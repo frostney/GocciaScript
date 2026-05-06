@@ -30,4 +30,33 @@ describe("addition with ToPrimitive", () => {
     expect(false + 1).toBe(1);
     expect(true + true).toBe(2);
   });
+
+  test("Symbol.toPrimitive takes precedence over valueOf and toString", () => {
+    const obj = {
+      valueOf() { return "valueOf"; },
+      toString() { return "toString"; },
+      [Symbol.toPrimitive](hint) { return "@@toPrimitive(" + hint + ")"; },
+    };
+    expect(obj + "").toBe("@@toPrimitive(default)");
+    expect("" + obj).toBe("@@toPrimitive(default)");
+  });
+
+  test("Symbol.toPrimitive receives 'default' hint for addition", () => {
+    const hints = [];
+    const obj = {
+      [Symbol.toPrimitive](hint) {
+        hints.push(hint);
+        return 0;
+      },
+    };
+    obj + 1;
+    expect(hints[0]).toBe("default");
+  });
+
+  test("Symbol.toPrimitive returning object throws TypeError", () => {
+    const obj = {
+      [Symbol.toPrimitive]() { return {}; },
+    };
+    expect(() => { obj + 1; }).toThrow(TypeError);
+  });
 });

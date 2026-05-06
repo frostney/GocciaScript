@@ -1,6 +1,6 @@
 /*---
-description: Symbols cannot be implicitly converted to strings or numbers (ECMAScript 2020 §6.1.5)
-features: [Symbol]
+description: Symbol coercion rules, @@toPrimitive protocol, and IsPrimitive semantics (ES2026 §6.1, §7.1.1)
+features: [Symbol, Symbol.toPrimitive]
 ---*/
 
 // === Implicit string coercion — must throw TypeError ===
@@ -253,5 +253,137 @@ describe("non-coercing operations work", () => {
     expect(s && true).toBe(true);
     expect(false || s).toBe(s);
     expect(s ?? "default").toBe(s);
+  });
+});
+
+// === Symbol.toPrimitive (@@toPrimitive) protocol — ES2026 §7.1.1 ===
+
+describe("Symbol.toPrimitive protocol", () => {
+  test("String() passes 'string' hint", () => {
+    const obj = {
+      [Symbol.toPrimitive](hint) { return "hint:" + hint; },
+    };
+    expect(String(obj)).toBe("hint:string");
+  });
+
+  test("Number() passes 'number' hint", () => {
+    const hints = [];
+    const obj = {
+      [Symbol.toPrimitive](hint) {
+        hints.push(hint);
+        return 42;
+      },
+    };
+    expect(Number(obj)).toBe(42);
+    expect(hints[0]).toBe("number");
+  });
+
+  test("template literal passes 'string' hint", () => {
+    const obj = {
+      [Symbol.toPrimitive](hint) { return "hint:" + hint; },
+    };
+    expect(`${obj}`).toBe("hint:string");
+  });
+
+  test("addition passes 'default' hint", () => {
+    const obj = {
+      [Symbol.toPrimitive](hint) { return "hint:" + hint; },
+    };
+    expect(obj + "").toBe("hint:default");
+  });
+
+  test("Symbol.toPrimitive takes precedence over valueOf and toString", () => {
+    const obj = {
+      valueOf() { return "valueOf"; },
+      toString() { return "toString"; },
+      [Symbol.toPrimitive](hint) { return "exotic(" + hint + ")"; },
+    };
+    expect(String(obj)).toBe("exotic(string)");
+    expect(`${obj}`).toBe("exotic(string)");
+    expect(obj + "").toBe("exotic(default)");
+  });
+
+  test("Symbol.toPrimitive returning non-primitive throws TypeError", () => {
+    const obj = {
+      [Symbol.toPrimitive]() { return {}; },
+    };
+    expect(() => String(obj)).toThrow(TypeError);
+    expect(() => Number(obj)).toThrow(TypeError);
+  });
+
+  test("Symbol.toPrimitive returning array throws TypeError", () => {
+    const obj = {
+      [Symbol.toPrimitive]() { return []; },
+    };
+    expect(() => String(obj)).toThrow(TypeError);
+  });
+
+  test("absent Symbol.toPrimitive falls through to valueOf/toString", () => {
+    const obj = { valueOf() { return 99; } };
+    expect(Number(obj)).toBe(99);
+    const obj2 = { toString() { return "hello"; } };
+    expect(String(obj2)).toBe("hello");
+  });
+
+  test("non-callable Symbol.toPrimitive throws TypeError", () => {
+    const obj = {
+      [Symbol.toPrimitive]: 42,
+      valueOf() { return "fallback"; },
+    };
+    expect(() => { obj + ""; }).toThrow(TypeError);
+  });
+
+  test("Symbol.toPrimitive can return null", () => {
+    const obj = {
+      [Symbol.toPrimitive]() { return null; },
+    };
+    expect(String(obj)).toBe("null");
+  });
+
+  test("Symbol.toPrimitive can return undefined", () => {
+    const obj = {
+      [Symbol.toPrimitive]() { return undefined; },
+    };
+    expect(String(obj)).toBe("undefined");
+  });
+
+  test("Symbol.toPrimitive can return a boolean", () => {
+    const obj = {
+      [Symbol.toPrimitive]() { return true; },
+    };
+    expect(Number(obj)).toBe(1);
+  });
+
+  test("Symbol.toPrimitive can return a bigint", () => {
+    const obj = {
+      [Symbol.toPrimitive]() { return 42n; },
+    };
+    expect(String(obj)).toBe("42");
+  });
+
+  test("Symbol.toPrimitive receives the object as this", () => {
+    const obj = {
+      name: "test",
+      [Symbol.toPrimitive](hint) { return this.name; },
+    };
+    expect(String(obj)).toBe("test");
+  });
+});
+
+// === Symbol is a primitive type — ES2026 §6.1 ===
+
+describe("Symbol as primitive return from valueOf/toString", () => {
+  test("toString returning a Symbol is accepted by ToPrimitive", () => {
+    const sym = Symbol("foo");
+    const target = { [sym]: "match" };
+    const key = { toString() { return sym; } };
+    expect(target[key]).toBe("match");
+  });
+
+  test("valueOf returning a Symbol is accepted when toString returns non-primitive", () => {
+    const sym = Symbol("bar");
+    const target = { [sym]: "found" };
+    const key = { toString() { return {}; }, valueOf() { return sym; } };
+    expect(target[key]).toBe("found");
   });
 });

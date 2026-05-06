@@ -349,6 +349,7 @@ resourcestring
 
   // Runtime errors — ToPrimitive
   SSuggestToPrimitive = 'define a valueOf() or toString() method on the object';
+  SSuggestToPrimitiveReturnPrimitive = '[Symbol.toPrimitive] must return a string, number, boolean, bigint, symbol, null, or undefined';
 
   // Runtime errors — Function
   SSuggestFunctionApply = 'Function.prototype.apply requires a callable this value';

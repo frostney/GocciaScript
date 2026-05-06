@@ -59,6 +59,7 @@ type
     class function WellKnownUnscopables: TGocciaSymbolValue;
     class function WellKnownCustomMatcher: TGocciaSymbolValue;
 
+    function IsPrimitive: Boolean; override;
     function TypeName: string; override;
     function TypeOf: string; override;
     function GetProperty(const AName: string): TGocciaValue; override;
@@ -440,6 +441,11 @@ begin
   if not Assigned(GSymbolRegistry) then
     GSymbolRegistry := THashMap<Integer, TGocciaSymbolValue>.Create;
   GSymbolRegistry.AddOrSetValue(FId, Self);
+end;
+
+function TGocciaSymbolValue.IsPrimitive: Boolean;
+begin
+  Result := True;
 end;
 
 function TGocciaSymbolValue.TypeName: string;
