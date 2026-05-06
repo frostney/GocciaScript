@@ -4051,7 +4051,7 @@ begin
     grkInt:
       Result := IntToStr(AKey.IntValue);
     grkFloat:
-      Result := FloatToStr(AKey.FloatValue);
+      Result := DoubleToESString(AKey.FloatValue);
     grkBoolean:
       if AKey.BoolValue then Result := 'true' else Result := 'false';
     grkNull:
