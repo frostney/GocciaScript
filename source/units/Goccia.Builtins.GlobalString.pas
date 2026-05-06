@@ -99,7 +99,7 @@ begin
       ThrowRangeError(SErrorInvalidCodePoint, SSuggestCodePointRange);
     RawValue := NumArg.Value;
     if (RawValue < 0) or (RawValue > $10FFFF) or (RawValue <> Trunc(RawValue)) then
-      ThrowRangeError(Format(SErrorNotValidCodePoint, [FloatToStr(RawValue)]), SSuggestCodePointRange);
+      ThrowRangeError(Format(SErrorNotValidCodePoint, [FormatDouble(RawValue)]), SSuggestCodePointRange);
     CodePoint := Trunc(RawValue);
 
     if CodePoint < $80 then

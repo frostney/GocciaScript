@@ -2325,7 +2325,7 @@ begin
     else if Check(gttNumber) then
     begin
       NumericValue := ConvertNumberLiteral(Advance.Lexeme);
-      Key := DoubleToESString(NumericValue);
+      Key := FormatDouble(NumericValue);
     end
     else if IsIdentifierNameToken(Peek.TokenType) then
     begin
@@ -2724,7 +2724,7 @@ begin
     begin
       // Convert numeric literals to their decimal string representation
       NumericValue := ConvertNumberLiteral(Advance.Lexeme);
-      Key := DoubleToESString(NumericValue);
+      Key := FormatDouble(NumericValue);
     end
     else if Match([gttIf, gttElse, gttConst, gttLet, gttClass, gttEnum, gttExtends, gttNew, gttThis, gttSuper, gttStatic,
                    gttReturn, gttFor, gttWhile, gttDo, gttSwitch, gttCase, gttDefault, gttBreak, gttContinue,
@@ -5173,7 +5173,7 @@ begin
       end
       else if Check(gttNumber) then
       begin
-        MemberName := DoubleToESString(ConvertNumberLiteral(Advance.Lexeme));
+        MemberName := FormatDouble(ConvertNumberLiteral(Advance.Lexeme));
       end
       else if Check(gttString) then
       begin

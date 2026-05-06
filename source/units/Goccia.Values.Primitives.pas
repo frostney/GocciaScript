@@ -6,6 +6,7 @@ interface
 
 uses
   Generics.Collections,
+  SysUtils,
 
   OrderedStringMap,
 
@@ -161,13 +162,14 @@ type
   procedure PinPrimitiveSingletons;
 
   // ES2026 §6.1.6.1.13 Number::toString(x)
-  function DoubleToESString(AValue: Double): string;
+  function FormatDouble(AValue: Double): string;
+
+  function InvariantFormatSettings: TFormatSettings;
 
 implementation
 
 uses
   Math,
-  SysUtils,
 
   TextSemantics,
 
@@ -184,8 +186,14 @@ uses
 const
   MAX_SAFE_INTEGER_VALUE = 9007199254740991.0;
 
+function InvariantFormatSettings: TFormatSettings;
+begin
+  Result := DefaultFormatSettings;
+  Result.DecimalSeparator := '.';
+end;
+
 // ES2026 §6.1.6.1.13 Number::toString(x)
-function DoubleToESString(AValue: Double): string;
+function FormatDouble(AValue: Double): string;
 
   procedure FormatES(const AMantissa: string; AK, AN: Integer; ANeg: Boolean;
     out AResult: string);
@@ -226,6 +234,16 @@ var
   Parsed: Double;
   FS: TFormatSettings;
 begin
+  if IsNan(AValue) then
+    Exit('NaN');
+  if IsInfinite(AValue) then
+  begin
+    if AValue > 0 then
+      Exit('Infinity')
+    else
+      Exit('-Infinity');
+  end;
+
   if AValue = 0 then
     Exit('0');
 
@@ -729,7 +747,7 @@ begin
   else if IsNegativeZero then
     Result := TGocciaStringLiteralValue.Create('0')
   else
-    Result := TGocciaStringLiteralValue.Create(DoubleToESString(FValue));
+    Result := TGocciaStringLiteralValue.Create(FormatDouble(FValue));
 end;
 
 

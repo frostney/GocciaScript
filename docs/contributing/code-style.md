@@ -108,6 +108,32 @@ When the same constant is used in both the `interface` section (e.g., as a defau
 
 Trivial literals that are self-explanatory in context (`0`, `1`, `-1`, `''`, `True`, `False`) do not need extraction.
 
+### Locale-Independent Number Formatting
+
+Never use bare `FloatToStr` or `FormatFloat` without an explicit `TFormatSettings` argument — these use the system decimal separator which varies by locale and breaks deterministic output.
+
+Use `FormatDouble` (from `Goccia.Values.Primitives`) for any float-to-string conversion that must produce ECMAScript-compliant output (property keys, error messages, serialization). For formatted output that needs a specific pattern (e.g., `toFixed`, `toExponential`, timing), pass `InvariantFormatSettings` (same unit) to `FormatFloat`:
+
+```pascal
+// Wrong — locale-dependent, breaks on systems with comma decimal separator
+Result := FloatToStr(AValue);
+Result := FormatFloat('0.###', AValue);
+
+// Correct — ES2026 §6.1.6.1.13 Number::toString, always uses '.'
+Result := FormatDouble(AValue);
+
+// Correct — formatted output with invariant decimal separator
+Result := FormatFloat('0.###', AValue, InvariantFormatSettings);
+```
+
+For `source/shared/` units that cannot import `Goccia.Values.Primitives`, use explicit inline format settings:
+
+```pascal
+FS := DefaultFormatSettings;
+FS.DecimalSeparator := '.';
+Result := FloatToStr(AValue, FS);
+```
+
 ### ECMAScript Spec Annotations
 
 When implementing ECMAScript-specified behavior, annotate each function or method with a comment referencing the relevant specification section. Place the annotation immediately above the function body in the `implementation` section. For multi-step spec algorithms, also annotate individual steps inline within the function body:
