@@ -13,12 +13,14 @@ uses
   Goccia.Values.ArrayValue,
   Goccia.Values.NativeFunction,
   Goccia.Values.NativeFunctionCallback,
+  Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
 type
   TGocciaGlobalPromise = class(TGocciaBuiltin)
   private
     FPromiseConstructor: TGocciaNativeFunctionValue;
+    FPromiseIntrinsicProto: TGocciaObjectValue;
 
     function ExtractPromiseArray(const AArgs: TGocciaArgumentsCollection): TGocciaArrayValue;
     function PromiseConstruct(const AArgs: TGocciaArgumentsCollection; const ANewTarget: TGocciaValue): TGocciaValue;
@@ -54,7 +56,6 @@ uses
   Goccia.Values.FunctionBase,
   Goccia.Values.MapValue,
   Goccia.Values.ObjectPropertyDescriptor,
-  Goccia.Values.ObjectValue,
   Goccia.Values.PromiseValue,
   Goccia.Values.SetValue,
   Goccia.Values.SymbolValue,
@@ -460,6 +461,7 @@ begin
       nil, [pfConfigurable]));
 
   TGocciaPromiseValue.ExposePrototype(FPromiseConstructor);
+  FPromiseIntrinsicProto := TGocciaObjectValue(FPromiseConstructor.GetProperty(PROP_PROTOTYPE));
   Members := TGocciaMemberCollection.Create;
   try
     Members.AddMethod(PromiseResolve, 1, gmkStaticMethod);
@@ -570,8 +572,7 @@ begin
   if not Executor.IsCallable then
     Goccia.Values.ErrorHelper.ThrowTypeError(SErrorPromiseResolverNotFunction, SSuggestPromiseResolver);
 
-  Proto := GetProtoFromConstructorWithIntrinsic(ANewTarget,
-    TGocciaObjectValue(FPromiseConstructor.GetProperty(PROP_PROTOTYPE)));
+  Proto := GetProtoFromConstructorWithIntrinsic(ANewTarget, FPromiseIntrinsicProto);
 
   Promise := TGocciaPromiseValue.Create;
   Promise.Prototype := Proto;

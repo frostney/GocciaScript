@@ -13,12 +13,14 @@ uses
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.NativeFunction,
   Goccia.Values.NativeFunctionCallback,
+  Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
 type
   TGocciaGlobalArrayBuffer = class(TGocciaBuiltin)
   private
     FArrayBufferConstructor: TGocciaNativeFunctionValue;
+    FArrayBufferIntrinsicProto: TGocciaObjectValue;
     function ArrayBufferConstruct(const AArgs: TGocciaArgumentsCollection; const ANewTarget: TGocciaValue): TGocciaValue;
   published
     function ArrayBufferConstructorFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -39,7 +41,6 @@ uses
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.HoleValue,
-  Goccia.Values.ObjectValue,
   Goccia.Values.TypedArrayValue;
 
 threadvar
@@ -57,6 +58,7 @@ begin
   FArrayBufferConstructor := TGocciaNativeFunctionValue.Create(ArrayBufferConstructorFn, 'ArrayBuffer', 1);
   FArrayBufferConstructor.ConstructCallback := ArrayBufferConstruct;
   TGocciaArrayBufferValue.ExposePrototype(FArrayBufferConstructor);
+  FArrayBufferIntrinsicProto := TGocciaObjectValue(FArrayBufferConstructor.GetProperty(PROP_PROTOTYPE));
 
   Members := TGocciaMemberCollection.Create;
   try
@@ -139,8 +141,7 @@ var
   Proto: TGocciaObjectValue;
   AB: TGocciaArrayBufferValue;
 begin
-  Proto := GetProtoFromConstructorWithIntrinsic(ANewTarget,
-    TGocciaObjectValue(FArrayBufferConstructor.GetProperty(PROP_PROTOTYPE)));
+  Proto := GetProtoFromConstructorWithIntrinsic(ANewTarget, FArrayBufferIntrinsicProto);
   AB := TGocciaArrayBufferValue(ArrayBufferConstructorFn(AArgs, TGocciaHoleValue.HoleValue));
   AB.Prototype := Proto;
   Result := AB;
