@@ -582,6 +582,9 @@ resourcestring
   // Disposal method errors
   SErrorDisposePropertyNotFunction = 'Property [Symbol.%s] is not a function';
 
+  // Error prototype errors
+  SErrorErrorProtoToStringRequiresObject = 'Error.prototype.toString requires that ''this'' be an Object';
+
   // Symbol prototype errors
   SErrorSymbolConstructorRequiresCall = 'Symbol is not a constructor';
   SErrorSymbolProtoToStringRequiresSymbol = 'Symbol.prototype.toString requires that ''this'' be a Symbol';
