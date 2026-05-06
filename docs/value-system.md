@@ -53,6 +53,7 @@ classDiagram
     TGocciaObjectValue <|-- TGocciaNumberObjectValue
     TGocciaObjectValue <|-- TGocciaStringObjectValue
     TGocciaObjectValue <|-- TGocciaBooleanObjectValue
+    TGocciaObjectValue <|-- TGocciaSymbolObjectValue
 
     TGocciaFunctionValue <|-- TGocciaMethodValue
 
@@ -301,6 +302,8 @@ Each symbol has a globally unique `Id` assigned at creation. Type coercion follo
 - Unary `+symbol` / `-symbol` — Throws `TypeError` (these trigger `ToNumberLiteral`).
 
 The implicit coercion checks for symbols are implemented at the operator level (primarily in `Goccia.Arithmetic.pas`, with string built-in behavior in `Goccia.Values.StringObjectValue.pas`) so that operators reach Symbol-rejection cleanly without first invoking `ToStringLiteral` on a non-symbol path.
+
+**Symbol wrapper objects:** `Object(symbol)` boxes a symbol primitive into a `TGocciaSymbolObjectValue`, a plain `TGocciaObjectValue` subclass whose prototype is `Symbol.prototype` and whose `SymbolData` property holds the underlying `TGocciaSymbolValue`. Symbol.prototype methods use `thisSymbolValue` to accept either the primitive or the wrapper. `ToObject` (via `Box`) also produces the wrapper when other spec operations need an object from a symbol.
 
 **Shared prototype singleton:** Like strings and numbers, symbols use a per-engine shared prototype object stored in a [realm slot](core-patterns.md#realm-ownership--slot-registration). It is initialized via `InitializePrototype`; the realm pins it on `SetSlot` and releases it on `Destroy`. The `description` getter and `toString()` method are registered on this shared prototype, and `TGocciaSymbolValue.GetProperty` delegates to the prototype via `GetPropertyWithContext` so that accessor getters receive the correct symbol instance as `this`. `Symbol.prototype` is exposed on the Symbol constructor function, matching ECMAScript semantics. Symbol is an always-registered standard built-in; special-purpose opt-ins like test assertions, benchmarking, and FFI are runtime globals selected through `TGocciaRuntimeGlobals`. Symbol type checks at the operator level use standard RTTI (`is TGocciaSymbolValue`) rather than VMT methods purely for implementation simplicity.
 

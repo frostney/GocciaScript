@@ -735,19 +735,7 @@ var
 begin
   TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Object.getPrototypeOf', ThrowError);
 
-  // Step 1: Let obj be ? ToObject(O)
-  // Symbol primitives: ToObject(Symbol) -> Symbol wrapper whose prototype is %Symbol.prototype%.
-  // Without a wrapper class we short-circuit to %Symbol.prototype% directly.
   Arg := AArgs.GetElement(0);
-  if Arg is TGocciaSymbolValue then
-  begin
-    if Assigned(TGocciaSymbolValue.SharedPrototype) then
-      Result := TGocciaSymbolValue.SharedPrototype
-    else
-      Result := TGocciaNullLiteralValue.NullValue;
-    Exit;
-  end;
-
   Obj := ToObject(Arg);
   if Assigned(TGarbageCollector.Instance) and
      not (AArgs.GetElement(0) is TGocciaObjectValue) then

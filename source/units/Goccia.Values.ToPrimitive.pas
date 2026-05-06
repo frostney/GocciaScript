@@ -56,13 +56,44 @@ begin
   end;
 end;
 
-function HintToString(const AHint: TGocciaToPrimitiveHint): string; inline;
+var
+  GHintString: TGocciaStringLiteralValue;
+  GHintNumber: TGocciaStringLiteralValue;
+  GHintDefault: TGocciaStringLiteralValue;
+
+function HintValue(const AHint: TGocciaToPrimitiveHint): TGocciaStringLiteralValue;
 begin
   case AHint of
-    tphString: Result := 'string';
-    tphNumber: Result := 'number';
+    tphString:
+    begin
+      if not Assigned(GHintString) then
+      begin
+        GHintString := TGocciaStringLiteralValue.Create('string');
+        if Assigned(TGarbageCollector.Instance) then
+          TGarbageCollector.Instance.PinObject(GHintString);
+      end;
+      Result := GHintString;
+    end;
+    tphNumber:
+    begin
+      if not Assigned(GHintNumber) then
+      begin
+        GHintNumber := TGocciaStringLiteralValue.Create('number');
+        if Assigned(TGarbageCollector.Instance) then
+          TGarbageCollector.Instance.PinObject(GHintNumber);
+      end;
+      Result := GHintNumber;
+    end;
   else
-    Result := 'default';
+    begin
+      if not Assigned(GHintDefault) then
+      begin
+        GHintDefault := TGocciaStringLiteralValue.Create('default');
+        if Assigned(TGarbageCollector.Instance) then
+          TGarbageCollector.Instance.PinObject(GHintDefault);
+      end;
+      Result := GHintDefault;
+    end;
   end;
 end;
 
@@ -94,7 +125,7 @@ begin
       // Step 2.b: Call(exoticToPrim, input, « hint »)
       Args := TGocciaArgumentsCollection.Create;
       try
-        Args.Add(TGocciaStringLiteralValue.Create(HintToString(AHint)));
+        Args.Add(HintValue(AHint));
         Result := TGocciaFunctionBase(ExoticToPrim).Call(Args, AValue);
       finally
         Args.Free;

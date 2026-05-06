@@ -387,3 +387,49 @@ describe("Symbol as primitive return from valueOf/toString", () => {
     expect(target[key]).toBe("found");
   });
 });
+
+// === Object(symbol) wrapper — ES2026 §7.1.18 ToObject ===
+
+describe("Object(symbol) wrapper", () => {
+  test("typeof Object(symbol) is 'object'", () => {
+    expect(typeof Object(Symbol("x"))).toBe("object");
+  });
+
+  test("wrapper preserves description", () => {
+    const w = Object(Symbol("desc"));
+    expect(w.description).toBe("desc");
+  });
+
+  test("wrapper description is undefined for Symbol()", () => {
+    expect(Object(Symbol()).description).toBe(undefined);
+  });
+
+  test("wrapper toString returns display string", () => {
+    expect(Object(Symbol("t")).toString()).toBe("Symbol(t)");
+  });
+
+  test("wrapper valueOf returns the underlying symbol", () => {
+    const s = Symbol("v");
+    expect(Object(s).valueOf()).toBe(s);
+  });
+
+  test("wrapper toPrimitive returns the underlying symbol", () => {
+    const s = Symbol("p");
+    expect(Object(s)[Symbol.toPrimitive]("default")).toBe(s);
+  });
+
+  test("wrapper prototype is Symbol.prototype", () => {
+    expect(Object.getPrototypeOf(Object(Symbol("x")))).toBe(Symbol.prototype);
+  });
+
+  test("Object.getPrototypeOf(symbol) is Symbol.prototype", () => {
+    expect(Object.getPrototypeOf(Symbol("x"))).toBe(Symbol.prototype);
+  });
+
+  test("Symbol.prototype methods work with call on wrapper", () => {
+    const s = Symbol("call");
+    const w = Object(s);
+    expect(Symbol.prototype.valueOf.call(w)).toBe(s);
+    expect(Symbol.prototype.toString.call(w)).toBe("Symbol(call)");
+  });
+});
