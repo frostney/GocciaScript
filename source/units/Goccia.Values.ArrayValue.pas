@@ -1232,6 +1232,13 @@ begin
   // Step 1: Let O be ToObject(this value)
   View.Init(AThisValue);
 
+  // Step 3: If len is 0, return false — before ToIntegerOrInfinity(fromIndex).
+  if View.Len = 0 then
+  begin
+    Result := TGocciaBooleanLiteralValue.FalseValue;
+    Exit;
+  end;
+
   if AArgs.Length < 1 then
     SearchValue := TGocciaUndefinedLiteralValue.UndefinedValue
   else
@@ -2127,7 +2134,13 @@ begin
   // Step 1: Let O be ToObject(this value)
   View.Init(AThisValue);
 
-  // Step 3: If len = 0, return -1𝔽
+  // Step 3: If len is 0, return -1 — before ToIntegerOrInfinity(fromIndex).
+  if View.Len = 0 then
+  begin
+    Result := TGocciaNumberLiteralValue.Create(-1);
+    Exit;
+  end;
+
   if AArgs.Length < 1 then
   begin
     Result := TGocciaNumberLiteralValue.Create(-1);
@@ -2204,7 +2217,13 @@ begin
   // Step 1: Let O be ToObject(this value)
   View.Init(AThisValue);
 
-  // Step 3: If len = 0, return -1𝔽
+  // Step 3: If len is 0, return -1 — before ToIntegerOrInfinity(fromIndex).
+  if View.Len = 0 then
+  begin
+    Result := TGocciaNumberLiteralValue.Create(-1);
+    Exit;
+  end;
+
   if AArgs.Length < 1 then
   begin
     Result := TGocciaNumberLiteralValue.Create(-1);

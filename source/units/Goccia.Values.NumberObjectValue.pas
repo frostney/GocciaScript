@@ -300,10 +300,7 @@ begin
     Radix := Trunc(AArgs.GetElement(0).ToNumberLiteral.Value);
     // Step 3: If radixMV < 2 or radixMV > 36, throw a RangeError exception
     if (Radix < 2) or (Radix > 36) then
-    begin
-      Result := TGocciaStringLiteralValue.Create('');
-      Exit;
-    end;
+      ThrowRangeError(SErrorBigIntInvalidRadix, SSuggestBigIntInvalidRadix);
     // Step 2: If radix is undefined or 10, return ! ToString(x)
     if Radix = 10 then
     begin
