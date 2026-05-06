@@ -344,41 +344,38 @@ end;
   4. Perform ? InstallErrorCause(O, options).
      a. If options has a "cause" property, CreateNonEnumerableDataPropertyOrThrow(O, "cause", cause).
   5. Return O. }
+
+procedure InstallErrorCause(const AObj: TGocciaObjectValue; const AOptions: TGocciaValue);
+var
+  CauseValue: TGocciaValue;
+begin
+  if AOptions is TGocciaObjectValue then
+  begin
+    if TGocciaObjectValue(AOptions).HasProperty(PROP_CAUSE) then
+    begin
+      CauseValue := AOptions.GetProperty(PROP_CAUSE);
+      if CauseValue = nil then
+        CauseValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+      AObj.DefineProperty(PROP_CAUSE,
+        TGocciaPropertyDescriptorData.Create(CauseValue, [pfConfigurable, pfWritable]));
+    end;
+  end;
+end;
+
 function TGocciaGlobals.BuildErrorObject(const AName: string; const AProto: TGocciaObjectValue; const AArgs: TGocciaArgumentsCollection): TGocciaObjectValue;
 var
   Message: string;
-  OptionsArg, CauseValue: TGocciaValue;
-  OptionsIndex: Integer;
 begin
-  { Step 3: If message is not undefined, let msg = ToString(message) }
   if AArgs.Length > 0 then
     Message := AArgs.GetElement(0).ToStringLiteral.Value
   else
     Message := '';
 
-  { Step 2: Let O = OrdinaryCreateFromConstructor with prototype }
   Result := CreateErrorObject(AName, Message, 1);
   Result.Prototype := AProto;
 
-  { Step 4: InstallErrorCause(O, options) — ES2026 §20.5.8.1 }
-  OptionsIndex := 1;
-  if AArgs.Length > OptionsIndex then
-  begin
-    OptionsArg := AArgs.GetElement(OptionsIndex);
-    if OptionsArg is TGocciaObjectValue then
-    begin
-      { Step 4a: If HasProperty(options, "cause"), CreateNonEnumerableDataPropertyOrThrow(O, "cause", cause) }
-      if TGocciaObjectValue(OptionsArg).HasProperty(PROP_CAUSE) then
-      begin
-        CauseValue := OptionsArg.GetProperty(PROP_CAUSE);
-        if CauseValue = nil then
-          CauseValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-        Result.DefineProperty(PROP_CAUSE,
-          TGocciaPropertyDescriptorData.Create(CauseValue, [pfConfigurable, pfWritable]));
-      end;
-    end;
-  end;
-  { Step 5: Return O }
+  if AArgs.Length > 1 then
+    InstallErrorCause(Result, AArgs.GetElement(1));
 end;
 
 { Error ( message [ , options ] ) — §20.5.1.1
@@ -451,7 +448,6 @@ function TGocciaGlobals.BuildAggregateError(const AArgs: TGocciaArgumentsCollect
 var
   Errors: TGocciaValue;
   ErrorsArray: TGocciaArrayValue;
-  OptionsArg, CauseValue: TGocciaValue;
   Message: string;
   I: Integer;
 begin
@@ -476,20 +472,7 @@ begin
   Result.AssignProperty(PROP_ERRORS, ErrorsArray);
 
   if AArgs.Length > 2 then
-  begin
-    OptionsArg := AArgs.GetElement(2);
-    if OptionsArg is TGocciaObjectValue then
-    begin
-      if TGocciaObjectValue(OptionsArg).HasProperty(PROP_CAUSE) then
-      begin
-        CauseValue := OptionsArg.GetProperty(PROP_CAUSE);
-        if CauseValue = nil then
-          CauseValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-        Result.DefineProperty(PROP_CAUSE,
-          TGocciaPropertyDescriptorData.Create(CauseValue, [pfConfigurable, pfWritable]));
-      end;
-    end;
-  end;
+    InstallErrorCause(Result, AArgs.GetElement(2));
 end;
 
 function TGocciaGlobals.AggregateErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -508,7 +491,6 @@ function TGocciaGlobals.BuildSuppressedError(const AArgs: TGocciaArgumentsCollec
 var
   ErrorArg, SuppressedArg: TGocciaValue;
   Message: string;
-  OptionsArg, CauseValue: TGocciaValue;
 begin
   if AArgs.Length > 0 then
     ErrorArg := AArgs.GetElement(0)
@@ -534,20 +516,7 @@ begin
     TGocciaPropertyDescriptorData.Create(SuppressedArg, [pfConfigurable, pfWritable]));
 
   if AArgs.Length > 3 then
-  begin
-    OptionsArg := AArgs.GetElement(3);
-    if OptionsArg is TGocciaObjectValue then
-    begin
-      if TGocciaObjectValue(OptionsArg).HasProperty(PROP_CAUSE) then
-      begin
-        CauseValue := OptionsArg.GetProperty(PROP_CAUSE);
-        if CauseValue = nil then
-          CauseValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-        Result.DefineProperty(PROP_CAUSE,
-          TGocciaPropertyDescriptorData.Create(CauseValue, [pfConfigurable, pfWritable]));
-      end;
-    end;
-  end;
+    InstallErrorCause(Result, AArgs.GetElement(3));
 end;
 
 function TGocciaGlobals.SuppressedErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;

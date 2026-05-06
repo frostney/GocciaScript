@@ -105,6 +105,29 @@ describe("Reflect.construct with native RegExp constructor", () => {
     const re = Reflect.construct(RegExp, ["abc"], RegExp);
     expect(re instanceof RegExp).toBe(true);
   });
+
+  test("RegExp source captured before newTarget prototype getter fires", () => {
+    let getterFired = false;
+    const re = Reflect.construct(RegExp, [/abc/],
+      Object.defineProperty((() => {}).bind(null), "prototype", {
+        get() { getterFired = true; return RegExp.prototype; },
+      }));
+    expect(getterFired).toBe(true);
+    expect(re.source).toBe("abc");
+  });
+
+  test("RegExp ToString(flags) deferred until after prototype getter", () => {
+    let didLookup = false;
+    const flags = { toString() {
+      expect(didLookup).toBe(true);
+      return "g";
+    }};
+    const re = Reflect.construct(RegExp, [/abc/, flags],
+      Object.defineProperty((() => {}).bind(null), "prototype", {
+        get() { didLookup = true; return RegExp.prototype; },
+      }));
+    expect(re.flags).toBe("g");
+  });
 });
 
 describe("Reflect.construct with native ArrayBuffer constructor", () => {

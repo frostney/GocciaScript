@@ -598,7 +598,7 @@ begin
 
   // §22.2.4.1 step 7: RegExpInitialize — remaining ToString coercions
   if not PatternIsRegExp and (AArgs.Length > 0) then
-    Pattern := AArgs.GetElement(0).ToStringLiteral.Value;
+    Pattern := PatternArg.ToStringLiteral.Value;
   if FlagsProvided then
     Flags := AArgs.GetElement(1).ToStringLiteral.Value;
 
