@@ -643,6 +643,7 @@ begin
               Parser.AutomaticSemicolonInsertion := Engine.ASIEnabled;
               Parser.VarDeclarationsEnabled := Engine.VarEnabled;
               Parser.FunctionDeclarationsEnabled := Engine.FunctionEnabled;
+              Parser.TraditionalForLoopsEnabled := Engine.TraditionalForLoopsEnabled;
               try
                 ProgramNode := Parser.Parse;
                 ParseEnd := GetNanoseconds;

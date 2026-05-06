@@ -190,6 +190,7 @@ begin
               Parser.AutomaticSemicolonInsertion := Eng.ASIEnabled;
               Parser.VarDeclarationsEnabled := Eng.VarEnabled;
               Parser.FunctionDeclarationsEnabled := Eng.FunctionEnabled;
+              Parser.TraditionalForLoopsEnabled := Eng.TraditionalForLoopsEnabled;
               try
                 ProgramNode := Parser.Parse;
                 ParseEnd := GetNanoseconds;

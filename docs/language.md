@@ -7,9 +7,9 @@
 
 - **Modern subset** — `let`/`const`, arrow functions, classes with private fields, `for...of`, async/await, ES modules (named only)
 - **TC39 proposals** — Decorators, decorator metadata, pattern matching, types as comments, enums, `Math.clamp`
-- **Excluded by design** — `==`/`!=`, `eval`, `arguments`, traditional loops, `with`, default imports/exports
-- **Graceful handling** — Parser-recognized excluded syntax (`==`, loops, `with`) parses successfully but executes as a no-op with a warning and suggestion
-- **Opt-in toggles** — ASI (`--asi`), `var` declarations (`--compat-var`), `function` keyword (`--compat-function`), runtime type enforcement (`--strict-types`)
+- **Excluded by design** — `==`/`!=`, `eval`, `arguments`, `while` / `do...while`, `with`, default imports/exports
+- **Graceful handling** — Parser-recognized excluded syntax (`==`, `while`/`do...while`, traditional `for(;;)` when `--compat-traditional-for-loop` is off, `with`) parses successfully but executes as a no-op with a warning and suggestion
+- **Opt-in toggles** — ASI (`--asi`), `var` declarations (`--compat-var`), `function` keyword (`--compat-function`), traditional `for(init; test; update)` loops (`--compat-traditional-for-loop`), runtime type enforcement (`--strict-types`)
 - **Default preprocessors** — JSX (enabled by default via `DefaultPreprocessors`)
 
 GocciaScript implements a curated subset of ECMAScript. This document details what's supported, what's excluded, and the rationale for each decision. For quick-reference tables of every feature and TC39 proposal, see [Language Tables](language-tables.md).
@@ -762,19 +762,18 @@ When enabled, GocciaScript follows the ECMAScript ASI rules (ES2026 §12.10):
 - A semicolon is inserted before `}` or at EOF
 - Restricted productions (`return`, `throw`, `break`) follow the `[no LineTerminator here]` rules
 
-### Traditional Loops (`for`, `while`, `do...while`)
+### Traditional `for(init; test; update)` Loop
 
-**Excluded.** Use `for...of`, `for await...of`, or array methods instead. The parser accepts traditional loop syntax but treats it as a no-op (the loop body is not executed), and emits a warning:
+**Opt-in.** Excluded by default; use `for...of`, `for await...of`, or array methods. Available via `--compat-traditional-for-loop` (CLI flag, `Engine.TraditionalForLoopsEnabled`, or `{"compat-traditional-for-loop": true}` in config).
 
-```text
-Warning: 'for' loops are not supported in GocciaScript
-  Suggestion: Use array methods like .forEach(), .map(), .filter(), or .reduce() instead
-  --> script.js:1:1
-```
+When disabled (default), the parser accepts the syntax but treats it as a no-op and emits a warning suggesting array methods or the flag. When enabled, `for(init; test; update) body` is fully supported in both interpreter and bytecode modes:
 
-The parser uses balanced-parenthesis tracking (`SkipBalancedParens`) to correctly skip the loop condition even when it contains nested parentheses (e.g., `for (let i = Math.max(0, 1); i < fn(x); i++)`), then `SkipStatementOrBlock` to skip the loop body. This ensures subsequent code executes correctly.
+- `let`/`const` in init create a fresh per-iteration lexical environment per [ES2026 §14.7.4.4](https://tc39.es/ecma262/#sec-runtime-semantics-forbodyevaluation), so closures captured during iteration N pin to that iteration's binding (the textbook `fns.push(() => i)` case yields `[0, 1, 2]`, not `[3, 3, 3]`).
+- `var` in init requires both `--compat-var` and the new flag, hoists out of the loop, and is shared across iterations (closures all see the final value).
+- All header parts are optional (`for(;;){…break}`, `for(;c;){…}`, `for(i;;u)`); comma expressions and destructuring are supported in init/update; `break`/`continue`/`return` unwind as in `for...of`.
+- The bytecode compiler reuses the counted-loop pattern from `CompileCountedForOf` for `for(let i = N; i <op> M; i++ | i--)` shapes (rejecting `var`/`const` and bodies that mutate the loop var); the general path uses an outer scope for the canonical slot plus a per-iteration `BeginScope`/`EndScope` cycle with `OP_CLOSE_UPVALUE` for captures.
 
-Traditional loops encourage imperative, mutation-heavy code. GocciaScript supports `for...of` and `for await...of` for iteration (see [Supported Iteration](#supported-iteration) above), and favors functional iteration through array methods:
+Traditional loops still encourage imperative, mutation-heavy code. GocciaScript continues to favor functional iteration through array methods and `for...of`:
 
 ```javascript
 // Instead of: for (let i = 0; i < items.length; i++) { ... }
@@ -785,7 +784,11 @@ items.filter((item) => item.isValid);
 items.reduce((acc, item) => acc + item, 0);
 ```
 
-`break` and `continue` are available inside `switch` statements and inside `for...of`/`for await...of` loops.
+`break` exits the nearest enclosing `switch`, `for...of`, `for await...of`, or (with the flag enabled) traditional `for(;;)` loop. `continue` only applies to iteration constructs — `for...of`, `for await...of`, and traditional `for(;;)` — never to `switch`.
+
+### `while` and `do...while`
+
+**Excluded.** Use `for(;;)` (with `--compat-traditional-for-loop`), `for...of`, or array methods instead. The parser accepts the syntax but treats it as a no-op (the body is not executed) and emits a warning.
 
 ### `with` Statement
 
@@ -811,7 +814,7 @@ Warning: Labeled statements are not supported in GocciaScript
 
 The labeled statement itself (the statement after the `:`) is still parsed and executed normally. For example, `myLabel: x = 2;` strips the label and executes `x = 2;`. If the labeled statement is itself unsupported (e.g., `outer: for (...)`), both a label warning and a loop warning are emitted.
 
-Labels exist primarily for `break`/`continue` targets in nested loops. Since GocciaScript excludes traditional loops, labels serve no purpose.
+Labels exist primarily for `break`/`continue` targets in nested loops. GocciaScript supports `for...of`, `for await...of`, and (with `--compat-traditional-for-loop`) traditional `for(;;)`, but doesn't implement labeled `break`/`continue` against any of them; nested-loop control flow uses `return` from a closure or an early-exit flag.
 
 ### Generators and Iterators
 

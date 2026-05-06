@@ -32,6 +32,8 @@ uses
   Math,
   SysUtils,
 
+  TextSemantics,
+
   Goccia.Arguments.Validator,
   Goccia.Constants.NumericLimits,
   Goccia.Values.NativeFunction,
@@ -88,7 +90,7 @@ begin
 
   // Step 1: Let inputString be ? ToString(string)
   // Step 2: Let S be ! TrimString(inputString, start)
-  InputStr := Trim(AArgs.GetElement(0).ToStringLiteral.Value);
+  InputStr := TrimECMAScriptWhitespace(AArgs.GetElement(0).ToStringLiteral.Value);
   if InputStr = '' then
   begin
     Result := TGocciaNumberLiteralValue.NaNValue;
@@ -185,12 +187,13 @@ end;
 function TGocciaGlobalNumber.NumberParseFloat(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   InputStr: string;
-  I: Integer;
+  I, ExpSign, ExpValue: Integer;
   C: Char;
   Sign: Integer;
   IntegerPart, FractionalPart: Double;
   FractionDivisor: Double;
-  HasDigits: Boolean;
+  HasDigits, HasExpDigits: Boolean;
+  Mantissa: Double;
 begin
   if AArgs.Length = 0 then
   begin
@@ -200,7 +203,7 @@ begin
 
   // Step 1: Let inputString be ? ToString(string)
   // Step 2: Let trimmedString be ! TrimString(inputString, start)
-  InputStr := Trim(AArgs.GetElement(0).ToStringLiteral.Value);
+  InputStr := TrimECMAScriptWhitespace(AArgs.GetElement(0).ToStringLiteral.Value);
   if InputStr = '' then
   begin
     Result := TGocciaNumberLiteralValue.NaNValue;
@@ -279,8 +282,55 @@ begin
     Exit;
   end;
 
+  Mantissa := IntegerPart + (FractionalPart / FractionDivisor);
+
+  // Step 3e: Parse optional ExponentPart (ES2026 StrUnsignedDecimalLiteral). The
+  // exponent must be present in its entirety (e/E, optional sign, at least one
+  // digit). When the exponent is malformed, parseFloat consumes the longest
+  // valid prefix BEFORE the indicator — i.e. the mantissa is returned unscaled.
+  if (I <= Length(InputStr)) and ((InputStr[I] = 'e') or (InputStr[I] = 'E')) then
+  begin
+    Inc(I);
+    ExpSign := 1;
+    if (I <= Length(InputStr)) and (InputStr[I] = '-') then
+    begin
+      ExpSign := -1;
+      Inc(I);
+    end
+    else if (I <= Length(InputStr)) and (InputStr[I] = '+') then
+      Inc(I);
+    ExpValue := 0;
+    HasExpDigits := False;
+    while I <= Length(InputStr) do
+    begin
+      C := InputStr[I];
+      if (C >= '0') and (C <= '9') then
+      begin
+        ExpValue := ExpValue * 10 + (Ord(C) - Ord('0'));
+        HasExpDigits := True;
+        Inc(I);
+      end
+      else
+        Break;
+    end;
+    if HasExpDigits then
+    begin
+      // Apply exponent. Multiply for positive, divide for negative — divide
+      // gives more accurate IEEE 754 results than multiplying by 10^-N
+      // (e.g. 0.1 / 10 lands exactly on the closest double to 0.01,
+      // whereas 0.1 * 0.1 yields 0.010000000000000002).
+      if ExpSign > 0 then
+        Mantissa := Mantissa * IntPower(10.0, ExpValue)
+      else if ExpValue > 0 then
+        Mantissa := Mantissa / IntPower(10.0, ExpValue);
+    end;
+    // If HasExpDigits is False the exponent indicator was a stray `e` —
+    // ES2026 §21.1.2.13.1 returns the longest valid prefix, which is the
+    // mantissa alone. Mantissa already holds it; nothing else to do.
+  end;
+
   // Step 5: Return the MV of the longest valid prefix of trimmedString
-  Result := TGocciaNumberLiteralValue.Create(Sign * (IntegerPart + (FractionalPart / FractionDivisor)));
+  Result := TGocciaNumberLiteralValue.Create(Sign * Mantissa);
 end;
 
 // ES2026 §21.1.2.2 Number.isFinite(number)

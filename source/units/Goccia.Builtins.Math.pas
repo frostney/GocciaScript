@@ -182,8 +182,14 @@ begin
   TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Math.floor', ThrowError);
   // Step 1: Let n be ? ToNumber(x).
   NumberArg := TGocciaArgumentConverter.GetNumber(AArgs, 0);
-  // Step 2: If n is NaN, +∞𝔽, -∞𝔽, or an integral Number, return n.
-  if NumberArg.IsNaN or NumberArg.IsInfinite then
+  // Step 2: If n is NaN, +∞𝔽, -∞𝔽, return n. Signed-zero is preserved
+  // (Math.floor(-0𝔽) is -0𝔽, not +0𝔽).
+  if NumberArg.IsNaN or NumberArg.IsInfinite or NumberArg.IsNegativeZero then
+  begin
+    Result := NumberArg;
+    Exit;
+  end;
+  if NumberArg.Value = 0 then
   begin
     Result := NumberArg;
     Exit;
@@ -196,6 +202,7 @@ end;
 function TGocciaMath.MathCeil(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   NumberArg: TGocciaNumberLiteralValue;
+  V: Double;
 begin
   TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Math.ceil', ThrowError);
   // Step 1: Let n be ? ToNumber(x).
@@ -206,8 +213,15 @@ begin
     Result := NumberArg;
     Exit;
   end;
-  // Step 3: Return the smallest (closest to -∞) integral Number ≥ n.
-  Result := TGocciaNumberLiteralValue.Create(Ceil(NumberArg.Value));
+  // Step 3: If n < +0𝔽 and n > -1𝔽, return -0𝔽 (preserves signed-zero).
+  V := NumberArg.Value;
+  if (V < 0) and (V > -1) then
+  begin
+    Result := TGocciaNumberLiteralValue.NegativeZeroValue;
+    Exit;
+  end;
+  // Step 4: Return the smallest (closest to -∞) integral Number ≥ n.
+  Result := TGocciaNumberLiteralValue.Create(Ceil(V));
 end;
 
 // §21.3.2.28 Math.round ( x )
@@ -312,18 +326,119 @@ begin
   end;
 end;
 
-// §21.3.2.26 Math.pow ( base, exponent )
+// §21.3.2.26 Math.pow ( base, exponent ) — calls Number::exponentiate (§6.1.6.1.3)
 function TGocciaMath.MathPow(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Base, Exponent: TGocciaNumberLiteralValue;
+  B, E, AbsB: Double;
+  IntPart: Double;
+  ExpIsOddInteger: Boolean;
 begin
   TGocciaArgumentValidator.RequireExactly(AArgs, 2, 'Math.pow', ThrowError);
-  // Step 1: Let base be ? ToNumber(base).
   Base := TGocciaArgumentConverter.GetNumber(AArgs, 0);
-  // Step 2: Let exponent be ? ToNumber(exponent).
   Exponent := TGocciaArgumentConverter.GetNumber(AArgs, 1);
-  // Step 3: Return Number::exponentiate(base, exponent).
-  Result := TGocciaNumberLiteralValue.Create(Power(Base.Value, Exponent.Value));
+  B := Base.Value;
+  E := Exponent.Value;
+
+  // ES2026 §6.1.6.1.3 Number::exponentiate(base, exponent)
+  // 1. If exponent is NaN, return NaN.
+  if Exponent.IsNaN then
+    Exit(TGocciaNumberLiteralValue.NaNValue);
+  // 2. If exponent is either +0 or -0, return 1.
+  if E = 0 then
+    Exit(TGocciaNumberLiteralValue.Create(1));
+  // 3. If base is NaN, return NaN.
+  if Base.IsNaN then
+    Exit(TGocciaNumberLiteralValue.NaNValue);
+
+  // Pre-compute "exponent is an odd integer" for sign-of-zero / sign-of-Infinity cases.
+  // Doubles above 2^53 round each integer position to even precision, so
+  // "odd integer" can only be detected up to that magnitude — guard against
+  // huge values to avoid Int64 overflow in Round() on values like 1.8e308.
+  ExpIsOddInteger := (not Exponent.IsInfinite)
+    and (Frac(E) = 0)
+    and (Abs(E) < 9007199254740992.0) // 2^53
+    and (Round(E) <> Round(E / 2) * 2);
+
+  // 4. If base is +∞, return +∞ if exponent > 0 else +0.
+  if Base.IsInfinity then
+  begin
+    if E > 0 then
+      Exit(TGocciaNumberLiteralValue.InfinityValue);
+    Exit(TGocciaNumberLiteralValue.Create(0));
+  end;
+  // 5. If base is -∞:
+  //    a. If exponent > 0: -∞ if odd-integer else +∞.
+  //    b. If exponent < 0: -0 if odd-integer else +0.
+  if Base.IsNegativeInfinity then
+  begin
+    if E > 0 then
+    begin
+      if ExpIsOddInteger then
+        Exit(TGocciaNumberLiteralValue.NegativeInfinityValue);
+      Exit(TGocciaNumberLiteralValue.InfinityValue);
+    end;
+    if ExpIsOddInteger then
+      Exit(TGocciaNumberLiteralValue.NegativeZeroValue);
+    Exit(TGocciaNumberLiteralValue.Create(0));
+  end;
+  // 6. If base is +0, return +0 if exponent > 0 else +∞.
+  // 7. If base is -0:
+  //    a. If exponent > 0: -0 if odd-integer else +0.
+  //    b. If exponent < 0: -∞ if odd-integer else +∞.
+  if B = 0 then
+  begin
+    if Base.IsNegativeZero then
+    begin
+      if E > 0 then
+      begin
+        if ExpIsOddInteger then
+          Exit(TGocciaNumberLiteralValue.NegativeZeroValue);
+        Exit(TGocciaNumberLiteralValue.Create(0));
+      end;
+      if ExpIsOddInteger then
+        Exit(TGocciaNumberLiteralValue.NegativeInfinityValue);
+      Exit(TGocciaNumberLiteralValue.InfinityValue);
+    end;
+    if E > 0 then
+      Exit(TGocciaNumberLiteralValue.Create(0));
+    Exit(TGocciaNumberLiteralValue.InfinityValue);
+  end;
+  // 8. (Assert base is finite, base ≠ 0.) — ensured by the cases above.
+  // 9. If exponent is +∞:
+  //    a. abs(base) > 1 → +∞.
+  //    b. abs(base) = 1 → NaN.
+  //    c. abs(base) < 1 → +0.
+  if Exponent.IsInfinity then
+  begin
+    AbsB := Abs(B);
+    if AbsB > 1 then
+      Exit(TGocciaNumberLiteralValue.InfinityValue);
+    if AbsB = 1 then
+      Exit(TGocciaNumberLiteralValue.NaNValue);
+    Exit(TGocciaNumberLiteralValue.Create(0));
+  end;
+  // 10. If exponent is -∞:
+  //     a. abs(base) > 1 → +0.
+  //     b. abs(base) = 1 → NaN.
+  //     c. abs(base) < 1 → +∞.
+  if Exponent.IsNegativeInfinity then
+  begin
+    AbsB := Abs(B);
+    if AbsB > 1 then
+      Exit(TGocciaNumberLiteralValue.Create(0));
+    if AbsB = 1 then
+      Exit(TGocciaNumberLiteralValue.NaNValue);
+    Exit(TGocciaNumberLiteralValue.InfinityValue);
+  end;
+  // 11. (base, exponent both finite & base ≠ 0.)
+  // 12. If base < 0 and exponent is not an integer, return NaN.
+  if (B < 0) and (Frac(E) <> 0) then
+    Exit(TGocciaNumberLiteralValue.NaNValue);
+  // 13. Implementation-defined approximation. FreePascal's Power handles the
+  //     non-special cases via exp/ln; the special cases above are covered.
+  IntPart := Power(B, E);
+  Result := TGocciaNumberLiteralValue.Create(IntPart);
 end;
 
 // §21.3.2.32 Math.sqrt ( x )
