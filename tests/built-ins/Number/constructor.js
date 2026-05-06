@@ -66,6 +66,10 @@ describe("Number constructor", () => {
     expect(Number(wrapped)).toBe(55);
   });
 
+  test("Number(Symbol()) throws TypeError", () => {
+    expect(() => Number(Symbol("x"))).toThrow(TypeError);
+  });
+
   test("Number(array) coerces via ToPrimitive, not element-wise", () => {
     expect(Number([])).toBe(0);
     expect(Number([42])).toBe(42);

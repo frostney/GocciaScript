@@ -58,7 +58,7 @@ type
     procedure SetProperty(const AName: string; const AValue: TGocciaValue); override;
     function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; virtual;
     function GetOwnPropertyDescriptor(const AName: string): TGocciaPropertyDescriptor; virtual;
-    function HasProperty(const AName: string): Boolean;
+    function HasProperty(const AName: string): Boolean; virtual;
     function HasOwnProperty(const AName: string): Boolean; virtual;
     function DeleteProperty(const AName: string): Boolean; virtual;
 
