@@ -46,7 +46,7 @@ describe("Proxy has trap", () => {
     expect("public" in proxy).toBe(true);
   });
 
-  test("has trap fires through prototype chain via HasProperty", () => {
+  test("has trap fires through prototype chain via HasProperty (arrow)", () => {
     const calls = [];
     const handler = {
       has: (t, pk) => {
@@ -58,6 +58,20 @@ describe("Proxy has trap", () => {
     "foo" in obj;
     expect(calls.length).toBe(1);
     expect(calls[0]).toBe("foo");
+  });
+
+  test("has trap fires through prototype chain via HasProperty (method)", () => {
+    const calls = [];
+    const handler = {
+      has(t, pk) {
+        calls.push(pk);
+        return pk in t;
+      },
+    };
+    const obj = Object.create(new Proxy({}, handler));
+    "bar" in obj;
+    expect(calls.length).toBe(1);
+    expect(calls[0]).toBe("bar");
   });
 
   test("can pretend properties exist", () => {
