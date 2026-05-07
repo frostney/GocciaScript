@@ -44,3 +44,36 @@ test("var redeclaration with undefined initializer updates captured cell", () =>
   };
   expect(fn()).toBeUndefined();
 });
+
+test("post-increment on captured var syncs upvalue cell", () => {
+  const fn = () => {
+    var i = 0;
+    const get = () => i;
+    i++;
+    i++;
+    return [get(), i];
+  };
+  expect(fn()).toEqual([2, 2]);
+});
+
+test("pre-increment on captured var syncs upvalue cell", () => {
+  const fn = () => {
+    var i = 0;
+    const get = () => i;
+    ++i;
+    ++i;
+    return [get(), i];
+  };
+  expect(fn()).toEqual([2, 2]);
+});
+
+test("decrement on captured var syncs upvalue cell", () => {
+  const fn = () => {
+    var i = 5;
+    const get = () => i;
+    i--;
+    --i;
+    return [get(), i];
+  };
+  expect(fn()).toEqual([3, 3]);
+});

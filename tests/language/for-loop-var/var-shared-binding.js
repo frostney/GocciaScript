@@ -23,3 +23,13 @@ test("multiple var declarations in for-init hoist", () => {
   };
   expect(f()).toEqual([4, 5]);
 });
+
+test("var captures shared binding across iterations", () => {
+  const fns = [];
+  for (var i = 0; i < 3; i++) {
+    fns.push(() => i);
+  }
+  expect(fns[0]()).toBe(3);
+  expect(fns[1]()).toBe(3);
+  expect(fns[2]()).toBe(3);
+});

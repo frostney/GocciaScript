@@ -106,3 +106,69 @@ test("increment cannot mutate captured const binding", () => {
     mutate();
   }).toThrow(TypeError);
 });
+
+test("post-increment on captured local syncs upvalue cell", () => {
+  const f = () => {
+    let i = 0;
+    const get = () => i;
+    i++;
+    i++;
+    return [get(), i];
+  };
+  expect(f()).toEqual([2, 2]);
+});
+
+test("pre-increment on captured local syncs upvalue cell", () => {
+  const f = () => {
+    let i = 0;
+    const get = () => i;
+    ++i;
+    ++i;
+    return [get(), i];
+  };
+  expect(f()).toEqual([2, 2]);
+});
+
+test("post-decrement on captured local syncs upvalue cell", () => {
+  const f = () => {
+    let i = 5;
+    const get = () => i;
+    i--;
+    i--;
+    return [get(), i];
+  };
+  expect(f()).toEqual([3, 3]);
+});
+
+test("pre-decrement on captured local syncs upvalue cell", () => {
+  const f = () => {
+    let i = 5;
+    const get = () => i;
+    --i;
+    --i;
+    return [get(), i];
+  };
+  expect(f()).toEqual([3, 3]);
+});
+
+test("post-increment on captured local returns old value", () => {
+  const f = () => {
+    let i = 10;
+    const get = () => i;
+    const a = i++;
+    const b = i++;
+    return [a, b, get()];
+  };
+  expect(f()).toEqual([10, 11, 12]);
+});
+
+test("pre-increment on captured local returns new value", () => {
+  const f = () => {
+    let i = 10;
+    const get = () => i;
+    const a = ++i;
+    const b = ++i;
+    return [a, b, get()];
+  };
+  expect(f()).toEqual([11, 12, 12]);
+});
