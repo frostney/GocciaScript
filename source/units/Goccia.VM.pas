@@ -6781,6 +6781,9 @@ begin
   ATemplate := AClosure.Template;
   AFrame.Template := ATemplate;
 
+  if not ATemplate.IsArrow then
+    FCurrentNewTarget := nil;
+
   if FCoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) and
      Assigned(ATemplate.DebugInfo) and (ATemplate.DebugInfo.LineMapCount > 0) then
     TGocciaCoverageTracker.Instance.RecordLineHit(
@@ -6873,6 +6876,7 @@ var
   SavedLocalCellCount: Integer;
   SavedArgCount: Integer;
   SavedClosure: TGocciaBytecodeClosure;
+  SavedNewTarget: TGocciaValue;
   SavedHandlerCount: Integer;
   InitialFrameStackCount: Integer;
   ReturnValue: TGocciaRegister;
@@ -6919,6 +6923,7 @@ begin
   SavedLocalCellCount := FLocalCellCount;
   SavedArgCount := FArgCount;
   SavedClosure := FCurrentClosure;
+  SavedNewTarget := FCurrentNewTarget;
   SavedHandlerCount := FHandlerStack.Count;
   InitialFrameStackCount := FFrameStackCount;
   FLastClosureThisValue := AThisValue;
@@ -6926,7 +6931,8 @@ begin
     SetupNewFrame(AClosure, AThisValue, AArguments, AArgCount,
       AArg0, AArg1, AArg2, AUseFixedArgs,
       Frame, Template, PrevCovLine, ProfileEntryTimestamp);
-    FCurrentNewTarget := FPendingNewTarget;
+    if Assigned(FPendingNewTarget) then
+      FCurrentNewTarget := FPendingNewTarget;
     FPendingNewTarget := nil;
     RestoredContinuation := Assigned(GActiveBytecodeGenerator) and
       GActiveBytecodeGenerator.RestoreContinuation(
@@ -9492,6 +9498,7 @@ begin
     TeardownCurrentFrame(Template, ProfileEntryTimestamp, SavedHandlerCount);
     // Restore the caller's state
     FCurrentClosure := SavedClosure;
+    FCurrentNewTarget := SavedNewTarget;
     FArgCount := SavedArgCount;
     FRegisterBase := SavedRegisterBase;
     FRegisterCount := SavedRegisterCount;

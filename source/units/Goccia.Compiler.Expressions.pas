@@ -1301,6 +1301,7 @@ begin
   ChildTemplate.IsArrow := True;
   ChildTemplate.SourceText := AExpr.SourceText;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
+  ChildScope.IsArrow := True;
 
   ChildScope.DeclareLocal('__receiver', False);
   ChildTemplate.ParameterCount := Length(AExpr.Parameters);

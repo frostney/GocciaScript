@@ -56,6 +56,7 @@ type
     FNextSlot: UInt8;
     FMaxSlot: UInt8;
     FPrivatePrefix: string;
+    FIsArrow: Boolean;
     procedure EnsureLocalIndex;
     procedure RestoreLocalIndexBinding(const ARemovedName: string);
   public
@@ -110,6 +111,7 @@ type
     function HasVisibleLocal(const AName: string): Boolean;
     function ResolvePrivatePrefix: string;
     property PrivatePrefix: string read FPrivatePrefix write FPrivatePrefix;
+    property IsArrow: Boolean read FIsArrow write FIsArrow;
   end;
 
 function NextClassPrivatePrefix: string;
@@ -121,6 +123,7 @@ uses
 
 const
   COMPILER_LOCAL_INDEX_THRESHOLD = 64;
+  COMPILER_SUPER_LOCAL = '__super__';
 
 { TGocciaCompilerScope }
 
@@ -288,6 +291,9 @@ begin
     FUpvalues[Idx].ParamTypeSignature := FParent.FLocals[LocalIdx].ParamTypeSignature;
     Exit(Idx);
   end;
+
+  if not FIsArrow and (AName = COMPILER_SUPER_LOCAL) then
+    Exit(-1);
 
   UpvalueIdx := FParent.ResolveUpvalue(AName);
   if UpvalueIdx >= 0 then

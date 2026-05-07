@@ -2011,10 +2011,7 @@ function TGocciaSuperExpression.Evaluate(const AContext: TGocciaEvaluationContex
 begin
   Result := AContext.Scope.FindSuperClass;
   if not Assigned(Result) then
-  begin
-    AContext.OnError('super can only be used in a class method', Line, Column);
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-  end;
+    ThrowTypeError('super can only be used in a class method');
 end;
 
 // ES2026 §13.3.12.1 ImportMeta : import . meta

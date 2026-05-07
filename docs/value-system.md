@@ -495,7 +495,7 @@ The base runtime type for user-defined functions. Uses call-site `this` binding 
 
 ### Arrow Functions (`TGocciaArrowFunctionValue`)
 
-Extends `TGocciaFunctionValue`. Overrides `BindThis` to walk the closure scope chain for lexical `this`, per ECMAScript spec. Arrow functions never receive their own `this` — they always inherit from their defining scope, regardless of how they are called.
+Extends `TGocciaFunctionValue`. Overrides `CreateCallScope` to return `TGocciaArrowCallScope` (transparent to `Find*` scope walks) and `BindThis` to walk the closure scope chain for lexical `this`, per ECMAScript spec. Arrow functions never receive their own `this`, `super`, `new.target`, or owning class — they always inherit from their defining scope, regardless of how they are called.
 
 Created from `TGocciaArrowFunctionExpression` AST nodes (arrow function syntax: `(x) => ...`).
 

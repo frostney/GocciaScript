@@ -55,6 +55,7 @@ type
 
   TGocciaArrowFunctionValue = class(TGocciaFunctionValue)
   protected
+    function CreateCallScope: TGocciaScope; override;
     procedure BindThis(const ACallScope: TGocciaScope; const AThisValue: TGocciaValue); override;
   end;
 
@@ -404,6 +405,11 @@ begin
 end;
 
 { TGocciaArrowFunctionValue }
+
+function TGocciaArrowFunctionValue.CreateCallScope: TGocciaScope;
+begin
+  Result := TGocciaArrowCallScope.Create(FClosure, FName, Length(FParameters) + 2);
+end;
 
 procedure TGocciaArrowFunctionValue.BindThis(const ACallScope: TGocciaScope; const AThisValue: TGocciaValue);
 var
