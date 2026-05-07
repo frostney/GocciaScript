@@ -85,7 +85,7 @@ describe("super function boundary", () => {
     class Derived extends Base {
       test() {
         const obj = { inner() { return super.hello(); } };
-        expect(() => obj.inner()).toThrow();
+        expect(() => obj.inner()).toThrow(TypeError);
       }
     }
     new Derived().test();
@@ -111,7 +111,7 @@ describe("super function boundary", () => {
           const obj = { f() { return super.hello(); } };
           return obj.f();
         };
-        expect(() => arrow()).toThrow();
+        expect(() => arrow()).toThrow(TypeError);
       }
     }
     new Derived().test();

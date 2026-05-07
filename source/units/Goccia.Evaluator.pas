@@ -1189,14 +1189,7 @@ begin
       SuperObject := nil;
     if (not Assigned(SuperClass)) and
        (not Assigned(SuperObject)) then
-    begin
-      AContext.OnError('super can only be used within a method with a superclass',
-        AMemberExpression.Line, AMemberExpression.Column);
-      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-      if Assigned(AOutObjectValue) then
-        AOutObjectValue^ := TGocciaUndefinedLiteralValue.UndefinedValue;
-      Exit;
-    end;
+      ThrowTypeError('super can only be used within a method with a superclass');
 
     if Assigned(AOutObjectValue) then
       AOutObjectValue^ := SuperClassValue;
