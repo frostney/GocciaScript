@@ -3161,21 +3161,14 @@ var
   Expr: TGocciaExpression;
   SuperInitContext: TGocciaEvaluationContext;
   SuperInitScope: TGocciaScope;
-  OldScope: TGocciaScope;
 begin
   if Assigned(AClassValue.SuperClass) then
   begin
     SuperInitContext := AContext;
-    OldScope := SuperInitContext.Scope;
     SuperInitScope := TGocciaClassInitScope.Create(AContext.Scope, AClassValue.SuperClass);
-    try
-      SuperInitScope.ThisValue := AInstance;
-      SuperInitContext.Scope := SuperInitScope;
-      InitializeObjectInstanceProperties(AInstance, AClassValue.SuperClass, SuperInitContext);
-    finally
-      SuperInitContext.Scope := OldScope;
-      SuperInitScope.Free;
-    end;
+    SuperInitScope.ThisValue := AInstance;
+    SuperInitContext.Scope := SuperInitScope;
+    InitializeObjectInstanceProperties(AInstance, AClassValue.SuperClass, SuperInitContext);
   end;
 
   if AClassValue.HasPrivateInstanceElements then
