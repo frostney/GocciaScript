@@ -32,4 +32,10 @@ describe.runIf(isTemporal)("Temporal year zero", () => {
       Temporal.PlainDateTime.from("-000000-03-31T00:45");
     }).toThrow(RangeError);
   });
+
+  test("Temporal.ZonedDateTime.from rejects -000000", () => {
+    expect(() => {
+      Temporal.ZonedDateTime.from("-000000-03-31T00:45[UTC]");
+    }).toThrow(RangeError);
+  });
 });
