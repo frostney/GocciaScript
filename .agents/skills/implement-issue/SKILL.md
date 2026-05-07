@@ -32,4 +32,4 @@ gh api "repos/$OWNER/$REPO/issues/$ISSUE_NUMBER"
 8. Implement the smallest complete change that satisfies the chosen approach.
 9. Add or update tests and documentation according to `CONTRIBUTING.md`.
 10. Run targeted verification, then broader verification when the change has wider impact.
-11. Finish by running the `/create-pr` workflow. Include `Closes #<number>` in the PR body.
+11. Invoke the `/create-pr` skill to commit, push, and open the pull request. Include `Closes #<number>` in the PR body.
