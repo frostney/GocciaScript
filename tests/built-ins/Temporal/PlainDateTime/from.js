@@ -22,4 +22,13 @@ describe.runIf(isTemporal)("Temporal.PlainDateTime.from", () => {
     expect(dt.day).toBe(15);
     expect(dt.hour).toBe(0);
   });
+
+  test("from() accepts +000000 as year zero", () => {
+    const dt = Temporal.PlainDateTime.from("+000000-03-31T00:45");
+    expect(dt.year).toBe(0);
+    expect(dt.month).toBe(3);
+    expect(dt.day).toBe(31);
+    expect(dt.hour).toBe(0);
+    expect(dt.minute).toBe(45);
+  });
 });
