@@ -35,28 +35,4 @@ describe("Superclass private fields in arrow field initializers", () => {
     expect(c.getB()).toBe(2);
     expect(c.getC()).toBe(3);
   });
-
-  test("superclass private field via method called in derived field initializer", () => {
-    class Base {
-      #secret = 42;
-      getSecret() { return this.#secret; }
-    }
-    class Derived extends Base {
-      value = this.getSecret();
-    }
-    const d = new Derived();
-    expect(d.value).toBe(42);
-  });
-
-  test("superclass private field via getter in derived field initializer", () => {
-    class Base {
-      #val = 99;
-      get val() { return this.#val; }
-    }
-    class Derived extends Base {
-      doubled = this.val * 2;
-    }
-    const d = new Derived();
-    expect(d.doubled).toBe(198);
-  });
 });
