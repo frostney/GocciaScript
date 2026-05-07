@@ -2739,6 +2739,7 @@ end;
 procedure TGocciaArrayValue.SetProperty(const AName: string; const AValue: TGocciaValue);
 var
   Index: Integer;
+  Desc: TGocciaPropertyDescriptorData;
 begin
   // Check if property name is a numeric index
   if TryStrToInt(AName, Index) then
@@ -2754,9 +2755,20 @@ begin
     end;
     // Negative indices are ignored for array assignment
   end
+  else if AName = PROP_LENGTH then
+  begin
+    // §10.4.2.1 → OrdinarySet → OrdinarySetWithOwnDescriptor step 3e:
+    // own writable data property ⇒ [[DefineOwnProperty]](P, {[[Value]]: V})
+    Desc := TGocciaPropertyDescriptorData.Create(AValue, [pfWritable]);
+    try
+      DefineProperty(PROP_LENGTH, Desc);
+    except
+      Desc.Free;
+      raise;
+    end;
+  end
   else
   begin
-    // Fall back to regular object property assignment
     inherited AssignProperty(AName, AValue);
   end;
 end;
