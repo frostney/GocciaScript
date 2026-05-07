@@ -172,3 +172,33 @@ test("pre-increment on captured local returns new value", () => {
   };
   expect(f()).toEqual([11, 12, 12]);
 });
+
+test("increment on captured local coerces string and syncs", () => {
+  const f = () => {
+    let i = "5";
+    const get = () => i;
+    i++;
+    return [get(), i, typeof i];
+  };
+  expect(f()).toEqual([6, 6, "number"]);
+});
+
+test("increment on captured local coerces boolean and syncs", () => {
+  const f = () => {
+    let i = true;
+    const get = () => i;
+    i++;
+    return [get(), i];
+  };
+  expect(f()).toEqual([2, 2]);
+});
+
+test("increment on captured local coerces null and syncs", () => {
+  const f = () => {
+    let i = null;
+    const get = () => i;
+    i++;
+    return [get(), i];
+  };
+  expect(f()).toEqual([1, 1]);
+});
