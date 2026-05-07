@@ -3,15 +3,12 @@ description: Error.prototype.constructor and NativeError.prototype.constructor
 features: [Error]
 ---*/
 
-test("prototype.constructor identity and descriptor for all error types", () => {
-  const types = [Error, TypeError, RangeError, ReferenceError, SyntaxError, URIError, AggregateError, SuppressedError, DOMException];
-  types.forEach((ErrorType) => {
-    expect(ErrorType.prototype.constructor).toBe(ErrorType);
-    const desc = Object.getOwnPropertyDescriptor(ErrorType.prototype, "constructor");
-    expect(desc.writable).toBe(true);
-    expect(desc.configurable).toBe(true);
-    expect(desc.enumerable).toBe(false);
-  });
+test.each([Error, TypeError, RangeError, ReferenceError, SyntaxError, URIError, AggregateError, SuppressedError, DOMException])("%s.prototype.constructor identity and descriptor", (ErrorType) => {
+  expect(ErrorType.prototype.constructor).toBe(ErrorType);
+  const desc = Object.getOwnPropertyDescriptor(ErrorType.prototype, "constructor");
+  expect(desc.writable).toBe(true);
+  expect(desc.configurable).toBe(true);
+  expect(desc.enumerable).toBe(false);
 });
 
 test("error instance .constructor resolves through prototype chain", () => {
