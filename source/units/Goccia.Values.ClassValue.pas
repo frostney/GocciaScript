@@ -968,6 +968,7 @@ var
   ConstructorToCall: TGocciaMethodValue;
   InstancePrototype: TGocciaObjectValue;
   FinalThis: TGocciaValue;
+  ConstructResult: TGocciaValue;
 begin
   // ES2026 §10.2.2 step 5: Let proto be ? GetPrototypeFromConstructor(newTarget)
   if Assigned(ANewTarget) then
@@ -1008,10 +1009,29 @@ begin
   begin
     TGarbageCollector.Instance.AddTempRoot(Instance);
     try
-      ConstructorToCall.CallWithThisValue(AArguments, Instance,
-        FinalThis, ANewTarget);
+      ConstructResult := ConstructorToCall.CallWithThisValue(AArguments,
+        Instance, FinalThis, ANewTarget);
     finally
       TGarbageCollector.Instance.RemoveTempRoot(Instance);
+    end;
+
+    // ES2026 §10.2.2 step 11: explicit Object return replaces the receiver
+    if ConstructResult is TGocciaObjectValue then
+      Exit(TGocciaObjectValue(ConstructResult));
+
+    // ES2026 §10.2.2 step 12: derived constructors must return Object or
+    // undefined — any other value is a TypeError
+    if Assigned(FSuperClass) or Assigned(FNativeSuperConstructor) then
+    begin
+      if Assigned(ConstructResult) and
+         not (ConstructResult is TGocciaUndefinedLiteralValue) then
+        ThrowTypeError('Derived constructor returned non-object',
+          SSuggestNotConstructorType);
+
+      // Derived constructor returned undefined — use the (possibly replaced)
+      // this binding from super()
+      if (FinalThis is TGocciaObjectValue) then
+        Exit(TGocciaObjectValue(FinalThis));
     end;
   end
   else if Assigned(NativeInstance) and (NativeInstance is TGocciaInstanceValue) then
