@@ -2100,23 +2100,12 @@ begin
     Exit(TGocciaTypedArrayValue.Create(FKind, SAB, ByteOff, ElemLen));
   end;
 
-  // new TypedArray(array)
-  if FirstArg is TGocciaArrayValue then
-  begin
-    SrcArr := TGocciaArrayValue(FirstArg);
-    NewTA := TGocciaTypedArrayValue.Create(FKind, SrcArr.Elements.Count);
-    for I := 0 to SrcArr.Elements.Count - 1 do
-      NewTA.WriteValueToElement(I, SrcArr.Elements[I]);
-    Exit(NewTA);
-  end;
-
-  // ES2026 §23.2.5.1 steps 5d-f: object with @@iterator or array-like
+  // ES2026 §23.2.5.1 step 5c: @@iterator check before array fast path
   if FirstArg is TGocciaObjectValue then
   begin
     Iterator := GetIteratorFromValue(FirstArg);
     if Assigned(Iterator) then
     begin
-      // Step 5e: InitializeTypedArrayFromList via IterableToList
       Values := TGocciaValueList.Create(False);
       try
         TGarbageCollector.Instance.AddTempRoot(Iterator);
@@ -2144,7 +2133,15 @@ begin
       Exit(NewTA);
     end;
 
-    // Step 5f: InitializeTypedArrayFromArrayLike
+    if FirstArg is TGocciaArrayValue then
+    begin
+      SrcArr := TGocciaArrayValue(FirstArg);
+      NewTA := TGocciaTypedArrayValue.Create(FKind, SrcArr.Elements.Count);
+      for I := 0 to SrcArr.Elements.Count - 1 do
+        NewTA.WriteValueToElement(I, SrcArr.Elements[I]);
+      Exit(NewTA);
+    end;
+
     Len := LengthOfArrayLike(TGocciaObjectValue(FirstArg));
     NewTA := TGocciaTypedArrayValue.Create(FKind, Len);
     for I := 0 to Len - 1 do
@@ -2215,6 +2212,51 @@ begin
   else
     ThisArg := TGocciaUndefinedLiteralValue.UndefinedValue;
 
+  // ES2026 §23.2.2.1 step 5: GetMethod(source, @@iterator) before type fast paths
+  Iterator := GetIteratorFromValue(Source);
+  if Assigned(Iterator) then
+  begin
+    Values := TGocciaValueList.Create(False);
+    try
+      TGarbageCollector.Instance.AddTempRoot(Iterator);
+      try
+        try
+          IterResult := Iterator.AdvanceNext;
+          while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
+          begin
+            Values.Add(IterResult.GetProperty(PROP_VALUE));
+            IterResult := Iterator.AdvanceNext;
+          end;
+        except
+          CloseIteratorPreservingError(Iterator);
+          raise;
+        end;
+      finally
+        TGarbageCollector.Instance.RemoveTempRoot(Iterator);
+      end;
+      NewTA := TGocciaTypedArrayValue.Create(FKind, Values.Count);
+      for I := 0 to Values.Count - 1 do
+      begin
+        Val := Values[I];
+        if HasMapFn then
+        begin
+          MapArgs := TGocciaArgumentsCollection.Create;
+          try
+            MapArgs.Add(Val);
+            MapArgs.Add(TGocciaNumberLiteralValue.Create(I));
+            Val := MapFn.Call(MapArgs, ThisArg);
+          finally
+            MapArgs.Free;
+          end;
+        end;
+        NewTA.WriteValueToElement(I, Val);
+      end;
+    finally
+      Values.Free;
+    end;
+    Exit(NewTA);
+  end;
+
   if Source is TGocciaTypedArrayValue then
   begin
     SrcTA := TGocciaTypedArrayValue(Source);
@@ -2257,51 +2299,6 @@ begin
         end;
       end;
       NewTA.WriteValueToElement(I, Val);
-    end;
-    Exit(NewTA);
-  end;
-
-  // Step 5-6: iterable path — GetMethod(source, @@iterator)
-  Iterator := GetIteratorFromValue(Source);
-  if Assigned(Iterator) then
-  begin
-    Values := TGocciaValueList.Create(False);
-    try
-      TGarbageCollector.Instance.AddTempRoot(Iterator);
-      try
-        try
-          IterResult := Iterator.AdvanceNext;
-          while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
-          begin
-            Values.Add(IterResult.GetProperty(PROP_VALUE));
-            IterResult := Iterator.AdvanceNext;
-          end;
-        except
-          CloseIteratorPreservingError(Iterator);
-          raise;
-        end;
-      finally
-        TGarbageCollector.Instance.RemoveTempRoot(Iterator);
-      end;
-      NewTA := TGocciaTypedArrayValue.Create(FKind, Values.Count);
-      for I := 0 to Values.Count - 1 do
-      begin
-        Val := Values[I];
-        if HasMapFn then
-        begin
-          MapArgs := TGocciaArgumentsCollection.Create;
-          try
-            MapArgs.Add(Val);
-            MapArgs.Add(TGocciaNumberLiteralValue.Create(I));
-            Val := MapFn.Call(MapArgs, ThisArg);
-          finally
-            MapArgs.Free;
-          end;
-        end;
-        NewTA.WriteValueToElement(I, Val);
-      end;
-    finally
-      Values.Free;
     end;
     Exit(NewTA);
   end;
