@@ -2754,9 +2754,15 @@ begin
     end;
     // Negative indices are ignored for array assignment
   end
+  else if AName = PROP_LENGTH then
+  begin
+    // §10.4.2.1 → OrdinarySet → OrdinarySetWithOwnDescriptor step 3e:
+    // own writable data property ⇒ [[DefineOwnProperty]](P, {[[Value]]: V})
+    DefineProperty(PROP_LENGTH,
+      TGocciaPropertyDescriptorData.Create(AValue, [pfWritable]));
+  end
   else
   begin
-    // Fall back to regular object property assignment
     inherited AssignProperty(AName, AValue);
   end;
 end;

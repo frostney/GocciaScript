@@ -111,3 +111,17 @@ test("setting length to NaN throws RangeError", () => {
     [].length = NaN;
   }).toThrow(RangeError);
 });
+
+test("setting length does not walk the prototype chain", () => {
+  const traps = [];
+  const array = [1, 2, 3];
+  Object.setPrototypeOf(array, new Proxy(Array.prototype, {
+    getOwnPropertyDescriptor(t, pk) {
+      traps.push("gOPD:" + String(pk));
+      return Reflect.getOwnPropertyDescriptor(t, pk);
+    }
+  }));
+  array.length = 0;
+  expect(traps.length).toBe(0);
+  expect(array.length).toBe(0);
+});
