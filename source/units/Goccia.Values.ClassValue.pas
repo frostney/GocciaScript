@@ -1028,8 +1028,6 @@ begin
         ThrowTypeError('Derived constructor returned non-object',
           SSuggestNotConstructorType);
 
-      // Derived constructor returned undefined — use the (possibly replaced)
-      // this binding from super()
       if (FinalThis is TGocciaObjectValue) then
         Exit(TGocciaObjectValue(FinalThis));
     end;

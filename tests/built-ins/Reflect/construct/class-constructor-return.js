@@ -10,21 +10,11 @@ describe("Reflect.construct with class constructor explicit object return", () =
         return { explicit: true };
       }
     }
-    const obj = Reflect.construct(Foo, []);
-    expect(obj.explicit).toBe(true);
-    expect(obj instanceof Foo).toBe(false);
-  });
-
-  test("base class explicit object return matches new operator behavior", () => {
-    class Foo {
-      constructor() {
-        return { replaced: true };
-      }
-    }
     const viaNew = new Foo();
     const viaReflect = Reflect.construct(Foo, []);
-    expect(viaNew.replaced).toBe(true);
-    expect(viaReflect.replaced).toBe(true);
+    expect(viaReflect.explicit).toBe(true);
+    expect(viaReflect instanceof Foo).toBe(false);
+    expect(viaNew.explicit).toBe(viaReflect.explicit);
   });
 
   test("base class primitive return is ignored — receiver wins", () => {
