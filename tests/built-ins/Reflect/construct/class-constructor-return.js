@@ -63,6 +63,29 @@ describe("Reflect.construct with class constructor explicit object return", () =
     expect(() => Reflect.construct(Derived, [])).toThrow(TypeError);
   });
 
+  test("base class returning null is ignored — receiver wins", () => {
+    class Foo {
+      constructor() {
+        this.kept = true;
+        return null;
+      }
+    }
+    const obj = Reflect.construct(Foo, []);
+    expect(obj.kept).toBe(true);
+    expect(obj instanceof Foo).toBe(true);
+  });
+
+  test("derived class returning null throws TypeError", () => {
+    class Base {}
+    class Derived extends Base {
+      constructor() {
+        super();
+        return null;
+      }
+    }
+    expect(() => Reflect.construct(Derived, [])).toThrow(TypeError);
+  });
+
   test("explicit object return prototype is not patched by newTarget", () => {
     class Foo {
       constructor() {
@@ -89,6 +112,23 @@ describe("Reflect.construct with class constructor explicit object return", () =
     }
     const obj = Reflect.construct(Derived, []);
     expect(obj.fromBase).toBe(true);
+  });
+
+  test("super() replacement with separate newTarget returns replacement unchanged", () => {
+    class Base {
+      constructor() {
+        return { fromBase: true };
+      }
+    }
+    class Derived extends Base {
+      constructor() {
+        super();
+      }
+    }
+    class NT {}
+    const obj = Reflect.construct(Derived, [], NT);
+    expect(obj.fromBase).toBe(true);
+    expect(Object.getPrototypeOf(obj)).toBe(Object.prototype);
   });
 
   test("constructor arguments are forwarded correctly", () => {
