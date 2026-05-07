@@ -313,6 +313,16 @@ begin
   SuppressedErrorConstructorFunc.DefineProperty(PROP_PROTOTYPE, TGocciaPropertyDescriptorData.Create(FSuppressedErrorProto, []));
   DOMExceptionConstructorFunc.DefineProperty(PROP_PROTOTYPE, TGocciaPropertyDescriptorData.Create(FDOMExceptionProto, []));
 
+  FErrorProto.DefineProperty(PROP_CONSTRUCTOR, TGocciaPropertyDescriptorData.Create(ErrorConstructorFunc, [pfConfigurable, pfWritable]));
+  FTypeErrorProto.DefineProperty(PROP_CONSTRUCTOR, TGocciaPropertyDescriptorData.Create(TypeErrorConstructorFunc, [pfConfigurable, pfWritable]));
+  FReferenceErrorProto.DefineProperty(PROP_CONSTRUCTOR, TGocciaPropertyDescriptorData.Create(ReferenceErrorConstructorFunc, [pfConfigurable, pfWritable]));
+  FRangeErrorProto.DefineProperty(PROP_CONSTRUCTOR, TGocciaPropertyDescriptorData.Create(RangeErrorConstructorFunc, [pfConfigurable, pfWritable]));
+  FSyntaxErrorProto.DefineProperty(PROP_CONSTRUCTOR, TGocciaPropertyDescriptorData.Create(SyntaxErrorConstructorFunc, [pfConfigurable, pfWritable]));
+  FURIErrorProto.DefineProperty(PROP_CONSTRUCTOR, TGocciaPropertyDescriptorData.Create(URIErrorConstructorFunc, [pfConfigurable, pfWritable]));
+  FAggregateErrorProto.DefineProperty(PROP_CONSTRUCTOR, TGocciaPropertyDescriptorData.Create(AggregateErrorConstructorFunc, [pfConfigurable, pfWritable]));
+  FSuppressedErrorProto.DefineProperty(PROP_CONSTRUCTOR, TGocciaPropertyDescriptorData.Create(SuppressedErrorConstructorFunc, [pfConfigurable, pfWritable]));
+  FDOMExceptionProto.DefineProperty(PROP_CONSTRUCTOR, TGocciaPropertyDescriptorData.Create(DOMExceptionConstructorFunc, [pfConfigurable, pfWritable]));
+
   AScope.DefineLexicalBinding(ERROR_NAME, ErrorConstructorFunc, dtConst);
   AScope.DefineLexicalBinding(TYPE_ERROR_NAME, TypeErrorConstructorFunc, dtConst);
   AScope.DefineLexicalBinding(REFERENCE_ERROR_NAME, ReferenceErrorConstructorFunc, dtConst);
