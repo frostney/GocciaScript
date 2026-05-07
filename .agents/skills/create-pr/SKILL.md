@@ -21,7 +21,7 @@ This command is explicit permission to commit relevant changes, push the branch,
 5. Commit with a concise message passed via HEREDOC.
 6. Push the branch with upstream tracking when needed: `git push -u origin HEAD`.
 7. Build the PR body from the repository's pull request template. Read `.github/pull_request_template.md`, or the relevant template under `.github/PULL_REQUEST_TEMPLATE/` if the repository uses multiple templates. Fill the template faithfully and preserve its structure.
-8. Create the pull request with GraphQL first:
+8. Create the pull request as a **draft** with GraphQL first:
 
 ```bash
 gh api graphql \
@@ -31,7 +31,8 @@ gh api graphql \
       baseRefName: $base,
       headRefName: $head,
       title: $title,
-      body: $body
+      body: $body,
+      draft: true
     }) {
       pullRequest { url number }
     }
@@ -43,7 +44,7 @@ gh api graphql \
   -f body="$PR_BODY"
 ```
 
-9. If GraphQL is rate-limited or unavailable, create the pull request with REST:
+9. If GraphQL is rate-limited or unavailable, create the pull request as a **draft** with REST:
 
 ```bash
 gh api "repos/$OWNER/$REPO/pulls" \
@@ -51,6 +52,7 @@ gh api "repos/$OWNER/$REPO/pulls" \
   -f head="$HEAD_BRANCH" \
   -f base="$BASE_BRANCH" \
   -f body="$PR_BODY" \
+  -F draft=true \
   --jq '.html_url'
 ```
 
