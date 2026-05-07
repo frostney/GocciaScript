@@ -53,6 +53,17 @@ describe("new.target function boundary", () => {
     const f = new Foo();
     expect(f.result).toBe(undefined);
   });
+
+  test("arrow inherits new.target through native callback", () => {
+    class Foo {
+      constructor() {
+        this.results = [1, 2].map(() => new.target);
+      }
+    }
+    const f = new Foo();
+    expect(f.results[0]).toBe(Foo);
+    expect(f.results[1]).toBe(Foo);
+  });
 });
 
 describe("super function boundary", () => {
