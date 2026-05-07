@@ -41,4 +41,11 @@ describe.runIf(isTemporal)("Temporal.PlainDate.from", () => {
     const d = Temporal.PlainDate.from({ year: 2024, month: 3, day: 0 }, { overflow: "constrain" });
     expect(d.day).toBe(1);
   });
+
+  test("from() accepts +000000 as year zero", () => {
+    const d = Temporal.PlainDate.from("+000000-03-31");
+    expect(d.year).toBe(0);
+    expect(d.month).toBe(3);
+    expect(d.day).toBe(31);
+  });
 });

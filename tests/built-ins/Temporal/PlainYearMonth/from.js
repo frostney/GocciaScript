@@ -54,4 +54,10 @@ describe.runIf(isTemporal)("Temporal.PlainYearMonth.from", () => {
     expect(() => Temporal.PlainYearMonth.from({ year: 2024, monthCode: "M13" })).toThrow();
     expect(() => Temporal.PlainYearMonth.from({ year: 2024, monthCode: "M00" })).toThrow();
   });
+
+  test("from() accepts +000000 as year zero", () => {
+    const ym = Temporal.PlainYearMonth.from("+000000-03");
+    expect(ym.year).toBe(0);
+    expect(ym.month).toBe(3);
+  });
 });

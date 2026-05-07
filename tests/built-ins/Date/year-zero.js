@@ -10,7 +10,7 @@ describe("Date year zero", () => {
   });
 
   test("new Date('+000000-03-31T00:45Z') is valid", () => {
-    expect(isNaN(new Date("+000000-03-31T00:45Z").getTime())).toBe(false);
+    expect(new Date("+000000-03-31T00:45Z").getTime()).toBe(-62159440500000);
   });
 });
 
