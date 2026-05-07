@@ -3088,8 +3088,6 @@ begin
     InitializerReplayReceiver := nil;
     TGarbageCollector.Instance.AddTempRoot(RootedInstance);
     try
-      FVM.RunClassInitializers(Self, Instance);
-
       ConstructorToCall := nil;
       if (SuperClass is TGocciaVMClassValue) and
          Assigned(TGocciaVMClassValue(SuperClass).FConstructorValue) then
@@ -3151,6 +3149,11 @@ begin
         else if Instance is TGocciaInstanceValue then
           TGocciaInstanceValue(Instance).InitializeNativeFromArguments(AArguments);
       end;
+
+      if not Assigned(InitializerReplayReceiver) or
+         (Instance <> InitializerReplayReceiver) then
+        FVM.RunClassInitializers(Self, Instance);
+
       if Assigned(InitializerReplayReceiver) and
          (Instance = InitializerReplayReceiver) then
         FVM.RunClassInitializers(Self, Instance);
@@ -3388,7 +3391,6 @@ begin
       end
       else
       begin
-        FVM.RunClassInitializers(Self, Instance);
         ConstructorToCall := nil;
 
         if (SuperClass is TGocciaVMClassValue) and
@@ -3480,6 +3482,10 @@ begin
               TGocciaInstanceValue(Instance).InitializeNativeFromArguments(BoxedArgs);
           end;
         end;
+
+        if not Assigned(InitializerReplayReceiver) or
+           (Instance <> InitializerReplayReceiver) then
+          FVM.RunClassInitializers(Self, Instance);
       end;
       if Assigned(InitializerReplayReceiver) and
          (Instance = InitializerReplayReceiver) then
