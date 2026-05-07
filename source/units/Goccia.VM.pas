@@ -3388,7 +3388,6 @@ begin
       end
       else
       begin
-        FVM.RunClassInitializers(Self, Instance);
         ConstructorToCall := nil;
 
         if (SuperClass is TGocciaVMClassValue) and
@@ -3480,6 +3479,10 @@ begin
               TGocciaInstanceValue(Instance).InitializeNativeFromArguments(BoxedArgs);
           end;
         end;
+
+        if not Assigned(InitializerReplayReceiver) or
+           (Instance <> InitializerReplayReceiver) then
+          FVM.RunClassInitializers(Self, Instance);
       end;
       if Assigned(InitializerReplayReceiver) and
          (Instance = InitializerReplayReceiver) then
