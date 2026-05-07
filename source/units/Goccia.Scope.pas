@@ -40,6 +40,7 @@ type
     function GetOwningClass: TGocciaValue; virtual;
     function GetSuperClass: TGocciaValue; virtual;
     function GetNewTarget: TGocciaValue; virtual;
+    function IsFunctionBoundary: Boolean; virtual;
   public
     constructor Create(const AParent: TGocciaScope = nil; const AScopeKind: TGocciaScopeKind = skUnknown; const ACustomLabel: string = ''; const ACapacity: Integer = 0);
     destructor Destroy; override;
@@ -117,12 +118,15 @@ type
   TGocciaCallScope = class(TGocciaScope)
   protected
     function GetThisValue: TGocciaValue; override;
+    function IsFunctionBoundary: Boolean; override;
   public
     constructor Create(const AParent: TGocciaScope; const AFunctionName: string; const ACapacity: Integer = 0);
   end;
 
   // Arrow function call scope -- transparent to Find* scope walks
   TGocciaArrowCallScope = class(TGocciaCallScope)
+  protected
+    function IsFunctionBoundary: Boolean; override;
   public
     constructor Create(const AParent: TGocciaScope; const AFunctionName: string; const ACapacity: Integer = 0);
   end;
@@ -246,6 +250,11 @@ begin
   Result := nil;
 end;
 
+function TGocciaScope.IsFunctionBoundary: Boolean;
+begin
+  Result := False;
+end;
+
 function TGocciaScope.FindFunctionOrModuleScope: TGocciaScope;
 begin
   Result := Self;
@@ -278,7 +287,7 @@ begin
   begin
     Result := Current.GetOwningClass;
     if Assigned(Result) then Exit;
-    if (Current is TGocciaCallScope) and not (Current is TGocciaArrowCallScope) then
+    if Current.IsFunctionBoundary then
       Exit(nil);
     Current := Current.FParent;
   end;
@@ -294,7 +303,7 @@ begin
   begin
     Result := Current.GetSuperClass;
     if Assigned(Result) then Exit;
-    if (Current is TGocciaCallScope) and not (Current is TGocciaArrowCallScope) then
+    if Current.IsFunctionBoundary then
       Exit(nil);
     Current := Current.FParent;
   end;
@@ -310,7 +319,7 @@ begin
   begin
     Result := Current.GetNewTarget;
     if Assigned(Result) then Exit;
-    if (Current is TGocciaCallScope) and not (Current is TGocciaArrowCallScope) then
+    if Current.IsFunctionBoundary then
       Exit(nil);
     Current := Current.FParent;
   end;
@@ -665,11 +674,21 @@ begin
   Result := FThisValue;
 end;
 
+function TGocciaCallScope.IsFunctionBoundary: Boolean;
+begin
+  Result := True;
+end;
+
 { TGocciaArrowCallScope }
 
 constructor TGocciaArrowCallScope.Create(const AParent: TGocciaScope; const AFunctionName: string; const ACapacity: Integer = 0);
 begin
   inherited Create(AParent, AFunctionName, ACapacity);
+end;
+
+function TGocciaArrowCallScope.IsFunctionBoundary: Boolean;
+begin
+  Result := False;
 end;
 
 { TGocciaMethodCallScope }

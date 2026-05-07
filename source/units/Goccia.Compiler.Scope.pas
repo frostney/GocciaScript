@@ -292,7 +292,7 @@ begin
     Exit(Idx);
   end;
 
-  if (AName = COMPILER_SUPER_LOCAL) and not FIsArrow then
+  if not FIsArrow and (AName = COMPILER_SUPER_LOCAL) then
     Exit(-1);
 
   UpvalueIdx := FParent.ResolveUpvalue(AName);
