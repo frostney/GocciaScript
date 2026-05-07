@@ -861,6 +861,7 @@ begin
     Inc(Pos);
     Sign := -1;
     if not TryParseDigits(S, Pos, 6, AYear) then Exit;
+    if AYear = 0 then Exit;
   end
   else
   begin

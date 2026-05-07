@@ -38,4 +38,10 @@ describe.runIf(isTemporal)("Temporal year zero", () => {
       Temporal.ZonedDateTime.from("-000000-03-31T00:45[UTC]");
     }).toThrow(RangeError);
   });
+
+  test("Temporal.PlainYearMonth.from rejects -000000", () => {
+    expect(() => {
+      Temporal.PlainYearMonth.from("-000000-03");
+    }).toThrow(RangeError);
+  });
 });
