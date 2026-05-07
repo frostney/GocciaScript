@@ -3106,9 +3106,16 @@ var
   I: Integer;
   FOEntry: TGocciaClassFieldOrderEntry;
   Expr: TGocciaExpression;
+  LocalContext: TGocciaEvaluationContext;
+  LocalScope: TGocciaScope;
 begin
+  LocalContext := AContext;
+  LocalScope := TGocciaClassInitScope.Create(AContext.Scope, AClassValue);
+  LocalScope.ThisValue := AInstance;
+  LocalContext.Scope := LocalScope;
+
   if Assigned(AClassValue.SuperClass) then
-    InitializeInstanceProperties(AInstance, AClassValue.SuperClass, AContext);
+    InitializeInstanceProperties(AInstance, AClassValue.SuperClass, LocalContext);
 
   if AClassValue.FieldOrderCount > 0 then
   begin
@@ -3120,7 +3127,7 @@ begin
       begin
         if AClassValue.PrivateInstancePropertyDefs.TryGetValue(FOEntry.Name, Expr) and Assigned(Expr) then
         begin
-          PropertyValue := EvaluateExpression(Expr, AContext);
+          PropertyValue := EvaluateExpression(Expr, LocalContext);
           AInstance.SetPrivateProperty(FOEntry.Name, PropertyValue, AClassValue);
         end;
       end
@@ -3128,7 +3135,7 @@ begin
       begin
         if AClassValue.InstancePropertyDefs.TryGetValue(FOEntry.Name, Expr) and Assigned(Expr) then
         begin
-          PropertyValue := EvaluateExpression(Expr, AContext);
+          PropertyValue := EvaluateExpression(Expr, LocalContext);
           AInstance.AssignProperty(FOEntry.Name, PropertyValue);
         end;
       end;
@@ -3139,7 +3146,7 @@ begin
     for I := 0 to AClassValue.InstancePropertyDefs.Count - 1 do
     begin
       Entry := AClassValue.InstancePropertyDefs.EntryAt(I);
-      PropertyValue := EvaluateExpression(Entry.Value, AContext);
+      PropertyValue := EvaluateExpression(Entry.Value, LocalContext);
       AInstance.AssignProperty(Entry.Key, PropertyValue);
     end;
   end;
