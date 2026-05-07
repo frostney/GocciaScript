@@ -3161,21 +3161,14 @@ var
   Expr: TGocciaExpression;
   SuperInitContext: TGocciaEvaluationContext;
   SuperInitScope: TGocciaScope;
-  OldScope: TGocciaScope;
 begin
   if Assigned(AClassValue.SuperClass) then
   begin
     SuperInitContext := AContext;
-    OldScope := SuperInitContext.Scope;
     SuperInitScope := TGocciaClassInitScope.Create(AContext.Scope, AClassValue.SuperClass);
-    try
-      SuperInitScope.ThisValue := AInstance;
-      SuperInitContext.Scope := SuperInitScope;
-      InitializeObjectInstanceProperties(AInstance, AClassValue.SuperClass, SuperInitContext);
-    finally
-      SuperInitContext.Scope := OldScope;
-      SuperInitScope.Free;
-    end;
+    SuperInitScope.ThisValue := AInstance;
+    SuperInitContext.Scope := SuperInitScope;
+    InitializeObjectInstanceProperties(AInstance, AClassValue.SuperClass, SuperInitContext);
   end;
 
   if AClassValue.HasPrivateInstanceElements then
@@ -5041,48 +5034,40 @@ var
 begin
   InitContext := AContext;
   InitScope := TGocciaClassInitScope.Create(AContext.Scope, AClassValue);
-  try
-    InitScope.ThisValue := AInstance;
-    InitContext.Scope := InitScope;
+  InitScope.ThisValue := AInstance;
+  InitContext.Scope := InitScope;
 
-    if AInstance is TGocciaInstanceValue then
+  if AInstance is TGocciaInstanceValue then
+  begin
+    InitializeInstanceProperties(TGocciaInstanceValue(AInstance), AClassValue, InitContext);
+
+    if AClassValue.FieldOrderCount = 0 then
     begin
-      InitializeInstanceProperties(TGocciaInstanceValue(AInstance), AClassValue, InitContext);
-
-      if AClassValue.FieldOrderCount = 0 then
+      WalkClass := AClassValue.SuperClass;
+      while Assigned(WalkClass) do
       begin
-        WalkClass := AClassValue.SuperClass;
-        while Assigned(WalkClass) do
-        begin
-          CheckExecutionTimeout;
-          IncrementInstructionCounter;
-          CheckInstructionLimit;
-          SuperInitContext := AContext;
-          SuperInitScope := TGocciaClassInitScope.Create(AContext.Scope, WalkClass);
-          try
-            SuperInitScope.ThisValue := AInstance;
-            SuperInitContext.Scope := SuperInitScope;
-            if WalkClass.FieldOrderCount = 0 then
-              InitializePrivateInstanceProperties(
-                AInstance, WalkClass, SuperInitContext);
-          finally
-            SuperInitScope.Free;
-          end;
-          WalkClass := WalkClass.SuperClass;
-        end;
-
-        InitializePrivateInstanceProperties(AInstance, AClassValue, InitContext);
+        CheckExecutionTimeout;
+        IncrementInstructionCounter;
+        CheckInstructionLimit;
+        SuperInitContext := AContext;
+        SuperInitScope := TGocciaClassInitScope.Create(AContext.Scope, WalkClass);
+        SuperInitScope.ThisValue := AInstance;
+        SuperInitContext.Scope := SuperInitScope;
+        if WalkClass.FieldOrderCount = 0 then
+          InitializePrivateInstanceProperties(
+            AInstance, WalkClass, SuperInitContext);
+        WalkClass := WalkClass.SuperClass;
       end;
-    end
-    else
-      InitializeObjectInstanceProperties(AInstance, AClassValue, InitContext);
 
-    AClassValue.RunMethodInitializers(AInstance);
-    AClassValue.RunFieldInitializers(AInstance);
-    AClassValue.RunDecoratorFieldInitializers(AInstance);
-  finally
-    InitScope.Free;
-  end;
+      InitializePrivateInstanceProperties(AInstance, AClassValue, InitContext);
+    end;
+  end
+  else
+    InitializeObjectInstanceProperties(AInstance, AClassValue, InitContext);
+
+  AClassValue.RunMethodInitializers(AInstance);
+  AClassValue.RunFieldInitializers(AInstance);
+  AClassValue.RunDecoratorFieldInitializers(AInstance);
 end;
 
 function InstantiateClass(const AClassValue: TGocciaClassValue;
