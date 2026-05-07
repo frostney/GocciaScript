@@ -3,52 +3,10 @@ description: Error.prototype.constructor and NativeError.prototype.constructor
 features: [Error]
 ---*/
 
-test("Error.prototype.constructor === Error", () => {
-  expect(Error.prototype.constructor).toBe(Error);
-});
-
-test("TypeError.prototype.constructor === TypeError", () => {
-  expect(TypeError.prototype.constructor).toBe(TypeError);
-});
-
-test("RangeError.prototype.constructor === RangeError", () => {
-  expect(RangeError.prototype.constructor).toBe(RangeError);
-});
-
-test("ReferenceError.prototype.constructor === ReferenceError", () => {
-  expect(ReferenceError.prototype.constructor).toBe(ReferenceError);
-});
-
-test("SyntaxError.prototype.constructor === SyntaxError", () => {
-  expect(SyntaxError.prototype.constructor).toBe(SyntaxError);
-});
-
-test("URIError.prototype.constructor === URIError", () => {
-  expect(URIError.prototype.constructor).toBe(URIError);
-});
-
-test("AggregateError.prototype.constructor === AggregateError", () => {
-  expect(AggregateError.prototype.constructor).toBe(AggregateError);
-});
-
-test("SuppressedError.prototype.constructor === SuppressedError", () => {
-  expect(SuppressedError.prototype.constructor).toBe(SuppressedError);
-});
-
-test("DOMException.prototype.constructor === DOMException", () => {
-  expect(DOMException.prototype.constructor).toBe(DOMException);
-});
-
-test("Error.prototype.constructor descriptor is {writable: true, configurable: true, enumerable: false}", () => {
-  const desc = Object.getOwnPropertyDescriptor(Error.prototype, "constructor");
-  expect(desc.writable).toBe(true);
-  expect(desc.configurable).toBe(true);
-  expect(desc.enumerable).toBe(false);
-});
-
-test("NativeError.prototype.constructor descriptors are {writable: true, configurable: true, enumerable: false}", () => {
-  const types = [TypeError, RangeError, ReferenceError, SyntaxError, URIError, AggregateError, SuppressedError, DOMException];
+test("prototype.constructor identity and descriptor for all error types", () => {
+  const types = [Error, TypeError, RangeError, ReferenceError, SyntaxError, URIError, AggregateError, SuppressedError, DOMException];
   types.forEach((ErrorType) => {
+    expect(ErrorType.prototype.constructor).toBe(ErrorType);
     const desc = Object.getOwnPropertyDescriptor(ErrorType.prototype, "constructor");
     expect(desc.writable).toBe(true);
     expect(desc.configurable).toBe(true);
