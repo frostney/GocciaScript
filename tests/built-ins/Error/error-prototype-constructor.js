@@ -31,6 +31,14 @@ test("AggregateError.prototype.constructor === AggregateError", () => {
   expect(AggregateError.prototype.constructor).toBe(AggregateError);
 });
 
+test("SuppressedError.prototype.constructor === SuppressedError", () => {
+  expect(SuppressedError.prototype.constructor).toBe(SuppressedError);
+});
+
+test("DOMException.prototype.constructor === DOMException", () => {
+  expect(DOMException.prototype.constructor).toBe(DOMException);
+});
+
 test("Error.prototype.constructor descriptor is {writable: true, configurable: true, enumerable: false}", () => {
   const desc = Object.getOwnPropertyDescriptor(Error.prototype, "constructor");
   expect(desc.writable).toBe(true);
@@ -39,7 +47,7 @@ test("Error.prototype.constructor descriptor is {writable: true, configurable: t
 });
 
 test("NativeError.prototype.constructor descriptors are {writable: true, configurable: true, enumerable: false}", () => {
-  const types = [TypeError, RangeError, ReferenceError, SyntaxError, URIError, AggregateError];
+  const types = [TypeError, RangeError, ReferenceError, SyntaxError, URIError, AggregateError, SuppressedError, DOMException];
   types.forEach((ErrorType) => {
     const desc = Object.getOwnPropertyDescriptor(ErrorType.prototype, "constructor");
     expect(desc.writable).toBe(true);
@@ -52,6 +60,12 @@ test("error instance .constructor resolves through prototype chain", () => {
   expect(new Error("x").constructor).toBe(Error);
   expect(new TypeError("x").constructor).toBe(TypeError);
   expect(new RangeError("x").constructor).toBe(RangeError);
+});
+
+test("constructor is inherited, not own on instances", () => {
+  const e = new TypeError("x");
+  expect(Object.prototype.hasOwnProperty.call(e, "constructor")).toBe(false);
+  expect(e.constructor).toBe(TypeError);
 });
 
 test("caught error has .constructor.name", () => {
