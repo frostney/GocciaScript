@@ -1,7 +1,6 @@
 ---
 name: create-issue
 description: Create a well-structured GocciaScript GitHub issue from a tagline or short description, using the repository issue template and project issue style. Use when the user enters /create-issue.
-disable-model-invocation: true
 ---
 
 # Create Issue

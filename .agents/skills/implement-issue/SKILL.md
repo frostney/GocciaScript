@@ -1,7 +1,6 @@
 ---
 name: implement-issue
 description: Validate a GitHub issue against the GocciaScript codebase, present implementation options, implement the chosen fix, and prepare a PR. Use when the user enters /implement-issue with an issue number.
-disable-model-invocation: true
 ---
 
 # Implement Issue

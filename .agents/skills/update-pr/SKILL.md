@@ -1,7 +1,6 @@
 ---
 name: update-pr
 description: Commit relevant local changes and push them to the current GocciaScript pull request branch. Use when the user enters /update-pr.
-disable-model-invocation: true
 ---
 
 # Update PR

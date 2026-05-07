@@ -1,7 +1,6 @@
 ---
 name: review-pr
 description: Resolve review comments on the current GocciaScript pull request without posting top-level PR comments. Use when the user enters /review-pr.
-disable-model-invocation: true
 ---
 
 # Review PR
