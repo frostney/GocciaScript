@@ -2121,11 +2121,16 @@ begin
       try
         TGarbageCollector.Instance.AddTempRoot(Iterator);
         try
-          IterResult := Iterator.AdvanceNext;
-          while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
-          begin
-            Values.Add(IterResult.GetProperty(PROP_VALUE));
+          try
             IterResult := Iterator.AdvanceNext;
+            while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
+            begin
+              Values.Add(IterResult.GetProperty(PROP_VALUE));
+              IterResult := Iterator.AdvanceNext;
+            end;
+          except
+            CloseIteratorPreservingError(Iterator);
+            raise;
           end;
         finally
           TGarbageCollector.Instance.RemoveTempRoot(Iterator);
@@ -2264,11 +2269,16 @@ begin
     try
       TGarbageCollector.Instance.AddTempRoot(Iterator);
       try
-        IterResult := Iterator.AdvanceNext;
-        while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
-        begin
-          Values.Add(IterResult.GetProperty(PROP_VALUE));
+        try
           IterResult := Iterator.AdvanceNext;
+          while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
+          begin
+            Values.Add(IterResult.GetProperty(PROP_VALUE));
+            IterResult := Iterator.AdvanceNext;
+          end;
+        except
+          CloseIteratorPreservingError(Iterator);
+          raise;
         end;
       finally
         TGarbageCollector.Instance.RemoveTempRoot(Iterator);
