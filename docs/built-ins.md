@@ -327,7 +327,7 @@ The constructor-backed objects mirror the `node-semver` public fields and core i
 
 **Error constructors:** `Error`, `TypeError`, `ReferenceError`, `RangeError`, `SyntaxError`, `URIError`, `AggregateError`, `DOMException`
 
-**Prototype chain:** All error types follow the standard prototype hierarchy. `TypeError.prototype`, `RangeError.prototype`, etc. inherit from `Error.prototype`. This means `new TypeError("msg") instanceof TypeError` is `true` AND `new TypeError("msg") instanceof Error` is `true`. Cross-type checks return `false` (e.g., `new TypeError("msg") instanceof RangeError` is `false`).
+**Prototype chain:** All error types follow the standard prototype hierarchy. `TypeError.prototype`, `RangeError.prototype`, etc. inherit from `Error.prototype`. Each error prototype has a `constructor` property pointing back to its constructor (e.g., `Error.prototype.constructor === Error`), so `new TypeError("x").constructor.name === "TypeError"`. `instanceof` checks and cross-type checks also work correctly: `new TypeError("msg") instanceof TypeError` is `true`, `new TypeError("msg") instanceof Error` is `true`, and `new TypeError("msg") instanceof RangeError` is `false`.
 
 **Runtime errors:** Errors thrown internally by the engine (e.g., `TypeError` from accessing a property on `null`/`undefined`, or `RangeError` from invalid `ArrayBuffer` length) have the same prototype chain as user-constructed errors. This means `instanceof` checks work correctly in catch blocks:
 
