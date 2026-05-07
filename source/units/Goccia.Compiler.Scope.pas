@@ -123,6 +123,7 @@ uses
 
 const
   COMPILER_LOCAL_INDEX_THRESHOLD = 64;
+  COMPILER_SUPER_LOCAL = '__super__';
 
 { TGocciaCompilerScope }
 
@@ -291,7 +292,7 @@ begin
     Exit(Idx);
   end;
 
-  if (AName = '__super__') and not FIsArrow then
+  if (AName = COMPILER_SUPER_LOCAL) and not FIsArrow then
     Exit(-1);
 
   UpvalueIdx := FParent.ResolveUpvalue(AName);
