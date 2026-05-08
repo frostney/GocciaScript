@@ -2956,7 +2956,8 @@ end;
 
 procedure CompileBreakStatement(const ACtx: TGocciaCompilationContext);
 var
-  I: Integer;
+  I, Count, Base: Integer;
+  Entries: array of TPendingFinallyEntry;
   Entry: TPendingFinallyEntry;
   Local: TGocciaCompilerLocal;
 begin
@@ -2964,11 +2965,22 @@ begin
     Exit;
 
   if Assigned(GPendingFinally) and (GPendingFinally.Count > GBreakFinallyBase) then
-    for I := GPendingFinally.Count - 1 downto GBreakFinallyBase do
+  begin
+    Count := GPendingFinally.Count;
+    Base := GBreakFinallyBase;
+    SetLength(Entries, Count - Base);
+    for I := Base to Count - 1 do
+      Entries[I - Base] := GPendingFinally[I];
+    for I := Count - 1 downto Base do
     begin
-      Entry := GPendingFinally[I];
+      if GPendingFinally.Count > I then
+        GPendingFinally.Delete(I);
+      Entry := Entries[I - Base];
       EmitPendingEntryCleanup(ACtx, Entry, True);
     end;
+    for I := 0 to Length(Entries) - 1 do
+      GPendingFinally.Insert(Base + I, Entries[I]);
+  end;
 
   for I := ACtx.Scope.LocalCount - 1 downto 0 do
   begin
