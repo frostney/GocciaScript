@@ -302,8 +302,7 @@ uses
   Goccia.Values.Formatting,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.PromiseValue,
-  Goccia.Values.SetValue,
-  Goccia.Values.SymbolValue;
+  Goccia.Values.SetValue;
 
 function FormatForMessage(const AValue: TGocciaValue): string;
 begin

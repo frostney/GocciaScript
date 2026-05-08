@@ -24,3 +24,16 @@ test("console.log does not invoke user toString on objects", () => {
 test("console.log handles Symbol values", () => {
   expect(console.log(Symbol("test"))).toBeUndefined();
 });
+
+test("console.log handles circular references without crashing", () => {
+  const obj = { a: 1 };
+  obj.self = obj;
+  expect(console.log(obj)).toBeUndefined();
+});
+
+test("console.log handles deeply nested objects", () => {
+  const obj = {
+    a: { b: { c: { d: { e: { f: { g: { h: "deep" } } } } } } },
+  };
+  expect(console.log(obj)).toBeUndefined();
+});

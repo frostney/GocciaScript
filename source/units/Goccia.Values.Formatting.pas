@@ -18,31 +18,44 @@ uses
   Goccia.Values.ObjectValue,
   Goccia.Values.SymbolValue;
 
-function DoFormat(const AValue: TGocciaValue; const ANested: Boolean): string; forward;
+const
+  MAX_FORMAT_DEPTH = 5;
 
-function FormatArray(const AArr: TGocciaArrayValue): string;
+function DoFormat(const AValue: TGocciaValue; const ANested: Boolean; const ADepth: Integer): string; forward;
+
+function FormatArray(const AArr: TGocciaArrayValue; const ADepth: Integer): string;
 var
   SB: TStringBuffer;
   I: Integer;
 begin
+  if ADepth >= MAX_FORMAT_DEPTH then
+  begin
+    Result := '[...]';
+    Exit;
+  end;
   SB := TStringBuffer.Create;
   SB.AppendChar('[');
   for I := 0 to AArr.Elements.Count - 1 do
   begin
     if I > 0 then
       SB.Append(', ');
-    SB.Append(DoFormat(AArr.Elements[I], True));
+    SB.Append(DoFormat(AArr.Elements[I], True, ADepth + 1));
   end;
   SB.AppendChar(']');
   Result := SB.ToString;
 end;
 
-function FormatObject(const AObj: TGocciaObjectValue): string;
+function FormatObject(const AObj: TGocciaObjectValue; const ADepth: Integer): string;
 var
   SB: TStringBuffer;
   Key: string;
   First: Boolean;
 begin
+  if ADepth >= MAX_FORMAT_DEPTH then
+  begin
+    Result := '{...}';
+    Exit;
+  end;
   SB := TStringBuffer.Create;
   SB.AppendChar('{');
   First := True;
@@ -53,13 +66,13 @@ begin
     First := False;
     SB.Append(Key);
     SB.Append(': ');
-    SB.Append(DoFormat(AObj.GetProperty(Key), True));
+    SB.Append(DoFormat(AObj.GetProperty(Key), True, ADepth + 1));
   end;
   SB.AppendChar('}');
   Result := SB.ToString;
 end;
 
-function DoFormat(const AValue: TGocciaValue; const ANested: Boolean): string;
+function DoFormat(const AValue: TGocciaValue; const ANested: Boolean; const ADepth: Integer): string;
 begin
   if not Assigned(AValue) then
   begin
@@ -70,9 +83,9 @@ begin
   if AValue is TGocciaSymbolValue then
     Result := TGocciaSymbolValue(AValue).ToDisplayString.Value
   else if AValue is TGocciaArrayValue then
-    Result := FormatArray(TGocciaArrayValue(AValue))
+    Result := FormatArray(TGocciaArrayValue(AValue), ADepth)
   else if AValue is TGocciaObjectValue then
-    Result := FormatObject(TGocciaObjectValue(AValue))
+    Result := FormatObject(TGocciaObjectValue(AValue), ADepth)
   else if ANested and (AValue is TGocciaStringLiteralValue) then
     Result := '''' + AValue.ToStringLiteral.Value + ''''
   else
@@ -81,7 +94,7 @@ end;
 
 function FormatForDisplay(const AValue: TGocciaValue): string;
 begin
-  Result := DoFormat(AValue, False);
+  Result := DoFormat(AValue, False, 0);
 end;
 
 end.
