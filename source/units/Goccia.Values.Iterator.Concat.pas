@@ -15,17 +15,17 @@ type
     IteratorMethod: TGocciaValue; // nil for string iterables (handled specially)
   end;
 
-  TGocciaConcatIteratorValue = class(TGocciaIteratorValue)
+  TGocciaConcatIteratorValue = class(TGocciaIteratorHelperValue)
   private
     FIterables: array of TGocciaConcatIterableRecord;
     FCurrentIndex: Integer;
     FCurrentIterator: TGocciaIteratorValue;
-    FExecuting: Boolean;
     function OpenNextIterator: Boolean;
+  protected
+    function DoAdvanceNext: TGocciaObjectValue; override;
+    function DoDirectNext(out ADone: Boolean): TGocciaValue; override;
   public
     constructor Create(const AIterables: array of TGocciaConcatIterableRecord);
-    function AdvanceNext: TGocciaObjectValue; override;
-    function DirectNext(out ADone: Boolean): TGocciaValue; override;
     procedure Close; override;
     procedure MarkReferences; override;
   end;
@@ -99,111 +99,84 @@ begin
 end;
 
 // TC39 Iterator Sequencing §1 Iterator.concat ( ...items ) — step 3.a.iv-v
-function TGocciaConcatIteratorValue.AdvanceNext: TGocciaObjectValue;
+function TGocciaConcatIteratorValue.DoAdvanceNext: TGocciaObjectValue;
 var
   InnerResult: TGocciaObjectValue;
 begin
-  if FDone then
-  begin
-    Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
-    Exit;
-  end;
-
-  if FExecuting then
-    ThrowTypeError(SErrorIteratorHelperExecuting, SSuggestIteratorProtocol);
-  FExecuting := True;
-  try
-    repeat
-      if Assigned(FCurrentIterator) then
-      begin
-        try
-          InnerResult := FCurrentIterator.AdvanceNext;
-        except
-          AcquireExceptionObject;
-          CloseIteratorPreservingError(FCurrentIterator);
-          FCurrentIterator := nil;
-          FDone := True;
-          raise;
-        end;
-        if not TGocciaBooleanLiteralValue(InnerResult.GetProperty(PROP_DONE)).Value then
-        begin
-          Result := CreateIteratorResult(InnerResult.GetProperty(PROP_VALUE), False);
-          Exit;
-        end;
-        FCurrentIterator := nil;
-      end;
-
+  repeat
+    if Assigned(FCurrentIterator) then
+    begin
       try
-        if not OpenNextIterator then
-        begin
-          FDone := True;
-          Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
-          Exit;
-        end;
+        InnerResult := FCurrentIterator.AdvanceNext;
       except
+        AcquireExceptionObject;
+        CloseIteratorPreservingError(FCurrentIterator);
+        FCurrentIterator := nil;
         FDone := True;
         raise;
       end;
-    until False;
-  finally
-    FExecuting := False;
-  end;
+      if not TGocciaBooleanLiteralValue(InnerResult.GetProperty(PROP_DONE)).Value then
+      begin
+        Result := CreateIteratorResult(InnerResult.GetProperty(PROP_VALUE), False);
+        Exit;
+      end;
+      FCurrentIterator := nil;
+    end;
+
+    try
+      if not OpenNextIterator then
+      begin
+        FDone := True;
+        Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
+        Exit;
+      end;
+    except
+      FDone := True;
+      raise;
+    end;
+  until False;
 end;
 
-// TC39 Iterator Sequencing §1 Iterator.concat ( ...items ) — step 3.a.iv-v (DirectNext)
-function TGocciaConcatIteratorValue.DirectNext(out ADone: Boolean): TGocciaValue;
+// TC39 Iterator Sequencing §1 Iterator.concat ( ...items ) — step 3.a.iv-v (DoDirectNext)
+function TGocciaConcatIteratorValue.DoDirectNext(out ADone: Boolean): TGocciaValue;
 var
   InnerDone: Boolean;
   InnerValue: TGocciaValue;
 begin
-  if FDone then
-  begin
-    ADone := True;
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-    Exit;
-  end;
-
-  if FExecuting then
-    ThrowTypeError(SErrorIteratorHelperExecuting, SSuggestIteratorProtocol);
-  FExecuting := True;
-  try
-    repeat
-      if Assigned(FCurrentIterator) then
-      begin
-        try
-          InnerValue := FCurrentIterator.DirectNext(InnerDone);
-        except
-          AcquireExceptionObject;
-          CloseIteratorPreservingError(FCurrentIterator);
-          FCurrentIterator := nil;
-          FDone := True;
-          raise;
-        end;
-        if not InnerDone then
-        begin
-          ADone := False;
-          Result := InnerValue;
-          Exit;
-        end;
-        FCurrentIterator := nil;
-      end;
-
+  repeat
+    if Assigned(FCurrentIterator) then
+    begin
       try
-        if not OpenNextIterator then
-        begin
-          FDone := True;
-          ADone := True;
-          Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-          Exit;
-        end;
+        InnerValue := FCurrentIterator.DirectNext(InnerDone);
       except
+        AcquireExceptionObject;
+        CloseIteratorPreservingError(FCurrentIterator);
+        FCurrentIterator := nil;
         FDone := True;
         raise;
       end;
-    until False;
-  finally
-    FExecuting := False;
-  end;
+      if not InnerDone then
+      begin
+        ADone := False;
+        Result := InnerValue;
+        Exit;
+      end;
+      FCurrentIterator := nil;
+    end;
+
+    try
+      if not OpenNextIterator then
+      begin
+        FDone := True;
+        ADone := True;
+        Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+        Exit;
+      end;
+    except
+      FDone := True;
+      raise;
+    end;
+  until False;
 end;
 
 procedure TGocciaConcatIteratorValue.Close;

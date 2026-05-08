@@ -10,74 +10,74 @@ uses
   Goccia.Values.Primitives;
 
 type
-  TGocciaLazyMapIteratorValue = class(TGocciaIteratorValue)
+  TGocciaLazyMapIteratorValue = class(TGocciaIteratorHelperValue)
   private
     FSourceIterator: TGocciaIteratorValue;
     FCallback: TGocciaValue;
     FIndex: Integer;
-    FExecuting: Boolean;
+  protected
+    function DoAdvanceNext: TGocciaObjectValue; override;
+    function DoDirectNext(out ADone: Boolean): TGocciaValue; override;
   public
     constructor Create(const ASourceIterator: TGocciaIteratorValue; const ACallback: TGocciaValue);
-    function AdvanceNext: TGocciaObjectValue; override;
-    function DirectNext(out ADone: Boolean): TGocciaValue; override;
     procedure Close; override;
     procedure MarkReferences; override;
   end;
 
-  TGocciaLazyFilterIteratorValue = class(TGocciaIteratorValue)
+  TGocciaLazyFilterIteratorValue = class(TGocciaIteratorHelperValue)
   private
     FSourceIterator: TGocciaIteratorValue;
     FCallback: TGocciaValue;
     FIndex: Integer;
-    FExecuting: Boolean;
+  protected
+    function DoAdvanceNext: TGocciaObjectValue; override;
+    function DoDirectNext(out ADone: Boolean): TGocciaValue; override;
   public
     constructor Create(const ASourceIterator: TGocciaIteratorValue; const ACallback: TGocciaValue);
-    function AdvanceNext: TGocciaObjectValue; override;
-    function DirectNext(out ADone: Boolean): TGocciaValue; override;
     procedure Close; override;
     procedure MarkReferences; override;
   end;
 
-  TGocciaLazyTakeIteratorValue = class(TGocciaIteratorValue)
+  TGocciaLazyTakeIteratorValue = class(TGocciaIteratorHelperValue)
   private
     FSourceIterator: TGocciaIteratorValue;
     FIndex: Integer;
     FLimit: Integer;
-    FExecuting: Boolean;
+  protected
+    function DoAdvanceNext: TGocciaObjectValue; override;
+    function DoDirectNext(out ADone: Boolean): TGocciaValue; override;
   public
     constructor Create(const ASourceIterator: TGocciaIteratorValue; const ALimit: Integer);
-    function AdvanceNext: TGocciaObjectValue; override;
-    function DirectNext(out ADone: Boolean): TGocciaValue; override;
     procedure Close; override;
     procedure MarkReferences; override;
   end;
 
-  TGocciaLazyDropIteratorValue = class(TGocciaIteratorValue)
+  TGocciaLazyDropIteratorValue = class(TGocciaIteratorHelperValue)
   private
     FSourceIterator: TGocciaIteratorValue;
     FIndex: Integer;
     FLimit: Integer;
-    FExecuting: Boolean;
+  protected
+    function DoAdvanceNext: TGocciaObjectValue; override;
+    function DoDirectNext(out ADone: Boolean): TGocciaValue; override;
   public
     constructor Create(const ASourceIterator: TGocciaIteratorValue; const ALimit: Integer);
-    function AdvanceNext: TGocciaObjectValue; override;
-    function DirectNext(out ADone: Boolean): TGocciaValue; override;
     procedure Close; override;
     procedure MarkReferences; override;
   end;
 
-  TGocciaLazyFlatMapIteratorValue = class(TGocciaIteratorValue)
+  TGocciaLazyFlatMapIteratorValue = class(TGocciaIteratorHelperValue)
   private
     FSourceIterator: TGocciaIteratorValue;
     FCallback: TGocciaValue;
     FIndex: Integer;
     FInnerIterator: TGocciaIteratorValue;
-    FExecuting: Boolean;
     function ResolveIterator(const AValue: TGocciaValue): TGocciaIteratorValue;
+  protected
+    function DoAdvanceNext: TGocciaObjectValue; override;
+    function DoDirectNext(out ADone: Boolean): TGocciaValue; override;
   public
     constructor Create(const ASourceIterator: TGocciaIteratorValue; const ACallback: TGocciaValue);
-    function AdvanceNext: TGocciaObjectValue; override;
-    function DirectNext(out ADone: Boolean): TGocciaValue; override;
     procedure Close; override;
     procedure MarkReferences; override;
   end;
@@ -109,76 +109,49 @@ begin
   FIndex := 0;
 end;
 
-function TGocciaLazyMapIteratorValue.AdvanceNext: TGocciaObjectValue;
+function TGocciaLazyMapIteratorValue.DoAdvanceNext: TGocciaObjectValue;
 var
   IterResult: TGocciaObjectValue;
   Value, MappedValue: TGocciaValue;
 begin
-  if FDone then
+  IterResult := FSourceIterator.AdvanceNext;
+  if TGocciaBooleanLiteralValue(IterResult.GetProperty(PROP_DONE)).Value then
   begin
+    FDone := True;
     Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
     Exit;
   end;
-
-  if FExecuting then
-    ThrowTypeError(SErrorIteratorHelperExecuting, SSuggestIteratorProtocol);
-  FExecuting := True;
+  Value := IterResult.GetProperty(PROP_VALUE);
   try
-    IterResult := FSourceIterator.AdvanceNext;
-    if TGocciaBooleanLiteralValue(IterResult.GetProperty(PROP_DONE)).Value then
-    begin
-      FDone := True;
-      Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
-      Exit;
-    end;
-    Value := IterResult.GetProperty(PROP_VALUE);
-    try
-      MappedValue := InvokeIteratorCallback(FCallback, Value, FIndex);
-    except
-      AcquireExceptionObject;
-      CloseIteratorPreservingError(FSourceIterator);
-      raise;
-    end;
-    Inc(FIndex);
-    Result := CreateIteratorResult(MappedValue, False);
-  finally
-    FExecuting := False;
+    MappedValue := InvokeIteratorCallback(FCallback, Value, FIndex);
+  except
+    AcquireExceptionObject;
+    CloseIteratorPreservingError(FSourceIterator);
+    raise;
   end;
+  Inc(FIndex);
+  Result := CreateIteratorResult(MappedValue, False);
 end;
 
-function TGocciaLazyMapIteratorValue.DirectNext(out ADone: Boolean): TGocciaValue;
+function TGocciaLazyMapIteratorValue.DoDirectNext(out ADone: Boolean): TGocciaValue;
 var
   Value: TGocciaValue;
 begin
-  if FDone then
+  Value := FSourceIterator.DirectNext(ADone);
+  if ADone then
   begin
-    ADone := True;
+    FDone := True;
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
     Exit;
   end;
-
-  if FExecuting then
-    ThrowTypeError(SErrorIteratorHelperExecuting, SSuggestIteratorProtocol);
-  FExecuting := True;
   try
-    Value := FSourceIterator.DirectNext(ADone);
-    if ADone then
-    begin
-      FDone := True;
-      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-      Exit;
-    end;
-    try
-      Result := InvokeIteratorCallback(FCallback, Value, FIndex);
-    except
-      AcquireExceptionObject;
-      CloseIteratorPreservingError(FSourceIterator);
-      raise;
-    end;
-    Inc(FIndex);
-  finally
-    FExecuting := False;
+    Result := InvokeIteratorCallback(FCallback, Value, FIndex);
+  except
+    AcquireExceptionObject;
+    CloseIteratorPreservingError(FSourceIterator);
+    raise;
   end;
+  Inc(FIndex);
 end;
 
 procedure TGocciaLazyMapIteratorValue.Close;
@@ -208,89 +181,62 @@ begin
   FIndex := 0;
 end;
 
-function TGocciaLazyFilterIteratorValue.AdvanceNext: TGocciaObjectValue;
+function TGocciaLazyFilterIteratorValue.DoAdvanceNext: TGocciaObjectValue;
 var
   IterResult: TGocciaObjectValue;
   Value: TGocciaValue;
 begin
-  if FDone then
-  begin
-    Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
-    Exit;
-  end;
-
-  if FExecuting then
-    ThrowTypeError(SErrorIteratorHelperExecuting, SSuggestIteratorProtocol);
-  FExecuting := True;
-  try
-    repeat
-      IterResult := FSourceIterator.AdvanceNext;
-      if TGocciaBooleanLiteralValue(IterResult.GetProperty(PROP_DONE)).Value then
+  repeat
+    IterResult := FSourceIterator.AdvanceNext;
+    if TGocciaBooleanLiteralValue(IterResult.GetProperty(PROP_DONE)).Value then
+    begin
+      FDone := True;
+      Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
+      Exit;
+    end;
+    Value := IterResult.GetProperty(PROP_VALUE);
+    try
+      if InvokeIteratorCallback(FCallback, Value, FIndex).ToBooleanLiteral.Value then
       begin
-        FDone := True;
-        Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
+        Inc(FIndex);
+        Result := CreateIteratorResult(Value, False);
         Exit;
       end;
-      Value := IterResult.GetProperty(PROP_VALUE);
-      try
-        if InvokeIteratorCallback(FCallback, Value, FIndex).ToBooleanLiteral.Value then
-        begin
-          Inc(FIndex);
-          Result := CreateIteratorResult(Value, False);
-          Exit;
-        end;
-      except
-        AcquireExceptionObject;
-        CloseIteratorPreservingError(FSourceIterator);
-        raise;
-      end;
-      Inc(FIndex);
-    until False;
-  finally
-    FExecuting := False;
-  end;
+    except
+      AcquireExceptionObject;
+      CloseIteratorPreservingError(FSourceIterator);
+      raise;
+    end;
+    Inc(FIndex);
+  until False;
 end;
 
-function TGocciaLazyFilterIteratorValue.DirectNext(out ADone: Boolean): TGocciaValue;
+function TGocciaLazyFilterIteratorValue.DoDirectNext(out ADone: Boolean): TGocciaValue;
 var
   Value: TGocciaValue;
 begin
-  if FDone then
-  begin
-    ADone := True;
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-    Exit;
-  end;
-
-  if FExecuting then
-    ThrowTypeError(SErrorIteratorHelperExecuting, SSuggestIteratorProtocol);
-  FExecuting := True;
-  try
-    repeat
-      Value := FSourceIterator.DirectNext(ADone);
-      if ADone then
+  repeat
+    Value := FSourceIterator.DirectNext(ADone);
+    if ADone then
+    begin
+      FDone := True;
+      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+      Exit;
+    end;
+    try
+      if InvokeIteratorCallback(FCallback, Value, FIndex).ToBooleanLiteral.Value then
       begin
-        FDone := True;
-        Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+        Inc(FIndex);
+        Result := Value;
         Exit;
       end;
-      try
-        if InvokeIteratorCallback(FCallback, Value, FIndex).ToBooleanLiteral.Value then
-        begin
-          Inc(FIndex);
-          Result := Value;
-          Exit;
-        end;
-      except
-        AcquireExceptionObject;
-        CloseIteratorPreservingError(FSourceIterator);
-        raise;
-      end;
-      Inc(FIndex);
-    until False;
-  finally
-    FExecuting := False;
-  end;
+    except
+      AcquireExceptionObject;
+      CloseIteratorPreservingError(FSourceIterator);
+      raise;
+    end;
+    Inc(FIndex);
+  until False;
 end;
 
 procedure TGocciaLazyFilterIteratorValue.Close;
@@ -320,60 +266,44 @@ begin
   FLimit := ALimit;
 end;
 
-function TGocciaLazyTakeIteratorValue.AdvanceNext: TGocciaObjectValue;
+function TGocciaLazyTakeIteratorValue.DoAdvanceNext: TGocciaObjectValue;
 var
   IterResult: TGocciaObjectValue;
 begin
-  if FDone or (FIndex >= FLimit) then
+  if FIndex >= FLimit then
   begin
     FDone := True;
     Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
     Exit;
   end;
-
-  if FExecuting then
-    ThrowTypeError(SErrorIteratorHelperExecuting, SSuggestIteratorProtocol);
-  FExecuting := True;
-  try
-    IterResult := FSourceIterator.AdvanceNext;
-    if TGocciaBooleanLiteralValue(IterResult.GetProperty(PROP_DONE)).Value then
-    begin
-      FDone := True;
-      Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
-      Exit;
-    end;
-    Inc(FIndex);
-    Result := CreateIteratorResult(IterResult.GetProperty(PROP_VALUE), False);
-  finally
-    FExecuting := False;
+  IterResult := FSourceIterator.AdvanceNext;
+  if TGocciaBooleanLiteralValue(IterResult.GetProperty(PROP_DONE)).Value then
+  begin
+    FDone := True;
+    Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
+    Exit;
   end;
+  Inc(FIndex);
+  Result := CreateIteratorResult(IterResult.GetProperty(PROP_VALUE), False);
 end;
 
-function TGocciaLazyTakeIteratorValue.DirectNext(out ADone: Boolean): TGocciaValue;
+function TGocciaLazyTakeIteratorValue.DoDirectNext(out ADone: Boolean): TGocciaValue;
 begin
-  if FDone or (FIndex >= FLimit) then
+  if FIndex >= FLimit then
   begin
     FDone := True;
     ADone := True;
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
     Exit;
   end;
-
-  if FExecuting then
-    ThrowTypeError(SErrorIteratorHelperExecuting, SSuggestIteratorProtocol);
-  FExecuting := True;
-  try
-    Result := FSourceIterator.DirectNext(ADone);
-    if ADone then
-    begin
-      FDone := True;
-      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-      Exit;
-    end;
-    Inc(FIndex);
-  finally
-    FExecuting := False;
+  Result := FSourceIterator.DirectNext(ADone);
+  if ADone then
+  begin
+    FDone := True;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Exit;
   end;
+  Inc(FIndex);
 end;
 
 procedure TGocciaLazyTakeIteratorValue.Close;
@@ -401,32 +331,12 @@ begin
   FLimit := ALimit;
 end;
 
-function TGocciaLazyDropIteratorValue.AdvanceNext: TGocciaObjectValue;
+function TGocciaLazyDropIteratorValue.DoAdvanceNext: TGocciaObjectValue;
 var
   IterResult: TGocciaObjectValue;
 begin
-  if FDone then
+  while FIndex < FLimit do
   begin
-    Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
-    Exit;
-  end;
-
-  if FExecuting then
-    ThrowTypeError(SErrorIteratorHelperExecuting, SSuggestIteratorProtocol);
-  FExecuting := True;
-  try
-    while FIndex < FLimit do
-    begin
-      IterResult := FSourceIterator.AdvanceNext;
-      if TGocciaBooleanLiteralValue(IterResult.GetProperty(PROP_DONE)).Value then
-      begin
-        FDone := True;
-        Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
-        Exit;
-      end;
-      Inc(FIndex);
-    end;
-
     IterResult := FSourceIterator.AdvanceNext;
     if TGocciaBooleanLiteralValue(IterResult.GetProperty(PROP_DONE)).Value then
     begin
@@ -434,47 +344,38 @@ begin
       Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
       Exit;
     end;
-    Result := CreateIteratorResult(IterResult.GetProperty(PROP_VALUE), False);
-  finally
-    FExecuting := False;
+    Inc(FIndex);
   end;
-end;
 
-function TGocciaLazyDropIteratorValue.DirectNext(out ADone: Boolean): TGocciaValue;
-var
-  Value: TGocciaValue;
-begin
-  if FDone then
+  IterResult := FSourceIterator.AdvanceNext;
+  if TGocciaBooleanLiteralValue(IterResult.GetProperty(PROP_DONE)).Value then
   begin
-    ADone := True;
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    FDone := True;
+    Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
     Exit;
   end;
+  Result := CreateIteratorResult(IterResult.GetProperty(PROP_VALUE), False);
+end;
 
-  if FExecuting then
-    ThrowTypeError(SErrorIteratorHelperExecuting, SSuggestIteratorProtocol);
-  FExecuting := True;
-  try
-    while FIndex < FLimit do
-    begin
-      Value := FSourceIterator.DirectNext(ADone);
-      if ADone then
-      begin
-        FDone := True;
-        Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-        Exit;
-      end;
-      Inc(FIndex);
-    end;
-
+function TGocciaLazyDropIteratorValue.DoDirectNext(out ADone: Boolean): TGocciaValue;
+begin
+  while FIndex < FLimit do
+  begin
     Result := FSourceIterator.DirectNext(ADone);
     if ADone then
     begin
       FDone := True;
       Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+      Exit;
     end;
-  finally
-    FExecuting := False;
+    Inc(FIndex);
+  end;
+
+  Result := FSourceIterator.DirectNext(ADone);
+  if ADone then
+  begin
+    FDone := True;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
 end;
 
@@ -564,140 +465,113 @@ begin
   Result := nil;
 end;
 
-function TGocciaLazyFlatMapIteratorValue.AdvanceNext: TGocciaObjectValue;
+function TGocciaLazyFlatMapIteratorValue.DoAdvanceNext: TGocciaObjectValue;
 var
   IterResult, InnerResult: TGocciaObjectValue;
   Value, MappedValue: TGocciaValue;
 begin
-  if FDone then
+  if Assigned(FInnerIterator) then
   begin
-    Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
-    Exit;
+    InnerResult := FInnerIterator.AdvanceNext;
+    if not TGocciaBooleanLiteralValue(InnerResult.GetProperty(PROP_DONE)).Value then
+    begin
+      Result := CreateIteratorResult(InnerResult.GetProperty(PROP_VALUE), False);
+      Exit;
+    end;
+    FInnerIterator := nil;
   end;
 
-  if FExecuting then
-    ThrowTypeError(SErrorIteratorHelperExecuting, SSuggestIteratorProtocol);
-  FExecuting := True;
-  try
-    if Assigned(FInnerIterator) then
+  repeat
+    IterResult := FSourceIterator.AdvanceNext;
+    if TGocciaBooleanLiteralValue(IterResult.GetProperty(PROP_DONE)).Value then
     begin
-      InnerResult := FInnerIterator.AdvanceNext;
-      if not TGocciaBooleanLiteralValue(InnerResult.GetProperty(PROP_DONE)).Value then
-      begin
-        Result := CreateIteratorResult(InnerResult.GetProperty(PROP_VALUE), False);
-        Exit;
-      end;
-      FInnerIterator := nil;
+      FDone := True;
+      Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
+      Exit;
     end;
 
-    repeat
-      IterResult := FSourceIterator.AdvanceNext;
-      if TGocciaBooleanLiteralValue(IterResult.GetProperty(PROP_DONE)).Value then
-      begin
-        FDone := True;
-        Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
-        Exit;
-      end;
+    Value := IterResult.GetProperty(PROP_VALUE);
+    try
+      MappedValue := InvokeIteratorCallback(FCallback, Value, FIndex);
+    except
+      AcquireExceptionObject;
+      CloseIteratorPreservingError(FSourceIterator);
+      if Assigned(FInnerIterator) then
+        CloseIteratorPreservingError(FInnerIterator);
+      raise;
+    end;
+    Inc(FIndex);
 
-      Value := IterResult.GetProperty(PROP_VALUE);
-      try
-        MappedValue := InvokeIteratorCallback(FCallback, Value, FIndex);
-      except
-        AcquireExceptionObject;
-        CloseIteratorPreservingError(FSourceIterator);
-        if Assigned(FInnerIterator) then
-          CloseIteratorPreservingError(FInnerIterator);
-        raise;
-      end;
-      Inc(FIndex);
+    FInnerIterator := ResolveIterator(MappedValue);
+    if not Assigned(FInnerIterator) then
+    begin
+      FSourceIterator.Close;
+      ThrowTypeError(SErrorIteratorFlatMapMustReturnIterable, SSuggestIteratorFlatMapCallable);
+    end;
 
-      FInnerIterator := ResolveIterator(MappedValue);
-      if not Assigned(FInnerIterator) then
-      begin
-        FSourceIterator.Close;
-        ThrowTypeError(SErrorIteratorFlatMapMustReturnIterable, SSuggestIteratorFlatMapCallable);
-      end;
-
-      InnerResult := FInnerIterator.AdvanceNext;
-      if not TGocciaBooleanLiteralValue(InnerResult.GetProperty(PROP_DONE)).Value then
-      begin
-        Result := CreateIteratorResult(InnerResult.GetProperty(PROP_VALUE), False);
-        Exit;
-      end;
-      FInnerIterator := nil;
-    until False;
-  finally
-    FExecuting := False;
-  end;
+    InnerResult := FInnerIterator.AdvanceNext;
+    if not TGocciaBooleanLiteralValue(InnerResult.GetProperty(PROP_DONE)).Value then
+    begin
+      Result := CreateIteratorResult(InnerResult.GetProperty(PROP_VALUE), False);
+      Exit;
+    end;
+    FInnerIterator := nil;
+  until False;
 end;
 
-function TGocciaLazyFlatMapIteratorValue.DirectNext(out ADone: Boolean): TGocciaValue;
+function TGocciaLazyFlatMapIteratorValue.DoDirectNext(out ADone: Boolean): TGocciaValue;
 var
   Value, MappedValue, InnerValue: TGocciaValue;
   InnerDone: Boolean;
 begin
-  if FDone then
+  if Assigned(FInnerIterator) then
   begin
-    ADone := True;
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-    Exit;
+    InnerValue := FInnerIterator.DirectNext(InnerDone);
+    if not InnerDone then
+    begin
+      ADone := False;
+      Result := InnerValue;
+      Exit;
+    end;
+    FInnerIterator := nil;
   end;
 
-  if FExecuting then
-    ThrowTypeError(SErrorIteratorHelperExecuting, SSuggestIteratorProtocol);
-  FExecuting := True;
-  try
-    if Assigned(FInnerIterator) then
+  repeat
+    Value := FSourceIterator.DirectNext(ADone);
+    if ADone then
     begin
-      InnerValue := FInnerIterator.DirectNext(InnerDone);
-      if not InnerDone then
-      begin
-        ADone := False;
-        Result := InnerValue;
-        Exit;
-      end;
-      FInnerIterator := nil;
+      FDone := True;
+      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+      Exit;
     end;
 
-    repeat
-      Value := FSourceIterator.DirectNext(ADone);
-      if ADone then
-      begin
-        FDone := True;
-        Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-        Exit;
-      end;
+    try
+      MappedValue := InvokeIteratorCallback(FCallback, Value, FIndex);
+    except
+      AcquireExceptionObject;
+      CloseIteratorPreservingError(FSourceIterator);
+      if Assigned(FInnerIterator) then
+        CloseIteratorPreservingError(FInnerIterator);
+      raise;
+    end;
+    Inc(FIndex);
 
-      try
-        MappedValue := InvokeIteratorCallback(FCallback, Value, FIndex);
-      except
-        AcquireExceptionObject;
-        CloseIteratorPreservingError(FSourceIterator);
-        if Assigned(FInnerIterator) then
-          CloseIteratorPreservingError(FInnerIterator);
-        raise;
-      end;
-      Inc(FIndex);
+    FInnerIterator := ResolveIterator(MappedValue);
+    if not Assigned(FInnerIterator) then
+    begin
+      FSourceIterator.Close;
+      ThrowTypeError(SErrorIteratorFlatMapMustReturnIterable, SSuggestIteratorFlatMapCallable);
+    end;
 
-      FInnerIterator := ResolveIterator(MappedValue);
-      if not Assigned(FInnerIterator) then
-      begin
-        FSourceIterator.Close;
-        ThrowTypeError(SErrorIteratorFlatMapMustReturnIterable, SSuggestIteratorFlatMapCallable);
-      end;
-
-      InnerValue := FInnerIterator.DirectNext(InnerDone);
-      if not InnerDone then
-      begin
-        ADone := False;
-        Result := InnerValue;
-        Exit;
-      end;
-      FInnerIterator := nil;
-    until False;
-  finally
-    FExecuting := False;
-  end;
+    InnerValue := FInnerIterator.DirectNext(InnerDone);
+    if not InnerDone then
+    begin
+      ADone := False;
+      Result := InnerValue;
+      Exit;
+    end;
+    FInnerIterator := nil;
+  until False;
 end;
 
 procedure TGocciaLazyFlatMapIteratorValue.Close;
