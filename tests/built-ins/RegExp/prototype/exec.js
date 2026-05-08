@@ -209,3 +209,52 @@ test("exec on large input does not crash", () => {
   const s = "foo" + ".bar".repeat(20000);
   expect(/f.*/.test(s)).toBe(true);
 });
+
+// --- Lookahead ---
+
+test("positive lookahead matches without consuming", () => {
+  const m = /foo(?=bar)/.exec("foobar");
+  expect(m[0]).toBe("foo");
+  expect(m.index).toBe(0);
+});
+
+test("negative lookahead rejects when pattern present", () => {
+  expect(/foo(?!bar)/.test("foobar")).toBe(false);
+  expect(/foo(?!bar)/.test("foobaz")).toBe(true);
+});
+
+// --- Lookbehind ---
+
+test("positive lookbehind matches fixed-length pattern", () => {
+  const m = /(?<=foo)bar/.exec("foobar");
+  expect(m[0]).toBe("bar");
+  expect(m.index).toBe(3);
+});
+
+test("positive lookbehind fails when prefix absent", () => {
+  expect(/(?<=foo)bar/.test("bazbar")).toBe(false);
+});
+
+test("negative lookbehind rejects when pattern present", () => {
+  expect(/(?<!foo)bar/.test("foobar")).toBe(false);
+  expect(/(?<!foo)bar/.test("bazbar")).toBe(true);
+});
+
+test("lookbehind with alternation", () => {
+  const m = "xabcd".match(/.*(?<=(..|...|....))(.*)/);
+  expect(m[0]).toBe("xabcd");
+  expect(m[1]).toBe("cd");
+  expect(m[2]).toBe("");
+});
+
+test("lookbehind with quantifier in outer pattern", () => {
+  const m = /(?<=\d+)px/.exec("100px");
+  expect(m[0]).toBe("px");
+  expect(m.index).toBe(3);
+});
+
+test("lookbehind does not consume input", () => {
+  const m = /(?<=a)b/.exec("ab");
+  expect(m[0]).toBe("b");
+  expect(m.index).toBe(1);
+});

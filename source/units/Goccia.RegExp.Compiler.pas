@@ -645,6 +645,7 @@ end;
 
 const
   BACKREF_STRICT_FLAG = $800000;
+  LOOK_NEGATED_FLAG = $800000;
 
 procedure TRegExpCompiler.EmitDuplicateNamedBackref(const AName: string);
 var
@@ -993,7 +994,7 @@ begin
         raise EConvertError.Create('Unterminated negative lookahead');
       Emit(EncodeOp(RX_MATCH));
       PatchHole(SplitHole, CurrentPC);
-      FCode[SplitHole] := EncodeOpBx(RX_LOOKAHEAD, CurrentPC) or $80;
+      FCode[SplitHole] := EncodeOpBx(RX_LOOKAHEAD, CurrentPC or LOOK_NEGATED_FLAG);
     end
     else if Match('<') then
     begin
@@ -1017,7 +1018,7 @@ begin
           raise EConvertError.Create('Unterminated negative lookbehind');
         Emit(EncodeOp(RX_MATCH));
         PatchHole(SplitHole, CurrentPC);
-        FCode[SplitHole] := EncodeOpBx(RX_LOOKBEHIND, CurrentPC) or $80;
+        FCode[SplitHole] := EncodeOpBx(RX_LOOKBEHIND, CurrentPC or LOOK_NEGATED_FLAG);
       end
       else
       begin
@@ -1229,6 +1230,7 @@ var
   I: Integer;
   Op: TRegExpOpCode;
   Bx: Integer;
+  Negated: Boolean;
 begin
   EnsureCodeCapacity(1);
   Move(FCode[APos], FCode[APos + 1], (FCodeLen - APos) * SizeOf(UInt32));
@@ -1250,10 +1252,14 @@ begin
       RX_LOOKAHEAD, RX_LOOKBEHIND:
         begin
           Bx := Integer(FCode[I] shr 8);
+          Negated := (Bx and $800000) <> 0;
+          Bx := Bx and $7FFFFF;
           if Bx >= APos then
           begin
             Inc(Bx);
-            FCode[I] := (FCode[I] and $80FF) or (UInt32(Bx) shl 8);
+            if Negated then
+              Bx := Bx or $800000;
+            FCode[I] := EncodeOpBx(Op, Bx);
           end;
         end;
     end;

@@ -508,8 +508,8 @@ begin
 
       RX_LOOKAHEAD:
         begin
-          Negated := (Instr and $80) <> 0;
-          LookEnd := Bx;
+          Negated := (Bx and $800000) <> 0;
+          LookEnd := Bx and $7FFFFF;
           SetLength(LookSlots, SlotCount);
           Move(ASlots[0], LookSlots[0], SlotCount * SizeOf(Integer));
           LookMatched := RunVM(AProgram, AInput, InputPos, LookSlots,
@@ -538,8 +538,8 @@ begin
 
       RX_LOOKBEHIND:
         begin
-          Negated := (Instr and $80) <> 0;
-          LookEnd := Bx;
+          Negated := (Bx and $800000) <> 0;
+          LookEnd := Bx and $7FFFFF;
           LookMatched := False;
           SetLength(LookSlots, SlotCount);
           I := InputPos - 1;
