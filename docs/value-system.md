@@ -41,12 +41,16 @@ classDiagram
     TGocciaIteratorValue <|-- TGocciaStringIteratorValue
     TGocciaIteratorValue <|-- TGocciaMapIteratorValue
     TGocciaIteratorValue <|-- TGocciaSetIteratorValue
-    TGocciaIteratorValue <|-- TGocciaLazyMapIteratorValue
-    TGocciaIteratorValue <|-- TGocciaLazyFilterIteratorValue
-    TGocciaIteratorValue <|-- TGocciaLazyTakeIteratorValue
-    TGocciaIteratorValue <|-- TGocciaLazyDropIteratorValue
-    TGocciaIteratorValue <|-- TGocciaLazyFlatMapIteratorValue
     TGocciaIteratorValue <|-- TGocciaGenericIteratorValue
+    TGocciaIteratorValue <|-- TGocciaIteratorHelperValue
+    TGocciaIteratorHelperValue <|-- TGocciaLazyMapIteratorValue
+    TGocciaIteratorHelperValue <|-- TGocciaLazyFilterIteratorValue
+    TGocciaIteratorHelperValue <|-- TGocciaLazyTakeIteratorValue
+    TGocciaIteratorHelperValue <|-- TGocciaLazyDropIteratorValue
+    TGocciaIteratorHelperValue <|-- TGocciaLazyFlatMapIteratorValue
+    TGocciaIteratorHelperValue <|-- TGocciaConcatIteratorValue
+    TGocciaIteratorHelperValue <|-- TGocciaZipIteratorValue
+    TGocciaIteratorHelperValue <|-- TGocciaZipKeyedIteratorValue
     TGocciaObjectValue <|-- TGocciaArrayBufferValue
     TGocciaObjectValue <|-- TGocciaSharedArrayBufferValue
     TGocciaObjectValue <|-- TGocciaTypedArrayValue
