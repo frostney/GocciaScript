@@ -861,8 +861,25 @@ begin
       end;
     'b':
       AddRange(ARanges, ARangeCount, $08, $08);
+    'c':
+      begin
+        if not AtEnd and (((Peek >= 'a') and (Peek <= 'z')) or
+           ((Peek >= 'A') and (Peek <= 'Z'))) then
+          AddRange(ARanges, ARangeCount, Ord(Advance) mod 32,
+            Ord(FPattern[FPos - 1]) mod 32)
+        else if FUnicode then
+          raise EConvertError.Create(
+            'Invalid regular expression: invalid control escape in unicode mode')
+        else
+          AddRange(ARanges, ARangeCount, Ord('c'), Ord('c'));
+      end;
   else
-    AddRange(ARanges, ARangeCount, Ord(C), Ord(C));
+    if FUnicode and not CharInSet(C, ['/', '^', '$', '\', '.', '*', '+',
+       '?', '(', ')', '[', ']', '{', '}', '|', '-']) then
+      raise EConvertError.Create(
+        'Invalid regular expression: invalid escape in unicode mode')
+    else
+      AddRange(ARanges, ARangeCount, Ord(C), Ord(C));
   end;
 end;
 

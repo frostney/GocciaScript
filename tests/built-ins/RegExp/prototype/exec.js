@@ -219,9 +219,10 @@ test("backreference to zero-length capture with + does not hang", () => {
 
 // --- Backtrack limit ---
 
-test("catastrophic backtracking does not hang", () => {
-  const result = /^(a+)+$/.exec("a".repeat(30) + "b");
-  expect(result).toBe(null);
+test("catastrophic backtracking throws Error instead of hanging", () => {
+  expect(() => {
+    /^(a+)+$/.exec("a".repeat(30) + "b");
+  }).toThrow(Error);
 });
 
 // --- Large input (#515 regression) ---

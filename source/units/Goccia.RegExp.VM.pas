@@ -27,7 +27,8 @@ uses
   TextSemantics;
 
 const
-  DEFAULT_STEP_LIMIT = 10000000;
+  MIN_STEP_LIMIT = 10000000;
+  STEPS_PER_INPUT_BYTE = 100;
   DEFAULT_BACKTRACK_CAP = 1000000;
   MAX_LOOKBEHIND_DISTANCE = 256;
   MEMO_CAPACITY = 65536;
@@ -201,6 +202,7 @@ var
   Stack: array of TBacktrackEntry;
   StackTop: Integer;
   StepCount: Integer;
+  StepLimit: Integer;
   Memo: TMemoTable;
   SlotCount: Integer;
   I: Integer;
@@ -252,6 +254,9 @@ begin
   PC := AStartPC;
   InputPos := AStartPos;
   StepCount := 0;
+  StepLimit := Length(AInput) * STEPS_PER_INPUT_BYTE;
+  if StepLimit < MIN_STEP_LIMIT then
+    StepLimit := MIN_STEP_LIMIT;
   StackTop := -1;
   SetLength(Stack, 256);
   MemoInit(Memo);
@@ -259,7 +264,7 @@ begin
   while PC < Length(AProgram.Code) do
   begin
     Inc(StepCount);
-    if StepCount > DEFAULT_STEP_LIMIT then
+    if StepCount > StepLimit then
       raise ERegExpRuntimeError.Create('Maximum regular expression backtrack stack size exceeded');
 
     Instr := AProgram.Code[PC];
@@ -346,12 +351,6 @@ begin
 
       RX_SPLIT:
         begin
-          if MemoContains(Memo, PC, InputPos) then
-          begin
-            PC := Bx;
-            Continue;
-          end;
-          MemoAdd(Memo, PC, InputPos);
           if not MemoContains(Memo, Bx, InputPos) then
             PushBacktrack(Bx, InputPos);
           Inc(PC);
@@ -365,7 +364,19 @@ begin
         end;
 
       RX_JUMP:
-        PC := Bx;
+        begin
+          if (Bx >= 0) and (Bx < Length(AProgram.Code)) and
+             (TRegExpOpCode(AProgram.Code[Bx] and $FF) = RX_SPLIT) then
+          begin
+            if (StackTop >= 0) and (Stack[StackTop].PC = Integer(AProgram.Code[Bx] shr 8)) and
+               (Stack[StackTop].InputPos = InputPos) then
+            begin
+              PC := Integer(AProgram.Code[Bx] shr 8);
+              Continue;
+            end;
+          end;
+          PC := Bx;
+        end;
 
       RX_SAVE:
         begin
