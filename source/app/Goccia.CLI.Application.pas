@@ -126,6 +126,7 @@ uses
   Goccia.Timeout,
   Goccia.TOML,
   Goccia.Values.ArrayValue,
+  Goccia.Values.Formatting,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
@@ -706,8 +707,12 @@ end;
 procedure TGocciaCLIApplication.InitializeSingletons;
 begin
   SetMaxStackDepth(DEFAULT_MAX_STACK_DEPTH);
+  SetInspectDepth(DEFAULT_INSPECT_DEPTH);
   if Assigned(FEngineOptions) then
+  begin
     SetMaxStackDepth(Max(0, FEngineOptions.StackSize.ValueOr(DEFAULT_MAX_STACK_DEPTH)));
+    SetInspectDepth(FEngineOptions.InspectDepth.ValueOr(DEFAULT_INSPECT_DEPTH));
+  end;
   if Assigned(FCoverageOptions) then
     InitializeCoverageIfEnabled(FCoverageOptions);
   if Assigned(FProfilerOptions) then

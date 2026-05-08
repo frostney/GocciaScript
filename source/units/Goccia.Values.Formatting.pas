@@ -7,12 +7,17 @@ interface
 uses
   Goccia.Values.Primitives;
 
+const
+  DEFAULT_INSPECT_DEPTH = 5;
+
+procedure SetInspectDepth(const ADepth: Integer);
 function FormatForDisplay(const AValue: TGocciaValue): string;
 
 implementation
 
 uses
   Generics.Collections,
+  Math,
 
   StringBuffer,
 
@@ -20,8 +25,13 @@ uses
   Goccia.Values.ObjectValue,
   Goccia.Values.SymbolValue;
 
-const
-  MAX_FORMAT_DEPTH = 5;
+var
+  GInspectDepth: Integer = DEFAULT_INSPECT_DEPTH;
+
+procedure SetInspectDepth(const ADepth: Integer);
+begin
+  GInspectDepth := Max(1, ADepth);
+end;
 
 function FormatRecursive(const AValue: TGocciaValue; const ANested: Boolean; const ADepth: Integer): string; forward;
 
@@ -30,20 +40,20 @@ var
   SB: TStringBuffer;
   I: Integer;
 begin
-  if ADepth >= MAX_FORMAT_DEPTH then
+  if ADepth >= GInspectDepth then
   begin
-    Result := '[...]';
+    Result := '[Array]';
     Exit;
   end;
   SB := TStringBuffer.Create;
-  SB.AppendChar('[');
+  SB.Append('[ ');
   for I := 0 to AArr.Elements.Count - 1 do
   begin
     if I > 0 then
       SB.Append(', ');
     SB.Append(FormatRecursive(AArr.Elements[I], True, ADepth + 1));
   end;
-  SB.AppendChar(']');
+  SB.Append(' ]');
   Result := SB.ToString;
 end;
 
@@ -52,25 +62,33 @@ var
   SB: TStringBuffer;
   Entry: TPair<string, TGocciaValue>;
   First: Boolean;
+  HasEntries: Boolean;
 begin
-  if ADepth >= MAX_FORMAT_DEPTH then
+  if ADepth >= GInspectDepth then
   begin
-    Result := '{...}';
+    Result := '[Object]';
     Exit;
   end;
   SB := TStringBuffer.Create;
   SB.AppendChar('{');
   First := True;
+  HasEntries := False;
   for Entry in AObj.GetEnumerablePropertyEntries do
   begin
-    if not First then
+    if First then
+      SB.AppendChar(' ')
+    else
       SB.Append(', ');
     First := False;
+    HasEntries := True;
     SB.Append(Entry.Key);
     SB.Append(': ');
     SB.Append(FormatRecursive(Entry.Value, True, ADepth + 1));
   end;
-  SB.AppendChar('}');
+  if HasEntries then
+    SB.Append(' }')
+  else
+    SB.AppendChar('}');
   Result := SB.ToString;
 end;
 
