@@ -44,17 +44,6 @@ uses
   Goccia.Values.Iterator.Concrete,
   Goccia.Values.Iterator.Generic;
 
-procedure CloseIteratorPreservingOriginalError(const AIterator: TGocciaIteratorValue);
-begin
-  if not Assigned(AIterator) then
-    Exit;
-  try
-    AIterator.Close;
-  except
-    // Preserve the original abrupt-completion error when cleanup also throws.
-  end;
-end;
-
 { TGocciaConcatIteratorValue }
 
 constructor TGocciaConcatIteratorValue.Create(const AIterables: array of TGocciaConcatIterableRecord);
@@ -131,7 +120,7 @@ begin
           InnerResult := FCurrentIterator.AdvanceNext;
         except
           AcquireExceptionObject;
-          CloseIteratorPreservingOriginalError(FCurrentIterator);
+          CloseIteratorPreservingError(FCurrentIterator);
           FCurrentIterator := nil;
           FDone := True;
           raise;
@@ -185,7 +174,7 @@ begin
           InnerValue := FCurrentIterator.DirectNext(InnerDone);
         except
           AcquireExceptionObject;
-          CloseIteratorPreservingOriginalError(FCurrentIterator);
+          CloseIteratorPreservingError(FCurrentIterator);
           FCurrentIterator := nil;
           FDone := True;
           raise;

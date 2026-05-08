@@ -65,17 +65,6 @@ uses
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
 
-procedure CloseIteratorPreservingOriginalError(const AIterator: TGocciaIteratorValue);
-begin
-  if not Assigned(AIterator) then
-    Exit;
-  try
-    AIterator.Close;
-  except
-    // Preserve the original abrupt-completion error when cleanup also throws.
-  end;
-end;
-
 // TC39 Joint Iteration §2.1.1 GetIteratorFlattenable(obj, primitiveHandling)
 function GetIteratorFromIterable(const AValue: TGocciaValue): TGocciaIteratorValue;
 var
@@ -148,7 +137,7 @@ begin
   for I := 0 to High(FIterators) do
   begin
     if not FExhausted[I] then
-      CloseIteratorPreservingOriginalError(FIterators[I]);
+      CloseIteratorPreservingError(FIterators[I]);
   end;
 end;
 
@@ -353,7 +342,7 @@ begin
   for I := 0 to High(FIterators) do
   begin
     if not FExhausted[I] then
-      CloseIteratorPreservingOriginalError(FIterators[I]);
+      CloseIteratorPreservingError(FIterators[I]);
   end;
 end;
 

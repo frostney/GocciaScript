@@ -99,17 +99,6 @@ uses
   Goccia.Values.Iterator.Generic,
   Goccia.Values.SymbolValue;
 
-procedure CloseIteratorPreservingOriginalError(const AIterator: TGocciaIteratorValue);
-begin
-  if not Assigned(AIterator) then
-    Exit;
-  try
-    AIterator.Close;
-  except
-    // Preserve the original abrupt-completion error when cleanup also throws.
-  end;
-end;
-
 { TGocciaLazyMapIteratorValue }
 
 constructor TGocciaLazyMapIteratorValue.Create(const ASourceIterator: TGocciaIteratorValue; const ACallback: TGocciaValue);
@@ -147,7 +136,7 @@ begin
       MappedValue := InvokeIteratorCallback(FCallback, Value, FIndex);
     except
       AcquireExceptionObject;
-      CloseIteratorPreservingOriginalError(FSourceIterator);
+      CloseIteratorPreservingError(FSourceIterator);
       raise;
     end;
     Inc(FIndex);
@@ -183,7 +172,7 @@ begin
       Result := InvokeIteratorCallback(FCallback, Value, FIndex);
     except
       AcquireExceptionObject;
-      CloseIteratorPreservingOriginalError(FSourceIterator);
+      CloseIteratorPreservingError(FSourceIterator);
       raise;
     end;
     Inc(FIndex);
@@ -252,7 +241,7 @@ begin
         end;
       except
         AcquireExceptionObject;
-        CloseIteratorPreservingOriginalError(FSourceIterator);
+        CloseIteratorPreservingError(FSourceIterator);
         raise;
       end;
       Inc(FIndex);
@@ -294,7 +283,7 @@ begin
         end;
       except
         AcquireExceptionObject;
-        CloseIteratorPreservingOriginalError(FSourceIterator);
+        CloseIteratorPreservingError(FSourceIterator);
         raise;
       end;
       Inc(FIndex);
@@ -615,9 +604,9 @@ begin
         MappedValue := InvokeIteratorCallback(FCallback, Value, FIndex);
       except
         AcquireExceptionObject;
-        CloseIteratorPreservingOriginalError(FSourceIterator);
+        CloseIteratorPreservingError(FSourceIterator);
         if Assigned(FInnerIterator) then
-          CloseIteratorPreservingOriginalError(FInnerIterator);
+          CloseIteratorPreservingError(FInnerIterator);
         raise;
       end;
       Inc(FIndex);
@@ -683,9 +672,9 @@ begin
         MappedValue := InvokeIteratorCallback(FCallback, Value, FIndex);
       except
         AcquireExceptionObject;
-        CloseIteratorPreservingOriginalError(FSourceIterator);
+        CloseIteratorPreservingError(FSourceIterator);
         if Assigned(FInnerIterator) then
-          CloseIteratorPreservingOriginalError(FInnerIterator);
+          CloseIteratorPreservingError(FInnerIterator);
         raise;
       end;
       Inc(FIndex);

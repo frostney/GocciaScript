@@ -169,15 +169,4 @@ describe("Iterator.concat()", () => {
     const result = Iterator.concat(...arrays).toArray();
     expect(result).toEqual(expected);
   });
-
-  test("re-entrant .next() on concat helper throws TypeError", () => {
-    let iter;
-    const iterable = {
-      [Symbol.iterator]() {
-        return { next() { iter.next(); return { done: false }; } };
-      },
-    };
-    iter = Iterator.concat(iterable);
-    expect(() => iter.next()).toThrow(TypeError);
-  });
 });

@@ -52,6 +52,7 @@ type
 
 function CreateIteratorResult(const AValue: TGocciaValue; const ADone: Boolean): TGocciaObjectValue;
 function InvokeIteratorCallback(const ACallback: TGocciaValue; const AValue: TGocciaValue; const AIndex: Integer): TGocciaValue;
+procedure CloseIteratorPreservingError(const AIterator: TGocciaIteratorValue);
 
 implementation
 
