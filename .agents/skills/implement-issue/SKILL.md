@@ -23,7 +23,8 @@ gh api "repos/$OWNER/$REPO/issues/$ISSUE_NUMBER"
    - The issue is not a pull request.
    - Labels or comments do not indicate `blocked`, `duplicate`, `wontfix`, or equivalent.
    - The reported behavior has been checked against the current codebase, not just accepted from the issue text.
-   - The problem statement is verified as an actual issue in this codebase by reading the relevant implementation, running or adding a focused reproduction when practical, and comparing observed behavior with the expected behavior.
+   - When the issue body provides a reproduction command, test path, or references an external test (test262, etc.), fetch and run that exact artifact first — before forming any hypothesis about the cause. Do not reconstruct a scenario from the title; the title is a pointer to the bug, not a spec for it.
+   - The problem statement is verified as an actual issue in this codebase by reading the relevant implementation, running the provided reproduction (or adding a focused one when none is provided), and comparing observed behavior with the expected behavior.
    - The expected behavior and acceptance criteria are clear enough to implement.
 5. If validation fails or requirements are ambiguous, stop and ask the user.
 6. Present the user with different implementation options, including tradeoffs, recommended verification, and the option you recommend. Do not code until the user chooses an option or explicitly asks you to proceed with the recommendation.

@@ -606,6 +606,9 @@ resourcestring
   // Iterator concat errors
   SErrorIteratorConcatMustReturnObject = 'Iterator.concat: [Symbol.iterator]() must return an object';
 
+  // Iterator helper re-entrancy
+  SErrorIteratorHelperExecuting = 'Iterator helper is already executing';
+
   // FFIPointer errors
   SErrorFFIPointerRequiresFFIPointer = 'FFIPointer.%s requires an FFIPointer';
 
