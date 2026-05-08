@@ -9,6 +9,7 @@ uses
 
 const
   DEFAULT_INSPECT_DEPTH = 5;
+  MAX_INSPECT_DEPTH = 64;
 
 procedure SetInspectDepth(const ADepth: Integer);
 function FormatForDisplay(const AValue: TGocciaValue): string;
@@ -30,7 +31,7 @@ var
 
 procedure SetInspectDepth(const ADepth: Integer);
 begin
-  GInspectDepth := Max(1, ADepth);
+  GInspectDepth := Min(MAX_INSPECT_DEPTH, Max(1, ADepth));
 end;
 
 function FormatRecursive(const AValue: TGocciaValue; const ANested: Boolean; const ADepth: Integer): string; forward;
