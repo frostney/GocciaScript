@@ -412,21 +412,8 @@ begin
 end;
 
 procedure TGocciaArrowFunctionValue.BindThis(const ACallScope: TGocciaScope; const AThisValue: TGocciaValue);
-var
-  ClosureScope: TGocciaScope;
 begin
-  // Arrow functions always inherit 'this' from their lexical (closure) scope,
-  // per ECMAScript spec. They never use the call-site AThisValue.
-  ClosureScope := FClosure;
-  while Assigned(ClosureScope) do
-  begin
-    if Assigned(ClosureScope.ThisValue) and not (ClosureScope.ThisValue is TGocciaUndefinedLiteralValue) then
-    begin
-      ACallScope.ThisValue := ClosureScope.ThisValue;
-      Break;
-    end;
-    ClosureScope := ClosureScope.Parent;
-  end;
+  ACallScope.ThisValue := FClosure.ThisValue;
 end;
 
 { TGocciaMethodValue }
