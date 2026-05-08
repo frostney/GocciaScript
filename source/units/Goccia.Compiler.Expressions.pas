@@ -1920,7 +1920,7 @@ var
   ChildTemplate: TGocciaFunctionTemplate;
   ChildScope: TGocciaCompilerScope;
   FuncIdx: UInt16;
-  GetterReg: UInt8;
+  TargetReg, AccessorReg: UInt8;
   KeyIdx: UInt16;
   I: Integer;
 begin
@@ -1950,14 +1950,15 @@ begin
   end;
 
   FuncIdx := OldTemplate.AddFunction(ChildTemplate);
-  GetterReg := ACtx.Scope.AllocateRegister;
-  EmitInstruction(ACtx, EncodeABx(OP_CLOSURE, GetterReg, FuncIdx));
   KeyIdx := ACtx.Template.AddConstantString(AKey);
   if KeyIdx > High(UInt8) then
     raise Exception.Create('Constant pool overflow: property name index exceeds 255');
-  if GetterReg <> ADest + 1 then
-    EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest + 1, GetterReg, 0));
-  EmitInstruction(ACtx, EncodeABC(OP_DEFINE_ACCESSOR_CONST, ADest, 0, UInt8(KeyIdx)));
+  TargetReg := ACtx.Scope.AllocateRegister;
+  EmitInstruction(ACtx, EncodeABC(OP_MOVE, TargetReg, ADest, 0));
+  AccessorReg := ACtx.Scope.AllocateRegister;
+  EmitInstruction(ACtx, EncodeABx(OP_CLOSURE, AccessorReg, FuncIdx));
+  EmitInstruction(ACtx, EncodeABC(OP_DEFINE_ACCESSOR_CONST, TargetReg, 0, UInt8(KeyIdx)));
+  ACtx.Scope.FreeRegister;
   ACtx.Scope.FreeRegister;
 end;
 
@@ -1970,7 +1971,7 @@ var
   ChildTemplate: TGocciaFunctionTemplate;
   ChildScope: TGocciaCompilerScope;
   FuncIdx: UInt16;
-  SetterReg: UInt8;
+  TargetReg, AccessorReg: UInt8;
   KeyIdx: UInt16;
   I: Integer;
 begin
@@ -2001,14 +2002,15 @@ begin
   end;
 
   FuncIdx := OldTemplate.AddFunction(ChildTemplate);
-  SetterReg := ACtx.Scope.AllocateRegister;
-  EmitInstruction(ACtx, EncodeABx(OP_CLOSURE, SetterReg, FuncIdx));
   KeyIdx := ACtx.Template.AddConstantString(AKey);
   if KeyIdx > High(UInt8) then
     raise Exception.Create('Constant pool overflow: property name index exceeds 255');
-  if SetterReg <> ADest + 1 then
-    EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest + 1, SetterReg, 0));
-  EmitInstruction(ACtx, EncodeABC(OP_DEFINE_ACCESSOR_CONST, ADest, ACCESSOR_FLAG_SETTER, UInt8(KeyIdx)));
+  TargetReg := ACtx.Scope.AllocateRegister;
+  EmitInstruction(ACtx, EncodeABC(OP_MOVE, TargetReg, ADest, 0));
+  AccessorReg := ACtx.Scope.AllocateRegister;
+  EmitInstruction(ACtx, EncodeABx(OP_CLOSURE, AccessorReg, FuncIdx));
+  EmitInstruction(ACtx, EncodeABC(OP_DEFINE_ACCESSOR_CONST, TargetReg, ACCESSOR_FLAG_SETTER, UInt8(KeyIdx)));
+  ACtx.Scope.FreeRegister;
   ACtx.Scope.FreeRegister;
 end;
 

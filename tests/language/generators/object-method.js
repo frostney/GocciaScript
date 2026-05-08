@@ -733,3 +733,64 @@ test("object generator method works with for of and Array.from", () => {
   expect(values).toEqual([1, 2]);
   expect(Array.from(obj.numbers())).toEqual([1, 2]);
 });
+
+test("yield* forwards return completion when iterator return is null", () => {
+  let returnGets = 0;
+  const iterable = {
+    next() {
+      return { value: 1, done: false };
+    },
+    get return() {
+      returnGets += 1;
+      return null;
+    },
+    [Symbol.iterator]() {
+      return this;
+    },
+  };
+
+  const obj = {
+    *gen() {
+      yield* iterable;
+    },
+  };
+
+  const iterator = obj.gen();
+  iterator.next();
+  const result = iterator.return(2);
+  expect(result.value).toBe(2);
+  expect(result.done).toBe(true);
+  expect(returnGets).toBe(1);
+});
+
+test("yield* throws TypeError when iterator throw is null and calls IteratorClose", () => {
+  let throwGets = 0;
+  let returnGets = 0;
+  const iterable = {
+    next() {
+      return { value: 1, done: false };
+    },
+    get throw() {
+      throwGets += 1;
+      return null;
+    },
+    get return() {
+      returnGets += 1;
+    },
+    [Symbol.iterator]() {
+      return this;
+    },
+  };
+
+  const obj = {
+    *gen() {
+      yield* iterable;
+    },
+  };
+
+  const iterator = obj.gen();
+  iterator.next();
+  expect(() => iterator.throw()).toThrow(TypeError);
+  expect(throwGets).toBe(1);
+  expect(returnGets).toBe(1);
+});
