@@ -66,5 +66,5 @@ jobs:
 
             Cron: weekly, Mondays 06:00 UTC. See `.github/workflows/test262-bump.yml`.
           labels: |
-            test262
+            spec compliance
             automated

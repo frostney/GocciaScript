@@ -58,5 +58,5 @@ jobs:
 
             Cron: weekly, Mondays 06:30 UTC. See `.github/workflows/toml-test-bump.yml`.
           labels: |
-            toml-test
+            toml
             automated

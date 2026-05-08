@@ -58,5 +58,5 @@ jobs:
 
             Cron: weekly, Mondays 07:00 UTC. See `.github/workflows/yaml-test-bump.yml`.
           labels: |
-            yaml-test
+            yaml
             automated
