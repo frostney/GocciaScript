@@ -237,6 +237,7 @@ Relative paths are resolved against the current working directory. A missing fil
   "timeout": 5000,
   "max-memory": 10485760,
   "stack-size": 3500,
+  "inspect-depth": 5,
   "allowed-hosts": ["api.example.com", "cdn.example.com"],
   "imports": {
     "@/": "./src/"
@@ -271,6 +272,7 @@ mode = "bytecode"
 timeout = 5000
 max-memory = 10485760
 stack-size = 3500
+inspect-depth = 5
 ```
 
 **CLI vs. embedding** — Config file discovery is automatic for all CLI applications (`GocciaScriptLoader`, `GocciaTestRunner`, `GocciaBenchmarkRunner`, `GocciaBundler`, `GocciaREPL`) because they inherit from `TGocciaCLIApplication`. When embedding the engine directly, config file loading is not automatic. Use the shared `CLI.ConfigFile` unit to get the same behavior.

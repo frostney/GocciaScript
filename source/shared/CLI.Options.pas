@@ -170,6 +170,7 @@ type
     FCompatAll: TGocciaFlagOption;
     FStrictTypes: TGocciaFlagOption;
     FAllowedHosts: TGocciaRepeatableOption;
+    FInspectDepth: TGocciaIntegerOption;
   public
     constructor Create;
     destructor Destroy; override;
@@ -193,6 +194,7 @@ type
     property CompatAll: TGocciaFlagOption read FCompatAll;
     property StrictTypes: TGocciaFlagOption read FStrictTypes;
     property AllowedHosts: TGocciaRepeatableOption read FAllowedHosts;
+    property InspectDepth: TGocciaIntegerOption read FInspectDepth;
   end;
 
   TGocciaCoverageFormat = (cfLcov, cfJson);
@@ -584,6 +586,8 @@ begin
   FAllowedHosts := TGocciaRepeatableOption.Create('allowed-host',
     'Hostname allowed for fetch requests (repeatable)', 'Engine');
   FAllowedHosts.ConfigName := 'allowed-hosts';
+  FInspectDepth := TGocciaIntegerOption.Create('inspect-depth',
+    'Maximum object inspection depth for console output (default: 5)', 'Engine');
 end;
 
 destructor TGocciaEngineOptions.Destroy;
@@ -605,12 +609,13 @@ begin
   FCompatAll.Free;
   FStrictTypes.Free;
   FAllowedHosts.Free;
+  FInspectDepth.Free;
   inherited Destroy;
 end;
 
 function TGocciaEngineOptions.Options: TGocciaOptionArray;
 begin
-  SetLength(Result, 17);
+  SetLength(Result, 18);
   Result[0] := FMode;
   Result[1] := FSourceType;
   Result[2] := FASI;
@@ -628,6 +633,7 @@ begin
   Result[14] := FCompatAll;
   Result[15] := FStrictTypes;
   Result[16] := FAllowedHosts;
+  Result[17] := FInspectDepth;
 end;
 
 { TGocciaCoverageOptions }

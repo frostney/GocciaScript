@@ -12,6 +12,7 @@ uses
   Goccia.Error,
   Goccia.TestSetup,
   Goccia.Values.Error,
+  Goccia.Values.Formatting,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
@@ -72,15 +73,15 @@ var
   ThrownTypeName: string;
 begin
   ObjectValue := SimpleObject;
-  DebugString := ObjectValue.ToDebugString;
+  DebugString := FormatForDisplay(ObjectValue);
 
-  Expect<Boolean>(ContainsFragment(DebugString, 'name: John')).ToBe(True);
+  Expect<Boolean>(ContainsFragment(DebugString, 'name: ''John''')).ToBe(True);
   Expect<Boolean>(ContainsFragment(DebugString, 'age: 30')).ToBe(True);
   Expect<Boolean>(ContainsFragment(DebugString, 'isStudent: true')).ToBe(True);
-  Expect<Boolean>(ContainsFragment(DebugString, 'address: 123 Main St')).ToBe(True);
-  Expect<Boolean>(ContainsFragment(DebugString, 'city: Anytown')).ToBe(True);
-  Expect<Boolean>(ContainsFragment(DebugString, 'state: CA')).ToBe(True);
-  Expect<Boolean>(ContainsFragment(DebugString, 'zip: 12345')).ToBe(True);
+  Expect<Boolean>(ContainsFragment(DebugString, 'address: ''123 Main St''')).ToBe(True);
+  Expect<Boolean>(ContainsFragment(DebugString, 'city: ''Anytown''')).ToBe(True);
+  Expect<Boolean>(ContainsFragment(DebugString, 'state: ''CA''')).ToBe(True);
+  Expect<Boolean>(ContainsFragment(DebugString, 'zip: ''12345''')).ToBe(True);
 
   // ES2026 §7.1.17 ToString on an object without Object.prototype.toString
   // (no prototype assigned in this test fixture) throws TypeError because
