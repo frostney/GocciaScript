@@ -228,3 +228,16 @@ xyz")).toBe(true);
   expect(/abc$/m.test("abc
 é")).toBe(true);
 });
+
+// --- Unicode mode syntax restrictions ---
+
+test("\\c without letter throws SyntaxError in unicode mode", () => {
+  expect(() => { new RegExp("\\c", "u"); }).toThrow(SyntaxError);
+  expect(() => { new RegExp("\\c1", "u"); }).toThrow(SyntaxError);
+});
+
+test("quantified assertion throws SyntaxError in unicode mode", () => {
+  expect(() => { new RegExp("(?=.)*", "u"); }).toThrow(SyntaxError);
+  expect(() => { new RegExp("(?=.)+", "u"); }).toThrow(SyntaxError);
+  expect(() => { new RegExp("(?!.){2}", "u"); }).toThrow(SyntaxError);
+});

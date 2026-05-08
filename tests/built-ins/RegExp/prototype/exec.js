@@ -195,6 +195,28 @@ test("exec with duplicate named backreference outside the disjunction", () => {
   expect(re.exec("ab")).toBe(null);
 });
 
+// --- Greedy quantifier with alternation ---
+
+test("greedy star with alternation picks correct match", () => {
+  const m = /(aa|aabaac|ba|b|c)*/.exec("aabaac");
+  expect(m[0]).toBe("aaba");
+  expect(m[1]).toBe("ba");
+});
+
+test("greedy star with character class quantifier backtracks correctly", () => {
+  const m = /^([a-z]+)*[a-z]$/.exec("ab");
+  expect(m[0]).toBe("ab");
+  expect(m[1]).toBe("a");
+});
+
+// --- Zero-width backref loop ---
+
+test("backreference to zero-length capture with + does not hang", () => {
+  const m = /(a*)b\1+/.exec("baaac");
+  expect(m[0]).toBe("b");
+  expect(m[1]).toBe("");
+});
+
 // --- Backtrack limit ---
 
 test("catastrophic backtracking does not hang", () => {

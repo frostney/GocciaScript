@@ -224,6 +224,21 @@ test("(?-:...) empty add and remove throws SyntaxError", () => {
   expect(() => { new RegExp("(?-:abc)"); }).toThrow(SyntaxError);
 });
 
+// --- Modifier scoping affects backreferences ---
+
+test("(?i:\\1) case-folds backreference comparison", () => {
+  const re = /(a)(?i:\1)/;
+  expect(re.test("aA")).toBe(true);
+  expect(re.test("aa")).toBe(true);
+  expect(re.test("AA")).toBe(false);
+});
+
+test("(?-i:\\1) disables case-folding for backreference", () => {
+  const re = new RegExp("(a)(?-i:\\1)", "i");
+  expect(re.test("aa")).toBe(true);
+  expect(re.test("aA")).toBe(false);
+});
+
 // --- Error cases: double dash ---
 
 test("(?i--s:...) double dash throws SyntaxError", () => {

@@ -98,3 +98,29 @@ test("RegExp canonicalizes new flags in correct order", () => {
   const regex = new RegExp("a", "yvgdims");
   expect(regex.flags).toBe("dgimsvy");
 });
+
+// --- Syntax validation ---
+
+test("dangling quantifier throws SyntaxError", () => {
+  expect(() => { new RegExp("a**"); }).toThrow(SyntaxError);
+  expect(() => { new RegExp("??"); }).toThrow(SyntaxError);
+  expect(() => { new RegExp("+"); }).toThrow(SyntaxError);
+  expect(() => { new RegExp("*"); }).toThrow(SyntaxError);
+});
+
+test("invalid character class range throws SyntaxError", () => {
+  expect(() => { new RegExp("[z-a]"); }).toThrow(SyntaxError);
+  expect(() => { new RegExp("[b-ac-e]"); }).toThrow(SyntaxError);
+});
+
+test("quantifier min > max throws SyntaxError", () => {
+  expect(() => { new RegExp("0{2,1}"); }).toThrow(SyntaxError);
+});
+
+test("trailing backslash throws SyntaxError", () => {
+  expect(() => { new RegExp("\\"); }).toThrow(SyntaxError);
+});
+
+test("huge quantifier does not crash", () => {
+  expect(/x{2147483648}x/.test("1")).toBe(false);
+});
