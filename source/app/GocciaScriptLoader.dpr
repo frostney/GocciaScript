@@ -624,15 +624,13 @@ var
 begin
   if AEngine.SourceType = stModule then
   begin
-    { Run with module semantics: fresh module scope, this = undefined.
-      Mirrors TGocciaModuleLoader.LoadModule for nested module loads. }
     ModuleScope := AEngine.Interpreter.GlobalScope.CreateChild(skModule,
       'Module:' + AFileName);
     ModuleScope.ThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-    Result := AExecutor.RunModuleInScope(AModule, ModuleScope);
+    Result := AEngine.RunBytecodeModuleInScope(AModule, ModuleScope);
   end
   else
-    Result := AExecutor.RunModule(AModule);
+    Result := AEngine.RunBytecodeModule(AModule);
 end;
 
 function TScriptLoaderApp.ExecuteBytecodeFromSource(const ASource: TStringList;
@@ -672,7 +670,7 @@ begin
         end;
 
         CompileStart := GetNanoseconds;
-        Module := TGocciaBytecodeExecutor(Engine.Executor).CompileToModule(ProgramNode);
+        Module := Engine.CompileToModule(ProgramNode);
         CompileEnd := GetNanoseconds;
         Result.Timing.CompileTimeNanoseconds := CompileEnd - CompileStart;
       finally
@@ -680,14 +678,12 @@ begin
         SourceMap.Free;
       end;
 
-      TGocciaBytecodeExecutor(Engine.Executor).RetainModule(Module);
       StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
       StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
       try
         ApplyModuleGlobalsToEngine(Engine);
         Result.ResultValue := RunBytecodeModule(Engine,
           TGocciaBytecodeExecutor(Engine.Executor), Module, AFileName);
-        Engine.WaitForRuntimeIdle;
       finally
         ClearExecutionTimeout;
         ClearInstructionLimit;
@@ -718,11 +714,11 @@ begin
   try
     Executor := TGocciaBytecodeExecutor.Create;
     try
-      Executor.RetainModule(Module);
-      RetainedModule := Module;
-      Module := nil;
       Engine := CreateEngine(AFileName, nil, Executor);
       try
+        Engine.RetainModule(Module);
+        RetainedModule := Module;
+        Module := nil;
         ConfigureConsole(RuntimeConsole(Engine), ACapture);
         ApplyDataGlobalsToEngine(Engine);
         StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
@@ -731,7 +727,6 @@ begin
           ApplyModuleGlobalsToEngine(Engine);
           Result.ResultValue := RunBytecodeModule(Engine,
             TGocciaBytecodeExecutor(Engine.Executor), RetainedModule, AFileName);
-          Engine.WaitForRuntimeIdle;
         finally
           ClearExecutionTimeout;
           ClearInstructionLimit;

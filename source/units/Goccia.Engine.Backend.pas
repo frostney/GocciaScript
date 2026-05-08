@@ -5,8 +5,6 @@ unit Goccia.Engine.Backend;
 interface
 
 uses
-  Generics.Collections,
-
   Goccia.AST.Node,
   Goccia.Bytecode.Module,
   Goccia.Compiler,
@@ -23,7 +21,6 @@ type
     FVM: TGocciaVM;
     FGlobalBackedTopLevel: Boolean;
     FStrictTypes: Boolean;
-    FModuleModules: TObjectList<TGocciaBytecodeModule>;
   public
     constructor Create;
     destructor Destroy; override;
@@ -48,7 +45,6 @@ type
       EvaluateModuleBody does for nested module loads. }
     function RunModuleInScope(const AModule: TGocciaBytecodeModule;
       const AScope: TGocciaScope): TGocciaValue;
-    procedure RetainModule(const AModule: TGocciaBytecodeModule);
 
     property VM: TGocciaVM read FVM;
     property GlobalBackedTopLevel: Boolean read FGlobalBackedTopLevel
@@ -75,12 +71,10 @@ constructor TGocciaBytecodeExecutor.Create;
 begin
   inherited Create;
   FVM := TGocciaVM.Create;
-  FModuleModules := TObjectList<TGocciaBytecodeModule>.Create(True);
 end;
 
 destructor TGocciaBytecodeExecutor.Destroy;
 begin
-  FModuleModules.Free;
   FVM.Free;
   inherited;
 end;
@@ -117,9 +111,8 @@ begin
   finally
     Compiler.Free;
   end;
-  // Keep the module alive: closures created during execution reference its
-  // function templates, so the module must outlive the exported values.
-  FModuleModules.Add(BytecodeModule);
+  if Assigned(FRetainModule) then
+    FRetainModule(BytecodeModule);
   SavedGlobalScope := FVM.GlobalScope;
   FVM.GlobalScope := AContext.Scope;
   try
@@ -138,10 +131,8 @@ begin
   Start := GetNanoseconds;
   Module := CompileToModule(AProgram);
   CompileTimeNanoseconds := GetNanoseconds - Start;
-  // Retain the module: closures created during execution reference its
-  // function templates, so the module must outlive any pending microtask
-  // continuations that WaitForRuntimeIdle will drain after this returns.
-  FModuleModules.Add(Module);
+  if Assigned(FRetainModule) then
+    FRetainModule(Module);
   Start := GetNanoseconds;
   Result := RunModule(Module);
   ExecuteTimeNanoseconds := GetNanoseconds - Start;
@@ -156,8 +147,8 @@ begin
   // Patch method template name to 'anonymous' for Function constructor
   if Module.TopLevel.FunctionCount > 0 then
     Module.TopLevel.GetFunction(0).Name := 'anonymous';
-  // Retain the module: closures reference its function templates
-  FModuleModules.Add(Module);
+  if Assigned(FRetainModule) then
+    FRetainModule(Module);
   Result := RunModule(Module);
 end;
 
@@ -230,12 +221,6 @@ procedure TGocciaBytecodeExecutor.ClearTransientCaches;
 begin
   // The Goccia VM executes directly on TGocciaValue and does not maintain
   // bridge-side transient caches that need per-measurement clearing.
-end;
-
-procedure TGocciaBytecodeExecutor.RetainModule(
-  const AModule: TGocciaBytecodeModule);
-begin
-  FModuleModules.Add(AModule);
 end;
 
 end.

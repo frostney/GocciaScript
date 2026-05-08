@@ -12,6 +12,8 @@ uses
   Goccia.Values.Primitives;
 
 type
+  TRetainObjectCallback = procedure(const AObject: TObject) of object;
+
   TGocciaExecutor = class abstract
   private
     FCompileTimeNanoseconds: Int64;
@@ -20,6 +22,7 @@ type
     FGlobalScope: TGocciaScope;
     FModuleLoader: TGocciaModuleLoader;
     FSourcePath: string;
+    FRetainModule: TRetainObjectCallback;
   public
     procedure Initialize(const AGlobalScope: TGocciaScope;
       const AModuleLoader: TGocciaModuleLoader;
@@ -39,6 +42,8 @@ type
       write FCompileTimeNanoseconds;
     property ExecuteTimeNanoseconds: Int64 read FExecuteTimeNanoseconds
       write FExecuteTimeNanoseconds;
+    property RetainModuleCallback: TRetainObjectCallback
+      read FRetainModule write FRetainModule;
   end;
 
 implementation
