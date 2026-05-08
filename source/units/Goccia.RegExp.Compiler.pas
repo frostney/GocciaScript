@@ -118,6 +118,8 @@ type
     function ReadCodePoint: Cardinal;
     procedure EnsureCodeCapacity(ANeeded: Integer);
     procedure EmitBody(const ABody: array of UInt32; ALen: Integer);
+    procedure EmitBodyAt(const ABody: array of UInt32; ALen: Integer;
+      AOrigStart: Integer);
     procedure ValidateNamedGroups;
     procedure PreScanNamedGroups;
     procedure InsertSplitAt(APos: Integer);
@@ -775,11 +777,19 @@ begin
         if not AtEnd and (((Peek >= 'a') and (Peek <= 'z')) or
            ((Peek >= 'A') and (Peek <= 'Z'))) then
           EmitCharMatch(Ord(Advance) mod 32)
+        else if FUnicode then
+          raise EConvertError.Create(
+            'Invalid regular expression: invalid control escape in unicode mode')
         else
           EmitCharMatch(Ord('c'));
       end;
   else
-    EmitCharMatch(Ord(C));
+    if FUnicode and not CharInSet(C, ['/', '^', '$', '\', '.', '*', '+',
+       '?', '(', ')', '[', ']', '{', '}', '|']) then
+      raise EConvertError.Create(
+        'Invalid regular expression: invalid escape in unicode mode')
+    else
+      EmitCharMatch(Ord(C));
   end;
 end;
 
@@ -874,12 +884,18 @@ begin
         begin
           Hi := Ranges[RangeCount - 1].Lo;
           Dec(RangeCount);
+          if Lo > Hi then
+            raise EConvertError.Create(
+              'Invalid regular expression: range out of order in character class');
           AddRange(Ranges, RangeCount, Lo, Hi);
         end;
       end
       else
       begin
         Hi := ReadCodePoint;
+        if Lo > Hi then
+          raise EConvertError.Create(
+            'Invalid regular expression: range out of order in character class');
         AddRange(Ranges, RangeCount, Lo, Hi);
       end;
     end
@@ -1097,6 +1113,9 @@ begin
     '\':
       begin
         Inc(FPos);
+        if AtEnd then
+          raise EConvertError.Create(
+            'Invalid regular expression: \ at end of pattern');
         CompileEscapeAtom;
       end;
   else
@@ -1123,8 +1142,43 @@ end;
 
 procedure TRegExpCompiler.EmitBody(const ABody: array of UInt32; ALen: Integer);
 begin
+  EmitBodyAt(ABody, ALen, 0);
+end;
+
+procedure TRegExpCompiler.EmitBodyAt(const ABody: array of UInt32;
+  ALen: Integer; AOrigStart: Integer);
+var
+  DstStart, Delta, J: Integer;
+  Op: TRegExpOpCode;
+  Bx: Integer;
+  NegFlag: Integer;
+begin
   EnsureCodeCapacity(ALen);
-  Move(ABody[0], FCode[FCodeLen], ALen * SizeOf(UInt32));
+  DstStart := FCodeLen;
+  Move(ABody[0], FCode[DstStart], ALen * SizeOf(UInt32));
+  Delta := DstStart - AOrigStart;
+  if Delta <> 0 then
+  begin
+    for J := DstStart to DstStart + ALen - 1 do
+    begin
+      Op := TRegExpOpCode(FCode[J] and $FF);
+      case Op of
+        RX_SPLIT, RX_SPLIT_LAZY, RX_JUMP:
+          begin
+            Bx := Integer(FCode[J] shr 8);
+            Inc(Bx, Delta);
+            FCode[J] := EncodeOpBx(Op, Bx);
+          end;
+        RX_LOOKAHEAD, RX_LOOKBEHIND:
+          begin
+            Bx := Integer(FCode[J] shr 8);
+            NegFlag := Bx and $800000;
+            Bx := (Bx and $7FFFFF) + Delta;
+            FCode[J] := EncodeOpBx(Op, Bx or NegFlag);
+          end;
+      end;
+    end;
+  end;
   Inc(FCodeLen, ALen);
 end;
 
@@ -1171,6 +1225,9 @@ begin
           FPos := SavePos;
           Exit;
         end;
+        if (MaxCount >= 0) and (MinCount > MaxCount) then
+          raise EConvertError.Create(
+            'Invalid regular expression: numbers out of order in quantifier');
       end;
   else
     Exit;
@@ -1183,7 +1240,7 @@ begin
   Move(FCode[AAtomStart], BodyCode[0], BodyLen * SizeOf(UInt32));
   FCodeLen := AAtomStart;
   for I := 1 to MinCount do
-    EmitBody(BodyCode, BodyLen);
+    EmitBodyAt(BodyCode, BodyLen, AAtomStart);
   if MaxCount = -1 then
   begin
     SplitPC := CurrentPC;
@@ -1191,7 +1248,7 @@ begin
       Emit(EncodeOpBx(RX_SPLIT_LAZY, 0))
     else
       Emit(EncodeOpBx(RX_SPLIT, 0));
-    EmitBody(BodyCode, BodyLen);
+    EmitBodyAt(BodyCode, BodyLen, AAtomStart);
     Emit(EncodeOpBx(RX_JUMP, SplitPC));
     PatchHole(SplitPC, CurrentPC);
   end
@@ -1204,18 +1261,37 @@ begin
         Emit(EncodeOpBx(RX_SPLIT_LAZY, 0))
       else
         Emit(EncodeOpBx(RX_SPLIT, 0));
-      EmitBody(BodyCode, BodyLen);
+      EmitBodyAt(BodyCode, BodyLen, AAtomStart);
       PatchHole(SplitPC, CurrentPC);
     end;
   end;
 end;
 
+function IsQuantifierChar(C: Char): Boolean; inline;
+begin
+  Result := (C = '*') or (C = '+') or (C = '?') or (C = '{');
+end;
+
 procedure TRegExpCompiler.CompileTerm;
 var
   AtomStart: Integer;
+  C: Char;
+  IsAssertion: Boolean;
 begin
+  C := Peek;
+  if IsQuantifierChar(C) then
+    raise EConvertError.Create('Invalid regular expression: nothing to repeat');
+  IsAssertion := (C = '^') or (C = '$') or
+    ((C = '\') and ((PeekAt(1) = 'b') or (PeekAt(1) = 'B')));
+  if (C = '(') and (PeekAt(1) = '?') and
+     ((PeekAt(2) = '=') or (PeekAt(2) = '!') or
+      ((PeekAt(2) = '<') and ((PeekAt(3) = '=') or (PeekAt(3) = '!')))) then
+    IsAssertion := True;
   AtomStart := CurrentPC;
   CompileAtom;
+  if (not AtEnd) and IsQuantifierChar(Peek) and IsAssertion and FUnicode then
+    raise EConvertError.Create(
+      'Invalid regular expression: quantifier on assertion in unicode mode');
   CompileQuantifier(AtomStart);
 end;
 

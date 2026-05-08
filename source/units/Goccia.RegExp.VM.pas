@@ -345,6 +345,12 @@ begin
 
       RX_SPLIT:
         begin
+          if MemoContains(Memo, PC, InputPos) then
+          begin
+            PC := Bx;
+            Continue;
+          end;
+          MemoAdd(Memo, PC, InputPos);
           if not MemoContains(Memo, Bx, InputPos) then
             PushBacktrack(Bx, InputPos);
           Inc(PC);
