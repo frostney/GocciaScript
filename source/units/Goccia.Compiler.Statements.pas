@@ -2774,7 +2774,6 @@ begin
   OldBreakScopeDepth := GBreakScopeDepth;
   BreakJumps := TList<Integer>.Create;
   GBreakJumps := BreakJumps;
-  GBreakScopeDepth := ACtx.Scope.Depth;
   if Assigned(GPendingFinally) then
     GBreakFinallyBase := GPendingFinally.Count
   else
@@ -2799,6 +2798,7 @@ begin
     end;
 
     ACtx.Scope.BeginScope;
+    GBreakScopeDepth := ACtx.Scope.Depth;
 
     if NeedsPrelude then
     begin
