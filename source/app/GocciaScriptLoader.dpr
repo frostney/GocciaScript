@@ -687,6 +687,7 @@ begin
           ApplyModuleGlobalsToEngine(Engine);
           Result.ResultValue := RunBytecodeModule(Engine,
             TGocciaBytecodeExecutor(Engine.Executor), Module, AFileName);
+          Engine.WaitForRuntimeIdle;
         finally
           ClearExecutionTimeout;
           ClearInstructionLimit;
@@ -729,6 +730,7 @@ begin
           ApplyModuleGlobalsToEngine(Engine);
           Result.ResultValue := RunBytecodeModule(Engine,
             TGocciaBytecodeExecutor(Engine.Executor), Module, AFileName);
+          Engine.WaitForRuntimeIdle;
         finally
           ClearExecutionTimeout;
           ClearInstructionLimit;

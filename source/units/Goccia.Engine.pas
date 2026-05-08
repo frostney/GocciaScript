@@ -189,7 +189,6 @@ type
     function GocciaGCMaxBytesGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function GocciaGCSuggestedMaxBytesGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function GocciaGCBytesAllocatedGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    procedure WaitForRuntimeIdle;
     procedure DiscardRuntimePending;
     procedure PrintParserWarnings(const AParser: TGocciaParser; const ASourceMap: TGocciaSourceMap = nil);
     function CompileDynamicFunction(const AParamsSources: array of string;
@@ -213,6 +212,7 @@ type
 
     function Execute: TGocciaScriptResult;
     function ExecuteProgram(const AProgram: TGocciaProgram): TGocciaValue;
+    procedure WaitForRuntimeIdle;
     procedure ThrowError(const AMessage: string; const ALine,
       AColumn: Integer);
 
