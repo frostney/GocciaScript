@@ -29,6 +29,7 @@ uses
 const
   DEFAULT_STEP_LIMIT = 10000000;
   DEFAULT_BACKTRACK_CAP = 1000000;
+  MAX_LOOKBEHIND_DISTANCE = 256;
   MEMO_CAPACITY = 65536;
   MEMO_LOAD_LIMIT = 49152;
 
@@ -188,7 +189,8 @@ end;
 
 function RunVM(const AProgram: TRegExpProgram; const AInput: string;
   AStartPos: Integer; var ASlots: array of Integer;
-  ASlotCount: Integer): Boolean;
+  ASlotCount: Integer; AStartPC: Integer = 0;
+  AEndPos: PInteger = nil): Boolean;
 var
   PC, InputPos: Integer;
   Instr: UInt32;
@@ -246,7 +248,7 @@ var
 begin
   Result := False;
   SlotCount := ASlotCount;
-  PC := 0;
+  PC := AStartPC;
   InputPos := AStartPos;
   StepCount := 0;
   StackTop := -1;
@@ -511,7 +513,7 @@ begin
           SetLength(LookSlots, SlotCount);
           Move(ASlots[0], LookSlots[0], SlotCount * SizeOf(Integer));
           LookMatched := RunVM(AProgram, AInput, InputPos, LookSlots,
-            SlotCount);
+            SlotCount, PC + 1);
           if Negated then
           begin
             if LookMatched then
@@ -541,12 +543,17 @@ begin
           LookMatched := False;
           SetLength(LookSlots, SlotCount);
           I := InputPos - 1;
-          while I >= 1 do
+          RefStart := I - MAX_LOOKBEHIND_DISTANCE;
+          if RefStart < 1 then
+            RefStart := 1;
+          while I >= RefStart do
           begin
             Move(ASlots[0], LookSlots[0], SlotCount * SizeOf(Integer));
-            if RunVM(AProgram, AInput, I, LookSlots, SlotCount) then
+            RefEnd := 0;
+            if RunVM(AProgram, AInput, I, LookSlots, SlotCount, PC + 1,
+               @RefEnd) then
             begin
-              if LookSlots[1] = InputPos then
+              if RefEnd = InputPos then
               begin
                 LookMatched := True;
                 Break;
@@ -578,6 +585,8 @@ begin
 
       RX_MATCH:
         begin
+          if AEndPos <> nil then
+            AEndPos^ := InputPos;
           Result := True;
           Exit;
         end;
