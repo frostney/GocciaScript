@@ -1,5 +1,6 @@
 # Output files
 *.o
+*.or
 *.ppu
 *.rsj
 
@@ -10,6 +11,7 @@ source/units/Goccia.Version.Generated.inc
 build/compiled/
 build/*.exe
 build/GocciaJSON5Check
+build/GocciaTOMLCheck
 build/main
 build/GocciaREPL
 build/GocciaScriptLoader

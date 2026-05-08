@@ -49,15 +49,15 @@ jobs:
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Open PR
+      - name: Open or update PR
         if: steps.changed.outputs.changed == 'true'
         uses: peter-evans/create-pull-request@v7
         with:
-          branch: chore/test262-bump-${{ steps.latest.outputs.short }}
+          branch: chore/test262-bump
           commit-message: "chore(test262): bump pin to ${{ steps.latest.outputs.short }}"
           title: "chore(test262): bump pin to ${{ steps.latest.outputs.short }}"
           body: |
-            Weekly automated bump of the test262 SHA pin.
+            Automated bump of the test262 SHA pin to `${{ steps.latest.outputs.sha }}`.
 
             CI will run the conformance suite against the new SHA. The
             test262 PR comment will show the per-category delta vs. the

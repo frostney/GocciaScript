@@ -516,7 +516,7 @@ Runs on the full platform matrix:
 
 **`test`** (needs build) — Runs all JavaScript tests and Pascal unit tests on all platforms.
 
-**`toml-compliance`** — Downloads the prebuilt `GocciaTOMLCheck` harness from each matrix build artifact, runs the official `toml-test` TOML 1.1.0 suite on every CI platform via `python3 scripts/run_toml_test_suite.py --harness=...`, validates that the JSON summary reports zero failures, and uploads the per-platform JSON report.
+**`toml-compliance`** — Downloads the prebuilt `GocciaTOMLCheck` harness from each matrix build artifact, runs the official `toml-test` TOML 1.1.0 suite (pinned to a specific SHA) on every CI platform via `python3 scripts/run_toml_test_suite.py --harness=...`, validates that the JSON summary reports zero failures, and uploads the per-platform JSON report. The pin is bumped weekly by `.github/workflows/toml-test-bump.yml`.
 
 **`json5-compliance`** — Downloads the prebuilt `GocciaJSON5Check` harness and `GocciaTestRunner` binary from each matrix build artifact, runs `python3 scripts/run_json5_test_suite.py --harness=... --test-runner=...` on every CI platform, validates both the parser and stringify summaries, and uploads the per-platform JSON report.
 

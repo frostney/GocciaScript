@@ -14,7 +14,7 @@ from pathlib import Path
 
 SUITE_REPO_URL = "https://github.com/toml-lang/toml-test.git"
 SUITE_VERSION = "1.1.0"
-SUITE_BRANCH = "main"
+SUITE_SHA = "4f76d84def032d092df152eb6efea5a6f78a0cee"
 SUITE_FILE_LIST = f"tests/files-toml-{SUITE_VERSION}"
 DEFAULT_TIMEOUT_SECONDS = 5
 HARNESS_SOURCE_PATH = Path("scripts/GocciaTOMLCheck.dpr")
@@ -40,18 +40,10 @@ def ensure_suite_checkout(suite_dir: Path | None) -> tuple[Path, tempfile.Tempor
 
   temp_dir = tempfile.TemporaryDirectory(prefix="toml-test-suite.")
   checkout_dir = Path(temp_dir.name) / "repo"
-  run(
-    [
-      "git",
-      "clone",
-      "--depth",
-      "1",
-      "--branch",
-      SUITE_BRANCH,
-      SUITE_REPO_URL,
-      str(checkout_dir),
-    ]
-  )
+  run(["git", "init", str(checkout_dir)])
+  run(["git", "remote", "add", "origin", SUITE_REPO_URL], cwd=checkout_dir)
+  run(["git", "fetch", "--depth", "1", "origin", SUITE_SHA], cwd=checkout_dir)
+  run(["git", "checkout", SUITE_SHA], cwd=checkout_dir)
   return checkout_dir, temp_dir
 
 

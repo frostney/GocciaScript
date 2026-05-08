@@ -273,7 +273,7 @@ Both modes must pass. The `--asi` flag enables automatic semicolon insertion tes
 
 **Official YAML Suite**
 
-For YAML parse-validity checks against the official `yaml-test-suite`, run:
+For YAML parse-validity checks against the official `yaml-test-suite` (pinned to a specific SHA in the script), run:
 
 ```bash
 python3 scripts/run_yaml_test_suite.py
@@ -285,7 +285,7 @@ This check is intentionally parse-only: it compares whether each suite case shou
 
 **Official TOML Suite**
 
-For TOML 1.1.0 checks against the official `toml-test` corpus, run:
+For TOML 1.1.0 checks against the official `toml-test` corpus (pinned to a specific SHA in the script), run:
 
 ```bash
 python3 scripts/run_toml_test_suite.py
@@ -558,7 +558,15 @@ The **test262 conformance comment** posts a non-blocking summary using the [`act
 - When a `main` baseline is cached, **Δ vs main** columns show absolute count delta and percentage-point delta. Deltas below ±0.05pp render as `±0pp` to keep the table readable.
 - A collapsible **Per-test deltas** section listing newly-passing and newly-failing test IDs.
 
-A weekly cron at `.github/workflows/test262-bump.yml` opens a PR every Monday with the latest tc39/test262 main SHA so the pin doesn't go stale. See [test262.md](test262.md) for details.
+Weekly crons open (or update) a single PR every Monday with the latest upstream SHA so pins don't go stale:
+
+| Suite | Workflow | Schedule | Pin location |
+|-------|----------|----------|--------------|
+| test262 | `test262-bump.yml` | 06:00 UTC | `.github/workflows/ci.yml` & `pr.yml` |
+| toml-test | `toml-test-bump.yml` | 06:30 UTC | `scripts/run_toml_test_suite.py` |
+| yaml-test-suite | `yaml-test-bump.yml` | 07:00 UTC | `scripts/run_yaml_test_suite.py` |
+
+Each workflow reuses a fixed branch (`chore/<suite>-bump`), so an unmerged PR is updated in place rather than replaced. See [test262.md](test262.md) for details on the test262 harness contract.
 
 ### Running test262 locally
 

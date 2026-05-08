@@ -1,0 +1,62 @@
+name: toml-test weekly bump
+
+# Pulls the latest toml-lang/toml-test main SHA, updates the pin in
+# scripts/run_toml_test_suite.py, and opens a PR.  Merge once the
+# compliance delta is acceptable.
+#
+# Cadence: weekly (Mondays 06:30 UTC).  Manual trigger available via
+# workflow_dispatch.
+
+on:
+  schedule:
+    - cron: '30 6 * * 1'
+  workflow_dispatch:
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: oven-sh/setup-bun@v2
+
+      - id: latest
+        run: |
+          sha=$(gh api repos/toml-lang/toml-test/commits/main --jq .sha)
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "short=${sha:0:8}" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update pin in suite runner
+        run: bun scripts/toml-test-bump-pin.ts ${{ steps.latest.outputs.sha }}
+
+      - id: changed
+        run: |
+          if git diff --quiet -- scripts/run_toml_test_suite.py; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "toml-test already pinned to ${{ steps.latest.outputs.short }} — no PR to open."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open or update PR
+        if: steps.changed.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: chore/toml-test-bump
+          commit-message: "chore(toml-test): bump pin to ${{ steps.latest.outputs.short }}"
+          title: "chore(toml-test): bump pin to ${{ steps.latest.outputs.short }}"
+          body: |
+            Automated bump of the toml-test SHA pin to `${{ steps.latest.outputs.sha }}`.
+
+            CI will run the TOML compliance suite against the new SHA.
+            Review the delta and merge if acceptable.
+
+            Cron: weekly, Mondays 06:30 UTC. See `.github/workflows/toml-test-bump.yml`.
+          labels: |
+            toml-test
+            automated
