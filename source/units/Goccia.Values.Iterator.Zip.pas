@@ -208,6 +208,7 @@ begin
         try
           InnerValue := FIterators[I].DirectNext(InnerDone);
         except
+          AcquireExceptionObject;
           CloseAllIterators;
           FDone := True;
           raise;
@@ -412,6 +413,7 @@ begin
         try
           InnerValue := FIterators[I].DirectNext(InnerDone);
         except
+          AcquireExceptionObject;
           CloseAllIterators;
           FDone := True;
           raise;

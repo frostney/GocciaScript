@@ -256,7 +256,7 @@ end;
 
 procedure TGocciaGeneratorObjectValue.Close;
 begin
-  if (FState = gsCompleted) or (FState = gsExecuting) then
+  if FState = gsCompleted then
     Exit;
   ReturnValue(TGocciaUndefinedLiteralValue.UndefinedValue);
 end;

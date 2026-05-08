@@ -2164,7 +2164,7 @@ end;
 
 procedure TGocciaBytecodeGeneratorObjectValue.Close;
 begin
-  if (FState = bgsCompleted) or (FState = bgsExecuting) then
+  if FState = bgsCompleted then
     Exit;
   ReturnValue(TGocciaUndefinedLiteralValue.UndefinedValue);
 end;
