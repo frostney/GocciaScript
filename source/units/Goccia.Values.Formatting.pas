@@ -12,6 +12,8 @@ function FormatForDisplay(const AValue: TGocciaValue): string;
 implementation
 
 uses
+  Generics.Collections,
+
   StringBuffer,
 
   Goccia.Values.ArrayValue,
@@ -21,7 +23,7 @@ uses
 const
   MAX_FORMAT_DEPTH = 5;
 
-function DoFormat(const AValue: TGocciaValue; const ANested: Boolean; const ADepth: Integer): string; forward;
+function FormatRecursive(const AValue: TGocciaValue; const ANested: Boolean; const ADepth: Integer): string; forward;
 
 function FormatArray(const AArr: TGocciaArrayValue; const ADepth: Integer): string;
 var
@@ -39,7 +41,7 @@ begin
   begin
     if I > 0 then
       SB.Append(', ');
-    SB.Append(DoFormat(AArr.Elements[I], True, ADepth + 1));
+    SB.Append(FormatRecursive(AArr.Elements[I], True, ADepth + 1));
   end;
   SB.AppendChar(']');
   Result := SB.ToString;
@@ -48,7 +50,7 @@ end;
 function FormatObject(const AObj: TGocciaObjectValue; const ADepth: Integer): string;
 var
   SB: TStringBuffer;
-  Key: string;
+  Entry: TPair<string, TGocciaValue>;
   First: Boolean;
 begin
   if ADepth >= MAX_FORMAT_DEPTH then
@@ -59,20 +61,20 @@ begin
   SB := TStringBuffer.Create;
   SB.AppendChar('{');
   First := True;
-  for Key in AObj.GetEnumerablePropertyNames do
+  for Entry in AObj.GetEnumerablePropertyEntries do
   begin
     if not First then
       SB.Append(', ');
     First := False;
-    SB.Append(Key);
+    SB.Append(Entry.Key);
     SB.Append(': ');
-    SB.Append(DoFormat(AObj.GetProperty(Key), True, ADepth + 1));
+    SB.Append(FormatRecursive(Entry.Value, True, ADepth + 1));
   end;
   SB.AppendChar('}');
   Result := SB.ToString;
 end;
 
-function DoFormat(const AValue: TGocciaValue; const ANested: Boolean; const ADepth: Integer): string;
+function FormatRecursive(const AValue: TGocciaValue; const ANested: Boolean; const ADepth: Integer): string;
 begin
   if not Assigned(AValue) then
   begin
@@ -94,7 +96,7 @@ end;
 
 function FormatForDisplay(const AValue: TGocciaValue): string;
 begin
-  Result := DoFormat(AValue, False, 0);
+  Result := FormatRecursive(AValue, False, 0);
 end;
 
 end.
