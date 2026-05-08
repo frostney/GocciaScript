@@ -44,4 +44,28 @@ describe("source-type=module entry", () => {
     };
     expect(outer()).toBeUndefined();
   });
+
+  test("arrow this is immune to .call()", () => {
+    const arrow = () => this;
+    expect(arrow.call({ x: 1 })).toBeUndefined();
+  });
+
+  test("arrow this is immune to .apply()", () => {
+    const arrow = () => this;
+    expect(arrow.apply({ x: 1 }, [])).toBeUndefined();
+  });
+
+  test("arrow this is immune to .bind()", () => {
+    const arrow = () => this;
+    const bound = arrow.bind({ x: 1 });
+    expect(bound()).toBeUndefined();
+  });
+
+  test("arrow as object method inherits module undefined this", () => {
+    const obj = {
+      value: 42,
+      arrow: () => this,
+    };
+    expect(obj.arrow()).toBeUndefined();
+  });
 });
