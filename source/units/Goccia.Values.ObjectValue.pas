@@ -37,7 +37,6 @@ type
     constructor Create(const APrototype: TGocciaObjectValue = nil;
       const APropertyCapacity: Integer = 0);
     destructor Destroy; override;
-    function ToDebugString: string;
     function TypeName: string; override;
     function TypeOf: string; override;
     function ToStringTag: string; virtual;
@@ -110,8 +109,6 @@ implementation
 
 uses
   SysUtils,
-
-  StringBuffer,
 
   Goccia.Arithmetic,
   Goccia.Constants.ConstructorNames,
@@ -405,59 +402,6 @@ begin
     SymPair.Key.MarkReferences;
     SymPair.Value.MarkValues;
   end;
-end;
-
-function TGocciaObjectValue.ToDebugString: string;
-var
-  SB: TStringBuffer;
-  Pair: TGocciaPropertyMap.TKeyValuePair;
-  First: Boolean;
-  Value: TGocciaValue;
-begin
-  SB := TStringBuffer.Create;
-  SB.AppendChar('{');
-  First := True;
-
-  for Pair in FProperties do
-  begin
-    if not First then
-      SB.Append(', ');
-
-    if Pair.Value is TGocciaPropertyDescriptorData then
-      Value := TGocciaPropertyDescriptorData(Pair.Value).Value
-    else
-      Value := nil;
-
-    if Assigned(Value) then
-    begin
-      SB.Append(Pair.Key);
-      SB.Append(': ');
-      if Value is TGocciaObjectValue then
-        SB.Append(TGocciaObjectValue(Value).ToDebugString)
-      else if Value is TGocciaSymbolValue then
-        SB.Append(TGocciaSymbolValue(Value).ToDisplayString.Value)
-      else
-        SB.Append(Value.ToStringLiteral.Value);
-    end
-    else
-    begin
-      SB.Append(Pair.Key);
-      SB.Append(': [accessor]');
-    end;
-
-    First := False;
-  end;
-
-  if Assigned(FPrototype) then
-  begin
-    if not First then
-      SB.Append(', ');
-    SB.Append('[[Prototype]]: ');
-    SB.Append(FPrototype.ToDebugString);
-  end;
-
-  SB.AppendChar('}');
-  Result := SB.ToString;
 end;
 
 function TGocciaObjectValue.TypeName: string;
