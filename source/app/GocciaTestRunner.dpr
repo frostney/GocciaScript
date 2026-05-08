@@ -140,7 +140,6 @@ type
     function RunGocciaScriptInterpreted(const AFileName: string;
       APreloadedSource: TStringList = nil): TTestFileResult;
     function RunBytecodeTestModule(const AEngine: TGocciaEngine;
-      const AExecutor: TGocciaBytecodeExecutor;
       const AModule: TGocciaBytecodeModule;
       const AFileName: string): TGocciaValue;
     function RunGocciaScriptBytecode(const AFileName: string;
@@ -549,7 +548,6 @@ begin
 end;
 
 function TTestRunnerApp.RunBytecodeTestModule(const AEngine: TGocciaEngine;
-  const AExecutor: TGocciaBytecodeExecutor;
   const AModule: TGocciaBytecodeModule;
   const AFileName: string): TGocciaValue;
 var
@@ -557,15 +555,13 @@ var
 begin
   if AEngine.SourceType = stModule then
   begin
-    { Run with module semantics: fresh module scope, this = undefined.
-      Mirrors TGocciaModuleLoader.LoadModule for nested module loads. }
     ModuleScope := AEngine.Interpreter.GlobalScope.CreateChild(skModule,
       'Module:' + AFileName);
     ModuleScope.ThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-    Result := AExecutor.RunModuleInScope(AModule, ModuleScope);
+    Result := AEngine.RunBytecodeModuleInScope(AModule, ModuleScope);
   end
   else
-    Result := AExecutor.RunModule(AModule);
+    Result := AEngine.RunBytecodeModule(AModule);
 end;
 
 function TTestRunnerApp.RunGocciaScriptBytecode(const AFileName: string;
@@ -671,7 +667,7 @@ begin
                       WriteLn(Format('  --> %s:%d:%d', [AFileName, Warning.Line, Warning.Column]));
                   end;
                 try
-                  Module := TGocciaBytecodeExecutor(Engine.Executor).CompileToModule(ProgramNode);
+                  Module := Engine.CompileToModule(ProgramNode);
                   CompileEnd := GetNanoseconds;
                 finally
                   ProgramNode.Free;
@@ -686,30 +682,25 @@ begin
             StartExecutionTimeout(EngineOptions.Timeout.ValueOr(DEFAULT_TIMEOUT_MS));
             StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
             try
-              try
-                ResultValue := RunBytecodeTestModule(Engine,
-                  TGocciaBytecodeExecutor(Engine.Executor), Module, AFileName);
-              finally
-                ClearExecutionTimeout;
-                ClearInstructionLimit;
-              end;
-              ExecEnd := GetNanoseconds;
-
-              if ResultValue is TGocciaObjectValue then
-                MergeFileResult(ScriptResult, TGocciaObjectValue(ResultValue));
-
-              Result.TestResult := ScriptResult;
-              Result.Timing.Result := ResultValue;
-              Result.Timing.LexTimeNanoseconds := LexEnd - LexStart;
-              Result.Timing.ParseTimeNanoseconds := ParseEnd - LexEnd;
-              Result.Timing.CompileTimeNanoseconds := CompileEnd - ParseEnd;
-              Result.Timing.ExecuteTimeNanoseconds := ExecEnd - CompileEnd;
-              Result.Timing.TotalTimeNanoseconds := ExecEnd - LexStart;
-              Result.Timing.FileName := AFileName;
-              Result.ErrorMessage := '';
+              ResultValue := RunBytecodeTestModule(Engine, Module, AFileName);
             finally
-              Module.Free;
+              ClearExecutionTimeout;
+              ClearInstructionLimit;
             end;
+            ExecEnd := GetNanoseconds;
+
+            if ResultValue is TGocciaObjectValue then
+              MergeFileResult(ScriptResult, TGocciaObjectValue(ResultValue));
+
+            Result.TestResult := ScriptResult;
+            Result.Timing.Result := ResultValue;
+            Result.Timing.LexTimeNanoseconds := LexEnd - LexStart;
+            Result.Timing.ParseTimeNanoseconds := ParseEnd - LexEnd;
+            Result.Timing.CompileTimeNanoseconds := CompileEnd - ParseEnd;
+            Result.Timing.ExecuteTimeNanoseconds := ExecEnd - CompileEnd;
+            Result.Timing.TotalTimeNanoseconds := ExecEnd - LexStart;
+            Result.Timing.FileName := AFileName;
+            Result.ErrorMessage := '';
         finally
           Engine.Free;
         end;

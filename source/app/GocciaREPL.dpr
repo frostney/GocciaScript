@@ -75,23 +75,6 @@ begin
     Runtime.BuiltinConsole.LogCallback := HandleConsoleLog;
 end;
 
-procedure WaitForRuntimeIdle(const AEngine: TGocciaEngine);
-var
-  Runtime: TGocciaRuntimeExtension;
-begin
-  Runtime := GetRuntimeExtension(AEngine);
-  if Assigned(Runtime) then
-    Runtime.WaitForIdle;
-end;
-
-procedure DiscardRuntimePending(const AEngine: TGocciaEngine);
-var
-  Runtime: TGocciaRuntimeExtension;
-begin
-  Runtime := GetRuntimeExtension(AEngine);
-  if Assigned(Runtime) then
-    Runtime.DiscardPending;
-end;
 
 function TREPLApp.UsageLine: string;
 begin
@@ -114,7 +97,6 @@ var
 
   { Bytecode mode }
   BcExecutor: TGocciaBytecodeExecutor;
-  LiveModules: TObjectList<TGocciaBytecodeModule>;
   ResultValue: TGocciaValue;
   SourceText: string;
   JSXResult: TGocciaJSXTransformResult;
@@ -147,7 +129,6 @@ begin
   begin
     BcExecutor := TGocciaBytecodeExecutor.Create;
     BcExecutor.GlobalBackedTopLevel := True;
-    LiveModules := TObjectList<TGocciaBytecodeModule>.Create(True);
     try
       Eng := CreateEngine(REPL_FILE_NAME, Source, BcExecutor);
       try
@@ -196,28 +177,21 @@ begin
                 ParseEnd := GetNanoseconds;
 
                 try
-                  Module := TGocciaBytecodeExecutor(Eng.Executor).CompileToModule(ProgramNode);
+                  Module := Eng.CompileToModule(ProgramNode);
                   CompileEnd := GetNanoseconds;
 
+                  ResultValue := TGocciaBytecodeExecutor(Eng.Executor).RunModule(Module);
+                  if Assigned(ResultValue) then
+                    TGarbageCollector.Instance.AddTempRoot(ResultValue);
                   try
-                    ResultValue := TGocciaBytecodeExecutor(Eng.Executor).RunModule(Module);
-                    if Assigned(ResultValue) then
-                      TGarbageCollector.Instance.AddTempRoot(ResultValue);
-                    try
-                      WaitForRuntimeIdle(Eng);
-                      ExecEnd := GetNanoseconds;
+                    Eng.WaitForRuntimeIdle;
+                    ExecEnd := GetNanoseconds;
 
-                      if ResultValue <> nil then
-                        WriteLn(FormatREPLValue(ResultValue, IsColorTerminal));
-                    finally
-                      if Assigned(ResultValue) then
-                        TGarbageCollector.Instance.RemoveTempRoot(ResultValue);
-                    end;
+                    if ResultValue <> nil then
+                      WriteLn(FormatREPLValue(ResultValue, IsColorTerminal));
                   finally
-                    if Assigned(TGocciaMicrotaskQueue.Instance) then
-                      TGocciaMicrotaskQueue.Instance.ClearQueue;
-                    DiscardRuntimePending(Eng);
-                    LiveModules.Add(Module);
+                    if Assigned(ResultValue) then
+                      TGarbageCollector.Instance.RemoveTempRoot(ResultValue);
                   end;
                 finally
                   ProgramNode.Free;
@@ -255,7 +229,6 @@ begin
         Eng.Free;
       end;
     finally
-      LiveModules.Free;
       BcExecutor.Free;
       Editor.Free;
       Source.Free;
