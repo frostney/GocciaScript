@@ -80,6 +80,8 @@ type
 implementation
 
 uses
+  SysUtils,
+
   Goccia.Arguments.Collection,
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
@@ -135,6 +137,7 @@ begin
   try
     MappedValue := InvokeIteratorCallback(FCallback, Value, FIndex);
   except
+    AcquireExceptionObject;
     CloseIteratorPreservingOriginalError(FSourceIterator);
     raise;
   end;
@@ -163,6 +166,7 @@ begin
   try
     Result := InvokeIteratorCallback(FCallback, Value, FIndex);
   except
+    AcquireExceptionObject;
     CloseIteratorPreservingOriginalError(FSourceIterator);
     raise;
   end;
@@ -224,6 +228,7 @@ begin
         Exit;
       end;
     except
+      AcquireExceptionObject;
       CloseIteratorPreservingOriginalError(FSourceIterator);
       raise;
     end;
@@ -258,6 +263,7 @@ begin
         Exit;
       end;
     except
+      AcquireExceptionObject;
       CloseIteratorPreservingOriginalError(FSourceIterator);
       raise;
     end;
@@ -543,6 +549,7 @@ begin
     try
       MappedValue := InvokeIteratorCallback(FCallback, Value, FIndex);
     except
+      AcquireExceptionObject;
       CloseIteratorPreservingOriginalError(FSourceIterator);
       if Assigned(FInnerIterator) then
         CloseIteratorPreservingOriginalError(FInnerIterator);
@@ -603,6 +610,7 @@ begin
     try
       MappedValue := InvokeIteratorCallback(FCallback, Value, FIndex);
     except
+      AcquireExceptionObject;
       CloseIteratorPreservingOriginalError(FSourceIterator);
       if Assigned(FInnerIterator) then
         CloseIteratorPreservingOriginalError(FInnerIterator);

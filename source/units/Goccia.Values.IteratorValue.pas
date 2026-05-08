@@ -831,6 +831,7 @@ begin
         end;
       except
         // Close and unroot already-acquired iterators before re-raising
+        AcquireExceptionObject;
         for J := 0 to Acquired - 1 do
         begin
           CloseIteratorPreservingError(Iterators[J]);
@@ -975,6 +976,7 @@ begin
     end;
   except
     // Close and unroot already-acquired iterators before re-raising
+    AcquireExceptionObject;
     for J := 0 to Acquired - 1 do
     begin
       CloseIteratorPreservingError(Iterators[J]);

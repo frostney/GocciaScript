@@ -32,6 +32,8 @@ type
 implementation
 
 uses
+  SysUtils,
+
   Goccia.Arguments.Collection,
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
@@ -123,6 +125,7 @@ begin
       try
         InnerResult := FCurrentIterator.AdvanceNext;
       except
+        AcquireExceptionObject;
         CloseIteratorPreservingOriginalError(FCurrentIterator);
         FCurrentIterator := nil;
         FDone := True;
@@ -169,6 +172,7 @@ begin
       try
         InnerValue := FCurrentIterator.DirectNext(InnerDone);
       except
+        AcquireExceptionObject;
         CloseIteratorPreservingOriginalError(FCurrentIterator);
         FCurrentIterator := nil;
         FDone := True;
