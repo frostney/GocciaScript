@@ -32,7 +32,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Update pin in suite runner
-        run: bun scripts/yaml-test-bump-pin.ts ${{ steps.latest.outputs.sha }}
+        run: bun scripts/suite-bump-pin.ts scripts/run_yaml_test_suite.py ${{ steps.latest.outputs.sha }}
 
       - id: changed
         run: |

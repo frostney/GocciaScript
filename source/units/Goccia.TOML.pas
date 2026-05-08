@@ -112,7 +112,7 @@ type
     procedure RequireNotSealed(const ANode: TGocciaTOMLNode; const AKey: string);
     procedure Reset(const AText: UTF8String);
     procedure SkipBlankLinesAndComments;
-    procedure ValidateInput;
+    procedure PrepareInput;
     procedure SkipWhitespace(const AAllowNewlines: Boolean);
     function TryParseBinaryInteger(const AToken: string;
       out AValue: Double): Boolean;
@@ -439,7 +439,7 @@ begin
   FCurrentTable := FRoot;
 end;
 
-procedure TGocciaTOMLParser.ValidateInput;
+procedure TGocciaTOMLParser.PrepareInput;
 var
   B: Byte;
   I: Integer;
@@ -473,7 +473,7 @@ function TGocciaTOMLParser.ParseDocument(const AText: UTF8String): TGocciaTOMLNo
 begin
   Reset(AText);
   try
-    ValidateInput;
+    PrepareInput;
     SkipBlankLinesAndComments;
     while not IsAtEnd do
     begin
