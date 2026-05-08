@@ -29,6 +29,7 @@ type
   // Base class for all callable functions
   TGocciaFunctionBase = class(TGocciaObjectValue)
   protected
+    FStrictThis: Boolean;
     // Subclasses should override these to provide name/length
     function GetFunctionLength: Integer; virtual;
     function GetFunctionName: string; virtual;
@@ -63,6 +64,10 @@ type
     function TypeName: string; override;
     function TypeOf: string; override;
 
+    // ES2026 §10.2.1.1 OrdinaryCallBindThis: when true, undefined/null this
+    // stays as-is; when false, coerced to globalThis.  Defaults to true
+    // (Goccia is always strict); only Function constructor (§15.2.2.4) clears it.
+    property StrictThis: Boolean read FStrictThis write FStrictThis;
   end;
 
   // Helper class for bound functions
@@ -282,6 +287,7 @@ var
   Shared: TGocciaFunctionSharedPrototype;
 begin
   inherited Create;
+  FStrictThis := True;
 
   Shared := GetSharedFunctionPrototype;
   if not Assigned(Shared) and Assigned(CurrentRealm) then

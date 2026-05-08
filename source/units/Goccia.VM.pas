@@ -79,6 +79,7 @@ type
     FLocalCellCount: Integer;
     FArgCount: Integer;
     FGlobalScope: TGocciaScope;
+    FGlobalThisValue: TGocciaValue;
     FLoadModule: TLoadModuleCallback;
     FCurrentClosure: TGocciaBytecodeClosure;
     FHandlerStack: TGocciaBytecodeHandlerStack;
@@ -244,6 +245,7 @@ type
     function ExecuteFunction(const ATemplate: TGocciaFunctionTemplate): TGocciaValue;
     function ExecuteModule(const AModule: TGocciaBytecodeModule): TGocciaValue;
     property GlobalScope: TGocciaScope read FGlobalScope write FGlobalScope;
+    property GlobalThisValue: TGocciaValue read FGlobalThisValue write FGlobalThisValue;
     property LoadModule: TLoadModuleCallback read FLoadModule write FLoadModule;
     property CoverageEnabled: Boolean read FCoverageEnabled write FCoverageEnabled;
     property ProfilingOpcodes: Boolean read FProfilingOpcodes write FProfilingOpcodes;
@@ -957,6 +959,8 @@ begin
 
   if Assigned(FVM.FGlobalScope) then
     FVM.FGlobalScope.MarkReferences;
+  if Assigned(FVM.FGlobalThisValue) then
+    FVM.FGlobalThisValue.MarkReferences;
   MarkClosureReferences(FVM.FCurrentClosure);
   MarkRegisterReferences(FVM.FLastClosureThisValue);
   if Assigned(FVM.FPrivateInitializerReceiver) then
@@ -2536,14 +2540,23 @@ function TGocciaBytecodeFunctionValue.Call(
   const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Promise: TGocciaPromiseValue;
+  EffectiveThis: TGocciaValue;
 begin
+  if (not FStrictThis) and Assigned(FVM.FGlobalThisValue) and
+     (not Assigned(AThisValue) or
+      (AThisValue is TGocciaUndefinedLiteralValue) or
+      (AThisValue is TGocciaNullLiteralValue)) then
+    EffectiveThis := FVM.FGlobalThisValue
+  else
+    EffectiveThis := AThisValue;
+
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsGenerator then
   begin
     if FClosure.Template.IsAsync then
       Exit(TGocciaBytecodeAsyncGeneratorObjectValue.Create(FVM, FClosure,
-        AThisValue, AArguments));
+        EffectiveThis, AArguments));
     Exit(TGocciaBytecodeGeneratorObjectValue.Create(FVM, FClosure,
-      AThisValue, AArguments));
+      EffectiveThis, AArguments));
   end;
 
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsAsync then
@@ -2551,7 +2564,7 @@ begin
     Promise := TGocciaPromiseValue.Create;
     try
       try
-        Promise.Resolve(FVM.ExecuteClosure(FClosure, AThisValue, AArguments));
+        Promise.Resolve(FVM.ExecuteClosure(FClosure, EffectiveThis, AArguments));
       except
         on E: EGocciaBytecodeThrow do
           Promise.Reject(E.ThrownValue);
@@ -2565,7 +2578,7 @@ begin
     Exit(Promise);
   end;
 
-  Result := FVM.ExecuteClosure(FClosure, AThisValue, AArguments);
+  Result := FVM.ExecuteClosure(FClosure, EffectiveThis, AArguments);
 end;
 
 function TGocciaBytecodeFunctionValue.CallPreparedArgs(
@@ -2588,14 +2601,23 @@ function TGocciaBytecodeFunctionValue.CallNoArgs(
   const AThisValue: TGocciaValue): TGocciaValue;
 var
   Promise: TGocciaPromiseValue;
+  EffectiveThis: TGocciaValue;
 begin
+  if (not FStrictThis) and Assigned(FVM.FGlobalThisValue) and
+     (not Assigned(AThisValue) or
+      (AThisValue is TGocciaUndefinedLiteralValue) or
+      (AThisValue is TGocciaNullLiteralValue)) then
+    EffectiveThis := FVM.FGlobalThisValue
+  else
+    EffectiveThis := AThisValue;
+
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsGenerator then
   begin
     if FClosure.Template.IsAsync then
       Exit(TGocciaBytecodeAsyncGeneratorObjectValue.CreateRegisters(FVM, FClosure,
-        VMValueToRegisterFast(AThisValue), TGocciaRegisterArray(nil)));
+        VMValueToRegisterFast(EffectiveThis), TGocciaRegisterArray(nil)));
     Exit(TGocciaBytecodeGeneratorObjectValue.CreateRegisters(FVM, FClosure,
-      VMValueToRegisterFast(AThisValue), TGocciaRegisterArray(nil)));
+      VMValueToRegisterFast(EffectiveThis), TGocciaRegisterArray(nil)));
   end;
 
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsAsync then
@@ -2604,7 +2626,7 @@ begin
     try
       try
         Promise.Resolve(RegisterToValue(FVM.ExecuteClosureRegisters0(FClosure,
-          VMValueToRegisterFast(AThisValue))));
+          VMValueToRegisterFast(EffectiveThis))));
       except
         on E: EGocciaBytecodeThrow do
           Promise.Reject(E.ThrownValue);
@@ -2619,22 +2641,31 @@ begin
   end;
 
   Result := RegisterToValue(FVM.ExecuteClosureRegisters0(FClosure,
-    VMValueToRegisterFast(AThisValue)));
+    VMValueToRegisterFast(EffectiveThis)));
 end;
 
 function TGocciaBytecodeFunctionValue.CallOneArg(const AArg0,
   AThisValue: TGocciaValue): TGocciaValue;
 var
   Promise: TGocciaPromiseValue;
+  EffectiveThis: TGocciaValue;
 begin
+  if (not FStrictThis) and Assigned(FVM.FGlobalThisValue) and
+     (not Assigned(AThisValue) or
+      (AThisValue is TGocciaUndefinedLiteralValue) or
+      (AThisValue is TGocciaNullLiteralValue)) then
+    EffectiveThis := FVM.FGlobalThisValue
+  else
+    EffectiveThis := AThisValue;
+
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsGenerator then
   begin
     if FClosure.Template.IsAsync then
       Exit(TGocciaBytecodeAsyncGeneratorObjectValue.CreateRegisters(FVM, FClosure,
-        VMValueToRegisterFast(AThisValue),
+        VMValueToRegisterFast(EffectiveThis),
         TGocciaRegisterArray.Create(VMValueToRegisterFast(AArg0))));
     Exit(TGocciaBytecodeGeneratorObjectValue.CreateRegisters(FVM, FClosure,
-      VMValueToRegisterFast(AThisValue),
+      VMValueToRegisterFast(EffectiveThis),
       TGocciaRegisterArray.Create(VMValueToRegisterFast(AArg0))));
   end;
 
@@ -2644,7 +2675,7 @@ begin
     try
       try
         Promise.Resolve(RegisterToValue(FVM.ExecuteClosureRegisters1(FClosure,
-          VMValueToRegisterFast(AThisValue), VMValueToRegisterFast(AArg0))));
+          VMValueToRegisterFast(EffectiveThis), VMValueToRegisterFast(AArg0))));
       except
         on E: EGocciaBytecodeThrow do
           Promise.Reject(E.ThrownValue);
@@ -2659,23 +2690,32 @@ begin
   end;
 
   Result := RegisterToValue(FVM.ExecuteClosureRegisters1(FClosure,
-    VMValueToRegisterFast(AThisValue), VMValueToRegisterFast(AArg0)));
+    VMValueToRegisterFast(EffectiveThis), VMValueToRegisterFast(AArg0)));
 end;
 
 function TGocciaBytecodeFunctionValue.CallTwoArgs(const AArg0, AArg1,
   AThisValue: TGocciaValue): TGocciaValue;
 var
   Promise: TGocciaPromiseValue;
+  EffectiveThis: TGocciaValue;
 begin
+  if (not FStrictThis) and Assigned(FVM.FGlobalThisValue) and
+     (not Assigned(AThisValue) or
+      (AThisValue is TGocciaUndefinedLiteralValue) or
+      (AThisValue is TGocciaNullLiteralValue)) then
+    EffectiveThis := FVM.FGlobalThisValue
+  else
+    EffectiveThis := AThisValue;
+
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsGenerator then
   begin
     if FClosure.Template.IsAsync then
       Exit(TGocciaBytecodeAsyncGeneratorObjectValue.CreateRegisters(FVM, FClosure,
-        VMValueToRegisterFast(AThisValue),
+        VMValueToRegisterFast(EffectiveThis),
         TGocciaRegisterArray.Create(VMValueToRegisterFast(AArg0),
           VMValueToRegisterFast(AArg1))));
     Exit(TGocciaBytecodeGeneratorObjectValue.CreateRegisters(FVM, FClosure,
-      VMValueToRegisterFast(AThisValue),
+      VMValueToRegisterFast(EffectiveThis),
       TGocciaRegisterArray.Create(VMValueToRegisterFast(AArg0),
         VMValueToRegisterFast(AArg1))));
   end;
@@ -2686,7 +2726,7 @@ begin
     try
       try
         Promise.Resolve(RegisterToValue(FVM.ExecuteClosureRegisters2(FClosure,
-          VMValueToRegisterFast(AThisValue), VMValueToRegisterFast(AArg0),
+          VMValueToRegisterFast(EffectiveThis), VMValueToRegisterFast(AArg0),
           VMValueToRegisterFast(AArg1))));
       except
         on E: EGocciaBytecodeThrow do
@@ -2702,7 +2742,7 @@ begin
   end;
 
   Result := RegisterToValue(FVM.ExecuteClosureRegisters2(FClosure,
-    VMValueToRegisterFast(AThisValue), VMValueToRegisterFast(AArg0),
+    VMValueToRegisterFast(EffectiveThis), VMValueToRegisterFast(AArg0),
     VMValueToRegisterFast(AArg1)));
 end;
 
@@ -2710,16 +2750,25 @@ function TGocciaBytecodeFunctionValue.CallThreeArgs(const AArg0, AArg1, AArg2,
   AThisValue: TGocciaValue): TGocciaValue;
 var
   Promise: TGocciaPromiseValue;
+  EffectiveThis: TGocciaValue;
 begin
+  if (not FStrictThis) and Assigned(FVM.FGlobalThisValue) and
+     (not Assigned(AThisValue) or
+      (AThisValue is TGocciaUndefinedLiteralValue) or
+      (AThisValue is TGocciaNullLiteralValue)) then
+    EffectiveThis := FVM.FGlobalThisValue
+  else
+    EffectiveThis := AThisValue;
+
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsGenerator then
   begin
     if FClosure.Template.IsAsync then
       Exit(TGocciaBytecodeAsyncGeneratorObjectValue.CreateRegisters(FVM, FClosure,
-        VMValueToRegisterFast(AThisValue),
+        VMValueToRegisterFast(EffectiveThis),
         TGocciaRegisterArray.Create(VMValueToRegisterFast(AArg0),
           VMValueToRegisterFast(AArg1), VMValueToRegisterFast(AArg2))));
     Exit(TGocciaBytecodeGeneratorObjectValue.CreateRegisters(FVM, FClosure,
-      VMValueToRegisterFast(AThisValue),
+      VMValueToRegisterFast(EffectiveThis),
       TGocciaRegisterArray.Create(VMValueToRegisterFast(AArg0),
         VMValueToRegisterFast(AArg1), VMValueToRegisterFast(AArg2))));
   end;
@@ -2730,7 +2779,7 @@ begin
     try
       try
         Promise.Resolve(RegisterToValue(FVM.ExecuteClosureRegisters3(FClosure,
-          VMValueToRegisterFast(AThisValue), VMValueToRegisterFast(AArg0),
+          VMValueToRegisterFast(EffectiveThis), VMValueToRegisterFast(AArg0),
           VMValueToRegisterFast(AArg1), VMValueToRegisterFast(AArg2))));
       except
         on E: EGocciaBytecodeThrow do
@@ -2746,7 +2795,7 @@ begin
   end;
 
   Result := RegisterToValue(FVM.ExecuteClosureRegisters3(FClosure,
-    VMValueToRegisterFast(AThisValue), VMValueToRegisterFast(AArg0),
+    VMValueToRegisterFast(EffectiveThis), VMValueToRegisterFast(AArg0),
     VMValueToRegisterFast(AArg1), VMValueToRegisterFast(AArg2)));
 end;
 
@@ -6912,6 +6961,7 @@ var
   MatchHintObject: TGocciaObjectValue;
   BuiltinConstructorMatch: Boolean;
   RegisterArgs: TGocciaRegisterArray;
+  CallThisRegister: TGocciaRegister;
   BytecodeFunction: TGocciaBytecodeFunctionValue;
   BoundFunction: TGocciaBoundFunctionValue;
   JumpOffset: Integer;
@@ -8570,13 +8620,17 @@ begin
               TGocciaStringLiteralValue(PropKeyValue).Value) then
               FRegisters[A] := RegisterBoolean(True)
             else
-              FRegisters[A] := RegisterBoolean(False);
+              ThrowTypeError(Format(SErrorCannotDeletePropertyOf,
+                [TGocciaStringLiteralValue(PropKeyValue).Value, '[object Object]']),
+                SSuggestCannotDeleteNonConfigurable);
           end
           else if TGocciaObjectValue(FRegisters[B].ObjectValue).DeleteProperty(
             KeyToPropertyNameRegister(FRegisters[C])) then
             FRegisters[A] := RegisterBoolean(True)
           else
-            FRegisters[A] := RegisterBoolean(False);
+            ThrowTypeError(Format(SErrorCannotDeletePropertyOf,
+              [KeyToPropertyNameRegister(FRegisters[C]), '[object Object]']),
+              SSuggestCannotDeleteNonConfigurable);
         end
         else
           FRegisters[A] := RegisterBoolean(True);
@@ -8668,6 +8722,10 @@ begin
              (not BytecodeFunction.FClosure.Template.IsAsync) and
              (not BytecodeFunction.FClosure.Template.IsGenerator) then
           begin
+            if (not BytecodeFunction.FStrictThis) and Assigned(FGlobalThisValue) then
+              CallThisRegister := VMValueToRegisterFast(FGlobalThisValue)
+            else
+              CallThisRegister := RegisterUndefined;
             if (C and 1) = 0 then
             begin
               SetLength(RegisterArgs, B);
@@ -8675,7 +8733,7 @@ begin
                 RegisterArgs[I] := FRegisters[A + 1 + I];
               PushFrame(A, Frame.IP, Template, PrevCovLine, ProfileEntryTimestamp);
               SetupNewFrame(BytecodeFunction.FClosure,
-                RegisterUndefined, RegisterArgs, B,
+                CallThisRegister, RegisterArgs, B,
                 RegisterUndefined, RegisterUndefined, RegisterUndefined, False,
                 Frame, Template, PrevCovLine, ProfileEntryTimestamp);
               Continue;
@@ -8690,7 +8748,7 @@ begin
                   TGocciaArrayValue(FRegisters[B].ObjectValue).Elements[I]);
               PushFrame(A, Frame.IP, Template, PrevCovLine, ProfileEntryTimestamp);
               SetupNewFrame(BytecodeFunction.FClosure,
-                RegisterUndefined, RegisterArgs, Length(RegisterArgs),
+                CallThisRegister, RegisterArgs, Length(RegisterArgs),
                 RegisterUndefined, RegisterUndefined, RegisterUndefined, False,
                 Frame, Template, PrevCovLine, ProfileEntryTimestamp);
               Continue;
@@ -8766,31 +8824,38 @@ begin
               begin
                 if GlobalName = 'call' then
                 begin
+                  if B = 0 then
+                    CallThisRegister := RegisterUndefined
+                  else
+                    CallThisRegister := FRegisters[A + 1];
+                  if (not BytecodeFunction.FStrictThis) and Assigned(FGlobalThisValue) and
+                     (CallThisRegister.Kind in [grkUndefined, grkNull]) then
+                    CallThisRegister := VMValueToRegisterFast(FGlobalThisValue);
                   PushFrame(A, Frame.IP, Template, PrevCovLine, ProfileEntryTimestamp);
                   case B of
                     0:
                       SetupNewFrame(BytecodeFunction.FClosure,
-                        RegisterUndefined, TGocciaRegisterArray(nil), 0,
+                        CallThisRegister, TGocciaRegisterArray(nil), 0,
                         RegisterUndefined, RegisterUndefined, RegisterUndefined,
                         True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
                     1:
                       SetupNewFrame(BytecodeFunction.FClosure,
-                        FRegisters[A + 1], TGocciaRegisterArray(nil), 0,
+                        CallThisRegister, TGocciaRegisterArray(nil), 0,
                         RegisterUndefined, RegisterUndefined, RegisterUndefined,
                         True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
                     2:
                       SetupNewFrame(BytecodeFunction.FClosure,
-                        FRegisters[A + 1], TGocciaRegisterArray(nil), 1,
+                        CallThisRegister, TGocciaRegisterArray(nil), 1,
                         FRegisters[A + 2], RegisterUndefined, RegisterUndefined,
                         True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
                     3:
                       SetupNewFrame(BytecodeFunction.FClosure,
-                        FRegisters[A + 1], TGocciaRegisterArray(nil), 2,
+                        CallThisRegister, TGocciaRegisterArray(nil), 2,
                         FRegisters[A + 2], FRegisters[A + 3], RegisterUndefined,
                         True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
                     4:
                       SetupNewFrame(BytecodeFunction.FClosure,
-                        FRegisters[A + 1], TGocciaRegisterArray(nil), 3,
+                        CallThisRegister, TGocciaRegisterArray(nil), 3,
                         FRegisters[A + 2], FRegisters[A + 3], FRegisters[A + 4],
                         True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
                   else
@@ -8799,7 +8864,7 @@ begin
                       for I := 1 to B - 1 do
                         RegisterArgs[I - 1] := FRegisters[A + 1 + I];
                       SetupNewFrame(BytecodeFunction.FClosure,
-                        FRegisters[A + 1], RegisterArgs, Length(RegisterArgs),
+                        CallThisRegister, RegisterArgs, Length(RegisterArgs),
                         RegisterUndefined, RegisterUndefined, RegisterUndefined,
                         False, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
                     end;
@@ -8811,29 +8876,33 @@ begin
                         (FRegisters[A + 2].ObjectValue is TGocciaArrayValue) then
                 begin
                   ArgsArray := TGocciaArrayValue(FRegisters[A + 2].ObjectValue);
+                  CallThisRegister := FRegisters[A + 1];
+                  if (not BytecodeFunction.FStrictThis) and Assigned(FGlobalThisValue) and
+                     (CallThisRegister.Kind in [grkUndefined, grkNull]) then
+                    CallThisRegister := VMValueToRegisterFast(FGlobalThisValue);
                   PushFrame(A, Frame.IP, Template, PrevCovLine, ProfileEntryTimestamp);
                   case ArgsArray.Elements.Count of
                     0:
                       SetupNewFrame(BytecodeFunction.FClosure,
-                        FRegisters[A + 1], TGocciaRegisterArray(nil), 0,
+                        CallThisRegister, TGocciaRegisterArray(nil), 0,
                         RegisterUndefined, RegisterUndefined, RegisterUndefined,
                         True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
                     1:
                       SetupNewFrame(BytecodeFunction.FClosure,
-                        FRegisters[A + 1], TGocciaRegisterArray(nil), 1,
+                        CallThisRegister, TGocciaRegisterArray(nil), 1,
                         VMValueToRegisterFast(ArgsArray.Elements[0]),
                         RegisterUndefined, RegisterUndefined,
                         True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
                     2:
                       SetupNewFrame(BytecodeFunction.FClosure,
-                        FRegisters[A + 1], TGocciaRegisterArray(nil), 2,
+                        CallThisRegister, TGocciaRegisterArray(nil), 2,
                         VMValueToRegisterFast(ArgsArray.Elements[0]),
                         VMValueToRegisterFast(ArgsArray.Elements[1]),
                         RegisterUndefined,
                         True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
                     3:
                       SetupNewFrame(BytecodeFunction.FClosure,
-                        FRegisters[A + 1], TGocciaRegisterArray(nil), 3,
+                        CallThisRegister, TGocciaRegisterArray(nil), 3,
                         VMValueToRegisterFast(ArgsArray.Elements[0]),
                         VMValueToRegisterFast(ArgsArray.Elements[1]),
                         VMValueToRegisterFast(ArgsArray.Elements[2]),
@@ -8844,7 +8913,7 @@ begin
                       for I := 0 to High(RegisterArgs) do
                         RegisterArgs[I] := VMValueToRegisterFast(ArgsArray.Elements[I]);
                       SetupNewFrame(BytecodeFunction.FClosure,
-                        FRegisters[A + 1], RegisterArgs, Length(RegisterArgs),
+                        CallThisRegister, RegisterArgs, Length(RegisterArgs),
                         RegisterUndefined, RegisterUndefined, RegisterUndefined,
                         False, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
                     end;

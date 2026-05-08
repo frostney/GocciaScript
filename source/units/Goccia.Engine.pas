@@ -1568,7 +1568,7 @@ function TGocciaEngine.CompileDynamicFunction(
   const AParamsSources: array of string;
   const ABodySource: string): TGocciaFunctionBase;
 var
-  ParamStr, Source: string;
+  ParamStr, Source, TrimmedBody: string;
   I: Integer;
   Lexer: TGocciaLexer;
   Tokens: TObjectList<TGocciaToken>;
@@ -1675,6 +1675,12 @@ begin
         // ES2026 §20.2.1.1.1: the function's name is 'anonymous'
         if Result is TGocciaFunctionValue then
           TGocciaFunctionValue(Result).Name := 'anonymous';
+        // ES2026 §15.2.2.4: Function-constructor bodies are non-strict
+        // unless the body starts with a Use Strict Directive (§11.2.2).
+        TrimmedBody := TrimLeft(ABodySource);
+        if (Pos('"use strict"', TrimmedBody) <> 1) and
+           (Pos('''use strict''', TrimmedBody) <> 1) then
+          Result.StrictThis := False;
       finally
         ProgramNode.Free;
       end;
