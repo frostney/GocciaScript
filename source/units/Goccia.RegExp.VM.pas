@@ -209,6 +209,7 @@ var
   BeforeIsWord, AfterIsWord: Boolean;
   Negated: Boolean;
   BackrefGroup: Integer;
+  BackrefICase: Boolean;
   LookEnd: Integer;
   LookSlots: array of Integer;
   LookMatched: Boolean;
@@ -376,7 +377,8 @@ begin
       RX_BACKREF:
         begin
           Negated := (Bx and $800000) <> 0;
-          BackrefGroup := Bx and $7FFFFF;
+          BackrefICase := (Bx and $400000) <> 0;
+          BackrefGroup := Bx and $3FFFFF;
           RefStart := -1;
           RefEnd := -1;
           if (BackrefGroup * 2) < SlotCount then
@@ -412,8 +414,18 @@ begin
             end;
             if RefCP <> InputCP then
             begin
-              LookMatched := False;
-              Break;
+              if BackrefICase then
+              begin
+                if (RefCP >= Ord('A')) and (RefCP <= Ord('Z')) then
+                  RefCP := RefCP + 32;
+                if (InputCP >= Ord('A')) and (InputCP <= Ord('Z')) then
+                  InputCP := InputCP + 32;
+              end;
+              if RefCP <> InputCP then
+              begin
+                LookMatched := False;
+                Break;
+              end;
             end;
             Inc(RefPos, RefByteLen);
             Inc(InputPos, InputByteLen);

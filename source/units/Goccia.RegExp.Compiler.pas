@@ -123,7 +123,8 @@ type
     procedure ValidateNamedGroups;
     procedure PreScanNamedGroups;
     procedure InsertSplitAt(APos: Integer);
-    procedure EmitDuplicateNamedBackref(const AName: string);
+    procedure EmitDuplicateNamedBackref(const AName: string;
+      AICaseFlag: Integer);
   public
     constructor Create(const APattern, AFlags: string);
     function Compile: TRegExpProgram;
@@ -632,6 +633,8 @@ begin
 end;
 
 function TRegExpCompiler.ParseDecimalEscape: Integer;
+const
+  MAX_QUANTIFIER = 1000000;
 var
   C: Char;
 begin
@@ -641,15 +644,22 @@ begin
     C := Peek;
     if (C < '0') or (C > '9') then
       Break;
-    Result := Result * 10 + (Ord(Advance) - Ord('0'));
+    if Result <= MAX_QUANTIFIER then
+      Result := Result * 10 + (Ord(Advance) - Ord('0'))
+    else
+      Advance;
   end;
+  if Result > MAX_QUANTIFIER then
+    Result := MAX_QUANTIFIER;
 end;
 
 const
   BACKREF_STRICT_FLAG = $800000;
+  BACKREF_ICASE_FLAG = $400000;
   LOOK_NEGATED_FLAG = $800000;
 
-procedure TRegExpCompiler.EmitDuplicateNamedBackref(const AName: string);
+procedure TRegExpCompiler.EmitDuplicateNamedBackref(const AName: string;
+  AICaseFlag: Integer);
 var
   Indices: array of Integer;
   Count, I: Integer;
@@ -668,7 +678,7 @@ begin
   SetLength(Indices, Count);
   if Count = 1 then
   begin
-    Emit(EncodeOpBx(RX_BACKREF, Indices[0]));
+    Emit(EncodeOpBx(RX_BACKREF, Indices[0] or AICaseFlag));
     Exit;
   end;
   JumpCount := 0;
@@ -677,7 +687,7 @@ begin
   begin
     SplitHole := CurrentPC;
     Emit(EncodeOpBx(RX_SPLIT, 0));
-    Emit(EncodeOpBx(RX_BACKREF, Indices[I] or BACKREF_STRICT_FLAG));
+    Emit(EncodeOpBx(RX_BACKREF, Indices[I] or BACKREF_STRICT_FLAG or AICaseFlag));
     JumpHoles[JumpCount] := CurrentPC;
     Inc(JumpCount);
     Emit(0);
@@ -696,9 +706,13 @@ var
   PropertyName: string;
   Negated: Boolean;
   GroupName: string;
-  BackrefIdx, I, GroupCount: Integer;
+  BackrefIdx, I, GroupCount, BackrefICaseFlag: Integer;
   CodePoint: Cardinal;
 begin
+  if FModifier.IgnoreCase then
+    BackrefICaseFlag := BACKREF_ICASE_FLAG
+  else
+    BackrefICaseFlag := 0;
   C := Advance;
   case C of
     'd', 'D', 'w', 'W', 's', 'S':
@@ -744,9 +758,9 @@ begin
             raise EConvertError.Create(
               'Invalid named backreference: ' + GroupName);
           if GroupCount <= 1 then
-            Emit(EncodeOpBx(RX_BACKREF, BackrefIdx))
+            Emit(EncodeOpBx(RX_BACKREF, BackrefIdx or BackrefICaseFlag))
           else
-            EmitDuplicateNamedBackref(GroupName);
+            EmitDuplicateNamedBackref(GroupName, BackrefICaseFlag);
         end
         else
           EmitCharMatch(Ord('k'));
@@ -756,7 +770,7 @@ begin
         BackrefIdx := Ord(C) - Ord('0');
         while not AtEnd and (Peek >= '0') and (Peek <= '9') do
           BackrefIdx := BackrefIdx * 10 + (Ord(Advance) - Ord('0'));
-        Emit(EncodeOpBx(RX_BACKREF, BackrefIdx));
+        Emit(EncodeOpBx(RX_BACKREF, BackrefIdx or BackrefICaseFlag));
       end;
     'n': EmitCharMatch($0A);
     'r': EmitCharMatch($0D);
