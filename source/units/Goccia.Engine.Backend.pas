@@ -48,6 +48,7 @@ type
       EvaluateModuleBody does for nested module loads. }
     function RunModuleInScope(const AModule: TGocciaBytecodeModule;
       const AScope: TGocciaScope): TGocciaValue;
+    procedure RetainModule(const AModule: TGocciaBytecodeModule);
 
     property VM: TGocciaVM read FVM;
     property GlobalBackedTopLevel: Boolean read FGlobalBackedTopLevel
@@ -229,6 +230,12 @@ procedure TGocciaBytecodeExecutor.ClearTransientCaches;
 begin
   // The Goccia VM executes directly on TGocciaValue and does not maintain
   // bridge-side transient caches that need per-measurement clearing.
+end;
+
+procedure TGocciaBytecodeExecutor.RetainModule(
+  const AModule: TGocciaBytecodeModule);
+begin
+  FModuleModules.Add(AModule);
 end;
 
 end.
