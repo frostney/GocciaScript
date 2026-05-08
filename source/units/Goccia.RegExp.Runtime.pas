@@ -29,6 +29,7 @@ uses
   SysUtils,
 
   Goccia.Constants.PropertyNames,
+  Goccia.RegExp.VM,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -153,30 +154,6 @@ begin
   Obj.DefineProperty(PROP_LAST_INDEX,
     TGocciaPropertyDescriptorData.Create(
       TGocciaNumberLiteralValue.Create(0), [pfWritable]));
-  Obj.DefineProperty(PROP_GLOBAL,
-    TGocciaPropertyDescriptorData.Create(
-      TGocciaBooleanLiteralValue.Create(HasRegExpFlag(CanonicalFlags, 'g')), []));
-  Obj.DefineProperty(PROP_IGNORE_CASE,
-    TGocciaPropertyDescriptorData.Create(
-      TGocciaBooleanLiteralValue.Create(HasRegExpFlag(CanonicalFlags, 'i')), []));
-  Obj.DefineProperty(PROP_MULTILINE,
-    TGocciaPropertyDescriptorData.Create(
-      TGocciaBooleanLiteralValue.Create(HasRegExpFlag(CanonicalFlags, 'm')), []));
-  Obj.DefineProperty(PROP_DOT_ALL,
-    TGocciaPropertyDescriptorData.Create(
-      TGocciaBooleanLiteralValue.Create(HasRegExpFlag(CanonicalFlags, 's')), []));
-  Obj.DefineProperty(PROP_UNICODE,
-    TGocciaPropertyDescriptorData.Create(
-      TGocciaBooleanLiteralValue.Create(HasRegExpFlag(CanonicalFlags, 'u')), []));
-  Obj.DefineProperty(PROP_STICKY,
-    TGocciaPropertyDescriptorData.Create(
-      TGocciaBooleanLiteralValue.Create(HasRegExpFlag(CanonicalFlags, 'y')), []));
-  Obj.DefineProperty(PROP_UNICODE_SETS,
-    TGocciaPropertyDescriptorData.Create(
-      TGocciaBooleanLiteralValue.Create(HasRegExpFlag(CanonicalFlags, 'v')), []));
-  Obj.DefineProperty(PROP_HAS_INDICES,
-    TGocciaPropertyDescriptorData.Create(
-      TGocciaBooleanLiteralValue.Create(HasRegExpFlag(CanonicalFlags, 'd')), []));
   Result := Obj;
 end;
 
@@ -215,13 +192,18 @@ var
   ShouldUpdate: Boolean;
 begin
   Obj := TGocciaObjectValue(AValue);
-  Result := ExecuteRegExp(
-    GetStringProperty(Obj, PROP_SOURCE),
-    GetStringProperty(Obj, PROP_FLAGS),
-    AInput,
-    AStartIndex,
-    ARequireStart,
-    MatchResult);
+  try
+    Result := ExecuteRegExp(
+      GetStringProperty(Obj, PROP_SOURCE),
+      GetStringProperty(Obj, PROP_FLAGS),
+      AInput,
+      AStartIndex,
+      ARequireStart,
+      MatchResult);
+  except
+    on E: ERegExpRuntimeError do
+      ThrowError(E.Message);
+  end;
 
   ShouldUpdate := AUpdateLastIndex and
     (GetBooleanProperty(Obj, PROP_GLOBAL) or GetBooleanProperty(Obj, PROP_STICKY));

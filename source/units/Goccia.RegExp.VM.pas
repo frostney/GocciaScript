@@ -5,9 +5,13 @@ unit Goccia.RegExp.VM;
 interface
 
 uses
+  SysUtils,
+
   Goccia.RegExp.Compiler;
 
 type
+  ERegExpRuntimeError = class(Exception);
+
   TRegExpVMResult = record
     Matched: Boolean;
     CaptureSlots: array of Integer;
@@ -20,8 +24,6 @@ function ExecuteRegExpVM(const AProgram: TRegExpProgram;
 implementation
 
 uses
-  SysUtils,
-
   TextSemantics;
 
 const
@@ -218,7 +220,7 @@ var
   procedure PushBacktrack(APC, AInputPos: Integer);
   begin
     if StackTop >= DEFAULT_BACKTRACK_CAP then
-      raise EConvertError.Create('Maximum regexp backtrack stack size exceeded');
+      raise ERegExpRuntimeError.Create('Maximum regular expression backtrack stack size exceeded');
     Inc(StackTop);
     if StackTop >= Length(Stack) then
       SetLength(Stack, StackTop * 2 + 16);
@@ -258,7 +260,7 @@ begin
   begin
     Inc(StepCount);
     if StepCount > DEFAULT_STEP_LIMIT then
-      raise EConvertError.Create('Maximum regexp backtrack stack size exceeded');
+      raise ERegExpRuntimeError.Create('Maximum regular expression backtrack stack size exceeded');
 
     Instr := AProgram.Code[PC];
     Op := TRegExpOpCode(Instr and $FF);

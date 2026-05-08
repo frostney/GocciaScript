@@ -194,3 +194,18 @@ test("exec with duplicate named backreference outside the disjunction", () => {
   expect(re.exec("b")).toBe(null);
   expect(re.exec("ab")).toBe(null);
 });
+
+// --- Backtrack limit ---
+
+test("catastrophic backtracking throws Error instead of hanging", () => {
+  expect(() => {
+    /^(a+)+$/.exec("a".repeat(30) + "b");
+  }).toThrow(Error);
+});
+
+// --- Large input (#515 regression) ---
+
+test("exec on large input does not crash", () => {
+  const s = "foo" + ".bar".repeat(20000);
+  expect(/f.*/.test(s)).toBe(true);
+});
