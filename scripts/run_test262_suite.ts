@@ -74,8 +74,6 @@ const DEFAULT_JOBS = 4;
 // bug.  Per docs/test262.md "Updating the contract", this list is the
 // only allowed form of test-skipping; no generic eligibility filter.
 const KNOWN_ENGINE_CRASHES = new Set<string>([
-  // SIGSEGV: generator + iterator concat path. https://github.com/frostney/GocciaScript/issues/514
-  "built-ins/Iterator/concat/throws-typeerror-when-generator-is-running-next.js",
   // SIGSEGV: RegExp.prototype.test trailing-input edge case. https://github.com/frostney/GocciaScript/issues/515
   "staging/sm/RegExp/test-trailing.js",
 ]);

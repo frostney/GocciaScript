@@ -169,4 +169,37 @@ describe("Iterator.concat()", () => {
     const result = Iterator.concat(...arrays).toArray();
     expect(result).toEqual(expected);
   });
+
+  test("throws TypeError when generator is mid-execution", () => {
+    let gen;
+    const obj = {
+      *makeGen() {
+        Iterator.concat(gen).next();
+        yield 1;
+      },
+    };
+    gen = obj.makeGen();
+    expect(() => gen.next()).toThrow(TypeError);
+  });
+
+  test("generator catches TypeError from re-entrant concat next", () => {
+    let gen;
+    let caught = null;
+    const obj = {
+      *makeGen() {
+        try {
+          Iterator.concat(gen).next();
+        } catch (e) {
+          caught = e;
+        }
+        yield "ok";
+      },
+    };
+    gen = obj.makeGen();
+    const result = gen.next();
+    expect(result.value).toBe("ok");
+    expect(result.done).toBe(false);
+    expect(caught !== null).toBe(true);
+    expect(caught.constructor.name).toBe("TypeError");
+  });
 });
