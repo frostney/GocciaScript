@@ -85,6 +85,7 @@ printf "const x = 2 + 2; x;" | ./build/GocciaScriptLoader # Execute stdin source
 ./build/GocciaScriptLoader example.js --log=console.log # Write console output to a log file (tee to stdout + file)
 ./build/GocciaScriptLoader example.js --stack-size=5000 # Execute with custom call stack depth limit
 ./build/GocciaScriptLoader example.js --stack-size=0 --mode=bytecode # Execute with no call stack depth limit (bytecode trampoline)
+./build/GocciaScriptLoader example.js --inspect-depth=2 # Execute with shallow object inspection (default: 5)
 ./build/GocciaScriptLoader example.js --multifile # Split file on '---' separators and run each section as its own input
 ./build/GocciaScriptLoader example.js --multifile --jobs=4 # Multifile with parallel section dispatch
 printf '1;\n---\n2;\n' | ./build/GocciaScriptLoader --multifile # Split stdin on '---' (sections named <stdin>[part1], <stdin>[part2])

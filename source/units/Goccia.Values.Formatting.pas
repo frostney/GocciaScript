@@ -45,6 +45,11 @@ begin
     Result := '[Array]';
     Exit;
   end;
+  if AArr.Elements.Count = 0 then
+  begin
+    Result := '[]';
+    Exit;
+  end;
   SB := TStringBuffer.Create;
   SB.Append('[ ');
   for I := 0 to AArr.Elements.Count - 1 do
