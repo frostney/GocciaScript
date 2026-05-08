@@ -128,7 +128,23 @@ describe("Chained iterator helper re-entrancy", () => {
       "zip → map",
       () => {
         let h;
-        h = Iterator.zip([makeReentrantIterable(() => h)]).map(x => x[0]);
+        h = Iterator.zip([makeReentrantIterable(() => h)]).map(x => x);
+        return h;
+      },
+    ],
+    [
+      "concat → drop",
+      () => {
+        let h;
+        h = Iterator.concat(makeReentrantIterable(() => h)).drop(0);
+        return h;
+      },
+    ],
+    [
+      "concat → flatMap",
+      () => {
+        let h;
+        h = Iterator.concat(makeReentrantIterable(() => h)).flatMap(x => [x]);
         return h;
       },
     ],
@@ -179,6 +195,13 @@ describe("Chained iterator helper re-entrancy", () => {
       () => {
         const inner = Iterator.zip([[1, 2, 3]]);
         return inner.map(x => { inner.next(); return x; });
+      },
+    ],
+    [
+      "drop → flatMap (flatMap callback re-enters drop)",
+      () => {
+        const inner = [1, 2, 3].values().drop(0);
+        return inner.flatMap(x => { inner.next(); return [x]; });
       },
     ],
     [
