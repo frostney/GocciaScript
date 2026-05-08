@@ -95,6 +95,16 @@ begin
   Result := SB.ToString;
 end;
 
+function QuoteString(const AStr: string): string;
+begin
+  if Pos('''', AStr) = 0 then
+    Result := '''' + AStr + ''''
+  else if Pos('"', AStr) = 0 then
+    Result := '"' + AStr + '"'
+  else
+    Result := '`' + AStr + '`';
+end;
+
 function FormatRecursive(const AValue: TGocciaValue; const ANested: Boolean; const ADepth: Integer): string;
 begin
   if not Assigned(AValue) then
@@ -110,7 +120,7 @@ begin
   else if AValue is TGocciaObjectValue then
     Result := FormatObject(TGocciaObjectValue(AValue), ADepth)
   else if ANested and (AValue is TGocciaStringLiteralValue) then
-    Result := '''' + AValue.ToStringLiteral.Value + ''''
+    Result := QuoteString(AValue.ToStringLiteral.Value)
   else
     Result := AValue.ToStringLiteral.Value;
 end;
