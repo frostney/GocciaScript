@@ -48,7 +48,7 @@ begin
       PROP_REVOCABLE, 2));
   FConstructorValue := ConstructorFn;
 
-  AScope.DefineLexicalBinding(CONSTRUCTOR_PROXY, FConstructorValue, dtConst);
+  AScope.DefineLexicalBinding(CONSTRUCTOR_PROXY, FConstructorValue, dtConst, True);
 end;
 
 // ES2026 §28.2.1 Proxy(target, handler)

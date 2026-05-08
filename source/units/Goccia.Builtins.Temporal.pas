@@ -140,7 +140,7 @@ begin
       [pfConfigurable]);
     RegisterMemberDefinitions(FTemporalNamespace, TemporalMembers);
 
-    AScope.DefineLexicalBinding(AName, FTemporalNamespace, dtLet);
+    AScope.DefineLexicalBinding(AName, FTemporalNamespace, dtLet, True);
   finally
     TGarbageCollector.Instance.RemoveTempRoot(FTemporalNamespace);
   end;

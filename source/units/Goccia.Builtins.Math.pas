@@ -151,7 +151,7 @@ begin
   end;
   RegisterMemberDefinitions(FBuiltinObject, FStaticMembers);
 
-  AScope.DefineLexicalBinding(AName, FBuiltinObject, dtLet);
+  AScope.DefineLexicalBinding(AName, FBuiltinObject, dtLet, True);
 end;
 
 // §21.3.2.1 Math.abs ( x )

@@ -98,7 +98,7 @@ begin
     TGocciaPropertyDescriptorData.Create(Proto, []));
 
   // Bind BigInt in scope
-  AScope.DefineLexicalBinding(AName, FBigIntFunction, dtLet);
+  AScope.DefineLexicalBinding(AName, FBigIntFunction, dtLet, True);
 end;
 
 // ES2026 §21.2.1.1 BigInt(value) — conversion function

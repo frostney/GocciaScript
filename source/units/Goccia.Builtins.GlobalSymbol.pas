@@ -116,7 +116,7 @@ begin
     TGocciaPropertyDescriptorData.Create(FSymbolFunction, [pfConfigurable, pfWritable]));
 
   // Bind Symbol in scope
-  AScope.DefineLexicalBinding(AName, FSymbolFunction, dtLet);
+  AScope.DefineLexicalBinding(AName, FSymbolFunction, dtLet, True);
 end;
 
 destructor TGocciaGlobalSymbol.Destroy;

@@ -115,7 +115,7 @@ begin
   end;
   RegisterMemberDefinitions(FBuiltinObject, FStaticMembers);
 
-  AScope.DefineLexicalBinding(AName, FBuiltinObject, dtLet);
+  AScope.DefineLexicalBinding(AName, FBuiltinObject, dtLet, True);
 end;
 
 procedure TGocciaConsole.EmitLine(const AMethod, ALine: string);

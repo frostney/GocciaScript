@@ -67,7 +67,7 @@ begin
   end;
   RegisterMemberDefinitions(FBuiltinObject, FStaticMembers);
 
-  AScope.DefineLexicalBinding(AName, FBuiltinObject, dtConst);
+  AScope.DefineLexicalBinding(AName, FBuiltinObject, dtConst, True);
 end;
 
 function TGocciaGlobalFFI.FFIOpen(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
