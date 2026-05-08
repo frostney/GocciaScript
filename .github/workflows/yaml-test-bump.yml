@@ -1,0 +1,62 @@
+name: yaml-test weekly bump
+
+# Pulls the latest yaml/yaml-test-suite data SHA, updates the pin in
+# scripts/run_yaml_test_suite.py, and opens a PR.  Merge once the
+# compliance delta is acceptable.
+#
+# Cadence: weekly (Mondays 07:00 UTC).  Manual trigger available via
+# workflow_dispatch.
+
+on:
+  schedule:
+    - cron: '0 7 * * 1'
+  workflow_dispatch:
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: oven-sh/setup-bun@v2
+
+      - id: latest
+        run: |
+          sha=$(gh api repos/yaml/yaml-test-suite/commits/data --jq .sha)
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "short=${sha:0:8}" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update pin in suite runner
+        run: bun scripts/suite-bump-pin.ts scripts/run_yaml_test_suite.py ${{ steps.latest.outputs.sha }}
+
+      - id: changed
+        run: |
+          if git diff --quiet -- scripts/run_yaml_test_suite.py; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "yaml-test-suite already pinned to ${{ steps.latest.outputs.short }} — no PR to open."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open or update PR
+        if: steps.changed.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: chore/yaml-test-bump
+          commit-message: "chore(yaml-test): bump pin to ${{ steps.latest.outputs.short }}"
+          title: "chore(yaml-test): bump pin to ${{ steps.latest.outputs.short }}"
+          body: |
+            Automated bump of the yaml-test-suite SHA pin to `${{ steps.latest.outputs.sha }}`.
+
+            CI will run the YAML compliance suite against the new SHA.
+            Review the delta and merge if acceptable.
+
+            Cron: weekly, Mondays 07:00 UTC. See `.github/workflows/yaml-test-bump.yml`.
+          labels: |
+            yaml
+            automated

@@ -112,6 +112,7 @@ type
     procedure RequireNotSealed(const ANode: TGocciaTOMLNode; const AKey: string);
     procedure Reset(const AText: UTF8String);
     procedure SkipBlankLinesAndComments;
+    procedure PrepareInput;
     procedure SkipWhitespace(const AAllowNewlines: Boolean);
     function TryParseBinaryInteger(const AToken: string;
       out AValue: Double): Boolean;
@@ -438,6 +439,24 @@ begin
   FCurrentTable := FRoot;
 end;
 
+procedure TGocciaTOMLParser.PrepareInput;
+var
+  B: Byte;
+  I: Integer;
+begin
+  if (Length(FText) >= 3) and (Byte(FText[1]) = $EF) and
+     (Byte(FText[2]) = $BB) and (Byte(FText[3]) = $BF) then
+    FIndex := 4;
+
+  for I := 1 to Length(FText) do
+  begin
+    B := Byte(FText[I]);
+    if ((B < 32) and (B <> 9) and (B <> 10) and (B <> 13)) or (B = 127) then
+      RaiseParseError('Input contains a forbidden control character (U+' +
+        IntToHex(B, 4) + ').');
+  end;
+end;
+
 function TGocciaTOMLParser.Parse(const AText: UTF8String): TGocciaObjectValue;
 var
   RootNode: TGocciaTOMLNode;
@@ -454,6 +473,7 @@ function TGocciaTOMLParser.ParseDocument(const AText: UTF8String): TGocciaTOMLNo
 begin
   Reset(AText);
   try
+    PrepareInput;
     SkipBlankLinesAndComments;
     while not IsAtEnd do
     begin

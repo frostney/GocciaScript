@@ -11,7 +11,7 @@ from pathlib import Path
 
 
 SUITE_REPO_URL = "https://github.com/yaml/yaml-test-suite.git"
-SUITE_BRANCH = "data"
+SUITE_SHA = "6ad3d2c62885d82fc349026c136ef560838fdf3d"
 DEFAULT_TIMEOUT_SECONDS = 5
 
 HARNESS_SOURCE = """program GocciaYAMLCheck;
@@ -82,18 +82,10 @@ def ensure_suite_checkout(suite_dir: Path | None) -> tuple[Path, tempfile.Tempor
 
   temp_dir = tempfile.TemporaryDirectory(prefix="yaml-test-suite.")
   checkout_dir = Path(temp_dir.name) / "repo"
-  run(
-    [
-      "git",
-      "clone",
-      "--depth",
-      "1",
-      "--branch",
-      SUITE_BRANCH,
-      SUITE_REPO_URL,
-      str(checkout_dir),
-    ]
-  )
+  run(["git", "init", str(checkout_dir)])
+  run(["git", "remote", "add", "origin", SUITE_REPO_URL], cwd=checkout_dir)
+  run(["git", "fetch", "--depth", "1", "origin", SUITE_SHA], cwd=checkout_dir)
+  run(["git", "checkout", SUITE_SHA], cwd=checkout_dir)
   return checkout_dir, temp_dir
 
 
