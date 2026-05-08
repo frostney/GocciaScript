@@ -13,6 +13,7 @@ test("top-level var NaN without initializer preserves the built-in value", () =>
 
 test("top-level var Infinity without initializer preserves the built-in value", () => {
   expect(typeof Infinity).toBe("number");
+  expect(Infinity).toBe(1 / 0);
 });
 
 test("top-level var undefined without initializer preserves the built-in value", () => {
@@ -21,7 +22,7 @@ test("top-level var undefined without initializer preserves the built-in value",
 
 var Array = "shadowed";
 
-test("top-level var Array with initializer shadows the constructor", () => {
+test("top-level var with initializer shadows a writable built-in", () => {
   expect(Array).toBe("shadowed");
 });
 

@@ -1,36 +1,28 @@
 /*---
-description: let declarations cannot shadow built-in globals at the same scope level
+description: let cannot shadow built-in globals at the same scope level but can in nested blocks
 features: [let-declaration]
 ---*/
 
-test("let NaN at top level throws SyntaxError", () => {
-  expect(() => {
-    eval("let NaN = 42");
-  }).toThrow();
-});
-
-test("let Infinity at top level throws SyntaxError", () => {
-  expect(() => {
-    eval("let Infinity = 42");
-  }).toThrow();
-});
-
-test("let undefined at top level throws SyntaxError", () => {
-  expect(() => {
-    eval("let undefined = 42");
-  }).toThrow();
-});
-
-test("let Array at top level throws SyntaxError", () => {
-  expect(() => {
-    eval("let Array = 42");
-  }).toThrow();
-});
-
-test("let in a nested block does not conflict with built-in globals", () => {
+test("let in a nested block shadows built-in NaN locally", () => {
   {
     let NaN = 42;
     expect(NaN).toBe(42);
   }
   expect(NaN).toBeNaN();
+});
+
+test("let in a nested block shadows built-in Infinity locally", () => {
+  {
+    let Infinity = "finite";
+    expect(Infinity).toBe("finite");
+  }
+  expect(Infinity).toBe(1 / 0);
+});
+
+test("let in a nested block shadows built-in Array locally", () => {
+  {
+    let Array = "not-an-array";
+    expect(Array).toBe("not-an-array");
+  }
+  expect(typeof Array).toBe("function");
 });

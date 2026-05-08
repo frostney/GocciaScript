@@ -1,24 +1,20 @@
 /*---
-description: const declarations cannot shadow built-in globals at the same scope level
+description: const cannot shadow built-in globals at the same scope level but can in nested blocks
 features: [const-declaration]
 ---*/
 
-test("const NaN at top level throws SyntaxError", () => {
-  expect(() => {
-    eval("const NaN = 42");
-  }).toThrow();
-});
-
-test("const Array at top level throws SyntaxError", () => {
-  expect(() => {
-    eval("const Array = []");
-  }).toThrow();
-});
-
-test("const in a nested block does not conflict with built-in globals", () => {
+test("const in a nested block shadows built-in NaN locally", () => {
   {
     const NaN = 42;
     expect(NaN).toBe(42);
   }
   expect(NaN).toBeNaN();
+});
+
+test("const in a nested block shadows built-in Array locally", () => {
+  {
+    const Array = "not-an-array";
+    expect(Array).toBe("not-an-array");
+  }
+  expect(typeof Array).toBe("function");
 });

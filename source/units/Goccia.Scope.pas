@@ -345,6 +345,7 @@ begin
   LexicalBinding.Value := TGocciaUndefinedLiteralValue.UndefinedValue;
   LexicalBinding.DeclarationType := ADeclarationType;
   LexicalBinding.Initialized := False;
+  LexicalBinding.BuiltIn := False;
   LexicalBinding.TypeHint := sltUntyped;
   FLexicalBindings.Add(AName, LexicalBinding);
 end;

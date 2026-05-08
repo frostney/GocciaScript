@@ -76,19 +76,21 @@ begin
     if Stmt is TGocciaVariableDeclaration then
     begin
       VarDecl := TGocciaVariableDeclaration(Stmt);
-      // §16.1.7: var and function declarations may shadow built-in
-      // globals in script mode.  Only block the redeclaration when the
-      // existing binding is a user-declared lexical (let/const/class).
-      if not (VarDecl.IsVar or VarDecl.IsFunctionDeclaration) then
-        for J := 0 to High(VarDecl.Variables) do
+      for J := 0 to High(VarDecl.Variables) do
+      begin
+        DeclName := VarDecl.Variables[J].Name;
+        if AScope.ContainsOwnLexicalBinding(DeclName) then
         begin
-          DeclName := VarDecl.Variables[J].Name;
-          if AScope.ContainsOwnLexicalBinding(DeclName) and
-             not AScope.IsBuiltInBinding(DeclName) then
-            raise TGocciaSyntaxError.Create(
-              SysUtils.Format('Identifier ''%s'' has already been declared',
-                [DeclName]), Stmt.Line, Stmt.Column, ASourcePath, nil);
+          // §16.1.7: var/function declarations may shadow built-in
+          // globals in script mode, but not user-declared bindings.
+          if (VarDecl.IsVar or VarDecl.IsFunctionDeclaration) and
+             AScope.IsBuiltInBinding(DeclName) then
+            Continue;
+          raise TGocciaSyntaxError.Create(
+            SysUtils.Format('Identifier ''%s'' has already been declared',
+              [DeclName]), Stmt.Line, Stmt.Column, ASourcePath, nil);
         end;
+      end;
     end
     else if Stmt is TGocciaClassDeclaration then
     begin
