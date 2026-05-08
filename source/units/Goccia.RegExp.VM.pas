@@ -158,17 +158,8 @@ begin
     AByteLen := 0;
     Exit(False);
   end;
-  if AUnicode then
-  begin
-    Result := TryReadUTF8CodePoint(AInput, APos, ACodePoint, AByteLen);
-    if not Result then
-    begin
-      ACodePoint := Ord(AInput[APos]);
-      AByteLen := 1;
-      Result := True;
-    end;
-  end
-  else
+  Result := TryReadUTF8CodePoint(AInput, APos, ACodePoint, AByteLen);
+  if not Result then
   begin
     ACodePoint := Ord(AInput[APos]);
     AByteLen := 1;
@@ -433,11 +424,16 @@ begin
         begin
           if Bx <> 0 then
           begin
-            if (InputPos > 1) and not IsLineTerminator(Ord(AInput[InputPos - 1])) then
+            if InputPos > 1 then
             begin
-              MemoAdd(Memo, PC, InputPos);
-              if not PopBacktrack then Exit;
-              Continue;
+              if not GetCodePointBefore(AInput, InputPos,
+                 AProgram.FlagUnicode, BeforeCP) or
+                 not IsLineTerminator(BeforeCP) then
+              begin
+                MemoAdd(Memo, PC, InputPos);
+                if not PopBacktrack then Exit;
+                Continue;
+              end;
             end;
           end
           else
@@ -456,12 +452,15 @@ begin
         begin
           if Bx <> 0 then
           begin
-            if (InputPos <= Length(AInput)) and
-               not IsLineTerminator(Ord(AInput[InputPos])) then
+            if ReadInputCodePoint(AInput, InputPos, AProgram.FlagUnicode,
+               CodePoint, ByteLen) then
             begin
-              MemoAdd(Memo, PC, InputPos);
-              if not PopBacktrack then Exit;
-              Continue;
+              if not IsLineTerminator(CodePoint) then
+              begin
+                MemoAdd(Memo, PC, InputPos);
+                if not PopBacktrack then Exit;
+                Continue;
+              end;
             end;
           end
           else
