@@ -1,7 +1,6 @@
 ---
 name: create-pr
 description: Commit relevant changes, push the branch, and create a GocciaScript pull request using the repository PR template. Use when the user enters /create-pr.
-disable-model-invocation: true
 ---
 
 # Create PR
