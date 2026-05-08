@@ -11,6 +11,14 @@ test("top-level var NaN without initializer preserves the built-in value", () =>
   expect(typeof NaN).toBe("number");
 });
 
+test("function-scoped var NaN with initializer creates a local binding", () => {
+  const fn = () => {
+    var NaN = 42;
+    return NaN;
+  };
+  expect(fn()).toBe(42);
+});
+
 test("top-level var Infinity without initializer preserves the built-in value", () => {
   expect(typeof Infinity).toBe("number");
   expect(Infinity).toBe(1 / 0);
