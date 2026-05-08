@@ -50,7 +50,7 @@ type
 
     // New Define/Assign pattern
     procedure PredeclareLexicalBinding(const AName: string; const ADeclarationType: TGocciaDeclarationType; const ALine: Integer = 0; const AColumn: Integer = 0);
-    procedure DefineLexicalBinding(const AName: string; const AValue: TGocciaValue; const ADeclarationType: TGocciaDeclarationType; const ALine: Integer = 0; const AColumn: Integer = 0);
+    procedure DefineLexicalBinding(const AName: string; const AValue: TGocciaValue; const ADeclarationType: TGocciaDeclarationType; const ABuiltIn: Boolean = False; const ALine: Integer = 0; const AColumn: Integer = 0);
     procedure AssignBinding(const AName: string; const AValue: TGocciaValue; const ALine: Integer = 0; const AColumn: Integer = 0); virtual;
     procedure ForceUpdateBinding(const AName: string; const AValue: TGocciaValue);
 
@@ -74,6 +74,7 @@ type
 
     function ResolveIdentifier(const AName: string): TGocciaValue; inline;
     function ContainsOwnLexicalBinding(const AName: string): Boolean; inline;
+    function IsBuiltInBinding(const AName: string): Boolean;
     function Contains(const AName: string): Boolean; inline;
     function GetOwnBindingNames: TGocciaStringArray; inline;
 
@@ -344,11 +345,12 @@ begin
   LexicalBinding.Value := TGocciaUndefinedLiteralValue.UndefinedValue;
   LexicalBinding.DeclarationType := ADeclarationType;
   LexicalBinding.Initialized := False;
+  LexicalBinding.BuiltIn := False;
   LexicalBinding.TypeHint := sltUntyped;
   FLexicalBindings.Add(AName, LexicalBinding);
 end;
 
-procedure TGocciaScope.DefineLexicalBinding(const AName: string; const AValue: TGocciaValue; const ADeclarationType: TGocciaDeclarationType; const ALine: Integer = 0; const AColumn: Integer = 0);
+procedure TGocciaScope.DefineLexicalBinding(const AName: string; const AValue: TGocciaValue; const ADeclarationType: TGocciaDeclarationType; const ABuiltIn: Boolean = False; const ALine: Integer = 0; const AColumn: Integer = 0);
 var
   LexicalBinding: TLexicalBinding;
   ExistingLexicalBinding: TLexicalBinding;
@@ -362,6 +364,7 @@ begin
       ExistingLexicalBinding.Value := AValue;
       ExistingLexicalBinding.DeclarationType := ADeclarationType;
       ExistingLexicalBinding.Initialized := True;
+      ExistingLexicalBinding.BuiltIn := ABuiltIn;
       FLexicalBindings.AddOrSetValue(AName, ExistingLexicalBinding);
       Exit;
     end;
@@ -386,6 +389,7 @@ begin
   // - dtLet: no TDZ after declaration statement is processed
   // - dtParameter: parameters have no TDZ
   LexicalBinding.Initialized := True;
+  LexicalBinding.BuiltIn := ABuiltIn;
   LexicalBinding.TypeHint := sltUntyped;
 
   FLexicalBindings.AddOrSetValue(AName, LexicalBinding);
@@ -422,9 +426,24 @@ procedure TGocciaScope.DefineVariableBinding(const AName: string; const AValue: 
 var
   TargetScope: TGocciaScope;
   Binding: TLexicalBinding;
+  ExistingBuiltIn: TLexicalBinding;
+  EffectiveValue: TGocciaValue;
   GlobalObject: TGocciaObjectValue;
 begin
   TargetScope := FindFunctionOrModuleScope;
+  EffectiveValue := AValue;
+
+  // §16.1.7: var/function declarations may shadow built-in globals in
+  // script mode.  Only the global scope carries built-in bindings, so
+  // skip the lookup for function/module-scoped vars (the common case).
+  if (TargetScope.FScopeKind = skGlobal) and
+     TargetScope.FLexicalBindings.TryGetValue(AName, ExistingBuiltIn) and
+     ExistingBuiltIn.BuiltIn then
+  begin
+    if not AHasInitializer then
+      EffectiveValue := ExistingBuiltIn.Value;
+    TargetScope.FLexicalBindings.Remove(AName);
+  end;
 
   if (TargetScope.FScopeKind = skGlobal) and
      (TargetScope.FThisValue is TGocciaObjectValue) then
@@ -432,7 +451,7 @@ begin
     GlobalObject := TGocciaObjectValue(TargetScope.FThisValue);
     if (not AHasInitializer) and GlobalObject.HasOwnProperty(AName) then
       Exit;
-    GlobalObject.AssignProperty(AName, AValue);
+    GlobalObject.AssignProperty(AName, EffectiveValue);
     Exit;
   end;
 
@@ -445,16 +464,17 @@ begin
     // Redeclaration: only update if the source had a syntactic initializer.
     if AHasInitializer then
     begin
-      Binding.Value := AValue;
+      Binding.Value := EffectiveValue;
       TargetScope.FVarBindings.AddOrSetValue(AName, Binding);
     end;
   end
   else
   begin
     // First declaration: create the binding
-    Binding.Value := AValue;
+    Binding.Value := EffectiveValue;
     Binding.DeclarationType := dtVar;
     Binding.Initialized := True;
+    Binding.BuiltIn := False;
     Binding.TypeHint := sltUntyped;
     TargetScope.FVarBindings.AddOrSetValue(AName, Binding);
   end;
@@ -608,6 +628,13 @@ end;
 function TGocciaScope.ContainsOwnLexicalBinding(const AName: string): Boolean; inline;
 begin
   Result := FLexicalBindings.ContainsKey(AName);
+end;
+
+function TGocciaScope.IsBuiltInBinding(const AName: string): Boolean;
+var
+  Binding: TLexicalBinding;
+begin
+  Result := FLexicalBindings.TryGetValue(AName, Binding) and Binding.BuiltIn;
 end;
 
 function TGocciaScope.Contains(const AName: string): Boolean; inline;
