@@ -209,9 +209,9 @@ var
 begin
   inherited Create(AName, AScope, AThrowError);
 
-  AScope.DefineLexicalBinding('undefined', TGocciaUndefinedLiteralValue.UndefinedValue, dtConst);
-  AScope.DefineLexicalBinding('NaN', TGocciaNumberLiteralValue.NaNValue, dtConst);
-  AScope.DefineLexicalBinding('Infinity', TGocciaNumberLiteralValue.InfinityValue, dtConst);
+  AScope.DefineLexicalBinding('undefined', TGocciaUndefinedLiteralValue.UndefinedValue, dtConst, True);
+  AScope.DefineLexicalBinding('NaN', TGocciaNumberLiteralValue.NaNValue, dtConst, True);
+  AScope.DefineLexicalBinding('Infinity', TGocciaNumberLiteralValue.InfinityValue, dtConst, True);
 
   FErrorProto := TGocciaObjectValue.Create;
   FErrorProto.DefineProperty(PROP_NAME, TGocciaPropertyDescriptorData.Create(TGocciaStringLiteralValue.Create(ERROR_NAME), [pfConfigurable, pfWritable]));
@@ -323,36 +323,36 @@ begin
   FSuppressedErrorProto.DefineProperty(PROP_CONSTRUCTOR, TGocciaPropertyDescriptorData.Create(SuppressedErrorConstructorFunc, [pfConfigurable, pfWritable]));
   FDOMExceptionProto.DefineProperty(PROP_CONSTRUCTOR, TGocciaPropertyDescriptorData.Create(DOMExceptionConstructorFunc, [pfConfigurable, pfWritable]));
 
-  AScope.DefineLexicalBinding(ERROR_NAME, ErrorConstructorFunc, dtConst);
-  AScope.DefineLexicalBinding(TYPE_ERROR_NAME, TypeErrorConstructorFunc, dtConst);
-  AScope.DefineLexicalBinding(REFERENCE_ERROR_NAME, ReferenceErrorConstructorFunc, dtConst);
-  AScope.DefineLexicalBinding(RANGE_ERROR_NAME, RangeErrorConstructorFunc, dtConst);
-  AScope.DefineLexicalBinding(SYNTAX_ERROR_NAME, SyntaxErrorConstructorFunc, dtConst);
-  AScope.DefineLexicalBinding(URI_ERROR_NAME, URIErrorConstructorFunc, dtConst);
-  AScope.DefineLexicalBinding(AGGREGATE_ERROR_NAME, AggregateErrorConstructorFunc, dtConst);
-  AScope.DefineLexicalBinding(SUPPRESSED_ERROR_NAME, SuppressedErrorConstructorFunc, dtConst);
-  AScope.DefineLexicalBinding(DOM_EXCEPTION_NAME, DOMExceptionConstructorFunc, dtConst);
+  AScope.DefineLexicalBinding(ERROR_NAME, ErrorConstructorFunc, dtConst, True);
+  AScope.DefineLexicalBinding(TYPE_ERROR_NAME, TypeErrorConstructorFunc, dtConst, True);
+  AScope.DefineLexicalBinding(REFERENCE_ERROR_NAME, ReferenceErrorConstructorFunc, dtConst, True);
+  AScope.DefineLexicalBinding(RANGE_ERROR_NAME, RangeErrorConstructorFunc, dtConst, True);
+  AScope.DefineLexicalBinding(SYNTAX_ERROR_NAME, SyntaxErrorConstructorFunc, dtConst, True);
+  AScope.DefineLexicalBinding(URI_ERROR_NAME, URIErrorConstructorFunc, dtConst, True);
+  AScope.DefineLexicalBinding(AGGREGATE_ERROR_NAME, AggregateErrorConstructorFunc, dtConst, True);
+  AScope.DefineLexicalBinding(SUPPRESSED_ERROR_NAME, SuppressedErrorConstructorFunc, dtConst, True);
+  AScope.DefineLexicalBinding(DOM_EXCEPTION_NAME, DOMExceptionConstructorFunc, dtConst, True);
 
   AScope.DefineLexicalBinding('encodeURI',
-    TGocciaNativeFunctionValue.Create(EncodeURICallback, 'encodeURI', 1), dtConst);
+    TGocciaNativeFunctionValue.Create(EncodeURICallback, 'encodeURI', 1), dtConst, True);
 
   AScope.DefineLexicalBinding('decodeURI',
-    TGocciaNativeFunctionValue.Create(DecodeURICallback, 'decodeURI', 1), dtConst);
+    TGocciaNativeFunctionValue.Create(DecodeURICallback, 'decodeURI', 1), dtConst, True);
 
   AScope.DefineLexicalBinding('encodeURIComponent',
-    TGocciaNativeFunctionValue.Create(EncodeURIComponentCallback, 'encodeURIComponent', 1), dtConst);
+    TGocciaNativeFunctionValue.Create(EncodeURIComponentCallback, 'encodeURIComponent', 1), dtConst, True);
 
   AScope.DefineLexicalBinding('decodeURIComponent',
-    TGocciaNativeFunctionValue.Create(DecodeURIComponentCallback, 'decodeURIComponent', 1), dtConst);
+    TGocciaNativeFunctionValue.Create(DecodeURIComponentCallback, 'decodeURIComponent', 1), dtConst, True);
 end;
 
 procedure TGocciaGlobals.RegisterRuntimeGlobals;
 begin
   FScope.DefineLexicalBinding('queueMicrotask',
-    TGocciaNativeFunctionValue.Create(QueueMicrotaskCallback, 'queueMicrotask', 1), dtConst);
+    TGocciaNativeFunctionValue.Create(QueueMicrotaskCallback, 'queueMicrotask', 1), dtConst, True);
 
   FScope.DefineLexicalBinding('structuredClone',
-    TGocciaNativeFunctionValue.Create(StructuredCloneCallback, 'structuredClone', 1), dtConst);
+    TGocciaNativeFunctionValue.Create(StructuredCloneCallback, 'structuredClone', 1), dtConst, True);
 end;
 
 { NativeError ( message [ , options ] ) — §20.5.6.1.1 (shared by all NativeError constructors)

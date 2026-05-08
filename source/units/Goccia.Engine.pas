@@ -587,7 +587,7 @@ begin
       LoadShimValue(FInterpreter, Shim)
     else
       FInterpreter.GlobalScope.DefineLexicalBinding(Shim.Name,
-        LoadShimValue(FInterpreter, Shim), dtConst);
+        LoadShimValue(FInterpreter, Shim), dtConst, True);
   end;
 end;
 
@@ -745,7 +745,7 @@ begin
   FBuiltinGlobalString := TGocciaGlobalString.Create(CONSTRUCTOR_STRING, Scope, ThrowError);
   FBuiltinGlobals := TGocciaGlobals.Create('Globals', Scope, ThrowError);
   FBuiltinDisposableStack := TGocciaBuiltinDisposableStack.Create('DisposableStack', Scope, ThrowError);
-  Scope.DefineLexicalBinding(CONSTRUCTOR_ITERATOR, TGocciaIteratorValue.CreateGlobalObject, dtConst);
+  Scope.DefineLexicalBinding(CONSTRUCTOR_ITERATOR, TGocciaIteratorValue.CreateGlobalObject, dtConst, True);
   RegisterBuiltinConstructors;
 end;
 
@@ -892,12 +892,12 @@ begin
   if Assigned(FBuiltinArrayBuffer) then
     for Key in FBuiltinArrayBuffer.BuiltinObject.GetAllPropertyNames do
       ArrayBufferConstructor.SetProperty(Key, FBuiltinArrayBuffer.BuiltinObject.GetProperty(Key));
-  FInterpreter.GlobalScope.DefineLexicalBinding(CONSTRUCTOR_ARRAY_BUFFER, ArrayBufferConstructor, dtConst);
+  FInterpreter.GlobalScope.DefineLexicalBinding(CONSTRUCTOR_ARRAY_BUFFER, ArrayBufferConstructor, dtConst, True);
 
   SharedArrayBufferConstructor := TGocciaSharedArrayBufferClassValue.Create(CONSTRUCTOR_SHARED_ARRAY_BUFFER, nil);
   TGocciaSharedArrayBufferValue.ExposePrototype(SharedArrayBufferConstructor);
   SharedArrayBufferConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
-  FInterpreter.GlobalScope.DefineLexicalBinding(CONSTRUCTOR_SHARED_ARRAY_BUFFER, SharedArrayBufferConstructor, dtConst);
+  FInterpreter.GlobalScope.DefineLexicalBinding(CONSTRUCTOR_SHARED_ARRAY_BUFFER, SharedArrayBufferConstructor, dtConst, True);
 
   // Create %TypedArray% intrinsic (not globally exposed per spec §23.2.1)
   FTypedArrayIntrinsic := TGocciaClassValue.Create('TypedArray', nil);
@@ -992,7 +992,7 @@ begin
   TGocciaClassValue.PatchDefaultPrototype(NumberConstructor);
   TGocciaClassValue.PatchDefaultPrototype(BooleanConstructor);
   TGocciaClassValue.PatchDefaultPrototype(FunctionConstructor);
-  FInterpreter.GlobalScope.DefineLexicalBinding('Function', FunctionConstructor, dtConst);
+  FInterpreter.GlobalScope.DefineLexicalBinding('Function', FunctionConstructor, dtConst, True);
 
   // ES2026 §20.4.3: Symbol.prototype's [[Prototype]] is %Object.prototype%
   if Assigned(TGocciaSymbolValue.SharedPrototype) then
@@ -1048,7 +1048,7 @@ begin
     TGocciaTypedArrayValue.SetUint8Prototype(TAConstructor.Prototype);
   end;
 
-  FInterpreter.GlobalScope.DefineLexicalBinding(AName, TAConstructor, dtConst);
+  FInterpreter.GlobalScope.DefineLexicalBinding(AName, TAConstructor, dtConst, True);
 end;
 
 procedure TGocciaEngine.RegisterGlobalThis;
@@ -1084,7 +1084,7 @@ begin
   if Scope.ContainsOwnLexicalBinding('globalThis') then
     Scope.ForceUpdateBinding('globalThis', GlobalThisObj)
   else
-    Scope.DefineLexicalBinding('globalThis', GlobalThisObj, dtConst);
+    Scope.DefineLexicalBinding('globalThis', GlobalThisObj, dtConst, True);
 
   // ES2026 §9.1.2.5 NewGlobalEnvironment: a global Environment Record's
   // [[GlobalThisValue]] is the global object. Top-level `this` resolves
@@ -1150,7 +1150,7 @@ begin
   GocciaObj.AssignProperty('gc', GCFunc);
 
   FGocciaGlobal := GocciaObj;
-  FInterpreter.GlobalScope.DefineLexicalBinding('Goccia', FGocciaGlobal, dtConst);
+  FInterpreter.GlobalScope.DefineLexicalBinding('Goccia', FGocciaGlobal, dtConst, True);
 end;
 
 function TGocciaEngine.GetResolver: TGocciaModuleResolver;

@@ -350,7 +350,7 @@ begin
   end;
   RegisterMemberDefinitions(FRegExpConstructor, FStaticMembers);
 
-  AScope.DefineLexicalBinding(AName, FRegExpConstructor, dtConst);
+  AScope.DefineLexicalBinding(AName, FRegExpConstructor, dtConst, True);
 end;
 
 // ES2026 §22.2.4.2 get RegExp [ @@species ]

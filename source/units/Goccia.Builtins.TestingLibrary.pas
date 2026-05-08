@@ -2384,7 +2384,7 @@ var
       GlobalObject.DefineProperty(AName,
         TGocciaPropertyDescriptorData.Create(AValue, [pfWritable, pfConfigurable]))
     else
-      AScope.DefineLexicalBinding(AName, AValue, dtConst);
+      AScope.DefineLexicalBinding(AName, AValue, dtConst, True);
   end;
 
 begin
@@ -2419,8 +2419,8 @@ begin
   // Private aliases used by generated Test262 wrappers.  Some conformance
   // tests intentionally declare globals named describe/test.
   AScope.DefineLexicalBinding('__gocciaTest262Describe', DescribeFunction,
-    dtConst);
-  AScope.DefineLexicalBinding('__gocciaTest262Test', TestFunction, dtConst);
+    dtConst, True);
+  AScope.DefineLexicalBinding('__gocciaTest262Test', TestFunction, dtConst, True);
 
   ItFunction := TGocciaNativeFunctionValue.Create(It, 'it', 2);
   ConfigureTestFunction(ItFunction);
