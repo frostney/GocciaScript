@@ -2916,6 +2916,8 @@ begin
     if not AExpr.IsPrefix then
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, Slot, 0));
     EmitInstruction(ACtx, EncodeABC(Op, Slot, Slot, 0));
+    if ACtx.Scope.GetLocal(LocalIdx).IsCaptured then
+      EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, Slot, UInt16(Slot)));
     if AExpr.IsPrefix then
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, Slot, 0));
     Exit;
