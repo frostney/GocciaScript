@@ -12,6 +12,7 @@ uses
   Goccia.Error.ThrowErrorCallback,
   Goccia.ObjectModel,
   Goccia.Scope,
+  Goccia.Values.Formatting,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
@@ -30,7 +31,6 @@ type
 
     function FormatArgs(const AArgs: TGocciaArgumentsCollection): string;
     function GroupPrefix: string;
-    function FormatValue(const AValue: TGocciaValue): string;
     procedure EmitLine(const AMethod, ALine: string);
     function GetEnabled: Boolean;
     procedure SetEnabled(const AValue: Boolean);
@@ -72,10 +72,7 @@ implementation
 uses
   SysUtils,
 
-  StringBuffer,
-  TimingUtils,
-
-  Goccia.Values.ArrayValue;
+  TimingUtils;
 
 threadvar
   FStaticMembers: TArray<TGocciaMemberDefinition>;
@@ -176,53 +173,6 @@ begin
   FLogCallback := AValue;
 end;
 
-function TGocciaConsole.FormatValue(const AValue: TGocciaValue): string;
-var
-  Arr: TGocciaArrayValue;
-  Obj: TGocciaObjectValue;
-  I: Integer;
-  Key: string;
-  SB: TStringBuffer;
-  First: Boolean;
-begin
-  if AValue is TGocciaArrayValue then
-  begin
-    Arr := TGocciaArrayValue(AValue);
-    SB := TStringBuffer.Create;
-    SB.AppendChar('[');
-    for I := 0 to Arr.Elements.Count - 1 do
-    begin
-      if I > 0 then
-        SB.Append(', ');
-      SB.Append(FormatValue(Arr.Elements[I]));
-    end;
-    SB.AppendChar(']');
-    Result := SB.ToString;
-  end
-  else if AValue is TGocciaObjectValue then
-  begin
-    Obj := TGocciaObjectValue(AValue);
-    SB := TStringBuffer.Create;
-    SB.AppendChar('{');
-    First := True;
-    for Key in Obj.GetEnumerablePropertyNames do
-    begin
-      if not First then
-        SB.Append(', ');
-      First := False;
-      SB.Append(Key);
-      SB.Append(': ');
-      SB.Append(FormatValue(Obj.GetProperty(Key)));
-    end;
-    SB.AppendChar('}');
-    Result := SB.ToString;
-  end
-  else if AValue is TGocciaStringLiteralValue then
-    Result := '''' + AValue.ToStringLiteral.Value + ''''
-  else
-    Result := AValue.ToStringLiteral.Value;
-end;
-
 function TGocciaConsole.FormatArgs(const AArgs: TGocciaArgumentsCollection): string;
 var
   I: Integer;
@@ -232,7 +182,7 @@ begin
   begin
     if I > 0 then
       Result := Result + ' ';
-    Result := Result + AArgs.GetElement(I).ToStringLiteral.Value;
+    Result := Result + FormatForDisplay(AArgs.GetElement(I));
   end;
 end;
 
@@ -282,7 +232,7 @@ begin
   if AArgs.Length >= 1 then
   begin
     Value := AArgs.GetElement(0);
-    EmitLine('dir', GroupPrefix + FormatValue(Value));
+    EmitLine('dir', GroupPrefix + FormatForDisplay(Value));
   end;
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
@@ -302,7 +252,7 @@ begin
       if AArgs.Length >= 2 then
       begin
         for I := 1 to AArgs.Length - 1 do
-          Msg := Msg + ' ' + AArgs.GetElement(I).ToStringLiteral.Value;
+          Msg := Msg + ' ' + FormatForDisplay(AArgs.GetElement(I));
       end;
       EmitLine('assert', GroupPrefix + Msg);
     end;
@@ -437,7 +387,7 @@ end;
 function TGocciaConsole.ConsoleTable(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   if AArgs.Length >= 1 then
-    EmitLine('table', GroupPrefix + FormatValue(AArgs.GetElement(0)));
+    EmitLine('table', GroupPrefix + FormatForDisplay(AArgs.GetElement(0)));
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 

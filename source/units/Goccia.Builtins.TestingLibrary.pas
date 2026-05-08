@@ -299,31 +299,15 @@ uses
   Goccia.Values.ClassValue,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
+  Goccia.Values.Formatting,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.PromiseValue,
   Goccia.Values.SetValue,
   Goccia.Values.SymbolValue;
 
-// Render a value for an assertion failure message. Mirrors the philosophy of
-// Jest/Vitest pretty-format: objects are dumped structurally (via ToDebugString)
-// rather than passed through user-defined toString, so failure messages are
-// (a) deterministic, (b) safe on objects without a working prototype chain
-// (e.g. Object.create(null)), and (c) free of side effects from getters or
-// proxy traps. Primitives use ToStringLiteral, which never invokes user code.
-// Symbols use ToDisplayString to avoid the spec ToString TypeError on Symbol.
 function FormatForMessage(const AValue: TGocciaValue): string;
 begin
-  if not Assigned(AValue) then
-  begin
-    Result := 'undefined';
-    Exit;
-  end;
-  if AValue is TGocciaSymbolValue then
-    Result := TGocciaSymbolValue(AValue).ToDisplayString.Value
-  else if AValue is TGocciaObjectValue then
-    Result := TGocciaObjectValue(AValue).ToDebugString
-  else
-    Result := AValue.ToStringLiteral.Value;
+  Result := FormatForDisplay(AValue);
 end;
 
 function FormatThrowValueDetail(const AValue: TGocciaValue): string;
