@@ -2542,7 +2542,7 @@ var
   Promise: TGocciaPromiseValue;
   EffectiveThis: TGocciaValue;
 begin
-  if FSloppyThis and Assigned(FVM.FGlobalThisValue) and
+  if (not FStrictThis) and Assigned(FVM.FGlobalThisValue) and
      (not Assigned(AThisValue) or
       (AThisValue is TGocciaUndefinedLiteralValue) or
       (AThisValue is TGocciaNullLiteralValue)) then
@@ -2603,7 +2603,7 @@ var
   Promise: TGocciaPromiseValue;
   EffectiveThis: TGocciaValue;
 begin
-  if FSloppyThis and Assigned(FVM.FGlobalThisValue) and
+  if (not FStrictThis) and Assigned(FVM.FGlobalThisValue) and
      (not Assigned(AThisValue) or
       (AThisValue is TGocciaUndefinedLiteralValue) or
       (AThisValue is TGocciaNullLiteralValue)) then
@@ -2650,7 +2650,7 @@ var
   Promise: TGocciaPromiseValue;
   EffectiveThis: TGocciaValue;
 begin
-  if FSloppyThis and Assigned(FVM.FGlobalThisValue) and
+  if (not FStrictThis) and Assigned(FVM.FGlobalThisValue) and
      (not Assigned(AThisValue) or
       (AThisValue is TGocciaUndefinedLiteralValue) or
       (AThisValue is TGocciaNullLiteralValue)) then
@@ -2699,7 +2699,7 @@ var
   Promise: TGocciaPromiseValue;
   EffectiveThis: TGocciaValue;
 begin
-  if FSloppyThis and Assigned(FVM.FGlobalThisValue) and
+  if (not FStrictThis) and Assigned(FVM.FGlobalThisValue) and
      (not Assigned(AThisValue) or
       (AThisValue is TGocciaUndefinedLiteralValue) or
       (AThisValue is TGocciaNullLiteralValue)) then
@@ -2752,7 +2752,7 @@ var
   Promise: TGocciaPromiseValue;
   EffectiveThis: TGocciaValue;
 begin
-  if FSloppyThis and Assigned(FVM.FGlobalThisValue) and
+  if (not FStrictThis) and Assigned(FVM.FGlobalThisValue) and
      (not Assigned(AThisValue) or
       (AThisValue is TGocciaUndefinedLiteralValue) or
       (AThisValue is TGocciaNullLiteralValue)) then
@@ -8722,7 +8722,7 @@ begin
              (not BytecodeFunction.FClosure.Template.IsAsync) and
              (not BytecodeFunction.FClosure.Template.IsGenerator) then
           begin
-            if BytecodeFunction.FSloppyThis and Assigned(FGlobalThisValue) then
+            if (not BytecodeFunction.FStrictThis) and Assigned(FGlobalThisValue) then
               CallThisRegister := VMValueToRegisterFast(FGlobalThisValue)
             else
               CallThisRegister := RegisterUndefined;
@@ -8828,7 +8828,7 @@ begin
                     CallThisRegister := RegisterUndefined
                   else
                     CallThisRegister := FRegisters[A + 1];
-                  if BytecodeFunction.FSloppyThis and Assigned(FGlobalThisValue) and
+                  if (not BytecodeFunction.FStrictThis) and Assigned(FGlobalThisValue) and
                      (CallThisRegister.Kind in [grkUndefined, grkNull]) then
                     CallThisRegister := VMValueToRegisterFast(FGlobalThisValue);
                   PushFrame(A, Frame.IP, Template, PrevCovLine, ProfileEntryTimestamp);
@@ -8877,7 +8877,7 @@ begin
                 begin
                   ArgsArray := TGocciaArrayValue(FRegisters[A + 2].ObjectValue);
                   CallThisRegister := FRegisters[A + 1];
-                  if BytecodeFunction.FSloppyThis and Assigned(FGlobalThisValue) and
+                  if (not BytecodeFunction.FStrictThis) and Assigned(FGlobalThisValue) and
                      (CallThisRegister.Kind in [grkUndefined, grkNull]) then
                     CallThisRegister := VMValueToRegisterFast(FGlobalThisValue);
                   PushFrame(A, Frame.IP, Template, PrevCovLine, ProfileEntryTimestamp);

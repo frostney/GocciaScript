@@ -139,7 +139,7 @@ procedure TGocciaFunctionValue.BindThis(const ACallScope: TGocciaScope; const AT
 var
   Root: TGocciaScope;
 begin
-  if FSloppyThis and
+  if (not FStrictThis) and
      (not Assigned(AThisValue) or
       (AThisValue is TGocciaUndefinedLiteralValue) or
       (AThisValue is TGocciaNullLiteralValue)) then
