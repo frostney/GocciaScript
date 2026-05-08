@@ -433,10 +433,10 @@ begin
   EffectiveValue := AValue;
 
   // §16.1.7: var/function declarations may shadow built-in globals in
-  // script mode.  Remove the lexical binding so the var binding is
-  // visible through GetBinding.  Preserve the original value when the
-  // declaration has no initializer (e.g. bare `var NaN;`).
-  if TargetScope.FLexicalBindings.TryGetValue(AName, ExistingBuiltIn) and
+  // script mode.  Only the global scope carries built-in bindings, so
+  // skip the lookup for function/module-scoped vars (the common case).
+  if (TargetScope.FScopeKind = skGlobal) and
+     TargetScope.FLexicalBindings.TryGetValue(AName, ExistingBuiltIn) and
      ExistingBuiltIn.BuiltIn then
   begin
     if not AHasInitializer then
