@@ -52,6 +52,7 @@ type
 
 function CreateIteratorResult(const AValue: TGocciaValue; const ADone: Boolean): TGocciaObjectValue;
 function InvokeIteratorCallback(const ACallback: TGocciaValue; const AValue: TGocciaValue; const AIndex: Integer): TGocciaValue;
+procedure CloseIteratorPreservingError(const AIterator: TGocciaIteratorValue);
 
 implementation
 
@@ -831,6 +832,7 @@ begin
         end;
       except
         // Close and unroot already-acquired iterators before re-raising
+        AcquireExceptionObject;
         for J := 0 to Acquired - 1 do
         begin
           CloseIteratorPreservingError(Iterators[J]);
@@ -975,6 +977,7 @@ begin
     end;
   except
     // Close and unroot already-acquired iterators before re-raising
+    AcquireExceptionObject;
     for J := 0 to Acquired - 1 do
     begin
       CloseIteratorPreservingError(Iterators[J]);

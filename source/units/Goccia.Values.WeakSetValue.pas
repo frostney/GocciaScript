@@ -226,6 +226,7 @@ begin
             NextValue := Iterator.DirectNext(Done);
           end;
         except
+          AcquireExceptionObject;
           CloseIteratorPreservingError(Iterator);
           raise;
         end;

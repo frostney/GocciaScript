@@ -2118,6 +2118,7 @@ begin
               IterResult := Iterator.AdvanceNext;
             end;
           except
+            AcquireExceptionObject;
             CloseIteratorPreservingError(Iterator);
             raise;
           end;
@@ -2228,6 +2229,7 @@ begin
             IterResult := Iterator.AdvanceNext;
           end;
         except
+          AcquireExceptionObject;
           CloseIteratorPreservingError(Iterator);
           raise;
         end;

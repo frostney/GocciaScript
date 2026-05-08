@@ -4259,6 +4259,7 @@ begin
         // §7.4.10 step 5 abrupt-completion path: DirectNext (and any
         // user code it calls) can throw.  Close the iterator, swallow
         // any error from iter.return(), and re-raise the original.
+        AcquireExceptionObject;
         CloseIteratorPreservingError(TGocciaIteratorValue(IteratorValue));
         raise;
       end;
@@ -4340,6 +4341,7 @@ begin
         // SErrorIteratorResultNotObject throw, AwaitValue rejections,
         // and any error raised by user-supplied next().  iter.return()
         // is best-effort and must not replace the original error.
+        AcquireExceptionObject;
         CloseRawIteratorPreservingError(IteratorValue);
         raise;
       end;
@@ -4436,6 +4438,7 @@ begin
         // (user next() / wrapped iterator may execute arbitrary code).
         // Close the iterator while preserving the original error per
         // ES2024 IteratorClose semantics.
+        AcquireExceptionObject;
         CloseIteratorPreservingError(TGocciaIteratorValue(IteratorValue));
         raise;
       end;
@@ -4475,6 +4478,7 @@ begin
       // §7.4.10 step 5 abrupt-completion path: covers user next()
       // throws and our SErrorIteratorResultNotObject TypeError.  Call
       // iter.return() best-effort and surface the original exception.
+      AcquireExceptionObject;
       CloseRawIteratorPreservingError(IteratorValue);
       raise;
     end;

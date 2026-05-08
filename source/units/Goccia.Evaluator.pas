@@ -5918,6 +5918,7 @@ begin
             end;
           end;
         except
+          AcquireExceptionObject;
           CloseIteratorPreservingError(Iterator);
           raise;
         end;
@@ -6164,6 +6165,7 @@ begin
         // error from iter.return() so the original abrupt completion
         // wins (IteratorClose §7.4.10 step 4: completion's [[Type]] is
         // throw, return ? completion).
+        AcquireExceptionObject;
         CloseIteratorPreservingError(Iterator);
         raise;
       end;

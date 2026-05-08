@@ -261,6 +261,7 @@ begin
       try
         UnwrappedValue := AwaitValue(Value);
       except
+        AcquireExceptionObject;
         if ACloseOnRejection and not Done then
         begin
           CloseIteratorPreservingError(FIterator);

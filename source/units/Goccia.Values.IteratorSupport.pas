@@ -147,13 +147,7 @@ end;
 
 procedure CloseIteratorPreservingError(const AIterator: TGocciaIteratorValue);
 begin
-  if not Assigned(AIterator) then
-    Exit;
-  try
-    AIterator.Close;
-  except
-    // Iterator close errors must not replace the original abrupt completion.
-  end;
+  Goccia.Values.IteratorValue.CloseIteratorPreservingError(AIterator);
 end;
 
 end.
