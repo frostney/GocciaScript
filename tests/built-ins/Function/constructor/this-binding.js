@@ -58,4 +58,30 @@ describe("Function constructor this-binding", () => {
     const f = Function("return this");
     expect(f.apply(null)).toBe(globalThis);
   });
+
+  test("body with 'use strict' directive keeps this undefined", () => {
+    const f = Function('"use strict"; return typeof this;');
+    expect(f()).toBe("undefined");
+  });
+
+  test("new Function with 'use strict' directive keeps this undefined", () => {
+    const f = new Function('"use strict"; return typeof this;');
+    expect(f()).toBe("undefined");
+  });
+
+  test("body with single-quoted 'use strict' keeps this undefined", () => {
+    const f = Function("'use strict'; return typeof this;");
+    expect(f()).toBe("undefined");
+  });
+
+  test("'use strict' body with leading whitespace keeps this undefined", () => {
+    const f = Function('  "use strict"; return typeof this;');
+    expect(f()).toBe("undefined");
+  });
+
+  test("'use strict' body still coerces when called with explicit receiver", () => {
+    const obj = { x: 1 };
+    const f = Function('"use strict"; return this.x;');
+    expect(f.call(obj)).toBe(1);
+  });
 });
