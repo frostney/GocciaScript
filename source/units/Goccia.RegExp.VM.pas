@@ -19,8 +19,6 @@ function ExecuteRegExpVM(const AProgram: TRegExpProgram;
 
 implementation
 
-{$rangechecks off}
-
 uses
   SysUtils,
 
@@ -58,10 +56,11 @@ end;
 
 function MemoHash(APC, APos: Integer): Integer; inline;
 var
-  H: UInt32;
+  H: Cardinal;
 begin
-  H := UInt32(APC) * 2654435761;
-  H := H xor (UInt32(APos) * 2246822519);
+  H := Cardinal(APC);
+  H := (H shl 5) xor (H shr 3) xor Cardinal(APos);
+  H := H xor (H shr 7) xor (H shr 15);
   Result := Integer(H and (MEMO_CAPACITY - 1));
 end;
 
