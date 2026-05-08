@@ -48,4 +48,14 @@ describe("Function constructor this-binding", () => {
     const bound = f.bind(obj);
     expect(bound()).toBe(99);
   });
+
+  test("Function.call() with no args coerces to globalThis", () => {
+    const f = Function("return this");
+    expect(f.call()).toBe(globalThis);
+  });
+
+  test("Function.apply(null) coerces to globalThis", () => {
+    const f = Function("return this");
+    expect(f.apply(null)).toBe(globalThis);
+  });
 });
