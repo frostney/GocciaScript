@@ -136,9 +136,21 @@ begin
 end;
 
 procedure TGocciaFunctionValue.BindThis(const ACallScope: TGocciaScope; const AThisValue: TGocciaValue);
+var
+  Root: TGocciaScope;
 begin
-  // Non-arrow function: use call-site this (shorthand methods, class methods, getters/setters)
-  ACallScope.ThisValue := AThisValue;
+  if FSloppyThis and
+     (not Assigned(AThisValue) or
+      (AThisValue is TGocciaUndefinedLiteralValue) or
+      (AThisValue is TGocciaNullLiteralValue)) then
+  begin
+    Root := FClosure;
+    while Assigned(Root.Parent) do
+      Root := Root.Parent;
+    ACallScope.ThisValue := Root.ThisValue;
+  end
+  else
+    ACallScope.ThisValue := AThisValue;
 end;
 
 function TGocciaFunctionValue.CreateCallScope: TGocciaScope;

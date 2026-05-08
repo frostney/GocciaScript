@@ -111,3 +111,23 @@ test("delete null?.[computed] returns true without evaluating key", () => {
   expect(delete null?.[key]).toBe(true);
   expect(called).toBe(false);
 });
+
+test("delete non-configurable property with computed key throws TypeError", () => {
+  const obj = Object.freeze({ x: 1 });
+  const key = "x";
+  expect(() => { delete obj[key]; }).toThrow(TypeError);
+});
+
+test("delete non-configurable property with dynamic key throws TypeError", () => {
+  const obj = {};
+  Object.defineProperty(obj, "fixed", { value: 1, configurable: false });
+  const key = "fixed";
+  expect(() => { delete obj[key]; }).toThrow(TypeError);
+});
+
+test("delete configurable property with computed key succeeds", () => {
+  const obj = { removable: 42 };
+  const key = "removable";
+  expect(delete obj[key]).toBe(true);
+  expect(obj.removable).toBeUndefined();
+});

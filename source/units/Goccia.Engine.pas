@@ -1675,6 +1675,8 @@ begin
         // ES2026 §20.2.1.1.1: the function's name is 'anonymous'
         if Result is TGocciaFunctionValue then
           TGocciaFunctionValue(Result).Name := 'anonymous';
+        // ES2026 §15.2.2.4: Function-constructor bodies are non-strict
+        Result.SloppyThis := True;
       finally
         ProgramNode.Free;
       end;

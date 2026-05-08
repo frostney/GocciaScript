@@ -29,6 +29,7 @@ type
   // Base class for all callable functions
   TGocciaFunctionBase = class(TGocciaObjectValue)
   protected
+    FSloppyThis: Boolean;
     // Subclasses should override these to provide name/length
     function GetFunctionLength: Integer; virtual;
     function GetFunctionName: string; virtual;
@@ -63,6 +64,9 @@ type
     function TypeName: string; override;
     function TypeOf: string; override;
 
+    // ES2026 §15.2.2.4: Function-constructor-created functions are non-strict
+    // for this-binding (OrdinaryCallBindThis coerces undefined/null to globalThis).
+    property SloppyThis: Boolean read FSloppyThis write FSloppyThis;
   end;
 
   // Helper class for bound functions
