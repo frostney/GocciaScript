@@ -152,7 +152,7 @@ begin
 end;
 
 function ReadInputCodePoint(const AInput: string; APos: Integer;
-  AUnicode: Boolean; out ACodePoint: Cardinal; out AByteLen: Integer): Boolean;
+  out ACodePoint: Cardinal; out AByteLen: Integer): Boolean;
 begin
   if (APos < 1) or (APos > Length(AInput)) then
   begin
@@ -160,7 +160,8 @@ begin
     AByteLen := 0;
     Exit(False);
   end;
-  Result := TryReadUTF8CodePoint(AInput, APos, ACodePoint, AByteLen);
+  Result := TryReadUTF8CodePointAllowSurrogates(AInput, APos, ACodePoint,
+    AByteLen);
   if not Result then
   begin
     ACodePoint := Ord(AInput[APos]);
@@ -170,7 +171,7 @@ begin
 end;
 
 function GetCodePointBefore(const AInput: string; APos: Integer;
-  AUnicode: Boolean; out ACodePoint: Cardinal): Boolean;
+  out ACodePoint: Cardinal): Boolean;
 var
   StartPos, ByteLen: Integer;
 begin
@@ -178,15 +179,11 @@ begin
   ACodePoint := 0;
   if APos <= 1 then
     Exit;
-  if not AUnicode then
-  begin
-    ACodePoint := Ord(AInput[APos - 1]);
-    Exit(True);
-  end;
   StartPos := APos - 1;
   while (StartPos > 1) and ((Ord(AInput[StartPos]) and $C0) = $80) do
     Dec(StartPos);
-  Result := TryReadUTF8CodePoint(AInput, StartPos, ACodePoint, ByteLen);
+  Result := TryReadUTF8CodePointAllowSurrogates(AInput, StartPos, ACodePoint,
+    ByteLen);
 end;
 
 function RunVM(const AProgram: TRegExpProgram; const AInput: string;
@@ -269,7 +266,7 @@ begin
     case Op of
       RX_CHAR:
         begin
-          if not ReadInputCodePoint(AInput, InputPos, AProgram.FlagUnicode,
+          if not ReadInputCodePoint(AInput, InputPos,
              CodePoint, ByteLen) then
           begin
             MemoAdd(Memo, PC, InputPos);
@@ -289,7 +286,7 @@ begin
 
       RX_CHAR_CLASS:
         begin
-          if not ReadInputCodePoint(AInput, InputPos, AProgram.FlagUnicode,
+          if not ReadInputCodePoint(AInput, InputPos,
              CodePoint, ByteLen) then
           begin
             MemoAdd(Memo, PC, InputPos);
@@ -308,7 +305,7 @@ begin
 
       RX_CHAR_CLASS_NEG:
         begin
-          if not ReadInputCodePoint(AInput, InputPos, AProgram.FlagUnicode,
+          if not ReadInputCodePoint(AInput, InputPos,
              CodePoint, ByteLen) then
           begin
             MemoAdd(Memo, PC, InputPos);
@@ -327,7 +324,7 @@ begin
 
       RX_ANY:
         begin
-          if not ReadInputCodePoint(AInput, InputPos, AProgram.FlagUnicode,
+          if not ReadInputCodePoint(AInput, InputPos,
              CodePoint, ByteLen) then
           begin
             MemoAdd(Memo, PC, InputPos);
@@ -393,13 +390,13 @@ begin
           LookMatched := True;
           while RefPos < RefEnd do
           begin
-            if not ReadInputCodePoint(AInput, RefPos, AProgram.FlagUnicode,
+            if not ReadInputCodePoint(AInput, RefPos,
                RefCP, RefByteLen) then
             begin
               LookMatched := False;
               Break;
             end;
-            if not ReadInputCodePoint(AInput, InputPos, AProgram.FlagUnicode,
+            if not ReadInputCodePoint(AInput, InputPos,
                InputCP, InputByteLen) then
             begin
               LookMatched := False;
@@ -428,8 +425,7 @@ begin
           begin
             if InputPos > 1 then
             begin
-              if not GetCodePointBefore(AInput, InputPos,
-                 AProgram.FlagUnicode, BeforeCP) or
+              if not GetCodePointBefore(AInput, InputPos, BeforeCP) or
                  not IsLineTerminator(BeforeCP) then
               begin
                 MemoAdd(Memo, PC, InputPos);
@@ -454,7 +450,7 @@ begin
         begin
           if Bx <> 0 then
           begin
-            if ReadInputCodePoint(AInput, InputPos, AProgram.FlagUnicode,
+            if ReadInputCodePoint(AInput, InputPos,
                CodePoint, ByteLen) then
             begin
               if not IsLineTerminator(CodePoint) then
@@ -482,9 +478,9 @@ begin
           Negated := Bx <> 0;
           BeforeIsWord := False;
           AfterIsWord := False;
-          if GetCodePointBefore(AInput, InputPos, AProgram.FlagUnicode, BeforeCP) then
+          if GetCodePointBefore(AInput, InputPos, BeforeCP) then
             BeforeIsWord := IsWordChar(BeforeCP);
-          if ReadInputCodePoint(AInput, InputPos, AProgram.FlagUnicode,
+          if ReadInputCodePoint(AInput, InputPos,
              CodePoint, ByteLen) then
             AfterIsWord := IsWordChar(CodePoint);
           if Negated then
@@ -639,13 +635,8 @@ begin
     end;
     if StartPos > Length(AInput) then
       Break;
-    if AProgram.FlagUnicode then
-    begin
-      if TryReadUTF8CodePoint(AInput, StartPos, CodePoint, ByteLen) then
-        Inc(StartPos, ByteLen)
-      else
-        Inc(StartPos);
-    end
+    if TryReadUTF8CodePointAllowSurrogates(AInput, StartPos, CodePoint, ByteLen) then
+      Inc(StartPos, ByteLen)
     else
       Inc(StartPos);
   end;
