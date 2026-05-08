@@ -88,6 +88,8 @@ uses
   StrUtils,
   SysUtils,
 
+  IntlICU,
+  IntlTypes,
   TextSemantics,
 
   Goccia.Constants.PropertyNames,
@@ -653,14 +655,36 @@ end;
 
 // ES2026 §22.1.3.27 String.prototype.toLocaleUpperCase([ reserved1 [ , reserved2 ]])
 function TGocciaStringObjectValue.StringToLocaleUpperCase(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  StringValue, Locale, UpperResult: string;
 begin
-  Result := StringToUpperCase(AArgs, AThisValue);
+  StringValue := ExtractStringValue(AThisValue);
+  Locale := '';
+  if AArgs.Length > 0 then
+    Locale := AArgs.GetElement(0).ToStringLiteral.Value;
+  if (Locale = '') then
+    Locale := 'en';
+  if TryICUUpperCase(Locale, StringValue, UpperResult) then
+    Result := TGocciaStringLiteralValue.Create(UpperResult)
+  else
+    Result := StringToUpperCase(AArgs, AThisValue);
 end;
 
 // ES2026 §22.1.3.26 String.prototype.toLocaleLowerCase([ reserved1 [ , reserved2 ]])
 function TGocciaStringObjectValue.StringToLocaleLowerCase(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  StringValue, Locale, LowerResult: string;
 begin
-  Result := StringToLowerCase(AArgs, AThisValue);
+  StringValue := ExtractStringValue(AThisValue);
+  Locale := '';
+  if AArgs.Length > 0 then
+    Locale := AArgs.GetElement(0).ToStringLiteral.Value;
+  if (Locale = '') then
+    Locale := 'en';
+  if TryICULowerCase(Locale, StringValue, LowerResult) then
+    Result := TGocciaStringLiteralValue.Create(LowerResult)
+  else
+    Result := StringToLowerCase(AArgs, AThisValue);
 end;
 
 // ES2026 §22.1.3.22 String.prototype.slice(start, end)
@@ -1988,20 +2012,26 @@ end;
 // ES2026 §22.1.3.11 String.prototype.localeCompare(that)
 function TGocciaStringObjectValue.StringLocaleCompare(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
-  StringValue, ThatString: string;
+  StringValue, ThatString, Locale: string;
+  ICUResult: Integer;
 begin
-  // Step 1: Let O be RequireObjectCoercible(this value)
-  // Step 2: Let S be ToString(O)
   StringValue := ExtractStringValue(AThisValue);
 
-  // Step 3: Let That be ToString(that)
   if AArgs.Length = 0 then
     ThatString := 'undefined'
   else
     ThatString := AArgs.GetElement(0).ToStringLiteral.Value;
 
-  // Step 4: Compare S and That, return negative, zero, or positive
-  if StringValue < ThatString then
+  Locale := '';
+  if AArgs.Length > 1 then
+    Locale := AArgs.GetElement(1).ToStringLiteral.Value;
+  if Locale = '' then
+    Locale := 'en';
+
+  if TryICUCompareStrings(Locale, UnicodeString(StringValue),
+    UnicodeString(ThatString), icsVariant, False, ICUResult) then
+    Result := TGocciaNumberLiteralValue.Create(ICUResult)
+  else if StringValue < ThatString then
     Result := TGocciaNumberLiteralValue.Create(-1)
   else if StringValue > ThatString then
     Result := TGocciaNumberLiteralValue.Create(1)

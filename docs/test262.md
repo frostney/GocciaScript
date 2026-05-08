@@ -274,9 +274,8 @@ Default categories: `built-ins, harness, intl402, language, staging`
 
 - `annexB` is legacy/deprecated browser-only behavior we don't intend
   to support.
-- `intl402` covers Intl APIs Goccia largely lacks; those tests fail
-  honestly and surface in the per-category breakdown so the gap is
-  visible.
+- `intl402` covers Intl APIs (ECMA-402); tests exercise
+  `Intl.getCanonicalLocales`, constructors, and formatting operations.
 - `staging` is forward-looking proposals — engine-readiness signal.
 - `harness` verifies test262's own harness functions work under our
   engine.

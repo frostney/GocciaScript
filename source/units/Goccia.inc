@@ -6,6 +6,12 @@
 {$DEFINE GOCCIA_TEMPORAL_EMBEDDED_TZDATA}
 {$ENDIF}
 
+{ Intl embeds a minimal CLDR subset so locale canonicalization and
+  formatting work even when system ICU is unavailable. }
+{$IFNDEF GOCCIA_INTL_NO_EMBEDDED_CLDR}
+{$DEFINE GOCCIA_INTL_EMBEDDED_CLDR}
+{$ENDIF}
+
 { Uncomment to enable bridge-crossing metrics on the GocciaScript runtime.
   When enabled, TGocciaRuntimeOperations tracks per-operation counts and
   prints a summary to stderr on destruction. }

@@ -785,6 +785,19 @@ resourcestring
   SErrorResponseNotResponse = 'Response method called on non-Response object';
   SErrorResponseBodyAlreadyUsed = 'body has already been consumed';
 
+  // Intl errors
+  SErrorIntlInvalidLanguageTag = 'Invalid language tag: %s';
+  SErrorIntlUnsupportedKey = '''%s'' is not a valid key for supportedValuesOf';
+  SErrorIntlInvalidOption = 'Invalid value ''%s'' for option ''%s''';
+  SErrorIntlInvalidCurrencyCode = 'Invalid currency code: %s';
+  SErrorIntlInvalidUnit = 'Invalid unit: %s';
+  SErrorIntlMissingCurrency = 'Currency must be provided when style is ''currency''';
+  SErrorIntlMissingUnit = 'Unit must be provided when style is ''unit''';
+  SErrorIntlMissingType = 'Required option ''type'' not specified';
+  SErrorIntlInvalidCode = 'Invalid code ''%s'' for type ''%s''';
+  SErrorIntlSegmenterNotSegments = 'Method called on non-Segments object';
+  SErrorIntlNotIntlObject = '%s method called on incompatible object';
+
 implementation
 
 end.

@@ -1,0 +1,143 @@
+unit ICU;
+
+{$I Shared.inc}
+
+interface
+
+uses
+  DynLibs;
+
+function TryGetICULibraryHandle(out AHandle: TLibHandle): Boolean;
+function ICULibraryAvailable: Boolean;
+
+implementation
+
+uses
+  SysUtils;
+
+const
+  {$IFDEF DARWIN}
+  ICU_LIBRARY_NAME = 'libicucore.dylib';
+  {$ENDIF}
+  {$IFDEF MSWINDOWS}
+  ICU_LIBRARY_PRIMARY = 'icu.dll';
+  ICU_LIBRARY_FALLBACK = 'icuin.dll';
+  {$ENDIF}
+  {$IFDEF LINUX}
+  ICU_I18N_BASE = 'libicui18n.so';
+  ICU_UC_BASE = 'libicuuc.so';
+  ICU_VERSION_MAX = 76;
+  ICU_VERSION_MIN = 70;
+  {$ENDIF}
+
+var
+  LibraryHandle: TLibHandle;
+  LoadAttempted: Boolean;
+  LoadSucceeded: Boolean;
+  InitLock: TRTLCriticalSection;
+  {$IFDEF LINUX}
+  UCHandle: TLibHandle;
+  {$ENDIF}
+
+{$IFDEF LINUX}
+function TryLoadLinuxICU(out AHandle: TLibHandle): Boolean;
+var
+  Version: Integer;
+  LibName, UCLibName: string;
+begin
+  Result := False;
+  AHandle := NilHandle;
+  UCHandle := NilHandle;
+
+  for Version := ICU_VERSION_MAX downto ICU_VERSION_MIN do
+  begin
+    LibName := ICU_I18N_BASE + '.' + IntToStr(Version);
+    UCLibName := ICU_UC_BASE + '.' + IntToStr(Version);
+    AHandle := LoadLibrary(LibName);
+    if AHandle <> NilHandle then
+    begin
+      UCHandle := LoadLibrary(UCLibName);
+      if UCHandle = NilHandle then
+      begin
+        UnloadLibrary(AHandle);
+        AHandle := NilHandle;
+        Continue;
+      end;
+      Result := True;
+      Exit;
+    end;
+  end;
+
+  AHandle := LoadLibrary(ICU_I18N_BASE);
+  if AHandle <> NilHandle then
+  begin
+    UCHandle := LoadLibrary(ICU_UC_BASE);
+    if UCHandle = NilHandle then
+    begin
+      UnloadLibrary(AHandle);
+      AHandle := NilHandle;
+    end
+    else
+      Result := True;
+  end;
+end;
+{$ENDIF}
+
+function TryGetICULibraryHandle(out AHandle: TLibHandle): Boolean;
+var
+  LoadedHandle: TLibHandle;
+begin
+  EnterCriticalSection(InitLock);
+  try
+    if not LoadAttempted then
+    begin
+      LoadAttempted := True;
+      LoadedHandle := NilHandle;
+
+      {$IFDEF DARWIN}
+      LoadedHandle := LoadLibrary(ICU_LIBRARY_NAME);
+      LoadSucceeded := LoadedHandle <> NilHandle;
+      {$ENDIF}
+
+      {$IFDEF MSWINDOWS}
+      LoadedHandle := LoadLibrary(ICU_LIBRARY_PRIMARY);
+      if LoadedHandle = NilHandle then
+        LoadedHandle := LoadLibrary(ICU_LIBRARY_FALLBACK);
+      LoadSucceeded := LoadedHandle <> NilHandle;
+      {$ENDIF}
+
+      {$IFDEF LINUX}
+      LoadSucceeded := TryLoadLinuxICU(LoadedHandle);
+      {$ENDIF}
+
+      if LoadSucceeded then
+        LibraryHandle := LoadedHandle;
+    end;
+
+    AHandle := LibraryHandle;
+    Result := LoadSucceeded;
+  finally
+    LeaveCriticalSection(InitLock);
+  end;
+end;
+
+function ICULibraryAvailable: Boolean;
+var
+  Dummy: TLibHandle;
+begin
+  Result := TryGetICULibraryHandle(Dummy);
+end;
+
+initialization
+  InitCriticalSection(InitLock);
+  LibraryHandle := NilHandle;
+  LoadAttempted := False;
+  LoadSucceeded := False;
+  {$IFDEF LINUX}
+  UCHandle := NilHandle;
+  {$ENDIF}
+
+finalization
+  DoneCriticalSection(InitLock);
+
+end.

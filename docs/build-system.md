@@ -489,6 +489,14 @@ The generator requires `zic`, `tar`, and `fpcres`. `fpcres` writes the FreePasca
 
 Temporal embeds this generated timezone resource by default through `source/units/Goccia.inc`. Define `GOCCIA_TEMPORAL_NO_EMBEDDED_TZDATA` to build without the resource fallback.
 
+### Generated Intl Data
+
+`source/generated/Generated.IntlData.pas` and `source/generated/Generated.IntlData.res` are produced by `scripts/generate-intl-data.js`. By default, the generator downloads CLDR JSON data, packs it into a single resource payload, and emits a small Pascal unit that links the resource.
+
+The generator requires `fpcres`. `fpcres` writes the FreePascal resource consumed by `{$R Generated.IntlData.res}`.
+
+Intl embeds this generated CLDR resource by default through `source/units/Goccia.inc`. Define `GOCCIA_INTL_NO_EMBEDDED_CLDR` to build without the resource fallback.
+
 ## CI/CD
 
 GitHub Actions CI is split into two workflow files:

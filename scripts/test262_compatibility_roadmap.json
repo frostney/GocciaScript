@@ -162,47 +162,47 @@
       "target": "arraybuffer-typedarray"
     },
     "Intl": {
-      "status": "excluded-by-language-design",
+      "status": "implemented",
       "target": "intl"
     },
     "Intl-enumeration": {
-      "status": "excluded-by-language-design",
+      "status": "implemented",
       "target": "intl"
     },
     "Intl.DateTimeFormat": {
-      "status": "excluded-by-language-design",
+      "status": "implemented",
       "target": "intl"
     },
     "Intl.DisplayNames": {
-      "status": "excluded-by-language-design",
+      "status": "implemented",
       "target": "intl"
     },
     "Intl.DurationFormat": {
-      "status": "excluded-by-language-design",
+      "status": "implemented",
       "target": "intl"
     },
     "Intl.Era-monthcode": {
-      "status": "excluded-by-language-design",
+      "status": "in-progress",
       "target": "intl"
     },
     "Intl.ListFormat": {
-      "status": "excluded-by-language-design",
+      "status": "implemented",
       "target": "intl"
     },
     "Intl.Locale": {
-      "status": "excluded-by-language-design",
+      "status": "implemented",
       "target": "intl"
     },
     "Intl.NumberFormat": {
-      "status": "excluded-by-language-design",
+      "status": "implemented",
       "target": "intl"
     },
     "Intl.RelativeTimeFormat": {
-      "status": "excluded-by-language-design",
+      "status": "implemented",
       "target": "intl"
     },
     "Intl.Segmenter": {
-      "status": "excluded-by-language-design",
+      "status": "implemented",
       "target": "intl"
     },
     "IsHTMLDDA": {
@@ -1126,7 +1126,7 @@
       "target": "atomics-shared-memory"
     },
     "testIntl.js": {
-      "status": "unsupported",
+      "status": "supported",
       "target": "intl"
     },
     "wellKnownIntrinsicObjects.js": {
@@ -1268,8 +1268,8 @@
       "status": "active"
     },
     "intl": {
-      "description": "Intl is intentionally outside the runtime scope",
-      "status": "excluded-by-language-design"
+      "description": "ECMA-402 Internationalization API via system ICU with embedded CLDR fallback",
+      "status": "implemented"
     },
     "iterators": {
       "description": "Generators and iterator helpers",
