@@ -132,6 +132,7 @@ threadvar
   GPendingFinally: TList<TPendingFinallyEntry>;
   GBreakFinallyBase: Integer;
   GContinueFinallyBase: Integer;
+  GBreakScopeDepth: Integer;
 
 procedure CompileExpressionStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaExpressionStatement);
@@ -1677,6 +1678,7 @@ var
   ClosedCount: Integer;
   OldBreakJumps: TList<Integer>;
   OldBreakFinallyBase: Integer;
+  OldBreakScopeDepth: Integer;
   BreakJumps: TList<Integer>;
   OldContinueJumps: TList<Integer>;
   OldContinueFinallyBase: Integer;
@@ -1698,12 +1700,14 @@ begin
 
   OldBreakJumps := GBreakJumps;
   OldBreakFinallyBase := GBreakFinallyBase;
+  OldBreakScopeDepth := GBreakScopeDepth;
   BreakJumps := TList<Integer>.Create;
   GBreakJumps := BreakJumps;
   OldContinueJumps := GContinueJumps;
   OldContinueFinallyBase := GContinueFinallyBase;
   ContinueJumps := TList<Integer>.Create;
   GContinueJumps := ContinueJumps;
+  GBreakScopeDepth := ACtx.Scope.Depth;
   if Assigned(GPendingFinally) then
   begin
     GBreakFinallyBase := GPendingFinally.Count;
@@ -1792,6 +1796,7 @@ begin
     BreakJumps.Free;
     GBreakJumps := OldBreakJumps;
     GBreakFinallyBase := OldBreakFinallyBase;
+    GBreakScopeDepth := OldBreakScopeDepth;
     ContinueJumps.Free;
     GContinueJumps := OldContinueJumps;
     GContinueFinallyBase := OldContinueFinallyBase;
@@ -1816,6 +1821,7 @@ var
   ClosedCount: Integer;
   OldBreakJumps: TList<Integer>;
   OldBreakFinallyBase: Integer;
+  OldBreakScopeDepth: Integer;
   BreakJumps: TList<Integer>;
   OldContinueJumps: TList<Integer>;
   OldContinueFinallyBase: Integer;
@@ -1845,12 +1851,14 @@ begin
 
   OldBreakJumps := GBreakJumps;
   OldBreakFinallyBase := GBreakFinallyBase;
+  OldBreakScopeDepth := GBreakScopeDepth;
   BreakJumps := TList<Integer>.Create;
   GBreakJumps := BreakJumps;
   OldContinueJumps := GContinueJumps;
   OldContinueFinallyBase := GContinueFinallyBase;
   ContinueJumps := TList<Integer>.Create;
   GContinueJumps := ContinueJumps;
+  GBreakScopeDepth := ACtx.Scope.Depth;
   if NeedsIteratorClose and not Assigned(GPendingFinally) then
     GPendingFinally := TList<TPendingFinallyEntry>.Create;
   if Assigned(GPendingFinally) then
@@ -1932,6 +1940,7 @@ begin
     BreakJumps.Free;
     GBreakJumps := OldBreakJumps;
     GBreakFinallyBase := OldBreakFinallyBase;
+    GBreakScopeDepth := OldBreakScopeDepth;
     ContinueJumps.Free;
     GContinueJumps := OldContinueJumps;
     GContinueFinallyBase := OldContinueFinallyBase;
@@ -1954,6 +1963,7 @@ var
   ClosedCount: Integer;
   OldBreakJumps: TList<Integer>;
   OldBreakFinallyBase: Integer;
+  OldBreakScopeDepth: Integer;
   BreakJumps: TList<Integer>;
   OldContinueJumps: TList<Integer>;
   OldContinueFinallyBase: Integer;
@@ -1968,12 +1978,14 @@ begin
 
   OldBreakJumps := GBreakJumps;
   OldBreakFinallyBase := GBreakFinallyBase;
+  OldBreakScopeDepth := GBreakScopeDepth;
   BreakJumps := TList<Integer>.Create;
   GBreakJumps := BreakJumps;
   OldContinueJumps := GContinueJumps;
   OldContinueFinallyBase := GContinueFinallyBase;
   ContinueJumps := TList<Integer>.Create;
   GContinueJumps := ContinueJumps;
+  GBreakScopeDepth := ACtx.Scope.Depth;
   if Assigned(GPendingFinally) then
   begin
     GBreakFinallyBase := GPendingFinally.Count;
@@ -2034,6 +2046,7 @@ begin
     BreakJumps.Free;
     GBreakJumps := OldBreakJumps;
     GBreakFinallyBase := OldBreakFinallyBase;
+    GBreakScopeDepth := OldBreakScopeDepth;
     ContinueJumps.Free;
     GContinueJumps := OldContinueJumps;
     GContinueFinallyBase := OldContinueFinallyBase;
@@ -2067,6 +2080,7 @@ var
   ClosedCount: Integer;
   OldBreakJumps, OldContinueJumps: TList<Integer>;
   OldBreakFinallyBase, OldContinueFinallyBase: Integer;
+  OldBreakScopeDepth: Integer;
   BreakJumps, ContinueJumps: TList<Integer>;
   IsAscending: Boolean;
   ExitOpcode, StepOpcode: TGocciaOpCode;
@@ -2179,12 +2193,14 @@ begin
 
   OldBreakJumps := GBreakJumps;
   OldBreakFinallyBase := GBreakFinallyBase;
+  OldBreakScopeDepth := GBreakScopeDepth;
   BreakJumps := TList<Integer>.Create;
   GBreakJumps := BreakJumps;
   OldContinueJumps := GContinueJumps;
   OldContinueFinallyBase := GContinueFinallyBase;
   ContinueJumps := TList<Integer>.Create;
   GContinueJumps := ContinueJumps;
+  GBreakScopeDepth := ACtx.Scope.Depth;
   if Assigned(GPendingFinally) then
   begin
     GBreakFinallyBase := GPendingFinally.Count;
@@ -2228,6 +2244,7 @@ begin
     BreakJumps.Free;
     GBreakJumps := OldBreakJumps;
     GBreakFinallyBase := OldBreakFinallyBase;
+    GBreakScopeDepth := OldBreakScopeDepth;
     ContinueJumps.Free;
     GContinueJumps := OldContinueJumps;
     GContinueFinallyBase := OldContinueFinallyBase;
@@ -2364,6 +2381,7 @@ var
   ClosedCount: Integer;
   OldBreakJumps, OldContinueJumps: TList<Integer>;
   OldBreakFinallyBase, OldContinueFinallyBase: Integer;
+  OldBreakScopeDepth: Integer;
   BreakJumps, ContinueJumps: TList<Integer>;
   HasLexicalInit: Boolean;
   PerIterNames: TStringList;
@@ -2413,12 +2431,14 @@ begin
 
     OldBreakJumps := GBreakJumps;
     OldBreakFinallyBase := GBreakFinallyBase;
+    OldBreakScopeDepth := GBreakScopeDepth;
     BreakJumps := TList<Integer>.Create;
     GBreakJumps := BreakJumps;
     OldContinueJumps := GContinueJumps;
     OldContinueFinallyBase := GContinueFinallyBase;
     ContinueJumps := TList<Integer>.Create;
     GContinueJumps := ContinueJumps;
+    GBreakScopeDepth := ACtx.Scope.Depth;
     if Assigned(GPendingFinally) then
     begin
       GBreakFinallyBase := GPendingFinally.Count;
@@ -2509,6 +2529,7 @@ begin
       BreakJumps.Free;
       GBreakJumps := OldBreakJumps;
       GBreakFinallyBase := OldBreakFinallyBase;
+      GBreakScopeDepth := OldBreakScopeDepth;
       ContinueJumps.Free;
       GContinueJumps := OldContinueJumps;
       GContinueFinallyBase := OldContinueFinallyBase;
@@ -2655,6 +2676,7 @@ var
   DefaultJump, EndJump: Integer;
   OldBreakJumps: TList<Integer>;
   OldBreakFinallyBase: Integer;
+  OldBreakScopeDepth: Integer;
   BreakJumps: TList<Integer>;
   Node: TGocciaASTNode;
   Reg: UInt8;
@@ -2749,6 +2771,7 @@ begin
 
   OldBreakJumps := GBreakJumps;
   OldBreakFinallyBase := GBreakFinallyBase;
+  OldBreakScopeDepth := GBreakScopeDepth;
   BreakJumps := TList<Integer>.Create;
   GBreakJumps := BreakJumps;
   if Assigned(GPendingFinally) then
@@ -2775,6 +2798,7 @@ begin
     end;
 
     ACtx.Scope.BeginScope;
+    GBreakScopeDepth := ACtx.Scope.Depth;
 
     if NeedsPrelude then
     begin
@@ -2925,24 +2949,47 @@ begin
     BreakJumps.Free;
     GBreakJumps := OldBreakJumps;
     GBreakFinallyBase := OldBreakFinallyBase;
+    GBreakScopeDepth := OldBreakScopeDepth;
   end;
   ACtx.Scope.FreeRegister;
 end;
 
 procedure CompileBreakStatement(const ACtx: TGocciaCompilationContext);
 var
-  I: Integer;
+  I, Count, Base: Integer;
+  Entries: array of TPendingFinallyEntry;
   Entry: TPendingFinallyEntry;
+  Local: TGocciaCompilerLocal;
 begin
   if not Assigned(GBreakJumps) then
     Exit;
 
   if Assigned(GPendingFinally) and (GPendingFinally.Count > GBreakFinallyBase) then
-    for I := GPendingFinally.Count - 1 downto GBreakFinallyBase do
+  begin
+    Count := GPendingFinally.Count;
+    Base := GBreakFinallyBase;
+    SetLength(Entries, Count - Base);
+    for I := Base to Count - 1 do
+      Entries[I - Base] := GPendingFinally[I];
+    for I := Count - 1 downto Base do
     begin
-      Entry := GPendingFinally[I];
+      if GPendingFinally.Count > I then
+        GPendingFinally.Delete(I);
+      Entry := Entries[I - Base];
       EmitPendingEntryCleanup(ACtx, Entry, True);
     end;
+    for I := 0 to Length(Entries) - 1 do
+      GPendingFinally.Insert(Base + I, Entries[I]);
+  end;
+
+  for I := ACtx.Scope.LocalCount - 1 downto 0 do
+  begin
+    Local := ACtx.Scope.GetLocal(I);
+    if Local.Depth <= GBreakScopeDepth then
+      Break;
+    if Local.IsCaptured then
+      EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, Local.Slot, 0, 0));
+  end;
 
   GBreakJumps.Add(EmitJumpInstruction(ACtx, OP_JUMP, 0));
 end;
