@@ -478,7 +478,7 @@ begin
   end;
   RegisterMemberDefinitions(FPromiseConstructor, FStaticMembers);
 
-  AScope.DefineLexicalBinding(AName, FPromiseConstructor, dtLet);
+  AScope.DefineLexicalBinding(AName, FPromiseConstructor, dtLet, True);
 end;
 
 // ES2026 §27.2.4.8 get Promise [ @@species ]

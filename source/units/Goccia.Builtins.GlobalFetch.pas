@@ -107,7 +107,7 @@ begin
 
   // Register fetch as a global function
   AScope.DefineLexicalBinding('fetch',
-    TGocciaNativeFunctionValue.Create(FetchCallback, 'fetch', 1), dtConst);
+    TGocciaNativeFunctionValue.Create(FetchCallback, 'fetch', 1), dtConst, True);
 end;
 
 destructor TGocciaGlobalFetch.Destroy;

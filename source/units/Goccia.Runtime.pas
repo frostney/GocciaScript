@@ -812,7 +812,7 @@ begin
   begin
     PerformanceConstructor := TGocciaPerformance.CreateInterfaceObject;
     FEngine.Interpreter.GlobalScope.DefineLexicalBinding(
-      CONSTRUCTOR_PERFORMANCE, PerformanceConstructor, dtConst);
+      CONSTRUCTOR_PERFORMANCE, PerformanceConstructor, dtConst, True);
   end;
 end;
 

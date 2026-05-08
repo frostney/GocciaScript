@@ -136,7 +136,7 @@ begin
           ASpeciesGetter, 'get [Symbol.species]', 0),
         nil, [pfConfigurable]));
 
-  AScope.DefineLexicalBinding(ATypeDefinition.ConstructorName, AConstructor, dtConst);
+  AScope.DefineLexicalBinding(ATypeDefinition.ConstructorName, AConstructor, dtConst, True);
 end;
 
 end.

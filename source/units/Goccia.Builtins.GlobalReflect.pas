@@ -96,7 +96,7 @@ begin
   end;
   RegisterMemberDefinitions(FBuiltinObject, FStaticMembers);
 
-  AScope.DefineLexicalBinding(AName, FBuiltinObject, dtConst);
+  AScope.DefineLexicalBinding(AName, FBuiltinObject, dtConst, True);
 end;
 
 // ES2026 §28.1.1 Reflect.apply(target, thisArgument, argumentsList)

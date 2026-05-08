@@ -359,11 +359,11 @@ begin
 
   DisposableStackFunc := TGocciaNativeFunctionValue.Create(
     DisposableStackConstructor, CONSTRUCTOR_DISPOSABLE_STACK, 0);
-  AScope.DefineLexicalBinding(CONSTRUCTOR_DISPOSABLE_STACK, DisposableStackFunc, dtConst);
+  AScope.DefineLexicalBinding(CONSTRUCTOR_DISPOSABLE_STACK, DisposableStackFunc, dtConst, True);
 
   AsyncDisposableStackFunc := TGocciaNativeFunctionValue.Create(
     AsyncDisposableStackConstructor, CONSTRUCTOR_ASYNC_DISPOSABLE_STACK, 0);
-  AScope.DefineLexicalBinding(CONSTRUCTOR_ASYNC_DISPOSABLE_STACK, AsyncDisposableStackFunc, dtConst);
+  AScope.DefineLexicalBinding(CONSTRUCTOR_ASYNC_DISPOSABLE_STACK, AsyncDisposableStackFunc, dtConst, True);
 end;
 
 function TGocciaBuiltinDisposableStack.DisposableStackConstructor(
