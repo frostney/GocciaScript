@@ -22,27 +22,32 @@ uses
 
 procedure CheckPatternRedeclarations(
   const APattern: TGocciaDestructuringPattern;
-  const AScope: TGocciaScope; const ASourcePath: string);
+  const AScope: TGocciaScope; const ASourcePath: string;
+  const AIsVar: Boolean);
 var
   ObjPat: TGocciaObjectDestructuringPattern;
   ArrPat: TGocciaArrayDestructuringPattern;
+  DeclName: string;
   I: Integer;
 begin
   if APattern is TGocciaIdentifierDestructuringPattern then
   begin
-    if AScope.ContainsOwnLexicalBinding(
-         TGocciaIdentifierDestructuringPattern(APattern).Name) then
+    DeclName := TGocciaIdentifierDestructuringPattern(APattern).Name;
+    if AScope.ContainsOwnLexicalBinding(DeclName) then
+    begin
+      if AIsVar and AScope.IsBuiltInBinding(DeclName) then
+        Exit;
       raise TGocciaSyntaxError.Create(
         SysUtils.Format('Identifier ''%s'' has already been declared',
-          [TGocciaIdentifierDestructuringPattern(APattern).Name]),
-        0, 0, ASourcePath, nil);
+          [DeclName]), 0, 0, ASourcePath, nil);
+    end;
   end
   else if APattern is TGocciaObjectDestructuringPattern then
   begin
     ObjPat := TGocciaObjectDestructuringPattern(APattern);
     for I := 0 to ObjPat.Properties.Count - 1 do
       CheckPatternRedeclarations(ObjPat.Properties[I].Pattern,
-        AScope, ASourcePath);
+        AScope, ASourcePath, AIsVar);
   end
   else if APattern is TGocciaArrayDestructuringPattern then
   begin
@@ -50,16 +55,16 @@ begin
     for I := 0 to ArrPat.Elements.Count - 1 do
       if Assigned(ArrPat.Elements[I]) then
         CheckPatternRedeclarations(ArrPat.Elements[I],
-          AScope, ASourcePath);
+          AScope, ASourcePath, AIsVar);
   end
   else if APattern is TGocciaAssignmentDestructuringPattern then
     CheckPatternRedeclarations(
       TGocciaAssignmentDestructuringPattern(APattern).Left,
-      AScope, ASourcePath)
+      AScope, ASourcePath, AIsVar)
   else if APattern is TGocciaRestDestructuringPattern then
     CheckPatternRedeclarations(
       TGocciaRestDestructuringPattern(APattern).Argument,
-      AScope, ASourcePath);
+      AScope, ASourcePath, AIsVar);
 end;
 
 procedure CheckTopLevelRedeclarations(const AProgram: TGocciaProgram;
@@ -102,7 +107,8 @@ begin
     end
     else if Stmt is TGocciaDestructuringDeclaration then
       CheckPatternRedeclarations(
-        TGocciaDestructuringDeclaration(Stmt).Pattern, AScope, ASourcePath)
+        TGocciaDestructuringDeclaration(Stmt).Pattern, AScope, ASourcePath,
+        TGocciaDestructuringDeclaration(Stmt).IsVar)
     else if Stmt is TGocciaEnumDeclaration then
     begin
       DeclName := TGocciaEnumDeclaration(Stmt).Name;

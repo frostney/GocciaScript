@@ -442,7 +442,7 @@ begin
   end
   else
   begin
-    FInterpreter.GlobalScope.DefineLexicalBinding(AName, AValue, dtConst, True);
+    FInterpreter.GlobalScope.DefineLexicalBinding(AName, AValue, dtConst);
     FInjectedGlobals.Add(AName);
   end;
 end;

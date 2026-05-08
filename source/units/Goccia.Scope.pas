@@ -364,6 +364,7 @@ begin
       ExistingLexicalBinding.Value := AValue;
       ExistingLexicalBinding.DeclarationType := ADeclarationType;
       ExistingLexicalBinding.Initialized := True;
+      ExistingLexicalBinding.BuiltIn := ABuiltIn;
       FLexicalBindings.AddOrSetValue(AName, ExistingLexicalBinding);
       Exit;
     end;
@@ -473,6 +474,7 @@ begin
     Binding.Value := EffectiveValue;
     Binding.DeclarationType := dtVar;
     Binding.Initialized := True;
+    Binding.BuiltIn := False;
     Binding.TypeHint := sltUntyped;
     TargetScope.FVarBindings.AddOrSetValue(AName, Binding);
   end;
