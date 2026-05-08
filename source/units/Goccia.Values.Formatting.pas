@@ -67,7 +67,6 @@ var
   SB: TStringBuffer;
   Entry: TPair<string, TGocciaValue>;
   First: Boolean;
-  HasEntries: Boolean;
 begin
   if ADepth >= GInspectDepth then
   begin
@@ -77,7 +76,6 @@ begin
   SB := TStringBuffer.Create;
   SB.AppendChar('{');
   First := True;
-  HasEntries := False;
   for Entry in AObj.GetEnumerablePropertyEntries do
   begin
     if First then
@@ -85,12 +83,11 @@ begin
     else
       SB.Append(', ');
     First := False;
-    HasEntries := True;
     SB.Append(Entry.Key);
     SB.Append(': ');
     SB.Append(FormatRecursive(Entry.Value, True, ADepth + 1));
   end;
-  if HasEntries then
+  if not First then
     SB.Append(' }')
   else
     SB.AppendChar('}');
