@@ -241,3 +241,13 @@ test("quantified assertion throws SyntaxError in unicode mode", () => {
   expect(() => { new RegExp("(?=.)+", "u"); }).toThrow(SyntaxError);
   expect(() => { new RegExp("(?!.){2}", "u"); }).toThrow(SyntaxError);
 });
+
+test("\\c inside character class without letter throws SyntaxError in unicode mode", () => {
+  expect(() => { new RegExp("[\\c]", "u"); }).toThrow(SyntaxError);
+  expect(() => { new RegExp("[\\c1]", "u"); }).toThrow(SyntaxError);
+});
+
+test("\\p{ASCII} matches on large input without hitting step limit", () => {
+  const s = "abcdefghij0123456789".repeat(50);
+  expect(new RegExp("^\\p{ASCII}+$", "u").test(s)).toBe(true);
+});

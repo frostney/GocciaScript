@@ -209,6 +209,16 @@ test("greedy star with character class quantifier backtracks correctly", () => {
   expect(m[1]).toBe("a");
 });
 
+test("backreference backtracking finds correct capture length", () => {
+  const m = /^(a+)\1*,\1+$/.exec("aaaaaaaaaa,aaaaaaaaaaaaaaa");
+  expect(m[0]).toBe("aaaaaaaaaa,aaaaaaaaaaaaaaa");
+  expect(m[1]).toBe("aaaaa");
+});
+
+test("replace with backreference uses correct capture", () => {
+  expect("aaaaaaaaaa,aaaaaaaaaaaaaaa".replace(/^(a+)\1*,\1+$/, "$1")).toBe("aaaaa");
+});
+
 // --- Zero-width backref loop ---
 
 test("backreference to zero-length capture with + does not hang", () => {
