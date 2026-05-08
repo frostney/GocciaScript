@@ -1,5 +1,5 @@
 /*---
-description: Iterator helpers throw TypeError on re-entrant .next() (ES2026 §27.1.2.1.1)
+description: Iterator helpers throw TypeError on re-entrant .next() and chained helpers isolate per-instance guards
 features: [Iterator, iterator-helpers, iterator-sequencing]
 ---*/
 
@@ -87,5 +87,110 @@ describe("Iterator helper re-entrancy guard", () => {
   ])("%s throws TypeError on re-entrant .next()", (_name, factory) => {
     const helper = factory();
     expect(() => helper.next()).toThrow(TypeError);
+  });
+});
+
+describe("Chained iterator helper re-entrancy", () => {
+  test.each([
+    [
+      "concat → take",
+      () => {
+        let h;
+        h = Iterator.concat(makeReentrantIterable(() => h)).take(5);
+        return h;
+      },
+    ],
+    [
+      "concat → map",
+      () => {
+        let h;
+        h = Iterator.concat(makeReentrantIterable(() => h)).map(x => x);
+        return h;
+      },
+    ],
+    [
+      "concat → filter",
+      () => {
+        let h;
+        h = Iterator.concat(makeReentrantIterable(() => h)).filter(() => true);
+        return h;
+      },
+    ],
+    [
+      "zip → take",
+      () => {
+        let h;
+        h = Iterator.zip([makeReentrantIterable(() => h)]).take(5);
+        return h;
+      },
+    ],
+    [
+      "zip → map",
+      () => {
+        let h;
+        h = Iterator.zip([makeReentrantIterable(() => h)]).map(x => x[0]);
+        return h;
+      },
+    ],
+    [
+      "concat → filter → take (three-deep)",
+      () => {
+        let h;
+        h = Iterator.concat(makeReentrantIterable(() => h)).filter(() => true).take(5);
+        return h;
+      },
+    ],
+  ])("%s throws TypeError when source re-enters outermost helper", (_name, factory) => {
+    const helper = factory();
+    expect(() => helper.next()).toThrow(TypeError);
+  });
+
+  test.each([
+    [
+      "map → filter (predicate re-enters map)",
+      () => {
+        const inner = [1, 2, 3].values().map(x => x * 2);
+        return inner.filter(() => { inner.next(); return true; });
+      },
+    ],
+    [
+      "filter → map (mapper re-enters filter)",
+      () => {
+        const inner = [1, 2, 3].values().filter(() => true);
+        return inner.map(x => { inner.next(); return x; });
+      },
+    ],
+    [
+      "take → map (mapper re-enters take)",
+      () => {
+        const inner = [1, 2, 3].values().take(5);
+        return inner.map(x => { inner.next(); return x; });
+      },
+    ],
+    [
+      "concat → filter (predicate re-enters concat)",
+      () => {
+        const inner = Iterator.concat([1, 2, 3]);
+        return inner.filter(() => { inner.next(); return true; });
+      },
+    ],
+    [
+      "zip → map (mapper re-enters zip)",
+      () => {
+        const inner = Iterator.zip([[1, 2, 3]]);
+        return inner.map(x => { inner.next(); return x; });
+      },
+    ],
+    [
+      "map → filter → take (predicate re-enters map, three-deep)",
+      () => {
+        const inner = [1, 2, 3, 4, 5, 6].values().map(x => x);
+        return inner.filter(() => { inner.next(); return true; }).take(5);
+      },
+    ],
+  ])("%s does not throw (per-instance guard isolation)", (_name, factory) => {
+    const chain = factory();
+    const { done } = chain.next();
+    expect(done).toBe(false);
   });
 });
