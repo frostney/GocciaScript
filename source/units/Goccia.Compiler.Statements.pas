@@ -2676,6 +2676,7 @@ var
   DefaultJump, EndJump: Integer;
   OldBreakJumps: TList<Integer>;
   OldBreakFinallyBase: Integer;
+  OldBreakScopeDepth: Integer;
   BreakJumps: TList<Integer>;
   Node: TGocciaASTNode;
   Reg: UInt8;
@@ -2770,8 +2771,10 @@ begin
 
   OldBreakJumps := GBreakJumps;
   OldBreakFinallyBase := GBreakFinallyBase;
+  OldBreakScopeDepth := GBreakScopeDepth;
   BreakJumps := TList<Integer>.Create;
   GBreakJumps := BreakJumps;
+  GBreakScopeDepth := ACtx.Scope.Depth;
   if Assigned(GPendingFinally) then
     GBreakFinallyBase := GPendingFinally.Count
   else
@@ -2946,6 +2949,7 @@ begin
     BreakJumps.Free;
     GBreakJumps := OldBreakJumps;
     GBreakFinallyBase := OldBreakFinallyBase;
+    GBreakScopeDepth := OldBreakScopeDepth;
   end;
   ACtx.Scope.FreeRegister;
 end;

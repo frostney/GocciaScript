@@ -1,6 +1,6 @@
 /*---
 description: break inside for...of closes per-iteration upvalues so closures pin correct values
-features: [for-of]
+features: [for-of, async-await]
 ---*/
 
 describe("for...of break with closure capture", () => {
@@ -59,4 +59,59 @@ describe("for...of break with closure capture", () => {
     expect(outer).toEqual([[10, 20], [10, 20]]);
   });
 
+  test("switch-break inside for-of does not close per-iteration upvalue prematurely", () => {
+    const fns = [];
+    for (const x of [1, 2, 3]) {
+      fns.push(() => x);
+      switch (x) {
+        case 2:
+          break;
+      }
+    }
+    expect(fns.map(f => f())).toEqual([1, 2, 3]);
+  });
+
+  test("break inside try-finally inside for-of closes upvalue after finally", () => {
+    const fns = [];
+    const log = [];
+    for (const x of [1, 2, 3]) {
+      try {
+        fns.push(() => x);
+        if (x === 2) break;
+      } finally {
+        log.push("finally:" + x);
+      }
+    }
+    expect(fns.map(f => f())).toEqual([1, 2]);
+    expect(log).toEqual(["finally:1", "finally:2"]);
+  });
+
+  test("for-await-of break closes per-iteration upvalue", () => {
+    const asyncIter = {
+      [Symbol.asyncIterator]() {
+        let i = 0;
+        return {
+          next() {
+            i = i + 1;
+            if (i <= 4)
+              return Promise.resolve({ value: i * 10, done: false });
+            return Promise.resolve({ value: undefined, done: true });
+          }
+        };
+      }
+    };
+
+    const fn = async () => {
+      const fns = [];
+      for await (const val of asyncIter) {
+        fns.push(() => val);
+        if (val === 20) break;
+      }
+      return fns.map(f => f());
+    };
+
+    return fn().then((result) => {
+      expect(result).toEqual([10, 20]);
+    });
+  });
 });
