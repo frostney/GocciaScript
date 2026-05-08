@@ -1174,9 +1174,13 @@ end;
 procedure TGocciaEngine.WaitForRuntimeIdle;
 var
   I: Integer;
+  Queue: TGocciaMicrotaskQueue;
 begin
   for I := 0 to FExtensions.Count - 1 do
     FExtensions[I].WaitForIdle;
+  Queue := TGocciaMicrotaskQueue.Instance;
+  if Assigned(Queue) and Queue.HasPending then
+    Queue.DrainQueue;
 end;
 
 procedure TGocciaEngine.DiscardRuntimePending;

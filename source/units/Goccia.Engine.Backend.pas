@@ -137,13 +137,13 @@ begin
   Start := GetNanoseconds;
   Module := CompileToModule(AProgram);
   CompileTimeNanoseconds := GetNanoseconds - Start;
-  try
-    Start := GetNanoseconds;
-    Result := RunModule(Module);
-    ExecuteTimeNanoseconds := GetNanoseconds - Start;
-  finally
-    Module.Free;
-  end;
+  // Retain the module: closures created during execution reference its
+  // function templates, so the module must outlive any pending microtask
+  // continuations that WaitForRuntimeIdle will drain after this returns.
+  FModuleModules.Add(Module);
+  Start := GetNanoseconds;
+  Result := RunModule(Module);
+  ExecuteTimeNanoseconds := GetNanoseconds - Start;
 end;
 
 function TGocciaBytecodeExecutor.ExecuteDynamicFunction(
