@@ -104,7 +104,7 @@ var
   Tokens: TObjectList<TGocciaToken>;
   Parser: TGocciaParser;
   ProgramNode: TGocciaProgram;
-  Module: TGocciaBytecodeModule;
+  Module: TObject;
   StartTime, LexEnd, ParseEnd, CompileEnd, ExecEnd: Int64;
 begin
   if APaths.Count > 0 then
@@ -177,22 +177,14 @@ begin
                 ParseEnd := GetNanoseconds;
 
                 try
-                  Module := Eng.CompileToModule(ProgramNode);
+                  Module := Eng.CompileModule(ProgramNode);
                   CompileEnd := GetNanoseconds;
 
-                  ResultValue := TGocciaBytecodeExecutor(Eng.Executor).RunModule(Module);
-                  if Assigned(ResultValue) then
-                    TGarbageCollector.Instance.AddTempRoot(ResultValue);
-                  try
-                    Eng.WaitForRuntimeIdle;
-                    ExecEnd := GetNanoseconds;
+                  ResultValue := Eng.RunModule(Module);
+                  ExecEnd := GetNanoseconds;
 
-                    if ResultValue <> nil then
-                      WriteLn(FormatREPLValue(ResultValue, IsColorTerminal));
-                  finally
-                    if Assigned(ResultValue) then
-                      TGarbageCollector.Instance.RemoveTempRoot(ResultValue);
-                  end;
+                  if ResultValue <> nil then
+                    WriteLn(FormatREPLValue(ResultValue, IsColorTerminal));
                 finally
                   ProgramNode.Free;
                 end;

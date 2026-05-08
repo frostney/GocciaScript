@@ -120,7 +120,7 @@ type
       const ACapture: TScriptLoaderConsoleCapture): TScriptExecutionReport;
     function RunBytecodeModule(const AEngine: TGocciaEngine;
       const AExecutor: TGocciaBytecodeExecutor;
-      const AModule: TGocciaBytecodeModule;
+      const AModule: TObject;
       const AFileName: string): TGocciaValue;
     function ExecuteBytecodeFromSource(const ASource: TStringList; const AFileName: string;
       const ACapture: TScriptLoaderConsoleCapture): TScriptExecutionReport;
@@ -617,7 +617,7 @@ end;
 
 function TScriptLoaderApp.RunBytecodeModule(const AEngine: TGocciaEngine;
   const AExecutor: TGocciaBytecodeExecutor;
-  const AModule: TGocciaBytecodeModule;
+  const AModule: TObject;
   const AFileName: string): TGocciaValue;
 var
   ModuleScope: TGocciaScope;
@@ -627,17 +627,17 @@ begin
     ModuleScope := AEngine.Interpreter.GlobalScope.CreateChild(skModule,
       'Module:' + AFileName);
     ModuleScope.ThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-    Result := AEngine.RunBytecodeModuleInScope(AModule, ModuleScope);
+    Result := AEngine.RunModuleInScope(AModule, ModuleScope);
   end
   else
-    Result := AEngine.RunBytecodeModule(AModule);
+    Result := AEngine.RunModule(AModule);
 end;
 
 function TScriptLoaderApp.ExecuteBytecodeFromSource(const ASource: TStringList;
   const AFileName: string; const ACapture: TScriptLoaderConsoleCapture): TScriptExecutionReport;
 var
   ProgramNode: TGocciaProgram;
-  Module: TGocciaBytecodeModule;
+  Module: TObject;
   Executor: TGocciaBytecodeExecutor;
   Engine: TGocciaEngine;
   SourceMap: TGocciaSourceMap;
@@ -670,7 +670,7 @@ begin
         end;
 
         CompileStart := GetNanoseconds;
-        Module := Engine.CompileToModule(ProgramNode);
+        Module := Engine.CompileModule(ProgramNode);
         CompileEnd := GetNanoseconds;
         Result.Timing.CompileTimeNanoseconds := CompileEnd - CompileStart;
       finally
@@ -702,8 +702,8 @@ end;
 function TScriptLoaderApp.ExecuteBytecodeFromFile(const AFileName: string;
   const ACapture: TScriptLoaderConsoleCapture): TScriptExecutionReport;
 var
-  Module: TGocciaBytecodeModule;
-  RetainedModule: TGocciaBytecodeModule;
+  Module: TObject;
+  RetainedModule: TObject;
   Executor: TGocciaBytecodeExecutor;
   Engine: TGocciaEngine;
   StartTime, LoadEnd, ExecEnd: Int64;

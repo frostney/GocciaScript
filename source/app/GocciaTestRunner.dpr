@@ -140,7 +140,7 @@ type
     function RunGocciaScriptInterpreted(const AFileName: string;
       APreloadedSource: TStringList = nil): TTestFileResult;
     function RunBytecodeTestModule(const AEngine: TGocciaEngine;
-      const AModule: TGocciaBytecodeModule;
+      const AModule: TObject;
       const AFileName: string): TGocciaValue;
     function RunGocciaScriptBytecode(const AFileName: string;
       APreloadedSource: TStringList = nil): TTestFileResult;
@@ -548,7 +548,7 @@ begin
 end;
 
 function TTestRunnerApp.RunBytecodeTestModule(const AEngine: TGocciaEngine;
-  const AModule: TGocciaBytecodeModule;
+  const AModule: TObject;
   const AFileName: string): TGocciaValue;
 var
   ModuleScope: TGocciaScope;
@@ -558,10 +558,10 @@ begin
     ModuleScope := AEngine.Interpreter.GlobalScope.CreateChild(skModule,
       'Module:' + AFileName);
     ModuleScope.ThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-    Result := AEngine.RunBytecodeModuleInScope(AModule, ModuleScope);
+    Result := AEngine.RunModuleInScope(AModule, ModuleScope);
   end
   else
-    Result := AEngine.RunBytecodeModule(AModule);
+    Result := AEngine.RunModule(AModule);
 end;
 
 function TTestRunnerApp.RunGocciaScriptBytecode(const AFileName: string;
@@ -576,7 +576,7 @@ var
   Parser: TGocciaParser;
   Warning: TGocciaParserWarning;
   ProgramNode: TGocciaProgram;
-  Module: TGocciaBytecodeModule;
+  Module: TObject;
   Executor: TGocciaBytecodeExecutor;
   Engine: TGocciaEngine;
   ScriptResult: TGocciaObjectValue;
@@ -667,7 +667,7 @@ begin
                       WriteLn(Format('  --> %s:%d:%d', [AFileName, Warning.Line, Warning.Column]));
                   end;
                 try
-                  Module := Engine.CompileToModule(ProgramNode);
+                  Module := Engine.CompileModule(ProgramNode);
                   CompileEnd := GetNanoseconds;
                 finally
                   ProgramNode.Free;

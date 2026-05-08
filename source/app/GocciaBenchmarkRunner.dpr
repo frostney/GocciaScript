@@ -191,7 +191,7 @@ type
     FWorkerProgressEnabled: Boolean;
     function ProfilingEnabled: Boolean;
     procedure RunBytecodeBenchmarkModule(const AEngine: TGocciaEngine;
-      const AModule: TGocciaBytecodeModule; const AFileName: string);
+      const AModule: TObject; const AFileName: string);
     procedure CollectBenchmarkFileInterpreted(const AFileName: string;
       const AReporter: TBenchmarkReporter; const AShowProgress: Boolean);
     procedure CollectBenchmarkFileBytecode(const AFileName: string;
@@ -296,7 +296,7 @@ end;
 
 procedure TBenchmarkRunnerApp.RunBytecodeBenchmarkModule(
   const AEngine: TGocciaEngine;
-  const AModule: TGocciaBytecodeModule; const AFileName: string);
+  const AModule: TObject; const AFileName: string);
 var
   ModuleScope: TGocciaScope;
 begin
@@ -305,10 +305,10 @@ begin
     ModuleScope := AEngine.Interpreter.GlobalScope.CreateChild(skModule,
       'Module:' + AFileName);
     ModuleScope.ThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-    AEngine.RunBytecodeModuleInScope(AModule, ModuleScope);
+    AEngine.RunModuleInScope(AModule, ModuleScope);
   end
   else
-    AEngine.RunBytecodeModule(AModule);
+    AEngine.RunModule(AModule);
 end;
 
 procedure TBenchmarkRunnerApp.CollectBenchmarkFileInterpreted(
@@ -414,7 +414,7 @@ var
   Tokens: TObjectList<TGocciaToken>;
   Parser: TGocciaParser;
   ProgramNode: TGocciaProgram;
-  Module: TGocciaBytecodeModule;
+  Module: TObject;
   Executor: TGocciaBytecodeExecutor;
   Engine: TGocciaEngine;
   GC: TGarbageCollector;
@@ -464,7 +464,7 @@ begin
               ParseEnd := GetNanoseconds;
 
               try
-                Module := Engine.CompileToModule(ProgramNode);
+                Module := Engine.CompileModule(ProgramNode);
                 CompileEnd := GetNanoseconds;
               finally
                 ProgramNode.Free;
@@ -646,7 +646,7 @@ var
   Tokens: TObjectList<TGocciaToken>;
   Parser: TGocciaParser;
   ProgramNode: TGocciaProgram;
-  Module: TGocciaBytecodeModule;
+  Module: TObject;
   Executor: TGocciaBytecodeExecutor;
   Engine: TGocciaEngine;
   GC: TGarbageCollector;
@@ -683,7 +683,7 @@ begin
             ParseEnd := GetNanoseconds;
 
             try
-              Module := Engine.CompileToModule(ProgramNode);
+              Module := Engine.CompileModule(ProgramNode);
               CompileEnd := GetNanoseconds;
             finally
               ProgramNode.Free;
