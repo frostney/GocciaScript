@@ -23,6 +23,7 @@ type
     PrevCovLine: UInt32;
     ProfileEntryTimestamp: Int64;
     NewTarget: Pointer;
+    Callee: Pointer;
   end;
 
 implementation

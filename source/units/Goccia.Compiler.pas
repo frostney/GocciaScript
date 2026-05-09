@@ -289,7 +289,10 @@ begin
       TGocciaExportEnumDeclaration(AStmt))
   else if AStmt is TGocciaUsingDeclaration then
     Goccia.Compiler.Statements.CompileUsingDeclaration(Ctx,
-      TGocciaUsingDeclaration(AStmt));
+      TGocciaUsingDeclaration(AStmt))
+  else if AStmt is TGocciaWithStatement then
+    Goccia.Compiler.Statements.CompileWithStatement(Ctx,
+      TGocciaWithStatement(AStmt));
 
   if not Result then
     Result := Goccia.Compiler.Statements.StatementAlwaysAbrupt(Ctx, AStmt);

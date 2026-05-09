@@ -57,6 +57,8 @@ procedure CompileExportEnumDeclaration(const ACtx: TGocciaCompilationContext;
 
 procedure CompileUsingDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaUsingDeclaration);
+procedure CompileWithStatement(const ACtx: TGocciaCompilationContext;
+  const AWith: TGocciaWithStatement);
 
 procedure CompileClassDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaClassDeclaration);
@@ -1148,9 +1150,7 @@ begin
     Exit(False);
 
   if AStmt is TGocciaWithStatement then
-    raise Exception.Create(
-      'The ''with'' statement requires interpreter mode (--mode=interpreted)');
-
+    Exit(StatementNeedsIteratorClose(TGocciaWithStatement(AStmt).Body));
 
   if (AStmt is TGocciaExpressionStatement) or
      (AStmt is TGocciaVariableDeclaration) or
@@ -3096,6 +3096,10 @@ begin
 
   EmitDefaultParameters(ChildCtx, AMethod.Parameters);
 
+  if ChildCtx.NonStrictMode then
+    EmitInstruction(ChildCtx, EncodeABC(OP_MAKE_ARGUMENTS,
+      ChildScope.DeclareLocal('arguments', False), 0, 0));
+
   ACtx.CompileFunctionBody(AMethod.Body);
   ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
 
@@ -3396,6 +3400,10 @@ begin
       UInt8(RestParamIndex), 0));
 
   EmitDefaultParameters(ChildCtx, AMethod.Parameters);
+
+  if ChildCtx.NonStrictMode then
+    EmitInstruction(ChildCtx, EncodeABC(OP_MAKE_ARGUMENTS,
+      ChildScope.DeclareLocal('arguments', False), 0, 0));
 
   ACtx.CompileFunctionBody(AMethod.Body);
   ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
@@ -4477,6 +4485,21 @@ procedure RestorePendingFinally(const ASaved: TObject);
 begin
   GPendingFinally.Free;
   GPendingFinally := TList<TPendingFinallyEntry>(ASaved);
+end;
+
+procedure CompileWithStatement(const ACtx: TGocciaCompilationContext;
+  const AWith: TGocciaWithStatement);
+var
+  ObjReg: UInt8;
+begin
+  ObjReg := ACtx.Scope.AllocateRegister;
+  ACtx.CompileExpression(AWith.ObjectExpr, ObjReg);
+  EmitInstruction(ACtx, EncodeABC(OP_WITH_ENTER, ObjReg, 0, 0));
+  ACtx.Scope.FreeRegister;
+  ACtx.Scope.EnterWithBlock;
+  ACtx.CompileStatement(AWith.Body);
+  ACtx.Scope.LeaveWithBlock;
+  EmitInstruction(ACtx, EncodeABC(OP_WITH_LEAVE, 0, 0, 0));
 end;
 
 end.

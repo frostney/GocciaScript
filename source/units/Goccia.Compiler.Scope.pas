@@ -57,6 +57,7 @@ type
     FMaxSlot: UInt8;
     FPrivatePrefix: string;
     FIsArrow: Boolean;
+    FWithDepth: Integer;
     procedure EnsureLocalIndex;
     procedure RestoreLocalIndexBinding(const ARemovedName: string);
   public
@@ -110,8 +111,11 @@ type
       out AValue: TGocciaCompileTimeValue): Boolean;
     function HasVisibleLocal(const AName: string): Boolean;
     function ResolvePrivatePrefix: string;
+    procedure EnterWithBlock;
+    procedure LeaveWithBlock;
     property PrivatePrefix: string read FPrivatePrefix write FPrivatePrefix;
     property IsArrow: Boolean read FIsArrow write FIsArrow;
+    property WithDepth: Integer read FWithDepth;
   end;
 
 function NextClassPrivatePrefix: string;
@@ -510,6 +514,17 @@ function NextClassPrivatePrefix: string;
 begin
   Result := IntToStr(GClassPrivateCounter) + '$';
   Inc(GClassPrivateCounter);
+end;
+
+procedure TGocciaCompilerScope.EnterWithBlock;
+begin
+  Inc(FWithDepth);
+end;
+
+procedure TGocciaCompilerScope.LeaveWithBlock;
+begin
+  if FWithDepth > 0 then
+    Dec(FWithDepth);
 end;
 
 end.

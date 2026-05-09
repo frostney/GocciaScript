@@ -191,6 +191,7 @@ begin
               Parser.VarDeclarationsEnabled := Eng.VarEnabled;
               Parser.FunctionDeclarationsEnabled := Eng.FunctionEnabled;
               Parser.TraditionalForLoopsEnabled := Eng.TraditionalForLoopsEnabled;
+              Parser.NonStrictModeEnabled := Eng.NonStrictModeEnabled;
               try
                 ProgramNode := Parser.Parse;
                 ParseEnd := GetNanoseconds;

@@ -39,7 +39,9 @@ const
   //   v24 -> v25: #540 added OP_INC, OP_DEC, OP_TO_NUMERIC for spec-correct
   //               BigInt increment/decrement (ES2026 §13.4.4.1 ToNumeric).
   //   v25 -> v26: #529 added OP_NEW_TARGET for the new.target meta-property.
-  GOCCIA_FORMAT_VERSION = 26;
+  //   v26 -> v27: #586 added OP_MAKE_ARGUMENTS, OP_WITH_ENTER, OP_WITH_LEAVE,
+  //               OP_WITH_GET, OP_WITH_SET for --compat-non-strict-mode.
+  GOCCIA_FORMAT_VERSION = 27;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
@@ -218,7 +220,13 @@ type
     OP_INC           = 178,
     OP_DEC           = 179,
     OP_TO_NUMERIC    = 180,
-    OP_NEW_TARGET    = 181
+    OP_NEW_TARGET    = 181,
+
+    OP_MAKE_ARGUMENTS = 182,
+    OP_WITH_ENTER    = 183,
+    OP_WITH_LEAVE    = 184,
+    OP_WITH_GET      = 185,
+    OP_WITH_SET      = 186
   );
 
 function EncodeABC(const AOp: TGocciaOpCode; const A, B, C: UInt8): UInt32; inline;

@@ -42,7 +42,7 @@ type
 
     function ParseSource(const ASource: TStringList; const AFileName: string;
       const AASIEnabled, AVarEnabled, AFunctionEnabled,
-        ATraditionalForLoopsEnabled: Boolean;
+        ATraditionalForLoopsEnabled, ANonStrictModeEnabled: Boolean;
       out ALexTimeNanoseconds, AParseTimeNanoseconds: Int64;
       out ASourceMap: TGocciaSourceMap): TGocciaProgram;
     function CompileSource(const ASource: TStringList;
@@ -93,7 +93,7 @@ end;
 
 function TBundlerApp.ParseSource(const ASource: TStringList;
   const AFileName: string; const AASIEnabled, AVarEnabled,
-  AFunctionEnabled, ATraditionalForLoopsEnabled: Boolean;
+  AFunctionEnabled, ATraditionalForLoopsEnabled, ANonStrictModeEnabled: Boolean;
   out ALexTimeNanoseconds, AParseTimeNanoseconds: Int64;
   out ASourceMap: TGocciaSourceMap): TGocciaProgram;
 var
@@ -131,6 +131,7 @@ begin
       Parser.VarDeclarationsEnabled := AVarEnabled;
       Parser.FunctionDeclarationsEnabled := AFunctionEnabled;
       Parser.TraditionalForLoopsEnabled := ATraditionalForLoopsEnabled;
+      Parser.NonStrictModeEnabled := ANonStrictModeEnabled;
       try
         Result := Parser.Parse;
         ParseEnd := GetNanoseconds;
@@ -200,11 +201,12 @@ var
   SourceMap: TGocciaSourceMap;
   FileConfig: TConfigEntryArray;
   EffectiveASI, EffectiveVar, EffectiveFunction, EffectiveStrictTypes,
-    EffectiveCompatAll, EffectiveTraditionalFor: Boolean;
+    EffectiveCompatAll, EffectiveTraditionalFor,
+    EffectiveNonStrictMode: Boolean;
 begin
-  { Resolve ASI, compat-var, compat-function, compat-traditional-for-loop
-    and strict-types: CLI flag > per-file config > root config > default
-    (false). }
+  { Resolve ASI, compat-var, compat-function, compat-traditional-for-loop,
+    compat-non-strict-mode and strict-types: CLI flag > per-file config >
+    root config > default (false). }
   FileConfig := DiscoverFileConfig(AFileName);
   EffectiveASI := ResolveFlagOption(EngineOptions.ASI, FileConfig, 'asi');
   EffectiveCompatAll := ResolveFlagOption(
@@ -216,12 +218,15 @@ begin
   EffectiveTraditionalFor := EffectiveCompatAll or ResolveFlagOption(
     EngineOptions.CompatTraditionalFor, FileConfig,
     'compat-traditional-for-loop');
+  EffectiveNonStrictMode := EffectiveCompatAll or ResolveFlagOption(
+    EngineOptions.CompatNonStrictMode, FileConfig,
+    'compat-non-strict-mode');
   EffectiveStrictTypes := ResolveFlagOption(
     EngineOptions.StrictTypes, FileConfig, 'strict-types');
 
   CompiledModule := nil;
   ProgramNode := ParseSource(ASource, AFileName, EffectiveASI, EffectiveVar,
-    EffectiveFunction, EffectiveTraditionalFor,
+    EffectiveFunction, EffectiveTraditionalFor, EffectiveNonStrictMode,
     LexTimeNanoseconds, ParseTimeNanoseconds, SourceMap);
   try
     Compiler := TGocciaCompiler.Create(AFileName);

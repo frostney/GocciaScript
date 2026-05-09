@@ -392,6 +392,12 @@ begin
 
   NameIdx := ACtx.Template.AddConstantString(AExpr.Name);
 
+  if ACtx.Scope.WithDepth > 0 then
+  begin
+    EmitInstruction(ACtx, EncodeABx(OP_WITH_GET, ADest, NameIdx));
+    Exit;
+  end;
+
   if ASafe then
   begin
     EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, ADest, NameIdx));
@@ -754,6 +760,12 @@ begin
     if UpvalIdx < 0 then
     begin
       NameIdx := ACtx.Template.AddConstantString(AExpr.Name);
+      if ACtx.Scope.WithDepth > 0 then
+      begin
+        ACtx.CompileExpression(AExpr.Value, ADest);
+        EmitInstruction(ACtx, EncodeABx(OP_WITH_SET, ADest, NameIdx));
+        Exit;
+      end;
       GlobalExistsReg := ACtx.Scope.AllocateRegister;
       EmitInstruction(ACtx, EncodeABx(OP_HAS_GLOBAL, GlobalExistsReg, NameIdx));
     end;
@@ -1367,6 +1379,10 @@ begin
     EmitDefaultParameters(ChildCtx, AExpr.Parameters);
     EmitDestructuringParameters(ChildCtx, AExpr.Parameters);
     EmitParameterTypeChecks(ChildCtx, AExpr.Parameters);
+
+    if ChildCtx.NonStrictMode and (not ChildTemplate.IsArrow) then
+      EmitInstruction(ChildCtx, EncodeABC(OP_MAKE_ARGUMENTS,
+        ChildScope.DeclareLocal('arguments', False), 0, 0));
 
     ACtx.CompileFunctionBody(AExpr.Body);
 
@@ -2453,6 +2469,10 @@ begin
     EmitDefaultParameters(ChildCtx, AExpr.Parameters);
     EmitDestructuringParameters(ChildCtx, AExpr.Parameters);
     EmitParameterTypeChecks(ChildCtx, AExpr.Parameters);
+
+    if ChildCtx.NonStrictMode and (not ChildTemplate.IsArrow) then
+      EmitInstruction(ChildCtx, EncodeABC(OP_MAKE_ARGUMENTS,
+        ChildScope.DeclareLocal('arguments', False), 0, 0));
 
     ACtx.CompileFunctionBody(AExpr.Body);
 

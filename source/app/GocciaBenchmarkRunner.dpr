@@ -463,6 +463,7 @@ begin
             Parser.VarDeclarationsEnabled := Engine.VarEnabled;
             Parser.FunctionDeclarationsEnabled := Engine.FunctionEnabled;
             Parser.TraditionalForLoopsEnabled := Engine.TraditionalForLoopsEnabled;
+            Parser.NonStrictModeEnabled := Engine.NonStrictModeEnabled;
             try
               ProgramNode := Parser.Parse;
               ParseEnd := GetNanoseconds;
@@ -687,6 +688,7 @@ begin
           Parser.VarDeclarationsEnabled := Engine.VarEnabled;
           Parser.FunctionDeclarationsEnabled := Engine.FunctionEnabled;
           Parser.TraditionalForLoopsEnabled := Engine.TraditionalForLoopsEnabled;
+          Parser.NonStrictModeEnabled := Engine.NonStrictModeEnabled;
           try
             ProgramNode := Parser.Parse;
             ParseEnd := GetNanoseconds;

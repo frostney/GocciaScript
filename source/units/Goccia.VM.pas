@@ -93,6 +93,9 @@ type
     FActiveDecoratorSession: TObject;
     FCoverageEnabled: Boolean;
     FNonStrictMode: Boolean;
+    FWithStack: array of TGocciaObjectValue;
+    FWithStackCount: Integer;
+    FCurrentCallee: TGocciaValue;
     FProfilingOpcodes: Boolean;
     FProfilingFunctions: Boolean;
     FPreviousExceptionMask: TFPUExceptionMask;
@@ -6943,6 +6946,7 @@ var
   LeftNum, RightNum: TGocciaNumberLiteralValue;
   KeyIndex: Integer;
   ArgsArray: TGocciaArrayValue;
+  ArgsObj: TGocciaObjectValue;
   CallArgs: TGocciaArgumentsCollection;
   I: Integer;
   GlobalName: string;
@@ -8740,6 +8744,7 @@ begin
               CallThisRegister := VMValueToRegisterFast(FGlobalThisValue)
             else
               CallThisRegister := RegisterUndefined;
+            FCurrentCallee := BytecodeFunction;
             if (C and 1) = 0 then
             begin
               SetLength(RegisterArgs, B);
@@ -9208,6 +9213,77 @@ begin
           SetRegister(A, FCurrentNewTarget)
         else
           SetRegister(A, TGocciaUndefinedLiteralValue.UndefinedValue);
+
+      OP_MAKE_ARGUMENTS:
+      begin
+        ArgsObj := TGocciaObjectValue.Create;
+        for I := 0 to FArgCount - 1 do
+          ArgsObj.DefineProperty(IntToStr(I),
+            TGocciaPropertyDescriptorData.Create(
+              RegisterToValue(GetLocalRegister(I + 1)),
+              [pfWritable, pfEnumerable, pfConfigurable]));
+        ArgsObj.DefineProperty('length',
+          TGocciaPropertyDescriptorData.Create(
+            TGocciaNumberLiteralValue.Create(FArgCount),
+            [pfWritable, pfConfigurable]));
+        if Assigned(FCurrentCallee) then
+          ArgsObj.DefineProperty('callee',
+            TGocciaPropertyDescriptorData.Create(
+              FCurrentCallee,
+              [pfWritable, pfConfigurable]));
+        SetRegister(A, ArgsObj);
+      end;
+
+      OP_WITH_ENTER:
+      begin
+        if (FRegisters[A].Kind = grkObject) and
+           (FRegisters[A].ObjectValue is TGocciaObjectValue) then
+        begin
+          if FWithStackCount >= Length(FWithStack) then
+            SetLength(FWithStack, FWithStackCount + 8);
+          FWithStack[FWithStackCount] :=
+            TGocciaObjectValue(FRegisters[A].ObjectValue);
+          Inc(FWithStackCount);
+        end;
+      end;
+
+      OP_WITH_LEAVE:
+        if FWithStackCount > 0 then
+          Dec(FWithStackCount);
+
+      OP_WITH_GET:
+      begin
+        GlobalName := Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue;
+        RightValue := nil;
+        for I := FWithStackCount - 1 downto 0 do
+          if FWithStack[I].HasProperty(GlobalName) then
+          begin
+            RightValue := FWithStack[I].GetProperty(GlobalName);
+            Break;
+          end;
+        if Assigned(RightValue) then
+          SetRegister(A, RightValue)
+        else if FGlobalScope.Contains(GlobalName) then
+          SetRegister(A, FGlobalScope.GetValue(GlobalName))
+        else
+          ThrowReferenceError(Format('%s is not defined', [GlobalName]),
+            '');
+      end;
+
+      OP_WITH_SET:
+      begin
+        GlobalName := Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue;
+        RightValue := RegisterToValue(FRegisters[A]);
+        for I := FWithStackCount - 1 downto 0 do
+          if FWithStack[I].HasProperty(GlobalName) then
+          begin
+            FWithStack[I].SetProperty(GlobalName, RightValue);
+            RightValue := nil;
+            Break;
+          end;
+        if Assigned(RightValue) then
+          FGlobalScope.AssignBinding(GlobalName, RightValue);
+      end;
 
       // ES2026 §13.3.10.1 ImportCall — import(specifier)
       OP_DYNAMIC_IMPORT:
