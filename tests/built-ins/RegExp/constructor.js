@@ -124,3 +124,13 @@ test("trailing backslash throws SyntaxError", () => {
 test("huge quantifier does not crash", () => {
   expect(/x{2147483648}x/.test("1")).toBe(false);
 });
+
+test("exec on Object.create(RegExp.prototype) throws TypeError", () => {
+  const obj = Object.create(RegExp.prototype);
+  expect(() => { RegExp.prototype.exec.call(obj, "test"); }).toThrow(TypeError);
+});
+
+test("test on Object.create(RegExp.prototype) throws TypeError", () => {
+  const obj = Object.create(RegExp.prototype);
+  expect(() => { RegExp.prototype.test.call(obj, "test"); }).toThrow(TypeError);
+});

@@ -54,8 +54,13 @@ type
 
 procedure MemoInit(var AMemo: TMemoTable);
 begin
-  SetLength(AMemo.Entries, MEMO_CAPACITY);
   AMemo.Count := 0;
+end;
+
+procedure MemoEnsureAllocated(var AMemo: TMemoTable); inline;
+begin
+  if Length(AMemo.Entries) = 0 then
+    SetLength(AMemo.Entries, MEMO_CAPACITY);
 end;
 
 function MemoHash(APC, APos: Integer): Integer; inline;
@@ -72,6 +77,8 @@ function MemoContains(var AMemo: TMemoTable; APC, APos: Integer): Boolean;
 var
   Idx, I: Integer;
 begin
+  if Length(AMemo.Entries) = 0 then
+    Exit(False);
   Idx := MemoHash(APC, APos);
   for I := 0 to 15 do
   begin
@@ -88,6 +95,7 @@ procedure MemoAdd(var AMemo: TMemoTable; APC, APos: Integer);
 var
   Idx, I: Integer;
 begin
+  MemoEnsureAllocated(AMemo);
   if AMemo.Count >= MEMO_LOAD_LIMIT then
     Exit;
   Idx := MemoHash(APC, APos);
@@ -105,26 +113,6 @@ begin
       Exit;
     Idx := (Idx + 1) and (MEMO_CAPACITY - 1);
   end;
-end;
-
-function CharClassContains(const AClass: TRegExpCharClass;
-  ACodePoint: Cardinal): Boolean;
-var
-  Lo, Hi, Mid: Integer;
-begin
-  Lo := 0;
-  Hi := High(AClass.Ranges);
-  while Lo <= Hi do
-  begin
-    Mid := (Lo + Hi) shr 1;
-    if ACodePoint < AClass.Ranges[Mid].Lo then
-      Hi := Mid - 1
-    else if ACodePoint > AClass.Ranges[Mid].Hi then
-      Lo := Mid + 1
-    else
-      Exit(True);
-  end;
-  Result := False;
 end;
 
 function CharClassContainsLinear(const AClass: TRegExpCharClass;
@@ -418,6 +406,8 @@ begin
           end;
           RefPos := RefStart;
           LookMatched := True;
+          RefEnd := ASlots[BackrefGroup * 2 + 1];
+          I := InputPos;
           while RefPos < RefEnd do
           begin
             if not ReadInputCodePoint(AInput, RefPos,
@@ -452,6 +442,7 @@ begin
           end;
           if not LookMatched then
           begin
+            InputPos := I;
             MemoAdd(Memo, PC, InputPos);
             if not PopBacktrack then Exit;
             Continue;
@@ -636,7 +627,9 @@ begin
           Continue;
         end;
     else
-      Inc(PC);
+      raise ERegExpRuntimeError.CreateFmt(
+        'Invalid regular expression bytecode: opcode %d at PC %d',
+        [Ord(Op), PC]);
     end;
   end;
 end;

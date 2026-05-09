@@ -118,15 +118,11 @@ begin
 end;
 
 function IsRegExpValue(const AValue: TGocciaValue): Boolean;
-var
-  Tag: TGocciaValue;
 begin
   if not (AValue is TGocciaObjectValue) then
     Exit(False);
-  Tag := TGocciaObjectValue(AValue).GetSymbolProperty(
-    TGocciaSymbolValue.WellKnownToStringTag);
-  Result := (Tag is TGocciaStringLiteralValue) and
-    (TGocciaStringLiteralValue(Tag).Value = 'RegExp');
+  Result := TGocciaObjectValue(AValue).HasOwnProperty(PROP_SOURCE) and
+    TGocciaObjectValue(AValue).HasOwnProperty(PROP_FLAGS);
 end;
 
 function CreateRegExpObject(const APattern, AFlags: string): TGocciaValue;

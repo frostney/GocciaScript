@@ -41,9 +41,6 @@ type
     CharClasses: array of TRegExpCharClass;
     CaptureCount: Integer;
     NamedGroups: TGocciaRegExpNamedGroups;
-    FlagIgnoreCase: Boolean;
-    FlagMultiline: Boolean;
-    FlagDotAll: Boolean;
     FlagUnicode: Boolean;
   end;
 
@@ -91,7 +88,6 @@ type
     function EncodeOp(AOp: TRegExpOpCode): UInt32;
     function EncodeOpBx(AOp: TRegExpOpCode; ABx: Integer): UInt32;
     function AddCharClass(const ARanges: array of TRegExpCharRange): Integer;
-    function AddCharClassFromDynamic(const ARanges: array of TRegExpCharRange): Integer;
     procedure CompilePattern;
     procedure CompileDisjunction;
     procedure CompileAlternative;
@@ -112,7 +108,6 @@ type
       ARangeCount: Integer; ANegated: Boolean);
     procedure AddBuiltinCharClass(AEscapeChar: Char; var ARanges: array of TRegExpCharRange; var ARangeCount: Integer);
     procedure AddRange(var ARanges: array of TRegExpCharRange; var ARangeCount: Integer; ALo, AHi: Cardinal);
-    function CaseFold(ACodePoint: Cardinal): Cardinal;
     procedure EmitUnicodePropertyClass(const APropertyName: string; ANegated: Boolean);
     procedure GetUnicodePropertyRanges(const APropertyName: string; var ARanges: array of TRegExpCharRange; var ARangeCount: Integer);
     function ReadCodePoint: Cardinal;
@@ -132,16 +127,6 @@ type
 
 const
   MAX_CHAR_RANGES = 512;
-
-function EncodeInstr(AOp: TRegExpOpCode; ABx: Integer): UInt32; inline;
-begin
-  Result := UInt32(Ord(AOp)) or (UInt32(ABx) shl 8);
-end;
-
-function DecodeBx(AInstr: UInt32): Integer; inline;
-begin
-  Result := Integer(AInstr shr 8);
-end;
 
 constructor TRegExpCompiler.Create(const APattern, AFlags: string);
 begin
@@ -253,29 +238,6 @@ begin
     FCharClasses[Result].Ranges[I] := ARanges[I];
 end;
 
-function TRegExpCompiler.AddCharClassFromDynamic(
-  const ARanges: array of TRegExpCharRange): Integer;
-var
-  I: Integer;
-begin
-  Result := Length(FCharClasses);
-  SetLength(FCharClasses, Result + 1);
-  SetLength(FCharClasses[Result].Ranges, Length(ARanges));
-  for I := 0 to High(ARanges) do
-    FCharClasses[Result].Ranges[I] := ARanges[I];
-end;
-
-function TRegExpCompiler.CaseFold(ACodePoint: Cardinal): Cardinal;
-begin
-  if not FModifier.IgnoreCase then
-    Exit(ACodePoint);
-  if (ACodePoint >= Ord('A')) and (ACodePoint <= Ord('Z')) then
-    Result := ACodePoint + 32
-  else if (ACodePoint >= Ord('a')) and (ACodePoint <= Ord('z')) then
-    Result := ACodePoint - 32
-  else
-    Result := ACodePoint;
-end;
 
 procedure TRegExpCompiler.EmitCharMatch(ACodePoint: Cardinal);
 var
@@ -527,7 +489,7 @@ begin
       end;
     end;
   end;
-  ClassIdx := AddCharClassFromDynamic(DynRanges);
+  ClassIdx := AddCharClass(DynRanges);
   if ANegated then
     Op := RX_CHAR_CLASS_NEG
   else
@@ -1548,9 +1510,6 @@ begin
   Result.CharClasses := FCharClasses;
   Result.CaptureCount := FCaptureCount;
   Result.NamedGroups := FNamedGroups;
-  Result.FlagIgnoreCase := HasRegExpFlag(FFlags, 'i');
-  Result.FlagMultiline := HasRegExpFlag(FFlags, 'm');
-  Result.FlagDotAll := HasRegExpFlag(FFlags, 's');
   Result.FlagUnicode := FUnicode;
 end;
 
