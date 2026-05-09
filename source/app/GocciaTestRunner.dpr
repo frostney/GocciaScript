@@ -551,18 +551,8 @@ end;
 function TTestRunnerApp.RunBytecodeTestModule(const AEngine: TGocciaEngine;
   const AModule: TGocciaCompiledModule;
   const AFileName: string): TGocciaValue;
-var
-  ModuleScope: TGocciaScope;
 begin
-  if AEngine.SourceType = stModule then
-  begin
-    ModuleScope := AEngine.Interpreter.GlobalScope.CreateChild(skModule,
-      'Module:' + AFileName);
-    ModuleScope.ThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-    Result := AEngine.RunModuleInScope(AModule, ModuleScope);
-  end
-  else
-    Result := AEngine.RunModule(AModule);
+  Result := AEngine.RunModuleForSourceType(AModule, AFileName);
 end;
 
 function TTestRunnerApp.RunGocciaScriptBytecode(const AFileName: string;

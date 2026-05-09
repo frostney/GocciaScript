@@ -298,18 +298,8 @@ end;
 procedure TBenchmarkRunnerApp.RunBytecodeBenchmarkModule(
   const AEngine: TGocciaEngine;
   const AModule: TGocciaCompiledModule; const AFileName: string);
-var
-  ModuleScope: TGocciaScope;
 begin
-  if AEngine.SourceType = stModule then
-  begin
-    ModuleScope := AEngine.Interpreter.GlobalScope.CreateChild(skModule,
-      'Module:' + AFileName);
-    ModuleScope.ThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-    AEngine.RunModuleInScope(AModule, ModuleScope);
-  end
-  else
-    AEngine.RunModule(AModule);
+  AEngine.RunModuleForSourceType(AModule, AFileName);
 end;
 
 procedure TBenchmarkRunnerApp.CollectBenchmarkFileInterpreted(

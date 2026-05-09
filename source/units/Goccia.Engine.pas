@@ -236,6 +236,8 @@ type
       const AModule: TGocciaCompiledModule): TGocciaValue;
     function RunModuleInScope(const AModule: TGocciaCompiledModule;
       const AScope: TGocciaScope): TGocciaValue;
+    function RunModuleForSourceType(const AModule: TGocciaCompiledModule;
+      const AFileName: string): TGocciaValue;
     procedure ThrowError(const AMessage: string; const ALine,
       AColumn: Integer);
 
@@ -313,7 +315,6 @@ uses
 
   Goccia.AST.Expressions,
   Goccia.AST.Statements,
-  Goccia.Bytecode.Module,
   Goccia.CallStack,
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
@@ -1293,6 +1294,23 @@ begin
     if Assigned(Result) and Assigned(GC) then
       GC.RemoveTempRoot(Result);
   end;
+end;
+
+function TGocciaEngine.RunModuleForSourceType(
+  const AModule: TGocciaCompiledModule;
+  const AFileName: string): TGocciaValue;
+var
+  ModuleScope: TGocciaScope;
+begin
+  if FSourceType = stModule then
+  begin
+    ModuleScope := FInterpreter.GlobalScope.CreateChild(skModule,
+      'Module:' + AFileName);
+    ModuleScope.ThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Result := RunModuleInScope(AModule, ModuleScope);
+  end
+  else
+    Result := RunModule(AModule);
 end;
 
 procedure TGocciaEngine.DiscardRuntimePending;
