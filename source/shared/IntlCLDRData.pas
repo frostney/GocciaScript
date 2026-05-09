@@ -306,60 +306,37 @@ begin
   end;
 end;
 
-var
-  CachedResource: TBytes;
-  CachedResourceLoaded: Boolean;
-  CachedHeader: record
-    EntryCount, EntryTableOffset, NamesOffset, DataOffset: Integer;
-    NamesByteCount, DataByteCount: Integer;
-  end;
-
-function EnsureResourceLoaded: Boolean;
-begin
-  if CachedResourceLoaded then
-  begin
-    Result := Length(CachedResource) > 0;
-    Exit;
-  end;
-
-  CachedResourceLoaded := True;
-  if not TryReadEmbeddedResource(CachedResource) then
-    Exit(False);
-
-  Result := TryReadEmbeddedHeader(CachedResource,
-    CachedHeader.EntryCount, CachedHeader.EntryTableOffset,
-    CachedHeader.NamesOffset, CachedHeader.DataOffset,
-    CachedHeader.NamesByteCount, CachedHeader.DataByteCount);
-
-  if not Result then
-    SetLength(CachedResource, 0);
-end;
-
 function TryGetSectionData(const ASectionName: string;
-  out ADataOffset, ADataLength: Integer): Boolean;
+  out AResource: TBytes; out ADataOffset, ADataLength: Integer): Boolean;
 var
   Entry: TEmbeddedCLDRDataEntry;
+  EntryCount, EntryTableOffset, NamesOffset, DataOffset: Integer;
+  NamesByteCount, DataByteCount: Integer;
   AbsoluteDataOffset, EntryDataEnd: Int64;
 begin
   Result := False;
   ADataOffset := 0;
   ADataLength := 0;
+  SetLength(AResource, 0);
 
-  if not EnsureResourceLoaded then
+  if not TryReadEmbeddedResource(AResource) then
     Exit;
 
-  if not TryFindEmbeddedEntry(CachedResource, ASectionName,
-    CachedHeader.EntryCount, CachedHeader.EntryTableOffset,
-    CachedHeader.NamesOffset, CachedHeader.NamesByteCount, Entry) then
+  if not TryReadEmbeddedHeader(AResource, EntryCount, EntryTableOffset,
+    NamesOffset, DataOffset, NamesByteCount, DataByteCount) then
     Exit;
 
-  AbsoluteDataOffset := Int64(CachedHeader.DataOffset) + Entry.DataOffset;
+  if not TryFindEmbeddedEntry(AResource, ASectionName, EntryCount,
+    EntryTableOffset, NamesOffset, NamesByteCount, Entry) then
+    Exit;
+
+  AbsoluteDataOffset := Int64(DataOffset) + Entry.DataOffset;
   EntryDataEnd := Int64(Entry.DataOffset) + Entry.DataLength;
   if (AbsoluteDataOffset < 0) or (AbsoluteDataOffset > High(Integer)) or
-     (EntryDataEnd < 0) or (EntryDataEnd > CachedHeader.DataByteCount) then
+     (EntryDataEnd < 0) or (EntryDataEnd > DataByteCount) then
     Exit;
 
-  if not HasBytesAvailable(CachedResource, Integer(AbsoluteDataOffset), Entry.DataLength) then
+  if not HasBytesAvailable(AResource, Integer(AbsoluteDataOffset), Entry.DataLength) then
     Exit;
 
   ADataOffset := Integer(AbsoluteDataOffset);
@@ -368,13 +345,13 @@ begin
 end;
 
 function TryGetSectionDataWithFallback(const APrefix, ALocale: string;
-  out ADataOffset, ADataLength: Integer): Boolean;
+  out AResource: TBytes; out ADataOffset, ADataLength: Integer): Boolean;
 var
   SectionName, FallbackLocale: string;
   DashPos: Integer;
 begin
   SectionName := APrefix + ALocale;
-  Result := TryGetSectionData(SectionName, ADataOffset, ADataLength);
+  Result := TryGetSectionData(SectionName, AResource, ADataOffset, ADataLength);
   if Result then
     Exit;
 
@@ -387,7 +364,7 @@ begin
       Exit;
     FallbackLocale := Copy(FallbackLocale, 1, DashPos - 1);
     SectionName := APrefix + FallbackLocale;
-    Result := TryGetSectionData(SectionName, ADataOffset, ADataLength);
+    Result := TryGetSectionData(SectionName, AResource, ADataOffset, ADataLength);
   until Result;
 end;
 
@@ -474,29 +451,31 @@ end;
 function TryLookupSimple(const ASectionName, AKey: string;
   out AValue: string): Boolean;
 var
+  Resource: TBytes;
   DataOffset, DataLength: Integer;
 begin
   Result := False;
   AValue := '';
 
-  if not TryGetSectionData(ASectionName, DataOffset, DataLength) then
+  if not TryGetSectionData(ASectionName, Resource, DataOffset, DataLength) then
     Exit;
 
-  Result := TryGetKeyValue(CachedResource, DataOffset, DataLength, AKey, AValue);
+  Result := TryGetKeyValue(Resource, DataOffset, DataLength, AKey, AValue);
 end;
 
 function TryLookupWithFallback(const APrefix, ALocale, AKey: string;
   out AValue: string): Boolean;
 var
+  Resource: TBytes;
   DataOffset, DataLength: Integer;
 begin
   Result := False;
   AValue := '';
 
-  if not TryGetSectionDataWithFallback(APrefix, ALocale, DataOffset, DataLength) then
+  if not TryGetSectionDataWithFallback(APrefix, ALocale, Resource, DataOffset, DataLength) then
     Exit;
 
-  Result := TryGetKeyValue(CachedResource, DataOffset, DataLength, AKey, AValue);
+  Result := TryGetKeyValue(Resource, DataOffset, DataLength, AKey, AValue);
 end;
 
 function TryGetLikelySubtags(const ATag: string; out AMaximized: string): Boolean;
@@ -527,6 +506,7 @@ end;
 function TryGetPluralRules(const ALocale: string; ACardinal: Boolean;
   out ARules: TIntlPluralRuleSet): Boolean;
 var
+  Resource: TBytes;
   SectionName: string;
   DataOffset, DataLength: Integer;
   Value: string;
@@ -544,7 +524,7 @@ begin
   else
     SectionName := 'plural-rules-ordinal';
 
-  if not TryGetSectionData(SectionName, DataOffset, DataLength) then
+  if not TryGetSectionData(SectionName, Resource, DataOffset, DataLength) then
   begin
     Result := False;
     Exit;
@@ -552,42 +532,42 @@ begin
 
   FoundAny := False;
 
-  if TryGetKeyValue(CachedResource, DataOffset, DataLength,
+  if TryGetKeyValue(Resource, DataOffset, DataLength,
     ALocale + '/zero', Value) then
   begin
     ARules.Zero := Value;
     FoundAny := True;
   end;
 
-  if TryGetKeyValue(CachedResource, DataOffset, DataLength,
+  if TryGetKeyValue(Resource, DataOffset, DataLength,
     ALocale + '/one', Value) then
   begin
     ARules.One := Value;
     FoundAny := True;
   end;
 
-  if TryGetKeyValue(CachedResource, DataOffset, DataLength,
+  if TryGetKeyValue(Resource, DataOffset, DataLength,
     ALocale + '/two', Value) then
   begin
     ARules.Two := Value;
     FoundAny := True;
   end;
 
-  if TryGetKeyValue(CachedResource, DataOffset, DataLength,
+  if TryGetKeyValue(Resource, DataOffset, DataLength,
     ALocale + '/few', Value) then
   begin
     ARules.Few := Value;
     FoundAny := True;
   end;
 
-  if TryGetKeyValue(CachedResource, DataOffset, DataLength,
+  if TryGetKeyValue(Resource, DataOffset, DataLength,
     ALocale + '/many', Value) then
   begin
     ARules.Many := Value;
     FoundAny := True;
   end;
 
-  if TryGetKeyValue(CachedResource, DataOffset, DataLength,
+  if TryGetKeyValue(Resource, DataOffset, DataLength,
     ALocale + '/other', Value) then
   begin
     ARules.Other := Value;
@@ -627,6 +607,7 @@ end;
 function TryGetListPattern(const ALocale: string; AType: TIntlListFormatType;
   AStyle: TIntlListFormatStyle; out APattern: TIntlListPattern): Boolean;
 var
+  Resource: TBytes;
   TypeName, SectionName, FallbackLocale: string;
   DataOffset, DataLength: Integer;
   Value: string;
@@ -650,7 +631,7 @@ begin
   end;
 
   SectionName := 'list-patterns/' + ALocale + '/' + TypeName;
-  Found := TryGetSectionData(SectionName, DataOffset, DataLength);
+  Found := TryGetSectionData(SectionName, Resource, DataOffset, DataLength);
 
   if not Found then
   begin
@@ -663,7 +644,7 @@ begin
         Break;
       FallbackLocale := Copy(FallbackLocale, 1, DashPos - 1);
       SectionName := 'list-patterns/' + FallbackLocale + '/' + TypeName;
-      Found := TryGetSectionData(SectionName, DataOffset, DataLength);
+      Found := TryGetSectionData(SectionName, Resource, DataOffset, DataLength);
     until Found;
   end;
 
@@ -675,25 +656,25 @@ begin
 
   Result := False;
 
-  if TryGetKeyValue(CachedResource, DataOffset, DataLength, 'start', Value) then
+  if TryGetKeyValue(Resource, DataOffset, DataLength, 'start', Value) then
   begin
     APattern.Start := Value;
     Result := True;
   end;
 
-  if TryGetKeyValue(CachedResource, DataOffset, DataLength, 'middle', Value) then
+  if TryGetKeyValue(Resource, DataOffset, DataLength, 'middle', Value) then
   begin
     APattern.Middle := Value;
     Result := True;
   end;
 
-  if TryGetKeyValue(CachedResource, DataOffset, DataLength, 'end', Value) then
+  if TryGetKeyValue(Resource, DataOffset, DataLength, 'end', Value) then
   begin
     APattern.EndPart := Value;
     Result := True;
   end;
 
-  if TryGetKeyValue(CachedResource, DataOffset, DataLength, 'pair', Value) then
+  if TryGetKeyValue(Resource, DataOffset, DataLength, 'pair', Value) then
   begin
     APattern.Pair := Value;
     Result := True;
@@ -703,6 +684,7 @@ end;
 function TryGetRelativeTimePattern(const ALocale: string;
   AUnit: TIntlRelativeTimeUnit; out APattern: TIntlRelativeTimePattern): Boolean;
 var
+  Resource: TBytes;
   UnitName: string;
   DataOffset, DataLength: Integer;
   Value: string;
@@ -735,14 +717,14 @@ begin
 
   Result := False;
 
-  if TryGetKeyValue(CachedResource, DataOffset, DataLength,
+  if TryGetKeyValue(Resource, DataOffset, DataLength,
     UnitName + '/future-other', Value) then
   begin
     APattern.Future := Value;
     Result := True;
   end;
 
-  if TryGetKeyValue(CachedResource, DataOffset, DataLength,
+  if TryGetKeyValue(Resource, DataOffset, DataLength,
     UnitName + '/past-other', Value) then
   begin
     APattern.Past := Value;
@@ -753,6 +735,7 @@ end;
 function TryGetDisplayName(const ALocale, ACode: string;
   AType: TIntlDisplayNameType; out AName: string): Boolean;
 var
+  Resource: TBytes;
   TypeName, SectionName, FallbackLocale: string;
   DataOffset, DataLength: Integer;
   DashPos: Integer;
@@ -772,7 +755,7 @@ begin
   end;
 
   SectionName := 'display-names/' + ALocale + '/' + TypeName;
-  Found := TryGetSectionData(SectionName, DataOffset, DataLength);
+  Found := TryGetSectionData(SectionName, Resource, DataOffset, DataLength);
 
   if not Found then
   begin
@@ -785,7 +768,7 @@ begin
         Break;
       FallbackLocale := Copy(FallbackLocale, 1, DashPos - 1);
       SectionName := 'display-names/' + FallbackLocale + '/' + TypeName;
-      Found := TryGetSectionData(SectionName, DataOffset, DataLength);
+      Found := TryGetSectionData(SectionName, Resource, DataOffset, DataLength);
     until Found;
   end;
 
@@ -795,7 +778,7 @@ begin
     Exit;
   end;
 
-  Result := TryGetKeyValue(CachedResource, DataOffset, DataLength, ACode, AName);
+  Result := TryGetKeyValue(Resource, DataOffset, DataLength, ACode, AName);
 end;
 
 function TryGetCurrencyInfo(const ALocale, ACurrency: string;
