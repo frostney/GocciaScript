@@ -107,9 +107,8 @@ jobs:
 
           # Keep official package sources available for cross builds. The
           # cached cross toolchain only prebuilds a minimal package subset, so
-          # source-based lookup is needed for units like Base64 and RegExpr.
+          # source-based lookup is needed for units like Base64.
           cp -R "$GITHUB_WORKSPACE/fpc-source/packages/fcl-base" "$PREFIX/share/fpcsrc/packages/"
-          cp -R "$GITHUB_WORKSPACE/fpc-source/packages/regexpr" "$PREFIX/share/fpcsrc/packages/"
           cp -R "$GITHUB_WORKSPACE/fpc-source/packages/fcl-net" "$PREFIX/share/fpcsrc/packages/"
           cp -R "$GITHUB_WORKSPACE/fpc-source/packages/openssl" "$PREFIX/share/fpcsrc/packages/"
 
