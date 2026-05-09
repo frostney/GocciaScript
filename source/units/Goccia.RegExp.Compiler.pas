@@ -113,7 +113,6 @@ type
     procedure CompileQuantifier(AAtomStart: Integer);
     procedure CompileCharacterClass;
     procedure CompileUnicodeSetsClass;
-    procedure ParseClassOperand(var AContents: TRegExpClassContents);
     procedure ParseClassUnion(var AContents: TRegExpClassContents);
     procedure ParseClassEscape(var AContents: TRegExpClassContents);
     procedure ParseStringDisjunction(var AContents: TRegExpClassContents);
@@ -761,6 +760,21 @@ begin
     ADest.Strings[I] := ResultStrings[I];
 end;
 
+procedure ComplementContents(var AContents: TRegExpClassContents);
+var
+  AllRange: array[0..0] of TRegExpCharRange;
+  ResultRanges: array[0..MAX_CHAR_RANGES - 1] of TRegExpCharRange;
+  ResultCount, I: Integer;
+begin
+  AllRange[0].Lo := 0;
+  AllRange[0].Hi := $10FFFF;
+  SubtractRanges(AllRange, 1, AContents.Ranges, AContents.RangeCount,
+    ResultRanges, ResultCount);
+  AContents.RangeCount := ResultCount;
+  for I := 0 to ResultCount - 1 do
+    AContents.Ranges[I] := ResultRanges[I];
+end;
+
 function TRegExpCompiler.IsStringProperty(const APropertyName: string): Boolean;
 begin
   Result := (APropertyName = 'Basic_Emoji') or
@@ -1131,7 +1145,7 @@ begin
       end;
     'q':
       begin
-        if Match('{') then
+        if FUnicodeSets and Match('{') then
           ParseStringDisjunction(AContents)
         else
           raise EConvertError.Create(
@@ -1218,40 +1232,6 @@ begin
   end;
 end;
 
-procedure TRegExpCompiler.ParseClassOperand(var AContents: TRegExpClassContents);
-var
-  SubContents: TRegExpClassContents;
-  Negated: Boolean;
-  CP: Cardinal;
-begin
-  if Peek = '[' then
-  begin
-    Inc(FPos);
-    Negated := Match('^');
-    InitClassContents(SubContents);
-    ParseClassUnion(SubContents);
-    if not Match(']') then
-      raise EConvertError.Create('Unterminated character class');
-    if Negated then
-    begin
-      if SubContents.StringCount > 0 then
-        raise EConvertError.Create(
-          'Negated character class cannot contain strings');
-    end;
-    MergeClassContents(AContents, SubContents);
-  end
-  else if Peek = '\' then
-  begin
-    Inc(FPos);
-    ParseClassEscape(AContents);
-  end
-  else
-  begin
-    CP := ReadCodePoint;
-    AddClassRange(AContents, CP, CP);
-  end;
-end;
-
 procedure TRegExpCompiler.ParseClassUnion(var AContents: TRegExpClassContents);
 var
   Lo, Hi: Cardinal;
@@ -1277,7 +1257,8 @@ begin
           raise EConvertError.Create(
             'Negated character class cannot contain strings');
         NormalizeRanges(EscContents.Ranges, EscContents.RangeCount);
-        NormalizeRanges(AContents.Ranges, AContents.RangeCount);
+        ComplementContents(EscContents);
+        MergeClassContents(AContents, EscContents);
       end
       else
       begin
@@ -1439,23 +1420,39 @@ procedure TRegExpCompiler.CompileUnicodeSetsClass;
 var
   Contents, RightContents: TRegExpClassContents;
   Negated: Boolean;
+  HaveIntersect, HaveSubtract: Boolean;
 begin
   Negated := Match('^');
   InitClassContents(Contents);
   ParseClassUnion(Contents);
-  if (not AtEnd) and (Peek = '&') and (PeekAt(1) = '&') then
+  HaveIntersect := False;
+  HaveSubtract := False;
+  while not AtEnd and (Peek <> ']') do
   begin
-    Inc(FPos, 2);
-    InitClassContents(RightContents);
-    ParseClassUnion(RightContents);
-    IntersectClassContents(Contents, RightContents);
-  end
-  else if (not AtEnd) and (Peek = '-') and (PeekAt(1) = '-') then
-  begin
-    Inc(FPos, 2);
-    InitClassContents(RightContents);
-    ParseClassUnion(RightContents);
-    SubtractClassContents(Contents, RightContents);
+    if (Peek = '&') and (PeekAt(1) = '&') then
+    begin
+      if HaveSubtract then
+        raise EConvertError.Create(
+          'Invalid regular expression: cannot mix && and -- in the same class');
+      HaveIntersect := True;
+      Inc(FPos, 2);
+      InitClassContents(RightContents);
+      ParseClassUnion(RightContents);
+      IntersectClassContents(Contents, RightContents);
+    end
+    else if (Peek = '-') and (PeekAt(1) = '-') then
+    begin
+      if HaveIntersect then
+        raise EConvertError.Create(
+          'Invalid regular expression: cannot mix && and -- in the same class');
+      HaveSubtract := True;
+      Inc(FPos, 2);
+      InitClassContents(RightContents);
+      ParseClassUnion(RightContents);
+      SubtractClassContents(Contents, RightContents);
+    end
+    else
+      Break;
   end;
   if not Match(']') then
     raise EConvertError.Create('Unterminated character class');

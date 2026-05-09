@@ -298,3 +298,91 @@ test("\\q{} with empty alternative", () => {
   const re = new RegExp("[\\q{|abc}]", "v");
   expect(re.test("abc")).toBe(true);
 });
+
+// --- Chained operators ---
+
+test("chained intersection narrows progressively", () => {
+  const re = new RegExp("[a-z&&[a-m]&&[a-f]]", "v");
+  expect(re.test("a")).toBe(true);
+  expect(re.test("f")).toBe(true);
+  expect(re.test("g")).toBe(false);
+  expect(re.test("m")).toBe(false);
+  expect(re.test("z")).toBe(false);
+});
+
+test("chained subtraction removes multiple sets", () => {
+  const re = new RegExp("[a-z--[aeiou]--[xyz]]", "v");
+  expect(re.test("b")).toBe(true);
+  expect(re.test("w")).toBe(true);
+  expect(re.test("a")).toBe(false);
+  expect(re.test("e")).toBe(false);
+  expect(re.test("x")).toBe(false);
+  expect(re.test("z")).toBe(false);
+});
+
+test("mixing && and -- at the same level throws", () => {
+  expect(() => new RegExp("[a-z&&[a-f]--[abc]]", "v")).toThrow(SyntaxError);
+  expect(() => new RegExp("[a-z--[abc]&&[a-f]]", "v")).toThrow(SyntaxError);
+});
+
+// --- Nested negated classes ---
+
+test("nested negated class computes complement", () => {
+  const re = new RegExp("[[^0-9]]", "v");
+  expect(re.test("a")).toBe(true);
+  expect(re.test("!")).toBe(true);
+  expect(re.test("5")).toBe(false);
+});
+
+test("nested negated class in intersection", () => {
+  const re = new RegExp("[[^0-9]&&[a-z]]", "v");
+  expect(re.test("a")).toBe(true);
+  expect(re.test("z")).toBe(true);
+  expect(re.test("5")).toBe(false);
+  expect(re.test("A")).toBe(false);
+});
+
+test("nested negated class in subtraction", () => {
+  const re = new RegExp("[a-z--[^b-y]]", "v");
+  expect(re.test("b")).toBe(true);
+  expect(re.test("y")).toBe(true);
+  expect(re.test("a")).toBe(false);
+  expect(re.test("z")).toBe(false);
+});
+
+// --- \\q{} in set operations ---
+
+test("\\q{} string intersection retains common strings", () => {
+  const re = new RegExp("[\\q{abc|def|ghi}&&\\q{abc|ghi|xyz}]", "v");
+  expect(re.test("abc")).toBe(true);
+  expect(re.test("ghi")).toBe(true);
+  expect(re.test("def")).toBe(false);
+  expect(re.test("xyz")).toBe(false);
+});
+
+test("\\q{} string subtraction removes matched strings", () => {
+  const re = new RegExp("[\\q{abc|def|ghi}--\\q{def}]", "v");
+  expect(re.test("abc")).toBe(true);
+  expect(re.test("ghi")).toBe(true);
+  expect(re.test("def")).toBe(false);
+});
+
+// --- Bytecode mode ---
+
+test("v flag works in bytecode mode", () => {
+  const re = new RegExp("[\\p{ASCII}&&\\p{Letter}]", "v");
+  expect(re.test("a")).toBe(true);
+  expect(re.test("1")).toBe(false);
+});
+
+test("set subtraction works in bytecode mode", () => {
+  const re = new RegExp("[a-z--[aeiou]]", "v");
+  expect(re.test("b")).toBe(true);
+  expect(re.test("a")).toBe(false);
+});
+
+test("\\q{} works in bytecode mode", () => {
+  const re = new RegExp("[\\q{abc|def}]", "v");
+  expect(re.test("abc")).toBe(true);
+  expect(re.test("a")).toBe(false);
+});
