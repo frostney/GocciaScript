@@ -504,6 +504,34 @@ describe("for-await-of", () => {
     expect(caughtMessage).toBe("return-rejected");
   });
 
+  test("surfaces .return() error on return", async () => {
+    let caughtMessage = "";
+    const asyncIter = {
+      [Symbol.asyncIterator]() {
+        return {
+          next() {
+            return Promise.resolve({ value: 1, done: false });
+          },
+          return() {
+            return Promise.reject(new Error("return-rejected"));
+          }
+        };
+      }
+    };
+
+    try {
+      await (async () => {
+        for await (const x of asyncIter) {
+          return "done";
+        }
+      })();
+    } catch (e) {
+      caughtMessage = e.message;
+    }
+
+    expect(caughtMessage).toBe("return-rejected");
+  });
+
   test("does not call async iterator return for continue", async () => {
     let returnCalled = 0;
     const asyncIter = {
