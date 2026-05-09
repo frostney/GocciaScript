@@ -23,6 +23,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Engine,
   Goccia.Engine.Backend,
+  Goccia.Executor,
   Goccia.Error,
   Goccia.Error.Detail,
   Goccia.FileExtensions,
@@ -191,8 +192,7 @@ type
     FWorkerProgressEnabled: Boolean;
     function ProfilingEnabled: Boolean;
     procedure RunBytecodeBenchmarkModule(const AEngine: TGocciaEngine;
-      const AExecutor: TGocciaBytecodeExecutor;
-      const AModule: TGocciaBytecodeModule; const AFileName: string);
+      const AModule: TGocciaCompiledModule; const AFileName: string);
     procedure CollectBenchmarkFileInterpreted(const AFileName: string;
       const AReporter: TBenchmarkReporter; const AShowProgress: Boolean);
     procedure CollectBenchmarkFileBytecode(const AFileName: string;
@@ -297,22 +297,9 @@ end;
 
 procedure TBenchmarkRunnerApp.RunBytecodeBenchmarkModule(
   const AEngine: TGocciaEngine;
-  const AExecutor: TGocciaBytecodeExecutor;
-  const AModule: TGocciaBytecodeModule; const AFileName: string);
-var
-  ModuleScope: TGocciaScope;
+  const AModule: TGocciaCompiledModule; const AFileName: string);
 begin
-  if AEngine.SourceType = stModule then
-  begin
-    { Run with module semantics: fresh module scope, this = undefined.
-      Mirrors TGocciaModuleLoader.LoadModule for nested module loads. }
-    ModuleScope := AEngine.Interpreter.GlobalScope.CreateChild(skModule,
-      'Module:' + AFileName);
-    ModuleScope.ThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-    AExecutor.RunModuleInScope(AModule, ModuleScope);
-  end
-  else
-    AExecutor.RunModule(AModule);
+  AEngine.RunModuleForSourceType(AModule, AFileName);
 end;
 
 procedure TBenchmarkRunnerApp.CollectBenchmarkFileInterpreted(
@@ -418,7 +405,7 @@ var
   Tokens: TObjectList<TGocciaToken>;
   Parser: TGocciaParser;
   ProgramNode: TGocciaProgram;
-  Module: TGocciaBytecodeModule;
+  Module: TGocciaCompiledModule;
   Executor: TGocciaBytecodeExecutor;
   Engine: TGocciaEngine;
   GC: TGarbageCollector;
@@ -468,7 +455,7 @@ begin
               ParseEnd := GetNanoseconds;
 
               try
-                Module := TGocciaBytecodeExecutor(Engine.Executor).CompileToModule(ProgramNode);
+                Module := Engine.CompileModule(ProgramNode);
                 CompileEnd := GetNanoseconds;
               finally
                 ProgramNode.Free;
@@ -482,12 +469,10 @@ begin
 
           ConfigureBenchmarkRuntime(Engine, AShowProgress, True);
 
-          try
           StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
           StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
           try
-            RunBytecodeBenchmarkModule(Engine,
-              TGocciaBytecodeExecutor(Engine.Executor), Module, AFileName);
+            RunBytecodeBenchmarkModule(Engine, Module, AFileName);
             ExecEnd := GetNanoseconds;
             if FProfileDeterministic.Present and
                Assigned(TGocciaProfiler.Instance) then
@@ -518,9 +503,6 @@ begin
             if Assigned(ScriptResult) and Assigned(GC) then
               GC.RemoveTempRoot(ScriptResult);
           end;
-        finally
-          Module.Free;
-        end;
         finally
           Engine.Free;
         end;
@@ -655,7 +637,7 @@ var
   Tokens: TObjectList<TGocciaToken>;
   Parser: TGocciaParser;
   ProgramNode: TGocciaProgram;
-  Module: TGocciaBytecodeModule;
+  Module: TGocciaCompiledModule;
   Executor: TGocciaBytecodeExecutor;
   Engine: TGocciaEngine;
   GC: TGarbageCollector;
@@ -692,7 +674,7 @@ begin
             ParseEnd := GetNanoseconds;
 
             try
-              Module := TGocciaBytecodeExecutor(Engine.Executor).CompileToModule(ProgramNode);
+              Module := Engine.CompileModule(ProgramNode);
               CompileEnd := GetNanoseconds;
             finally
               ProgramNode.Free;
@@ -706,12 +688,10 @@ begin
 
         ConfigureBenchmarkRuntime(Engine, AShowProgress, True);
 
-        try
         StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
         StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
         try
-          RunBytecodeBenchmarkModule(Engine,
-            TGocciaBytecodeExecutor(Engine.Executor), Module, AFileName);
+          RunBytecodeBenchmarkModule(Engine, Module, AFileName);
           ExecEnd := GetNanoseconds;
           if FProfileDeterministic.Present and
              Assigned(TGocciaProfiler.Instance) then
@@ -742,9 +722,6 @@ begin
           if Assigned(ScriptResult) and Assigned(GC) then
             GC.RemoveTempRoot(ScriptResult);
         end;
-      finally
-        Module.Free;
-      end;
       finally
         Engine.Free;
       end;

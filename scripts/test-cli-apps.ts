@@ -610,6 +610,61 @@ console.log("Bare Loader: --help documents --print...");
     throw new Error(`Bare --help should document --print, got: ${proc.stdout.toString()}`);
 }
 
+// -- Promise.then microtask drain (Bare) ----------------------------------------
+// Top-level .then callbacks must fire via WaitForRuntimeIdle post-execution drain.
+// Regression: ExecuteProgram freed the bytecode module before the drain, leaving
+// closures with dangling template pointers (Range check error on FCode access).
+
+console.log("Bare Loader: Promise.then drain (interpreted)...");
+{
+  const proc = Bun.spawnSync([BARE, "--mode=interpreted"], {
+    stdin: new TextEncoder().encode('Promise.resolve(42).then(v => print("then-" + v));\n'),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0) throw new Error(`Bare Promise drain interpreted exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (proc.stdout.toString().trim() !== "then-42")
+    throw new Error(`Bare Promise drain interpreted expected then-42, got: ${proc.stdout.toString()}`);
+}
+
+console.log("Bare Loader: Promise.then drain (bytecode)...");
+{
+  const proc = Bun.spawnSync([BARE, "--mode=bytecode"], {
+    stdin: new TextEncoder().encode('Promise.resolve(42).then(v => print("then-" + v));\n'),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0) throw new Error(`Bare Promise drain bytecode exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (proc.stdout.toString().trim() !== "then-42")
+    throw new Error(`Bare Promise drain bytecode expected then-42, got: ${proc.stdout.toString()}`);
+}
+
+// -- Promise.then microtask drain (Loader) --------------------------------------
+
+console.log("Loader: Promise.then drain (interpreted)...");
+{
+  const proc = Bun.spawnSync([LOADER, "--mode=interpreted"], {
+    stdin: new TextEncoder().encode('Promise.resolve(42).then(v => console.log("then-" + v));\n'),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0) throw new Error(`Loader Promise drain interpreted exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (!proc.stdout.toString().includes("then-42"))
+    throw new Error(`Loader Promise drain interpreted expected then-42, got: ${proc.stdout.toString()}`);
+}
+
+console.log("Loader: Promise.then drain (bytecode)...");
+{
+  const proc = Bun.spawnSync([LOADER, "--mode=bytecode"], {
+    stdin: new TextEncoder().encode('Promise.resolve(42).then(v => console.log("then-" + v));\n'),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0) throw new Error(`Loader Promise drain bytecode exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (!proc.stdout.toString().includes("then-42"))
+    throw new Error(`Loader Promise drain bytecode expected then-42, got: ${proc.stdout.toString()}`);
+}
+
 // -- --global / --globals -------------------------------------------------------
 
 console.log("Loader: --global flag...");
