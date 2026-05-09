@@ -181,7 +181,8 @@ begin
                   Module := Eng.CompileModule(ProgramNode);
                   CompileEnd := GetNanoseconds;
 
-                  ResultValue := Eng.RunModule(Module);
+                  ResultValue := Eng.RunModuleForSourceType(Module,
+                    REPL_FILE_NAME);
                   ExecEnd := GetNanoseconds;
 
                   if ResultValue <> nil then

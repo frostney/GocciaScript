@@ -463,6 +463,7 @@ var
 begin
   Context := FInterpreter.CreateEvaluationContext;
   Context.Scope := AScope;
+  Context.CurrentFilePath := FSourcePath;
   Result := EvaluateModuleBody(
     TGocciaInterpreterModule(AModule).Prog, Context);
   TGocciaInterpreterModule(AModule).FProgram := nil;
