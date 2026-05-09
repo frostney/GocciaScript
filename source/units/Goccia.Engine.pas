@@ -6,6 +6,7 @@ interface
 
 uses
   Classes,
+  Contnrs,
   Generics.Collections,
 
   Goccia.Arguments.Collection,
@@ -89,6 +90,14 @@ type
   TGocciaEngineExtensionClass = class of TGocciaEngineExtension;
   TGocciaEngineExtensionList = TObjectList<TGocciaEngineExtension>;
 
+  TGocciaInterpreterModule = class(TGocciaCompiledModule)
+  private
+    FProgram: TGocciaProgram;
+  public
+    constructor Create(const AProgram: TGocciaProgram);
+    property Prog: TGocciaProgram read FProgram;
+  end;
+
   TGocciaInterpreterExecutor = class(TGocciaExecutor)
   private
     FInterpreter: TGocciaInterpreter;
@@ -103,8 +112,13 @@ type
       const AProgram: TGocciaProgram): TGocciaValue; override;
     function EvaluateModuleBody(const AProgram: TGocciaProgram;
       const AContext: TGocciaEvaluationContext): TGocciaValue; override;
-    { The bootstrapped interpreter is owned by TGocciaEngine and assigned
-      here during Engine.Initialize so the executor can tree-walk. }
+    function CompileModule(
+      const AProgram: TGocciaProgram): TGocciaCompiledModule; override;
+    function RunCompiledModule(
+      const AModule: TGocciaCompiledModule): TGocciaValue; override;
+    function RunCompiledModuleInScope(
+      const AModule: TGocciaCompiledModule;
+      const AScope: TGocciaScope): TGocciaValue; override;
     property Interpreter: TGocciaInterpreter read FInterpreter
       write FInterpreter;
   end;
@@ -128,6 +142,7 @@ type
     FExecutor: TGocciaExecutor;
     FSourceLines: TStringList;
     FExtensions: TGocciaEngineExtensionList;
+    FRetainedModules: TObjectList;
 
     // Core language built-in objects
     FBuiltinMath: TGocciaMath;
@@ -192,7 +207,7 @@ type
     function GocciaGCMaxBytesGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function GocciaGCSuggestedMaxBytesGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function GocciaGCBytesAllocatedGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    procedure WaitForRuntimeIdle;
+    procedure DoRetainModule(const AModule: TObject);
     procedure DiscardRuntimePending;
     procedure PrintParserWarnings(const AParser: TGocciaParser; const ASourceMap: TGocciaSourceMap = nil);
     function CompileDynamicFunction(const AParamsSources: array of string;
@@ -216,6 +231,16 @@ type
 
     function Execute: TGocciaScriptResult;
     function ExecuteProgram(const AProgram: TGocciaProgram): TGocciaValue;
+    procedure WaitForRuntimeIdle;
+    function CompileModule(
+      const AProgram: TGocciaProgram): TGocciaCompiledModule;
+    procedure RetainModule(const AModule: TGocciaCompiledModule);
+    function RunModule(
+      const AModule: TGocciaCompiledModule): TGocciaValue;
+    function RunModuleInScope(const AModule: TGocciaCompiledModule;
+      const AScope: TGocciaScope): TGocciaValue;
+    function RunModuleForSourceType(const AModule: TGocciaCompiledModule;
+      const AFileName: string): TGocciaValue;
     procedure ThrowError(const AMessage: string; const ALine,
       AColumn: Integer);
 
@@ -414,6 +439,39 @@ begin
     Result := CF.Value;
     if CF.Kind = cfkReturn then Exit;
   end;
+end;
+
+constructor TGocciaInterpreterModule.Create(const AProgram: TGocciaProgram);
+begin
+  inherited Create;
+  FProgram := AProgram;
+end;
+
+function TGocciaInterpreterExecutor.CompileModule(
+  const AProgram: TGocciaProgram): TGocciaCompiledModule;
+begin
+  Result := TGocciaInterpreterModule.Create(AProgram);
+end;
+
+function TGocciaInterpreterExecutor.RunCompiledModule(
+  const AModule: TGocciaCompiledModule): TGocciaValue;
+begin
+  Result := FInterpreter.Execute(TGocciaInterpreterModule(AModule).Prog);
+  TGocciaInterpreterModule(AModule).FProgram := nil;
+end;
+
+function TGocciaInterpreterExecutor.RunCompiledModuleInScope(
+  const AModule: TGocciaCompiledModule;
+  const AScope: TGocciaScope): TGocciaValue;
+var
+  Context: TGocciaEvaluationContext;
+begin
+  Context := FInterpreter.CreateEvaluationContext;
+  Context.Scope := AScope;
+  Context.CurrentFilePath := FSourcePath;
+  Result := EvaluateModuleBody(
+    TGocciaInterpreterModule(AModule).Prog, Context);
+  TGocciaInterpreterModule(AModule).FProgram := nil;
 end;
 
 { TGocciaEngine }
@@ -649,8 +707,11 @@ begin
   // caller chose interpreter mode, bind the bootstrapped interpreter into
   // it now so its tree-walk methods can dispatch.  The bytecode executor
   // does not need this hook.
+  FRetainedModules := TObjectList.Create(True);
+
   if FExecutor is TGocciaInterpreterExecutor then
     TGocciaInterpreterExecutor(FExecutor).Interpreter := FInterpreter;
+  FExecutor.RetainModuleCallback := DoRetainModule;
   FExecutor.Initialize(FInterpreter.GlobalScope, FModuleLoader, AFileName);
 
   if Assigned(FFunctionConstructor) then
@@ -663,6 +724,7 @@ begin
     if Assigned(TGarbageCollector.Instance) and Assigned(FInterpreter) then
       TGarbageCollector.Instance.RemoveRootObject(FInterpreter.GlobalScope);
 
+    FRetainedModules.Free;
     FExtensions.Free;
     FBuiltinMath.Free;
     FBuiltinGlobalObject.Free;
@@ -1179,9 +1241,82 @@ end;
 procedure TGocciaEngine.WaitForRuntimeIdle;
 var
   I: Integer;
+  Queue: TGocciaMicrotaskQueue;
 begin
   for I := 0 to FExtensions.Count - 1 do
     FExtensions[I].WaitForIdle;
+  Queue := TGocciaMicrotaskQueue.Instance;
+  if Assigned(Queue) and Queue.HasPending then
+    Queue.DrainQueue;
+end;
+
+procedure TGocciaEngine.DoRetainModule(const AModule: TObject);
+begin
+  FRetainedModules.Add(AModule);
+end;
+
+function TGocciaEngine.CompileModule(
+  const AProgram: TGocciaProgram): TGocciaCompiledModule;
+begin
+  Result := FExecutor.CompileModule(AProgram);
+  FRetainedModules.Add(Result);
+end;
+
+procedure TGocciaEngine.RetainModule(const AModule: TGocciaCompiledModule);
+begin
+  FRetainedModules.Add(AModule);
+end;
+
+function TGocciaEngine.RunModule(
+  const AModule: TGocciaCompiledModule): TGocciaValue;
+var
+  GC: TGarbageCollector;
+begin
+  Result := FExecutor.RunCompiledModule(AModule);
+  GC := TGarbageCollector.Instance;
+  if Assigned(Result) and Assigned(GC) then
+    GC.AddTempRoot(Result);
+  try
+    WaitForRuntimeIdle;
+  finally
+    if Assigned(Result) and Assigned(GC) then
+      GC.RemoveTempRoot(Result);
+  end;
+end;
+
+function TGocciaEngine.RunModuleInScope(
+  const AModule: TGocciaCompiledModule;
+  const AScope: TGocciaScope): TGocciaValue;
+var
+  GC: TGarbageCollector;
+begin
+  Result := FExecutor.RunCompiledModuleInScope(AModule, AScope);
+  GC := TGarbageCollector.Instance;
+  if Assigned(Result) and Assigned(GC) then
+    GC.AddTempRoot(Result);
+  try
+    WaitForRuntimeIdle;
+  finally
+    if Assigned(Result) and Assigned(GC) then
+      GC.RemoveTempRoot(Result);
+  end;
+end;
+
+function TGocciaEngine.RunModuleForSourceType(
+  const AModule: TGocciaCompiledModule;
+  const AFileName: string): TGocciaValue;
+var
+  ModuleScope: TGocciaScope;
+begin
+  if FSourceType = stModule then
+  begin
+    ModuleScope := FInterpreter.GlobalScope.CreateChild(skModule,
+      'Module:' + AFileName);
+    ModuleScope.ThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Result := RunModuleInScope(AModule, ModuleScope);
+  end
+  else
+    Result := RunModule(AModule);
 end;
 
 procedure TGocciaEngine.DiscardRuntimePending;
