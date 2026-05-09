@@ -4206,17 +4206,53 @@ begin
       SSuggestIteratorResultObject);
 end;
 
+procedure CloseRawAsyncIterator(const AIteratorObject: TGocciaValue);
+var
+  ReturnMethod, ReturnResult: TGocciaValue;
+  CallArgs: TGocciaArgumentsCollection;
+begin
+  if not Assigned(AIteratorObject) then
+    Exit;
+  if not (AIteratorObject is TGocciaObjectValue) then
+    Exit;
+  ReturnMethod := AIteratorObject.GetProperty(PROP_RETURN);
+  if not Assigned(ReturnMethod) or
+     (ReturnMethod is TGocciaUndefinedLiteralValue) or
+     (ReturnMethod is TGocciaNullLiteralValue) then
+    Exit;
+  if not ReturnMethod.IsCallable then
+    ThrowTypeError(SErrorIteratorReturnMustBeCallable,
+      SSuggestIteratorProtocol);
+  CallArgs := TGocciaArgumentsCollection.Create;
+  try
+    ReturnResult := TGocciaFunctionBase(ReturnMethod).Call(
+      CallArgs, AIteratorObject);
+  finally
+    CallArgs.Free;
+  end;
+  ReturnResult := AwaitValue(ReturnResult);
+  if (ReturnResult is TGocciaUndefinedLiteralValue)
+      or (ReturnResult is TGocciaNullLiteralValue)
+      or ReturnResult.IsPrimitive then
+    ThrowTypeError(SErrorIteratorReturnObject,
+      SSuggestIteratorResultObject);
+end;
+
 // Abrupt-completion variant of CloseRawIterator: per ES2024 §7.4.10
 // step 5, when an iteration body completes abruptly the close must
 // not let iter.return()'s own errors replace the original exception.
 // Mirrors CloseIteratorPreservingError in Goccia.Values.IteratorSupport
 // for the TGocciaIteratorValue case.
-procedure CloseRawIteratorPreservingError(const AIteratorObject: TGocciaValue);
+procedure CloseRawIteratorPreservingError(const AIteratorObject: TGocciaValue;
+  const AAsync: Boolean = False);
 begin
   if not Assigned(AIteratorObject) then
     Exit;
   try
-    CloseRawIterator(AIteratorObject);
+    if AAsync then
+      CloseRawAsyncIterator(AIteratorObject)
+    else
+      CloseRawIterator(AIteratorObject);
   except
     // Swallow: the original abrupt completion is the one that must
     // surface to the caller.
@@ -9104,7 +9140,7 @@ begin
 
       OP_ITER_CLOSE:
         if FRegisters[A].Kind = grkObject then
-          CloseRawIteratorPreservingError(FRegisters[A].ObjectValue);
+          CloseRawIteratorPreservingError(FRegisters[A].ObjectValue, B <> 0);
 
       OP_AWAIT:
         SetRegister(A, AwaitValue(GetRegister(B)));

@@ -123,6 +123,7 @@ type
     UsingResources: array of TUsingResourceEntry;
     UsingErrorReg: UInt8;
     IsIteratorClose: Boolean;
+    IsAsyncIterator: Boolean;
     IteratorReg: UInt8;
   end;
 
@@ -1213,7 +1214,8 @@ begin
     PatchJumpTarget(ACtx, NullishJump);
   end
   else if AEntry.IsIteratorClose and ACloseIterator then
-    EmitInstruction(ACtx, EncodeABC(OP_ITER_CLOSE, AEntry.IteratorReg, 0, 0));
+    EmitInstruction(ACtx, EncodeABC(OP_ITER_CLOSE, AEntry.IteratorReg,
+      Ord(AEntry.IsAsyncIterator), 0));
 end;
 
 function CompileBlockStatement(const ACtx: TGocciaCompilationContext;
@@ -2010,6 +2012,7 @@ begin
       HandlerJump := EmitJumpInstruction(ACtx, OP_PUSH_HANDLER, CloseErrorReg);
       FillChar(PendingEntry, SizeOf(PendingEntry), 0);
       PendingEntry.IsIteratorClose := True;
+      PendingEntry.IsAsyncIterator := True;
       PendingEntry.IteratorReg := IterReg;
       GPendingFinally.Add(PendingEntry);
       GContinueFinallyBase := GPendingFinally.Count;
@@ -2044,12 +2047,11 @@ begin
 
     ACtx.CompileStatement(AStmt.Body);
 
-    if MismatchJump >= 0 then
-      PatchJumpTarget(ACtx, MismatchJump);
-
     // Patch continue jumps before close-upvalue so closures see correct iteration values
     for I := 0 to ContinueJumps.Count - 1 do
       PatchJumpTarget(ACtx, ContinueJumps[I]);
+    if MismatchJump >= 0 then
+      PatchJumpTarget(ACtx, MismatchJump);
 
     ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
     for I := 0 to ClosedCount - 1 do
@@ -2060,7 +2062,7 @@ begin
     if NeedsIteratorClose then
     begin
       PatchJumpTarget(ACtx, HandlerJump);
-      EmitInstruction(ACtx, EncodeABC(OP_ITER_CLOSE, IterReg, 0, 0));
+      EmitInstruction(ACtx, EncodeABC(OP_ITER_CLOSE, IterReg, 1, 0));
       EmitInstruction(ACtx, EncodeABC(OP_THROW, CloseErrorReg, 0, 0));
     end;
 

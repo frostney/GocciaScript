@@ -588,4 +588,31 @@ describe("for-await-of", () => {
     expect(returnCalled).toBe(1);
     expect(caughtMessage).toBe("body-threw");
   });
+
+  test("calls return on sync iterator fallback on return", async () => {
+    let returnCalled = 0;
+    const iterable = {
+      [Symbol.iterator]() {
+        return {
+          next() {
+            return { value: 1, done: false };
+          },
+          return() {
+            returnCalled++;
+            return { done: true };
+          }
+        };
+      }
+    };
+
+    const result = await (async () => {
+      for await (const x of iterable) {
+        return "done";
+      }
+      return "missed";
+    })();
+
+    expect(result).toBe("done");
+    expect(returnCalled).toBe(1);
+  });
 });
