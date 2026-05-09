@@ -493,14 +493,17 @@ var
 begin
   if ARangeCount <= 1 then
     Exit;
-  for I := 0 to ARangeCount - 2 do
-    for J := I + 1 to ARangeCount - 1 do
-      if ARanges[J].Lo < ARanges[I].Lo then
-      begin
-        Temp := ARanges[I];
-        ARanges[I] := ARanges[J];
-        ARanges[J] := Temp;
-      end;
+  for I := 1 to ARangeCount - 1 do
+  begin
+    Temp := ARanges[I];
+    J := I - 1;
+    while (J >= 0) and (ARanges[J].Lo > Temp.Lo) do
+    begin
+      ARanges[J + 1] := ARanges[J];
+      Dec(J);
+    end;
+    ARanges[J + 1] := Temp;
+  end;
   WriteIdx := 0;
   for I := 1 to ARangeCount - 1 do
   begin
@@ -652,30 +655,14 @@ begin
   end;
 end;
 
-procedure IntersectClassContents(var ADest: TRegExpClassContents;
-  const ARight: TRegExpClassContents);
+procedure FilterClassStrings(var ADest: TRegExpClassContents;
+  const ARight: TRegExpClassContents; AKeepMatched: Boolean);
 var
-  ResultRanges: array[0..MAX_CHAR_RANGES - 1] of TRegExpCharRange;
-  ResultCount: Integer;
-  NormLeft, NormRight: array[0..MAX_CHAR_RANGES - 1] of TRegExpCharRange;
-  NormLeftCount, NormRightCount, I, J: Integer;
+  I, J: Integer;
   Found: Boolean;
   ResultStrings: array of TRegExpStringSequence;
   ResultStringCount: Integer;
 begin
-  NormLeftCount := ADest.RangeCount;
-  for I := 0 to NormLeftCount - 1 do
-    NormLeft[I] := ADest.Ranges[I];
-  NormalizeRanges(NormLeft, NormLeftCount);
-  NormRightCount := ARight.RangeCount;
-  for I := 0 to NormRightCount - 1 do
-    NormRight[I] := ARight.Ranges[I];
-  NormalizeRanges(NormRight, NormRightCount);
-  IntersectRanges(NormLeft, NormLeftCount, NormRight, NormRightCount,
-    ResultRanges, ResultCount);
-  ADest.RangeCount := ResultCount;
-  for I := 0 to ResultCount - 1 do
-    ADest.Ranges[I] := ResultRanges[I];
   ResultStringCount := 0;
   SetLength(ResultStrings, ADest.StringCount);
   for I := 0 to ADest.StringCount - 1 do
@@ -694,7 +681,7 @@ begin
       if Found then
         Break;
     end;
-    if Found then
+    if Found = AKeepMatched then
     begin
       ResultStrings[ResultStringCount] := ADest.Strings[I];
       Inc(ResultStringCount);
@@ -706,16 +693,13 @@ begin
     ADest.Strings[I] := ResultStrings[I];
 end;
 
-procedure SubtractClassContents(var ADest: TRegExpClassContents;
-  const ARight: TRegExpClassContents);
+procedure ApplyClassSetOp(var ADest: TRegExpClassContents;
+  const ARight: TRegExpClassContents; AIsIntersect: Boolean);
 var
   ResultRanges: array[0..MAX_CHAR_RANGES - 1] of TRegExpCharRange;
   ResultCount: Integer;
   NormLeft, NormRight: array[0..MAX_CHAR_RANGES - 1] of TRegExpCharRange;
-  NormLeftCount, NormRightCount, I, J: Integer;
-  Found: Boolean;
-  ResultStrings: array of TRegExpStringSequence;
-  ResultStringCount: Integer;
+  NormLeftCount, NormRightCount, I: Integer;
 begin
   NormLeftCount := ADest.RangeCount;
   for I := 0 to NormLeftCount - 1 do
@@ -725,39 +709,28 @@ begin
   for I := 0 to NormRightCount - 1 do
     NormRight[I] := ARight.Ranges[I];
   NormalizeRanges(NormRight, NormRightCount);
-  SubtractRanges(NormLeft, NormLeftCount, NormRight, NormRightCount,
-    ResultRanges, ResultCount);
+  if AIsIntersect then
+    IntersectRanges(NormLeft, NormLeftCount, NormRight, NormRightCount,
+      ResultRanges, ResultCount)
+  else
+    SubtractRanges(NormLeft, NormLeftCount, NormRight, NormRightCount,
+      ResultRanges, ResultCount);
   ADest.RangeCount := ResultCount;
   for I := 0 to ResultCount - 1 do
     ADest.Ranges[I] := ResultRanges[I];
-  ResultStringCount := 0;
-  SetLength(ResultStrings, ADest.StringCount);
-  for I := 0 to ADest.StringCount - 1 do
-  begin
-    Found := False;
-    for J := 0 to ARight.StringCount - 1 do
-    begin
-      if Length(ADest.Strings[I].CodePoints) = Length(ARight.Strings[J].CodePoints) then
-      begin
-        Found := True;
-        if Length(ADest.Strings[I].CodePoints) > 0 then
-          Found := CompareMem(@ADest.Strings[I].CodePoints[0],
-            @ARight.Strings[J].CodePoints[0],
-            Length(ADest.Strings[I].CodePoints) * SizeOf(Cardinal));
-      end;
-      if Found then
-        Break;
-    end;
-    if not Found then
-    begin
-      ResultStrings[ResultStringCount] := ADest.Strings[I];
-      Inc(ResultStringCount);
-    end;
-  end;
-  ADest.StringCount := ResultStringCount;
-  SetLength(ADest.Strings, ResultStringCount);
-  for I := 0 to ResultStringCount - 1 do
-    ADest.Strings[I] := ResultStrings[I];
+  FilterClassStrings(ADest, ARight, AIsIntersect);
+end;
+
+procedure IntersectClassContents(var ADest: TRegExpClassContents;
+  const ARight: TRegExpClassContents);
+begin
+  ApplyClassSetOp(ADest, ARight, True);
+end;
+
+procedure SubtractClassContents(var ADest: TRegExpClassContents;
+  const ARight: TRegExpClassContents);
+begin
+  ApplyClassSetOp(ADest, ARight, False);
 end;
 
 procedure ComplementContents(var AContents: TRegExpClassContents);
@@ -937,41 +910,7 @@ begin
     AddClassRange(AContents, $2194, $2199);
     AddClassRange(AContents, $21A9, $21AA);
     AddClassRange(AContents, $24C2, $24C2);
-    AddClassRange(AContents, $25FC, $25FD);
-    AddClassRange(AContents, $2660, $2660);
-    AddClassRange(AContents, $2663, $2663);
-    AddClassRange(AContents, $2665, $2666);
-    AddClassRange(AContents, $2668, $2668);
-    AddClassRange(AContents, $267F, $267F);
-    AddClassRange(AContents, $2693, $2693);
-    AddClassRange(AContents, $2694, $2697);
-    AddClassRange(AContents, $2699, $2699);
-    AddClassRange(AContents, $269B, $269C);
-    AddClassRange(AContents, $26A0, $26A0);
-    AddClassRange(AContents, $26D4, $26D4);
-    AddClassRange(AContents, $2702, $2702);
-    AddClassRange(AContents, $2708, $2709);
-    AddClassRange(AContents, $270C, $270D);
-    AddClassRange(AContents, $270F, $270F);
-    AddClassRange(AContents, $2712, $2712);
-    AddClassRange(AContents, $2714, $2714);
-    AddClassRange(AContents, $2716, $2716);
-    AddClassRange(AContents, $271D, $271D);
-    AddClassRange(AContents, $2721, $2721);
-    AddClassRange(AContents, $2733, $2734);
-    AddClassRange(AContents, $2744, $2744);
-    AddClassRange(AContents, $2747, $2747);
-    AddClassRange(AContents, $2763, $2764);
-    AddClassRange(AContents, $27A1, $27A1);
-    AddClassRange(AContents, $2934, $2935);
-    AddClassRange(AContents, $2B05, $2B07);
-    AddClassRange(AContents, $3030, $3030);
-    AddClassRange(AContents, $303D, $303D);
-    AddClassRange(AContents, $3297, $3297);
-    AddClassRange(AContents, $3299, $3299);
     AddClassRange(AContents, $FE0F, $FE0F);
-    AddClassRange(AContents, $1F170, $1F171);
-    AddClassRange(AContents, $1F17E, $1F17F);
     AddClassRange(AContents, $1F202, $1F202);
     AddClassRange(AContents, $1F237, $1F237);
     AddClassString(AContents, [$23, $FE0F, $20E3]);
@@ -1071,12 +1010,7 @@ var
   C: Char;
   PropertyName: string;
   CodePoint: Cardinal;
-  PropRanges: array[0..MAX_CHAR_RANGES - 1] of TRegExpCharRange;
-  PropCount: Integer;
-  ComplementRanges: array[0..MAX_CHAR_RANGES - 1] of TRegExpCharRange;
-  ComplementCount: Integer;
-  AllRange: array[0..0] of TRegExpCharRange;
-  I: Integer;
+  NegContents: TRegExpClassContents;
 begin
   C := Advance;
   case C of
@@ -1124,16 +1058,12 @@ begin
           end
           else if C = 'P' then
           begin
-            PropCount := 0;
-            GetUnicodePropertyRanges(PropertyName, PropRanges, PropCount);
-            NormalizeRanges(PropRanges, PropCount);
-            AllRange[0].Lo := 0;
-            AllRange[0].Hi := $10FFFF;
-            SubtractRanges(AllRange, 1, PropRanges, PropCount,
-              ComplementRanges, ComplementCount);
-            for I := 0 to ComplementCount - 1 do
-              AddClassRange(AContents, ComplementRanges[I].Lo,
-                ComplementRanges[I].Hi);
+            InitClassContents(NegContents);
+            GetUnicodePropertyRanges(PropertyName, NegContents.Ranges,
+              NegContents.RangeCount);
+            NormalizeRanges(NegContents.Ranges, NegContents.RangeCount);
+            ComplementContents(NegContents);
+            MergeClassContents(AContents, NegContents);
           end
           else
             GetUnicodePropertyRanges(PropertyName, AContents.Ranges,
@@ -1355,9 +1285,6 @@ var
   SplitCount: Integer;
   JumpHoles: array of Integer;
   JumpCount: Integer;
-  ClassIdx: Integer;
-  DynRanges: array of TRegExpCharRange;
-  OrigCount: Integer;
 begin
   if (AContents.StringCount = 0) or ANegated then
   begin
@@ -1384,32 +1311,7 @@ begin
     end;
   end;
   if AContents.RangeCount > 0 then
-  begin
-    SetLength(DynRanges, AContents.RangeCount);
-    for I := 0 to AContents.RangeCount - 1 do
-      DynRanges[I] := AContents.Ranges[I];
-    if FModifier.IgnoreCase then
-    begin
-      OrigCount := Length(DynRanges);
-      for I := 0 to OrigCount - 1 do
-      begin
-        if (DynRanges[I].Lo >= Ord('A')) and (DynRanges[I].Hi <= Ord('Z')) then
-        begin
-          SetLength(DynRanges, Length(DynRanges) + 1);
-          DynRanges[High(DynRanges)].Lo := DynRanges[I].Lo + 32;
-          DynRanges[High(DynRanges)].Hi := DynRanges[I].Hi + 32;
-        end
-        else if (DynRanges[I].Lo >= Ord('a')) and (DynRanges[I].Hi <= Ord('z')) then
-        begin
-          SetLength(DynRanges, Length(DynRanges) + 1);
-          DynRanges[High(DynRanges)].Lo := DynRanges[I].Lo - 32;
-          DynRanges[High(DynRanges)].Hi := DynRanges[I].Hi - 32;
-        end;
-      end;
-    end;
-    ClassIdx := AddCharClass(DynRanges);
-    Emit(EncodeOpBx(RX_CHAR_CLASS, ClassIdx));
-  end
+    EmitCharClassRanges(AContents.Ranges, AContents.RangeCount, False)
   else
     Emit(EncodeOp(RX_FAIL));
   for I := 0 to JumpCount - 1 do
