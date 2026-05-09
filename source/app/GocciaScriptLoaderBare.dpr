@@ -232,8 +232,7 @@ begin
   AEngine.FunctionEnabled := AOptions.CompatFunction or AOptions.CompatAll;
   AEngine.TraditionalForLoopsEnabled :=
     AOptions.CompatTraditionalFor or AOptions.CompatAll;
-  AEngine.NonStrictModeEnabled :=
-    AOptions.CompatNonStrictMode or AOptions.CompatAll;
+  AEngine.NonStrictModeEnabled := AOptions.CompatNonStrictMode;
   AEngine.StrictTypes := AOptions.StrictTypes;
   AEngine.SourceType := AOptions.SourceType;
   AEngine.FunctionConstructor.Enabled := AOptions.UnsafeFunctionConstructor;

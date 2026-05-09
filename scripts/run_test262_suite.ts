@@ -685,6 +685,7 @@ async function runOneTest(
   const isAsync = flags.includes("async");
   const isRaw = flags.includes("raw");
   const isModule = flags.includes("module");
+  const isNoStrict = flags.includes("noStrict");
   const negative = parsed.meta.negative;
   const isNegative = negative !== undefined;
 
@@ -753,6 +754,7 @@ async function runOneTest(
     `--max-memory=${opts.maxMemoryBytes}`,
   ];
   if (isModule) args.unshift("--source-type=module");
+  if (isNoStrict) args.push("--compat-non-strict-mode");
   args.push("-");
 
   const result = await spawnBareWithTimeout(

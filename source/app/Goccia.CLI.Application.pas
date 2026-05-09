@@ -549,8 +549,11 @@ begin
   AEngine.TraditionalForLoopsEnabled := CompatAll or ResolveFlagOption(
     AEngineOptions.CompatTraditionalFor, AFileConfig, 'compat-traditional-for-loop');
 
-  { compat-non-strict-mode: CLI flag > per-file config > root config > default (false) }
-  AEngine.NonStrictModeEnabled := CompatAll or ResolveFlagOption(
+  { compat-non-strict-mode: CLI flag > per-file config > root config > default (false).
+    Intentionally NOT included in compat-all — unlike the other compat flags
+    which add syntax, this one weakens error enforcement (delete, this-binding,
+    assignment) and would break strict-mode test262 tests. }
+  AEngine.NonStrictModeEnabled := ResolveFlagOption(
     AEngineOptions.CompatNonStrictMode, AFileConfig, 'compat-non-strict-mode');
 
   { strict-types: CLI flag > per-file config > root config > default (false) }

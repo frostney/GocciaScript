@@ -218,7 +218,7 @@ begin
   EffectiveTraditionalFor := EffectiveCompatAll or ResolveFlagOption(
     EngineOptions.CompatTraditionalFor, FileConfig,
     'compat-traditional-for-loop');
-  EffectiveNonStrictMode := EffectiveCompatAll or ResolveFlagOption(
+  EffectiveNonStrictMode := ResolveFlagOption(
     EngineOptions.CompatNonStrictMode, FileConfig,
     'compat-non-strict-mode');
   EffectiveStrictTypes := ResolveFlagOption(
