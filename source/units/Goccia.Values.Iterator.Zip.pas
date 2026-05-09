@@ -12,38 +12,38 @@ uses
 type
   TGocciaZipMode = (zmShortest, zmLongest, zmStrict);
 
-  TGocciaZipIteratorValue = class(TGocciaIteratorValue)
+  TGocciaZipIteratorValue = class(TGocciaIteratorHelperValue)
   private
     FIterators: array of TGocciaIteratorValue;
     FPadding: array of TGocciaValue;
     FMode: TGocciaZipMode;
     FExhausted: array of Boolean;
-    FExecuting: Boolean;
     procedure CloseAllIterators;
+  protected
+    function DoAdvanceNext: TGocciaObjectValue; override;
+    function DoDirectNext(out ADone: Boolean): TGocciaValue; override;
   public
     constructor Create(const AIterators: array of TGocciaIteratorValue;
       const APadding: array of TGocciaValue; const AMode: TGocciaZipMode);
-    function AdvanceNext: TGocciaObjectValue; override;
-    function DirectNext(out ADone: Boolean): TGocciaValue; override;
     procedure Close; override;
     procedure MarkReferences; override;
   end;
 
-  TGocciaZipKeyedIteratorValue = class(TGocciaIteratorValue)
+  TGocciaZipKeyedIteratorValue = class(TGocciaIteratorHelperValue)
   private
     FKeys: array of string;
     FIterators: array of TGocciaIteratorValue;
     FPadding: array of TGocciaValue;
     FMode: TGocciaZipMode;
     FExhausted: array of Boolean;
-    FExecuting: Boolean;
     procedure CloseAllIterators;
+  protected
+    function DoAdvanceNext: TGocciaObjectValue; override;
+    function DoDirectNext(out ADone: Boolean): TGocciaValue; override;
   public
     constructor Create(const AKeys: array of string;
       const AIterators: array of TGocciaIteratorValue;
       const APadding: array of TGocciaValue; const AMode: TGocciaZipMode);
-    function AdvanceNext: TGocciaObjectValue; override;
-    function DirectNext(out ADone: Boolean): TGocciaValue; override;
     procedure Close; override;
     procedure MarkReferences; override;
   end;
@@ -142,23 +142,17 @@ begin
 end;
 
 // TC39 Joint Iteration §1.1 Iterator.zip(iterables [, options])
-function TGocciaZipIteratorValue.AdvanceNext: TGocciaObjectValue;
+function TGocciaZipIteratorValue.DoAdvanceNext: TGocciaObjectValue;
 var
   Value: TGocciaValue;
   Done: Boolean;
 begin
-  if FDone then
-  begin
-    Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
-    Exit;
-  end;
-
-  Value := DirectNext(Done);
+  Value := DoDirectNext(Done);
   Result := CreateIteratorResult(Value, Done);
 end;
 
 // TC39 Joint Iteration §1.1 Iterator.zip(iterables [, options]) — yield step
-function TGocciaZipIteratorValue.DirectNext(out ADone: Boolean): TGocciaValue;
+function TGocciaZipIteratorValue.DoDirectNext(out ADone: Boolean): TGocciaValue;
 var
   ResultArray: TGocciaArrayValue;
   I: Integer;
@@ -166,124 +160,105 @@ var
   InnerDone: Boolean;
   AnyDone, AllDone: Boolean;
 begin
-  if FDone then
+  if Length(FIterators) = 0 then
   begin
+    FDone := True;
     ADone := True;
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
     Exit;
   end;
 
-  if FExecuting then
-    ThrowTypeError(SErrorIteratorHelperExecuting, SSuggestIteratorProtocol);
-  FExecuting := True;
+  ResultArray := TGocciaArrayValue.Create;
+  TGarbageCollector.Instance.AddTempRoot(ResultArray);
   try
-    if Length(FIterators) = 0 then
+    AnyDone := False;
+    AllDone := True;
+
+    // TC39 Joint Iteration §1.1 step 6.a: For each iteratorRecord of iteratorRecords
+    for I := 0 to High(FIterators) do
     begin
-      FDone := True;
-      ADone := True;
-      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-      Exit;
+      if FExhausted[I] then
+      begin
+        if I < Length(FPadding) then
+          ResultArray.Elements.Add(FPadding[I])
+        else
+          ResultArray.Elements.Add(TGocciaUndefinedLiteralValue.UndefinedValue);
+        AnyDone := True;
+        Continue;
+      end;
+
+      try
+        InnerValue := FIterators[I].DirectNext(InnerDone);
+      except
+        AcquireExceptionObject;
+        CloseAllIterators;
+        FDone := True;
+        raise;
+      end;
+
+      if InnerDone then
+      begin
+        FExhausted[I] := True;
+        AnyDone := True;
+        if I < Length(FPadding) then
+          ResultArray.Elements.Add(FPadding[I])
+        else
+          ResultArray.Elements.Add(TGocciaUndefinedLiteralValue.UndefinedValue);
+      end
+      else
+      begin
+        AllDone := False;
+        ResultArray.Elements.Add(InnerValue);
+      end;
     end;
 
-    ResultArray := TGocciaArrayValue.Create;
-    TGarbageCollector.Instance.AddTempRoot(ResultArray);
-    try
-      AnyDone := False;
-      AllDone := True;
+    if not AnyDone then
+      AllDone := False;
 
-      // TC39 Joint Iteration §1.1 step 6.a: For each iteratorRecord of iteratorRecords
-      for I := 0 to High(FIterators) do
+    case FMode of
+      zmShortest:
       begin
-        if FExhausted[I] then
+        if AnyDone then
         begin
-          // Already exhausted — use padding (only relevant for longest mode)
-          if I < Length(FPadding) then
-            ResultArray.Elements.Add(FPadding[I])
-          else
-            ResultArray.Elements.Add(TGocciaUndefinedLiteralValue.UndefinedValue);
-          AnyDone := True;
-          Continue;
-        end;
-
-        try
-          InnerValue := FIterators[I].DirectNext(InnerDone);
-        except
-          AcquireExceptionObject;
           CloseAllIterators;
           FDone := True;
-          raise;
-        end;
-
-        if InnerDone then
-        begin
-          FExhausted[I] := True;
-          AnyDone := True;
-          if I < Length(FPadding) then
-            ResultArray.Elements.Add(FPadding[I])
-          else
-            ResultArray.Elements.Add(TGocciaUndefinedLiteralValue.UndefinedValue);
-        end
-        else
-        begin
-          AllDone := False;
-          ResultArray.Elements.Add(InnerValue);
+          ADone := True;
+          Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+          Exit;
         end;
       end;
-
-      if not AnyDone then
-        AllDone := False;
-
-      case FMode of
-        zmShortest:
+      zmLongest:
+      begin
+        if AllDone then
         begin
-          // TC39 Joint Iteration §1.1 step 6.a.ii: If mode is "shortest", close remaining
-          if AnyDone then
-          begin
-            CloseAllIterators;
-            FDone := True;
-            ADone := True;
-            Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-            Exit;
-          end;
-        end;
-        zmLongest:
-        begin
-          // TC39 Joint Iteration §1.1: If all are done, complete
-          if AllDone then
-          begin
-            FDone := True;
-            ADone := True;
-            Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-            Exit;
-          end;
-          // Otherwise yield the array with padding values for exhausted iterators
-        end;
-        zmStrict:
-        begin
-          // TC39 Joint Iteration §1.1: In strict mode, all must finish together
-          if AnyDone and not AllDone then
-          begin
-            CloseAllIterators;
-            FDone := True;
-            ThrowTypeError(SErrorIteratorZipStrictLengthMismatch, SSuggestIteratorZipMode);
-          end;
-          if AllDone then
-          begin
-            FDone := True;
-            ADone := True;
-            Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-            Exit;
-          end;
+          FDone := True;
+          ADone := True;
+          Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+          Exit;
         end;
       end;
-
-      ADone := False;
-      Result := ResultArray;
-    finally
-      TGarbageCollector.Instance.RemoveTempRoot(ResultArray);
+      zmStrict:
+      begin
+        if AnyDone and not AllDone then
+        begin
+          CloseAllIterators;
+          FDone := True;
+          ThrowTypeError(SErrorIteratorZipStrictLengthMismatch, SSuggestIteratorZipMode);
+        end;
+        if AllDone then
+        begin
+          FDone := True;
+          ADone := True;
+          Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+          Exit;
+        end;
+      end;
     end;
+
+    ADone := False;
+    Result := ResultArray;
   finally
-    FExecuting := False;
+    TGarbageCollector.Instance.RemoveTempRoot(ResultArray);
   end;
 end;
 
@@ -348,23 +323,17 @@ begin
 end;
 
 // TC39 Joint Iteration §1.2 Iterator.zipKeyed(iterables [, options])
-function TGocciaZipKeyedIteratorValue.AdvanceNext: TGocciaObjectValue;
+function TGocciaZipKeyedIteratorValue.DoAdvanceNext: TGocciaObjectValue;
 var
   Value: TGocciaValue;
   Done: Boolean;
 begin
-  if FDone then
-  begin
-    Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
-    Exit;
-  end;
-
-  Value := DirectNext(Done);
+  Value := DoDirectNext(Done);
   Result := CreateIteratorResult(Value, Done);
 end;
 
 // TC39 Joint Iteration §1.2 Iterator.zipKeyed(iterables [, options]) — yield step
-function TGocciaZipKeyedIteratorValue.DirectNext(out ADone: Boolean): TGocciaValue;
+function TGocciaZipKeyedIteratorValue.DoDirectNext(out ADone: Boolean): TGocciaValue;
 var
   ResultObj: TGocciaObjectValue;
   I: Integer;
@@ -372,119 +341,105 @@ var
   InnerDone: Boolean;
   AnyDone, AllDone: Boolean;
 begin
-  if FDone then
+  if Length(FIterators) = 0 then
   begin
+    FDone := True;
     ADone := True;
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
     Exit;
   end;
 
-  if FExecuting then
-    ThrowTypeError(SErrorIteratorHelperExecuting, SSuggestIteratorProtocol);
-  FExecuting := True;
+  ResultObj := TGocciaObjectValue.Create;
+  TGarbageCollector.Instance.AddTempRoot(ResultObj);
   try
-    if Length(FIterators) = 0 then
+    AnyDone := False;
+    AllDone := True;
+
+    // TC39 Joint Iteration §1.2 step 6.a: For each key of keys
+    for I := 0 to High(FIterators) do
     begin
-      FDone := True;
-      ADone := True;
-      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-      Exit;
+      if FExhausted[I] then
+      begin
+        if I < Length(FPadding) then
+          ResultObj.AssignProperty(FKeys[I], FPadding[I])
+        else
+          ResultObj.AssignProperty(FKeys[I], TGocciaUndefinedLiteralValue.UndefinedValue);
+        AnyDone := True;
+        Continue;
+      end;
+
+      try
+        InnerValue := FIterators[I].DirectNext(InnerDone);
+      except
+        AcquireExceptionObject;
+        CloseAllIterators;
+        FDone := True;
+        raise;
+      end;
+
+      if InnerDone then
+      begin
+        FExhausted[I] := True;
+        AnyDone := True;
+        if I < Length(FPadding) then
+          ResultObj.AssignProperty(FKeys[I], FPadding[I])
+        else
+          ResultObj.AssignProperty(FKeys[I], TGocciaUndefinedLiteralValue.UndefinedValue);
+      end
+      else
+      begin
+        AllDone := False;
+        ResultObj.AssignProperty(FKeys[I], InnerValue);
+      end;
     end;
 
-    ResultObj := TGocciaObjectValue.Create;
-    TGarbageCollector.Instance.AddTempRoot(ResultObj);
-    try
-      AnyDone := False;
-      AllDone := True;
+    if not AnyDone then
+      AllDone := False;
 
-      // TC39 Joint Iteration §1.2 step 6.a: For each key of keys
-      for I := 0 to High(FIterators) do
+    case FMode of
+      zmShortest:
       begin
-        if FExhausted[I] then
+        if AnyDone then
         begin
-          if I < Length(FPadding) then
-            ResultObj.AssignProperty(FKeys[I], FPadding[I])
-          else
-            ResultObj.AssignProperty(FKeys[I], TGocciaUndefinedLiteralValue.UndefinedValue);
-          AnyDone := True;
-          Continue;
-        end;
-
-        try
-          InnerValue := FIterators[I].DirectNext(InnerDone);
-        except
-          AcquireExceptionObject;
           CloseAllIterators;
           FDone := True;
-          raise;
-        end;
-
-        if InnerDone then
-        begin
-          FExhausted[I] := True;
-          AnyDone := True;
-          if I < Length(FPadding) then
-            ResultObj.AssignProperty(FKeys[I], FPadding[I])
-          else
-            ResultObj.AssignProperty(FKeys[I], TGocciaUndefinedLiteralValue.UndefinedValue);
-        end
-        else
-        begin
-          AllDone := False;
-          ResultObj.AssignProperty(FKeys[I], InnerValue);
+          ADone := True;
+          Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+          Exit;
         end;
       end;
-
-      if not AnyDone then
-        AllDone := False;
-
-      case FMode of
-        zmShortest:
+      zmLongest:
+      begin
+        if AllDone then
         begin
-          if AnyDone then
-          begin
-            CloseAllIterators;
-            FDone := True;
-            ADone := True;
-            Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-            Exit;
-          end;
-        end;
-        zmLongest:
-        begin
-          if AllDone then
-          begin
-            FDone := True;
-            ADone := True;
-            Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-            Exit;
-          end;
-        end;
-        zmStrict:
-        begin
-          if AnyDone and not AllDone then
-          begin
-            CloseAllIterators;
-            FDone := True;
-            ThrowTypeError(SErrorIteratorZipKeyedStrictLengthMismatch, SSuggestIteratorZipMode);
-          end;
-          if AllDone then
-          begin
-            FDone := True;
-            ADone := True;
-            Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-            Exit;
-          end;
+          FDone := True;
+          ADone := True;
+          Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+          Exit;
         end;
       end;
-
-      ADone := False;
-      Result := ResultObj;
-    finally
-      TGarbageCollector.Instance.RemoveTempRoot(ResultObj);
+      zmStrict:
+      begin
+        if AnyDone and not AllDone then
+        begin
+          CloseAllIterators;
+          FDone := True;
+          ThrowTypeError(SErrorIteratorZipKeyedStrictLengthMismatch, SSuggestIteratorZipMode);
+        end;
+        if AllDone then
+        begin
+          FDone := True;
+          ADone := True;
+          Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+          Exit;
+        end;
+      end;
     end;
+
+    ADone := False;
+    Result := ResultObj;
   finally
-    FExecuting := False;
+    TGarbageCollector.Instance.RemoveTempRoot(ResultObj);
   end;
 end;
 

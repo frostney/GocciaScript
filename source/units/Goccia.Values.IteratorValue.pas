@@ -50,6 +50,17 @@ type
     class function CreateGlobalObject: TGocciaObjectValue;
   end;
 
+  TGocciaIteratorHelperValue = class(TGocciaIteratorValue)
+  private
+    FExecuting: Boolean;
+  protected
+    function DoAdvanceNext: TGocciaObjectValue; virtual; abstract;
+    function DoDirectNext(out ADone: Boolean): TGocciaValue; virtual; abstract;
+  public
+    function AdvanceNext: TGocciaObjectValue; override;
+    function DirectNext(out ADone: Boolean): TGocciaValue; override;
+  end;
+
 function CreateIteratorResult(const AValue: TGocciaValue; const ADone: Boolean): TGocciaObjectValue;
 function InvokeIteratorCallback(const ACallback: TGocciaValue; const AValue: TGocciaValue; const AIndex: Integer): TGocciaValue;
 procedure CloseIteratorPreservingError(const AIterator: TGocciaIteratorValue);
@@ -1050,6 +1061,43 @@ begin
     // Unroot iterators — the zipKeyed iterator now owns them via MarkReferences
     for I := 0 to Count - 1 do
       GC.RemoveTempRoot(Iterators[I]);
+  end;
+end;
+
+{ TGocciaIteratorHelperValue }
+
+function TGocciaIteratorHelperValue.AdvanceNext: TGocciaObjectValue;
+begin
+  if FDone then
+  begin
+    Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
+    Exit;
+  end;
+  if FExecuting then
+    ThrowTypeError(SErrorIteratorHelperExecuting, SSuggestIteratorProtocol);
+  FExecuting := True;
+  try
+    Result := DoAdvanceNext;
+  finally
+    FExecuting := False;
+  end;
+end;
+
+function TGocciaIteratorHelperValue.DirectNext(out ADone: Boolean): TGocciaValue;
+begin
+  if FDone then
+  begin
+    ADone := True;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Exit;
+  end;
+  if FExecuting then
+    ThrowTypeError(SErrorIteratorHelperExecuting, SSuggestIteratorProtocol);
+  FExecuting := True;
+  try
+    Result := DoDirectNext(ADone);
+  finally
+    FExecuting := False;
   end;
 end;
 
