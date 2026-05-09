@@ -125,6 +125,7 @@ type
     UsingResources: array of TUsingResourceEntry;
     UsingErrorReg: UInt8;
     IsIteratorClose: Boolean;
+    IsAsyncIterator: Boolean;
     IteratorReg: UInt8;
   end;
 
@@ -1218,7 +1219,8 @@ begin
     PatchJumpTarget(ACtx, NullishJump);
   end
   else if AEntry.IsIteratorClose and ACloseIterator then
-    EmitInstruction(ACtx, EncodeABC(OP_ITER_CLOSE, AEntry.IteratorReg, 0, 0));
+    EmitInstruction(ACtx, EncodeABC(OP_ITER_CLOSE, AEntry.IteratorReg,
+      Ord(AEntry.IsAsyncIterator), 0));
 end;
 
 function CompileBlockStatement(const ACtx: TGocciaCompilationContext;
@@ -1928,7 +1930,7 @@ begin
     if NeedsIteratorClose then
     begin
       PatchJumpTarget(ACtx, HandlerJump);
-      EmitInstruction(ACtx, EncodeABC(OP_ITER_CLOSE, IterReg, 0, 0));
+      EmitInstruction(ACtx, EncodeABC(OP_ITER_CLOSE, IterReg, 0, 1));
       EmitInstruction(ACtx, EncodeABC(OP_THROW, CloseErrorReg, 0, 0));
     end;
 
@@ -1961,8 +1963,9 @@ end;
 procedure CompileForAwaitOfStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaForAwaitOfStatement);
 var
-  IterReg, ValueReg, DoneReg: UInt8;
-  LoopStart, ExitJump, MismatchJump, I: Integer;
+  IterReg, ValueReg, DoneReg, CloseErrorReg: UInt8;
+  LoopStart, ExitJump, MismatchJump, HandlerJump, I: Integer;
+  PendingBase: Integer;
   Slot: UInt8;
   ClosedLocals: array[0..255] of UInt8;
   ClosedCount: Integer;
@@ -1973,10 +1976,18 @@ var
   OldContinueJumps: TList<Integer>;
   OldContinueFinallyBase: Integer;
   ContinueJumps: TList<Integer>;
+  PendingEntry: TPendingFinallyEntry;
+  NeedsIteratorClose: Boolean;
 begin
   IterReg := ACtx.Scope.AllocateRegister;
   ValueReg := ACtx.Scope.AllocateRegister;
   DoneReg := ACtx.Scope.AllocateRegister;
+  CloseErrorReg := 0;
+
+  NeedsIteratorClose := Assigned(AStmt.BindingPattern) or
+    Assigned(AStmt.MatchPattern) or StatementNeedsIteratorClose(AStmt.Body);
+  if NeedsIteratorClose then
+    CloseErrorReg := ACtx.Scope.AllocateRegister;
 
   ACtx.CompileExpression(AStmt.Iterable, IterReg);
   EmitInstruction(ACtx, EncodeABC(OP_GET_ITER, IterReg, IterReg, 1));
@@ -1991,17 +2002,27 @@ begin
   ContinueJumps := TList<Integer>.Create;
   GContinueJumps := ContinueJumps;
   GBreakScopeDepth := ACtx.Scope.Depth;
+  if NeedsIteratorClose and not Assigned(GPendingFinally) then
+    GPendingFinally := TList<TPendingFinallyEntry>.Create;
   if Assigned(GPendingFinally) then
-  begin
-    GBreakFinallyBase := GPendingFinally.Count;
-    GContinueFinallyBase := GPendingFinally.Count;
-  end
+    PendingBase := GPendingFinally.Count
   else
-  begin
-    GBreakFinallyBase := 0;
-    GContinueFinallyBase := 0;
-  end;
+    PendingBase := 0;
+  GBreakFinallyBase := PendingBase;
+  GContinueFinallyBase := PendingBase;
   try
+    HandlerJump := -1;
+    if NeedsIteratorClose then
+    begin
+      HandlerJump := EmitJumpInstruction(ACtx, OP_PUSH_HANDLER, CloseErrorReg);
+      FillChar(PendingEntry, SizeOf(PendingEntry), 0);
+      PendingEntry.IsIteratorClose := True;
+      PendingEntry.IsAsyncIterator := True;
+      PendingEntry.IteratorReg := IterReg;
+      GPendingFinally.Add(PendingEntry);
+      GContinueFinallyBase := GPendingFinally.Count;
+    end;
+
     LoopStart := CurrentCodePosition(ACtx);
     MismatchJump := -1;
 
@@ -2043,7 +2064,19 @@ begin
 
     EmitInstruction(ACtx, EncodeAx(OP_JUMP, LoopStart - CurrentCodePosition(ACtx) - 1));
 
+    if NeedsIteratorClose then
+    begin
+      PatchJumpTarget(ACtx, HandlerJump);
+      EmitInstruction(ACtx, EncodeABC(OP_ITER_CLOSE, IterReg, 1, 1));
+      EmitInstruction(ACtx, EncodeABC(OP_THROW, CloseErrorReg, 0, 0));
+    end;
+
     PatchJumpTarget(ACtx, ExitJump);
+    if NeedsIteratorClose then
+    begin
+      EmitInstruction(ACtx, EncodeABC(OP_POP_HANDLER, 0, 0, 0));
+      GPendingFinally.Delete(GPendingFinally.Count - 1);
+    end;
 
     for I := 0 to BreakJumps.Count - 1 do
       PatchJumpTarget(ACtx, BreakJumps[I]);
@@ -2060,6 +2093,8 @@ begin
   ACtx.Scope.FreeRegister;
   ACtx.Scope.FreeRegister;
   ACtx.Scope.FreeRegister;
+  if NeedsIteratorClose then
+    ACtx.Scope.FreeRegister;
 end;
 
 function ForBodyAssignsIdentifier(const ANode: TGocciaASTNode;

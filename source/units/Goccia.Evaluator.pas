@@ -2058,6 +2058,45 @@ var
   SavedIteratorValue, SavedCurrentValue, SavedNextMethod: TGocciaValue;
   HasSavedLoopState: Boolean;
   HeadCompleted, HeadYielding: Boolean;
+  ShouldCloseIterator: Boolean;
+
+  procedure CloseAsyncIterator(const AIter: TGocciaValue);
+  var
+    ReturnMethod, ReturnResult: TGocciaValue;
+    CloseArgs: TGocciaArgumentsCollection;
+  begin
+    if not Assigned(AIter) or not (AIter is TGocciaObjectValue) then
+      Exit;
+    ReturnMethod := AIter.GetProperty(PROP_RETURN);
+    if not Assigned(ReturnMethod) or
+       (ReturnMethod is TGocciaUndefinedLiteralValue) or
+       (ReturnMethod is TGocciaNullLiteralValue) then
+      Exit;
+    if not ReturnMethod.IsCallable then
+      ThrowTypeError(SErrorIteratorReturnMustBeCallable,
+        SSuggestIteratorProtocol);
+    CloseArgs := TGocciaArgumentsCollection.Create;
+    try
+      ReturnResult := TGocciaFunctionBase(ReturnMethod).Call(CloseArgs, AIter);
+    finally
+      CloseArgs.Free;
+    end;
+    ReturnResult := AwaitValue(ReturnResult);
+    if (ReturnResult is TGocciaUndefinedLiteralValue)
+        or (ReturnResult is TGocciaNullLiteralValue)
+        or ReturnResult.IsPrimitive then
+      ThrowTypeError(SErrorIteratorReturnObject,
+        SSuggestIteratorResultObject);
+  end;
+
+  procedure CloseAsyncIteratorPreservingError(const AIter: TGocciaValue);
+  begin
+    try
+      CloseAsyncIterator(AIter);
+    except
+    end;
+  end;
+
 begin
   Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
 
@@ -2158,6 +2197,7 @@ begin
 
           HeadCompleted := False;
           HeadYielding := False;
+          ShouldCloseIterator := True;
           try
             try
               IterScope := AContext.Scope.CreateChild(skBlock);
@@ -2184,6 +2224,7 @@ begin
                 begin
                   if Assigned(Continuation) then
                     Continuation.ClearLoopState(AForAwaitOfStatement);
+                  ShouldCloseIterator := False;
                   Continue;
                 end;
                 IterContext := MatchContext;
@@ -2196,7 +2237,11 @@ begin
                 raise;
               end;
               on E: Exception do
+              begin
+                if ShouldCloseIterator then
+                  CloseAsyncIteratorPreservingError(IteratorObj);
                 raise;
+              end;
             end;
           finally
             if (not HeadCompleted) and (not HeadYielding) and
@@ -2219,6 +2264,7 @@ begin
               begin
                 if Assigned(Continuation) then
                   Continuation.ClearLoopState(AForAwaitOfStatement);
+                CloseAsyncIteratorPreservingError(IteratorObj);
                 raise;
               end;
             end;
@@ -2231,12 +2277,14 @@ begin
           begin
             if Assigned(Continuation) then
               Continuation.ClearLoopState(AForAwaitOfStatement);
+            CloseAsyncIterator(IteratorObj);
             Break;
           end;
           if CF.Kind = cfkReturn then
           begin
             if Assigned(Continuation) then
               Continuation.ClearLoopState(AForAwaitOfStatement);
+            CloseAsyncIterator(IteratorObj);
             Result := CF;
             Exit;
           end;
@@ -2292,6 +2340,7 @@ begin
 
         HeadCompleted := False;
         HeadYielding := False;
+        ShouldCloseIterator := True;
         try
           try
             IterScope := AContext.Scope.CreateChild(skBlock);
@@ -2318,6 +2367,7 @@ begin
               begin
                 if Assigned(Continuation) then
                   Continuation.ClearLoopState(AForAwaitOfStatement);
+                ShouldCloseIterator := False;
                 GenericNextResult := Iterator.AdvanceNext;
                 Continue;
               end;
@@ -2331,7 +2381,11 @@ begin
               raise;
             end;
             on E: Exception do
+            begin
+              if ShouldCloseIterator then
+                Goccia.Values.IteratorSupport.CloseIteratorPreservingError(Iterator);
               raise;
+            end;
           end;
         finally
           if (not HeadCompleted) and (not HeadYielding) and
@@ -2354,6 +2408,7 @@ begin
             begin
               if Assigned(Continuation) then
                 Continuation.ClearLoopState(AForAwaitOfStatement);
+              Goccia.Values.IteratorSupport.CloseIteratorPreservingError(Iterator);
               raise;
             end;
           end;
@@ -2366,12 +2421,14 @@ begin
         begin
           if Assigned(Continuation) then
             Continuation.ClearLoopState(AForAwaitOfStatement);
+          Iterator.Close;
           Break;
         end;
         if CF.Kind = cfkReturn then
         begin
           if Assigned(Continuation) then
             Continuation.ClearLoopState(AForAwaitOfStatement);
+          Iterator.Close;
           Result := CF;
           Exit;
         end;
