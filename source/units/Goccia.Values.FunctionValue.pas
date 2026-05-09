@@ -92,7 +92,9 @@ uses
   Goccia.GarbageCollector,
   Goccia.Types.Enforcement,
   Goccia.Values.ArrayValue,
-  Goccia.Values.ErrorHelper;
+  Goccia.Values.ErrorHelper,
+  Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.ObjectValue;
 
 { TGocciaFunctionValue }
 
@@ -165,6 +167,7 @@ var
   CF: TGocciaControlFlow;
   Context: TGocciaEvaluationContext;
   ParamTypeHint: TGocciaLocalType;
+  ArgsObj: TGocciaObjectValue;
 begin
   // Set up evaluation context — inherit OnError, LoadModule and the
   // strict-types flag from the closure scope so the body sees the
@@ -179,9 +182,9 @@ begin
   Context.CoverageEnabled := Assigned(TGocciaCoverageTracker.Instance)
     and TGocciaCoverageTracker.Instance.Enabled;
   Context.StrictTypes := FClosure.EffectiveStrictTypes;
+  Context.NonStrictMode := IsNonStrictAssignmentMode;
   Context.DisposalTracker := nil;
 
-  // Record coverage hit on the declaration line (get/set/constructor/method)
   if Context.CoverageEnabled and (FSourceLine > 0) and (FSourceFilePath <> '') then
     TGocciaCoverageTracker.Instance.RecordLineHit(FSourceFilePath, FSourceLine);
 
@@ -303,10 +306,25 @@ begin
     end;
   end;
 
-  // Hoist var declarations to function scope
+  if Context.NonStrictMode then
+  begin
+    ArgsObj := TGocciaObjectValue.Create;
+    for I := 0 to AArguments.Length - 1 do
+      ArgsObj.DefineProperty(IntToStr(I),
+        TGocciaPropertyDescriptorData.Create(AArguments.GetElement(I),
+          [pfWritable, pfEnumerable, pfConfigurable]));
+    ArgsObj.DefineProperty('length',
+      TGocciaPropertyDescriptorData.Create(
+        TGocciaNumberLiteralValue.Create(AArguments.Length),
+        [pfWritable, pfConfigurable]));
+    ArgsObj.DefineProperty('callee',
+      TGocciaPropertyDescriptorData.Create(Self,
+        [pfWritable, pfConfigurable]));
+    ACallScope.DefineLexicalBinding('arguments', ArgsObj, dtParameter);
+  end;
+
   HoistVarDeclarations(FBodyStatements, ACallScope);
 
-  // Hoist function declarations (both name and value) to function scope
   HoistFunctionDeclarations(FBodyStatements, Context);
 
   // Expression-body fast path: expression bodies cannot contain return/break

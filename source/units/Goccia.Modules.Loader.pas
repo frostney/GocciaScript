@@ -35,6 +35,7 @@ type
     FVarEnabled: Boolean;
     FFunctionEnabled: Boolean;
     FTraditionalForLoopsEnabled: Boolean;
+    FNonStrictModeEnabled: Boolean;
     FStrictTypesEnabled: Boolean;
     FContentProvider: TGocciaModuleContentProvider;
     FEvaluateModuleBody: TGocciaModuleBodyEvaluator;
@@ -80,6 +81,8 @@ type
     property FunctionEnabled: Boolean read FFunctionEnabled write FFunctionEnabled;
     property TraditionalForLoopsEnabled: Boolean
       read FTraditionalForLoopsEnabled write FTraditionalForLoopsEnabled;
+    property NonStrictModeEnabled: Boolean
+      read FNonStrictModeEnabled write FNonStrictModeEnabled;
     property StrictTypesEnabled: Boolean read FStrictTypesEnabled
       write FStrictTypesEnabled;
     property Resolver: TGocciaModuleResolver read FResolver;
@@ -291,6 +294,7 @@ begin
           Parser.VarDeclarationsEnabled := FVarEnabled;
           Parser.FunctionDeclarationsEnabled := FFunctionEnabled;
           Parser.TraditionalForLoopsEnabled := FTraditionalForLoopsEnabled;
+          Parser.NonStrictModeEnabled := FNonStrictModeEnabled;
           try
             ProgramNode := Parser.Parse;
             try
@@ -312,6 +316,7 @@ begin
                 Context.CurrentFilePath := ResolvedPath;
                 Context.CoverageEnabled := False;
                 Context.StrictTypes := FStrictTypesEnabled;
+                Context.NonStrictMode := FNonStrictModeEnabled;
                 Context.DisposalTracker := nil;
 
                 FEvaluateModuleBody(ProgramNode, Context);

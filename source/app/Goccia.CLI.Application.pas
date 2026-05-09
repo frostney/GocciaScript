@@ -549,6 +549,10 @@ begin
   AEngine.TraditionalForLoopsEnabled := CompatAll or ResolveFlagOption(
     AEngineOptions.CompatTraditionalFor, AFileConfig, 'compat-traditional-for-loop');
 
+  { compat-non-strict-mode: CLI flag > per-file config > root config > default (false) }
+  AEngine.NonStrictModeEnabled := CompatAll or ResolveFlagOption(
+    AEngineOptions.CompatNonStrictMode, AFileConfig, 'compat-non-strict-mode');
+
   { strict-types: CLI flag > per-file config > root config > default (false) }
   AEngine.StrictTypes := ResolveFlagOption(
     AEngineOptions.StrictTypes, AFileConfig, 'strict-types');

@@ -23,6 +23,7 @@ type
     FVM: TGocciaVM;
     FGlobalBackedTopLevel: Boolean;
     FStrictTypes: Boolean;
+    FNonStrictMode: Boolean;
     FModuleModules: TObjectList<TGocciaBytecodeModule>;
   public
     constructor Create;
@@ -53,6 +54,7 @@ type
     property GlobalBackedTopLevel: Boolean read FGlobalBackedTopLevel
       write FGlobalBackedTopLevel;
     property StrictTypes: Boolean read FStrictTypes write FStrictTypes;
+    property NonStrictMode: Boolean read FNonStrictMode write FNonStrictMode;
   end;
 
 implementation
@@ -107,6 +109,7 @@ begin
   try
     Compiler.GlobalBackedTopLevel := True;
     Compiler.StrictTypes := FStrictTypes;
+    Compiler.NonStrictMode := FNonStrictMode;
     Options := Compiler.OptimizationOptions;
     Options.PreserveCoverageShape :=
       Assigned(TGocciaCoverageTracker.Instance) and
@@ -173,6 +176,7 @@ begin
   try
     Compiler.GlobalBackedTopLevel := FGlobalBackedTopLevel;
     Compiler.StrictTypes := FStrictTypes;
+    Compiler.NonStrictMode := FNonStrictMode;
     Options := Compiler.OptimizationOptions;
     Options.PreserveCoverageShape :=
       Assigned(TGocciaCoverageTracker.Instance) and
@@ -193,6 +197,7 @@ begin
   GC := TGarbageCollector.Instance;
   WasEnabled := GC.Enabled;
   GC.Enabled := False;
+  FVM.NonStrictMode := FNonStrictMode;
   FVM.CoverageEnabled := Assigned(TGocciaCoverageTracker.Instance)
     and TGocciaCoverageTracker.Instance.Enabled;
   FVM.ProfilingOpcodes := Assigned(TGocciaProfiler.Instance)

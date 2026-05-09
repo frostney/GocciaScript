@@ -649,7 +649,21 @@ begin
     ACtx.Scope.FreeRegister;
   end
   else if AExpr.Operand is TGocciaIdentifierExpression then
-    raise Exception.Create('Delete of an unqualified identifier in strict mode')
+  begin
+    if ACtx.NonStrictMode then
+    begin
+      if (ACtx.Scope.ResolveLocal(
+            TGocciaIdentifierExpression(AExpr.Operand).Name) >= 0) or
+         (ACtx.Scope.ResolveUpvalue(
+            TGocciaIdentifierExpression(AExpr.Operand).Name) >= 0) then
+        EmitInstruction(ACtx, EncodeABC(OP_LOAD_FALSE, ADest, 0, 0))
+      else
+        EmitInstruction(ACtx, EncodeABC(OP_LOAD_TRUE, ADest, 0, 0));
+    end
+    else
+      raise Exception.Create(
+        'Delete of an unqualified identifier in strict mode');
+  end
   else
     EmitInstruction(ACtx, EncodeABC(OP_LOAD_TRUE, ADest, 0, 0));
 end;

@@ -2426,6 +2426,8 @@ begin
   TGocciaFunctionValue(Result).SourceFilePath := AContext.CurrentFilePath;
   TGocciaFunctionValue(Result).SourceLine := AMethodExpression.Line;
   TGocciaFunctionValue(Result).SourceText := AMethodExpression.SourceText;
+  if AContext.NonStrictMode then
+    TGocciaFunctionBase(Result).StrictThis := False;
 
   // ES2026 §10.2.5 MakeConstructor: function declarations / expressions and
   // (async) generator declarations / expressions get their own `prototype`
@@ -6399,13 +6401,17 @@ begin
       if ObjValue is TGocciaObjectValue then
       begin
         if not TGocciaObjectValue(ObjValue).DeleteSymbolProperty(SymbolKey) then
-          ThrowTypeError(Format(SErrorCannotDeletePropertyOf,
-            [SymbolKey.ToDisplayString.Value, '[object Object]']),
-            SSuggestCannotDeleteNonConfigurable);
+        begin
+          if not AContext.NonStrictMode then
+            ThrowTypeError(Format(SErrorCannotDeletePropertyOf,
+              [SymbolKey.ToDisplayString.Value, '[object Object]']),
+              SSuggestCannotDeleteNonConfigurable);
+          Result := TGocciaBooleanLiteralValue.FalseValue;
+          Exit;
+        end;
       end;
       Result := TGocciaBooleanLiteralValue.TrueValue;
     end
-    // Handle array element deletion
     else if ObjValue is TGocciaArrayValue then
     begin
       ArrayValue := TGocciaArrayValue(ObjValue);
@@ -6417,8 +6423,13 @@ begin
       else
       begin
         if not ArrayValue.DeleteProperty(PropertyName) then
-          ThrowTypeError(Format(SErrorCannotDeletePropertyOf, [PropertyName, '[object Array]']),
-            SSuggestCannotDeleteNonConfigurable);
+        begin
+          if not AContext.NonStrictMode then
+            ThrowTypeError(Format(SErrorCannotDeletePropertyOf, [PropertyName, '[object Array]']),
+              SSuggestCannotDeleteNonConfigurable);
+          Result := TGocciaBooleanLiteralValue.FalseValue;
+          Exit;
+        end;
         Result := TGocciaBooleanLiteralValue.TrueValue;
       end;
     end
@@ -6426,8 +6437,13 @@ begin
     begin
       ObjectValue := TGocciaObjectValue(ObjValue);
       if not ObjectValue.DeleteProperty(PropertyName) then
-        ThrowTypeError(Format(SErrorCannotDeletePropertyOf, [PropertyName, '[object Object]']),
-          SSuggestCannotDeleteNonConfigurable);
+      begin
+        if not AContext.NonStrictMode then
+          ThrowTypeError(Format(SErrorCannotDeletePropertyOf, [PropertyName, '[object Object]']),
+            SSuggestCannotDeleteNonConfigurable);
+        Result := TGocciaBooleanLiteralValue.FalseValue;
+        Exit;
+      end;
       Result := TGocciaBooleanLiteralValue.TrueValue;
     end
     else
@@ -6441,10 +6457,20 @@ begin
     // Handle other expressions according to strict mode semantics
     if AOperand is TGocciaIdentifierExpression then
     begin
-      // In strict mode, attempting to delete variables/identifiers throws TypeError
-      AContext.OnError('Delete of an unqualified identifier in strict mode',
-        AOperand.Line, AOperand.Column);
-      Result := TGocciaBooleanLiteralValue.TrueValue; // Fallback if OnError doesn't throw
+      if AContext.NonStrictMode then
+      begin
+        if AContext.Scope.Contains(
+             TGocciaIdentifierExpression(AOperand).Name) then
+          Result := TGocciaBooleanLiteralValue.FalseValue
+        else
+          Result := TGocciaBooleanLiteralValue.TrueValue;
+      end
+      else
+      begin
+        AContext.OnError('Delete of an unqualified identifier in strict mode',
+          AOperand.Line, AOperand.Column);
+        Result := TGocciaBooleanLiteralValue.TrueValue;
+      end;
     end
     else
     begin

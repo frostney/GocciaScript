@@ -1147,6 +1147,11 @@ begin
      (AStmt is TGocciaContinueStatement) then
     Exit(False);
 
+  if AStmt is TGocciaWithStatement then
+    raise Exception.Create(
+      'The ''with'' statement requires interpreter mode (--mode=interpreted)');
+
+
   if (AStmt is TGocciaExpressionStatement) or
      (AStmt is TGocciaVariableDeclaration) or
      (AStmt is TGocciaDestructuringDeclaration) or

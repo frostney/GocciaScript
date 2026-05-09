@@ -71,6 +71,7 @@ type
     FVarDeclarationsEnabled: Boolean;
     FFunctionDeclarationsEnabled: Boolean;
     FTraditionalForLoopsEnabled: Boolean;
+    FNonStrictModeEnabled: Boolean;
 
     procedure AddWarning(const AMessage, ASuggestion: string; const ALine, AColumn: Integer);
     procedure PushPrivateClassContext;
@@ -232,6 +233,8 @@ type
       read FFunctionDeclarationsEnabled write FFunctionDeclarationsEnabled;
     property TraditionalForLoopsEnabled: Boolean
       read FTraditionalForLoopsEnabled write FTraditionalForLoopsEnabled;
+    property NonStrictModeEnabled: Boolean
+      read FNonStrictModeEnabled write FNonStrictModeEnabled;
     property WarningCount: Integer read FWarningCount;
   end;
 
@@ -4226,18 +4229,28 @@ end;
 function TGocciaParser.WithStatement: TGocciaStatement;
 var
   Line, Column: Integer;
+  ObjExpr: TGocciaExpression;
+  Body: TGocciaStatement;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
 
-  AddWarning('The ''with'' statement is not supported in GocciaScript', '',
-    Line, Column);
-
-  SkipBalancedParens;
-
-  SkipStatementOrBlock;
-
-  Result := TGocciaEmptyStatement.Create(Line, Column);
+  if FNonStrictModeEnabled then
+  begin
+    Consume(gttLeftParen, 'Expected ''('' after ''with''', '');
+    ObjExpr := Expression;
+    Consume(gttRightParen, 'Expected '')'' after with expression', '');
+    Body := Statement;
+    Result := TGocciaWithStatement.Create(ObjExpr, Body, Line, Column);
+  end
+  else
+  begin
+    AddWarning('The ''with'' statement is not supported in GocciaScript', '',
+      Line, Column);
+    SkipBalancedParens;
+    SkipStatementOrBlock;
+    Result := TGocciaEmptyStatement.Create(Line, Column);
+  end;
 end;
 
 function TGocciaParser.FunctionStatement(const AIsAsync: Boolean; const AIsGenerator: Boolean): TGocciaStatement;

@@ -35,6 +35,7 @@ type
     FOnError: TGocciaThrowErrorCallback;
     FLoadModule: TLoadModuleCallback;
     FStrictTypes: Boolean;
+    FWithObject: TGocciaValue;
   protected
     function GetThisValue: TGocciaValue; virtual;
     function GetOwningClass: TGocciaValue; virtual;
@@ -105,6 +106,7 @@ type
       surrounding lexical scope.  For live engine state use
       EffectiveStrictTypes, which always reads the root scope. }
     property StrictTypes: Boolean read FStrictTypes write FStrictTypes;
+    property WithObject: TGocciaValue read FWithObject write FWithObject;
   end;
 
   // Root scope with no parent -- used by the interpreter/engine
@@ -517,7 +519,13 @@ begin
   // continuing to throw based on stale state.
   StrictActive := EffectiveStrictTypes;
 
-  // Try to find variable in current scope first
+  if (FWithObject is TGocciaObjectValue) and
+     TGocciaObjectValue(FWithObject).HasProperty(AName) then
+  begin
+    FWithObject.SetProperty(AName, AValue);
+    Exit;
+  end;
+
   if FLexicalBindings.TryGetValue(AName, LexicalBinding) then
   begin
     // Check if variable is initialized (temporal dead zone for let/const)
@@ -581,6 +589,15 @@ function TGocciaScope.GetBinding(const AName: string; const ALine: Integer = 0; 
 var
   LexicalBinding: TLexicalBinding;
 begin
+  if (FWithObject is TGocciaObjectValue) and
+     TGocciaObjectValue(FWithObject).HasProperty(AName) then
+  begin
+    Result.Value := TGocciaObjectValue(FWithObject).GetProperty(AName);
+    Result.DeclarationType := dtVar;
+    Result.Initialized := True;
+    Result.TypeHint := sltUntyped;
+    Exit;
+  end;
   if FLexicalBindings.TryGetValue(AName, LexicalBinding) then
   begin
     if not LexicalBinding.IsAccessible then
@@ -674,6 +691,9 @@ begin
     for Pair in FVarBindings do
       if Assigned(Pair.Value.Value) then
         Pair.Value.Value.MarkReferences;
+
+  if Assigned(FWithObject) then
+    FWithObject.MarkReferences;
 end;
 
 { TGocciaGlobalScope }

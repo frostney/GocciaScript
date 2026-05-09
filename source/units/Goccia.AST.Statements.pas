@@ -428,6 +428,19 @@ type
     function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
   end;
 
+  TGocciaWithStatement = class(TGocciaStatement)
+  private
+    FObjectExpr: TGocciaExpression;
+    FBody: TGocciaStatement;
+  public
+    constructor Create(const AObjectExpr: TGocciaExpression;
+      const ABody: TGocciaStatement; const ALine, AColumn: Integer);
+    destructor Destroy; override;
+    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
+    property ObjectExpr: TGocciaExpression read FObjectExpr;
+    property Body: TGocciaStatement read FBody;
+  end;
+
   TGocciaCaseClause = class(TGocciaASTNode)
   private
     FTest: TGocciaExpression;  // Case value expression (nil for default case)
@@ -780,6 +793,44 @@ end;
   constructor TGocciaEmptyStatement.Create(const ALine, AColumn: Integer);
   begin
     inherited Create(ALine, AColumn);
+  end;
+
+  { TGocciaWithStatement }
+
+  constructor TGocciaWithStatement.Create(const AObjectExpr: TGocciaExpression;
+    const ABody: TGocciaStatement; const ALine, AColumn: Integer);
+  begin
+    inherited Create(ALine, AColumn);
+    FObjectExpr := AObjectExpr;
+    FBody := ABody;
+  end;
+
+  destructor TGocciaWithStatement.Destroy;
+  begin
+    FObjectExpr.Free;
+    FBody.Free;
+    inherited;
+  end;
+
+  function TGocciaWithStatement.Execute(
+    const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  var
+    ObjValue: TGocciaValue;
+    WithScope: TGocciaScope;
+    WithContext: TGocciaEvaluationContext;
+  begin
+    ObjValue := EvaluateExpression(FObjectExpr, AContext);
+    if not (ObjValue is TGocciaObjectValue) then
+    begin
+      Result := TGocciaControlFlow.Normal(
+        TGocciaUndefinedLiteralValue.UndefinedValue);
+      Exit;
+    end;
+    WithScope := AContext.Scope.CreateChild(skCustom, 'with');
+    WithScope.WithObject := ObjValue;
+    WithContext := AContext;
+    WithContext.Scope := WithScope;
+    Result := FBody.Execute(WithContext);
   end;
 
   { TGocciaWhileStatement }

@@ -38,6 +38,7 @@ type
     CompatVar: Boolean;
     CompatFunction: Boolean;
     CompatTraditionalFor: Boolean;
+    CompatNonStrictMode: Boolean;
     CompatAll: Boolean;
     StrictTypes: Boolean;
     UnsafeFunctionConstructor: Boolean;
@@ -182,6 +183,8 @@ begin
       Result.CompatFunction := True
     else if Arg = '--compat-traditional-for-loop' then
       Result.CompatTraditionalFor := True
+    else if Arg = '--compat-non-strict-mode' then
+      Result.CompatNonStrictMode := True
     else if Arg = '--compat-all' then
       Result.CompatAll := True
     else if Arg = '--strict-types' then
@@ -229,6 +232,8 @@ begin
   AEngine.FunctionEnabled := AOptions.CompatFunction or AOptions.CompatAll;
   AEngine.TraditionalForLoopsEnabled :=
     AOptions.CompatTraditionalFor or AOptions.CompatAll;
+  AEngine.NonStrictModeEnabled :=
+    AOptions.CompatNonStrictMode or AOptions.CompatAll;
   AEngine.StrictTypes := AOptions.StrictTypes;
   AEngine.SourceType := AOptions.SourceType;
   AEngine.FunctionConstructor.Enabled := AOptions.UnsafeFunctionConstructor;

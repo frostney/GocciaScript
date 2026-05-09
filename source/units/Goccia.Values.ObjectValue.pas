@@ -104,6 +104,8 @@ type
     function ObjectPrototypeValueOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
+procedure SetNonStrictAssignmentMode(const AEnabled: Boolean);
+function IsNonStrictAssignmentMode: Boolean; inline;
 
 implementation
 
@@ -134,9 +136,20 @@ var
 threadvar
   FPrototypeMethodHost: TGocciaObjectValue;
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+  GNonStrictAssignment: Boolean;
 
 const
   MAX_PROTOTYPE_CHAIN_DEPTH = 256;
+
+procedure SetNonStrictAssignmentMode(const AEnabled: Boolean);
+begin
+  GNonStrictAssignment := AEnabled;
+end;
+
+function IsNonStrictAssignmentMode: Boolean; inline;
+begin
+  Result := GNonStrictAssignment;
+end;
 
 procedure MarkPropertyDescriptor(const ADescriptor: TGocciaPropertyDescriptor);
 begin
@@ -463,7 +476,10 @@ var
   ChainDepth: Integer;
 begin
   if FFrozen then
+  begin
+    if GNonStrictAssignment then Exit;
     ThrowTypeError(Format(SErrorReadOnlyPropertyFrozen, [AName]), SSuggestCannotDeleteNonConfigurable);
+  end;
 
   if FProperties.TryGetValue(AName, Descriptor) then
   begin
@@ -481,6 +497,7 @@ begin
         end;
         Exit;
       end;
+      if GNonStrictAssignment then Exit;
       ThrowTypeError(Format(SErrorSetPropertyOnlyGetter, [AName, ToStringTag]), SSuggestPropertyHasOnlyGetter);
     end
     else if Descriptor is TGocciaPropertyDescriptorData then
@@ -490,11 +507,11 @@ begin
         TGocciaPropertyDescriptorData(Descriptor).Value := AValue;
         Exit;
       end;
+      if GNonStrictAssignment then Exit;
       ThrowTypeError(Format(SErrorCannotAssignReadOnly, [AName]), SSuggestCannotDeleteNonConfigurable);
     end;
   end;
 
-  // ES2026 §10.1.9 step 2-3: Walk prototype chain for inherited accessor descriptors
   Proto := FPrototype;
   ChainDepth := 0;
   while Assigned(Proto) do
@@ -518,12 +535,16 @@ begin
           end;
           Exit;
         end;
+        if GNonStrictAssignment then Exit;
         ThrowTypeError(Format(SErrorSetPropertyOnlyGetter, [AName, ToStringTag]), SSuggestPropertyHasOnlyGetter);
       end
       else if Descriptor is TGocciaPropertyDescriptorData then
       begin
         if not TGocciaPropertyDescriptorData(Descriptor).Writable then
+        begin
+          if GNonStrictAssignment then Exit;
           ThrowTypeError(Format(SErrorCannotAssignReadOnly, [AName]), SSuggestCannotDeleteNonConfigurable);
+        end;
         Break;
       end;
     end;
@@ -531,10 +552,16 @@ begin
   end;
 
   if not ACanCreate then
+  begin
+    if GNonStrictAssignment then Exit;
     ThrowTypeError(Format(SErrorCannotAssignNonExistent, [AName]), SSuggestCannotDeleteNonConfigurable);
+  end;
 
   if not FExtensible then
+  begin
+    if GNonStrictAssignment then Exit;
     ThrowTypeError(Format(SErrorCannotAddPropertyNotExtensible, [AName]), SSuggestObjectNotExtensible);
+  end;
 
   DefineProperty(AName, TGocciaPropertyDescriptorData.Create(AValue,
     [pfEnumerable, pfConfigurable, pfWritable]));

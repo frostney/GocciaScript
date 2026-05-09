@@ -92,6 +92,7 @@ type
     FCurrentNewTarget: TGocciaValue;
     FActiveDecoratorSession: TObject;
     FCoverageEnabled: Boolean;
+    FNonStrictMode: Boolean;
     FProfilingOpcodes: Boolean;
     FProfilingFunctions: Boolean;
     FPreviousExceptionMask: TFPUExceptionMask;
@@ -248,6 +249,7 @@ type
     property GlobalThisValue: TGocciaValue read FGlobalThisValue write FGlobalThisValue;
     property LoadModule: TLoadModuleCallback read FLoadModule write FLoadModule;
     property CoverageEnabled: Boolean read FCoverageEnabled write FCoverageEnabled;
+    property NonStrictMode: Boolean read FNonStrictMode write FNonStrictMode;
     property ProfilingOpcodes: Boolean read FProfilingOpcodes write FProfilingOpcodes;
     property ProfilingFunctions: Boolean read FProfilingFunctions write FProfilingFunctions;
   end;
@@ -7811,6 +7813,8 @@ begin
           if TGocciaObjectValue(FRegisters[A].ObjectValue).DeleteProperty(
             Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue) then
             FRegisters[A] := RegisterBoolean(True)
+          else if FNonStrictMode then
+            FRegisters[A] := RegisterBoolean(False)
           else
             ThrowTypeError(Format(SErrorCannotDeletePropertyOf, [Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue, '[object Object]']),
               SSuggestCannotDeleteNonConfigurable);
@@ -8580,6 +8584,8 @@ begin
           if TGocciaObjectValue(FRegisters[B].ObjectValue).DeleteSymbolProperty(
             TGocciaSymbolValue(FRegisters[C].ObjectValue)) then
             FRegisters[A] := RegisterBoolean(True)
+          else if FNonStrictMode then
+            FRegisters[A] := RegisterBoolean(False)
           else
             ThrowTypeError(Format(SErrorCannotDeletePropertyOf,
               [TGocciaSymbolValue(FRegisters[C].ObjectValue).ToDisplayString.Value,
@@ -8610,6 +8616,8 @@ begin
               if TGocciaObjectValue(FRegisters[B].ObjectValue).DeleteSymbolProperty(
                 TGocciaSymbolValue(PropKeyValue)) then
                 FRegisters[A] := RegisterBoolean(True)
+              else if FNonStrictMode then
+                FRegisters[A] := RegisterBoolean(False)
               else
                 ThrowTypeError(Format(SErrorCannotDeletePropertyOf,
                   [TGocciaSymbolValue(PropKeyValue).ToDisplayString.Value,
@@ -8619,6 +8627,8 @@ begin
             else if TGocciaObjectValue(FRegisters[B].ObjectValue).DeleteProperty(
               TGocciaStringLiteralValue(PropKeyValue).Value) then
               FRegisters[A] := RegisterBoolean(True)
+            else if FNonStrictMode then
+              FRegisters[A] := RegisterBoolean(False)
             else
               ThrowTypeError(Format(SErrorCannotDeletePropertyOf,
                 [TGocciaStringLiteralValue(PropKeyValue).Value, '[object Object]']),
@@ -8627,6 +8637,8 @@ begin
           else if TGocciaObjectValue(FRegisters[B].ObjectValue).DeleteProperty(
             KeyToPropertyNameRegister(FRegisters[C])) then
             FRegisters[A] := RegisterBoolean(True)
+          else if FNonStrictMode then
+            FRegisters[A] := RegisterBoolean(False)
           else
             ThrowTypeError(Format(SErrorCannotDeletePropertyOf,
               [KeyToPropertyNameRegister(FRegisters[C]), '[object Object]']),
@@ -8651,6 +8663,8 @@ begin
             ChildClosure.SetUpvalue(I, FCurrentClosure.GetUpvalue(Desc.Index));
         end;
         BytecodeFunction := TGocciaBytecodeFunctionValue.Create(Self, ChildClosure);
+        if FNonStrictMode then
+          BytecodeFunction.StrictThis := False;
         // ES2026 §10.2.5 MakeConstructor: install own `prototype` data property
         // for `function`/`function*` declarations and expressions (including
         // async generators).  The prototype is a fresh ordinary object whose
@@ -9601,6 +9615,7 @@ var
   TopClosure: TGocciaBytecodeClosure;
   SavedModuleSourcePath: string;
   SavedModuleExports: TGocciaValueMap;
+  SavedNonStrict: Boolean;
 begin
   EmptyArgs := TGocciaArgumentsCollection.Create;
   TopClosure := TGocciaBytecodeClosure.Create(AModule.TopLevel);
@@ -9608,6 +9623,8 @@ begin
   SavedModuleExports := FCurrentModuleExports;
   FCurrentModuleSourcePath := AModule.SourcePath;
   FCurrentModuleExports := TGocciaValueMap.Create;
+  SavedNonStrict := IsNonStrictAssignmentMode;
+  SetNonStrictAssignmentMode(FNonStrictMode);
   try
     try
       Result := ExecuteClosure(TopClosure,
@@ -9616,6 +9633,7 @@ begin
       FCurrentModuleExports.Free;
       FCurrentModuleExports := SavedModuleExports;
       FCurrentModuleSourcePath := SavedModuleSourcePath;
+      SetNonStrictAssignmentMode(SavedNonStrict);
     end;
   finally
     TopClosure.Free;
@@ -9627,13 +9645,17 @@ function TGocciaVM.ExecuteFunction(const ATemplate: TGocciaFunctionTemplate): TG
 var
   EmptyArgs: TGocciaArgumentsCollection;
   TopClosure: TGocciaBytecodeClosure;
+  SavedNonStrict: Boolean;
 begin
   EmptyArgs := TGocciaArgumentsCollection.Create;
   TopClosure := TGocciaBytecodeClosure.Create(ATemplate);
+  SavedNonStrict := IsNonStrictAssignmentMode;
+  SetNonStrictAssignmentMode(FNonStrictMode);
   try
     Result := ExecuteClosure(TopClosure,
       TGocciaUndefinedLiteralValue.UndefinedValue, EmptyArgs);
   finally
+    SetNonStrictAssignmentMode(SavedNonStrict);
     TopClosure.Free;
     EmptyArgs.Free;
   end;

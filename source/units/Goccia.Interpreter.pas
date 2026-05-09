@@ -35,6 +35,7 @@ type
     FVarEnabled: Boolean;
     FFunctionEnabled: Boolean;
     FTraditionalForLoopsEnabled: Boolean;
+    FNonStrictModeEnabled: Boolean;
     FStrictTypesEnabled: Boolean;
     FModuleLoader: TGocciaModuleLoader;
     FOwnsModuleLoader: Boolean;
@@ -50,6 +51,7 @@ type
     procedure SetVarEnabled(const AValue: Boolean);
     procedure SetFunctionEnabled(const AValue: Boolean);
     procedure SetTraditionalForLoopsEnabled(const AValue: Boolean);
+    procedure SetNonStrictModeEnabled(const AValue: Boolean);
     procedure SetStrictTypesEnabled(const AValue: Boolean);
     procedure SetResolver(const AValue: TGocciaModuleResolver);
   public
@@ -66,6 +68,8 @@ type
     property FunctionEnabled: Boolean read FFunctionEnabled write SetFunctionEnabled;
     property TraditionalForLoopsEnabled: Boolean
       read FTraditionalForLoopsEnabled write SetTraditionalForLoopsEnabled;
+    property NonStrictModeEnabled: Boolean
+      read FNonStrictModeEnabled write SetNonStrictModeEnabled;
     property StrictTypesEnabled: Boolean read FStrictTypesEnabled
       write SetStrictTypesEnabled;
     property GlobalScope: TGocciaGlobalScope read FGlobalScope;
@@ -136,6 +140,7 @@ begin
   Result.CoverageEnabled := Assigned(TGocciaCoverageTracker.Instance)
     and TGocciaCoverageTracker.Instance.Enabled;
   Result.StrictTypes := FStrictTypesEnabled;
+  Result.NonStrictMode := FNonStrictModeEnabled;
 end;
 
 function TGocciaInterpreter.Execute(const AProgram: TGocciaProgram): TGocciaValue;
@@ -143,20 +148,28 @@ var
   I: Integer;
   CF: TGocciaControlFlow;
   Context: TGocciaEvaluationContext;
+  SavedNonStrict: Boolean;
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   Context := CreateEvaluationContext;
+
+  SavedNonStrict := IsNonStrictAssignmentMode;
+  SetNonStrictAssignmentMode(FNonStrictModeEnabled);
 
   if FVarEnabled then
     HoistVarDeclarations(AProgram.Body, FGlobalScope);
   if FFunctionEnabled then
     HoistFunctionDeclarations(AProgram.Body, Context);
 
-  for I := 0 to AProgram.Body.Count - 1 do
-  begin
-    CF := EvaluateStatement(AProgram.Body[I], Context);
-    Result := CF.Value;
-    if CF.Kind = cfkReturn then Exit;
+  try
+    for I := 0 to AProgram.Body.Count - 1 do
+    begin
+      CF := EvaluateStatement(AProgram.Body[I], Context);
+      Result := CF.Value;
+      if CF.Kind = cfkReturn then Exit;
+    end;
+  finally
+    SetNonStrictAssignmentMode(SavedNonStrict);
   end;
 end;
 
@@ -208,6 +221,12 @@ procedure TGocciaInterpreter.SetTraditionalForLoopsEnabled(const AValue: Boolean
 begin
   FTraditionalForLoopsEnabled := AValue;
   FModuleLoader.TraditionalForLoopsEnabled := AValue;
+end;
+
+procedure TGocciaInterpreter.SetNonStrictModeEnabled(const AValue: Boolean);
+begin
+  FNonStrictModeEnabled := AValue;
+  FModuleLoader.NonStrictModeEnabled := AValue;
 end;
 
 procedure TGocciaInterpreter.SetStrictTypesEnabled(const AValue: Boolean);

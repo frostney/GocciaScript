@@ -167,6 +167,7 @@ type
     FCompatVar: TGocciaFlagOption;
     FCompatFunction: TGocciaFlagOption;
     FCompatTraditionalFor: TGocciaFlagOption;
+    FCompatNonStrictMode: TGocciaFlagOption;
     FCompatAll: TGocciaFlagOption;
     FStrictTypes: TGocciaFlagOption;
     FAllowedHosts: TGocciaRepeatableOption;
@@ -191,6 +192,7 @@ type
     property CompatVar: TGocciaFlagOption read FCompatVar;
     property CompatFunction: TGocciaFlagOption read FCompatFunction;
     property CompatTraditionalFor: TGocciaFlagOption read FCompatTraditionalFor;
+    property CompatNonStrictMode: TGocciaFlagOption read FCompatNonStrictMode;
     property CompatAll: TGocciaFlagOption read FCompatAll;
     property StrictTypes: TGocciaFlagOption read FStrictTypes;
     property AllowedHosts: TGocciaRepeatableOption read FAllowedHosts;
@@ -579,6 +581,8 @@ begin
     'Enable function declarations and expressions (compatibility)', 'Engine');
   FCompatTraditionalFor := TGocciaFlagOption.Create('compat-traditional-for-loop',
     'Enable traditional C-style for(init; test; update) loops (compatibility)', 'Engine');
+  FCompatNonStrictMode := TGocciaFlagOption.Create('compat-non-strict-mode',
+    'Enable non-strict-mode semantics (delete, this-coercion, arguments, with)', 'Engine');
   FCompatAll := TGocciaFlagOption.Create('compat-all',
     'Enable all compatibility flags (--compat-*)', 'Engine');
   FStrictTypes := TGocciaFlagOption.Create('strict-types',
@@ -606,6 +610,7 @@ begin
   FCompatVar.Free;
   FCompatFunction.Free;
   FCompatTraditionalFor.Free;
+  FCompatNonStrictMode.Free;
   FCompatAll.Free;
   FStrictTypes.Free;
   FAllowedHosts.Free;
@@ -615,7 +620,7 @@ end;
 
 function TGocciaEngineOptions.Options: TGocciaOptionArray;
 begin
-  SetLength(Result, 18);
+  SetLength(Result, 19);
   Result[0] := FMode;
   Result[1] := FSourceType;
   Result[2] := FASI;
@@ -630,10 +635,11 @@ begin
   Result[11] := FCompatVar;
   Result[12] := FCompatFunction;
   Result[13] := FCompatTraditionalFor;
-  Result[14] := FCompatAll;
-  Result[15] := FStrictTypes;
-  Result[16] := FAllowedHosts;
-  Result[17] := FInspectDepth;
+  Result[14] := FCompatNonStrictMode;
+  Result[15] := FCompatAll;
+  Result[16] := FStrictTypes;
+  Result[17] := FAllowedHosts;
+  Result[18] := FInspectDepth;
 end;
 
 { TGocciaCoverageOptions }
