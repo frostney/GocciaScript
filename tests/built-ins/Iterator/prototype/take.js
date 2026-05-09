@@ -20,14 +20,13 @@ describe("Iterator.prototype.take()", () => {
     expect(() => [1].values().take(-1)).toThrow(RangeError);
   });
 
-  test("take only advances the source as needed", () => {
+  test("take closes the source when the limit is reached", () => {
     const source = [10, 20, 30, 40, 50].values();
     const taken = source.take(2);
 
     expect(taken.next().value).toBe(10);
     expect(taken.next().value).toBe(20);
     expect(taken.next().done).toBe(true);
-    // Source is closed when the take limit is reached (IteratorClose per spec)
     expect(source.next().done).toBe(true);
   });
 
@@ -118,6 +117,27 @@ describe("Iterator.prototype.take()", () => {
     const result = Iterator.from(source[Symbol.iterator]()).take(0).toArray();
     expect(result).toEqual([]);
     expect(closed).toBe(true);
+  });
+
+  test("take propagates errors from return() on normal completion", () => {
+    const source = {
+      [Symbol.iterator]() {
+        let i = 0;
+        return {
+          next() {
+            i++;
+            return { value: i, done: false };
+          },
+          return() {
+            throw new TypeError("close error");
+          },
+        };
+      },
+    };
+
+    expect(() => {
+      Iterator.from(source[Symbol.iterator]()).take(1).toArray();
+    }).toThrow(TypeError);
   });
 
   test("take can bound nested iterators inside helper chains", () => {
