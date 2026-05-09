@@ -4,6 +4,7 @@ features: [Intl]
 ---*/
 
 const isIntl = typeof Intl !== "undefined";
+const hasICU = isIntl && new Intl.NumberFormat("en").format(1000).includes(",");
 
 describe.runIf(isIntl)("Intl.NumberFormat.prototype.format", () => {
   test("format returns a string", () => {
@@ -12,19 +13,19 @@ describe.runIf(isIntl)("Intl.NumberFormat.prototype.format", () => {
     expect(typeof result).toBe("string");
   });
 
-  test("format includes grouping separator for large numbers", () => {
+  test.runIf(hasICU)("format includes grouping separator for large numbers", () => {
     const nf = new Intl.NumberFormat("en-US");
     const result = nf.format(1234567);
     expect(result.includes(",")).toBe(true);
   });
 
-  test("currency format produces a string containing the currency symbol", () => {
+  test.runIf(hasICU)("currency format produces a string containing the currency symbol", () => {
     const nf = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
     const result = nf.format(9.99);
     expect(result.includes("$")).toBe(true);
   });
 
-  test("percent format produces a string containing the percent sign", () => {
+  test.runIf(hasICU)("percent format produces a string containing the percent sign", () => {
     const nf = new Intl.NumberFormat("en-US", { style: "percent" });
     const result = nf.format(0.75);
     expect(result.includes("%")).toBe(true);

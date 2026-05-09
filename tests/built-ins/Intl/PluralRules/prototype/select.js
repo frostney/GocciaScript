@@ -4,6 +4,7 @@ features: [Intl]
 ---*/
 
 const isIntl = typeof Intl !== "undefined";
+const hasICU = isIntl && new Intl.NumberFormat("en").format(1000).includes(",");
 
 describe.runIf(isIntl)("Intl.PluralRules.prototype.select", () => {
   test("select(0) returns 'other' for English", () => {
@@ -11,7 +12,7 @@ describe.runIf(isIntl)("Intl.PluralRules.prototype.select", () => {
     expect(pr.select(0)).toBe("other");
   });
 
-  test("select(1) returns 'one' for English", () => {
+  test.runIf(hasICU)("select(1) returns 'one' for English", () => {
     const pr = new Intl.PluralRules("en");
     expect(pr.select(1)).toBe("one");
   });

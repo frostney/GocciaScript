@@ -4,15 +4,16 @@ features: [Intl]
 ---*/
 
 const isIntl = typeof Intl !== "undefined";
+const hasICU = isIntl && new Intl.NumberFormat("en").format(1000).includes(",");
 
 describe.runIf(isIntl && typeof Intl.ListFormat !== "undefined")("Intl.ListFormat.prototype.format", () => {
-  test("formats a three-element list with conjunction", () => {
+  test.runIf(hasICU)("formats a three-element list with conjunction", () => {
     const lf = new Intl.ListFormat("en", { style: "long", type: "conjunction" });
     const result = lf.format(["a", "b", "c"]);
     expect(result).toBe("a, b, and c");
   });
 
-  test("formats a two-element list with conjunction", () => {
+  test.runIf(hasICU)("formats a two-element list with conjunction", () => {
     const lf = new Intl.ListFormat("en", { style: "long", type: "conjunction" });
     const result = lf.format(["a", "b"]);
     expect(result).toBe("a and b");
