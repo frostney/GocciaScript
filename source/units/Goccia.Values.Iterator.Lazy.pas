@@ -97,6 +97,7 @@ uses
   Goccia.Values.FunctionBase,
   Goccia.Values.Iterator.Concrete,
   Goccia.Values.Iterator.Generic,
+  Goccia.Values.IteratorSupport,
   Goccia.Values.SymbolValue;
 
 { TGocciaLazyMapIteratorValue }
@@ -273,6 +274,7 @@ begin
   if FIndex >= FLimit then
   begin
     FDone := True;
+    CloseIterator(FSourceIterator);
     Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
     Exit;
   end;
@@ -292,6 +294,7 @@ begin
   if FIndex >= FLimit then
   begin
     FDone := True;
+    CloseIterator(FSourceIterator);
     ADone := True;
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
     Exit;
