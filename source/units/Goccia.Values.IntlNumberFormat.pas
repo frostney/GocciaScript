@@ -57,6 +57,7 @@ uses
   IntlICU,
   IntlLocaleResolver,
 
+  Goccia.Error.Messages,
   Goccia.ObjectModel.Types,
   Goccia.Realm,
   Goccia.Values.ArrayValue,
@@ -249,6 +250,28 @@ begin
   FMaximumSignificantDigits := -1;
 
   ReadOptions(AOptions);
+
+  // Validate style-dependent required options
+  if (FStyle = 'currency') and (FCurrency = '') then
+    ThrowTypeError(SErrorIntlMissingCurrency);
+  if (FStyle = 'unit') and (FUnitIdentifier = '') then
+    ThrowTypeError(SErrorIntlMissingUnit);
+
+  // Validate digit ranges
+  if (FMinimumIntegerDigits < 1) or (FMinimumIntegerDigits > 21) then
+    ThrowRangeError(Format(SErrorIntlDigitsOutOfRange, ['minimumIntegerDigits', 1, 21]));
+  if (FMinimumFractionDigits >= 0) and
+     ((FMinimumFractionDigits < 0) or (FMinimumFractionDigits > 100)) then
+    ThrowRangeError(Format(SErrorIntlDigitsOutOfRange, ['minimumFractionDigits', 0, 100]));
+  if (FMaximumFractionDigits >= 0) and
+     ((FMaximumFractionDigits < 0) or (FMaximumFractionDigits > 100)) then
+    ThrowRangeError(Format(SErrorIntlDigitsOutOfRange, ['maximumFractionDigits', 0, 100]));
+  if (FMinimumSignificantDigits >= 0) and
+     ((FMinimumSignificantDigits < 1) or (FMinimumSignificantDigits > 21)) then
+    ThrowRangeError(Format(SErrorIntlDigitsOutOfRange, ['minimumSignificantDigits', 1, 21]));
+  if (FMaximumSignificantDigits >= 0) and
+     ((FMaximumSignificantDigits < 1) or (FMaximumSignificantDigits > 21)) then
+    ThrowRangeError(Format(SErrorIntlDigitsOutOfRange, ['maximumSignificantDigits', 1, 21]));
 
   // Build resolved ICU options
   FResolvedOptions := DefaultNumberFormatOptions;

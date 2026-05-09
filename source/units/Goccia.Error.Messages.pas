@@ -797,6 +797,7 @@ resourcestring
   SErrorIntlInvalidCode = 'Invalid code ''%s'' for type ''%s''';
   SErrorIntlSegmenterNotSegments = 'Method called on non-Segments object';
   SErrorIntlNotIntlObject = '%s method called on incompatible object';
+  SErrorIntlDigitsOutOfRange = '%s value is out of range %d to %d';
 
 implementation
 

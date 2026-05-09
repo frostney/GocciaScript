@@ -51,6 +51,8 @@ function TryICUFormatRelativeTime(const ALocale: string; AValue: Double;
   AUnit: TIntlRelativeTimeUnit; ANumeric: TIntlRelativeTimeNumeric;
   out AFormatted: string): Boolean;
 
+function TryICUGetDefaultLocale(out ALocale: string): Boolean;
+
 function TryICUUpperCase(const ALocale, AStr: string; out AResult: string): Boolean;
 function TryICULowerCase(const ALocale, AStr: string; out AResult: string): Boolean;
 
@@ -127,6 +129,7 @@ type
   PPUChar = ^PUChar;
   PLongInt = ^LongInt;
 
+  TUlocGetDefault = function: PAnsiChar; cdecl;
   TUlocForLanguageTag = function(const ATag: PAnsiChar; ALocaleId: PAnsiChar;
     ALocaleIdCapacity: LongInt; var AParsedLength: LongInt;
     var AStatus: TICUErrorCode): LongInt; cdecl;
@@ -222,6 +225,7 @@ type
     ADestCapacity: LongInt; const ASrc: PAnsiChar; ASrcLength: LongInt;
     var AStatus: TICUErrorCode): LongInt; cdecl;
   TIntlICUFunctions = record
+    UlocGetDefault: TUlocGetDefault;
     UlocForLanguageTag: TUlocForLanguageTag;
     UlocToLanguageTag: TUlocToLanguageTag;
     UlocGetAvailable: TUlocGetAvailable;
@@ -368,6 +372,9 @@ begin
   S := ResolveSymbol(AHandle, 'udat_format');
   if not Assigned(S) then Exit;
   F.UdatFormat := TUdatFormat(S);
+
+  S := ResolveSymbol(AHandle, 'uloc_getDefault');
+  if Assigned(S) then F.UlocGetDefault := TUlocGetDefault(S);
 
   S := ResolveSymbol(AHandle, 'unum_setAttribute');
   if Assigned(S) then F.UnumSetAttribute := TUnumSetAttribute(S);
@@ -1120,6 +1127,37 @@ begin
   end;
 end;
 
+function TryICUGetDefaultLocale(out ALocale: string): Boolean;
+var
+  Status: TICUErrorCode;
+  DefaultId: PAnsiChar;
+  TagBuf: array[0..LOCALE_ID_CAPACITY - 1] of AnsiChar;
+  ResultLen: LongInt;
+begin
+  Result := False;
+  ALocale := '';
+
+  if not EnsureLoaded then
+    Exit;
+
+  if not Assigned(IntlFunctions.UlocGetDefault) then
+    Exit;
+
+  DefaultId := IntlFunctions.UlocGetDefault;
+  if not Assigned(DefaultId) or (DefaultId[0] = #0) then
+    Exit;
+
+  FillChar(TagBuf, SizeOf(TagBuf), 0);
+  Status := ICU_SUCCESS;
+  ResultLen := IntlFunctions.UlocToLanguageTag(DefaultId, @TagBuf[0],
+    LOCALE_ID_CAPACITY, False, Status);
+  if not ICUSucceeded(Status) or (ResultLen <= 0) then
+    Exit;
+
+  ALocale := string(PAnsiChar(@TagBuf[0]));
+  Result := ALocale <> '';
+end;
+
 function TryICUUpperCase(const ALocale, AStr: string; out AResult: string): Boolean;
 var
   Status: TICUErrorCode;
@@ -1127,6 +1165,7 @@ var
   DestBuf: array[0..1023] of AnsiChar;
   ResultLen: LongInt;
   LocaleAnsi, SrcAnsi: AnsiString;
+  ResultUtf8: UTF8String;
 begin
   Result := False;
   AResult := AStr;
@@ -1155,7 +1194,10 @@ begin
     if not ICUSucceeded(Status) or (ResultLen <= 0) then
       Exit;
 
-    AResult := string(UTF8Decode(Copy(AnsiString(PAnsiChar(@DestBuf[0])), 1, ResultLen)));
+    SetLength(ResultUtf8, ResultLen);
+    if ResultLen > 0 then
+      Move(DestBuf[0], ResultUtf8[1], ResultLen);
+    AResult := string(UTF8Decode(ResultUtf8));
     Result := True;
   finally
     IntlFunctions.UcasemapClose(CaseMap);
@@ -1169,6 +1211,7 @@ var
   DestBuf: array[0..1023] of AnsiChar;
   ResultLen: LongInt;
   LocaleAnsi, SrcAnsi: AnsiString;
+  ResultUtf8: UTF8String;
 begin
   Result := False;
   AResult := AStr;
@@ -1197,7 +1240,10 @@ begin
     if not ICUSucceeded(Status) or (ResultLen <= 0) then
       Exit;
 
-    AResult := string(UTF8Decode(Copy(AnsiString(PAnsiChar(@DestBuf[0])), 1, ResultLen)));
+    SetLength(ResultUtf8, ResultLen);
+    if ResultLen > 0 then
+      Move(DestBuf[0], ResultUtf8[1], ResultLen);
+    AResult := string(UTF8Decode(ResultUtf8));
     Result := True;
   finally
     IntlFunctions.UcasemapClose(CaseMap);

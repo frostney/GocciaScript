@@ -200,14 +200,9 @@ begin
 end;
 
 function DefaultLocale: string;
-var
-  Locales: TStringArray;
 begin
-  if TryICUGetAvailableLocales(Locales) and (Length(Locales) > 0) then
-  begin
-    Result := Locales[0];
+  if TryICUGetDefaultLocale(Result) then
     Exit;
-  end;
 
   Result := 'en';
 end;

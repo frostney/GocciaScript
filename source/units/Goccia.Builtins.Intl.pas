@@ -20,6 +20,7 @@ type
 
     function GetCanonicalLocales(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function SupportedValuesOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function SupportedLocalesOfFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
     function LocaleConstructorFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function CollatorConstructorFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -51,6 +52,7 @@ implementation
 uses
   SysUtils,
 
+  IntlICU,
   IntlLocaleResolver,
   IntlTypes,
 
@@ -582,6 +584,74 @@ begin
   Result := ResultArr;
 end;
 
+{ supportedLocalesOf — shared by all constructors }
+
+function TGocciaIntlBuiltin.SupportedLocalesOfFn(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Arg: TGocciaValue;
+  Tags: TStringArray;
+  Canonical: TStringArray;
+  Available: TStringArray;
+  AvailableTags: TStringArray;
+  ResultArr: TGocciaArrayValue;
+  I, Len, AvailCount: Integer;
+  AvailTag: string;
+begin
+  Arg := AArgs.GetElement(0);
+
+  if Arg is TGocciaArrayValue then
+  begin
+    Len := TGocciaArrayValue(Arg).GetLength;
+    SetLength(Tags, Len);
+    for I := 0 to Len - 1 do
+      Tags[I] := TGocciaArrayValue(Arg).GetElement(I).ToStringLiteral.Value;
+  end
+  else if Arg is TGocciaStringLiteralValue then
+  begin
+    SetLength(Tags, 1);
+    Tags[0] := TGocciaStringLiteralValue(Arg).Value;
+  end
+  else if (Arg is TGocciaUndefinedLiteralValue) or (Arg = nil) then
+  begin
+    SetLength(Tags, 0);
+  end
+  else
+  begin
+    ThrowTypeError('locales argument must be a string or an array');
+    Result := nil;
+    Exit;
+  end;
+
+  Canonical := CanonicalizeLocaleList(Tags);
+
+  // Get available locales from ICU and convert to BCP 47 tags
+  SetLength(AvailableTags, 0);
+  if TryICUGetAvailableLocales(Available) then
+  begin
+    AvailCount := 0;
+    SetLength(AvailableTags, Length(Available));
+    for I := 0 to High(Available) do
+    begin
+      if TryICUCanonicalizeLocale(Available[I], AvailTag) then
+      begin
+        AvailableTags[AvailCount] := AvailTag;
+        Inc(AvailCount);
+      end;
+    end;
+    SetLength(AvailableTags, AvailCount);
+  end;
+
+  ResultArr := TGocciaArrayValue.Create;
+  for I := 0 to High(Canonical) do
+  begin
+    if BestAvailableLocale(AvailableTags, Canonical[I]) <> '' then
+      ResultArr.Elements.Add(TGocciaStringLiteralValue.Create(Canonical[I]));
+  end;
+
+  Result := ResultArr;
+end;
+
 { Locale }
 
 function TGocciaIntlBuiltin.LocaleConstructorFn(const AArgs: TGocciaArgumentsCollection;
@@ -614,6 +684,11 @@ var
 begin
   ConstructorMethod := TGocciaNativeFunctionValue.Create(LocaleConstructorFn, 'Locale', 1);
   TGocciaIntlLocaleValue.ExposePrototype(ConstructorMethod);
+  ConstructorMethod.DefineProperty('supportedLocalesOf',
+    TGocciaPropertyDescriptorData.Create(
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(
+        SupportedLocalesOfFn, 'supportedLocalesOf', 1),
+      [pfConfigurable, pfWritable]));
   FIntlNamespace.DefineProperty('Locale',
     TGocciaPropertyDescriptorData.Create(ConstructorMethod, [pfConfigurable, pfWritable]));
 end;
@@ -641,6 +716,11 @@ var
 begin
   ConstructorMethod := TGocciaNativeFunctionValue.Create(CollatorConstructorFn, 'Collator', 0);
   TGocciaIntlCollatorValue.ExposePrototype(ConstructorMethod);
+  ConstructorMethod.DefineProperty('supportedLocalesOf',
+    TGocciaPropertyDescriptorData.Create(
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(
+        SupportedLocalesOfFn, 'supportedLocalesOf', 1),
+      [pfConfigurable, pfWritable]));
   FIntlNamespace.DefineProperty('Collator',
     TGocciaPropertyDescriptorData.Create(ConstructorMethod, [pfConfigurable, pfWritable]));
 end;
@@ -668,6 +748,11 @@ var
 begin
   ConstructorMethod := TGocciaNativeFunctionValue.Create(NumberFormatConstructorFn, 'NumberFormat', 0);
   TGocciaIntlNumberFormatValue.ExposePrototype(ConstructorMethod);
+  ConstructorMethod.DefineProperty('supportedLocalesOf',
+    TGocciaPropertyDescriptorData.Create(
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(
+        SupportedLocalesOfFn, 'supportedLocalesOf', 1),
+      [pfConfigurable, pfWritable]));
   FIntlNamespace.DefineProperty('NumberFormat',
     TGocciaPropertyDescriptorData.Create(ConstructorMethod, [pfConfigurable, pfWritable]));
 end;
@@ -695,6 +780,11 @@ var
 begin
   ConstructorMethod := TGocciaNativeFunctionValue.Create(DateTimeFormatConstructorFn, 'DateTimeFormat', 0);
   TGocciaIntlDateTimeFormatValue.ExposePrototype(ConstructorMethod);
+  ConstructorMethod.DefineProperty('supportedLocalesOf',
+    TGocciaPropertyDescriptorData.Create(
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(
+        SupportedLocalesOfFn, 'supportedLocalesOf', 1),
+      [pfConfigurable, pfWritable]));
   FIntlNamespace.DefineProperty('DateTimeFormat',
     TGocciaPropertyDescriptorData.Create(ConstructorMethod, [pfConfigurable, pfWritable]));
 end;
@@ -722,6 +812,11 @@ var
 begin
   ConstructorMethod := TGocciaNativeFunctionValue.Create(PluralRulesConstructorFn, 'PluralRules', 0);
   TGocciaIntlPluralRulesValue.ExposePrototype(ConstructorMethod);
+  ConstructorMethod.DefineProperty('supportedLocalesOf',
+    TGocciaPropertyDescriptorData.Create(
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(
+        SupportedLocalesOfFn, 'supportedLocalesOf', 1),
+      [pfConfigurable, pfWritable]));
   FIntlNamespace.DefineProperty('PluralRules',
     TGocciaPropertyDescriptorData.Create(ConstructorMethod, [pfConfigurable, pfWritable]));
 end;
@@ -749,6 +844,11 @@ var
 begin
   ConstructorMethod := TGocciaNativeFunctionValue.Create(RelativeTimeFormatConstructorFn, 'RelativeTimeFormat', 0);
   TGocciaIntlRelativeTimeFormatValue.ExposePrototype(ConstructorMethod);
+  ConstructorMethod.DefineProperty('supportedLocalesOf',
+    TGocciaPropertyDescriptorData.Create(
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(
+        SupportedLocalesOfFn, 'supportedLocalesOf', 1),
+      [pfConfigurable, pfWritable]));
   FIntlNamespace.DefineProperty('RelativeTimeFormat',
     TGocciaPropertyDescriptorData.Create(ConstructorMethod, [pfConfigurable, pfWritable]));
 end;
@@ -776,6 +876,11 @@ var
 begin
   ConstructorMethod := TGocciaNativeFunctionValue.Create(ListFormatConstructorFn, 'ListFormat', 0);
   TGocciaIntlListFormatValue.ExposePrototype(ConstructorMethod);
+  ConstructorMethod.DefineProperty('supportedLocalesOf',
+    TGocciaPropertyDescriptorData.Create(
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(
+        SupportedLocalesOfFn, 'supportedLocalesOf', 1),
+      [pfConfigurable, pfWritable]));
   FIntlNamespace.DefineProperty('ListFormat',
     TGocciaPropertyDescriptorData.Create(ConstructorMethod, [pfConfigurable, pfWritable]));
 end;
@@ -803,6 +908,11 @@ var
 begin
   ConstructorMethod := TGocciaNativeFunctionValue.Create(DisplayNamesConstructorFn, 'DisplayNames', 2);
   TGocciaIntlDisplayNamesValue.ExposePrototype(ConstructorMethod);
+  ConstructorMethod.DefineProperty('supportedLocalesOf',
+    TGocciaPropertyDescriptorData.Create(
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(
+        SupportedLocalesOfFn, 'supportedLocalesOf', 1),
+      [pfConfigurable, pfWritable]));
   FIntlNamespace.DefineProperty('DisplayNames',
     TGocciaPropertyDescriptorData.Create(ConstructorMethod, [pfConfigurable, pfWritable]));
 end;
@@ -830,6 +940,11 @@ var
 begin
   ConstructorMethod := TGocciaNativeFunctionValue.Create(SegmenterConstructorFn, 'Segmenter', 0);
   TGocciaIntlSegmenterValue.ExposePrototype(ConstructorMethod);
+  ConstructorMethod.DefineProperty('supportedLocalesOf',
+    TGocciaPropertyDescriptorData.Create(
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(
+        SupportedLocalesOfFn, 'supportedLocalesOf', 1),
+      [pfConfigurable, pfWritable]));
   FIntlNamespace.DefineProperty('Segmenter',
     TGocciaPropertyDescriptorData.Create(ConstructorMethod, [pfConfigurable, pfWritable]));
 end;
@@ -857,6 +972,11 @@ var
 begin
   ConstructorMethod := TGocciaNativeFunctionValue.Create(DurationFormatConstructorFn, 'DurationFormat', 0);
   TGocciaIntlDurationFormatValue.ExposePrototype(ConstructorMethod);
+  ConstructorMethod.DefineProperty('supportedLocalesOf',
+    TGocciaPropertyDescriptorData.Create(
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(
+        SupportedLocalesOfFn, 'supportedLocalesOf', 1),
+      [pfConfigurable, pfWritable]));
   FIntlNamespace.DefineProperty('DurationFormat',
     TGocciaPropertyDescriptorData.Create(ConstructorMethod, [pfConfigurable, pfWritable]));
 end;
