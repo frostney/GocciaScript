@@ -1925,7 +1925,7 @@ begin
     if NeedsIteratorClose then
     begin
       PatchJumpTarget(ACtx, HandlerJump);
-      EmitInstruction(ACtx, EncodeABC(OP_ITER_CLOSE, IterReg, 0, 0));
+      EmitInstruction(ACtx, EncodeABC(OP_ITER_CLOSE, IterReg, 0, 1));
       EmitInstruction(ACtx, EncodeABC(OP_THROW, CloseErrorReg, 0, 0));
     end;
 
@@ -2062,7 +2062,7 @@ begin
     if NeedsIteratorClose then
     begin
       PatchJumpTarget(ACtx, HandlerJump);
-      EmitInstruction(ACtx, EncodeABC(OP_ITER_CLOSE, IterReg, 1, 0));
+      EmitInstruction(ACtx, EncodeABC(OP_ITER_CLOSE, IterReg, 1, 1));
       EmitInstruction(ACtx, EncodeABC(OP_THROW, CloseErrorReg, 0, 0));
     end;
 

@@ -358,7 +358,7 @@ describe("for-await-of", () => {
     expect(chars).toEqual(["a", "b", "c"]);
   });
 
-  test("calls async iterator return on break", async () => {
+  test("calls async iterator return on break and awaits result", async () => {
     const log = [];
     const asyncIter = {
       [Symbol.asyncIterator]() {
@@ -371,8 +371,11 @@ describe("for-await-of", () => {
             return Promise.resolve({ value: undefined, done: true });
           },
           return() {
-            log.push("return");
-            return Promise.resolve({ done: true });
+            log.push("return:start");
+            return Promise.resolve().then(() => {
+              log.push("return:end");
+              return { done: true };
+            });
           }
         };
       }
@@ -384,7 +387,7 @@ describe("for-await-of", () => {
       }
     })();
 
-    expect(log.join(",")).toBe("next:1,next:2,return");
+    expect(log.join(",")).toBe("next:1,next:2,return:start,return:end");
   });
 
   test("calls async iterator return on return", async () => {
@@ -471,6 +474,34 @@ describe("for-await-of", () => {
     }
 
     expect(caughtMessage).toBe("body-threw");
+  });
+
+  test("surfaces .return() error on break", async () => {
+    let caughtMessage = "";
+    const asyncIter = {
+      [Symbol.asyncIterator]() {
+        return {
+          next() {
+            return Promise.resolve({ value: 1, done: false });
+          },
+          return() {
+            return Promise.reject(new Error("return-rejected"));
+          }
+        };
+      }
+    };
+
+    try {
+      await (async () => {
+        for await (const x of asyncIter) {
+          break;
+        }
+      })();
+    } catch (e) {
+      caughtMessage = e.message;
+    }
+
+    expect(caughtMessage).toBe("return-rejected");
   });
 
   test("does not call async iterator return for continue", async () => {

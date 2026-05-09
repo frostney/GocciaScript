@@ -9140,7 +9140,14 @@ begin
 
       OP_ITER_CLOSE:
         if FRegisters[A].Kind = grkObject then
-          CloseRawIteratorPreservingError(FRegisters[A].ObjectValue, B <> 0);
+        begin
+          if C <> 0 then
+            CloseRawIteratorPreservingError(FRegisters[A].ObjectValue, B <> 0)
+          else if B <> 0 then
+            CloseRawAsyncIterator(FRegisters[A].ObjectValue)
+          else
+            CloseRawIterator(FRegisters[A].ObjectValue);
+        end;
 
       OP_AWAIT:
         SetRegister(A, AwaitValue(GetRegister(B)));
