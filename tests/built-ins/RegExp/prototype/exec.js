@@ -194,3 +194,99 @@ test("exec with duplicate named backreference outside the disjunction", () => {
   expect(re.exec("b")).toBe(null);
   expect(re.exec("ab")).toBe(null);
 });
+
+// --- Greedy quantifier with alternation ---
+
+test("greedy star with alternation picks correct match", () => {
+  const m = /(aa|aabaac|ba|b|c)*/.exec("aabaac");
+  expect(m[0]).toBe("aaba");
+  expect(m[1]).toBe("ba");
+});
+
+test("greedy star with character class quantifier backtracks correctly", () => {
+  const m = /^([a-z]+)*[a-z]$/.exec("ab");
+  expect(m[0]).toBe("ab");
+  expect(m[1]).toBe("a");
+});
+
+test("backreference backtracking finds correct capture length", () => {
+  const m = /^(a+)\1*,\1+$/.exec("aaaaaaaaaa,aaaaaaaaaaaaaaa");
+  expect(m[0]).toBe("aaaaaaaaaa,aaaaaaaaaaaaaaa");
+  expect(m[1]).toBe("aaaaa");
+});
+
+test("replace with backreference uses correct capture", () => {
+  expect("aaaaaaaaaa,aaaaaaaaaaaaaaa".replace(/^(a+)\1*,\1+$/, "$1")).toBe("aaaaa");
+});
+
+// --- Zero-width backref loop ---
+
+test("backreference to zero-length capture with + does not hang", () => {
+  const m = /(a*)b\1+/.exec("baaac");
+  expect(m[0]).toBe("b");
+  expect(m[1]).toBe("");
+});
+
+// --- Backtrack limit ---
+
+test("catastrophic backtracking throws Error instead of hanging", () => {
+  expect(() => {
+    /^(a+)+$/.exec("a".repeat(30) + "b");
+  }).toThrow(Error);
+});
+
+// --- Large input (#515 regression) ---
+
+test("exec on large input does not crash", () => {
+  const s = "foo" + ".bar".repeat(20000);
+  expect(/f.*/.test(s)).toBe(true);
+});
+
+// --- Lookahead ---
+
+test("positive lookahead matches without consuming", () => {
+  const m = /foo(?=bar)/.exec("foobar");
+  expect(m[0]).toBe("foo");
+  expect(m.index).toBe(0);
+});
+
+test("negative lookahead rejects when pattern present", () => {
+  expect(/foo(?!bar)/.test("foobar")).toBe(false);
+  expect(/foo(?!bar)/.test("foobaz")).toBe(true);
+});
+
+// --- Lookbehind ---
+
+test("positive lookbehind matches fixed-length pattern", () => {
+  const m = /(?<=foo)bar/.exec("foobar");
+  expect(m[0]).toBe("bar");
+  expect(m.index).toBe(3);
+});
+
+test("positive lookbehind fails when prefix absent", () => {
+  expect(/(?<=foo)bar/.test("bazbar")).toBe(false);
+});
+
+test("negative lookbehind rejects when pattern present", () => {
+  expect(/(?<!foo)bar/.test("foobar")).toBe(false);
+  expect(/(?<!foo)bar/.test("bazbar")).toBe(true);
+});
+
+test("lookbehind with alternation", () => {
+  const m = "xabcd".match(/.*(?<=(..|...|....))(.*)/);
+  expect(m[0]).toBe("xabcd");
+  expect(m[1]).toBe("cd");
+  expect(m[2]).toBe("");
+});
+
+test("lookbehind with quantifier in outer pattern", () => {
+  const m = /(?<=\d+)px/.exec("100px");
+  expect(m[0]).toBe("px");
+  expect(m.index).toBe(3);
+});
+
+test("lookbehind does not consume input", () => {
+  const m = /(?<=a)b/.exec("ab");
+  expect(m[0]).toBe("b");
+  expect(m.index).toBe(1);
+});

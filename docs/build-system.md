@@ -435,7 +435,7 @@ It:
 6. If the `FPC_TARGET_CPU` environment variable is set, prepends `-P<arch>` to the compiler arguments (used by CI to target x86_64 on Windows where the FPC package defaults to i386).
 7. For the `tests` target, auto-discovers all `*.Test.pas` files in `source/units/` and `source/shared/`.
 
-The GitHub Actions cross-compilation workflow uses a reduced cached FPC toolchain rather than a full target-side FCL install. It prebuilds the RTL, `rtl-objpas`, `rtl-generics`, and `fcl-process`, and also caches the official `fcl-base` and `regexpr` sources so cross builds can resolve units such as `Base64` and `RegExpr` on demand from the shipped FPC packages.
+The GitHub Actions cross-compilation workflow uses a reduced cached FPC toolchain rather than a full target-side FCL install. It prebuilds the RTL, `rtl-objpas`, `rtl-generics`, and `fcl-process`, and also caches the official `fcl-base` sources so cross builds can resolve units such as `Base64` on demand from the shipped FPC packages.
 
 ## Project Structure for Compilation
 
