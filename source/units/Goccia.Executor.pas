@@ -12,6 +12,11 @@ uses
   Goccia.Values.Primitives;
 
 type
+  TGocciaCompiledModule = class
+  end;
+
+  TRetainObjectCallback = procedure(const AObject: TObject) of object;
+
   TGocciaExecutor = class abstract
   private
     FCompileTimeNanoseconds: Int64;
@@ -20,6 +25,7 @@ type
     FGlobalScope: TGocciaScope;
     FModuleLoader: TGocciaModuleLoader;
     FSourcePath: string;
+    FRetainModule: TRetainObjectCallback;
   public
     procedure Initialize(const AGlobalScope: TGocciaScope;
       const AModuleLoader: TGocciaModuleLoader;
@@ -33,12 +39,21 @@ type
       virtual; abstract;
     function ExecuteDynamicFunction(
       const AProgram: TGocciaProgram): TGocciaValue; virtual; abstract;
+    function CompileModule(
+      const AProgram: TGocciaProgram): TGocciaCompiledModule; virtual; abstract;
+    function RunCompiledModule(
+      const AModule: TGocciaCompiledModule): TGocciaValue; virtual; abstract;
+    function RunCompiledModuleInScope(
+      const AModule: TGocciaCompiledModule;
+      const AScope: TGocciaScope): TGocciaValue; virtual; abstract;
     procedure ClearTransientCaches; virtual;
 
     property CompileTimeNanoseconds: Int64 read FCompileTimeNanoseconds
       write FCompileTimeNanoseconds;
     property ExecuteTimeNanoseconds: Int64 read FExecuteTimeNanoseconds
       write FExecuteTimeNanoseconds;
+    property RetainModuleCallback: TRetainObjectCallback
+      read FRetainModule write FRetainModule;
   end;
 
 implementation
