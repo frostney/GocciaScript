@@ -26,6 +26,8 @@ function TryGetDisplayName(const ALocale, ACode: string;
   AType: TIntlDisplayNameType; out AName: string): Boolean;
 function TryGetCurrencyInfo(const ALocale, ACurrency: string;
   out ASymbol, ANarrowSymbol: string; out ADigits: Integer): Boolean;
+function TryGetNumberSymbol(const ALocale, ASymbolName: string;
+  out AValue: string): Boolean;
 
 implementation
 
@@ -304,53 +306,315 @@ begin
   end;
 end;
 
-function TryGetLikelySubtags(const ATag: string; out AMaximized: string): Boolean;
+var
+  CachedResource: TBytes;
+  CachedResourceLoaded: Boolean;
+  CachedHeader: record
+    EntryCount, EntryTableOffset, NamesOffset, DataOffset: Integer;
+    NamesByteCount, DataByteCount: Integer;
+  end;
+
+function EnsureResourceLoaded: Boolean;
+begin
+  if CachedResourceLoaded then
+  begin
+    Result := Length(CachedResource) > 0;
+    Exit;
+  end;
+
+  CachedResourceLoaded := True;
+  if not TryReadEmbeddedResource(CachedResource) then
+    Exit(False);
+
+  Result := TryReadEmbeddedHeader(CachedResource,
+    CachedHeader.EntryCount, CachedHeader.EntryTableOffset,
+    CachedHeader.NamesOffset, CachedHeader.DataOffset,
+    CachedHeader.NamesByteCount, CachedHeader.DataByteCount);
+
+  if not Result then
+    SetLength(CachedResource, 0);
+end;
+
+function TryGetSectionData(const ASectionName: string;
+  out ADataOffset, ADataLength: Integer): Boolean;
+var
+  Entry: TEmbeddedCLDRDataEntry;
+  AbsoluteDataOffset, EntryDataEnd: Int64;
 begin
   Result := False;
-  AMaximized := '';
+  ADataOffset := 0;
+  ADataLength := 0;
+
+  if not EnsureResourceLoaded then
+    Exit;
+
+  if not TryFindEmbeddedEntry(CachedResource, ASectionName,
+    CachedHeader.EntryCount, CachedHeader.EntryTableOffset,
+    CachedHeader.NamesOffset, CachedHeader.NamesByteCount, Entry) then
+    Exit;
+
+  AbsoluteDataOffset := Int64(CachedHeader.DataOffset) + Entry.DataOffset;
+  EntryDataEnd := Int64(Entry.DataOffset) + Entry.DataLength;
+  if (AbsoluteDataOffset < 0) or (AbsoluteDataOffset > High(Integer)) or
+     (EntryDataEnd < 0) or (EntryDataEnd > CachedHeader.DataByteCount) then
+    Exit;
+
+  if not HasBytesAvailable(CachedResource, Integer(AbsoluteDataOffset), Entry.DataLength) then
+    Exit;
+
+  ADataOffset := Integer(AbsoluteDataOffset);
+  ADataLength := Entry.DataLength;
+  Result := True;
+end;
+
+function TryGetSectionDataWithFallback(const APrefix, ALocale: string;
+  out ADataOffset, ADataLength: Integer): Boolean;
+var
+  SectionName, FallbackLocale: string;
+  DashPos: Integer;
+begin
+  SectionName := APrefix + ALocale;
+  Result := TryGetSectionData(SectionName, ADataOffset, ADataLength);
+  if Result then
+    Exit;
+
+  FallbackLocale := ALocale;
+  repeat
+    DashPos := Length(FallbackLocale);
+    while (DashPos > 0) and (FallbackLocale[DashPos] <> '-') do
+      Dec(DashPos);
+    if DashPos <= 0 then
+      Exit;
+    FallbackLocale := Copy(FallbackLocale, 1, DashPos - 1);
+    SectionName := APrefix + FallbackLocale;
+    Result := TryGetSectionData(SectionName, ADataOffset, ADataLength);
+  until Result;
+end;
+
+function TryGetKeyValue(const ABuffer: TBytes; ADataOffset, ADataLength: Integer;
+  const AKey: string; out AValue: string): Boolean;
+var
+  Count: Integer;
+  StringAreaOffset: Integer;
+  LowIndex, HighIndex, MiddleIndex: Integer;
+  EntryOffset: Integer;
+  KeyOffset, KeyLength, ValueOffset, ValueLength: Integer;
+  AbsoluteKeyOffset: Int64;
+  EntryKey: string;
+  CompareResult: Integer;
+begin
+  Result := False;
+  AValue := '';
+
+  if ADataLength < 4 then
+    Exit;
+
+  if not HasBytesAvailable(ABuffer, ADataOffset, 4) then
+    Exit;
+
+  if not TryUInt32ToInteger(ReadUInt32LE(ABuffer, ADataOffset), Count) then
+    Exit;
+
+  if Count = 0 then
+    Exit;
+
+  StringAreaOffset := ADataOffset + 4 + Count * 16;
+  if not HasBytesAvailable(ABuffer, ADataOffset, ADataLength) then
+    Exit;
+
+  LowIndex := 0;
+  HighIndex := Count - 1;
+
+  while LowIndex <= HighIndex do
+  begin
+    MiddleIndex := LowIndex + (HighIndex - LowIndex) div 2;
+    EntryOffset := ADataOffset + 4 + MiddleIndex * 16;
+
+    if not HasBytesAvailable(ABuffer, EntryOffset, 16) then
+      Exit;
+
+    if not TryUInt32ToInteger(ReadUInt32LE(ABuffer, EntryOffset), KeyOffset) then
+      Exit;
+    if not TryUInt32ToInteger(ReadUInt32LE(ABuffer, EntryOffset + 4), KeyLength) then
+      Exit;
+    if not TryUInt32ToInteger(ReadUInt32LE(ABuffer, EntryOffset + 8), ValueOffset) then
+      Exit;
+    if not TryUInt32ToInteger(ReadUInt32LE(ABuffer, EntryOffset + 12), ValueLength) then
+      Exit;
+
+    AbsoluteKeyOffset := Int64(StringAreaOffset) + KeyOffset;
+    if (AbsoluteKeyOffset < 0) or (AbsoluteKeyOffset > High(Integer)) then
+      Exit;
+
+    if not HasBytesAvailable(ABuffer, Integer(AbsoluteKeyOffset), KeyLength) then
+      Exit;
+
+    EntryKey := CopyStringFromBytes(ABuffer, Integer(AbsoluteKeyOffset), KeyLength);
+    CompareResult := CompareStr(AKey, EntryKey);
+
+    if CompareResult = 0 then
+    begin
+      AbsoluteKeyOffset := Int64(StringAreaOffset) + ValueOffset;
+      if (AbsoluteKeyOffset < 0) or (AbsoluteKeyOffset > High(Integer)) then
+        Exit;
+      if not HasBytesAvailable(ABuffer, Integer(AbsoluteKeyOffset), ValueLength) then
+        Exit;
+      AValue := CopyStringFromBytes(ABuffer, Integer(AbsoluteKeyOffset), ValueLength);
+      Result := True;
+      Exit;
+    end;
+
+    if CompareResult < 0 then
+      HighIndex := MiddleIndex - 1
+    else
+      LowIndex := MiddleIndex + 1;
+  end;
+end;
+
+function TryLookupSimple(const ASectionName, AKey: string;
+  out AValue: string): Boolean;
+var
+  DataOffset, DataLength: Integer;
+begin
+  Result := False;
+  AValue := '';
+
+  if not TryGetSectionData(ASectionName, DataOffset, DataLength) then
+    Exit;
+
+  Result := TryGetKeyValue(CachedResource, DataOffset, DataLength, AKey, AValue);
+end;
+
+function TryLookupWithFallback(const APrefix, ALocale, AKey: string;
+  out AValue: string): Boolean;
+var
+  DataOffset, DataLength: Integer;
+begin
+  Result := False;
+  AValue := '';
+
+  if not TryGetSectionDataWithFallback(APrefix, ALocale, DataOffset, DataLength) then
+    Exit;
+
+  Result := TryGetKeyValue(CachedResource, DataOffset, DataLength, AKey, AValue);
+end;
+
+function TryGetLikelySubtags(const ATag: string; out AMaximized: string): Boolean;
+begin
+  Result := TryLookupSimple('likely-subtags', LowerCase(ATag), AMaximized);
 end;
 
 function TryGetLanguageAlias(const ATag: string; out AReplacement: string): Boolean;
 begin
-  Result := False;
-  AReplacement := '';
+  Result := TryLookupSimple('language-aliases', ATag, AReplacement);
 end;
 
 function TryGetTerritoryAlias(const ACode: string; out AReplacement: string): Boolean;
 begin
-  Result := False;
-  AReplacement := '';
+  Result := TryLookupSimple('territory-aliases', ACode, AReplacement);
 end;
 
 function TryGetScriptAlias(const ACode: string; out AReplacement: string): Boolean;
 begin
-  Result := False;
-  AReplacement := '';
+  Result := TryLookupSimple('script-aliases', ACode, AReplacement);
 end;
 
 function TryGetGrandfatheredTag(const ATag: string; out AReplacement: string): Boolean;
 begin
-  Result := False;
-  AReplacement := '';
+  Result := TryLookupSimple('grandfathered-tags', LowerCase(ATag), AReplacement);
 end;
 
 function TryGetPluralRules(const ALocale: string; ACardinal: Boolean;
   out ARules: TIntlPluralRuleSet): Boolean;
+var
+  SectionName: string;
+  DataOffset, DataLength: Integer;
+  Value: string;
+  FoundAny: Boolean;
 begin
-  Result := False;
   ARules.Zero := '';
   ARules.One := '';
   ARules.Two := '';
   ARules.Few := '';
   ARules.Many := '';
   ARules.Other := '';
+
+  if ACardinal then
+    SectionName := 'plural-rules-cardinal'
+  else
+    SectionName := 'plural-rules-ordinal';
+
+  if not TryGetSectionData(SectionName, DataOffset, DataLength) then
+  begin
+    Result := False;
+    Exit;
+  end;
+
+  FoundAny := False;
+
+  if TryGetKeyValue(CachedResource, DataOffset, DataLength,
+    ALocale + '/zero', Value) then
+  begin
+    ARules.Zero := Value;
+    FoundAny := True;
+  end;
+
+  if TryGetKeyValue(CachedResource, DataOffset, DataLength,
+    ALocale + '/one', Value) then
+  begin
+    ARules.One := Value;
+    FoundAny := True;
+  end;
+
+  if TryGetKeyValue(CachedResource, DataOffset, DataLength,
+    ALocale + '/two', Value) then
+  begin
+    ARules.Two := Value;
+    FoundAny := True;
+  end;
+
+  if TryGetKeyValue(CachedResource, DataOffset, DataLength,
+    ALocale + '/few', Value) then
+  begin
+    ARules.Few := Value;
+    FoundAny := True;
+  end;
+
+  if TryGetKeyValue(CachedResource, DataOffset, DataLength,
+    ALocale + '/many', Value) then
+  begin
+    ARules.Many := Value;
+    FoundAny := True;
+  end;
+
+  if TryGetKeyValue(CachedResource, DataOffset, DataLength,
+    ALocale + '/other', Value) then
+  begin
+    ARules.Other := Value;
+    FoundAny := True;
+  end;
+
+  Result := FoundAny;
 end;
 
 function TryGetNumberPattern(const ALocale: string; AStyle: TIntlNumberStyle;
   out APattern: string): Boolean;
+var
+  Key: string;
 begin
-  Result := False;
-  APattern := '';
+  case AStyle of
+    insDecimal: Key := 'decimal';
+    insCurrency: Key := 'currency';
+    insPercent: Key := 'percent';
+  else
+    begin
+      Result := False;
+      APattern := '';
+      Exit;
+    end;
+  end;
+
+  Result := TryLookupWithFallback('number-patterns/', ALocale, Key, APattern);
 end;
 
 function TryGetDatePattern(const ALocale: string;
@@ -362,36 +626,214 @@ end;
 
 function TryGetListPattern(const ALocale: string; AType: TIntlListFormatType;
   AStyle: TIntlListFormatStyle; out APattern: TIntlListPattern): Boolean;
+var
+  TypeName, SectionName, FallbackLocale: string;
+  DataOffset, DataLength: Integer;
+  Value: string;
+  DashPos: Integer;
+  Found: Boolean;
 begin
-  Result := False;
   APattern.Start := '';
   APattern.Middle := '';
   APattern.EndPart := '';
   APattern.Pair := '';
+
+  case AType of
+    ilftConjunction: TypeName := 'conjunction';
+    ilftDisjunction: TypeName := 'disjunction';
+    ilftUnit: TypeName := 'unit';
+  else
+    begin
+      Result := False;
+      Exit;
+    end;
+  end;
+
+  SectionName := 'list-patterns/' + ALocale + '/' + TypeName;
+  Found := TryGetSectionData(SectionName, DataOffset, DataLength);
+
+  if not Found then
+  begin
+    FallbackLocale := ALocale;
+    repeat
+      DashPos := Length(FallbackLocale);
+      while (DashPos > 0) and (FallbackLocale[DashPos] <> '-') do
+        Dec(DashPos);
+      if DashPos <= 0 then
+        Break;
+      FallbackLocale := Copy(FallbackLocale, 1, DashPos - 1);
+      SectionName := 'list-patterns/' + FallbackLocale + '/' + TypeName;
+      Found := TryGetSectionData(SectionName, DataOffset, DataLength);
+    until Found;
+  end;
+
+  if not Found then
+  begin
+    Result := False;
+    Exit;
+  end;
+
+  Result := False;
+
+  if TryGetKeyValue(CachedResource, DataOffset, DataLength, 'start', Value) then
+  begin
+    APattern.Start := Value;
+    Result := True;
+  end;
+
+  if TryGetKeyValue(CachedResource, DataOffset, DataLength, 'middle', Value) then
+  begin
+    APattern.Middle := Value;
+    Result := True;
+  end;
+
+  if TryGetKeyValue(CachedResource, DataOffset, DataLength, 'end', Value) then
+  begin
+    APattern.EndPart := Value;
+    Result := True;
+  end;
+
+  if TryGetKeyValue(CachedResource, DataOffset, DataLength, 'pair', Value) then
+  begin
+    APattern.Pair := Value;
+    Result := True;
+  end;
 end;
 
 function TryGetRelativeTimePattern(const ALocale: string;
   AUnit: TIntlRelativeTimeUnit; out APattern: TIntlRelativeTimePattern): Boolean;
+var
+  UnitName: string;
+  DataOffset, DataLength: Integer;
+  Value: string;
 begin
-  Result := False;
   APattern.Future := '';
   APattern.Past := '';
+
+  case AUnit of
+    irtuYear: UnitName := 'year';
+    irtuQuarter: UnitName := 'quarter';
+    irtuMonth: UnitName := 'month';
+    irtuWeek: UnitName := 'week';
+    irtuDay: UnitName := 'day';
+    irtuHour: UnitName := 'hour';
+    irtuMinute: UnitName := 'minute';
+    irtuSecond: UnitName := 'second';
+  else
+    begin
+      Result := False;
+      Exit;
+    end;
+  end;
+
+  if not TryGetSectionDataWithFallback('relative-time/', ALocale,
+    DataOffset, DataLength) then
+  begin
+    Result := False;
+    Exit;
+  end;
+
+  Result := False;
+
+  if TryGetKeyValue(CachedResource, DataOffset, DataLength,
+    UnitName + '/future-other', Value) then
+  begin
+    APattern.Future := Value;
+    Result := True;
+  end;
+
+  if TryGetKeyValue(CachedResource, DataOffset, DataLength,
+    UnitName + '/past-other', Value) then
+  begin
+    APattern.Past := Value;
+    Result := True;
+  end;
 end;
 
 function TryGetDisplayName(const ALocale, ACode: string;
   AType: TIntlDisplayNameType; out AName: string): Boolean;
+var
+  TypeName, SectionName, FallbackLocale: string;
+  DataOffset, DataLength: Integer;
+  DashPos: Integer;
+  Found: Boolean;
 begin
-  Result := False;
   AName := '';
+
+  case AType of
+    idntLanguage: TypeName := 'languages';
+    idntRegion: TypeName := 'territories';
+    idntScript: TypeName := 'scripts';
+  else
+    begin
+      Result := False;
+      Exit;
+    end;
+  end;
+
+  SectionName := 'display-names/' + ALocale + '/' + TypeName;
+  Found := TryGetSectionData(SectionName, DataOffset, DataLength);
+
+  if not Found then
+  begin
+    FallbackLocale := ALocale;
+    repeat
+      DashPos := Length(FallbackLocale);
+      while (DashPos > 0) and (FallbackLocale[DashPos] <> '-') do
+        Dec(DashPos);
+      if DashPos <= 0 then
+        Break;
+      FallbackLocale := Copy(FallbackLocale, 1, DashPos - 1);
+      SectionName := 'display-names/' + FallbackLocale + '/' + TypeName;
+      Found := TryGetSectionData(SectionName, DataOffset, DataLength);
+    until Found;
+  end;
+
+  if not Found then
+  begin
+    Result := False;
+    Exit;
+  end;
+
+  Result := TryGetKeyValue(CachedResource, DataOffset, DataLength, ACode, AName);
 end;
 
 function TryGetCurrencyInfo(const ALocale, ACurrency: string;
   out ASymbol, ANarrowSymbol: string; out ADigits: Integer): Boolean;
+var
+  Value: string;
+  ColonPos, DigitValue, ErrorCode: Integer;
 begin
-  Result := False;
-  ASymbol := '';
-  ANarrowSymbol := '';
+  ASymbol := ACurrency;
+  ANarrowSymbol := ACurrency;
   ADigits := 2;
+
+  Result := TryLookupSimple('currency-data', ACurrency, Value);
+  if not Result then
+    Exit;
+
+  ColonPos := Pos(':', Value);
+  if ColonPos > 0 then
+  begin
+    Val(Copy(Value, 1, ColonPos - 1), DigitValue, ErrorCode);
+    if ErrorCode = 0 then
+      ADigits := DigitValue;
+  end
+  else
+  begin
+    Val(Value, DigitValue, ErrorCode);
+    if ErrorCode = 0 then
+      ADigits := DigitValue;
+  end;
+
+  ASymbol := ACurrency;
+  ANarrowSymbol := ACurrency;
+end;
+
+function TryGetNumberSymbol(const ALocale, ASymbolName: string;
+  out AValue: string): Boolean;
+begin
+  Result := TryLookupWithFallback('number-symbols/', ALocale, ASymbolName, AValue);
 end;
 
 {$ELSE}
@@ -484,6 +926,13 @@ begin
   ASymbol := '';
   ANarrowSymbol := '';
   ADigits := 2;
+end;
+
+function TryGetNumberSymbol(const ALocale, ASymbolName: string;
+  out AValue: string): Boolean;
+begin
+  Result := False;
+  AValue := '';
 end;
 
 {$ENDIF}

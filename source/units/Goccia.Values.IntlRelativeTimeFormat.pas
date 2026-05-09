@@ -36,6 +36,7 @@ implementation
 uses
   SysUtils,
 
+  IntlCLDRData,
   IntlICU,
   IntlLocaleResolver,
   IntlTypes,
@@ -100,6 +101,44 @@ begin
     Result := irtnAuto
   else
     Result := irtnAlways;
+end;
+
+function FormatRelativeTimeWithCLDR(AValue: Double; const ALocale: string;
+  AUnit: TIntlRelativeTimeUnit): string;
+var
+  Pattern: TIntlRelativeTimePattern;
+  Template, ValueStr: string;
+  AbsValue: Double;
+begin
+  AbsValue := Abs(AValue);
+  if Frac(AbsValue) = 0 then
+    ValueStr := IntToStr(Trunc(AbsValue))
+  else
+    ValueStr := FloatToStr(AbsValue);
+
+  if not TryGetRelativeTimePattern(ALocale, AUnit, Pattern) then
+  begin
+    Result := FloatToStr(AValue);
+    Exit;
+  end;
+
+  if AValue < 0 then
+    Template := Pattern.Past
+  else
+    Template := Pattern.Future;
+
+  if Template = '' then
+  begin
+    if AValue < 0 then
+      Template := Pattern.Future
+    else
+      Template := Pattern.Past;
+  end;
+
+  if Template <> '' then
+    Result := StringReplace(Template, '{0}', ValueStr, [])
+  else
+    Result := FloatToStr(AValue);
 end;
 
 { TGocciaIntlRelativeTimeFormatValue }
@@ -222,7 +261,8 @@ begin
     NumericStringToEnum(RTF.FNumeric), Formatted) then
     Result := TGocciaStringLiteralValue.Create(Formatted)
   else
-    Result := TGocciaStringLiteralValue.Create(FloatToStr(NumValue) + ' ' + UnitStr);
+    Result := TGocciaStringLiteralValue.Create(
+      FormatRelativeTimeWithCLDR(NumValue, RTF.FLocale, UnitStringToEnum(UnitStr)));
 end;
 
 function TGocciaIntlRelativeTimeFormatValue.IntlRelativeTimeFormatFormatToParts(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -243,15 +283,16 @@ begin
 
   // Produce a single-element parts array with the formatted string
   Arr := TGocciaArrayValue.Create;
-  if TryICUFormatRelativeTime(RTF.FLocale, NumValue, UnitStringToEnum(UnitStr),
+  if not TryICUFormatRelativeTime(RTF.FLocale, NumValue, UnitStringToEnum(UnitStr),
     NumericStringToEnum(RTF.FNumeric), Formatted) then
-  begin
-    PartObj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
-    PartObj.AssignProperty('type', TGocciaStringLiteralValue.Create('literal'));
-    PartObj.AssignProperty('value', TGocciaStringLiteralValue.Create(Formatted));
-    PartObj.AssignProperty('unit', TGocciaStringLiteralValue.Create(UnitStr));
-    Arr.Elements.Add(PartObj);
-  end;
+    Formatted := FormatRelativeTimeWithCLDR(NumValue, RTF.FLocale,
+      UnitStringToEnum(UnitStr));
+
+  PartObj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
+  PartObj.AssignProperty('type', TGocciaStringLiteralValue.Create('literal'));
+  PartObj.AssignProperty('value', TGocciaStringLiteralValue.Create(Formatted));
+  PartObj.AssignProperty('unit', TGocciaStringLiteralValue.Create(UnitStr));
+  Arr.Elements.Add(PartObj);
   Result := Arr;
 end;
 

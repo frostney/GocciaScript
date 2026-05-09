@@ -35,6 +35,7 @@ implementation
 uses
   SysUtils,
 
+  IntlCLDRData,
   IntlICU,
   IntlLocaleResolver,
   IntlTypes,
@@ -101,6 +102,76 @@ begin
     for I := 0 to ArrValue.Elements.Count - 1 do
       Result[I] := ArrValue.Elements[I].ToStringLiteral.Value;
   end;
+end;
+
+function ApplyListTemplate(const ATemplate, ALeft, ARight: string): string;
+var
+  Tmp: string;
+begin
+  Tmp := StringReplace(ATemplate, '{0}', ALeft, []);
+  Result := StringReplace(Tmp, '{1}', ARight, []);
+end;
+
+function FormatListWithCLDR(const AItems: TStringArray; const ALocale: string;
+  AType: TIntlListFormatType; AStyle: TIntlListFormatStyle): string;
+var
+  Pattern: TIntlListPattern;
+  Count, I: Integer;
+begin
+  Count := Length(AItems);
+  if Count = 0 then
+  begin
+    Result := '';
+    Exit;
+  end;
+
+  if Count = 1 then
+  begin
+    Result := AItems[0];
+    Exit;
+  end;
+
+  if not TryGetListPattern(ALocale, AType, AStyle, Pattern) then
+  begin
+    // Bare fallback: comma-join
+    Result := '';
+    for I := 0 to Count - 1 do
+    begin
+      if I > 0 then Result := Result + ', ';
+      Result := Result + AItems[I];
+    end;
+    Exit;
+  end;
+
+  if Count = 2 then
+  begin
+    if Pattern.Pair <> '' then
+      Result := ApplyListTemplate(Pattern.Pair, AItems[0], AItems[1])
+    else if Pattern.EndPart <> '' then
+      Result := ApplyListTemplate(Pattern.EndPart, AItems[0], AItems[1])
+    else
+      Result := AItems[0] + ', ' + AItems[1];
+    Exit;
+  end;
+
+  // 3+ items: build from the end
+  if Pattern.EndPart <> '' then
+    Result := ApplyListTemplate(Pattern.EndPart, AItems[Count - 2], AItems[Count - 1])
+  else
+    Result := AItems[Count - 2] + ', ' + AItems[Count - 1];
+
+  for I := Count - 3 downto 1 do
+  begin
+    if Pattern.Middle <> '' then
+      Result := ApplyListTemplate(Pattern.Middle, AItems[I], Result)
+    else
+      Result := AItems[I] + ', ' + Result;
+  end;
+
+  if Pattern.Start <> '' then
+    Result := ApplyListTemplate(Pattern.Start, AItems[0], Result)
+  else
+    Result := AItems[0] + ', ' + Result;
 end;
 
 { TGocciaIntlListFormatValue }
@@ -211,16 +282,9 @@ begin
     ListStyleStringToEnum(LF.FStyle), Formatted) then
     Result := TGocciaStringLiteralValue.Create(Formatted)
   else
-  begin
-    // Fallback: join with commas
-    Formatted := '';
-    for I := 0 to Length(Items) - 1 do
-    begin
-      if I > 0 then Formatted := Formatted + ', ';
-      Formatted := Formatted + Items[I];
-    end;
-    Result := TGocciaStringLiteralValue.Create(Formatted);
-  end;
+    Result := TGocciaStringLiteralValue.Create(
+      FormatListWithCLDR(Items, LF.FLocale, ListTypeStringToEnum(LF.FType),
+        ListStyleStringToEnum(LF.FStyle)));
 end;
 
 function TGocciaIntlListFormatValue.IntlListFormatFormatToParts(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -239,24 +303,24 @@ begin
   Items := ExtractStringArray(AArgs.GetElement(0));
   Arr := TGocciaArrayValue.Create;
 
-  if TryICUFormatList(LF.FLocale, Items, ListTypeStringToEnum(LF.FType),
+  if not TryICUFormatList(LF.FLocale, Items, ListTypeStringToEnum(LF.FType),
     ListStyleStringToEnum(LF.FStyle), Formatted) then
+    Formatted := FormatListWithCLDR(Items, LF.FLocale,
+      ListTypeStringToEnum(LF.FType), ListStyleStringToEnum(LF.FStyle));
+
+  for I := 0 to Length(Items) - 1 do
   begin
-    // Return elements as individual parts
-    for I := 0 to Length(Items) - 1 do
+    if I > 0 then
     begin
-      if I > 0 then
-      begin
-        PartObj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
-        PartObj.AssignProperty('type', TGocciaStringLiteralValue.Create('literal'));
-        PartObj.AssignProperty('value', TGocciaStringLiteralValue.Create(', '));
-        Arr.Elements.Add(PartObj);
-      end;
       PartObj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
-      PartObj.AssignProperty('type', TGocciaStringLiteralValue.Create('element'));
-      PartObj.AssignProperty('value', TGocciaStringLiteralValue.Create(Items[I]));
+      PartObj.AssignProperty('type', TGocciaStringLiteralValue.Create('literal'));
+      PartObj.AssignProperty('value', TGocciaStringLiteralValue.Create(', '));
       Arr.Elements.Add(PartObj);
     end;
+    PartObj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
+    PartObj.AssignProperty('type', TGocciaStringLiteralValue.Create('element'));
+    PartObj.AssignProperty('value', TGocciaStringLiteralValue.Create(Items[I]));
+    Arr.Elements.Add(PartObj);
   end;
   Result := Arr;
 end;

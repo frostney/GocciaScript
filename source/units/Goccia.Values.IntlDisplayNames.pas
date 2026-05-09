@@ -36,6 +36,7 @@ implementation
 uses
   SysUtils,
 
+  IntlCLDRData,
   IntlICU,
   IntlLocaleResolver,
   IntlTypes,
@@ -212,6 +213,9 @@ begin
 
   if TryICUGetDisplayName(DN.FLocale, Code, DisplayTypeStringToEnum(DN.FType),
     DisplayStyleStringToEnum(DN.FStyle), DisplayName) then
+    Result := TGocciaStringLiteralValue.Create(DisplayName)
+  else if TryGetDisplayName(DN.FLocale, Code, DisplayTypeStringToEnum(DN.FType),
+    DisplayName) then
     Result := TGocciaStringLiteralValue.Create(DisplayName)
   else
   begin

@@ -37,8 +37,10 @@ type
 implementation
 
 uses
+  Math,
   SysUtils,
 
+  IntlCLDRData,
   IntlICU,
   IntlLocaleResolver,
   IntlTypes,
@@ -77,6 +79,43 @@ begin
     Result := iptOrdinal
   else
     Result := iptCardinal;
+end;
+
+function SelectPluralWithCLDR(AValue: Double; const ALocale: string;
+  ACardinal: Boolean): string;
+var
+  Rules: TIntlPluralRuleSet;
+  IntVal: Int64;
+  HasFraction: Boolean;
+begin
+  Result := 'other';
+
+  if not TryGetPluralRules(ALocale, ACardinal, Rules) then
+    Exit;
+
+  IntVal := Trunc(AValue);
+  HasFraction := Abs(AValue - IntVal) > 1e-10;
+
+  // Check "zero": used by some languages for n = 0
+  if (Rules.Zero <> '') and (IntVal = 0) and not HasFraction then
+  begin
+    Result := 'zero';
+    Exit;
+  end;
+
+  // Check "one": most common is i = 1 and v = 0
+  if (Rules.One <> '') and (IntVal = 1) and not HasFraction then
+  begin
+    Result := 'one';
+    Exit;
+  end;
+
+  // Check "two": Arabic, etc. for n = 2
+  if (Rules.Two <> '') and (IntVal = 2) and not HasFraction then
+  begin
+    Result := 'two';
+    Exit;
+  end;
 end;
 
 { TGocciaIntlPluralRulesValue }
@@ -203,7 +242,9 @@ begin
   if TryICUSelectPlural(PR.FLocale, NumValue, PluralTypeStringToEnum(PR.FType), Category) then
     Result := TGocciaStringLiteralValue.Create(Category)
   else
-    Result := TGocciaStringLiteralValue.Create('other');
+    Result := TGocciaStringLiteralValue.Create(
+      SelectPluralWithCLDR(NumValue, PR.FLocale,
+        PluralTypeStringToEnum(PR.FType) = iptCardinal));
 end;
 
 function TGocciaIntlPluralRulesValue.IntlPluralRulesSelectRange(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -220,9 +261,11 @@ begin
 
   // Select plural category for the end value as a fallback
   if not TryICUSelectPlural(PR.FLocale, StartVal, PluralTypeStringToEnum(PR.FType), StartCat) then
-    StartCat := 'other';
+    StartCat := SelectPluralWithCLDR(StartVal, PR.FLocale,
+      PluralTypeStringToEnum(PR.FType) = iptCardinal);
   if not TryICUSelectPlural(PR.FLocale, EndVal, PluralTypeStringToEnum(PR.FType), EndCat) then
-    EndCat := 'other';
+    EndCat := SelectPluralWithCLDR(EndVal, PR.FLocale,
+      PluralTypeStringToEnum(PR.FType) = iptCardinal);
 
   // ECMA-402 range resolution: use end value category as the result
   Result := TGocciaStringLiteralValue.Create(EndCat);

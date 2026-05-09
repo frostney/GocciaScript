@@ -59,6 +59,7 @@ type
 
     procedure InitializePrototype;
     procedure BuildSegments;
+    procedure BuildSegmentsFallback;
   public
     constructor Create(const ALocale, AGranularity: string; const AText: UnicodeString);
 
@@ -74,6 +75,7 @@ uses
 
   IntlICU,
   IntlLocaleResolver,
+  TextSemantics,
 
   Goccia.Error.Messages,
   Goccia.ObjectModel.Types,
@@ -370,14 +372,7 @@ begin
   if not TryICUCreateBreakIterator(FLocale, GranularityStringToEnum(FGranularity),
     FText, Iterator) then
   begin
-    // Fallback: single segment covering the whole string
-    if Length(FText) > 0 then
-    begin
-      SetLength(FSegments, 1);
-      FSegments[0].Segment := string(FText);
-      FSegments[0].Index := 0;
-      FSegments[0].IsWordLike := False;
-    end;
+    BuildSegmentsFallback;
     Exit;
   end;
 
@@ -403,6 +398,132 @@ begin
     end;
   finally
     ICUBreakIteratorClose(Iterator);
+  end;
+end;
+
+function IsWordBoundaryChar(C: Char): Boolean;
+begin
+  Result := (C = ' ') or (C = #9) or (C = #10) or (C = #13) or
+            (C = ',') or (C = '.') or (C = '!') or (C = '?') or
+            (C = ';') or (C = ':') or (C = '(') or (C = ')') or
+            (C = '[') or (C = ']') or (C = '{') or (C = '}') or
+            (C = '"') or (C = '''') or (C = '-');
+end;
+
+function IsSentenceEndChar(C: Char): Boolean;
+begin
+  Result := (C = '.') or (C = '!') or (C = '?');
+end;
+
+procedure TGocciaIntlSegmentIteratorValue.BuildSegmentsFallback;
+var
+  Utf8Text: string;
+  Idx, SeqLen: Integer;
+  CodePoint: Cardinal;
+  Seg: TIntlSegment;
+  SegStart: Integer;
+  C: Char;
+begin
+  Utf8Text := string(FText);
+
+  if FGranularity = 'grapheme' then
+  begin
+    // Split into individual code points via UTF-8 iteration
+    Idx := 1;
+    while Idx <= Length(Utf8Text) do
+    begin
+      if TryReadUTF8CodePoint(Utf8Text, Idx, CodePoint, SeqLen) then
+      begin
+        Seg.Segment := Copy(Utf8Text, Idx, SeqLen);
+        Seg.Index := Idx - 1;
+        Seg.IsWordLike := False;
+        SetLength(FSegments, Length(FSegments) + 1);
+        FSegments[Length(FSegments) - 1] := Seg;
+        Inc(Idx, SeqLen);
+      end
+      else
+        Inc(Idx);
+    end;
+  end
+  else if FGranularity = 'word' then
+  begin
+    // Split on word boundaries (whitespace/punctuation)
+    Idx := 1;
+    while Idx <= Length(Utf8Text) do
+    begin
+      SegStart := Idx;
+      C := Utf8Text[Idx];
+
+      if IsWordBoundaryChar(C) then
+      begin
+        // Non-word segment: consume consecutive boundary chars
+        while (Idx <= Length(Utf8Text)) and IsWordBoundaryChar(Utf8Text[Idx]) do
+          Inc(Idx);
+        Seg.Segment := Copy(Utf8Text, SegStart, Idx - SegStart);
+        Seg.Index := SegStart - 1;
+        Seg.IsWordLike := False;
+      end
+      else
+      begin
+        // Word segment: consume until boundary
+        while (Idx <= Length(Utf8Text)) and not IsWordBoundaryChar(Utf8Text[Idx]) do
+          Inc(Idx);
+        Seg.Segment := Copy(Utf8Text, SegStart, Idx - SegStart);
+        Seg.Index := SegStart - 1;
+        Seg.IsWordLike := True;
+      end;
+
+      SetLength(FSegments, Length(FSegments) + 1);
+      FSegments[Length(FSegments) - 1] := Seg;
+    end;
+  end
+  else if FGranularity = 'sentence' then
+  begin
+    // Split on sentence endings: .!? followed by whitespace or end of string
+    SegStart := 1;
+    Idx := 1;
+    while Idx <= Length(Utf8Text) do
+    begin
+      if IsSentenceEndChar(Utf8Text[Idx]) then
+      begin
+        // Consume trailing whitespace after sentence end
+        Inc(Idx);
+        while (Idx <= Length(Utf8Text)) and
+              ((Utf8Text[Idx] = ' ') or (Utf8Text[Idx] = #10) or
+               (Utf8Text[Idx] = #13) or (Utf8Text[Idx] = #9)) do
+          Inc(Idx);
+
+        Seg.Segment := Copy(Utf8Text, SegStart, Idx - SegStart);
+        Seg.Index := SegStart - 1;
+        Seg.IsWordLike := False;
+        SetLength(FSegments, Length(FSegments) + 1);
+        FSegments[Length(FSegments) - 1] := Seg;
+        SegStart := Idx;
+      end
+      else
+        Inc(Idx);
+    end;
+
+    // Remaining text as final segment
+    if SegStart <= Length(Utf8Text) then
+    begin
+      Seg.Segment := Copy(Utf8Text, SegStart, Length(Utf8Text) - SegStart + 1);
+      Seg.Index := SegStart - 1;
+      Seg.IsWordLike := False;
+      SetLength(FSegments, Length(FSegments) + 1);
+      FSegments[Length(FSegments) - 1] := Seg;
+    end;
+  end
+  else
+  begin
+    // Unknown granularity: single segment
+    if Length(Utf8Text) > 0 then
+    begin
+      SetLength(FSegments, 1);
+      FSegments[0].Segment := Utf8Text;
+      FSegments[0].Index := 0;
+      FSegments[0].IsWordLike := False;
+    end;
   end;
 end;
 

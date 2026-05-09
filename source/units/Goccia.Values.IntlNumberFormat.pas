@@ -52,8 +52,10 @@ type
 implementation
 
 uses
+  Math,
   SysUtils,
 
+  IntlCLDRData,
   IntlICU,
   IntlLocaleResolver,
 
@@ -144,6 +146,144 @@ begin
     Result := inudNarrow
   else
     Result := inudShort;
+end;
+
+function InsertGroupingSeparator(const AIntPart, ASep: string): string;
+var
+  Len, I, GroupCount: Integer;
+begin
+  Len := Length(AIntPart);
+  if Len <= 3 then
+  begin
+    Result := AIntPart;
+    Exit;
+  end;
+
+  Result := '';
+  GroupCount := 0;
+  for I := Len downto 1 do
+  begin
+    if (GroupCount > 0) and (GroupCount mod 3 = 0) then
+      Result := ASep + Result;
+    Result := AIntPart[I] + Result;
+    Inc(GroupCount);
+  end;
+end;
+
+function FormatNumberWithCLDR(AValue: Double; const ALocale: string;
+  const AOptions: TIntlNumberFormatOptions): string;
+var
+  DecimalSep, GroupSep, PercentSign, MinusSign: string;
+  IsNeg: Boolean;
+  AbsValue: Double;
+  MinFrac, MaxFrac: Integer;
+  IntPart, FracPart, RawStr: string;
+  DotPos: Integer;
+  CurrSymbol, CurrNarrow: string;
+  CurrDigits: Integer;
+  FormatSpec: string;
+begin
+  if not TryGetNumberSymbol(ALocale, 'decimal', DecimalSep) then
+    DecimalSep := '.';
+  if not TryGetNumberSymbol(ALocale, 'group', GroupSep) then
+    GroupSep := ',';
+  if not TryGetNumberSymbol(ALocale, 'percentSign', PercentSign) then
+    PercentSign := '%';
+  if not TryGetNumberSymbol(ALocale, 'minusSign', MinusSign) then
+    MinusSign := '-';
+
+  IsNeg := AValue < 0;
+  AbsValue := Abs(AValue);
+
+  case AOptions.Style of
+    insPercent:
+      AbsValue := AbsValue * 100;
+    insCurrency:
+    begin
+      if not TryGetCurrencyInfo(ALocale, AOptions.Currency,
+        CurrSymbol, CurrNarrow, CurrDigits) then
+      begin
+        CurrSymbol := AOptions.Currency;
+        CurrDigits := 2;
+      end;
+    end;
+  end;
+
+  MinFrac := AOptions.MinimumFractionDigits;
+  MaxFrac := AOptions.MaximumFractionDigits;
+  if (MinFrac < 0) and (MaxFrac < 0) then
+  begin
+    case AOptions.Style of
+      insCurrency:
+      begin
+        MinFrac := CurrDigits;
+        MaxFrac := CurrDigits;
+      end;
+      insPercent:
+      begin
+        MinFrac := 0;
+        MaxFrac := 0;
+      end;
+    else
+      MinFrac := 0;
+      MaxFrac := 3;
+    end;
+  end;
+
+  if MinFrac < 0 then MinFrac := 0;
+  if MaxFrac < 0 then MaxFrac := 3;
+  if MaxFrac < MinFrac then MaxFrac := MinFrac;
+
+  FormatSpec := '0.' + StringOfChar('0', MaxFrac);
+  RawStr := FormatFloat(FormatSpec, AbsValue);
+
+  DotPos := Pos('.', RawStr);
+  if DotPos > 0 then
+  begin
+    IntPart := Copy(RawStr, 1, DotPos - 1);
+    FracPart := Copy(RawStr, DotPos + 1, Length(RawStr) - DotPos);
+
+    // Trim trailing zeros down to MinFrac
+    while (Length(FracPart) > MinFrac) and
+          (Length(FracPart) > 0) and (FracPart[Length(FracPart)] = '0') do
+      Delete(FracPart, Length(FracPart), 1);
+  end
+  else
+  begin
+    IntPart := RawStr;
+    FracPart := '';
+  end;
+
+  // Pad integer part to minimumIntegerDigits
+  while Length(IntPart) < AOptions.MinimumIntegerDigits do
+    IntPart := '0' + IntPart;
+
+  // Apply grouping separator
+  IntPart := InsertGroupingSeparator(IntPart, GroupSep);
+
+  if Length(FracPart) > 0 then
+    Result := IntPart + DecimalSep + FracPart
+  else
+    Result := IntPart;
+
+  case AOptions.Style of
+    insPercent:
+      Result := Result + PercentSign;
+    insCurrency:
+    begin
+      case AOptions.CurrencyDisplay of
+        incdCode:
+          Result := AOptions.Currency + ' ' + Result;
+        incdNarrowSymbol:
+          Result := CurrNarrow + Result;
+      else
+        Result := CurrSymbol + Result;
+      end;
+    end;
+  end;
+
+  if IsNeg then
+    Result := MinusSign + Result;
 end;
 
 function FormatPartsToArray(const AParts: TIntlFormatPartArray): TGocciaArrayValue;
@@ -373,7 +513,8 @@ begin
   if TryICUFormatNumber(NF.FLocale, NumValue, NF.FResolvedOptions, Formatted) then
     Result := TGocciaStringLiteralValue.Create(Formatted)
   else
-    Result := TGocciaStringLiteralValue.Create(FloatToStr(NumValue));
+    Result := TGocciaStringLiteralValue.Create(
+      FormatNumberWithCLDR(NumValue, NF.FLocale, NF.FResolvedOptions));
 end;
 
 function TGocciaIntlNumberFormatValue.IntlNumberFormatFormatToParts(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -390,7 +531,12 @@ begin
   if TryICUFormatNumberToParts(NF.FLocale, NumValue, NF.FResolvedOptions, Parts) then
     Result := FormatPartsToArray(Parts)
   else
-    Result := TGocciaArrayValue.Create;
+  begin
+    SetLength(Parts, 1);
+    Parts[0].PartType := 'literal';
+    Parts[0].Value := FormatNumberWithCLDR(NumValue, NF.FLocale, NF.FResolvedOptions);
+    Result := FormatPartsToArray(Parts);
+  end;
 end;
 
 function TGocciaIntlNumberFormatValue.IntlNumberFormatResolvedOptions(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
