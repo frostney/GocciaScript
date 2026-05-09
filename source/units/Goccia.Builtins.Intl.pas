@@ -59,6 +59,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.GarbageCollector,
+  Goccia.Intl.CLDRData,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.HoleValue,
