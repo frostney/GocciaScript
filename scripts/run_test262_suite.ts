@@ -742,12 +742,15 @@ async function runOneTest(
   });
 
   // test262 source is overwhelmingly semicolon-omitted; ASI is required to
-  // parse the corpus.  --compat-all and --unsafe-function-constructor are
+  // parse the corpus.  --compat-var, --compat-function,
+  // --compat-traditional-for-loop, and --unsafe-function-constructor are
   // also unconditional: stock harness uses `var`, `function`, and
   // `Function("return this;")()`.
   const args = [
     "--asi",
-    "--compat-all",
+    "--compat-var",
+    "--compat-function",
+    "--compat-traditional-for-loop",
     "--unsafe-function-constructor",
     `--mode=${opts.mode}`,
     `--timeout=${opts.timeoutMs}`,
