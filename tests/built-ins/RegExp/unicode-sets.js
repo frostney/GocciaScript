@@ -386,3 +386,50 @@ test("\\q{} works in bytecode mode", () => {
   expect(re.test("abc")).toBe(true);
   expect(re.test("a")).toBe(false);
 });
+
+// --- Nested set operators inside nested classes ---
+
+test("nested class with set operators", () => {
+  const re = new RegExp("[[a-z&&[a-f]]]", "v");
+  expect(re.test("a")).toBe(true);
+  expect(re.test("f")).toBe(true);
+  expect(re.test("g")).toBe(false);
+});
+
+test("nested class with subtraction operator", () => {
+  const re = new RegExp("[[a-z--[aeiou]]]", "v");
+  expect(re.test("b")).toBe(true);
+  expect(re.test("a")).toBe(false);
+});
+
+test("deeply nested set operators", () => {
+  const re = new RegExp("[[[a-z&&[a-m]]&&[a-f]]]", "v");
+  expect(re.test("a")).toBe(true);
+  expect(re.test("f")).toBe(true);
+  expect(re.test("g")).toBe(false);
+});
+
+// --- Character class escapes rejected as range endpoints ---
+
+test("\\d as range start throws in v-mode", () => {
+  expect(() => new RegExp("[\\d-a]", "v")).toThrow(SyntaxError);
+});
+
+test("\\w as range start throws in v-mode", () => {
+  expect(() => new RegExp("[\\w-z]", "v")).toThrow(SyntaxError);
+});
+
+test("\\p{} as range endpoint throws in v-mode", () => {
+  expect(() => new RegExp("[a-\\p{Letter}]", "v")).toThrow(SyntaxError);
+});
+
+// --- Case-insensitive string matching ---
+
+test("\\q{} respects case-insensitive flag", () => {
+  const re = new RegExp("[\\q{ABC|def}]", "iv");
+  expect(re.test("abc")).toBe(true);
+  expect(re.test("ABC")).toBe(true);
+  expect(re.test("DEF")).toBe(true);
+  expect(re.test("def")).toBe(true);
+  expect(re.test("xyz")).toBe(false);
+});

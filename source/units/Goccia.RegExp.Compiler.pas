@@ -113,6 +113,7 @@ type
     procedure CompileQuantifier(AAtomStart: Integer);
     procedure CompileCharacterClass;
     procedure CompileUnicodeSetsClass;
+    procedure ApplyNestedSetOps(var AContents: TRegExpClassContents);
     procedure ParseClassUnion(var AContents: TRegExpClassContents);
     procedure ParseClassEscape(var AContents: TRegExpClassContents);
     procedure ParseStringDisjunction(var AContents: TRegExpClassContents);
@@ -1162,10 +1163,48 @@ begin
   end;
 end;
 
+procedure TRegExpCompiler.ApplyNestedSetOps(
+  var AContents: TRegExpClassContents);
+var
+  RightContents: TRegExpClassContents;
+  HaveIntersect, HaveSubtract: Boolean;
+begin
+  HaveIntersect := False;
+  HaveSubtract := False;
+  while not AtEnd and (Peek <> ']') do
+  begin
+    if (Peek = '&') and (PeekAt(1) = '&') then
+    begin
+      if HaveSubtract then
+        raise EConvertError.Create(
+          'Invalid regular expression: cannot mix && and -- in the same class');
+      HaveIntersect := True;
+      Inc(FPos, 2);
+      InitClassContents(RightContents);
+      ParseClassUnion(RightContents);
+      IntersectClassContents(AContents, RightContents);
+    end
+    else if (Peek = '-') and (PeekAt(1) = '-') then
+    begin
+      if HaveIntersect then
+        raise EConvertError.Create(
+          'Invalid regular expression: cannot mix && and -- in the same class');
+      HaveSubtract := True;
+      Inc(FPos, 2);
+      InitClassContents(RightContents);
+      ParseClassUnion(RightContents);
+      SubtractClassContents(AContents, RightContents);
+    end
+    else
+      Break;
+  end;
+end;
+
 procedure TRegExpCompiler.ParseClassUnion(var AContents: TRegExpClassContents);
 var
   Lo, Hi: Cardinal;
-  SavePos: Integer;
+  SavePos, SaveStringPos: Integer;
+  IsClassEscape: Boolean;
   EscContents: TRegExpClassContents;
 begin
   while not AtEnd and (Peek <> ']') do
@@ -1181,6 +1220,7 @@ begin
       if Match('^') then
       begin
         ParseClassUnion(EscContents);
+        ApplyNestedSetOps(EscContents);
         if not Match(']') then
           raise EConvertError.Create('Unterminated character class');
         if EscContents.StringCount > 0 then
@@ -1193,6 +1233,7 @@ begin
       else
       begin
         ParseClassUnion(EscContents);
+        ApplyNestedSetOps(EscContents);
         if not Match(']') then
           raise EConvertError.Create('Unterminated character class');
         MergeClassContents(AContents, EscContents);
@@ -1202,14 +1243,20 @@ begin
     if Peek = '\' then
     begin
       Inc(FPos);
+      IsClassEscape := FUnicodeSets and CharInSet(Peek,
+        ['d', 'D', 'w', 'W', 's', 'S', 'p', 'P', 'q']);
       SavePos := AContents.RangeCount;
+      SaveStringPos := AContents.StringCount;
       ParseClassEscape(AContents);
-      if (AContents.StringCount > 0) and
+      if (AContents.StringCount > SaveStringPos) and
          (AContents.Strings[AContents.StringCount - 1].CodePoints <> nil) then
         Continue;
       if (not AtEnd) and (Peek = '-') and (PeekAt(1) <> ']') and
          (PeekAt(1) <> '-') then
       begin
+        if IsClassEscape then
+          raise EConvertError.Create(
+            'Invalid regular expression: character class escape in range');
         if AContents.RangeCount > SavePos then
         begin
           Lo := AContents.Ranges[AContents.RangeCount - 1].Lo;
@@ -1218,6 +1265,10 @@ begin
           if Peek = '\' then
           begin
             Inc(FPos);
+            if FUnicodeSets and CharInSet(Peek,
+               ['d', 'D', 'w', 'W', 's', 'S', 'p', 'P', 'q']) then
+              raise EConvertError.Create(
+                'Invalid regular expression: character class escape in range');
             InitClassContents(EscContents);
             ParseClassEscape(EscContents);
             if EscContents.RangeCount > 0 then
@@ -1303,7 +1354,7 @@ begin
       Inc(SplitCount);
       Emit(EncodeOpBx(RX_SPLIT, 0));
       for J := 0 to High(AContents.Strings[I].CodePoints) do
-        Emit(EncodeOpBx(RX_CHAR, Integer(AContents.Strings[I].CodePoints[J])));
+        EmitCharMatch(AContents.Strings[I].CodePoints[J]);
       JumpHoles[JumpCount] := CurrentPC;
       Inc(JumpCount);
       Emit(EncodeOpBx(RX_JUMP, 0));
@@ -1320,42 +1371,13 @@ end;
 
 procedure TRegExpCompiler.CompileUnicodeSetsClass;
 var
-  Contents, RightContents: TRegExpClassContents;
+  Contents: TRegExpClassContents;
   Negated: Boolean;
-  HaveIntersect, HaveSubtract: Boolean;
 begin
   Negated := Match('^');
   InitClassContents(Contents);
   ParseClassUnion(Contents);
-  HaveIntersect := False;
-  HaveSubtract := False;
-  while not AtEnd and (Peek <> ']') do
-  begin
-    if (Peek = '&') and (PeekAt(1) = '&') then
-    begin
-      if HaveSubtract then
-        raise EConvertError.Create(
-          'Invalid regular expression: cannot mix && and -- in the same class');
-      HaveIntersect := True;
-      Inc(FPos, 2);
-      InitClassContents(RightContents);
-      ParseClassUnion(RightContents);
-      IntersectClassContents(Contents, RightContents);
-    end
-    else if (Peek = '-') and (PeekAt(1) = '-') then
-    begin
-      if HaveIntersect then
-        raise EConvertError.Create(
-          'Invalid regular expression: cannot mix && and -- in the same class');
-      HaveSubtract := True;
-      Inc(FPos, 2);
-      InitClassContents(RightContents);
-      ParseClassUnion(RightContents);
-      SubtractClassContents(Contents, RightContents);
-    end
-    else
-      Break;
-  end;
+  ApplyNestedSetOps(Contents);
   if not Match(']') then
     raise EConvertError.Create('Unterminated character class');
   if Negated and (Contents.StringCount > 0) then
