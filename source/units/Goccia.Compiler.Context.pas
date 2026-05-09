@@ -75,21 +75,25 @@ uses
 function BodyHasStrictDirective(const ABody: TGocciaASTNode): Boolean;
 var
   Block: TGocciaBlockStatement;
-  FirstStmt: TGocciaASTNode;
+  I: Integer;
+  Stmt: TGocciaASTNode;
   Lit: TGocciaLiteralExpression;
 begin
   Result := False;
   if not (ABody is TGocciaBlockStatement) then Exit;
   Block := TGocciaBlockStatement(ABody);
-  if Block.Nodes.Count = 0 then Exit;
-  FirstStmt := Block.Nodes[0];
-  if not (FirstStmt is TGocciaExpressionStatement) then Exit;
-  if not (TGocciaExpressionStatement(FirstStmt).Expression
-    is TGocciaLiteralExpression) then Exit;
-  Lit := TGocciaLiteralExpression(
-    TGocciaExpressionStatement(FirstStmt).Expression);
-  if Lit.Value is TGocciaStringLiteralValue then
-    Result := TGocciaStringLiteralValue(Lit.Value).Value = 'use strict';
+  for I := 0 to Block.Nodes.Count - 1 do
+  begin
+    Stmt := Block.Nodes[I];
+    if not (Stmt is TGocciaExpressionStatement) then Exit;
+    if not (TGocciaExpressionStatement(Stmt).Expression
+      is TGocciaLiteralExpression) then Exit;
+    Lit := TGocciaLiteralExpression(
+      TGocciaExpressionStatement(Stmt).Expression);
+    if not (Lit.Value is TGocciaStringLiteralValue) then Exit;
+    if TGocciaStringLiteralValue(Lit.Value).Value = 'use strict' then
+      Exit(True);
+  end;
 end;
 
 function EmitInstruction(const ACtx: TGocciaCompilationContext;

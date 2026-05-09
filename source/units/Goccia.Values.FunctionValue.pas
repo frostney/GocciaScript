@@ -323,6 +323,24 @@ begin
     ACallScope.DefineLexicalBinding('arguments', ArgsObj, dtParameter);
   end;
 
+  if Context.NonStrictMode then
+    for I := 0 to FBodyStatements.Count - 1 do
+    begin
+      if not (FBodyStatements[I] is TGocciaExpressionStatement) then Break;
+      if not (TGocciaExpressionStatement(FBodyStatements[I]).Expression
+        is TGocciaLiteralExpression) then Break;
+      if not (TGocciaLiteralExpression(
+        TGocciaExpressionStatement(FBodyStatements[I]).Expression).Value
+        is TGocciaStringLiteralValue) then Break;
+      if TGocciaStringLiteralValue(TGocciaLiteralExpression(
+        TGocciaExpressionStatement(FBodyStatements[I]).Expression).Value)
+        .Value = 'use strict' then
+      begin
+        Context.NonStrictMode := False;
+        Break;
+      end;
+    end;
+
   HoistVarDeclarations(FBodyStatements, ACallScope);
 
   HoistFunctionDeclarations(FBodyStatements, Context);

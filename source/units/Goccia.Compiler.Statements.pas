@@ -3134,7 +3134,8 @@ begin
   if ChildCtx.NonStrictMode then
   begin
     ChildTemplate.HasStrictDirective :=
-      BodyHasStrictDirective(AMethod.Body);
+      BodyHasStrictDirective(AMethod.Body) or
+      ACtx.Template.HasStrictDirective;
     EmitInstruction(ChildCtx, EncodeABC(OP_MAKE_ARGUMENTS,
       ChildScope.DeclareLocal('arguments', False), 0, 0));
   end;
@@ -3443,7 +3444,8 @@ begin
   if ChildCtx.NonStrictMode then
   begin
     ChildTemplate.HasStrictDirective :=
-      BodyHasStrictDirective(AMethod.Body);
+      BodyHasStrictDirective(AMethod.Body) or
+      ACtx.Template.HasStrictDirective;
     EmitInstruction(ChildCtx, EncodeABC(OP_MAKE_ARGUMENTS,
       ChildScope.DeclareLocal('arguments', False), 0, 0));
   end;

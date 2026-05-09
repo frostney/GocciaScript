@@ -1382,7 +1382,9 @@ begin
 
     if ChildCtx.NonStrictMode and (not ChildTemplate.IsArrow) then
     begin
-      ChildTemplate.HasStrictDirective := BodyHasStrictDirective(AExpr.Body);
+      ChildTemplate.HasStrictDirective :=
+        BodyHasStrictDirective(AExpr.Body) or
+        ACtx.Template.HasStrictDirective;
       EmitInstruction(ChildCtx, EncodeABC(OP_MAKE_ARGUMENTS,
         ChildScope.DeclareLocal('arguments', False), 0, 0));
     end;
@@ -2475,7 +2477,9 @@ begin
 
     if ChildCtx.NonStrictMode and (not ChildTemplate.IsArrow) then
     begin
-      ChildTemplate.HasStrictDirective := BodyHasStrictDirective(AExpr.Body);
+      ChildTemplate.HasStrictDirective :=
+        BodyHasStrictDirective(AExpr.Body) or
+        ACtx.Template.HasStrictDirective;
       EmitInstruction(ChildCtx, EncodeABC(OP_MAKE_ARGUMENTS,
         ChildScope.DeclareLocal('arguments', False), 0, 0));
     end;
