@@ -9,7 +9,7 @@
 - **TC39 proposals** — Decorators, decorator metadata, pattern matching, types as comments, enums, `Math.clamp`
 - **Excluded by design** — `==`/`!=`, `eval`, `arguments`, `while` / `do...while`, `with`, default imports/exports
 - **Graceful handling** — Parser-recognized excluded syntax (`==`, `while`/`do...while`, traditional `for(;;)` when `--compat-traditional-for-loop` is off, `with`) parses successfully but executes as a no-op with a warning and suggestion
-- **Opt-in toggles** — ASI (`--asi`), `var` declarations (`--compat-var`), `function` keyword (`--compat-function`), traditional `for(init; test; update)` loops (`--compat-traditional-for-loop`), runtime type enforcement (`--strict-types`)
+- **Opt-in toggles** — ASI (`--asi`), `var` declarations (`--compat-var`), `function` keyword (`--compat-function`), traditional `for(init; test; update)` loops (`--compat-traditional-for-loop`), non-strict mode semantics (`--compat-non-strict-mode`), runtime type enforcement (`--strict-types`)
 - **Default preprocessors** — JSX (enabled by default via `DefaultPreprocessors`)
 
 GocciaScript implements a curated subset of ECMAScript. This document details what's supported, what's excluded, and the rationale for each decision. For quick-reference tables of every feature and TC39 proposal, see [Language Tables](language-tables.md).
@@ -717,9 +717,11 @@ Strict equality requires matching types, eliminating this entire class of bugs.
 
 ### `arguments` Object
 
-**Excluded.** Use rest parameters (`...args`) instead.
+**Excluded by default.** Use rest parameters (`...args`) instead.
 
 The `arguments` object is an array-like (but not array) object with confusing behavior. Rest parameters provide a real array with explicit syntax.
+
+**Opt-in** via `--compat-non-strict-mode` (CLI flag, `Engine.NonStrictModeEnabled`, or `{"compat-non-strict-mode": true}` in config). When enabled, non-arrow functions receive an `arguments` binding with indexed access, `.length`, and `.callee`. Works in both interpreter and bytecode modes.
 
 ### Automatic Semicolon Insertion
 
@@ -794,16 +796,16 @@ items.reduce((acc, item) => acc + item, 0);
 
 ### `with` Statement
 
-**Excluded.** No alternative needed. The parser accepts `with` syntax but treats it as a no-op (the body is not executed), and emits a warning:
+**Excluded by default.** Without `--compat-non-strict-mode`, the parser accepts `with` syntax but treats it as a no-op (the body is not executed), and emits a warning:
 
 ```text
 Warning: The 'with' statement is not supported in GocciaScript
   --> script.js:1:1
 ```
 
-Like loops, the parser uses `SkipBalancedParens` to safely skip the `with (...)` expression, including nested parentheses.
+**Opt-in** via `--compat-non-strict-mode`. When enabled, `with` is fully parsed and executed. The with-object's properties shadow outer scope bindings during identifier resolution, respecting `Symbol.unscopables` (ES2026 §8.1.1.2.1). In bytecode mode, identifier accesses inside `with` blocks use `OP_WITH_GET`/`OP_WITH_SET` opcodes for dynamic resolution. Works in both interpreter and bytecode modes.
 
-`with` creates ambiguous scope and is deprecated even in JavaScript's strict mode. Note that `with` is a reserved keyword in GocciaScript (it cannot be used as a variable name), but it can be used as a property name (e.g., `obj.with`).
+`with` is a reserved keyword in GocciaScript (it cannot be used as a variable name), but it can be used as a property name (e.g., `obj.with`).
 
 ### Labeled Statements
 
@@ -860,6 +862,8 @@ GocciaScript operates in an implicit strict mode (see [Errors](errors.md) for th
 - Accessing undeclared variables throws `ReferenceError`.
 - `this` is `undefined` in standalone function calls (no implicit global `this`).
 - Symbol values cannot be implicitly converted to strings or numbers — throws `TypeError`.
+
+With `--compat-non-strict-mode`, these guarantees are relaxed: `delete` returns values instead of erroring, `this` is coerced to `globalThis` for unattached calls (unless the function has `"use strict"`), assignment to non-writable/frozen properties silently fails, and `arguments`/`with` become available.
 
 ### `this` Binding (Strict Mode Semantics)
 

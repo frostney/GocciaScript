@@ -493,9 +493,10 @@ Runtime globals can be reduced by passing a smaller `TGocciaRuntimeGlobals` set,
 | System | Type | Default | Purpose |
 |--------|------|---------|---------|
 | `Preprocessors` | `TGocciaPreprocessors` | `[ppJSX]` | Source transformations before parsing |
-| `Compatibility` | `TGocciaCompatibilityFlags` | `[]` | Parser behavior toggles |
+| `Compatibility` | `TGocciaCompatibilityFlags` | `[]` | Parser/runtime behavior toggles (`cfASI`, `cfVar`, `cfFunction`, `cfTraditionalFor`, `cfNonStrictMode`) |
 | `SourceType` | `TGocciaSourceType` | `stScript` | Load entry as a Script (default) or Module |
 | `StrictTypes` | `Boolean` | `False` | Runtime enforcement of type annotations (works in both interpreter and bytecode); setter propagates to the active executor and interpreter scope |
+| `NonStrictModeEnabled` | `Boolean` | `False` | ES2026 sloppy-mode semantics: delete returns values, this-coercion, silent assignment, `arguments` object, `with` statement |
 
 ```pascal
 Executor := TGocciaInterpreterExecutor.Create;
@@ -503,6 +504,7 @@ try
   Engine := TGocciaEngine.Create('app.js', Source, Executor);
   Engine.Preprocessors := [];              // Disable JSX
   Engine.ASIEnabled := True;               // Enable ASI (convenience for cfASI)
+  Engine.NonStrictModeEnabled := True;     // Enable sloppy-mode semantics (delete, this, arguments, with)
   Engine.SourceType := stModule;           // Run entry as a Module (top-level this is undefined; import.meta resolves)
   Engine.StrictTypes := True;              // Enforce type annotations in both modes
 finally

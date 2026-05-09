@@ -65,6 +65,7 @@ In the current VM:
 - core instructions cover hot execution paths such as locals, arithmetic, comparisons, property/index access, calls, construction, iteration, and class/object setup
 - semantic instructions already include generic arithmetic and bitwise operations in `128..140`
 - module and async orchestration currently starts at `167` (`IMPORT`, `EXPORT`, `AWAIT`, `IMPORT_META`)
+- non-strict-mode opcodes at `182..186` (`MAKE_ARGUMENTS`, `WITH_ENTER`, `WITH_LEAVE`, `WITH_GET`, `WITH_SET`)
 
 The current encoding helpers are defined in `Goccia.Bytecode.pas`:
 

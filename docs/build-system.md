@@ -233,6 +233,7 @@ Relative paths are resolved against the current working directory. A missing fil
   "mode": "bytecode",
   "source-type": "module",
   "asi": true,
+  "compat-non-strict-mode": true,
   "strict-types": true,
   "timeout": 5000,
   "max-memory": 10485760,
