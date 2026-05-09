@@ -657,34 +657,46 @@ end;
 function TGocciaStringObjectValue.StringToLocaleUpperCase(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   StringValue, Locale, UpperResult: string;
+  LocaleArg: TGocciaValue;
 begin
-  StringValue := ExtractStringValue(AThisValue);
-  Locale := '';
   if AArgs.Length > 0 then
-    Locale := AArgs.GetElement(0).ToStringLiteral.Value;
-  if (Locale = '') then
-    Locale := 'en';
-  if TryICUUpperCase(Locale, StringValue, UpperResult) then
-    Result := TGocciaStringLiteralValue.Create(UpperResult)
-  else
-    Result := StringToUpperCase(AArgs, AThisValue);
+  begin
+    LocaleArg := AArgs.GetElement(0);
+    if not (LocaleArg is TGocciaUndefinedLiteralValue) then
+    begin
+      StringValue := ExtractStringValue(AThisValue);
+      Locale := LocaleArg.ToStringLiteral.Value;
+      if (Locale <> '') and TryICUUpperCase(Locale, StringValue, UpperResult) then
+      begin
+        Result := TGocciaStringLiteralValue.Create(UpperResult);
+        Exit;
+      end;
+    end;
+  end;
+  Result := StringToUpperCase(AArgs, AThisValue);
 end;
 
 // ES2026 §22.1.3.26 String.prototype.toLocaleLowerCase([ reserved1 [ , reserved2 ]])
 function TGocciaStringObjectValue.StringToLocaleLowerCase(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   StringValue, Locale, LowerResult: string;
+  LocaleArg: TGocciaValue;
 begin
-  StringValue := ExtractStringValue(AThisValue);
-  Locale := '';
   if AArgs.Length > 0 then
-    Locale := AArgs.GetElement(0).ToStringLiteral.Value;
-  if (Locale = '') then
-    Locale := 'en';
-  if TryICULowerCase(Locale, StringValue, LowerResult) then
-    Result := TGocciaStringLiteralValue.Create(LowerResult)
-  else
-    Result := StringToLowerCase(AArgs, AThisValue);
+  begin
+    LocaleArg := AArgs.GetElement(0);
+    if not (LocaleArg is TGocciaUndefinedLiteralValue) then
+    begin
+      StringValue := ExtractStringValue(AThisValue);
+      Locale := LocaleArg.ToStringLiteral.Value;
+      if (Locale <> '') and TryICULowerCase(Locale, StringValue, LowerResult) then
+      begin
+        Result := TGocciaStringLiteralValue.Create(LowerResult);
+        Exit;
+      end;
+    end;
+  end;
+  Result := StringToLowerCase(AArgs, AThisValue);
 end;
 
 // ES2026 §22.1.3.22 String.prototype.slice(start, end)
@@ -2014,6 +2026,8 @@ function TGocciaStringObjectValue.StringLocaleCompare(const AArgs: TGocciaArgume
 var
   StringValue, ThatString, Locale: string;
   ICUResult: Integer;
+  LocaleArg: TGocciaValue;
+  UseICU: Boolean;
 begin
   StringValue := ExtractStringValue(AThisValue);
 
@@ -2022,13 +2036,20 @@ begin
   else
     ThatString := AArgs.GetElement(0).ToStringLiteral.Value;
 
-  Locale := '';
+  UseICU := False;
+  Locale := 'en';
   if AArgs.Length > 1 then
-    Locale := AArgs.GetElement(1).ToStringLiteral.Value;
-  if Locale = '' then
-    Locale := 'en';
+  begin
+    LocaleArg := AArgs.GetElement(1);
+    if not (LocaleArg is TGocciaUndefinedLiteralValue) then
+    begin
+      Locale := LocaleArg.ToStringLiteral.Value;
+      if Locale <> '' then
+        UseICU := True;
+    end;
+  end;
 
-  if TryICUCompareStrings(Locale, UnicodeString(StringValue),
+  if UseICU and TryICUCompareStrings(Locale, UnicodeString(StringValue),
     UnicodeString(ThatString), icsVariant, False, ICUResult) then
     Result := TGocciaNumberLiteralValue.Create(ICUResult)
   else if StringValue < ThatString then
