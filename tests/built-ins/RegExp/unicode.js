@@ -199,3 +199,55 @@ test("\\p{Separator}", () => {
 test("\\p{Z} shorthand for Separator", () => {
   expect(new RegExp("\\p{Z}", "u").test(" ")).toBe(true);
 });
+
+// --- Multi-byte UTF-8 code point handling ---
+
+test("dot matches multi-byte BMP characters in dotAll mode", () => {
+  expect(/^.$/s.test(" ")).toBe(true);
+  expect(/^.$/s.test(" ")).toBe(true);
+  expect(/^.$/s.test("")).toBe(true);
+});
+
+test("dot rejects line terminators without dotAll", () => {
+  expect(/^.$/.test(" ")).toBe(false);
+  expect(/^.$/.test(" ")).toBe(false);
+  expect(/^.$/.test("\n")).toBe(false);
+  expect(/^.$/.test("\r")).toBe(false);
+});
+
+test("multiline ^ matches after newline in multi-byte context", () => {
+  expect(/^abc/m.test("xyz
+abc")).toBe(true);
+  expect(/^abc/m.test("é
+abc")).toBe(true);
+});
+
+test("multiline $ matches before newline in multi-byte context", () => {
+  expect(/abc$/m.test("abc
+xyz")).toBe(true);
+  expect(/abc$/m.test("abc
+é")).toBe(true);
+});
+
+// --- Unicode mode syntax restrictions ---
+
+test("\\c without letter throws SyntaxError in unicode mode", () => {
+  expect(() => { new RegExp("\\c", "u"); }).toThrow(SyntaxError);
+  expect(() => { new RegExp("\\c1", "u"); }).toThrow(SyntaxError);
+});
+
+test("quantified assertion throws SyntaxError in unicode mode", () => {
+  expect(() => { new RegExp("(?=.)*", "u"); }).toThrow(SyntaxError);
+  expect(() => { new RegExp("(?=.)+", "u"); }).toThrow(SyntaxError);
+  expect(() => { new RegExp("(?!.){2}", "u"); }).toThrow(SyntaxError);
+});
+
+test("\\c inside character class without letter throws SyntaxError in unicode mode", () => {
+  expect(() => { new RegExp("[\\c]", "u"); }).toThrow(SyntaxError);
+  expect(() => { new RegExp("[\\c1]", "u"); }).toThrow(SyntaxError);
+});
+
+test("\\p{ASCII} matches on large input without hitting step limit", () => {
+  const s = "abcdefghij0123456789".repeat(50);
+  expect(new RegExp("^\\p{ASCII}+$", "u").test(s)).toBe(true);
+});

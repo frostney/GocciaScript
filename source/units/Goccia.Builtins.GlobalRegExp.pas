@@ -46,6 +46,26 @@ type
       const AThisValue: TGocciaValue): TGocciaValue;
     function RegExpSymbolSplit(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
+    function RegExpSourceGetter(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function RegExpFlagsGetter(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function RegExpGlobalGetter(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function RegExpIgnoreCaseGetter(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function RegExpMultilineGetter(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function RegExpDotAllGetter(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function RegExpUnicodeGetter(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function RegExpStickyGetter(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function RegExpUnicodeSetsGetter(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function RegExpHasIndicesGetter(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope;
       const AThrowError: TGocciaThrowErrorCallback;
@@ -63,6 +83,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
+  Goccia.RegExp.Engine,
   Goccia.RegExp.Runtime,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
@@ -315,6 +336,26 @@ begin
       Members.AddSymbolMethod(TGocciaSymbolValue.WellKnownSplit,
         '[Symbol.split]', RegExpSymbolSplit, 2,
         [pfConfigurable, pfWritable], [gmfNoFunctionPrototype]);
+      Members.AddAccessor(PROP_SOURCE, RegExpSourceGetter, nil,
+        [pfConfigurable]);
+      Members.AddAccessor(PROP_FLAGS, RegExpFlagsGetter, nil,
+        [pfConfigurable]);
+      Members.AddAccessor(PROP_GLOBAL, RegExpGlobalGetter, nil,
+        [pfConfigurable]);
+      Members.AddAccessor(PROP_IGNORE_CASE, RegExpIgnoreCaseGetter, nil,
+        [pfConfigurable]);
+      Members.AddAccessor(PROP_MULTILINE, RegExpMultilineGetter, nil,
+        [pfConfigurable]);
+      Members.AddAccessor(PROP_DOT_ALL, RegExpDotAllGetter, nil,
+        [pfConfigurable]);
+      Members.AddAccessor(PROP_UNICODE, RegExpUnicodeGetter, nil,
+        [pfConfigurable]);
+      Members.AddAccessor(PROP_STICKY, RegExpStickyGetter, nil,
+        [pfConfigurable]);
+      Members.AddAccessor(PROP_UNICODE_SETS, RegExpUnicodeSetsGetter, nil,
+        [pfConfigurable]);
+      Members.AddAccessor(PROP_HAS_INDICES, RegExpHasIndicesGetter, nil,
+        [pfConfigurable]);
       Members.AddSymbolDataProperty(TGocciaSymbolValue.WellKnownToStringTag,
         TGocciaStringLiteralValue.Create(CONSTRUCTOR_REGEXP), [pfConfigurable]);
       FPrototypeMembers := Members.ToDefinitions;
@@ -353,7 +394,127 @@ begin
   AScope.DefineLexicalBinding(AName, FRegExpConstructor, dtConst, True);
 end;
 
-// ES2026 §22.2.4.2 get RegExp [ @@species ]
+function RequireRegExpThis(const AThisValue: TGocciaValue;
+  const AMethodName: string): TGocciaObjectValue;
+begin
+  if not IsRegExpValue(AThisValue) then
+    ThrowTypeError(AMethodName + ' requires a RegExp object');
+  Result := TGocciaObjectValue(AThisValue);
+end;
+
+function GetRegExpInternalFlags(const AObj: TGocciaObjectValue): string;
+begin
+  Result := AObj.GetProperty(PROP_FLAGS).ToStringLiteral.Value;
+end;
+
+function TGocciaGlobalRegExp.RegExpSourceGetter(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  if AThisValue = GetRegExpPrototype then
+    Exit(TGocciaStringLiteralValue.Create('(?:)'));
+  Result := RequireRegExpThis(AThisValue, 'get RegExp.prototype.source')
+    .GetProperty(PROP_SOURCE);
+end;
+
+function TGocciaGlobalRegExp.RegExpFlagsGetter(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  if AThisValue = GetRegExpPrototype then
+    Exit(TGocciaStringLiteralValue.Create(''));
+  Result := RequireRegExpThis(AThisValue, 'get RegExp.prototype.flags')
+    .GetProperty(PROP_FLAGS);
+end;
+
+function TGocciaGlobalRegExp.RegExpGlobalGetter(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  if AThisValue = GetRegExpPrototype then
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  Result := TGocciaBooleanLiteralValue.Create(
+    HasRegExpFlag(GetRegExpInternalFlags(
+      RequireRegExpThis(AThisValue, 'get RegExp.prototype.global')), 'g'));
+end;
+
+function TGocciaGlobalRegExp.RegExpIgnoreCaseGetter(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  if AThisValue = GetRegExpPrototype then
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  Result := TGocciaBooleanLiteralValue.Create(
+    HasRegExpFlag(GetRegExpInternalFlags(
+      RequireRegExpThis(AThisValue, 'get RegExp.prototype.ignoreCase')), 'i'));
+end;
+
+function TGocciaGlobalRegExp.RegExpMultilineGetter(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  if AThisValue = GetRegExpPrototype then
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  Result := TGocciaBooleanLiteralValue.Create(
+    HasRegExpFlag(GetRegExpInternalFlags(
+      RequireRegExpThis(AThisValue, 'get RegExp.prototype.multiline')), 'm'));
+end;
+
+function TGocciaGlobalRegExp.RegExpDotAllGetter(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  if AThisValue = GetRegExpPrototype then
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  Result := TGocciaBooleanLiteralValue.Create(
+    HasRegExpFlag(GetRegExpInternalFlags(
+      RequireRegExpThis(AThisValue, 'get RegExp.prototype.dotAll')), 's'));
+end;
+
+function TGocciaGlobalRegExp.RegExpUnicodeGetter(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  if AThisValue = GetRegExpPrototype then
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  Result := TGocciaBooleanLiteralValue.Create(
+    HasRegExpFlag(GetRegExpInternalFlags(
+      RequireRegExpThis(AThisValue, 'get RegExp.prototype.unicode')), 'u'));
+end;
+
+function TGocciaGlobalRegExp.RegExpStickyGetter(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  if AThisValue = GetRegExpPrototype then
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  Result := TGocciaBooleanLiteralValue.Create(
+    HasRegExpFlag(GetRegExpInternalFlags(
+      RequireRegExpThis(AThisValue, 'get RegExp.prototype.sticky')), 'y'));
+end;
+
+function TGocciaGlobalRegExp.RegExpUnicodeSetsGetter(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  if AThisValue = GetRegExpPrototype then
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  Result := TGocciaBooleanLiteralValue.Create(
+    HasRegExpFlag(GetRegExpInternalFlags(
+      RequireRegExpThis(AThisValue, 'get RegExp.prototype.unicodeSets')), 'v'));
+end;
+
+function TGocciaGlobalRegExp.RegExpHasIndicesGetter(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  if AThisValue = GetRegExpPrototype then
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  Result := TGocciaBooleanLiteralValue.Create(
+    HasRegExpFlag(GetRegExpInternalFlags(
+      RequireRegExpThis(AThisValue, 'get RegExp.prototype.hasIndices')), 'd'));
+end;
+
 function TGocciaGlobalRegExp.RegExpSpeciesGetter(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
