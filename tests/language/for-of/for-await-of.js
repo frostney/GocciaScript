@@ -450,6 +450,7 @@ describe("for-await-of", () => {
 
   test("preserves original error when return also throws", async () => {
     let caughtMessage = "";
+    let returnCalled = 0;
     const asyncIter = {
       [Symbol.asyncIterator]() {
         return {
@@ -457,6 +458,7 @@ describe("for-await-of", () => {
             return Promise.resolve({ value: 1, done: false });
           },
           return() {
+            returnCalled++;
             throw new Error("return-threw");
           }
         };
@@ -474,6 +476,7 @@ describe("for-await-of", () => {
     }
 
     expect(caughtMessage).toBe("body-threw");
+    expect(returnCalled).toBe(1);
   });
 
   test("surfaces .return() error on break", async () => {
