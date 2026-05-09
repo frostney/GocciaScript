@@ -97,8 +97,10 @@ const
   UCOL_QUATERNARY = 3;
   UCOL_IDENTICAL = 15;
   UCOL_STRENGTH = 2;
+  UCOL_CASE_LEVEL = 3;
   UCOL_ALTERNATE_HANDLING = 1;
   UCOL_SHIFTED = 20;
+  UCOL_ON = 1;
   UCOL_LESS = -1;
   UCOL_EQUAL = 0;
   UCOL_GREATER = 1;
@@ -641,12 +643,24 @@ begin
 
     Status := ICU_SUCCESS;
     IntlFunctions.UcolSetAttribute(Collator, UCOL_STRENGTH, Strength, Status);
+    if not ICUSucceeded(Status) then
+      Exit;
+
+    if ASensitivity = icsCase then
+    begin
+      Status := ICU_SUCCESS;
+      IntlFunctions.UcolSetAttribute(Collator, UCOL_CASE_LEVEL, UCOL_ON, Status);
+      if not ICUSucceeded(Status) then
+        Exit;
+    end;
 
     if AIgnorePunctuation then
     begin
       Status := ICU_SUCCESS;
       IntlFunctions.UcolSetAttribute(Collator, UCOL_ALTERNATE_HANDLING,
         UCOL_SHIFTED, Status);
+      if not ICUSucceeded(Status) then
+        Exit;
     end;
 
     CollResult := IntlFunctions.UcolStrcoll(Collator,
@@ -1143,8 +1157,10 @@ begin
   if not Assigned(IntlFunctions.UlocGetDefault) then
     Exit;
 
-  DefaultId := IntlFunctions.UlocGetDefault;
-  if not Assigned(DefaultId) or (DefaultId[0] = #0) then
+  DefaultId := IntlFunctions.UlocGetDefault();
+  if not Assigned(DefaultId) then
+    Exit;
+  if DefaultId[0] = #0 then
     Exit;
 
   FillChar(TagBuf, SizeOf(TagBuf), 0);

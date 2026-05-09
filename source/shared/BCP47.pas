@@ -255,6 +255,7 @@ var
   ExtSingleton: Char;
   ExtValue: string;
   ExtParts: Integer;
+  I, J: Integer;
 begin
   Result.Language := '';
   Result.Script := '';
@@ -279,10 +280,16 @@ begin
   if SubtagCount = 0 then
     Exit;
 
+  for Idx := 0 to SubtagCount - 1 do
+    if Subtags[Idx] = '' then
+      Exit;
+
   Idx := 0;
 
   if IsPrivateUsePrefix(Subtags[0]) then
   begin
+    if SubtagCount < 2 then
+      Exit;
     Result.PrivateUse := ATag;
     Result.IsValid := True;
     Exit;
@@ -314,6 +321,11 @@ begin
     Inc(Idx);
   end;
 
+  for I := 0 to High(Result.Variants) - 1 do
+    for J := I + 1 to High(Result.Variants) do
+      if CompareText(Result.Variants[I], Result.Variants[J]) = 0 then
+        Exit;
+
   ExtCount := 0;
   while (Idx < SubtagCount) and IsSingleton(Subtags[Idx]) do
   begin
@@ -340,6 +352,11 @@ begin
     Result.Extensions[ExtCount - 1].Singleton := ExtSingleton;
     Result.Extensions[ExtCount - 1].Value := ExtValue;
   end;
+
+  for I := 0 to High(Result.Extensions) - 1 do
+    for J := I + 1 to High(Result.Extensions) do
+      if Result.Extensions[I].Singleton = Result.Extensions[J].Singleton then
+        Exit;
 
   if (Idx < SubtagCount) and IsPrivateUsePrefix(Subtags[Idx]) then
   begin
@@ -386,6 +403,8 @@ begin
     Result.Extensions[I].Singleton := ATag.Extensions[I].Singleton;
     Result.Extensions[I].Value := LowerCase(ATag.Extensions[I].Value);
   end;
+
+  Result.PrivateUse := LowerCase(ATag.PrivateUse);
 end;
 
 function CanonicalizeBcp47Tag(const ATag: TBcp47Tag): string;

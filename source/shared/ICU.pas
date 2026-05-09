@@ -51,6 +51,8 @@ begin
 
   for Version := ICU_VERSION_MAX downto ICU_VERSION_MIN do
   begin
+    AHandle := NilHandle;
+    UCHandle := NilHandle;
     LibName := ICU_I18N_BASE + '.' + IntToStr(Version);
     UCLibName := ICU_UC_BASE + '.' + IntToStr(Version);
     AHandle := LoadLibrary(LibName);
@@ -139,5 +141,9 @@ initialization
 
 finalization
   DoneCriticalSection(InitLock);
+  {$IFDEF LINUX}
+  if UCHandle <> NilHandle then
+    UnloadLibrary(UCHandle);
+  {$ENDIF}
 
 end.

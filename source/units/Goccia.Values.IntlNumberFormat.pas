@@ -260,17 +260,13 @@ begin
   // Validate digit ranges
   if (FMinimumIntegerDigits < 1) or (FMinimumIntegerDigits > 21) then
     ThrowRangeError(Format(SErrorIntlDigitsOutOfRange, ['minimumIntegerDigits', 1, 21]));
-  if (FMinimumFractionDigits >= 0) and
-     ((FMinimumFractionDigits < 0) or (FMinimumFractionDigits > 100)) then
+  if (FMinimumFractionDigits >= 0) and (FMinimumFractionDigits > 100) then
     ThrowRangeError(Format(SErrorIntlDigitsOutOfRange, ['minimumFractionDigits', 0, 100]));
-  if (FMaximumFractionDigits >= 0) and
-     ((FMaximumFractionDigits < 0) or (FMaximumFractionDigits > 100)) then
+  if (FMaximumFractionDigits >= 0) and (FMaximumFractionDigits > 100) then
     ThrowRangeError(Format(SErrorIntlDigitsOutOfRange, ['maximumFractionDigits', 0, 100]));
-  if (FMinimumSignificantDigits >= 0) and
-     ((FMinimumSignificantDigits < 1) or (FMinimumSignificantDigits > 21)) then
+  if (FMinimumSignificantDigits > 0) and (FMinimumSignificantDigits > 21) then
     ThrowRangeError(Format(SErrorIntlDigitsOutOfRange, ['minimumSignificantDigits', 1, 21]));
-  if (FMaximumSignificantDigits >= 0) and
-     ((FMaximumSignificantDigits < 1) or (FMaximumSignificantDigits > 21)) then
+  if (FMaximumSignificantDigits > 0) and (FMaximumSignificantDigits > 21) then
     ThrowRangeError(Format(SErrorIntlDigitsOutOfRange, ['maximumSignificantDigits', 1, 21]));
 
   // Build resolved ICU options

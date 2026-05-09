@@ -154,10 +154,24 @@ begin
     if LastHyphen = 0 then
       Exit;
 
-    if (LastHyphen >= 3) and (Candidate[LastHyphen - 1] = '-') then
-      Candidate := Copy(Candidate, 1, LastHyphen - 2)
-    else
-      Candidate := Copy(Candidate, 1, LastHyphen - 1);
+    Candidate := Copy(Candidate, 1, LastHyphen - 1);
+
+    while Length(Candidate) >= 2 do
+    begin
+      LastHyphen := 0;
+      for I := Length(Candidate) downto 1 do
+      begin
+        if Candidate[I] = '-' then
+        begin
+          LastHyphen := I;
+          Break;
+        end;
+      end;
+      if (LastHyphen > 0) and (Length(Candidate) - LastHyphen = 1) then
+        Candidate := Copy(Candidate, 1, LastHyphen - 1)
+      else
+        Break;
+    end;
   end;
 end;
 
