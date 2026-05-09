@@ -41,8 +41,14 @@ type
     CharClasses: array of TRegExpCharClass;
     CaptureCount: Integer;
     NamedGroups: TGocciaRegExpNamedGroups;
-    FlagUnicode: Boolean;
   end;
+
+const
+  BACKREF_STRICT_FLAG = $800000;
+  BACKREF_ICASE_FLAG = $400000;
+  BACKREF_INDEX_MASK = $3FFFFF;
+  LOOK_NEGATED_FLAG = $800000;
+  LOOK_TARGET_MASK = $7FFFFF;
 
 function CompileRegExp(const APattern, AFlags: string): TRegExpProgram;
 procedure ValidateRegExpPatternNew(const APattern, AFlags: string);
@@ -65,7 +71,6 @@ type
   TRegExpCompiler = class
   private
     FPattern: string;
-    FFlags: string;
     FPos: Integer;
     FCode: array of UInt32;
     FCodeLen: Integer;
@@ -95,7 +100,7 @@ type
     procedure CompileAtom;
     procedure CompileQuantifier(AAtomStart: Integer);
     procedure CompileCharacterClass;
-    procedure CompileEscape(AInCharClass: Boolean; var ARanges: array of TRegExpCharRange; var ARangeCount: Integer);
+    procedure CompileEscape(var ARanges: array of TRegExpCharRange; var ARangeCount: Integer);
     procedure CompileEscapeAtom;
     procedure CompileGroup;
     procedure CompileModifierGroup;
@@ -132,7 +137,6 @@ constructor TRegExpCompiler.Create(const APattern, AFlags: string);
 begin
   inherited Create;
   FPattern := APattern;
-  FFlags := AFlags;
   FPos := 1;
   FCodeLen := 0;
   SetLength(FCode, 256);
@@ -452,7 +456,7 @@ procedure TRegExpCompiler.EmitUnicodePropertyClass(const APropertyName: string;
   ANegated: Boolean);
 var
   Ranges: array[0..MAX_CHAR_RANGES - 1] of TRegExpCharRange;
-  RangeCount, ClassIdx: Integer;
+  RangeCount: Integer;
 begin
   RangeCount := 0;
   GetUnicodePropertyRanges(APropertyName, Ranges, RangeCount);
@@ -615,11 +619,6 @@ begin
     Result := MAX_QUANTIFIER;
 end;
 
-const
-  BACKREF_STRICT_FLAG = $800000;
-  BACKREF_ICASE_FLAG = $400000;
-  LOOK_NEGATED_FLAG = $800000;
-
 procedure TRegExpCompiler.EmitDuplicateNamedBackref(const AName: string;
   AICaseFlag: Integer);
 var
@@ -769,12 +768,11 @@ begin
   end;
 end;
 
-procedure TRegExpCompiler.CompileEscape(AInCharClass: Boolean;
+procedure TRegExpCompiler.CompileEscape(
   var ARanges: array of TRegExpCharRange; var ARangeCount: Integer);
 var
   C: Char;
   PropertyName: string;
-  Negated: Boolean;
   CodePoint: Cardinal;
 begin
   C := Advance;
@@ -812,11 +810,11 @@ begin
             PropertyName := PropertyName + Advance;
           if not Match('}') then
             raise EConvertError.Create('Unterminated Unicode property escape');
-          GetUnicodePropertyRanges(PropertyName, ARanges, ARangeCount);
           if C = 'P' then
-          begin
-            // For negated in char class context, handled by caller
-          end;
+            raise EConvertError.Create(
+              'Negated Unicode property escape \\P{...} is not supported inside character classes')
+          else
+            GetUnicodePropertyRanges(PropertyName, ARanges, ARangeCount);
         end
         else
           AddRange(ARanges, ARangeCount, Ord(C), Ord(C));
@@ -861,7 +859,7 @@ begin
     if Peek = '\' then
     begin
       Inc(FPos);
-      CompileEscape(True, Ranges, RangeCount);
+      CompileEscape(Ranges, RangeCount);
       Continue;
     end;
     Lo := ReadCodePoint;
@@ -872,7 +870,7 @@ begin
       begin
         SavePos := RangeCount;
         Inc(FPos);
-        CompileEscape(True, Ranges, RangeCount);
+        CompileEscape(Ranges, RangeCount);
         if RangeCount > SavePos then
         begin
           Hi := Ranges[RangeCount - 1].Lo;
@@ -1165,8 +1163,8 @@ begin
         RX_LOOKAHEAD, RX_LOOKBEHIND:
           begin
             Bx := Integer(FCode[J] shr 8);
-            NegFlag := Bx and $800000;
-            Bx := (Bx and $7FFFFF) + Delta;
+            NegFlag := Bx and LOOK_NEGATED_FLAG;
+            Bx := (Bx and LOOK_TARGET_MASK) + Delta;
             FCode[J] := EncodeOpBx(Op, Bx or NegFlag);
           end;
       end;
@@ -1321,13 +1319,13 @@ begin
       RX_LOOKAHEAD, RX_LOOKBEHIND:
         begin
           Bx := Integer(FCode[I] shr 8);
-          Negated := (Bx and $800000) <> 0;
-          Bx := Bx and $7FFFFF;
+          Negated := (Bx and LOOK_NEGATED_FLAG) <> 0;
+          Bx := Bx and LOOK_TARGET_MASK;
           if Bx >= APos then
           begin
             Inc(Bx);
             if Negated then
-              Bx := Bx or $800000;
+              Bx := Bx or LOOK_NEGATED_FLAG;
             FCode[I] := EncodeOpBx(Op, Bx);
           end;
         end;
@@ -1510,7 +1508,6 @@ begin
   Result.CharClasses := FCharClasses;
   Result.CaptureCount := FCaptureCount;
   Result.NamedGroups := FNamedGroups;
-  Result.FlagUnicode := FUnicode;
 end;
 
 function CompileRegExp(const APattern, AFlags: string): TRegExpProgram;

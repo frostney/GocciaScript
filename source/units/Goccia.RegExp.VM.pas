@@ -225,7 +225,8 @@ var
       SetLength(Stack, StackTop * 2 + 16);
     Stack[StackTop].PC := APC;
     Stack[StackTop].InputPos := AInputPos;
-    SetLength(Stack[StackTop].Slots, SlotCount);
+    if Length(Stack[StackTop].Slots) <> SlotCount then
+      SetLength(Stack[StackTop].Slots, SlotCount);
     if SlotCount > 0 then
       Move(ASlots[0], Stack[StackTop].Slots[0], SlotCount * SizeOf(Integer));
   end;
@@ -384,9 +385,9 @@ begin
 
       RX_BACKREF:
         begin
-          Negated := (Bx and $800000) <> 0;
-          BackrefICase := (Bx and $400000) <> 0;
-          BackrefGroup := Bx and $3FFFFF;
+          Negated := (Bx and BACKREF_STRICT_FLAG) <> 0;
+          BackrefICase := (Bx and BACKREF_ICASE_FLAG) <> 0;
+          BackrefGroup := Bx and BACKREF_INDEX_MASK;
           RefStart := -1;
           RefEnd := -1;
           if (BackrefGroup * 2) < SlotCount then
@@ -537,8 +538,8 @@ begin
 
       RX_LOOKAHEAD:
         begin
-          Negated := (Bx and $800000) <> 0;
-          LookEnd := Bx and $7FFFFF;
+          Negated := (Bx and LOOK_NEGATED_FLAG) <> 0;
+          LookEnd := Bx and LOOK_TARGET_MASK;
           SetLength(LookSlots, SlotCount);
           Move(ASlots[0], LookSlots[0], SlotCount * SizeOf(Integer));
           LookMatched := RunVM(AProgram, AInput, InputPos, LookSlots,
@@ -567,8 +568,8 @@ begin
 
       RX_LOOKBEHIND:
         begin
-          Negated := (Bx and $800000) <> 0;
-          LookEnd := Bx and $7FFFFF;
+          Negated := (Bx and LOOK_NEGATED_FLAG) <> 0;
+          LookEnd := Bx and LOOK_TARGET_MASK;
           LookMatched := False;
           SetLength(LookSlots, SlotCount);
           I := InputPos - 1;
@@ -650,8 +651,7 @@ begin
   StartPos := AStartIndex + 1;
   if ARequireStart then
   begin
-    for I := 0 to SlotCount - 1 do
-      Slots[I] := -1;
+    FillChar(Slots[0], SlotCount * SizeOf(Integer), $FF);
     if RunVM(AProgram, AInput, StartPos, Slots, SlotCount) then
     begin
       AResult.Matched := True;
@@ -663,8 +663,7 @@ begin
   end;
   while StartPos <= Length(AInput) + 1 do
   begin
-    for I := 0 to SlotCount - 1 do
-      Slots[I] := -1;
+    FillChar(Slots[0], SlotCount * SizeOf(Integer), $FF);
     if RunVM(AProgram, AInput, StartPos, Slots, SlotCount) then
     begin
       AResult.Matched := True;
