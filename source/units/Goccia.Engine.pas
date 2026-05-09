@@ -451,6 +451,7 @@ function TGocciaInterpreterExecutor.RunCompiledModule(
   const AModule: TGocciaCompiledModule): TGocciaValue;
 begin
   Result := FInterpreter.Execute(TGocciaInterpreterModule(AModule).Prog);
+  TGocciaInterpreterModule(AModule).FProgram := nil;
 end;
 
 function TGocciaInterpreterExecutor.RunCompiledModuleInScope(
@@ -463,6 +464,7 @@ begin
   Context.Scope := AScope;
   Result := EvaluateModuleBody(
     TGocciaInterpreterModule(AModule).Prog, Context);
+  TGocciaInterpreterModule(AModule).FProgram := nil;
 end;
 
 { TGocciaEngine }
@@ -1260,17 +1262,37 @@ end;
 
 function TGocciaEngine.RunModule(
   const AModule: TGocciaCompiledModule): TGocciaValue;
+var
+  GC: TGarbageCollector;
 begin
   Result := FExecutor.RunCompiledModule(AModule);
-  WaitForRuntimeIdle;
+  GC := TGarbageCollector.Instance;
+  if Assigned(Result) and Assigned(GC) then
+    GC.AddTempRoot(Result);
+  try
+    WaitForRuntimeIdle;
+  finally
+    if Assigned(Result) and Assigned(GC) then
+      GC.RemoveTempRoot(Result);
+  end;
 end;
 
 function TGocciaEngine.RunModuleInScope(
   const AModule: TGocciaCompiledModule;
   const AScope: TGocciaScope): TGocciaValue;
+var
+  GC: TGarbageCollector;
 begin
   Result := FExecutor.RunCompiledModuleInScope(AModule, AScope);
-  WaitForRuntimeIdle;
+  GC := TGarbageCollector.Instance;
+  if Assigned(Result) and Assigned(GC) then
+    GC.AddTempRoot(Result);
+  try
+    WaitForRuntimeIdle;
+  finally
+    if Assigned(Result) and Assigned(GC) then
+      GC.RemoveTempRoot(Result);
+  end;
 end;
 
 procedure TGocciaEngine.DiscardRuntimePending;

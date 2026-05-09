@@ -120,7 +120,6 @@ type
     function ExecuteInterpreted(const ASource: TStringList; const AFileName: string;
       const ACapture: TScriptLoaderConsoleCapture): TScriptExecutionReport;
     function RunBytecodeModule(const AEngine: TGocciaEngine;
-      const AExecutor: TGocciaBytecodeExecutor;
       const AModule: TGocciaCompiledModule;
       const AFileName: string): TGocciaValue;
     function ExecuteBytecodeFromSource(const ASource: TStringList; const AFileName: string;
@@ -617,7 +616,6 @@ begin
 end;
 
 function TScriptLoaderApp.RunBytecodeModule(const AEngine: TGocciaEngine;
-  const AExecutor: TGocciaBytecodeExecutor;
   const AModule: TGocciaCompiledModule;
   const AFileName: string): TGocciaValue;
 var
@@ -683,8 +681,7 @@ begin
       StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
       try
         ApplyModuleGlobalsToEngine(Engine);
-        Result.ResultValue := RunBytecodeModule(Engine,
-          TGocciaBytecodeExecutor(Engine.Executor), Module, AFileName);
+        Result.ResultValue := RunBytecodeModule(Engine, Module, AFileName);
       finally
         ClearExecutionTimeout;
         ClearInstructionLimit;
@@ -727,7 +724,7 @@ begin
         try
           ApplyModuleGlobalsToEngine(Engine);
           Result.ResultValue := RunBytecodeModule(Engine,
-            TGocciaBytecodeExecutor(Engine.Executor), RetainedModule, AFileName);
+            RetainedModule, AFileName);
         finally
           ClearExecutionTimeout;
           ClearInstructionLimit;
