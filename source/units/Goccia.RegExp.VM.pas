@@ -29,7 +29,7 @@ uses
 const
   MIN_STEP_LIMIT = 10000000;
   STEPS_PER_INPUT_BYTE = 100;
-  DEFAULT_BACKTRACK_CAP = 1000000;
+  DEFAULT_BACKTRACK_CAP = 10000000;
   MAX_LOOKBEHIND_DISTANCE = 256;
   MEMO_CAPACITY = 65536;
   MEMO_LOAD_LIMIT = 49152;
@@ -128,7 +128,7 @@ begin
 end;
 
 function CharClassContainsLinear(const AClass: TRegExpCharClass;
-  ACodePoint: Cardinal): Boolean;
+  ACodePoint: Cardinal): Boolean; inline;
 var
   I: Integer;
 begin
@@ -154,7 +154,9 @@ begin
 end;
 
 function ReadInputCodePoint(const AInput: string; APos: Integer;
-  out ACodePoint: Cardinal; out AByteLen: Integer): Boolean;
+  out ACodePoint: Cardinal; out AByteLen: Integer): Boolean; inline;
+var
+  B: Byte;
 begin
   if (APos < 1) or (APos > Length(AInput)) then
   begin
@@ -162,11 +164,18 @@ begin
     AByteLen := 0;
     Exit(False);
   end;
+  B := Ord(AInput[APos]);
+  if B < $80 then
+  begin
+    ACodePoint := B;
+    AByteLen := 1;
+    Exit(True);
+  end;
   Result := TryReadUTF8CodePointAllowSurrogates(AInput, APos, ACodePoint,
     AByteLen);
   if not Result then
   begin
-    ACodePoint := Ord(AInput[APos]);
+    ACodePoint := B;
     AByteLen := 1;
     Result := True;
   end;
