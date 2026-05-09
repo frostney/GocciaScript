@@ -89,6 +89,14 @@ type
   TGocciaEngineExtensionClass = class of TGocciaEngineExtension;
   TGocciaEngineExtensionList = TObjectList<TGocciaEngineExtension>;
 
+  TGocciaInterpreterModule = class(TGocciaCompiledModule)
+  private
+    FProgram: TGocciaProgram;
+  public
+    constructor Create(const AProgram: TGocciaProgram);
+    property Prog: TGocciaProgram read FProgram;
+  end;
+
   TGocciaInterpreterExecutor = class(TGocciaExecutor)
   private
     FInterpreter: TGocciaInterpreter;
@@ -103,8 +111,13 @@ type
       const AProgram: TGocciaProgram): TGocciaValue; override;
     function EvaluateModuleBody(const AProgram: TGocciaProgram;
       const AContext: TGocciaEvaluationContext): TGocciaValue; override;
-    { The bootstrapped interpreter is owned by TGocciaEngine and assigned
-      here during Engine.Initialize so the executor can tree-walk. }
+    function CompileModule(
+      const AProgram: TGocciaProgram): TGocciaCompiledModule; override;
+    function RunCompiledModule(
+      const AModule: TGocciaCompiledModule): TGocciaValue; override;
+    function RunCompiledModuleInScope(
+      const AModule: TGocciaCompiledModule;
+      const AScope: TGocciaScope): TGocciaValue; override;
     property Interpreter: TGocciaInterpreter read FInterpreter
       write FInterpreter;
   end;
@@ -216,10 +229,12 @@ type
     function Execute: TGocciaScriptResult;
     function ExecuteProgram(const AProgram: TGocciaProgram): TGocciaValue;
     procedure WaitForRuntimeIdle;
-    function CompileModule(const AProgram: TGocciaProgram): TObject;
-    procedure RetainModule(const AModule: TObject);
-    function RunModule(const AModule: TObject): TGocciaValue;
-    function RunModuleInScope(const AModule: TObject;
+    function CompileModule(
+      const AProgram: TGocciaProgram): TGocciaCompiledModule;
+    procedure RetainModule(const AModule: TGocciaCompiledModule);
+    function RunModule(
+      const AModule: TGocciaCompiledModule): TGocciaValue;
+    function RunModuleInScope(const AModule: TGocciaCompiledModule;
       const AScope: TGocciaScope): TGocciaValue;
     procedure ThrowError(const AMessage: string; const ALine,
       AColumn: Integer);
@@ -418,6 +433,36 @@ begin
     Result := CF.Value;
     if CF.Kind = cfkReturn then Exit;
   end;
+end;
+
+constructor TGocciaInterpreterModule.Create(const AProgram: TGocciaProgram);
+begin
+  inherited Create;
+  FProgram := AProgram;
+end;
+
+function TGocciaInterpreterExecutor.CompileModule(
+  const AProgram: TGocciaProgram): TGocciaCompiledModule;
+begin
+  Result := TGocciaInterpreterModule.Create(AProgram);
+end;
+
+function TGocciaInterpreterExecutor.RunCompiledModule(
+  const AModule: TGocciaCompiledModule): TGocciaValue;
+begin
+  Result := FInterpreter.Execute(TGocciaInterpreterModule(AModule).Prog);
+end;
+
+function TGocciaInterpreterExecutor.RunCompiledModuleInScope(
+  const AModule: TGocciaCompiledModule;
+  const AScope: TGocciaScope): TGocciaValue;
+var
+  Context: TGocciaEvaluationContext;
+begin
+  Context := FInterpreter.CreateEvaluationContext;
+  Context.Scope := AScope;
+  Result := EvaluateModuleBody(
+    TGocciaInterpreterModule(AModule).Prog, Context);
 end;
 
 { TGocciaEngine }
@@ -1202,38 +1247,29 @@ begin
 end;
 
 function TGocciaEngine.CompileModule(
-  const AProgram: TGocciaProgram): TObject;
+  const AProgram: TGocciaProgram): TGocciaCompiledModule;
 begin
-  if FExecutor is TGocciaBytecodeExecutor then
-    Result := TGocciaBytecodeExecutor(FExecutor).CompileToModule(AProgram)
-  else
-    raise Exception.Create('CompileModule requires a bytecode executor');
+  Result := FExecutor.CompileModule(AProgram);
   FRetainedModules.Add(Result);
 end;
 
-procedure TGocciaEngine.RetainModule(const AModule: TObject);
+procedure TGocciaEngine.RetainModule(const AModule: TGocciaCompiledModule);
 begin
   FRetainedModules.Add(AModule);
 end;
 
-function TGocciaEngine.RunModule(const AModule: TObject): TGocciaValue;
+function TGocciaEngine.RunModule(
+  const AModule: TGocciaCompiledModule): TGocciaValue;
 begin
-  if FExecutor is TGocciaBytecodeExecutor then
-    Result := TGocciaBytecodeExecutor(FExecutor).RunModule(
-      TGocciaBytecodeModule(AModule))
-  else
-    raise Exception.Create('RunModule requires a bytecode executor');
+  Result := FExecutor.RunCompiledModule(AModule);
   WaitForRuntimeIdle;
 end;
 
-function TGocciaEngine.RunModuleInScope(const AModule: TObject;
+function TGocciaEngine.RunModuleInScope(
+  const AModule: TGocciaCompiledModule;
   const AScope: TGocciaScope): TGocciaValue;
 begin
-  if FExecutor is TGocciaBytecodeExecutor then
-    Result := TGocciaBytecodeExecutor(FExecutor).RunModuleInScope(
-      TGocciaBytecodeModule(AModule), AScope)
-  else
-    raise Exception.Create('RunModuleInScope requires a bytecode executor');
+  Result := FExecutor.RunCompiledModuleInScope(AModule, AScope);
   WaitForRuntimeIdle;
 end;
 

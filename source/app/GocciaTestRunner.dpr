@@ -22,6 +22,7 @@ uses
   Goccia.Coverage.Report,
   Goccia.Engine,
   Goccia.Engine.Backend,
+  Goccia.Executor,
   Goccia.Error,
   Goccia.Error.Detail,
   Goccia.FileExtensions,
@@ -140,7 +141,7 @@ type
     function RunGocciaScriptInterpreted(const AFileName: string;
       APreloadedSource: TStringList = nil): TTestFileResult;
     function RunBytecodeTestModule(const AEngine: TGocciaEngine;
-      const AModule: TObject;
+      const AModule: TGocciaCompiledModule;
       const AFileName: string): TGocciaValue;
     function RunGocciaScriptBytecode(const AFileName: string;
       APreloadedSource: TStringList = nil): TTestFileResult;
@@ -548,7 +549,7 @@ begin
 end;
 
 function TTestRunnerApp.RunBytecodeTestModule(const AEngine: TGocciaEngine;
-  const AModule: TObject;
+  const AModule: TGocciaCompiledModule;
   const AFileName: string): TGocciaValue;
 var
   ModuleScope: TGocciaScope;
@@ -576,7 +577,7 @@ var
   Parser: TGocciaParser;
   Warning: TGocciaParserWarning;
   ProgramNode: TGocciaProgram;
-  Module: TObject;
+  Module: TGocciaCompiledModule;
   Executor: TGocciaBytecodeExecutor;
   Engine: TGocciaEngine;
   ScriptResult: TGocciaObjectValue;

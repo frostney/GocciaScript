@@ -23,6 +23,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Engine,
   Goccia.Engine.Backend,
+  Goccia.Executor,
   Goccia.Error,
   Goccia.Error.Detail,
   Goccia.FileExtensions,
@@ -191,7 +192,7 @@ type
     FWorkerProgressEnabled: Boolean;
     function ProfilingEnabled: Boolean;
     procedure RunBytecodeBenchmarkModule(const AEngine: TGocciaEngine;
-      const AModule: TObject; const AFileName: string);
+      const AModule: TGocciaCompiledModule; const AFileName: string);
     procedure CollectBenchmarkFileInterpreted(const AFileName: string;
       const AReporter: TBenchmarkReporter; const AShowProgress: Boolean);
     procedure CollectBenchmarkFileBytecode(const AFileName: string;
@@ -296,7 +297,7 @@ end;
 
 procedure TBenchmarkRunnerApp.RunBytecodeBenchmarkModule(
   const AEngine: TGocciaEngine;
-  const AModule: TObject; const AFileName: string);
+  const AModule: TGocciaCompiledModule; const AFileName: string);
 var
   ModuleScope: TGocciaScope;
 begin
@@ -414,7 +415,7 @@ var
   Tokens: TObjectList<TGocciaToken>;
   Parser: TGocciaParser;
   ProgramNode: TGocciaProgram;
-  Module: TObject;
+  Module: TGocciaCompiledModule;
   Executor: TGocciaBytecodeExecutor;
   Engine: TGocciaEngine;
   GC: TGarbageCollector;
@@ -646,7 +647,7 @@ var
   Tokens: TObjectList<TGocciaToken>;
   Parser: TGocciaParser;
   ProgramNode: TGocciaProgram;
-  Module: TObject;
+  Module: TGocciaCompiledModule;
   Executor: TGocciaBytecodeExecutor;
   Engine: TGocciaEngine;
   GC: TGarbageCollector;

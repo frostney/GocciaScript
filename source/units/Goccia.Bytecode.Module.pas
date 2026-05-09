@@ -5,7 +5,8 @@ unit Goccia.Bytecode.Module;
 interface
 
 uses
-  Goccia.Bytecode.Chunk;
+  Goccia.Bytecode.Chunk,
+  Goccia.Executor;
 
 type
   TGocciaModuleBinding = record
@@ -23,7 +24,7 @@ type
     LocalSlot: UInt16;
   end;
 
-  TGocciaBytecodeModule = class
+  TGocciaBytecodeModule = class(TGocciaCompiledModule)
   private
     FFormatVersion: UInt16;
     FRuntimeTag: string;

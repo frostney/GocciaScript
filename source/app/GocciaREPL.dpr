@@ -19,6 +19,7 @@ uses
   CLI.Options,
   Goccia.Engine,
   Goccia.Engine.Backend,
+  Goccia.Executor,
   Goccia.Error,
   Goccia.Error.Detail,
   Goccia.GarbageCollector,
@@ -104,7 +105,7 @@ var
   Tokens: TObjectList<TGocciaToken>;
   Parser: TGocciaParser;
   ProgramNode: TGocciaProgram;
-  Module: TObject;
+  Module: TGocciaCompiledModule;
   StartTime, LexEnd, ParseEnd, CompileEnd, ExecEnd: Int64;
 begin
   if APaths.Count > 0 then

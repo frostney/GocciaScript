@@ -36,15 +36,13 @@ type
       const AProgram: TGocciaProgram): TGocciaValue; override;
     procedure ClearTransientCaches; override;
 
-    function CompileToModule(
-      const AProgram: TGocciaProgram): TGocciaBytecodeModule;
-    function RunModule(const AModule: TGocciaBytecodeModule): TGocciaValue;
-    { Run AModule with FVM.GlobalScope temporarily replaced by AScope.
-      Used to execute the entry program with a fresh module scope when
-      --source-type=module is set; mirrors the swap that
-      EvaluateModuleBody does for nested module loads. }
-    function RunModuleInScope(const AModule: TGocciaBytecodeModule;
-      const AScope: TGocciaScope): TGocciaValue;
+    function CompileModule(
+      const AProgram: TGocciaProgram): TGocciaCompiledModule; override;
+    function RunCompiledModule(
+      const AModule: TGocciaCompiledModule): TGocciaValue; override;
+    function RunCompiledModuleInScope(
+      const AModule: TGocciaCompiledModule;
+      const AScope: TGocciaScope): TGocciaValue; override;
 
     property VM: TGocciaVM read FVM;
     property GlobalBackedTopLevel: Boolean read FGlobalBackedTopLevel
@@ -125,16 +123,16 @@ end;
 function TGocciaBytecodeExecutor.ExecuteProgram(
   const AProgram: TGocciaProgram): TGocciaValue;
 var
-  Module: TGocciaBytecodeModule;
+  Module: TGocciaCompiledModule;
   Start: Int64;
 begin
   Start := GetNanoseconds;
-  Module := CompileToModule(AProgram);
+  Module := CompileModule(AProgram);
   CompileTimeNanoseconds := GetNanoseconds - Start;
   if Assigned(FRetainModule) then
     FRetainModule(Module);
   Start := GetNanoseconds;
-  Result := RunModule(Module);
+  Result := RunCompiledModule(Module);
   ExecuteTimeNanoseconds := GetNanoseconds - Start;
 end;
 
@@ -143,17 +141,16 @@ function TGocciaBytecodeExecutor.ExecuteDynamicFunction(
 var
   Module: TGocciaBytecodeModule;
 begin
-  Module := CompileToModule(AProgram);
-  // Patch method template name to 'anonymous' for Function constructor
+  Module := TGocciaBytecodeModule(CompileModule(AProgram));
   if Module.TopLevel.FunctionCount > 0 then
     Module.TopLevel.GetFunction(0).Name := 'anonymous';
   if Assigned(FRetainModule) then
     FRetainModule(Module);
-  Result := RunModule(Module);
+  Result := RunCompiledModule(Module);
 end;
 
-function TGocciaBytecodeExecutor.CompileToModule(
-  const AProgram: TGocciaProgram): TGocciaBytecodeModule;
+function TGocciaBytecodeExecutor.CompileModule(
+  const AProgram: TGocciaProgram): TGocciaCompiledModule;
 var
   Compiler: TGocciaCompiler;
   Options: TGocciaCompilerOptimizationOptions;
@@ -176,8 +173,8 @@ begin
   end;
 end;
 
-function TGocciaBytecodeExecutor.RunModule(
-  const AModule: TGocciaBytecodeModule): TGocciaValue;
+function TGocciaBytecodeExecutor.RunCompiledModule(
+  const AModule: TGocciaCompiledModule): TGocciaValue;
 var
   GC: TGarbageCollector;
   WasEnabled: Boolean;
@@ -195,15 +192,15 @@ begin
     and (pmFunctions in TGocciaProfiler.Instance.Mode);
   GProfilingAllocations := FVM.ProfilingFunctions;
   try
-    Result := FVM.ExecuteModule(AModule);
+    Result := FVM.ExecuteModule(TGocciaBytecodeModule(AModule));
   finally
     GProfilingAllocations := False;
     GC.Enabled := WasEnabled;
   end;
 end;
 
-function TGocciaBytecodeExecutor.RunModuleInScope(
-  const AModule: TGocciaBytecodeModule;
+function TGocciaBytecodeExecutor.RunCompiledModuleInScope(
+  const AModule: TGocciaCompiledModule;
   const AScope: TGocciaScope): TGocciaValue;
 var
   SavedGlobalScope: TGocciaScope;
@@ -211,7 +208,7 @@ begin
   SavedGlobalScope := FVM.GlobalScope;
   FVM.GlobalScope := AScope;
   try
-    Result := RunModule(AModule);
+    Result := RunCompiledModule(AModule);
   finally
     FVM.GlobalScope := SavedGlobalScope;
   end;

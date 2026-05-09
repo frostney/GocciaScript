@@ -24,6 +24,7 @@ uses
   Goccia.Coverage.Report,
   Goccia.Engine,
   Goccia.Engine.Backend,
+  Goccia.Executor,
   Goccia.Error,
   Goccia.Error.Detail,
   Goccia.FileExtensions,
@@ -120,7 +121,7 @@ type
       const ACapture: TScriptLoaderConsoleCapture): TScriptExecutionReport;
     function RunBytecodeModule(const AEngine: TGocciaEngine;
       const AExecutor: TGocciaBytecodeExecutor;
-      const AModule: TObject;
+      const AModule: TGocciaCompiledModule;
       const AFileName: string): TGocciaValue;
     function ExecuteBytecodeFromSource(const ASource: TStringList; const AFileName: string;
       const ACapture: TScriptLoaderConsoleCapture): TScriptExecutionReport;
@@ -617,7 +618,7 @@ end;
 
 function TScriptLoaderApp.RunBytecodeModule(const AEngine: TGocciaEngine;
   const AExecutor: TGocciaBytecodeExecutor;
-  const AModule: TObject;
+  const AModule: TGocciaCompiledModule;
   const AFileName: string): TGocciaValue;
 var
   ModuleScope: TGocciaScope;
@@ -637,7 +638,7 @@ function TScriptLoaderApp.ExecuteBytecodeFromSource(const ASource: TStringList;
   const AFileName: string; const ACapture: TScriptLoaderConsoleCapture): TScriptExecutionReport;
 var
   ProgramNode: TGocciaProgram;
-  Module: TObject;
+  Module: TGocciaCompiledModule;
   Executor: TGocciaBytecodeExecutor;
   Engine: TGocciaEngine;
   SourceMap: TGocciaSourceMap;
@@ -702,8 +703,8 @@ end;
 function TScriptLoaderApp.ExecuteBytecodeFromFile(const AFileName: string;
   const ACapture: TScriptLoaderConsoleCapture): TScriptExecutionReport;
 var
-  Module: TObject;
-  RetainedModule: TObject;
+  Module: TGocciaCompiledModule;
+  RetainedModule: TGocciaCompiledModule;
   Executor: TGocciaBytecodeExecutor;
   Engine: TGocciaEngine;
   StartTime, LoadEnd, ExecEnd: Int64;
