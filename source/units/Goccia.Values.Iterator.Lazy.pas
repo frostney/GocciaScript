@@ -273,6 +273,7 @@ begin
   if FIndex >= FLimit then
   begin
     FDone := True;
+    CloseIteratorPreservingError(FSourceIterator);
     Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
     Exit;
   end;
@@ -292,6 +293,7 @@ begin
   if FIndex >= FLimit then
   begin
     FDone := True;
+    CloseIteratorPreservingError(FSourceIterator);
     ADone := True;
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
     Exit;

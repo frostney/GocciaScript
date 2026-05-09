@@ -27,7 +27,8 @@ describe("Iterator.prototype.take()", () => {
     expect(taken.next().value).toBe(10);
     expect(taken.next().value).toBe(20);
     expect(taken.next().done).toBe(true);
-    expect(source.next().value).toBe(30);
+    // Source is closed when the take limit is reached (IteratorClose per spec)
+    expect(source.next().done).toBe(true);
   });
 
   test("take composes after drop", () => {
@@ -37,6 +38,86 @@ describe("Iterator.prototype.take()", () => {
       .toArray();
 
     expect(result).toEqual([3, 4, 5]);
+  });
+
+  test("take closes source iterator when limit is reached", () => {
+    let closed = false;
+    const source = {
+      [Symbol.iterator]() {
+        let i = 0;
+        return {
+          next() {
+            i++;
+            return { value: i, done: false };
+          },
+          return() {
+            closed = true;
+            return { value: undefined, done: true };
+          },
+        };
+      },
+    };
+
+    const result = Iterator.from(source[Symbol.iterator]()).take(2).toArray();
+    expect(result).toEqual([1, 2]);
+    expect(closed).toBe(true);
+  });
+
+  test("take runs generator finally blocks when limit is reached", () => {
+    let finalized = false;
+    const gen = {
+      *go() {
+        try { yield 1; yield 2; yield 3; }
+        finally { finalized = true; }
+      },
+    }.go;
+
+    const arr = gen().take(1).toArray();
+    expect(arr).toEqual([1]);
+    expect(finalized).toBe(true);
+  });
+
+  test("take does not close source when source is exhausted before limit", () => {
+    let closed = false;
+    const source = {
+      [Symbol.iterator]() {
+        let i = 0;
+        return {
+          next() {
+            i++;
+            if (i > 2) return { value: undefined, done: true };
+            return { value: i, done: false };
+          },
+          return() {
+            closed = true;
+            return { value: undefined, done: true };
+          },
+        };
+      },
+    };
+
+    const result = Iterator.from(source[Symbol.iterator]()).take(5).toArray();
+    expect(result).toEqual([1, 2]);
+    expect(closed).toBe(false);
+  });
+
+  test("take(0) closes source iterator immediately", () => {
+    let closed = false;
+    const source = {
+      [Symbol.iterator]() {
+        return {
+          next() { return { value: 1, done: false }; },
+          return() {
+            closed = true;
+            return { value: undefined, done: true };
+          },
+        };
+      },
+    };
+
+    const result = Iterator.from(source[Symbol.iterator]()).take(0).toArray();
+    expect(result).toEqual([]);
+    expect(closed).toBe(true);
   });
 
   test("take can bound nested iterators inside helper chains", () => {
