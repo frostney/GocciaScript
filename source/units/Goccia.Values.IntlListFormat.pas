@@ -35,12 +35,12 @@ implementation
 uses
   SysUtils,
 
-  IntlCLDRData,
   IntlICU,
   IntlLocaleResolver,
   IntlTypes,
 
   Goccia.Error.Messages,
+  Goccia.Intl.CLDRData,
   Goccia.ObjectModel.Types,
   Goccia.Realm,
   Goccia.Values.ArrayValue,

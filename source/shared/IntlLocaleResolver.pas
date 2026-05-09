@@ -21,8 +21,9 @@ uses
   SysUtils,
 
   BCP47,
-  IntlCLDRData,
-  IntlICU;
+  IntlICU,
+
+  Goccia.Intl.CLDRData;
 
 function CanonicalizeUnicodeLocaleId(const ATag: string): string;
 var

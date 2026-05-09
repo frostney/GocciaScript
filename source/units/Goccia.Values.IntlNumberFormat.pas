@@ -55,11 +55,11 @@ uses
   Math,
   SysUtils,
 
-  IntlCLDRData,
   IntlICU,
   IntlLocaleResolver,
 
   Goccia.Error.Messages,
+  Goccia.Intl.CLDRData,
   Goccia.ObjectModel.Types,
   Goccia.Realm,
   Goccia.Values.ArrayValue,

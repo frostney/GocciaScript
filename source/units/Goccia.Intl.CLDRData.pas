@@ -1,6 +1,6 @@
-unit IntlCLDRData;
+unit Goccia.Intl.CLDRData;
 
-{$I Shared.inc}
+{$I Goccia.inc}
 
 interface
 
@@ -709,7 +709,7 @@ begin
   end;
 
   if not TryGetSectionDataWithFallback('relative-time/', ALocale,
-    DataOffset, DataLength) then
+    Resource, DataOffset, DataLength) then
   begin
     Result := False;
     Exit;
