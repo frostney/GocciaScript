@@ -75,6 +75,7 @@ uses
   IntlICU,
   IntlLocaleResolver,
 
+  Goccia.Error.Messages,
   Goccia.ObjectModel.Types,
   Goccia.Realm,
   Goccia.Values.ArrayValue,
@@ -171,7 +172,11 @@ begin
   begin
     V := AOptions.GetProperty('granularity');
     if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
+    begin
       FGranularity := V.ToStringLiteral.Value;
+      if ContainsNulCharacter(FGranularity) then
+        ThrowRangeError(Format(SErrorIntlInvalidOption, [FGranularity, 'granularity']));
+    end;
   end;
 
   InitializePrototype;

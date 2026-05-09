@@ -40,6 +40,7 @@ uses
   IntlLocaleResolver,
   IntlTypes,
 
+  Goccia.Error.Messages,
   Goccia.ObjectModel.Types,
   Goccia.Realm,
   Goccia.Values.ArrayValue,
@@ -121,12 +122,26 @@ begin
 
   if Assigned(AOptions) then
   begin
+    V := AOptions.GetProperty('localeMatcher');
+    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
+    begin
+      if ContainsNulCharacter(V.ToStringLiteral.Value) then
+        ThrowRangeError(Format(SErrorIntlInvalidOption, [V.ToStringLiteral.Value, 'localeMatcher']));
+    end;
     V := AOptions.GetProperty('numeric');
     if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
+    begin
       FNumeric := V.ToStringLiteral.Value;
+      if ContainsNulCharacter(FNumeric) then
+        ThrowRangeError(Format(SErrorIntlInvalidOption, [FNumeric, 'numeric']));
+    end;
     V := AOptions.GetProperty('style');
     if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
+    begin
       FStyle := V.ToStringLiteral.Value;
+      if ContainsNulCharacter(FStyle) then
+        ThrowRangeError(Format(SErrorIntlInvalidOption, [FStyle, 'style']));
+    end;
     V := AOptions.GetProperty('numberingSystem');
     if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
       FNumberingSystem := V.ToStringLiteral.Value;
@@ -200,6 +215,8 @@ begin
     ThrowTypeError('Intl.RelativeTimeFormat.prototype.format requires value and unit');
   NumValue := AArgs.GetElement(0).ToNumberLiteral.Value;
   UnitStr := AArgs.GetElement(1).ToStringLiteral.Value;
+  if ContainsNulCharacter(UnitStr) then
+    ThrowRangeError('Invalid unit for Intl.RelativeTimeFormat: ' + UnitStr);
 
   if TryICUFormatRelativeTime(RTF.FLocale, NumValue, UnitStringToEnum(UnitStr),
     NumericStringToEnum(RTF.FNumeric), Formatted) then
@@ -221,6 +238,8 @@ begin
     ThrowTypeError('Intl.RelativeTimeFormat.prototype.formatToParts requires value and unit');
   NumValue := AArgs.GetElement(0).ToNumberLiteral.Value;
   UnitStr := AArgs.GetElement(1).ToStringLiteral.Value;
+  if ContainsNulCharacter(UnitStr) then
+    ThrowRangeError('Invalid unit for Intl.RelativeTimeFormat: ' + UnitStr);
 
   // Produce a single-element parts array with the formatted string
   Arr := TGocciaArrayValue.Create;

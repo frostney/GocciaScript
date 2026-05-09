@@ -169,15 +169,33 @@ var
 begin
   if not Assigned(AOptions) then Exit;
 
+  V := AOptions.GetProperty('localeMatcher');
+  if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
+  begin
+    if ContainsNulCharacter(V.ToStringLiteral.Value) then
+      ThrowRangeError(Format(SErrorIntlInvalidOption, [V.ToStringLiteral.Value, 'localeMatcher']));
+  end;
   V := AOptions.GetProperty('style');
   if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
+  begin
     FStyle := V.ToStringLiteral.Value;
+    if ContainsNulCharacter(FStyle) then
+      ThrowRangeError(Format(SErrorIntlInvalidOption, [FStyle, 'style']));
+  end;
   V := AOptions.GetProperty('currency');
   if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
+  begin
     FCurrency := V.ToStringLiteral.Value;
+    if ContainsNulCharacter(FCurrency) then
+      ThrowRangeError(Format(SErrorIntlInvalidOption, [FCurrency, 'currency']));
+  end;
   V := AOptions.GetProperty('currencyDisplay');
   if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
+  begin
     FCurrencyDisplay := V.ToStringLiteral.Value;
+    if ContainsNulCharacter(FCurrencyDisplay) then
+      ThrowRangeError(Format(SErrorIntlInvalidOption, [FCurrencyDisplay, 'currencyDisplay']));
+  end;
   V := AOptions.GetProperty('currencySign');
   if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
     FCurrencySign := V.ToStringLiteral.Value;

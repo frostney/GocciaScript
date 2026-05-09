@@ -589,7 +589,7 @@ end;
 function TGocciaIntlBuiltin.SupportedLocalesOfFn(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
-  Arg: TGocciaValue;
+  Arg, OptionsArg, V: TGocciaValue;
   Tags: TStringArray;
   Canonical: TStringArray;
   Available: TStringArray;
@@ -599,6 +599,21 @@ var
   AvailTag: string;
 begin
   Arg := AArgs.GetElement(0);
+
+  // Validate localeMatcher option for NUL characters
+  if AArgs.Length >= 2 then
+  begin
+    OptionsArg := AArgs.GetElement(1);
+    if Assigned(OptionsArg) and (OptionsArg is TGocciaObjectValue) then
+    begin
+      V := TGocciaObjectValue(OptionsArg).GetProperty('localeMatcher');
+      if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
+      begin
+        if ContainsNulCharacter(V.ToStringLiteral.Value) then
+          ThrowRangeError(Format(SErrorIntlInvalidOption, [V.ToStringLiteral.Value, 'localeMatcher']));
+      end;
+    end;
+  end;
 
   if Arg is TGocciaArrayValue then
   begin

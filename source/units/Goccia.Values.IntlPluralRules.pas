@@ -43,6 +43,7 @@ uses
   IntlLocaleResolver,
   IntlTypes,
 
+  Goccia.Error.Messages,
   Goccia.ObjectModel.Types,
   Goccia.Realm,
   Goccia.Values.ErrorHelper,
@@ -102,9 +103,19 @@ begin
 
   if Assigned(AOptions) then
   begin
+    V := AOptions.GetProperty('localeMatcher');
+    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
+    begin
+      if ContainsNulCharacter(V.ToStringLiteral.Value) then
+        ThrowRangeError(Format(SErrorIntlInvalidOption, [V.ToStringLiteral.Value, 'localeMatcher']));
+    end;
     V := AOptions.GetProperty('type');
     if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
+    begin
       FType := V.ToStringLiteral.Value;
+      if ContainsNulCharacter(FType) then
+        ThrowRangeError(Format(SErrorIntlInvalidOption, [FType, 'type']));
+    end;
     V := AOptions.GetProperty('minimumIntegerDigits');
     if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
       FMinimumIntegerDigits := Trunc(V.ToNumberLiteral.Value);

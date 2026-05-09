@@ -40,6 +40,7 @@ uses
   IntlLocaleResolver,
   IntlTypes,
 
+  Goccia.Error.Messages,
   Goccia.ObjectModel.Types,
   Goccia.Realm,
   Goccia.Values.ErrorHelper,
@@ -120,13 +121,23 @@ begin
   if not Assigned(V) or (V is TGocciaUndefinedLiteralValue) then
     ThrowTypeError('Intl.DisplayNames requires a type option');
   FType := V.ToStringLiteral.Value;
+  if ContainsNulCharacter(FType) then
+    ThrowRangeError(Format(SErrorIntlInvalidOption, [FType, 'type']));
 
   V := AOptions.GetProperty('style');
   if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
+  begin
     FStyle := V.ToStringLiteral.Value;
+    if ContainsNulCharacter(FStyle) then
+      ThrowRangeError(Format(SErrorIntlInvalidOption, [FStyle, 'style']));
+  end;
   V := AOptions.GetProperty('fallback');
   if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
+  begin
     FFallback := V.ToStringLiteral.Value;
+    if ContainsNulCharacter(FFallback) then
+      ThrowRangeError(Format(SErrorIntlInvalidOption, [FFallback, 'fallback']));
+  end;
   V := AOptions.GetProperty('languageDisplay');
   if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
     FLanguageDisplay := V.ToStringLiteral.Value;

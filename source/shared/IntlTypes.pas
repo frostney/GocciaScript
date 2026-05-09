@@ -122,8 +122,22 @@ type
 
 function DefaultNumberFormatOptions: TIntlNumberFormatOptions;
 function DefaultDateTimeFormatOptions: TIntlDateTimeFormatOptions;
+function ContainsNulCharacter(const AStr: string): Boolean;
 
 implementation
+
+function ContainsNulCharacter(const AStr: string): Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  for I := 1 to Length(AStr) do
+    if AStr[I] = #0 then
+    begin
+      Result := True;
+      Exit;
+    end;
+end;
 
 function DefaultNumberFormatOptions: TIntlNumberFormatOptions;
 begin

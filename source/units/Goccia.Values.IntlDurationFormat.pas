@@ -51,6 +51,7 @@ uses
   IntlLocaleResolver,
   IntlTypes,
 
+  Goccia.Error.Messages,
   Goccia.ObjectModel.Types,
   Goccia.Realm,
   Goccia.Values.ArrayValue,
@@ -219,7 +220,11 @@ begin
 
   V := AOptions.GetProperty('style');
   if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
+  begin
     FStyle := V.ToStringLiteral.Value;
+    if ContainsNulCharacter(FStyle) then
+      ThrowRangeError(Format(SErrorIntlInvalidOption, [FStyle, 'style']));
+  end;
   V := AOptions.GetProperty('yearsDisplay');
   if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
     FYearsDisplay := V.ToStringLiteral.Value;

@@ -39,6 +39,7 @@ uses
   IntlLocaleResolver,
   IntlTypes,
 
+  Goccia.Error.Messages,
   Goccia.ObjectModel.Types,
   Goccia.Realm,
   Goccia.Values.ArrayValue,
@@ -124,10 +125,18 @@ begin
   begin
     V := AOptions.GetProperty('type');
     if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
+    begin
       FType := V.ToStringLiteral.Value;
+      if ContainsNulCharacter(FType) then
+        ThrowRangeError(Format(SErrorIntlInvalidOption, [FType, 'type']));
+    end;
     V := AOptions.GetProperty('style');
     if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
+    begin
       FStyle := V.ToStringLiteral.Value;
+      if ContainsNulCharacter(FStyle) then
+        ThrowRangeError(Format(SErrorIntlInvalidOption, [FStyle, 'style']));
+    end;
   end;
 
   InitializePrototype;

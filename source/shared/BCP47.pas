@@ -29,7 +29,9 @@ function NormalizeBcp47Case(const ATag: TBcp47Tag): TBcp47Tag;
 implementation
 
 uses
-  SysUtils;
+  SysUtils,
+
+  IntlTypes;
 
 type
   TSubtags = array of string;
@@ -266,6 +268,9 @@ begin
   Result.IsValid := False;
 
   if ATag = '' then
+    Exit;
+
+  if ContainsNulCharacter(ATag) then
     Exit;
 
   if IsGrandfatheredTag(ATag) then
