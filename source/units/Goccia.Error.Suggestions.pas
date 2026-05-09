@@ -128,10 +128,10 @@ resourcestring
   SSuggestCloseBlockComment = 'Add "*/" to close the block comment';
   SSuggestCloseString = 'Add a closing quote to end the string';
   SSuggestCloseTemplate = 'Add a closing backtick to end the template literal';
-  SSuggestCloseRegex = 'Add a closing / to end the regex, followed by optional flags (g, i, m, s, u, y)';
-  SSuggestValidRegexFlags = 'Valid regex flags are: g (global), i (case-insensitive), m (multiline), s (dotAll), u (unicode), y (sticky)';
+  SSuggestCloseRegex = 'Add a closing / to end the regex, followed by optional flags (d, g, i, m, s, u, v, y)';
+  SSuggestValidRegexFlags = 'Valid regex flags are: d (hasIndices), g (global), i (case-insensitive), m (multiline), s (dotAll), u (unicode), v (unicodeSets), y (sticky)';
   SSuggestDuplicateRegexFlag = 'Each regex flag can only appear once';
-  SSuggestRegexSuffixFlags = 'Only flag characters (g, i, m, s, u, y) are allowed after the closing /';
+  SSuggestRegexSuffixFlags = 'Only flag characters (d, g, i, m, s, u, v, y) are allowed after the closing /';
 
   // Lexer errors — numbers
   SSuggestHexNumberFormat = 'Hex numbers start with 0x followed by hex digits (e.g., 0xFF)';

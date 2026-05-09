@@ -1161,7 +1161,7 @@ begin
 
   for I := 1 to Length(Flags) do
   begin
-    if not CharInSet(Flags[I], ['g', 'i', 'm', 's', 'u', 'y']) then
+    if not CharInSet(Flags[I], ['d', 'g', 'i', 'm', 's', 'u', 'v', 'y']) then
       raise TGocciaLexerError.Create('Invalid regular expression flag: ' + Flags[I],
         FLine, FColumn, FFileName, GetSourceLines,
         SSuggestValidRegexFlags);

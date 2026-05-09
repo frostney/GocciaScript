@@ -68,6 +68,17 @@ type
     DotAll: Boolean;
   end;
 
+  TRegExpStringSequence = record
+    CodePoints: array of Cardinal;
+  end;
+
+  TRegExpClassContents = record
+    Ranges: array of TRegExpCharRange;
+    RangeCount: Integer;
+    Strings: array of TRegExpStringSequence;
+    StringCount: Integer;
+  end;
+
   TRegExpCompiler = class
   private
     FPattern: string;
@@ -81,6 +92,7 @@ type
     FAltStackDepth: Integer;
     FModifier: TModifierState;
     FUnicode: Boolean;
+    FUnicodeSets: Boolean;
     function Peek: Char;
     function PeekAt(AOffset: Integer): Char;
     function AtEnd: Boolean;
@@ -100,6 +112,11 @@ type
     procedure CompileAtom;
     procedure CompileQuantifier(AAtomStart: Integer);
     procedure CompileCharacterClass;
+    procedure CompileUnicodeSetsClass;
+    procedure ParseClassOperand(var AContents: TRegExpClassContents);
+    procedure ParseClassUnion(var AContents: TRegExpClassContents);
+    procedure ParseClassEscape(var AContents: TRegExpClassContents);
+    procedure ParseStringDisjunction(var AContents: TRegExpClassContents);
     procedure CompileEscape(var ARanges: array of TRegExpCharRange; var ARangeCount: Integer);
     procedure CompileEscapeAtom;
     procedure CompileGroup;
@@ -111,10 +128,15 @@ type
     procedure EmitCharMatch(ACodePoint: Cardinal);
     procedure EmitCharClassRanges(const ARanges: array of TRegExpCharRange;
       ARangeCount: Integer; ANegated: Boolean);
+    procedure EmitClassContents(const AContents: TRegExpClassContents;
+      ANegated: Boolean);
     procedure AddBuiltinCharClass(AEscapeChar: Char; var ARanges: array of TRegExpCharRange; var ARangeCount: Integer);
     procedure AddRange(var ARanges: array of TRegExpCharRange; var ARangeCount: Integer; ALo, AHi: Cardinal);
     procedure EmitUnicodePropertyClass(const APropertyName: string; ANegated: Boolean);
     procedure GetUnicodePropertyRanges(const APropertyName: string; var ARanges: array of TRegExpCharRange; var ARangeCount: Integer);
+    function IsStringProperty(const APropertyName: string): Boolean;
+    procedure GetStringPropertySequences(const APropertyName: string;
+      var AContents: TRegExpClassContents);
     function ReadCodePoint: Cardinal;
     procedure EnsureCodeCapacity(ANeeded: Integer);
     procedure EmitBody(const ABody: array of UInt32; ALen: Integer);
@@ -149,7 +171,8 @@ begin
   FModifier.IgnoreCase := HasRegExpFlag(AFlags, 'i');
   FModifier.Multiline := HasRegExpFlag(AFlags, 'm');
   FModifier.DotAll := HasRegExpFlag(AFlags, 's');
-  FUnicode := HasRegExpFlag(AFlags, 'u') or HasRegExpFlag(AFlags, 'v');
+  FUnicodeSets := HasRegExpFlag(AFlags, 'v');
+  FUnicode := HasRegExpFlag(AFlags, 'u') or FUnicodeSets;
 end;
 
 function TRegExpCompiler.Peek: Char;
@@ -461,6 +484,985 @@ begin
   RangeCount := 0;
   GetUnicodePropertyRanges(APropertyName, Ranges, RangeCount);
   EmitCharClassRanges(Ranges, RangeCount, ANegated);
+end;
+
+procedure NormalizeRanges(var ARanges: array of TRegExpCharRange;
+  var ARangeCount: Integer);
+var
+  I, J, WriteIdx: Integer;
+  Temp: TRegExpCharRange;
+begin
+  if ARangeCount <= 1 then
+    Exit;
+  for I := 0 to ARangeCount - 2 do
+    for J := I + 1 to ARangeCount - 1 do
+      if ARanges[J].Lo < ARanges[I].Lo then
+      begin
+        Temp := ARanges[I];
+        ARanges[I] := ARanges[J];
+        ARanges[J] := Temp;
+      end;
+  WriteIdx := 0;
+  for I := 1 to ARangeCount - 1 do
+  begin
+    if ARanges[I].Lo <= ARanges[WriteIdx].Hi + 1 then
+    begin
+      if ARanges[I].Hi > ARanges[WriteIdx].Hi then
+        ARanges[WriteIdx].Hi := ARanges[I].Hi;
+    end
+    else
+    begin
+      Inc(WriteIdx);
+      ARanges[WriteIdx] := ARanges[I];
+    end;
+  end;
+  ARangeCount := WriteIdx + 1;
+end;
+
+procedure IntersectRanges(
+  const ALeft: array of TRegExpCharRange; ALeftCount: Integer;
+  const ARight: array of TRegExpCharRange; ARightCount: Integer;
+  var AOut: array of TRegExpCharRange; var AOutCount: Integer);
+var
+  I, J: Integer;
+  Lo, Hi: Cardinal;
+begin
+  AOutCount := 0;
+  I := 0;
+  J := 0;
+  while (I < ALeftCount) and (J < ARightCount) do
+  begin
+    if ALeft[I].Lo > ARight[J].Lo then
+      Lo := ALeft[I].Lo
+    else
+      Lo := ARight[J].Lo;
+    if ALeft[I].Hi < ARight[J].Hi then
+      Hi := ALeft[I].Hi
+    else
+      Hi := ARight[J].Hi;
+    if Lo <= Hi then
+    begin
+      if AOutCount < Length(AOut) then
+      begin
+        AOut[AOutCount].Lo := Lo;
+        AOut[AOutCount].Hi := Hi;
+        Inc(AOutCount);
+      end;
+    end;
+    if ALeft[I].Hi < ARight[J].Hi then
+      Inc(I)
+    else
+      Inc(J);
+  end;
+end;
+
+procedure SubtractRanges(
+  const ALeft: array of TRegExpCharRange; ALeftCount: Integer;
+  const ARight: array of TRegExpCharRange; ARightCount: Integer;
+  var AOut: array of TRegExpCharRange; var AOutCount: Integer);
+var
+  I, J: Integer;
+  CurLo, CurHi: Cardinal;
+begin
+  AOutCount := 0;
+  J := 0;
+  for I := 0 to ALeftCount - 1 do
+  begin
+    CurLo := ALeft[I].Lo;
+    CurHi := ALeft[I].Hi;
+    while (J < ARightCount) and (ARight[J].Hi < CurLo) do
+      Inc(J);
+    while (J < ARightCount) and (ARight[J].Lo <= CurHi) do
+    begin
+      if ARight[J].Lo > CurLo then
+      begin
+        if AOutCount < Length(AOut) then
+        begin
+          AOut[AOutCount].Lo := CurLo;
+          AOut[AOutCount].Hi := ARight[J].Lo - 1;
+          Inc(AOutCount);
+        end;
+      end;
+      if ARight[J].Hi >= CurHi then
+      begin
+        CurLo := CurHi + 1;
+        Break;
+      end;
+      CurLo := ARight[J].Hi + 1;
+      Inc(J);
+    end;
+    if CurLo <= CurHi then
+    begin
+      if AOutCount < Length(AOut) then
+      begin
+        AOut[AOutCount].Lo := CurLo;
+        AOut[AOutCount].Hi := CurHi;
+        Inc(AOutCount);
+      end;
+    end;
+  end;
+end;
+
+procedure InitClassContents(var AContents: TRegExpClassContents);
+begin
+  SetLength(AContents.Ranges, MAX_CHAR_RANGES);
+  AContents.RangeCount := 0;
+  SetLength(AContents.Strings, 0);
+  AContents.StringCount := 0;
+end;
+
+procedure AddClassRange(var AContents: TRegExpClassContents;
+  ALo, AHi: Cardinal);
+begin
+  if AContents.RangeCount < Length(AContents.Ranges) then
+  begin
+    AContents.Ranges[AContents.RangeCount].Lo := ALo;
+    AContents.Ranges[AContents.RangeCount].Hi := AHi;
+    Inc(AContents.RangeCount);
+  end;
+end;
+
+procedure AddClassString(var AContents: TRegExpClassContents;
+  const ACodePoints: array of Cardinal);
+var
+  Seq: TRegExpStringSequence;
+  I: Integer;
+begin
+  SetLength(Seq.CodePoints, Length(ACodePoints));
+  for I := 0 to High(ACodePoints) do
+    Seq.CodePoints[I] := ACodePoints[I];
+  if AContents.StringCount >= Length(AContents.Strings) then
+    SetLength(AContents.Strings, AContents.StringCount + 16);
+  AContents.Strings[AContents.StringCount] := Seq;
+  Inc(AContents.StringCount);
+end;
+
+procedure MergeClassContents(var ADest: TRegExpClassContents;
+  const ASrc: TRegExpClassContents);
+var
+  I: Integer;
+begin
+  for I := 0 to ASrc.RangeCount - 1 do
+    AddClassRange(ADest, ASrc.Ranges[I].Lo, ASrc.Ranges[I].Hi);
+  for I := 0 to ASrc.StringCount - 1 do
+  begin
+    if ADest.StringCount >= Length(ADest.Strings) then
+      SetLength(ADest.Strings, ADest.StringCount + 16);
+    ADest.Strings[ADest.StringCount] := ASrc.Strings[I];
+    Inc(ADest.StringCount);
+  end;
+end;
+
+procedure IntersectClassContents(var ADest: TRegExpClassContents;
+  const ARight: TRegExpClassContents);
+var
+  ResultRanges: array[0..MAX_CHAR_RANGES - 1] of TRegExpCharRange;
+  ResultCount: Integer;
+  NormLeft, NormRight: array[0..MAX_CHAR_RANGES - 1] of TRegExpCharRange;
+  NormLeftCount, NormRightCount, I, J: Integer;
+  Found: Boolean;
+  ResultStrings: array of TRegExpStringSequence;
+  ResultStringCount: Integer;
+begin
+  NormLeftCount := ADest.RangeCount;
+  for I := 0 to NormLeftCount - 1 do
+    NormLeft[I] := ADest.Ranges[I];
+  NormalizeRanges(NormLeft, NormLeftCount);
+  NormRightCount := ARight.RangeCount;
+  for I := 0 to NormRightCount - 1 do
+    NormRight[I] := ARight.Ranges[I];
+  NormalizeRanges(NormRight, NormRightCount);
+  IntersectRanges(NormLeft, NormLeftCount, NormRight, NormRightCount,
+    ResultRanges, ResultCount);
+  ADest.RangeCount := ResultCount;
+  for I := 0 to ResultCount - 1 do
+    ADest.Ranges[I] := ResultRanges[I];
+  ResultStringCount := 0;
+  SetLength(ResultStrings, ADest.StringCount);
+  for I := 0 to ADest.StringCount - 1 do
+  begin
+    Found := False;
+    for J := 0 to ARight.StringCount - 1 do
+    begin
+      if Length(ADest.Strings[I].CodePoints) = Length(ARight.Strings[J].CodePoints) then
+      begin
+        Found := True;
+        if Length(ADest.Strings[I].CodePoints) > 0 then
+          Found := CompareMem(@ADest.Strings[I].CodePoints[0],
+            @ARight.Strings[J].CodePoints[0],
+            Length(ADest.Strings[I].CodePoints) * SizeOf(Cardinal));
+      end;
+      if Found then
+        Break;
+    end;
+    if Found then
+    begin
+      ResultStrings[ResultStringCount] := ADest.Strings[I];
+      Inc(ResultStringCount);
+    end;
+  end;
+  ADest.StringCount := ResultStringCount;
+  SetLength(ADest.Strings, ResultStringCount);
+  for I := 0 to ResultStringCount - 1 do
+    ADest.Strings[I] := ResultStrings[I];
+end;
+
+procedure SubtractClassContents(var ADest: TRegExpClassContents;
+  const ARight: TRegExpClassContents);
+var
+  ResultRanges: array[0..MAX_CHAR_RANGES - 1] of TRegExpCharRange;
+  ResultCount: Integer;
+  NormLeft, NormRight: array[0..MAX_CHAR_RANGES - 1] of TRegExpCharRange;
+  NormLeftCount, NormRightCount, I, J: Integer;
+  Found: Boolean;
+  ResultStrings: array of TRegExpStringSequence;
+  ResultStringCount: Integer;
+begin
+  NormLeftCount := ADest.RangeCount;
+  for I := 0 to NormLeftCount - 1 do
+    NormLeft[I] := ADest.Ranges[I];
+  NormalizeRanges(NormLeft, NormLeftCount);
+  NormRightCount := ARight.RangeCount;
+  for I := 0 to NormRightCount - 1 do
+    NormRight[I] := ARight.Ranges[I];
+  NormalizeRanges(NormRight, NormRightCount);
+  SubtractRanges(NormLeft, NormLeftCount, NormRight, NormRightCount,
+    ResultRanges, ResultCount);
+  ADest.RangeCount := ResultCount;
+  for I := 0 to ResultCount - 1 do
+    ADest.Ranges[I] := ResultRanges[I];
+  ResultStringCount := 0;
+  SetLength(ResultStrings, ADest.StringCount);
+  for I := 0 to ADest.StringCount - 1 do
+  begin
+    Found := False;
+    for J := 0 to ARight.StringCount - 1 do
+    begin
+      if Length(ADest.Strings[I].CodePoints) = Length(ARight.Strings[J].CodePoints) then
+      begin
+        Found := True;
+        if Length(ADest.Strings[I].CodePoints) > 0 then
+          Found := CompareMem(@ADest.Strings[I].CodePoints[0],
+            @ARight.Strings[J].CodePoints[0],
+            Length(ADest.Strings[I].CodePoints) * SizeOf(Cardinal));
+      end;
+      if Found then
+        Break;
+    end;
+    if not Found then
+    begin
+      ResultStrings[ResultStringCount] := ADest.Strings[I];
+      Inc(ResultStringCount);
+    end;
+  end;
+  ADest.StringCount := ResultStringCount;
+  SetLength(ADest.Strings, ResultStringCount);
+  for I := 0 to ResultStringCount - 1 do
+    ADest.Strings[I] := ResultStrings[I];
+end;
+
+function TRegExpCompiler.IsStringProperty(const APropertyName: string): Boolean;
+begin
+  Result := (APropertyName = 'Basic_Emoji') or
+    (APropertyName = 'Emoji_Keycap_Sequence') or
+    (APropertyName = 'RGI_Emoji_Flag_Sequence') or
+    (APropertyName = 'RGI_Emoji_Modifier_Sequence') or
+    (APropertyName = 'RGI_Emoji_Tag_Sequence') or
+    (APropertyName = 'RGI_Emoji_ZWJ_Sequence');
+end;
+
+procedure TRegExpCompiler.GetStringPropertySequences(
+  const APropertyName: string; var AContents: TRegExpClassContents);
+begin
+  if APropertyName = 'Basic_Emoji' then
+  begin
+    AddClassRange(AContents, $231A, $231B);
+    AddClassRange(AContents, $23E9, $23F3);
+    AddClassRange(AContents, $23F8, $23FA);
+    AddClassRange(AContents, $25AA, $25AB);
+    AddClassRange(AContents, $25B6, $25B6);
+    AddClassRange(AContents, $25C0, $25C0);
+    AddClassRange(AContents, $25FB, $25FE);
+    AddClassRange(AContents, $2600, $2604);
+    AddClassRange(AContents, $260E, $260E);
+    AddClassRange(AContents, $2611, $2611);
+    AddClassRange(AContents, $2614, $2615);
+    AddClassRange(AContents, $2618, $2618);
+    AddClassRange(AContents, $261D, $261D);
+    AddClassRange(AContents, $2620, $2620);
+    AddClassRange(AContents, $2622, $2623);
+    AddClassRange(AContents, $2626, $2626);
+    AddClassRange(AContents, $262A, $262A);
+    AddClassRange(AContents, $262E, $262F);
+    AddClassRange(AContents, $2638, $263A);
+    AddClassRange(AContents, $2640, $2640);
+    AddClassRange(AContents, $2642, $2642);
+    AddClassRange(AContents, $2648, $2653);
+    AddClassRange(AContents, $265F, $2660);
+    AddClassRange(AContents, $2663, $2663);
+    AddClassRange(AContents, $2665, $2666);
+    AddClassRange(AContents, $2668, $2668);
+    AddClassRange(AContents, $267B, $267B);
+    AddClassRange(AContents, $267E, $267F);
+    AddClassRange(AContents, $2692, $2697);
+    AddClassRange(AContents, $2699, $2699);
+    AddClassRange(AContents, $269B, $269C);
+    AddClassRange(AContents, $26A0, $26A1);
+    AddClassRange(AContents, $26A7, $26A7);
+    AddClassRange(AContents, $26AA, $26AB);
+    AddClassRange(AContents, $26B0, $26B1);
+    AddClassRange(AContents, $26BD, $26BE);
+    AddClassRange(AContents, $26C4, $26C5);
+    AddClassRange(AContents, $26C8, $26C8);
+    AddClassRange(AContents, $26CE, $26CF);
+    AddClassRange(AContents, $26D1, $26D1);
+    AddClassRange(AContents, $26D3, $26D4);
+    AddClassRange(AContents, $26E9, $26EA);
+    AddClassRange(AContents, $26F0, $26F5);
+    AddClassRange(AContents, $26F7, $26FA);
+    AddClassRange(AContents, $26FD, $26FD);
+    AddClassRange(AContents, $2702, $2702);
+    AddClassRange(AContents, $2705, $2705);
+    AddClassRange(AContents, $2708, $270D);
+    AddClassRange(AContents, $270F, $270F);
+    AddClassRange(AContents, $2712, $2712);
+    AddClassRange(AContents, $2714, $2714);
+    AddClassRange(AContents, $2716, $2716);
+    AddClassRange(AContents, $271D, $271D);
+    AddClassRange(AContents, $2721, $2721);
+    AddClassRange(AContents, $2728, $2728);
+    AddClassRange(AContents, $2733, $2734);
+    AddClassRange(AContents, $2744, $2744);
+    AddClassRange(AContents, $2747, $2747);
+    AddClassRange(AContents, $274C, $274C);
+    AddClassRange(AContents, $274E, $274E);
+    AddClassRange(AContents, $2753, $2755);
+    AddClassRange(AContents, $2757, $2757);
+    AddClassRange(AContents, $2763, $2764);
+    AddClassRange(AContents, $2795, $2797);
+    AddClassRange(AContents, $27A1, $27A1);
+    AddClassRange(AContents, $27B0, $27B0);
+    AddClassRange(AContents, $27BF, $27BF);
+    AddClassRange(AContents, $2934, $2935);
+    AddClassRange(AContents, $2B05, $2B07);
+    AddClassRange(AContents, $2B1B, $2B1C);
+    AddClassRange(AContents, $2B50, $2B50);
+    AddClassRange(AContents, $2B55, $2B55);
+    AddClassRange(AContents, $3030, $3030);
+    AddClassRange(AContents, $303D, $303D);
+    AddClassRange(AContents, $3297, $3297);
+    AddClassRange(AContents, $3299, $3299);
+    AddClassRange(AContents, $1F004, $1F004);
+    AddClassRange(AContents, $1F0CF, $1F0CF);
+    AddClassRange(AContents, $1F170, $1F171);
+    AddClassRange(AContents, $1F17E, $1F17F);
+    AddClassRange(AContents, $1F18E, $1F18E);
+    AddClassRange(AContents, $1F191, $1F19A);
+    AddClassRange(AContents, $1F1E6, $1F1FF);
+    AddClassRange(AContents, $1F201, $1F202);
+    AddClassRange(AContents, $1F21A, $1F21A);
+    AddClassRange(AContents, $1F22F, $1F22F);
+    AddClassRange(AContents, $1F232, $1F23A);
+    AddClassRange(AContents, $1F250, $1F251);
+    AddClassRange(AContents, $1F300, $1F321);
+    AddClassRange(AContents, $1F324, $1F393);
+    AddClassRange(AContents, $1F396, $1F397);
+    AddClassRange(AContents, $1F399, $1F39B);
+    AddClassRange(AContents, $1F39E, $1F3F0);
+    AddClassRange(AContents, $1F3F3, $1F3F5);
+    AddClassRange(AContents, $1F3F7, $1F4FD);
+    AddClassRange(AContents, $1F4FF, $1F53D);
+    AddClassRange(AContents, $1F549, $1F54E);
+    AddClassRange(AContents, $1F550, $1F567);
+    AddClassRange(AContents, $1F56F, $1F570);
+    AddClassRange(AContents, $1F573, $1F57A);
+    AddClassRange(AContents, $1F587, $1F587);
+    AddClassRange(AContents, $1F58A, $1F58D);
+    AddClassRange(AContents, $1F590, $1F590);
+    AddClassRange(AContents, $1F595, $1F596);
+    AddClassRange(AContents, $1F5A4, $1F5A5);
+    AddClassRange(AContents, $1F5A8, $1F5A8);
+    AddClassRange(AContents, $1F5B1, $1F5B2);
+    AddClassRange(AContents, $1F5BC, $1F5BC);
+    AddClassRange(AContents, $1F5C2, $1F5C4);
+    AddClassRange(AContents, $1F5D1, $1F5D3);
+    AddClassRange(AContents, $1F5DC, $1F5DE);
+    AddClassRange(AContents, $1F5E1, $1F5E1);
+    AddClassRange(AContents, $1F5E3, $1F5E3);
+    AddClassRange(AContents, $1F5E8, $1F5E8);
+    AddClassRange(AContents, $1F5EF, $1F5EF);
+    AddClassRange(AContents, $1F5F3, $1F5F3);
+    AddClassRange(AContents, $1F5FA, $1F64F);
+    AddClassRange(AContents, $1F680, $1F6C5);
+    AddClassRange(AContents, $1F6CB, $1F6D2);
+    AddClassRange(AContents, $1F6D5, $1F6D7);
+    AddClassRange(AContents, $1F6DC, $1F6E5);
+    AddClassRange(AContents, $1F6E9, $1F6E9);
+    AddClassRange(AContents, $1F6EB, $1F6EC);
+    AddClassRange(AContents, $1F6F0, $1F6F0);
+    AddClassRange(AContents, $1F6F3, $1F6FC);
+    AddClassRange(AContents, $1F7E0, $1F7EB);
+    AddClassRange(AContents, $1F7F0, $1F7F0);
+    AddClassRange(AContents, $1F90C, $1F93A);
+    AddClassRange(AContents, $1F93C, $1F945);
+    AddClassRange(AContents, $1F947, $1F9FF);
+    AddClassRange(AContents, $1FA00, $1FA53);
+    AddClassRange(AContents, $1FA60, $1FA6D);
+    AddClassRange(AContents, $1FA70, $1FA7C);
+    AddClassRange(AContents, $1FA80, $1FA89);
+    AddClassRange(AContents, $1FA8F, $1FAC6);
+    AddClassRange(AContents, $1FACE, $1FADC);
+    AddClassRange(AContents, $1FADF, $1FAE9);
+    AddClassRange(AContents, $1FAF0, $1FAF8);
+    AddClassRange(AContents, $A9, $A9);
+    AddClassRange(AContents, $AE, $AE);
+    AddClassRange(AContents, $203C, $203C);
+    AddClassRange(AContents, $2049, $2049);
+    AddClassRange(AContents, $2122, $2122);
+    AddClassRange(AContents, $2139, $2139);
+    AddClassRange(AContents, $2194, $2199);
+    AddClassRange(AContents, $21A9, $21AA);
+    AddClassRange(AContents, $24C2, $24C2);
+    AddClassRange(AContents, $25FC, $25FD);
+    AddClassRange(AContents, $2660, $2660);
+    AddClassRange(AContents, $2663, $2663);
+    AddClassRange(AContents, $2665, $2666);
+    AddClassRange(AContents, $2668, $2668);
+    AddClassRange(AContents, $267F, $267F);
+    AddClassRange(AContents, $2693, $2693);
+    AddClassRange(AContents, $2694, $2697);
+    AddClassRange(AContents, $2699, $2699);
+    AddClassRange(AContents, $269B, $269C);
+    AddClassRange(AContents, $26A0, $26A0);
+    AddClassRange(AContents, $26D4, $26D4);
+    AddClassRange(AContents, $2702, $2702);
+    AddClassRange(AContents, $2708, $2709);
+    AddClassRange(AContents, $270C, $270D);
+    AddClassRange(AContents, $270F, $270F);
+    AddClassRange(AContents, $2712, $2712);
+    AddClassRange(AContents, $2714, $2714);
+    AddClassRange(AContents, $2716, $2716);
+    AddClassRange(AContents, $271D, $271D);
+    AddClassRange(AContents, $2721, $2721);
+    AddClassRange(AContents, $2733, $2734);
+    AddClassRange(AContents, $2744, $2744);
+    AddClassRange(AContents, $2747, $2747);
+    AddClassRange(AContents, $2763, $2764);
+    AddClassRange(AContents, $27A1, $27A1);
+    AddClassRange(AContents, $2934, $2935);
+    AddClassRange(AContents, $2B05, $2B07);
+    AddClassRange(AContents, $3030, $3030);
+    AddClassRange(AContents, $303D, $303D);
+    AddClassRange(AContents, $3297, $3297);
+    AddClassRange(AContents, $3299, $3299);
+    AddClassRange(AContents, $FE0F, $FE0F);
+    AddClassRange(AContents, $1F170, $1F171);
+    AddClassRange(AContents, $1F17E, $1F17F);
+    AddClassRange(AContents, $1F202, $1F202);
+    AddClassRange(AContents, $1F237, $1F237);
+    AddClassString(AContents, [$23, $FE0F, $20E3]);
+    AddClassString(AContents, [$2A, $FE0F, $20E3]);
+    AddClassString(AContents, [$30, $FE0F, $20E3]);
+    AddClassString(AContents, [$31, $FE0F, $20E3]);
+    AddClassString(AContents, [$32, $FE0F, $20E3]);
+    AddClassString(AContents, [$33, $FE0F, $20E3]);
+    AddClassString(AContents, [$34, $FE0F, $20E3]);
+    AddClassString(AContents, [$35, $FE0F, $20E3]);
+    AddClassString(AContents, [$36, $FE0F, $20E3]);
+    AddClassString(AContents, [$37, $FE0F, $20E3]);
+    AddClassString(AContents, [$38, $FE0F, $20E3]);
+    AddClassString(AContents, [$39, $FE0F, $20E3]);
+  end
+  else if APropertyName = 'Emoji_Keycap_Sequence' then
+  begin
+    AddClassString(AContents, [$23, $FE0F, $20E3]);
+    AddClassString(AContents, [$2A, $FE0F, $20E3]);
+    AddClassString(AContents, [$30, $FE0F, $20E3]);
+    AddClassString(AContents, [$31, $FE0F, $20E3]);
+    AddClassString(AContents, [$32, $FE0F, $20E3]);
+    AddClassString(AContents, [$33, $FE0F, $20E3]);
+    AddClassString(AContents, [$34, $FE0F, $20E3]);
+    AddClassString(AContents, [$35, $FE0F, $20E3]);
+    AddClassString(AContents, [$36, $FE0F, $20E3]);
+    AddClassString(AContents, [$37, $FE0F, $20E3]);
+    AddClassString(AContents, [$38, $FE0F, $20E3]);
+    AddClassString(AContents, [$39, $FE0F, $20E3]);
+  end
+  else if APropertyName = 'RGI_Emoji_Flag_Sequence' then
+  begin
+    AddClassString(AContents, [$1F1FA, $1F1F8]);
+    AddClassString(AContents, [$1F1EC, $1F1E7]);
+    AddClassString(AContents, [$1F1EB, $1F1F7]);
+    AddClassString(AContents, [$1F1E9, $1F1EA]);
+    AddClassString(AContents, [$1F1EF, $1F1F5]);
+    AddClassString(AContents, [$1F1E8, $1F1F3]);
+    AddClassString(AContents, [$1F1EE, $1F1F3]);
+    AddClassString(AContents, [$1F1E7, $1F1F7]);
+    AddClassString(AContents, [$1F1F7, $1F1FA]);
+    AddClassString(AContents, [$1F1E8, $1F1E6]);
+    AddClassString(AContents, [$1F1E6, $1F1FA]);
+    AddClassString(AContents, [$1F1EE, $1F1F9]);
+    AddClassString(AContents, [$1F1EA, $1F1F8]);
+    AddClassString(AContents, [$1F1F2, $1F1FD]);
+    AddClassString(AContents, [$1F1F0, $1F1F7]);
+  end
+  else if APropertyName = 'RGI_Emoji_Modifier_Sequence' then
+  begin
+    AddClassString(AContents, [$261D, $1F3FB]);
+    AddClassString(AContents, [$261D, $1F3FC]);
+    AddClassString(AContents, [$261D, $1F3FD]);
+    AddClassString(AContents, [$261D, $1F3FE]);
+    AddClassString(AContents, [$261D, $1F3FF]);
+    AddClassString(AContents, [$270C, $1F3FB]);
+    AddClassString(AContents, [$270C, $1F3FC]);
+    AddClassString(AContents, [$270C, $1F3FD]);
+    AddClassString(AContents, [$270C, $1F3FE]);
+    AddClassString(AContents, [$270C, $1F3FF]);
+    AddClassString(AContents, [$1F44D, $1F3FB]);
+    AddClassString(AContents, [$1F44D, $1F3FC]);
+    AddClassString(AContents, [$1F44D, $1F3FD]);
+    AddClassString(AContents, [$1F44D, $1F3FE]);
+    AddClassString(AContents, [$1F44D, $1F3FF]);
+  end
+  else if APropertyName = 'RGI_Emoji_Tag_Sequence' then
+  begin
+    AddClassString(AContents, [$1F3F4, $E0067, $E0062, $E0065, $E006E, $E0067, $E007F]);
+    AddClassString(AContents, [$1F3F4, $E0067, $E0062, $E0073, $E0063, $E0074, $E007F]);
+    AddClassString(AContents, [$1F3F4, $E0067, $E0062, $E0077, $E006C, $E0073, $E007F]);
+  end
+  else if APropertyName = 'RGI_Emoji_ZWJ_Sequence' then
+  begin
+    AddClassString(AContents, [$1F468, $200D, $1F469, $200D, $1F466]);
+    AddClassString(AContents, [$1F468, $200D, $1F469, $200D, $1F467]);
+    AddClassString(AContents, [$1F468, $200D, $2764, $FE0F, $200D, $1F468]);
+    AddClassString(AContents, [$1F469, $200D, $2764, $FE0F, $200D, $1F469]);
+    AddClassString(AContents, [$1F469, $200D, $2764, $FE0F, $200D, $1F48B, $200D, $1F468]);
+    AddClassString(AContents, [$1F468, $200D, $1F4BB]);
+    AddClassString(AContents, [$1F469, $200D, $1F4BB]);
+    AddClassString(AContents, [$1F468, $200D, $2695, $FE0F]);
+    AddClassString(AContents, [$1F469, $200D, $2695, $FE0F]);
+    AddClassString(AContents, [$1F468, $200D, $1F3EB]);
+    AddClassString(AContents, [$1F469, $200D, $1F3EB]);
+    AddClassString(AContents, [$1F468, $200D, $1F527]);
+    AddClassString(AContents, [$1F469, $200D, $1F527]);
+    AddClassString(AContents, [$1F468, $200D, $1F373]);
+    AddClassString(AContents, [$1F469, $200D, $1F373]);
+  end
+  else
+    raise EConvertError.Create('Invalid Unicode property of strings: ' + APropertyName);
+end;
+
+procedure TRegExpCompiler.ParseClassEscape(var AContents: TRegExpClassContents);
+var
+  C: Char;
+  PropertyName: string;
+  CodePoint: Cardinal;
+  PropRanges: array[0..MAX_CHAR_RANGES - 1] of TRegExpCharRange;
+  PropCount: Integer;
+  ComplementRanges: array[0..MAX_CHAR_RANGES - 1] of TRegExpCharRange;
+  ComplementCount: Integer;
+  AllRange: array[0..0] of TRegExpCharRange;
+  I: Integer;
+begin
+  C := Advance;
+  case C of
+    'd', 'D', 'w', 'W', 's', 'S':
+      begin
+        AddBuiltinCharClass(C, AContents.Ranges, AContents.RangeCount);
+      end;
+    'n': AddClassRange(AContents, $0A, $0A);
+    'r': AddClassRange(AContents, $0D, $0D);
+    't': AddClassRange(AContents, $09, $09);
+    'v': AddClassRange(AContents, $0B, $0B);
+    'f': AddClassRange(AContents, $0C, $0C);
+    '0':
+      begin
+        if not AtEnd and (Peek >= '0') and (Peek <= '9') then
+          AddClassRange(AContents, Ord(C), Ord(C))
+        else
+          AddClassRange(AContents, 0, 0);
+      end;
+    'x':
+      begin
+        CodePoint := ParseHexEscape(2);
+        AddClassRange(AContents, CodePoint, CodePoint);
+      end;
+    'u':
+      begin
+        CodePoint := ParseUnicodeEscape;
+        AddClassRange(AContents, CodePoint, CodePoint);
+      end;
+    'p', 'P':
+      begin
+        if Match('{') then
+        begin
+          PropertyName := '';
+          while not AtEnd and (Peek <> '}') do
+            PropertyName := PropertyName + Advance;
+          if not Match('}') then
+            raise EConvertError.Create('Unterminated Unicode property escape');
+          if IsStringProperty(PropertyName) then
+          begin
+            if C = 'P' then
+              raise EConvertError.Create(
+                'Negated \\P{} cannot be used with properties of strings');
+            GetStringPropertySequences(PropertyName, AContents);
+          end
+          else if C = 'P' then
+          begin
+            PropCount := 0;
+            GetUnicodePropertyRanges(PropertyName, PropRanges, PropCount);
+            NormalizeRanges(PropRanges, PropCount);
+            AllRange[0].Lo := 0;
+            AllRange[0].Hi := $10FFFF;
+            SubtractRanges(AllRange, 1, PropRanges, PropCount,
+              ComplementRanges, ComplementCount);
+            for I := 0 to ComplementCount - 1 do
+              AddClassRange(AContents, ComplementRanges[I].Lo,
+                ComplementRanges[I].Hi);
+          end
+          else
+            GetUnicodePropertyRanges(PropertyName, AContents.Ranges,
+              AContents.RangeCount);
+        end
+        else
+          raise EConvertError.Create(
+            'Invalid regular expression: invalid escape in unicode mode');
+      end;
+    'q':
+      begin
+        if Match('{') then
+          ParseStringDisjunction(AContents)
+        else
+          raise EConvertError.Create(
+            'Invalid regular expression: invalid escape in unicode mode');
+      end;
+    'b':
+      AddClassRange(AContents, $08, $08);
+    'c':
+      begin
+        if not AtEnd and (((Peek >= 'a') and (Peek <= 'z')) or
+           ((Peek >= 'A') and (Peek <= 'Z'))) then
+          AddClassRange(AContents, Ord(Advance) mod 32, Ord(FPattern[FPos - 1]) mod 32)
+        else
+          raise EConvertError.Create(
+            'Invalid regular expression: invalid control escape in unicode mode');
+      end;
+  else
+    if not CharInSet(C, ['/', '^', '$', '\', '.', '*', '+',
+       '?', '(', ')', '[', ']', '{', '}', '|', '-', '&', '!', '#',
+       '%', ',', ':', ';', '<', '=', '>', '@', '`', '~']) then
+      raise EConvertError.Create(
+        'Invalid regular expression: invalid escape in unicode mode')
+    else
+      AddClassRange(AContents, Ord(C), Ord(C));
+  end;
+end;
+
+procedure TRegExpCompiler.ParseStringDisjunction(
+  var AContents: TRegExpClassContents);
+var
+  CodePoints: array of Cardinal;
+  CodePointCount: Integer;
+  CodePoint: Cardinal;
+begin
+  CodePointCount := 0;
+  SetLength(CodePoints, 16);
+  while not AtEnd and (Peek <> '}') do
+  begin
+    if Peek = '|' then
+    begin
+      if CodePointCount = 1 then
+        AddClassRange(AContents, CodePoints[0], CodePoints[0])
+      else if CodePointCount > 0 then
+      begin
+        SetLength(CodePoints, CodePointCount);
+        AddClassString(AContents, CodePoints);
+        SetLength(CodePoints, 16);
+      end;
+      CodePointCount := 0;
+      Inc(FPos);
+      Continue;
+    end;
+    if Peek = '\' then
+    begin
+      Inc(FPos);
+      case Peek of
+        'u':
+          begin
+            Inc(FPos);
+            CodePoint := ParseUnicodeEscape;
+          end;
+        'n': begin Inc(FPos); CodePoint := $0A; end;
+        'r': begin Inc(FPos); CodePoint := $0D; end;
+        't': begin Inc(FPos); CodePoint := $09; end;
+      else
+        CodePoint := Ord(Advance);
+      end;
+    end
+    else
+      CodePoint := ReadCodePoint;
+    if CodePointCount >= Length(CodePoints) then
+      SetLength(CodePoints, CodePointCount * 2);
+    CodePoints[CodePointCount] := CodePoint;
+    Inc(CodePointCount);
+  end;
+  if not Match('}') then
+    raise EConvertError.Create('Unterminated string disjunction \\q{}');
+  if CodePointCount = 1 then
+    AddClassRange(AContents, CodePoints[0], CodePoints[0])
+  else if CodePointCount > 0 then
+  begin
+    SetLength(CodePoints, CodePointCount);
+    AddClassString(AContents, CodePoints);
+  end;
+end;
+
+procedure TRegExpCompiler.ParseClassOperand(var AContents: TRegExpClassContents);
+var
+  SubContents: TRegExpClassContents;
+  Negated: Boolean;
+  CP: Cardinal;
+begin
+  if Peek = '[' then
+  begin
+    Inc(FPos);
+    Negated := Match('^');
+    InitClassContents(SubContents);
+    ParseClassUnion(SubContents);
+    if not Match(']') then
+      raise EConvertError.Create('Unterminated character class');
+    if Negated then
+    begin
+      if SubContents.StringCount > 0 then
+        raise EConvertError.Create(
+          'Negated character class cannot contain strings');
+    end;
+    MergeClassContents(AContents, SubContents);
+  end
+  else if Peek = '\' then
+  begin
+    Inc(FPos);
+    ParseClassEscape(AContents);
+  end
+  else
+  begin
+    CP := ReadCodePoint;
+    AddClassRange(AContents, CP, CP);
+  end;
+end;
+
+procedure TRegExpCompiler.ParseClassUnion(var AContents: TRegExpClassContents);
+var
+  Lo, Hi: Cardinal;
+  SavePos: Integer;
+  EscContents: TRegExpClassContents;
+begin
+  while not AtEnd and (Peek <> ']') do
+  begin
+    if (Peek = '&') and (PeekAt(1) = '&') then
+      Break;
+    if (Peek = '-') and (PeekAt(1) = '-') then
+      Break;
+    if Peek = '[' then
+    begin
+      Inc(FPos);
+      InitClassContents(EscContents);
+      if Match('^') then
+      begin
+        ParseClassUnion(EscContents);
+        if not Match(']') then
+          raise EConvertError.Create('Unterminated character class');
+        if EscContents.StringCount > 0 then
+          raise EConvertError.Create(
+            'Negated character class cannot contain strings');
+        NormalizeRanges(EscContents.Ranges, EscContents.RangeCount);
+        NormalizeRanges(AContents.Ranges, AContents.RangeCount);
+      end
+      else
+      begin
+        ParseClassUnion(EscContents);
+        if not Match(']') then
+          raise EConvertError.Create('Unterminated character class');
+        MergeClassContents(AContents, EscContents);
+      end;
+      Continue;
+    end;
+    if Peek = '\' then
+    begin
+      Inc(FPos);
+      SavePos := AContents.RangeCount;
+      ParseClassEscape(AContents);
+      if (AContents.StringCount > 0) and
+         (AContents.Strings[AContents.StringCount - 1].CodePoints <> nil) then
+        Continue;
+      if (not AtEnd) and (Peek = '-') and (PeekAt(1) <> ']') and
+         (PeekAt(1) <> '-') then
+      begin
+        if AContents.RangeCount > SavePos then
+        begin
+          Lo := AContents.Ranges[AContents.RangeCount - 1].Lo;
+          Dec(AContents.RangeCount);
+          Inc(FPos);
+          if Peek = '\' then
+          begin
+            Inc(FPos);
+            InitClassContents(EscContents);
+            ParseClassEscape(EscContents);
+            if EscContents.RangeCount > 0 then
+            begin
+              Hi := EscContents.Ranges[0].Lo;
+              if Lo > Hi then
+                raise EConvertError.Create(
+                  'Invalid regular expression: range out of order in character class');
+              AddClassRange(AContents, Lo, Hi);
+            end;
+          end
+          else
+          begin
+            Hi := ReadCodePoint;
+            if Lo > Hi then
+              raise EConvertError.Create(
+                'Invalid regular expression: range out of order in character class');
+            AddClassRange(AContents, Lo, Hi);
+          end;
+        end;
+      end;
+      Continue;
+    end;
+    if FUnicodeSets and CharInSet(Peek, ['(', ')', '/', '|']) then
+      raise EConvertError.Create(
+        'Invalid regular expression: unescaped ' + Peek + ' in unicode sets mode character class');
+    Lo := ReadCodePoint;
+    if (not AtEnd) and (Peek = '-') and (PeekAt(1) <> ']') and
+       (PeekAt(1) <> '-') then
+    begin
+      Inc(FPos);
+      if Peek = '\' then
+      begin
+        Inc(FPos);
+        InitClassContents(EscContents);
+        ParseClassEscape(EscContents);
+        if EscContents.RangeCount > 0 then
+        begin
+          Hi := EscContents.Ranges[0].Lo;
+          if Lo > Hi then
+            raise EConvertError.Create(
+              'Invalid regular expression: range out of order in character class');
+          AddClassRange(AContents, Lo, Hi);
+        end;
+      end
+      else
+      begin
+        Hi := ReadCodePoint;
+        if Lo > Hi then
+          raise EConvertError.Create(
+            'Invalid regular expression: range out of order in character class');
+        AddClassRange(AContents, Lo, Hi);
+      end;
+    end
+    else
+      AddClassRange(AContents, Lo, Lo);
+  end;
+end;
+
+procedure TRegExpCompiler.EmitClassContents(
+  const AContents: TRegExpClassContents; ANegated: Boolean);
+var
+  I, J: Integer;
+  SplitHoles: array of Integer;
+  SplitCount: Integer;
+  JumpHoles: array of Integer;
+  JumpCount: Integer;
+  ClassIdx: Integer;
+  DynRanges: array of TRegExpCharRange;
+  OrigCount: Integer;
+begin
+  if (AContents.StringCount = 0) or ANegated then
+  begin
+    EmitCharClassRanges(AContents.Ranges, AContents.RangeCount, ANegated);
+    Exit;
+  end;
+  SplitCount := 0;
+  JumpCount := 0;
+  SetLength(SplitHoles, AContents.StringCount + 1);
+  SetLength(JumpHoles, AContents.StringCount + 1);
+  for I := AContents.StringCount - 1 downto 0 do
+  begin
+    if Length(AContents.Strings[I].CodePoints) > 1 then
+    begin
+      SplitHoles[SplitCount] := CurrentPC;
+      Inc(SplitCount);
+      Emit(EncodeOpBx(RX_SPLIT, 0));
+      for J := 0 to High(AContents.Strings[I].CodePoints) do
+        Emit(EncodeOpBx(RX_CHAR, Integer(AContents.Strings[I].CodePoints[J])));
+      JumpHoles[JumpCount] := CurrentPC;
+      Inc(JumpCount);
+      Emit(EncodeOpBx(RX_JUMP, 0));
+      PatchHole(SplitHoles[SplitCount - 1], CurrentPC);
+    end;
+  end;
+  if AContents.RangeCount > 0 then
+  begin
+    SetLength(DynRanges, AContents.RangeCount);
+    for I := 0 to AContents.RangeCount - 1 do
+      DynRanges[I] := AContents.Ranges[I];
+    if FModifier.IgnoreCase then
+    begin
+      OrigCount := Length(DynRanges);
+      for I := 0 to OrigCount - 1 do
+      begin
+        if (DynRanges[I].Lo >= Ord('A')) and (DynRanges[I].Hi <= Ord('Z')) then
+        begin
+          SetLength(DynRanges, Length(DynRanges) + 1);
+          DynRanges[High(DynRanges)].Lo := DynRanges[I].Lo + 32;
+          DynRanges[High(DynRanges)].Hi := DynRanges[I].Hi + 32;
+        end
+        else if (DynRanges[I].Lo >= Ord('a')) and (DynRanges[I].Hi <= Ord('z')) then
+        begin
+          SetLength(DynRanges, Length(DynRanges) + 1);
+          DynRanges[High(DynRanges)].Lo := DynRanges[I].Lo - 32;
+          DynRanges[High(DynRanges)].Hi := DynRanges[I].Hi - 32;
+        end;
+      end;
+    end;
+    ClassIdx := AddCharClass(DynRanges);
+    Emit(EncodeOpBx(RX_CHAR_CLASS, ClassIdx));
+  end
+  else
+    Emit(EncodeOp(RX_FAIL));
+  for I := 0 to JumpCount - 1 do
+    FCode[JumpHoles[I]] := EncodeOpBx(RX_JUMP, CurrentPC);
+end;
+
+procedure TRegExpCompiler.CompileUnicodeSetsClass;
+var
+  Contents, RightContents: TRegExpClassContents;
+  Negated: Boolean;
+begin
+  Negated := Match('^');
+  InitClassContents(Contents);
+  ParseClassUnion(Contents);
+  if (not AtEnd) and (Peek = '&') and (PeekAt(1) = '&') then
+  begin
+    Inc(FPos, 2);
+    InitClassContents(RightContents);
+    ParseClassUnion(RightContents);
+    IntersectClassContents(Contents, RightContents);
+  end
+  else if (not AtEnd) and (Peek = '-') and (PeekAt(1) = '-') then
+  begin
+    Inc(FPos, 2);
+    InitClassContents(RightContents);
+    ParseClassUnion(RightContents);
+    SubtractClassContents(Contents, RightContents);
+  end;
+  if not Match(']') then
+    raise EConvertError.Create('Unterminated character class');
+  if Negated and (Contents.StringCount > 0) then
+    raise EConvertError.Create(
+      'Negated character class cannot contain strings');
+  EmitClassContents(Contents, Negated);
 end;
 
 procedure TRegExpCompiler.EmitCharClassRanges(
@@ -1075,7 +2077,10 @@ begin
     '[':
       begin
         Inc(FPos);
-        CompileCharacterClass;
+        if FUnicodeSets then
+          CompileUnicodeSetsClass
+        else
+          CompileCharacterClass;
       end;
     '.':
       begin
