@@ -3,16 +3,10 @@ description: String.prototype.toLocaleLowerCase basic functionality
 features: [String.prototype.toLocaleLowerCase]
 ---*/
 
-const hasICU = typeof Intl !== "undefined" && new Intl.NumberFormat("en").format(1000).includes(",");
-
 describe("String.prototype.toLocaleLowerCase", () => {
   test("exists and maps through Unicode lowercase conversion", () => {
     expect("HELLO".toLocaleLowerCase()).toBe("hello");
-    if (hasICU) {
-      expect("ÉÖΣ".toLocaleLowerCase()).toBe("éöς");
-    } else {
-      expect("ÉÖΣ".toLocaleLowerCase()).toBe("éöσ");
-    }
+    expect("ÉÖΣ".toLocaleLowerCase()).toBe("éöς");
   });
 
   test("coerces non-string receivers", () => {

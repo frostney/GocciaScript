@@ -9,6 +9,7 @@ uses
 
 function TryGetICULibraryHandle(out AHandle: TLibHandle): Boolean;
 function ICULibraryAvailable: Boolean;
+function ICUGetProcAddress(const AName: string): Pointer;
 
 implementation
 
@@ -128,6 +129,20 @@ var
   Dummy: TLibHandle;
 begin
   Result := TryGetICULibraryHandle(Dummy);
+end;
+
+function ICUGetProcAddress(const AName: string): Pointer;
+var
+  Handle: TLibHandle;
+begin
+  Result := nil;
+  if not TryGetICULibraryHandle(Handle) then
+    Exit;
+  Result := GetProcAddress(Handle, AName);
+  {$IFDEF LINUX}
+  if (Result = nil) and (UCHandle <> NilHandle) then
+    Result := GetProcAddress(UCHandle, AName);
+  {$ENDIF}
 end;
 
 initialization

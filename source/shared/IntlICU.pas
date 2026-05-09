@@ -284,7 +284,7 @@ end;
 
 function ResolveSymbol(const AHandle: TLibHandle; const AName: string): Pointer;
 begin
-  Result := GetProcAddress(AHandle, AName);
+  Result := ICUGetProcAddress(AName);
 end;
 
 function TryLoadIntlFunctions(const AHandle: TLibHandle): Boolean;

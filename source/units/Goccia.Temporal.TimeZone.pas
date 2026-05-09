@@ -111,31 +111,31 @@ begin
   FillChar(AICU, SizeOf(AICU), 0);
   AICU.Handle := AHandle;
 
-  Symbol := GetProcAddress(AHandle, 'ucal_open');
+  Symbol := ICUGetProcAddress('ucal_open');
   if not Assigned(Symbol) then Exit;
   AICU.OpenCalendar := TICUCalendarOpen(Symbol);
 
-  Symbol := GetProcAddress(AHandle, 'ucal_close');
+  Symbol := ICUGetProcAddress('ucal_close');
   if not Assigned(Symbol) then Exit;
   AICU.CloseCalendar := TICUCalendarClose(Symbol);
 
-  Symbol := GetProcAddress(AHandle, 'ucal_setMillis');
+  Symbol := ICUGetProcAddress('ucal_setMillis');
   if not Assigned(Symbol) then Exit;
   AICU.SetMillis := TICUCalendarSetMillis(Symbol);
 
-  Symbol := GetProcAddress(AHandle, 'ucal_get');
+  Symbol := ICUGetProcAddress('ucal_get');
   if not Assigned(Symbol) then Exit;
   AICU.GetField := TICUCalendarGet(Symbol);
 
-  Symbol := GetProcAddress(AHandle, 'ucal_getTimeZoneTransitionDate');
+  Symbol := ICUGetProcAddress('ucal_getTimeZoneTransitionDate');
   if not Assigned(Symbol) then Exit;
   AICU.GetTimeZoneTransitionDate := TICUCalendarGetTimeZoneTransitionDate(Symbol);
 
-  Symbol := GetProcAddress(AHandle, 'ucal_getCanonicalTimeZoneID');
+  Symbol := ICUGetProcAddress('ucal_getCanonicalTimeZoneID');
   if not Assigned(Symbol) then Exit;
   AICU.GetCanonicalTimeZoneID := TICUCalendarGetCanonicalTimeZoneID(Symbol);
 
-  Symbol := GetProcAddress(AHandle, 'ucal_getDefaultTimeZone');
+  Symbol := ICUGetProcAddress('ucal_getDefaultTimeZone');
   if not Assigned(Symbol) then Exit;
   AICU.GetDefaultTimeZone := TICUCalendarGetDefaultTimeZone(Symbol);
 
