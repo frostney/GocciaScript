@@ -88,6 +88,7 @@ type
     FIsGenerator: Boolean;
     FIsArrow: Boolean;
     FHasOwnPrototype: Boolean;
+    FHasStrictDirective: Boolean;
     FTypeCheckPreambleSize: UInt8;
     FProfileIndex: Integer;
     FSourceText: string;
@@ -158,6 +159,7 @@ type
     // time pointing at a fresh ordinary object whose `constructor` is the
     // function itself.
     property HasOwnPrototype: Boolean read FHasOwnPrototype write FHasOwnPrototype;
+    property HasStrictDirective: Boolean read FHasStrictDirective write FHasStrictDirective;
     property TypeCheckPreambleSize: UInt8 read FTypeCheckPreambleSize write FTypeCheckPreambleSize;
     property ProfileIndex: Integer read FProfileIndex write FProfileIndex;
     property SourceText: string read FSourceText write FSourceText;

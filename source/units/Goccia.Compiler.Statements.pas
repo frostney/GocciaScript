@@ -3097,8 +3097,12 @@ begin
   EmitDefaultParameters(ChildCtx, AMethod.Parameters);
 
   if ChildCtx.NonStrictMode then
+  begin
+    ChildTemplate.HasStrictDirective :=
+      BodyHasStrictDirective(AMethod.Body);
     EmitInstruction(ChildCtx, EncodeABC(OP_MAKE_ARGUMENTS,
       ChildScope.DeclareLocal('arguments', False), 0, 0));
+  end;
 
   ACtx.CompileFunctionBody(AMethod.Body);
   ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
@@ -3402,8 +3406,12 @@ begin
   EmitDefaultParameters(ChildCtx, AMethod.Parameters);
 
   if ChildCtx.NonStrictMode then
+  begin
+    ChildTemplate.HasStrictDirective :=
+      BodyHasStrictDirective(AMethod.Body);
     EmitInstruction(ChildCtx, EncodeABC(OP_MAKE_ARGUMENTS,
       ChildScope.DeclareLocal('arguments', False), 0, 0));
+  end;
 
   ACtx.CompileFunctionBody(AMethod.Body);
   ChildTemplate.MaxRegisters := ChildScope.MaxSlot;

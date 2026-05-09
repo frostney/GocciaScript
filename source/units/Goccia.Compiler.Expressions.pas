@@ -1381,8 +1381,11 @@ begin
     EmitParameterTypeChecks(ChildCtx, AExpr.Parameters);
 
     if ChildCtx.NonStrictMode and (not ChildTemplate.IsArrow) then
+    begin
+      ChildTemplate.HasStrictDirective := BodyHasStrictDirective(AExpr.Body);
       EmitInstruction(ChildCtx, EncodeABC(OP_MAKE_ARGUMENTS,
         ChildScope.DeclareLocal('arguments', False), 0, 0));
+    end;
 
     ACtx.CompileFunctionBody(AExpr.Body);
 
@@ -2471,8 +2474,11 @@ begin
     EmitParameterTypeChecks(ChildCtx, AExpr.Parameters);
 
     if ChildCtx.NonStrictMode and (not ChildTemplate.IsArrow) then
+    begin
+      ChildTemplate.HasStrictDirective := BodyHasStrictDirective(AExpr.Body);
       EmitInstruction(ChildCtx, EncodeABC(OP_MAKE_ARGUMENTS,
         ChildScope.DeclareLocal('arguments', False), 0, 0));
+    end;
 
     ACtx.CompileFunctionBody(AExpr.Body);
 

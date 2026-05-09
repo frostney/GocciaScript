@@ -177,6 +177,9 @@ type
 
   TGocciaScopeList = TObjectList<TGocciaScope>;
 
+function IsWithUnscopable(const AObj: TGocciaValue;
+  const AName: string): Boolean;
+
 
 
 
@@ -190,7 +193,26 @@ uses
   Goccia.Error.Suggestions,
   Goccia.Keywords.Reserved,
   Goccia.Types.Enforcement,
-  Goccia.Values.ObjectValue;
+  Goccia.Values.ObjectValue,
+  Goccia.Values.SymbolValue;
+
+function IsWithUnscopable(const AObj: TGocciaValue;
+  const AName: string): Boolean;
+var
+  Obj: TGocciaObjectValue;
+  Unscopables, Blocked: TGocciaValue;
+begin
+  Result := False;
+  if not (AObj is TGocciaObjectValue) then Exit;
+  Obj := TGocciaObjectValue(AObj);
+  if not Obj.HasSymbolProperty(TGocciaSymbolValue.WellKnownUnscopables) then
+    Exit;
+  Unscopables := Obj.GetSymbolProperty(TGocciaSymbolValue.WellKnownUnscopables);
+  if not (Unscopables is TGocciaObjectValue) then Exit;
+  if not TGocciaObjectValue(Unscopables).HasProperty(AName) then Exit;
+  Blocked := TGocciaObjectValue(Unscopables).GetProperty(AName);
+  Result := Assigned(Blocked) and Blocked.ToBooleanLiteral.Value;
+end;
 
 { TGocciaScope }
 
@@ -520,7 +542,8 @@ begin
   StrictActive := EffectiveStrictTypes;
 
   if (FWithObject is TGocciaObjectValue) and
-     TGocciaObjectValue(FWithObject).HasProperty(AName) then
+     TGocciaObjectValue(FWithObject).HasProperty(AName) and
+     (not IsWithUnscopable(TGocciaObjectValue(FWithObject), AName)) then
   begin
     FWithObject.SetProperty(AName, AValue);
     Exit;
@@ -590,7 +613,8 @@ var
   LexicalBinding: TLexicalBinding;
 begin
   if (FWithObject is TGocciaObjectValue) and
-     TGocciaObjectValue(FWithObject).HasProperty(AName) then
+     TGocciaObjectValue(FWithObject).HasProperty(AName) and
+     (not IsWithUnscopable(TGocciaObjectValue(FWithObject), AName)) then
   begin
     Result.Value := TGocciaObjectValue(FWithObject).GetProperty(AName);
     Result.DeclarationType := dtVar;

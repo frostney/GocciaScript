@@ -54,6 +54,8 @@ procedure PatchJumpTarget(const ACtx: TGocciaCompilationContext;
   const AIndex: Integer);
 function CurrentCodePosition(const ACtx: TGocciaCompilationContext): Integer;
 
+function BodyHasStrictDirective(const ABody: TGocciaASTNode): Boolean;
+
 function TokenTypeToRuntimeOp(
   const ATokenType: TGocciaTokenType): TGocciaOpCode;
 function CompoundOpToRuntimeOp(
@@ -64,6 +66,31 @@ function ShortCircuitJumpOp(
   const ATokenType: TGocciaTokenType): TGocciaOpCode; inline;
 
 implementation
+
+uses
+  Goccia.AST.Expressions,
+  Goccia.AST.Statements,
+  Goccia.Values.Primitives;
+
+function BodyHasStrictDirective(const ABody: TGocciaASTNode): Boolean;
+var
+  Block: TGocciaBlockStatement;
+  FirstStmt: TGocciaASTNode;
+  Lit: TGocciaLiteralExpression;
+begin
+  Result := False;
+  if not (ABody is TGocciaBlockStatement) then Exit;
+  Block := TGocciaBlockStatement(ABody);
+  if Block.Nodes.Count = 0 then Exit;
+  FirstStmt := Block.Nodes[0];
+  if not (FirstStmt is TGocciaExpressionStatement) then Exit;
+  if not (TGocciaExpressionStatement(FirstStmt).Expression
+    is TGocciaLiteralExpression) then Exit;
+  Lit := TGocciaLiteralExpression(
+    TGocciaExpressionStatement(FirstStmt).Expression);
+  if Lit.Value is TGocciaStringLiteralValue then
+    Result := TGocciaStringLiteralValue(Lit.Value).Value = 'use strict';
+end;
 
 function EmitInstruction(const ACtx: TGocciaCompilationContext;
   const AInstruction: UInt32): Integer;

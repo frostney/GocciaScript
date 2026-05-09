@@ -8667,7 +8667,7 @@ begin
             ChildClosure.SetUpvalue(I, FCurrentClosure.GetUpvalue(Desc.Index));
         end;
         BytecodeFunction := TGocciaBytecodeFunctionValue.Create(Self, ChildClosure);
-        if FNonStrictMode then
+        if FNonStrictMode and (not ChildTemplate.HasStrictDirective) then
           BytecodeFunction.StrictThis := False;
         // ES2026 §10.2.5 MakeConstructor: install own `prototype` data property
         // for `function`/`function*` declarations and expressions (including
@@ -9256,7 +9256,8 @@ begin
         GlobalName := Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue;
         RightValue := nil;
         for I := FWithStackCount - 1 downto 0 do
-          if FWithStack[I].HasProperty(GlobalName) then
+          if FWithStack[I].HasProperty(GlobalName) and
+             (not IsWithUnscopable(FWithStack[I], GlobalName)) then
           begin
             RightValue := FWithStack[I].GetProperty(GlobalName);
             Break;
@@ -9275,7 +9276,8 @@ begin
         GlobalName := Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue;
         RightValue := RegisterToValue(FRegisters[A]);
         for I := FWithStackCount - 1 downto 0 do
-          if FWithStack[I].HasProperty(GlobalName) then
+          if FWithStack[I].HasProperty(GlobalName) and
+             (not IsWithUnscopable(FWithStack[I], GlobalName)) then
           begin
             FWithStack[I].SetProperty(GlobalName, RightValue);
             RightValue := nil;
