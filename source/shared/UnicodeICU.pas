@@ -47,6 +47,12 @@ var
   LoadSucceeded: Boolean;
   InitLock: TRTLCriticalSection;
 
+function LoadSymbol(const AName: string; out APtr: Pointer): Boolean;
+begin
+  APtr := ICUGetProcAddress(AName);
+  Result := Assigned(APtr);
+end;
+
 function TryLoadFunctions: Boolean;
 var
   S: Pointer;
@@ -65,24 +71,19 @@ begin
     if not ICULibraryAvailable then
       Exit;
 
-    S := ICUGetProcAddress('uset_openEmpty');
-    if not Assigned(S) then Exit;
+    if not LoadSymbol('uset_openEmpty', S) then Exit;
     FnOpenEmpty := TUsetOpenEmpty(S);
 
-    S := ICUGetProcAddress('uset_applyPropertyAlias');
-    if not Assigned(S) then Exit;
+    if not LoadSymbol('uset_applyPropertyAlias', S) then Exit;
     FnApplyPropertyAlias := TUsetApplyPropertyAlias(S);
 
-    S := ICUGetProcAddress('uset_getItemCount');
-    if not Assigned(S) then Exit;
+    if not LoadSymbol('uset_getItemCount', S) then Exit;
     FnGetItemCount := TUsetGetItemCount(S);
 
-    S := ICUGetProcAddress('uset_getItem');
-    if not Assigned(S) then Exit;
+    if not LoadSymbol('uset_getItem', S) then Exit;
     FnGetItem := TUsetGetItem(S);
 
-    S := ICUGetProcAddress('uset_close');
-    if not Assigned(S) then Exit;
+    if not LoadSymbol('uset_close', S) then Exit;
     FnClose := TUsetClose(S);
 
     LoadSucceeded := True;

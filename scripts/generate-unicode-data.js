@@ -153,9 +153,16 @@ async function downloadUCDFile(unicodeVersion, filePath) {
   return downloadFile(url);
 }
 
-function parseUCDRangeFile(text) {
-  const properties = new Map();
+function parseRange(rangePart) {
+  const dotDot = rangePart.indexOf("..");
+  if (dotDot >= 0) {
+    return { lo: parseInt(rangePart.slice(0, dotDot), 16), hi: parseInt(rangePart.slice(dotDot + 2), 16) };
+  }
+  const cp = parseInt(rangePart, 16);
+  return { lo: cp, hi: cp };
+}
 
+function forEachUCDLine(text, minFields, callback) {
   for (const line of text.split("\n")) {
     const commentIndex = line.indexOf("#");
     const content = (commentIndex >= 0 ? line.slice(0, commentIndex) : line).trim();
@@ -164,29 +171,24 @@ function parseUCDRangeFile(text) {
     }
 
     const parts = content.split(";").map((part) => part.trim());
-    if (parts.length < 2) {
+    if (parts.length < minFields) {
       continue;
     }
 
-    const rangePart = parts[0];
+    callback(parts);
+  }
+}
+
+function parseUCDRangeFile(text) {
+  const properties = new Map();
+
+  forEachUCDLine(text, 2, (parts) => {
     const propertyValue = parts[1];
-
-    let lo;
-    let hi;
-    const dotDot = rangePart.indexOf("..");
-    if (dotDot >= 0) {
-      lo = parseInt(rangePart.slice(0, dotDot), 16);
-      hi = parseInt(rangePart.slice(dotDot + 2), 16);
-    } else {
-      lo = parseInt(rangePart, 16);
-      hi = lo;
-    }
-
     if (!properties.has(propertyValue)) {
       properties.set(propertyValue, []);
     }
-    properties.get(propertyValue).push({ lo, hi });
-  }
+    properties.get(propertyValue).push(parseRange(parts[0]));
+  });
 
   for (const [key, ranges] of properties) {
     properties.set(key, mergeRanges(ranges));
@@ -198,18 +200,7 @@ function parseUCDRangeFile(text) {
 function parsePropertyValueAliases(text) {
   const aliases = new Map();
 
-  for (const line of text.split("\n")) {
-    const commentIndex = line.indexOf("#");
-    const content = (commentIndex >= 0 ? line.slice(0, commentIndex) : line).trim();
-    if (content.length === 0) {
-      continue;
-    }
-
-    const parts = content.split(";").map((part) => part.trim());
-    if (parts.length < 3) {
-      continue;
-    }
-
+  forEachUCDLine(text, 3, (parts) => {
     const propertyAbbr = parts[0];
     if (!aliases.has(propertyAbbr)) {
       aliases.set(propertyAbbr, new Map());
@@ -217,14 +208,12 @@ function parsePropertyValueAliases(text) {
 
     const valueMap = aliases.get(propertyAbbr);
     const shortName = parts[1];
-    const allNames = parts.slice(1).filter((name) => name.length > 0);
-
-    for (const name of allNames) {
-      if (!valueMap.has(name)) {
+    for (const name of parts.slice(1)) {
+      if (name.length > 0 && !valueMap.has(name)) {
         valueMap.set(name, shortName);
       }
     }
-  }
+  });
 
   return aliases;
 }
@@ -232,26 +221,14 @@ function parsePropertyValueAliases(text) {
 function parsePropertyAliases(text) {
   const aliases = new Map();
 
-  for (const line of text.split("\n")) {
-    const commentIndex = line.indexOf("#");
-    const content = (commentIndex >= 0 ? line.slice(0, commentIndex) : line).trim();
-    if (content.length === 0) {
-      continue;
-    }
-
-    const parts = content.split(";").map((part) => part.trim());
-    if (parts.length < 2) {
-      continue;
-    }
-
+  forEachUCDLine(text, 2, (parts) => {
     const shortName = parts[0];
     for (const name of parts) {
-      const trimmed = name.trim();
-      if (trimmed.length > 0) {
-        aliases.set(trimmed, shortName);
+      if (name.length > 0) {
+        aliases.set(name, shortName);
       }
     }
-  }
+  });
 
   return aliases;
 }
@@ -467,63 +444,41 @@ function collectAllEntries(
     }
   }
 
-  const gcAliases = pvAliases.get("gc") || new Map();
+  function registerProperty(data, prefix, aliasMap, addBareAlias) {
+    for (const [value, ranges] of data) {
+      const canonicalKey = `${prefix}/${value}`;
+      addEntry(canonicalKey, ranges);
 
-  for (const [value, ranges] of gcData) {
-    const canonicalKey = `gc/${value}`;
-    addEntry(canonicalKey, ranges);
+      if (addBareAlias) {
+        addAliasEntry(value, canonicalKey);
+      }
 
-    addAliasEntry(value, canonicalKey);
-
-    for (const alias of findAllAliases(gcAliases, value)) {
-      addAliasEntry(`gc/${alias}`, canonicalKey);
-      addAliasEntry(alias, canonicalKey);
+      for (const alias of findAllAliases(aliasMap, value)) {
+        addAliasEntry(`${prefix}/${alias}`, canonicalKey);
+        if (addBareAlias) {
+          addAliasEntry(alias, canonicalKey);
+        }
+      }
     }
   }
+
+  const gcAliases = pvAliases.get("gc") || new Map();
+  registerProperty(gcData, "gc", gcAliases, true);
 
   for (const [group, members] of Object.entries(GC_GROUPS)) {
     const memberRanges = members
       .filter((m) => gcData.has(m))
       .map((m) => gcData.get(m));
     if (memberRanges.length > 0) {
-      const unionedRanges = unionRanges(memberRanges);
-      const canonicalKey = `gc/${group}`;
-      addEntry(canonicalKey, unionedRanges);
-
-      addAliasEntry(group, canonicalKey);
-
-      for (const alias of findAllAliases(gcAliases, group)) {
-        addAliasEntry(`gc/${alias}`, canonicalKey);
-        addAliasEntry(alias, canonicalKey);
-      }
+      registerProperty(new Map([[group, unionRanges(memberRanges)]]), "gc", gcAliases, true);
     }
   }
 
-  const scAliases = pvAliases.get("sc") || new Map();
-
-  for (const [value, ranges] of scriptData) {
-    const canonicalKey = `sc/${value}`;
-    addEntry(canonicalKey, ranges);
-
-    for (const alias of findAllAliases(scAliases, value)) {
-      addAliasEntry(`sc/${alias}`, canonicalKey);
-    }
-  }
-
-  const scxAliases = pvAliases.get("scx") || pvAliases.get("sc") || new Map();
-
-  for (const [value, ranges] of scxData) {
-    const canonicalKey = `scx/${value}`;
-    addEntry(canonicalKey, ranges);
-
-    for (const alias of findAllAliases(scxAliases, value)) {
-      addAliasEntry(`scx/${alias}`, canonicalKey);
-    }
-  }
+  registerProperty(scriptData, "sc", pvAliases.get("sc") || new Map(), false);
+  registerProperty(scxData, "scx", pvAliases.get("scx") || pvAliases.get("sc") || new Map(), false);
 
   for (const [value, ranges] of binaryProperties) {
     addEntry(value, ranges);
-
     for (const alias of findAllAliases(pAliases, value)) {
       addAliasEntry(alias, value);
     }
@@ -537,41 +492,24 @@ function collectAllEntries(
     addEntry("Assigned", complementRanges(cnRanges));
   }
 
-  for (const [propLong, propShort] of pAliases) {
-    if (propShort === "gc") {
-      addAliasEntry(`${propLong}`, `gc`);
+  const prefixPropNames = [
+    { prefix: "gc", short: "gc" },
+    { prefix: "sc", short: "sc" },
+    { prefix: "scx", short: "scx" },
+  ];
+
+  for (const { prefix, short } of prefixPropNames) {
+    const propNames = new Set();
+    for (const [alias, canonical] of pAliases) {
+      if (canonical === short && alias !== short) {
+        propNames.add(alias);
+      }
     }
-  }
 
-  const gcPropNames = new Set(["gc", "General_Category"]);
-  const scPropNames = new Set(["sc", "Script"]);
-  const scxPropNames = new Set(["scx", "Script_Extensions"]);
-
-  for (const [alias, short] of pAliases) {
-    if (short === "gc") gcPropNames.add(alias);
-    if (short === "sc") scPropNames.add(alias);
-    if (short === "scx") scxPropNames.add(alias);
-  }
-
-  for (const key of [...entries.keys()]) {
-    if (key.startsWith("gc/")) {
-      const valuePart = key.slice(3);
-      for (const propName of gcPropNames) {
-        if (propName !== "gc") {
-          addAliasEntry(`${propName}/${valuePart}`, key);
-        }
-      }
-    } else if (key.startsWith("sc/")) {
-      const valuePart = key.slice(3);
-      for (const propName of scPropNames) {
-        if (propName !== "sc") {
-          addAliasEntry(`${propName}/${valuePart}`, key);
-        }
-      }
-    } else if (key.startsWith("scx/")) {
-      const valuePart = key.slice(4);
-      for (const propName of scxPropNames) {
-        if (propName !== "scx") {
+    for (const key of [...entries.keys()]) {
+      if (key.startsWith(`${prefix}/`)) {
+        const valuePart = key.slice(prefix.length + 1);
+        for (const propName of propNames) {
           addAliasEntry(`${propName}/${valuePart}`, key);
         }
       }
@@ -626,31 +564,9 @@ function parseScriptExtensions(text, scriptData, scAliases) {
     }
   }
 
-  for (const line of text.split("\n")) {
-    const commentIndex = line.indexOf("#");
-    const content = (commentIndex >= 0 ? line.slice(0, commentIndex) : line).trim();
-    if (content.length === 0) {
-      continue;
-    }
-
-    const parts = content.split(";").map((part) => part.trim());
-    if (parts.length < 2) {
-      continue;
-    }
-
-    const rangePart = parts[0];
+  forEachUCDLine(text, 2, (parts) => {
+    const range = parseRange(parts[0]);
     const scripts = parts[1].split(/\s+/);
-
-    let lo;
-    let hi;
-    const dotDot = rangePart.indexOf("..");
-    if (dotDot >= 0) {
-      lo = parseInt(rangePart.slice(0, dotDot), 16);
-      hi = parseInt(rangePart.slice(dotDot + 2), 16);
-    } else {
-      lo = parseInt(rangePart, 16);
-      hi = lo;
-    }
 
     for (const script of scripts) {
       if (!properties.has(script)) {
@@ -663,9 +579,9 @@ function parseScriptExtensions(text, scriptData, scAliases) {
         }
         properties.set(script, baseRanges ? [...baseRanges] : []);
       }
-      properties.get(script).push({ lo, hi });
+      properties.get(script).push(range);
     }
-  }
+  });
 
   for (const [key, ranges] of properties) {
     properties.set(key, mergeRanges(ranges));

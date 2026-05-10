@@ -164,16 +164,16 @@ begin
   Result := True;
 end;
 
-function TryGetEntryName(const ABuffer: TBytes; const AEntry: TEmbeddedUCDEntry;
-  const ANamesOffset, ANamesByteCount: Integer; out AName: string): Boolean;
+function TryCompareEntryName(const ABuffer: TBytes; const AEntry: TEmbeddedUCDEntry;
+  const ANamesOffset, ANamesByteCount: Integer; const AKey: string;
+  out ACompareResult: Integer): Boolean;
 var
   AbsoluteOffset, EntryEnd: Int64;
+  KeyLen, EntryLen, MinLen, I: Integer;
+  KeyByte, EntryByte: Byte;
 begin
   Result := False;
-  AName := '';
-
-  if not HasBytesAvailable(ABuffer, ANamesOffset, ANamesByteCount) then
-    Exit;
+  ACompareResult := 0;
 
   AbsoluteOffset := Int64(ANamesOffset) + AEntry.NameOffset;
   EntryEnd := Int64(AEntry.NameOffset) + AEntry.NameLength;
@@ -184,7 +184,34 @@ begin
   if not HasBytesAvailable(ABuffer, Integer(AbsoluteOffset), AEntry.NameLength) then
     Exit;
 
-  AName := CopyStringFromBytes(ABuffer, Integer(AbsoluteOffset), AEntry.NameLength);
+  KeyLen := Length(AKey);
+  EntryLen := AEntry.NameLength;
+  if KeyLen < EntryLen then
+    MinLen := KeyLen
+  else
+    MinLen := EntryLen;
+
+  for I := 0 to MinLen - 1 do
+  begin
+    KeyByte := Byte(AKey[I + 1]);
+    EntryByte := ABuffer[Integer(AbsoluteOffset) + I];
+    if KeyByte <> EntryByte then
+    begin
+      if KeyByte < EntryByte then
+        ACompareResult := -1
+      else
+        ACompareResult := 1;
+      Result := True;
+      Exit;
+    end;
+  end;
+
+  if KeyLen < EntryLen then
+    ACompareResult := -1
+  else if KeyLen > EntryLen then
+    ACompareResult := 1
+  else
+    ACompareResult := 0;
   Result := True;
 end;
 
@@ -193,7 +220,6 @@ function TryFindEmbeddedEntry(const ABuffer: TBytes; const AKey: string;
   out AEntry: TEmbeddedUCDEntry): Boolean;
 var
   LowIndex, HighIndex, MiddleIndex, CompareResult: Integer;
-  EntryName: string;
 begin
   Result := False;
   LowIndex := 0;
@@ -205,10 +231,10 @@ begin
     if not TryReadEmbeddedEntry(ABuffer, AEntryTableOffset, MiddleIndex, AEntry) then
       Exit;
 
-    if not TryGetEntryName(ABuffer, AEntry, ANamesOffset, ANamesByteCount, EntryName) then
+    if not TryCompareEntryName(ABuffer, AEntry, ANamesOffset, ANamesByteCount,
+      AKey, CompareResult) then
       Exit;
 
-    CompareResult := CompareStr(AKey, EntryName);
     if CompareResult = 0 then
     begin
       Result := True;
