@@ -27,7 +27,7 @@ import {
   BUNDLER,
   BENCHRUNNER,
 } from "./test-cli/binaries";
-import { containsLine } from "./test-cli/assertions";
+import { containsLine, runLoaderJson } from "./test-cli/assertions";
 import { makeTmpFactory, clean } from "./test-cli/tmpdir";
 
 const makeTmp = makeTmpFactory("goccia-apps-");
@@ -77,12 +77,7 @@ function assertCommonJsonFile(file: any, label: string, fileName: string, ok = t
 
 console.log("Loader: JSON output (interpreted)...");
 {
-  const proc = Bun.spawnSync([LOADER, "--output=json"], {
-    stdin: new TextEncoder().encode("console.log('hi'); 2 + 2;\n"),
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const json = JSON.parse(proc.stdout.toString());
+  const { json } = runLoaderJson("console.log('hi'); 2 + 2;\n");
   const file = json.files?.[0];
   if (json.ok !== true) throw new Error(`JSON ok should be true, got ${json.ok}`);
   if (json.fileName !== undefined) throw new Error(`JSON fileName should only be present per-file, got ${json.fileName}`);
@@ -107,12 +102,7 @@ console.log("Loader: JSON output (interpreted)...");
 
 console.log("Loader: JSON output (bytecode)...");
 {
-  const proc = Bun.spawnSync([LOADER, "--output=json", "--mode=bytecode"], {
-    stdin: new TextEncoder().encode("console.log('hi'); 2 + 2;\n"),
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const json = JSON.parse(proc.stdout.toString());
+  const { json } = runLoaderJson("console.log('hi'); 2 + 2;\n", ["--mode=bytecode"]);
   const file = json.files?.[0];
   if (json.ok !== true) throw new Error(`Bytecode JSON ok should be true, got ${json.ok}`);
   if (file?.result !== 4) throw new Error(`Bytecode JSON file result should be 4, got ${file?.result}`);
@@ -124,12 +114,7 @@ console.log("Loader: JSON output (bytecode)...");
 
 console.log("Loader: JSON undefined result...");
 {
-  const proc = Bun.spawnSync([LOADER, "--output=json"], {
-    stdin: new TextEncoder().encode("undefined;\n"),
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const json = JSON.parse(proc.stdout.toString());
+  const { json } = runLoaderJson("undefined;\n");
   if (json.ok !== true) throw new Error(`JSON undefined run should succeed, got ${json.ok}`);
   if (json.files?.[0]?.error !== null) throw new Error("JSON undefined result should not imply an error");
   if (json.files?.[0]?.result !== null) throw new Error(`JSON undefined result should serialize as null, got ${json.files?.[0]?.result}`);
@@ -137,12 +122,7 @@ console.log("Loader: JSON undefined result...");
 
 console.log("Loader: JSON stdout/stderr split...");
 {
-  const proc = Bun.spawnSync([LOADER, "--output=json"], {
-    stdin: new TextEncoder().encode("console.log('out'); console.error('err'); 1;\n"),
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const json = JSON.parse(proc.stdout.toString());
+  const { json } = runLoaderJson("console.log('out'); console.error('err'); 1;\n");
   if (!json.stdout?.includes("out")) throw new Error(`JSON stdout should contain "out", got ${json.stdout}`);
   if (!json.stderr?.includes("err")) throw new Error(`JSON stderr should contain "err", got ${json.stderr}`);
   if (!json.output?.includes("out") || !json.output?.includes("Error: err")) {
@@ -226,13 +206,8 @@ console.log("Loader: JSON source-load failure stays per-file...");
 
 console.log("Loader: compact-json omits build, memory, stdout, stderr...");
 {
-  const proc = Bun.spawnSync([LOADER, "--output=compact-json"], {
-    stdin: new TextEncoder().encode("console.log('hi'); console.error('warn'); 2 + 2;\n"),
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  if (proc.exitCode !== 0) throw new Error(`compact-json exited ${proc.exitCode}: ${proc.stderr.toString()}`);
-  const json = JSON.parse(proc.stdout.toString());
+  const { exitCode, json, stderr } = runLoaderJson("console.log('hi'); console.error('warn'); 2 + 2;\n", ["--output=compact-json"]);
+  if (exitCode !== 0) throw new Error(`compact-json exited ${exitCode}: ${stderr}`);
   if ("build" in json) throw new Error("compact-json should omit top-level build");
   if ("memory" in json) throw new Error("compact-json should omit top-level memory");
   if ("stdout" in json) throw new Error("compact-json should omit top-level stdout");
@@ -258,13 +233,8 @@ console.log("Loader: compact-json omits build, memory, stdout, stderr...");
 
 console.log("Loader: compact-json error path omits build, memory, stdout, stderr...");
 {
-  const proc = Bun.spawnSync([LOADER, "--output=compact-json"], {
-    stdin: new TextEncoder().encode("throw new Error('boom');\n"),
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  if (proc.exitCode === 0) throw new Error("compact-json error path should set non-zero exit code");
-  const json = JSON.parse(proc.stdout.toString());
+  const { exitCode, json } = runLoaderJson("throw new Error('boom');\n", ["--output=compact-json"]);
+  if (exitCode === 0) throw new Error("compact-json error path should set non-zero exit code");
   if ("build" in json) throw new Error("compact-json error should omit top-level build");
   if ("memory" in json) throw new Error("compact-json error should omit top-level memory");
   if ("stdout" in json) throw new Error("compact-json error should omit top-level stdout");
@@ -669,12 +639,7 @@ console.log("Loader: Promise.then drain (bytecode)...");
 
 console.log("Loader: --global flag...");
 {
-  const proc = Bun.spawnSync([LOADER, "--global", "x=10", "--global", "y=20", "--output=json"], {
-    stdin: new TextEncoder().encode("x + y;\n"),
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const json = JSON.parse(proc.stdout.toString());
+  const { json } = runLoaderJson("x + y;\n", ["--global", "x=10", "--global", "y=20"]);
   if (json.files?.[0]?.result !== 30) throw new Error(`--global x+y should be 30, got ${json.files?.[0]?.result}`);
 }
 
@@ -684,12 +649,7 @@ console.log("Loader: --globals file...");
   try {
     const globalsPath = join(tmp, "globals.json");
     writeFileSync(globalsPath, JSON.stringify({ name: "goccia" }));
-    const proc = Bun.spawnSync([LOADER, `--globals=${globalsPath}`, "--output=json", "--mode=bytecode"], {
-      stdin: new TextEncoder().encode("name;\n"),
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    const json = JSON.parse(proc.stdout.toString());
+    const { json } = runLoaderJson("name;\n", [`--globals=${globalsPath}`, "--mode=bytecode"]);
     if (json.files?.[0]?.result !== "goccia") throw new Error(`--globals should set name to "goccia", got ${json.files?.[0]?.result}`);
   } finally {
     clean(tmp);
@@ -710,13 +670,8 @@ console.log("Loader: --globals JSON5 file...");
       "}",
       "",
     ].join("\n"));
-    const proc = Bun.spawnSync([LOADER, `--globals=${globalsPath}`, "--output=json"], {
-      stdin: new TextEncoder().encode("unquoted + ':' + maxRetries + ':' + nested.enabled;\n"),
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    if (proc.exitCode !== 0) throw new Error(`--globals JSON5 exited ${proc.exitCode}: ${proc.stderr.toString()}`);
-    const json = JSON.parse(proc.stdout.toString());
+    const { exitCode, json, stderr } = runLoaderJson("unquoted + ':' + maxRetries + ':' + nested.enabled;\n", [`--globals=${globalsPath}`]);
+    if (exitCode !== 0) throw new Error(`--globals JSON5 exited ${exitCode}: ${stderr}`);
     if (json.files?.[0]?.result !== "goccia:3:true")
       throw new Error(`--globals JSON5 should inject parsed values, got ${json.files?.[0]?.result}`);
   } finally {
@@ -737,13 +692,8 @@ console.log("Loader: --globals TOML file...");
       "count = 3",
       "",
     ].join("\n"));
-    const proc = Bun.spawnSync([LOADER, `--globals=${globalsPath}`, "--output=json", "--mode=bytecode"], {
-      stdin: new TextEncoder().encode(`name + ':' + globalThis["${quotedKey}"] + ':' + count;\n`),
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    if (proc.exitCode !== 0) throw new Error(`--globals TOML exited ${proc.exitCode}: ${proc.stderr.toString()}`);
-    const json = JSON.parse(proc.stdout.toString());
+    const { exitCode, json, stderr } = runLoaderJson(`name + ':' + globalThis["${quotedKey}"] + ':' + count;\n`, [`--globals=${globalsPath}`, "--mode=bytecode"]);
+    if (exitCode !== 0) throw new Error(`--globals TOML exited ${exitCode}: ${stderr}`);
     if (json.files?.[0]?.result !== "Jos\u00e9:vu:3")
       throw new Error(`--globals TOML should inject UTF-8 parsed values, got ${json.files?.[0]?.result}`);
   } finally {
@@ -757,12 +707,7 @@ console.log("Loader: --global overrides --globals file...");
   try {
     const globalsPath = join(tmp, "globals.json");
     writeFileSync(globalsPath, JSON.stringify({ name: "goccia" }));
-    const proc = Bun.spawnSync([LOADER, `--globals=${globalsPath}`, "--global", "name=override", "--output=json"], {
-      stdin: new TextEncoder().encode("name;\n"),
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    const json = JSON.parse(proc.stdout.toString());
+    const { json } = runLoaderJson("name;\n", [`--globals=${globalsPath}`, "--global", "name=override"]);
     if (json.files?.[0]?.result !== "override") throw new Error(`--global should override --globals, got ${json.files?.[0]?.result}`);
   } finally {
     clean(tmp);
@@ -775,12 +720,7 @@ console.log("Loader: --globals from JS module...");
   try {
     const moduleJsPath = join(tmp, "module.js");
     writeFileSync(moduleJsPath, 'export const name = "module-value";\n');
-    const proc = Bun.spawnSync([LOADER, `--globals=${moduleJsPath}`, "--output=json"], {
-      stdin: new TextEncoder().encode("name;\n"),
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    const json = JSON.parse(proc.stdout.toString());
+    const { json } = runLoaderJson("name;\n", [`--globals=${moduleJsPath}`]);
     if (json.files?.[0]?.result !== "module-value") throw new Error(`--globals JS module should set name, got ${json.files?.[0]?.result}`);
   } finally {
     clean(tmp);
@@ -804,13 +744,8 @@ console.log("Loader: coverage summary...");
 
 console.log("Loader: coverage --output=json not corrupted...");
 {
-  const proc = Bun.spawnSync([LOADER, "--coverage", "--output=json"], {
-    stdin: new TextEncoder().encode("const x = 1 + 2;\nx;\n"),
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const firstLine = proc.stdout.toString().trimStart().split("\n")[0];
-  if (!firstLine.startsWith("{")) throw new Error(`Coverage --output=json first line should start with "{", got: ${firstLine}`);
+  const { json } = runLoaderJson("const x = 1 + 2;\nx;\n", ["--coverage"]);
+  if (json.ok === undefined) throw new Error(`Coverage --output=json should produce valid JSON with ok field`);
 }
 
 {
@@ -1718,17 +1653,12 @@ console.log("Loader: --allowed-host multiple hosts...");
 
 console.log("Loader: HTTPS fetch smoke with --allowed-host...");
 {
-  const proc = Bun.spawnSync([LOADER, "--output=json", "--asi", "--allowed-host=www.gstatic.com"], {
-    stdin: new TextEncoder().encode(
-      'const response = await fetch("https://www.gstatic.com/generate_204", { method: "HEAD" });\nresponse.status;\n',
-    ),
-    stdout: "pipe",
-    stderr: "pipe",
-    timeout: 10_000,
-  });
-  if (proc.exitedDueToTimeout) throw new Error("HTTPS fetch timed out after 10 seconds");
-  if (proc.exitCode !== 0) throw new Error(`HTTPS fetch should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
-  const json = JSON.parse(proc.stdout.toString());
+  const { exitCode, json, stderr } = runLoaderJson(
+    'const response = await fetch("https://www.gstatic.com/generate_204", { method: "HEAD" });\nresponse.status;\n',
+    ["--asi", "--allowed-host=www.gstatic.com"],
+    { timeout: 10_000 },
+  );
+  if (exitCode !== 0) throw new Error(`HTTPS fetch should exit 0, got ${exitCode}: ${stderr}`);
   if (json.ok !== true) throw new Error(`HTTPS fetch JSON ok should be true, got ${json.ok}`);
   if (json.files?.[0]?.result !== 204) throw new Error(`HTTPS fetch status should be 204, got ${json.files?.[0]?.result}`);
 }
@@ -1774,15 +1704,11 @@ console.log("Loader: --multifile splits a single file into N section results..."
 
 console.log("Loader: --multifile on stdin produces <stdin>[partN] entries...");
 {
-  const proc = Bun.spawnSync([LOADER, "--multifile", "--output=json"], {
-    stdin: new TextEncoder().encode(
-      "console.log('a');\n---\nconsole.log('b');\n---\nconsole.log('c');\n",
-    ),
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  if (proc.exitCode !== 0) throw new Error(`Loader --multifile stdin should exit 0, got ${proc.exitCode}`);
-  const json = JSON.parse(proc.stdout.toString());
+  const { exitCode, json } = runLoaderJson(
+    "console.log('a');\n---\nconsole.log('b');\n---\nconsole.log('c');\n",
+    ["--multifile"],
+  );
+  if (exitCode !== 0) throw new Error(`Loader --multifile stdin should exit 0, got ${exitCode}`);
   if (json.files?.length !== 3) throw new Error(`Loader --multifile stdin should produce 3 entries, got ${json.files?.length}`);
   for (let i = 0; i < 3; i++) {
     const expected = `<stdin>[part${i + 1}]`;

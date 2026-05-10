@@ -79,6 +79,22 @@ describe("Iterator.prototype.flatMap()", () => {
     expect(result).toEqual([10, 30, 20, 10, 30]);
   });
 
+  test("flatMap TypeError is preserved when source .return() throws", () => {
+    let closed = 0;
+    const source = Iterator.from({
+      next() {
+        return { value: 42, done: false };
+      },
+      return() {
+        closed = closed + 1;
+        throw new RangeError("close boom");
+      },
+    });
+
+    expect(() => source.flatMap((x) => x * 10).next()).toThrow(TypeError);
+    expect(closed).toBe(1);
+  });
+
   test("flatMap can consume dropped inner iterators", () => {
     const result = Iterator.from([3, 5, 7][Symbol.iterator]())
       .flatMap((n) =>
