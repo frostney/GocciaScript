@@ -166,6 +166,25 @@ begin
 
   ReadOptions(AOptions);
 
+  // Default calendar and numberingSystem
+  if FCalendar = '' then
+    FCalendar := 'gregory';
+  if FNumberingSystem = '' then
+    FNumberingSystem := 'latn';
+
+  // ECMA-402: when no dateStyle/timeStyle and no component properties,
+  // default to { year: "numeric", month: "numeric", day: "numeric" }
+  if (FDateStyle = '') and (FTimeStyle = '') and
+     (FWeekday = '') and (FEra = '') and (FYear = '') and
+     (FMonth = '') and (FDay = '') and (FDayPeriod = '') and
+     (FHour = '') and (FMinute = '') and (FSecond = '') and
+     (FTimeZoneName = '') then
+  begin
+    FYear := 'numeric';
+    FMonth := 'numeric';
+    FDay := 'numeric';
+  end;
+
   // Build resolved ICU options
   FResolvedOptions := DefaultDateTimeFormatOptions;
   FResolvedOptions.DateStyle := DateStyleStringToEnum(FDateStyle);
@@ -307,43 +326,43 @@ begin
   DTF := AsDateTimeFormat(AThisValue, 'Intl.DateTimeFormat.prototype.resolvedOptions');
   Obj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
   Obj.AssignProperty('locale', TGocciaStringLiteralValue.Create(DTF.FLocale));
-  if DTF.FDateStyle <> '' then
-    Obj.AssignProperty('dateStyle', TGocciaStringLiteralValue.Create(DTF.FDateStyle));
-  if DTF.FTimeStyle <> '' then
-    Obj.AssignProperty('timeStyle', TGocciaStringLiteralValue.Create(DTF.FTimeStyle));
-  if DTF.FCalendar <> '' then
-    Obj.AssignProperty('calendar', TGocciaStringLiteralValue.Create(DTF.FCalendar));
-  if DTF.FNumberingSystem <> '' then
-    Obj.AssignProperty('numberingSystem', TGocciaStringLiteralValue.Create(DTF.FNumberingSystem));
-  if DTF.FTimeZone <> '' then
-    Obj.AssignProperty('timeZone', TGocciaStringLiteralValue.Create(DTF.FTimeZone));
+  Obj.AssignProperty('calendar', TGocciaStringLiteralValue.Create(DTF.FCalendar));
+  Obj.AssignProperty('numberingSystem', TGocciaStringLiteralValue.Create(DTF.FNumberingSystem));
+  Obj.AssignProperty('timeZone', TGocciaStringLiteralValue.Create(DTF.FTimeZone));
   if DTF.FHour12 >= 0 then
     Obj.AssignProperty('hour12', TGocciaBooleanLiteralValue.Create(DTF.FHour12 = 1));
   if DTF.FHourCycle <> '' then
     Obj.AssignProperty('hourCycle', TGocciaStringLiteralValue.Create(DTF.FHourCycle));
-  if DTF.FWeekday <> '' then
-    Obj.AssignProperty('weekday', TGocciaStringLiteralValue.Create(DTF.FWeekday));
-  if DTF.FEra <> '' then
-    Obj.AssignProperty('era', TGocciaStringLiteralValue.Create(DTF.FEra));
-  if DTF.FYear <> '' then
-    Obj.AssignProperty('year', TGocciaStringLiteralValue.Create(DTF.FYear));
-  if DTF.FMonth <> '' then
-    Obj.AssignProperty('month', TGocciaStringLiteralValue.Create(DTF.FMonth));
-  if DTF.FDay <> '' then
-    Obj.AssignProperty('day', TGocciaStringLiteralValue.Create(DTF.FDay));
-  if DTF.FDayPeriod <> '' then
-    Obj.AssignProperty('dayPeriod', TGocciaStringLiteralValue.Create(DTF.FDayPeriod));
-  if DTF.FHour <> '' then
-    Obj.AssignProperty('hour', TGocciaStringLiteralValue.Create(DTF.FHour));
-  if DTF.FMinute <> '' then
-    Obj.AssignProperty('minute', TGocciaStringLiteralValue.Create(DTF.FMinute));
-  if DTF.FSecond <> '' then
-    Obj.AssignProperty('second', TGocciaStringLiteralValue.Create(DTF.FSecond));
-  if DTF.FFractionalSecondDigits >= 0 then
-    Obj.AssignProperty('fractionalSecondDigits',
-      TGocciaNumberLiteralValue.Create(DTF.FFractionalSecondDigits));
-  if DTF.FTimeZoneName <> '' then
-    Obj.AssignProperty('timeZoneName', TGocciaStringLiteralValue.Create(DTF.FTimeZoneName));
+  if DTF.FDateStyle <> '' then
+    Obj.AssignProperty('dateStyle', TGocciaStringLiteralValue.Create(DTF.FDateStyle));
+  if DTF.FTimeStyle <> '' then
+    Obj.AssignProperty('timeStyle', TGocciaStringLiteralValue.Create(DTF.FTimeStyle));
+  if (DTF.FDateStyle = '') and (DTF.FTimeStyle = '') then
+  begin
+    if DTF.FWeekday <> '' then
+      Obj.AssignProperty('weekday', TGocciaStringLiteralValue.Create(DTF.FWeekday));
+    if DTF.FEra <> '' then
+      Obj.AssignProperty('era', TGocciaStringLiteralValue.Create(DTF.FEra));
+    if DTF.FYear <> '' then
+      Obj.AssignProperty('year', TGocciaStringLiteralValue.Create(DTF.FYear));
+    if DTF.FMonth <> '' then
+      Obj.AssignProperty('month', TGocciaStringLiteralValue.Create(DTF.FMonth));
+    if DTF.FDay <> '' then
+      Obj.AssignProperty('day', TGocciaStringLiteralValue.Create(DTF.FDay));
+    if DTF.FDayPeriod <> '' then
+      Obj.AssignProperty('dayPeriod', TGocciaStringLiteralValue.Create(DTF.FDayPeriod));
+    if DTF.FHour <> '' then
+      Obj.AssignProperty('hour', TGocciaStringLiteralValue.Create(DTF.FHour));
+    if DTF.FMinute <> '' then
+      Obj.AssignProperty('minute', TGocciaStringLiteralValue.Create(DTF.FMinute));
+    if DTF.FSecond <> '' then
+      Obj.AssignProperty('second', TGocciaStringLiteralValue.Create(DTF.FSecond));
+    if DTF.FFractionalSecondDigits >= 0 then
+      Obj.AssignProperty('fractionalSecondDigits',
+        TGocciaNumberLiteralValue.Create(DTF.FFractionalSecondDigits));
+    if DTF.FTimeZoneName <> '' then
+      Obj.AssignProperty('timeZoneName', TGocciaStringLiteralValue.Create(DTF.FTimeZoneName));
+  end;
   Result := Obj;
 end;
 
