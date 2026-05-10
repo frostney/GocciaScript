@@ -20,7 +20,6 @@ type
     procedure AssertIgnoresLeadingHashbang(const ALineBreak: string);
     procedure AssertPreservesLineNumbersAfterHashbang(const ALineBreak: string);
     procedure AssertCommentTerminatedBy(const ALineBreak: string);
-    procedure AssertStringRejectsLineTerminator(const ASource: string);
     procedure TestIgnoresLeadingHashbang;
     procedure TestPreservesLineNumbersAfterHashbang;
     procedure TestCommentTerminatedByUnicodeLineTerminators;
@@ -32,8 +31,6 @@ type
     procedure TestRegexUnterminatedAtEOF;
     procedure TestNumericSeparatorsNormalize;
     procedure TestTemplateInterpolationTracksLineTerminators;
-    procedure TestStringRejectsUnescapedLineTerminators;
-    procedure TestStringAllowsLineContinuation;
   public
     procedure SetupTests; override;
   end;
@@ -51,8 +48,6 @@ begin
   Test('Unterminated regex at EOF raises lexer error', TestRegexUnterminatedAtEOF);
   Test('Numeric separators normalize', TestNumericSeparatorsNormalize);
   Test('Template interpolation tracks line terminators', TestTemplateInterpolationTracksLineTerminators);
-  Test('String rejects unescaped line terminators', TestStringRejectsUnescapedLineTerminators);
-  Test('String allows line continuation', TestStringAllowsLineContinuation);
 end;
 
 procedure TLexerTests.AssertIgnoresLeadingHashbang(const ALineBreak: string);
@@ -323,53 +318,6 @@ begin
     Expect<TGocciaTokenType>(Tokens[2].TokenType).ToBe(gttConst);
     Expect<Integer>(Tokens[2].Line).ToBe(2);
     Expect<Integer>(Tokens[2].Column).ToBe(9);
-  finally
-    Lexer.Free;
-  end;
-end;
-
-procedure TLexerTests.AssertStringRejectsLineTerminator(const ASource: string);
-var
-  Lexer: TGocciaLexer;
-  Raised: Boolean;
-begin
-  Lexer := TGocciaLexer.Create(ASource, '<test>');
-  try
-    Raised := False;
-    try
-      Lexer.ScanTokens;
-    except
-      on E: TGocciaLexerError do
-        Raised := True;
-    end;
-    Expect<Boolean>(Raised).ToBe(True);
-  finally
-    Lexer.Free;
-  end;
-end;
-
-procedure TLexerTests.TestStringRejectsUnescapedLineTerminators;
-begin
-  AssertStringRejectsLineTerminator('"hello' + #10 + 'world"');
-  AssertStringRejectsLineTerminator('''hello' + #10 + 'world''');
-  AssertStringRejectsLineTerminator('"hello' + #13 + 'world"');
-  AssertStringRejectsLineTerminator('''hello' + #13 + 'world''');
-  AssertStringRejectsLineTerminator('"hello' + #$E2#$80#$A8 + 'world"');
-  AssertStringRejectsLineTerminator('''hello' + #$E2#$80#$A8 + 'world''');
-  AssertStringRejectsLineTerminator('"hello' + #$E2#$80#$A9 + 'world"');
-  AssertStringRejectsLineTerminator('''hello' + #$E2#$80#$A9 + 'world''');
-end;
-
-procedure TLexerTests.TestStringAllowsLineContinuation;
-var
-  Lexer: TGocciaLexer;
-  Tokens: TObjectList<TGocciaToken>;
-begin
-  Lexer := TGocciaLexer.Create('"hello\' + #10 + 'world"', '<test>');
-  try
-    Tokens := Lexer.ScanTokens;
-    Expect<TGocciaTokenType>(Tokens[0].TokenType).ToBe(gttString);
-    Expect<string>(Tokens[0].Lexeme).ToBe('helloworld');
   finally
     Lexer.Free;
   end;

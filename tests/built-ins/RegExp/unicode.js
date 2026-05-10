@@ -203,14 +203,14 @@ test("\\p{Z} shorthand for Separator", () => {
 // --- Multi-byte UTF-8 code point handling ---
 
 test("dot matches multi-byte BMP characters in dotAll mode", () => {
-  expect(/^.$/s.test("\u2028")).toBe(true);
-  expect(/^.$/s.test("\u2029")).toBe(true);
+  expect(/^.$/s.test(" ")).toBe(true);
+  expect(/^.$/s.test(" ")).toBe(true);
   expect(/^.$/s.test("")).toBe(true);
 });
 
 test("dot rejects line terminators without dotAll", () => {
-  expect(/^.$/.test("\u2028")).toBe(false);
-  expect(/^.$/.test("\u2029")).toBe(false);
+  expect(/^.$/.test(" ")).toBe(false);
+  expect(/^.$/.test(" ")).toBe(false);
   expect(/^.$/.test("\n")).toBe(false);
   expect(/^.$/.test("\r")).toBe(false);
 });

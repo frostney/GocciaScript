@@ -966,7 +966,7 @@ begin
   SB := TStringBuffer.Create;
   while (Peek <> Quote) and not IsAtEnd do
   begin
-    if IsLineTerminator then
+    if (Peek = #10) or (Peek = #13) then
       raise TGocciaLexerError.Create('String literals cannot contain unescaped line terminators',
         FLine, FColumn, FFileName, GetSourceLines, SSuggestStringLineTerminator);
 

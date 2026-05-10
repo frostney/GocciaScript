@@ -15,3 +15,8 @@ right").toBe("leftright");
   expect('left\
 right').toBe("leftright");
 });
+
+test("LS and PS are valid in string literals (ES2019)", () => {
+  expect("hello world").toBe("hello" + String.fromCharCode(0x2028) + "world");
+  expect('hello world').toBe("hello" + String.fromCharCode(0x2029) + "world");
+});
