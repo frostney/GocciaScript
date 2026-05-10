@@ -44,8 +44,8 @@ type
     property Suggestion: string read FSuggestion write FSuggestion;
   end;
 
-  TGocciaLexerError = class(TGocciaError);
   TGocciaSyntaxError = class(TGocciaError);
+  TGocciaLexerError = class(TGocciaSyntaxError);
   TGocciaRuntimeError = class(TGocciaError);
   TGocciaTypeError = class(TGocciaRuntimeError);
   TGocciaReferenceError = class(TGocciaRuntimeError);
@@ -82,8 +82,6 @@ begin
     Result := 'SyntaxError'
   else if AError is TGocciaRuntimeError then
     Result := 'RuntimeError'
-  else if AError is TGocciaLexerError then
-    Result := 'SyntaxError'
   else
     Result := 'Error';
 end;

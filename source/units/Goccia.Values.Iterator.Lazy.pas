@@ -508,8 +508,13 @@ begin
     FInnerIterator := ResolveIterator(MappedValue);
     if not Assigned(FInnerIterator) then
     begin
-      FSourceIterator.Close;
-      ThrowTypeError(SErrorIteratorFlatMapMustReturnIterable, SSuggestIteratorFlatMapCallable);
+      try
+        ThrowTypeError(SErrorIteratorFlatMapMustReturnIterable, SSuggestIteratorFlatMapCallable);
+      except
+        AcquireExceptionObject;
+        CloseIteratorPreservingError(FSourceIterator);
+        raise;
+      end;
     end;
 
     InnerResult := FInnerIterator.AdvanceNext;
@@ -562,8 +567,13 @@ begin
     FInnerIterator := ResolveIterator(MappedValue);
     if not Assigned(FInnerIterator) then
     begin
-      FSourceIterator.Close;
-      ThrowTypeError(SErrorIteratorFlatMapMustReturnIterable, SSuggestIteratorFlatMapCallable);
+      try
+        ThrowTypeError(SErrorIteratorFlatMapMustReturnIterable, SSuggestIteratorFlatMapCallable);
+      except
+        AcquireExceptionObject;
+        CloseIteratorPreservingError(FSourceIterator);
+        raise;
+      end;
     end;
 
     InnerValue := FInnerIterator.DirectNext(InnerDone);

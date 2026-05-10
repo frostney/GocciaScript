@@ -79,4 +79,34 @@ console.log("String line continuation...");
   }
 }
 
+// -- Lexer errors surface as SyntaxError (#626) ---------------------------------
+
+console.log("Lexer errors are SyntaxError...");
+{
+  const cases: [string, string][] = [
+    ["'unterminated", "unterminated single-quoted string"],
+    ['"unterminated', "unterminated double-quoted string"],
+    ["`unterminated", "unterminated template literal"],
+    ["'\\xZZ'", "invalid hex escape"],
+    ["'\\u{ZZZZ}'", "invalid unicode escape"],
+  ];
+
+  for (const [source, desc] of cases) {
+    const proc = Bun.spawnSync([LOADER, "--output=json"], {
+      stdin: new TextEncoder().encode(source + "\n"),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode === 0) {
+      throw new Error(`Lexer error "${desc}" should fail, but exited 0`);
+    }
+    const json = JSON.parse(proc.stdout.toString());
+    if (json.ok !== false || json.error?.type !== "SyntaxError") {
+      throw new Error(
+        `Lexer error "${desc}" should be SyntaxError, got ok=${json.ok} type=${json.error?.type}`
+      );
+    }
+  }
+}
+
 console.log("\nAll test-cli-lexer.ts tests passed.");

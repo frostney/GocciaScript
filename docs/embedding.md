@@ -762,19 +762,21 @@ try
 except
   on E: TGocciaRuntimeError do
     WriteLn('Runtime error: ', E.Message);
-  on E: TGocciaSyntaxError do
-    WriteLn('Syntax error: ', E.Message);
   on E: TGocciaLexerError do
     WriteLn('Lexer error: ', E.Message);
+  on E: TGocciaSyntaxError do
+    WriteLn('Syntax error: ', E.Message);
   on E: Exception do
     WriteLn('Unexpected error: ', E.Message);
 end;
 ```
 
+`TGocciaLexerError` inherits from `TGocciaSyntaxError`, so catching `TGocciaSyntaxError` alone covers both lexer and parser errors. Catch `TGocciaLexerError` first only when you need to distinguish them for diagnostics.
+
 | Exception Class | When |
 |----------------|------|
-| `TGocciaLexerError` | Invalid tokens (unterminated strings, invalid characters) |
-| `TGocciaSyntaxError` | Parse failures (unexpected token, missing semicolon) |
+| `TGocciaSyntaxError` | All early errors (base class for lexer and parser failures) |
+| `TGocciaLexerError` | Invalid tokens (unterminated strings, invalid characters) — subclass of `TGocciaSyntaxError` |
 | `TGocciaRuntimeError` | Execution errors (type errors, reference errors, throw statements) |
 | `TGocciaTypeError` | Type-specific runtime error |
 | `TGocciaReferenceError` | Undefined variable access |
