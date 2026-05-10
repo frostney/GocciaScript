@@ -184,30 +184,24 @@ console.log("--compat-function (Loader) + Bare loader compat parsing...");
 {
   const tmp = mkdtemp("goccia-func-");
   try {
-    // --compat-function on its own (Loader): no other flag would enable
-    // function declarations, so this exercises the flag in isolation.
     const fnSrc = join(tmp, "use-fn.js");
     writeFileSync(fnSrc, "function f() { return 7; }\nf();\n");
     const loaderOut = await $`${LOADER} --print ${fnSrc} --compat-function 2>&1`.text();
     if (!containsLine(loaderOut, "7")) throw new Error(`Loader --compat-function expected 7, got: ${loaderOut}`);
 
-    // Bare loader compat parsing — same flag combo run_test262_suite.ts uses.
-    // The bare loader has its own argv parser, so it needs direct coverage;
-    // otherwise only the full test262 suite exercises this path.
+    // Bare loader argv path — covered here so the full test262 suite isn't the
+    // only thing exercising it.  Flag combo mirrors run_test262_suite.ts.
     const bothSrc = join(tmp, "use-both.js");
-    writeFileSync(bothSrc, "var x = 10;\nfunction f() { return x; }\nf();\n");
+    writeFileSync(bothSrc, "var x = 22;\nfunction f() { return x; }\nf();\n");
     const bareOut = await $`${BARE} --print ${bothSrc} --compat-var --compat-function 2>&1`.text();
-    if (bareOut.trim() !== "10") throw new Error(`Bare --compat-var --compat-function expected 10, got: ${bareOut}`);
+    if (bareOut.trim() !== "22") throw new Error(`Bare --compat-var --compat-function expected 22, got: ${bareOut}`);
     const bareNoFlag = await $`${BARE} ${bothSrc} 2>&1`.nothrow();
     if (bareNoFlag.exitCode === 0) throw new Error("Bare without compat flags should reject var/function");
 
-    // --compat-traditional-for-loop via direct CLI flag (Bare).  The config-
-    // file path is covered by scripts/test-cli-config.ts; this checks the
-    // argv path.
     const forSrc = join(tmp, "use-for.js");
-    writeFileSync(forSrc, "let s = 0;\nfor (let i = 0; i < 5; i++) { s = s + i; }\ns;\n");
+    writeFileSync(forSrc, "let s = 0;\nfor (let i = 1; i <= 5; i++) { s = s + i; }\ns;\n");
     const forOut = await $`${BARE} --print ${forSrc} --compat-traditional-for-loop 2>&1`.text();
-    if (forOut.trim() !== "10") throw new Error(`Bare --compat-traditional-for-loop expected 10, got: ${forOut}`);
+    if (forOut.trim() !== "15") throw new Error(`Bare --compat-traditional-for-loop expected 15, got: ${forOut}`);
   } finally {
     clean(tmp);
   }

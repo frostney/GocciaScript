@@ -662,6 +662,18 @@ interface PerTestRecord {
   diagnostic?: string;
 }
 
+// test262 source is overwhelmingly semicolon-omitted; ASI is required to parse
+// the corpus.  --compat-var, --compat-function, --compat-traditional-for-loop,
+// and --unsafe-function-constructor are also unconditional: stock harness uses
+// `var`, `function`, traditional `for(;;)` loops, and `Function("return this;")()`.
+const TEST262_BARE_FLAGS: readonly string[] = [
+  "--asi",
+  "--compat-var",
+  "--compat-function",
+  "--compat-traditional-for-loop",
+  "--unsafe-function-constructor",
+];
+
 async function runOneTest(
   test: DiscoveredTest,
   cache: HarnessCache,
@@ -738,17 +750,8 @@ async function runOneTest(
     errorType: negative?.type,
   });
 
-  // test262 source is overwhelmingly semicolon-omitted; ASI is required to
-  // parse the corpus.  --compat-var, --compat-function,
-  // --compat-traditional-for-loop, and --unsafe-function-constructor are
-  // also unconditional: stock harness uses `var`, `function`, traditional
-  // `for(;;)` loops, and `Function("return this;")()`.
   const args = [
-    "--asi",
-    "--compat-var",
-    "--compat-function",
-    "--compat-traditional-for-loop",
-    "--unsafe-function-constructor",
+    ...TEST262_BARE_FLAGS,
     `--mode=${opts.mode}`,
     `--timeout=${opts.timeoutMs}`,
     `--max-memory=${opts.maxMemoryBytes}`,
