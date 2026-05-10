@@ -1655,7 +1655,7 @@ var
 begin
   Obj := ObjectExpr.Evaluate(AContext);
   Result := Value.Evaluate(AContext);
-  AssignProperty(Obj, PropertyName, Result, AContext.OnError, Line, Column);
+  AssignProperty(Obj, PropertyName, Result, AContext.OnError, Line, Column, AContext.NonStrictMode);
 end;
 
 function TGocciaComputedPropertyAssignmentExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
@@ -1672,7 +1672,7 @@ begin
   else
   begin
     PropName := TGocciaStringLiteralValue(PropertyValue).Value;
-    AssignProperty(Obj, PropName, Result, AContext.OnError, Line, Column);
+    AssignProperty(Obj, PropName, Result, AContext.OnError, Line, Column, AContext.NonStrictMode);
   end;
 end;
 
@@ -1736,7 +1736,7 @@ begin
       Exit(CurrentValue);
 
     Result := Value.Evaluate(AContext);
-    AssignProperty(Obj, PropertyName, Result, AContext.OnError, Line, Column);
+    AssignProperty(Obj, PropertyName, Result, AContext.OnError, Line, Column, AContext.NonStrictMode);
     Exit;
   end;
 
@@ -1747,7 +1747,7 @@ begin
       Exit(CurrentValue);
 
     Result := Value.Evaluate(AContext);
-    AssignProperty(Obj, PropertyName, Result, AContext.OnError, Line, Column);
+    AssignProperty(Obj, PropertyName, Result, AContext.OnError, Line, Column, AContext.NonStrictMode);
     Exit;
   end;
 
@@ -1758,7 +1758,7 @@ begin
       Exit(CurrentValue);
 
     Result := Value.Evaluate(AContext);
-    AssignProperty(Obj, PropertyName, Result, AContext.OnError, Line, Column);
+    AssignProperty(Obj, PropertyName, Result, AContext.OnError, Line, Column, AContext.NonStrictMode);
     Exit;
   end;
 
@@ -1855,7 +1855,7 @@ begin
       Exit(CurrentValue);
 
     Result := Value.Evaluate(AContext);
-    AssignProperty(Obj, PropName, Result, AContext.OnError, Line, Column);
+    AssignProperty(Obj, PropName, Result, AContext.OnError, Line, Column, AContext.NonStrictMode);
     Exit;
   end;
 
@@ -1924,7 +1924,7 @@ begin
       OldValue := TGocciaUndefinedLiteralValue.UndefinedValue;
     OldValue := ToNumericValue(OldValue);
     NewValue := PerformIncrement(OldValue, Operator = gttIncrement);
-    AssignProperty(Obj, PropName, NewValue, AContext.OnError, Line, Column);
+    AssignProperty(Obj, PropName, NewValue, AContext.OnError, Line, Column, AContext.NonStrictMode);
     if IsPrefix then
       Result := NewValue
     else

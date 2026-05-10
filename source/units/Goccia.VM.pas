@@ -6433,7 +6433,7 @@ begin
 
   if AObject is TGocciaObjectValue then
   begin
-    AObject.SetProperty(AKey, AValue);
+    TGocciaObjectValue(AObject).AssignProperty(AKey, AValue, True, FNonStrictMode);
     Exit;
   end;
 
@@ -9757,7 +9757,6 @@ var
   TopClosure: TGocciaBytecodeClosure;
   SavedModuleSourcePath: string;
   SavedModuleExports: TGocciaValueMap;
-  SavedNonStrict: Boolean;
   SavedNonStrictMode: Boolean;
 begin
   EmptyArgs := TGocciaArgumentsCollection.Create;
@@ -9766,15 +9765,9 @@ begin
   SavedModuleExports := FCurrentModuleExports;
   FCurrentModuleSourcePath := AModule.SourcePath;
   FCurrentModuleExports := TGocciaValueMap.Create;
-  SavedNonStrict := IsNonStrictAssignmentMode;
   SavedNonStrictMode := FNonStrictMode;
-  SetNonStrictAssignmentMode(FNonStrictMode);
-  // Detect top-level "use strict" directive via compiler flag
   if FNonStrictMode and AModule.TopLevel.HasStrictDirective then
-  begin
     FNonStrictMode := False;
-    SetNonStrictAssignmentMode(False);
-  end;
   try
     try
       Result := ExecuteClosure(TopClosure,
@@ -9784,7 +9777,6 @@ begin
       FCurrentModuleExports := SavedModuleExports;
       FCurrentModuleSourcePath := SavedModuleSourcePath;
       FNonStrictMode := SavedNonStrictMode;
-      SetNonStrictAssignmentMode(SavedNonStrict);
     end;
   finally
     TopClosure.Free;
@@ -9796,17 +9788,13 @@ function TGocciaVM.ExecuteFunction(const ATemplate: TGocciaFunctionTemplate): TG
 var
   EmptyArgs: TGocciaArgumentsCollection;
   TopClosure: TGocciaBytecodeClosure;
-  SavedNonStrict: Boolean;
 begin
   EmptyArgs := TGocciaArgumentsCollection.Create;
   TopClosure := TGocciaBytecodeClosure.Create(ATemplate);
-  SavedNonStrict := IsNonStrictAssignmentMode;
-  SetNonStrictAssignmentMode(FNonStrictMode);
   try
     Result := ExecuteClosure(TopClosure,
       TGocciaUndefinedLiteralValue.UndefinedValue, EmptyArgs);
   finally
-    SetNonStrictAssignmentMode(SavedNonStrict);
     TopClosure.Free;
     EmptyArgs.Free;
   end;

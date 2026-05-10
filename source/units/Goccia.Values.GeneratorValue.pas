@@ -521,7 +521,7 @@ begin
   // observe TGocciaEngine.SetStrictTypes updates made after the
   // generator's closure scope was created.
   Context.StrictTypes := FClosure.EffectiveStrictTypes;
-  Context.NonStrictMode := IsNonStrictAssignmentMode;
+  Context.NonStrictMode := not FStrictThis;
   Context.DisposalTracker := nil;
 
   for I := 0 to Length(FParameters) - 1 do
@@ -659,7 +659,7 @@ begin
   Context.CoverageEnabled := False;
   // EffectiveStrictTypes — see CreateContinuation above.
   Context.StrictTypes := FClosure.EffectiveStrictTypes;
-  Context.NonStrictMode := IsNonStrictAssignmentMode;
+  Context.NonStrictMode := not FStrictThis;
   Context.DisposalTracker := nil;
 
   for I := 0 to Length(FParameters) - 1 do

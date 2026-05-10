@@ -32,7 +32,7 @@ type
 
     // ES2026 §28.1.1 [[Set]](P, V, Receiver)
     procedure AssignProperty(const AName: string; const AValue: TGocciaValue;
-      const ACanCreate: Boolean = True); override;
+      const ACanCreate: Boolean = True; const ANonStrict: Boolean = False); override;
 
     // ES2026 §28.1.1 [[HasProperty]](P)
     function HasProperty(const AName: string): Boolean; override;
@@ -254,7 +254,8 @@ end;
 
 // ES2026 §28.1.1 [[Set]](P, V, Receiver)
 procedure TGocciaProxyValue.AssignProperty(const AName: string;
-  const AValue: TGocciaValue; const ACanCreate: Boolean = True);
+  const AValue: TGocciaValue; const ACanCreate: Boolean = True;
+  const ANonStrict: Boolean = False);
 var
   Trap: TGocciaValue;
   Args: TGocciaArgumentsCollection;

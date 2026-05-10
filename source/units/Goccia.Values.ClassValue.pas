@@ -271,7 +271,7 @@ type
     function TypeName: string; override;
     function GetProperty(const AName: string): TGocciaValue; override;
     function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; override;
-    procedure AssignProperty(const AName: string; const AValue: TGocciaValue; const ACanCreate: Boolean = True); override;
+    procedure AssignProperty(const AName: string; const AValue: TGocciaValue; const ACanCreate: Boolean = True; const ANonStrict: Boolean = False); override;
     procedure SetProperty(const AName: string; const AValue: TGocciaValue); override;
     function GetPrivateProperty(const AName: string; const AAccessClass: TGocciaClassValue): TGocciaValue;
     procedure SetPrivateProperty(const AName: string; const AValue: TGocciaValue; const AAccessClass: TGocciaClassValue);
@@ -1691,7 +1691,7 @@ begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
-procedure TGocciaInstanceValue.AssignProperty(const AName: string; const AValue: TGocciaValue; const ACanCreate: Boolean = True);
+procedure TGocciaInstanceValue.AssignProperty(const AName: string; const AValue: TGocciaValue; const ACanCreate: Boolean = True; const ANonStrict: Boolean = False);
 var
   Descriptor: TGocciaPropertyDescriptor;
   Args: TGocciaArgumentsCollection;

@@ -34,6 +34,7 @@ node_modules/
 scripts/__pycache__/
 
 tests-wasm/*.wasm
+results.json
 
 # FFI fixture binaries (built from source by fixtures/ffi/build.sh)
 fixtures/ffi/*.dylib

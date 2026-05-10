@@ -55,7 +55,7 @@ type
       const AByteOffset: Integer = 0; const ALength: Integer = -1); overload;
 
     function GetProperty(const AName: string): TGocciaValue; override;
-    procedure AssignProperty(const AName: string; const AValue: TGocciaValue; const ACanCreate: Boolean = True); override;
+    procedure AssignProperty(const AName: string; const AValue: TGocciaValue; const ACanCreate: Boolean = True; const ANonStrict: Boolean = False); override;
     function HasOwnProperty(const AName: string): Boolean; override;
     function ToStringTag: string; override;
 
@@ -706,7 +706,7 @@ begin
   Result := inherited GetProperty(AName);
 end;
 
-procedure TGocciaTypedArrayValue.AssignProperty(const AName: string; const AValue: TGocciaValue; const ACanCreate: Boolean);
+procedure TGocciaTypedArrayValue.AssignProperty(const AName: string; const AValue: TGocciaValue; const ACanCreate: Boolean; const ANonStrict: Boolean);
 var
   Index: Integer;
 begin

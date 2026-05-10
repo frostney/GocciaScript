@@ -183,7 +183,7 @@ begin
   Context.CoverageEnabled := Assigned(TGocciaCoverageTracker.Instance)
     and TGocciaCoverageTracker.Instance.Enabled;
   Context.StrictTypes := FClosure.EffectiveStrictTypes;
-  Context.NonStrictMode := IsNonStrictAssignmentMode;
+  Context.NonStrictMode := not FStrictThis;
   Context.DisposalTracker := nil;
 
   if Context.CoverageEnabled and (FSourceLine > 0) and (FSourceFilePath <> '') then

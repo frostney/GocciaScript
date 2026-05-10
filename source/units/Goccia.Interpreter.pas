@@ -21,7 +21,6 @@ uses
   Goccia.Modules.Loader,
   Goccia.Modules.Resolver,
   Goccia.Scope,
-  Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
 type
@@ -150,15 +149,10 @@ var
   I: Integer;
   CF: TGocciaControlFlow;
   Context: TGocciaEvaluationContext;
-  SavedNonStrict: Boolean;
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   Context := CreateEvaluationContext;
 
-  SavedNonStrict := IsNonStrictAssignmentMode;
-  SetNonStrictAssignmentMode(FNonStrictModeEnabled);
-
-  // Detect top-level "use strict" directive prologue
   if Context.NonStrictMode then
     for I := 0 to AProgram.Body.Count - 1 do
     begin
@@ -173,7 +167,6 @@ begin
         .Value = 'use strict' then
       begin
         Context.NonStrictMode := False;
-        SetNonStrictAssignmentMode(False);
         Break;
       end;
     end;
@@ -183,15 +176,11 @@ begin
   if FFunctionEnabled then
     HoistFunctionDeclarations(AProgram.Body, Context);
 
-  try
-    for I := 0 to AProgram.Body.Count - 1 do
-    begin
-      CF := EvaluateStatement(AProgram.Body[I], Context);
-      Result := CF.Value;
-      if CF.Kind = cfkReturn then Exit;
-    end;
-  finally
-    SetNonStrictAssignmentMode(SavedNonStrict);
+  for I := 0 to AProgram.Body.Count - 1 do
+  begin
+    CF := EvaluateStatement(AProgram.Body[I], Context);
+    Result := CF.Value;
+    if CF.Kind = cfkReturn then Exit;
   end;
 end;
 

@@ -11,7 +11,7 @@ uses
   Goccia.Values.SymbolValue;
 
 // Property assignment with error handling for non-objects
-procedure AssignProperty(const AObj: TGocciaValue; const APropertyName: string; const AValue: TGocciaValue; const AOnError: TGocciaThrowErrorCallback; const ALine, AColumn: Integer);
+procedure AssignProperty(const AObj: TGocciaValue; const APropertyName: string; const AValue: TGocciaValue; const AOnError: TGocciaThrowErrorCallback; const ALine, AColumn: Integer; const ANonStrict: Boolean = False);
 procedure AssignSymbolProperty(const AObj: TGocciaValue; const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue; const AOnError: TGocciaThrowErrorCallback; const ALine, AColumn: Integer);
 
 // Compound assignment operations
@@ -64,14 +64,17 @@ begin
   Result := nil;
 end;
 
-procedure AssignProperty(const AObj: TGocciaValue; const APropertyName: string; const AValue: TGocciaValue; const AOnError: TGocciaThrowErrorCallback; const ALine, AColumn: Integer);
+procedure AssignProperty(const AObj: TGocciaValue; const APropertyName: string; const AValue: TGocciaValue; const AOnError: TGocciaThrowErrorCallback; const ALine, AColumn: Integer; const ANonStrict: Boolean = False);
 var
   BoxedValue: TGocciaObjectValue;
 begin
   EnsureAssignableReceiver(AObj, APropertyName);
   if (AObj is TGocciaObjectValue) or (AObj is TGocciaClassValue) then
   begin
-    AObj.SetProperty(APropertyName, AValue);
+    if AObj is TGocciaObjectValue then
+      TGocciaObjectValue(AObj).AssignProperty(APropertyName, AValue, True, ANonStrict)
+    else
+      AObj.SetProperty(APropertyName, AValue);
     Exit;
   end;
 

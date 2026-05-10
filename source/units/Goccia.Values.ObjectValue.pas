@@ -47,7 +47,7 @@ type
 
     procedure DefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor); virtual;
     function TryDefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor): Boolean; virtual;
-    procedure AssignProperty(const AName: string; const AValue: TGocciaValue; const ACanCreate: Boolean = True); virtual;
+    procedure AssignProperty(const AName: string; const AValue: TGocciaValue; const ACanCreate: Boolean = True; const ANonStrict: Boolean = False); virtual;
     function AssignPropertyWithReceiver(const AName: string; const AValue: TGocciaValue; const AReceiver: TGocciaValue): Boolean; virtual;
 
     procedure RegisterNativeMethod(const AMethod: TGocciaValue);
@@ -104,8 +104,6 @@ type
     function ObjectPrototypeValueOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
-procedure SetNonStrictAssignmentMode(const AEnabled: Boolean);
-function IsNonStrictAssignmentMode: Boolean; inline;
 
 implementation
 
@@ -136,25 +134,9 @@ var
 threadvar
   FPrototypeMethodHost: TGocciaObjectValue;
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
-  // Controls whether ObjectValue.AssignProperty silently returns instead of
-  // throwing for non-writable/frozen/getter-only assignments. Set by the
-  // interpreter/VM at execution entry based on NonStrictModeEnabled.
-  // Single-threaded invariant: must only be accessed from the engine's
-  // execution thread.
-  GNonStrictAssignment: Boolean;
 
 const
   MAX_PROTOTYPE_CHAIN_DEPTH = 256;
-
-procedure SetNonStrictAssignmentMode(const AEnabled: Boolean);
-begin
-  GNonStrictAssignment := AEnabled;
-end;
-
-function IsNonStrictAssignmentMode: Boolean; inline;
-begin
-  Result := GNonStrictAssignment;
-end;
 
 procedure MarkPropertyDescriptor(const ADescriptor: TGocciaPropertyDescriptor);
 begin
@@ -472,7 +454,7 @@ begin
 end;
 
 // ES2026 §10.1.9 [[Set]](P, V, Receiver)
-procedure TGocciaObjectValue.AssignProperty(const AName: string; const AValue: TGocciaValue; const ACanCreate: Boolean = True);
+procedure TGocciaObjectValue.AssignProperty(const AName: string; const AValue: TGocciaValue; const ACanCreate: Boolean = True; const ANonStrict: Boolean = False);
 var
   Descriptor: TGocciaPropertyDescriptor;
   Accessor: TGocciaPropertyDescriptorAccessor;
@@ -482,7 +464,7 @@ var
 begin
   if FFrozen then
   begin
-    if GNonStrictAssignment then Exit;
+    if ANonStrict then Exit;
     ThrowTypeError(Format(SErrorReadOnlyPropertyFrozen, [AName]), SSuggestCannotDeleteNonConfigurable);
   end;
 
@@ -502,7 +484,7 @@ begin
         end;
         Exit;
       end;
-      if GNonStrictAssignment then Exit;
+      if ANonStrict then Exit;
       ThrowTypeError(Format(SErrorSetPropertyOnlyGetter, [AName, ToStringTag]), SSuggestPropertyHasOnlyGetter);
     end
     else if Descriptor is TGocciaPropertyDescriptorData then
@@ -512,7 +494,7 @@ begin
         TGocciaPropertyDescriptorData(Descriptor).Value := AValue;
         Exit;
       end;
-      if GNonStrictAssignment then Exit;
+      if ANonStrict then Exit;
       ThrowTypeError(Format(SErrorCannotAssignReadOnly, [AName]), SSuggestCannotDeleteNonConfigurable);
     end;
   end;
@@ -540,14 +522,14 @@ begin
           end;
           Exit;
         end;
-        if GNonStrictAssignment then Exit;
+        if ANonStrict then Exit;
         ThrowTypeError(Format(SErrorSetPropertyOnlyGetter, [AName, ToStringTag]), SSuggestPropertyHasOnlyGetter);
       end
       else if Descriptor is TGocciaPropertyDescriptorData then
       begin
         if not TGocciaPropertyDescriptorData(Descriptor).Writable then
         begin
-          if GNonStrictAssignment then Exit;
+          if ANonStrict then Exit;
           ThrowTypeError(Format(SErrorCannotAssignReadOnly, [AName]), SSuggestCannotDeleteNonConfigurable);
         end;
         Break;
@@ -558,13 +540,13 @@ begin
 
   if not ACanCreate then
   begin
-    if GNonStrictAssignment then Exit;
+    if ANonStrict then Exit;
     ThrowTypeError(Format(SErrorCannotAssignNonExistent, [AName]), SSuggestCannotDeleteNonConfigurable);
   end;
 
   if not FExtensible then
   begin
-    if GNonStrictAssignment then Exit;
+    if ANonStrict then Exit;
     ThrowTypeError(Format(SErrorCannotAddPropertyNotExtensible, [AName]), SSuggestObjectNotExtensible);
   end;
 
