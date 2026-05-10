@@ -518,7 +518,6 @@ var
   FileHosts: TStringList;
   HasFileHosts: Boolean;
   I: Integer;
-  CompatAll: Boolean;
 begin
   if not Assigned(AEngineOptions) then
     Exit;
@@ -531,22 +530,16 @@ begin
   AEngine.SourceType := ResolveSourceTypeOption(
     AEngineOptions.SourceType, AFileConfig);
 
-  { compat-all: meta-flag enabling every --compat-* option.  ORs into
-    each individual flag so embedders can opt into "as legacy-compatible
-    as the engine offers" without enumerating each flag. }
-  CompatAll := ResolveFlagOption(
-    AEngineOptions.CompatAll, AFileConfig, 'compat-all');
-
   { compat-var: CLI flag > per-file config > root config > default (false) }
-  AEngine.VarEnabled := CompatAll or ResolveFlagOption(
+  AEngine.VarEnabled := ResolveFlagOption(
     AEngineOptions.CompatVar, AFileConfig, 'compat-var');
 
   { compat-function: CLI flag > per-file config > root config > default (false) }
-  AEngine.FunctionEnabled := CompatAll or ResolveFlagOption(
+  AEngine.FunctionEnabled := ResolveFlagOption(
     AEngineOptions.CompatFunction, AFileConfig, 'compat-function');
 
   { compat-traditional-for-loop: CLI flag > per-file config > root config > default (false) }
-  AEngine.TraditionalForLoopsEnabled := CompatAll or ResolveFlagOption(
+  AEngine.TraditionalForLoopsEnabled := ResolveFlagOption(
     AEngineOptions.CompatTraditionalFor, AFileConfig, 'compat-traditional-for-loop');
 
   { strict-types: CLI flag > per-file config > root config > default (false) }
