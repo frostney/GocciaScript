@@ -216,17 +216,13 @@ test("dot rejects line terminators without dotAll", () => {
 });
 
 test("multiline ^ matches after newline in multi-byte context", () => {
-  expect(/^abc/m.test("xyz
-abc")).toBe(true);
-  expect(/^abc/m.test("é
-abc")).toBe(true);
+  expect(/^abc/m.test("xyz\nabc")).toBe(true);
+  expect(/^abc/m.test("é\nabc")).toBe(true);
 });
 
 test("multiline $ matches before newline in multi-byte context", () => {
-  expect(/abc$/m.test("abc
-xyz")).toBe(true);
-  expect(/abc$/m.test("abc
-é")).toBe(true);
+  expect(/abc$/m.test("abc\nxyz")).toBe(true);
+  expect(/abc$/m.test("abc\né")).toBe(true);
 });
 
 // --- Unicode mode syntax restrictions ---
