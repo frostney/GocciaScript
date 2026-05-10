@@ -680,7 +680,11 @@ end;
 
 function TGocciaScope.Contains(const AName: string): Boolean; inline;
 begin
-  Result := ContainsOwnLexicalBinding(AName) or
+  Result :=
+    ((FWithObject is TGocciaObjectValue) and
+     TGocciaObjectValue(FWithObject).HasProperty(AName) and
+     (not IsWithUnscopable(FWithObject, AName))) or
+    ContainsOwnLexicalBinding(AName) or
     ContainsOwnVarBinding(AName) or
     ((FScopeKind = skGlobal) and (FThisValue is TGocciaObjectValue) and
      TGocciaObjectValue(FThisValue).HasProperty(AName)) or

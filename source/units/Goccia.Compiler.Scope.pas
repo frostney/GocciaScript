@@ -176,6 +176,8 @@ begin
   FDepth := ADepth;
   FNextSlot := 0;
   FMaxSlot := 0;
+  if Assigned(AParent) then
+    FWithDepth := AParent.FWithDepth;
 end;
 
 destructor TGocciaCompilerScope.Destroy;

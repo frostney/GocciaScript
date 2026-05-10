@@ -93,7 +93,7 @@ type
     FActiveDecoratorSession: TObject;
     FCoverageEnabled: Boolean;
     FNonStrictMode: Boolean;
-    FWithStack: array of TGocciaObjectValue;
+    FWithScopeStack: array of TGocciaScope;
     FWithStackCount: Integer;
     FCurrentCallee: TGocciaValue;
     FProfilingOpcodes: Boolean;
@@ -743,6 +743,7 @@ type
   private
     FClosure: TGocciaBytecodeClosure;
     FVM: TGocciaVM;
+    FWithScope: TGocciaScope;
   protected
     function GetFunctionLength: Integer; override;
     function GetFunctionName: string; override;
@@ -3667,6 +3668,9 @@ begin
     if Assigned(Upvalue) and Assigned(Upvalue.Cell) then
       MarkRegisterReferences(Upvalue.Cell.Value);
   end;
+
+  if Assigned(FWithScope) then
+    FWithScope.MarkReferences;
 end;
 
 function TGocciaVM.ConstantToValue(const AConstant: TGocciaBytecodeConstant): TGocciaValue;
@@ -8705,6 +8709,8 @@ begin
         BytecodeFunction := TGocciaBytecodeFunctionValue.Create(Self, ChildClosure);
         if FNonStrictMode and (not ChildTemplate.HasStrictDirective) then
           BytecodeFunction.StrictThis := False;
+        if FWithStackCount > 0 then
+          BytecodeFunction.FWithScope := FGlobalScope;
         // ES2026 §10.2.5 MakeConstructor: install own `prototype` data property
         // for `function`/`function*` declarations and expressions (including
         // async generators).  The prototype is a fresh ordinary object whose
@@ -9282,33 +9288,33 @@ begin
         if (FRegisters[A].Kind = grkObject) and
            (FRegisters[A].ObjectValue is TGocciaObjectValue) then
         begin
-          if FWithStackCount >= Length(FWithStack) then
-            SetLength(FWithStack, FWithStackCount + 8);
-          FWithStack[FWithStackCount] :=
-            TGocciaObjectValue(FRegisters[A].ObjectValue);
+          if FWithStackCount >= Length(FWithScopeStack) then
+            SetLength(FWithScopeStack, FWithStackCount + 8);
+          FWithScopeStack[FWithStackCount] := FGlobalScope;
           Inc(FWithStackCount);
+          FGlobalScope := FGlobalScope.CreateChild(skCustom, 'with');
+          FGlobalScope.WithObject := FRegisters[A].ObjectValue;
         end;
       end;
 
       OP_WITH_LEAVE:
         if FWithStackCount > 0 then
+        begin
           Dec(FWithStackCount);
+          FGlobalScope := FWithScopeStack[FWithStackCount];
+        end;
 
       OP_WITH_GET:
       begin
         GlobalName := Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue;
-        RightValue := nil;
-        for I := FWithStackCount - 1 downto 0 do
-          if FWithStack[I].HasProperty(GlobalName) and
-             (not IsWithUnscopable(FWithStack[I], GlobalName)) then
-          begin
-            RightValue := FWithStack[I].GetProperty(GlobalName);
-            Break;
-          end;
-        if Assigned(RightValue) then
-          SetRegister(A, RightValue)
-        else if FGlobalScope.Contains(GlobalName) then
+        if FGlobalScope.Contains(GlobalName) then
           SetRegister(A, FGlobalScope.GetValue(GlobalName))
+        else if (FCurrentCallee is TGocciaBytecodeFunctionValue) and
+           Assigned(TGocciaBytecodeFunctionValue(FCurrentCallee).FWithScope) and
+           TGocciaBytecodeFunctionValue(FCurrentCallee).FWithScope.Contains(
+             GlobalName) then
+          SetRegister(A, TGocciaBytecodeFunctionValue(FCurrentCallee)
+            .FWithScope.GetValue(GlobalName))
         else
           ThrowReferenceError(Format('%s is not defined', [GlobalName]),
             '');
@@ -9317,17 +9323,14 @@ begin
       OP_WITH_SET:
       begin
         GlobalName := Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue;
-        RightValue := RegisterToValue(FRegisters[A]);
-        for I := FWithStackCount - 1 downto 0 do
-          if FWithStack[I].HasProperty(GlobalName) and
-             (not IsWithUnscopable(FWithStack[I], GlobalName)) then
-          begin
-            FWithStack[I].SetProperty(GlobalName, RightValue);
-            RightValue := nil;
-            Break;
-          end;
-        if Assigned(RightValue) then
-          FGlobalScope.AssignBinding(GlobalName, RightValue);
+        if FGlobalScope.Contains(GlobalName) then
+          FGlobalScope.AssignBinding(GlobalName, RegisterToValue(FRegisters[A]))
+        else if (FCurrentCallee is TGocciaBytecodeFunctionValue) and
+           Assigned(TGocciaBytecodeFunctionValue(FCurrentCallee).FWithScope) then
+          TGocciaBytecodeFunctionValue(FCurrentCallee).FWithScope.AssignBinding(
+            GlobalName, RegisterToValue(FRegisters[A]))
+        else
+          FGlobalScope.AssignBinding(GlobalName, RegisterToValue(FRegisters[A]));
       end;
 
       // ES2026 §13.3.10.1 ImportCall — import(specifier)
