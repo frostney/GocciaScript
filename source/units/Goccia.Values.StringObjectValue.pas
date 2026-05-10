@@ -126,18 +126,35 @@ end;
 function CoerceRegExpValue(const AValue: TGocciaValue;
   const ANewFlags: string = ''): TGocciaObjectValue;
 var
-  Pattern: string;
+  Pattern, Flags: string;
+  PropVal: TGocciaValue;
 begin
-  if IsRegExpInstance(AValue) then
-    Result := TGocciaObjectValue(CloneRegExpObject(AValue))
+  if IsRegExp(AValue) then
+  begin
+    PropVal := TGocciaObjectValue(AValue).GetProperty(PROP_SOURCE);
+    if PropVal is TGocciaUndefinedLiteralValue then
+      Pattern := ''
+    else
+      Pattern := PropVal.ToStringLiteral.Value;
+    if ANewFlags <> '' then
+      Flags := ANewFlags
+    else
+    begin
+      PropVal := TGocciaObjectValue(AValue).GetProperty(PROP_FLAGS);
+      if PropVal is TGocciaUndefinedLiteralValue then
+        Flags := ''
+      else
+        Flags := PropVal.ToStringLiteral.Value;
+    end;
+    Result := TGocciaObjectValue(CreateRegExpObject(Pattern, Flags));
+  end
   else
   begin
     if AValue is TGocciaUndefinedLiteralValue then
       Pattern := ''
     else
       Pattern := AValue.ToStringLiteral.Value;
-    Result := TGocciaObjectValue(CreateRegExpObject(
-      Pattern, ANewFlags));
+    Result := TGocciaObjectValue(CreateRegExpObject(Pattern, ANewFlags));
   end;
 end;
 
@@ -1394,48 +1411,7 @@ begin
     // Step 3 (spec): Let S be ? ToString(O). Only reached when no @@split.
     StringValue := ExtractStringValue(AThisValue);
 
-    if IsRegExpInstance(SeparatorArg) then
-    begin
-      RegexValue := CoerceRegExpValue(SeparatorArg);
-      TGarbageCollector.Instance.AddTempRoot(RegexValue);
-      try
-        PreviousIndex := 0;
-        SearchIndex := 0;
-        while MatchRegExpObjectValue(RegexValue, StringValue, SearchIndex,
-          False,
-          False, MatchArray, MatchIndex, MatchEnd, NextIndex) do
-        begin
-          ResultArray.Elements.Add(TGocciaStringLiteralValue.Create(
-            Copy(StringValue, PreviousIndex + 1, MatchIndex - PreviousIndex)));
-          if HasLimit and (Cardinal(ResultArray.Elements.Count) >= Limit) then
-            Break;
-
-          for I := 1 to TGocciaArrayValue(MatchArray).Elements.Count - 1 do
-          begin
-            ResultArray.Elements.Add(TGocciaArrayValue(MatchArray).Elements[I]);
-            if HasLimit and (Cardinal(ResultArray.Elements.Count) >= Limit) then
-              Break;
-          end;
-          if HasLimit and (Cardinal(ResultArray.Elements.Count) >= Limit) then
-            Break;
-
-          PreviousIndex := MatchEnd;
-          SearchIndex := NextIndex;
-          if SearchIndex > Length(StringValue) then
-            Break;
-        end;
-
-        if not HasLimit or (Cardinal(ResultArray.Elements.Count) < Limit) then
-          ResultArray.Elements.Add(TGocciaStringLiteralValue.Create(
-            Copy(StringValue, PreviousIndex + 1, Length(StringValue) - PreviousIndex)));
-
-        Result := ResultArray;
-      finally
-        TGarbageCollector.Instance.RemoveTempRoot(RegexValue);
-      end;
-      Exit;
-    end;
-
+    // §22.1.3.23 step 5: Let R be ? ToString(separator).
     Separator := SeparatorArg.ToStringLiteral.Value;
 
     // Step 5: If separator is undefined, return [S]
