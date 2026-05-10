@@ -198,6 +198,19 @@ console.log("--compat-function (Loader) + Bare loader compat parsing...");
     const bareNoFlag = await $`${BARE} ${bothSrc} 2>&1`.nothrow();
     if (bareNoFlag.exitCode === 0) throw new Error("Bare without compat flags should reject var/function");
 
+    // Stdin path — the exact shape run_test262_suite.ts uses (source piped
+    // into a `-` argument).  Without this, file-path is the only invocation
+    // mode covered.
+    const bareStdin = await $`cat ${bothSrc} | ${BARE} --print - --compat-var --compat-function 2>&1`.text();
+    if (bareStdin.trim() !== "22") throw new Error(`Bare stdin --compat-var --compat-function expected 22, got: ${bareStdin}`);
+
+    // --compat-all regression guard: the flag was removed and must now be
+    // rejected as an unknown option.
+    const bareCompatAll = await $`echo 'x;' | ${BARE} --compat-all - 2>&1`.nothrow();
+    const compatAllOut = bareCompatAll.stdout.toString();
+    if (bareCompatAll.exitCode === 0 || !compatAllOut.includes("--compat-all"))
+      throw new Error(`Bare must reject --compat-all, got exit ${bareCompatAll.exitCode}: ${compatAllOut}`);
+
     const forSrc = join(tmp, "use-for.js");
     writeFileSync(forSrc, "let s = 0;\nfor (let i = 1; i <= 5; i++) { s = s + i; }\ns;\n");
     const forOut = await $`${BARE} --print ${forSrc} --compat-traditional-for-loop 2>&1`.text();
