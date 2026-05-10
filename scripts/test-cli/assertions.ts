@@ -36,11 +36,17 @@ export function runLoaderJson(
     ],
     spawnOpts,
   );
-  return {
-    exitCode: proc.exitCode,
-    json: JSON.parse(proc.stdout.toString()),
-    stderr: proc.stderr.toString(),
-  };
+  const stdout = proc.stdout.toString();
+  const stderr = proc.stderr.toString();
+  let json: any;
+  try {
+    json = JSON.parse(stdout);
+  } catch (e: any) {
+    throw new Error(
+      `runLoaderJson: failed to parse JSON (exitCode=${proc.exitCode}): ${e.message}\nstderr: ${stderr}\nstdout: ${stdout}`,
+    );
+  }
+  return { exitCode: proc.exitCode, json, stderr };
 }
 
 export function assertSyntaxError(
