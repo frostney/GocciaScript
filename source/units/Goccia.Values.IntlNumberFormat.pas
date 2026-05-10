@@ -431,9 +431,11 @@ begin
     ThrowRangeError(Format(SErrorIntlDigitsOutOfRange, ['minimumFractionDigits', 0, 100]));
   if (FMaximumFractionDigits >= 0) and (FMaximumFractionDigits > 100) then
     ThrowRangeError(Format(SErrorIntlDigitsOutOfRange, ['maximumFractionDigits', 0, 100]));
-  if (FMinimumSignificantDigits > 0) and (FMinimumSignificantDigits > 21) then
+  if (FMinimumSignificantDigits >= 0) and
+     ((FMinimumSignificantDigits < 1) or (FMinimumSignificantDigits > 21)) then
     ThrowRangeError(Format(SErrorIntlDigitsOutOfRange, ['minimumSignificantDigits', 1, 21]));
-  if (FMaximumSignificantDigits > 0) and (FMaximumSignificantDigits > 21) then
+  if (FMaximumSignificantDigits >= 0) and
+     ((FMaximumSignificantDigits < 1) or (FMaximumSignificantDigits > 21)) then
     ThrowRangeError(Format(SErrorIntlDigitsOutOfRange, ['maximumSignificantDigits', 1, 21]));
 
   // Build resolved ICU options

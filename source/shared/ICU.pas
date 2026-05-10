@@ -156,6 +156,8 @@ initialization
 
 finalization
   DoneCriticalSection(InitLock);
+  if LibraryHandle <> NilHandle then
+    UnloadLibrary(LibraryHandle);
   {$IFDEF LINUX}
   if UCHandle <> NilHandle then
     UnloadLibrary(UCHandle);
