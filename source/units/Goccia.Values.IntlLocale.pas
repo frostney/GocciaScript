@@ -60,6 +60,7 @@ uses
   IntlTypes,
 
   Goccia.Error.Messages,
+  Goccia.Intl.Helpers,
   Goccia.ObjectModel.Types,
   Goccia.Realm,
   Goccia.Values.ErrorHelper,
@@ -123,62 +124,14 @@ begin
   // Apply options overrides
   if Assigned(AOptions) then
   begin
-    V := AOptions.GetProperty('language');
-    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-    begin
-      FLanguage := V.ToStringLiteral.Value;
-      if ContainsNulCharacter(FLanguage) then
-        ThrowRangeError(Format(SErrorIntlInvalidOption, [FLanguage, 'language']));
-    end;
-    V := AOptions.GetProperty('script');
-    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-    begin
-      FScript := V.ToStringLiteral.Value;
-      if ContainsNulCharacter(FScript) then
-        ThrowRangeError(Format(SErrorIntlInvalidOption, [FScript, 'script']));
-    end;
-    V := AOptions.GetProperty('region');
-    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-    begin
-      FRegion := V.ToStringLiteral.Value;
-      if ContainsNulCharacter(FRegion) then
-        ThrowRangeError(Format(SErrorIntlInvalidOption, [FRegion, 'region']));
-    end;
-    V := AOptions.GetProperty('calendar');
-    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-    begin
-      FCalendar := V.ToStringLiteral.Value;
-      if ContainsNulCharacter(FCalendar) then
-        ThrowRangeError(Format(SErrorIntlInvalidOption, [FCalendar, 'calendar']));
-    end;
-    V := AOptions.GetProperty('caseFirst');
-    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-    begin
-      FCaseFirst := V.ToStringLiteral.Value;
-      if ContainsNulCharacter(FCaseFirst) then
-        ThrowRangeError(Format(SErrorIntlInvalidOption, [FCaseFirst, 'caseFirst']));
-    end;
-    V := AOptions.GetProperty('collation');
-    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-    begin
-      FCollation := V.ToStringLiteral.Value;
-      if ContainsNulCharacter(FCollation) then
-        ThrowRangeError(Format(SErrorIntlInvalidOption, [FCollation, 'collation']));
-    end;
-    V := AOptions.GetProperty('hourCycle');
-    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-    begin
-      FHourCycle := V.ToStringLiteral.Value;
-      if ContainsNulCharacter(FHourCycle) then
-        ThrowRangeError(Format(SErrorIntlInvalidOption, [FHourCycle, 'hourCycle']));
-    end;
-    V := AOptions.GetProperty('numberingSystem');
-    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-    begin
-      FNumberingSystem := V.ToStringLiteral.Value;
-      if ContainsNulCharacter(FNumberingSystem) then
-        ThrowRangeError(Format(SErrorIntlInvalidOption, [FNumberingSystem, 'numberingSystem']));
-    end;
+    ReadValidatedStringOption(AOptions, 'language', FLanguage);
+    ReadValidatedStringOption(AOptions, 'script', FScript);
+    ReadValidatedStringOption(AOptions, 'region', FRegion);
+    ReadValidatedStringOption(AOptions, 'calendar', FCalendar);
+    ReadValidatedStringOption(AOptions, 'caseFirst', FCaseFirst);
+    ReadValidatedStringOption(AOptions, 'collation', FCollation);
+    ReadValidatedStringOption(AOptions, 'hourCycle', FHourCycle);
+    ReadValidatedStringOption(AOptions, 'numberingSystem', FNumberingSystem);
     V := AOptions.GetProperty('numeric');
     if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
       FNumeric := V.ToBooleanLiteral.Value;

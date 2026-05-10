@@ -60,6 +60,7 @@ uses
 
   Goccia.Error.Messages,
   Goccia.Intl.CLDRData,
+  Goccia.Intl.Helpers,
   Goccia.ObjectModel.Types,
   Goccia.Realm,
   Goccia.Values.ArrayValue,
@@ -295,80 +296,27 @@ begin
     Result := MinusSign + Result;
 end;
 
-function FormatPartsToArray(const AParts: TIntlFormatPartArray): TGocciaArrayValue;
-var
-  I: Integer;
-  PartObj: TGocciaObjectValue;
-begin
-  Result := TGocciaArrayValue.Create;
-  for I := 0 to Length(AParts) - 1 do
-  begin
-    PartObj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
-    PartObj.AssignProperty('type', TGocciaStringLiteralValue.Create(AParts[I].PartType));
-    PartObj.AssignProperty('value', TGocciaStringLiteralValue.Create(AParts[I].Value));
-    Result.Elements.Add(PartObj);
-  end;
-end;
-
 { TGocciaIntlNumberFormatValue }
 
 procedure TGocciaIntlNumberFormatValue.ReadOptions(const AOptions: TGocciaObjectValue);
 var
   V: TGocciaValue;
+  Ignored: string;
 begin
   if not Assigned(AOptions) then Exit;
 
-  V := AOptions.GetProperty('localeMatcher');
-  if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-  begin
-    if ContainsNulCharacter(V.ToStringLiteral.Value) then
-      ThrowRangeError(Format(SErrorIntlInvalidOption, [V.ToStringLiteral.Value, 'localeMatcher']));
-  end;
-  V := AOptions.GetProperty('style');
-  if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-  begin
-    FStyle := V.ToStringLiteral.Value;
-    if ContainsNulCharacter(FStyle) then
-      ThrowRangeError(Format(SErrorIntlInvalidOption, [FStyle, 'style']));
-  end;
-  V := AOptions.GetProperty('currency');
-  if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-  begin
-    FCurrency := V.ToStringLiteral.Value;
-    if ContainsNulCharacter(FCurrency) then
-      ThrowRangeError(Format(SErrorIntlInvalidOption, [FCurrency, 'currency']));
-  end;
-  V := AOptions.GetProperty('currencyDisplay');
-  if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-  begin
-    FCurrencyDisplay := V.ToStringLiteral.Value;
-    if ContainsNulCharacter(FCurrencyDisplay) then
-      ThrowRangeError(Format(SErrorIntlInvalidOption, [FCurrencyDisplay, 'currencyDisplay']));
-  end;
-  V := AOptions.GetProperty('currencySign');
-  if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-    FCurrencySign := V.ToStringLiteral.Value;
-  V := AOptions.GetProperty('unit');
-  if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-    FUnitIdentifier := V.ToStringLiteral.Value;
-  V := AOptions.GetProperty('unitDisplay');
-  if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-    FUnitDisplay := V.ToStringLiteral.Value;
-  V := AOptions.GetProperty('notation');
-  if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-    FNotation := V.ToStringLiteral.Value;
-  V := AOptions.GetProperty('compactDisplay');
-  if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-    FCompactDisplay := V.ToStringLiteral.Value;
-  V := AOptions.GetProperty('signDisplay');
-  if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-    FSignDisplay := V.ToStringLiteral.Value;
-  V := AOptions.GetProperty('useGrouping');
-  if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-    FUseGrouping := V.ToStringLiteral.Value;
-  V := AOptions.GetProperty('roundingMode');
-  if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-    FRoundingMode := V.ToStringLiteral.Value;
+  ReadValidatedStringOption(AOptions, 'localeMatcher', Ignored);
+  ReadValidatedStringOption(AOptions, 'style', FStyle);
+  ReadValidatedStringOption(AOptions, 'currency', FCurrency);
+  ReadValidatedStringOption(AOptions, 'currencyDisplay', FCurrencyDisplay);
+  TryReadStringOption(AOptions, 'currencySign', FCurrencySign);
+  TryReadStringOption(AOptions, 'unit', FUnitIdentifier);
+  TryReadStringOption(AOptions, 'unitDisplay', FUnitDisplay);
+  TryReadStringOption(AOptions, 'notation', FNotation);
+  TryReadStringOption(AOptions, 'compactDisplay', FCompactDisplay);
+  TryReadStringOption(AOptions, 'signDisplay', FSignDisplay);
+  TryReadStringOption(AOptions, 'useGrouping', FUseGrouping);
+  TryReadStringOption(AOptions, 'roundingMode', FRoundingMode);
   V := AOptions.GetProperty('minimumIntegerDigits');
   if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
     FMinimumIntegerDigits := Trunc(V.ToNumberLiteral.Value);
@@ -384,9 +332,7 @@ begin
   V := AOptions.GetProperty('maximumSignificantDigits');
   if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
     FMaximumSignificantDigits := Trunc(V.ToNumberLiteral.Value);
-  V := AOptions.GetProperty('numberingSystem');
-  if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-    FNumberingSystem := V.ToStringLiteral.Value;
+  TryReadStringOption(AOptions, 'numberingSystem', FNumberingSystem);
 end;
 
 constructor TGocciaIntlNumberFormatValue.Create(const ALocale: string; const AOptions: TGocciaObjectValue);

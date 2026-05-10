@@ -429,6 +429,11 @@ function EnsureLoaded: Boolean;
 var
   Handle: TLibHandle;
 begin
+  if IntlLoadAttempted then
+  begin
+    Result := IntlLoadSucceeded;
+    Exit;
+  end;
   EnterCriticalSection(IntlInitLock);
   try
     if not IntlLoadAttempted then

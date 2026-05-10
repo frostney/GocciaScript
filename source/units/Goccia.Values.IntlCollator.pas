@@ -44,6 +44,7 @@ uses
   IntlTypes,
 
   Goccia.Error.Messages,
+  Goccia.Intl.Helpers,
   Goccia.ObjectModel.Types,
   Goccia.Realm,
   Goccia.Values.ErrorHelper,
@@ -90,6 +91,7 @@ constructor TGocciaIntlCollatorValue.Create(const ALocale: string; const AOption
 var
   Canonical: string;
   V: TGocciaValue;
+  Ignored: string;
 begin
   inherited Create;
   Canonical := CanonicalizeUnicodeLocaleId(ALocale);
@@ -108,42 +110,17 @@ begin
 
   if Assigned(AOptions) then
   begin
-    V := AOptions.GetProperty('sensitivity');
-    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-    begin
-      FSensitivity := V.ToStringLiteral.Value;
-      if ContainsNulCharacter(FSensitivity) then
-        ThrowRangeError(Format(SErrorIntlInvalidOption, [FSensitivity, 'sensitivity']));
-    end;
-    V := AOptions.GetProperty('usage');
-    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-    begin
-      FUsage := V.ToStringLiteral.Value;
-      if ContainsNulCharacter(FUsage) then
-        ThrowRangeError(Format(SErrorIntlInvalidOption, [FUsage, 'usage']));
-    end;
+    ReadValidatedStringOption(AOptions, 'sensitivity', FSensitivity);
+    ReadValidatedStringOption(AOptions, 'usage', FUsage);
     V := AOptions.GetProperty('ignorePunctuation');
     if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
       FIgnorePunctuation := V.ToBooleanLiteral.Value;
     V := AOptions.GetProperty('numeric');
     if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
       FNumeric := V.ToBooleanLiteral.Value;
-    V := AOptions.GetProperty('caseFirst');
-    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-    begin
-      FCaseFirst := V.ToStringLiteral.Value;
-      if ContainsNulCharacter(FCaseFirst) then
-        ThrowRangeError(Format(SErrorIntlInvalidOption, [FCaseFirst, 'caseFirst']));
-    end;
-    V := AOptions.GetProperty('collation');
-    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-      FCollation := V.ToStringLiteral.Value;
-    V := AOptions.GetProperty('localeMatcher');
-    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-    begin
-      if ContainsNulCharacter(V.ToStringLiteral.Value) then
-        ThrowRangeError(Format(SErrorIntlInvalidOption, [V.ToStringLiteral.Value, 'localeMatcher']));
-    end;
+    ReadValidatedStringOption(AOptions, 'caseFirst', FCaseFirst);
+    TryReadStringOption(AOptions, 'collation', FCollation);
+    ReadValidatedStringOption(AOptions, 'localeMatcher', Ignored);
   end;
 
   InitializePrototype;

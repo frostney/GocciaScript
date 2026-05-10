@@ -60,6 +60,7 @@ uses
   IntlLocaleResolver,
 
   Goccia.Error.Messages,
+  Goccia.Intl.Helpers,
   Goccia.ObjectModel.Types,
   Goccia.Realm,
   Goccia.Values.ArrayValue,
@@ -107,60 +108,22 @@ begin
     Result := idtsNone;
 end;
 
-function FormatPartsToArray(const AParts: TIntlFormatPartArray): TGocciaArrayValue;
-var
-  I: Integer;
-  PartObj: TGocciaObjectValue;
-begin
-  Result := TGocciaArrayValue.Create;
-  for I := 0 to Length(AParts) - 1 do
-  begin
-    PartObj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
-    PartObj.AssignProperty('type', TGocciaStringLiteralValue.Create(AParts[I].PartType));
-    PartObj.AssignProperty('value', TGocciaStringLiteralValue.Create(AParts[I].Value));
-    Result.Elements.Add(PartObj);
-  end;
-end;
-
 { TGocciaIntlDateTimeFormatValue }
 
 procedure TGocciaIntlDateTimeFormatValue.ReadOptions(const AOptions: TGocciaObjectValue);
 var
   V: TGocciaValue;
+  Ignored: string;
 begin
   if not Assigned(AOptions) then Exit;
 
-  V := AOptions.GetProperty('localeMatcher');
-  if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-  begin
-    if ContainsNulCharacter(V.ToStringLiteral.Value) then
-      ThrowRangeError(Format(SErrorIntlInvalidOption, [V.ToStringLiteral.Value, 'localeMatcher']));
-  end;
-  V := AOptions.GetProperty('formatMatcher');
-  if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-  begin
-    if ContainsNulCharacter(V.ToStringLiteral.Value) then
-      ThrowRangeError(Format(SErrorIntlInvalidOption, [V.ToStringLiteral.Value, 'formatMatcher']));
-  end;
-  V := AOptions.GetProperty('dateStyle');
-  if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-    FDateStyle := V.ToStringLiteral.Value;
-  V := AOptions.GetProperty('timeStyle');
-  if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-    FTimeStyle := V.ToStringLiteral.Value;
-  V := AOptions.GetProperty('calendar');
-  if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-    FCalendar := V.ToStringLiteral.Value;
-  V := AOptions.GetProperty('numberingSystem');
-  if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-    FNumberingSystem := V.ToStringLiteral.Value;
-  V := AOptions.GetProperty('timeZone');
-  if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-  begin
-    FTimeZone := V.ToStringLiteral.Value;
-    if ContainsNulCharacter(FTimeZone) then
-      ThrowRangeError(Format(SErrorIntlInvalidOption, [FTimeZone, 'timeZone']));
-  end;
+  ReadValidatedStringOption(AOptions, 'localeMatcher', Ignored);
+  ReadValidatedStringOption(AOptions, 'formatMatcher', Ignored);
+  TryReadStringOption(AOptions, 'dateStyle', FDateStyle);
+  TryReadStringOption(AOptions, 'timeStyle', FTimeStyle);
+  TryReadStringOption(AOptions, 'calendar', FCalendar);
+  TryReadStringOption(AOptions, 'numberingSystem', FNumberingSystem);
+  ReadValidatedStringOption(AOptions, 'timeZone', FTimeZone);
   V := AOptions.GetProperty('hour12');
   if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
   begin
@@ -169,78 +132,20 @@ begin
     else
       FHour12 := 0;
   end;
-  V := AOptions.GetProperty('hourCycle');
-  if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-  begin
-    FHourCycle := V.ToStringLiteral.Value;
-    if ContainsNulCharacter(FHourCycle) then
-      ThrowRangeError(Format(SErrorIntlInvalidOption, [FHourCycle, 'hourCycle']));
-  end;
-  V := AOptions.GetProperty('weekday');
-  if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-  begin
-    FWeekday := V.ToStringLiteral.Value;
-    if ContainsNulCharacter(FWeekday) then
-      ThrowRangeError(Format(SErrorIntlInvalidOption, [FWeekday, 'weekday']));
-  end;
-  V := AOptions.GetProperty('era');
-  if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-  begin
-    FEra := V.ToStringLiteral.Value;
-    if ContainsNulCharacter(FEra) then
-      ThrowRangeError(Format(SErrorIntlInvalidOption, [FEra, 'era']));
-  end;
-  V := AOptions.GetProperty('year');
-  if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-  begin
-    FYear := V.ToStringLiteral.Value;
-    if ContainsNulCharacter(FYear) then
-      ThrowRangeError(Format(SErrorIntlInvalidOption, [FYear, 'year']));
-  end;
-  V := AOptions.GetProperty('month');
-  if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-  begin
-    FMonth := V.ToStringLiteral.Value;
-    if ContainsNulCharacter(FMonth) then
-      ThrowRangeError(Format(SErrorIntlInvalidOption, [FMonth, 'month']));
-  end;
-  V := AOptions.GetProperty('day');
-  if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-  begin
-    FDay := V.ToStringLiteral.Value;
-    if ContainsNulCharacter(FDay) then
-      ThrowRangeError(Format(SErrorIntlInvalidOption, [FDay, 'day']));
-  end;
-  V := AOptions.GetProperty('dayPeriod');
-  if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-    FDayPeriod := V.ToStringLiteral.Value;
-  V := AOptions.GetProperty('hour');
-  if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-  begin
-    FHour := V.ToStringLiteral.Value;
-    if ContainsNulCharacter(FHour) then
-      ThrowRangeError(Format(SErrorIntlInvalidOption, [FHour, 'hour']));
-  end;
-  V := AOptions.GetProperty('minute');
-  if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-  begin
-    FMinute := V.ToStringLiteral.Value;
-    if ContainsNulCharacter(FMinute) then
-      ThrowRangeError(Format(SErrorIntlInvalidOption, [FMinute, 'minute']));
-  end;
-  V := AOptions.GetProperty('second');
-  if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-  begin
-    FSecond := V.ToStringLiteral.Value;
-    if ContainsNulCharacter(FSecond) then
-      ThrowRangeError(Format(SErrorIntlInvalidOption, [FSecond, 'second']));
-  end;
+  ReadValidatedStringOption(AOptions, 'hourCycle', FHourCycle);
+  ReadValidatedStringOption(AOptions, 'weekday', FWeekday);
+  ReadValidatedStringOption(AOptions, 'era', FEra);
+  ReadValidatedStringOption(AOptions, 'year', FYear);
+  ReadValidatedStringOption(AOptions, 'month', FMonth);
+  ReadValidatedStringOption(AOptions, 'day', FDay);
+  TryReadStringOption(AOptions, 'dayPeriod', FDayPeriod);
+  ReadValidatedStringOption(AOptions, 'hour', FHour);
+  ReadValidatedStringOption(AOptions, 'minute', FMinute);
+  ReadValidatedStringOption(AOptions, 'second', FSecond);
   V := AOptions.GetProperty('fractionalSecondDigits');
   if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
     FFractionalSecondDigits := Trunc(V.ToNumberLiteral.Value);
-  V := AOptions.GetProperty('timeZoneName');
-  if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-    FTimeZoneName := V.ToStringLiteral.Value;
+  TryReadStringOption(AOptions, 'timeZoneName', FTimeZoneName);
 end;
 
 constructor TGocciaIntlDateTimeFormatValue.Create(const ALocale: string; const AOptions: TGocciaObjectValue);
