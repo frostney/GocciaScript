@@ -9,7 +9,7 @@ Chronological record of key architectural and implementation decisions, newest f
 ```
 
 - **Date** — When the decision was made
-- **Area** — One of: `bytecode`, `interpreter`, `parser`, `data-structures`, `strings`, `fpc-platform`, `runtime`, `testing`, `build`
+- **Area** — One of: `build`, `bytecode`, `data-structures`, `engine`, `fpc-platform`, `interpreter`, `parser`, `runtime`, `strings`, `testing`
 - **Summary** — 1–3 sentences explaining the decision and why
 - **PR / Detail** — Link to the pull request and/or the `docs/` section where the full rationale lives
 
