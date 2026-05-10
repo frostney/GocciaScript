@@ -679,6 +679,7 @@ begin
     APattern.Pair := Value;
     Result := True;
   end;
+
 end;
 
 function TryGetRelativeTimePattern(const ALocale: string;

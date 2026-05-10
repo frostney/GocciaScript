@@ -203,8 +203,17 @@ begin
       if not TryGetCurrencyInfo(ALocale, AOptions.Currency,
         CurrSymbol, CurrNarrow, CurrDigits) then
       begin
-        CurrSymbol := AOptions.Currency;
         CurrDigits := 2;
+        if AOptions.Currency = 'USD' then CurrSymbol := '$'
+        else if AOptions.Currency = 'EUR' then CurrSymbol := #$E2#$82#$AC
+        else if AOptions.Currency = 'GBP' then CurrSymbol := #$C2#$A3
+        else if (AOptions.Currency = 'JPY') or (AOptions.Currency = 'CNY') then
+        begin
+          CurrSymbol := #$C2#$A5;
+          CurrDigits := 0;
+        end
+        else
+          CurrSymbol := AOptions.Currency;
       end;
     end;
   end;

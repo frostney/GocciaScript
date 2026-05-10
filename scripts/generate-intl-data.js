@@ -308,7 +308,7 @@ function extractCurrencyData(cldrDir) {
 }
 
 function buildKeyValueBlob(entries) {
-  const keys = Object.keys(entries);
+  const keys = Object.keys(entries).sort();
   const count = keys.length;
   const strings = [];
   let stringsOffset = 0;
