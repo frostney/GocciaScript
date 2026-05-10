@@ -998,7 +998,13 @@ begin
       FVM.FFrameStack[I].LocalCellCount);
     if Assigned(FVM.FFrameStack[I].NewTarget) then
       TGocciaValue(FVM.FFrameStack[I].NewTarget).MarkReferences;
+    if Assigned(FVM.FFrameStack[I].SavedGlobalScope) then
+      TGocciaScope(FVM.FFrameStack[I].SavedGlobalScope).MarkReferences;
   end;
+
+  for I := 0 to FVM.FWithStackCount - 1 do
+    if Assigned(FVM.FWithScopeStack[I]) then
+      FVM.FWithScopeStack[I].MarkReferences;
 
   if Assigned(FVM.FActiveDecoratorSession) then
     TGocciaVMDecoratorSession(FVM.FActiveDecoratorSession).MarkReferences;
@@ -6816,6 +6822,9 @@ begin
   FFrameStack[FFrameStackCount].PrevCovLine := APrevCovLine;
   FFrameStack[FFrameStackCount].ProfileEntryTimestamp := AProfileTimestamp;
   FFrameStack[FFrameStackCount].NewTarget := Pointer(FCurrentNewTarget);
+  FFrameStack[FFrameStackCount].Callee := Pointer(FCurrentCallee);
+  FFrameStack[FFrameStackCount].SavedGlobalScope := Pointer(FGlobalScope);
+  FFrameStack[FFrameStackCount].SavedWithStackCount := FWithStackCount;
   Inc(FFrameStackCount);
 end;
 
@@ -6838,6 +6847,9 @@ begin
   APrevCovLine := FFrameStack[FFrameStackCount].PrevCovLine;
   AProfileTimestamp := FFrameStack[FFrameStackCount].ProfileEntryTimestamp;
   FCurrentNewTarget := TGocciaValue(FFrameStack[FFrameStackCount].NewTarget);
+  FCurrentCallee := TGocciaValue(FFrameStack[FFrameStackCount].Callee);
+  FGlobalScope := TGocciaScope(FFrameStack[FFrameStackCount].SavedGlobalScope);
+  FWithStackCount := FFrameStack[FFrameStackCount].SavedWithStackCount;
   Result := FFrameStack[FFrameStackCount].ReturnRegister;
 end;
 
@@ -6874,6 +6886,13 @@ begin
       AClosure.Template.Name,
       FCurrentModuleSourcePath,
       0, 0);
+
+  if (FCurrentCallee is TGocciaBytecodeFunctionValue) and
+     Assigned(TGocciaBytecodeFunctionValue(FCurrentCallee).FWithScope) then
+    FGlobalScope := TGocciaBytecodeFunctionValue(FCurrentCallee).FWithScope
+  else if FWithStackCount > 0 then
+    FGlobalScope := FWithScopeStack[0];
+  FWithStackCount := 0;
 
   FillChar(AFrame, SizeOf(AFrame), 0);
   ATemplate := AClosure.Template;
@@ -9309,12 +9328,6 @@ begin
         GlobalName := Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue;
         if FGlobalScope.Contains(GlobalName) then
           SetRegister(A, FGlobalScope.GetValue(GlobalName))
-        else if (FCurrentCallee is TGocciaBytecodeFunctionValue) and
-           Assigned(TGocciaBytecodeFunctionValue(FCurrentCallee).FWithScope) and
-           TGocciaBytecodeFunctionValue(FCurrentCallee).FWithScope.Contains(
-             GlobalName) then
-          SetRegister(A, TGocciaBytecodeFunctionValue(FCurrentCallee)
-            .FWithScope.GetValue(GlobalName))
         else
           ThrowReferenceError(Format('%s is not defined', [GlobalName]),
             '');
@@ -9323,14 +9336,7 @@ begin
       OP_WITH_SET:
       begin
         GlobalName := Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue;
-        if FGlobalScope.Contains(GlobalName) then
-          FGlobalScope.AssignBinding(GlobalName, RegisterToValue(FRegisters[A]))
-        else if (FCurrentCallee is TGocciaBytecodeFunctionValue) and
-           Assigned(TGocciaBytecodeFunctionValue(FCurrentCallee).FWithScope) then
-          TGocciaBytecodeFunctionValue(FCurrentCallee).FWithScope.AssignBinding(
-            GlobalName, RegisterToValue(FRegisters[A]))
-        else
-          FGlobalScope.AssignBinding(GlobalName, RegisterToValue(FRegisters[A]));
+        FGlobalScope.AssignBinding(GlobalName, RegisterToValue(FRegisters[A]));
       end;
 
       // ES2026 §13.3.10.1 ImportCall — import(specifier)

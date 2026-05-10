@@ -24,6 +24,8 @@ type
     ProfileEntryTimestamp: Int64;
     NewTarget: Pointer;
     Callee: Pointer;
+    SavedGlobalScope: Pointer;
+    SavedWithStackCount: Integer;
   end;
 
 implementation
