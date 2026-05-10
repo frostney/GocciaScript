@@ -59,7 +59,10 @@ uses
   Math,
   SysUtils,
 
-  TextSemantics;
+  TextSemantics,
+  UnicodeICU,
+
+  Goccia.RegExp.UnicodeData;
 
 type
   TModifierState = record
@@ -153,7 +156,7 @@ type
   end;
 
 const
-  MAX_CHAR_RANGES = 512;
+  MAX_CHAR_RANGES = 2048;
 
 constructor TRegExpCompiler.Create(const APattern, AFlags: string);
 begin
@@ -378,101 +381,57 @@ end;
 
 procedure TRegExpCompiler.GetUnicodePropertyRanges(const APropertyName: string;
   var ARanges: array of TRegExpCharRange; var ARangeCount: Integer);
+var
+  EqPos, I: Integer;
+  PropPart, ValuePart: string;
+  ICURanges: TUnicodePropertyRangeArray;
 begin
-  if (APropertyName = 'L') or (APropertyName = 'Letter') then
+  EqPos := Pos('=', APropertyName);
+  if EqPos > 0 then
   begin
-    AddRange(ARanges, ARangeCount, $41, $5A);
-    AddRange(ARanges, ARangeCount, $61, $7A);
-    AddRange(ARanges, ARangeCount, $C0, $D6);
-    AddRange(ARanges, ARangeCount, $D8, $F6);
-    AddRange(ARanges, ARangeCount, $F8, $2FF);
-    AddRange(ARanges, ARangeCount, $370, $37D);
-    AddRange(ARanges, ARangeCount, $37F, $1FFF);
-    AddRange(ARanges, ARangeCount, $200C, $200D);
-    AddRange(ARanges, ARangeCount, $2070, $218F);
-    AddRange(ARanges, ARangeCount, $2C00, $2FEF);
-    AddRange(ARanges, ARangeCount, $3001, $D7FF);
-    AddRange(ARanges, ARangeCount, $F900, $FDCF);
-    AddRange(ARanges, ARangeCount, $FDF0, $FFFD);
-    AddRange(ARanges, ARangeCount, $10000, $EFFFF);
-  end
-  else if (APropertyName = 'Lu') or (APropertyName = 'Uppercase_Letter') then
-  begin
-    AddRange(ARanges, ARangeCount, $41, $5A);
-    AddRange(ARanges, ARangeCount, $C0, $D6);
-    AddRange(ARanges, ARangeCount, $D8, $DE);
-  end
-  else if (APropertyName = 'Ll') or (APropertyName = 'Lowercase_Letter') then
-  begin
-    AddRange(ARanges, ARangeCount, $61, $7A);
-    AddRange(ARanges, ARangeCount, $DF, $F6);
-    AddRange(ARanges, ARangeCount, $F8, $FF);
-  end
-  else if (APropertyName = 'N') or (APropertyName = 'Number') then
-    AddRange(ARanges, ARangeCount, $30, $39)
-  else if (APropertyName = 'Nd') or (APropertyName = 'Decimal_Number') then
-    AddRange(ARanges, ARangeCount, $30, $39)
-  else if (APropertyName = 'P') or (APropertyName = 'Punctuation') then
-  begin
-    AddRange(ARanges, ARangeCount, $21, $23);
-    AddRange(ARanges, ARangeCount, $25, $2A);
-    AddRange(ARanges, ARangeCount, $2C, $2F);
-    AddRange(ARanges, ARangeCount, $3A, $3B);
-    AddRange(ARanges, ARangeCount, $3F, $40);
-    AddRange(ARanges, ARangeCount, $5B, $5D);
-    AddRange(ARanges, ARangeCount, $5F, $5F);
-    AddRange(ARanges, ARangeCount, $7B, $7B);
-    AddRange(ARanges, ARangeCount, $7D, $7D);
-  end
-  else if (APropertyName = 'S') or (APropertyName = 'Symbol') then
-  begin
-    AddRange(ARanges, ARangeCount, $24, $24);
-    AddRange(ARanges, ARangeCount, $2B, $2B);
-    AddRange(ARanges, ARangeCount, $3C, $3E);
-    AddRange(ARanges, ARangeCount, $5E, $5E);
-    AddRange(ARanges, ARangeCount, $60, $60);
-    AddRange(ARanges, ARangeCount, $7C, $7C);
-    AddRange(ARanges, ARangeCount, $7E, $7E);
-  end
-  else if (APropertyName = 'Z') or (APropertyName = 'Separator') then
-  begin
-    AddRange(ARanges, ARangeCount, $20, $20);
-    AddRange(ARanges, ARangeCount, $A0, $A0);
-    AddRange(ARanges, ARangeCount, $1680, $1680);
-    AddRange(ARanges, ARangeCount, $2000, $200A);
-    AddRange(ARanges, ARangeCount, $2028, $2029);
-    AddRange(ARanges, ARangeCount, $202F, $202F);
-    AddRange(ARanges, ARangeCount, $205F, $205F);
-    AddRange(ARanges, ARangeCount, $3000, $3000);
-  end
-  else if (APropertyName = 'Cc') or (APropertyName = 'Control') then
-  begin
-    AddRange(ARanges, ARangeCount, $00, $1F);
-    AddRange(ARanges, ARangeCount, $7F, $9F);
-  end
-  else if APropertyName = 'ASCII' then
-    AddRange(ARanges, ARangeCount, $00, $7F)
-  else if APropertyName = 'ASCII_Hex_Digit' then
-  begin
-    AddRange(ARanges, ARangeCount, $30, $39);
-    AddRange(ARanges, ARangeCount, $41, $46);
-    AddRange(ARanges, ARangeCount, $61, $66);
-  end
-  else if APropertyName = 'White_Space' then
-  begin
-    AddRange(ARanges, ARangeCount, $09, $0D);
-    AddRange(ARanges, ARangeCount, $20, $20);
-    AddRange(ARanges, ARangeCount, $85, $85);
-    AddRange(ARanges, ARangeCount, $A0, $A0);
-    AddRange(ARanges, ARangeCount, $1680, $1680);
-    AddRange(ARanges, ARangeCount, $2000, $200A);
-    AddRange(ARanges, ARangeCount, $2028, $2029);
-    AddRange(ARanges, ARangeCount, $202F, $202F);
-    AddRange(ARanges, ARangeCount, $205F, $205F);
-    AddRange(ARanges, ARangeCount, $3000, $3000);
+    PropPart := Copy(APropertyName, 1, EqPos - 1);
+    ValuePart := Copy(APropertyName, EqPos + 1, Length(APropertyName) - EqPos);
   end
   else
-    raise EConvertError.Create('Invalid Unicode property name: ' + APropertyName);
+  begin
+    PropPart := APropertyName;
+    ValuePart := '';
+  end;
+
+  if TryICUGetUnicodePropertyRanges(PropPart, ValuePart, ICURanges) then
+  begin
+    for I := 0 to High(ICURanges) do
+      AddRange(ARanges, ARangeCount, ICURanges[I].Lo, ICURanges[I].Hi);
+    Exit;
+  end;
+
+  if EqPos > 0 then
+  begin
+    if TryGetUnicodePropertyRanges(PropPart + '/' + ValuePart, ICURanges) then
+    begin
+      for I := 0 to High(ICURanges) do
+        AddRange(ARanges, ARangeCount, ICURanges[I].Lo, ICURanges[I].Hi);
+      Exit;
+    end;
+  end
+  else
+  begin
+    if TryGetUnicodePropertyRanges(APropertyName, ICURanges) then
+    begin
+      for I := 0 to High(ICURanges) do
+        AddRange(ARanges, ARangeCount, ICURanges[I].Lo, ICURanges[I].Hi);
+      Exit;
+    end;
+
+    if TryGetUnicodePropertyRanges('gc/' + APropertyName, ICURanges) then
+    begin
+      for I := 0 to High(ICURanges) do
+        AddRange(ARanges, ARangeCount, ICURanges[I].Lo, ICURanges[I].Hi);
+      Exit;
+    end;
+  end;
+
+  raise EConvertError.Create('Invalid Unicode property name: ' + APropertyName);
 end;
 
 procedure TRegExpCompiler.EmitUnicodePropertyClass(const APropertyName: string;
