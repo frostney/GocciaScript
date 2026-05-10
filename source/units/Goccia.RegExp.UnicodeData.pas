@@ -261,42 +261,48 @@ end;
 var
   CachedUCDResource: TBytes;
   CachedUCDResourceLoaded: Boolean;
+  CachedUCDResourceLock: TRTLCriticalSection;
 
 function TryReadEmbeddedResource(out ABuffer: TBytes): Boolean;
 var
   Stream: TResourceStream;
   BufferSize: Integer;
 begin
-  if CachedUCDResourceLoaded then
-  begin
-    ABuffer := CachedUCDResource;
-    Result := Length(ABuffer) > 0;
-    Exit;
-  end;
-
-  Result := False;
-  SetLength(ABuffer, 0);
-  Stream := nil;
+  EnterCriticalSection(CachedUCDResourceLock);
   try
-    Stream := TResourceStream.Create(HInstance, GeneratedUnicodeDataResourceName,
-      UCD_RCDATA_RESOURCE_TYPE);
-    if Stream.Size > High(Integer) then
+    if CachedUCDResourceLoaded then
     begin
-      Stream.Free;
+      ABuffer := CachedUCDResource;
+      Result := Length(ABuffer) > 0;
       Exit;
     end;
 
-    BufferSize := Integer(Stream.Size);
-    SetLength(ABuffer, BufferSize);
-    if BufferSize > 0 then
-      Stream.ReadBuffer(ABuffer[0], BufferSize);
-    Stream.Free;
+    Result := False;
+    SetLength(ABuffer, 0);
     Stream := nil;
-    CachedUCDResource := ABuffer;
-    CachedUCDResourceLoaded := True;
-    Result := True;
-  except
-    Stream.Free;
+    try
+      Stream := TResourceStream.Create(HInstance, GeneratedUnicodeDataResourceName,
+        UCD_RCDATA_RESOURCE_TYPE);
+      if Stream.Size > High(Integer) then
+      begin
+        Stream.Free;
+        Exit;
+      end;
+
+      BufferSize := Integer(Stream.Size);
+      SetLength(ABuffer, BufferSize);
+      if BufferSize > 0 then
+        Stream.ReadBuffer(ABuffer[0], BufferSize);
+      Stream.Free;
+      Stream := nil;
+      CachedUCDResource := ABuffer;
+      CachedUCDResourceLoaded := True;
+      Result := True;
+    except
+      Stream.Free;
+    end;
+  finally
+    LeaveCriticalSection(CachedUCDResourceLock);
   end;
 end;
 
@@ -330,6 +336,12 @@ function TryGetUnicodePropertyRanges(const AKey: string;
 begin
   Result := TryGetEmbeddedPropertyRanges(AKey, ARanges);
 end;
+
+initialization
+  InitCriticalSection(CachedUCDResourceLock);
+
+finalization
+  DoneCriticalSection(CachedUCDResourceLock);
 
 {$ELSE}
 

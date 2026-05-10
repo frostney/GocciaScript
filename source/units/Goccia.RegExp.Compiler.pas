@@ -385,6 +385,15 @@ var
   EqPos, I: Integer;
   PropPart, ValuePart: string;
   ICURanges: TUnicodePropertyRangeArray;
+
+  procedure CopyICURanges;
+  var
+    J: Integer;
+  begin
+    for J := 0 to High(ICURanges) do
+      AddRange(ARanges, ARangeCount, ICURanges[J].Lo, ICURanges[J].Hi);
+  end;
+
 begin
   EqPos := Pos('=', APropertyName);
   if EqPos > 0 then
@@ -400,8 +409,7 @@ begin
 
   if TryICUGetUnicodePropertyRanges(PropPart, ValuePart, ICURanges) then
   begin
-    for I := 0 to High(ICURanges) do
-      AddRange(ARanges, ARangeCount, ICURanges[I].Lo, ICURanges[I].Hi);
+    CopyICURanges;
     Exit;
   end;
 
@@ -409,8 +417,7 @@ begin
   begin
     if TryGetUnicodePropertyRanges(PropPart + '/' + ValuePart, ICURanges) then
     begin
-      for I := 0 to High(ICURanges) do
-        AddRange(ARanges, ARangeCount, ICURanges[I].Lo, ICURanges[I].Hi);
+      CopyICURanges;
       Exit;
     end;
   end
@@ -418,15 +425,13 @@ begin
   begin
     if TryGetUnicodePropertyRanges(APropertyName, ICURanges) then
     begin
-      for I := 0 to High(ICURanges) do
-        AddRange(ARanges, ARangeCount, ICURanges[I].Lo, ICURanges[I].Hi);
+      CopyICURanges;
       Exit;
     end;
 
     if TryGetUnicodePropertyRanges('gc/' + APropertyName, ICURanges) then
     begin
-      for I := 0 to High(ICURanges) do
-        AddRange(ARanges, ARangeCount, ICURanges[I].Lo, ICURanges[I].Hi);
+      CopyICURanges;
       Exit;
     end;
   end;

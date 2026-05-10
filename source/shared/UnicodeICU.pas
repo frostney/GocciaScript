@@ -17,8 +17,6 @@ function TryICUGetUnicodePropertyRanges(const AProperty, AValue: string;
 implementation
 
 uses
-  SysUtils,
-
   ICU;
 
 const

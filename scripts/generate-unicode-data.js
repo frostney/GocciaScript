@@ -24,6 +24,7 @@ const UCD_FILES = [
   "ScriptExtensions.txt",
   "PropList.txt",
   "DerivedCoreProperties.txt",
+  "extracted/DerivedBinaryProperties.txt",
   "PropertyValueAliases.txt",
   "PropertyAliases.txt",
   "emoji/emoji-data.txt",
@@ -583,7 +584,7 @@ function collectAllEntries(
 function buildResourceFromEntries(allEntries) {
   const sortedKeys = [...allEntries.keys()].sort();
 
-  const blobMap = new Map();
+  const blobByContent = new Map();
   const dataBuffers = [];
   let dataOffset = 0;
 
@@ -591,15 +592,15 @@ function buildResourceFromEntries(allEntries) {
 
   for (const key of sortedKeys) {
     const entry = allEntries.get(key);
-    const blobId = entry.blob;
+    const contentKey = entry.blob.toString("base64");
 
-    if (!blobMap.has(blobId)) {
-      blobMap.set(blobId, { offset: dataOffset, length: blobId.length });
-      dataBuffers.push(blobId);
-      dataOffset += blobId.length;
+    if (!blobByContent.has(contentKey)) {
+      blobByContent.set(contentKey, { offset: dataOffset, length: entry.blob.length });
+      dataBuffers.push(entry.blob);
+      dataOffset += entry.blob.length;
     }
 
-    const blobInfo = blobMap.get(blobId);
+    const blobInfo = blobByContent.get(contentKey);
     indexedEntries.push({
       name: key,
       offset: blobInfo.offset,
@@ -616,11 +617,11 @@ function buildResourceFromEntries(allEntries) {
 function parseScriptExtensions(text, scriptData, scAliases) {
   const properties = new Map();
 
-  const shortToLong = new Map();
+  const shortToDataKey = new Map();
   if (scAliases) {
     for (const [alias, short] of scAliases) {
-      if (alias !== short && alias.length > short.length) {
-        shortToLong.set(short, alias);
+      if (scriptData.has(alias) && !shortToDataKey.has(short)) {
+        shortToDataKey.set(short, alias);
       }
     }
   }
@@ -655,9 +656,9 @@ function parseScriptExtensions(text, scriptData, scAliases) {
       if (!properties.has(script)) {
         let baseRanges = scriptData.get(script);
         if (!baseRanges) {
-          const longName = shortToLong.get(script);
-          if (longName) {
-            baseRanges = scriptData.get(longName);
+          const dataKey = shortToDataKey.get(script);
+          if (dataKey) {
+            baseRanges = scriptData.get(dataKey);
           }
         }
         properties.set(script, baseRanges ? [...baseRanges] : []);
@@ -688,6 +689,7 @@ async function main() {
     scxText,
     propListText,
     derivedCoreText,
+    derivedBinaryText,
     pvAliasesText,
     pAliasesText,
     emojiText,
@@ -704,9 +706,12 @@ async function main() {
   const scxData = parseScriptExtensions(scxText, scriptData, scAliasMap);
   const propListData = parseUCDRangeFile(propListText);
   const derivedCoreData = parseUCDRangeFile(derivedCoreText);
+  const derivedBinaryData = parseUCDRangeFile(derivedBinaryText);
   const emojiData = parseUCDRangeFile(emojiText);
 
-  const binaryProperties = new Map([...propListData, ...derivedCoreData, ...emojiData]);
+  const binaryProperties = new Map([
+    ...propListData, ...derivedCoreData, ...derivedBinaryData, ...emojiData,
+  ]);
 
   console.log("Building property tables...");
   console.log(`  General_Category: ${gcData.size} values`);
