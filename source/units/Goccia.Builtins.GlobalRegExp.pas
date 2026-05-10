@@ -698,10 +698,12 @@ begin
     PatternArg := AArgs.GetElement(0);
     PatternIsRegExp := IsRegExp(PatternArg);
 
-    // §22.2.3.1 step 2b: non-construct, regexp-like, no flags → return as-is
+    // §22.2.3.1 step 2b: non-construct, regexp-like, no flags, same constructor
     if PatternIsRegExp and not IsConstructCall and
        ((AArgs.Length <= 1) or
-        (AArgs.GetElement(1) is TGocciaUndefinedLiteralValue)) then
+        (AArgs.GetElement(1) is TGocciaUndefinedLiteralValue)) and
+       (TGocciaObjectValue(PatternArg).GetProperty(PROP_CONSTRUCTOR) =
+        FRegExpConstructor) then
       Exit(PatternArg);
 
     // §22.2.3.1 steps 3–4: read source/flags when regexp-like

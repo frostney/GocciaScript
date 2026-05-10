@@ -158,10 +158,17 @@ test("new RegExp stringifies object when Symbol.match is false", () => {
   expect(r.source).toBe("[object Object]");
 });
 
-test("RegExp() without new returns Symbol.match object as-is when flags omitted", () => {
+test("RegExp() without new returns actual RegExp as-is when flags omitted", () => {
+  const r = /abc/g;
+  const result = RegExp(r);
+  expect(result).toBe(r);
+});
+
+test("RegExp() without new wraps Symbol.match object whose constructor differs", () => {
   const obj = { source: "abc", flags: "", [Symbol.match]: true };
   const result = RegExp(obj);
-  expect(result).toBe(obj);
+  expect(result).not.toBe(obj);
+  expect(result.source).toBe("abc");
 });
 
 test("new RegExp overrides flags from Symbol.match object when second arg provided", () => {

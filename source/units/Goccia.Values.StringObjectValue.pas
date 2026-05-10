@@ -1181,7 +1181,7 @@ end;
 function TGocciaStringObjectValue.StringReplaceAllMethod(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   StringValue, SearchValue, ReplaceValue, ResultStr: string;
-  SearchArg: TGocciaValue;
+  SearchArg, FlagsVal: TGocciaValue;
   ReplaceArg: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
   CallResult: TGocciaValue;
@@ -1206,11 +1206,16 @@ begin
   else
     ReplaceArg := TGocciaUndefinedLiteralValue.UndefinedValue;
 
-  // §22.1.3.20 step 2a–b: IsRegExp check; if regexp-like without 'g' flag, throw
-  if IsRegExp(SearchArg) and
-     (Pos('g', TGocciaObjectValue(SearchArg).GetProperty(PROP_FLAGS)
-       .ToStringLiteral.Value) = 0) then
-    ThrowTypeError(SErrorReplaceAllRequiresGlobalRegExp, SSuggestReplaceAllGlobalFlag);
+  // §22.1.3.20 step 2a–b: IsRegExp check; RequireObjectCoercible(flags); 'g' check
+  if IsRegExp(SearchArg) then
+  begin
+    FlagsVal := TGocciaObjectValue(SearchArg).GetProperty(PROP_FLAGS);
+    if (FlagsVal is TGocciaUndefinedLiteralValue) or
+       (FlagsVal is TGocciaNullLiteralValue) then
+      ThrowTypeError(SErrorCannotConvertNullOrUndefined, SSuggestObjectArgType);
+    if Pos('g', FlagsVal.ToStringLiteral.Value) = 0 then
+      ThrowTypeError(SErrorReplaceAllRequiresGlobalRegExp, SSuggestReplaceAllGlobalFlag);
+  end;
 
   ReplaceMethod := GetMethodBySymbol(SearchArg,
     TGocciaSymbolValue.WellKnownReplace);
@@ -1651,7 +1656,7 @@ end;
 function TGocciaStringObjectValue.StringMatchAll(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   StringValue: string;
-  MatchAllMethod: TGocciaValue;
+  RegExpArg, FlagsVal, MatchAllMethod: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
   RegexValue: TGocciaObjectValue;
 begin
@@ -1665,15 +1670,21 @@ begin
      (AThisValue is TGocciaNullLiteralValue) then
     ThrowTypeError(SErrorStringPrototypeRequiresNonNullish, SSuggestCheckNullBeforeAccess);
 
-  // §22.1.3.13 step 2a–b: IsRegExp check; if regexp-like without 'g' flag, throw
-  if (AArgs.Length > 0) and IsRegExp(AArgs.GetElement(0)) and
-     (Pos('g', TGocciaObjectValue(AArgs.GetElement(0)).GetProperty(PROP_FLAGS)
-       .ToStringLiteral.Value) = 0) then
-    ThrowTypeError(SErrorMatchAllRequiresGlobalRegExp, SSuggestReplaceAllGlobalFlag);
-
+  // §22.1.3.13 step 2a–b: IsRegExp check; RequireObjectCoercible(flags); 'g' check
   if AArgs.Length > 0 then
   begin
-    MatchAllMethod := GetMethodBySymbol(AArgs.GetElement(0),
+    RegExpArg := AArgs.GetElement(0);
+    if IsRegExp(RegExpArg) then
+    begin
+      FlagsVal := TGocciaObjectValue(RegExpArg).GetProperty(PROP_FLAGS);
+      if (FlagsVal is TGocciaUndefinedLiteralValue) or
+         (FlagsVal is TGocciaNullLiteralValue) then
+        ThrowTypeError(SErrorCannotConvertNullOrUndefined, SSuggestObjectArgType);
+      if Pos('g', FlagsVal.ToStringLiteral.Value) = 0 then
+        ThrowTypeError(SErrorMatchAllRequiresGlobalRegExp, SSuggestReplaceAllGlobalFlag);
+    end;
+
+    MatchAllMethod := GetMethodBySymbol(RegExpArg,
       TGocciaSymbolValue.WellKnownMatchAll);
     if not (MatchAllMethod is TGocciaUndefinedLiteralValue) then
     begin
@@ -1684,7 +1695,7 @@ begin
         AThisValue
       ]);
       try
-        Result := InvokeCallable(MatchAllMethod, CallArgs, AArgs.GetElement(0));
+        Result := InvokeCallable(MatchAllMethod, CallArgs, RegExpArg);
       finally
         CallArgs.Free;
       end;
@@ -1696,7 +1707,7 @@ begin
   StringValue := ExtractStringValue(AThisValue);
 
   if AArgs.Length > 0 then
-    RegexValue := CoerceRegExpValue(AArgs.GetElement(0), 'g')
+    RegexValue := CoerceRegExpValue(RegExpArg, 'g')
   else
     RegexValue := CoerceRegExpValue(TGocciaUndefinedLiteralValue.UndefinedValue,
       'g');

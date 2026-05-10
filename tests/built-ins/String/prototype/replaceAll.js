@@ -131,4 +131,16 @@ describe('String.prototype.replaceAll', () => {
     };
     expect('abc'.replaceAll(obj, 'x')).toBe('ok');
   });
+
+  test('throws TypeError when IsRegExp object has null flags', () => {
+    expect(() => {
+      'abc'.replaceAll({ [Symbol.match]: true, flags: null }, 'x');
+    }).toThrow(TypeError);
+  });
+
+  test('throws TypeError when IsRegExp object has undefined flags', () => {
+    expect(() => {
+      'abc'.replaceAll({ [Symbol.match]: true }, 'x');
+    }).toThrow(TypeError);
+  });
 });

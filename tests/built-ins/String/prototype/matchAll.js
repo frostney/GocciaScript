@@ -164,3 +164,15 @@ test("matchAll accepts Symbol.match truthy object with global flag", () => {
   };
   expect("abc".matchAll(obj)).toEqual(["ok"]);
 });
+
+test("matchAll throws TypeError when IsRegExp object has null flags", () => {
+  expect(() => {
+    "abc".matchAll({ [Symbol.match]: true, flags: null });
+  }).toThrow(TypeError);
+});
+
+test("matchAll throws TypeError when IsRegExp object has undefined flags", () => {
+  expect(() => {
+    "abc".matchAll({ [Symbol.match]: true });
+  }).toThrow(TypeError);
+});
