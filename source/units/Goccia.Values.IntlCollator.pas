@@ -190,8 +190,7 @@ var
 begin
   // Bound compare uses Self directly, so it works when detached from the
   // Collator (e.g. passed as a callback to Array.prototype.sort).
-  if AArgs.Length < 2 then
-    ThrowTypeError('Intl.Collator.prototype.compare requires two arguments');
+  // Per ECMA-402, missing arguments are ToString-coerced (undefined -> "undefined").
   Str1 := UnicodeString(AArgs.GetElement(0).ToStringLiteral.Value);
   Str2 := UnicodeString(AArgs.GetElement(1).ToStringLiteral.Value);
 
@@ -209,8 +208,7 @@ var
   CompareResult: Integer;
 begin
   C := AsCollator(AThisValue, 'Intl.Collator.prototype.compare');
-  if AArgs.Length < 2 then
-    ThrowTypeError('Intl.Collator.prototype.compare requires two arguments');
+  // Per ECMA-402, missing arguments are ToString-coerced (undefined -> "undefined").
   Str1 := UnicodeString(AArgs.GetElement(0).ToStringLiteral.Value);
   Str2 := UnicodeString(AArgs.GetElement(1).ToStringLiteral.Value);
 

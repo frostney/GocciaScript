@@ -71,7 +71,9 @@ end;
 
 function DisplayTypeStringToEnum(const AValue: string): TIntlDisplayNameType;
 begin
-  if AValue = 'region' then
+  if AValue = 'language' then
+    Result := idntLanguage
+  else if AValue = 'region' then
     Result := idntRegion
   else if AValue = 'script' then
     Result := idntScript
@@ -82,7 +84,10 @@ begin
   else if AValue = 'dateTimeField' then
     Result := idntDateTimeField
   else
-    Result := idntLanguage;
+  begin
+    ThrowRangeError(Format(SErrorIntlInvalidOption, [AValue, 'type']));
+    Result := idntLanguage; // unreachable; satisfies compiler
+  end;
 end;
 
 function DisplayStyleStringToEnum(const AValue: string): TIntlDisplayNameStyle;

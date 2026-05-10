@@ -149,6 +149,18 @@ begin
     Result := inudShort;
 end;
 
+function UseGroupingStringToEnum(const AValue: string): TIntlNumberUseGrouping;
+begin
+  if AValue = 'always' then
+    Result := inugAlways
+  else if AValue = 'min2' then
+    Result := inugMin2
+  else if (AValue = 'false') or (AValue = '') then
+    Result := inugFalse
+  else
+    Result := inugAuto;
+end;
+
 function InsertGroupingSeparator(const AIntPart, ASep: string): string;
 var
   Len, I, GroupCount: Integer;
@@ -183,6 +195,7 @@ var
   CurrSymbol, CurrNarrow: string;
   CurrDigits: Integer;
   FormatSpec: string;
+  InvariantFS: TFormatSettings;
 begin
   if not TryGetNumberSymbol(ALocale, 'decimal', DecimalSep) then
     DecimalSep := '.';
@@ -245,7 +258,9 @@ begin
   if MaxFrac < MinFrac then MaxFrac := MinFrac;
 
   FormatSpec := '0.' + StringOfChar('0', MaxFrac);
-  RawStr := FormatFloat(FormatSpec, AbsValue);
+  InvariantFS := DefaultFormatSettings;
+  InvariantFS.DecimalSeparator := '.';
+  RawStr := FormatFloat(FormatSpec, AbsValue, InvariantFS);
 
   DotPos := Pos('.', RawStr);
   if DotPos > 0 then
@@ -269,7 +284,8 @@ begin
     IntPart := '0' + IntPart;
 
   // Apply grouping separator
-  IntPart := InsertGroupingSeparator(IntPart, GroupSep);
+  if AOptions.UseGrouping <> inugFalse then
+    IntPart := InsertGroupingSeparator(IntPart, GroupSep);
 
   if Length(FracPart) > 0 then
     Result := IntPart + DecimalSep + FracPart
@@ -393,6 +409,7 @@ begin
   FResolvedOptions.UnitDisplay := UnitDisplayStringToEnum(FUnitDisplay);
   FResolvedOptions.Notation := NotationStringToEnum(FNotation);
   FResolvedOptions.SignDisplay := SignDisplayStringToEnum(FSignDisplay);
+  FResolvedOptions.UseGrouping := UseGroupingStringToEnum(FUseGrouping);
   FResolvedOptions.MinimumIntegerDigits := FMinimumIntegerDigits;
   FResolvedOptions.MinimumFractionDigits := FMinimumFractionDigits;
   FResolvedOptions.MaximumFractionDigits := FMaximumFractionDigits;

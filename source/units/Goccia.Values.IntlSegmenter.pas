@@ -66,6 +66,7 @@ type
     function ToStringTag: string; override;
   published
     function IntlSegmentIteratorNext(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function IntlSegmentIteratorSymbolIterator(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
 implementation
@@ -143,12 +144,13 @@ begin
     Result := isgGrapheme;
 end;
 
-function CreateSegmentObject(const ASeg: TIntlSegment; const AIsWordGranularity: Boolean): TGocciaObjectValue;
+function CreateSegmentObject(const ASeg: TIntlSegment; const AIsWordGranularity: Boolean;
+  const AInput: string): TGocciaObjectValue;
 begin
   Result := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
   Result.AssignProperty('segment', TGocciaStringLiteralValue.Create(ASeg.Segment));
   Result.AssignProperty('index', TGocciaNumberLiteralValue.Create(ASeg.Index));
-  Result.AssignProperty('input', TGocciaStringLiteralValue.Create(ASeg.Segment));
+  Result.AssignProperty('input', TGocciaStringLiteralValue.Create(AInput));
   if AIsWordGranularity then
     Result.AssignProperty('isWordLike', TGocciaBooleanLiteralValue.Create(ASeg.IsWordLike));
 end;
@@ -324,16 +326,20 @@ begin
   // Build all segments and find the one containing the index
   Iter := TGocciaIntlSegmentIteratorValue.Create(Segs.FLocale, Segs.FGranularity,
     UnicodeString(Segs.FText));
-  for I := 0 to Length(Iter.FSegments) - 1 do
-  begin
-    Seg := Iter.FSegments[I];
-    if (Idx >= Seg.Index) and (Idx < Seg.Index + Length(Seg.Segment)) then
+  try
+    for I := 0 to Length(Iter.FSegments) - 1 do
     begin
-      Result := CreateSegmentObject(Seg, Segs.FGranularity = 'word');
-      Exit;
+      Seg := Iter.FSegments[I];
+      if (Idx >= Seg.Index) and (Idx < Seg.Index + Length(Seg.Segment)) then
+      begin
+        Result := CreateSegmentObject(Seg, Segs.FGranularity = 'word', Segs.FText);
+        Exit;
+      end;
     end;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  finally
+    Iter.Free;
   end;
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 function TGocciaIntlSegmentsValue.IntlSegmentsSymbolIterator(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -551,7 +557,7 @@ begin
       Members.AddSymbolMethod(
         TGocciaSymbolValue.WellKnownIterator,
         '[Symbol.iterator]',
-        IntlSegmentIteratorNext,
+        IntlSegmentIteratorSymbolIterator,
         0,
         [pfConfigurable, pfWritable]);
       FSegmentIteratorPrototypeMembers := Members.ToDefinitions;
@@ -579,11 +585,19 @@ begin
   begin
     Obj.AssignProperty('value', CreateSegmentObject(
       TGocciaIntlSegmentIteratorValue(AThisValue).FSegments[TGocciaIntlSegmentIteratorValue(AThisValue).FIndex],
-      TGocciaIntlSegmentIteratorValue(AThisValue).FGranularity = 'word'));
+      TGocciaIntlSegmentIteratorValue(AThisValue).FGranularity = 'word',
+      string(TGocciaIntlSegmentIteratorValue(AThisValue).FText)));
     Obj.AssignProperty('done', TGocciaBooleanLiteralValue.FalseValue);
     Inc(TGocciaIntlSegmentIteratorValue(AThisValue).FIndex);
   end;
   Result := Obj;
+end;
+
+function TGocciaIntlSegmentIteratorValue.IntlSegmentIteratorSymbolIterator(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  if not (AThisValue is TGocciaIntlSegmentIteratorValue) then
+    ThrowTypeError('Segment Iterator [Symbol.iterator] called on non-iterator');
+  Result := AThisValue;
 end;
 
 initialization
