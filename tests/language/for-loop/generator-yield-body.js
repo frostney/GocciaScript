@@ -1,13 +1,69 @@
 /*---
 description: yield in traditional for-loop body preserves loop state across resumes
-features: [compat-traditional-for-loop, compat-function, generators]
+features: [compat-traditional-for-loop, generators]
 ---*/
 
+const factory = {
+  basic() {
+    return ({
+      *gen() {
+        for (let i = 0; i < 3; i++) yield i;
+      },
+    }).gen();
+  },
+  doubled() {
+    return ({
+      *gen() {
+        for (let i = 0; i < 5; i++) yield i * 2;
+      },
+    }).gen();
+  },
+  countdown() {
+    return ({
+      *gen() {
+        for (let i = 3; i > 0; i--) yield i;
+      },
+    }).gen();
+  },
+  withSeen() {
+    return ({
+      *gen() {
+        const seen = [];
+        for (let i = 0; i < 3; i++) {
+          seen.push(i);
+          yield seen.length;
+        }
+        return seen;
+      },
+    }).gen();
+  },
+  commaInit() {
+    return ({
+      *gen() {
+        for (let i = 0, j = 10; i < 3; i++, j--) yield [i, j];
+      },
+    }).gen();
+  },
+  destructInit() {
+    return ({
+      *gen() {
+        for (let [i, j] = [0, 10]; i < 3; i++, j--) yield [i, j];
+      },
+    }).gen();
+  },
+  constInit() {
+    return ({
+      *gen() {
+        for (const arr = [10, 20, 30], len = arr.length; arr[0] < 100; ) {
+          yield arr.shift();
+        }
+      },
+    }).gen();
+  },
+};
+
 test("yield in body advances loop counter across resumes", () => {
-  function* gen() {
-    for (let i = 0; i < 3; i++) yield i;
-  }
-  const g = gen();
+  const g = factory.basic();
   expect(g.next()).toEqual({ value: 0, done: false });
   expect(g.next()).toEqual({ value: 1, done: false });
   expect(g.next()).toEqual({ value: 2, done: false });
@@ -15,30 +71,25 @@ test("yield in body advances loop counter across resumes", () => {
 });
 
 test("yield in body collects values across multiple resumes", () => {
-  function* gen() {
-    for (let i = 0; i < 5; i++) yield i * 2;
-  }
   const out = [];
-  for (const v of gen()) out.push(v);
+  for (const v of factory.doubled()) out.push(v);
   expect(out).toEqual([0, 2, 4, 6, 8]);
 });
 
 test("init side effects run exactly once", () => {
   let initCalls = 0;
-  const initFn = () => { initCalls++; return 0; };
-  function* gen() {
-    for (let i = initFn(); i < 3; i++) yield i;
-  }
-  const g = gen();
+  const obj = {
+    *gen() {
+      for (let i = ((initCalls++), 0); i < 3; i++) yield i;
+    },
+  };
+  const g = obj.gen();
   g.next(); g.next(); g.next(); g.next();
   expect(initCalls).toBe(1);
 });
 
 test("yield in body with countdown", () => {
-  function* gen() {
-    for (let i = 3; i > 0; i--) yield i;
-  }
-  const g = gen();
+  const g = factory.countdown();
   expect(g.next().value).toBe(3);
   expect(g.next().value).toBe(2);
   expect(g.next().value).toBe(1);
@@ -46,15 +97,7 @@ test("yield in body with countdown", () => {
 });
 
 test("body with multiple statements before yield", () => {
-  function* gen() {
-    const seen = [];
-    for (let i = 0; i < 3; i++) {
-      seen.push(i);
-      yield seen.length;
-    }
-    return seen;
-  }
-  const g = gen();
+  const g = factory.withSeen();
   expect(g.next().value).toBe(1);
   expect(g.next().value).toBe(2);
   expect(g.next().value).toBe(3);
@@ -62,10 +105,7 @@ test("body with multiple statements before yield", () => {
 });
 
 test("comma-separated init bindings advance per iteration", () => {
-  function* gen() {
-    for (let i = 0, j = 10; i < 3; i++, j--) yield [i, j];
-  }
-  const g = gen();
+  const g = factory.commaInit();
   expect(g.next().value).toEqual([0, 10]);
   expect(g.next().value).toEqual([1, 9]);
   expect(g.next().value).toEqual([2, 8]);
@@ -73,10 +113,7 @@ test("comma-separated init bindings advance per iteration", () => {
 });
 
 test("destructuring init advances per iteration", () => {
-  function* gen() {
-    for (let [i, j] = [0, 10]; i < 3; i++, j--) yield [i, j];
-  }
-  const g = gen();
+  const g = factory.destructInit();
   expect(g.next().value).toEqual([0, 10]);
   expect(g.next().value).toEqual([1, 9]);
   expect(g.next().value).toEqual([2, 8]);
@@ -84,12 +121,7 @@ test("destructuring init advances per iteration", () => {
 });
 
 test("const binding in init yields per iteration", () => {
-  function* gen() {
-    for (const arr = [10, 20, 30], len = arr.length; arr[0] < 100;) {
-      yield arr.shift();
-    }
-  }
-  const g = gen();
+  const g = factory.constInit();
   expect(g.next().value).toBe(10);
   expect(g.next().value).toBe(20);
   expect(g.next().value).toBe(30);
