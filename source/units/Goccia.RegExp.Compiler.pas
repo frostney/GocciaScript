@@ -390,6 +390,8 @@ var
   var
     J: Integer;
   begin
+    if ARangeCount + Length(ICURanges) > Length(ARanges) then
+      raise EConvertError.Create('Unicode property range count exceeds buffer capacity');
     for J := 0 to High(ICURanges) do
       AddRange(ARanges, ARangeCount, ICURanges[J].Lo, ICURanges[J].Hi);
   end;
