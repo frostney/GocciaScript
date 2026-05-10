@@ -92,20 +92,7 @@ console.log("Lexer errors are SyntaxError...");
   ];
 
   for (const [source, desc] of cases) {
-    const proc = Bun.spawnSync([LOADER, "--output=json"], {
-      stdin: new TextEncoder().encode(source + "\n"),
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    if (proc.exitCode === 0) {
-      throw new Error(`Lexer error "${desc}" should fail, but exited 0`);
-    }
-    const json = JSON.parse(proc.stdout.toString());
-    if (json.ok !== false || json.error?.type !== "SyntaxError") {
-      throw new Error(
-        `Lexer error "${desc}" should be SyntaxError, got ok=${json.ok} type=${json.error?.type}`
-      );
-    }
+    assertSyntaxError(source + "\n", `Lexer error "${desc}"`);
   }
 }
 
