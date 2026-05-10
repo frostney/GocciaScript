@@ -9362,7 +9362,7 @@ begin
                 LeftValue := CreateErrorObject(TYPE_ERROR_NAME, E.Message)
               else if E is TGocciaReferenceError then
                 LeftValue := CreateErrorObject(REFERENCE_ERROR_NAME, E.Message)
-              else if E is TGocciaSyntaxError then
+              else if (E is TGocciaSyntaxError) or (E is TGocciaLexerError) then
                 LeftValue := CreateErrorObject(SYNTAX_ERROR_NAME, E.Message)
               else
                 LeftValue := CreateErrorObject(ERROR_NAME, E.Message);

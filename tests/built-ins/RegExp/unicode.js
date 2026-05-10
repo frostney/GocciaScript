@@ -203,30 +203,26 @@ test("\\p{Z} shorthand for Separator", () => {
 // --- Multi-byte UTF-8 code point handling ---
 
 test("dot matches multi-byte BMP characters in dotAll mode", () => {
-  expect(/^.$/s.test(" ")).toBe(true);
-  expect(/^.$/s.test(" ")).toBe(true);
+  expect(/^.$/s.test("\u2028")).toBe(true);
+  expect(/^.$/s.test("\u2029")).toBe(true);
   expect(/^.$/s.test("")).toBe(true);
 });
 
 test("dot rejects line terminators without dotAll", () => {
-  expect(/^.$/.test(" ")).toBe(false);
-  expect(/^.$/.test(" ")).toBe(false);
+  expect(/^.$/.test("\u2028")).toBe(false);
+  expect(/^.$/.test("\u2029")).toBe(false);
   expect(/^.$/.test("\n")).toBe(false);
   expect(/^.$/.test("\r")).toBe(false);
 });
 
 test("multiline ^ matches after newline in multi-byte context", () => {
-  expect(/^abc/m.test("xyz
-abc")).toBe(true);
-  expect(/^abc/m.test("é
-abc")).toBe(true);
+  expect(/^abc/m.test("xyz\nabc")).toBe(true);
+  expect(/^abc/m.test("é\nabc")).toBe(true);
 });
 
 test("multiline $ matches before newline in multi-byte context", () => {
-  expect(/abc$/m.test("abc
-xyz")).toBe(true);
-  expect(/abc$/m.test("abc
-é")).toBe(true);
+  expect(/abc$/m.test("abc\nxyz")).toBe(true);
+  expect(/abc$/m.test("abc\né")).toBe(true);
 });
 
 // --- Unicode mode syntax restrictions ---

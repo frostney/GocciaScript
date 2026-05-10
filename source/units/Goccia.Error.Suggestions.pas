@@ -127,6 +127,7 @@ resourcestring
   // Lexer errors — strings, templates, regex
   SSuggestCloseBlockComment = 'Add "*/" to close the block comment';
   SSuggestCloseString = 'Add a closing quote to end the string';
+  SSuggestStringLineTerminator = 'Use a template literal (`...`) for multi-line strings, or escape the line break with \n';
   SSuggestCloseTemplate = 'Add a closing backtick to end the template literal';
   SSuggestCloseRegex = 'Add a closing / to end the regex, followed by optional flags (g, i, m, s, u, y)';
   SSuggestValidRegexFlags = 'Valid regex flags are: g (global), i (case-insensitive), m (multiline), s (dotAll), u (unicode), y (sticky)';
