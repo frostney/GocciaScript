@@ -200,20 +200,18 @@ var
   SourceMap: TGocciaSourceMap;
   FileConfig: TConfigEntryArray;
   EffectiveASI, EffectiveVar, EffectiveFunction, EffectiveStrictTypes,
-    EffectiveCompatAll, EffectiveTraditionalFor: Boolean;
+    EffectiveTraditionalFor: Boolean;
 begin
   { Resolve ASI, compat-var, compat-function, compat-traditional-for-loop
     and strict-types: CLI flag > per-file config > root config > default
     (false). }
   FileConfig := DiscoverFileConfig(AFileName);
   EffectiveASI := ResolveFlagOption(EngineOptions.ASI, FileConfig, 'asi');
-  EffectiveCompatAll := ResolveFlagOption(
-    EngineOptions.CompatAll, FileConfig, 'compat-all');
-  EffectiveVar := EffectiveCompatAll or ResolveFlagOption(
+  EffectiveVar := ResolveFlagOption(
     EngineOptions.CompatVar, FileConfig, 'compat-var');
-  EffectiveFunction := EffectiveCompatAll or ResolveFlagOption(
+  EffectiveFunction := ResolveFlagOption(
     EngineOptions.CompatFunction, FileConfig, 'compat-function');
-  EffectiveTraditionalFor := EffectiveCompatAll or ResolveFlagOption(
+  EffectiveTraditionalFor := ResolveFlagOption(
     EngineOptions.CompatTraditionalFor, FileConfig,
     'compat-traditional-for-loop');
   EffectiveStrictTypes := ResolveFlagOption(
