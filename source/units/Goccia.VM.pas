@@ -6967,6 +6967,9 @@ begin
     begin
       Handler := FHandlerStack.Peek;
       FHandlerStack.Pop;
+      FWithStackCount := Handler.WithStackCount;
+      if Assigned(Handler.SavedGlobalScope) then
+        FGlobalScope := TGocciaScope(Handler.SavedGlobalScope);
       AFrame.IP := Handler.CatchIP;
       SetRegister(Handler.CatchRegister, AErrorValue);
       Exit;
@@ -7304,7 +7307,11 @@ begin
             Template.DebugInfo.GetColumnForPC(Frame.IP - 1), 1);
 
       OP_PUSH_HANDLER:
+      begin
         FHandlerStack.Push(Frame.IP + DecodeBx(Instruction), A, FFrameDepth);
+        FHandlerStack.PeekEntry.WithStackCount := FWithStackCount;
+        FHandlerStack.PeekEntry.SavedGlobalScope := Pointer(FGlobalScope);
+      end;
 
       OP_POP_HANDLER:
         if not FHandlerStack.IsEmpty then

@@ -1708,9 +1708,15 @@ begin
         Token := Advance;
         if Check(gttLeftParen) then
         begin
-          // ES2026 §13.3.10 ImportCall — import(specifier)
+          // ES2026 §13.3.10 ImportCall — import(specifier[, options])
           Advance; // consume '('
           Expr := Assignment;
+          if Match(gttComma) then
+          begin
+            if not Check(gttRightParen) then
+              Assignment;  // consume optional second argument (import attributes)
+            Match(gttComma);  // trailing comma
+          end;
           Consume(gttRightParen, 'Expected ")" after import() specifier',
             SSuggestDynamicImportSyntax);
           Result := TGocciaImportCallExpression.Create(Expr, Token.Line, Token.Column);

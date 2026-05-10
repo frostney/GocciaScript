@@ -14,8 +14,11 @@ type
     CatchIP: Integer;
     CatchRegister: UInt8;
     FrameDepth: Integer;
+    WithStackCount: Integer;
+    SavedGlobalScope: Pointer;
   end;
 
+  PGocciaBytecodeHandlerEntry = ^TGocciaBytecodeHandlerEntry;
   TGocciaBytecodeHandlerEntryArray = array of TGocciaBytecodeHandlerEntry;
 
   TGocciaBytecodeHandlerStack = class
@@ -31,6 +34,7 @@ type
     procedure RestoreFrom(const AEntries: TGocciaBytecodeHandlerEntryArray;
       const AFrameDepth: Integer);
     function Peek: TGocciaBytecodeHandlerEntry;
+    function PeekEntry: PGocciaBytecodeHandlerEntry;
     function IsEmpty: Boolean;
     property Count: Integer read FCount;
   end;
@@ -105,6 +109,13 @@ begin
   if FCount = 0 then
     raise Exception.Create('TGocciaBytecodeHandlerStack.Peek: stack is empty');
   Result := FEntries[FCount - 1];
+end;
+
+function TGocciaBytecodeHandlerStack.PeekEntry: PGocciaBytecodeHandlerEntry;
+begin
+  if FCount = 0 then
+    raise Exception.Create('TGocciaBytecodeHandlerStack.PeekEntry: stack is empty');
+  Result := @FEntries[FCount - 1];
 end;
 
 function TGocciaBytecodeHandlerStack.IsEmpty: Boolean;
