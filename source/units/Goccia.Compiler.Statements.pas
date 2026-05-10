@@ -127,6 +127,7 @@ type
     IsIteratorClose: Boolean;
     IsAsyncIterator: Boolean;
     IteratorReg: UInt8;
+    IsWithLeave: Boolean;
   end;
 
 threadvar
@@ -1206,6 +1207,11 @@ procedure EmitPendingEntryCleanup(const ACtx: TGocciaCompilationContext;
 var
   NullishJump: Integer;
 begin
+  if AEntry.IsWithLeave then
+  begin
+    EmitInstruction(ACtx, EncodeABC(OP_WITH_LEAVE, 0, 0, 0));
+    Exit;
+  end;
   EmitInstruction(ACtx, EncodeABC(OP_POP_HANDLER, 0, 0, 0));
   if Assigned(AEntry.FinallyBlock) then
     CompileBlockStatement(ACtx, AEntry.FinallyBlock)
@@ -1574,6 +1580,7 @@ begin
   begin
     if not Assigned(GPendingFinally) then
       GPendingFinally := TList<TPendingFinallyEntry>.Create;
+    FillChar(Entry, SizeOf(Entry), 0);
     Entry.FinallyBlock := AStmt.FinallyBlock;
     GPendingFinally.Add(Entry);
   end;
@@ -4536,13 +4543,23 @@ procedure CompileWithStatement(const ACtx: TGocciaCompilationContext;
   const AWith: TGocciaWithStatement);
 var
   ObjReg: UInt8;
+  PendingEntry: TPendingFinallyEntry;
 begin
   ObjReg := ACtx.Scope.AllocateRegister;
   ACtx.CompileExpression(AWith.ObjectExpr, ObjReg);
   EmitInstruction(ACtx, EncodeABC(OP_WITH_ENTER, ObjReg, 0, 0));
   ACtx.Scope.FreeRegister;
   ACtx.Scope.EnterWithBlock;
+
+  if not Assigned(GPendingFinally) then
+    GPendingFinally := TList<TPendingFinallyEntry>.Create;
+  FillChar(PendingEntry, SizeOf(PendingEntry), 0);
+  PendingEntry.IsWithLeave := True;
+  GPendingFinally.Add(PendingEntry);
+
   ACtx.CompileStatement(AWith.Body);
+
+  GPendingFinally.Delete(GPendingFinally.Count - 1);
   ACtx.Scope.LeaveWithBlock;
   EmitInstruction(ACtx, EncodeABC(OP_WITH_LEAVE, 0, 0, 0));
 end;

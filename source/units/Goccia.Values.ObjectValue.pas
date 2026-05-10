@@ -136,6 +136,11 @@ var
 threadvar
   FPrototypeMethodHost: TGocciaObjectValue;
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+  // Controls whether ObjectValue.AssignProperty silently returns instead of
+  // throwing for non-writable/frozen/getter-only assignments. Set by the
+  // interpreter/VM at execution entry based on NonStrictModeEnabled.
+  // Single-threaded invariant: must only be accessed from the engine's
+  // execution thread.
   GNonStrictAssignment: Boolean;
 
 const

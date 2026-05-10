@@ -417,6 +417,10 @@ begin
     begin
       Block := TGocciaBlockStatement(ABody);
 
+      // Detect "use strict" directive prologue for this function/top-level
+      if BodyHasStrictDirective(ABody) then
+        FCurrentTemplate.HasStrictDirective := True;
+
       // Hoist var declarations to function scope
       for I := 0 to Block.Nodes.Count - 1 do
         HoistVarLocals(Block.Nodes[I], FCurrentScope);

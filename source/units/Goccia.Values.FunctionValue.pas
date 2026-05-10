@@ -94,7 +94,8 @@ uses
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
-  Goccia.Values.ObjectValue;
+  Goccia.Values.ObjectValue,
+  Goccia.Values.SymbolValue;
 
 { TGocciaFunctionValue }
 
@@ -319,6 +320,11 @@ begin
         [pfWritable, pfConfigurable]));
     ArgsObj.DefineProperty('callee',
       TGocciaPropertyDescriptorData.Create(Self,
+        [pfWritable, pfConfigurable]));
+    ArgsObj.DefineSymbolProperty(TGocciaSymbolValue.WellKnownIterator,
+      TGocciaPropertyDescriptorData.Create(
+        TGocciaArrayValue.Create.GetSymbolProperty(
+          TGocciaSymbolValue.WellKnownIterator),
         [pfWritable, pfConfigurable]));
     ACallScope.DefineLexicalBinding('arguments', ArgsObj, dtParameter);
   end;

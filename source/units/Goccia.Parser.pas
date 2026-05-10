@@ -1714,7 +1714,8 @@ begin
           if Match(gttComma) then
           begin
             if not Check(gttRightParen) then
-              Assignment;  // consume optional second argument (import attributes)
+              // Import attributes (options argument) parsed for syntax validity but not yet evaluated
+              Assignment;
             Match(gttComma);  // trailing comma
           end;
           Consume(gttRightParen, 'Expected ")" after import() specifier',

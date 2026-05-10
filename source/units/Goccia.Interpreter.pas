@@ -84,6 +84,8 @@ type
 implementation
 
 uses
+  Goccia.AST.Expressions,
+  Goccia.AST.Statements,
   Goccia.Coverage,
   Goccia.GarbageCollector;
 
@@ -155,6 +157,26 @@ begin
 
   SavedNonStrict := IsNonStrictAssignmentMode;
   SetNonStrictAssignmentMode(FNonStrictModeEnabled);
+
+  // Detect top-level "use strict" directive prologue
+  if Context.NonStrictMode then
+    for I := 0 to AProgram.Body.Count - 1 do
+    begin
+      if not (AProgram.Body[I] is TGocciaExpressionStatement) then Break;
+      if not (TGocciaExpressionStatement(AProgram.Body[I]).Expression
+        is TGocciaLiteralExpression) then Break;
+      if not (TGocciaLiteralExpression(
+        TGocciaExpressionStatement(AProgram.Body[I]).Expression).Value
+        is TGocciaStringLiteralValue) then Break;
+      if TGocciaStringLiteralValue(TGocciaLiteralExpression(
+        TGocciaExpressionStatement(AProgram.Body[I]).Expression).Value)
+        .Value = 'use strict' then
+      begin
+        Context.NonStrictMode := False;
+        SetNonStrictAssignmentMode(False);
+        Break;
+      end;
+    end;
 
   if FVarEnabled then
     HoistVarDeclarations(AProgram.Body, FGlobalScope);

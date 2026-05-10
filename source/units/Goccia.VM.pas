@@ -9306,6 +9306,11 @@ begin
             TGocciaPropertyDescriptorData.Create(
               FCurrentCallee,
               [pfWritable, pfConfigurable]));
+        ArgsObj.DefineSymbolProperty(TGocciaSymbolValue.WellKnownIterator,
+          TGocciaPropertyDescriptorData.Create(
+            TGocciaArrayValue.Create.GetSymbolProperty(
+              TGocciaSymbolValue.WellKnownIterator),
+            [pfWritable, pfConfigurable]));
         SetRegister(A, ArgsObj);
       end;
 
@@ -9753,6 +9758,7 @@ var
   SavedModuleSourcePath: string;
   SavedModuleExports: TGocciaValueMap;
   SavedNonStrict: Boolean;
+  SavedNonStrictMode: Boolean;
 begin
   EmptyArgs := TGocciaArgumentsCollection.Create;
   TopClosure := TGocciaBytecodeClosure.Create(AModule.TopLevel);
@@ -9761,7 +9767,14 @@ begin
   FCurrentModuleSourcePath := AModule.SourcePath;
   FCurrentModuleExports := TGocciaValueMap.Create;
   SavedNonStrict := IsNonStrictAssignmentMode;
+  SavedNonStrictMode := FNonStrictMode;
   SetNonStrictAssignmentMode(FNonStrictMode);
+  // Detect top-level "use strict" directive via compiler flag
+  if FNonStrictMode and AModule.TopLevel.HasStrictDirective then
+  begin
+    FNonStrictMode := False;
+    SetNonStrictAssignmentMode(False);
+  end;
   try
     try
       Result := ExecuteClosure(TopClosure,
@@ -9770,6 +9783,7 @@ begin
       FCurrentModuleExports.Free;
       FCurrentModuleExports := SavedModuleExports;
       FCurrentModuleSourcePath := SavedModuleSourcePath;
+      FNonStrictMode := SavedNonStrictMode;
       SetNonStrictAssignmentMode(SavedNonStrict);
     end;
   finally

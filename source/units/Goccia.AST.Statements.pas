@@ -500,11 +500,14 @@ uses
   Goccia.Scope.BindingMap,
   Goccia.Token,
   Goccia.Types.Enforcement,
+  Goccia.Values.BooleanObjectValue,
   Goccia.Values.ClassValue,
   Goccia.Values.Error,
   Goccia.Values.FunctionValue,
+  Goccia.Values.NumberObjectValue,
   Goccia.Values.ObjectPropertyDescriptor,
-  Goccia.Values.ObjectValue;
+  Goccia.Values.ObjectValue,
+  Goccia.Values.StringObjectValue;
 
 function CreateModuleNamespaceObject(const AModule: TGocciaModule): TGocciaValue;
 begin
@@ -820,11 +823,24 @@ end;
     WithContext: TGocciaEvaluationContext;
   begin
     ObjValue := EvaluateExpression(FObjectExpr, AContext);
+    // ES2026 14.11.2 step 2: ToObject() — box primitives, throw on null/undefined
     if not (ObjValue is TGocciaObjectValue) then
     begin
-      Result := TGocciaControlFlow.Normal(
-        TGocciaUndefinedLiteralValue.UndefinedValue);
-      Exit;
+      if ObjValue is TGocciaStringLiteralValue then
+        ObjValue := TGocciaStringObjectValue.Create(
+          TGocciaStringLiteralValue(ObjValue))
+      else if ObjValue is TGocciaNumberLiteralValue then
+        ObjValue := TGocciaNumberObjectValue.Create(
+          TGocciaNumberLiteralValue(ObjValue))
+      else if ObjValue is TGocciaBooleanLiteralValue then
+        ObjValue := TGocciaBooleanObjectValue.Create(
+          TGocciaBooleanLiteralValue(ObjValue))
+      else
+      begin
+        Result := TGocciaControlFlow.Normal(
+          TGocciaUndefinedLiteralValue.UndefinedValue);
+        Exit;
+      end;
     end;
     WithScope := AContext.Scope.CreateChild(skCustom, 'with');
     WithScope.WithObject := ObjValue;
