@@ -49,6 +49,7 @@ console.log("String line terminator rejection...");
     ['"hello\rworld"', "CR in double-quoted string"],
     ["'hello\rworld'", "CR in single-quoted string"],
     ['"hello\r\nworld"', "CRLF in double-quoted string"],
+    ["'hello\r\nworld'", "CRLF in single-quoted string"],
   ];
 
   for (const [source, desc] of cases) {
