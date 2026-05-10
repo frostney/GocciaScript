@@ -128,18 +128,35 @@ end;
 function CoerceRegExpValue(const AValue: TGocciaValue;
   const ANewFlags: string = ''): TGocciaObjectValue;
 var
-  Pattern: string;
+  Pattern, Flags: string;
+  PropVal: TGocciaValue;
 begin
-  if IsRegExpValue(AValue) then
-    Result := TGocciaObjectValue(CloneRegExpObject(AValue))
+  if IsRegExp(AValue) then
+  begin
+    PropVal := TGocciaObjectValue(AValue).GetProperty(PROP_SOURCE);
+    if PropVal is TGocciaUndefinedLiteralValue then
+      Pattern := ''
+    else
+      Pattern := PropVal.ToStringLiteral.Value;
+    if ANewFlags <> '' then
+      Flags := ANewFlags
+    else
+    begin
+      PropVal := TGocciaObjectValue(AValue).GetProperty(PROP_FLAGS);
+      if PropVal is TGocciaUndefinedLiteralValue then
+        Flags := ''
+      else
+        Flags := PropVal.ToStringLiteral.Value;
+    end;
+    Result := TGocciaObjectValue(CreateRegExpObject(Pattern, Flags));
+  end
   else
   begin
     if AValue is TGocciaUndefinedLiteralValue then
       Pattern := ''
     else
       Pattern := AValue.ToStringLiteral.Value;
-    Result := TGocciaObjectValue(CreateRegExpObject(
-      Pattern, ANewFlags));
+    Result := TGocciaObjectValue(CreateRegExpObject(Pattern, ANewFlags));
   end;
 end;
 
@@ -847,11 +864,15 @@ var
   FoundIndex: Integer;
   Len: Integer;
 begin
-  // Step 1: Let O be RequireObjectCoercible(this value)
-  // Step 2: Let S be ToString(O)
+  // Step 1–2: Let S be ToString(RequireObjectCoercible(this))
   StringValue := ExtractStringValue(AThisValue);
 
-  // Step 3: Let searchStr be ToString(searchString)
+  // §22.1.3.8 steps 3–4: throw if searchString is regexp-like
+  if (AArgs.Length > 0) and IsRegExp(AArgs.GetElement(0)) then
+    ThrowTypeError(Format(SErrorFirstArgMustNotBeRegExp,
+      ['String.prototype.includes']), SSuggestUseMatchOrSearch);
+
+  // Step 5: Let searchStr be ToString(searchString)
   if AArgs.Length > 0 then
     SearchValue := AArgs.GetElement(0).ToStringLiteral.Value
   else
@@ -895,23 +916,25 @@ var
   StartPosition: Integer;
   Len: Integer;
 begin
-  // Step 1: Let O be RequireObjectCoercible(this value)
-  // Step 2: Let S be ToString(O)
+  // Step 1–2: Let S be ToString(RequireObjectCoercible(this))
   StringValue := ExtractStringValue(AThisValue);
 
-  // Step 3: Let searchStr be ToString(searchString)
+  // §22.1.3.24 steps 3–4: throw if searchString is regexp-like
+  if (AArgs.Length > 0) and IsRegExp(AArgs.GetElement(0)) then
+    ThrowTypeError(Format(SErrorFirstArgMustNotBeRegExp,
+      ['String.prototype.startsWith']), SSuggestUseMatchOrSearch);
+
+  // Step 5: Let searchStr be ToString(searchString)
   if AArgs.Length > 0 then
     SearchValue := AArgs.GetElement(0).ToStringLiteral.Value
   else
     SearchValue := 'undefined';
 
-  // Step 4: Let searchLength be the length of searchStr
-  // Step 5: Let start be min(max(ToIntegerOrInfinity(position), 0), len)
+  // Step 6: Let start be min(max(ToIntegerOrInfinity(position), 0), len)
   Len := UTF16CodeUnitLength(StringValue);
   StartPosition := Min(Max(0, ToIntegerFromArgs(AArgs, 1)), Len);
 
-  // Step 6: If searchLength + start > len(S), return false
-  // Step 7: If the code units of S starting at start match searchStr, return true; else false
+  // Step 7–8: If searchLength + start > len(S), return false; else compare
   if StartPosition + UTF16CodeUnitLength(SearchValue) > Len then
     Result := TGocciaBooleanLiteralValue.FalseValue
   else if UTF16IndexOf(StringValue, SearchValue, StartPosition) = StartPosition then
@@ -928,19 +951,23 @@ var
   SearchLength: Integer;
   StartPosition: Integer;
 begin
-  // Step 1: Let O be RequireObjectCoercible(this value)
-  // Step 2: Let S be ToString(O)
+  // Step 1–2: Let S be ToString(RequireObjectCoercible(this))
   StringValue := ExtractStringValue(AThisValue);
 
-  // Step 3: Let searchStr be ToString(searchString)
+  // §22.1.3.6 steps 3–4: throw if searchString is regexp-like
+  if (AArgs.Length > 0) and IsRegExp(AArgs.GetElement(0)) then
+    ThrowTypeError(Format(SErrorFirstArgMustNotBeRegExp,
+      ['String.prototype.endsWith']), SSuggestUseMatchOrSearch);
+
+  // Step 5: Let searchStr be ToString(searchString)
   if AArgs.Length > 0 then
     SearchValue := AArgs.GetElement(0).ToStringLiteral.Value
   else
     SearchValue := 'undefined';
 
-  // Step 4: Let searchLength be the length of searchStr
-  // Step 5: If endPosition is undefined, let pos be len; else let pos be ToIntegerOrInfinity(endPosition)
-  // Step 6: Let end be min(max(pos, 0), len)
+  // Step 6: Let searchLength be the length of searchStr
+  // Step 7: If endPosition is undefined, let pos be len; else let pos be ToIntegerOrInfinity(endPosition)
+  // Step 8: Let end be min(max(pos, 0), len)
   EndPosition := Min(Max(0, ToIntegerFromArgs(AArgs, 1,
     UTF16CodeUnitLength(StringValue))), UTF16CodeUnitLength(StringValue));
 
@@ -1096,48 +1123,7 @@ begin
   // Step 3: Let string be ? ToString(O).
   StringValue := ExtractStringValue(AThisValue);
 
-  if IsRegExpValue(SearchArg) then
-  begin
-    RegexValue := CoerceRegExpValue(SearchArg);
-    TGarbageCollector.Instance.AddTempRoot(RegexValue);
-    try
-      if GetRegExpBooleanProperty(RegexValue, PROP_GLOBAL) then
-      begin
-        ResultStr := '';
-        Offset := 0;
-        while MatchRegExpObjectValue(RegexValue, StringValue, Offset, False,
-          False, MatchArray, MatchIndex, MatchEnd, NextIndex) do
-        begin
-          ResultStr := ResultStr + Copy(StringValue, Offset + 1,
-            MatchIndex - Offset);
-          ResultStr := ResultStr + BuildRegexReplacement(ReplaceArg,
-            TGocciaArrayValue(MatchArray), MatchIndex, StringValue);
-          Offset := NextIndex;
-          if Offset > Length(StringValue) then
-            Break;
-        end;
-        if Offset <= Length(StringValue) then
-          ResultStr := ResultStr + Copy(StringValue, Offset + 1, MaxInt);
-        Result := TGocciaStringLiteralValue.Create(ResultStr);
-      end
-      else if MatchRegExpObjectValue(RegexValue, StringValue, 0, False, False,
-        MatchArray, MatchIndex, MatchEnd, NextIndex) then
-      begin
-        ReplaceValue := BuildRegexReplacement(ReplaceArg,
-          TGocciaArrayValue(MatchArray),
-          MatchIndex, StringValue);
-        Result := TGocciaStringLiteralValue.Create(
-          Copy(StringValue, 1, MatchIndex) + ReplaceValue +
-          Copy(StringValue, MatchEnd + 1, MaxInt));
-      end
-      else
-        Result := TGocciaStringLiteralValue.Create(StringValue);
-    finally
-      TGarbageCollector.Instance.RemoveTempRoot(RegexValue);
-    end;
-    Exit;
-  end;
-
+  // §22.1.3.19 step 4: Let searchString be ? ToString(searchValue).
   SearchValue := SearchArg.ToStringLiteral.Value;
 
   // Step 5: Let pos be StringIndexOf(string, searchString, 0)
@@ -1191,7 +1177,7 @@ end;
 function TGocciaStringObjectValue.StringReplaceAllMethod(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   StringValue, SearchValue, ReplaceValue, ResultStr: string;
-  SearchArg: TGocciaValue;
+  SearchArg, FlagsVal: TGocciaValue;
   ReplaceArg: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
   CallResult: TGocciaValue;
@@ -1216,16 +1202,16 @@ begin
   else
     ReplaceArg := TGocciaUndefinedLiteralValue.UndefinedValue;
 
-  // Step 2 (spec): If searchValue is neither undefined nor null, invoke
-  // GetMethod(searchValue, @@replace) and dispatch through it BEFORE doing
-  // any ToString on `O` or the args. ES2026 §22.1.3.20 step 2.a.iii: the
-  // RegExp-flags global check uses Get + ToString on searchValue.flags
-  // only when searchValue is itself a RegExp; for arbitrary user-supplied
-  // searchValues with @@replace, the replacer call is the only observable
-  // side effect.
-  if IsRegExpValue(SearchArg) and
-     not GetRegExpBooleanProperty(TGocciaObjectValue(SearchArg), PROP_GLOBAL) then
-    ThrowTypeError(SErrorReplaceAllRequiresGlobalRegExp, SSuggestReplaceAllGlobalFlag);
+  // §22.1.3.20 step 2a–b: IsRegExp check; RequireObjectCoercible(flags); 'g' check
+  if IsRegExp(SearchArg) then
+  begin
+    FlagsVal := TGocciaObjectValue(SearchArg).GetProperty(PROP_FLAGS);
+    if (FlagsVal is TGocciaUndefinedLiteralValue) or
+       (FlagsVal is TGocciaNullLiteralValue) then
+      ThrowTypeError(SErrorCannotConvertNullOrUndefined, SSuggestObjectArgType);
+    if Pos('g', FlagsVal.ToStringLiteral.Value) = 0 then
+      ThrowTypeError(SErrorReplaceAllRequiresGlobalRegExp, SSuggestReplaceAllGlobalFlag);
+  end;
 
   ReplaceMethod := GetMethodBySymbol(SearchArg,
     TGocciaSymbolValue.WellKnownReplace);
@@ -1251,34 +1237,7 @@ begin
   // Step 3 (spec): Let string be ? ToString(O)
   StringValue := ExtractStringValue(AThisValue);
 
-  if IsRegExpValue(SearchArg) then
-  begin
-    RegexValue := CoerceRegExpValue(SearchArg);
-    TGarbageCollector.Instance.AddTempRoot(RegexValue);
-    try
-      ResultStr := '';
-      Offset := 0;
-      while MatchRegExpObjectValue(RegexValue, StringValue, Offset, False,
-        False,
-        MatchArray, MatchIndex, MatchEnd, NextIndex) do
-      begin
-        ResultStr := ResultStr + Copy(StringValue, Offset + 1,
-          MatchIndex - Offset);
-        ResultStr := ResultStr + BuildRegexReplacement(ReplaceArg,
-          TGocciaArrayValue(MatchArray), MatchIndex, StringValue);
-        Offset := NextIndex;
-        if Offset > Length(StringValue) then
-          Break;
-      end;
-      if Offset <= Length(StringValue) then
-        ResultStr := ResultStr + Copy(StringValue, Offset + 1, MaxInt);
-      Result := TGocciaStringLiteralValue.Create(ResultStr);
-    finally
-      TGarbageCollector.Instance.RemoveTempRoot(RegexValue);
-    end;
-    Exit;
-  end;
-
+  // §22.1.3.20 step 7: Let searchString be ? ToString(searchValue).
   SearchValue := SearchArg.ToStringLiteral.Value;
 
   // Step 5: Let searchLength be the length of searchString
@@ -1472,48 +1431,7 @@ begin
     // Step 3 (spec): Let S be ? ToString(O). Only reached when no @@split.
     StringValue := ExtractStringValue(AThisValue);
 
-    if IsRegExpValue(SeparatorArg) then
-    begin
-      RegexValue := CoerceRegExpValue(SeparatorArg);
-      TGarbageCollector.Instance.AddTempRoot(RegexValue);
-      try
-        PreviousIndex := 0;
-        SearchIndex := 0;
-        while MatchRegExpObjectValue(RegexValue, StringValue, SearchIndex,
-          False,
-          False, MatchArray, MatchIndex, MatchEnd, NextIndex) do
-        begin
-          ResultArray.Elements.Add(TGocciaStringLiteralValue.Create(
-            Copy(StringValue, PreviousIndex + 1, MatchIndex - PreviousIndex)));
-          if HasLimit and (Cardinal(ResultArray.Elements.Count) >= Limit) then
-            Break;
-
-          for I := 1 to TGocciaArrayValue(MatchArray).Elements.Count - 1 do
-          begin
-            ResultArray.Elements.Add(TGocciaArrayValue(MatchArray).Elements[I]);
-            if HasLimit and (Cardinal(ResultArray.Elements.Count) >= Limit) then
-              Break;
-          end;
-          if HasLimit and (Cardinal(ResultArray.Elements.Count) >= Limit) then
-            Break;
-
-          PreviousIndex := MatchEnd;
-          SearchIndex := NextIndex;
-          if SearchIndex > Length(StringValue) then
-            Break;
-        end;
-
-        if not HasLimit or (Cardinal(ResultArray.Elements.Count) < Limit) then
-          ResultArray.Elements.Add(TGocciaStringLiteralValue.Create(
-            Copy(StringValue, PreviousIndex + 1, Length(StringValue) - PreviousIndex)));
-
-        Result := ResultArray;
-      finally
-        TGarbageCollector.Instance.RemoveTempRoot(RegexValue);
-      end;
-      Exit;
-    end;
-
+    // §22.1.3.23 step 5: Let R be ? ToString(separator).
     Separator := SeparatorArg.ToStringLiteral.Value;
 
     // Step 5: If separator is undefined, return [S]
@@ -1666,7 +1584,7 @@ end;
 function TGocciaStringObjectValue.StringMatchAll(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   StringValue: string;
-  MatchAllMethod: TGocciaValue;
+  RegExpArg, FlagsVal, MatchAllMethod: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
   RegexValue: TGocciaObjectValue;
 begin
@@ -1680,14 +1598,21 @@ begin
      (AThisValue is TGocciaNullLiteralValue) then
     ThrowTypeError(SErrorStringPrototypeRequiresNonNullish, SSuggestCheckNullBeforeAccess);
 
-  if (AArgs.Length > 0) and IsRegExpValue(AArgs.GetElement(0)) and
-     not GetRegExpBooleanProperty(TGocciaObjectValue(AArgs.GetElement(0)),
-       PROP_GLOBAL) then
-    ThrowTypeError(SErrorMatchAllRequiresGlobalRegExp, SSuggestReplaceAllGlobalFlag);
-
+  // §22.1.3.13 step 2a–b: IsRegExp check; RequireObjectCoercible(flags); 'g' check
   if AArgs.Length > 0 then
   begin
-    MatchAllMethod := GetMethodBySymbol(AArgs.GetElement(0),
+    RegExpArg := AArgs.GetElement(0);
+    if IsRegExp(RegExpArg) then
+    begin
+      FlagsVal := TGocciaObjectValue(RegExpArg).GetProperty(PROP_FLAGS);
+      if (FlagsVal is TGocciaUndefinedLiteralValue) or
+         (FlagsVal is TGocciaNullLiteralValue) then
+        ThrowTypeError(SErrorCannotConvertNullOrUndefined, SSuggestObjectArgType);
+      if Pos('g', FlagsVal.ToStringLiteral.Value) = 0 then
+        ThrowTypeError(SErrorMatchAllRequiresGlobalRegExp, SSuggestReplaceAllGlobalFlag);
+    end;
+
+    MatchAllMethod := GetMethodBySymbol(RegExpArg,
       TGocciaSymbolValue.WellKnownMatchAll);
     if not (MatchAllMethod is TGocciaUndefinedLiteralValue) then
     begin
@@ -1698,7 +1623,7 @@ begin
         AThisValue
       ]);
       try
-        Result := InvokeCallable(MatchAllMethod, CallArgs, AArgs.GetElement(0));
+        Result := InvokeCallable(MatchAllMethod, CallArgs, RegExpArg);
       finally
         CallArgs.Free;
       end;
@@ -1710,7 +1635,7 @@ begin
   StringValue := ExtractStringValue(AThisValue);
 
   if AArgs.Length > 0 then
-    RegexValue := CoerceRegExpValue(AArgs.GetElement(0), 'g')
+    RegexValue := CoerceRegExpValue(RegExpArg, 'g')
   else
     RegexValue := CoerceRegExpValue(TGocciaUndefinedLiteralValue.UndefinedValue,
       'g');

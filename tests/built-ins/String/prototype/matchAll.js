@@ -149,3 +149,30 @@ test("matchAll throws TypeError when called on null or undefined", () => {
   expect(() => "".matchAll.call(null, /x/g)).toThrow(TypeError);
   expect(() => "".matchAll.call(undefined, /x/g)).toThrow(TypeError);
 });
+
+test("matchAll rejects Symbol.match truthy object without global flag", () => {
+  expect(() => {
+    "abc".matchAll({ [Symbol.match]: true, flags: "" });
+  }).toThrow(TypeError);
+});
+
+test("matchAll accepts Symbol.match truthy object with global flag", () => {
+  const obj = {
+    flags: "g",
+    [Symbol.match]: true,
+    [Symbol.matchAll](str) { return ["ok"]; },
+  };
+  expect("abc".matchAll(obj)).toEqual(["ok"]);
+});
+
+test("matchAll throws TypeError when IsRegExp object has null flags", () => {
+  expect(() => {
+    "abc".matchAll({ [Symbol.match]: true, flags: null });
+  }).toThrow(TypeError);
+});
+
+test("matchAll throws TypeError when IsRegExp object has undefined flags", () => {
+  expect(() => {
+    "abc".matchAll({ [Symbol.match]: true });
+  }).toThrow(TypeError);
+});

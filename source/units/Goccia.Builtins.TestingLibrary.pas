@@ -924,7 +924,7 @@ begin
   end;
 
   Expected := AArgs.GetElement(0);
-  if not (Expected is TGocciaStringLiteralValue) and not IsRegExpValue(Expected) then
+  if not (Expected is TGocciaStringLiteralValue) and not IsRegExpInstance(Expected) then
   begin
     if FIsNegated then
       TGocciaTestAssertions(FTestAssertions).AssertionPassed('toMatch')
@@ -937,7 +937,7 @@ begin
   end;
 
   ActualString := FormatForDisplay(FActualValue);
-  if IsRegExpValue(Expected) then
+  if IsRegExpInstance(Expected) then
   begin
     ExpectedDescription := RegExpObjectToString(Expected);
     Matches := MatchRegExpObject(Expected, ActualString, 0, False, False,

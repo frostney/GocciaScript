@@ -134,3 +134,76 @@ test("test on Object.create(RegExp.prototype) throws TypeError", () => {
   const obj = Object.create(RegExp.prototype);
   expect(() => { RegExp.prototype.test.call(obj, "test"); }).toThrow(TypeError);
 });
+
+// --- IsRegExp via Symbol.match ---
+
+test("new RegExp reads source/flags from object with Symbol.match truthy", () => {
+  const obj = { source: "abc", flags: "g", [Symbol.match]: true };
+  const r = new RegExp(obj);
+  expect(r.source).toBe("abc");
+  expect(r.flags).toBe("g");
+  expect(r.toString()).toBe("/abc/g");
+});
+
+test("new RegExp uses empty strings when source/flags are absent on Symbol.match object", () => {
+  const obj = { [Symbol.match]: true };
+  const r = new RegExp(obj);
+  expect(r.source).toBe("(?:)");
+  expect(r.flags).toBe("");
+});
+
+test("new RegExp stringifies object when Symbol.match is false", () => {
+  const obj = { source: "abc", flags: "", [Symbol.match]: false };
+  const r = new RegExp(obj);
+  expect(r.source).toBe("[object Object]");
+});
+
+test("RegExp() without new returns actual RegExp as-is when flags omitted", () => {
+  const r = /abc/g;
+  const result = RegExp(r);
+  expect(result).toBe(r);
+});
+
+test("RegExp() without new wraps Symbol.match object whose constructor differs", () => {
+  const obj = { source: "abc", flags: "", [Symbol.match]: true };
+  const result = RegExp(obj);
+  expect(result).not.toBe(obj);
+  expect(result.source).toBe("abc");
+});
+
+test("new RegExp overrides flags from Symbol.match object when second arg provided", () => {
+  const obj = { source: "abc", flags: "g", [Symbol.match]: true };
+  const r = new RegExp(obj, "i");
+  expect(r.source).toBe("abc");
+  expect(r.flags).toBe("i");
+});
+
+test("new RegExp treats Symbol.match with truthy non-boolean as regexp-like", () => {
+  const obj = { source: "x", flags: "", [Symbol.match]: 1 };
+  const r = new RegExp(obj);
+  expect(r.source).toBe("x");
+});
+
+test("new RegExp stringifies object when Symbol.match is null", () => {
+  const obj = { source: "abc", flags: "", [Symbol.match]: null };
+  const r = new RegExp(obj);
+  expect(r.source).toBe("[object Object]");
+});
+
+test("new RegExp stringifies object when Symbol.match is 0", () => {
+  const obj = { source: "abc", flags: "", [Symbol.match]: 0 };
+  const r = new RegExp(obj);
+  expect(r.source).toBe("[object Object]");
+});
+
+test("new RegExp stringifies object when Symbol.match is empty string", () => {
+  const obj = { source: "abc", flags: "", [Symbol.match]: "" };
+  const r = new RegExp(obj);
+  expect(r.source).toBe("[object Object]");
+});
+
+test("plain object with source and flags is not a RegExp instance", () => {
+  const fake = { source: "abc", flags: "g" };
+  expect(() => { RegExp.prototype.exec.call(fake, "abc"); }).toThrow(TypeError);
+  expect(() => { RegExp.prototype.test.call(fake, "abc"); }).toThrow(TypeError);
+});

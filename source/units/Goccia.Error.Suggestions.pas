@@ -226,6 +226,7 @@ resourcestring
   // Runtime errors — string
   SSuggestWellKnownSymbolCallable = 'the well-known Symbol method must be a function on the object';
   SSuggestReplaceAllGlobalFlag = 'add the ''g'' flag to the RegExp: /pattern/g';
+  SSuggestUseMatchOrSearch = 'use String.prototype.match or String.prototype.search instead';
   SSuggestRepeatCountRange = 'the count must be a non-negative finite integer';
   SSuggestNormalizationForm = 'valid forms are NFC, NFD, NFKC, or NFKD';
 

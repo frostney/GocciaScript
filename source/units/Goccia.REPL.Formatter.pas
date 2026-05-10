@@ -202,7 +202,7 @@ begin
   end;
 
   // RegExp — JSON.stringify would show empty object
-  if IsRegExpValue(AValue) then
+  if IsRegExpInstance(AValue) then
     Exit(Colorize(RegExpObjectToString(AValue), ANSI_RED, AUseColor));
 
   // Maps — JSON.stringify can't see internal entries

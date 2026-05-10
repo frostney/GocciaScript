@@ -30,4 +30,16 @@ describe("String.prototype.endsWith", () => {
   test("entire string match", () => {
     expect("hello".endsWith("hello")).toBe(true);
   });
+
+  test("throws TypeError for regexp argument", () => {
+    expect(() => { "hello".endsWith(/lo/); }).toThrow(TypeError);
+  });
+
+  test("throws TypeError for object with Symbol.match truthy", () => {
+    expect(() => { "hello".endsWith({ [Symbol.match]: true }); }).toThrow(TypeError);
+  });
+
+  test("allows object with Symbol.match false", () => {
+    expect("hello".endsWith({ [Symbol.match]: false })).toBe(false);
+  });
 });
