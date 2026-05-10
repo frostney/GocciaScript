@@ -749,4 +749,4 @@ JavaScript error objects are represented as `TGocciaObjectValue` instances with 
 
 Throwing is implemented via `TGocciaThrowValue`, a Pascal `Exception` subclass that wraps any `TGocciaValue` (the thrown value). The evaluator catches `TGocciaThrowValue` and extracts the wrapped value for `catch` blocks.
 
-`TGocciaError` is a separate Pascal `Exception` subclass (not a `TGocciaValue`) used for parser and lexer errors (`TGocciaSyntaxError` and its subclass `TGocciaLexerError`, `TGocciaRuntimeError`). These are internal Pascal exceptions, not JavaScript error objects. The subclass relationship mirrors the ES spec: all early errors (lexer and parser) are `SyntaxError`.
+`TGocciaError` is a separate Pascal `Exception` subclass (not a `TGocciaValue`) used for internal Pascal-side exceptions: early parser/lexer errors (`TGocciaSyntaxError` and its subclass `TGocciaLexerError`) and runtime engine errors (`TGocciaRuntimeError`). These are internal Pascal exceptions, not JavaScript error objects. The subclass relationship mirrors the ES spec: all early errors (lexer and parser) are `SyntaxError`.
