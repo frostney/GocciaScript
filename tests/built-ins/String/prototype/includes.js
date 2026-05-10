@@ -38,4 +38,16 @@ describe("String.prototype.includes", () => {
     expect(String.prototype.includes.name).toBe("includes");
     expect(String.prototype.includes.length).toBe(1);
   });
+
+  test("throws TypeError for regexp argument", () => {
+    expect(() => { "hello".includes(/ell/); }).toThrow(TypeError);
+  });
+
+  test("throws TypeError for object with Symbol.match truthy", () => {
+    expect(() => { "hello".includes({ [Symbol.match]: true }); }).toThrow(TypeError);
+  });
+
+  test("allows object with Symbol.match false", () => {
+    expect("hello".includes({ [Symbol.match]: false })).toBe(false);
+  });
 });

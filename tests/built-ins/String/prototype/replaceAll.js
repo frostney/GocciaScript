@@ -116,4 +116,19 @@ describe('String.prototype.replaceAll', () => {
     expect(() => ''.replaceAll.call(null, /x/g, 'y')).toThrow(TypeError);
     expect(() => ''.replaceAll.call(undefined, /x/g, 'y')).toThrow(TypeError);
   });
+
+  test('rejects Symbol.match truthy object without global flag', () => {
+    expect(() => {
+      'abc'.replaceAll({ [Symbol.match]: true, flags: '' }, 'x');
+    }).toThrow(TypeError);
+  });
+
+  test('accepts Symbol.match truthy object with global flag', () => {
+    const obj = {
+      flags: 'g',
+      [Symbol.match]: true,
+      [Symbol.replace](str, rep) { return 'ok'; },
+    };
+    expect('abc'.replaceAll(obj, 'x')).toBe('ok');
+  });
 });

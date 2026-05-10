@@ -396,6 +396,7 @@ resourcestring
   SErrorMatchAllRequiresGlobalRegExp = 'String.prototype.matchAll requires a global RegExp';
   SErrorSymbolMatchAllNotCallable = '@@matchAll is not callable';
   SErrorSymbolSearchNotCallable = '@@search is not callable';
+  SErrorFirstArgMustNotBeRegExp = 'First argument to %s must not be a regular expression';
   SErrorInvalidRepeatCount = 'Invalid count value: %s';
   SErrorInvalidNormalizationForm = 'The normalization form should be one of NFC, NFD, NFKC, NFKD';
   SErrorStringPrototypeRequiresNonNullish = 'String.prototype method requires that ''this'' not be null or undefined';

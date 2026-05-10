@@ -397,7 +397,7 @@ end;
 function RequireRegExpThis(const AThisValue: TGocciaValue;
   const AMethodName: string): TGocciaObjectValue;
 begin
-  if not IsRegExpValue(AThisValue) then
+  if not IsRegExpInstance(AThisValue) then
     ThrowTypeError(AMethodName + ' requires a RegExp object');
   Result := TGocciaObjectValue(AThisValue);
 end;
@@ -685,9 +685,9 @@ function TGocciaGlobalRegExp.RegExpConstructorFn(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
-  PatternArg: TGocciaValue;
+  PatternArg, PropVal: TGocciaValue;
   Pattern, Flags: string;
-  IsConstructCall: Boolean;
+  IsConstructCall, PatternIsRegExp: Boolean;
 begin
   Pattern := '';
   Flags := '';
@@ -696,21 +696,29 @@ begin
   if AArgs.Length > 0 then
   begin
     PatternArg := AArgs.GetElement(0);
-    if IsRegExpValue(PatternArg) then
-    begin
-      if not IsConstructCall and
-         ((AArgs.Length <= 1) or
-          (AArgs.GetElement(1) is TGocciaUndefinedLiteralValue)) then
-        Exit(PatternArg);
+    PatternIsRegExp := IsRegExp(PatternArg);
 
-      Pattern := TGocciaObjectValue(PatternArg).GetProperty(PROP_SOURCE)
-        .ToStringLiteral.Value;
+    // §22.2.3.1 step 2b: non-construct, regexp-like, no flags → return as-is
+    if PatternIsRegExp and not IsConstructCall and
+       ((AArgs.Length <= 1) or
+        (AArgs.GetElement(1) is TGocciaUndefinedLiteralValue)) then
+      Exit(PatternArg);
+
+    // §22.2.3.1 steps 3–4: read source/flags when regexp-like
+    if PatternIsRegExp then
+    begin
+      PropVal := TGocciaObjectValue(PatternArg).GetProperty(PROP_SOURCE);
+      if not (PropVal is TGocciaUndefinedLiteralValue) then
+        Pattern := PropVal.ToStringLiteral.Value;
       if (AArgs.Length > 1) and
          not (AArgs.GetElement(1) is TGocciaUndefinedLiteralValue) then
         Flags := AArgs.GetElement(1).ToStringLiteral.Value
       else
-        Flags := TGocciaObjectValue(PatternArg).GetProperty(PROP_FLAGS)
-          .ToStringLiteral.Value;
+      begin
+        PropVal := TGocciaObjectValue(PatternArg).GetProperty(PROP_FLAGS);
+        if not (PropVal is TGocciaUndefinedLiteralValue) then
+          Flags := PropVal.ToStringLiteral.Value;
+      end;
     end
     else
     begin
@@ -729,7 +737,7 @@ function TGocciaGlobalRegExp.RegExpConstruct(
   const ANewTarget: TGocciaValue): TGocciaValue;
 var
   Proto: TGocciaObjectValue;
-  PatternArg: TGocciaValue;
+  PatternArg, PropVal: TGocciaValue;
   Pattern, Flags: string;
   PatternIsRegExp, FlagsProvided: Boolean;
 begin
@@ -739,18 +747,22 @@ begin
   FlagsProvided := (AArgs.Length > 1) and
     not (AArgs.GetElement(1) is TGocciaUndefinedLiteralValue);
 
-  // §22.2.4.1 step 3: if pattern is a RegExp, capture source before step 6
+  // §22.2.4.1 steps 1, 3–4: IsRegExp check, then read source/flags if regexp-like
   if AArgs.Length > 0 then
   begin
     PatternArg := AArgs.GetElement(0);
-    if IsRegExpValue(PatternArg) then
+    PatternIsRegExp := IsRegExp(PatternArg);
+    if PatternIsRegExp then
     begin
-      PatternIsRegExp := True;
-      Pattern := TGocciaObjectValue(PatternArg).GetProperty(PROP_SOURCE)
-        .ToStringLiteral.Value;
+      PropVal := TGocciaObjectValue(PatternArg).GetProperty(PROP_SOURCE);
+      if not (PropVal is TGocciaUndefinedLiteralValue) then
+        Pattern := PropVal.ToStringLiteral.Value;
       if not FlagsProvided then
-        Flags := TGocciaObjectValue(PatternArg).GetProperty(PROP_FLAGS)
-          .ToStringLiteral.Value;
+      begin
+        PropVal := TGocciaObjectValue(PatternArg).GetProperty(PROP_FLAGS);
+        if not (PropVal is TGocciaUndefinedLiteralValue) then
+          Flags := PropVal.ToStringLiteral.Value;
+      end;
     end;
   end;
 
@@ -774,7 +786,7 @@ var
   Input: string;
   MatchValue: TGocciaValue;
 begin
-  if not IsRegExpValue(AThisValue) then
+  if not IsRegExpInstance(AThisValue) then
     ThrowTypeError(SErrorRegExpExecNonRegExp, SSuggestRegExpThisType);
 
   if AArgs.Length > 0 then
@@ -795,7 +807,7 @@ var
   Input: string;
   MatchValue: TGocciaValue;
 begin
-  if not IsRegExpValue(AThisValue) then
+  if not IsRegExpInstance(AThisValue) then
     ThrowTypeError(SErrorRegExpTestNonRegExp, SSuggestRegExpThisType);
 
   if AArgs.Length > 0 then
@@ -812,7 +824,7 @@ function TGocciaGlobalRegExp.RegExpToStringMethod(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  if not IsRegExpValue(AThisValue) then
+  if not IsRegExpInstance(AThisValue) then
     ThrowTypeError(SErrorRegExpToStringNonRegExp, SSuggestRegExpThisType);
 
   Result := TGocciaStringLiteralValue.Create(RegExpObjectToString(AThisValue));
@@ -829,7 +841,7 @@ var
   ResultArray: TGocciaArrayValue;
   MatchIndex, MatchEnd, NextIndex: Integer;
 begin
-  if not IsRegExpValue(AThisValue) then
+  if not IsRegExpInstance(AThisValue) then
     ThrowTypeError(SErrorRegExpMatchNonRegExp, SSuggestRegExpThisType);
 
   if AArgs.Length > 0 then
@@ -869,7 +881,7 @@ var
   RegexClone: TGocciaObjectValue;
   IsGlobal: Boolean;
 begin
-  if not IsRegExpValue(AThisValue) then
+  if not IsRegExpInstance(AThisValue) then
     ThrowTypeError(SErrorRegExpMatchAllNonRegExp, SSuggestRegExpThisType);
 
   if AArgs.Length > 0 then
@@ -896,7 +908,7 @@ var
   MatchArray: TGocciaObjectValue;
   MatchIndex, MatchEnd, NextIndex, SearchIndex, OutputIndex: Integer;
 begin
-  if not IsRegExpValue(AThisValue) then
+  if not IsRegExpInstance(AThisValue) then
     ThrowTypeError(SErrorRegExpReplaceNonRegExp, SSuggestRegExpThisType);
 
   if AArgs.Length > 0 then
@@ -961,7 +973,7 @@ var
   MatchArray: TGocciaObjectValue;
   MatchIndex, MatchEnd, NextIndex: Integer;
 begin
-  if not IsRegExpValue(AThisValue) then
+  if not IsRegExpInstance(AThisValue) then
     ThrowTypeError(SErrorRegExpSearchNonRegExp, SSuggestRegExpThisType);
 
   if AArgs.Length > 0 then
@@ -992,7 +1004,7 @@ var
   LastMatchWasZeroWidth: Boolean;
   I: Integer;
 begin
-  if not IsRegExpValue(AThisValue) then
+  if not IsRegExpInstance(AThisValue) then
     ThrowTypeError(SErrorRegExpSplitNonRegExp, SSuggestRegExpThisType);
 
   if AArgs.Length > 0 then

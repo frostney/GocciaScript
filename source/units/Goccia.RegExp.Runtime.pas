@@ -11,7 +11,8 @@ uses
 function GetRegExpPrototype: TGocciaValue;
 procedure SetRegExpPrototype(const APrototype: TGocciaValue);
 
-function IsRegExpValue(const AValue: TGocciaValue): Boolean;
+function IsRegExpInstance(const AValue: TGocciaValue): Boolean;
+function IsRegExp(const AValue: TGocciaValue): Boolean;
 function CreateRegExpObject(const APattern, AFlags: string): TGocciaValue;
 function CloneRegExpObject(const AValue: TGocciaValue): TGocciaValue;
 function MatchRegExpObjectOnce(const AValue: TGocciaValue; const AInput: string;
@@ -117,12 +118,25 @@ begin
   Result := MatchArray;
 end;
 
-function IsRegExpValue(const AValue: TGocciaValue): Boolean;
+function IsRegExpInstance(const AValue: TGocciaValue): Boolean;
 begin
   if not (AValue is TGocciaObjectValue) then
     Exit(False);
   Result := TGocciaObjectValue(AValue).HasOwnProperty(PROP_SOURCE) and
     TGocciaObjectValue(AValue).HasOwnProperty(PROP_FLAGS);
+end;
+
+function IsRegExp(const AValue: TGocciaValue): Boolean;
+var
+  Matcher: TGocciaValue;
+begin
+  if not (AValue is TGocciaObjectValue) then
+    Exit(False);
+  Matcher := TGocciaObjectValue(AValue).GetSymbolProperty(
+    TGocciaSymbolValue.WellKnownMatch);
+  if not (Matcher is TGocciaUndefinedLiteralValue) then
+    Exit(Matcher.ToBooleanLiteral.Value);
+  Result := IsRegExpInstance(AValue);
 end;
 
 function CreateRegExpObject(const APattern, AFlags: string): TGocciaValue;

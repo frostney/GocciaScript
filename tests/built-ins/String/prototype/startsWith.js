@@ -26,4 +26,16 @@ describe("String.prototype.startsWith", () => {
   test("case sensitive", () => {
     expect("Hello".startsWith("hello")).toBe(false);
   });
+
+  test("throws TypeError for regexp argument", () => {
+    expect(() => { "hello".startsWith(/hel/); }).toThrow(TypeError);
+  });
+
+  test("throws TypeError for object with Symbol.match truthy", () => {
+    expect(() => { "hello".startsWith({ [Symbol.match]: true }); }).toThrow(TypeError);
+  });
+
+  test("allows object with Symbol.match false", () => {
+    expect("hello".startsWith({ [Symbol.match]: false })).toBe(false);
+  });
 });
