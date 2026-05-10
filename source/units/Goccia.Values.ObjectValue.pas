@@ -29,6 +29,7 @@ type
     FSealed: Boolean;
     FExtensible: Boolean;
     FHasErrorData: Boolean;
+    FHasRegExpData: Boolean;
   public
     class procedure InitializeSharedPrototype;
     class function GetSharedObjectPrototype: TGocciaObjectValue; static;
@@ -96,6 +97,7 @@ type
     property Sealed: Boolean read FSealed;
     property Extensible: Boolean read FExtensible;
     property HasErrorData: Boolean read FHasErrorData write FHasErrorData;
+    property HasRegExpData: Boolean read FHasRegExpData write FHasRegExpData;
   published
     function ObjectPrototypeToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ObjectPrototypeIsPrototypeOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;

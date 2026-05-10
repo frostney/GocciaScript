@@ -1086,48 +1086,7 @@ begin
   // Step 3: Let string be ? ToString(O).
   StringValue := ExtractStringValue(AThisValue);
 
-  if IsRegExpInstance(SearchArg) then
-  begin
-    RegexValue := CoerceRegExpValue(SearchArg);
-    TGarbageCollector.Instance.AddTempRoot(RegexValue);
-    try
-      if GetRegExpBooleanProperty(RegexValue, PROP_GLOBAL) then
-      begin
-        ResultStr := '';
-        Offset := 0;
-        while MatchRegExpObjectValue(RegexValue, StringValue, Offset, False,
-          False, MatchArray, MatchIndex, MatchEnd, NextIndex) do
-        begin
-          ResultStr := ResultStr + Copy(StringValue, Offset + 1,
-            MatchIndex - Offset);
-          ResultStr := ResultStr + BuildRegexReplacement(ReplaceArg,
-            TGocciaArrayValue(MatchArray), MatchIndex, StringValue);
-          Offset := NextIndex;
-          if Offset > Length(StringValue) then
-            Break;
-        end;
-        if Offset <= Length(StringValue) then
-          ResultStr := ResultStr + Copy(StringValue, Offset + 1, MaxInt);
-        Result := TGocciaStringLiteralValue.Create(ResultStr);
-      end
-      else if MatchRegExpObjectValue(RegexValue, StringValue, 0, False, False,
-        MatchArray, MatchIndex, MatchEnd, NextIndex) then
-      begin
-        ReplaceValue := BuildRegexReplacement(ReplaceArg,
-          TGocciaArrayValue(MatchArray),
-          MatchIndex, StringValue);
-        Result := TGocciaStringLiteralValue.Create(
-          Copy(StringValue, 1, MatchIndex) + ReplaceValue +
-          Copy(StringValue, MatchEnd + 1, MaxInt));
-      end
-      else
-        Result := TGocciaStringLiteralValue.Create(StringValue);
-    finally
-      TGarbageCollector.Instance.RemoveTempRoot(RegexValue);
-    end;
-    Exit;
-  end;
-
+  // §22.1.3.19 step 4: Let searchString be ? ToString(searchValue).
   SearchValue := SearchArg.ToStringLiteral.Value;
 
   // Step 5: Let pos be StringIndexOf(string, searchString, 0)
@@ -1241,34 +1200,7 @@ begin
   // Step 3 (spec): Let string be ? ToString(O)
   StringValue := ExtractStringValue(AThisValue);
 
-  if IsRegExpInstance(SearchArg) then
-  begin
-    RegexValue := CoerceRegExpValue(SearchArg);
-    TGarbageCollector.Instance.AddTempRoot(RegexValue);
-    try
-      ResultStr := '';
-      Offset := 0;
-      while MatchRegExpObjectValue(RegexValue, StringValue, Offset, False,
-        False,
-        MatchArray, MatchIndex, MatchEnd, NextIndex) do
-      begin
-        ResultStr := ResultStr + Copy(StringValue, Offset + 1,
-          MatchIndex - Offset);
-        ResultStr := ResultStr + BuildRegexReplacement(ReplaceArg,
-          TGocciaArrayValue(MatchArray), MatchIndex, StringValue);
-        Offset := NextIndex;
-        if Offset > Length(StringValue) then
-          Break;
-      end;
-      if Offset <= Length(StringValue) then
-        ResultStr := ResultStr + Copy(StringValue, Offset + 1, MaxInt);
-      Result := TGocciaStringLiteralValue.Create(ResultStr);
-    finally
-      TGarbageCollector.Instance.RemoveTempRoot(RegexValue);
-    end;
-    Exit;
-  end;
-
+  // §22.1.3.20 step 7: Let searchString be ? ToString(searchValue).
   SearchValue := SearchArg.ToStringLiteral.Value;
 
   // Step 5: Let searchLength be the length of searchString

@@ -122,8 +122,7 @@ function IsRegExpInstance(const AValue: TGocciaValue): Boolean;
 begin
   if not (AValue is TGocciaObjectValue) then
     Exit(False);
-  Result := TGocciaObjectValue(AValue).HasOwnProperty(PROP_SOURCE) and
-    TGocciaObjectValue(AValue).HasOwnProperty(PROP_FLAGS);
+  Result := TGocciaObjectValue(AValue).HasRegExpData;
 end;
 
 function IsRegExp(const AValue: TGocciaValue): Boolean;
@@ -155,6 +154,7 @@ begin
   Source := NormalizeRegExpSource(APattern);
   CanonicalFlags := CanonicalizeRegExpFlags(AFlags);
   Obj := TGocciaObjectValue.Create(GRegExpPrototype);
+  Obj.HasRegExpData := True;
   Obj.DefineProperty(PROP_SOURCE,
     TGocciaPropertyDescriptorData.Create(
       TGocciaStringLiteralValue.Create(Source), []));

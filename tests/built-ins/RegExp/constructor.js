@@ -201,3 +201,9 @@ test("new RegExp stringifies object when Symbol.match is empty string", () => {
   const r = new RegExp(obj);
   expect(r.source).toBe("[object Object]");
 });
+
+test("plain object with source and flags is not a RegExp instance", () => {
+  const fake = { source: "abc", flags: "g" };
+  expect(() => { RegExp.prototype.exec.call(fake, "abc"); }).toThrow(TypeError);
+  expect(() => { RegExp.prototype.test.call(fake, "abc"); }).toThrow(TypeError);
+});
