@@ -423,6 +423,22 @@ end.
 `;
 }
 
+function findAllAliases(aliasMap, value) {
+  const canonicalShort = aliasMap.get(value);
+  if (!canonicalShort) {
+    return [value];
+  }
+
+  const aliases = new Set();
+  for (const [alias, short] of aliasMap) {
+    if (short === canonicalShort) {
+      aliases.add(alias);
+    }
+  }
+  aliases.add(value);
+  return [...aliases];
+}
+
 function collectAllEntries(
   gcData,
   scriptData,
@@ -458,11 +474,9 @@ function collectAllEntries(
 
     addAliasEntry(value, canonicalKey);
 
-    for (const [alias, short] of gcAliases) {
-      if (short === value) {
-        addAliasEntry(`gc/${alias}`, canonicalKey);
-        addAliasEntry(alias, canonicalKey);
-      }
+    for (const alias of findAllAliases(gcAliases, value)) {
+      addAliasEntry(`gc/${alias}`, canonicalKey);
+      addAliasEntry(alias, canonicalKey);
     }
   }
 
@@ -477,11 +491,9 @@ function collectAllEntries(
 
       addAliasEntry(group, canonicalKey);
 
-      for (const [alias, short] of gcAliases) {
-        if (short === group) {
-          addAliasEntry(`gc/${alias}`, canonicalKey);
-          addAliasEntry(alias, canonicalKey);
-        }
+      for (const alias of findAllAliases(gcAliases, group)) {
+        addAliasEntry(`gc/${alias}`, canonicalKey);
+        addAliasEntry(alias, canonicalKey);
       }
     }
   }
@@ -492,10 +504,8 @@ function collectAllEntries(
     const canonicalKey = `sc/${value}`;
     addEntry(canonicalKey, ranges);
 
-    for (const [alias, short] of scAliases) {
-      if (short === value) {
-        addAliasEntry(`sc/${alias}`, canonicalKey);
-      }
+    for (const alias of findAllAliases(scAliases, value)) {
+      addAliasEntry(`sc/${alias}`, canonicalKey);
     }
   }
 
@@ -505,23 +515,20 @@ function collectAllEntries(
     const canonicalKey = `scx/${value}`;
     addEntry(canonicalKey, ranges);
 
-    for (const [alias, short] of scxAliases) {
-      if (short === value) {
-        addAliasEntry(`scx/${alias}`, canonicalKey);
-      }
+    for (const alias of findAllAliases(scxAliases, value)) {
+      addAliasEntry(`scx/${alias}`, canonicalKey);
     }
   }
 
   for (const [value, ranges] of binaryProperties) {
     addEntry(value, ranges);
 
-    for (const [alias, short] of pAliases) {
-      if (short === value) {
-        addAliasEntry(alias, value);
-      }
+    for (const alias of findAllAliases(pAliases, value)) {
+      addAliasEntry(alias, value);
     }
   }
 
+  addEntry("ASCII", [{ lo: 0, hi: 0x7f }]);
   addEntry("Any", [{ lo: 0, hi: 0x10ffff }]);
 
   const cnRanges = gcData.get("Cn");
@@ -606,8 +613,17 @@ function buildResourceFromEntries(allEntries) {
   };
 }
 
-function parseScriptExtensions(text, scriptData) {
+function parseScriptExtensions(text, scriptData, scAliases) {
   const properties = new Map();
+
+  const shortToLong = new Map();
+  if (scAliases) {
+    for (const [alias, short] of scAliases) {
+      if (alias !== short && alias.length > short.length) {
+        shortToLong.set(short, alias);
+      }
+    }
+  }
 
   for (const line of text.split("\n")) {
     const commentIndex = line.indexOf("#");
@@ -637,8 +653,14 @@ function parseScriptExtensions(text, scriptData) {
 
     for (const script of scripts) {
       if (!properties.has(script)) {
-        const scriptRanges = scriptData.get(script);
-        properties.set(script, scriptRanges ? [...scriptRanges] : []);
+        let baseRanges = scriptData.get(script);
+        if (!baseRanges) {
+          const longName = shortToLong.get(script);
+          if (longName) {
+            baseRanges = scriptData.get(longName);
+          }
+        }
+        properties.set(script, baseRanges ? [...baseRanges] : []);
       }
       properties.get(script).push({ lo, hi });
     }
@@ -674,14 +696,15 @@ async function main() {
   );
 
   console.log("Parsing UCD data...");
+  const pvAliases = parsePropertyValueAliases(pvAliasesText);
+  const pAliases = parsePropertyAliases(pAliasesText);
   const gcData = parseUCDRangeFile(gcText);
   const scriptData = parseUCDRangeFile(scriptsText);
-  const scxData = parseScriptExtensions(scxText, scriptData);
+  const scAliasMap = pvAliases.get("sc") || new Map();
+  const scxData = parseScriptExtensions(scxText, scriptData, scAliasMap);
   const propListData = parseUCDRangeFile(propListText);
   const derivedCoreData = parseUCDRangeFile(derivedCoreText);
   const emojiData = parseUCDRangeFile(emojiText);
-  const pvAliases = parsePropertyValueAliases(pvAliasesText);
-  const pAliases = parsePropertyAliases(pAliasesText);
 
   const binaryProperties = new Map([...propListData, ...derivedCoreData, ...emojiData]);
 
