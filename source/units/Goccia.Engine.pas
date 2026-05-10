@@ -29,6 +29,7 @@ uses
   Goccia.Builtins.GlobalSymbol,
   Goccia.Builtins.GlobalWeakMap,
   Goccia.Builtins.GlobalWeakSet,
+  Goccia.Builtins.Intl,
   Goccia.Builtins.JSON,
   Goccia.Builtins.Math,
   Goccia.Builtins.Temporal,
@@ -160,6 +161,7 @@ type
     FBuiltinWeakMap: TGocciaGlobalWeakMap;
     FBuiltinPromise: TGocciaGlobalPromise;
     FBuiltinTemporal: TGocciaTemporalBuiltin;
+    FBuiltinIntl: TGocciaIntlBuiltin;
     FBuiltinArrayBuffer: TGocciaGlobalArrayBuffer;
     FBuiltinProxy: TGocciaGlobalProxy;
     FBuiltinReflect: TGocciaGlobalReflect;
@@ -292,6 +294,7 @@ type
     property BuiltinWeakMap: TGocciaGlobalWeakMap read FBuiltinWeakMap;
     property BuiltinPromise: TGocciaGlobalPromise read FBuiltinPromise;
     property BuiltinTemporal: TGocciaTemporalBuiltin read FBuiltinTemporal;
+    property BuiltinIntl: TGocciaIntlBuiltin read FBuiltinIntl;
     property BuiltinArrayBuffer: TGocciaGlobalArrayBuffer read FBuiltinArrayBuffer;
     property BuiltinProxy: TGocciaGlobalProxy read FBuiltinProxy;
     property BuiltinReflect: TGocciaGlobalReflect read FBuiltinReflect;
@@ -737,6 +740,7 @@ begin
     FBuiltinWeakMap.Free;
     FBuiltinPromise.Free;
     FBuiltinTemporal.Free;
+    FBuiltinIntl.Free;
     FBuiltinArrayBuffer.Free;
     FBuiltinProxy.Free;
     FBuiltinReflect.Free;
@@ -801,6 +805,7 @@ begin
   FBuiltinWeakMap := TGocciaGlobalWeakMap.Create(CONSTRUCTOR_WEAK_MAP, Scope, ThrowError);
   FBuiltinPromise := TGocciaGlobalPromise.Create(CONSTRUCTOR_PROMISE, Scope, ThrowError);
   FBuiltinTemporal := TGocciaTemporalBuiltin.Create('Temporal', Scope, ThrowError);
+  FBuiltinIntl := TGocciaIntlBuiltin.Create('Intl', Scope, ThrowError);
   FBuiltinArrayBuffer := TGocciaGlobalArrayBuffer.Create(CONSTRUCTOR_ARRAY_BUFFER, Scope, ThrowError);
   FBuiltinProxy := TGocciaGlobalProxy.Create(Scope);
   FBuiltinReflect := TGocciaGlobalReflect.Create('Reflect', Scope, ThrowError);

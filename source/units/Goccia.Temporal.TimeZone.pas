@@ -22,6 +22,7 @@ uses
   {$ENDIF}
   {$IFDEF MSWINDOWS}
   DynLibs,
+  ICU,
   {$ENDIF}
   Classes;
 
@@ -101,81 +102,41 @@ begin
   Result := AStatus <= ICU_SUCCESS;
 end;
 
-function TryLoadWindowsICUFromLibrary(const ALibraryName: string;
+function TryLoadCalendarFunctions(const AHandle: TLibHandle;
   out AICU: TWindowsICU): Boolean;
 var
   Symbol: Pointer;
-
-  function FailLoad: Boolean;
-  begin
-    if AICU.Handle <> NilHandle then
-      UnloadLibrary(AICU.Handle);
-    FillChar(AICU, SizeOf(AICU), 0);
-    Result := False;
-  end;
-
 begin
   Result := False;
   FillChar(AICU, SizeOf(AICU), 0);
+  AICU.Handle := AHandle;
 
-  AICU.Handle := LoadLibrary(ALibraryName);
-  if AICU.Handle = NilHandle then
-    Exit;
-
-  Symbol := GetProcAddress(AICU.Handle, 'ucal_open');
-  if not Assigned(Symbol) then
-  begin
-    Result := FailLoad;
-    Exit;
-  end;
+  Symbol := ICUGetProcAddress('ucal_open');
+  if not Assigned(Symbol) then Exit;
   AICU.OpenCalendar := TICUCalendarOpen(Symbol);
 
-  Symbol := GetProcAddress(AICU.Handle, 'ucal_close');
-  if not Assigned(Symbol) then
-  begin
-    Result := FailLoad;
-    Exit;
-  end;
+  Symbol := ICUGetProcAddress('ucal_close');
+  if not Assigned(Symbol) then Exit;
   AICU.CloseCalendar := TICUCalendarClose(Symbol);
 
-  Symbol := GetProcAddress(AICU.Handle, 'ucal_setMillis');
-  if not Assigned(Symbol) then
-  begin
-    Result := FailLoad;
-    Exit;
-  end;
+  Symbol := ICUGetProcAddress('ucal_setMillis');
+  if not Assigned(Symbol) then Exit;
   AICU.SetMillis := TICUCalendarSetMillis(Symbol);
 
-  Symbol := GetProcAddress(AICU.Handle, 'ucal_get');
-  if not Assigned(Symbol) then
-  begin
-    Result := FailLoad;
-    Exit;
-  end;
+  Symbol := ICUGetProcAddress('ucal_get');
+  if not Assigned(Symbol) then Exit;
   AICU.GetField := TICUCalendarGet(Symbol);
 
-  Symbol := GetProcAddress(AICU.Handle, 'ucal_getTimeZoneTransitionDate');
-  if not Assigned(Symbol) then
-  begin
-    Result := FailLoad;
-    Exit;
-  end;
+  Symbol := ICUGetProcAddress('ucal_getTimeZoneTransitionDate');
+  if not Assigned(Symbol) then Exit;
   AICU.GetTimeZoneTransitionDate := TICUCalendarGetTimeZoneTransitionDate(Symbol);
 
-  Symbol := GetProcAddress(AICU.Handle, 'ucal_getCanonicalTimeZoneID');
-  if not Assigned(Symbol) then
-  begin
-    Result := FailLoad;
-    Exit;
-  end;
+  Symbol := ICUGetProcAddress('ucal_getCanonicalTimeZoneID');
+  if not Assigned(Symbol) then Exit;
   AICU.GetCanonicalTimeZoneID := TICUCalendarGetCanonicalTimeZoneID(Symbol);
 
-  Symbol := GetProcAddress(AICU.Handle, 'ucal_getDefaultTimeZone');
-  if not Assigned(Symbol) then
-  begin
-    Result := FailLoad;
-    Exit;
-  end;
+  Symbol := ICUGetProcAddress('ucal_getDefaultTimeZone');
+  if not Assigned(Symbol) then Exit;
   AICU.GetDefaultTimeZone := TICUCalendarGetDefaultTimeZone(Symbol);
 
   Result := True;
@@ -183,6 +144,7 @@ end;
 
 function TryGetWindowsICU(out AICU: TWindowsICU): Boolean;
 var
+  Handle: TLibHandle;
   LoadedICU: TWindowsICU;
 begin
   EnterCriticalSection(WindowsICUInitLock);
@@ -190,9 +152,8 @@ begin
     if not WindowsICULoadAttempted then
     begin
       WindowsICULoadAttempted := True;
-      WindowsICUAvailable := TryLoadWindowsICUFromLibrary(ICU_LIBRARY, LoadedICU);
-      if not WindowsICUAvailable then
-        WindowsICUAvailable := TryLoadWindowsICUFromLibrary(ICU_I18N_LIBRARY, LoadedICU);
+      if TryGetICULibraryHandle(Handle) then
+        WindowsICUAvailable := TryLoadCalendarFunctions(Handle, LoadedICU);
       if WindowsICUAvailable then
         WindowsICU := LoadedICU;
     end;
@@ -850,8 +811,6 @@ initialization
 
 finalization
   {$IFDEF MSWINDOWS}
-  if WindowsICU.Handle <> NilHandle then
-    UnloadLibrary(WindowsICU.Handle);
   DoneCriticalSection(WindowsICUInitLock);
   {$ENDIF}
 

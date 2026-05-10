@@ -72,6 +72,7 @@
 | Explicit Resource Management (`using`, `await using`) | ES2026 | Supported |
 | JSON.parse source text access (`JSON.rawJSON`, `JSON.isRawJSON`) | ES2026 | Supported |
 | `Temporal` (dates, times, durations, time zones) | ES2027 | Supported |
+| `Intl` (ECMA-402) | ECMA-402 | Supported |
 
 ## Web Platform APIs
 

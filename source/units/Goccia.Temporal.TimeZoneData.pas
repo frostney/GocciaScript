@@ -15,6 +15,7 @@ implementation
 uses
   Classes,
 
+  EmbeddedResourceReader,
   Generated.TimeZoneData;
 
 type
@@ -36,36 +37,6 @@ const
   TIME_ZONE_RCDATA_RESOURCE_TYPE = MAKEINTRESOURCE(10);
   TIME_ZONE_DATA_MAGIC: array[0..TIME_ZONE_DATA_MAGIC_LENGTH - 1] of Byte =
     (Ord('G'), Ord('O'), Ord('C'), Ord('C'), Ord('I'), Ord('A'), Ord('T'), Ord('Z'));
-
-function HasBytesAvailable(const ABuffer: TBytes; const AOffset, ALength: Integer): Boolean;
-begin
-  Result := False;
-
-  if (AOffset < 0) or (ALength < 0) then
-    Exit;
-
-  if AOffset > Length(ABuffer) then
-    Exit;
-
-  Result := ALength <= Length(ABuffer) - AOffset;
-end;
-
-function TryUInt32ToInteger(const AValue: UInt32; out AInteger: Integer): Boolean;
-begin
-  Result := AValue <= UInt32(High(Integer));
-  if Result then
-    AInteger := Integer(AValue)
-  else
-    AInteger := 0;
-end;
-
-function ReadUInt32LE(const ABuffer: TBytes; const AOffset: Integer): UInt32;
-begin
-  Result := UInt32(ABuffer[AOffset]) or
-            (UInt32(ABuffer[AOffset + 1]) shl 8) or
-            (UInt32(ABuffer[AOffset + 2]) shl 16) or
-            (UInt32(ABuffer[AOffset + 3]) shl 24);
-end;
 
 function HasExpectedMagic(const ABuffer: TBytes): Boolean;
 var
@@ -190,14 +161,6 @@ begin
   Result := True;
 end;
 
-function CopyStringFromBytes(const ABuffer: TBytes; const AOffset,
-  ALength: Integer): string;
-begin
-  SetLength(Result, ALength);
-  if ALength > 0 then
-    Move(ABuffer[AOffset], Result[1], ALength);
-end;
-
 function TryGetEntryName(const ABuffer: TBytes; const AEntry: TEmbeddedTimeZoneDataEntry;
   const ANamesOffset, ANamesByteCount: Integer; out AName: string): Boolean;
 var
@@ -256,11 +219,22 @@ begin
   end;
 end;
 
+var
+  CachedTZResource: TBytes;
+  CachedTZResourceLoaded: Boolean;
+
 function TryReadEmbeddedResource(out ABuffer: TBytes): Boolean;
 var
   Stream: TResourceStream;
   BufferSize: Integer;
 begin
+  if CachedTZResourceLoaded then
+  begin
+    ABuffer := CachedTZResource;
+    Result := Length(ABuffer) > 0;
+    Exit;
+  end;
+
   Result := False;
   SetLength(ABuffer, 0);
   Stream := nil;
@@ -279,6 +253,8 @@ begin
       Stream.ReadBuffer(ABuffer[0], BufferSize);
     Stream.Free;
     Stream := nil;
+    CachedTZResource := ABuffer;
+    CachedTZResourceLoaded := True;
     Result := True;
   except
     Stream.Free;

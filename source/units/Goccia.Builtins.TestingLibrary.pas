@@ -304,6 +304,28 @@ uses
   Goccia.Values.PromiseValue,
   Goccia.Values.SetValue;
 
+function IsNativeFunctionInstanceOf(const AObj: TGocciaObjectValue;
+  const AConstructor: TGocciaNativeFunctionValue): Boolean;
+var
+  ConstructorProto: TGocciaValue;
+  CurrentProto: TGocciaObjectValue;
+begin
+  Result := False;
+  ConstructorProto := AConstructor.GetProperty(PROP_PROTOTYPE);
+  if not (ConstructorProto is TGocciaObjectValue) then
+    Exit;
+  CurrentProto := AObj.Prototype;
+  while Assigned(CurrentProto) do
+  begin
+    if CurrentProto = TGocciaObjectValue(ConstructorProto) then
+    begin
+      Result := True;
+      Exit;
+    end;
+    CurrentProto := CurrentProto.Prototype;
+  end;
+end;
+
 function FormatThrowValueDetail(const AValue: TGocciaValue): string;
 var
   MsgValue, StackValue: TGocciaValue;
@@ -1319,6 +1341,14 @@ begin
     else if ConstructorName = 'Boolean' then
     begin
       IsInstance := FActualValue is TGocciaBooleanLiteralValue;
+    end
+    else if FActualValue is TGocciaObjectValue then
+    begin
+      // General prototype-chain walk for native function constructors
+      // (e.g. Intl.Collator, URL, Map, etc.)
+      IsInstance := IsNativeFunctionInstanceOf(
+        TGocciaObjectValue(FActualValue),
+        TGocciaNativeFunctionValue(ExpectedConstructor));
     end;
   end
     else if ExpectedConstructor is TGocciaClassValue then
