@@ -811,8 +811,6 @@ initialization
 
 finalization
   {$IFDEF MSWINDOWS}
-  if WindowsICU.Handle <> NilHandle then
-    UnloadLibrary(WindowsICU.Handle);
   DoneCriticalSection(WindowsICUInitLock);
   {$ENDIF}
 
