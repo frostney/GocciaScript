@@ -1616,7 +1616,7 @@ begin
 
         if ((ExpectedErrorType = TYPE_ERROR_NAME) and (E is TGocciaTypeError)) or
            ((ExpectedErrorType = REFERENCE_ERROR_NAME) and (E is TGocciaReferenceError)) or
-           ((ExpectedErrorType = SYNTAX_ERROR_NAME) and ((E is TGocciaSyntaxError) or (E is TGocciaLexerError))) or
+           ((ExpectedErrorType = SYNTAX_ERROR_NAME) and (E is TGocciaSyntaxError)) or
            ((ExpectedErrorType = ERROR_NAME) and (E is TGocciaRuntimeError)) or
            (Pos(LowerCase(ExpectedErrorType), LowerCase(E.Message)) > 0) then
         begin
