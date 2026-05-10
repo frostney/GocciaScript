@@ -5,9 +5,57 @@
  * \n<value>\n fail there unless \r is stripped first.
  */
 
+import { LOADER } from "./binaries";
+
 /** Returns true when `value` appears on its own line in `s`, CRLF-tolerant. */
 export const containsLine = (s: string, value: string): boolean =>
   s.replace(/\r/g, "").includes(`\n${value}\n`);
+
+export function runLoaderJson(
+  source: string,
+  extraArgs?: string[],
+  opts?: { bin?: string; timeout?: number },
+): { exitCode: number; json: any; stderr: string } {
+  const hasOutputFlag = extraArgs?.some((a) => a.startsWith("--output="));
+  const spawnOpts: {
+    stdin: Uint8Array;
+    stdout: "pipe";
+    stderr: "pipe";
+    timeout?: number;
+  } = {
+    stdin: new TextEncoder().encode(source),
+    stdout: "pipe",
+    stderr: "pipe",
+  };
+  if (opts?.timeout != null) spawnOpts.timeout = opts.timeout;
+  const proc = Bun.spawnSync(
+    [
+      opts?.bin ?? LOADER,
+      ...(hasOutputFlag ? [] : ["--output=json"]),
+      ...(extraArgs ?? []),
+    ],
+    spawnOpts,
+  );
+  return {
+    exitCode: proc.exitCode,
+    json: JSON.parse(proc.stdout.toString()),
+    stderr: proc.stderr.toString(),
+  };
+}
+
+export function assertSyntaxError(
+  source: string,
+  desc: string,
+  extraArgs?: string[],
+): void {
+  const { exitCode, json } = runLoaderJson(source, extraArgs);
+  if (exitCode === 0)
+    throw new Error(`${desc} should fail, but exited 0`);
+  if (json.ok !== false || json.error?.type !== "SyntaxError")
+    throw new Error(
+      `${desc} should be SyntaxError, got ok=${json.ok} type=${json.error?.type}`,
+    );
+}
 
 /**
  * Normalizes captured output to LF line endings. Accepts a raw string or
