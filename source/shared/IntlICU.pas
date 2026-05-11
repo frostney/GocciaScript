@@ -59,6 +59,7 @@ function TryICULowerCase(const ALocale, AStr: string; out AResult: string): Bool
 implementation
 
 uses
+  Math,
   SysUtils,
 
   DynLibs,
@@ -75,6 +76,25 @@ const
   UNUM_PERCENT_STYLE = 3;
   UNUM_SCIENTIFIC_STYLE = 4;
   UNUM_PATTERN_DECIMAL = 0;
+  UNUM_GROUPING_USED = 1;
+  UNUM_MAX_INTEGER_DIGITS = 3;
+  UNUM_MIN_INTEGER_DIGITS = 4;
+  UNUM_MAX_FRACTION_DIGITS = 6;
+  UNUM_MIN_FRACTION_DIGITS = 7;
+  UNUM_ROUNDING_MODE = 11;
+  UNUM_SIGNIFICANT_DIGITS_USED = 22;
+  UNUM_MIN_SIGNIFICANT_DIGITS = 23;
+  UNUM_MAX_SIGNIFICANT_DIGITS = 24;
+  UNUM_ROUND_CEILING = 0;
+  UNUM_ROUND_FLOOR = 1;
+  UNUM_ROUND_DOWN = 2;
+  UNUM_ROUND_UP = 3;
+  UNUM_ROUND_HALFEVEN = 4;
+  UNUM_ROUND_HALFDOWN = 5;
+  UNUM_ROUND_HALFUP = 6;
+  UNUM_ROUND_HALF_CEILING = 9;
+  UNUM_ROUND_HALF_FLOOR = 10;
+  UNUM_DATTR_ROUNDING_INCREMENT = 0;
   UDAT_FULL = 0;
   UDAT_LONG = 1;
   UDAT_MEDIUM = 2;
@@ -173,6 +193,11 @@ type
     var AStatus: TICUErrorCode): LongInt; cdecl;
   TUnumSetAttribute = procedure(AFormat: Pointer; AAttr: LongInt;
     ANewValue: LongInt); cdecl;
+  TUnumSetDoubleAttribute = procedure(AFormat: Pointer; AAttr: LongInt;
+    ANewValue: Double); cdecl;
+  TUnumApplyPattern = procedure(AFormat: Pointer; ALocalized: ByteBool;
+    const APattern: PUChar; APatternLength: LongInt;
+    AParseError: Pointer; var AStatus: TICUErrorCode); cdecl;
   TUnumSetTextAttribute = procedure(AFormat: Pointer; ATag: LongInt;
     const ANewValue: PUChar; ANewValueLength: LongInt;
     var AStatus: TICUErrorCode); cdecl;
@@ -246,6 +271,8 @@ type
     UnumClose: TUnumClose;
     UnumFormatDouble: TUnumFormatDouble;
     UnumSetAttribute: TUnumSetAttribute;
+    UnumSetDoubleAttribute: TUnumSetDoubleAttribute;
+    UnumApplyPattern: TUnumApplyPattern;
     UnumSetTextAttribute: TUnumSetTextAttribute;
     UdatOpen: TUdatOpen;
     UdatClose: TUdatClose;
@@ -380,6 +407,10 @@ begin
 
   S := ResolveSymbol(AHandle, 'unum_setAttribute');
   if Assigned(S) then F.UnumSetAttribute := TUnumSetAttribute(S);
+  S := ResolveSymbol(AHandle, 'unum_setDoubleAttribute');
+  if Assigned(S) then F.UnumSetDoubleAttribute := TUnumSetDoubleAttribute(S);
+  S := ResolveSymbol(AHandle, 'unum_applyPattern');
+  if Assigned(S) then F.UnumApplyPattern := TUnumApplyPattern(S);
   S := ResolveSymbol(AHandle, 'unum_setTextAttribute');
   if Assigned(S) then F.UnumSetTextAttribute := TUnumSetTextAttribute(S);
   S := ResolveSymbol(AHandle, 'uplrules_open');
@@ -698,6 +729,263 @@ begin
   end;
 end;
 
+function RoundingModeToICU(AMode: TIntlNumberRoundingMode): LongInt;
+begin
+  case AMode of
+    inrmCeil: Result := UNUM_ROUND_CEILING;
+    inrmFloor: Result := UNUM_ROUND_FLOOR;
+    inrmExpand: Result := UNUM_ROUND_UP;
+    inrmTrunc: Result := UNUM_ROUND_DOWN;
+    inrmHalfCeil: Result := UNUM_ROUND_HALF_CEILING;
+    inrmHalfFloor: Result := UNUM_ROUND_HALF_FLOOR;
+    inrmHalfExpand: Result := UNUM_ROUND_HALFUP;
+    inrmHalfTrunc: Result := UNUM_ROUND_HALFDOWN;
+    inrmHalfEven: Result := UNUM_ROUND_HALFEVEN;
+  else
+    Result := UNUM_ROUND_HALFUP;
+  end;
+end;
+
+procedure ApplySignificantDigitsPattern(AFormatter: Pointer;
+  AMinSig, AMaxSig: Integer);
+var
+  Pattern: UnicodeString;
+  Status: TICUErrorCode;
+  I: Integer;
+begin
+  if not Assigned(IntlFunctions.UnumApplyPattern) then
+    Exit;
+  if AMinSig < 1 then AMinSig := 1;
+  if AMaxSig < AMinSig then AMaxSig := AMinSig;
+  Pattern := '';
+  for I := 1 to AMinSig do
+    Pattern := Pattern + '@';
+  for I := AMinSig + 1 to AMaxSig do
+    Pattern := Pattern + '#';
+  Status := ICU_SUCCESS;
+  IntlFunctions.UnumApplyPattern(AFormatter, False,
+    PWideChar(Pattern), Length(Pattern), nil, Status);
+end;
+
+procedure ConfigureNumberFormatter(AFormatter: Pointer;
+  const AOptions: TIntlNumberFormatOptions);
+var
+  IncValue: Double;
+  MinSig, MaxSig: Integer;
+begin
+  if not Assigned(IntlFunctions.UnumSetAttribute) then
+    Exit;
+
+  if (AOptions.MinimumSignificantDigits > 0) or
+     (AOptions.MaximumSignificantDigits > 0) then
+  begin
+    MinSig := AOptions.MinimumSignificantDigits;
+    MaxSig := AOptions.MaximumSignificantDigits;
+    if MinSig < 1 then MinSig := 1;
+    if MaxSig < 1 then MaxSig := 21;
+    ApplySignificantDigitsPattern(AFormatter, MinSig, MaxSig);
+  end
+  else
+  begin
+    if AOptions.MinimumFractionDigits >= 0 then
+      IntlFunctions.UnumSetAttribute(AFormatter,
+        UNUM_MIN_FRACTION_DIGITS, AOptions.MinimumFractionDigits);
+    if AOptions.MaximumFractionDigits >= 0 then
+      IntlFunctions.UnumSetAttribute(AFormatter,
+        UNUM_MAX_FRACTION_DIGITS, AOptions.MaximumFractionDigits);
+  end;
+
+  IntlFunctions.UnumSetAttribute(AFormatter,
+    UNUM_MIN_INTEGER_DIGITS, AOptions.MinimumIntegerDigits);
+
+  if AOptions.UseGrouping = inugFalse then
+    IntlFunctions.UnumSetAttribute(AFormatter, UNUM_GROUPING_USED, 0);
+
+  IntlFunctions.UnumSetAttribute(AFormatter,
+    UNUM_ROUNDING_MODE, RoundingModeToICU(AOptions.RoundingMode));
+
+  if (AOptions.RoundingIncrement > 1) and
+     Assigned(IntlFunctions.UnumSetDoubleAttribute) then
+  begin
+    IncValue := AOptions.RoundingIncrement;
+    if AOptions.MaximumFractionDigits = 1 then
+      IncValue := IncValue * 0.1
+    else if AOptions.MaximumFractionDigits = 2 then
+      IncValue := IncValue * 0.01
+    else if AOptions.MaximumFractionDigits = 3 then
+      IncValue := IncValue * 0.001
+    else if AOptions.MaximumFractionDigits = 4 then
+      IncValue := IncValue * 0.0001;
+    IntlFunctions.UnumSetDoubleAttribute(AFormatter,
+      UNUM_DATTR_ROUNDING_INCREMENT, IncValue);
+  end;
+end;
+
+function RoundHalfExpand(AValue: Double): Double;
+begin
+  if AValue >= 0 then
+    Result := Math.Floor(AValue + 0.5)
+  else
+    Result := Math.Ceil(AValue - 0.5);
+end;
+
+function RoundHalfTrunc(AValue: Double): Double;
+var
+  F: Double;
+begin
+  F := Frac(AValue);
+  if Abs(F) > 0.5 then
+  begin
+    if AValue >= 0 then
+      Result := Math.Ceil(AValue - 0.5)
+    else
+      Result := Math.Floor(AValue + 0.5);
+  end
+  else
+    Result := System.Int(AValue);
+end;
+
+function RoundWithMode(AValue: Double; AMode: TIntlNumberRoundingMode): Double;
+var
+  F: Double;
+begin
+  case AMode of
+    inrmCeil:
+      Result := Math.Ceil(AValue);
+    inrmFloor:
+      Result := Math.Floor(AValue);
+    inrmTrunc:
+      Result := System.Int(AValue);
+    inrmExpand:
+      if AValue >= 0 then
+        Result := Math.Ceil(AValue)
+      else
+        Result := Math.Floor(AValue);
+    inrmHalfEven:
+      Result := Round(AValue);
+    inrmHalfTrunc:
+      Result := RoundHalfTrunc(AValue);
+    inrmHalfCeil:
+    begin
+      F := Frac(AValue);
+      if F = 0.5 then
+        Result := Math.Ceil(AValue)
+      else if F = -0.5 then
+        Result := System.Int(AValue)
+      else
+        Result := RoundHalfExpand(AValue);
+    end;
+    inrmHalfFloor:
+    begin
+      F := Frac(AValue);
+      if F = 0.5 then
+        Result := System.Int(AValue)
+      else if F = -0.5 then
+        Result := Math.Floor(AValue)
+      else
+        Result := RoundHalfExpand(AValue);
+    end;
+  else
+    Result := RoundHalfExpand(AValue);
+  end;
+end;
+
+function ApplyRoundingIncrement(AValue: Double;
+  const AOptions: TIntlNumberFormatOptions): Double;
+var
+  Scale, ScaledInt, Remainder, Rounded: Double;
+  Inc: Integer;
+  IsNeg: Boolean;
+begin
+  Result := AValue;
+  Inc := AOptions.RoundingIncrement;
+  if Inc <= 1 then
+    Exit;
+  if AOptions.MaximumFractionDigits < 0 then
+    Exit;
+
+  Scale := 1.0;
+  case AOptions.MaximumFractionDigits of
+    1: Scale := 10.0;
+    2: Scale := 100.0;
+    3: Scale := 1000.0;
+    4: Scale := 10000.0;
+  else
+    Exit;
+  end;
+
+  IsNeg := AValue < 0;
+  ScaledInt := Abs(AValue) * Scale;
+  if Abs(ScaledInt - System.Round(ScaledInt)) < 1e-6 then
+    ScaledInt := System.Round(ScaledInt);
+  Remainder := ScaledInt - Math.Floor(ScaledInt / Inc) * Inc;
+  if Abs(Remainder - Inc) < 1e-9 then
+    Remainder := 0;
+
+  if Remainder = 0 then
+  begin
+    Result := AValue;
+    Exit;
+  end;
+
+  case AOptions.RoundingMode of
+    inrmCeil:
+      if IsNeg then
+        Rounded := ScaledInt - Remainder
+      else
+        Rounded := ScaledInt - Remainder + Inc;
+    inrmFloor:
+      if IsNeg then
+        Rounded := ScaledInt - Remainder + Inc
+      else
+        Rounded := ScaledInt - Remainder;
+    inrmTrunc:
+      Rounded := ScaledInt - Remainder;
+    inrmExpand:
+      Rounded := ScaledInt - Remainder + Inc;
+    inrmHalfEven, inrmHalfExpand, inrmHalfTrunc, inrmHalfCeil, inrmHalfFloor:
+    begin
+      if Remainder * 2 > Inc then
+        Rounded := ScaledInt - Remainder + Inc
+      else if Remainder * 2 < Inc then
+        Rounded := ScaledInt - Remainder
+      else
+      begin
+        case AOptions.RoundingMode of
+          inrmHalfExpand:
+            Rounded := ScaledInt - Remainder + Inc;
+          inrmHalfTrunc:
+            Rounded := ScaledInt - Remainder;
+          inrmHalfCeil:
+            if IsNeg then
+              Rounded := ScaledInt - Remainder
+            else
+              Rounded := ScaledInt - Remainder + Inc;
+          inrmHalfFloor:
+            if IsNeg then
+              Rounded := ScaledInt - Remainder + Inc
+            else
+              Rounded := ScaledInt - Remainder;
+        else
+        begin
+          if Trunc(Math.Floor(ScaledInt / Inc)) mod 2 = 0 then
+            Rounded := ScaledInt - Remainder
+          else
+            Rounded := ScaledInt - Remainder + Inc;
+        end;
+        end;
+      end;
+    end;
+  else
+    Rounded := ScaledInt - Remainder + Inc;
+  end;
+
+  if IsNeg then
+    Result := -(Rounded / Scale)
+  else
+    Result := Rounded / Scale;
+end;
+
 function TryICUFormatNumber(const ALocale: string; AValue: Double;
   const AOptions: TIntlNumberFormatOptions; out AFormatted: string): Boolean;
 var
@@ -707,6 +995,7 @@ var
   ResultLen: LongInt;
   LocaleAnsi: AnsiString;
   ICUStyle: LongInt;
+  FormattedValue: Double;
 begin
   Result := False;
   AFormatted := '';
@@ -724,9 +1013,12 @@ begin
     Exit;
 
   try
+    ConfigureNumberFormatter(Formatter, AOptions);
+    FormattedValue := ApplyRoundingIncrement(AValue, AOptions);
+
     FillChar(Buffer, SizeOf(Buffer), 0);
     Status := ICU_SUCCESS;
-    ResultLen := IntlFunctions.UnumFormatDouble(Formatter, AValue,
+    ResultLen := IntlFunctions.UnumFormatDouble(Formatter, FormattedValue,
       @Buffer[0], FORMAT_BUFFER_CAPACITY, nil, Status);
     if not ICUSucceeded(Status) or (ResultLen <= 0) then
       Exit;

@@ -164,6 +164,28 @@ begin
     Result := inugAuto;
 end;
 
+function RoundingModeStringToEnum(const AValue: string): TIntlNumberRoundingMode;
+begin
+  if AValue = 'ceil' then
+    Result := inrmCeil
+  else if AValue = 'floor' then
+    Result := inrmFloor
+  else if AValue = 'expand' then
+    Result := inrmExpand
+  else if AValue = 'trunc' then
+    Result := inrmTrunc
+  else if AValue = 'halfCeil' then
+    Result := inrmHalfCeil
+  else if AValue = 'halfFloor' then
+    Result := inrmHalfFloor
+  else if AValue = 'halfTrunc' then
+    Result := inrmHalfTrunc
+  else if AValue = 'halfEven' then
+    Result := inrmHalfEven
+  else
+    Result := inrmHalfExpand;
+end;
+
 function InsertGroupingSeparator(const AIntPart, ASep: string): string;
 var
   Len, I, GroupCount: Integer;
@@ -466,6 +488,8 @@ begin
   FResolvedOptions.MaximumFractionDigits := FMaximumFractionDigits;
   FResolvedOptions.MinimumSignificantDigits := FMinimumSignificantDigits;
   FResolvedOptions.MaximumSignificantDigits := FMaximumSignificantDigits;
+  FResolvedOptions.RoundingMode := RoundingModeStringToEnum(FRoundingMode);
+  FResolvedOptions.RoundingIncrement := FRoundingIncrement;
   FResolvedOptions.NumberingSystem := FNumberingSystem;
 
   InitializePrototype;
