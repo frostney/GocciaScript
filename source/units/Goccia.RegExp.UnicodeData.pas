@@ -421,7 +421,9 @@ begin
   Result := TryExtractRanges(Resource, Entry, DataOffset, DataByteCount, ARanges);
 end;
 
-function TryGetEmbeddedCaseFoldPairs(
+function TryGetEmbeddedPairs(const AKey: string; var ACachedPairs:
+  TCodePointPairArray; var ACachedPairsLoaded, ACachedPairsAvailable: Boolean;
+  var ACachedPairsLock: TRTLCriticalSection;
   out APairs: TCodePointPairArray): Boolean;
 var
   Resource: TBytes;
@@ -429,19 +431,19 @@ var
   EntryCount, EntryTableOffset, NamesOffset, DataOffset: Integer;
   NamesByteCount, DataByteCount: Integer;
 begin
-  EnterCriticalSection(CachedCaseFoldPairsLock);
+  EnterCriticalSection(ACachedPairsLock);
   try
-    if CachedCaseFoldPairsLoaded then
+    if ACachedPairsLoaded then
     begin
-      APairs := CachedCaseFoldPairs;
-      Result := CachedCaseFoldPairsAvailable;
+      APairs := ACachedPairs;
+      Result := ACachedPairsAvailable;
       Exit;
     end;
 
     Result := False;
     SetLength(APairs, 0);
-    CachedCaseFoldPairsLoaded := True;
-    CachedCaseFoldPairsAvailable := False;
+    ACachedPairsLoaded := True;
+    ACachedPairsAvailable := False;
 
     if not TryReadEmbeddedResource(Resource) then
       Exit;
@@ -450,64 +452,62 @@ begin
        NamesOffset, DataOffset, NamesByteCount, DataByteCount) then
       Exit;
 
-    if not TryFindEmbeddedEntry(Resource, CASE_FOLDING_ENTRY_KEY, EntryCount,
-       EntryTableOffset, NamesOffset, NamesByteCount, Entry) then
+    if not TryFindEmbeddedEntry(Resource, AKey, EntryCount, EntryTableOffset,
+       NamesOffset, NamesByteCount, Entry) then
       Exit;
 
     if not TryExtractCaseFoldPairs(Resource, Entry, DataOffset, DataByteCount,
-       CachedCaseFoldPairs) then
+       ACachedPairs) then
       Exit;
 
-    APairs := CachedCaseFoldPairs;
-    CachedCaseFoldPairsAvailable := True;
+    APairs := ACachedPairs;
+    ACachedPairsAvailable := True;
     Result := True;
   finally
-    LeaveCriticalSection(CachedCaseFoldPairsLock);
+    LeaveCriticalSection(ACachedPairsLock);
   end;
+end;
+
+function TryGetEmbeddedCaseFoldPairs(
+  out APairs: TCodePointPairArray): Boolean;
+begin
+  Result := TryGetEmbeddedPairs(CASE_FOLDING_ENTRY_KEY, CachedCaseFoldPairs,
+    CachedCaseFoldPairsLoaded, CachedCaseFoldPairsAvailable,
+    CachedCaseFoldPairsLock, APairs);
 end;
 
 function TryGetEmbeddedNonUnicodeUppercasePairs(
   out APairs: TCodePointPairArray): Boolean;
-var
-  Resource: TBytes;
-  Entry: TEmbeddedUCDEntry;
-  EntryCount, EntryTableOffset, NamesOffset, DataOffset: Integer;
-  NamesByteCount, DataByteCount: Integer;
 begin
-  EnterCriticalSection(CachedNonUnicodeUppercasePairsLock);
-  try
-    if CachedNonUnicodeUppercasePairsLoaded then
+  Result := TryGetEmbeddedPairs(NON_UNICODE_UPPERCASE_ENTRY_KEY,
+    CachedNonUnicodeUppercasePairs, CachedNonUnicodeUppercasePairsLoaded,
+    CachedNonUnicodeUppercasePairsAvailable,
+    CachedNonUnicodeUppercasePairsLock, APairs);
+end;
+
+function TryFindPairTarget(const APairs: TCodePointPairArray;
+  ASource: Cardinal; out ATarget: Cardinal): Boolean;
+var
+  LowIndex, HighIndex, MiddleIndex: Integer;
+begin
+  Result := False;
+  ATarget := ASource;
+
+  LowIndex := 0;
+  HighIndex := High(APairs);
+  while LowIndex <= HighIndex do
+  begin
+    MiddleIndex := LowIndex + (HighIndex - LowIndex) div 2;
+    if APairs[MiddleIndex].Source = ASource then
     begin
-      APairs := CachedNonUnicodeUppercasePairs;
-      Result := CachedNonUnicodeUppercasePairsAvailable;
+      ATarget := APairs[MiddleIndex].Target;
+      Result := True;
       Exit;
     end;
-
-    Result := False;
-    SetLength(APairs, 0);
-    CachedNonUnicodeUppercasePairsLoaded := True;
-    CachedNonUnicodeUppercasePairsAvailable := False;
-
-    if not TryReadEmbeddedResource(Resource) then
-      Exit;
-
-    if not TryReadEmbeddedHeader(Resource, EntryCount, EntryTableOffset,
-       NamesOffset, DataOffset, NamesByteCount, DataByteCount) then
-      Exit;
-
-    if not TryFindEmbeddedEntry(Resource, NON_UNICODE_UPPERCASE_ENTRY_KEY,
-       EntryCount, EntryTableOffset, NamesOffset, NamesByteCount, Entry) then
-      Exit;
-
-    if not TryExtractCaseFoldPairs(Resource, Entry, DataOffset, DataByteCount,
-       CachedNonUnicodeUppercasePairs) then
-      Exit;
-
-    APairs := CachedNonUnicodeUppercasePairs;
-    CachedNonUnicodeUppercasePairsAvailable := True;
-    Result := True;
-  finally
-    LeaveCriticalSection(CachedNonUnicodeUppercasePairsLock);
+    if APairs[MiddleIndex].Source < ASource then
+      LowIndex := MiddleIndex + 1
+    else
+      HighIndex := MiddleIndex - 1;
   end;
 end;
 
@@ -521,29 +521,13 @@ function TryGetUnicodeSimpleCaseFold(ACodePoint: Cardinal;
   out AFoldedCodePoint: Cardinal): Boolean;
 var
   Pairs: TCodePointPairArray;
-  LowIndex, HighIndex, MiddleIndex: Integer;
 begin
-  Result := False;
-  AFoldedCodePoint := ACodePoint;
-
-  if not TryGetEmbeddedCaseFoldPairs(Pairs) then
-    Exit;
-
-  LowIndex := 0;
-  HighIndex := High(Pairs);
-  while LowIndex <= HighIndex do
+  if TryGetEmbeddedCaseFoldPairs(Pairs) then
+    Result := TryFindPairTarget(Pairs, ACodePoint, AFoldedCodePoint)
+  else
   begin
-    MiddleIndex := LowIndex + (HighIndex - LowIndex) div 2;
-    if Pairs[MiddleIndex].Source = ACodePoint then
-    begin
-      AFoldedCodePoint := Pairs[MiddleIndex].Target;
-      Result := True;
-      Exit;
-    end;
-    if Pairs[MiddleIndex].Source < ACodePoint then
-      LowIndex := MiddleIndex + 1
-    else
-      HighIndex := MiddleIndex - 1;
+    AFoldedCodePoint := ACodePoint;
+    Result := False;
   end;
 end;
 
@@ -641,29 +625,13 @@ function TryGetRegExpNonUnicodeUppercase(ACodePoint: Cardinal;
   out AUpperCodePoint: Cardinal): Boolean;
 var
   Pairs: TCodePointPairArray;
-  LowIndex, HighIndex, MiddleIndex: Integer;
 begin
-  Result := False;
-  AUpperCodePoint := ACodePoint;
-
-  if not TryGetEmbeddedNonUnicodeUppercasePairs(Pairs) then
-    Exit;
-
-  LowIndex := 0;
-  HighIndex := High(Pairs);
-  while LowIndex <= HighIndex do
+  if TryGetEmbeddedNonUnicodeUppercasePairs(Pairs) then
+    Result := TryFindPairTarget(Pairs, ACodePoint, AUpperCodePoint)
+  else
   begin
-    MiddleIndex := LowIndex + (HighIndex - LowIndex) div 2;
-    if Pairs[MiddleIndex].Source = ACodePoint then
-    begin
-      AUpperCodePoint := Pairs[MiddleIndex].Target;
-      Result := True;
-      Exit;
-    end;
-    if Pairs[MiddleIndex].Source < ACodePoint then
-      LowIndex := MiddleIndex + 1
-    else
-      HighIndex := MiddleIndex - 1;
+    AUpperCodePoint := ACodePoint;
+    Result := False;
   end;
 end;
 

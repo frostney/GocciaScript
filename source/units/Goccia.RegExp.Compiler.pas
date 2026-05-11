@@ -32,8 +32,10 @@ type
     Hi: Cardinal;
   end;
 
+  TRegExpCharRangeArray = array of TRegExpCharRange;
+
   TRegExpCharClass = record
-    Ranges: array of TRegExpCharRange;
+    Ranges: TRegExpCharRangeArray;
   end;
 
   TRegExpProgram = record
@@ -414,33 +416,46 @@ begin
   raise EConvertError.Create('Invalid Unicode property name: ' + APropertyName);
 end;
 
+function CharRangesToUnicodeRanges(const ARanges: array of TRegExpCharRange;
+  ARangeCount: Integer): TUnicodePropertyRangeArray;
+var
+  I: Integer;
+begin
+  SetLength(Result, ARangeCount);
+  for I := 0 to ARangeCount - 1 do
+  begin
+    Result[I].Lo := ARanges[I].Lo;
+    Result[I].Hi := ARanges[I].Hi;
+  end;
+end;
+
+function UnicodeRangesToCharRanges(const ARanges: TUnicodePropertyRangeArray):
+  TRegExpCharRangeArray;
+var
+  I: Integer;
+begin
+  SetLength(Result, Length(ARanges));
+  for I := 0 to High(ARanges) do
+  begin
+    Result[I].Lo := ARanges[I].Lo;
+    Result[I].Hi := ARanges[I].Hi;
+  end;
+end;
+
 procedure TRegExpCompiler.EmitUnicodePropertyClass(const APropertyName: string;
   ANegated: Boolean);
 var
   Ranges: array[0..MAX_CHAR_RANGES - 1] of TRegExpCharRange;
   FoldRanges: TUnicodePropertyRangeArray;
-  DynRanges: array of TRegExpCharRange;
   RangeCount: Integer;
-  I: Integer;
 begin
   RangeCount := 0;
   GetUnicodePropertyRanges(APropertyName, Ranges, RangeCount);
   if ANegated and FModifier.IgnoreCase and FUnicode and not FUnicodeSets then
   begin
-    SetLength(FoldRanges, RangeCount);
-    for I := 0 to RangeCount - 1 do
-    begin
-      FoldRanges[I].Lo := Ranges[I].Lo;
-      FoldRanges[I].Hi := Ranges[I].Hi;
-    end;
+    FoldRanges := CharRangesToUnicodeRanges(Ranges, RangeCount);
     ReduceUnicodeSimpleCaseFoldClosed(FoldRanges);
-    SetLength(DynRanges, Length(FoldRanges));
-    for I := 0 to High(FoldRanges) do
-    begin
-      DynRanges[I].Lo := FoldRanges[I].Lo;
-      DynRanges[I].Hi := FoldRanges[I].Hi;
-    end;
-    EmitRawCharClassRanges(DynRanges, True);
+    EmitRawCharClassRanges(UnicodeRangesToCharRanges(FoldRanges), True);
     Exit;
   end;
   EmitCharClassRanges(Ranges, RangeCount, ANegated);
@@ -1351,7 +1366,7 @@ procedure TRegExpCompiler.EmitCharClassRanges(
   ARangeCount: Integer; ANegated: Boolean);
 var
   I: Integer;
-  DynRanges: array of TRegExpCharRange;
+  DynRanges: TRegExpCharRangeArray;
   FoldRanges: TUnicodePropertyRangeArray;
 begin
   SetLength(DynRanges, ARangeCount);
@@ -1359,38 +1374,14 @@ begin
     DynRanges[I] := ARanges[I];
   if FModifier.IgnoreCase then
   begin
+    FoldRanges := CharRangesToUnicodeRanges(DynRanges, Length(DynRanges));
+
     if FUnicode then
-    begin
-      SetLength(FoldRanges, Length(DynRanges));
-      for I := 0 to High(DynRanges) do
-      begin
-        FoldRanges[I].Lo := DynRanges[I].Lo;
-        FoldRanges[I].Hi := DynRanges[I].Hi;
-      end;
-      ExpandUnicodeSimpleCaseFolding(FoldRanges);
-      SetLength(DynRanges, Length(FoldRanges));
-      for I := 0 to High(FoldRanges) do
-      begin
-        DynRanges[I].Lo := FoldRanges[I].Lo;
-        DynRanges[I].Hi := FoldRanges[I].Hi;
-      end
-    end
+      ExpandUnicodeSimpleCaseFolding(FoldRanges)
     else
-    begin
-      SetLength(FoldRanges, Length(DynRanges));
-      for I := 0 to High(DynRanges) do
-      begin
-        FoldRanges[I].Lo := DynRanges[I].Lo;
-        FoldRanges[I].Hi := DynRanges[I].Hi;
-      end;
       ExpandRegExpNonUnicodeCaseFolding(FoldRanges);
-      SetLength(DynRanges, Length(FoldRanges));
-      for I := 0 to High(FoldRanges) do
-      begin
-        DynRanges[I].Lo := FoldRanges[I].Lo;
-        DynRanges[I].Hi := FoldRanges[I].Hi;
-      end;
-    end;
+
+    DynRanges := UnicodeRangesToCharRanges(FoldRanges);
   end;
   EmitRawCharClassRanges(DynRanges, ANegated);
 end;
