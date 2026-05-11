@@ -849,7 +849,7 @@ begin
       TypeAnnotation := CollectTypeAnnotation([gttSemicolon, gttComma, gttRightParen, gttRightBracket, gttRightBrace, gttColon, gttQuestion,
         gttAnd, gttOr, gttNullishCoalescing,
         gttPlus, gttMinus, gttStar, gttSlash, gttPercent, gttPower,
-        gttEqual, gttNotEqual,
+        gttEqual, gttNotEqual, gttLooseEqual, gttLooseNotEqual,
         gttAssign, gttPlusAssign, gttMinusAssign, gttStarAssign, gttSlashAssign, gttPercentAssign, gttPowerAssign, gttNullishCoalescingAssign,
         gttLogicalAndAssign, gttLogicalOrAssign,
         gttInstanceof, gttIn], KEYWORD_IS);

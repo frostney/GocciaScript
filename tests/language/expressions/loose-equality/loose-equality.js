@@ -52,6 +52,11 @@ describe("loose equality", () => {
     expect(hints).toEqual(["default", "default"]);
   });
 
+  test("String.prototype compares as the empty string", () => {
+    expect(String.prototype == "").toBe(true);
+    expect(String.prototype != "").toBe(false);
+  });
+
   test("arrays and valueOf results compare through ToPrimitive", () => {
     const boxed = { valueOf() { return 42; } };
 

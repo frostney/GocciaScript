@@ -24,6 +24,7 @@ type
     constructor Create(const APrimitive: TGocciaStringLiteralValue; const AClass: TGocciaClassValue = nil);
     destructor Destroy; override;
     function TypeName: string; override;
+    function ToStringTag: string; override;
     function GetProperty(const AName: string): TGocciaValue; override;
     function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; override;
     function GetEnumerablePropertyNames: TArray<string>; override;
@@ -92,6 +93,7 @@ uses
   IntlTypes,
   TextSemantics,
 
+  Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
@@ -303,7 +305,8 @@ begin
   FPrimitive := APrimitive;
   InitializePrototype;
   SharedPrototype := GetSharedStringPrototype;
-  if not Assigned(AClass) and Assigned(SharedPrototype) then
+  if not Assigned(AClass) and Assigned(SharedPrototype) and
+     (SharedPrototype <> TGocciaObjectValue(Self)) then
     FPrototype := SharedPrototype;
 end;
 
@@ -326,6 +329,11 @@ begin
   Result := 'object';  // Boxed primitives are objects
 end;
 
+function TGocciaStringObjectValue.ToStringTag: string;
+begin
+  Result := CONSTRUCTOR_STRING;
+end;
+
 function TGocciaStringObjectValue.GetProperty(const AName: string): TGocciaValue;
 begin
   Result := GetPropertyWithContext(AName, Self);
@@ -334,6 +342,7 @@ end;
 function TGocciaStringObjectValue.GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue;
 var
   Index: Integer;
+  SharedPrototype: TGocciaObjectValue;
   StringValue: string;
 begin
   StringValue := FPrimitive.ToStringLiteral.Value;
@@ -352,8 +361,9 @@ begin
   if not (Result is TGocciaUndefinedLiteralValue) then
     Exit;
 
-  if Assigned(GetSharedStringPrototype) then
-    Result := GetSharedStringPrototype.GetPropertyWithContext(AName, AThisContext);
+  SharedPrototype := GetSharedStringPrototype;
+  if Assigned(SharedPrototype) and (SharedPrototype <> TGocciaObjectValue(Self)) then
+    Result := SharedPrototype.GetPropertyWithContext(AName, AThisContext);
 end;
 
 // ES2026 §10.4.3.6 StringExoticObject [[OwnPropertyKeys]]
@@ -490,13 +500,11 @@ end;
 procedure TGocciaStringObjectValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
-  SharedPrototype: TGocciaObjectValue;
 begin
   if not Assigned(CurrentRealm) then Exit;
   if Assigned(GetSharedStringPrototype) then Exit;
 
-  SharedPrototype := TGocciaObjectValue.Create;
-  CurrentRealm.SetSlot(GStringPrototypeSlot, SharedPrototype);
+  CurrentRealm.SetSlot(GStringPrototypeSlot, Self);
   FPrototypeMethodHost := Self;
   if Length(FPrototypeMembers) = 0 then
   begin
@@ -548,7 +556,7 @@ begin
       Members.Free;
     end;
   end;
-  RegisterMemberDefinitions(SharedPrototype, FPrototypeMembers);
+  RegisterMemberDefinitions(Self, FPrototypeMembers);
 
   // SharedPrototype is pinned through the realm slot.  Pin the host directly
   // since it's a process-wide singleton.
@@ -568,15 +576,6 @@ function TGocciaStringObjectValue.StringLength(const AArgs: TGocciaArgumentsColl
 var
   StringValue: string;
 begin
-  // ES2026 §22.1.4 String.prototype is itself a String exotic object whose
-  // [[StringData]] is the empty String. Short-circuit to 0 here so the
-  // accessor returns spec-correct length without recursing through
-  // ExtractStringValue → ToStringLiteral → String.prototype.toString →
-  // ExtractStringValue → ... (Goccia's String.prototype is a plain
-  // TGocciaObjectValue, not a String wrapper, so ExtractStringValue would
-  // fall through to ToString which triggers the recursion).
-  if AThisValue = GetSharedStringPrototype then
-    Exit(TGocciaNumberLiteralValue.ZeroValue);
   // Step 1: Let O be RequireObjectCoercible(this value)
   // Step 2: Let S be ToString(O)
   StringValue := ExtractStringValue(AThisValue);
