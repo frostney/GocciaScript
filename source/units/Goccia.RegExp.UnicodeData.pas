@@ -9,6 +9,12 @@ uses
 
 function TryGetUnicodePropertyRanges(const AKey: string;
   out ARanges: TUnicodePropertyRangeArray): Boolean;
+function TryGetUnicodeSimpleCaseFold(ACodePoint: Cardinal;
+  out AFoldedCodePoint: Cardinal): Boolean;
+function RegExpCanonicalizeCodePoint(ACodePoint: Cardinal;
+  AUnicodeAware, AIgnoreCase: Boolean): Cardinal;
+procedure ExpandUnicodeSimpleCaseFolding(
+  var ARanges: TUnicodePropertyRangeArray);
 
 implementation
 
@@ -28,6 +34,13 @@ type
     DataLength: Integer;
   end;
 
+  TSimpleCaseFoldPair = record
+    Source: Cardinal;
+    Target: Cardinal;
+  end;
+
+  TSimpleCaseFoldPairArray = array of TSimpleCaseFoldPair;
+
 const
   UCD_MAGIC_LENGTH = 8;
   UCD_HEADER_FIELD_SIZE = 4;
@@ -37,6 +50,7 @@ const
   UCD_ENTRY_SIZE = 16;
   UCD_FORMAT_VERSION = 1;
   UCD_RANGE_SIZE = 8;
+  CASE_FOLDING_ENTRY_KEY = 'CaseFolding/Simple';
   UCD_RCDATA_RESOURCE_TYPE = MAKEINTRESOURCE(10);
   UCD_MAGIC: array[0..UCD_MAGIC_LENGTH - 1] of Byte =
     (Ord('G'), Ord('O'), Ord('C'), Ord('C'), Ord('I'), Ord('A'), Ord('U'), Ord('C'));
@@ -284,10 +298,51 @@ begin
   Result := True;
 end;
 
+function TryExtractCaseFoldPairs(const ABuffer: TBytes;
+  const AEntry: TEmbeddedUCDEntry; const ADataOffset, ADataByteCount: Integer;
+  out APairs: TSimpleCaseFoldPairArray): Boolean;
+var
+  AbsoluteDataOffset, EntryDataEnd: Int64;
+  PairCount, I, Offset: Integer;
+begin
+  Result := False;
+  SetLength(APairs, 0);
+
+  AbsoluteDataOffset := Int64(ADataOffset) + AEntry.DataOffset;
+  EntryDataEnd := Int64(AEntry.DataOffset) + AEntry.DataLength;
+  if (AbsoluteDataOffset < 0) or (AbsoluteDataOffset > High(Integer)) or
+     (EntryDataEnd < 0) or (EntryDataEnd > ADataByteCount) then
+    Exit;
+
+  if not HasBytesAvailable(ABuffer, Integer(AbsoluteDataOffset),
+     AEntry.DataLength) then
+    Exit;
+
+  if (AEntry.DataLength mod UCD_RANGE_SIZE) <> 0 then
+    Exit;
+
+  PairCount := AEntry.DataLength div UCD_RANGE_SIZE;
+  SetLength(APairs, PairCount);
+  Offset := Integer(AbsoluteDataOffset);
+
+  for I := 0 to PairCount - 1 do
+  begin
+    APairs[I].Source := ReadUInt32LE(ABuffer, Offset);
+    APairs[I].Target := ReadUInt32LE(ABuffer, Offset + 4);
+    Inc(Offset, UCD_RANGE_SIZE);
+  end;
+
+  Result := True;
+end;
+
 var
   CachedUCDResource: TBytes;
   CachedUCDResourceLoaded: Boolean;
   CachedUCDResourceLock: TRTLCriticalSection;
+  CachedCaseFoldPairs: TSimpleCaseFoldPairArray;
+  CachedCaseFoldPairsLoaded: Boolean;
+  CachedCaseFoldPairsAvailable: Boolean;
+  CachedCaseFoldPairsLock: TRTLCriticalSection;
 
 function TryReadEmbeddedResource(out ABuffer: TBytes): Boolean;
 var
@@ -357,16 +412,163 @@ begin
   Result := TryExtractRanges(Resource, Entry, DataOffset, DataByteCount, ARanges);
 end;
 
+function TryGetEmbeddedCaseFoldPairs(
+  out APairs: TSimpleCaseFoldPairArray): Boolean;
+var
+  Resource: TBytes;
+  Entry: TEmbeddedUCDEntry;
+  EntryCount, EntryTableOffset, NamesOffset, DataOffset: Integer;
+  NamesByteCount, DataByteCount: Integer;
+begin
+  EnterCriticalSection(CachedCaseFoldPairsLock);
+  try
+    if CachedCaseFoldPairsLoaded then
+    begin
+      APairs := CachedCaseFoldPairs;
+      Result := CachedCaseFoldPairsAvailable;
+      Exit;
+    end;
+
+    Result := False;
+    SetLength(APairs, 0);
+    CachedCaseFoldPairsLoaded := True;
+    CachedCaseFoldPairsAvailable := False;
+
+    if not TryReadEmbeddedResource(Resource) then
+      Exit;
+
+    if not TryReadEmbeddedHeader(Resource, EntryCount, EntryTableOffset,
+       NamesOffset, DataOffset, NamesByteCount, DataByteCount) then
+      Exit;
+
+    if not TryFindEmbeddedEntry(Resource, CASE_FOLDING_ENTRY_KEY, EntryCount,
+       EntryTableOffset, NamesOffset, NamesByteCount, Entry) then
+      Exit;
+
+    if not TryExtractCaseFoldPairs(Resource, Entry, DataOffset, DataByteCount,
+       CachedCaseFoldPairs) then
+      Exit;
+
+    APairs := CachedCaseFoldPairs;
+    CachedCaseFoldPairsAvailable := True;
+    Result := True;
+  finally
+    LeaveCriticalSection(CachedCaseFoldPairsLock);
+  end;
+end;
+
 function TryGetUnicodePropertyRanges(const AKey: string;
   out ARanges: TUnicodePropertyRangeArray): Boolean;
 begin
   Result := TryGetEmbeddedPropertyRanges(AKey, ARanges);
 end;
 
+function TryGetUnicodeSimpleCaseFold(ACodePoint: Cardinal;
+  out AFoldedCodePoint: Cardinal): Boolean;
+var
+  Pairs: TSimpleCaseFoldPairArray;
+  LowIndex, HighIndex, MiddleIndex: Integer;
+begin
+  Result := False;
+  AFoldedCodePoint := ACodePoint;
+
+  if not TryGetEmbeddedCaseFoldPairs(Pairs) then
+    Exit;
+
+  LowIndex := 0;
+  HighIndex := High(Pairs);
+  while LowIndex <= HighIndex do
+  begin
+    MiddleIndex := LowIndex + (HighIndex - LowIndex) div 2;
+    if Pairs[MiddleIndex].Source = ACodePoint then
+    begin
+      AFoldedCodePoint := Pairs[MiddleIndex].Target;
+      Result := True;
+      Exit;
+    end;
+    if Pairs[MiddleIndex].Source < ACodePoint then
+      LowIndex := MiddleIndex + 1
+    else
+      HighIndex := MiddleIndex - 1;
+  end;
+end;
+
+function RegExpCanonicalizeCodePoint(ACodePoint: Cardinal;
+  AUnicodeAware, AIgnoreCase: Boolean): Cardinal;
+begin
+  Result := ACodePoint;
+  if not AIgnoreCase then
+    Exit;
+
+  if AUnicodeAware then
+  begin
+    TryGetUnicodeSimpleCaseFold(ACodePoint, Result);
+    Exit;
+  end;
+
+  if (Result >= Ord('A')) and (Result <= Ord('Z')) then
+    Inc(Result, Ord('a') - Ord('A'));
+end;
+
+function RangeContainsCodePoint(const ARanges: TUnicodePropertyRangeArray;
+  ACodePoint: Cardinal): Boolean;
+var
+  I: Integer;
+begin
+  for I := 0 to High(ARanges) do
+    if (ACodePoint >= ARanges[I].Lo) and (ACodePoint <= ARanges[I].Hi) then
+      Exit(True);
+  Result := False;
+end;
+
+procedure AddFoldRange(var ARanges: TUnicodePropertyRangeArray;
+  ACodePoint: Cardinal);
+var
+  NewIndex: Integer;
+begin
+  if RangeContainsCodePoint(ARanges, ACodePoint) then
+    Exit;
+  NewIndex := Length(ARanges);
+  SetLength(ARanges, NewIndex + 1);
+  ARanges[NewIndex].Lo := ACodePoint;
+  ARanges[NewIndex].Hi := ACodePoint;
+end;
+
+procedure ExpandUnicodeSimpleCaseFolding(
+  var ARanges: TUnicodePropertyRangeArray);
+var
+  OriginalRanges: TUnicodePropertyRangeArray;
+  Pairs: TSimpleCaseFoldPairArray;
+  I, J: Integer;
+  Target: Cardinal;
+begin
+  if not TryGetEmbeddedCaseFoldPairs(Pairs) then
+    Exit;
+
+  SetLength(OriginalRanges, Length(ARanges));
+  for I := 0 to High(ARanges) do
+    OriginalRanges[I] := ARanges[I];
+
+  for I := 0 to High(Pairs) do
+  begin
+    if not RangeContainsCodePoint(OriginalRanges, Pairs[I].Source) and
+       not RangeContainsCodePoint(OriginalRanges, Pairs[I].Target) then
+      Continue;
+
+    Target := Pairs[I].Target;
+    AddFoldRange(ARanges, Target);
+    for J := 0 to High(Pairs) do
+      if Pairs[J].Target = Target then
+        AddFoldRange(ARanges, Pairs[J].Source);
+  end;
+end;
+
 initialization
   InitCriticalSection(CachedUCDResourceLock);
+  InitCriticalSection(CachedCaseFoldPairsLock);
 
 finalization
+  DoneCriticalSection(CachedCaseFoldPairsLock);
   DoneCriticalSection(CachedUCDResourceLock);
 
 {$ELSE}
@@ -376,6 +578,28 @@ function TryGetUnicodePropertyRanges(const AKey: string;
 begin
   Result := False;
   SetLength(ARanges, 0);
+end;
+
+function TryGetUnicodeSimpleCaseFold(ACodePoint: Cardinal;
+  out AFoldedCodePoint: Cardinal): Boolean;
+begin
+  AFoldedCodePoint := ACodePoint;
+  Result := False;
+end;
+
+function RegExpCanonicalizeCodePoint(ACodePoint: Cardinal;
+  AUnicodeAware, AIgnoreCase: Boolean): Cardinal;
+begin
+  Result := ACodePoint;
+  if AUnicodeAware or not AIgnoreCase then
+    Exit;
+  if (Result >= Ord('A')) and (Result <= Ord('Z')) then
+    Inc(Result, Ord('a') - Ord('A'));
+end;
+
+procedure ExpandUnicodeSimpleCaseFolding(
+  var ARanges: TUnicodePropertyRangeArray);
+begin
 end;
 
 {$ENDIF}

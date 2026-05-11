@@ -28,6 +28,7 @@ const UCD_FILES = [
   "PropertyValueAliases.txt",
   "PropertyAliases.txt",
   "emoji/emoji-data.txt",
+  "CaseFolding.txt",
 ];
 
 const RESOURCE_NAME = "GOCCIA_UCD";
@@ -233,6 +234,28 @@ function parsePropertyAliases(text) {
   return aliases;
 }
 
+function parseCaseFolding(text) {
+  const pairs = [];
+
+  forEachUCDLine(text, 3, (parts) => {
+    const status = parts[1];
+    if (status !== "C" && status !== "S") {
+      return;
+    }
+
+    const source = parseInt(parts[0], 16);
+    const mapping = parts[2].split(/\s+/).filter((part) => part.length > 0);
+    if (mapping.length !== 1) {
+      return;
+    }
+
+    pairs.push({ lo: source, hi: parseInt(mapping[0], 16) });
+  });
+
+  pairs.sort((a, b) => a.lo - b.lo);
+  return pairs;
+}
+
 function mergeRanges(ranges) {
   if (ranges.length === 0) {
     return [];
@@ -422,6 +445,7 @@ function collectAllEntries(
   scriptData,
   scxData,
   binaryProperties,
+  caseFoldingPairs,
   pvAliases,
   pAliases,
 ) {
@@ -486,6 +510,7 @@ function collectAllEntries(
 
   addEntry("ASCII", [{ lo: 0, hi: 0x7f }]);
   addEntry("Any", [{ lo: 0, hi: 0x10ffff }]);
+  addEntry("CaseFolding/Simple", caseFoldingPairs);
 
   const cnRanges = gcData.get("Cn");
   if (cnRanges) {
@@ -609,6 +634,7 @@ async function main() {
     pvAliasesText,
     pAliasesText,
     emojiText,
+    caseFoldingText,
   ] = await Promise.all(
     UCD_FILES.map((file) => downloadUCDFile(unicodeVersion, file)),
   );
@@ -624,6 +650,7 @@ async function main() {
   const derivedCoreData = parseUCDRangeFile(derivedCoreText);
   const derivedBinaryData = parseUCDRangeFile(derivedBinaryText);
   const emojiData = parseUCDRangeFile(emojiText);
+  const caseFoldingPairs = parseCaseFolding(caseFoldingText);
 
   const binaryProperties = new Map([
     ...propListData, ...derivedCoreData, ...derivedBinaryData, ...emojiData,
@@ -634,12 +661,14 @@ async function main() {
   console.log(`  Script: ${scriptData.size} values`);
   console.log(`  Script_Extensions: ${scxData.size} values`);
   console.log(`  Binary properties: ${binaryProperties.size} values`);
+  console.log(`  Simple case folding pairs: ${caseFoldingPairs.length}`);
 
   const allEntries = collectAllEntries(
     gcData,
     scriptData,
     scxData,
     binaryProperties,
+    caseFoldingPairs,
     pvAliases,
     pAliases,
   );

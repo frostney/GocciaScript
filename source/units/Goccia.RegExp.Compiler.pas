@@ -46,7 +46,8 @@ type
 const
   BACKREF_STRICT_FLAG = $800000;
   BACKREF_ICASE_FLAG = $400000;
-  BACKREF_INDEX_MASK = $3FFFFF;
+  BACKREF_UNICODE_FLAG = $200000;
+  BACKREF_INDEX_MASK = $1FFFFF;
   LOOK_NEGATED_FLAG = $800000;
   LOOK_TARGET_MASK = $7FFFFF;
 
@@ -277,6 +278,13 @@ var
 begin
   if FModifier.IgnoreCase then
   begin
+    if FUnicode then
+    begin
+      Ranges[0].Lo := ACodePoint;
+      Ranges[0].Hi := ACodePoint;
+      EmitCharClassRanges(Ranges, 1, False);
+      Exit;
+    end;
     if (ACodePoint >= Ord('A')) and (ACodePoint <= Ord('Z')) then
     begin
       Lower := ACodePoint + 32;
@@ -295,16 +303,6 @@ begin
       Ranges[0].Hi := Upper;
       Ranges[1].Lo := ACodePoint;
       Ranges[1].Hi := ACodePoint;
-      ClassIdx := AddCharClass(Ranges);
-      Emit(EncodeOpBx(RX_CHAR_CLASS, ClassIdx));
-      Exit;
-    end;
-    if FUnicode and (ACodePoint = $212A) then
-    begin
-      Ranges[0].Lo := Ord('K');
-      Ranges[0].Hi := Ord('K');
-      Ranges[1].Lo := Ord('k');
-      Ranges[1].Hi := Ord('k');
       ClassIdx := AddCharClass(Ranges);
       Emit(EncodeOpBx(RX_CHAR_CLASS, ClassIdx));
       Exit;
@@ -1359,26 +1357,46 @@ var
   ClassIdx, I, OrigCount: Integer;
   Op: TRegExpOpCode;
   DynRanges: array of TRegExpCharRange;
+  FoldRanges: TUnicodePropertyRangeArray;
 begin
   SetLength(DynRanges, ARangeCount);
   for I := 0 to ARangeCount - 1 do
     DynRanges[I] := ARanges[I];
   if FModifier.IgnoreCase then
   begin
-    OrigCount := Length(DynRanges);
-    for I := 0 to OrigCount - 1 do
+    if FUnicode then
     begin
-      if (DynRanges[I].Lo >= Ord('A')) and (DynRanges[I].Hi <= Ord('Z')) then
+      SetLength(FoldRanges, Length(DynRanges));
+      for I := 0 to High(DynRanges) do
       begin
-        SetLength(DynRanges, Length(DynRanges) + 1);
-        DynRanges[High(DynRanges)].Lo := DynRanges[I].Lo + 32;
-        DynRanges[High(DynRanges)].Hi := DynRanges[I].Hi + 32;
+        FoldRanges[I].Lo := DynRanges[I].Lo;
+        FoldRanges[I].Hi := DynRanges[I].Hi;
+      end;
+      ExpandUnicodeSimpleCaseFolding(FoldRanges);
+      SetLength(DynRanges, Length(FoldRanges));
+      for I := 0 to High(FoldRanges) do
+      begin
+        DynRanges[I].Lo := FoldRanges[I].Lo;
+        DynRanges[I].Hi := FoldRanges[I].Hi;
       end
-      else if (DynRanges[I].Lo >= Ord('a')) and (DynRanges[I].Hi <= Ord('z')) then
+    end
+    else
+    begin
+      OrigCount := Length(DynRanges);
+      for I := 0 to OrigCount - 1 do
       begin
-        SetLength(DynRanges, Length(DynRanges) + 1);
-        DynRanges[High(DynRanges)].Lo := DynRanges[I].Lo - 32;
-        DynRanges[High(DynRanges)].Hi := DynRanges[I].Hi - 32;
+        if (DynRanges[I].Lo >= Ord('A')) and (DynRanges[I].Hi <= Ord('Z')) then
+        begin
+          SetLength(DynRanges, Length(DynRanges) + 1);
+          DynRanges[High(DynRanges)].Lo := DynRanges[I].Lo + 32;
+          DynRanges[High(DynRanges)].Hi := DynRanges[I].Hi + 32;
+        end
+        else if (DynRanges[I].Lo >= Ord('a')) and (DynRanges[I].Hi <= Ord('z')) then
+        begin
+          SetLength(DynRanges, Length(DynRanges) + 1);
+          DynRanges[High(DynRanges)].Lo := DynRanges[I].Lo - 32;
+          DynRanges[High(DynRanges)].Hi := DynRanges[I].Hi - 32;
+        end;
       end;
     end;
   end;
@@ -1559,10 +1577,13 @@ var
   BackrefIdx, I, GroupCount, BackrefICaseFlag: Integer;
   CodePoint: Cardinal;
 begin
+  BackrefICaseFlag := 0;
   if FModifier.IgnoreCase then
-    BackrefICaseFlag := BACKREF_ICASE_FLAG
-  else
-    BackrefICaseFlag := 0;
+  begin
+    BackrefICaseFlag := BACKREF_ICASE_FLAG;
+    if FUnicode then
+      BackrefICaseFlag := BackrefICaseFlag or BACKREF_UNICODE_FLAG;
+  end;
   C := Advance;
   case C of
     'd', 'D', 'w', 'W', 's', 'S':

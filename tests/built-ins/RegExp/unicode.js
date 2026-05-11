@@ -18,6 +18,36 @@ test("u flag with case-insensitive matching", () => {
   expect(/hello/iu.test("HELLO")).toBe(true);
 });
 
+test("u flag with ignoreCase uses Unicode simple case folding", () => {
+  expect(/[a-z]/iu.test("ſ")).toBe(true);
+  expect(/[a-z]/iu.test("K")).toBe(true);
+  expect(/[ω]/iu.test("Ω")).toBe(true);
+  expect(/[Ω]/iu.test("Ω")).toBe(true);
+  expect(/[ß]/iu.test("ẞ")).toBe(true);
+});
+
+test("u flag with ignoreCase does not use full case folding expansions", () => {
+  expect(/ß/iu.test("SS")).toBe(false);
+  expect(/ẞ/iu.test("ss")).toBe(false);
+});
+
+test("u flag with ignoreCase applies folding before negated class checks", () => {
+  expect(/[^a-z]/iu.test("ſ")).toBe(false);
+  expect(/[^ω]/iu.test("Ω")).toBe(false);
+});
+
+test("u flag with ignoreCase applies Unicode folding to backreferences", () => {
+  expect(/([ſ])\1/iu.test("ſs")).toBe(true);
+  expect(/([Ω])\1/iu.test("Ωω")).toBe(true);
+  expect(/([ß])\1/iu.test("ßẞ")).toBe(true);
+});
+
+test("ignoreCase without u flag does not fold non-ASCII code points to ASCII", () => {
+  expect(/[a-z]/i.test("ſ")).toBe(false);
+  expect(/[a-z]/i.test("K")).toBe(false);
+  expect(/[ω]/i.test("Ω")).toBe(false);
+});
+
 test("u flag with dot matches single character", () => {
   expect(/^.$/u.test("a")).toBe(true);
 });
