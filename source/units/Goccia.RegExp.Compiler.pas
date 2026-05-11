@@ -409,12 +409,6 @@ begin
     ValuePart := '';
   end;
 
-  if TryICUGetUnicodePropertyRanges(PropPart, ValuePart, ICURanges) then
-  begin
-    CopyICURanges;
-    Exit;
-  end;
-
   if EqPos > 0 then
   begin
     if TryGetUnicodePropertyRanges(PropPart + '/' + ValuePart, ICURanges) then
@@ -436,6 +430,12 @@ begin
       CopyICURanges;
       Exit;
     end;
+  end;
+
+  if TryICUGetUnicodePropertyRanges(PropPart, ValuePart, ICURanges) then
+  begin
+    CopyICURanges;
+    Exit;
   end;
 
   raise EConvertError.Create('Invalid Unicode property name: ' + APropertyName);
