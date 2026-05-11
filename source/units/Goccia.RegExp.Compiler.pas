@@ -451,7 +451,7 @@ var
 begin
   RangeCount := 0;
   GetUnicodePropertyRanges(APropertyName, Ranges, RangeCount);
-  if ANegated and FModifier.IgnoreCase and FUnicode and not FUnicodeSets then
+  if ANegated and FModifier.IgnoreCase and FUnicode then
   begin
     FoldRanges := CharRangesToUnicodeRanges(Ranges, RangeCount);
     ReduceUnicodeSimpleCaseFoldClosed(FoldRanges);

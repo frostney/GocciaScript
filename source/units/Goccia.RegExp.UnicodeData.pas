@@ -766,7 +766,39 @@ end;
 
 procedure ExpandRegExpNonUnicodeCaseFolding(
   var ARanges: TUnicodePropertyRangeArray);
+var
+  OriginalLength, I, NewIndex: Integer;
+
+  procedure AddRange(ALo, AHi: Cardinal);
+  begin
+    NewIndex := Length(ARanges);
+    SetLength(ARanges, NewIndex + 1);
+    ARanges[NewIndex].Lo := ALo;
+    ARanges[NewIndex].Hi := AHi;
+  end;
+
+  procedure AddShiftedOverlap(const ARange: TUnicodePropertyRange;
+    ALo, AHi: Cardinal; AShift: Integer);
+  var
+    Lo, Hi: Cardinal;
+  begin
+    Lo := ARange.Lo;
+    if Lo < ALo then
+      Lo := ALo;
+    Hi := ARange.Hi;
+    if Hi > AHi then
+      Hi := AHi;
+    if Lo <= Hi then
+      AddRange(Cardinal(Integer(Lo) + AShift), Cardinal(Integer(Hi) + AShift));
+  end;
+
 begin
+  OriginalLength := Length(ARanges);
+  for I := 0 to OriginalLength - 1 do
+  begin
+    AddShiftedOverlap(ARanges[I], Ord('A'), Ord('Z'), Ord('a') - Ord('A'));
+    AddShiftedOverlap(ARanges[I], Ord('a'), Ord('z'), Ord('A') - Ord('a'));
+  end;
 end;
 
 {$ENDIF}

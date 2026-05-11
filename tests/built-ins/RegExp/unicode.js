@@ -43,6 +43,13 @@ test("u flag with ignoreCase applies property complement before folding", () => 
   expect(new RegExp("\\P{ASCII}", "iu").test("K")).toBe(true);
 });
 
+test("v flag with ignoreCase applies property complement before folding", () => {
+  expect(new RegExp("\\P{Lowercase_Letter}", "iv").test("a")).toBe(true);
+  expect(new RegExp("\\P{Lowercase_Letter}", "iv").test("A")).toBe(true);
+  expect(new RegExp("\\P{ASCII}", "iv").test("k")).toBe(true);
+  expect(new RegExp("\\P{ASCII}", "iv").test("K")).toBe(true);
+});
+
 test("u flag with ignoreCase applies Unicode folding to backreferences", () => {
   expect(/([ſ])\1/iu.test("ſs")).toBe(true);
   expect(/([Ω])\1/iu.test("Ωω")).toBe(true);
