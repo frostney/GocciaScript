@@ -12,6 +12,12 @@
 {$DEFINE GOCCIA_INTL_EMBEDDED_CLDR}
 {$ENDIF}
 
+{ RegExp embeds Unicode Character Database property tables so
+  \p Unicode property escapes resolve when system ICU is unavailable. }
+{$IFNDEF GOCCIA_REGEXP_NO_EMBEDDED_UCD}
+{$DEFINE GOCCIA_REGEXP_EMBEDDED_UCD}
+{$ENDIF}
+
 { Uncomment to enable bridge-crossing metrics on the GocciaScript runtime.
   When enabled, TGocciaRuntimeOperations tracks per-operation counts and
   prints a summary to stderr on destruction. }

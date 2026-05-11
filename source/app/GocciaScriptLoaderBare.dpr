@@ -38,7 +38,6 @@ type
     CompatVar: Boolean;
     CompatFunction: Boolean;
     CompatTraditionalFor: Boolean;
-    CompatAll: Boolean;
     StrictTypes: Boolean;
     UnsafeFunctionConstructor: Boolean;
     Print: Boolean;
@@ -80,7 +79,6 @@ begin
   WriteLn('  --compat-var                  Enable var declarations');
   WriteLn('  --compat-function             Enable function declarations/expressions');
   WriteLn('  --compat-traditional-for-loop Enable traditional C-style for(;;) loops');
-  WriteLn('  --compat-all                  Enable all compatibility flags (--compat-*)');
   WriteLn('  --strict-types                Enforce type annotations at runtime');
   WriteLn('  --mode=interpreted|bytecode   Execution mode (default: interpreted)');
   WriteLn('  --source-type=script|module   Load entry as a script or module');
@@ -155,7 +153,6 @@ begin
   Result.CompatVar := False;
   Result.CompatFunction := False;
   Result.CompatTraditionalFor := False;
-  Result.CompatAll := False;
   Result.StrictTypes := False;
   Result.UnsafeFunctionConstructor := False;
   Result.Print := False;
@@ -182,8 +179,6 @@ begin
       Result.CompatFunction := True
     else if Arg = '--compat-traditional-for-loop' then
       Result.CompatTraditionalFor := True
-    else if Arg = '--compat-all' then
-      Result.CompatAll := True
     else if Arg = '--strict-types' then
       Result.StrictTypes := True
     else if Arg = '--unsafe-function-constructor' then
@@ -222,13 +217,9 @@ procedure ConfigureEngine(const AEngine: TGocciaEngine;
   const AOptions: TBareOptions);
 begin
   AEngine.ASIEnabled := AOptions.ASI;
-  { CompatAll is a meta-flag — OR it into every per-flag setting so future
-    --compat-* options only need their own field; the meta-flag fan-out
-    happens here rather than in the parser. }
-  AEngine.VarEnabled := AOptions.CompatVar or AOptions.CompatAll;
-  AEngine.FunctionEnabled := AOptions.CompatFunction or AOptions.CompatAll;
-  AEngine.TraditionalForLoopsEnabled :=
-    AOptions.CompatTraditionalFor or AOptions.CompatAll;
+  AEngine.VarEnabled := AOptions.CompatVar;
+  AEngine.FunctionEnabled := AOptions.CompatFunction;
+  AEngine.TraditionalForLoopsEnabled := AOptions.CompatTraditionalFor;
   AEngine.StrictTypes := AOptions.StrictTypes;
   AEngine.SourceType := AOptions.SourceType;
   AEngine.FunctionConstructor.Enabled := AOptions.UnsafeFunctionConstructor;

@@ -26,6 +26,7 @@ type
     procedure TestGetDetailedMessageWithoutColorHasNoAnsiCodes;
     procedure TestErrorDisplayNameMapsSyntaxErrorCorrectly;
     procedure TestErrorDisplayNameMapsLexerErrorToSyntaxError;
+    procedure TestLexerErrorInheritFromSyntaxError;
     procedure TestErrorDisplayNameMapsTypeErrorCorrectly;
     procedure TestErrorDisplayNameMapsReferenceErrorCorrectly;
     procedure TestGetDetailedMessageHandlesSingleSourceLine;
@@ -73,6 +74,8 @@ begin
     TestErrorDisplayNameMapsSyntaxErrorCorrectly);
   Test('ErrorDisplayName maps LexerError to SyntaxError',
     TestErrorDisplayNameMapsLexerErrorToSyntaxError);
+  Test('LexerError inherits from SyntaxError',
+    TestLexerErrorInheritFromSyntaxError);
   Test('ErrorDisplayName maps TypeError correctly',
     TestErrorDisplayNameMapsTypeErrorCorrectly);
   Test('ErrorDisplayName maps ReferenceError correctly',
@@ -308,6 +311,18 @@ begin
   Error := TGocciaLexerError.Create('test', 1, 1, 'test.js', nil);
   try
     Expect<string>(ErrorDisplayName(Error)).ToBe('SyntaxError');
+  finally
+    Error.Free;
+  end;
+end;
+
+procedure TErrorTests.TestLexerErrorInheritFromSyntaxError;
+var
+  Error: TGocciaLexerError;
+begin
+  Error := TGocciaLexerError.Create('test', 1, 1, 'test.js', nil);
+  try
+    Expect<Boolean>(Error is TGocciaSyntaxError).ToBe(True);
   finally
     Error.Free;
   end;

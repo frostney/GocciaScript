@@ -552,7 +552,7 @@ When execution exceeds the `--timeout` limit, the JSON envelope reports a `Timeo
 
 ## Embedding
 
-For Pascal-side error handling when embedding GocciaScript in FreePascal applications, see [Embedding the Engine](embedding.md). The engine raises `TGocciaError` subclasses (`TGocciaSyntaxError`, `TGocciaTypeError`, `TGocciaReferenceError`) on the Pascal side and `TGocciaThrowValue` for JS-level `throw` statements.
+For Pascal-side error handling when embedding GocciaScript in FreePascal applications, see [Embedding the Engine](embedding.md). The engine raises `TGocciaError` subclasses (`TGocciaSyntaxError` and its subclass `TGocciaLexerError`, `TGocciaTypeError`, `TGocciaReferenceError`) on the Pascal side and `TGocciaThrowValue` for JS-level `throw` statements.
 
 ## Related Documents
 

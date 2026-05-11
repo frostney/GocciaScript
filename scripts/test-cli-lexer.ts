@@ -5,7 +5,7 @@
  * Lexer-level CLI tests: numeric separator rejection.
  */
 
-import { LOADER } from "./test-cli/binaries";
+import { assertSyntaxError, runLoaderJson } from "./test-cli/assertions";
 
 // -- Numeric separator rejection (9 cases) --------------------------------------
 
@@ -24,18 +24,7 @@ console.log("Numeric separator rejection...");
   ];
 
   for (const [literal, desc] of cases) {
-    const proc = Bun.spawnSync([LOADER, "--output=json"], {
-      stdin: new TextEncoder().encode(`${literal};\n`),
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    if (proc.exitCode === 0) {
-      throw new Error(`Numeric separator "${literal}" (${desc}) should fail, but exited 0`);
-    }
-    const json = JSON.parse(proc.stdout.toString());
-    if (json.ok !== false || json.error?.type !== "SyntaxError") {
-      throw new Error(`Numeric separator "${literal}" (${desc}) should be SyntaxError, got ok=${json.ok} type=${json.error?.type}`);
-    }
+    assertSyntaxError(`${literal};\n`, `Numeric separator "${literal}" (${desc})`);
   }
 }
 
@@ -53,18 +42,7 @@ console.log("String line terminator rejection...");
   ];
 
   for (const [source, desc] of cases) {
-    const proc = Bun.spawnSync([LOADER, "--output=json"], {
-      stdin: new TextEncoder().encode(source + ";\n"),
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    if (proc.exitCode === 0) {
-      throw new Error(`String "${desc}" should fail, but exited 0`);
-    }
-    const json = JSON.parse(proc.stdout.toString());
-    if (json.ok !== false || json.error?.type !== "SyntaxError") {
-      throw new Error(`String "${desc}" should be SyntaxError, got ok=${json.ok} type=${json.error?.type}`);
-    }
+    assertSyntaxError(source + ";\n", `String "${desc}"`);
   }
 }
 
@@ -80,14 +58,9 @@ console.log("String allows LS/PS (ES2019)...");
   ];
 
   for (const [source, desc] of cases) {
-    const proc = Bun.spawnSync([LOADER, "--output=json"], {
-      stdin: new TextEncoder().encode(source + ";\n"),
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    if (proc.exitCode !== 0) {
-      const stderr = proc.stderr.toString().trim();
-      throw new Error(`String "${desc}" should succeed, but failed: ${stderr}`);
+    const { exitCode, stderr } = runLoaderJson(source + ";\n");
+    if (exitCode !== 0) {
+      throw new Error(`String "${desc}" should succeed, but failed: ${stderr.trim()}`);
     }
   }
 }
@@ -96,18 +69,30 @@ console.log("String allows LS/PS (ES2019)...");
 
 console.log("String line continuation...");
 {
-  const proc = Bun.spawnSync([LOADER, "--output=json", "--print", "--asi"], {
-    stdin: new TextEncoder().encode('"hello\\\nworld";\n'),
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  if (proc.exitCode !== 0) {
+  const { exitCode, json } = runLoaderJson('"hello\\\nworld";\n', ["--print", "--asi"]);
+  if (exitCode !== 0) {
     throw new Error(`Line continuation should succeed, but failed`);
   }
-  const json = JSON.parse(proc.stdout.toString());
   const result = json.files?.[0]?.result;
   if (result !== "helloworld") {
     throw new Error(`Line continuation should produce "helloworld", got ${JSON.stringify(result)}`);
+  }
+}
+
+// -- Lexer errors surface as SyntaxError (#626) ---------------------------------
+
+console.log("Lexer errors are SyntaxError...");
+{
+  const cases: [string, string][] = [
+    ["'unterminated", "unterminated single-quoted string"],
+    ['"unterminated', "unterminated double-quoted string"],
+    ["`unterminated", "unterminated template literal"],
+    ["'\\xZZ'", "invalid hex escape"],
+    ["'\\u{ZZZZ}'", "invalid unicode escape"],
+  ];
+
+  for (const [source, desc] of cases) {
+    assertSyntaxError(source + "\n", `Lexer error "${desc}"`);
   }
 }
 

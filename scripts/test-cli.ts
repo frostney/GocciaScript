@@ -8,7 +8,7 @@
  */
 
 import { $ } from "bun";
-import { mkdirSync, writeFileSync, readFileSync, existsSync } from "fs";
+import { writeFileSync, readFileSync, existsSync } from "fs";
 import { join } from "path";
 import {
   LOADER,
@@ -18,7 +18,7 @@ import {
   BUNDLER,
   BENCHRUNNER,
 } from "./test-cli/binaries";
-import { containsLine } from "./test-cli/assertions";
+import { containsLine, runLoaderJson } from "./test-cli/assertions";
 import { mkdtemp, clean } from "./test-cli/tmpdir";
 
 // -- Stdin smoke (Loader interpreted + bytecode) --------------------------------
@@ -94,20 +94,10 @@ for (const bin of [LOADER, BARE, REPL, TESTRUNNER, BUNDLER, BENCHRUNNER]) {
 
 console.log("--unsafe-ffi gating...");
 {
-  const proc = Bun.spawnSync([LOADER, "--output=json"], {
-    stdin: new TextEncoder().encode("typeof FFI;\n"),
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const json = JSON.parse(proc.stdout.toString());
+  const { json } = runLoaderJson("typeof FFI;\n");
   if (json.files?.[0]?.result !== "undefined") throw new Error(`FFI without flag should be "undefined", got ${json.files?.[0]?.result}`);
 
-  const procOn = Bun.spawnSync([LOADER, "--unsafe-ffi", "--output=json"], {
-    stdin: new TextEncoder().encode("typeof FFI;\n"),
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const jsonOn = JSON.parse(procOn.stdout.toString());
+  const { json: jsonOn } = runLoaderJson("typeof FFI;\n", ["--unsafe-ffi"]);
   if (jsonOn.files?.[0]?.result !== "object") throw new Error(`FFI with flag should be "object", got ${jsonOn.files?.[0]?.result}`);
 }
 
@@ -178,86 +168,43 @@ console.log("--compat-var (Loader + Bundler + TestRunner)...");
   }
 }
 
-// -- --compat-all (Loader + Bare + TestRunner) ----------------------------------
+// -- --compat-function + Bare loader compat parsing ----------------------------
 
-console.log("--compat-all (Loader + Bare + TestRunner)...");
+console.log("--compat-function (Loader) + Bare loader compat parsing...");
 {
-  const tmp = mkdtemp("goccia-compat-all-");
+  const tmp = mkdtemp("goccia-func-");
   try {
-    // Source uses both var and function — both compat flags required.
-    const src = join(tmp, "use-both.js");
-    writeFileSync(src, "var x = 10;\nfunction f() { return x; }\nf();\n");
+    const fnSrc = join(tmp, "use-fn.js");
+    writeFileSync(fnSrc, "function f() { return 7; }\nf();\n");
+    const loaderOut = await $`${LOADER} --print ${fnSrc} --compat-function 2>&1`.text();
+    if (!containsLine(loaderOut, "7")) throw new Error(`Loader --compat-function expected 7, got: ${loaderOut}`);
 
-    // Loader with --compat-all matches enumerating both flags.
-    const allOut = await $`${LOADER} --print ${src} --compat-all 2>&1`.text();
-    if (!containsLine(allOut, "10")) throw new Error(`Loader --compat-all expected 10, got: ${allOut}`);
-    const enumOut = await $`${LOADER} --print ${src} --compat-var --compat-function 2>&1`.text();
-    if (!containsLine(enumOut, "10")) throw new Error(`Loader enumerated flags expected 10, got: ${enumOut}`);
-
-    // Without any compat flag the source must fail (function declaration unsupported).
-    const noFlag = await $`${LOADER} ${src} 2>&1`.nothrow();
-    if (noFlag.exitCode === 0) throw new Error("Loader without compat flags should reject var/function");
-
-    // Bare loader with --compat-all.
-    const bareOut = await $`${BARE} --print ${src} --compat-all 2>&1`.text();
-    if (bareOut.trim() !== "10") throw new Error(`Bare --compat-all expected output 10, got: ${bareOut}`);
-    const bareNoFlag = await $`${BARE} ${src} 2>&1`.nothrow();
+    // Bare loader argv path — covered here so the full test262 suite isn't the
+    // only thing exercising it.  Flag combo mirrors run_test262_suite.ts.
+    const bothSrc = join(tmp, "use-both.js");
+    writeFileSync(bothSrc, "var x = 22;\nfunction f() { return x; }\nf();\n");
+    const bareOut = await $`${BARE} --print ${bothSrc} --compat-var --compat-function 2>&1`.text();
+    if (bareOut.trim() !== "22") throw new Error(`Bare --compat-var --compat-function expected 22, got: ${bareOut}`);
+    const bareNoFlag = await $`${BARE} ${bothSrc} 2>&1`.nothrow();
     if (bareNoFlag.exitCode === 0) throw new Error("Bare without compat flags should reject var/function");
 
-    // TestRunner with --compat-all.
-    const testSrc = join(tmp, "test-both.js");
-    writeFileSync(
-      testSrc,
-      [
-        "var y = 20;",
-        "function getY() { return y; }",
-        'describe("compat-all", () => {',
-        '  test("works", () => {',
-        "    expect(getY()).toBe(20);",
-        "  });",
-        "});",
-      ].join("\n") + "\n",
-    );
-    const trOut = await $`${TESTRUNNER} ${testSrc} --compat-all --no-progress 2>&1`.text();
-    if (!trOut.includes("Passed: 1")) throw new Error(`TestRunner --compat-all expected Passed: 1, got: ${trOut}`);
+    // Stdin path — the exact shape run_test262_suite.ts uses (source piped
+    // into a `-` argument).  Without this, file-path is the only invocation
+    // mode covered.
+    const bareStdin = await $`cat ${bothSrc} | ${BARE} --print - --compat-var --compat-function 2>&1`.text();
+    if (bareStdin.trim() !== "22") throw new Error(`Bare stdin --compat-var --compat-function expected 22, got: ${bareStdin}`);
 
-    // goccia.json equivalent: "compat-all": true.
-    const cfgDir = join(tmp, "cfg");
-    mkdirSync(cfgDir);
-    writeFileSync(join(cfgDir, "goccia.json"), '{"compat-all": true}\n');
-    const cfgSrc = join(cfgDir, "use-both.js");
-    writeFileSync(cfgSrc, "var x = 10;\nfunction f() { return x; }\nf();\n");
-    const cfgOut = await $`${LOADER} --print ${cfgSrc} 2>&1`.text();
-    if (!containsLine(cfgOut, "10")) throw new Error(`Config compat-all expected 10, got: ${cfgOut}`);
+    // --compat-all regression guard: the flag was removed and must now be
+    // rejected as an unknown option.
+    const bareCompatAll = await $`echo 'x;' | ${BARE} --compat-all - 2>&1`.nothrow();
+    const compatAllOut = bareCompatAll.stdout.toString();
+    if (bareCompatAll.exitCode === 0 || !compatAllOut.includes("--compat-all"))
+      throw new Error(`Bare must reject --compat-all, got exit ${bareCompatAll.exitCode}: ${compatAllOut}`);
 
-    // --help mentions --compat-all on every CLI.
-    for (const bin of [LOADER, BARE, REPL, TESTRUNNER, BUNDLER, BENCHRUNNER]) {
-      const help = await $`${bin} --help 2>&1`.text();
-      if (!help.includes("--compat-all")) throw new Error(`${bin} --help should mention --compat-all`);
-    }
-
-    // Runtime smoke: every CLI must accept --compat-all without parser error.
-    // Each invocation feeds the binary an input it can complete and exit on,
-    // so the option actually flows through ParseCommandLine into engine setup.
-    const bundlerOut = join(tmp, "smoke.gbc");
-    const benchSrc = `suite("smoke", () => { bench("noop", { run: () => 1 }); });\n`;
-    const smokes: Array<[string, string[], string]> = [
-      [LOADER, ["--compat-all", "--output=compact-json"], ""],
-      [BARE, ["--compat-all"], ""],
-      [REPL, ["--compat-all"], ""],
-      [TESTRUNNER, ["--compat-all", "--no-progress"], 'test("noop", () => expect(1).toBe(1));\n'],
-      [BUNDLER, ["--compat-all", `--output=${bundlerOut}`], "1;\n"],
-      [BENCHRUNNER, ["--compat-all", "--no-progress"], benchSrc],
-    ];
-    for (const [bin, args, stdin] of smokes) {
-      const proc = Bun.spawnSync([bin, ...args], {
-        stdin: new TextEncoder().encode(stdin),
-        stdout: "pipe",
-        stderr: "pipe",
-      });
-      if (proc.exitCode !== 0)
-        throw new Error(`${bin} --compat-all smoke should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
-    }
+    const forSrc = join(tmp, "use-for.js");
+    writeFileSync(forSrc, "let s = 0;\nfor (let i = 1; i <= 5; i++) { s = s + i; }\ns;\n");
+    const forOut = await $`${BARE} --print ${forSrc} --compat-traditional-for-loop 2>&1`.text();
+    if (forOut.trim() !== "15") throw new Error(`Bare --compat-traditional-for-loop expected 15, got: ${forOut}`);
   } finally {
     clean(tmp);
   }
@@ -281,28 +228,16 @@ console.log("--mode=bytecode...");
 console.log("--timeout (interpreted)...");
 {
   const loop = "const iterable = { [Symbol.iterator]: () => ({ next: () => ({ done: false, value: 1 }) }) }; for (const x of iterable) { }\n";
-  const proc = Bun.spawnSync([LOADER, "--timeout=50", "--output=json"], {
-    stdin: new TextEncoder().encode(loop),
-    stdout: "pipe",
-    stderr: "pipe",
-    timeout: 10_000,
-  });
-  if (proc.exitCode !== 1) throw new Error(`Timeout exit code should be 1, got ${proc.exitCode}`);
-  const json = JSON.parse(proc.stdout.toString());
+  const { exitCode, json } = runLoaderJson(loop, ["--timeout=50"], { timeout: 10_000 });
+  if (exitCode !== 1) throw new Error(`Timeout exit code should be 1, got ${exitCode}`);
   if (json.error?.type !== "TimeoutError") throw new Error(`Expected TimeoutError, got ${json.error?.type}`);
 }
 
 console.log("--timeout (bytecode)...");
 {
   const loop = "const iterable = { [Symbol.iterator]: () => ({ next: () => ({ done: false, value: 1 }) }) }; for (const x of iterable) { }\n";
-  const proc = Bun.spawnSync([LOADER, "--timeout=50", "--output=json", "--mode=bytecode"], {
-    stdin: new TextEncoder().encode(loop),
-    stdout: "pipe",
-    stderr: "pipe",
-    timeout: 10_000,
-  });
-  if (proc.exitCode !== 1) throw new Error(`Bytecode timeout exit code should be 1, got ${proc.exitCode}`);
-  const json = JSON.parse(proc.stdout.toString());
+  const { exitCode, json } = runLoaderJson(loop, ["--timeout=50", "--mode=bytecode"], { timeout: 10_000 });
+  if (exitCode !== 1) throw new Error(`Bytecode timeout exit code should be 1, got ${exitCode}`);
   if (json.error?.type !== "TimeoutError") throw new Error(`Expected TimeoutError, got ${json.error?.type}`);
 }
 
@@ -311,28 +246,16 @@ console.log("--timeout (bytecode)...");
 console.log("--max-instructions (interpreted)...");
 {
   const loop = "const iterable = { [Symbol.iterator]: () => ({ next: () => ({ done: false, value: 1 }) }) }; for (const x of iterable) { }\n";
-  const proc = Bun.spawnSync([LOADER, "--max-instructions=500", "--output=json"], {
-    stdin: new TextEncoder().encode(loop),
-    stdout: "pipe",
-    stderr: "pipe",
-    timeout: 10_000,
-  });
-  if (proc.exitCode !== 1) throw new Error(`Instruction limit exit code should be 1, got ${proc.exitCode}`);
-  const json = JSON.parse(proc.stdout.toString());
+  const { exitCode, json } = runLoaderJson(loop, ["--max-instructions=500"], { timeout: 10_000 });
+  if (exitCode !== 1) throw new Error(`Instruction limit exit code should be 1, got ${exitCode}`);
   if (json.error?.type !== "InstructionLimitError") throw new Error(`Expected InstructionLimitError, got ${json.error?.type}`);
 }
 
 console.log("--max-instructions (bytecode)...");
 {
   const loop = "const iterable = { [Symbol.iterator]: () => ({ next: () => ({ done: false, value: 1 }) }) }; for (const x of iterable) { }\n";
-  const proc = Bun.spawnSync([LOADER, "--max-instructions=500", "--output=json", "--mode=bytecode"], {
-    stdin: new TextEncoder().encode(loop),
-    stdout: "pipe",
-    stderr: "pipe",
-    timeout: 10_000,
-  });
-  if (proc.exitCode !== 1) throw new Error(`Bytecode instruction limit exit code should be 1, got ${proc.exitCode}`);
-  const json = JSON.parse(proc.stdout.toString());
+  const { exitCode, json } = runLoaderJson(loop, ["--max-instructions=500", "--mode=bytecode"], { timeout: 10_000 });
+  if (exitCode !== 1) throw new Error(`Bytecode instruction limit exit code should be 1, got ${exitCode}`);
   if (json.error?.type !== "InstructionLimitError") throw new Error(`Expected InstructionLimitError, got ${json.error?.type}`);
 }
 
@@ -340,23 +263,13 @@ console.log("--max-instructions (bytecode)...");
 
 console.log("--max-memory (default positive)...");
 {
-  const proc = Bun.spawnSync([LOADER, "--output=json", "--asi"], {
-    stdin: new TextEncoder().encode("Goccia.gc.maxBytes\n"),
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const json = JSON.parse(proc.stdout.toString());
+  const { json } = runLoaderJson("Goccia.gc.maxBytes\n", ["--asi"]);
   if (typeof json.files?.[0]?.result !== "number" || json.files[0].result <= 0) throw new Error(`Default maxBytes should be positive, got ${json.files?.[0]?.result}`);
 }
 
 console.log("--max-memory (override)...");
 {
-  const proc = Bun.spawnSync([LOADER, "--max-memory=5000000", "--output=json", "--asi"], {
-    stdin: new TextEncoder().encode("Goccia.gc.maxBytes\n"),
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const json = JSON.parse(proc.stdout.toString());
+  const { json } = runLoaderJson("Goccia.gc.maxBytes\n", ["--max-memory=5000000", "--asi"]);
   if (json.files?.[0]?.result !== 5000000) throw new Error(`Override maxBytes should be 5000000, got ${json.files?.[0]?.result}`);
 }
 
@@ -382,15 +295,9 @@ console.log("--max-memory (manual gc reclaims inside active calls)...");
   ].join("\n");
 
   for (const modeArgs of [[], ["--mode=bytecode"]] as const) {
-    const proc = Bun.spawnSync([LOADER, "--max-memory=500000", "--output=json", "--asi", ...modeArgs], {
-      stdin: new TextEncoder().encode(src),
-      stdout: "pipe",
-      stderr: "pipe",
-      timeout: 30_000,
-    });
     const label = modeArgs.length > 0 ? modeArgs.join(" ") : "interpreter";
-    if (proc.exitCode !== 0) throw new Error(`Manual GC active-call ${label} exit code should be 0, got ${proc.exitCode}: ${proc.stdout.toString()}${proc.stderr.toString()}`);
-    const json = JSON.parse(proc.stdout.toString());
+    const { exitCode, json, stderr } = runLoaderJson(src, ["--max-memory=500000", "--asi", ...modeArgs], { timeout: 30_000 });
+    if (exitCode !== 0) throw new Error(`Manual GC active-call ${label} exit code should be 0, got ${exitCode}: ${JSON.stringify(json)}${stderr}`);
     if (typeof json.files?.[0]?.result !== "number" || json.files[0].result <= 0) throw new Error(`Manual GC active-call ${label} should return positive bytesAllocated`);
     if ((json.memory?.gc?.collections ?? 0) < 30) throw new Error(`Manual GC active-call ${label} should report at least 30 collections, got ${json.memory?.gc?.collections}`);
   }
@@ -407,13 +314,8 @@ console.log("--max-memory (maxBytes readonly)...");
 
 console.log("--stack-size (default overflow)...");
 {
-  const proc = Bun.spawnSync([LOADER, "--output=json"], {
-    stdin: new TextEncoder().encode("const f = () => f(); f();\n"),
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  if (proc.exitCode !== 1) throw new Error(`Default overflow should exit 1, got ${proc.exitCode}`);
-  const json = JSON.parse(proc.stdout.toString());
+  const { exitCode, json } = runLoaderJson("const f = () => f(); f();\n");
+  if (exitCode !== 1) throw new Error(`Default overflow should exit 1, got ${exitCode}`);
   if (json.error?.type !== "RangeError") throw new Error(`Expected RangeError, got ${json.error?.type}`);
 }
 
