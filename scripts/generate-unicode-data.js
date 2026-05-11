@@ -29,6 +29,7 @@ const UCD_FILES = [
   "PropertyAliases.txt",
   "emoji/emoji-data.txt",
   "CaseFolding.txt",
+  "UnicodeData.txt",
 ];
 
 const RESOURCE_NAME = "GOCCIA_UCD";
@@ -256,6 +257,27 @@ function parseCaseFolding(text) {
   return pairs;
 }
 
+function parseRegExpNonUnicodeUppercase(text) {
+  const pairs = [];
+
+  forEachUCDLine(text, 13, (parts) => {
+    if (parts[12].length === 0) {
+      return;
+    }
+
+    const source = parseInt(parts[0], 16);
+    const target = parseInt(parts[12], 16);
+    if (source >= 0x80 && target < 0x80) {
+      return;
+    }
+
+    pairs.push({ lo: source, hi: target });
+  });
+
+  pairs.sort((a, b) => a.lo - b.lo);
+  return pairs;
+}
+
 function mergeRanges(ranges) {
   if (ranges.length === 0) {
     return [];
@@ -446,6 +468,7 @@ function collectAllEntries(
   scxData,
   binaryProperties,
   caseFoldingPairs,
+  nonUnicodeUppercasePairs,
   pvAliases,
   pAliases,
 ) {
@@ -511,6 +534,7 @@ function collectAllEntries(
   addEntry("ASCII", [{ lo: 0, hi: 0x7f }]);
   addEntry("Any", [{ lo: 0, hi: 0x10ffff }]);
   addEntry("CaseFolding/Simple", caseFoldingPairs);
+  addEntry("CaseMapping/RegExpNonUnicodeUppercase", nonUnicodeUppercasePairs);
 
   const cnRanges = gcData.get("Cn");
   if (cnRanges) {
@@ -635,6 +659,7 @@ async function main() {
     pAliasesText,
     emojiText,
     caseFoldingText,
+    unicodeDataText,
   ] = await Promise.all(
     UCD_FILES.map((file) => downloadUCDFile(unicodeVersion, file)),
   );
@@ -651,6 +676,7 @@ async function main() {
   const derivedBinaryData = parseUCDRangeFile(derivedBinaryText);
   const emojiData = parseUCDRangeFile(emojiText);
   const caseFoldingPairs = parseCaseFolding(caseFoldingText);
+  const nonUnicodeUppercasePairs = parseRegExpNonUnicodeUppercase(unicodeDataText);
 
   const binaryProperties = new Map([
     ...propListData, ...derivedCoreData, ...derivedBinaryData, ...emojiData,
@@ -662,6 +688,7 @@ async function main() {
   console.log(`  Script_Extensions: ${scxData.size} values`);
   console.log(`  Binary properties: ${binaryProperties.size} values`);
   console.log(`  Simple case folding pairs: ${caseFoldingPairs.length}`);
+  console.log(`  Non-Unicode uppercase pairs: ${nonUnicodeUppercasePairs.length}`);
 
   const allEntries = collectAllEntries(
     gcData,
@@ -669,6 +696,7 @@ async function main() {
     scxData,
     binaryProperties,
     caseFoldingPairs,
+    nonUnicodeUppercasePairs,
     pvAliases,
     pAliases,
   );

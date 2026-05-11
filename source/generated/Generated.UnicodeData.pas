@@ -11,8 +11,8 @@ interface
 const
   GeneratedUnicodeDataVersion = '16.0.0';
   GeneratedUnicodeDataResourceName = 'GOCCIA_UCD';
-  GeneratedUnicodeDataEntryCount = 1421;
-  GeneratedUnicodeDataBlobByteCount = 180680;
+  GeneratedUnicodeDataEntryCount = 1422;
+  GeneratedUnicodeDataBlobByteCount = 192480;
 
 implementation
 
