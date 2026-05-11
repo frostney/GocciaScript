@@ -27,6 +27,8 @@ function CompoundOperations(const ACurrentValue, ANewValue: TGocciaValue;
 
 function IsStrictEqual(const ALeft, ARight: TGocciaValue): Boolean; inline;
 function IsNotStrictEqual(const ALeft, ARight: TGocciaValue): Boolean; inline;
+function IsLooselyEqual(const ALeft, ARight: TGocciaValue): Boolean; inline;
+function IsNotLooselyEqual(const ALeft, ARight: TGocciaValue): Boolean; inline;
 function IsSameValue(const ALeft, ARight: TGocciaValue): Boolean; inline;
 function IsSameValueZero(const ALeft, ARight: TGocciaValue): Boolean; inline;
 
@@ -580,7 +582,7 @@ begin
   Result := ALeft = ARight;
 end;
 
-// ES2026 §7.2.15 IsStrictlyEqual(x, y)
+// ES2026 §7.2.14 IsStrictlyEqual(x, y)
 function IsStrictEqual(const ALeft, ARight: TGocciaValue): Boolean; inline;
 begin
   Result := ValuesEqual(ALeft, ARight, nekStrict);
@@ -589,6 +591,93 @@ end;
 function IsNotStrictEqual(const ALeft, ARight: TGocciaValue): Boolean; inline;
 begin
   Result := not IsStrictEqual(ALeft, ARight);
+end;
+
+function IsNullOrUndefined(const AValue: TGocciaValue): Boolean; inline;
+begin
+  Result := (AValue is TGocciaNullLiteralValue) or
+    (AValue is TGocciaUndefinedLiteralValue);
+end;
+
+function IsLooseObjectComparablePrimitive(const AValue: TGocciaValue): Boolean; inline;
+begin
+  Result := (AValue is TGocciaStringLiteralValue) or
+    (AValue is TGocciaNumberLiteralValue) or
+    (AValue is TGocciaBigIntValue) or
+    (AValue is TGocciaSymbolValue);
+end;
+
+function CompareBigIntAndNumber(const ABigInt: TGocciaBigIntValue;
+  const ANumber: TGocciaNumberLiteralValue): Integer; forward;
+
+function BigIntNumberLooselyEqual(const ABigInt: TGocciaBigIntValue;
+  const ANumber: TGocciaNumberLiteralValue): Boolean; inline;
+begin
+  Result := CompareBigIntAndNumber(ABigInt, ANumber) = RELATION_EQUAL;
+end;
+
+// ES2026 §7.2.13 IsLooselyEqual(x, y)
+function IsLooselyEqual(const ALeft, ARight: TGocciaValue): Boolean; inline;
+var
+  StringBigInt: TBigInteger;
+begin
+  if ALeft.ClassType = ARight.ClassType then
+    Exit(IsStrictEqual(ALeft, ARight));
+
+  if IsNullOrUndefined(ALeft) and IsNullOrUndefined(ARight) then
+    Exit(True);
+
+  if (ALeft is TGocciaNumberLiteralValue) and
+     (ARight is TGocciaStringLiteralValue) then
+    Exit(IsLooselyEqual(ALeft, ARight.ToNumberLiteral));
+
+  if (ALeft is TGocciaStringLiteralValue) and
+     (ARight is TGocciaNumberLiteralValue) then
+    Exit(IsLooselyEqual(ALeft.ToNumberLiteral, ARight));
+
+  if (ALeft is TGocciaBigIntValue) and
+     (ARight is TGocciaStringLiteralValue) then
+  begin
+    if not TryStringToBigInt(TGocciaStringLiteralValue(ARight).Value,
+      StringBigInt) then
+      Exit(False);
+    Exit(TGocciaBigIntValue(ALeft).Value.Equal(StringBigInt));
+  end;
+
+  if (ALeft is TGocciaStringLiteralValue) and
+     (ARight is TGocciaBigIntValue) then
+    Exit(IsLooselyEqual(ARight, ALeft));
+
+  if ALeft is TGocciaBooleanLiteralValue then
+    Exit(IsLooselyEqual(ALeft.ToNumberLiteral, ARight));
+
+  if ARight is TGocciaBooleanLiteralValue then
+    Exit(IsLooselyEqual(ALeft, ARight.ToNumberLiteral));
+
+  if IsLooseObjectComparablePrimitive(ALeft) and
+     (not ARight.IsPrimitive) then
+    Exit(IsLooselyEqual(ALeft, ToPrimitive(ARight)));
+
+  if (not ALeft.IsPrimitive) and
+     IsLooseObjectComparablePrimitive(ARight) then
+    Exit(IsLooselyEqual(ToPrimitive(ALeft), ARight));
+
+  if (ALeft is TGocciaBigIntValue) and
+     (ARight is TGocciaNumberLiteralValue) then
+    Exit(BigIntNumberLooselyEqual(TGocciaBigIntValue(ALeft),
+      TGocciaNumberLiteralValue(ARight)));
+
+  if (ALeft is TGocciaNumberLiteralValue) and
+     (ARight is TGocciaBigIntValue) then
+    Exit(BigIntNumberLooselyEqual(TGocciaBigIntValue(ARight),
+      TGocciaNumberLiteralValue(ALeft)));
+
+  Result := False;
+end;
+
+function IsNotLooselyEqual(const ALeft, ARight: TGocciaValue): Boolean; inline;
+begin
+  Result := not IsLooselyEqual(ALeft, ARight);
 end;
 
 // ES2026 §7.2.10 SameValue(x, y)

@@ -71,6 +71,7 @@ type
     FVarDeclarationsEnabled: Boolean;
     FFunctionDeclarationsEnabled: Boolean;
     FTraditionalForLoopsEnabled: Boolean;
+    FLooseEqualityEnabled: Boolean;
 
     procedure AddWarning(const AMessage, ASuggestion: string; const ALine, AColumn: Integer);
     procedure PushPrivateClassContext;
@@ -232,6 +233,8 @@ type
       read FFunctionDeclarationsEnabled write FFunctionDeclarationsEnabled;
     property TraditionalForLoopsEnabled: Boolean
       read FTraditionalForLoopsEnabled write FTraditionalForLoopsEnabled;
+    property LooseEqualityEnabled: Boolean
+      read FLooseEqualityEnabled write FLooseEqualityEnabled;
     property WarningCount: Integer read FWarningCount;
   end;
 
@@ -778,26 +781,35 @@ end;
 function TGocciaParser.Equality: TGocciaExpression;
 var
   Op: TGocciaToken;
+  Right: TGocciaExpression;
 begin
   Result := Comparison;
   while Peek.TokenType in [gttEqual, gttNotEqual, gttLooseEqual, gttLooseNotEqual] do
   begin
     Op := Advance;
+    Right := Comparison;
     if Op.TokenType in [gttLooseEqual, gttLooseNotEqual] then
     begin
-      if Op.TokenType = gttLooseEqual then
-        AddWarning('''=='' (loose equality) is not supported in GocciaScript',
-          'Use ''==='' (strict equality) instead', Op.Line, Op.Column)
+      if FLooseEqualityEnabled then
+        Result := TGocciaBinaryExpression.Create(
+          Result, Op.TokenType, Right, Op.Line, Op.Column)
       else
-        AddWarning('''!='' (loose inequality) is not supported in GocciaScript',
-          'Use ''!=='' (strict inequality) instead', Op.Line, Op.Column);
-      Comparison;
-      Result := TGocciaLiteralExpression.Create(
-        TGocciaUndefinedLiteralValue.UndefinedValue, Op.Line, Op.Column);
+      begin
+        if Op.TokenType = gttLooseEqual then
+          AddWarning('''=='' (loose equality) is not supported in GocciaScript',
+            'Use ''==='' (strict equality), or enable --compat-loose-equality',
+            Op.Line, Op.Column)
+        else
+          AddWarning('''!='' (loose inequality) is not supported in GocciaScript',
+            'Use ''!=='' (strict inequality), or enable --compat-loose-equality',
+            Op.Line, Op.Column);
+        Result := TGocciaLiteralExpression.Create(
+          TGocciaUndefinedLiteralValue.UndefinedValue, Op.Line, Op.Column);
+      end;
     end
     else
       Result := TGocciaBinaryExpression.Create(
-        Result, Op.TokenType, Comparison, Op.Line, Op.Column);
+        Result, Op.TokenType, Right, Op.Line, Op.Column);
   end;
 end;
 
@@ -1463,7 +1475,8 @@ end;
 function ParseInterpolationExpression(const AExprText, AFileName: string;
   const AASI: Boolean = False; const AVarEnabled: Boolean = False;
   const AFunctionEnabled: Boolean = False;
-  const ATraditionalForLoopsEnabled: Boolean = False): TGocciaExpression;
+  const ATraditionalForLoopsEnabled: Boolean = False;
+  const ALooseEqualityEnabled: Boolean = False): TGocciaExpression;
 var
   Lexer: TGocciaLexer;
   Parser: TGocciaParser;
@@ -1486,6 +1499,7 @@ begin
       Parser.VarDeclarationsEnabled := AVarEnabled;
       Parser.FunctionDeclarationsEnabled := AFunctionEnabled;
       Parser.TraditionalForLoopsEnabled := ATraditionalForLoopsEnabled;
+      Parser.LooseEqualityEnabled := ALooseEqualityEnabled;
       try
         ProgramNode := Parser.ParseUnchecked;
         try
@@ -1548,7 +1562,10 @@ begin
   Expressions := TObjectList<TGocciaExpression>.Create(True);
   for I := 0 to Length(ExprTexts) - 1 do
   begin
-    ParsedExpr := ParseInterpolationExpression(ExprTexts[I], FFileName, FAutomaticSemicolonInsertion, FVarDeclarationsEnabled, FFunctionDeclarationsEnabled, FTraditionalForLoopsEnabled);
+    ParsedExpr := ParseInterpolationExpression(ExprTexts[I], FFileName,
+      FAutomaticSemicolonInsertion, FVarDeclarationsEnabled,
+      FFunctionDeclarationsEnabled, FTraditionalForLoopsEnabled,
+      FLooseEqualityEnabled);
     if Assigned(ParsedExpr) then
       Expressions.Add(ParsedExpr);
   end;
@@ -1608,7 +1625,10 @@ begin
       AToken.Line, AToken.Column));
 
     // Parse and add the interpolation expression
-    ParsedExpr := ParseInterpolationExpression(ExprTexts[I], FFileName, FAutomaticSemicolonInsertion, FVarDeclarationsEnabled, FFunctionDeclarationsEnabled, FTraditionalForLoopsEnabled);
+    ParsedExpr := ParseInterpolationExpression(ExprTexts[I], FFileName,
+      FAutomaticSemicolonInsertion, FVarDeclarationsEnabled,
+      FFunctionDeclarationsEnabled, FTraditionalForLoopsEnabled,
+      FLooseEqualityEnabled);
     if Assigned(ParsedExpr) then
       Parts.Add(ParsedExpr);
   end;

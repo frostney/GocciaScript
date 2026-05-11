@@ -16,7 +16,7 @@
 | `var` | ES1 | Opt-in (`--compat-var`) — use `let`/`const` by default |
 | `function` keyword | ES1 | Opt-in (`--compat-function`) — use arrow functions or shorthand methods by default |
 | Comma operator (`,`) | ES1 | Supported |
-| `==` / `!=` (loose equality) | ES1 | Excluded — use `===` / `!==` |
+| `==` / `!=` (loose equality) | ES1 | Opt-in (`--compat-loose-equality`) — use `===` / `!==` by default |
 | `eval()` | ES1 | Excluded |
 | `arguments` object | ES1 | Excluded — use rest parameters |
 | Traditional `for(init; test; update)` loop | ES1 | Opt-in (`--compat-traditional-for-loop`) — use `for...of` or array methods by default |

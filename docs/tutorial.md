@@ -5,13 +5,13 @@
 ## Executive Summary
 
 - **Familiar syntax** — GocciaScript is modern JavaScript minus the quirks; `.js` files, no transpilation needed
-- **Key differences** — No `var`/`function`/`==`/loops; use `let`/`const`, arrow functions, `===`, `for...of`/array methods
+- **Key differences** — No `var`/`function`/loops by default; use `let`/`const`, arrow functions, strict equality, `for...of`/array methods
 - **Full walkthrough** — Variables, arrow functions, arrays, objects, classes, modules, async/await
 - **Next steps** — Links to language restrictions, built-in API reference, and example programs
 
 ## What is GocciaScript?
 
-GocciaScript is a subset of JavaScript implemented in FreePascal. It strips away the quirks of early ECMAScript — `var`, `function`, loose equality, `eval`, traditional loops — and keeps the modern parts: arrow functions, classes with private fields, async/await, modules, and implicit strict mode. If you've written modern JavaScript, you already know most of GocciaScript.
+GocciaScript is a subset of JavaScript implemented in FreePascal. It strips away the quirks of early ECMAScript by default — `var`, `function`, loose equality, `eval`, traditional loops — and keeps the modern parts: arrow functions, classes with private fields, async/await, modules, and implicit strict mode. If you've written modern JavaScript, you already know most of GocciaScript.
 
 ## Prerequisites
 
@@ -290,15 +290,17 @@ Promises are fully supported — `.then()`, `.catch()`, `.finally()`, `Promise.a
 
 GocciaScript uses a synchronous microtask queue: all pending `.then()` callbacks are drained after synchronous code completes.
 
-## Strict Equality Only
+## Strict Equality by Default
 
-GocciaScript enforces strict equality. The loose equality operators (`==` and `!=`) are not available — use `===` and `!==`:
+GocciaScript uses strict equality by default. Use `===` and `!==` for predictable comparisons:
 
 ```javascript
 console.log(1 === 1);     // true
 console.log(1 === "1");   // false
 console.log(null === undefined); // false
 ```
+
+The loose equality operators (`==` and `!=`) are available only in compatibility mode with `--compat-loose-equality`.
 
 ## What's Different from JavaScript
 
@@ -308,7 +310,7 @@ Here's a quick reference of GocciaScript's key restrictions:
 |------------|-------------|-------------|
 | `var x = 1` | Not supported | `let x = 1` or `const x = 1` |
 | `function foo() {}` | Not supported | `const foo = () => {}` |
-| `==` / `!=` | Not supported | `===` / `!==` |
+| `==` / `!=` | Off by default | `===` / `!==` or `--compat-loose-equality` |
 | `for (...)` / `while (...)` | Not supported | `for...of`, `.map()`, `.forEach()`, `.reduce()` |
 | `eval("code")` | Not supported | No alternative (by design) |
 | `arguments` | Not supported | `(...args) => {}` |

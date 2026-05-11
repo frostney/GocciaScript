@@ -611,6 +611,12 @@ begin
     gttNotEqual:
       Result := TGocciaBooleanLiteralValue.FromBoolean(
         Goccia.Arithmetic.IsNotStrictEqual(Left, Right));
+    gttLooseEqual:
+      Result := TGocciaBooleanLiteralValue.FromBoolean(
+        Goccia.Arithmetic.IsLooselyEqual(Left, Right));
+    gttLooseNotEqual:
+      Result := TGocciaBooleanLiteralValue.FromBoolean(
+        Goccia.Arithmetic.IsNotLooselyEqual(Left, Right));
     gttLess:
       Result := TGocciaBooleanLiteralValue.FromBoolean(
         Goccia.Arithmetic.LessThan(Left, Right));

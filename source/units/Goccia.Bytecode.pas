@@ -39,7 +39,9 @@ const
   //   v24 -> v25: #540 added OP_INC, OP_DEC, OP_TO_NUMERIC for spec-correct
   //               BigInt increment/decrement (ES2026 §13.4.4.1 ToNumeric).
   //   v25 -> v26: #529 added OP_NEW_TARGET for the new.target meta-property.
-  GOCCIA_FORMAT_VERSION = 26;
+  //   v26 -> v27: added OP_LOOSE_EQ/OP_LOOSE_NEQ for
+  //               --compat-loose-equality bytecode.
+  GOCCIA_FORMAT_VERSION = 27;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
@@ -165,6 +167,8 @@ type
     OP_DEFINE_ACCESSOR_CONST = 85,
     OP_DEFINE_ACCESSOR_DYNAMIC = 86,
     OP_SUPER_GET     = 87,
+    OP_LOOSE_EQ      = 88,
+    OP_LOOSE_NEQ     = 89,
     OP_COLLECTION_OP = 93,
     OP_VALIDATE_VALUE = 95,
     OP_THROW_TYPE_ERROR_CONST_LONG = 97,
