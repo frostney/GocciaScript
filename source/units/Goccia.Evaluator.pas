@@ -1893,13 +1893,19 @@ var
   VarDecl: TGocciaVariableDeclaration;
   DestructDecl: TGocciaDestructuringDeclaration;
   DeclarationType: TGocciaDeclarationType;
+  Continuation: TGocciaGeneratorContinuation;
+  ForState: TGocciaGeneratorForLoopState;
+  ResumePhase: TGocciaGeneratorForLoopPhase;
+  HasResumeState: Boolean;
 begin
   Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
 
   IsLexical := False;
   PerIterNames := nil;
   HeaderScope := nil;
+  IterScope := nil;
   HeaderContext := AContext;
+  IterContext := AContext;
 
   if Assigned(AForStatement.Init) then
   begin
@@ -1931,97 +1937,186 @@ begin
     end;
   end;
 
-  try
+  Continuation := CurrentGeneratorContinuation;
+  ForState := nil;
+  HasResumeState := False;
+  if Assigned(Continuation) then
+  begin
+    ForState := Continuation.GetForLoopState(AForStatement);
+    HasResumeState := Assigned(ForState);
+  end;
+
+  if HasResumeState then
+  begin
+    // Resume from a previously suspended evaluation: restore the scopes the
+    // generator captured at suspension and skip whichever sub-step already
+    // completed. The phase records the next step to run.
     if IsLexical then
     begin
-      HeaderScope := AContext.Scope.CreateChild(skBlock, 'ForHeader');
-      HeaderContext := AContext;
+      HeaderScope := ForState.HeaderScope;
       HeaderContext.Scope := HeaderScope;
     end;
-
-    if Assigned(AForStatement.Init) then
+    ResumePhase := ForState.Phase;
+    if (ResumePhase = gflpBody) and IsLexical then
     begin
-      CF := EvaluateStatement(AForStatement.Init, HeaderContext);
-      if CF.Kind = cfkReturn then
-      begin
-        Result := CF;
-        Exit;
-      end;
-    end;
+      IterScope := ForState.IterScope;
+      IterContext.Scope := IterScope;
+    end
+    else
+      IterContext := HeaderContext;
+  end
+  else
+    ResumePhase := gflpIterStart;
 
-    while True do
-    begin
-      CheckExecutionTimeout;
-      IncrementInstructionCounter;
-      CheckInstructionLimit;
-
-      if IsLexical then
-      begin
-        SetLength(PrevValues, PerIterNames.Count);
-        for I := 0 to PerIterNames.Count - 1 do
-        begin
-          Name := PerIterNames[I];
-          HeaderBinding := HeaderScope.GetBinding(Name);
-          PrevValues[I] := HeaderBinding.Value;
-        end;
-        IterScope := AContext.Scope.CreateChild(skBlock, 'ForIter');
-        IterContext := AContext;
-        IterContext.Scope := IterScope;
-        for I := 0 to PerIterNames.Count - 1 do
-        begin
-          Name := PerIterNames[I];
-          HeaderBinding := HeaderScope.GetBinding(Name);
-          IterScope.DefineLexicalBinding(Name, PrevValues[I], DeclarationType);
-          if HeaderBinding.TypeHint <> sltUntyped then
-            IterScope.SetOwnBindingTypeHint(Name, HeaderBinding.TypeHint);
-        end;
-      end
-      else
-        IterContext := HeaderContext;
-
-      if Assigned(AForStatement.Condition) then
-      begin
-        CondValue := EvaluateExpression(AForStatement.Condition, IterContext);
-        if not CondValue.ToBooleanLiteral.Value then
-          Break;
-      end;
-
-      CF := EvaluateLoopBodyStatement(AForStatement.Body, IterContext);
-      if CF.Kind = cfkBreak then
-        Break;
-      if CF.Kind = cfkReturn then
-      begin
-        Result := CF;
-        Exit;
-      end;
-      // cfkContinue and cfkNormal both fall through to update.
-
-      // Sync body's writes (including the iteration variable) back to the
-      // header so the update expression and the next iteration's snapshot
-      // see them. The body's per-iteration scope stays alive and pinned to
-      // its captured value for any closure created during the body — the
-      // header carries the canonical mutating cell that update will modify.
-      if IsLexical then
-      begin
-        for I := 0 to PerIterNames.Count - 1 do
-        begin
-          Name := PerIterNames[I];
-          IterBinding := IterScope.GetBinding(Name);
-          HeaderScope.ForceUpdateBinding(Name, IterBinding.Value);
-        end;
-      end;
-
-      // Update runs on the header so it mutates the canonical cell rather
-      // than the iteration's frozen scope. Per-iteration semantics for
-      // closures created _inside_ the update expression are intentionally
-      // simpler than the spec (they pin the header rather than a fresh
-      // per-iteration env); closures inside update bodies are rare.
-      if Assigned(AForStatement.Update) then
+  try
+    try
+      if not HasResumeState then
       begin
         if IsLexical then
-          EvaluateExpression(AForStatement.Update, HeaderContext)
-        else
-          EvaluateExpression(AForStatement.Update, IterContext);
+        begin
+          HeaderScope := AContext.Scope.CreateChild(skBlock, 'ForHeader');
+          HeaderContext.Scope := HeaderScope;
+        end;
+
+        if Assigned(AForStatement.Init) then
+        begin
+          CF := EvaluateStatement(AForStatement.Init, HeaderContext);
+          if CF.Kind = cfkReturn then
+          begin
+            Result := CF;
+            Exit;
+          end;
+        end;
+
+        // Init completed — persist HeaderScope so a yield in a later sub-step
+        // does not cause the next resume to re-run Init.
+        if Assigned(Continuation) then
+        begin
+          ForState := Continuation.EnsureForLoopState(AForStatement, HeaderScope);
+          ForState.Phase := gflpIterStart;
+        end;
+      end;
+
+      while True do
+      begin
+        CheckExecutionTimeout;
+        IncrementInstructionCounter;
+        CheckInstructionLimit;
+
+        if ResumePhase = gflpIterStart then
+        begin
+          if IsLexical then
+          begin
+            SetLength(PrevValues, PerIterNames.Count);
+            for I := 0 to PerIterNames.Count - 1 do
+            begin
+              Name := PerIterNames[I];
+              HeaderBinding := HeaderScope.GetBinding(Name);
+              PrevValues[I] := HeaderBinding.Value;
+            end;
+            IterScope := AContext.Scope.CreateChild(skBlock, 'ForIter');
+            IterContext := AContext;
+            IterContext.Scope := IterScope;
+            for I := 0 to PerIterNames.Count - 1 do
+            begin
+              Name := PerIterNames[I];
+              HeaderBinding := HeaderScope.GetBinding(Name);
+              IterScope.DefineLexicalBinding(Name, PrevValues[I], DeclarationType);
+              if HeaderBinding.TypeHint <> sltUntyped then
+                IterScope.SetOwnBindingTypeHint(Name, HeaderBinding.TypeHint);
+            end;
+          end
+          else
+            IterContext := HeaderContext;
+
+          if Assigned(AForStatement.Condition) then
+          begin
+            CondValue := EvaluateExpression(AForStatement.Condition, IterContext);
+            if not CondValue.ToBooleanLiteral.Value then
+            begin
+              if Assigned(Continuation) then
+                Continuation.ClearForLoopState(AForStatement);
+              Break;
+            end;
+          end;
+
+          // Condition passed; commit IterScope so a yield in the body resumes
+          // into the same iteration rather than re-snapshotting from Header.
+          if Assigned(ForState) then
+          begin
+            ForState.Phase := gflpBody;
+            if IsLexical then
+              ForState.IterScope := IterScope;
+          end;
+          ResumePhase := gflpBody;
+        end;
+
+        if ResumePhase = gflpBody then
+        begin
+          CF := EvaluateLoopBodyStatement(AForStatement.Body, IterContext);
+          if CF.Kind = cfkBreak then
+          begin
+            if Assigned(Continuation) then
+              Continuation.ClearForLoopState(AForStatement);
+            Break;
+          end;
+          if CF.Kind = cfkReturn then
+          begin
+            if Assigned(Continuation) then
+              Continuation.ClearForLoopState(AForStatement);
+            Result := CF;
+            Exit;
+          end;
+          // cfkContinue and cfkNormal both fall through to update.
+
+          // Sync body's writes (including the iteration variable) back to the
+          // header so the update expression and the next iteration's snapshot
+          // see them. The body's per-iteration scope stays alive and pinned to
+          // its captured value for any closure created during the body — the
+          // header carries the canonical mutating cell that update will modify.
+          if IsLexical then
+          begin
+            for I := 0 to PerIterNames.Count - 1 do
+            begin
+              Name := PerIterNames[I];
+              IterBinding := IterScope.GetBinding(Name);
+              HeaderScope.ForceUpdateBinding(Name, IterBinding.Value);
+            end;
+          end;
+
+          if Assigned(ForState) then
+          begin
+            ForState.Phase := gflpUpdate;
+            ForState.IterScope := nil;
+          end;
+          ResumePhase := gflpUpdate;
+        end;
+
+        // Update runs on the header so it mutates the canonical cell rather
+        // than the iteration's frozen scope. Per-iteration semantics for
+        // closures created _inside_ the update expression are intentionally
+        // simpler than the spec (they pin the header rather than a fresh
+        // per-iteration env); closures inside update bodies are rare.
+        if Assigned(AForStatement.Update) then
+        begin
+          if IsLexical then
+            EvaluateExpression(AForStatement.Update, HeaderContext)
+          else
+            EvaluateExpression(AForStatement.Update, IterContext);
+        end;
+
+        if Assigned(ForState) then
+          ForState.Phase := gflpIterStart;
+        ResumePhase := gflpIterStart;
+      end;
+    except
+      on E: EGocciaGeneratorYield do
+        raise;
+      else
+      begin
+        if Assigned(Continuation) then
+          Continuation.ClearForLoopState(AForStatement);
+        raise;
       end;
     end;
   finally

@@ -498,6 +498,14 @@ The generator requires `fpcres`. `fpcres` writes the FreePascal resource consume
 
 Intl embeds this generated CLDR resource by default through `source/units/Goccia.inc`. Define `GOCCIA_INTL_NO_EMBEDDED_CLDR` to build without the resource fallback.
 
+### Generated Unicode Data
+
+`source/generated/Generated.UnicodeData.pas` and `source/generated/Generated.UnicodeData.res` are produced by `scripts/generate-unicode-data.js`. By default, the generator downloads Unicode Character Database (UCD) files for a given Unicode version, packs General_Category, Script, Script_Extensions, and binary property range tables into a single resource payload, and emits a small Pascal unit that links the resource.
+
+The generator requires `fpcres`. `fpcres` writes the FreePascal resource consumed by `{$R Generated.UnicodeData.res}`.
+
+RegExp embeds this generated UCD resource by default through `source/units/Goccia.inc`. Define `GOCCIA_REGEXP_NO_EMBEDDED_UCD` to build without the resource fallback. When system ICU is available, the engine queries ICU directly for Unicode property data; the embedded resource serves as a fallback for systems without ICU.
+
 ## CI/CD
 
 GitHub Actions CI is split into two workflow files:
