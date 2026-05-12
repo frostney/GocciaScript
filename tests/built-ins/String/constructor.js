@@ -23,6 +23,16 @@ describe("String constructor", () => {
     expect(s[4]).toBe("o");
   });
 
+  test("new String() respects ordinary prototype lookup", () => {
+    const ownUndefined = new String("hello");
+    ownUndefined.toString = undefined;
+    expect(ownUndefined.toString).toBeUndefined();
+
+    const nullPrototype = new String("hello");
+    Object.setPrototypeOf(nullPrototype, null);
+    expect(nullPrototype.toString).toBeUndefined();
+  });
+
   test("String() as function returns primitive", () => {
     const s = String(42);
     expect(typeof s).toBe("string");

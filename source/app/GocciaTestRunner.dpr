@@ -631,6 +631,7 @@ begin
               Parser.VarDeclarationsEnabled := Engine.VarEnabled;
               Parser.FunctionDeclarationsEnabled := Engine.FunctionEnabled;
               Parser.TraditionalForLoopsEnabled := Engine.TraditionalForLoopsEnabled;
+              Parser.LooseEqualityEnabled := Engine.LooseEqualityEnabled;
               try
                 ProgramNode := Parser.Parse;
                 ParseEnd := GetNanoseconds;

@@ -108,7 +108,7 @@ type
     function ParseSource(const ASource: TStringList; const AFileName: string;
       const APreprocessors: TGocciaPreprocessors; const ASuppressWarnings: Boolean;
       const AASIEnabled, AVarEnabled, AFunctionEnabled,
-        ATraditionalForLoopsEnabled: Boolean;
+        ATraditionalForLoopsEnabled, ALooseEqualityEnabled: Boolean;
       out ALexTimeNanoseconds, AParseTimeNanoseconds: Int64;
       out ASourceMap: TGocciaSourceMap): TGocciaProgram;
     procedure WriteSourceMapIfEnabled(const ASourceMap: TGocciaSourceMap;
@@ -331,7 +331,8 @@ end;
 function TScriptLoaderApp.ParseSource(const ASource: TStringList;
   const AFileName: string; const APreprocessors: TGocciaPreprocessors;
   const ASuppressWarnings: Boolean; const AASIEnabled, AVarEnabled,
-  AFunctionEnabled, ATraditionalForLoopsEnabled: Boolean;
+  AFunctionEnabled, ATraditionalForLoopsEnabled,
+  ALooseEqualityEnabled: Boolean;
   out ALexTimeNanoseconds, AParseTimeNanoseconds: Int64;
   out ASourceMap: TGocciaSourceMap): TGocciaProgram;
 var
@@ -369,6 +370,7 @@ begin
       Parser.VarDeclarationsEnabled := AVarEnabled;
       Parser.FunctionDeclarationsEnabled := AFunctionEnabled;
       Parser.TraditionalForLoopsEnabled := ATraditionalForLoopsEnabled;
+      Parser.LooseEqualityEnabled := ALooseEqualityEnabled;
       try
         Result := Parser.Parse;
         ParseEnd := GetNanoseconds;
@@ -642,7 +644,7 @@ begin
 
       ProgramNode := ParseSource(ASource, AFileName, TGocciaEngine.DefaultPreprocessors,
         IsJsonOutput, Engine.ASIEnabled, Engine.VarEnabled, Engine.FunctionEnabled,
-        Engine.TraditionalForLoopsEnabled,
+        Engine.TraditionalForLoopsEnabled, Engine.LooseEqualityEnabled,
         Result.Timing.LexTimeNanoseconds,
         Result.Timing.ParseTimeNanoseconds, SourceMap);
       try

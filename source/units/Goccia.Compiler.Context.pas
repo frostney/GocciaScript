@@ -151,6 +151,8 @@ begin
     gttPower:              Result := OP_POW;
     gttEqual:              Result := OP_EQ;
     gttNotEqual:           Result := OP_NEQ;
+    gttLooseEqual:         Result := OP_LOOSE_EQ;
+    gttLooseNotEqual:      Result := OP_LOOSE_NEQ;
     gttLess:               Result := OP_LT;
     gttGreater:            Result := OP_GT;
     gttLessEqual:          Result := OP_LTE;

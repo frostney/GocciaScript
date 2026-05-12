@@ -664,13 +664,15 @@ interface PerTestRecord {
 
 // test262 source is overwhelmingly semicolon-omitted; ASI is required to parse
 // the corpus.  --compat-var, --compat-function, --compat-traditional-for-loop,
-// and --unsafe-function-constructor are also unconditional: stock harness uses
-// `var`, `function`, traditional `for(;;)` loops, and `Function("return this;")()`.
+// --compat-loose-equality, and --unsafe-function-constructor are also
+// unconditional: stock harness uses `var`, `function`, traditional `for(;;)`
+// loops, loose equality, and `Function("return this;")()`.
 const TEST262_BARE_FLAGS: readonly string[] = [
   "--asi",
   "--compat-var",
   "--compat-function",
   "--compat-traditional-for-loop",
+  "--compat-loose-equality",
   "--unsafe-function-constructor",
 ];
 
