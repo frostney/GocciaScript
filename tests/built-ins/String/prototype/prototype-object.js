@@ -25,6 +25,10 @@ describe("String.prototype object", () => {
   });
 
   test("falls through prototype lookup for missing numeric indices", () => {
+    const objectProto0 = Object.getOwnPropertyDescriptor(Object.prototype, "0");
+    const stringProto3 = Object.getOwnPropertyDescriptor(String.prototype, "3");
+    const objectProto01 = Object.getOwnPropertyDescriptor(Object.prototype, "01");
+
     Object.prototype[0] = "inherited zero";
     String.prototype[3] = "inherited three";
     Object.prototype["01"] = "non-canonical index";
@@ -34,9 +38,14 @@ describe("String.prototype object", () => {
       expect(new String("abc")[3]).toBe("inherited three");
       expect(new String("abc")["01"]).toBe("non-canonical index");
     } finally {
-      delete Object.prototype[0];
-      delete String.prototype[3];
-      delete Object.prototype["01"];
+      if (objectProto0) Object.defineProperty(Object.prototype, "0", objectProto0);
+      else delete Object.prototype[0];
+
+      if (stringProto3) Object.defineProperty(String.prototype, "3", stringProto3);
+      else delete String.prototype[3];
+
+      if (objectProto01) Object.defineProperty(Object.prototype, "01", objectProto01);
+      else delete Object.prototype["01"];
     }
   });
 });
