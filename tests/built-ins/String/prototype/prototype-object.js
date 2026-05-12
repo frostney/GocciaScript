@@ -11,7 +11,7 @@ describe("String.prototype object", () => {
   });
 
   test("inherits from Object.prototype with the String brand", () => {
-    const ownToString = String.prototype.toString;
+    const toStringDescriptor = Object.getOwnPropertyDescriptor(String.prototype, "toString");
 
     expect(Object.prototype.isPrototypeOf(String.prototype)).toBe(true);
     expect(Object.prototype.toString.call(String.prototype)).toBe("[object String]");
@@ -20,7 +20,23 @@ describe("String.prototype object", () => {
       delete String.prototype.toString;
       expect(String.prototype.toString()).toBe("[object String]");
     } finally {
-      String.prototype.toString = ownToString;
+      Object.defineProperty(String.prototype, "toString", toStringDescriptor);
+    }
+  });
+
+  test("falls through prototype lookup for missing numeric indices", () => {
+    Object.prototype[0] = "inherited zero";
+    String.prototype[3] = "inherited three";
+    Object.prototype["01"] = "non-canonical index";
+
+    try {
+      expect(String.prototype[0]).toBe("inherited zero");
+      expect(new String("abc")[3]).toBe("inherited three");
+      expect(new String("abc")["01"]).toBe("non-canonical index");
+    } finally {
+      delete Object.prototype[0];
+      delete String.prototype[3];
+      delete Object.prototype["01"];
     }
   });
 });

@@ -342,28 +342,16 @@ end;
 function TGocciaStringObjectValue.GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue;
 var
   Index: Integer;
-  SharedPrototype: TGocciaObjectValue;
   StringValue: string;
 begin
   StringValue := FPrimitive.ToStringLiteral.Value;
 
-  if TryStrToInt(AName, Index) then
-  begin
-    if (Index >= 0) and (Index < UTF16CodeUnitLength(StringValue)) then
-      Result := TGocciaStringLiteralValue.Create(
-        UTF16CodeUnitAt(StringValue, Index))
-    else
-      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-    Exit;
-  end;
+  if TryStrToInt(AName, Index) and (AName = IntToStr(Index)) and
+     (Index >= 0) and (Index < UTF16CodeUnitLength(StringValue)) then
+    Exit(TGocciaStringLiteralValue.Create(
+      UTF16CodeUnitAt(StringValue, Index)));
 
   Result := inherited GetPropertyWithContext(AName, AThisContext);
-  if not (Result is TGocciaUndefinedLiteralValue) then
-    Exit;
-
-  SharedPrototype := GetSharedStringPrototype;
-  if Assigned(SharedPrototype) and (SharedPrototype <> TGocciaObjectValue(Self)) then
-    Result := SharedPrototype.GetPropertyWithContext(AName, AThisContext);
 end;
 
 // ES2026 §10.4.3.6 StringExoticObject [[OwnPropertyKeys]]
