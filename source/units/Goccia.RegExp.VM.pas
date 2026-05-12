@@ -24,7 +24,9 @@ function ExecuteRegExpVM(const AProgram: TRegExpProgram;
 implementation
 
 uses
-  TextSemantics;
+  TextSemantics,
+
+  Goccia.RegExp.UnicodeData;
 
 const
   MIN_STEP_LIMIT = 10000000;
@@ -209,6 +211,7 @@ var
   Negated: Boolean;
   BackrefGroup: Integer;
   BackrefICase: Boolean;
+  BackrefUnicode: Boolean;
   LookEnd: Integer;
   LookSlots: array of Integer;
   LookMatched: Boolean;
@@ -387,6 +390,7 @@ begin
         begin
           Negated := (Bx and BACKREF_STRICT_FLAG) <> 0;
           BackrefICase := (Bx and BACKREF_ICASE_FLAG) <> 0;
+          BackrefUnicode := (Bx and BACKREF_UNICODE_FLAG) <> 0;
           BackrefGroup := Bx and BACKREF_INDEX_MASK;
           RefStart := -1;
           RefEnd := -1;
@@ -427,10 +431,9 @@ begin
             begin
               if BackrefICase then
               begin
-                if (RefCP >= Ord('A')) and (RefCP <= Ord('Z')) then
-                  RefCP := RefCP + 32;
-                if (InputCP >= Ord('A')) and (InputCP <= Ord('Z')) then
-                  InputCP := InputCP + 32;
+                RefCP := RegExpCanonicalizeCodePoint(RefCP, BackrefUnicode, True);
+                InputCP := RegExpCanonicalizeCodePoint(InputCP, BackrefUnicode,
+                  True);
               end;
               if RefCP <> InputCP then
               begin
