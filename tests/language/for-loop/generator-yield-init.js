@@ -42,3 +42,34 @@ test("yield in multi-binding init", () => {
   expect(g.next().value).toEqual([1, 99]);
   expect(g.next().done).toBe(true);
 });
+
+test("closure captured before yield in init pins resumed header binding", () => {
+  const obj = {
+    *gen() {
+      let snap;
+      for (let i = (snap = () => i, yield "init"); i < 1; i++) {
+        yield snap();
+      }
+    },
+  };
+
+  const g = obj.gen();
+  expect(g.next().value).toBe("init");
+  expect(g.next(0).value).toBe(0);
+  expect(g.next().done).toBe(true);
+});
+
+test("yield in later init binding resumes without redeclaring prior bindings", () => {
+  const obj = {
+    *gen() {
+      for (let i = 1, j = yield "mid", k = 3; j < 1; j++) {
+        yield [i, j, k];
+      }
+    },
+  };
+
+  const g = obj.gen();
+  expect(g.next().value).toBe("mid");
+  expect(g.next(0).value).toEqual([1, 0, 3]);
+  expect(g.next().done).toBe(true);
+});

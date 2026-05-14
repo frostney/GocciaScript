@@ -104,6 +104,25 @@ test("body with multiple statements before yield", () => {
   expect(g.next()).toEqual({ value: [0, 1, 2], done: true });
 });
 
+test("closures captured in yielded body pin per-iteration binding", () => {
+  const obj = {
+    *gen() {
+      const fns = [];
+      for (let i = 0; i < 3; i++) {
+        fns.push(() => i);
+        yield i;
+      }
+      return fns.map((fn) => fn());
+    },
+  };
+
+  const g = obj.gen();
+  expect(g.next().value).toBe(0);
+  expect(g.next().value).toBe(1);
+  expect(g.next().value).toBe(2);
+  expect(g.next()).toEqual({ value: [0, 1, 2], done: true });
+});
+
 test("comma-separated init bindings advance per iteration", () => {
   const g = factory.commaInit();
   expect(g.next().value).toEqual([0, 10]);

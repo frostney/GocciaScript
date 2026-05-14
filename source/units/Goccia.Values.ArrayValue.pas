@@ -119,6 +119,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.Realm,
+  Goccia.Runtime.GeneratorContinuation,
   Goccia.Timeout,
   Goccia.Utils,
   Goccia.Utils.Arrays,
@@ -226,11 +227,18 @@ function InvokeArrayCallback(const ACallback: TGocciaValue;
   const ATypedCallback: TGocciaFunctionBase;
   const ACallArgs: TGocciaArgumentsCollection;
   const AThisArg: TGocciaValue): TGocciaValue; inline;
+var
+  PreviousContinuation: TGocciaGeneratorContinuation;
 begin
-  if Assigned(ATypedCallback) then
-    Result := ATypedCallback.Call(ACallArgs, AThisArg)
-  else
-    Result := InvokeCallable(ACallback, ACallArgs, AThisArg);
+  PreviousContinuation := SuspendCurrentGeneratorContinuation;
+  try
+    if Assigned(ATypedCallback) then
+      Result := ATypedCallback.Call(ACallArgs, AThisArg)
+    else
+      Result := InvokeCallable(ACallback, ACallArgs, AThisArg);
+  finally
+    RestoreCurrentGeneratorContinuation(PreviousContinuation);
+  end;
 end;
 
 

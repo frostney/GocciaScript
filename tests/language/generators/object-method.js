@@ -132,6 +132,25 @@ test("object generator method preserves for-of iterator across yielded loop body
   expect(iter.next()).toEqual({ value: undefined, done: true });
 });
 
+test("object generator method keeps for-of body closure bindings across yields", () => {
+  const obj = {
+    *values() {
+      const fns = [];
+      for (const n of [1, 2, 3]) {
+        fns.push(() => n);
+        yield n;
+      }
+      return fns.map((fn) => fn());
+    },
+  };
+
+  const iter = obj.values();
+  expect(iter.next()).toEqual({ value: 1, done: false });
+  expect(iter.next()).toEqual({ value: 2, done: false });
+  expect(iter.next()).toEqual({ value: 3, done: false });
+  expect(iter.next()).toEqual({ value: [1, 2, 3], done: true });
+});
+
 test("object generator method preserves for-of iterator across yielded loop head", () => {
   const obj = {
     *values() {
