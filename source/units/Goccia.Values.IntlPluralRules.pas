@@ -173,8 +173,16 @@ begin
       FMaximumSignificantDigits := Trunc(V.ToNumberLiteral.Value);
   end;
 
-  // Resolve fraction digit defaults when significantDigits rounding is not in use
-  if (FMinimumSignificantDigits < 0) and (FMaximumSignificantDigits < 0) then
+  if (FMinimumSignificantDigits >= 0) or (FMaximumSignificantDigits >= 0) then
+  begin
+    if FMinimumSignificantDigits < 0 then
+      FMinimumSignificantDigits := 1;
+    if FMaximumSignificantDigits < 0 then
+      FMaximumSignificantDigits := 21;
+    FMinimumFractionDigits := -1;
+    FMaximumFractionDigits := -1;
+  end
+  else
   begin
     if FMinimumFractionDigits < 0 then
       FMinimumFractionDigits := 0;

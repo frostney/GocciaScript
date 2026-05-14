@@ -433,13 +433,30 @@ begin
   if (FMaximumSignificantDigits >= 0) and
      ((FMaximumSignificantDigits < 1) or (FMaximumSignificantDigits > 21)) then
     ThrowRangeError(Format(SErrorIntlDigitsOutOfRange, ['maximumSignificantDigits', 1, 21]));
+  if (FRoundingIncrement <> 1) and (FRoundingIncrement <> 2) and
+     (FRoundingIncrement <> 5) and (FRoundingIncrement <> 10) and
+     (FRoundingIncrement <> 20) and (FRoundingIncrement <> 25) and
+     (FRoundingIncrement <> 50) and (FRoundingIncrement <> 100) and
+     (FRoundingIncrement <> 200) and (FRoundingIncrement <> 250) and
+     (FRoundingIncrement <> 500) and (FRoundingIncrement <> 1000) and
+     (FRoundingIncrement <> 2000) and (FRoundingIncrement <> 2500) and
+     (FRoundingIncrement <> 5000) then
+    ThrowRangeError(Format(SErrorIntlInvalidOption, [IntToStr(FRoundingIncrement), 'roundingIncrement']));
 
   // Default numberingSystem to "latn"
   if FNumberingSystem = '' then
     FNumberingSystem := 'latn';
 
-  // Resolve fraction digit defaults when significantDigits rounding is not in use
-  if (FMinimumSignificantDigits < 0) and (FMaximumSignificantDigits < 0) then
+  if (FMinimumSignificantDigits >= 0) or (FMaximumSignificantDigits >= 0) then
+  begin
+    if FMinimumSignificantDigits < 0 then
+      FMinimumSignificantDigits := 1;
+    if FMaximumSignificantDigits < 0 then
+      FMaximumSignificantDigits := 21;
+    FMinimumFractionDigits := -1;
+    FMaximumFractionDigits := -1;
+  end
+  else
   begin
     if (FMinimumFractionDigits < 0) and (FMaximumFractionDigits < 0) then
     begin

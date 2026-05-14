@@ -807,7 +807,7 @@ function ApplyRoundingIncrement(AValue: Double;
 var
   Scale, ScaledInt, Remainder: Double;
   Lower, Upper: Double;
-  Inc: Integer;
+  I, Inc: Integer;
   IsNeg: Boolean;
 begin
   Result := AValue;
@@ -818,14 +818,8 @@ begin
     Exit;
 
   Scale := 1.0;
-  case AOptions.MaximumFractionDigits of
-    1: Scale := 10.0;
-    2: Scale := 100.0;
-    3: Scale := 1000.0;
-    4: Scale := 10000.0;
-  else
-    Exit;
-  end;
+  for I := 1 to AOptions.MaximumFractionDigits do
+    Scale := Scale * 10.0;
 
   IsNeg := AValue < 0;
   ScaledInt := Abs(AValue) * Scale;

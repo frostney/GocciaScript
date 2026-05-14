@@ -283,7 +283,7 @@ begin
      (FWeekday = '') and (FEra = '') and (FYear = '') and
      (FMonth = '') and (FDay = '') and (FDayPeriod = '') and
      (FHour = '') and (FMinute = '') and (FSecond = '') and
-     (FTimeZoneName = '') then
+     (FFractionalSecondDigits < 0) and (FTimeZoneName = '') then
   begin
     FYear := 'numeric';
     FMonth := 'numeric';
