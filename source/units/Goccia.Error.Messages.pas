@@ -424,6 +424,7 @@ resourcestring
   SErrorRegExpReplaceNonRegExp = 'RegExp.prototype[Symbol.replace] called on non-RegExp object';
   SErrorRegExpSearchNonRegExp = 'RegExp.prototype[Symbol.search] called on non-RegExp object';
   SErrorRegExpSplitNonRegExp = 'RegExp.prototype[Symbol.split] called on non-RegExp object';
+  SErrorRegExpExecReturnType = 'RegExp exec method must return an object or null';
 
   // VM runtime errors
   SErrorCannotAssignReadOnly = 'Cannot assign to read only property ''%s''';

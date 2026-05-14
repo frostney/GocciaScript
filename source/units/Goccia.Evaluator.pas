@@ -118,12 +118,12 @@ uses
   Goccia.Evaluator.TypeOperations,
   Goccia.FetchManager,
   Goccia.GarbageCollector,
+  Goccia.Generator.Continuation,
   Goccia.InstructionLimit,
   Goccia.Keywords.Reserved,
   Goccia.Lexer,
   Goccia.MicrotaskQueue,
   Goccia.Parser,
-  Goccia.Runtime.GeneratorContinuation,
   Goccia.StackLimit,
   Goccia.Timeout,
   Goccia.Token,
@@ -777,13 +777,15 @@ end;
 function InvokeConstructableWithReceiver(const AConstructor: TGocciaValue;
   const AArguments: TGocciaArgumentsCollection;
   const AReceiver: TGocciaValue;
-  const AContext: TGocciaEvaluationContext): TGocciaValue;
+  const AContext: TGocciaEvaluationContext;
+  const ANewTarget: TGocciaValue = nil): TGocciaValue;
 var
   BoundFunction: TGocciaBoundFunctionValue;
   ClassConstructor: TGocciaClassValue;
   CombinedArgs: TGocciaArgumentsCollection;
   SuperResult: TGocciaValue;
   ConstructorThisValue: TGocciaValue;
+  EffectiveNewTarget: TGocciaValue;
   I: Integer;
 
   function InvokeImplicitClassConstructor: TGocciaValue;
@@ -792,11 +794,11 @@ var
 
     if Assigned(ClassConstructor.SuperClass) then
       Result := InvokeConstructableWithReceiver(ClassConstructor.SuperClass,
-        AArguments, AReceiver, AContext)
+        AArguments, AReceiver, AContext, EffectiveNewTarget)
     else if Assigned(ClassConstructor.NativeSuperConstructor) then
       Result := InvokeConstructableWithReceiver(
         ClassConstructor.NativeSuperConstructor, AArguments, AReceiver,
-        AContext)
+        AContext, EffectiveNewTarget)
     else if AReceiver is TGocciaInstanceValue then
       TGocciaInstanceValue(AReceiver).InitializeNativeFromArguments(AArguments);
 
@@ -812,9 +814,16 @@ var
     end;
   end;
 begin
+  if Assigned(ANewTarget) then
+    EffectiveNewTarget := ANewTarget
+  else
+    EffectiveNewTarget := AConstructor;
+
   if AConstructor is TGocciaBoundFunctionValue then
   begin
     BoundFunction := TGocciaBoundFunctionValue(AConstructor);
+    if IsSameValue(BoundFunction, EffectiveNewTarget) then
+      EffectiveNewTarget := BoundFunction.OriginalFunction;
     CombinedArgs := TGocciaArgumentsCollection.CreateWithCapacity(
       BoundFunction.BoundArgCount + AArguments.Length);
     try
@@ -823,14 +832,15 @@ begin
       for I := 0 to AArguments.Length - 1 do
         CombinedArgs.Add(AArguments.GetElement(I));
       Exit(InvokeConstructableWithReceiver(BoundFunction.OriginalFunction,
-        CombinedArgs, AReceiver, AContext));
+        CombinedArgs, AReceiver, AContext, EffectiveNewTarget));
     finally
       CombinedArgs.Free;
     end;
   end;
 
   if AConstructor is TGocciaProxyValue then
-    SuperResult := TGocciaProxyValue(AConstructor).ConstructTrap(AArguments)
+    SuperResult := TGocciaProxyValue(AConstructor).ConstructTrap(
+      AArguments, EffectiveNewTarget)
   else if AConstructor is TGocciaNativeFunctionValue then
   begin
     if TGocciaNativeFunctionValue(AConstructor).NotConstructable then
@@ -840,7 +850,7 @@ begin
         Format('''%s'' is not a constructor',
           [TGocciaNativeFunctionValue(AConstructor).Name]));
     SuperResult := TGocciaNativeFunctionValue(AConstructor).Construct(
-      AArguments, AConstructor);
+      AArguments, EffectiveNewTarget);
   end
   else if AConstructor is TGocciaClassValue then
   begin
@@ -851,7 +861,7 @@ begin
         RunClassInstanceInitializers(ClassConstructor,
           TGocciaObjectValue(AReceiver), AContext);
       SuperResult := ClassConstructor.ConstructorMethod.CallWithThisValue(
-        AArguments, AReceiver, ConstructorThisValue);
+        AArguments, AReceiver, ConstructorThisValue, EffectiveNewTarget);
       ValidateClassConstructorReturn(ClassConstructor, SuperResult);
       if not (SuperResult is TGocciaObjectValue) and
          (ConstructorThisValue is TGocciaObjectValue) then
@@ -930,7 +940,8 @@ begin
       if Assigned(SuperClass) and Assigned(SuperClass.ConstructorMethod) then
       begin
         SuperResult := SuperClass.ConstructorMethod.CallWithThisValue(
-          Arguments, AContext.Scope.ThisValue, ConstructorThisValue);
+          Arguments, AContext.Scope.ThisValue, ConstructorThisValue,
+          AContext.Scope.FindNewTarget);
         if SuperResult is TGocciaObjectValue then
         begin
           AContext.Scope.ThisValue := TGocciaObjectValue(SuperResult);
@@ -963,13 +974,11 @@ begin
           TGocciaInstanceValue(AContext.Scope.ThisValue).InitializeNativeFromArguments(Arguments);
         Result := AContext.Scope.ThisValue;
       end
-      else if (AContext.Scope.ThisValue is TGocciaObjectValue) and
-              not (AContext.Scope.ThisValue is TGocciaInstanceValue) then
-        Result := AContext.Scope.ThisValue
       else if SuperClassValue is TGocciaObjectValue then
       begin
         SuperResult := InvokeConstructableWithReceiver(SuperClassValue,
-          Arguments, AContext.Scope.ThisValue, AContext);
+          Arguments, AContext.Scope.ThisValue, AContext,
+          AContext.Scope.FindNewTarget);
         if SuperResult is TGocciaObjectValue then
         begin
           AContext.Scope.ThisValue := TGocciaObjectValue(SuperResult);

@@ -81,7 +81,11 @@ begin
     Exit;
   end;
 
-  FSearchIndex := NextIndex;
+  if FGlobal and not IsRegExpInstance(FRegExp) and (MatchEnd = MatchIndex) then
+    FSearchIndex := AdvanceProtocolLastIndexAfterEmptyMatch(FRegExp, FInput,
+      HasUnicodeRegExpFlag(FRegExp.GetProperty(PROP_FLAGS).ToStringLiteral.Value))
+  else
+    FSearchIndex := NextIndex;
   if not FGlobal then
     FSingleMatchReturned := True;
 
@@ -120,7 +124,11 @@ begin
     Exit;
   end;
 
-  FSearchIndex := NextIndex;
+  if FGlobal and not IsRegExpInstance(FRegExp) and (MatchEnd = MatchIndex) then
+    FSearchIndex := AdvanceProtocolLastIndexAfterEmptyMatch(FRegExp, FInput,
+      HasUnicodeRegExpFlag(FRegExp.GetProperty(PROP_FLAGS).ToStringLiteral.Value))
+  else
+    FSearchIndex := NextIndex;
   if not FGlobal then
     FSingleMatchReturned := True;
 

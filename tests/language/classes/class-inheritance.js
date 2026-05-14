@@ -53,6 +53,25 @@ test("super() in constructor", () => {
   expect(car.getInfo()).toBe("2020 Toyota with 4 doors");
 });
 
+test("new.target flows through superclass constructors", () => {
+  class Base {
+    constructor() {
+      this.seenNewTarget = new.target;
+    }
+  }
+
+  class Middle extends Base {
+    constructor() {
+      super();
+    }
+  }
+
+  class Derived extends Middle {}
+
+  const value = new Derived();
+  expect(value.seenNewTarget).toBe(Derived);
+});
+
 test("super() returns receiver unless superclass returns object", () => {
   class PrimitiveBase {
     constructor() {
