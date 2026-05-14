@@ -33,6 +33,9 @@ type
     FMaximumFractionDigits: Integer;
     FMinimumSignificantDigits: Integer;
     FMaximumSignificantDigits: Integer;
+    FRoundingIncrement: Integer;
+    FRoundingPriority: string;
+    FTrailingZeroDisplay: string;
     FNumberingSystem: string;
     FResolvedOptions: TIntlNumberFormatOptions;
 
@@ -159,6 +162,28 @@ begin
     Result := inugFalse
   else
     Result := inugAuto;
+end;
+
+function RoundingModeStringToEnum(const AValue: string): TIntlNumberRoundingMode;
+begin
+  if AValue = 'ceil' then
+    Result := inrmCeil
+  else if AValue = 'floor' then
+    Result := inrmFloor
+  else if AValue = 'expand' then
+    Result := inrmExpand
+  else if AValue = 'trunc' then
+    Result := inrmTrunc
+  else if AValue = 'halfCeil' then
+    Result := inrmHalfCeil
+  else if AValue = 'halfFloor' then
+    Result := inrmHalfFloor
+  else if AValue = 'halfTrunc' then
+    Result := inrmHalfTrunc
+  else if AValue = 'halfEven' then
+    Result := inrmHalfEven
+  else
+    Result := inrmHalfExpand;
 end;
 
 function InsertGroupingSeparator(const AIntPart, ASep: string): string;
@@ -348,12 +373,18 @@ begin
   V := AOptions.GetProperty('maximumSignificantDigits');
   if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
     FMaximumSignificantDigits := Trunc(V.ToNumberLiteral.Value);
+  V := AOptions.GetProperty('roundingIncrement');
+  if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
+    FRoundingIncrement := Trunc(V.ToNumberLiteral.Value);
+  TryReadStringOption(AOptions, 'roundingPriority', FRoundingPriority);
+  TryReadStringOption(AOptions, 'trailingZeroDisplay', FTrailingZeroDisplay);
   TryReadStringOption(AOptions, 'numberingSystem', FNumberingSystem);
 end;
 
 constructor TGocciaIntlNumberFormatValue.Create(const ALocale: string; const AOptions: TGocciaObjectValue);
 var
-  Canonical: string;
+  Canonical, CurrSymbol, CurrNarrow: string;
+  CurrDigits: Integer;
 begin
   inherited Create;
   Canonical := CanonicalizeUnicodeLocaleId(ALocale);
@@ -372,6 +403,9 @@ begin
   FSignDisplay := 'auto';
   FUseGrouping := 'auto';
   FRoundingMode := 'halfExpand';
+  FRoundingIncrement := 1;
+  FRoundingPriority := 'auto';
+  FTrailingZeroDisplay := 'auto';
   FMinimumIntegerDigits := 1;
   FMinimumFractionDigits := -1;
   FMaximumFractionDigits := -1;
@@ -399,6 +433,62 @@ begin
   if (FMaximumSignificantDigits >= 0) and
      ((FMaximumSignificantDigits < 1) or (FMaximumSignificantDigits > 21)) then
     ThrowRangeError(Format(SErrorIntlDigitsOutOfRange, ['maximumSignificantDigits', 1, 21]));
+  if (FRoundingIncrement <> 1) and (FRoundingIncrement <> 2) and
+     (FRoundingIncrement <> 5) and (FRoundingIncrement <> 10) and
+     (FRoundingIncrement <> 20) and (FRoundingIncrement <> 25) and
+     (FRoundingIncrement <> 50) and (FRoundingIncrement <> 100) and
+     (FRoundingIncrement <> 200) and (FRoundingIncrement <> 250) and
+     (FRoundingIncrement <> 500) and (FRoundingIncrement <> 1000) and
+     (FRoundingIncrement <> 2000) and (FRoundingIncrement <> 2500) and
+     (FRoundingIncrement <> 5000) then
+    ThrowRangeError(Format(SErrorIntlInvalidOption, [IntToStr(FRoundingIncrement), 'roundingIncrement']));
+
+  // Default numberingSystem to "latn"
+  if FNumberingSystem = '' then
+    FNumberingSystem := 'latn';
+
+  if (FMinimumSignificantDigits >= 0) or (FMaximumSignificantDigits >= 0) then
+  begin
+    if FMinimumSignificantDigits < 0 then
+      FMinimumSignificantDigits := 1;
+    if FMaximumSignificantDigits < 0 then
+      FMaximumSignificantDigits := 21;
+    FMinimumFractionDigits := -1;
+    FMaximumFractionDigits := -1;
+  end
+  else
+  begin
+    if (FMinimumFractionDigits < 0) and (FMaximumFractionDigits < 0) then
+    begin
+      if FStyle = 'currency' then
+      begin
+        FMinimumFractionDigits := 2;
+        FMaximumFractionDigits := 2;
+        if TryGetCurrencyInfo(FLocale, FCurrency, CurrSymbol, CurrNarrow, CurrDigits) then
+        begin
+          FMinimumFractionDigits := CurrDigits;
+          FMaximumFractionDigits := CurrDigits;
+        end;
+      end
+      else if FStyle = 'percent' then
+      begin
+        FMinimumFractionDigits := 0;
+        FMaximumFractionDigits := 0;
+      end
+      else
+      begin
+        FMinimumFractionDigits := 0;
+        FMaximumFractionDigits := 3;
+      end;
+    end
+    else
+    begin
+      if FMinimumFractionDigits < 0 then
+        FMinimumFractionDigits := 0;
+      if FMaximumFractionDigits < 0 then
+        FMaximumFractionDigits := Max(3, FMinimumFractionDigits);
+    end;
+  end;
 
   // Build resolved ICU options
   FResolvedOptions := DefaultNumberFormatOptions;
@@ -415,6 +505,8 @@ begin
   FResolvedOptions.MaximumFractionDigits := FMaximumFractionDigits;
   FResolvedOptions.MinimumSignificantDigits := FMinimumSignificantDigits;
   FResolvedOptions.MaximumSignificantDigits := FMaximumSignificantDigits;
+  FResolvedOptions.RoundingMode := RoundingModeStringToEnum(FRoundingMode);
+  FResolvedOptions.RoundingIncrement := FRoundingIncrement;
   FResolvedOptions.NumberingSystem := FNumberingSystem;
 
   InitializePrototype;
@@ -521,22 +613,19 @@ begin
   NF := AsNumberFormat(AThisValue, 'Intl.NumberFormat.prototype.resolvedOptions');
   Obj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
   Obj.AssignProperty('locale', TGocciaStringLiteralValue.Create(NF.FLocale));
+  Obj.AssignProperty('numberingSystem', TGocciaStringLiteralValue.Create(NF.FNumberingSystem));
   Obj.AssignProperty('style', TGocciaStringLiteralValue.Create(NF.FStyle));
-  if NF.FCurrency <> '' then
-    Obj.AssignProperty('currency', TGocciaStringLiteralValue.Create(NF.FCurrency));
   if NF.FStyle = 'currency' then
   begin
+    Obj.AssignProperty('currency', TGocciaStringLiteralValue.Create(NF.FCurrency));
     Obj.AssignProperty('currencyDisplay', TGocciaStringLiteralValue.Create(NF.FCurrencyDisplay));
     Obj.AssignProperty('currencySign', TGocciaStringLiteralValue.Create(NF.FCurrencySign));
   end;
-  if NF.FUnitIdentifier <> '' then
-    Obj.AssignProperty('unit', TGocciaStringLiteralValue.Create(NF.FUnitIdentifier));
   if NF.FStyle = 'unit' then
+  begin
+    Obj.AssignProperty('unit', TGocciaStringLiteralValue.Create(NF.FUnitIdentifier));
     Obj.AssignProperty('unitDisplay', TGocciaStringLiteralValue.Create(NF.FUnitDisplay));
-  Obj.AssignProperty('notation', TGocciaStringLiteralValue.Create(NF.FNotation));
-  Obj.AssignProperty('signDisplay', TGocciaStringLiteralValue.Create(NF.FSignDisplay));
-  Obj.AssignProperty('useGrouping', TGocciaStringLiteralValue.Create(NF.FUseGrouping));
-  Obj.AssignProperty('roundingMode', TGocciaStringLiteralValue.Create(NF.FRoundingMode));
+  end;
   Obj.AssignProperty('minimumIntegerDigits',
     TGocciaNumberLiteralValue.Create(NF.FMinimumIntegerDigits));
   if NF.FMinimumFractionDigits >= 0 then
@@ -551,8 +640,16 @@ begin
   if NF.FMaximumSignificantDigits >= 0 then
     Obj.AssignProperty('maximumSignificantDigits',
       TGocciaNumberLiteralValue.Create(NF.FMaximumSignificantDigits));
-  if NF.FNumberingSystem <> '' then
-    Obj.AssignProperty('numberingSystem', TGocciaStringLiteralValue.Create(NF.FNumberingSystem));
+  Obj.AssignProperty('useGrouping', TGocciaStringLiteralValue.Create(NF.FUseGrouping));
+  Obj.AssignProperty('notation', TGocciaStringLiteralValue.Create(NF.FNotation));
+  if NF.FNotation = 'compact' then
+    Obj.AssignProperty('compactDisplay', TGocciaStringLiteralValue.Create(NF.FCompactDisplay));
+  Obj.AssignProperty('signDisplay', TGocciaStringLiteralValue.Create(NF.FSignDisplay));
+  Obj.AssignProperty('roundingMode', TGocciaStringLiteralValue.Create(NF.FRoundingMode));
+  Obj.AssignProperty('roundingIncrement',
+    TGocciaNumberLiteralValue.Create(NF.FRoundingIncrement));
+  Obj.AssignProperty('roundingPriority', TGocciaStringLiteralValue.Create(NF.FRoundingPriority));
+  Obj.AssignProperty('trailingZeroDisplay', TGocciaStringLiteralValue.Create(NF.FTrailingZeroDisplay));
   Result := Obj;
 end;
 

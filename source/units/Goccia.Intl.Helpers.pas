@@ -18,7 +18,7 @@ function FormatPartsToArray(const AParts: TIntlFormatPartArray): TGocciaArrayVal
 // Reads a string-valued property from AOptions.  Returns True and sets AValue
 // when the property exists and is not undefined; returns False otherwise.
 function TryReadStringOption(const AOptions: TGocciaObjectValue;
-  const AName: string; out AValue: string): Boolean;
+  const AName: string; var AValue: string): Boolean;
 
 // Like TryReadStringOption but additionally rejects NUL characters via
 // ThrowRangeError (SErrorIntlInvalidOption).
@@ -49,7 +49,7 @@ begin
 end;
 
 function TryReadStringOption(const AOptions: TGocciaObjectValue;
-  const AName: string; out AValue: string): Boolean;
+  const AName: string; var AValue: string): Boolean;
 var
   V: TGocciaValue;
 begin
