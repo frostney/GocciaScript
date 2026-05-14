@@ -186,6 +186,9 @@ begin
       FNumberingSystem := V.ToStringLiteral.Value;
   end;
 
+  if FNumberingSystem = '' then
+    FNumberingSystem := 'latn';
+
   InitializePrototype;
   if Assigned(GetIntlRelativeTimeFormatShared) then
     FPrototype := GetIntlRelativeTimeFormatShared.Prototype;
@@ -304,10 +307,9 @@ begin
   RTF := AsRelativeTimeFormat(AThisValue, 'Intl.RelativeTimeFormat.prototype.resolvedOptions');
   Obj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
   Obj.AssignProperty('locale', TGocciaStringLiteralValue.Create(RTF.FLocale));
-  Obj.AssignProperty('numeric', TGocciaStringLiteralValue.Create(RTF.FNumeric));
+  Obj.AssignProperty('numberingSystem', TGocciaStringLiteralValue.Create(RTF.FNumberingSystem));
   Obj.AssignProperty('style', TGocciaStringLiteralValue.Create(RTF.FStyle));
-  if RTF.FNumberingSystem <> '' then
-    Obj.AssignProperty('numberingSystem', TGocciaStringLiteralValue.Create(RTF.FNumberingSystem));
+  Obj.AssignProperty('numeric', TGocciaStringLiteralValue.Create(RTF.FNumeric));
   Result := Obj;
 end;
 

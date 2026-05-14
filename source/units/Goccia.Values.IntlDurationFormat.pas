@@ -286,6 +286,9 @@ begin
 
   ReadOptions(AOptions);
 
+  if FNumberingSystem = '' then
+    FNumberingSystem := 'latn';
+
   InitializePrototype;
   if Assigned(GetIntlDurationFormatShared) then
     FPrototype := GetIntlDurationFormatShared.Prototype;
@@ -429,8 +432,7 @@ begin
   Obj.AssignProperty('millisecondsDisplay', TGocciaStringLiteralValue.Create(DF.FMillisecondsDisplay));
   Obj.AssignProperty('microsecondsDisplay', TGocciaStringLiteralValue.Create(DF.FMicrosecondsDisplay));
   Obj.AssignProperty('nanosecondsDisplay', TGocciaStringLiteralValue.Create(DF.FNanosecondsDisplay));
-  if DF.FNumberingSystem <> '' then
-    Obj.AssignProperty('numberingSystem', TGocciaStringLiteralValue.Create(DF.FNumberingSystem));
+  Obj.AssignProperty('numberingSystem', TGocciaStringLiteralValue.Create(DF.FNumberingSystem));
   Result := Obj;
 end;
 

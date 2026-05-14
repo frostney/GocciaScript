@@ -38,6 +38,7 @@ var
   InitLock: TRTLCriticalSection;
   {$IFDEF LINUX}
   UCHandle: TLibHandle;
+  ICUVersionSuffix: string;
   {$ENDIF}
 
 {$IFDEF LINUX}
@@ -66,6 +67,7 @@ begin
         AHandle := NilHandle;
         Continue;
       end;
+      ICUVersionSuffix := '_' + IntToStr(Version);
       Result := True;
       Exit;
     end;
@@ -81,7 +83,10 @@ begin
       AHandle := NilHandle;
     end
     else
+    begin
+      ICUVersionSuffix := '';
       Result := True;
+    end;
   end;
 end;
 {$ENDIF}
@@ -134,14 +139,29 @@ end;
 function ICUGetProcAddress(const AName: string): Pointer;
 var
   Handle: TLibHandle;
+  {$IFDEF LINUX}
+  VersionedName: string;
+  {$ENDIF}
 begin
   Result := nil;
   if not TryGetICULibraryHandle(Handle) then
     Exit;
   Result := GetProcAddress(Handle, AName);
   {$IFDEF LINUX}
+  if (Result = nil) and (ICUVersionSuffix <> '') then
+  begin
+    VersionedName := AName + ICUVersionSuffix;
+    Result := GetProcAddress(Handle, VersionedName);
+  end;
   if (Result = nil) and (UCHandle <> NilHandle) then
+  begin
     Result := GetProcAddress(UCHandle, AName);
+    if (Result = nil) and (ICUVersionSuffix <> '') then
+    begin
+      VersionedName := AName + ICUVersionSuffix;
+      Result := GetProcAddress(UCHandle, VersionedName);
+    end;
+  end;
   {$ENDIF}
 end;
 
@@ -152,6 +172,7 @@ initialization
   LoadSucceeded := False;
   {$IFDEF LINUX}
   UCHandle := NilHandle;
+  ICUVersionSuffix := '';
   {$ENDIF}
 
 finalization
