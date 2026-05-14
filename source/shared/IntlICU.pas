@@ -770,7 +770,6 @@ end;
 procedure ConfigureNumberFormatter(AFormatter: Pointer;
   const AOptions: TIntlNumberFormatOptions);
 var
-  IncValue: Double;
   MinSig, MaxSig: Integer;
 begin
   if not Assigned(IntlFunctions.UnumSetAttribute) then
@@ -801,99 +800,19 @@ begin
   if AOptions.UseGrouping = inugFalse then
     IntlFunctions.UnumSetAttribute(AFormatter, UNUM_GROUPING_USED, 0);
 
-  IntlFunctions.UnumSetAttribute(AFormatter,
-    UNUM_ROUNDING_MODE, RoundingModeToICU(AOptions.RoundingMode));
-
-  if (AOptions.RoundingIncrement > 1) and
-     Assigned(IntlFunctions.UnumSetDoubleAttribute) then
-  begin
-    IncValue := AOptions.RoundingIncrement;
-    if AOptions.MaximumFractionDigits = 1 then
-      IncValue := IncValue * 0.1
-    else if AOptions.MaximumFractionDigits = 2 then
-      IncValue := IncValue * 0.01
-    else if AOptions.MaximumFractionDigits = 3 then
-      IncValue := IncValue * 0.001
-    else if AOptions.MaximumFractionDigits = 4 then
-      IncValue := IncValue * 0.0001;
-    IntlFunctions.UnumSetDoubleAttribute(AFormatter,
-      UNUM_DATTR_ROUNDING_INCREMENT, IncValue);
-  end;
-end;
-
-function RoundHalfExpand(AValue: Double): Double;
-begin
-  if AValue >= 0 then
-    Result := Math.Floor(AValue + 0.5)
+  if AOptions.RoundingIncrement > 1 then
+    IntlFunctions.UnumSetAttribute(AFormatter,
+      UNUM_ROUNDING_MODE, UNUM_ROUND_HALFUP)
   else
-    Result := Math.Ceil(AValue - 0.5);
-end;
-
-function RoundHalfTrunc(AValue: Double): Double;
-var
-  F: Double;
-begin
-  F := Frac(AValue);
-  if Abs(F) > 0.5 then
-  begin
-    if AValue >= 0 then
-      Result := Math.Ceil(AValue - 0.5)
-    else
-      Result := Math.Floor(AValue + 0.5);
-  end
-  else
-    Result := System.Int(AValue);
-end;
-
-function RoundWithMode(AValue: Double; AMode: TIntlNumberRoundingMode): Double;
-var
-  F: Double;
-begin
-  case AMode of
-    inrmCeil:
-      Result := Math.Ceil(AValue);
-    inrmFloor:
-      Result := Math.Floor(AValue);
-    inrmTrunc:
-      Result := System.Int(AValue);
-    inrmExpand:
-      if AValue >= 0 then
-        Result := Math.Ceil(AValue)
-      else
-        Result := Math.Floor(AValue);
-    inrmHalfEven:
-      Result := Round(AValue);
-    inrmHalfTrunc:
-      Result := RoundHalfTrunc(AValue);
-    inrmHalfCeil:
-    begin
-      F := Frac(AValue);
-      if F = 0.5 then
-        Result := Math.Ceil(AValue)
-      else if F = -0.5 then
-        Result := System.Int(AValue)
-      else
-        Result := RoundHalfExpand(AValue);
-    end;
-    inrmHalfFloor:
-    begin
-      F := Frac(AValue);
-      if F = 0.5 then
-        Result := System.Int(AValue)
-      else if F = -0.5 then
-        Result := Math.Floor(AValue)
-      else
-        Result := RoundHalfExpand(AValue);
-    end;
-  else
-    Result := RoundHalfExpand(AValue);
-  end;
+    IntlFunctions.UnumSetAttribute(AFormatter,
+      UNUM_ROUNDING_MODE, RoundingModeToICU(AOptions.RoundingMode));
 end;
 
 function ApplyRoundingIncrement(AValue: Double;
   const AOptions: TIntlNumberFormatOptions): Double;
 var
-  Scale, ScaledInt, Remainder, Rounded: Double;
+  Scale, ScaledInt, Remainder: Double;
+  Lower, Upper: Double;
   Inc: Integer;
   IsNeg: Boolean;
 begin
@@ -923,67 +842,63 @@ begin
     Remainder := 0;
 
   if Remainder = 0 then
-  begin
-    Result := AValue;
     Exit;
-  end;
+
+  Lower := ScaledInt - Remainder;
+  Upper := Lower + Inc;
 
   case AOptions.RoundingMode of
     inrmCeil:
-      if IsNeg then
-        Rounded := ScaledInt - Remainder
-      else
-        Rounded := ScaledInt - Remainder + Inc;
+      if IsNeg then ScaledInt := Lower else ScaledInt := Upper;
     inrmFloor:
-      if IsNeg then
-        Rounded := ScaledInt - Remainder + Inc
-      else
-        Rounded := ScaledInt - Remainder;
+      if IsNeg then ScaledInt := Upper else ScaledInt := Lower;
     inrmTrunc:
-      Rounded := ScaledInt - Remainder;
+      ScaledInt := Lower;
     inrmExpand:
-      Rounded := ScaledInt - Remainder + Inc;
-    inrmHalfEven, inrmHalfExpand, inrmHalfTrunc, inrmHalfCeil, inrmHalfFloor:
+      ScaledInt := Upper;
+    inrmHalfExpand:
+      if Remainder * 2 >= Inc then ScaledInt := Upper else ScaledInt := Lower;
+    inrmHalfTrunc:
+      if Remainder * 2 > Inc then ScaledInt := Upper else ScaledInt := Lower;
+    inrmHalfEven:
     begin
       if Remainder * 2 > Inc then
-        Rounded := ScaledInt - Remainder + Inc
+        ScaledInt := Upper
       else if Remainder * 2 < Inc then
-        Rounded := ScaledInt - Remainder
+        ScaledInt := Lower
+      else if Trunc(Lower / Inc) mod 2 = 0 then
+        ScaledInt := Lower
       else
-      begin
-        case AOptions.RoundingMode of
-          inrmHalfExpand:
-            Rounded := ScaledInt - Remainder + Inc;
-          inrmHalfTrunc:
-            Rounded := ScaledInt - Remainder;
-          inrmHalfCeil:
-            if IsNeg then
-              Rounded := ScaledInt - Remainder
-            else
-              Rounded := ScaledInt - Remainder + Inc;
-          inrmHalfFloor:
-            if IsNeg then
-              Rounded := ScaledInt - Remainder + Inc
-            else
-              Rounded := ScaledInt - Remainder;
-        else
-        begin
-          if Trunc(Math.Floor(ScaledInt / Inc)) mod 2 = 0 then
-            Rounded := ScaledInt - Remainder
-          else
-            Rounded := ScaledInt - Remainder + Inc;
-        end;
-        end;
-      end;
+        ScaledInt := Upper;
     end;
-  else
-    Rounded := ScaledInt - Remainder + Inc;
+    inrmHalfCeil:
+    begin
+      if Remainder * 2 > Inc then
+        ScaledInt := Upper
+      else if Remainder * 2 < Inc then
+        ScaledInt := Lower
+      else if IsNeg then
+        ScaledInt := Lower
+      else
+        ScaledInt := Upper;
+    end;
+    inrmHalfFloor:
+    begin
+      if Remainder * 2 > Inc then
+        ScaledInt := Upper
+      else if Remainder * 2 < Inc then
+        ScaledInt := Lower
+      else if IsNeg then
+        ScaledInt := Upper
+      else
+        ScaledInt := Lower;
+    end;
   end;
 
   if IsNeg then
-    Result := -(Rounded / Scale)
+    Result := -(ScaledInt / Scale)
   else
-    Result := Rounded / Scale;
+    Result := ScaledInt / Scale;
 end;
 
 function TryICUFormatNumber(const ALocale: string; AValue: Double;
