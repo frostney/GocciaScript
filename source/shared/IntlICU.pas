@@ -59,7 +59,6 @@ function TryICULowerCase(const ALocale, AStr: string; out AResult: string): Bool
 implementation
 
 uses
-  Math,
   SysUtils,
 
   DynLibs,
@@ -82,7 +81,6 @@ const
   UNUM_MAX_FRACTION_DIGITS = 6;
   UNUM_MIN_FRACTION_DIGITS = 7;
   UNUM_ROUNDING_MODE = 11;
-  UNUM_SIGNIFICANT_DIGITS_USED = 22;
   UNUM_MIN_SIGNIFICANT_DIGITS = 23;
   UNUM_MAX_SIGNIFICANT_DIGITS = 24;
   UNUM_ROUND_CEILING = 0;
@@ -751,17 +749,13 @@ procedure ApplySignificantDigitsPattern(AFormatter: Pointer;
 var
   Pattern: UnicodeString;
   Status: TICUErrorCode;
-  I: Integer;
 begin
   if not Assigned(IntlFunctions.UnumApplyPattern) then
     Exit;
   if AMinSig < 1 then AMinSig := 1;
   if AMaxSig < AMinSig then AMaxSig := AMinSig;
-  Pattern := '';
-  for I := 1 to AMinSig do
-    Pattern := Pattern + '@';
-  for I := AMinSig + 1 to AMaxSig do
-    Pattern := Pattern + '#';
+  Pattern := UnicodeString(StringOfChar('@', AMinSig) +
+    StringOfChar('#', AMaxSig - AMinSig));
   Status := ICU_SUCCESS;
   IntlFunctions.UnumApplyPattern(AFormatter, False,
     PWideChar(Pattern), Length(Pattern), nil, Status);
@@ -837,7 +831,7 @@ begin
   ScaledInt := Abs(AValue) * Scale;
   if Abs(ScaledInt - System.Round(ScaledInt)) < 1e-6 then
     ScaledInt := System.Round(ScaledInt);
-  Remainder := ScaledInt - Math.Floor(ScaledInt / Inc) * Inc;
+  Remainder := ScaledInt - Trunc(ScaledInt / Inc) * Inc;
   if Abs(Remainder - Inc) < 1e-9 then
     Remainder := 0;
 
