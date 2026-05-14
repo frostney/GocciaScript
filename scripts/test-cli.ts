@@ -3,8 +3,8 @@
  * test-cli.ts
  *
  * Common CLI flags tested across all apps: stdin smoke, --help, --unsafe-ffi,
- * --asi, --compat-var, --mode, --timeout, --max-instructions, --max-memory,
- * --stack-size, --log, example scripts.
+ * --asi, --compat-var, --compat-loose-equality, --mode, --timeout,
+ * --max-instructions, --max-memory, --stack-size, --log, example scripts.
  */
 
 import { $ } from "bun";
@@ -205,6 +205,23 @@ console.log("--compat-function (Loader) + Bare loader compat parsing...");
     writeFileSync(forSrc, "let s = 0;\nfor (let i = 1; i <= 5; i++) { s = s + i; }\ns;\n");
     const forOut = await $`${BARE} --print ${forSrc} --compat-traditional-for-loop 2>&1`.text();
     if (forOut.trim() !== "15") throw new Error(`Bare --compat-traditional-for-loop expected 15, got: ${forOut}`);
+
+    const looseSrc = join(tmp, "use-loose.js");
+    writeFileSync(looseSrc, '"1" == 1;\n');
+    const loaderLoose = await $`${LOADER} --print ${looseSrc} --compat-loose-equality 2>&1`.text();
+    if (!containsLine(loaderLoose, "true")) throw new Error(`Loader --compat-loose-equality expected true, got: ${loaderLoose}`);
+
+    const looseTest = join(tmp, "use-loose-test.js");
+    writeFileSync(looseTest, 'test("loose equality", () => { expect("1" == 1).toBe(true); });\n');
+    const trLoose = await $`${TESTRUNNER} ${looseTest} --compat-loose-equality --no-progress 2>&1`.text();
+    if (!trLoose.includes("Passed: 1")) throw new Error(`TestRunner --compat-loose-equality expected Passed: 1, got: ${trLoose}`);
+
+    const looseOut = join(tmp, "loose.gbc");
+    await $`${BUNDLER} ${looseSrc} --compat-loose-equality --output=${looseOut}`.quiet();
+    if (!existsSync(looseOut)) throw new Error("Bundler --compat-loose-equality should compile");
+
+    const bareLoose = await $`${BARE} --print ${looseSrc} --compat-loose-equality 2>&1`.text();
+    if (bareLoose.trim() !== "true") throw new Error(`Bare --compat-loose-equality expected true, got: ${bareLoose}`);
   } finally {
     clean(tmp);
   }

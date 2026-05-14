@@ -35,6 +35,7 @@ type
     FVarEnabled: Boolean;
     FFunctionEnabled: Boolean;
     FTraditionalForLoopsEnabled: Boolean;
+    FLooseEqualityEnabled: Boolean;
     FStrictTypesEnabled: Boolean;
     FModuleLoader: TGocciaModuleLoader;
     FOwnsModuleLoader: Boolean;
@@ -50,6 +51,7 @@ type
     procedure SetVarEnabled(const AValue: Boolean);
     procedure SetFunctionEnabled(const AValue: Boolean);
     procedure SetTraditionalForLoopsEnabled(const AValue: Boolean);
+    procedure SetLooseEqualityEnabled(const AValue: Boolean);
     procedure SetStrictTypesEnabled(const AValue: Boolean);
     procedure SetResolver(const AValue: TGocciaModuleResolver);
   public
@@ -66,6 +68,8 @@ type
     property FunctionEnabled: Boolean read FFunctionEnabled write SetFunctionEnabled;
     property TraditionalForLoopsEnabled: Boolean
       read FTraditionalForLoopsEnabled write SetTraditionalForLoopsEnabled;
+    property LooseEqualityEnabled: Boolean
+      read FLooseEqualityEnabled write SetLooseEqualityEnabled;
     property StrictTypesEnabled: Boolean read FStrictTypesEnabled
       write SetStrictTypesEnabled;
     property GlobalScope: TGocciaGlobalScope read FGlobalScope;
@@ -208,6 +212,12 @@ procedure TGocciaInterpreter.SetTraditionalForLoopsEnabled(const AValue: Boolean
 begin
   FTraditionalForLoopsEnabled := AValue;
   FModuleLoader.TraditionalForLoopsEnabled := AValue;
+end;
+
+procedure TGocciaInterpreter.SetLooseEqualityEnabled(const AValue: Boolean);
+begin
+  FLooseEqualityEnabled := AValue;
+  FModuleLoader.LooseEqualityEnabled := AValue;
 end;
 
 procedure TGocciaInterpreter.SetStrictTypesEnabled(const AValue: Boolean);

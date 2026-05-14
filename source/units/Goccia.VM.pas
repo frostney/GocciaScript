@@ -8355,6 +8355,22 @@ begin
         else
           SetRegister(A, GetRegister(B).IsNotEqual(GetRegister(C)));
 
+      OP_LOOSE_EQ:
+        if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
+          FRegisters[A] := RegisterBoolean(
+            FRegisters[B].IntValue = FRegisters[C].IntValue)
+        else
+          SetRegister(A, TGocciaBooleanLiteralValue.FromBoolean(
+            Goccia.Arithmetic.IsLooselyEqual(GetRegister(B), GetRegister(C))));
+
+      OP_LOOSE_NEQ:
+        if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
+          FRegisters[A] := RegisterBoolean(
+            FRegisters[B].IntValue <> FRegisters[C].IntValue)
+        else
+          SetRegister(A, TGocciaBooleanLiteralValue.FromBoolean(
+            Goccia.Arithmetic.IsNotLooselyEqual(GetRegister(B), GetRegister(C))));
+
       OP_LT:
       begin
         if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then

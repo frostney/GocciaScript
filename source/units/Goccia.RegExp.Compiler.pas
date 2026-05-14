@@ -32,8 +32,10 @@ type
     Hi: Cardinal;
   end;
 
+  TRegExpCharRangeArray = array of TRegExpCharRange;
+
   TRegExpCharClass = record
-    Ranges: array of TRegExpCharRange;
+    Ranges: TRegExpCharRangeArray;
   end;
 
   TRegExpProgram = record
@@ -46,7 +48,8 @@ type
 const
   BACKREF_STRICT_FLAG = $800000;
   BACKREF_ICASE_FLAG = $400000;
-  BACKREF_INDEX_MASK = $3FFFFF;
+  BACKREF_UNICODE_FLAG = $200000;
+  BACKREF_INDEX_MASK = $1FFFFF;
   LOOK_NEGATED_FLAG = $800000;
   LOOK_TARGET_MASK = $7FFFFF;
 
@@ -108,6 +111,8 @@ type
     function EncodeOp(AOp: TRegExpOpCode): UInt32;
     function EncodeOpBx(AOp: TRegExpOpCode; ABx: Integer): UInt32;
     function AddCharClass(const ARanges: array of TRegExpCharRange): Integer;
+    procedure EmitRawCharClassRanges(const ARanges: array of TRegExpCharRange;
+      ANegated: Boolean);
     procedure CompilePattern;
     procedure CompileDisjunction;
     procedure CompileAlternative;
@@ -272,43 +277,13 @@ end;
 procedure TRegExpCompiler.EmitCharMatch(ACodePoint: Cardinal);
 var
   Ranges: array[0..1] of TRegExpCharRange;
-  ClassIdx: Integer;
-  Lower, Upper: Cardinal;
 begin
   if FModifier.IgnoreCase then
   begin
-    if (ACodePoint >= Ord('A')) and (ACodePoint <= Ord('Z')) then
-    begin
-      Lower := ACodePoint + 32;
-      Ranges[0].Lo := ACodePoint;
-      Ranges[0].Hi := ACodePoint;
-      Ranges[1].Lo := Lower;
-      Ranges[1].Hi := Lower;
-      ClassIdx := AddCharClass(Ranges);
-      Emit(EncodeOpBx(RX_CHAR_CLASS, ClassIdx));
-      Exit;
-    end;
-    if (ACodePoint >= Ord('a')) and (ACodePoint <= Ord('z')) then
-    begin
-      Upper := ACodePoint - 32;
-      Ranges[0].Lo := Upper;
-      Ranges[0].Hi := Upper;
-      Ranges[1].Lo := ACodePoint;
-      Ranges[1].Hi := ACodePoint;
-      ClassIdx := AddCharClass(Ranges);
-      Emit(EncodeOpBx(RX_CHAR_CLASS, ClassIdx));
-      Exit;
-    end;
-    if FUnicode and (ACodePoint = $212A) then
-    begin
-      Ranges[0].Lo := Ord('K');
-      Ranges[0].Hi := Ord('K');
-      Ranges[1].Lo := Ord('k');
-      Ranges[1].Hi := Ord('k');
-      ClassIdx := AddCharClass(Ranges);
-      Emit(EncodeOpBx(RX_CHAR_CLASS, ClassIdx));
-      Exit;
-    end;
+    Ranges[0].Lo := ACodePoint;
+    Ranges[0].Hi := ACodePoint;
+    EmitCharClassRanges(Ranges, 1, False);
+    Exit;
   end;
   Emit(EncodeOpBx(RX_CHAR, Integer(ACodePoint)));
 end;
@@ -441,14 +416,48 @@ begin
   raise EConvertError.Create('Invalid Unicode property name: ' + APropertyName);
 end;
 
+function CharRangesToUnicodeRanges(const ARanges: array of TRegExpCharRange;
+  ARangeCount: Integer): TUnicodePropertyRangeArray;
+var
+  I: Integer;
+begin
+  SetLength(Result, ARangeCount);
+  for I := 0 to ARangeCount - 1 do
+  begin
+    Result[I].Lo := ARanges[I].Lo;
+    Result[I].Hi := ARanges[I].Hi;
+  end;
+end;
+
+function UnicodeRangesToCharRanges(const ARanges: TUnicodePropertyRangeArray):
+  TRegExpCharRangeArray;
+var
+  I: Integer;
+begin
+  SetLength(Result, Length(ARanges));
+  for I := 0 to High(ARanges) do
+  begin
+    Result[I].Lo := ARanges[I].Lo;
+    Result[I].Hi := ARanges[I].Hi;
+  end;
+end;
+
 procedure TRegExpCompiler.EmitUnicodePropertyClass(const APropertyName: string;
   ANegated: Boolean);
 var
   Ranges: array[0..MAX_CHAR_RANGES - 1] of TRegExpCharRange;
+  FoldRanges: TUnicodePropertyRangeArray;
   RangeCount: Integer;
 begin
   RangeCount := 0;
   GetUnicodePropertyRanges(APropertyName, Ranges, RangeCount);
+  if ANegated and FModifier.IgnoreCase and FUnicode then
+  begin
+    FoldRanges := CharRangesToUnicodeRanges(Ranges, RangeCount);
+    ReduceUnicodeSimpleCaseFoldClosed(FoldRanges);
+    EmitRawCharClassRanges(UnicodeRangesToCharRanges(FoldRanges), True);
+    Exit;
+  end;
   EmitCharClassRanges(Ranges, RangeCount, ANegated);
 end;
 
@@ -1356,33 +1365,34 @@ procedure TRegExpCompiler.EmitCharClassRanges(
   const ARanges: array of TRegExpCharRange;
   ARangeCount: Integer; ANegated: Boolean);
 var
-  ClassIdx, I, OrigCount: Integer;
-  Op: TRegExpOpCode;
-  DynRanges: array of TRegExpCharRange;
+  I: Integer;
+  DynRanges: TRegExpCharRangeArray;
+  FoldRanges: TUnicodePropertyRangeArray;
 begin
   SetLength(DynRanges, ARangeCount);
   for I := 0 to ARangeCount - 1 do
     DynRanges[I] := ARanges[I];
   if FModifier.IgnoreCase then
   begin
-    OrigCount := Length(DynRanges);
-    for I := 0 to OrigCount - 1 do
-    begin
-      if (DynRanges[I].Lo >= Ord('A')) and (DynRanges[I].Hi <= Ord('Z')) then
-      begin
-        SetLength(DynRanges, Length(DynRanges) + 1);
-        DynRanges[High(DynRanges)].Lo := DynRanges[I].Lo + 32;
-        DynRanges[High(DynRanges)].Hi := DynRanges[I].Hi + 32;
-      end
-      else if (DynRanges[I].Lo >= Ord('a')) and (DynRanges[I].Hi <= Ord('z')) then
-      begin
-        SetLength(DynRanges, Length(DynRanges) + 1);
-        DynRanges[High(DynRanges)].Lo := DynRanges[I].Lo - 32;
-        DynRanges[High(DynRanges)].Hi := DynRanges[I].Hi - 32;
-      end;
-    end;
+    FoldRanges := CharRangesToUnicodeRanges(DynRanges, Length(DynRanges));
+
+    if FUnicode then
+      ExpandUnicodeSimpleCaseFolding(FoldRanges)
+    else
+      ExpandRegExpNonUnicodeCaseFolding(FoldRanges);
+
+    DynRanges := UnicodeRangesToCharRanges(FoldRanges);
   end;
-  ClassIdx := AddCharClass(DynRanges);
+  EmitRawCharClassRanges(DynRanges, ANegated);
+end;
+
+procedure TRegExpCompiler.EmitRawCharClassRanges(
+  const ARanges: array of TRegExpCharRange; ANegated: Boolean);
+var
+  ClassIdx: Integer;
+  Op: TRegExpOpCode;
+begin
+  ClassIdx := AddCharClass(ARanges);
   if ANegated then
     Op := RX_CHAR_CLASS_NEG
   else
@@ -1394,7 +1404,7 @@ function TRegExpCompiler.ReadCodePoint: Cardinal;
 var
   ByteLen: Integer;
 begin
-  if FUnicode and (FPos <= Length(FPattern)) then
+  if FPos <= Length(FPattern) then
   begin
     if TryReadUTF8CodePoint(FPattern, FPos, Result, ByteLen) and (ByteLen > 1) then
     begin
@@ -1559,10 +1569,13 @@ var
   BackrefIdx, I, GroupCount, BackrefICaseFlag: Integer;
   CodePoint: Cardinal;
 begin
+  BackrefICaseFlag := 0;
   if FModifier.IgnoreCase then
-    BackrefICaseFlag := BACKREF_ICASE_FLAG
-  else
-    BackrefICaseFlag := 0;
+  begin
+    BackrefICaseFlag := BACKREF_ICASE_FLAG;
+    if FUnicode then
+      BackrefICaseFlag := BackrefICaseFlag or BACKREF_UNICODE_FLAG;
+  end;
   C := Advance;
   case C of
     'd', 'D', 'w', 'W', 's', 'S':
@@ -2003,16 +2016,8 @@ begin
       end;
   else
     begin
-      if FUnicode then
-      begin
-        CodePoint := ReadCodePoint;
-        EmitCharMatch(CodePoint);
-      end
-      else
-      begin
-        Inc(FPos);
-        EmitCharMatch(Ord(C));
-      end;
+      CodePoint := ReadCodePoint;
+      EmitCharMatch(CodePoint);
     end;
   end;
 end;

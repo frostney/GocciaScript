@@ -7,9 +7,9 @@
 
 - **Modern subset** — `let`/`const`, arrow functions, classes with private fields, `for...of`, async/await, ES modules (named only)
 - **TC39 proposals** — Decorators, decorator metadata, pattern matching, types as comments, enums, `Math.clamp`
-- **Excluded by design** — `==`/`!=`, `eval`, `arguments`, `while` / `do...while`, `with`, default imports/exports
-- **Graceful handling** — Parser-recognized excluded syntax (`==`, `while`/`do...while`, traditional `for(;;)` when `--compat-traditional-for-loop` is off, `with`) parses successfully but executes as a no-op with a warning and suggestion
-- **Opt-in toggles** — ASI (`--asi`), `var` declarations (`--compat-var`), `function` keyword (`--compat-function`), traditional `for(init; test; update)` loops (`--compat-traditional-for-loop`), runtime type enforcement (`--strict-types`)
+- **Excluded by design** — `eval`, `arguments`, `while` / `do...while`, `with`, default imports/exports
+- **Graceful handling** — Parser-recognized excluded syntax (`==`/`!=` when `--compat-loose-equality` is off, `while`/`do...while`, traditional `for(;;)` when `--compat-traditional-for-loop` is off, `with`) parses successfully but executes as a no-op with a warning and suggestion
+- **Opt-in toggles** — ASI (`--asi`), `var` declarations (`--compat-var`), `function` keyword (`--compat-function`), loose equality (`--compat-loose-equality`), traditional `for(init; test; update)` loops (`--compat-traditional-for-loop`), runtime type enforcement (`--strict-types`)
 - **Default preprocessors** — JSX (enabled by default via `DefaultPreprocessors`)
 
 GocciaScript implements a curated subset of ECMAScript. This document details what's supported, what's excluded, and the rationale for each decision. For quick-reference tables of every feature and TC39 proposal, see [Language Tables](language-tables.md).
@@ -688,22 +688,26 @@ When enabled (CLI: `--compat-function`, engine API: `Engine.FunctionEnabled := T
 
 ### Loose Equality (`==` and `!=`)
 
-**Excluded.** Use `===` and `!==` instead. The parser accepts `==` and `!=` but treats them as no-ops (the expression evaluates to `undefined`), and emits a warning:
+**Opt-in.** Excluded by default; use `===` and `!==` unless you are running compatibility code. Available via `--compat-loose-equality` (CLI flag, `Engine.LooseEqualityEnabled`, or `{"compat-loose-equality": true}` in config).
+
+When enabled, `==` and `!=` follow [ES2026 §7.2.13 IsLooselyEqual](https://tc39.es/ecma262/2026/multipage/abstract-operations.html#sec-islooselyequal) in both interpreter and bytecode modes, including `null == undefined`, string/number coercion, boolean-to-number coercion, BigInt/string and BigInt/number comparisons, and object `ToPrimitive` conversion.
+
+When disabled (default), the parser accepts `==` and `!=` but treats them as no-ops (the expression evaluates to `undefined`), and emits a warning:
 
 ```text
 Warning: '==' (loose equality) is not supported in GocciaScript
-  Suggestion: Use '===' (strict equality) instead
+  Suggestion: Use '===' (strict equality), or enable --compat-loose-equality
   --> script.js:1:10
 ```
 
 Both operands are parsed but not evaluated at runtime (no side effects). Because the entire expression becomes `undefined`, which is falsy, `==`/`!=` in conditions (e.g., `if (a == b)`) will never enter the truthy branch.
 
-Loose equality's type coercion rules are notoriously confusing:
+Loose equality's type coercion rules are notoriously confusing, which is why the flag is off by default:
 
 ```javascript
-// All true in JavaScript with ==
-"" == false   // true
-0 == ""       // true
+// All true with --compat-loose-equality
+"" == false       // true
+0 == ""           // true
 null == undefined // true
 ```
 

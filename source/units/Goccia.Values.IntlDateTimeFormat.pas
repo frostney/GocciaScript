@@ -87,6 +87,110 @@ begin
   Result := 'UTC';
 end;
 
+function IsAsciiDigit(const AChar: Char): Boolean;
+begin
+  Result := (AChar >= '0') and (AChar <= '9');
+end;
+
+function ReadTwoDigits(const AValue: string; const APosition: Integer;
+  out ANumber: Integer): Boolean;
+begin
+  Result := False;
+  ANumber := 0;
+  if APosition + 1 > Length(AValue) then
+    Exit;
+  if not IsAsciiDigit(AValue[APosition]) or not IsAsciiDigit(AValue[APosition + 1]) then
+    Exit;
+  ANumber := (Ord(AValue[APosition]) - Ord('0')) * 10 +
+    (Ord(AValue[APosition + 1]) - Ord('0'));
+  Result := True;
+end;
+
+function TryParseOffsetTimeZoneIdentifier(const AValue: string;
+  out AOffsetMinutes: Integer): Boolean;
+var
+  Hours, Minutes, Position, Sign: Integer;
+begin
+  Result := False;
+  AOffsetMinutes := 0;
+
+  if Length(AValue) < 3 then
+    Exit;
+
+  case AValue[1] of
+    '+': Sign := 1;
+    '-': Sign := -1;
+  else
+    Exit;
+  end;
+
+  if not ReadTwoDigits(AValue, 2, Hours) then
+    Exit;
+
+  Position := 4;
+  Minutes := 0;
+  if Position <= Length(AValue) then
+  begin
+    if AValue[Position] = ':' then
+      Inc(Position);
+
+    if not ReadTwoDigits(AValue, Position, Minutes) then
+      Exit;
+    Inc(Position, 2);
+
+    if Position <= Length(AValue) then
+      Exit;
+  end;
+
+  if (Hours > 23) or (Minutes > 59) then
+    Exit;
+
+  AOffsetMinutes := Sign * ((Hours * 60) + Minutes);
+  Result := True;
+end;
+
+// ECMA-402 §11.1.3 FormatOffsetTimeZoneIdentifier(offsetMinutes).
+function FormatOffsetTimeZoneIdentifier(const AOffsetMinutes: Integer): string;
+var
+  AbsoluteMinutes, Hours, Minutes: Integer;
+  Sign: Char;
+begin
+  if AOffsetMinutes >= 0 then
+    Sign := '+'
+  else
+    Sign := '-';
+  AbsoluteMinutes := Abs(AOffsetMinutes);
+  Hours := AbsoluteMinutes div 60;
+  Minutes := AbsoluteMinutes mod 60;
+  Result := Sign + Format('%.2d:%.2d', [Hours, Minutes]);
+end;
+
+function NormalizeDateTimeFormatTimeZone(const ATimeZone: string): string;
+var
+  OffsetMinutes: Integer;
+begin
+  Result := ATimeZone;
+  if ATimeZone = '' then
+    Exit;
+
+  if not ((ATimeZone[1] = '+') or (ATimeZone[1] = '-')) then
+    Exit;
+
+  // ECMA-402 §11.1.2 normalizes offset time zone identifiers before storing
+  // [[TimeZone]], so resolvedOptions() exposes ±HH:MM even for ±HH input.
+  if not TryParseOffsetTimeZoneIdentifier(ATimeZone, OffsetMinutes) then
+    ThrowRangeError(Format(SErrorIntlInvalidOption, [ATimeZone, 'timeZone']));
+
+  Result := FormatOffsetTimeZoneIdentifier(OffsetMinutes);
+end;
+
+function ICUDateTimeFormatTimeZone(const ATimeZone: string): string;
+begin
+  Result := ATimeZone;
+  if (ATimeZone <> '') and ((ATimeZone[1] = '+') or (ATimeZone[1] = '-')) then
+    Result := 'GMT' + ATimeZone;
+end;
+
 function AsDateTimeFormat(const AValue: TGocciaValue; const AMethod: string): TGocciaIntlDateTimeFormatValue;
 begin
   if not (AValue is TGocciaIntlDateTimeFormatValue) then
@@ -124,6 +228,7 @@ begin
   TryReadStringOption(AOptions, 'calendar', FCalendar);
   TryReadStringOption(AOptions, 'numberingSystem', FNumberingSystem);
   ReadValidatedStringOption(AOptions, 'timeZone', FTimeZone);
+  FTimeZone := NormalizeDateTimeFormatTimeZone(FTimeZone);
   V := AOptions.GetProperty('hour12');
   if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
   begin
@@ -191,7 +296,7 @@ begin
   FResolvedOptions.TimeStyle := DateStyleStringToEnum(FTimeStyle);
   FResolvedOptions.Calendar := FCalendar;
   FResolvedOptions.NumberingSystem := FNumberingSystem;
-  FResolvedOptions.TimeZone := FTimeZone;
+  FResolvedOptions.TimeZone := ICUDateTimeFormatTimeZone(FTimeZone);
   FResolvedOptions.Hour12 := FHour12;
   FResolvedOptions.HourCycle := FHourCycle;
   FResolvedOptions.Weekday := FWeekday;

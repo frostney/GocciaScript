@@ -3,6 +3,32 @@ description: RegExp constructor
 features: [RegExp]
 ---*/
 
+const regexpAccessorNames = [
+  "source",
+  "flags",
+  "global",
+  "ignoreCase",
+  "multiline",
+  "dotAll",
+  "unicode",
+  "sticky",
+  "unicodeSets",
+  "hasIndices",
+];
+
+const invalidThisValues = [
+  null,
+  undefined,
+  1,
+  true,
+  "x",
+  Symbol("regexp"),
+  {},
+  [],
+  Object.create(null),
+  () => {},
+];
+
 test("RegExp constructor creates regex objects with flags and properties", () => {
   const regex = new RegExp("ab", "gi");
 
@@ -206,4 +232,14 @@ test("plain object with source and flags is not a RegExp instance", () => {
   const fake = { source: "abc", flags: "g" };
   expect(() => { RegExp.prototype.exec.call(fake, "abc"); }).toThrow(TypeError);
   expect(() => { RegExp.prototype.test.call(fake, "abc"); }).toThrow(TypeError);
+});
+
+test.each(regexpAccessorNames)("%s getter throws TypeError for invalid this values", (accessorName) => {
+  const getter = Object.getOwnPropertyDescriptor(RegExp.prototype, accessorName).get;
+
+  for (const thisValue of invalidThisValues) {
+    expect(() => {
+      getter.call(thisValue);
+    }).toThrow(TypeError);
+  }
 });

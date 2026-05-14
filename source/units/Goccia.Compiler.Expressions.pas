@@ -490,6 +490,8 @@ begin
     gttGreaterEqual: AIntOp := OP_GTE_INT;
     gttEqual:        AIntOp := OP_EQ_INT;
     gttNotEqual:     AIntOp := OP_NEQ_INT;
+    gttLooseEqual:   AIntOp := OP_EQ_INT;
+    gttLooseNotEqual: AIntOp := OP_NEQ_INT;
   else
     Result := False;
   end;
@@ -527,6 +529,8 @@ begin
     gttGreaterEqual: AFloatOp := OP_GTE_FLOAT;
     gttEqual:        AFloatOp := OP_EQ_FLOAT;
     gttNotEqual:     AFloatOp := OP_NEQ_FLOAT;
+    gttLooseEqual:   AFloatOp := OP_EQ_FLOAT;
+    gttLooseNotEqual: AFloatOp := OP_NEQ_FLOAT;
   else
     Result := False;
   end;

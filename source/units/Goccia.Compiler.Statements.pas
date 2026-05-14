@@ -218,7 +218,7 @@ end;
 function IsComparisonOp(const ATokenType: TGocciaTokenType): Boolean;
 begin
   Result := ATokenType in [gttLess, gttGreater, gttLessEqual, gttGreaterEqual,
-    gttEqual, gttNotEqual];
+    gttEqual, gttNotEqual, gttLooseEqual, gttLooseNotEqual];
 end;
 
 function ExpressionTypeAnnotation(const AScope: TGocciaCompilerScope;

@@ -167,6 +167,7 @@ type
     FCompatVar: TGocciaFlagOption;
     FCompatFunction: TGocciaFlagOption;
     FCompatTraditionalFor: TGocciaFlagOption;
+    FCompatLooseEquality: TGocciaFlagOption;
     FStrictTypes: TGocciaFlagOption;
     FAllowedHosts: TGocciaRepeatableOption;
     FInspectDepth: TGocciaIntegerOption;
@@ -190,6 +191,7 @@ type
     property CompatVar: TGocciaFlagOption read FCompatVar;
     property CompatFunction: TGocciaFlagOption read FCompatFunction;
     property CompatTraditionalFor: TGocciaFlagOption read FCompatTraditionalFor;
+    property CompatLooseEquality: TGocciaFlagOption read FCompatLooseEquality;
     property StrictTypes: TGocciaFlagOption read FStrictTypes;
     property AllowedHosts: TGocciaRepeatableOption read FAllowedHosts;
     property InspectDepth: TGocciaIntegerOption read FInspectDepth;
@@ -577,6 +579,8 @@ begin
     'Enable function declarations and expressions (compatibility)', 'Engine');
   FCompatTraditionalFor := TGocciaFlagOption.Create('compat-traditional-for-loop',
     'Enable traditional C-style for(init; test; update) loops (compatibility)', 'Engine');
+  FCompatLooseEquality := TGocciaFlagOption.Create('compat-loose-equality',
+    'Enable loose equality and inequality (== and !=) (compatibility)', 'Engine');
   FStrictTypes := TGocciaFlagOption.Create('strict-types',
     'Enforce type annotations at runtime (interpreter and bytecode)', 'Engine');
   FAllowedHosts := TGocciaRepeatableOption.Create('allowed-host',
@@ -602,6 +606,7 @@ begin
   FCompatVar.Free;
   FCompatFunction.Free;
   FCompatTraditionalFor.Free;
+  FCompatLooseEquality.Free;
   FStrictTypes.Free;
   FAllowedHosts.Free;
   FInspectDepth.Free;
@@ -610,7 +615,7 @@ end;
 
 function TGocciaEngineOptions.Options: TGocciaOptionArray;
 begin
-  SetLength(Result, 17);
+  SetLength(Result, 18);
   Result[0] := FMode;
   Result[1] := FSourceType;
   Result[2] := FASI;
@@ -625,9 +630,10 @@ begin
   Result[11] := FCompatVar;
   Result[12] := FCompatFunction;
   Result[13] := FCompatTraditionalFor;
-  Result[14] := FStrictTypes;
-  Result[15] := FAllowedHosts;
-  Result[16] := FInspectDepth;
+  Result[14] := FCompatLooseEquality;
+  Result[15] := FStrictTypes;
+  Result[16] := FAllowedHosts;
+  Result[17] := FInspectDepth;
 end;
 
 { TGocciaCoverageOptions }

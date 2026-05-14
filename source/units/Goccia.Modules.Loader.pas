@@ -35,6 +35,7 @@ type
     FVarEnabled: Boolean;
     FFunctionEnabled: Boolean;
     FTraditionalForLoopsEnabled: Boolean;
+    FLooseEqualityEnabled: Boolean;
     FStrictTypesEnabled: Boolean;
     FContentProvider: TGocciaModuleContentProvider;
     FEvaluateModuleBody: TGocciaModuleBodyEvaluator;
@@ -80,6 +81,8 @@ type
     property FunctionEnabled: Boolean read FFunctionEnabled write FFunctionEnabled;
     property TraditionalForLoopsEnabled: Boolean
       read FTraditionalForLoopsEnabled write FTraditionalForLoopsEnabled;
+    property LooseEqualityEnabled: Boolean
+      read FLooseEqualityEnabled write FLooseEqualityEnabled;
     property StrictTypesEnabled: Boolean read FStrictTypesEnabled
       write FStrictTypesEnabled;
     property Resolver: TGocciaModuleResolver read FResolver;
@@ -291,6 +294,7 @@ begin
           Parser.VarDeclarationsEnabled := FVarEnabled;
           Parser.FunctionDeclarationsEnabled := FFunctionEnabled;
           Parser.TraditionalForLoopsEnabled := FTraditionalForLoopsEnabled;
+          Parser.LooseEqualityEnabled := FLooseEqualityEnabled;
           try
             ProgramNode := Parser.Parse;
             try
