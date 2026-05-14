@@ -601,10 +601,16 @@ function CallCompareFunc(const ACompareFunc: TGocciaFunctionBase; const ACallArg
   const A, B: TGocciaValue; const AThisValue: TGocciaValue): Double;
 var
   CompResult: TGocciaNumberLiteralValue;
+  PreviousContinuation: TGocciaGeneratorContinuation;
 begin
   ACallArgs.SetElement(0, A);
   ACallArgs.SetElement(1, B);
-  CompResult := ACompareFunc.Call(ACallArgs, AThisValue).ToNumberLiteral;
+  PreviousContinuation := SuspendCurrentGeneratorContinuation;
+  try
+    CompResult := ACompareFunc.Call(ACallArgs, AThisValue).ToNumberLiteral;
+  finally
+    RestoreCurrentGeneratorContinuation(PreviousContinuation);
+  end;
 
   if CompResult.IsNaN then
     Result := 0
@@ -1067,10 +1073,8 @@ begin
         CallArgs.Accumulator := Accumulator;
         CallArgs.Element := View.Get64(Sparse[J]);
         CallArgs.Index := TGocciaNumberLiteralValue.Create(Int64ToDouble(Sparse[J]));
-        if Assigned(TypedCallback) then
-          Accumulator := TypedCallback.Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue)
-        else
-          Accumulator := InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+        Accumulator := InvokeArrayCallback(Callback, TypedCallback, CallArgs,
+          TGocciaUndefinedLiteralValue.UndefinedValue);
       end;
     finally
       CallArgs.Free;
@@ -1113,10 +1117,8 @@ begin
       CallArgs.Accumulator := Accumulator;
       CallArgs.Element := View.Get(I);
       CallArgs.Index := TGocciaNumberLiteralValue.Create(I);
-      if Assigned(TypedCallback) then
-        Accumulator := TypedCallback.Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue)
-      else
-        Accumulator := InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+      Accumulator := InvokeArrayCallback(Callback, TypedCallback, CallArgs,
+        TGocciaUndefinedLiteralValue.UndefinedValue);
     end;
   finally
     CallArgs.Free;

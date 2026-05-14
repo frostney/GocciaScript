@@ -40,10 +40,13 @@ type
     CurrentValue: TGocciaValue;
     NextMethod: TGocciaValue;
     IterScope: TGocciaScope;
+    ActiveScope: TGocciaScope;
     constructor Create(const AIteratorValue, ACurrentValue,
-      ANextMethod: TGocciaValue; const AIterScope: TGocciaScope = nil);
+      ANextMethod: TGocciaValue; const AIterScope: TGocciaScope = nil;
+      const AActiveScope: TGocciaScope = nil);
     procedure Assign(const AIteratorValue, ACurrentValue,
-      ANextMethod: TGocciaValue; const AIterScope: TGocciaScope = nil);
+      ANextMethod: TGocciaValue; const AIterScope: TGocciaScope = nil;
+      const AActiveScope: TGocciaScope = nil);
     procedure MarkReferences;
   end;
 
@@ -133,10 +136,11 @@ type
     procedure SaveLoopState(const ALoopStatement: TObject;
       const AIteratorValue, ACurrentValue: TGocciaValue;
       const ANextMethod: TGocciaValue = nil;
-      const AIterScope: TGocciaScope = nil);
+      const AIterScope: TGocciaScope = nil;
+      const AActiveScope: TGocciaScope = nil);
     function GetLoopState(const ALoopStatement: TObject;
       out AIteratorValue, ACurrentValue, ANextMethod: TGocciaValue;
-      out AIterScope: TGocciaScope): Boolean;
+      out AIterScope, AActiveScope: TGocciaScope): Boolean;
     procedure ClearLoopState(const ALoopStatement: TObject);
     procedure ClearLoopStates;
     function EnsureForLoopState(const ALoopStatement: TObject;
@@ -210,19 +214,22 @@ begin
 end;
 
 constructor TGocciaGeneratorLoopState.Create(const AIteratorValue,
-  ACurrentValue, ANextMethod: TGocciaValue; const AIterScope: TGocciaScope);
+  ACurrentValue, ANextMethod: TGocciaValue; const AIterScope: TGocciaScope;
+  const AActiveScope: TGocciaScope);
 begin
   inherited Create;
-  Assign(AIteratorValue, ACurrentValue, ANextMethod, AIterScope);
+  Assign(AIteratorValue, ACurrentValue, ANextMethod, AIterScope, AActiveScope);
 end;
 
 procedure TGocciaGeneratorLoopState.Assign(const AIteratorValue,
-  ACurrentValue, ANextMethod: TGocciaValue; const AIterScope: TGocciaScope);
+  ACurrentValue, ANextMethod: TGocciaValue; const AIterScope: TGocciaScope;
+  const AActiveScope: TGocciaScope);
 begin
   IteratorValue := AIteratorValue;
   CurrentValue := ACurrentValue;
   NextMethod := ANextMethod;
   IterScope := AIterScope;
+  ActiveScope := AActiveScope;
 end;
 
 procedure TGocciaGeneratorLoopState.MarkReferences;
@@ -235,6 +242,8 @@ begin
     NextMethod.MarkReferences;
   if Assigned(IterScope) then
     IterScope.MarkReferences;
+  if Assigned(ActiveScope) then
+    ActiveScope.MarkReferences;
 end;
 
 constructor TGocciaGeneratorForLoopState.Create(const AHeaderScope: TGocciaScope);
@@ -1045,21 +1054,22 @@ end;
 procedure TGocciaGeneratorContinuation.SaveLoopState(
   const ALoopStatement: TObject; const AIteratorValue,
   ACurrentValue: TGocciaValue; const ANextMethod: TGocciaValue;
-  const AIterScope: TGocciaScope);
+  const AIterScope: TGocciaScope; const AActiveScope: TGocciaScope);
 var
   LoopState: TGocciaGeneratorLoopState;
 begin
   if FLoopStates.TryGetValue(ALoopStatement, LoopState) then
-    LoopState.Assign(AIteratorValue, ACurrentValue, ANextMethod, AIterScope)
+    LoopState.Assign(AIteratorValue, ACurrentValue, ANextMethod,
+      AIterScope, AActiveScope)
   else
     FLoopStates.Add(ALoopStatement,
       TGocciaGeneratorLoopState.Create(AIteratorValue, ACurrentValue,
-        ANextMethod, AIterScope));
+        ANextMethod, AIterScope, AActiveScope));
 end;
 
 function TGocciaGeneratorContinuation.GetLoopState(
   const ALoopStatement: TObject; out AIteratorValue, ACurrentValue,
-  ANextMethod: TGocciaValue; out AIterScope: TGocciaScope): Boolean;
+  ANextMethod: TGocciaValue; out AIterScope, AActiveScope: TGocciaScope): Boolean;
 var
   LoopState: TGocciaGeneratorLoopState;
 begin
@@ -1070,6 +1080,7 @@ begin
     ACurrentValue := LoopState.CurrentValue;
     ANextMethod := LoopState.NextMethod;
     AIterScope := LoopState.IterScope;
+    AActiveScope := LoopState.ActiveScope;
   end
   else
   begin
@@ -1077,6 +1088,7 @@ begin
     ACurrentValue := nil;
     ANextMethod := nil;
     AIterScope := nil;
+    AActiveScope := nil;
   end;
 end;
 

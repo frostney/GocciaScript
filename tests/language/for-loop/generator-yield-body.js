@@ -123,6 +123,44 @@ test("closures captured in yielded body pin per-iteration binding", () => {
   expect(g.next()).toEqual({ value: [0, 1, 2], done: true });
 });
 
+test("array reduce callbacks do not reuse generator replay values", () => {
+  const obj = {
+    *gen() {
+      const fns = [];
+      for (let i = 0; i < 3; i++) {
+        fns.push(() => i);
+        yield i;
+      }
+      return fns.reduce((acc, fn) => acc.concat(fn()), []);
+    },
+  };
+
+  const g = obj.gen();
+  expect(g.next().value).toBe(0);
+  expect(g.next().value).toBe(1);
+  expect(g.next().value).toBe(2);
+  expect(g.next()).toEqual({ value: [0, 1, 2], done: true });
+});
+
+test("array sort callbacks do not reuse generator replay values", () => {
+  const obj = {
+    *gen() {
+      const fns = [];
+      for (let i = 2; i >= 0; i--) {
+        fns.push(() => i);
+        yield i;
+      }
+      return fns.sort((a, b) => a() - b()).map((fn) => fn());
+    },
+  };
+
+  const g = obj.gen();
+  expect(g.next().value).toBe(2);
+  expect(g.next().value).toBe(1);
+  expect(g.next().value).toBe(0);
+  expect(g.next()).toEqual({ value: [0, 1, 2], done: true });
+});
+
 test("comma-separated init bindings advance per iteration", () => {
   const g = factory.commaInit();
   expect(g.next().value).toEqual([0, 10]);

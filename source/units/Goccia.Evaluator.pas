@@ -1707,9 +1707,10 @@ var
   MatchContext, MatchBaseContext: TGocciaEvaluationContext;
   Continuation: TGocciaGeneratorContinuation;
   SavedIteratorValue, SavedCurrentValue, SavedNextMethod: TGocciaValue;
-  SavedIterScope: TGocciaScope;
+  SavedIterScope, SavedActiveScope: TGocciaScope;
   HasSavedLoopState: Boolean;
   HeadCompleted, HeadYielding: Boolean;
+  BodyYielding: Boolean;
   ShouldCloseIterator: Boolean;
 begin
   Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
@@ -1717,7 +1718,7 @@ begin
   Continuation := CurrentGeneratorContinuation;
   HasSavedLoopState := Assigned(Continuation) and
     Continuation.GetLoopState(AForOfStatement, SavedIteratorValue,
-      SavedCurrentValue, SavedNextMethod, SavedIterScope);
+      SavedCurrentValue, SavedNextMethod, SavedIterScope, SavedActiveScope);
   if HasSavedLoopState then
     Iterator := TGocciaIteratorValue(SavedIteratorValue)
   else
@@ -1771,7 +1772,12 @@ begin
       if Assigned(IterScope) then
       begin
         IterContext := AContext;
-        IterContext.Scope := IterScope;
+        if Assigned(SavedActiveScope) then
+          IterContext.Scope := SavedActiveScope
+        else
+          IterContext.Scope := IterScope;
+        MatchBaseContext := AContext;
+        MatchBaseContext.Scope := IterScope;
       end
       else
       begin
@@ -1792,7 +1798,8 @@ begin
             begin
               // var binding: define/update on function/module scope
               if AForOfStatement.BindingPattern <> nil then
-                AssignVariablePattern(AForOfStatement.BindingPattern, CurrentValue, AContext)
+                AssignPattern(AForOfStatement.BindingPattern, CurrentValue,
+                  IterContext)
               else
                 AContext.Scope.DefineVariableBinding(AForOfStatement.BindingName, CurrentValue, True);
             end
@@ -1818,7 +1825,7 @@ begin
             HeadCompleted := True;
             if Assigned(Continuation) then
               Continuation.SaveLoopState(AForOfStatement, Iterator, CurrentValue,
-                nil, IterScope);
+                nil, IterScope, IterContext.Scope);
           except
             on E: EGocciaGeneratorYield do
             begin
@@ -1843,13 +1850,17 @@ begin
       end;
 
       try
+        BodyYielding := False;
         try
           CF := EvaluateLoopBodyStatement(AForOfStatement.Body, IterContext);
           if Assigned(Continuation) then
             Continuation.ClearLoopState(AForOfStatement);
         except
           on E: EGocciaGeneratorYield do
+          begin
+            BodyYielding := True;
             raise;
+          end;
           else
           begin
             if Assigned(Continuation) then
@@ -1859,7 +1870,7 @@ begin
           end;
         end;
       finally
-        if Assigned(AForOfStatement.MatchPattern) and
+        if (not BodyYielding) and Assigned(AForOfStatement.MatchPattern) and
            (IterContext.Scope <> IterScope) then
           ReleaseMatchContext(IterContext, MatchBaseContext);
       end;
@@ -2172,7 +2183,7 @@ var
   MatchContext, MatchBaseContext: TGocciaEvaluationContext;
   Continuation: TGocciaGeneratorContinuation;
   SavedIteratorValue, SavedCurrentValue, SavedNextMethod: TGocciaValue;
-  SavedIterScope: TGocciaScope;
+  SavedIterScope, SavedActiveScope: TGocciaScope;
   HasSavedLoopState: Boolean;
   HeadCompleted, HeadYielding: Boolean;
   ShouldCloseIterator: Boolean;
@@ -2220,7 +2231,7 @@ begin
   Continuation := CurrentGeneratorContinuation;
   HasSavedLoopState := Assigned(Continuation) and
     Continuation.GetLoopState(AForAwaitOfStatement, SavedIteratorValue,
-      SavedCurrentValue, SavedNextMethod, SavedIterScope);
+      SavedCurrentValue, SavedNextMethod, SavedIterScope, SavedActiveScope);
   if not HasSavedLoopState then
     IterableValue := EvaluateExpression(AForAwaitOfStatement.Iterable, AContext)
   else
@@ -2324,7 +2335,8 @@ begin
               if AForAwaitOfStatement.IsVar then
               begin
                 if AForAwaitOfStatement.BindingPattern <> nil then
-                  AssignVariablePattern(AForAwaitOfStatement.BindingPattern, CurrentValue, AContext)
+                  AssignPattern(AForAwaitOfStatement.BindingPattern, CurrentValue,
+                    IterContext)
                 else
                   AContext.Scope.DefineVariableBinding(AForAwaitOfStatement.BindingName, CurrentValue, True);
               end
@@ -2467,7 +2479,8 @@ begin
             if AForAwaitOfStatement.IsVar then
             begin
               if AForAwaitOfStatement.BindingPattern <> nil then
-                AssignVariablePattern(AForAwaitOfStatement.BindingPattern, CurrentValue, AContext)
+                AssignPattern(AForAwaitOfStatement.BindingPattern, CurrentValue,
+                  IterContext)
               else
                 AContext.Scope.DefineVariableBinding(AForAwaitOfStatement.BindingName, CurrentValue, True);
             end

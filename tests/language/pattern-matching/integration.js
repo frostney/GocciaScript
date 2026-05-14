@@ -21,6 +21,24 @@ describe("pattern matching integrations", () => {
     expect(() => new Function("for (const item is _ items) {}")).toThrow();
   });
 
+  test("generator for-of resumes with pattern bindings after body yield", () => {
+    const obj = {
+      *values() {
+        const fns = [];
+        for (const item is { x: const x } of [{ x: 1 }, { y: 2 }, { x: 3 }]) {
+          yield x;
+          fns.push(() => x);
+        }
+        return fns.map((fn) => fn());
+      },
+    };
+
+    const iter = obj.values();
+    expect(iter.next()).toEqual({ value: 1, done: false });
+    expect(iter.next()).toEqual({ value: 3, done: false });
+    expect(iter.next()).toEqual({ value: [1, 3], done: true });
+  });
+
   test("for-await-of filters awaited iterations", () => {
     const fn = async () => {
       const seen = [];
