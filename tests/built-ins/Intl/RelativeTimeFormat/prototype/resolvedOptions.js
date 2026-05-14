@@ -3,9 +3,7 @@ description: Intl.RelativeTimeFormat.prototype.resolvedOptions
 features: [Intl]
 ---*/
 
-const isIntl = typeof Intl !== "undefined";
-
-describe.runIf(isIntl)("Intl.RelativeTimeFormat.prototype.resolvedOptions", () => {
+describe("Intl.RelativeTimeFormat.prototype.resolvedOptions", () => {
   test("default includes all spec-required fields", () => {
     const opts = new Intl.RelativeTimeFormat("en-US").resolvedOptions();
     expect(opts.locale).toBe("en-US");

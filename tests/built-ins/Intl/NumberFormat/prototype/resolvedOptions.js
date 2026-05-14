@@ -3,9 +3,7 @@ description: Intl.NumberFormat.prototype.resolvedOptions
 features: [Intl]
 ---*/
 
-const isIntl = typeof Intl !== "undefined";
-
-describe.runIf(isIntl)("Intl.NumberFormat.prototype.resolvedOptions", () => {
+describe("Intl.NumberFormat.prototype.resolvedOptions", () => {
   test("decimal style includes all spec-required fields", () => {
     const opts = new Intl.NumberFormat("en-US").resolvedOptions();
     expect(opts.locale).toBe("en-US");

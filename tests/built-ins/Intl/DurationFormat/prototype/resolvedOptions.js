@@ -3,9 +3,7 @@ description: Intl.DurationFormat.prototype.resolvedOptions
 features: [Intl]
 ---*/
 
-const isIntl = typeof Intl !== "undefined";
-
-describe.runIf(isIntl)("Intl.DurationFormat.prototype.resolvedOptions", () => {
+describe("Intl.DurationFormat.prototype.resolvedOptions", () => {
   test("default includes numberingSystem", () => {
     const opts = new Intl.DurationFormat("en-US").resolvedOptions();
     expect(opts.locale).toBe("en-US");

@@ -3,9 +3,7 @@ description: Intl.DateTimeFormat.prototype.resolvedOptions
 features: [Intl]
 ---*/
 
-const isIntl = typeof Intl !== "undefined";
-
-describe.runIf(isIntl)("Intl.DateTimeFormat.prototype.resolvedOptions", () => {
+describe("Intl.DateTimeFormat.prototype.resolvedOptions", () => {
   test("default includes calendar, numberingSystem, and timeZone", () => {
     const opts = new Intl.DateTimeFormat("en-US").resolvedOptions();
     expect(opts.locale).toBe("en-US");

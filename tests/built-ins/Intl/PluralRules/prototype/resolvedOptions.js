@@ -3,9 +3,7 @@ description: Intl.PluralRules.prototype.resolvedOptions
 features: [Intl]
 ---*/
 
-const isIntl = typeof Intl !== "undefined";
-
-describe.runIf(isIntl)("Intl.PluralRules.prototype.resolvedOptions", () => {
+describe("Intl.PluralRules.prototype.resolvedOptions", () => {
   test("default includes all spec-required fields", () => {
     const opts = new Intl.PluralRules("en-US").resolvedOptions();
     expect(opts.locale).toBe("en-US");
