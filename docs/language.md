@@ -725,6 +725,8 @@ Strict equality requires matching types, eliminating this entire class of bugs.
 
 GocciaScript creates an unmapped `arguments` object: indexed entries and `length` reflect the call's argument list, but parameter variables and `arguments[index]` do not alias each other. The object is array-like, not an Array. Prefer rest parameters (`...args`) for new code when a real array is desired.
 
+`arguments` is an ordinary identifier, not a reserved keyword. Parameters or body-level lexical declarations named `arguments` shadow the implicit object, and generator functions/methods receive the same unmapped object as ordinary functions/methods.
+
 ### Automatic Semicolon Insertion
 
 **Opt-in.** Semicolons are required by default.
@@ -799,6 +801,8 @@ items.reduce((acc, item) => acc + item, 0);
 ### `with` Statement
 
 **Supported for ECMAScript compatibility.** `with (object) statement` evaluates the object expression, converts it with `ToObject`, and resolves unqualified identifiers through that object before falling back to outer lexical scopes. `Symbol.unscopables` is honored.
+
+Calls to functions resolved through the object environment use that object as `this`, and closures created inside the body retain the object environment.
 
 `with` creates ambiguous scope and is deprecated in JavaScript's strict mode, so new GocciaScript code should prefer explicit property access. The keyword is reserved (it cannot be used as a variable name), but it can be used as a property name (for example, `obj.with`).
 
