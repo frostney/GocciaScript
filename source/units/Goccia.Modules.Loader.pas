@@ -36,6 +36,7 @@ type
     FFunctionEnabled: Boolean;
     FTraditionalForLoopsEnabled: Boolean;
     FLooseEqualityEnabled: Boolean;
+    FNonStrictModeEnabled: Boolean;
     FStrictTypesEnabled: Boolean;
     FContentProvider: TGocciaModuleContentProvider;
     FEvaluateModuleBody: TGocciaModuleBodyEvaluator;
@@ -83,6 +84,8 @@ type
       read FTraditionalForLoopsEnabled write FTraditionalForLoopsEnabled;
     property LooseEqualityEnabled: Boolean
       read FLooseEqualityEnabled write FLooseEqualityEnabled;
+    property NonStrictModeEnabled: Boolean
+      read FNonStrictModeEnabled write FNonStrictModeEnabled;
     property StrictTypesEnabled: Boolean read FStrictTypesEnabled
       write FStrictTypesEnabled;
     property Resolver: TGocciaModuleResolver read FResolver;
@@ -295,6 +298,7 @@ begin
           Parser.FunctionDeclarationsEnabled := FFunctionEnabled;
           Parser.TraditionalForLoopsEnabled := FTraditionalForLoopsEnabled;
           Parser.LooseEqualityEnabled := FLooseEqualityEnabled;
+          Parser.NonStrictModeEnabled := FNonStrictModeEnabled;
           try
             ProgramNode := Parser.Parse;
             try
@@ -310,12 +314,14 @@ begin
                 // Environment Record's [[ThisValue]] is undefined.
                 ModuleScope.ThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
                 ModuleScope.StrictTypes := FStrictTypesEnabled;
+                ModuleScope.NonStrictMode := FNonStrictModeEnabled;
                 Context.Scope := ModuleScope;
                 Context.OnError := FOnError;
                 Context.LoadModule := LoadModule;
                 Context.CurrentFilePath := ResolvedPath;
                 Context.CoverageEnabled := False;
                 Context.StrictTypes := FStrictTypesEnabled;
+                Context.NonStrictMode := FNonStrictModeEnabled;
                 Context.DisposalTracker := nil;
 
                 FEvaluateModuleBody(ProgramNode, Context);

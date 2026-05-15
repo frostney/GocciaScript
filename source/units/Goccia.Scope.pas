@@ -36,6 +36,7 @@ type
     FOnError: TGocciaThrowErrorCallback;
     FLoadModule: TLoadModuleCallback;
     FStrictTypes: Boolean;
+    FNonStrictMode: Boolean;
   protected
     function GetThisValue: TGocciaValue; virtual;
     function GetOwningClass: TGocciaValue; virtual;
@@ -97,6 +98,7 @@ type
       creation, but it is only the root's value that the engine setter
       keeps in sync. }
     function EffectiveStrictTypes: Boolean;
+    function EffectiveNonStrictMode: Boolean;
 
     property Parent: TGocciaScope read FParent;
     property ThisValue: TGocciaValue read FThisValue write FThisValue;
@@ -109,6 +111,7 @@ type
       surrounding lexical scope.  For live engine state use
       EffectiveStrictTypes, which always reads the root scope. }
     property StrictTypes: Boolean read FStrictTypes write FStrictTypes;
+    property NonStrictMode: Boolean read FNonStrictMode write FNonStrictMode;
   end;
 
   // Root scope with no parent -- used by the interpreter/engine
@@ -228,6 +231,7 @@ begin
     FOnError := AParent.FOnError;
     FLoadModule := AParent.FLoadModule;
     FStrictTypes := AParent.FStrictTypes;
+    FNonStrictMode := AParent.FNonStrictMode;
   end;
 
   if Assigned(TGarbageCollector.Instance) then
@@ -300,6 +304,16 @@ begin
   while Assigned(Root.FParent) do
     Root := Root.FParent;
   Result := Root.FStrictTypes;
+end;
+
+function TGocciaScope.EffectiveNonStrictMode: Boolean;
+var
+  Root: TGocciaScope;
+begin
+  Root := Self;
+  while Assigned(Root.FParent) do
+    Root := Root.FParent;
+  Result := Root.FNonStrictMode;
 end;
 
 function TGocciaScope.FindOwningClass: TGocciaValue;

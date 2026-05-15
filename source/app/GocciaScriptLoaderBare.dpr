@@ -39,6 +39,7 @@ type
     CompatFunction: Boolean;
     CompatTraditionalFor: Boolean;
     CompatLooseEquality: Boolean;
+    CompatNonStrictMode: Boolean;
     StrictTypes: Boolean;
     UnsafeFunctionConstructor: Boolean;
     Print: Boolean;
@@ -81,6 +82,7 @@ begin
   WriteLn('  --compat-function             Enable function declarations/expressions');
   WriteLn('  --compat-traditional-for-loop Enable traditional C-style for(;;) loops');
   WriteLn('  --compat-loose-equality       Enable loose equality (== and !=)');
+  WriteLn('  --compat-non-strict-mode      Enable non-strict-mode compatibility');
   WriteLn('  --strict-types                Enforce type annotations at runtime');
   WriteLn('  --mode=interpreted|bytecode   Execution mode (default: interpreted)');
   WriteLn('  --source-type=script|module   Load entry as a script or module');
@@ -156,6 +158,7 @@ begin
   Result.CompatFunction := False;
   Result.CompatTraditionalFor := False;
   Result.CompatLooseEquality := False;
+  Result.CompatNonStrictMode := False;
   Result.StrictTypes := False;
   Result.UnsafeFunctionConstructor := False;
   Result.Print := False;
@@ -184,6 +187,8 @@ begin
       Result.CompatTraditionalFor := True
     else if Arg = '--compat-loose-equality' then
       Result.CompatLooseEquality := True
+    else if Arg = '--compat-non-strict-mode' then
+      Result.CompatNonStrictMode := True
     else if Arg = '--strict-types' then
       Result.StrictTypes := True
     else if Arg = '--unsafe-function-constructor' then
@@ -226,6 +231,7 @@ begin
   AEngine.FunctionEnabled := AOptions.CompatFunction;
   AEngine.TraditionalForLoopsEnabled := AOptions.CompatTraditionalFor;
   AEngine.LooseEqualityEnabled := AOptions.CompatLooseEquality;
+  AEngine.NonStrictModeEnabled := AOptions.CompatNonStrictMode;
   AEngine.StrictTypes := AOptions.StrictTypes;
   AEngine.SourceType := AOptions.SourceType;
   AEngine.FunctionConstructor.Enabled := AOptions.UnsafeFunctionConstructor;

@@ -208,14 +208,14 @@ moves.
   instead of stock's `thrown.constructor !== ctor` because caught
   Errors have `e.constructor === undefined` in Goccia.
 - `propertyHelper.js`, `deepEqual.js`, `temporalHelpers.js`,
-  `wellKnownIntrinsicObjects.js`: stock helpers were originally adapted
-  while `arguments` was unsupported; now that `arguments` exists, these
-  entries should be re-evaluated against the stock helpers during the
-  next harness cleanup.
+  `wellKnownIntrinsicObjects.js`: stock helpers use `arguments`; the
+  runner now enables `--compat-non-strict-mode`, so these entries should
+  be re-evaluated against the stock helpers during the next harness
+  cleanup.
 - `testTypedArray.js`: stock uses `for (var i = 0; ...)` and
-  `with (...)` blocks; reimplemented with for-of and explicit property
-  access. The remaining reason to keep it bundled is the stock
-  traditional loop shape, not `with`.
+  `with (...)` blocks; the runner now enables `--compat-non-strict-mode`,
+  so the remaining reason to keep it bundled is the stock traditional
+  loop shape, not `with`.
 - `compareIterator.js`, `decimalToHexString.js`,
   `nativeFunctionMatcher.js`, `regExpUtils.js`: stock uses traditional
   `for` or `while` loops whose bodies Goccia's parser drops;

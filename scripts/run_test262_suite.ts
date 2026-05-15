@@ -170,12 +170,12 @@ function toStringArray(value: unknown): string[] {
 // Harness loading
 // ---------------------------------------------------------------------------
 
-// Stock test262 harness JS depends on language features GocciaScript
-// intentionally excludes (`arguments`, `with`, traditional
-// `for (var i = 0; ...)` and `while` loops — Goccia's parser warns and
-// then silently drops these constructs).  Loading affected stock files
-// produces silently-broken helpers — `propertyHelper.verifyProperty` etc.
-// throw `ReferenceError: arguments is not defined`, `decimalToHexString`
+// Stock test262 harness JS depends on language features GocciaScript either
+// gates behind compatibility flags (`arguments`, `with`, traditional
+// `for (var i = 0; ...)`) or intentionally excludes (`while` loops, whose
+// bodies the parser warns and drops).  Loading affected stock files without
+// the right handling produces silently-broken helpers — `propertyHelper`
+// verification never reaches the actual assertion, `decimalToHexString`
 // returns wrong values because its loop body never runs, and so on.
 // Tests that include those files then fail with harness-environment
 // errors, not engine surface differences.
@@ -196,8 +196,8 @@ const BUNDLED_INCLUDES: Record<string, string> = {
   // the methods they expect.  No stock equivalent — this is host-provided.
   "$262.js": "$262.js",
   // Subsumes stock sta.js + assert.js + compareArray.js.  Stock assert.js
-  // uses `arguments` in `assert.compareArray` and a `for (var i = 0; ...)`
-  // loop body that Goccia's parser drops.
+  // uses `arguments` in `assert.compareArray` and traditional loop shapes
+  // that still differ from the bundled helper style.
   "assert.js": "assert.js",
   "sta.js": "assert.js",
   "compareArray.js": "assert.js",
@@ -664,7 +664,8 @@ interface PerTestRecord {
 
 // test262 source is overwhelmingly semicolon-omitted; ASI is required to parse
 // the corpus.  --compat-var, --compat-function, --compat-traditional-for-loop,
-// --compat-loose-equality, and --unsafe-function-constructor are also
+// --compat-loose-equality, --compat-non-strict-mode, and
+// --unsafe-function-constructor are also
 // unconditional: stock harness uses `var`, `function`, traditional `for(;;)`
 // loops, loose equality, and `Function("return this;")()`.
 const TEST262_BARE_FLAGS: readonly string[] = [
@@ -673,6 +674,7 @@ const TEST262_BARE_FLAGS: readonly string[] = [
   "--compat-function",
   "--compat-traditional-for-loop",
   "--compat-loose-equality",
+  "--compat-non-strict-mode",
   "--unsafe-function-constructor",
 ];
 

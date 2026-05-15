@@ -89,8 +89,8 @@ procedure CompileYield(const ACtx: TGocciaCompilationContext;
 
 procedure EmitDefaultParameters(const ACtx: TGocciaCompilationContext;
   const AParams: TGocciaParameterArray);
-function DeclareArgumentsObjectLocal(const AScope: TGocciaCompilerScope;
-  const AParams: TGocciaParameterArray): Integer;
+function DeclareArgumentsObjectLocal(const ACtx: TGocciaCompilationContext;
+  const AScope: TGocciaCompilerScope; const AParams: TGocciaParameterArray): Integer;
 procedure EmitCreateArgumentsObject(const ACtx: TGocciaCompilationContext;
   const AArgumentsSlot: Integer);
 procedure CollectDestructuringBindings(const APattern: TGocciaDestructuringPattern;
@@ -1019,9 +1019,12 @@ begin
     GOCCIA_NULLISH_MATCH_UNDEFINED);
 end;
 
-function DeclareArgumentsObjectLocal(const AScope: TGocciaCompilerScope;
-  const AParams: TGocciaParameterArray): Integer;
+function DeclareArgumentsObjectLocal(const ACtx: TGocciaCompilationContext;
+  const AScope: TGocciaCompilerScope; const AParams: TGocciaParameterArray): Integer;
 begin
+  if not ACtx.NonStrictMode then
+    Exit(-1);
+
   if ParameterListBindsName(AParams, IDENTIFIER_ARGUMENTS) then
     Exit(-1);
 
@@ -2240,7 +2243,7 @@ begin
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
   ChildTemplate.ParameterCount := 0;
   SetLength(EmptyParams, 0);
-  ArgumentsSlot := DeclareArgumentsObjectLocal(ChildScope, EmptyParams);
+  ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, EmptyParams);
 
   ACtx.SwapState(ChildTemplate, ChildScope);
   try
@@ -2302,7 +2305,7 @@ begin
   ChildTemplate.ParameterCount := 1;
   SetLength(SetterParams, 1);
   SetterParams[0].Name := ASetter.Parameter;
-  ArgumentsSlot := DeclareArgumentsObjectLocal(ChildScope, SetterParams);
+  ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, SetterParams);
 
   ACtx.SwapState(ChildTemplate, ChildScope);
   try
@@ -2735,7 +2738,7 @@ begin
     if AExpr.Parameters[I].IsPattern and Assigned(AExpr.Parameters[I].Pattern) then
       CollectDestructuringBindings(AExpr.Parameters[I].Pattern, ChildScope);
 
-  ArgumentsSlot := DeclareArgumentsObjectLocal(ChildScope, AExpr.Parameters);
+  ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, AExpr.Parameters);
 
   ApplyParameterTypeAnnotations(ChildScope, ChildTemplate, AExpr.Parameters,
     ACtx.StrictTypes);

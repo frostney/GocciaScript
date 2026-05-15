@@ -72,6 +72,7 @@ type
     FFunctionDeclarationsEnabled: Boolean;
     FTraditionalForLoopsEnabled: Boolean;
     FLooseEqualityEnabled: Boolean;
+    FNonStrictModeEnabled: Boolean;
 
     procedure AddWarning(const AMessage, ASuggestion: string; const ALine, AColumn: Integer);
     procedure PushPrivateClassContext;
@@ -235,6 +236,8 @@ type
       read FTraditionalForLoopsEnabled write FTraditionalForLoopsEnabled;
     property LooseEqualityEnabled: Boolean
       read FLooseEqualityEnabled write FLooseEqualityEnabled;
+    property NonStrictModeEnabled: Boolean
+      read FNonStrictModeEnabled write FNonStrictModeEnabled;
     property WarningCount: Integer read FWarningCount;
   end;
 
@@ -1480,7 +1483,8 @@ function ParseInterpolationExpression(const AExprText, AFileName: string;
   const AASI: Boolean = False; const AVarEnabled: Boolean = False;
   const AFunctionEnabled: Boolean = False;
   const ATraditionalForLoopsEnabled: Boolean = False;
-  const ALooseEqualityEnabled: Boolean = False): TGocciaExpression;
+  const ALooseEqualityEnabled: Boolean = False;
+  const ANonStrictModeEnabled: Boolean = False): TGocciaExpression;
 var
   Lexer: TGocciaLexer;
   Parser: TGocciaParser;
@@ -1504,6 +1508,7 @@ begin
       Parser.FunctionDeclarationsEnabled := AFunctionEnabled;
       Parser.TraditionalForLoopsEnabled := ATraditionalForLoopsEnabled;
       Parser.LooseEqualityEnabled := ALooseEqualityEnabled;
+      Parser.NonStrictModeEnabled := ANonStrictModeEnabled;
       try
         ProgramNode := Parser.ParseUnchecked;
         try
@@ -1569,7 +1574,7 @@ begin
     ParsedExpr := ParseInterpolationExpression(ExprTexts[I], FFileName,
       FAutomaticSemicolonInsertion, FVarDeclarationsEnabled,
       FFunctionDeclarationsEnabled, FTraditionalForLoopsEnabled,
-      FLooseEqualityEnabled);
+      FLooseEqualityEnabled, FNonStrictModeEnabled);
     if Assigned(ParsedExpr) then
       Expressions.Add(ParsedExpr);
   end;
@@ -1632,7 +1637,7 @@ begin
     ParsedExpr := ParseInterpolationExpression(ExprTexts[I], FFileName,
       FAutomaticSemicolonInsertion, FVarDeclarationsEnabled,
       FFunctionDeclarationsEnabled, FTraditionalForLoopsEnabled,
-      FLooseEqualityEnabled);
+      FLooseEqualityEnabled, FNonStrictModeEnabled);
     if Assigned(ParsedExpr) then
       Parts.Add(ParsedExpr);
   end;
@@ -4255,6 +4260,17 @@ var
 begin
   Line := Previous.Line;
   Column := Previous.Column;
+
+  if not FNonStrictModeEnabled then
+  begin
+    AddWarning('''with'' statements require --compat-non-strict-mode',
+      'Use explicit property access, or enable --compat-non-strict-mode',
+      Line, Column);
+    SkipBalancedParens;
+    SkipStatementOrBlock;
+    Result := TGocciaEmptyStatement.Create(Line, Column);
+    Exit;
+  end;
 
   Consume(gttLeftParen, 'Expected ''('' after ''with''',
     SSuggestCloseParenExpression);

@@ -3145,7 +3145,7 @@ begin
     end;
     ChildScope.DeclareLocal(AMethod.Parameters[I].Name, False);
   end;
-  ArgumentsSlot := DeclareArgumentsObjectLocal(ChildScope, AMethod.Parameters);
+  ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, AMethod.Parameters);
   if FormalCount < 0 then
     FormalCount := Length(AMethod.Parameters);
   ChildTemplate.FormalParameterCount := UInt8(FormalCount);
@@ -3219,7 +3219,7 @@ begin
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
   SetLength(EmptyParams, 0);
-  ArgumentsSlot := DeclareArgumentsObjectLocal(ChildScope, EmptyParams);
+  ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, EmptyParams);
 
   ACtx.SwapState(ChildTemplate, ChildScope);
   ChildCtx := ACtx;
@@ -3286,7 +3286,7 @@ begin
   ChildScope.DeclareLocal(ASetter.Parameter, False);
   SetLength(SetterParams, 1);
   SetterParams[0].Name := ASetter.Parameter;
-  ArgumentsSlot := DeclareArgumentsObjectLocal(ChildScope, SetterParams);
+  ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, SetterParams);
 
   ACtx.SwapState(ChildTemplate, ChildScope);
   ChildCtx := ACtx;
@@ -3349,7 +3349,7 @@ begin
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
   SetLength(EmptyParams, 0);
-  ArgumentsSlot := DeclareArgumentsObjectLocal(ChildScope, EmptyParams);
+  ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, EmptyParams);
 
   ACtx.SwapState(ChildTemplate, ChildScope);
   ChildCtx := ACtx;
@@ -3411,7 +3411,7 @@ begin
   ChildScope.DeclareLocal(ASetter.Parameter, False);
   SetLength(SetterParams, 1);
   SetterParams[0].Name := ASetter.Parameter;
-  ArgumentsSlot := DeclareArgumentsObjectLocal(ChildScope, SetterParams);
+  ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, SetterParams);
 
   ACtx.SwapState(ChildTemplate, ChildScope);
   ChildCtx := ACtx;
@@ -3488,7 +3488,7 @@ begin
     end;
     ChildScope.DeclareLocal(AMethod.Parameters[I].Name, False);
   end;
-  ArgumentsSlot := DeclareArgumentsObjectLocal(ChildScope, AMethod.Parameters);
+  ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, AMethod.Parameters);
   if FormalCount < 0 then
     FormalCount := Length(AMethod.Parameters);
   ChildTemplate.FormalParameterCount := UInt8(FormalCount);

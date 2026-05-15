@@ -89,7 +89,7 @@ Current instruction families:
 - object and array operations
 - class construction and member definition
 - calls, construction, iteration, globals, and string coercion
-- compatibility scope helpers: `arguments` object creation and `with` object binding probes
+- opt-in compatibility scope helpers: `arguments` object creation and `with` object binding probes
 - semantic-only imports/exports, dynamic import, import.meta, await, and yield
 
 Some opcode families intentionally use flags or mode operands instead of one opcode per syntax form. For example:
@@ -197,8 +197,8 @@ This keeps the emitted bytecode compact and makes opcode additions deliberate in
 
 Compatibility features that alter identifier lookup still compile to explicit VM state instead of falling back to interpreter behavior.
 
-- **`arguments` object** — Function templates snapshot the current call arguments in the frame. `OP_CREATE_ARGUMENTS` materializes an unmapped arguments object into the declared local slot before parameter defaults and body execution, so default initializers can observe `arguments.length` and generators see the original call list after suspension/resume.
-- **`with` statement** — The compiler lowers `with (expr) body` to `OP_TO_OBJECT`, stores the object in a hidden local, and records that hidden binding in the compiler scope. Identifier reads, writes, updates, and identifier calls inside the dynamic extent emit `OP_HAS_WITH_BINDING` probes from innermost to outermost hidden object before falling back to normal local/upvalue/global resolution. Nested functions inherit the hidden binding as an upvalue when captured, preserving closures created inside `with`.
+- **`arguments` object** — With `--compat-non-strict-mode` enabled, function templates snapshot the current call arguments in the frame. `OP_CREATE_ARGUMENTS` materializes an unmapped arguments object into the declared local slot before parameter defaults and body execution, so default initializers can observe `arguments.length` and generators see the original call list after suspension/resume.
+- **`with` statement** — With `--compat-non-strict-mode` enabled, the compiler lowers `with (expr) body` to `OP_TO_OBJECT`, stores the object in a hidden local, and records that hidden binding in the compiler scope. Identifier reads, writes, updates, and identifier calls inside the dynamic extent emit `OP_HAS_WITH_BINDING` probes from innermost to outermost hidden object before falling back to normal local/upvalue/global resolution. Nested functions inherit the hidden binding as an upvalue when captured, preserving closures created inside `with`.
 
 ### Compiler Optimizer
 

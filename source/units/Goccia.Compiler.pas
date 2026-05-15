@@ -25,6 +25,7 @@ type
     FFormalParameterCounts: TFormalParameterCountMap;
     FGlobalBackedTopLevel: Boolean;
     FStrictTypes: Boolean;
+    FNonStrictMode: Boolean;
     FOptimizationOptions: TGocciaCompilerOptimizationOptions;
     procedure DoCompileExpression(const AExpr: TGocciaExpression;
       const ADest: UInt8);
@@ -43,6 +44,7 @@ type
     property GlobalBackedTopLevel: Boolean read FGlobalBackedTopLevel
       write FGlobalBackedTopLevel;
     property StrictTypes: Boolean read FStrictTypes write FStrictTypes;
+    property NonStrictMode: Boolean read FNonStrictMode write FNonStrictMode;
     property OptimizationOptions: TGocciaCompilerOptimizationOptions
       read FOptimizationOptions write FOptimizationOptions;
   end;
@@ -92,6 +94,7 @@ begin
   Result.GlobalBackedTopLevel := FGlobalBackedTopLevel and
     (FCurrentTemplate = FTopLevelTemplate);
   Result.StrictTypes := FStrictTypes;
+  Result.NonStrictMode := FNonStrictMode;
   Result.OptimizationOptions := FOptimizationOptions;
   Result.CompileExpression := DoCompileExpression;
   Result.CompileStatement := DoCompileStatement;

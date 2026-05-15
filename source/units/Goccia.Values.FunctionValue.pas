@@ -189,6 +189,7 @@ begin
   Context.CoverageEnabled := Assigned(TGocciaCoverageTracker.Instance)
     and TGocciaCoverageTracker.Instance.Enabled;
   Context.StrictTypes := FClosure.EffectiveStrictTypes;
+  Context.NonStrictMode := FClosure.EffectiveNonStrictMode;
   Context.DisposalTracker := nil;
 
   // Record coverage hit on the declaration line (get/set/constructor/method)
@@ -199,7 +200,7 @@ begin
   BindThis(ACallScope, AThisValue);
   Context.Scope := ACallScope;
 
-  if CreatesArgumentsObject and
+  if Context.NonStrictMode and CreatesArgumentsObject and
      not ParameterListBindsName(FParameters, IDENTIFIER_ARGUMENTS) and
      not ACallScope.ContainsOwnLexicalBinding(IDENTIFIER_ARGUMENTS) then
     ACallScope.DefineVariableBinding(IDENTIFIER_ARGUMENTS,

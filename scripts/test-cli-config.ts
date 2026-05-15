@@ -4,7 +4,7 @@
  *
  * Config file loading and per-file config: goccia.json, goccia.toml,
  * goccia.json5, priority, discovery, timeout, stack-size, imports, extends,
- * TestRunner integration, per-file ASI/compat-var, multi-directory, CLI override.
+ * TestRunner integration, per-file compat flags, multi-directory, CLI override.
  */
 
 import { $ } from "bun";
@@ -680,6 +680,91 @@ console.log("Per-file compat-loose-equality config across all apps...");
     );
     if (benchBc.exitCode !== 0) throw new Error(`BenchmarkRunner bytecode compat-loose-equality exited ${benchBc.exitCode}: ${benchBc.stderr.toString()}`);
     if (!benchBc.stdout.toString().includes("loose")) throw new Error("BenchmarkRunner bytecode compat-loose-equality should mention 'loose'");
+  } finally {
+    clean(tmp);
+  }
+}
+
+// -- Per-file compat-non-strict-mode config across all apps --------------------
+
+console.log("Per-file compat-non-strict-mode config across all apps...");
+{
+  const tmp = makeTmp();
+  try {
+    writeFileSync(
+      join(tmp, "goccia.json"),
+      '{"compat-function": true, "compat-non-strict-mode": true}\n',
+    );
+    const nonStrictSource = [
+      "function f(a) {",
+      "  with ({ extra: 5 }) {",
+      "    return arguments.length + extra;",
+      "  }",
+      "}",
+      "f(1, 2);",
+    ].join("\n") + "\n";
+    writeFileSync(join(tmp, "test.js"), nonStrictSource);
+    writeFileSync(
+      join(tmp, "test-runner.js"),
+      nonStrictSource + 'test("nonstrict", () => { expect(f(1, 2)).toBe(7); });\n',
+    );
+    writeFileSync(
+      join(tmp, "bench.js"),
+      [
+        nonStrictSource,
+        'suite("nonstrict", () => {',
+        '  bench("call", {',
+        "    run: () => f(1, 2),",
+        "  });",
+        "});",
+      ].join("\n") + "\n",
+    );
+
+    // Loader (interpreted)
+    const loaderOut = await $`${LOADER} --print ${join(tmp, "test.js")} 2>&1`.text();
+    if (!containsLine(loaderOut, "7")) throw new Error(`Loader interp compat-non-strict-mode should produce 7 on its own line, got: ${loaderOut}`);
+
+    // Loader (bytecode)
+    const loaderBc = await $`${LOADER} --print ${join(tmp, "test.js")} --mode=bytecode 2>&1`.text();
+    if (!containsLine(loaderBc, "7")) throw new Error(`Loader bytecode compat-non-strict-mode should produce 7 on its own line, got: ${loaderBc}`);
+
+    // TestRunner (interpreted)
+    const trInterp = await $`${TESTRUNNER} ${join(tmp, "test-runner.js")} --no-progress 2>&1`.text();
+    if (!trInterp.includes("Passed: 1")) throw new Error(`TestRunner interp compat-non-strict-mode should pass, got: ${trInterp}`);
+
+    // TestRunner (bytecode)
+    const trBc = await $`${TESTRUNNER} ${join(tmp, "test-runner.js")} --mode=bytecode --no-progress 2>&1`.text();
+    if (!trBc.includes("Passed: 1")) throw new Error(`TestRunner bytecode compat-non-strict-mode should pass, got: ${trBc}`);
+
+    // Bundler
+    await $`${BUNDLER} ${join(tmp, "test.js")}`.quiet();
+    if (!existsSync(join(tmp, "test.gbc"))) throw new Error("Bundler compat-non-strict-mode should compile");
+
+    // BenchmarkRunner (interpreted)
+    const benchInterp = Bun.spawnSync(
+      [resolve(BENCHRUNNER), join(tmp, "bench.js"), "--no-progress"],
+      {
+        stdout: "pipe",
+        stderr: "pipe",
+        env: { ...process.env, GOCCIA_BENCH_CALIBRATION_MS: "50", GOCCIA_BENCH_ROUNDS: "3" } as Record<string, string>,
+        timeout: 60_000,
+      },
+    );
+    if (benchInterp.exitCode !== 0) throw new Error(`BenchmarkRunner interp compat-non-strict-mode exited ${benchInterp.exitCode}: ${benchInterp.stderr.toString()}`);
+    if (!benchInterp.stdout.toString().includes("nonstrict")) throw new Error("BenchmarkRunner interp compat-non-strict-mode should mention 'nonstrict'");
+
+    // BenchmarkRunner (bytecode)
+    const benchBc = Bun.spawnSync(
+      [resolve(BENCHRUNNER), join(tmp, "bench.js"), "--mode=bytecode", "--no-progress"],
+      {
+        stdout: "pipe",
+        stderr: "pipe",
+        env: { ...process.env, GOCCIA_BENCH_CALIBRATION_MS: "50", GOCCIA_BENCH_ROUNDS: "3" } as Record<string, string>,
+        timeout: 60_000,
+      },
+    );
+    if (benchBc.exitCode !== 0) throw new Error(`BenchmarkRunner bytecode compat-non-strict-mode exited ${benchBc.exitCode}: ${benchBc.stderr.toString()}`);
+    if (!benchBc.stdout.toString().includes("nonstrict")) throw new Error("BenchmarkRunner bytecode compat-non-strict-mode should mention 'nonstrict'");
   } finally {
     clean(tmp);
   }

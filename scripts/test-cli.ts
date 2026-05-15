@@ -3,8 +3,9 @@
  * test-cli.ts
  *
  * Common CLI flags tested across all apps: stdin smoke, --help, --unsafe-ffi,
- * --asi, --compat-var, --compat-loose-equality, --mode, --timeout,
- * --max-instructions, --max-memory, --stack-size, --log, example scripts.
+ * --asi, --compat-var, --compat-loose-equality, --compat-non-strict-mode,
+ * --mode, --timeout, --max-instructions, --max-memory, --stack-size, --log,
+ * example scripts.
  */
 
 import { $ } from "bun";
@@ -222,6 +223,60 @@ console.log("--compat-function (Loader) + Bare loader compat parsing...");
 
     const bareLoose = await $`${BARE} --print ${looseSrc} --compat-loose-equality 2>&1`.text();
     if (bareLoose.trim() !== "true") throw new Error(`Bare --compat-loose-equality expected true, got: ${bareLoose}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+// -- --compat-non-strict-mode (Loader + Bundler + TestRunner + Bare) -----------
+
+console.log("--compat-non-strict-mode (Loader + Bundler + TestRunner + Bare)...");
+{
+  const tmp = mkdtemp("goccia-nonstrict-");
+  try {
+    const src = join(tmp, "use-nonstrict.js");
+    writeFileSync(
+      src,
+      [
+        "function f(a) {",
+        "  with ({ extra: 5 }) {",
+        "    return arguments.length + extra;",
+        "  }",
+        "}",
+        "f(1, 2);",
+      ].join("\n") + "\n",
+    );
+
+    const loaderOut = await $`${LOADER} --print ${src} --compat-function --compat-non-strict-mode 2>&1`.text();
+    if (!containsLine(loaderOut, "7")) throw new Error(`Loader --compat-non-strict-mode expected 7, got: ${loaderOut}`);
+
+    const loaderBcOut = await $`${LOADER} --print ${src} --mode=bytecode --compat-function --compat-non-strict-mode 2>&1`.text();
+    if (!containsLine(loaderBcOut, "7")) throw new Error(`Loader bytecode --compat-non-strict-mode expected 7, got: ${loaderBcOut}`);
+
+    const outPath = join(tmp, "use-nonstrict.gbc");
+    await $`${BUNDLER} ${src} --output=${outPath} --compat-function --compat-non-strict-mode`.quiet();
+    if (!existsSync(outPath)) throw new Error("Bundler --compat-non-strict-mode should compile");
+
+    const testSrc = join(tmp, "test-nonstrict.js");
+    writeFileSync(
+      testSrc,
+      [
+        "function f(a) {",
+        "  with ({ extra: 5 }) {",
+        "    return arguments.length + extra;",
+        "  }",
+        "}",
+        'test("non-strict mode compat", () => { expect(f(1, 2)).toBe(7); });',
+      ].join("\n") + "\n",
+    );
+    const trOut = await $`${TESTRUNNER} ${testSrc} --no-progress --compat-function --compat-non-strict-mode 2>&1`.text();
+    if (!trOut.includes("Passed: 1")) throw new Error(`TestRunner --compat-non-strict-mode expected Passed: 1, got: ${trOut}`);
+
+    const bareOut = await $`${BARE} --print ${src} --compat-function --compat-non-strict-mode 2>&1`.text();
+    if (bareOut.trim() !== "7") throw new Error(`Bare --compat-non-strict-mode expected 7, got: ${bareOut}`);
+
+    const bundleNoFlag = await $`${BUNDLER} ${src} --compat-function --output=${join(tmp, "no-flag.gbc")} 2>&1`.nothrow();
+    if (bundleNoFlag.exitCode !== 0) throw new Error(`Bundler without --compat-non-strict-mode should skip unsupported with and still compile, got: ${bundleNoFlag.stderr.toString()}`);
   } finally {
     clean(tmp);
   }

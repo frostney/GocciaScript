@@ -524,9 +524,10 @@ begin
   // observe TGocciaEngine.SetStrictTypes updates made after the
   // generator's closure scope was created.
   Context.StrictTypes := FClosure.EffectiveStrictTypes;
+  Context.NonStrictMode := FClosure.EffectiveNonStrictMode;
   Context.DisposalTracker := nil;
 
-  if CreatesArgumentsObject and
+  if Context.NonStrictMode and CreatesArgumentsObject and
      not ParameterListBindsName(FParameters, IDENTIFIER_ARGUMENTS) and
      not CallScope.ContainsOwnLexicalBinding(IDENTIFIER_ARGUMENTS) then
     CallScope.DefineVariableBinding(IDENTIFIER_ARGUMENTS,
@@ -669,9 +670,10 @@ begin
   Context.CoverageEnabled := False;
   // EffectiveStrictTypes — see CreateContinuation above.
   Context.StrictTypes := FClosure.EffectiveStrictTypes;
+  Context.NonStrictMode := FClosure.EffectiveNonStrictMode;
   Context.DisposalTracker := nil;
 
-  if CreatesArgumentsObject and
+  if Context.NonStrictMode and CreatesArgumentsObject and
      not ParameterListBindsName(FParameters, IDENTIFIER_ARGUMENTS) and
      not CallScope.ContainsOwnLexicalBinding(IDENTIFIER_ARGUMENTS) then
     CallScope.DefineVariableBinding(IDENTIFIER_ARGUMENTS,
