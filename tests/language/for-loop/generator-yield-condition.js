@@ -41,3 +41,20 @@ test("body side effects accumulate across condition-yield resumes", () => {
   expect(g.next().value).toBe(3);
   expect(g.next()).toEqual({ value: [0, 1, 2], done: true });
 });
+
+test("closure captured before yield in condition pins active iteration binding", () => {
+  const obj = {
+    *gen() {
+      let snap;
+      for (let i = 0; (snap = () => i, yield "condition", i < 1); i++) {
+        yield snap();
+      }
+    },
+  };
+
+  const g = obj.gen();
+  expect(g.next().value).toBe("condition");
+  expect(g.next().value).toBe(0);
+  expect(g.next().value).toBe("condition");
+  expect(g.next().done).toBe(true);
+});

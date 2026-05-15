@@ -358,6 +358,59 @@ describe("for-await-of", () => {
     expect(chars).toEqual(["a", "b", "c"]);
   });
 
+  test("async generator for-await-of async iterator resumes with pattern bindings after body yield", async () => {
+    const asyncIterable = {
+      [Symbol.asyncIterator]() {
+        const values = [{ x: 1 }, { y: 2 }, { x: 3 }];
+        let i = 0;
+        return {
+          next() {
+            if (i < values.length) {
+              const value = values[i];
+              i = i + 1;
+              return Promise.resolve({ value, done: false });
+            }
+            return Promise.resolve({ value: undefined, done: true });
+          }
+        };
+      }
+    };
+
+    const obj = {
+      async *values() {
+        const fns = [];
+        for await (const item is { x: const x } of asyncIterable) {
+          yield x;
+          fns.push(() => x);
+        }
+        return fns.map((fn) => fn());
+      },
+    };
+
+    const iter = obj.values();
+    expect(await iter.next()).toEqual({ value: 1, done: false });
+    expect(await iter.next()).toEqual({ value: 3, done: false });
+    expect(await iter.next()).toEqual({ value: [1, 3], done: true });
+  });
+
+  test("async generator for-await-of sync fallback resumes with pattern bindings after body yield", async () => {
+    const obj = {
+      async *values() {
+        const fns = [];
+        for await (const item is { x: const x } of [{ x: 1 }, { y: 2 }, { x: 3 }]) {
+          yield x;
+          fns.push(() => x);
+        }
+        return fns.map((fn) => fn());
+      },
+    };
+
+    const iter = obj.values();
+    expect(await iter.next()).toEqual({ value: 1, done: false });
+    expect(await iter.next()).toEqual({ value: 3, done: false });
+    expect(await iter.next()).toEqual({ value: [1, 3], done: true });
+  });
+
   test("calls async iterator return on break and awaits result", async () => {
     const log = [];
     const asyncIter = {

@@ -39,10 +39,14 @@ type
     IteratorValue: TGocciaValue;
     CurrentValue: TGocciaValue;
     NextMethod: TGocciaValue;
+    IterScope: TGocciaScope;
+    ActiveScope: TGocciaScope;
     constructor Create(const AIteratorValue, ACurrentValue,
-      ANextMethod: TGocciaValue);
+      ANextMethod: TGocciaValue; const AIterScope: TGocciaScope = nil;
+      const AActiveScope: TGocciaScope = nil);
     procedure Assign(const AIteratorValue, ACurrentValue,
-      ANextMethod: TGocciaValue);
+      ANextMethod: TGocciaValue; const AIterScope: TGocciaScope = nil;
+      const AActiveScope: TGocciaScope = nil);
     procedure MarkReferences;
   end;
 
@@ -50,8 +54,10 @@ type
   // for(init; test; update) loops. Phase records which sub-step suspended so
   // a resume picks up there instead of re-entering Init from the top.
   TGocciaGeneratorForLoopPhase = (
-    gflpIterStart,  // Between iterations: snapshot HeaderScope, create IterScope, evaluate test
-    gflpBody,       // Test passed and IterScope is committed; body is mid-execution
+    gflpInit,       // Init is mid-execution
+    gflpIterStart,  // Between iterations: snapshot HeaderScope and create IterScope
+    gflpTest,       // IterScope is committed and the test is mid-execution
+    gflpBody,       // Test passed and body is mid-execution
     gflpUpdate      // Body completed and IterScope was synced back; update is mid-execution
   );
 
@@ -59,7 +65,7 @@ type
   public
     Phase: TGocciaGeneratorForLoopPhase;
     HeaderScope: TGocciaScope;  // nil for non-lexical for-loops
-    IterScope: TGocciaScope;    // non-nil only while Phase = gflpBody and loop is lexical
+    IterScope: TGocciaScope;    // non-nil while test/body is active for lexical loops
     constructor Create(const AHeaderScope: TGocciaScope);
     procedure MarkReferences;
   end;
@@ -129,9 +135,12 @@ type
     procedure ClearTryStates;
     procedure SaveLoopState(const ALoopStatement: TObject;
       const AIteratorValue, ACurrentValue: TGocciaValue;
-      const ANextMethod: TGocciaValue = nil);
+      const ANextMethod: TGocciaValue = nil;
+      const AIterScope: TGocciaScope = nil;
+      const AActiveScope: TGocciaScope = nil);
     function GetLoopState(const ALoopStatement: TObject;
-      out AIteratorValue, ACurrentValue, ANextMethod: TGocciaValue): Boolean;
+      out AIteratorValue, ACurrentValue, ANextMethod: TGocciaValue;
+      out AIterScope, AActiveScope: TGocciaScope): Boolean;
     procedure ClearLoopState(const ALoopStatement: TObject);
     procedure ClearLoopStates;
     function EnsureForLoopState(const ALoopStatement: TObject;
@@ -144,6 +153,9 @@ type
   end;
 
 function CurrentGeneratorContinuation: TGocciaGeneratorContinuation;
+function SuspendCurrentGeneratorContinuation: TGocciaGeneratorContinuation;
+procedure RestoreCurrentGeneratorContinuation(
+  const AContinuation: TGocciaGeneratorContinuation);
 function EvaluateGeneratorYield(const AYieldExpression: TGocciaYieldExpression;
   const AContext: TGocciaEvaluationContext): TGocciaValue;
 
@@ -202,18 +214,22 @@ begin
 end;
 
 constructor TGocciaGeneratorLoopState.Create(const AIteratorValue,
-  ACurrentValue, ANextMethod: TGocciaValue);
+  ACurrentValue, ANextMethod: TGocciaValue; const AIterScope: TGocciaScope;
+  const AActiveScope: TGocciaScope);
 begin
   inherited Create;
-  Assign(AIteratorValue, ACurrentValue, ANextMethod);
+  Assign(AIteratorValue, ACurrentValue, ANextMethod, AIterScope, AActiveScope);
 end;
 
 procedure TGocciaGeneratorLoopState.Assign(const AIteratorValue,
-  ACurrentValue, ANextMethod: TGocciaValue);
+  ACurrentValue, ANextMethod: TGocciaValue; const AIterScope: TGocciaScope;
+  const AActiveScope: TGocciaScope);
 begin
   IteratorValue := AIteratorValue;
   CurrentValue := ACurrentValue;
   NextMethod := ANextMethod;
+  IterScope := AIterScope;
+  ActiveScope := AActiveScope;
 end;
 
 procedure TGocciaGeneratorLoopState.MarkReferences;
@@ -224,6 +240,10 @@ begin
     CurrentValue.MarkReferences;
   if Assigned(NextMethod) then
     NextMethod.MarkReferences;
+  if Assigned(IterScope) then
+    IterScope.MarkReferences;
+  if Assigned(ActiveScope) then
+    ActiveScope.MarkReferences;
 end;
 
 constructor TGocciaGeneratorForLoopState.Create(const AHeaderScope: TGocciaScope);
@@ -1033,21 +1053,23 @@ end;
 
 procedure TGocciaGeneratorContinuation.SaveLoopState(
   const ALoopStatement: TObject; const AIteratorValue,
-  ACurrentValue: TGocciaValue; const ANextMethod: TGocciaValue);
+  ACurrentValue: TGocciaValue; const ANextMethod: TGocciaValue;
+  const AIterScope: TGocciaScope; const AActiveScope: TGocciaScope);
 var
   LoopState: TGocciaGeneratorLoopState;
 begin
   if FLoopStates.TryGetValue(ALoopStatement, LoopState) then
-    LoopState.Assign(AIteratorValue, ACurrentValue, ANextMethod)
+    LoopState.Assign(AIteratorValue, ACurrentValue, ANextMethod,
+      AIterScope, AActiveScope)
   else
     FLoopStates.Add(ALoopStatement,
       TGocciaGeneratorLoopState.Create(AIteratorValue, ACurrentValue,
-        ANextMethod));
+        ANextMethod, AIterScope, AActiveScope));
 end;
 
 function TGocciaGeneratorContinuation.GetLoopState(
   const ALoopStatement: TObject; out AIteratorValue, ACurrentValue,
-  ANextMethod: TGocciaValue): Boolean;
+  ANextMethod: TGocciaValue; out AIterScope, AActiveScope: TGocciaScope): Boolean;
 var
   LoopState: TGocciaGeneratorLoopState;
 begin
@@ -1057,12 +1079,16 @@ begin
     AIteratorValue := LoopState.IteratorValue;
     ACurrentValue := LoopState.CurrentValue;
     ANextMethod := LoopState.NextMethod;
+    AIterScope := LoopState.IterScope;
+    AActiveScope := LoopState.ActiveScope;
   end
   else
   begin
     AIteratorValue := nil;
     ACurrentValue := nil;
     ANextMethod := nil;
+    AIterScope := nil;
+    AActiveScope := nil;
   end;
 end;
 
@@ -1158,6 +1184,18 @@ end;
 function CurrentGeneratorContinuation: TGocciaGeneratorContinuation;
 begin
   Result := GCurrentContinuation;
+end;
+
+function SuspendCurrentGeneratorContinuation: TGocciaGeneratorContinuation;
+begin
+  Result := GCurrentContinuation;
+  GCurrentContinuation := nil;
+end;
+
+procedure RestoreCurrentGeneratorContinuation(
+  const AContinuation: TGocciaGeneratorContinuation);
+begin
+  GCurrentContinuation := AContinuation;
 end;
 
 function EvaluateGeneratorYield(const AYieldExpression: TGocciaYieldExpression;
