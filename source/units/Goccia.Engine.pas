@@ -476,6 +476,7 @@ begin
   Context := FInterpreter.CreateEvaluationContext;
   Context.Scope := AScope;
   Context.CurrentFilePath := FSourcePath;
+  Context.NonStrictMode := AScope.NonStrictMode;
   Result := EvaluateModuleBody(
     TGocciaInterpreterModule(AModule).Prog, Context);
   TGocciaInterpreterModule(AModule).FProgram := nil;
@@ -1266,8 +1267,21 @@ end;
 
 function TGocciaEngine.CompileModule(
   const AProgram: TGocciaProgram): TGocciaCompiledModule;
+var
+  SavedNonStrictMode: Boolean;
 begin
-  Result := FExecutor.CompileModule(AProgram);
+  if (FSourceType = stModule) and (FExecutor is TGocciaBytecodeExecutor) then
+  begin
+    SavedNonStrictMode := TGocciaBytecodeExecutor(FExecutor).NonStrictMode;
+    TGocciaBytecodeExecutor(FExecutor).NonStrictMode := False;
+    try
+      Result := FExecutor.CompileModule(AProgram);
+    finally
+      TGocciaBytecodeExecutor(FExecutor).NonStrictMode := SavedNonStrictMode;
+    end;
+  end
+  else
+    Result := FExecutor.CompileModule(AProgram);
   FRetainedModules.Add(Result);
 end;
 
@@ -1322,6 +1336,7 @@ begin
     ModuleScope := FInterpreter.GlobalScope.CreateChild(skModule,
       'Module:' + AFileName);
     ModuleScope.ThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+    ModuleScope.NonStrictMode := False;
     Result := RunModuleInScope(AModule, ModuleScope);
   end
   else
@@ -1393,7 +1408,8 @@ begin
         Parser.FunctionDeclarationsEnabled := cfFunction in FCompatibility;
         Parser.TraditionalForLoopsEnabled := cfTraditionalFor in FCompatibility;
         Parser.LooseEqualityEnabled := cfLooseEquality in FCompatibility;
-        Parser.NonStrictModeEnabled := cfNonStrictMode in FCompatibility;
+        Parser.NonStrictModeEnabled := (cfNonStrictMode in FCompatibility) and
+          (FSourceType <> stModule);
         try
           ProgramNode := Parser.Parse;
           PrintParserWarnings(Parser, SourceMap);
@@ -1422,9 +1438,11 @@ begin
                 'Module:' + FSourcePath);
               ModuleScope.ThisValue :=
                 TGocciaUndefinedLiteralValue.UndefinedValue;
+              ModuleScope.NonStrictMode := False;
               ModuleContext := FInterpreter.CreateEvaluationContext;
               ModuleContext.Scope := ModuleScope;
               ModuleContext.CurrentFilePath := FSourcePath;
+              ModuleContext.NonStrictMode := False;
               ExecStart := GetNanoseconds;
               FLastTiming.Result :=
                 FExecutor.EvaluateModuleBody(ProgramNode, ModuleContext);

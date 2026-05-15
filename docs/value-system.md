@@ -381,7 +381,7 @@ end;
 
 ### Property Deletion
 
-`DeleteProperty` returns `True` for configurable or non-existent properties, `False` for non-configurable properties. Delete call sites convert `False` to `TypeError` by default, matching ECMAScript strict mode semantics. With `--compat-non-strict-mode`, expression-level `delete` keeps the `False` result instead.
+`DeleteProperty` returns `True` for configurable or non-existent properties, `False` for non-configurable properties. Delete call sites convert `False` to `TypeError` by default, matching ECMAScript strict mode semantics. With Script-source `--compat-non-strict-mode`, expression-level `delete` keeps the `False` result instead, and identifier delete can remove configurable global object properties through the global scope's `DeleteBinding` path.
 
 ### ToPropertyDescriptor
 
@@ -540,7 +540,11 @@ Generator objects hold a resumable `TGocciaGeneratorContinuation`. Sync generato
 | `TGocciaAsyncFunctionValue` / `TGocciaAsyncArrowFunctionValue` / `TGocciaAsyncMethodValue` | Inherited from superclass via `BindThis` | `async` functions |
 | `TGocciaGeneratorFunctionValue` / `TGocciaGeneratorMethodValue` / async generator variants | Inherited from superclass via `BindThis` | generator functions and methods |
 
-Standalone calls to any function type receive `undefined` as `this` (strict mode, no implicit global).
+Standalone calls to any function type receive `undefined` as `this` by default (strict mode, no implicit global). Script-source `--compat-non-strict-mode` lets ordinary functions coerce nullish `this` to `globalThis`; module source remains strict.
+
+### Arguments Object (`Goccia.Values.ArgumentsObjectValue.pas`)
+
+Compatibility `arguments` objects are ordinary `TGocciaObjectValue` instances created by `CreateUnmappedArgumentsObject`. The helper lives in the value-system namespace because both interpreter function calls and bytecode `OP_CREATE_ARGUMENTS` need the same array-like object shape. It is intentionally not a separate runtime type: indexed properties and `length` are enough for the current unmapped `arguments` semantics.
 
 ### Array Method Callbacks
 
@@ -722,7 +726,8 @@ Object properties follow ECMAScript's property descriptor model:
 - **Accessor descriptors** — `{ get, set, enumerable, configurable }`
 - **Insertion order** — Properties maintain their creation order, matching JavaScript's `Object.keys()` ordering guarantee.
 - **Descriptor merging** — `Object.defineProperty` merges the new descriptor with the existing one when the property already exists. Unspecified attributes retain their current values rather than resetting to defaults. This matches ECMAScript specification behavior (e.g., `Object.defineProperty(obj, "x", { enumerable: false })` only changes `enumerable`, preserving `writable`, `configurable`, and `value`).
-- **Strict mode `delete`** — Deleting a non-configurable property throws `TypeError` by default, matching ECMAScript strict mode semantics. `DeleteProperty` returns `False` for non-configurable properties, and delete call sites convert this into a `TypeError` unless `--compat-non-strict-mode` is enabled. Deleting a non-existent property returns `true` (no error).
+- **Strict mode `delete`** — Deleting a non-configurable property throws `TypeError` by default, matching ECMAScript strict mode semantics. `DeleteProperty` returns `False` for non-configurable properties, and delete call sites convert this into a `TypeError` unless Script-source `--compat-non-strict-mode` is enabled. Deleting a non-existent property returns `true` (no error).
+- **Strict mode assignment** — Failed object `[[Set]]` results, such as writes to non-writable data properties, setter-less accessors, or non-extensible objects, become `TypeError` by default. Script-source `--compat-non-strict-mode` keeps the failed write silent while the assignment expression returns the assigned value.
 
 This is more complex than a simple key-value map, but it's necessary for `Object.defineProperty`, getters/setters, and non-enumerable properties like prototype methods.
 

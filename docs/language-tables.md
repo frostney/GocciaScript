@@ -18,12 +18,13 @@
 | Comma operator (`,`) | ES1 | Supported |
 | `==` / `!=` (loose equality) | ES1 | Opt-in (`--compat-loose-equality`) — use `===` / `!==` by default |
 | `eval()` | ES1 | Excluded |
-| Non-strict function `this` binding | ES1 | Strict by default; `--compat-non-strict-mode` coerces nullish regular-function `this` to `globalThis`; arrows remain lexical |
-| `arguments` object | ES1 | Opt-in (`--compat-non-strict-mode`) as an unmapped object for ordinary functions, methods, accessors, and generators; arrows resolve it lexically; prefer rest parameters for new code |
+| Non-strict function `this` binding | ES1 | Strict by default; Script-source `--compat-non-strict-mode` coerces nullish regular-function `this` to `globalThis`; modules remain strict and arrows remain lexical |
+| `arguments` object | ES1 | Opt-in for Script source (`--compat-non-strict-mode`) as an unmapped object for ordinary functions, methods, accessors, and generators; modules remain strict; arrows resolve it lexically; prefer rest parameters for new code |
+| Non-strict assignment failures | ES1 | Strict by default; Script-source `--compat-non-strict-mode` silently ignores failed ordinary object/global writes while assignment expressions return the assigned value |
 | Traditional `for(init; test; update)` loop | ES1 | Opt-in (`--compat-traditional-for-loop`) — use `for...of` or array methods by default |
 | `while` / `do...while` | ES1 | Excluded — use `for...of`, array methods, or traditional `for(;;)` (with `--compat-traditional-for-loop`) |
-| `with` statement | ES1 | Opt-in (`--compat-non-strict-mode`) for compatibility with object-environment lookup, `Symbol.unscopables`, closure capture, and method-call receivers — prefer explicit property access |
-| `delete` non-strict return values | ES1 | Strict by default; `--compat-non-strict-mode` makes `delete identifier` and non-configurable property deletion return booleans instead of throwing |
+| `with` statement | ES1 | Opt-in for Script source (`--compat-non-strict-mode`) for compatibility with object-environment lookup, `Symbol.unscopables`, closure capture, method-call receivers, and non-strict write failures — prefer explicit property access |
+| `delete` non-strict return values | ES1 | Strict by default; Script-source `--compat-non-strict-mode` makes `delete identifier` handle declared bindings, configurable global object properties, and unresolvable names with legacy booleans; non-configurable property deletion returns `false` |
 | ASI (automatic semicolon insertion) | ES1 | Opt-in (`--asi`) |
 | Global `parseInt`, `parseFloat`, `isNaN`, `isFinite` | ES1 | Excluded — use `Number.*` |
 | `let` / `const` | ES2015 | Supported |

@@ -35,6 +35,23 @@ describe("non-strict delete", () => {
     expect(Object.hasOwn(obj, "value")).toBe(false);
   });
 
+  test("delete identifier removes configurable global object properties", () => {
+    globalThis.__gocciaConfigurableDelete = 1;
+
+    expect(delete __gocciaConfigurableDelete).toBe(true);
+    expect(Object.hasOwn(globalThis, "__gocciaConfigurableDelete")).toBe(false);
+  });
+
+  test("delete identifier keeps non-configurable global object properties", () => {
+    Object.defineProperty(globalThis, "__gocciaFixedDelete", {
+      value: 1,
+      configurable: false,
+    });
+
+    expect(delete __gocciaFixedDelete).toBe(false);
+    expect(globalThis.__gocciaFixedDelete).toBe(1);
+  });
+
   test("delete identifier targets with object bindings", () => {
     const obj = { value: 1 };
     let result = false;

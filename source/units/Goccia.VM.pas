@@ -22,6 +22,7 @@ uses
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
+  Goccia.Values.SymbolValue,
   Goccia.VM.CallFrame,
   Goccia.VM.Closure,
   Goccia.VM.Exception,
@@ -197,6 +198,12 @@ type
     function GetPropertyValue(const AObject: TGocciaValue; const AKey: string): TGocciaValue;
     procedure SetPropertyValue(const AObject: TGocciaValue; const AKey: string;
       const AValue: TGocciaValue);
+    procedure SetPropertyValueLoose(const AObject: TGocciaValue;
+      const AKey: string; const AValue: TGocciaValue);
+    procedure SetSymbolPropertyValueLoose(const AObject: TGocciaValue;
+      const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue);
+    procedure SetIndexValueLoose(const AObject: TGocciaValue;
+      const AKey: TGocciaRegister; const AValue: TGocciaValue);
     function TryGetRawPrivateValue(const AObject: TGocciaValue; const AKey: string;
       out AValue: TGocciaValue): Boolean;
     procedure SetRawPrivateValue(const AObject: TGocciaValue; const AKey: string;
@@ -304,7 +311,6 @@ uses
   Goccia.Values.NativeFunction,
   Goccia.Values.PromiseValue,
   Goccia.Values.ProxyValue,
-  Goccia.Values.SymbolValue,
   Goccia.Values.ToObject,
   Goccia.Values.ToPrimitive;
 
@@ -6479,6 +6485,103 @@ begin
     SSuggestCheckNullBeforeAccess);
 end;
 
+procedure TGocciaVM.SetPropertyValueLoose(const AObject: TGocciaValue;
+  const AKey: string; const AValue: TGocciaValue);
+var
+  BoxedValue: TGocciaObjectValue;
+begin
+  if AObject is TGocciaNullLiteralValue then
+    ThrowTypeError(Format(SErrorCannotSetPropertiesOfNull, [AKey]),
+      SSuggestCheckNullBeforeAccess);
+  if AObject is TGocciaUndefinedLiteralValue then
+    ThrowTypeError(Format(SErrorCannotSetPropertiesOfUndefined, [AKey]),
+      SSuggestCheckNullBeforeAccess);
+
+  if IsBytecodePrivateKey(AKey) then
+  begin
+    SetPropertyValue(AObject, AKey, AValue);
+    Exit;
+  end;
+
+  if AObject is TGocciaObjectValue then
+  begin
+    TGocciaObjectValue(AObject).AssignPropertyWithReceiver(AKey, AValue,
+      AObject);
+    Exit;
+  end;
+
+  if (AObject is TGocciaSymbolValue) and
+     (TGocciaSymbolValue.SharedPrototype is TGocciaObjectValue) then
+  begin
+    BoxedValue := TGocciaObjectValue(TGocciaSymbolValue.SharedPrototype);
+    BoxedValue.AssignPropertyWithReceiver(AKey, AValue, AObject);
+    Exit;
+  end;
+
+  BoxedValue := AObject.Box;
+  if Assigned(BoxedValue) then
+    BoxedValue.AssignPropertyWithReceiver(AKey, AValue, AObject);
+end;
+
+procedure TGocciaVM.SetSymbolPropertyValueLoose(const AObject: TGocciaValue;
+  const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue);
+var
+  BoxedValue: TGocciaObjectValue;
+begin
+  if AObject is TGocciaNullLiteralValue then
+    ThrowTypeError(Format(SErrorCannotSetPropertiesOfNull,
+      [ASymbol.ToDisplayString.Value]), SSuggestCheckNullBeforeAccess);
+  if AObject is TGocciaUndefinedLiteralValue then
+    ThrowTypeError(Format(SErrorCannotSetPropertiesOfUndefined,
+      [ASymbol.ToDisplayString.Value]), SSuggestCheckNullBeforeAccess);
+
+  if AObject is TGocciaObjectValue then
+  begin
+    TGocciaObjectValue(AObject).AssignSymbolPropertyWithReceiver(ASymbol,
+      AValue, AObject);
+    Exit;
+  end;
+
+  if (AObject is TGocciaSymbolValue) and
+     (TGocciaSymbolValue.SharedPrototype is TGocciaObjectValue) then
+  begin
+    BoxedValue := TGocciaObjectValue(TGocciaSymbolValue.SharedPrototype);
+    BoxedValue.AssignSymbolPropertyWithReceiver(ASymbol, AValue, AObject);
+    Exit;
+  end;
+
+  BoxedValue := AObject.Box;
+  if Assigned(BoxedValue) then
+    BoxedValue.AssignSymbolPropertyWithReceiver(ASymbol, AValue, AObject);
+end;
+
+procedure TGocciaVM.SetIndexValueLoose(const AObject: TGocciaValue;
+  const AKey: TGocciaRegister; const AValue: TGocciaValue);
+var
+  PropKeyValue: TGocciaValue;
+begin
+  if (AKey.Kind = grkObject) and
+     (AKey.ObjectValue is TGocciaSymbolValue) then
+  begin
+    SetSymbolPropertyValueLoose(AObject, TGocciaSymbolValue(AKey.ObjectValue),
+      AValue);
+    Exit;
+  end;
+
+  if TryResolveObjectKey(AKey, PropKeyValue) then
+  begin
+    if PropKeyValue is TGocciaSymbolValue then
+      SetSymbolPropertyValueLoose(AObject, TGocciaSymbolValue(PropKeyValue),
+        AValue)
+    else
+      SetPropertyValueLoose(AObject,
+        TGocciaStringLiteralValue(PropKeyValue).Value, AValue);
+    Exit;
+  end;
+
+  SetPropertyValueLoose(AObject, KeyToPropertyNameRegister(AKey), AValue);
+end;
+
 function TGocciaVM.TryGetRawPrivateValue(const AObject: TGocciaValue;
   const AKey: string; out AValue: TGocciaValue): Boolean;
 var
@@ -7903,6 +8006,17 @@ begin
             Template.GetConstantUnchecked(B).StringValue,
             GetRegister(C));
 
+      OP_SET_PROP_CONST_LOOSE:
+      begin
+        GlobalName := Template.GetConstantUnchecked(B).StringValue;
+        RightValue := RegisterToValue(FRegisters[C]);
+        TargetValue := GetRegister(A);
+        if (TargetValue is TGocciaClassValue) or
+           (TargetValue is TGocciaObjectValue) then
+          SetBytecodeHomeObject(RightValue, TargetValue);
+        SetPropertyValueLoose(TargetValue, GlobalName, RightValue);
+      end;
+
       OP_DELETE_PROP_CONST:
       begin
         if FRegisters[A].Kind = grkNull then
@@ -8212,6 +8326,16 @@ begin
             KeyToPropertyNameRegister(FRegisters[B]),
             RightValue);
         end;
+      end;
+
+      OP_SET_INDEX_LOOSE:
+      begin
+        RightValue := RegisterToValue(FRegisters[C]);
+        TargetValue := GetRegister(A);
+        if (TargetValue is TGocciaClassValue) or
+           (TargetValue is TGocciaObjectValue) then
+          SetBytecodeHomeObject(RightValue, TargetValue);
+        SetIndexValueLoose(TargetValue, FRegisters[B], RightValue);
       end;
 
       OP_ADD:
@@ -9404,10 +9528,32 @@ begin
         end;
       end;
 
+      OP_SET_GLOBAL_LOOSE:
+      begin
+        GlobalName := Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue;
+        if Assigned(FGlobalScope) then
+        begin
+          if FGlobalScope.Contains(GlobalName) then
+            FGlobalScope.AssignBinding(GlobalName,
+              RegisterToValue(FRegisters[A]), 0, 0, True)
+          else
+            ThrowReferenceError(GlobalName + ' is not defined');
+        end;
+      end;
+
       OP_HAS_GLOBAL:
       begin
         GlobalName := Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue;
         if Assigned(FGlobalScope) and FGlobalScope.Contains(GlobalName) then
+          FRegisters[A] := RegisterBoolean(True)
+        else
+          FRegisters[A] := RegisterBoolean(False);
+      end;
+
+      OP_DELETE_GLOBAL:
+      begin
+        GlobalName := Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue;
+        if Assigned(FGlobalScope) and FGlobalScope.DeleteBinding(GlobalName) then
           FRegisters[A] := RegisterBoolean(True)
         else
           FRegisters[A] := RegisterBoolean(False);

@@ -496,7 +496,7 @@ Runtime globals can be reduced by passing a smaller `TGocciaRuntimeGlobals` set,
 | `Compatibility` | `TGocciaCompatibilityFlags` | `[]` | Parser behavior toggles |
 | `SourceType` | `TGocciaSourceType` | `stScript` | Load entry as a Script (default) or Module |
 | `StrictTypes` | `Boolean` | `False` | Runtime enforcement of type annotations (works in both interpreter and bytecode); setter propagates to the active executor and interpreter scope |
-| `NonStrictModeEnabled` | `Boolean` | `False` | Enables compatibility semantics for `arguments`, `with`, legacy `delete` return values, and regular-function nullish `this` |
+| `NonStrictModeEnabled` | `Boolean` | `False` | Enables Script-source compatibility semantics for `arguments`, `with`, silent assignment failures, legacy `delete` return values, and regular-function nullish `this`; Module source remains strict |
 
 ```pascal
 Executor := TGocciaInterpreterExecutor.Create;

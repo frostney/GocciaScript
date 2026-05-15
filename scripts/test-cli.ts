@@ -263,15 +263,36 @@ console.log("--compat-non-strict-mode (Loader + Bundler + TestRunner + Bare)..."
       deleteSrc,
       [
         "let binding = 1;",
+        "globalThis.tempDeleteName = 1;",
         "const obj = {};",
         'Object.defineProperty(obj, "fixed", { value: 1, configurable: false });',
-        "(delete binding ? 1 : 0) + (delete obj.fixed ? 2 : 0) + (delete missingName ? 4 : 0);",
+        "(delete binding ? 1 : 0) + (delete obj.fixed ? 2 : 0) + (delete missingName ? 4 : 0) + (delete tempDeleteName ? 8 : 0);",
       ].join("\n") + "\n",
     );
     const deleteOutPath = join(tmp, "delete-nonstrict.gbc");
     await $`${BUNDLER} ${deleteSrc} --output=${deleteOutPath} --compat-non-strict-mode`.quiet();
     const bundledDeleteOut = await $`${LOADER} --print ${deleteOutPath} 2>&1`.text();
-    if (!containsLine(bundledDeleteOut, "4")) throw new Error(`Bundled non-strict delete expected 4, got: ${bundledDeleteOut}`);
+    if (!containsLine(bundledDeleteOut, "12")) throw new Error(`Bundled non-strict delete expected 12, got: ${bundledDeleteOut}`);
+
+    const assignmentSrc = join(tmp, "assignment-nonstrict.js");
+    writeFileSync(
+      assignmentSrc,
+      [
+        "const obj = {};",
+        'Object.defineProperty(obj, "fixed", { value: 1, writable: false });',
+        "obj.fixed = 2;",
+        "const withObj = {};",
+        'Object.defineProperty(withObj, "value", { value: 1, writable: false });',
+        "with (withObj) {",
+        "  value = 2;",
+        "}",
+        "obj.fixed + withObj.value;",
+      ].join("\n") + "\n",
+    );
+    const assignmentOutPath = join(tmp, "assignment-nonstrict.gbc");
+    await $`${BUNDLER} ${assignmentSrc} --output=${assignmentOutPath} --compat-non-strict-mode`.quiet();
+    const bundledAssignmentOut = await $`${LOADER} --print ${assignmentOutPath} 2>&1`.text();
+    if (!containsLine(bundledAssignmentOut, "2")) throw new Error(`Bundled non-strict assignment expected 2, got: ${bundledAssignmentOut}`);
 
     const testSrc = join(tmp, "test-nonstrict.js");
     writeFileSync(

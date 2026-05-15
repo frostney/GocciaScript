@@ -6127,15 +6127,18 @@ begin
     // ES2026 §13.5.1.2 PropertyDestructuringAssignmentEvaluation step 5:
     // ToPropertyKey on the computed key.
     PropValue := ToPropertyKey(EvaluateExpression(MemberExpr.PropertyExpression, AContext));
-    if (PropValue is TGocciaSymbolValue) and (Obj is TGocciaObjectValue) then
-      TGocciaObjectValue(Obj).AssignSymbolProperty(TGocciaSymbolValue(PropValue), AValue)
-    else if (PropValue is TGocciaSymbolValue) and (Obj is TGocciaClassValue) then
-      TGocciaClassValue(Obj).AssignSymbolProperty(TGocciaSymbolValue(PropValue), AValue)
+    if PropValue is TGocciaSymbolValue then
+      AssignSymbolProperty(Obj, TGocciaSymbolValue(PropValue), AValue,
+        AContext.OnError, APattern.Line, APattern.Column,
+        AContext.NonStrictMode)
     else
-      AssignProperty(Obj, TGocciaStringLiteralValue(PropValue).Value, AValue, AContext.OnError, APattern.Line, APattern.Column);
+      AssignProperty(Obj, TGocciaStringLiteralValue(PropValue).Value, AValue,
+        AContext.OnError, APattern.Line, APattern.Column,
+        AContext.NonStrictMode);
   end
   else
-    AssignProperty(Obj, MemberExpr.PropertyName, AValue, AContext.OnError, APattern.Line, APattern.Column);
+    AssignProperty(Obj, MemberExpr.PropertyName, AValue, AContext.OnError,
+      APattern.Line, APattern.Column, AContext.NonStrictMode);
 end;
 
 procedure AssignPattern(const APattern: TGocciaDestructuringPattern; const AValue: TGocciaValue; const AContext: TGocciaEvaluationContext; const AIsDeclaration: Boolean = False; const ADeclarationType: TGocciaDeclarationType = dtLet);
@@ -6159,7 +6162,8 @@ begin
   if AIsDeclaration then
     AContext.Scope.DefineLexicalBinding(APattern.Name, AValue, ADeclarationType)
   else
-    AContext.Scope.AssignBinding(APattern.Name, AValue);
+    AContext.Scope.AssignBinding(APattern.Name, AValue, APattern.Line,
+      APattern.Column, AContext.NonStrictMode);
 end;
 
 procedure AssignArrayPattern(const APattern: TGocciaArrayDestructuringPattern; const AValue: TGocciaValue; const AContext: TGocciaEvaluationContext; const AIsDeclaration: Boolean = False; const ADeclarationType: TGocciaDeclarationType = dtLet);

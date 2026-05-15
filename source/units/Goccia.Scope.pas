@@ -53,7 +53,9 @@ type
     // New Define/Assign pattern
     procedure PredeclareLexicalBinding(const AName: string; const ADeclarationType: TGocciaDeclarationType; const ALine: Integer = 0; const AColumn: Integer = 0);
     procedure DefineLexicalBinding(const AName: string; const AValue: TGocciaValue; const ADeclarationType: TGocciaDeclarationType; const ABuiltIn: Boolean = False; const ALine: Integer = 0; const AColumn: Integer = 0);
-    procedure AssignBinding(const AName: string; const AValue: TGocciaValue; const ALine: Integer = 0; const AColumn: Integer = 0); virtual;
+    procedure AssignBinding(const AName: string; const AValue: TGocciaValue;
+      const ALine: Integer = 0; const AColumn: Integer = 0;
+      const ANonStrictMode: Boolean = False); virtual;
     procedure ForceUpdateBinding(const AName: string; const AValue: TGocciaValue);
 
     // Var binding support (separate map on function/module/global scopes)
@@ -178,7 +180,9 @@ type
     FCatchParameter: string;  // Track the catch parameter name for proper shadowing
   public
     constructor Create(const AParent: TGocciaScope; const ACatchParameter: string);
-    procedure AssignBinding(const AName: string; const AValue: TGocciaValue; const ALine: Integer = 0; const AColumn: Integer = 0); override;
+    procedure AssignBinding(const AName: string; const AValue: TGocciaValue;
+      const ALine: Integer = 0; const AColumn: Integer = 0;
+      const ANonStrictMode: Boolean = False); override;
   end;
 
   TGocciaWithScope = class(TGocciaScope)
@@ -190,7 +194,8 @@ type
       const ABindingObject: TGocciaObjectValue);
     procedure MarkReferences; override;
     procedure AssignBinding(const AName: string; const AValue: TGocciaValue;
-      const ALine: Integer = 0; const AColumn: Integer = 0); override;
+      const ALine: Integer = 0; const AColumn: Integer = 0;
+      const ANonStrictMode: Boolean = False); override;
     function GetBinding(const AName: string; const ALine: Integer = 0;
       const AColumn: Integer = 0): TLexicalBinding; override;
     function DeleteBinding(const AName: string): Boolean; override;
@@ -310,12 +315,16 @@ end;
 
 function TGocciaScope.EffectiveNonStrictMode: Boolean;
 var
-  Root: TGocciaScope;
+  Current: TGocciaScope;
 begin
-  Root := Self;
-  while Assigned(Root.FParent) do
-    Root := Root.FParent;
-  Result := Root.FNonStrictMode;
+  Current := Self;
+  while Assigned(Current) do
+  begin
+    if Current.FScopeKind in [skFunction, skModule, skGlobal] then
+      Exit(Current.FNonStrictMode);
+    Current := Current.FParent;
+  end;
+  Result := False;
 end;
 
 function TGocciaScope.FindOwningClass: TGocciaValue;
@@ -543,10 +552,11 @@ begin
   end;
 end;
 
-procedure TGocciaScope.AssignBinding(const AName: string; const AValue: TGocciaValue; const ALine: Integer = 0; const AColumn: Integer = 0);
+procedure TGocciaScope.AssignBinding(const AName: string; const AValue: TGocciaValue; const ALine: Integer = 0; const AColumn: Integer = 0; const ANonStrictMode: Boolean = False);
 var
   LexicalBinding: TLexicalBinding;
   StrictActive: Boolean;
+  GlobalObject: TGocciaObjectValue;
 begin
   // Type hints recorded on bindings persist for the lifetime of the
   // binding; the live --strict-types flag (read from the root scope)
@@ -589,7 +599,13 @@ begin
   if (FScopeKind = skGlobal) and (FThisValue is TGocciaObjectValue) and
      TGocciaObjectValue(FThisValue).HasProperty(AName) then
   begin
-    TGocciaObjectValue(FThisValue).AssignProperty(AName, AValue);
+    GlobalObject := TGocciaObjectValue(FThisValue);
+    if ANonStrictMode then
+    begin
+      GlobalObject.AssignPropertyWithReceiver(AName, AValue, GlobalObject);
+      Exit;
+    end;
+    GlobalObject.AssignProperty(AName, AValue);
     Exit;
   end;
 
@@ -606,7 +622,7 @@ begin
   // Variable not found in current scope, try parent scope
   if Assigned(FParent) then
   begin
-    FParent.AssignBinding(AName, AValue, ALine, AColumn);
+    FParent.AssignBinding(AName, AValue, ALine, AColumn, ANonStrictMode);
     Exit;
   end;
 
@@ -663,7 +679,7 @@ begin
 
   if (FScopeKind = skGlobal) and (FThisValue is TGocciaObjectValue) and
      TGocciaObjectValue(FThisValue).HasProperty(AName) then
-    Exit(False);
+    Exit(TGocciaObjectValue(FThisValue).DeleteProperty(AName));
 
   if Assigned(FParent) then
     Exit(FParent.DeleteBinding(AName));
@@ -856,7 +872,7 @@ begin
   FCatchParameter := ACatchParameter;
 end;
 
-procedure TGocciaCatchScope.AssignBinding(const AName: string; const AValue: TGocciaValue; const ALine: Integer = 0; const AColumn: Integer = 0);
+procedure TGocciaCatchScope.AssignBinding(const AName: string; const AValue: TGocciaValue; const ALine: Integer = 0; const AColumn: Integer = 0; const ANonStrictMode: Boolean = False);
 begin
   // Surgical fix for catch parameter scopes: assignments to non-parameter variables
   // should propagate to parent scope, but catch parameters should stay for proper shadowing
@@ -864,12 +880,12 @@ begin
   begin
     // This is a catch parameter scope and the variable isn't the catch parameter.
     // Delegate directly to parent to ensure assignment propagation
-    FParent.AssignBinding(AName, AValue, ALine, AColumn);
+    FParent.AssignBinding(AName, AValue, ALine, AColumn, ANonStrictMode);
   end
   else
   begin
     // Either it's the catch parameter or it exists in current scope - use base behavior
-    inherited AssignBinding(AName, AValue, ALine, AColumn);
+    inherited AssignBinding(AName, AValue, ALine, AColumn, ANonStrictMode);
   end;
 end;
 
@@ -912,15 +928,20 @@ end;
 
 procedure TGocciaWithScope.AssignBinding(const AName: string;
   const AValue: TGocciaValue; const ALine: Integer = 0;
-  const AColumn: Integer = 0);
+  const AColumn: Integer = 0; const ANonStrictMode: Boolean = False);
 begin
   if HasObjectBinding(AName) then
   begin
+    if ANonStrictMode then
+    begin
+      FBindingObject.AssignPropertyWithReceiver(AName, AValue, FBindingObject);
+      Exit;
+    end;
     FBindingObject.AssignProperty(AName, AValue);
     Exit;
   end;
 
-  inherited AssignBinding(AName, AValue, ALine, AColumn);
+  inherited AssignBinding(AName, AValue, ALine, AColumn, ANonStrictMode);
 end;
 
 function TGocciaWithScope.GetBinding(const AName: string; const ALine: Integer = 0;

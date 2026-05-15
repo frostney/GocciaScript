@@ -632,7 +632,8 @@ begin
               Parser.FunctionDeclarationsEnabled := Engine.FunctionEnabled;
               Parser.TraditionalForLoopsEnabled := Engine.TraditionalForLoopsEnabled;
               Parser.LooseEqualityEnabled := Engine.LooseEqualityEnabled;
-              Parser.NonStrictModeEnabled := Engine.NonStrictModeEnabled;
+              Parser.NonStrictModeEnabled := Engine.NonStrictModeEnabled and
+                (Engine.SourceType <> stModule);
               try
                 ProgramNode := Parser.Parse;
                 ParseEnd := GetNanoseconds;

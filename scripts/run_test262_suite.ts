@@ -664,19 +664,23 @@ interface PerTestRecord {
 
 // test262 source is overwhelmingly semicolon-omitted; ASI is required to parse
 // the corpus.  --compat-var, --compat-function, --compat-traditional-for-loop,
-// --compat-loose-equality, --compat-non-strict-mode, and
-// --unsafe-function-constructor are also
+// --compat-loose-equality, and --unsafe-function-constructor are also
 // unconditional: stock harness uses `var`, `function`, traditional `for(;;)`
-// loops, loose equality, and `Function("return this;")()`.
+// loops, loose equality, and `Function("return this;")()`.  Non-strict mode
+// compatibility is per-test because modules and `onlyStrict` tests must keep
+// strict semantics.
 const TEST262_BARE_FLAGS: readonly string[] = [
   "--asi",
   "--compat-var",
   "--compat-function",
   "--compat-traditional-for-loop",
   "--compat-loose-equality",
-  "--compat-non-strict-mode",
   "--unsafe-function-constructor",
 ];
+
+function needsNonStrictCompat(flags: readonly string[], isModule: boolean): boolean {
+  return !isModule && !flags.includes("onlyStrict");
+}
 
 async function runOneTest(
   test: DiscoveredTest,
@@ -760,6 +764,9 @@ async function runOneTest(
     `--timeout=${opts.timeoutMs}`,
     `--max-memory=${opts.maxMemoryBytes}`,
   ];
+  if (needsNonStrictCompat(flags, isModule)) {
+    args.push("--compat-non-strict-mode");
+  }
   if (isModule) args.unshift("--source-type=module");
   args.push("-");
 

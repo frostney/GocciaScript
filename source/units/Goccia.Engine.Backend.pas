@@ -102,7 +102,7 @@ begin
   try
     Compiler.GlobalBackedTopLevel := True;
     Compiler.StrictTypes := FStrictTypes;
-    Compiler.NonStrictMode := FNonStrictMode;
+    Compiler.NonStrictMode := AContext.NonStrictMode;
     Options := Compiler.OptimizationOptions;
     Options.PreserveCoverageShape :=
       Assigned(TGocciaCoverageTracker.Instance) and
