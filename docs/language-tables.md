@@ -18,10 +18,10 @@
 | Comma operator (`,`) | ES1 | Supported |
 | `==` / `!=` (loose equality) | ES1 | Opt-in (`--compat-loose-equality`) — use `===` / `!==` by default |
 | `eval()` | ES1 | Excluded |
-| `arguments` object | ES1 | Supported for ordinary functions and shorthand methods — prefer rest parameters for new code |
+| `arguments` object | ES1 | Supported as an unmapped object for ordinary functions, methods, accessors, and generators; arrows resolve it lexically; prefer rest parameters for new code |
 | Traditional `for(init; test; update)` loop | ES1 | Opt-in (`--compat-traditional-for-loop`) — use `for...of` or array methods by default |
 | `while` / `do...while` | ES1 | Excluded — use `for...of`, array methods, or traditional `for(;;)` (with `--compat-traditional-for-loop`) |
-| `with` statement | ES1 | Supported for compatibility — prefer explicit property access |
+| `with` statement | ES1 | Supported for compatibility with object-environment lookup, `Symbol.unscopables`, closure capture, and method-call receivers — prefer explicit property access |
 | ASI (automatic semicolon insertion) | ES1 | Opt-in (`--asi`) |
 | Global `parseInt`, `parseFloat`, `isNaN`, `isFinite` | ES1 | Excluded — use `Number.*` |
 | `let` / `const` | ES2015 | Supported |
@@ -37,7 +37,7 @@
 | `RegExp` (literals, flags `d`/`g`/`i`/`m`/`s`/`u`/`v`/`y`) | ES2015+ | Supported |
 | ES modules (`import` / `export`) | ES2015 | Supported (named only) |
 | Default exports / imports | ES2015 | Excluded — use named exports |
-| Generators (`function*`, `*method()`) | ES2015 | Supported — `function*` requires `--compat-function`; generator methods are default syntax |
+| Generators (`function*`, `*method()`) | ES2015 | Supported with `arguments` objects — `function*` requires `--compat-function`; generator methods are default syntax |
 | Nullish coalescing (`??`) | ES2020 | Supported |
 | Optional chaining (`?.`) | ES2020 | Supported |
 | `BigInt` | ES2020 | Supported |
