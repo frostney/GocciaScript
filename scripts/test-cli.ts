@@ -257,6 +257,21 @@ console.log("--compat-non-strict-mode (Loader + Bundler + TestRunner + Bare)..."
     await $`${BUNDLER} ${src} --output=${outPath} --compat-function --compat-non-strict-mode`.quiet();
     if (!existsSync(outPath)) throw new Error("Bundler --compat-non-strict-mode should compile");
 
+    const deleteSrc = join(tmp, "delete-nonstrict.js");
+    writeFileSync(
+      deleteSrc,
+      [
+        "let binding = 1;",
+        "const obj = {};",
+        'Object.defineProperty(obj, "fixed", { value: 1, configurable: false });',
+        "(delete binding ? 1 : 0) + (delete obj.fixed ? 2 : 0) + (delete missingName ? 4 : 0);",
+      ].join("\n") + "\n",
+    );
+    const deleteOutPath = join(tmp, "delete-nonstrict.gbc");
+    await $`${BUNDLER} ${deleteSrc} --output=${deleteOutPath} --compat-non-strict-mode`.quiet();
+    const bundledDeleteOut = await $`${LOADER} --print ${deleteOutPath} 2>&1`.text();
+    if (!containsLine(bundledDeleteOut, "4")) throw new Error(`Bundled non-strict delete expected 4, got: ${bundledDeleteOut}`);
+
     const testSrc = join(tmp, "test-nonstrict.js");
     writeFileSync(
       testSrc,

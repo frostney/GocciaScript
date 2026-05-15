@@ -106,6 +106,8 @@ begin
     OP_SUPER_GET:                      Result := 'OP_SUPER_GET';
     OP_LOOSE_EQ:                       Result := 'OP_LOOSE_EQ';
     OP_LOOSE_NEQ:                      Result := 'OP_LOOSE_NEQ';
+    OP_DELETE_PROP_CONST_LOOSE:        Result := 'OP_DELETE_PROP_CONST_LOOSE';
+    OP_DEL_INDEX_LOOSE:                Result := 'OP_DEL_INDEX_LOOSE';
     OP_COLLECTION_OP:                  Result := 'OP_COLLECTION_OP';
     OP_VALIDATE_VALUE:                 Result := 'OP_VALIDATE_VALUE';
     OP_THROW_TYPE_ERROR_CONST_LONG:    Result := 'OP_THROW_TYPE_ERROR_CONST_LONG';

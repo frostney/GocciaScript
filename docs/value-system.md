@@ -381,7 +381,7 @@ end;
 
 ### Property Deletion
 
-`DeleteProperty` returns `True` for configurable or non-existent properties, `False` for non-configurable properties. The evaluator throws `TypeError` when `DeleteProperty` returns `False`, matching ECMAScript strict mode semantics where deleting a non-configurable property is an error.
+`DeleteProperty` returns `True` for configurable or non-existent properties, `False` for non-configurable properties. Delete call sites convert `False` to `TypeError` by default, matching ECMAScript strict mode semantics. With `--compat-non-strict-mode`, expression-level `delete` keeps the `False` result instead.
 
 ### ToPropertyDescriptor
 
@@ -722,7 +722,7 @@ Object properties follow ECMAScript's property descriptor model:
 - **Accessor descriptors** — `{ get, set, enumerable, configurable }`
 - **Insertion order** — Properties maintain their creation order, matching JavaScript's `Object.keys()` ordering guarantee.
 - **Descriptor merging** — `Object.defineProperty` merges the new descriptor with the existing one when the property already exists. Unspecified attributes retain their current values rather than resetting to defaults. This matches ECMAScript specification behavior (e.g., `Object.defineProperty(obj, "x", { enumerable: false })` only changes `enumerable`, preserving `writable`, `configurable`, and `value`).
-- **Strict mode `delete`** — Deleting a non-configurable property throws `TypeError`, matching ECMAScript strict mode semantics. `DeleteProperty` returns `False` for non-configurable properties, and the evaluator converts this into a `TypeError` at the call site. Deleting a non-existent property returns `true` (no error).
+- **Strict mode `delete`** — Deleting a non-configurable property throws `TypeError` by default, matching ECMAScript strict mode semantics. `DeleteProperty` returns `False` for non-configurable properties, and delete call sites convert this into a `TypeError` unless `--compat-non-strict-mode` is enabled. Deleting a non-existent property returns `true` (no error).
 
 This is more complex than a simple key-value map, but it's necessary for `Object.defineProperty`, getters/setters, and non-enumerable properties like prototype methods.
 

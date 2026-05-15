@@ -18,3 +18,15 @@ test("arguments remains an ordinary identifier", () => {
 
   expect(echo("param")).toBe("param");
 });
+
+test("delete non-configurable properties throws by default", () => {
+  const obj = {};
+  Object.defineProperty(obj, "fixed", {
+    value: 1,
+    configurable: false
+  });
+
+  expect(() => {
+    delete obj.fixed;
+  }).toThrow(TypeError);
+});

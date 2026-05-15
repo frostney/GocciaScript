@@ -73,6 +73,7 @@ type
     // Core methods
     function GetBinding(const AName: string; const ALine: Integer = 0; const AColumn: Integer = 0): TLexicalBinding; virtual;
     function GetValue(const AName: string): TGocciaValue; virtual;
+    function DeleteBinding(const AName: string): Boolean; virtual;
 
     function ResolveIdentifier(const AName: string): TGocciaValue; virtual;
     procedure ResolveIdentifierReference(const AName: string;
@@ -192,6 +193,7 @@ type
       const ALine: Integer = 0; const AColumn: Integer = 0); override;
     function GetBinding(const AName: string; const ALine: Integer = 0;
       const AColumn: Integer = 0): TLexicalBinding; override;
+    function DeleteBinding(const AName: string): Boolean; override;
     procedure ResolveIdentifierReference(const AName: string;
       out AValue, AThisValue: TGocciaValue; const ALine: Integer = 0;
       const AColumn: Integer = 0); override;
@@ -654,6 +656,21 @@ begin
   Result := GetBinding(AName).Value;
 end;
 
+function TGocciaScope.DeleteBinding(const AName: string): Boolean;
+begin
+  if ContainsOwnLexicalBinding(AName) or ContainsOwnVarBinding(AName) then
+    Exit(False);
+
+  if (FScopeKind = skGlobal) and (FThisValue is TGocciaObjectValue) and
+     TGocciaObjectValue(FThisValue).HasProperty(AName) then
+    Exit(False);
+
+  if Assigned(FParent) then
+    Exit(FParent.DeleteBinding(AName));
+
+  Result := True;
+end;
+
 function TGocciaScope.ResolveIdentifier(const AName: string): TGocciaValue;
 begin
   if AName = KEYWORD_THIS then
@@ -920,6 +937,14 @@ begin
   end;
 
   Result := inherited GetBinding(AName, ALine, AColumn);
+end;
+
+function TGocciaWithScope.DeleteBinding(const AName: string): Boolean;
+begin
+  if HasObjectBinding(AName) then
+    Exit(FBindingObject.DeleteProperty(AName));
+
+  Result := inherited DeleteBinding(AName);
 end;
 
 procedure TGocciaWithScope.ResolveIdentifierReference(const AName: string;

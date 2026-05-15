@@ -22,6 +22,7 @@
 | Traditional `for(init; test; update)` loop | ES1 | Opt-in (`--compat-traditional-for-loop`) — use `for...of` or array methods by default |
 | `while` / `do...while` | ES1 | Excluded — use `for...of`, array methods, or traditional `for(;;)` (with `--compat-traditional-for-loop`) |
 | `with` statement | ES1 | Opt-in (`--compat-non-strict-mode`) for compatibility with object-environment lookup, `Symbol.unscopables`, closure capture, and method-call receivers — prefer explicit property access |
+| `delete` non-strict return values | ES1 | Strict by default; `--compat-non-strict-mode` makes `delete identifier` and non-configurable property deletion return booleans instead of throwing |
 | ASI (automatic semicolon insertion) | ES1 | Opt-in (`--asi`) |
 | Global `parseInt`, `parseFloat`, `isNaN`, `isFinite` | ES1 | Excluded — use `Number.*` |
 | `let` / `const` | ES2015 | Supported |

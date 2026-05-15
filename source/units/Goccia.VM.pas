@@ -7925,6 +7925,30 @@ begin
           FRegisters[A] := RegisterBoolean(True);
       end;
 
+      OP_DELETE_PROP_CONST_LOOSE:
+      begin
+        GlobalName := Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue;
+        if FRegisters[A].Kind = grkNull then
+          ThrowTypeError(Format(SErrorCannotReadPropertiesOfNull,
+            [GlobalName]),
+            SSuggestCheckNullBeforeAccess)
+        else if FRegisters[A].Kind = grkUndefined then
+          ThrowTypeError(Format(SErrorCannotReadPropertiesOfUndefined,
+            [GlobalName]),
+            SSuggestCheckNullBeforeAccess)
+        else if (FRegisters[A].Kind = grkObject) and
+           (FRegisters[A].ObjectValue is TGocciaObjectValue) then
+        begin
+          if TGocciaObjectValue(FRegisters[A].ObjectValue).DeleteProperty(
+            GlobalName) then
+            FRegisters[A] := RegisterBoolean(True)
+          else
+            FRegisters[A] := RegisterBoolean(False);
+        end
+        else
+          FRegisters[A] := RegisterBoolean(True);
+      end;
+
       OP_UNPACK:
       begin
         if (FRegisters[B].Kind = grkObject) and
@@ -8756,6 +8780,89 @@ begin
             ThrowTypeError(Format(SErrorCannotDeletePropertyOf,
               [KeyToPropertyNameRegister(FRegisters[C]), '[object Object]']),
               SSuggestCannotDeleteNonConfigurable);
+        end
+        else
+          FRegisters[A] := RegisterBoolean(True);
+      end;
+
+      OP_DEL_INDEX_LOOSE:
+      begin
+        if FRegisters[B].Kind = grkNull then
+          ThrowTypeError(Format(SErrorCannotReadPropertiesOfNull,
+            [KeyDisplaySafe(FRegisters[C])]),
+            SSuggestCheckNullBeforeAccess)
+        else if FRegisters[B].Kind = grkUndefined then
+          ThrowTypeError(Format(SErrorCannotReadPropertiesOfUndefined,
+            [KeyDisplaySafe(FRegisters[C])]),
+            SSuggestCheckNullBeforeAccess)
+        else if (FRegisters[B].Kind = grkObject) and
+           (FRegisters[B].ObjectValue is TGocciaObjectValue) and
+           (FRegisters[C].Kind = grkObject) and
+           (FRegisters[C].ObjectValue is TGocciaSymbolValue) then
+        begin
+          if TGocciaObjectValue(FRegisters[B].ObjectValue).DeleteSymbolProperty(
+            TGocciaSymbolValue(FRegisters[C].ObjectValue)) then
+            FRegisters[A] := RegisterBoolean(True)
+          else
+            FRegisters[A] := RegisterBoolean(False);
+        end
+        else if (FRegisters[B].Kind = grkObject) and
+           (FRegisters[B].ObjectValue is TGocciaArrayValue) then
+        begin
+          if TryGetArrayIndexRegister(FRegisters[C], KeyIndex) and
+             (KeyIndex >= 0) and
+             (KeyIndex < TGocciaArrayValue(FRegisters[B].ObjectValue).Elements.Count) then
+          begin
+            TGocciaArrayValue(FRegisters[B].ObjectValue).SetElement(
+              KeyIndex, TGocciaHoleValue.HoleValue);
+            FRegisters[A] := RegisterBoolean(True);
+          end
+          else if TryResolveObjectKey(FRegisters[C], PropKeyValue) then
+          begin
+            if PropKeyValue is TGocciaSymbolValue then
+            begin
+              if TGocciaObjectValue(FRegisters[B].ObjectValue).DeleteSymbolProperty(
+                TGocciaSymbolValue(PropKeyValue)) then
+                FRegisters[A] := RegisterBoolean(True)
+              else
+                FRegisters[A] := RegisterBoolean(False);
+            end
+            else if TGocciaObjectValue(FRegisters[B].ObjectValue).DeleteProperty(
+              TGocciaStringLiteralValue(PropKeyValue).Value) then
+              FRegisters[A] := RegisterBoolean(True)
+            else
+              FRegisters[A] := RegisterBoolean(False);
+          end
+          else if TGocciaObjectValue(FRegisters[B].ObjectValue).DeleteProperty(
+            KeyToPropertyNameRegister(FRegisters[C])) then
+            FRegisters[A] := RegisterBoolean(True)
+          else
+            FRegisters[A] := RegisterBoolean(False);
+        end
+        else if (FRegisters[B].Kind = grkObject) and
+                (FRegisters[B].ObjectValue is TGocciaObjectValue) then
+        begin
+          if TryResolveObjectKey(FRegisters[C], PropKeyValue) then
+          begin
+            if PropKeyValue is TGocciaSymbolValue then
+            begin
+              if TGocciaObjectValue(FRegisters[B].ObjectValue).DeleteSymbolProperty(
+                TGocciaSymbolValue(PropKeyValue)) then
+                FRegisters[A] := RegisterBoolean(True)
+              else
+                FRegisters[A] := RegisterBoolean(False);
+            end
+            else if TGocciaObjectValue(FRegisters[B].ObjectValue).DeleteProperty(
+              TGocciaStringLiteralValue(PropKeyValue).Value) then
+              FRegisters[A] := RegisterBoolean(True)
+            else
+              FRegisters[A] := RegisterBoolean(False);
+          end
+          else if TGocciaObjectValue(FRegisters[B].ObjectValue).DeleteProperty(
+            KeyToPropertyNameRegister(FRegisters[C])) then
+            FRegisters[A] := RegisterBoolean(True)
+          else
+            FRegisters[A] := RegisterBoolean(False);
         end
         else
           FRegisters[A] := RegisterBoolean(True);

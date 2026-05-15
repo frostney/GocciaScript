@@ -43,7 +43,9 @@ const
   //               --compat-loose-equality bytecode.
   //   v27 -> v28: added OP_CREATE_ARGUMENTS plus with-statement helper
   //               opcodes for object environment records.
-  GOCCIA_FORMAT_VERSION = 28;
+  //   v28 -> v29: added non-strict delete opcodes for
+  //               --compat-non-strict-mode bytecode.
+  GOCCIA_FORMAT_VERSION = 29;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
@@ -171,6 +173,8 @@ type
     OP_SUPER_GET     = 87,
     OP_LOOSE_EQ      = 88,
     OP_LOOSE_NEQ     = 89,
+    OP_DELETE_PROP_CONST_LOOSE = 90,
+    OP_DEL_INDEX_LOOSE = 91,
     OP_COLLECTION_OP = 93,
     OP_VALIDATE_VALUE = 95,
     OP_THROW_TYPE_ERROR_CONST_LONG = 97,

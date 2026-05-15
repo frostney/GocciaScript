@@ -6564,9 +6564,16 @@ begin
       if ObjValue is TGocciaObjectValue then
       begin
         if not TGocciaObjectValue(ObjValue).DeleteSymbolProperty(SymbolKey) then
+        begin
+          if AContext.NonStrictMode then
+          begin
+            Result := TGocciaBooleanLiteralValue.FalseValue;
+            Exit;
+          end;
           ThrowTypeError(Format(SErrorCannotDeletePropertyOf,
             [SymbolKey.ToDisplayString.Value, '[object Object]']),
             SSuggestCannotDeleteNonConfigurable);
+        end;
       end;
       Result := TGocciaBooleanLiteralValue.TrueValue;
     end
@@ -6582,8 +6589,15 @@ begin
       else
       begin
         if not ArrayValue.DeleteProperty(PropertyName) then
+        begin
+          if AContext.NonStrictMode then
+          begin
+            Result := TGocciaBooleanLiteralValue.FalseValue;
+            Exit;
+          end;
           ThrowTypeError(Format(SErrorCannotDeletePropertyOf, [PropertyName, '[object Array]']),
             SSuggestCannotDeleteNonConfigurable);
+        end;
         Result := TGocciaBooleanLiteralValue.TrueValue;
       end;
     end
@@ -6591,8 +6605,15 @@ begin
     begin
       ObjectValue := TGocciaObjectValue(ObjValue);
       if not ObjectValue.DeleteProperty(PropertyName) then
+      begin
+        if AContext.NonStrictMode then
+        begin
+          Result := TGocciaBooleanLiteralValue.FalseValue;
+          Exit;
+        end;
         ThrowTypeError(Format(SErrorCannotDeletePropertyOf, [PropertyName, '[object Object]']),
           SSuggestCannotDeleteNonConfigurable);
+      end;
       Result := TGocciaBooleanLiteralValue.TrueValue;
     end
     else
@@ -6606,6 +6627,15 @@ begin
     // Handle other expressions according to strict mode semantics
     if AOperand is TGocciaIdentifierExpression then
     begin
+      if AContext.NonStrictMode then
+      begin
+        if AContext.Scope.DeleteBinding(TGocciaIdentifierExpression(AOperand).Name) then
+          Result := TGocciaBooleanLiteralValue.TrueValue
+        else
+          Result := TGocciaBooleanLiteralValue.FalseValue;
+        Exit;
+      end;
+
       // In strict mode, attempting to delete variables/identifiers throws TypeError
       AContext.OnError('Delete of an unqualified identifier in strict mode',
         AOperand.Line, AOperand.Column);

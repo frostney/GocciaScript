@@ -245,7 +245,7 @@ Independently, the engine's curated semantics enforce most strict-mode
 behaviors statically:
 
 - Implicit globals throw `ReferenceError` (sloppy would create a global)
-- `delete <identifier>` always throws (sloppy is silent)
+- `delete <identifier>` and non-configurable property deletion throw by default
 - `eval` is not implemented
 
 The orchestrator therefore does not inject `"use strict"` for `onlyStrict`
@@ -253,9 +253,11 @@ tests — the body's own directive (if present) is parsed and ignored,
 which is correct because the engine's behavior is already strict-equivalent
 for the things `onlyStrict` tests assert on.
 
-`noStrict` tests rely on sloppy-only behaviors that GocciaScript doesn't
-provide and fail naturally. They are documented in
-`scripts/test262_compatibility_roadmap.json` as
+The orchestrator enables `--compat-non-strict-mode` for harness runs so
+`arguments`, `with`, and legacy `delete` return values are exercised where
+test262 requires them. Remaining `noStrict` tests rely on sloppy-only
+behaviors that GocciaScript still does not provide and fail naturally. They
+are documented in `scripts/test262_compatibility_roadmap.json` as
 `excluded-by-language-design` and counted as expected failures, not as
 wrapper-infra failures.
 

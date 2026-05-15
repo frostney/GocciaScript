@@ -9,7 +9,7 @@
 - **TC39 proposals** — Decorators, decorator metadata, pattern matching, types as comments, enums, `Math.clamp`
 - **Excluded by design** — `eval`, `while` / `do...while`, default imports/exports
 - **Graceful handling** — Parser-recognized excluded syntax (`==`/`!=` when `--compat-loose-equality` is off, `while`/`do...while`, `with` when `--compat-non-strict-mode` is off, traditional `for(;;)` when `--compat-traditional-for-loop` is off) parses successfully but executes as a no-op with a warning and suggestion
-- **Opt-in toggles** — ASI (`--asi`), `var` declarations (`--compat-var`), `function` keyword (`--compat-function`), non-strict compatibility (`--compat-non-strict-mode` for `arguments` and `with`), loose equality (`--compat-loose-equality`), traditional `for(init; test; update)` loops (`--compat-traditional-for-loop`), runtime type enforcement (`--strict-types`)
+- **Opt-in toggles** — ASI (`--asi`), `var` declarations (`--compat-var`), `function` keyword (`--compat-function`), non-strict compatibility (`--compat-non-strict-mode` for `arguments`, `with`, and legacy `delete` return values), loose equality (`--compat-loose-equality`), traditional `for(init; test; update)` loops (`--compat-traditional-for-loop`), runtime type enforcement (`--strict-types`)
 - **Default preprocessors** — JSX (enabled by default via `DefaultPreprocessors`)
 
 GocciaScript implements a curated subset of ECMAScript. This document details what's supported, what's excluded, and the rationale for each decision. For quick-reference tables of every feature and TC39 proposal, see [Language Tables](language-tables.md).
@@ -802,11 +802,11 @@ items.reduce((acc, item) => acc + item, 0);
 
 **Opt-in.** Excluded by default; use explicit property access. Available via `--compat-non-strict-mode` (CLI flag, `Engine.NonStrictModeEnabled`, or `{"compat-non-strict-mode": true}` in config).
 
-When enabled, `with (object) statement` evaluates the object expression, converts it with `ToObject`, and resolves unqualified identifiers through that object before falling back to outer lexical scopes. `Symbol.unscopables` is honored.
+When enabled, `with (object) statement` evaluates the object expression, converts it with `ToObject`, and resolves unqualified identifiers through that object before falling back to outer lexical scopes. `Symbol.unscopables` is honored. Calls to functions resolved through the object environment use that object as `this`, and closures created inside the body retain the object environment. When disabled (default), the parser accepts the syntax but treats the statement as a no-op and emits a warning suggesting explicit property access or the flag. `with` creates ambiguous scope and is forbidden by JavaScript strict mode, so new GocciaScript code should prefer explicit property access. The keyword is reserved (it cannot be used as a variable name), but it can be used as a property name (for example, `obj.with`).
 
-Calls to functions resolved through the object environment use that object as `this`, and closures created inside the body retain the object environment.
+### `delete` Semantics
 
-When disabled (default), the parser accepts the syntax but treats the statement as a no-op and emits a warning suggesting explicit property access or the flag. `with` creates ambiguous scope and is forbidden by JavaScript strict mode, so new GocciaScript code should prefer explicit property access. The keyword is reserved (it cannot be used as a variable name), but it can be used as a property name (for example, `obj.with`).
+By default, GocciaScript follows strict delete behavior: deleting an unqualified identifier is an error, and deleting a non-configurable property throws `TypeError`. With `--compat-non-strict-mode`, legacy non-strict delete return values are enabled in both interpreter and bytecode modes. `delete name` returns `false` for declared bindings and `true` for unresolvable names. `delete obj.prop` and `delete obj[key]` return `false` for non-configurable properties instead of throwing. Accessing a property through `null` or `undefined` still throws `TypeError`.
 
 ### Labeled Statements
 
@@ -861,6 +861,7 @@ GocciaScript operates in an implicit strict mode (see [Errors](errors.md) for th
 - Temporal Dead Zone is enforced for `let`/`const`.
 - `const` reassignment throws `TypeError`.
 - Accessing undeclared variables throws `ReferenceError`.
+- Deleting an unqualified identifier or non-configurable property is an error unless `--compat-non-strict-mode` is enabled.
 - `this` is `undefined` in standalone function calls (no implicit global `this`).
 - Symbol values cannot be implicitly converted to strings or numbers — throws `TypeError`.
 

@@ -775,9 +775,93 @@ procedure CompileDelete(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaUnaryExpression; const ADest: UInt8);
 var
   MemberExpr: TGocciaMemberExpression;
+  IdentExpr: TGocciaIdentifierExpression;
   ObjReg, KeyReg: UInt8;
   PropIdx: UInt16;
   NilJump, EndJump: Integer;
+
+  procedure EmitGlobalDeleteIdentifierResult(const AName: string);
+  var
+    NameIdx: UInt16;
+  begin
+    NameIdx := ACtx.Template.AddConstantString(AName);
+    EmitInstruction(ACtx, EncodeABx(OP_HAS_GLOBAL, ADest, NameIdx));
+    EmitInstruction(ACtx, EncodeABC(OP_NOT, ADest, ADest, 0));
+  end;
+
+  procedure CompileDeleteIdentifierNoWith(const AName: string);
+  var
+    LocalIdx, UpvalIdx: Integer;
+  begin
+    LocalIdx := ACtx.Scope.ResolveLocal(AName);
+    if LocalIdx >= 0 then
+    begin
+      if ACtx.Scope.GetLocal(LocalIdx).IsGlobalBacked then
+        EmitGlobalDeleteIdentifierResult(AName)
+      else
+        EmitInstruction(ACtx, EncodeABC(OP_LOAD_FALSE, ADest, 0, 0));
+      Exit;
+    end;
+
+    UpvalIdx := ACtx.Scope.ResolveUpvalue(AName);
+    if UpvalIdx >= 0 then
+    begin
+      if ACtx.Scope.GetUpvalue(UpvalIdx).IsGlobalBacked then
+        EmitGlobalDeleteIdentifierResult(AName)
+      else
+        EmitInstruction(ACtx, EncodeABC(OP_LOAD_FALSE, ADest, 0, 0));
+      Exit;
+    end;
+
+    EmitGlobalDeleteIdentifierResult(AName);
+  end;
+
+  procedure CompileDeleteIdentifier(const AName: string);
+  var
+    WithObjReg, WithKeyReg, CondReg: UInt8;
+    NameIdx: UInt16;
+    I, EndCount: Integer;
+    MissJump: Integer;
+    EndJumps: array of Integer;
+  begin
+    if not ShouldTryWithBinding(ACtx.Scope, AName) then
+    begin
+      CompileDeleteIdentifierNoWith(AName);
+      Exit;
+    end;
+
+    WithObjReg := ACtx.Scope.AllocateRegister;
+    WithKeyReg := ACtx.Scope.AllocateRegister;
+    CondReg := ACtx.Scope.AllocateRegister;
+    EndCount := 0;
+    SetLength(EndJumps, ACtx.Scope.WithBindingCount);
+    try
+      NameIdx := ACtx.Template.AddConstantString(AName);
+      EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, WithKeyReg, NameIdx));
+
+      for I := ACtx.Scope.WithBindingCount - 1 downto 0 do
+      begin
+        EmitLoadHiddenWithObject(ACtx, ACtx.Scope.GetWithBindingName(I), WithObjReg);
+        EmitInstruction(ACtx, EncodeABC(OP_HAS_WITH_BINDING, CondReg, WithObjReg,
+          WithKeyReg));
+        MissJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, CondReg);
+        EmitInstruction(ACtx, EncodeABC(OP_DEL_INDEX_LOOSE, ADest, WithObjReg,
+          WithKeyReg));
+        EndJumps[EndCount] := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+        Inc(EndCount);
+        PatchJumpTarget(ACtx, MissJump);
+      end;
+
+      CompileDeleteIdentifierNoWith(AName);
+
+      for I := 0 to EndCount - 1 do
+        PatchJumpTarget(ACtx, EndJumps[I]);
+    finally
+      ACtx.Scope.FreeRegister;
+      ACtx.Scope.FreeRegister;
+      ACtx.Scope.FreeRegister;
+    end;
+  end;
 begin
   if AExpr.Operand is TGocciaMemberExpression then
   begin
@@ -794,13 +878,19 @@ begin
     begin
       KeyReg := ACtx.Scope.AllocateRegister;
       ACtx.CompileExpression(MemberExpr.PropertyExpression, KeyReg);
-      EmitInstruction(ACtx, EncodeABC(OP_DEL_INDEX, ADest, ObjReg, KeyReg));
+      if ACtx.NonStrictMode then
+        EmitInstruction(ACtx, EncodeABC(OP_DEL_INDEX_LOOSE, ADest, ObjReg, KeyReg))
+      else
+        EmitInstruction(ACtx, EncodeABC(OP_DEL_INDEX, ADest, ObjReg, KeyReg));
       ACtx.Scope.FreeRegister;
     end
     else
     begin
       PropIdx := ACtx.Template.AddConstantString(MemberExpr.PropertyName);
-      EmitInstruction(ACtx, EncodeABx(OP_DELETE_PROP_CONST, ObjReg, PropIdx));
+      if ACtx.NonStrictMode then
+        EmitInstruction(ACtx, EncodeABx(OP_DELETE_PROP_CONST_LOOSE, ObjReg, PropIdx))
+      else
+        EmitInstruction(ACtx, EncodeABx(OP_DELETE_PROP_CONST, ObjReg, PropIdx));
       if ADest <> ObjReg then
         EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, ObjReg, 0));
     end;
@@ -816,7 +906,12 @@ begin
     ACtx.Scope.FreeRegister;
   end
   else if AExpr.Operand is TGocciaIdentifierExpression then
-    raise Exception.Create('Delete of an unqualified identifier in strict mode')
+  begin
+    if not ACtx.NonStrictMode then
+      raise Exception.Create('Delete of an unqualified identifier in strict mode');
+    IdentExpr := TGocciaIdentifierExpression(AExpr.Operand);
+    CompileDeleteIdentifier(IdentExpr.Name);
+  end
   else
     EmitInstruction(ACtx, EncodeABC(OP_LOAD_TRUE, ADest, 0, 0));
 end;
