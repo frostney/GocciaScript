@@ -1,4 +1,4 @@
-unit Goccia.Runtime.GeneratorContinuation;
+unit Goccia.Generator.Continuation;
 
 {$I Goccia.inc}
 

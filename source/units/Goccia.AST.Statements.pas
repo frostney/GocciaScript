@@ -482,8 +482,8 @@ uses
 
   Goccia.Evaluator,
   Goccia.GarbageCollector,
+  Goccia.Generator.Continuation,
   Goccia.Modules,
-  Goccia.Runtime.GeneratorContinuation,
   Goccia.Scope,
   Goccia.Scope.BindingMap,
   Goccia.Token,
