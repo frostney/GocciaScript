@@ -79,6 +79,19 @@ begin
   Result := Max(0, Trunc(AObject.GetProperty(AName).ToNumberLiteral.Value));
 end;
 
+function GetClampedIndexValue(const AValue: TGocciaValue;
+  const AInputLength: Integer): Integer;
+var
+  Index: TGocciaNumberLiteralValue;
+begin
+  Index := AValue.ToNumberLiteral;
+  if Index.IsNaN or Index.IsNegativeInfinity or (Index.Value <= 0) then
+    Exit(0);
+  if Index.IsInfinity or (Index.Value >= AInputLength) then
+    Exit(AInputLength);
+  Result := Trunc(Index.Value);
+end;
+
 function HasUnicodeRegExpFlag(const AFlags: string): Boolean;
 begin
   Result := HasRegExpFlag(AFlags, 'u') or HasRegExpFlag(AFlags, 'v');
@@ -86,16 +99,9 @@ end;
 
 function GetClampedLastIndex(const AValue: TGocciaValue;
   const AInputLength: Integer): Integer;
-var
-  LastIndex: TGocciaNumberLiteralValue;
 begin
-  LastIndex := TGocciaObjectValue(AValue).GetProperty(PROP_LAST_INDEX)
-    .ToNumberLiteral;
-  if LastIndex.IsNaN or LastIndex.IsNegativeInfinity or (LastIndex.Value <= 0) then
-    Exit(0);
-  if LastIndex.IsInfinity or (LastIndex.Value >= AInputLength) then
-    Exit(AInputLength);
-  Result := Trunc(LastIndex.Value);
+  Result := GetClampedIndexValue(
+    TGocciaObjectValue(AValue).GetProperty(PROP_LAST_INDEX), AInputLength);
 end;
 
 function AdvanceProtocolLastIndexAfterEmptyMatch(
@@ -250,8 +256,11 @@ begin
   Obj := TGocciaObjectValue(AValue);
   ExecMethod := Obj.GetProperty(PROP_EXEC);
   if (not IsRegExpInstance(AValue)) and Assigned(ExecMethod) and
-     (not (ExecMethod is TGocciaUndefinedLiteralValue)) and ExecMethod.IsCallable then
+     (not (ExecMethod is TGocciaUndefinedLiteralValue)) then
   begin
+    if not ExecMethod.IsCallable then
+      ThrowTypeError(SErrorRegExpExecNotCallable);
+
     ExecArgs := TGocciaArgumentsCollection.Create([
       TGocciaStringLiteralValue.Create(AInput)
     ]);
@@ -274,8 +283,9 @@ begin
       ThrowTypeError(SErrorRegExpExecReturnType);
 
     AMatchArray := ExecResult;
-    AMatchIndex := Trunc(TGocciaObjectValue(ExecResult).GetProperty(PROP_INDEX)
-      .ToNumberLiteral.Value);
+    AMatchIndex := GetClampedIndexValue(
+      TGocciaObjectValue(ExecResult).GetProperty(PROP_INDEX),
+      Length(AInput));
     MatchText := TGocciaObjectValue(ExecResult).GetProperty(MATCH_TEXT_PROPERTY)
       .ToStringLiteral.Value;
     AMatchEnd := AMatchIndex + Length(MatchText);

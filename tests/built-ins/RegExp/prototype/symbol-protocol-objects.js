@@ -91,6 +91,36 @@ test("Symbol.search accepts a protocol object with exec", () => {
   expect(RegExp.prototype[Symbol.search].call(protocol, "abc")).toBe(1);
 });
 
+test("Symbol.search rejects protocol object with non-callable exec", () => {
+  const protocol = {
+    flags: "",
+    lastIndex: 0,
+    exec: 1,
+  };
+
+  expect(() => RegExp.prototype[Symbol.search].call(protocol, "abc")).toThrow(TypeError);
+});
+
+test("Symbol.search clamps protocol result index", () => {
+  const negativeIndexProtocol = {
+    flags: "",
+    lastIndex: 0,
+    exec(input) {
+      return createMatch("a", -10, input);
+    },
+  };
+  const infiniteIndexProtocol = {
+    flags: "",
+    lastIndex: 0,
+    exec(input) {
+      return createMatch("", Infinity, input);
+    },
+  };
+
+  expect(RegExp.prototype[Symbol.search].call(negativeIndexProtocol, "abc")).toBe(0);
+  expect(RegExp.prototype[Symbol.search].call(infiniteIndexProtocol, "abc")).toBe(3);
+});
+
 test("Symbol.search restores protocol object lastIndex", () => {
   const protocol = {
     flags: "",
