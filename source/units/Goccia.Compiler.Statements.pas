@@ -23,6 +23,8 @@ function CompileBlockStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaBlockStatement): Boolean;
 function CompileIfStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaIfStatement): Boolean;
+function CompileWithStatement(const ACtx: TGocciaCompilationContext;
+  const AStmt: TGocciaWithStatement): Boolean;
 procedure CompileReturnStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaReturnStatement);
 procedure CompileThrowStatement(const ACtx: TGocciaCompilationContext;
@@ -1082,6 +1084,9 @@ begin
       StatementAlwaysAbrupt(IfStmt.Alternate));
   end;
 
+  if AStmt is TGocciaWithStatement then
+    Exit(StatementAlwaysAbrupt(TGocciaWithStatement(AStmt).Body));
+
   if AStmt is TGocciaBlockStatement then
   begin
     BlockStmt := TGocciaBlockStatement(AStmt);
@@ -1127,6 +1132,9 @@ begin
     Exit(False);
   end;
 
+  if AStmt is TGocciaWithStatement then
+    Exit(StatementAlwaysAbrupt(ACtx, TGocciaWithStatement(AStmt).Body));
+
   Result := StatementAlwaysAbrupt(AStmt);
 end;
 
@@ -1169,6 +1177,9 @@ begin
 
   if AStmt is TGocciaIfStatement then
     Exit(True);
+
+  if AStmt is TGocciaWithStatement then
+    Exit(StatementNeedsIteratorClose(TGocciaWithStatement(AStmt).Body));
 
   if AStmt is TGocciaTryStatement then
   begin
@@ -1394,6 +1405,34 @@ begin
   // Free exception handling registers
   ACtx.Scope.FreeRegister; // ErrorReg
   ACtx.Scope.FreeRegister; // CatchReg
+
+  ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
+  for I := 0 to ClosedCount - 1 do
+    EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
+end;
+
+function CompileWithStatement(const ACtx: TGocciaCompilationContext;
+  const AStmt: TGocciaWithStatement): Boolean;
+var
+  HiddenName: string;
+  HiddenSlot: UInt8;
+  ClosedLocals: array[0..255] of UInt8;
+  ClosedCount, I: Integer;
+begin
+  ACtx.Scope.BeginScope;
+  HiddenName := '#with:' + IntToStr(ACtx.Template.CodeCount) + ':' +
+    IntToStr(ACtx.Scope.Depth);
+  HiddenSlot := ACtx.Scope.DeclareLocal(HiddenName, False);
+
+  ACtx.CompileExpression(AStmt.ObjectExpression, HiddenSlot);
+  EmitInstruction(ACtx, EncodeABC(OP_TO_OBJECT, HiddenSlot, HiddenSlot, 0));
+
+  ACtx.Scope.PushWithBinding(HiddenName);
+  try
+    Result := ACtx.CompileStatement(AStmt.Body);
+  finally
+    ACtx.Scope.PopWithBinding;
+  end;
 
   ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
   for I := 0 to ClosedCount - 1 do
@@ -3076,6 +3115,7 @@ var
   MethodReg: UInt8;
   MethodNameIdx: UInt16;
   FormalCount, RestParamIndex, I: Integer;
+  ArgumentsSlot: Integer;
 begin
   OldTemplate := ACtx.Template;
   OldScope := ACtx.Scope;
@@ -3105,6 +3145,7 @@ begin
     end;
     ChildScope.DeclareLocal(AMethod.Parameters[I].Name, False);
   end;
+  ArgumentsSlot := DeclareArgumentsObjectLocal(ChildScope, AMethod.Parameters);
   if FormalCount < 0 then
     FormalCount := Length(AMethod.Parameters);
   ChildTemplate.FormalParameterCount := UInt8(FormalCount);
@@ -3117,6 +3158,8 @@ begin
   ChildCtx := ACtx;
   ChildCtx.Template := ChildTemplate;
   ChildCtx.Scope := ChildScope;
+
+  EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot);
 
   if RestParamIndex >= 0 then
     EmitInstruction(ChildCtx, EncodeABC(OP_PACK_ARGS,
@@ -3158,9 +3201,12 @@ var
   OldScope: TGocciaCompilerScope;
   ChildTemplate: TGocciaFunctionTemplate;
   ChildScope: TGocciaCompilerScope;
+  ChildCtx: TGocciaCompilationContext;
   FuncIdx: UInt16;
   FnReg, TargetReg, AccessorReg: UInt8;
   NameIdx: UInt16;
+  EmptyParams: TGocciaParameterArray;
+  ArgumentsSlot: Integer;
   I: Integer;
 begin
   OldTemplate := ACtx.Template;
@@ -3172,9 +3218,15 @@ begin
   ChildTemplate.ParameterCount := 0;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
+  SetLength(EmptyParams, 0);
+  ArgumentsSlot := DeclareArgumentsObjectLocal(ChildScope, EmptyParams);
 
   ACtx.SwapState(ChildTemplate, ChildScope);
-  EmitLineMapping(ACtx, AGetter.Line, AGetter.Column);
+  ChildCtx := ACtx;
+  ChildCtx.Template := ChildTemplate;
+  ChildCtx.Scope := ChildScope;
+  EmitLineMapping(ChildCtx, AGetter.Line, AGetter.Column);
+  EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot);
   ACtx.CompileFunctionBody(AGetter.Body);
   ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
 
@@ -3214,9 +3266,12 @@ var
   OldScope: TGocciaCompilerScope;
   ChildTemplate: TGocciaFunctionTemplate;
   ChildScope: TGocciaCompilerScope;
+  ChildCtx: TGocciaCompilationContext;
   FuncIdx: UInt16;
   FnReg, TargetReg, AccessorReg: UInt8;
   NameIdx: UInt16;
+  SetterParams: TGocciaParameterArray;
+  ArgumentsSlot: Integer;
   I: Integer;
 begin
   OldTemplate := ACtx.Template;
@@ -3229,9 +3284,16 @@ begin
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
   ChildScope.DeclareLocal(ASetter.Parameter, False);
+  SetLength(SetterParams, 1);
+  SetterParams[0].Name := ASetter.Parameter;
+  ArgumentsSlot := DeclareArgumentsObjectLocal(ChildScope, SetterParams);
 
   ACtx.SwapState(ChildTemplate, ChildScope);
-  EmitLineMapping(ACtx, ASetter.Line, ASetter.Column);
+  ChildCtx := ACtx;
+  ChildCtx.Template := ChildTemplate;
+  ChildCtx.Scope := ChildScope;
+  EmitLineMapping(ChildCtx, ASetter.Line, ASetter.Column);
+  EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot);
   ACtx.CompileFunctionBody(ASetter.Body);
   ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
 
@@ -3271,8 +3333,11 @@ var
   OldScope: TGocciaCompilerScope;
   ChildTemplate: TGocciaFunctionTemplate;
   ChildScope: TGocciaCompilerScope;
+  ChildCtx: TGocciaCompilationContext;
   FuncIdx: UInt16;
   FnReg, TargetReg, AccessorReg: UInt8;
+  EmptyParams: TGocciaParameterArray;
+  ArgumentsSlot: Integer;
   I: Integer;
 begin
   OldTemplate := ACtx.Template;
@@ -3283,9 +3348,15 @@ begin
   ChildTemplate.ParameterCount := 0;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
+  SetLength(EmptyParams, 0);
+  ArgumentsSlot := DeclareArgumentsObjectLocal(ChildScope, EmptyParams);
 
   ACtx.SwapState(ChildTemplate, ChildScope);
-  EmitLineMapping(ACtx, AGetter.Line, AGetter.Column);
+  ChildCtx := ACtx;
+  ChildCtx.Template := ChildTemplate;
+  ChildCtx.Scope := ChildScope;
+  EmitLineMapping(ChildCtx, AGetter.Line, AGetter.Column);
+  EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot);
   ACtx.CompileFunctionBody(AGetter.Body);
   ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
 
@@ -3322,8 +3393,11 @@ var
   OldScope: TGocciaCompilerScope;
   ChildTemplate: TGocciaFunctionTemplate;
   ChildScope: TGocciaCompilerScope;
+  ChildCtx: TGocciaCompilationContext;
   FuncIdx: UInt16;
   FnReg, TargetReg, AccessorReg: UInt8;
+  SetterParams: TGocciaParameterArray;
+  ArgumentsSlot: Integer;
   I: Integer;
 begin
   OldTemplate := ACtx.Template;
@@ -3335,9 +3409,16 @@ begin
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
   ChildScope.DeclareLocal(ASetter.Parameter, False);
+  SetLength(SetterParams, 1);
+  SetterParams[0].Name := ASetter.Parameter;
+  ArgumentsSlot := DeclareArgumentsObjectLocal(ChildScope, SetterParams);
 
   ACtx.SwapState(ChildTemplate, ChildScope);
-  EmitLineMapping(ACtx, ASetter.Line, ASetter.Column);
+  ChildCtx := ACtx;
+  ChildCtx.Template := ChildTemplate;
+  ChildCtx.Scope := ChildScope;
+  EmitLineMapping(ChildCtx, ASetter.Line, ASetter.Column);
+  EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot);
   ACtx.CompileFunctionBody(ASetter.Body);
   ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
 
@@ -3378,6 +3459,7 @@ var
   FnReg, TargetReg: UInt8;
   ProtoNameIdx: UInt16;
   FormalCount, RestParamIndex, I: Integer;
+  ArgumentsSlot: Integer;
 begin
   OldTemplate := ACtx.Template;
   OldScope := ACtx.Scope;
@@ -3406,6 +3488,7 @@ begin
     end;
     ChildScope.DeclareLocal(AMethod.Parameters[I].Name, False);
   end;
+  ArgumentsSlot := DeclareArgumentsObjectLocal(ChildScope, AMethod.Parameters);
   if FormalCount < 0 then
     FormalCount := Length(AMethod.Parameters);
   ChildTemplate.FormalParameterCount := UInt8(FormalCount);
@@ -3418,6 +3501,8 @@ begin
   ChildCtx := ACtx;
   ChildCtx.Template := ChildTemplate;
   ChildCtx.Scope := ChildScope;
+
+  EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot);
 
   if RestParamIndex >= 0 then
     EmitInstruction(ChildCtx, EncodeABC(OP_PACK_ARGS,

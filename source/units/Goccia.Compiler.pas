@@ -234,6 +234,9 @@ begin
   else if AStmt is TGocciaIfStatement then
     Result := Goccia.Compiler.Statements.CompileIfStatement(Ctx,
       TGocciaIfStatement(AStmt))
+  else if AStmt is TGocciaWithStatement then
+    Result := Goccia.Compiler.Statements.CompileWithStatement(Ctx,
+      TGocciaWithStatement(AStmt))
   else if AStmt is TGocciaReturnStatement then
   begin
     Goccia.Compiler.Statements.CompileReturnStatement(Ctx,

@@ -91,8 +91,11 @@ implementation
 uses
   SysUtils,
 
+  Goccia.Arguments.ObjectValue,
+  Goccia.AST.BindingPatterns,
   Goccia.AST.Statements,
   Goccia.Bytecode.Chunk,
+  Goccia.Constants,
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
   Goccia.Evaluator,
@@ -523,6 +526,12 @@ begin
   Context.StrictTypes := FClosure.EffectiveStrictTypes;
   Context.DisposalTracker := nil;
 
+  if CreatesArgumentsObject and
+     not ParameterListBindsName(FParameters, IDENTIFIER_ARGUMENTS) and
+     not CallScope.ContainsOwnLexicalBinding(IDENTIFIER_ARGUMENTS) then
+    CallScope.DefineVariableBinding(IDENTIFIER_ARGUMENTS,
+      CreateUnmappedArgumentsObject(AArguments), True);
+
   for I := 0 to Length(FParameters) - 1 do
   begin
     if FParameters[I].IsRest then
@@ -550,10 +559,11 @@ begin
     begin
       if I < AArguments.Length then
         Value := AArguments.GetElement(I)
-      else if Assigned(FParameters[I].DefaultValue) then
-        Value := EvaluateExpression(FParameters[I].DefaultValue, Context)
       else
         Value := TGocciaUndefinedLiteralValue.UndefinedValue;
+      if Assigned(FParameters[I].DefaultValue) and
+         (Value is TGocciaUndefinedLiteralValue) then
+        Value := EvaluateExpression(FParameters[I].DefaultValue, Context);
 
       // Mirrors TGocciaFunctionValue.ExecuteBody's IsPattern branch:
       // enforce on the raw pre-destructured value (defaults and
@@ -575,10 +585,11 @@ begin
     begin
       if I < AArguments.Length then
         Value := AArguments.GetElement(I)
-      else if Assigned(FParameters[I].DefaultValue) then
-        Value := EvaluateExpression(FParameters[I].DefaultValue, Context)
       else
         Value := TGocciaUndefinedLiteralValue.UndefinedValue;
+      if Assigned(FParameters[I].DefaultValue) and
+         (Value is TGocciaUndefinedLiteralValue) then
+        Value := EvaluateExpression(FParameters[I].DefaultValue, Context);
       CallScope.DefineLexicalBinding(FParameters[I].Name, Value, dtParameter);
     end;
   end;
@@ -660,6 +671,12 @@ begin
   Context.StrictTypes := FClosure.EffectiveStrictTypes;
   Context.DisposalTracker := nil;
 
+  if CreatesArgumentsObject and
+     not ParameterListBindsName(FParameters, IDENTIFIER_ARGUMENTS) and
+     not CallScope.ContainsOwnLexicalBinding(IDENTIFIER_ARGUMENTS) then
+    CallScope.DefineVariableBinding(IDENTIFIER_ARGUMENTS,
+      CreateUnmappedArgumentsObject(AArguments), True);
+
   for I := 0 to Length(FParameters) - 1 do
   begin
     if FParameters[I].IsRest then
@@ -685,10 +702,11 @@ begin
     begin
       if I < AArguments.Length then
         Value := AArguments.GetElement(I)
-      else if Assigned(FParameters[I].DefaultValue) then
-        Value := EvaluateExpression(FParameters[I].DefaultValue, Context)
       else
         Value := TGocciaUndefinedLiteralValue.UndefinedValue;
+      if Assigned(FParameters[I].DefaultValue) and
+         (Value is TGocciaUndefinedLiteralValue) then
+        Value := EvaluateExpression(FParameters[I].DefaultValue, Context);
 
       // Mirrors TGocciaFunctionValue.ExecuteBody's IsPattern branch.
       if Context.StrictTypes
@@ -707,10 +725,11 @@ begin
     begin
       if I < AArguments.Length then
         Value := AArguments.GetElement(I)
-      else if Assigned(FParameters[I].DefaultValue) then
-        Value := EvaluateExpression(FParameters[I].DefaultValue, Context)
       else
         Value := TGocciaUndefinedLiteralValue.UndefinedValue;
+      if Assigned(FParameters[I].DefaultValue) and
+         (Value is TGocciaUndefinedLiteralValue) then
+        Value := EvaluateExpression(FParameters[I].DefaultValue, Context);
       CallScope.DefineLexicalBinding(FParameters[I].Name, Value, dtParameter);
     end;
   end;

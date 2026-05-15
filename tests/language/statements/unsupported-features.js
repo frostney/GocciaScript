@@ -1,6 +1,6 @@
 /*---
 description: >
-  Unsupported features (for, while, do...while, var, with, function, ==, !=,
+  Unsupported features (for, while, do...while, var, function, ==, !=,
   export *, labels) are parsed as no-ops. Code after skipped statements must
   still execute correctly, even when the unsupported statement contains nested
   parentheses or complex expressions.

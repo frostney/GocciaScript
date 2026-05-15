@@ -34,6 +34,7 @@ type
     function GetSourceText: string; override;
     procedure BindThis(const ACallScope: TGocciaScope; const AThisValue: TGocciaValue); virtual;
     function CreateCallScope: TGocciaScope; virtual;
+    function CreatesArgumentsObject: Boolean; virtual;
     function ExecuteBody(const ACallScope: TGocciaScope; const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const AParameters: TGocciaParameterArray; const ABodyStatements: TObjectList<TGocciaASTNode>; const AClosure: TGocciaScope; const AName: string = '');
@@ -56,6 +57,7 @@ type
   TGocciaArrowFunctionValue = class(TGocciaFunctionValue)
   protected
     function CreateCallScope: TGocciaScope; override;
+    function CreatesArgumentsObject: Boolean; override;
     procedure BindThis(const ACallScope: TGocciaScope; const AThisValue: TGocciaValue); override;
   end;
 
@@ -81,8 +83,11 @@ implementation
 uses
   SysUtils,
 
+  Goccia.Arguments.ObjectValue,
+  Goccia.AST.BindingPatterns,
   Goccia.AST.Statements,
   Goccia.Bytecode.Chunk,
+  Goccia.Constants,
   Goccia.ControlFlow,
   Goccia.Coverage,
   Goccia.Error.Messages,
@@ -158,6 +163,11 @@ begin
   Result := TGocciaCallScope.Create(FClosure, FName, Length(FParameters) + 2);
 end;
 
+function TGocciaFunctionValue.CreatesArgumentsObject: Boolean;
+begin
+  Result := True;
+end;
+
 function TGocciaFunctionValue.ExecuteBody(const ACallScope: TGocciaScope; const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   I, J: Integer;
@@ -187,6 +197,13 @@ begin
 
   // Bind this via virtual dispatch (arrow vs non-arrow)
   BindThis(ACallScope, AThisValue);
+  Context.Scope := ACallScope;
+
+  if CreatesArgumentsObject and
+     not ParameterListBindsName(FParameters, IDENTIFIER_ARGUMENTS) and
+     not ACallScope.ContainsOwnLexicalBinding(IDENTIFIER_ARGUMENTS) then
+    ACallScope.DefineVariableBinding(IDENTIFIER_ARGUMENTS,
+      CreateUnmappedArgumentsObject(AArguments), True);
 
   // Bind parameters - fast path for simple named params (no rest/destructuring/defaults)
   if FIsSimpleParams then
@@ -231,10 +248,11 @@ begin
       begin
         if I < AArguments.Length then
           ReturnValue := AArguments.GetElement(I)
-        else if Assigned(FParameters[I].DefaultValue) then
-          ReturnValue := EvaluateExpression(FParameters[I].DefaultValue, Context)
         else
           ReturnValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+        if Assigned(FParameters[I].DefaultValue) and
+           (ReturnValue is TGocciaUndefinedLiteralValue) then
+          ReturnValue := EvaluateExpression(FParameters[I].DefaultValue, Context);
 
         // Strict-types enforcement on destructured parameters: enforce on the
         // raw pre-destructured value, matching the bytecode side which checks
@@ -256,17 +274,13 @@ begin
       else
       begin
         if I < AArguments.Length then
-          ACallScope.DefineLexicalBinding(FParameters[I].Name, AArguments.GetElement(I), dtParameter)
+          ReturnValue := AArguments.GetElement(I)
         else
-        begin
-          if Assigned(FParameters[I].DefaultValue) then
-          begin
-            ReturnValue := EvaluateExpression(FParameters[I].DefaultValue, Context);
-            ACallScope.DefineLexicalBinding(FParameters[I].Name, ReturnValue, dtParameter);
-          end
-          else
-            ACallScope.DefineLexicalBinding(FParameters[I].Name, TGocciaUndefinedLiteralValue.UndefinedValue, dtParameter);
-        end;
+          ReturnValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+        if Assigned(FParameters[I].DefaultValue) and
+           (ReturnValue is TGocciaUndefinedLiteralValue) then
+          ReturnValue := EvaluateExpression(FParameters[I].DefaultValue, Context);
+        ACallScope.DefineLexicalBinding(FParameters[I].Name, ReturnValue, dtParameter);
       end;
     end;
   end;
@@ -417,6 +431,11 @@ begin
 end;
 
 { TGocciaArrowFunctionValue }
+
+function TGocciaArrowFunctionValue.CreatesArgumentsObject: Boolean;
+begin
+  Result := False;
+end;
 
 function TGocciaArrowFunctionValue.CreateCallScope: TGocciaScope;
 begin

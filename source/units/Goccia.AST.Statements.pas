@@ -129,6 +129,18 @@ type
     property Condition: TGocciaExpression read FCondition;
   end;
 
+  TGocciaWithStatement = class(TGocciaStatement)
+  private
+    FObjectExpression: TGocciaExpression;
+    FBody: TGocciaStatement;
+  public
+    constructor Create(const AObjectExpression: TGocciaExpression;
+      const ABody: TGocciaStatement; const ALine, AColumn: Integer);
+    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
+    property ObjectExpression: TGocciaExpression read FObjectExpression;
+    property Body: TGocciaStatement read FBody;
+  end;
+
   TGocciaForOfStatement = class(TGocciaStatement)
   private
     FIsConst: Boolean;
@@ -491,7 +503,8 @@ uses
   Goccia.Values.Error,
   Goccia.Values.FunctionValue,
   Goccia.Values.ObjectPropertyDescriptor,
-  Goccia.Values.ObjectValue;
+  Goccia.Values.ObjectValue,
+  Goccia.Values.ToObject;
 
 function CreateModuleNamespaceObject(const AModule: TGocciaModule): TGocciaValue;
 begin
@@ -800,6 +813,17 @@ end;
     FCondition := ACondition;
   end;
 
+  { TGocciaWithStatement }
+
+  constructor TGocciaWithStatement.Create(
+    const AObjectExpression: TGocciaExpression; const ABody: TGocciaStatement;
+    const ALine, AColumn: Integer);
+  begin
+    inherited Create(ALine, AColumn);
+    FObjectExpression := AObjectExpression;
+    FBody := ABody;
+  end;
+
   { TGocciaCaseClause }
 
   constructor TGocciaCaseClause.Create(const ATest: TGocciaExpression; const AConsequent: TObjectList<TGocciaStatement>; const ALine, AColumn: Integer);
@@ -950,6 +974,28 @@ end;
   function TGocciaDoWhileStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
   begin
     Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
+  end;
+
+  function TGocciaWithStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  var
+    WithContext: TGocciaEvaluationContext;
+    WithObject: TGocciaObjectValue;
+    WithScope: TGocciaWithScope;
+    GC: TGarbageCollector;
+  begin
+    WithObject := ToObject(EvaluateExpression(ObjectExpression, AContext));
+    WithScope := TGocciaWithScope.Create(AContext.Scope, WithObject);
+    GC := TGarbageCollector.Instance;
+    if Assigned(GC) then
+      GC.AddTempRoot(WithScope);
+    try
+      WithContext := AContext;
+      WithContext.Scope := WithScope;
+      Result := EvaluateStatement(Body, WithContext);
+    finally
+      if Assigned(GC) then
+        GC.RemoveTempRoot(WithScope);
+    end;
   end;
 
   function TGocciaForOfStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;

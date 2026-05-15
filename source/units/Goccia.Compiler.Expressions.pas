@@ -89,6 +89,10 @@ procedure CompileYield(const ACtx: TGocciaCompilationContext;
 
 procedure EmitDefaultParameters(const ACtx: TGocciaCompilationContext;
   const AParams: TGocciaParameterArray);
+function DeclareArgumentsObjectLocal(const AScope: TGocciaCompilerScope;
+  const AParams: TGocciaParameterArray): Integer;
+procedure EmitCreateArgumentsObject(const ACtx: TGocciaCompilationContext;
+  const AArgumentsSlot: Integer);
 procedure CollectDestructuringBindings(const APattern: TGocciaDestructuringPattern;
   const AScope: TGocciaCompilerScope; const AIsConst: Boolean = False);
 procedure EmitDestructuring(const ACtx: TGocciaCompilationContext;
@@ -110,6 +114,7 @@ uses
   Goccia.Compiler.ConstantFolding,
   Goccia.Compiler.Statements,
   Goccia.Compiler.TypeRules,
+  Goccia.Constants,
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
@@ -350,7 +355,63 @@ begin
   CompileIdentifierAccess(ACtx, AExpr, ADest, False);
 end;
 
-procedure CompileIdentifierAccess(const ACtx: TGocciaCompilationContext;
+procedure EmitBindingAssignmentFromRegister(const ACtx: TGocciaCompilationContext;
+  const AName: string; const AValueReg: UInt8;
+  const AAssignmentMode: Boolean); forward;
+
+function HiddenWithBindingName(const AName: string): Boolean;
+begin
+  Result := Pos('#with:', AName) = 1;
+end;
+
+function ShouldTryWithBinding(const AScope: TGocciaCompilerScope;
+  const AName: string): Boolean;
+var
+  LocalIdx: Integer;
+  Local: TGocciaCompilerLocal;
+  WithDepth: Integer;
+begin
+  if (AScope.WithBindingCount = 0) or (AName = KEYWORD_THIS) or
+     HiddenWithBindingName(AName) then
+    Exit(False);
+
+  WithDepth := AScope.GetWithBindingDepth(AScope.WithBindingCount - 1);
+  LocalIdx := AScope.ResolveLocal(AName);
+  if LocalIdx >= 0 then
+  begin
+    Local := AScope.GetLocal(LocalIdx);
+    if Local.Depth > WithDepth then
+      Exit(False);
+  end;
+
+  Result := True;
+end;
+
+procedure EmitLoadHiddenWithObject(const ACtx: TGocciaCompilationContext;
+  const AHiddenName: string; const ADest: UInt8);
+var
+  LocalIdx, UpvalIdx: Integer;
+begin
+  LocalIdx := ACtx.Scope.ResolveLocal(AHiddenName);
+  if LocalIdx >= 0 then
+  begin
+    EmitInstruction(ACtx, EncodeABx(OP_GET_LOCAL, ADest,
+      ACtx.Scope.GetLocal(LocalIdx).Slot));
+    Exit;
+  end;
+
+  UpvalIdx := ACtx.Scope.ResolveUpvalue(AHiddenName);
+  if UpvalIdx >= 0 then
+  begin
+    EmitInstruction(ACtx, EncodeABx(OP_GET_UPVALUE, ADest,
+      UInt16(UpvalIdx)));
+    Exit;
+  end;
+
+  EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, ADest, 0, 0));
+end;
+
+procedure CompileIdentifierAccessNoWith(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaIdentifierExpression; const ADest: UInt8;
   const ASafe: Boolean);
 var
@@ -417,6 +478,108 @@ begin
 
   ACtx.Scope.FreeRegister;
   ACtx.Scope.FreeRegister;
+end;
+
+procedure CompileIdentifierAccess(const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaIdentifierExpression; const ADest: UInt8;
+  const ASafe: Boolean);
+var
+  ObjReg, KeyReg, CondReg: UInt8;
+  NameIdx: UInt16;
+  I, EndCount: Integer;
+  MissJump: Integer;
+  EndJumps: array of Integer;
+begin
+  if not ShouldTryWithBinding(ACtx.Scope, AExpr.Name) then
+  begin
+    CompileIdentifierAccessNoWith(ACtx, AExpr, ADest, ASafe);
+    Exit;
+  end;
+
+  ObjReg := ACtx.Scope.AllocateRegister;
+  KeyReg := ACtx.Scope.AllocateRegister;
+  CondReg := ACtx.Scope.AllocateRegister;
+  EndCount := 0;
+  SetLength(EndJumps, ACtx.Scope.WithBindingCount);
+  try
+    NameIdx := ACtx.Template.AddConstantString(AExpr.Name);
+    EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, KeyReg, NameIdx));
+
+    for I := ACtx.Scope.WithBindingCount - 1 downto 0 do
+    begin
+      EmitLoadHiddenWithObject(ACtx, ACtx.Scope.GetWithBindingName(I), ObjReg);
+      EmitInstruction(ACtx, EncodeABC(OP_HAS_WITH_BINDING, CondReg, ObjReg,
+        KeyReg));
+      MissJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, CondReg);
+      EmitInstruction(ACtx, EncodeABC(OP_GET_INDEX, ADest, ObjReg, KeyReg));
+      EndJumps[EndCount] := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+      Inc(EndCount);
+      PatchJumpTarget(ACtx, MissJump);
+    end;
+
+    CompileIdentifierAccessNoWith(ACtx, AExpr, ADest, ASafe);
+
+    for I := 0 to EndCount - 1 do
+      PatchJumpTarget(ACtx, EndJumps[I]);
+  finally
+    ACtx.Scope.FreeRegister;
+    ACtx.Scope.FreeRegister;
+    ACtx.Scope.FreeRegister;
+  end;
+end;
+
+procedure EmitLoadBindingByName(const ACtx: TGocciaCompilationContext;
+  const AName: string; const ADest: UInt8; const ASafe: Boolean);
+var
+  Ident: TGocciaIdentifierExpression;
+begin
+  Ident := TGocciaIdentifierExpression.Create(AName, 0, 0);
+  try
+    CompileIdentifierAccess(ACtx, Ident, ADest, ASafe);
+  finally
+    Ident.Free;
+  end;
+end;
+
+procedure EmitWithAssignmentOrFallback(const ACtx: TGocciaCompilationContext;
+  const AName: string; const AValueReg: UInt8);
+var
+  ObjReg, KeyReg, CondReg: UInt8;
+  NameIdx: UInt16;
+  I, EndCount: Integer;
+  MissJump: Integer;
+  EndJumps: array of Integer;
+begin
+  ObjReg := ACtx.Scope.AllocateRegister;
+  KeyReg := ACtx.Scope.AllocateRegister;
+  CondReg := ACtx.Scope.AllocateRegister;
+  EndCount := 0;
+  SetLength(EndJumps, ACtx.Scope.WithBindingCount);
+  try
+    NameIdx := ACtx.Template.AddConstantString(AName);
+    EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, KeyReg, NameIdx));
+
+    for I := ACtx.Scope.WithBindingCount - 1 downto 0 do
+    begin
+      EmitLoadHiddenWithObject(ACtx, ACtx.Scope.GetWithBindingName(I), ObjReg);
+      EmitInstruction(ACtx, EncodeABC(OP_HAS_WITH_BINDING, CondReg, ObjReg,
+        KeyReg));
+      MissJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, CondReg);
+      EmitInstruction(ACtx, EncodeABC(OP_SET_INDEX, ObjReg, KeyReg, AValueReg));
+      EndJumps[EndCount] := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+      Inc(EndCount);
+      PatchJumpTarget(ACtx, MissJump);
+    end;
+
+    EmitBindingAssignmentFromRegister(ACtx, AName, AValueReg, True);
+
+    for I := 0 to EndCount - 1 do
+      PatchJumpTarget(ACtx, EndJumps[I]);
+  finally
+    ACtx.Scope.FreeRegister;
+    ACtx.Scope.FreeRegister;
+    ACtx.Scope.FreeRegister;
+  end;
 end;
 
 function CallTrustedFlag(const ACtx: TGocciaCompilationContext;
@@ -733,6 +896,13 @@ var
   ValueType: TGocciaLocalType;
   GlobalExistsJump: Integer;
 begin
+  if ShouldTryWithBinding(ACtx.Scope, AExpr.Name) then
+  begin
+    ACtx.CompileExpression(AExpr.Value, ADest);
+    EmitWithAssignmentOrFallback(ACtx, AExpr.Name, ADest);
+    Exit;
+  end;
+
   LocalIdx := ACtx.Scope.ResolveLocal(AExpr.Name);
   UpvalIdx := -1;
   GlobalExistsReg := 0;
@@ -847,6 +1017,23 @@ procedure EmitUndefinedCheck(const ACtx: TGocciaCompilationContext;
 begin
   AJumpIdx := EmitJumpInstruction(ACtx, OP_JUMP_IF_NOT_NULLISH, ASlot,
     GOCCIA_NULLISH_MATCH_UNDEFINED);
+end;
+
+function DeclareArgumentsObjectLocal(const AScope: TGocciaCompilerScope;
+  const AParams: TGocciaParameterArray): Integer;
+begin
+  if ParameterListBindsName(AParams, IDENTIFIER_ARGUMENTS) then
+    Exit(-1);
+
+  Result := AScope.DeclareLocal(IDENTIFIER_ARGUMENTS, False);
+end;
+
+procedure EmitCreateArgumentsObject(const ACtx: TGocciaCompilationContext;
+  const AArgumentsSlot: Integer);
+begin
+  if AArgumentsSlot >= 0 then
+    EmitInstruction(ACtx, EncodeABC(OP_CREATE_ARGUMENTS,
+      UInt8(AArgumentsSlot), 0, 0));
 end;
 
 procedure EmitDefaultParameters(const ACtx: TGocciaCompilationContext;
@@ -1428,6 +1615,112 @@ begin
   CompileSpreadArgsArrayFromList(ACtx, AExpr.Arguments, AArrayReg);
 end;
 
+function TryCompileWithIdentifierCall(const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaCallExpression; const ADest: UInt8;
+  const AArgCount: Integer; const AUseSpread: Boolean): Boolean;
+var
+  Ident: TGocciaIdentifierExpression;
+  ObjReg, BaseReg, ArgsReg, KeyReg, CondReg: UInt8;
+  NameIdx: UInt16;
+  I, EndCount: Integer;
+  MissJump, CallNilJump, BranchEndJump: Integer;
+  EndJumps: array of Integer;
+
+  procedure EmitBranchCall(const AIsMethodCall, AJumpAfter: Boolean);
+  var
+    ArgIndex: Integer;
+  begin
+    if AExpr.Optional then
+      CallNilJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH, BaseReg)
+    else
+      CallNilJump := -1;
+
+    if AUseSpread then
+    begin
+      ArgsReg := ACtx.Scope.AllocateRegister;
+      CompileSpreadArgsArray(ACtx, AExpr, ArgsReg);
+      if AIsMethodCall then
+        EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, BaseReg, ArgsReg, 1))
+      else
+        EmitInstruction(ACtx, EncodeABC(OP_CALL, BaseReg, ArgsReg, 1));
+      ACtx.Scope.FreeRegister;
+    end
+    else
+    begin
+      for ArgIndex := 0 to AArgCount - 1 do
+        ACtx.CompileExpression(AExpr.Arguments[ArgIndex],
+          ACtx.Scope.AllocateRegister);
+      if AIsMethodCall then
+        EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, BaseReg,
+          UInt8(AArgCount), 0))
+      else
+        EmitInstruction(ACtx, EncodeABC(OP_CALL, BaseReg, UInt8(AArgCount),
+          CallTrustedFlag(ACtx, AExpr)));
+      for ArgIndex := 0 to AArgCount - 1 do
+        ACtx.Scope.FreeRegister;
+    end;
+
+    if AExpr.Optional then
+    begin
+      BranchEndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+      PatchJumpTarget(ACtx, CallNilJump);
+      EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, BaseReg, 0, 0));
+      PatchJumpTarget(ACtx, BranchEndJump);
+    end;
+
+    if ADest <> BaseReg then
+      EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, BaseReg, 0));
+
+    if AJumpAfter then
+    begin
+      EndJumps[EndCount] := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+      Inc(EndCount);
+    end;
+  end;
+
+begin
+  if not (AExpr.Callee is TGocciaIdentifierExpression) then
+    Exit(False);
+
+  Ident := TGocciaIdentifierExpression(AExpr.Callee);
+  if not ShouldTryWithBinding(ACtx.Scope, Ident.Name) then
+    Exit(False);
+
+  ObjReg := ACtx.Scope.AllocateRegister;
+  BaseReg := ACtx.Scope.AllocateRegister;
+  NameIdx := ACtx.Template.AddConstantString(Ident.Name);
+  EndCount := 0;
+  SetLength(EndJumps, ACtx.Scope.WithBindingCount);
+  try
+    for I := ACtx.Scope.WithBindingCount - 1 downto 0 do
+    begin
+      EmitLoadHiddenWithObject(ACtx, ACtx.Scope.GetWithBindingName(I), ObjReg);
+      KeyReg := ACtx.Scope.AllocateRegister;
+      CondReg := ACtx.Scope.AllocateRegister;
+      EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, KeyReg, NameIdx));
+      EmitInstruction(ACtx, EncodeABC(OP_HAS_WITH_BINDING, CondReg, ObjReg,
+        KeyReg));
+      MissJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, CondReg);
+      EmitInstruction(ACtx, EncodeABC(OP_GET_INDEX, BaseReg, ObjReg, KeyReg));
+      ACtx.Scope.FreeRegister;
+      ACtx.Scope.FreeRegister;
+      EmitBranchCall(True, True);
+      PatchJumpTarget(ACtx, MissJump);
+    end;
+
+    CompileIdentifierAccessNoWith(ACtx, Ident, BaseReg, False);
+    EmitBranchCall(False, False);
+
+    for I := 0 to EndCount - 1 do
+      PatchJumpTarget(ACtx, EndJumps[I]);
+  finally
+    ACtx.Scope.FreeRegister;
+    ACtx.Scope.FreeRegister;
+  end;
+
+  Result := True;
+end;
+
 procedure CompileCall(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaCallExpression; const ADest: UInt8);
 var
@@ -1707,6 +2000,10 @@ begin
   end
   else
   begin
+    if TryCompileWithIdentifierCall(ACtx, AExpr, ADest, ArgCount,
+       UseSpread) then
+      Exit;
+
     if (ADest + 1 = ACtx.Scope.NextSlot) and
        not IsLocalSlot(ACtx.Scope, ADest) then
       BaseReg := ADest
@@ -1925,9 +2222,12 @@ var
   OldScope: TGocciaCompilerScope;
   ChildTemplate: TGocciaFunctionTemplate;
   ChildScope: TGocciaCompilerScope;
+  ChildCtx: TGocciaCompilationContext;
   FuncIdx: UInt16;
   TargetReg, AccessorReg: UInt8;
   KeyIdx: UInt16;
+  EmptyParams: TGocciaParameterArray;
+  ArgumentsSlot: Integer;
   I: Integer;
 begin
   OldTemplate := ACtx.Template;
@@ -1939,10 +2239,16 @@ begin
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
   ChildTemplate.ParameterCount := 0;
+  SetLength(EmptyParams, 0);
+  ArgumentsSlot := DeclareArgumentsObjectLocal(ChildScope, EmptyParams);
 
   ACtx.SwapState(ChildTemplate, ChildScope);
   try
-    EmitLineMapping(ACtx, AGetter.Line, AGetter.Column);
+    ChildCtx := ACtx;
+    ChildCtx.Template := ChildTemplate;
+    ChildCtx.Scope := ChildScope;
+    EmitLineMapping(ChildCtx, AGetter.Line, AGetter.Column);
+    EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot);
     ACtx.CompileFunctionBody(AGetter.Body);
     ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
 
@@ -1976,9 +2282,12 @@ var
   OldScope: TGocciaCompilerScope;
   ChildTemplate: TGocciaFunctionTemplate;
   ChildScope: TGocciaCompilerScope;
+  ChildCtx: TGocciaCompilationContext;
   FuncIdx: UInt16;
   TargetReg, AccessorReg: UInt8;
   KeyIdx: UInt16;
+  SetterParams: TGocciaParameterArray;
+  ArgumentsSlot: Integer;
   I: Integer;
 begin
   OldTemplate := ACtx.Template;
@@ -1991,10 +2300,17 @@ begin
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
   ChildScope.DeclareLocal(ASetter.Parameter, False);
   ChildTemplate.ParameterCount := 1;
+  SetLength(SetterParams, 1);
+  SetterParams[0].Name := ASetter.Parameter;
+  ArgumentsSlot := DeclareArgumentsObjectLocal(ChildScope, SetterParams);
 
   ACtx.SwapState(ChildTemplate, ChildScope);
   try
-    EmitLineMapping(ACtx, ASetter.Line, ASetter.Column);
+    ChildCtx := ACtx;
+    ChildCtx.Template := ChildTemplate;
+    ChildCtx.Scope := ChildScope;
+    EmitLineMapping(ChildCtx, ASetter.Line, ASetter.Column);
+    EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot);
     ACtx.CompileFunctionBody(ASetter.Body);
     ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
 
@@ -2368,6 +2684,7 @@ var
   RestParamIndex: Integer;
   RestReg: Integer;
   I: Integer;
+  ArgumentsSlot: Integer;
   HasNameBinding: Boolean;
   NameSlot: UInt8;
   ClosedLocals: array[0..0] of UInt8;
@@ -2418,6 +2735,8 @@ begin
     if AExpr.Parameters[I].IsPattern and Assigned(AExpr.Parameters[I].Pattern) then
       CollectDestructuringBindings(AExpr.Parameters[I].Pattern, ChildScope);
 
+  ArgumentsSlot := DeclareArgumentsObjectLocal(ChildScope, AExpr.Parameters);
+
   ApplyParameterTypeAnnotations(ChildScope, ChildTemplate, AExpr.Parameters,
     ACtx.StrictTypes);
 
@@ -2432,6 +2751,8 @@ begin
     ChildCtx := ACtx;
     ChildCtx.Template := ChildTemplate;
     ChildCtx.Scope := ChildScope;
+
+    EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot);
 
     if RestParamIndex >= 0 then
     begin
@@ -2483,6 +2804,17 @@ begin
   // ES2026 §13.15.2 AssignmentExpression : LeftHandSideExpression ??=/&&=/||= AssignmentExpression
   if IsShortCircuitAssignment(AExpr.Operator) then
   begin
+    if ShouldTryWithBinding(ACtx.Scope, AExpr.Name) then
+    begin
+      Op := ShortCircuitJumpOp(AExpr.Operator);
+      EmitLoadBindingByName(ACtx, AExpr.Name, ADest, False);
+      JumpIdx := EmitJumpInstruction(ACtx, Op, ADest);
+      ACtx.CompileExpression(AExpr.Value, ADest);
+      EmitWithAssignmentOrFallback(ACtx, AExpr.Name, ADest);
+      PatchJumpTarget(ACtx, JumpIdx);
+      Exit;
+    end;
+
     Op := ShortCircuitJumpOp(AExpr.Operator);
     LocalIdx := ACtx.Scope.ResolveLocal(AExpr.Name);
     if LocalIdx >= 0 then
@@ -2594,6 +2926,19 @@ begin
   end;
 
   Op := CompoundOpToRuntimeOp(AExpr.Operator);
+
+  if ShouldTryWithBinding(ACtx.Scope, AExpr.Name) then
+  begin
+    RegVal := ACtx.Scope.AllocateRegister;
+    RegResult := ACtx.Scope.AllocateRegister;
+    EmitLoadBindingByName(ACtx, AExpr.Name, RegResult, False);
+    ACtx.CompileExpression(AExpr.Value, RegVal);
+    EmitInstruction(ACtx, EncodeABC(Op, ADest, RegResult, RegVal));
+    EmitWithAssignmentOrFallback(ACtx, AExpr.Name, ADest);
+    ACtx.Scope.FreeRegister;
+    ACtx.Scope.FreeRegister;
+    Exit;
+  end;
 
   LocalIdx := ACtx.Scope.ResolveLocal(AExpr.Name);
   if LocalIdx >= 0 then
@@ -2894,6 +3239,21 @@ begin
   end;
 
   Ident := TGocciaIdentifierExpression(AExpr.Operand);
+
+  if ShouldTryWithBinding(ACtx.Scope, Ident.Name) then
+  begin
+    RegResult := ACtx.Scope.AllocateRegister;
+    EmitLoadBindingByName(ACtx, Ident.Name, RegResult, False);
+    EmitInstruction(ACtx, EncodeABC(OP_TO_NUMERIC, RegResult, RegResult, 0));
+    if not AExpr.IsPrefix then
+      EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, RegResult, 0));
+    EmitInstruction(ACtx, EncodeABC(Op, RegResult, RegResult, 0));
+    EmitWithAssignmentOrFallback(ACtx, Ident.Name, RegResult);
+    if AExpr.IsPrefix then
+      EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, RegResult, 0));
+    ACtx.Scope.FreeRegister;
+    Exit;
+  end;
 
   LocalIdx := ACtx.Scope.ResolveLocal(Ident.Name);
   if LocalIdx >= 0 then

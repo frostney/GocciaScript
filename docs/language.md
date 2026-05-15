@@ -7,8 +7,8 @@
 
 - **Modern subset** — `let`/`const`, arrow functions, classes with private fields, `for...of`, async/await, ES modules (named only)
 - **TC39 proposals** — Decorators, decorator metadata, pattern matching, types as comments, enums, `Math.clamp`
-- **Excluded by design** — `eval`, `arguments`, `while` / `do...while`, `with`, default imports/exports
-- **Graceful handling** — Parser-recognized excluded syntax (`==`/`!=` when `--compat-loose-equality` is off, `while`/`do...while`, traditional `for(;;)` when `--compat-traditional-for-loop` is off, `with`) parses successfully but executes as a no-op with a warning and suggestion
+- **Excluded by design** — `eval`, `while` / `do...while`, default imports/exports
+- **Graceful handling** — Parser-recognized excluded syntax (`==`/`!=` when `--compat-loose-equality` is off, `while`/`do...while`, traditional `for(;;)` when `--compat-traditional-for-loop` is off) parses successfully but executes as a no-op with a warning and suggestion
 - **Opt-in toggles** — ASI (`--asi`), `var` declarations (`--compat-var`), `function` keyword (`--compat-function`), loose equality (`--compat-loose-equality`), traditional `for(init; test; update)` loops (`--compat-traditional-for-loop`), runtime type enforcement (`--strict-types`)
 - **Default preprocessors** — JSX (enabled by default via `DefaultPreprocessors`)
 
@@ -673,12 +673,12 @@ Warning: 'function' declarations are not supported in GocciaScript
 
 Function expressions in assignment position evaluate to `undefined`. Generator function declarations (`function*`) are also skipped.
 
-GocciaScript provides two function definition styles that cover all use cases without the `function` keyword's pitfalls (`this` binding confusion, hoisting surprises, implicit `arguments`):
+GocciaScript provides two function definition styles that cover most use cases without the `function` keyword's legacy pitfalls (`this` binding confusion and hoisting surprises):
 
 - **Arrow functions** (`(x) => x + 1`) — Lexical `this`, no hoisting, no `arguments`. Use for standalone functions, callbacks, and closures.
-- **Shorthand methods** (`method() {}`) — Call-site `this`, like ECMAScript's regular functions. Use in object literals and class definitions where `this` binding is needed.
+- **Shorthand methods** (`method() {}`) — Call-site `this` and an own `arguments` object, like ECMAScript's regular functions. Use in object literals and class definitions where `this` binding is needed.
 
-When enabled (CLI: `--compat-function`, engine API: `Engine.FunctionEnabled := True`, config: `{"compat-function": true}`), `function` declarations and expressions are fully supported. The `arguments` object remains excluded regardless of this flag.
+When enabled (CLI: `--compat-function`, engine API: `Engine.FunctionEnabled := True`, config: `{"compat-function": true}`), `function` declarations and expressions are fully supported, including an own `arguments` object for ordinary functions.
 
 - **Function declarations** (`function name(params) { body }`) are desugared to var-scoped bindings backed by `TGocciaMethodExpression`, which produces call-site `this` binding (not lexical). Declarations are hoisted: both the name and the function value are available before the declaration is reached, matching ES2026 §15.2.6 semantics. Uses the same var binding infrastructure (`DefineVariableBinding`) as `--compat-var`.
 - **Function expressions** (`const f = function(params) { body }`) produce the same `TGocciaMethodExpression` node. Named function expressions (`const f = function g(params) { body }`) create a read-only self-binding of the name (`g`) visible only inside the function body for recursion, matching ES2026 §15.2.4 semantics.
@@ -721,9 +721,9 @@ Strict equality requires matching types, eliminating this entire class of bugs.
 
 ### `arguments` Object
 
-**Excluded.** Use rest parameters (`...args`) instead.
+**Supported for ordinary functions and shorthand methods.** Arrow functions do not create their own `arguments`; they resolve `arguments` lexically from the nearest enclosing ordinary function or method.
 
-The `arguments` object is an array-like (but not array) object with confusing behavior. Rest parameters provide a real array with explicit syntax.
+GocciaScript creates an unmapped `arguments` object: indexed entries and `length` reflect the call's argument list, but parameter variables and `arguments[index]` do not alias each other. The object is array-like, not an Array. Prefer rest parameters (`...args`) for new code when a real array is desired.
 
 ### Automatic Semicolon Insertion
 
@@ -798,16 +798,9 @@ items.reduce((acc, item) => acc + item, 0);
 
 ### `with` Statement
 
-**Excluded.** No alternative needed. The parser accepts `with` syntax but treats it as a no-op (the body is not executed), and emits a warning:
+**Supported for ECMAScript compatibility.** `with (object) statement` evaluates the object expression, converts it with `ToObject`, and resolves unqualified identifiers through that object before falling back to outer lexical scopes. `Symbol.unscopables` is honored.
 
-```text
-Warning: The 'with' statement is not supported in GocciaScript
-  --> script.js:1:1
-```
-
-Like loops, the parser uses `SkipBalancedParens` to safely skip the `with (...)` expression, including nested parentheses.
-
-`with` creates ambiguous scope and is deprecated even in JavaScript's strict mode. Note that `with` is a reserved keyword in GocciaScript (it cannot be used as a variable name), but it can be used as a property name (e.g., `obj.with`).
+`with` creates ambiguous scope and is deprecated in JavaScript's strict mode, so new GocciaScript code should prefer explicit property access. The keyword is reserved (it cannot be used as a variable name), but it can be used as a property name (for example, `obj.with`).
 
 ### Labeled Statements
 

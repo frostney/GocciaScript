@@ -13,6 +13,7 @@ uses
   Goccia.Modules,
   Goccia.Scope.BindingMap,
   Goccia.Token,
+  Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
 const
@@ -69,14 +70,17 @@ type
     procedure DefineFromToken(const AName: string; const AValue: TGocciaValue; const ATokenType: TGocciaTokenType);
 
     // Core methods
-    function GetBinding(const AName: string; const ALine: Integer = 0; const AColumn: Integer = 0): TLexicalBinding;
-    function GetValue(const AName: string): TGocciaValue; inline;
+    function GetBinding(const AName: string; const ALine: Integer = 0; const AColumn: Integer = 0): TLexicalBinding; virtual;
+    function GetValue(const AName: string): TGocciaValue; virtual;
 
-    function ResolveIdentifier(const AName: string): TGocciaValue; inline;
+    function ResolveIdentifier(const AName: string): TGocciaValue; virtual;
+    procedure ResolveIdentifierReference(const AName: string;
+      out AValue, AThisValue: TGocciaValue; const ALine: Integer = 0;
+      const AColumn: Integer = 0); virtual;
     function ContainsOwnLexicalBinding(const AName: string): Boolean; inline;
     function IsBuiltInBinding(const AName: string): Boolean;
-    function Contains(const AName: string): Boolean; inline;
-    function GetOwnBindingNames: TGocciaStringArray; inline;
+    function Contains(const AName: string): Boolean; virtual;
+    function GetOwnBindingNames: TGocciaStringArray; virtual;
 
     // Walk the parent chain to find the nearest function/module/global scope (for var hoisting)
     function FindFunctionOrModuleScope: TGocciaScope;
@@ -173,6 +177,25 @@ type
     procedure AssignBinding(const AName: string; const AValue: TGocciaValue; const ALine: Integer = 0; const AColumn: Integer = 0); override;
   end;
 
+  TGocciaWithScope = class(TGocciaScope)
+  private
+    FBindingObject: TGocciaObjectValue;
+    function HasObjectBinding(const AName: string): Boolean;
+  public
+    constructor Create(const AParent: TGocciaScope;
+      const ABindingObject: TGocciaObjectValue);
+    procedure MarkReferences; override;
+    procedure AssignBinding(const AName: string; const AValue: TGocciaValue;
+      const ALine: Integer = 0; const AColumn: Integer = 0); override;
+    function GetBinding(const AName: string; const ALine: Integer = 0;
+      const AColumn: Integer = 0): TLexicalBinding; override;
+    procedure ResolveIdentifierReference(const AName: string;
+      out AValue, AThisValue: TGocciaValue; const ALine: Integer = 0;
+      const AColumn: Integer = 0); override;
+    function Contains(const AName: string): Boolean; override;
+    property BindingObject: TGocciaObjectValue read FBindingObject;
+  end;
+
   TGocciaScopeList = TObjectList<TGocciaScope>;
 
 
@@ -188,7 +211,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.Keywords.Reserved,
   Goccia.Types.Enforcement,
-  Goccia.Values.ObjectValue;
+  Goccia.Values.SymbolValue;
 
 { TGocciaScope }
 
@@ -625,6 +648,21 @@ begin
     Result := GetValue(AName);
 end;
 
+procedure TGocciaScope.ResolveIdentifierReference(const AName: string;
+  out AValue, AThisValue: TGocciaValue; const ALine: Integer = 0;
+  const AColumn: Integer = 0);
+begin
+  AThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+
+  if AName = KEYWORD_THIS then
+  begin
+    AValue := FThisValue;
+    Exit;
+  end;
+
+  AValue := GetBinding(AName, ALine, AColumn).Value;
+end;
+
 function TGocciaScope.ContainsOwnLexicalBinding(const AName: string): Boolean; inline;
 begin
   Result := FLexicalBindings.ContainsKey(AName);
@@ -637,7 +675,7 @@ begin
   Result := FLexicalBindings.TryGetValue(AName, Binding) and Binding.BuiltIn;
 end;
 
-function TGocciaScope.Contains(const AName: string): Boolean; inline;
+function TGocciaScope.Contains(const AName: string): Boolean;
 begin
   Result := ContainsOwnLexicalBinding(AName) or
     ContainsOwnVarBinding(AName) or
@@ -802,6 +840,92 @@ begin
     // Either it's the catch parameter or it exists in current scope - use base behavior
     inherited AssignBinding(AName, AValue, ALine, AColumn);
   end;
+end;
+
+{ TGocciaWithScope }
+
+constructor TGocciaWithScope.Create(const AParent: TGocciaScope;
+  const ABindingObject: TGocciaObjectValue);
+begin
+  inherited Create(AParent, skBlock, 'WithScope');
+  FBindingObject := ABindingObject;
+  if Assigned(AParent) then
+    ThisValue := AParent.ThisValue;
+end;
+
+function TGocciaWithScope.HasObjectBinding(const AName: string): Boolean;
+var
+  Unscopables: TGocciaValue;
+  Blocked: TGocciaValue;
+begin
+  Result := Assigned(FBindingObject) and FBindingObject.HasProperty(AName);
+  if not Result then
+    Exit;
+
+  Unscopables := FBindingObject.GetSymbolProperty(
+    TGocciaSymbolValue.WellKnownUnscopables);
+  if Unscopables is TGocciaObjectValue then
+  begin
+    Blocked := TGocciaObjectValue(Unscopables).GetProperty(AName);
+    if Assigned(Blocked) and Blocked.ToBooleanLiteral.Value then
+      Exit(False);
+  end;
+end;
+
+procedure TGocciaWithScope.MarkReferences;
+begin
+  inherited;
+  if Assigned(FBindingObject) then
+    FBindingObject.MarkReferences;
+end;
+
+procedure TGocciaWithScope.AssignBinding(const AName: string;
+  const AValue: TGocciaValue; const ALine: Integer = 0;
+  const AColumn: Integer = 0);
+begin
+  if HasObjectBinding(AName) then
+  begin
+    FBindingObject.AssignProperty(AName, AValue);
+    Exit;
+  end;
+
+  inherited AssignBinding(AName, AValue, ALine, AColumn);
+end;
+
+function TGocciaWithScope.GetBinding(const AName: string; const ALine: Integer = 0;
+  const AColumn: Integer = 0): TLexicalBinding;
+begin
+  if HasObjectBinding(AName) then
+  begin
+    Result.Value := FBindingObject.GetProperty(AName);
+    Result.DeclarationType := dtVar;
+    Result.Initialized := True;
+    Result.BuiltIn := False;
+    Result.TypeHint := sltUntyped;
+    Exit;
+  end;
+
+  Result := inherited GetBinding(AName, ALine, AColumn);
+end;
+
+procedure TGocciaWithScope.ResolveIdentifierReference(const AName: string;
+  out AValue, AThisValue: TGocciaValue; const ALine: Integer = 0;
+  const AColumn: Integer = 0);
+begin
+  if HasObjectBinding(AName) then
+  begin
+    AValue := FBindingObject.GetProperty(AName);
+    AThisValue := FBindingObject;
+    Exit;
+  end;
+
+  inherited ResolveIdentifierReference(AName, AValue, AThisValue, ALine,
+    AColumn);
+end;
+
+function TGocciaWithScope.Contains(const AName: string): Boolean;
+begin
+  Result := HasObjectBinding(AName) or inherited Contains(AName);
 end;
 
 end.

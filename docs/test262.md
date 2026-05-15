@@ -186,12 +186,11 @@ This is the minimum compatibility layer needed to keep conformance
 numbers honest — without it, ~7K tests fail with harness-environment
 errors instead of real engine surfaces.
 
-Bundling rule: only override a stock file when it depends on language
-features Goccia intentionally excludes (`arguments`, `with`, traditional
-`for(var i=0;...)` / `while` loops — Goccia's parser warns and silently
-drops these constructs, leaving helper functions broken). Each entry has
-a one-line rationale in `BUNDLED_INCLUDES`. If a future stock harness
-change makes a bundled file unnecessary, delete the entry.
+Bundling rule: only override a stock file when it depends on missing
+language/runtime coverage or on compatibility syntax that the harness
+cannot currently exercise directly. Each entry has a one-line rationale
+in `BUNDLED_INCLUDES`. If a future stock harness change or engine
+implementation makes a bundled file unnecessary, delete the entry.
 
 Current bundled set (13 files):
 
@@ -209,12 +208,14 @@ moves.
   instead of stock's `thrown.constructor !== ctor` because caught
   Errors have `e.constructor === undefined` in Goccia.
 - `propertyHelper.js`, `deepEqual.js`, `temporalHelpers.js`,
-  `wellKnownIntrinsicObjects.js`: stock helpers use `arguments`
-  (variadic captures) which Goccia excludes; reimplemented with rest
-  parameters.
+  `wellKnownIntrinsicObjects.js`: stock helpers were originally adapted
+  while `arguments` was unsupported; now that `arguments` exists, these
+  entries should be re-evaluated against the stock helpers during the
+  next harness cleanup.
 - `testTypedArray.js`: stock uses `for (var i = 0; ...)` and
-  `with (...)` blocks which Goccia excludes; reimplemented with
-  for-of and explicit property access.
+  `with (...)` blocks; reimplemented with for-of and explicit property
+  access. The remaining reason to keep it bundled is the stock
+  traditional loop shape, not `with`.
 - `compareIterator.js`, `decimalToHexString.js`,
   `nativeFunctionMatcher.js`, `regExpUtils.js`: stock uses traditional
   `for` or `while` loops whose bodies Goccia's parser drops;
@@ -245,7 +246,6 @@ behaviors statically:
 
 - Implicit globals throw `ReferenceError` (sloppy would create a global)
 - `delete <identifier>` always throws (sloppy is silent)
-- `arguments` and `with` are excluded by language design
 - `eval` is not implemented
 
 The orchestrator therefore does not inject `"use strict"` for `onlyStrict`

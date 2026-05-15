@@ -4250,18 +4250,21 @@ end;
 function TGocciaParser.WithStatement: TGocciaStatement;
 var
   Line, Column: Integer;
+  ObjectExpr: TGocciaExpression;
+  BodyStmt: TGocciaStatement;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
 
-  AddWarning('The ''with'' statement is not supported in GocciaScript', '',
-    Line, Column);
+  Consume(gttLeftParen, 'Expected ''('' after ''with''',
+    SSuggestCloseParenExpression);
+  ObjectExpr := Expression;
+  Consume(gttRightParen, 'Expected '')'' after with object',
+    SSuggestCloseParenExpression);
 
-  SkipBalancedParens;
+  BodyStmt := Statement;
 
-  SkipStatementOrBlock;
-
-  Result := TGocciaEmptyStatement.Create(Line, Column);
+  Result := TGocciaWithStatement.Create(ObjectExpr, BodyStmt, Line, Column);
 end;
 
 function TGocciaParser.FunctionStatement(const AIsAsync: Boolean; const AIsGenerator: Boolean): TGocciaStatement;

@@ -1147,6 +1147,23 @@ console.log("TestRunner: --output=compact-json omits build, memory, stdout, stde
     await $`${BUNDLER} ${customSrc} --output=${customOut}`.quiet();
     if (!existsSync(customOut)) throw new Error("Custom --output .gbc should exist");
 
+    console.log("Bundler: repeated NaN constants compile + roundtrip...");
+    const nanSrc = join(tmp, "nan-constants.js");
+    const nanOut = join(tmp, "nan-constants.gbc");
+    writeFileSync(
+      nanSrc,
+      [
+        'console.log("NaN =", NaN);',
+        'console.log("NaN2 =", NaN);',
+        "",
+      ].join("\n"),
+    );
+    await $`${BUNDLER} ${nanSrc} --output=${nanOut}`.quiet();
+    if (!existsSync(nanOut)) throw new Error("Repeated NaN constants should compile to .gbc");
+    const nanRoundtrip = await $`${LOADER} ${nanOut} 2>&1`.text();
+    if (!nanRoundtrip.includes("NaN = NaN") || !nanRoundtrip.includes("NaN2 = NaN"))
+      throw new Error(`Repeated NaN roundtrip should print both lines, got: ${nanRoundtrip}`);
+
     console.log("Bundler: stdin compile with --output...");
     const stdinOut = join(tmp, "stdin.gbc");
     await $`echo 'const z = 5 + 5; z;' | ${BUNDLER} --output=${stdinOut}`.quiet();

@@ -112,7 +112,7 @@ tests/
     ├── objects/            # Object literals, methods, computed properties
     ├── statements/         # if/else, switch/case/break, try/catch/finally
     │   ├── try-catch/      # Try-catch-finally edge cases
-    │   └── unsupported-features.js  # Verifies parser skip for for/while/do-while/var/with
+    │   └── unsupported-features.js  # Verifies parser skip for for/while/do-while/var
     └── unary-operators.js
 ```
 

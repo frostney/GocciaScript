@@ -14,6 +14,9 @@ const
   INFINITY_LITERAL          = 'Infinity';
   NEGATIVE_INFINITY_LITERAL = '-Infinity';
 
+  // Special identifier names
+  IDENTIFIER_ARGUMENTS = 'arguments';
+
   // Numeric constants
   ZERO_VALUE = 0.0;
   ONE_VALUE  = 1.0;

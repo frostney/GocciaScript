@@ -300,12 +300,16 @@ function TGocciaFunctionTemplate.AddConstantFloat(
   const AValue: Double): UInt16;
 var
   I: Integer;
+  ValueIsNaN: Boolean;
 begin
+  ValueIsNaN := FloatBitsAreNaN(AValue);
   for I := 0 to FConstantCount - 1 do
     if (FConstants[I].Kind = bckFloat) and
-       ((FConstants[I].FloatValue = AValue) or
-        (FloatBitsAreNaN(FConstants[I].FloatValue) and FloatBitsAreNaN(AValue))) then
-      Exit(UInt16(I));
+       (FloatBitsAreNaN(FConstants[I].FloatValue) = ValueIsNaN) then
+    begin
+      if ValueIsNaN or (FConstants[I].FloatValue = AValue) then
+        Exit(UInt16(I));
+    end;
 
   if FConstantCount > High(UInt16) then
     raise Exception.Create('Constant pool overflow: exceeds 65535 entries');

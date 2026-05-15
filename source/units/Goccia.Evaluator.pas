@@ -1021,8 +1021,15 @@ begin
   else
   begin
     // Regular function calls
-    Callee := EvaluateExpression(ACallExpression.Callee, AContext);
-    ThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+    if ACallExpression.Callee is TGocciaIdentifierExpression then
+      AContext.Scope.ResolveIdentifierReference(
+        TGocciaIdentifierExpression(ACallExpression.Callee).Name,
+        Callee, ThisValue)
+    else
+    begin
+      Callee := EvaluateExpression(ACallExpression.Callee, AContext);
+      ThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+    end;
   end;
 
   if ACallExpression.Optional and

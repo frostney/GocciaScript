@@ -313,7 +313,7 @@ Here's a quick reference of GocciaScript's key restrictions:
 | `==` / `!=` | Off by default | `===` / `!==` or `--compat-loose-equality` |
 | `for (...)` / `while (...)` | Not supported | `for...of`, `.map()`, `.forEach()`, `.reduce()` |
 | `eval("code")` | Not supported | No alternative (by design) |
-| `arguments` | Not supported | `(...args) => {}` |
+| `arguments` | Supported in ordinary functions and methods | Prefer rest parameters (`...args`) |
 | `parseInt("10")` | Not available as global | `Number.parseInt("10")` |
 | `isNaN(x)` | Not available as global | `Number.isNaN(x)` |
 | `import x from "mod"` | Not supported | `import { x } from "mod"` |

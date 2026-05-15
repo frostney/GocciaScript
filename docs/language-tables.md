@@ -18,10 +18,10 @@
 | Comma operator (`,`) | ES1 | Supported |
 | `==` / `!=` (loose equality) | ES1 | Opt-in (`--compat-loose-equality`) — use `===` / `!==` by default |
 | `eval()` | ES1 | Excluded |
-| `arguments` object | ES1 | Excluded — use rest parameters |
+| `arguments` object | ES1 | Supported for ordinary functions and shorthand methods — prefer rest parameters for new code |
 | Traditional `for(init; test; update)` loop | ES1 | Opt-in (`--compat-traditional-for-loop`) — use `for...of` or array methods by default |
 | `while` / `do...while` | ES1 | Excluded — use `for...of`, array methods, or traditional `for(;;)` (with `--compat-traditional-for-loop`) |
-| `with` statement | ES1 | Excluded |
+| `with` statement | ES1 | Supported for compatibility — prefer explicit property access |
 | ASI (automatic semicolon insertion) | ES1 | Opt-in (`--asi`) |
 | Global `parseInt`, `parseFloat`, `isNaN`, `isFinite` | ES1 | Excluded — use `Number.*` |
 | `let` / `const` | ES2015 | Supported |

@@ -77,6 +77,7 @@ type
     FLocalCellBase: Integer;
     FLocalCells: PGocciaBytecodeCell;
     FLocalCellCount: Integer;
+    FCurrentArguments: TGocciaRegisterArray;
     FArgCount: Integer;
     FGlobalScope: TGocciaScope;
     FGlobalThisValue: TGocciaValue;
@@ -178,6 +179,7 @@ type
       const AInstance: TGocciaValue);
     function MaterializeArguments(
       const AArguments: TGocciaRegisterArray): TGocciaArgumentsCollection;
+    function CreateArgumentsObjectFromCurrentFrame: TGocciaObjectValue;
     function InvokeImplicitSuperInitialization(const AClassValue: TGocciaClassValue;
       const AInstance: TGocciaValue; const AArguments: TGocciaArgumentsCollection): TGocciaValue;
     function InvokeImplicitSuperInitializationRegisters(
@@ -200,6 +202,7 @@ type
     procedure SetRawPrivateValue(const AObject: TGocciaValue; const AKey: string;
       const AValue: TGocciaValue);
     function HasPropertyValue(const AObject, AKey: TGocciaValue): TGocciaValue;
+    function HasWithBindingValue(const AObject, AKey: TGocciaValue): TGocciaValue;
     function MatchHasPropertyValue(const AObject, AKey: TGocciaValue): TGocciaValue;
     function MatchExtractorValue(const ASubject, AMatcher: TGocciaValue): TGocciaValue;
     function InvokeFunctionValue(const ACallee: TGocciaValue;
@@ -263,6 +266,7 @@ uses
   TextSemantics,
   TimingUtils,
 
+  Goccia.Arguments.ObjectValue,
   Goccia.Arithmetic,
   Goccia.CallStack,
   Goccia.Constants.ConstructorNames,
@@ -301,6 +305,7 @@ uses
   Goccia.Values.PromiseValue,
   Goccia.Values.ProxyValue,
   Goccia.Values.SymbolValue,
+  Goccia.Values.ToObject,
   Goccia.Values.ToPrimitive;
 
 const
@@ -951,6 +956,14 @@ var
         MarkRegisterReferences(FVM.FLocalCellStack[J].Value);
   end;
 
+  procedure MarkRegisterArray(const ARegisters: TGocciaRegisterArray);
+  var
+    J: Integer;
+  begin
+    for J := 0 to High(ARegisters) do
+      MarkRegisterReferences(ARegisters[J]);
+  end;
+
 begin
   if GCMarked then Exit;
   inherited;
@@ -969,6 +982,7 @@ begin
     FVM.FPendingNewTarget.MarkReferences;
   if Assigned(FVM.FCurrentNewTarget) then
     FVM.FCurrentNewTarget.MarkReferences;
+  MarkRegisterArray(FVM.FCurrentArguments);
 
   Limit := FVM.FRegisterBase + FVM.FRegisterCount;
   if Limit > Length(FVM.FRegisterStack) then
@@ -986,6 +1000,7 @@ begin
   for I := 0 to FVM.FFrameStackCount - 1 do
   begin
     MarkClosureReferences(FVM.FFrameStack[I].Closure);
+    MarkRegisterArray(FVM.FFrameStack[I].Arguments);
     MarkRegisterRange(FVM.FFrameStack[I].RegisterBase,
       FVM.FFrameStack[I].RegisterCount);
     MarkLocalCellRange(FVM.FFrameStack[I].LocalCellBase,
@@ -5411,6 +5426,24 @@ begin
     Result.Add(RegisterToValue(AArguments[I]));
 end;
 
+function TGocciaVM.CreateArgumentsObjectFromCurrentFrame: TGocciaObjectValue;
+var
+  Args: TGocciaArgumentsCollection;
+  I: Integer;
+begin
+  Args := AcquireArguments(FArgCount);
+  try
+    for I := 0 to FArgCount - 1 do
+      if I < Length(FCurrentArguments) then
+        Args.Add(RegisterToValue(FCurrentArguments[I]))
+      else
+        Args.Add(TGocciaUndefinedLiteralValue.UndefinedValue);
+    Result := CreateUnmappedArgumentsObject(Args);
+  finally
+    ReleaseArguments(Args);
+  end;
+end;
+
 function TGocciaVM.InvokeImplicitSuperInitialization(
   const AClassValue: TGocciaClassValue; const AInstance: TGocciaValue;
   const AArguments: TGocciaArgumentsCollection): TGocciaValue;
@@ -6610,6 +6643,31 @@ begin
   Result := TGocciaBooleanLiteralValue.FalseValue;
 end;
 
+function TGocciaVM.HasWithBindingValue(const AObject, AKey: TGocciaValue): TGocciaValue;
+var
+  BindingObject: TGocciaObjectValue;
+  KeyStr: string;
+  Unscopables: TGocciaValue;
+  Blocked: TGocciaValue;
+begin
+  BindingObject := ToObject(AObject);
+  KeyStr := KeyToPropertyName(AKey);
+
+  if not BindingObject.HasProperty(KeyStr) then
+    Exit(TGocciaBooleanLiteralValue.FalseValue);
+
+  Unscopables := BindingObject.GetSymbolProperty(
+    TGocciaSymbolValue.WellKnownUnscopables);
+  if Unscopables is TGocciaObjectValue then
+  begin
+    Blocked := TGocciaObjectValue(Unscopables).GetProperty(KeyStr);
+    if Assigned(Blocked) and Blocked.ToBooleanLiteral.Value then
+      Exit(TGocciaBooleanLiteralValue.FalseValue);
+  end;
+
+  Result := TGocciaBooleanLiteralValue.TrueValue;
+end;
+
 function TGocciaVM.MatchHasPropertyValue(const AObject, AKey: TGocciaValue): TGocciaValue;
 var
   KeyStr: string;
@@ -6801,6 +6859,7 @@ begin
   FFrameStack[FFrameStackCount].RegisterCount := FRegisterCount;
   FFrameStack[FFrameStackCount].LocalCellBase := FLocalCellBase;
   FFrameStack[FFrameStackCount].LocalCellCount := FLocalCellCount;
+  FFrameStack[FFrameStackCount].Arguments := Copy(FCurrentArguments);
   FFrameStack[FFrameStackCount].ArgCount := FArgCount;
   FFrameStack[FFrameStackCount].Closure := FCurrentClosure;
   FFrameStack[FFrameStackCount].HandlerCount := FHandlerStack.Count;
@@ -6824,6 +6883,8 @@ begin
   FLocalCellBase := FFrameStack[FFrameStackCount].LocalCellBase;
   FLocalCellCount := FFrameStack[FFrameStackCount].LocalCellCount;
   FLocalCells := @FLocalCellStack[FLocalCellBase];
+  FCurrentArguments := FFrameStack[FFrameStackCount].Arguments;
+  FFrameStack[FFrameStackCount].Arguments := nil;
   FArgCount := FFrameStack[FFrameStackCount].ArgCount;
   FCurrentClosure := FFrameStack[FFrameStackCount].Closure;
   APrevCovLine := FFrameStack[FFrameStackCount].PrevCovLine;
@@ -6857,6 +6918,21 @@ begin
   AProfileTimestamp := 0;
   AcquireRegisters(Max(AClosure.Template.MaxRegisters, 1));
   AcquireLocalCells(Max(AClosure.Template.MaxRegisters, 1));
+  SetLength(FCurrentArguments, AArgCount);
+  for I := 0 to AArgCount - 1 do
+    if AUseFixedArgs then
+      case I of
+        0:
+          FCurrentArguments[I] := AArg0;
+        1:
+          FCurrentArguments[I] := AArg1;
+        2:
+          FCurrentArguments[I] := AArg2;
+      else
+        FCurrentArguments[I] := RegisterUndefined;
+      end
+    else
+      FCurrentArguments[I] := AArguments[I];
   FArgCount := AArgCount;
   FCurrentClosure := AClosure;
   Inc(FFrameDepth);
@@ -6897,25 +6973,8 @@ begin
   end;
 
   SetLocalRaw(0, AThisValue);
-  if AUseFixedArgs then
-    case AArgCount of
-      1:
-        SetLocalRaw(1, AArg0);
-      2:
-        begin
-          SetLocalRaw(1, AArg0);
-          SetLocalRaw(2, AArg1);
-        end;
-      3:
-        begin
-          SetLocalRaw(1, AArg0);
-          SetLocalRaw(2, AArg1);
-          SetLocalRaw(3, AArg2);
-        end;
-    end
-  else
-    for I := 0 to High(AArguments) do
-      SetLocalRaw(I + 1, AArguments[I]);
+  for I := 0 to FArgCount - 1 do
+    SetLocalRaw(I + 1, FCurrentArguments[I]);
 
   if FCoverageEnabled and Assigned(ATemplate.DebugInfo) and
      (ATemplate.DebugInfo.LineMapCount > 0) then
@@ -6963,6 +7022,7 @@ var
   SavedRegisterCount: Integer;
   SavedLocalCellBase: Integer;
   SavedLocalCellCount: Integer;
+  SavedCurrentArguments: TGocciaRegisterArray;
   SavedArgCount: Integer;
   SavedClosure: TGocciaBytecodeClosure;
   SavedNewTarget: TGocciaValue;
@@ -7011,6 +7071,7 @@ begin
   SavedRegisterCount := FRegisterCount;
   SavedLocalCellBase := FLocalCellBase;
   SavedLocalCellCount := FLocalCellCount;
+  SavedCurrentArguments := Copy(FCurrentArguments);
   SavedArgCount := FArgCount;
   SavedClosure := FCurrentClosure;
   SavedNewTarget := FCurrentNewTarget;
@@ -7133,6 +7194,9 @@ begin
         else
           SetRegisterFast(A, ToPrimitive(GetRegisterFast(B)));
 
+      OP_TO_OBJECT:
+        SetRegister(A, ToObject(GetRegister(B)));
+
       OP_LOAD_INT:
         FRegisters[A] := RegisterInt(DecodesBx(Instruction));
 
@@ -7188,11 +7252,17 @@ begin
       OP_ARG_COUNT:
         FRegisters[A] := RegisterInt(FArgCount);
 
+      OP_CREATE_ARGUMENTS:
+        SetRegister(A, CreateArgumentsObjectFromCurrentFrame);
+
       OP_PACK_ARGS:
       begin
         ArgsArray := TGocciaArrayValue.Create;
         for I := B to FArgCount - 1 do
-          ArgsArray.Elements.Add(RegisterToValue(GetLocalRegister(I + 1)));
+          if I < Length(FCurrentArguments) then
+            ArgsArray.Elements.Add(RegisterToValue(FCurrentArguments[I]))
+          else
+            ArgsArray.Elements.Add(TGocciaUndefinedLiteralValue.UndefinedValue);
         FRegisters[A] := RegisterObject(ArgsArray);
       end;
 
@@ -8520,6 +8590,9 @@ begin
       OP_HAS_PROPERTY:
         SetRegister(A, HasPropertyValue(GetRegister(B), GetRegister(C)));
 
+      OP_HAS_WITH_BINDING:
+        SetRegister(A, HasWithBindingValue(GetRegister(B), GetRegister(C)));
+
       OP_MATCH_HAS_PROPERTY:
         SetRegister(A, MatchHasPropertyValue(GetRegister(B), GetRegister(C)));
 
@@ -9631,6 +9704,7 @@ begin
     // Restore the caller's state
     FCurrentClosure := SavedClosure;
     FCurrentNewTarget := SavedNewTarget;
+    FCurrentArguments := SavedCurrentArguments;
     FArgCount := SavedArgCount;
     FRegisterBase := SavedRegisterBase;
     FRegisterCount := SavedRegisterCount;

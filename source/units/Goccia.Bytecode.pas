@@ -41,7 +41,9 @@ const
   //   v25 -> v26: #529 added OP_NEW_TARGET for the new.target meta-property.
   //   v26 -> v27: added OP_LOOSE_EQ/OP_LOOSE_NEQ for
   //               --compat-loose-equality bytecode.
-  GOCCIA_FORMAT_VERSION = 27;
+  //   v27 -> v28: added OP_CREATE_ARGUMENTS plus with-statement helper
+  //               opcodes for object environment records.
+  GOCCIA_FORMAT_VERSION = 28;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
@@ -222,7 +224,10 @@ type
     OP_INC           = 178,
     OP_DEC           = 179,
     OP_TO_NUMERIC    = 180,
-    OP_NEW_TARGET    = 181
+    OP_NEW_TARGET    = 181,
+    OP_CREATE_ARGUMENTS = 182,
+    OP_TO_OBJECT     = 183,
+    OP_HAS_WITH_BINDING = 184
   );
 
 function EncodeABC(const AOp: TGocciaOpCode; const A, B, C: UInt8): UInt32; inline;
