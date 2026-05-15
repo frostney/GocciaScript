@@ -171,6 +171,7 @@ end;
 function TGocciaFunctionValue.ExecuteBody(const ACallScope: TGocciaScope; const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   I, J: Integer;
+  CompatibilityNonStrictMode: Boolean;
   ReturnValue: TGocciaValue;
   CF: TGocciaControlFlow;
   Context: TGocciaEvaluationContext;
@@ -189,7 +190,8 @@ begin
   Context.CoverageEnabled := Assigned(TGocciaCoverageTracker.Instance)
     and TGocciaCoverageTracker.Instance.Enabled;
   Context.StrictTypes := FClosure.EffectiveStrictTypes;
-  Context.NonStrictMode := FClosure.EffectiveNonStrictMode;
+  CompatibilityNonStrictMode := FClosure.EffectiveNonStrictMode;
+  Context.NonStrictMode := CompatibilityNonStrictMode and not FStrictCode;
   Context.DisposalTracker := nil;
 
   // Record coverage hit on the declaration line (get/set/constructor/method)
@@ -200,7 +202,7 @@ begin
   BindThis(ACallScope, AThisValue);
   Context.Scope := ACallScope;
 
-  if Context.NonStrictMode and CreatesArgumentsObject and
+  if CompatibilityNonStrictMode and CreatesArgumentsObject and
      not ParameterListBindsName(FParameters, IDENTIFIER_ARGUMENTS) and
      not ACallScope.ContainsOwnLexicalBinding(IDENTIFIER_ARGUMENTS) then
     ACallScope.DefineVariableBinding(IDENTIFIER_ARGUMENTS,

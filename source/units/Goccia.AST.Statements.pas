@@ -487,11 +487,16 @@ type
     property IsAwait: Boolean read FIsAwait;
   end;
 
+function HasUseStrictDirective(const ABody: TGocciaASTNode): Boolean; overload;
+function HasUseStrictDirective(const AProgram: TGocciaProgram): Boolean; overload;
+
 implementation
 
 uses
   SysUtils,
 
+  Goccia.Constants,
+  Goccia.Error,
   Goccia.Evaluator,
   Goccia.GarbageCollector,
   Goccia.Modules,
@@ -509,6 +514,76 @@ uses
 function CreateModuleNamespaceObject(const AModule: TGocciaModule): TGocciaValue;
 begin
   Result := AModule.GetNamespaceObject;
+end;
+
+function DirectiveStatementIsUseStrict(const AStatement: TGocciaASTNode;
+  out AContinuesDirectivePrologue: Boolean): Boolean;
+var
+  LiteralExpression: TGocciaLiteralExpression;
+  Expression: TGocciaExpression;
+  Literal: TGocciaValue;
+  SourceText: string;
+begin
+  Result := False;
+  AContinuesDirectivePrologue := False;
+
+  if not (AStatement is TGocciaExpressionStatement) then
+    Exit;
+
+  Expression := TGocciaExpressionStatement(AStatement).Expression;
+  if not (Expression is TGocciaLiteralExpression) then
+    Exit;
+
+  LiteralExpression := TGocciaLiteralExpression(Expression);
+  Literal := LiteralExpression.Value;
+  if not (Literal is TGocciaStringLiteralValue) then
+    Exit;
+
+  AContinuesDirectivePrologue := True;
+  SourceText := LiteralExpression.SourceText;
+  Result := (SourceText = #34 + USE_STRICT_DIRECTIVE + #34) or
+    (SourceText = #39 + USE_STRICT_DIRECTIVE + #39);
+end;
+
+// ES2026 §11.2.2 Directive Prologues and the Use Strict Directive
+function HasUseStrictDirective(const ABody: TGocciaASTNode): Boolean;
+var
+  Block: TGocciaBlockStatement;
+  I: Integer;
+  ContinuesDirectivePrologue: Boolean;
+begin
+  Result := False;
+  if not (ABody is TGocciaBlockStatement) then
+    Exit;
+
+  Block := TGocciaBlockStatement(ABody);
+  for I := 0 to Block.Nodes.Count - 1 do
+  begin
+    if DirectiveStatementIsUseStrict(Block.Nodes[I],
+      ContinuesDirectivePrologue) then
+      Exit(True);
+    if not ContinuesDirectivePrologue then
+      Exit;
+  end;
+end;
+
+function HasUseStrictDirective(const AProgram: TGocciaProgram): Boolean;
+var
+  I: Integer;
+  ContinuesDirectivePrologue: Boolean;
+begin
+  Result := False;
+  if not Assigned(AProgram) then
+    Exit;
+
+  for I := 0 to AProgram.Body.Count - 1 do
+  begin
+    if DirectiveStatementIsUseStrict(AProgram.Body[I],
+      ContinuesDirectivePrologue) then
+      Exit(True);
+    if not ContinuesDirectivePrologue then
+      Exit;
+  end;
 end;
 
 { TGocciaExpressionStatement }
@@ -983,6 +1058,11 @@ end;
     WithScope: TGocciaWithScope;
     GC: TGarbageCollector;
   begin
+    if not AContext.NonStrictMode then
+      raise TGocciaSyntaxError.Create(
+        '''with'' statements are not allowed in strict mode',
+        Line, Column, AContext.CurrentFilePath, nil);
+
     WithObject := ToObject(EvaluateExpression(ObjectExpression, AContext));
     WithScope := TGocciaWithScope.Create(AContext.Scope, WithObject);
     GC := TGarbageCollector.Instance;

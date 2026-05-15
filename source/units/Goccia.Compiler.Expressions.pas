@@ -245,6 +245,14 @@ begin
     Result := OP_ARRAY_SET;
 end;
 
+function ChildBodyIsStrictCode(const ACtx: TGocciaCompilationContext;
+  const ABody: TGocciaASTNode): Boolean; inline;
+begin
+  Result := (not ACtx.NonStrictMode) or
+    (Assigned(ACtx.Template) and ACtx.Template.StrictCode) or
+    HasUseStrictDirective(ABody);
+end;
+
 function SetGlobalOpcode(const ACtx: TGocciaCompilationContext): TGocciaOpCode;
 begin
   if ACtx.NonStrictMode then
@@ -1628,6 +1636,7 @@ begin
   ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
   ChildTemplate.IsAsync := AExpr.IsAsync;
   ChildTemplate.IsArrow := True;
+  ChildTemplate.StrictCode := ChildBodyIsStrictCode(ACtx, AExpr.Body);
   ChildTemplate.SourceText := AExpr.SourceText;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
   ChildScope.IsArrow := True;
@@ -1669,6 +1678,8 @@ begin
     ChildCtx := ACtx;
     ChildCtx.Template := ChildTemplate;
     ChildCtx.Scope := ChildScope;
+    ChildCtx.NonStrictMode := ACtx.NonStrictMode and
+      not ChildTemplate.StrictCode;
 
     if RestParamIndex >= 0 then
     begin
@@ -2371,7 +2382,8 @@ begin
 
   ChildTemplate := TGocciaFunctionTemplate.Create('get ' + AKey);
   ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
-  ChildTemplate.StrictThis := not ACtx.NonStrictMode;
+  ChildTemplate.StrictCode := ChildBodyIsStrictCode(ACtx, AGetter.Body);
+  ChildTemplate.StrictThis := ChildTemplate.StrictCode;
   ChildTemplate.SourceText := AGetter.SourceText;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
@@ -2384,6 +2396,8 @@ begin
     ChildCtx := ACtx;
     ChildCtx.Template := ChildTemplate;
     ChildCtx.Scope := ChildScope;
+    ChildCtx.NonStrictMode := ACtx.NonStrictMode and
+      not ChildTemplate.StrictCode;
     EmitLineMapping(ChildCtx, AGetter.Line, AGetter.Column);
     EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot);
     ACtx.CompileFunctionBody(AGetter.Body);
@@ -2432,7 +2446,8 @@ begin
 
   ChildTemplate := TGocciaFunctionTemplate.Create('set ' + AKey);
   ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
-  ChildTemplate.StrictThis := not ACtx.NonStrictMode;
+  ChildTemplate.StrictCode := ChildBodyIsStrictCode(ACtx, ASetter.Body);
+  ChildTemplate.StrictThis := ChildTemplate.StrictCode;
   ChildTemplate.SourceText := ASetter.SourceText;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
@@ -2447,6 +2462,8 @@ begin
     ChildCtx := ACtx;
     ChildCtx.Template := ChildTemplate;
     ChildCtx.Scope := ChildScope;
+    ChildCtx.NonStrictMode := ACtx.NonStrictMode and
+      not ChildTemplate.StrictCode;
     EmitLineMapping(ChildCtx, ASetter.Line, ASetter.Column);
     EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot);
     ACtx.CompileFunctionBody(ASetter.Body);
@@ -2846,7 +2863,8 @@ begin
   ChildTemplate.IsAsync := AExpr.IsAsync;
   ChildTemplate.IsGenerator := AExpr.IsGenerator;
   ChildTemplate.HasOwnPrototype := AExpr.HasOwnPrototype;
-  ChildTemplate.StrictThis := not ACtx.NonStrictMode;
+  ChildTemplate.StrictCode := ChildBodyIsStrictCode(ACtx, AExpr.Body);
+  ChildTemplate.StrictThis := ChildTemplate.StrictCode;
   ChildTemplate.SourceText := AExpr.SourceText;
   if HasNameBinding then
     ChildTemplate.Name := AExpr.Name;
@@ -2891,6 +2909,8 @@ begin
     ChildCtx := ACtx;
     ChildCtx.Template := ChildTemplate;
     ChildCtx.Scope := ChildScope;
+    ChildCtx.NonStrictMode := ACtx.NonStrictMode and
+      not ChildTemplate.StrictCode;
 
     EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot);
 

@@ -473,6 +473,26 @@ begin
   Result := True;
 end;
 
+// ES2026 §10.4.2.4 ArraySetLength(A, Desc): deleting array-index
+// properties during length truncation must include sparse own properties
+// stored on the object descriptor map, not just dense FElements slots.
+procedure DeleteSparseArrayIndexesAtOrAbove(const AArray: TGocciaArrayValue;
+  const ANewLength: Int64);
+var
+  Keys: TArray<string>;
+  Key: string;
+  Index: Int64;
+begin
+  Keys := AArray.GetOwnPropertyKeys;
+  for Key in Keys do
+  begin
+    if not TryParseArrayIndex(Key, Index) then
+      Continue;
+    if (Index >= ANewLength) and (Index < MAX_ARRAY_LENGTH) then
+      AArray.DeleteProperty(Key);
+  end;
+end;
+
 function CompareInt64(constref A, B: Int64): Integer;
 begin
   if A < B then Result := -1
@@ -2826,6 +2846,7 @@ begin
       if NewLen < FElements.Count then
         for I := FElements.Count - 1 downto NewLen do
           FElements.Delete(I);
+      DeleteSparseArrayIndexesAtOrAbove(Self, NewLen);
       while FElements.Count < NewLen do
         FElements.Add(TGocciaHoleValue.HoleValue);
     end;
@@ -2892,6 +2913,7 @@ begin
       if NewLen < FElements.Count then
         for I := FElements.Count - 1 downto NewLen do
           FElements.Delete(I);
+      DeleteSparseArrayIndexesAtOrAbove(Self, NewLen);
       // Extend elements
       while FElements.Count < NewLen do
         FElements.Add(TGocciaHoleValue.HoleValue);

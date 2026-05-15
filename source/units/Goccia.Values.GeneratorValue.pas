@@ -511,6 +511,7 @@ var
   Value: TGocciaValue;
   Context: TGocciaEvaluationContext;
   ParamTypeHint: TGocciaLocalType;
+  CompatibilityNonStrictMode: Boolean;
 begin
   CallScope := CreateCallScope;
   BindThis(CallScope, AThisValue);
@@ -524,10 +525,11 @@ begin
   // observe TGocciaEngine.SetStrictTypes updates made after the
   // generator's closure scope was created.
   Context.StrictTypes := FClosure.EffectiveStrictTypes;
-  Context.NonStrictMode := FClosure.EffectiveNonStrictMode;
+  CompatibilityNonStrictMode := FClosure.EffectiveNonStrictMode;
+  Context.NonStrictMode := CompatibilityNonStrictMode and not FStrictCode;
   Context.DisposalTracker := nil;
 
-  if Context.NonStrictMode and CreatesArgumentsObject and
+  if CompatibilityNonStrictMode and CreatesArgumentsObject and
      not ParameterListBindsName(FParameters, IDENTIFIER_ARGUMENTS) and
      not CallScope.ContainsOwnLexicalBinding(IDENTIFIER_ARGUMENTS) then
     CallScope.DefineVariableBinding(IDENTIFIER_ARGUMENTS,
@@ -659,6 +661,7 @@ var
   Value: TGocciaValue;
   Context: TGocciaEvaluationContext;
   ParamTypeHint: TGocciaLocalType;
+  CompatibilityNonStrictMode: Boolean;
 begin
   CallScope := CreateCallScope;
   BindThis(CallScope, AThisValue);
@@ -670,10 +673,11 @@ begin
   Context.CoverageEnabled := False;
   // EffectiveStrictTypes — see CreateContinuation above.
   Context.StrictTypes := FClosure.EffectiveStrictTypes;
-  Context.NonStrictMode := FClosure.EffectiveNonStrictMode;
+  CompatibilityNonStrictMode := FClosure.EffectiveNonStrictMode;
+  Context.NonStrictMode := CompatibilityNonStrictMode and not FStrictCode;
   Context.DisposalTracker := nil;
 
-  if Context.NonStrictMode and CreatesArgumentsObject and
+  if CompatibilityNonStrictMode and CreatesArgumentsObject and
      not ParameterListBindsName(FParameters, IDENTIFIER_ARGUMENTS) and
      not CallScope.ContainsOwnLexicalBinding(IDENTIFIER_ARGUMENTS) then
     CallScope.DefineVariableBinding(IDENTIFIER_ARGUMENTS,

@@ -16,6 +16,7 @@ const
 
   // Special identifier names
   IDENTIFIER_ARGUMENTS = 'arguments';
+  USE_STRICT_DIRECTIVE = 'use strict';
 
   // Numeric constants
   ZERO_VALUE = 0.0;

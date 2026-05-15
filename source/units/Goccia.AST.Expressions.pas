@@ -43,11 +43,14 @@ type
   TGocciaLiteralExpression = class(TGocciaExpression)
   private
     FValue: TGocciaValue;
+    FSourceText: string;
   public
-    constructor Create(const AValue: TGocciaValue; const ALine, AColumn: Integer);
+    constructor Create(const AValue: TGocciaValue; const ALine, AColumn: Integer;
+      const ASourceText: string = '');
     destructor Destroy; override;
     function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Value: TGocciaValue read FValue;
+    property SourceText: string read FSourceText;
   end;
 
   TGocciaTemplateLiteralExpression = class(TGocciaExpression)
@@ -883,10 +886,11 @@ end;
 { TGocciaLiteralExpression }
 
 constructor TGocciaLiteralExpression.Create(const AValue: TGocciaValue;
-  const ALine, AColumn: Integer);
+  const ALine, AColumn: Integer; const ASourceText: string);
 begin
   inherited Create(ALine, AColumn);
   FValue := AValue;
+  FSourceText := ASourceText;
   // Remove from GC -- the AST owns this value, not the garbage collector.
   // Singletons (UndefinedValue, TrueValue, FalseValue) are pinned separately
   // and safe to unregister (Remove is a no-op if not found).

@@ -1772,8 +1772,9 @@ function TGocciaEngine.CompileDynamicFunction(
   const AParamsSources: array of string;
   const ABodySource: string): TGocciaFunctionBase;
 var
-  ParamStr, Source, TrimmedBody: string;
+  ParamStr, Source: string;
   I: Integer;
+  BodyHasUseStrictDirective: Boolean;
   Lexer: TGocciaLexer;
   Tokens: TObjectList<TGocciaToken>;
   Parser: TGocciaParser;
@@ -1789,6 +1790,7 @@ begin
   // wrapper will fail validation because it will have unmatched braces when
   // parsed as a standalone function body.
   ParamStr := '';
+  BodyHasUseStrictDirective := False;
   for I := 0 to High(AParamsSources) do
   begin
     if I > 0 then
@@ -1853,6 +1855,9 @@ begin
              not (TGocciaExpressionStatement(ProgramNode.Body[0]).Expression
                is TGocciaArrowFunctionExpression) then
             ThrowSyntaxError('Invalid body for Function constructor');
+          BodyHasUseStrictDirective := HasUseStrictDirective(
+            TGocciaArrowFunctionExpression(
+              TGocciaExpressionStatement(ProgramNode.Body[0]).Expression).Body);
         finally
           ProgramNode.Free;
         end;
@@ -1886,11 +1891,12 @@ begin
         if Result is TGocciaFunctionValue then
           TGocciaFunctionValue(Result).Name := 'anonymous';
         // ES2026 §15.2.2.4: Function-constructor bodies are non-strict
-        // unless the body starts with a Use Strict Directive (§11.2.2).
-        TrimmedBody := TrimLeft(ABodySource);
-        if (Pos('"use strict"', TrimmedBody) <> 1) and
-           (Pos('''use strict''', TrimmedBody) <> 1) then
+        // unless the parsed body contains a Use Strict Directive (§11.2.2).
+        if not BodyHasUseStrictDirective then
+        begin
           Result.StrictThis := False;
+          Result.StrictCode := False;
+        end;
       finally
         ProgramNode.Free;
       end;

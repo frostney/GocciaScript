@@ -94,7 +94,7 @@ begin
   Result.GlobalBackedTopLevel := FGlobalBackedTopLevel and
     (FCurrentTemplate = FTopLevelTemplate);
   Result.StrictTypes := FStrictTypes;
-  Result.NonStrictMode := FNonStrictMode;
+  Result.NonStrictMode := FNonStrictMode and not FCurrentTemplate.StrictCode;
   Result.OptimizationOptions := FOptimizationOptions;
   Result.CompileExpression := DoCompileExpression;
   Result.CompileStatement := DoCompileStatement;
@@ -633,6 +633,8 @@ begin
   FCurrentTemplate := TGocciaFunctionTemplate.Create('<module>');
   FTopLevelTemplate := FCurrentTemplate;
   FCurrentTemplate.DebugInfo := TGocciaDebugInfo.Create(FSourcePath);
+  FCurrentTemplate.StrictCode := (not FNonStrictMode) or
+    HasUseStrictDirective(AProgram);
   FCurrentScope := TGocciaCompilerScope.Create(nil, 0);
   FCurrentScope.DeclareLocal('__receiver', False);
 

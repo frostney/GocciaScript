@@ -1700,7 +1700,8 @@ begin
       begin
         Token := Advance;
         Result := TGocciaLiteralExpression.Create(
-          TGocciaStringLiteralValue.Create(Token.Lexeme), Token.Line, Token.Column);
+          TGocciaStringLiteralValue.Create(Token.Lexeme), Token.Line,
+          Token.Column, ExtractSourceRange(Token.Line, Token.Column));
       end;
     gttTemplate:
       begin

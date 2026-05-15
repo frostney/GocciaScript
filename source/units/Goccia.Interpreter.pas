@@ -88,6 +88,7 @@ type
 implementation
 
 uses
+  Goccia.AST.Statements,
   Goccia.Coverage,
   Goccia.GarbageCollector;
 
@@ -155,6 +156,8 @@ var
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   Context := CreateEvaluationContext;
+  Context.NonStrictMode := Context.NonStrictMode and
+    not HasUseStrictDirective(AProgram);
 
   if FVarEnabled then
     HoistVarDeclarations(AProgram.Body, FGlobalScope);

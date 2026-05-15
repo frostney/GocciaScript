@@ -1031,7 +1031,10 @@ begin
   FVM := AVM;
   FClosure := AClosure;
   if Assigned(AClosure) and Assigned(AClosure.Template) then
+  begin
     FStrictThis := AClosure.Template.StrictThis;
+    FStrictCode := AClosure.Template.StrictCode;
+  end;
 end;
 
 function TGocciaVMLiteralObjectValue.TryGetOwnDataPropertyFast(
@@ -4084,6 +4087,8 @@ begin
   NumberValue := AKey.ToNumberLiteral;
   if Frac(NumberValue.Value) <> 0.0 then
     Exit;
+  if (NumberValue.Value < 0) or (NumberValue.Value > MaxInt) then
+    Exit;
 
   AIndex := Trunc(NumberValue.Value);
   Result := AIndex >= 0;
@@ -4103,6 +4108,8 @@ begin
     grkFloat:
       begin
         if Frac(AKey.FloatValue) <> 0.0 then
+          Exit;
+        if (AKey.FloatValue < 0) or (AKey.FloatValue > MaxInt) then
           Exit;
         AIndex := Trunc(AKey.FloatValue);
         Result := AIndex >= 0;

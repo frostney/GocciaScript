@@ -30,6 +30,7 @@ type
   TGocciaFunctionBase = class(TGocciaObjectValue)
   protected
     FStrictThis: Boolean;
+    FStrictCode: Boolean;
     // Subclasses should override these to provide name/length
     function GetFunctionLength: Integer; virtual;
     function GetFunctionName: string; virtual;
@@ -68,6 +69,7 @@ type
     // stays as-is; when false, coerced to globalThis. Defaults to strict mode
     // behavior; non-strict compatibility and Function constructor calls clear it.
     property StrictThis: Boolean read FStrictThis write FStrictThis;
+    property StrictCode: Boolean read FStrictCode write FStrictCode;
   end;
 
   // Helper class for bound functions
@@ -288,6 +290,7 @@ var
 begin
   inherited Create;
   FStrictThis := True;
+  FStrictCode := True;
 
   Shared := GetSharedFunctionPrototype;
   if not Assigned(Shared) and Assigned(CurrentRealm) then

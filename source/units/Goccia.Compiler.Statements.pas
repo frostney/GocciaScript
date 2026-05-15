@@ -98,6 +98,7 @@ uses
   Goccia.Compiler.PatternMatching,
   Goccia.Constants.PropertyNames,
   Goccia.Constants.TypeNames,
+  Goccia.Error,
   Goccia.Keywords.Reserved,
   Goccia.Token,
   Goccia.Types.Enforcement,
@@ -1419,6 +1420,11 @@ var
   ClosedLocals: array[0..255] of UInt8;
   ClosedCount, I: Integer;
 begin
+  if not ACtx.NonStrictMode then
+    raise TGocciaSyntaxError.Create(
+      '''with'' statements are not allowed in strict mode',
+      AStmt.Line, AStmt.Column, ACtx.SourcePath, nil);
+
   ACtx.Scope.BeginScope;
   HiddenName := '#with:' + IntToStr(ACtx.Template.CodeCount) + ':' +
     IntToStr(ACtx.Scope.Depth);
@@ -3158,6 +3164,8 @@ begin
   ChildCtx := ACtx;
   ChildCtx.Template := ChildTemplate;
   ChildCtx.Scope := ChildScope;
+  ChildCtx.NonStrictMode := ACtx.NonStrictMode and
+    not ChildTemplate.StrictCode;
 
   EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot);
 
@@ -3225,6 +3233,8 @@ begin
   ChildCtx := ACtx;
   ChildCtx.Template := ChildTemplate;
   ChildCtx.Scope := ChildScope;
+  ChildCtx.NonStrictMode := ACtx.NonStrictMode and
+    not ChildTemplate.StrictCode;
   EmitLineMapping(ChildCtx, AGetter.Line, AGetter.Column);
   EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot);
   ACtx.CompileFunctionBody(AGetter.Body);
@@ -3292,6 +3302,8 @@ begin
   ChildCtx := ACtx;
   ChildCtx.Template := ChildTemplate;
   ChildCtx.Scope := ChildScope;
+  ChildCtx.NonStrictMode := ACtx.NonStrictMode and
+    not ChildTemplate.StrictCode;
   EmitLineMapping(ChildCtx, ASetter.Line, ASetter.Column);
   EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot);
   ACtx.CompileFunctionBody(ASetter.Body);
@@ -3355,6 +3367,8 @@ begin
   ChildCtx := ACtx;
   ChildCtx.Template := ChildTemplate;
   ChildCtx.Scope := ChildScope;
+  ChildCtx.NonStrictMode := ACtx.NonStrictMode and
+    not ChildTemplate.StrictCode;
   EmitLineMapping(ChildCtx, AGetter.Line, AGetter.Column);
   EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot);
   ACtx.CompileFunctionBody(AGetter.Body);
@@ -3417,6 +3431,8 @@ begin
   ChildCtx := ACtx;
   ChildCtx.Template := ChildTemplate;
   ChildCtx.Scope := ChildScope;
+  ChildCtx.NonStrictMode := ACtx.NonStrictMode and
+    not ChildTemplate.StrictCode;
   EmitLineMapping(ChildCtx, ASetter.Line, ASetter.Column);
   EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot);
   ACtx.CompileFunctionBody(ASetter.Body);
@@ -3501,6 +3517,8 @@ begin
   ChildCtx := ACtx;
   ChildCtx.Template := ChildTemplate;
   ChildCtx.Scope := ChildScope;
+  ChildCtx.NonStrictMode := ACtx.NonStrictMode and
+    not ChildTemplate.StrictCode;
 
   EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot);
 
@@ -3628,6 +3646,8 @@ begin
   ChildCtx := ACtx;
   ChildCtx.Template := ChildTemplate;
   ChildCtx.Scope := ChildScope;
+  ChildCtx.NonStrictMode := ACtx.NonStrictMode and
+    not ChildTemplate.StrictCode;
 
   if Length(AClassDef.FFieldOrder) > 0 then
   begin
@@ -3750,6 +3770,8 @@ begin
   ChildCtx := ACtx;
   ChildCtx.Template := ChildTemplate;
   ChildCtx.Scope := ChildScope;
+  ChildCtx.NonStrictMode := ACtx.NonStrictMode and
+    not ChildTemplate.StrictCode;
 
   for I := 0 to ABody.Nodes.Count - 1 do
   begin

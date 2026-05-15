@@ -1567,19 +1567,27 @@ function EvaluateGetter(const AGetterExpression: TGocciaGetterExpression; const 
 var
   Statements: TObjectList<TGocciaASTNode>;
   EmptyParameters: TGocciaParameterArray;
+  HasStrictDirective: Boolean;
 begin
   // Getter has no parameters
   SetLength(EmptyParameters, 0);
 
   Statements := CopyStatementList(TGocciaBlockStatement(AGetterExpression.Body).Nodes);
+  HasStrictDirective := HasUseStrictDirective(AGetterExpression.Body);
 
   // Create function with closure scope
   if AAsMethod or Assigned(ASuperClass) then
     Result := TGocciaMethodValue.Create(EmptyParameters, Statements, AContext.Scope.CreateChild, '', ASuperClass)
   else
     Result := TGocciaFunctionValue.Create(EmptyParameters, Statements, AContext.Scope.CreateChild);
-  if AContext.NonStrictMode and not (AAsMethod or Assigned(ASuperClass)) then
+  if AContext.NonStrictMode and not HasStrictDirective and
+     not (AAsMethod or Assigned(ASuperClass)) then
+  begin
     TGocciaFunctionValue(Result).StrictThis := False;
+    TGocciaFunctionValue(Result).StrictCode := False;
+  end
+  else
+    TGocciaFunctionValue(Result).StrictCode := True;
   TGocciaFunctionValue(Result).SourceFilePath := AContext.CurrentFilePath;
   TGocciaFunctionValue(Result).SourceLine := AGetterExpression.Line;
   TGocciaFunctionValue(Result).SourceText := AGetterExpression.SourceText;
@@ -1589,6 +1597,7 @@ function EvaluateSetter(const ASetterExpression: TGocciaSetterExpression; const 
 var
   Statements: TObjectList<TGocciaASTNode>;
   Parameters: TGocciaParameterArray;
+  HasStrictDirective: Boolean;
 begin
   // Setter has one parameter
   SetLength(Parameters, 1);
@@ -1596,14 +1605,21 @@ begin
   Parameters[0].DefaultValue := nil;
 
   Statements := CopyStatementList(TGocciaBlockStatement(ASetterExpression.Body).Nodes);
+  HasStrictDirective := HasUseStrictDirective(ASetterExpression.Body);
 
   // Create function with closure scope
   if AAsMethod or Assigned(ASuperClass) then
     Result := TGocciaMethodValue.Create(Parameters, Statements, AContext.Scope.CreateChild, '', ASuperClass)
   else
     Result := TGocciaFunctionValue.Create(Parameters, Statements, AContext.Scope.CreateChild);
-  if AContext.NonStrictMode and not (AAsMethod or Assigned(ASuperClass)) then
+  if AContext.NonStrictMode and not HasStrictDirective and
+     not (AAsMethod or Assigned(ASuperClass)) then
+  begin
     TGocciaFunctionValue(Result).StrictThis := False;
+    TGocciaFunctionValue(Result).StrictCode := False;
+  end
+  else
+    TGocciaFunctionValue(Result).StrictCode := True;
   TGocciaFunctionValue(Result).SourceFilePath := AContext.CurrentFilePath;
   TGocciaFunctionValue(Result).SourceLine := ASetterExpression.Line;
   TGocciaFunctionValue(Result).SourceText := ASetterExpression.SourceText;
@@ -2555,6 +2571,9 @@ begin
     Result := TGocciaAsyncArrowFunctionValue.Create(AArrowFunctionExpression.Parameters, Statements, AContext.Scope.CreateChild)
   else
     Result := TGocciaArrowFunctionValue.Create(AArrowFunctionExpression.Parameters, Statements, AContext.Scope.CreateChild);
+  TGocciaFunctionValue(Result).StrictCode :=
+    (not AContext.NonStrictMode) or
+    HasUseStrictDirective(AArrowFunctionExpression.Body);
   TGocciaFunctionValue(Result).IsExpressionBody := not (AArrowFunctionExpression.Body is TGocciaBlockStatement);
   TGocciaFunctionValue(Result).SourceFilePath := AContext.CurrentFilePath;
   TGocciaFunctionValue(Result).SourceLine := AArrowFunctionExpression.Line;
@@ -2567,7 +2586,9 @@ var
   ClosureScope: TGocciaScope;
   PrototypeObj: TGocciaObjectValue;
   PrototypeFlags: TPropertyFlags;
+  HasStrictDirective: Boolean;
 begin
+  HasStrictDirective := HasUseStrictDirective(AMethodExpression.Body);
   if AMethodExpression.Body is TGocciaBlockStatement then
     Statements := CopyStatementList(TGocciaBlockStatement(AMethodExpression.Body).Nodes)
   else
@@ -2592,8 +2613,13 @@ begin
   else
     Result := TGocciaFunctionValue.Create(AMethodExpression.Parameters, Statements, ClosureScope);
   TGocciaFunctionValue(Result).Name := AMethodExpression.Name;
-  if AContext.NonStrictMode then
+  if AContext.NonStrictMode and not HasStrictDirective then
+  begin
     TGocciaFunctionValue(Result).StrictThis := False;
+    TGocciaFunctionValue(Result).StrictCode := False;
+  end
+  else
+    TGocciaFunctionValue(Result).StrictCode := True;
   TGocciaFunctionValue(Result).SourceFilePath := AContext.CurrentFilePath;
   TGocciaFunctionValue(Result).SourceLine := AMethodExpression.Line;
   TGocciaFunctionValue(Result).SourceText := AMethodExpression.SourceText;
