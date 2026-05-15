@@ -30,3 +30,12 @@ test("delete non-configurable properties throws by default", () => {
     delete obj.fixed;
   }).toThrow(TypeError);
 });
+
+test("regular function calls keep strict this by default", () => {
+  function f() {
+    return this;
+  }
+
+  expect(f()).toBeUndefined();
+  expect(f.call(null)).toBeNull();
+});

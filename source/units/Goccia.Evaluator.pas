@@ -1578,6 +1578,8 @@ begin
     Result := TGocciaMethodValue.Create(EmptyParameters, Statements, AContext.Scope.CreateChild, '', ASuperClass)
   else
     Result := TGocciaFunctionValue.Create(EmptyParameters, Statements, AContext.Scope.CreateChild);
+  if AContext.NonStrictMode and not (AAsMethod or Assigned(ASuperClass)) then
+    TGocciaFunctionValue(Result).StrictThis := False;
   TGocciaFunctionValue(Result).SourceFilePath := AContext.CurrentFilePath;
   TGocciaFunctionValue(Result).SourceLine := AGetterExpression.Line;
   TGocciaFunctionValue(Result).SourceText := AGetterExpression.SourceText;
@@ -1600,6 +1602,8 @@ begin
     Result := TGocciaMethodValue.Create(Parameters, Statements, AContext.Scope.CreateChild, '', ASuperClass)
   else
     Result := TGocciaFunctionValue.Create(Parameters, Statements, AContext.Scope.CreateChild);
+  if AContext.NonStrictMode and not (AAsMethod or Assigned(ASuperClass)) then
+    TGocciaFunctionValue(Result).StrictThis := False;
   TGocciaFunctionValue(Result).SourceFilePath := AContext.CurrentFilePath;
   TGocciaFunctionValue(Result).SourceLine := ASetterExpression.Line;
   TGocciaFunctionValue(Result).SourceText := ASetterExpression.SourceText;
@@ -2588,6 +2592,8 @@ begin
   else
     Result := TGocciaFunctionValue.Create(AMethodExpression.Parameters, Statements, ClosureScope);
   TGocciaFunctionValue(Result).Name := AMethodExpression.Name;
+  if AContext.NonStrictMode then
+    TGocciaFunctionValue(Result).StrictThis := False;
   TGocciaFunctionValue(Result).SourceFilePath := AContext.CurrentFilePath;
   TGocciaFunctionValue(Result).SourceLine := AMethodExpression.Line;
   TGocciaFunctionValue(Result).SourceText := AMethodExpression.SourceText;

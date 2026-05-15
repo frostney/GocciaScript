@@ -65,8 +65,8 @@ type
     function TypeOf: string; override;
 
     // ES2026 §10.2.1.1 OrdinaryCallBindThis: when true, undefined/null this
-    // stays as-is; when false, coerced to globalThis.  Defaults to true
-    // (Goccia is always strict); only Function constructor (§15.2.2.4) clears it.
+    // stays as-is; when false, coerced to globalThis. Defaults to strict mode
+    // behavior; non-strict compatibility and Function constructor calls clear it.
     property StrictThis: Boolean read FStrictThis write FStrictThis;
   end;
 

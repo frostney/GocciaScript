@@ -83,7 +83,6 @@ implementation
 uses
   SysUtils,
 
-  Goccia.Arguments.ObjectValue,
   Goccia.AST.BindingPatterns,
   Goccia.AST.Statements,
   Goccia.Bytecode.Chunk,
@@ -96,6 +95,7 @@ uses
   Goccia.Evaluator.Context,
   Goccia.GarbageCollector,
   Goccia.Types.Enforcement,
+  Goccia.Values.ArgumentsObjectValue,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper;
 

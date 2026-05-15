@@ -239,6 +239,7 @@ console.log("--compat-non-strict-mode (Loader + Bundler + TestRunner + Bare)..."
       src,
       [
         "function f(a) {",
+        "  if (this !== globalThis) return -1;",
         "  with ({ extra: 5 }) {",
         "    return arguments.length + extra;",
         "  }",
@@ -277,6 +278,7 @@ console.log("--compat-non-strict-mode (Loader + Bundler + TestRunner + Bare)..."
       testSrc,
       [
         "function f(a) {",
+        "  if (this !== globalThis) return -1;",
         "  with ({ extra: 5 }) {",
         "    return arguments.length + extra;",
         "  }",

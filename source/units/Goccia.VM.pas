@@ -266,7 +266,6 @@ uses
   TextSemantics,
   TimingUtils,
 
-  Goccia.Arguments.ObjectValue,
   Goccia.Arithmetic,
   Goccia.CallStack,
   Goccia.Constants.ConstructorNames,
@@ -288,6 +287,7 @@ uses
   Goccia.Timeout,
   Goccia.Types.Enforcement,
   Goccia.Utils,
+  Goccia.Values.ArgumentsObjectValue,
   Goccia.Values.BigIntValue,
   Goccia.Values.ClassHelper,
   Goccia.Values.EnumValue,
@@ -1024,6 +1024,8 @@ begin
   inherited Create;
   FVM := AVM;
   FClosure := AClosure;
+  if Assigned(AClosure) and Assigned(AClosure.Template) then
+    FStrictThis := AClosure.Template.StrictThis;
 end;
 
 function TGocciaVMLiteralObjectValue.TryGetOwnDataPropertyFast(

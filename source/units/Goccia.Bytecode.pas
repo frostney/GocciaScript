@@ -45,7 +45,9 @@ const
   //               opcodes for object environment records.
   //   v28 -> v29: added non-strict delete opcodes for
   //               --compat-non-strict-mode bytecode.
-  GOCCIA_FORMAT_VERSION = 29;
+  //   v29 -> v30: serialized function strict-this mode for
+  //               --compat-non-strict-mode bytecode.
+  GOCCIA_FORMAT_VERSION = 30;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;

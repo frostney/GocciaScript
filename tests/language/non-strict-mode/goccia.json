@@ -1,3 +1,4 @@
 {
+  "compat-function": true,
   "compat-non-strict-mode": true
 }

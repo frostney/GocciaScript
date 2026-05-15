@@ -697,6 +697,7 @@ console.log("Per-file compat-non-strict-mode config across all apps...");
     );
     const nonStrictSource = [
       "function f(a) {",
+      "  if (this !== globalThis) return -1;",
       "  with ({ extra: 5 }) {",
       "    return arguments.length + extra;",
       "  }",

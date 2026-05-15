@@ -224,10 +224,11 @@ moves.
   `Reflect.construct(function(){}, [], f)`; Goccia's `Reflect.construct`
   rejects `function` declarations and expressions as the proxy target.
   Adapted version uses `Reflect.construct(class {}, [], f)`.
-- `fnGlobalObject.js`: stock uses `Function("return this;")()`; Goccia
-  binds `this` to `undefined` for unattached calls (consistent with
-  Goccia's strict-equivalent language design), so the stock helper
-  returns `undefined`. Adapted version uses `() => globalThis`.
+- `fnGlobalObject.js`: stock uses `Function("return this;")()`.
+  The runner now enables `--compat-function` and
+  `--compat-non-strict-mode`, so this helper should be re-evaluated
+  against the stock version during the next harness cleanup. Adapted
+  version still uses `() => globalThis`.
 - `doneprintHandle.js`: stock has `$DONE` print
   `Test262:AsyncTestComplete` / `Test262:AsyncTestFailure:...` directly;
   in Goccia bytecode mode draining a top-level `Promise.then`
@@ -254,8 +255,8 @@ which is correct because the engine's behavior is already strict-equivalent
 for the things `onlyStrict` tests assert on.
 
 The orchestrator enables `--compat-non-strict-mode` for harness runs so
-`arguments`, `with`, and legacy `delete` return values are exercised where
-test262 requires them. Remaining `noStrict` tests rely on sloppy-only
+`arguments`, `with`, legacy `delete` return values, and regular-function
+nullish `this` coercion are exercised where test262 requires them. Remaining `noStrict` tests rely on sloppy-only
 behaviors that GocciaScript still does not provide and fail naturally. They
 are documented in `scripts/test262_compatibility_roadmap.json` as
 `excluded-by-language-design` and counted as expected failures, not as

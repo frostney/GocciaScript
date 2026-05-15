@@ -88,6 +88,7 @@ type
     FIsGenerator: Boolean;
     FIsArrow: Boolean;
     FHasOwnPrototype: Boolean;
+    FStrictThis: Boolean;
     FTypeCheckPreambleSize: UInt8;
     FProfileIndex: Integer;
     FSourceText: string;
@@ -152,6 +153,7 @@ type
     property IsAsync: Boolean read FIsAsync write FIsAsync;
     property IsGenerator: Boolean read FIsGenerator write FIsGenerator;
     property IsArrow: Boolean read FIsArrow write FIsArrow;
+    property StrictThis: Boolean read FStrictThis write FStrictThis;
     // True when this template represents a `function`/`function*` declaration or
     // expression (or async generator).  Per ES2026 §10.2.5 MakeConstructor, such
     // functions get an own `prototype` property installed at closure-creation
@@ -197,6 +199,7 @@ begin
   FLocalStrictCount := 0;
   FIsArrow := False;
   FHasOwnPrototype := False;
+  FStrictThis := True;
   FProfileIndex := -1;
 end;
 

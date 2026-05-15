@@ -2333,6 +2333,7 @@ begin
 
   ChildTemplate := TGocciaFunctionTemplate.Create('get ' + AKey);
   ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
+  ChildTemplate.StrictThis := not ACtx.NonStrictMode;
   ChildTemplate.SourceText := AGetter.SourceText;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
@@ -2393,6 +2394,7 @@ begin
 
   ChildTemplate := TGocciaFunctionTemplate.Create('set ' + AKey);
   ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
+  ChildTemplate.StrictThis := not ACtx.NonStrictMode;
   ChildTemplate.SourceText := ASetter.SourceText;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
@@ -2805,6 +2807,7 @@ begin
   ChildTemplate.IsAsync := AExpr.IsAsync;
   ChildTemplate.IsGenerator := AExpr.IsGenerator;
   ChildTemplate.HasOwnPrototype := AExpr.HasOwnPrototype;
+  ChildTemplate.StrictThis := not ACtx.NonStrictMode;
   ChildTemplate.SourceText := AExpr.SourceText;
   if HasNameBinding then
     ChildTemplate.Name := AExpr.Name;

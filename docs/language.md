@@ -9,7 +9,7 @@
 - **TC39 proposals** — Decorators, decorator metadata, pattern matching, types as comments, enums, `Math.clamp`
 - **Excluded by design** — `eval`, `while` / `do...while`, default imports/exports
 - **Graceful handling** — Parser-recognized excluded syntax (`==`/`!=` when `--compat-loose-equality` is off, `while`/`do...while`, `with` when `--compat-non-strict-mode` is off, traditional `for(;;)` when `--compat-traditional-for-loop` is off) parses successfully but executes as a no-op with a warning and suggestion
-- **Opt-in toggles** — ASI (`--asi`), `var` declarations (`--compat-var`), `function` keyword (`--compat-function`), non-strict compatibility (`--compat-non-strict-mode` for `arguments`, `with`, and legacy `delete` return values), loose equality (`--compat-loose-equality`), traditional `for(init; test; update)` loops (`--compat-traditional-for-loop`), runtime type enforcement (`--strict-types`)
+- **Opt-in toggles** — ASI (`--asi`), `var` declarations (`--compat-var`), `function` keyword (`--compat-function`), non-strict compatibility (`--compat-non-strict-mode` for `arguments`, `with`, legacy `delete` returns, and sloppy `this`), loose equality (`--compat-loose-equality`), traditional `for(init; test; update)` loops (`--compat-traditional-for-loop`), runtime type enforcement (`--strict-types`)
 - **Default preprocessors** — JSX (enabled by default via `DefaultPreprocessors`)
 
 GocciaScript implements a curated subset of ECMAScript. This document details what's supported, what's excluded, and the rationale for each decision. For quick-reference tables of every feature and TC39 proposal, see [Language Tables](language-tables.md).
@@ -862,7 +862,7 @@ GocciaScript operates in an implicit strict mode (see [Errors](errors.md) for th
 - `const` reassignment throws `TypeError`.
 - Accessing undeclared variables throws `ReferenceError`.
 - Deleting an unqualified identifier or non-configurable property is an error unless `--compat-non-strict-mode` is enabled.
-- `this` is `undefined` in standalone function calls (no implicit global `this`).
+- `this` is `undefined` in standalone function calls unless `--compat-non-strict-mode` is enabled.
 - Symbol values cannot be implicitly converted to strings or numbers — throws `TypeError`.
 
 ### `this` Binding (Strict Mode Semantics)
@@ -876,8 +876,8 @@ GocciaScript follows ECMAScript strict mode `this` semantics:
 | Shorthand method (`method() {}`) | Call-site object (the receiver) |
 | Class method | Call-site object (the instance) |
 | Getter/setter | Call-site object |
-| Standalone function call | `undefined` |
-| `fn.call(thisArg)` / `fn.apply(thisArg)` | Explicit `thisArg` |
+| Standalone function call | `undefined` by default; `globalThis` for regular functions with `--compat-non-strict-mode` |
+| `fn.call(thisArg)` / `fn.apply(thisArg)` | Explicit `thisArg`; nullish `thisArg` becomes `globalThis` for regular functions with `--compat-non-strict-mode` |
 | `fn.bind(thisArg)` | Bound `thisArg` |
 
 Arrow functions **never** receive their own `this` — they always inherit from their defining scope:

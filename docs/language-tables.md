@@ -18,6 +18,7 @@
 | Comma operator (`,`) | ES1 | Supported |
 | `==` / `!=` (loose equality) | ES1 | Opt-in (`--compat-loose-equality`) — use `===` / `!==` by default |
 | `eval()` | ES1 | Excluded |
+| Non-strict function `this` binding | ES1 | Strict by default; `--compat-non-strict-mode` coerces nullish regular-function `this` to `globalThis`; arrows remain lexical |
 | `arguments` object | ES1 | Opt-in (`--compat-non-strict-mode`) as an unmapped object for ordinary functions, methods, accessors, and generators; arrows resolve it lexically; prefer rest parameters for new code |
 | Traditional `for(init; test; update)` loop | ES1 | Opt-in (`--compat-traditional-for-loop`) — use `for...of` or array methods by default |
 | `while` / `do...while` | ES1 | Excluded — use `for...of`, array methods, or traditional `for(;;)` (with `--compat-traditional-for-loop`) |

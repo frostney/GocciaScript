@@ -314,6 +314,7 @@ Here's a quick reference of GocciaScript's key restrictions:
 | `for (...)` / `while (...)` | Not supported | `for...of`, `.map()`, `.forEach()`, `.reduce()` |
 | `eval("code")` | Not supported | No alternative (by design) |
 | `arguments` | Off by default | Prefer rest parameters (`...args`) or `--compat-non-strict-mode` |
+| sloppy function `this` | Strict by default | `--compat-non-strict-mode` when porting scripts that expect `globalThis` |
 | legacy `delete` returns | Strict by default | `--compat-non-strict-mode` when porting sloppy scripts |
 | `parseInt("10")` | Not available as global | `Number.parseInt("10")` |
 | `isNaN(x)` | Not available as global | `Number.isNaN(x)` |
