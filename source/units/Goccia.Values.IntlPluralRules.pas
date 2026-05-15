@@ -48,6 +48,7 @@ uses
   Goccia.Intl.CLDRData,
   Goccia.ObjectModel.Types,
   Goccia.Realm,
+  Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
@@ -172,6 +173,23 @@ begin
       FMaximumSignificantDigits := Trunc(V.ToNumberLiteral.Value);
   end;
 
+  if (FMinimumSignificantDigits >= 0) or (FMaximumSignificantDigits >= 0) then
+  begin
+    if FMinimumSignificantDigits < 0 then
+      FMinimumSignificantDigits := 1;
+    if FMaximumSignificantDigits < 0 then
+      FMaximumSignificantDigits := 21;
+    FMinimumFractionDigits := -1;
+    FMaximumFractionDigits := -1;
+  end
+  else
+  begin
+    if FMinimumFractionDigits < 0 then
+      FMinimumFractionDigits := 0;
+    if FMaximumFractionDigits < 0 then
+      FMaximumFractionDigits := 3;
+  end;
+
   InitializePrototype;
   if Assigned(GetIntlPluralRulesShared) then
     FPrototype := GetIntlPluralRulesShared.Prototype;
@@ -275,6 +293,8 @@ function TGocciaIntlPluralRulesValue.IntlPluralRulesResolvedOptions(const AArgs:
 var
   PR: TGocciaIntlPluralRulesValue;
   Obj: TGocciaObjectValue;
+  Rules: TIntlPluralRuleSet;
+  CatArr: TGocciaArrayValue;
 begin
   PR := AsPluralRules(AThisValue, 'Intl.PluralRules.prototype.resolvedOptions');
   Obj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
@@ -294,6 +314,24 @@ begin
   if PR.FMaximumSignificantDigits >= 0 then
     Obj.AssignProperty('maximumSignificantDigits',
       TGocciaNumberLiteralValue.Create(PR.FMaximumSignificantDigits));
+
+  CatArr := TGocciaArrayValue.Create;
+  if TryGetPluralRules(PR.FLocale, PluralTypeStringToEnum(PR.FType) = iptCardinal, Rules) then
+  begin
+    if Rules.Zero <> '' then
+      CatArr.Elements.Add(TGocciaStringLiteralValue.Create('zero'));
+    if Rules.One <> '' then
+      CatArr.Elements.Add(TGocciaStringLiteralValue.Create('one'));
+    if Rules.Two <> '' then
+      CatArr.Elements.Add(TGocciaStringLiteralValue.Create('two'));
+    if Rules.Few <> '' then
+      CatArr.Elements.Add(TGocciaStringLiteralValue.Create('few'));
+    if Rules.Many <> '' then
+      CatArr.Elements.Add(TGocciaStringLiteralValue.Create('many'));
+  end;
+  CatArr.Elements.Add(TGocciaStringLiteralValue.Create('other'));
+  Obj.AssignProperty('pluralCategories', CatArr);
+
   Result := Obj;
 end;
 
