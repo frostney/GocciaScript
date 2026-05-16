@@ -200,6 +200,170 @@ describe("TypedArray element access", () => {
     });
   });
 
+  describe("BigInt64Array and BigUint64Array range", () => {
+    test("BigInt64Array wraps to signed 64-bit range", () => {
+      const ta = new BigInt64Array(1);
+      ta[0] = 9223372036854775810n;
+      expect(ta[0]).toBe(-9223372036854775806n);
+    });
+
+    test("BigUint64Array wraps to unsigned 64-bit range", () => {
+      const ta = new BigUint64Array(1);
+      ta[0] = -1n;
+      expect(ta[0]).toBe(18446744073709551615n);
+    });
+  });
+
+  describe("BigInt typed-array element conversion", () => {
+    test("converts booleans, strings, and objects with ToBigInt", () => {
+      const ta = new BigInt64Array(4);
+      ta[0] = true;
+      ta[1] = false;
+      ta[2] = "-2";
+      ta[3] = {
+        valueOf() {
+          return 3n;
+        },
+      };
+
+      expect(ta[0]).toBe(1n);
+      expect(ta[1]).toBe(0n);
+      expect(ta[2]).toBe(-2n);
+      expect(ta[3]).toBe(3n);
+    });
+
+    test("invalid string conversion throws SyntaxError", () => {
+      const ta = new BigInt64Array(1);
+
+      expect(() => {
+        ta[0] = "not a bigint";
+      }).toThrow(SyntaxError);
+    });
+
+    test("number conversion throws TypeError", () => {
+      const ta = new BigInt64Array(1);
+
+      expect(() => {
+        ta[0] = 1;
+      }).toThrow(TypeError);
+    });
+  });
+
+  describe("Resizable ArrayBuffer-backed element assignment", () => {
+    test("revalidates index after value coercion grows the buffer", () => {
+      const rab = new ArrayBuffer(0, { maxByteLength: 1 });
+      const ta = new Int8Array(rab);
+      const value = {
+        valueOf() {
+          rab.resize(1);
+          return 100;
+        },
+      };
+
+      expect(ta.length).toBe(0);
+
+      ta[0] = value;
+
+      expect(ta.length).toBe(1);
+      expect(ta[0]).toBe(100);
+    });
+  });
+
+  describe("Reflect.set integer-indexed receiver semantics", () => {
+    test("plain receiver gets an ordinary property without coercing the value", () => {
+      let valueOfCalls = 0;
+      const target = new Uint8Array([0]);
+      const receiver = {};
+      const value = {
+        valueOf() {
+          valueOfCalls += 1;
+          return 7;
+        },
+      };
+
+      expect(Reflect.set(target, 0, value, receiver)).toBe(true);
+      expect(target[0]).toBe(0);
+      expect(receiver[0]).toBe(value);
+      expect(valueOfCalls).toBe(0);
+    });
+
+    test("typed-array receiver gets the element write", () => {
+      const target = new Uint8Array([0]);
+      const receiver = new Uint8Array([1]);
+
+      expect(Reflect.set(target, 0, new Number(2.3), receiver)).toBe(true);
+      expect(target[0]).toBe(0);
+      expect(receiver[0]).toBe(2);
+    });
+
+    test("short typed-array receiver fails without coercing the value", () => {
+      let valueOfCalls = 0;
+      const target = new Uint8Array([0, 0]);
+      const receiver = new Uint8Array([1]);
+      const value = {
+        valueOf() {
+          valueOfCalls += 1;
+          return 7;
+        },
+      };
+
+      expect(Reflect.set(target, 1, value, receiver)).toBe(false);
+      expect(target[1]).toBe(0);
+      expect(valueOfCalls).toBe(0);
+    });
+
+    test("prototype-chain proxy receiver uses ordinary defineProperty", () => {
+      let valueOfCalls = 0;
+      let defineCalls = 0;
+      const target = new BigInt64Array([0n]);
+      const value = {
+        valueOf() {
+          valueOfCalls += 1;
+          return 2n;
+        },
+      };
+      const receiver = new Proxy(Object.create(target), {
+        defineProperty: (object, key, desc) => {
+          defineCalls += 1;
+          Object.defineProperty(object, key, desc);
+          return true;
+        },
+      });
+
+      receiver[0] = value;
+
+      expect(target[0]).toBe(0n);
+      expect(receiver[0]).toBe(value);
+      expect(defineCalls).toBe(1);
+      expect(valueOfCalls).toBe(0);
+    });
+
+    test("prototype-chain receiver ignores typed-array prototype accessor", () => {
+      const target = new BigInt64Array([0n]);
+      const receiver = Object.create(target);
+      const value = {};
+
+      Object.defineProperty(BigInt64Array.prototype, 0, {
+        get: () => {
+          throw new Error("getter should not be reached");
+        },
+        set: () => {
+          throw new Error("setter should not be reached");
+        },
+        configurable: true,
+      });
+
+      try {
+        receiver[0] = value;
+
+        expect(target[0]).toBe(0n);
+        expect(receiver[0]).toBe(value);
+      } finally {
+        delete BigInt64Array.prototype[0];
+      }
+    });
+  });
+
   describe("Infinity written to integer types", () => {
     test("Int8Array truncates Infinity", () => {
       const ta = new Int8Array(1);

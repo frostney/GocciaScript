@@ -56,6 +56,24 @@ describe("Proxy set trap", () => {
     expect(proxy.x).toBe(42);
   });
 
+  test("fallback set uses receiver defineProperty semantics", () => {
+    const target = {};
+    let defineCalls = 0;
+    const proxy = new Proxy(target, {
+      defineProperty: (t, prop, desc) => {
+        defineCalls += 1;
+        Object.defineProperty(t, prop, desc);
+        return true;
+      },
+    });
+
+    proxy.x = 42;
+
+    expect(defineCalls).toBe(1);
+    expect(target.x).toBe(42);
+    expect(proxy.x).toBe(42);
+  });
+
   test("receives correct arguments", () => {
     const target = {};
     let receivedArgs;
