@@ -102,6 +102,10 @@ type
     destructor Destroy; override;
   end;
 
+function ResolveSourceTypeOption(
+  const AOption: TGocciaEnumOption<CLI.Options.TGocciaSourceType>;
+  const AFileConfig: TConfigEntryArray): Goccia.Engine.TGocciaSourceType;
+
 implementation
 
 uses

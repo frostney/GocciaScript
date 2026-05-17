@@ -286,13 +286,19 @@ console.log("--compat-non-strict-mode (Loader + Bundler + TestRunner + Bare)..."
         "with (withObj) {",
         "  value = 2;",
         "}",
-        "obj.fixed + withObj.value;",
+        "looseCreated = 3;",
+        "let calledThis;",
+        "const receiverObj = { x: 4, tag(strings) { return this.x; } };",
+        "with (receiverObj) {",
+        "  calledThis = tag``;",
+        "}",
+        "obj.fixed + withObj.value + looseCreated + calledThis;",
       ].join("\n") + "\n",
     );
     const assignmentOutPath = join(tmp, "assignment-nonstrict.gbc");
     await $`${BUNDLER} ${assignmentSrc} --output=${assignmentOutPath} --compat-non-strict-mode`.quiet();
     const bundledAssignmentOut = await $`${LOADER} --print ${assignmentOutPath} 2>&1`.text();
-    if (!containsLine(bundledAssignmentOut, "2")) throw new Error(`Bundled non-strict assignment expected 2, got: ${bundledAssignmentOut}`);
+    if (!containsLine(bundledAssignmentOut, "9")) throw new Error(`Bundled non-strict assignment expected 9, got: ${bundledAssignmentOut}`);
 
     const moduleWithSrc = join(tmp, "module-with.js");
     writeFileSync(moduleWithSrc, "with ({ x: 1 }) { x; }\n");
@@ -324,8 +330,10 @@ console.log("--compat-non-strict-mode (Loader + Bundler + TestRunner + Bare)..."
     const bareOut = await $`${BARE} --print ${src} --compat-function --compat-non-strict-mode 2>&1`.text();
     if (bareOut.trim() !== "7") throw new Error(`Bare --compat-non-strict-mode expected 7, got: ${bareOut}`);
 
-    const bundleNoFlag = await $`${BUNDLER} ${src} --compat-function --output=${join(tmp, "no-flag.gbc")} 2>&1`.nothrow();
+    const noFlagOut = join(tmp, "no-flag.gbc");
+    const bundleNoFlag = await $`${BUNDLER} ${src} --compat-function --output=${noFlagOut} 2>&1`.nothrow();
     if (bundleNoFlag.exitCode !== 0) throw new Error(`Bundler without --compat-non-strict-mode should skip unsupported with and still compile, got: ${bundleNoFlag.stderr.toString()}`);
+    if (!existsSync(noFlagOut)) throw new Error("Bundler without --compat-non-strict-mode did not write bytecode output");
   } finally {
     clean(tmp);
   }

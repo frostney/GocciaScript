@@ -5606,6 +5606,10 @@ begin
     MemberExpr := TGocciaMemberExpression(ATaggedTemplateExpression.Tag);
     Callee := EvaluateMember(MemberExpr, AContext, ThisValue);
   end
+  else if ATaggedTemplateExpression.Tag is TGocciaIdentifierExpression then
+    AContext.Scope.ResolveIdentifierReference(
+      TGocciaIdentifierExpression(ATaggedTemplateExpression.Tag).Name,
+      Callee, ThisValue)
   else
   begin
     Callee := EvaluateExpression(ATaggedTemplateExpression.Tag, AContext);

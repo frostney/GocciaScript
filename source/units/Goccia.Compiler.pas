@@ -514,6 +514,7 @@ var
   ForStmt: TGocciaForStatement;
   TryStmt: TGocciaTryStatement;
   SwitchStmt: TGocciaSwitchStatement;
+  WithStmt: TGocciaWithStatement;
   VarDecl: TGocciaVariableDeclaration;
   DestructDecl: TGocciaDestructuringDeclaration;
   I, J: Integer;
@@ -555,6 +556,11 @@ begin
     if Assigned(ForStmt.Init) then
       HoistVarLocals(ForStmt.Init, AScope);
     HoistVarLocals(ForStmt.Body, AScope);
+  end
+  else if ANode is TGocciaWithStatement then
+  begin
+    WithStmt := TGocciaWithStatement(ANode);
+    HoistVarLocals(WithStmt.Body, AScope);
   end
   else if ANode is TGocciaTryStatement then
   begin

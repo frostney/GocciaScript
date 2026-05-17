@@ -206,6 +206,7 @@ var
   EffectiveASI, EffectiveVar, EffectiveFunction, EffectiveStrictTypes,
     EffectiveTraditionalFor, EffectiveLooseEquality,
     EffectiveNonStrictMode: Boolean;
+  EffectiveSourceType: TGocciaSourceType;
 begin
   { Resolve ASI and compatibility flags: CLI flag > per-file config >
     root config > default (false). }
@@ -222,18 +223,22 @@ begin
     EngineOptions.CompatLooseEquality, FileConfig, 'compat-loose-equality');
   EffectiveNonStrictMode := ResolveFlagOption(
     EngineOptions.CompatNonStrictMode, FileConfig, 'compat-non-strict-mode');
+  EffectiveSourceType := ResolveSourceTypeOption(EngineOptions.SourceType,
+    FileConfig);
   EffectiveStrictTypes := ResolveFlagOption(
     EngineOptions.StrictTypes, FileConfig, 'strict-types');
 
   CompiledModule := nil;
   ProgramNode := ParseSource(ASource, AFileName, EffectiveASI, EffectiveVar,
     EffectiveFunction, EffectiveTraditionalFor, EffectiveLooseEquality,
-    EffectiveNonStrictMode, LexTimeNanoseconds, ParseTimeNanoseconds, SourceMap);
+    EffectiveNonStrictMode or (EffectiveSourceType = stModule),
+    LexTimeNanoseconds, ParseTimeNanoseconds, SourceMap);
   try
     Compiler := TGocciaCompiler.Create(AFileName);
     try
       Compiler.StrictTypes := EffectiveStrictTypes;
-      Compiler.NonStrictMode := EffectiveNonStrictMode;
+      Compiler.NonStrictMode := EffectiveNonStrictMode and
+        (EffectiveSourceType = stScript);
       CompiledModule := Compiler.Compile(ProgramNode);
       WriteSourceMapIfEnabled(SourceMap, AFileName);
       Result := CompiledModule;

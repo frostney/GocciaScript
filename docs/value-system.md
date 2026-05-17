@@ -540,7 +540,7 @@ Generator objects hold a resumable `TGocciaGeneratorContinuation`. Sync generato
 | `TGocciaAsyncFunctionValue` / `TGocciaAsyncArrowFunctionValue` / `TGocciaAsyncMethodValue` | Inherited from superclass via `BindThis` | `async` functions |
 | `TGocciaGeneratorFunctionValue` / `TGocciaGeneratorMethodValue` / async generator variants | Inherited from superclass via `BindThis` | generator functions and methods |
 
-Standalone calls to any function type receive `undefined` as `this` by default (strict mode, no implicit global). Script-source `--compat-non-strict-mode` lets ordinary functions coerce nullish `this` to `globalThis`; module source remains strict.
+Standalone calls to ordinary, method, async, and generator functions receive `undefined` as `this` by default (strict mode, no implicit global). Arrow functions ignore the call-site receiver and keep their lexical `this` from the closure scope walk. Script-source `--compat-non-strict-mode` lets ordinary non-arrow functions coerce nullish `this` to `globalThis`; module source remains strict.
 
 ### Arguments Object (`Goccia.Values.ArgumentsObjectValue.pas`)
 

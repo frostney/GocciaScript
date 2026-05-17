@@ -79,6 +79,7 @@ begin
     begin
       Names := TStringList.Create;
       try
+        Names.CaseSensitive := True;
         CollectPatternBindingNames(AParameters[I].Pattern, Names, True);
         if Names.IndexOf(AName) >= 0 then
           Exit(True);

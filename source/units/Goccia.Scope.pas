@@ -626,6 +626,14 @@ begin
     Exit;
   end;
 
+  if ANonStrictMode and (FScopeKind = skGlobal) and
+     (FThisValue is TGocciaObjectValue) then
+  begin
+    GlobalObject := TGocciaObjectValue(FThisValue);
+    GlobalObject.AssignPropertyWithReceiver(AName, AValue, GlobalObject);
+    Exit;
+  end;
+
   raise TGocciaReferenceError.Create(
     Format(SErrorUndefinedVariable, [AName]),
     ALine, AColumn, '', nil,

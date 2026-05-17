@@ -414,6 +414,34 @@ begin
   Result := Pos('#with:', AName) = 1;
 end;
 
+function CapturedLocalDeclaredInsideParentWith(const AScope: TGocciaCompilerScope;
+  const AName: string): Boolean;
+var
+  Scope: TGocciaCompilerScope;
+  LocalIdx: Integer;
+  Local: TGocciaCompilerLocal;
+  WithDepth: Integer;
+begin
+  Scope := AScope.Parent;
+  while Assigned(Scope) do
+  begin
+    LocalIdx := Scope.ResolveLocal(AName);
+    if LocalIdx >= 0 then
+    begin
+      if Scope.WithBindingCount = 0 then
+        Exit(False);
+
+      Local := Scope.GetLocal(LocalIdx);
+      WithDepth := Scope.GetWithBindingDepth(Scope.WithBindingCount - 1);
+      Exit((WithDepth >= 0) and (Local.Depth > WithDepth));
+    end;
+
+    Scope := Scope.Parent;
+  end;
+
+  Result := False;
+end;
+
 function ShouldTryWithBinding(const AScope: TGocciaCompilerScope;
   const AName: string): Boolean;
 var
@@ -433,6 +461,9 @@ begin
     if Local.Depth > WithDepth then
       Exit(False);
   end;
+
+  if CapturedLocalDeclaredInsideParentWith(AScope, AName) then
+    Exit(False);
 
   Result := True;
 end;
@@ -1037,14 +1068,57 @@ var
   LocalIdx, UpvalIdx: Integer;
   Local: TGocciaCompilerLocal;
   Slot, GlobalExistsReg, ErrorReg, MessageReg: UInt8;
+  ObjReg, KeyReg, CondReg, TargetReg: UInt8;
   NameIdx: UInt16;
   ValueType: TGocciaLocalType;
-  GlobalExistsJump: Integer;
+  GlobalExistsJump, MissJump, EndJump: Integer;
+  I, EndCount: Integer;
+  EndJumps: array of Integer;
 begin
   if ShouldTryWithBinding(ACtx.Scope, AExpr.Name) then
   begin
-    ACtx.CompileExpression(AExpr.Value, ADest);
-    EmitWithAssignmentOrFallback(ACtx, AExpr.Name, ADest);
+    ObjReg := ACtx.Scope.AllocateRegister;
+    KeyReg := ACtx.Scope.AllocateRegister;
+    CondReg := ACtx.Scope.AllocateRegister;
+    TargetReg := ACtx.Scope.AllocateRegister;
+    EndCount := 0;
+    SetLength(EndJumps, ACtx.Scope.WithBindingCount);
+    try
+      NameIdx := ACtx.Template.AddConstantString(AExpr.Name);
+      EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, KeyReg, NameIdx));
+      EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, TargetReg, 0, 0));
+
+      for I := ACtx.Scope.WithBindingCount - 1 downto 0 do
+      begin
+        EmitLoadHiddenWithObject(ACtx, ACtx.Scope.GetWithBindingName(I),
+          ObjReg);
+        EmitInstruction(ACtx, EncodeABC(OP_HAS_WITH_BINDING, CondReg, ObjReg,
+          KeyReg));
+        MissJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, CondReg);
+        EmitInstruction(ACtx, EncodeABC(OP_MOVE, TargetReg, ObjReg, 0));
+        EndJumps[EndCount] := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+        Inc(EndCount);
+        PatchJumpTarget(ACtx, MissJump);
+      end;
+
+      for I := 0 to EndCount - 1 do
+        PatchJumpTarget(ACtx, EndJumps[I]);
+
+      ACtx.CompileExpression(AExpr.Value, ADest);
+      MissJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH, TargetReg,
+        GOCCIA_NULLISH_MATCH_UNDEFINED);
+      EmitInstruction(ACtx, EncodeABC(StoreByKeyOpcode(ACtx), TargetReg,
+        KeyReg, ADest));
+      EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+      PatchJumpTarget(ACtx, MissJump);
+      EmitBindingAssignmentFromRegister(ACtx, AExpr.Name, ADest, True);
+      PatchJumpTarget(ACtx, EndJump);
+    finally
+      ACtx.Scope.FreeRegister;
+      ACtx.Scope.FreeRegister;
+      ACtx.Scope.FreeRegister;
+      ACtx.Scope.FreeRegister;
+    end;
     Exit;
   end;
 
@@ -1059,6 +1133,12 @@ begin
     if UpvalIdx < 0 then
     begin
       NameIdx := ACtx.Template.AddConstantString(AExpr.Name);
+      if ACtx.NonStrictMode then
+      begin
+        ACtx.CompileExpression(AExpr.Value, ADest);
+        EmitSetGlobalByIndex(ACtx, ADest, NameIdx);
+        Exit;
+      end;
       GlobalExistsReg := ACtx.Scope.AllocateRegister;
       EmitInstruction(ACtx, EncodeABx(OP_HAS_GLOBAL, GlobalExistsReg, NameIdx));
     end;
@@ -2691,10 +2771,16 @@ procedure CompileTagCalleeRegisters(const ACtx: TGocciaCompilationContext;
   out AIsMethodCall: Boolean);
 var
   MemberExpr: TGocciaMemberExpression;
+  IdentExpr: TGocciaIdentifierExpression;
+  KeyReg, CondReg: UInt8;
+  NameIdx: UInt16;
+  I, EndCount: Integer;
+  MissJump: Integer;
+  EndJumps: array of Integer;
 begin
-  AIsMethodCall := ATagExpr is TGocciaMemberExpression;
-  if AIsMethodCall then
+  if ATagExpr is TGocciaMemberExpression then
   begin
+    AIsMethodCall := True;
     MemberExpr := TGocciaMemberExpression(ATagExpr);
     AObjReg  := ACtx.Scope.AllocateRegister;
     ABaseReg := ACtx.Scope.AllocateRegister;
@@ -2709,8 +2795,50 @@ begin
       EmitLoadPropertyByName(ACtx, ABaseReg, AObjReg,
         MemberExpr.PropertyName);
   end
+  else if (ATagExpr is TGocciaIdentifierExpression) and
+          ShouldTryWithBinding(ACtx.Scope,
+            TGocciaIdentifierExpression(ATagExpr).Name) then
+  begin
+    AIsMethodCall := True;
+    IdentExpr := TGocciaIdentifierExpression(ATagExpr);
+    AObjReg := ACtx.Scope.AllocateRegister;
+    ABaseReg := ACtx.Scope.AllocateRegister;
+    KeyReg := ACtx.Scope.AllocateRegister;
+    CondReg := ACtx.Scope.AllocateRegister;
+    EndCount := 0;
+    SetLength(EndJumps, ACtx.Scope.WithBindingCount);
+    try
+      NameIdx := ACtx.Template.AddConstantString(IdentExpr.Name);
+      EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, AObjReg, 0, 0));
+      EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, KeyReg, NameIdx));
+
+      for I := ACtx.Scope.WithBindingCount - 1 downto 0 do
+      begin
+        EmitLoadHiddenWithObject(ACtx, ACtx.Scope.GetWithBindingName(I),
+          ABaseReg);
+        EmitInstruction(ACtx, EncodeABC(OP_HAS_WITH_BINDING, CondReg,
+          ABaseReg, KeyReg));
+        MissJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, CondReg);
+        EmitInstruction(ACtx, EncodeABC(OP_MOVE, AObjReg, ABaseReg, 0));
+        EmitInstruction(ACtx, EncodeABC(OP_GET_INDEX, ABaseReg, AObjReg,
+          KeyReg));
+        EndJumps[EndCount] := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+        Inc(EndCount);
+        PatchJumpTarget(ACtx, MissJump);
+      end;
+
+      CompileIdentifierAccessNoWith(ACtx, IdentExpr, ABaseReg, False);
+
+      for I := 0 to EndCount - 1 do
+        PatchJumpTarget(ACtx, EndJumps[I]);
+    finally
+      ACtx.Scope.FreeRegister;
+      ACtx.Scope.FreeRegister;
+    end;
+  end
   else
   begin
+    AIsMethodCall := False;
     ABaseReg := ACtx.Scope.AllocateRegister;
     ACtx.CompileExpression(ATagExpr, ABaseReg);
     AObjReg := 0; // unused — caller must not free when AIsMethodCall = false

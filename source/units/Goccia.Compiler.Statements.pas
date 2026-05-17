@@ -1180,7 +1180,7 @@ begin
     Exit(True);
 
   if AStmt is TGocciaWithStatement then
-    Exit(StatementNeedsIteratorClose(TGocciaWithStatement(AStmt).Body));
+    Exit(True);
 
   if AStmt is TGocciaTryStatement then
   begin

@@ -7069,7 +7069,7 @@ begin
       FCurrentModuleSourcePath,
       0, 0);
 
-  FillChar(AFrame, SizeOf(AFrame), 0);
+  AFrame := Default(TGocciaVMCallFrame);
   ATemplate := AClosure.Template;
   AFrame.Template := ATemplate;
 
@@ -9558,8 +9558,9 @@ begin
           if FGlobalScope.Contains(GlobalName) then
             FGlobalScope.AssignBinding(GlobalName,
               RegisterToValue(FRegisters[A]), 0, 0, True)
-          else
-            ThrowReferenceError(GlobalName + ' is not defined');
+          else if FGlobalScope.ThisValue is TGocciaObjectValue then
+            TGocciaObjectValue(FGlobalScope.ThisValue).AssignPropertyWithReceiver(
+              GlobalName, RegisterToValue(FRegisters[A]), FGlobalScope.ThisValue);
         end;
       end;
 
@@ -9575,10 +9576,10 @@ begin
       OP_DELETE_GLOBAL:
       begin
         GlobalName := Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue;
-        if Assigned(FGlobalScope) and FGlobalScope.DeleteBinding(GlobalName) then
-          FRegisters[A] := RegisterBoolean(True)
+        if Assigned(FGlobalScope) then
+          FRegisters[A] := RegisterBoolean(FGlobalScope.DeleteBinding(GlobalName))
         else
-          FRegisters[A] := RegisterBoolean(False);
+          FRegisters[A] := RegisterBoolean(True);
       end;
 
       OP_IMPORT:
