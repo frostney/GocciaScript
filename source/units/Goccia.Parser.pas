@@ -4006,13 +4006,7 @@ begin
         Consume(gttRightParen, 'Expected ")" after for...of expression',
           SSuggestCloseParenForOf);
 
-        if Check(gttLeftBrace) then
-        begin
-          Advance;
-          BodyStmt := BlockStatement;
-        end
-        else
-          BodyStmt := Statement;
+        BodyStmt := Statement;
 
         if IsAwait then
         begin
@@ -4218,13 +4212,7 @@ begin
     SSuggestCloseParenExpression);
 
   // ---- BODY ----
-  if Check(gttLeftBrace) then
-  begin
-    Advance;
-    BodyStmt := BlockStatement;
-  end
-  else
-    BodyStmt := Statement;
+  BodyStmt := Statement;
 
   Result := TGocciaForStatement.Create(InitStmt, CondExpr, UpdateExpr,
     BodyStmt, ALine, AColumn);
@@ -4258,13 +4246,7 @@ begin
   Consume(gttRightParen, 'Expected ")" after while condition',
     SSuggestCloseParenCondition);
 
-  if Check(gttLeftBrace) then
-  begin
-    Advance;
-    BodyStmt := BlockStatement;
-  end
-  else
-    BodyStmt := Statement;
+  BodyStmt := Statement;
 
   Result := TGocciaWhileStatement.Create(Condition, BodyStmt, Line, Column);
 end;
@@ -4296,13 +4278,7 @@ begin
     Exit;
   end;
 
-  if Check(gttLeftBrace) then
-  begin
-    Advance;
-    BodyStmt := BlockStatement;
-  end
-  else
-    BodyStmt := Statement;
+  BodyStmt := Statement;
 
   Consume(gttWhile, 'Expected "while" after do body',
     SSuggestAddWhileAfterDo);

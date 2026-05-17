@@ -2207,6 +2207,43 @@ begin
   end;
 end;
 
+function InitializeGeneratorLoopState(const ALoopStatement: TObject;
+  const AInitialPhase: TGocciaGeneratorForLoopPhase;
+  out AContinuation: TGocciaGeneratorContinuation;
+  out ALoopState: TGocciaGeneratorForLoopState): TGocciaGeneratorForLoopPhase;
+begin
+  AContinuation := CurrentGeneratorContinuation;
+  ALoopState := nil;
+  Result := AInitialPhase;
+  if not Assigned(AContinuation) then
+    Exit;
+
+  ALoopState := AContinuation.GetForLoopState(ALoopStatement);
+  if Assigned(ALoopState) then
+    Result := ALoopState.Phase
+  else
+  begin
+    ALoopState := AContinuation.EnsureForLoopState(ALoopStatement, nil);
+    ALoopState.Phase := AInitialPhase;
+  end;
+end;
+
+procedure ClearGeneratorLoopState(const AContinuation: TGocciaGeneratorContinuation;
+  const ALoopStatement: TObject);
+begin
+  if Assigned(AContinuation) then
+    AContinuation.ClearForLoopState(ALoopStatement);
+end;
+
+procedure MarkGeneratorLoopPhase(const ALoopState: TGocciaGeneratorForLoopState;
+  const APhase: TGocciaGeneratorForLoopPhase;
+  var AResumePhase: TGocciaGeneratorForLoopPhase);
+begin
+  if Assigned(ALoopState) then
+    ALoopState.Phase := APhase;
+  AResumePhase := APhase;
+end;
+
 // ES2026 §14.7.3.2 Runtime Semantics: WhileLoopEvaluation
 function EvaluateWhile(const AWhileStatement: TGocciaWhileStatement;
   const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
@@ -2214,27 +2251,13 @@ var
   ConditionValue: TGocciaValue;
   CF: TGocciaControlFlow;
   Continuation: TGocciaGeneratorContinuation;
-  ForState: TGocciaGeneratorForLoopState;
+  LoopState: TGocciaGeneratorForLoopState;
   ResumePhase: TGocciaGeneratorForLoopPhase;
 begin
   Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
 
-  Continuation := CurrentGeneratorContinuation;
-  ForState := nil;
-  if Assigned(Continuation) then
-  begin
-    ForState := Continuation.GetForLoopState(AWhileStatement);
-    if Assigned(ForState) then
-      ResumePhase := ForState.Phase
-    else
-    begin
-      ForState := Continuation.EnsureForLoopState(AWhileStatement, nil);
-      ForState.Phase := gflpTest;
-      ResumePhase := gflpTest;
-    end;
-  end
-  else
-    ResumePhase := gflpTest;
+  ResumePhase := InitializeGeneratorLoopState(AWhileStatement, gflpTest,
+    Continuation, LoopState);
 
   try
     while True do
@@ -2245,19 +2268,15 @@ begin
 
       if ResumePhase = gflpTest then
       begin
-        if Assigned(ForState) then
-          ForState.Phase := gflpTest;
+        MarkGeneratorLoopPhase(LoopState, gflpTest, ResumePhase);
         ConditionValue := EvaluateExpression(AWhileStatement.Condition, AContext);
         if not ConditionValue.ToBooleanLiteral.Value then
         begin
-          if Assigned(Continuation) then
-            Continuation.ClearForLoopState(AWhileStatement);
+          ClearGeneratorLoopState(Continuation, AWhileStatement);
           Break;
         end;
 
-        if Assigned(ForState) then
-          ForState.Phase := gflpBody;
-        ResumePhase := gflpBody;
+        MarkGeneratorLoopPhase(LoopState, gflpBody, ResumePhase);
       end;
 
       if ResumePhase = gflpBody then
@@ -2266,29 +2285,23 @@ begin
         case CF.Kind of
           cfkBreak:
           begin
-            if Assigned(Continuation) then
-              Continuation.ClearForLoopState(AWhileStatement);
+            ClearGeneratorLoopState(Continuation, AWhileStatement);
             Break;
           end;
           cfkReturn:
           begin
-            if Assigned(Continuation) then
-              Continuation.ClearForLoopState(AWhileStatement);
+            ClearGeneratorLoopState(Continuation, AWhileStatement);
             Result := CF;
             Exit;
           end;
           cfkContinue:
           begin
-            if Assigned(ForState) then
-              ForState.Phase := gflpTest;
-            ResumePhase := gflpTest;
+            MarkGeneratorLoopPhase(LoopState, gflpTest, ResumePhase);
             Continue;
           end;
         end;
 
-        if Assigned(ForState) then
-          ForState.Phase := gflpTest;
-        ResumePhase := gflpTest;
+        MarkGeneratorLoopPhase(LoopState, gflpTest, ResumePhase);
       end;
     end;
   except
@@ -2296,8 +2309,7 @@ begin
       raise;
     else
     begin
-      if Assigned(Continuation) then
-        Continuation.ClearForLoopState(AWhileStatement);
+      ClearGeneratorLoopState(Continuation, AWhileStatement);
       raise;
     end;
   end;
@@ -2310,27 +2322,13 @@ var
   ConditionValue: TGocciaValue;
   CF: TGocciaControlFlow;
   Continuation: TGocciaGeneratorContinuation;
-  ForState: TGocciaGeneratorForLoopState;
+  LoopState: TGocciaGeneratorForLoopState;
   ResumePhase: TGocciaGeneratorForLoopPhase;
 begin
   Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
 
-  Continuation := CurrentGeneratorContinuation;
-  ForState := nil;
-  if Assigned(Continuation) then
-  begin
-    ForState := Continuation.GetForLoopState(ADoWhileStatement);
-    if Assigned(ForState) then
-      ResumePhase := ForState.Phase
-    else
-    begin
-      ForState := Continuation.EnsureForLoopState(ADoWhileStatement, nil);
-      ForState.Phase := gflpBody;
-      ResumePhase := gflpBody;
-    end;
-  end;
-  if not Assigned(Continuation) then
-    ResumePhase := gflpBody;
+  ResumePhase := InitializeGeneratorLoopState(ADoWhileStatement, gflpBody,
+    Continuation, LoopState);
 
   try
     while True do
@@ -2341,45 +2339,36 @@ begin
 
       if ResumePhase = gflpBody then
       begin
-        if Assigned(ForState) then
-          ForState.Phase := gflpBody;
+        MarkGeneratorLoopPhase(LoopState, gflpBody, ResumePhase);
         CF := EvaluateLoopBodyStatement(ADoWhileStatement.Body, AContext);
         case CF.Kind of
           cfkBreak:
           begin
-            if Assigned(Continuation) then
-              Continuation.ClearForLoopState(ADoWhileStatement);
+            ClearGeneratorLoopState(Continuation, ADoWhileStatement);
             Break;
           end;
           cfkReturn:
           begin
-            if Assigned(Continuation) then
-              Continuation.ClearForLoopState(ADoWhileStatement);
+            ClearGeneratorLoopState(Continuation, ADoWhileStatement);
             Result := CF;
             Exit;
           end;
         end;
 
-        if Assigned(ForState) then
-          ForState.Phase := gflpTest;
-        ResumePhase := gflpTest;
+        MarkGeneratorLoopPhase(LoopState, gflpTest, ResumePhase);
       end;
 
       if ResumePhase = gflpTest then
       begin
-        if Assigned(ForState) then
-          ForState.Phase := gflpTest;
+        MarkGeneratorLoopPhase(LoopState, gflpTest, ResumePhase);
         ConditionValue := EvaluateExpression(ADoWhileStatement.Condition, AContext);
         if not ConditionValue.ToBooleanLiteral.Value then
         begin
-          if Assigned(Continuation) then
-            Continuation.ClearForLoopState(ADoWhileStatement);
+          ClearGeneratorLoopState(Continuation, ADoWhileStatement);
           Break;
         end;
 
-        if Assigned(ForState) then
-          ForState.Phase := gflpBody;
-        ResumePhase := gflpBody;
+        MarkGeneratorLoopPhase(LoopState, gflpBody, ResumePhase);
       end;
     end;
   except
@@ -2387,8 +2376,7 @@ begin
       raise;
     else
     begin
-      if Assigned(Continuation) then
-        Continuation.ClearForLoopState(ADoWhileStatement);
+      ClearGeneratorLoopState(Continuation, ADoWhileStatement);
       raise;
     end;
   end;
