@@ -40,4 +40,15 @@ describe("Date methods", () => {
   test("Date.parse() parses ISO string to epoch ms", () => {
     expect(Date.parse("2024-06-15T11:30:45.123Z")).toBe(epoch);
   });
+
+  test("Date.UTC() returns an epoch millisecond timestamp", () => {
+    expect(Date.UTC(2024, 5, 15, 11, 30, 45, 123)).toBe(epoch);
+  });
+
+  test("setDate() updates the local day and returns epoch ms", () => {
+    const value = new Date(2024, 0, 1);
+    const result = value.setDate(value.getDate() + 1);
+    expect(result).toBe(value.getTime());
+    expect(value.getDate()).toBe(2);
+  });
 });

@@ -155,6 +155,16 @@ const
         '    try { return Temporal.Instant.from(String(str)).epochMilliseconds; }'#10 +
         '    catch (e) { return NaN; }'#10 +
         '  }'#10 +
+        '  static UTC(...args: any[]): number {'#10 +
+        '    try {'#10 +
+        '      const y: number = args[0] >= 0 && args[0] <= 99 ? 1900 + args[0] : args[0];'#10 +
+        '      const dt = new Temporal.PlainDateTime('#10 +
+        '        y, (args[1] ?? 0) + 1, args[2] ?? 1,'#10 +
+        '        args[3] ?? 0, args[4] ?? 0, args[5] ?? 0, args[6] ?? 0'#10 +
+        '      );'#10 +
+        '      return dt.toZonedDateTime("UTC").epochMilliseconds;'#10 +
+        '    } catch (e) { return NaN; }'#10 +
+        '  }'#10 +
         '  constructor(...args: any[]) {'#10 +
         '    if (args.length === 0) {'#10 +
         '      this.#ms = Temporal.Now.instant().epochMilliseconds;'#10 +
@@ -194,6 +204,14 @@ const
         '  getUTCMinutes(): number { const z = this.#utc(); return z ? z.minute : NaN; }'#10 +
         '  getUTCSeconds(): number { const z = this.#utc(); return z ? z.second : NaN; }'#10 +
         '  getUTCMilliseconds(): number { const z = this.#utc(); return z ? z.millisecond : NaN; }'#10 +
+        '  setDate(day: number): number {'#10 +
+        '    const z = this.#local();'#10 +
+        '    const n = Number(day);'#10 +
+        '    if (!z || !Number.isFinite(n)) { this.#ms = NaN; return NaN; }'#10 +
+        '    const next = z.add({ days: Math.trunc(n) - z.day });'#10 +
+        '    this.#ms = next.epochMilliseconds;'#10 +
+        '    return this.#ms;'#10 +
+        '  }'#10 +
         '  getTimezoneOffset(): number { const z = this.#local(); return z ? -(z.offsetNanoseconds / 60000000000) : NaN; }'#10 +
         '  toISOString(): string { if (!this.#valid()) throw new RangeError("Invalid time value"); return Temporal.Instant.fromEpochMilliseconds(this.#ms).toString(); }'#10 +
         '  toJSON(): string | null { if (!this.#valid()) return null; return this.toISOString(); }'#10 +
