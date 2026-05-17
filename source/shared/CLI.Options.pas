@@ -167,6 +167,7 @@ type
     FCompatVar: TGocciaFlagOption;
     FCompatFunction: TGocciaFlagOption;
     FCompatTraditionalFor: TGocciaFlagOption;
+    FCompatWhileLoops: TGocciaFlagOption;
     FCompatLooseEquality: TGocciaFlagOption;
     FCompatNonStrictMode: TGocciaFlagOption;
     FStrictTypes: TGocciaFlagOption;
@@ -192,6 +193,7 @@ type
     property CompatVar: TGocciaFlagOption read FCompatVar;
     property CompatFunction: TGocciaFlagOption read FCompatFunction;
     property CompatTraditionalFor: TGocciaFlagOption read FCompatTraditionalFor;
+    property CompatWhileLoops: TGocciaFlagOption read FCompatWhileLoops;
     property CompatLooseEquality: TGocciaFlagOption read FCompatLooseEquality;
     property CompatNonStrictMode: TGocciaFlagOption read FCompatNonStrictMode;
     property StrictTypes: TGocciaFlagOption read FStrictTypes;
@@ -581,6 +583,8 @@ begin
     'Enable function declarations and expressions (compatibility)', 'Engine');
   FCompatTraditionalFor := TGocciaFlagOption.Create('compat-traditional-for-loop',
     'Enable traditional C-style for(init; test; update) loops (compatibility)', 'Engine');
+  FCompatWhileLoops := TGocciaFlagOption.Create('compat-while-loops',
+    'Enable while and do...while loops (compatibility)', 'Engine');
   FCompatLooseEquality := TGocciaFlagOption.Create('compat-loose-equality',
     'Enable loose equality and inequality (== and !=) (compatibility)', 'Engine');
   FCompatNonStrictMode := TGocciaFlagOption.Create('compat-non-strict-mode',
@@ -610,6 +614,7 @@ begin
   FCompatVar.Free;
   FCompatFunction.Free;
   FCompatTraditionalFor.Free;
+  FCompatWhileLoops.Free;
   FCompatLooseEquality.Free;
   FCompatNonStrictMode.Free;
   FStrictTypes.Free;
@@ -620,7 +625,7 @@ end;
 
 function TGocciaEngineOptions.Options: TGocciaOptionArray;
 begin
-  SetLength(Result, 19);
+  SetLength(Result, 20);
   Result[0] := FMode;
   Result[1] := FSourceType;
   Result[2] := FASI;
@@ -635,11 +640,12 @@ begin
   Result[11] := FCompatVar;
   Result[12] := FCompatFunction;
   Result[13] := FCompatTraditionalFor;
-  Result[14] := FCompatLooseEquality;
-  Result[15] := FCompatNonStrictMode;
-  Result[16] := FStrictTypes;
-  Result[17] := FAllowedHosts;
-  Result[18] := FInspectDepth;
+  Result[14] := FCompatWhileLoops;
+  Result[15] := FCompatLooseEquality;
+  Result[16] := FCompatNonStrictMode;
+  Result[17] := FStrictTypes;
+  Result[18] := FAllowedHosts;
+  Result[19] := FInspectDepth;
 end;
 
 { TGocciaCoverageOptions }

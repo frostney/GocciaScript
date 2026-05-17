@@ -235,6 +235,8 @@ Relative paths are resolved against the current working directory. A missing fil
   "asi": true,
   "compat-non-strict-mode": true,
   "compat-loose-equality": true,
+  "compat-traditional-for-loop": true,
+  "compat-while-loops": true,
   "strict-types": true,
   "timeout": 5000,
   "max-memory": 10485760,

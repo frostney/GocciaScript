@@ -4,7 +4,7 @@
  *
  * Common CLI flags tested across all apps: stdin smoke, --help, --unsafe-ffi,
  * --asi, --compat-var, --compat-loose-equality, --compat-non-strict-mode,
- * --mode, --timeout, --max-instructions, --max-memory, --stack-size, --log,
+ * --compat-while-loops, --mode, --timeout, --max-instructions, --max-memory, --stack-size, --log,
  * example scripts.
  */
 
@@ -206,6 +206,14 @@ console.log("--compat-function (Loader) + Bare loader compat parsing...");
     writeFileSync(forSrc, "let s = 0;\nfor (let i = 1; i <= 5; i++) { s = s + i; }\ns;\n");
     const forOut = await $`${BARE} --print ${forSrc} --compat-traditional-for-loop 2>&1`.text();
     if (forOut.trim() !== "15") throw new Error(`Bare --compat-traditional-for-loop expected 15, got: ${forOut}`);
+
+    const whileSrc = join(tmp, "use-while.js");
+    writeFileSync(whileSrc, "let s = 0;\nlet i = 1;\nwhile (i <= 5) { s = s + i; i++; }\ns;\n");
+    const whileOut = await $`${BARE} --print ${whileSrc} --compat-while-loops 2>&1`.text();
+    if (whileOut.trim() !== "15") throw new Error(`Bare --compat-while-loops expected 15, got: ${whileOut}`);
+
+    const whileBcOut = await $`${LOADER} --print ${whileSrc} --mode=bytecode --compat-while-loops 2>&1`.text();
+    if (!containsLine(whileBcOut, "15")) throw new Error(`Loader bytecode --compat-while-loops expected 15, got: ${whileBcOut}`);
 
     const looseSrc = join(tmp, "use-loose.js");
     writeFileSync(looseSrc, '"1" == 1;\n');

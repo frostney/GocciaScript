@@ -1070,12 +1070,12 @@ end;
 
   function TGocciaWhileStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
   begin
-    Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
+    Result := EvaluateWhile(Self, AContext);
   end;
 
   function TGocciaDoWhileStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
   begin
-    Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
+    Result := EvaluateDoWhile(Self, AContext);
   end;
 
   function TGocciaWithStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;

@@ -41,6 +41,13 @@ describe.runIf(hasGoccia)("unsupported features are skipped", () => {
     expect(x).toBe(1);
   });
 
+  test("while loop with non-block if-else body is skipped correctly", () => {
+    let x = 1;
+    while (x < 10) if (x === 1) x = 99; else x = 100;
+    x = 2;
+    expect(x).toBe(2);
+  });
+
   test("code after skipped do...while executes", () => {
     let x = 1;
     do { x = 99; } while (x < 10);
@@ -51,6 +58,13 @@ describe.runIf(hasGoccia)("unsupported features are skipped", () => {
     let x = 1;
     do { x = 99; } while (Math.max(x, 0) < 10);
     expect(x).toBe(1);
+  });
+
+  test("do...while with non-block if-else body is skipped correctly", () => {
+    let x = 1;
+    do if (x === 1) x = 99; else x = 100; while (x < 10);
+    x = 2;
+    expect(x).toBe(2);
   });
 
   test("code after skipped var declaration executes", () => {

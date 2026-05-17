@@ -68,6 +68,8 @@ function EvaluateUsingDeclaration(const AUsingDeclaration: TGocciaUsingDeclarati
 function EvaluateForOf(const AForOfStatement: TGocciaForOfStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 function EvaluateForAwaitOf(const AForAwaitOfStatement: TGocciaForAwaitOfStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 function EvaluateFor(const AForStatement: TGocciaForStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+function EvaluateWhile(const AWhileStatement: TGocciaWhileStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+function EvaluateDoWhile(const ADoWhileStatement: TGocciaDoWhileStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 
 // Destructuring pattern assignment procedures
 procedure AssignPattern(const APattern: TGocciaDestructuringPattern; const AValue: TGocciaValue; const AContext: TGocciaEvaluationContext; const AIsDeclaration: Boolean = False; const ADeclarationType: TGocciaDeclarationType = dtLet);
@@ -2202,6 +2204,181 @@ begin
   finally
     if Assigned(PerIterNames) then
       PerIterNames.Free;
+  end;
+end;
+
+function InitializeGeneratorLoopState(const ALoopStatement: TObject;
+  const AInitialPhase: TGocciaGeneratorForLoopPhase;
+  out AContinuation: TGocciaGeneratorContinuation;
+  out ALoopState: TGocciaGeneratorForLoopState): TGocciaGeneratorForLoopPhase;
+begin
+  AContinuation := CurrentGeneratorContinuation;
+  ALoopState := nil;
+  Result := AInitialPhase;
+  if not Assigned(AContinuation) then
+    Exit;
+
+  ALoopState := AContinuation.GetForLoopState(ALoopStatement);
+  if Assigned(ALoopState) then
+    Result := ALoopState.Phase
+  else
+  begin
+    ALoopState := AContinuation.EnsureForLoopState(ALoopStatement, nil);
+    ALoopState.Phase := AInitialPhase;
+  end;
+end;
+
+procedure ClearGeneratorLoopState(const AContinuation: TGocciaGeneratorContinuation;
+  const ALoopStatement: TObject);
+begin
+  if Assigned(AContinuation) then
+    AContinuation.ClearForLoopState(ALoopStatement);
+end;
+
+procedure MarkGeneratorLoopPhase(const ALoopState: TGocciaGeneratorForLoopState;
+  const APhase: TGocciaGeneratorForLoopPhase;
+  var AResumePhase: TGocciaGeneratorForLoopPhase);
+begin
+  if Assigned(ALoopState) then
+    ALoopState.Phase := APhase;
+  AResumePhase := APhase;
+end;
+
+// ES2026 §14.7.3.2 Runtime Semantics: WhileLoopEvaluation
+function EvaluateWhile(const AWhileStatement: TGocciaWhileStatement;
+  const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+var
+  ConditionValue: TGocciaValue;
+  CF: TGocciaControlFlow;
+  Continuation: TGocciaGeneratorContinuation;
+  LoopState: TGocciaGeneratorForLoopState;
+  ResumePhase: TGocciaGeneratorForLoopPhase;
+begin
+  Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
+
+  ResumePhase := InitializeGeneratorLoopState(AWhileStatement, gflpTest,
+    Continuation, LoopState);
+
+  try
+    while True do
+    begin
+      CheckExecutionTimeout;
+      IncrementInstructionCounter;
+      CheckInstructionLimit;
+
+      if ResumePhase = gflpTest then
+      begin
+        MarkGeneratorLoopPhase(LoopState, gflpTest, ResumePhase);
+        ConditionValue := EvaluateExpression(AWhileStatement.Condition, AContext);
+        if not ConditionValue.ToBooleanLiteral.Value then
+        begin
+          ClearGeneratorLoopState(Continuation, AWhileStatement);
+          Break;
+        end;
+
+        MarkGeneratorLoopPhase(LoopState, gflpBody, ResumePhase);
+      end;
+
+      if ResumePhase = gflpBody then
+      begin
+        CF := EvaluateLoopBodyStatement(AWhileStatement.Body, AContext);
+        case CF.Kind of
+          cfkBreak:
+          begin
+            ClearGeneratorLoopState(Continuation, AWhileStatement);
+            Break;
+          end;
+          cfkReturn:
+          begin
+            ClearGeneratorLoopState(Continuation, AWhileStatement);
+            Result := CF;
+            Exit;
+          end;
+          cfkContinue:
+          begin
+            MarkGeneratorLoopPhase(LoopState, gflpTest, ResumePhase);
+            Continue;
+          end;
+        end;
+
+        MarkGeneratorLoopPhase(LoopState, gflpTest, ResumePhase);
+      end;
+    end;
+  except
+    on E: EGocciaGeneratorYield do
+      raise;
+    else
+    begin
+      ClearGeneratorLoopState(Continuation, AWhileStatement);
+      raise;
+    end;
+  end;
+end;
+
+// ES2026 §14.7.2.2 Runtime Semantics: DoWhileLoopEvaluation
+function EvaluateDoWhile(const ADoWhileStatement: TGocciaDoWhileStatement;
+  const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+var
+  ConditionValue: TGocciaValue;
+  CF: TGocciaControlFlow;
+  Continuation: TGocciaGeneratorContinuation;
+  LoopState: TGocciaGeneratorForLoopState;
+  ResumePhase: TGocciaGeneratorForLoopPhase;
+begin
+  Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
+
+  ResumePhase := InitializeGeneratorLoopState(ADoWhileStatement, gflpBody,
+    Continuation, LoopState);
+
+  try
+    while True do
+    begin
+      CheckExecutionTimeout;
+      IncrementInstructionCounter;
+      CheckInstructionLimit;
+
+      if ResumePhase = gflpBody then
+      begin
+        MarkGeneratorLoopPhase(LoopState, gflpBody, ResumePhase);
+        CF := EvaluateLoopBodyStatement(ADoWhileStatement.Body, AContext);
+        case CF.Kind of
+          cfkBreak:
+          begin
+            ClearGeneratorLoopState(Continuation, ADoWhileStatement);
+            Break;
+          end;
+          cfkReturn:
+          begin
+            ClearGeneratorLoopState(Continuation, ADoWhileStatement);
+            Result := CF;
+            Exit;
+          end;
+        end;
+
+        MarkGeneratorLoopPhase(LoopState, gflpTest, ResumePhase);
+      end;
+
+      if ResumePhase = gflpTest then
+      begin
+        MarkGeneratorLoopPhase(LoopState, gflpTest, ResumePhase);
+        ConditionValue := EvaluateExpression(ADoWhileStatement.Condition, AContext);
+        if not ConditionValue.ToBooleanLiteral.Value then
+        begin
+          ClearGeneratorLoopState(Continuation, ADoWhileStatement);
+          Break;
+        end;
+
+        MarkGeneratorLoopPhase(LoopState, gflpBody, ResumePhase);
+      end;
+    end;
+  except
+    on E: EGocciaGeneratorYield do
+      raise;
+    else
+    begin
+      ClearGeneratorLoopState(Continuation, ADoWhileStatement);
+      raise;
+    end;
   end;
 end;
 

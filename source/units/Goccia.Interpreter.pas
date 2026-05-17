@@ -35,6 +35,7 @@ type
     FVarEnabled: Boolean;
     FFunctionEnabled: Boolean;
     FTraditionalForLoopsEnabled: Boolean;
+    FWhileLoopsEnabled: Boolean;
     FLooseEqualityEnabled: Boolean;
     FNonStrictModeEnabled: Boolean;
     FStrictTypesEnabled: Boolean;
@@ -52,6 +53,7 @@ type
     procedure SetVarEnabled(const AValue: Boolean);
     procedure SetFunctionEnabled(const AValue: Boolean);
     procedure SetTraditionalForLoopsEnabled(const AValue: Boolean);
+    procedure SetWhileLoopsEnabled(const AValue: Boolean);
     procedure SetLooseEqualityEnabled(const AValue: Boolean);
     procedure SetNonStrictModeEnabled(const AValue: Boolean);
     procedure SetStrictTypesEnabled(const AValue: Boolean);
@@ -70,6 +72,8 @@ type
     property FunctionEnabled: Boolean read FFunctionEnabled write SetFunctionEnabled;
     property TraditionalForLoopsEnabled: Boolean
       read FTraditionalForLoopsEnabled write SetTraditionalForLoopsEnabled;
+    property WhileLoopsEnabled: Boolean
+      read FWhileLoopsEnabled write SetWhileLoopsEnabled;
     property LooseEqualityEnabled: Boolean
       read FLooseEqualityEnabled write SetLooseEqualityEnabled;
     property NonStrictModeEnabled: Boolean
@@ -220,6 +224,12 @@ procedure TGocciaInterpreter.SetTraditionalForLoopsEnabled(const AValue: Boolean
 begin
   FTraditionalForLoopsEnabled := AValue;
   FModuleLoader.TraditionalForLoopsEnabled := AValue;
+end;
+
+procedure TGocciaInterpreter.SetWhileLoopsEnabled(const AValue: Boolean);
+begin
+  FWhileLoopsEnabled := AValue;
+  FModuleLoader.WhileLoopsEnabled := AValue;
 end;
 
 procedure TGocciaInterpreter.SetLooseEqualityEnabled(const AValue: Boolean);
