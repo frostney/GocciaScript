@@ -67,6 +67,8 @@ type
       const AByteOffset: Integer = 0; const ALength: Integer = -1); overload;
 
     function GetProperty(const AName: string): TGocciaValue; override;
+    procedure DefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor); override;
+    function TryDefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor): Boolean; override;
     procedure AssignProperty(const AName: string; const AValue: TGocciaValue; const ACanCreate: Boolean = True); override;
     function AssignPropertyWithReceiver(const AName: string; const AValue: TGocciaValue; const AReceiver: TGocciaValue): Boolean; override;
     function GetOwnPropertyDescriptor(const AName: string): TGocciaPropertyDescriptor; override;
@@ -946,6 +948,75 @@ begin
       IsNegativeZero, AValue, AReceiver));
   end;
   Result := inherited AssignPropertyWithReceiver(AName, AValue, AReceiver);
+end;
+
+// ES2026 §10.4.5.4 [[DefineOwnProperty]](P, Desc), integer-indexed branch.
+function TryDefineTypedArrayIntegerIndexedProperty(
+  const AArray: TGocciaTypedArrayValue;
+  const ANumericIndex: Double;
+  const AIsNegativeZero: Boolean;
+  const ADescriptor: TGocciaPropertyDescriptor): Boolean;
+var
+  Index: Integer;
+begin
+  if not AArray.IsValidIntegerIndexedElement(ANumericIndex,
+    AIsNegativeZero, Index) then
+    Exit(False);
+  if ADescriptor.HasConfigurable and not ADescriptor.Configurable then
+    Exit(False);
+  if ADescriptor.HasEnumerable and not ADescriptor.Enumerable then
+    Exit(False);
+  if IsAccessorDescriptor(ADescriptor) then
+    Exit(False);
+  if ADescriptor.HasWritable and not ADescriptor.Writable then
+    Exit(False);
+  if ADescriptor.HasValue then
+    AArray.SetIntegerIndexedElement(ANumericIndex, AIsNegativeZero,
+      TGocciaPropertyDescriptorData(ADescriptor).Value);
+  Result := True;
+end;
+
+// ES2026 §10.4.5.4 [[DefineOwnProperty]](P, Desc)
+procedure TGocciaTypedArrayValue.DefineProperty(const AName: string;
+  const ADescriptor: TGocciaPropertyDescriptor);
+var
+  IsNegativeZero: Boolean;
+  NumericIndex: Double;
+begin
+  if TryCanonicalNumericIndexString(AName, NumericIndex, IsNegativeZero) then
+  begin
+    if TryDefineTypedArrayIntegerIndexedProperty(Self, NumericIndex,
+      IsNegativeZero, ADescriptor) then
+    begin
+      ADescriptor.Free;
+      Exit;
+    end;
+    ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [AName]),
+      SSuggestCannotDeleteNonConfigurable);
+  end;
+
+  inherited DefineProperty(AName, ADescriptor);
+end;
+
+// ES2026 §10.4.5.4 [[DefineOwnProperty]](P, Desc) — boolean variant
+function TGocciaTypedArrayValue.TryDefineProperty(const AName: string;
+  const ADescriptor: TGocciaPropertyDescriptor): Boolean;
+var
+  IsNegativeZero: Boolean;
+  NumericIndex: Double;
+begin
+  if TryCanonicalNumericIndexString(AName, NumericIndex, IsNegativeZero) then
+  begin
+    try
+      Result := TryDefineTypedArrayIntegerIndexedProperty(Self, NumericIndex,
+        IsNegativeZero, ADescriptor);
+    finally
+      ADescriptor.Free;
+    end;
+    Exit;
+  end;
+
+  Result := inherited TryDefineProperty(AName, ADescriptor);
 end;
 
 function TGocciaTypedArrayValue.GetOwnPropertyDescriptor(

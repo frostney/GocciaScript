@@ -60,4 +60,25 @@ describe("Proxy defineProperty trap", () => {
     expect(receivedDescriptor.enumerable).toBe(true);
     expect(receivedDescriptor.configurable).toBe(false);
   });
+
+  test("preserves omitted descriptor fields", () => {
+    let receivedDescriptor;
+    const proxy = new Proxy(
+      {},
+      {
+        defineProperty: (t, prop, desc) => {
+          receivedDescriptor = desc;
+          return true;
+        },
+      }
+    );
+
+    Reflect.defineProperty(proxy, "x", { value: 1 });
+
+    expect(Object.keys(receivedDescriptor)).toEqual(["value"]);
+    expect(receivedDescriptor.value).toBe(1);
+    expect(receivedDescriptor.writable).toBeUndefined();
+    expect(receivedDescriptor.enumerable).toBeUndefined();
+    expect(receivedDescriptor.configurable).toBeUndefined();
+  });
 });

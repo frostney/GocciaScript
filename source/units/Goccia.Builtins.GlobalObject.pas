@@ -76,34 +76,50 @@ threadvar
 function FromPropertyDescriptor(const ADescriptor: TGocciaPropertyDescriptor): TGocciaObjectValue;
 begin
   Result := TGocciaObjectValue.Create;
-  if ADescriptor.Enumerable then
-    Result.AssignProperty(PROP_ENUMERABLE, TGocciaBooleanLiteralValue.TrueValue)
-  else
-    Result.AssignProperty(PROP_ENUMERABLE, TGocciaBooleanLiteralValue.FalseValue);
-  if ADescriptor.Configurable then
-    Result.AssignProperty(PROP_CONFIGURABLE, TGocciaBooleanLiteralValue.TrueValue)
-  else
-    Result.AssignProperty(PROP_CONFIGURABLE, TGocciaBooleanLiteralValue.FalseValue);
+  if ADescriptor.HasEnumerable then
+  begin
+    if ADescriptor.Enumerable then
+      Result.AssignProperty(PROP_ENUMERABLE, TGocciaBooleanLiteralValue.TrueValue)
+    else
+      Result.AssignProperty(PROP_ENUMERABLE, TGocciaBooleanLiteralValue.FalseValue);
+  end;
+  if ADescriptor.HasConfigurable then
+  begin
+    if ADescriptor.Configurable then
+      Result.AssignProperty(PROP_CONFIGURABLE, TGocciaBooleanLiteralValue.TrueValue)
+    else
+      Result.AssignProperty(PROP_CONFIGURABLE, TGocciaBooleanLiteralValue.FalseValue);
+  end;
 
   if ADescriptor is TGocciaPropertyDescriptorData then
   begin
-    Result.AssignProperty(PROP_VALUE, TGocciaPropertyDescriptorData(ADescriptor).Value);
-    if ADescriptor.Writable then
-      Result.AssignProperty(PROP_WRITABLE, TGocciaBooleanLiteralValue.TrueValue)
-    else
-      Result.AssignProperty(PROP_WRITABLE, TGocciaBooleanLiteralValue.FalseValue);
+    if ADescriptor.HasValue then
+      Result.AssignProperty(PROP_VALUE, TGocciaPropertyDescriptorData(ADescriptor).Value);
+    if ADescriptor.HasWritable then
+    begin
+      if ADescriptor.Writable then
+        Result.AssignProperty(PROP_WRITABLE, TGocciaBooleanLiteralValue.TrueValue)
+      else
+        Result.AssignProperty(PROP_WRITABLE, TGocciaBooleanLiteralValue.FalseValue);
+    end;
   end
   else if ADescriptor is TGocciaPropertyDescriptorAccessor then
   begin
-    if Assigned(TGocciaPropertyDescriptorAccessor(ADescriptor).Getter) then
-      Result.AssignProperty(PROP_GET, TGocciaPropertyDescriptorAccessor(ADescriptor).Getter)
-    else
-      Result.AssignProperty(PROP_GET, TGocciaUndefinedLiteralValue.UndefinedValue);
+    if ADescriptor.HasGet then
+    begin
+      if Assigned(TGocciaPropertyDescriptorAccessor(ADescriptor).Getter) then
+        Result.AssignProperty(PROP_GET, TGocciaPropertyDescriptorAccessor(ADescriptor).Getter)
+      else
+        Result.AssignProperty(PROP_GET, TGocciaUndefinedLiteralValue.UndefinedValue);
+    end;
 
-    if Assigned(TGocciaPropertyDescriptorAccessor(ADescriptor).Setter) then
-      Result.AssignProperty(PROP_SET, TGocciaPropertyDescriptorAccessor(ADescriptor).Setter)
-    else
-      Result.AssignProperty(PROP_SET, TGocciaUndefinedLiteralValue.UndefinedValue);
+    if ADescriptor.HasSet then
+    begin
+      if Assigned(TGocciaPropertyDescriptorAccessor(ADescriptor).Setter) then
+        Result.AssignProperty(PROP_SET, TGocciaPropertyDescriptorAccessor(ADescriptor).Setter)
+      else
+        Result.AssignProperty(PROP_SET, TGocciaUndefinedLiteralValue.UndefinedValue);
+    end;
   end;
 end;
 

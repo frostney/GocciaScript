@@ -12,21 +12,41 @@ uses
 type
   TPropertyFlag = (pfEnumerable, pfConfigurable, pfWritable);
   TPropertyFlags = set of TPropertyFlag;
+  TPropertyDescriptorField = (
+    pdfEnumerable, pdfConfigurable, pdfWritable,
+    pdfValue, pdfGet, pdfSet
+  );
+  TPropertyDescriptorFields = set of TPropertyDescriptorField;
 
   TGocciaPropertyDescriptor = class
   private
     FFlags: TPropertyFlags;
+    FFields: TPropertyDescriptorFields;
     function GetEnumerable: Boolean; inline;
     function GetConfigurable: Boolean; inline;
     function GetWritable: Boolean; inline;
+    function GetHasEnumerable: Boolean; inline;
+    function GetHasConfigurable: Boolean; inline;
+    function GetHasWritable: Boolean; inline;
+    function GetHasValue: Boolean; inline;
+    function GetHasGet: Boolean; inline;
+    function GetHasSet: Boolean; inline;
   public
-    constructor Create(const AFlags: TPropertyFlags);
+    constructor Create(const AFlags: TPropertyFlags;
+      const AFields: TPropertyDescriptorFields);
     procedure MarkValues; virtual;
 
     property Flags: TPropertyFlags read FFlags;
+    property Fields: TPropertyDescriptorFields read FFields;
     property Enumerable: Boolean read GetEnumerable;
     property Configurable: Boolean read GetConfigurable;
     property Writable: Boolean read GetWritable;
+    property HasEnumerable: Boolean read GetHasEnumerable;
+    property HasConfigurable: Boolean read GetHasConfigurable;
+    property HasWritable: Boolean read GetHasWritable;
+    property HasValue: Boolean read GetHasValue;
+    property HasGet: Boolean read GetHasGet;
+    property HasSet: Boolean read GetHasSet;
   end;
 
   TGocciaPropertyDescriptorData = class(TGocciaPropertyDescriptor)
@@ -34,6 +54,8 @@ type
     FValue: TGocciaValue;
   public
     constructor Create(const AValue: TGocciaValue; const AFlags: TPropertyFlags);
+    constructor CreatePartial(const AValue: TGocciaValue;
+      const AFlags: TPropertyFlags; const AFields: TPropertyDescriptorFields);
     procedure MarkValues; override;
 
     property Value: TGocciaValue read FValue write FValue;
@@ -47,6 +69,9 @@ type
     function GetWritable: Boolean; inline;
   public
     constructor Create(const AGetter: TGocciaValue; const ASetter: TGocciaValue; const AFlags: TPropertyFlags);
+    constructor CreatePartial(const AGetter: TGocciaValue;
+      const ASetter: TGocciaValue; const AFlags: TPropertyFlags;
+      const AFields: TPropertyDescriptorFields);
     procedure MarkValues; override;
 
     property Getter: TGocciaValue read FGetter;
@@ -61,6 +86,10 @@ function ToPropertyDescriptor(
   const ADescriptorObject: TGocciaValue;
   const AExistingDescriptor: TGocciaPropertyDescriptor
 ): TGocciaPropertyDescriptor;
+function IsDataDescriptor(const ADescriptor: TGocciaPropertyDescriptor): Boolean;
+function IsAccessorDescriptor(const ADescriptor: TGocciaPropertyDescriptor): Boolean;
+function IsGenericDescriptor(const ADescriptor: TGocciaPropertyDescriptor): Boolean;
+function ClonePropertyDescriptor(const ADescriptor: TGocciaPropertyDescriptor): TGocciaPropertyDescriptor;
 
 implementation
 
@@ -71,9 +100,11 @@ uses
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectValue;
 
-constructor TGocciaPropertyDescriptor.Create(const AFlags: TPropertyFlags);
+constructor TGocciaPropertyDescriptor.Create(const AFlags: TPropertyFlags;
+  const AFields: TPropertyDescriptorFields);
 begin
   FFlags := AFlags;
+  FFields := AFields;
 end;
 
 function TGocciaPropertyDescriptor.GetEnumerable: Boolean;
@@ -91,6 +122,36 @@ begin
   Result := pfWritable in FFlags;
 end;
 
+function TGocciaPropertyDescriptor.GetHasEnumerable: Boolean;
+begin
+  Result := pdfEnumerable in FFields;
+end;
+
+function TGocciaPropertyDescriptor.GetHasConfigurable: Boolean;
+begin
+  Result := pdfConfigurable in FFields;
+end;
+
+function TGocciaPropertyDescriptor.GetHasWritable: Boolean;
+begin
+  Result := pdfWritable in FFields;
+end;
+
+function TGocciaPropertyDescriptor.GetHasValue: Boolean;
+begin
+  Result := pdfValue in FFields;
+end;
+
+function TGocciaPropertyDescriptor.GetHasGet: Boolean;
+begin
+  Result := pdfGet in FFields;
+end;
+
+function TGocciaPropertyDescriptor.GetHasSet: Boolean;
+begin
+  Result := pdfSet in FFields;
+end;
+
 procedure TGocciaPropertyDescriptor.MarkValues;
 begin
   // No-op base: subclasses override to mark their value references
@@ -98,7 +159,16 @@ end;
 
 constructor TGocciaPropertyDescriptorData.Create(const AValue: TGocciaValue; const AFlags: TPropertyFlags);
 begin
-  inherited Create(AFlags);
+  inherited Create(AFlags,
+    [pdfEnumerable, pdfConfigurable, pdfWritable, pdfValue]);
+  FValue := AValue;
+end;
+
+constructor TGocciaPropertyDescriptorData.CreatePartial(
+  const AValue: TGocciaValue; const AFlags: TPropertyFlags;
+  const AFields: TPropertyDescriptorFields);
+begin
+  inherited Create(AFlags, AFields);
   FValue := AValue;
 end;
 
@@ -110,7 +180,16 @@ end;
 
 constructor TGocciaPropertyDescriptorAccessor.Create(const AGetter: TGocciaValue; const ASetter: TGocciaValue; const AFlags: TPropertyFlags);
 begin
-  inherited Create(AFlags);
+  inherited Create(AFlags, [pdfEnumerable, pdfConfigurable, pdfGet, pdfSet]);
+  FGetter := AGetter;
+  FSetter := ASetter;
+end;
+
+constructor TGocciaPropertyDescriptorAccessor.CreatePartial(
+  const AGetter: TGocciaValue; const ASetter: TGocciaValue;
+  const AFlags: TPropertyFlags; const AFields: TPropertyDescriptorFields);
+begin
+  inherited Create(AFlags, AFields);
   FGetter := AGetter;
   FSetter := ASetter;
 end;
@@ -128,6 +207,44 @@ begin
   Result := FSetter <> nil;
 end;
 
+function IsDataDescriptor(const ADescriptor: TGocciaPropertyDescriptor): Boolean;
+begin
+  Result := Assigned(ADescriptor) and
+    ((pdfValue in ADescriptor.Fields) or (pdfWritable in ADescriptor.Fields));
+end;
+
+function IsAccessorDescriptor(const ADescriptor: TGocciaPropertyDescriptor): Boolean;
+begin
+  Result := Assigned(ADescriptor) and
+    ((pdfGet in ADescriptor.Fields) or (pdfSet in ADescriptor.Fields));
+end;
+
+function IsGenericDescriptor(const ADescriptor: TGocciaPropertyDescriptor): Boolean;
+begin
+  Result := Assigned(ADescriptor) and
+    not IsDataDescriptor(ADescriptor) and
+    not IsAccessorDescriptor(ADescriptor);
+end;
+
+function ClonePropertyDescriptor(
+  const ADescriptor: TGocciaPropertyDescriptor): TGocciaPropertyDescriptor;
+begin
+  if ADescriptor is TGocciaPropertyDescriptorData then
+    Result := TGocciaPropertyDescriptorData.CreatePartial(
+      TGocciaPropertyDescriptorData(ADescriptor).Value,
+      ADescriptor.Flags,
+      ADescriptor.Fields)
+  else if ADescriptor is TGocciaPropertyDescriptorAccessor then
+    Result := TGocciaPropertyDescriptorAccessor.CreatePartial(
+      TGocciaPropertyDescriptorAccessor(ADescriptor).Getter,
+      TGocciaPropertyDescriptorAccessor(ADescriptor).Setter,
+      ADescriptor.Flags,
+      ADescriptor.Fields)
+  else
+    Result := TGocciaPropertyDescriptor.Create(ADescriptor.Flags,
+      ADescriptor.Fields);
+end;
+
 // ES2026 §6.2.5.5 ToPropertyDescriptor(Obj)
 function ToPropertyDescriptor(
   const ADescriptorObject: TGocciaValue;
@@ -138,7 +255,9 @@ var
   Enumerable, Configurable, Writable: Boolean;
   Value, Getter, Setter: TGocciaValue;
   PropertyFlags: TPropertyFlags;
+  DescriptorFields: TPropertyDescriptorFields;
   HasValue, HasGet, HasSet, HasWritable: Boolean;
+  HasEnumerable, HasConfigurable: Boolean;
 begin
   // ES2026 §6.2.5.5 step 1: If Desc is not an Object, throw a TypeError
   if not (ADescriptorObject is TGocciaObjectValue) then
@@ -153,37 +272,22 @@ begin
   Getter := nil;
   Setter := nil;
 
-  // Inherit from existing descriptor
-  if Assigned(AExistingDescriptor) then
-  begin
-    Enumerable := AExistingDescriptor.Enumerable;
-    Configurable := AExistingDescriptor.Configurable;
-    if AExistingDescriptor is TGocciaPropertyDescriptorData then
-    begin
-      Writable := AExistingDescriptor.Writable;
-      Value := TGocciaPropertyDescriptorData(AExistingDescriptor).Value;
-    end
-    else if AExistingDescriptor is TGocciaPropertyDescriptorAccessor then
-    begin
-      Getter := TGocciaPropertyDescriptorAccessor(AExistingDescriptor).Getter;
-      Setter := TGocciaPropertyDescriptorAccessor(AExistingDescriptor).Setter;
-    end;
-  end;
-
   // ES2026 §6.2.5.5 steps 3–9: extract descriptor fields
+  HasEnumerable := DescObj.HasProperty(PROP_ENUMERABLE);
+  HasConfigurable := DescObj.HasProperty(PROP_CONFIGURABLE);
   HasValue := DescObj.HasProperty(PROP_VALUE);
   HasGet := DescObj.HasProperty(PROP_GET);
   HasSet := DescObj.HasProperty(PROP_SET);
   HasWritable := DescObj.HasProperty(PROP_WRITABLE);
 
-  if DescObj.HasProperty(PROP_ENUMERABLE) then
+  if HasEnumerable then
     Enumerable := DescObj.GetProperty(PROP_ENUMERABLE).ToBooleanLiteral.Value;
-  if DescObj.HasProperty(PROP_CONFIGURABLE) then
+  if HasConfigurable then
     Configurable := DescObj.GetProperty(PROP_CONFIGURABLE).ToBooleanLiteral.Value;
-  if HasWritable then
-    Writable := DescObj.GetProperty(PROP_WRITABLE).ToBooleanLiteral.Value;
   if HasValue then
     Value := DescObj.GetProperty(PROP_VALUE);
+  if HasWritable then
+    Writable := DescObj.GetProperty(PROP_WRITABLE).ToBooleanLiteral.Value;
 
   // ES2026 §6.2.5.5 step 7: validate getter
   if HasGet then
@@ -218,17 +322,31 @@ begin
   if Writable then
     Include(PropertyFlags, pfWritable);
 
-  // Construct the appropriate descriptor type
-  if HasValue or HasWritable or
-     (Assigned(AExistingDescriptor) and (AExistingDescriptor is TGocciaPropertyDescriptorData) and not HasGet and not HasSet) or
-     (not Assigned(AExistingDescriptor) and not HasGet and not HasSet) then
-    Result := TGocciaPropertyDescriptorData.Create(Value, PropertyFlags)
-  else
+  DescriptorFields := [];
+  if HasEnumerable then
+    Include(DescriptorFields, pdfEnumerable);
+  if HasConfigurable then
+    Include(DescriptorFields, pdfConfigurable);
+  if HasValue then
+    Include(DescriptorFields, pdfValue);
+  if HasWritable then
+    Include(DescriptorFields, pdfWritable);
+  if HasGet then
+    Include(DescriptorFields, pdfGet);
+  if HasSet then
+    Include(DescriptorFields, pdfSet);
+
+  if HasValue or HasWritable then
+    Result := TGocciaPropertyDescriptorData.CreatePartial(Value,
+      PropertyFlags, DescriptorFields)
+  else if HasGet or HasSet then
   begin
-    // Accessor descriptors determine writability via FSetter, not pfWritable
     Exclude(PropertyFlags, pfWritable);
-    Result := TGocciaPropertyDescriptorAccessor.Create(Getter, Setter, PropertyFlags);
-  end;
+    Result := TGocciaPropertyDescriptorAccessor.CreatePartial(Getter,
+      Setter, PropertyFlags, DescriptorFields);
+  end
+  else
+    Result := TGocciaPropertyDescriptor.Create(PropertyFlags, DescriptorFields);
 end;
 
 end.

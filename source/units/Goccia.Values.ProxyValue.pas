@@ -767,28 +767,44 @@ begin
   Trap := GetTrap(PROP_DEFINE_PROPERTY);
   if Assigned(Trap) then
   begin
-    // Build descriptor object — preserve accessor vs data shape
+    // Build descriptor object — preserve descriptor field presence.
     DescObj := TGocciaObjectValue.Create;
-    // Emit get/set when the descriptor IS an accessor, regardless of
-    // whether the stored function is nil — presence matters per spec.
     if ADescriptor is TGocciaPropertyDescriptorAccessor then
     begin
-      DescObj.AssignProperty(PROP_GET,
-        TGocciaPropertyDescriptorAccessor(ADescriptor).Getter);
-      DescObj.AssignProperty(PROP_SET,
-        TGocciaPropertyDescriptorAccessor(ADescriptor).Setter);
+      if ADescriptor.HasGet then
+      begin
+        if Assigned(TGocciaPropertyDescriptorAccessor(ADescriptor).Getter) then
+          DescObj.AssignProperty(PROP_GET,
+            TGocciaPropertyDescriptorAccessor(ADescriptor).Getter)
+        else
+          DescObj.AssignProperty(PROP_GET,
+            TGocciaUndefinedLiteralValue.UndefinedValue);
+      end;
+      if ADescriptor.HasSet then
+      begin
+        if Assigned(TGocciaPropertyDescriptorAccessor(ADescriptor).Setter) then
+          DescObj.AssignProperty(PROP_SET,
+            TGocciaPropertyDescriptorAccessor(ADescriptor).Setter)
+        else
+          DescObj.AssignProperty(PROP_SET,
+            TGocciaUndefinedLiteralValue.UndefinedValue);
+      end;
     end
     else if ADescriptor is TGocciaPropertyDescriptorData then
     begin
-      DescObj.AssignProperty(PROP_VALUE,
-        TGocciaPropertyDescriptorData(ADescriptor).Value);
-      DescObj.AssignProperty(PROP_WRITABLE,
-        TGocciaBooleanLiteralValue.Create(ADescriptor.Writable));
+      if ADescriptor.HasValue then
+        DescObj.AssignProperty(PROP_VALUE,
+          TGocciaPropertyDescriptorData(ADescriptor).Value);
+      if ADescriptor.HasWritable then
+        DescObj.AssignProperty(PROP_WRITABLE,
+          TGocciaBooleanLiteralValue.Create(ADescriptor.Writable));
     end;
-    DescObj.AssignProperty(PROP_ENUMERABLE,
-      TGocciaBooleanLiteralValue.Create(ADescriptor.Enumerable));
-    DescObj.AssignProperty(PROP_CONFIGURABLE,
-      TGocciaBooleanLiteralValue.Create(ADescriptor.Configurable));
+    if ADescriptor.HasEnumerable then
+      DescObj.AssignProperty(PROP_ENUMERABLE,
+        TGocciaBooleanLiteralValue.Create(ADescriptor.Enumerable));
+    if ADescriptor.HasConfigurable then
+      DescObj.AssignProperty(PROP_CONFIGURABLE,
+        TGocciaBooleanLiteralValue.Create(ADescriptor.Configurable));
 
     Args := TGocciaArgumentsCollection.Create;
     try
@@ -798,6 +814,7 @@ begin
       TrapResult := InvokeTrap(Trap, Args);
       if not TrapResult.ToBooleanLiteral.Value then
         ThrowTypeError(Format(SErrorProxyDefineReturnedFalse, [AName]), SSuggestProxyTrapInvariant);
+      ADescriptor.Free;
     finally
       Args.Free;
     end;
@@ -825,38 +842,59 @@ begin
   Trap := GetTrap(PROP_DEFINE_PROPERTY);
   if Assigned(Trap) then
   begin
-    // Build descriptor object — preserve accessor vs data shape
+    // Build descriptor object — preserve descriptor field presence.
     DescObj := TGocciaObjectValue.Create;
     if ADescriptor is TGocciaPropertyDescriptorAccessor then
     begin
-      DescObj.AssignProperty(PROP_GET,
-        TGocciaPropertyDescriptorAccessor(ADescriptor).Getter);
-      DescObj.AssignProperty(PROP_SET,
-        TGocciaPropertyDescriptorAccessor(ADescriptor).Setter);
+      if ADescriptor.HasGet then
+      begin
+        if Assigned(TGocciaPropertyDescriptorAccessor(ADescriptor).Getter) then
+          DescObj.AssignProperty(PROP_GET,
+            TGocciaPropertyDescriptorAccessor(ADescriptor).Getter)
+        else
+          DescObj.AssignProperty(PROP_GET,
+            TGocciaUndefinedLiteralValue.UndefinedValue);
+      end;
+      if ADescriptor.HasSet then
+      begin
+        if Assigned(TGocciaPropertyDescriptorAccessor(ADescriptor).Setter) then
+          DescObj.AssignProperty(PROP_SET,
+            TGocciaPropertyDescriptorAccessor(ADescriptor).Setter)
+        else
+          DescObj.AssignProperty(PROP_SET,
+            TGocciaUndefinedLiteralValue.UndefinedValue);
+      end;
     end
     else if ADescriptor is TGocciaPropertyDescriptorData then
     begin
-      DescObj.AssignProperty(PROP_VALUE,
-        TGocciaPropertyDescriptorData(ADescriptor).Value);
-      DescObj.AssignProperty(PROP_WRITABLE,
-        TGocciaBooleanLiteralValue.Create(ADescriptor.Writable));
+      if ADescriptor.HasValue then
+        DescObj.AssignProperty(PROP_VALUE,
+          TGocciaPropertyDescriptorData(ADescriptor).Value);
+      if ADescriptor.HasWritable then
+        DescObj.AssignProperty(PROP_WRITABLE,
+          TGocciaBooleanLiteralValue.Create(ADescriptor.Writable));
     end;
-    DescObj.AssignProperty(PROP_ENUMERABLE,
-      TGocciaBooleanLiteralValue.Create(ADescriptor.Enumerable));
-    DescObj.AssignProperty(PROP_CONFIGURABLE,
-      TGocciaBooleanLiteralValue.Create(ADescriptor.Configurable));
+    if ADescriptor.HasEnumerable then
+      DescObj.AssignProperty(PROP_ENUMERABLE,
+        TGocciaBooleanLiteralValue.Create(ADescriptor.Enumerable));
+    if ADescriptor.HasConfigurable then
+      DescObj.AssignProperty(PROP_CONFIGURABLE,
+        TGocciaBooleanLiteralValue.Create(ADescriptor.Configurable));
 
     Args := TGocciaArgumentsCollection.Create;
     try
-      Args.Add(FTarget);
-      Args.Add(TGocciaStringLiteralValue.Create(AName));
-      Args.Add(DescObj);
-      TrapResult := InvokeTrap(Trap, Args);
-      Result := TrapResult.ToBooleanLiteral.Value;
+      try
+        Args.Add(FTarget);
+        Args.Add(TGocciaStringLiteralValue.Create(AName));
+        Args.Add(DescObj);
+        TrapResult := InvokeTrap(Trap, Args);
+        Result := TrapResult.ToBooleanLiteral.Value;
+      finally
+        ADescriptor.Free;
+      end;
     finally
       Args.Free;
     end;
-    ADescriptor.Free;
   end
   else
   begin
@@ -884,38 +922,59 @@ begin
   Trap := GetTrap(PROP_DEFINE_PROPERTY);
   if Assigned(Trap) then
   begin
-    // Build descriptor object — preserve accessor vs data shape
+    // Build descriptor object — preserve descriptor field presence.
     DescObj := TGocciaObjectValue.Create;
     if ADescriptor is TGocciaPropertyDescriptorAccessor then
     begin
-      DescObj.AssignProperty(PROP_GET,
-        TGocciaPropertyDescriptorAccessor(ADescriptor).Getter);
-      DescObj.AssignProperty(PROP_SET,
-        TGocciaPropertyDescriptorAccessor(ADescriptor).Setter);
+      if ADescriptor.HasGet then
+      begin
+        if Assigned(TGocciaPropertyDescriptorAccessor(ADescriptor).Getter) then
+          DescObj.AssignProperty(PROP_GET,
+            TGocciaPropertyDescriptorAccessor(ADescriptor).Getter)
+        else
+          DescObj.AssignProperty(PROP_GET,
+            TGocciaUndefinedLiteralValue.UndefinedValue);
+      end;
+      if ADescriptor.HasSet then
+      begin
+        if Assigned(TGocciaPropertyDescriptorAccessor(ADescriptor).Setter) then
+          DescObj.AssignProperty(PROP_SET,
+            TGocciaPropertyDescriptorAccessor(ADescriptor).Setter)
+        else
+          DescObj.AssignProperty(PROP_SET,
+            TGocciaUndefinedLiteralValue.UndefinedValue);
+      end;
     end
     else if ADescriptor is TGocciaPropertyDescriptorData then
     begin
-      DescObj.AssignProperty(PROP_VALUE,
-        TGocciaPropertyDescriptorData(ADescriptor).Value);
-      DescObj.AssignProperty(PROP_WRITABLE,
-        TGocciaBooleanLiteralValue.Create(ADescriptor.Writable));
+      if ADescriptor.HasValue then
+        DescObj.AssignProperty(PROP_VALUE,
+          TGocciaPropertyDescriptorData(ADescriptor).Value);
+      if ADescriptor.HasWritable then
+        DescObj.AssignProperty(PROP_WRITABLE,
+          TGocciaBooleanLiteralValue.Create(ADescriptor.Writable));
     end;
-    DescObj.AssignProperty(PROP_ENUMERABLE,
-      TGocciaBooleanLiteralValue.Create(ADescriptor.Enumerable));
-    DescObj.AssignProperty(PROP_CONFIGURABLE,
-      TGocciaBooleanLiteralValue.Create(ADescriptor.Configurable));
+    if ADescriptor.HasEnumerable then
+      DescObj.AssignProperty(PROP_ENUMERABLE,
+        TGocciaBooleanLiteralValue.Create(ADescriptor.Enumerable));
+    if ADescriptor.HasConfigurable then
+      DescObj.AssignProperty(PROP_CONFIGURABLE,
+        TGocciaBooleanLiteralValue.Create(ADescriptor.Configurable));
 
     Args := TGocciaArgumentsCollection.Create;
     try
-      Args.Add(FTarget);
-      Args.Add(ASymbol);
-      Args.Add(DescObj);
-      TrapResult := InvokeTrap(Trap, Args);
-      Result := TrapResult.ToBooleanLiteral.Value;
+      try
+        Args.Add(FTarget);
+        Args.Add(ASymbol);
+        Args.Add(DescObj);
+        TrapResult := InvokeTrap(Trap, Args);
+        Result := TrapResult.ToBooleanLiteral.Value;
+      finally
+        ADescriptor.Free;
+      end;
     finally
       Args.Free;
     end;
-    ADescriptor.Free;
   end
   else
   begin
