@@ -672,6 +672,39 @@ test("defineProperty on array length to 0 empties array", () => {
   expect(arr[0]).toBeUndefined();
 });
 
+test("defineProperty on array length preserves lower indices when truncation fails", () => {
+  const arr = [0, 1, 2, 3, 4, 5, 6, 7, "blocked", 9];
+  Object.defineProperty(arr, "8", {
+    get: () => "blocked",
+    configurable: false,
+  });
+
+  expect(() => {
+    Object.defineProperty(arr, "length", { value: 5 });
+  }).toThrow(TypeError);
+
+  expect(arr.length).toBe(9);
+  expect(arr[7]).toBe(7);
+  expect(arr[8]).toBe("blocked");
+  expect(arr[9]).toBeUndefined();
+});
+
+test("Reflect.defineProperty on array length returns false when truncation fails", () => {
+  const arr = [0, 1, 2, 3, 4, 5, 6, 7, "blocked", 9];
+  Object.defineProperty(arr, "8", {
+    get: () => "blocked",
+    configurable: false,
+  });
+
+  const result = Reflect.defineProperty(arr, "length", { value: 5 });
+
+  expect(result).toBe(false);
+  expect(arr.length).toBe(9);
+  expect(arr[7]).toBe(7);
+  expect(arr[8]).toBe("blocked");
+  expect(arr[9]).toBeUndefined();
+});
+
 test("defineProperty on numeric index updates element", () => {
   const arr = [1, 2, 3];
   Object.defineProperty(arr, "0", { value: 99 });
