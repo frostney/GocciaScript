@@ -49,6 +49,66 @@ describe("with statement", () => {
     expect(result).toBe(9);
   });
 
+  test("with object bindings shadow outer const bindings in bytecode", () => {
+    const obj = { x: "object x" };
+    const x = "outer x";
+    let result = "";
+
+    with (obj) {
+      result = x;
+    }
+
+    expect(result).toBe("object x");
+  });
+
+  test("Symbol.unscopables checks prototype chains", () => {
+    const x = "outer x";
+    const y = "outer y";
+    const proto = { x: "object x", y: "object y" };
+    const obj = Object.create(proto);
+    let seenX = "";
+    let seenY = "";
+    let deleteResult = true;
+
+    obj[Symbol.unscopables] = { x: true, y: false };
+
+    with (obj) {
+      seenX = x;
+      deleteResult = delete x;
+      seenY = y;
+    }
+
+    expect(seenX).toBe("outer x");
+    expect(deleteResult).toBe(false);
+    expect(seenY).toBe("object y");
+  });
+
+  test("inherited Symbol.unscopables controls object environment bindings", () => {
+    const x = "outer x";
+    let obj = {
+      x: "object x",
+      [Symbol.unscopables]: { x: true }
+    };
+    let result = "";
+
+    obj = Object.create(obj);
+
+    with (obj) {
+      result = x;
+    }
+
+    expect(result).toBe("outer x");
+  });
+
+  test("parses ASI after let as a with body expression statement", () => {
+    if (false) {
+      with ({}) let
+      {}
+    }
+
+    expect(true).toBe(true);
+  });
+
   test("closures created inside with retain the object environment", () => {
     const obj = { x: 4 };
     let read;

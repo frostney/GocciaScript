@@ -3296,6 +3296,7 @@ end;
 function TGocciaParser.Statement: TGocciaStatement;
 var
   Line, Column: Integer;
+  Token: TGocciaToken;
 begin
   if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_TYPE) and IsTypeDeclaration then
   begin
@@ -3313,6 +3314,17 @@ begin
     Advance;
     SkipInterfaceDeclaration;
     Result := TGocciaEmptyStatement.Create(Line, Column);
+  end
+  else if Check(gttLet) and FNonStrictModeEnabled and
+          FAutomaticSemicolonInsertion and
+          (FCurrent + 1 < FTokens.Count) and
+          (FTokens[FCurrent + 1].TokenType = gttLeftBrace) and
+          (Peek.Line < FTokens[FCurrent + 1].Line) then
+  begin
+    Token := Advance;
+    Result := TGocciaExpressionStatement.Create(
+      TGocciaIdentifierExpression.Create(Token.Lexeme, Token.Line,
+        Token.Column), Token.Line, Token.Column);
   end
   else if Match([gttConst, gttLet]) then
     Result := DeclarationStatement
