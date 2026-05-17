@@ -1408,8 +1408,8 @@ begin
         Parser.FunctionDeclarationsEnabled := cfFunction in FCompatibility;
         Parser.TraditionalForLoopsEnabled := cfTraditionalFor in FCompatibility;
         Parser.LooseEqualityEnabled := cfLooseEquality in FCompatibility;
-        Parser.NonStrictModeEnabled := (cfNonStrictMode in FCompatibility) and
-          (FSourceType <> stModule);
+        Parser.NonStrictModeEnabled := (cfNonStrictMode in FCompatibility) or
+          (FSourceType = stModule);
         try
           ProgramNode := Parser.Parse;
           PrintParserWarnings(Parser, SourceMap);

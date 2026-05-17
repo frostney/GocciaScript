@@ -79,10 +79,10 @@ below.
 All four template kinds are produced by `buildTestSource` in
 `scripts/run_test262_suite.ts`. Bodies for positive sync, positive async,
 empty, and script-scope tests are all `harness + body` — identical
-shape, no special wrapping. There is no per-template strict-directive
-injection (GocciaScript's parser ignores `"use strict"`; its curated
-semantics enforce strict-equivalent behaviors statically — see
-"Strict mode" below).
+shape, no special wrapping. Tests flagged `onlyStrict` receive a
+`"use strict"` directive prefix before the harness so the runtime uses
+strict directive semantics while the runner can still enable
+compatibility-gated parser support for Script tests.
 
 ### Positive (sync, async, empty, script-scope)
 
@@ -240,29 +240,23 @@ moves.
 
 ## Strict mode
 
-GocciaScript's parser does not process `"use strict"` directives — it
-neither recognizes nor enforces strict-mode toggling at parse time.
-Independently, the engine's curated semantics enforce most strict-mode
-behaviors statically:
+GocciaScript recognizes strict directive prologues at execution time for
+the compatibility behaviors that otherwise depend on Script non-strict
+mode. Independently, the engine's curated default semantics enforce most
+strict-mode behaviors statically:
 
 - Implicit globals throw `ReferenceError` (sloppy would create a global)
 - `delete <identifier>` and non-configurable property deletion throw by default
 - `eval` is not implemented
 
-The orchestrator therefore does not inject `"use strict"` for `onlyStrict`
-tests — the body's own directive (if present) is parsed and ignored,
-which is correct because the engine's behavior is already strict-equivalent
-for the things `onlyStrict` tests assert on.
-
 The orchestrator enables `--compat-non-strict-mode` per test, not globally:
-Script tests receive it unless they are flagged `onlyStrict`, while module
-tests and `onlyStrict` tests stay strict. This lets `arguments`, `with`,
-non-strict assignment failures, legacy `delete` return values, and
-regular-function nullish `this` coercion run where test262 expects sloppy
-Script semantics without leaking those semantics into module or strict-only
-coverage. Remaining `noStrict` tests rely on sloppy-only
-behaviors that GocciaScript still does not provide and fail naturally. They
-are documented in `scripts/test262_compatibility_roadmap.json` as
+Script tests receive it, while module tests stay strict. `onlyStrict`
+Script tests also receive the flag, but the injected directive keeps
+`arguments`, `with`, non-strict assignment failures, legacy `delete`
+return values, and regular-function nullish `this` coercion on the strict
+path. Remaining `noStrict` tests rely on sloppy-only behaviors that
+GocciaScript still does not provide and fail naturally. They are
+documented in `scripts/test262_compatibility_roadmap.json` as
 `excluded-by-language-design` and counted as expected failures, not as
 wrapper-infra failures.
 

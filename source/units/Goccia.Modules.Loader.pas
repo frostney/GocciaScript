@@ -298,7 +298,7 @@ begin
           Parser.FunctionDeclarationsEnabled := FFunctionEnabled;
           Parser.TraditionalForLoopsEnabled := FTraditionalForLoopsEnabled;
           Parser.LooseEqualityEnabled := FLooseEqualityEnabled;
-          Parser.NonStrictModeEnabled := False;
+          Parser.NonStrictModeEnabled := True;
           try
             ProgramNode := Parser.Parse;
             try

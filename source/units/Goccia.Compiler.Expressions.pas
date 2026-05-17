@@ -1165,7 +1165,7 @@ end;
 function DeclareArgumentsObjectLocal(const ACtx: TGocciaCompilationContext;
   const AScope: TGocciaCompilerScope; const AParams: TGocciaParameterArray): Integer;
 begin
-  if not ACtx.NonStrictMode then
+  if not ACtx.CompatibilityNonStrictMode then
     Exit(-1);
 
   if ParameterListBindsName(AParams, IDENTIFIER_ARGUMENTS) then

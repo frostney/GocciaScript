@@ -19,9 +19,38 @@ uses
 
   Goccia.Constants.PropertyNames,
   Goccia.Values.ArrayValue,
+  Goccia.Values.ErrorHelper,
+  Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.Primitives,
   Goccia.Values.SymbolValue;
+
+type
+  TArgumentsThrowerHost = class
+  public
+    function ThrowTypeError(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+  end;
+
+var
+  GArgumentsThrowerHost: TArgumentsThrowerHost;
+
+function TArgumentsThrowerHost.ThrowTypeError(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Goccia.Values.ErrorHelper.ThrowTypeError(
+    '''caller'', ''callee'', and ''arguments'' properties may not be accessed');
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function CreateThrowTypeErrorFunction: TGocciaNativeFunctionValue;
+begin
+  if not Assigned(GArgumentsThrowerHost) then
+    GArgumentsThrowerHost := TArgumentsThrowerHost.Create;
+  Result := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+    GArgumentsThrowerHost.ThrowTypeError, 'ThrowTypeError', 0);
+end;
 
 function ArrayPrototypeValuesFunction: TGocciaValue;
 var
@@ -36,6 +65,7 @@ function CreateUnmappedArgumentsObject(
 var
   I: Integer;
   IteratorValue: TGocciaValue;
+  Thrower: TGocciaNativeFunctionValue;
 begin
   Result := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype,
     AArguments.Length + 2);
@@ -57,12 +87,15 @@ begin
       TGocciaPropertyDescriptorData.Create(IteratorValue,
         [pfWritable, pfConfigurable]));
 
-  // Keep `callee` present and non-enumerable.  Goccia uses unmapped
-  // arguments objects in all functions, so there is no parameter map.
+  Thrower := CreateThrowTypeErrorFunction;
   Result.DefineProperty(PROP_CALLEE,
-    TGocciaPropertyDescriptorData.Create(
-      TGocciaUndefinedLiteralValue.UndefinedValue,
+    TGocciaPropertyDescriptorAccessor.Create(
+      Thrower,
+      Thrower,
       []));
 end;
+
+finalization
+  GArgumentsThrowerHost.Free;
 
 end.

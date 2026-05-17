@@ -34,6 +34,7 @@ type
     FormalParameterCounts: TFormalParameterCountMap;
     GlobalBackedTopLevel: Boolean;
     StrictTypes: Boolean;
+    CompatibilityNonStrictMode: Boolean;
     NonStrictMode: Boolean;
     OptimizationOptions: TGocciaCompilerOptimizationOptions;
     CompileExpression: TCompileExpressionProc;

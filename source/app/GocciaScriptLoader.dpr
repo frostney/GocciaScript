@@ -647,7 +647,7 @@ begin
       ProgramNode := ParseSource(ASource, AFileName, TGocciaEngine.DefaultPreprocessors,
         IsJsonOutput, Engine.ASIEnabled, Engine.VarEnabled, Engine.FunctionEnabled,
         Engine.TraditionalForLoopsEnabled, Engine.LooseEqualityEnabled,
-        Engine.NonStrictModeEnabled,
+        Engine.NonStrictModeEnabled or (Engine.SourceType = stModule),
         Result.Timing.LexTimeNanoseconds,
         Result.Timing.ParseTimeNanoseconds, SourceMap);
       try

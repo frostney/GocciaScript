@@ -110,4 +110,17 @@ describe("arguments object", () => {
     expect(obj.count).toBe(0);
     expect(obj.seen).toBe(6);
   });
+
+  test("callee accessors throw on unmapped arguments objects", () => {
+    function getCallee() {
+      return arguments.callee;
+    }
+
+    function setCallee() {
+      arguments.callee = function replacement() {};
+    }
+
+    expect(() => getCallee()).toThrow(TypeError);
+    expect(() => setCallee()).toThrow(TypeError);
+  });
 });

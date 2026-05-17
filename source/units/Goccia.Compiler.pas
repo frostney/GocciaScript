@@ -94,6 +94,7 @@ begin
   Result.GlobalBackedTopLevel := FGlobalBackedTopLevel and
     (FCurrentTemplate = FTopLevelTemplate);
   Result.StrictTypes := FStrictTypes;
+  Result.CompatibilityNonStrictMode := FNonStrictMode;
   Result.NonStrictMode := FNonStrictMode and not FCurrentTemplate.StrictCode;
   Result.OptimizationOptions := FOptimizationOptions;
   Result.CompileExpression := DoCompileExpression;

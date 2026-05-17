@@ -174,7 +174,8 @@ begin
               Parser.FunctionDeclarationsEnabled := Eng.FunctionEnabled;
               Parser.TraditionalForLoopsEnabled := Eng.TraditionalForLoopsEnabled;
               Parser.LooseEqualityEnabled := Eng.LooseEqualityEnabled;
-              Parser.NonStrictModeEnabled := Eng.NonStrictModeEnabled;
+              Parser.NonStrictModeEnabled := Eng.NonStrictModeEnabled or
+                (Eng.SourceType = stModule);
               try
                 ProgramNode := Parser.Parse;
                 ParseEnd := GetNanoseconds;

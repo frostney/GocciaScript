@@ -312,7 +312,7 @@ type WrapperKind =
 
 interface BuildOptions {
   kind: WrapperKind;
-  errorType?: string;
+  strictMode: boolean;
 }
 
 /**
@@ -322,16 +322,16 @@ interface BuildOptions {
  * Goccia-specific addition to the stock convention. Negative-parse is
  * body-only.
  *
- * No "use strict" injection: the parser ignores the directive anyway, and
- * GocciaScript's curated semantics already enforce most strict-mode
- * behaviors statically. See docs/test262.md "Strict mode" section.
+ * `onlyStrict` tests get a directive prefix so they exercise strict runtime
+ * semantics while still receiving compatibility-gated parser support.
  */
 function buildTestSource(
   harnessSource: string,
   body: string,
   opts: BuildOptions,
 ): string {
-  if (opts.kind === "negative_parse") return body;
+  const strictPrefix = opts.strictMode ? '"use strict";\n' : "";
+  if (opts.kind === "negative_parse") return `${strictPrefix}${body}`;
   if (opts.kind === "negative_runtime") {
     // For the error-class identification we prefer `e.constructor.name`
     // (the spec-canonical path) but fall back to `e.name` because
@@ -339,7 +339,7 @@ function buildTestSource(
     // `prototype.constructor` (#519) — caught Errors have
     // `e.constructor === undefined` despite `e.name` being set
     // correctly to "TypeError" / "ReferenceError" / etc.
-    return `${harnessSource}
+    return `${strictPrefix}${harnessSource}
 try {
 ${body}
   print("Test262:NegativeTestNoError");
@@ -368,7 +368,7 @@ ${body}
     // semicolon — relying on ASI), and the leading `(` of our IIFE would
     // otherwise be parsed as a call on the body's last expression
     // (`then(...)(async () => ...)`), producing "object is not a function".
-    return `${harnessSource}
+    return `${strictPrefix}${harnessSource}
 ${body};
 (async () => {
   try {
@@ -385,7 +385,7 @@ ${body};
 `;
   }
   // positive_sync
-  return `${harnessSource}\n${body}`;
+  return `${strictPrefix}${harnessSource}\n${body}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -667,8 +667,9 @@ interface PerTestRecord {
 // --compat-loose-equality, and --unsafe-function-constructor are also
 // unconditional: stock harness uses `var`, `function`, traditional `for(;;)`
 // loops, loose equality, and `Function("return this;")()`.  Non-strict mode
-// compatibility is per-test because modules and `onlyStrict` tests must keep
-// strict semantics.
+// compatibility is also enabled for Script-source strict tests: strict
+// directives and modules decide strict semantics, while the flag exposes
+// compatibility-gated syntax and implicit objects needed by the corpus.
 const TEST262_BARE_FLAGS: readonly string[] = [
   "--asi",
   "--compat-var",
@@ -678,8 +679,8 @@ const TEST262_BARE_FLAGS: readonly string[] = [
   "--unsafe-function-constructor",
 ];
 
-function needsNonStrictCompat(flags: readonly string[], isModule: boolean): boolean {
-  return !isModule && !flags.includes("onlyStrict");
+function needsNonStrictCompat(isModule: boolean): boolean {
+  return !isModule;
 }
 
 async function runOneTest(
@@ -700,6 +701,7 @@ async function runOneTest(
     };
   }
   const flags = parsed.meta.flags;
+  const strictMode = flags.includes("onlyStrict");
   const isAsync = flags.includes("async");
   const isRaw = flags.includes("raw");
   const isModule = flags.includes("module");
@@ -755,7 +757,7 @@ async function runOneTest(
 
   const source = buildTestSource(harnessSource, parsed.body, {
     kind,
-    errorType: negative?.type,
+    strictMode,
   });
 
   const args = [
@@ -764,7 +766,7 @@ async function runOneTest(
     `--timeout=${opts.timeoutMs}`,
     `--max-memory=${opts.maxMemoryBytes}`,
   ];
-  if (needsNonStrictCompat(flags, isModule)) {
+  if (needsNonStrictCompat(isModule)) {
     args.push("--compat-non-strict-mode");
   }
   if (isModule) args.unshift("--source-type=module");

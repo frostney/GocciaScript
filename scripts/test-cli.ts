@@ -294,6 +294,17 @@ console.log("--compat-non-strict-mode (Loader + Bundler + TestRunner + Bare)..."
     const bundledAssignmentOut = await $`${LOADER} --print ${assignmentOutPath} 2>&1`.text();
     if (!containsLine(bundledAssignmentOut, "2")) throw new Error(`Bundled non-strict assignment expected 2, got: ${bundledAssignmentOut}`);
 
+    const moduleWithSrc = join(tmp, "module-with.js");
+    writeFileSync(moduleWithSrc, "with ({ x: 1 }) { x; }\n");
+    const moduleWithInterp = await $`${LOADER} ${moduleWithSrc} --source-type=module --compat-non-strict-mode 2>&1`.nothrow();
+    const moduleWithInterpOutput = moduleWithInterp.text();
+    if (moduleWithInterp.exitCode === 0 || !moduleWithInterpOutput.includes("'with' statements are not allowed in strict mode"))
+      throw new Error(`Module with should fail as strict code in interpreted mode, got: ${moduleWithInterpOutput}`);
+    const moduleWithBytecode = await $`${LOADER} ${moduleWithSrc} --source-type=module --mode=bytecode --compat-non-strict-mode 2>&1`.nothrow();
+    const moduleWithBytecodeOutput = moduleWithBytecode.text();
+    if (moduleWithBytecode.exitCode === 0 || !moduleWithBytecodeOutput.includes("'with' statements are not allowed in strict mode"))
+      throw new Error(`Module with should fail as strict code in bytecode mode, got: ${moduleWithBytecodeOutput}`);
+
     const testSrc = join(tmp, "test-nonstrict.js");
     writeFileSync(
       testSrc,
