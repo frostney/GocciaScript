@@ -4234,7 +4234,8 @@ begin
       Line, Column);
 
     SkipBalancedParens;
-    SkipStatementOrBlock;
+    BodyStmt := Statement;
+    BodyStmt.Free;
 
     Result := TGocciaEmptyStatement.Create(Line, Column);
     Exit;
@@ -4266,13 +4267,16 @@ begin
       'Use for...of/array methods, or enable --compat-while-loops',
       Line, Column);
 
-    SkipStatementOrBlock;
-
-    Consume(gttWhile, 'Expected "while" after do body',
-      SSuggestAddWhileAfterDo);
-    SkipBalancedParens;
-    ConsumeSemicolonOrASI('Expected ";" after do-while statement',
-      SSuggestAddSemicolon);
+    BodyStmt := Statement;
+    try
+      Consume(gttWhile, 'Expected "while" after do body',
+        SSuggestAddWhileAfterDo);
+      SkipBalancedParens;
+      ConsumeSemicolonOrASI('Expected ";" after do-while statement',
+        SSuggestAddSemicolon);
+    finally
+      BodyStmt.Free;
+    end;
 
     Result := TGocciaEmptyStatement.Create(Line, Column);
     Exit;

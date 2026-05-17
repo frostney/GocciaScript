@@ -199,6 +199,11 @@ begin
   GContinueScopeDepth := AState.OldContinueScopeDepth;
 end;
 
+procedure SetLoopContinueScopeDepth(const ACtx: TGocciaCompilationContext);
+begin
+  GContinueScopeDepth := ACtx.Scope.Depth;
+end;
+
 procedure PatchJumpList(const ACtx: TGocciaCompilationContext;
   const AJumps: TList<Integer>);
 var
@@ -1820,6 +1825,7 @@ begin
     EmitInstruction(ACtx, EncodeABC(OP_ARRAY_GET, ValueReg, ArrReg, IdxReg));
 
     ACtx.Scope.BeginScope;
+    SetLoopContinueScopeDepth(ACtx);
 
     if Assigned(AStmt.BindingPattern) then
     begin
@@ -1948,6 +1954,7 @@ begin
     ExitJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, DoneReg);
 
     ACtx.Scope.BeginScope;
+    SetLoopContinueScopeDepth(ACtx);
 
     if Assigned(AStmt.BindingPattern) then
     begin
@@ -2056,6 +2063,7 @@ begin
     EmitInstruction(ACtx, EncodeABC(OP_AWAIT, ValueReg, ValueReg, 0));
 
     ACtx.Scope.BeginScope;
+    SetLoopContinueScopeDepth(ACtx);
 
     if Assigned(AStmt.BindingPattern) then
     begin
@@ -2254,6 +2262,7 @@ begin
 
     OuterSlot := StartReg;
     ACtx.Scope.BeginScope;
+    SetLoopContinueScopeDepth(ACtx);
     Slot := ACtx.Scope.DeclareLocal(LoopName, False);
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, Slot, OuterSlot, 0));
 
@@ -2498,6 +2507,7 @@ begin
       end;
 
       ACtx.Scope.BeginScope;
+      SetLoopContinueScopeDepth(ACtx);
 
       if HasLexicalInit then
       begin
