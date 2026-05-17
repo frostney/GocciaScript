@@ -101,6 +101,8 @@ var
   IfStmt: TGocciaIfStatement;
   ForOf: TGocciaForOfStatement;
   ForStmt: TGocciaForStatement;
+  WhileStmt: TGocciaWhileStatement;
+  DoWhileStmt: TGocciaDoWhileStatement;
   TryStmt: TGocciaTryStatement;
   SwitchStmt: TGocciaSwitchStatement;
   VarDecl: TGocciaVariableDeclaration;
@@ -159,6 +161,16 @@ begin
     if Assigned(ForStmt.Init) then
       CollectVarBindingNamesFromNode(ForStmt.Init, ANames);
     CollectVarBindingNamesFromNode(ForStmt.Body, ANames);
+  end
+  else if ANode is TGocciaWhileStatement then
+  begin
+    WhileStmt := TGocciaWhileStatement(ANode);
+    CollectVarBindingNamesFromNode(WhileStmt.Body, ANames);
+  end
+  else if ANode is TGocciaDoWhileStatement then
+  begin
+    DoWhileStmt := TGocciaDoWhileStatement(ANode);
+    CollectVarBindingNamesFromNode(DoWhileStmt.Body, ANames);
   end
   else if ANode is TGocciaTryStatement then
   begin

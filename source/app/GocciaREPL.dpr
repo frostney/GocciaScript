@@ -173,6 +173,7 @@ begin
               Parser.VarDeclarationsEnabled := Eng.VarEnabled;
               Parser.FunctionDeclarationsEnabled := Eng.FunctionEnabled;
               Parser.TraditionalForLoopsEnabled := Eng.TraditionalForLoopsEnabled;
+              Parser.WhileLoopsEnabled := Eng.WhileLoopsEnabled;
               Parser.LooseEqualityEnabled := Eng.LooseEqualityEnabled;
               Parser.NonStrictModeEnabled := Eng.NonStrictModeEnabled or
                 (Eng.SourceType = stModule);

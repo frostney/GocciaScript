@@ -202,9 +202,9 @@ Goccia does today, so it stays accurate even if the underlying gap
 moves.
 
 - `assert.js` (subsumes stock `sta.js` + `assert.js` + `compareArray.js`):
-  `assert.compareArray` uses `for-of` instead of stock's
-  `for (var i = 0; ...)` because Goccia's parser warns and drops
-  traditional for-loop bodies; `assert.throws` uses `instanceof`
+  `assert.compareArray` still uses the historical for-of adaptation from
+  before the runner enabled traditional for-loop compatibility; it should be
+  re-evaluated against stock. `assert.throws` uses `instanceof`
   instead of stock's `thrown.constructor !== ctor` because caught
   Errors have `e.constructor === undefined` in Goccia.
 - `propertyHelper.js`, `deepEqual.js`, `temporalHelpers.js`,
@@ -213,13 +213,14 @@ moves.
   so these entries should be re-evaluated against the stock helpers during
   the next harness cleanup.
 - `testTypedArray.js`: stock uses `for (var i = 0; ...)` and
-  `with (...)` blocks; the runner now enables `--compat-non-strict-mode`
-  for eligible Script tests, so the remaining reason to keep it bundled is
-  the stock traditional loop shape, not `with`.
+  `with (...)` blocks; the runner now enables the corresponding
+  compatibility flags for eligible Script tests, so this helper should be
+  re-evaluated against stock during the next harness cleanup.
 - `compareIterator.js`, `decimalToHexString.js`,
   `nativeFunctionMatcher.js`, `regExpUtils.js`: stock uses traditional
-  `for` or `while` loops whose bodies Goccia's parser drops;
-  reimplemented with for-of or recursion.
+  `for` or `while` loops. These helpers were reimplemented with for-of or
+  recursion before loop compatibility flags covered the stock forms, and
+  should be re-evaluated against stock during the next harness cleanup.
 - `isConstructor.js`: stock probes constructor-ness via
   `Reflect.construct(function(){}, [], f)`; Goccia's `Reflect.construct`
   rejects `function` declarations and expressions as the proxy target.

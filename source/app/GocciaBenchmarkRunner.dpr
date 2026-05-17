@@ -450,6 +450,7 @@ begin
             Parser.VarDeclarationsEnabled := Engine.VarEnabled;
             Parser.FunctionDeclarationsEnabled := Engine.FunctionEnabled;
             Parser.TraditionalForLoopsEnabled := Engine.TraditionalForLoopsEnabled;
+            Parser.WhileLoopsEnabled := Engine.WhileLoopsEnabled;
             Parser.LooseEqualityEnabled := Engine.LooseEqualityEnabled;
             Parser.NonStrictModeEnabled := Engine.NonStrictModeEnabled or
               (Engine.SourceType = stModule);
@@ -672,6 +673,7 @@ begin
           Parser.VarDeclarationsEnabled := Engine.VarEnabled;
           Parser.FunctionDeclarationsEnabled := Engine.FunctionEnabled;
           Parser.TraditionalForLoopsEnabled := Engine.TraditionalForLoopsEnabled;
+          Parser.WhileLoopsEnabled := Engine.WhileLoopsEnabled;
           Parser.LooseEqualityEnabled := Engine.LooseEqualityEnabled;
           Parser.NonStrictModeEnabled := Engine.NonStrictModeEnabled or
             (Engine.SourceType = stModule);

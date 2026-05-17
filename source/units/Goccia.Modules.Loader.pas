@@ -35,6 +35,7 @@ type
     FVarEnabled: Boolean;
     FFunctionEnabled: Boolean;
     FTraditionalForLoopsEnabled: Boolean;
+    FWhileLoopsEnabled: Boolean;
     FLooseEqualityEnabled: Boolean;
     FNonStrictModeEnabled: Boolean;
     FStrictTypesEnabled: Boolean;
@@ -82,6 +83,8 @@ type
     property FunctionEnabled: Boolean read FFunctionEnabled write FFunctionEnabled;
     property TraditionalForLoopsEnabled: Boolean
       read FTraditionalForLoopsEnabled write FTraditionalForLoopsEnabled;
+    property WhileLoopsEnabled: Boolean
+      read FWhileLoopsEnabled write FWhileLoopsEnabled;
     property LooseEqualityEnabled: Boolean
       read FLooseEqualityEnabled write FLooseEqualityEnabled;
     property NonStrictModeEnabled: Boolean
@@ -297,6 +300,7 @@ begin
           Parser.VarDeclarationsEnabled := FVarEnabled;
           Parser.FunctionDeclarationsEnabled := FFunctionEnabled;
           Parser.TraditionalForLoopsEnabled := FTraditionalForLoopsEnabled;
+          Parser.WhileLoopsEnabled := FWhileLoopsEnabled;
           Parser.LooseEqualityEnabled := FLooseEqualityEnabled;
           Parser.NonStrictModeEnabled := True;
           try

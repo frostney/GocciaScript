@@ -68,6 +68,8 @@ function EvaluateUsingDeclaration(const AUsingDeclaration: TGocciaUsingDeclarati
 function EvaluateForOf(const AForOfStatement: TGocciaForOfStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 function EvaluateForAwaitOf(const AForAwaitOfStatement: TGocciaForAwaitOfStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 function EvaluateFor(const AForStatement: TGocciaForStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+function EvaluateWhile(const AWhileStatement: TGocciaWhileStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+function EvaluateDoWhile(const ADoWhileStatement: TGocciaDoWhileStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 
 // Destructuring pattern assignment procedures
 procedure AssignPattern(const APattern: TGocciaDestructuringPattern; const AValue: TGocciaValue; const AContext: TGocciaEvaluationContext; const AIsDeclaration: Boolean = False; const ADeclarationType: TGocciaDeclarationType = dtLet);
@@ -2202,6 +2204,193 @@ begin
   finally
     if Assigned(PerIterNames) then
       PerIterNames.Free;
+  end;
+end;
+
+// ES2026 §14.7.3.2 Runtime Semantics: WhileLoopEvaluation
+function EvaluateWhile(const AWhileStatement: TGocciaWhileStatement;
+  const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+var
+  ConditionValue: TGocciaValue;
+  CF: TGocciaControlFlow;
+  Continuation: TGocciaGeneratorContinuation;
+  ForState: TGocciaGeneratorForLoopState;
+  ResumePhase: TGocciaGeneratorForLoopPhase;
+begin
+  Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
+
+  Continuation := CurrentGeneratorContinuation;
+  ForState := nil;
+  if Assigned(Continuation) then
+  begin
+    ForState := Continuation.GetForLoopState(AWhileStatement);
+    if Assigned(ForState) then
+      ResumePhase := ForState.Phase
+    else
+    begin
+      ForState := Continuation.EnsureForLoopState(AWhileStatement, nil);
+      ForState.Phase := gflpTest;
+      ResumePhase := gflpTest;
+    end;
+  end
+  else
+    ResumePhase := gflpTest;
+
+  try
+    while True do
+    begin
+      CheckExecutionTimeout;
+      IncrementInstructionCounter;
+      CheckInstructionLimit;
+
+      if ResumePhase = gflpTest then
+      begin
+        if Assigned(ForState) then
+          ForState.Phase := gflpTest;
+        ConditionValue := EvaluateExpression(AWhileStatement.Condition, AContext);
+        if not ConditionValue.ToBooleanLiteral.Value then
+        begin
+          if Assigned(Continuation) then
+            Continuation.ClearForLoopState(AWhileStatement);
+          Break;
+        end;
+
+        if Assigned(ForState) then
+          ForState.Phase := gflpBody;
+        ResumePhase := gflpBody;
+      end;
+
+      if ResumePhase = gflpBody then
+      begin
+        CF := EvaluateLoopBodyStatement(AWhileStatement.Body, AContext);
+        case CF.Kind of
+          cfkBreak:
+          begin
+            if Assigned(Continuation) then
+              Continuation.ClearForLoopState(AWhileStatement);
+            Break;
+          end;
+          cfkReturn:
+          begin
+            if Assigned(Continuation) then
+              Continuation.ClearForLoopState(AWhileStatement);
+            Result := CF;
+            Exit;
+          end;
+          cfkContinue:
+          begin
+            if Assigned(ForState) then
+              ForState.Phase := gflpTest;
+            ResumePhase := gflpTest;
+            Continue;
+          end;
+        end;
+
+        if Assigned(ForState) then
+          ForState.Phase := gflpTest;
+        ResumePhase := gflpTest;
+      end;
+    end;
+  except
+    on E: EGocciaGeneratorYield do
+      raise;
+    else
+    begin
+      if Assigned(Continuation) then
+        Continuation.ClearForLoopState(AWhileStatement);
+      raise;
+    end;
+  end;
+end;
+
+// ES2026 §14.7.2.2 Runtime Semantics: DoWhileLoopEvaluation
+function EvaluateDoWhile(const ADoWhileStatement: TGocciaDoWhileStatement;
+  const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+var
+  ConditionValue: TGocciaValue;
+  CF: TGocciaControlFlow;
+  Continuation: TGocciaGeneratorContinuation;
+  ForState: TGocciaGeneratorForLoopState;
+  ResumePhase: TGocciaGeneratorForLoopPhase;
+begin
+  Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
+
+  Continuation := CurrentGeneratorContinuation;
+  ForState := nil;
+  if Assigned(Continuation) then
+  begin
+    ForState := Continuation.GetForLoopState(ADoWhileStatement);
+    if Assigned(ForState) then
+      ResumePhase := ForState.Phase
+    else
+    begin
+      ForState := Continuation.EnsureForLoopState(ADoWhileStatement, nil);
+      ForState.Phase := gflpBody;
+      ResumePhase := gflpBody;
+    end;
+  end;
+  if not Assigned(Continuation) then
+    ResumePhase := gflpBody;
+
+  try
+    while True do
+    begin
+      CheckExecutionTimeout;
+      IncrementInstructionCounter;
+      CheckInstructionLimit;
+
+      if ResumePhase = gflpBody then
+      begin
+        if Assigned(ForState) then
+          ForState.Phase := gflpBody;
+        CF := EvaluateLoopBodyStatement(ADoWhileStatement.Body, AContext);
+        case CF.Kind of
+          cfkBreak:
+          begin
+            if Assigned(Continuation) then
+              Continuation.ClearForLoopState(ADoWhileStatement);
+            Break;
+          end;
+          cfkReturn:
+          begin
+            if Assigned(Continuation) then
+              Continuation.ClearForLoopState(ADoWhileStatement);
+            Result := CF;
+            Exit;
+          end;
+        end;
+
+        if Assigned(ForState) then
+          ForState.Phase := gflpTest;
+        ResumePhase := gflpTest;
+      end;
+
+      if ResumePhase = gflpTest then
+      begin
+        if Assigned(ForState) then
+          ForState.Phase := gflpTest;
+        ConditionValue := EvaluateExpression(ADoWhileStatement.Condition, AContext);
+        if not ConditionValue.ToBooleanLiteral.Value then
+        begin
+          if Assigned(Continuation) then
+            Continuation.ClearForLoopState(ADoWhileStatement);
+          Break;
+        end;
+
+        if Assigned(ForState) then
+          ForState.Phase := gflpBody;
+        ResumePhase := gflpBody;
+      end;
+    end;
+  except
+    on E: EGocciaGeneratorYield do
+      raise;
+    else
+    begin
+      if Assigned(Continuation) then
+        Continuation.ClearForLoopState(ADoWhileStatement);
+      raise;
+    end;
   end;
 end;
 
