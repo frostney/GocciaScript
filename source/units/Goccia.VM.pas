@@ -873,10 +873,11 @@ type
   TGocciaVMSuperConstructorValue = class(TGocciaFunctionBase)
   private
     FSuperClass: TGocciaValue;
+    FNewTarget: TGocciaValue;
   protected
     function GetFunctionName: string; override;
   public
-    constructor Create(const ASuperClass: TGocciaValue);
+    constructor Create(const ASuperClass, ANewTarget: TGocciaValue);
     function Call(const AArguments: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue; override;
     procedure MarkReferences; override;
@@ -1154,10 +1155,11 @@ begin
 end;
 
 constructor TGocciaVMSuperConstructorValue.Create(
-  const ASuperClass: TGocciaValue);
+  const ASuperClass, ANewTarget: TGocciaValue);
 begin
   inherited Create;
   FSuperClass := ASuperClass;
+  FNewTarget := ANewTarget;
 end;
 
 function TGocciaBytecodeFunctionValue.GetFunctionLength: Integer;
@@ -2445,7 +2447,8 @@ end;
 
 function InvokeConstructableWithReceiver(const AConstructor: TGocciaValue;
   const AArguments: TGocciaArgumentsCollection;
-  const AReceiver: TGocciaValue): TGocciaValue;
+  const AReceiver: TGocciaValue;
+  const ANewTarget: TGocciaValue = nil): TGocciaValue;
 var
   BoundFunction: TGocciaBoundFunctionValue;
   ClassConstructor: TGocciaClassValue;
@@ -2453,6 +2456,7 @@ var
   SuperResult: TGocciaValue;
   ConstructorThisValue: TGocciaValue;
   VMClassConstructor: TGocciaVMClassValue;
+  EffectiveNewTarget: TGocciaValue;
   I: Integer;
   function IsUndefinedConstructedValue(const AValue: TGocciaValue): Boolean;
   begin
@@ -2477,9 +2481,16 @@ var
         SSuggestNotConstructorType);
   end;
 begin
+  if Assigned(ANewTarget) then
+    EffectiveNewTarget := ANewTarget
+  else
+    EffectiveNewTarget := AConstructor;
+
   if AConstructor is TGocciaBoundFunctionValue then
   begin
     BoundFunction := TGocciaBoundFunctionValue(AConstructor);
+    if IsSameValue(BoundFunction, EffectiveNewTarget) then
+      EffectiveNewTarget := BoundFunction.OriginalFunction;
     CombinedArgs := TGocciaArgumentsCollection.CreateWithCapacity(
       BoundFunction.BoundArgCount + AArguments.Length);
     try
@@ -2488,14 +2499,15 @@ begin
       for I := 0 to AArguments.Length - 1 do
         CombinedArgs.Add(AArguments.GetElement(I));
       Exit(InvokeConstructableWithReceiver(BoundFunction.OriginalFunction,
-        CombinedArgs, AReceiver));
+        CombinedArgs, AReceiver, EffectiveNewTarget));
     finally
       CombinedArgs.Free;
     end;
   end;
 
   if AConstructor is TGocciaProxyValue then
-    SuperResult := TGocciaProxyValue(AConstructor).ConstructTrap(AArguments)
+    SuperResult := TGocciaProxyValue(AConstructor).ConstructTrap(
+      AArguments, EffectiveNewTarget)
   else if AConstructor is TGocciaNativeFunctionValue then
   begin
     if TGocciaNativeFunctionValue(AConstructor).NotConstructable then
@@ -2504,8 +2516,8 @@ begin
           [TGocciaNativeFunctionValue(AConstructor).Name]),
         Format('''%s'' is not a constructor',
           [TGocciaNativeFunctionValue(AConstructor).Name]));
-    SuperResult := TGocciaNativeFunctionValue(AConstructor).Call(
-      AArguments, TGocciaHoleValue.HoleValue);
+    SuperResult := TGocciaNativeFunctionValue(AConstructor).Construct(
+      AArguments, EffectiveNewTarget);
   end
   else if AConstructor is TGocciaClassValue then
   begin
@@ -2514,6 +2526,7 @@ begin
        Assigned(TGocciaVMClassValue(ClassConstructor).FConstructorValue) then
     begin
       VMClassConstructor := TGocciaVMClassValue(ClassConstructor);
+      VMClassConstructor.FVM.FPendingNewTarget := EffectiveNewTarget;
       VMClassConstructor.FVM.RunClassInitializers(ClassConstructor, AReceiver);
       SuperResult := VMClassConstructor.FVM.InvokeFunctionValue(
         VMClassConstructor.FConstructorValue, AArguments, AReceiver);
@@ -2537,7 +2550,7 @@ begin
       // final `this` (which the body may have replaced via an explicit return)
       // so we can promote it as the receiver when the body returned a primitive.
       SuperResult := ClassConstructor.ConstructorMethod.CallWithThisValue(
-        AArguments, AReceiver, ConstructorThisValue);
+        AArguments, AReceiver, ConstructorThisValue, EffectiveNewTarget);
       ValidateClassConstructorReturn(ClassConstructor, SuperResult);
       if not (SuperResult is TGocciaObjectValue) and
          (ConstructorThisValue is TGocciaObjectValue) then
@@ -2852,12 +2865,9 @@ begin
      (not (FSuperClass is TGocciaClassValue)) and
      FSuperClass.IsConstructable then
   begin
-    if (AThisValue is TGocciaObjectValue) and
-       not (AThisValue is TGocciaInstanceValue) then
-      Exit(AThisValue);
-
-    Exit(InvokeConstructableWithReceiver(FSuperClass, AArguments,
-      AThisValue));
+    SuperResult := InvokeConstructableWithReceiver(FSuperClass, AArguments,
+      AThisValue, FNewTarget);
+    Exit(SuperResult);
   end;
 
   if not (FSuperClass is TGocciaClassValue) then
@@ -2870,6 +2880,7 @@ begin
   if (SuperClass is TGocciaVMClassValue) and
      Assigned(TGocciaVMClassValue(SuperClass).FConstructorValue) then
   begin
+    TGocciaVMClassValue(SuperClass).FVM.FPendingNewTarget := FNewTarget;
     TGocciaVMClassValue(SuperClass).FVM.RunClassInitializers(
       SuperClass, AThisValue);
     SuperResult := TGocciaVMClassValue(SuperClass).FVM.InvokeFunctionValue(
@@ -2906,7 +2917,7 @@ begin
       TGocciaVMClassValue(SuperClass).FVM.RunClassInitializers(
         SuperClass, AThisValue);
     SuperResult := SuperClass.ConstructorMethod.CallWithThisValue(
-      AArguments, AThisValue, ConstructorThisValue);
+      AArguments, AThisValue, ConstructorThisValue, FNewTarget);
     if SuperResult is TGocciaObjectValue then
     begin
       if (SuperResult <> AThisValue) and
@@ -3666,6 +3677,8 @@ begin
   inherited;
   if Assigned(FSuperClass) then
     FSuperClass.MarkReferences;
+  if Assigned(FNewTarget) then
+    FNewTarget.MarkReferences;
 end;
 
 procedure TGocciaBytecodeFunctionValue.MarkReferences;
@@ -6170,7 +6183,8 @@ begin
   begin
     SuperObject := TGocciaObjectValue(ASuperValue);
     if AUseSuperConstructor and (AName = PROP_CONSTRUCTOR) then
-      Exit(TGocciaVMSuperConstructorValue.Create(SuperObject));
+      Exit(TGocciaVMSuperConstructorValue.Create(SuperObject,
+        FCurrentNewTarget));
 
     if AThisValue is TGocciaClassValue then
       Exit(SuperObject.GetPropertyWithContext(AName, AThisValue));
@@ -6197,7 +6211,8 @@ begin
 
   SuperClass := TGocciaClassValue(ASuperValue);
   if AUseSuperConstructor and (AName = PROP_CONSTRUCTOR) then
-    Exit(TGocciaVMSuperConstructorValue.Create(SuperClass));
+    Exit(TGocciaVMSuperConstructorValue.Create(SuperClass,
+      FCurrentNewTarget));
 
   if AThisValue is TGocciaClassValue then
     Exit(SuperClass.GetPropertyWithContext(AName, AThisValue));

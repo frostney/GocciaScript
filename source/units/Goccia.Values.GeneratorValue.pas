@@ -9,7 +9,7 @@ uses
 
   Goccia.Arguments.Collection,
   Goccia.AST.Node,
-  Goccia.Runtime.GeneratorContinuation,
+  Goccia.Generator.Continuation,
   Goccia.Scope,
   Goccia.Values.FunctionValue,
   Goccia.Values.IteratorValue,

@@ -29,6 +29,27 @@ describe("Proxy construct trap", () => {
     expect(receivedNewTarget).toBe(proxy);
   });
 
+  test("super() forwards the derived class as newTarget", () => {
+    class Target {}
+    let receivedNewTarget;
+    const proxy = new Proxy(Target, {
+      construct: (target, args, newTarget) => {
+        receivedNewTarget = newTarget;
+        return Object.create(newTarget.prototype);
+      },
+    });
+
+    class Derived extends proxy {
+      constructor() {
+        super();
+      }
+    }
+
+    const result = new Derived();
+    expect(receivedNewTarget).toBe(Derived);
+    expect(result instanceof Derived).toBe(true);
+  });
+
   test("throws TypeError when trap returns non-object", () => {
     class Target {}
     const proxy = new Proxy(Target, {

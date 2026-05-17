@@ -125,6 +125,21 @@ test("RegExp canonicalizes new flags in correct order", () => {
   expect(regex.flags).toBe("dgimsvy");
 });
 
+test("RegExp subclass constructor honors super arguments", () => {
+  class ChildRegExp extends RegExp {
+    constructor(pattern, flags) {
+      super("x", flags);
+    }
+  }
+
+  const regex = new ChildRegExp(",", "y");
+
+  expect(regex.source).toBe("x");
+  expect(regex.flags).toBe("y");
+  expect(regex instanceof ChildRegExp).toBe(true);
+  expect("a,bxc".split(regex)).toEqual(["a,b", "c"]);
+});
+
 // --- Syntax validation ---
 
 test("dangling quantifier throws SyntaxError", () => {

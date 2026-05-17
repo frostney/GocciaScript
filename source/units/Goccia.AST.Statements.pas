@@ -499,6 +499,7 @@ uses
   Goccia.Error,
   Goccia.Evaluator,
   Goccia.GarbageCollector,
+  Goccia.Generator.Continuation,
   Goccia.Modules,
   Goccia.Scope,
   Goccia.Scope.BindingMap,
@@ -958,14 +959,35 @@ end;
     Value: TGocciaValue;
     HasRealStrictInit: Boolean;
     AnnotationType, TypeHint: TGocciaLocalType;
+    Continuation: TGocciaGeneratorContinuation;
   begin
     Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
     // Function declarations are no-ops at runtime — already hoisted with their value
     if IsFunctionDeclaration then
       Exit;
-    for I := 0 to Length(Variables) - 1 do
+    Continuation := CurrentGeneratorContinuation;
+    if Assigned(Continuation) then
+      I := Continuation.GetStatementIndex(Self)
+    else
+      I := 0;
+    while I < Length(Variables) do
     begin
-      Value := EvaluateExpression(Variables[I].Initializer, AContext);
+      try
+        Value := EvaluateExpression(Variables[I].Initializer, AContext);
+      except
+        on E: EGocciaGeneratorYield do
+        begin
+          if Assigned(Continuation) then
+            Continuation.SaveStatementIndex(Self, I);
+          raise;
+        end;
+        else
+        begin
+          if Assigned(Continuation) then
+            Continuation.ClearStatementIndex(Self);
+          raise;
+        end;
+      end;
       if (Value is TGocciaFunctionValue) and (TGocciaFunctionValue(Value).Name = '') then
         TGocciaFunctionValue(Value).Name := Variables[I].Name
       else if Value is TGocciaClassValue then
@@ -1018,7 +1040,12 @@ end;
         else
           AContext.Scope.SetOwnBindingTypeHint(Variables[I].Name, TypeHint);
       end;
+      if Assigned(Continuation) then
+        Continuation.SaveStatementIndex(Self, I + 1);
+      Inc(I);
     end;
+    if Assigned(Continuation) then
+      Continuation.ClearStatementIndex(Self);
   end;
 
   function TGocciaDestructuringDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;

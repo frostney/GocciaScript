@@ -22,6 +22,7 @@ const
   PROP_TO_STRING    = 'toString';
   PROP_VALUE_OF     = 'valueOf';
   PROP_FREEZE       = 'freeze';
+  PROP_EXEC         = 'exec';
   PROP_DESCRIPTION  = 'description';
   PROP_SOURCE       = 'source';
   PROP_FLAGS        = 'flags';
