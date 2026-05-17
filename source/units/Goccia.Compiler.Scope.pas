@@ -57,6 +57,9 @@ type
     FMaxSlot: UInt8;
     FPrivatePrefix: string;
     FIsArrow: Boolean;
+    FWithBindingNames: array of string;
+    FWithBindingDepths: array of Integer;
+    FWithBindingCount: Integer;
     procedure EnsureLocalIndex;
     procedure RestoreLocalIndexBinding(const ARemovedName: string);
   public
@@ -110,8 +113,13 @@ type
       out AValue: TGocciaCompileTimeValue): Boolean;
     function HasVisibleLocal(const AName: string): Boolean;
     function ResolvePrivatePrefix: string;
+    procedure PushWithBinding(const AHiddenName: string);
+    procedure PopWithBinding;
+    function GetWithBindingName(const AIndex: Integer): string;
+    function GetWithBindingDepth(const AIndex: Integer): Integer;
     property PrivatePrefix: string read FPrivatePrefix write FPrivatePrefix;
     property IsArrow: Boolean read FIsArrow write FIsArrow;
+    property WithBindingCount: Integer read FWithBindingCount;
   end;
 
 function NextClassPrivatePrefix: string;
@@ -163,6 +171,8 @@ end;
 
 constructor TGocciaCompilerScope.Create(const AParent: TGocciaCompilerScope;
   const ADepth: Integer);
+var
+  I: Integer;
 begin
   inherited Create;
   FParent := AParent;
@@ -172,6 +182,18 @@ begin
   FDepth := ADepth;
   FNextSlot := 0;
   FMaxSlot := 0;
+  FWithBindingCount := 0;
+  if Assigned(AParent) and (AParent.FWithBindingCount > 0) then
+  begin
+    FWithBindingCount := AParent.FWithBindingCount;
+    SetLength(FWithBindingNames, FWithBindingCount);
+    SetLength(FWithBindingDepths, FWithBindingCount);
+    for I := 0 to FWithBindingCount - 1 do
+    begin
+      FWithBindingNames[I] := AParent.FWithBindingNames[I];
+      FWithBindingDepths[I] := -1;
+    end;
+  end;
 end;
 
 destructor TGocciaCompilerScope.Destroy;
@@ -501,6 +523,36 @@ begin
     S := S.FParent;
   end;
   Result := '';
+end;
+
+procedure TGocciaCompilerScope.PushWithBinding(const AHiddenName: string);
+begin
+  if FWithBindingCount >= Length(FWithBindingNames) then
+  begin
+    SetLength(FWithBindingNames, FWithBindingCount * 2 + 4);
+    SetLength(FWithBindingDepths, FWithBindingCount * 2 + 4);
+  end;
+  FWithBindingNames[FWithBindingCount] := AHiddenName;
+  FWithBindingDepths[FWithBindingCount] := FDepth;
+  Inc(FWithBindingCount);
+end;
+
+procedure TGocciaCompilerScope.PopWithBinding;
+begin
+  if FWithBindingCount > 0 then
+    Dec(FWithBindingCount);
+end;
+
+function TGocciaCompilerScope.GetWithBindingName(
+  const AIndex: Integer): string;
+begin
+  Result := FWithBindingNames[AIndex];
+end;
+
+function TGocciaCompilerScope.GetWithBindingDepth(
+  const AIndex: Integer): Integer;
+begin
+  Result := FWithBindingDepths[AIndex];
 end;
 
 threadvar

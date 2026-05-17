@@ -102,6 +102,10 @@ type
     destructor Destroy; override;
   end;
 
+function ResolveSourceTypeOption(
+  const AOption: TGocciaEnumOption<CLI.Options.TGocciaSourceType>;
+  const AFileConfig: TConfigEntryArray): Goccia.Engine.TGocciaSourceType;
+
 implementation
 
 uses
@@ -545,6 +549,10 @@ begin
   { compat-loose-equality: CLI flag > per-file config > root config > default (false) }
   AEngine.LooseEqualityEnabled := ResolveFlagOption(
     AEngineOptions.CompatLooseEquality, AFileConfig, 'compat-loose-equality');
+
+  { compat-non-strict-mode: CLI flag > per-file config > root config > default (false) }
+  AEngine.NonStrictModeEnabled := ResolveFlagOption(
+    AEngineOptions.CompatNonStrictMode, AFileConfig, 'compat-non-strict-mode');
 
   { strict-types: CLI flag > per-file config > root config > default (false) }
   AEngine.StrictTypes := ResolveFlagOption(

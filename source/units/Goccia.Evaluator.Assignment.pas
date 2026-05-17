@@ -11,12 +11,12 @@ uses
   Goccia.Values.SymbolValue;
 
 // Property assignment with error handling for non-objects
-procedure AssignProperty(const AObj: TGocciaValue; const APropertyName: string; const AValue: TGocciaValue; const AOnError: TGocciaThrowErrorCallback; const ALine, AColumn: Integer);
-procedure AssignSymbolProperty(const AObj: TGocciaValue; const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue; const AOnError: TGocciaThrowErrorCallback; const ALine, AColumn: Integer);
+procedure AssignProperty(const AObj: TGocciaValue; const APropertyName: string; const AValue: TGocciaValue; const AOnError: TGocciaThrowErrorCallback; const ALine, AColumn: Integer; const ANonStrictMode: Boolean = False);
+procedure AssignSymbolProperty(const AObj: TGocciaValue; const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue; const AOnError: TGocciaThrowErrorCallback; const ALine, AColumn: Integer; const ANonStrictMode: Boolean = False);
 
 // Compound assignment operations
-procedure PerformPropertyCompoundAssignment(const AObj: TGocciaValue; const APropertyName: string; const AValue: TGocciaValue; const AOperator: TGocciaTokenType; const AOnError: TGocciaThrowErrorCallback; const ALine, AColumn: Integer);
-procedure PerformSymbolPropertyCompoundAssignment(const AObj: TGocciaValue; const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue; const AOperator: TGocciaTokenType; const AOnError: TGocciaThrowErrorCallback; const ALine, AColumn: Integer);
+function PerformPropertyCompoundAssignment(const AObj: TGocciaValue; const APropertyName: string; const AValue: TGocciaValue; const AOperator: TGocciaTokenType; const AOnError: TGocciaThrowErrorCallback; const ALine, AColumn: Integer; const ANonStrictMode: Boolean = False): TGocciaValue;
+function PerformSymbolPropertyCompoundAssignment(const AObj: TGocciaValue; const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue; const AOperator: TGocciaTokenType; const AOnError: TGocciaThrowErrorCallback; const ALine, AColumn: Integer; const ANonStrictMode: Boolean = False): TGocciaValue;
 
 // Increment/Decrement operations
 function PerformIncrement(const AOldValue: TGocciaValue; const AIsIncrement: Boolean): TGocciaValue;
@@ -64,14 +64,26 @@ begin
   Result := nil;
 end;
 
-procedure AssignProperty(const AObj: TGocciaValue; const APropertyName: string; const AValue: TGocciaValue; const AOnError: TGocciaThrowErrorCallback; const ALine, AColumn: Integer);
+procedure AssignProperty(const AObj: TGocciaValue; const APropertyName: string; const AValue: TGocciaValue; const AOnError: TGocciaThrowErrorCallback; const ALine, AColumn: Integer; const ANonStrictMode: Boolean = False);
 var
   BoxedValue: TGocciaObjectValue;
 begin
   EnsureAssignableReceiver(AObj, APropertyName);
-  if (AObj is TGocciaObjectValue) or (AObj is TGocciaClassValue) then
+  if AObj is TGocciaClassValue then
   begin
-    AObj.SetProperty(APropertyName, AValue);
+    if ANonStrictMode then
+      TGocciaClassValue(AObj).AssignPropertyWithReceiver(APropertyName, AValue, AObj)
+    else
+      TGocciaClassValue(AObj).SetProperty(APropertyName, AValue);
+    Exit;
+  end;
+
+  if AObj is TGocciaObjectValue then
+  begin
+    if ANonStrictMode then
+      TGocciaObjectValue(AObj).AssignPropertyWithReceiver(APropertyName, AValue, AObj)
+    else
+      AObj.SetProperty(APropertyName, AValue);
     Exit;
   end;
 
@@ -81,8 +93,12 @@ begin
     BoxedValue := TGocciaObjectValue(TGocciaSymbolValue.SharedPrototype);
     if not BoxedValue.AssignPropertyWithReceiver(APropertyName, AValue,
       AObj) then
+    begin
+      if ANonStrictMode then
+        Exit;
       ThrowTypeError(SErrorCannotSetPropertyOnNonObject,
         SSuggestCheckNullBeforeAccess);
+    end;
     Exit;
   end;
 
@@ -91,8 +107,12 @@ begin
   begin
     if not BoxedValue.AssignPropertyWithReceiver(APropertyName, AValue,
       AObj) then
+    begin
+      if ANonStrictMode then
+        Exit;
       ThrowTypeError(SErrorCannotSetPropertyOnNonObject,
         SSuggestCheckNullBeforeAccess);
+    end;
     Exit;
   end;
 
@@ -105,14 +125,18 @@ begin
       SSuggestCheckNullBeforeAccess);
 end;
 
-procedure AssignSymbolProperty(const AObj: TGocciaValue; const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue; const AOnError: TGocciaThrowErrorCallback; const ALine, AColumn: Integer);
+procedure AssignSymbolProperty(const AObj: TGocciaValue; const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue; const AOnError: TGocciaThrowErrorCallback; const ALine, AColumn: Integer; const ANonStrictMode: Boolean = False);
 var
   BoxedValue: TGocciaObjectValue;
 begin
   EnsureAssignableReceiver(AObj, ASymbol.ToDisplayString.Value);
   if AObj is TGocciaClassValue then
   begin
-    TGocciaClassValue(AObj).AssignSymbolProperty(ASymbol, AValue);
+    if ANonStrictMode then
+      TGocciaClassValue(AObj).AssignSymbolPropertyWithReceiver(ASymbol,
+        AValue, AObj)
+    else
+      TGocciaClassValue(AObj).AssignSymbolProperty(ASymbol, AValue);
     Exit;
   end;
 
@@ -120,8 +144,12 @@ begin
   begin
     if not TGocciaObjectValue(AObj).AssignSymbolPropertyWithReceiver(ASymbol,
       AValue, AObj) then
+    begin
+      if ANonStrictMode then
+        Exit;
       ThrowTypeError(SErrorCannotSetPropertyOnNonObject,
         SSuggestCheckNullBeforeAccess);
+    end;
     Exit;
   end;
 
@@ -131,8 +159,12 @@ begin
     BoxedValue := TGocciaObjectValue(TGocciaSymbolValue.SharedPrototype);
     if not BoxedValue.AssignSymbolPropertyWithReceiver(ASymbol, AValue,
       AObj) then
+    begin
+      if ANonStrictMode then
+        Exit;
       ThrowTypeError(SErrorCannotSetPropertyOnNonObject,
         SSuggestCheckNullBeforeAccess);
+    end;
     Exit;
   end;
 
@@ -141,8 +173,12 @@ begin
   begin
     if not BoxedValue.AssignSymbolPropertyWithReceiver(ASymbol, AValue,
       AObj) then
+    begin
+      if ANonStrictMode then
+        Exit;
       ThrowTypeError(SErrorCannotSetPropertyOnNonObject,
         SSuggestCheckNullBeforeAccess);
+    end;
     Exit;
   end;
 
@@ -151,11 +187,12 @@ begin
       SSuggestCheckNullBeforeAccess);
 end;
 
-procedure PerformPropertyCompoundAssignment(const AObj: TGocciaValue; const APropertyName: string; const AValue: TGocciaValue; const AOperator: TGocciaTokenType; const AOnError: TGocciaThrowErrorCallback; const ALine, AColumn: Integer);
+function PerformPropertyCompoundAssignment(const AObj: TGocciaValue; const APropertyName: string; const AValue: TGocciaValue; const AOperator: TGocciaTokenType; const AOnError: TGocciaThrowErrorCallback; const ALine, AColumn: Integer; const ANonStrictMode: Boolean = False): TGocciaValue;
 var
   CurrentValue, NewValue: TGocciaValue;
   BoxedValue: TGocciaObjectValue;
 begin
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   EnsureAssignableReceiver(AObj, APropertyName);
   CurrentValue := AObj.GetProperty(APropertyName);
   if CurrentValue = nil then
@@ -185,14 +222,17 @@ begin
 
   NewValue := Goccia.Arithmetic.CompoundOperations(
     CurrentValue, AValue, AOperator);
-  AssignProperty(AObj, APropertyName, NewValue, AOnError, ALine, AColumn);
+  AssignProperty(AObj, APropertyName, NewValue, AOnError, ALine, AColumn,
+    ANonStrictMode);
+  Result := NewValue;
 end;
 
-procedure PerformSymbolPropertyCompoundAssignment(const AObj: TGocciaValue; const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue; const AOperator: TGocciaTokenType; const AOnError: TGocciaThrowErrorCallback; const ALine, AColumn: Integer);
+function PerformSymbolPropertyCompoundAssignment(const AObj: TGocciaValue; const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue; const AOperator: TGocciaTokenType; const AOnError: TGocciaThrowErrorCallback; const ALine, AColumn: Integer; const ANonStrictMode: Boolean = False): TGocciaValue;
 var
   CurrentValue, NewValue: TGocciaValue;
   BoxedValue: TGocciaObjectValue;
 begin
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   EnsureAssignableReceiver(AObj, ASymbol.ToDisplayString.Value);
   if AObj is TGocciaClassValue then
     CurrentValue := TGocciaClassValue(AObj).GetSymbolProperty(ASymbol)
@@ -218,7 +258,9 @@ begin
     CurrentValue := TGocciaUndefinedLiteralValue.UndefinedValue;
   NewValue := Goccia.Arithmetic.CompoundOperations(
     CurrentValue, AValue, AOperator);
-  AssignSymbolProperty(AObj, ASymbol, NewValue, AOnError, ALine, AColumn);
+  AssignSymbolProperty(AObj, ASymbol, NewValue, AOnError, ALine, AColumn,
+    ANonStrictMode);
+  Result := NewValue;
 end;
 
 function PerformIncrement(const AOldValue: TGocciaValue; const AIsIncrement: Boolean): TGocciaValue;

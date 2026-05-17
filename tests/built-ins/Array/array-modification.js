@@ -139,3 +139,15 @@ test("setting length to invalid value throws RangeError without walking prototyp
   expect(traps.length).toBe(0);
   expect(array.length).toBe(3);
 });
+
+test("setting length below max array index does not range check in bytecode", () => {
+  const array = [0, 1, 2];
+
+  array[4294967294] = 4294967294;
+  array.length = 2;
+
+  expect(array[0]).toBe(0);
+  expect(array[1]).toBe(1);
+  expect(array[2]).toBeUndefined();
+  expect(array[4294967294]).toBeUndefined();
+});

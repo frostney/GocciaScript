@@ -488,6 +488,67 @@ begin
   else Result := 0;
 end;
 
+// ES2026 §10.4.2.4 ArraySetLength(A, Desc): delete own array-index
+// properties in descending numeric order.  Dense elements live in FElements,
+// while sparse/accessor descriptors live on the object descriptor map.
+function DeleteArrayIndexesAtOrAbove(const AArray: TGocciaArrayValue;
+  const ANewLength: Int64; out AFailedIndex: Int64): Boolean;
+var
+  SparseIndices: TList<Int64>;
+  Keys: TArray<string>;
+  Key: string;
+  Index, DenseIndex, SparseIndex, CandidateIndex: Int64;
+  SparsePos: Integer;
+begin
+  Result := True;
+  AFailedIndex := -1;
+  Keys := AArray.GetOwnPropertyKeys;
+  SparseIndices := TList<Int64>.Create;
+  try
+    for Key in Keys do
+    begin
+      if not TryParseArrayIndex(Key, Index) then
+        Continue;
+      if (Index >= ANewLength) and (Index < MAX_ARRAY_LENGTH) then
+        SparseIndices.Add(Index);
+    end;
+    SparseIndices.Sort(TComparer<Int64>.Construct(CompareInt64));
+
+    DenseIndex := AArray.FElements.Count - 1;
+    SparsePos := SparseIndices.Count - 1;
+    while (DenseIndex >= ANewLength) or (SparsePos >= 0) do
+    begin
+      if SparsePos >= 0 then
+        SparseIndex := SparseIndices[SparsePos]
+      else
+        SparseIndex := -1;
+
+      if (SparseIndex > DenseIndex) or (DenseIndex < ANewLength) then
+        CandidateIndex := SparseIndex
+      else
+        CandidateIndex := DenseIndex;
+
+      if (SparsePos >= 0) and (SparseIndex = CandidateIndex) then
+      begin
+        if not AArray.DeleteProperty(IntToStr(CandidateIndex)) then
+        begin
+          AFailedIndex := CandidateIndex;
+          Exit(False);
+        end;
+        Dec(SparsePos);
+      end;
+
+      if (DenseIndex = CandidateIndex) and (DenseIndex >= ANewLength) then
+      begin
+        AArray.FElements.Delete(Integer(DenseIndex));
+        Dec(DenseIndex);
+      end;
+    end;
+  finally
+    SparseIndices.Free;
+  end;
+end;
+
 function CollectSparseIndicesInRange(const AObj: TGocciaObjectValue;
   const AStartInclusive, AEndExclusive: Int64): TArray<Int64>;
 var
@@ -2818,8 +2879,8 @@ end;
 // outer caller would free again from its `except` clause.
 procedure TGocciaArrayValue.DefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor);
 var
-  Index, NewLen, I: Integer;
-  TruncLen: Int64;
+  Index, NewLen: Integer;
+  TruncLen, FailedIndex: Int64;
   RawLen: Double;
 begin
   if AName = PROP_LENGTH then
@@ -2833,9 +2894,14 @@ begin
          (RawLen > MAX_ARRAY_LENGTH_F) or (TruncLen > MaxInt) then
         ThrowRangeError(SErrorInvalidArrayLength, SSuggestArrayLengthRange);
       NewLen := Integer(TruncLen);
-      if NewLen < FElements.Count then
-        for I := FElements.Count - 1 downto NewLen do
-          FElements.Delete(I);
+      if (NewLen < FElements.Count) and
+         (not DeleteArrayIndexesAtOrAbove(Self, NewLen, FailedIndex)) then
+      begin
+        while (FailedIndex < MaxInt) and (FElements.Count <= FailedIndex) do
+          FElements.Add(TGocciaHoleValue.HoleValue);
+        ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [AName]),
+          SSuggestCannotDeleteNonConfigurable);
+      end;
       while FElements.Count < NewLen do
         FElements.Add(TGocciaHoleValue.HoleValue);
     end;
@@ -2873,8 +2939,8 @@ end;
 // ES2026 §10.4.2.1 ArrayDefineOwnProperty — boolean variant
 function TGocciaArrayValue.TryDefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor): Boolean;
 var
-  Index, NewLen, I: Integer;
-  TruncLen: Int64;
+  Index, NewLen: Integer;
+  TruncLen, FailedIndex: Int64;
   RawLen: Double;
 begin
   if AName = PROP_LENGTH then
@@ -2898,10 +2964,14 @@ begin
         ThrowRangeError(SErrorInvalidArrayLength, SSuggestArrayLengthRange);
       end;
       NewLen := Integer(TruncLen);
-      // Truncate elements
-      if NewLen < FElements.Count then
-        for I := FElements.Count - 1 downto NewLen do
-          FElements.Delete(I);
+      if (NewLen < FElements.Count) and
+         (not DeleteArrayIndexesAtOrAbove(Self, NewLen, FailedIndex)) then
+      begin
+        while (FailedIndex < MaxInt) and (FElements.Count <= FailedIndex) do
+          FElements.Add(TGocciaHoleValue.HoleValue);
+        ADescriptor.Free;
+        Exit(False);
+      end;
       // Extend elements
       while FElements.Count < NewLen do
         FElements.Add(TGocciaHoleValue.HoleValue);

@@ -36,6 +36,7 @@ type
     FFunctionEnabled: Boolean;
     FTraditionalForLoopsEnabled: Boolean;
     FLooseEqualityEnabled: Boolean;
+    FNonStrictModeEnabled: Boolean;
     FStrictTypesEnabled: Boolean;
     FModuleLoader: TGocciaModuleLoader;
     FOwnsModuleLoader: Boolean;
@@ -52,6 +53,7 @@ type
     procedure SetFunctionEnabled(const AValue: Boolean);
     procedure SetTraditionalForLoopsEnabled(const AValue: Boolean);
     procedure SetLooseEqualityEnabled(const AValue: Boolean);
+    procedure SetNonStrictModeEnabled(const AValue: Boolean);
     procedure SetStrictTypesEnabled(const AValue: Boolean);
     procedure SetResolver(const AValue: TGocciaModuleResolver);
   public
@@ -70,6 +72,8 @@ type
       read FTraditionalForLoopsEnabled write SetTraditionalForLoopsEnabled;
     property LooseEqualityEnabled: Boolean
       read FLooseEqualityEnabled write SetLooseEqualityEnabled;
+    property NonStrictModeEnabled: Boolean
+      read FNonStrictModeEnabled write SetNonStrictModeEnabled;
     property StrictTypesEnabled: Boolean read FStrictTypesEnabled
       write SetStrictTypesEnabled;
     property GlobalScope: TGocciaGlobalScope read FGlobalScope;
@@ -84,6 +88,7 @@ type
 implementation
 
 uses
+  Goccia.AST.Statements,
   Goccia.Coverage,
   Goccia.GarbageCollector;
 
@@ -140,6 +145,7 @@ begin
   Result.CoverageEnabled := Assigned(TGocciaCoverageTracker.Instance)
     and TGocciaCoverageTracker.Instance.Enabled;
   Result.StrictTypes := FStrictTypesEnabled;
+  Result.NonStrictMode := FNonStrictModeEnabled;
 end;
 
 function TGocciaInterpreter.Execute(const AProgram: TGocciaProgram): TGocciaValue;
@@ -150,6 +156,8 @@ var
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   Context := CreateEvaluationContext;
+  Context.NonStrictMode := Context.NonStrictMode and
+    not HasUseStrictDirective(AProgram);
 
   if FVarEnabled then
     HoistVarDeclarations(AProgram.Body, FGlobalScope);
@@ -218,6 +226,14 @@ procedure TGocciaInterpreter.SetLooseEqualityEnabled(const AValue: Boolean);
 begin
   FLooseEqualityEnabled := AValue;
   FModuleLoader.LooseEqualityEnabled := AValue;
+end;
+
+procedure TGocciaInterpreter.SetNonStrictModeEnabled(const AValue: Boolean);
+begin
+  FNonStrictModeEnabled := AValue;
+  if Assigned(FGlobalScope) then
+    FGlobalScope.NonStrictMode := AValue;
+  FModuleLoader.NonStrictModeEnabled := AValue;
 end;
 
 procedure TGocciaInterpreter.SetStrictTypesEnabled(const AValue: Boolean);

@@ -17,6 +17,7 @@ type
     CurrentFilePath: string;
     CoverageEnabled: Boolean;
     StrictTypes: Boolean;
+    NonStrictMode: Boolean;
     DisposalTracker: TObject; // TGocciaDisposalTracker or nil
   end;
 

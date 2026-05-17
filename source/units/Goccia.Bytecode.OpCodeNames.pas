@@ -106,8 +106,13 @@ begin
     OP_SUPER_GET:                      Result := 'OP_SUPER_GET';
     OP_LOOSE_EQ:                       Result := 'OP_LOOSE_EQ';
     OP_LOOSE_NEQ:                      Result := 'OP_LOOSE_NEQ';
+    OP_DELETE_PROP_CONST_LOOSE:        Result := 'OP_DELETE_PROP_CONST_LOOSE';
+    OP_DEL_INDEX_LOOSE:                Result := 'OP_DEL_INDEX_LOOSE';
+    OP_SET_PROP_CONST_LOOSE:           Result := 'OP_SET_PROP_CONST_LOOSE';
     OP_COLLECTION_OP:                  Result := 'OP_COLLECTION_OP';
+    OP_SET_INDEX_LOOSE:                Result := 'OP_SET_INDEX_LOOSE';
     OP_VALIDATE_VALUE:                 Result := 'OP_VALIDATE_VALUE';
+    OP_SET_GLOBAL_LOOSE:               Result := 'OP_SET_GLOBAL_LOOSE';
     OP_THROW_TYPE_ERROR_CONST_LONG:    Result := 'OP_THROW_TYPE_ERROR_CONST_LONG';
     OP_THROW_TYPE_ERROR_CONST:         Result := 'OP_THROW_TYPE_ERROR_CONST';
     OP_DEFINE_GLOBAL_CONST:            Result := 'OP_DEFINE_GLOBAL_CONST';
@@ -133,6 +138,7 @@ begin
     OP_GET_INDEX:                      Result := 'OP_GET_INDEX';
     OP_SET_INDEX:                      Result := 'OP_SET_INDEX';
     OP_DEL_INDEX:                      Result := 'OP_DEL_INDEX';
+    OP_DELETE_GLOBAL:                  Result := 'OP_DELETE_GLOBAL';
     OP_ADD:                            Result := 'OP_ADD';
     OP_SUB:                            Result := 'OP_SUB';
     OP_MUL:                            Result := 'OP_MUL';
@@ -157,6 +163,9 @@ begin
     OP_MATCH_HAS_PROPERTY:             Result := 'OP_MATCH_HAS_PROPERTY';
     OP_MATCH_EXTRACTOR:                Result := 'OP_MATCH_EXTRACTOR';
     OP_NEW_TARGET:                     Result := 'OP_NEW_TARGET';
+    OP_CREATE_ARGUMENTS:               Result := 'OP_CREATE_ARGUMENTS';
+    OP_TO_OBJECT:                      Result := 'OP_TO_OBJECT';
+    OP_HAS_WITH_BINDING:               Result := 'OP_HAS_WITH_BINDING';
     OP_INC:                            Result := 'OP_INC';
     OP_DEC:                            Result := 'OP_DEC';
     OP_TO_NUMERIC:                     Result := 'OP_TO_NUMERIC';

@@ -89,6 +89,7 @@ Current instruction families:
 - object and array operations
 - class construction and member definition
 - calls, construction, iteration, globals, and string coercion
+- opt-in compatibility scope helpers: `arguments` object creation and `with` object binding probes
 - semantic-only imports/exports, dynamic import, import.meta, await, and yield
 
 Some opcode families intentionally use flags or mode operands instead of one opcode per syntax form. For example:
@@ -191,6 +192,16 @@ Language features are compiled into compact bytecode instruction sequences rathe
 - **Increment/decrement (`++`/`--`)** — The compiler emits `OP_TO_NUMERIC` (which preserves BigInt, converts others to Number) followed by `OP_INC`/`OP_DEC` (type-aware unit addition: `+1n` for BigInt, `+1` for Number). This replaces the prior `OP_TO_NUMBER` + `OP_LOAD_INT 1` + `OP_ADD/SUB` sequence and correctly implements ES2026 §13.4.4.1 ToNumeric semantics.
 
 This keeps the emitted bytecode compact and makes opcode additions deliberate instead of reactive.
+
+### Compatibility Scope Helpers
+
+Compatibility features that alter identifier lookup still compile to explicit VM state instead of falling back to interpreter behavior.
+
+- **`arguments` object** — With `--compat-non-strict-mode` enabled for Script source, function templates snapshot the current call arguments in the frame. `OP_CREATE_ARGUMENTS` materializes an unmapped arguments object into the declared local slot before parameter defaults and body execution, so default initializers can observe `arguments.length` and generators see the original call list after suspension/resume. Module source forces strict compilation, so module function templates do not create compatibility arguments objects.
+- **Non-strict `this` binding** — Function templates serialize their strict-this mode. With `--compat-non-strict-mode` enabled for Script source, ordinary function templates clear it so VM call paths coerce nullish `this` to `globalThis`; arrows and class methods keep their existing lexical or strict receiver behavior. Module source ignores the compatibility flag for this decision.
+- **Non-strict assignment** — Failed object/global writes throw by default. In Script-source non-strict compatibility mode, the compiler emits `OP_SET_PROP_CONST_LOOSE`, `OP_SET_INDEX_LOOSE`, and `OP_SET_GLOBAL_LOOSE` for ordinary writes so failed `[[Set]]` results are ignored while null/undefined property access and throwing setters still raise errors.
+- **`with` statement** — With `--compat-non-strict-mode` enabled for Script source, the compiler lowers `with (expr) body` to `OP_TO_OBJECT`, stores the object in a hidden local, and records that hidden binding in the compiler scope. Identifier reads, writes, updates, and identifier calls inside the dynamic extent emit `OP_HAS_WITH_BINDING` probes from innermost to outermost hidden object before falling back to normal local/upvalue/global resolution. Writes that resolve to a with object use the loose set opcodes in non-strict mode. Nested functions inherit the hidden binding as an upvalue when captured, preserving closures created inside `with`.
+- **Non-strict `delete`** — With `--compat-non-strict-mode` enabled for Script source, member deletes emit `OP_DELETE_PROP_CONST_LOOSE` or `OP_DEL_INDEX_LOOSE`, which preserve strict null/undefined errors but return `false` for non-configurable properties. Identifier deletes compile to local/upvalue false results, `OP_DELETE_GLOBAL` for global object property semantics, or `with` binding probes as needed.
 
 ### Compiler Optimizer
 

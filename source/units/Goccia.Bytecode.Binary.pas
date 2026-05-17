@@ -138,6 +138,7 @@ begin
   WriteBoolean(AProto.IsGenerator);
   WriteBoolean(AProto.IsAsync);
   WriteBoolean(AProto.HasOwnPrototype);
+  WriteBoolean(AProto.StrictThis);
 
   WriteUInt32(UInt32(AProto.CodeCount));
   for I := 0 to AProto.CodeCount - 1 do
@@ -351,6 +352,7 @@ begin
   Result.IsGenerator := ReadBoolean;
   Result.IsAsync := ReadBoolean;
   Result.HasOwnPrototype := ReadBoolean;
+  Result.StrictThis := ReadBoolean;
 
   CodeCount := ReadUInt32;
   for I := 0 to CodeCount - 1 do

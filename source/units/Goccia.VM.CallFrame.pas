@@ -6,7 +6,8 @@ interface
 
 uses
   Goccia.Bytecode.Chunk,
-  Goccia.VM.Closure;
+  Goccia.VM.Closure,
+  Goccia.VM.Registers;
 
 type
   TGocciaVMCallFrame = record
@@ -17,6 +18,7 @@ type
     RegisterCount: Integer;
     LocalCellBase: Integer;
     LocalCellCount: Integer;
+    Arguments: TGocciaRegisterArray;
     ArgCount: Integer;
     Closure: TGocciaBytecodeClosure;
     HandlerCount: Integer;

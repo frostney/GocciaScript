@@ -170,12 +170,12 @@ function toStringArray(value: unknown): string[] {
 // Harness loading
 // ---------------------------------------------------------------------------
 
-// Stock test262 harness JS depends on language features GocciaScript
-// intentionally excludes (`arguments`, `with`, traditional
-// `for (var i = 0; ...)` and `while` loops — Goccia's parser warns and
-// then silently drops these constructs).  Loading affected stock files
-// produces silently-broken helpers — `propertyHelper.verifyProperty` etc.
-// throw `ReferenceError: arguments is not defined`, `decimalToHexString`
+// Stock test262 harness JS depends on language features GocciaScript either
+// gates behind compatibility flags (`arguments`, `with`, traditional
+// `for (var i = 0; ...)`) or intentionally excludes (`while` loops, whose
+// bodies the parser warns and drops).  Loading affected stock files without
+// the right handling produces silently-broken helpers — `propertyHelper`
+// verification never reaches the actual assertion, `decimalToHexString`
 // returns wrong values because its loop body never runs, and so on.
 // Tests that include those files then fail with harness-environment
 // errors, not engine surface differences.
@@ -196,8 +196,8 @@ const BUNDLED_INCLUDES: Record<string, string> = {
   // the methods they expect.  No stock equivalent — this is host-provided.
   "$262.js": "$262.js",
   // Subsumes stock sta.js + assert.js + compareArray.js.  Stock assert.js
-  // uses `arguments` in `assert.compareArray` and a `for (var i = 0; ...)`
-  // loop body that Goccia's parser drops.
+  // uses `arguments` in `assert.compareArray` and traditional loop shapes
+  // that still differ from the bundled helper style.
   "assert.js": "assert.js",
   "sta.js": "assert.js",
   "compareArray.js": "assert.js",
@@ -312,7 +312,7 @@ type WrapperKind =
 
 interface BuildOptions {
   kind: WrapperKind;
-  errorType?: string;
+  strictMode: boolean;
 }
 
 /**
@@ -322,16 +322,16 @@ interface BuildOptions {
  * Goccia-specific addition to the stock convention. Negative-parse is
  * body-only.
  *
- * No "use strict" injection: the parser ignores the directive anyway, and
- * GocciaScript's curated semantics already enforce most strict-mode
- * behaviors statically. See docs/test262.md "Strict mode" section.
+ * `onlyStrict` tests get a directive prefix so they exercise strict runtime
+ * semantics while still receiving compatibility-gated parser support.
  */
 function buildTestSource(
   harnessSource: string,
   body: string,
   opts: BuildOptions,
 ): string {
-  if (opts.kind === "negative_parse") return body;
+  const strictPrefix = opts.strictMode ? '"use strict";\n' : "";
+  if (opts.kind === "negative_parse") return `${strictPrefix}${body}`;
   if (opts.kind === "negative_runtime") {
     // For the error-class identification we prefer `e.constructor.name`
     // (the spec-canonical path) but fall back to `e.name` because
@@ -339,7 +339,7 @@ function buildTestSource(
     // `prototype.constructor` (#519) — caught Errors have
     // `e.constructor === undefined` despite `e.name` being set
     // correctly to "TypeError" / "ReferenceError" / etc.
-    return `${harnessSource}
+    return `${strictPrefix}${harnessSource}
 try {
 ${body}
   print("Test262:NegativeTestNoError");
@@ -368,7 +368,7 @@ ${body}
     // semicolon — relying on ASI), and the leading `(` of our IIFE would
     // otherwise be parsed as a call on the body's last expression
     // (`then(...)(async () => ...)`), producing "object is not a function".
-    return `${harnessSource}
+    return `${strictPrefix}${harnessSource}
 ${body};
 (async () => {
   try {
@@ -385,7 +385,7 @@ ${body};
 `;
   }
   // positive_sync
-  return `${harnessSource}\n${body}`;
+  return `${strictPrefix}${harnessSource}\n${body}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -666,7 +666,10 @@ interface PerTestRecord {
 // the corpus.  --compat-var, --compat-function, --compat-traditional-for-loop,
 // --compat-loose-equality, and --unsafe-function-constructor are also
 // unconditional: stock harness uses `var`, `function`, traditional `for(;;)`
-// loops, loose equality, and `Function("return this;")()`.
+// loops, loose equality, and `Function("return this;")()`.  Non-strict mode
+// compatibility is also enabled for Script-source strict tests: strict
+// directives and modules decide strict semantics, while the flag exposes
+// compatibility-gated syntax and implicit objects needed by the corpus.
 const TEST262_BARE_FLAGS: readonly string[] = [
   "--asi",
   "--compat-var",
@@ -675,6 +678,10 @@ const TEST262_BARE_FLAGS: readonly string[] = [
   "--compat-loose-equality",
   "--unsafe-function-constructor",
 ];
+
+function needsNonStrictCompat(isModule: boolean): boolean {
+  return !isModule;
+}
 
 async function runOneTest(
   test: DiscoveredTest,
@@ -694,6 +701,7 @@ async function runOneTest(
     };
   }
   const flags = parsed.meta.flags;
+  const strictMode = flags.includes("onlyStrict");
   const isAsync = flags.includes("async");
   const isRaw = flags.includes("raw");
   const isModule = flags.includes("module");
@@ -749,7 +757,7 @@ async function runOneTest(
 
   const source = buildTestSource(harnessSource, parsed.body, {
     kind,
-    errorType: negative?.type,
+    strictMode,
   });
 
   const args = [
@@ -758,6 +766,9 @@ async function runOneTest(
     `--timeout=${opts.timeoutMs}`,
     `--max-memory=${opts.maxMemoryBytes}`,
   ];
+  if (needsNonStrictCompat(isModule)) {
+    args.push("--compat-non-strict-mode");
+  }
   if (isModule) args.unshift("--source-type=module");
   args.push("-");
 

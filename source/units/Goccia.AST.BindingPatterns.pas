@@ -14,6 +14,8 @@ uses
 
 procedure CollectPatternBindingNames(const APattern: TGocciaDestructuringPattern;
   const ANames: TStrings; const AUnique: Boolean = False);
+function ParameterListBindsName(const AParameters: TGocciaParameterArray;
+  const AName: string): Boolean;
 procedure CollectVarBindingNamesFromNode(const ANode: TGocciaASTNode;
   const ANames: TStrings);
 procedure CollectVarBindingNamesFromStatements(
@@ -63,6 +65,33 @@ begin
   else if APattern is TGocciaRestDestructuringPattern then
     CollectPatternBindingNames(
       TGocciaRestDestructuringPattern(APattern).Argument, ANames, AUnique);
+end;
+
+function ParameterListBindsName(const AParameters: TGocciaParameterArray;
+  const AName: string): Boolean;
+var
+  I: Integer;
+  Names: TStringList;
+begin
+  for I := 0 to High(AParameters) do
+  begin
+    if AParameters[I].IsPattern then
+    begin
+      Names := TStringList.Create;
+      try
+        Names.CaseSensitive := True;
+        CollectPatternBindingNames(AParameters[I].Pattern, Names, True);
+        if Names.IndexOf(AName) >= 0 then
+          Exit(True);
+      finally
+        Names.Free;
+      end;
+    end
+    else if AParameters[I].Name = AName then
+      Exit(True);
+  end;
+
+  Result := False;
 end;
 
 procedure CollectVarBindingNamesFromNode(const ANode: TGocciaASTNode;

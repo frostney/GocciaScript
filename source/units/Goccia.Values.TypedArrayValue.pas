@@ -14,6 +14,7 @@ uses
   Goccia.SharedPrototype,
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ClassValue,
+  Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
   Goccia.Values.SharedArrayBufferValue;
@@ -34,8 +35,12 @@ type
     FByteOffset: Integer;
     FLength: Integer;
     FKind: TGocciaTypedArrayKind;
+    FAutoLength: Boolean;
 
     procedure InitializePrototype;
+    procedure SyncBufferData;
+    function GetLength: Integer;
+    function HasValidBackingRange(const ALength: Integer): Boolean;
 
     function ReadElement(const AIndex: Integer): Double;
     procedure WriteElement(const AIndex: Integer; const AValue: Double);
@@ -46,6 +51,13 @@ type
 
     function GetElementAsValue(const AIndex: Integer): TGocciaValue;
     procedure WriteValueToElement(const AIndex: Integer; const AValue: TGocciaValue);
+    function IsValidIntegerIndexedElement(const ANumericIndex: Double;
+      const AIsNegativeZero: Boolean; out AIndex: Integer): Boolean;
+    function OrdinarySetIntegerIndexedElementWithReceiver(const AName: string;
+      const ANumericIndex: Double; const AIsNegativeZero: Boolean;
+      const AValue: TGocciaValue; const AReceiver: TGocciaValue): Boolean;
+    procedure SetIntegerIndexedElement(const ANumericIndex: Double;
+      const AIsNegativeZero: Boolean; const AValue: TGocciaValue);
 
   public
     constructor Create(const AKind: TGocciaTypedArrayKind; const ALength: Integer); overload;
@@ -56,6 +68,8 @@ type
 
     function GetProperty(const AName: string): TGocciaValue; override;
     procedure AssignProperty(const AName: string; const AValue: TGocciaValue; const ACanCreate: Boolean = True); override;
+    function AssignPropertyWithReceiver(const AName: string; const AValue: TGocciaValue; const AReceiver: TGocciaValue): Boolean; override;
+    function GetOwnPropertyDescriptor(const AName: string): TGocciaPropertyDescriptor; override;
     function HasOwnProperty(const AName: string): Boolean; override;
     function ToStringTag: string; override;
 
@@ -73,7 +87,7 @@ type
     property BufferValue: TGocciaValue read FBufferValue;
     property BufferData: TBytes read FBufferData;
     property ByteOffset: Integer read FByteOffset;
-    property Length: Integer read FLength;
+    property Length: Integer read GetLength;
     property Kind: TGocciaTypedArrayKind read FKind;
   published
     function TypedArrayAt(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -151,9 +165,9 @@ uses
   Goccia.Values.IteratorSupport,
   Goccia.Values.IteratorValue,
   Goccia.Values.NativeFunction,
-  Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue,
-  Goccia.Values.ToObject;
+  Goccia.Values.ToObject,
+  Goccia.Values.ToPrimitive;
 
 var
   GTypedArraySharedSlot: TGocciaRealmOwnedSlotId;
@@ -212,6 +226,51 @@ begin
   end;
 end;
 
+procedure TGocciaTypedArrayValue.SyncBufferData;
+begin
+  if FBufferValue is TGocciaArrayBufferValue then
+    FBufferData := TGocciaArrayBufferValue(FBufferValue).Data
+  else if FBufferValue is TGocciaSharedArrayBufferValue then
+    FBufferData := TGocciaSharedArrayBufferValue(FBufferValue).Data;
+end;
+
+function TGocciaTypedArrayValue.GetLength: Integer;
+var
+  BPE: Integer;
+  AvailableBytes: Integer;
+begin
+  if (FBufferValue is TGocciaArrayBufferValue) and
+     TGocciaArrayBufferValue(FBufferValue).Detached then
+    Exit(0);
+
+  SyncBufferData;
+  if FAutoLength then
+  begin
+    BPE := BytesPerElement(FKind);
+    AvailableBytes := System.Length(FBufferData) - FByteOffset;
+    if AvailableBytes <= 0 then
+      Exit(0);
+    Exit(AvailableBytes div BPE);
+  end;
+
+  if not HasValidBackingRange(FLength) then
+    Exit(0);
+  Result := FLength;
+end;
+
+function TGocciaTypedArrayValue.HasValidBackingRange(const ALength: Integer): Boolean;
+var
+  RequiredBytes: Int64;
+begin
+  if (FBufferValue is TGocciaArrayBufferValue) and
+     TGocciaArrayBufferValue(FBufferValue).Detached then
+    Exit(False);
+
+  SyncBufferData;
+  RequiredBytes := Int64(FByteOffset) + Int64(ALength) * Int64(BytesPerElement(FKind));
+  Result := RequiredBytes <= System.Length(FBufferData);
+end;
+
 { Element read/write via buffer }
 
 function TGocciaTypedArrayValue.ReadElement(const AIndex: Integer): Double;
@@ -227,6 +286,7 @@ var
   F32: Single;
   F64: Double;
 begin
+  SyncBufferData;
   Offset := FByteOffset + AIndex * BytesPerElement(FKind);
   case FKind of
     takInt8:
@@ -294,6 +354,7 @@ var
   F64: Double;
   Clamped: Integer;
 begin
+  SyncBufferData;
   Offset := FByteOffset + AIndex * BytesPerElement(FKind);
   case FKind of
     takInt8:
@@ -383,6 +444,7 @@ procedure TGocciaTypedArrayValue.WriteNumberLiteral(const AIndex: Integer; const
 var
   Offset: Integer;
 begin
+  SyncBufferData;
   if ANum.IsNaN then
   begin
     if IsFloatKind(FKind) then
@@ -428,6 +490,7 @@ var
   I64: Int64;
   U64: QWord;
 begin
+  SyncBufferData;
   Offset := FByteOffset + AIndex * 8;
   case FKind of
     takBigInt64:
@@ -449,6 +512,7 @@ procedure TGocciaTypedArrayValue.WriteBigIntElement(const AIndex: Integer; const
 var
   Offset: Integer;
 begin
+  SyncBufferData;
   Offset := FByteOffset + AIndex * 8;
   Move(AValue, FBufferData[Offset], 8);
 end;
@@ -463,6 +527,67 @@ begin
     Result := TBigInteger.FromInt64(Lo)
   else
     Result := TBigInteger.FromInt64(Hi).Multiply(TBigInteger.FromInt64($100000000)).Add(TBigInteger.FromInt64(Lo));
+end;
+
+function RawBigIntForKind(const AKind: TGocciaTypedArrayKind;
+  const AValue: TGocciaBigIntValue): Int64;
+begin
+  if AKind = takBigUint64 then
+    Result := AValue.Value.AsUintN(64).ToInt64
+  else
+    Result := AValue.Value.AsIntN(64).ToInt64;
+end;
+
+function ToBigIntForTypedArray(const AValue: TGocciaValue): TGocciaBigIntValue;
+var
+  Prim: TGocciaValue;
+  StringBigInt: TBigInteger;
+begin
+  if AValue is TGocciaObjectValue then
+  begin
+    Prim := ToPrimitive(AValue, tphNumber);
+    Exit(ToBigIntForTypedArray(Prim));
+  end;
+
+  if AValue is TGocciaBigIntValue then
+    Exit(TGocciaBigIntValue(AValue));
+
+  if AValue is TGocciaBooleanLiteralValue then
+  begin
+    if TGocciaBooleanLiteralValue(AValue).Value then
+      Exit(TGocciaBigIntValue.BigIntOne)
+    else
+      Exit(TGocciaBigIntValue.BigIntZero);
+  end;
+
+  if AValue is TGocciaStringLiteralValue then
+  begin
+    if not TryStringToBigInt(TGocciaStringLiteralValue(AValue).Value, StringBigInt) then
+      ThrowSyntaxError(Format(SErrorBigIntInvalidConversion,
+        [TGocciaStringLiteralValue(AValue).Value]), SSuggestBigIntNoImplicitConversion);
+    Exit(TGocciaBigIntValue.Create(StringBigInt));
+  end;
+
+  ThrowTypeError(SErrorBigIntTypedArrayRequiresBigInt, SSuggestBigIntTypedArrayValue);
+  Result := nil;
+end;
+
+function TryCanonicalNumericIndexString(const AName: string;
+  out ANumericIndex: Double; out AIsNegativeZero: Boolean): Boolean;
+var
+  NumberValue: TGocciaNumberLiteralValue;
+begin
+  AIsNegativeZero := False;
+  if AName = '-0' then
+  begin
+    ANumericIndex := 0;
+    AIsNegativeZero := True;
+    Exit(True);
+  end;
+
+  NumberValue := TGocciaStringLiteralValue.Create(AName).ToNumberLiteral;
+  ANumericIndex := NumberValue.Value;
+  Result := NumberValue.ToStringLiteral.Value = AName;
 end;
 
 function TGocciaTypedArrayValue.GetElementAsValue(const AIndex: Integer): TGocciaValue;
@@ -484,13 +609,93 @@ end;
 procedure TGocciaTypedArrayValue.WriteValueToElement(const AIndex: Integer; const AValue: TGocciaValue);
 begin
   if IsBigIntKind(FKind) then
-  begin
-    if not (AValue is TGocciaBigIntValue) then
-      ThrowTypeError(SErrorBigIntTypedArrayRequiresBigInt, SSuggestBigIntTypedArrayValue);
-    WriteBigIntElement(AIndex, TGocciaBigIntValue(AValue).Value.ToInt64);
-  end
+    WriteBigIntElement(AIndex, RawBigIntForKind(FKind, ToBigIntForTypedArray(AValue)))
   else
     WriteNumberLiteral(AIndex, AValue.ToNumberLiteral);
+end;
+
+function TGocciaTypedArrayValue.IsValidIntegerIndexedElement(
+  const ANumericIndex: Double; const AIsNegativeZero: Boolean;
+  out AIndex: Integer): Boolean;
+begin
+  AIndex := -1;
+  if AIsNegativeZero or Math.IsNaN(ANumericIndex) or Math.IsInfinite(ANumericIndex) or
+     (Frac(ANumericIndex) <> 0.0) or (ANumericIndex < 0) or
+     (ANumericIndex > High(Integer)) then
+    Exit(False);
+
+  AIndex := Trunc(ANumericIndex);
+  if (AIndex < 0) or (AIndex >= GetLength) then
+    Exit(False);
+
+  Result := True;
+end;
+
+// ES2026 §10.4.5.9 [[Set]](P, V, Receiver), integer-indexed branch.
+procedure TGocciaTypedArrayValue.SetIntegerIndexedElement(const ANumericIndex: Double;
+  const AIsNegativeZero: Boolean; const AValue: TGocciaValue);
+var
+  Index: Integer;
+  NumberValue: TGocciaNumberLiteralValue;
+  BigIntRaw: Int64;
+begin
+  // ES2026 §10.4.5.16 TypedArraySetElement step 3: conversion is observable
+  // and happens before the valid-index check.
+  if IsBigIntKind(FKind) then
+    BigIntRaw := RawBigIntForKind(FKind, ToBigIntForTypedArray(AValue))
+  else
+    NumberValue := AValue.ToNumberLiteral;
+
+  if not IsValidIntegerIndexedElement(ANumericIndex, AIsNegativeZero, Index) then
+    Exit;
+
+  if IsBigIntKind(FKind) then
+    WriteBigIntElement(Index, BigIntRaw)
+  else
+    WriteNumberLiteral(Index, NumberValue);
+end;
+
+function TGocciaTypedArrayValue.OrdinarySetIntegerIndexedElementWithReceiver(
+  const AName: string; const ANumericIndex: Double;
+  const AIsNegativeZero: Boolean; const AValue: TGocciaValue;
+  const AReceiver: TGocciaValue): Boolean;
+var
+  Index: Integer;
+  ReceiverDesc: TGocciaPropertyDescriptor;
+  ReceiverObj: TGocciaObjectValue;
+  ReceiverTypedArray: TGocciaTypedArrayValue;
+begin
+  if not IsValidIntegerIndexedElement(ANumericIndex, AIsNegativeZero, Index) then
+    Exit(True);
+
+  if not (AReceiver is TGocciaObjectValue) then
+    Exit(False);
+
+  ReceiverObj := TGocciaObjectValue(AReceiver);
+  if ReceiverObj is TGocciaTypedArrayValue then
+  begin
+    ReceiverTypedArray := TGocciaTypedArrayValue(ReceiverObj);
+    if not ReceiverTypedArray.IsValidIntegerIndexedElement(ANumericIndex,
+      AIsNegativeZero, Index) then
+      Exit(False);
+    ReceiverTypedArray.SetIntegerIndexedElement(ANumericIndex,
+      AIsNegativeZero, AValue);
+    Exit(True);
+  end;
+
+  ReceiverDesc := ReceiverObj.GetOwnPropertyDescriptor(AName);
+  if Assigned(ReceiverDesc) then
+  begin
+    if (ReceiverDesc is TGocciaPropertyDescriptorAccessor) or
+       (not ReceiverDesc.Writable) then
+      Exit(False);
+    Exit(ReceiverObj.TryDefineProperty(AName,
+      TGocciaPropertyDescriptorData.Create(AValue, ReceiverDesc.Flags)));
+  end;
+
+  Result := ReceiverObj.TryDefineProperty(AName,
+    TGocciaPropertyDescriptorData.Create(AValue,
+      [pfEnumerable, pfConfigurable, pfWritable]));
 end;
 
 { Constructors }
@@ -505,6 +710,7 @@ begin
   FKind := AKind;
   FByteOffset := 0;
   FLength := ALength;
+  FAutoLength := False;
   ByteLen := ALength * BytesPerElement(AKind);
   Buf := TGocciaArrayBufferValue.Create(ByteLen);
   FBufferValue := Buf;
@@ -529,6 +735,7 @@ begin
   FBufferData := ABuffer.Data;
   FByteOffset := AByteOffset;
   BPE := BytesPerElement(AKind);
+  FAutoLength := (ALength < 0) and (ABuffer.MaxByteLength >= 0);
 
   if ALength >= 0 then
     FLength := ALength
@@ -555,6 +762,7 @@ begin
   FBufferData := ASharedBuffer.Data;
   FByteOffset := AByteOffset;
   BPE := BytesPerElement(AKind);
+  FAutoLength := False;
 
   if ALength >= 0 then
     FLength := ALength
@@ -683,20 +891,22 @@ end;
 
 function TGocciaTypedArrayValue.GetProperty(const AName: string): TGocciaValue;
 var
+  IsNegativeZero: Boolean;
   Index: Integer;
+  NumericIndex: Double;
 begin
-  if TryStrToInt(AName, Index) then
+  if TryCanonicalNumericIndexString(AName, NumericIndex, IsNegativeZero) then
   begin
-    if (Index >= 0) and (Index < FLength) then
+    if IsValidIntegerIndexedElement(NumericIndex, IsNegativeZero, Index) then
       Result := GetElementAsValue(Index)
     else
       Result := TGocciaUndefinedLiteralValue.UndefinedValue;
     Exit;
   end;
   if AName = PROP_LENGTH then
-    Exit(TGocciaNumberLiteralValue.Create(FLength));
+    Exit(TGocciaNumberLiteralValue.Create(GetLength));
   if AName = PROP_BYTE_LENGTH then
-    Exit(TGocciaNumberLiteralValue.Create(FLength * BytesPerElement(FKind)));
+    Exit(TGocciaNumberLiteralValue.Create(GetLength * BytesPerElement(FKind)));
   if AName = PROP_BYTE_OFFSET then
     Exit(TGocciaNumberLiteralValue.Create(FByteOffset));
   if AName = PROP_BUFFER then
@@ -708,22 +918,62 @@ end;
 
 procedure TGocciaTypedArrayValue.AssignProperty(const AName: string; const AValue: TGocciaValue; const ACanCreate: Boolean);
 var
-  Index: Integer;
+  IsNegativeZero: Boolean;
+  NumericIndex: Double;
 begin
-  if TryStrToInt(AName, Index) then
+  if TryCanonicalNumericIndexString(AName, NumericIndex, IsNegativeZero) then
   begin
-    if (Index >= 0) and (Index < FLength) then
-      WriteValueToElement(Index, AValue);
+    SetIntegerIndexedElement(NumericIndex, IsNegativeZero, AValue);
     Exit;
   end;
   inherited AssignProperty(AName, AValue, ACanCreate);
 end;
 
+function TGocciaTypedArrayValue.AssignPropertyWithReceiver(const AName: string;
+  const AValue: TGocciaValue; const AReceiver: TGocciaValue): Boolean;
+var
+  IsNegativeZero: Boolean;
+  NumericIndex: Double;
+begin
+  if TryCanonicalNumericIndexString(AName, NumericIndex, IsNegativeZero) then
+  begin
+    if AReceiver = Self then
+    begin
+      SetIntegerIndexedElement(NumericIndex, IsNegativeZero, AValue);
+      Exit(True);
+    end;
+    Exit(OrdinarySetIntegerIndexedElementWithReceiver(AName, NumericIndex,
+      IsNegativeZero, AValue, AReceiver));
+  end;
+  Result := inherited AssignPropertyWithReceiver(AName, AValue, AReceiver);
+end;
+
+function TGocciaTypedArrayValue.GetOwnPropertyDescriptor(
+  const AName: string): TGocciaPropertyDescriptor;
+var
+  IsNegativeZero: Boolean;
+  Index: Integer;
+  NumericIndex: Double;
+begin
+  if TryCanonicalNumericIndexString(AName, NumericIndex, IsNegativeZero) then
+  begin
+    if IsValidIntegerIndexedElement(NumericIndex, IsNegativeZero, Index) then
+      Exit(TGocciaPropertyDescriptorData.Create(GetElementAsValue(Index),
+        [pfEnumerable, pfConfigurable, pfWritable]));
+    Exit(nil);
+  end;
+
+  Result := inherited GetOwnPropertyDescriptor(AName);
+end;
+
 function TGocciaTypedArrayValue.HasOwnProperty(const AName: string): Boolean;
 var
+  IsNegativeZero: Boolean;
   Index: Integer;
+  NumericIndex: Double;
 begin
-  if TryStrToInt(AName, Index) and (Index >= 0) and (Index < FLength) then
+  if TryCanonicalNumericIndexString(AName, NumericIndex, IsNegativeZero) and
+     IsValidIntegerIndexedElement(NumericIndex, IsNegativeZero, Index) then
     Result := True
   else if AName = PROP_LENGTH then
     Result := True
@@ -805,7 +1055,7 @@ var
   TA: TGocciaTypedArrayValue;
 begin
   TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.byteLength');
-  Result := TGocciaNumberLiteralValue.Create(TA.FLength * BytesPerElement(TA.FKind));
+  Result := TGocciaNumberLiteralValue.Create(TA.GetLength * BytesPerElement(TA.FKind));
 end;
 
 function TGocciaTypedArrayValue.TypedArrayByteOffsetGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -815,7 +1065,7 @@ end;
 
 function TGocciaTypedArrayValue.TypedArrayLengthGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := TGocciaNumberLiteralValue.Create(RequireTypedArray(AThisValue, 'TypedArray.prototype.length').FLength);
+  Result := TGocciaNumberLiteralValue.Create(RequireTypedArray(AThisValue, 'TypedArray.prototype.length').GetLength);
 end;
 
 // ES2026 §23.2.3.32 get %TypedArray%.prototype [ @@toStringTag ]
@@ -2056,9 +2306,9 @@ begin
     begin
       if ((Int64(System.Length(Buf.Data)) - Int64(ByteOff)) mod Int64(BPE)) <> 0 then
         ThrowRangeError(Format(SErrorTypedArrayByteLengthMultiple, [TGocciaTypedArrayValue.KindName(FKind), BPE]), SSuggestTypedArrayAlignment);
-      ElemLen := Integer((Int64(System.Length(Buf.Data)) - Int64(ByteOff)) div Int64(BPE));
-      if ElemLen < 0 then
+      if (System.Length(Buf.Data) - ByteOff) < 0 then
         ThrowRangeError(SErrorInvalidTypedArrayLength, SSuggestTypedArrayLength);
+      ElemLen := -1;
     end;
 
     Exit(TGocciaTypedArrayValue.Create(FKind, Buf, ByteOff, ElemLen));

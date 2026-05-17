@@ -61,7 +61,7 @@ type
   TGocciaPreprocessors = set of TGocciaPreprocessor;
 
   TGocciaCompatibility = (cfASI, cfVar, cfFunction, cfTraditionalFor,
-    cfLooseEquality);
+    cfLooseEquality, cfNonStrictMode);
   TGocciaCompatibilityFlags = set of TGocciaCompatibility;
 
   TGocciaSourceType = (stScript, stModule);
@@ -182,11 +182,13 @@ type
     function GetFunctionEnabled: Boolean;
     function GetTraditionalForLoopsEnabled: Boolean;
     function GetLooseEqualityEnabled: Boolean;
+    function GetNonStrictModeEnabled: Boolean;
     procedure SetASIEnabled(const AValue: Boolean);
     procedure SetVarEnabled(const AValue: Boolean);
     procedure SetFunctionEnabled(const AValue: Boolean);
     procedure SetTraditionalForLoopsEnabled(const AValue: Boolean);
     procedure SetLooseEqualityEnabled(const AValue: Boolean);
+    procedure SetNonStrictModeEnabled(const AValue: Boolean);
     procedure SetStrictTypes(const AValue: Boolean);
     function GetContentProvider: TGocciaModuleContentProvider;
     function GetModuleResolver: TGocciaModuleResolver;
@@ -279,6 +281,8 @@ type
       read GetTraditionalForLoopsEnabled write SetTraditionalForLoopsEnabled;
     property LooseEqualityEnabled: Boolean
       read GetLooseEqualityEnabled write SetLooseEqualityEnabled;
+    property NonStrictModeEnabled: Boolean
+      read GetNonStrictModeEnabled write SetNonStrictModeEnabled;
     property FunctionConstructor: TGocciaFunctionConstructorClassValue read FFunctionConstructor;
     property ObjectConstructor: TGocciaClassValue read FObjectConstructor;
     property Preprocessors: TGocciaPreprocessors read FPreprocessors write SetPreprocessors;
@@ -472,6 +476,7 @@ begin
   Context := FInterpreter.CreateEvaluationContext;
   Context.Scope := AScope;
   Context.CurrentFilePath := FSourcePath;
+  Context.NonStrictMode := AScope.NonStrictMode;
   Result := EvaluateModuleBody(
     TGocciaInterpreterModule(AModule).Prog, Context);
   TGocciaInterpreterModule(AModule).FProgram := nil;
@@ -1262,8 +1267,21 @@ end;
 
 function TGocciaEngine.CompileModule(
   const AProgram: TGocciaProgram): TGocciaCompiledModule;
+var
+  SavedNonStrictMode: Boolean;
 begin
-  Result := FExecutor.CompileModule(AProgram);
+  if (FSourceType = stModule) and (FExecutor is TGocciaBytecodeExecutor) then
+  begin
+    SavedNonStrictMode := TGocciaBytecodeExecutor(FExecutor).NonStrictMode;
+    TGocciaBytecodeExecutor(FExecutor).NonStrictMode := False;
+    try
+      Result := FExecutor.CompileModule(AProgram);
+    finally
+      TGocciaBytecodeExecutor(FExecutor).NonStrictMode := SavedNonStrictMode;
+    end;
+  end
+  else
+    Result := FExecutor.CompileModule(AProgram);
   FRetainedModules.Add(Result);
 end;
 
@@ -1318,6 +1336,7 @@ begin
     ModuleScope := FInterpreter.GlobalScope.CreateChild(skModule,
       'Module:' + AFileName);
     ModuleScope.ThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+    ModuleScope.NonStrictMode := False;
     Result := RunModuleInScope(AModule, ModuleScope);
   end
   else
@@ -1389,6 +1408,8 @@ begin
         Parser.FunctionDeclarationsEnabled := cfFunction in FCompatibility;
         Parser.TraditionalForLoopsEnabled := cfTraditionalFor in FCompatibility;
         Parser.LooseEqualityEnabled := cfLooseEquality in FCompatibility;
+        Parser.NonStrictModeEnabled := (cfNonStrictMode in FCompatibility) or
+          (FSourceType = stModule);
         try
           ProgramNode := Parser.Parse;
           PrintParserWarnings(Parser, SourceMap);
@@ -1417,9 +1438,11 @@ begin
                 'Module:' + FSourcePath);
               ModuleScope.ThisValue :=
                 TGocciaUndefinedLiteralValue.UndefinedValue;
+              ModuleScope.NonStrictMode := False;
               ModuleContext := FInterpreter.CreateEvaluationContext;
               ModuleContext.Scope := ModuleScope;
               ModuleContext.CurrentFilePath := FSourcePath;
+              ModuleContext.NonStrictMode := False;
               ExecStart := GetNanoseconds;
               FLastTiming.Result :=
                 FExecutor.EvaluateModuleBody(ProgramNode, ModuleContext);
@@ -1691,6 +1714,22 @@ begin
   FInterpreter.LooseEqualityEnabled := AValue;
 end;
 
+function TGocciaEngine.GetNonStrictModeEnabled: Boolean;
+begin
+  Result := cfNonStrictMode in FCompatibility;
+end;
+
+procedure TGocciaEngine.SetNonStrictModeEnabled(const AValue: Boolean);
+begin
+  if AValue then
+    Include(FCompatibility, cfNonStrictMode)
+  else
+    Exclude(FCompatibility, cfNonStrictMode);
+  FInterpreter.NonStrictModeEnabled := AValue;
+  if FExecutor is TGocciaBytecodeExecutor then
+    TGocciaBytecodeExecutor(FExecutor).NonStrictMode := AValue;
+end;
+
 procedure TGocciaEngine.SetStrictTypes(const AValue: Boolean);
 begin
   FStrictTypes := AValue;
@@ -1718,6 +1757,10 @@ begin
   FInterpreter.FunctionEnabled := cfFunction in AValue;
   FInterpreter.TraditionalForLoopsEnabled := cfTraditionalFor in AValue;
   FInterpreter.LooseEqualityEnabled := cfLooseEquality in AValue;
+  FInterpreter.NonStrictModeEnabled := cfNonStrictMode in AValue;
+  if FExecutor is TGocciaBytecodeExecutor then
+    TGocciaBytecodeExecutor(FExecutor).NonStrictMode :=
+      cfNonStrictMode in AValue;
 end;
 
 procedure TGocciaEngine.ThrowError(const AMessage: string; const ALine, AColumn: Integer);
@@ -1729,8 +1772,9 @@ function TGocciaEngine.CompileDynamicFunction(
   const AParamsSources: array of string;
   const ABodySource: string): TGocciaFunctionBase;
 var
-  ParamStr, Source, TrimmedBody: string;
+  ParamStr, Source: string;
   I: Integer;
+  BodyHasUseStrictDirective: Boolean;
   Lexer: TGocciaLexer;
   Tokens: TObjectList<TGocciaToken>;
   Parser: TGocciaParser;
@@ -1746,6 +1790,7 @@ begin
   // wrapper will fail validation because it will have unmatched braces when
   // parsed as a standalone function body.
   ParamStr := '';
+  BodyHasUseStrictDirective := False;
   for I := 0 to High(AParamsSources) do
   begin
     if I > 0 then
@@ -1767,6 +1812,7 @@ begin
       Parser.FunctionDeclarationsEnabled := cfFunction in FCompatibility;
       Parser.TraditionalForLoopsEnabled := cfTraditionalFor in FCompatibility;
       Parser.LooseEqualityEnabled := cfLooseEquality in FCompatibility;
+      Parser.NonStrictModeEnabled := cfNonStrictMode in FCompatibility;
       try
         ProgramNode := Parser.Parse;
         try
@@ -1800,6 +1846,7 @@ begin
       Parser.FunctionDeclarationsEnabled := cfFunction in FCompatibility;
       Parser.TraditionalForLoopsEnabled := cfTraditionalFor in FCompatibility;
       Parser.LooseEqualityEnabled := cfLooseEquality in FCompatibility;
+      Parser.NonStrictModeEnabled := cfNonStrictMode in FCompatibility;
       try
         ProgramNode := Parser.Parse;
         try
@@ -1808,6 +1855,9 @@ begin
              not (TGocciaExpressionStatement(ProgramNode.Body[0]).Expression
                is TGocciaArrowFunctionExpression) then
             ThrowSyntaxError('Invalid body for Function constructor');
+          BodyHasUseStrictDirective := HasUseStrictDirective(
+            TGocciaArrowFunctionExpression(
+              TGocciaExpressionStatement(ProgramNode.Body[0]).Expression).Body);
         finally
           ProgramNode.Free;
         end;
@@ -1831,6 +1881,7 @@ begin
     Parser.FunctionDeclarationsEnabled := cfFunction in FCompatibility;
     Parser.TraditionalForLoopsEnabled := cfTraditionalFor in FCompatibility;
     Parser.LooseEqualityEnabled := cfLooseEquality in FCompatibility;
+    Parser.NonStrictModeEnabled := cfNonStrictMode in FCompatibility;
     try
       ProgramNode := Parser.ParseUnchecked;
       try
@@ -1840,11 +1891,12 @@ begin
         if Result is TGocciaFunctionValue then
           TGocciaFunctionValue(Result).Name := 'anonymous';
         // ES2026 §15.2.2.4: Function-constructor bodies are non-strict
-        // unless the body starts with a Use Strict Directive (§11.2.2).
-        TrimmedBody := TrimLeft(ABodySource);
-        if (Pos('"use strict"', TrimmedBody) <> 1) and
-           (Pos('''use strict''', TrimmedBody) <> 1) then
+        // unless the parsed body contains a Use Strict Directive (§11.2.2).
+        if not BodyHasUseStrictDirective then
+        begin
           Result.StrictThis := False;
+          Result.StrictCode := False;
+        end;
       finally
         ProgramNode.Free;
       end;

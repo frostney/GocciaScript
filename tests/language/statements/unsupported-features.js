@@ -1,6 +1,6 @@
 /*---
 description: >
-  Unsupported features (for, while, do...while, var, with, function, ==, !=,
+  Unsupported features (for, while, do...while, var, function, with, ==, !=,
   export *, labels) are parsed as no-ops. Code after skipped statements must
   still execute correctly, even when the unsupported statement contains nested
   parentheses or complex expressions.
@@ -65,7 +65,20 @@ describe.runIf(hasGoccia)("unsupported features are skipped", () => {
     for (let i = 0; i < 10; i++) { x = 99; }
     while (x < 10) { x = 99; }
     do { x = 99; } while (x < 10);
+    with ({ x: 99 }) { x = 99; }
     var z = 42;
+    expect(x).toBe(1);
+  });
+
+  test("with statement is skipped without compat-non-strict-mode", () => {
+    let x = 1;
+    let called = false;
+    const source = () => {
+      called = true;
+      return { x: 99 };
+    };
+    with (source()) { x = 99; }
+    expect(called).toBe(false);
     expect(x).toBe(1);
   });
 

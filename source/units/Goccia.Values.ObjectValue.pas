@@ -504,7 +504,8 @@ begin
     Inc(ChainDepth);
     if ChainDepth > MAX_PROTOTYPE_CHAIN_DEPTH then
       ThrowTypeError(Format(SErrorProtoChainDepthExceeded, [AName]), SSuggestPrototypeChainTooDeep);
-    if Proto.FProperties.TryGetValue(AName, Descriptor) then
+    Descriptor := Proto.GetOwnPropertyDescriptor(AName);
+    if Assigned(Descriptor) then
     begin
       if Descriptor is TGocciaPropertyDescriptorAccessor then
       begin

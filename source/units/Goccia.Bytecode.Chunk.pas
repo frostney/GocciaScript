@@ -88,6 +88,8 @@ type
     FIsGenerator: Boolean;
     FIsArrow: Boolean;
     FHasOwnPrototype: Boolean;
+    FStrictThis: Boolean;
+    FStrictCode: Boolean;
     FTypeCheckPreambleSize: UInt8;
     FProfileIndex: Integer;
     FSourceText: string;
@@ -152,6 +154,8 @@ type
     property IsAsync: Boolean read FIsAsync write FIsAsync;
     property IsGenerator: Boolean read FIsGenerator write FIsGenerator;
     property IsArrow: Boolean read FIsArrow write FIsArrow;
+    property StrictThis: Boolean read FStrictThis write FStrictThis;
+    property StrictCode: Boolean read FStrictCode write FStrictCode;
     // True when this template represents a `function`/`function*` declaration or
     // expression (or async generator).  Per ES2026 §10.2.5 MakeConstructor, such
     // functions get an own `prototype` property installed at closure-creation
@@ -197,6 +201,8 @@ begin
   FLocalStrictCount := 0;
   FIsArrow := False;
   FHasOwnPrototype := False;
+  FStrictThis := True;
+  FStrictCode := True;
   FProfileIndex := -1;
 end;
 
@@ -300,12 +306,16 @@ function TGocciaFunctionTemplate.AddConstantFloat(
   const AValue: Double): UInt16;
 var
   I: Integer;
+  ValueIsNaN: Boolean;
 begin
+  ValueIsNaN := FloatBitsAreNaN(AValue);
   for I := 0 to FConstantCount - 1 do
     if (FConstants[I].Kind = bckFloat) and
-       ((FConstants[I].FloatValue = AValue) or
-        (FloatBitsAreNaN(FConstants[I].FloatValue) and FloatBitsAreNaN(AValue))) then
-      Exit(UInt16(I));
+       (FloatBitsAreNaN(FConstants[I].FloatValue) = ValueIsNaN) then
+    begin
+      if ValueIsNaN or (FConstants[I].FloatValue = AValue) then
+        Exit(UInt16(I));
+    end;
 
   if FConstantCount > High(UInt16) then
     raise Exception.Create('Constant pool overflow: exceeds 65535 entries');

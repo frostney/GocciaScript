@@ -297,7 +297,12 @@ begin
     end;
   end
   else
-    FTarget.SetProperty(AName, AValue);
+  begin
+    if (FTarget is TGocciaObjectValue) and
+       TGocciaObjectValue(FTarget).AssignPropertyWithReceiver(AName, AValue, Self) then
+      Exit;
+    ThrowTypeError(Format(SErrorProxySetReturnedFalse, [AName]), SSuggestProxyTrapInvariant);
+  end;
 end;
 
 // ES2026 §10.5.9 [[Set]](P, V, Receiver) — receiver-aware, returns Boolean

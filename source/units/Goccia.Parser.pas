@@ -72,6 +72,7 @@ type
     FFunctionDeclarationsEnabled: Boolean;
     FTraditionalForLoopsEnabled: Boolean;
     FLooseEqualityEnabled: Boolean;
+    FNonStrictModeEnabled: Boolean;
 
     procedure AddWarning(const AMessage, ASuggestion: string; const ALine, AColumn: Integer);
     procedure PushPrivateClassContext;
@@ -235,6 +236,8 @@ type
       read FTraditionalForLoopsEnabled write FTraditionalForLoopsEnabled;
     property LooseEqualityEnabled: Boolean
       read FLooseEqualityEnabled write FLooseEqualityEnabled;
+    property NonStrictModeEnabled: Boolean
+      read FNonStrictModeEnabled write FNonStrictModeEnabled;
     property WarningCount: Integer read FWarningCount;
   end;
 
@@ -1480,7 +1483,8 @@ function ParseInterpolationExpression(const AExprText, AFileName: string;
   const AASI: Boolean = False; const AVarEnabled: Boolean = False;
   const AFunctionEnabled: Boolean = False;
   const ATraditionalForLoopsEnabled: Boolean = False;
-  const ALooseEqualityEnabled: Boolean = False): TGocciaExpression;
+  const ALooseEqualityEnabled: Boolean = False;
+  const ANonStrictModeEnabled: Boolean = False): TGocciaExpression;
 var
   Lexer: TGocciaLexer;
   Parser: TGocciaParser;
@@ -1504,6 +1508,7 @@ begin
       Parser.FunctionDeclarationsEnabled := AFunctionEnabled;
       Parser.TraditionalForLoopsEnabled := ATraditionalForLoopsEnabled;
       Parser.LooseEqualityEnabled := ALooseEqualityEnabled;
+      Parser.NonStrictModeEnabled := ANonStrictModeEnabled;
       try
         ProgramNode := Parser.ParseUnchecked;
         try
@@ -1569,7 +1574,7 @@ begin
     ParsedExpr := ParseInterpolationExpression(ExprTexts[I], FFileName,
       FAutomaticSemicolonInsertion, FVarDeclarationsEnabled,
       FFunctionDeclarationsEnabled, FTraditionalForLoopsEnabled,
-      FLooseEqualityEnabled);
+      FLooseEqualityEnabled, FNonStrictModeEnabled);
     if Assigned(ParsedExpr) then
       Expressions.Add(ParsedExpr);
   end;
@@ -1632,7 +1637,7 @@ begin
     ParsedExpr := ParseInterpolationExpression(ExprTexts[I], FFileName,
       FAutomaticSemicolonInsertion, FVarDeclarationsEnabled,
       FFunctionDeclarationsEnabled, FTraditionalForLoopsEnabled,
-      FLooseEqualityEnabled);
+      FLooseEqualityEnabled, FNonStrictModeEnabled);
     if Assigned(ParsedExpr) then
       Parts.Add(ParsedExpr);
   end;
@@ -1695,7 +1700,8 @@ begin
       begin
         Token := Advance;
         Result := TGocciaLiteralExpression.Create(
-          TGocciaStringLiteralValue.Create(Token.Lexeme), Token.Line, Token.Column);
+          TGocciaStringLiteralValue.Create(Token.Lexeme), Token.Line,
+          Token.Column, ExtractSourceRange(Token.Line, Token.Column));
       end;
     gttTemplate:
       begin
@@ -3290,6 +3296,7 @@ end;
 function TGocciaParser.Statement: TGocciaStatement;
 var
   Line, Column: Integer;
+  Token: TGocciaToken;
 begin
   if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_TYPE) and IsTypeDeclaration then
   begin
@@ -3307,6 +3314,17 @@ begin
     Advance;
     SkipInterfaceDeclaration;
     Result := TGocciaEmptyStatement.Create(Line, Column);
+  end
+  else if Check(gttLet) and FNonStrictModeEnabled and
+          FAutomaticSemicolonInsertion and
+          (FCurrent + 1 < FTokens.Count) and
+          (FTokens[FCurrent + 1].TokenType = gttLeftBrace) and
+          (Peek.Line < FTokens[FCurrent + 1].Line) then
+  begin
+    Token := Advance;
+    Result := TGocciaExpressionStatement.Create(
+      TGocciaIdentifierExpression.Create(Token.Lexeme, Token.Line,
+        Token.Column), Token.Line, Token.Column);
   end
   else if Match([gttConst, gttLet]) then
     Result := DeclarationStatement
@@ -4250,18 +4268,32 @@ end;
 function TGocciaParser.WithStatement: TGocciaStatement;
 var
   Line, Column: Integer;
+  ObjectExpr: TGocciaExpression;
+  BodyStmt: TGocciaStatement;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
 
-  AddWarning('The ''with'' statement is not supported in GocciaScript', '',
-    Line, Column);
+  if not FNonStrictModeEnabled then
+  begin
+    AddWarning('''with'' statements require --compat-non-strict-mode',
+      'Use explicit property access, or enable --compat-non-strict-mode',
+      Line, Column);
+    SkipBalancedParens;
+    SkipStatementOrBlock;
+    Result := TGocciaEmptyStatement.Create(Line, Column);
+    Exit;
+  end;
 
-  SkipBalancedParens;
+  Consume(gttLeftParen, 'Expected ''('' after ''with''',
+    SSuggestCloseParenExpression);
+  ObjectExpr := Expression;
+  Consume(gttRightParen, 'Expected '')'' after with object',
+    SSuggestCloseParenExpression);
 
-  SkipStatementOrBlock;
+  BodyStmt := Statement;
 
-  Result := TGocciaEmptyStatement.Create(Line, Column);
+  Result := TGocciaWithStatement.Create(ObjectExpr, BodyStmt, Line, Column);
 end;
 
 function TGocciaParser.FunctionStatement(const AIsAsync: Boolean; const AIsGenerator: Boolean): TGocciaStatement;

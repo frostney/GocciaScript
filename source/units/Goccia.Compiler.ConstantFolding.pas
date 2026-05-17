@@ -470,6 +470,12 @@ function TryEvaluateIdentifier(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaIdentifierExpression;
   out AValue: TGocciaCompileTimeValue): Boolean;
 begin
+  if Assigned(ACtx.Scope) and (ACtx.Scope.WithBindingCount > 0) then
+  begin
+    AValue := UnknownCompileTimeValue;
+    Exit(False);
+  end;
+
   if ACtx.OptimizationOptions.EnableConstPropagation and
      ACtx.Scope.TryGetVisibleConstantValue(AExpr.Name, AValue) then
     Exit(True);

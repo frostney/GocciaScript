@@ -43,11 +43,14 @@ type
   TGocciaLiteralExpression = class(TGocciaExpression)
   private
     FValue: TGocciaValue;
+    FSourceText: string;
   public
-    constructor Create(const AValue: TGocciaValue; const ALine, AColumn: Integer);
+    constructor Create(const AValue: TGocciaValue; const ALine, AColumn: Integer;
+      const ASourceText: string = '');
     destructor Destroy; override;
     function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Value: TGocciaValue read FValue;
+    property SourceText: string read FSourceText;
   end;
 
   TGocciaTemplateLiteralExpression = class(TGocciaExpression)
@@ -855,6 +858,7 @@ uses
   Goccia.ImportMeta,
   Goccia.Modules,
   Goccia.RegExp.Runtime,
+  Goccia.Scope,
   Goccia.Values.BigIntValue,
   Goccia.Values.ClassHelper,
   Goccia.Values.ClassValue,
@@ -883,10 +887,11 @@ end;
 { TGocciaLiteralExpression }
 
 constructor TGocciaLiteralExpression.Create(const AValue: TGocciaValue;
-  const ALine, AColumn: Integer);
+  const ALine, AColumn: Integer; const ASourceText: string);
 begin
   inherited Create(ALine, AColumn);
   FValue := AValue;
+  FSourceText := ASourceText;
   // Remove from GC -- the AST owns this value, not the garbage collector.
   // Singletons (UndefinedValue, TrueValue, FalseValue) are pinned separately
   // and safe to unregister (Remove is a no-op if not found).
@@ -1644,9 +1649,24 @@ begin
 end;
 
 function TGocciaAssignmentExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
+var
+  ObjectBinding: TGocciaObjectValue;
+  ScopeBinding: TGocciaScope;
 begin
+  AContext.Scope.ResolveAssignmentTarget(Name, ObjectBinding, ScopeBinding);
   Result := Value.Evaluate(AContext);
-  AContext.Scope.AssignBinding(Name, Result);
+
+  if Assigned(ObjectBinding) then
+  begin
+    if AContext.NonStrictMode then
+      ObjectBinding.AssignPropertyWithReceiver(Name, Result, ObjectBinding)
+    else
+      ObjectBinding.AssignProperty(Name, Result);
+    Exit;
+  end;
+
+  ScopeBinding.AssignBinding(Name, Result, Line, Column,
+    AContext.NonStrictMode);
 end;
 
 function TGocciaPropertyAssignmentExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
@@ -1655,7 +1675,8 @@ var
 begin
   Obj := ObjectExpr.Evaluate(AContext);
   Result := Value.Evaluate(AContext);
-  AssignProperty(Obj, PropertyName, Result, AContext.OnError, Line, Column);
+  AssignProperty(Obj, PropertyName, Result, AContext.OnError, Line, Column,
+    AContext.NonStrictMode);
 end;
 
 function TGocciaComputedPropertyAssignmentExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
@@ -1668,11 +1689,12 @@ begin
   Result := Value.Evaluate(AContext);
   if PropertyValue is TGocciaSymbolValue then
     AssignSymbolProperty(Obj, TGocciaSymbolValue(PropertyValue),
-      Result, AContext.OnError, Line, Column)
+      Result, AContext.OnError, Line, Column, AContext.NonStrictMode)
   else
   begin
     PropName := TGocciaStringLiteralValue(PropertyValue).Value;
-    AssignProperty(Obj, PropName, Result, AContext.OnError, Line, Column);
+    AssignProperty(Obj, PropName, Result, AContext.OnError, Line, Column,
+      AContext.NonStrictMode);
   end;
 end;
 
@@ -1689,7 +1711,8 @@ begin
       Exit(CurrentValue);
 
     Result := Value.Evaluate(AContext);
-    AContext.Scope.AssignBinding(Name, Result);
+    AContext.Scope.AssignBinding(Name, Result, Line, Column,
+      AContext.NonStrictMode);
     Exit;
   end;
 
@@ -1700,7 +1723,8 @@ begin
       Exit(CurrentValue);
 
     Result := Value.Evaluate(AContext);
-    AContext.Scope.AssignBinding(Name, Result);
+    AContext.Scope.AssignBinding(Name, Result, Line, Column,
+      AContext.NonStrictMode);
     Exit;
   end;
 
@@ -1711,15 +1735,17 @@ begin
       Exit(CurrentValue);
 
     Result := Value.Evaluate(AContext);
-    AContext.Scope.AssignBinding(Name, Result);
+    AContext.Scope.AssignBinding(Name, Result, Line, Column,
+      AContext.NonStrictMode);
     Exit;
   end;
 
   Result := CurrentValue;
   RhsValue := Value.Evaluate(AContext);
-    Result := Goccia.Arithmetic.CompoundOperations(
+  Result := Goccia.Arithmetic.CompoundOperations(
       Result, RhsValue, Operator);
-  AContext.Scope.AssignBinding(Name, Result);
+  AContext.Scope.AssignBinding(Name, Result, Line, Column,
+    AContext.NonStrictMode);
 end;
 
 // ES2026 §13.15.2 AssignmentExpression : LeftHandSideExpression AssignmentOperator AssignmentExpression
@@ -1736,7 +1762,8 @@ begin
       Exit(CurrentValue);
 
     Result := Value.Evaluate(AContext);
-    AssignProperty(Obj, PropertyName, Result, AContext.OnError, Line, Column);
+    AssignProperty(Obj, PropertyName, Result, AContext.OnError, Line, Column,
+      AContext.NonStrictMode);
     Exit;
   end;
 
@@ -1747,7 +1774,8 @@ begin
       Exit(CurrentValue);
 
     Result := Value.Evaluate(AContext);
-    AssignProperty(Obj, PropertyName, Result, AContext.OnError, Line, Column);
+    AssignProperty(Obj, PropertyName, Result, AContext.OnError, Line, Column,
+      AContext.NonStrictMode);
     Exit;
   end;
 
@@ -1758,13 +1786,14 @@ begin
       Exit(CurrentValue);
 
     Result := Value.Evaluate(AContext);
-    AssignProperty(Obj, PropertyName, Result, AContext.OnError, Line, Column);
+    AssignProperty(Obj, PropertyName, Result, AContext.OnError, Line, Column,
+      AContext.NonStrictMode);
     Exit;
   end;
 
   RhsValue := Value.Evaluate(AContext);
-  PerformPropertyCompoundAssignment(Obj, PropertyName, RhsValue, Operator, AContext.OnError, Line, Column);
-  Result := NormalizeAssignmentValue(Obj.GetProperty(PropertyName));
+  Result := PerformPropertyCompoundAssignment(Obj, PropertyName, RhsValue,
+    Operator, AContext.OnError, Line, Column, AContext.NonStrictMode);
 end;
 
 // ES2026 §13.15.2 AssignmentExpression : LeftHandSideExpression AssignmentOperator AssignmentExpression
@@ -1836,14 +1865,14 @@ begin
 
       Result := Value.Evaluate(AContext);
       AssignSymbolProperty(Obj, TGocciaSymbolValue(PropertyKeyValue),
-        Result, AContext.OnError, Line, Column);
+        Result, AContext.OnError, Line, Column, AContext.NonStrictMode);
       Exit;
     end;
 
     RhsValue := Value.Evaluate(AContext);
-    PerformSymbolPropertyCompoundAssignment(Obj, TGocciaSymbolValue(PropertyKeyValue), RhsValue, Operator, AContext.OnError, Line, Column);
-    Result := NormalizeAssignmentValue(ReadSymbolProperty(Obj,
-      TGocciaSymbolValue(PropertyKeyValue)));
+    Result := PerformSymbolPropertyCompoundAssignment(Obj,
+      TGocciaSymbolValue(PropertyKeyValue), RhsValue, Operator,
+      AContext.OnError, Line, Column, AContext.NonStrictMode);
     Exit;
   end;
 
@@ -1855,13 +1884,14 @@ begin
       Exit(CurrentValue);
 
     Result := Value.Evaluate(AContext);
-    AssignProperty(Obj, PropName, Result, AContext.OnError, Line, Column);
+    AssignProperty(Obj, PropName, Result, AContext.OnError, Line, Column,
+      AContext.NonStrictMode);
     Exit;
   end;
 
   RhsValue := Value.Evaluate(AContext);
-  PerformPropertyCompoundAssignment(Obj, PropName, RhsValue, Operator, AContext.OnError, Line, Column);
-  Result := NormalizeAssignmentValue(Obj.GetProperty(PropName));
+  Result := PerformPropertyCompoundAssignment(Obj, PropName, RhsValue,
+    Operator, AContext.OnError, Line, Column, AContext.NonStrictMode);
 end;
 
 function ToNumericValue(const AValue: TGocciaValue): TGocciaValue; inline;
@@ -1882,7 +1912,8 @@ begin
     PropName := TGocciaIdentifierExpression(Operand).Name;
     OldValue := ToNumericValue(AContext.Scope.GetValue(PropName));
     NewValue := PerformIncrement(OldValue, Operator = gttIncrement);
-    AContext.Scope.AssignBinding(PropName, NewValue);
+    AContext.Scope.AssignBinding(PropName, NewValue, Line, Column,
+      AContext.NonStrictMode);
     if IsPrefix then
       Result := NewValue
     else
@@ -1905,10 +1936,8 @@ begin
           OldValue := TGocciaUndefinedLiteralValue.UndefinedValue;
         OldValue := ToNumericValue(OldValue);
         NewValue := PerformIncrement(OldValue, Operator = gttIncrement);
-        if Obj is TGocciaClassValue then
-          TGocciaClassValue(Obj).AssignSymbolProperty(TGocciaSymbolValue(PropertyKeyValue), NewValue)
-        else
-          TGocciaObjectValue(Obj).AssignSymbolProperty(TGocciaSymbolValue(PropertyKeyValue), NewValue);
+        AssignSymbolProperty(Obj, TGocciaSymbolValue(PropertyKeyValue),
+          NewValue, AContext.OnError, Line, Column, AContext.NonStrictMode);
         if IsPrefix then
           Result := NewValue
         else
@@ -1924,7 +1953,8 @@ begin
       OldValue := TGocciaUndefinedLiteralValue.UndefinedValue;
     OldValue := ToNumericValue(OldValue);
     NewValue := PerformIncrement(OldValue, Operator = gttIncrement);
-    AssignProperty(Obj, PropName, NewValue, AContext.OnError, Line, Column);
+    AssignProperty(Obj, PropName, NewValue, AContext.OnError, Line, Column,
+      AContext.NonStrictMode);
     if IsPrefix then
       Result := NewValue
     else

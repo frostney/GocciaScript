@@ -7,9 +7,9 @@
 
 - **Modern subset** — `let`/`const`, arrow functions, classes with private fields, `for...of`, async/await, ES modules (named only)
 - **TC39 proposals** — Decorators, decorator metadata, pattern matching, types as comments, enums, `Math.clamp`
-- **Excluded by design** — `eval`, `arguments`, `while` / `do...while`, `with`, default imports/exports
-- **Graceful handling** — Parser-recognized excluded syntax (`==`/`!=` when `--compat-loose-equality` is off, `while`/`do...while`, traditional `for(;;)` when `--compat-traditional-for-loop` is off, `with`) parses successfully but executes as a no-op with a warning and suggestion
-- **Opt-in toggles** — ASI (`--asi`), `var` declarations (`--compat-var`), `function` keyword (`--compat-function`), loose equality (`--compat-loose-equality`), traditional `for(init; test; update)` loops (`--compat-traditional-for-loop`), runtime type enforcement (`--strict-types`)
+- **Excluded by design** — `eval`, `while` / `do...while`, default imports/exports
+- **Graceful handling** — Parser-recognized excluded syntax (`==`/`!=` when `--compat-loose-equality` is off, `while`/`do...while`, `with` when `--compat-non-strict-mode` is off, traditional `for(;;)` when `--compat-traditional-for-loop` is off) parses successfully but executes as a no-op with a warning and suggestion
+- **Opt-in toggles** — ASI (`--asi`), `var` declarations (`--compat-var`), `function` keyword (`--compat-function`), non-strict Script compatibility (`--compat-non-strict-mode` for `arguments`, `with`, silent assignment failures, legacy `delete` returns, and sloppy `this`), loose equality (`--compat-loose-equality`), traditional `for(init; test; update)` loops (`--compat-traditional-for-loop`), runtime type enforcement (`--strict-types`)
 - **Default preprocessors** — JSX (enabled by default via `DefaultPreprocessors`)
 
 GocciaScript implements a curated subset of ECMAScript. This document details what's supported, what's excluded, and the rationale for each decision. For quick-reference tables of every feature and TC39 proposal, see [Language Tables](language-tables.md).
@@ -673,12 +673,12 @@ Warning: 'function' declarations are not supported in GocciaScript
 
 Function expressions in assignment position evaluate to `undefined`. Generator function declarations (`function*`) are also skipped.
 
-GocciaScript provides two function definition styles that cover all use cases without the `function` keyword's pitfalls (`this` binding confusion, hoisting surprises, implicit `arguments`):
+GocciaScript provides two function definition styles that cover most use cases without the `function` keyword's legacy pitfalls (`this` binding confusion and hoisting surprises):
 
-- **Arrow functions** (`(x) => x + 1`) — Lexical `this`, no hoisting, no `arguments`. Use for standalone functions, callbacks, and closures.
-- **Shorthand methods** (`method() {}`) — Call-site `this`, like ECMAScript's regular functions. Use in object literals and class definitions where `this` binding is needed.
+- **Arrow functions** (`(x) => x + 1`) — Lexical `this`, no hoisting, no own `arguments`. Use for standalone functions, callbacks, and closures.
+- **Shorthand methods** (`method() {}`) — Call-site `this`. Use in object literals and class definitions where `this` binding is needed.
 
-When enabled (CLI: `--compat-function`, engine API: `Engine.FunctionEnabled := True`, config: `{"compat-function": true}`), `function` declarations and expressions are fully supported. The `arguments` object remains excluded regardless of this flag.
+When enabled (CLI: `--compat-function`, engine API: `Engine.FunctionEnabled := True`, config: `{"compat-function": true}`), `function` declarations and expressions are supported. Their implicit `arguments` object still requires `--compat-non-strict-mode`.
 
 - **Function declarations** (`function name(params) { body }`) are desugared to var-scoped bindings backed by `TGocciaMethodExpression`, which produces call-site `this` binding (not lexical). Declarations are hoisted: both the name and the function value are available before the declaration is reached, matching ES2026 §15.2.6 semantics. Uses the same var binding infrastructure (`DefineVariableBinding`) as `--compat-var`.
 - **Function expressions** (`const f = function(params) { body }`) produce the same `TGocciaMethodExpression` node. Named function expressions (`const f = function g(params) { body }`) create a read-only self-binding of the name (`g`) visible only inside the function body for recursion, matching ES2026 §15.2.4 semantics.
@@ -721,9 +721,7 @@ Strict equality requires matching types, eliminating this entire class of bugs.
 
 ### `arguments` Object
 
-**Excluded.** Use rest parameters (`...args`) instead.
-
-The `arguments` object is an array-like (but not array) object with confusing behavior. Rest parameters provide a real array with explicit syntax.
+**Opt-in for Script source.** Excluded by default; prefer rest parameters. Available via `--compat-non-strict-mode` (CLI flag, `Engine.NonStrictModeEnabled`, or `{"compat-non-strict-mode": true}` in config). Module source remains strict even when this flag is enabled. When enabled in Script source, ordinary functions, shorthand methods, accessors, and generators create an unmapped, array-like `arguments` object whose indexed entries and `length` reflect the call's argument list without aliasing parameter variables. Arrow functions do not create their own `arguments`; they resolve it lexically from the nearest enclosing ordinary function or method that has one. `arguments` is an ordinary identifier, not a reserved keyword, so parameters or body-level lexical declarations named `arguments` shadow the implicit object.
 
 ### Automatic Semicolon Insertion
 
@@ -798,16 +796,15 @@ items.reduce((acc, item) => acc + item, 0);
 
 ### `with` Statement
 
-**Excluded.** No alternative needed. The parser accepts `with` syntax but treats it as a no-op (the body is not executed), and emits a warning:
+**Opt-in for Script source.** Excluded by default; use explicit property access. Available via `--compat-non-strict-mode` (CLI flag, `Engine.NonStrictModeEnabled`, or `{"compat-non-strict-mode": true}` in config). Module source remains strict even when this flag is enabled. When enabled in Script source, `with (object) statement` evaluates the object expression, converts it with `ToObject`, and resolves unqualified identifiers through that object before falling back to outer lexical scopes. `Symbol.unscopables` is honored. Calls to functions resolved through the object environment use that object as `this`, closures created inside the body retain the object environment, and writes through non-writable or setter-less object properties silently keep the original value instead of throwing. When disabled (default), the parser accepts the syntax but treats the statement as a no-op and emits a warning suggesting explicit property access or the flag. `with` creates ambiguous scope and is forbidden by JavaScript strict mode, so new GocciaScript code should prefer explicit property access. The keyword is reserved (it cannot be used as a variable name), but it can be used as a property name (for example, `obj.with`).
 
-```text
-Warning: The 'with' statement is not supported in GocciaScript
-  --> script.js:1:1
-```
+### Non-Strict Assignment Semantics
 
-Like loops, the parser uses `SkipBalancedParens` to safely skip the `with (...)` expression, including nested parentheses.
+By default, assigning to a read-only property, setter-less accessor, or non-extensible object throws `TypeError`. With `--compat-non-strict-mode` in Script source, failed ordinary object and global object writes are ignored instead. The assignment expression still evaluates to the assigned value, matching ECMAScript non-strict `[[Set]]` behavior. Setters that throw still propagate their error, and property access through `null` or `undefined` still throws `TypeError`.
 
-`with` creates ambiguous scope and is deprecated even in JavaScript's strict mode. Note that `with` is a reserved keyword in GocciaScript (it cannot be used as a variable name), but it can be used as a property name (e.g., `obj.with`).
+### `delete` Semantics
+
+By default, GocciaScript follows strict delete behavior: deleting an unqualified identifier is an error, and deleting a non-configurable property throws `TypeError`. With `--compat-non-strict-mode` in Script source, legacy non-strict delete return values are enabled in both interpreter and bytecode modes. `delete name` returns `false` for declared bindings, deletes configurable global object properties when the identifier resolves there, and returns `true` for unresolvable names. `delete obj.prop` and `delete obj[key]` return `false` for non-configurable properties instead of throwing. Accessing a property through `null` or `undefined` still throws `TypeError`.
 
 ### Labeled Statements
 
@@ -862,7 +859,10 @@ GocciaScript operates in an implicit strict mode (see [Errors](errors.md) for th
 - Temporal Dead Zone is enforced for `let`/`const`.
 - `const` reassignment throws `TypeError`.
 - Accessing undeclared variables throws `ReferenceError`.
-- `this` is `undefined` in standalone function calls (no implicit global `this`).
+- Assigning to read-only properties, setter-less accessors, or non-extensible objects throws `TypeError` unless Script-source `--compat-non-strict-mode` is enabled.
+- Deleting an unqualified identifier or non-configurable property is an error unless Script-source `--compat-non-strict-mode` is enabled.
+- `this` is `undefined` in standalone function calls unless Script-source `--compat-non-strict-mode` is enabled.
+- Modules remain strict regardless of `--compat-non-strict-mode`.
 - Symbol values cannot be implicitly converted to strings or numbers — throws `TypeError`.
 
 ### `this` Binding (Strict Mode Semantics)
@@ -876,8 +876,8 @@ GocciaScript follows ECMAScript strict mode `this` semantics:
 | Shorthand method (`method() {}`) | Call-site object (the receiver) |
 | Class method | Call-site object (the instance) |
 | Getter/setter | Call-site object |
-| Standalone function call | `undefined` |
-| `fn.call(thisArg)` / `fn.apply(thisArg)` | Explicit `thisArg` |
+| Standalone function call | `undefined` by default; `globalThis` for regular functions with Script-source `--compat-non-strict-mode` |
+| `fn.call(thisArg)` / `fn.apply(thisArg)` | Explicit `thisArg`; nullish `thisArg` becomes `globalThis` for regular functions with Script-source `--compat-non-strict-mode` |
 | `fn.bind(thisArg)` | Bound `thisArg` |
 
 Arrow functions **never** receive their own `this` — they always inherit from their defining scope:

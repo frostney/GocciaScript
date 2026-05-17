@@ -41,7 +41,15 @@ const
   //   v25 -> v26: #529 added OP_NEW_TARGET for the new.target meta-property.
   //   v26 -> v27: added OP_LOOSE_EQ/OP_LOOSE_NEQ for
   //               --compat-loose-equality bytecode.
-  GOCCIA_FORMAT_VERSION = 27;
+  //   v27 -> v28: added OP_CREATE_ARGUMENTS plus with-statement helper
+  //               opcodes for object environment records.
+  //   v28 -> v29: added non-strict delete opcodes for
+  //               --compat-non-strict-mode bytecode.
+  //   v29 -> v30: serialized function strict-this mode for
+  //               --compat-non-strict-mode bytecode.
+  //   v30 -> v31: added non-strict assignment/global-delete opcodes for
+  //               --compat-non-strict-mode bytecode.
+  GOCCIA_FORMAT_VERSION = 31;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
@@ -169,8 +177,13 @@ type
     OP_SUPER_GET     = 87,
     OP_LOOSE_EQ      = 88,
     OP_LOOSE_NEQ     = 89,
+    OP_DELETE_PROP_CONST_LOOSE = 90,
+    OP_DEL_INDEX_LOOSE = 91,
+    OP_SET_PROP_CONST_LOOSE = 92,
     OP_COLLECTION_OP = 93,
+    OP_SET_INDEX_LOOSE = 94,
     OP_VALIDATE_VALUE = 95,
+    OP_SET_GLOBAL_LOOSE = 96,
     OP_THROW_TYPE_ERROR_CONST_LONG = 97,
     OP_THROW_TYPE_ERROR_CONST = 98,
     OP_DEFINE_GLOBAL_CONST = 99,
@@ -196,6 +209,7 @@ type
     OP_GET_INDEX     = 119,
     OP_SET_INDEX     = 120,
     OP_DEL_INDEX     = 121,
+    OP_DELETE_GLOBAL = 122,
     OP_ADD           = 128,
     OP_SUB           = 129,
     OP_MUL           = 130,
@@ -222,7 +236,10 @@ type
     OP_INC           = 178,
     OP_DEC           = 179,
     OP_TO_NUMERIC    = 180,
-    OP_NEW_TARGET    = 181
+    OP_NEW_TARGET    = 181,
+    OP_CREATE_ARGUMENTS = 182,
+    OP_TO_OBJECT     = 183,
+    OP_HAS_WITH_BINDING = 184
   );
 
 function EncodeABC(const AOp: TGocciaOpCode; const A, B, C: UInt8): UInt32; inline;

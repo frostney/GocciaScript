@@ -129,6 +129,18 @@ type
     property Condition: TGocciaExpression read FCondition;
   end;
 
+  TGocciaWithStatement = class(TGocciaStatement)
+  private
+    FObjectExpression: TGocciaExpression;
+    FBody: TGocciaStatement;
+  public
+    constructor Create(const AObjectExpression: TGocciaExpression;
+      const ABody: TGocciaStatement; const ALine, AColumn: Integer);
+    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
+    property ObjectExpression: TGocciaExpression read FObjectExpression;
+    property Body: TGocciaStatement read FBody;
+  end;
+
   TGocciaForOfStatement = class(TGocciaStatement)
   private
     FIsConst: Boolean;
@@ -475,11 +487,16 @@ type
     property IsAwait: Boolean read FIsAwait;
   end;
 
+function HasUseStrictDirective(const ABody: TGocciaASTNode): Boolean; overload;
+function HasUseStrictDirective(const AProgram: TGocciaProgram): Boolean; overload;
+
 implementation
 
 uses
   SysUtils,
 
+  Goccia.Constants,
+  Goccia.Error,
   Goccia.Evaluator,
   Goccia.GarbageCollector,
   Goccia.Generator.Continuation,
@@ -492,11 +509,82 @@ uses
   Goccia.Values.Error,
   Goccia.Values.FunctionValue,
   Goccia.Values.ObjectPropertyDescriptor,
-  Goccia.Values.ObjectValue;
+  Goccia.Values.ObjectValue,
+  Goccia.Values.ToObject;
 
 function CreateModuleNamespaceObject(const AModule: TGocciaModule): TGocciaValue;
 begin
   Result := AModule.GetNamespaceObject;
+end;
+
+function DirectiveStatementIsUseStrict(const AStatement: TGocciaASTNode;
+  out AContinuesDirectivePrologue: Boolean): Boolean;
+var
+  LiteralExpression: TGocciaLiteralExpression;
+  Expression: TGocciaExpression;
+  Literal: TGocciaValue;
+  SourceText: string;
+begin
+  Result := False;
+  AContinuesDirectivePrologue := False;
+
+  if not (AStatement is TGocciaExpressionStatement) then
+    Exit;
+
+  Expression := TGocciaExpressionStatement(AStatement).Expression;
+  if not (Expression is TGocciaLiteralExpression) then
+    Exit;
+
+  LiteralExpression := TGocciaLiteralExpression(Expression);
+  Literal := LiteralExpression.Value;
+  if not (Literal is TGocciaStringLiteralValue) then
+    Exit;
+
+  AContinuesDirectivePrologue := True;
+  SourceText := LiteralExpression.SourceText;
+  Result := (SourceText = #34 + USE_STRICT_DIRECTIVE + #34) or
+    (SourceText = #39 + USE_STRICT_DIRECTIVE + #39);
+end;
+
+// ES2026 §11.2.2 Directive Prologues and the Use Strict Directive
+function HasUseStrictDirective(const ABody: TGocciaASTNode): Boolean;
+var
+  Block: TGocciaBlockStatement;
+  I: Integer;
+  ContinuesDirectivePrologue: Boolean;
+begin
+  Result := False;
+  if not (ABody is TGocciaBlockStatement) then
+    Exit;
+
+  Block := TGocciaBlockStatement(ABody);
+  for I := 0 to Block.Nodes.Count - 1 do
+  begin
+    if DirectiveStatementIsUseStrict(Block.Nodes[I],
+      ContinuesDirectivePrologue) then
+      Exit(True);
+    if not ContinuesDirectivePrologue then
+      Exit;
+  end;
+end;
+
+function HasUseStrictDirective(const AProgram: TGocciaProgram): Boolean;
+var
+  I: Integer;
+  ContinuesDirectivePrologue: Boolean;
+begin
+  Result := False;
+  if not Assigned(AProgram) then
+    Exit;
+
+  for I := 0 to AProgram.Body.Count - 1 do
+  begin
+    if DirectiveStatementIsUseStrict(AProgram.Body[I],
+      ContinuesDirectivePrologue) then
+      Exit(True);
+    if not ContinuesDirectivePrologue then
+      Exit;
+  end;
 end;
 
 { TGocciaExpressionStatement }
@@ -801,6 +889,17 @@ end;
     FCondition := ACondition;
   end;
 
+  { TGocciaWithStatement }
+
+  constructor TGocciaWithStatement.Create(
+    const AObjectExpression: TGocciaExpression; const ABody: TGocciaStatement;
+    const ALine, AColumn: Integer);
+  begin
+    inherited Create(ALine, AColumn);
+    FObjectExpression := AObjectExpression;
+    FBody := ABody;
+  end;
+
   { TGocciaCaseClause }
 
   constructor TGocciaCaseClause.Create(const ATest: TGocciaExpression; const AConsequent: TObjectList<TGocciaStatement>; const ALine, AColumn: Integer);
@@ -977,6 +1076,33 @@ end;
   function TGocciaDoWhileStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
   begin
     Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
+  end;
+
+  function TGocciaWithStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  var
+    WithContext: TGocciaEvaluationContext;
+    WithObject: TGocciaObjectValue;
+    WithScope: TGocciaWithScope;
+    GC: TGarbageCollector;
+  begin
+    if not AContext.NonStrictMode then
+      raise TGocciaSyntaxError.Create(
+        '''with'' statements are not allowed in strict mode',
+        Line, Column, AContext.CurrentFilePath, nil);
+
+    WithObject := ToObject(EvaluateExpression(ObjectExpression, AContext));
+    WithScope := TGocciaWithScope.Create(AContext.Scope, WithObject);
+    GC := TGarbageCollector.Instance;
+    if Assigned(GC) then
+      GC.AddTempRoot(WithScope);
+    try
+      WithContext := AContext;
+      WithContext.Scope := WithScope;
+      Result := EvaluateStatement(Body, WithContext);
+    finally
+      if Assigned(GC) then
+        GC.RemoveTempRoot(WithScope);
+    end;
   end;
 
   function TGocciaForOfStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;

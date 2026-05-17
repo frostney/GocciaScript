@@ -1030,8 +1030,15 @@ begin
   else
   begin
     // Regular function calls
-    Callee := EvaluateExpression(ACallExpression.Callee, AContext);
-    ThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+    if ACallExpression.Callee is TGocciaIdentifierExpression then
+      AContext.Scope.ResolveIdentifierReference(
+        TGocciaIdentifierExpression(ACallExpression.Callee).Name,
+        Callee, ThisValue)
+    else
+    begin
+      Callee := EvaluateExpression(ACallExpression.Callee, AContext);
+      ThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+    end;
   end;
 
   if ACallExpression.Optional and
@@ -1569,17 +1576,27 @@ function EvaluateGetter(const AGetterExpression: TGocciaGetterExpression; const 
 var
   Statements: TObjectList<TGocciaASTNode>;
   EmptyParameters: TGocciaParameterArray;
+  HasStrictDirective: Boolean;
 begin
   // Getter has no parameters
   SetLength(EmptyParameters, 0);
 
   Statements := CopyStatementList(TGocciaBlockStatement(AGetterExpression.Body).Nodes);
+  HasStrictDirective := HasUseStrictDirective(AGetterExpression.Body);
 
   // Create function with closure scope
   if AAsMethod or Assigned(ASuperClass) then
     Result := TGocciaMethodValue.Create(EmptyParameters, Statements, AContext.Scope.CreateChild, '', ASuperClass)
   else
     Result := TGocciaFunctionValue.Create(EmptyParameters, Statements, AContext.Scope.CreateChild);
+  if AContext.NonStrictMode and not HasStrictDirective and
+     not (AAsMethod or Assigned(ASuperClass)) then
+  begin
+    TGocciaFunctionValue(Result).StrictThis := False;
+    TGocciaFunctionValue(Result).StrictCode := False;
+  end
+  else
+    TGocciaFunctionValue(Result).StrictCode := True;
   TGocciaFunctionValue(Result).SourceFilePath := AContext.CurrentFilePath;
   TGocciaFunctionValue(Result).SourceLine := AGetterExpression.Line;
   TGocciaFunctionValue(Result).SourceText := AGetterExpression.SourceText;
@@ -1589,6 +1606,7 @@ function EvaluateSetter(const ASetterExpression: TGocciaSetterExpression; const 
 var
   Statements: TObjectList<TGocciaASTNode>;
   Parameters: TGocciaParameterArray;
+  HasStrictDirective: Boolean;
 begin
   // Setter has one parameter
   SetLength(Parameters, 1);
@@ -1596,12 +1614,21 @@ begin
   Parameters[0].DefaultValue := nil;
 
   Statements := CopyStatementList(TGocciaBlockStatement(ASetterExpression.Body).Nodes);
+  HasStrictDirective := HasUseStrictDirective(ASetterExpression.Body);
 
   // Create function with closure scope
   if AAsMethod or Assigned(ASuperClass) then
     Result := TGocciaMethodValue.Create(Parameters, Statements, AContext.Scope.CreateChild, '', ASuperClass)
   else
     Result := TGocciaFunctionValue.Create(Parameters, Statements, AContext.Scope.CreateChild);
+  if AContext.NonStrictMode and not HasStrictDirective and
+     not (AAsMethod or Assigned(ASuperClass)) then
+  begin
+    TGocciaFunctionValue(Result).StrictThis := False;
+    TGocciaFunctionValue(Result).StrictCode := False;
+  end
+  else
+    TGocciaFunctionValue(Result).StrictCode := True;
   TGocciaFunctionValue(Result).SourceFilePath := AContext.CurrentFilePath;
   TGocciaFunctionValue(Result).SourceLine := ASetterExpression.Line;
   TGocciaFunctionValue(Result).SourceText := ASetterExpression.SourceText;
@@ -2645,6 +2672,9 @@ begin
     Result := TGocciaAsyncArrowFunctionValue.Create(AArrowFunctionExpression.Parameters, Statements, AContext.Scope.CreateChild)
   else
     Result := TGocciaArrowFunctionValue.Create(AArrowFunctionExpression.Parameters, Statements, AContext.Scope.CreateChild);
+  TGocciaFunctionValue(Result).StrictCode :=
+    (not AContext.NonStrictMode) or
+    HasUseStrictDirective(AArrowFunctionExpression.Body);
   TGocciaFunctionValue(Result).IsExpressionBody := not (AArrowFunctionExpression.Body is TGocciaBlockStatement);
   TGocciaFunctionValue(Result).SourceFilePath := AContext.CurrentFilePath;
   TGocciaFunctionValue(Result).SourceLine := AArrowFunctionExpression.Line;
@@ -2657,7 +2687,9 @@ var
   ClosureScope: TGocciaScope;
   PrototypeObj: TGocciaObjectValue;
   PrototypeFlags: TPropertyFlags;
+  HasStrictDirective: Boolean;
 begin
+  HasStrictDirective := HasUseStrictDirective(AMethodExpression.Body);
   if AMethodExpression.Body is TGocciaBlockStatement then
     Statements := CopyStatementList(TGocciaBlockStatement(AMethodExpression.Body).Nodes)
   else
@@ -2682,6 +2714,13 @@ begin
   else
     Result := TGocciaFunctionValue.Create(AMethodExpression.Parameters, Statements, ClosureScope);
   TGocciaFunctionValue(Result).Name := AMethodExpression.Name;
+  if AContext.NonStrictMode and not HasStrictDirective then
+  begin
+    TGocciaFunctionValue(Result).StrictThis := False;
+    TGocciaFunctionValue(Result).StrictCode := False;
+  end
+  else
+    TGocciaFunctionValue(Result).StrictCode := True;
   TGocciaFunctionValue(Result).SourceFilePath := AContext.CurrentFilePath;
   TGocciaFunctionValue(Result).SourceLine := AMethodExpression.Line;
   TGocciaFunctionValue(Result).SourceText := AMethodExpression.SourceText;
@@ -2866,6 +2905,9 @@ begin
       BlockContext.Scope := AContext.Scope.CreateChild(skBlock, 'BlockScope')
     else
       BlockContext.Scope := AContext.Scope;
+    GC := TGarbageCollector.Instance;
+    if NeedsChildScope and Assigned(GC) then
+      GC.AddTempRoot(BlockContext.Scope);
     try
       if NeedsChildScope then
         PredeclareBlockLexicalBindings(ABlockStatement.Nodes, BlockContext);
@@ -2875,8 +2917,8 @@ begin
       if (Result.Kind = cfkNormal) and (Result.Value = nil) then
         Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
     finally
-      if NeedsChildScope then
-        BlockContext.Scope.Free;
+      if NeedsChildScope and Assigned(GC) then
+        GC.RemoveTempRoot(BlockContext.Scope);
     end;
     Exit;
   end;
@@ -2891,6 +2933,8 @@ begin
   CaughtError := nil;
   HasCaughtError := False;
   GC := TGarbageCollector.Instance;
+  if Assigned(GC) then
+    GC.AddTempRoot(BlockContext.Scope);
   try
     try
       PredeclareBlockLexicalBindings(ABlockStatement.Nodes, BlockContext);
@@ -2929,8 +2973,8 @@ begin
     Tracker.Free;
     BlockContext.DisposalTracker := nil;
 
-    // Free the block scope before re-raising
-    BlockContext.Scope.Free;
+    if Assigned(GC) then
+      GC.RemoveTempRoot(BlockContext.Scope);
 
     // Remove GC temp root before re-raising
     if HasCaughtError and Assigned(GC) and Assigned(CaughtError) then
@@ -5567,6 +5611,10 @@ begin
     MemberExpr := TGocciaMemberExpression(ATaggedTemplateExpression.Tag);
     Callee := EvaluateMember(MemberExpr, AContext, ThisValue);
   end
+  else if ATaggedTemplateExpression.Tag is TGocciaIdentifierExpression then
+    AContext.Scope.ResolveIdentifierReference(
+      TGocciaIdentifierExpression(ATaggedTemplateExpression.Tag).Name,
+      Callee, ThisValue)
   else
   begin
     Callee := EvaluateExpression(ATaggedTemplateExpression.Tag, AContext);
@@ -6215,15 +6263,18 @@ begin
     // ES2026 §13.5.1.2 PropertyDestructuringAssignmentEvaluation step 5:
     // ToPropertyKey on the computed key.
     PropValue := ToPropertyKey(EvaluateExpression(MemberExpr.PropertyExpression, AContext));
-    if (PropValue is TGocciaSymbolValue) and (Obj is TGocciaObjectValue) then
-      TGocciaObjectValue(Obj).AssignSymbolProperty(TGocciaSymbolValue(PropValue), AValue)
-    else if (PropValue is TGocciaSymbolValue) and (Obj is TGocciaClassValue) then
-      TGocciaClassValue(Obj).AssignSymbolProperty(TGocciaSymbolValue(PropValue), AValue)
+    if PropValue is TGocciaSymbolValue then
+      AssignSymbolProperty(Obj, TGocciaSymbolValue(PropValue), AValue,
+        AContext.OnError, APattern.Line, APattern.Column,
+        AContext.NonStrictMode)
     else
-      AssignProperty(Obj, TGocciaStringLiteralValue(PropValue).Value, AValue, AContext.OnError, APattern.Line, APattern.Column);
+      AssignProperty(Obj, TGocciaStringLiteralValue(PropValue).Value, AValue,
+        AContext.OnError, APattern.Line, APattern.Column,
+        AContext.NonStrictMode);
   end
   else
-    AssignProperty(Obj, MemberExpr.PropertyName, AValue, AContext.OnError, APattern.Line, APattern.Column);
+    AssignProperty(Obj, MemberExpr.PropertyName, AValue, AContext.OnError,
+      APattern.Line, APattern.Column, AContext.NonStrictMode);
 end;
 
 procedure AssignPattern(const APattern: TGocciaDestructuringPattern; const AValue: TGocciaValue; const AContext: TGocciaEvaluationContext; const AIsDeclaration: Boolean = False; const ADeclarationType: TGocciaDeclarationType = dtLet);
@@ -6247,7 +6298,8 @@ begin
   if AIsDeclaration then
     AContext.Scope.DefineLexicalBinding(APattern.Name, AValue, ADeclarationType)
   else
-    AContext.Scope.AssignBinding(APattern.Name, AValue);
+    AContext.Scope.AssignBinding(APattern.Name, AValue, APattern.Line,
+      APattern.Column, AContext.NonStrictMode);
 end;
 
 procedure AssignArrayPattern(const APattern: TGocciaArrayDestructuringPattern; const AValue: TGocciaValue; const AContext: TGocciaEvaluationContext; const AIsDeclaration: Boolean = False; const ADeclarationType: TGocciaDeclarationType = dtLet);
@@ -6658,9 +6710,16 @@ begin
       if ObjValue is TGocciaObjectValue then
       begin
         if not TGocciaObjectValue(ObjValue).DeleteSymbolProperty(SymbolKey) then
+        begin
+          if AContext.NonStrictMode then
+          begin
+            Result := TGocciaBooleanLiteralValue.FalseValue;
+            Exit;
+          end;
           ThrowTypeError(Format(SErrorCannotDeletePropertyOf,
             [SymbolKey.ToDisplayString.Value, '[object Object]']),
             SSuggestCannotDeleteNonConfigurable);
+        end;
       end;
       Result := TGocciaBooleanLiteralValue.TrueValue;
     end
@@ -6676,8 +6735,15 @@ begin
       else
       begin
         if not ArrayValue.DeleteProperty(PropertyName) then
+        begin
+          if AContext.NonStrictMode then
+          begin
+            Result := TGocciaBooleanLiteralValue.FalseValue;
+            Exit;
+          end;
           ThrowTypeError(Format(SErrorCannotDeletePropertyOf, [PropertyName, '[object Array]']),
             SSuggestCannotDeleteNonConfigurable);
+        end;
         Result := TGocciaBooleanLiteralValue.TrueValue;
       end;
     end
@@ -6685,8 +6751,15 @@ begin
     begin
       ObjectValue := TGocciaObjectValue(ObjValue);
       if not ObjectValue.DeleteProperty(PropertyName) then
+      begin
+        if AContext.NonStrictMode then
+        begin
+          Result := TGocciaBooleanLiteralValue.FalseValue;
+          Exit;
+        end;
         ThrowTypeError(Format(SErrorCannotDeletePropertyOf, [PropertyName, '[object Object]']),
           SSuggestCannotDeleteNonConfigurable);
+      end;
       Result := TGocciaBooleanLiteralValue.TrueValue;
     end
     else
@@ -6700,6 +6773,15 @@ begin
     // Handle other expressions according to strict mode semantics
     if AOperand is TGocciaIdentifierExpression then
     begin
+      if AContext.NonStrictMode then
+      begin
+        if AContext.Scope.DeleteBinding(TGocciaIdentifierExpression(AOperand).Name) then
+          Result := TGocciaBooleanLiteralValue.TrueValue
+        else
+          Result := TGocciaBooleanLiteralValue.FalseValue;
+        Exit;
+      end;
+
       // In strict mode, attempting to delete variables/identifiers throws TypeError
       AContext.OnError('Delete of an unqualified identifier in strict mode',
         AOperand.Line, AOperand.Column);

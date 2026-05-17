@@ -25,6 +25,7 @@ type
     FFormalParameterCounts: TFormalParameterCountMap;
     FGlobalBackedTopLevel: Boolean;
     FStrictTypes: Boolean;
+    FNonStrictMode: Boolean;
     FOptimizationOptions: TGocciaCompilerOptimizationOptions;
     procedure DoCompileExpression(const AExpr: TGocciaExpression;
       const ADest: UInt8);
@@ -43,6 +44,7 @@ type
     property GlobalBackedTopLevel: Boolean read FGlobalBackedTopLevel
       write FGlobalBackedTopLevel;
     property StrictTypes: Boolean read FStrictTypes write FStrictTypes;
+    property NonStrictMode: Boolean read FNonStrictMode write FNonStrictMode;
     property OptimizationOptions: TGocciaCompilerOptimizationOptions
       read FOptimizationOptions write FOptimizationOptions;
   end;
@@ -92,6 +94,8 @@ begin
   Result.GlobalBackedTopLevel := FGlobalBackedTopLevel and
     (FCurrentTemplate = FTopLevelTemplate);
   Result.StrictTypes := FStrictTypes;
+  Result.CompatibilityNonStrictMode := FNonStrictMode;
+  Result.NonStrictMode := FNonStrictMode and not FCurrentTemplate.StrictCode;
   Result.OptimizationOptions := FOptimizationOptions;
   Result.CompileExpression := DoCompileExpression;
   Result.CompileStatement := DoCompileStatement;
@@ -234,6 +238,9 @@ begin
   else if AStmt is TGocciaIfStatement then
     Result := Goccia.Compiler.Statements.CompileIfStatement(Ctx,
       TGocciaIfStatement(AStmt))
+  else if AStmt is TGocciaWithStatement then
+    Result := Goccia.Compiler.Statements.CompileWithStatement(Ctx,
+      TGocciaWithStatement(AStmt))
   else if AStmt is TGocciaReturnStatement then
   begin
     Goccia.Compiler.Statements.CompileReturnStatement(Ctx,
@@ -507,6 +514,7 @@ var
   ForStmt: TGocciaForStatement;
   TryStmt: TGocciaTryStatement;
   SwitchStmt: TGocciaSwitchStatement;
+  WithStmt: TGocciaWithStatement;
   VarDecl: TGocciaVariableDeclaration;
   DestructDecl: TGocciaDestructuringDeclaration;
   I, J: Integer;
@@ -548,6 +556,11 @@ begin
     if Assigned(ForStmt.Init) then
       HoistVarLocals(ForStmt.Init, AScope);
     HoistVarLocals(ForStmt.Body, AScope);
+  end
+  else if ANode is TGocciaWithStatement then
+  begin
+    WithStmt := TGocciaWithStatement(ANode);
+    HoistVarLocals(WithStmt.Body, AScope);
   end
   else if ANode is TGocciaTryStatement then
   begin
@@ -627,6 +640,8 @@ begin
   FCurrentTemplate := TGocciaFunctionTemplate.Create('<module>');
   FTopLevelTemplate := FCurrentTemplate;
   FCurrentTemplate.DebugInfo := TGocciaDebugInfo.Create(FSourcePath);
+  FCurrentTemplate.StrictCode := (not FNonStrictMode) or
+    HasUseStrictDirective(AProgram);
   FCurrentScope := TGocciaCompilerScope.Create(nil, 0);
   FCurrentScope.DeclareLocal('__receiver', False);
 

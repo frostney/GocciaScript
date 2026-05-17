@@ -79,10 +79,10 @@ below.
 All four template kinds are produced by `buildTestSource` in
 `scripts/run_test262_suite.ts`. Bodies for positive sync, positive async,
 empty, and script-scope tests are all `harness + body` — identical
-shape, no special wrapping. There is no per-template strict-directive
-injection (GocciaScript's parser ignores `"use strict"`; its curated
-semantics enforce strict-equivalent behaviors statically — see
-"Strict mode" below).
+shape, no special wrapping. Tests flagged `onlyStrict` receive a
+`"use strict"` directive prefix before the harness so the runtime uses
+strict directive semantics while the runner can still enable
+compatibility-gated parser support for Script tests.
 
 ### Positive (sync, async, empty, script-scope)
 
@@ -186,12 +186,11 @@ This is the minimum compatibility layer needed to keep conformance
 numbers honest — without it, ~7K tests fail with harness-environment
 errors instead of real engine surfaces.
 
-Bundling rule: only override a stock file when it depends on language
-features Goccia intentionally excludes (`arguments`, `with`, traditional
-`for(var i=0;...)` / `while` loops — Goccia's parser warns and silently
-drops these constructs, leaving helper functions broken). Each entry has
-a one-line rationale in `BUNDLED_INCLUDES`. If a future stock harness
-change makes a bundled file unnecessary, delete the entry.
+Bundling rule: only override a stock file when it depends on missing
+language/runtime coverage or on compatibility syntax that the harness
+cannot currently exercise directly. Each entry has a one-line rationale
+in `BUNDLED_INCLUDES`. If a future stock harness change or engine
+implementation makes a bundled file unnecessary, delete the entry.
 
 Current bundled set (13 files):
 
@@ -209,12 +208,14 @@ moves.
   instead of stock's `thrown.constructor !== ctor` because caught
   Errors have `e.constructor === undefined` in Goccia.
 - `propertyHelper.js`, `deepEqual.js`, `temporalHelpers.js`,
-  `wellKnownIntrinsicObjects.js`: stock helpers use `arguments`
-  (variadic captures) which Goccia excludes; reimplemented with rest
-  parameters.
+  `wellKnownIntrinsicObjects.js`: stock helpers use `arguments`; the
+  runner now enables `--compat-non-strict-mode` for eligible Script tests,
+  so these entries should be re-evaluated against the stock helpers during
+  the next harness cleanup.
 - `testTypedArray.js`: stock uses `for (var i = 0; ...)` and
-  `with (...)` blocks which Goccia excludes; reimplemented with
-  for-of and explicit property access.
+  `with (...)` blocks; the runner now enables `--compat-non-strict-mode`
+  for eligible Script tests, so the remaining reason to keep it bundled is
+  the stock traditional loop shape, not `with`.
 - `compareIterator.js`, `decimalToHexString.js`,
   `nativeFunctionMatcher.js`, `regExpUtils.js`: stock uses traditional
   `for` or `while` loops whose bodies Goccia's parser drops;
@@ -223,10 +224,11 @@ moves.
   `Reflect.construct(function(){}, [], f)`; Goccia's `Reflect.construct`
   rejects `function` declarations and expressions as the proxy target.
   Adapted version uses `Reflect.construct(class {}, [], f)`.
-- `fnGlobalObject.js`: stock uses `Function("return this;")()`; Goccia
-  binds `this` to `undefined` for unattached calls (consistent with
-  Goccia's strict-equivalent language design), so the stock helper
-  returns `undefined`. Adapted version uses `() => globalThis`.
+- `fnGlobalObject.js`: stock uses `Function("return this;")()`.
+  The runner now enables `--compat-function` and
+  `--compat-non-strict-mode` for eligible Script tests, so this helper
+  should be re-evaluated against the stock version during the next harness
+  cleanup. Adapted version still uses `() => globalThis`.
 - `doneprintHandle.js`: stock has `$DONE` print
   `Test262:AsyncTestComplete` / `Test262:AsyncTestFailure:...` directly;
   in Goccia bytecode mode draining a top-level `Promise.then`
@@ -238,24 +240,23 @@ moves.
 
 ## Strict mode
 
-GocciaScript's parser does not process `"use strict"` directives — it
-neither recognizes nor enforces strict-mode toggling at parse time.
-Independently, the engine's curated semantics enforce most strict-mode
-behaviors statically:
+GocciaScript recognizes strict directive prologues at execution time for
+the compatibility behaviors that otherwise depend on Script non-strict
+mode. Independently, the engine's curated default semantics enforce most
+strict-mode behaviors statically:
 
 - Implicit globals throw `ReferenceError` (sloppy would create a global)
-- `delete <identifier>` always throws (sloppy is silent)
-- `arguments` and `with` are excluded by language design
+- `delete <identifier>` and non-configurable property deletion throw by default
 - `eval` is not implemented
 
-The orchestrator therefore does not inject `"use strict"` for `onlyStrict`
-tests — the body's own directive (if present) is parsed and ignored,
-which is correct because the engine's behavior is already strict-equivalent
-for the things `onlyStrict` tests assert on.
-
-`noStrict` tests rely on sloppy-only behaviors that GocciaScript doesn't
-provide and fail naturally. They are documented in
-`scripts/test262_compatibility_roadmap.json` as
+The orchestrator enables `--compat-non-strict-mode` per test, not globally:
+Script tests receive it, while module tests stay strict. `onlyStrict`
+Script tests also receive the flag, but the injected directive keeps
+`arguments`, `with`, non-strict assignment failures, legacy `delete`
+return values, and regular-function nullish `this` coercion on the strict
+path. Remaining `noStrict` tests rely on sloppy-only behaviors that
+GocciaScript still does not provide and fail naturally. They are
+documented in `scripts/test262_compatibility_roadmap.json` as
 `excluded-by-language-design` and counted as expected failures, not as
 wrapper-infra failures.
 
