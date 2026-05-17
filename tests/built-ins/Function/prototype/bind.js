@@ -42,4 +42,19 @@ describe("Function.prototype.bind", () => {
     expect(bbc(1)).toBe(true);
     expect(bbc(0)).toBe(false);
   });
+
+  test("bound length ignores non-number and inherited target length", () => {
+    const foo = () => {};
+
+    Object.defineProperty(foo, "length", { value: undefined });
+    expect(foo.bind(null, 1).length).toBe(0);
+
+    Object.defineProperty(foo, "length", { value: "1" });
+    expect(foo.bind(null, 1).length).toBe(0);
+
+    const bar = () => {};
+    Object.setPrototypeOf(bar, { length: 42 });
+    expect(delete bar.length).toBe(true);
+    expect(Function.prototype.bind.call(bar, null, 1).length).toBe(0);
+  });
 });

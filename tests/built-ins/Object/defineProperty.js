@@ -819,3 +819,43 @@ test("defineProperty accessor on array rolls back when redefinition is rejected"
   expect(arr.length).toBe(6);
   expect(arr[5]).toBe("first");
 });
+
+test("array length descriptor without value preserves current length", () => {
+  const arr = [];
+  Object.defineProperty(arr, "length", {
+    writable: true,
+    enumerable: false,
+    configurable: false,
+  });
+
+  expect(arr.length).toBe(0);
+  arr.length = 2;
+  const desc = Object.getOwnPropertyDescriptor(arr, "length");
+  expect(desc.value).toBe(2);
+  expect(desc.writable).toBe(true);
+  expect(desc.enumerable).toBe(false);
+  expect(desc.configurable).toBe(false);
+});
+
+test("array index empty descriptor preserves dense element", () => {
+  const arr = [101];
+  Object.defineProperty(arr, "0", {});
+
+  const desc = Object.getOwnPropertyDescriptor(arr, "0");
+  expect(desc.value).toBe(101);
+  expect(desc.writable).toBe(true);
+  expect(desc.enumerable).toBe(true);
+  expect(desc.configurable).toBe(true);
+});
+
+test("array length non-writable allows same-value redefinition", () => {
+  const arr = [0, 1, 2];
+  Object.defineProperty(arr, "length", { writable: false });
+
+  Object.defineProperty(arr, "length", { value: 3 });
+  Object.defineProperty(arr, "length", { writable: false });
+  Object.defineProperty(arr, "length", { configurable: false, value: 3 });
+
+  expect(arr.length).toBe(3);
+  expect(Object.getOwnPropertyDescriptor(arr, "length").writable).toBe(false);
+});
