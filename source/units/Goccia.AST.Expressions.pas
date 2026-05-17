@@ -858,6 +858,7 @@ uses
   Goccia.ImportMeta,
   Goccia.Modules,
   Goccia.RegExp.Runtime,
+  Goccia.Scope,
   Goccia.Values.BigIntValue,
   Goccia.Values.ClassHelper,
   Goccia.Values.ClassValue,
@@ -1648,9 +1649,23 @@ begin
 end;
 
 function TGocciaAssignmentExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
+var
+  ObjectBinding: TGocciaObjectValue;
+  ScopeBinding: TGocciaScope;
 begin
+  AContext.Scope.ResolveAssignmentTarget(Name, ObjectBinding, ScopeBinding);
   Result := Value.Evaluate(AContext);
-  AContext.Scope.AssignBinding(Name, Result, Line, Column,
+
+  if Assigned(ObjectBinding) then
+  begin
+    if AContext.NonStrictMode then
+      ObjectBinding.AssignPropertyWithReceiver(Name, Result, ObjectBinding)
+    else
+      ObjectBinding.AssignProperty(Name, Result);
+    Exit;
+  end;
+
+  ScopeBinding.AssignBinding(Name, Result, Line, Column,
     AContext.NonStrictMode);
 end;
 

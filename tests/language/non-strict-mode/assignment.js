@@ -95,6 +95,20 @@ describe("non-strict assignment", () => {
     delete globalThis.__gocciaNonStrictFixedAssignment;
   });
 
+  test("unresolvable identifier assignment creates a global object property", () => {
+    delete globalThis.__gocciaLooseCreatedAssignment;
+
+    try {
+      const result = (__gocciaLooseCreatedAssignment = 3);
+
+      expect(result).toBe(3);
+      expect(globalThis.__gocciaLooseCreatedAssignment).toBe(3);
+      expect(__gocciaLooseCreatedAssignment).toBe(3);
+    } finally {
+      delete globalThis.__gocciaLooseCreatedAssignment;
+    }
+  });
+
   test("non-extensible object additions silently fail", () => {
     const obj = {};
     Object.preventExtensions(obj);

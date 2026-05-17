@@ -2905,6 +2905,9 @@ begin
       BlockContext.Scope := AContext.Scope.CreateChild(skBlock, 'BlockScope')
     else
       BlockContext.Scope := AContext.Scope;
+    GC := TGarbageCollector.Instance;
+    if NeedsChildScope and Assigned(GC) then
+      GC.AddTempRoot(BlockContext.Scope);
     try
       if NeedsChildScope then
         PredeclareBlockLexicalBindings(ABlockStatement.Nodes, BlockContext);
@@ -2914,8 +2917,8 @@ begin
       if (Result.Kind = cfkNormal) and (Result.Value = nil) then
         Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
     finally
-      if NeedsChildScope then
-        BlockContext.Scope.Free;
+      if NeedsChildScope and Assigned(GC) then
+        GC.RemoveTempRoot(BlockContext.Scope);
     end;
     Exit;
   end;
@@ -2930,6 +2933,8 @@ begin
   CaughtError := nil;
   HasCaughtError := False;
   GC := TGarbageCollector.Instance;
+  if Assigned(GC) then
+    GC.AddTempRoot(BlockContext.Scope);
   try
     try
       PredeclareBlockLexicalBindings(ABlockStatement.Nodes, BlockContext);
@@ -2968,8 +2973,8 @@ begin
     Tracker.Free;
     BlockContext.DisposalTracker := nil;
 
-    // Free the block scope before re-raising
-    BlockContext.Scope.Free;
+    if Assigned(GC) then
+      GC.RemoveTempRoot(BlockContext.Scope);
 
     // Remove GC temp root before re-raising
     if HasCaughtError and Assigned(GC) and Assigned(CaughtError) then

@@ -121,6 +121,20 @@ describe("with statement", () => {
     expect(read()).toBe(6);
   });
 
+  test("closures prefer lexical declarations created inside the with body", () => {
+    const obj = { x: 1 };
+    let read;
+
+    with (obj) {
+      let x = 2;
+      read = () => x;
+    }
+
+    obj.x = 3;
+    expect(read()).toBe(2);
+    expect(obj.x).toBe(3);
+  });
+
   test("calls object-environment methods with the object as this", () => {
     const obj = {
       x: 3,
@@ -142,6 +156,22 @@ describe("with statement", () => {
     expect(obj.x).toBe(4);
   });
 
+  test("tagged template calls object-environment methods with the object as this", () => {
+    const obj = {
+      x: 42,
+      tag(strings) {
+        return this.x + strings.length;
+      }
+    };
+    let result = 0;
+
+    with (obj) {
+      result = tag`value`;
+    }
+
+    expect(result).toBe(43);
+  });
+
   test("compound assignments and updates target the object binding", () => {
     const obj = { x: 1 };
 
@@ -151,6 +181,57 @@ describe("with statement", () => {
     }
 
     expect(obj.x).toBe(4);
+  });
+
+  test("assignments resolve the object-environment target before evaluating the value", () => {
+    let log = "";
+    const obj = {
+      x: 1,
+      [Symbol.unscopables]: {
+        get x() {
+          log += "u";
+          return false;
+        }
+      }
+    };
+
+    with (obj) {
+      x = (log += "r", 2);
+    }
+
+    expect(log).toBe("ur");
+    expect(obj.x).toBe(2);
+  });
+
+  test("unscopables-hidden assignments keep the resolved outer target", () => {
+    let log = "";
+    let x = 1;
+    const obj = {
+      x: 10,
+      [Symbol.unscopables]: {
+        get x() {
+          log += "u";
+          return true;
+        }
+      }
+    };
+
+    with (obj) {
+      x = (log += "r", 2);
+    }
+
+    expect(log).toBe("ur");
+    expect(x).toBe(2);
+    expect(obj.x).toBe(10);
+  });
+
+  test("var declarations inside with hoist to the containing scope", () => {
+    with ({}) {
+      var hoistedFromWith = 7;
+    }
+
+    const value = hoistedFromWith;
+    expect(value).toBe(7);
   });
 
   test("throws when the object expression cannot be converted to an object", () => {
