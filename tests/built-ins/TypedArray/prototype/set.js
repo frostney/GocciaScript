@@ -48,6 +48,12 @@ describe("TypedArray.prototype.set", () => {
       const ta = new TA(3);
       expect(() => ta.set([1, 2], 2)).toThrow(RangeError);
     });
+
+    test("throws when target buffer is already detached", () => {
+      const ta = new TA(3);
+      ta.buffer.transfer();
+      expect(() => ta.set([1])).toThrow(TypeError);
+    });
   });
 
   describe("set from array-like", () => {
@@ -108,5 +114,12 @@ describe("TypedArray.prototype.set", () => {
     expect(dst[0]).toBe(0n);
     expect(dst[1]).toBe(10n);
     expect(dst[2]).toBe(20n);
+  });
+
+  test("throws when typed array source buffer is already detached", () => {
+    const src = new Int32Array([1]);
+    const dst = new Int32Array(1);
+    src.buffer.transfer();
+    expect(() => dst.set(src)).toThrow(TypeError);
   });
 });

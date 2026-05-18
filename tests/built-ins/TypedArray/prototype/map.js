@@ -26,6 +26,17 @@ describe("TypedArray.prototype.map", () => {
       expect(() => ta.map()).toThrow(TypeError);
     });
 
+    test("throws on detached buffer before callback", () => {
+      const ta = new TA([1, 2, 3]);
+      let called = false;
+      ta.buffer.transfer();
+      expect(() => ta.map(() => {
+        called = true;
+        return 0;
+      })).toThrow(TypeError);
+      expect(called).toBe(false);
+    });
+
     test("passes thisArg to callback", () => {
       const ta = new TA([1, 2, 3]);
       const ctx = { mult: 3 };

@@ -32,4 +32,10 @@ describe("TypedArray.prototype.reverse", () => {
     expect(ta[1]).toBe(2n);
     expect(ta[2]).toBe(1n);
   });
+
+  test("throws on detached buffer", () => {
+    const ta = new Int32Array([1, 2, 3]);
+    ta.buffer.transfer();
+    expect(() => ta.reverse()).toThrow(TypeError);
+  });
 });
