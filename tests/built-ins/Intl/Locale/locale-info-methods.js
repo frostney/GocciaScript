@@ -49,6 +49,8 @@ describe.runIf(isIntl && typeof Intl.Locale !== "undefined")("Intl.Locale locale
   test("getTextInfo returns text direction", () => {
     expect(new Intl.Locale("en").getTextInfo()).toEqual({ direction: "ltr" });
     expect(new Intl.Locale("ar").getTextInfo()).toEqual({ direction: "rtl" });
+    expect(new Intl.Locale("ar-Latn").getTextInfo()).toEqual({ direction: "ltr" });
+    expect(new Intl.Locale("en-Hatr").getTextInfo()).toEqual({ direction: "rtl" });
   });
 
   test("getWeekInfo returns first day and weekend data", () => {

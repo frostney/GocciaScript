@@ -235,21 +235,35 @@ function TryGetScriptTextDirection(const AScript: string; out ADirection: string
 var
   NormalizedScript: string;
 begin
-  Result := AScript <> '';
-  if not Result then
+  Result := False;
+  if AScript = '' then
     Exit;
 
   NormalizedScript := LowerCase(AScript);
   if (NormalizedScript = 'adlm') or (NormalizedScript = 'arab') or
-     (NormalizedScript = 'hebr') or (NormalizedScript = 'mand') or
-     (NormalizedScript = 'mani') or (NormalizedScript = 'mend') or
-     (NormalizedScript = 'merc') or (NormalizedScript = 'mero') or
-     (NormalizedScript = 'nkoo') or (NormalizedScript = 'rohg') or
-     (NormalizedScript = 'samr') or (NormalizedScript = 'syrc') or
-     (NormalizedScript = 'thaa') then
-    ADirection := 'rtl'
-  else
+     (NormalizedScript = 'cprt') or (NormalizedScript = 'hatr') or
+     (NormalizedScript = 'hebr') or (NormalizedScript = 'hung') or
+     (NormalizedScript = 'khar') or (NormalizedScript = 'lydi') or
+     (NormalizedScript = 'mand') or (NormalizedScript = 'mani') or
+     (NormalizedScript = 'mend') or (NormalizedScript = 'merc') or
+     (NormalizedScript = 'mero') or (NormalizedScript = 'narb') or
+     (NormalizedScript = 'nkoo') or (NormalizedScript = 'ougr') or
+     (NormalizedScript = 'palm') or (NormalizedScript = 'phli') or
+     (NormalizedScript = 'phlp') or (NormalizedScript = 'phnx') or
+     (NormalizedScript = 'prti') or (NormalizedScript = 'rohg') or
+     (NormalizedScript = 'samr') or (NormalizedScript = 'sarb') or
+     (NormalizedScript = 'sogd') or (NormalizedScript = 'sogo') or
+     (NormalizedScript = 'syrc') or (NormalizedScript = 'thaa') then
+  begin
+    ADirection := 'rtl';
+    Result := True;
+  end
+  else if (NormalizedScript = 'cyrl') or (NormalizedScript = 'grek') or
+          (NormalizedScript = 'latn') then
+  begin
     ADirection := 'ltr';
+    Result := True;
+  end;
 end;
 
 procedure AppendSubtag(var AValue: string; const ASubtag: string);
