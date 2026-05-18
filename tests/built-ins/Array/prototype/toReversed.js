@@ -53,7 +53,13 @@ test("toReversed throws RangeError on Number.MAX_SAFE_INTEGER length", () => {
 
 test("toReversed caches length while reading elements", () => {
   const arr = [0, 1, 2, 3, 4];
-  Array.prototype[1] = 5;
+  const originalProto1 = Object.getOwnPropertyDescriptor(Array.prototype, "1");
+  Object.defineProperty(Array.prototype, "1", {
+    value: 5,
+    writable: true,
+    enumerable: true,
+    configurable: true,
+  });
 
   Object.defineProperty(arr, "3", {
     get() {
@@ -66,7 +72,11 @@ test("toReversed caches length while reading elements", () => {
   try {
     result = arr.toReversed();
   } finally {
-    delete Array.prototype[1];
+    if (originalProto1) {
+      Object.defineProperty(Array.prototype, "1", originalProto1);
+    } else {
+      delete Array.prototype[1];
+    }
   }
   expect(result).toEqual([4, 3, undefined, 5, 0]);
 });
