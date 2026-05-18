@@ -641,6 +641,15 @@ begin
     (not ADescriptor.HasWritableField or ADescriptor.Writable);
 end;
 
+function CanCreateDenseArrayElement(
+  const ADescriptor: TGocciaPropertyDescriptor): Boolean;
+begin
+  Result := IsDataDescriptor(ADescriptor) and ADescriptor.HasValue and
+    ADescriptor.HasConfigurableField and ADescriptor.Configurable and
+    ADescriptor.HasEnumerableField and ADescriptor.Enumerable and
+    ADescriptor.HasWritableField and ADescriptor.Writable;
+end;
+
 procedure MaterializeDenseArrayElement(
   const AArray: TGocciaArrayValue;
   const AName: string;
@@ -3040,6 +3049,21 @@ begin
       MaterializeDenseArrayElement(Self, AName, Index);
     end;
 
+    if FProperties.ContainsKey(AName) then
+    begin
+      inherited DefineProperty(AName, ADescriptor);
+      Exit;
+    end;
+
+    if CanCreateDenseArrayElement(ADescriptor) then
+    begin
+      while FElements.Count <= Index do
+        FElements.Add(TGocciaHoleValue.HoleValue);
+      FElements[Index] := TGocciaPropertyDescriptorData(ADescriptor).Value;
+      ADescriptor.Free;
+      Exit;
+    end;
+
     // Non-dense descriptors must be stored in the ordinary property map so
     // missing/defaulted attributes keep their spec values.
     inherited DefineProperty(AName, ADescriptor);
@@ -3094,6 +3118,21 @@ begin
         Exit(True);
       end;
       MaterializeDenseArrayElement(Self, AName, Index);
+    end;
+
+    if FProperties.ContainsKey(AName) then
+    begin
+      Result := inherited TryDefineProperty(AName, ADescriptor);
+      Exit;
+    end;
+
+    if CanCreateDenseArrayElement(ADescriptor) then
+    begin
+      while FElements.Count <= Index do
+        FElements.Add(TGocciaHoleValue.HoleValue);
+      FElements[Index] := TGocciaPropertyDescriptorData(ADescriptor).Value;
+      ADescriptor.Free;
+      Exit(True);
     end;
 
     // Store non-dense descriptors on the ordinary property map. This preserves
