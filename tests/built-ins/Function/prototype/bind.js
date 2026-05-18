@@ -57,4 +57,41 @@ describe("Function.prototype.bind", () => {
     expect(delete bar.length).toBe(true);
     expect(Function.prototype.bind.call(bar, null, 1).length).toBe(0);
   });
+
+  test("bound length is snapshotted at bind time", () => {
+    const fn = (a, b, c) => {};
+    const bound = fn.bind(null);
+
+    Object.defineProperty(fn, "length", { value: 0, configurable: true });
+
+    expect(bound.length).toBe(3);
+  });
+
+  test("bound length snapshots non-number and infinite target lengths", () => {
+    const nonNumber = () => {};
+    Object.defineProperty(nonNumber, "length", {
+      value: undefined,
+      configurable: true,
+    });
+    const nonNumberBound = nonNumber.bind(null);
+    Object.defineProperty(nonNumber, "length", { value: 3, configurable: true });
+    expect(nonNumberBound.length).toBe(0);
+
+    const infinite = () => {};
+    Object.defineProperty(infinite, "length", {
+      value: Infinity,
+      configurable: true,
+    });
+    expect(infinite.bind(null, 1).length).toBe(Infinity);
+  });
+
+  test("bound name is snapshotted at bind time", () => {
+    const fn = () => {};
+    Object.defineProperty(fn, "name", { value: "before", configurable: true });
+    const bound = fn.bind(null);
+
+    Object.defineProperty(fn, "name", { value: "after", configurable: true });
+
+    expect(bound.name).toBe("bound before");
+  });
 });
