@@ -129,20 +129,23 @@ function AdvanceProtocolLastIndexAfterEmptyMatch(
   const AValue: TGocciaValue; const AInput: string;
   const AUnicode: Boolean): Integer;
 var
+  InputLength: Integer;
   ThisIndex, NextIndex: Double;
 begin
+  InputLength := UTF16CodeUnitLength(AInput);
   ThisIndex := GetRegExpLastIndexLength(AValue);
-  if ThisIndex > Length(AInput) then
+  if ThisIndex > InputLength then
     NextIndex := ThisIndex + 1
   else
-    NextIndex := AdvanceUTF8StringIndex(AInput, Trunc(ThisIndex), AUnicode);
+    NextIndex := AdvanceUTF16StringIndex(AInput, Trunc(ThisIndex),
+      AUnicode);
   TGocciaObjectValue(AValue).SetProperty(PROP_LAST_INDEX,
     TGocciaNumberLiteralValue.Create(NextIndex));
 
-  if NextIndex > Length(AInput) then
+  if NextIndex > InputLength then
   begin
-    if Length(AInput) < MaxInt then
-      Result := Length(AInput) + 1
+    if InputLength < MaxInt then
+      Result := InputLength + 1
     else
       Result := MaxInt;
   end
@@ -154,10 +157,27 @@ end;
 function BuildMatchArray(const AInput: string;
   const AMatchResult: TGocciaRegExpMatchResult): TGocciaObjectValue;
 var
+  IndicesArray: TGocciaArrayValue;
+  IndicesGroupsObject: TGocciaObjectValue;
   MatchArray: TGocciaArrayValue;
   GroupsObject: TGocciaObjectValue;
   GroupIndex: Integer;
   I: Integer;
+
+  procedure CreateDataProperty(const AObject: TGocciaObjectValue;
+    const AName: string; const AValue: TGocciaValue);
+  begin
+    AObject.DefineProperty(AName, TGocciaPropertyDescriptorData.Create(
+      AValue, [pfEnumerable, pfConfigurable, pfWritable]));
+  end;
+
+  function CreateIndexPair(const AStartIndex, AEndIndex: Integer):
+    TGocciaArrayValue;
+  begin
+    Result := TGocciaArrayValue.Create;
+    Result.Elements.Add(TGocciaNumberLiteralValue.Create(AStartIndex));
+    Result.Elements.Add(TGocciaNumberLiteralValue.Create(AEndIndex));
+  end;
 begin
   MatchArray := TGocciaArrayValue.Create;
   for I := 0 to High(AMatchResult.Groups) do
@@ -168,10 +188,9 @@ begin
     else
       MatchArray.Elements.Add(TGocciaUndefinedLiteralValue.UndefinedValue);
   end;
-  MatchArray.AssignProperty(PROP_INDEX,
+  CreateDataProperty(MatchArray, PROP_INDEX,
     TGocciaNumberLiteralValue.Create(AMatchResult.MatchIndex));
-  MatchArray.AssignProperty(PROP_INPUT,
-    TGocciaStringLiteralValue.Create(AInput));
+  CreateDataProperty(MatchArray, PROP_INPUT, TGocciaStringLiteralValue.Create(AInput));
   if Length(AMatchResult.NamedGroups) > 0 then
   begin
     GroupsObject := TGocciaObjectValue.Create(nil);
@@ -192,11 +211,50 @@ begin
           TGocciaStringLiteralValue.Create(
             AMatchResult.Groups[GroupIndex].Value));
     end;
-    MatchArray.AssignProperty(PROP_GROUPS, GroupsObject);
+    CreateDataProperty(MatchArray, PROP_GROUPS, GroupsObject);
   end
   else
-    MatchArray.AssignProperty(PROP_GROUPS,
+    CreateDataProperty(MatchArray, PROP_GROUPS,
       TGocciaUndefinedLiteralValue.UndefinedValue);
+
+  if AMatchResult.HasIndices then
+  begin
+    IndicesArray := TGocciaArrayValue.Create;
+    for I := 0 to High(AMatchResult.Groups) do
+    begin
+      if AMatchResult.Groups[I].Matched then
+        IndicesArray.Elements.Add(CreateIndexPair(
+          AMatchResult.Groups[I].StartIndex,
+          AMatchResult.Groups[I].EndIndex))
+      else
+        IndicesArray.Elements.Add(TGocciaUndefinedLiteralValue.UndefinedValue);
+    end;
+
+    if Length(AMatchResult.NamedGroups) > 0 then
+    begin
+      IndicesGroupsObject := TGocciaObjectValue.Create(nil);
+      for I := 0 to High(AMatchResult.NamedGroups) do
+        CreateDataProperty(IndicesGroupsObject, AMatchResult.NamedGroups[I].Name,
+          TGocciaUndefinedLiteralValue.UndefinedValue);
+      for I := 0 to High(AMatchResult.NamedGroups) do
+      begin
+        GroupIndex := AMatchResult.NamedGroups[I].Index;
+        if (GroupIndex <= High(AMatchResult.Groups)) and
+           AMatchResult.Groups[GroupIndex].Matched then
+          CreateDataProperty(IndicesGroupsObject,
+            AMatchResult.NamedGroups[I].Name,
+            CreateIndexPair(AMatchResult.Groups[GroupIndex].StartIndex,
+              AMatchResult.Groups[GroupIndex].EndIndex));
+      end;
+      CreateDataProperty(IndicesArray, PROP_GROUPS, IndicesGroupsObject);
+    end
+    else
+      CreateDataProperty(IndicesArray, PROP_GROUPS,
+        TGocciaUndefinedLiteralValue.UndefinedValue);
+
+    CreateDataProperty(MatchArray, PROP_INDICES, IndicesArray);
+  end;
+
   Result := MatchArray;
 end;
 
@@ -263,6 +321,7 @@ function MatchRegExpObjectOnce(const AValue: TGocciaValue; const AInput: string;
 var
   Obj: TGocciaObjectValue;
   StartIndex, MatchIndex, MatchEnd, NextIndex: Integer;
+  InputLength: Integer;
   LastIndex: Double;
 begin
   Obj := TGocciaObjectValue(AValue);
@@ -275,11 +334,12 @@ begin
 
   if GetBooleanProperty(Obj, PROP_GLOBAL) or GetBooleanProperty(Obj, PROP_STICKY) then
   begin
+    InputLength := UTF16CodeUnitLength(AInput);
     LastIndex := GetRegExpLastIndexLength(AValue);
-    if LastIndex > Length(AInput) then
+    if LastIndex > InputLength then
     begin
-      if Length(AInput) < MaxInt then
-        StartIndex := Length(AInput) + 1
+      if InputLength < MaxInt then
+        StartIndex := InputLength + 1
       else
         StartIndex := MaxInt;
     end
@@ -340,10 +400,10 @@ begin
     AMatchArray := ExecResult;
     AMatchIndex := GetClampedIndexValue(
       TGocciaObjectValue(ExecResult).GetProperty(PROP_INDEX),
-      Length(AInput));
+      UTF16CodeUnitLength(AInput));
     MatchText := TGocciaObjectValue(ExecResult).GetProperty(MATCH_TEXT_PROPERTY)
       .ToStringLiteral.Value;
-    AMatchEnd := AMatchIndex + Length(MatchText);
+    AMatchEnd := AMatchIndex + UTF16CodeUnitLength(MatchText);
     ANextIndex := AMatchEnd;
     Exit(True);
   end;

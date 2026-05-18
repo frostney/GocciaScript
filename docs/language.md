@@ -392,6 +392,7 @@ The transformer generates an internal source map for accurate error line/column 
 - Regex literals: `/pattern/flags`
 - Flags: `d`, `g`, `i`, `m`, `s`, `u`, `v`, `y`
 - RegExp instance properties: `source`, canonicalized `flags`, `lastIndex`, `global`, `ignoreCase`, `multiline`, `dotAll`, `unicode`, `sticky`, `unicodeSets`, `hasIndices`
+- Match indices through the `d` flag, exposed as UTF-16 code unit `[start, end]` pairs on `match.indices` and `match.indices.groups`
 - `RegExp.escape()` (ES2026)
 - Duplicate named capture groups: the same group name may appear in different alternatives of a disjunction (`|`), e.g., `/(?<year>\d{4})-\d{2}|\d{2}-(?<year>\d{4})/`. The `groups` property returns the value from whichever alternative participated, and `\k<name>` backreferences resolve to the correct group within each alternative.
 - `RegExp.prototype.exec()`, `test()`, `toString()`, and the `Symbol.match`, `Symbol.matchAll`, `Symbol.replace`, `Symbol.search`, and `Symbol.split` hooks
@@ -405,7 +406,6 @@ Current gaps from full ECMAScript RegExp semantics:
 
 - The `u` flag enables Unicode-aware matching with property escapes (`\p{Letter}`) and code point escapes (`\u{1F600}`), but does not yet cover the full ECMAScript Unicode specification.
 - The `v` flag (Unicode sets) is accepted and exposed but full set notation is not yet implemented beyond basic `u` flag behavior.
-- The `d` flag (indices) is accepted and exposed but match indices are not yet populated.
 
 ## TC39 Proposal Details
 

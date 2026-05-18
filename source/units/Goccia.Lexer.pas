@@ -1426,15 +1426,31 @@ end;
 
 procedure TGocciaLexer.ScanIdentifier;
 var
+  SB: TStringBuffer;
   Text: string;
+  HadEscape: Boolean;
   TokenType: TGocciaTokenType;
 begin
-  while not IsAtEnd and (not IsLineTerminator) and IsValidIdentifierChar(Peek) do
-    Advance;
+  SB := TStringBuffer.Create(32);
+  HadEscape := False;
+  while not IsAtEnd and not IsLineTerminator do
+  begin
+    if IsValidIdentifierChar(Peek) then
+      SB.AppendChar(Advance)
+    else if (Peek = '\') and (PeekNext = 'u') then
+    begin
+      Advance;
+      Advance;
+      SB.Append(ScanUnicodeEscape);
+      HadEscape := True;
+    end
+    else
+      Break;
+  end;
 
-  Text := Copy(FSource, FStart, FCurrent - FStart);
+  Text := SB.ToString;
 
-  if FKeywords.TryGetValue(Text, TokenType) then
+  if (not HadEscape) and FKeywords.TryGetValue(Text, TokenType) then
     AddToken(TokenType, Text)
   else
     AddToken(gttIdentifier, Text);
@@ -1621,6 +1637,12 @@ begin
       ScanNumber;
     end
     else if IsValidIdentifierChar(C) then
+    begin
+      Dec(FCurrent);
+      Dec(FColumn);
+      ScanIdentifier;
+    end
+    else if (C = '\') and (Peek = 'u') then
     begin
       Dec(FCurrent);
       Dec(FColumn);

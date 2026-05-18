@@ -7,6 +7,8 @@ interface
 type
   TGocciaRegExpMatchGroup = record
     Matched: Boolean;
+    StartIndex: Integer;
+    EndIndex: Integer;
     Value: string;
   end;
 
@@ -25,6 +27,7 @@ type
     MatchIndex: Integer;
     MatchEnd: Integer;
     NextIndex: Integer;
+    HasIndices: Boolean;
     Groups: TGocciaRegExpMatchGroups;
     NamedGroups: TGocciaRegExpNamedGroups;
   end;
@@ -123,20 +126,24 @@ begin
   AResult.MatchIndex := -1;
   AResult.MatchEnd := -1;
   AResult.NextIndex := -1;
+  AResult.HasIndices := HasRegExpFlag(AFlags, 'd');
   SetLength(AResult.Groups, 0);
   SetLength(AResult.NamedGroups, 0);
   ValidateRegExpFlags(AFlags);
   IsUnicode := HasRegExpFlag(AFlags, 'u') or HasRegExpFlag(AFlags, 'v');
-  if AStartIndex > Length(AInput) then
+  if AStartIndex > UTF16CodeUnitLength(AInput) then
     Exit(False);
   if APattern = EMPTY_REGEX then
   begin
     AResult.Found := True;
     AResult.MatchIndex := AStartIndex;
     AResult.MatchEnd := AStartIndex;
-    AResult.NextIndex := AdvanceUTF8StringIndex(AInput, AStartIndex, IsUnicode);
+    AResult.NextIndex := AdvanceUTF16StringIndex(AInput, AStartIndex,
+      IsUnicode);
     SetLength(AResult.Groups, 1);
     AResult.Groups[0].Matched := True;
+    AResult.Groups[0].StartIndex := AStartIndex;
+    AResult.Groups[0].EndIndex := AStartIndex;
     AResult.Groups[0].Value := '';
     Exit(True);
   end;
@@ -150,11 +157,11 @@ begin
   AResult.Found := True;
   if Length(VMResult.CaptureSlots) < 2 then
     Exit(False);
-  AResult.MatchIndex := VMResult.CaptureSlots[0] - 1;
-  AResult.MatchEnd := VMResult.CaptureSlots[1] - 1;
+  AResult.MatchIndex := VMResult.CaptureSlots[0];
+  AResult.MatchEnd := VMResult.CaptureSlots[1];
   AResult.NextIndex := AResult.MatchEnd;
   if AResult.MatchEnd = AResult.MatchIndex then
-    AResult.NextIndex := AdvanceUTF8StringIndex(AInput, AResult.NextIndex,
+    AResult.NextIndex := AdvanceUTF16StringIndex(AInput, AResult.NextIndex,
       IsUnicode);
   GroupCount := Prog.CaptureCount + 1;
   SetLength(AResult.Groups, GroupCount);
@@ -167,15 +174,20 @@ begin
       SlotStart := VMResult.CaptureSlots[I * 2];
       SlotEnd := VMResult.CaptureSlots[I * 2 + 1];
     end;
-    if (SlotStart >= 1) and (SlotEnd >= SlotStart) and
-       (SlotEnd <= Length(AInput) + 1) then
+    if (SlotStart >= 0) and (SlotEnd >= SlotStart) and
+       (SlotEnd <= UTF16CodeUnitLength(AInput)) then
     begin
       AResult.Groups[I].Matched := True;
-      AResult.Groups[I].Value := Copy(AInput, SlotStart, SlotEnd - SlotStart);
+      AResult.Groups[I].StartIndex := SlotStart;
+      AResult.Groups[I].EndIndex := SlotEnd;
+      AResult.Groups[I].Value := UTF16Substring(AInput, SlotStart,
+        SlotEnd - SlotStart);
     end
     else
     begin
       AResult.Groups[I].Matched := False;
+      AResult.Groups[I].StartIndex := -1;
+      AResult.Groups[I].EndIndex := -1;
       AResult.Groups[I].Value := '';
     end;
   end;

@@ -83,6 +83,7 @@ const
   PROP_TO_JSON5               = 'toJSON5';
   PROP_TIME_ORIGIN            = 'timeOrigin';
   PROP_GROUPS                 = 'groups';
+  PROP_INDICES                = 'indices';
   PROP_UNICODE_SETS           = 'unicodeSets';
   PROP_HAS_INDICES            = 'hasIndices';
   PROP_TYPE                   = 'type';
