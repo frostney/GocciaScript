@@ -16,6 +16,16 @@ describe.runIf(isIntl && typeof Intl.Locale !== "undefined")("Intl.Locale locale
     expect(new Intl.Locale("en-u-co-phonebk").getCollations()).toEqual(["phonebk"]);
   });
 
+  test("getCollations returns canonical collation identifiers from ICU", () => {
+    const germanCollations = new Intl.Locale("de").getCollations();
+    expect(germanCollations.includes("phonebk")).toBe(true);
+    expect(germanCollations.includes("phonebook")).toBe(false);
+
+    const sinhalaCollations = new Intl.Locale("si").getCollations();
+    expect(sinhalaCollations.includes("dict")).toBe(true);
+    expect(sinhalaCollations.includes("dictionary")).toBe(false);
+  });
+
   test("getHourCycles returns preferred hour cycles", () => {
     expect(new Intl.Locale("en").getHourCycles()).toEqual(["h12"]);
     expect(new Intl.Locale("en-GB").getHourCycles()).toEqual(["h23"]);
@@ -49,5 +59,18 @@ describe.runIf(isIntl && typeof Intl.Locale !== "undefined")("Intl.Locale locale
       firstDay: 1,
       weekend: [6, 7],
     });
+  });
+
+  test("constructor options update the canonical locale used by info methods", () => {
+    const arabicEgypt = new Intl.Locale("en", { language: "ar", region: "EG" });
+    expect(arabicEgypt.toString()).toBe("ar-EG");
+    expect(arabicEgypt.baseName).toBe("ar-EG");
+    expect(arabicEgypt.getNumberingSystems()).toEqual(["arab"]);
+    expect(arabicEgypt.getTextInfo()).toEqual({ direction: "rtl" });
+    expect(arabicEgypt.getWeekInfo()).toEqual({ firstDay: 6, weekend: [5, 6] });
+
+    const arabicAzeri = new Intl.Locale("az", { script: "Arab" });
+    expect(arabicAzeri.toString()).toBe("az-Arab");
+    expect(arabicAzeri.getTextInfo()).toEqual({ direction: "rtl" });
   });
 });

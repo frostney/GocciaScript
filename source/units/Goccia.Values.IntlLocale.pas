@@ -204,6 +204,152 @@ begin
     Result := 0;
 end;
 
+function DayNumberToIdentifier(const AValue: Integer): string;
+begin
+  case AValue of
+    1: Result := 'mon';
+    2: Result := 'tue';
+    3: Result := 'wed';
+    4: Result := 'thu';
+    5: Result := 'fri';
+    6: Result := 'sat';
+    7: Result := 'sun';
+  else
+    Result := '';
+  end;
+end;
+
+function NormalizeCollationType(const AValue: string): string;
+begin
+  if AValue = 'phonebook' then
+    Result := 'phonebk'
+  else if AValue = 'traditional' then
+    Result := 'trad'
+  else if AValue = 'dictionary' then
+    Result := 'dict'
+  else
+    Result := AValue;
+end;
+
+function TryGetScriptTextDirection(const AScript: string; out ADirection: string): Boolean;
+var
+  NormalizedScript: string;
+begin
+  Result := AScript <> '';
+  if not Result then
+    Exit;
+
+  NormalizedScript := LowerCase(AScript);
+  if (NormalizedScript = 'adlm') or (NormalizedScript = 'arab') or
+     (NormalizedScript = 'hebr') or (NormalizedScript = 'mand') or
+     (NormalizedScript = 'mani') or (NormalizedScript = 'mend') or
+     (NormalizedScript = 'merc') or (NormalizedScript = 'mero') or
+     (NormalizedScript = 'nkoo') or (NormalizedScript = 'rohg') or
+     (NormalizedScript = 'samr') or (NormalizedScript = 'syrc') or
+     (NormalizedScript = 'thaa') then
+    ADirection := 'rtl'
+  else
+    ADirection := 'ltr';
+end;
+
+procedure AppendSubtag(var AValue: string; const ASubtag: string);
+begin
+  if ASubtag = '' then
+    Exit;
+
+  if AValue <> '' then
+    AValue := AValue + '-';
+  AValue := AValue + ASubtag;
+end;
+
+procedure SetUnicodeExtensionKeyword(var AParsed: TBcp47Tag;
+  const AKey, AValue: string);
+var
+  ExtensionIndex, PartIndex, ValueIndex, ValueEnd: Integer;
+  Parts: IntlTypes.TStringArray;
+  NewValue: string;
+  Found, HasUnicodeExtension: Boolean;
+begin
+  Found := False;
+  HasUnicodeExtension := False;
+
+  for ExtensionIndex := 0 to High(AParsed.Extensions) do
+  begin
+    if AParsed.Extensions[ExtensionIndex].Singleton <> 'u' then
+      Continue;
+
+    HasUnicodeExtension := True;
+    Parts := SplitSubtags(AParsed.Extensions[ExtensionIndex].Value);
+    NewValue := '';
+    PartIndex := 0;
+
+    while PartIndex <= High(Parts) do
+    begin
+      if Length(Parts[PartIndex]) = 2 then
+      begin
+        ValueEnd := PartIndex + 1;
+        while (ValueEnd <= High(Parts)) and (Length(Parts[ValueEnd]) <> 2) do
+          Inc(ValueEnd);
+
+        if Parts[PartIndex] = AKey then
+        begin
+          Found := True;
+          if AValue <> '' then
+          begin
+            AppendSubtag(NewValue, AKey);
+            AppendSubtag(NewValue, AValue);
+          end;
+        end
+        else
+        begin
+          AppendSubtag(NewValue, Parts[PartIndex]);
+          for ValueIndex := PartIndex + 1 to ValueEnd - 1 do
+            AppendSubtag(NewValue, Parts[ValueIndex]);
+        end;
+
+        PartIndex := ValueEnd;
+      end
+      else
+      begin
+        AppendSubtag(NewValue, Parts[PartIndex]);
+        Inc(PartIndex);
+      end;
+    end;
+
+    if (not Found) and (AValue <> '') then
+    begin
+      AppendSubtag(NewValue, AKey);
+      AppendSubtag(NewValue, AValue);
+    end;
+
+    AParsed.Extensions[ExtensionIndex].Value := NewValue;
+    Exit;
+  end;
+
+  if (not HasUnicodeExtension) and (AValue <> '') then
+  begin
+    SetLength(AParsed.Extensions, Length(AParsed.Extensions) + 1);
+    AParsed.Extensions[High(AParsed.Extensions)].Singleton := 'u';
+    AParsed.Extensions[High(AParsed.Extensions)].Value := AKey + '-' + AValue;
+  end;
+end;
+
+procedure RemoveEmptyExtensions(var AParsed: TBcp47Tag);
+var
+  ReadIndex, WriteIndex: Integer;
+begin
+  WriteIndex := 0;
+  for ReadIndex := 0 to High(AParsed.Extensions) do
+  begin
+    if AParsed.Extensions[ReadIndex].Value = '' then
+      Continue;
+    if WriteIndex <> ReadIndex then
+      AParsed.Extensions[WriteIndex] := AParsed.Extensions[ReadIndex];
+    Inc(WriteIndex);
+  end;
+  SetLength(AParsed.Extensions, WriteIndex);
+end;
+
 function CreateStringArray(const AValues: IntlTypes.TStringArray): TGocciaArrayValue;
 var
   Index: Integer;
@@ -236,10 +382,10 @@ begin
   SetLength(Result, Length(AValues));
   for Index := 0 to High(AValues) do
   begin
-    if (AValues[Index] = '') or (AValues[Index] = 'standard') or
-       (AValues[Index] = 'search') then
+    Result[Count] := NormalizeCollationType(AValues[Index]);
+    if (Result[Count] = '') or (Result[Count] = 'standard') or
+       (Result[Count] = 'search') then
       Continue;
-    Result[Count] := AValues[Index];
     Inc(Count);
   end;
   SetLength(Result, Count);
@@ -298,7 +444,7 @@ begin
     if TryGetUnicodeExtensionKeyword(Parsed, 'ca', ExtensionValue) then
       FCalendar := NormalizeCalendarType(ExtensionValue);
     if TryGetUnicodeExtensionKeyword(Parsed, 'co', ExtensionValue) then
-      FCollation := ExtensionValue;
+      FCollation := NormalizeCollationType(ExtensionValue);
     if TryGetUnicodeExtensionKeyword(Parsed, 'hc', ExtensionValue) then
       FHourCycle := ExtensionValue;
     if TryGetUnicodeExtensionKeyword(Parsed, 'nu', ExtensionValue) then
@@ -325,6 +471,7 @@ begin
     FCalendar := NormalizeCalendarType(FCalendar);
     ReadValidatedStringOption(AOptions, 'caseFirst', FCaseFirst);
     ReadValidatedStringOption(AOptions, 'collation', FCollation);
+    FCollation := NormalizeCollationType(FCollation);
     ReadValidatedStringOption(AOptions, 'hourCycle', FHourCycle);
     ReadValidatedStringOption(AOptions, 'numberingSystem', FNumberingSystem);
     if TryReadStringOption(AOptions, 'firstDayOfWeek', FirstDayOption) then
@@ -338,6 +485,41 @@ begin
     V := AOptions.GetProperty('numeric');
     if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
       FNumeric := V.ToBooleanLiteral.Value;
+  end;
+
+  if Parsed.IsValid then
+  begin
+    Parsed.Language := FLanguage;
+    Parsed.Script := FScript;
+    Parsed.Region := FRegion;
+    SetUnicodeExtensionKeyword(Parsed, 'ca', FCalendar);
+    SetUnicodeExtensionKeyword(Parsed, 'co', FCollation);
+    SetUnicodeExtensionKeyword(Parsed, 'hc', FHourCycle);
+    SetUnicodeExtensionKeyword(Parsed, 'nu', FNumberingSystem);
+    SetUnicodeExtensionKeyword(Parsed, 'fw', DayNumberToIdentifier(FFirstDayOfWeek));
+    RemoveEmptyExtensions(Parsed);
+
+    Canonical := CanonicalizeBcp47Tag(Parsed);
+    if Canonical <> '' then
+    begin
+      FTag := Canonical;
+      Canonical := CanonicalizeUnicodeLocaleId(FTag);
+      if Canonical <> '' then
+        FTag := Canonical;
+
+      Parsed := ParseBcp47Tag(FTag);
+      if Parsed.IsValid then
+      begin
+        FLanguage := LowerCase(Parsed.Language);
+        FScript := Parsed.Script;
+        FRegion := Parsed.Region;
+
+        BaseParsed := Parsed;
+        SetLength(BaseParsed.Extensions, 0);
+        BaseParsed.PrivateUse := '';
+        FBaseName := CanonicalizeBcp47Tag(BaseParsed);
+      end;
+    end;
   end;
 end;
 
@@ -707,7 +889,8 @@ var
   Obj: TGocciaObjectValue;
 begin
   L := AsLocale(AThisValue, 'Intl.Locale.prototype.getTextInfo');
-  if not TryGetLocaleTextDirection(L.FBaseName, Direction) then
+  if not TryGetScriptTextDirection(L.FScript, Direction) and
+     not TryGetLocaleTextDirection(L.FBaseName, Direction) then
     Direction := 'ltr';
 
   Obj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
