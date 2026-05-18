@@ -85,6 +85,20 @@ describe("TypedArray.prototype.set", () => {
       const ta = new Int32Array(3);
       expect(() => ta.set({ 0: 1, 1: 2, length: 2 }, 2)).toThrow(RangeError);
     });
+
+    test("array-like length getter can detach target buffer", () => {
+      const ta = new Int32Array(4);
+      const buffer = ta.buffer;
+      ta.set({
+        0: 17,
+        get length() {
+          buffer.transfer();
+          return 1;
+        }
+      }, 1);
+
+      expect(buffer.detached).toBe(true);
+    });
   });
 
   test.each([BigInt64Array, BigUint64Array])("%s set from BigInt typed array", (TA) => {

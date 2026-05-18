@@ -41,6 +41,7 @@ type
     procedure SyncBufferData;
     function GetLength: Integer;
     function HasValidBackingRange(const ALength: Integer): Boolean;
+    function HasValidElementIndex(const AIndex: Integer): Boolean;
 
     function ReadElement(const AIndex: Integer): Double;
     procedure WriteElement(const AIndex: Integer; const AValue: Double);
@@ -273,6 +274,11 @@ begin
   Result := RequiredBytes <= System.Length(FBufferData);
 end;
 
+function TGocciaTypedArrayValue.HasValidElementIndex(const AIndex: Integer): Boolean;
+begin
+  Result := (AIndex >= 0) and (AIndex < GetLength);
+end;
+
 { Element read/write via buffer }
 
 function TGocciaTypedArrayValue.ReadElement(const AIndex: Integer): Double;
@@ -288,6 +294,9 @@ var
   F32: Single;
   F64: Double;
 begin
+  if not HasValidElementIndex(AIndex) then
+    Exit(0);
+
   SyncBufferData;
   Offset := FByteOffset + AIndex * BytesPerElement(FKind);
   case FKind of
@@ -356,6 +365,9 @@ var
   F64: Double;
   Clamped: Integer;
 begin
+  if not HasValidElementIndex(AIndex) then
+    Exit;
+
   SyncBufferData;
   Offset := FByteOffset + AIndex * BytesPerElement(FKind);
   case FKind of
@@ -446,6 +458,9 @@ procedure TGocciaTypedArrayValue.WriteNumberLiteral(const AIndex: Integer; const
 var
   Offset: Integer;
 begin
+  if not HasValidElementIndex(AIndex) then
+    Exit;
+
   SyncBufferData;
   if ANum.IsNaN then
   begin
@@ -492,6 +507,9 @@ var
   I64: Int64;
   U64: QWord;
 begin
+  if not HasValidElementIndex(AIndex) then
+    Exit(0);
+
   SyncBufferData;
   Offset := FByteOffset + AIndex * 8;
   case FKind of
@@ -514,6 +532,9 @@ procedure TGocciaTypedArrayValue.WriteBigIntElement(const AIndex: Integer; const
 var
   Offset: Integer;
 begin
+  if not HasValidElementIndex(AIndex) then
+    Exit;
+
   SyncBufferData;
   Offset := FByteOffset + AIndex * 8;
   Move(AValue, FBufferData[Offset], 8);
@@ -596,6 +617,9 @@ function TGocciaTypedArrayValue.GetElementAsValue(const AIndex: Integer): TGocci
 var
   Raw: Int64;
 begin
+  if not HasValidElementIndex(AIndex) then
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+
   if IsBigIntKind(FKind) then
   begin
     Raw := ReadBigIntElement(AIndex);
@@ -1965,12 +1989,9 @@ end;
 function TGocciaTypedArrayValue.TypedArrayFilter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   TA, NewTA: TGocciaTypedArrayValue;
-  I, Count: Integer;
-  ElemVal: Double;
-  ElemBigVal: Int64;
+  I: Integer;
   CallResult, ThisArg, Element: TGocciaValue;
-  Kept: array of Double;
-  KeptBig: array of Int64;
+  Kept: TGocciaValueList;
 begin
   TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.filter');
   if (AArgs.Length = 0) or not AArgs.GetElement(0).IsCallable then
@@ -1980,47 +2001,23 @@ begin
   else
     ThisArg := TGocciaUndefinedLiteralValue.UndefinedValue;
 
-  if IsBigIntKind(TA.FKind) then
-  begin
-    SetLength(KeptBig, 0);
+  Kept := TGocciaValueList.Create(False);
+  try
     for I := 0 to TA.FLength - 1 do
     begin
-      ElemBigVal := TA.ReadBigIntElement(I);
       Element := TA.GetElementAsValue(I);
       CallResult := InvokeCallback(AArgs.GetElement(0),
         Element, TGocciaNumberLiteralValue.Create(I), AThisValue, ThisArg);
       if CallResult.ToBooleanLiteral.Value then
-      begin
-        Count := System.Length(KeptBig);
-        SetLength(KeptBig, Count + 1);
-        KeptBig[Count] := ElemBigVal;
-      end;
+        Kept.Add(Element);
     end;
-    NewTA := CreateSameKindArray(TA, System.Length(KeptBig));
-    for I := 0 to System.Length(KeptBig) - 1 do
-      NewTA.WriteBigIntElement(I, KeptBig[I]);
-  end
-  else
-  begin
-    SetLength(Kept, 0);
-    for I := 0 to TA.FLength - 1 do
-    begin
-      ElemVal := TA.ReadElement(I);
-      CallResult := InvokeCallback(AArgs.GetElement(0),
-        TGocciaNumberLiteralValue.Create(ElemVal),
-        TGocciaNumberLiteralValue.Create(I), AThisValue, ThisArg);
-      if CallResult.ToBooleanLiteral.Value then
-      begin
-        Count := System.Length(Kept);
-        SetLength(Kept, Count + 1);
-        Kept[Count] := ElemVal;
-      end;
-    end;
-    NewTA := CreateSameKindArray(TA, System.Length(Kept));
-    for I := 0 to System.Length(Kept) - 1 do
-      NewTA.WriteElement(I, Kept[I]);
+    NewTA := CreateSameKindArray(TA, Kept.Count);
+    for I := 0 to Kept.Count - 1 do
+      NewTA.WriteValueToElement(I, Kept[I]);
+    Result := NewTA;
+  finally
+    Kept.Free;
   end;
-  Result := NewTA;
 end;
 
 // ES2026 §23.2.3.22 %TypedArray%.prototype.reduce(callbackfn [, initialValue])
