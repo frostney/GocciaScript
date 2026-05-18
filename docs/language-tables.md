@@ -38,8 +38,8 @@
 | `Promise` | ES2015 | Supported |
 | `WeakMap`, `WeakSet` | ES2015 | Supported |
 | `RegExp` (literals, flags `d`/`g`/`i`/`m`/`s`/`u`/`v`/`y`) | ES2015+ | Supported |
-| ES modules (`import` / `export`) | ES2015 | Supported (named only) |
-| Default exports / imports | ES2015 | Excluded — use named exports |
+| ES modules (`import` / `export`) | ES2015 | Supported |
+| Default exports / imports | ES2015 | Supported; project code convention prefers named exports for internal modules |
 | Generators (`function*`, `*method()`) | ES2015 | Supported; `function*` requires `--compat-function`; implicit `arguments` objects require `--compat-non-strict-mode`; generator methods are default syntax |
 | Nullish coalescing (`??`) | ES2020 | Supported |
 | Optional chaining (`?.`) | ES2020 | Supported |

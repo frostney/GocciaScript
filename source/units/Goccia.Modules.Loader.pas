@@ -105,6 +105,7 @@ uses
   Goccia.GarbageCollector,
   Goccia.JSON,
   Goccia.JSX.Transformer,
+  Goccia.Keywords.Reserved,
   Goccia.Lexer,
   Goccia.Parser,
   Goccia.SourceMap,
@@ -204,6 +205,7 @@ var
   Content: TGocciaModuleContent;
   Context: TGocciaEvaluationContext;
   ExportDecl: TGocciaExportDeclaration;
+  ExportDefaultDecl: TGocciaExportDefaultDeclaration;
   ExportPair: TStringStringMap.TKeyValuePair;
   ExportVarDecl: TGocciaExportVariableDeclaration;
   I: Integer;
@@ -339,6 +341,13 @@ begin
                       if Assigned(Value) then
                         Module.ExportsTable.AddOrSetValue(ExportPair.Key, Value);
                     end;
+                  end
+                  else if Stmt is TGocciaExportDefaultDeclaration then
+                  begin
+                    ExportDefaultDecl := TGocciaExportDefaultDeclaration(Stmt);
+                    Value := ModuleScope.GetValue(ExportDefaultDecl.LocalName);
+                    if Assigned(Value) then
+                      Module.ExportsTable.AddOrSetValue(KEYWORD_DEFAULT, Value);
                   end
                   else if Stmt is TGocciaExportVariableDeclaration then
                   begin
