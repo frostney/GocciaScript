@@ -11,6 +11,37 @@ test("Symbol.split coerces limit with ToUint32", () => {
   expect(/,/[Symbol.split]("a,b,c", -4294967295)).toEqual(["a"]);
 });
 
+test("Symbol.split converts input before species, flags, and limit", () => {
+  const log = [];
+  class Source extends RegExp {
+    static get [Symbol.species]() {
+      log.push("species");
+      return class Splitter extends RegExp {
+        constructor(rx, flags) {
+          log.push("construct:" + flags);
+          super(rx, flags);
+        }
+      };
+    }
+  }
+  const regex = new Source(",");
+  const input = {
+    toString() {
+      log.push("string");
+      return "a,b";
+    },
+  };
+  const limit = {
+    valueOf() {
+      log.push("limit");
+      return 2;
+    },
+  };
+
+  expect(regex[Symbol.split](input, limit)).toEqual(["a", "b"]);
+  expect(log).toEqual(["string", "species", "construct:y", "limit"]);
+});
+
 test("Symbol.split treats undefined limit like an omitted limit", () => {
   expect(/,/[Symbol.split]("a,b,c", undefined)).toEqual(["a", "b", "c"]);
 });

@@ -147,15 +147,15 @@ test("u flag zero-width match advances correctly", () => {
   expect(matches.length).toBe(4);
 });
 
-test("u flag with exec advances correctly on empty matches", () => {
+test("u flag with exec leaves lastIndex at the empty match end", () => {
   const regex = /(?:)/gu;
   const result1 = regex.exec("ab");
   expect(result1.index).toBe(0);
-  expect(regex.lastIndex).toBe(1);
+  expect(regex.lastIndex).toBe(0);
 
   const result2 = regex.exec("ab");
-  expect(result2.index).toBe(1);
-  expect(regex.lastIndex).toBe(2);
+  expect(result2.index).toBe(0);
+  expect(regex.lastIndex).toBe(0);
 });
 
 test("\\p{L} shorthand for Letter", () => {
