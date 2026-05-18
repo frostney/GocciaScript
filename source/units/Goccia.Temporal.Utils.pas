@@ -198,6 +198,13 @@ begin
     Result := AYear;
 end;
 
+function FloorDivide(const ADividend, ADivisor: Int64): Int64;
+begin
+  Result := ADividend div ADivisor;
+  if ((ADividend < 0) <> (ADivisor < 0)) and ((ADividend mod ADivisor) <> 0) then
+    Dec(Result);
+end;
+
 function DateToEpochDays(const AYear, AMonth, ADay: Integer): Int64;
 var
   Y, M: Integer;
@@ -215,7 +222,8 @@ begin
     Dec(M, 3);
 
   // Days from year
-  EpochDays := Int64(365) * Y + (Y div 4) - (Y div 100) + (Y div 400);
+  EpochDays := Int64(365) * Y + FloorDivide(Y, 4) - FloorDivide(Y, 100) +
+    FloorDivide(Y, 400);
   // Days from month
   EpochDays := EpochDays + (M * 153 + 2) div 5;
   // Days

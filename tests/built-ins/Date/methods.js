@@ -52,6 +52,10 @@ describe("Date methods", () => {
     expect(Date.UTC(2020, 0, 1, 24, 60, 60, 1000)).toBe(Date.UTC(2020, 0, 2, 1, 1, 1, 0));
   });
 
+  test("Date.UTC() returns NaN when normalized fields exceed TimeClip", () => {
+    expect(Number.isNaN(Date.UTC(1970, 0, -99999999, 0, -60, 0, -1))).toBe(true);
+  });
+
   test("Date.UTC() treats omitted and explicit undefined arguments differently", () => {
     expect(Number.isNaN(Date.UTC())).toBe(true);
     expect(Date.UTC(2020)).toBe(Date.UTC(2020, 0, 1));
@@ -67,6 +71,19 @@ describe("Date methods", () => {
     expect(value.getMinutes()).toBe(1);
     expect(value.getSeconds()).toBe(1);
     expect(value.getMilliseconds()).toBe(0);
+  });
+
+  test("toISOString throws when normalized Date constructor fields exceed TimeClip", () => {
+    const timeZoneMinutes = new Date(0).getTimezoneOffset() * -1;
+    let value;
+
+    if (timeZoneMinutes > 0) {
+      value = new Date(1970, 0, -99999999, 0, 0, 0, -1);
+    } else {
+      value = new Date(1970, 0, -99999999, 0, timeZoneMinutes - 60, 0, -1);
+    }
+
+    expect(() => value.toISOString()).toThrow(RangeError);
   });
 
   test("setDate() updates the local day and returns epoch ms", () => {
