@@ -23,6 +23,23 @@ describe.runIf(isIntl)("Intl.DateTimeFormat.prototype.formatRange", () => {
     expect(dtf.formatRange(Date.UTC(2026, 0, 1), Date.UTC(2026, 0, 15))).toBe("Jan 1 – 15, 2026");
   });
 
+  test("honors explicit hourCycle options in range skeletons", () => {
+    const start = Date.UTC(2026, 0, 1, 0, 30);
+    const end = Date.UTC(2026, 0, 1, 1, 30);
+    const options = { hour: "numeric", minute: "2-digit", timeZone: "UTC" };
+
+    expect(new Intl.DateTimeFormat("en-US", { ...options, hourCycle: "h11" }).formatRange(start, end))
+      .toBe("0:30 – 1:30 AM");
+    expect(new Intl.DateTimeFormat("en-US", { ...options, hourCycle: "h12" }).formatRange(start, end))
+      .toBe("12:30 – 1:30 AM");
+    expect(new Intl.DateTimeFormat("en-US", { ...options, hourCycle: "h23" }).formatRange(start, end))
+      .toBe("00:30 – 01:30");
+    expect(new Intl.DateTimeFormat("en-US", { ...options, hourCycle: "h24" }).formatRange(start, end))
+      .toBe("24:30 – 01:30");
+    expect(new Intl.DateTimeFormat("en-US-u-hc-h24", { ...options, hourCycle: "h11" }).formatRange(start, end))
+      .toBe("0:30 – 1:30 AM");
+  });
+
   test("throws RangeError for invalid endpoints", () => {
     const dtf = new Intl.DateTimeFormat("en-US");
     expect(() => dtf.formatRange(NaN, 0)).toThrow(RangeError);

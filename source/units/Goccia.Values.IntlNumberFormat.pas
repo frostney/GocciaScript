@@ -359,14 +359,12 @@ end;
 procedure AppendPartArray(var ADest: TIntlFormatPartArray;
   const ASrc: TIntlFormatPartArray);
 var
-  I, Index: Integer;
+  I, OldLength: Integer;
 begin
+  OldLength := Length(ADest);
+  SetLength(ADest, OldLength + Length(ASrc));
   for I := 0 to Length(ASrc) - 1 do
-  begin
-    SetLength(ADest, Length(ADest) + 1);
-    Index := Length(ADest) - 1;
-    ADest[Index] := ASrc[I];
-  end;
+    ADest[OldLength + I] := ASrc[I];
 end;
 
 function TryGetNumberPartsWithFallback(const ALocale: string; AValue: Double;

@@ -29,6 +29,20 @@ describe.runIf(isIntl)("Intl.NumberFormat.prototype.formatRange", () => {
     expect(nf.formatRange(2.9, 3.1)).toBe("~$3");
   });
 
+  test("preserves ICU default fraction precision", () => {
+    const nf = new Intl.NumberFormat("en-US");
+    expect(nf.formatRange(1.2, 1.8)).toBe("1.2–1.8");
+  });
+
+  test("applies roundingIncrement before range formatting", () => {
+    const nf = new Intl.NumberFormat("en-US", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+      roundingIncrement: 5
+    });
+    expect(nf.formatRange(1.21, 1.22)).toBe("~1.20");
+  });
+
   test("throws RangeError for NaN endpoints", () => {
     const nf = new Intl.NumberFormat("en-US");
     expect(() => nf.formatRange(NaN, 1)).toThrow(RangeError);

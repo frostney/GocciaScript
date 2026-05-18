@@ -251,8 +251,6 @@ begin
   if IsNan(AValue) or Math.IsInfinite(AValue) or (Abs(AValue) > 8.64e15) then
     Exit(Math.NaN);
   Result := Trunc(AValue);
-  if Result = 0 then
-    Result := 0;
 end;
 
 function EpochMillisFromDateTimeParts(const AYear, AMonth, ADay, AHour,
@@ -649,14 +647,12 @@ end;
 procedure AppendFormatPartArray(var ADest: TIntlFormatPartArray;
   const ASrc: TIntlFormatPartArray);
 var
-  I, Index: Integer;
+  I, OldLength: Integer;
 begin
+  OldLength := Length(ADest);
+  SetLength(ADest, OldLength + Length(ASrc));
   for I := 0 to Length(ASrc) - 1 do
-  begin
-    SetLength(ADest, Length(ADest) + 1);
-    Index := Length(ADest) - 1;
-    ADest[Index] := ASrc[I];
-  end;
+    ADest[OldLength + I] := ASrc[I];
 end;
 
 procedure ReplaceTemporalSurrogateParts(var AParts: TIntlFormatPartArray;
@@ -866,19 +862,6 @@ var
 begin
   for I := 0 to Length(AParts) - 1 do
     AParts[I].Source := ASource;
-end;
-
-procedure AppendDatePartArray(var ADest: TIntlFormatPartArray;
-  const ASrc: TIntlFormatPartArray);
-var
-  I, Index: Integer;
-begin
-  for I := 0 to Length(ASrc) - 1 do
-  begin
-    SetLength(ADest, Length(ADest) + 1);
-    Index := Length(ADest) - 1;
-    ADest[Index] := ASrc[I];
-  end;
 end;
 
 function TryGetDatePartsWithFallback(const ALocale: string; AMillis: Double;
@@ -1244,13 +1227,13 @@ begin
     TryGetDatePartsWithFallback(DTF.FLocale, EndMillis, EffectiveOptions,
       'endRange', EndParts);
     SetLength(Parts, 0);
-    AppendDatePartArray(Parts, StartParts);
+    AppendFormatPartArray(Parts, StartParts);
     SetLength(Parts, Length(Parts) + 1);
     Index := Length(Parts) - 1;
     Parts[Index].PartType := 'literal';
     Parts[Index].Value := ' – ';
     Parts[Index].Source := 'shared';
-    AppendDatePartArray(Parts, EndParts);
+    AppendFormatPartArray(Parts, EndParts);
   end;
 
   Result := FormatPartsToArray(Parts);

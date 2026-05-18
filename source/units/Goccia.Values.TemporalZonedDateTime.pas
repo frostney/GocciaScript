@@ -917,17 +917,6 @@ begin
   ANanoseconds := 0;
 end;
 
-function ApplyZonedDateDurationToDate(const AStartDate: TTemporalDateRecord;
-  const AYears, AMonths, AWeeks, ADays: Int64): TTemporalDateRecord;
-begin
-  Result := AStartDate;
-  if AYears <> 0 then
-    Result := AddMonthsToDate(Result.Year, Result.Month, Result.Day, AYears * MONTHS_PER_YEAR);
-  if AMonths <> 0 then
-    Result := AddMonthsToDate(Result.Year, Result.Month, Result.Day, AMonths);
-  Result := AddDaysToDate(Result.Year, Result.Month, Result.Day, AWeeks * DAYS_PER_WEEK + ADays);
-end;
-
 procedure SplitEpochNanoseconds(const AEpochNanoseconds: TBigInteger;
   out AEpochMilliseconds: Int64; out ASubMillisecondNanoseconds: Integer);
 var
@@ -1126,8 +1115,9 @@ var
   StartMillisecond, StartMicrosecond, StartNanosecond: Integer;
   EndYear, EndMonth, EndDay, EndHour, EndMinute, EndSecond: Integer;
   EndMillisecond, EndMicrosecond, EndNanosecond: Integer;
-  AdjustedEndDate, StartDate, IntermediateDate: TTemporalDateRecord;
+  CandidateDate, IntermediateDate: TTemporalDateRecord;
   IntermediateEpochMs, RemainderNs: Int64;
+  DayCorrection, MaxDayCorrection, SearchSign: Integer;
 begin
   ZeroZonedDateTimeDiffFields(AYears, AMonths, AWeeks, ADays,
     AHours, AMinutes, ASeconds, AMilliseconds, AMicroseconds, ANanoseconds);
@@ -1142,6 +1132,11 @@ begin
     Sign := 1
   else
     Sign := -1;
+  SearchSign := -Sign;
+  if SearchSign < 0 then
+    MaxDayCorrection := 2
+  else
+    MaxDayCorrection := 1;
 
   ComputeLocalComponentsFromEpoch(AStartEpochMilliseconds,
     AStartSubMillisecondNanoseconds, ATimeZone,
@@ -1152,27 +1147,41 @@ begin
     EndYear, EndMonth, EndDay, EndHour, EndMinute, EndSecond,
     EndMillisecond, EndMicrosecond, EndNanosecond);
 
-  AdjustedEndDate := GetAdjustedEndDateForWholeUnits(Sign,
-    EndYear, EndMonth, EndDay, EndHour, EndMinute, EndSecond,
-    EndMillisecond, EndMicrosecond, EndNanosecond,
-    StartHour, StartMinute, StartSecond, StartMillisecond,
-    StartMicrosecond, StartNanosecond);
+  RemainderBig := TBigInteger.Zero;
+  IntermediateDate.Year := EndYear;
+  IntermediateDate.Month := EndMonth;
+  IntermediateDate.Day := EndDay;
+  for DayCorrection := 0 to MaxDayCorrection do
+  begin
+    CandidateDate := AddDaysToDate(EndYear, EndMonth, EndDay,
+      Int64(DayCorrection) * SearchSign);
+    IntermediateEpochMs := LocalToEpochMs(CandidateDate.Year,
+      CandidateDate.Month, CandidateDate.Day, StartHour, StartMinute,
+      StartSecond, StartMillisecond, ATimeZone);
+    IntermediateNs := EpochNanosecondsFromParts(IntermediateEpochMs,
+      AStartSubMillisecondNanoseconds);
+
+    RemainderBig := EndNs.Subtract(IntermediateNs);
+    if RemainderBig.IsZero then
+    begin
+      IntermediateDate := CandidateDate;
+      Break;
+    end;
+
+    if RemainderBig.IsNegative then
+      RemainderSign := -1
+    else
+      RemainderSign := 1;
+    if RemainderSign = Sign then
+    begin
+      IntermediateDate := CandidateDate;
+      Break;
+    end;
+  end;
+
   CalendarDateUntil(StartYear, StartMonth, StartDay,
-    AdjustedEndDate.Year, AdjustedEndDate.Month, AdjustedEndDate.Day,
+    IntermediateDate.Year, IntermediateDate.Month, IntermediateDate.Day,
     ALargestUnit, AYears, AMonths, AWeeks, ADays);
-
-  StartDate.Year := StartYear;
-  StartDate.Month := StartMonth;
-  StartDate.Day := StartDay;
-  IntermediateDate := ApplyZonedDateDurationToDate(StartDate,
-    AYears, AMonths, AWeeks, ADays);
-  IntermediateEpochMs := LocalToEpochMs(IntermediateDate.Year,
-    IntermediateDate.Month, IntermediateDate.Day, StartHour, StartMinute,
-    StartSecond, StartMillisecond, ATimeZone);
-  IntermediateNs := EpochNanosecondsFromParts(IntermediateEpochMs,
-    AStartSubMillisecondNanoseconds);
-
-  RemainderBig := EndNs.Subtract(IntermediateNs);
   if RemainderBig.IsZero then Exit;
 
   if RemainderBig.IsNegative then
