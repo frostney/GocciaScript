@@ -13,6 +13,10 @@ function TryICUCanonicalizeLocale(const ATag: string; out ACanonical: string): B
 function TryICUGetAvailableLocales(out ALocales: IntlTypes.TStringArray): Boolean;
 function TryICUMaximizeLocale(const ATag: string; out AMaximized: string): Boolean;
 function TryICUMinimizeLocale(const ATag: string; out AMinimized: string): Boolean;
+function TryICUGetLocaleCalendars(const ALocale: string;
+  out ACalendars: IntlTypes.TStringArray): Boolean;
+function TryICUGetLocaleCollations(const ALocale: string;
+  out ACollations: IntlTypes.TStringArray): Boolean;
 
 function TryICUCompareStrings(const ALocale: string; const AStr1, AStr2: UnicodeString;
   ASensitivity: TIntlCollatorSensitivity; AIgnorePunctuation: Boolean;
@@ -242,6 +246,15 @@ type
     ATargetLength: LongInt): TICUCollationResult; cdecl;
   TUcolSetAttribute = procedure(ACollator: Pointer; AAttr: LongInt;
     AValue: LongInt; var AStatus: TICUErrorCode); cdecl;
+  TUcalGetKeywordValuesForLocale = function(const AKey: PAnsiChar;
+    const ALocale: PAnsiChar; ACommonlyUsed: ByteBool;
+    var AStatus: TICUErrorCode): Pointer; cdecl;
+  TUcolGetKeywordValuesForLocale = function(const AKey: PAnsiChar;
+    const ALocale: PAnsiChar; ACommonlyUsed: ByteBool;
+    var AStatus: TICUErrorCode): Pointer; cdecl;
+  TUenumNext = function(AEnumeration: Pointer; AResultLength: PLongInt;
+    var AStatus: TICUErrorCode): PAnsiChar; cdecl;
+  TUenumClose = procedure(AEnumeration: Pointer); cdecl;
   TUnumOpen = function(AStyle: LongInt; const APattern: PUChar;
     APatternLength: LongInt; const ALocale: PAnsiChar;
     AParseErr: Pointer; var AStatus: TICUErrorCode): Pointer; cdecl;
@@ -377,6 +390,10 @@ type
     UcolClose: TUcolClose;
     UcolStrcoll: TUcolStrcoll;
     UcolSetAttribute: TUcolSetAttribute;
+    UcalGetKeywordValuesForLocale: TUcalGetKeywordValuesForLocale;
+    UcolGetKeywordValuesForLocale: TUcolGetKeywordValuesForLocale;
+    UenumNext: TUenumNext;
+    UenumClose: TUenumClose;
     UnumOpen: TUnumOpen;
     UnumClose: TUnumClose;
     UnumFormatDouble: TUnumFormatDouble;
@@ -525,6 +542,18 @@ begin
   S := ResolveSymbol(AHandle, 'ucol_setAttribute');
   if not Assigned(S) then Exit;
   F.UcolSetAttribute := TUcolSetAttribute(S);
+
+  S := ResolveSymbol(AHandle, 'ucal_getKeywordValuesForLocale');
+  if Assigned(S) then F.UcalGetKeywordValuesForLocale := TUcalGetKeywordValuesForLocale(S);
+
+  S := ResolveSymbol(AHandle, 'ucol_getKeywordValuesForLocale');
+  if Assigned(S) then F.UcolGetKeywordValuesForLocale := TUcolGetKeywordValuesForLocale(S);
+
+  S := ResolveSymbol(AHandle, 'uenum_next');
+  if Assigned(S) then F.UenumNext := TUenumNext(S);
+
+  S := ResolveSymbol(AHandle, 'uenum_close');
+  if Assigned(S) then F.UenumClose := TUenumClose(S);
 
   S := ResolveSymbol(AHandle, 'unum_open');
   if not Assigned(S) then Exit;
@@ -1171,6 +1200,94 @@ begin
 
   AMinimized := string(PAnsiChar(@TagBuf[0]));
   Result := True;
+end;
+
+function TryICUEnumerationToArray(AEnumeration: Pointer;
+  out AValues: IntlTypes.TStringArray): Boolean;
+var
+  Status: TICUErrorCode;
+  ValueLength, Count: LongInt;
+  ValuePtr: PAnsiChar;
+  ValueAnsi: AnsiString;
+begin
+  Result := False;
+  SetLength(AValues, 0);
+
+  if (not Assigned(AEnumeration)) or (not Assigned(IntlFunctions.UenumNext)) or
+     (not Assigned(IntlFunctions.UenumClose)) then
+    Exit;
+
+  Count := 0;
+  try
+    repeat
+      Status := ICU_SUCCESS;
+      ValueLength := 0;
+      ValuePtr := IntlFunctions.UenumNext(AEnumeration, @ValueLength, Status);
+      if not ICUSucceeded(Status) then
+        Exit;
+      if not Assigned(ValuePtr) then
+        Break;
+
+      Inc(Count);
+      SetLength(AValues, Count);
+      SetString(ValueAnsi, ValuePtr, ValueLength);
+      AValues[Count - 1] := string(ValueAnsi);
+    until False;
+  finally
+    IntlFunctions.UenumClose(AEnumeration);
+  end;
+
+  Result := Count > 0;
+end;
+
+function TryICUGetLocaleCalendars(const ALocale: string;
+  out ACalendars: IntlTypes.TStringArray): Boolean;
+var
+  Status: TICUErrorCode;
+  KeyAnsi, LocaleAnsi: AnsiString;
+  Enumeration: Pointer;
+begin
+  Result := False;
+  SetLength(ACalendars, 0);
+
+  if not EnsureLoaded or
+     (not Assigned(IntlFunctions.UcalGetKeywordValuesForLocale)) then
+    Exit;
+
+  KeyAnsi := AnsiString('calendar');
+  LocaleAnsi := AnsiString(ALocale);
+  Status := ICU_SUCCESS;
+  Enumeration := IntlFunctions.UcalGetKeywordValuesForLocale(
+    PAnsiChar(KeyAnsi), PAnsiChar(LocaleAnsi), True, Status);
+  if not ICUSucceeded(Status) or not Assigned(Enumeration) then
+    Exit;
+
+  Result := TryICUEnumerationToArray(Enumeration, ACalendars);
+end;
+
+function TryICUGetLocaleCollations(const ALocale: string;
+  out ACollations: IntlTypes.TStringArray): Boolean;
+var
+  Status: TICUErrorCode;
+  KeyAnsi, LocaleAnsi: AnsiString;
+  Enumeration: Pointer;
+begin
+  Result := False;
+  SetLength(ACollations, 0);
+
+  if not EnsureLoaded or
+     (not Assigned(IntlFunctions.UcolGetKeywordValuesForLocale)) then
+    Exit;
+
+  KeyAnsi := AnsiString('collation');
+  LocaleAnsi := AnsiString(ALocale);
+  Status := ICU_SUCCESS;
+  Enumeration := IntlFunctions.UcolGetKeywordValuesForLocale(
+    PAnsiChar(KeyAnsi), PAnsiChar(LocaleAnsi), True, Status);
+  if not ICUSucceeded(Status) or not Assigned(Enumeration) then
+    Exit;
+
+  Result := TryICUEnumerationToArray(Enumeration, ACollations);
 end;
 
 function TryICUCompareStrings(const ALocale: string; const AStr1, AStr2: UnicodeString;

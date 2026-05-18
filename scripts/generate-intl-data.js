@@ -14,6 +14,7 @@ const DEFAULT_OUTPUT = path.join(
 );
 const DEFAULT_CLDR_VERSION = "45.0.0";
 const CLDR_PACKAGES = [
+  "cldr-bcp47",
   "cldr-core",
   "cldr-numbers-modern",
   "cldr-misc-modern",
@@ -307,6 +308,185 @@ function extractCurrencyData(cldrDir) {
   return result;
 }
 
+function normalizeCalendarType(value) {
+  if (value === "gregorian") {
+    return "gregory";
+  }
+  if (value === "ethiopic-amete-alem") {
+    return "ethioaa";
+  }
+  return value;
+}
+
+function hourSymbolToHourCycle(value) {
+  const symbol = value[0];
+  if (symbol === "K") {
+    return "h11";
+  }
+  if (symbol === "h") {
+    return "h12";
+  }
+  if (symbol === "H") {
+    return "h23";
+  }
+  if (symbol === "k") {
+    return "h24";
+  }
+  return "";
+}
+
+function uniqueSpaceSeparated(values) {
+  return [...new Set(values.filter((value) => value.length > 0))].join(" ");
+}
+
+function extractCalendarPreferences(cldrDir) {
+  const data = readJson(path.join(cldrDir, "cldr-core", "supplemental", "calendarPreferenceData.json"));
+  const preferences = data.supplemental.calendarPreferenceData;
+  const result = {};
+
+  for (const [region, calendars] of Object.entries(preferences)) {
+    result[region] = uniqueSpaceSeparated(calendars.map(normalizeCalendarType));
+  }
+
+  return result;
+}
+
+function extractCollationValues(cldrDir) {
+  const data = readJson(path.join(cldrDir, "cldr-bcp47", "bcp47", "collation.json"));
+  const collations = data.keyword.u.co;
+  const values = [];
+
+  for (const [key, value] of Object.entries(collations)) {
+    if (key.startsWith("_")) {
+      continue;
+    }
+    if (value._deprecated || key === "standard" || key === "search") {
+      continue;
+    }
+    values.push(key);
+  }
+
+  values.sort();
+  return { default: values.join(" ") };
+}
+
+function extractHourCyclePreferences(cldrDir) {
+  const data = readJson(path.join(cldrDir, "cldr-core", "supplemental", "timeData.json"));
+  const timeData = data.supplemental.timeData;
+  const result = {};
+
+  for (const [regionOrLocale, info] of Object.entries(timeData)) {
+    const hourCycle = hourSymbolToHourCycle(info._preferred || "");
+    if (hourCycle !== "") {
+      result[regionOrLocale] = hourCycle;
+    }
+  }
+
+  return result;
+}
+
+function extractNumberingSystemPreferences(cldrDir) {
+  const mainDir = path.join(cldrDir, "cldr-numbers-modern", "main");
+  const result = {};
+
+  for (const locale of fs.readdirSync(mainDir).sort()) {
+    const numbersPath = path.join(mainDir, locale, "numbers.json");
+    if (!fs.existsSync(numbersPath)) {
+      continue;
+    }
+    const data = readJson(numbersPath);
+    const numbers = data.main[locale].numbers;
+    if (numbers.defaultNumberingSystem) {
+      result[locale] = numbers.defaultNumberingSystem;
+    }
+  }
+
+  return result;
+}
+
+function extractTextDirections(cldrDir) {
+  const mainDir = path.join(cldrDir, "cldr-misc-modern", "main");
+  const result = {};
+
+  for (const locale of fs.readdirSync(mainDir).sort()) {
+    const layoutPath = path.join(mainDir, locale, "layout.json");
+    if (!fs.existsSync(layoutPath)) {
+      continue;
+    }
+    const data = readJson(layoutPath);
+    const order = data.main[locale].layout.orientation.characterOrder;
+    result[locale] = order === "right-to-left" ? "rtl" : "ltr";
+  }
+
+  return result;
+}
+
+function cldrDayToNumber(value) {
+  const days = {
+    mon: 1,
+    tue: 2,
+    wed: 3,
+    thu: 4,
+    fri: 5,
+    sat: 6,
+    sun: 7,
+  };
+  return days[value] || 0;
+}
+
+function extractWeekInfo(cldrDir) {
+  const data = readJson(path.join(cldrDir, "cldr-core", "supplemental", "weekData.json"));
+  const weekData = data.supplemental.weekData;
+  const regions = new Set([
+    ...Object.keys(weekData.firstDay || {}),
+    ...Object.keys(weekData.weekendStart || {}),
+    ...Object.keys(weekData.weekendEnd || {}),
+    ...Object.keys(weekData.minDays || {}),
+  ]);
+  const result = {};
+
+  for (const region of [...regions].sort()) {
+    const firstDay = cldrDayToNumber(weekData.firstDay[region] || weekData.firstDay["001"]);
+    const weekendStart = cldrDayToNumber(weekData.weekendStart[region] || weekData.weekendStart["001"]);
+    const weekendEnd = cldrDayToNumber(weekData.weekendEnd[region] || weekData.weekendEnd["001"]);
+    const minDays = weekData.minDays[region] || weekData.minDays["001"];
+    result[region] = `${firstDay}:${weekendStart}:${weekendEnd}:${minDays}`;
+  }
+
+  return result;
+}
+
+function extractTimeZonesByRegion(cldrDir) {
+  const data = readJson(path.join(cldrDir, "cldr-core", "supplemental", "windowsZones.json"));
+  const zones = data.supplemental.windowsZones.mapTimezones;
+  const byRegion = {};
+
+  for (const entry of zones) {
+    const mapZone = entry.mapZone;
+    const region = mapZone._territory;
+    if (region === "001" || region === "ZZ") {
+      continue;
+    }
+
+    if (!byRegion[region]) {
+      byRegion[region] = new Set();
+    }
+
+    for (const zone of mapZone._type.split(" ")) {
+      if (zone.length > 0 && !zone.startsWith("Etc/")) {
+        byRegion[region].add(zone);
+      }
+    }
+  }
+
+  const result = {};
+  for (const [region, zonesForRegion] of Object.entries(byRegion)) {
+    result[region] = [...zonesForRegion].sort().join(" ");
+  }
+
+  return result;
+}
+
 function buildKeyValueBlob(entries) {
   const keys = Object.keys(entries).sort();
   const count = keys.length;
@@ -397,6 +577,27 @@ function collectAllSections(cldrDir) {
   console.log("  currency data...");
   const currencyData = extractCurrencyData(cldrDir);
   sections.push({ name: "currency-data", data: currencyData });
+
+  console.log("  locale calendar preferences...");
+  sections.push({ name: "locale-calendars", data: extractCalendarPreferences(cldrDir) });
+
+  console.log("  locale collation values...");
+  sections.push({ name: "locale-collations", data: extractCollationValues(cldrDir) });
+
+  console.log("  locale hour cycles...");
+  sections.push({ name: "locale-hour-cycles", data: extractHourCyclePreferences(cldrDir) });
+
+  console.log("  locale numbering systems...");
+  sections.push({ name: "locale-numbering-systems", data: extractNumberingSystemPreferences(cldrDir) });
+
+  console.log("  locale text directions...");
+  sections.push({ name: "locale-text-directions", data: extractTextDirections(cldrDir) });
+
+  console.log("  locale time zones...");
+  sections.push({ name: "locale-time-zones", data: extractTimeZonesByRegion(cldrDir) });
+
+  console.log("  locale week info...");
+  sections.push({ name: "locale-week-info", data: extractWeekInfo(cldrDir) });
 
   for (const locale of TARGET_LOCALES) {
     console.log(`  locale ${locale}...`);

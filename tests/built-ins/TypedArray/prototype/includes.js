@@ -42,4 +42,21 @@ describe("TypedArray.prototype.includes", () => {
     expect(ta.includes(2n)).toBe(true);
     expect(ta.includes(4n)).toBe(false);
   });
+
+  test("throws on detached buffer", () => {
+    const ta = new Int32Array([1, 2, 3]);
+    ta.buffer.transfer();
+    expect(() => ta.includes(1)).toThrow(TypeError);
+  });
+
+  test("reads undefined when fromIndex detaches buffer", () => {
+    const ta = new Int32Array(1);
+    const fromIndex = {
+      valueOf() {
+        ta.buffer.transfer();
+        return 0;
+      }
+    };
+    expect(ta.includes(undefined, fromIndex)).toBe(true);
+  });
 });

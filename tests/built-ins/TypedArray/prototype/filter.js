@@ -44,6 +44,23 @@ describe("TypedArray.prototype.filter", () => {
       expect(filtered[1]).toBe(4);
       expect(filtered[2]).toBe(5);
     });
+
+    test("continues after callback detaches buffer", () => {
+      const ta = new TA(2);
+      const buffer = ta.buffer;
+      const seen = [];
+      const filtered = ta.filter((value) => {
+        seen.push(value);
+        if (seen.length === 1) {
+          buffer.transfer();
+        }
+        return true;
+      });
+
+      expect(seen.length).toBe(2);
+      expect(seen[1]).toBeUndefined();
+      expect(filtered.length).toBe(2);
+    });
   });
 
   test.each([BigInt64Array, BigUint64Array])("%s filter", (TA) => {
@@ -53,5 +70,24 @@ describe("TypedArray.prototype.filter", () => {
     expect(filtered.length).toBe(2);
     expect(filtered[0]).toBe(3n);
     expect(filtered[1]).toBe(4n);
+  });
+
+  test.each([BigInt64Array, BigUint64Array])("%s continues after callback detaches buffer", (TA) => {
+    const ta = new TA(2);
+    const buffer = ta.buffer;
+    const seen = [];
+    const filtered = ta.filter((value) => {
+      seen.push(value);
+      if (seen.length === 1) {
+        buffer.transfer();
+        return true;
+      }
+      return false;
+    });
+
+    expect(seen.length).toBe(2);
+    expect(seen[1]).toBeUndefined();
+    expect(filtered.length).toBe(1);
+    expect(filtered[0]).toBe(0n);
   });
 });
