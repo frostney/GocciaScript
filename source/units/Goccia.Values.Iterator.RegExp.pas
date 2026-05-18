@@ -14,12 +14,12 @@ type
   private
     FRegExp: TGocciaObjectValue;
     FInput: string;
-    FSearchIndex: Integer;
     FGlobal: Boolean;
+    FUnicode: Boolean;
     FSingleMatchReturned: Boolean;
   public
     constructor Create(const ARegExp: TGocciaObjectValue; const AInput: string;
-      const AGlobal: Boolean);
+      const AGlobal, AUnicode: Boolean);
     function AdvanceNext: TGocciaObjectValue; override;
     function DirectNext(out ADone: Boolean): TGocciaValue; override;
     function ToStringTag: string; override;
@@ -29,28 +29,23 @@ type
 implementation
 
 uses
-  Math,
-
-  Goccia.Constants.PropertyNames,
   Goccia.RegExp.Runtime;
 
 const
   REGEXP_STRING_ITERATOR_TAG = 'RegExp String Iterator';
+  MATCH_TEXT_PROPERTY = '0';
 
 { TGocciaRegExpMatchAllIteratorValue }
 
 constructor TGocciaRegExpMatchAllIteratorValue.Create(
   const ARegExp: TGocciaObjectValue; const AInput: string;
-  const AGlobal: Boolean);
+  const AGlobal, AUnicode: Boolean);
 begin
   inherited Create;
   FRegExp := ARegExp;
   FInput := AInput;
-  // ES2026 §22.2.6.9 step 6: matcher.lastIndex = ToLength(rx.lastIndex)
-  // CloneRegExpObject preserves lastIndex; honour it for global/sticky regexes
-  FSearchIndex := Max(0, Trunc(
-    ARegExp.GetProperty(PROP_LAST_INDEX).ToNumberLiteral.Value));
   FGlobal := AGlobal;
+  FUnicode := AUnicode;
   FSingleMatchReturned := False;
 end;
 
@@ -58,7 +53,7 @@ end;
 function TGocciaRegExpMatchAllIteratorValue.AdvanceNext: TGocciaObjectValue;
 var
   MatchValue: TGocciaValue;
-  MatchIndex, MatchEnd, NextIndex: Integer;
+  MatchString: string;
 begin
   if FDone then
   begin
@@ -73,24 +68,22 @@ begin
     Exit;
   end;
 
-  if not MatchRegExpObject(FRegExp, FInput, FSearchIndex, False, False,
-    MatchValue, MatchIndex, MatchEnd, NextIndex) then
+  if not MatchRegExpObjectOnce(FRegExp, FInput, MatchValue) then
   begin
     FDone := True;
     Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
     Exit;
   end;
 
-  if FGlobal and not IsRegExpInstance(FRegExp) and (MatchEnd = MatchIndex) then
-    FSearchIndex := AdvanceProtocolLastIndexAfterEmptyMatch(FRegExp, FInput,
-      HasUnicodeRegExpFlag(FRegExp.GetProperty(PROP_FLAGS).ToStringLiteral.Value))
+  if FGlobal then
+  begin
+    MatchString := TGocciaObjectValue(MatchValue).GetProperty(MATCH_TEXT_PROPERTY)
+      .ToStringLiteral.Value;
+    if MatchString = '' then
+      AdvanceProtocolLastIndexAfterEmptyMatch(FRegExp, FInput, FUnicode);
+  end
   else
-    FSearchIndex := NextIndex;
-  if not FGlobal then
     FSingleMatchReturned := True;
-
-  if FSearchIndex > Length(FInput) then
-    FDone := True;
 
   Result := CreateIteratorResult(MatchValue, False);
 end;
@@ -98,7 +91,7 @@ end;
 function TGocciaRegExpMatchAllIteratorValue.DirectNext(out ADone: Boolean): TGocciaValue;
 var
   MatchValue: TGocciaValue;
-  MatchIndex, MatchEnd, NextIndex: Integer;
+  MatchString: string;
 begin
   if FDone then
   begin
@@ -115,8 +108,7 @@ begin
     Exit;
   end;
 
-  if not MatchRegExpObject(FRegExp, FInput, FSearchIndex, False, False,
-    MatchValue, MatchIndex, MatchEnd, NextIndex) then
+  if not MatchRegExpObjectOnce(FRegExp, FInput, MatchValue) then
   begin
     FDone := True;
     ADone := True;
@@ -124,16 +116,15 @@ begin
     Exit;
   end;
 
-  if FGlobal and not IsRegExpInstance(FRegExp) and (MatchEnd = MatchIndex) then
-    FSearchIndex := AdvanceProtocolLastIndexAfterEmptyMatch(FRegExp, FInput,
-      HasUnicodeRegExpFlag(FRegExp.GetProperty(PROP_FLAGS).ToStringLiteral.Value))
+  if FGlobal then
+  begin
+    MatchString := TGocciaObjectValue(MatchValue).GetProperty(MATCH_TEXT_PROPERTY)
+      .ToStringLiteral.Value;
+    if MatchString = '' then
+      AdvanceProtocolLastIndexAfterEmptyMatch(FRegExp, FInput, FUnicode);
+  end
   else
-    FSearchIndex := NextIndex;
-  if not FGlobal then
     FSingleMatchReturned := True;
-
-  if FSearchIndex > Length(FInput) then
-    FDone := True;
 
   ADone := False;
   Result := MatchValue;

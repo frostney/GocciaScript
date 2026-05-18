@@ -14,6 +14,59 @@ test("Symbol.matchAll returns a single match for non-global regexes", () => {
   expect(matches).toEqual([["a", 1]]);
 });
 
+test("Symbol.matchAll converts input before species and flags", () => {
+  const log = [];
+  class Source extends RegExp {
+    static get [Symbol.species]() {
+      log.push("species");
+      return class Matcher extends RegExp {
+        constructor(rx, flags) {
+          log.push("construct:" + flags);
+          super(rx, flags);
+        }
+      };
+    }
+  }
+  const regex = new Source("a", "g");
+  const input = {
+    toString() {
+      log.push("string");
+      return "a";
+    },
+  };
+
+  regex[Symbol.matchAll](input).next();
+  expect(log).toEqual(["string", "species", "construct:g"]);
+});
+
+test("Symbol.matchAll sets matcher lastIndex from ToLength of the original", () => {
+  const log = [];
+  const matcher = {
+    set lastIndex(value) {
+      log.push("matcher-lastIndex:" + value);
+    },
+  };
+  class Source extends RegExp {
+    static get [Symbol.species]() {
+      return class Matcher {
+        constructor() {
+          return matcher;
+        }
+      };
+    }
+  }
+  const regex = new Source("a", "g");
+  regex.lastIndex = {
+    valueOf() {
+      log.push("valueOf-lastIndex");
+      return 1;
+    },
+  };
+
+  regex[Symbol.matchAll]("aaa");
+  expect(log).toEqual(["valueOf-lastIndex", "matcher-lastIndex:1"]);
+});
+
 test("Symbol.matchAll does not mutate the original regex lastIndex", () => {
   const regex = /a/g;
 

@@ -606,6 +606,105 @@ console.log("Per-file compat-traditional-for-loop config across all apps...");
   }
 }
 
+// -- Per-file compat-while-loops config across all apps ------------------------
+
+console.log("Per-file compat-while-loops config across all apps...");
+{
+  const tmp = makeTmp();
+  try {
+    writeFileSync(
+      join(tmp, "goccia.json"),
+      '{"compat-while-loops": true}\n',
+    );
+    writeFileSync(
+      join(tmp, "test.js"),
+      "let s = 0;\nlet i = 0;\nwhile (i < 5) { s += i; i++; }\ns;\n",
+    );
+    writeFileSync(
+      join(tmp, "test-runner.js"),
+      [
+        'describe("while", () => {',
+        '  test("counts", () => {',
+        "    let s = 0;",
+        "    let i = 0;",
+        "    do {",
+        "      s += i;",
+        "      i++;",
+        "    } while (i < 5);",
+        "    expect(s).toBe(10);",
+        "  });",
+        "});",
+      ].join("\n") + "\n",
+    );
+    writeFileSync(
+      join(tmp, "bench.js"),
+      [
+        'suite("while", () => {',
+        '  bench("count", {',
+        "    run: () => {",
+        "      let s = 0;",
+        "      let i = 0;",
+        "      while (i < 10) {",
+        "        s += i;",
+        "        i++;",
+        "      }",
+        "      return s;",
+        "    },",
+        "  });",
+        "});",
+      ].join("\n") + "\n",
+    );
+
+    // Loader (interpreted)
+    const loaderOut = await $`${LOADER} --print ${join(tmp, "test.js")} 2>&1`.text();
+    if (!containsLine(loaderOut, "10")) throw new Error(`Loader interp compat-while-loops should produce 10 on its own line, got: ${loaderOut}`);
+
+    // Loader (bytecode)
+    const loaderBc = await $`${LOADER} --print ${join(tmp, "test.js")} --mode=bytecode 2>&1`.text();
+    if (!containsLine(loaderBc, "10")) throw new Error(`Loader bytecode compat-while-loops should produce 10 on its own line, got: ${loaderBc}`);
+
+    // TestRunner (interpreted)
+    const trInterp = await $`${TESTRUNNER} ${join(tmp, "test-runner.js")} --no-progress 2>&1`.text();
+    if (!trInterp.includes("Passed: 1")) throw new Error(`TestRunner interp compat-while-loops should pass, got: ${trInterp}`);
+
+    // TestRunner (bytecode)
+    const trBc = await $`${TESTRUNNER} ${join(tmp, "test-runner.js")} --mode=bytecode --no-progress 2>&1`.text();
+    if (!trBc.includes("Passed: 1")) throw new Error(`TestRunner bytecode compat-while-loops should pass, got: ${trBc}`);
+
+    // Bundler
+    await $`${BUNDLER} ${join(tmp, "test.js")}`.quiet();
+    if (!existsSync(join(tmp, "test.gbc"))) throw new Error("Bundler compat-while-loops should compile");
+
+    // BenchmarkRunner (interpreted)
+    const benchInterp = Bun.spawnSync(
+      [resolve(BENCHRUNNER), join(tmp, "bench.js"), "--no-progress"],
+      {
+        stdout: "pipe",
+        stderr: "pipe",
+        env: { ...process.env, GOCCIA_BENCH_CALIBRATION_MS: "50", GOCCIA_BENCH_ROUNDS: "3" } as Record<string, string>,
+        timeout: 60_000,
+      },
+    );
+    if (benchInterp.exitCode !== 0) throw new Error(`BenchmarkRunner interp compat-while-loops exited ${benchInterp.exitCode}: ${benchInterp.stderr.toString()}`);
+    if (!benchInterp.stdout.toString().includes("while")) throw new Error("BenchmarkRunner interp compat-while-loops should mention 'while'");
+
+    // BenchmarkRunner (bytecode)
+    const benchBc = Bun.spawnSync(
+      [resolve(BENCHRUNNER), join(tmp, "bench.js"), "--mode=bytecode", "--no-progress"],
+      {
+        stdout: "pipe",
+        stderr: "pipe",
+        env: { ...process.env, GOCCIA_BENCH_CALIBRATION_MS: "50", GOCCIA_BENCH_ROUNDS: "3" } as Record<string, string>,
+        timeout: 60_000,
+      },
+    );
+    if (benchBc.exitCode !== 0) throw new Error(`BenchmarkRunner bytecode compat-while-loops exited ${benchBc.exitCode}: ${benchBc.stderr.toString()}`);
+    if (!benchBc.stdout.toString().includes("while")) throw new Error("BenchmarkRunner bytecode compat-while-loops should mention 'while'");
+  } finally {
+    clean(tmp);
+  }
+}
+
 // -- Per-file compat-loose-equality config across all apps ---------------------
 
 console.log("Per-file compat-loose-equality config across all apps...");
@@ -783,6 +882,28 @@ console.log("compat-traditional-for-loop OFF emits warning and no-ops...");
     );
     const stderr = await $`${LOADER} ${join(tmp, "no-flag.js")} 2>&1`.text();
     if (!stderr.includes("Traditional 'for(;;)' loops are not supported")) {
+      throw new Error(`Loader without flag should emit warning, got: ${stderr}`);
+    }
+    if (stderr.includes("should not run")) {
+      throw new Error(`Loader without flag should not execute the loop body, got: ${stderr}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+}
+
+// -- compat-while-loops off -> warning, no crash -------------------------------
+
+console.log("compat-while-loops OFF emits warning and no-ops...");
+{
+  const tmp = makeTmp();
+  try {
+    writeFileSync(
+      join(tmp, "no-flag.js"),
+      "let x = 0;\nwhile (x < 3) { console.log('should not run'); x++; }\n",
+    );
+    const stderr = await $`${LOADER} ${join(tmp, "no-flag.js")} 2>&1`.text();
+    if (!stderr.includes("'while' loops are not supported by default")) {
       throw new Error(`Loader without flag should emit warning, got: ${stderr}`);
     }
     if (stderr.includes("should not run")) {

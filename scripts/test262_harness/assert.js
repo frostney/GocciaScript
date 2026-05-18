@@ -9,8 +9,9 @@
 // adaptations:
 //
 //   1. assert.compareArray uses for-of over .entries() instead of stock's
-//      `for (var i = 0; i < a.length; i++) { ... }` because Goccia's parser
-//      warns and drops traditional for-loop bodies.
+//      `for (var i = 0; i < a.length; i++) { ... }`. This is a historical
+//      adaptation from before the runner enabled traditional for-loop
+//      compatibility and should be re-evaluated against stock.
 //
 //   2. assert.throws uses `error instanceof expectedErrorConstructor`
 //      instead of stock's `thrown.constructor !== expectedErrorConstructor`
@@ -157,8 +158,8 @@ assert.compareArray = function (actual, expected, message) {
     );
   }
   // Adaptation: for-of over .entries() instead of stock's
-  // `for (var i = 0; i < actual.length; i++) { ... }` because Goccia's
-  // parser warns and drops traditional for-loop bodies.
+  // `for (var i = 0; i < actual.length; i++) { ... }`. This predates
+  // traditional for-loop compatibility in the test262 runner.
   for (const [i, val] of actual.entries()) {
     if (!assert._isSameValue(val, expected[i])) {
       throw new Test262Error(

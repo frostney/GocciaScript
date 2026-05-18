@@ -38,6 +38,7 @@ type
     CompatVar: Boolean;
     CompatFunction: Boolean;
     CompatTraditionalFor: Boolean;
+    CompatWhileLoops: Boolean;
     CompatLooseEquality: Boolean;
     CompatNonStrictMode: Boolean;
     StrictTypes: Boolean;
@@ -81,6 +82,7 @@ begin
   WriteLn('  --compat-var                  Enable var declarations');
   WriteLn('  --compat-function             Enable function declarations/expressions');
   WriteLn('  --compat-traditional-for-loop Enable traditional C-style for(;;) loops');
+  WriteLn('  --compat-while-loops          Enable while and do...while loops');
   WriteLn('  --compat-loose-equality       Enable loose equality (== and !=)');
   WriteLn('  --compat-non-strict-mode      Enable non-strict-mode compatibility');
   WriteLn('  --strict-types                Enforce type annotations at runtime');
@@ -157,6 +159,7 @@ begin
   Result.CompatVar := False;
   Result.CompatFunction := False;
   Result.CompatTraditionalFor := False;
+  Result.CompatWhileLoops := False;
   Result.CompatLooseEquality := False;
   Result.CompatNonStrictMode := False;
   Result.StrictTypes := False;
@@ -185,6 +188,8 @@ begin
       Result.CompatFunction := True
     else if Arg = '--compat-traditional-for-loop' then
       Result.CompatTraditionalFor := True
+    else if Arg = '--compat-while-loops' then
+      Result.CompatWhileLoops := True
     else if Arg = '--compat-loose-equality' then
       Result.CompatLooseEquality := True
     else if Arg = '--compat-non-strict-mode' then
@@ -230,6 +235,7 @@ begin
   AEngine.VarEnabled := AOptions.CompatVar;
   AEngine.FunctionEnabled := AOptions.CompatFunction;
   AEngine.TraditionalForLoopsEnabled := AOptions.CompatTraditionalFor;
+  AEngine.WhileLoopsEnabled := AOptions.CompatWhileLoops;
   AEngine.LooseEqualityEnabled := AOptions.CompatLooseEquality;
   AEngine.NonStrictModeEnabled := AOptions.CompatNonStrictMode;
   AEngine.StrictTypes := AOptions.StrictTypes;

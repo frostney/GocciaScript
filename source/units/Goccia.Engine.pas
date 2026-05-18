@@ -61,7 +61,7 @@ type
   TGocciaPreprocessors = set of TGocciaPreprocessor;
 
   TGocciaCompatibility = (cfASI, cfVar, cfFunction, cfTraditionalFor,
-    cfLooseEquality, cfNonStrictMode);
+    cfWhileLoops, cfLooseEquality, cfNonStrictMode);
   TGocciaCompatibilityFlags = set of TGocciaCompatibility;
 
   TGocciaSourceType = (stScript, stModule);
@@ -181,12 +181,14 @@ type
     function GetVarEnabled: Boolean;
     function GetFunctionEnabled: Boolean;
     function GetTraditionalForLoopsEnabled: Boolean;
+    function GetWhileLoopsEnabled: Boolean;
     function GetLooseEqualityEnabled: Boolean;
     function GetNonStrictModeEnabled: Boolean;
     procedure SetASIEnabled(const AValue: Boolean);
     procedure SetVarEnabled(const AValue: Boolean);
     procedure SetFunctionEnabled(const AValue: Boolean);
     procedure SetTraditionalForLoopsEnabled(const AValue: Boolean);
+    procedure SetWhileLoopsEnabled(const AValue: Boolean);
     procedure SetLooseEqualityEnabled(const AValue: Boolean);
     procedure SetNonStrictModeEnabled(const AValue: Boolean);
     procedure SetStrictTypes(const AValue: Boolean);
@@ -279,6 +281,8 @@ type
     property FunctionEnabled: Boolean read GetFunctionEnabled write SetFunctionEnabled;
     property TraditionalForLoopsEnabled: Boolean
       read GetTraditionalForLoopsEnabled write SetTraditionalForLoopsEnabled;
+    property WhileLoopsEnabled: Boolean
+      read GetWhileLoopsEnabled write SetWhileLoopsEnabled;
     property LooseEqualityEnabled: Boolean
       read GetLooseEqualityEnabled write SetLooseEqualityEnabled;
     property NonStrictModeEnabled: Boolean
@@ -1407,6 +1411,7 @@ begin
         Parser.VarDeclarationsEnabled := cfVar in FCompatibility;
         Parser.FunctionDeclarationsEnabled := cfFunction in FCompatibility;
         Parser.TraditionalForLoopsEnabled := cfTraditionalFor in FCompatibility;
+        Parser.WhileLoopsEnabled := cfWhileLoops in FCompatibility;
         Parser.LooseEqualityEnabled := cfLooseEquality in FCompatibility;
         Parser.NonStrictModeEnabled := (cfNonStrictMode in FCompatibility) or
           (FSourceType = stModule);
@@ -1700,6 +1705,20 @@ begin
   FInterpreter.TraditionalForLoopsEnabled := AValue;
 end;
 
+function TGocciaEngine.GetWhileLoopsEnabled: Boolean;
+begin
+  Result := cfWhileLoops in FCompatibility;
+end;
+
+procedure TGocciaEngine.SetWhileLoopsEnabled(const AValue: Boolean);
+begin
+  if AValue then
+    Include(FCompatibility, cfWhileLoops)
+  else
+    Exclude(FCompatibility, cfWhileLoops);
+  FInterpreter.WhileLoopsEnabled := AValue;
+end;
+
 function TGocciaEngine.GetLooseEqualityEnabled: Boolean;
 begin
   Result := cfLooseEquality in FCompatibility;
@@ -1756,6 +1775,7 @@ begin
   FInterpreter.VarEnabled := cfVar in AValue;
   FInterpreter.FunctionEnabled := cfFunction in AValue;
   FInterpreter.TraditionalForLoopsEnabled := cfTraditionalFor in AValue;
+  FInterpreter.WhileLoopsEnabled := cfWhileLoops in AValue;
   FInterpreter.LooseEqualityEnabled := cfLooseEquality in AValue;
   FInterpreter.NonStrictModeEnabled := cfNonStrictMode in AValue;
   if FExecutor is TGocciaBytecodeExecutor then
@@ -1811,6 +1831,7 @@ begin
       Parser.VarDeclarationsEnabled := cfVar in FCompatibility;
       Parser.FunctionDeclarationsEnabled := cfFunction in FCompatibility;
       Parser.TraditionalForLoopsEnabled := cfTraditionalFor in FCompatibility;
+      Parser.WhileLoopsEnabled := cfWhileLoops in FCompatibility;
       Parser.LooseEqualityEnabled := cfLooseEquality in FCompatibility;
       Parser.NonStrictModeEnabled := cfNonStrictMode in FCompatibility;
       try
@@ -1845,6 +1866,7 @@ begin
       Parser.VarDeclarationsEnabled := cfVar in FCompatibility;
       Parser.FunctionDeclarationsEnabled := cfFunction in FCompatibility;
       Parser.TraditionalForLoopsEnabled := cfTraditionalFor in FCompatibility;
+      Parser.WhileLoopsEnabled := cfWhileLoops in FCompatibility;
       Parser.LooseEqualityEnabled := cfLooseEquality in FCompatibility;
       Parser.NonStrictModeEnabled := cfNonStrictMode in FCompatibility;
       try
@@ -1880,6 +1902,7 @@ begin
     Parser.VarDeclarationsEnabled := cfVar in FCompatibility;
     Parser.FunctionDeclarationsEnabled := cfFunction in FCompatibility;
     Parser.TraditionalForLoopsEnabled := cfTraditionalFor in FCompatibility;
+    Parser.WhileLoopsEnabled := cfWhileLoops in FCompatibility;
     Parser.LooseEqualityEnabled := cfLooseEquality in FCompatibility;
     Parser.NonStrictModeEnabled := cfNonStrictMode in FCompatibility;
     try
