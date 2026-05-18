@@ -41,6 +41,7 @@ type
     procedure SyncBufferData;
     function GetLength: Integer;
     function HasValidBackingRange(const ALength: Integer): Boolean;
+    function HasValidElementIndex(const AIndex: Integer): Boolean;
 
     function ReadElement(const AIndex: Integer): Double;
     procedure WriteElement(const AIndex: Integer; const AValue: Double);
@@ -152,6 +153,7 @@ implementation
 uses
   Math,
 
+  Goccia.Arithmetic,
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
@@ -273,6 +275,11 @@ begin
   Result := RequiredBytes <= System.Length(FBufferData);
 end;
 
+function TGocciaTypedArrayValue.HasValidElementIndex(const AIndex: Integer): Boolean;
+begin
+  Result := (AIndex >= 0) and (AIndex < GetLength);
+end;
+
 { Element read/write via buffer }
 
 function TGocciaTypedArrayValue.ReadElement(const AIndex: Integer): Double;
@@ -288,6 +295,9 @@ var
   F32: Single;
   F64: Double;
 begin
+  if not HasValidElementIndex(AIndex) then
+    Exit(0);
+
   SyncBufferData;
   Offset := FByteOffset + AIndex * BytesPerElement(FKind);
   case FKind of
@@ -356,6 +366,9 @@ var
   F64: Double;
   Clamped: Integer;
 begin
+  if not HasValidElementIndex(AIndex) then
+    Exit;
+
   SyncBufferData;
   Offset := FByteOffset + AIndex * BytesPerElement(FKind);
   case FKind of
@@ -446,6 +459,9 @@ procedure TGocciaTypedArrayValue.WriteNumberLiteral(const AIndex: Integer; const
 var
   Offset: Integer;
 begin
+  if not HasValidElementIndex(AIndex) then
+    Exit;
+
   SyncBufferData;
   if ANum.IsNaN then
   begin
@@ -492,6 +508,9 @@ var
   I64: Int64;
   U64: QWord;
 begin
+  if not HasValidElementIndex(AIndex) then
+    Exit(0);
+
   SyncBufferData;
   Offset := FByteOffset + AIndex * 8;
   case FKind of
@@ -514,6 +533,9 @@ procedure TGocciaTypedArrayValue.WriteBigIntElement(const AIndex: Integer; const
 var
   Offset: Integer;
 begin
+  if not HasValidElementIndex(AIndex) then
+    Exit;
+
   SyncBufferData;
   Offset := FByteOffset + AIndex * 8;
   Move(AValue, FBufferData[Offset], 8);
@@ -596,6 +618,9 @@ function TGocciaTypedArrayValue.GetElementAsValue(const AIndex: Integer): TGocci
 var
   Raw: Int64;
 begin
+  if not HasValidElementIndex(AIndex) then
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+
   if IsBigIntKind(FKind) then
   begin
     Raw := ReadBigIntElement(AIndex);
@@ -910,7 +935,12 @@ begin
   if AName = PROP_BYTE_LENGTH then
     Exit(TGocciaNumberLiteralValue.Create(GetLength * BytesPerElement(FKind)));
   if AName = PROP_BYTE_OFFSET then
+  begin
+    if (FBufferValue is TGocciaArrayBufferValue) and
+       TGocciaArrayBufferValue(FBufferValue).Detached then
+      Exit(TGocciaNumberLiteralValue.Create(0));
     Exit(TGocciaNumberLiteralValue.Create(FByteOffset));
+  end;
   if AName = PROP_BUFFER then
     Exit(FBufferValue);
   if AName = PROP_BYTES_PER_ELEMENT then
@@ -1074,6 +1104,24 @@ begin
   Result := TGocciaTypedArrayValue(AThisValue);
 end;
 
+function IsDetachedTypedArray(const AArray: TGocciaTypedArrayValue): Boolean;
+begin
+  Result := (AArray.FBufferValue is TGocciaArrayBufferValue) and
+    TGocciaArrayBufferValue(AArray.FBufferValue).Detached;
+end;
+
+procedure EnsureTypedArrayAttached(const AArray: TGocciaTypedArrayValue; const AMethod: string);
+begin
+  if IsDetachedTypedArray(AArray) then
+    ThrowTypeError(Format(SErrorCannotUseDetachedTypedArray, [AMethod]), SSuggestArrayBufferDetached);
+end;
+
+function RequireAttachedTypedArray(const AThisValue: TGocciaValue; const AMethod: string): TGocciaTypedArrayValue;
+begin
+  Result := RequireTypedArray(AThisValue, AMethod);
+  EnsureTypedArrayAttached(Result, AMethod);
+end;
+
 function ToIntegerOrInfinityBounded(const AValue: TGocciaValue): Integer;
 var
   Num: TGocciaNumberLiteralValue;
@@ -1130,8 +1178,13 @@ begin
 end;
 
 function TGocciaTypedArrayValue.TypedArrayByteOffsetGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  TA: TGocciaTypedArrayValue;
 begin
-  Result := TGocciaNumberLiteralValue.Create(RequireTypedArray(AThisValue, 'TypedArray.prototype.byteOffset').FByteOffset);
+  TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.byteOffset');
+  if IsDetachedTypedArray(TA) then
+    Exit(TGocciaNumberLiteralValue.Create(0));
+  Result := TGocciaNumberLiteralValue.Create(TA.FByteOffset);
 end;
 
 function TGocciaTypedArrayValue.TypedArrayLengthGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -1155,7 +1208,7 @@ var
   TA: TGocciaTypedArrayValue;
   RelIndex, ActualIndex: Integer;
 begin
-  TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.at');
+  TA := RequireAttachedTypedArray(AThisValue, 'TypedArray.prototype.at');
   if AArgs.Length = 0 then
     Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
   RelIndex := Trunc(AArgs.GetElement(0).ToNumberLiteral.Value);
@@ -1176,7 +1229,7 @@ var
   FillBigInt: Int64;
   First, Final, I, RelStart, RelEnd: Integer;
 begin
-  TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.fill');
+  TA := RequireAttachedTypedArray(AThisValue, 'TypedArray.prototype.fill');
   FillBigInt := 0;
   FillNum := nil;
   if IsBigIntKind(TA.FKind) then
@@ -1217,6 +1270,8 @@ begin
   else
     Final := TA.FLength;
 
+  EnsureTypedArrayAttached(TA, 'TypedArray.prototype.fill');
+
   if IsBigIntKind(TA.FKind) then
   begin
     for I := First to Final - 1 do
@@ -1238,7 +1293,7 @@ var
   BPE: Integer;
   TempBuf: TBytes;
 begin
-  TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.copyWithin');
+  TA := RequireAttachedTypedArray(AThisValue, 'TypedArray.prototype.copyWithin');
   if AArgs.Length < 2 then
     Exit(AThisValue);
 
@@ -1259,6 +1314,7 @@ begin
   Count := Min(Final - Start, TA.FLength - Target);
   if Count <= 0 then
     Exit(AThisValue);
+  EnsureTypedArrayAttached(TA, 'TypedArray.prototype.copyWithin');
 
   BPE := BytesPerElement(TA.FKind);
   SetLength(TempBuf, Count * BPE);
@@ -1276,7 +1332,7 @@ var
   TA, NewTA: TGocciaTypedArrayValue;
   First, Final, NewLen, I: Integer;
 begin
-  TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.slice');
+  TA := RequireAttachedTypedArray(AThisValue, 'TypedArray.prototype.slice');
 
   if AArgs.Length > 0 then
   begin
@@ -1335,6 +1391,8 @@ begin
     EndIdx := TA.FLength;
 
   NewLen := Max(EndIdx - BeginIdx, 0);
+  if NewLen > 0 then
+    EnsureTypedArrayAttached(TA, 'TypedArray.prototype.subarray');
   if TA.FBufferValue is TGocciaSharedArrayBufferValue then
     Result := TGocciaTypedArrayValue.Create(TA.FKind, TGocciaSharedArrayBufferValue(TA.FBufferValue), TA.FByteOffset + BeginIdx * BPE, NewLen)
   else
@@ -1363,9 +1421,12 @@ begin
   else
     TargetOffset := 0;
 
+  EnsureTypedArrayAttached(TA, 'TypedArray.prototype.set');
+
   if AArgs.GetElement(0) is TGocciaTypedArrayValue then
   begin
     SrcTA := TGocciaTypedArrayValue(AArgs.GetElement(0));
+    EnsureTypedArrayAttached(SrcTA, 'TypedArray.prototype.set');
     if (TargetOffset > TA.FLength) or
        (SrcTA.FLength > TA.FLength - TargetOffset) then
       ThrowRangeError(SErrorTypedArraySourceTooLarge, SSuggestTypedArrayLength);
@@ -1415,7 +1476,7 @@ var
   Tmp: Double;
   TmpBig: Int64;
 begin
-  TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.reverse');
+  TA := RequireAttachedTypedArray(AThisValue, 'TypedArray.prototype.reverse');
   if IsBigIntKind(TA.FKind) then
   begin
     for I := 0 to (TA.FLength div 2) - 1 do
@@ -1452,7 +1513,7 @@ var
   ZeroJBits: Int64 absolute ZeroJ;
   TmpZeroBits: Int64 absolute Tmp;
 begin
-  TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.sort');
+  TA := RequireAttachedTypedArray(AThisValue, 'TypedArray.prototype.sort');
   HasCompare := (AArgs.Length > 0) and AArgs.GetElement(0).IsCallable;
   SortLen := TA.FLength;
 
@@ -1600,12 +1661,10 @@ end;
 function TGocciaTypedArrayValue.TypedArrayIndexOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   TA: TGocciaTypedArrayValue;
-  SearchNum: TGocciaNumberLiteralValue;
-  SearchVal: Double;
-  SearchBigInt: Int64;
+  SearchValue: TGocciaValue;
   I, StartIdx: Integer;
 begin
-  TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.indexOf');
+  TA := RequireAttachedTypedArray(AThisValue, 'TypedArray.prototype.indexOf');
   if TA.FLength = 0 then
     Exit(TGocciaNumberLiteralValue.Create(-1));
   if AArgs.Length = 0 then
@@ -1619,35 +1678,12 @@ begin
   else
     StartIdx := 0;
 
-  if IsBigIntKind(TA.FKind) then
-  begin
-    if not (AArgs.GetElement(0) is TGocciaBigIntValue) then
-      Exit(TGocciaNumberLiteralValue.Create(-1));
-    SearchBigInt := TGocciaBigIntValue(AArgs.GetElement(0)).Value.ToInt64;
-    for I := StartIdx to TA.FLength - 1 do
-      if TA.ReadBigIntElement(I) = SearchBigInt then
-        Exit(TGocciaNumberLiteralValue.Create(I));
+  if IsDetachedTypedArray(TA) then
     Exit(TGocciaNumberLiteralValue.Create(-1));
-  end;
 
-  SearchNum := AArgs.GetElement(0).ToNumberLiteral;
-  // ES2026: indexOf uses strict equality — NaN !== NaN
-  if SearchNum.IsNaN then
-    Exit(TGocciaNumberLiteralValue.Create(-1));
-  if SearchNum.IsInfinite then
-  begin
-    if not (IsFloatKind(TA.FKind)) then
-      Exit(TGocciaNumberLiteralValue.Create(-1));
-    for I := StartIdx to TA.FLength - 1 do
-      if Math.IsInfinite(TA.ReadElement(I)) and
-         ((SearchNum.IsInfinity and (TA.ReadElement(I) > 0)) or
-          (SearchNum.IsNegativeInfinity and (TA.ReadElement(I) < 0))) then
-        Exit(TGocciaNumberLiteralValue.Create(I));
-    Exit(TGocciaNumberLiteralValue.Create(-1));
-  end;
-  SearchVal := SearchNum.Value;
+  SearchValue := AArgs.GetElement(0);
   for I := StartIdx to TA.FLength - 1 do
-    if TA.ReadElement(I) = SearchVal then
+    if IsStrictEqual(TA.GetElementAsValue(I), SearchValue) then
       Exit(TGocciaNumberLiteralValue.Create(I));
   Result := TGocciaNumberLiteralValue.Create(-1);
 end;
@@ -1656,12 +1692,10 @@ end;
 function TGocciaTypedArrayValue.TypedArrayLastIndexOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   TA: TGocciaTypedArrayValue;
-  SearchNum: TGocciaNumberLiteralValue;
-  SearchVal: Double;
-  SearchBigInt: Int64;
+  SearchValue: TGocciaValue;
   I, StartIdx: Integer;
 begin
-  TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.lastIndexOf');
+  TA := RequireAttachedTypedArray(AThisValue, 'TypedArray.prototype.lastIndexOf');
   if TA.FLength = 0 then
     Exit(TGocciaNumberLiteralValue.Create(-1));
   if AArgs.Length = 0 then
@@ -1674,34 +1708,12 @@ begin
   else
     StartIdx := TA.FLength - 1;
 
-  if IsBigIntKind(TA.FKind) then
-  begin
-    if not (AArgs.GetElement(0) is TGocciaBigIntValue) then
-      Exit(TGocciaNumberLiteralValue.Create(-1));
-    SearchBigInt := TGocciaBigIntValue(AArgs.GetElement(0)).Value.ToInt64;
-    for I := Min(StartIdx, TA.FLength - 1) downto 0 do
-      if TA.ReadBigIntElement(I) = SearchBigInt then
-        Exit(TGocciaNumberLiteralValue.Create(I));
+  if IsDetachedTypedArray(TA) then
     Exit(TGocciaNumberLiteralValue.Create(-1));
-  end;
 
-  SearchNum := AArgs.GetElement(0).ToNumberLiteral;
-  if SearchNum.IsNaN then
-    Exit(TGocciaNumberLiteralValue.Create(-1));
-  if SearchNum.IsInfinite then
-  begin
-    if not (IsFloatKind(TA.FKind)) then
-      Exit(TGocciaNumberLiteralValue.Create(-1));
-    for I := Min(StartIdx, TA.FLength - 1) downto 0 do
-      if Math.IsInfinite(TA.ReadElement(I)) and
-         ((SearchNum.IsInfinity and (TA.ReadElement(I) > 0)) or
-          (SearchNum.IsNegativeInfinity and (TA.ReadElement(I) < 0))) then
-        Exit(TGocciaNumberLiteralValue.Create(I));
-    Exit(TGocciaNumberLiteralValue.Create(-1));
-  end;
-  SearchVal := SearchNum.Value;
+  SearchValue := AArgs.GetElement(0);
   for I := Min(StartIdx, TA.FLength - 1) downto 0 do
-    if TA.ReadElement(I) = SearchVal then
+    if IsStrictEqual(TA.GetElementAsValue(I), SearchValue) then
       Exit(TGocciaNumberLiteralValue.Create(I));
   Result := TGocciaNumberLiteralValue.Create(-1);
 end;
@@ -1710,12 +1722,10 @@ end;
 function TGocciaTypedArrayValue.TypedArrayIncludes(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   TA: TGocciaTypedArrayValue;
-  SearchNum: TGocciaNumberLiteralValue;
-  SearchVal: Double;
-  SearchBigInt: Int64;
+  SearchValue: TGocciaValue;
   I, StartIdx: Integer;
 begin
-  TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.includes');
+  TA := RequireAttachedTypedArray(AThisValue, 'TypedArray.prototype.includes');
   if TA.FLength = 0 then
     Exit(TGocciaBooleanLiteralValue.FalseValue);
   if AArgs.Length = 0 then
@@ -1728,43 +1738,9 @@ begin
   else
     StartIdx := 0;
 
-  if IsBigIntKind(TA.FKind) then
-  begin
-    if not (AArgs.GetElement(0) is TGocciaBigIntValue) then
-      Exit(TGocciaBooleanLiteralValue.FalseValue);
-    SearchBigInt := TGocciaBigIntValue(AArgs.GetElement(0)).Value.ToInt64;
-    for I := StartIdx to TA.FLength - 1 do
-      if TA.ReadBigIntElement(I) = SearchBigInt then
-        Exit(TGocciaBooleanLiteralValue.TrueValue);
-    Exit(TGocciaBooleanLiteralValue.FalseValue);
-  end;
-
-  if not (AArgs.GetElement(0) is TGocciaNumberLiteralValue) then
-    Exit(TGocciaBooleanLiteralValue.FalseValue);
-  SearchNum := TGocciaNumberLiteralValue(AArgs.GetElement(0));
-  // SameValueZero: NaN === NaN for includes
-  if SearchNum.IsNaN then
-  begin
-    if IsFloatKind(TA.FKind) then
-      for I := StartIdx to TA.FLength - 1 do
-        if Math.IsNaN(TA.ReadElement(I)) then
-          Exit(TGocciaBooleanLiteralValue.TrueValue);
-    Exit(TGocciaBooleanLiteralValue.FalseValue);
-  end;
-  if SearchNum.IsInfinite then
-  begin
-    if not (IsFloatKind(TA.FKind)) then
-      Exit(TGocciaBooleanLiteralValue.FalseValue);
-    for I := StartIdx to TA.FLength - 1 do
-      if Math.IsInfinite(TA.ReadElement(I)) and
-         ((SearchNum.IsInfinity and (TA.ReadElement(I) > 0)) or
-          (SearchNum.IsNegativeInfinity and (TA.ReadElement(I) < 0))) then
-        Exit(TGocciaBooleanLiteralValue.TrueValue);
-    Exit(TGocciaBooleanLiteralValue.FalseValue);
-  end;
-  SearchVal := SearchNum.Value;
+  SearchValue := AArgs.GetElement(0);
   for I := StartIdx to TA.FLength - 1 do
-    if TA.ReadElement(I) = SearchVal then
+    if IsSameValueZero(TA.GetElementAsValue(I), SearchValue) then
       Exit(TGocciaBooleanLiteralValue.TrueValue);
   Result := TGocciaBooleanLiteralValue.FalseValue;
 end;
@@ -1776,7 +1752,7 @@ var
   I: Integer;
   Element, CallResult, ThisArg: TGocciaValue;
 begin
-  TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.find');
+  TA := RequireAttachedTypedArray(AThisValue, 'TypedArray.prototype.find');
   if (AArgs.Length = 0) or not AArgs.GetElement(0).IsCallable then
     ThrowTypeError(SErrorTypedArrayFindCallable, SSuggestTypedArrayCallable);
   if AArgs.Length > 1 then
@@ -1800,7 +1776,7 @@ var
   I: Integer;
   Element, CallResult, ThisArg: TGocciaValue;
 begin
-  TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.findIndex');
+  TA := RequireAttachedTypedArray(AThisValue, 'TypedArray.prototype.findIndex');
   if (AArgs.Length = 0) or not AArgs.GetElement(0).IsCallable then
     ThrowTypeError(SErrorTypedArrayFindIndexCallable, SSuggestTypedArrayCallable);
   if AArgs.Length > 1 then
@@ -1824,7 +1800,7 @@ var
   I: Integer;
   Element, CallResult, ThisArg: TGocciaValue;
 begin
-  TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.findLast');
+  TA := RequireAttachedTypedArray(AThisValue, 'TypedArray.prototype.findLast');
   if (AArgs.Length = 0) or not AArgs.GetElement(0).IsCallable then
     ThrowTypeError(SErrorTypedArrayFindLastCallable, SSuggestTypedArrayCallable);
   if AArgs.Length > 1 then
@@ -1848,7 +1824,7 @@ var
   I: Integer;
   Element, CallResult, ThisArg: TGocciaValue;
 begin
-  TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.findLastIndex');
+  TA := RequireAttachedTypedArray(AThisValue, 'TypedArray.prototype.findLastIndex');
   if (AArgs.Length = 0) or not AArgs.GetElement(0).IsCallable then
     ThrowTypeError(SErrorTypedArrayFindLastIndexCallable, SSuggestTypedArrayCallable);
   if AArgs.Length > 1 then
@@ -1872,7 +1848,7 @@ var
   I: Integer;
   CallResult, ThisArg: TGocciaValue;
 begin
-  TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.every');
+  TA := RequireAttachedTypedArray(AThisValue, 'TypedArray.prototype.every');
   if (AArgs.Length = 0) or not AArgs.GetElement(0).IsCallable then
     ThrowTypeError(SErrorTypedArrayEveryCallable, SSuggestTypedArrayCallable);
   if AArgs.Length > 1 then
@@ -1897,7 +1873,7 @@ var
   I: Integer;
   CallResult, ThisArg: TGocciaValue;
 begin
-  TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.some');
+  TA := RequireAttachedTypedArray(AThisValue, 'TypedArray.prototype.some');
   if (AArgs.Length = 0) or not AArgs.GetElement(0).IsCallable then
     ThrowTypeError(SErrorTypedArraySomeCallable, SSuggestTypedArrayCallable);
   if AArgs.Length > 1 then
@@ -1922,7 +1898,7 @@ var
   I: Integer;
   ThisArg: TGocciaValue;
 begin
-  TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.forEach');
+  TA := RequireAttachedTypedArray(AThisValue, 'TypedArray.prototype.forEach');
   if (AArgs.Length = 0) or not AArgs.GetElement(0).IsCallable then
     ThrowTypeError(SErrorTypedArrayForEachCallable, SSuggestTypedArrayCallable);
   if AArgs.Length > 1 then
@@ -1943,7 +1919,7 @@ var
   I: Integer;
   CallResult, ThisArg: TGocciaValue;
 begin
-  TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.map');
+  TA := RequireAttachedTypedArray(AThisValue, 'TypedArray.prototype.map');
   if (AArgs.Length = 0) or not AArgs.GetElement(0).IsCallable then
     ThrowTypeError(SErrorTypedArrayMapCallable, SSuggestTypedArrayCallable);
   if AArgs.Length > 1 then
@@ -1965,14 +1941,11 @@ end;
 function TGocciaTypedArrayValue.TypedArrayFilter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   TA, NewTA: TGocciaTypedArrayValue;
-  I, Count: Integer;
-  ElemVal: Double;
-  ElemBigVal: Int64;
+  I: Integer;
   CallResult, ThisArg, Element: TGocciaValue;
-  Kept: array of Double;
-  KeptBig: array of Int64;
+  Kept: TGocciaValueList;
 begin
-  TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.filter');
+  TA := RequireAttachedTypedArray(AThisValue, 'TypedArray.prototype.filter');
   if (AArgs.Length = 0) or not AArgs.GetElement(0).IsCallable then
     ThrowTypeError(SErrorTypedArrayFilterCallable, SSuggestTypedArrayCallable);
   if AArgs.Length > 1 then
@@ -1980,47 +1953,30 @@ begin
   else
     ThisArg := TGocciaUndefinedLiteralValue.UndefinedValue;
 
-  if IsBigIntKind(TA.FKind) then
-  begin
-    SetLength(KeptBig, 0);
+  Kept := TGocciaValueList.Create(False);
+  try
     for I := 0 to TA.FLength - 1 do
     begin
-      ElemBigVal := TA.ReadBigIntElement(I);
       Element := TA.GetElementAsValue(I);
       CallResult := InvokeCallback(AArgs.GetElement(0),
         Element, TGocciaNumberLiteralValue.Create(I), AThisValue, ThisArg);
       if CallResult.ToBooleanLiteral.Value then
       begin
-        Count := System.Length(KeptBig);
-        SetLength(KeptBig, Count + 1);
-        KeptBig[Count] := ElemBigVal;
+        Kept.Add(Element);
+        if Assigned(TGarbageCollector.Instance) then
+          TGarbageCollector.Instance.AddTempRoot(Element);
       end;
     end;
-    NewTA := CreateSameKindArray(TA, System.Length(KeptBig));
-    for I := 0 to System.Length(KeptBig) - 1 do
-      NewTA.WriteBigIntElement(I, KeptBig[I]);
-  end
-  else
-  begin
-    SetLength(Kept, 0);
-    for I := 0 to TA.FLength - 1 do
-    begin
-      ElemVal := TA.ReadElement(I);
-      CallResult := InvokeCallback(AArgs.GetElement(0),
-        TGocciaNumberLiteralValue.Create(ElemVal),
-        TGocciaNumberLiteralValue.Create(I), AThisValue, ThisArg);
-      if CallResult.ToBooleanLiteral.Value then
-      begin
-        Count := System.Length(Kept);
-        SetLength(Kept, Count + 1);
-        Kept[Count] := ElemVal;
-      end;
-    end;
-    NewTA := CreateSameKindArray(TA, System.Length(Kept));
-    for I := 0 to System.Length(Kept) - 1 do
-      NewTA.WriteElement(I, Kept[I]);
+    NewTA := CreateSameKindArray(TA, Kept.Count);
+    for I := 0 to Kept.Count - 1 do
+      NewTA.WriteValueToElement(I, Kept[I]);
+    Result := NewTA;
+  finally
+    if Assigned(TGarbageCollector.Instance) then
+      for I := 0 to Kept.Count - 1 do
+        TGarbageCollector.Instance.RemoveTempRoot(Kept[I]);
+    Kept.Free;
   end;
-  Result := NewTA;
 end;
 
 // ES2026 §23.2.3.22 %TypedArray%.prototype.reduce(callbackfn [, initialValue])
@@ -2031,7 +1987,7 @@ var
   Accumulator: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
 begin
-  TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.reduce');
+  TA := RequireAttachedTypedArray(AThisValue, 'TypedArray.prototype.reduce');
   if (AArgs.Length = 0) or not AArgs.GetElement(0).IsCallable then
     ThrowTypeError(SErrorTypedArrayReduceCallable, SSuggestTypedArrayCallable);
 
@@ -2073,7 +2029,7 @@ var
   Accumulator: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
 begin
-  TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.reduceRight');
+  TA := RequireAttachedTypedArray(AThisValue, 'TypedArray.prototype.reduceRight');
   if (AArgs.Length = 0) or not AArgs.GetElement(0).IsCallable then
     ThrowTypeError(SErrorTypedArrayReduceRightCallable, SSuggestTypedArrayCallable);
 
@@ -2114,8 +2070,9 @@ var
   Sep: string;
   I: Integer;
   S: string;
+  Element: TGocciaValue;
 begin
-  TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.join');
+  TA := RequireAttachedTypedArray(AThisValue, 'TypedArray.prototype.join');
   if (AArgs.Length > 0) and not (AArgs.GetElement(0) is TGocciaUndefinedLiteralValue) then
     Sep := AArgs.GetElement(0).ToStringLiteral.Value
   else
@@ -2124,7 +2081,10 @@ begin
   for I := 0 to TA.FLength - 1 do
   begin
     if I > 0 then S := S + Sep;
-    S := S + TA.GetElementAsValue(I).ToStringLiteral.Value;
+    Element := TA.GetElementAsValue(I);
+    if not ((Element is TGocciaUndefinedLiteralValue) or
+            (Element is TGocciaNullLiteralValue)) then
+      S := S + Element.ToStringLiteral.Value;
   end;
   Result := TGocciaStringLiteralValue.Create(S);
 end;
@@ -2141,7 +2101,7 @@ var
   TA, NewTA: TGocciaTypedArrayValue;
   I: Integer;
 begin
-  TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.toReversed');
+  TA := RequireAttachedTypedArray(AThisValue, 'TypedArray.prototype.toReversed');
   NewTA := CreateSameKindArray(TA, TA.FLength);
   if IsBigIntKind(TA.FKind) then
   begin
@@ -2163,7 +2123,7 @@ var
   I: Integer;
   SortArgs: TGocciaArgumentsCollection;
 begin
-  TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.toSorted');
+  TA := RequireAttachedTypedArray(AThisValue, 'TypedArray.prototype.toSorted');
   NewTA := CreateSameKindArray(TA, TA.FLength);
   if IsBigIntKind(TA.FKind) then
   begin
@@ -2195,7 +2155,7 @@ var
   NewBigInt: Int64;
   NewVal: TGocciaValue;
 begin
-  TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.with');
+  TA := RequireAttachedTypedArray(AThisValue, 'TypedArray.prototype.with');
   // ES2026 §23.2.3.36 step 3: Let relativeIndex be ? ToIntegerOrInfinity(index)
   if AArgs.Length > 0 then
     ActualIndex := Trunc(AArgs.GetElement(0).ToNumberLiteral.Value)
@@ -2250,7 +2210,7 @@ var
   Arr: TGocciaArrayValue;
   I: Integer;
 begin
-  TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.values');
+  TA := RequireAttachedTypedArray(AThisValue, 'TypedArray.prototype.values');
   Arr := TGocciaArrayValue.Create;
   for I := 0 to TA.FLength - 1 do
     Arr.Elements.Add(TA.GetElementAsValue(I));
@@ -2264,7 +2224,7 @@ var
   Arr: TGocciaArrayValue;
   I: Integer;
 begin
-  TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.keys');
+  TA := RequireAttachedTypedArray(AThisValue, 'TypedArray.prototype.keys');
   Arr := TGocciaArrayValue.Create;
   for I := 0 to TA.FLength - 1 do
     Arr.Elements.Add(TGocciaNumberLiteralValue.Create(I));
@@ -2279,7 +2239,7 @@ var
   I: Integer;
   Entry: TGocciaArrayValue;
 begin
-  TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.entries');
+  TA := RequireAttachedTypedArray(AThisValue, 'TypedArray.prototype.entries');
   Arr := TGocciaArrayValue.Create;
   for I := 0 to TA.FLength - 1 do
   begin

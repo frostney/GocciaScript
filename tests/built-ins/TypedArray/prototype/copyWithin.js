@@ -34,6 +34,16 @@ describe("TypedArray.prototype.copyWithin", () => {
       expect(ta[0]).toBe(4);
       expect(ta[1]).toBe(5);
     });
+
+    test("throws if start coercion detaches buffer before copy", () => {
+      const ta = new TA([1, 2, 3, 4]);
+      expect(() => ta.copyWithin(0, {
+        valueOf() {
+          ta.buffer.transfer();
+          return 1;
+        }
+      }, 3)).toThrow(TypeError);
+    });
   });
 
   test.each([BigInt64Array, BigUint64Array])("%s copyWithin", (TA) => {
