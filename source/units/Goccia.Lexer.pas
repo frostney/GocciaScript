@@ -1639,6 +1639,16 @@ var
   I: Integer;
   InClass, Escaped: Boolean;
   Ch: Char;
+
+  function IsLineTerminatorAt(const AIndex: Integer): Boolean; inline;
+  begin
+    Result := (FSource[AIndex] = #10) or (FSource[AIndex] = #13) or
+              ((FSource[AIndex] = UTF8_LINE_TERMINATOR_LEAD_BYTE) and
+              (AIndex + 2 <= Length(FSource)) and
+              (FSource[AIndex + 1] = UTF8_LINE_TERMINATOR_CONTINUATION_BYTE) and
+              ((FSource[AIndex + 2] = UTF8_LINE_SEPARATOR_FINAL_BYTE) or
+              (FSource[AIndex + 2] = UTF8_PARAGRAPH_SEPARATOR_FINAL_BYTE)));
+  end;
 begin
   Result := False;
   if (FTokens.Count = 0) or
@@ -1655,7 +1665,7 @@ begin
   while I <= Length(FSource) do
   begin
     Ch := FSource[I];
-    if (Ch = #10) or (Ch = #13) then
+    if IsLineTerminatorAt(I) then
       Exit;
 
     if Escaped then
