@@ -95,8 +95,12 @@ describe("TypedArray.prototype.set", () => {
     test("array-like length getter can detach target buffer", () => {
       const ta = new Int32Array(4);
       const buffer = ta.buffer;
+      let sourceRead = false;
       ta.set({
-        0: 17,
+        get 0() {
+          sourceRead = true;
+          return 17;
+        },
         get length() {
           buffer.transfer();
           return 1;
@@ -104,6 +108,10 @@ describe("TypedArray.prototype.set", () => {
       }, 1);
 
       expect(buffer.detached).toBe(true);
+      expect(sourceRead).toBe(true);
+      expect(ta.length).toBe(0);
+      expect(ta.byteLength).toBe(0);
+      expect(ta.byteOffset).toBe(0);
     });
   });
 
