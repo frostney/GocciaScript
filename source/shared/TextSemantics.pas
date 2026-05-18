@@ -804,8 +804,6 @@ function AdvanceUTF16StringIndex(const AText: string; const AIndex: Integer;
 var
   CodePoint: Cardinal;
 begin
-  if AIndex >= UTF16CodeUnitLength(AText) then
-    Exit(AIndex + 1);
   if not AUnicode then
     Exit(AIndex + 1);
   if TryUTF16CodePointValueAt(AText, AIndex, CodePoint) and

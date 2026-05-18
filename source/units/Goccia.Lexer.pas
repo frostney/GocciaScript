@@ -47,7 +47,8 @@ type
       const AAtStart: Boolean): Boolean;
     procedure AppendCurrent(var ASB, ARawSB: TStringBuffer); inline;
     procedure AddToken(const ATokenType: TGocciaTokenType); overload;
-    procedure AddToken(const ATokenType: TGocciaTokenType; const ALiteral: string); overload;
+    procedure AddToken(const ATokenType: TGocciaTokenType; const ALiteral: string;
+      const AContainsEscape: Boolean = False); overload;
     procedure ScanToken;
     procedure ScanString;
     procedure ScanTemplate;
@@ -211,10 +212,11 @@ begin
   AddToken(ATokenType, Copy(FSource, FStart, FCurrent - FStart));
 end;
 
-procedure TGocciaLexer.AddToken(const ATokenType: TGocciaTokenType; const ALiteral: string);
+procedure TGocciaLexer.AddToken(const ATokenType: TGocciaTokenType; const ALiteral: string;
+  const AContainsEscape: Boolean);
 begin
   FTokens.Add(TGocciaToken.Create(ATokenType, ALiteral, FLine, FStartColumn,
-    FCurrent - FStart, FColumn - 1));
+    FCurrent - FStart, FColumn - 1, AContainsEscape));
   UpdateRegexContext(ATokenType);
 end;
 
@@ -1488,7 +1490,7 @@ begin
   if (not HadEscape) and FKeywords.TryGetValue(Text, TokenType) then
     AddToken(TokenType, Text)
   else
-    AddToken(gttIdentifier, Text);
+    AddToken(gttIdentifier, Text, HadEscape);
 end;
 
 procedure TGocciaLexer.ScanToken;

@@ -52,11 +52,15 @@ describe('String.prototype.replace', () => {
   });
 
   test('replace expands regex replacement tokens', () => {
+    const emoji = String.fromCodePoint(0x1f600);
+
     expect('abc'.replace(/b/, '[$&]')).toBe('a[b]c');
     expect('abc'.replace(/(b)/, '<$1>')).toBe('a<b>c');
     expect('abc'.replace(/b/, '$$')).toBe('a$c');
     expect('abc'.replace(/b/, '$`')).toBe('aac');
     expect('abc'.replace(/b/, "$'")).toBe('acc');
+    expect((emoji + 'a').replace(/a/, '$`')).toBe(emoji + emoji);
+    expect((emoji + 'a' + emoji).replace(/a/, "$'")).toBe(emoji + emoji + emoji);
     expect('b'.replace(/(a)?b/, 'x$1y')).toBe('xy');
     expect('foo'.replace(/(f)/, '$2')).toBe('$2oo');
     expect('foo'.replace(/(f)/, '$12')).toBe('f2oo');

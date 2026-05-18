@@ -17,6 +17,21 @@ test("identifier unicode escapes reject invalid start characters", () => {
   expect(() => new Function("const \\u0031 = 7;")).toThrow(SyntaxError);
 });
 
+test("identifier unicode escapes reject escaped reserved words", () => {
+  expect(() => new Function("const \\u0069f = 7;")).toThrow(SyntaxError);
+  expect(() => new Function("return \\u0069f;")).toThrow(SyntaxError);
+  expect(() => new Function("const f = (\\u0069f) => 1;")).toThrow(SyntaxError);
+  expect(() => new Function("class \\u0069f {}")).toThrow(SyntaxError);
+});
+
+test("identifier unicode escapes reject escaped contextual grammar keywords", () => {
+  expect(() => new Function("return n\\u0065w.target;")).toThrow(SyntaxError);
+  expect(() => new Function("return new.\\u0074arget;")).toThrow(SyntaxError);
+  expect(() => new Function("for (let x o\\u0066 [1]) {}")).toThrow(SyntaxError);
+  expect(() => new Function("for (let x i\\u006e [1]) {}")).toThrow(SyntaxError);
+  expect(() => new Function("return ({ g\\u0065t foo() { return 1; } });")).toThrow(SyntaxError);
+});
+
 test("identifier unicode escapes reject invalid continuation characters", () => {
   expect(() => new Function("const a\\u0020 = 7;")).toThrow(SyntaxError);
 });

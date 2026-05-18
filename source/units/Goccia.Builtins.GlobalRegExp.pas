@@ -245,14 +245,18 @@ function ExpandRegexReplacementString(const AReplaceValue: string;
   const ACaptures: TRegexReplacementCaptures;
   const ANamedCaptures: TGocciaObjectValue): string;
 var
+  InputLength: Integer;
   I: Integer;
   NextChar: Char;
   GroupText: string;
   CloseAngle: Integer;
   GroupName: string;
+  MatchLength: Integer;
   GroupValue: TGocciaValue;
 begin
   Result := '';
+  InputLength := UTF16CodeUnitLength(AInput);
+  MatchLength := UTF16CodeUnitLength(AMatched);
   I := 1;
   while I <= Length(AReplaceValue) do
   begin
@@ -283,13 +287,14 @@ begin
         end;
       '`':
         begin
-          Result := Result + Copy(AInput, 1, AMatchIndex);
+          Result := Result + UTF16Substring(AInput, 0, AMatchIndex);
           Inc(I, 2);
         end;
       '''':
         begin
-          Result := Result + Copy(AInput, AMatchIndex + Length(AMatched) + 1,
-            MaxInt);
+          Result := Result + UTF16Substring(AInput,
+            AMatchIndex + MatchLength,
+            InputLength - AMatchIndex - MatchLength);
           Inc(I, 2);
         end;
       '<':

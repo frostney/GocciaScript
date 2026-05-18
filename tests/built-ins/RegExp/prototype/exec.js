@@ -323,6 +323,10 @@ test("backreference backtracking finds correct capture length", () => {
   expect(m[1]).toBe("aaaaa");
 });
 
+test("unicode backreference does not partially match a surrogate pair", () => {
+  expect(/foo(.+)bar\1/u.exec("foo\uD834bar\uD834\uDC00")).toBe(null);
+});
+
 test("replace with backreference uses correct capture", () => {
   expect("aaaaaaaaaa,aaaaaaaaaaaaaaa".replace(/^(a+)\1*,\1+$/, "$1")).toBe("aaaaa");
 });

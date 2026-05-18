@@ -100,6 +100,14 @@ type
       const ATokenType: TGocciaTokenType): Boolean;
     function ConsumeModuleExportName(const AMessage: string): TGocciaToken; overload;
     function ConsumeModuleExportName(const AMessage, ASuggestion: string): TGocciaToken; overload;
+    function IsReservedKeywordName(const AName: string): Boolean;
+    function CheckUnescapedIdentifierKeyword(const AKeyword: string): Boolean;
+    function CheckEscapedIdentifierKeyword(const AKeyword: string): Boolean;
+    procedure ValidateIdentifierReference(const AToken: TGocciaToken);
+    procedure ValidateIdentifierBinding(const AToken: TGocciaToken);
+    function ConsumeIdentifierBinding(const AMessage: string): TGocciaToken; overload;
+    function ConsumeIdentifierBinding(const AMessage,
+      ASuggestion: string): TGocciaToken; overload;
     function IsArrowFunction: Boolean;
     function ExtractSourceRange(const AStartLine, AStartColumn: Integer): string;
     function ConvertNumberLiteral(const ALexeme: string): Double;
@@ -686,6 +694,87 @@ begin
   raise Error;
 end;
 
+function TGocciaParser.IsReservedKeywordName(const AName: string): Boolean;
+begin
+  Result := (AName = KEYWORD_BREAK) or
+            (AName = KEYWORD_CASE) or
+            (AName = KEYWORD_CONTINUE) or
+            (AName = KEYWORD_CATCH) or
+            (AName = KEYWORD_CLASS) or
+            (AName = KEYWORD_CONST) or
+            (AName = KEYWORD_DEFAULT) or
+            (AName = KEYWORD_DELETE) or
+            (AName = KEYWORD_DO) or
+            (AName = KEYWORD_ELSE) or
+            (AName = KEYWORD_ENUM) or
+            (AName = KEYWORD_EXPORT) or
+            (AName = KEYWORD_EXTENDS) or
+            (AName = KEYWORD_FALSE) or
+            (AName = KEYWORD_FINALLY) or
+            (AName = KEYWORD_FOR) or
+            (AName = KEYWORD_FUNCTION) or
+            (AName = KEYWORD_IF) or
+            (AName = KEYWORD_IMPORT) or
+            (AName = KEYWORD_IN) or
+            (AName = KEYWORD_INSTANCEOF) or
+            (AName = KEYWORD_LET) or
+            (AName = KEYWORD_NEW) or
+            (AName = KEYWORD_NULL) or
+            (AName = KEYWORD_RETURN) or
+            (AName = KEYWORD_SUPER) or
+            (AName = KEYWORD_SWITCH) or
+            (AName = KEYWORD_THIS) or
+            (AName = KEYWORD_THROW) or
+            (AName = KEYWORD_TRUE) or
+            (AName = KEYWORD_TRY) or
+            (AName = KEYWORD_TYPEOF) or
+            (AName = KEYWORD_VAR) or
+            (AName = KEYWORD_VOID) or
+            (AName = KEYWORD_WHILE) or
+            (AName = KEYWORD_WITH);
+end;
+
+function TGocciaParser.CheckUnescapedIdentifierKeyword(
+  const AKeyword: string): Boolean;
+begin
+  Result := Check(gttIdentifier) and (Peek.Lexeme = AKeyword) and
+            not Peek.ContainsEscape;
+end;
+
+function TGocciaParser.CheckEscapedIdentifierKeyword(
+  const AKeyword: string): Boolean;
+begin
+  Result := Check(gttIdentifier) and (Peek.Lexeme = AKeyword) and
+            Peek.ContainsEscape;
+end;
+
+procedure TGocciaParser.ValidateIdentifierReference(const AToken: TGocciaToken);
+begin
+  if AToken.ContainsEscape and IsReservedKeywordName(AToken.Lexeme) then
+    raise TGocciaSyntaxError.Create(
+      'Keyword must not contain escaped characters',
+      AToken.Line, AToken.Column, FFileName, FSourceLines);
+end;
+
+procedure TGocciaParser.ValidateIdentifierBinding(const AToken: TGocciaToken);
+begin
+  ValidateIdentifierReference(AToken);
+end;
+
+function TGocciaParser.ConsumeIdentifierBinding(
+  const AMessage: string): TGocciaToken;
+begin
+  Result := Consume(gttIdentifier, AMessage);
+  ValidateIdentifierBinding(Result);
+end;
+
+function TGocciaParser.ConsumeIdentifierBinding(const AMessage,
+  ASuggestion: string): TGocciaToken;
+begin
+  Result := Consume(gttIdentifier, AMessage, ASuggestion);
+  ValidateIdentifierBinding(Result);
+end;
+
 function TGocciaParser.Expression: TGocciaExpression;
 var
   Expressions: TObjectList<TGocciaExpression>;
@@ -733,7 +822,7 @@ end;
 
 function TGocciaParser.CheckContextualKeyword(const AKeyword: string): Boolean;
 begin
-  Result := Check(gttIdentifier) and (Peek.Lexeme = AKeyword);
+  Result := CheckUnescapedIdentifierKeyword(AKeyword);
   if (not Result) and (AKeyword = KEYWORD_AS) then
     Result := Check(gttAs);
 end;
@@ -921,7 +1010,7 @@ var
 begin
   // ES2026 §16.1 top-level await / §15.8.2 AwaitExpression: await UnaryExpression
   if ((FInAsyncFunction > 0) or (FFunctionDepth = 0)) and
-     Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_AWAIT) and
+     CheckUnescapedIdentifierKeyword(KEYWORD_AWAIT) and
      IsAwaitOperandStart then
   begin
     Operator := Advance; // consume 'await'
@@ -929,13 +1018,14 @@ begin
     Result := TGocciaAwaitExpression.Create(Right, Operator.Line, Operator.Column);
     Exit;
   end;
-  if (FInAsyncFunction > 0) and Check(gttIdentifier) and
-     (Peek.Lexeme = KEYWORD_AWAIT) and not IsAwaitOperandStart then
+  if (FInAsyncFunction > 0) and
+     CheckUnescapedIdentifierKeyword(KEYWORD_AWAIT) and
+     not IsAwaitOperandStart then
     raise TGocciaSyntaxError.Create('Expected expression after "await"',
       Peek.Line, Peek.Column, FFileName, FSourceLines,
       SSuggestExpressionExpected);
 
-  if (FInGeneratorFunction > 0) and Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_YIELD) then
+  if (FInGeneratorFunction > 0) and CheckUnescapedIdentifierKeyword(KEYWORD_YIELD) then
   begin
     Operator := Advance; // consume 'yield'
     if Match(gttStar) then
@@ -1752,7 +1842,7 @@ begin
           // ES2026 §13.3.12 MetaProperty — import.meta
           Consume(gttDot, 'Expected "." or "(" after "import" in expression context',
             SSuggestDynamicImportSyntax);
-          if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_META) then
+          if CheckUnescapedIdentifierKeyword(KEYWORD_META) then
           begin
             Advance;
             Result := TGocciaImportMetaExpression.Create(Token.Line, Token.Column);
@@ -1776,6 +1866,11 @@ begin
         if Check(gttDot) and CheckNext(gttIdentifier) and
            (FTokens[FCurrent + 1].Lexeme = KEYWORD_TARGET) then
         begin
+          if FTokens[FCurrent + 1].ContainsEscape then
+            raise TGocciaSyntaxError.Create(
+              'new.target must not contain escaped characters',
+              FTokens[FCurrent + 1].Line, FTokens[FCurrent + 1].Column,
+              FFileName, FSourceLines);
           Advance; // consume '.'
           Advance; // consume 'target'
           Result := TGocciaNewTargetExpression.Create(Token.Line, Token.Column);
@@ -1836,9 +1931,11 @@ begin
 
         Token := Advance;
         Name := Token.Lexeme;
+        ValidateIdentifierReference(Token);
 
         // async arrow function: async (params) => body
-        if (Name = KEYWORD_ASYNC) and Check(gttLeftParen) then
+        if (Name = KEYWORD_ASYNC) and not Token.ContainsEscape and
+           Check(gttLeftParen) then
         begin
           Advance; // consume '('
           if IsArrowFunction() then
@@ -1857,12 +1954,14 @@ begin
           end;
         end
         // async single-param arrow: async x => body
-        else if (Name = KEYWORD_ASYNC) and Check(gttIdentifier) and CheckNext(gttArrow) then
+        else if (Name = KEYWORD_ASYNC) and not Token.ContainsEscape and
+                Check(gttIdentifier) and CheckNext(gttArrow) then
         begin
           Line := Token.Line;
           Column := Token.Column;
           Token := Advance; // consume param identifier
           Name := Token.Lexeme;
+          ValidateIdentifierBinding(Token);
           Consume(gttArrow, 'Expected "=>" in async arrow function',
             SSuggestArrowFunctionSyntax);
 
@@ -1892,7 +1991,7 @@ begin
           ArrowFn.SourceText := ExtractSourceRange(Line, Column);
           Result := ArrowFn;
         end
-        else if Name = KEYWORD_ASYNC then
+        else if (Name = KEYWORD_ASYNC) and not Token.ContainsEscape then
         begin
           case TryConsumeAsyncFunction(Token.Line, Token.Column) of
             afcNotMatched:
@@ -1911,8 +2010,9 @@ begin
               Name := '';
               if Check(gttIdentifier) then
               begin
-                Name := Peek.Lexeme;
-                Advance;
+                Token := Advance;
+                ValidateIdentifierBinding(Token);
+                Name := Token.Lexeme;
               end;
               CollectGenericParameters;
               Result := ParseObjectMethodBody(Token.Line, Token.Column, True, IsGenerator);
@@ -2185,7 +2285,7 @@ begin
         DeclarationType := dtConst
       else if Match(gttLet) then
         DeclarationType := dtLet;
-      Name := Consume(gttIdentifier, 'Expected binding name after "as"',
+      Name := ConsumeIdentifierBinding('Expected binding name after "as"',
         SSuggestProvideVariableName).Lexeme;
       Result := TGocciaAsMatchPattern.Create(Result, Name, DeclarationType,
         Token.Line, Token.Column);
@@ -2252,7 +2352,7 @@ begin
       DeclarationType := dtConst
     else
       DeclarationType := dtLet;
-    Name := Consume(gttIdentifier, 'Expected binding name in pattern',
+    Name := ConsumeIdentifierBinding('Expected binding name in pattern',
       SSuggestProvideVariableName).Lexeme;
     Exit(TGocciaBindingMatchPattern.Create(Name, DeclarationType,
       Token.Line, Token.Column));
@@ -2700,7 +2800,7 @@ begin
     MemberStartColumn := Peek.Column;
 
     // Check for async method syntax
-    if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_ASYNC) and not CheckNext(gttColon) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) and not CheckNext(gttLeftParen) then
+    if CheckUnescapedIdentifierKeyword(KEYWORD_ASYNC) and not CheckNext(gttColon) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) and not CheckNext(gttLeftParen) then
     begin
       Advance;
       IsAsync := True;
@@ -2708,12 +2808,12 @@ begin
 
     // Check for getter/setter syntax (contextual keywords)
     // Only treat as getter/setter if followed by identifier (not colon, parenthesis, comma, or right brace)
-    if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_GET) and not CheckNext(gttColon) and not CheckNext(gttLeftParen) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) then
+    if CheckUnescapedIdentifierKeyword(KEYWORD_GET) and not CheckNext(gttColon) and not CheckNext(gttLeftParen) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) then
     begin
       Advance;
       IsGetter := True;
     end
-    else if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_SET) and not CheckNext(gttColon) and not CheckNext(gttLeftParen) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) then
+    else if CheckUnescapedIdentifierKeyword(KEYWORD_SET) and not CheckNext(gttColon) and not CheckNext(gttLeftParen) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) then
     begin
       Advance;
       IsSetter := True;
@@ -2910,7 +3010,7 @@ begin
 
       if Match(gttSpread) then
       begin
-        ParamName := Consume(gttIdentifier, 'Expected parameter name after "..."',
+        ParamName := ConsumeIdentifierBinding('Expected parameter name after "..."',
           SSuggestProvideRestParameterName).Lexeme;
         Result[ParamCount].Name := ParamName;
         Result[ParamCount].IsPattern := False;
@@ -2945,7 +3045,7 @@ begin
       end
       else
       begin
-        ParamName := Consume(gttIdentifier, 'Expected parameter name',
+        ParamName := ConsumeIdentifierBinding('Expected parameter name',
           SSuggestProvideParameterName).Lexeme;
         Result[ParamCount].Name := ParamName;
         Result[ParamCount].IsPattern := False;
@@ -3014,7 +3114,7 @@ begin
     raise TGocciaSyntaxError.Create('Setter must have exactly one parameter',
       Peek.Line, Peek.Column, FFileName, FSourceLines,
       SSuggestSetterOneParameter);
-  ParamName := Consume(gttIdentifier, 'Expected parameter name in setter',
+  ParamName := ConsumeIdentifierBinding('Expected parameter name in setter',
     SSuggestProvideSetterParameterName).Lexeme;
   if Check(gttColon) then
   begin
@@ -3303,7 +3403,7 @@ var
   Line, Column: Integer;
   Token: TGocciaToken;
 begin
-  if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_TYPE) and IsTypeDeclaration then
+  if CheckUnescapedIdentifierKeyword(KEYWORD_TYPE) and IsTypeDeclaration then
   begin
     Line := Peek.Line;
     Column := Peek.Column;
@@ -3311,7 +3411,7 @@ begin
     SkipUntilSemicolon;
     Result := TGocciaEmptyStatement.Create(Line, Column);
   end
-  else if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_INTERFACE) and IsTypeDeclaration then
+  else if CheckUnescapedIdentifierKeyword(KEYWORD_INTERFACE) and IsTypeDeclaration then
   begin
     Line := Peek.Line;
     Column := Peek.Column;
@@ -3363,7 +3463,7 @@ begin
     Result := WithStatement
   else if Match(gttFunction) then
     Result := FunctionStatement(False, Check(gttStar))
-  else if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_ASYNC) and
+  else if CheckUnescapedIdentifierKeyword(KEYWORD_ASYNC) and
           (FCurrent + 1 < FTokens.Count) and
           (FTokens[FCurrent + 1].TokenType = gttFunction) then
   begin
@@ -3412,15 +3512,16 @@ begin
   // TC39 Explicit Resource Management: using x = expr;
   // Disambiguate: 'using' followed by identifier is a declaration,
   // 'using(' or 'using.x' is an expression (function call / member access).
-  else if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_USING) and
+  else if CheckUnescapedIdentifierKeyword(KEYWORD_USING) and
           CheckNext(gttIdentifier) then
     Result := UsingStatement
   // TC39 Explicit Resource Management: await using x = expr;
   // Detect 'await using identifier' regardless of context, then validate.
-  else if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_AWAIT) and
+  else if CheckUnescapedIdentifierKeyword(KEYWORD_AWAIT) and
           (FCurrent + 2 < FTokens.Count) and
           (FTokens[FCurrent + 1].TokenType = gttIdentifier) and
           (FTokens[FCurrent + 1].Lexeme = KEYWORD_USING) and
+          not FTokens[FCurrent + 1].ContainsEscape and
           (FTokens[FCurrent + 2].TokenType = gttIdentifier) then
   begin
     // Reject await using in synchronous function bodies
@@ -3490,7 +3591,7 @@ begin
     repeat
       SetLength(Variables, VariableCount + 1);
 
-      Name := Consume(gttIdentifier, 'Expected variable name',
+      Name := ConsumeIdentifierBinding('Expected variable name',
         SSuggestProvideVariableName).Lexeme;
       Variables[VariableCount].Name := Name;
 
@@ -3541,7 +3642,7 @@ begin
   VariableCount := 0;
 
   // Check for 'await using' — consume 'await' first
-  if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_AWAIT) then
+  if CheckUnescapedIdentifierKeyword(KEYWORD_AWAIT) then
   begin
     IsAwait := True;
     Advance; // consume 'await'
@@ -3554,7 +3655,7 @@ begin
   repeat
     SetLength(Variables, VariableCount + 1);
 
-    Name := Consume(gttIdentifier, 'Expected variable name after "using"',
+    Name := ConsumeIdentifierBinding('Expected variable name after "using"',
       'Provide an identifier for the disposable resource').Lexeme;
     Variables[VariableCount].Name := Name;
 
@@ -3832,7 +3933,7 @@ end;
 
 function TGocciaParser.IsTypeOnlySpecifierModifier: Boolean;
 begin
-  Result := Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_TYPE) and
+  Result := CheckUnescapedIdentifierKeyword(KEYWORD_TYPE) and
     (FCurrent + 1 < FTokens.Count) and
     (FTokens[FCurrent + 1].TokenType in [gttIdentifier, gttString]);
 end;
@@ -3887,7 +3988,7 @@ begin
     repeat
       SetLength(Variables, VariableCount + 1);
 
-      Name := Consume(gttIdentifier, 'Expected variable name',
+      Name := ConsumeIdentifierBinding('Expected variable name',
         SSuggestProvideVariableName).Lexeme;
       Variables[VariableCount].Name := Name;
 
@@ -3931,6 +4032,7 @@ var
   IterableExpr: TGocciaExpression;
   BodyStmt: TGocciaStatement;
   SavedCurrent: Integer;
+  Token: TGocciaToken;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
@@ -3943,7 +4045,7 @@ begin
   MatchPattern := nil;
 
   // for-await-of: 'await' appears between 'for' and '(' (async or top-level)
-  if ((FInAsyncFunction > 0) or (FFunctionDepth = 0)) and Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_AWAIT) then
+  if ((FInAsyncFunction > 0) or (FFunctionDepth = 0)) and CheckUnescapedIdentifierKeyword(KEYWORD_AWAIT) then
   begin
     IsAwait := True;
     Advance; // consume 'await'
@@ -3968,7 +4070,9 @@ begin
       end
       else if Check(gttIdentifier) then
       begin
-        BindingName := Advance.Lexeme;
+        Token := Advance;
+        ValidateIdentifierBinding(Token);
+        BindingName := Token.Lexeme;
       end
       else
       begin
@@ -3984,6 +4088,11 @@ begin
         Exit;
       end;
 
+      if CheckEscapedIdentifierKeyword(KEYWORD_IS) then
+        raise TGocciaSyntaxError.Create(
+          'Keyword must not contain escaped characters',
+          Peek.Line, Peek.Column, FFileName, FSourceLines);
+
       if Assigned(BindingPattern) and CheckContextualKeyword(KEYWORD_IS) then
         raise TGocciaSyntaxError.Create('Pattern-filtered for...of requires an identifier binding before "is"',
           Peek.Line, Peek.Column, FFileName, FSourceLines,
@@ -3997,6 +4106,16 @@ begin
         raise TGocciaSyntaxError.Create('Expected "of" after pattern-filtered for loop pattern',
           Peek.Line, Peek.Column, FFileName, FSourceLines,
           'Use for (const item is Pattern of iterable)');
+
+      if CheckEscapedIdentifierKeyword(KEYWORD_IN) then
+        raise TGocciaSyntaxError.Create(
+          'Keyword must not contain escaped characters',
+          Peek.Line, Peek.Column, FFileName, FSourceLines);
+
+      if CheckEscapedIdentifierKeyword(KEYWORD_OF) then
+        raise TGocciaSyntaxError.Create(
+          'Keyword must not contain escaped characters',
+          Peek.Line, Peek.Column, FFileName, FSourceLines);
 
       if CheckContextualKeyword(KEYWORD_OF) then
       begin
@@ -4143,7 +4262,7 @@ begin
       repeat
         SetLength(Variables, VarCount + 1);
         Variables[VarCount].Name :=
-          Consume(gttIdentifier, 'Expected variable name in for-init',
+          ConsumeIdentifierBinding('Expected variable name in for-init',
             SSuggestProvideVariableName).Lexeme;
         if Check(gttColon) then
         begin
@@ -4352,7 +4471,7 @@ begin
   if AIsGenerator then
     Consume(gttStar, 'Expected "*" after "function" in generator declaration');
 
-  NameToken := Consume(gttIdentifier, 'Expected function name',
+  NameToken := ConsumeIdentifierBinding('Expected function name',
     'Provide a name for the function declaration');
 
   CollectGenericParameters;
@@ -4448,7 +4567,7 @@ begin
     begin
       Consume(gttLeftParen, 'Expected "(" after "catch"',
         SSuggestOpenParenCatchClause);
-      CatchParam := Consume(gttIdentifier, 'Expected catch parameter',
+      CatchParam := ConsumeIdentifierBinding('Expected catch parameter',
         SSuggestProvideCatchParameter).Lexeme;
       if Check(gttColon) then
       begin
@@ -4576,7 +4695,7 @@ begin
   Line := Previous.Line;
   Column := Previous.Column;
 
-  Name := Consume(gttIdentifier, 'Expected class name',
+  Name := ConsumeIdentifierBinding('Expected class name',
     SSuggestProvideClassName).Lexeme;
   ClassDef := ParseClassBody(Name);
   Result := TGocciaClassDeclaration.Create(ClassDef, Line, Column);
@@ -4661,7 +4780,7 @@ begin
   Line := Previous.Line;
   Column := Previous.Column;
 
-  Name := Consume(gttIdentifier, 'Expected class name',
+  Name := ConsumeIdentifierBinding('Expected class name',
     SSuggestProvideClassName).Lexeme;
   ClassDef := ParseClassBody(Name);
   ClassDef.FDecorators := ADecorators;
@@ -4680,7 +4799,7 @@ begin
   Line := Previous.Line;
   Column := Previous.Column;
 
-  Name := Consume(gttIdentifier, 'Expected enum name',
+  Name := ConsumeIdentifierBinding('Expected enum name',
     SSuggestEnumName).Lexeme;
   Consume(gttLeftBrace, 'Expected "{" after enum name',
     SSuggestOpenBraceEnumBody);
@@ -4726,7 +4845,7 @@ begin
   Line := Previous.Line;
   Column := Previous.Column;
 
-  if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_TYPE) then
+  if CheckUnescapedIdentifierKeyword(KEYWORD_TYPE) then
   begin
     Advance;
     SkipUntilSemicolon;
@@ -4739,7 +4858,7 @@ begin
     Advance;
     Consume(gttAs, 'Expected "as" after "*" in namespace import',
       SSuggestNamespaceImportAs);
-    NamespaceName := Consume(gttIdentifier,
+    NamespaceName := ConsumeIdentifierBinding(
       'Expected local name after "as"',
       SSuggestProvideLocalName).Lexeme;
     Consume(gttFrom, 'Expected "from" after namespace import',
@@ -4789,7 +4908,7 @@ begin
     ImportedName := ImportedNameToken.Lexeme;
 
     if Match(gttAs) then
-      LocalName := Consume(gttIdentifier, 'Expected local name after "as"',
+      LocalName := ConsumeIdentifierBinding('Expected local name after "as"',
         SSuggestProvideLocalName).Lexeme
     else if ImportedNameToken.TokenType = gttString then
       raise TGocciaSyntaxError.Create(
@@ -4853,7 +4972,7 @@ begin
   Line := Previous.Line;
   Column := Previous.Column;
 
-  if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_TYPE) then
+  if CheckUnescapedIdentifierKeyword(KEYWORD_TYPE) then
   begin
     Advance;
     SkipUntilSemicolon;
@@ -4861,7 +4980,7 @@ begin
     Exit;
   end;
 
-  if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_INTERFACE) and IsTypeDeclaration then
+  if CheckUnescapedIdentifierKeyword(KEYWORD_INTERFACE) and IsTypeDeclaration then
   begin
     Advance;
     Advance;
@@ -4913,7 +5032,7 @@ begin
   end;
 
   // export async function name() { ... }
-  if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_ASYNC) and
+  if CheckUnescapedIdentifierKeyword(KEYWORD_ASYNC) and
      (FCurrent + 1 < FTokens.Count) and
      (FTokens[FCurrent + 1].TokenType = gttFunction) then
   begin
@@ -5116,7 +5235,7 @@ begin
     SuperClass := '';
 
   ClassImplementsClause := '';
-  if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_IMPLEMENTS) then
+  if CheckUnescapedIdentifierKeyword(KEYWORD_IMPLEMENTS) then
   begin
     Advance;
     ClassImplementsClause := CollectTypeAnnotation([gttLeftBrace]);
@@ -5174,7 +5293,7 @@ begin
         Continue;
       end;
 
-      while Check(gttIdentifier) and
+      while Check(gttIdentifier) and not Peek.ContainsEscape and
         ((Peek.Lexeme = KEYWORD_PUBLIC) or (Peek.Lexeme = KEYWORD_PROTECTED) or (Peek.Lexeme = KEYWORD_PRIVATE) or
          (Peek.Lexeme = KEYWORD_READONLY) or (Peek.Lexeme = KEYWORD_OVERRIDE) or (Peek.Lexeme = KEYWORD_ABSTRACT)) do
         Advance;
@@ -5182,7 +5301,7 @@ begin
       if not IsStatic and Check(gttStatic) then
         IsStatic := Match(gttStatic);
 
-      if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_ACCESSOR) and not CheckNext(gttLeftParen) and not CheckNext(gttColon) and not CheckNext(gttSemicolon) and not CheckNext(gttAssign) then
+      if CheckUnescapedIdentifierKeyword(KEYWORD_ACCESSOR) and not CheckNext(gttLeftParen) and not CheckNext(gttColon) and not CheckNext(gttSemicolon) and not CheckNext(gttAssign) then
       begin
         Advance;
         IsAccessor := True;
@@ -5190,7 +5309,7 @@ begin
 
       IsAsync := False;
       IsGenerator := False;
-      if not IsAccessor and Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_ASYNC) and not CheckNext(gttColon) and not CheckNext(gttLeftParen) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) and not CheckNext(gttSemicolon) and not CheckNext(gttAssign) and not CheckNext(gttQuestion) then
+      if not IsAccessor and CheckUnescapedIdentifierKeyword(KEYWORD_ASYNC) and not CheckNext(gttColon) and not CheckNext(gttLeftParen) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) and not CheckNext(gttSemicolon) and not CheckNext(gttAssign) and not CheckNext(gttQuestion) then
       begin
         Advance;
         IsAsync := True;
@@ -5209,7 +5328,7 @@ begin
       IsComputed := False;
       ComputedKeyExpression := nil;
 
-      if not IsAccessor and Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_GET) and not CheckNext(gttColon) and not CheckNext(gttLeftParen) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) and not CheckNext(gttSemicolon) and not CheckNext(gttAssign) and not CheckNext(gttQuestion) then
+      if not IsAccessor and CheckUnescapedIdentifierKeyword(KEYWORD_GET) and not CheckNext(gttColon) and not CheckNext(gttLeftParen) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) and not CheckNext(gttSemicolon) and not CheckNext(gttAssign) and not CheckNext(gttQuestion) then
       begin
         Advance;
         IsGetter := True;
@@ -5234,7 +5353,7 @@ begin
           MemberName := Consume(gttIdentifier, 'Expected property name after "get"',
             SSuggestProvideGetterPropertyName).Lexeme;
       end
-      else if not IsAccessor and Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_SET) and not CheckNext(gttColon) and not CheckNext(gttLeftParen) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) and not CheckNext(gttSemicolon) and not CheckNext(gttAssign) and not CheckNext(gttQuestion) then
+      else if not IsAccessor and CheckUnescapedIdentifierKeyword(KEYWORD_SET) and not CheckNext(gttColon) and not CheckNext(gttLeftParen) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) and not CheckNext(gttSemicolon) and not CheckNext(gttAssign) and not CheckNext(gttQuestion) then
       begin
         Advance;
         IsSetter := True;
