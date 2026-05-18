@@ -25,6 +25,9 @@ uses
   Goccia.Modules.Resolver,
   Goccia.Parser,
   Goccia.Runtime,
+  Goccia.RuntimeExtensions.JSONL,
+  Goccia.RuntimeExtensions.TextAssets,
+  Goccia.RuntimeExtensions.TOML,
   Goccia.TestSetup,
   Goccia.Token,
   Goccia.TOML,
@@ -524,7 +527,8 @@ begin
       Engine := TGocciaEngine.Create(ENTRY_PATH, Source, ModuleLoader, Executor);
       Runtime := nil;
       try
-        Runtime := TGocciaRuntime.Create(Engine, [rgJSONL]);
+        Runtime := TGocciaRuntime.Create(Engine);
+        Runtime.Install(TGocciaJSONLRuntimeExtension.Create);
         RaisedExpected := False;
         try
           Runtime.Execute;
@@ -589,7 +593,8 @@ begin
       Engine := TGocciaEngine.Create(ENTRY_PATH, Source, ModuleLoader, Executor);
       Runtime := nil;
       try
-        Runtime := TGocciaRuntime.Create(Engine, [rgTOML]);
+        Runtime := TGocciaRuntime.Create(Engine);
+        Runtime.Install(TGocciaTOMLRuntimeExtension.Create);
         RaisedExpected := False;
         try
           Runtime.Execute;
@@ -819,7 +824,8 @@ begin
       Source, Executor);
     Runtime := nil;
     try
-      Runtime := TGocciaRuntime.Create(Engine, [rgTextAssets]);
+      Runtime := TGocciaRuntime.Create(Engine);
+      Runtime.Install(TGocciaTextAssetsRuntimeExtension.Create);
       ScriptResult := Runtime.Execute;
     finally
       Runtime.Free;
@@ -876,7 +882,8 @@ begin
       Source, Executor);
     Runtime := nil;
     try
-      Runtime := TGocciaRuntime.Create(Engine, [rgTextAssets]);
+      Runtime := TGocciaRuntime.Create(Engine);
+      Runtime.Install(TGocciaTextAssetsRuntimeExtension.Create);
       ScriptResult := Runtime.Execute;
     finally
       Runtime.Free;

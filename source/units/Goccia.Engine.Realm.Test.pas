@@ -12,6 +12,7 @@ uses
   Goccia.Engine,
   Goccia.Realm,
   Goccia.Runtime,
+  Goccia.RuntimeExtensions.URL,
   Goccia.TestSetup,
   Goccia.Values.Primitives;
 
@@ -76,7 +77,8 @@ begin
   Executor := TGocciaInterpreterExecutor.Create;
   try
     Engine := TGocciaEngine.Create('<engine-realm-test>', Source, Executor);
-    Runtime := TGocciaRuntime.Create(Engine, [rgURL]);
+    Runtime := TGocciaRuntime.Create(Engine);
+    Runtime.Install(TGocciaURLRuntimeExtension.Create);
     Result := Runtime.Execute;
   finally
     Runtime.Free;

@@ -6,7 +6,7 @@
 
 - **10-step recipe** — Value type, built-in registration, class value subclass, engine/runtime integration, constants, structuredClone, tests, benchmarks, documentation
 - **Key patterns** — Shared prototype singleton (GC-pinned), `ThisValue` for method callbacks (not `Self`), `MarkReferences` for GC
-- **Engine/runtime integration** — Core language built-ins are registered by the engine; host/runtime globals and special-purpose tools belong in runtime extensions via `TGocciaRuntimeGlobals`
+- **Engine/runtime integration** — Core language built-ins are registered by the engine; host/runtime globals and special-purpose tools belong in concrete runtime extension classes
 - **Checklist included** — Complete checklist at the end of the document for verification
 
 This guide walks through every step needed to add a new built-in type to GocciaScript. Follow the steps in order; each section references the exact files and patterns involved.
@@ -340,7 +340,7 @@ end;
 
 ## Step 4: Engine Or Runtime Integration
 
-Core language built-ins belong in `Goccia.Engine.pas`. Host/runtime globals that are not part of the language core belong in a runtime extension such as `Goccia.Runtime.pas`.
+Core language built-ins belong in `Goccia.Engine.pas`. Host/runtime globals that are not part of the language core belong in a dedicated runtime extension unit under `source/units/Goccia.RuntimeExtensions.*.pas`.
 
 For a core language built-in, make these changes in the engine:
 
@@ -348,15 +348,19 @@ For a core language built-in, make these changes in the engine:
 
 Add `Goccia.Builtins.GlobalYour` (alphabetically sorted).
 
-### 4b. Runtime config entry (runtime globals only)
+### 4b. Runtime extension class (runtime globals only)
 
-Core language built-ins are always registered and do not need an enum flag. Host/runtime globals and special-purpose tools should add a selector to `TGocciaRuntimeGlobal`:
+Core language built-ins are always registered and do not need a runtime extension. Host/runtime globals and special-purpose tools should add a concrete extension class:
 
 ```pascal
-TGocciaRuntimeGlobal = (..., rgYour);
+TGocciaYourRuntimeExtension = class(TGocciaRuntimeExtension)
+public
+  procedure Attach(const ARuntime: TGocciaRuntimeCore); override;
+  procedure Detach; override;
+end;
 ```
 
-Most new language built-in types should skip this step entirely. Runtime extension membership is represented by `TGocciaRuntimeGlobals`, not by engine configuration.
+Most new language built-in types should skip this step entirely. Runtime extension membership is represented by installed classes and profiles, not by engine configuration.
 
 ### 4c. Field declaration
 
@@ -413,15 +417,13 @@ property BuiltinYour: TGocciaGlobalYour read FBuiltinYour;
 
 ### 4i. Runtime-extension registration
 
-For a host/runtime global, use the same built-in/value unit patterns but wire it through `Goccia.Runtime.pas` instead of `Goccia.Engine.pas`:
+For a host/runtime global, use the same built-in/value unit patterns but wire it through a concrete runtime extension instead of `Goccia.Engine.pas`:
 
-1. Add `Goccia.Builtins.GlobalYour` to the `Goccia.Runtime.pas` interface `uses` clause.
-2. Add an extension-specific config entry such as `rgYour` to `TGocciaRuntimeGlobal`.
-3. Add a private field such as `FBuiltinYour: TGocciaGlobalYour` to `TGocciaRuntimeExtension`.
-4. Instantiate it from `TGocciaRuntimeExtension.RegisterBuiltIns` or register its constructor from `RegisterRuntimeConstructors`, mirroring the engine's `RegisterBuiltIns` / constructor-registration pattern.
-5. Free the field in `TGocciaRuntimeExtension.Destroy`.
-6. If the feature adds importable file types, update `ConfigureModuleExtensions` and `LoadRuntimeModule` so the extension participates only when its `rgYour` config flag is enabled.
-7. Expose host setup through `TGocciaRuntime.Create(..., RuntimeGlobals)` or `AttachRuntimeExtension(Engine, RuntimeGlobals)`. CLI frontends attach the runtime in their engine-configuration hook; embedders can use the same runtime constructor or extension attach entry.
+1. Add a dedicated runtime-extension unit in `source/units/`, following the `Goccia.RuntimeExtensions.<Feature>` naming pattern.
+2. Add a private built-in field to the concrete extension class.
+3. Instantiate it from `Attach` and free it from `Detach`, mirroring the engine's `RegisterBuiltIns` / constructor-registration pattern.
+4. If the feature adds importable file types, override `AddModuleExtensions` and `TryLoadModule` so the extension participates only when installed.
+5. If the feature should be part of a CLI surface, add it to the relevant profile in `Goccia.RuntimeProfiles.*.pas`; otherwise embedders can install the concrete extension directly.
 
 ## Step 5: Constructor Name Constant
 
@@ -567,7 +569,7 @@ Use this checklist when adding a new built-in type:
 - [ ] Value type unit (`Goccia.Values.YourValue.pas`) with realm slot registered in `initialization`
 - [ ] Built-in registration unit (`Goccia.Builtins.GlobalYour.pas`)
 - [ ] Class value subclass in `Goccia.Values.ClassValue.pas`
-- [ ] Runtime: config entry in `TGocciaRuntimeGlobal` (runtime globals only)
+- [ ] Runtime: concrete `TGocciaRuntimeExtension` class (runtime globals only)
 - [ ] Engine: field declaration
 - [ ] Engine: `RegisterBuiltIns` registration
 - [ ] Engine: `RegisterBuiltinConstructors` constructor

@@ -14,6 +14,9 @@ uses
   Goccia.Modules.Loader,
   Goccia.Modules.Resolver,
   Goccia.Runtime,
+  Goccia.RuntimeExtensions.Console,
+  Goccia.RuntimeExtensions.JSON5,
+  Goccia.RuntimeExtensions.SemVer,
   Goccia.TestSetup,
   Goccia.Values.Primitives;
 
@@ -32,7 +35,7 @@ type
       out AModule: TGocciaModule): Boolean;
     procedure TestEngineRejectsNilExtension;
     procedure TestRuntimeConstructorAcceptsExistingEngine;
-    procedure TestRuntimeConstructorRejectsDifferentGlobals;
+    procedure TestRuntimeInstallIsIdempotent;
     procedure TestRuntimePreservesResolverExtensions;
     procedure TestRuntimeModuleLoaderFallsBackToPreviousLoader;
     procedure TestRuntimeRunScriptFromFileLoadsFile;
@@ -55,8 +58,8 @@ begin
     TestEngineRejectsNilExtension);
   Test('Runtime constructor accepts existing engine',
     TestRuntimeConstructorAcceptsExistingEngine);
-  Test('Runtime constructor rejects different globals',
-    TestRuntimeConstructorRejectsDifferentGlobals);
+  Test('Runtime extension install is idempotent',
+    TestRuntimeInstallIsIdempotent);
   Test('Runtime preserves resolver extensions',
     TestRuntimePreservesResolverExtensions);
   Test('Runtime module loader falls back to previous loader',
@@ -124,6 +127,7 @@ end;
 
 procedure TRuntimeTests.TestRuntimeConstructorAcceptsExistingEngine;
 var
+  ConsoleExtension: TGocciaConsoleRuntimeExtension;
   Engine: TGocciaEngine;
   Executor: TGocciaInterpreterExecutor;
   Runtime: TGocciaRuntime;
@@ -135,12 +139,16 @@ begin
     Engine := TGocciaEngine.Create('<runtime-test>', Source, Executor);
     Runtime := nil;
     try
-      Runtime := TGocciaRuntime.Create(Engine, [rgConsole]);
+      Runtime := TGocciaRuntime.Create(Engine);
+      Runtime.Install(TGocciaConsoleRuntimeExtension.Create);
+      ConsoleExtension := TGocciaConsoleRuntimeExtension(
+        Runtime.FindRuntimeExtension(TGocciaConsoleRuntimeExtension));
 
       Expect<Boolean>(Runtime.Engine = Engine).ToBe(True);
-      Expect<Boolean>(Assigned(Runtime.BuiltinConsole)).ToBe(True);
-      Expect<Boolean>(rgConsole in Runtime.Globals).ToBe(True);
-      Expect<Boolean>(rgSemver in Runtime.Globals).ToBe(False);
+      Expect<Boolean>(Assigned(ConsoleExtension)).ToBe(True);
+      Expect<Boolean>(Assigned(ConsoleExtension.BuiltinConsole)).ToBe(True);
+      Expect<Boolean>(Assigned(
+        Runtime.FindRuntimeExtension(TGocciaSemVerRuntimeExtension))).ToBe(False);
     finally
       Runtime.Free;
       Engine.Free;
@@ -151,45 +159,28 @@ begin
   end;
 end;
 
-procedure TRuntimeTests.TestRuntimeConstructorRejectsDifferentGlobals;
+procedure TRuntimeTests.TestRuntimeInstallIsIdempotent;
 var
   Engine: TGocciaEngine;
   Executor: TGocciaInterpreterExecutor;
-  FirstRuntime: TGocciaRuntime;
-  HasExpectedMessage: Boolean;
-  RaisedExpected: Boolean;
-  SecondRuntime: TGocciaRuntime;
+  FirstExtension: TGocciaRuntimeExtension;
+  Runtime: TGocciaRuntime;
+  SecondExtension: TGocciaRuntimeExtension;
   Source: TStringList;
 begin
   Source := CreateEmptySource;
   Executor := TGocciaInterpreterExecutor.Create;
   try
     Engine := TGocciaEngine.Create('<runtime-test>', Source, Executor);
-    FirstRuntime := nil;
-    SecondRuntime := nil;
+    Runtime := nil;
     try
-      FirstRuntime := TGocciaRuntime.Create(Engine, [rgConsole]);
-      RaisedExpected := False;
-      HasExpectedMessage := False;
+      Runtime := TGocciaRuntime.Create(Engine);
+      FirstExtension := Runtime.Install(TGocciaConsoleRuntimeExtension.Create);
+      SecondExtension := Runtime.Install(TGocciaConsoleRuntimeExtension.Create);
 
-      try
-        SecondRuntime := TGocciaRuntime.Create(Engine, [rgConsole, rgSemver]);
-        Fail('Expected runtime global mismatch to raise an exception.');
-      except
-        on E: Exception do
-        begin
-          RaisedExpected := True;
-          HasExpectedMessage := Pos('different global configuration',
-            E.Message) > 0;
-          if not HasExpectedMessage then
-            Fail('Expected runtime global mismatch error message.');
-        end;
-      end;
-
-      Expect<Boolean>(RaisedExpected).ToBe(True);
+      Expect<Boolean>(FirstExtension = SecondExtension).ToBe(True);
     finally
-      SecondRuntime.Free;
-      FirstRuntime.Free;
+      Runtime.Free;
       Engine.Free;
       Source.Free;
     end;
@@ -213,7 +204,8 @@ begin
     Runtime := nil;
     try
       Engine.Resolver.SetExtensions(['.custom', '.js']);
-      Runtime := TGocciaRuntime.Create(Engine, [rgJSON5]);
+      Runtime := TGocciaRuntime.Create(Engine);
+      Runtime.Install(TGocciaJSON5RuntimeExtension.Create);
       Extensions := Engine.Resolver.GetExtensions;
 
       Expect<Boolean>(Length(Extensions) >= 4).ToBe(True);
@@ -255,7 +247,8 @@ begin
     ModuleLoader := TGocciaModuleLoader.Create('<runtime-test>', Resolver);
     Engine := TGocciaEngine.Create('<runtime-test>', Source, ModuleLoader, Executor);
     Engine.ModuleLoader.RuntimeModuleLoader := LoadCustomRuntimeModule;
-    Runtime := TGocciaRuntime.Create(Engine, [rgJSON5]);
+    Runtime := TGocciaRuntime.Create(Engine);
+    Runtime.Install(TGocciaJSON5RuntimeExtension.Create);
 
     LoadedModule := Engine.ModuleLoader.LoadModule(
       'virtual.custom', '<runtime-test>');
@@ -293,8 +286,7 @@ begin
   end;
 
   try
-    ScriptResult := TGocciaRuntime.RunScriptFromFile(TempFileName,
-      [rgConsole]);
+    ScriptResult := TGocciaRuntime.RunScriptFromFile(TempFileName);
     Expect<Double>(ScriptResult.Result.ToNumberLiteral.Value).ToBe(42);
   finally
     DeleteFile(TempFileName);
