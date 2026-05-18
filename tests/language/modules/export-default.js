@@ -21,6 +21,7 @@ import NamedDefaultClassBeforeStatement, {
   localFollowingNamedDefaultClassName
 } from "./helpers/default-named-class-following-statement.js";
 import defaultAwaitRegexp from "./helpers/default-await-regexp.js";
+import defaultAwaitSpaceRegexp from "./helpers/default-await-space-regexp.js";
 import defaultAwaitObjectWithFunctionMethod from "./helpers/default-await-object-function-method.js";
 
 describe("default export", () => {
@@ -62,6 +63,7 @@ describe("default export", () => {
 
   test("exports top-level await expressions with regex and object method operands", () => {
     expect(defaultAwaitRegexp.test("1")).toBe(true);
+    expect(defaultAwaitSpaceRegexp.test(" ")).toBe(true);
     expect(defaultAwaitObjectWithFunctionMethod.function()).toBe("method");
   });
 });

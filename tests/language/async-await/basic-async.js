@@ -69,7 +69,9 @@ describe("async functions", () => {
 
   test("await can still be an identifier before division outside async code", () => {
     const half = (await) => await / 2;
+    const compactHalf = (await) => await/2;
 
     expect(half(6)).toBe(3);
+    expect(compactHalf(8)).toBe(4);
   });
 });

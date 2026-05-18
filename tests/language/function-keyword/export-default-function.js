@@ -22,6 +22,9 @@ import namedDefaultGeneratorBeforeStatement, {
   defaultNamedGeneratorFollowingStatementHit,
   localFollowingNamedDefaultGeneratorType
 } from "./helpers/default-named-generator-following-statement.js";
+import CapturedDefaultClass, {
+  readCapturedDefaultClassName
+} from "./helpers/default-named-class-hoisted-capture.js";
 
 test("default exported function expression can be called", () => {
   expect(defaultDouble(4)).toBe(8);
@@ -57,4 +60,9 @@ test("named default exported generator declaration can be followed by another st
   expect(namedDefaultGeneratorBeforeStatement().next()).toEqual({ value: "named generator", done: false });
   expect(localFollowingNamedDefaultGeneratorType).toBe("function");
   expect(defaultNamedGeneratorFollowingStatementHit).toBe(1);
+});
+
+test("hoisted functions capture named default class declarations", () => {
+  expect(CapturedDefaultClass.name).toBe("CapturedDefaultClass");
+  expect(readCapturedDefaultClassName()).toBe("CapturedDefaultClass");
 });

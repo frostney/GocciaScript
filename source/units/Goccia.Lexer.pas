@@ -51,6 +51,7 @@ type
     procedure ScanRegexLiteral;
     procedure ScanNumber;
     procedure ScanIdentifier;
+    function CanScanRegexAfterAwait: Boolean;
     function ScanUnicodeEscape: string;
     function ScanHexEscape: string;
     procedure ProcessEscapeSequence(var ASB: TStringBuffer);
@@ -1499,11 +1500,7 @@ begin
     '/':
       if Match('=') then
         AddToken(gttSlashAssign)
-      else if FCanStartRegex or
-              ((FTokens.Count > 0) and
-              (FTokens[FTokens.Count - 1].TokenType = gttIdentifier) and
-              (FTokens[FTokens.Count - 1].Lexeme = KEYWORD_AWAIT) and
-              (not IsAtEnd) and (not CharInSet(Peek, [' ', #9, #10, #13]))) then
+      else if FCanStartRegex or CanScanRegexAfterAwait then
         ScanRegexLiteral
       else
         AddToken(gttSlash);
@@ -1634,6 +1631,53 @@ begin
       raise TGocciaLexerError.Create(Format('Unexpected character: %s', [C]),
         FLine, FStartColumn, FFileName, GetSourceLines,
         SSuggestInvalidCharacter);
+  end;
+end;
+
+function TGocciaLexer.CanScanRegexAfterAwait: Boolean;
+var
+  I: Integer;
+  InClass, Escaped: Boolean;
+  Ch: Char;
+begin
+  Result := False;
+  if (FTokens.Count = 0) or
+     (FTokens[FTokens.Count - 1].TokenType <> gttIdentifier) or
+     (FTokens[FTokens.Count - 1].Lexeme <> KEYWORD_AWAIT) then
+    Exit;
+
+  if IsAtEnd or (Peek = '/') or (Peek = '*') then
+    Exit;
+
+  InClass := False;
+  Escaped := False;
+  I := FCurrent;
+  while I <= Length(FSource) do
+  begin
+    Ch := FSource[I];
+    if (Ch = #10) or (Ch = #13) then
+      Exit;
+
+    if Escaped then
+    begin
+      Escaped := False;
+      Inc(I);
+      Continue;
+    end;
+
+    case Ch of
+      '\':
+        Escaped := True;
+      '[':
+        InClass := True;
+      ']':
+        InClass := False;
+      '/':
+        if not InClass then
+          Exit(True);
+    end;
+
+    Inc(I);
   end;
 end;
 

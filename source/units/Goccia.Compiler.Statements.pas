@@ -2751,6 +2751,10 @@ begin
     end;
   end;
 
+  LocalIdx := ACtx.Scope.ResolveLocal(BindingName);
+  if (LocalIdx >= 0) and ACtx.Scope.GetLocal(LocalIdx).IsCaptured then
+    EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, Slot, UInt16(Slot)));
+
   if ACtx.GlobalBackedTopLevel and (ACtx.Scope.Depth = 0) then
     EmitGlobalDefine(ACtx, Slot, BindingName, True);
 
