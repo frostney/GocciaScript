@@ -1110,14 +1110,14 @@ procedure ComputeZonedDateTimeDiffFields(
       AMilliseconds, AMicroseconds, ANanoseconds: Int64);
 var
   StartNs, EndNs, IntermediateNs, RemainderBig: TBigInteger;
-  Sign, RemainderSign: Integer;
+  CorrectionSign, RemainderSign: Integer;
   StartYear, StartMonth, StartDay, StartHour, StartMinute, StartSecond: Integer;
   StartMillisecond, StartMicrosecond, StartNanosecond: Integer;
   EndYear, EndMonth, EndDay, EndHour, EndMinute, EndSecond: Integer;
   EndMillisecond, EndMicrosecond, EndNanosecond: Integer;
   CandidateDate, IntermediateDate: TTemporalDateRecord;
   IntermediateEpochMs, RemainderNs: Int64;
-  DayCorrection, MaxDayCorrection, SearchSign: Integer;
+  DayCorrection, MaxDayCorrection: Integer;
 begin
   ZeroZonedDateTimeDiffFields(AYears, AMonths, AWeeks, ADays,
     AHours, AMinutes, ASeconds, AMilliseconds, AMicroseconds, ANanoseconds);
@@ -1128,12 +1128,11 @@ begin
     AEndSubMillisecondNanoseconds);
   if EndNs.Compare(StartNs) = 0 then Exit;
 
-  if EndNs.Compare(StartNs) > 0 then
-    Sign := 1
+  if EndNs.Compare(StartNs) < 0 then
+    CorrectionSign := 1
   else
-    Sign := -1;
-  SearchSign := -Sign;
-  if SearchSign < 0 then
+    CorrectionSign := -1;
+  if CorrectionSign = -1 then
     MaxDayCorrection := 2
   else
     MaxDayCorrection := 1;
@@ -1147,14 +1146,42 @@ begin
     EndYear, EndMonth, EndDay, EndHour, EndMinute, EndSecond,
     EndMillisecond, EndMicrosecond, EndNanosecond);
 
+  if CompareDates(StartYear, StartMonth, StartDay, EndYear, EndMonth, EndDay) = 0 then
+  begin
+    RemainderBig := EndNs.Subtract(StartNs);
+    if RemainderBig.IsNegative then
+      RemainderSign := -1
+    else
+      RemainderSign := 1;
+    RemainderNs := RemainderBig.AbsValue.ToInt64;
+
+    AHours := RemainderSign * (RemainderNs div NANOSECONDS_PER_HOUR);
+    RemainderNs := RemainderNs mod NANOSECONDS_PER_HOUR;
+    AMinutes := RemainderSign * (RemainderNs div NANOSECONDS_PER_MINUTE);
+    RemainderNs := RemainderNs mod NANOSECONDS_PER_MINUTE;
+    ASeconds := RemainderSign * (RemainderNs div NANOSECONDS_PER_SECOND);
+    RemainderNs := RemainderNs mod NANOSECONDS_PER_SECOND;
+    AMilliseconds := RemainderSign * (RemainderNs div NANOSECONDS_PER_MILLISECOND);
+    RemainderNs := RemainderNs mod NANOSECONDS_PER_MILLISECOND;
+    AMicroseconds := RemainderSign * (RemainderNs div NANOSECONDS_PER_MICROSECOND);
+    ANanoseconds := RemainderSign * (RemainderNs mod NANOSECONDS_PER_MICROSECOND);
+    Exit;
+  end;
+
+  DayCorrection := 0;
+  if CompareTimes(EndHour, EndMinute, EndSecond, EndMillisecond,
+    EndMicrosecond, EndNanosecond, StartHour, StartMinute, StartSecond,
+    StartMillisecond, StartMicrosecond, StartNanosecond) = CorrectionSign then
+    Inc(DayCorrection);
+
   RemainderBig := TBigInteger.Zero;
   IntermediateDate.Year := EndYear;
   IntermediateDate.Month := EndMonth;
   IntermediateDate.Day := EndDay;
-  for DayCorrection := 0 to MaxDayCorrection do
+  while DayCorrection <= MaxDayCorrection do
   begin
     CandidateDate := AddDaysToDate(EndYear, EndMonth, EndDay,
-      Int64(DayCorrection) * SearchSign);
+      Int64(DayCorrection) * CorrectionSign);
     IntermediateEpochMs := LocalToEpochMs(CandidateDate.Year,
       CandidateDate.Month, CandidateDate.Day, StartHour, StartMinute,
       StartSecond, StartMillisecond, ATimeZone);
@@ -1172,11 +1199,12 @@ begin
       RemainderSign := -1
     else
       RemainderSign := 1;
-    if RemainderSign = Sign then
+    if RemainderSign <> CorrectionSign then
     begin
       IntermediateDate := CandidateDate;
       Break;
     end;
+    Inc(DayCorrection);
   end;
 
   CalendarDateUntil(StartYear, StartMonth, StartDay,

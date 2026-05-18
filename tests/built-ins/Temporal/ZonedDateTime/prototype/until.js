@@ -68,6 +68,17 @@ describe.runIf(isTemporal)("Temporal.ZonedDateTime.prototype.until", () => {
       .toBe("-P273790Y8M12DT9H13M1.001001001S");
   });
 
+  test("until() chooses the smaller duration at DST month-day boundaries", () => {
+    const d1 = new Temporal.ZonedDateTime(957258000_000_000_000n, "America/Vancouver");
+    const d2 = new Temporal.ZonedDateTime(954669600_000_000_000n, "America/Vancouver");
+    const result = d1.until(d2, { largestUnit: "months" });
+
+    expect(result.months).toBe(0);
+    expect(result.days).toBe(-29);
+    expect(result.hours).toBe(-23);
+    expect(result.toString()).toBe("-P29DT23H");
+  });
+
   test("until() with smallestUnit minutes truncates seconds", () => {
     const z1 = Temporal.Instant.fromEpochMilliseconds(0).toZonedDateTimeISO("UTC");
     const z2 = Temporal.Instant.fromEpochMilliseconds(5400000 + 30000).toZonedDateTimeISO("UTC");
