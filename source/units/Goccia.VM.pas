@@ -7773,8 +7773,8 @@ begin
             TGocciaArrayValue(FRegisters[A].ObjectValue).AssignSymbolProperty(
               TGocciaSymbolValue(FRegisters[B].ObjectValue), RegisterToValue(FRegisters[C]))
           else if TryGetArrayIndexRegister(FRegisters[B], KeyIndex) then
-            TGocciaArrayValue(FRegisters[A].ObjectValue).SetElement(
-              KeyIndex, RegisterToValue(FRegisters[C]))
+            TGocciaArrayValue(FRegisters[A].ObjectValue).SetProperty(
+              IntToStr(KeyIndex), RegisterToValue(FRegisters[C]))
           else if TryResolveObjectKey(FRegisters[B], PropKeyValue) then
           begin
             if PropKeyValue is TGocciaSymbolValue then
@@ -8258,8 +8258,8 @@ begin
             TGocciaArrayValue(FRegisters[A].ObjectValue).AssignSymbolProperty(
               TGocciaSymbolValue(FRegisters[B].ObjectValue), RightValue)
           else if TryGetArrayIndexRegister(FRegisters[B], KeyIndex) then
-            TGocciaArrayValue(FRegisters[A].ObjectValue).SetElement(
-              KeyIndex, RightValue)
+            TGocciaArrayValue(FRegisters[A].ObjectValue).SetProperty(
+              IntToStr(KeyIndex), RightValue)
           else if TryResolveObjectKey(FRegisters[B], PropKeyValue) then
           begin
             if PropKeyValue is TGocciaSymbolValue then

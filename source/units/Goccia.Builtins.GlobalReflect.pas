@@ -344,14 +344,14 @@ begin
   end;
 
   DescriptorObj := TGocciaObjectValue.Create;
-  if Descriptor.HasEnumerable then
+  if Descriptor.HasEnumerableField then
   begin
     if Descriptor.Enumerable then
       DescriptorObj.AssignProperty(PROP_ENUMERABLE, TGocciaBooleanLiteralValue.TrueValue)
     else
       DescriptorObj.AssignProperty(PROP_ENUMERABLE, TGocciaBooleanLiteralValue.FalseValue);
   end;
-  if Descriptor.HasConfigurable then
+  if Descriptor.HasConfigurableField then
   begin
     if Descriptor.Configurable then
       DescriptorObj.AssignProperty(PROP_CONFIGURABLE, TGocciaBooleanLiteralValue.TrueValue)
@@ -363,7 +363,7 @@ begin
   begin
     if Descriptor.HasValue then
       DescriptorObj.AssignProperty(PROP_VALUE, TGocciaPropertyDescriptorData(Descriptor).Value);
-    if Descriptor.HasWritable then
+    if Descriptor.HasWritableField then
     begin
       if Descriptor.Writable then
         DescriptorObj.AssignProperty(PROP_WRITABLE, TGocciaBooleanLiteralValue.TrueValue)

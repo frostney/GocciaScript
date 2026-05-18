@@ -554,13 +554,13 @@ function IsArrayLengthDescriptorCompatible(
   const AArray: TGocciaArrayValue;
   const ADescriptor: TGocciaPropertyDescriptor): Boolean;
 begin
-  if ADescriptor.HasConfigurable and ADescriptor.Configurable then
+  if ADescriptor.HasConfigurableField and ADescriptor.Configurable then
     Exit(False);
-  if ADescriptor.HasEnumerable and ADescriptor.Enumerable then
+  if ADescriptor.HasEnumerableField and ADescriptor.Enumerable then
     Exit(False);
   if IsAccessorDescriptor(ADescriptor) then
     Exit(False);
-  if ADescriptor.HasWritable and ADescriptor.Writable and
+  if ADescriptor.HasWritableField and ADescriptor.Writable and
      not AArray.FLengthWritable then
     Exit(False);
   Result := True;
@@ -606,12 +606,12 @@ begin
     begin
       while AArray.FElements.Count < NewLen do
         AArray.FElements.Add(TGocciaHoleValue.HoleValue);
-      if ADescriptor.HasWritable and not ADescriptor.Writable then
+      if ADescriptor.HasWritableField and not ADescriptor.Writable then
         AArray.FLengthWritable := False;
       Exit(True);
     end;
 
-    NewWritable := not (ADescriptor.HasWritable and not ADescriptor.Writable);
+    NewWritable := not (ADescriptor.HasWritableField and not ADescriptor.Writable);
     if not DeleteArrayIndexesAtOrAbove(AArray, NewLen, FailedIndex) then
     begin
       while (FailedIndex < MaxInt) and (AArray.FElements.Count <= FailedIndex) do
@@ -627,7 +627,7 @@ begin
 
   if not IsArrayLengthDescriptorCompatible(AArray, ADescriptor) then
     Exit(False);
-  if ADescriptor.HasWritable and not ADescriptor.Writable then
+  if ADescriptor.HasWritableField and not ADescriptor.Writable then
     AArray.FLengthWritable := False;
   Result := True;
 end;
@@ -636,9 +636,9 @@ function CanKeepDenseArrayElement(
   const ADescriptor: TGocciaPropertyDescriptor): Boolean;
 begin
   Result := IsDataDescriptor(ADescriptor) and
-    (not ADescriptor.HasConfigurable or ADescriptor.Configurable) and
-    (not ADescriptor.HasEnumerable or ADescriptor.Enumerable) and
-    (not ADescriptor.HasWritable or ADescriptor.Writable);
+    (not ADescriptor.HasConfigurableField or ADescriptor.Configurable) and
+    (not ADescriptor.HasEnumerableField or ADescriptor.Enumerable) and
+    (not ADescriptor.HasWritableField or ADescriptor.Writable);
 end;
 
 procedure MaterializeDenseArrayElement(
@@ -2925,6 +2925,12 @@ begin
   begin
     if Index >= 0 then
     begin
+      if FProperties.ContainsKey(AName) then
+      begin
+        inherited AssignProperty(AName, AValue);
+        Exit;
+      end;
+
       if (Index >= FElements.Count) and not FLengthWritable then
         ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [AName]),
           SSuggestCannotDeleteNonConfigurable);
@@ -3034,25 +3040,13 @@ begin
       MaterializeDenseArrayElement(Self, AName, Index);
     end;
 
-    if ADescriptor is TGocciaPropertyDescriptorData then
-    begin
-      // Data descriptor on an array index: extract the value into FElements.
-      while FElements.Count <= Index do
-        FElements.Add(TGocciaHoleValue.HoleValue);
-      FElements[Index] := TGocciaPropertyDescriptorData(ADescriptor).Value;
-      ADescriptor.Free;
-    end
-    else
-    begin
-      // Accessor descriptor: delegate to the throwing inherited DefineProperty
-      // so ownership semantics match the spec wrapper. On exception, ADescriptor
-      // remains live and the outer caller's `except` frees it once.
-      inherited DefineProperty(AName, ADescriptor);
-      while FElements.Count <= Index do
-        FElements.Add(TGocciaHoleValue.HoleValue);
-      if not IsArrayHole(FElements[Index]) then
-        FElements[Index] := TGocciaHoleValue.HoleValue;
-    end;
+    // Non-dense descriptors must be stored in the ordinary property map so
+    // missing/defaulted attributes keep their spec values.
+    inherited DefineProperty(AName, ADescriptor);
+    while FElements.Count <= Index do
+      FElements.Add(TGocciaHoleValue.HoleValue);
+    if not IsArrayHole(FElements[Index]) then
+      FElements[Index] := TGocciaHoleValue.HoleValue;
     Exit;
   end;
 
@@ -3102,36 +3096,16 @@ begin
       MaterializeDenseArrayElement(Self, AName, Index);
     end;
 
-    if ADescriptor is TGocciaPropertyDescriptorData then
+    // Store non-dense descriptors on the ordinary property map. This preserves
+    // omitted fields as false/undefined for new array-index properties and
+    // keeps non-default attributes visible to subsequent [[GetOwnProperty]].
+    Result := inherited TryDefineProperty(AName, ADescriptor);
+    if Result then
     begin
-      // Extend array if needed
       while FElements.Count <= Index do
         FElements.Add(TGocciaHoleValue.HoleValue);
-      FElements[Index] := TGocciaPropertyDescriptorData(ADescriptor).Value;
-      ADescriptor.Free;
-      Result := True;
-    end
-    else
-    begin
-      // Accessor descriptor on array index — store on the underlying object
-      // first; only then mutate FElements. If the inherited call rejects the
-      // descriptor (e.g., redefining a non-configurable own property), we
-      // must not have already grown the backing array or cleared a slot.
-      Result := inherited TryDefineProperty(AName, ADescriptor);
-      if Result then
-      begin
-        // Extend the backing storage if the index is past the current length
-        // so the array's `length` reflects the new own property
-        // (ES2026 §10.4.2.1, mirroring the data-descriptor branch above).
-        while FElements.Count <= Index do
-          FElements.Add(TGocciaHoleValue.HoleValue);
-        // Clear the dense slot so [[Get]]/[[GetOwnProperty]] fall through to
-        // the accessor stored on the underlying object — otherwise the
-        // array's fast path would shadow the descriptor with the original
-        // element value.
-        if not IsArrayHole(FElements[Index]) then
-          FElements[Index] := TGocciaHoleValue.HoleValue;
-      end;
+      if not IsArrayHole(FElements[Index]) then
+        FElements[Index] := TGocciaHoleValue.HoleValue;
     end;
     Exit;
   end;

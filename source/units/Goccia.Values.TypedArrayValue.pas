@@ -962,13 +962,13 @@ begin
   if not AArray.IsValidIntegerIndexedElement(ANumericIndex,
     AIsNegativeZero, Index) then
     Exit(False);
-  if ADescriptor.HasConfigurable and not ADescriptor.Configurable then
+  if ADescriptor.HasConfigurableField and not ADescriptor.Configurable then
     Exit(False);
-  if ADescriptor.HasEnumerable and not ADescriptor.Enumerable then
+  if ADescriptor.HasEnumerableField and not ADescriptor.Enumerable then
     Exit(False);
   if IsAccessorDescriptor(ADescriptor) then
     Exit(False);
-  if ADescriptor.HasWritable and not ADescriptor.Writable then
+  if ADescriptor.HasWritableField and not ADescriptor.Writable then
     Exit(False);
   if ADescriptor.HasValue then
     AArray.SetIntegerIndexedElement(ANumericIndex, AIsNegativeZero,

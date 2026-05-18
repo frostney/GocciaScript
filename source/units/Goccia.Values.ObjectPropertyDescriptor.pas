@@ -10,6 +10,8 @@ uses
   Goccia.Values.Primitives;
 
 type
+  // Flags store resolved descriptor attribute values; Fields store which
+  // descriptor keys were explicitly present in a partial descriptor.
   TPropertyFlag = (pfEnumerable, pfConfigurable, pfWritable);
   TPropertyFlags = set of TPropertyFlag;
   TPropertyDescriptorField = (
@@ -25,9 +27,9 @@ type
     function GetEnumerable: Boolean; inline;
     function GetConfigurable: Boolean; inline;
     function GetWritable: Boolean; inline;
-    function GetHasEnumerable: Boolean; inline;
-    function GetHasConfigurable: Boolean; inline;
-    function GetHasWritable: Boolean; inline;
+    function GetHasEnumerableField: Boolean; inline;
+    function GetHasConfigurableField: Boolean; inline;
+    function GetHasWritableField: Boolean; inline;
     function GetHasValue: Boolean; inline;
     function GetHasGet: Boolean; inline;
     function GetHasSet: Boolean; inline;
@@ -41,9 +43,9 @@ type
     property Enumerable: Boolean read GetEnumerable;
     property Configurable: Boolean read GetConfigurable;
     property Writable: Boolean read GetWritable;
-    property HasEnumerable: Boolean read GetHasEnumerable;
-    property HasConfigurable: Boolean read GetHasConfigurable;
-    property HasWritable: Boolean read GetHasWritable;
+    property HasEnumerableField: Boolean read GetHasEnumerableField;
+    property HasConfigurableField: Boolean read GetHasConfigurableField;
+    property HasWritableField: Boolean read GetHasWritableField;
     property HasValue: Boolean read GetHasValue;
     property HasGet: Boolean read GetHasGet;
     property HasSet: Boolean read GetHasSet;
@@ -122,17 +124,17 @@ begin
   Result := pfWritable in FFlags;
 end;
 
-function TGocciaPropertyDescriptor.GetHasEnumerable: Boolean;
+function TGocciaPropertyDescriptor.GetHasEnumerableField: Boolean;
 begin
   Result := pdfEnumerable in FFields;
 end;
 
-function TGocciaPropertyDescriptor.GetHasConfigurable: Boolean;
+function TGocciaPropertyDescriptor.GetHasConfigurableField: Boolean;
 begin
   Result := pdfConfigurable in FFields;
 end;
 
-function TGocciaPropertyDescriptor.GetHasWritable: Boolean;
+function TGocciaPropertyDescriptor.GetHasWritableField: Boolean;
 begin
   Result := pdfWritable in FFields;
 end;
@@ -256,8 +258,8 @@ var
   Value, Getter, Setter: TGocciaValue;
   PropertyFlags: TPropertyFlags;
   DescriptorFields: TPropertyDescriptorFields;
-  HasValue, HasGet, HasSet, HasWritable: Boolean;
-  HasEnumerable, HasConfigurable: Boolean;
+  HasValue, HasGet, HasSet, HasWritableField: Boolean;
+  HasEnumerableField, HasConfigurableField: Boolean;
 begin
   // ES2026 §6.2.5.5 step 1: If Desc is not an Object, throw a TypeError
   if not (ADescriptorObject is TGocciaObjectValue) then
@@ -273,20 +275,20 @@ begin
   Setter := nil;
 
   // ES2026 §6.2.5.5 steps 3–9: extract descriptor fields
-  HasEnumerable := DescObj.HasProperty(PROP_ENUMERABLE);
-  HasConfigurable := DescObj.HasProperty(PROP_CONFIGURABLE);
+  HasEnumerableField := DescObj.HasProperty(PROP_ENUMERABLE);
+  HasConfigurableField := DescObj.HasProperty(PROP_CONFIGURABLE);
   HasValue := DescObj.HasProperty(PROP_VALUE);
   HasGet := DescObj.HasProperty(PROP_GET);
   HasSet := DescObj.HasProperty(PROP_SET);
-  HasWritable := DescObj.HasProperty(PROP_WRITABLE);
+  HasWritableField := DescObj.HasProperty(PROP_WRITABLE);
 
-  if HasEnumerable then
+  if HasEnumerableField then
     Enumerable := DescObj.GetProperty(PROP_ENUMERABLE).ToBooleanLiteral.Value;
-  if HasConfigurable then
+  if HasConfigurableField then
     Configurable := DescObj.GetProperty(PROP_CONFIGURABLE).ToBooleanLiteral.Value;
   if HasValue then
     Value := DescObj.GetProperty(PROP_VALUE);
-  if HasWritable then
+  if HasWritableField then
     Writable := DescObj.GetProperty(PROP_WRITABLE).ToBooleanLiteral.Value;
 
   // ES2026 §6.2.5.5 step 7: validate getter
@@ -310,7 +312,7 @@ begin
   end;
 
   // ES2026 §6.2.5.5 step 10: mixed data+accessor is invalid
-  if (HasValue or HasWritable) and (HasGet or HasSet) then
+  if (HasValue or HasWritableField) and (HasGet or HasSet) then
     ThrowTypeError(SErrorDescriptorMixedAccessorData, SSuggestPropertyDescriptorObject);
 
   // Build flags
@@ -323,20 +325,20 @@ begin
     Include(PropertyFlags, pfWritable);
 
   DescriptorFields := [];
-  if HasEnumerable then
+  if HasEnumerableField then
     Include(DescriptorFields, pdfEnumerable);
-  if HasConfigurable then
+  if HasConfigurableField then
     Include(DescriptorFields, pdfConfigurable);
   if HasValue then
     Include(DescriptorFields, pdfValue);
-  if HasWritable then
+  if HasWritableField then
     Include(DescriptorFields, pdfWritable);
   if HasGet then
     Include(DescriptorFields, pdfGet);
   if HasSet then
     Include(DescriptorFields, pdfSet);
 
-  if HasValue or HasWritable then
+  if HasValue or HasWritableField then
     Result := TGocciaPropertyDescriptorData.CreatePartial(Value,
       PropertyFlags, DescriptorFields)
   else if HasGet or HasSet then

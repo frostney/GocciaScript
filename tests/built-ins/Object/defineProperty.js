@@ -262,6 +262,47 @@ test("Object.defineProperty with default values", () => {
   expect(obj.minimal).toBe("test");
 });
 
+test("Object.defineProperty preserves array index value when only writable changes", () => {
+  const array = [101];
+
+  Object.defineProperty(array, "0", { writable: false });
+
+  const desc = Object.getOwnPropertyDescriptor(array, "0");
+  expect(array[0]).toBe(101);
+  expect(desc.value).toBe(101);
+  expect(desc.writable).toBe(false);
+  expect(desc.enumerable).toBe(true);
+  expect(desc.configurable).toBe(true);
+  expect(() => {
+    array[0] = 202;
+  }).toThrow(TypeError);
+  expect(array[0]).toBe(101);
+});
+
+test("Object.defineProperty preserves new array index descriptor attributes", () => {
+  const array = [];
+
+  Object.defineProperty(array, "5", {
+    value: 202,
+    writable: false,
+    enumerable: false,
+    configurable: false,
+  });
+
+  const desc = Object.getOwnPropertyDescriptor(array, "5");
+  expect(array.length).toBe(6);
+  expect(array[5]).toBe(202);
+  expect(desc.value).toBe(202);
+  expect(desc.writable).toBe(false);
+  expect(desc.enumerable).toBe(false);
+  expect(desc.configurable).toBe(false);
+  expect(Object.keys(array)).not.toContain("5");
+  expect(() => {
+    array[5] = 303;
+  }).toThrow(TypeError);
+  expect(array[5]).toBe(202);
+});
+
 test("Object.defineProperty with modification constraints", () => {
   const obj = {};
 

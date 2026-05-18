@@ -76,14 +76,14 @@ threadvar
 function FromPropertyDescriptor(const ADescriptor: TGocciaPropertyDescriptor): TGocciaObjectValue;
 begin
   Result := TGocciaObjectValue.Create;
-  if ADescriptor.HasEnumerable then
+  if ADescriptor.HasEnumerableField then
   begin
     if ADescriptor.Enumerable then
       Result.AssignProperty(PROP_ENUMERABLE, TGocciaBooleanLiteralValue.TrueValue)
     else
       Result.AssignProperty(PROP_ENUMERABLE, TGocciaBooleanLiteralValue.FalseValue);
   end;
-  if ADescriptor.HasConfigurable then
+  if ADescriptor.HasConfigurableField then
   begin
     if ADescriptor.Configurable then
       Result.AssignProperty(PROP_CONFIGURABLE, TGocciaBooleanLiteralValue.TrueValue)
@@ -95,7 +95,7 @@ begin
   begin
     if ADescriptor.HasValue then
       Result.AssignProperty(PROP_VALUE, TGocciaPropertyDescriptorData(ADescriptor).Value);
-    if ADescriptor.HasWritable then
+    if ADescriptor.HasWritableField then
     begin
       if ADescriptor.Writable then
         Result.AssignProperty(PROP_WRITABLE, TGocciaBooleanLiteralValue.TrueValue)

@@ -69,7 +69,7 @@ type
     function GetOwnPropertyNames: TArray<string>; virtual;
     function GetOwnPropertyKeys: TArray<string>; virtual;
 
-    procedure DefineSymbolProperty(const ASymbol: TGocciaSymbolValue; const ADescriptor: TGocciaPropertyDescriptor);
+    procedure DefineSymbolProperty(const ASymbol: TGocciaSymbolValue; const ADescriptor: TGocciaPropertyDescriptor); virtual;
     function TryDefineSymbolProperty(const ASymbol: TGocciaSymbolValue; const ADescriptor: TGocciaPropertyDescriptor): Boolean; virtual;
     procedure AssignSymbolProperty(const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue);
     function AssignSymbolPropertyWithReceiver(const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue; const AReceiver: TGocciaValue): Boolean; virtual;
@@ -649,9 +649,9 @@ var
   Setter: TGocciaValue;
 begin
   Flags := [];
-  if ADescriptor.HasEnumerable and ADescriptor.Enumerable then
+  if ADescriptor.HasEnumerableField and ADescriptor.Enumerable then
     Include(Flags, pfEnumerable);
-  if ADescriptor.HasConfigurable and ADescriptor.Configurable then
+  if ADescriptor.HasConfigurableField and ADescriptor.Configurable then
     Include(Flags, pfConfigurable);
 
   if IsAccessorDescriptor(ADescriptor) then
@@ -668,7 +668,7 @@ begin
   Value := TGocciaUndefinedLiteralValue.UndefinedValue;
   if IsDataDescriptor(ADescriptor) and ADescriptor.HasValue then
     Value := TGocciaPropertyDescriptorData(ADescriptor).Value;
-  if IsDataDescriptor(ADescriptor) and ADescriptor.HasWritable and
+  if IsDataDescriptor(ADescriptor) and ADescriptor.HasWritableField and
      ADescriptor.Writable then
     Include(Flags, pfWritable);
 
@@ -685,9 +685,9 @@ var
   Setter: TGocciaValue;
 begin
   Flags := ACurrent.Flags;
-  if ADescriptor.HasEnumerable then
+  if ADescriptor.HasEnumerableField then
     Flags := SetFlag(Flags, pfEnumerable, ADescriptor.Enumerable);
-  if ADescriptor.HasConfigurable then
+  if ADescriptor.HasConfigurableField then
     Flags := SetFlag(Flags, pfConfigurable, ADescriptor.Configurable);
 
   if IsAccessorDescriptor(ADescriptor) then
@@ -718,7 +718,7 @@ begin
     end;
     if ADescriptor.HasValue then
       Value := TGocciaPropertyDescriptorData(ADescriptor).Value;
-    if ADescriptor.HasWritable then
+    if ADescriptor.HasWritableField then
       Flags := SetFlag(Flags, pfWritable, ADescriptor.Writable);
     Exit(TGocciaPropertyDescriptorData.Create(Value, Flags));
   end;
@@ -770,11 +770,11 @@ begin
   end;
 
   // §10.1.6.3 step 3a: Cannot make configurable
-  if ANew.HasConfigurable and ANew.Configurable then
+  if ANew.HasConfigurableField and ANew.Configurable then
     Exit(False);
 
   // 3b: Cannot change enumerable
-  if ANew.HasEnumerable and (ACurrent.Enumerable <> ANew.Enumerable) then
+  if ANew.HasEnumerableField and (ACurrent.Enumerable <> ANew.Enumerable) then
     Exit(False);
 
   if IsGenericDescriptor(ANew) then
@@ -806,7 +806,7 @@ begin
     if not CurrentData.Writable then
     begin
       // 3e.i: Cannot make writable once non-writable
-      if ANew.HasWritable and NewData.Writable then
+      if ANew.HasWritableField and NewData.Writable then
         Exit(False);
       // 3e.ii: Cannot change value
       if ANew.HasValue and not IsSameValue(CurrentData.Value, NewData.Value) then

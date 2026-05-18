@@ -399,7 +399,17 @@ end;
 function TGocciaFunctionBase.DeleteProperty(const AName: string): Boolean;
 begin
   if FProperties.ContainsKey(AName) then
-    Exit(inherited DeleteProperty(AName));
+  begin
+    Result := inherited DeleteProperty(AName);
+    if Result then
+    begin
+      if AName = PROP_LENGTH then
+        FHasOwnLengthProperty := False
+      else if AName = PROP_NAME then
+        FHasOwnNameProperty := False;
+    end;
+    Exit;
+  end;
   if (AName = PROP_LENGTH) and FHasOwnLengthProperty then
   begin
     FHasOwnLengthProperty := False;
