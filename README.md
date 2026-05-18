@@ -8,7 +8,7 @@ It's based on the thought "What if we implement ECMAScript today, but without th
 
 ## Features
 
-GocciaScript implements a modern subset of ECMAScript: `let`/`const`, arrow functions, classes with private fields, `for...of`, async/await, ES modules (named only), decorators, and TypeScript-style type annotations. Features that are error-prone, redundant, or security risks (`var`, `function` keyword, `==`/`!=`, `eval`, traditional loops) are excluded by default; selected legacy forms are available through explicit compatibility flags.
+GocciaScript implements a modern subset of ECMAScript: `let`/`const`, arrow functions, classes with private fields, `for...of`, async/await, ES modules, decorators, and TypeScript-style type annotations. Features that are error-prone, redundant, or security risks (`var`, `function` keyword, `==`/`!=`, `eval`, traditional loops) are excluded by default; selected legacy forms are available through explicit compatibility flags.
 
 See [Language](docs/language.md) for the complete specification of supported features, TC39 proposals, and exclusions.
 
@@ -201,7 +201,7 @@ GocciaScript looks like modern JavaScript — with a few intentional differences
 - **Arrow functions only** — `const greet = (name) => \`Hello, ${name}!\`;` (no `function` keyword)
 - **No traditional loops** — `numbers.map((n) => n * 2)` or `for (const n of numbers) { ... }`
 - **Classes** with private fields — `class Account { #balance = 0; ... }`
-- **Named imports/exports only** — `import { add } from "./math.js";` (no default exports)
+- **ES modules** — default, named, and namespace imports/exports are supported; project code prefers named exports for clarity.
 - **Strict equality by default** — `===` and `!==` (`==`/`!=` require `--compat-loose-equality`)
 
 The CLI tools share WHATWG-style import map support with `--import-map=<file.json>`, `--alias key=value`, and automatic `goccia.json` discovery for project-level module aliases.

@@ -45,6 +45,8 @@ procedure CompileImportDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaImportDeclaration);
 procedure CompileExportDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaExportDeclaration);
+procedure CompileExportDefaultDeclaration(const ACtx: TGocciaCompilationContext;
+  const AStmt: TGocciaExportDefaultDeclaration);
 procedure CompileExportVariableDeclaration(
   const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaExportVariableDeclaration);
@@ -2699,6 +2701,65 @@ begin
       EmitInstruction(ACtx, EncodeABx(OP_EXPORT, Reg, NameIdx));
     end;
   end;
+end;
+
+procedure CompileExportDefaultDeclaration(const ACtx: TGocciaCompilationContext;
+  const AStmt: TGocciaExportDefaultDeclaration);
+var
+  Slot: UInt8;
+  LocalIdx, FuncCount: Integer;
+  InferredTemplate: TGocciaFunctionTemplate;
+  NameIdx: UInt16;
+  BindingName: string;
+begin
+  BindingName := AStmt.LocalName;
+  LocalIdx := ACtx.Scope.ResolveLocal(BindingName);
+  if (LocalIdx >= 0) and
+     (ACtx.Scope.GetLocal(LocalIdx).Depth = ACtx.Scope.Depth) then
+    Slot := ACtx.Scope.GetLocal(LocalIdx).Slot
+  else
+    Slot := ACtx.Scope.DeclareLocal(BindingName, True);
+
+  if ACtx.GlobalBackedTopLevel and (ACtx.Scope.Depth = 0) then
+  begin
+    LocalIdx := ACtx.Scope.ResolveLocal(BindingName);
+    if LocalIdx >= 0 then
+      ACtx.Scope.MarkGlobalBacked(LocalIdx);
+  end;
+
+  FuncCount := ACtx.Template.FunctionCount;
+  if (AStmt.Expression is TGocciaClassExpression) and
+     (TGocciaClassExpression(AStmt.Expression).ClassDefinition.Name = '') then
+    CompileClassExpression(ACtx,
+      TGocciaClassExpression(AStmt.Expression).ClassDefinition, Slot,
+      KEYWORD_DEFAULT)
+  else
+    ACtx.CompileExpression(AStmt.Expression, Slot);
+
+  if (BindingName = GOCCIA_DEFAULT_EXPORT_BINDING) and
+     ((AStmt.Expression is TGocciaArrowFunctionExpression) or
+     ((AStmt.Expression is TGocciaMethodExpression) and
+     (TGocciaMethodExpression(AStmt.Expression).Name = ''))) then
+  begin
+    if ACtx.Template.FunctionCount > FuncCount then
+    begin
+      InferredTemplate := ACtx.Template.GetFunction(
+        ACtx.Template.FunctionCount - 1);
+      if (InferredTemplate.Name = '<arrow>') or
+         (InferredTemplate.Name = '<method>') then
+        InferredTemplate.Name := KEYWORD_DEFAULT;
+    end;
+  end;
+
+  LocalIdx := ACtx.Scope.ResolveLocal(BindingName);
+  if (LocalIdx >= 0) and ACtx.Scope.GetLocal(LocalIdx).IsCaptured then
+    EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, Slot, UInt16(Slot)));
+
+  if ACtx.GlobalBackedTopLevel and (ACtx.Scope.Depth = 0) then
+    EmitGlobalDefine(ACtx, Slot, BindingName, True);
+
+  NameIdx := ACtx.Template.AddConstantString(KEYWORD_DEFAULT);
+  EmitInstruction(ACtx, EncodeABx(OP_EXPORT, Slot, NameIdx));
 end;
 
 procedure CompileExportVariableDeclaration(

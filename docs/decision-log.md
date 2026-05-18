@@ -17,6 +17,8 @@ Chronological record of key architectural and implementation decisions, newest f
 
 ---
 
+**2026-05-18** · `engine` — Default imports and exports are supported across interpreter and bytecode script-module execution, including `import name from`, default-plus-named or namespace imports, `export default` expressions, and named default class/function declarations. "Named exports only" is no longer a language restriction; it remains the project convention for internal examples and new project code because named exports keep call sites explicit and refactors easier to review. [language.md § Modules](language.md#modules). [language-tables.md](language-tables.md).
+
 **2026-05-17** · `engine` · [#651](https://github.com/frostney/GocciaScript/pull/651) — Added opt-in `while` and `do...while` JavaScript compatibility behind `--compat-while-loops` / `"compat-while-loops"` in interpreter and bytecode modes. The flag is separate from `--compat-traditional-for-loop`, stays off by default with the existing parser warning/no-op posture, and supports condition testing, `break`, `continue`, `return`, timeout checks, instruction limits, and module/config propagation when enabled. [language.md](language.md#while-and-dowhile).
 
 **2026-05-17** · `testing` · [#645](https://github.com/frostney/GocciaScript/pull/645) — The test262 runner now injects a `"use strict"` directive for `onlyStrict` tests while still passing `--compat-non-strict-mode` to Script tests. This lets strict-only coverage exercise strict `arguments`, `with`, assignment, `delete`, and `this` semantics without losing the parser/runtime support needed for non-strict Script tests. [test262.md](test262.md#strict-mode).
