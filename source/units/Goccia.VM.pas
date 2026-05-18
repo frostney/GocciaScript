@@ -5232,7 +5232,7 @@ begin
     TGocciaClassValue(ATarget).DefineSymbolProperty(
       TGocciaSymbolValue(AKey),
       TGocciaPropertyDescriptorAccessor.Create(
-        AGetter, ExistingSetter, [pfEnumerable, pfConfigurable, pfWritable]));
+        AGetter, ExistingSetter, [pfConfigurable]));
     Exit;
   end;
 
@@ -5257,7 +5257,7 @@ begin
     TGocciaClassValue(ATarget).DefineSymbolProperty(
       TGocciaSymbolValue(AKey),
       TGocciaPropertyDescriptorAccessor.Create(
-        ExistingGetter, ASetter, [pfEnumerable, pfConfigurable, pfWritable]));
+        ExistingGetter, ASetter, [pfConfigurable]));
     Exit;
   end;
 

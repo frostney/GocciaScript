@@ -191,6 +191,29 @@ test("static getter and setter", () => {
   expect(Registry.count).toBe(5);
 });
 
+test("static getters and setters are constructor own accessor descriptors", () => {
+  let stored = 1;
+  class Registry {
+    static get value() {
+      return stored;
+    }
+
+    static set value(next) {
+      stored = next;
+    }
+  }
+
+  const descriptor = Object.getOwnPropertyDescriptor(Registry, "value");
+
+  expect(typeof descriptor.get).toBe("function");
+  expect(typeof descriptor.set).toBe("function");
+  expect(descriptor.enumerable).toBe(false);
+  expect(descriptor.configurable).toBe(true);
+
+  Registry.value = 9;
+  expect(Registry.value).toBe(9);
+});
+
 test("static getter is not on instances", () => {
   class Foo {
     static get bar() {
