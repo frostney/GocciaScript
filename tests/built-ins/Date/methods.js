@@ -45,6 +45,30 @@ describe("Date methods", () => {
     expect(Date.UTC(2024, 5, 15, 11, 30, 45, 123)).toBe(epoch);
   });
 
+  test("Date.UTC() normalizes overflowing date and time fields", () => {
+    expect(Date.UTC(2020, 12, 1)).toBe(Date.UTC(2021, 0, 1));
+    expect(Date.UTC(2020, 0, 32)).toBe(Date.UTC(2020, 1, 1));
+    expect(Date.UTC(2020, -1, 1)).toBe(Date.UTC(2019, 11, 1));
+    expect(Date.UTC(2020, 0, 1, 24, 60, 60, 1000)).toBe(Date.UTC(2020, 0, 2, 1, 1, 1, 0));
+  });
+
+  test("Date.UTC() treats omitted and explicit undefined arguments differently", () => {
+    expect(Number.isNaN(Date.UTC())).toBe(true);
+    expect(Date.UTC(2020)).toBe(Date.UTC(2020, 0, 1));
+    expect(Number.isNaN(Date.UTC(2020, undefined))).toBe(true);
+  });
+
+  test("multi-argument Date constructor normalizes overflowing fields", () => {
+    const value = new Date(2020, 12, 1, 24, 60, 60, 1000);
+    expect(value.getFullYear()).toBe(2021);
+    expect(value.getMonth()).toBe(0);
+    expect(value.getDate()).toBe(2);
+    expect(value.getHours()).toBe(1);
+    expect(value.getMinutes()).toBe(1);
+    expect(value.getSeconds()).toBe(1);
+    expect(value.getMilliseconds()).toBe(0);
+  });
+
   test("setDate() updates the local day and returns epoch ms", () => {
     const value = new Date(2024, 0, 1);
     const result = value.setDate(value.getDate() + 1);

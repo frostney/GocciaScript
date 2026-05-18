@@ -38,6 +38,64 @@ describe.runIf(isIntl && isTemporal)("Intl.DateTimeFormat.prototype.formatRange 
     expect(dtf.formatRange(start, end)).toBe("8/4/2021, 12:30:45 AM – 11:30:45 PM");
   });
 
+  test("localizes large Temporal.PlainDate ranges through ICU", () => {
+    const dtf = new Intl.DateTimeFormat("fr-FR", {
+      weekday: "long",
+      year: "numeric",
+      month: "long",
+      day: "numeric"
+    });
+    const start = new Temporal.PlainDate(10000, 1, 1);
+    const end = new Temporal.PlainDate(10000, 1, 2);
+    expect(dtf.formatRange(start, end)).toBe("samedi 1 – dimanche 2 janvier 10000");
+  });
+
+  test("formats Temporal.PlainDate extremes without Date TimeClip", () => {
+    const dtf = new Intl.DateTimeFormat("en", {
+      weekday: "long",
+      year: "numeric",
+      month: "numeric",
+      day: "numeric",
+      calendar: "iso8601"
+    });
+    const start = new Temporal.PlainDate(-271821, 4, 19);
+    const end = new Temporal.PlainDate(275760, 9, 13);
+    const result = dtf.formatRange(start, end);
+    const weekdays = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+    expect(result).toContain("-271821");
+    expect(result).toContain("19");
+    expect(result).toContain("275760");
+    expect(result).toContain("13");
+    expect(weekdays.some((weekday) => result.includes(weekday))).toBe(true);
+  });
+
+  test("does not collapse Temporal.PlainDate ranges separated by Gregorian cycles", () => {
+    const dtf = new Intl.DateTimeFormat("en-US", {
+      year: "numeric",
+      month: "short",
+      day: "numeric"
+    });
+    const start = new Temporal.PlainDate(10000, 1, 1);
+    const end = new Temporal.PlainDate(10400, 1, 1);
+
+    expect(dtf.formatRange(start, end)).toBe("Jan 1, 10000 – Jan 1, 10400");
+  });
+
+  test("formats Temporal.PlainDate ranges with mixed eras", () => {
+    const dtf = new Intl.DateTimeFormat("en", {
+      calendar: "iso8601",
+      era: "short",
+      year: "numeric",
+      month: "long",
+      day: "numeric"
+    });
+    const start = new Temporal.PlainDate(-271821, 4, 19);
+    const end = new Temporal.PlainDate(275760, 9, 13);
+
+    expect(dtf.formatRange(start, end)).toBe("April 19, -271821 BC – September 13, 275760 AD");
+  });
+
   test("rejects Temporal.ZonedDateTime directly", () => {
     const dtf = new Intl.DateTimeFormat("en-US");
     const start = new Temporal.ZonedDateTime(0n, "UTC");

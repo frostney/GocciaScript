@@ -85,6 +85,12 @@ var
 threadvar
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
 
+const
+  GREGORIAN_CYCLE_YEARS = 400;
+  TEMPORAL_SURROGATE_YEAR_BASE = 2000;
+  TEMPORAL_DIRECT_ICU_YEAR_LIMIT = 9999;
+  TWO_DIGIT_YEAR_MODULUS = 100;
+
 type
   TDateTimeFormattableKind = (dtfkNumber, dtfkPlainDate, dtfkPlainDateTime,
     dtfkPlainTime, dtfkPlainYearMonth, dtfkPlainMonthDay, dtfkInstant,
@@ -490,138 +496,280 @@ begin
   Result := True;
 end;
 
-function Pad2(const AValue: Integer): string;
+function PositiveModulo(const AValue, AModulo: Integer): Integer;
 begin
-  if (AValue >= 0) and (AValue < 10) then
-    Result := '0' + IntToStr(AValue)
-  else
-    Result := IntToStr(AValue);
+  Result := AValue mod AModulo;
+  if Result < 0 then
+    Inc(Result, AModulo);
 end;
 
-function OptionIntegerString(const AValue: Integer; const AOption: string): string;
+function CompareInteger(const ALeft, ARight: Integer): Integer;
 begin
-  if AOption = '2-digit' then
-    Result := Pad2(AValue)
+  if ALeft < ARight then
+    Result := -1
+  else if ALeft > ARight then
+    Result := 1
   else
-    Result := IntToStr(AValue);
+    Result := 0;
 end;
 
-function ISOWeekdayName(const AYear, AMonth, ADay: Integer): string;
+function CompareDateTimeFormattableFields(const ALeft,
+  ARight: TDateTimeFormattable): Integer;
 begin
-  case DayOfWeek(AYear, AMonth, ADay) of
-    1: Result := 'Monday';
-    2: Result := 'Tuesday';
-    3: Result := 'Wednesday';
-    4: Result := 'Thursday';
-    5: Result := 'Friday';
-    6: Result := 'Saturday';
-  else
-    Result := 'Sunday';
-  end;
+  Result := CompareInteger(ALeft.Year, ARight.Year);
+  if Result <> 0 then Exit;
+  Result := CompareInteger(ALeft.Month, ARight.Month);
+  if Result <> 0 then Exit;
+  Result := CompareInteger(ALeft.Day, ARight.Day);
+  if Result <> 0 then Exit;
+  Result := CompareInteger(ALeft.Hour, ARight.Hour);
+  if Result <> 0 then Exit;
+  Result := CompareInteger(ALeft.Minute, ARight.Minute);
+  if Result <> 0 then Exit;
+  Result := CompareInteger(ALeft.Second, ARight.Second);
+  if Result <> 0 then Exit;
+  Result := CompareInteger(ALeft.Millisecond, ARight.Millisecond);
 end;
 
-procedure AppendManualPart(var AParts: TIntlFormatPartArray; const AType,
-  AValue, ASource: string);
+function SurrogateTemporalYear(const AYear: Integer): Integer;
+begin
+  Result := TEMPORAL_SURROGATE_YEAR_BASE +
+    PositiveModulo(AYear - TEMPORAL_SURROGATE_YEAR_BASE,
+      GREGORIAN_CYCLE_YEARS);
+end;
+
+procedure RecomputeDateTimeFormattableMillis(var AInput: TDateTimeFormattable);
+begin
+  AInput.Millis := EpochMillisFromDateTimeParts(AInput.Year, AInput.Month,
+    AInput.Day, AInput.Hour, AInput.Minute, AInput.Second, AInput.Millisecond);
+end;
+
+procedure AlignSurrogateTemporalRangeOrder(const AStartInput,
+  AEndInput: TDateTimeFormattable; var AStartSurrogate,
+  AEndSurrogate: TDateTimeFormattable);
 var
-  Index: Integer;
+  SourceOrder: Integer;
 begin
-  if AValue = '' then
-    Exit;
-  SetLength(AParts, Length(AParts) + 1);
-  Index := Length(AParts) - 1;
-  AParts[Index].PartType := AType;
-  AParts[Index].Value := AValue;
-  AParts[Index].Source := ASource;
+  SourceOrder := CompareDateTimeFormattableFields(AStartInput, AEndInput);
+  if SourceOrder <= 0 then
+    while (SourceOrder < 0) and
+      (CompareDateTimeFormattableFields(AStartSurrogate,
+        AEndSurrogate) >= 0) do
+      Inc(AEndSurrogate.Year, GREGORIAN_CYCLE_YEARS)
+  else
+    while CompareDateTimeFormattableFields(AStartSurrogate,
+      AEndSurrogate) <= 0 do
+      Dec(AEndSurrogate.Year, GREGORIAN_CYCLE_YEARS);
 end;
 
-procedure AppendManualLiteral(var AParts: TIntlFormatPartArray; const AValue,
-  ASource: string);
-begin
-  AppendManualPart(AParts, 'literal', AValue, ASource);
-end;
-
-procedure BuildManualTemporalParts(const AInput: TDateTimeFormattable;
-  const AOptions: TIntlDateTimeFormatOptions; const ASource: string;
-  var AParts: TIntlFormatPartArray);
-var
-  HasPreviousDatePart, HasDate, HasTime: Boolean;
-begin
-  HasPreviousDatePart := False;
-  HasDate := (AOptions.Weekday <> '') or (AOptions.Year <> '') or
-    (AOptions.Month <> '') or (AOptions.Day <> '');
-  HasTime := (AOptions.Hour <> '') or (AOptions.Minute <> '') or
-    (AOptions.Second <> '');
-
-  if AOptions.Weekday <> '' then
-  begin
-    AppendManualPart(AParts, 'weekday',
-      ISOWeekdayName(AInput.Year, AInput.Month, AInput.Day), ASource);
-    HasPreviousDatePart := True;
-  end;
-  if AOptions.Month <> '' then
-  begin
-    if HasPreviousDatePart then
-      AppendManualLiteral(AParts, ', ', ASource);
-    AppendManualPart(AParts, 'month',
-      OptionIntegerString(AInput.Month, AOptions.Month), ASource);
-    HasPreviousDatePart := True;
-  end;
-  if AOptions.Day <> '' then
-  begin
-    if HasPreviousDatePart then
-      AppendManualLiteral(AParts, '/', ASource);
-    AppendManualPart(AParts, 'day', OptionIntegerString(AInput.Day,
-      AOptions.Day), ASource);
-    HasPreviousDatePart := True;
-  end;
-  if AOptions.Year <> '' then
-  begin
-    if HasPreviousDatePart then
-      AppendManualLiteral(AParts, '/', ASource);
-    AppendManualPart(AParts, 'year', IntToStr(AInput.Year), ASource);
-    HasPreviousDatePart := True;
-  end;
-
-  if HasDate and HasTime then
-    AppendManualLiteral(AParts, ', ', ASource);
-  if AOptions.Hour <> '' then
-    AppendManualPart(AParts, 'hour', OptionIntegerString(AInput.Hour,
-      AOptions.Hour), ASource);
-  if AOptions.Minute <> '' then
-  begin
-    if AOptions.Hour <> '' then
-      AppendManualLiteral(AParts, ':', ASource);
-    AppendManualPart(AParts, 'minute', OptionIntegerString(AInput.Minute,
-      AOptions.Minute), ASource);
-  end;
-  if AOptions.Second <> '' then
-  begin
-    if (AOptions.Hour <> '') or (AOptions.Minute <> '') then
-      AppendManualLiteral(AParts, ':', ASource);
-    AppendManualPart(AParts, 'second', OptionIntegerString(AInput.Second,
-      AOptions.Second), ASource);
-  end;
-end;
-
-function NeedsManualTemporalRange(const AStartInput,
+function NeedsTemporalSurrogateRange(const AStartInput,
   AEndInput: TDateTimeFormattable): Boolean;
 begin
   Result := IsTemporalPlainKind(AStartInput.Kind) and
-    ((Abs(AStartInput.Year) > 9999) or (Abs(AEndInput.Year) > 9999));
+    ((Abs(AStartInput.Year) > TEMPORAL_DIRECT_ICU_YEAR_LIMIT) or
+     (Abs(AEndInput.Year) > TEMPORAL_DIRECT_ICU_YEAR_LIMIT));
 end;
 
-function TryManualTemporalRangeToParts(const AStartInput,
-  AEndInput: TDateTimeFormattable; const AOptions: TIntlDateTimeFormatOptions;
-  out AParts: TIntlFormatPartArray): Boolean;
+function LocalizedTemporalYearString(const ALocale: string; const AYear: Integer;
+  const AOptions: TIntlDateTimeFormatOptions): string;
+var
+  NumberOptions: TIntlNumberFormatOptions;
+  YearValue: Integer;
+  Formatted: string;
 begin
-  Result := NeedsManualTemporalRange(AStartInput, AEndInput);
+  NumberOptions := DefaultNumberFormatOptions;
+  NumberOptions.UseGrouping := inugFalse;
+  NumberOptions.MinimumFractionDigits := 0;
+  NumberOptions.MaximumFractionDigits := 0;
+  NumberOptions.NumberingSystem := AOptions.NumberingSystem;
+  YearValue := AYear;
+
+  if AOptions.Year = '2-digit' then
+  begin
+    YearValue := Abs(AYear) mod TWO_DIGIT_YEAR_MODULUS;
+    NumberOptions.MinimumIntegerDigits := 2;
+  end;
+
+  if TryICUFormatNumber(ALocale, YearValue, NumberOptions, Formatted) then
+    Exit(Formatted);
+
+  Result := IntToStr(YearValue);
+  if (AOptions.Year = '2-digit') and (YearValue < 10) then
+    Result := '0' + Result;
+end;
+
+function SameTemporalEra(const AStartYear, AEndYear: Integer): Boolean;
+begin
+  Result := (AStartYear <= 0) = (AEndYear <= 0);
+end;
+
+function LocalizedTemporalEraString(const ALocale: string; const AYear: Integer;
+  const AOptions: TIntlDateTimeFormatOptions): string;
+var
+  EraOptions: TIntlDateTimeFormatOptions;
+  EraParts: TIntlFormatPartArray;
+  EraMillis: Double;
+  I: Integer;
+begin
+  if AOptions.Era = '' then
+    Exit('');
+
+  EraOptions := DefaultDateTimeFormatOptions;
+  EraOptions.Calendar := AOptions.Calendar;
+  EraOptions.NumberingSystem := AOptions.NumberingSystem;
+  EraOptions.TimeZone := 'UTC';
+  EraOptions.Era := AOptions.Era;
+  EraOptions.Year := 'numeric';
+
+  if AYear <= 0 then
+    EraMillis := EpochMillisFromDateTimeParts(-1, 1, 1, 0, 0, 0, 0)
+  else
+    EraMillis := EpochMillisFromDateTimeParts(1, 1, 1, 0, 0, 0, 0);
+
+  if TryICUFormatDateTimeToParts(ALocale, EraMillis, EraOptions, EraParts) then
+    for I := 0 to Length(EraParts) - 1 do
+      if EraParts[I].PartType = 'era' then
+        Exit(EraParts[I].Value);
+
+  if AYear <= 0 then
+    Result := 'BC'
+  else
+    Result := 'AD';
+end;
+
+procedure SetFormatPartSource(var AParts: TIntlFormatPartArray;
+  const ASource: string);
+var
+  I: Integer;
+begin
+  for I := 0 to Length(AParts) - 1 do
+    AParts[I].Source := ASource;
+end;
+
+procedure AppendFormatPartArray(var ADest: TIntlFormatPartArray;
+  const ASrc: TIntlFormatPartArray);
+var
+  I, Index: Integer;
+begin
+  for I := 0 to Length(ASrc) - 1 do
+  begin
+    SetLength(ADest, Length(ADest) + 1);
+    Index := Length(ADest) - 1;
+    ADest[Index] := ASrc[I];
+  end;
+end;
+
+procedure ReplaceTemporalSurrogateParts(var AParts: TIntlFormatPartArray;
+  const ALocale: string; const AStartInput, AEndInput: TDateTimeFormattable;
+  const AOptions: TIntlDateTimeFormatOptions);
+var
+  I: Integer;
+  StartYear, EndYear, StartEra, EndEra: string;
+begin
+  StartYear := LocalizedTemporalYearString(ALocale, AStartInput.Year, AOptions);
+  EndYear := LocalizedTemporalYearString(ALocale, AEndInput.Year, AOptions);
+  StartEra := LocalizedTemporalEraString(ALocale, AStartInput.Year, AOptions);
+  EndEra := LocalizedTemporalEraString(ALocale, AEndInput.Year, AOptions);
+
+  for I := 0 to Length(AParts) - 1 do
+    if AParts[I].PartType = 'year' then
+    begin
+      if AParts[I].Source = 'endRange' then
+        AParts[I].Value := EndYear
+      else
+        AParts[I].Value := StartYear;
+    end
+    else if AParts[I].PartType = 'era' then
+    begin
+      if AParts[I].Source = 'endRange' then
+        AParts[I].Value := EndEra
+      else if AParts[I].Source = 'startRange' then
+        AParts[I].Value := StartEra
+      else if SameTemporalEra(AStartInput.Year, AEndInput.Year) then
+        AParts[I].Value := StartEra;
+    end;
+end;
+
+function TryICUTemporalSurrogateSingleToParts(const ALocale: string;
+  const AInput: TDateTimeFormattable; const AOptions: TIntlDateTimeFormatOptions;
+  const ASource: string; out AParts: TIntlFormatPartArray): Boolean;
+var
+  Surrogate: TDateTimeFormattable;
+begin
+  Surrogate := AInput;
+  Surrogate.Year := SurrogateTemporalYear(AInput.Year);
+  RecomputeDateTimeFormattableMillis(Surrogate);
+  Result := TryICUFormatDateTimeToParts(ALocale, Surrogate.Millis, AOptions,
+    AParts);
   if not Result then
     Exit;
 
+  ReplaceTemporalSurrogateParts(AParts, ALocale, AInput, AInput, AOptions);
+  SetFormatPartSource(AParts, ASource);
+end;
+
+function TryICUTemporalMixedEraRangeToParts(const ALocale: string;
+  const AStartInput, AEndInput: TDateTimeFormattable;
+  const AOptions: TIntlDateTimeFormatOptions;
+  out AParts: TIntlFormatPartArray): Boolean;
+var
+  StartParts, EndParts: TIntlFormatPartArray;
+  LiteralIndex: Integer;
+begin
+  Result := False;
   SetLength(AParts, 0);
-  BuildManualTemporalParts(AStartInput, AOptions, 'startRange', AParts);
-  AppendManualLiteral(AParts, ' – ', 'shared');
-  BuildManualTemporalParts(AEndInput, AOptions, 'endRange', AParts);
+  if (AOptions.Era = '') or SameTemporalEra(AStartInput.Year, AEndInput.Year) then
+    Exit;
+
+  if not TryICUTemporalSurrogateSingleToParts(ALocale, AStartInput, AOptions,
+    'startRange', StartParts) then
+    Exit;
+  if not TryICUTemporalSurrogateSingleToParts(ALocale, AEndInput, AOptions,
+    'endRange', EndParts) then
+    Exit;
+
+  AppendFormatPartArray(AParts, StartParts);
+  SetLength(AParts, Length(AParts) + 1);
+  LiteralIndex := Length(AParts) - 1;
+  AParts[LiteralIndex].PartType := 'literal';
+  AParts[LiteralIndex].Value := ' – ';
+  AParts[LiteralIndex].Source := 'shared';
+  AppendFormatPartArray(AParts, EndParts);
+  Result := True;
+end;
+
+function TryICUTemporalSurrogateRangeToParts(const ALocale: string;
+  const AStartInput, AEndInput: TDateTimeFormattable;
+  const AOptions: TIntlDateTimeFormatOptions;
+  out AParts: TIntlFormatPartArray): Boolean;
+var
+  StartSurrogate, EndSurrogate: TDateTimeFormattable;
+begin
+  Result := False;
+  SetLength(AParts, 0);
+  if not NeedsTemporalSurrogateRange(AStartInput, AEndInput) then
+    Exit;
+
+  if TryICUTemporalMixedEraRangeToParts(ALocale, AStartInput, AEndInput,
+    AOptions, AParts) then
+    Exit(True);
+
+  StartSurrogate := AStartInput;
+  EndSurrogate := AEndInput;
+  StartSurrogate.Year := SurrogateTemporalYear(AStartInput.Year);
+  EndSurrogate.Year := SurrogateTemporalYear(AEndInput.Year);
+  AlignSurrogateTemporalRangeOrder(AStartInput, AEndInput, StartSurrogate,
+    EndSurrogate);
+  RecomputeDateTimeFormattableMillis(StartSurrogate);
+  RecomputeDateTimeFormattableMillis(EndSurrogate);
+
+  if not TryICUFormatDateTimeRangeToParts(ALocale, StartSurrogate.Millis,
+    EndSurrogate.Millis, AOptions, AParts) then
+    Exit;
+
+  ReplaceTemporalSurrogateParts(AParts, ALocale, AStartInput, AEndInput,
+    AOptions);
+  Result := True;
 end;
 
 function FormatPartArrayValue(const AParts: TIntlFormatPartArray): string;
@@ -964,7 +1112,7 @@ var
   DTF: TGocciaIntlDateTimeFormatValue;
   StartMillis, EndMillis: Double;
   StartFormatted, EndFormatted: string;
-  ManualParts: TIntlFormatPartArray;
+  Parts: TIntlFormatPartArray;
   EffectiveOptions: TIntlDateTimeFormatOptions;
   StartInput, EndInput: TDateTimeFormattable;
 begin
@@ -1005,9 +1153,9 @@ begin
       ThrowRangeError('Invalid time value');
   end;
 
-  if TryManualTemporalRangeToParts(StartInput, EndInput, EffectiveOptions,
-    ManualParts) then
-    Exit(TGocciaStringLiteralValue.Create(FormatPartArrayValue(ManualParts)));
+  if TryICUTemporalSurrogateRangeToParts(DTF.FLocale, StartInput, EndInput,
+    EffectiveOptions, Parts) then
+    Exit(TGocciaStringLiteralValue.Create(FormatPartArrayValue(Parts)));
 
   if TryICUFormatDateTimeRange(DTF.FLocale, StartMillis, EndMillis,
     EffectiveOptions, StartFormatted) then
@@ -1071,8 +1219,8 @@ begin
       ThrowRangeError('Invalid time value');
   end;
 
-  if TryManualTemporalRangeToParts(StartInput, EndInput, EffectiveOptions,
-    Parts) then
+  if TryICUTemporalSurrogateRangeToParts(DTF.FLocale, StartInput, EndInput,
+    EffectiveOptions, Parts) then
     Exit(FormatPartsToArray(Parts));
 
   if TryICUFormatDateTimeRangeToParts(DTF.FLocale, StartMillis, EndMillis,
