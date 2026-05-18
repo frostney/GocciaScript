@@ -45,8 +45,6 @@ type
     FPrivateMethods: TOrderedStringMap<TGocciaMethodValue>;
     FPrivateGetters: TOrderedStringMap<TGocciaFunctionBase>;
     FPrivateSetters: TOrderedStringMap<TGocciaFunctionBase>;
-    FStaticGetters: TOrderedStringMap<TGocciaFunctionBase>;
-    FStaticSetters: TOrderedStringMap<TGocciaFunctionBase>;
     FNativeSuperConstructor: TGocciaObjectValue;
     FPrivateBrandToken: string;
     FMethodInitializers: array of TGocciaValue;
@@ -355,8 +353,6 @@ begin
   FPrivateMethods := TOrderedStringMap<TGocciaMethodValue>.Create;
   FPrivateGetters := TOrderedStringMap<TGocciaFunctionBase>.Create;
   FPrivateSetters := TOrderedStringMap<TGocciaFunctionBase>.Create;
-  FStaticGetters := TOrderedStringMap<TGocciaFunctionBase>.Create;
-  FStaticSetters := TOrderedStringMap<TGocciaFunctionBase>.Create;
   FNativeSuperConstructor := nil;
   FClassPrototype := TGocciaObjectValue.Create;
   FConstructorMethod := nil;
@@ -381,8 +377,6 @@ begin
   FPrivateMethods.Free;
   FPrivateGetters.Free;
   FPrivateSetters.Free;
-  FStaticGetters.Free;
-  FStaticSetters.Free;
   // Don't free FClassPrototype - it's GC-managed
   inherited;
 end;
@@ -431,11 +425,6 @@ begin
   for FuncPair in FPrivateGetters do
     FuncPair.Value.MarkReferences;
   for FuncPair in FPrivateSetters do
-    FuncPair.Value.MarkReferences;
-
-  for FuncPair in FStaticGetters do
-    FuncPair.Value.MarkReferences;
-  for FuncPair in FStaticSetters do
     FuncPair.Value.MarkReferences;
 
   // Mark decorator initializer arrays
@@ -561,8 +550,6 @@ var
   ExistingDescriptor: TGocciaPropertyDescriptor;
   ExistingSetter: TGocciaValue;
 begin
-  FStaticGetters.AddOrSetValue(AName, AGetter);
-
   ExistingDescriptor := inherited GetOwnPropertyDescriptor(AName);
   ExistingSetter := nil;
   if (ExistingDescriptor is TGocciaPropertyDescriptorAccessor) and
@@ -579,8 +566,6 @@ var
   ExistingDescriptor: TGocciaPropertyDescriptor;
   ExistingGetter: TGocciaValue;
 begin
-  FStaticSetters.AddOrSetValue(AName, ASetter);
-
   ExistingDescriptor := inherited GetOwnPropertyDescriptor(AName);
   ExistingGetter := nil;
   if (ExistingDescriptor is TGocciaPropertyDescriptorAccessor) and
@@ -687,15 +672,33 @@ begin
 end;
 
 function TGocciaClassValue.GetStaticPropertyGetter(const AName: string): TGocciaFunctionBase;
+var
+  Descriptor: TGocciaPropertyDescriptor;
+  Getter: TGocciaValue;
 begin
-  if not FStaticGetters.TryGetValue(AName, Result) then
-    Result := nil;
+  Result := nil;
+  Descriptor := inherited GetOwnPropertyDescriptor(AName);
+  if Descriptor is TGocciaPropertyDescriptorAccessor then
+  begin
+    Getter := TGocciaPropertyDescriptorAccessor(Descriptor).Getter;
+    if Getter is TGocciaFunctionBase then
+      Result := TGocciaFunctionBase(Getter);
+  end;
 end;
 
 function TGocciaClassValue.GetStaticPropertySetter(const AName: string): TGocciaFunctionBase;
+var
+  Descriptor: TGocciaPropertyDescriptor;
+  Setter: TGocciaValue;
 begin
-  if not FStaticSetters.TryGetValue(AName, Result) then
-    Result := nil;
+  Result := nil;
+  Descriptor := inherited GetOwnPropertyDescriptor(AName);
+  if Descriptor is TGocciaPropertyDescriptorAccessor then
+  begin
+    Setter := TGocciaPropertyDescriptorAccessor(Descriptor).Setter;
+    if Setter is TGocciaFunctionBase then
+      Result := TGocciaFunctionBase(Setter);
+  end;
 end;
 
 procedure TGocciaClassValue.AddFieldInitializer(const AName: string; const AInitializer: TGocciaValue; const AIsPrivate, AIsStatic: Boolean);
@@ -1061,8 +1064,7 @@ end;
 
 function TGocciaClassValue.GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue;
 var
-  Getter: TGocciaFunctionBase;
-  Args: TGocciaArgumentsCollection;
+  Descriptor: TGocciaPropertyDescriptor;
 begin
   if AName = PROP_PROTOTYPE then
   begin
@@ -1073,25 +1075,15 @@ begin
   if FStaticMethods.TryGetValue(AName, Result) then
     Exit;
 
-  if FStaticGetters.TryGetValue(AName, Getter) then
-  begin
-    Args := TGocciaArgumentsCollection.CreateWithCapacity(0);
-    try
-      Result := Getter.Call(Args, AThisContext);
-    finally
-      Args.Free;
-    end;
-    Exit;
-  end;
-
-  if FStaticSetters.ContainsKey(AName) then
-  begin
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-    Exit;
-  end;
-
   if AName = PROP_NAME then
   begin
+    Descriptor := inherited GetOwnPropertyDescriptor(AName);
+    if Assigned(Descriptor) then
+    begin
+      Result := inherited GetPropertyWithContext(AName, AThisContext);
+      Exit;
+    end;
+
     if FName = '<anonymous>' then
       Result := TGocciaStringLiteralValue.Create('')
     else
@@ -1101,6 +1093,13 @@ begin
 
   if AName = PROP_LENGTH then
   begin
+    Descriptor := inherited GetOwnPropertyDescriptor(AName);
+    if Assigned(Descriptor) then
+    begin
+      Result := inherited GetPropertyWithContext(AName, AThisContext);
+      Exit;
+    end;
+
     Result := TGocciaNumberLiteralValue.Create(GetClassLength);
     Exit;
   end;
@@ -1112,30 +1111,23 @@ end;
 
 procedure TGocciaClassValue.SetProperty(const AName: string; const AValue: TGocciaValue);
 var
-  Setter: TGocciaFunctionBase;
-  Args: TGocciaArgumentsCollection;
-  Current: TGocciaClassValue;
+  Descriptor: TGocciaPropertyDescriptor;
 begin
-  Current := Self;
-  repeat
-    if Current.FStaticSetters.TryGetValue(AName, Setter) then
-    begin
-      Args := TGocciaArgumentsCollection.CreateWithCapacity(1);
-      try
-        Args.Add(AValue);
-        Setter.Call(Args, Self);
-      finally
-        Args.Free;
-      end;
-      Exit;
-    end;
-    Current := Current.FSuperClass;
-  until not Assigned(Current);
-
   // .name override via static field or assignment: use DefineProperty to
   // override the synthesized non-writable descriptor (which is configurable)
   if AName = PROP_NAME then
   begin
+    Descriptor := inherited GetOwnPropertyDescriptor(AName);
+    if Assigned(Descriptor) then
+    begin
+      inherited SetProperty(AName, AValue);
+      Descriptor := inherited GetOwnPropertyDescriptor(AName);
+      if (Descriptor is TGocciaPropertyDescriptorData) and
+         (TGocciaPropertyDescriptorData(Descriptor).Value is TGocciaStringLiteralValue) then
+        FName := TGocciaStringLiteralValue(TGocciaPropertyDescriptorData(Descriptor).Value).Value;
+      Exit;
+    end;
+
     if AValue is TGocciaStringLiteralValue then
       FName := TGocciaStringLiteralValue(AValue).Value;
     inherited DefineProperty(AName,

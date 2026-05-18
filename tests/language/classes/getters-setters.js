@@ -214,6 +214,63 @@ test("static getters and setters are constructor own accessor descriptors", () =
   expect(Registry.value).toBe(9);
 });
 
+test("static string accessor descriptors can be redefined or deleted", () => {
+  let setterCalls = 0;
+  class SetterOnly {
+    static set value(next) {
+      setterCalls = next;
+    }
+  }
+
+  Object.defineProperty(SetterOnly, "value", {
+    value: 1,
+    writable: true,
+    configurable: true,
+  });
+  SetterOnly.value = 2;
+
+  expect(SetterOnly.value).toBe(2);
+  expect(setterCalls).toBe(0);
+
+  class GetterOnly {
+    static get value() {
+      return 1;
+    }
+  }
+
+  Object.defineProperty(GetterOnly, "value", {
+    value: 2,
+    writable: true,
+    configurable: true,
+  });
+  expect(GetterOnly.value).toBe(2);
+
+  expect(delete GetterOnly.value).toBe(true);
+  GetterOnly.value = 3;
+  expect(GetterOnly.value).toBe(3);
+});
+
+test("own static data descriptors shadow inherited static setters", () => {
+  class Base {
+    static set value(next) {
+      this.received = next;
+    }
+  }
+
+  class Derived extends Base {}
+
+  Object.defineProperty(Derived, "value", {
+    value: 1,
+    writable: true,
+    configurable: true,
+  });
+  Derived.value = 2;
+
+  expect(Derived.value).toBe(2);
+  expect(Derived.received).toBeUndefined();
+  expect(Base.received).toBeUndefined();
+});
+
 test("static getter is not on instances", () => {
   class Foo {
     static get bar() {

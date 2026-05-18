@@ -3598,12 +3598,17 @@ end;
 
 function TGocciaVMClassValue.GetProperty(const AName: string): TGocciaValue;
 var
+  Descriptor: TGocciaPropertyDescriptor;
   Getter: TGocciaFunctionBase;
-  Current: TGocciaClassValue;
   BytecodeGetter: TGocciaBytecodeFunctionValue;
   Args: TGocciaArgumentsCollection;
 begin
-  Getter := StaticPropertyGetter[AName];
+  Getter := nil;
+  Descriptor := inherited GetOwnPropertyDescriptor(AName);
+  if Descriptor is TGocciaPropertyDescriptorAccessor then
+    if TGocciaPropertyDescriptorAccessor(Descriptor).Getter is TGocciaFunctionBase then
+      Getter := TGocciaFunctionBase(TGocciaPropertyDescriptorAccessor(Descriptor).Getter);
+
   if Assigned(Getter) then
   begin
     if (Getter is TGocciaBytecodeFunctionValue) then
@@ -3629,40 +3634,41 @@ end;
 procedure TGocciaVMClassValue.SetProperty(const AName: string;
   const AValue: TGocciaValue);
 var
+  Descriptor: TGocciaPropertyDescriptor;
   Setter: TGocciaFunctionBase;
-  Current: TGocciaClassValue;
   BytecodeSetter: TGocciaBytecodeFunctionValue;
   Args: TGocciaArgumentsCollection;
 begin
-  Current := Self;
-  repeat
-    Setter := Current.StaticPropertySetter[AName];
-    if Assigned(Setter) then
-    begin
-      if Setter is TGocciaBytecodeFunctionValue then
-      begin
-        BytecodeSetter := TGocciaBytecodeFunctionValue(Setter);
-        if Assigned(BytecodeSetter.FClosure) and
-           Assigned(BytecodeSetter.FClosure.Template) and
-           (not BytecodeSetter.FClosure.Template.IsAsync) then
-        begin
-          FVM.ExecuteClosureRegisters(BytecodeSetter.FClosure, RegisterObject(Self),
-            [ValueToRegister(AValue)]);
-          Exit;
-        end;
-      end;
+  Setter := nil;
+  Descriptor := inherited GetOwnPropertyDescriptor(AName);
+  if Descriptor is TGocciaPropertyDescriptorAccessor then
+    if TGocciaPropertyDescriptorAccessor(Descriptor).Setter is TGocciaFunctionBase then
+      Setter := TGocciaFunctionBase(TGocciaPropertyDescriptorAccessor(Descriptor).Setter);
 
-      Args := TGocciaArgumentsCollection.CreateWithCapacity(1);
-      try
-        Args.Add(AValue);
-        Setter.Call(Args, Self);
-      finally
-        Args.Free;
+  if Assigned(Setter) then
+  begin
+    if Setter is TGocciaBytecodeFunctionValue then
+    begin
+      BytecodeSetter := TGocciaBytecodeFunctionValue(Setter);
+      if Assigned(BytecodeSetter.FClosure) and
+         Assigned(BytecodeSetter.FClosure.Template) and
+         (not BytecodeSetter.FClosure.Template.IsAsync) then
+      begin
+        FVM.ExecuteClosureRegisters(BytecodeSetter.FClosure, RegisterObject(Self),
+          [ValueToRegister(AValue)]);
+        Exit;
       end;
-      Exit;
     end;
-    Current := Current.SuperClass;
-  until not Assigned(Current);
+
+    Args := TGocciaArgumentsCollection.CreateWithCapacity(1);
+    try
+      Args.Add(AValue);
+      Setter.Call(Args, Self);
+    finally
+      Args.Free;
+    end;
+    Exit;
+  end;
 
   inherited SetProperty(AName, AValue);
 end;
