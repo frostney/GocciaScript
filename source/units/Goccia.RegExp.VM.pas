@@ -281,6 +281,16 @@ begin
     Result := AIndex + 1;
 end;
 
+function NormalizeInputIndex(const AInput: TRegExpInput; const AIndex: Integer;
+  const AUnicode: Boolean): Integer;
+begin
+  Result := AIndex;
+  if AUnicode and (AIndex > 0) and (AIndex < AInput.Length) and
+     IsLowSurrogate(AInput.Units[AIndex]) and
+     IsHighSurrogate(AInput.Units[AIndex - 1]) then
+    Dec(Result);
+end;
+
 function RunVM(const AProgram: TRegExpProgram; const AInput: TRegExpInput;
   AStartPos: Integer; var ASlots: array of Integer;
   ASlotCount: Integer; AStartPC: Integer = 0;
@@ -747,7 +757,7 @@ begin
   BuildRegExpInput(AInput, Input);
   SlotCount := (AProgram.CaptureCount + 1) * 2;
   SetLength(Slots, SlotCount);
-  StartPos := AStartIndex;
+  StartPos := NormalizeInputIndex(Input, AStartIndex, AProgram.FullUnicode);
   if ARequireStart then
   begin
     FillChar(Slots[0], SlotCount * SizeOf(Integer), $FF);

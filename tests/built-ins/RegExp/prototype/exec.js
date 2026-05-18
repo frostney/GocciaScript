@@ -122,6 +122,37 @@ test("exec indices use UTF-16 code units in unicode and non-unicode modes", () =
   expect(classMatch.indices[0][1]).toBe(1);
 });
 
+test("unicode exec normalizes lastIndex inside surrogate pairs", () => {
+  const text = String.fromCodePoint(0x1f600);
+
+  const sticky = /./duy;
+  sticky.lastIndex = 1;
+  const stickyMatch = sticky.exec(text);
+  expect(stickyMatch.index).toBe(0);
+  expect(stickyMatch[0].length).toBe(2);
+  expect(stickyMatch.indices[0][0]).toBe(0);
+  expect(stickyMatch.indices[0][1]).toBe(2);
+  expect(sticky.lastIndex).toBe(2);
+
+  const global = /./dug;
+  global.lastIndex = 1;
+  const globalMatch = global.exec(text);
+  expect(globalMatch.index).toBe(0);
+  expect(globalMatch[0].length).toBe(2);
+  expect(globalMatch.indices[0][0]).toBe(0);
+  expect(globalMatch.indices[0][1]).toBe(2);
+  expect(global.lastIndex).toBe(2);
+
+  const nonUnicode = /./dy;
+  nonUnicode.lastIndex = 1;
+  const nonUnicodeMatch = nonUnicode.exec(text);
+  expect(nonUnicodeMatch.index).toBe(1);
+  expect(nonUnicodeMatch[0].length).toBe(1);
+  expect(nonUnicodeMatch.indices[0][0]).toBe(1);
+  expect(nonUnicodeMatch.indices[0][1]).toBe(2);
+  expect(nonUnicode.lastIndex).toBe(2);
+});
+
 test("non-unicode braced unicode escape remains an identity escape", () => {
   const re = new RegExp("\\u{61}", "d");
   const result = re.exec("u".repeat(61));

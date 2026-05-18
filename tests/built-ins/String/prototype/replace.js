@@ -28,6 +28,13 @@ describe('String.prototype.replace', () => {
     expect(result).toBe('hello WORLD');
   });
 
+  test('replace string search uses UTF-16 offsets', () => {
+    const emoji = String.fromCodePoint(0x1f600);
+
+    expect((emoji + 'a').replace('a', '$`')).toBe(emoji + emoji);
+    expect((emoji + 'a').replace('a', (match, offset) => String(offset))).toBe(emoji + '2');
+  });
+
   test('replace supports regex arguments', () => {
     expect('abcabc'.replace(/bc/, 'X')).toBe('aXabc');
     expect('abc'.replace(/(b)(c)/, (match, b, c, index, input) => {

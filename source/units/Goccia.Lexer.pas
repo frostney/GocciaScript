@@ -42,6 +42,9 @@ type
     function PeekNext: Char; inline;
     function Match(const AExpected: Char): Boolean; inline;
     function IsValidIdentifierChar(const C: Char): Boolean; inline;
+    function IsValidIdentifierStartChar(const C: Char): Boolean; inline;
+    function IsValidEscapedIdentifierText(const AText: string;
+      const AAtStart: Boolean): Boolean;
     procedure AppendCurrent(var ASB, ARawSB: TStringBuffer); inline;
     procedure AddToken(const ATokenType: TGocciaTokenType); overload;
     procedure AddToken(const ATokenType: TGocciaTokenType; const ALiteral: string); overload;
@@ -1371,6 +1374,33 @@ begin
   Result := CharInSet(C, ValidIdentifierChars) or (Ord(C) > 127);
 end;
 
+function TGocciaLexer.IsValidIdentifierStartChar(const C: Char): Boolean; inline;
+begin
+  Result := CharInSet(C, ['a'..'z', 'A'..'Z', '_', '$']) or
+            (Ord(C) > 127);
+end;
+
+function TGocciaLexer.IsValidEscapedIdentifierText(const AText: string;
+  const AAtStart: Boolean): Boolean;
+var
+  I: Integer;
+begin
+  if AText = '' then
+    Exit(False);
+
+  if AAtStart and not IsValidIdentifierStartChar(AText[1]) then
+    Exit(False);
+
+  if (not AAtStart) and not IsValidIdentifierChar(AText[1]) then
+    Exit(False);
+
+  for I := 2 to Length(AText) do
+    if not IsValidIdentifierChar(AText[I]) then
+      Exit(False);
+
+  Result := True;
+end;
+
 class procedure TGocciaLexer.InitKeywords;
 begin
   if Assigned(FKeywords) then Exit;
@@ -1427,6 +1457,7 @@ end;
 procedure TGocciaLexer.ScanIdentifier;
 var
   SB: TStringBuffer;
+  EscapedText: string;
   Text: string;
   HadEscape: Boolean;
   TokenType: TGocciaTokenType;
@@ -1441,7 +1472,11 @@ begin
     begin
       Advance;
       Advance;
-      SB.Append(ScanUnicodeEscape);
+      EscapedText := ScanUnicodeEscape;
+      if not IsValidEscapedIdentifierText(EscapedText, SB.Length = 0) then
+        raise TGocciaLexerError.Create('Invalid identifier escape', FLine,
+          FColumn, FFileName, GetSourceLines, SSuggestInvalidCharacter);
+      SB.Append(EscapedText);
       HadEscape := True;
     end
     else
@@ -1636,7 +1671,7 @@ begin
       Dec(FColumn);
       ScanNumber;
     end
-    else if IsValidIdentifierChar(C) then
+    else if IsValidIdentifierStartChar(C) then
     begin
       Dec(FCurrent);
       Dec(FColumn);

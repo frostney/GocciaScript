@@ -1064,6 +1064,7 @@ var
   RegexValue: TGocciaObjectValue;
   MatchArray: TGocciaObjectValue;
   MatchIndex, MatchEnd, NextIndex, Offset: Integer;
+  SearchLength, StringLength: Integer;
 begin
   // ES2026 §22.1.3.19 String.prototype.replace:
   //   1. Let O be ? RequireObjectCoercible(this value).
@@ -1112,20 +1113,23 @@ begin
 
   // §22.1.3.19 step 4: Let searchString be ? ToString(searchValue).
   SearchValue := SearchArg.ToStringLiteral.Value;
+  SearchLength := UTF16CodeUnitLength(SearchValue);
+  StringLength := UTF16CodeUnitLength(StringValue);
 
   // Step 5: Let pos be StringIndexOf(string, searchString, 0)
   // Step 6: If not found, return string
   // Step 7: Replace first occurrence
   if ReplaceArg.IsCallable then
   begin
-    FoundPos := Pos(SearchValue, StringValue);
     if SearchValue = '' then
-      FoundPos := 1;
-    if FoundPos > 0 then
+      FoundPos := 0
+    else
+      FoundPos := UTF16IndexOf(StringValue, SearchValue, 0);
+    if FoundPos >= 0 then
     begin
       CallArgs := TGocciaArgumentsCollection.Create([
         TGocciaStringLiteralValue.Create(SearchValue),
-        TGocciaNumberLiteralValue.Create(FoundPos - 1),
+        TGocciaNumberLiteralValue.Create(FoundPos),
         TGocciaStringLiteralValue.Create(StringValue)
       ]);
       try
@@ -1135,8 +1139,9 @@ begin
         CallArgs.Free;
       end;
       Result := TGocciaStringLiteralValue.Create(
-        Copy(StringValue, 1, FoundPos - 1) + ReplaceValue +
-        Copy(StringValue, FoundPos + Length(SearchValue), Length(StringValue)));
+        UTF16Substring(StringValue, 0, FoundPos) + ReplaceValue +
+        UTF16Substring(StringValue, FoundPos + SearchLength,
+        StringLength - FoundPos - SearchLength));
     end
     else
       Result := TGocciaStringLiteralValue.Create(StringValue);
@@ -1144,17 +1149,21 @@ begin
   else
   begin
     ReplaceValue := ReplaceArg.ToStringLiteral.Value;
-    FoundPos := Pos(SearchValue, StringValue);
+    if SearchValue = '' then
+      FoundPos := 0
+    else
+      FoundPos := UTF16IndexOf(StringValue, SearchValue, 0);
     if SearchValue = '' then
       Result := TGocciaStringLiteralValue.Create(
         ExpandReplacementPattern(ReplaceValue, SearchValue, StringValue, 0,
           [], []) + StringValue)
-    else if FoundPos > 0 then
+    else if FoundPos >= 0 then
       Result := TGocciaStringLiteralValue.Create(
-        Copy(StringValue, 1, FoundPos - 1) +
+        UTF16Substring(StringValue, 0, FoundPos) +
         ExpandReplacementPattern(ReplaceValue, SearchValue, StringValue,
-          FoundPos - 1, [], []) +
-        Copy(StringValue, FoundPos + Length(SearchValue), MaxInt))
+          FoundPos, [], []) +
+        UTF16Substring(StringValue, FoundPos + SearchLength,
+          StringLength - FoundPos - SearchLength))
     else
       Result := TGocciaStringLiteralValue.Create(StringValue);
   end;
@@ -1169,6 +1178,7 @@ var
   CallArgs: TGocciaArgumentsCollection;
   CallResult: TGocciaValue;
   MatchStart, NextOffset, SearchPos, Offset: Integer;
+  SearchLength, StringLength: Integer;
   ReplaceMethod: TGocciaValue;
   RegexValue: TGocciaObjectValue;
   MatchArray: TGocciaObjectValue;
@@ -1226,6 +1236,8 @@ begin
 
   // §22.1.3.20 step 7: Let searchString be ? ToString(searchValue).
   SearchValue := SearchArg.ToStringLiteral.Value;
+  SearchLength := UTF16CodeUnitLength(SearchValue);
+  StringLength := UTF16CodeUnitLength(StringValue);
 
   // Step 5: Let searchLength be the length of searchString
   // Step 6: Find all occurrences of searchString in string
@@ -1242,16 +1254,16 @@ begin
         TGocciaStringLiteralValue.Create(StringValue)
       ]);
       try
-        while Offset <= Length(StringValue) do
+        while Offset <= StringLength do
         begin
           CallArgs.SetElement(1, TGocciaNumberLiteralValue.Create(Offset));
           CallResult := InvokeCallable(ReplaceArg, CallArgs,
             TGocciaUndefinedLiteralValue.UndefinedValue);
           ResultStr := ResultStr + CallResult.ToStringLiteral.Value;
-          if Offset = Length(StringValue) then
+          if Offset = StringLength then
             Break;
-          NextOffset := AdvanceUTF8StringIndex(StringValue, Offset, True);
-          ResultStr := ResultStr + Copy(StringValue, Offset + 1,
+          NextOffset := Offset + 1;
+          ResultStr := ResultStr + UTF16Substring(StringValue, Offset,
             NextOffset - Offset);
           Offset := NextOffset;
         end;
@@ -1262,9 +1274,9 @@ begin
       Exit;
     end;
 
-    Offset := 1;
-    SearchPos := Pos(SearchValue, Copy(StringValue, Offset, Length(StringValue)));
-    if SearchPos = 0 then
+    Offset := 0;
+    SearchPos := UTF16IndexOf(StringValue, SearchValue, Offset);
+    if SearchPos < 0 then
     begin
       Result := TGocciaStringLiteralValue.Create(StringValue);
       Exit;
@@ -1272,21 +1284,22 @@ begin
 
     CallArgs := TGocciaArgumentsCollection.Create([nil, nil, TGocciaStringLiteralValue.Create(StringValue)]);
     try
-      SearchPos := Pos(SearchValue, Copy(StringValue, Offset, Length(StringValue)));
-      while SearchPos > 0 do
+      while SearchPos >= 0 do
       begin
-        ResultStr := ResultStr + Copy(StringValue, Offset, SearchPos - 1);
+        ResultStr := ResultStr + UTF16Substring(StringValue, Offset,
+          SearchPos - Offset);
         CallArgs.SetElement(0, TGocciaStringLiteralValue.Create(SearchValue));
-        CallArgs.SetElement(1, TGocciaNumberLiteralValue.Create(Offset + SearchPos - 2));
+        CallArgs.SetElement(1, TGocciaNumberLiteralValue.Create(SearchPos));
         CallResult := InvokeCallable(ReplaceArg, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
         ResultStr := ResultStr + CallResult.ToStringLiteral.Value;
-        Offset := Offset + SearchPos - 1 + Length(SearchValue);
-        if Offset > Length(StringValue) then
+        Offset := SearchPos + SearchLength;
+        if Offset > StringLength then
           Break;
-        SearchPos := Pos(SearchValue, Copy(StringValue, Offset, Length(StringValue)));
+        SearchPos := UTF16IndexOf(StringValue, SearchValue, Offset);
       end;
-      if Offset <= Length(StringValue) then
-        ResultStr := ResultStr + Copy(StringValue, Offset, Length(StringValue));
+      if Offset <= StringLength then
+        ResultStr := ResultStr + UTF16Substring(StringValue, Offset,
+          StringLength - Offset);
     finally
       CallArgs.Free;
     end;
@@ -1300,14 +1313,14 @@ begin
     if SearchValue = '' then
     begin
       Offset := 0;
-      while Offset <= Length(StringValue) do
+      while Offset <= StringLength do
       begin
         ResultStr := ResultStr + ExpandReplacementPattern(ReplaceValue,
           SearchValue, StringValue, Offset, [], []);
-        if Offset = Length(StringValue) then
+        if Offset = StringLength then
           Break;
-        NextOffset := AdvanceUTF8StringIndex(StringValue, Offset, True);
-        ResultStr := ResultStr + Copy(StringValue, Offset + 1,
+        NextOffset := Offset + 1;
+        ResultStr := ResultStr + UTF16Substring(StringValue, Offset,
           NextOffset - Offset);
         Offset := NextOffset;
       end;
@@ -1315,28 +1328,29 @@ begin
       Exit;
     end;
 
-    Offset := 1;
-    SearchPos := Pos(SearchValue, Copy(StringValue, Offset, Length(StringValue)));
-    if SearchPos = 0 then
+    Offset := 0;
+    SearchPos := UTF16IndexOf(StringValue, SearchValue, Offset);
+    if SearchPos < 0 then
     begin
       Result := TGocciaStringLiteralValue.Create(StringValue);
       Exit;
     end;
 
-    while SearchPos > 0 do
+    while SearchPos >= 0 do
     begin
-      MatchStart := Offset + SearchPos - 2;
-      ResultStr := ResultStr + Copy(StringValue, Offset, SearchPos - 1);
+      MatchStart := SearchPos;
+      ResultStr := ResultStr + UTF16Substring(StringValue, Offset,
+        MatchStart - Offset);
       ResultStr := ResultStr + ExpandReplacementPattern(ReplaceValue,
         SearchValue, StringValue, MatchStart, [], []);
-      Offset := MatchStart + Length(SearchValue) + 1;
-      if Offset > Length(StringValue) then
+      Offset := MatchStart + SearchLength;
+      if Offset > StringLength then
         Break;
-      SearchPos := Pos(SearchValue, Copy(StringValue, Offset,
-        Length(StringValue)));
+      SearchPos := UTF16IndexOf(StringValue, SearchValue, Offset);
     end;
-    if Offset <= Length(StringValue) then
-      ResultStr := ResultStr + Copy(StringValue, Offset, Length(StringValue));
+    if Offset <= StringLength then
+      ResultStr := ResultStr + UTF16Substring(StringValue, Offset,
+        StringLength - Offset);
     Result := TGocciaStringLiteralValue.Create(ResultStr);
   end;
 end;
