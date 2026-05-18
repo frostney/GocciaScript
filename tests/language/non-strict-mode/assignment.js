@@ -118,4 +118,39 @@ describe("non-strict assignment", () => {
     expect(result).toBe(1);
     expect(Object.hasOwn(obj, "added")).toBe(false);
   });
+
+  test("computed array index writes create elements visible to array methods", () => {
+    const array = [];
+
+    array[0] = 0;
+    array[3] = 3;
+
+    expect(0 in array).toBe(true);
+    expect(3 in array).toBe(true);
+    expect(array.length).toBe(4);
+    expect(array[3]).toBe(3);
+
+    expect(array.pop()).toBe(3);
+    expect(array.length).toBe(3);
+    expect(3 in array).toBe(false);
+    expect(array[3]).toBeUndefined();
+    expect(array[2]).toBeUndefined();
+  });
+
+  test("array index deletion side effects are visible during indexOf", () => {
+    const array = [];
+    array[10] = "ten";
+    array.length = 20;
+
+    const fromIndex = {
+      valueOf() {
+        delete array[10];
+        return 3;
+      },
+    };
+
+    expect(array.indexOf("ten", fromIndex)).toBe(-1);
+    expect(10 in array).toBe(false);
+    expect(array[10]).toBeUndefined();
+  });
 });

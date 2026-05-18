@@ -86,3 +86,25 @@ test("Object.defineProperties with empty object", () => {
   Object.defineProperties(obj, {});
   expect(obj).toEqual({});
 });
+
+test("Object.defineProperties preserves array index descriptor attributes", () => {
+  const array = [];
+
+  Object.defineProperties(array, {
+    2: {
+      value: "two",
+      writable: false,
+      enumerable: false,
+      configurable: false,
+    },
+  });
+
+  const desc = Object.getOwnPropertyDescriptor(array, "2");
+  expect(array.length).toBe(3);
+  expect(array[2]).toBe("two");
+  expect(desc.value).toBe("two");
+  expect(desc.writable).toBe(false);
+  expect(desc.enumerable).toBe(false);
+  expect(desc.configurable).toBe(false);
+  expect(Object.keys(array)).not.toContain("2");
+});

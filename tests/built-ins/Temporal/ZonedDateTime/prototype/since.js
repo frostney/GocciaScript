@@ -38,6 +38,20 @@ describe.runIf(isTemporal)("Temporal.ZonedDateTime.prototype.since", () => {
     expect(dur.toString()).toBe("PT5S");
   });
 
+  test("since() handles epoch limits with calendar units", () => {
+    const max = new Temporal.ZonedDateTime(86400_0000_0000_000_000_000n, "UTC");
+    const maxLimit = max.withTimeZone("+02:00");
+    const maxInstance = new Temporal.PlainDateTime(1970, 1, 1, 1, 1, 1, 1, 1, 1).toZonedDateTime("+02:00");
+    expect(maxLimit.since(maxInstance, { largestUnit: "years" }).toString())
+      .toBe("P273790Y8M12DT58M58.998998999S");
+
+    const min = new Temporal.ZonedDateTime(-86400_0000_0000_000_000_000n, "UTC");
+    const minLimit = min.withTimeZone("-08:12");
+    const minInstance = new Temporal.PlainDateTime(1970, 1, 1, 1, 1, 1, 1, 1, 1).toZonedDateTime("-08:12");
+    expect(minLimit.since(minInstance, { largestUnit: "years" }).toString())
+      .toBe("-P273790Y8M12DT9H13M1.001001001S");
+  });
+
   test("since() rounds days using spring-forward day length", () => {
     const start = Temporal.ZonedDateTime.from("2024-03-09T00:00:00-05:00[America/New_York]");
     const beforeHalf = Temporal.ZonedDateTime.from("2024-03-10T12:00:00-04:00[America/New_York]");

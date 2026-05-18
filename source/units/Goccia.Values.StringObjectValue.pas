@@ -1627,7 +1627,9 @@ begin
     RegexValue := CoerceRegExpValue(TGocciaUndefinedLiteralValue.UndefinedValue,
       'g');
 
-  Result := TGocciaRegExpMatchAllIteratorValue.Create(RegexValue, StringValue, True);
+  Result := TGocciaRegExpMatchAllIteratorValue.Create(RegexValue, StringValue,
+    True, HasUnicodeRegExpFlag(RegexValue.GetProperty(PROP_FLAGS)
+    .ToStringLiteral.Value));
 end;
 
 // ES2026 §22.1.3.27 String.prototype.search(regexp)

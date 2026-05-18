@@ -21,6 +21,15 @@ test("continue runs update and skips remainder", () => {
   expect(result).toEqual([0, 1, 3, 4]);
 });
 
+test("continue after closure capture preserves per-iteration binding", () => {
+  const fns = [];
+  for (let i = 0; i < 3; i++) {
+    fns.push(() => i);
+    continue;
+  }
+  expect(fns.map(fn => fn())).toEqual([0, 1, 2]);
+});
+
 test("break in nested loop only exits inner", () => {
   const result = [];
   for (let i = 0; i < 3; i++) {

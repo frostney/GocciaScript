@@ -31,10 +31,13 @@ type
   protected
     FStrictThis: Boolean;
     FStrictCode: Boolean;
+    FHasOwnLengthProperty: Boolean;
+    FHasOwnNameProperty: Boolean;
     // Subclasses should override these to provide name/length
     function GetFunctionLength: Integer; virtual;
     function GetFunctionName: string; virtual;
     function GetSourceText: string; virtual;
+    procedure MaterializeIntrinsicProperty(const AName: string);
   public
     constructor Create;
     class procedure SetSharedPrototypeParent(const AParent: TGocciaObjectValue);
@@ -56,6 +59,9 @@ type
     // name/length as own properties per ECMAScript spec
     function HasOwnProperty(const AName: string): Boolean; override;
     function GetOwnPropertyDescriptor(const AName: string): TGocciaPropertyDescriptor; override;
+    function DeleteProperty(const AName: string): Boolean; override;
+    procedure DefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor); override;
+    function TryDefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor): Boolean; override;
 
     // VMT-based type discrimination
     function IsCallable: Boolean; override;
@@ -80,6 +86,9 @@ type
     FBoundArgs: TGocciaValueList; // Pre-filled arguments when count > 1
     FSingleBoundArg: TGocciaValue;
     FBoundArgCount: Integer;
+    FBoundLength: Double;
+    FBoundName: string;
+    procedure InitializeBoundFunctionProperties;
   protected
     function GetFunctionLength: Integer; override;
     function GetFunctionName: string; override;
@@ -284,6 +293,58 @@ end;
 
 { TGocciaFunctionBase }
 
+function SnapshotBoundFunctionLength(const ATarget: TGocciaValue;
+  const ABoundArgCount: Integer): Double;
+var
+  TargetObject: TGocciaObjectValue;
+  LengthValue: TGocciaValue;
+  LengthNumber: TGocciaNumberLiteralValue;
+begin
+  // ES2026 §20.2.3.2 Function.prototype.bind steps 7-8: read target.length
+  // once while binding, then derive the bound function's own length.
+  Result := 0;
+  if not (ATarget is TGocciaObjectValue) then
+    Exit;
+
+  TargetObject := TGocciaObjectValue(ATarget);
+  if not TargetObject.HasOwnProperty(PROP_LENGTH) then
+    Exit;
+
+  LengthValue := TargetObject.GetProperty(PROP_LENGTH);
+  if not (LengthValue is TGocciaNumberLiteralValue) then
+    Exit;
+
+  LengthNumber := TGocciaNumberLiteralValue(LengthValue);
+  if LengthNumber.IsInfinity then
+  begin
+    Result := Math.Infinity;
+    Exit;
+  end;
+  if LengthNumber.IsNaN or LengthNumber.IsNegativeInfinity then
+    Exit;
+
+  Result := Int(LengthNumber.Value) - ABoundArgCount;
+  if Result < 0 then
+    Result := 0;
+end;
+
+function SnapshotBoundFunctionName(const ATarget: TGocciaValue): string;
+var
+  TargetObject: TGocciaObjectValue;
+  NameValue: TGocciaValue;
+begin
+  // ES2026 §20.2.3.2 steps 9-10: read target.name once while binding.
+  Result := '';
+  if ATarget is TGocciaObjectValue then
+  begin
+    TargetObject := TGocciaObjectValue(ATarget);
+    NameValue := TargetObject.GetProperty(PROP_NAME);
+    if NameValue is TGocciaStringLiteralValue then
+      Result := TGocciaStringLiteralValue(NameValue).Value;
+  end;
+  Result := 'bound ' + Result;
+end;
+
 constructor TGocciaFunctionBase.Create;
 var
   Shared: TGocciaFunctionSharedPrototype;
@@ -291,6 +352,8 @@ begin
   inherited Create;
   FStrictThis := True;
   FStrictCode := True;
+  FHasOwnLengthProperty := True;
+  FHasOwnNameProperty := True;
 
   Shared := GetSharedFunctionPrototype;
   if not Assigned(Shared) and Assigned(CurrentRealm) then
@@ -313,12 +376,22 @@ begin
   // ECMAScript: Function.length and Function.name
   if AName = PROP_LENGTH then
   begin
-    Result := TGocciaNumberLiteralValue.Create(GetFunctionLength);
+    if FProperties.ContainsKey(AName) then
+      Result := inherited GetPropertyWithContext(AName, AThisContext)
+    else if FHasOwnLengthProperty then
+      Result := TGocciaNumberLiteralValue.Create(GetFunctionLength)
+    else
+      Result := inherited GetPropertyWithContext(AName, AThisContext);
     Exit;
   end;
   if AName = PROP_NAME then
   begin
-    Result := TGocciaStringLiteralValue.Create(GetFunctionName);
+    if FProperties.ContainsKey(AName) then
+      Result := inherited GetPropertyWithContext(AName, AThisContext)
+    else if FHasOwnNameProperty then
+      Result := TGocciaStringLiteralValue.Create(GetFunctionName)
+    else
+      Result := inherited GetPropertyWithContext(AName, AThisContext);
     Exit;
   end;
   Result := inherited GetPropertyWithContext(AName, AThisContext);
@@ -341,7 +414,9 @@ end;
 
 function TGocciaFunctionBase.HasOwnProperty(const AName: string): Boolean;
 begin
-  if (AName = PROP_LENGTH) or (AName = PROP_NAME) then
+  if (AName = PROP_LENGTH) and FHasOwnLengthProperty then
+    Result := True
+  else if (AName = PROP_NAME) and FHasOwnNameProperty then
     Result := True
   else
     Result := inherited HasOwnProperty(AName);
@@ -349,14 +424,83 @@ end;
 
 function TGocciaFunctionBase.GetOwnPropertyDescriptor(const AName: string): TGocciaPropertyDescriptor;
 begin
-  if AName = PROP_LENGTH then
+  Result := inherited GetOwnPropertyDescriptor(AName);
+  if Assigned(Result) then
+    Exit;
+
+  if (AName = PROP_LENGTH) and FHasOwnLengthProperty then
     Result := TGocciaPropertyDescriptorData.Create(
       TGocciaNumberLiteralValue.Create(GetFunctionLength), [pfConfigurable])
-  else if AName = PROP_NAME then
+  else if (AName = PROP_NAME) and FHasOwnNameProperty then
     Result := TGocciaPropertyDescriptorData.Create(
       TGocciaStringLiteralValue.Create(GetFunctionName), [pfConfigurable])
   else
-    Result := inherited GetOwnPropertyDescriptor(AName);
+    Result := nil;
+end;
+
+procedure TGocciaFunctionBase.MaterializeIntrinsicProperty(
+  const AName: string);
+begin
+  if FProperties.ContainsKey(AName) then
+    Exit;
+  if (AName = PROP_LENGTH) and FHasOwnLengthProperty then
+    FProperties.Add(AName, TGocciaPropertyDescriptorData.Create(
+      TGocciaNumberLiteralValue.Create(GetFunctionLength), [pfConfigurable]))
+  else if (AName = PROP_NAME) and FHasOwnNameProperty then
+    FProperties.Add(AName, TGocciaPropertyDescriptorData.Create(
+      TGocciaStringLiteralValue.Create(GetFunctionName), [pfConfigurable]));
+end;
+
+function TGocciaFunctionBase.DeleteProperty(const AName: string): Boolean;
+begin
+  if FProperties.ContainsKey(AName) then
+  begin
+    Result := inherited DeleteProperty(AName);
+    if Result then
+    begin
+      if AName = PROP_LENGTH then
+        FHasOwnLengthProperty := False
+      else if AName = PROP_NAME then
+        FHasOwnNameProperty := False;
+    end;
+    Exit;
+  end;
+  if (AName = PROP_LENGTH) and FHasOwnLengthProperty then
+  begin
+    FHasOwnLengthProperty := False;
+    Exit(True);
+  end;
+  if (AName = PROP_NAME) and FHasOwnNameProperty then
+  begin
+    FHasOwnNameProperty := False;
+    Exit(True);
+  end;
+  Result := inherited DeleteProperty(AName);
+end;
+
+procedure TGocciaFunctionBase.DefineProperty(const AName: string;
+  const ADescriptor: TGocciaPropertyDescriptor);
+begin
+  MaterializeIntrinsicProperty(AName);
+  inherited DefineProperty(AName, ADescriptor);
+  if AName = PROP_LENGTH then
+    FHasOwnLengthProperty := True
+  else if AName = PROP_NAME then
+    FHasOwnNameProperty := True;
+end;
+
+function TGocciaFunctionBase.TryDefineProperty(const AName: string;
+  const ADescriptor: TGocciaPropertyDescriptor): Boolean;
+begin
+  MaterializeIntrinsicProperty(AName);
+  Result := inherited TryDefineProperty(AName, ADescriptor);
+  if Result then
+  begin
+    if AName = PROP_LENGTH then
+      FHasOwnLengthProperty := True
+    else if AName = PROP_NAME then
+      FHasOwnNameProperty := True;
+  end;
 end;
 
 function TGocciaFunctionBase.IsCallable: Boolean;
@@ -704,6 +848,7 @@ begin
   FBoundArgs := nil;
   FSingleBoundArg := nil;
   FBoundArgCount := 0;
+  InitializeBoundFunctionProperties;
 end;
 
 constructor TGocciaBoundFunctionValue.CreateWithSingleArg(
@@ -715,6 +860,7 @@ begin
   FBoundArgs := nil;
   FSingleBoundArg := ABoundArg;
   FBoundArgCount := 1;
+  InitializeBoundFunctionProperties;
 end;
 
 constructor TGocciaBoundFunctionValue.Create(const AOriginalFunction: TGocciaValue; const ABoundThis: TGocciaValue; const ABoundArgs: TGocciaValueList);
@@ -727,14 +873,32 @@ begin
   FBoundArgCount := ABoundArgs.Count;
   case ABoundArgs.Count of
     0:
-      ;
+      begin
+        InitializeBoundFunctionProperties;
+      end;
     1:
-      FSingleBoundArg := ABoundArgs[0];
+      begin
+        FSingleBoundArg := ABoundArgs[0];
+        InitializeBoundFunctionProperties;
+      end;
   else
     FBoundArgs := ABoundArgs;
+    InitializeBoundFunctionProperties;
     Exit;
   end;
   ABoundArgs.Free;
+end;
+
+procedure TGocciaBoundFunctionValue.InitializeBoundFunctionProperties;
+begin
+  FBoundLength := SnapshotBoundFunctionLength(FOriginalFunction,
+    FBoundArgCount);
+  FBoundName := SnapshotBoundFunctionName(FOriginalFunction);
+
+  FProperties.Add(PROP_LENGTH, TGocciaPropertyDescriptorData.Create(
+    TGocciaNumberLiteralValue.Create(FBoundLength), [pfConfigurable]));
+  FProperties.Add(PROP_NAME, TGocciaPropertyDescriptorData.Create(
+    TGocciaStringLiteralValue.Create(FBoundName), [pfConfigurable]));
 end;
 
 destructor TGocciaBoundFunctionValue.Destroy;
@@ -873,36 +1037,17 @@ begin
 end;
 
 function TGocciaBoundFunctionValue.GetFunctionLength: Integer;
-var
-  OrigLength: Integer;
-  LengthVal: TGocciaValue;
 begin
-  // ECMAScript: bound function length = max(0, originalLength - boundArgs.length)
-  if FOriginalFunction is TGocciaFunctionBase then
-    OrigLength := TGocciaFunctionBase(FOriginalFunction).GetFunctionLength
-  else if FOriginalFunction is TGocciaClassValue then
-  begin
-    OrigLength := 0;
-    LengthVal := TGocciaClassValue(FOriginalFunction).GetProperty(PROP_LENGTH);
-    if LengthVal is TGocciaNumberLiteralValue then
-      OrigLength := Trunc(TGocciaNumberLiteralValue(LengthVal).Value);
-  end
-  else
-    OrigLength := 0;
-  Result := OrigLength - FBoundArgCount;
-  if Result < 0 then
-    Result := 0;
+  if (FBoundLength <= 0) or IsNan(FBoundLength) then
+    Exit(0);
+  if FBoundLength >= MaxInt then
+    Exit(MaxInt);
+  Result := Trunc(FBoundLength);
 end;
 
 function TGocciaBoundFunctionValue.GetFunctionName: string;
 begin
-  // ECMAScript: bound function name = "bound " + originalName
-  if FOriginalFunction is TGocciaFunctionBase then
-    Result := 'bound ' + TGocciaFunctionBase(FOriginalFunction).GetFunctionName
-  else if FOriginalFunction is TGocciaClassValue then
-    Result := 'bound ' + TGocciaClassValue(FOriginalFunction).Name
-  else
-    Result := 'bound ';
+  Result := FBoundName;
 end;
 
 procedure TGocciaBoundFunctionValue.MarkReferences;

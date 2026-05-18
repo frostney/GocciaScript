@@ -71,6 +71,7 @@ type
     FVarDeclarationsEnabled: Boolean;
     FFunctionDeclarationsEnabled: Boolean;
     FTraditionalForLoopsEnabled: Boolean;
+    FWhileLoopsEnabled: Boolean;
     FLooseEqualityEnabled: Boolean;
     FNonStrictModeEnabled: Boolean;
 
@@ -234,6 +235,8 @@ type
       read FFunctionDeclarationsEnabled write FFunctionDeclarationsEnabled;
     property TraditionalForLoopsEnabled: Boolean
       read FTraditionalForLoopsEnabled write FTraditionalForLoopsEnabled;
+    property WhileLoopsEnabled: Boolean
+      read FWhileLoopsEnabled write FWhileLoopsEnabled;
     property LooseEqualityEnabled: Boolean
       read FLooseEqualityEnabled write FLooseEqualityEnabled;
     property NonStrictModeEnabled: Boolean
@@ -1483,6 +1486,7 @@ function ParseInterpolationExpression(const AExprText, AFileName: string;
   const AASI: Boolean = False; const AVarEnabled: Boolean = False;
   const AFunctionEnabled: Boolean = False;
   const ATraditionalForLoopsEnabled: Boolean = False;
+  const AWhileLoopsEnabled: Boolean = False;
   const ALooseEqualityEnabled: Boolean = False;
   const ANonStrictModeEnabled: Boolean = False): TGocciaExpression;
 var
@@ -1507,6 +1511,7 @@ begin
       Parser.VarDeclarationsEnabled := AVarEnabled;
       Parser.FunctionDeclarationsEnabled := AFunctionEnabled;
       Parser.TraditionalForLoopsEnabled := ATraditionalForLoopsEnabled;
+      Parser.WhileLoopsEnabled := AWhileLoopsEnabled;
       Parser.LooseEqualityEnabled := ALooseEqualityEnabled;
       Parser.NonStrictModeEnabled := ANonStrictModeEnabled;
       try
@@ -1574,7 +1579,7 @@ begin
     ParsedExpr := ParseInterpolationExpression(ExprTexts[I], FFileName,
       FAutomaticSemicolonInsertion, FVarDeclarationsEnabled,
       FFunctionDeclarationsEnabled, FTraditionalForLoopsEnabled,
-      FLooseEqualityEnabled, FNonStrictModeEnabled);
+      FWhileLoopsEnabled, FLooseEqualityEnabled, FNonStrictModeEnabled);
     if Assigned(ParsedExpr) then
       Expressions.Add(ParsedExpr);
   end;
@@ -1637,7 +1642,7 @@ begin
     ParsedExpr := ParseInterpolationExpression(ExprTexts[I], FFileName,
       FAutomaticSemicolonInsertion, FVarDeclarationsEnabled,
       FFunctionDeclarationsEnabled, FTraditionalForLoopsEnabled,
-      FLooseEqualityEnabled, FNonStrictModeEnabled);
+      FWhileLoopsEnabled, FLooseEqualityEnabled, FNonStrictModeEnabled);
     if Assigned(ParsedExpr) then
       Parts.Add(ParsedExpr);
   end;
@@ -4001,13 +4006,7 @@ begin
         Consume(gttRightParen, 'Expected ")" after for...of expression',
           SSuggestCloseParenForOf);
 
-        if Check(gttLeftBrace) then
-        begin
-          Advance;
-          BodyStmt := BlockStatement;
-        end
-        else
-          BodyStmt := Statement;
+        BodyStmt := Statement;
 
         if IsAwait then
         begin
@@ -4213,13 +4212,7 @@ begin
     SSuggestCloseParenExpression);
 
   // ---- BODY ----
-  if Check(gttLeftBrace) then
-  begin
-    Advance;
-    BodyStmt := BlockStatement;
-  end
-  else
-    BodyStmt := Statement;
+  BodyStmt := Statement;
 
   Result := TGocciaForStatement.Create(InitStmt, CondExpr, UpdateExpr,
     BodyStmt, ALine, AColumn);
@@ -4228,41 +4221,80 @@ end;
 function TGocciaParser.WhileStatement: TGocciaStatement;
 var
   Line, Column: Integer;
+  Condition: TGocciaExpression;
+  BodyStmt: TGocciaStatement;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
 
-  AddWarning('''while'' loops are not supported in GocciaScript',
-    'Use array methods like .forEach(), .map(), .filter(), or .reduce() instead',
-    Line, Column);
+  if not FWhileLoopsEnabled then
+  begin
+    AddWarning('''while'' loops are not supported by default in GocciaScript',
+      'Use for...of/array methods, or enable --compat-while-loops',
+      Line, Column);
 
-  SkipBalancedParens;
+    SkipBalancedParens;
+    BodyStmt := Statement;
+    BodyStmt.Free;
 
-  SkipStatementOrBlock;
+    Result := TGocciaEmptyStatement.Create(Line, Column);
+    Exit;
+  end;
 
-  Result := TGocciaEmptyStatement.Create(Line, Column);
+  Consume(gttLeftParen, 'Expected "(" after "while"',
+    SSuggestOpenParenCondition);
+  Condition := Expression;
+  Consume(gttRightParen, 'Expected ")" after while condition',
+    SSuggestCloseParenCondition);
+
+  BodyStmt := Statement;
+
+  Result := TGocciaWhileStatement.Create(Condition, BodyStmt, Line, Column);
 end;
 
 function TGocciaParser.DoWhileStatement: TGocciaStatement;
 var
   Line, Column: Integer;
+  BodyStmt: TGocciaStatement;
+  Condition: TGocciaExpression;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
 
-  AddWarning('''do...while'' loops are not supported in GocciaScript',
-    'Use array methods like .forEach(), .map(), .filter(), or .reduce() instead',
-    Line, Column);
+  if not FWhileLoopsEnabled then
+  begin
+    AddWarning('''do...while'' loops are not supported by default in GocciaScript',
+      'Use for...of/array methods, or enable --compat-while-loops',
+      Line, Column);
 
-  SkipStatementOrBlock;
+    BodyStmt := Statement;
+    try
+      Consume(gttWhile, 'Expected "while" after do body',
+        SSuggestAddWhileAfterDo);
+      SkipBalancedParens;
+      ConsumeSemicolonOrASI('Expected ";" after do-while statement',
+        SSuggestAddSemicolon);
+    finally
+      BodyStmt.Free;
+    end;
+
+    Result := TGocciaEmptyStatement.Create(Line, Column);
+    Exit;
+  end;
+
+  BodyStmt := Statement;
 
   Consume(gttWhile, 'Expected "while" after do body',
     SSuggestAddWhileAfterDo);
-  SkipBalancedParens;
+  Consume(gttLeftParen, 'Expected "(" after "while"',
+    SSuggestOpenParenCondition);
+  Condition := Expression;
+  Consume(gttRightParen, 'Expected ")" after do-while condition',
+    SSuggestCloseParenCondition);
   ConsumeSemicolonOrASI('Expected ";" after do-while statement',
     SSuggestAddSemicolon);
 
-  Result := TGocciaEmptyStatement.Create(Line, Column);
+  Result := TGocciaDoWhileStatement.Create(BodyStmt, Condition, Line, Column);
 end;
 
 function TGocciaParser.WithStatement: TGocciaStatement;

@@ -20,3 +20,13 @@ test("body sees current iteration's binding", () => {
   for (let i = 0; i < 3; i++) result.push(i);
   expect(result).toEqual([0, 1, 2]);
 });
+
+test("continue after capture preserves per-iteration binding in general path", () => {
+  const fns = [];
+  const limit = 3;
+  for (let i = 0; i < limit; i++) {
+    fns.push(() => i);
+    continue;
+  }
+  expect(fns.map(fn => fn())).toEqual([0, 1, 2]);
+});

@@ -1,6 +1,6 @@
 /*---
 description: for...of with continue statement
-features: [for-of]
+features: [for-of, async-await]
 ---*/
 
 describe("for...of continue", () => {
@@ -129,5 +129,53 @@ describe("for...of continue", () => {
     expect(fns.length).toBe(2);
     expect(fns[0]()).toBe(1);
     expect(fns[1]()).toBe(3);
+  });
+
+  test("continue after closure capture preserves per-iteration value", () => {
+    const fns = [];
+    for (const x of [1, 2, 3]) {
+      fns.push(() => x);
+      continue;
+    }
+    expect(fns.map(fn => fn())).toEqual([1, 2, 3]);
+  });
+
+  test("continue after closure capture preserves counted for-of value", () => {
+    const values: number[] = [1, 2, 3];
+    const fns = [];
+    for (const x of values) {
+      fns.push(() => x);
+      continue;
+    }
+    expect(fns.map(fn => fn())).toEqual([1, 2, 3]);
+  });
+
+  test("for-await-of continue after closure capture preserves per-iteration value", () => {
+    const asyncIter = {
+      [Symbol.asyncIterator]() {
+        let i = 0;
+        return {
+          next() {
+            i = i + 1;
+            if (i <= 3)
+              return Promise.resolve({ value: i * 10, done: false });
+            return Promise.resolve({ value: undefined, done: true });
+          }
+        };
+      }
+    };
+
+    const fn = async () => {
+      const fns = [];
+      for await (const value of asyncIter) {
+        fns.push(() => value);
+        continue;
+      }
+      return fns.map(fn => fn());
+    };
+
+    return fn().then((result) => {
+      expect(result).toEqual([10, 20, 30]);
+    });
   });
 });

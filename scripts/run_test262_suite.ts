@@ -196,7 +196,7 @@ const BUNDLED_INCLUDES: Record<string, string> = {
   // the methods they expect.  No stock equivalent — this is host-provided.
   "$262.js": "$262.js",
   // Subsumes stock sta.js + assert.js + compareArray.js.  Stock assert.js
-  // uses `arguments` in `assert.compareArray` and traditional loop shapes
+  // uses `arguments` in `assert.compareArray` and traditional for-loop shapes
   // that still differ from the bundled helper style.
   "assert.js": "assert.js",
   "sta.js": "assert.js",
@@ -219,11 +219,12 @@ const BUNDLED_INCLUDES: Record<string, string> = {
   // Stock uses `arguments` and `for (var i = 0; ...)` in the intrinsics
   // walker.
   "wellKnownIntrinsicObjects.js": "wellKnownIntrinsicObjects.js",
-  // Stock uses `for (...)` loop bodies (Goccia parses them as a warning
-  // then drops the body) in iterator comparators.
+  // Historical adaptation for stock `for (...)` loop bodies in iterator
+  // comparators; re-evaluate against stock now that compatibility flags cover
+  // traditional for-loop semantics.
   "compareIterator.js": "compareIterator.js",
-  // Stock uses `while (...)` for the digit-conversion loop; without it
-  // the function returns wrong results silently.
+  // Historical adaptation for stock `while (...)` in the digit-conversion loop;
+  // re-evaluate against stock now that --compat-while-loops is available.
   "decimalToHexString.js": "decimalToHexString.js",
   // Stock uses `while (...)` in the matcher loop.
   "nativeFunctionMatcher.js": "nativeFunctionMatcher.js",
@@ -664,9 +665,9 @@ interface PerTestRecord {
 
 // test262 source is overwhelmingly semicolon-omitted; ASI is required to parse
 // the corpus.  --compat-var, --compat-function, --compat-traditional-for-loop,
-// --compat-loose-equality, and --unsafe-function-constructor are also
+// --compat-while-loops, --compat-loose-equality, and --unsafe-function-constructor are also
 // unconditional: stock harness uses `var`, `function`, traditional `for(;;)`
-// loops, loose equality, and `Function("return this;")()`.  Non-strict mode
+// loops, while/do-while loops, loose equality, and `Function("return this;")()`.  Non-strict mode
 // compatibility is also enabled for Script-source strict tests: strict
 // directives and modules decide strict semantics, while the flag exposes
 // compatibility-gated syntax and implicit objects needed by the corpus.
@@ -675,6 +676,7 @@ const TEST262_BARE_FLAGS: readonly string[] = [
   "--compat-var",
   "--compat-function",
   "--compat-traditional-for-loop",
+  "--compat-while-loops",
   "--compat-loose-equality",
   "--unsafe-function-constructor",
 ];

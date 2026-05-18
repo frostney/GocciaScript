@@ -25,6 +25,19 @@ describe("Function.length", () => {
     const f = (a, b, ...rest) => {};
     expect(f.length).toBe(2);
   });
+
+  test("deleted materialized length does not resurrect", () => {
+    const f = (a, b) => {};
+
+    Object.defineProperty(f, "length", {
+      value: 10,
+      configurable: true,
+    });
+
+    expect(f.length).toBe(10);
+    expect(delete f.length).toBe(true);
+    expect(Object.getOwnPropertyDescriptor(f, "length")).toBeUndefined();
+  });
 });
 
 describe("Function.name", () => {
@@ -58,5 +71,18 @@ describe("Function.name", () => {
     const obj = { set mySetter(v) {} };
     const desc = Object.getOwnPropertyDescriptor(obj, "mySetter");
     expect(desc.set.name).toBe("set mySetter");
+  });
+
+  test("deleted materialized name does not resurrect", () => {
+    const f = (a) => {};
+
+    Object.defineProperty(f, "name", {
+      value: "renamed",
+      configurable: true,
+    });
+
+    expect(f.name).toBe("renamed");
+    expect(delete f.name).toBe(true);
+    expect(Object.getOwnPropertyDescriptor(f, "name")).toBeUndefined();
   });
 });

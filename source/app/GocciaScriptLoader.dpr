@@ -108,7 +108,7 @@ type
     function ParseSource(const ASource: TStringList; const AFileName: string;
       const APreprocessors: TGocciaPreprocessors; const ASuppressWarnings: Boolean;
       const AASIEnabled, AVarEnabled, AFunctionEnabled,
-        ATraditionalForLoopsEnabled, ALooseEqualityEnabled,
+        ATraditionalForLoopsEnabled, AWhileLoopsEnabled, ALooseEqualityEnabled,
         ANonStrictModeEnabled: Boolean;
       out ALexTimeNanoseconds, AParseTimeNanoseconds: Int64;
       out ASourceMap: TGocciaSourceMap): TGocciaProgram;
@@ -333,7 +333,7 @@ function TScriptLoaderApp.ParseSource(const ASource: TStringList;
   const AFileName: string; const APreprocessors: TGocciaPreprocessors;
   const ASuppressWarnings: Boolean; const AASIEnabled, AVarEnabled,
   AFunctionEnabled, ATraditionalForLoopsEnabled,
-  ALooseEqualityEnabled, ANonStrictModeEnabled: Boolean;
+  AWhileLoopsEnabled, ALooseEqualityEnabled, ANonStrictModeEnabled: Boolean;
   out ALexTimeNanoseconds, AParseTimeNanoseconds: Int64;
   out ASourceMap: TGocciaSourceMap): TGocciaProgram;
 var
@@ -371,6 +371,7 @@ begin
       Parser.VarDeclarationsEnabled := AVarEnabled;
       Parser.FunctionDeclarationsEnabled := AFunctionEnabled;
       Parser.TraditionalForLoopsEnabled := ATraditionalForLoopsEnabled;
+      Parser.WhileLoopsEnabled := AWhileLoopsEnabled;
       Parser.LooseEqualityEnabled := ALooseEqualityEnabled;
       Parser.NonStrictModeEnabled := ANonStrictModeEnabled;
       try
@@ -646,8 +647,9 @@ begin
 
       ProgramNode := ParseSource(ASource, AFileName, TGocciaEngine.DefaultPreprocessors,
         IsJsonOutput, Engine.ASIEnabled, Engine.VarEnabled, Engine.FunctionEnabled,
-        Engine.TraditionalForLoopsEnabled, Engine.LooseEqualityEnabled,
-        Engine.NonStrictModeEnabled or (Engine.SourceType = stModule),
+        Engine.TraditionalForLoopsEnabled, Engine.WhileLoopsEnabled,
+        Engine.LooseEqualityEnabled, Engine.NonStrictModeEnabled or
+        (Engine.SourceType = stModule),
         Result.Timing.LexTimeNanoseconds,
         Result.Timing.ParseTimeNanoseconds, SourceMap);
       try

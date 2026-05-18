@@ -49,6 +49,8 @@ type
   published
     function IntlNumberFormatFormat(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function IntlNumberFormatFormatToParts(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function IntlNumberFormatFormatRange(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function IntlNumberFormatFormatRangeToParts(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function IntlNumberFormatResolvedOptions(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
@@ -67,6 +69,7 @@ uses
   Goccia.ObjectModel.Types,
   Goccia.Realm,
   Goccia.Values.ArrayValue,
+  Goccia.Values.BigIntValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
@@ -337,6 +340,111 @@ begin
     Result := MinusSign + Result;
 end;
 
+function NumberRangeSeparator(const AOptions: TIntlNumberFormatOptions): string;
+begin
+  if (AOptions.Style = insDecimal) and (AOptions.SignDisplay = insdAuto) then
+    Result := '–'
+  else
+    Result := ' – ';
+end;
+
+procedure SetPartsSource(var AParts: TIntlFormatPartArray; const ASource: string);
+var
+  I: Integer;
+begin
+  for I := 0 to Length(AParts) - 1 do
+    AParts[I].Source := ASource;
+end;
+
+procedure AppendPartArray(var ADest: TIntlFormatPartArray;
+  const ASrc: TIntlFormatPartArray);
+var
+  I, OldLength: Integer;
+begin
+  OldLength := Length(ADest);
+  SetLength(ADest, OldLength + Length(ASrc));
+  for I := 0 to Length(ASrc) - 1 do
+    ADest[OldLength + I] := ASrc[I];
+end;
+
+function TryGetNumberPartsWithFallback(const ALocale: string; AValue: Double;
+  const AOptions: TIntlNumberFormatOptions; const ASource: string;
+  out AParts: TIntlFormatPartArray): Boolean;
+var
+  Formatted: string;
+begin
+  Result := True;
+  if not TryICUFormatNumberToParts(ALocale, AValue, AOptions, AParts) then
+  begin
+    if TryICUFormatNumber(ALocale, AValue, AOptions, Formatted) then
+    begin
+      SetLength(AParts, 1);
+      AParts[0].PartType := 'literal';
+      AParts[0].Value := Formatted;
+    end
+    else
+    begin
+      SetLength(AParts, 1);
+      AParts[0].PartType := 'literal';
+      AParts[0].Value := FormatNumberWithCLDR(AValue, ALocale, AOptions);
+    end;
+  end;
+  SetPartsSource(AParts, ASource);
+end;
+
+function IsIntlDecimalString(const AValue: string): Boolean;
+var
+  I: Integer;
+  HasDigit: Boolean;
+begin
+  Result := False;
+  HasDigit := False;
+  if AValue = '' then
+    Exit;
+
+  for I := 1 to Length(AValue) do
+  begin
+    if (AValue[I] >= '0') and (AValue[I] <= '9') then
+      HasDigit := True
+    else if not (AValue[I] in ['+', '-', '.', 'e', 'E']) then
+      Exit;
+  end;
+
+  Result := HasDigit;
+end;
+
+function TryReadDecimalRangeInput(const AValue: TGocciaValue;
+  out ANumber: Double; out ADecimal: string; out AHasDecimal: Boolean): Boolean;
+var
+  S: string;
+begin
+  Result := False;
+  ADecimal := '';
+  AHasDecimal := False;
+
+  if AValue is TGocciaBigIntValue then
+  begin
+    ADecimal := TGocciaBigIntValue(AValue).Value.ToString;
+    AHasDecimal := True;
+    if not TryStrToFloat(ADecimal, ANumber, InvariantFormatSettings) then
+      ANumber := 0;
+    Exit(True);
+  end;
+
+  if AValue is TGocciaStringLiteralValue then
+  begin
+    S := Trim(TGocciaStringLiteralValue(AValue).Value);
+    if IsIntlDecimalString(S) then
+    begin
+      ADecimal := S;
+      AHasDecimal := True;
+    end;
+  end;
+
+  ANumber := AValue.ToNumberLiteral.Value;
+  Result := not IsNan(ANumber);
+end;
+
 { TGocciaIntlNumberFormatValue }
 
 procedure TGocciaIntlNumberFormatValue.ReadOptions(const AOptions: TGocciaObjectValue);
@@ -537,6 +645,10 @@ begin
         gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddNamedMethod('formatToParts', IntlNumberFormatFormatToParts, 1,
         gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddNamedMethod('formatRange', IntlNumberFormatFormatRange, 2,
+        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddNamedMethod('formatRangeToParts', IntlNumberFormatFormatRangeToParts, 2,
+        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddNamedMethod('resolvedOptions', IntlNumberFormatResolvedOptions, 0,
         gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddSymbolDataProperty(
@@ -603,6 +715,110 @@ begin
     Parts[0].Value := FormatNumberWithCLDR(NumValue, NF.FLocale, NF.FResolvedOptions);
     Result := FormatPartsToArray(Parts);
   end;
+end;
+
+function TGocciaIntlNumberFormatValue.IntlNumberFormatFormatRange(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  NF: TGocciaIntlNumberFormatValue;
+  StartValue, EndValue: Double;
+  StartDecimal, EndDecimal, Formatted, StartFormatted, EndFormatted: string;
+  StartHasDecimal, EndHasDecimal: Boolean;
+begin
+  NF := AsNumberFormat(AThisValue, 'Intl.NumberFormat.prototype.formatRange');
+  if AArgs.Length < 2 then
+    ThrowTypeError('Intl.NumberFormat.prototype.formatRange requires start and end values');
+  if (AArgs.GetElement(0) is TGocciaUndefinedLiteralValue) or
+     (AArgs.GetElement(1) is TGocciaUndefinedLiteralValue) then
+    ThrowTypeError('Intl.NumberFormat.prototype.formatRange requires defined start and end values');
+
+  if not TryReadDecimalRangeInput(AArgs.GetElement(0), StartValue, StartDecimal, StartHasDecimal) then
+    ThrowRangeError('Intl.NumberFormat.prototype.formatRange start value must not be NaN');
+  if not TryReadDecimalRangeInput(AArgs.GetElement(1), EndValue, EndDecimal, EndHasDecimal) then
+    ThrowRangeError('Intl.NumberFormat.prototype.formatRange end value must not be NaN');
+
+  if StartHasDecimal and EndHasDecimal and
+     TryICUFormatNumberDecimalRange(NF.FLocale, StartDecimal, EndDecimal,
+       NF.FResolvedOptions, Formatted) then
+    Exit(TGocciaStringLiteralValue.Create(Formatted));
+
+  if TryICUFormatNumberRange(NF.FLocale, StartValue, EndValue,
+    NF.FResolvedOptions, Formatted) then
+    Exit(TGocciaStringLiteralValue.Create(Formatted));
+
+  if not TryICUFormatNumber(NF.FLocale, StartValue, NF.FResolvedOptions, StartFormatted) then
+    StartFormatted := FormatNumberWithCLDR(StartValue, NF.FLocale, NF.FResolvedOptions);
+  if not TryICUFormatNumber(NF.FLocale, EndValue, NF.FResolvedOptions, EndFormatted) then
+    EndFormatted := FormatNumberWithCLDR(EndValue, NF.FLocale, NF.FResolvedOptions);
+
+  if StartFormatted = EndFormatted then
+    Formatted := '~' + StartFormatted
+  else
+    Formatted := StartFormatted + NumberRangeSeparator(NF.FResolvedOptions) + EndFormatted;
+  Result := TGocciaStringLiteralValue.Create(Formatted);
+end;
+
+function TGocciaIntlNumberFormatValue.IntlNumberFormatFormatRangeToParts(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  NF: TGocciaIntlNumberFormatValue;
+  StartValue, EndValue: Double;
+  StartDecimal, EndDecimal, StartFormatted, EndFormatted: string;
+  StartHasDecimal, EndHasDecimal: Boolean;
+  Parts, StartParts, EndParts: TIntlFormatPartArray;
+  Index: Integer;
+begin
+  NF := AsNumberFormat(AThisValue, 'Intl.NumberFormat.prototype.formatRangeToParts');
+  if AArgs.Length < 2 then
+    ThrowTypeError('Intl.NumberFormat.prototype.formatRangeToParts requires start and end values');
+  if (AArgs.GetElement(0) is TGocciaUndefinedLiteralValue) or
+     (AArgs.GetElement(1) is TGocciaUndefinedLiteralValue) then
+    ThrowTypeError('Intl.NumberFormat.prototype.formatRangeToParts requires defined start and end values');
+
+  if not TryReadDecimalRangeInput(AArgs.GetElement(0), StartValue, StartDecimal, StartHasDecimal) then
+    ThrowRangeError('Intl.NumberFormat.prototype.formatRangeToParts start value must not be NaN');
+  if not TryReadDecimalRangeInput(AArgs.GetElement(1), EndValue, EndDecimal, EndHasDecimal) then
+    ThrowRangeError('Intl.NumberFormat.prototype.formatRangeToParts end value must not be NaN');
+
+  if StartHasDecimal and EndHasDecimal and
+     TryICUFormatNumberDecimalRangeToParts(NF.FLocale, StartDecimal, EndDecimal,
+       NF.FResolvedOptions, Parts) then
+    Exit(FormatPartsToArray(Parts));
+
+  if TryICUFormatNumberRangeToParts(NF.FLocale, StartValue, EndValue,
+    NF.FResolvedOptions, Parts) then
+    Exit(FormatPartsToArray(Parts));
+
+  if not TryICUFormatNumber(NF.FLocale, StartValue, NF.FResolvedOptions, StartFormatted) then
+    StartFormatted := FormatNumberWithCLDR(StartValue, NF.FLocale, NF.FResolvedOptions);
+  if not TryICUFormatNumber(NF.FLocale, EndValue, NF.FResolvedOptions, EndFormatted) then
+    EndFormatted := FormatNumberWithCLDR(EndValue, NF.FLocale, NF.FResolvedOptions);
+
+  if StartFormatted = EndFormatted then
+  begin
+    TryGetNumberPartsWithFallback(NF.FLocale, StartValue, NF.FResolvedOptions,
+      'shared', StartParts);
+    SetLength(Parts, 1);
+    Parts[0].PartType := 'approximatelySign';
+    Parts[0].Value := '~';
+    Parts[0].Source := 'shared';
+    AppendPartArray(Parts, StartParts);
+  end
+  else
+  begin
+    TryGetNumberPartsWithFallback(NF.FLocale, StartValue, NF.FResolvedOptions,
+      'startRange', StartParts);
+    TryGetNumberPartsWithFallback(NF.FLocale, EndValue, NF.FResolvedOptions,
+      'endRange', EndParts);
+    SetLength(Parts, 0);
+    AppendPartArray(Parts, StartParts);
+    SetLength(Parts, Length(Parts) + 1);
+    Index := Length(Parts) - 1;
+    Parts[Index].PartType := 'literal';
+    Parts[Index].Value := NumberRangeSeparator(NF.FResolvedOptions);
+    Parts[Index].Source := 'shared';
+    AppendPartArray(Parts, EndParts);
+  end;
+
+  Result := FormatPartsToArray(Parts);
 end;
 
 function TGocciaIntlNumberFormatValue.IntlNumberFormatResolvedOptions(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;

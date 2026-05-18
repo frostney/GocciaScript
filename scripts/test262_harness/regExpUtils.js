@@ -5,7 +5,7 @@
 //   - const/let (no var)
 //   - arrow functions (no function keyword)
 //   - === / !== (no == / !=)
-//   - for...of / array methods (no traditional loops)
+//   - for...of / array methods (no traditional for or while forms)
 //   - semicolons required
 
 const REGEXP_UTILS_CHUNK_SIZE = 10000;

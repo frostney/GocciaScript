@@ -261,6 +261,12 @@ begin
     Goccia.Compiler.Statements.CompileForOfStatement(Ctx, TGocciaForOfStatement(AStmt))
   else if AStmt is TGocciaForStatement then
     Goccia.Compiler.Statements.CompileForStatement(Ctx, TGocciaForStatement(AStmt))
+  else if AStmt is TGocciaWhileStatement then
+    Goccia.Compiler.Statements.CompileWhileStatement(Ctx,
+      TGocciaWhileStatement(AStmt))
+  else if AStmt is TGocciaDoWhileStatement then
+    Goccia.Compiler.Statements.CompileDoWhileStatement(Ctx,
+      TGocciaDoWhileStatement(AStmt))
   else if AStmt is TGocciaClassDeclaration then
     Goccia.Compiler.Statements.CompileClassDeclaration(Ctx,
       TGocciaClassDeclaration(AStmt))
@@ -521,6 +527,8 @@ var
   IfStmt: TGocciaIfStatement;
   ForOf: TGocciaForOfStatement;
   ForStmt: TGocciaForStatement;
+  WhileStmt: TGocciaWhileStatement;
+  DoWhileStmt: TGocciaDoWhileStatement;
   TryStmt: TGocciaTryStatement;
   SwitchStmt: TGocciaSwitchStatement;
   WithStmt: TGocciaWithStatement;
@@ -565,6 +573,16 @@ begin
     if Assigned(ForStmt.Init) then
       HoistVarLocals(ForStmt.Init, AScope);
     HoistVarLocals(ForStmt.Body, AScope);
+  end
+  else if ANode is TGocciaWhileStatement then
+  begin
+    WhileStmt := TGocciaWhileStatement(ANode);
+    HoistVarLocals(WhileStmt.Body, AScope);
+  end
+  else if ANode is TGocciaDoWhileStatement then
+  begin
+    DoWhileStmt := TGocciaDoWhileStatement(ANode);
+    HoistVarLocals(DoWhileStmt.Body, AScope);
   end
   else if ANode is TGocciaWithStatement then
   begin

@@ -1,4 +1,4 @@
-<!-- doc-length-limit: 900 -->
+<!-- doc-length-limit: 1000 -->
 # Language
 
 *GocciaScript's ECMAScript subset: what we implement, TC39 proposals, and what we exclude.*
@@ -7,9 +7,9 @@
 
 - **Modern subset** — `let`/`const`, arrow functions, classes with private fields, `for...of`, async/await, ES modules
 - **TC39 proposals** — Decorators, decorator metadata, pattern matching, types as comments, enums, `Math.clamp`
-- **Excluded by design** — `eval`, `while` / `do...while`, wildcard re-exports
-- **Graceful handling** — Parser-recognized excluded syntax (`==`/`!=` when `--compat-loose-equality` is off, `while`/`do...while`, `with` when `--compat-non-strict-mode` is off, traditional `for(;;)` when `--compat-traditional-for-loop` is off) parses successfully but executes as a no-op with a warning and suggestion
-- **Opt-in toggles** — ASI (`--asi`), `var` declarations (`--compat-var`), `function` keyword (`--compat-function`), non-strict Script compatibility (`--compat-non-strict-mode` for `arguments`, `with`, silent assignment failures, legacy `delete` returns, and sloppy `this`), loose equality (`--compat-loose-equality`), traditional `for(init; test; update)` loops (`--compat-traditional-for-loop`), runtime type enforcement (`--strict-types`)
+- **Excluded by design** — `eval`, wildcard re-exports
+- **Graceful handling** — Parser-recognized excluded or disabled syntax (`==`/`!=` when `--compat-loose-equality` is off, `while`/`do...while` when `--compat-while-loops` is off, `with` when `--compat-non-strict-mode` is off, traditional `for(;;)` when `--compat-traditional-for-loop` is off) parses successfully but executes as a no-op with a warning and suggestion
+- **Opt-in toggles** — ASI (`--asi`), `var` declarations (`--compat-var`), `function` keyword (`--compat-function`), non-strict Script compatibility (`--compat-non-strict-mode` for `arguments`, `with`, silent assignment failures, legacy `delete` returns, and sloppy `this`), loose equality (`--compat-loose-equality`), traditional `for(init; test; update)` loops (`--compat-traditional-for-loop`), `while`/`do...while` loops (`--compat-while-loops`), runtime type enforcement (`--strict-types`)
 - **Default preprocessors** — JSX (enabled by default via `DefaultPreprocessors`)
 
 GocciaScript implements a curated subset of ECMAScript. This document details what's supported, what's excluded, and the rationale for each decision. For quick-reference tables of every feature and TC39 proposal, see [Language Tables](language-tables.md).
@@ -133,6 +133,7 @@ class Counter {
 - `return`
 - Block statements
 - `for...of` and `for await...of` (see [Supported Iteration](#supported-iteration))
+- `while` and `do...while` via `--compat-while-loops` (see [`while` and `do...while`](#while-and-dowhile))
 - `import`/`export` (ES module system)
 
 ### Explicit Resource Management
@@ -766,16 +767,16 @@ When enabled, GocciaScript follows the ECMAScript ASI rules (ES2026 §12.10):
 
 ### Traditional `for(init; test; update)` Loop
 
-**Opt-in.** Excluded by default; use `for...of`, `for await...of`, or array methods. Available via `--compat-traditional-for-loop` (CLI flag, `Engine.TraditionalForLoopsEnabled`, or `{"compat-traditional-for-loop": true}` in config).
+**Opt-in for JavaScript compatibility.** Excluded by default. Available via `--compat-traditional-for-loop` (CLI flag, `Engine.TraditionalForLoopsEnabled`, or `{"compat-traditional-for-loop": true}` in config) when a program or conformance suite needs ECMAScript `for(init; test; update)` semantics.
 
-When disabled (default), the parser accepts the syntax but treats it as a no-op and emits a warning suggesting array methods or the flag. When enabled, `for(init; test; update) body` is fully supported in both interpreter and bytecode modes:
+When disabled (default), the parser accepts the syntax but treats it as a no-op and emits a warning. When enabled, `for(init; test; update) body` is fully supported in both interpreter and bytecode modes:
 
 - `let`/`const` in init create a fresh per-iteration lexical environment per [ES2026 §14.7.4.4](https://tc39.es/ecma262/#sec-runtime-semantics-forbodyevaluation), so closures captured during iteration N pin to that iteration's binding (the textbook `fns.push(() => i)` case yields `[0, 1, 2]`, not `[3, 3, 3]`).
-- `var` in init requires both `--compat-var` and the new flag, hoists out of the loop, and is shared across iterations (closures all see the final value).
+- `var` in init requires both `--compat-var` and `--compat-traditional-for-loop`, hoists out of the loop, and is shared across iterations (closures all see the final value).
 - All header parts are optional (`for(;;){…break}`, `for(;c;){…}`, `for(i;;u)`); comma expressions and destructuring are supported in init/update; `break`/`continue`/`return` unwind as in `for...of`.
 - The bytecode compiler reuses the counted-loop pattern from `CompileCountedForOf` for `for(let i = N; i <op> M; i++ | i--)` shapes (rejecting `var`/`const` and bodies that mutate the loop var); the general path uses an outer scope for the canonical slot plus a per-iteration `BeginScope`/`EndScope` cycle with `OP_CLOSE_UPVALUE` for captures.
 
-Traditional loops still encourage imperative, mutation-heavy code. GocciaScript continues to favor functional iteration through array methods and `for...of`:
+The flag exists to run code that depends on JavaScript loop semantics, such as test262 cases or compatibility harnesses. It does not change the default GocciaScript iteration guidance, which remains `for...of`, `for await...of`, or array methods:
 
 ```javascript
 // Instead of: for (let i = 0; i < items.length; i++) { ... }
@@ -786,11 +787,32 @@ items.filter((item) => item.isValid);
 items.reduce((acc, item) => acc + item, 0);
 ```
 
-`break` exits the nearest enclosing `switch`, `for...of`, `for await...of`, or (with the flag enabled) traditional `for(;;)` loop. `continue` only applies to iteration constructs — `for...of`, `for await...of`, and traditional `for(;;)` — never to `switch`.
+`break` exits the nearest enclosing `switch`, `for...of`, `for await...of`, enabled traditional `for` loop, or enabled `while`/`do...while` loop. `continue` only applies to iteration constructs — `for...of`, `for await...of`, enabled traditional `for`, and enabled `while`/`do...while` — never to `switch`.
 
 ### `while` and `do...while`
 
-**Excluded.** Use `for(;;)` (with `--compat-traditional-for-loop`), `for...of`, or array methods instead. The parser accepts the syntax but treats it as a no-op (the body is not executed) and emits a warning.
+**Opt-in for JavaScript compatibility.** Excluded by default. Available via `--compat-while-loops` (CLI flag, `Engine.WhileLoopsEnabled`, or `{"compat-while-loops": true}` in config) when a program or conformance suite needs ECMAScript `while` or `do...while` semantics.
+
+When disabled (default), the parser accepts `while` and `do...while` syntax but treats each loop as a no-op and emits a warning. When enabled, both loop forms are supported in interpreter and bytecode modes:
+
+- `while (condition) body` evaluates the condition before each iteration and skips the body when the initial condition is falsy.
+- `do body while (condition);` runs the body once before testing the condition.
+- `break`, `continue`, and `return` unwind as they do in other supported loops.
+- Timeouts and instruction limits are checked during loop execution.
+
+```javascript
+let i = 0;
+let sum = 0;
+
+while (i < 5) {
+  sum += i;
+  i++;
+}
+
+do {
+  sum++;
+} while (sum < 20);
+```
 
 ### `with` Statement
 
@@ -815,7 +837,7 @@ Warning: Labeled statements are not supported in GocciaScript
 
 The labeled statement itself (the statement after the `:`) is still parsed and executed normally. For example, `myLabel: x = 2;` strips the label and executes `x = 2;`. If the labeled statement is itself unsupported (e.g., `outer: for (...)`), both a label warning and a loop warning are emitted.
 
-Labels exist primarily for `break`/`continue` targets in nested loops. GocciaScript supports `for...of`, `for await...of`, and (with `--compat-traditional-for-loop`) traditional `for(;;)`, but doesn't implement labeled `break`/`continue` against any of them; nested-loop control flow uses `return` from a closure or an early-exit flag.
+Labels exist primarily for `break`/`continue` targets in nested loops. GocciaScript supports `for...of`, `for await...of`, traditional `for(;;)` with `--compat-traditional-for-loop`, and `while`/`do...while` with `--compat-while-loops`, but doesn't implement labeled `break`/`continue` against any of them; nested-loop control flow uses `return` from a closure or an early-exit flag.
 
 ### Generators and Iterators
 

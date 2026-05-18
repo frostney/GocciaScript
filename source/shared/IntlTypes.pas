@@ -35,6 +35,7 @@ type
   TIntlFormatPart = record
     PartType: string;
     Value: string;
+    Source: string;
   end;
   TIntlFormatPartArray = array of TIntlFormatPart;
 
