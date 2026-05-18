@@ -1077,7 +1077,8 @@ begin
             else if Peek.TokenType in [gttIf, gttElse, gttConst, gttLet, gttClass, gttEnum, gttExtends, gttNew, gttThis, gttSuper, gttStatic,
                                        gttReturn, gttFor, gttWhile, gttDo, gttSwitch, gttCase, gttDefault, gttBreak, gttContinue,
                                        gttThrow, gttTry, gttCatch, gttFinally, gttImport, gttExport, gttFrom, gttAs,
-                                       gttTrue, gttFalse, gttNull, gttTypeof, gttVoid, gttInstanceof, gttIn, gttDelete, gttVar, gttWith] then
+                                       gttTrue, gttFalse, gttNull, gttTypeof, gttVoid, gttInstanceof, gttIn, gttDelete, gttVar, gttWith,
+                                       gttFunction] then
               PropertyName := Advance.Lexeme  // Reserved words are allowed as property names
             else
               raise TGocciaSyntaxError.Create('Expected property name after "."', Peek.Line, Peek.Column, FFileName, FSourceLines,
@@ -1792,7 +1793,8 @@ begin
           else if Peek.TokenType in [gttIf, gttElse, gttConst, gttLet, gttClass, gttEnum, gttExtends, gttNew, gttThis, gttSuper, gttStatic,
                                      gttReturn, gttFor, gttWhile, gttDo, gttSwitch, gttCase, gttDefault, gttBreak, gttContinue,
                                      gttThrow, gttTry, gttCatch, gttFinally, gttImport, gttExport, gttFrom, gttAs,
-                                     gttTrue, gttFalse, gttNull, gttTypeof, gttVoid, gttInstanceof, gttIn, gttDelete, gttVar, gttWith] then
+                                     gttTrue, gttFalse, gttNull, gttTypeof, gttVoid, gttInstanceof, gttIn, gttDelete, gttVar, gttWith,
+                                     gttFunction] then
           begin
             Token := Advance;
             // Reserved words are valid property names after "." per ES spec
@@ -2773,7 +2775,8 @@ begin
     else if Match([gttIf, gttElse, gttConst, gttLet, gttClass, gttEnum, gttExtends, gttNew, gttThis, gttSuper, gttStatic,
                    gttReturn, gttFor, gttWhile, gttDo, gttSwitch, gttCase, gttDefault, gttBreak, gttContinue,
                    gttThrow, gttTry, gttCatch, gttFinally, gttImport, gttExport, gttFrom, gttAs,
-                   gttTrue, gttFalse, gttNull, gttTypeof, gttVoid, gttInstanceof, gttIn, gttDelete, gttVar, gttWith]) then
+                   gttTrue, gttFalse, gttNull, gttTypeof, gttVoid, gttInstanceof, gttIn, gttDelete, gttVar, gttWith,
+                   gttFunction]) then
       Key := Previous.Lexeme  // Reserved words are allowed as property names
     else
       raise TGocciaSyntaxError.Create('Expected property name', Peek.Line, Peek.Column, FFileName, FSourceLines,
@@ -4955,8 +4958,9 @@ begin
               (TGocciaMethodExpression(DefaultValue).Name <> '') then
         DefaultLocalName := TGocciaMethodExpression(DefaultValue).Name;
     end;
-    ConsumeSemicolonOrASI('Expected ";" after default export',
-      SSuggestAddSemicolon);
+    if not DirectDefaultDeclaration then
+      ConsumeSemicolonOrASI('Expected ";" after default export',
+        SSuggestAddSemicolon);
     Result := TGocciaExportDefaultDeclaration.Create(DefaultValue,
       DefaultLocalName, Line, Column);
     Exit;

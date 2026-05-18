@@ -13,6 +13,15 @@ import NamedDefaultClass, {
   localNamedDefaultClassName,
   localNamedDefaultClassType
 } from "./helpers/default-named-class.js";
+import DefaultClassBeforeStatement, {
+  defaultClassFollowingStatementHit
+} from "./helpers/default-class-following-statement.js";
+import NamedDefaultClassBeforeStatement, {
+  defaultNamedClassFollowingStatementHit,
+  localFollowingNamedDefaultClassName
+} from "./helpers/default-named-class-following-statement.js";
+import defaultAwaitRegexp from "./helpers/default-await-regexp.js";
+import defaultAwaitObjectWithFunctionMethod from "./helpers/default-await-object-function-method.js";
 
 describe("default export", () => {
   test("exports an expression as default", () => {
@@ -38,5 +47,21 @@ describe("default export", () => {
     expect(NamedDefaultClass.name).toBe("NamedDefaultClass");
     expect(localNamedDefaultClassType).toBe("function");
     expect(localNamedDefaultClassName).toBe("NamedDefaultClass");
+  });
+
+  test("allows default class declarations before a following statement", () => {
+    expect(DefaultClassBeforeStatement.name).toBe("default");
+    expect(defaultClassFollowingStatementHit).toBe(1);
+  });
+
+  test("allows named default class declarations before a following statement", () => {
+    expect(NamedDefaultClassBeforeStatement.name).toBe("FollowingNamedDefaultClass");
+    expect(localFollowingNamedDefaultClassName).toBe("FollowingNamedDefaultClass");
+    expect(defaultNamedClassFollowingStatementHit).toBe(1);
+  });
+
+  test("exports top-level await expressions with regex and object method operands", () => {
+    expect(defaultAwaitRegexp.test("1")).toBe(true);
+    expect(defaultAwaitObjectWithFunctionMethod.function()).toBe("method");
   });
 });

@@ -66,4 +66,10 @@ describe("async functions", () => {
 
     expect(await new Counter().read()).toBe(42);
   });
+
+  test("await can still be an identifier before division outside async code", () => {
+    const half = (await) => await / 2;
+
+    expect(half(6)).toBe(3);
+  });
 });

@@ -101,6 +101,7 @@ APIs from WHATWG and W3C specifications — not part of ECMA-262, but widely exp
 |----------|-------|--------|
 | [Decorators](https://github.com/tc39/proposal-decorators) | 3 | Supported — class, method, field, getter/setter, auto-accessor decorators with `addInitializer` |
 | [Decorator Metadata](https://github.com/tc39/proposal-decorator-metadata) | 3 | Supported — `Symbol.metadata` for decorator-attached class metadata with inheritance |
+| [Import Defer](https://tc39.es/proposal-defer-import-eval/) | 3 | Not supported |
 | [Joint Iteration](https://github.com/tc39/proposal-joint-iteration) | 3 | Supported — `Iterator.zip` and `Iterator.zipKeyed` |
 | [`Math.clamp`](https://github.com/tc39/proposal-math-clamp) | 2 | Supported |
 | [Pattern Matching](https://tc39.es/proposal-pattern-matching/) | 1 | Supported — `value is Pattern`, `match`, filtered `for...of` / `for await...of`, and pattern catches |

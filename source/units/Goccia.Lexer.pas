@@ -1499,7 +1499,11 @@ begin
     '/':
       if Match('=') then
         AddToken(gttSlashAssign)
-      else if FCanStartRegex then
+      else if FCanStartRegex or
+              ((FTokens.Count > 0) and
+              (FTokens[FTokens.Count - 1].TokenType = gttIdentifier) and
+              (FTokens[FTokens.Count - 1].Lexeme = KEYWORD_AWAIT) and
+              (not IsAtEnd) and (not CharInSet(Peek, [' ', #9, #10, #13]))) then
         ScanRegexLiteral
       else
         AddToken(gttSlash);
