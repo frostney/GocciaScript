@@ -48,6 +48,12 @@ describe("TypedArray.prototype.set", () => {
       const ta = new TA(3);
       expect(() => ta.set([1, 2], 2)).toThrow(RangeError);
     });
+
+    test("throws when target buffer is already detached", () => {
+      const ta = new TA(3);
+      ta.buffer.transfer();
+      expect(() => ta.set([1])).toThrow(TypeError);
+    });
   });
 
   describe("set from array-like", () => {
@@ -85,6 +91,28 @@ describe("TypedArray.prototype.set", () => {
       const ta = new Int32Array(3);
       expect(() => ta.set({ 0: 1, 1: 2, length: 2 }, 2)).toThrow(RangeError);
     });
+
+    test("array-like length getter can detach target buffer", () => {
+      const ta = new Int32Array(4);
+      const buffer = ta.buffer;
+      let sourceRead = false;
+      ta.set({
+        get 0() {
+          sourceRead = true;
+          return 17;
+        },
+        get length() {
+          buffer.transfer();
+          return 1;
+        }
+      }, 1);
+
+      expect(buffer.detached).toBe(true);
+      expect(sourceRead).toBe(true);
+      expect(ta.length).toBe(0);
+      expect(ta.byteLength).toBe(0);
+      expect(ta.byteOffset).toBe(0);
+    });
   });
 
   test.each([BigInt64Array, BigUint64Array])("%s set from BigInt typed array", (TA) => {
@@ -94,5 +122,12 @@ describe("TypedArray.prototype.set", () => {
     expect(dst[0]).toBe(0n);
     expect(dst[1]).toBe(10n);
     expect(dst[2]).toBe(20n);
+  });
+
+  test("throws when typed array source buffer is already detached", () => {
+    const src = new Int32Array([1]);
+    const dst = new Int32Array(1);
+    src.buffer.transfer();
+    expect(() => dst.set(src)).toThrow(TypeError);
   });
 });

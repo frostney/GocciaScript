@@ -84,7 +84,7 @@ Represents a Unicode locale identifier with parsed subtags and extension keys.
 | `getNumberingSystems()` | Return an array of preferred numbering systems |
 | `getTimeZones()` | Return an array of preferred time zones |
 | `getTextInfo()` | Return an object with `direction` (`"ltr"` or `"rtl"`) |
-| `getWeekInfo()` | Return an object with `firstDay`, `weekend`, `minimalDays` |
+| `getWeekInfo()` | Return an object with `firstDay` and `weekend` |
 | `toString()` | Return the canonical locale string |
 
 ## Intl.Collator

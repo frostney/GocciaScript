@@ -28,10 +28,44 @@ describe("TypedArray.prototype.find", () => {
       ta.find(x => { count++; return x === 3; });
       expect(count).toBe(3);
     });
+
+    test("continues after predicate detaches buffer", () => {
+      const ta = new TA(2);
+      const buffer = ta.buffer;
+      const seen = [];
+      const found = ta.find((value) => {
+        seen.push(value);
+        if (seen.length === 1) {
+          buffer.transfer();
+        }
+        return false;
+      });
+
+      expect(found).toBeUndefined();
+      expect(seen.length).toBe(2);
+      expect(seen[1]).toBeUndefined();
+    });
   });
 
   test.each([BigInt64Array, BigUint64Array])("%s find", (TA) => {
     const ta = new TA([1n, 2n, 3n]);
     expect(ta.find(x => x > 1n)).toBe(2n);
+  });
+
+  test.each([BigInt64Array, BigUint64Array])("%s continues after predicate detaches buffer", (TA) => {
+    const ta = new TA(2);
+    const buffer = ta.buffer;
+    const seen = [];
+    const found = ta.find((value) => {
+      seen.push(value);
+      if (seen.length === 1) {
+        buffer.transfer();
+      }
+      return false;
+    });
+
+    expect(found).toBeUndefined();
+    expect(seen.length).toBe(2);
+    expect(seen[1]).toBeUndefined();
   });
 });

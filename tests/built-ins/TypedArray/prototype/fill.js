@@ -47,6 +47,16 @@ describe("TypedArray.prototype.fill", () => {
       expect(ta[3]).toBe(9);
       expect(ta[4]).toBe(5);
     });
+
+    test("throws if value coercion detaches buffer before fill", () => {
+      const ta = new TA(2);
+      expect(() => ta.fill({
+        valueOf() {
+          ta.buffer.transfer();
+          return 7;
+        }
+      })).toThrow(TypeError);
+    });
   });
 
   describe.each([BigInt64Array, BigUint64Array])("%s", (TA) => {

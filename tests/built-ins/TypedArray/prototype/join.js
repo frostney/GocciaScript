@@ -33,6 +33,17 @@ describe("TypedArray.prototype.join", () => {
       const ta = new TA([1, 2]);
       expect(() => ta.join(Symbol())).toThrow(TypeError);
     });
+
+    test("uses empty fields if separator coercion detaches buffer", () => {
+      const ta = new TA([1, 2, 3]);
+      const joined = ta.join({
+        toString() {
+          ta.buffer.transfer();
+          return ",";
+        }
+      });
+      expect(joined).toBe(",,");
+    });
   });
 
   test.each([BigInt64Array, BigUint64Array])("%s join", (TA) => {

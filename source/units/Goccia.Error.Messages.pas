@@ -278,6 +278,7 @@ resourcestring
 
   // TypedArray errors
   SErrorTypedArrayRequiresTypedArray = '%s requires a TypedArray';
+  SErrorCannotUseDetachedTypedArray = '%s cannot be used with a detached ArrayBuffer';
   SErrorTypedArraySetRequiresArg = 'TypedArray.prototype.set requires at least one argument';
   SErrorTypedArraySetOffsetNonNegative = 'TypedArray.prototype.set offset must be >= 0';
   SErrorTypedArraySetArgType = 'TypedArray.prototype.set argument must be an array or typed array';

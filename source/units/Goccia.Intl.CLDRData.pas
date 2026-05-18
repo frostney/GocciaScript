@@ -28,6 +28,16 @@ function TryGetCurrencyInfo(const ALocale, ACurrency: string;
   out ASymbol, ANarrowSymbol: string; out ADigits: Integer): Boolean;
 function TryGetNumberSymbol(const ALocale, ASymbolName: string;
   out AValue: string): Boolean;
+function TryGetLocaleCalendars(const ARegion: string; out ACalendars: IntlTypes.TStringArray): Boolean;
+function TryGetLocaleCollations(out ACollations: IntlTypes.TStringArray): Boolean;
+function TryGetLocaleHourCycles(const ALocale, ARegion: string;
+  out AHourCycles: IntlTypes.TStringArray): Boolean;
+function TryGetLocaleNumberingSystems(const ALocale: string;
+  out ANumberingSystems: IntlTypes.TStringArray): Boolean;
+function TryGetLocaleTimeZones(const ARegion: string; out ATimeZones: IntlTypes.TStringArray): Boolean;
+function TryGetLocaleTextDirection(const ALocale: string; out ADirection: string): Boolean;
+function TryGetLocaleWeekInfo(const ARegion: string; out AFirstDay,
+  AWeekendStart, AWeekendEnd, AMinimalDays: Integer): Boolean;
 
 implementation
 
@@ -454,6 +464,71 @@ begin
   Result := TryGetKeyValue(Resource, DataOffset, DataLength, AKey, AValue);
 end;
 
+function TryLookupKeyWithFallback(const ASectionName, AKey: string;
+  out AValue: string): Boolean;
+var
+  Candidate: string;
+  DashPos: Integer;
+begin
+  Result := False;
+  AValue := '';
+
+  Candidate := AKey;
+  repeat
+    if TryLookupSimple(ASectionName, Candidate, AValue) then
+    begin
+      Result := True;
+      Exit;
+    end;
+
+    DashPos := Length(Candidate);
+    while (DashPos > 0) and (Candidate[DashPos] <> '-') do
+      Dec(DashPos);
+    if DashPos <= 0 then
+      Break;
+    Candidate := Copy(Candidate, 1, DashPos - 1);
+  until Candidate = '';
+end;
+
+function TryLookupRegionWithDefault(const ASectionName, ARegion: string;
+  out AValue: string): Boolean;
+begin
+  Result := TryLookupSimple(ASectionName, ARegion, AValue);
+  if not Result then
+    Result := TryLookupSimple(ASectionName, '001', AValue);
+end;
+
+function SplitSpaceSeparated(const AValue: string): IntlTypes.TStringArray;
+var
+  Count, StartIndex, Index: Integer;
+begin
+  Count := 0;
+  SetLength(Result, 0);
+  StartIndex := 1;
+
+  for Index := 1 to Length(AValue) + 1 do
+  begin
+    if (Index > Length(AValue)) or (AValue[Index] = ' ') then
+    begin
+      if Index > StartIndex then
+      begin
+        Inc(Count);
+        SetLength(Result, Count);
+        Result[Count - 1] := Copy(AValue, StartIndex, Index - StartIndex);
+      end;
+      StartIndex := Index + 1;
+    end;
+  end;
+end;
+
+function TryParseInteger(const AValue: string; out ANumber: Integer): Boolean;
+var
+  ErrorCode: Integer;
+begin
+  Val(AValue, ANumber, ErrorCode);
+  Result := ErrorCode = 0;
+end;
+
 function TryGetLikelySubtags(const ATag: string; out AMaximized: string): Boolean;
 begin
   Result := TryLookupSimple('likely-subtags', LowerCase(ATag), AMaximized);
@@ -796,6 +871,111 @@ begin
   Result := TryLookupWithFallback('number-symbols/', ALocale, ASymbolName, AValue);
 end;
 
+function TryGetLocaleCalendars(const ARegion: string; out ACalendars: IntlTypes.TStringArray): Boolean;
+var
+  Value: string;
+begin
+  Result := TryLookupRegionWithDefault('locale-calendars', ARegion, Value);
+  if Result then
+    ACalendars := SplitSpaceSeparated(Value)
+  else
+    SetLength(ACalendars, 0);
+end;
+
+function TryGetLocaleCollations(out ACollations: IntlTypes.TStringArray): Boolean;
+var
+  Value: string;
+begin
+  Result := TryLookupSimple('locale-collations', 'default', Value);
+  if Result then
+    ACollations := SplitSpaceSeparated(Value)
+  else
+    SetLength(ACollations, 0);
+end;
+
+function TryGetLocaleHourCycles(const ALocale, ARegion: string;
+  out AHourCycles: IntlTypes.TStringArray): Boolean;
+var
+  Value: string;
+begin
+  Result := (ALocale <> '') and
+    TryLookupKeyWithFallback('locale-hour-cycles', ALocale, Value);
+  if not Result then
+    Result := TryLookupRegionWithDefault('locale-hour-cycles', ARegion, Value);
+
+  if Result then
+    AHourCycles := SplitSpaceSeparated(Value)
+  else
+    SetLength(AHourCycles, 0);
+end;
+
+function TryGetLocaleNumberingSystems(const ALocale: string;
+  out ANumberingSystems: IntlTypes.TStringArray): Boolean;
+var
+  Value: string;
+begin
+  Result := TryLookupKeyWithFallback('locale-numbering-systems', ALocale, Value);
+  if not Result then
+    Result := TryLookupSimple('locale-numbering-systems', 'und', Value);
+
+  if Result then
+    ANumberingSystems := SplitSpaceSeparated(Value)
+  else
+    SetLength(ANumberingSystems, 0);
+end;
+
+function TryGetLocaleTimeZones(const ARegion: string; out ATimeZones: IntlTypes.TStringArray): Boolean;
+var
+  Value: string;
+begin
+  Result := TryLookupSimple('locale-time-zones', ARegion, Value);
+  if Result then
+    ATimeZones := SplitSpaceSeparated(Value)
+  else
+    SetLength(ATimeZones, 0);
+end;
+
+function TryGetLocaleTextDirection(const ALocale: string; out ADirection: string): Boolean;
+begin
+  Result := TryLookupKeyWithFallback('locale-text-directions', ALocale, ADirection);
+  if not Result then
+  begin
+    ADirection := 'ltr';
+    Result := True;
+  end;
+end;
+
+function TryGetLocaleWeekInfo(const ARegion: string; out AFirstDay,
+  AWeekendStart, AWeekendEnd, AMinimalDays: Integer): Boolean;
+var
+  Value: string;
+  FirstColon, SecondColon, ThirdColon: Integer;
+begin
+  AFirstDay := 1;
+  AWeekendStart := 6;
+  AWeekendEnd := 7;
+  AMinimalDays := 1;
+
+  Result := TryLookupRegionWithDefault('locale-week-info', ARegion, Value);
+  if not Result then
+    Exit;
+
+  FirstColon := Pos(':', Value);
+  SecondColon := Pos(':', Copy(Value, FirstColon + 1, Length(Value)));
+  if SecondColon > 0 then
+    Inc(SecondColon, FirstColon);
+  ThirdColon := Pos(':', Copy(Value, SecondColon + 1, Length(Value)));
+  if ThirdColon > 0 then
+    Inc(ThirdColon, SecondColon);
+
+  Result := (FirstColon > 0) and (SecondColon > FirstColon) and
+    (ThirdColon > SecondColon) and
+    TryParseInteger(Copy(Value, 1, FirstColon - 1), AFirstDay) and
+    TryParseInteger(Copy(Value, FirstColon + 1, SecondColon - FirstColon - 1), AWeekendStart) and
+    TryParseInteger(Copy(Value, SecondColon + 1, ThirdColon - SecondColon - 1), AWeekendEnd) and
+    TryParseInteger(Copy(Value, ThirdColon + 1, Length(Value) - ThirdColon), AMinimalDays);
+end;
+
 {$ELSE}
 
 function TryGetLikelySubtags(const ATag: string; out AMaximized: string): Boolean;
@@ -893,6 +1073,54 @@ function TryGetNumberSymbol(const ALocale, ASymbolName: string;
 begin
   Result := False;
   AValue := '';
+end;
+
+function TryGetLocaleCalendars(const ARegion: string; out ACalendars: IntlTypes.TStringArray): Boolean;
+begin
+  Result := False;
+  SetLength(ACalendars, 0);
+end;
+
+function TryGetLocaleCollations(out ACollations: IntlTypes.TStringArray): Boolean;
+begin
+  Result := False;
+  SetLength(ACollations, 0);
+end;
+
+function TryGetLocaleHourCycles(const ALocale, ARegion: string;
+  out AHourCycles: IntlTypes.TStringArray): Boolean;
+begin
+  Result := False;
+  SetLength(AHourCycles, 0);
+end;
+
+function TryGetLocaleNumberingSystems(const ALocale: string;
+  out ANumberingSystems: IntlTypes.TStringArray): Boolean;
+begin
+  Result := False;
+  SetLength(ANumberingSystems, 0);
+end;
+
+function TryGetLocaleTimeZones(const ARegion: string; out ATimeZones: IntlTypes.TStringArray): Boolean;
+begin
+  Result := False;
+  SetLength(ATimeZones, 0);
+end;
+
+function TryGetLocaleTextDirection(const ALocale: string; out ADirection: string): Boolean;
+begin
+  Result := False;
+  ADirection := '';
+end;
+
+function TryGetLocaleWeekInfo(const ARegion: string; out AFirstDay,
+  AWeekendStart, AWeekendEnd, AMinimalDays: Integer): Boolean;
+begin
+  Result := False;
+  AFirstDay := 0;
+  AWeekendStart := 0;
+  AWeekendEnd := 0;
+  AMinimalDays := 0;
 end;
 
 {$ENDIF}
