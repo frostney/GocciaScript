@@ -56,6 +56,8 @@ type
     function GetProperty(const AName: string): TGocciaValue; override;
     procedure DefineProperty(const AName: string;
       const ADescriptor: TGocciaPropertyDescriptor); override;
+    function TryDefineProperty(const AName: string;
+      const ADescriptor: TGocciaPropertyDescriptor): Boolean; override;
     procedure Freeze; override;
     procedure Seal; override;
     procedure PreventExtensions; override;
@@ -1082,6 +1084,13 @@ procedure TGocciaVMLiteralObjectValue.DefineProperty(const AName: string;
 begin
   FFastLiteralMode := False;
   inherited DefineProperty(AName, ADescriptor);
+end;
+
+function TGocciaVMLiteralObjectValue.TryDefineProperty(const AName: string;
+  const ADescriptor: TGocciaPropertyDescriptor): Boolean;
+begin
+  FFastLiteralMode := False;
+  Result := inherited TryDefineProperty(AName, ADescriptor);
 end;
 
 procedure TGocciaVMLiteralObjectValue.Freeze;
@@ -7764,8 +7773,8 @@ begin
             TGocciaArrayValue(FRegisters[A].ObjectValue).AssignSymbolProperty(
               TGocciaSymbolValue(FRegisters[B].ObjectValue), RegisterToValue(FRegisters[C]))
           else if TryGetArrayIndexRegister(FRegisters[B], KeyIndex) then
-            TGocciaArrayValue(FRegisters[A].ObjectValue).SetElement(
-              KeyIndex, RegisterToValue(FRegisters[C]))
+            TGocciaArrayValue(FRegisters[A].ObjectValue).SetProperty(
+              IntToStr(KeyIndex), RegisterToValue(FRegisters[C]))
           else if TryResolveObjectKey(FRegisters[B], PropKeyValue) then
           begin
             if PropKeyValue is TGocciaSymbolValue then
@@ -8249,8 +8258,8 @@ begin
             TGocciaArrayValue(FRegisters[A].ObjectValue).AssignSymbolProperty(
               TGocciaSymbolValue(FRegisters[B].ObjectValue), RightValue)
           else if TryGetArrayIndexRegister(FRegisters[B], KeyIndex) then
-            TGocciaArrayValue(FRegisters[A].ObjectValue).SetElement(
-              KeyIndex, RightValue)
+            TGocciaArrayValue(FRegisters[A].ObjectValue).SetProperty(
+              IntToStr(KeyIndex), RightValue)
           else if TryResolveObjectKey(FRegisters[B], PropKeyValue) then
           begin
             if PropKeyValue is TGocciaSymbolValue then

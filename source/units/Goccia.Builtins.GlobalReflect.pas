@@ -186,6 +186,7 @@ var
   ExistingDescriptor: TGocciaPropertyDescriptor;
   IsSymbolKey: Boolean;
   SymbolKey: TGocciaSymbolValue;
+  Success: Boolean;
 begin
   TGocciaArgumentValidator.RequireAtLeast(AArgs, 3, 'Reflect.defineProperty', ThrowError);
 
@@ -222,22 +223,17 @@ begin
   // Step 3: Let desc be ? ToPropertyDescriptor(Attributes)
   Descriptor := ToPropertyDescriptor(DescriptorObject, ExistingDescriptor);
 
-  // Step 4: Return target.[[DefineOwnProperty]](key, desc) — returns boolean
-  try
-    if IsSymbolKey then
-      Obj.DefineSymbolProperty(SymbolKey, Descriptor)
-    else
-      Obj.DefineProperty(PropertyName, Descriptor);
-    // DefineProperty/DefineSymbolProperty takes ownership on success
-    Descriptor := nil;
-    Result := TGocciaBooleanLiteralValue.TrueValue;
-  except
-    on TGocciaThrowValue do
-    begin
-      Descriptor.Free;
-      Result := TGocciaBooleanLiteralValue.FalseValue;
-    end;
-  end;
+  // Step 4: Return target.[[DefineOwnProperty]](key, desc) — returns boolean.
+  // Validation failures become false; abrupt completions still propagate.
+  if IsSymbolKey then
+    Success := Obj.TryDefineSymbolProperty(SymbolKey, Descriptor)
+  else
+    Success := Obj.TryDefineProperty(PropertyName, Descriptor);
+
+  if Success then
+    Result := TGocciaBooleanLiteralValue.TrueValue
+  else
+    Result := TGocciaBooleanLiteralValue.FalseValue;
 end;
 
 // ES2026 §28.1.4 Reflect.deleteProperty(target, propertyKey)
@@ -348,33 +344,49 @@ begin
   end;
 
   DescriptorObj := TGocciaObjectValue.Create;
-  if Descriptor.Enumerable then
-    DescriptorObj.AssignProperty(PROP_ENUMERABLE, TGocciaBooleanLiteralValue.TrueValue)
-  else
-    DescriptorObj.AssignProperty(PROP_ENUMERABLE, TGocciaBooleanLiteralValue.FalseValue);
-  if Descriptor.Configurable then
-    DescriptorObj.AssignProperty(PROP_CONFIGURABLE, TGocciaBooleanLiteralValue.TrueValue)
-  else
-    DescriptorObj.AssignProperty(PROP_CONFIGURABLE, TGocciaBooleanLiteralValue.FalseValue);
+  if Descriptor.HasEnumerableField then
+  begin
+    if Descriptor.Enumerable then
+      DescriptorObj.AssignProperty(PROP_ENUMERABLE, TGocciaBooleanLiteralValue.TrueValue)
+    else
+      DescriptorObj.AssignProperty(PROP_ENUMERABLE, TGocciaBooleanLiteralValue.FalseValue);
+  end;
+  if Descriptor.HasConfigurableField then
+  begin
+    if Descriptor.Configurable then
+      DescriptorObj.AssignProperty(PROP_CONFIGURABLE, TGocciaBooleanLiteralValue.TrueValue)
+    else
+      DescriptorObj.AssignProperty(PROP_CONFIGURABLE, TGocciaBooleanLiteralValue.FalseValue);
+  end;
 
   if Descriptor is TGocciaPropertyDescriptorData then
   begin
-    DescriptorObj.AssignProperty(PROP_VALUE, TGocciaPropertyDescriptorData(Descriptor).Value);
-    if Descriptor.Writable then
-      DescriptorObj.AssignProperty(PROP_WRITABLE, TGocciaBooleanLiteralValue.TrueValue)
-    else
-      DescriptorObj.AssignProperty(PROP_WRITABLE, TGocciaBooleanLiteralValue.FalseValue);
+    if Descriptor.HasValue then
+      DescriptorObj.AssignProperty(PROP_VALUE, TGocciaPropertyDescriptorData(Descriptor).Value);
+    if Descriptor.HasWritableField then
+    begin
+      if Descriptor.Writable then
+        DescriptorObj.AssignProperty(PROP_WRITABLE, TGocciaBooleanLiteralValue.TrueValue)
+      else
+        DescriptorObj.AssignProperty(PROP_WRITABLE, TGocciaBooleanLiteralValue.FalseValue);
+    end;
   end
   else if Descriptor is TGocciaPropertyDescriptorAccessor then
   begin
-    if Assigned(TGocciaPropertyDescriptorAccessor(Descriptor).Getter) then
-      DescriptorObj.AssignProperty(PROP_GET, TGocciaPropertyDescriptorAccessor(Descriptor).Getter)
-    else
-      DescriptorObj.AssignProperty(PROP_GET, TGocciaUndefinedLiteralValue.UndefinedValue);
-    if Assigned(TGocciaPropertyDescriptorAccessor(Descriptor).Setter) then
-      DescriptorObj.AssignProperty(PROP_SET, TGocciaPropertyDescriptorAccessor(Descriptor).Setter)
-    else
-      DescriptorObj.AssignProperty(PROP_SET, TGocciaUndefinedLiteralValue.UndefinedValue);
+    if Descriptor.HasGet then
+    begin
+      if Assigned(TGocciaPropertyDescriptorAccessor(Descriptor).Getter) then
+        DescriptorObj.AssignProperty(PROP_GET, TGocciaPropertyDescriptorAccessor(Descriptor).Getter)
+      else
+        DescriptorObj.AssignProperty(PROP_GET, TGocciaUndefinedLiteralValue.UndefinedValue);
+    end;
+    if Descriptor.HasSet then
+    begin
+      if Assigned(TGocciaPropertyDescriptorAccessor(Descriptor).Setter) then
+        DescriptorObj.AssignProperty(PROP_SET, TGocciaPropertyDescriptorAccessor(Descriptor).Setter)
+      else
+        DescriptorObj.AssignProperty(PROP_SET, TGocciaUndefinedLiteralValue.UndefinedValue);
+    end;
   end;
 
   Result := DescriptorObj;

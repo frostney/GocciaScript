@@ -26,6 +26,7 @@ type
     procedure ThrowError(const AMessage: string; const AArgs: array of const; const ASuggestion: string); overload; inline;
   protected
     FElements: TGocciaValueList;
+    FLengthWritable: Boolean;
   public
     constructor Create(const AClass: TGocciaClassValue = nil;
       const AElementCapacity: Integer = 0);
@@ -549,6 +550,121 @@ begin
   end;
 end;
 
+function IsArrayLengthDescriptorCompatible(
+  const AArray: TGocciaArrayValue;
+  const ADescriptor: TGocciaPropertyDescriptor): Boolean;
+begin
+  if ADescriptor.HasConfigurableField and ADescriptor.Configurable then
+    Exit(False);
+  if ADescriptor.HasEnumerableField and ADescriptor.Enumerable then
+    Exit(False);
+  if IsAccessorDescriptor(ADescriptor) then
+    Exit(False);
+  if ADescriptor.HasWritableField and ADescriptor.Writable and
+     not AArray.FLengthWritable then
+    Exit(False);
+  Result := True;
+end;
+
+function ArrayLengthFromDescriptorValue(const AValue: TGocciaValue): Integer;
+var
+  NumberValue: TGocciaNumberLiteralValue;
+  RawLen: Double;
+  TruncLen: Int64;
+begin
+  NumberValue := AValue.ToNumberLiteral;
+  RawLen := NumberValue.Value;
+  if NumberValue.IsNaN or NumberValue.IsInfinite or
+     (RawLen < 0) or (RawLen > MAX_ARRAY_LENGTH_F) then
+    ThrowRangeError(SErrorInvalidArrayLength, SSuggestArrayLengthRange);
+  TruncLen := Trunc(RawLen);
+  if (RawLen <> TruncLen) or (TruncLen > MaxInt) then
+    ThrowRangeError(SErrorInvalidArrayLength, SSuggestArrayLengthRange);
+  Result := Integer(TruncLen);
+end;
+
+function TryApplyArrayLengthDescriptor(
+  const AArray: TGocciaArrayValue;
+  const ADescriptor: TGocciaPropertyDescriptor): Boolean;
+var
+  NewLen: Integer;
+  FailedIndex: Int64;
+  NewWritable: Boolean;
+begin
+  if ADescriptor.HasValue then
+  begin
+    // ES2026 §10.4.2.4 steps 3-5: value conversion and RangeError happen
+    // before ordinary descriptor validation.
+    NewLen := ArrayLengthFromDescriptorValue(
+      TGocciaPropertyDescriptorData(ADescriptor).Value);
+    if not IsArrayLengthDescriptorCompatible(AArray, ADescriptor) then
+      Exit(False);
+    if (NewLen <> AArray.FElements.Count) and not AArray.FLengthWritable then
+      Exit(False);
+
+    if NewLen >= AArray.FElements.Count then
+    begin
+      while AArray.FElements.Count < NewLen do
+        AArray.FElements.Add(TGocciaHoleValue.HoleValue);
+      if ADescriptor.HasWritableField and not ADescriptor.Writable then
+        AArray.FLengthWritable := False;
+      Exit(True);
+    end;
+
+    NewWritable := not (ADescriptor.HasWritableField and not ADescriptor.Writable);
+    if not DeleteArrayIndexesAtOrAbove(AArray, NewLen, FailedIndex) then
+    begin
+      while (FailedIndex < MaxInt) and (AArray.FElements.Count <= FailedIndex) do
+        AArray.FElements.Add(TGocciaHoleValue.HoleValue);
+      if not NewWritable then
+        AArray.FLengthWritable := False;
+      Exit(False);
+    end;
+    if not NewWritable then
+      AArray.FLengthWritable := False;
+    Exit(True);
+  end;
+
+  if not IsArrayLengthDescriptorCompatible(AArray, ADescriptor) then
+    Exit(False);
+  if ADescriptor.HasWritableField and not ADescriptor.Writable then
+    AArray.FLengthWritable := False;
+  Result := True;
+end;
+
+function CanKeepDenseArrayElement(
+  const ADescriptor: TGocciaPropertyDescriptor): Boolean;
+begin
+  Result := IsDataDescriptor(ADescriptor) and
+    (not ADescriptor.HasConfigurableField or ADescriptor.Configurable) and
+    (not ADescriptor.HasEnumerableField or ADescriptor.Enumerable) and
+    (not ADescriptor.HasWritableField or ADescriptor.Writable);
+end;
+
+function CanCreateDenseArrayElement(
+  const ADescriptor: TGocciaPropertyDescriptor): Boolean;
+begin
+  Result := IsDataDescriptor(ADescriptor) and ADescriptor.HasValue and
+    ADescriptor.HasConfigurableField and ADescriptor.Configurable and
+    ADescriptor.HasEnumerableField and ADescriptor.Enumerable and
+    ADescriptor.HasWritableField and ADescriptor.Writable;
+end;
+
+procedure MaterializeDenseArrayElement(
+  const AArray: TGocciaArrayValue;
+  const AName: string;
+  const AIndex: Integer);
+begin
+  if (AIndex >= 0) and (AIndex < AArray.FElements.Count) and
+     (AArray.FElements[AIndex] <> TGocciaHoleValue.HoleValue) and
+     not AArray.FProperties.ContainsKey(AName) then
+  begin
+    AArray.FProperties.Add(AName, TGocciaPropertyDescriptorData.Create(
+      AArray.FElements[AIndex], [pfEnumerable, pfConfigurable, pfWritable]));
+    AArray.FElements[AIndex] := TGocciaHoleValue.HoleValue;
+  end;
+end;
+
 function CollectSparseIndicesInRange(const AObj: TGocciaObjectValue;
   const AStartInclusive, AEndExclusive: Int64): TArray<Int64>;
 var
@@ -723,6 +839,7 @@ var
 begin
   inherited Create(AClass);
   FElements := TGocciaValueList.Create(False);
+  FLengthWritable := True;
   if AElementCapacity > 0 then
     FElements.Capacity := AElementCapacity;
   InitializePrototype;
@@ -2817,6 +2934,15 @@ begin
   begin
     if Index >= 0 then
     begin
+      if FProperties.ContainsKey(AName) then
+      begin
+        inherited AssignProperty(AName, AValue);
+        Exit;
+      end;
+
+      if (Index >= FElements.Count) and not FLengthWritable then
+        ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [AName]),
+          SSuggestCannotDeleteNonConfigurable);
       // Expand array if necessary
       while FElements.Count <= Index do
         FElements.Add(TGocciaHoleValue.HoleValue);
@@ -2830,7 +2956,8 @@ begin
   begin
     // §10.4.2.1 → OrdinarySet → OrdinarySetWithOwnDescriptor step 3e:
     // own writable data property ⇒ [[DefineOwnProperty]](P, {[[Value]]: V})
-    Desc := TGocciaPropertyDescriptorData.Create(AValue, [pfWritable]);
+    Desc := TGocciaPropertyDescriptorData.CreatePartial(AValue, [],
+      [pdfValue]);
     try
       DefineProperty(PROP_LENGTH, Desc);
     except
@@ -2865,7 +2992,14 @@ begin
      not IsArrayHole(FElements[Index]) then
     Result := TGocciaPropertyDescriptorData.Create(FElements[Index], [pfEnumerable, pfConfigurable, pfWritable])
   else if AName = PROP_LENGTH then
-    Result := TGocciaPropertyDescriptorData.Create(TGocciaNumberLiteralValue.Create(FElements.Count), [pfWritable])
+  begin
+    if FLengthWritable then
+      Result := TGocciaPropertyDescriptorData.Create(
+        TGocciaNumberLiteralValue.Create(FElements.Count), [pfWritable])
+    else
+      Result := TGocciaPropertyDescriptorData.Create(
+        TGocciaNumberLiteralValue.Create(FElements.Count), []);
+  end
   else
     Result := inherited GetOwnPropertyDescriptor(AName);
 end;
@@ -2879,57 +3013,64 @@ end;
 // outer caller would free again from its `except` clause.
 procedure TGocciaArrayValue.DefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor);
 var
-  Index, NewLen: Integer;
-  TruncLen, FailedIndex: Int64;
-  RawLen: Double;
+  Index: Integer;
 begin
   if AName = PROP_LENGTH then
   begin
     // §10.4.2.4 ArraySetLength(A, Desc)
-    if ADescriptor is TGocciaPropertyDescriptorData then
-    begin
-      RawLen := TGocciaPropertyDescriptorData(ADescriptor).Value.ToNumberLiteral.Value;
-      TruncLen := Trunc(RawLen);
-      if (RawLen <> TruncLen) or (TruncLen < 0) or
-         (RawLen > MAX_ARRAY_LENGTH_F) or (TruncLen > MaxInt) then
-        ThrowRangeError(SErrorInvalidArrayLength, SSuggestArrayLengthRange);
-      NewLen := Integer(TruncLen);
-      if (NewLen < FElements.Count) and
-         (not DeleteArrayIndexesAtOrAbove(Self, NewLen, FailedIndex)) then
-      begin
-        while (FailedIndex < MaxInt) and (FElements.Count <= FailedIndex) do
-          FElements.Add(TGocciaHoleValue.HoleValue);
-        ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [AName]),
-          SSuggestCannotDeleteNonConfigurable);
-      end;
-      while FElements.Count < NewLen do
-        FElements.Add(TGocciaHoleValue.HoleValue);
-    end;
+    if not TryApplyArrayLengthDescriptor(Self, ADescriptor) then
+      ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [AName]),
+        SSuggestCannotDeleteNonConfigurable);
     ADescriptor.Free;
     Exit;
   end;
 
   if TryStrToInt(AName, Index) and (Index >= 0) then
   begin
-    if ADescriptor is TGocciaPropertyDescriptorData then
+    if (Index >= FElements.Count) and not FLengthWritable then
+      ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [AName]),
+        SSuggestCannotDeleteNonConfigurable);
+
+    if (Index < FElements.Count) and
+       (FElements[Index] <> TGocciaHoleValue.HoleValue) then
     begin
-      // Data descriptor on an array index: extract the value into FElements.
+      if ADescriptor.Fields = [] then
+      begin
+        ADescriptor.Free;
+        Exit;
+      end;
+      if CanKeepDenseArrayElement(ADescriptor) then
+      begin
+        if ADescriptor.HasValue then
+          FElements[Index] := TGocciaPropertyDescriptorData(ADescriptor).Value;
+        ADescriptor.Free;
+        Exit;
+      end;
+      MaterializeDenseArrayElement(Self, AName, Index);
+    end;
+
+    if FProperties.ContainsKey(AName) then
+    begin
+      inherited DefineProperty(AName, ADescriptor);
+      Exit;
+    end;
+
+    if CanCreateDenseArrayElement(ADescriptor) then
+    begin
       while FElements.Count <= Index do
         FElements.Add(TGocciaHoleValue.HoleValue);
       FElements[Index] := TGocciaPropertyDescriptorData(ADescriptor).Value;
       ADescriptor.Free;
-    end
-    else
-    begin
-      // Accessor descriptor: delegate to the throwing inherited DefineProperty
-      // so ownership semantics match the spec wrapper. On exception, ADescriptor
-      // remains live and the outer caller's `except` frees it once.
-      inherited DefineProperty(AName, ADescriptor);
-      while FElements.Count <= Index do
-        FElements.Add(TGocciaHoleValue.HoleValue);
-      if not IsArrayHole(FElements[Index]) then
-        FElements[Index] := TGocciaHoleValue.HoleValue;
+      Exit;
     end;
+
+    // Non-dense descriptors must be stored in the ordinary property map so
+    // missing/defaulted attributes keep their spec values.
+    inherited DefineProperty(AName, ADescriptor);
+    while FElements.Count <= Index do
+      FElements.Add(TGocciaHoleValue.HoleValue);
+    if not IsArrayHole(FElements[Index]) then
+      FElements[Index] := TGocciaHoleValue.HoleValue;
     Exit;
   end;
 
@@ -2939,81 +3080,71 @@ end;
 // ES2026 §10.4.2.1 ArrayDefineOwnProperty — boolean variant
 function TGocciaArrayValue.TryDefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor): Boolean;
 var
-  Index, NewLen: Integer;
-  TruncLen, FailedIndex: Int64;
-  RawLen: Double;
+  Index: Integer;
 begin
   if AName = PROP_LENGTH then
   begin
     // §10.4.2.4 ArraySetLength(A, Desc)
-    if ADescriptor is TGocciaPropertyDescriptorData then
-    begin
-      RawLen := TGocciaPropertyDescriptorData(ADescriptor).Value.ToNumberLiteral.Value;
-      // Trunc into Int64 first so we can detect lengths above MaxInt
-      // before assigning to NewLen (which is Integer-sized to match
-      // FElements.Count).  Spec allows up to 2^32 - 1 but the engine
-      // cannot index that many elements; reject anything above MaxInt
-      // with the same RangeError so callers see spec-correct error type
-      // instead of the "cannot redefine" TypeError that Exit(False) would
-      // produce via DefineProperty.
-      TruncLen := Trunc(RawLen);
-      if (RawLen <> TruncLen) or (TruncLen < 0) or
-         (RawLen > MAX_ARRAY_LENGTH_F) or (TruncLen > MaxInt) then
-      begin
-        ADescriptor.Free;
-        ThrowRangeError(SErrorInvalidArrayLength, SSuggestArrayLengthRange);
-      end;
-      NewLen := Integer(TruncLen);
-      if (NewLen < FElements.Count) and
-         (not DeleteArrayIndexesAtOrAbove(Self, NewLen, FailedIndex)) then
-      begin
-        while (FailedIndex < MaxInt) and (FElements.Count <= FailedIndex) do
-          FElements.Add(TGocciaHoleValue.HoleValue);
-        ADescriptor.Free;
-        Exit(False);
-      end;
-      // Extend elements
-      while FElements.Count < NewLen do
-        FElements.Add(TGocciaHoleValue.HoleValue);
+    try
+      Result := TryApplyArrayLengthDescriptor(Self, ADescriptor);
+    finally
+      ADescriptor.Free;
     end;
-    ADescriptor.Free;
-    Result := True;
     Exit;
   end;
 
   // Numeric index — update FElements directly
   if TryStrToInt(AName, Index) and (Index >= 0) then
   begin
-    if ADescriptor is TGocciaPropertyDescriptorData then
+    if (Index >= FElements.Count) and not FLengthWritable then
     begin
-      // Extend array if needed
+      ADescriptor.Free;
+      Exit(False);
+    end;
+
+    if (Index < FElements.Count) and
+       (FElements[Index] <> TGocciaHoleValue.HoleValue) then
+    begin
+      if ADescriptor.Fields = [] then
+      begin
+        ADescriptor.Free;
+        Exit(True);
+      end;
+      if CanKeepDenseArrayElement(ADescriptor) then
+      begin
+        if ADescriptor.HasValue then
+          FElements[Index] := TGocciaPropertyDescriptorData(ADescriptor).Value;
+        ADescriptor.Free;
+        Exit(True);
+      end;
+      MaterializeDenseArrayElement(Self, AName, Index);
+    end;
+
+    if FProperties.ContainsKey(AName) then
+    begin
+      Result := inherited TryDefineProperty(AName, ADescriptor);
+      Exit;
+    end;
+
+    if CanCreateDenseArrayElement(ADescriptor) then
+    begin
       while FElements.Count <= Index do
         FElements.Add(TGocciaHoleValue.HoleValue);
       FElements[Index] := TGocciaPropertyDescriptorData(ADescriptor).Value;
       ADescriptor.Free;
-      Result := True;
-    end
-    else
+      Exit(True);
+    end;
+
+    // Store non-dense descriptors on the ordinary property map. This preserves
+    // omitted fields as false/undefined for new array-index properties and
+    // keeps non-default attributes visible to subsequent [[GetOwnProperty]].
+    Result := inherited TryDefineProperty(AName, ADescriptor);
+    if Result then
     begin
-      // Accessor descriptor on array index — store on the underlying object
-      // first; only then mutate FElements. If the inherited call rejects the
-      // descriptor (e.g., redefining a non-configurable own property), we
-      // must not have already grown the backing array or cleared a slot.
-      Result := inherited TryDefineProperty(AName, ADescriptor);
-      if Result then
-      begin
-        // Extend the backing storage if the index is past the current length
-        // so the array's `length` reflects the new own property
-        // (ES2026 §10.4.2.1, mirroring the data-descriptor branch above).
-        while FElements.Count <= Index do
-          FElements.Add(TGocciaHoleValue.HoleValue);
-        // Clear the dense slot so [[Get]]/[[GetOwnProperty]] fall through to
-        // the accessor stored on the underlying object — otherwise the
-        // array's fast path would shadow the descriptor with the original
-        // element value.
-        if not IsArrayHole(FElements[Index]) then
-          FElements[Index] := TGocciaHoleValue.HoleValue;
-      end;
+      while FElements.Count <= Index do
+        FElements.Add(TGocciaHoleValue.HoleValue);
+      if not IsArrayHole(FElements[Index]) then
+        FElements[Index] := TGocciaHoleValue.HoleValue;
     end;
     Exit;
   end;
