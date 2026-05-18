@@ -546,6 +546,10 @@ begin
   AEngine.TraditionalForLoopsEnabled := ResolveFlagOption(
     AEngineOptions.CompatTraditionalFor, AFileConfig, 'compat-traditional-for-loop');
 
+  { compat-while-loops: CLI flag > per-file config > root config > default (false) }
+  AEngine.WhileLoopsEnabled := ResolveFlagOption(
+    AEngineOptions.CompatWhileLoops, AFileConfig, 'compat-while-loops');
+
   { compat-loose-equality: CLI flag > per-file config > root config > default (false) }
   AEngine.LooseEqualityEnabled := ResolveFlagOption(
     AEngineOptions.CompatLooseEquality, AFileConfig, 'compat-loose-equality');

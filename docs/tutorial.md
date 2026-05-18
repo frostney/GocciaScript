@@ -5,13 +5,13 @@
 ## Executive Summary
 
 - **Familiar syntax** — GocciaScript is modern JavaScript minus the quirks; `.js` files, no transpilation needed
-- **Key differences** — No `var`/`function`/loops by default; use `let`/`const`, arrow functions, strict equality, `for...of`/array methods
+- **Key differences** — No `var`, `function`, traditional `for` loops, or `while` loops by default; use `let`/`const`, arrow functions, strict equality, `for...of`/array methods
 - **Full walkthrough** — Variables, arrow functions, arrays, objects, classes, modules, async/await
 - **Next steps** — Links to language restrictions, built-in API reference, and example programs
 
 ## What is GocciaScript?
 
-GocciaScript is a subset of JavaScript implemented in FreePascal. It strips away the quirks of early ECMAScript by default — `var`, `function`, loose equality, `eval`, traditional loops — and keeps the modern parts: arrow functions, classes with private fields, async/await, modules, and implicit strict mode. If you've written modern JavaScript, you already know most of GocciaScript.
+GocciaScript is a subset of JavaScript implemented in FreePascal. It strips away the quirks of early ECMAScript by default — `var`, `function`, loose equality, `eval`, traditional `for` loops, and `while` loops — and keeps the modern parts: arrow functions, classes with private fields, async/await, modules, and implicit strict mode. If you've written modern JavaScript, you already know most of GocciaScript.
 
 ## Prerequisites
 
@@ -103,7 +103,7 @@ Arrow functions capture their surrounding scope's `this` — there's no `this` r
 
 ## Working with Arrays
 
-GocciaScript has no traditional loops (`for`, `while`, `do...while`). Instead, you use array methods and `for...of`:
+GocciaScript keeps traditional `for` loops and `while` loops off by default. Use array methods and `for...of` for new code:
 
 ```javascript
 const numbers = [1, 2, 3, 4, 5];
@@ -311,7 +311,8 @@ Here's a quick reference of GocciaScript's key restrictions:
 | `var x = 1` | Not supported | `let x = 1` or `const x = 1` |
 | `function foo() {}` | Not supported | `const foo = () => {}` |
 | `==` / `!=` | Off by default | `===` / `!==` or `--compat-loose-equality` |
-| `for (...)` / `while (...)` | Not supported | `for...of`, `.map()`, `.forEach()`, `.reduce()` |
+| `for (init; test; update)` | Off by default | `for...of`, `.map()`, `.forEach()`, `.reduce()`, or `--compat-traditional-for-loop` for JavaScript compatibility |
+| `while (...)` / `do ... while (...)` | Off by default | `for...of`, `.map()`, `.forEach()`, `.reduce()`, or `--compat-while-loops` for JavaScript compatibility |
 | `eval("code")` | Not supported | No alternative (by design) |
 | `arguments` | Off by default | Prefer rest parameters (`...args`) or Script-source `--compat-non-strict-mode` |
 | sloppy assignment failures | Strict by default | Script-source `--compat-non-strict-mode` when porting code that expects failed property writes to be ignored |

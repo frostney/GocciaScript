@@ -81,7 +81,8 @@ Other features that produce suggestions include:
 - `var` declarations -- suggests `let` or `const`
 - `function` declarations and expressions -- suggests arrow functions
 - `==` / `!=` (loose equality) -- suggests `===` / `!==`
-- Traditional loops (`for`, `while`, `do...while`) -- suggests `for...of` or array methods
+- Traditional `for(init; test; update)` loops when `--compat-traditional-for-loop` is off -- suggests `for...of`, array methods, or the flag
+- `while` / `do...while` loops when `--compat-while-loops` is off -- suggests `for...of`, array methods, or the flag
 - Default imports/exports -- suggests named imports/exports
 
 See [Language](language.md) for the full list of excluded features and their rationale.

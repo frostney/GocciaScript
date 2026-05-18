@@ -101,7 +101,7 @@ test("Symbol.search rejects protocol object with non-callable exec", () => {
   expect(() => RegExp.prototype[Symbol.search].call(protocol, "abc")).toThrow(TypeError);
 });
 
-test("Symbol.search clamps protocol result index", () => {
+test("Symbol.search returns protocol result index without clamping", () => {
   const negativeIndexProtocol = {
     flags: "",
     lastIndex: 0,
@@ -117,8 +117,8 @@ test("Symbol.search clamps protocol result index", () => {
     },
   };
 
-  expect(RegExp.prototype[Symbol.search].call(negativeIndexProtocol, "abc")).toBe(0);
-  expect(RegExp.prototype[Symbol.search].call(infiniteIndexProtocol, "abc")).toBe(3);
+  expect(RegExp.prototype[Symbol.search].call(negativeIndexProtocol, "abc")).toBe(-10);
+  expect(RegExp.prototype[Symbol.search].call(infiniteIndexProtocol, "abc")).toBe(Infinity);
 });
 
 test("Symbol.search restores protocol object lastIndex", () => {
@@ -135,28 +135,36 @@ test("Symbol.search restores protocol object lastIndex", () => {
   expect(protocol.lastIndex).toBe(7);
 });
 
-test("Symbol.split accepts a protocol object with exec", () => {
+test("Symbol.split accepts a species-created protocol object with exec", () => {
   let calls = 0;
-  const protocol = {
-    flags: "",
+  const splitter = {
     lastIndex: 0,
     exec(input) {
       calls++;
       expect(input).toBe("a,b");
-      if (calls === 1) {
+      if (this.lastIndex === 1) {
+        this.lastIndex = 2;
         return createMatch(",", 1, input);
       }
       return null;
     },
   };
+  class Splitter {
+    constructor() {
+      return splitter;
+    }
+  }
+  const protocol = {
+    flags: "",
+    constructor: { [Symbol.species]: Splitter },
+  };
 
   expect(RegExp.prototype[Symbol.split].call(protocol, "a,b")).toEqual(["a", "b"]);
 });
 
-test("Symbol.split sets lastIndex before protocol exec retries", () => {
+test("Symbol.split sets lastIndex before species-created protocol exec retries", () => {
   const seen = [];
-  const protocol = {
-    flags: "",
+  const splitter = {
     lastIndex: 0,
     exec(input) {
       seen.push(this.lastIndex);
@@ -167,15 +175,23 @@ test("Symbol.split sets lastIndex before protocol exec retries", () => {
       return null;
     },
   };
+  class Splitter {
+    constructor() {
+      return splitter;
+    }
+  }
+  const protocol = {
+    flags: "",
+    constructor: { [Symbol.species]: Splitter },
+  };
 
   expect(RegExp.prototype[Symbol.split].call(protocol, "a,b")).toEqual(["a", "b"]);
   expect(seen).toEqual([0, 1, 2]);
 });
 
-test("Symbol.matchAll accepts a protocol object with exec", () => {
+test("Symbol.matchAll accepts a species-created protocol object with exec", () => {
   let calls = 0;
-  const protocol = {
-    flags: "g",
+  const matcher = {
     lastIndex: 0,
     exec(input) {
       calls++;
@@ -191,15 +207,24 @@ test("Symbol.matchAll accepts a protocol object with exec", () => {
       return null;
     },
   };
+  class Matcher {
+    constructor() {
+      return matcher;
+    }
+  }
+  const protocol = {
+    flags: "g",
+    lastIndex: 0,
+    constructor: { [Symbol.species]: Matcher },
+  };
 
   const matches = [...RegExp.prototype[Symbol.matchAll].call(protocol, "aba")];
   expect(matches[0][0]).toBe("a");
   expect(matches[1].index).toBe(2);
 });
 
-test("Symbol.matchAll advances empty protocol matches", () => {
-  const protocol = {
-    flags: "g",
+test("Symbol.matchAll advances empty species-created protocol matches", () => {
+  const matcher = {
     lastIndex: 0,
     exec(input) {
       if (this.lastIndex > input.length) {
@@ -207,6 +232,16 @@ test("Symbol.matchAll advances empty protocol matches", () => {
       }
       return createMatch("", this.lastIndex, input);
     },
+  };
+  class Matcher {
+    constructor() {
+      return matcher;
+    }
+  }
+  const protocol = {
+    flags: "g",
+    lastIndex: 0,
+    constructor: { [Symbol.species]: Matcher },
   };
 
   const matches = [...RegExp.prototype[Symbol.matchAll].call(protocol, "ab")];

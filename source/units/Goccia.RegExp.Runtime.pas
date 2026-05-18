@@ -22,6 +22,7 @@ function MatchRegExpObject(const AValue: TGocciaValue; const AInput: string;
   out AMatchArray: TGocciaValue; out AMatchIndex, AMatchEnd,
   ANextIndex: Integer): Boolean;
 function HasUnicodeRegExpFlag(const AFlags: string): Boolean;
+function GetRegExpLastIndexLength(const AValue: TGocciaValue): Double;
 function GetClampedLastIndex(const AValue: TGocciaValue;
   const AInputLength: Integer): Integer;
 function AdvanceProtocolLastIndexAfterEmptyMatch(
@@ -38,6 +39,7 @@ uses
   TextSemantics,
 
   Goccia.Arguments.Collection,
+  Goccia.Constants.NumericLimits,
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.RegExp.VM,
@@ -73,10 +75,19 @@ begin
   Result := AObject.GetProperty(AName).ToBooleanLiteral.Value;
 end;
 
-function GetIntegerProperty(const AObject: TGocciaObjectValue;
-  const AName: string): Integer;
+function ToLengthIndex(const AValue: TGocciaValue): Double;
+var
+  Index: TGocciaNumberLiteralValue;
 begin
-  Result := Max(0, Trunc(AObject.GetProperty(AName).ToNumberLiteral.Value));
+  if not Assigned(AValue) then
+    Exit(0);
+
+  Index := AValue.ToNumberLiteral;
+  if Index.IsNaN or Index.IsNegativeInfinity or (Index.Value <= 0) then
+    Exit(0);
+  if Index.IsInfinity or (Index.Value > MAX_SAFE_INTEGER_F) then
+    Exit(MAX_SAFE_INTEGER_F);
+  Result := Trunc(Index.Value);
 end;
 
 function GetClampedIndexValue(const AValue: TGocciaValue;
@@ -97,21 +108,46 @@ begin
   Result := HasRegExpFlag(AFlags, 'u') or HasRegExpFlag(AFlags, 'v');
 end;
 
+function GetRegExpLastIndexLength(const AValue: TGocciaValue): Double;
+begin
+  Result := ToLengthIndex(TGocciaObjectValue(AValue).GetProperty(PROP_LAST_INDEX));
+end;
+
 function GetClampedLastIndex(const AValue: TGocciaValue;
   const AInputLength: Integer): Integer;
+var
+  Index: Double;
 begin
-  Result := GetClampedIndexValue(
-    TGocciaObjectValue(AValue).GetProperty(PROP_LAST_INDEX), AInputLength);
+  Index := GetRegExpLastIndexLength(AValue);
+  if Index >= AInputLength then
+    Result := AInputLength
+  else
+    Result := Trunc(Index);
 end;
 
 function AdvanceProtocolLastIndexAfterEmptyMatch(
   const AValue: TGocciaValue; const AInput: string;
   const AUnicode: Boolean): Integer;
+var
+  ThisIndex, NextIndex: Double;
 begin
-  Result := AdvanceUTF8StringIndex(AInput,
-    GetClampedLastIndex(AValue, Length(AInput)), AUnicode);
+  ThisIndex := GetRegExpLastIndexLength(AValue);
+  if ThisIndex > Length(AInput) then
+    NextIndex := ThisIndex + 1
+  else
+    NextIndex := AdvanceUTF8StringIndex(AInput, Trunc(ThisIndex), AUnicode);
   TGocciaObjectValue(AValue).SetProperty(PROP_LAST_INDEX,
-    TGocciaNumberLiteralValue.Create(Result));
+    TGocciaNumberLiteralValue.Create(NextIndex));
+
+  if NextIndex > Length(AInput) then
+  begin
+    if Length(AInput) < MaxInt then
+      Result := Length(AInput) + 1
+    else
+      Result := MaxInt;
+  end
+  else
+    Result := Trunc(NextIndex);
 end;
 
 // ES2026 §22.2.7.3 BuildMatchArray
@@ -219,7 +255,7 @@ begin
     GetStringProperty(TGocciaObjectValue(AValue), PROP_SOURCE),
     GetStringProperty(TGocciaObjectValue(AValue), PROP_FLAGS));
   Result.SetProperty(PROP_LAST_INDEX, TGocciaNumberLiteralValue.Create(
-    GetIntegerProperty(TGocciaObjectValue(AValue), PROP_LAST_INDEX)));
+    GetRegExpLastIndexLength(AValue)));
 end;
 
 function MatchRegExpObjectOnce(const AValue: TGocciaValue; const AInput: string;
@@ -227,10 +263,29 @@ function MatchRegExpObjectOnce(const AValue: TGocciaValue; const AInput: string;
 var
   Obj: TGocciaObjectValue;
   StartIndex, MatchIndex, MatchEnd, NextIndex: Integer;
+  LastIndex: Double;
 begin
   Obj := TGocciaObjectValue(AValue);
+  if not IsRegExpInstance(AValue) then
+  begin
+    Result := MatchRegExpObject(AValue, AInput, 0, False, False, AMatchArray,
+      MatchIndex, MatchEnd, NextIndex);
+    Exit;
+  end;
+
   if GetBooleanProperty(Obj, PROP_GLOBAL) or GetBooleanProperty(Obj, PROP_STICKY) then
-    StartIndex := GetIntegerProperty(Obj, PROP_LAST_INDEX)
+  begin
+    LastIndex := GetRegExpLastIndexLength(AValue);
+    if LastIndex > Length(AInput) then
+    begin
+      if Length(AInput) < MaxInt then
+        StartIndex := Length(AInput) + 1
+      else
+        StartIndex := MaxInt;
+    end
+    else
+      StartIndex := Trunc(LastIndex);
+  end
   else
     StartIndex := 0;
   Result := MatchRegExpObject(AValue, AInput, StartIndex,
@@ -328,7 +383,7 @@ begin
   ANextIndex := MatchResult.NextIndex;
   AMatchArray := BuildMatchArray(AInput, MatchResult);
   if ShouldUpdate then
-    Obj.SetProperty(PROP_LAST_INDEX, TGocciaNumberLiteralValue.Create(ANextIndex));
+    Obj.SetProperty(PROP_LAST_INDEX, TGocciaNumberLiteralValue.Create(AMatchEnd));
 end;
 
 function RegExpObjectToString(const AValue: TGocciaValue): string;
