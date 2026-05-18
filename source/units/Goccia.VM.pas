@@ -3616,7 +3616,8 @@ begin
       BytecodeGetter := TGocciaBytecodeFunctionValue(Getter);
       if Assigned(BytecodeGetter.FClosure) and
          Assigned(BytecodeGetter.FClosure.Template) and
-         (not BytecodeGetter.FClosure.Template.IsAsync) then
+         (not BytecodeGetter.FClosure.Template.IsAsync) and
+         (not BytecodeGetter.FClosure.Template.IsGenerator) then
         Exit(RegisterToValue(FVM.ExecuteClosureRegisters(
           BytecodeGetter.FClosure, RegisterObject(Self), [])));
     end;
@@ -3652,7 +3653,8 @@ begin
       BytecodeSetter := TGocciaBytecodeFunctionValue(Setter);
       if Assigned(BytecodeSetter.FClosure) and
          Assigned(BytecodeSetter.FClosure.Template) and
-         (not BytecodeSetter.FClosure.Template.IsAsync) then
+         (not BytecodeSetter.FClosure.Template.IsAsync) and
+         (not BytecodeSetter.FClosure.Template.IsGenerator) then
       begin
         FVM.ExecuteClosureRegisters(BytecodeSetter.FClosure, RegisterObject(Self),
           [ValueToRegister(AValue)]);
@@ -8052,6 +8054,42 @@ begin
            (TargetValue is TGocciaObjectValue) then
           SetBytecodeHomeObject(RightValue, TargetValue);
         SetPropertyValueLoose(TargetValue, GlobalName, RightValue);
+      end;
+
+      OP_DEFINE_STATIC_PROP_CONST:
+      begin
+        GlobalName := Template.GetConstantUnchecked(B).StringValue;
+        RightValue := RegisterToValue(FRegisters[C]);
+        if (FRegisters[A].Kind = grkObject) and
+           (FRegisters[A].ObjectValue is TGocciaObjectValue) then
+        begin
+          if FRegisters[A].ObjectValue is TGocciaVMClassValue then
+            SetBytecodeHomeObject(RightValue, RegisterToValue(FRegisters[A]));
+          TGocciaObjectValue(FRegisters[A].ObjectValue).DefineProperty(
+            GlobalName,
+            TGocciaPropertyDescriptorData.Create(
+              RightValue, [pfEnumerable, pfConfigurable, pfWritable]));
+        end
+        else
+          SetPropertyValue(GetRegister(A), GlobalName, RightValue);
+      end;
+
+      OP_DEFINE_STATIC_METHOD_CONST:
+      begin
+        GlobalName := Template.GetConstantUnchecked(B).StringValue;
+        RightValue := RegisterToValue(FRegisters[C]);
+        if (FRegisters[A].Kind = grkObject) and
+           (FRegisters[A].ObjectValue is TGocciaObjectValue) then
+        begin
+          if FRegisters[A].ObjectValue is TGocciaVMClassValue then
+            SetBytecodeHomeObject(RightValue, RegisterToValue(FRegisters[A]));
+          TGocciaObjectValue(FRegisters[A].ObjectValue).DefineProperty(
+            GlobalName,
+            TGocciaPropertyDescriptorData.Create(
+              RightValue, [pfConfigurable, pfWritable]));
+        end
+        else
+          SetPropertyValue(GetRegister(A), GlobalName, RightValue);
       end;
 
       OP_DELETE_PROP_CONST:

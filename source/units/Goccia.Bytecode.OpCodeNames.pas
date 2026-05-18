@@ -139,6 +139,8 @@ begin
     OP_SET_INDEX:                      Result := 'OP_SET_INDEX';
     OP_DEL_INDEX:                      Result := 'OP_DEL_INDEX';
     OP_DELETE_GLOBAL:                  Result := 'OP_DELETE_GLOBAL';
+    OP_DEFINE_STATIC_PROP_CONST:       Result := 'OP_DEFINE_STATIC_PROP_CONST';
+    OP_DEFINE_STATIC_METHOD_CONST:     Result := 'OP_DEFINE_STATIC_METHOD_CONST';
     OP_ADD:                            Result := 'OP_ADD';
     OP_SUB:                            Result := 'OP_SUB';
     OP_MUL:                            Result := 'OP_MUL';

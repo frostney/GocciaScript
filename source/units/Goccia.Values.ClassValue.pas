@@ -1128,6 +1128,15 @@ begin
       Exit;
     end;
 
+    Descriptor := GetOwnPropertyDescriptor(AName);
+    if (Descriptor is TGocciaPropertyDescriptorData) and
+       (not TGocciaPropertyDescriptorData(Descriptor).Writable) then
+    begin
+      inherited DefineProperty(AName, Descriptor);
+      inherited SetProperty(AName, AValue);
+      Exit;
+    end;
+
     if AValue is TGocciaStringLiteralValue then
       FName := TGocciaStringLiteralValue(AValue).Value;
     inherited DefineProperty(AName,
