@@ -35,7 +35,7 @@ For files, load `app.js` into the `Source` list, pass the real filename to `TGoc
 
 ### Class Methods (One-Shot Execution)
 
-These are convenience methods that create a core engine, execute, and clean up in a single call. They do not attach `TGocciaRuntime`, so host/runtime globals such as `console`, `fetch`, `URL`, JSON5, TOML, YAML, CSV/TSV, and SemVer are not available.
+These helpers create, execute, and clean up in a single call. The `TGocciaEngine` methods create a core-language-only engine. The `TGocciaRuntime` methods attach the runtime core/file-loading layer, but they do not apply a host profile; install runtime extensions explicitly when scripts need host globals such as `console`, `fetch`, `URL`, JSON5, TOML, YAML, CSV/TSV, or SemVer.
 
 | Method | Description |
 |--------|-------------|
