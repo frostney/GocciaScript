@@ -153,6 +153,15 @@ procedure RunClassInstanceInitializers(const AClassValue: TGocciaClassValue;
   const AInstance: TGocciaObjectValue;
   const AContext: TGocciaEvaluationContext); forward;
 
+procedure DrainAwaitMicrotasks;
+var
+  Queue: TGocciaMicrotaskQueue;
+begin
+  Queue := TGocciaMicrotaskQueue.Instance;
+  if Assigned(Queue) and Queue.HasPending then
+    Queue.DrainQueue;
+end;
+
 // Helper: create a non-owning copy of a statement list (AST owns the nodes)
 function CopyStatementList(const ASource: TObjectList<TGocciaASTNode>): TObjectList<TGocciaASTNode>;
 var
@@ -1679,7 +1688,7 @@ begin
     begin
       // ES2026 §27.7.5.3 step 2: Await wraps the value in Promise.resolve(),
       // introducing a microtask boundary even for non-thenable objects
-      DrainMicrotasksAndFetchCompletions;
+      DrainAwaitMicrotasks;
       Result := AValue;
       Exit;
     end;
@@ -1688,7 +1697,7 @@ begin
   begin
     // ES2026 §27.7.5.3 step 2: Await wraps the value in Promise.resolve(),
     // introducing a microtask boundary even for primitive values
-    DrainMicrotasksAndFetchCompletions;
+    DrainAwaitMicrotasks;
     Result := AValue;
     Exit;
   end;
@@ -1698,7 +1707,7 @@ begin
     begin
       // ES2026 §27.7.5.3 step 3-4: Even already-settled promises introduce
       // a microtask boundary (the continuation is a PromiseReactionJob)
-      DrainMicrotasksAndFetchCompletions;
+      DrainAwaitMicrotasks;
       if Promise.State = gpsFulfilled then
         Result := Promise.PromiseResult
       else
