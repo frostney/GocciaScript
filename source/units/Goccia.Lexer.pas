@@ -42,9 +42,13 @@ type
     function PeekNext: Char; inline;
     function Match(const AExpected: Char): Boolean; inline;
     function IsValidIdentifierChar(const C: Char): Boolean; inline;
+    function IsValidIdentifierStartChar(const C: Char): Boolean; inline;
+    function IsValidEscapedIdentifierText(const AText: string;
+      const AAtStart: Boolean): Boolean;
     procedure AppendCurrent(var ASB, ARawSB: TStringBuffer); inline;
     procedure AddToken(const ATokenType: TGocciaTokenType); overload;
-    procedure AddToken(const ATokenType: TGocciaTokenType; const ALiteral: string); overload;
+    procedure AddToken(const ATokenType: TGocciaTokenType; const ALiteral: string;
+      const AContainsEscape: Boolean = False); overload;
     procedure ScanToken;
     procedure ScanString;
     procedure ScanTemplate;
@@ -209,10 +213,11 @@ begin
   AddToken(ATokenType, Copy(FSource, FStart, FCurrent - FStart));
 end;
 
-procedure TGocciaLexer.AddToken(const ATokenType: TGocciaTokenType; const ALiteral: string);
+procedure TGocciaLexer.AddToken(const ATokenType: TGocciaTokenType; const ALiteral: string;
+  const AContainsEscape: Boolean);
 begin
   FTokens.Add(TGocciaToken.Create(ATokenType, ALiteral, FLine, FStartColumn,
-    FCurrent - FStart, FColumn - 1));
+    FCurrent - FStart, FColumn - 1, AContainsEscape));
   UpdateRegexContext(ATokenType);
 end;
 
@@ -1372,6 +1377,33 @@ begin
   Result := CharInSet(C, ValidIdentifierChars) or (Ord(C) > 127);
 end;
 
+function TGocciaLexer.IsValidIdentifierStartChar(const C: Char): Boolean; inline;
+begin
+  Result := CharInSet(C, ['a'..'z', 'A'..'Z', '_', '$']) or
+            (Ord(C) > 127);
+end;
+
+function TGocciaLexer.IsValidEscapedIdentifierText(const AText: string;
+  const AAtStart: Boolean): Boolean;
+var
+  I: Integer;
+begin
+  if AText = '' then
+    Exit(False);
+
+  if AAtStart and not IsValidIdentifierStartChar(AText[1]) then
+    Exit(False);
+
+  if (not AAtStart) and not IsValidIdentifierChar(AText[1]) then
+    Exit(False);
+
+  for I := 2 to Length(AText) do
+    if not IsValidIdentifierChar(AText[I]) then
+      Exit(False);
+
+  Result := True;
+end;
+
 class procedure TGocciaLexer.InitKeywords;
 begin
   if Assigned(FKeywords) then Exit;
@@ -1427,18 +1459,39 @@ end;
 
 procedure TGocciaLexer.ScanIdentifier;
 var
+  SB: TStringBuffer;
+  EscapedText: string;
   Text: string;
+  HadEscape: Boolean;
   TokenType: TGocciaTokenType;
 begin
-  while not IsAtEnd and (not IsLineTerminator) and IsValidIdentifierChar(Peek) do
-    Advance;
+  SB := TStringBuffer.Create(32);
+  HadEscape := False;
+  while not IsAtEnd and not IsLineTerminator do
+  begin
+    if IsValidIdentifierChar(Peek) then
+      SB.AppendChar(Advance)
+    else if (Peek = '\') and (PeekNext = 'u') then
+    begin
+      Advance;
+      Advance;
+      EscapedText := ScanUnicodeEscape;
+      if not IsValidEscapedIdentifierText(EscapedText, SB.Length = 0) then
+        raise TGocciaLexerError.Create('Invalid identifier escape', FLine,
+          FColumn, FFileName, GetSourceLines, SSuggestInvalidCharacter);
+      SB.Append(EscapedText);
+      HadEscape := True;
+    end
+    else
+      Break;
+  end;
 
-  Text := Copy(FSource, FStart, FCurrent - FStart);
+  Text := SB.ToString;
 
-  if FKeywords.TryGetValue(Text, TokenType) then
+  if (not HadEscape) and FKeywords.TryGetValue(Text, TokenType) then
     AddToken(TokenType, Text)
   else
-    AddToken(gttIdentifier, Text);
+    AddToken(gttIdentifier, Text, HadEscape);
 end;
 
 procedure TGocciaLexer.ScanToken;
@@ -1621,7 +1674,13 @@ begin
       Dec(FColumn);
       ScanNumber;
     end
-    else if IsValidIdentifierChar(C) then
+    else if IsValidIdentifierStartChar(C) then
+    begin
+      Dec(FCurrent);
+      Dec(FColumn);
+      ScanIdentifier;
+    end
+    else if (C = '\') and (Peek = 'u') then
     begin
       Dec(FCurrent);
       Dec(FColumn);

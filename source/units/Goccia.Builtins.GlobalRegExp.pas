@@ -245,14 +245,18 @@ function ExpandRegexReplacementString(const AReplaceValue: string;
   const ACaptures: TRegexReplacementCaptures;
   const ANamedCaptures: TGocciaObjectValue): string;
 var
+  InputLength: Integer;
   I: Integer;
   NextChar: Char;
   GroupText: string;
   CloseAngle: Integer;
   GroupName: string;
+  MatchLength: Integer;
   GroupValue: TGocciaValue;
 begin
   Result := '';
+  InputLength := UTF16CodeUnitLength(AInput);
+  MatchLength := UTF16CodeUnitLength(AMatched);
   I := 1;
   while I <= Length(AReplaceValue) do
   begin
@@ -283,13 +287,14 @@ begin
         end;
       '`':
         begin
-          Result := Result + Copy(AInput, 1, AMatchIndex);
+          Result := Result + UTF16Substring(AInput, 0, AMatchIndex);
           Inc(I, 2);
         end;
       '''':
         begin
-          Result := Result + Copy(AInput, AMatchIndex + Length(AMatched) + 1,
-            MaxInt);
+          Result := Result + UTF16Substring(AInput,
+            AMatchIndex + MatchLength,
+            InputLength - AMatchIndex - MatchLength);
           Inc(I, 2);
         end;
       '<':
@@ -1037,9 +1042,9 @@ begin
         CaptureCount := 0;
 
       Matched := MatchArray.GetProperty('0').ToStringLiteral.Value;
-      MatchLength := Length(Matched);
+      MatchLength := UTF16CodeUnitLength(Matched);
       Position := ToIntegerOrInfinityClampedIndex(
-        MatchArray.GetProperty(PROP_INDEX), Length(Input));
+        MatchArray.GetProperty(PROP_INDEX), UTF16CodeUnitLength(Input));
 
       SetLength(Captures, CaptureCount);
       for CaptureNumber := 1 to CaptureCount do
@@ -1095,17 +1100,19 @@ begin
       if Position >= NextSourcePosition then
       begin
         AccumulatedResult := AccumulatedResult +
-          Copy(Input, NextSourcePosition + 1, Position - NextSourcePosition) +
+          UTF16Substring(Input, NextSourcePosition,
+            Position - NextSourcePosition) +
           ReplacementString;
         NextSourcePosition := Position + MatchLength;
       end;
     end;
 
-    if NextSourcePosition >= Length(Input) then
+    if NextSourcePosition >= UTF16CodeUnitLength(Input) then
       Result := TGocciaStringLiteralValue.Create(AccumulatedResult)
     else
       Result := TGocciaStringLiteralValue.Create(AccumulatedResult +
-        Copy(Input, NextSourcePosition + 1, MaxInt));
+        UTF16Substring(Input, NextSourcePosition,
+          UTF16CodeUnitLength(Input) - NextSourcePosition));
   finally
     for I := 0 to Results.Count - 1 do
       if Results[I] is TGocciaObjectValue then
@@ -1191,7 +1198,7 @@ begin
       Exit;
     end;
 
-    if Length(Input) = 0 then
+    if UTF16CodeUnitLength(Input) = 0 then
     begin
       if MatchRegExpObjectOnce(SplitterValue, Input, MatchValue) then
       begin
@@ -1203,7 +1210,7 @@ begin
       Exit;
     end;
 
-    Size := Length(Input);
+    Size := UTF16CodeUnitLength(Input);
     LastMatchEnd := 0;
     SearchIndex := LastMatchEnd;
     while SearchIndex < Size do
@@ -1212,7 +1219,7 @@ begin
         TGocciaNumberLiteralValue.Create(SearchIndex));
       if not MatchRegExpObjectOnce(SplitterValue, Input, MatchValue) then
       begin
-        SearchIndex := AdvanceUTF8StringIndex(Input, SearchIndex,
+        SearchIndex := AdvanceUTF16StringIndex(Input, SearchIndex,
           UnicodeMatching);
         Continue;
       end;
@@ -1221,13 +1228,13 @@ begin
       MatchEnd := GetClampedLastIndex(SplitterValue, Size);
       if MatchEnd = LastMatchEnd then
       begin
-        SearchIndex := AdvanceUTF8StringIndex(Input, SearchIndex,
+        SearchIndex := AdvanceUTF16StringIndex(Input, SearchIndex,
           UnicodeMatching);
         Continue;
       end;
 
       ResultArray.Elements.Add(TGocciaStringLiteralValue.Create(
-        Copy(Input, LastMatchEnd + 1, SearchIndex - LastMatchEnd)));
+        UTF16Substring(Input, LastMatchEnd, SearchIndex - LastMatchEnd)));
       if Cardinal(ResultArray.Elements.Count) >= Limit then
       begin
         Result := ResultArray;
@@ -1253,7 +1260,7 @@ begin
     end;
 
     ResultArray.Elements.Add(TGocciaStringLiteralValue.Create(
-      Copy(Input, LastMatchEnd + 1, Size - LastMatchEnd)));
+      UTF16Substring(Input, LastMatchEnd, Size - LastMatchEnd)));
     Result := ResultArray;
   finally
     TGarbageCollector.Instance.RemoveTempRoot(SplitterValue);

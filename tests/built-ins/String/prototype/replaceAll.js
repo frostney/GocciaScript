@@ -20,6 +20,13 @@ describe('String.prototype.replaceAll', () => {
     expect(result).toBe('HELLO HELLO');
   });
 
+  test('replaceAll string search uses UTF-16 offsets', () => {
+    const emoji = String.fromCodePoint(0x1f600);
+
+    expect((emoji + 'a').replaceAll('a', '$`')).toBe(emoji + emoji);
+    expect((emoji + 'a').replaceAll('a', (match, offset) => String(offset))).toBe(emoji + '2');
+  });
+
   test('no occurrences returns original', () => {
     const str = 'hello';
     expect(str.replaceAll('xyz', 'abc')).toBe('hello');
@@ -59,6 +66,7 @@ describe('String.prototype.replaceAll', () => {
   test('replaceAll handles empty string search values', () => {
     expect('abc'.replaceAll('', '-')).toBe('-a-b-c-');
     expect('é'.replaceAll('', '-')).toBe('-é-');
+    expect(String.fromCodePoint(0x1f600).replaceAll('', '-')).toBe('-\uD83D-\uDE00-');
   });
 
   test('replaceAll calls function replacer for empty string search values', () => {
@@ -71,6 +79,17 @@ describe('String.prototype.replaceAll', () => {
     });
 
     expect(result).toBe('0a1b2');
+    expect(offsets).toEqual([0, 1, 2]);
+  });
+
+  test('replaceAll calls function replacer for empty string at UTF-16 offsets', () => {
+    const offsets = [];
+    const result = String.fromCodePoint(0x1f600).replaceAll('', (match, offset) => {
+      offsets.push(offset);
+      return String(offset);
+    });
+
+    expect(result).toBe('0\uD83D1\uDE002');
     expect(offsets).toEqual([0, 1, 2]);
   });
 

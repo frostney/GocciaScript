@@ -44,21 +44,25 @@ type
     FColumn: Integer;
     FSourceLength: Integer;
     FEndColumn: Integer;
+    FContainsEscape: Boolean;
   public
     constructor Create(const AType: TGocciaTokenType; const ALexeme: string;
-      const ALine, AColumn, ASourceLength, AEndColumn: Integer);
+      const ALine, AColumn, ASourceLength, AEndColumn: Integer;
+      const AContainsEscape: Boolean = False);
     property TokenType: TGocciaTokenType read FType;
     property Lexeme: string read FLexeme;
     property Line: Integer read FLine;
     property Column: Integer read FColumn;
     property SourceLength: Integer read FSourceLength;
     property EndColumn: Integer read FEndColumn;
+    property ContainsEscape: Boolean read FContainsEscape;
   end;
 
 implementation
 
 constructor TGocciaToken.Create(const AType: TGocciaTokenType; const ALexeme: string;
-  const ALine, AColumn, ASourceLength, AEndColumn: Integer);
+  const ALine, AColumn, ASourceLength, AEndColumn: Integer;
+  const AContainsEscape: Boolean);
 begin
   FType := AType;
   FLexeme := ALexeme;
@@ -66,6 +70,7 @@ begin
   FColumn := AColumn;
   FSourceLength := ASourceLength;
   FEndColumn := AEndColumn;
+  FContainsEscape := AContainsEscape;
 end;
 
 end.
