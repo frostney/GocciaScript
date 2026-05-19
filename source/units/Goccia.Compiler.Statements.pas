@@ -4112,7 +4112,7 @@ begin
   begin
     if MethodPair.Value.IsStatic then
       CompileMethodBody(ACtx, ClassReg, MethodPair.Key,
-        MethodPair.Value, OP_SET_PROP_CONST)
+        MethodPair.Value, OP_DEFINE_STATIC_METHOD_CONST)
     else
       CompileMethodBody(ACtx, ClassReg, MethodPair.Key,
         MethodPair.Value, OP_CLASS_ADD_METHOD_CONST);
@@ -4181,7 +4181,7 @@ begin
       KeyIdx := ACtx.Template.AddConstantString(StaticPropPair.Key);
       if KeyIdx > High(UInt8) then
         raise Exception.Create('Constant pool overflow: static property name index exceeds 255');
-      EmitInstruction(ACtx, EncodeABC(OP_SET_PROP_CONST, ClassReg,
+      EmitInstruction(ACtx, EncodeABC(OP_DEFINE_STATIC_PROP_CONST, ClassReg,
         UInt8(KeyIdx), ValReg));
       ACtx.Scope.FreeRegister;
     end;
@@ -4231,7 +4231,7 @@ begin
         KeyIdx := ACtx.Template.AddConstantString(ClassDef.FElements[I].Name);
         if KeyIdx > High(UInt8) then
           raise Exception.Create('Constant pool overflow: static property name index exceeds 255');
-        EmitInstruction(ACtx, EncodeABC(OP_SET_PROP_CONST, ClassReg,
+        EmitInstruction(ACtx, EncodeABC(OP_DEFINE_STATIC_PROP_CONST, ClassReg,
           UInt8(KeyIdx), ValReg));
       end;
       ACtx.Scope.FreeRegister;
@@ -4323,7 +4323,7 @@ begin
   begin
     if MethodPair.Value.IsStatic then
       CompileMethodBody(ACtx, ADest, MethodPair.Key,
-        MethodPair.Value, OP_SET_PROP_CONST)
+        MethodPair.Value, OP_DEFINE_STATIC_METHOD_CONST)
     else
       CompileMethodBody(ACtx, ADest, MethodPair.Key,
         MethodPair.Value, OP_CLASS_ADD_METHOD_CONST);
@@ -4392,7 +4392,7 @@ begin
       KeyIdx := ACtx.Template.AddConstantString(StaticPropPair.Key);
       if KeyIdx > High(UInt8) then
         raise Exception.Create('Constant pool overflow: static property name index exceeds 255');
-      EmitInstruction(ACtx, EncodeABC(OP_SET_PROP_CONST, ADest,
+      EmitInstruction(ACtx, EncodeABC(OP_DEFINE_STATIC_PROP_CONST, ADest,
         UInt8(KeyIdx), ValReg));
       ACtx.Scope.FreeRegister;
     end;
@@ -4442,7 +4442,7 @@ begin
         KeyIdx := ACtx.Template.AddConstantString(ClassDef.FElements[I].Name);
         if KeyIdx > High(UInt8) then
           raise Exception.Create('Constant pool overflow: static property name index exceeds 255');
-        EmitInstruction(ACtx, EncodeABC(OP_SET_PROP_CONST, ADest,
+        EmitInstruction(ACtx, EncodeABC(OP_DEFINE_STATIC_PROP_CONST, ADest,
           UInt8(KeyIdx), ValReg));
       end;
       ACtx.Scope.FreeRegister;
