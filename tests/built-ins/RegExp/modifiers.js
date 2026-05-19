@@ -239,6 +239,31 @@ test("(?-i:\\1) disables case-folding for backreference", () => {
   expect(re.test("aA")).toBe(false);
 });
 
+// --- Modifier scoping affects word escapes ---
+
+test("(?i:...) enables Unicode case folding for word boundaries", () => {
+  expect(/(?i:\b)/u.test("\u017f")).toBe(true);
+  expect(/(?i:\b)/u.test("\u212a")).toBe(true);
+  expect(/(?i:Z\B)/u.test("Z\u017f")).toBe(true);
+  expect(/(?i:Z\B)/u.test("Z\u212a")).toBe(true);
+});
+
+test("(?i:...) enables Unicode case folding for word character classes", () => {
+  expect(/(?i:\w)/u.test("\u017f")).toBe(true);
+  expect(/(?i:\w)/u.test("\u212a")).toBe(true);
+  expect(/(?i:\W)/u.test("\u017f")).toBe(false);
+  expect(/(?i:\W)/u.test("\u212a")).toBe(false);
+});
+
+test("(?-i:...) disables Unicode case folding for word escapes", () => {
+  const boundary = new RegExp("(?-i:\\b)", "iu");
+  const word = new RegExp("(?-i:\\w)", "iu");
+  const nonWord = new RegExp("(?-i:\\W)", "iu");
+  expect(boundary.test("\u017f")).toBe(false);
+  expect(word.test("\u017f")).toBe(false);
+  expect(nonWord.test("\u017f")).toBe(true);
+});
+
 // --- Error cases: double dash ---
 
 test("(?i--s:...) double dash throws SyntaxError", () => {

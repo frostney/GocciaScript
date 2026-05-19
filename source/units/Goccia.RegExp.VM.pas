@@ -138,12 +138,23 @@ begin
   Result := False;
 end;
 
-function IsWordChar(ACodePoint: Cardinal): Boolean; inline;
+function IsBasicWordChar(ACodePoint: Cardinal): Boolean; inline;
 begin
   Result := ((ACodePoint >= Ord('a')) and (ACodePoint <= Ord('z'))) or
             ((ACodePoint >= Ord('A')) and (ACodePoint <= Ord('Z'))) or
             ((ACodePoint >= Ord('0')) and (ACodePoint <= Ord('9'))) or
             (ACodePoint = Ord('_'));
+end;
+
+function IsWordChar(ACodePoint: Cardinal; AUnicodeAware,
+  AIgnoreCase: Boolean): Boolean; inline;
+begin
+  if IsBasicWordChar(ACodePoint) then
+    Exit(True);
+  if not AUnicodeAware or not AIgnoreCase then
+    Exit(False);
+  Result := IsBasicWordChar(RegExpCanonicalizeCodePoint(ACodePoint, True,
+    True));
 end;
 
 function IsLineTerminator(ACodePoint: Cardinal): Boolean; inline;
@@ -312,6 +323,7 @@ var
   MatchCP: Cardinal;
   BeforeCP: Cardinal;
   BeforeIsWord, AfterIsWord: Boolean;
+  WordIgnoreCase: Boolean;
   Negated: Boolean;
   BackrefGroup: Integer;
   BackrefICase: Boolean;
@@ -615,15 +627,18 @@ begin
 
       RX_ASSERT_WORD:
         begin
-          Negated := Bx <> 0;
+          Negated := (Bx and WORD_ASSERT_NEGATED_FLAG) <> 0;
+          WordIgnoreCase := (Bx and WORD_ASSERT_ICASE_FLAG) <> 0;
           BeforeIsWord := False;
           AfterIsWord := False;
           if GetCodePointBefore(AInput, InputPos, AProgram.FullUnicode,
              BeforeCP) then
-            BeforeIsWord := IsWordChar(BeforeCP);
+            BeforeIsWord := IsWordChar(BeforeCP, AProgram.FullUnicode,
+              WordIgnoreCase);
           if ReadInputCodePoint(AInput, InputPos, AProgram.FullUnicode,
              CodePoint, ByteLen) then
-            AfterIsWord := IsWordChar(CodePoint);
+            AfterIsWord := IsWordChar(CodePoint, AProgram.FullUnicode,
+              WordIgnoreCase);
           if Negated then
           begin
             if BeforeIsWord <> AfterIsWord then
