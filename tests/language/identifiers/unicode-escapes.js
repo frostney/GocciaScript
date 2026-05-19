@@ -32,6 +32,12 @@ test("identifier unicode escapes reject escaped contextual grammar keywords", ()
   expect(() => new Function("return ({ g\\u0065t foo() { return 1; } });")).toThrow(SyntaxError);
 });
 
+test("identifier unicode escapes reject escaped expression binding names", () => {
+  expect(() => new Function("return function \\u0069f() {};")).toThrow(SyntaxError);
+  expect(() => new Function("return function* \\u0069f() {};")).toThrow(SyntaxError);
+  expect(() => new Function("return class \\u0069f {};")).toThrow(SyntaxError);
+});
+
 test("identifier unicode escapes reject invalid continuation characters", () => {
   expect(() => new Function("const a\\u0020 = 7;")).toThrow(SyntaxError);
 });

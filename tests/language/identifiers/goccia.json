@@ -1,3 +1,4 @@
 {
-  "unsafe-function-constructor": true
+  "unsafe-function-constructor": true,
+  "compat-function": true
 }

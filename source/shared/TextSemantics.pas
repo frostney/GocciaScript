@@ -803,14 +803,19 @@ function AdvanceUTF16StringIndex(const AText: string; const AIndex: Integer;
   const AUnicode: Boolean): Integer;
 var
   CodePoint: Cardinal;
+  NextCodeUnit: Cardinal;
 begin
   if not AUnicode then
     Exit(AIndex + 1);
-  if TryUTF16CodePointValueAt(AText, AIndex, CodePoint) and
-     (CodePoint > $FFFF) then
-    Result := AIndex + 2
-  else
-    Result := AIndex + 1;
+  if TryUTF16CodePointValueAt(AText, AIndex, CodePoint) then
+  begin
+    if (CodePoint > $FFFF) or
+       ((CodePoint >= $D800) and (CodePoint <= $DBFF) and
+        TryUTF16CodePointValueAt(AText, AIndex + 1, NextCodeUnit) and
+        (NextCodeUnit >= $DC00) and (NextCodeUnit <= $DFFF)) then
+      Exit(AIndex + 2);
+  end;
+  Result := AIndex + 1;
 end;
 
 function AdvanceUTF8StringIndex(const AText: string; const AIndex: Integer;

@@ -2075,10 +2075,8 @@ begin
           Advance;
           Name := '';
           if Check(gttIdentifier) then
-          begin
-            Name := Peek.Lexeme;
-            Advance;
-          end;
+            Name := ConsumeIdentifierBinding(
+              'Expected generator function name').Lexeme;
           CollectGenericParameters;
           Result := ParseObjectMethodBody(Token.Line, Token.Column, False, True);
           TGocciaMethodExpression(Result).SourceText := ExtractSourceRange(Token.Line, Token.Column);
@@ -2093,10 +2091,8 @@ begin
         begin
           Name := '';
           if Check(gttIdentifier) then
-          begin
-            Name := Peek.Lexeme;
-            Advance;
-          end;
+            Name := ConsumeIdentifierBinding(
+              'Expected function name').Lexeme;
           CollectGenericParameters;
           Result := ParseObjectMethodBody(Token.Line, Token.Column);
           TGocciaMethodExpression(Result).SourceText := ExtractSourceRange(Token.Line, Token.Column);
@@ -3393,7 +3389,7 @@ begin
 
   // Class name is optional in class expressions
   if Check(gttIdentifier) then
-    Name := Advance.Lexeme
+    Name := ConsumeIdentifierBinding('Expected class name').Lexeme
   else
     Name := ''; // Anonymous class
 

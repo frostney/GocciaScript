@@ -87,6 +87,12 @@ describe('String.prototype.replace', () => {
     expect('ab'.replace(/(?:)/g, '-')).toBe('-a-b-');
   });
 
+  test('replace advances unicode empty regex matches over explicit surrogate pairs', () => {
+    const pair = String.fromCharCode(0xD83D, 0xDE00);
+
+    expect(pair.replace(/(?:)/gu, '-')).toBe('-' + pair + '-');
+  });
+
   test('replace dispatches through Symbol.replace', () => {
     const searchValue = {
       [Symbol.replace](input, replacement) {
