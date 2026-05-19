@@ -66,6 +66,7 @@ uses
   TextSemantics,
   UnicodeICU,
 
+  Goccia.Identifier,
   Goccia.RegExp.UnicodeData;
 
 type
@@ -178,7 +179,7 @@ begin
 end;
 
 function DecodeRegExpGroupNameUnicodeEscape(const AText: string;
-  var AIndex: Integer): string;
+  var AIndex: Integer): Cardinal;
 var
   CodePoint: Cardinal;
   HexStart: Integer;
@@ -233,25 +234,74 @@ begin
   if CodePoint > $10FFFF then
     raise EConvertError.Create('Unicode escape out of range in group name');
 
-  Result := CodePointToUTF8(CodePoint);
+  Result := CodePoint;
+end;
+
+function ReadRegExpGroupNameLiteralCodePoint(const AText: string;
+  var AIndex: Integer): Cardinal;
+var
+  ByteLength: Integer;
+  CodePoint: Cardinal;
+  LowSurrogate: Cardinal;
+  LowSurrogateByteLength: Integer;
+begin
+  if not TryReadUTF8CodePointAllowSurrogates(AText, AIndex, CodePoint,
+     ByteLength) then
+  begin
+    Result := Ord(AText[AIndex]);
+    Inc(AIndex);
+    Exit;
+  end;
+
+  Inc(AIndex, ByteLength);
+  if (CodePoint >= $D800) and (CodePoint <= $DBFF) and
+     TryReadUTF8CodePointAllowSurrogates(AText, AIndex, LowSurrogate,
+       LowSurrogateByteLength) and
+     (LowSurrogate >= $DC00) and (LowSurrogate <= $DFFF) then
+  begin
+    Inc(AIndex, LowSurrogateByteLength);
+    CodePoint := $10000 + ((CodePoint - $D800) shl 10) +
+      (LowSurrogate - $DC00);
+  end;
+
+  Result := CodePoint;
+end;
+
+procedure ValidateRegExpGroupNameCodePoint(ACodePoint: Cardinal;
+  AAtStart: Boolean);
+begin
+  if AAtStart then
+  begin
+    if not IsIdentifierStartCodePoint(ACodePoint) then
+      raise EConvertError.Create('Invalid group name');
+  end
+  else if not IsIdentifierPartCodePoint(ACodePoint) then
+    raise EConvertError.Create('Invalid group name');
 end;
 
 function DecodeRegExpGroupName(const ARawName: string): string;
 var
+  CodePoint: Cardinal;
   I: Integer;
+  AtStart: Boolean;
 begin
+  if ARawName = '' then
+    raise EConvertError.Create('Invalid group name');
+
   Result := '';
   I := 1;
+  AtStart := True;
   while I <= Length(ARawName) do
   begin
     if (ARawName[I] = '\') and (I + 1 <= Length(ARawName)) and
        (ARawName[I + 1] = 'u') then
-      Result := Result + DecodeRegExpGroupNameUnicodeEscape(ARawName, I)
+      CodePoint := DecodeRegExpGroupNameUnicodeEscape(ARawName, I)
     else
-    begin
-      Result := Result + ARawName[I];
-      Inc(I);
-    end;
+      CodePoint := ReadRegExpGroupNameLiteralCodePoint(ARawName, I);
+
+    ValidateRegExpGroupNameCodePoint(CodePoint, AtStart);
+    Result := Result + CodePointToUTF8(CodePoint);
+    AtStart := False;
   end;
 end;
 
