@@ -13,6 +13,10 @@ function TryICUCanonicalizeLocale(const ATag: string; out ACanonical: string): B
 function TryICUGetAvailableLocales(out ALocales: IntlTypes.TStringArray): Boolean;
 function TryICUMaximizeLocale(const ATag: string; out AMaximized: string): Boolean;
 function TryICUMinimizeLocale(const ATag: string; out AMinimized: string): Boolean;
+function TryICUGetLocaleCalendars(const ALocale: string;
+  out ACalendars: IntlTypes.TStringArray): Boolean;
+function TryICUGetLocaleCollations(const ALocale: string;
+  out ACollations: IntlTypes.TStringArray): Boolean;
 
 function TryICUCompareStrings(const ALocale: string; const AStr1, AStr2: UnicodeString;
   ASensitivity: TIntlCollatorSensitivity; AIgnorePunctuation: Boolean;
@@ -22,10 +26,22 @@ function TryICUFormatNumber(const ALocale: string; AValue: Double;
   const AOptions: TIntlNumberFormatOptions; out AFormatted: string): Boolean;
 function TryICUFormatNumberToParts(const ALocale: string; AValue: Double;
   const AOptions: TIntlNumberFormatOptions; out AParts: TIntlFormatPartArray): Boolean;
+function TryICUFormatNumberRange(const ALocale: string; AStartValue, AEndValue: Double;
+  const AOptions: TIntlNumberFormatOptions; out AFormatted: string): Boolean;
+function TryICUFormatNumberRangeToParts(const ALocale: string; AStartValue, AEndValue: Double;
+  const AOptions: TIntlNumberFormatOptions; out AParts: TIntlFormatPartArray): Boolean;
+function TryICUFormatNumberDecimalRange(const ALocale, AStartValue, AEndValue: string;
+  const AOptions: TIntlNumberFormatOptions; out AFormatted: string): Boolean;
+function TryICUFormatNumberDecimalRangeToParts(const ALocale, AStartValue, AEndValue: string;
+  const AOptions: TIntlNumberFormatOptions; out AParts: TIntlFormatPartArray): Boolean;
 
 function TryICUFormatDateTime(const ALocale: string; AMillis: Double;
   const AOptions: TIntlDateTimeFormatOptions; out AFormatted: string): Boolean;
 function TryICUFormatDateTimeToParts(const ALocale: string; AMillis: Double;
+  const AOptions: TIntlDateTimeFormatOptions; out AParts: TIntlFormatPartArray): Boolean;
+function TryICUFormatDateTimeRange(const ALocale: string; AStartMillis, AEndMillis: Double;
+  const AOptions: TIntlDateTimeFormatOptions; out AFormatted: string): Boolean;
+function TryICUFormatDateTimeRangeToParts(const ALocale: string; AStartMillis, AEndMillis: Double;
   const AOptions: TIntlDateTimeFormatOptions; out AParts: TIntlFormatPartArray): Boolean;
 
 function TryICUSelectPlural(const ALocale: string; AValue: Double;
@@ -93,11 +109,59 @@ const
   UNUM_ROUND_HALF_CEILING = 9;
   UNUM_ROUND_HALF_FLOOR = 10;
   UNUM_DATTR_ROUNDING_INCREMENT = 0;
+  UNUM_CURRENCY_CODE = 5;
+  UNUM_INTEGER_FIELD = 0;
+  UNUM_FRACTION_FIELD = 1;
+  UNUM_DECIMAL_SEPARATOR_FIELD = 2;
+  UNUM_EXPONENT_SYMBOL_FIELD = 3;
+  UNUM_EXPONENT_SIGN_FIELD = 4;
+  UNUM_EXPONENT_FIELD = 5;
+  UNUM_GROUPING_SEPARATOR_FIELD = 6;
+  UNUM_CURRENCY_FIELD = 7;
+  UNUM_PERCENT_FIELD = 8;
+  UNUM_PERMILL_FIELD = 9;
+  UNUM_SIGN_FIELD = 10;
+  UNUM_MEASURE_UNIT_FIELD = 11;
+  UNUM_COMPACT_FIELD = 12;
+  UNUM_APPROXIMATELY_SIGN_FIELD = 13;
   UDAT_FULL = 0;
   UDAT_LONG = 1;
   UDAT_MEDIUM = 2;
   UDAT_SHORT = 3;
   UDAT_NONE = -1;
+  UDAT_PATTERN = -2;
+  UDAT_ERA_FIELD = 0;
+  UDAT_YEAR_FIELD = 1;
+  UDAT_MONTH_FIELD = 2;
+  UDAT_DATE_FIELD = 3;
+  UDAT_HOUR_OF_DAY1_FIELD = 4;
+  UDAT_HOUR_OF_DAY0_FIELD = 5;
+  UDAT_MINUTE_FIELD = 6;
+  UDAT_SECOND_FIELD = 7;
+  UDAT_FRACTIONAL_SECOND_FIELD = 8;
+  UDAT_DAY_OF_WEEK_FIELD = 9;
+  UDAT_AM_PM_FIELD = 14;
+  UDAT_HOUR1_FIELD = 15;
+  UDAT_HOUR0_FIELD = 16;
+  UDAT_TIMEZONE_FIELD = 17;
+  UDAT_TIMEZONE_RFC_FIELD = 23;
+  UDAT_TIMEZONE_GENERIC_FIELD = 24;
+  UDAT_STANDALONE_MONTH_FIELD = 26;
+  UDAT_TIMEZONE_SPECIAL_FIELD = 29;
+  UDAT_YEAR_NAME_FIELD = 30;
+  UDAT_TIMEZONE_LOCALIZED_GMT_OFFSET_FIELD = 31;
+  UDAT_TIMEZONE_ISO_FIELD = 32;
+  UDAT_TIMEZONE_ISO_LOCAL_FIELD = 33;
+  UDAT_RELATED_YEAR_FIELD = 34;
+  UDAT_AM_PM_MIDNIGHT_NOON_FIELD = 35;
+  UDAT_FLEXIBLE_DAY_PERIOD_FIELD = 36;
+  UDAT_TIME_SEPARATOR_FIELD = 37;
+  UFIELD_CATEGORY_DATE = 1;
+  UFIELD_CATEGORY_NUMBER = 2;
+  UFIELD_CATEGORY_DATE_INTERVAL_SPAN = 4101;
+  UFIELD_CATEGORY_NUMBER_RANGE_SPAN = 4098;
+  UNUM_RANGE_COLLAPSE_AUTO = 0;
+  UNUM_IDENTITY_FALLBACK_APPROXIMATELY = 2;
   UBRK_CHARACTER = 0;
   UBRK_WORD = 1;
   UBRK_LINE = 2;
@@ -182,12 +246,24 @@ type
     ATargetLength: LongInt): TICUCollationResult; cdecl;
   TUcolSetAttribute = procedure(ACollator: Pointer; AAttr: LongInt;
     AValue: LongInt; var AStatus: TICUErrorCode); cdecl;
+  TUcalGetKeywordValuesForLocale = function(const AKey: PAnsiChar;
+    const ALocale: PAnsiChar; ACommonlyUsed: ByteBool;
+    var AStatus: TICUErrorCode): Pointer; cdecl;
+  TUcolGetKeywordValuesForLocale = function(const AKey: PAnsiChar;
+    const ALocale: PAnsiChar; ACommonlyUsed: ByteBool;
+    var AStatus: TICUErrorCode): Pointer; cdecl;
+  TUenumNext = function(AEnumeration: Pointer; AResultLength: PLongInt;
+    var AStatus: TICUErrorCode): PAnsiChar; cdecl;
+  TUenumClose = procedure(AEnumeration: Pointer); cdecl;
   TUnumOpen = function(AStyle: LongInt; const APattern: PUChar;
     APatternLength: LongInt; const ALocale: PAnsiChar;
     AParseErr: Pointer; var AStatus: TICUErrorCode): Pointer; cdecl;
   TUnumClose = procedure(AFormat: Pointer); cdecl;
   TUnumFormatDouble = function(AFormat: Pointer; ANumber: Double;
     AResult: PUChar; AResultLength: LongInt; APos: Pointer;
+    var AStatus: TICUErrorCode): LongInt; cdecl;
+  TUnumFormatDoubleForFields = function(AFormat: Pointer; ANumber: Double;
+    AResult: PUChar; AResultLength: LongInt; AFposIter: Pointer;
     var AStatus: TICUErrorCode): LongInt; cdecl;
   TUnumSetAttribute = procedure(AFormat: Pointer; AAttr: LongInt;
     ANewValue: LongInt); cdecl;
@@ -207,6 +283,55 @@ type
   TUdatFormat = function(AFormat: Pointer; ADateToFormat: Double;
     AResult: PUChar; AResultLength: LongInt; APosition: Pointer;
     var AStatus: TICUErrorCode): LongInt; cdecl;
+  TUdatFormatForFields = function(AFormat: Pointer; ADateToFormat: Double;
+    AResult: PUChar; AResultLength: LongInt; AFposIter: Pointer;
+    var AStatus: TICUErrorCode): LongInt; cdecl;
+  TUdatpgOpen = function(const ALocale: PAnsiChar;
+    var AStatus: TICUErrorCode): Pointer; cdecl;
+  TUdatpgClose = procedure(APatternGenerator: Pointer); cdecl;
+  TUdatpgGetBestPattern = function(APatternGenerator: Pointer;
+    const ASkeleton: PUChar; ASkeletonLength: LongInt;
+    ABestPattern: PUChar; ABestPatternCapacity: LongInt;
+    var AStatus: TICUErrorCode): LongInt; cdecl;
+  TUFieldPosIterOpen = function(var AStatus: TICUErrorCode): Pointer; cdecl;
+  TUFieldPosIterClose = procedure(AIterator: Pointer); cdecl;
+  TUFieldPosIterNext = function(AIterator: Pointer; ABeginIndex, AEndIndex: PLongInt): LongInt; cdecl;
+  TUdtitvfmtOpen = function(const ALocale: PAnsiChar;
+    const ASkeleton: PUChar; ASkeletonLength: LongInt;
+    const ATzId: PUChar; ATzIdLength: LongInt;
+    var AStatus: TICUErrorCode): Pointer; cdecl;
+  TUdtitvfmtClose = procedure(AFormatter: Pointer); cdecl;
+  TUdtitvfmtFormat = function(AFormatter: Pointer; AFromDate, AToDate: Double;
+    AResult: PUChar; AResultCapacity: LongInt; APosition: Pointer;
+    var AStatus: TICUErrorCode): LongInt; cdecl;
+  TUdtitvfmtOpenResult = function(var AStatus: TICUErrorCode): Pointer; cdecl;
+  TUdtitvfmtFormatToResult = procedure(AFormatter: Pointer; AFromDate, AToDate: Double;
+    AResult: Pointer; var AStatus: TICUErrorCode); cdecl;
+  TUdtitvfmtResultAsValue = function(AResult: Pointer; var AStatus: TICUErrorCode): Pointer; cdecl;
+  TUdtitvfmtCloseResult = procedure(AResult: Pointer); cdecl;
+  TUcfposOpen = function(var AStatus: TICUErrorCode): Pointer; cdecl;
+  TUcfposClose = procedure(APosition: Pointer); cdecl;
+  TUcfposGetCategory = function(APosition: Pointer; var AStatus: TICUErrorCode): LongInt; cdecl;
+  TUcfposGetField = function(APosition: Pointer; var AStatus: TICUErrorCode): LongInt; cdecl;
+  TUcfposGetIndexes = procedure(APosition: Pointer; AStart, ALimit: PLongInt;
+    var AStatus: TICUErrorCode); cdecl;
+  TUfmtvalGetString = function(AFormattedValue: Pointer; ALength: PLongInt;
+    var AStatus: TICUErrorCode): PUChar; cdecl;
+  TUfmtvalNextPosition = function(AFormattedValue, APosition: Pointer;
+    var AStatus: TICUErrorCode): ByteBool; cdecl;
+  TUnumrfOpenForSkeletonWithCollapseAndIdentityFallback = function(
+    const ASkeleton: PUChar; ASkeletonLength: LongInt; ACollapse: LongInt;
+    AIdentityFallback: LongInt; const ALocale: PAnsiChar; AParseError: Pointer;
+    var AStatus: TICUErrorCode): Pointer; cdecl;
+  TUnumrfOpenResult = function(var AStatus: TICUErrorCode): Pointer; cdecl;
+  TUnumrfFormatDoubleRange = procedure(AFormatter: Pointer; AFirst, ASecond: Double;
+    AResult: Pointer; var AStatus: TICUErrorCode); cdecl;
+  TUnumrfFormatDecimalRange = procedure(AFormatter: Pointer; const AFirst: PAnsiChar;
+    AFirstLength: LongInt; const ASecond: PAnsiChar; ASecondLength: LongInt;
+    AResult: Pointer; var AStatus: TICUErrorCode); cdecl;
+  TUnumrfResultAsValue = function(AResult: Pointer; var AStatus: TICUErrorCode): Pointer; cdecl;
+  TUnumrfClose = procedure(AFormatter: Pointer); cdecl;
+  TUnumrfCloseResult = procedure(AResult: Pointer); cdecl;
   TUplrulesOpen = function(const ALocale: PAnsiChar;
     var AStatus: TICUErrorCode): Pointer; cdecl;
   TUplrulesOpenForType = function(const ALocale: PAnsiChar; APluralType: LongInt;
@@ -265,9 +390,14 @@ type
     UcolClose: TUcolClose;
     UcolStrcoll: TUcolStrcoll;
     UcolSetAttribute: TUcolSetAttribute;
+    UcalGetKeywordValuesForLocale: TUcalGetKeywordValuesForLocale;
+    UcolGetKeywordValuesForLocale: TUcolGetKeywordValuesForLocale;
+    UenumNext: TUenumNext;
+    UenumClose: TUenumClose;
     UnumOpen: TUnumOpen;
     UnumClose: TUnumClose;
     UnumFormatDouble: TUnumFormatDouble;
+    UnumFormatDoubleForFields: TUnumFormatDoubleForFields;
     UnumSetAttribute: TUnumSetAttribute;
     UnumSetDoubleAttribute: TUnumSetDoubleAttribute;
     UnumApplyPattern: TUnumApplyPattern;
@@ -275,6 +405,34 @@ type
     UdatOpen: TUdatOpen;
     UdatClose: TUdatClose;
     UdatFormat: TUdatFormat;
+    UdatFormatForFields: TUdatFormatForFields;
+    UdatpgOpen: TUdatpgOpen;
+    UdatpgClose: TUdatpgClose;
+    UdatpgGetBestPattern: TUdatpgGetBestPattern;
+    UfieldpositerOpen: TUFieldPosIterOpen;
+    UfieldpositerClose: TUFieldPosIterClose;
+    UfieldpositerNext: TUFieldPosIterNext;
+    UdtitvfmtOpen: TUdtitvfmtOpen;
+    UdtitvfmtClose: TUdtitvfmtClose;
+    UdtitvfmtFormat: TUdtitvfmtFormat;
+    UdtitvfmtOpenResult: TUdtitvfmtOpenResult;
+    UdtitvfmtFormatToResult: TUdtitvfmtFormatToResult;
+    UdtitvfmtResultAsValue: TUdtitvfmtResultAsValue;
+    UdtitvfmtCloseResult: TUdtitvfmtCloseResult;
+    UcfposOpen: TUcfposOpen;
+    UcfposClose: TUcfposClose;
+    UcfposGetCategory: TUcfposGetCategory;
+    UcfposGetField: TUcfposGetField;
+    UcfposGetIndexes: TUcfposGetIndexes;
+    UfmtvalGetString: TUfmtvalGetString;
+    UfmtvalNextPosition: TUfmtvalNextPosition;
+    UnumrfOpenForSkeletonWithCollapseAndIdentityFallback: TUnumrfOpenForSkeletonWithCollapseAndIdentityFallback;
+    UnumrfOpenResult: TUnumrfOpenResult;
+    UnumrfFormatDoubleRange: TUnumrfFormatDoubleRange;
+    UnumrfFormatDecimalRange: TUnumrfFormatDecimalRange;
+    UnumrfResultAsValue: TUnumrfResultAsValue;
+    UnumrfClose: TUnumrfClose;
+    UnumrfCloseResult: TUnumrfCloseResult;
     UplrulesOpen: TUplrulesOpen;
     UplrulesOpenForType: TUplrulesOpenForType;
     UplrulesClose: TUplrulesClose;
@@ -295,6 +453,15 @@ type
     UcasemapUtf8ToUpper: TUcasemapUtf8ToUpper;
     UcasemapUtf8ToLower: TUcasemapUtf8ToLower;
   end;
+
+  TICUFieldSpan = record
+    Category: Integer;
+    Field: Integer;
+    StartIndex: Integer;
+    EndIndex: Integer;
+  end;
+  TICUFieldSpanArray = array of TICUFieldSpan;
+  TICUFieldTypeMapper = function(AField: Integer): string;
 
 var
   IntlFunctions: TIntlICUFunctions;
@@ -376,6 +543,18 @@ begin
   if not Assigned(S) then Exit;
   F.UcolSetAttribute := TUcolSetAttribute(S);
 
+  S := ResolveSymbol(AHandle, 'ucal_getKeywordValuesForLocale');
+  if Assigned(S) then F.UcalGetKeywordValuesForLocale := TUcalGetKeywordValuesForLocale(S);
+
+  S := ResolveSymbol(AHandle, 'ucol_getKeywordValuesForLocale');
+  if Assigned(S) then F.UcolGetKeywordValuesForLocale := TUcolGetKeywordValuesForLocale(S);
+
+  S := ResolveSymbol(AHandle, 'uenum_next');
+  if Assigned(S) then F.UenumNext := TUenumNext(S);
+
+  S := ResolveSymbol(AHandle, 'uenum_close');
+  if Assigned(S) then F.UenumClose := TUenumClose(S);
+
   S := ResolveSymbol(AHandle, 'unum_open');
   if not Assigned(S) then Exit;
   F.UnumOpen := TUnumOpen(S);
@@ -411,6 +590,66 @@ begin
   if Assigned(S) then F.UnumApplyPattern := TUnumApplyPattern(S);
   S := ResolveSymbol(AHandle, 'unum_setTextAttribute');
   if Assigned(S) then F.UnumSetTextAttribute := TUnumSetTextAttribute(S);
+  S := ResolveSymbol(AHandle, 'unum_formatDoubleForFields');
+  if Assigned(S) then F.UnumFormatDoubleForFields := TUnumFormatDoubleForFields(S);
+  S := ResolveSymbol(AHandle, 'udat_formatForFields');
+  if Assigned(S) then F.UdatFormatForFields := TUdatFormatForFields(S);
+  S := ResolveSymbol(AHandle, 'udatpg_open');
+  if Assigned(S) then F.UdatpgOpen := TUdatpgOpen(S);
+  S := ResolveSymbol(AHandle, 'udatpg_close');
+  if Assigned(S) then F.UdatpgClose := TUdatpgClose(S);
+  S := ResolveSymbol(AHandle, 'udatpg_getBestPattern');
+  if Assigned(S) then F.UdatpgGetBestPattern := TUdatpgGetBestPattern(S);
+  S := ResolveSymbol(AHandle, 'ufieldpositer_open');
+  if Assigned(S) then F.UfieldpositerOpen := TUFieldPosIterOpen(S);
+  S := ResolveSymbol(AHandle, 'ufieldpositer_close');
+  if Assigned(S) then F.UfieldpositerClose := TUFieldPosIterClose(S);
+  S := ResolveSymbol(AHandle, 'ufieldpositer_next');
+  if Assigned(S) then F.UfieldpositerNext := TUFieldPosIterNext(S);
+  S := ResolveSymbol(AHandle, 'udtitvfmt_open');
+  if Assigned(S) then F.UdtitvfmtOpen := TUdtitvfmtOpen(S);
+  S := ResolveSymbol(AHandle, 'udtitvfmt_close');
+  if Assigned(S) then F.UdtitvfmtClose := TUdtitvfmtClose(S);
+  S := ResolveSymbol(AHandle, 'udtitvfmt_format');
+  if Assigned(S) then F.UdtitvfmtFormat := TUdtitvfmtFormat(S);
+  S := ResolveSymbol(AHandle, 'udtitvfmt_openResult');
+  if Assigned(S) then F.UdtitvfmtOpenResult := TUdtitvfmtOpenResult(S);
+  S := ResolveSymbol(AHandle, 'udtitvfmt_formatToResult');
+  if Assigned(S) then F.UdtitvfmtFormatToResult := TUdtitvfmtFormatToResult(S);
+  S := ResolveSymbol(AHandle, 'udtitvfmt_resultAsValue');
+  if Assigned(S) then F.UdtitvfmtResultAsValue := TUdtitvfmtResultAsValue(S);
+  S := ResolveSymbol(AHandle, 'udtitvfmt_closeResult');
+  if Assigned(S) then F.UdtitvfmtCloseResult := TUdtitvfmtCloseResult(S);
+  S := ResolveSymbol(AHandle, 'ucfpos_open');
+  if Assigned(S) then F.UcfposOpen := TUcfposOpen(S);
+  S := ResolveSymbol(AHandle, 'ucfpos_close');
+  if Assigned(S) then F.UcfposClose := TUcfposClose(S);
+  S := ResolveSymbol(AHandle, 'ucfpos_getCategory');
+  if Assigned(S) then F.UcfposGetCategory := TUcfposGetCategory(S);
+  S := ResolveSymbol(AHandle, 'ucfpos_getField');
+  if Assigned(S) then F.UcfposGetField := TUcfposGetField(S);
+  S := ResolveSymbol(AHandle, 'ucfpos_getIndexes');
+  if Assigned(S) then F.UcfposGetIndexes := TUcfposGetIndexes(S);
+  S := ResolveSymbol(AHandle, 'ufmtval_getString');
+  if Assigned(S) then F.UfmtvalGetString := TUfmtvalGetString(S);
+  S := ResolveSymbol(AHandle, 'ufmtval_nextPosition');
+  if Assigned(S) then F.UfmtvalNextPosition := TUfmtvalNextPosition(S);
+  S := ResolveSymbol(AHandle, 'unumrf_openForSkeletonWithCollapseAndIdentityFallback');
+  if Assigned(S) then
+    F.UnumrfOpenForSkeletonWithCollapseAndIdentityFallback :=
+      TUnumrfOpenForSkeletonWithCollapseAndIdentityFallback(S);
+  S := ResolveSymbol(AHandle, 'unumrf_openResult');
+  if Assigned(S) then F.UnumrfOpenResult := TUnumrfOpenResult(S);
+  S := ResolveSymbol(AHandle, 'unumrf_formatDoubleRange');
+  if Assigned(S) then F.UnumrfFormatDoubleRange := TUnumrfFormatDoubleRange(S);
+  S := ResolveSymbol(AHandle, 'unumrf_formatDecimalRange');
+  if Assigned(S) then F.UnumrfFormatDecimalRange := TUnumrfFormatDecimalRange(S);
+  S := ResolveSymbol(AHandle, 'unumrf_resultAsValue');
+  if Assigned(S) then F.UnumrfResultAsValue := TUnumrfResultAsValue(S);
+  S := ResolveSymbol(AHandle, 'unumrf_close');
+  if Assigned(S) then F.UnumrfClose := TUnumrfClose(S);
+  S := ResolveSymbol(AHandle, 'unumrf_closeResult');
+  if Assigned(S) then F.UnumrfCloseResult := TUnumrfCloseResult(S);
   S := ResolveSymbol(AHandle, 'uplrules_open');
   if Assigned(S) then F.UplrulesOpen := TUplrulesOpen(S);
   S := ResolveSymbol(AHandle, 'uplrules_openForType');
@@ -494,6 +733,326 @@ begin
   SetLength(U, ALen);
   Move(ABuf[0], U[1], ALen * SizeOf(WideChar));
   Result := string(U);
+end;
+
+function UnicodePointerToString(AChars: PUChar; ALen: Integer): string;
+var
+  U: UnicodeString;
+begin
+  if (ALen <= 0) or not Assigned(AChars) then
+  begin
+    Result := '';
+    Exit;
+  end;
+  SetLength(U, ALen);
+  Move(AChars^, U[1], ALen * SizeOf(WideChar));
+  Result := string(U);
+end;
+
+procedure AppendFormatPart(var AParts: TIntlFormatPartArray;
+  const APartType, AValue, ASource: string);
+var
+  Index: Integer;
+begin
+  if AValue = '' then
+    Exit;
+
+  Index := Length(AParts) - 1;
+  if (Index >= 0) and (AParts[Index].PartType = APartType) and
+     (AParts[Index].Source = ASource) then
+  begin
+    AParts[Index].Value := AParts[Index].Value + AValue;
+    Exit;
+  end;
+
+  SetLength(AParts, Length(AParts) + 1);
+  Index := Length(AParts) - 1;
+  AParts[Index].PartType := APartType;
+  AParts[Index].Value := AValue;
+  AParts[Index].Source := ASource;
+end;
+
+procedure AppendFieldSpan(var ASpans: TICUFieldSpanArray;
+  ACategory, AField, AStartIndex, AEndIndex: Integer);
+var
+  Index: Integer;
+begin
+  if AEndIndex <= AStartIndex then
+    Exit;
+  SetLength(ASpans, Length(ASpans) + 1);
+  Index := Length(ASpans) - 1;
+  ASpans[Index].Category := ACategory;
+  ASpans[Index].Field := AField;
+  ASpans[Index].StartIndex := AStartIndex;
+  ASpans[Index].EndIndex := AEndIndex;
+end;
+
+procedure AddBoundary(var ABoundaries: array of Integer; var ACount: Integer;
+  AValue: Integer);
+var
+  I: Integer;
+begin
+  for I := 0 to ACount - 1 do
+    if ABoundaries[I] = AValue then
+      Exit;
+  ABoundaries[ACount] := AValue;
+  Inc(ACount);
+end;
+
+procedure SortBoundaries(var ABoundaries: array of Integer; ACount: Integer);
+var
+  I, J, Value: Integer;
+begin
+  for I := 1 to ACount - 1 do
+  begin
+    Value := ABoundaries[I];
+    J := I - 1;
+    while (J >= 0) and (ABoundaries[J] > Value) do
+    begin
+      ABoundaries[J + 1] := ABoundaries[J];
+      Dec(J);
+    end;
+    ABoundaries[J + 1] := Value;
+  end;
+end;
+
+function NumberFieldToPartType(AField: Integer): string;
+begin
+  case AField of
+    UNUM_INTEGER_FIELD: Result := 'integer';
+    UNUM_FRACTION_FIELD: Result := 'fraction';
+    UNUM_DECIMAL_SEPARATOR_FIELD: Result := 'decimal';
+    UNUM_EXPONENT_SYMBOL_FIELD: Result := 'exponentSeparator';
+    UNUM_EXPONENT_SIGN_FIELD: Result := 'exponentMinusSign';
+    UNUM_EXPONENT_FIELD: Result := 'exponentInteger';
+    UNUM_GROUPING_SEPARATOR_FIELD: Result := 'group';
+    UNUM_CURRENCY_FIELD: Result := 'currency';
+    UNUM_PERCENT_FIELD: Result := 'percentSign';
+    UNUM_PERMILL_FIELD: Result := 'literal';
+    UNUM_SIGN_FIELD: Result := 'sign';
+    UNUM_MEASURE_UNIT_FIELD: Result := 'unit';
+    UNUM_COMPACT_FIELD: Result := 'compact';
+    UNUM_APPROXIMATELY_SIGN_FIELD: Result := 'approximatelySign';
+  else
+    Result := 'literal';
+  end;
+end;
+
+function DateFieldToPartType(AField: Integer): string;
+begin
+  case AField of
+    UDAT_ERA_FIELD: Result := 'era';
+    UDAT_YEAR_FIELD: Result := 'year';
+    UDAT_MONTH_FIELD,
+    UDAT_STANDALONE_MONTH_FIELD: Result := 'month';
+    UDAT_YEAR_NAME_FIELD: Result := 'yearName';
+    UDAT_RELATED_YEAR_FIELD: Result := 'relatedYear';
+    UDAT_DATE_FIELD: Result := 'day';
+    UDAT_HOUR_OF_DAY1_FIELD,
+    UDAT_HOUR_OF_DAY0_FIELD,
+    UDAT_HOUR1_FIELD,
+    UDAT_HOUR0_FIELD: Result := 'hour';
+    UDAT_MINUTE_FIELD: Result := 'minute';
+    UDAT_SECOND_FIELD: Result := 'second';
+    UDAT_FRACTIONAL_SECOND_FIELD: Result := 'fractionalSecond';
+    UDAT_DAY_OF_WEEK_FIELD: Result := 'weekday';
+    UDAT_AM_PM_FIELD,
+    UDAT_AM_PM_MIDNIGHT_NOON_FIELD,
+    UDAT_FLEXIBLE_DAY_PERIOD_FIELD: Result := 'dayPeriod';
+    UDAT_TIMEZONE_FIELD,
+    UDAT_TIMEZONE_RFC_FIELD,
+    UDAT_TIMEZONE_GENERIC_FIELD,
+    UDAT_TIMEZONE_SPECIAL_FIELD,
+    UDAT_TIMEZONE_LOCALIZED_GMT_OFFSET_FIELD,
+    UDAT_TIMEZONE_ISO_FIELD,
+    UDAT_TIMEZONE_ISO_LOCAL_FIELD: Result := 'timeZoneName';
+  else
+    Result := 'literal';
+  end;
+end;
+
+function BestPartTypeForSegment(const ASpans: TICUFieldSpanArray;
+  AFieldCategory, AStartIndex, AEndIndex: Integer;
+  AMapper: TICUFieldTypeMapper): string;
+var
+  I, SpanLength, BestLength, BestField: Integer;
+begin
+  BestField := -1;
+  BestLength := MaxInt;
+  for I := 0 to Length(ASpans) - 1 do
+    if (ASpans[I].Category = AFieldCategory) and
+       (AStartIndex >= ASpans[I].StartIndex) and
+       (AEndIndex <= ASpans[I].EndIndex) then
+    begin
+      SpanLength := ASpans[I].EndIndex - ASpans[I].StartIndex;
+      if SpanLength < BestLength then
+      begin
+        BestLength := SpanLength;
+        BestField := ASpans[I].Field;
+      end;
+    end;
+
+  if BestField >= 0 then
+    Result := AMapper(BestField)
+  else
+    Result := 'literal';
+end;
+
+function RangeSourceForSegment(const ASpans: TICUFieldSpanArray;
+  ARangeSpanCategory, AStartIndex, AEndIndex: Integer): string;
+var
+  I: Integer;
+begin
+  Result := 'shared';
+  if ARangeSpanCategory = 0 then
+  begin
+    Result := '';
+    Exit;
+  end;
+
+  for I := 0 to Length(ASpans) - 1 do
+    if (ASpans[I].Category = ARangeSpanCategory) and
+       (AStartIndex >= ASpans[I].StartIndex) and
+       (AEndIndex <= ASpans[I].EndIndex) then
+    begin
+      if ASpans[I].Field = 0 then
+        Result := 'startRange'
+      else if ASpans[I].Field = 1 then
+        Result := 'endRange';
+      Exit;
+    end;
+end;
+
+function BuildPartsFromFieldSpans(const AFormatted: UnicodeString;
+  const ASpans: TICUFieldSpanArray; AFieldCategory, ARangeSpanCategory: Integer;
+  AMapper: TICUFieldTypeMapper; out AParts: TIntlFormatPartArray): Boolean;
+var
+  Boundaries: array of Integer;
+  BoundaryCount, I, SegStart, SegEnd, FormattedLength: Integer;
+  PartType, Value, Source: string;
+begin
+  Result := False;
+  SetLength(AParts, 0);
+  FormattedLength := Length(AFormatted);
+  SetLength(Boundaries, (Length(ASpans) * 2) + 2);
+  BoundaryCount := 0;
+  AddBoundary(Boundaries, BoundaryCount, 0);
+  AddBoundary(Boundaries, BoundaryCount, FormattedLength);
+
+  for I := 0 to Length(ASpans) - 1 do
+    if (ASpans[I].StartIndex >= 0) and
+       (ASpans[I].EndIndex <= FormattedLength) then
+    begin
+      AddBoundary(Boundaries, BoundaryCount, ASpans[I].StartIndex);
+      AddBoundary(Boundaries, BoundaryCount, ASpans[I].EndIndex);
+    end;
+
+  SortBoundaries(Boundaries, BoundaryCount);
+  for I := 0 to BoundaryCount - 2 do
+  begin
+    SegStart := Boundaries[I];
+    SegEnd := Boundaries[I + 1];
+    if SegEnd <= SegStart then
+      Continue;
+
+    Value := string(Copy(AFormatted, SegStart + 1, SegEnd - SegStart));
+    Source := RangeSourceForSegment(ASpans, ARangeSpanCategory, SegStart, SegEnd);
+    PartType := BestPartTypeForSegment(ASpans, AFieldCategory, SegStart, SegEnd, AMapper);
+    if PartType = 'sign' then
+    begin
+      if (Pos('+', Value) > 0) then
+        PartType := 'plusSign'
+      else
+        PartType := 'minusSign';
+    end;
+    AppendFormatPart(AParts, PartType, Value, Source);
+  end;
+
+  Result := True;
+end;
+
+procedure CollectIteratorFieldSpans(AIterator: Pointer; ACategory: Integer;
+  var ASpans: TICUFieldSpanArray);
+var
+  Field, StartIndex, EndIndex: LongInt;
+begin
+  while True do
+  begin
+    StartIndex := 0;
+    EndIndex := 0;
+    Field := IntlFunctions.UfieldpositerNext(AIterator, @StartIndex, @EndIndex);
+    if Field < 0 then
+      Break;
+    AppendFieldSpan(ASpans, ACategory, Field, StartIndex, EndIndex);
+  end;
+end;
+
+function FormattedValueToParts(AFormattedValue: Pointer; AFieldCategory,
+  ARangeSpanCategory: Integer; AMapper: TICUFieldTypeMapper;
+  out AFormatted: string; out AParts: TIntlFormatPartArray): Boolean;
+var
+  Status: TICUErrorCode;
+  Len, Category, Field, StartIndex, EndIndex: LongInt;
+  UText: PUChar;
+  UFormatted: UnicodeString;
+  Position: Pointer;
+  Spans: TICUFieldSpanArray;
+begin
+  Result := False;
+  AFormatted := '';
+  SetLength(AParts, 0);
+
+  if not Assigned(IntlFunctions.UfmtvalGetString) or
+     not Assigned(IntlFunctions.UfmtvalNextPosition) or
+     not Assigned(IntlFunctions.UcfposOpen) or
+     not Assigned(IntlFunctions.UcfposClose) or
+     not Assigned(IntlFunctions.UcfposGetCategory) or
+     not Assigned(IntlFunctions.UcfposGetField) or
+     not Assigned(IntlFunctions.UcfposGetIndexes) then
+    Exit;
+
+  Status := ICU_SUCCESS;
+  Len := 0;
+  UText := IntlFunctions.UfmtvalGetString(AFormattedValue, @Len, Status);
+  if not ICUSucceeded(Status) or not Assigned(UText) then
+    Exit;
+
+  AFormatted := UnicodePointerToString(UText, Len);
+  UFormatted := UnicodeString(AFormatted);
+  SetLength(Spans, 0);
+
+  Status := ICU_SUCCESS;
+  Position := IntlFunctions.UcfposOpen(Status);
+  if not ICUSucceeded(Status) or not Assigned(Position) then
+    Exit;
+  try
+    while True do
+    begin
+      Status := ICU_SUCCESS;
+      if not IntlFunctions.UfmtvalNextPosition(AFormattedValue, Position, Status) then
+        Break;
+      if not ICUSucceeded(Status) then
+        Exit;
+
+      Status := ICU_SUCCESS;
+      Category := IntlFunctions.UcfposGetCategory(Position, Status);
+      if not ICUSucceeded(Status) then Exit;
+      Status := ICU_SUCCESS;
+      Field := IntlFunctions.UcfposGetField(Position, Status);
+      if not ICUSucceeded(Status) then Exit;
+      Status := ICU_SUCCESS;
+      StartIndex := 0;
+      EndIndex := 0;
+      IntlFunctions.UcfposGetIndexes(Position, @StartIndex, @EndIndex, Status);
+      if not ICUSucceeded(Status) then Exit;
+      AppendFieldSpan(Spans, Category, Field, StartIndex, EndIndex);
+    end;
+  finally
+    IntlFunctions.UcfposClose(Position);
+  end;
+
+  Result := BuildPartsFromFieldSpans(UFormatted, Spans, AFieldCategory,
+    ARangeSpanCategory, AMapper, AParts);
 end;
 
 function TryICUCanonicalizeLocale(const ATag: string; out ACanonical: string): Boolean;
@@ -643,6 +1202,94 @@ begin
   Result := True;
 end;
 
+function TryICUEnumerationToArray(AEnumeration: Pointer;
+  out AValues: IntlTypes.TStringArray): Boolean;
+var
+  Status: TICUErrorCode;
+  ValueLength, Count: LongInt;
+  ValuePtr: PAnsiChar;
+  ValueAnsi: AnsiString;
+begin
+  Result := False;
+  SetLength(AValues, 0);
+
+  if (not Assigned(AEnumeration)) or (not Assigned(IntlFunctions.UenumNext)) or
+     (not Assigned(IntlFunctions.UenumClose)) then
+    Exit;
+
+  Count := 0;
+  try
+    repeat
+      Status := ICU_SUCCESS;
+      ValueLength := 0;
+      ValuePtr := IntlFunctions.UenumNext(AEnumeration, @ValueLength, Status);
+      if not ICUSucceeded(Status) then
+        Exit;
+      if not Assigned(ValuePtr) then
+        Break;
+
+      Inc(Count);
+      SetLength(AValues, Count);
+      SetString(ValueAnsi, ValuePtr, ValueLength);
+      AValues[Count - 1] := string(ValueAnsi);
+    until False;
+  finally
+    IntlFunctions.UenumClose(AEnumeration);
+  end;
+
+  Result := Count > 0;
+end;
+
+function TryICUGetLocaleCalendars(const ALocale: string;
+  out ACalendars: IntlTypes.TStringArray): Boolean;
+var
+  Status: TICUErrorCode;
+  KeyAnsi, LocaleAnsi: AnsiString;
+  Enumeration: Pointer;
+begin
+  Result := False;
+  SetLength(ACalendars, 0);
+
+  if not EnsureLoaded or
+     (not Assigned(IntlFunctions.UcalGetKeywordValuesForLocale)) then
+    Exit;
+
+  KeyAnsi := AnsiString('calendar');
+  LocaleAnsi := AnsiString(ALocale);
+  Status := ICU_SUCCESS;
+  Enumeration := IntlFunctions.UcalGetKeywordValuesForLocale(
+    PAnsiChar(KeyAnsi), PAnsiChar(LocaleAnsi), True, Status);
+  if not ICUSucceeded(Status) or not Assigned(Enumeration) then
+    Exit;
+
+  Result := TryICUEnumerationToArray(Enumeration, ACalendars);
+end;
+
+function TryICUGetLocaleCollations(const ALocale: string;
+  out ACollations: IntlTypes.TStringArray): Boolean;
+var
+  Status: TICUErrorCode;
+  KeyAnsi, LocaleAnsi: AnsiString;
+  Enumeration: Pointer;
+begin
+  Result := False;
+  SetLength(ACollations, 0);
+
+  if not EnsureLoaded or
+     (not Assigned(IntlFunctions.UcolGetKeywordValuesForLocale)) then
+    Exit;
+
+  KeyAnsi := AnsiString('collation');
+  LocaleAnsi := AnsiString(ALocale);
+  Status := ICU_SUCCESS;
+  Enumeration := IntlFunctions.UcolGetKeywordValuesForLocale(
+    PAnsiChar(KeyAnsi), PAnsiChar(LocaleAnsi), True, Status);
+  if not ICUSucceeded(Status) or not Assigned(Enumeration) then
+    Exit;
+
+  Result := TryICUEnumerationToArray(Enumeration, ACollations);
+end;
+
 function TryICUCompareStrings(const ALocale: string; const AStr1, AStr2: UnicodeString;
   ASensitivity: TIntlCollatorSensitivity; AIgnorePunctuation: Boolean;
   out AResult: Integer): Boolean;
@@ -765,9 +1412,20 @@ procedure ConfigureNumberFormatter(AFormatter: Pointer;
   const AOptions: TIntlNumberFormatOptions);
 var
   MinSig, MaxSig: Integer;
+  CurrencyUnicode: UnicodeString;
+  Status: TICUErrorCode;
 begin
   if not Assigned(IntlFunctions.UnumSetAttribute) then
     Exit;
+
+  if (AOptions.Style = insCurrency) and (AOptions.Currency <> '') and
+     Assigned(IntlFunctions.UnumSetTextAttribute) then
+  begin
+    CurrencyUnicode := UnicodeString(AOptions.Currency);
+    Status := ICU_SUCCESS;
+    IntlFunctions.UnumSetTextAttribute(AFormatter, UNUM_CURRENCY_CODE,
+      PWideChar(CurrencyUnicode), Length(CurrencyUnicode), Status);
+  end;
 
   if (AOptions.MinimumSignificantDigits > 0) or
      (AOptions.MaximumSignificantDigits > 0) then
@@ -889,6 +1547,123 @@ begin
     Result := ScaledInt / Scale;
 end;
 
+procedure AddSkeletonToken(var ASkeleton: string; const AToken: string);
+begin
+  if AToken = '' then
+    Exit;
+  if ASkeleton <> '' then
+    ASkeleton := ASkeleton + ' ';
+  ASkeleton := ASkeleton + AToken;
+end;
+
+function BuildFractionPrecisionSkeleton(const AOptions: TIntlNumberFormatOptions): string;
+var
+  MinFrac, MaxFrac: Integer;
+begin
+  Result := '';
+  if (AOptions.MinimumFractionDigits < 0) and
+     (AOptions.MaximumFractionDigits < 0) then
+    Exit;
+
+  MinFrac := AOptions.MinimumFractionDigits;
+  MaxFrac := AOptions.MaximumFractionDigits;
+  if MinFrac < 0 then MinFrac := 0;
+  if MaxFrac < MinFrac then MaxFrac := MinFrac;
+
+  if (MinFrac = 0) and (MaxFrac = 0) then
+    Result := 'precision-integer'
+  else if MaxFrac > 0 then
+    Result := '.' + StringOfChar('0', MinFrac) +
+      StringOfChar('#', MaxFrac - MinFrac);
+end;
+
+function BuildSignificantPrecisionSkeleton(const AOptions: TIntlNumberFormatOptions): string;
+var
+  MinSig, MaxSig: Integer;
+begin
+  Result := '';
+  MinSig := AOptions.MinimumSignificantDigits;
+  MaxSig := AOptions.MaximumSignificantDigits;
+  if MinSig < 1 then MinSig := 1;
+  if MaxSig < MinSig then MaxSig := MinSig;
+  Result := StringOfChar('@', MinSig) + StringOfChar('#', MaxSig - MinSig);
+end;
+
+function BuildNumberSkeleton(const AOptions: TIntlNumberFormatOptions): string;
+begin
+  Result := '';
+
+  case AOptions.Style of
+    insPercent:
+    begin
+      AddSkeletonToken(Result, 'percent');
+      AddSkeletonToken(Result, 'scale/100');
+    end;
+    insCurrency:
+    begin
+      if AOptions.Currency <> '' then
+        AddSkeletonToken(Result, 'currency/' + AOptions.Currency);
+      case AOptions.CurrencyDisplay of
+        incdNarrowSymbol: AddSkeletonToken(Result, 'unit-width-narrow');
+        incdCode: AddSkeletonToken(Result, 'unit-width-iso-code');
+        incdName: AddSkeletonToken(Result, 'unit-width-full-name');
+      end;
+    end;
+    insUnit:
+      if AOptions.UnitIdentifier <> '' then
+      begin
+        AddSkeletonToken(Result, 'unit/' + AOptions.UnitIdentifier);
+        case AOptions.UnitDisplay of
+          inudNarrow: AddSkeletonToken(Result, 'unit-width-narrow');
+          inudLong: AddSkeletonToken(Result, 'unit-width-full-name');
+        end;
+      end;
+  end;
+
+  case AOptions.Notation of
+    innScientific: AddSkeletonToken(Result, 'scientific');
+    innEngineering: AddSkeletonToken(Result, 'engineering');
+    innCompact:
+      if AOptions.CompactDisplay = incdLong then
+        AddSkeletonToken(Result, 'compact-long')
+      else
+        AddSkeletonToken(Result, 'compact-short');
+  end;
+
+  if (AOptions.MinimumSignificantDigits > 0) or
+     (AOptions.MaximumSignificantDigits > 0) then
+    AddSkeletonToken(Result, BuildSignificantPrecisionSkeleton(AOptions))
+  else
+    AddSkeletonToken(Result, BuildFractionPrecisionSkeleton(AOptions));
+
+  if AOptions.MinimumIntegerDigits > 1 then
+    AddSkeletonToken(Result, 'integer-width/*' +
+      StringOfChar('0', AOptions.MinimumIntegerDigits));
+
+  case AOptions.UseGrouping of
+    inugFalse: AddSkeletonToken(Result, 'group-off');
+    inugMin2: AddSkeletonToken(Result, 'group-min2');
+    inugAlways: AddSkeletonToken(Result, 'group-on-aligned');
+  end;
+
+  case AOptions.SignDisplay of
+    insdNever: AddSkeletonToken(Result, 'sign-never');
+    insdAlways: AddSkeletonToken(Result, 'sign-always');
+    insdExceptZero: AddSkeletonToken(Result, 'sign-except-zero');
+    insdNegative: AddSkeletonToken(Result, 'sign-negative');
+  end;
+
+  case AOptions.RoundingMode of
+    inrmCeil: AddSkeletonToken(Result, 'rounding-mode-ceiling');
+    inrmFloor: AddSkeletonToken(Result, 'rounding-mode-floor');
+    inrmExpand: AddSkeletonToken(Result, 'rounding-mode-up');
+    inrmTrunc: AddSkeletonToken(Result, 'rounding-mode-down');
+    inrmHalfExpand: AddSkeletonToken(Result, 'rounding-mode-half-up');
+    inrmHalfTrunc: AddSkeletonToken(Result, 'rounding-mode-half-down');
+    inrmHalfEven: AddSkeletonToken(Result, 'rounding-mode-half-even');
+  end;
+end;
+
 function TryICUFormatNumber(const ALocale: string; AValue: Double;
   const AOptions: TIntlNumberFormatOptions; out AFormatted: string): Boolean;
 var
@@ -936,15 +1711,178 @@ end;
 function TryICUFormatNumberToParts(const ALocale: string; AValue: Double;
   const AOptions: TIntlNumberFormatOptions; out AParts: TIntlFormatPartArray): Boolean;
 var
+  Status: TICUErrorCode;
+  Formatter, Iterator: Pointer;
+  Buffer: array[0..FORMAT_BUFFER_CAPACITY - 1] of WideChar;
+  ResultLen: LongInt;
+  LocaleAnsi: AnsiString;
+  ICUStyle: LongInt;
+  FormattedValue: Double;
+  Spans: TICUFieldSpanArray;
+  UFormatted: UnicodeString;
+begin
+  Result := False;
+  SetLength(AParts, 0);
+
+  if not EnsureLoaded or not Assigned(IntlFunctions.UnumFormatDoubleForFields) or
+     not Assigned(IntlFunctions.UfieldpositerOpen) or
+     not Assigned(IntlFunctions.UfieldpositerClose) or
+     not Assigned(IntlFunctions.UfieldpositerNext) then
+    Exit;
+
+  LocaleAnsi := AnsiString(ALocale);
+  ICUStyle := NumberStyleToICU(AOptions.Style);
+
+  Status := ICU_SUCCESS;
+  Formatter := IntlFunctions.UnumOpen(ICUStyle, nil, 0,
+    PAnsiChar(LocaleAnsi), nil, Status);
+  if not ICUSucceeded(Status) or not Assigned(Formatter) then
+    Exit;
+
+  try
+    ConfigureNumberFormatter(Formatter, AOptions);
+    FormattedValue := ApplyRoundingIncrement(AValue, AOptions);
+
+    Status := ICU_SUCCESS;
+    Iterator := IntlFunctions.UfieldpositerOpen(Status);
+    if not ICUSucceeded(Status) or not Assigned(Iterator) then
+      Exit;
+    try
+      FillChar(Buffer, SizeOf(Buffer), 0);
+      Status := ICU_SUCCESS;
+      ResultLen := IntlFunctions.UnumFormatDoubleForFields(Formatter,
+        FormattedValue, @Buffer[0], FORMAT_BUFFER_CAPACITY, Iterator, Status);
+      if not ICUSucceeded(Status) or (ResultLen <= 0) then
+        Exit;
+
+      UFormatted := UnicodeString(UnicodeToString(Buffer, ResultLen));
+      SetLength(Spans, 0);
+      CollectIteratorFieldSpans(Iterator, UFIELD_CATEGORY_NUMBER, Spans);
+      Result := BuildPartsFromFieldSpans(UFormatted, Spans,
+        UFIELD_CATEGORY_NUMBER, 0, NumberFieldToPartType, AParts);
+    finally
+      IntlFunctions.UfieldpositerClose(Iterator);
+    end;
+  finally
+    IntlFunctions.UnumClose(Formatter);
+  end;
+end;
+
+function TryICUFormatNumberRangeInternal(const ALocale: string;
+  AUseDecimal: Boolean; AStartDouble, AEndDouble: Double;
+  const AStartDecimal, AEndDecimal: string; const AOptions: TIntlNumberFormatOptions;
+  out AFormatted: string; out AParts: TIntlFormatPartArray;
+  AWantParts: Boolean): Boolean;
+var
+  Status: TICUErrorCode;
+  Skeleton: UnicodeString;
+  LocaleAnsi, StartAnsi, EndAnsi: AnsiString;
+  Formatter, RangeResult, FormattedValue: Pointer;
+begin
+  Result := False;
+  AFormatted := '';
+  SetLength(AParts, 0);
+
+  if not EnsureLoaded or
+     not Assigned(IntlFunctions.UnumrfOpenForSkeletonWithCollapseAndIdentityFallback) or
+     not Assigned(IntlFunctions.UnumrfOpenResult) or
+     not Assigned(IntlFunctions.UnumrfResultAsValue) or
+     not Assigned(IntlFunctions.UnumrfClose) or
+     not Assigned(IntlFunctions.UnumrfCloseResult) then
+    Exit;
+  if AUseDecimal and not Assigned(IntlFunctions.UnumrfFormatDecimalRange) then
+    Exit;
+  if (not AUseDecimal) and not Assigned(IntlFunctions.UnumrfFormatDoubleRange) then
+    Exit;
+
+  if not AUseDecimal then
+  begin
+    AStartDouble := ApplyRoundingIncrement(AStartDouble, AOptions);
+    AEndDouble := ApplyRoundingIncrement(AEndDouble, AOptions);
+  end;
+
+  Skeleton := UnicodeString(BuildNumberSkeleton(AOptions));
+  LocaleAnsi := AnsiString(ALocale);
+  Status := ICU_SUCCESS;
+  Formatter := IntlFunctions.UnumrfOpenForSkeletonWithCollapseAndIdentityFallback(
+    PWideChar(Skeleton), Length(Skeleton), UNUM_RANGE_COLLAPSE_AUTO,
+    UNUM_IDENTITY_FALLBACK_APPROXIMATELY, PAnsiChar(LocaleAnsi), nil, Status);
+  if not ICUSucceeded(Status) or not Assigned(Formatter) then
+    Exit;
+
+  try
+    Status := ICU_SUCCESS;
+    RangeResult := IntlFunctions.UnumrfOpenResult(Status);
+    if not ICUSucceeded(Status) or not Assigned(RangeResult) then
+      Exit;
+    try
+      Status := ICU_SUCCESS;
+      if AUseDecimal then
+      begin
+        StartAnsi := AnsiString(AStartDecimal);
+        EndAnsi := AnsiString(AEndDecimal);
+        IntlFunctions.UnumrfFormatDecimalRange(Formatter, PAnsiChar(StartAnsi),
+          Length(StartAnsi), PAnsiChar(EndAnsi), Length(EndAnsi),
+          RangeResult, Status);
+      end
+      else
+        IntlFunctions.UnumrfFormatDoubleRange(Formatter, AStartDouble,
+          AEndDouble, RangeResult, Status);
+      if not ICUSucceeded(Status) then
+        Exit;
+
+      Status := ICU_SUCCESS;
+      FormattedValue := IntlFunctions.UnumrfResultAsValue(RangeResult, Status);
+      if not ICUSucceeded(Status) or not Assigned(FormattedValue) then
+        Exit;
+
+      Result := FormattedValueToParts(FormattedValue, UFIELD_CATEGORY_NUMBER,
+        UFIELD_CATEGORY_NUMBER_RANGE_SPAN, NumberFieldToPartType,
+        AFormatted, AParts);
+      if Result and not AWantParts then
+        SetLength(AParts, 0);
+    finally
+      IntlFunctions.UnumrfCloseResult(RangeResult);
+    end;
+  finally
+    IntlFunctions.UnumrfClose(Formatter);
+  end;
+end;
+
+function TryICUFormatNumberRange(const ALocale: string; AStartValue, AEndValue: Double;
+  const AOptions: TIntlNumberFormatOptions; out AFormatted: string): Boolean;
+var
+  Parts: TIntlFormatPartArray;
+begin
+  Result := TryICUFormatNumberRangeInternal(ALocale, False, AStartValue, AEndValue,
+    '', '', AOptions, AFormatted, Parts, False);
+end;
+
+function TryICUFormatNumberRangeToParts(const ALocale: string; AStartValue, AEndValue: Double;
+  const AOptions: TIntlNumberFormatOptions; out AParts: TIntlFormatPartArray): Boolean;
+var
   Formatted: string;
 begin
-  Result := TryICUFormatNumber(ALocale, AValue, AOptions, Formatted);
-  if Result then
-  begin
-    SetLength(AParts, 1);
-    AParts[0].PartType := 'literal';
-    AParts[0].Value := Formatted;
-  end;
+  Result := TryICUFormatNumberRangeInternal(ALocale, False, AStartValue, AEndValue,
+    '', '', AOptions, Formatted, AParts, True);
+end;
+
+function TryICUFormatNumberDecimalRange(const ALocale, AStartValue, AEndValue: string;
+  const AOptions: TIntlNumberFormatOptions; out AFormatted: string): Boolean;
+var
+  Parts: TIntlFormatPartArray;
+begin
+  Result := TryICUFormatNumberRangeInternal(ALocale, True, 0, 0,
+    AStartValue, AEndValue, AOptions, AFormatted, Parts, False);
+end;
+
+function TryICUFormatNumberDecimalRangeToParts(const ALocale, AStartValue, AEndValue: string;
+  const AOptions: TIntlNumberFormatOptions; out AParts: TIntlFormatPartArray): Boolean;
+var
+  Formatted: string;
+begin
+  Result := TryICUFormatNumberRangeInternal(ALocale, True, 0, 0,
+    AStartValue, AEndValue, AOptions, Formatted, AParts, True);
 end;
 
 function DateTimeStyleToICU(AStyle: TIntlDateTimeStyle): LongInt;
@@ -960,37 +1898,256 @@ begin
   end;
 end;
 
-function TryICUFormatDateTime(const ALocale: string; AMillis: Double;
-  const AOptions: TIntlDateTimeFormatOptions; out AFormatted: string): Boolean;
+procedure AppendDateSkeletonField(var ASkeleton: string; const AOption,
+  ANumericField, ATwoDigitField, AShortField, ALongField, ANarrowField: string);
+begin
+  if AOption = '' then
+    Exit;
+  if AOption = '2-digit' then
+    ASkeleton := ASkeleton + ATwoDigitField
+  else if AOption = 'short' then
+    ASkeleton := ASkeleton + AShortField
+  else if AOption = 'long' then
+    ASkeleton := ASkeleton + ALongField
+  else if AOption = 'narrow' then
+    ASkeleton := ASkeleton + ANarrowField
+  else
+    ASkeleton := ASkeleton + ANumericField;
+end;
+
+function BuildDateTimeSkeleton(const AOptions: TIntlDateTimeFormatOptions): string;
+var
+  HourField: string;
+begin
+  Result := '';
+
+  if (AOptions.DateStyle <> idtsNone) or (AOptions.TimeStyle <> idtsNone) then
+  begin
+    case AOptions.DateStyle of
+      idtsFull: Result := Result + 'yMMMMEEEEd';
+      idtsLong: Result := Result + 'yMMMMd';
+      idtsMedium: Result := Result + 'yMMMd';
+      idtsShort: Result := Result + 'yMd';
+    end;
+    case AOptions.TimeStyle of
+      idtsFull,
+      idtsLong: Result := Result + 'jmszzzz';
+      idtsMedium: Result := Result + 'jms';
+      idtsShort: Result := Result + 'jm';
+    end;
+    Exit;
+  end;
+
+  AppendDateSkeletonField(Result, AOptions.Weekday, 'E', 'EE', 'E', 'EEEE', 'EEEEE');
+  AppendDateSkeletonField(Result, AOptions.Era, 'G', 'GG', 'G', 'GGGG', 'GGGGG');
+  AppendDateSkeletonField(Result, AOptions.Year, 'y', 'yy', 'y', 'y', 'y');
+  AppendDateSkeletonField(Result, AOptions.Month, 'M', 'MM', 'MMM', 'MMMM', 'MMMMM');
+  AppendDateSkeletonField(Result, AOptions.Day, 'd', 'dd', 'd', 'd', 'd');
+
+  if AOptions.HourCycle = 'h11' then
+    HourField := 'K'
+  else if AOptions.HourCycle = 'h12' then
+    HourField := 'h'
+  else if AOptions.HourCycle = 'h23' then
+    HourField := 'H'
+  else if AOptions.HourCycle = 'h24' then
+    HourField := 'k'
+  else
+    HourField := 'j';
+  if AOptions.Hour = '2-digit' then
+    Result := Result + HourField + HourField
+  else if AOptions.Hour <> '' then
+    Result := Result + HourField;
+
+  AppendDateSkeletonField(Result, AOptions.Minute, 'm', 'mm', 'm', 'm', 'm');
+  AppendDateSkeletonField(Result, AOptions.Second, 's', 'ss', 's', 's', 's');
+  if AOptions.FractionalSecondDigits > 0 then
+    Result := Result + StringOfChar('S', AOptions.FractionalSecondDigits);
+  if AOptions.DayPeriod <> '' then
+    Result := Result + 'B';
+
+  if AOptions.TimeZoneName = 'long' then
+    Result := Result + 'zzzz'
+  else if AOptions.TimeZoneName = 'shortOffset' then
+    Result := Result + 'O'
+  else if AOptions.TimeZoneName = 'longOffset' then
+    Result := Result + 'OOOO'
+  else if AOptions.TimeZoneName = 'shortGeneric' then
+    Result := Result + 'v'
+  else if AOptions.TimeZoneName = 'longGeneric' then
+    Result := Result + 'vvvv'
+  else if AOptions.TimeZoneName <> '' then
+    Result := Result + 'z';
+
+  if Result = '' then
+    Result := 'yMd';
+end;
+
+function FindUnicodeExtensionEnd(const ALocaleLower: string; const AUnicodePos: Integer): Integer;
+var
+  I: Integer;
+begin
+  Result := Length(ALocaleLower) + 1;
+  I := AUnicodePos + 3;
+  while I <= Length(ALocaleLower) - 2 do
+  begin
+    if (ALocaleLower[I] = '-') and (ALocaleLower[I + 2] = '-') and
+       (ALocaleLower[I + 1] in ['0'..'9', 'a'..'z']) then
+    begin
+      Result := I;
+      Exit;
+    end;
+    Inc(I);
+  end;
+end;
+
+function RemoveUnicodeHourCycleKeyword(const ALocale: string): string;
+var
+  LocaleLower, Extension, NewExtension, Token, TokenLower, Suffix: string;
+  UnicodePos, ExtensionStart, ExtensionEnd, I, TokenStart: Integer;
+  Tokens: IntlTypes.TStringArray;
+
+  procedure AddToken(const AToken: string);
+  begin
+    if AToken = '' then
+      Exit;
+    SetLength(Tokens, Length(Tokens) + 1);
+    Tokens[High(Tokens)] := AToken;
+  end;
+
+begin
+  LocaleLower := LowerCase(ALocale);
+  UnicodePos := Pos('-u-', LocaleLower);
+  if UnicodePos = 0 then
+    Exit(ALocale);
+
+  ExtensionStart := UnicodePos + 3;
+  ExtensionEnd := FindUnicodeExtensionEnd(LocaleLower, UnicodePos);
+  Extension := Copy(ALocale, ExtensionStart, ExtensionEnd - ExtensionStart);
+
+  I := 1;
+  while I <= Length(Extension) do
+  begin
+    TokenStart := I;
+    while (I <= Length(Extension)) and (Extension[I] <> '-') do
+      Inc(I);
+    AddToken(Copy(Extension, TokenStart, I - TokenStart));
+    while (I <= Length(Extension)) and (Extension[I] = '-') do
+      Inc(I);
+  end;
+
+  NewExtension := '';
+  I := 0;
+  while I < Length(Tokens) do
+  begin
+    Token := Tokens[I];
+    TokenLower := LowerCase(Token);
+    if TokenLower = 'hc' then
+    begin
+      Inc(I);
+      while (I < Length(Tokens)) and (Length(Tokens[I]) > 2) do
+        Inc(I);
+      Continue;
+    end;
+
+    if NewExtension <> '' then
+      NewExtension := NewExtension + '-';
+    NewExtension := NewExtension + Token;
+    Inc(I);
+  end;
+
+  Suffix := Copy(ALocale, ExtensionEnd, Length(ALocale) - ExtensionEnd + 1);
+  if NewExtension = '' then
+    Result := Copy(ALocale, 1, UnicodePos - 1) + Suffix
+  else
+    Result := Copy(ALocale, 1, UnicodePos + 2) + NewExtension + Suffix;
+end;
+
+function ApplyDateTimeHourCycleLocaleOption(const ALocale: string;
+  const AOptions: TIntlDateTimeFormatOptions): string;
+var
+  LocaleLower: string;
+  UnicodePos, ExtensionEnd, PrivateUsePos: Integer;
+begin
+  if AOptions.HourCycle = '' then
+    Exit(ALocale);
+
+  Result := RemoveUnicodeHourCycleKeyword(ALocale);
+  LocaleLower := LowerCase(Result);
+  UnicodePos := Pos('-u-', LocaleLower);
+  if UnicodePos > 0 then
+  begin
+    ExtensionEnd := FindUnicodeExtensionEnd(LocaleLower, UnicodePos);
+    Result := Copy(Result, 1, ExtensionEnd - 1) + '-hc-' +
+      AOptions.HourCycle + Copy(Result, ExtensionEnd, Length(Result) - ExtensionEnd + 1);
+    Exit;
+  end;
+
+  PrivateUsePos := Pos('-x-', LocaleLower);
+  if PrivateUsePos > 0 then
+    Result := Copy(Result, 1, PrivateUsePos - 1) + '-u-hc-' +
+      AOptions.HourCycle + Copy(Result, PrivateUsePos, Length(Result) - PrivateUsePos + 1)
+  else
+    Result := Result + '-u-hc-' + AOptions.HourCycle;
+end;
+
+function TryICUGetBestDateTimePattern(const ALocale, ASkeleton: string;
+  out APattern: UnicodeString): Boolean;
 var
   Status: TICUErrorCode;
-  Formatter: Pointer;
+  PatternGenerator: Pointer;
+  LocaleAnsi: AnsiString;
+  SkeletonUnicode: UnicodeString;
   Buffer: array[0..FORMAT_BUFFER_CAPACITY - 1] of WideChar;
   ResultLen: LongInt;
+begin
+  Result := False;
+  APattern := '';
+
+  if not Assigned(IntlFunctions.UdatpgOpen) or
+     not Assigned(IntlFunctions.UdatpgClose) or
+     not Assigned(IntlFunctions.UdatpgGetBestPattern) then
+    Exit;
+
+  LocaleAnsi := AnsiString(ALocale);
+  Status := ICU_SUCCESS;
+  PatternGenerator := IntlFunctions.UdatpgOpen(PAnsiChar(LocaleAnsi), Status);
+  if not ICUSucceeded(Status) or not Assigned(PatternGenerator) then
+    Exit;
+  try
+    SkeletonUnicode := UnicodeString(ASkeleton);
+    FillChar(Buffer, SizeOf(Buffer), 0);
+    Status := ICU_SUCCESS;
+    ResultLen := IntlFunctions.UdatpgGetBestPattern(PatternGenerator,
+      PWideChar(SkeletonUnicode), Length(SkeletonUnicode), @Buffer[0],
+      FORMAT_BUFFER_CAPACITY, Status);
+    if not ICUSucceeded(Status) or (ResultLen <= 0) or
+       (ResultLen > FORMAT_BUFFER_CAPACITY) then
+      Exit;
+    APattern := UnicodeString(UnicodeToString(Buffer, ResultLen));
+    Result := APattern <> '';
+  finally
+    IntlFunctions.UdatpgClose(PatternGenerator);
+  end;
+end;
+
+function OpenDateFormatter(const ALocale: string;
+  const AOptions: TIntlDateTimeFormatOptions; out AFormatter: Pointer): Boolean;
+var
+  Status: TICUErrorCode;
+  EffectiveLocale: string;
   LocaleAnsi: AnsiString;
   ICUTimeStyle, ICUDateStyle: LongInt;
+  Pattern: UnicodeString;
   TzUnicode: UnicodeString;
   TzPtr: PUChar;
   TzLen: LongInt;
 begin
   Result := False;
-  AFormatted := '';
+  AFormatter := nil;
 
-  if not EnsureLoaded then
-    Exit;
-
-  LocaleAnsi := AnsiString(ALocale);
-
-  if (AOptions.DateStyle <> idtsNone) or (AOptions.TimeStyle <> idtsNone) then
-  begin
-    ICUDateStyle := DateTimeStyleToICU(AOptions.DateStyle);
-    ICUTimeStyle := DateTimeStyleToICU(AOptions.TimeStyle);
-  end
-  else
-  begin
-    ICUDateStyle := UDAT_MEDIUM;
-    ICUTimeStyle := UDAT_MEDIUM;
-  end;
+  EffectiveLocale := ApplyDateTimeHourCycleLocaleOption(ALocale, AOptions);
+  LocaleAnsi := AnsiString(EffectiveLocale);
 
   if AOptions.TimeZone <> '' then
   begin
@@ -1004,10 +2161,43 @@ begin
     TzLen := -1;
   end;
 
+  if (AOptions.DateStyle <> idtsNone) or (AOptions.TimeStyle <> idtsNone) then
+  begin
+    ICUDateStyle := DateTimeStyleToICU(AOptions.DateStyle);
+    ICUTimeStyle := DateTimeStyleToICU(AOptions.TimeStyle);
+    Pattern := '';
+  end
+  else
+  begin
+    if not TryICUGetBestDateTimePattern(EffectiveLocale,
+      BuildDateTimeSkeleton(AOptions), Pattern) then
+      Exit;
+    ICUDateStyle := UDAT_PATTERN;
+    ICUTimeStyle := UDAT_PATTERN;
+  end;
+
   Status := ICU_SUCCESS;
-  Formatter := IntlFunctions.UdatOpen(ICUTimeStyle, ICUDateStyle,
-    PAnsiChar(LocaleAnsi), TzPtr, TzLen, nil, -1, Status);
-  if not ICUSucceeded(Status) or not Assigned(Formatter) then
+  AFormatter := IntlFunctions.UdatOpen(ICUTimeStyle, ICUDateStyle,
+    PAnsiChar(LocaleAnsi), TzPtr, TzLen, PWideChar(Pattern),
+    Length(Pattern), Status);
+  Result := ICUSucceeded(Status) and Assigned(AFormatter);
+end;
+
+function TryICUFormatDateTime(const ALocale: string; AMillis: Double;
+  const AOptions: TIntlDateTimeFormatOptions; out AFormatted: string): Boolean;
+var
+  Status: TICUErrorCode;
+  Formatter: Pointer;
+  Buffer: array[0..FORMAT_BUFFER_CAPACITY - 1] of WideChar;
+  ResultLen: LongInt;
+begin
+  Result := False;
+  AFormatted := '';
+
+  if not EnsureLoaded then
+    Exit;
+
+  if not OpenDateFormatter(ALocale, AOptions, Formatter) then
     Exit;
 
   try
@@ -1028,14 +2218,163 @@ end;
 function TryICUFormatDateTimeToParts(const ALocale: string; AMillis: Double;
   const AOptions: TIntlDateTimeFormatOptions; out AParts: TIntlFormatPartArray): Boolean;
 var
+  Status: TICUErrorCode;
+  Formatter, Iterator: Pointer;
+  Buffer: array[0..FORMAT_BUFFER_CAPACITY - 1] of WideChar;
+  ResultLen: LongInt;
+  Spans: TICUFieldSpanArray;
+  UFormatted: UnicodeString;
+begin
+  Result := False;
+  SetLength(AParts, 0);
+
+  if not EnsureLoaded or not Assigned(IntlFunctions.UdatFormatForFields) or
+     not Assigned(IntlFunctions.UfieldpositerOpen) or
+     not Assigned(IntlFunctions.UfieldpositerClose) or
+     not Assigned(IntlFunctions.UfieldpositerNext) then
+    Exit;
+
+  if not OpenDateFormatter(ALocale, AOptions, Formatter) then
+    Exit;
+  try
+    Status := ICU_SUCCESS;
+    Iterator := IntlFunctions.UfieldpositerOpen(Status);
+    if not ICUSucceeded(Status) or not Assigned(Iterator) then
+      Exit;
+    try
+      FillChar(Buffer, SizeOf(Buffer), 0);
+      Status := ICU_SUCCESS;
+      ResultLen := IntlFunctions.UdatFormatForFields(Formatter, AMillis,
+        @Buffer[0], FORMAT_BUFFER_CAPACITY, Iterator, Status);
+      if not ICUSucceeded(Status) or (ResultLen <= 0) then
+        Exit;
+
+      UFormatted := UnicodeString(UnicodeToString(Buffer, ResultLen));
+      SetLength(Spans, 0);
+      CollectIteratorFieldSpans(Iterator, UFIELD_CATEGORY_DATE, Spans);
+      Result := BuildPartsFromFieldSpans(UFormatted, Spans,
+        UFIELD_CATEGORY_DATE, 0, DateFieldToPartType, AParts);
+    finally
+      IntlFunctions.UfieldpositerClose(Iterator);
+    end;
+  finally
+    IntlFunctions.UdatClose(Formatter);
+  end;
+end;
+
+function OpenDateIntervalFormatter(const ALocale: string;
+  const AOptions: TIntlDateTimeFormatOptions; out AFormatter: Pointer): Boolean;
+var
+  Status: TICUErrorCode;
+  EffectiveLocale: string;
+  LocaleAnsi: AnsiString;
+  SkeletonUnicode, TzUnicode: UnicodeString;
+  TzPtr: PUChar;
+  TzLen: LongInt;
+begin
+  Result := False;
+  AFormatter := nil;
+
+  if not Assigned(IntlFunctions.UdtitvfmtOpen) or
+     not Assigned(IntlFunctions.UdtitvfmtClose) then
+    Exit;
+
+  if AOptions.TimeZone <> '' then
+  begin
+    TzUnicode := UnicodeString(AOptions.TimeZone);
+    TzPtr := PWideChar(TzUnicode);
+    TzLen := Length(TzUnicode);
+  end
+  else
+  begin
+    TzPtr := nil;
+    TzLen := -1;
+  end;
+
+  EffectiveLocale := ApplyDateTimeHourCycleLocaleOption(ALocale, AOptions);
+  LocaleAnsi := AnsiString(EffectiveLocale);
+  SkeletonUnicode := UnicodeString(BuildDateTimeSkeleton(AOptions));
+  Status := ICU_SUCCESS;
+  AFormatter := IntlFunctions.UdtitvfmtOpen(PAnsiChar(LocaleAnsi),
+    PWideChar(SkeletonUnicode), Length(SkeletonUnicode), TzPtr, TzLen, Status);
+  Result := ICUSucceeded(Status) and Assigned(AFormatter);
+end;
+
+function TryICUFormatDateTimeRange(const ALocale: string; AStartMillis, AEndMillis: Double;
+  const AOptions: TIntlDateTimeFormatOptions; out AFormatted: string): Boolean;
+var
+  Status: TICUErrorCode;
+  Formatter: Pointer;
+  Buffer: array[0..FORMAT_BUFFER_CAPACITY - 1] of WideChar;
+  ResultLen: LongInt;
+begin
+  Result := False;
+  AFormatted := '';
+
+  if not EnsureLoaded or not Assigned(IntlFunctions.UdtitvfmtFormat) then
+    Exit;
+
+  if not OpenDateIntervalFormatter(ALocale, AOptions, Formatter) then
+    Exit;
+  try
+    FillChar(Buffer, SizeOf(Buffer), 0);
+    Status := ICU_SUCCESS;
+    ResultLen := IntlFunctions.UdtitvfmtFormat(Formatter, AStartMillis,
+      AEndMillis, @Buffer[0], FORMAT_BUFFER_CAPACITY, nil, Status);
+    if not ICUSucceeded(Status) or (ResultLen <= 0) then
+      Exit;
+
+    AFormatted := UnicodeToString(Buffer, ResultLen);
+    Result := True;
+  finally
+    IntlFunctions.UdtitvfmtClose(Formatter);
+  end;
+end;
+
+function TryICUFormatDateTimeRangeToParts(const ALocale: string; AStartMillis, AEndMillis: Double;
+  const AOptions: TIntlDateTimeFormatOptions; out AParts: TIntlFormatPartArray): Boolean;
+var
+  Status: TICUErrorCode;
+  Formatter, RangeResult, FormattedValue: Pointer;
   Formatted: string;
 begin
-  Result := TryICUFormatDateTime(ALocale, AMillis, AOptions, Formatted);
-  if Result then
-  begin
-    SetLength(AParts, 1);
-    AParts[0].PartType := 'literal';
-    AParts[0].Value := Formatted;
+  Result := False;
+  SetLength(AParts, 0);
+
+  if not EnsureLoaded or
+     not Assigned(IntlFunctions.UdtitvfmtOpenResult) or
+     not Assigned(IntlFunctions.UdtitvfmtFormatToResult) or
+     not Assigned(IntlFunctions.UdtitvfmtResultAsValue) or
+     not Assigned(IntlFunctions.UdtitvfmtCloseResult) then
+    Exit;
+
+  if not OpenDateIntervalFormatter(ALocale, AOptions, Formatter) then
+    Exit;
+  try
+    Status := ICU_SUCCESS;
+    RangeResult := IntlFunctions.UdtitvfmtOpenResult(Status);
+    if not ICUSucceeded(Status) or not Assigned(RangeResult) then
+      Exit;
+    try
+      Status := ICU_SUCCESS;
+      IntlFunctions.UdtitvfmtFormatToResult(Formatter, AStartMillis,
+        AEndMillis, RangeResult, Status);
+      if not ICUSucceeded(Status) then
+        Exit;
+
+      Status := ICU_SUCCESS;
+      FormattedValue := IntlFunctions.UdtitvfmtResultAsValue(RangeResult, Status);
+      if not ICUSucceeded(Status) or not Assigned(FormattedValue) then
+        Exit;
+
+      Result := FormattedValueToParts(FormattedValue, UFIELD_CATEGORY_DATE,
+        UFIELD_CATEGORY_DATE_INTERVAL_SPAN, DateFieldToPartType,
+        Formatted, AParts);
+    finally
+      IntlFunctions.UdtitvfmtCloseResult(RangeResult);
+    end;
+  finally
+    IntlFunctions.UdtitvfmtClose(Formatter);
   end;
 end;
 

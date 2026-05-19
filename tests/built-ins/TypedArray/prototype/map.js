@@ -26,6 +26,17 @@ describe("TypedArray.prototype.map", () => {
       expect(() => ta.map()).toThrow(TypeError);
     });
 
+    test("throws on detached buffer before callback", () => {
+      const ta = new TA([1, 2, 3]);
+      let called = false;
+      ta.buffer.transfer();
+      expect(() => ta.map(() => {
+        called = true;
+        return 0;
+      })).toThrow(TypeError);
+      expect(called).toBe(false);
+    });
+
     test("passes thisArg to callback", () => {
       const ta = new TA([1, 2, 3]);
       const ctx = { mult: 3 };
@@ -35,6 +46,24 @@ describe("TypedArray.prototype.map", () => {
       expect(mapped[1]).toBe(6);
       expect(mapped[2]).toBe(9);
     });
+
+    test("continues after callback detaches buffer", () => {
+      const ta = new TA(2);
+      const buffer = ta.buffer;
+      const seen = [];
+      const mapped = ta.map((value) => {
+        seen.push(value);
+        if (seen.length === 1) {
+          buffer.transfer();
+        }
+        return 7;
+      });
+
+      expect(seen.length).toBe(2);
+      expect(seen[1]).toBeUndefined();
+      expect(mapped[0]).toBe(7);
+      expect(mapped[1]).toBe(7);
+    });
   });
 
   test.each([BigInt64Array, BigUint64Array])("%s map", (TA) => {
@@ -43,5 +72,23 @@ describe("TypedArray.prototype.map", () => {
     expect(mapped[0]).toBe(2n);
     expect(mapped[1]).toBe(4n);
     expect(mapped[2]).toBe(6n);
+  });
+
+  test.each([BigInt64Array, BigUint64Array])("%s continues after callback detaches buffer", (TA) => {
+    const ta = new TA(2);
+    const buffer = ta.buffer;
+    const seen = [];
+    const mapped = ta.map((value) => {
+      seen.push(value);
+      if (seen.length === 1) {
+        buffer.transfer();
+      }
+      return true;
+    });
+
+    expect(seen.length).toBe(2);
+    expect(seen[1]).toBeUndefined();
+    expect(mapped[0]).toBe(1n);
+    expect(mapped[1]).toBe(1n);
   });
 });

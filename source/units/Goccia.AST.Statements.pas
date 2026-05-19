@@ -17,6 +17,9 @@ uses
   Goccia.Evaluator.Context,
   Goccia.Values.Primitives;
 
+const
+  GOCCIA_DEFAULT_EXPORT_BINDING = '*default*';
+
 type
   TGocciaVariableInfo = record
     Name: string;
@@ -412,6 +415,18 @@ type
     property ExportsTable: TStringStringMap read FExportsTable;
   end;
 
+  TGocciaExportDefaultDeclaration = class(TGocciaStatement)
+  private
+    FExpression: TGocciaExpression;
+    FLocalName: string;
+  public
+    constructor Create(const AExpression: TGocciaExpression;
+      const ALocalName: string; const ALine, AColumn: Integer);
+    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
+    property Expression: TGocciaExpression read FExpression;
+    property LocalName: string read FLocalName;
+  end;
+
   TGocciaExportVariableDeclaration = class(TGocciaStatement)
   private
     FDeclaration: TGocciaVariableDeclaration;
@@ -500,6 +515,7 @@ uses
   Goccia.Evaluator,
   Goccia.GarbageCollector,
   Goccia.Generator.Continuation,
+  Goccia.Keywords.Reserved,
   Goccia.Modules,
   Goccia.Scope,
   Goccia.Scope.BindingMap,
@@ -843,6 +859,17 @@ end;
   begin
     inherited Create(ALine, AColumn);
     FExportsTable := AExportsTable;
+  end;
+
+  { TGocciaExportDefaultDeclaration }
+
+  constructor TGocciaExportDefaultDeclaration.Create(
+    const AExpression: TGocciaExpression; const ALocalName: string;
+    const ALine, AColumn: Integer);
+  begin
+    inherited Create(ALine, AColumn);
+    FExpression := AExpression;
+    FLocalName := ALocalName;
   end;
 
   { TGocciaExportVariableDeclaration }
@@ -1212,6 +1239,26 @@ end;
 
   function TGocciaExportDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
   begin
+    Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
+  end;
+
+  function TGocciaExportDefaultDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  var
+    Value: TGocciaValue;
+  begin
+    Value := EvaluateExpression(Expression, AContext);
+    if ((Expression is TGocciaArrowFunctionExpression) or
+       ((Expression is TGocciaMethodExpression) and
+       (TGocciaMethodExpression(Expression).Name = ''))) and
+       (Value is TGocciaFunctionValue) then
+      TGocciaFunctionValue(Value).SetInferredName(KEYWORD_DEFAULT)
+    else if (Expression is TGocciaClassExpression) and
+            (TGocciaClassExpression(Expression).ClassDefinition.Name = '') and
+            (Value is TGocciaClassValue) then
+      TGocciaClassValue(Value).SetInferredName(KEYWORD_DEFAULT);
+
+    AContext.Scope.DefineLexicalBinding(LocalName, Value, dtConst, False, Line,
+      Column);
     Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
   end;
 

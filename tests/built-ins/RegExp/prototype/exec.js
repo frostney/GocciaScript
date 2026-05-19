@@ -55,6 +55,114 @@ test("exec returns undefined groups when no named captures", () => {
   expect(result.groups).toBe(undefined);
 });
 
+test("exec populates indices when the d flag is present", () => {
+  const result = /a(b)c/d.exec("abc");
+
+  expect(result.indices[0][0]).toBe(0);
+  expect(result.indices[0][1]).toBe(3);
+  expect(result.indices[1][0]).toBe(1);
+  expect(result.indices[1][1]).toBe(2);
+  expect(result.indices.groups).toBe(undefined);
+});
+
+test("exec omits indices without the d flag", () => {
+  const result = /a(b)c/.exec("abc");
+
+  expect(result.indices).toBe(undefined);
+});
+
+test("exec indices preserve unmatched captures", () => {
+  const result = /(\w\w)(\W)?/d.exec("bab");
+
+  expect(result.indices[0][0]).toBe(0);
+  expect(result.indices[0][1]).toBe(2);
+  expect(result.indices[1][0]).toBe(0);
+  expect(result.indices[1][1]).toBe(2);
+  expect(result.indices[2]).toBe(undefined);
+});
+
+test("exec indices expose named capture groups", () => {
+  const result = /(?<a>.)(?<b>.)/d.exec("ab");
+
+  expect(result.indices.groups.a[0]).toBe(0);
+  expect(result.indices.groups.a[1]).toBe(1);
+  expect(result.indices.groups.b[0]).toBe(1);
+  expect(result.indices.groups.b[1]).toBe(2);
+  expect(Object.getPrototypeOf(result.indices.groups)).toBe(null);
+});
+
+test("exec indices support unicode escaped named capture groups", () => {
+  const result = /(?<\u{03C0}>a)/du.exec("bab");
+
+  expect(result.indices.groups.π[0]).toBe(1);
+  expect(result.indices.groups.\u03C0[1]).toBe(2);
+});
+
+test("exec indices use UTF-16 code units in unicode and non-unicode modes", () => {
+  const text = String.fromCodePoint(0x1d401);
+  const nonUnicode = /./d.exec(text);
+
+  expect(nonUnicode[0].length).toBe(1);
+  expect(nonUnicode.indices[0][0]).toBe(0);
+  expect(nonUnicode.indices[0][1]).toBe(1);
+
+  const unicode = /./du.exec(text);
+  expect(unicode[0].length).toBe(2);
+  expect(unicode.indices[0][0]).toBe(0);
+  expect(unicode.indices[0][1]).toBe(2);
+
+  const literal = new RegExp(String.fromCodePoint(0x1d401), "d").exec(text);
+  expect(literal[0].length).toBe(2);
+  expect(literal.indices[0][0]).toBe(0);
+  expect(literal.indices[0][1]).toBe(2);
+
+  const classMatch = new RegExp("[" + String.fromCodePoint(0x1d401) + "]", "d").exec(text);
+  expect(classMatch[0].length).toBe(1);
+  expect(classMatch.indices[0][0]).toBe(0);
+  expect(classMatch.indices[0][1]).toBe(1);
+});
+
+test("unicode exec normalizes lastIndex inside surrogate pairs", () => {
+  const text = String.fromCodePoint(0x1f600);
+
+  const sticky = /./duy;
+  sticky.lastIndex = 1;
+  const stickyMatch = sticky.exec(text);
+  expect(stickyMatch.index).toBe(0);
+  expect(stickyMatch[0].length).toBe(2);
+  expect(stickyMatch.indices[0][0]).toBe(0);
+  expect(stickyMatch.indices[0][1]).toBe(2);
+  expect(sticky.lastIndex).toBe(2);
+
+  const global = /./dug;
+  global.lastIndex = 1;
+  const globalMatch = global.exec(text);
+  expect(globalMatch.index).toBe(0);
+  expect(globalMatch[0].length).toBe(2);
+  expect(globalMatch.indices[0][0]).toBe(0);
+  expect(globalMatch.indices[0][1]).toBe(2);
+  expect(global.lastIndex).toBe(2);
+
+  const nonUnicode = /./dy;
+  nonUnicode.lastIndex = 1;
+  const nonUnicodeMatch = nonUnicode.exec(text);
+  expect(nonUnicodeMatch.index).toBe(1);
+  expect(nonUnicodeMatch[0].length).toBe(1);
+  expect(nonUnicodeMatch.indices[0][0]).toBe(1);
+  expect(nonUnicodeMatch.indices[0][1]).toBe(2);
+  expect(nonUnicode.lastIndex).toBe(2);
+});
+
+test("non-unicode braced unicode escape remains an identity escape", () => {
+  const re = new RegExp("\\u{61}", "d");
+  const result = re.exec("u".repeat(61));
+
+  expect(re.exec("a")).toBe(null);
+  expect(result[0].length).toBe(61);
+  expect(result.indices[0][0]).toBe(0);
+  expect(result.indices[0][1]).toBe(61);
+});
+
 test("exec with duplicate named groups — first alternative matches", () => {
   const re = new RegExp("(?<year>[0-9][0-9][0-9][0-9])-[0-9][0-9]|[0-9][0-9]-(?<year>[0-9][0-9][0-9][0-9])");
   const result = re.exec("2026-04");
@@ -213,6 +321,10 @@ test("backreference backtracking finds correct capture length", () => {
   const m = /^(a+)\1*,\1+$/.exec("aaaaaaaaaa,aaaaaaaaaaaaaaa");
   expect(m[0]).toBe("aaaaaaaaaa,aaaaaaaaaaaaaaa");
   expect(m[1]).toBe("aaaaa");
+});
+
+test("unicode backreference does not partially match a surrogate pair", () => {
+  expect(/foo(.+)bar\1/u.exec("foo\uD834bar\uD834\uDC00")).toBe(null);
 });
 
 test("replace with backreference uses correct capture", () => {

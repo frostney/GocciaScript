@@ -78,4 +78,10 @@ describe("TypedArray.prototype.slice", () => {
     expect(sliced[0]).toBe(2n);
     expect(sliced[1]).toBe(3n);
   });
+
+  test("throws on detached buffer", () => {
+    const ta = new Int32Array([1, 2, 3]);
+    ta.buffer.transfer();
+    expect(() => ta.slice()).toThrow(TypeError);
+  });
 });

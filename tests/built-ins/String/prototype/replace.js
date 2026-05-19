@@ -28,6 +28,13 @@ describe('String.prototype.replace', () => {
     expect(result).toBe('hello WORLD');
   });
 
+  test('replace string search uses UTF-16 offsets', () => {
+    const emoji = String.fromCodePoint(0x1f600);
+
+    expect((emoji + 'a').replace('a', '$`')).toBe(emoji + emoji);
+    expect((emoji + 'a').replace('a', (match, offset) => String(offset))).toBe(emoji + '2');
+  });
+
   test('replace supports regex arguments', () => {
     expect('abcabc'.replace(/bc/, 'X')).toBe('aXabc');
     expect('abc'.replace(/(b)(c)/, (match, b, c, index, input) => {
@@ -45,11 +52,15 @@ describe('String.prototype.replace', () => {
   });
 
   test('replace expands regex replacement tokens', () => {
+    const emoji = String.fromCodePoint(0x1f600);
+
     expect('abc'.replace(/b/, '[$&]')).toBe('a[b]c');
     expect('abc'.replace(/(b)/, '<$1>')).toBe('a<b>c');
     expect('abc'.replace(/b/, '$$')).toBe('a$c');
     expect('abc'.replace(/b/, '$`')).toBe('aac');
     expect('abc'.replace(/b/, "$'")).toBe('acc');
+    expect((emoji + 'a').replace(/a/, '$`')).toBe(emoji + emoji);
+    expect((emoji + 'a' + emoji).replace(/a/, "$'")).toBe(emoji + emoji + emoji);
     expect('b'.replace(/(a)?b/, 'x$1y')).toBe('xy');
     expect('foo'.replace(/(f)/, '$2')).toBe('$2oo');
     expect('foo'.replace(/(f)/, '$12')).toBe('f2oo');
@@ -74,6 +85,12 @@ describe('String.prototype.replace', () => {
 
   test('replace preserves original text around zero-width global matches', () => {
     expect('ab'.replace(/(?:)/g, '-')).toBe('-a-b-');
+  });
+
+  test('replace advances unicode empty regex matches over explicit surrogate pairs', () => {
+    const pair = String.fromCharCode(0xD83D, 0xDE00);
+
+    expect(pair.replace(/(?:)/gu, '-')).toBe('-' + pair + '-');
   });
 
   test('replace dispatches through Symbol.replace', () => {

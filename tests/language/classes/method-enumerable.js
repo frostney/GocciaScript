@@ -26,6 +26,18 @@ describe("class method enumerability", () => {
     expect(keys.includes("doStuff")).toBe(false);
   });
 
+  test("static methods are non-enumerable on the constructor", () => {
+    class Foo {
+      static bar() { return 1; }
+    }
+
+    const desc = Object.getOwnPropertyDescriptor(Foo, "bar");
+    expect(desc.enumerable).toBe(false);
+    expect(desc.writable).toBe(true);
+    expect(desc.configurable).toBe(true);
+    expect(Object.keys(Foo).includes("bar")).toBe(false);
+  });
+
   test("constructor property is also non-enumerable", () => {
     class C {}
     const desc = Object.getOwnPropertyDescriptor(C.prototype, "constructor");

@@ -38,8 +38,8 @@
 | `Promise` | ES2015 | Supported |
 | `WeakMap`, `WeakSet` | ES2015 | Supported |
 | `RegExp` (literals, flags `d`/`g`/`i`/`m`/`s`/`u`/`v`/`y`) | ES2015+ | Supported |
-| ES modules (`import` / `export`) | ES2015 | Supported (named only) |
-| Default exports / imports | ES2015 | Excluded — use named exports |
+| ES modules (`import` / `export`) | ES2015 | Supported |
+| Default exports / imports | ES2015 | Supported; project code convention prefers named exports for internal modules |
 | Generators (`function*`, `*method()`) | ES2015 | Supported; `function*` requires `--compat-function`; implicit `arguments` objects require `--compat-non-strict-mode`; generator methods are default syntax |
 | Nullish coalescing (`??`) | ES2020 | Supported |
 | Optional chaining (`?.`) | ES2020 | Supported |
@@ -101,6 +101,7 @@ APIs from WHATWG and W3C specifications — not part of ECMA-262, but widely exp
 |----------|-------|--------|
 | [Decorators](https://github.com/tc39/proposal-decorators) | 3 | Supported — class, method, field, getter/setter, auto-accessor decorators with `addInitializer` |
 | [Decorator Metadata](https://github.com/tc39/proposal-decorator-metadata) | 3 | Supported — `Symbol.metadata` for decorator-attached class metadata with inheritance |
+| [Import Defer](https://tc39.es/proposal-defer-import-eval/) | 3 | Not supported; namespace syntax is accepted as a no-op compatibility fallback |
 | [Joint Iteration](https://github.com/tc39/proposal-joint-iteration) | 3 | Supported — `Iterator.zip` and `Iterator.zipKeyed` |
 | [`Math.clamp`](https://github.com/tc39/proposal-math-clamp) | 2 | Supported |
 | [Pattern Matching](https://tc39.es/proposal-pattern-matching/) | 1 | Supported — `value is Pattern`, `match`, filtered `for...of` / `for await...of`, and pattern catches |

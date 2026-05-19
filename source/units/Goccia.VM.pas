@@ -56,6 +56,8 @@ type
     function GetProperty(const AName: string): TGocciaValue; override;
     procedure DefineProperty(const AName: string;
       const ADescriptor: TGocciaPropertyDescriptor); override;
+    function TryDefineProperty(const AName: string;
+      const ADescriptor: TGocciaPropertyDescriptor): Boolean; override;
     procedure Freeze; override;
     procedure Seal; override;
     procedure PreventExtensions; override;
@@ -1082,6 +1084,13 @@ procedure TGocciaVMLiteralObjectValue.DefineProperty(const AName: string;
 begin
   FFastLiteralMode := False;
   inherited DefineProperty(AName, ADescriptor);
+end;
+
+function TGocciaVMLiteralObjectValue.TryDefineProperty(const AName: string;
+  const ADescriptor: TGocciaPropertyDescriptor): Boolean;
+begin
+  FFastLiteralMode := False;
+  Result := inherited TryDefineProperty(AName, ADescriptor);
 end;
 
 procedure TGocciaVMLiteralObjectValue.Freeze;
@@ -3589,12 +3598,17 @@ end;
 
 function TGocciaVMClassValue.GetProperty(const AName: string): TGocciaValue;
 var
+  Descriptor: TGocciaPropertyDescriptor;
   Getter: TGocciaFunctionBase;
-  Current: TGocciaClassValue;
   BytecodeGetter: TGocciaBytecodeFunctionValue;
   Args: TGocciaArgumentsCollection;
 begin
-  Getter := StaticPropertyGetter[AName];
+  Getter := nil;
+  Descriptor := inherited GetOwnPropertyDescriptor(AName);
+  if Descriptor is TGocciaPropertyDescriptorAccessor then
+    if TGocciaPropertyDescriptorAccessor(Descriptor).Getter is TGocciaFunctionBase then
+      Getter := TGocciaFunctionBase(TGocciaPropertyDescriptorAccessor(Descriptor).Getter);
+
   if Assigned(Getter) then
   begin
     if (Getter is TGocciaBytecodeFunctionValue) then
@@ -3602,7 +3616,8 @@ begin
       BytecodeGetter := TGocciaBytecodeFunctionValue(Getter);
       if Assigned(BytecodeGetter.FClosure) and
          Assigned(BytecodeGetter.FClosure.Template) and
-         (not BytecodeGetter.FClosure.Template.IsAsync) then
+         (not BytecodeGetter.FClosure.Template.IsAsync) and
+         (not BytecodeGetter.FClosure.Template.IsGenerator) then
         Exit(RegisterToValue(FVM.ExecuteClosureRegisters(
           BytecodeGetter.FClosure, RegisterObject(Self), [])));
     end;
@@ -3620,40 +3635,42 @@ end;
 procedure TGocciaVMClassValue.SetProperty(const AName: string;
   const AValue: TGocciaValue);
 var
+  Descriptor: TGocciaPropertyDescriptor;
   Setter: TGocciaFunctionBase;
-  Current: TGocciaClassValue;
   BytecodeSetter: TGocciaBytecodeFunctionValue;
   Args: TGocciaArgumentsCollection;
 begin
-  Current := Self;
-  repeat
-    Setter := Current.StaticPropertySetter[AName];
-    if Assigned(Setter) then
-    begin
-      if Setter is TGocciaBytecodeFunctionValue then
-      begin
-        BytecodeSetter := TGocciaBytecodeFunctionValue(Setter);
-        if Assigned(BytecodeSetter.FClosure) and
-           Assigned(BytecodeSetter.FClosure.Template) and
-           (not BytecodeSetter.FClosure.Template.IsAsync) then
-        begin
-          FVM.ExecuteClosureRegisters(BytecodeSetter.FClosure, RegisterObject(Self),
-            [ValueToRegister(AValue)]);
-          Exit;
-        end;
-      end;
+  Setter := nil;
+  Descriptor := inherited GetOwnPropertyDescriptor(AName);
+  if Descriptor is TGocciaPropertyDescriptorAccessor then
+    if TGocciaPropertyDescriptorAccessor(Descriptor).Setter is TGocciaFunctionBase then
+      Setter := TGocciaFunctionBase(TGocciaPropertyDescriptorAccessor(Descriptor).Setter);
 
-      Args := TGocciaArgumentsCollection.CreateWithCapacity(1);
-      try
-        Args.Add(AValue);
-        Setter.Call(Args, Self);
-      finally
-        Args.Free;
+  if Assigned(Setter) then
+  begin
+    if Setter is TGocciaBytecodeFunctionValue then
+    begin
+      BytecodeSetter := TGocciaBytecodeFunctionValue(Setter);
+      if Assigned(BytecodeSetter.FClosure) and
+         Assigned(BytecodeSetter.FClosure.Template) and
+         (not BytecodeSetter.FClosure.Template.IsAsync) and
+         (not BytecodeSetter.FClosure.Template.IsGenerator) then
+      begin
+        FVM.ExecuteClosureRegisters(BytecodeSetter.FClosure, RegisterObject(Self),
+          [ValueToRegister(AValue)]);
+        Exit;
       end;
-      Exit;
     end;
-    Current := Current.SuperClass;
-  until not Assigned(Current);
+
+    Args := TGocciaArgumentsCollection.CreateWithCapacity(1);
+    try
+      Args.Add(AValue);
+      Setter.Call(Args, Self);
+    finally
+      Args.Free;
+    end;
+    Exit;
+  end;
 
   inherited SetProperty(AName, AValue);
 end;
@@ -5223,7 +5240,7 @@ begin
     TGocciaClassValue(ATarget).DefineSymbolProperty(
       TGocciaSymbolValue(AKey),
       TGocciaPropertyDescriptorAccessor.Create(
-        AGetter, ExistingSetter, [pfEnumerable, pfConfigurable, pfWritable]));
+        AGetter, ExistingSetter, [pfConfigurable]));
     Exit;
   end;
 
@@ -5248,7 +5265,7 @@ begin
     TGocciaClassValue(ATarget).DefineSymbolProperty(
       TGocciaSymbolValue(AKey),
       TGocciaPropertyDescriptorAccessor.Create(
-        ExistingGetter, ASetter, [pfEnumerable, pfConfigurable, pfWritable]));
+        ExistingGetter, ASetter, [pfConfigurable]));
     Exit;
   end;
 
@@ -7764,8 +7781,8 @@ begin
             TGocciaArrayValue(FRegisters[A].ObjectValue).AssignSymbolProperty(
               TGocciaSymbolValue(FRegisters[B].ObjectValue), RegisterToValue(FRegisters[C]))
           else if TryGetArrayIndexRegister(FRegisters[B], KeyIndex) then
-            TGocciaArrayValue(FRegisters[A].ObjectValue).SetElement(
-              KeyIndex, RegisterToValue(FRegisters[C]))
+            TGocciaArrayValue(FRegisters[A].ObjectValue).SetProperty(
+              IntToStr(KeyIndex), RegisterToValue(FRegisters[C]))
           else if TryResolveObjectKey(FRegisters[B], PropKeyValue) then
           begin
             if PropKeyValue is TGocciaSymbolValue then
@@ -8039,6 +8056,42 @@ begin
         SetPropertyValueLoose(TargetValue, GlobalName, RightValue);
       end;
 
+      OP_DEFINE_STATIC_PROP_CONST:
+      begin
+        GlobalName := Template.GetConstantUnchecked(B).StringValue;
+        RightValue := RegisterToValue(FRegisters[C]);
+        if (FRegisters[A].Kind = grkObject) and
+           (FRegisters[A].ObjectValue is TGocciaObjectValue) then
+        begin
+          if FRegisters[A].ObjectValue is TGocciaVMClassValue then
+            SetBytecodeHomeObject(RightValue, RegisterToValue(FRegisters[A]));
+          TGocciaObjectValue(FRegisters[A].ObjectValue).DefineProperty(
+            GlobalName,
+            TGocciaPropertyDescriptorData.Create(
+              RightValue, [pfEnumerable, pfConfigurable, pfWritable]));
+        end
+        else
+          SetPropertyValue(GetRegister(A), GlobalName, RightValue);
+      end;
+
+      OP_DEFINE_STATIC_METHOD_CONST:
+      begin
+        GlobalName := Template.GetConstantUnchecked(B).StringValue;
+        RightValue := RegisterToValue(FRegisters[C]);
+        if (FRegisters[A].Kind = grkObject) and
+           (FRegisters[A].ObjectValue is TGocciaObjectValue) then
+        begin
+          if FRegisters[A].ObjectValue is TGocciaVMClassValue then
+            SetBytecodeHomeObject(RightValue, RegisterToValue(FRegisters[A]));
+          TGocciaObjectValue(FRegisters[A].ObjectValue).DefineProperty(
+            GlobalName,
+            TGocciaPropertyDescriptorData.Create(
+              RightValue, [pfConfigurable, pfWritable]));
+        end
+        else
+          SetPropertyValue(GetRegister(A), GlobalName, RightValue);
+      end;
+
       OP_DELETE_PROP_CONST:
       begin
         if FRegisters[A].Kind = grkNull then
@@ -8249,8 +8302,8 @@ begin
             TGocciaArrayValue(FRegisters[A].ObjectValue).AssignSymbolProperty(
               TGocciaSymbolValue(FRegisters[B].ObjectValue), RightValue)
           else if TryGetArrayIndexRegister(FRegisters[B], KeyIndex) then
-            TGocciaArrayValue(FRegisters[A].ObjectValue).SetElement(
-              KeyIndex, RightValue)
+            TGocciaArrayValue(FRegisters[A].ObjectValue).SetProperty(
+              IntToStr(KeyIndex), RightValue)
           else if TryResolveObjectKey(FRegisters[B], PropKeyValue) then
           begin
             if PropKeyValue is TGocciaSymbolValue then

@@ -1,4 +1,6 @@
 import { localFunction, localValue } from "./local-module.js";
+import defer * as deferredMath from "./helpers/missing-defer-fixture.js";
+import defer * as attributedDeferredMath from "./helpers/missing-defer-fixture.js" with { };
 
 describe("basic import", () => {
   test("import function from local module", () => {
@@ -7,6 +9,11 @@ describe("basic import", () => {
 
   test("import value from local module", () => {
     expect(localValue).toBe("hello");
+  });
+
+  test("unsupported import defer namespace syntax is accepted as a no-op", () => {
+    expect(typeof deferredMath).toBe("undefined");
+    expect(typeof attributedDeferredMath).toBe("undefined");
   });
 });
 

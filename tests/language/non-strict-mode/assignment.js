@@ -118,4 +118,94 @@ describe("non-strict assignment", () => {
     expect(result).toBe(1);
     expect(Object.hasOwn(obj, "added")).toBe(false);
   });
+
+  test("computed array index writes create elements visible to array methods", () => {
+    const array = [];
+
+    array[0] = 0;
+    array[3] = 3;
+
+    expect(0 in array).toBe(true);
+    expect(3 in array).toBe(true);
+    expect(array.length).toBe(4);
+    expect(array[3]).toBe(3);
+
+    expect(array.pop()).toBe(3);
+    expect(array.length).toBe(3);
+    expect(3 in array).toBe(false);
+    expect(array[3]).toBeUndefined();
+    expect(array[2]).toBeUndefined();
+  });
+
+  test("array index deletion side effects are visible during indexOf", () => {
+    const array = [];
+    array[10] = "ten";
+    array.length = 20;
+
+    const fromIndex = {
+      valueOf() {
+        delete array[10];
+        return 3;
+      },
+    };
+
+    expect(array.indexOf("ten", fromIndex)).toBe(-1);
+    expect(10 in array).toBe(false);
+    expect(array[10]).toBeUndefined();
+  });
+
+  test("class constructor static setters receive non-strict assignments", () => {
+    let captured = 0;
+    const computed = "computed";
+    const symbolKey = Symbol("staticSetter");
+
+    class C {
+      static set eval(value) {
+        captured = captured + value;
+      }
+
+      static set arguments(value) {
+        captured = captured + value * 10;
+      }
+
+      static set [computed](value) {
+        captured = captured + value * 100;
+      }
+
+      static set [symbolKey](value) {
+        captured = captured + value * 1000;
+      }
+    }
+
+    const evalDescriptor = Object.getOwnPropertyDescriptor(C, "eval");
+    const symbolDescriptor = Object.getOwnPropertyDescriptor(C, symbolKey);
+
+    C.eval = 1;
+    C.arguments = 2;
+    C[computed] = 3;
+    C[symbolKey] = 4;
+
+    expect(captured).toBe(4321);
+    expect(typeof evalDescriptor.set).toBe("function");
+    expect(evalDescriptor.enumerable).toBe(false);
+    expect(evalDescriptor.configurable).toBe(true);
+    expect(typeof symbolDescriptor.set).toBe("function");
+    expect(symbolDescriptor.enumerable).toBe(false);
+    expect(symbolDescriptor.configurable).toBe(true);
+  });
+
+  test("inherited static setters receive the derived constructor as receiver", () => {
+    class Base {
+      static set value(next) {
+        this.received = next;
+      }
+    }
+
+    class Derived extends Base {}
+
+    Derived.value = 7;
+
+    expect(Derived.received).toBe(7);
+    expect(Base.received).toBeUndefined();
+  });
 });

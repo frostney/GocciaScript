@@ -148,12 +148,51 @@ const
       Name: 'Date';
       FileName: '<shim:Date>';
       Source:
+        'const dateTimeClipLimit: number = 8.64e15;'#10 +
+        'const toDateInteger = (value: any): number => {'#10 +
+        '  const numberValue: number = Number(value);'#10 +
+        '  return Number.isFinite(numberValue) ? Math.trunc(numberValue) : NaN;'#10 +
+        '};'#10 +
+        'const makeDateEpochMilliseconds = (args: any[], timeZone: string): number => {'#10 +
+        '  if (args.length === 0) return NaN;'#10 +
+        '  const yearValue: number = toDateInteger(args[0]);'#10 +
+        '  const month: number = toDateInteger(args.length > 1 ? args[1] : 0);'#10 +
+        '  const day: number = toDateInteger(args.length > 2 ? args[2] : 1);'#10 +
+        '  const hour: number = toDateInteger(args.length > 3 ? args[3] : 0);'#10 +
+        '  const minute: number = toDateInteger(args.length > 4 ? args[4] : 0);'#10 +
+        '  const second: number = toDateInteger(args.length > 5 ? args[5] : 0);'#10 +
+        '  const millisecond: number = toDateInteger(args.length > 6 ? args[6] : 0);'#10 +
+        '  if (!Number.isFinite(yearValue) || !Number.isFinite(month) ||'#10 +
+        '      !Number.isFinite(day) || !Number.isFinite(hour) ||'#10 +
+        '      !Number.isFinite(minute) || !Number.isFinite(second) ||'#10 +
+        '      !Number.isFinite(millisecond)) return NaN;'#10 +
+        '  const fullYear: number = yearValue >= 0 && yearValue <= 99 ?'#10 +
+        '    1900 + yearValue : yearValue;'#10 +
+        '  try {'#10 +
+        '    const dt = new Temporal.PlainDateTime(fullYear, 1, 1, 0, 0, 0, 0).add({'#10 +
+        '      months: month,'#10 +
+        '      days: day - 1,'#10 +
+        '      hours: hour,'#10 +
+        '      minutes: minute,'#10 +
+        '      seconds: second,'#10 +
+        '      milliseconds: millisecond'#10 +
+        '    });'#10 +
+        '    const epochMilliseconds: number = dt.toZonedDateTime(timeZone).epochMilliseconds;'#10 +
+        '    if (!Number.isFinite(epochMilliseconds) ||'#10 +
+        '        Math.abs(epochMilliseconds) > dateTimeClipLimit)'#10 +
+        '      return NaN;'#10 +
+        '    return Math.trunc(epochMilliseconds);'#10 +
+        '  } catch (e) { return NaN; }'#10 +
+        '};'#10 +
         'export const Date = class Date {'#10 +
         '  #ms;'#10 +
         '  static now(): number { return Temporal.Now.instant().epochMilliseconds; }'#10 +
         '  static parse(str: string): number {'#10 +
         '    try { return Temporal.Instant.from(String(str)).epochMilliseconds; }'#10 +
         '    catch (e) { return NaN; }'#10 +
+        '  }'#10 +
+        '  static UTC(...args: any[]): number {'#10 +
+        '    return makeDateEpochMilliseconds(args, "UTC");'#10 +
         '  }'#10 +
         '  constructor(...args: any[]) {'#10 +
         '    if (args.length === 0) {'#10 +
@@ -165,12 +204,7 @@ const
         '        this.#ms = Number.isFinite(t) && Math.abs(t) <= 8.64e15 ? t : NaN;'#10 +
         '      } else { this.#ms = Date.parse(String(v)); }'#10 +
         '    } else {'#10 +
-        '      const y: number = args[0] >= 0 && args[0] <= 99 ? 1900 + args[0] : args[0];'#10 +
-        '      const dt = new Temporal.PlainDateTime('#10 +
-        '        y, (args[1] ?? 0) + 1, args[2] ?? 1,'#10 +
-        '        args[3] ?? 0, args[4] ?? 0, args[5] ?? 0, args[6] ?? 0'#10 +
-        '      );'#10 +
-        '      this.#ms = dt.toZonedDateTime(Temporal.Now.timeZoneId()).epochMilliseconds;'#10 +
+        '      this.#ms = makeDateEpochMilliseconds(args, Temporal.Now.timeZoneId());'#10 +
         '    }'#10 +
         '  }'#10 +
         '  #valid() { return Number.isFinite(this.#ms); }'#10 +
@@ -194,6 +228,14 @@ const
         '  getUTCMinutes(): number { const z = this.#utc(); return z ? z.minute : NaN; }'#10 +
         '  getUTCSeconds(): number { const z = this.#utc(); return z ? z.second : NaN; }'#10 +
         '  getUTCMilliseconds(): number { const z = this.#utc(); return z ? z.millisecond : NaN; }'#10 +
+        '  setDate(day: number): number {'#10 +
+        '    const z = this.#local();'#10 +
+        '    const n = Number(day);'#10 +
+        '    if (!z || !Number.isFinite(n)) { this.#ms = NaN; return NaN; }'#10 +
+        '    const next = z.add({ days: Math.trunc(n) - z.day });'#10 +
+        '    this.#ms = next.epochMilliseconds;'#10 +
+        '    return this.#ms;'#10 +
+        '  }'#10 +
         '  getTimezoneOffset(): number { const z = this.#local(); return z ? -(z.offsetNanoseconds / 60000000000) : NaN; }'#10 +
         '  toISOString(): string { if (!this.#valid()) throw new RangeError("Invalid time value"); return Temporal.Instant.fromEpochMilliseconds(this.#ms).toString(); }'#10 +
         '  toJSON(): string | null { if (!this.#valid()) return null; return this.toISOString(); }'#10 +

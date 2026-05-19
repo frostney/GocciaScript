@@ -288,6 +288,9 @@ begin
     Goccia.Compiler.Statements.CompileExportVariableDeclaration(Ctx, TGocciaExportVariableDeclaration(AStmt))
   else if AStmt is TGocciaExportDeclaration then
     Goccia.Compiler.Statements.CompileExportDeclaration(Ctx, TGocciaExportDeclaration(AStmt))
+  else if AStmt is TGocciaExportDefaultDeclaration then
+    Goccia.Compiler.Statements.CompileExportDefaultDeclaration(Ctx,
+      TGocciaExportDefaultDeclaration(AStmt))
   else if AStmt is TGocciaReExportDeclaration then
     Goccia.Compiler.Statements.CompileReExportDeclaration(Ctx, TGocciaReExportDeclaration(AStmt))
   else if AStmt is TGocciaDestructuringDeclaration then
@@ -380,6 +383,12 @@ begin
   begin
     if AScope.ResolveLocal(TGocciaClassDeclaration(ANode).ClassDefinition.Name) < 0 then
       AScope.DeclareLocal(TGocciaClassDeclaration(ANode).ClassDefinition.Name, True);
+  end
+  else if (ANode is TGocciaExportDefaultDeclaration) and
+          (TGocciaExportDefaultDeclaration(ANode).LocalName <> GOCCIA_DEFAULT_EXPORT_BINDING) then
+  begin
+    if AScope.ResolveLocal(TGocciaExportDefaultDeclaration(ANode).LocalName) < 0 then
+      AScope.DeclareLocal(TGocciaExportDefaultDeclaration(ANode).LocalName, True);
   end
   else if ANode is TGocciaEnumDeclaration then
   begin

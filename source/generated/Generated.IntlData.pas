@@ -11,8 +11,8 @@ interface
 const
   GeneratedIntlDataVersion = '45.0.0';
   GeneratedIntlDataResourceName = 'GOCCIA_CLDR';
-  GeneratedIntlDataSectionCount = 188;
-  GeneratedIntlDataBlobByteCount = 1136389;
+  GeneratedIntlDataSectionCount = 195;
+  GeneratedIntlDataBlobByteCount = 1178953;
 
 implementation
 

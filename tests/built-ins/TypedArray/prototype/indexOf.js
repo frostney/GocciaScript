@@ -34,6 +34,23 @@ describe("TypedArray.prototype.indexOf", () => {
     expect(() => Int32Array.prototype.indexOf.call({}, 1)).toThrow(TypeError);
   });
 
+  test("throws on detached buffer", () => {
+    const ta = new Int32Array([1, 2, 3]);
+    ta.buffer.transfer();
+    expect(() => ta.indexOf(1)).toThrow(TypeError);
+  });
+
+  test("returns -1 when fromIndex detaches buffer", () => {
+    const ta = new Int32Array(1);
+    const fromIndex = {
+      valueOf() {
+        ta.buffer.transfer();
+        return 0;
+      }
+    };
+    expect(ta.indexOf(undefined, fromIndex)).toBe(-1);
+  });
+
   test.each([BigInt64Array, BigUint64Array])("%s indexOf", (TA) => {
     const ta = new TA([1n, 2n, 3n, 2n]);
     expect(ta.indexOf(2n)).toBe(1);

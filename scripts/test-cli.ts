@@ -338,6 +338,30 @@ console.log("--compat-non-strict-mode (Loader + Bundler + TestRunner + Bare)..."
     const bareOut = await $`${BARE} --print ${src} --compat-function --compat-non-strict-mode 2>&1`.text();
     if (bareOut.trim() !== "7") throw new Error(`Bare --compat-non-strict-mode expected 7, got: ${bareOut}`);
 
+    const staticSetterSrc = join(tmp, "static-setter-nonstrict.js");
+    writeFileSync(
+      staticSetterSrc,
+      [
+        "let captured = 0;",
+        'const computed = "computed";',
+        'const symbolKey = Symbol("staticSetter");',
+        "class C {",
+        "  static set eval(value) { captured = captured + value; }",
+        "  static set arguments(value) { captured = captured + value * 10; }",
+        "  static set [computed](value) { captured = captured + value * 100; }",
+        "  static set [symbolKey](value) { captured = captured + value * 1000; }",
+        "}",
+        "C.eval = 1;",
+        "C.arguments = 2;",
+        "C[computed] = 3;",
+        "C[symbolKey] = 4;",
+        "captured;",
+      ].join("\n") + "\n",
+    );
+    const staticSetterBareOut = await $`${BARE} --print ${staticSetterSrc} --compat-non-strict-mode 2>&1`.text();
+    if (staticSetterBareOut.trim() !== "4321")
+      throw new Error(`Bare static setters in non-strict mode expected 4321, got: ${staticSetterBareOut}`);
+
     const noFlagOut = join(tmp, "no-flag.gbc");
     const bundleNoFlag = await $`${BUNDLER} ${src} --compat-function --output=${noFlagOut} 2>&1`.nothrow();
     if (bundleNoFlag.exitCode !== 0) throw new Error(`Bundler without --compat-non-strict-mode should skip unsupported with and still compile, got: ${bundleNoFlag.stderr.toString()}`);

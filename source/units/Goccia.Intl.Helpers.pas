@@ -30,6 +30,7 @@ implementation
 uses
   SysUtils,
 
+  Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Values.ErrorHelper;
 
@@ -42,8 +43,10 @@ begin
   for I := 0 to Length(AParts) - 1 do
   begin
     PartObj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
-    PartObj.AssignProperty('type', TGocciaStringLiteralValue.Create(AParts[I].PartType));
-    PartObj.AssignProperty('value', TGocciaStringLiteralValue.Create(AParts[I].Value));
+    PartObj.AssignProperty(PROP_TYPE, TGocciaStringLiteralValue.Create(AParts[I].PartType));
+    PartObj.AssignProperty(PROP_VALUE, TGocciaStringLiteralValue.Create(AParts[I].Value));
+    if AParts[I].Source <> '' then
+      PartObj.AssignProperty(PROP_SOURCE, TGocciaStringLiteralValue.Create(AParts[I].Source));
     Result.Elements.Add(PartObj);
   end;
 end;

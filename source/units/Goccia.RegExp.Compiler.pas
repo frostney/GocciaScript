@@ -42,6 +42,7 @@ type
     Code: array of UInt32;
     CharClasses: array of TRegExpCharClass;
     CaptureCount: Integer;
+    FullUnicode: Boolean;
     NamedGroups: TGocciaRegExpNamedGroups;
   end;
 
@@ -99,6 +100,7 @@ type
     FModifier: TModifierState;
     FUnicode: Boolean;
     FUnicodeSets: Boolean;
+    FPendingCodeUnit: Integer;
     function Peek: Char;
     function PeekAt(AOffset: Integer): Char;
     function AtEnd: Boolean;
@@ -154,7 +156,7 @@ type
     procedure PreScanNamedGroups;
     procedure InsertSplitAt(APos: Integer);
     procedure EmitDuplicateNamedBackref(const AName: string;
-      AICaseFlag: Integer);
+      ABackrefFlags: Integer);
   public
     constructor Create(const APattern, AFlags: string);
     function Compile: TRegExpProgram;
@@ -162,6 +164,96 @@ type
 
 const
   MAX_CHAR_RANGES = 2048;
+
+function IsRegExpHexString(const AValue: string): Boolean;
+var
+  I: Integer;
+begin
+  if AValue = '' then
+    Exit(False);
+  for I := 1 to Length(AValue) do
+    if not CharInSet(AValue[I], ['0'..'9', 'a'..'f', 'A'..'F']) then
+      Exit(False);
+  Result := True;
+end;
+
+function DecodeRegExpGroupNameUnicodeEscape(const AText: string;
+  var AIndex: Integer): string;
+var
+  CodePoint: Cardinal;
+  HexStart: Integer;
+  HexStr: string;
+  LowSurrogate: Cardinal;
+begin
+  if (AIndex + 1 > Length(AText)) or (AText[AIndex] <> '\') or
+     (AText[AIndex + 1] <> 'u') then
+    raise EConvertError.Create('Invalid Unicode escape in group name');
+
+  Inc(AIndex, 2);
+  if (AIndex <= Length(AText)) and (AText[AIndex] = '{') then
+  begin
+    Inc(AIndex);
+    HexStart := AIndex;
+    while (AIndex <= Length(AText)) and (AText[AIndex] <> '}') do
+      Inc(AIndex);
+    if AIndex > Length(AText) then
+      raise EConvertError.Create('Unterminated Unicode escape in group name');
+    HexStr := Copy(AText, HexStart, AIndex - HexStart);
+    if not IsRegExpHexString(HexStr) then
+      raise EConvertError.Create('Invalid Unicode escape in group name');
+    Inc(AIndex);
+  end
+  else
+  begin
+    if AIndex + 3 > Length(AText) then
+      raise EConvertError.Create('Invalid Unicode escape in group name');
+    HexStr := Copy(AText, AIndex, 4);
+    if not IsRegExpHexString(HexStr) then
+      raise EConvertError.Create('Invalid Unicode escape in group name');
+    Inc(AIndex, 4);
+  end;
+
+  CodePoint := StrToInt('$' + HexStr);
+  if (CodePoint >= $D800) and (CodePoint <= $DBFF) and
+     (AIndex + 5 <= Length(AText)) and (AText[AIndex] = '\') and
+     (AText[AIndex + 1] = 'u') then
+  begin
+    HexStr := Copy(AText, AIndex + 2, 4);
+    if IsRegExpHexString(HexStr) then
+    begin
+      LowSurrogate := StrToInt('$' + HexStr);
+      if (LowSurrogate >= $DC00) and (LowSurrogate <= $DFFF) then
+      begin
+        CodePoint := $10000 + ((CodePoint - $D800) shl 10) +
+          (LowSurrogate - $DC00);
+        Inc(AIndex, 6);
+      end;
+    end;
+  end;
+  if CodePoint > $10FFFF then
+    raise EConvertError.Create('Unicode escape out of range in group name');
+
+  Result := CodePointToUTF8(CodePoint);
+end;
+
+function DecodeRegExpGroupName(const ARawName: string): string;
+var
+  I: Integer;
+begin
+  Result := '';
+  I := 1;
+  while I <= Length(ARawName) do
+  begin
+    if (ARawName[I] = '\') and (I + 1 <= Length(ARawName)) and
+       (ARawName[I + 1] = 'u') then
+      Result := Result + DecodeRegExpGroupNameUnicodeEscape(ARawName, I)
+    else
+    begin
+      Result := Result + ARawName[I];
+      Inc(I);
+    end;
+  end;
+end;
 
 constructor TRegExpCompiler.Create(const APattern, AFlags: string);
 begin
@@ -181,10 +273,13 @@ begin
   FModifier.DotAll := HasRegExpFlag(AFlags, 's');
   FUnicodeSets := HasRegExpFlag(AFlags, 'v');
   FUnicode := HasRegExpFlag(AFlags, 'u') or FUnicodeSets;
+  FPendingCodeUnit := -1;
 end;
 
 function TRegExpCompiler.Peek: Char;
 begin
+  if FPendingCodeUnit >= 0 then
+    Exit(#1);
   if FPos <= Length(FPattern) then
     Result := FPattern[FPos]
   else
@@ -195,6 +290,12 @@ function TRegExpCompiler.PeekAt(AOffset: Integer): Char;
 var
   Idx: Integer;
 begin
+  if FPendingCodeUnit >= 0 then
+  begin
+    if AOffset = 0 then
+      Exit(#1);
+    Dec(AOffset);
+  end;
   Idx := FPos + AOffset;
   if (Idx >= 1) and (Idx <= Length(FPattern)) then
     Result := FPattern[Idx]
@@ -204,7 +305,7 @@ end;
 
 function TRegExpCompiler.AtEnd: Boolean;
 begin
-  Result := FPos > Length(FPattern);
+  Result := (FPendingCodeUnit < 0) and (FPos > Length(FPattern));
 end;
 
 function TRegExpCompiler.Advance: Char;
@@ -1403,12 +1504,30 @@ end;
 function TRegExpCompiler.ReadCodePoint: Cardinal;
 var
   ByteLen: Integer;
+  CodePoint: Cardinal;
+  Supplementary: Cardinal;
 begin
+  if FPendingCodeUnit >= 0 then
+  begin
+    Result := Cardinal(FPendingCodeUnit);
+    FPendingCodeUnit := -1;
+    Exit;
+  end;
+
   if FPos <= Length(FPattern) then
   begin
-    if TryReadUTF8CodePoint(FPattern, FPos, Result, ByteLen) and (ByteLen > 1) then
+    if TryReadUTF8CodePointAllowSurrogates(FPattern, FPos, CodePoint,
+       ByteLen) and (ByteLen > 1) then
     begin
       Inc(FPos, ByteLen);
+      if (not FUnicode) and (CodePoint > $FFFF) then
+      begin
+        Supplementary := CodePoint - $10000;
+        FPendingCodeUnit := Integer($DC00 + (Supplementary and $3FF));
+        Result := $D800 + (Supplementary shr 10);
+        Exit;
+      end;
+      Result := CodePoint;
       Exit;
     end;
   end;
@@ -1418,17 +1537,19 @@ end;
 function TRegExpCompiler.ParseGroupName: string;
 var
   C: Char;
+  RawName: string;
 begin
-  Result := '';
+  RawName := '';
   while not AtEnd do
   begin
     C := Peek;
     if C = '>' then
     begin
       Inc(FPos);
+      Result := DecodeRegExpGroupName(RawName);
       Exit;
     end;
-    Result := Result + Advance;
+    RawName := RawName + Advance;
   end;
   raise EConvertError.Create('Unterminated group name');
 end;
@@ -1478,7 +1599,7 @@ begin
     Exit;
   end;
   Result := ParseHexEscape(4);
-  if (Result >= $D800) and (Result <= $DBFF) then
+  if FUnicode and (Result >= $D800) and (Result <= $DBFF) then
   begin
     HighSurrogate := Result;
     if (Peek = '\') and (PeekAt(1) = 'u') then
@@ -1519,7 +1640,7 @@ begin
 end;
 
 procedure TRegExpCompiler.EmitDuplicateNamedBackref(const AName: string;
-  AICaseFlag: Integer);
+  ABackrefFlags: Integer);
 var
   Indices: array of Integer;
   Count, I: Integer;
@@ -1538,7 +1659,7 @@ begin
   SetLength(Indices, Count);
   if Count = 1 then
   begin
-    Emit(EncodeOpBx(RX_BACKREF, Indices[0] or AICaseFlag));
+    Emit(EncodeOpBx(RX_BACKREF, Indices[0] or ABackrefFlags));
     Exit;
   end;
   JumpCount := 0;
@@ -1547,7 +1668,8 @@ begin
   begin
     SplitHole := CurrentPC;
     Emit(EncodeOpBx(RX_SPLIT, 0));
-    Emit(EncodeOpBx(RX_BACKREF, Indices[I] or BACKREF_STRICT_FLAG or AICaseFlag));
+    Emit(EncodeOpBx(RX_BACKREF, Indices[I] or BACKREF_STRICT_FLAG or
+      ABackrefFlags));
     JumpHoles[JumpCount] := CurrentPC;
     Inc(JumpCount);
     Emit(0);
@@ -1566,16 +1688,14 @@ var
   PropertyName: string;
   Negated: Boolean;
   GroupName: string;
-  BackrefIdx, I, GroupCount, BackrefICaseFlag: Integer;
+  BackrefIdx, I, GroupCount, BackrefFlags: Integer;
   CodePoint: Cardinal;
 begin
-  BackrefICaseFlag := 0;
+  BackrefFlags := 0;
   if FModifier.IgnoreCase then
-  begin
-    BackrefICaseFlag := BACKREF_ICASE_FLAG;
-    if FUnicode then
-      BackrefICaseFlag := BackrefICaseFlag or BACKREF_UNICODE_FLAG;
-  end;
+    BackrefFlags := BackrefFlags or BACKREF_ICASE_FLAG;
+  if FUnicode then
+    BackrefFlags := BackrefFlags or BACKREF_UNICODE_FLAG;
   C := Advance;
   case C of
     'd', 'D', 'w', 'W', 's', 'S':
@@ -1621,9 +1741,9 @@ begin
             raise EConvertError.Create(
               'Invalid named backreference: ' + GroupName);
           if GroupCount <= 1 then
-            Emit(EncodeOpBx(RX_BACKREF, BackrefIdx or BackrefICaseFlag))
+            Emit(EncodeOpBx(RX_BACKREF, BackrefIdx or BackrefFlags))
           else
-            EmitDuplicateNamedBackref(GroupName, BackrefICaseFlag);
+            EmitDuplicateNamedBackref(GroupName, BackrefFlags);
         end
         else
           EmitCharMatch(Ord('k'));
@@ -1633,7 +1753,7 @@ begin
         BackrefIdx := Ord(C) - Ord('0');
         while not AtEnd and (Peek >= '0') and (Peek <= '9') do
           BackrefIdx := BackrefIdx * 10 + (Ord(Advance) - Ord('0'));
-        Emit(EncodeOpBx(RX_BACKREF, BackrefIdx or BackrefICaseFlag));
+        Emit(EncodeOpBx(RX_BACKREF, BackrefIdx or BackrefFlags));
       end;
     'n': EmitCharMatch($0A);
     'r': EmitCharMatch($0D);
@@ -1648,7 +1768,13 @@ begin
           EmitCharMatch(0);
       end;
     'x': EmitCharMatch(ParseHexEscape(2));
-    'u': EmitCharMatch(ParseUnicodeEscape);
+    'u':
+      begin
+        if (not FUnicode) and (Peek = '{') then
+          EmitCharMatch(Ord('u'))
+        else
+          EmitCharMatch(ParseUnicodeEscape);
+      end;
     'c':
       begin
         if not AtEnd and (((Peek >= 'a') and (Peek <= 'z')) or
@@ -1700,8 +1826,13 @@ begin
       end;
     'u':
       begin
-        CodePoint := ParseUnicodeEscape;
-        AddRange(ARanges, ARangeCount, CodePoint, CodePoint);
+        if (not FUnicode) and (Peek = '{') then
+          AddRange(ARanges, ARangeCount, Ord('u'), Ord('u'))
+        else
+        begin
+          CodePoint := ParseUnicodeEscape;
+          AddRange(ARanges, ARangeCount, CodePoint, CodePoint);
+        end;
       end;
     'p', 'P':
       begin
@@ -2348,7 +2479,8 @@ begin
           if CloseAngle <= Length(FPattern) then
           begin
             Inc(GroupIndex);
-            GroupName := Copy(FPattern, I + 3, CloseAngle - I - 3);
+            GroupName := DecodeRegExpGroupName(
+              Copy(FPattern, I + 3, CloseAngle - I - 3));
             SetLength(FNamedGroups, Length(FNamedGroups) + 1);
             FNamedGroups[High(FNamedGroups)].Name := GroupName;
             FNamedGroups[High(FNamedGroups)].Index := GroupIndex;
@@ -2404,6 +2536,7 @@ begin
   Result.Code := FCode;
   Result.CharClasses := FCharClasses;
   Result.CaptureCount := FCaptureCount;
+  Result.FullUnicode := FUnicode;
   Result.NamedGroups := FNamedGroups;
 end;
 

@@ -55,6 +55,8 @@ function UTF16LastIndexOf(const AText, ASearch: string;
   const AStart: Integer): Integer;
 function UnicodeLowerCaseUTF8(const AText: string): string;
 function UnicodeUpperCaseUTF8(const AText: string): string;
+function AdvanceUTF16StringIndex(const AText: string; const AIndex: Integer;
+  const AUnicode: Boolean): Integer;
 function AdvanceUTF8StringIndex(const AText: string; const AIndex: Integer;
   const AUnicode: Boolean): Integer;
 function ExpandReplacementPattern(const AReplacement, AMatched,
@@ -797,6 +799,25 @@ begin
     UnicodeUpperCase(UTF8TextToUnicodeString(AText)));
 end;
 
+function AdvanceUTF16StringIndex(const AText: string; const AIndex: Integer;
+  const AUnicode: Boolean): Integer;
+var
+  CodePoint: Cardinal;
+  NextCodeUnit: Cardinal;
+begin
+  if not AUnicode then
+    Exit(AIndex + 1);
+  if TryUTF16CodePointValueAt(AText, AIndex, CodePoint) then
+  begin
+    if (CodePoint > $FFFF) or
+       ((CodePoint >= $D800) and (CodePoint <= $DBFF) and
+        TryUTF16CodePointValueAt(AText, AIndex + 1, NextCodeUnit) and
+        (NextCodeUnit >= $DC00) and (NextCodeUnit <= $DFFF)) then
+      Exit(AIndex + 2);
+  end;
+  Result := AIndex + 1;
+end;
+
 function AdvanceUTF8StringIndex(const AText: string; const AIndex: Integer;
   const AUnicode: Boolean): Integer;
 var
@@ -887,13 +908,14 @@ begin
         end;
       '`':
         begin
-          Buffer.Append(Copy(AInput, 1, AMatchStart));
+          Buffer.Append(UTF16Substring(AInput, 0, AMatchStart));
           Inc(I, 2);
         end;
       '''':
         begin
-          Buffer.Append(Copy(AInput, AMatchStart + Length(AMatched) + 1,
-            MaxInt));
+          Buffer.Append(UTF16Substring(AInput,
+            AMatchStart + UTF16CodeUnitLength(AMatched),
+            UTF16CodeUnitLength(AInput)));
           Inc(I, 2);
         end;
       '<':
