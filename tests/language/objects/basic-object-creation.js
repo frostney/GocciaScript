@@ -59,6 +59,49 @@ test("object property enumeration and inspection", () => {
   expect(Object.hasOwn(obj, "d")).toBe(false);
 });
 
+test("object literals define own data properties over inherited descriptors", () => {
+  Object.defineProperty(Object.prototype, "literalReadOnly", {
+    value: 100,
+    writable: false,
+    configurable: true,
+  });
+  Object.defineProperty(Object.prototype, "literalAccessor", {
+    get: () => false,
+    configurable: true,
+  });
+
+  try {
+    const staticObj = { literalReadOnly: 12 };
+    expect(Object.hasOwn(staticObj, "literalReadOnly")).toBe(true);
+    expect(staticObj.literalReadOnly).toBe(12);
+
+    const accessorKey = "literalAccessor";
+    const computedObj = { [accessorKey]: true };
+    expect(Object.hasOwn(computedObj, "literalAccessor")).toBe(true);
+    expect(computedObj.literalAccessor).toBe(true);
+  } finally {
+    delete Object.prototype.literalReadOnly;
+    delete Object.prototype.literalAccessor;
+  }
+});
+
+test("object spread defines own data properties over inherited descriptors", () => {
+  const source = { spreadReadOnly: 42 };
+  Object.defineProperty(Object.prototype, "spreadReadOnly", {
+    value: 100,
+    writable: false,
+    configurable: true,
+  });
+
+  try {
+    const obj = { ...source };
+    expect(Object.hasOwn(obj, "spreadReadOnly")).toBe(true);
+    expect(obj.spreadReadOnly).toBe(42);
+  } finally {
+    delete Object.prototype.spreadReadOnly;
+  }
+});
+
 // TODO: We don't have a test to support creating objects with prototypes because we only support arrow functions.
 test("object creation with arrow function should throw a type error", () => {
   expect(() => {

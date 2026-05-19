@@ -237,6 +237,23 @@ begin
   end;
 end;
 
+procedure EmitDefineDataPropertyByName(const ACtx: TGocciaCompilationContext;
+  const AObjReg: UInt8; const APropertyName: string; const AValueReg: UInt8);
+var
+  PropIdx: UInt16;
+  KeyReg: UInt8;
+begin
+  PropIdx := ACtx.Template.AddConstantString(APropertyName);
+  KeyReg := ACtx.Scope.AllocateRegister;
+  try
+    EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, KeyReg, PropIdx));
+    EmitInstruction(ACtx, EncodeABC(OP_DEFINE_DATA_PROP, AObjReg, KeyReg,
+      AValueReg));
+  finally
+    ACtx.Scope.FreeRegister;
+  end;
+end;
+
 function StoreByKeyOpcode(const ACtx: TGocciaCompilationContext): TGocciaOpCode;
 begin
   if ACtx.NonStrictMode then
@@ -2410,7 +2427,6 @@ procedure CompileObjectProperty(const ACtx: TGocciaCompilationContext;
   const AKey: string; const AValExpr: TGocciaExpression);
 var
   ValReg: UInt8;
-  KeyIdx: UInt16;
   FuncCount: Integer;
   InferredTemplate: TGocciaFunctionTemplate;
 begin
@@ -2437,7 +2453,7 @@ begin
     end;
   end;
 
-  EmitStorePropertyByName(ACtx, ADest, AKey, ValReg);
+  EmitDefineDataPropertyByName(ACtx, ADest, AKey, ValReg);
   ACtx.Scope.FreeRegister;
 end;
 
@@ -2616,7 +2632,8 @@ begin
               ValReg := ACtx.Scope.AllocateRegister;
               ACtx.CompileExpression(Pair.Key, KeyReg);
               ACtx.CompileExpression(Pair.Value, ValReg);
-              EmitInstruction(ACtx, EncodeABC(OP_SET_INDEX, ADest, KeyReg, ValReg));
+              EmitInstruction(ACtx, EncodeABC(OP_DEFINE_DATA_PROP, ADest,
+                KeyReg, ValReg));
               ACtx.Scope.FreeRegister;
               ACtx.Scope.FreeRegister;
             end;
