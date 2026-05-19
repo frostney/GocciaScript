@@ -2769,6 +2769,7 @@ var
   IsGetter, IsSetter: Boolean;
   IsAsync: Boolean;
   IsGenerator: Boolean;
+  IsMethod: Boolean;
   ComputedCount, SourceOrderCount: Integer;
   MemberStartLine, MemberStartColumn: Integer;
 begin
@@ -2794,6 +2795,7 @@ begin
     IsSetter := False;
     IsAsync := False;
     IsGenerator := False;
+    IsMethod := False;
     MemberStartLine := Peek.Line;
     MemberStartColumn := Peek.Column;
 
@@ -2844,6 +2846,7 @@ begin
       PropertySourceOrder[SourceOrderCount - 1].PropertyType := pstComputed;
       PropertySourceOrder[SourceOrderCount - 1].ComputedIndex := ComputedCount - 1;
       PropertySourceOrder[SourceOrderCount - 1].StaticKey := '';
+      PropertySourceOrder[SourceOrderCount - 1].IsMethod := False;
 
       // For spread expressions, no further processing is needed
       if not Match(gttComma) then
@@ -2890,6 +2893,7 @@ begin
       PropertySourceOrder[SourceOrderCount - 1].PropertyType := pstGetter;
       PropertySourceOrder[SourceOrderCount - 1].StaticKey := Key;
       PropertySourceOrder[SourceOrderCount - 1].ComputedIndex := -1;
+      PropertySourceOrder[SourceOrderCount - 1].IsMethod := False;
     end
     else if IsSetter then
     begin
@@ -2902,6 +2906,7 @@ begin
       PropertySourceOrder[SourceOrderCount - 1].PropertyType := pstSetter;
       PropertySourceOrder[SourceOrderCount - 1].StaticKey := Key;
       PropertySourceOrder[SourceOrderCount - 1].ComputedIndex := -1;
+      PropertySourceOrder[SourceOrderCount - 1].IsMethod := False;
     end
     // Check for method shorthand syntax: methodName() { ... } or [expr]() { ... }
     else if Check(gttLeftParen) then
@@ -2912,6 +2917,7 @@ begin
       if IsAsync then
         TGocciaMethodExpression(Value).IsAsync := True;
       TGocciaMethodExpression(Value).IsGenerator := IsGenerator;
+      IsMethod := True;
     end
     else
     begin
@@ -2960,6 +2966,7 @@ begin
         PropertySourceOrder[SourceOrderCount - 1].PropertyType := pstComputed;
         PropertySourceOrder[SourceOrderCount - 1].ComputedIndex := ComputedCount - 1;
         PropertySourceOrder[SourceOrderCount - 1].StaticKey := '';
+        PropertySourceOrder[SourceOrderCount - 1].IsMethod := IsMethod;
       end
       else
       begin
@@ -2978,6 +2985,7 @@ begin
         PropertySourceOrder[SourceOrderCount - 1].PropertyType := pstStatic;
         PropertySourceOrder[SourceOrderCount - 1].StaticKey := Key;
         PropertySourceOrder[SourceOrderCount - 1].ComputedIndex := -1;
+        PropertySourceOrder[SourceOrderCount - 1].IsMethod := IsMethod;
       end;
     end;
 

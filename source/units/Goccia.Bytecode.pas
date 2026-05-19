@@ -55,7 +55,9 @@ const
   //               assignment semantics.
   //   v32 -> v33: added OP_DEFINE_DATA_PROP so bytecode object literals define
   //               own data properties instead of assigning through prototypes.
-  GOCCIA_FORMAT_VERSION = 33;
+  //   v33 -> v34: added OP_DEFINE_METHOD_PROP so concise object methods get
+  //               [[HomeObject]] without affecting plain data properties.
+  GOCCIA_FORMAT_VERSION = 34;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
@@ -219,6 +221,7 @@ type
     OP_DEFINE_STATIC_PROP_CONST = 123,
     OP_DEFINE_STATIC_METHOD_CONST = 124,
     OP_DEFINE_DATA_PROP = 125,
+    OP_DEFINE_METHOD_PROP = 126,
     OP_ADD           = 128,
     OP_SUB           = 129,
     OP_MUL           = 130,

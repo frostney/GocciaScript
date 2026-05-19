@@ -167,7 +167,12 @@ type
       const AGetter: TGocciaValue);
     procedure DefineStaticSetterProperty(const ATarget: TGocciaValue; const AName: string;
       const ASetter: TGocciaValue);
+    procedure DefineDataPropertyByKeyInternal(const ATarget: TGocciaValue;
+      const AKey: TGocciaRegister; const AValue: TGocciaValue;
+      const ASetHomeObject: Boolean);
     procedure DefineDataPropertyByKey(const ATarget: TGocciaValue;
+      const AKey: TGocciaRegister; const AValue: TGocciaValue);
+    procedure DefineMethodPropertyByKey(const ATarget: TGocciaValue;
       const AKey: TGocciaRegister; const AValue: TGocciaValue);
     procedure DefineGetterPropertyByKey(const ATarget, AKey, AGetter: TGocciaValue);
     procedure DefineSetterPropertyByKey(const ATarget, AKey, ASetter: TGocciaValue);
@@ -5076,8 +5081,9 @@ begin
 end;
 
 // ES2026 §13.2.5.6 Runtime Semantics: PropertyDefinitionEvaluation
-procedure TGocciaVM.DefineDataPropertyByKey(const ATarget: TGocciaValue;
-  const AKey: TGocciaRegister; const AValue: TGocciaValue);
+procedure TGocciaVM.DefineDataPropertyByKeyInternal(const ATarget: TGocciaValue;
+  const AKey: TGocciaRegister; const AValue: TGocciaValue;
+  const ASetHomeObject: Boolean);
 var
   TargetObject: TGocciaObjectValue;
   ResolvedKey: TGocciaValue;
@@ -5086,7 +5092,8 @@ begin
     Exit;
 
   TargetObject := TGocciaObjectValue(ATarget);
-  SetBytecodeHomeObject(AValue, TargetObject);
+  if ASetHomeObject then
+    SetBytecodeHomeObject(AValue, TargetObject);
 
   if (AKey.Kind = grkObject) and
      (AKey.ObjectValue is TGocciaSymbolValue) then
@@ -5109,6 +5116,19 @@ begin
 
   DefineDataPropertyOnObject(TargetObject, KeyToPropertyNameRegister(AKey),
     AValue);
+end;
+
+procedure TGocciaVM.DefineDataPropertyByKey(const ATarget: TGocciaValue;
+  const AKey: TGocciaRegister; const AValue: TGocciaValue);
+begin
+  DefineDataPropertyByKeyInternal(ATarget, AKey, AValue, False);
+end;
+
+// ES2026 §13.2.5.5 MethodDefinition: concise object methods get [[HomeObject]].
+procedure TGocciaVM.DefineMethodPropertyByKey(const ATarget: TGocciaValue;
+  const AKey: TGocciaRegister; const AValue: TGocciaValue);
+begin
+  DefineDataPropertyByKeyInternal(ATarget, AKey, AValue, True);
 end;
 
 procedure TGocciaVM.DefineGetterProperty(const ATarget: TGocciaValue;
@@ -8157,6 +8177,10 @@ begin
 
       OP_DEFINE_DATA_PROP:
         DefineDataPropertyByKey(RegisterToValue(FRegisters[A]),
+          FRegisters[B], RegisterToValue(FRegisters[C]));
+
+      OP_DEFINE_METHOD_PROP:
+        DefineMethodPropertyByKey(RegisterToValue(FRegisters[A]),
           FRegisters[B], RegisterToValue(FRegisters[C]));
 
       OP_DELETE_PROP_CONST:

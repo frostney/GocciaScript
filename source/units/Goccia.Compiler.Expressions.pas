@@ -238,7 +238,8 @@ begin
 end;
 
 procedure EmitDefineDataPropertyByName(const ACtx: TGocciaCompilationContext;
-  const AObjReg: UInt8; const APropertyName: string; const AValueReg: UInt8);
+  const AObjReg: UInt8; const APropertyName: string; const AValueReg: UInt8;
+  const AOpcode: TGocciaOpCode);
 var
   PropIdx: UInt16;
   KeyReg: UInt8;
@@ -247,8 +248,7 @@ begin
   KeyReg := ACtx.Scope.AllocateRegister;
   try
     EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, KeyReg, PropIdx));
-    EmitInstruction(ACtx, EncodeABC(OP_DEFINE_DATA_PROP, AObjReg, KeyReg,
-      AValueReg));
+    EmitInstruction(ACtx, EncodeABC(AOpcode, AObjReg, KeyReg, AValueReg));
   finally
     ACtx.Scope.FreeRegister;
   end;
@@ -2424,9 +2424,10 @@ end;
 
 procedure CompileObjectProperty(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaObjectExpression; const ADest: UInt8;
-  const AKey: string; const AValExpr: TGocciaExpression);
+  const AKey: string; const AValExpr: TGocciaExpression; const AIsMethod: Boolean);
 var
   ValReg: UInt8;
+  DefineOp: TGocciaOpCode;
   FuncCount: Integer;
   InferredTemplate: TGocciaFunctionTemplate;
 begin
@@ -2453,7 +2454,11 @@ begin
     end;
   end;
 
-  EmitDefineDataPropertyByName(ACtx, ADest, AKey, ValReg);
+  if AIsMethod then
+    DefineOp := OP_DEFINE_METHOD_PROP
+  else
+    DefineOp := OP_DEFINE_DATA_PROP;
+  EmitDefineDataPropertyByName(ACtx, ADest, AKey, ValReg, DefineOp);
   ACtx.Scope.FreeRegister;
 end;
 
@@ -2611,7 +2616,8 @@ begin
       case Order[I].PropertyType of
         pstStatic:
           if AExpr.Properties.TryGetValue(Key, ValExpr) then
-            CompileObjectProperty(ACtx, AExpr, ADest, Key, ValExpr);
+            CompileObjectProperty(ACtx, AExpr, ADest, Key, ValExpr,
+              Order[I].IsMethod);
         pstComputed:
         begin
           if (Order[I].ComputedIndex >= 0) and
@@ -2632,8 +2638,12 @@ begin
               ValReg := ACtx.Scope.AllocateRegister;
               ACtx.CompileExpression(Pair.Key, KeyReg);
               ACtx.CompileExpression(Pair.Value, ValReg);
-              EmitInstruction(ACtx, EncodeABC(OP_DEFINE_DATA_PROP, ADest,
-                KeyReg, ValReg));
+              if Order[I].IsMethod then
+                EmitInstruction(ACtx, EncodeABC(OP_DEFINE_METHOD_PROP, ADest,
+                  KeyReg, ValReg))
+              else
+                EmitInstruction(ACtx, EncodeABC(OP_DEFINE_DATA_PROP, ADest,
+                  KeyReg, ValReg));
               ACtx.Scope.FreeRegister;
               ACtx.Scope.FreeRegister;
             end;
@@ -2655,7 +2665,7 @@ begin
     begin
       Key := Names[I];
       if AExpr.Properties.TryGetValue(Key, ValExpr) then
-        CompileObjectProperty(ACtx, AExpr, ADest, Key, ValExpr);
+        CompileObjectProperty(ACtx, AExpr, ADest, Key, ValExpr, False);
     end;
   end;
 end;
