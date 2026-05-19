@@ -2612,6 +2612,9 @@ begin
   begin
     for I := 0 to High(Order) do
     begin
+      if Order[I].Skip then
+        Continue;
+
       Key := Order[I].StaticKey;
       case Order[I].PropertyType of
         pstStatic:

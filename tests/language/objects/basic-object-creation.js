@@ -85,6 +85,24 @@ test("object literals define own data properties over inherited descriptors", ()
   }
 });
 
+test("duplicate static object keys evaluate final definition once", () => {
+  let calls = 0;
+  const mark = (value) => {
+    calls += 1;
+    return value;
+  };
+
+  const obj = {
+    value() {
+      return "method";
+    },
+    value: mark("data"),
+  };
+
+  expect(calls).toBe(1);
+  expect(obj.value).toBe("data");
+});
+
 test("object spread defines own data properties over inherited descriptors", () => {
   const source = { spreadReadOnly: 42 };
   Object.defineProperty(Object.prototype, "spreadReadOnly", {

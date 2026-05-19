@@ -2772,6 +2772,7 @@ var
   IsMethod: Boolean;
   ComputedCount, SourceOrderCount: Integer;
   MemberStartLine, MemberStartColumn: Integer;
+  OrderIndex: Integer;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
@@ -2847,6 +2848,7 @@ begin
       PropertySourceOrder[SourceOrderCount - 1].ComputedIndex := ComputedCount - 1;
       PropertySourceOrder[SourceOrderCount - 1].StaticKey := '';
       PropertySourceOrder[SourceOrderCount - 1].IsMethod := False;
+      PropertySourceOrder[SourceOrderCount - 1].Skip := False;
 
       // For spread expressions, no further processing is needed
       if not Match(gttComma) then
@@ -2894,6 +2896,7 @@ begin
       PropertySourceOrder[SourceOrderCount - 1].StaticKey := Key;
       PropertySourceOrder[SourceOrderCount - 1].ComputedIndex := -1;
       PropertySourceOrder[SourceOrderCount - 1].IsMethod := False;
+      PropertySourceOrder[SourceOrderCount - 1].Skip := False;
     end
     else if IsSetter then
     begin
@@ -2907,6 +2910,7 @@ begin
       PropertySourceOrder[SourceOrderCount - 1].StaticKey := Key;
       PropertySourceOrder[SourceOrderCount - 1].ComputedIndex := -1;
       PropertySourceOrder[SourceOrderCount - 1].IsMethod := False;
+      PropertySourceOrder[SourceOrderCount - 1].Skip := False;
     end
     // Check for method shorthand syntax: methodName() { ... } or [expr]() { ... }
     else if Check(gttLeftParen) then
@@ -2967,12 +2971,20 @@ begin
         PropertySourceOrder[SourceOrderCount - 1].ComputedIndex := ComputedCount - 1;
         PropertySourceOrder[SourceOrderCount - 1].StaticKey := '';
         PropertySourceOrder[SourceOrderCount - 1].IsMethod := IsMethod;
+        PropertySourceOrder[SourceOrderCount - 1].Skip := False;
       end
       else
       begin
         // JavaScript allows duplicate keys - last one wins
         if Properties.ContainsKey(Key) then
-          Properties[Key] := Value
+        begin
+          Properties[Key] := Value;
+          for OrderIndex := 0 to SourceOrderCount - 1 do
+            if (not PropertySourceOrder[OrderIndex].Skip) and
+               (PropertySourceOrder[OrderIndex].PropertyType = pstStatic) and
+               (PropertySourceOrder[OrderIndex].StaticKey = Key) then
+              PropertySourceOrder[OrderIndex].Skip := True;
+        end
         else
         begin
           Properties.Add(Key, Value);
@@ -2986,6 +2998,7 @@ begin
         PropertySourceOrder[SourceOrderCount - 1].StaticKey := Key;
         PropertySourceOrder[SourceOrderCount - 1].ComputedIndex := -1;
         PropertySourceOrder[SourceOrderCount - 1].IsMethod := IsMethod;
+        PropertySourceOrder[SourceOrderCount - 1].Skip := False;
       end;
     end;
 

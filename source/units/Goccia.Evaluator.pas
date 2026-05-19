@@ -1448,6 +1448,9 @@ begin
   // Process all properties in source order
   for I := 0 to High(AObjectExpression.PropertySourceOrder) do
     begin
+      if AObjectExpression.PropertySourceOrder[I].Skip then
+        Continue;
+
       case AObjectExpression.PropertySourceOrder[I].PropertyType of
         pstStatic:
           begin

@@ -314,6 +314,7 @@ type
     StaticKey: string;           // For static properties, getters, setters
     ComputedIndex: Integer;      // Index into ComputedProperties list
     IsMethod: Boolean;           // True for concise object method syntax
+    Skip: Boolean;               // True when superseded by a later static key
   end;
 
   TGocciaObjectExpression = class(TGocciaExpression)
