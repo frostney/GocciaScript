@@ -317,6 +317,7 @@ end;
 function TGocciaRuntimeCore.Install(
   const AExtension: TGocciaRuntimeExtension): TGocciaRuntimeExtension;
 var
+  Added: Boolean;
   Existing: TGocciaRuntimeExtension;
 begin
   if not Assigned(AExtension) then
@@ -330,10 +331,22 @@ begin
     Exit(Existing);
   end;
 
-  AExtension.Attach(Self);
-  FExtensions.Add(AExtension);
-  RefreshModuleExtensions;
-  FEngine.RefreshGlobalThis;
+  Added := False;
+  try
+    AExtension.Attach(Self);
+    FExtensions.Add(AExtension);
+    Added := True;
+    RefreshModuleExtensions;
+    FEngine.RefreshGlobalThis;
+  except
+    if Added then
+    begin
+      FExtensions.Extract(AExtension);
+      AExtension.Detach;
+    end;
+    AExtension.Free;
+    raise;
+  end;
   Result := AExtension;
 end;
 
@@ -487,8 +500,13 @@ constructor TGocciaRuntime.Create(const AFileName: string;
   const ASourceLines: TStringList);
 begin
   FOwnedExecutor := TGocciaInterpreterExecutor.Create;
-  CreateWithEngine(
-    TGocciaEngine.Create(AFileName, ASourceLines, FOwnedExecutor), True);
+  try
+    CreateWithEngine(
+      TGocciaEngine.Create(AFileName, ASourceLines, FOwnedExecutor), True);
+  except
+    FreeAndNil(FOwnedExecutor);
+    raise;
+  end;
 end;
 
 constructor TGocciaRuntime.Create(const AFileName: string;
