@@ -96,7 +96,7 @@ var
 begin
   // Advance the head index BEFORE running each task so that recursive
   // DrainQueue calls (e.g. when a handler awaits a settled promise, which
-  // calls DrainMicrotasksAndFetchCompletions during AwaitValue) only see
+  // drains the microtask queue during AwaitValue) only see
   // remaining and newly-enqueued tasks rather than re-executing the in-flight
   // one. A previous implementation kept tasks in the queue until a final
   // Clear at the end, so any nested drain re-ran every already-processed

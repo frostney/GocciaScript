@@ -63,7 +63,6 @@ function EvaluateTaggedTemplate(const ATaggedTemplateExpression: TGocciaTaggedTe
 function EvaluateTemplateExpression(const AExpressionText: string; const AContext: TGocciaEvaluationContext; const ALine, AColumn: Integer): TGocciaValue;
 function EvaluateAwait(const AAwaitExpression: TGocciaAwaitExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateYield(const AYieldExpression: TGocciaYieldExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
-function AwaitValue(const AValue: TGocciaValue): TGocciaValue;
 function EvaluateUsingDeclaration(const AUsingDeclaration: TGocciaUsingDeclaration; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 function EvaluateForOf(const AForOfStatement: TGocciaForOfStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 function EvaluateForAwaitOf(const AForAwaitOfStatement: TGocciaForAwaitOfStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
@@ -118,19 +117,18 @@ uses
   Goccia.Evaluator.Decorators,
   Goccia.Evaluator.PatternMatching,
   Goccia.Evaluator.TypeOperations,
-  Goccia.FetchManager,
   Goccia.GarbageCollector,
   Goccia.Generator.Continuation,
   Goccia.InstructionLimit,
   Goccia.Keywords.Reserved,
   Goccia.Lexer,
-  Goccia.MicrotaskQueue,
   Goccia.Parser,
   Goccia.StackLimit,
   Goccia.Timeout,
   Goccia.Token,
   Goccia.Values.ArrayValue,
   Goccia.Values.AsyncFunctionValue,
+  Goccia.Values.Await,
   Goccia.Values.BigIntValue,
   Goccia.Values.ClassHelper,
   Goccia.Values.EnumValue,
@@ -152,15 +150,6 @@ uses
 procedure RunClassInstanceInitializers(const AClassValue: TGocciaClassValue;
   const AInstance: TGocciaObjectValue;
   const AContext: TGocciaEvaluationContext); forward;
-
-procedure DrainAwaitMicrotasks;
-var
-  Queue: TGocciaMicrotaskQueue;
-begin
-  Queue := TGocciaMicrotaskQueue.Instance;
-  if Assigned(Queue) and Queue.HasPending then
-    Queue.DrainQueue;
-end;
 
 // Helper: create a non-owning copy of a statement list (AST owns the nodes)
 function CopyStatementList(const ASource: TObjectList<TGocciaASTNode>): TObjectList<TGocciaASTNode>;
@@ -1643,90 +1632,6 @@ begin
   TGocciaFunctionValue(Result).SourceFilePath := AContext.CurrentFilePath;
   TGocciaFunctionValue(Result).SourceLine := ASetterExpression.Line;
   TGocciaFunctionValue(Result).SourceText := ASetterExpression.SourceText;
-end;
-
-// ES2026 §27.7.5.3 Await(value)
-function AwaitValue(const AValue: TGocciaValue): TGocciaValue;
-var
-  ThenMethod: TGocciaValue;
-  Promise: TGocciaPromiseValue;
-  ThenArgs: TGocciaArgumentsCollection;
-begin
-  if AValue is TGocciaPromiseValue then
-  begin
-    Promise := TGocciaPromiseValue(AValue);
-    if Assigned(TGarbageCollector.Instance) then
-      TGarbageCollector.Instance.AddTempRoot(Promise);
-  end
-  // ES2026 §25.6.4.6.1 PromiseResolve: If value is a thenable (object with
-  // callable .then), wrap it in a Promise via resolve
-  else if AValue is TGocciaObjectValue then
-  begin
-    ThenMethod := AValue.GetProperty(PROP_THEN);
-    if Assigned(ThenMethod) and not (ThenMethod is TGocciaUndefinedLiteralValue) and ThenMethod.IsCallable then
-    begin
-      Promise := TGocciaPromiseValue.Create;
-      if Assigned(TGarbageCollector.Instance) then
-        TGarbageCollector.Instance.AddTempRoot(Promise);
-      ThenArgs := TGocciaArgumentsCollection.Create([
-        TGocciaNativeFunctionValue.Create(Promise.DoResolve, 'resolve', 1),
-        TGocciaNativeFunctionValue.Create(Promise.DoReject, 'reject', 1)
-      ]);
-      try
-        // ES2026 §25.6.4.6.1 step 9: If Call(then, ...) throws, reject promise
-        try
-          TGocciaFunctionBase(ThenMethod).Call(ThenArgs, AValue);
-        except
-          on E: TGocciaThrowValue do
-            Promise.Reject(E.Value);
-        end;
-      finally
-        ThenArgs.Free;
-      end;
-    end
-    else
-    begin
-      // ES2026 §27.7.5.3 step 2: Await wraps the value in Promise.resolve(),
-      // introducing a microtask boundary even for non-thenable objects
-      DrainAwaitMicrotasks;
-      Result := AValue;
-      Exit;
-    end;
-  end
-  else
-  begin
-    // ES2026 §27.7.5.3 step 2: Await wraps the value in Promise.resolve(),
-    // introducing a microtask boundary even for primitive values
-    DrainAwaitMicrotasks;
-    Result := AValue;
-    Exit;
-  end;
-
-  try
-    if Promise.State <> gpsPending then
-    begin
-      // ES2026 §27.7.5.3 step 3-4: Even already-settled promises introduce
-      // a microtask boundary (the continuation is a PromiseReactionJob)
-      DrainAwaitMicrotasks;
-      if Promise.State = gpsFulfilled then
-        Result := Promise.PromiseResult
-      else
-        raise TGocciaThrowValue.Create(Promise.PromiseResult);
-      Exit;
-    end;
-
-    WaitForFetchPromise(Promise);
-
-    if Promise.State = gpsFulfilled then
-      Result := Promise.PromiseResult
-    else if Promise.State = gpsRejected then
-      raise TGocciaThrowValue.Create(Promise.PromiseResult)
-    else
-      ThrowTypeError(SErrorAwaitPromiseUnsettled, SSuggestAwaitMicrotaskDrain);
-  finally
-    if Assigned(TGarbageCollector.Instance) then
-      TGarbageCollector.Instance.RemoveTempRoot(Promise);
-  end;
 end;
 
 // ES2026 §27.7.5.3 Await(value)

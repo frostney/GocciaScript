@@ -86,11 +86,11 @@ uses
   SysUtils,
 
   Goccia.Constants.PropertyNames,
-  Goccia.Evaluator,
   Goccia.FetchManager,
   Goccia.GarbageCollector,
   Goccia.MicrotaskQueue,
   Goccia.Values.ArrayValue,
+  Goccia.Values.Await,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectValue,
   Goccia.Values.PromiseValue;

@@ -167,6 +167,7 @@ uses
   Goccia.Error,
   Goccia.Evaluator,
   Goccia.GarbageCollector,
+  Goccia.Values.Await,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,

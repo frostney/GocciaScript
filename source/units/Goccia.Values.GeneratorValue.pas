@@ -103,6 +103,7 @@ uses
   Goccia.Types.Enforcement,
   Goccia.Values.ArgumentsObjectValue,
   Goccia.Values.ArrayValue,
+  Goccia.Values.Await,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction,
