@@ -27,6 +27,11 @@ describe.runIf(hasGoccia)("Goccia global", () => {
       expect(result).toBe(undefined);
     });
 
+    test("gc does not interrupt test result aggregation", () => {
+      Goccia.gc();
+      expect(1).toBe(1);
+    });
+
     test("gc can be called multiple times", () => {
       Goccia.gc();
       Goccia.gc();
