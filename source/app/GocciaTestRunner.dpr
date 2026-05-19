@@ -457,8 +457,15 @@ var
   Engine: TGocciaEngine;
   Executor: TGocciaInterpreterExecutor;
   EngineResult: TGocciaScriptResult;
+  GC: TGarbageCollector;
+  EngineResultRooted: Boolean;
 begin
   ScriptResult := CreateDefaultScriptResult;
+  GC := TGarbageCollector.Instance;
+  EngineResult.Result := nil;
+  EngineResultRooted := False;
+  if Assigned(GC) then
+    GC.AddTempRoot(ScriptResult);
 
   Source := nil;
   try
@@ -498,6 +505,11 @@ begin
           StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
           try
             EngineResult := Engine.Execute;
+            if Assigned(GC) and Assigned(EngineResult.Result) then
+            begin
+              GC.AddTempRoot(EngineResult.Result);
+              EngineResultRooted := True;
+            end;
           finally
             ClearExecutionTimeout;
             ClearInstructionLimit;
@@ -544,6 +556,10 @@ begin
       end;
     end;
   finally
+    if EngineResultRooted and Assigned(GC) then
+      GC.RemoveTempRoot(EngineResult.Result);
+    if Assigned(GC) then
+      GC.RemoveTempRoot(ScriptResult);
     Source.Free;
   end;
 end;
@@ -572,10 +588,17 @@ var
   Engine: TGocciaEngine;
   ScriptResult: TGocciaObjectValue;
   ResultValue: TGocciaValue;
+  GC: TGarbageCollector;
+  ResultValueRooted: Boolean;
   OrigLine, OrigCol, I: Integer;
   LexStart, LexEnd, ParseEnd, CompileEnd, ExecEnd: Int64;
 begin
   ScriptResult := CreateDefaultScriptResult;
+  ResultValue := nil;
+  GC := TGarbageCollector.Instance;
+  ResultValueRooted := False;
+  if Assigned(GC) then
+    GC.AddTempRoot(ScriptResult);
 
   Source := nil;
   try
@@ -678,6 +701,11 @@ begin
             StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
             try
               ResultValue := RunBytecodeTestModule(Engine, Module, AFileName);
+              if Assigned(GC) and Assigned(ResultValue) then
+              begin
+                GC.AddTempRoot(ResultValue);
+                ResultValueRooted := True;
+              end;
             finally
               ClearExecutionTimeout;
               ClearInstructionLimit;
@@ -736,6 +764,10 @@ begin
       SourceMap.Free;
     end;
   finally
+    if ResultValueRooted and Assigned(GC) then
+      GC.RemoveTempRoot(ResultValue);
+    if Assigned(GC) then
+      GC.RemoveTempRoot(ScriptResult);
     Source.Free;
   end;
 end;
