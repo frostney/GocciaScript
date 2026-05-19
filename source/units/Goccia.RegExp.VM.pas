@@ -153,8 +153,8 @@ begin
     Exit(True);
   if not AUnicodeAware or not AIgnoreCase then
     Exit(False);
-  Result := IsBasicWordChar(RegExpCanonicalizeCodePoint(ACodePoint, True,
-    True));
+  Result := IsBasicWordChar(RegExpCanonicalizeCodePoint(ACodePoint,
+    AUnicodeAware, AIgnoreCase));
 end;
 
 function IsLineTerminator(ACodePoint: Cardinal): Boolean; inline;
