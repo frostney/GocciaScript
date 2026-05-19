@@ -299,6 +299,7 @@ uses
   Goccia.Types.Enforcement,
   Goccia.Utils,
   Goccia.Values.ArgumentsObjectValue,
+  Goccia.Values.Await,
   Goccia.Values.BigIntValue,
   Goccia.Values.ClassHelper,
   Goccia.Values.EnumValue,

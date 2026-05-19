@@ -90,7 +90,7 @@ printf "undefined;" | ./build/GocciaScriptLoader --print        # prints "undefi
 
 `GocciaScriptLoader` keeps its human-readable timing banner regardless; `--print` only controls the final value line. For programmatic consumers, `--output=json` always carries the result in the `result` field (no `--print` needed).
 
-For a smaller binary surface without the default runtime globals (console, JSON5/TOML/YAML, fetch, SemVer, etc.), build and run `GocciaScriptLoaderBare`:
+For a smaller binary surface without the loader runtime profile (console, JSON5/TOML/YAML, fetch, SemVer, etc.), build and run `GocciaScriptLoaderBare`:
 
 ```bash
 ./build.pas loaderbare

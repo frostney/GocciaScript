@@ -33,6 +33,9 @@ uses
   Goccia.Lexer,
   Goccia.Parser,
   Goccia.Runtime,
+  Goccia.RuntimeExtensions.Console,
+  Goccia.RuntimeExtensions.FFI,
+  Goccia.RuntimeProfiles.TestRunner,
   Goccia.Scope,
   Goccia.ScriptLoader.Input,
   Goccia.SourceMap,
@@ -127,7 +130,7 @@ type
     FOutputFile: TGocciaStringOption;
     FTestTimeout: TGocciaIntegerOption;
     FDescribeTimeout: TGocciaIntegerOption;
-    function EffectiveRuntimeGlobals: TGocciaRuntimeGlobals;
+    procedure InitializeRuntime(const AEngine: TGocciaEngine);
   protected
     procedure Configure; override;
     procedure ConfigureCreatedEngine(const AEngine: TGocciaEngine;
@@ -219,11 +222,16 @@ end;
 
 procedure DisableRuntimeConsole(const AEngine: TGocciaEngine);
 var
-  Runtime: TGocciaRuntimeExtension;
+  ConsoleExtension: TGocciaConsoleRuntimeExtension;
+  Runtime: TGocciaRuntimeCore;
 begin
-  Runtime := GetRuntimeExtension(AEngine);
-  if Assigned(Runtime) and Assigned(Runtime.BuiltinConsole) then
-    Runtime.BuiltinConsole.Enabled := False;
+  Runtime := GetRuntime(AEngine);
+  if not Assigned(Runtime) then
+    Exit;
+  ConsoleExtension := TGocciaConsoleRuntimeExtension(
+    Runtime.FindRuntimeExtension(TGocciaConsoleRuntimeExtension));
+  if Assigned(ConsoleExtension) and Assigned(ConsoleExtension.BuiltinConsole) then
+    ConsoleExtension.BuiltinConsole.Enabled := False;
 end;
 
 procedure TTestRunnerApp.Configure;
@@ -247,11 +255,16 @@ end;
 procedure TTestRunnerApp.ConfigureCreatedEngine(const AEngine: TGocciaEngine;
   const AFileConfig: TConfigEntryArray);
 var
-  Runtime: TGocciaRuntimeExtension;
+  ConsoleExtension: TGocciaConsoleRuntimeExtension;
+  Runtime: TGocciaRuntimeCore;
 begin
-  Runtime := AttachRuntimeExtension(AEngine, EffectiveRuntimeGlobals);
-  if LogFileOpen and Assigned(Runtime.BuiltinConsole) then
-    Runtime.BuiltinConsole.LogCallback := HandleConsoleLog;
+  InitializeRuntime(AEngine);
+  Runtime := GetRuntime(AEngine);
+  ConsoleExtension := TGocciaConsoleRuntimeExtension(
+    Runtime.FindRuntimeExtension(TGocciaConsoleRuntimeExtension));
+  if LogFileOpen and Assigned(ConsoleExtension) and
+     Assigned(ConsoleExtension.BuiltinConsole) then
+    ConsoleExtension.BuiltinConsole.LogCallback := HandleConsoleLog;
 end;
 
 procedure TTestRunnerApp.Validate;
@@ -442,11 +455,14 @@ begin
   end;
 end;
 
-function TTestRunnerApp.EffectiveRuntimeGlobals: TGocciaRuntimeGlobals;
+procedure TTestRunnerApp.InitializeRuntime(const AEngine: TGocciaEngine);
+var
+  Runtime: TGocciaRuntimeCore;
 begin
-  Result := DefaultRuntimeGlobals + [rgTestAssertions];
+  Runtime := AttachRuntime(AEngine);
+  TGocciaTestRunnerRuntimeProfile.Apply(Runtime);
   if Assigned(EngineOptions) and EngineOptions.UnsafeFFI.Present then
-    Include(Result, rgFFI);
+    Runtime.Install(TGocciaFFIRuntimeExtension.Create);
 end;
 
 function TTestRunnerApp.RunGocciaScriptInterpreted(const AFileName: string;
@@ -457,8 +473,15 @@ var
   Engine: TGocciaEngine;
   Executor: TGocciaInterpreterExecutor;
   EngineResult: TGocciaScriptResult;
+  GC: TGarbageCollector;
+  EngineResultRooted: Boolean;
 begin
   ScriptResult := CreateDefaultScriptResult;
+  GC := TGarbageCollector.Instance;
+  EngineResult.Result := nil;
+  EngineResultRooted := False;
+  if Assigned(GC) then
+    GC.AddTempRoot(ScriptResult);
 
   Source := nil;
   try
@@ -498,6 +521,11 @@ begin
           StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
           try
             EngineResult := Engine.Execute;
+            if Assigned(GC) and Assigned(EngineResult.Result) then
+            begin
+              GC.AddTempRoot(EngineResult.Result);
+              EngineResultRooted := True;
+            end;
           finally
             ClearExecutionTimeout;
             ClearInstructionLimit;
@@ -544,6 +572,10 @@ begin
       end;
     end;
   finally
+    if EngineResultRooted and Assigned(GC) then
+      GC.RemoveTempRoot(EngineResult.Result);
+    if Assigned(GC) then
+      GC.RemoveTempRoot(ScriptResult);
     Source.Free;
   end;
 end;
@@ -572,10 +604,17 @@ var
   Engine: TGocciaEngine;
   ScriptResult: TGocciaObjectValue;
   ResultValue: TGocciaValue;
+  GC: TGarbageCollector;
+  ResultValueRooted: Boolean;
   OrigLine, OrigCol, I: Integer;
   LexStart, LexEnd, ParseEnd, CompileEnd, ExecEnd: Int64;
 begin
   ScriptResult := CreateDefaultScriptResult;
+  ResultValue := nil;
+  GC := TGarbageCollector.Instance;
+  ResultValueRooted := False;
+  if Assigned(GC) then
+    GC.AddTempRoot(ScriptResult);
 
   Source := nil;
   try
@@ -678,6 +717,11 @@ begin
             StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
             try
               ResultValue := RunBytecodeTestModule(Engine, Module, AFileName);
+              if Assigned(GC) and Assigned(ResultValue) then
+              begin
+                GC.AddTempRoot(ResultValue);
+                ResultValueRooted := True;
+              end;
             finally
               ClearExecutionTimeout;
               ClearInstructionLimit;
@@ -736,6 +780,10 @@ begin
       SourceMap.Free;
     end;
   finally
+    if ResultValueRooted and Assigned(GC) then
+      GC.RemoveTempRoot(ResultValue);
+    if Assigned(GC) then
+      GC.RemoveTempRoot(ScriptResult);
     Source.Free;
   end;
 end;
@@ -1082,7 +1130,7 @@ begin
 
   // Force all shared prototypes to be initialised on the main thread
   // before any worker thread starts, avoiding class-var race conditions.
-  EnsureSharedPrototypesInitialized(EffectiveRuntimeGlobals);
+  EnsureSharedPrototypesInitialized(InitializeRuntime);
 
   WallClockStart := GetNanoseconds;
 

@@ -35,6 +35,10 @@ uses
   Goccia.Profiler,
   Goccia.Profiler.Report,
   Goccia.Runtime,
+  Goccia.RuntimeExtensions.Benchmark,
+  Goccia.RuntimeExtensions.Console,
+  Goccia.RuntimeExtensions.FFI,
+  Goccia.RuntimeProfiles.BenchmarkRunner,
   Goccia.Scope,
   Goccia.ScriptLoader.Input,
   Goccia.CLI.JSON.Reporter,
@@ -217,7 +221,7 @@ type
     procedure RunBenchmarks(const APaths: TStringList;
       const AReports: array of TReportSpec;
       const AMode: TGocciaExecutionMode; const AShowProgress: Boolean);
-    function EffectiveRuntimeGlobals: TGocciaRuntimeGlobals;
+    procedure InitializeRuntime(const AEngine: TGocciaEngine);
   protected
     procedure Configure; override;
     procedure Validate; override;
@@ -243,13 +247,18 @@ end;
 
 function RuntimeBenchmark(const AEngine: TGocciaEngine): TGocciaBenchmark;
 var
-  Runtime: TGocciaRuntimeExtension;
+  BenchmarkExtension: TGocciaBenchmarkRuntimeExtension;
+  Runtime: TGocciaRuntimeCore;
 begin
-  Runtime := GetRuntimeExtension(AEngine);
+  Runtime := GetRuntime(AEngine);
   if Assigned(Runtime) then
-    Result := Runtime.BuiltinBenchmark
-  else
-    Result := nil;
+  begin
+    BenchmarkExtension := TGocciaBenchmarkRuntimeExtension(
+      Runtime.FindRuntimeExtension(TGocciaBenchmarkRuntimeExtension));
+    if Assigned(BenchmarkExtension) then
+      Exit(BenchmarkExtension.BuiltinBenchmark);
+  end;
+  Result := nil;
 end;
 
 procedure ConfigureBenchmarkRuntime(const AEngine: TGocciaEngine;
@@ -967,7 +976,7 @@ begin
         SetLength(WorkerData[I].Entries, 0);
       end;
 
-      EnsureSharedPrototypesInitialized(EffectiveRuntimeGlobals);
+      EnsureSharedPrototypesInitialized(InitializeRuntime);
 
       BeginCLIJSONMemoryMeasurement(MemoryMeasurement);
       WallClockStart := GetNanoseconds;
@@ -1124,18 +1133,26 @@ end;
 procedure TBenchmarkRunnerApp.ConfigureCreatedEngine(
   const AEngine: TGocciaEngine; const AFileConfig: TConfigEntryArray);
 var
-  Runtime: TGocciaRuntimeExtension;
+  ConsoleExtension: TGocciaConsoleRuntimeExtension;
+  Runtime: TGocciaRuntimeCore;
 begin
-  Runtime := AttachRuntimeExtension(AEngine, EffectiveRuntimeGlobals);
-  if LogFileOpen and Assigned(Runtime.BuiltinConsole) then
-    Runtime.BuiltinConsole.LogCallback := HandleConsoleLog;
+  InitializeRuntime(AEngine);
+  Runtime := GetRuntime(AEngine);
+  ConsoleExtension := TGocciaConsoleRuntimeExtension(
+    Runtime.FindRuntimeExtension(TGocciaConsoleRuntimeExtension));
+  if LogFileOpen and Assigned(ConsoleExtension) and
+     Assigned(ConsoleExtension.BuiltinConsole) then
+    ConsoleExtension.BuiltinConsole.LogCallback := HandleConsoleLog;
 end;
 
-function TBenchmarkRunnerApp.EffectiveRuntimeGlobals: TGocciaRuntimeGlobals;
+procedure TBenchmarkRunnerApp.InitializeRuntime(const AEngine: TGocciaEngine);
+var
+  Runtime: TGocciaRuntimeCore;
 begin
-  Result := DefaultRuntimeGlobals + [rgBenchmark];
+  Runtime := AttachRuntime(AEngine);
+  TGocciaBenchmarkRunnerRuntimeProfile.Apply(Runtime);
   if Assigned(EngineOptions) and EngineOptions.UnsafeFFI.Present then
-    Include(Result, rgFFI);
+    Runtime.Install(TGocciaFFIRuntimeExtension.Create);
 end;
 
 procedure TBenchmarkRunnerApp.ExecuteWithPaths(const APaths: TStringList);

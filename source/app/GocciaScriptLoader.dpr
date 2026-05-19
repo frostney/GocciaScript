@@ -36,6 +36,9 @@ uses
   Goccia.Profiler,
   Goccia.Profiler.Report,
   Goccia.Runtime,
+  Goccia.RuntimeExtensions.Console,
+  Goccia.RuntimeExtensions.FFI,
+  Goccia.RuntimeProfiles.Loader,
   Goccia.Scope,
   Goccia.ScriptLoader.Globals,
   Goccia.ScriptLoader.Input,
@@ -102,7 +105,7 @@ type
     FInlineGlobals: TGocciaRepeatableOption;
     FLastPaths: TStringList;
 
-    function EffectiveRuntimeGlobals: TGocciaRuntimeGlobals;
+    procedure InitializeRuntime(const AEngine: TGocciaEngine);
     function IsJsonOutput: Boolean;
     function IsCompactJsonOutput: Boolean;
     function ParseSource(const ASource: TStringList; const AFileName: string;
@@ -239,20 +242,28 @@ end;
 
 function RuntimeConsole(const AEngine: TGocciaEngine): TGocciaConsole;
 var
-  Runtime: TGocciaRuntimeExtension;
+  ConsoleExtension: TGocciaConsoleRuntimeExtension;
+  Runtime: TGocciaRuntimeCore;
 begin
-  Runtime := GetRuntimeExtension(AEngine);
+  Runtime := GetRuntime(AEngine);
   if Assigned(Runtime) then
-    Result := Runtime.BuiltinConsole
-  else
-    Result := nil;
+  begin
+    ConsoleExtension := TGocciaConsoleRuntimeExtension(
+      Runtime.FindRuntimeExtension(TGocciaConsoleRuntimeExtension));
+    if Assigned(ConsoleExtension) then
+      Exit(ConsoleExtension.BuiltinConsole);
+  end;
+  Result := nil;
 end;
 
-function TScriptLoaderApp.EffectiveRuntimeGlobals: TGocciaRuntimeGlobals;
+procedure TScriptLoaderApp.InitializeRuntime(const AEngine: TGocciaEngine);
+var
+  Runtime: TGocciaRuntimeCore;
 begin
-  Result := DefaultRuntimeGlobals;
+  Runtime := AttachRuntime(AEngine);
+  TGocciaLoaderRuntimeProfile.Apply(Runtime);
   if Assigned(EngineOptions) and EngineOptions.UnsafeFFI.Present then
-    Include(Result, rgFFI);
+    Runtime.Install(TGocciaFFIRuntimeExtension.Create);
 end;
 
 function TScriptLoaderApp.UsageLine: string;
@@ -282,11 +293,16 @@ end;
 procedure TScriptLoaderApp.ConfigureCreatedEngine(const AEngine: TGocciaEngine;
   const AFileConfig: TConfigEntryArray);
 var
-  Runtime: TGocciaRuntimeExtension;
+  ConsoleExtension: TGocciaConsoleRuntimeExtension;
+  Runtime: TGocciaRuntimeCore;
 begin
-  Runtime := AttachRuntimeExtension(AEngine, EffectiveRuntimeGlobals);
-  if LogFileOpen and Assigned(Runtime.BuiltinConsole) then
-    Runtime.BuiltinConsole.LogCallback := HandleConsoleLog;
+  InitializeRuntime(AEngine);
+  Runtime := GetRuntime(AEngine);
+  ConsoleExtension := TGocciaConsoleRuntimeExtension(
+    Runtime.FindRuntimeExtension(TGocciaConsoleRuntimeExtension));
+  if LogFileOpen and Assigned(ConsoleExtension) and
+     Assigned(ConsoleExtension.BuiltinConsole) then
+    ConsoleExtension.BuiltinConsole.LogCallback := HandleConsoleLog;
 end;
 
 function TScriptLoaderApp.IsJsonOutput: Boolean;
@@ -1029,7 +1045,7 @@ begin
 
   if JobCount > 1 then
   begin
-    EnsureSharedPrototypesInitialized(EffectiveRuntimeGlobals);
+    EnsureSharedPrototypesInitialized(InitializeRuntime);
     BeginCLIJSONMemoryMeasurement(MemoryMeasurement);
     Pool := TGocciaThreadPool.Create(JobCount);
     try
@@ -1158,7 +1174,7 @@ var
   Pool: TGocciaThreadPool;
   I: Integer;
 begin
-  EnsureSharedPrototypesInitialized(EffectiveRuntimeGlobals);
+  EnsureSharedPrototypesInitialized(InitializeRuntime);
 
   Pool := TGocciaThreadPool.Create(AJobCount);
   try

@@ -354,19 +354,14 @@ This keeps the evaluator fully reentrant — all dependencies are explicit, maki
 
 ### Configurable Built-ins
 
-`TGocciaEngine` always registers core language built-ins such as Math, Array, Number, Promise, JSON, Symbol, Set, Map, Temporal, ArrayBuffer, and related constructors. `TGocciaRuntime` attaches host/runtime globals such as console, fetch, URL, JSON5, TOML, YAML, CSV, TSV, test assertions, benchmarking, and FFI through runtime extensions. `TGocciaRuntimeGlobals` is the single selector for that runtime surface:
-
-```pascal
-TGocciaRuntimeGlobal = (..., rgTestAssertions, rgBenchmark, rgFFI);
-```
-
-Core language built-ins (Math, Array, Number, Promise, JSON, Symbol, Set, Map, Temporal, ArrayBuffer, etc.) are always registered by `TGocciaEngine` -- no flag-gating required. Host/runtime globals and special-purpose tools are attached by `TGocciaRuntime`, so small hosts can pass a reduced `TGocciaRuntimeGlobals` set.
+`TGocciaEngine` always registers core language built-ins such as Math, Array, Number, Promise, JSON, Symbol, Set, Map, Temporal, ArrayBuffer, and related constructors. Host/runtime globals are installed through class-based runtime extensions on `TGocciaRuntimeCore`; small hosts install only the extensions they need.
 
 **Why configurable for special-purpose runtime globals?**
 
-- **Testing** — The GocciaTestRunner enables `rgTestAssertions` to inject `describe`, `test`, and `expect` without polluting the normal runtime.
-- **Benchmarking** — The GocciaBenchmarkRunner enables `rgBenchmark` to inject `suite` and `bench`.
-- **FFI** — `rgFFI` enables the Foreign Function Interface for calling native shared libraries, which is disabled by default for security.
+- **Loader profile** — `TGocciaLoaderRuntimeProfile` installs the ordinary CLI host surface: console, host globals, structured data modules, text assets, performance, text encoding, URL/fetch, and SemVer.
+- **Testing** — The GocciaTestRunner installs `TGocciaTestingLibraryRuntimeExtension` to inject `describe`, `test`, and `expect` without polluting the loader runtime.
+- **Benchmarking** — The GocciaBenchmarkRunner installs `TGocciaBenchmarkRuntimeExtension` to inject `suite` and `bench`.
+- **FFI** — `TGocciaFFIRuntimeExtension` enables the Foreign Function Interface for calling native shared libraries, and CLI tools install it only for `--unsafe-ffi`.
 
 ### Global Function Placement
 
