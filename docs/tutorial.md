@@ -211,7 +211,7 @@ console.log(dog instanceof Animal);  // true
 
 ## Modules
 
-GocciaScript supports ES-style named imports and exports. Default imports/exports are not supported — use named exports instead.
+GocciaScript supports ES-style default, named, and namespace imports and exports. Project examples prefer named exports for internal modules because explicit import names make refactors easier to review; default exports are supported when a module intentionally exposes a primary value or interoperates with code that uses default exports.
 
 Create a file called `math.js`:
 
@@ -320,7 +320,6 @@ Here's a quick reference of GocciaScript's key restrictions:
 | legacy `delete` returns | Strict by default | Script-source `--compat-non-strict-mode` when porting sloppy scripts |
 | `parseInt("10")` | Not available as global | `Number.parseInt("10")` |
 | `isNaN(x)` | Not available as global | `Number.isNaN(x)` |
-| `import x from "mod"` | Not supported | `import { x } from "mod"` |
 
 These restrictions are intentional — they eliminate common sources of bugs and security issues. See [Language](language.md) for the full rationale.
 

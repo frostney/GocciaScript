@@ -4305,7 +4305,8 @@ begin
     Method.OwningClass := ClassValue;
 
     if MethodPair.Value.IsStatic then
-      ClassValue.SetProperty(MethodPair.Key, Method)
+      ClassValue.DefineProperty(MethodPair.Key,
+        TGocciaPropertyDescriptorData.Create(Method, [pfConfigurable, pfWritable]))
     else
       ClassValue.AddMethod(MethodPair.Key, Method);
   end;
@@ -4316,7 +4317,9 @@ begin
     for PropertyPair in AClassDef.StaticProperties do
     begin
       PropertyValue := EvaluateExpression(PropertyPair.Value, AContext);
-      ClassValue.SetProperty(PropertyPair.Key, PropertyValue);
+      ClassValue.DefineProperty(PropertyPair.Key,
+        TGocciaPropertyDescriptorData.Create(PropertyValue,
+          [pfEnumerable, pfConfigurable, pfWritable]));
     end;
 
     for PropertyPair in AClassDef.PrivateStaticProperties do
@@ -4429,7 +4432,8 @@ begin
         else
         begin
           if Elem.IsStatic then
-            ClassValue.SetProperty(ComputedKey.ToStringLiteral.Value, Method)
+            ClassValue.DefineProperty(ComputedKey.ToStringLiteral.Value,
+              TGocciaPropertyDescriptorData.Create(Method, [pfConfigurable, pfWritable]))
           else
             ClassValue.AddMethod(ComputedKey.ToStringLiteral.Value, Method);
         end;
@@ -4535,7 +4539,9 @@ begin
       if Elem.IsPrivate then
         ClassValue.AddPrivateStaticProperty(Elem.Name, PropertyValue)
       else
-        ClassValue.SetProperty(Elem.Name, PropertyValue);
+        ClassValue.DefineProperty(Elem.Name,
+          TGocciaPropertyDescriptorData.Create(PropertyValue,
+            [pfEnumerable, pfConfigurable, pfWritable]));
     end;
   end;
 
@@ -4690,7 +4696,9 @@ begin
                     ClassValue.AddPrivateMethod(ElementName, TGocciaMethodValue(DecoratorResult));
                 end
                 else if Elem.IsStatic then
-                  ClassValue.SetProperty(ElementName, DecoratorResult)
+                  ClassValue.DefineProperty(ElementName,
+                    TGocciaPropertyDescriptorData.Create(
+                      DecoratorResult, [pfConfigurable, pfWritable]))
                 else
                   ClassValue.Prototype.AssignProperty(ElementName, DecoratorResult);
               end;
@@ -6226,10 +6234,7 @@ begin
         PropertyKey := ToPropertyKey(EvaluateExpression(ObjPat.Properties[I].KeyExpression, AContext));
         if PropertyKey is TGocciaSymbolValue then
         begin
-          // TGocciaClassValue.GetSymbolProperty is not virtual, so casting an
-          // AValue that is actually a class to TGocciaObjectValue would skip
-          // the static symbol descriptor table. Dispatch on the concrete type
-          // (mirrors AssignObjectPattern below).
+          // Keep the class dispatch explicit to mirror assignment patterns.
           if AValue is TGocciaClassValue then
             PropValue := TGocciaClassValue(AValue).GetSymbolProperty(TGocciaSymbolValue(PropertyKey))
           else
@@ -6727,10 +6732,7 @@ begin
           PropValue := ToPropertyKey(EvaluateExpression(Prop.KeyExpression, AContext));
           if PropValue is TGocciaSymbolValue then
           begin
-            // Class values store static symbol-keyed members in their own
-            // descriptor table; the TGocciaClassValue.GetSymbolProperty
-            // method is not virtual, so a TGocciaObjectValue receiver would
-            // miss them. Dispatch via the class entry point when applicable.
+            // Keep the class dispatch explicit to mirror binding patterns.
             if ObjectValue is TGocciaClassValue then
               PropValue := TGocciaClassValue(ObjectValue).GetSymbolProperty(TGocciaSymbolValue(PropValue))
             else

@@ -43,21 +43,4 @@ with (Math) {
   console.log("This will NOT execute");
 }
 
-// --- Default imports/exports ---
-
-import foo from "./helpers/math-utils.js";
-import "./helpers/math-utils.js";
-export default 42;
-export default class Unused {
-  constructor() {
-    this.x = 1;
-  }
-}
-
-// Named imports/exports and namespace imports work as expected:
-// import { add } from "./math.js";
-// import * as math from "./math.js";
-// export const PI = 3.14159;
-// export { add, multiply };
-
 console.log("Script completed successfully despite unsupported features above.");

@@ -29,6 +29,7 @@ type
     procedure TestUnicodeLineTerminatorsBetweenTokens;
     procedure TestRegexLiteralPreservesRawPattern;
     procedure TestRegexUnterminatedAtEOF;
+    procedure TestAwaitSlashLookaheadStopsAtUnicodeLineTerminators;
     procedure TestNumericSeparatorsNormalize;
     procedure TestTemplateInterpolationTracksLineTerminators;
   public
@@ -46,6 +47,8 @@ begin
   Test('Unicode line terminators split tokens', TestUnicodeLineTerminatorsBetweenTokens);
   Test('Regex literal preserves raw pattern', TestRegexLiteralPreservesRawPattern);
   Test('Unterminated regex at EOF raises lexer error', TestRegexUnterminatedAtEOF);
+  Test('Await slash lookahead stops at Unicode line terminators',
+    TestAwaitSlashLookaheadStopsAtUnicodeLineTerminators);
   Test('Numeric separators normalize', TestNumericSeparatorsNormalize);
   Test('Template interpolation tracks line terminators', TestTemplateInterpolationTracksLineTerminators);
 end;
@@ -284,6 +287,37 @@ begin
     end;
     Expect<Boolean>(Raised).ToBe(True);
     Expect<Boolean>(MessageMatches).ToBe(True);
+  finally
+    Lexer.Free;
+  end;
+end;
+
+procedure TLexerTests.TestAwaitSlashLookaheadStopsAtUnicodeLineTerminators;
+const
+  UTF8_LINE_SEPARATOR = #$E2#$80#$A8;
+  UTF8_PARAGRAPH_SEPARATOR = #$E2#$80#$A9;
+var
+  Lexer: TGocciaLexer;
+  Tokens: TObjectList<TGocciaToken>;
+begin
+  Lexer := TGocciaLexer.Create(
+    'const half = (await) => await/' + UTF8_LINE_SEPARATOR + '/2/;',
+    '<test>');
+  try
+    Tokens := Lexer.ScanTokens;
+    Expect<TGocciaTokenType>(Tokens[8].TokenType).ToBe(gttSlash);
+    Expect<TGocciaTokenType>(Tokens[9].TokenType).ToBe(gttRegex);
+  finally
+    Lexer.Free;
+  end;
+
+  Lexer := TGocciaLexer.Create(
+    'const half = (await) => await/' + UTF8_PARAGRAPH_SEPARATOR + '/2/;',
+    '<test>');
+  try
+    Tokens := Lexer.ScanTokens;
+    Expect<TGocciaTokenType>(Tokens[8].TokenType).ToBe(gttSlash);
+    Expect<TGocciaTokenType>(Tokens[9].TokenType).ToBe(gttRegex);
   finally
     Lexer.Free;
   end;

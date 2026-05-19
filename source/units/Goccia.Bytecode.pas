@@ -49,7 +49,11 @@ const
   //               --compat-non-strict-mode bytecode.
   //   v30 -> v31: added non-strict assignment/global-delete opcodes for
   //               --compat-non-strict-mode bytecode.
-  GOCCIA_FORMAT_VERSION = 31;
+  //   v31 -> v32: added OP_DEFINE_STATIC_PROP_CONST and
+  //               OP_DEFINE_STATIC_METHOD_CONST so class static fields and
+  //               methods define own data properties instead of using ordinary
+  //               assignment semantics.
+  GOCCIA_FORMAT_VERSION = 32;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
@@ -210,6 +214,8 @@ type
     OP_SET_INDEX     = 120,
     OP_DEL_INDEX     = 121,
     OP_DELETE_GLOBAL = 122,
+    OP_DEFINE_STATIC_PROP_CONST = 123,
+    OP_DEFINE_STATIC_METHOD_CONST = 124,
     OP_ADD           = 128,
     OP_SUB           = 129,
     OP_MUL           = 130,

@@ -83,7 +83,6 @@ Other features that produce suggestions include:
 - `==` / `!=` (loose equality) -- suggests `===` / `!==`
 - Traditional `for(init; test; update)` loops when `--compat-traditional-for-loop` is off -- suggests `for...of`, array methods, or the flag
 - `while` / `do...while` loops when `--compat-while-loops` is off -- suggests `for...of`, array methods, or the flag
-- Default imports/exports -- suggests named imports/exports
 
 See [Language](language.md) for the full list of excluded features and their rationale.
 

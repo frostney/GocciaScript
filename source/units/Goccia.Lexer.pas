@@ -55,6 +55,7 @@ type
     procedure ScanRegexLiteral;
     procedure ScanNumber;
     procedure ScanIdentifier;
+    function CanScanRegexAfterAwait: Boolean;
     function ScanUnicodeEscape: string;
     function ScanHexEscape: string;
     procedure ProcessEscapeSequence(var ASB: TStringBuffer);
@@ -1552,7 +1553,7 @@ begin
     '/':
       if Match('=') then
         AddToken(gttSlashAssign)
-      else if FCanStartRegex then
+      else if FCanStartRegex or CanScanRegexAfterAwait then
         ScanRegexLiteral
       else
         AddToken(gttSlash);
@@ -1689,6 +1690,63 @@ begin
       raise TGocciaLexerError.Create(Format('Unexpected character: %s', [C]),
         FLine, FStartColumn, FFileName, GetSourceLines,
         SSuggestInvalidCharacter);
+  end;
+end;
+
+function TGocciaLexer.CanScanRegexAfterAwait: Boolean;
+var
+  I: Integer;
+  InClass, Escaped: Boolean;
+  Ch: Char;
+
+  function IsLineTerminatorAt(const AIndex: Integer): Boolean; inline;
+  begin
+    Result := (FSource[AIndex] = #10) or (FSource[AIndex] = #13) or
+              ((FSource[AIndex] = UTF8_LINE_TERMINATOR_LEAD_BYTE) and
+              (AIndex + 2 <= Length(FSource)) and
+              (FSource[AIndex + 1] = UTF8_LINE_TERMINATOR_CONTINUATION_BYTE) and
+              ((FSource[AIndex + 2] = UTF8_LINE_SEPARATOR_FINAL_BYTE) or
+              (FSource[AIndex + 2] = UTF8_PARAGRAPH_SEPARATOR_FINAL_BYTE)));
+  end;
+begin
+  Result := False;
+  if (FTokens.Count = 0) or
+     (FTokens[FTokens.Count - 1].TokenType <> gttIdentifier) or
+     (FTokens[FTokens.Count - 1].Lexeme <> KEYWORD_AWAIT) then
+    Exit;
+
+  if IsAtEnd or (Peek = '/') or (Peek = '*') then
+    Exit;
+
+  InClass := False;
+  Escaped := False;
+  I := FCurrent;
+  while I <= Length(FSource) do
+  begin
+    Ch := FSource[I];
+    if IsLineTerminatorAt(I) then
+      Exit;
+
+    if Escaped then
+    begin
+      Escaped := False;
+      Inc(I);
+      Continue;
+    end;
+
+    case Ch of
+      '\':
+        Escaped := True;
+      '[':
+        InClass := True;
+      ']':
+        InClass := False;
+      '/':
+        if not InClass then
+          Exit(True);
+    end;
+
+    Inc(I);
   end;
 end;
 

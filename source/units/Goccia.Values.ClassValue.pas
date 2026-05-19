@@ -7,7 +7,6 @@ interface
 uses
   Classes,
 
-  HashMap,
   OrderedStringMap,
 
   Goccia.Arguments.Collection,
@@ -21,7 +20,6 @@ uses
   Goccia.Values.SymbolValue;
 
 type
-  TStaticSymbolDescriptorMap = THashMap<TGocciaSymbolValue, TGocciaPropertyDescriptor>;
   // Forward declaration
   TGocciaInstanceValue = class;
 
@@ -47,9 +45,6 @@ type
     FPrivateMethods: TOrderedStringMap<TGocciaMethodValue>;
     FPrivateGetters: TOrderedStringMap<TGocciaFunctionBase>;
     FPrivateSetters: TOrderedStringMap<TGocciaFunctionBase>;
-    FStaticGetters: TOrderedStringMap<TGocciaFunctionBase>;
-    FStaticSetters: TOrderedStringMap<TGocciaFunctionBase>;
-    FStaticSymbolDescriptors: TStaticSymbolDescriptorMap;
     FNativeSuperConstructor: TGocciaObjectValue;
     FPrivateBrandToken: string;
     FMethodInitializers: array of TGocciaValue;
@@ -120,13 +115,7 @@ type
     procedure SetConstructorPrototype(const APrototype: TGocciaObjectValue);
     procedure LinkNativeSuperConstructor(const ASuperConstructor: TGocciaObjectValue);
     procedure SetInferredName(const AName: string);
-    procedure DefineSymbolProperty(const ASymbol: TGocciaSymbolValue; const ADescriptor: TGocciaPropertyDescriptor);
-    procedure AssignSymbolProperty(const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue);
     function GetOwnStaticSymbolDescriptor(const ASymbol: TGocciaSymbolValue): TGocciaPropertyDescriptor;
-    function GetOwnSymbolPropertyDescriptor(const ASymbol: TGocciaSymbolValue): TGocciaPropertyDescriptor; override;
-    function GetOwnSymbols: TArray<TGocciaSymbolValue>; override;
-    function GetSymbolProperty(const ASymbol: TGocciaSymbolValue): TGocciaValue;
-    function GetSymbolPropertyWithReceiver(const ASymbol: TGocciaSymbolValue; const AReceiver: TGocciaValue): TGocciaValue; override;
 
     property Name: string read FName;
     property PrivateBrandToken: string read FPrivateBrandToken;
@@ -364,9 +353,6 @@ begin
   FPrivateMethods := TOrderedStringMap<TGocciaMethodValue>.Create;
   FPrivateGetters := TOrderedStringMap<TGocciaFunctionBase>.Create;
   FPrivateSetters := TOrderedStringMap<TGocciaFunctionBase>.Create;
-  FStaticGetters := TOrderedStringMap<TGocciaFunctionBase>.Create;
-  FStaticSetters := TOrderedStringMap<TGocciaFunctionBase>.Create;
-  FStaticSymbolDescriptors := TStaticSymbolDescriptorMap.Create;
   FNativeSuperConstructor := nil;
   FClassPrototype := TGocciaObjectValue.Create;
   FConstructorMethod := nil;
@@ -391,9 +377,6 @@ begin
   FPrivateMethods.Free;
   FPrivateGetters.Free;
   FPrivateSetters.Free;
-  FStaticGetters.Free;
-  FStaticSetters.Free;
-  FStaticSymbolDescriptors.Free;
   // Don't free FClassPrototype - it's GC-managed
   inherited;
 end;
@@ -403,8 +386,6 @@ var
   MethodPair: TOrderedStringMap<TGocciaMethodValue>.TKeyValuePair;
   FuncPair: TOrderedStringMap<TGocciaFunctionBase>.TKeyValuePair;
   ValPair: TGocciaValueMap.TKeyValuePair;
-  SymPair: TStaticSymbolDescriptorMap.TKeyValuePair;
-  Accessor: TGocciaPropertyDescriptorAccessor;
   I: Integer;
 begin
   if GCMarked then Exit;
@@ -445,29 +426,6 @@ begin
     FuncPair.Value.MarkReferences;
   for FuncPair in FPrivateSetters do
     FuncPair.Value.MarkReferences;
-
-  for FuncPair in FStaticGetters do
-    FuncPair.Value.MarkReferences;
-  for FuncPair in FStaticSetters do
-    FuncPair.Value.MarkReferences;
-
-  for SymPair in FStaticSymbolDescriptors do
-  begin
-    SymPair.Key.MarkReferences;
-    if SymPair.Value is TGocciaPropertyDescriptorData then
-    begin
-      if Assigned(TGocciaPropertyDescriptorData(SymPair.Value).Value) then
-        TGocciaPropertyDescriptorData(SymPair.Value).Value.MarkReferences;
-    end
-    else if SymPair.Value is TGocciaPropertyDescriptorAccessor then
-    begin
-      Accessor := TGocciaPropertyDescriptorAccessor(SymPair.Value);
-      if Assigned(Accessor.Getter) then
-        Accessor.Getter.MarkReferences;
-      if Assigned(Accessor.Setter) then
-        Accessor.Setter.MarkReferences;
-    end;
-  end;
 
   // Mark decorator initializer arrays
   for I := 0 to High(FMethodInitializers) do
@@ -588,13 +546,35 @@ begin
 end;
 
 procedure TGocciaClassValue.AddStaticGetter(const AName: string; const AGetter: TGocciaFunctionBase);
+var
+  ExistingDescriptor: TGocciaPropertyDescriptor;
+  ExistingSetter: TGocciaValue;
 begin
-  FStaticGetters.AddOrSetValue(AName, AGetter);
+  ExistingDescriptor := inherited GetOwnPropertyDescriptor(AName);
+  ExistingSetter := nil;
+  if (ExistingDescriptor is TGocciaPropertyDescriptorAccessor) and
+     Assigned(TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Setter) then
+    ExistingSetter := TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Setter;
+
+  inherited DefineProperty(AName,
+    TGocciaPropertyDescriptorAccessor.Create(
+      AGetter, ExistingSetter, [pfConfigurable]));
 end;
 
 procedure TGocciaClassValue.AddStaticSetter(const AName: string; const ASetter: TGocciaFunctionBase);
+var
+  ExistingDescriptor: TGocciaPropertyDescriptor;
+  ExistingGetter: TGocciaValue;
 begin
-  FStaticSetters.AddOrSetValue(AName, ASetter);
+  ExistingDescriptor := inherited GetOwnPropertyDescriptor(AName);
+  ExistingGetter := nil;
+  if (ExistingDescriptor is TGocciaPropertyDescriptorAccessor) and
+     Assigned(TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Getter) then
+    ExistingGetter := TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Getter;
+
+  inherited DefineProperty(AName,
+    TGocciaPropertyDescriptorAccessor.Create(
+      ExistingGetter, ASetter, [pfConfigurable]));
 end;
 
 procedure TGocciaClassValue.AddPrivateGetter(const AName: string; const AGetter: TGocciaFunctionBase);
@@ -692,15 +672,33 @@ begin
 end;
 
 function TGocciaClassValue.GetStaticPropertyGetter(const AName: string): TGocciaFunctionBase;
+var
+  Descriptor: TGocciaPropertyDescriptor;
+  Getter: TGocciaValue;
 begin
-  if not FStaticGetters.TryGetValue(AName, Result) then
-    Result := nil;
+  Result := nil;
+  Descriptor := inherited GetOwnPropertyDescriptor(AName);
+  if Descriptor is TGocciaPropertyDescriptorAccessor then
+  begin
+    Getter := TGocciaPropertyDescriptorAccessor(Descriptor).Getter;
+    if Getter is TGocciaFunctionBase then
+      Result := TGocciaFunctionBase(Getter);
+  end;
 end;
 
 function TGocciaClassValue.GetStaticPropertySetter(const AName: string): TGocciaFunctionBase;
+var
+  Descriptor: TGocciaPropertyDescriptor;
+  Setter: TGocciaValue;
 begin
-  if not FStaticSetters.TryGetValue(AName, Result) then
-    Result := nil;
+  Result := nil;
+  Descriptor := inherited GetOwnPropertyDescriptor(AName);
+  if Descriptor is TGocciaPropertyDescriptorAccessor then
+  begin
+    Setter := TGocciaPropertyDescriptorAccessor(Descriptor).Setter;
+    if Setter is TGocciaFunctionBase then
+      Result := TGocciaFunctionBase(Setter);
+  end;
 end;
 
 procedure TGocciaClassValue.AddFieldInitializer(const AName: string; const AInitializer: TGocciaValue; const AIsPrivate, AIsStatic: Boolean);
@@ -1066,8 +1064,7 @@ end;
 
 function TGocciaClassValue.GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue;
 var
-  Getter: TGocciaFunctionBase;
-  Args: TGocciaArgumentsCollection;
+  Descriptor: TGocciaPropertyDescriptor;
 begin
   if AName = PROP_PROTOTYPE then
   begin
@@ -1078,25 +1075,15 @@ begin
   if FStaticMethods.TryGetValue(AName, Result) then
     Exit;
 
-  if FStaticGetters.TryGetValue(AName, Getter) then
-  begin
-    Args := TGocciaArgumentsCollection.CreateWithCapacity(0);
-    try
-      Result := Getter.Call(Args, AThisContext);
-    finally
-      Args.Free;
-    end;
-    Exit;
-  end;
-
-  if FStaticSetters.ContainsKey(AName) then
-  begin
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-    Exit;
-  end;
-
   if AName = PROP_NAME then
   begin
+    Descriptor := inherited GetOwnPropertyDescriptor(AName);
+    if Assigned(Descriptor) then
+    begin
+      Result := inherited GetPropertyWithContext(AName, AThisContext);
+      Exit;
+    end;
+
     if FName = '<anonymous>' then
       Result := TGocciaStringLiteralValue.Create('')
     else
@@ -1106,6 +1093,13 @@ begin
 
   if AName = PROP_LENGTH then
   begin
+    Descriptor := inherited GetOwnPropertyDescriptor(AName);
+    if Assigned(Descriptor) then
+    begin
+      Result := inherited GetPropertyWithContext(AName, AThisContext);
+      Exit;
+    end;
+
     Result := TGocciaNumberLiteralValue.Create(GetClassLength);
     Exit;
   end;
@@ -1117,30 +1111,32 @@ end;
 
 procedure TGocciaClassValue.SetProperty(const AName: string; const AValue: TGocciaValue);
 var
-  Setter: TGocciaFunctionBase;
-  Args: TGocciaArgumentsCollection;
-  Current: TGocciaClassValue;
+  Descriptor: TGocciaPropertyDescriptor;
 begin
-  Current := Self;
-  repeat
-    if Current.FStaticSetters.TryGetValue(AName, Setter) then
-    begin
-      Args := TGocciaArgumentsCollection.CreateWithCapacity(1);
-      try
-        Args.Add(AValue);
-        Setter.Call(Args, Self);
-      finally
-        Args.Free;
-      end;
-      Exit;
-    end;
-    Current := Current.FSuperClass;
-  until not Assigned(Current);
-
   // .name override via static field or assignment: use DefineProperty to
   // override the synthesized non-writable descriptor (which is configurable)
   if AName = PROP_NAME then
   begin
+    Descriptor := inherited GetOwnPropertyDescriptor(AName);
+    if Assigned(Descriptor) then
+    begin
+      inherited SetProperty(AName, AValue);
+      Descriptor := inherited GetOwnPropertyDescriptor(AName);
+      if (Descriptor is TGocciaPropertyDescriptorData) and
+         (TGocciaPropertyDescriptorData(Descriptor).Value is TGocciaStringLiteralValue) then
+        FName := TGocciaStringLiteralValue(TGocciaPropertyDescriptorData(Descriptor).Value).Value;
+      Exit;
+    end;
+
+    Descriptor := GetOwnPropertyDescriptor(AName);
+    if (Descriptor is TGocciaPropertyDescriptorData) and
+       (not TGocciaPropertyDescriptorData(Descriptor).Writable) then
+    begin
+      inherited DefineProperty(AName, Descriptor);
+      inherited SetProperty(AName, AValue);
+      Exit;
+    end;
+
     if AValue is TGocciaStringLiteralValue then
       FName := TGocciaStringLiteralValue(AValue).Value;
     inherited DefineProperty(AName,
@@ -1193,142 +1189,9 @@ begin
     Result := inherited HasOwnProperty(AName);
 end;
 
-procedure TGocciaClassValue.DefineSymbolProperty(const ASymbol: TGocciaSymbolValue; const ADescriptor: TGocciaPropertyDescriptor);
-begin
-  FStaticSymbolDescriptors.AddOrSetValue(ASymbol, ADescriptor);
-end;
-
 function TGocciaClassValue.GetOwnStaticSymbolDescriptor(const ASymbol: TGocciaSymbolValue): TGocciaPropertyDescriptor;
 begin
-  if not FStaticSymbolDescriptors.TryGetValue(ASymbol, Result) then
-    Result := nil;
-end;
-
-function TGocciaClassValue.GetOwnSymbolPropertyDescriptor(const ASymbol: TGocciaSymbolValue): TGocciaPropertyDescriptor;
-begin
-  Result := GetOwnStaticSymbolDescriptor(ASymbol);
-  if not Assigned(Result) then
-    Result := inherited GetOwnSymbolPropertyDescriptor(ASymbol);
-end;
-
-function TGocciaClassValue.GetOwnSymbols: TArray<TGocciaSymbolValue>;
-var
-  Symbols, InheritedSymbols: TArray<TGocciaSymbolValue>;
-  Seen: THashMap<TGocciaSymbolValue, Boolean>;
-  Symbol: TGocciaSymbolValue;
-  Count: Integer;
-begin
-  Symbols := FStaticSymbolDescriptors.Keys;
-  InheritedSymbols := inherited GetOwnSymbols;
-  Seen := THashMap<TGocciaSymbolValue, Boolean>.Create;
-  try
-    SetLength(Result, Length(Symbols) + Length(InheritedSymbols));
-    Count := 0;
-
-    for Symbol in Symbols do
-    begin
-      if Seen.ContainsKey(Symbol) then
-        Continue;
-      Seen.Add(Symbol, True);
-      Result[Count] := Symbol;
-      Inc(Count);
-    end;
-
-    for Symbol in InheritedSymbols do
-    begin
-      if Seen.ContainsKey(Symbol) then
-        Continue;
-      Seen.Add(Symbol, True);
-      Result[Count] := Symbol;
-      Inc(Count);
-    end;
-
-    SetLength(Result, Count);
-  finally
-    Seen.Free;
-  end;
-end;
-
-procedure TGocciaClassValue.AssignSymbolProperty(const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue);
-var
-  Descriptor: TGocciaPropertyDescriptor;
-  Accessor: TGocciaPropertyDescriptorAccessor;
-  Args: TGocciaArgumentsCollection;
-  Current: TGocciaClassValue;
-begin
-  Current := Self;
-  while Assigned(Current) do
-  begin
-    if Current.FStaticSymbolDescriptors.TryGetValue(ASymbol, Descriptor) then
-    begin
-      if Descriptor is TGocciaPropertyDescriptorAccessor then
-      begin
-        Accessor := TGocciaPropertyDescriptorAccessor(Descriptor);
-      if Assigned(Accessor.Setter) then
-      begin
-        Args := TGocciaArgumentsCollection.Create;
-        try
-          Args.Add(AValue);
-          if Accessor.Setter is TGocciaFunctionBase then
-            TGocciaFunctionBase(Accessor.Setter).Call(Args, Self);
-        finally
-          Args.Free;
-        end;
-        Exit;
-        end
-        else
-          ThrowTypeError(SErrorClassSetterOnlyAccessor, SSuggestPropertyHasOnlyGetter);
-      end;
-      Break;
-    end;
-    Current := Current.FSuperClass;
-  end;
-
-  DefineSymbolProperty(ASymbol, TGocciaPropertyDescriptorData.Create(AValue, [pfEnumerable, pfConfigurable, pfWritable]));
-end;
-
-function TGocciaClassValue.GetSymbolProperty(const ASymbol: TGocciaSymbolValue): TGocciaValue;
-begin
-  Result := GetSymbolPropertyWithReceiver(ASymbol, Self);
-end;
-
-function TGocciaClassValue.GetSymbolPropertyWithReceiver(const ASymbol: TGocciaSymbolValue; const AReceiver: TGocciaValue): TGocciaValue;
-var
-  Descriptor: TGocciaPropertyDescriptor;
-  Accessor: TGocciaPropertyDescriptorAccessor;
-  Args: TGocciaArgumentsCollection;
-begin
-  if FStaticSymbolDescriptors.TryGetValue(ASymbol, Descriptor) then
-  begin
-    if Descriptor is TGocciaPropertyDescriptorData then
-    begin
-      Result := TGocciaPropertyDescriptorData(Descriptor).Value;
-      Exit;
-    end
-    else if Descriptor is TGocciaPropertyDescriptorAccessor then
-    begin
-      Accessor := TGocciaPropertyDescriptorAccessor(Descriptor);
-      if Assigned(Accessor.Getter) then
-      begin
-        if Accessor.Getter is TGocciaFunctionBase then
-        begin
-          Args := TGocciaArgumentsCollection.CreateWithCapacity(0);
-          try
-            Result := TGocciaFunctionBase(Accessor.Getter).Call(Args, AReceiver);
-          finally
-            Args.Free;
-          end;
-        end
-        else
-          Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-        Exit;
-      end;
-      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-      Exit;
-    end;
-  end;
-
-  Result := inherited GetSymbolPropertyWithReceiver(ASymbol, AReceiver);
+  Result := inherited GetOwnSymbolPropertyDescriptor(ASymbol);
 end;
 
 // ES2026 §10.2.2 [[Call]] — class constructors are not callable without new

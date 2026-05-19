@@ -1167,7 +1167,8 @@ begin
             else if Peek.TokenType in [gttIf, gttElse, gttConst, gttLet, gttClass, gttEnum, gttExtends, gttNew, gttThis, gttSuper, gttStatic,
                                        gttReturn, gttFor, gttWhile, gttDo, gttSwitch, gttCase, gttDefault, gttBreak, gttContinue,
                                        gttThrow, gttTry, gttCatch, gttFinally, gttImport, gttExport, gttFrom, gttAs,
-                                       gttTrue, gttFalse, gttNull, gttTypeof, gttVoid, gttInstanceof, gttIn, gttDelete, gttVar, gttWith] then
+                                       gttTrue, gttFalse, gttNull, gttTypeof, gttVoid, gttInstanceof, gttIn, gttDelete, gttVar, gttWith,
+                                       gttFunction] then
               PropertyName := Advance.Lexeme  // Reserved words are allowed as property names
             else
               raise TGocciaSyntaxError.Create('Expected property name after "."', Peek.Line, Peek.Column, FFileName, FSourceLines,
@@ -1887,7 +1888,8 @@ begin
           else if Peek.TokenType in [gttIf, gttElse, gttConst, gttLet, gttClass, gttEnum, gttExtends, gttNew, gttThis, gttSuper, gttStatic,
                                      gttReturn, gttFor, gttWhile, gttDo, gttSwitch, gttCase, gttDefault, gttBreak, gttContinue,
                                      gttThrow, gttTry, gttCatch, gttFinally, gttImport, gttExport, gttFrom, gttAs,
-                                     gttTrue, gttFalse, gttNull, gttTypeof, gttVoid, gttInstanceof, gttIn, gttDelete, gttVar, gttWith] then
+                                     gttTrue, gttFalse, gttNull, gttTypeof, gttVoid, gttInstanceof, gttIn, gttDelete, gttVar, gttWith,
+                                     gttFunction] then
           begin
             Token := Advance;
             // Reserved words are valid property names after "." per ES spec
@@ -2873,7 +2875,8 @@ begin
     else if Match([gttIf, gttElse, gttConst, gttLet, gttClass, gttEnum, gttExtends, gttNew, gttThis, gttSuper, gttStatic,
                    gttReturn, gttFor, gttWhile, gttDo, gttSwitch, gttCase, gttDefault, gttBreak, gttContinue,
                    gttThrow, gttTry, gttCatch, gttFinally, gttImport, gttExport, gttFrom, gttAs,
-                   gttTrue, gttFalse, gttNull, gttTypeof, gttVoid, gttInstanceof, gttIn, gttDelete, gttVar, gttWith]) then
+                   gttTrue, gttFalse, gttNull, gttTypeof, gttVoid, gttInstanceof, gttIn, gttDelete, gttVar, gttWith,
+                   gttFunction]) then
       Key := Previous.Lexeme  // Reserved words are allowed as property names
     else
       raise TGocciaSyntaxError.Create('Expected property name', Peek.Line, Peek.Column, FFileName, FSourceLines,
@@ -4841,6 +4844,32 @@ var
   ImportedNameToken: TGocciaToken;
   Line, Column: Integer;
   IsTypeOnlyBinding: Boolean;
+
+  procedure SkipImportAttributesIfPresent;
+  var
+    Depth: Integer;
+  begin
+    if not Match(gttWith) then
+      Exit;
+
+    AddWarning('Import attributes are not supported in GocciaScript',
+      'The attribute bag is ignored for now',
+      Previous.Line, Previous.Column);
+
+    Consume(gttLeftBrace, 'Expected "{" after import attributes "with"',
+      SSuggestOpenBraceImportList);
+    Depth := 1;
+    while (Depth > 0) and not IsAtEnd do
+    begin
+      if Check(gttLeftBrace) then Inc(Depth);
+      if Check(gttRightBrace) then Dec(Depth);
+      Advance;
+    end;
+
+    if Depth > 0 then
+      Consume(gttRightBrace, 'Expected "}" after import attributes',
+        SSuggestCloseImportList);
+  end;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
@@ -4849,6 +4878,30 @@ begin
   begin
     Advance;
     SkipUntilSemicolon;
+    Result := TGocciaEmptyStatement.Create(Line, Column);
+    Exit;
+  end;
+
+  if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_DEFER) and
+     CheckNext(gttStar) then
+  begin
+    AddWarning('Import defer is not supported in GocciaScript',
+      'The deferred namespace import is ignored for now',
+      Peek.Line, Peek.Column);
+    Advance;
+    Advance;
+    Consume(gttAs, 'Expected "as" after "*" in namespace import',
+      SSuggestNamespaceImportAs);
+    NamespaceName := Consume(gttIdentifier,
+      'Expected local name after "as"',
+      SSuggestProvideLocalName).Lexeme;
+    Consume(gttFrom, 'Expected "from" after namespace import',
+      SSuggestAddFromAfterImport);
+    ModulePath := Consume(gttString, 'Expected module path',
+      SSuggestProvideModulePath).Lexeme;
+    SkipImportAttributesIfPresent;
+    ConsumeSemicolonOrASI('Expected ";" after import declaration',
+      SSuggestAddSemicolon);
     Result := TGocciaEmptyStatement.Create(Line, Column);
     Exit;
   end;
@@ -4874,11 +4927,73 @@ begin
 
   if Check(gttIdentifier) then
   begin
-    AddWarning('Default imports are not supported in GocciaScript',
-      'Use named imports instead: import { name } from ''module''',
-      Line, Column);
-    SkipUntilSemicolon;
-    Result := TGocciaEmptyStatement.Create(Line, Column);
+    Imports := TStringStringMap.Create;
+    LocalName := Advance.Lexeme;
+    Imports.Add(LocalName, KEYWORD_DEFAULT);
+
+    if Match(gttComma) then
+    begin
+      if Check(gttStar) then
+      begin
+        Advance;
+        Consume(gttAs, 'Expected "as" after "*" in namespace import',
+          SSuggestNamespaceImportAs);
+        NamespaceName := Consume(gttIdentifier,
+          'Expected local name after "as"',
+          SSuggestProvideLocalName).Lexeme;
+        Consume(gttFrom, 'Expected "from" after namespace import',
+          SSuggestAddFromAfterImport);
+        ModulePath := Consume(gttString, 'Expected module path',
+          SSuggestProvideModulePath).Lexeme;
+        ConsumeSemicolonOrASI('Expected ";" after import declaration',
+          SSuggestAddSemicolon);
+        Result := TGocciaImportDeclaration.Create(Imports, ModulePath, Line,
+          Column, NamespaceName);
+        Exit;
+      end;
+
+      Consume(gttLeftBrace, 'Expected "{" after "," in import declaration',
+        SSuggestOpenBraceImportList);
+      while not Check(gttRightBrace) and not IsAtEnd do
+      begin
+        IsTypeOnlyBinding := IsTypeOnlySpecifierModifier;
+        if IsTypeOnlyBinding then
+          Advance;
+
+        ImportedNameToken := ConsumeModuleExportName('Expected import name',
+          SSuggestProvideImportName);
+        ImportedName := ImportedNameToken.Lexeme;
+
+        if Match(gttAs) then
+          LocalName := Consume(gttIdentifier, 'Expected local name after "as"',
+            SSuggestProvideLocalName).Lexeme
+        else if ImportedNameToken.TokenType = gttString then
+          raise TGocciaSyntaxError.Create(
+            'String-literal import names require "as" and a local identifier',
+            ImportedNameToken.Line, ImportedNameToken.Column, FFileName,
+            FSourceLines,
+            SSuggestStringImportAs)
+        else
+          LocalName := ImportedName;
+
+        if not IsTypeOnlyBinding then
+          Imports.Add(LocalName, ImportedName);
+
+        if not Match(gttComma) then
+          Break;
+      end;
+
+      Consume(gttRightBrace, 'Expected "}" after imports',
+        SSuggestCloseImportList);
+    end;
+
+    Consume(gttFrom, 'Expected "from" after import binding',
+      SSuggestAddFromAfterImport);
+    ModulePath := Consume(gttString, 'Expected module path',
+      SSuggestProvideModulePath).Lexeme;
+    ConsumeSemicolonOrASI('Expected ";" after import declaration',
+      SSuggestAddSemicolon);
+    Result := TGocciaImportDeclaration.Create(Imports, ModulePath, Line, Column);
     Exit;
   end;
 
@@ -4945,6 +5060,9 @@ var
   Line, Column: Integer;
   InnerDecl: TGocciaStatement;
   VarDecl: TGocciaVariableDeclaration;
+  DefaultValue: TGocciaExpression;
+  DefaultLocalName: string;
+  DirectDefaultDeclaration: Boolean;
   LocalNames: array of string;
   ExportedNames: array of string;
   LocalNameTokenTypes: array of TGocciaTokenType;
@@ -4991,24 +5109,29 @@ begin
 
   if Check(gttDefault) then
   begin
-    AddWarning('Default exports are not supported in GocciaScript',
-      'Use named exports instead: export const name = value; or export { name }',
-      Line, Column);
     Advance;
-    if Check(gttClass) or Check(gttEnum) then
+    DirectDefaultDeclaration := Check(gttClass) or Check(gttFunction) or
+      (Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_ASYNC) and
+      (FCurrent + 1 < FTokens.Count) and
+      (FTokens[FCurrent + 1].TokenType = gttFunction) and
+      (Peek.Line = FTokens[FCurrent + 1].Line));
+    DefaultValue := Expression;
+    DefaultLocalName := GOCCIA_DEFAULT_EXPORT_BINDING;
+    if DirectDefaultDeclaration then
     begin
-      Advance;
-      if Check(gttIdentifier) then Advance;
-      SkipBlock;
-    end
-    else if Check(gttFunction) then
-    begin
-      Advance;
-      SkipUnsupportedFunctionSignature;
-    end
-    else
-      SkipUntilSemicolon;
-    Result := TGocciaEmptyStatement.Create(Line, Column);
+      if (DefaultValue is TGocciaClassExpression) and
+         (TGocciaClassExpression(DefaultValue).ClassDefinition.Name <> '') then
+        DefaultLocalName :=
+          TGocciaClassExpression(DefaultValue).ClassDefinition.Name
+      else if (DefaultValue is TGocciaMethodExpression) and
+              (TGocciaMethodExpression(DefaultValue).Name <> '') then
+        DefaultLocalName := TGocciaMethodExpression(DefaultValue).Name;
+    end;
+    if not DirectDefaultDeclaration then
+      ConsumeSemicolonOrASI('Expected ";" after default export',
+        SSuggestAddSemicolon);
+    Result := TGocciaExportDefaultDeclaration.Create(DefaultValue,
+      DefaultLocalName, Line, Column);
     Exit;
   end;
 

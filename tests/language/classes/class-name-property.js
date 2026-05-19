@@ -45,9 +45,28 @@ describe("class as object property", () => {
 });
 
 describe("static name override", () => {
+  test("ordinary assignment does not override built-in .name", () => {
+    class Foo {}
+
+    expect(() => {
+      Foo.name = "Changed";
+    }).toThrow(TypeError);
+    expect(Foo.name).toBe("Foo");
+  });
+
   test("static getter overrides default .name", () => {
     class Foo { static get name() { return "Custom"; } }
     expect(Foo.name).toBe("Custom");
+  });
+
+  test("static method overrides default .name", () => {
+    class Foo {
+      static name() {
+        return "Custom";
+      }
+    }
+
+    expect(Foo.name()).toBe("Custom");
   });
 
   test("static field overrides default .name", () => {

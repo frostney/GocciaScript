@@ -41,3 +41,34 @@ test("function* is not constructable", () => {
 
   expect(() => new make()).toThrow(TypeError);
 });
+
+test("class static getter backed by function* returns a generator object", () => {
+  class C {}
+  Object.defineProperty(C, "value", {
+    get: function* () {
+      yield 1;
+    },
+    configurable: true,
+  });
+
+  const iter = C.value;
+
+  expect(iter.next()).toEqual({ value: 1, done: false });
+  expect(iter.next()).toEqual({ value: undefined, done: true });
+});
+
+test("class static setter backed by function* is called as a generator function", () => {
+  let called = 0;
+  class C {}
+  Object.defineProperty(C, "value", {
+    set: function* (next) {
+      called = next;
+      yield next;
+    },
+    configurable: true,
+  });
+
+  C.value = 5;
+
+  expect(called).toBe(0);
+});
