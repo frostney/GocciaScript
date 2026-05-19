@@ -1,0 +1,4 @@
+{
+  "extends": "../goccia.json",
+  "source-type": "module"
+}
