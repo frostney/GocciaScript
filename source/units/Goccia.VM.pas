@@ -8075,6 +8075,47 @@ begin
           SetPropertyValue(GetRegister(A), GlobalName, RightValue);
       end;
 
+      OP_DEFINE_PROP_DYNAMIC:
+      begin
+        RightValue := RegisterToValue(FRegisters[C]);
+        TargetValue := GetRegister(A);
+        if (TargetValue is TGocciaClassValue) or
+           (TargetValue is TGocciaObjectValue) then
+          SetBytecodeHomeObject(RightValue, TargetValue);
+        if (TargetValue is TGocciaObjectValue) and
+           (FRegisters[B].Kind = grkObject) and
+           (FRegisters[B].ObjectValue is TGocciaSymbolValue) then
+          TGocciaObjectValue(TargetValue).DefineSymbolProperty(
+            TGocciaSymbolValue(FRegisters[B].ObjectValue),
+            TGocciaPropertyDescriptorData.Create(
+              RightValue, [pfEnumerable, pfConfigurable, pfWritable]))
+        else if (TargetValue is TGocciaObjectValue) and
+                TryResolveObjectKey(FRegisters[B], PropKeyValue) then
+        begin
+          if PropKeyValue is TGocciaSymbolValue then
+            TGocciaObjectValue(TargetValue).DefineSymbolProperty(
+              TGocciaSymbolValue(PropKeyValue),
+              TGocciaPropertyDescriptorData.Create(
+                RightValue, [pfEnumerable, pfConfigurable, pfWritable]))
+          else
+            TGocciaObjectValue(TargetValue).DefineProperty(
+              TGocciaStringLiteralValue(PropKeyValue).Value,
+              TGocciaPropertyDescriptorData.Create(
+                RightValue, [pfEnumerable, pfConfigurable, pfWritable]));
+        end
+        else
+        begin
+          GlobalName := KeyToPropertyNameRegister(FRegisters[B]);
+          if TargetValue is TGocciaObjectValue then
+            TGocciaObjectValue(TargetValue).DefineProperty(
+              GlobalName,
+              TGocciaPropertyDescriptorData.Create(
+                RightValue, [pfEnumerable, pfConfigurable, pfWritable]))
+          else
+            SetPropertyValue(TargetValue, GlobalName, RightValue);
+        end;
+      end;
+
       OP_DEFINE_STATIC_METHOD_CONST:
       begin
         GlobalName := Template.GetConstantUnchecked(B).StringValue;

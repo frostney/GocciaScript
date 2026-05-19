@@ -285,6 +285,10 @@ type
   TGocciaFieldOrderEntry = record
     Name: string;
     IsPrivate: Boolean;
+    IsComputed: Boolean;
+    ElementIndex: Integer;
+    ComputedKeyExpression: TGocciaExpression;
+    FieldInitializer: TGocciaExpression;
   end;
 
   // Shared class definition structure

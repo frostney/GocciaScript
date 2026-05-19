@@ -124,6 +124,13 @@ type
     ResourceRegistered: Boolean;
   end;
 
+  TComputedFieldKeyLocal = record
+    ElementIndex: Integer;
+    Name: string;
+  end;
+
+  TComputedFieldKeyLocals = array of TComputedFieldKeyLocal;
+
   TPendingFinallyEntry = record
     FinallyBlock: TGocciaBlockStatement;
     // Non-nil when this entry represents a using block's disposal.
@@ -3609,23 +3616,52 @@ begin
   ACtx.Scope.FreeRegister;
 end;
 
+function FindComputedFieldKeyLocalName(
+  const ALocals: TComputedFieldKeyLocals;
+  const AElementIndex: Integer): string;
+var
+  LocalIndex: Integer;
+begin
+  for LocalIndex := 0 to High(ALocals) do
+    if ALocals[LocalIndex].ElementIndex = AElementIndex then
+      Exit(ALocals[LocalIndex].Name);
+  Result := '';
+end;
+
 procedure CompileComputedElements(const ACtx: TGocciaCompilationContext;
-  const ATargetReg: UInt8; const AClassDef: TGocciaClassDefinition);
+  const ATargetReg: UInt8; const AClassDef: TGocciaClassDefinition;
+  var AComputedFieldKeyLocals: TComputedFieldKeyLocals);
 var
   I: Integer;
   Elem: TGocciaClassElement;
   KeyReg: UInt8;
+  ComputedKeyName: string;
 begin
+  SetLength(AComputedFieldKeyLocals, 0);
   for I := 0 to High(AClassDef.FElements) do
   begin
     Elem := AClassDef.FElements[I];
     if not Elem.IsComputed then
       Continue;
+    if not (Elem.Kind in [cekGetter, cekSetter, cekMethod, cekField]) then
+      Continue;
 
-    KeyReg := ACtx.Scope.AllocateRegister;
+    if Elem.Kind = cekField then
+    begin
+      SetLength(AComputedFieldKeyLocals, Length(AComputedFieldKeyLocals) + 1);
+      ComputedKeyName := Format('#computed-field-key:%d', [I]);
+      AComputedFieldKeyLocals[High(AComputedFieldKeyLocals)].ElementIndex := I;
+      AComputedFieldKeyLocals[High(AComputedFieldKeyLocals)].Name :=
+        ComputedKeyName;
+      KeyReg := ACtx.Scope.DeclareLocal(ComputedKeyName, False);
+    end
+    else
+      KeyReg := ACtx.Scope.AllocateRegister;
     ACtx.CompileExpression(Elem.ComputedKeyExpression, KeyReg);
 
     case Elem.Kind of
+      cekField:
+        Continue;
       cekGetter:
         if Elem.IsStatic then
           CompileComputedGetterBody(ACtx, ATargetReg, KeyReg,
@@ -3662,8 +3698,20 @@ begin
   Result := False;
 end;
 
+function HasComputedInstanceFields(
+  const AClassDef: TGocciaClassDefinition): Boolean;
+var
+  I: Integer;
+begin
+  for I := 0 to High(AClassDef.FFieldOrder) do
+    if AClassDef.FFieldOrder[I].IsComputed then
+      Exit(True);
+  Result := False;
+end;
+
 procedure CompileFieldInitializer(const ACtx: TGocciaCompilationContext;
-  const AClassReg: UInt8; const AClassDef: TGocciaClassDefinition);
+  const AClassReg: UInt8; const AClassDef: TGocciaClassDefinition;
+  const AComputedFieldKeyLocals: TComputedFieldKeyLocals);
 var
   OldTemplate: TGocciaFunctionTemplate;
   OldScope: TGocciaCompilerScope;
@@ -3672,12 +3720,13 @@ var
   ChildCtx: TGocciaCompilationContext;
   FuncIdx: UInt16;
   FnReg: UInt8;
-  ValReg, ThisReg: UInt8;
+  ValReg, ThisReg, KeyReg: UInt8;
   KeyIdx: UInt16;
-  I: Integer;
+  I, UpvalueIdx: Integer;
   Entry: TGocciaExpressionMap.TKeyValuePair;
   Elem: TGocciaClassElement;
   FieldExpr: TGocciaExpression;
+  ComputedKeyName: string;
 begin
   OldTemplate := ACtx.Template;
   OldScope := ACtx.Scope;
@@ -3702,7 +3751,27 @@ begin
     for I := 0 to High(AClassDef.FFieldOrder) do
     begin
       ValReg := ChildScope.AllocateRegister;
-      if AClassDef.FFieldOrder[I].IsPrivate then
+      if AClassDef.FFieldOrder[I].IsComputed then
+      begin
+        if Assigned(AClassDef.FFieldOrder[I].FieldInitializer) then
+          ACtx.CompileExpression(AClassDef.FFieldOrder[I].FieldInitializer, ValReg)
+        else
+          EmitInstruction(ChildCtx, EncodeABx(OP_LOAD_UNDEFINED, ValReg, 0));
+        KeyReg := ChildScope.AllocateRegister;
+        ComputedKeyName := FindComputedFieldKeyLocalName(
+          AComputedFieldKeyLocals, AClassDef.FFieldOrder[I].ElementIndex);
+        UpvalueIdx := ChildScope.ResolveUpvalue(ComputedKeyName);
+        if UpvalueIdx < 0 then
+          raise Exception.Create('Compiler error: computed class field key was not captured');
+        EmitInstruction(ChildCtx, EncodeABx(OP_GET_UPVALUE, KeyReg,
+          UInt16(UpvalueIdx)));
+        EmitInstruction(ChildCtx, EncodeABC(OP_DEFINE_PROP_DYNAMIC, ThisReg,
+          KeyReg, ValReg));
+        ChildScope.FreeRegister;
+        ChildScope.FreeRegister;
+        Continue;
+      end
+      else if AClassDef.FFieldOrder[I].IsPrivate then
       begin
         if AClassDef.PrivateInstanceProperties.TryGetValue(
             AClassDef.FFieldOrder[I].Name, FieldExpr) then
@@ -4053,7 +4122,7 @@ procedure CompileClassDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaClassDeclaration);
 var
   ClassDef: TGocciaClassDefinition;
-  ClassReg, SuperReg, ValReg: UInt8;
+  ClassReg, SuperReg, ValReg, KeyReg: UInt8;
   NameIdx, KeyIdx: UInt16;
   MethodPair: TGocciaClassMethodMap.TKeyValuePair;
   GetterPair: TGocciaGetterExpressionMap.TKeyValuePair;
@@ -4062,6 +4131,8 @@ var
   I, LocalIdx, UpvalIdx: Integer;
   HasSuper: Boolean;
   PrivPrefix: string;
+  ComputedFieldKeyLocals: TComputedFieldKeyLocals;
+  ComputedKeyName: string;
 begin
   ClassDef := AStmt.ClassDefinition;
   HasSuper := ClassDef.SuperClass <> '';
@@ -4166,10 +4237,13 @@ begin
         SetterPair.Value, OP_DEFINE_ACCESSOR_CONST, ACCESSOR_FLAG_STATIC or ACCESSOR_FLAG_SETTER);
   end;
 
+  CompileComputedElements(ACtx, ClassReg, ClassDef, ComputedFieldKeyLocals);
+
   if (ClassDef.InstanceProperties.Count > 0) or
      (ClassDef.PrivateInstanceProperties.Count > 0) or
+     HasComputedInstanceFields(ClassDef) or
      HasAccessorInitializers(ClassDef) then
-    CompileFieldInitializer(ACtx, ClassReg, ClassDef);
+    CompileFieldInitializer(ACtx, ClassReg, ClassDef, ComputedFieldKeyLocals);
 
   // Static fields without FElements entries (legacy / no static blocks)
   if Length(ClassDef.FElements) = 0 then
@@ -4201,8 +4275,6 @@ begin
     end;
   end;
 
-  CompileComputedElements(ACtx, ClassReg, ClassDef);
-
   // ES2022 §15.7.14: compile static fields and static blocks in source order
   for I := 0 to High(ClassDef.FElements) do
   begin
@@ -4211,6 +4283,17 @@ begin
     else if (ClassDef.FElements[I].Kind = cekField) and ClassDef.FElements[I].IsStatic then
     begin
       ValReg := ACtx.Scope.AllocateRegister;
+      if ClassDef.FElements[I].IsComputed then
+      begin
+        ComputedKeyName := FindComputedFieldKeyLocalName(
+          ComputedFieldKeyLocals, I);
+        LocalIdx := ACtx.Scope.ResolveLocal(ComputedKeyName);
+        if LocalIdx < 0 then
+          raise Exception.Create('Compiler error: computed static field key was not captured');
+        KeyReg := ACtx.Scope.GetLocal(LocalIdx).Slot;
+      end
+      else
+        KeyReg := 0;
       if Assigned(ClassDef.FElements[I].FieldInitializer) then
         ACtx.CompileExpression(ClassDef.FElements[I].FieldInitializer, ValReg)
       else
@@ -4226,6 +4309,9 @@ begin
         EmitInstruction(ACtx, EncodeABC(OP_SET_PROP_CONST, ClassReg,
           UInt8(KeyIdx), ValReg));
       end
+      else if ClassDef.FElements[I].IsComputed then
+        EmitInstruction(ACtx, EncodeABC(OP_DEFINE_PROP_DYNAMIC,
+          ClassReg, KeyReg, ValReg))
       else
       begin
         KeyIdx := ACtx.Template.AddConstantString(ClassDef.FElements[I].Name);
@@ -4260,7 +4346,7 @@ procedure CompileClassExpression(const ACtx: TGocciaCompilationContext;
   const AInferredName: string = '');
 var
   ClassDef: TGocciaClassDefinition;
-  SuperReg, ValReg: UInt8;
+  SuperReg, ValReg, KeyReg: UInt8;
   NameIdx, KeyIdx: UInt16;
   MethodPair: TGocciaClassMethodMap.TKeyValuePair;
   GetterPair: TGocciaGetterExpressionMap.TKeyValuePair;
@@ -4272,6 +4358,8 @@ var
   HasNameBinding: Boolean;
   ClosedLocals: array[0..0] of UInt8;
   ClosedCount, I: Integer;
+  ComputedFieldKeyLocals: TComputedFieldKeyLocals;
+  ComputedKeyName: string;
 begin
   ClassDef := AClassDef;
   HasSuper := ClassDef.SuperClass <> '';
@@ -4377,10 +4465,13 @@ begin
         SetterPair.Value, OP_DEFINE_ACCESSOR_CONST, ACCESSOR_FLAG_STATIC or ACCESSOR_FLAG_SETTER);
   end;
 
+  CompileComputedElements(ACtx, ADest, ClassDef, ComputedFieldKeyLocals);
+
   if (ClassDef.InstanceProperties.Count > 0) or
      (ClassDef.PrivateInstanceProperties.Count > 0) or
+     HasComputedInstanceFields(ClassDef) or
      HasAccessorInitializers(ClassDef) then
-    CompileFieldInitializer(ACtx, ADest, ClassDef);
+    CompileFieldInitializer(ACtx, ADest, ClassDef, ComputedFieldKeyLocals);
 
   // Static fields without FElements entries (legacy / no static blocks)
   if Length(ClassDef.FElements) = 0 then
@@ -4412,8 +4503,6 @@ begin
     end;
   end;
 
-  CompileComputedElements(ACtx, ADest, ClassDef);
-
   // ES2022 §15.7.14: compile static fields and static blocks in source order
   for I := 0 to High(ClassDef.FElements) do
   begin
@@ -4422,6 +4511,17 @@ begin
     else if (ClassDef.FElements[I].Kind = cekField) and ClassDef.FElements[I].IsStatic then
     begin
       ValReg := ACtx.Scope.AllocateRegister;
+      if ClassDef.FElements[I].IsComputed then
+      begin
+        ComputedKeyName := FindComputedFieldKeyLocalName(
+          ComputedFieldKeyLocals, I);
+        LocalIdx := ACtx.Scope.ResolveLocal(ComputedKeyName);
+        if LocalIdx < 0 then
+          raise Exception.Create('Compiler error: computed static field key was not captured');
+        KeyReg := ACtx.Scope.GetLocal(LocalIdx).Slot;
+      end
+      else
+        KeyReg := 0;
       if Assigned(ClassDef.FElements[I].FieldInitializer) then
         ACtx.CompileExpression(ClassDef.FElements[I].FieldInitializer, ValReg)
       else
@@ -4437,6 +4537,9 @@ begin
         EmitInstruction(ACtx, EncodeABC(OP_SET_PROP_CONST, ADest,
           UInt8(KeyIdx), ValReg));
       end
+      else if ClassDef.FElements[I].IsComputed then
+        EmitInstruction(ACtx, EncodeABC(OP_DEFINE_PROP_DYNAMIC,
+          ADest, KeyReg, ValReg))
       else
       begin
         KeyIdx := ACtx.Template.AddConstantString(ClassDef.FElements[I].Name);

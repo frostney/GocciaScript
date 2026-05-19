@@ -26,6 +26,9 @@ type
   TGocciaClassFieldOrderEntry = record
     Name: string;
     IsPrivate: Boolean;
+    IsComputed: Boolean;
+    ComputedKey: TGocciaValue;
+    Initializer: TGocciaExpression;
   end;
 
   TGocciaClassValue = class(TGocciaObjectValue)
@@ -437,6 +440,9 @@ begin
   for I := 0 to High(FDecoratorFieldInitializers) do
     if Assigned(FDecoratorFieldInitializers[I].Initializer) then
       FDecoratorFieldInitializers[I].Initializer.MarkReferences;
+  for I := 0 to High(FFieldOrder) do
+    if Assigned(FFieldOrder[I].ComputedKey) then
+      FFieldOrder[I].ComputedKey.MarkReferences;
 end;
 
 function TGocciaClassValue.IsCallable: Boolean;

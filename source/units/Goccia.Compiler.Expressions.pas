@@ -2594,8 +2594,13 @@ begin
       Key := Order[I].StaticKey;
       case Order[I].PropertyType of
         pstStatic:
-          if AExpr.Properties.TryGetValue(Key, ValExpr) then
+        begin
+          ValExpr := Order[I].Expression;
+          if not Assigned(ValExpr) then
+            AExpr.Properties.TryGetValue(Key, ValExpr);
+          if Assigned(ValExpr) then
             CompileObjectProperty(ACtx, AExpr, ADest, Key, ValExpr);
+        end;
         pstComputed:
         begin
           if (Order[I].ComputedIndex >= 0) and

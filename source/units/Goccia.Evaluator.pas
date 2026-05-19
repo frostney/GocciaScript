@@ -1453,7 +1453,10 @@ begin
           begin
             // Static property: {key: value}
             PropertyName := AObjectExpression.PropertySourceOrder[I].StaticKey;
-            if AObjectExpression.Properties.TryGetValue(PropertyName, PropertyExpression) then
+            PropertyExpression := AObjectExpression.PropertySourceOrder[I].Expression;
+            if not Assigned(PropertyExpression) then
+              AObjectExpression.Properties.TryGetValue(PropertyName, PropertyExpression);
+            if Assigned(PropertyExpression) then
             begin
               PropertyValue := EvaluateExpression(PropertyExpression, AContext);
               if (PropertyExpression is TGocciaMethodExpression)
@@ -3510,7 +3513,23 @@ begin
     begin
       FOEntry := AClassValue.FieldOrderEntry(I);
       Expr := nil;
-      if FOEntry.IsPrivate then
+      if FOEntry.IsComputed then
+      begin
+        if Assigned(FOEntry.Initializer) then
+          PropertyValue := EvaluateExpression(FOEntry.Initializer, LocalContext)
+        else
+          PropertyValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+        if FOEntry.ComputedKey is TGocciaSymbolValue then
+          AInstance.DefineSymbolProperty(
+            TGocciaSymbolValue(FOEntry.ComputedKey),
+            TGocciaPropertyDescriptorData.Create(PropertyValue,
+              [pfEnumerable, pfConfigurable, pfWritable]))
+        else if Assigned(FOEntry.ComputedKey) then
+          AInstance.DefineProperty(FOEntry.ComputedKey.ToStringLiteral.Value,
+            TGocciaPropertyDescriptorData.Create(PropertyValue,
+              [pfEnumerable, pfConfigurable, pfWritable]));
+      end
+      else if FOEntry.IsPrivate then
       begin
         if AClassValue.PrivateInstancePropertyDefs.TryGetValue(FOEntry.Name, Expr) and Assigned(Expr) then
         begin
@@ -3574,7 +3593,23 @@ begin
     begin
       FOEntry := AClassValue.FieldOrderEntry(I);
       Expr := nil;
-      if FOEntry.IsPrivate then
+      if FOEntry.IsComputed then
+      begin
+        if Assigned(FOEntry.Initializer) then
+          PropertyValue := EvaluateExpression(FOEntry.Initializer, AContext)
+        else
+          PropertyValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+        if FOEntry.ComputedKey is TGocciaSymbolValue then
+          AInstance.DefineSymbolProperty(
+            TGocciaSymbolValue(FOEntry.ComputedKey),
+            TGocciaPropertyDescriptorData.Create(PropertyValue,
+              [pfEnumerable, pfConfigurable, pfWritable]))
+        else if Assigned(FOEntry.ComputedKey) then
+          AInstance.DefineProperty(FOEntry.ComputedKey.ToStringLiteral.Value,
+            TGocciaPropertyDescriptorData.Create(PropertyValue,
+              [pfEnumerable, pfConfigurable, pfWritable]));
+      end
+      else if FOEntry.IsPrivate then
       begin
         if AClassValue.PrivateInstancePropertyDefs.TryGetValue(FOEntry.Name, Expr) and Assigned(Expr) then
         begin
@@ -4133,7 +4168,10 @@ var
   ClassName: string;
   I, J: Integer;
   HasDecorators: Boolean;
+  HasReplayedComputedKey: Boolean;
   FieldOrderEntries: array of TGocciaClassFieldOrderEntry;
+  ResolvedComputedFieldKeys: array of TGocciaValue;
+  Continuation: TGocciaGeneratorContinuation;
   MetadataObject: TGocciaObjectValue;
   SuperMetadata: TGocciaValue;
   EvaluatedElementDecorators: array of array of TGocciaValue;
@@ -4166,6 +4204,7 @@ var
     TGocciaMethodValue(Result).OwningClass := ClassValue;
   end;
 begin
+  Continuation := CurrentGeneratorContinuation;
   SuperClass := nil;
   SuperClassValue := nil;
   MethodSuperClass := nil;
@@ -4257,18 +4296,6 @@ begin
     ClassValue.AddPrivateInstanceProperty(PropertyEntry.Key, PropertyEntry.Value);
   end;
 
-  // Copy field order for source-order initialization
-  if Length(AClassDef.FFieldOrder) > 0 then
-  begin
-    SetLength(FieldOrderEntries, Length(AClassDef.FFieldOrder));
-    for I := 0 to High(AClassDef.FFieldOrder) do
-    begin
-      FieldOrderEntries[I].Name := AClassDef.FFieldOrder[I].Name;
-      FieldOrderEntries[I].IsPrivate := AClassDef.FFieldOrder[I].IsPrivate;
-    end;
-    ClassValue.SetFieldOrder(FieldOrderEntries);
-  end;
-
   for MethodPair in AClassDef.PrivateMethods do
   begin
     Method := TGocciaMethodValue(EvaluateClassMethod(MethodPair.Value, AContext, MethodSuperClass));
@@ -4314,20 +4341,34 @@ begin
       ClassValue.AddStaticSetter(SetterPair.Key, SetterFunction);
   end;
 
-  // Handle computed members (methods, getters, setters) in source order via FElements
+  SetLength(ResolvedComputedFieldKeys, Length(AClassDef.FElements));
+
+  // Handle computed class element names in source order via FElements.
   for I := 0 to High(AClassDef.FElements) do
   begin
     Elem := AClassDef.FElements[I];
     if not Elem.IsComputed then
       Continue;
-    if not (Elem.Kind in [cekMethod, cekGetter, cekSetter]) then
+    if not (Elem.Kind in [cekMethod, cekGetter, cekSetter, cekField]) then
       Continue;
 
     // ES2026 §15.4 ClassDefinitionEvaluation step 6.b for computed names:
     // evaluate, then ToPropertyKey, dispatching string vs. symbol storage.
-    ComputedKey := ToPropertyKey(EvaluateExpression(Elem.ComputedKeyExpression, AContext));
+    // Generator resumption restarts this class definition evaluation, so
+    // replay keys already resolved before a later computed name suspended.
+    HasReplayedComputedKey := False;
+    if Assigned(Continuation) then
+      HasReplayedComputedKey := Continuation.TakeExpressionValue(
+        Elem.ComputedKeyExpression, ComputedKey);
+    if not HasReplayedComputedKey then
+      ComputedKey := ToPropertyKey(EvaluateExpression(
+        Elem.ComputedKeyExpression, AContext));
+    if Assigned(Continuation) then
+      Continuation.SaveExpressionValue(Elem.ComputedKeyExpression, ComputedKey);
 
     case Elem.Kind of
+      cekField:
+        ResolvedComputedFieldKeys[I] := ComputedKey;
       cekMethod:
       begin
         Method := TGocciaMethodValue(EvaluateClassMethod(Elem.MethodNode, AContext, MethodSuperClass));
@@ -4423,6 +4464,26 @@ begin
     end;
   end;
 
+  // Copy field order for source-order initialization after computed names are resolved.
+  if Length(AClassDef.FFieldOrder) > 0 then
+  begin
+    SetLength(FieldOrderEntries, Length(AClassDef.FFieldOrder));
+    for I := 0 to High(AClassDef.FFieldOrder) do
+    begin
+      FieldOrderEntries[I].Name := AClassDef.FFieldOrder[I].Name;
+      FieldOrderEntries[I].IsPrivate := AClassDef.FFieldOrder[I].IsPrivate;
+      FieldOrderEntries[I].IsComputed := AClassDef.FFieldOrder[I].IsComputed;
+      FieldOrderEntries[I].Initializer := AClassDef.FFieldOrder[I].FieldInitializer;
+      FieldOrderEntries[I].ComputedKey := nil;
+      if FieldOrderEntries[I].IsComputed and
+         (AClassDef.FFieldOrder[I].ElementIndex >= 0) and
+         (AClassDef.FFieldOrder[I].ElementIndex <= High(ResolvedComputedFieldKeys)) then
+        FieldOrderEntries[I].ComputedKey :=
+          ResolvedComputedFieldKeys[AClassDef.FFieldOrder[I].ElementIndex];
+    end;
+    ClassValue.SetFieldOrder(FieldOrderEntries);
+  end;
+
   // TC39 proposal-decorators §3.1 ClassDefinitionEvaluation — auto-accessor setup
   for I := 0 to High(AClassDef.FElements) do
   begin
@@ -4452,6 +4513,24 @@ begin
         PropertyValue := TGocciaUndefinedLiteralValue.UndefinedValue;
       if Elem.IsPrivate then
         ClassValue.AddPrivateStaticProperty(Elem.Name, PropertyValue)
+      else if Elem.IsComputed then
+      begin
+        ComputedKey := nil;
+        if I <= High(ResolvedComputedFieldKeys) then
+          ComputedKey := ResolvedComputedFieldKeys[I];
+        if not Assigned(ComputedKey) then
+          ComputedKey := ToPropertyKey(EvaluateExpression(
+            Elem.ComputedKeyExpression, AContext));
+        if ComputedKey is TGocciaSymbolValue then
+          ClassValue.DefineSymbolProperty(
+            TGocciaSymbolValue(ComputedKey),
+            TGocciaPropertyDescriptorData.Create(PropertyValue,
+              [pfEnumerable, pfConfigurable, pfWritable]))
+        else
+          ClassValue.DefineProperty(ComputedKey.ToStringLiteral.Value,
+            TGocciaPropertyDescriptorData.Create(PropertyValue,
+              [pfEnumerable, pfConfigurable, pfWritable]));
+      end
       else
         ClassValue.DefineProperty(Elem.Name,
           TGocciaPropertyDescriptorData.Create(PropertyValue,
@@ -4799,6 +4878,13 @@ begin
       ClassCollector.Free;
     end;
   end;
+
+  if Assigned(Continuation) then
+    for I := 0 to High(AClassDef.FElements) do
+      if AClassDef.FElements[I].IsComputed and
+         (AClassDef.FElements[I].Kind in [cekMethod, cekGetter, cekSetter, cekField]) then
+        Continuation.ClearExpressionValue(
+          AClassDef.FElements[I].ComputedKeyExpression);
 
   Result := ClassValue;
 end;

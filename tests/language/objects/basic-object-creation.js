@@ -59,6 +59,20 @@ test("object property enumeration and inspection", () => {
   expect(Object.hasOwn(obj, "d")).toBe(false);
 });
 
+test("duplicate static property initializers evaluate in source order", () => {
+  const log = [];
+  const obj = {
+    a: log.push("first"),
+    b: log.push("middle"),
+    a: log.push("last"),
+  };
+
+  expect(log).toEqual(["first", "middle", "last"]);
+  expect(obj.a).toBe(3);
+  expect(obj.b).toBe(2);
+  expect(Object.keys(obj)).toEqual(["a", "b"]);
+});
+
 // TODO: We don't have a test to support creating objects with prototypes because we only support arrow functions.
 test("object creation with arrow function should throw a type error", () => {
   expect(() => {

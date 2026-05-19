@@ -313,6 +313,7 @@ type
     PropertyType: TGocciaPropertySourceType;
     StaticKey: string;           // For static properties, getters, setters
     ComputedIndex: Integer;      // Index into ComputedProperties list
+    Expression: TGocciaExpression; // Value expression for static properties
   end;
 
   TGocciaObjectExpression = class(TGocciaExpression)
