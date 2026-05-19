@@ -51,6 +51,32 @@ test("named group backreference with k<name>", () => {
   expect(result.groups.word).toBe("hello");
 });
 
+test("named group names accept IdentifierName code points", () => {
+  const ascii = new RegExp("(?<$>a)(?<_>b)");
+  const asciiResult = ascii.exec("ab");
+  expect(asciiResult.groups.$).toBe("a");
+  expect(asciiResult.groups._).toBe("b");
+
+  const unicode = new RegExp("(?<π>a)(?<the𝟚>b)");
+  const unicodeResult = unicode.exec("ab");
+  expect(unicodeResult.groups.π).toBe("a");
+  expect(unicodeResult.groups.the𝟚).toBe("b");
+
+  const escaped = new RegExp("(?<\\u03C0>a)\\k<\\u03C0>");
+  const escapedResult = escaped.exec("aa");
+  expect(escapedResult.groups.π).toBe("a");
+});
+
+test("invalid named group names throw SyntaxError", () => {
+  expect(() => new RegExp("(?<>a)")).toThrow(SyntaxError);
+  expect(() => new RegExp("(?<1>a)")).toThrow(SyntaxError);
+  expect(() => new RegExp("(?<\\u0031>a)")).toThrow(SyntaxError);
+  expect(() => new RegExp("(?<a-b>a)")).toThrow(SyntaxError);
+  expect(() => new RegExp("(?<a\\u002d>a)")).toThrow(SyntaxError);
+  expect(() => new RegExp("(?<🦊>a)")).toThrow(SyntaxError);
+  expect(() => new RegExp("\\k<a-b>")).toThrow(SyntaxError);
+});
+
 test("named groups in replace with $<name>", () => {
   const re = new RegExp("(?<year>\\d{4})-(?<month>\\d{2})-(?<day>\\d{2})");
   const result = "2026-04-07".replace(re, "$<day>/$<month>/$<year>");
