@@ -34,7 +34,7 @@ Source -> JSX Transformer (optional) -> Lexer -> Parser -> Compiler -> Goccia By
 | Layer | Units | Responsibility |
 |-------|-------|----------------|
 | Engine | `Goccia.Engine` | Core language globals, language configuration, source-string/source-list execution, executor dispatch |
-| Runtime | `Goccia.Runtime` | Optional host/runtime globals such as console, fetch, JSON5, TOML, YAML, CSV/TSV, text assets, SemVer, test assertions, benchmarks, FFI, and file-backed helpers |
+| Runtime | `Goccia.Runtime`, `Goccia.RuntimeExtensions.*`, `Goccia.RuntimeProfiles.*` | Runtime core, class-based host extensions such as console/fetch/data modules/SemVer/testing/benchmarks/FFI, loader/test/benchmark profiles, and file-backed helpers |
 | Executor abstraction | `Goccia.Executor` | Abstract `TGocciaExecutor` base class |
 | Interpreter executor | `Goccia.Engine` (`TGocciaInterpreterExecutor`) | Tree-walk execution via `TGocciaInterpreter` |
 | Bytecode executor | `Goccia.Engine.Backend` (`TGocciaBytecodeExecutor`) | Bytecode compile + VM execution; no interpreter dependency |
@@ -50,7 +50,7 @@ Source -> JSX Transformer (optional) -> Lexer -> Parser -> Compiler -> Goccia By
 
 For **tree-walk execution**, see [Interpreter](interpreter.md); for **bytecode execution**, see [Bytecode VM](bytecode-vm.md). For **recurring implementation patterns** and **terminology** (Define vs Assign, bindings, …), see [Core patterns](core-patterns.md).
 
-Script-vs-module entry semantics belong to `TGocciaEngine.SourceType`, because they change language execution (`this`, import metadata, and top-level scope lifetime). `TGocciaRuntime` may be attached to an engine, but it does not decide whether the entry runs as a Script or Module. File-backed convenience APIs and the default filesystem module content provider live in `Goccia.Runtime`; engine APIs accept source strings or caller-provided `TStringList` instances. CLI frontends may still read their entry file or stdin before constructing the engine, as `GocciaScriptLoaderBare` does, but that file read is outside the engine API and does not attach runtime globals.
+Script-vs-module entry semantics belong to `TGocciaEngine.SourceType`, because they change language execution (`this`, import metadata, and top-level scope lifetime). `TGocciaRuntimeCore` may be attached to an engine, but it does not decide whether the entry runs as a Script or Module. File-backed convenience APIs and the default filesystem module content provider live in `Goccia.Runtime`; host globals are added by installing concrete `TGocciaRuntimeExtension` classes or by applying a profile such as `TGocciaLoaderRuntimeProfile`. Engine APIs accept source strings or caller-provided `TStringList` instances. CLI frontends may still read their entry file or stdin before constructing the engine, as `GocciaScriptLoaderBare` does, but that file read is outside the engine API and does not attach runtime globals.
 
 ## Design Direction
 

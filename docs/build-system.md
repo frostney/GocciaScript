@@ -355,7 +355,7 @@ All compiled binaries go to the `build/` directory:
 |--------|--------|-------------|
 | `build/GocciaREPL` | `source/app/GocciaREPL.dpr` | Interactive read-eval-print loop |
 | `build/GocciaScriptLoader` | `source/app/GocciaScriptLoader.dpr` | Execute `.js` files or stdin input, with optional JSON output |
-| `build/GocciaScriptLoaderBare` | `source/app/GocciaScriptLoaderBare.dpr` | Execute file or stdin source with the core engine and CLI-local `print`; no default runtime globals |
+| `build/GocciaScriptLoaderBare` | `source/app/GocciaScriptLoaderBare.dpr` | Execute file or stdin source with the core engine and CLI-local `print`; no loader runtime profile |
 | `build/GocciaTestRunner` | `source/app/GocciaTestRunner.dpr` | JavaScript test runner |
 | `build/GocciaBenchmarkRunner` | `source/app/GocciaBenchmarkRunner.dpr` | Performance benchmark runner for files or stdin input |
 | `build/GocciaBundler` | `source/app/GocciaBundler.dpr` | Standalone bytecode compiler (source to `.gbc`) |
@@ -571,7 +571,7 @@ Runs on **ubuntu-latest x64 only** (single runner, no matrix).
 
 **`test262`** (needs build, **non-blocking**) — Checks out `tc39/test262` at the pinned SHA, runs `bun scripts/run_test262_suite.ts --suite-dir test262-suite --mode=bytecode --jobs=2 --output=test262-results.json`, and uploads the JSON report. Failing tests do not fail the job. The downstream `test262-comment` job (`if: always()`) restores the most recent `test262-baseline-` cache entry from main, then `bun scripts/run_test262_suite.ts --comment test262-results.json <baseline>` builds the markdown body and the workflow posts/updates a comment using marker `<!-- test262-results -->`. The comment shows a per-category breakdown (built-ins, harness, intl402, language, staging) with Δ-vs-main columns when a baseline is cached, an "Areas closest to 100%" sub-table, and a collapsible per-test delta list.
 
-**`cli`** (needs build) — Runs CLI behavior smoke tests via Bun (`scripts/test-cli.ts`, `scripts/test-cli-lexer.ts`, `scripts/test-cli-parser.ts`, `scripts/test-cli-config.ts`, `scripts/test-cli-apps.ts`). `test-cli-apps.ts` includes `GocciaScriptLoaderBare` coverage for stdin, `-`, file input, CLI-local `print`, module source type, absence of runtime globals, and `--mode=interpreted|bytecode` (both values plus invalid-value rejection).
+**`cli`** (needs build) — Runs CLI behavior smoke tests via Bun (`scripts/test-cli.ts`, `scripts/test-cli-lexer.ts`, `scripts/test-cli-parser.ts`, `scripts/test-cli-config.ts`, `scripts/test-cli-apps.ts`). `test-cli-apps.ts` includes `GocciaScriptLoaderBare` coverage for stdin, `-`, file input, CLI-local `print`, module source type, absence of the loader runtime profile, and `--mode=interpreted|bytecode` (both values plus invalid-value rejection).
 
 FPC is only installed once per platform in the `build` job. In `ci.yml`, the test, benchmark, cli, TOML, JSON5, and test262 conformance jobs reuse the pre-built binaries and artifacts from that job; in `pr.yml`, the test, benchmark, test262, and cli jobs do the same.
 

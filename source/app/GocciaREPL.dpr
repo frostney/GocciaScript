@@ -30,6 +30,9 @@ uses
   Goccia.REPL.Formatter,
   Goccia.REPL.LineEditor,
   Goccia.Runtime,
+  Goccia.RuntimeExtensions.Console,
+  Goccia.RuntimeExtensions.FFI,
+  Goccia.RuntimeProfiles.Loader,
   Goccia.Terminal.Colors,
   Goccia.TextFiles,
   Goccia.Token,
@@ -44,7 +47,7 @@ type
   TREPLApp = class(TGocciaCLIApplication)
   private
     FTiming: TGocciaFlagOption;
-    function EffectiveRuntimeGlobals: TGocciaRuntimeGlobals;
+    procedure InitializeRuntime(const AEngine: TGocciaEngine);
   protected
     procedure Configure; override;
     procedure ConfigureCreatedEngine(const AEngine: TGocciaEngine;
@@ -59,21 +62,29 @@ begin
   FTiming := AddFlag('timing', 'Show per-line timing');
 end;
 
-function TREPLApp.EffectiveRuntimeGlobals: TGocciaRuntimeGlobals;
+procedure TREPLApp.InitializeRuntime(const AEngine: TGocciaEngine);
+var
+  Runtime: TGocciaRuntimeCore;
 begin
-  Result := DefaultRuntimeGlobals;
+  Runtime := AttachRuntime(AEngine);
+  TGocciaLoaderRuntimeProfile.Apply(Runtime);
   if Assigned(EngineOptions) and EngineOptions.UnsafeFFI.Present then
-    Include(Result, rgFFI);
+    Runtime.Install(TGocciaFFIRuntimeExtension.Create);
 end;
 
 procedure TREPLApp.ConfigureCreatedEngine(const AEngine: TGocciaEngine;
   const AFileConfig: TConfigEntryArray);
 var
-  Runtime: TGocciaRuntimeExtension;
+  ConsoleExtension: TGocciaConsoleRuntimeExtension;
+  Runtime: TGocciaRuntimeCore;
 begin
-  Runtime := AttachRuntimeExtension(AEngine, EffectiveRuntimeGlobals);
-  if LogFileOpen and Assigned(Runtime.BuiltinConsole) then
-    Runtime.BuiltinConsole.LogCallback := HandleConsoleLog;
+  InitializeRuntime(AEngine);
+  Runtime := GetRuntime(AEngine);
+  ConsoleExtension := TGocciaConsoleRuntimeExtension(
+    Runtime.FindRuntimeExtension(TGocciaConsoleRuntimeExtension));
+  if LogFileOpen and Assigned(ConsoleExtension) and
+     Assigned(ConsoleExtension.BuiltinConsole) then
+    ConsoleExtension.BuiltinConsole.LogCallback := HandleConsoleLog;
 end;
 
 

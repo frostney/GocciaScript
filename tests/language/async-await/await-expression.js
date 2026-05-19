@@ -121,6 +121,28 @@ describe("await expression", () => {
     expect(await obj).toBe(obj);
   });
 
+  test("await converts a throwing then getter into a rejection after queued microtasks", async () => {
+    const events = [];
+    const obj = {
+      get then() {
+        events.push("getter");
+        throw new TypeError("then getter failed");
+      },
+    };
+
+    Promise.resolve().then(() => {
+      events.push("microtask");
+    });
+
+    try {
+      await obj;
+    } catch (e) {
+      events.push(e.message);
+    }
+
+    expect(events).toEqual(["getter", "microtask", "then getter failed"]);
+  });
+
   test("await works in addition expressions", async () => {
     const sum = (await Promise.resolve(10)) + (await Promise.resolve(20));
     expect(sum).toBe(30);

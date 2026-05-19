@@ -7,7 +7,7 @@
 ## Executive Summary
 
 - **Core vs runtime registration** — `TGocciaEngine` always registers core language built-ins (Math, Object, Array, String, Number, RegExp, JSON, Symbol, Set, Map, Promise, Temporal, Intl, ArrayBuffer, TypedArrays, Proxy, Reflect, Iterator, DisposableStack, etc.); `Goccia.Runtime` provides optional host/runtime globals (Console, JSON5, JSONL, TOML, YAML, CSV, TSV, Performance, TextEncoder/TextDecoder, URL, fetch, Headers, Response, SemVer)
-- **Runtime opt-ins** — `rgTestAssertions`, `rgBenchmark`, and `rgFFI` are special-purpose runtime globals that are off by default
+- **Runtime opt-ins** — Testing, benchmarking, FFI, and host/data surfaces are installed as concrete runtime extension classes
 - **Adding new built-ins** — See [Adding Built-in Types](adding-built-in-types.md) for the step-by-step recipe
 - **Always-present globals** — `globalThis` and `Goccia` namespace are registered after all built-ins
 
@@ -17,19 +17,9 @@ GocciaScript provides a set of built-in global objects that mirror JavaScript's 
 
 Core language built-ins (Math, Object, Array, Number, JSON, Symbol, Set, Map, WeakSet, WeakMap, Promise, Temporal, Intl, ArrayBuffer, Proxy, Reflect, etc.) are always registered unconditionally by the engine.
 
-Runtime globals (Console, JSON5, JSONL, TOML, YAML, CSV, TSV, Performance, TextEncoder/TextDecoder, URL, fetch, Headers, Response, SemVer) are registered by `TGocciaRuntime`. Frontends such as `GocciaScriptLoader`, `GocciaTestRunner`, `GocciaBenchmarkRunner`, and `GocciaREPL` attach that runtime; `GocciaScriptLoaderBare` does not, and exposes only a CLI-local `print(...args)` helper.
+Runtime globals (Console, JSON5, JSONL, TOML, YAML, CSV, TSV, Performance, TextEncoder/TextDecoder, URL, fetch, Headers, Response, SemVer) are registered by runtime extension classes under `source/units/Goccia.RuntimeExtensions.*.pas`. Frontends such as `GocciaScriptLoader` and `GocciaREPL` apply `TGocciaLoaderRuntimeProfile`; `GocciaTestRunner` applies the loader profile plus `TGocciaTestingLibraryRuntimeExtension`; `GocciaBenchmarkRunner` applies the loader profile plus `TGocciaBenchmarkRuntimeExtension`. `GocciaScriptLoaderBare` does not attach a runtime and exposes only a CLI-local `print(...args)` helper.
 
-Only three runtime globals are special-purpose opt-ins in `TGocciaRuntimeGlobal`:
-
-```pascal
-TGocciaRuntimeGlobal = (
-  rgTestAssertions,   // describe, test, expect (testing only)
-  rgBenchmark,        // suite, bench, runBenchmarks (benchmarking only)
-  rgFFI               // Foreign Function Interface
-);
-```
-
-The `GocciaTestRunner` adds `rgTestAssertions`, the `GocciaBenchmarkRunner` adds `rgBenchmark`, and FFI (`rgFFI`) requires the `--unsafe-ffi` CLI flag.
+FFI is not part of the loader profile. CLI tools install `TGocciaFFIRuntimeExtension` only when `--unsafe-ffi` is passed.
 
 ## Adding a New Built-in
 
@@ -624,7 +614,7 @@ See [Binary Data Built-ins](built-ins-binary-data.md) for the complete ArrayBuff
 
 ### FFI (`Goccia.Builtins.GlobalFFI.pas`)
 
-Foreign Function Interface for calling native shared libraries. Only available when `rgFFI` is enabled in the runtime (not registered by default).
+Foreign Function Interface for calling native shared libraries. Only available when `TGocciaFFIRuntimeExtension` is installed (CLI tools do this only for `--unsafe-ffi`).
 
 **FFI global object:**
 
@@ -655,7 +645,7 @@ Foreign Function Interface for calling native shared libraries. Only available w
 
 ### Test Assertions (`Goccia.Builtins.TestingLibrary.pas`)
 
-Only available when `rgTestAssertions` is enabled in the runtime.
+Only available when `TGocciaTestingLibraryRuntimeExtension` is installed in the runtime.
 
 **Test structure:**
 
@@ -709,7 +699,7 @@ All matchers support `.not` negation: `expect(value).not.toBe(wrong)`.
 
 ### Benchmark (`Goccia.Builtins.Benchmark.pas`)
 
-Only available when `rgBenchmark` is enabled in the runtime (used by the GocciaBenchmarkRunner). See [benchmarks.md](benchmarks.md) for usage, output formats, and CI integration.
+Only available when `TGocciaBenchmarkRuntimeExtension` is installed in the runtime (used by the GocciaBenchmarkRunner). See [benchmarks.md](benchmarks.md) for usage, output formats, and CI integration.
 
 **Benchmark structure:**
 
