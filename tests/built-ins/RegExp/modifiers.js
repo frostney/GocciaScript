@@ -255,6 +255,15 @@ test("(?i:...) enables Unicode case folding for word character classes", () => {
   expect(/(?i:\W)/u.test("\u212a")).toBe(false);
 });
 
+test("(?i:...) preserves ASCII and punctuation behavior for word character classes", () => {
+  expect(/(?i:\w)/u.test("A")).toBe(true);
+  expect(/(?i:\w)/u.test("_")).toBe(true);
+  expect(/(?i:\w)/u.test("-")).toBe(false);
+  expect(/(?i:\W)/u.test("A")).toBe(false);
+  expect(/(?i:\W)/u.test("_")).toBe(false);
+  expect(/(?i:\W)/u.test("-")).toBe(true);
+});
+
 test("(?-i:...) disables Unicode case folding for word escapes", () => {
   const boundary = new RegExp("(?-i:\\b)", "iu");
   const word = new RegExp("(?-i:\\w)", "iu");
