@@ -47,6 +47,14 @@ const
   KEYWORD_OVERRIDE     = 'override';
   KEYWORD_ABSTRACT     = 'abstract';
 
+  // Contextual keywords that the lexer tokenizes directly. Other contextual
+  // keywords stay as identifiers so the parser can interpret them by context.
+  TokenizedContextualKeywords: array[0..2] of string = (
+    KEYWORD_AS,
+    KEYWORD_FROM,
+    KEYWORD_STATIC
+  );
+
 implementation
 
 end.

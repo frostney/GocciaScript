@@ -696,42 +696,7 @@ end;
 
 function TGocciaParser.IsReservedKeywordName(const AName: string): Boolean;
 begin
-  Result := (AName = KEYWORD_BREAK) or
-            (AName = KEYWORD_CASE) or
-            (AName = KEYWORD_CONTINUE) or
-            (AName = KEYWORD_CATCH) or
-            (AName = KEYWORD_CLASS) or
-            (AName = KEYWORD_CONST) or
-            (AName = KEYWORD_DEFAULT) or
-            (AName = KEYWORD_DELETE) or
-            (AName = KEYWORD_DO) or
-            (AName = KEYWORD_ELSE) or
-            (AName = KEYWORD_ENUM) or
-            (AName = KEYWORD_EXPORT) or
-            (AName = KEYWORD_EXTENDS) or
-            (AName = KEYWORD_FALSE) or
-            (AName = KEYWORD_FINALLY) or
-            (AName = KEYWORD_FOR) or
-            (AName = KEYWORD_FUNCTION) or
-            (AName = KEYWORD_IF) or
-            (AName = KEYWORD_IMPORT) or
-            (AName = KEYWORD_IN) or
-            (AName = KEYWORD_INSTANCEOF) or
-            (AName = KEYWORD_LET) or
-            (AName = KEYWORD_NEW) or
-            (AName = KEYWORD_NULL) or
-            (AName = KEYWORD_RETURN) or
-            (AName = KEYWORD_SUPER) or
-            (AName = KEYWORD_SWITCH) or
-            (AName = KEYWORD_THIS) or
-            (AName = KEYWORD_THROW) or
-            (AName = KEYWORD_TRUE) or
-            (AName = KEYWORD_TRY) or
-            (AName = KEYWORD_TYPEOF) or
-            (AName = KEYWORD_VAR) or
-            (AName = KEYWORD_VOID) or
-            (AName = KEYWORD_WHILE) or
-            (AName = KEYWORD_WITH);
+  Result := IsReservedKeyword(AName);
 end;
 
 function TGocciaParser.CheckUnescapedIdentifierKeyword(

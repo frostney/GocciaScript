@@ -93,6 +93,9 @@ type
 implementation
 
 uses
+  TypInfo,
+
+  OrderedStringMap,
   TextSemantics,
 
   Goccia.Error,
@@ -108,6 +111,13 @@ const
   UTF8_LINE_SEPARATOR_FINAL_BYTE = #$A8;
   UTF8_PARAGRAPH_SEPARATOR_FINAL_BYTE = #$A9;
   UTF8_LINE_TERMINATOR_BYTE_LENGTH = 3;
+  TOKEN_TYPE_PREFIX = 'gtt';
+
+type
+  TKeywordTokenMap = TOrderedStringMap<TGocciaTokenType>;
+
+var
+  KeywordTokens: TKeywordTokenMap;
 
 function IsValidHexString(const AValue: string): Boolean;
 var
@@ -121,71 +131,54 @@ begin
   Result := True;
 end;
 
-function TryKeywordToken(const AText: string; out ATokenType: TGocciaTokenType): Boolean; inline;
+function TryKeywordTokenTypeForName(const AKeyword: string;
+  out ATokenType: TGocciaTokenType): Boolean;
 var
-  Len: Integer;
+  TokenName: string;
+  TokenOrdinal: Integer;
 begin
-  Len := Length(AText);
+  if AKeyword = '' then
+    Exit(False);
+
+  TokenName := TOKEN_TYPE_PREFIX + UpCase(AKeyword[1]) + Copy(AKeyword, 2, MaxInt);
+  TokenOrdinal := GetEnumValue(TypeInfo(TGocciaTokenType), TokenName);
+  if TokenOrdinal < 0 then
+    Exit(False);
+
+  ATokenType := TGocciaTokenType(TokenOrdinal);
   Result := True;
-  case Len of
-    2:
-      if AText = KEYWORD_AS then ATokenType := gttAs
-      else if AText = KEYWORD_DO then ATokenType := gttDo
-      else if AText = KEYWORD_IF then ATokenType := gttIf
-      else if AText = KEYWORD_IN then ATokenType := gttIn
-      else Result := False;
-    3:
-      if AText = KEYWORD_FOR then ATokenType := gttFor
-      else if AText = KEYWORD_LET then ATokenType := gttLet
-      else if AText = KEYWORD_NEW then ATokenType := gttNew
-      else if AText = KEYWORD_TRY then ATokenType := gttTry
-      else if AText = KEYWORD_VAR then ATokenType := gttVar
-      else Result := False;
-    4:
-      if AText = KEYWORD_CASE then ATokenType := gttCase
-      else if AText = KEYWORD_ELSE then ATokenType := gttElse
-      else if AText = KEYWORD_ENUM then ATokenType := gttEnum
-      else if AText = KEYWORD_FROM then ATokenType := gttFrom
-      else if AText = KEYWORD_NULL then ATokenType := gttNull
-      else if AText = KEYWORD_THIS then ATokenType := gttThis
-      else if AText = KEYWORD_TRUE then ATokenType := gttTrue
-      else if AText = KEYWORD_VOID then ATokenType := gttVoid
-      else if AText = KEYWORD_WITH then ATokenType := gttWith
-      else Result := False;
-    5:
-      if AText = KEYWORD_BREAK then ATokenType := gttBreak
-      else if AText = KEYWORD_CATCH then ATokenType := gttCatch
-      else if AText = KEYWORD_CLASS then ATokenType := gttClass
-      else if AText = KEYWORD_CONST then ATokenType := gttConst
-      else if AText = KEYWORD_FALSE then ATokenType := gttFalse
-      else if AText = KEYWORD_SUPER then ATokenType := gttSuper
-      else if AText = KEYWORD_THROW then ATokenType := gttThrow
-      else if AText = KEYWORD_WHILE then ATokenType := gttWhile
-      else Result := False;
-    6:
-      if AText = KEYWORD_DELETE then ATokenType := gttDelete
-      else if AText = KEYWORD_EXPORT then ATokenType := gttExport
-      else if AText = KEYWORD_IMPORT then ATokenType := gttImport
-      else if AText = KEYWORD_RETURN then ATokenType := gttReturn
-      else if AText = KEYWORD_STATIC then ATokenType := gttStatic
-      else if AText = KEYWORD_SWITCH then ATokenType := gttSwitch
-      else if AText = KEYWORD_TYPEOF then ATokenType := gttTypeof
-      else Result := False;
-    7:
-      if AText = KEYWORD_DEFAULT then ATokenType := gttDefault
-      else if AText = KEYWORD_EXTENDS then ATokenType := gttExtends
-      else if AText = KEYWORD_FINALLY then ATokenType := gttFinally
-      else Result := False;
-    8:
-      if AText = KEYWORD_CONTINUE then ATokenType := gttContinue
-      else if AText = KEYWORD_FUNCTION then ATokenType := gttFunction
-      else Result := False;
-    10:
-      if AText = KEYWORD_INSTANCEOF then ATokenType := gttInstanceof
-      else Result := False;
-  else
-    Result := False;
-  end;
+end;
+
+procedure RegisterKeywordToken(const AKeyword: string);
+var
+  TokenType: TGocciaTokenType;
+begin
+  if not TryKeywordTokenTypeForName(AKeyword, TokenType) then
+    raise Exception.CreateFmt('Keyword "%s" does not match a token type', [AKeyword]);
+
+  KeywordTokens.Add(AKeyword, TokenType);
+end;
+
+procedure RegisterKeywordTokens(const AKeywords: array of string);
+var
+  I: Integer;
+begin
+  for I := Low(AKeywords) to High(AKeywords) do
+    RegisterKeywordToken(AKeywords[I]);
+end;
+
+procedure BuildKeywordTokenMap;
+begin
+  // Keyword token names intentionally follow the gtt + PascalCase(keyword)
+  // convention, so the lexer map can be derived from the centralized lists.
+  KeywordTokens := TKeywordTokenMap.Create(64);
+  RegisterKeywordTokens(ReservedKeywords);
+  RegisterKeywordTokens(TokenizedContextualKeywords);
+end;
+
+function TryKeywordToken(const AText: string; out ATokenType: TGocciaTokenType): Boolean; inline;
+begin
+  Result := KeywordTokens.TryGetValue(AText, ATokenType);
 end;
 
 constructor TGocciaLexer.Create(const ASource, AFileName: string);
@@ -1737,5 +1730,11 @@ begin
   FTokens.Add(TGocciaToken.Create(gttEOF, '', FLine, FColumn, FColumn));
   Result := FTokens;
 end;
+
+initialization
+  BuildKeywordTokenMap;
+
+finalization
+  KeywordTokens.Free;
 
 end.
