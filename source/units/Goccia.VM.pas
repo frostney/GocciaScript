@@ -6004,17 +6004,28 @@ var
   procedure DefineDecoratedMethodProperty(const AIsStatic: Boolean;
     const AName: string; const AKey, AValue: TGocciaValue);
   var
-    TargetValue, KeyValue: TGocciaValue;
+    TargetObject: TGocciaObjectValue;
+    KeyValue: TGocciaValue;
   begin
     if AIsStatic then
-      TargetValue := ClassVal
+      TargetObject := TGocciaObjectValue(ClassVal)
     else
-      TargetValue := TGocciaClassValue(ClassVal).Prototype;
+      TargetObject := TGocciaClassValue(ClassVal).Prototype;
     if Assigned(AKey) then
       KeyValue := AKey
     else
       KeyValue := TGocciaStringLiteralValue.Create(AName);
-    DefineMethodPropertyByKey(TargetValue, ValueToRegister(KeyValue), AValue);
+    SetBytecodeHomeObject(AValue, TargetObject);
+    if KeyValue is TGocciaSymbolValue then
+      TargetObject.DefineSymbolProperty(
+        TGocciaSymbolValue(KeyValue),
+        TGocciaPropertyDescriptorData.Create(
+          AValue, [pfConfigurable, pfWritable]))
+    else
+      TargetObject.DefineProperty(
+        KeyValue.ToStringLiteral.Value,
+        TGocciaPropertyDescriptorData.Create(
+          AValue, [pfConfigurable, pfWritable]));
   end;
 
   function GetDecoratedAccessorDescriptor(const AIsStatic: Boolean;
@@ -6039,31 +6050,85 @@ var
   procedure DefineDecoratedGetterProperty(const AIsStatic: Boolean;
     const AName: string; const AKey, AGetter: TGocciaValue);
   var
+    TargetObject: TGocciaObjectValue;
     KeyValue: TGocciaValue;
+    ExistingDescriptor: TGocciaPropertyDescriptor;
+    ExistingSetter: TGocciaValue;
   begin
+    if AIsStatic then
+      TargetObject := TGocciaObjectValue(ClassVal)
+    else
+      TargetObject := TGocciaClassValue(ClassVal).Prototype;
     if Assigned(AKey) then
       KeyValue := AKey
     else
       KeyValue := TGocciaStringLiteralValue.Create(AName);
-    if AIsStatic then
-      DefineStaticGetterPropertyByKey(ClassVal, KeyValue, AGetter)
+
+    SetBytecodeHomeObject(AGetter, TargetObject);
+    if KeyValue is TGocciaSymbolValue then
+      ExistingDescriptor := TargetObject.GetOwnSymbolPropertyDescriptor(
+        TGocciaSymbolValue(KeyValue))
     else
-      DefineGetterPropertyByKey(ClassVal, KeyValue, AGetter);
+      ExistingDescriptor := TargetObject.GetOwnPropertyDescriptor(
+        KeyValue.ToStringLiteral.Value);
+
+    ExistingSetter := nil;
+    if (ExistingDescriptor is TGocciaPropertyDescriptorAccessor) and
+       Assigned(TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Setter) then
+      ExistingSetter := TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Setter;
+
+    if KeyValue is TGocciaSymbolValue then
+      TargetObject.DefineSymbolProperty(
+        TGocciaSymbolValue(KeyValue),
+        TGocciaPropertyDescriptorAccessor.Create(
+          AGetter, ExistingSetter, [pfConfigurable]))
+    else
+      TargetObject.DefineProperty(
+        KeyValue.ToStringLiteral.Value,
+        TGocciaPropertyDescriptorAccessor.Create(
+          AGetter, ExistingSetter, [pfConfigurable]));
   end;
 
   procedure DefineDecoratedSetterProperty(const AIsStatic: Boolean;
     const AName: string; const AKey, ASetter: TGocciaValue);
   var
+    TargetObject: TGocciaObjectValue;
     KeyValue: TGocciaValue;
+    ExistingDescriptor: TGocciaPropertyDescriptor;
+    ExistingGetter: TGocciaValue;
   begin
+    if AIsStatic then
+      TargetObject := TGocciaObjectValue(ClassVal)
+    else
+      TargetObject := TGocciaClassValue(ClassVal).Prototype;
     if Assigned(AKey) then
       KeyValue := AKey
     else
       KeyValue := TGocciaStringLiteralValue.Create(AName);
-    if AIsStatic then
-      DefineStaticSetterPropertyByKey(ClassVal, KeyValue, ASetter)
+
+    SetBytecodeHomeObject(ASetter, TargetObject);
+    if KeyValue is TGocciaSymbolValue then
+      ExistingDescriptor := TargetObject.GetOwnSymbolPropertyDescriptor(
+        TGocciaSymbolValue(KeyValue))
     else
-      DefineSetterPropertyByKey(ClassVal, KeyValue, ASetter);
+      ExistingDescriptor := TargetObject.GetOwnPropertyDescriptor(
+        KeyValue.ToStringLiteral.Value);
+
+    ExistingGetter := nil;
+    if (ExistingDescriptor is TGocciaPropertyDescriptorAccessor) and
+       Assigned(TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Getter) then
+      ExistingGetter := TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Getter;
+
+    if KeyValue is TGocciaSymbolValue then
+      TargetObject.DefineSymbolProperty(
+        TGocciaSymbolValue(KeyValue),
+        TGocciaPropertyDescriptorAccessor.Create(
+          ExistingGetter, ASetter, [pfConfigurable]))
+    else
+      TargetObject.DefineProperty(
+        KeyValue.ToStringLiteral.Value,
+        TGocciaPropertyDescriptorAccessor.Create(
+          ExistingGetter, ASetter, [pfConfigurable]));
   end;
 begin
   if not Assigned(FActiveDecoratorSession) then
@@ -6382,6 +6447,7 @@ begin
   ClassVal.AppendMethodInitializers(InitializerResults);
   InitializerResults := Session.FieldCollector.GetInitializers;
   ClassVal.AppendFieldInitializers(InitializerResults);
+  ClassVal.RunDecoratorStaticFieldInitializers;
 
   InitializerResults := Session.ClassCollector.GetInitializers;
   for I := 0 to High(InitializerResults) do

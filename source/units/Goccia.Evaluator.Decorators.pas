@@ -161,6 +161,8 @@ begin
         TGocciaObjectValue(Target).AssignSymbolProperty(
           TGocciaSymbolValue(FPropertyKey), NewValue);
     end
+    else if Target is TGocciaClassValue then
+      TGocciaClassValue(Target).SetProperty(FPropertyName, NewValue)
     else
       TGocciaObjectValue(Target).AssignProperty(FPropertyName, NewValue);
   end;

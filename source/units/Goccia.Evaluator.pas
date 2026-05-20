@@ -5070,6 +5070,7 @@ begin
     ClassValue.SetMethodInitializers(InitializerResults);
     InitializerResults := FieldCollector.GetInitializers;
     ClassValue.SetFieldInitializers(InitializerResults);
+    ClassValue.RunDecoratorStaticFieldInitializers;
 
     // Run class-level initializers after static fields
     InitializerResults := ClassCollector.GetInitializers;

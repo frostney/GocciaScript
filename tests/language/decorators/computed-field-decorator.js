@@ -202,4 +202,92 @@ describe("computed field decorators", () => {
     expect(receivedName).toBe("staticName");
     expect(C.staticName).toBe(1);
   });
+
+  test("static string computed field decorator initializer updates resolved key", () => {
+    const key = "staticInit";
+    const decorate = (value, context) => {
+      return (initialValue) => initialValue + 1;
+    };
+
+    class C {
+      @decorate
+      static [key] = 41;
+    }
+
+    expect(C.staticInit).toBe(42);
+  });
+
+  test("static symbol computed field decorator initializer updates resolved key", () => {
+    const key = Symbol("static-init");
+    const decorate = (value, context) => {
+      return (initialValue) => initialValue + 1;
+    };
+
+    class C {
+      @decorate
+      static [key] = 41;
+    }
+
+    expect(C[key]).toBe(42);
+  });
+
+  test("static string computed field access helper writes through class properties", () => {
+    const key = "name";
+    const decorate = (value, context) => {
+      context.addInitializer(({ init() {
+        context.access.set(this, "DecoratedName");
+      } }).init);
+    };
+
+    class Original {
+      @decorate
+      static [key] = "InitialName";
+    }
+
+    expect(Original.name).toBe("DecoratedName");
+  });
+
+  test("decorated computed methods remain non-enumerable", () => {
+    const key = "method";
+    const decorate = (value, context) => value;
+
+    class C {
+      @decorate
+      [key]() {
+        return 1;
+      }
+    }
+
+    const descriptor = Object.getOwnPropertyDescriptor(C.prototype, key);
+    expect(descriptor.enumerable).toBe(false);
+  });
+
+  test("decorated computed getters remain non-enumerable", () => {
+    const key = "value";
+    const decorate = (value, context) => value;
+
+    class C {
+      @decorate
+      get [key]() {
+        return 1;
+      }
+    }
+
+    const descriptor = Object.getOwnPropertyDescriptor(C.prototype, key);
+    expect(descriptor.enumerable).toBe(false);
+  });
+
+  test("decorated computed setters remain non-enumerable", () => {
+    const key = "value";
+    const decorate = (value, context) => value;
+
+    class C {
+      @decorate
+      set [key](next) {
+      }
+    }
+
+    const descriptor = Object.getOwnPropertyDescriptor(C.prototype, key);
+    expect(descriptor.enumerable).toBe(false);
+  });
 });

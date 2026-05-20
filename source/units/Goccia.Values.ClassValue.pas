@@ -31,6 +31,14 @@ type
     Initializer: TGocciaExpression;
   end;
 
+  TGocciaDecoratorFieldInitializerEntry = record
+    Name: string;
+    ComputedKey: TGocciaValue;
+    Initializer: TGocciaValue;
+    IsPrivate: Boolean;
+    IsStatic: Boolean;
+  end;
+
   TGocciaClassValue = class(TGocciaObjectValue)
   private
     FName: string;
@@ -52,13 +60,8 @@ type
     FPrivateBrandToken: string;
     FMethodInitializers: array of TGocciaValue;
     FFieldInitializers: array of TGocciaValue;
-    FDecoratorFieldInitializers: array of record
-      Name: string;
-      ComputedKey: TGocciaValue;
-      Initializer: TGocciaValue;
-      IsPrivate: Boolean;
-      IsStatic: Boolean;
-    end;
+    FDecoratorFieldInitializers: array of TGocciaDecoratorFieldInitializerEntry;
+    FStaticDecoratorFieldInitializers: array of TGocciaDecoratorFieldInitializerEntry;
     function GetPropertyGetter(const AName: string): TGocciaFunctionBase; inline;
     function GetPropertySetter(const AName: string): TGocciaFunctionBase; inline;
     function GetStaticPropertyGetter(const AName: string): TGocciaFunctionBase; inline;
@@ -153,6 +156,7 @@ type
     procedure RunMethodInitializers(const AInstance: TGocciaValue);
     procedure RunFieldInitializers(const AInstance: TGocciaValue);
     procedure RunDecoratorFieldInitializers(const AInstance: TGocciaValue);
+    procedure RunDecoratorStaticFieldInitializers;
   end;
 
   TGocciaArrayClassValue = class(TGocciaClassValue)
@@ -447,6 +451,13 @@ begin
     if Assigned(FDecoratorFieldInitializers[I].ComputedKey) then
       FDecoratorFieldInitializers[I].ComputedKey.MarkReferences;
   end;
+  for I := 0 to High(FStaticDecoratorFieldInitializers) do
+  begin
+    if Assigned(FStaticDecoratorFieldInitializers[I].Initializer) then
+      FStaticDecoratorFieldInitializers[I].Initializer.MarkReferences;
+    if Assigned(FStaticDecoratorFieldInitializers[I].ComputedKey) then
+      FStaticDecoratorFieldInitializers[I].ComputedKey.MarkReferences;
+  end;
   for I := 0 to High(FFieldOrder) do
     if Assigned(FFieldOrder[I].ComputedKey) then
       FFieldOrder[I].ComputedKey.MarkReferences;
@@ -720,13 +731,30 @@ begin
 end;
 
 procedure TGocciaClassValue.AddFieldInitializerWithKey(const AName: string; const AComputedKey: TGocciaValue; const AInitializer: TGocciaValue; const AIsPrivate, AIsStatic: Boolean);
+var
+  EntryIndex: Integer;
 begin
-  SetLength(FDecoratorFieldInitializers, Length(FDecoratorFieldInitializers) + 1);
-  FDecoratorFieldInitializers[High(FDecoratorFieldInitializers)].Name := AName;
-  FDecoratorFieldInitializers[High(FDecoratorFieldInitializers)].ComputedKey := AComputedKey;
-  FDecoratorFieldInitializers[High(FDecoratorFieldInitializers)].Initializer := AInitializer;
-  FDecoratorFieldInitializers[High(FDecoratorFieldInitializers)].IsPrivate := AIsPrivate;
-  FDecoratorFieldInitializers[High(FDecoratorFieldInitializers)].IsStatic := AIsStatic;
+  if AIsStatic then
+  begin
+    SetLength(FStaticDecoratorFieldInitializers,
+      Length(FStaticDecoratorFieldInitializers) + 1);
+    EntryIndex := High(FStaticDecoratorFieldInitializers);
+    FStaticDecoratorFieldInitializers[EntryIndex].Name := AName;
+    FStaticDecoratorFieldInitializers[EntryIndex].ComputedKey := AComputedKey;
+    FStaticDecoratorFieldInitializers[EntryIndex].Initializer := AInitializer;
+    FStaticDecoratorFieldInitializers[EntryIndex].IsPrivate := AIsPrivate;
+    FStaticDecoratorFieldInitializers[EntryIndex].IsStatic := AIsStatic;
+    Exit;
+  end;
+
+  SetLength(FDecoratorFieldInitializers,
+    Length(FDecoratorFieldInitializers) + 1);
+  EntryIndex := High(FDecoratorFieldInitializers);
+  FDecoratorFieldInitializers[EntryIndex].Name := AName;
+  FDecoratorFieldInitializers[EntryIndex].ComputedKey := AComputedKey;
+  FDecoratorFieldInitializers[EntryIndex].Initializer := AInitializer;
+  FDecoratorFieldInitializers[EntryIndex].IsPrivate := AIsPrivate;
+  FDecoratorFieldInitializers[EntryIndex].IsStatic := AIsStatic;
 end;
 
 procedure TGocciaClassValue.SetMethodInitializers(const AInitializers: array of TGocciaValue);
@@ -882,6 +910,56 @@ begin
       finally
         Args.Free;
       end;
+    end;
+  end;
+end;
+
+procedure TGocciaClassValue.RunDecoratorStaticFieldInitializers;
+var
+  Idx: Integer;
+  Args: TGocciaArgumentsCollection;
+  InitResult, OriginalValue: TGocciaValue;
+  PropertyKey: TGocciaValue;
+  PropertyName: string;
+begin
+  for Idx := 0 to High(FStaticDecoratorFieldInitializers) do
+  begin
+    PropertyKey := FStaticDecoratorFieldInitializers[Idx].ComputedKey;
+    if FStaticDecoratorFieldInitializers[Idx].IsPrivate then
+    begin
+      if not FPrivateStaticProperties.TryGetValue(
+        FStaticDecoratorFieldInitializers[Idx].Name, OriginalValue) then
+        OriginalValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+    end
+    else if PropertyKey is TGocciaSymbolValue then
+      OriginalValue := GetSymbolProperty(TGocciaSymbolValue(PropertyKey))
+    else
+    begin
+      if Assigned(PropertyKey) then
+        PropertyName := PropertyKey.ToStringLiteral.Value
+      else
+        PropertyName := FStaticDecoratorFieldInitializers[Idx].Name;
+      OriginalValue := GetProperty(PropertyName);
+    end;
+    if not Assigned(OriginalValue) then
+      OriginalValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+
+    Args := TGocciaArgumentsCollection.Create([OriginalValue]);
+    try
+      InitResult := TGocciaFunctionBase(
+        FStaticDecoratorFieldInitializers[Idx].Initializer).Call(Args, Self);
+      if Assigned(InitResult) and not (InitResult is TGocciaUndefinedLiteralValue) then
+      begin
+        if FStaticDecoratorFieldInitializers[Idx].IsPrivate then
+          AddPrivateStaticProperty(
+            FStaticDecoratorFieldInitializers[Idx].Name, InitResult)
+        else if PropertyKey is TGocciaSymbolValue then
+          AssignSymbolProperty(TGocciaSymbolValue(PropertyKey), InitResult)
+        else
+          SetProperty(PropertyName, InitResult);
+      end;
+    finally
+      Args.Free;
     end;
   end;
 end;
