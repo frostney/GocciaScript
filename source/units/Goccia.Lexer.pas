@@ -124,6 +124,22 @@ begin
   Result := True;
 end;
 
+function IsPotentialKeywordText(const AText: string): Boolean; inline;
+var
+  I: Integer;
+  Len: Integer;
+begin
+  Len := Length(AText);
+  if (Len < 2) or (Len > 10) then
+    Exit(False);
+
+  for I := 1 to Len do
+    if not CharInSet(AText[I], ['a'..'z']) then
+      Exit(False);
+
+  Result := True;
+end;
+
 constructor TGocciaLexer.Create(const ASource, AFileName: string);
 begin
   FSource := ASource;
@@ -1407,7 +1423,8 @@ begin
 
   Text := SB.ToString;
 
-  if (not HadEscape) and FKeywords.TryGetValue(Text, TokenType) then
+  if (not HadEscape) and IsPotentialKeywordText(Text) and
+     FKeywords.TryGetValue(Text, TokenType) then
     AddToken(TokenType, Text)
   else
     AddToken(gttIdentifier, Text, HadEscape);
