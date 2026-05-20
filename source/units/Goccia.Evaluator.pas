@@ -4461,13 +4461,14 @@ begin
     // replay keys already resolved before a later computed name suspended.
     HasReplayedComputedKey := False;
     if Assigned(Continuation) then
-      HasReplayedComputedKey := Continuation.TakeExpressionValue(
+      HasReplayedComputedKey := Continuation.TakeCompletedExpressionValue(
         Elem.ComputedKeyExpression, ComputedKey);
     if not HasReplayedComputedKey then
       ComputedKey := ToPropertyKey(EvaluateExpression(
         Elem.ComputedKeyExpression, AContext));
     if Assigned(Continuation) then
-      Continuation.SaveExpressionValue(Elem.ComputedKeyExpression, ComputedKey);
+      Continuation.SaveCompletedExpressionValue(
+        Elem.ComputedKeyExpression, ComputedKey);
 
     ResolvedComputedElementKeys[I] := ComputedKey;
 
@@ -5107,7 +5108,7 @@ begin
     for I := 0 to High(AClassDef.FElements) do
       if AClassDef.FElements[I].IsComputed and
          (AClassDef.FElements[I].Kind in [cekMethod, cekGetter, cekSetter, cekField, cekAccessor]) then
-        Continuation.ClearExpressionValue(
+        Continuation.ClearCompletedExpressionValue(
           AClassDef.FElements[I].ComputedKeyExpression);
 
   Result := ClassValue;

@@ -121,6 +121,7 @@ type
       const AContext: TGocciaEvaluationContext): TGocciaValue;
     procedure SaveCompletedExpressionValue(const AExpression: TObject; const AValue: TGocciaValue);
     function TakeCompletedExpressionValue(const AExpression: TObject; out AValue: TGocciaValue): Boolean;
+    procedure ClearCompletedExpressionValue(const AExpression: TObject);
     procedure SaveExpressionValue(const AExpression: TObject; const AValue: TGocciaValue);
     function TakeExpressionValue(const AExpression: TObject; out AValue: TGocciaValue): Boolean;
     procedure ClearExpressionValue(const AExpression: TObject);
@@ -964,6 +965,12 @@ begin
   if Result then
     // Consume replayed completed values; statement completion clears the rest.
     FCompletedExpressionValues.Remove(AExpression);
+end;
+
+procedure TGocciaGeneratorContinuation.ClearCompletedExpressionValue(
+  const AExpression: TObject);
+begin
+  FCompletedExpressionValues.Remove(AExpression);
 end;
 
 procedure TGocciaGeneratorContinuation.SaveExpressionValue(
