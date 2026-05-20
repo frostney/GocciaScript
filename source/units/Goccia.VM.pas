@@ -197,7 +197,7 @@ type
       const AArguments: TGocciaRegisterArray): TGocciaValue;
     procedure BeginDecorators(const AClassValue, ASuperValue: TGocciaValue);
     procedure ApplyElementDecorator(const ADecoratorFn: TGocciaValue;
-      const ADescriptor: string);
+      const ADescriptor: string; const AComputedKey: TGocciaValue = nil);
     procedure ApplyClassDecorator(const ADecoratorFn: TGocciaValue);
     function FinishDecorators(const ACurrentValue: TGocciaValue): TGocciaValue;
     function GetSuperPropertyValue(const ASuperValue, AThisValue: TGocciaValue;
@@ -5946,11 +5946,13 @@ begin
 end;
 
 procedure TGocciaVM.ApplyElementDecorator(const ADecoratorFn: TGocciaValue;
-  const ADescriptor: string);
+  const ADescriptor: string; const AComputedKey: TGocciaValue = nil);
 var
   Session: TGocciaVMDecoratorSession;
   Kind: Char;
   Name: string;
+  ElementName: string;
+  ElementKey: TGocciaValue;
   Flags: Integer;
   IsStatic, IsPrivate: Boolean;
   ClassVal, DecoratorResult, ElementValue: TGocciaValue;
@@ -5976,6 +5978,15 @@ begin
   ParseElementDescriptor(ADescriptor, Kind, Name, Flags);
   IsStatic := (Flags and 1) <> 0;
   IsPrivate := (Flags and 2) <> 0;
+  ElementName := Name;
+  ElementKey := nil;
+  if (not IsPrivate) and Assigned(AComputedKey) and
+     not (AComputedKey is TGocciaUndefinedLiteralValue) then
+  begin
+    ElementKey := AComputedKey;
+    if not (ElementKey is TGocciaSymbolValue) then
+      ElementName := ElementKey.ToStringLiteral.Value;
+  end;
 
   case Kind of
     'm': KindStr := 'method';
@@ -5993,6 +6004,11 @@ begin
   if IsPrivate then
     ContextObject.AssignProperty(PROP_NAME,
       TGocciaStringLiteralValue.Create('#' + Name))
+  else if ElementKey is TGocciaSymbolValue then
+    ContextObject.AssignProperty(PROP_NAME, ElementKey)
+  else if Assigned(ElementKey) then
+    ContextObject.AssignProperty(PROP_NAME,
+      TGocciaStringLiteralValue.Create(ElementName))
   else
     ContextObject.AssignProperty(PROP_NAME,
       TGocciaStringLiteralValue.Create(Name));
@@ -6017,10 +6033,10 @@ begin
         if IsPrivate then
           ElementValue := TGocciaClassValue(ClassVal).GetPrivateMethod(Name)
         else if IsStatic then
-          ElementValue := TGocciaClassValue(ClassVal).GetProperty(Name)
+          ElementValue := TGocciaClassValue(ClassVal).GetProperty(ElementName)
         else
-          ElementValue := TGocciaClassValue(ClassVal).Prototype.GetProperty(Name);
-        AccessGetterHelper := TGocciaAccessGetter.Create(ElementValue, Name);
+          ElementValue := TGocciaClassValue(ClassVal).Prototype.GetProperty(ElementName);
+        AccessGetterHelper := TGocciaAccessGetter.Create(ElementValue, ElementName);
         AccessObject.AssignProperty(PROP_GET,
           TGocciaNativeFunctionValue.CreateWithoutPrototype(
             AccessGetterHelper.Get, PROP_GET, 0));
@@ -6028,8 +6044,8 @@ begin
       end;
     'f', 'a':
       begin
-        AccessGetterHelper := TGocciaAccessGetter.Create(nil, Name);
-        AccessSetterHelper := TGocciaAccessSetter.Create(Name);
+        AccessGetterHelper := TGocciaAccessGetter.Create(nil, ElementName);
+        AccessSetterHelper := TGocciaAccessSetter.Create(ElementName);
         AccessObject.AssignProperty(PROP_GET,
           TGocciaNativeFunctionValue.CreateWithoutPrototype(
             AccessGetterHelper.Get, PROP_GET, 0));
@@ -6058,18 +6074,18 @@ begin
         if IsPrivate then
           ElementValue := TGocciaClassValue(ClassVal).PrivatePropertyGetter[Name]
         else if IsStatic then
-          ElementValue := TGocciaClassValue(ClassVal).StaticPropertyGetter[Name]
+          ElementValue := TGocciaClassValue(ClassVal).StaticPropertyGetter[ElementName]
         else
-          ElementValue := TGocciaClassValue(ClassVal).PropertyGetter[Name];
+          ElementValue := TGocciaClassValue(ClassVal).PropertyGetter[ElementName];
       end;
     's':
       begin
         if IsPrivate then
           ElementValue := TGocciaClassValue(ClassVal).PrivatePropertySetter[Name]
         else if IsStatic then
-          ElementValue := TGocciaClassValue(ClassVal).StaticPropertySetter[Name]
+          ElementValue := TGocciaClassValue(ClassVal).StaticPropertySetter[ElementName]
         else
-          ElementValue := TGocciaClassValue(ClassVal).PropertySetter[Name];
+          ElementValue := TGocciaClassValue(ClassVal).PropertySetter[ElementName];
       end;
     'f':
       ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -6079,16 +6095,16 @@ begin
         if IsStatic then
         begin
           AutoAccessorValue.AssignProperty(PROP_GET,
-            TGocciaClassValue(ClassVal).StaticPropertyGetter[Name]);
+            TGocciaClassValue(ClassVal).StaticPropertyGetter[ElementName]);
           AutoAccessorValue.AssignProperty(PROP_SET,
-            TGocciaClassValue(ClassVal).StaticPropertySetter[Name]);
+            TGocciaClassValue(ClassVal).StaticPropertySetter[ElementName]);
         end
         else
         begin
           AutoAccessorValue.AssignProperty(PROP_GET,
-            TGocciaClassValue(ClassVal).PropertyGetter[Name]);
+            TGocciaClassValue(ClassVal).PropertyGetter[ElementName]);
           AutoAccessorValue.AssignProperty(PROP_SET,
-            TGocciaClassValue(ClassVal).PropertySetter[Name]);
+            TGocciaClassValue(ClassVal).PropertySetter[ElementName]);
         end;
         ElementValue := AutoAccessorValue;
       end;
@@ -6117,10 +6133,10 @@ begin
           TGocciaClassValue(ClassVal).Prototype.AssignProperty(
             '#' + Name, DecoratorResult)
         else if IsStatic then
-          TGocciaClassValue(ClassVal).SetProperty(Name, DecoratorResult)
+          TGocciaClassValue(ClassVal).SetProperty(ElementName, DecoratorResult)
         else
           TGocciaClassValue(ClassVal).Prototype.AssignProperty(
-            Name, DecoratorResult);
+            ElementName, DecoratorResult);
       end;
     'g':
       begin
@@ -6128,16 +6144,16 @@ begin
           ThrowTypeError(SErrorGetterDecoratorReturn, SSuggestDecoratorFunction);
         if IsStatic then
           TGocciaClassValue(ClassVal).AddStaticGetter(
-            Name, TGocciaFunctionValue(DecoratorResult))
+            ElementName, TGocciaFunctionValue(DecoratorResult))
         else
         begin
           ExistingDescriptor := TGocciaClassValue(ClassVal).Prototype
-            .GetOwnPropertyDescriptor(Name);
+            .GetOwnPropertyDescriptor(ElementName);
           SetterValue := nil;
           if (ExistingDescriptor is TGocciaPropertyDescriptorAccessor) and
              Assigned(TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Setter) then
             SetterValue := TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Setter;
-          TGocciaClassValue(ClassVal).Prototype.DefineProperty(Name,
+          TGocciaClassValue(ClassVal).Prototype.DefineProperty(ElementName,
             TGocciaPropertyDescriptorAccessor.Create(
               DecoratorResult, SetterValue, [pfEnumerable, pfConfigurable, pfWritable]));
         end;
@@ -6148,16 +6164,16 @@ begin
           ThrowTypeError(SErrorSetterDecoratorReturn, SSuggestDecoratorFunction);
         if IsStatic then
           TGocciaClassValue(ClassVal).AddStaticSetter(
-            Name, TGocciaFunctionValue(DecoratorResult))
+            ElementName, TGocciaFunctionValue(DecoratorResult))
         else
         begin
           ExistingDescriptor := TGocciaClassValue(ClassVal).Prototype
-            .GetOwnPropertyDescriptor(Name);
+            .GetOwnPropertyDescriptor(ElementName);
           GetterValue := nil;
           if (ExistingDescriptor is TGocciaPropertyDescriptorAccessor) and
              Assigned(TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Getter) then
             GetterValue := TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Getter;
-          TGocciaClassValue(ClassVal).Prototype.DefineProperty(Name,
+          TGocciaClassValue(ClassVal).Prototype.DefineProperty(ElementName,
             TGocciaPropertyDescriptorAccessor.Create(
               GetterValue, DecoratorResult, [pfEnumerable, pfConfigurable, pfWritable]));
         end;
@@ -6166,8 +6182,8 @@ begin
       begin
         if not DecoratorResult.IsCallable then
           ThrowTypeError(SErrorFieldDecoratorReturn, SSuggestDecoratorFunction);
-        TGocciaClassValue(ClassVal).AddFieldInitializer(
-          Name, DecoratorResult, IsPrivate, IsStatic);
+        TGocciaClassValue(ClassVal).AddFieldInitializerWithKey(
+          ElementName, ElementKey, DecoratorResult, IsPrivate, IsStatic);
       end;
     'a':
       begin
@@ -6182,26 +6198,26 @@ begin
         begin
           if IsStatic then
             TGocciaClassValue(ClassVal).AddStaticGetter(
-              Name, TGocciaFunctionBase(NewGetter))
+              ElementName, TGocciaFunctionBase(NewGetter))
           else
             TGocciaClassValue(ClassVal).AddGetter(
-              Name, TGocciaFunctionBase(NewGetter));
+              ElementName, TGocciaFunctionBase(NewGetter));
         end;
 
         if Assigned(NewSetter) and not (NewSetter is TGocciaUndefinedLiteralValue) then
         begin
           if IsStatic then
             TGocciaClassValue(ClassVal).AddStaticSetter(
-              Name, TGocciaFunctionBase(NewSetter))
+              ElementName, TGocciaFunctionBase(NewSetter))
           else
             TGocciaClassValue(ClassVal).AddSetter(
-              Name, TGocciaFunctionBase(NewSetter));
+              ElementName, TGocciaFunctionBase(NewSetter));
         end;
 
         if Assigned(NewInit) and not (NewInit is TGocciaUndefinedLiteralValue) and
            NewInit.IsCallable then
-          TGocciaClassValue(ClassVal).AddFieldInitializer(
-            Name, NewInit, IsPrivate, IsStatic);
+          TGocciaClassValue(ClassVal).AddFieldInitializerWithKey(
+            ElementName, ElementKey, NewInit, IsPrivate, IsStatic);
       end;
   end;
 end;
@@ -9709,8 +9725,13 @@ begin
         BeginDecorators(RegisterToValue(FRegisters[A]), RegisterToValue(FRegisters[A + 1]));
 
       OP_APPLY_ELEMENT_DECORATOR_CONST:
-        ApplyElementDecorator(RegisterToValue(FRegisters[A]),
-          Template.GetConstantUnchecked(C).StringValue);
+        if B <> 0 then
+          ApplyElementDecorator(RegisterToValue(FRegisters[A]),
+            Template.GetConstantUnchecked(C).StringValue,
+            RegisterToValue(FRegisters[B]))
+        else
+          ApplyElementDecorator(RegisterToValue(FRegisters[A]),
+            Template.GetConstantUnchecked(C).StringValue);
 
       OP_APPLY_CLASS_DECORATOR:
         ApplyClassDecorator(RegisterToValue(FRegisters[A]));

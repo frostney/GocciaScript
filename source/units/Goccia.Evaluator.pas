@@ -4197,6 +4197,7 @@ var
   ContextObject, AccessObject, AutoAccessorValue, DecResultObj: TGocciaObjectValue;
   Elem: TGocciaClassElement;
   ElementName: string;
+  ElementKey: TGocciaValue;
   CurrentMethod, GetterFnValue, SetterFnValue: TGocciaValue;
   NewGetter, NewSetter, NewInit: TGocciaValue;
   MethodCollector, FieldCollector, StaticFieldCollector, ClassCollector: TGocciaInitializerCollector;
@@ -4621,7 +4622,25 @@ begin
           cekAccessor: ContextObject.AssignProperty(PROP_KIND, TGocciaStringLiteralValue.Create('accessor'));
         end;
 
-        if Elem.IsPrivate then
+        ElementName := Elem.Name;
+        ElementKey := nil;
+        if (not Elem.IsPrivate) and Elem.IsComputed and
+           (I <= High(ResolvedComputedFieldKeys)) then
+        begin
+          ElementKey := ResolvedComputedFieldKeys[I];
+          if ElementKey is TGocciaSymbolValue then
+            ContextObject.AssignProperty(PROP_NAME, ElementKey)
+          else if Assigned(ElementKey) then
+          begin
+            ElementName := ElementKey.ToStringLiteral.Value;
+            ContextObject.AssignProperty(PROP_NAME,
+              TGocciaStringLiteralValue.Create(ElementName));
+          end
+          else
+            ContextObject.AssignProperty(PROP_NAME,
+              TGocciaStringLiteralValue.Create(Elem.Name));
+        end
+        else if Elem.IsPrivate then
           ContextObject.AssignProperty(PROP_NAME, TGocciaStringLiteralValue.Create('#' + Elem.Name))
         else
           ContextObject.AssignProperty(PROP_NAME, TGocciaStringLiteralValue.Create(Elem.Name));
@@ -4637,7 +4656,6 @@ begin
         ContextObject.AssignProperty(PROP_METADATA, MetadataObject);
 
         // Build access object
-        ElementName := Elem.Name;
         AccessObject := TGocciaObjectValue.Create;
 
         case Elem.Kind of
@@ -4780,7 +4798,7 @@ begin
               begin
                 if not DecoratorResult.IsCallable then
                   AContext.OnError('Field decorator must return a function or undefined', ALine, AColumn);
-                ClassValue.AddFieldInitializer(ElementName, DecoratorResult, Elem.IsPrivate, Elem.IsStatic);
+                ClassValue.AddFieldInitializerWithKey(ElementName, ElementKey, DecoratorResult, Elem.IsPrivate, Elem.IsStatic);
               end;
             end;
 
@@ -4809,7 +4827,7 @@ begin
                 if Assigned(NewSetter) and not (NewSetter is TGocciaUndefinedLiteralValue) then
                   ClassValue.AddSetter(ElementName, TGocciaFunctionValue(NewSetter));
                 if Assigned(NewInit) and not (NewInit is TGocciaUndefinedLiteralValue) and NewInit.IsCallable then
-                  ClassValue.AddFieldInitializer(ElementName, NewInit, Elem.IsPrivate, Elem.IsStatic);
+                  ClassValue.AddFieldInitializerWithKey(ElementName, ElementKey, NewInit, Elem.IsPrivate, Elem.IsStatic);
               end;
             end;
           end;

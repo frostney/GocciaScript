@@ -54,6 +54,7 @@ type
     FFieldInitializers: array of TGocciaValue;
     FDecoratorFieldInitializers: array of record
       Name: string;
+      ComputedKey: TGocciaValue;
       Initializer: TGocciaValue;
       IsPrivate: Boolean;
       IsStatic: Boolean;
@@ -142,6 +143,7 @@ type
     procedure MarkReferences; override;
 
     procedure AddFieldInitializer(const AName: string; const AInitializer: TGocciaValue; const AIsPrivate, AIsStatic: Boolean);
+    procedure AddFieldInitializerWithKey(const AName: string; const AComputedKey: TGocciaValue; const AInitializer: TGocciaValue; const AIsPrivate, AIsStatic: Boolean);
     procedure SetMethodInitializers(const AInitializers: array of TGocciaValue);
     procedure SetFieldInitializers(const AInitializers: array of TGocciaValue);
     procedure AppendMethodInitializers(const AInitializers: array of TGocciaValue);
@@ -438,8 +440,12 @@ begin
     if Assigned(FFieldInitializers[I]) then
       FFieldInitializers[I].MarkReferences;
   for I := 0 to High(FDecoratorFieldInitializers) do
+  begin
     if Assigned(FDecoratorFieldInitializers[I].Initializer) then
       FDecoratorFieldInitializers[I].Initializer.MarkReferences;
+    if Assigned(FDecoratorFieldInitializers[I].ComputedKey) then
+      FDecoratorFieldInitializers[I].ComputedKey.MarkReferences;
+  end;
   for I := 0 to High(FFieldOrder) do
     if Assigned(FFieldOrder[I].ComputedKey) then
       FFieldOrder[I].ComputedKey.MarkReferences;
@@ -709,8 +715,14 @@ end;
 
 procedure TGocciaClassValue.AddFieldInitializer(const AName: string; const AInitializer: TGocciaValue; const AIsPrivate, AIsStatic: Boolean);
 begin
+  AddFieldInitializerWithKey(AName, nil, AInitializer, AIsPrivate, AIsStatic);
+end;
+
+procedure TGocciaClassValue.AddFieldInitializerWithKey(const AName: string; const AComputedKey: TGocciaValue; const AInitializer: TGocciaValue; const AIsPrivate, AIsStatic: Boolean);
+begin
   SetLength(FDecoratorFieldInitializers, Length(FDecoratorFieldInitializers) + 1);
   FDecoratorFieldInitializers[High(FDecoratorFieldInitializers)].Name := AName;
+  FDecoratorFieldInitializers[High(FDecoratorFieldInitializers)].ComputedKey := AComputedKey;
   FDecoratorFieldInitializers[High(FDecoratorFieldInitializers)].Initializer := AInitializer;
   FDecoratorFieldInitializers[High(FDecoratorFieldInitializers)].IsPrivate := AIsPrivate;
   FDecoratorFieldInitializers[High(FDecoratorFieldInitializers)].IsStatic := AIsStatic;
@@ -814,6 +826,8 @@ var
   Idx: Integer;
   Args: TGocciaArgumentsCollection;
   InitResult, OriginalValue: TGocciaValue;
+  PropertyKey: TGocciaValue;
+  PropertyName: string;
 begin
   for Idx := 0 to High(FDecoratorFieldInitializers) do
   begin
@@ -822,7 +836,18 @@ begin
 
     if Assigned(AInstance) and (AInstance is TGocciaObjectValue) then
     begin
-      OriginalValue := TGocciaObjectValue(AInstance).GetProperty(FDecoratorFieldInitializers[Idx].Name);
+      PropertyKey := FDecoratorFieldInitializers[Idx].ComputedKey;
+      if PropertyKey is TGocciaSymbolValue then
+        OriginalValue := TGocciaObjectValue(AInstance).GetSymbolProperty(
+          TGocciaSymbolValue(PropertyKey))
+      else
+      begin
+        if Assigned(PropertyKey) then
+          PropertyName := PropertyKey.ToStringLiteral.Value
+        else
+          PropertyName := FDecoratorFieldInitializers[Idx].Name;
+        OriginalValue := TGocciaObjectValue(AInstance).GetProperty(PropertyName);
+      end;
       if not Assigned(OriginalValue) then
         OriginalValue := TGocciaUndefinedLiteralValue.UndefinedValue;
 
@@ -830,7 +855,13 @@ begin
       try
         InitResult := TGocciaFunctionBase(FDecoratorFieldInitializers[Idx].Initializer).Call(Args, AInstance);
         if Assigned(InitResult) and not (InitResult is TGocciaUndefinedLiteralValue) then
-          TGocciaObjectValue(AInstance).AssignProperty(FDecoratorFieldInitializers[Idx].Name, InitResult);
+        begin
+          if PropertyKey is TGocciaSymbolValue then
+            TGocciaObjectValue(AInstance).AssignSymbolProperty(
+              TGocciaSymbolValue(PropertyKey), InitResult)
+          else
+            TGocciaObjectValue(AInstance).AssignProperty(PropertyName, InitResult);
+        end;
       finally
         Args.Free;
       end;

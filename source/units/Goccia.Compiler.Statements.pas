@@ -4076,7 +4076,8 @@ end;
 
 procedure CompileDecoratorOrchestration(
   const ACtx: TGocciaCompilationContext;
-  const AClassReg: UInt8; const AClassDef: TGocciaClassDefinition);
+  const AClassReg: UInt8; const AClassDef: TGocciaClassDefinition;
+  const AComputedFieldKeyLocals: TComputedFieldKeyLocals);
 var
   I, J: Integer;
   Elem: TGocciaClassElement;
@@ -4086,6 +4087,8 @@ var
   Desc: string;
   PairReg, ExtraReg: UInt8;
   HasElementDecorators: Boolean;
+  ComputedKeyName: string;
+  LocalIdx: Integer;
 begin
   HasElementDecorators := False;
   for I := 0 to High(AClassDef.FElements) do
@@ -4134,9 +4137,24 @@ begin
       PairReg := ACtx.Scope.AllocateRegister;
       ExtraReg := ACtx.Scope.AllocateRegister;
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, PairReg, DecoRegs[I][J], 0));
-      EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, ExtraReg, 0, 0));
-      EmitInstruction(ACtx, EncodeABC(OP_APPLY_ELEMENT_DECORATOR_CONST, PairReg,
-        0, UInt8(DescIdx)));
+      if (Elem.Kind = cekField) and Elem.IsComputed then
+      begin
+        ComputedKeyName := FindComputedFieldKeyLocalName(
+          AComputedFieldKeyLocals, I);
+        LocalIdx := ACtx.Scope.ResolveLocal(ComputedKeyName);
+        if LocalIdx < 0 then
+          raise Exception.Create('Compiler error: computed decorator field key was not captured');
+        EmitInstruction(ACtx, EncodeABC(OP_MOVE, ExtraReg,
+          ACtx.Scope.GetLocal(LocalIdx).Slot, 0));
+        EmitInstruction(ACtx, EncodeABC(OP_APPLY_ELEMENT_DECORATOR_CONST,
+          PairReg, ExtraReg, UInt8(DescIdx)));
+      end
+      else
+      begin
+        EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, ExtraReg, 0, 0));
+        EmitInstruction(ACtx, EncodeABC(OP_APPLY_ELEMENT_DECORATOR_CONST,
+          PairReg, 0, UInt8(DescIdx)));
+      end;
       ACtx.Scope.FreeRegister;
       ACtx.Scope.FreeRegister;
     end;
@@ -4163,7 +4181,8 @@ end;
 procedure CompileDecoratorAndAccessorPass(
   const ACtx: TGocciaCompilationContext;
   const AClassReg: UInt8; const AClassDef: TGocciaClassDefinition;
-  const ASuperReg: Integer);
+  const ASuperReg: Integer;
+  const AComputedFieldKeyLocals: TComputedFieldKeyLocals);
 var
   PairReg, ExtraReg: UInt8;
 begin
@@ -4182,7 +4201,8 @@ begin
   ACtx.Scope.FreeRegister;
 
   CompileAutoAccessors(ACtx, AClassReg, AClassDef);
-  CompileDecoratorOrchestration(ACtx, AClassReg, AClassDef);
+  CompileDecoratorOrchestration(ACtx, AClassReg, AClassDef,
+    AComputedFieldKeyLocals);
 
   PairReg := ACtx.Scope.AllocateRegister;
   ExtraReg := ACtx.Scope.AllocateRegister;
@@ -4401,9 +4421,11 @@ begin
   end;
 
   if HasSuper then
-    CompileDecoratorAndAccessorPass(ACtx, ClassReg, ClassDef, SuperReg)
+    CompileDecoratorAndAccessorPass(ACtx, ClassReg, ClassDef, SuperReg,
+      ComputedFieldKeyLocals)
   else
-    CompileDecoratorAndAccessorPass(ACtx, ClassReg, ClassDef, -1);
+    CompileDecoratorAndAccessorPass(ACtx, ClassReg, ClassDef, -1,
+      ComputedFieldKeyLocals);
 
   // Sync cell if the class local was pre-declared and captured by a hoisted
   // function (see CompileVariableDeclaration for the full explanation)
@@ -4630,7 +4652,8 @@ begin
 
   if HasSuper then
   begin
-    CompileDecoratorAndAccessorPass(ACtx, ADest, ClassDef, SuperReg);
+    CompileDecoratorAndAccessorPass(ACtx, ADest, ClassDef, SuperReg,
+      ComputedFieldKeyLocals);
     // Only free __super__ manually when there is no name binding scope —
     // when HasNameBinding is true, __super__ lives inside the inner scope
     // and EndScope below will free it together with the name binding local.
@@ -4638,7 +4661,8 @@ begin
       ACtx.Scope.FreeRegister;
   end
   else
-    CompileDecoratorAndAccessorPass(ACtx, ADest, ClassDef, -1);
+    CompileDecoratorAndAccessorPass(ACtx, ADest, ClassDef, -1,
+      ComputedFieldKeyLocals);
 
   if HasNameBinding then
   begin
