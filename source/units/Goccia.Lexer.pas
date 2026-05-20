@@ -9,7 +9,6 @@ uses
   Generics.Collections,
   SysUtils,
 
-  OrderedStringMap,
   StringBuffer,
 
   Goccia.Token;
@@ -17,10 +16,6 @@ uses
 type
   TGocciaLexer = class
   const ValidIdentifierChars: set of Char = ['a'..'z', 'A'..'Z', '0'..'9', '_', '$'];
-  private class var
-    FKeywords: TOrderedStringMap<TGocciaTokenType>;
-    class procedure InitKeywords;
-    class destructor DestroyClass;
   private
     FSource: string;
     FTokens: TObjectList<TGocciaToken>;
@@ -124,20 +119,71 @@ begin
   Result := True;
 end;
 
-function IsPotentialKeywordText(const AText: string): Boolean; inline;
+function TryKeywordToken(const AText: string; out ATokenType: TGocciaTokenType): Boolean; inline;
 var
-  I: Integer;
   Len: Integer;
 begin
   Len := Length(AText);
-  if (Len < 2) or (Len > 10) then
-    Exit(False);
-
-  for I := 1 to Len do
-    if not CharInSet(AText[I], ['a'..'z']) then
-      Exit(False);
-
   Result := True;
+  case Len of
+    2:
+      if AText = KEYWORD_AS then ATokenType := gttAs
+      else if AText = KEYWORD_DO then ATokenType := gttDo
+      else if AText = KEYWORD_IF then ATokenType := gttIf
+      else if AText = KEYWORD_IN then ATokenType := gttIn
+      else Result := False;
+    3:
+      if AText = KEYWORD_FOR then ATokenType := gttFor
+      else if AText = KEYWORD_LET then ATokenType := gttLet
+      else if AText = KEYWORD_NEW then ATokenType := gttNew
+      else if AText = KEYWORD_TRY then ATokenType := gttTry
+      else if AText = KEYWORD_VAR then ATokenType := gttVar
+      else Result := False;
+    4:
+      if AText = KEYWORD_CASE then ATokenType := gttCase
+      else if AText = KEYWORD_ELSE then ATokenType := gttElse
+      else if AText = KEYWORD_ENUM then ATokenType := gttEnum
+      else if AText = KEYWORD_FROM then ATokenType := gttFrom
+      else if AText = KEYWORD_NULL then ATokenType := gttNull
+      else if AText = KEYWORD_THIS then ATokenType := gttThis
+      else if AText = KEYWORD_TRUE then ATokenType := gttTrue
+      else if AText = KEYWORD_VOID then ATokenType := gttVoid
+      else if AText = KEYWORD_WITH then ATokenType := gttWith
+      else Result := False;
+    5:
+      if AText = KEYWORD_BREAK then ATokenType := gttBreak
+      else if AText = KEYWORD_CATCH then ATokenType := gttCatch
+      else if AText = KEYWORD_CLASS then ATokenType := gttClass
+      else if AText = KEYWORD_CONST then ATokenType := gttConst
+      else if AText = KEYWORD_FALSE then ATokenType := gttFalse
+      else if AText = KEYWORD_SUPER then ATokenType := gttSuper
+      else if AText = KEYWORD_THROW then ATokenType := gttThrow
+      else if AText = KEYWORD_WHILE then ATokenType := gttWhile
+      else Result := False;
+    6:
+      if AText = KEYWORD_DELETE then ATokenType := gttDelete
+      else if AText = KEYWORD_EXPORT then ATokenType := gttExport
+      else if AText = KEYWORD_IMPORT then ATokenType := gttImport
+      else if AText = KEYWORD_RETURN then ATokenType := gttReturn
+      else if AText = KEYWORD_STATIC then ATokenType := gttStatic
+      else if AText = KEYWORD_SWITCH then ATokenType := gttSwitch
+      else if AText = KEYWORD_TYPEOF then ATokenType := gttTypeof
+      else Result := False;
+    7:
+      if AText = KEYWORD_DEFAULT then ATokenType := gttDefault
+      else if AText = KEYWORD_EXTENDS then ATokenType := gttExtends
+      else if AText = KEYWORD_FINALLY then ATokenType := gttFinally
+      else Result := False;
+    8:
+      if AText = KEYWORD_CONTINUE then ATokenType := gttContinue
+      else if AText = KEYWORD_FUNCTION then ATokenType := gttFunction
+      else Result := False;
+    10:
+      if AText = KEYWORD_INSTANCEOF then ATokenType := gttInstanceof
+      else Result := False;
+  else
+    Result := False;
+  end;
 end;
 
 constructor TGocciaLexer.Create(const ASource, AFileName: string);
@@ -1344,59 +1390,6 @@ begin
   Result := True;
 end;
 
-class procedure TGocciaLexer.InitKeywords;
-begin
-  if Assigned(FKeywords) then Exit;
-  FKeywords := TOrderedStringMap<TGocciaTokenType>.Create(40);
-  // Reserved keywords
-  FKeywords.Add(KEYWORD_BREAK, gttBreak);
-  FKeywords.Add(KEYWORD_CASE, gttCase);
-  FKeywords.Add(KEYWORD_CONTINUE, gttContinue);
-  FKeywords.Add(KEYWORD_CATCH, gttCatch);
-  FKeywords.Add(KEYWORD_CLASS, gttClass);
-  FKeywords.Add(KEYWORD_CONST, gttConst);
-  FKeywords.Add(KEYWORD_DEFAULT, gttDefault);
-  FKeywords.Add(KEYWORD_DELETE, gttDelete);
-  FKeywords.Add(KEYWORD_DO, gttDo);
-  FKeywords.Add(KEYWORD_ELSE, gttElse);
-  FKeywords.Add(KEYWORD_ENUM, gttEnum);
-  FKeywords.Add(KEYWORD_EXPORT, gttExport);
-  FKeywords.Add(KEYWORD_EXTENDS, gttExtends);
-  FKeywords.Add(KEYWORD_FALSE, gttFalse);
-  FKeywords.Add(KEYWORD_FINALLY, gttFinally);
-  FKeywords.Add(KEYWORD_FOR, gttFor);
-  FKeywords.Add(KEYWORD_FUNCTION, gttFunction);
-  FKeywords.Add(KEYWORD_IF, gttIf);
-  FKeywords.Add(KEYWORD_IMPORT, gttImport);
-  FKeywords.Add(KEYWORD_IN, gttIn);
-  FKeywords.Add(KEYWORD_INSTANCEOF, gttInstanceof);
-  FKeywords.Add(KEYWORD_LET, gttLet);
-  FKeywords.Add(KEYWORD_NEW, gttNew);
-  FKeywords.Add(KEYWORD_NULL, gttNull);
-  FKeywords.Add(KEYWORD_RETURN, gttReturn);
-  FKeywords.Add(KEYWORD_SUPER, gttSuper);
-  FKeywords.Add(KEYWORD_SWITCH, gttSwitch);
-  FKeywords.Add(KEYWORD_THIS, gttThis);
-  FKeywords.Add(KEYWORD_THROW, gttThrow);
-  FKeywords.Add(KEYWORD_TRUE, gttTrue);
-  FKeywords.Add(KEYWORD_TRY, gttTry);
-  FKeywords.Add(KEYWORD_TYPEOF, gttTypeof);
-  FKeywords.Add(KEYWORD_VAR, gttVar);
-  FKeywords.Add(KEYWORD_VOID, gttVoid);
-  FKeywords.Add(KEYWORD_WHILE, gttWhile);
-  FKeywords.Add(KEYWORD_WITH, gttWith);
-
-  // Contextual keywords
-  FKeywords.Add(KEYWORD_AS, gttAs);
-  FKeywords.Add(KEYWORD_FROM, gttFrom);
-  FKeywords.Add(KEYWORD_STATIC, gttStatic);
-end;
-
-class destructor TGocciaLexer.DestroyClass;
-begin
-  FreeAndNil(FKeywords);
-end;
-
 procedure TGocciaLexer.ScanIdentifier;
 var
   SB: TStringBuffer;
@@ -1428,8 +1421,7 @@ begin
 
   Text := SB.ToString;
 
-  if (not HadEscape) and IsPotentialKeywordText(Text) and
-     FKeywords.TryGetValue(Text, TokenType) then
+  if (not HadEscape) and TryKeywordToken(Text, TokenType) then
     AddToken(TokenType, Text)
   else
     AddToken(gttIdentifier, Text, HadEscape);
@@ -1704,8 +1696,5 @@ begin
   FTokens.Add(TGocciaToken.Create(gttEOF, '', FLine, FColumn, FColumn));
   Result := FTokens;
 end;
-
-initialization
-  TGocciaLexer.InitKeywords;
 
 end.
