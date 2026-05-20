@@ -47,4 +47,30 @@ describe("auto-accessor decorators", () => {
     expect(instance[key]).toBe(42);
     expect(accessGet(instance)).toBe(42);
   });
+
+  test("static accessor decorator initializer runs before class replacement", () => {
+    let observedOriginalValue;
+    const accessor = (value, context) => {
+      return {
+        init() {
+          return 42;
+        }
+      };
+    };
+    const replace = (cls, context) => {
+      observedOriginalValue = cls.value;
+      return class Replacement {
+        static value = 100;
+      };
+    };
+
+    @replace
+    class C {
+      @accessor
+      static accessor value = 41;
+    }
+
+    expect(observedOriginalValue).toBe(42);
+    expect(C.value).toBe(100);
+  });
 });

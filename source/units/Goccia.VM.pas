@@ -774,6 +774,8 @@ type
     StaticFieldCollector: TGocciaInitializerCollector;
     ClassCollector: TGocciaInitializerCollector;
     ClassValue: TGocciaValue;
+    OriginalClassValue: TGocciaValue;
+    StaticDecoratorInitializersRun: Boolean;
     constructor Create(const AMetadataObject: TGocciaObjectValue);
     destructor Destroy; override;
     procedure MarkReferences;
@@ -1218,6 +1220,8 @@ begin
   StaticFieldCollector := TGocciaInitializerCollector.Create;
   ClassCollector := TGocciaInitializerCollector.Create;
   ClassValue := nil;
+  OriginalClassValue := nil;
+  StaticDecoratorInitializersRun := False;
 end;
 
 destructor TGocciaVMDecoratorSession.Destroy;
@@ -1249,10 +1253,24 @@ begin
     MetadataObject.MarkReferences;
   if Assigned(ClassValue) then
     ClassValue.MarkReferences;
+  if Assigned(OriginalClassValue) and (OriginalClassValue <> ClassValue) then
+    OriginalClassValue.MarkReferences;
   MarkCollector(MethodCollector);
   MarkCollector(FieldCollector);
   MarkCollector(StaticFieldCollector);
   MarkCollector(ClassCollector);
+end;
+
+procedure RunStaticDecoratorInitializersForSession(
+  const ASession: TGocciaVMDecoratorSession);
+begin
+  if not Assigned(ASession) or ASession.StaticDecoratorInitializersRun then
+    Exit;
+
+  if ASession.OriginalClassValue is TGocciaClassValue then
+    TGocciaClassValue(ASession.OriginalClassValue)
+      .RunDecoratorStaticFieldInitializers;
+  ASession.StaticDecoratorInitializersRun := True;
 end;
 
 threadvar
@@ -5915,6 +5933,8 @@ begin
 
   FActiveDecoratorSession := TGocciaVMDecoratorSession.Create(Meta);
   TGocciaVMDecoratorSession(FActiveDecoratorSession).ClassValue := ClassVal;
+  TGocciaVMDecoratorSession(FActiveDecoratorSession).OriginalClassValue :=
+    ClassVal;
 end;
 
 procedure TGocciaVM.ApplyClassDecorator(const ADecoratorFn: TGocciaValue);
@@ -5933,6 +5953,7 @@ begin
     Exit;
   if not ADecoratorFn.IsCallable then
     ThrowTypeError(SErrorDecoratorMustBeFunction, SSuggestDecoratorFunction);
+  RunStaticDecoratorInitializersForSession(Session);
 
   ContextObject := TGocciaObjectValue.Create;
   ContextObject.AssignProperty(PROP_KIND,
@@ -6008,14 +6029,17 @@ var
     KeyValue: TGocciaValue;
   begin
     if AIsStatic then
-      TargetObject := TGocciaObjectValue(ClassVal)
+      TargetObject := TGocciaClassValue(ClassVal)
     else
       TargetObject := TGocciaClassValue(ClassVal).Prototype;
     if Assigned(AKey) then
       KeyValue := AKey
     else
       KeyValue := TGocciaStringLiteralValue.Create(AName);
-    SetBytecodeHomeObject(AValue, TargetObject);
+    if AIsStatic then
+      SetBytecodeHomeObject(AValue, TGocciaClassValue(ClassVal))
+    else
+      SetBytecodeHomeObject(AValue, TargetObject);
     if KeyValue is TGocciaSymbolValue then
       TargetObject.DefineSymbolProperty(
         TGocciaSymbolValue(KeyValue),
@@ -6056,7 +6080,7 @@ var
     ExistingSetter: TGocciaValue;
   begin
     if AIsStatic then
-      TargetObject := TGocciaObjectValue(ClassVal)
+      TargetObject := TGocciaClassValue(ClassVal)
     else
       TargetObject := TGocciaClassValue(ClassVal).Prototype;
     if Assigned(AKey) then
@@ -6064,10 +6088,19 @@ var
     else
       KeyValue := TGocciaStringLiteralValue.Create(AName);
 
-    SetBytecodeHomeObject(AGetter, TargetObject);
+    if AIsStatic then
+      SetBytecodeHomeObject(AGetter, TGocciaClassValue(ClassVal))
+    else
+      SetBytecodeHomeObject(AGetter, TargetObject);
     if KeyValue is TGocciaSymbolValue then
-      ExistingDescriptor := TargetObject.GetOwnSymbolPropertyDescriptor(
-        TGocciaSymbolValue(KeyValue))
+    begin
+      if AIsStatic then
+        ExistingDescriptor := TGocciaClassValue(ClassVal)
+          .GetOwnStaticSymbolDescriptor(TGocciaSymbolValue(KeyValue))
+      else
+        ExistingDescriptor := TargetObject.GetOwnSymbolPropertyDescriptor(
+          TGocciaSymbolValue(KeyValue));
+    end
     else
       ExistingDescriptor := TargetObject.GetOwnPropertyDescriptor(
         KeyValue.ToStringLiteral.Value);
@@ -6098,7 +6131,7 @@ var
     ExistingGetter: TGocciaValue;
   begin
     if AIsStatic then
-      TargetObject := TGocciaObjectValue(ClassVal)
+      TargetObject := TGocciaClassValue(ClassVal)
     else
       TargetObject := TGocciaClassValue(ClassVal).Prototype;
     if Assigned(AKey) then
@@ -6106,10 +6139,19 @@ var
     else
       KeyValue := TGocciaStringLiteralValue.Create(AName);
 
-    SetBytecodeHomeObject(ASetter, TargetObject);
+    if AIsStatic then
+      SetBytecodeHomeObject(ASetter, TGocciaClassValue(ClassVal))
+    else
+      SetBytecodeHomeObject(ASetter, TargetObject);
     if KeyValue is TGocciaSymbolValue then
-      ExistingDescriptor := TargetObject.GetOwnSymbolPropertyDescriptor(
-        TGocciaSymbolValue(KeyValue))
+    begin
+      if AIsStatic then
+        ExistingDescriptor := TGocciaClassValue(ClassVal)
+          .GetOwnStaticSymbolDescriptor(TGocciaSymbolValue(KeyValue))
+      else
+        ExistingDescriptor := TargetObject.GetOwnSymbolPropertyDescriptor(
+          TGocciaSymbolValue(KeyValue));
+    end
     else
       ExistingDescriptor := TargetObject.GetOwnPropertyDescriptor(
         KeyValue.ToStringLiteral.Value);
@@ -6437,6 +6479,7 @@ begin
     Exit(ACurrentValue);
   end;
 
+  RunStaticDecoratorInitializersForSession(Session);
   ClassVal := TGocciaClassValue(Session.ClassValue);
   ClassVal.DefineSymbolProperty(
     TGocciaSymbolValue.WellKnownMetadata,
@@ -6447,7 +6490,6 @@ begin
   ClassVal.AppendMethodInitializers(InitializerResults);
   InitializerResults := Session.FieldCollector.GetInitializers;
   ClassVal.AppendFieldInitializers(InitializerResults);
-  ClassVal.RunDecoratorStaticFieldInitializers;
 
   InitializerResults := Session.ClassCollector.GetInitializers;
   for I := 0 to High(InitializerResults) do

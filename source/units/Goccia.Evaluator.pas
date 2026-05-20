@@ -4202,6 +4202,7 @@ var
   NewGetter, NewSetter, NewInit: TGocciaValue;
   ExistingGetterValue, ExistingSetterValue: TGocciaValue;
   MethodCollector, FieldCollector, StaticFieldCollector, ClassCollector: TGocciaInitializerCollector;
+  OriginalClassValue: TGocciaClassValue;
   AccessGetterHelper: TGocciaAccessGetter;
   AccessSetterHelper: TGocciaAccessSetter;
   InitializerResults: TArray<TGocciaValue>;
@@ -5028,6 +5029,9 @@ begin
       end;
     end;
 
+    OriginalClassValue := ClassValue;
+    OriginalClassValue.RunDecoratorStaticFieldInitializers;
+
     // Phase 3: Call class decorators (bottom-up)
     for I := High(EvaluatedClassDecorators) downto 0 do
     begin
@@ -5070,7 +5074,6 @@ begin
     ClassValue.SetMethodInitializers(InitializerResults);
     InitializerResults := FieldCollector.GetInitializers;
     ClassValue.SetFieldInitializers(InitializerResults);
-    ClassValue.RunDecoratorStaticFieldInitializers;
 
     // Run class-level initializers after static fields
     InitializerResults := ClassCollector.GetInitializers;
