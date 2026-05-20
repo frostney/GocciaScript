@@ -5,7 +5,7 @@ unit Goccia.RegExp.Compiler;
 interface
 
 uses
-  Goccia.RegExp.Engine;
+  Goccia.RegExp.&Program;
 
 type
   TRegExpOpCode = (
@@ -27,25 +27,6 @@ type
     RX_FAIL          = 15
   );
 
-  TRegExpCharRange = record
-    Lo: Cardinal;
-    Hi: Cardinal;
-  end;
-
-  TRegExpCharRangeArray = array of TRegExpCharRange;
-
-  TRegExpCharClass = record
-    Ranges: TRegExpCharRangeArray;
-  end;
-
-  TRegExpProgram = record
-    Code: array of UInt32;
-    CharClasses: array of TRegExpCharClass;
-    CaptureCount: Integer;
-    FullUnicode: Boolean;
-    NamedGroups: TGocciaRegExpNamedGroups;
-  end;
-
 const
   BACKREF_STRICT_FLAG = $800000;
   BACKREF_ICASE_FLAG = $400000;
@@ -57,7 +38,6 @@ const
   WORD_ASSERT_ICASE_FLAG = $2;
 
 function CompileRegExp(const APattern, AFlags: string): TRegExpProgram;
-procedure ValidateRegExpPatternNew(const APattern, AFlags: string);
 
 implementation
 
@@ -69,6 +49,7 @@ uses
   UnicodeICU,
 
   Goccia.Identifier,
+  Goccia.RegExp.Engine,
   Goccia.RegExp.UnicodeData;
 
 type
@@ -2739,14 +2720,6 @@ begin
   finally
     Compiler.Free;
   end;
-end;
-
-procedure ValidateRegExpPatternNew(const APattern, AFlags: string);
-begin
-  ValidateRegExpFlags(AFlags);
-  if APattern = '(?:)' then
-    Exit;
-  CompileRegExp(APattern, AFlags);
 end;
 
 end.
