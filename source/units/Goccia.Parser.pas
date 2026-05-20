@@ -2769,7 +2769,7 @@ var
   IsGetter, IsSetter: Boolean;
   IsAsync: Boolean;
   IsGenerator: Boolean;
-  IsMethod: Boolean;
+  MethodDefinition: TGocciaMethodExpression;
   ComputedCount, SourceOrderCount: Integer;
   MemberStartLine, MemberStartColumn: Integer;
   OrderIndex: Integer;
@@ -2796,7 +2796,6 @@ begin
     IsSetter := False;
     IsAsync := False;
     IsGenerator := False;
-    IsMethod := False;
     MemberStartLine := Peek.Line;
     MemberStartColumn := Peek.Column;
 
@@ -2847,7 +2846,6 @@ begin
       PropertySourceOrder[SourceOrderCount - 1].PropertyType := pstComputed;
       PropertySourceOrder[SourceOrderCount - 1].ComputedIndex := ComputedCount - 1;
       PropertySourceOrder[SourceOrderCount - 1].StaticKey := '';
-      PropertySourceOrder[SourceOrderCount - 1].IsMethod := False;
       PropertySourceOrder[SourceOrderCount - 1].Skip := False;
 
       // For spread expressions, no further processing is needed
@@ -2895,7 +2893,6 @@ begin
       PropertySourceOrder[SourceOrderCount - 1].PropertyType := pstGetter;
       PropertySourceOrder[SourceOrderCount - 1].StaticKey := Key;
       PropertySourceOrder[SourceOrderCount - 1].ComputedIndex := -1;
-      PropertySourceOrder[SourceOrderCount - 1].IsMethod := False;
       PropertySourceOrder[SourceOrderCount - 1].Skip := False;
     end
     else if IsSetter then
@@ -2909,19 +2906,20 @@ begin
       PropertySourceOrder[SourceOrderCount - 1].PropertyType := pstSetter;
       PropertySourceOrder[SourceOrderCount - 1].StaticKey := Key;
       PropertySourceOrder[SourceOrderCount - 1].ComputedIndex := -1;
-      PropertySourceOrder[SourceOrderCount - 1].IsMethod := False;
       PropertySourceOrder[SourceOrderCount - 1].Skip := False;
     end
     // Check for method shorthand syntax: methodName() { ... } or [expr]() { ... }
     else if Check(gttLeftParen) then
     begin
-      Value := ParseObjectMethodBody(MemberStartLine, MemberStartColumn, IsAsync, IsGenerator);
-      TGocciaMethodExpression(Value).SourceText := ExtractSourceRange(
+      MethodDefinition := TGocciaMethodExpression(ParseObjectMethodBody(
+        MemberStartLine, MemberStartColumn, IsAsync, IsGenerator));
+      MethodDefinition.SourceText := ExtractSourceRange(
         MemberStartLine, MemberStartColumn);
       if IsAsync then
-        TGocciaMethodExpression(Value).IsAsync := True;
-      TGocciaMethodExpression(Value).IsGenerator := IsGenerator;
-      IsMethod := True;
+        MethodDefinition.IsAsync := True;
+      MethodDefinition.IsGenerator := IsGenerator;
+      Value := TGocciaObjectMethodDefinition.Create(
+        MethodDefinition, MemberStartLine, MemberStartColumn);
     end
     else
     begin
@@ -2970,7 +2968,6 @@ begin
         PropertySourceOrder[SourceOrderCount - 1].PropertyType := pstComputed;
         PropertySourceOrder[SourceOrderCount - 1].ComputedIndex := ComputedCount - 1;
         PropertySourceOrder[SourceOrderCount - 1].StaticKey := '';
-        PropertySourceOrder[SourceOrderCount - 1].IsMethod := IsMethod;
         PropertySourceOrder[SourceOrderCount - 1].Skip := False;
       end
       else
@@ -2997,7 +2994,6 @@ begin
         PropertySourceOrder[SourceOrderCount - 1].PropertyType := pstStatic;
         PropertySourceOrder[SourceOrderCount - 1].StaticKey := Key;
         PropertySourceOrder[SourceOrderCount - 1].ComputedIndex := -1;
-        PropertySourceOrder[SourceOrderCount - 1].IsMethod := IsMethod;
         PropertySourceOrder[SourceOrderCount - 1].Skip := False;
       end;
     end;

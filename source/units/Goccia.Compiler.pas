@@ -148,6 +148,9 @@ begin
     Goccia.Compiler.Expressions.CompilePropertyAssignment(Ctx, TGocciaPropertyAssignmentExpression(AExpr), ADest)
   else if AExpr is TGocciaComputedPropertyAssignmentExpression then
     Goccia.Compiler.Expressions.CompileComputedPropertyAssignment(Ctx, TGocciaComputedPropertyAssignmentExpression(AExpr), ADest)
+  else if AExpr is TGocciaObjectMethodDefinition then
+    Goccia.Compiler.Expressions.CompileMethod(Ctx,
+      TGocciaObjectMethodDefinition(AExpr).Method, ADest)
   else if AExpr is TGocciaMethodExpression then
     Goccia.Compiler.Expressions.CompileMethod(Ctx, TGocciaMethodExpression(AExpr), ADest)
   else if AExpr is TGocciaArrowFunctionExpression then

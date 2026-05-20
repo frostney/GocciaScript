@@ -2423,26 +2423,34 @@ begin
 end;
 
 procedure CompileObjectProperty(const ACtx: TGocciaCompilationContext;
-  const AExpr: TGocciaObjectExpression; const ADest: UInt8;
-  const AKey: string; const AValExpr: TGocciaExpression; const AIsMethod: Boolean);
+  const ADest: UInt8; const AKey: string; const AValExpr: TGocciaExpression);
 var
   ValReg: UInt8;
   DefineOp: TGocciaOpCode;
   FuncCount: Integer;
   InferredTemplate: TGocciaFunctionTemplate;
+  ValueExpr: TGocciaExpression;
 begin
   ValReg := ACtx.Scope.AllocateRegister;
   FuncCount := ACtx.Template.FunctionCount;
+  ValueExpr := AValExpr;
+  DefineOp := OP_DEFINE_DATA_PROP;
 
-  if (AValExpr is TGocciaClassExpression) and
-     (TGocciaClassExpression(AValExpr).ClassDefinition.Name = '') then
+  if AValExpr is TGocciaObjectMethodDefinition then
+  begin
+    ValueExpr := TGocciaObjectMethodDefinition(AValExpr).Method;
+    DefineOp := OP_DEFINE_METHOD_PROP;
+  end;
+
+  if (ValueExpr is TGocciaClassExpression) and
+     (TGocciaClassExpression(ValueExpr).ClassDefinition.Name = '') then
     Goccia.Compiler.Statements.CompileClassExpression(ACtx,
-      TGocciaClassExpression(AValExpr).ClassDefinition, ValReg, AKey)
+      TGocciaClassExpression(ValueExpr).ClassDefinition, ValReg, AKey)
   else
-    ACtx.CompileExpression(AValExpr, ValReg);
+    ACtx.CompileExpression(ValueExpr, ValReg);
 
-  if (AValExpr is TGocciaArrowFunctionExpression) or
-     (AValExpr is TGocciaMethodExpression) then
+  if (ValueExpr is TGocciaArrowFunctionExpression) or
+     (ValueExpr is TGocciaMethodExpression) then
   begin
     if ACtx.Template.FunctionCount > FuncCount then
     begin
@@ -2454,10 +2462,6 @@ begin
     end;
   end;
 
-  if AIsMethod then
-    DefineOp := OP_DEFINE_METHOD_PROP
-  else
-    DefineOp := OP_DEFINE_DATA_PROP;
   EmitDefineDataPropertyByName(ACtx, ADest, AKey, ValReg, DefineOp);
   ACtx.Scope.FreeRegister;
 end;
@@ -2599,6 +2603,7 @@ var
   Key: string;
   ValExpr: TGocciaExpression;
   KeyReg, ValReg: UInt8;
+  DefineOp: TGocciaOpCode;
   Names: TStringList;
   Order: TArray<TGocciaPropertySourceOrder>;
   Pair: TPair<TGocciaExpression, TGocciaExpression>;
@@ -2619,8 +2624,7 @@ begin
       case Order[I].PropertyType of
         pstStatic:
           if AExpr.Properties.TryGetValue(Key, ValExpr) then
-            CompileObjectProperty(ACtx, AExpr, ADest, Key, ValExpr,
-              Order[I].IsMethod);
+            CompileObjectProperty(ACtx, ADest, Key, ValExpr);
         pstComputed:
         begin
           if (Order[I].ComputedIndex >= 0) and
@@ -2640,13 +2644,18 @@ begin
               KeyReg := ACtx.Scope.AllocateRegister;
               ValReg := ACtx.Scope.AllocateRegister;
               ACtx.CompileExpression(Pair.Key, KeyReg);
-              ACtx.CompileExpression(Pair.Value, ValReg);
-              if Order[I].IsMethod then
-                EmitInstruction(ACtx, EncodeABC(OP_DEFINE_METHOD_PROP, ADest,
-                  KeyReg, ValReg))
+              if Pair.Value is TGocciaObjectMethodDefinition then
+              begin
+                DefineOp := OP_DEFINE_METHOD_PROP;
+                ACtx.CompileExpression(
+                  TGocciaObjectMethodDefinition(Pair.Value).Method, ValReg);
+              end
               else
-                EmitInstruction(ACtx, EncodeABC(OP_DEFINE_DATA_PROP, ADest,
-                  KeyReg, ValReg));
+              begin
+                DefineOp := OP_DEFINE_DATA_PROP;
+                ACtx.CompileExpression(Pair.Value, ValReg);
+              end;
+              EmitInstruction(ACtx, EncodeABC(DefineOp, ADest, KeyReg, ValReg));
               ACtx.Scope.FreeRegister;
               ACtx.Scope.FreeRegister;
             end;
@@ -2668,7 +2677,7 @@ begin
     begin
       Key := Names[I];
       if AExpr.Properties.TryGetValue(Key, ValExpr) then
-        CompileObjectProperty(ACtx, AExpr, ADest, Key, ValExpr, False);
+        CompileObjectProperty(ACtx, ADest, Key, ValExpr);
     end;
   end;
 end;

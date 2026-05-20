@@ -313,7 +313,6 @@ type
     PropertyType: TGocciaPropertySourceType;
     StaticKey: string;           // For static properties, getters, setters
     ComputedIndex: Integer;      // Index into ComputedProperties list
-    IsMethod: Boolean;           // True for concise object method syntax
     Skip: Boolean;               // True when superseded by a later static key
   end;
 
@@ -407,6 +406,15 @@ type
     property HasOwnPrototype: Boolean read FHasOwnPrototype write FHasOwnPrototype;
     property SourceText: string read FSourceText write FSourceText;
     property Name: string read FName write FName;
+  end;
+
+  TGocciaObjectMethodDefinition = class(TGocciaExpression)
+  private
+    FMethod: TGocciaMethodExpression;
+  public
+    constructor Create(const AMethod: TGocciaMethodExpression; const ALine, AColumn: Integer);
+    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
+    property Method: TGocciaMethodExpression read FMethod;
   end;
 
   TGocciaYieldExpression = class(TGocciaExpression)
@@ -1269,6 +1277,15 @@ begin
   FHasOwnPrototype := False;
 end;
 
+{ TGocciaObjectMethodDefinition }
+
+constructor TGocciaObjectMethodDefinition.Create(
+  const AMethod: TGocciaMethodExpression; const ALine, AColumn: Integer);
+begin
+  inherited Create(ALine, AColumn);
+  FMethod := AMethod;
+end;
+
 { TGocciaAwaitExpression }
 
 constructor TGocciaAwaitExpression.Create(const AOperand: TGocciaExpression;
@@ -1992,6 +2009,11 @@ end;
 function TGocciaMethodExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
 begin
   Result := EvaluateMethodExpression(Self, AContext);
+end;
+
+function TGocciaObjectMethodDefinition.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
+begin
+  Result := EvaluateMethodExpression(FMethod, AContext);
 end;
 
 function TGocciaAwaitExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;

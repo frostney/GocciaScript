@@ -100,6 +100,8 @@ begin
   else if AExpr is TGocciaArrowFunctionExpression then
     Result := sltReference
   else if AExpr is TGocciaMethodExpression then
+    Result := sltReference
+  else if AExpr is TGocciaObjectMethodDefinition then
     Result := sltReference;
 end;
 

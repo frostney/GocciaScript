@@ -1459,7 +1459,8 @@ begin
             if AObjectExpression.Properties.TryGetValue(PropertyName, PropertyExpression) then
             begin
               PropertyValue := EvaluateExpression(PropertyExpression, AContext);
-              if (PropertyExpression is TGocciaMethodExpression)
+              if (PropertyExpression is TGocciaObjectMethodDefinition)
+                or (PropertyExpression is TGocciaMethodExpression)
                 or (PropertyExpression is TGocciaArrowFunctionExpression) then
                 TGocciaFunctionValue(PropertyValue).SetInferredName(PropertyName)
               else if (PropertyExpression is TGocciaClassExpression)
