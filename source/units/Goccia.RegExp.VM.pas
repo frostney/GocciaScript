@@ -32,7 +32,6 @@ const
   MIN_STEP_LIMIT = 10000000;
   STEPS_PER_INPUT_BYTE = 100;
   DEFAULT_BACKTRACK_CAP = 10000000;
-  MAX_LOOKBEHIND_DISTANCE = 256;
   MEMO_CAPACITY = 65536;
   MEMO_LOAD_LIMIT = 49152;
   HIGH_SURROGATE_START = $D800;
@@ -276,6 +275,33 @@ begin
   Result := True;
 end;
 
+function ReadInputCodePointBefore(const AInput: TRegExpInput; APos: Integer;
+  const AUnicode: Boolean; out ACodePoint: Cardinal;
+  out AWidth: Integer): Boolean;
+var
+  CodeUnit: Cardinal;
+begin
+  Result := False;
+  ACodePoint := 0;
+  AWidth := 0;
+  if APos <= 0 then
+    Exit;
+
+  CodeUnit := AInput.Units[APos - 1];
+  if AUnicode and IsLowSurrogate(CodeUnit) and (APos >= 2) and
+     IsHighSurrogate(AInput.Units[APos - 2]) then
+  begin
+    ACodePoint := SurrogatePairToCodePoint(AInput.Units[APos - 2], CodeUnit);
+    AWidth := 2;
+  end
+  else
+  begin
+    ACodePoint := CodeUnit;
+    AWidth := 1;
+  end;
+  Result := True;
+end;
+
 function AdvanceInputIndex(const AInput: TRegExpInput; const AIndex: Integer;
   const AUnicode: Boolean): Integer;
 var
@@ -305,7 +331,7 @@ end;
 function RunVM(const AProgram: TRegExpProgram; const AInput: TRegExpInput;
   AStartPos: Integer; var ASlots: array of Integer;
   ASlotCount: Integer; AStartPC: Integer = 0;
-  AEndPos: PInteger = nil): Boolean;
+  AEndPos: PInteger = nil; ABackward: Boolean = False): Boolean;
 var
   PC, InputPos: Integer;
   Instr: UInt32;
@@ -319,7 +345,6 @@ var
   StepLimit: Integer;
   Memo: TMemoTable;
   SlotCount: Integer;
-  I: Integer;
   MatchCP: Cardinal;
   BeforeCP: Cardinal;
   BeforeIsWord, AfterIsWord: Boolean;
@@ -332,6 +357,7 @@ var
   LookSlots: array of Integer;
   LookMatched: Boolean;
   RefStart, RefEnd, RefPos: Integer;
+  ComparePos: Integer;
   RefCP, InputCP: Cardinal;
   RefByteLen, InputByteLen: Integer;
 
@@ -391,8 +417,18 @@ begin
     case Op of
       RX_CHAR:
         begin
-          if not ReadInputCodePoint(AInput, InputPos, AProgram.FullUnicode,
-             CodePoint, ByteLen) then
+          if ABackward then
+          begin
+            if not ReadInputCodePointBefore(AInput, InputPos,
+               AProgram.FullUnicode, CodePoint, ByteLen) then
+            begin
+              MemoAdd(Memo, PC, InputPos);
+              if not PopBacktrack then Exit;
+              Continue;
+            end;
+          end
+          else if not ReadInputCodePoint(AInput, InputPos,
+             AProgram.FullUnicode, CodePoint, ByteLen) then
           begin
             MemoAdd(Memo, PC, InputPos);
             if not PopBacktrack then Exit;
@@ -405,14 +441,27 @@ begin
             if not PopBacktrack then Exit;
             Continue;
           end;
-          Inc(InputPos, ByteLen);
+          if ABackward then
+            Dec(InputPos, ByteLen)
+          else
+            Inc(InputPos, ByteLen);
           Inc(PC);
         end;
 
       RX_CHAR_CLASS:
         begin
-          if not ReadInputCodePoint(AInput, InputPos, AProgram.FullUnicode,
-             CodePoint, ByteLen) then
+          if ABackward then
+          begin
+            if not ReadInputCodePointBefore(AInput, InputPos,
+               AProgram.FullUnicode, CodePoint, ByteLen) then
+            begin
+              MemoAdd(Memo, PC, InputPos);
+              if not PopBacktrack then Exit;
+              Continue;
+            end;
+          end
+          else if not ReadInputCodePoint(AInput, InputPos,
+             AProgram.FullUnicode, CodePoint, ByteLen) then
           begin
             MemoAdd(Memo, PC, InputPos);
             if not PopBacktrack then Exit;
@@ -424,14 +473,27 @@ begin
             if not PopBacktrack then Exit;
             Continue;
           end;
-          Inc(InputPos, ByteLen);
+          if ABackward then
+            Dec(InputPos, ByteLen)
+          else
+            Inc(InputPos, ByteLen);
           Inc(PC);
         end;
 
       RX_CHAR_CLASS_NEG:
         begin
-          if not ReadInputCodePoint(AInput, InputPos, AProgram.FullUnicode,
-             CodePoint, ByteLen) then
+          if ABackward then
+          begin
+            if not ReadInputCodePointBefore(AInput, InputPos,
+               AProgram.FullUnicode, CodePoint, ByteLen) then
+            begin
+              MemoAdd(Memo, PC, InputPos);
+              if not PopBacktrack then Exit;
+              Continue;
+            end;
+          end
+          else if not ReadInputCodePoint(AInput, InputPos,
+             AProgram.FullUnicode, CodePoint, ByteLen) then
           begin
             MemoAdd(Memo, PC, InputPos);
             if not PopBacktrack then Exit;
@@ -443,14 +505,27 @@ begin
             if not PopBacktrack then Exit;
             Continue;
           end;
-          Inc(InputPos, ByteLen);
+          if ABackward then
+            Dec(InputPos, ByteLen)
+          else
+            Inc(InputPos, ByteLen);
           Inc(PC);
         end;
 
       RX_ANY:
         begin
-          if not ReadInputCodePoint(AInput, InputPos, AProgram.FullUnicode,
-             CodePoint, ByteLen) then
+          if ABackward then
+          begin
+            if not ReadInputCodePointBefore(AInput, InputPos,
+               AProgram.FullUnicode, CodePoint, ByteLen) then
+            begin
+              MemoAdd(Memo, PC, InputPos);
+              if not PopBacktrack then Exit;
+              Continue;
+            end;
+          end
+          else if not ReadInputCodePoint(AInput, InputPos,
+             AProgram.FullUnicode, CodePoint, ByteLen) then
           begin
             MemoAdd(Memo, PC, InputPos);
             if not PopBacktrack then Exit;
@@ -462,7 +537,10 @@ begin
             if not PopBacktrack then Exit;
             Continue;
           end;
-          Inc(InputPos, ByteLen);
+          if ABackward then
+            Dec(InputPos, ByteLen)
+          else
+            Inc(InputPos, ByteLen);
           Inc(PC);
         end;
 
@@ -525,10 +603,20 @@ begin
             Inc(PC);
             Continue;
           end;
+          RefEnd := ASlots[BackrefGroup * 2 + 1];
+          ComparePos := InputPos;
+          if ABackward then
+          begin
+            ComparePos := InputPos - (RefEnd - RefStart);
+            if ComparePos < 0 then
+            begin
+              MemoAdd(Memo, PC, InputPos);
+              if not PopBacktrack then Exit;
+              Continue;
+            end;
+          end;
           RefPos := RefStart;
           LookMatched := True;
-          RefEnd := ASlots[BackrefGroup * 2 + 1];
-          I := InputPos;
           while RefPos < RefEnd do
           begin
             if not ReadInputCodePoint(AInput, RefPos, BackrefUnicode,
@@ -537,7 +625,7 @@ begin
               LookMatched := False;
               Break;
             end;
-            if not ReadInputCodePoint(AInput, InputPos, BackrefUnicode,
+            if not ReadInputCodePoint(AInput, ComparePos, BackrefUnicode,
                InputCP, InputByteLen) then
             begin
               LookMatched := False;
@@ -558,15 +646,18 @@ begin
               end;
             end;
             Inc(RefPos, RefByteLen);
-            Inc(InputPos, InputByteLen);
+            Inc(ComparePos, InputByteLen);
           end;
           if not LookMatched then
           begin
-            InputPos := I;
             MemoAdd(Memo, PC, InputPos);
             if not PopBacktrack then Exit;
             Continue;
           end;
+          if ABackward then
+            InputPos := InputPos - (RefEnd - RefStart)
+          else
+            InputPos := ComparePos;
           Inc(PC);
         end;
 
@@ -667,7 +758,7 @@ begin
           SetLength(LookSlots, SlotCount);
           Move(ASlots[0], LookSlots[0], SlotCount * SizeOf(Integer));
           LookMatched := RunVM(AProgram, AInput, InputPos, LookSlots,
-            SlotCount, PC + 1);
+            SlotCount, PC + 1, nil, False);
           if Negated then
           begin
             if LookMatched then
@@ -694,27 +785,10 @@ begin
         begin
           Negated := (Bx and LOOK_NEGATED_FLAG) <> 0;
           LookEnd := Bx and LOOK_TARGET_MASK;
-          LookMatched := False;
           SetLength(LookSlots, SlotCount);
-          I := InputPos - 1;
-          RefStart := I - MAX_LOOKBEHIND_DISTANCE;
-          if RefStart < 0 then
-            RefStart := 0;
-          while I >= RefStart do
-          begin
-            Move(ASlots[0], LookSlots[0], SlotCount * SizeOf(Integer));
-            RefEnd := 0;
-            if RunVM(AProgram, AInput, I, LookSlots, SlotCount, PC + 1,
-               @RefEnd) then
-            begin
-              if RefEnd = InputPos then
-              begin
-                LookMatched := True;
-                Break;
-              end;
-            end;
-            Dec(I);
-          end;
+          Move(ASlots[0], LookSlots[0], SlotCount * SizeOf(Integer));
+          LookMatched := RunVM(AProgram, AInput, InputPos, LookSlots,
+            SlotCount, PC + 1, nil, True);
           if Negated then
           begin
             if LookMatched then

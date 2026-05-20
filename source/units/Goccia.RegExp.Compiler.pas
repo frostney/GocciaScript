@@ -82,6 +82,12 @@ type
     CodePoints: array of Cardinal;
   end;
 
+  TRegExpTermCode = record
+    Code: array of UInt32;
+    Length: Integer;
+    OriginalStart: Integer;
+  end;
+
   TRegExpClassContents = record
     Ranges: array of TRegExpCharRange;
     RangeCount: Integer;
@@ -104,6 +110,7 @@ type
     FUnicode: Boolean;
     FUnicodeSets: Boolean;
     FPendingCodeUnit: Integer;
+    FBackward: Boolean;
     function Peek: Char;
     function PeekAt(AOffset: Integer): Char;
     function AtEnd: Boolean;
@@ -328,6 +335,7 @@ begin
   FUnicodeSets := HasRegExpFlag(AFlags, 'v');
   FUnicode := HasRegExpFlag(AFlags, 'u') or FUnicodeSets;
   FPendingCodeUnit := -1;
+  FBackward := False;
 end;
 
 function TRegExpCompiler.Peek: Char;
@@ -1530,8 +1538,16 @@ begin
       SplitHoles[SplitCount] := CurrentPC;
       Inc(SplitCount);
       Emit(EncodeOpBx(RX_SPLIT, 0));
-      for J := 0 to High(AContents.Strings[I].CodePoints) do
-        EmitCharMatch(AContents.Strings[I].CodePoints[J]);
+      if FBackward then
+      begin
+        for J := High(AContents.Strings[I].CodePoints) downto 0 do
+          EmitCharMatch(AContents.Strings[I].CodePoints[J]);
+      end
+      else
+      begin
+        for J := 0 to High(AContents.Strings[I].CodePoints) do
+          EmitCharMatch(AContents.Strings[I].CodePoints[J]);
+      end;
       JumpHoles[JumpCount] := CurrentPC;
       Inc(JumpCount);
       Emit(EncodeOpBx(RX_JUMP, 0));
@@ -2106,6 +2122,7 @@ end;
 procedure TRegExpCompiler.CompileGroup;
 var
   SaveAltDepth: Integer;
+  SavedBackward: Boolean;
   GroupName: string;
   CaptureIdx, I: Integer;
   SplitHole, JumpHole: Integer;
@@ -2128,8 +2145,11 @@ begin
     begin
       SplitHole := EmitHole;
       FCode[SplitHole] := EncodeOpBx(RX_LOOKAHEAD, 0);
+      SavedBackward := FBackward;
+      FBackward := False;
       LookStart := CurrentPC;
       CompileDisjunction;
+      FBackward := SavedBackward;
       if not Match(')') then
         raise EConvertError.Create('Unterminated lookahead');
       Emit(EncodeOp(RX_MATCH));
@@ -2140,7 +2160,10 @@ begin
     begin
       SplitHole := EmitHole;
       FCode[SplitHole] := EncodeOpBx(RX_LOOKAHEAD, 0);
+      SavedBackward := FBackward;
+      FBackward := False;
       CompileDisjunction;
+      FBackward := SavedBackward;
       if not Match(')') then
         raise EConvertError.Create('Unterminated negative lookahead');
       Emit(EncodeOp(RX_MATCH));
@@ -2153,7 +2176,10 @@ begin
       begin
         SplitHole := EmitHole;
         FCode[SplitHole] := EncodeOpBx(RX_LOOKBEHIND, 0);
+        SavedBackward := FBackward;
+        FBackward := True;
         CompileDisjunction;
+        FBackward := SavedBackward;
         if not Match(')') then
           raise EConvertError.Create('Unterminated lookbehind');
         Emit(EncodeOp(RX_MATCH));
@@ -2164,7 +2190,10 @@ begin
       begin
         SplitHole := EmitHole;
         FCode[SplitHole] := EncodeOpBx(RX_LOOKBEHIND, 0);
+        SavedBackward := FBackward;
+        FBackward := True;
         CompileDisjunction;
+        FBackward := SavedBackward;
         if not Match(')') then
           raise EConvertError.Create('Unterminated negative lookbehind');
         Emit(EncodeOp(RX_MATCH));
@@ -2176,11 +2205,18 @@ begin
         GroupName := ParseGroupName;
         Inc(FCaptureCount);
         CaptureIdx := FCaptureCount;
-        Emit(EncodeOpBx(RX_SAVE, CaptureIdx * 2));
+        // Backward capture groups still store source-order [start, end] slots.
+        if FBackward then
+          Emit(EncodeOpBx(RX_SAVE, CaptureIdx * 2 + 1))
+        else
+          Emit(EncodeOpBx(RX_SAVE, CaptureIdx * 2));
         CompileDisjunction;
         if not Match(')') then
           raise EConvertError.Create('Unterminated named capture group');
-        Emit(EncodeOpBx(RX_SAVE, CaptureIdx * 2 + 1));
+        if FBackward then
+          Emit(EncodeOpBx(RX_SAVE, CaptureIdx * 2))
+        else
+          Emit(EncodeOpBx(RX_SAVE, CaptureIdx * 2 + 1));
       end;
     end
     else if CharInSet(Peek, ['i', 'm', 's', '-']) then
@@ -2194,11 +2230,18 @@ begin
   begin
     Inc(FCaptureCount);
     CaptureIdx := FCaptureCount;
-    Emit(EncodeOpBx(RX_SAVE, CaptureIdx * 2));
+    // Backward capture groups still store source-order [start, end] slots.
+    if FBackward then
+      Emit(EncodeOpBx(RX_SAVE, CaptureIdx * 2 + 1))
+    else
+      Emit(EncodeOpBx(RX_SAVE, CaptureIdx * 2));
     CompileDisjunction;
     if not Match(')') then
       raise EConvertError.Create('Unterminated capturing group');
-    Emit(EncodeOpBx(RX_SAVE, CaptureIdx * 2 + 1));
+    if FBackward then
+      Emit(EncodeOpBx(RX_SAVE, CaptureIdx * 2))
+    else
+      Emit(EncodeOpBx(RX_SAVE, CaptureIdx * 2 + 1));
   end;
   if FAltStackDepth > 0 then
     Dec(FAltStackDepth);
@@ -2283,6 +2326,9 @@ var
   Bx: Integer;
   NegFlag: Integer;
 begin
+  if ALen <= 0 then
+    Exit;
+
   EnsureCodeCapacity(ALen);
   DstStart := FCodeLen;
   Move(ABody[0], FCode[DstStart], ALen * SizeOf(UInt32));
@@ -2425,10 +2471,42 @@ begin
   CompileQuantifier(AtomStart);
 end;
 
+// ES2026 §22.2.2.3.4 MatchSequence(m1, m2, direction)
 procedure TRegExpCompiler.CompileAlternative;
+var
+  TermStart: Integer;
+  TermCount: Integer;
+  TermIndex: Integer;
+  Terms: array of TRegExpTermCode;
 begin
+  if not FBackward then
+  begin
+    while not AtEnd and (Peek <> '|') and (Peek <> ')') do
+      CompileTerm;
+    Exit;
+  end;
+
+  TermCount := 0;
+  SetLength(Terms, 8);
   while not AtEnd and (Peek <> '|') and (Peek <> ')') do
+  begin
+    TermStart := CurrentPC;
     CompileTerm;
+    if TermCount >= Length(Terms) then
+      SetLength(Terms, TermCount * 2 + 8);
+    Terms[TermCount].Length := CurrentPC - TermStart;
+    Terms[TermCount].OriginalStart := TermStart;
+    SetLength(Terms[TermCount].Code, Terms[TermCount].Length);
+    if Terms[TermCount].Length > 0 then
+      Move(FCode[TermStart], Terms[TermCount].Code[0],
+        Terms[TermCount].Length * SizeOf(UInt32));
+    FCodeLen := TermStart;
+    Inc(TermCount);
+  end;
+
+  for TermIndex := TermCount - 1 downto 0 do
+    EmitBodyAt(Terms[TermIndex].Code, Terms[TermIndex].Length,
+      Terms[TermIndex].OriginalStart);
 end;
 
 procedure TRegExpCompiler.InsertSplitAt(APos: Integer);
