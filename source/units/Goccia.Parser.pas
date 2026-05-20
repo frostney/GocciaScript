@@ -128,8 +128,8 @@ type
     function ParseGetterExpression: TGocciaGetterExpression;
     function ParseSetterExpression: TGocciaSetterExpression;
 
-    // Object method body parsing: (params) { stmts } -> method expression
-    function ParseObjectMethodBody(const ALine, AColumn: Integer; const AIsAsync: Boolean = False; const AIsGenerator: Boolean = False): TGocciaExpression;
+    // Function body parsing: (params) { stmts } -> function expression
+    function ParseFunctionBodyExpression(const ALine, AColumn: Integer; const AIsAsync: Boolean = False; const AIsGenerator: Boolean = False): TGocciaExpression;
 
     // Destructuring pattern parsing
     function ParsePattern: TGocciaDestructuringPattern;
@@ -1759,6 +1759,7 @@ var
   ArrowBody: TGocciaASTNode;
   SeparatorPos: Integer;
   Line, Column: Integer;
+  AsyncStartLine, AsyncStartColumn: Integer;
   IsGenerator: Boolean;
 begin
   case Peek.TokenType of
@@ -1995,6 +1996,8 @@ begin
         end
         else if (Name = KEYWORD_ASYNC) and not Token.ContainsEscape then
         begin
+          AsyncStartLine := Token.Line;
+          AsyncStartColumn := Token.Column;
           case TryConsumeAsyncFunction(Token.Line, Token.Column) of
             afcNotMatched:
               Result := TGocciaIdentifierExpression.Create(Name, Token.Line, Token.Column);
@@ -2017,15 +2020,15 @@ begin
                 Name := Token.Lexeme;
               end;
               CollectGenericParameters;
-              Result := ParseObjectMethodBody(Token.Line, Token.Column, True, IsGenerator);
-              TGocciaMethodExpression(Result).SourceText := ExtractSourceRange(Token.Line, Token.Column);
-              TGocciaMethodExpression(Result).IsAsync := True;
-              TGocciaMethodExpression(Result).IsGenerator := IsGenerator;
+              Result := ParseFunctionBodyExpression(AsyncStartLine, AsyncStartColumn, True, IsGenerator);
+              TGocciaFunctionExpression(Result).SourceText := ExtractSourceRange(AsyncStartLine, AsyncStartColumn);
+              TGocciaFunctionExpression(Result).IsAsync := True;
+              TGocciaFunctionExpression(Result).IsGenerator := IsGenerator;
               // ES2026 §15.6: AsyncGeneratorDeclaration / AsyncGeneratorExpression have
               // their own `prototype` property.  Plain `async function` does not.
-              TGocciaMethodExpression(Result).HasOwnPrototype := IsGenerator;
+              TGocciaFunctionExpression(Result).HasOwnPrototype := IsGenerator;
               if Name <> '' then
-                TGocciaMethodExpression(Result).Name := Name;
+                TGocciaFunctionExpression(Result).Name := Name;
             end;
           end;
         end
@@ -2078,14 +2081,14 @@ begin
             Name := ConsumeIdentifierBinding(
               'Expected generator function name').Lexeme;
           CollectGenericParameters;
-          Result := ParseObjectMethodBody(Token.Line, Token.Column, False, True);
-          TGocciaMethodExpression(Result).SourceText := ExtractSourceRange(Token.Line, Token.Column);
-          TGocciaMethodExpression(Result).IsGenerator := True;
+          Result := ParseFunctionBodyExpression(Token.Line, Token.Column, False, True);
+          TGocciaFunctionExpression(Result).SourceText := ExtractSourceRange(Token.Line, Token.Column);
+          TGocciaFunctionExpression(Result).IsGenerator := True;
           // ES2026 §15.5: GeneratorDeclaration / GeneratorExpression have their own
           // `prototype` data property (per OrdinaryFunctionCreate + MakeConstructor).
-          TGocciaMethodExpression(Result).HasOwnPrototype := True;
+          TGocciaFunctionExpression(Result).HasOwnPrototype := True;
           if Name <> '' then
-            TGocciaMethodExpression(Result).Name := Name;
+            TGocciaFunctionExpression(Result).Name := Name;
         end
         else
         begin
@@ -2094,14 +2097,14 @@ begin
             Name := ConsumeIdentifierBinding(
               'Expected function name').Lexeme;
           CollectGenericParameters;
-          Result := ParseObjectMethodBody(Token.Line, Token.Column);
-          TGocciaMethodExpression(Result).SourceText := ExtractSourceRange(Token.Line, Token.Column);
+          Result := ParseFunctionBodyExpression(Token.Line, Token.Column);
+          TGocciaFunctionExpression(Result).SourceText := ExtractSourceRange(Token.Line, Token.Column);
           // ES2026 §15.2: FunctionDeclaration / FunctionExpression have their own
           // `prototype` data property whose `[[Value]]` is a fresh ordinary object
           // and whose `constructor` data property points back at the function.
-          TGocciaMethodExpression(Result).HasOwnPrototype := True;
+          TGocciaFunctionExpression(Result).HasOwnPrototype := True;
           if Name <> '' then
-            TGocciaMethodExpression(Result).Name := Name;
+            TGocciaFunctionExpression(Result).Name := Name;
         end;
       end;
     gttLeftBracket:
@@ -2769,6 +2772,7 @@ var
   IsGetter, IsSetter: Boolean;
   IsAsync: Boolean;
   IsGenerator: Boolean;
+  MethodFunction: TGocciaFunctionExpression;
   ComputedCount, SourceOrderCount: Integer;
   MemberStartLine, MemberStartColumn: Integer;
 begin
@@ -2844,6 +2848,7 @@ begin
       PropertySourceOrder[SourceOrderCount - 1].PropertyType := pstComputed;
       PropertySourceOrder[SourceOrderCount - 1].ComputedIndex := ComputedCount - 1;
       PropertySourceOrder[SourceOrderCount - 1].StaticKey := '';
+      PropertySourceOrder[SourceOrderCount - 1].Expression := nil;
 
       // For spread expressions, no further processing is needed
       if not Match(gttComma) then
@@ -2890,6 +2895,7 @@ begin
       PropertySourceOrder[SourceOrderCount - 1].PropertyType := pstGetter;
       PropertySourceOrder[SourceOrderCount - 1].StaticKey := Key;
       PropertySourceOrder[SourceOrderCount - 1].ComputedIndex := -1;
+      PropertySourceOrder[SourceOrderCount - 1].Expression := nil;
     end
     else if IsSetter then
     begin
@@ -2902,16 +2908,20 @@ begin
       PropertySourceOrder[SourceOrderCount - 1].PropertyType := pstSetter;
       PropertySourceOrder[SourceOrderCount - 1].StaticKey := Key;
       PropertySourceOrder[SourceOrderCount - 1].ComputedIndex := -1;
+      PropertySourceOrder[SourceOrderCount - 1].Expression := nil;
     end
     // Check for method shorthand syntax: methodName() { ... } or [expr]() { ... }
     else if Check(gttLeftParen) then
     begin
-      Value := ParseObjectMethodBody(MemberStartLine, MemberStartColumn, IsAsync, IsGenerator);
-      TGocciaMethodExpression(Value).SourceText := ExtractSourceRange(
+      MethodFunction := TGocciaFunctionExpression(ParseFunctionBodyExpression(
+        MemberStartLine, MemberStartColumn, IsAsync, IsGenerator));
+      MethodFunction.SourceText := ExtractSourceRange(
         MemberStartLine, MemberStartColumn);
       if IsAsync then
-        TGocciaMethodExpression(Value).IsAsync := True;
-      TGocciaMethodExpression(Value).IsGenerator := IsGenerator;
+        MethodFunction.IsAsync := True;
+      MethodFunction.IsGenerator := IsGenerator;
+      Value := TGocciaObjectMethodDefinition.Create(
+        MethodFunction, MemberStartLine, MemberStartColumn);
     end
     else
     begin
@@ -2960,12 +2970,15 @@ begin
         PropertySourceOrder[SourceOrderCount - 1].PropertyType := pstComputed;
         PropertySourceOrder[SourceOrderCount - 1].ComputedIndex := ComputedCount - 1;
         PropertySourceOrder[SourceOrderCount - 1].StaticKey := '';
+        PropertySourceOrder[SourceOrderCount - 1].Expression := nil;
       end
       else
       begin
         // JavaScript allows duplicate keys - last one wins
         if Properties.ContainsKey(Key) then
-          Properties[Key] := Value
+        begin
+          Properties[Key] := Value;
+        end
         else
         begin
           Properties.Add(Key, Value);
@@ -2978,6 +2991,7 @@ begin
         PropertySourceOrder[SourceOrderCount - 1].PropertyType := pstStatic;
         PropertySourceOrder[SourceOrderCount - 1].StaticKey := Key;
         PropertySourceOrder[SourceOrderCount - 1].ComputedIndex := -1;
+        PropertySourceOrder[SourceOrderCount - 1].Expression := Value;
       end;
     end;
 
@@ -3137,14 +3151,14 @@ begin
   end;
 end;
 
-function TGocciaParser.ParseObjectMethodBody(const ALine, AColumn: Integer; const AIsAsync: Boolean; const AIsGenerator: Boolean): TGocciaExpression;
+function TGocciaParser.ParseFunctionBodyExpression(const ALine, AColumn: Integer; const AIsAsync: Boolean; const AIsGenerator: Boolean): TGocciaExpression;
 var
   Parameters: TGocciaParameterArray;
   Body: TGocciaASTNode;
   Statements: TObjectList<TGocciaASTNode>;
   Stmt: TGocciaStatement;
 begin
-  Consume(gttLeftParen, 'Expected "(" after method name',
+  Consume(gttLeftParen, 'Expected "(" before function parameters',
     SSuggestOpenParenMethodParameterList);
 
   Inc(FFunctionDepth);
@@ -3159,7 +3173,7 @@ begin
       CollectTypeAnnotation([gttLeftBrace]);
     end;
 
-    Consume(gttLeftBrace, 'Expected "{" before method body',
+    Consume(gttLeftBrace, 'Expected "{" before function body',
       SSuggestOpenBraceMethodBody);
 
     if AIsAsync then Inc(FInAsyncFunction);
@@ -3173,12 +3187,12 @@ begin
           Statements.Add(Stmt);
         end;
 
-        Consume(gttRightBrace, 'Expected "}" after method body',
+        Consume(gttRightBrace, 'Expected "}" after function body',
           SSuggestCloseBlock);
         Body := TGocciaBlockStatement.Create(Statements, ALine, AColumn);
-        Result := TGocciaMethodExpression.Create(Parameters, Body, ALine, AColumn);
-        TGocciaMethodExpression(Result).IsAsync := AIsAsync;
-        TGocciaMethodExpression(Result).IsGenerator := AIsGenerator;
+        Result := TGocciaFunctionExpression.Create(Parameters, Body, ALine, AColumn);
+        TGocciaFunctionExpression(Result).IsAsync := AIsAsync;
+        TGocciaFunctionExpression(Result).IsGenerator := AIsGenerator;
       except
         Statements.Free;
         raise;
@@ -3481,14 +3495,12 @@ begin
       afcReady:
       begin
         Result := FunctionStatement(True, Check(gttStar));
-        if (Result is TGocciaVariableDeclaration) and
-           (Length(TGocciaVariableDeclaration(Result).Variables) = 1) and
-           (TGocciaVariableDeclaration(Result).Variables[0].Initializer is TGocciaMethodExpression) then
+        if Result is TGocciaFunctionDeclaration then
         begin
-          TGocciaMethodExpression(TGocciaVariableDeclaration(Result).Variables[0].Initializer).IsAsync := True;
+          TGocciaFunctionDeclaration(Result).FunctionExpression.IsAsync := True;
           // Override SourceText to include 'async' prefix (FunctionStatement
           // sets it from the 'function' token; Line/Column are the 'async' token)
-          TGocciaMethodExpression(TGocciaVariableDeclaration(Result).Variables[0].Initializer).SourceText :=
+          TGocciaFunctionDeclaration(Result).FunctionExpression.SourceText :=
             ExtractSourceRange(Line, Column);
         end;
       end;
@@ -4450,9 +4462,7 @@ function TGocciaParser.FunctionStatement(const AIsAsync: Boolean; const AIsGener
 var
   Line, Column: Integer;
   NameToken: TGocciaToken;
-  MethodExpr: TGocciaExpression;
-  Variables: TArray<TGocciaVariableInfo>;
-  VarDecl: TGocciaVariableDeclaration;
+  FunctionExpr: TGocciaFunctionExpression;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
@@ -4475,24 +4485,17 @@ begin
 
   CollectGenericParameters;
 
-  MethodExpr := ParseObjectMethodBody(Line, Column, AIsAsync, AIsGenerator);
-  TGocciaMethodExpression(MethodExpr).SourceText := ExtractSourceRange(Line, Column);
-  TGocciaMethodExpression(MethodExpr).IsAsync := AIsAsync;
-  TGocciaMethodExpression(MethodExpr).IsGenerator := AIsGenerator;
+  FunctionExpr := TGocciaFunctionExpression(ParseFunctionBodyExpression(Line, Column, AIsAsync, AIsGenerator));
+  FunctionExpr.SourceText := ExtractSourceRange(Line, Column);
+  FunctionExpr.IsAsync := AIsAsync;
+  FunctionExpr.IsGenerator := AIsGenerator;
   // ES2026 §15.2 / §15.5 / §15.6: FunctionDeclaration, GeneratorDeclaration, and
   // AsyncGeneratorDeclaration get their own `prototype` data property
   // (MakeConstructor).  Plain `async function` declarations do not.
-  TGocciaMethodExpression(MethodExpr).HasOwnPrototype :=
-    AIsGenerator or (not AIsAsync);
+  FunctionExpr.HasOwnPrototype := AIsGenerator or (not AIsAsync);
 
-  SetLength(Variables, 1);
-  Variables[0].Name := NameToken.Lexeme;
-  Variables[0].Initializer := TGocciaExpression(MethodExpr);
-  Variables[0].HasInitializer := True;
-  Variables[0].TypeAnnotation := '';
-  VarDecl := TGocciaVariableDeclaration.Create(Variables, False, Line, Column, True);
-  VarDecl.IsFunctionDeclaration := True;
-  Result := VarDecl;
+  Result := TGocciaFunctionDeclaration.Create(
+    NameToken.Lexeme, FunctionExpr, Line, Column);
 end;
 
 function TGocciaParser.ReturnStatement: TGocciaStatement;
@@ -5056,6 +5059,7 @@ var
   Line, Column: Integer;
   InnerDecl: TGocciaStatement;
   VarDecl: TGocciaVariableDeclaration;
+  FunctionDecl: TGocciaFunctionDeclaration;
   DefaultValue: TGocciaExpression;
   DefaultLocalName: string;
   DirectDefaultDeclaration: Boolean;
@@ -5119,9 +5123,9 @@ begin
          (TGocciaClassExpression(DefaultValue).ClassDefinition.Name <> '') then
         DefaultLocalName :=
           TGocciaClassExpression(DefaultValue).ClassDefinition.Name
-      else if (DefaultValue is TGocciaMethodExpression) and
-              (TGocciaMethodExpression(DefaultValue).Name <> '') then
-        DefaultLocalName := TGocciaMethodExpression(DefaultValue).Name;
+      else if (DefaultValue is TGocciaFunctionExpression) and
+              (TGocciaFunctionExpression(DefaultValue).Name <> '') then
+        DefaultLocalName := TGocciaFunctionExpression(DefaultValue).Name;
     end;
     if not DirectDefaultDeclaration then
       ConsumeSemicolonOrASI('Expected ";" after default export',
@@ -5172,20 +5176,18 @@ begin
       afcReady:
       begin
         InnerDecl := FunctionStatement(True, Check(gttStar));
-        if (InnerDecl is TGocciaVariableDeclaration) and
-           (Length(TGocciaVariableDeclaration(InnerDecl).Variables) = 1) and
-           (TGocciaVariableDeclaration(InnerDecl).Variables[0].Initializer is TGocciaMethodExpression) then
+        if InnerDecl is TGocciaFunctionDeclaration then
         begin
-          TGocciaMethodExpression(TGocciaVariableDeclaration(InnerDecl).Variables[0].Initializer).IsAsync := True;
+          TGocciaFunctionDeclaration(InnerDecl).FunctionExpression.IsAsync := True;
           // Override SourceText to include 'async' prefix (FunctionStatement
           // sets it from the 'function' token; AsyncLine/AsyncColumn are the 'async' token)
-          TGocciaMethodExpression(TGocciaVariableDeclaration(InnerDecl).Variables[0].Initializer).SourceText :=
+          TGocciaFunctionDeclaration(InnerDecl).FunctionExpression.SourceText :=
             ExtractSourceRange(AsyncLine, AsyncColumn);
         end;
-        if InnerDecl is TGocciaVariableDeclaration then
+        if InnerDecl is TGocciaFunctionDeclaration then
         begin
-          VarDecl := TGocciaVariableDeclaration(InnerDecl);
-          Result := TGocciaExportVariableDeclaration.Create(VarDecl, Line, Column);
+          FunctionDecl := TGocciaFunctionDeclaration(InnerDecl);
+          Result := TGocciaExportFunctionDeclaration.Create(FunctionDecl, Line, Column);
         end
         else
           Result := InnerDecl;
@@ -5208,10 +5210,10 @@ begin
     end;
     Advance; // consume 'function'
     InnerDecl := FunctionStatement(False, Check(gttStar));
-    if InnerDecl is TGocciaVariableDeclaration then
+    if InnerDecl is TGocciaFunctionDeclaration then
     begin
-      VarDecl := TGocciaVariableDeclaration(InnerDecl);
-      Result := TGocciaExportVariableDeclaration.Create(VarDecl, Line, Column);
+      FunctionDecl := TGocciaFunctionDeclaration(InnerDecl);
+      Result := TGocciaExportFunctionDeclaration.Create(FunctionDecl, Line, Column);
     end
     else
       Result := InnerDecl;
