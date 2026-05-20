@@ -313,6 +313,7 @@ type
     PropertyType: TGocciaPropertySourceType;
     StaticKey: string;           // For static properties, getters, setters
     ComputedIndex: Integer;      // Index into ComputedProperties list
+    Expression: TGocciaExpression; // Source-order static value expression
   end;
 
   TGocciaObjectExpression = class(TGocciaExpression)
@@ -380,7 +381,7 @@ type
     property SourceText: string read FSourceText write FSourceText;
   end;
 
-  TGocciaMethodExpression = class(TGocciaExpression)
+  TGocciaFunctionExpression = class(TGocciaExpression)
   private
     FParameters: TGocciaParameterArray;
     FBody: TGocciaASTNode;
@@ -397,14 +398,23 @@ type
     property Body: TGocciaASTNode read FBody;
     property IsAsync: Boolean read FIsAsync write FIsAsync;
     property IsGenerator: Boolean read FIsGenerator write FIsGenerator;
-    // True when this method node represents a `function`/`function*` declaration
-    // or expression (or async generator) that, per ES2026 §10.2.5 MakeConstructor,
+    // True when this function node represents a `function`/`function*`
+    // declaration or expression (or async generator) that, per ES2026 §10.2.5 MakeConstructor,
     // requires its own `prototype` data property pointing to a fresh object whose
     // `constructor` back-references the function. False for concise methods,
     // arrow functions, getters/setters, and plain async functions.
     property HasOwnPrototype: Boolean read FHasOwnPrototype write FHasOwnPrototype;
     property SourceText: string read FSourceText write FSourceText;
     property Name: string read FName write FName;
+  end;
+
+  TGocciaObjectMethodDefinition = class(TGocciaExpression)
+  private
+    FFunctionExpression: TGocciaFunctionExpression;
+  public
+    constructor Create(const AFunctionExpression: TGocciaFunctionExpression; const ALine, AColumn: Integer);
+    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
+    property FunctionExpression: TGocciaFunctionExpression read FFunctionExpression;
   end;
 
   TGocciaYieldExpression = class(TGocciaExpression)
@@ -1256,15 +1266,25 @@ begin
   FBody := ABody;
 end;
 
-{ TGocciaMethodExpression }
+{ TGocciaFunctionExpression }
 
-constructor TGocciaMethodExpression.Create(const AParameters: TGocciaParameterArray;
+constructor TGocciaFunctionExpression.Create(const AParameters: TGocciaParameterArray;
   const ABody: TGocciaASTNode; const ALine, AColumn: Integer);
 begin
   inherited Create(ALine, AColumn);
   FParameters := AParameters;
   FBody := ABody;
   FHasOwnPrototype := False;
+end;
+
+{ TGocciaObjectMethodDefinition }
+
+constructor TGocciaObjectMethodDefinition.Create(
+  const AFunctionExpression: TGocciaFunctionExpression;
+  const ALine, AColumn: Integer);
+begin
+  inherited Create(ALine, AColumn);
+  FFunctionExpression := AFunctionExpression;
 end;
 
 { TGocciaAwaitExpression }
@@ -1987,9 +2007,14 @@ begin
   Result := EvaluateObject(Self, AContext);
 end;
 
-function TGocciaMethodExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
+function TGocciaFunctionExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
 begin
-  Result := EvaluateMethodExpression(Self, AContext);
+  Result := EvaluateFunctionExpression(Self, AContext);
+end;
+
+function TGocciaObjectMethodDefinition.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
+begin
+  Result := EvaluateFunctionExpression(FFunctionExpression, AContext);
 end;
 
 function TGocciaAwaitExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;

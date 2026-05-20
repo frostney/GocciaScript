@@ -41,7 +41,6 @@ type
     FVariables: TArray<TGocciaVariableInfo>;
     FIsConst: Boolean;
     FIsVar: Boolean;
-    FIsFunctionDeclaration: Boolean;
   public
     constructor Create(const AVariables: TArray<TGocciaVariableInfo>;
       const AIsConst: Boolean; const ALine, AColumn: Integer;
@@ -50,7 +49,19 @@ type
     property Variables: TArray<TGocciaVariableInfo> read FVariables;
     property IsConst: Boolean read FIsConst;
     property IsVar: Boolean read FIsVar;
-    property IsFunctionDeclaration: Boolean read FIsFunctionDeclaration write FIsFunctionDeclaration;
+  end;
+
+  TGocciaFunctionDeclaration = class(TGocciaStatement)
+  private
+    FName: string;
+    FFunctionExpression: TGocciaFunctionExpression;
+  public
+    constructor Create(const AName: string;
+      const AFunctionExpression: TGocciaFunctionExpression;
+      const ALine, AColumn: Integer);
+    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
+    property Name: string read FName;
+    property FunctionExpression: TGocciaFunctionExpression read FFunctionExpression;
   end;
 
   TGocciaDestructuringDeclaration = class(TGocciaStatement)
@@ -437,6 +448,16 @@ type
     property Declaration: TGocciaVariableDeclaration read FDeclaration;
   end;
 
+  TGocciaExportFunctionDeclaration = class(TGocciaStatement)
+  private
+    FDeclaration: TGocciaFunctionDeclaration;
+  public
+    constructor Create(const ADeclaration: TGocciaFunctionDeclaration;
+      const ALine, AColumn: Integer);
+    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
+    property Declaration: TGocciaFunctionDeclaration read FDeclaration;
+  end;
+
   TGocciaReExportDeclaration = class(TGocciaStatement)
   private
     FExportsTable: TStringStringMap; // exported name -> source name
@@ -622,6 +643,17 @@ end;
     FVariables := AVariables;
     FIsConst := AIsConst;
     FIsVar := AIsVar;
+  end;
+
+  { TGocciaFunctionDeclaration }
+
+  constructor TGocciaFunctionDeclaration.Create(const AName: string;
+    const AFunctionExpression: TGocciaFunctionExpression;
+    const ALine, AColumn: Integer);
+  begin
+    inherited Create(ALine, AColumn);
+    FName := AName;
+    FFunctionExpression := AFunctionExpression;
   end;
 
   { TGocciaDestructuringDeclaration }
@@ -881,6 +913,16 @@ end;
     FDeclaration := ADeclaration;
   end;
 
+  { TGocciaExportFunctionDeclaration }
+
+  constructor TGocciaExportFunctionDeclaration.Create(
+    const ADeclaration: TGocciaFunctionDeclaration;
+    const ALine, AColumn: Integer);
+  begin
+    inherited Create(ALine, AColumn);
+    FDeclaration := ADeclaration;
+  end;
+
   { TGocciaReExportDeclaration }
 
   constructor TGocciaReExportDeclaration.Create(const AExportsTable: TStringStringMap;
@@ -989,9 +1031,6 @@ end;
     Continuation: TGocciaGeneratorContinuation;
   begin
     Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
-    // Function declarations are no-ops at runtime — already hoisted with their value
-    if IsFunctionDeclaration then
-      Exit;
     Continuation := CurrentGeneratorContinuation;
     if Assigned(Continuation) then
       I := Continuation.GetStatementIndex(Self)
@@ -1242,14 +1281,21 @@ end;
     Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
   end;
 
+  function TGocciaFunctionDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  begin
+    // Function declarations are no-ops at runtime: their bindings and function
+    // values are installed by HoistFunctionDeclarations before statement execution.
+    Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
+  end;
+
   function TGocciaExportDefaultDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
   var
     Value: TGocciaValue;
   begin
     Value := EvaluateExpression(Expression, AContext);
     if ((Expression is TGocciaArrowFunctionExpression) or
-       ((Expression is TGocciaMethodExpression) and
-       (TGocciaMethodExpression(Expression).Name = ''))) and
+       ((Expression is TGocciaFunctionExpression) and
+       (TGocciaFunctionExpression(Expression).Name = ''))) and
        (Value is TGocciaFunctionValue) then
       TGocciaFunctionValue(Value).SetInferredName(KEYWORD_DEFAULT)
     else if (Expression is TGocciaClassExpression) and
@@ -1263,6 +1309,11 @@ end;
   end;
 
   function TGocciaExportVariableDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  begin
+    Result := Declaration.Execute(AContext);
+  end;
+
+  function TGocciaExportFunctionDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
   begin
     Result := Declaration.Execute(AContext);
   end;

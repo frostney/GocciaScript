@@ -167,6 +167,13 @@ type
       const AGetter: TGocciaValue);
     procedure DefineStaticSetterProperty(const ATarget: TGocciaValue; const AName: string;
       const ASetter: TGocciaValue);
+    procedure DefineDataPropertyByKeyInternal(const ATarget: TGocciaValue;
+      const AKey: TGocciaRegister; const AValue: TGocciaValue;
+      const ASetHomeObject: Boolean);
+    procedure DefineDataPropertyByKey(const ATarget: TGocciaValue;
+      const AKey: TGocciaRegister; const AValue: TGocciaValue);
+    procedure DefineMethodPropertyByKey(const ATarget: TGocciaValue;
+      const AKey: TGocciaRegister; const AValue: TGocciaValue);
     procedure DefineGetterPropertyByKey(const ATarget, AKey, AGetter: TGocciaValue);
     procedure DefineSetterPropertyByKey(const ATarget, AKey, ASetter: TGocciaValue);
     procedure DefineStaticGetterPropertyByKey(const ATarget, AKey, AGetter: TGocciaValue);
@@ -462,6 +469,28 @@ begin
     ThrowTypeError(Format(SErrorCannotAssignReadOnly, [AName]),
       SSuggestReadOnlyProperty);
   TGocciaPropertyDescriptorData(Descriptor).Value := AValue;
+end;
+
+// ES2026 §7.3.6 CreateDataPropertyOrThrow(O, P, V)
+procedure DefineDataPropertyOnObject(const ATarget: TGocciaObjectValue;
+  const AName: string; const AValue: TGocciaValue); inline;
+begin
+  if (ATarget is TGocciaVMLiteralObjectValue) and
+     TGocciaVMLiteralObjectValue(ATarget)
+       .TrySetLiteralDataPropertyFast(AName, AValue) then
+    Exit;
+
+  ATarget.DefineProperty(AName, TGocciaPropertyDescriptorData.Create(AValue,
+    [pfEnumerable, pfConfigurable, pfWritable]));
+end;
+
+// ES2026 §7.3.6 CreateDataPropertyOrThrow(O, P, V) — symbol variant
+procedure DefineSymbolDataPropertyOnObject(const ATarget: TGocciaObjectValue;
+  const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue); inline;
+begin
+  ATarget.DefineSymbolProperty(ASymbol,
+    TGocciaPropertyDescriptorData.Create(AValue,
+      [pfEnumerable, pfConfigurable, pfWritable]));
 end;
 
 function VMNumberValue(const AValue: Double): TGocciaNumberLiteralValue; inline;
@@ -4655,9 +4684,10 @@ begin
   begin
     SourceObject := TGocciaObjectValue(ASource);
     for Key in SourceObject.GetEnumerablePropertyNames do
-      ATarget.SetProperty(Key, SourceObject.GetProperty(Key));
+      DefineDataPropertyOnObject(ATarget, Key, SourceObject.GetProperty(Key));
     for SymbolPair in SourceObject.GetEnumerableSymbolProperties do
-      ATarget.AssignSymbolProperty(SymbolPair.Key, SymbolPair.Value);
+      DefineSymbolDataPropertyOnObject(ATarget, SymbolPair.Key,
+        SymbolPair.Value);
     Exit;
   end;
 
@@ -4665,14 +4695,15 @@ begin
   begin
     for I := 0 to TGocciaArrayValue(ASource).Elements.Count - 1 do
       if TGocciaArrayValue(ASource).Elements[I] <> TGocciaHoleValue.HoleValue then
-        ATarget.SetProperty(IntToStr(I), TGocciaArrayValue(ASource).Elements[I]);
+        DefineDataPropertyOnObject(ATarget, IntToStr(I),
+          TGocciaArrayValue(ASource).Elements[I]);
     Exit;
   end;
 
   if ASource is TGocciaStringLiteralValue then
   begin
     for I := 1 to Length(TGocciaStringLiteralValue(ASource).Value) do
-      ATarget.SetProperty(IntToStr(I - 1),
+      DefineDataPropertyOnObject(ATarget, IntToStr(I - 1),
         TGocciaStringLiteralValue.Create(TGocciaStringLiteralValue(ASource).Value[I]));
   end;
 end;
@@ -5047,6 +5078,57 @@ begin
   if not Assigned(FCurrentModuleExports) then
     FCurrentModuleExports := TGocciaValueMap.Create;
   FCurrentModuleExports.AddOrSetValue(AName, AValue);
+end;
+
+// ES2026 §13.2.5.6 Runtime Semantics: PropertyDefinitionEvaluation
+procedure TGocciaVM.DefineDataPropertyByKeyInternal(const ATarget: TGocciaValue;
+  const AKey: TGocciaRegister; const AValue: TGocciaValue;
+  const ASetHomeObject: Boolean);
+var
+  TargetObject: TGocciaObjectValue;
+  ResolvedKey: TGocciaValue;
+begin
+  if not (ATarget is TGocciaObjectValue) then
+    Exit;
+
+  TargetObject := TGocciaObjectValue(ATarget);
+  if ASetHomeObject then
+    SetBytecodeHomeObject(AValue, TargetObject);
+
+  if (AKey.Kind = grkObject) and
+     (AKey.ObjectValue is TGocciaSymbolValue) then
+  begin
+    DefineSymbolDataPropertyOnObject(TargetObject,
+      TGocciaSymbolValue(AKey.ObjectValue), AValue);
+    Exit;
+  end;
+
+  if TryResolveObjectKey(AKey, ResolvedKey) then
+  begin
+    if ResolvedKey is TGocciaSymbolValue then
+      DefineSymbolDataPropertyOnObject(TargetObject,
+        TGocciaSymbolValue(ResolvedKey), AValue)
+    else
+      DefineDataPropertyOnObject(TargetObject,
+        TGocciaStringLiteralValue(ResolvedKey).Value, AValue);
+    Exit;
+  end;
+
+  DefineDataPropertyOnObject(TargetObject, KeyToPropertyNameRegister(AKey),
+    AValue);
+end;
+
+procedure TGocciaVM.DefineDataPropertyByKey(const ATarget: TGocciaValue;
+  const AKey: TGocciaRegister; const AValue: TGocciaValue);
+begin
+  DefineDataPropertyByKeyInternal(ATarget, AKey, AValue, False);
+end;
+
+// ES2026 §13.2.5.5 MethodDefinition: concise object methods get [[HomeObject]].
+procedure TGocciaVM.DefineMethodPropertyByKey(const ATarget: TGocciaValue;
+  const AKey: TGocciaRegister; const AValue: TGocciaValue);
+begin
+  DefineDataPropertyByKeyInternal(ATarget, AKey, AValue, True);
 end;
 
 procedure TGocciaVM.DefineGetterProperty(const ATarget: TGocciaValue;
@@ -8092,6 +8174,14 @@ begin
         else
           SetPropertyValue(GetRegister(A), GlobalName, RightValue);
       end;
+
+      OP_DEFINE_DATA_PROP:
+        DefineDataPropertyByKey(RegisterToValue(FRegisters[A]),
+          FRegisters[B], RegisterToValue(FRegisters[C]));
+
+      OP_DEFINE_METHOD_PROP:
+        DefineMethodPropertyByKey(RegisterToValue(FRegisters[A]),
+          FRegisters[B], RegisterToValue(FRegisters[C]));
 
       OP_DELETE_PROP_CONST:
       begin

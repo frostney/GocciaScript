@@ -141,6 +141,8 @@ begin
     OP_DELETE_GLOBAL:                  Result := 'OP_DELETE_GLOBAL';
     OP_DEFINE_STATIC_PROP_CONST:       Result := 'OP_DEFINE_STATIC_PROP_CONST';
     OP_DEFINE_STATIC_METHOD_CONST:     Result := 'OP_DEFINE_STATIC_METHOD_CONST';
+    OP_DEFINE_DATA_PROP:               Result := 'OP_DEFINE_DATA_PROP';
+    OP_DEFINE_METHOD_PROP:             Result := 'OP_DEFINE_METHOD_PROP';
     OP_ADD:                            Result := 'OP_ADD';
     OP_SUB:                            Result := 'OP_SUB';
     OP_MUL:                            Result := 'OP_MUL';
