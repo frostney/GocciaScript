@@ -20,6 +20,7 @@ type
 
   TGocciaObjectValue = class(TGocciaValue)
   private
+    procedure SetRegExpData(const AValue: TObject);
   protected
     FProperties: TGocciaPropertyMap;
     FSymbolDescriptors: TSymbolDescriptorMap;
@@ -30,6 +31,7 @@ type
     FExtensible: Boolean;
     FHasErrorData: Boolean;
     FHasRegExpData: Boolean;
+    FRegExpData: TObject;
   public
     class procedure InitializeSharedPrototype;
     class function GetSharedObjectPrototype: TGocciaObjectValue; static;
@@ -98,6 +100,7 @@ type
     property Extensible: Boolean read FExtensible;
     property HasErrorData: Boolean read FHasErrorData write FHasErrorData;
     property HasRegExpData: Boolean read FHasRegExpData write FHasRegExpData;
+    property RegExpData: TObject read FRegExpData write SetRegExpData;
   published
     function ObjectPrototypeToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ObjectPrototypeIsPrototypeOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -146,6 +149,14 @@ begin
 end;
 
 { TGocciaObjectValue }
+
+procedure TGocciaObjectValue.SetRegExpData(const AValue: TObject);
+begin
+  if FRegExpData = AValue then
+    Exit;
+  FRegExpData.Free;
+  FRegExpData := AValue;
+end;
 
 class function TGocciaObjectValue.GetSharedObjectPrototype: TGocciaObjectValue;
 begin
@@ -382,6 +393,7 @@ begin
   FSymbolDescriptors.Free;
 
   FSymbolInsertionOrder.Free;
+  FRegExpData.Free;
   inherited;
 end;
 
