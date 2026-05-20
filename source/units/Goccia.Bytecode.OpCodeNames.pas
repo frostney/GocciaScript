@@ -171,6 +171,7 @@ begin
     OP_CREATE_ARGUMENTS:               Result := 'OP_CREATE_ARGUMENTS';
     OP_TO_OBJECT:                      Result := 'OP_TO_OBJECT';
     OP_HAS_WITH_BINDING:               Result := 'OP_HAS_WITH_BINDING';
+    OP_TO_PROPERTY_KEY:                Result := 'OP_TO_PROPERTY_KEY';
     OP_INC:                            Result := 'OP_INC';
     OP_DEC:                            Result := 'OP_DEC';
     OP_TO_NUMERIC:                     Result := 'OP_TO_NUMERIC';

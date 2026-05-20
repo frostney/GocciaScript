@@ -7424,6 +7424,10 @@ begin
       OP_TO_OBJECT:
         SetRegister(A, ToObject(GetRegister(B)));
 
+      // ES2026 §7.1.19 ToPropertyKey(argument)
+      OP_TO_PROPERTY_KEY:
+        SetRegister(A, ToPropertyKey(RegisterToValue(FRegisters[B])));
+
       OP_LOAD_INT:
         FRegisters[A] := RegisterInt(DecodesBx(Instruction));
 

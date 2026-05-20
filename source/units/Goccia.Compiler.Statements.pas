@@ -3732,7 +3732,12 @@ begin
 
     case Elem.Kind of
       cekField:
+      begin
+        // ES2026 §15.7.10 ClassFieldDefinitionEvaluation evaluates
+        // ClassElementName, including ToPropertyKey, during class definition.
+        EmitInstruction(ACtx, EncodeABC(OP_TO_PROPERTY_KEY, KeyReg, KeyReg, 0));
         Continue;
+      end;
       cekGetter:
         if Elem.IsStatic then
           CompileComputedGetterBody(ACtx, ATargetReg, KeyReg,

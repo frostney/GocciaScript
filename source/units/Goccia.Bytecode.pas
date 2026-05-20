@@ -59,7 +59,9 @@ const
   //               [[HomeObject]] without affecting plain data properties.
   //   v34 -> v35: added OP_DEFINE_PROP_DYNAMIC for computed public
   //               class fields.
-  GOCCIA_FORMAT_VERSION = 35;
+  //   v35 -> v36: added OP_TO_PROPERTY_KEY so delayed computed class field
+  //               definitions can reuse source-order property keys.
+  GOCCIA_FORMAT_VERSION = 36;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
@@ -254,7 +256,8 @@ type
     OP_NEW_TARGET    = 181,
     OP_CREATE_ARGUMENTS = 182,
     OP_TO_OBJECT     = 183,
-    OP_HAS_WITH_BINDING = 184
+    OP_HAS_WITH_BINDING = 184,
+    OP_TO_PROPERTY_KEY = 185
   );
 
 function EncodeABC(const AOp: TGocciaOpCode; const A, B, C: UInt8): UInt32; inline;
