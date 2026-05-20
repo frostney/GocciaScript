@@ -99,7 +99,9 @@ begin
     Result := sltReference
   else if AExpr is TGocciaArrowFunctionExpression then
     Result := sltReference
-  else if AExpr is TGocciaMethodExpression then
+  else if AExpr is TGocciaFunctionExpression then
+    Result := sltReference
+  else if AExpr is TGocciaObjectMethodDefinition then
     Result := sltReference;
 end;
 

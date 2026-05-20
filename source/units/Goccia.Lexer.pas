@@ -15,7 +15,6 @@ uses
 
 type
   TGocciaLexer = class
-  const ValidIdentifierChars: set of Char = ['a'..'z', 'A'..'Z', '0'..'9', '_', '$'];
   private
     FSource: string;
     FTokens: TObjectList<TGocciaToken>;
@@ -36,10 +35,12 @@ type
     function Peek: Char; inline;
     function PeekNext: Char; inline;
     function Match(const AExpected: Char): Boolean; inline;
-    function IsValidIdentifierChar(const C: Char): Boolean; inline;
-    function IsValidIdentifierStartChar(const C: Char): Boolean; inline;
+    function IsSourceIdentifierStartCodePoint(ACodePoint: Cardinal): Boolean; inline;
+    function IsSourceIdentifierPartCodePoint(ACodePoint: Cardinal): Boolean; inline;
     function IsValidEscapedIdentifierText(const AText: string;
       const AAtStart: Boolean): Boolean;
+    function TryReadIdentifierCodePoint(out ACodePoint: Cardinal;
+      out AText: string; out AByteLength: Integer): Boolean;
     procedure AppendCurrent(var ASB, ARawSB: TStringBuffer); inline;
     procedure AddToken(const ATokenType: TGocciaTokenType); overload;
     procedure AddToken(const ATokenType: TGocciaTokenType; const ALiteral: string;
@@ -96,6 +97,7 @@ uses
 
   Goccia.Error,
   Goccia.Error.Suggestions,
+  Goccia.Identifier,
   Goccia.Keywords.Contextual,
   Goccia.Keywords.Reserved;
 
@@ -1358,40 +1360,69 @@ begin
   end;
 end;
 
-function TGocciaLexer.IsValidIdentifierChar(const C: Char): Boolean; inline;
+function TGocciaLexer.IsSourceIdentifierStartCodePoint(
+  ACodePoint: Cardinal): Boolean;
 begin
-  Result := CharInSet(C, ValidIdentifierChars) or (Ord(C) > 127);
+  // GocciaScript intentionally keeps its historical non-ASCII identifier
+  // extension, including emoji identifiers, while using the standard helper
+  // for ordinary Unicode identifier code points.
+  Result := IsIdentifierStartCodePoint(ACodePoint) or (ACodePoint > $7F);
 end;
 
-function TGocciaLexer.IsValidIdentifierStartChar(const C: Char): Boolean; inline;
+function TGocciaLexer.IsSourceIdentifierPartCodePoint(
+  ACodePoint: Cardinal): Boolean;
 begin
-  Result := CharInSet(C, ['a'..'z', 'A'..'Z', '_', '$']) or
-            (Ord(C) > 127);
+  Result := IsIdentifierPartCodePoint(ACodePoint) or (ACodePoint > $7F);
+end;
+
+function TGocciaLexer.TryReadIdentifierCodePoint(out ACodePoint: Cardinal;
+  out AText: string; out AByteLength: Integer): Boolean;
+begin
+  Result := False;
+  ACodePoint := 0;
+  AText := '';
+  AByteLength := 0;
+
+  if IsAtEnd then
+    Exit;
+
+  if Ord(FSource[FCurrent]) <= $7F then
+  begin
+    ACodePoint := Ord(FSource[FCurrent]);
+    AText := FSource[FCurrent];
+    AByteLength := 1;
+    Exit(True);
+  end;
+
+  Result := TryReadUTF8CodePoint(FSource, FCurrent, ACodePoint, AByteLength);
+  if Result then
+    AText := Copy(FSource, FCurrent, AByteLength);
 end;
 
 function TGocciaLexer.IsValidEscapedIdentifierText(const AText: string;
   const AAtStart: Boolean): Boolean;
 var
-  I: Integer;
+  ByteLength: Integer;
+  CodePoint: Cardinal;
 begin
   if AText = '' then
     Exit(False);
 
-  if AAtStart and not IsValidIdentifierStartChar(AText[1]) then
+  if not TryReadUTF8CodePoint(AText, 1, CodePoint, ByteLength) or
+     (ByteLength <> Length(AText)) then
     Exit(False);
 
-  if (not AAtStart) and not IsValidIdentifierChar(AText[1]) then
-    Exit(False);
-
-  for I := 2 to Length(AText) do
-    if not IsValidIdentifierChar(AText[I]) then
-      Exit(False);
-
-  Result := True;
+  if AAtStart then
+    Result := IsSourceIdentifierStartCodePoint(CodePoint)
+  else
+    Result := IsSourceIdentifierPartCodePoint(CodePoint);
 end;
 
 procedure TGocciaLexer.ScanIdentifier;
 var
+  ByteLength: Integer;
+  CodePoint: Cardinal;
+  IdentifierText: string;
   SB: TStringBuffer;
   EscapedText: string;
   Text: string;
@@ -1402,9 +1433,7 @@ begin
   HadEscape := False;
   while not IsAtEnd and not IsLineTerminator do
   begin
-    if IsValidIdentifierChar(Peek) then
-      SB.AppendChar(Advance)
-    else if (Peek = '\') and (PeekNext = 'u') then
+    if (Peek = '\') and (PeekNext = 'u') then
     begin
       Advance;
       Advance;
@@ -1414,6 +1443,13 @@ begin
           FColumn, FFileName, GetSourceLines, SSuggestInvalidCharacter);
       SB.Append(EscapedText);
       HadEscape := True;
+    end
+    else if TryReadIdentifierCodePoint(CodePoint, IdentifierText,
+       ByteLength) and IsSourceIdentifierPartCodePoint(CodePoint) then
+    begin
+      SB.Append(IdentifierText);
+      Inc(FCurrent, ByteLength);
+      Inc(FColumn, ByteLength);
     end
     else
       Break;
@@ -1429,7 +1465,10 @@ end;
 
 procedure TGocciaLexer.ScanToken;
 var
+  ByteLength: Integer;
   C: Char;
+  CodePoint: Cardinal;
+  IdentifierText: string;
 begin
   FStart := FCurrent;
   FStartColumn := FColumn;
@@ -1607,12 +1646,6 @@ begin
       Dec(FColumn);
       ScanNumber;
     end
-    else if IsValidIdentifierStartChar(C) then
-    begin
-      Dec(FCurrent);
-      Dec(FColumn);
-      ScanIdentifier;
-    end
     else if (C = '\') and (Peek = 'u') then
     begin
       Dec(FCurrent);
@@ -1620,9 +1653,17 @@ begin
       ScanIdentifier;
     end
     else
-      raise TGocciaLexerError.Create(Format('Unexpected character: %s', [C]),
-        FLine, FStartColumn, FFileName, GetSourceLines,
-        SSuggestInvalidCharacter);
+    begin
+      Dec(FCurrent);
+      Dec(FColumn);
+      if TryReadIdentifierCodePoint(CodePoint, IdentifierText, ByteLength) and
+         IsSourceIdentifierStartCodePoint(CodePoint) then
+        ScanIdentifier
+      else
+        raise TGocciaLexerError.Create(Format('Unexpected character: %s', [C]),
+          FLine, FStartColumn, FFileName, GetSourceLines,
+          SSuggestInvalidCharacter);
+    end
   end;
 end;
 

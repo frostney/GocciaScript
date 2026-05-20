@@ -534,7 +534,7 @@ Generator objects hold a resumable `TGocciaGeneratorContinuation`. Sync generato
 
 | Runtime Type | `this` binding | Created from |
 |-------------|---------------|-------------|
-| `TGocciaFunctionValue` | Call-site (receiver) | `TGocciaMethodExpression` (shorthand methods) |
+| `TGocciaFunctionValue` | Call-site (receiver) | `TGocciaFunctionExpression` / `TGocciaObjectMethodDefinition` |
 | `TGocciaArrowFunctionValue` | Lexical (closure scope walk) | `TGocciaArrowFunctionExpression` (arrow syntax) |
 | `TGocciaMethodValue` | Call-site (inherited from base) | `TGocciaClassMethod` (class methods) |
 | `TGocciaAsyncFunctionValue` / `TGocciaAsyncArrowFunctionValue` / `TGocciaAsyncMethodValue` | Inherited from superclass via `BindThis` | `async` functions |
@@ -705,7 +705,7 @@ GocciaScript distinguishes two function forms — arrow functions and shorthand 
 | Syntax | AST Node | Runtime Type | `this` binding |
 |--------|----------|-------------|---------------|
 | `(x) => x + 1` | `TGocciaArrowFunctionExpression` | `TGocciaArrowFunctionValue` | Lexical (closure scope) |
-| `method() { ... }` | `TGocciaMethodExpression` | `TGocciaFunctionValue` | Call-site (receiver) |
+| `method() { ... }` | `TGocciaObjectMethodDefinition` | `TGocciaFunctionValue` | Call-site (receiver) |
 | `class { method() {} }` | `TGocciaClassMethod` | `TGocciaMethodValue` | Call-site (receiver) |
 
 The runtime uses virtual dispatch — `TGocciaFunctionValue.BindThis` is a virtual method overridden by `TGocciaArrowFunctionValue` — so `this` binding resolution has no branch overhead.
