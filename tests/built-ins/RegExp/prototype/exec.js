@@ -402,3 +402,62 @@ test("lookbehind does not consume input", () => {
   expect(m[0]).toBe("b");
   expect(m.index).toBe(1);
 });
+
+test("lookbehind captures use backward matching order", () => {
+  const repeated = "abcdef".match(/(?<=(\w){3})def/);
+  expect(repeated[0]).toBe("def");
+  expect(repeated[1]).toBe("a");
+
+  const greedy = "abbbbbbc".match(/(?<=(b+))c/);
+  expect(greedy[0]).toBe("c");
+  expect(greedy[1]).toBe("bbbbbb");
+});
+
+test("lookbehind captures are visible to backreferences inside lookbehind", () => {
+  const forwardReference = "ababc".match(/(?<=\1(\w+))c/);
+  expect(forwardReference[0]).toBe("c");
+  expect(forwardReference[1]).toBe("ab");
+
+  const mutualReference = /(?<=a(.\2)b(\1)).{4}/.exec("aabcacbc");
+  expect(mutualReference[0]).toBe("cacb");
+  expect(mutualReference[1]).toBe("a");
+  expect(mutualReference[2]).toBe("");
+});
+
+test("negative lookbehind keeps captures unset", () => {
+  const result = "abcdef".match(/(?<!(^|[ab]))\w{2}/);
+  expect(result[0]).toBe("de");
+  expect(result[1]).toBe(undefined);
+});
+
+test("nested lookaround inside lookbehind uses the correct direction", () => {
+  const nested = "abcdef".match(/(?<=a(?=([^a]{2})d)\w{3})\w\w/);
+  expect(nested[0]).toBe("ef");
+  expect(nested[1]).toBe("bc");
+
+  expect("abcdef".match(/(?<=a(?=([bc]{2}(?<!a*))d)\w{3})\w\w/)).toBe(null);
+});
+
+test("lookbehind supports multiline anchors and word boundaries", () => {
+  expect("ab\ncd\nefg".match(/(?<=^)\w+/gm)).toEqual(["ab", "cd", "efg"]);
+  expect("abc def".match(/(?<=\b)[d-f]{3}/)[0]).toBe("def");
+});
+
+test("lookbehind works with variable-length and sticky matches", () => {
+  expect("abcdef".match(/(?<=\w*)[^a|b|c]{3}/)[0]).toBe("def");
+
+  const sticky = /(?<=^(\w+))def/y;
+  sticky.lastIndex = 3;
+  const first = sticky.exec("abcdefdef");
+  expect(first[0]).toBe("def");
+  expect(first[1]).toBe("abc");
+
+  const second = sticky.exec("abcdefdef");
+  expect(second[0]).toBe("def");
+  expect(second[1]).toBe("abcdef");
+});
+
+test("lookbehind unicode set strings match backward", () => {
+  expect(/(?<=[\q{ab}])c/v.test("abc")).toBe(true);
+  expect(/(?<=[\q{ab}])c/v.test("ac")).toBe(false);
+});

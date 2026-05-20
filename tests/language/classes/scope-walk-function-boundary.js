@@ -81,6 +81,16 @@ describe("super function boundary", () => {
     expect(new Derived().test()).toBe("base");
   });
 
+  test("data property arrow inherits super from class method", () => {
+    class Derived extends Base {
+      test() {
+        const obj = { inner: () => super.hello() };
+        return obj.inner();
+      }
+    }
+    expect(new Derived().test()).toBe("base");
+  });
+
   test("ordinary method does not inherit super from class method", () => {
     class Derived extends Base {
       test() {

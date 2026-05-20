@@ -53,6 +53,8 @@ const
   BACKREF_INDEX_MASK = $1FFFFF;
   LOOK_NEGATED_FLAG = $800000;
   LOOK_TARGET_MASK = $7FFFFF;
+  WORD_ASSERT_NEGATED_FLAG = $1;
+  WORD_ASSERT_ICASE_FLAG = $2;
 
 function CompileRegExp(const APattern, AFlags: string): TRegExpProgram;
 procedure ValidateRegExpPatternNew(const APattern, AFlags: string);
@@ -66,6 +68,7 @@ uses
   TextSemantics,
   UnicodeICU,
 
+  Goccia.Identifier,
   Goccia.RegExp.UnicodeData;
 
 type
@@ -77,6 +80,12 @@ type
 
   TRegExpStringSequence = record
     CodePoints: array of Cardinal;
+  end;
+
+  TRegExpTermCode = record
+    Code: array of UInt32;
+    Length: Integer;
+    OriginalStart: Integer;
   end;
 
   TRegExpClassContents = record
@@ -101,6 +110,7 @@ type
     FUnicode: Boolean;
     FUnicodeSets: Boolean;
     FPendingCodeUnit: Integer;
+    FBackward: Boolean;
     function Peek: Char;
     function PeekAt(AOffset: Integer): Char;
     function AtEnd: Boolean;
@@ -141,6 +151,8 @@ type
     procedure EmitClassContents(const AContents: TRegExpClassContents;
       ANegated: Boolean);
     procedure AddBuiltinCharClass(AEscapeChar: Char; var ARanges: array of TRegExpCharRange; var ARangeCount: Integer);
+    procedure AddWordCharacterRanges(var ARanges: array of TRegExpCharRange; var ARangeCount: Integer);
+    procedure AddCaseFoldedWordComplementRanges(var ARanges: array of TRegExpCharRange; var ARangeCount: Integer);
     procedure AddRange(var ARanges: array of TRegExpCharRange; var ARangeCount: Integer; ALo, AHi: Cardinal);
     procedure EmitUnicodePropertyClass(const APropertyName: string; ANegated: Boolean);
     procedure GetUnicodePropertyRanges(const APropertyName: string; var ARanges: array of TRegExpCharRange; var ARangeCount: Integer);
@@ -178,7 +190,7 @@ begin
 end;
 
 function DecodeRegExpGroupNameUnicodeEscape(const AText: string;
-  var AIndex: Integer): string;
+  var AIndex: Integer): Cardinal;
 var
   CodePoint: Cardinal;
   HexStart: Integer;
@@ -233,25 +245,74 @@ begin
   if CodePoint > $10FFFF then
     raise EConvertError.Create('Unicode escape out of range in group name');
 
-  Result := CodePointToUTF8(CodePoint);
+  Result := CodePoint;
+end;
+
+function ReadRegExpGroupNameLiteralCodePoint(const AText: string;
+  var AIndex: Integer): Cardinal;
+var
+  ByteLength: Integer;
+  CodePoint: Cardinal;
+  LowSurrogate: Cardinal;
+  LowSurrogateByteLength: Integer;
+begin
+  if not TryReadUTF8CodePointAllowSurrogates(AText, AIndex, CodePoint,
+     ByteLength) then
+  begin
+    Result := Ord(AText[AIndex]);
+    Inc(AIndex);
+    Exit;
+  end;
+
+  Inc(AIndex, ByteLength);
+  if (CodePoint >= $D800) and (CodePoint <= $DBFF) and
+     TryReadUTF8CodePointAllowSurrogates(AText, AIndex, LowSurrogate,
+       LowSurrogateByteLength) and
+     (LowSurrogate >= $DC00) and (LowSurrogate <= $DFFF) then
+  begin
+    Inc(AIndex, LowSurrogateByteLength);
+    CodePoint := $10000 + ((CodePoint - $D800) shl 10) +
+      (LowSurrogate - $DC00);
+  end;
+
+  Result := CodePoint;
+end;
+
+procedure ValidateRegExpGroupNameCodePoint(ACodePoint: Cardinal;
+  AAtStart: Boolean);
+begin
+  if AAtStart then
+  begin
+    if not IsIdentifierStartCodePoint(ACodePoint) then
+      raise EConvertError.Create('Invalid group name');
+  end
+  else if not IsIdentifierPartCodePoint(ACodePoint) then
+    raise EConvertError.Create('Invalid group name');
 end;
 
 function DecodeRegExpGroupName(const ARawName: string): string;
 var
+  CodePoint: Cardinal;
   I: Integer;
+  AtStart: Boolean;
 begin
+  if ARawName = '' then
+    raise EConvertError.Create('Invalid group name');
+
   Result := '';
   I := 1;
+  AtStart := True;
   while I <= Length(ARawName) do
   begin
     if (ARawName[I] = '\') and (I + 1 <= Length(ARawName)) and
        (ARawName[I + 1] = 'u') then
-      Result := Result + DecodeRegExpGroupNameUnicodeEscape(ARawName, I)
+      CodePoint := DecodeRegExpGroupNameUnicodeEscape(ARawName, I)
     else
-    begin
-      Result := Result + ARawName[I];
-      Inc(I);
-    end;
+      CodePoint := ReadRegExpGroupNameLiteralCodePoint(ARawName, I);
+
+    ValidateRegExpGroupNameCodePoint(CodePoint, AtStart);
+    Result := Result + CodePointToUTF8(CodePoint);
+    AtStart := False;
   end;
 end;
 
@@ -274,6 +335,7 @@ begin
   FUnicodeSets := HasRegExpFlag(AFlags, 'v');
   FUnicode := HasRegExpFlag(AFlags, 'u') or FUnicodeSets;
   FPendingCodeUnit := -1;
+  FBackward := False;
 end;
 
 function TRegExpCompiler.Peek: Char;
@@ -399,6 +461,15 @@ begin
   Inc(ARangeCount);
 end;
 
+procedure TRegExpCompiler.AddWordCharacterRanges(
+  var ARanges: array of TRegExpCharRange; var ARangeCount: Integer);
+begin
+  AddRange(ARanges, ARangeCount, Ord('0'), Ord('9'));
+  AddRange(ARanges, ARangeCount, Ord('A'), Ord('Z'));
+  AddRange(ARanges, ARangeCount, Ord('_'), Ord('_'));
+  AddRange(ARanges, ARangeCount, Ord('a'), Ord('z'));
+end;
+
 procedure TRegExpCompiler.AddBuiltinCharClass(AEscapeChar: Char;
   var ARanges: array of TRegExpCharRange; var ARangeCount: Integer);
 begin
@@ -411,19 +482,19 @@ begin
         AddRange(ARanges, ARangeCount, Ord('9') + 1, $10FFFF);
       end;
     'w':
-      begin
-        AddRange(ARanges, ARangeCount, Ord('0'), Ord('9'));
-        AddRange(ARanges, ARangeCount, Ord('A'), Ord('Z'));
-        AddRange(ARanges, ARangeCount, Ord('_'), Ord('_'));
-        AddRange(ARanges, ARangeCount, Ord('a'), Ord('z'));
-      end;
+      AddWordCharacterRanges(ARanges, ARangeCount);
     'W':
       begin
-        AddRange(ARanges, ARangeCount, 0, Ord('0') - 1);
-        AddRange(ARanges, ARangeCount, Ord('9') + 1, Ord('A') - 1);
-        AddRange(ARanges, ARangeCount, Ord('Z') + 1, Ord('_') - 1);
-        AddRange(ARanges, ARangeCount, Ord('_') + 1, Ord('a') - 1);
-        AddRange(ARanges, ARangeCount, Ord('z') + 1, $10FFFF);
+        if FModifier.IgnoreCase and FUnicode then
+          AddCaseFoldedWordComplementRanges(ARanges, ARangeCount)
+        else
+        begin
+          AddRange(ARanges, ARangeCount, 0, Ord('0') - 1);
+          AddRange(ARanges, ARangeCount, Ord('9') + 1, Ord('A') - 1);
+          AddRange(ARanges, ARangeCount, Ord('Z') + 1, Ord('_') - 1);
+          AddRange(ARanges, ARangeCount, Ord('_') + 1, Ord('a') - 1);
+          AddRange(ARanges, ARangeCount, Ord('z') + 1, $10FFFF);
+        end;
       end;
     's':
       begin
@@ -680,6 +751,44 @@ begin
       end;
     end;
   end;
+end;
+
+procedure TRegExpCompiler.AddCaseFoldedWordComplementRanges(
+  var ARanges: array of TRegExpCharRange; var ARangeCount: Integer);
+var
+  AllRange: array[0..0] of TRegExpCharRange;
+  ComplementRanges: array[0..MAX_CHAR_RANGES - 1] of TRegExpCharRange;
+  FoldRanges: TUnicodePropertyRangeArray;
+  FoldedRanges: array[0..MAX_CHAR_RANGES - 1] of TRegExpCharRange;
+  WordRanges: array[0..MAX_CHAR_RANGES - 1] of TRegExpCharRange;
+  ComplementCount, FoldedCount, I, WordCount: Integer;
+begin
+  WordCount := 0;
+  AddWordCharacterRanges(WordRanges, WordCount);
+  SetLength(FoldRanges, WordCount);
+  for I := 0 to WordCount - 1 do
+  begin
+    FoldRanges[I].Lo := WordRanges[I].Lo;
+    FoldRanges[I].Hi := WordRanges[I].Hi;
+  end;
+  ExpandUnicodeSimpleCaseFolding(FoldRanges);
+  if Length(FoldRanges) > Length(FoldedRanges) then
+    raise EConvertError.Create('Folded word character range count exceeds buffer capacity');
+  FoldedCount := Length(FoldRanges);
+  for I := 0 to FoldedCount - 1 do
+  begin
+    FoldedRanges[I].Lo := FoldRanges[I].Lo;
+    FoldedRanges[I].Hi := FoldRanges[I].Hi;
+  end;
+  NormalizeRanges(FoldedRanges, FoldedCount);
+
+  AllRange[0].Lo := 0;
+  AllRange[0].Hi := $10FFFF;
+  SubtractRanges(AllRange, 1, FoldedRanges, FoldedCount,
+    ComplementRanges, ComplementCount);
+  for I := 0 to ComplementCount - 1 do
+    AddRange(ARanges, ARangeCount, ComplementRanges[I].Lo,
+      ComplementRanges[I].Hi);
 end;
 
 procedure InitClassContents(var AContents: TRegExpClassContents);
@@ -1429,8 +1538,16 @@ begin
       SplitHoles[SplitCount] := CurrentPC;
       Inc(SplitCount);
       Emit(EncodeOpBx(RX_SPLIT, 0));
-      for J := 0 to High(AContents.Strings[I].CodePoints) do
-        EmitCharMatch(AContents.Strings[I].CodePoints[J]);
+      if FBackward then
+      begin
+        for J := High(AContents.Strings[I].CodePoints) downto 0 do
+          EmitCharMatch(AContents.Strings[I].CodePoints[J]);
+      end
+      else
+      begin
+        for J := 0 to High(AContents.Strings[I].CodePoints) do
+          EmitCharMatch(AContents.Strings[I].CodePoints[J]);
+      end;
       JumpHoles[JumpCount] := CurrentPC;
       Inc(JumpCount);
       Emit(EncodeOpBx(RX_JUMP, 0));
@@ -1688,7 +1805,7 @@ var
   PropertyName: string;
   Negated: Boolean;
   GroupName: string;
-  BackrefIdx, I, GroupCount, BackrefFlags: Integer;
+  BackrefIdx, I, GroupCount, BackrefFlags, WordAssertFlags: Integer;
   CodePoint: Cardinal;
 begin
   BackrefFlags := 0;
@@ -1705,9 +1822,19 @@ begin
         EmitCharClassRanges(Ranges, RangeCount, False);
       end;
     'b':
-      Emit(EncodeOpBx(RX_ASSERT_WORD, 0));
+      begin
+        WordAssertFlags := 0;
+        if FModifier.IgnoreCase then
+          WordAssertFlags := WordAssertFlags or WORD_ASSERT_ICASE_FLAG;
+        Emit(EncodeOpBx(RX_ASSERT_WORD, WordAssertFlags));
+      end;
     'B':
-      Emit(EncodeOpBx(RX_ASSERT_WORD, 1));
+      begin
+        WordAssertFlags := WORD_ASSERT_NEGATED_FLAG;
+        if FModifier.IgnoreCase then
+          WordAssertFlags := WordAssertFlags or WORD_ASSERT_ICASE_FLAG;
+        Emit(EncodeOpBx(RX_ASSERT_WORD, WordAssertFlags));
+      end;
     'p', 'P':
       begin
         if FUnicode and Match('{') then
@@ -1995,6 +2122,7 @@ end;
 procedure TRegExpCompiler.CompileGroup;
 var
   SaveAltDepth: Integer;
+  SavedBackward: Boolean;
   GroupName: string;
   CaptureIdx, I: Integer;
   SplitHole, JumpHole: Integer;
@@ -2017,8 +2145,11 @@ begin
     begin
       SplitHole := EmitHole;
       FCode[SplitHole] := EncodeOpBx(RX_LOOKAHEAD, 0);
+      SavedBackward := FBackward;
+      FBackward := False;
       LookStart := CurrentPC;
       CompileDisjunction;
+      FBackward := SavedBackward;
       if not Match(')') then
         raise EConvertError.Create('Unterminated lookahead');
       Emit(EncodeOp(RX_MATCH));
@@ -2029,7 +2160,10 @@ begin
     begin
       SplitHole := EmitHole;
       FCode[SplitHole] := EncodeOpBx(RX_LOOKAHEAD, 0);
+      SavedBackward := FBackward;
+      FBackward := False;
       CompileDisjunction;
+      FBackward := SavedBackward;
       if not Match(')') then
         raise EConvertError.Create('Unterminated negative lookahead');
       Emit(EncodeOp(RX_MATCH));
@@ -2042,7 +2176,10 @@ begin
       begin
         SplitHole := EmitHole;
         FCode[SplitHole] := EncodeOpBx(RX_LOOKBEHIND, 0);
+        SavedBackward := FBackward;
+        FBackward := True;
         CompileDisjunction;
+        FBackward := SavedBackward;
         if not Match(')') then
           raise EConvertError.Create('Unterminated lookbehind');
         Emit(EncodeOp(RX_MATCH));
@@ -2053,7 +2190,10 @@ begin
       begin
         SplitHole := EmitHole;
         FCode[SplitHole] := EncodeOpBx(RX_LOOKBEHIND, 0);
+        SavedBackward := FBackward;
+        FBackward := True;
         CompileDisjunction;
+        FBackward := SavedBackward;
         if not Match(')') then
           raise EConvertError.Create('Unterminated negative lookbehind');
         Emit(EncodeOp(RX_MATCH));
@@ -2065,11 +2205,18 @@ begin
         GroupName := ParseGroupName;
         Inc(FCaptureCount);
         CaptureIdx := FCaptureCount;
-        Emit(EncodeOpBx(RX_SAVE, CaptureIdx * 2));
+        // Backward capture groups still store source-order [start, end] slots.
+        if FBackward then
+          Emit(EncodeOpBx(RX_SAVE, CaptureIdx * 2 + 1))
+        else
+          Emit(EncodeOpBx(RX_SAVE, CaptureIdx * 2));
         CompileDisjunction;
         if not Match(')') then
           raise EConvertError.Create('Unterminated named capture group');
-        Emit(EncodeOpBx(RX_SAVE, CaptureIdx * 2 + 1));
+        if FBackward then
+          Emit(EncodeOpBx(RX_SAVE, CaptureIdx * 2))
+        else
+          Emit(EncodeOpBx(RX_SAVE, CaptureIdx * 2 + 1));
       end;
     end
     else if CharInSet(Peek, ['i', 'm', 's', '-']) then
@@ -2083,11 +2230,18 @@ begin
   begin
     Inc(FCaptureCount);
     CaptureIdx := FCaptureCount;
-    Emit(EncodeOpBx(RX_SAVE, CaptureIdx * 2));
+    // Backward capture groups still store source-order [start, end] slots.
+    if FBackward then
+      Emit(EncodeOpBx(RX_SAVE, CaptureIdx * 2 + 1))
+    else
+      Emit(EncodeOpBx(RX_SAVE, CaptureIdx * 2));
     CompileDisjunction;
     if not Match(')') then
       raise EConvertError.Create('Unterminated capturing group');
-    Emit(EncodeOpBx(RX_SAVE, CaptureIdx * 2 + 1));
+    if FBackward then
+      Emit(EncodeOpBx(RX_SAVE, CaptureIdx * 2))
+    else
+      Emit(EncodeOpBx(RX_SAVE, CaptureIdx * 2 + 1));
   end;
   if FAltStackDepth > 0 then
     Dec(FAltStackDepth);
@@ -2172,6 +2326,9 @@ var
   Bx: Integer;
   NegFlag: Integer;
 begin
+  if ALen <= 0 then
+    Exit;
+
   EnsureCodeCapacity(ALen);
   DstStart := FCodeLen;
   Move(ABody[0], FCode[DstStart], ALen * SizeOf(UInt32));
@@ -2314,10 +2471,42 @@ begin
   CompileQuantifier(AtomStart);
 end;
 
+// ES2026 §22.2.2.3.4 MatchSequence(m1, m2, direction)
 procedure TRegExpCompiler.CompileAlternative;
+var
+  TermStart: Integer;
+  TermCount: Integer;
+  TermIndex: Integer;
+  Terms: array of TRegExpTermCode;
 begin
+  if not FBackward then
+  begin
+    while not AtEnd and (Peek <> '|') and (Peek <> ')') do
+      CompileTerm;
+    Exit;
+  end;
+
+  TermCount := 0;
+  SetLength(Terms, 8);
   while not AtEnd and (Peek <> '|') and (Peek <> ')') do
+  begin
+    TermStart := CurrentPC;
     CompileTerm;
+    if TermCount >= Length(Terms) then
+      SetLength(Terms, TermCount * 2 + 8);
+    Terms[TermCount].Length := CurrentPC - TermStart;
+    Terms[TermCount].OriginalStart := TermStart;
+    SetLength(Terms[TermCount].Code, Terms[TermCount].Length);
+    if Terms[TermCount].Length > 0 then
+      Move(FCode[TermStart], Terms[TermCount].Code[0],
+        Terms[TermCount].Length * SizeOf(UInt32));
+    FCodeLen := TermStart;
+    Inc(TermCount);
+  end;
+
+  for TermIndex := TermCount - 1 downto 0 do
+    EmitBodyAt(Terms[TermIndex].Code, Terms[TermIndex].Length,
+      Terms[TermIndex].OriginalStart);
 end;
 
 procedure TRegExpCompiler.InsertSplitAt(APos: Integer);

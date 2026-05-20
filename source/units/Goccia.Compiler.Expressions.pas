@@ -62,8 +62,9 @@ procedure CompileComputedPropertyCompoundAssignment(
   const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaComputedPropertyCompoundAssignmentExpression;
   const ADest: UInt8);
-procedure CompileMethod(const ACtx: TGocciaCompilationContext;
-  const AExpr: TGocciaMethodExpression; const ADest: UInt8);
+procedure CompileFunctionExpression(const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaFunctionExpression; const ADest: UInt8;
+  const ATemplateName: string = '<function>');
 procedure CompileIncrement(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaIncrementExpression; const ADest: UInt8);
 procedure CompilePrivateMember(const ACtx: TGocciaCompilationContext;
@@ -234,6 +235,23 @@ begin
     finally
       ACtx.Scope.FreeRegister;
     end;
+  end;
+end;
+
+procedure EmitDefineDataPropertyByName(const ACtx: TGocciaCompilationContext;
+  const AObjReg: UInt8; const APropertyName: string; const AValueReg: UInt8;
+  const AOpcode: TGocciaOpCode);
+var
+  PropIdx: UInt16;
+  KeyReg: UInt8;
+begin
+  PropIdx := ACtx.Template.AddConstantString(APropertyName);
+  KeyReg := ACtx.Scope.AllocateRegister;
+  try
+    EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, KeyReg, PropIdx));
+    EmitInstruction(ACtx, EncodeABC(AOpcode, AObjReg, KeyReg, AValueReg));
+  finally
+    ACtx.Scope.FreeRegister;
   end;
 end;
 
@@ -2406,38 +2424,49 @@ begin
 end;
 
 procedure CompileObjectProperty(const ACtx: TGocciaCompilationContext;
-  const AExpr: TGocciaObjectExpression; const ADest: UInt8;
-  const AKey: string; const AValExpr: TGocciaExpression);
+  const ADest: UInt8; const AKey: string; const AValExpr: TGocciaExpression);
 var
   ValReg: UInt8;
-  KeyIdx: UInt16;
+  DefineOp: TGocciaOpCode;
   FuncCount: Integer;
   InferredTemplate: TGocciaFunctionTemplate;
+  ValueExpr: TGocciaExpression;
 begin
   ValReg := ACtx.Scope.AllocateRegister;
   FuncCount := ACtx.Template.FunctionCount;
+  ValueExpr := AValExpr;
+  DefineOp := OP_DEFINE_DATA_PROP;
 
-  if (AValExpr is TGocciaClassExpression) and
-     (TGocciaClassExpression(AValExpr).ClassDefinition.Name = '') then
+  if AValExpr is TGocciaObjectMethodDefinition then
+  begin
+    ValueExpr := TGocciaObjectMethodDefinition(AValExpr).FunctionExpression;
+    DefineOp := OP_DEFINE_METHOD_PROP;
+    CompileFunctionExpression(ACtx,
+      TGocciaObjectMethodDefinition(AValExpr).FunctionExpression,
+      ValReg, '<method>');
+  end
+  else if (ValueExpr is TGocciaClassExpression) and
+     (TGocciaClassExpression(ValueExpr).ClassDefinition.Name = '') then
     Goccia.Compiler.Statements.CompileClassExpression(ACtx,
-      TGocciaClassExpression(AValExpr).ClassDefinition, ValReg, AKey)
+      TGocciaClassExpression(ValueExpr).ClassDefinition, ValReg, AKey)
   else
-    ACtx.CompileExpression(AValExpr, ValReg);
+    ACtx.CompileExpression(ValueExpr, ValReg);
 
-  if (AValExpr is TGocciaArrowFunctionExpression) or
-     (AValExpr is TGocciaMethodExpression) then
+  if (ValueExpr is TGocciaArrowFunctionExpression) or
+     (ValueExpr is TGocciaFunctionExpression) then
   begin
     if ACtx.Template.FunctionCount > FuncCount then
     begin
       InferredTemplate := ACtx.Template.GetFunction(
         ACtx.Template.FunctionCount - 1);
       if (InferredTemplate.Name = '<arrow>') or
+         (InferredTemplate.Name = '<function>') or
          (InferredTemplate.Name = '<method>') then
         InferredTemplate.Name := AKey;
     end;
   end;
 
-  EmitStorePropertyByName(ACtx, ADest, AKey, ValReg);
+  EmitDefineDataPropertyByName(ACtx, ADest, AKey, ValReg, DefineOp);
   ACtx.Scope.FreeRegister;
 end;
 
@@ -2577,7 +2606,9 @@ var
   I: Integer;
   Key: string;
   ValExpr: TGocciaExpression;
+  FinalExpr: TGocciaExpression;
   KeyReg, ValReg: UInt8;
+  DefineOp: TGocciaOpCode;
   Names: TStringList;
   Order: TArray<TGocciaPropertySourceOrder>;
   Pair: TPair<TGocciaExpression, TGocciaExpression>;
@@ -2596,10 +2627,22 @@ begin
         pstStatic:
         begin
           ValExpr := Order[I].Expression;
-          if not Assigned(ValExpr) then
-            AExpr.Properties.TryGetValue(Key, ValExpr);
+          if (not Assigned(ValExpr)) and
+             AExpr.Properties.TryGetValue(Key, FinalExpr) then
+            ValExpr := FinalExpr;
+
           if Assigned(ValExpr) then
-            CompileObjectProperty(ACtx, AExpr, ADest, Key, ValExpr);
+          begin
+            if AExpr.Properties.TryGetValue(Key, FinalExpr) and
+               (FinalExpr = ValExpr) then
+              CompileObjectProperty(ACtx, ADest, Key, ValExpr)
+            else
+            begin
+              ValReg := ACtx.Scope.AllocateRegister;
+              ACtx.CompileExpression(ValExpr, ValReg);
+              ACtx.Scope.FreeRegister;
+            end;
+          end;
         end;
         pstComputed:
         begin
@@ -2620,8 +2663,19 @@ begin
               KeyReg := ACtx.Scope.AllocateRegister;
               ValReg := ACtx.Scope.AllocateRegister;
               ACtx.CompileExpression(Pair.Key, KeyReg);
-              ACtx.CompileExpression(Pair.Value, ValReg);
-              EmitInstruction(ACtx, EncodeABC(OP_SET_INDEX, ADest, KeyReg, ValReg));
+              if Pair.Value is TGocciaObjectMethodDefinition then
+              begin
+                DefineOp := OP_DEFINE_METHOD_PROP;
+                CompileFunctionExpression(ACtx,
+                  TGocciaObjectMethodDefinition(Pair.Value).FunctionExpression,
+                  ValReg, '<method>');
+              end
+              else
+              begin
+                DefineOp := OP_DEFINE_DATA_PROP;
+                ACtx.CompileExpression(Pair.Value, ValReg);
+              end;
+              EmitInstruction(ACtx, EncodeABC(DefineOp, ADest, KeyReg, ValReg));
               ACtx.Scope.FreeRegister;
               ACtx.Scope.FreeRegister;
             end;
@@ -2643,7 +2697,7 @@ begin
     begin
       Key := Names[I];
       if AExpr.Properties.TryGetValue(Key, ValExpr) then
-        CompileObjectProperty(ACtx, AExpr, ADest, Key, ValExpr);
+        CompileObjectProperty(ACtx, ADest, Key, ValExpr);
     end;
   end;
 end;
@@ -2960,8 +3014,9 @@ begin
   ACtx.Scope.FreeRegister;
 end;
 
-procedure CompileMethod(const ACtx: TGocciaCompilationContext;
-  const AExpr: TGocciaMethodExpression; const ADest: UInt8);
+procedure CompileFunctionExpression(const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaFunctionExpression; const ADest: UInt8;
+  const ATemplateName: string);
 var
   OldTemplate: TGocciaFunctionTemplate;
   OldScope: TGocciaCompilerScope;
@@ -2991,7 +3046,7 @@ begin
     NameSlot := OldScope.DeclareLocal(AExpr.Name, True);
   end;
 
-  ChildTemplate := TGocciaFunctionTemplate.Create('<method>');
+  ChildTemplate := TGocciaFunctionTemplate.Create(ATemplateName);
   ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
   ChildTemplate.IsAsync := AExpr.IsAsync;
   ChildTemplate.IsGenerator := AExpr.IsGenerator;

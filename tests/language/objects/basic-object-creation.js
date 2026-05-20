@@ -59,18 +59,83 @@ test("object property enumeration and inspection", () => {
   expect(Object.hasOwn(obj, "d")).toBe(false);
 });
 
-test("duplicate static property initializers evaluate in source order", () => {
-  const log = [];
-  const obj = {
-    a: log.push("first"),
-    b: log.push("middle"),
-    a: log.push("last"),
+test("object literals define own data properties over inherited descriptors", () => {
+  Object.defineProperty(Object.prototype, "literalReadOnly", {
+    value: 100,
+    writable: false,
+    configurable: true,
+  });
+  Object.defineProperty(Object.prototype, "literalAccessor", {
+    get: () => false,
+    configurable: true,
+  });
+
+  try {
+    const staticObj = { literalReadOnly: 12 };
+    expect(Object.hasOwn(staticObj, "literalReadOnly")).toBe(true);
+    expect(staticObj.literalReadOnly).toBe(12);
+
+    const accessorKey = "literalAccessor";
+    const computedObj = { [accessorKey]: true };
+    expect(Object.hasOwn(computedObj, "literalAccessor")).toBe(true);
+    expect(computedObj.literalAccessor).toBe(true);
+  } finally {
+    delete Object.prototype.literalReadOnly;
+    delete Object.prototype.literalAccessor;
+  }
+});
+
+test("duplicate static object keys evaluate final definition once", () => {
+  let calls = 0;
+  const mark = (value) => {
+    calls += 1;
+    return value;
   };
 
-  expect(log).toEqual(["first", "middle", "last"]);
-  expect(obj.a).toBe(3);
-  expect(obj.b).toBe(2);
-  expect(Object.keys(obj)).toEqual(["a", "b"]);
+  const obj = {
+    value() {
+      return "method";
+    },
+    value: mark("data"),
+  };
+
+  expect(calls).toBe(1);
+  expect(obj.value).toBe("data");
+});
+
+test("duplicate static object keys evaluate every source-order initializer", () => {
+  const order = [];
+  const mark = (label, value) => {
+    order.push(label);
+    return value;
+  };
+
+  const obj = {
+    value: mark("first", "first"),
+    other: mark("middle", "middle"),
+    value: mark("second", "second"),
+  };
+
+  expect(order).toEqual(["first", "middle", "second"]);
+  expect(obj.value).toBe("second");
+  expect(obj.other).toBe("middle");
+});
+
+test("object spread defines own data properties over inherited descriptors", () => {
+  const source = { spreadReadOnly: 42 };
+  Object.defineProperty(Object.prototype, "spreadReadOnly", {
+    value: 100,
+    writable: false,
+    configurable: true,
+  });
+
+  try {
+    const obj = { ...source };
+    expect(Object.hasOwn(obj, "spreadReadOnly")).toBe(true);
+    expect(obj.spreadReadOnly).toBe(42);
+  } finally {
+    delete Object.prototype.spreadReadOnly;
+  }
 });
 
 // TODO: We don't have a test to support creating objects with prototypes because we only support arrow functions.

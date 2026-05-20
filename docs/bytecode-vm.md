@@ -188,6 +188,7 @@ Language features are compiled into compact bytecode instruction sequences rathe
 
 - **Nullish coalescing (`??`) and nullish coalescing assignment (`??=`)** — The compiler emits `OP_JUMP_IF_NOT_NULLISH` in its nullish-match mode, so `undefined`, `null`, and internal hole values all follow the same short-circuit path without extra comparison instructions.
 - **Template literals** — The compiler parses interpolations at compile time, emits string constants and `OP_TO_STRING` for expression parts, then chains `OP_CONCAT` instructions.
+- **Object literals** — Data properties compile to `OP_DEFINE_DATA_PROP` so object initializers create or overwrite own enumerable data properties. Concise methods use `OP_DEFINE_METHOD_PROP` to attach `[[HomeObject]]` without changing plain data-property function or arrow values. Ordinary property assignment still uses the `OP_SET_*` family and keeps `[[Set]]` prototype-chain semantics.
 - **Object spread** — The compiler emits dedicated Goccia bytecode rather than routing through a generic extension dispatcher.
 - **Increment/decrement (`++`/`--`)** — The compiler emits `OP_TO_NUMERIC` (which preserves BigInt, converts others to Number) followed by `OP_INC`/`OP_DEC` (type-aware unit addition: `+1n` for BigInt, `+1` for Number). This replaces the prior `OP_TO_NUMBER` + `OP_LOAD_INT 1` + `OP_ADD/SUB` sequence and correctly implements ES2026 §13.4.4.1 ToNumeric semantics.
 

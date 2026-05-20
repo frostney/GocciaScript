@@ -24,3 +24,11 @@ test("immediately invoked function expression", () => {
   })();
   expect(result).toBe(42);
 });
+
+test("named async function expression source text starts at async keyword", () => {
+  const source = (async function namedAsync() {
+    return 1;
+  }).toString();
+
+  expect(source.startsWith("async function namedAsync")).toBe(true);
+});
