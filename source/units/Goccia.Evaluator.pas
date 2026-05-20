@@ -40,7 +40,7 @@ function EvaluateObject(const AObjectExpression: TGocciaObjectExpression; const 
 function EvaluateGetter(const AGetterExpression: TGocciaGetterExpression; const AContext: TGocciaEvaluationContext; const ASuperClass: TGocciaValue = nil; const AAsMethod: Boolean = False): TGocciaValue;
 function EvaluateSetter(const ASetterExpression: TGocciaSetterExpression; const AContext: TGocciaEvaluationContext; const ASuperClass: TGocciaValue = nil; const AAsMethod: Boolean = False): TGocciaValue;
 function EvaluateArrowFunction(const AArrowFunctionExpression: TGocciaArrowFunctionExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
-function EvaluateMethodExpression(const AMethodExpression: TGocciaMethodExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
+function EvaluateFunctionExpression(const AFunctionExpression: TGocciaFunctionExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateBlock(const ABlockStatement: TGocciaBlockStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 function EvaluateIf(const AIfStatement: TGocciaIfStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 function EvaluateTry(const ATryStatement: TGocciaTryStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
@@ -1460,7 +1460,7 @@ begin
             begin
               PropertyValue := EvaluateExpression(PropertyExpression, AContext);
               if (PropertyExpression is TGocciaObjectMethodDefinition)
-                or (PropertyExpression is TGocciaMethodExpression)
+                or (PropertyExpression is TGocciaFunctionExpression)
                 or (PropertyExpression is TGocciaArrowFunctionExpression) then
                 TGocciaFunctionValue(PropertyValue).SetInferredName(PropertyName)
               else if (PropertyExpression is TGocciaClassExpression)
@@ -2776,7 +2776,7 @@ begin
   TGocciaFunctionValue(Result).SourceText := AArrowFunctionExpression.SourceText;
 end;
 
-function EvaluateMethodExpression(const AMethodExpression: TGocciaMethodExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
+function EvaluateFunctionExpression(const AFunctionExpression: TGocciaFunctionExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
 var
   Statements: TObjectList<TGocciaASTNode>;
   ClosureScope: TGocciaScope;
@@ -2784,31 +2784,31 @@ var
   PrototypeFlags: TPropertyFlags;
   HasStrictDirective: Boolean;
 begin
-  HasStrictDirective := HasUseStrictDirective(AMethodExpression.Body);
-  if AMethodExpression.Body is TGocciaBlockStatement then
-    Statements := CopyStatementList(TGocciaBlockStatement(AMethodExpression.Body).Nodes)
+  HasStrictDirective := HasUseStrictDirective(AFunctionExpression.Body);
+  if AFunctionExpression.Body is TGocciaBlockStatement then
+    Statements := CopyStatementList(TGocciaBlockStatement(AFunctionExpression.Body).Nodes)
   else
   begin
     Statements := TObjectList<TGocciaASTNode>.Create(False);
-    Statements.Add(AMethodExpression.Body);
+    Statements.Add(AFunctionExpression.Body);
   end;
 
   // ES2026 §15.2.5: Named function expressions get an intermediate scope
   // with a read-only binding of the function name visible inside the body
-  if AMethodExpression.Name <> '' then
+  if AFunctionExpression.Name <> '' then
     ClosureScope := AContext.Scope.CreateChild.CreateChild
   else
     ClosureScope := AContext.Scope.CreateChild;
 
-  if AMethodExpression.IsGenerator and AMethodExpression.IsAsync then
-    Result := TGocciaAsyncGeneratorFunctionValue.Create(AMethodExpression.Parameters, Statements, ClosureScope)
-  else if AMethodExpression.IsGenerator then
-    Result := TGocciaGeneratorFunctionValue.Create(AMethodExpression.Parameters, Statements, ClosureScope)
-  else if AMethodExpression.IsAsync then
-    Result := TGocciaAsyncFunctionValue.Create(AMethodExpression.Parameters, Statements, ClosureScope)
+  if AFunctionExpression.IsGenerator and AFunctionExpression.IsAsync then
+    Result := TGocciaAsyncGeneratorFunctionValue.Create(AFunctionExpression.Parameters, Statements, ClosureScope)
+  else if AFunctionExpression.IsGenerator then
+    Result := TGocciaGeneratorFunctionValue.Create(AFunctionExpression.Parameters, Statements, ClosureScope)
+  else if AFunctionExpression.IsAsync then
+    Result := TGocciaAsyncFunctionValue.Create(AFunctionExpression.Parameters, Statements, ClosureScope)
   else
-    Result := TGocciaFunctionValue.Create(AMethodExpression.Parameters, Statements, ClosureScope);
-  TGocciaFunctionValue(Result).Name := AMethodExpression.Name;
+    Result := TGocciaFunctionValue.Create(AFunctionExpression.Parameters, Statements, ClosureScope);
+  TGocciaFunctionValue(Result).Name := AFunctionExpression.Name;
   if AContext.NonStrictMode and not HasStrictDirective then
   begin
     TGocciaFunctionValue(Result).StrictThis := False;
@@ -2817,8 +2817,8 @@ begin
   else
     TGocciaFunctionValue(Result).StrictCode := True;
   TGocciaFunctionValue(Result).SourceFilePath := AContext.CurrentFilePath;
-  TGocciaFunctionValue(Result).SourceLine := AMethodExpression.Line;
-  TGocciaFunctionValue(Result).SourceText := AMethodExpression.SourceText;
+  TGocciaFunctionValue(Result).SourceLine := AFunctionExpression.Line;
+  TGocciaFunctionValue(Result).SourceText := AFunctionExpression.SourceText;
 
   // ES2026 §10.2.5 MakeConstructor: function declarations / expressions and
   // (async) generator declarations / expressions get their own `prototype`
@@ -2834,7 +2834,7 @@ begin
   //     it inherits `constructor` from %GeneratorFunction.prototype.prototype%
   //     (which itself points at %GeneratorFunction.prototype%, not the
   //     specific generator), so an own back-reference here would be wrong.
-  if AMethodExpression.HasOwnPrototype then
+  if AFunctionExpression.HasOwnPrototype then
   begin
     // The prototype object's [[Prototype]] is %Object.prototype% per ES2026
     // §10.2.5.1 OrdinaryFunctionCreate.  (For generators it should be
@@ -2842,7 +2842,7 @@ begin
     // back to Object.prototype keeps the chain non-null and lets generic object
     // methods like hasOwnProperty resolve.)
     PrototypeObj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
-    if AMethodExpression.IsGenerator then
+    if AFunctionExpression.IsGenerator then
     begin
       PrototypeFlags := [];
     end
@@ -2858,8 +2858,8 @@ begin
   end;
 
   // Bind the function name in the intermediate scope (parent of the closure)
-  if AMethodExpression.Name <> '' then
-    ClosureScope.Parent.DefineLexicalBinding(AMethodExpression.Name, Result, dtConst);
+  if AFunctionExpression.Name <> '' then
+    ClosureScope.Parent.DefineLexicalBinding(AFunctionExpression.Name, Result, dtConst);
 end;
 
 // TC39 Explicit Resource Management §3.6 DisposeResources — sync disposal

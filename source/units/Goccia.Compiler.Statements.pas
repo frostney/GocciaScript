@@ -438,7 +438,7 @@ begin
     Result := sltReference
   else if AExpr is TGocciaArrowFunctionExpression then
     Result := sltReference
-  else if AExpr is TGocciaMethodExpression then
+  else if AExpr is TGocciaFunctionExpression then
     Result := sltReference;
 end;
 
@@ -676,13 +676,14 @@ begin
             UInt8(Ord(TypeHint)), 0));
 
       if (Info.Initializer is TGocciaArrowFunctionExpression) or
-         (Info.Initializer is TGocciaMethodExpression) then
+         (Info.Initializer is TGocciaFunctionExpression) then
       begin
         if ACtx.Template.FunctionCount > FuncCount then
         begin
           InferredTemplate := ACtx.Template.GetFunction(
             ACtx.Template.FunctionCount - 1);
           if (InferredTemplate.Name = '<arrow>') or
+             (InferredTemplate.Name = '<function>') or
              (InferredTemplate.Name = '<method>') then
             InferredTemplate.Name := Info.Name;
         end;
@@ -2738,14 +2739,15 @@ begin
 
   if (BindingName = GOCCIA_DEFAULT_EXPORT_BINDING) and
      ((AStmt.Expression is TGocciaArrowFunctionExpression) or
-     ((AStmt.Expression is TGocciaMethodExpression) and
-     (TGocciaMethodExpression(AStmt.Expression).Name = ''))) then
+     ((AStmt.Expression is TGocciaFunctionExpression) and
+     (TGocciaFunctionExpression(AStmt.Expression).Name = ''))) then
   begin
     if ACtx.Template.FunctionCount > FuncCount then
     begin
       InferredTemplate := ACtx.Template.GetFunction(
         ACtx.Template.FunctionCount - 1);
       if (InferredTemplate.Name = '<arrow>') or
+         (InferredTemplate.Name = '<function>') or
          (InferredTemplate.Name = '<method>') then
         InferredTemplate.Name := KEYWORD_DEFAULT;
     end;

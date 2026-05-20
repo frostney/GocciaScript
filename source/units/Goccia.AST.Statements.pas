@@ -1248,8 +1248,8 @@ end;
   begin
     Value := EvaluateExpression(Expression, AContext);
     if ((Expression is TGocciaArrowFunctionExpression) or
-       ((Expression is TGocciaMethodExpression) and
-       (TGocciaMethodExpression(Expression).Name = ''))) and
+       ((Expression is TGocciaFunctionExpression) and
+       (TGocciaFunctionExpression(Expression).Name = ''))) and
        (Value is TGocciaFunctionValue) then
       TGocciaFunctionValue(Value).SetInferredName(KEYWORD_DEFAULT)
     else if (Expression is TGocciaClassExpression) and
