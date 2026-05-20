@@ -1538,8 +1538,16 @@ begin
       SplitHoles[SplitCount] := CurrentPC;
       Inc(SplitCount);
       Emit(EncodeOpBx(RX_SPLIT, 0));
-      for J := 0 to High(AContents.Strings[I].CodePoints) do
-        EmitCharMatch(AContents.Strings[I].CodePoints[J]);
+      if FBackward then
+      begin
+        for J := High(AContents.Strings[I].CodePoints) downto 0 do
+          EmitCharMatch(AContents.Strings[I].CodePoints[J]);
+      end
+      else
+      begin
+        for J := 0 to High(AContents.Strings[I].CodePoints) do
+          EmitCharMatch(AContents.Strings[I].CodePoints[J]);
+      end;
       JumpHoles[JumpCount] := CurrentPC;
       Inc(JumpCount);
       Emit(EncodeOpBx(RX_JUMP, 0));

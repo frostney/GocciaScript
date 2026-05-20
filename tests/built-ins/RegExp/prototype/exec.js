@@ -446,7 +446,8 @@ test("lookbehind supports multiline anchors and word boundaries", () => {
 test("lookbehind works with variable-length and sticky matches", () => {
   expect("abcdef".match(/(?<=\w*)[^a|b|c]{3}/)[0]).toBe("def");
 
-  const sticky = /(?<=^(\w+))def/g;
+  const sticky = /(?<=^(\w+))def/y;
+  sticky.lastIndex = 3;
   const first = sticky.exec("abcdefdef");
   expect(first[0]).toBe("def");
   expect(first[1]).toBe("abc");
@@ -454,4 +455,9 @@ test("lookbehind works with variable-length and sticky matches", () => {
   const second = sticky.exec("abcdefdef");
   expect(second[0]).toBe("def");
   expect(second[1]).toBe("abcdef");
+});
+
+test("lookbehind unicode set strings match backward", () => {
+  expect(/(?<=[\q{ab}])c/v.test("abc")).toBe(true);
+  expect(/(?<=[\q{ab}])c/v.test("ac")).toBe(false);
 });
