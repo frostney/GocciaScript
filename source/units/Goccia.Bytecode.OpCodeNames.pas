@@ -150,6 +150,7 @@ begin
     OP_DIV:                            Result := 'OP_DIV';
     OP_MOD:                            Result := 'OP_MOD';
     OP_POW:                            Result := 'OP_POW';
+    OP_SETUP_AUTO_ACCESSOR_DYNAMIC:    Result := 'OP_SETUP_AUTO_ACCESSOR_DYNAMIC';
     OP_BAND:                           Result := 'OP_BAND';
     OP_BOR:                            Result := 'OP_BOR';
     OP_BXOR:                           Result := 'OP_BXOR';

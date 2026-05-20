@@ -42,6 +42,7 @@ type
 implementation
 
 uses
+  Goccia.Values.ClassValue,
   Goccia.Values.ObjectValue,
   Goccia.Values.SymbolValue;
 
@@ -98,7 +99,10 @@ begin
 
   if FPropertyKey is TGocciaSymbolValue then
   begin
-    if Target is TGocciaObjectValue then
+    if Target is TGocciaClassValue then
+      Result := TGocciaClassValue(Target).GetSymbolProperty(
+        TGocciaSymbolValue(FPropertyKey))
+    else if Target is TGocciaObjectValue then
       Result := TGocciaObjectValue(Target).GetSymbolProperty(
         TGocciaSymbolValue(FPropertyKey))
     else
@@ -149,8 +153,14 @@ begin
   if Target is TGocciaObjectValue then
   begin
     if FPropertyKey is TGocciaSymbolValue then
-      TGocciaObjectValue(Target).AssignSymbolProperty(
-        TGocciaSymbolValue(FPropertyKey), NewValue)
+    begin
+      if Target is TGocciaClassValue then
+        TGocciaClassValue(Target).AssignSymbolProperty(
+          TGocciaSymbolValue(FPropertyKey), NewValue)
+      else
+        TGocciaObjectValue(Target).AssignSymbolProperty(
+          TGocciaSymbolValue(FPropertyKey), NewValue);
+    end
     else
       TGocciaObjectValue(Target).AssignProperty(FPropertyName, NewValue);
   end;

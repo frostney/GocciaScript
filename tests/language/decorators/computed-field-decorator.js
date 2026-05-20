@@ -54,6 +54,20 @@ describe("computed field decorators", () => {
     expect(new C()[key]).toBe(42);
   });
 
+  test("static symbol computed field access helper preserves class symbol key", () => {
+    const key = Symbol("static-field-access");
+    const decorate = (value, context) => {
+      context.addInitializer(({ init() { context.access.set(this, 42); } }).init);
+    };
+
+    class C {
+      @decorate
+      static [key] = 1;
+    }
+
+    expect(C[key]).toBe(42);
+  });
+
   test("symbol computed method decorator uses resolved key", () => {
     let receivedName;
     let accessGet;
@@ -75,6 +89,51 @@ describe("computed field decorators", () => {
     const instance = new C();
     expect(instance[key]()).toBe(42);
     expect(accessGet(instance)()).toBe(42);
+  });
+
+  test("decorated computed method context uses property-key coercion", () => {
+    let receivedName;
+    let toStringCalls = 0;
+    const key = {
+      toString() {
+        toStringCalls++;
+        return "coerced";
+      }
+    };
+    const decorate = (value, context) => {
+      receivedName = context.name;
+      return value;
+    };
+
+    class C {
+      @decorate
+      [key]() {
+        return 42;
+      }
+    }
+
+    expect(receivedName).toBe("coerced");
+    expect(toStringCalls).toBe(1);
+    expect(new C().coerced()).toBe(42);
+  });
+
+  test("static symbol computed method access helper preserves class symbol key", () => {
+    let accessGet;
+    const key = Symbol("static-method-access");
+    const decorate = (value, context) => {
+      accessGet = context.access.get;
+      return () => 42;
+    };
+
+    class C {
+      @decorate
+      static [key]() {
+        return 1;
+      }
+    }
+
+    expect(C[key]()).toBe(42);
+    expect(accessGet(C)()).toBe(42);
   });
 
   test("symbol computed getter decorator uses resolved key", () => {

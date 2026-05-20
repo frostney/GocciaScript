@@ -3718,10 +3718,11 @@ begin
     Elem := AClassDef.FElements[I];
     if not Elem.IsComputed then
       Continue;
-    if not (Elem.Kind in [cekGetter, cekSetter, cekMethod, cekField]) then
+    if not (Elem.Kind in [cekGetter, cekSetter, cekMethod, cekField, cekAccessor]) then
       Continue;
 
-    NeedsKeyLocal := (Elem.Kind = cekField) or (Length(Elem.Decorators) > 0);
+    NeedsKeyLocal := (Elem.Kind in [cekField, cekAccessor]) or
+      (Length(Elem.Decorators) > 0);
     KeyIsLocal := False;
     if NeedsKeyLocal then
     begin
@@ -3737,13 +3738,13 @@ begin
     else
       KeyReg := ACtx.Scope.AllocateRegister;
     ACtx.CompileExpression(Elem.ComputedKeyExpression, KeyReg);
+    if (Elem.Kind in [cekField, cekAccessor]) or
+       (Length(Elem.Decorators) > 0) then
+      EmitInstruction(ACtx, EncodeABC(OP_TO_PROPERTY_KEY, KeyReg, KeyReg, 0));
 
     case Elem.Kind of
       cekField:
       begin
-        // ES2026 §15.7.10 ClassFieldDefinitionEvaluation evaluates
-        // ClassElementName, including ToPropertyKey, during class definition.
-        EmitInstruction(ACtx, EncodeABC(OP_TO_PROPERTY_KEY, KeyReg, KeyReg, 0));
         Continue;
       end;
       cekGetter:
@@ -3764,6 +3765,8 @@ begin
       cekMethod:
         CompileComputedMethodBody(ACtx, ATargetReg, KeyReg,
           Elem.MethodNode, Elem.IsStatic);
+      cekAccessor:
+        ; // Auto-accessor installation consumes the captured property key later.
     end;
 
     if not KeyIsLocal then
@@ -3812,6 +3815,7 @@ var
   Elem: TGocciaClassElement;
   FieldExpr: TGocciaExpression;
   ComputedKeyName: string;
+  AccessorBackingName: string;
 begin
   OldTemplate := ACtx.Template;
   OldScope := ACtx.Scope;
@@ -3914,7 +3918,11 @@ begin
       Continue;
     ValReg := ChildScope.AllocateRegister;
     ACtx.CompileExpression(Elem.FieldInitializer, ValReg);
-    KeyIdx := ChildTemplate.AddConstantString('__accessor_' + Elem.Name);
+    if Elem.IsComputed then
+      AccessorBackingName := '__accessor_computed_' + IntToStr(I)
+    else
+      AccessorBackingName := '__accessor_' + Elem.Name;
+    KeyIdx := ChildTemplate.AddConstantString(AccessorBackingName);
     if KeyIdx > High(UInt8) then
       raise Exception.Create('Constant pool overflow: accessor backing field name index exceeds 255');
     EmitInstruction(ChildCtx, EncodeABC(OP_SET_PROP_CONST, ThisReg,
@@ -4056,12 +4064,16 @@ begin
 end;
 
 procedure CompileAutoAccessors(const ACtx: TGocciaCompilationContext;
-  const AClassReg: UInt8; const AClassDef: TGocciaClassDefinition);
+  const AClassReg: UInt8; const AClassDef: TGocciaClassDefinition;
+  const AComputedFieldKeyLocals: TComputedFieldKeyLocals);
 var
   I: Integer;
   Elem: TGocciaClassElement;
   NameIdx: UInt16;
-  PairReg, InitReg: UInt8;
+  KeyReg: UInt8;
+  LocalIdx: Integer;
+  ComputedKeyName: string;
+  BackingName: string;
 begin
   for I := 0 to High(AClassDef.FElements) do
   begin
@@ -4069,17 +4081,29 @@ begin
     if Elem.Kind <> cekAccessor then
       Continue;
 
-    NameIdx := ACtx.Template.AddConstantString(Elem.Name);
+    if Elem.IsComputed then
+      BackingName := '__accessor_computed_' + IntToStr(I)
+    else
+      BackingName := Elem.Name;
+
+    NameIdx := ACtx.Template.AddConstantString(BackingName);
     if NameIdx > High(UInt8) then
       raise Exception.Create('Constant pool overflow: accessor name index exceeds 255');
 
-    PairReg := ACtx.Scope.AllocateRegister;
-    InitReg := ACtx.Scope.AllocateRegister;
-    EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, InitReg, 0, 0));
-    EmitInstruction(ACtx, EncodeABC(OP_SETUP_AUTO_ACCESSOR_CONST, PairReg, 0,
-      UInt8(NameIdx)));
-    ACtx.Scope.FreeRegister;
-    ACtx.Scope.FreeRegister;
+    if Elem.IsComputed then
+    begin
+      ComputedKeyName := FindComputedFieldKeyLocalName(
+        AComputedFieldKeyLocals, I);
+      LocalIdx := ACtx.Scope.ResolveLocal(ComputedKeyName);
+      if LocalIdx < 0 then
+        raise Exception.Create('Compiler error: computed auto-accessor key was not captured');
+      KeyReg := ACtx.Scope.GetLocal(LocalIdx).Slot;
+      EmitInstruction(ACtx, EncodeABC(OP_SETUP_AUTO_ACCESSOR_DYNAMIC,
+        KeyReg, Ord(Elem.IsStatic), UInt8(NameIdx)));
+    end
+    else
+      EmitInstruction(ACtx, EncodeABC(OP_SETUP_AUTO_ACCESSOR_CONST,
+        0, Ord(Elem.IsStatic), UInt8(NameIdx)));
   end;
 end;
 
@@ -4209,7 +4233,8 @@ begin
   ACtx.Scope.FreeRegister;
   ACtx.Scope.FreeRegister;
 
-  CompileAutoAccessors(ACtx, AClassReg, AClassDef);
+  CompileAutoAccessors(ACtx, AClassReg, AClassDef,
+    AComputedFieldKeyLocals);
   CompileDecoratorOrchestration(ACtx, AClassReg, AClassDef,
     AComputedFieldKeyLocals);
 

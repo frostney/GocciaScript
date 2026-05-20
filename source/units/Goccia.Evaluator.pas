@@ -4452,7 +4452,7 @@ begin
     Elem := AClassDef.FElements[I];
     if not Elem.IsComputed then
       Continue;
-    if not (Elem.Kind in [cekMethod, cekGetter, cekSetter, cekField]) then
+    if not (Elem.Kind in [cekMethod, cekGetter, cekSetter, cekField, cekAccessor]) then
       Continue;
 
     // ES2026 §15.4 ClassDefinitionEvaluation step 6.b for computed names:
@@ -4473,6 +4473,8 @@ begin
 
     case Elem.Kind of
       cekField:
+        ;
+      cekAccessor:
         ;
       cekMethod:
       begin
@@ -4595,12 +4597,26 @@ begin
     if AClassDef.FElements[I].Kind = cekAccessor then
     begin
       Elem := AClassDef.FElements[I];
+      ComputedKey := nil;
       AccessorBackingName := '__accessor_' + Elem.Name;
+      if Elem.IsComputed then
+      begin
+        if I <= High(ResolvedComputedElementKeys) then
+          ComputedKey := ResolvedComputedElementKeys[I];
+        if not Assigned(ComputedKey) then
+          ComputedKey := ToPropertyKey(EvaluateExpression(
+            Elem.ComputedKeyExpression, AContext));
+        AccessorBackingName := '__accessor_computed_' + IntToStr(I);
+      end;
 
       if Assigned(Elem.FieldInitializer) then
         ClassValue.AddInstanceProperty(AccessorBackingName, Elem.FieldInitializer);
 
-      ClassValue.AddAutoAccessor(Elem.Name, AccessorBackingName, Elem.IsStatic);
+      if Elem.IsComputed then
+        ClassValue.AddAutoAccessorWithKey(
+          Elem.Name, ComputedKey, AccessorBackingName, Elem.IsStatic)
+      else
+        ClassValue.AddAutoAccessor(Elem.Name, AccessorBackingName, Elem.IsStatic);
     end;
   end;
 
@@ -5090,7 +5106,7 @@ begin
   if Assigned(Continuation) then
     for I := 0 to High(AClassDef.FElements) do
       if AClassDef.FElements[I].IsComputed and
-         (AClassDef.FElements[I].Kind in [cekMethod, cekGetter, cekSetter, cekField]) then
+         (AClassDef.FElements[I].Kind in [cekMethod, cekGetter, cekSetter, cekField, cekAccessor]) then
         Continuation.ClearExpressionValue(
           AClassDef.FElements[I].ComputedKeyExpression);
 

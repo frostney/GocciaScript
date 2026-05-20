@@ -5551,8 +5551,8 @@ begin
         Elements[High(Elements)].Name := MemberName;
         Elements[High(Elements)].IsStatic := IsStatic;
         Elements[High(Elements)].IsPrivate := IsPrivate;
-        Elements[High(Elements)].IsComputed := False;
-        Elements[High(Elements)].ComputedKeyExpression := nil;
+        Elements[High(Elements)].IsComputed := IsComputed;
+        Elements[High(Elements)].ComputedKeyExpression := ComputedKeyExpression;
         Elements[High(Elements)].Decorators := MemberDecorators;
         Elements[High(Elements)].FieldInitializer := PropertyValue;
         Elements[High(Elements)].TypeAnnotation := FieldType;

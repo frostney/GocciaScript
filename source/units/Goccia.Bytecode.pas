@@ -61,7 +61,9 @@ const
   //               class fields.
   //   v35 -> v36: added OP_TO_PROPERTY_KEY so delayed computed class field
   //               definitions can reuse source-order property keys.
-  GOCCIA_FORMAT_VERSION = 36;
+  //   v36 -> v37: added OP_SETUP_AUTO_ACCESSOR_DYNAMIC for computed
+  //               auto-accessor keys.
+  GOCCIA_FORMAT_VERSION = 37;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
@@ -233,6 +235,7 @@ type
     OP_DIV           = 131,
     OP_MOD           = 132,
     OP_POW           = 133,
+    OP_SETUP_AUTO_ACCESSOR_DYNAMIC = 134,
     OP_BAND          = 135,
     OP_BOR           = 136,
     OP_BXOR          = 137,

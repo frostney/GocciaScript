@@ -22,4 +22,29 @@ describe("auto-accessor decorators", () => {
     expect(receivedContext.name).toBe("x");
     expect(typeof receivedValue).toBe("object");
   });
+
+  test("computed accessor decorator context and access use resolved symbol key", () => {
+    let receivedName;
+    let accessGet;
+    const key = Symbol("accessor");
+    const decorate = (value, context) => {
+      receivedName = context.name;
+      accessGet = context.access.get;
+      return {
+        get() {
+          return value.get.call(this) + 1;
+        }
+      };
+    };
+
+    class C {
+      @decorate
+      accessor [key] = 41;
+    }
+
+    const instance = new C();
+    expect(receivedName === key).toBe(true);
+    expect(instance[key]).toBe(42);
+    expect(accessGet(instance)).toBe(42);
+  });
 });

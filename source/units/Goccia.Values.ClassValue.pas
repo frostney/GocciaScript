@@ -149,6 +149,7 @@ type
     procedure AppendMethodInitializers(const AInitializers: array of TGocciaValue);
     procedure AppendFieldInitializers(const AInitializers: array of TGocciaValue);
     procedure AddAutoAccessor(const AName, ABackingName: string; const AIsStatic: Boolean);
+    procedure AddAutoAccessorWithKey(const AName: string; const AKey: TGocciaValue; const ABackingName: string; const AIsStatic: Boolean);
     procedure RunMethodInitializers(const AInstance: TGocciaValue);
     procedure RunFieldInitializers(const AInstance: TGocciaValue);
     procedure RunDecoratorFieldInitializers(const AInstance: TGocciaValue);
@@ -768,25 +769,41 @@ end;
 
 // TC39 proposal-decorators: auto-accessor creates backing getter/setter
 procedure TGocciaClassValue.AddAutoAccessor(const AName, ABackingName: string; const AIsStatic: Boolean);
+begin
+  AddAutoAccessorWithKey(AName, nil, ABackingName, AIsStatic);
+end;
+
+procedure TGocciaClassValue.AddAutoAccessorWithKey(const AName: string; const AKey: TGocciaValue; const ABackingName: string; const AIsStatic: Boolean);
 var
   GetterHelper: TGocciaAutoAccessorGetter;
   SetterHelper: TGocciaAutoAccessorSetter;
   GetterFn, SetterFn: TGocciaNativeFunctionValue;
   Target: TGocciaObjectValue;
+  PropertyName: string;
 begin
   GetterHelper := TGocciaAutoAccessorGetter.Create(ABackingName);
   SetterHelper := TGocciaAutoAccessorSetter.Create(ABackingName);
 
-  GetterFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(GetterHelper.Get, 'get ' + AName, 0);
-  SetterFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(SetterHelper.SetValue, 'set ' + AName, 1);
+  if Assigned(AKey) and not (AKey is TGocciaSymbolValue) then
+    PropertyName := AKey.ToStringLiteral.Value
+  else
+    PropertyName := AName;
+
+  GetterFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(GetterHelper.Get, 'get ' + PropertyName, 0);
+  SetterFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(SetterHelper.SetValue, 'set ' + PropertyName, 1);
 
   // Static auto-accessors go on the constructor; instance ones on the prototype
   if AIsStatic then
     Target := Self
   else
     Target := FClassPrototype;
-  Target.DefineProperty(AName, TGocciaPropertyDescriptorAccessor.Create(
-    GetterFn, SetterFn, [pfConfigurable, pfWritable]));
+  if AKey is TGocciaSymbolValue then
+    Target.DefineSymbolProperty(TGocciaSymbolValue(AKey),
+      TGocciaPropertyDescriptorAccessor.Create(
+        GetterFn, SetterFn, [pfConfigurable, pfWritable]))
+  else
+    Target.DefineProperty(PropertyName, TGocciaPropertyDescriptorAccessor.Create(
+      GetterFn, SetterFn, [pfConfigurable, pfWritable]));
 end;
 
 procedure TGocciaClassValue.RunMethodInitializers(const AInstance: TGocciaValue);
