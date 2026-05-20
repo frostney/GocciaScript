@@ -53,6 +53,8 @@ const
   BACKREF_INDEX_MASK = $1FFFFF;
   LOOK_NEGATED_FLAG = $800000;
   LOOK_TARGET_MASK = $7FFFFF;
+  WORD_ASSERT_NEGATED_FLAG = $1;
+  WORD_ASSERT_ICASE_FLAG = $2;
 
 function CompileRegExp(const APattern, AFlags: string): TRegExpProgram;
 procedure ValidateRegExpPatternNew(const APattern, AFlags: string);
@@ -142,6 +144,8 @@ type
     procedure EmitClassContents(const AContents: TRegExpClassContents;
       ANegated: Boolean);
     procedure AddBuiltinCharClass(AEscapeChar: Char; var ARanges: array of TRegExpCharRange; var ARangeCount: Integer);
+    procedure AddWordCharacterRanges(var ARanges: array of TRegExpCharRange; var ARangeCount: Integer);
+    procedure AddCaseFoldedWordComplementRanges(var ARanges: array of TRegExpCharRange; var ARangeCount: Integer);
     procedure AddRange(var ARanges: array of TRegExpCharRange; var ARangeCount: Integer; ALo, AHi: Cardinal);
     procedure EmitUnicodePropertyClass(const APropertyName: string; ANegated: Boolean);
     procedure GetUnicodePropertyRanges(const APropertyName: string; var ARanges: array of TRegExpCharRange; var ARangeCount: Integer);
@@ -449,6 +453,15 @@ begin
   Inc(ARangeCount);
 end;
 
+procedure TRegExpCompiler.AddWordCharacterRanges(
+  var ARanges: array of TRegExpCharRange; var ARangeCount: Integer);
+begin
+  AddRange(ARanges, ARangeCount, Ord('0'), Ord('9'));
+  AddRange(ARanges, ARangeCount, Ord('A'), Ord('Z'));
+  AddRange(ARanges, ARangeCount, Ord('_'), Ord('_'));
+  AddRange(ARanges, ARangeCount, Ord('a'), Ord('z'));
+end;
+
 procedure TRegExpCompiler.AddBuiltinCharClass(AEscapeChar: Char;
   var ARanges: array of TRegExpCharRange; var ARangeCount: Integer);
 begin
@@ -461,19 +474,19 @@ begin
         AddRange(ARanges, ARangeCount, Ord('9') + 1, $10FFFF);
       end;
     'w':
-      begin
-        AddRange(ARanges, ARangeCount, Ord('0'), Ord('9'));
-        AddRange(ARanges, ARangeCount, Ord('A'), Ord('Z'));
-        AddRange(ARanges, ARangeCount, Ord('_'), Ord('_'));
-        AddRange(ARanges, ARangeCount, Ord('a'), Ord('z'));
-      end;
+      AddWordCharacterRanges(ARanges, ARangeCount);
     'W':
       begin
-        AddRange(ARanges, ARangeCount, 0, Ord('0') - 1);
-        AddRange(ARanges, ARangeCount, Ord('9') + 1, Ord('A') - 1);
-        AddRange(ARanges, ARangeCount, Ord('Z') + 1, Ord('_') - 1);
-        AddRange(ARanges, ARangeCount, Ord('_') + 1, Ord('a') - 1);
-        AddRange(ARanges, ARangeCount, Ord('z') + 1, $10FFFF);
+        if FModifier.IgnoreCase and FUnicode then
+          AddCaseFoldedWordComplementRanges(ARanges, ARangeCount)
+        else
+        begin
+          AddRange(ARanges, ARangeCount, 0, Ord('0') - 1);
+          AddRange(ARanges, ARangeCount, Ord('9') + 1, Ord('A') - 1);
+          AddRange(ARanges, ARangeCount, Ord('Z') + 1, Ord('_') - 1);
+          AddRange(ARanges, ARangeCount, Ord('_') + 1, Ord('a') - 1);
+          AddRange(ARanges, ARangeCount, Ord('z') + 1, $10FFFF);
+        end;
       end;
     's':
       begin
@@ -730,6 +743,44 @@ begin
       end;
     end;
   end;
+end;
+
+procedure TRegExpCompiler.AddCaseFoldedWordComplementRanges(
+  var ARanges: array of TRegExpCharRange; var ARangeCount: Integer);
+var
+  AllRange: array[0..0] of TRegExpCharRange;
+  ComplementRanges: array[0..MAX_CHAR_RANGES - 1] of TRegExpCharRange;
+  FoldRanges: TUnicodePropertyRangeArray;
+  FoldedRanges: array[0..MAX_CHAR_RANGES - 1] of TRegExpCharRange;
+  WordRanges: array[0..MAX_CHAR_RANGES - 1] of TRegExpCharRange;
+  ComplementCount, FoldedCount, I, WordCount: Integer;
+begin
+  WordCount := 0;
+  AddWordCharacterRanges(WordRanges, WordCount);
+  SetLength(FoldRanges, WordCount);
+  for I := 0 to WordCount - 1 do
+  begin
+    FoldRanges[I].Lo := WordRanges[I].Lo;
+    FoldRanges[I].Hi := WordRanges[I].Hi;
+  end;
+  ExpandUnicodeSimpleCaseFolding(FoldRanges);
+  if Length(FoldRanges) > Length(FoldedRanges) then
+    raise EConvertError.Create('Folded word character range count exceeds buffer capacity');
+  FoldedCount := Length(FoldRanges);
+  for I := 0 to FoldedCount - 1 do
+  begin
+    FoldedRanges[I].Lo := FoldRanges[I].Lo;
+    FoldedRanges[I].Hi := FoldRanges[I].Hi;
+  end;
+  NormalizeRanges(FoldedRanges, FoldedCount);
+
+  AllRange[0].Lo := 0;
+  AllRange[0].Hi := $10FFFF;
+  SubtractRanges(AllRange, 1, FoldedRanges, FoldedCount,
+    ComplementRanges, ComplementCount);
+  for I := 0 to ComplementCount - 1 do
+    AddRange(ARanges, ARangeCount, ComplementRanges[I].Lo,
+      ComplementRanges[I].Hi);
 end;
 
 procedure InitClassContents(var AContents: TRegExpClassContents);
@@ -1738,7 +1789,7 @@ var
   PropertyName: string;
   Negated: Boolean;
   GroupName: string;
-  BackrefIdx, I, GroupCount, BackrefFlags: Integer;
+  BackrefIdx, I, GroupCount, BackrefFlags, WordAssertFlags: Integer;
   CodePoint: Cardinal;
 begin
   BackrefFlags := 0;
@@ -1755,9 +1806,19 @@ begin
         EmitCharClassRanges(Ranges, RangeCount, False);
       end;
     'b':
-      Emit(EncodeOpBx(RX_ASSERT_WORD, 0));
+      begin
+        WordAssertFlags := 0;
+        if FModifier.IgnoreCase then
+          WordAssertFlags := WordAssertFlags or WORD_ASSERT_ICASE_FLAG;
+        Emit(EncodeOpBx(RX_ASSERT_WORD, WordAssertFlags));
+      end;
     'B':
-      Emit(EncodeOpBx(RX_ASSERT_WORD, 1));
+      begin
+        WordAssertFlags := WORD_ASSERT_NEGATED_FLAG;
+        if FModifier.IgnoreCase then
+          WordAssertFlags := WordAssertFlags or WORD_ASSERT_ICASE_FLAG;
+        Emit(EncodeOpBx(RX_ASSERT_WORD, WordAssertFlags));
+      end;
     'p', 'P':
       begin
         if FUnicode and Match('{') then
