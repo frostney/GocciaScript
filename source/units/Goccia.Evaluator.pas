@@ -1872,8 +1872,8 @@ end;
 function EvaluateFor(const AForStatement: TGocciaForStatement;
   const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 var
-  HeaderScope, IterScope: TGocciaScope;
-  HeaderContext, IterContext: TGocciaEvaluationContext;
+  HeaderScope, IterScope, UpdateScope: TGocciaScope;
+  HeaderContext, IterContext, UpdateContext: TGocciaEvaluationContext;
   IsLexical: Boolean;
   PerIterNames: TStringList;
   PrevValues: array of TGocciaValue;
@@ -1896,8 +1896,10 @@ begin
   PerIterNames := nil;
   HeaderScope := nil;
   IterScope := nil;
+  UpdateScope := nil;
   HeaderContext := AContext;
   IterContext := AContext;
+  UpdateContext := AContext;
 
   if Assigned(AForStatement.Init) then
   begin
@@ -1952,6 +1954,11 @@ begin
     begin
       IterScope := ForState.IterScope;
       IterContext.Scope := IterScope;
+    end
+    else if (ResumePhase = gflpUpdate) and IsLexical then
+    begin
+      UpdateScope := ForState.UpdateScope;
+      UpdateContext.Scope := UpdateScope;
     end
     else
       IterContext := HeaderContext;
@@ -2079,18 +2086,22 @@ begin
           end;
           // cfkContinue and cfkNormal both fall through to update.
 
-          // Sync body's writes (including the iteration variable) back to the
-          // header so the update expression and the next iteration's snapshot
-          // see them. The body's per-iteration scope stays alive and pinned to
-          // its captured value for any closure created during the body — the
-          // header carries the canonical mutating cell that update will modify.
+          // ES2026 §14.7.4.4 step 3.e: create the next per-iteration
+          // environment after the body and before the update expression.
+          // Closures created in the body keep IterScope; closures created in
+          // the update expression capture this fresh UpdateScope.
           if IsLexical then
           begin
+            UpdateScope := AContext.Scope.CreateChild(skBlock, 'ForUpdate');
+            UpdateContext := AContext;
+            UpdateContext.Scope := UpdateScope;
             for I := 0 to PerIterNames.Count - 1 do
             begin
               Name := PerIterNames[I];
               IterBinding := IterScope.GetBinding(Name);
-              HeaderScope.ForceUpdateBinding(Name, IterBinding.Value);
+              UpdateScope.DefineLexicalBinding(Name, IterBinding.Value, DeclarationType);
+              if IterBinding.TypeHint <> sltUntyped then
+                UpdateScope.SetOwnBindingTypeHint(Name, IterBinding.TypeHint);
             end;
           end;
 
@@ -2098,25 +2109,34 @@ begin
           begin
             ForState.Phase := gflpUpdate;
             ForState.IterScope := nil;
+            if IsLexical then
+              ForState.UpdateScope := UpdateScope;
           end;
           ResumePhase := gflpUpdate;
         end;
 
-        // Update runs on the header so it mutates the canonical cell rather
-        // than the iteration's frozen scope. Per-iteration semantics for
-        // closures created _inside_ the update expression are intentionally
-        // simpler than the spec (they pin the header rather than a fresh
-        // per-iteration env); closures inside update bodies are rare.
         if Assigned(AForStatement.Update) then
         begin
           if IsLexical then
-            EvaluateExpression(AForStatement.Update, HeaderContext)
+            EvaluateExpression(AForStatement.Update, UpdateContext)
           else
             EvaluateExpression(AForStatement.Update, IterContext);
         end;
 
+        if IsLexical then
+        begin
+          for I := 0 to PerIterNames.Count - 1 do
+          begin
+            Name := PerIterNames[I];
+            HeaderScope.ForceUpdateBinding(Name, UpdateScope.GetBinding(Name).Value);
+          end;
+        end;
+
         if Assigned(ForState) then
+        begin
           ForState.Phase := gflpIterStart;
+          ForState.UpdateScope := nil;
+        end;
         ResumePhase := gflpIterStart;
       end;
     except
