@@ -4,6 +4,9 @@ unit Goccia.RegExp.Engine;
 
 interface
 
+uses
+  Goccia.RegExp.&Program;
+
 type
   TGocciaRegExpMatchGroup = record
     Matched: Boolean;
@@ -13,14 +16,6 @@ type
   end;
 
   TGocciaRegExpMatchGroups = array of TGocciaRegExpMatchGroup;
-
-  TGocciaRegExpNamedGroup = record
-    Name: string;
-    Index: Integer;
-    DisjunctionPath: array of Integer;
-  end;
-
-  TGocciaRegExpNamedGroups = array of TGocciaRegExpNamedGroup;
 
   TGocciaRegExpMatchResult = record
     Found: Boolean;
@@ -36,8 +31,12 @@ function NormalizeRegExpSource(const APattern: string): string;
 function HasRegExpFlag(const AFlags: string; const AFlag: Char): Boolean;
 procedure ValidateRegExpFlags(const AFlags: string);
 procedure ValidateRegExpPattern(const APattern, AFlags: string);
+function CompileRegExpProgram(const APattern, AFlags: string): TRegExpProgram;
 function CanonicalizeRegExpFlags(const AFlags: string): string;
 function RegExpToString(const APattern, AFlags: string): string;
+function ExecuteCompiledRegExp(const AProgram: TRegExpProgram;
+  const APattern, AFlags, AInput: string; const AStartIndex: Integer;
+  const ARequireStart: Boolean; out AResult: TGocciaRegExpMatchResult): Boolean;
 function ExecuteRegExp(const APattern, AFlags, AInput: string;
   const AStartIndex: Integer; const ARequireStart: Boolean;
   out AResult: TGocciaRegExpMatchResult): Boolean;
@@ -89,7 +88,18 @@ end;
 
 procedure ValidateRegExpPattern(const APattern, AFlags: string);
 begin
-  ValidateRegExpPatternNew(APattern, AFlags);
+  CompileRegExpProgram(APattern, AFlags);
+end;
+
+function CompileRegExpProgram(const APattern, AFlags: string): TRegExpProgram;
+var
+  PatternToCompile: string;
+begin
+  ValidateRegExpFlags(AFlags);
+  PatternToCompile := APattern;
+  if PatternToCompile = EMPTY_REGEX then
+    PatternToCompile := '';
+  Result := CompileRegExp(PatternToCompile, AFlags);
 end;
 
 function CanonicalizeRegExpFlags(const AFlags: string): string;
@@ -111,15 +121,14 @@ begin
     CanonicalizeRegExpFlags(AFlags);
 end;
 
-function ExecuteRegExp(const APattern, AFlags, AInput: string;
-  const AStartIndex: Integer; const ARequireStart: Boolean;
+function ExecuteCompiledRegExp(const AProgram: TRegExpProgram;
+  const APattern, AFlags, AInput: string; const AStartIndex: Integer;
+  const ARequireStart: Boolean;
   out AResult: TGocciaRegExpMatchResult): Boolean;
 var
-  Prog: TRegExpProgram;
   VMResult: TRegExpVMResult;
   IsUnicode: Boolean;
   I, GroupCount: Integer;
-  PatternToCompile: string;
   SlotStart, SlotEnd: Integer;
 begin
   AResult.Found := False;
@@ -147,11 +156,7 @@ begin
     AResult.Groups[0].Value := '';
     Exit(True);
   end;
-  PatternToCompile := APattern;
-  if PatternToCompile = EMPTY_REGEX then
-    PatternToCompile := '';
-  Prog := CompileRegExp(PatternToCompile, AFlags);
-  Result := ExecuteRegExpVM(Prog, AInput, AStartIndex, ARequireStart, VMResult);
+  Result := ExecuteRegExpVM(AProgram, AInput, AStartIndex, ARequireStart, VMResult);
   if not Result then
     Exit(False);
   AResult.Found := True;
@@ -163,7 +168,7 @@ begin
   if AResult.MatchEnd = AResult.MatchIndex then
     AResult.NextIndex := AdvanceUTF16StringIndex(AInput, AResult.NextIndex,
       IsUnicode);
-  GroupCount := Prog.CaptureCount + 1;
+  GroupCount := AProgram.CaptureCount + 1;
   SetLength(AResult.Groups, GroupCount);
   for I := 0 to GroupCount - 1 do
   begin
@@ -191,7 +196,18 @@ begin
       AResult.Groups[I].Value := '';
     end;
   end;
-  AResult.NamedGroups := Prog.NamedGroups;
+  AResult.NamedGroups := AProgram.NamedGroups;
+end;
+
+function ExecuteRegExp(const APattern, AFlags, AInput: string;
+  const AStartIndex: Integer; const ARequireStart: Boolean;
+  out AResult: TGocciaRegExpMatchResult): Boolean;
+var
+  CompiledProgram: TRegExpProgram;
+begin
+  CompiledProgram := CompileRegExpProgram(APattern, AFlags);
+  Result := ExecuteCompiledRegExp(CompiledProgram, APattern, AFlags, AInput,
+    AStartIndex, ARequireStart, AResult);
 end;
 
 end.
