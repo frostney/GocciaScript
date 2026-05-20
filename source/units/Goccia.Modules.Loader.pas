@@ -209,6 +209,7 @@ var
   Context: TGocciaEvaluationContext;
   ExportDecl: TGocciaExportDeclaration;
   ExportDefaultDecl: TGocciaExportDefaultDeclaration;
+  ExportFuncDecl: TGocciaExportFunctionDeclaration;
   ExportPair: TStringStringMap.TKeyValuePair;
   ExportVarDecl: TGocciaExportVariableDeclaration;
   I: Integer;
@@ -362,6 +363,14 @@ begin
                       if Assigned(Value) then
                         Module.ExportsTable.AddOrSetValue(VarInfo.Name, Value);
                     end;
+                  end
+                  else if Stmt is TGocciaExportFunctionDeclaration then
+                  begin
+                    ExportFuncDecl := TGocciaExportFunctionDeclaration(Stmt);
+                    Value := ModuleScope.GetValue(ExportFuncDecl.Declaration.Name);
+                    if Assigned(Value) then
+                      Module.ExportsTable.AddOrSetValue(
+                        ExportFuncDecl.Declaration.Name, Value);
                   end
                   else if Stmt is TGocciaExportEnumDeclaration then
                   begin

@@ -74,6 +74,20 @@ var
   Stmt: TGocciaStatement;
   VarDecl: TGocciaVariableDeclaration;
   DeclName: string;
+
+  procedure CheckVarLikeName(const AName: string; const ALine, AColumn: Integer);
+  begin
+    if AScope.ContainsOwnLexicalBinding(AName) then
+    begin
+      // §16.1.7: var/function declarations may shadow built-in globals in
+      // script mode, but not user-declared bindings.
+      if AScope.IsBuiltInBinding(AName) then
+        Exit;
+      raise TGocciaSyntaxError.Create(
+        SysUtils.Format('Identifier ''%s'' has already been declared',
+          [AName]), ALine, AColumn, ASourcePath, nil);
+    end;
+  end;
 begin
   for I := 0 to AProgram.Body.Count - 1 do
   begin
@@ -86,10 +100,9 @@ begin
         DeclName := VarDecl.Variables[J].Name;
         if AScope.ContainsOwnLexicalBinding(DeclName) then
         begin
-          // §16.1.7: var/function declarations may shadow built-in
-          // globals in script mode, but not user-declared bindings.
-          if (VarDecl.IsVar or VarDecl.IsFunctionDeclaration) and
-             AScope.IsBuiltInBinding(DeclName) then
+          // §16.1.7: var declarations may shadow built-in globals in script
+          // mode, but not user-declared bindings.
+          if VarDecl.IsVar and AScope.IsBuiltInBinding(DeclName) then
             Continue;
           raise TGocciaSyntaxError.Create(
             SysUtils.Format('Identifier ''%s'' has already been declared',
@@ -97,6 +110,13 @@ begin
         end;
       end;
     end
+    else if Stmt is TGocciaFunctionDeclaration then
+      CheckVarLikeName(TGocciaFunctionDeclaration(Stmt).Name,
+        Stmt.Line, Stmt.Column)
+    else if Stmt is TGocciaExportFunctionDeclaration then
+      CheckVarLikeName(
+        TGocciaExportFunctionDeclaration(Stmt).Declaration.Name,
+        Stmt.Line, Stmt.Column)
     else if Stmt is TGocciaClassDeclaration then
     begin
       DeclName := TGocciaClassDeclaration(Stmt).ClassDefinition.Name;

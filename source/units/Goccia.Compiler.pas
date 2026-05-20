@@ -235,6 +235,8 @@ begin
     Goccia.Compiler.Statements.CompileExpressionStatement(Ctx, TGocciaExpressionStatement(AStmt))
   else if AStmt is TGocciaVariableDeclaration then
     Goccia.Compiler.Statements.CompileVariableDeclaration(Ctx, TGocciaVariableDeclaration(AStmt))
+  else if AStmt is TGocciaFunctionDeclaration then
+    Goccia.Compiler.Statements.CompileFunctionDeclaration(Ctx, TGocciaFunctionDeclaration(AStmt))
   else if AStmt is TGocciaBlockStatement then
     Result := Goccia.Compiler.Statements.CompileBlockStatement(Ctx,
       TGocciaBlockStatement(AStmt))
@@ -289,6 +291,8 @@ begin
     Goccia.Compiler.Statements.CompileImportDeclaration(Ctx, TGocciaImportDeclaration(AStmt))
   else if AStmt is TGocciaExportVariableDeclaration then
     Goccia.Compiler.Statements.CompileExportVariableDeclaration(Ctx, TGocciaExportVariableDeclaration(AStmt))
+  else if AStmt is TGocciaExportFunctionDeclaration then
+    Goccia.Compiler.Statements.CompileExportFunctionDeclaration(Ctx, TGocciaExportFunctionDeclaration(AStmt))
   else if AStmt is TGocciaExportDeclaration then
     Goccia.Compiler.Statements.CompileExportDeclaration(Ctx, TGocciaExportDeclaration(AStmt))
   else if AStmt is TGocciaExportDefaultDeclaration then
@@ -368,13 +372,13 @@ begin
   if ANode is TGocciaVariableDeclaration then
   begin
     VarDecl := TGocciaVariableDeclaration(ANode);
-    if (not VarDecl.IsVar) and (not VarDecl.IsFunctionDeclaration) then
+    if not VarDecl.IsVar then
       PredeclareVarDeclLocals(VarDecl, AScope);
   end
   else if ANode is TGocciaExportVariableDeclaration then
   begin
     VarDecl := TGocciaExportVariableDeclaration(ANode).Declaration;
-    if (not VarDecl.IsVar) and (not VarDecl.IsFunctionDeclaration) then
+    if not VarDecl.IsVar then
       PredeclareVarDeclLocals(VarDecl, AScope);
   end
   else if (ANode is TGocciaDestructuringDeclaration) and
@@ -405,18 +409,16 @@ begin
   end;
 end;
 
-// Returns the inner TGocciaVariableDeclaration if the node is a function
-// declaration (either directly or wrapped in TGocciaExportVariableDeclaration),
+// Returns the inner TGocciaFunctionDeclaration if the node is a function
+// declaration (either directly or wrapped in TGocciaExportFunctionDeclaration),
 // or nil otherwise.
-function GetFunctionDecl(const ANode: TGocciaASTNode): TGocciaVariableDeclaration;
+function GetFunctionDecl(const ANode: TGocciaASTNode): TGocciaFunctionDeclaration;
 begin
-  if ANode is TGocciaVariableDeclaration then
-    Result := TGocciaVariableDeclaration(ANode)
-  else if ANode is TGocciaExportVariableDeclaration then
-    Result := TGocciaExportVariableDeclaration(ANode).Declaration
+  if ANode is TGocciaFunctionDeclaration then
+    Result := TGocciaFunctionDeclaration(ANode)
+  else if ANode is TGocciaExportFunctionDeclaration then
+    Result := TGocciaExportFunctionDeclaration(ANode).Declaration
   else
-    Exit(nil);
-  if not Result.IsFunctionDeclaration then
     Result := nil;
 end;
 
@@ -546,6 +548,11 @@ begin
       for I := 0 to High(VarDecl.Variables) do
         AScope.DeclareVarLocal(VarDecl.Variables[I].Name);
   end
+  else if ANode is TGocciaFunctionDeclaration then
+    AScope.DeclareVarLocal(TGocciaFunctionDeclaration(ANode).Name)
+  else if ANode is TGocciaExportFunctionDeclaration then
+    AScope.DeclareVarLocal(
+      TGocciaExportFunctionDeclaration(ANode).Declaration.Name)
   else if ANode is TGocciaDestructuringDeclaration then
   begin
     DestructDecl := TGocciaDestructuringDeclaration(ANode);

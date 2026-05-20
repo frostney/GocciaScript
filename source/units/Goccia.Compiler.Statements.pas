@@ -19,6 +19,8 @@ procedure CompileExpressionStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaExpressionStatement);
 procedure CompileVariableDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaVariableDeclaration);
+procedure CompileFunctionDeclaration(const ACtx: TGocciaCompilationContext;
+  const AStmt: TGocciaFunctionDeclaration);
 function CompileBlockStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaBlockStatement): Boolean;
 function CompileIfStatement(const ACtx: TGocciaCompilationContext;
@@ -50,6 +52,9 @@ procedure CompileExportDefaultDeclaration(const ACtx: TGocciaCompilationContext;
 procedure CompileExportVariableDeclaration(
   const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaExportVariableDeclaration);
+procedure CompileExportFunctionDeclaration(
+  const ACtx: TGocciaCompilationContext;
+  const AStmt: TGocciaExportFunctionDeclaration);
 procedure CompileReExportDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaReExportDeclaration);
 procedure CompileSwitchStatement(const ACtx: TGocciaCompilationContext;
@@ -556,16 +561,14 @@ var
   TypeHint, AnnotationType: TGocciaLocalType;
   ConstantValue: TGocciaCompileTimeValue;
   ConstantType: TGocciaLocalType;
-  IsBlockScopedFunctionDeclaration, IsStrict, HasInitializer, HasRealInitializer,
-  IsTopLevelGlobalBacked, IsVarRedeclaration: Boolean;
+  IsStrict, HasInitializer, HasRealInitializer, IsTopLevelGlobalBacked,
+  IsVarRedeclaration: Boolean;
   CanTrackConstant: Boolean;
 begin
   for I := 0 to High(AStmt.Variables) do
   begin
     Info := AStmt.Variables[I];
-    IsBlockScopedFunctionDeclaration := AStmt.IsFunctionDeclaration and
-      (ACtx.Scope.Depth > 0);
-    if AStmt.IsVar and (not IsBlockScopedFunctionDeclaration) then
+    if AStmt.IsVar then
     begin
       // Track whether this is a redeclaration (slot already exists)
       LocalIdx := FindVarLocalIndex(ACtx.Scope, Info.Name);
@@ -574,9 +577,9 @@ begin
     end
     else
     begin
-      // Check if the local was pre-declared (for function declaration
-      // upvalue resolution) and reuse the existing slot, but only at the
-      // same scope depth to preserve block-scoping and shadowing
+      // Check if the local was pre-declared for upvalue resolution and reuse
+      // the existing slot, but only at the same scope depth to preserve
+      // block-scoping and shadowing.
       LocalIdx := ACtx.Scope.ResolveLocal(Info.Name);
       if (LocalIdx >= 0) and
          (ACtx.Scope.GetLocal(LocalIdx).Depth = ACtx.Scope.Depth) then
@@ -587,10 +590,8 @@ begin
     end;
 
     IsTopLevelGlobalBacked := ACtx.GlobalBackedTopLevel and
-      ((AStmt.IsVar and (not IsBlockScopedFunctionDeclaration)) or
-       ((not AStmt.IsVar) and (ACtx.Scope.Depth = 0)));
-    if IsTopLevelGlobalBacked and AStmt.IsVar and
-       (not IsBlockScopedFunctionDeclaration) then
+      (AStmt.IsVar or ((not AStmt.IsVar) and (ACtx.Scope.Depth = 0)));
+    if IsTopLevelGlobalBacked and AStmt.IsVar then
     begin
       LocalIdx := FindLocalBySlot(ACtx.Scope, Info.Name, Slot);
       if LocalIdx >= 0 then
@@ -698,7 +699,7 @@ begin
     // a cell that copied the register's initial (undefined) value.  The
     // initializer wrote directly to the register (e.g. OP_LOAD_INT) bypassing
     // the cell.  Emit OP_SET_LOCAL to sync the cell with the register.
-    if (not AStmt.IsVar) or IsBlockScopedFunctionDeclaration or HasInitializer then
+    if (not AStmt.IsVar) or HasInitializer then
     begin
       LocalIdx := ACtx.Scope.ResolveLocal(Info.Name);
       if (LocalIdx >= 0) and ACtx.Scope.GetLocal(LocalIdx).IsCaptured then
@@ -711,8 +712,7 @@ begin
       ACtx.Scope.ClearLocalConstantValue(LocalIdx);
       CanTrackConstant := ACtx.OptimizationOptions.EnableConstPropagation and
         AStmt.IsConst and not AStmt.IsVar and
-        not AStmt.IsFunctionDeclaration and not IsTopLevelGlobalBacked and
-        HasRealInitializer and Assigned(Info.Initializer) and
+        not IsTopLevelGlobalBacked and HasRealInitializer and Assigned(Info.Initializer) and
         TryEvaluateConstantExpression(ACtx, Info.Initializer, ConstantValue);
 
       if CanTrackConstant and IsStrict then
@@ -729,6 +729,56 @@ begin
       EmitGlobalDefine(ACtx, Slot, Info.Name, AStmt.IsConst, AStmt.IsVar,
         HasInitializer);
   end;
+end;
+
+procedure CompileFunctionDeclaration(const ACtx: TGocciaCompilationContext;
+  const AStmt: TGocciaFunctionDeclaration);
+var
+  Slot: UInt8;
+  LocalIdx, FuncCount: Integer;
+  InferredTemplate: TGocciaFunctionTemplate;
+  IsBlockScoped, IsTopLevelGlobalBacked: Boolean;
+begin
+  IsBlockScoped := ACtx.Scope.Depth > 0;
+  if IsBlockScoped then
+  begin
+    LocalIdx := ACtx.Scope.ResolveLocal(AStmt.Name);
+    if (LocalIdx >= 0) and
+       (ACtx.Scope.GetLocal(LocalIdx).Depth = ACtx.Scope.Depth) then
+      Slot := ACtx.Scope.GetLocal(LocalIdx).Slot
+    else
+      Slot := ACtx.Scope.DeclareLocal(AStmt.Name, False);
+  end
+  else
+  begin
+    Slot := ACtx.Scope.DeclareVarLocal(AStmt.Name);
+  end;
+
+  IsTopLevelGlobalBacked := ACtx.GlobalBackedTopLevel and not IsBlockScoped;
+  if IsTopLevelGlobalBacked then
+  begin
+    LocalIdx := FindLocalBySlot(ACtx.Scope, AStmt.Name, Slot);
+    if LocalIdx >= 0 then
+      ACtx.Scope.MarkGlobalBacked(LocalIdx);
+  end;
+
+  FuncCount := ACtx.Template.FunctionCount;
+  Goccia.Compiler.Expressions.CompileFunctionExpression(
+    ACtx, AStmt.FunctionExpression, Slot);
+  if ACtx.Template.FunctionCount > FuncCount then
+  begin
+    InferredTemplate := ACtx.Template.GetFunction(
+      ACtx.Template.FunctionCount - 1);
+    if InferredTemplate.Name = '<function>' then
+      InferredTemplate.Name := AStmt.Name;
+  end;
+
+  LocalIdx := ACtx.Scope.ResolveLocal(AStmt.Name);
+  if (LocalIdx >= 0) and ACtx.Scope.GetLocal(LocalIdx).IsCaptured then
+    EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, Slot, UInt16(Slot)));
+
+  if IsTopLevelGlobalBacked then
+    EmitGlobalDefine(ACtx, Slot, AStmt.Name, False, True, True);
 end;
 
 threadvar
@@ -870,15 +920,13 @@ begin
   end;
 end;
 
-function GetBlockFunctionDeclaration(const ANode: TGocciaASTNode): TGocciaVariableDeclaration;
+function GetBlockFunctionDeclaration(const ANode: TGocciaASTNode): TGocciaFunctionDeclaration;
 begin
-  if ANode is TGocciaVariableDeclaration then
-    Result := TGocciaVariableDeclaration(ANode)
-  else if ANode is TGocciaExportVariableDeclaration then
-    Result := TGocciaExportVariableDeclaration(ANode).Declaration
+  if ANode is TGocciaFunctionDeclaration then
+    Result := TGocciaFunctionDeclaration(ANode)
+  else if ANode is TGocciaExportFunctionDeclaration then
+    Result := TGocciaExportFunctionDeclaration(ANode).Declaration
   else
-    Exit(nil);
-  if not Result.IsFunctionDeclaration then
     Result := nil;
 end;
 
@@ -912,17 +960,14 @@ begin
   Result := -1;
 end;
 
-procedure PredeclareBlockFunctionLocal(const AVarDecl: TGocciaVariableDeclaration;
+procedure PredeclareBlockFunctionLocal(const AFunctionDecl: TGocciaFunctionDeclaration;
   const AScope: TGocciaCompilerScope);
 var
-  I, LocalIdx: Integer;
+  LocalIdx: Integer;
 begin
-  for I := 0 to High(AVarDecl.Variables) do
-  begin
-    LocalIdx := AScope.ResolveLocal(AVarDecl.Variables[I].Name);
-    if (LocalIdx < 0) or (AScope.GetLocal(LocalIdx).Depth <> AScope.Depth) then
-      AScope.DeclareLocal(AVarDecl.Variables[I].Name, False);
-  end;
+  LocalIdx := AScope.ResolveLocal(AFunctionDecl.Name);
+  if (LocalIdx < 0) or (AScope.GetLocal(LocalIdx).Depth <> AScope.Depth) then
+    AScope.DeclareLocal(AFunctionDecl.Name, False);
 end;
 
 procedure PredeclareBlockVariableLocals(const ACtx: TGocciaCompilationContext;
@@ -1010,19 +1055,20 @@ begin
   if ANode is TGocciaVariableDeclaration then
   begin
     VarDecl := TGocciaVariableDeclaration(ANode);
-    if VarDecl.IsFunctionDeclaration then
-      PredeclareBlockFunctionLocal(VarDecl, ACtx.Scope)
-    else if not VarDecl.IsVar then
+    if not VarDecl.IsVar then
       PredeclareBlockVariableLocals(ACtx, VarDecl, AEmitInitializers);
   end
   else if ANode is TGocciaExportVariableDeclaration then
   begin
     VarDecl := TGocciaExportVariableDeclaration(ANode).Declaration;
-    if VarDecl.IsFunctionDeclaration then
-      PredeclareBlockFunctionLocal(VarDecl, ACtx.Scope)
-    else if not VarDecl.IsVar then
+    if not VarDecl.IsVar then
       PredeclareBlockVariableLocals(ACtx, VarDecl, AEmitInitializers);
   end
+  else if ANode is TGocciaFunctionDeclaration then
+    PredeclareBlockFunctionLocal(TGocciaFunctionDeclaration(ANode), ACtx.Scope)
+  else if ANode is TGocciaExportFunctionDeclaration then
+    PredeclareBlockFunctionLocal(
+      TGocciaExportFunctionDeclaration(ANode).Declaration, ACtx.Scope)
   else if (ANode is TGocciaDestructuringDeclaration) and
           not TGocciaDestructuringDeclaration(ANode).IsVar then
     PredeclareBlockPatternLocals(ACtx,
@@ -1085,7 +1131,7 @@ begin
   if ANode is TGocciaVariableDeclaration then
   begin
     VarDecl := TGocciaVariableDeclaration(ANode);
-    if VarDecl.IsVar or VarDecl.IsFunctionDeclaration then
+    if VarDecl.IsVar then
       Exit;
     for I := 0 to High(VarDecl.Variables) do
       EmitBlockLexicalHoleInitializer(ACtx, VarDecl.Variables[I].Name);
@@ -1093,7 +1139,7 @@ begin
   else if ANode is TGocciaExportVariableDeclaration then
   begin
     VarDecl := TGocciaExportVariableDeclaration(ANode).Declaration;
-    if VarDecl.IsVar or VarDecl.IsFunctionDeclaration then
+    if VarDecl.IsVar then
       Exit;
     for I := 0 to High(VarDecl.Variables) do
       EmitBlockLexicalHoleInitializer(ACtx, VarDecl.Variables[I].Name);
@@ -1125,13 +1171,16 @@ begin
   if ANode is TGocciaVariableDeclaration then
   begin
     VarDecl := TGocciaVariableDeclaration(ANode);
-    Exit(VarDecl.IsFunctionDeclaration or not VarDecl.IsVar);
+    Exit(not VarDecl.IsVar);
   end
   else if ANode is TGocciaExportVariableDeclaration then
   begin
     VarDecl := TGocciaExportVariableDeclaration(ANode).Declaration;
-    Exit(VarDecl.IsFunctionDeclaration or not VarDecl.IsVar);
+    Exit(not VarDecl.IsVar);
   end
+  else if (ANode is TGocciaFunctionDeclaration) or
+          (ANode is TGocciaExportFunctionDeclaration) then
+    Exit(True)
   else if ANode is TGocciaDestructuringDeclaration then
     Exit(not TGocciaDestructuringDeclaration(ANode).IsVar)
   else if (ANode is TGocciaUsingDeclaration) or
@@ -1232,7 +1281,9 @@ begin
     Exit(True);
 
   if (AStmt is TGocciaEmptyStatement) or
-     (AStmt is TGocciaContinueStatement) then
+     (AStmt is TGocciaContinueStatement) or
+     (AStmt is TGocciaFunctionDeclaration) or
+     (AStmt is TGocciaExportFunctionDeclaration) then
     Exit(False);
 
   if (AStmt is TGocciaExpressionStatement) or
@@ -2155,7 +2206,7 @@ begin
   if not Assigned(AStmt.Init) or not (AStmt.Init is TGocciaVariableDeclaration) then
     Exit;
   VarDecl := TGocciaVariableDeclaration(AStmt.Init);
-  if VarDecl.IsFunctionDeclaration or (Length(VarDecl.Variables) <> 1) then
+  if Length(VarDecl.Variables) <> 1 then
     Exit;
   if not VarDecl.Variables[0].HasInitializer then
     Exit;
@@ -2450,9 +2501,8 @@ begin
 
   if Assigned(AStmt.Init) then
   begin
-    if (AStmt.Init is TGocciaVariableDeclaration)
-       and not TGocciaVariableDeclaration(AStmt.Init).IsVar
-       and not TGocciaVariableDeclaration(AStmt.Init).IsFunctionDeclaration then
+    if (AStmt.Init is TGocciaVariableDeclaration) and
+       not TGocciaVariableDeclaration(AStmt.Init).IsVar then
     begin
       HasLexicalInit := True;
       VarDecl := TGocciaVariableDeclaration(AStmt.Init);
@@ -2786,6 +2836,25 @@ begin
       NameIdx := ACtx.Template.AddConstantString(VarInfo.Name);
       EmitInstruction(ACtx, EncodeABx(OP_EXPORT, Reg, NameIdx));
     end;
+  end;
+end;
+
+procedure CompileExportFunctionDeclaration(
+  const ACtx: TGocciaCompilationContext;
+  const AStmt: TGocciaExportFunctionDeclaration);
+var
+  LocalIdx: Integer;
+  Reg: UInt8;
+  NameIdx: UInt16;
+begin
+  CompileFunctionDeclaration(ACtx, AStmt.Declaration);
+
+  LocalIdx := ACtx.Scope.ResolveLocal(AStmt.Declaration.Name);
+  if LocalIdx >= 0 then
+  begin
+    Reg := ACtx.Scope.GetLocal(LocalIdx).Slot;
+    NameIdx := ACtx.Template.AddConstantString(AStmt.Declaration.Name);
+    EmitInstruction(ACtx, EncodeABx(OP_EXPORT, Reg, NameIdx));
   end;
 end;
 

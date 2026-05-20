@@ -220,7 +220,7 @@ begin
   if ANode is TGocciaVariableDeclaration then
   begin
     VarDecl := TGocciaVariableDeclaration(ANode);
-    if VarDecl.IsVar and not VarDecl.IsFunctionDeclaration then
+    if VarDecl.IsVar then
       Exit;
     for I := 0 to High(VarDecl.Variables) do
       PredeclareBlockLexicalName(AScope, VarDecl.Variables[I].Name,
@@ -230,13 +230,21 @@ begin
   else if ANode is TGocciaExportVariableDeclaration then
   begin
     VarDecl := TGocciaExportVariableDeclaration(ANode).Declaration;
-    if VarDecl.IsVar and not VarDecl.IsFunctionDeclaration then
+    if VarDecl.IsVar then
       Exit;
     for I := 0 to High(VarDecl.Variables) do
       PredeclareBlockLexicalName(AScope, VarDecl.Variables[I].Name,
         BlockLexicalDeclarationType(VarDecl.IsConst), VarDecl.Line,
         VarDecl.Column);
   end
+  else if ANode is TGocciaFunctionDeclaration then
+    PredeclareBlockLexicalName(AScope,
+      TGocciaFunctionDeclaration(ANode).Name, dtLet, ANode.Line,
+      ANode.Column)
+  else if ANode is TGocciaExportFunctionDeclaration then
+    PredeclareBlockLexicalName(AScope,
+      TGocciaExportFunctionDeclaration(ANode).Declaration.Name, dtLet,
+      ANode.Line, ANode.Column)
   else if ANode is TGocciaDestructuringDeclaration then
   begin
     DestructDecl := TGocciaDestructuringDeclaration(ANode);
@@ -286,22 +294,19 @@ end;
 procedure HoistSingleFunctionDeclaration(const ANode: TGocciaASTNode;
   const AContext: TGocciaEvaluationContext; const ABlockScoped: Boolean);
 var
-  VarDecl: TGocciaVariableDeclaration;
+  FuncDecl: TGocciaFunctionDeclaration;
   Value: TGocciaValue;
   Name: string;
 begin
-  if ANode is TGocciaVariableDeclaration then
-    VarDecl := TGocciaVariableDeclaration(ANode)
-  else if ANode is TGocciaExportVariableDeclaration then
-    VarDecl := TGocciaExportVariableDeclaration(ANode).Declaration
+  if ANode is TGocciaFunctionDeclaration then
+    FuncDecl := TGocciaFunctionDeclaration(ANode)
+  else if ANode is TGocciaExportFunctionDeclaration then
+    FuncDecl := TGocciaExportFunctionDeclaration(ANode).Declaration
   else
     Exit;
 
-  if not VarDecl.IsFunctionDeclaration then
-    Exit;
-
-  Name := VarDecl.Variables[0].Name;
-  Value := VarDecl.Variables[0].Initializer.Evaluate(AContext);
+  Name := FuncDecl.Name;
+  Value := FuncDecl.FunctionExpression.Evaluate(AContext);
   if Assigned(TGarbageCollector.Instance) then
     TGarbageCollector.Instance.AddTempRoot(Value);
   try
@@ -1890,9 +1895,8 @@ begin
 
   if Assigned(AForStatement.Init) then
   begin
-    if (AForStatement.Init is TGocciaVariableDeclaration)
-       and not TGocciaVariableDeclaration(AForStatement.Init).IsVar
-       and not TGocciaVariableDeclaration(AForStatement.Init).IsFunctionDeclaration then
+    if (AForStatement.Init is TGocciaVariableDeclaration) and
+       not TGocciaVariableDeclaration(AForStatement.Init).IsVar then
     begin
       IsLexical := True;
       VarDecl := TGocciaVariableDeclaration(AForStatement.Init);
@@ -2980,6 +2984,8 @@ begin
   for I := 0 to ABlockStatement.Nodes.Count - 1 do
   begin
     if (ABlockStatement.Nodes[I] is TGocciaVariableDeclaration) or
+       (ABlockStatement.Nodes[I] is TGocciaFunctionDeclaration) or
+       (ABlockStatement.Nodes[I] is TGocciaExportFunctionDeclaration) or
        (ABlockStatement.Nodes[I] is TGocciaDestructuringDeclaration) or
        (ABlockStatement.Nodes[I] is TGocciaClassDeclaration) or
        (ABlockStatement.Nodes[I] is TGocciaEnumDeclaration) or
@@ -3640,15 +3646,18 @@ var
       if AConsequent[K] is TGocciaVariableDeclaration then
       begin
         VarDecl := TGocciaVariableDeclaration(AConsequent[K]);
-        if VarDecl.IsFunctionDeclaration or (not VarDecl.IsVar) then
+        if not VarDecl.IsVar then
           Exit(True);
       end
       else if AConsequent[K] is TGocciaExportVariableDeclaration then
       begin
         VarDecl := TGocciaExportVariableDeclaration(AConsequent[K]).Declaration;
-        if VarDecl.IsFunctionDeclaration or (not VarDecl.IsVar) then
+        if not VarDecl.IsVar then
           Exit(True);
       end
+      else if (AConsequent[K] is TGocciaFunctionDeclaration) or
+              (AConsequent[K] is TGocciaExportFunctionDeclaration) then
+        Exit(True)
       else if ((AConsequent[K] is TGocciaDestructuringDeclaration) and
               (not TGocciaDestructuringDeclaration(AConsequent[K]).IsVar)) or
               (AConsequent[K] is TGocciaClassDeclaration) or

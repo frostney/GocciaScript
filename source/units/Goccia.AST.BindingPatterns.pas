@@ -125,6 +125,11 @@ begin
       for I := 0 to Length(VarDecl.Variables) - 1 do
         AddBindingName(ANames, VarDecl.Variables[I].Name, True);
   end
+  else if ANode is TGocciaFunctionDeclaration then
+    AddBindingName(ANames, TGocciaFunctionDeclaration(ANode).Name, True)
+  else if ANode is TGocciaExportFunctionDeclaration then
+    AddBindingName(ANames,
+      TGocciaExportFunctionDeclaration(ANode).Declaration.Name, True)
   else if ANode is TGocciaDestructuringDeclaration then
   begin
     DestructDecl := TGocciaDestructuringDeclaration(ANode);
