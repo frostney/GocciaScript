@@ -1185,10 +1185,15 @@ var
   Lexeme: string;
 
   procedure ConsumeDigitsWithSeparators(const AValidDigits: TSysCharSet); inline;
+  var
+    Digit: Char;
   begin
-    while CharInSet(Peek, AValidDigits) or (Peek = '_') do
+    while True do
     begin
-      if Peek = '_' then
+      Digit := Peek;
+      if CharInSet(Digit, AValidDigits) then
+        Advance
+      else if Digit = '_' then
       begin
         HasSeparator := True;
         Advance;
@@ -1197,7 +1202,7 @@ var
             FLine, FColumn, FFileName, GetSourceLines, SSuggestNumericSeparator);
       end
       else
-        Advance;
+        Break;
     end;
   end;
 begin
