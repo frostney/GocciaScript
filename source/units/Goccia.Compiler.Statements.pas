@@ -529,6 +529,9 @@ function FindVarLocalIndex(const AScope: TGocciaCompilerScope;
 function FindLocalBySlot(const AScope: TGocciaCompilerScope;
   const AName: string; const ASlot: UInt8): Integer; forward;
 
+procedure CopyLocalTypeMetadata(const ACtx: TGocciaCompilationContext;
+  const ASourceIdx, ATargetIdx: Integer); forward;
+
 procedure EmitGlobalDefine(const ACtx: TGocciaCompilationContext;
   const ASlot: UInt8; const AName: string; const AIsConst: Boolean;
   const AIsVar: Boolean = False; const AHasInitializer: Boolean = True);
@@ -958,6 +961,34 @@ begin
       Exit(I);
   end;
   Result := -1;
+end;
+
+procedure CopyLocalTypeMetadata(const ACtx: TGocciaCompilationContext;
+  const ASourceIdx, ATargetIdx: Integer);
+var
+  Source: TGocciaCompilerLocal;
+  Target: TGocciaCompilerLocal;
+begin
+  if (ASourceIdx < 0) or (ATargetIdx < 0) then
+    Exit;
+
+  Source := ACtx.Scope.GetLocal(ASourceIdx);
+  Target := ACtx.Scope.GetLocal(ATargetIdx);
+
+  ACtx.Scope.SetLocalTypeHint(ATargetIdx, Source.TypeHint);
+  ACtx.Scope.SetLocalStrictlyTyped(ATargetIdx, Source.IsStrictlyTyped);
+  ACtx.Scope.SetLocalArrayTyped(ATargetIdx, Source.IsArrayTyped);
+  ACtx.Scope.SetLocalReturnTypeHint(ATargetIdx, Source.ReturnTypeHint);
+  ACtx.Scope.SetLocalParamTypeSignature(ATargetIdx,
+    Source.ParamTypeSignature);
+  ACtx.Scope.SetLocalTypeAnnotation(ATargetIdx, Source.TypeAnnotation);
+  ACtx.Scope.SetLocalElementTypeAnnotation(ATargetIdx,
+    Source.ElementTypeAnnotation);
+
+  if Source.TypeHint <> sltUntyped then
+    ACtx.Template.SetLocalType(Target.Slot, Source.TypeHint);
+  if Source.IsStrictlyTyped then
+    ACtx.Template.SetLocalStrictFlag(Target.Slot, True);
 end;
 
 procedure PredeclareBlockFunctionLocal(const AFunctionDecl: TGocciaFunctionDeclaration;
@@ -2492,9 +2523,11 @@ var
   PerIterNames: TStringList;
   PerIterIsConst: Boolean;
   OuterSlots, BodySlots, UpdateSlots: array of UInt8;
+  OuterLocalIdxs: array of Integer;
   Name: string;
   VarDecl: TGocciaVariableDeclaration;
   DestructDecl: TGocciaDestructuringDeclaration;
+  LocalIdx: Integer;
 begin
   if TryCompileCountedFor(ACtx, AStmt) then
     Exit;
@@ -2541,10 +2574,12 @@ begin
         SetLength(OuterSlots, PerIterNames.Count);
         SetLength(BodySlots, PerIterNames.Count);
         SetLength(UpdateSlots, PerIterNames.Count);
+        SetLength(OuterLocalIdxs, PerIterNames.Count);
         for I := 0 to PerIterNames.Count - 1 do
         begin
           Name := PerIterNames[I];
-          OuterSlots[I] := ACtx.Scope.GetLocal(ACtx.Scope.ResolveLocal(Name)).Slot;
+          OuterLocalIdxs[I] := ACtx.Scope.ResolveLocal(Name);
+          OuterSlots[I] := ACtx.Scope.GetLocal(OuterLocalIdxs[I]).Slot;
         end;
 
         LoopStart := CurrentCodePosition(ACtx);
@@ -2558,6 +2593,8 @@ begin
         begin
           Name := PerIterNames[I];
           BodySlots[I] := ACtx.Scope.DeclareLocal(Name, PerIterIsConst);
+          LocalIdx := ACtx.Scope.ResolveLocal(Name);
+          CopyLocalTypeMetadata(ACtx, OuterLocalIdxs[I], LocalIdx);
           EmitInstruction(ACtx,
             EncodeABC(OP_MOVE, BodySlots[I], OuterSlots[I], 0));
         end;
@@ -2593,6 +2630,8 @@ begin
         begin
           Name := PerIterNames[I];
           UpdateSlots[I] := ACtx.Scope.DeclareLocal(Name, PerIterIsConst);
+          LocalIdx := ACtx.Scope.ResolveLocal(Name);
+          CopyLocalTypeMetadata(ACtx, OuterLocalIdxs[I], LocalIdx);
           EmitInstruction(ACtx,
             EncodeABC(OP_MOVE, UpdateSlots[I], BodySlots[I], 0));
         end;
@@ -4597,7 +4636,10 @@ begin
     // when HasNameBinding is true, __super__ lives inside the inner scope
     // and EndScope below will free it together with the name binding local.
     if not HasNameBinding then
+    begin
+      EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, SuperReg, 0, 0));
       ACtx.Scope.FreeRegister;
+    end;
   end
   else
     CompileDecoratorAndAccessorPass(ACtx, ADest, ClassDef, -1);

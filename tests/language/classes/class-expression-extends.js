@@ -4,6 +4,27 @@ features: [classes]
 ---*/
 
 describe("class expression extends dynamic value", () => {
+  test("top-level class expression with constructor calling super()", () => {
+    class Original {
+      constructor() { this.x = 1; }
+      getX() { return this.x; }
+    }
+
+    let Wrapped = class extends Original {
+      constructor() {
+        super();
+        this.wrapped = true;
+      }
+    };
+
+    const w = new Wrapped();
+    expect(w.x).toBe(1);
+    expect(w.wrapped).toBe(true);
+    expect(w.getX()).toBe(1);
+    expect(w instanceof Wrapped).toBe(true);
+    expect(w instanceof Original).toBe(true);
+  });
+
   test("class expression extends parameter with constructor calling super()", () => {
     const makeWrapper = (Base) => {
       return class extends Base {
