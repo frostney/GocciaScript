@@ -34,6 +34,24 @@ describe("Intl.NumberFormat.prototype.resolvedOptions", () => {
     expect(opts.maximumFractionDigits).toBe(2);
   });
 
+  test("currency style uses currency digits for missing one-sided fraction defaults", () => {
+    const maximumOnly = new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: "USD",
+      maximumFractionDigits: 5,
+    }).resolvedOptions();
+    expect(maximumOnly.minimumFractionDigits).toBe(2);
+    expect(maximumOnly.maximumFractionDigits).toBe(5);
+
+    const minimumOnly = new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: "USD",
+      minimumFractionDigits: 1,
+    }).resolvedOptions();
+    expect(minimumOnly.minimumFractionDigits).toBe(1);
+    expect(minimumOnly.maximumFractionDigits).toBe(2);
+  });
+
   test("currency style omits unit fields", () => {
     const opts = new Intl.NumberFormat("en-US", {
       style: "currency",
@@ -73,5 +91,20 @@ describe("Intl.NumberFormat.prototype.resolvedOptions", () => {
     expect(opts.maximumSignificantDigits).toBe(5);
     expect(opts.minimumFractionDigits).toBe(undefined);
     expect(opts.maximumFractionDigits).toBe(undefined);
+  });
+
+  test("non-auto roundingPriority resolves fraction and significant digit fields", () => {
+    const opts = new Intl.NumberFormat("en-US", {
+      roundingPriority: "lessPrecision",
+      minimumFractionDigits: 1,
+      maximumFractionDigits: 3,
+      minimumSignificantDigits: 3,
+      maximumSignificantDigits: 3,
+    }).resolvedOptions();
+    expect(opts.minimumFractionDigits).toBe(1);
+    expect(opts.maximumFractionDigits).toBe(3);
+    expect(opts.minimumSignificantDigits).toBe(3);
+    expect(opts.maximumSignificantDigits).toBe(3);
+    expect(opts.roundingPriority).toBe("lessPrecision");
   });
 });

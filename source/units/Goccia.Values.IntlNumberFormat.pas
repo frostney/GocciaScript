@@ -189,6 +189,16 @@ begin
     Result := inrmHalfExpand;
 end;
 
+function RoundingPriorityStringToEnum(const AValue: string): TIntlNumberRoundingPriority;
+begin
+  if AValue = 'morePrecision' then
+    Result := inrpMorePrecision
+  else if AValue = 'lessPrecision' then
+    Result := inrpLessPrecision
+  else
+    Result := inrpAuto;
+end;
+
 function InsertGroupingSeparator(const AIntPart, ASep: string): string;
 var
   Len, I, GroupCount: Integer;
@@ -492,7 +502,9 @@ end;
 constructor TGocciaIntlNumberFormatValue.Create(const ALocale: string; const AOptions: TGocciaObjectValue);
 var
   Canonical, CurrSymbol, CurrNarrow: string;
-  CurrDigits: Integer;
+  CurrDigits, MinimumFractionDefault, MaximumFractionDefault: Integer;
+  HasFractionDigits, HasSignificantDigits: Boolean;
+  NeedFractionDigits, NeedSignificantDigits: Boolean;
 begin
   inherited Create;
   Canonical := CanonicalizeUnicodeLocaleId(ALocale);
@@ -555,47 +567,94 @@ begin
   if FNumberingSystem = '' then
     FNumberingSystem := 'latn';
 
-  if (FMinimumSignificantDigits >= 0) or (FMaximumSignificantDigits >= 0) then
+  HasSignificantDigits := (FMinimumSignificantDigits >= 0) or
+    (FMaximumSignificantDigits >= 0);
+  HasFractionDigits := (FMinimumFractionDigits >= 0) or
+    (FMaximumFractionDigits >= 0);
+
+  CurrDigits := 2;
+  if (FStyle = 'currency') and (FNotation = 'standard') then
   begin
-    if FMinimumSignificantDigits < 0 then
-      FMinimumSignificantDigits := 1;
-    if FMaximumSignificantDigits < 0 then
-      FMaximumSignificantDigits := 21;
-    FMinimumFractionDigits := -1;
-    FMaximumFractionDigits := -1;
+    if not TryGetCurrencyInfo(FLocale, FCurrency, CurrSymbol, CurrNarrow, CurrDigits) then
+      CurrDigits := 2;
+    MinimumFractionDefault := CurrDigits;
+    MaximumFractionDefault := CurrDigits;
   end
   else
   begin
-    if (FMinimumFractionDigits < 0) and (FMaximumFractionDigits < 0) then
+    MinimumFractionDefault := 0;
+    if FStyle = 'percent' then
+      MaximumFractionDefault := 0
+    else
+      MaximumFractionDefault := 3;
+  end;
+
+  if FRoundingIncrement <> 1 then
+    MaximumFractionDefault := MinimumFractionDefault;
+
+  NeedSignificantDigits := True;
+  NeedFractionDigits := True;
+  if FRoundingPriority = 'auto' then
+  begin
+    NeedSignificantDigits := HasSignificantDigits;
+    if NeedSignificantDigits or
+       ((not HasFractionDigits) and (FNotation = 'compact')) then
+      NeedFractionDigits := False;
+  end;
+
+  if NeedSignificantDigits then
+  begin
+    if HasSignificantDigits then
     begin
-      if FStyle = 'currency' then
-      begin
-        FMinimumFractionDigits := 2;
-        FMaximumFractionDigits := 2;
-        if TryGetCurrencyInfo(FLocale, FCurrency, CurrSymbol, CurrNarrow, CurrDigits) then
-        begin
-          FMinimumFractionDigits := CurrDigits;
-          FMaximumFractionDigits := CurrDigits;
-        end;
-      end
-      else if FStyle = 'percent' then
-      begin
-        FMinimumFractionDigits := 0;
-        FMaximumFractionDigits := 0;
-      end
-      else
-      begin
-        FMinimumFractionDigits := 0;
-        FMaximumFractionDigits := 3;
-      end;
+      if FMinimumSignificantDigits < 0 then
+        FMinimumSignificantDigits := 1;
+      if FMaximumSignificantDigits < 0 then
+        FMaximumSignificantDigits := 21;
+      if FMinimumSignificantDigits > FMaximumSignificantDigits then
+        ThrowRangeError(Format(SErrorIntlDigitsOutOfRange,
+          ['maximumSignificantDigits', FMinimumSignificantDigits, 21]));
     end
     else
     begin
-      if FMinimumFractionDigits < 0 then
-        FMinimumFractionDigits := 0;
-      if FMaximumFractionDigits < 0 then
-        FMaximumFractionDigits := Max(3, FMinimumFractionDigits);
+      FMinimumSignificantDigits := 1;
+      FMaximumSignificantDigits := 21;
     end;
+  end;
+
+  if NeedFractionDigits then
+  begin
+    if HasFractionDigits then
+    begin
+      if FMinimumFractionDigits < 0 then
+        FMinimumFractionDigits := Min(MinimumFractionDefault, FMaximumFractionDigits)
+      else if FMaximumFractionDigits < 0 then
+        FMaximumFractionDigits := Max(MaximumFractionDefault, FMinimumFractionDigits)
+      else if FMinimumFractionDigits > FMaximumFractionDigits then
+        ThrowRangeError(Format(SErrorIntlDigitsOutOfRange,
+          ['maximumFractionDigits', FMinimumFractionDigits, 100]));
+    end
+    else
+    begin
+      FMinimumFractionDigits := MinimumFractionDefault;
+      FMaximumFractionDigits := MaximumFractionDefault;
+    end;
+  end;
+
+  if (not NeedSignificantDigits) and (not NeedFractionDigits) then
+  begin
+    FMinimumFractionDigits := 0;
+    FMaximumFractionDigits := 0;
+    FMinimumSignificantDigits := 1;
+    FMaximumSignificantDigits := 2;
+    FRoundingPriority := 'morePrecision';
+  end;
+
+  if FRoundingIncrement <> 1 then
+  begin
+    if (FRoundingPriority <> 'auto') or HasSignificantDigits then
+      ThrowTypeError('roundingIncrement requires fraction digit rounding');
+    if FMinimumFractionDigits <> FMaximumFractionDigits then
+      ThrowRangeError('roundingIncrement requires matching fraction digit bounds');
   end;
 
   // Build resolved ICU options
@@ -615,6 +674,7 @@ begin
   FResolvedOptions.MaximumSignificantDigits := FMaximumSignificantDigits;
   FResolvedOptions.RoundingMode := RoundingModeStringToEnum(FRoundingMode);
   FResolvedOptions.RoundingIncrement := FRoundingIncrement;
+  FResolvedOptions.RoundingPriority := RoundingPriorityStringToEnum(FRoundingPriority);
   FResolvedOptions.NumberingSystem := FNumberingSystem;
 
   InitializePrototype;
