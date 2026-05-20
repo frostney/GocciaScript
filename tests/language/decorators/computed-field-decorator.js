@@ -40,6 +40,94 @@ describe("computed field decorators", () => {
     expect(instance[key]).toBe(42);
   });
 
+  test("symbol computed field access helper preserves symbol key", () => {
+    const key = Symbol("field-access");
+    const decorate = (value, context) => {
+      context.addInitializer(({ init() { context.access.set(this, 42); } }).init);
+    };
+
+    class C {
+      @decorate
+      [key] = 1;
+    }
+
+    expect(new C()[key]).toBe(42);
+  });
+
+  test("symbol computed method decorator uses resolved key", () => {
+    let receivedName;
+    let accessGet;
+    const key = Symbol("method");
+    const decorate = (value, context) => {
+      receivedName = context.name;
+      accessGet = context.access.get;
+      return () => 42;
+    };
+
+    class C {
+      @decorate
+      [key]() {
+        return 1;
+      }
+    }
+
+    expect(receivedName === key).toBe(true);
+    const instance = new C();
+    expect(instance[key]()).toBe(42);
+    expect(accessGet(instance)()).toBe(42);
+  });
+
+  test("symbol computed getter decorator uses resolved key", () => {
+    let receivedName;
+    let accessGet;
+    const key = Symbol("getter");
+    const decorate = (value, context) => {
+      receivedName = context.name;
+      accessGet = context.access.get;
+      return () => 42;
+    };
+
+    class C {
+      @decorate
+      get [key]() {
+        return 1;
+      }
+    }
+
+    expect(receivedName === key).toBe(true);
+    const instance = new C();
+    expect(instance[key]).toBe(42);
+    expect(accessGet(instance)).toBe(42);
+  });
+
+  test("symbol computed setter decorator uses resolved key", () => {
+    let receivedName;
+    let accessSet;
+    let stored = 0;
+    const key = Symbol("setter");
+    const decorate = (value, context) => {
+      receivedName = context.name;
+      accessSet = context.access.set;
+      return (next) => {
+        stored = next * 2;
+      };
+    };
+
+    class C {
+      @decorate
+      set [key](next) {
+        stored = next;
+      }
+    }
+
+    const instance = new C();
+    instance[key] = 21;
+    expect(receivedName === key).toBe(true);
+    expect(stored).toBe(42);
+    accessSet(instance, 7);
+    expect(stored).toBe(14);
+  });
+
   test("static computed field context uses resolved key", () => {
     let receivedName;
     const key = "staticName";

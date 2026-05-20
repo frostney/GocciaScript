@@ -22,23 +22,28 @@ type
   private
     FTarget: TGocciaValue;
     FPropertyName: string;
+    FPropertyKey: TGocciaValue;
   public
     constructor Create(const ATarget: TGocciaValue; const APropertyName: string);
+    constructor CreateWithKey(const ATarget: TGocciaValue; const APropertyKey: TGocciaValue);
     function Get(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
   TGocciaAccessSetter = class
   private
     FPropertyName: string;
+    FPropertyKey: TGocciaValue;
   public
     constructor Create(const APropertyName: string);
+    constructor CreateWithKey(const APropertyKey: TGocciaValue);
     function SetValue(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
 implementation
 
 uses
-  Goccia.Values.ObjectValue;
+  Goccia.Values.ObjectValue,
+  Goccia.Values.SymbolValue;
 
 { TGocciaInitializerCollector }
 
@@ -67,14 +72,40 @@ constructor TGocciaAccessGetter.Create(const ATarget: TGocciaValue; const APrope
 begin
   FTarget := ATarget;
   FPropertyName := APropertyName;
+  FPropertyKey := nil;
+end;
+
+constructor TGocciaAccessGetter.CreateWithKey(const ATarget: TGocciaValue; const APropertyKey: TGocciaValue);
+begin
+  FTarget := ATarget;
+  FPropertyKey := APropertyKey;
+  if Assigned(APropertyKey) and not (APropertyKey is TGocciaSymbolValue) then
+    FPropertyName := APropertyKey.ToStringLiteral.Value
+  else
+    FPropertyName := '';
 end;
 
 function TGocciaAccessGetter.Get(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Target: TGocciaValue;
 begin
-  if Assigned(AThisValue) and (AThisValue is TGocciaObjectValue) then
-    Result := AThisValue.GetProperty(FPropertyName)
-  else if Assigned(FTarget) then
-    Result := FTarget.GetProperty(FPropertyName)
+  if AArgs.Length > 0 then
+    Target := AArgs.GetElement(0)
+  else if Assigned(AThisValue) and (AThisValue is TGocciaObjectValue) then
+    Target := AThisValue
+  else
+    Target := FTarget;
+
+  if FPropertyKey is TGocciaSymbolValue then
+  begin
+    if Target is TGocciaObjectValue then
+      Result := TGocciaObjectValue(Target).GetSymbolProperty(
+        TGocciaSymbolValue(FPropertyKey))
+    else
+      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  end
+  else if Assigned(Target) then
+    Result := Target.GetProperty(FPropertyName)
   else
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
@@ -84,12 +115,45 @@ end;
 constructor TGocciaAccessSetter.Create(const APropertyName: string);
 begin
   FPropertyName := APropertyName;
+  FPropertyKey := nil;
+end;
+
+constructor TGocciaAccessSetter.CreateWithKey(const APropertyKey: TGocciaValue);
+begin
+  FPropertyKey := APropertyKey;
+  if Assigned(APropertyKey) and not (APropertyKey is TGocciaSymbolValue) then
+    FPropertyName := APropertyKey.ToStringLiteral.Value
+  else
+    FPropertyName := '';
 end;
 
 function TGocciaAccessSetter.SetValue(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Target: TGocciaValue;
+  NewValue: TGocciaValue;
 begin
-  if Assigned(AThisValue) and (AThisValue is TGocciaObjectValue) then
-    TGocciaObjectValue(AThisValue).AssignProperty(FPropertyName, AArgs.GetElement(0));
+  if AArgs.Length >= 2 then
+  begin
+    Target := AArgs.GetElement(0);
+    NewValue := AArgs.GetElement(1);
+  end
+  else
+  begin
+    Target := AThisValue;
+    if AArgs.Length > 0 then
+      NewValue := AArgs.GetElement(0)
+    else
+      NewValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+  end;
+
+  if Target is TGocciaObjectValue then
+  begin
+    if FPropertyKey is TGocciaSymbolValue then
+      TGocciaObjectValue(Target).AssignSymbolProperty(
+        TGocciaSymbolValue(FPropertyKey), NewValue)
+    else
+      TGocciaObjectValue(Target).AssignProperty(FPropertyName, NewValue);
+  end;
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 

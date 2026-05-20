@@ -3707,8 +3707,12 @@ var
   Elem: TGocciaClassElement;
   KeyReg: UInt8;
   ComputedKeyName: string;
+  ClassKeyPrefix: string;
+  NeedsKeyLocal: Boolean;
+  KeyIsLocal: Boolean;
 begin
   SetLength(AComputedFieldKeyLocals, 0);
+  ClassKeyPrefix := IntToHex(PtrUInt(AClassDef), SizeOf(PtrUInt) * 2);
   for I := 0 to High(AClassDef.FElements) do
   begin
     Elem := AClassDef.FElements[I];
@@ -3717,14 +3721,18 @@ begin
     if not (Elem.Kind in [cekGetter, cekSetter, cekMethod, cekField]) then
       Continue;
 
-    if Elem.Kind = cekField then
+    NeedsKeyLocal := (Elem.Kind = cekField) or (Length(Elem.Decorators) > 0);
+    KeyIsLocal := False;
+    if NeedsKeyLocal then
     begin
       SetLength(AComputedFieldKeyLocals, Length(AComputedFieldKeyLocals) + 1);
-      ComputedKeyName := Format('#computed-field-key:%d', [I]);
+      ComputedKeyName := Format('#computed-element-key:%s:%d',
+        [ClassKeyPrefix, I]);
       AComputedFieldKeyLocals[High(AComputedFieldKeyLocals)].ElementIndex := I;
       AComputedFieldKeyLocals[High(AComputedFieldKeyLocals)].Name :=
         ComputedKeyName;
       KeyReg := ACtx.Scope.DeclareLocal(ComputedKeyName, False);
+      KeyIsLocal := True;
     end
     else
       KeyReg := ACtx.Scope.AllocateRegister;
@@ -3758,7 +3766,8 @@ begin
           Elem.MethodNode, Elem.IsStatic);
     end;
 
-    ACtx.Scope.FreeRegister;
+    if not KeyIsLocal then
+      ACtx.Scope.FreeRegister;
   end;
 end;
 
@@ -4137,13 +4146,13 @@ begin
       PairReg := ACtx.Scope.AllocateRegister;
       ExtraReg := ACtx.Scope.AllocateRegister;
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, PairReg, DecoRegs[I][J], 0));
-      if (Elem.Kind = cekField) and Elem.IsComputed then
+      if Elem.IsComputed then
       begin
         ComputedKeyName := FindComputedFieldKeyLocalName(
           AComputedFieldKeyLocals, I);
         LocalIdx := ACtx.Scope.ResolveLocal(ComputedKeyName);
         if LocalIdx < 0 then
-          raise Exception.Create('Compiler error: computed decorator field key was not captured');
+          raise Exception.Create('Compiler error: computed decorator element key was not captured');
         EmitInstruction(ACtx, EncodeABC(OP_MOVE, ExtraReg,
           ACtx.Scope.GetLocal(LocalIdx).Slot, 0));
         EmitInstruction(ACtx, EncodeABC(OP_APPLY_ELEMENT_DECORATOR_CONST,
