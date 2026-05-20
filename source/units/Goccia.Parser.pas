@@ -1759,6 +1759,7 @@ var
   ArrowBody: TGocciaASTNode;
   SeparatorPos: Integer;
   Line, Column: Integer;
+  AsyncStartLine, AsyncStartColumn: Integer;
   IsGenerator: Boolean;
 begin
   case Peek.TokenType of
@@ -1995,6 +1996,8 @@ begin
         end
         else if (Name = KEYWORD_ASYNC) and not Token.ContainsEscape then
         begin
+          AsyncStartLine := Token.Line;
+          AsyncStartColumn := Token.Column;
           case TryConsumeAsyncFunction(Token.Line, Token.Column) of
             afcNotMatched:
               Result := TGocciaIdentifierExpression.Create(Name, Token.Line, Token.Column);
@@ -2017,8 +2020,8 @@ begin
                 Name := Token.Lexeme;
               end;
               CollectGenericParameters;
-              Result := ParseFunctionBodyExpression(Token.Line, Token.Column, True, IsGenerator);
-              TGocciaFunctionExpression(Result).SourceText := ExtractSourceRange(Token.Line, Token.Column);
+              Result := ParseFunctionBodyExpression(AsyncStartLine, AsyncStartColumn, True, IsGenerator);
+              TGocciaFunctionExpression(Result).SourceText := ExtractSourceRange(AsyncStartLine, AsyncStartColumn);
               TGocciaFunctionExpression(Result).IsAsync := True;
               TGocciaFunctionExpression(Result).IsGenerator := IsGenerator;
               // ES2026 §15.6: AsyncGeneratorDeclaration / AsyncGeneratorExpression have
@@ -2772,7 +2775,6 @@ var
   MethodFunction: TGocciaFunctionExpression;
   ComputedCount, SourceOrderCount: Integer;
   MemberStartLine, MemberStartColumn: Integer;
-  OrderIndex: Integer;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
@@ -2846,7 +2848,7 @@ begin
       PropertySourceOrder[SourceOrderCount - 1].PropertyType := pstComputed;
       PropertySourceOrder[SourceOrderCount - 1].ComputedIndex := ComputedCount - 1;
       PropertySourceOrder[SourceOrderCount - 1].StaticKey := '';
-      PropertySourceOrder[SourceOrderCount - 1].Skip := False;
+      PropertySourceOrder[SourceOrderCount - 1].Expression := nil;
 
       // For spread expressions, no further processing is needed
       if not Match(gttComma) then
@@ -2893,7 +2895,7 @@ begin
       PropertySourceOrder[SourceOrderCount - 1].PropertyType := pstGetter;
       PropertySourceOrder[SourceOrderCount - 1].StaticKey := Key;
       PropertySourceOrder[SourceOrderCount - 1].ComputedIndex := -1;
-      PropertySourceOrder[SourceOrderCount - 1].Skip := False;
+      PropertySourceOrder[SourceOrderCount - 1].Expression := nil;
     end
     else if IsSetter then
     begin
@@ -2906,7 +2908,7 @@ begin
       PropertySourceOrder[SourceOrderCount - 1].PropertyType := pstSetter;
       PropertySourceOrder[SourceOrderCount - 1].StaticKey := Key;
       PropertySourceOrder[SourceOrderCount - 1].ComputedIndex := -1;
-      PropertySourceOrder[SourceOrderCount - 1].Skip := False;
+      PropertySourceOrder[SourceOrderCount - 1].Expression := nil;
     end
     // Check for method shorthand syntax: methodName() { ... } or [expr]() { ... }
     else if Check(gttLeftParen) then
@@ -2968,7 +2970,7 @@ begin
         PropertySourceOrder[SourceOrderCount - 1].PropertyType := pstComputed;
         PropertySourceOrder[SourceOrderCount - 1].ComputedIndex := ComputedCount - 1;
         PropertySourceOrder[SourceOrderCount - 1].StaticKey := '';
-        PropertySourceOrder[SourceOrderCount - 1].Skip := False;
+        PropertySourceOrder[SourceOrderCount - 1].Expression := nil;
       end
       else
       begin
@@ -2976,11 +2978,6 @@ begin
         if Properties.ContainsKey(Key) then
         begin
           Properties[Key] := Value;
-          for OrderIndex := 0 to SourceOrderCount - 1 do
-            if (not PropertySourceOrder[OrderIndex].Skip) and
-               (PropertySourceOrder[OrderIndex].PropertyType = pstStatic) and
-               (PropertySourceOrder[OrderIndex].StaticKey = Key) then
-              PropertySourceOrder[OrderIndex].Skip := True;
         end
         else
         begin
@@ -2994,7 +2991,7 @@ begin
         PropertySourceOrder[SourceOrderCount - 1].PropertyType := pstStatic;
         PropertySourceOrder[SourceOrderCount - 1].StaticKey := Key;
         PropertySourceOrder[SourceOrderCount - 1].ComputedIndex := -1;
-        PropertySourceOrder[SourceOrderCount - 1].Skip := False;
+        PropertySourceOrder[SourceOrderCount - 1].Expression := Value;
       end;
     end;
 

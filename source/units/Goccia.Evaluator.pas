@@ -1438,6 +1438,7 @@ var
   SetterFunction: TGocciaValue;
   PropertyName: string;
   PropertyExpression: TGocciaExpression;
+  FinalPropertyExpression: TGocciaExpression;
   PropertyValue: TGocciaValue;
   PropertyKey: TGocciaValue;
   ExistingDescriptor: TGocciaPropertyDescriptor;
@@ -1450,18 +1451,20 @@ begin
     TGarbageCollector.Instance.AddTempRoot(Obj);
 
   try
-  // Process all properties in source order
-  for I := 0 to High(AObjectExpression.PropertySourceOrder) do
+    // Process all properties in source order
+    for I := 0 to High(AObjectExpression.PropertySourceOrder) do
     begin
-      if AObjectExpression.PropertySourceOrder[I].Skip then
-        Continue;
-
       case AObjectExpression.PropertySourceOrder[I].PropertyType of
         pstStatic:
           begin
             // Static property: {key: value}
             PropertyName := AObjectExpression.PropertySourceOrder[I].StaticKey;
-            if AObjectExpression.Properties.TryGetValue(PropertyName, PropertyExpression) then
+            PropertyExpression := AObjectExpression.PropertySourceOrder[I].Expression;
+            if (not Assigned(PropertyExpression)) and
+               AObjectExpression.Properties.TryGetValue(PropertyName, FinalPropertyExpression) then
+              PropertyExpression := FinalPropertyExpression;
+
+            if Assigned(PropertyExpression) then
             begin
               PropertyValue := EvaluateExpression(PropertyExpression, AContext);
               if (PropertyExpression is TGocciaObjectMethodDefinition)
@@ -1471,7 +1474,10 @@ begin
               else if (PropertyExpression is TGocciaClassExpression)
                 and (TGocciaClassExpression(PropertyExpression).ClassDefinition.FName = '') then
                 TGocciaClassValue(PropertyValue).SetInferredName(PropertyName);
-              Obj.DefineProperty(PropertyName, TGocciaPropertyDescriptorData.Create(PropertyValue, [pfEnumerable, pfConfigurable, pfWritable]));
+
+              if AObjectExpression.Properties.TryGetValue(PropertyName, FinalPropertyExpression) and
+                 (FinalPropertyExpression = PropertyExpression) then
+                Obj.DefineProperty(PropertyName, TGocciaPropertyDescriptorData.Create(PropertyValue, [pfEnumerable, pfConfigurable, pfWritable]));
             end;
           end;
 

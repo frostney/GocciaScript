@@ -2606,6 +2606,7 @@ var
   I: Integer;
   Key: string;
   ValExpr: TGocciaExpression;
+  FinalExpr: TGocciaExpression;
   KeyReg, ValReg: UInt8;
   DefineOp: TGocciaOpCode;
   Names: TStringList;
@@ -2621,14 +2622,28 @@ begin
   begin
     for I := 0 to High(Order) do
     begin
-      if Order[I].Skip then
-        Continue;
-
       Key := Order[I].StaticKey;
       case Order[I].PropertyType of
         pstStatic:
-          if AExpr.Properties.TryGetValue(Key, ValExpr) then
-            CompileObjectProperty(ACtx, ADest, Key, ValExpr);
+        begin
+          ValExpr := Order[I].Expression;
+          if (not Assigned(ValExpr)) and
+             AExpr.Properties.TryGetValue(Key, FinalExpr) then
+            ValExpr := FinalExpr;
+
+          if Assigned(ValExpr) then
+          begin
+            if AExpr.Properties.TryGetValue(Key, FinalExpr) and
+               (FinalExpr = ValExpr) then
+              CompileObjectProperty(ACtx, ADest, Key, ValExpr)
+            else
+            begin
+              ValReg := ACtx.Scope.AllocateRegister;
+              ACtx.CompileExpression(ValExpr, ValReg);
+              ACtx.Scope.FreeRegister;
+            end;
+          end;
+        end;
         pstComputed:
         begin
           if (Order[I].ComputedIndex >= 0) and

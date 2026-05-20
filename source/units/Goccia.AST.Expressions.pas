@@ -313,7 +313,7 @@ type
     PropertyType: TGocciaPropertySourceType;
     StaticKey: string;           // For static properties, getters, setters
     ComputedIndex: Integer;      // Index into ComputedProperties list
-    Skip: Boolean;               // True when superseded by a later static key
+    Expression: TGocciaExpression; // Source-order static value expression
   end;
 
   TGocciaObjectExpression = class(TGocciaExpression)

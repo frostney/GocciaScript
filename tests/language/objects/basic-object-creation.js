@@ -103,6 +103,24 @@ test("duplicate static object keys evaluate final definition once", () => {
   expect(obj.value).toBe("data");
 });
 
+test("duplicate static object keys evaluate every source-order initializer", () => {
+  const order = [];
+  const mark = (label, value) => {
+    order.push(label);
+    return value;
+  };
+
+  const obj = {
+    value: mark("first", "first"),
+    other: mark("middle", "middle"),
+    value: mark("second", "second"),
+  };
+
+  expect(order).toEqual(["first", "middle", "second"]);
+  expect(obj.value).toBe("second");
+  expect(obj.other).toBe("middle");
+});
+
 test("object spread defines own data properties over inherited descriptors", () => {
   const source = { spreadReadOnly: 42 };
   Object.defineProperty(Object.prototype, "spreadReadOnly", {
