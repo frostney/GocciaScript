@@ -1138,6 +1138,9 @@ var
 begin
   InitializeRuntime(AEngine);
   Runtime := GetRuntime(AEngine);
+  if Assigned(EngineOptions) and
+     ResolveFlagOption(EngineOptions.UnsafeFFI, AFileConfig) then
+    Runtime.Install(TGocciaFFIRuntimeExtension.Create);
   ConsoleExtension := TGocciaConsoleRuntimeExtension(
     Runtime.FindRuntimeExtension(TGocciaConsoleRuntimeExtension));
   if LogFileOpen and Assigned(ConsoleExtension) and
@@ -1151,8 +1154,6 @@ var
 begin
   Runtime := AttachRuntime(AEngine);
   TGocciaBenchmarkRunnerRuntimeProfile.Apply(Runtime);
-  if Assigned(EngineOptions) and EngineOptions.UnsafeFFI.Present then
-    Runtime.Install(TGocciaFFIRuntimeExtension.Create);
 end;
 
 procedure TBenchmarkRunnerApp.ExecuteWithPaths(const APaths: TStringList);

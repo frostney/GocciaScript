@@ -471,9 +471,9 @@ Runtime extensions are ordinary Pascal classes installed on `TGocciaRuntimeCore`
 | `TGocciaLoaderRuntimeProfile` | console, host globals, data modules, text assets, performance, text encoding, URL/fetch, SemVer | Used by ScriptLoader and REPL |
 | `TGocciaTestingLibraryRuntimeExtension` | `describe`, `test`, `expect` | Testing framework; TestRunner installs this through `TGocciaTestRunnerRuntimeProfile` |
 | `TGocciaBenchmarkRuntimeExtension` | `suite`, `bench` | Benchmark framework; BenchmarkRunner installs this through `TGocciaBenchmarkRunnerRuntimeProfile` |
-| `TGocciaFFIRuntimeExtension` | `FFI.open`, `FFILibrary`, `FFIPointer` | Native shared-library FFI; CLI tools install this only for `--unsafe-ffi` |
+| `TGocciaFFIRuntimeExtension` | `FFI.open`, `FFILibrary`, `FFIPointer` | Native shared-library FFI; CLI tools install this for `--unsafe-ffi` or `"unsafe-ffi": true` in config |
 
-When embedding, install `TGocciaFFIRuntimeExtension` to enable the FFI global. CLI tools (ScriptLoader, REPL, TestRunner, BenchmarkRunner, Bundler) expose this as the `--unsafe-ffi` flag.
+When embedding, install `TGocciaFFIRuntimeExtension` to enable the FFI global. CLI tools (ScriptLoader, REPL, TestRunner, BenchmarkRunner, Bundler) expose this as the `--unsafe-ffi` flag and matching `"unsafe-ffi"` config key.
 
 To add the test framework for a custom test runner:
 

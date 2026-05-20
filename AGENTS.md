@@ -26,7 +26,7 @@ Assistants should treat CONTRIBUTING as authoritative for contribution requireme
 ## Quick checks
 
 ```bash
-./build.pas testrunner && ./build/GocciaTestRunner tests --asi --unsafe-ffi  # after substantive changes
+./build.pas testrunner && ./build/GocciaTestRunner tests  # after substantive changes
 ./build.pas bundler && ./build/GocciaBundler example.js  # build and run the bundler
 ./format.pas --check # before push / PR
 ```
@@ -99,7 +99,7 @@ printf '1;\n---\n2;\n' | ./build/GocciaScriptLoader --multifile # Split stdin on
 ./build/GocciaREPL --log=repl.log # Start the REPL with console log capture
 ./build/GocciaREPL --stack-size=5000 # Start the REPL with custom call stack depth limit
 ./build/GocciaREPL --max-memory=10485760 # Start the REPL with 10 MB GC heap limit
-./build/GocciaTestRunner tests/ --asi # Run all JavaScript tests
+./build/GocciaTestRunner tests/ # Run all JavaScript tests
 ./build/GocciaTestRunner tests --import-map=imports.json # Run tests with an explicit import map
 ./build/GocciaTestRunner tests --config=./configs/ci.json # Run tests with an explicit config path (skips auto-discovery)
 ./build/GocciaTestRunner tests/language/expressions/ # Run a test category
@@ -109,13 +109,13 @@ printf '1;\n---\n2;\n' | ./build/GocciaScriptLoader --multifile # Split stdin on
 ./build/GocciaTestRunner tests --output=json # Emit a structured JSON envelope to stdout
 ./build/GocciaTestRunner tests --output=compact-json # Same envelope to stdout, omitting build, memory, stdout, and stderr
 ./build/GocciaTestRunner tests --mode=bytecode # Run tests via the Goccia bytecode VM
-./build/GocciaTestRunner tests/language/asi --asi # Run ASI tests with automatic semicolon insertion
+./build/GocciaTestRunner tests/language/asi # Run ASI tests configured by tests/language/asi/goccia.json
 ./build/GocciaTestRunner tests --coverage # Run tests with line and branch coverage
 ./build/GocciaTestRunner tests --coverage --coverage-format=lcov --coverage-output=coverage.lcov # Coverage with lcov output
 ./build/GocciaTestRunner tests --coverage --coverage-format=json --coverage-output=coverage.json # Coverage with JSON output
 ./build/GocciaTestRunner tests --jobs=4 # Run tests with 4 parallel workers
 ./build/GocciaTestRunner tests -j 1 # Force sequential execution (no threading)
-./build/GocciaTestRunner tests --asi --unsafe-ffi # Run all tests including FFI tests
+./build/GocciaTestRunner tests # Run all tests, including folder-configured ASI and FFI tests
 ./build/GocciaTestRunner tests --log=test-console.log # Capture console output to a log file
 ./build/GocciaTestRunner suites.js --multifile # Split a single test file on '---' and run each section as its own file
 printf 'test("two plus two", () => { expect(2 + 2).toBe(4); });\n' | ./build/GocciaTestRunner # Run a test source from stdin
@@ -150,7 +150,7 @@ printf "const x = 2 + 2; x;" | ./build/GocciaBundler --output=out.gbc # Compile 
 ./build.pas loader && ./build/GocciaScriptLoader ./example.js
 
 # Compile and run all tests
-./build.pas testrunner && ./build/GocciaTestRunner tests --asi --unsafe-ffi
+./build.pas testrunner && ./build/GocciaTestRunner tests
 
 # Compile and run a specific test
 ./build.pas testrunner && ./build/GocciaTestRunner tests/language/expressions/addition/basic-addition.js
@@ -174,6 +174,11 @@ All CLI options can be set via `goccia.json` (or `.json5` / `.toml`) discovered 
 ```json
 // tests/language/asi/goccia.json — enables ASI for this subtree
 { "asi": true }
+```
+
+```json
+// tests/built-ins/FFI/goccia.json — enables FFI for this subtree
+{ "unsafe-ffi": true }
 ```
 
 ```json

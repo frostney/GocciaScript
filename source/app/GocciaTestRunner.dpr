@@ -260,6 +260,9 @@ var
 begin
   InitializeRuntime(AEngine);
   Runtime := GetRuntime(AEngine);
+  if Assigned(EngineOptions) and
+     ResolveFlagOption(EngineOptions.UnsafeFFI, AFileConfig) then
+    Runtime.Install(TGocciaFFIRuntimeExtension.Create);
   ConsoleExtension := TGocciaConsoleRuntimeExtension(
     Runtime.FindRuntimeExtension(TGocciaConsoleRuntimeExtension));
   if LogFileOpen and Assigned(ConsoleExtension) and
@@ -461,8 +464,6 @@ var
 begin
   Runtime := AttachRuntime(AEngine);
   TGocciaTestRunnerRuntimeProfile.Apply(Runtime);
-  if Assigned(EngineOptions) and EngineOptions.UnsafeFFI.Present then
-    Runtime.Install(TGocciaFFIRuntimeExtension.Create);
 end;
 
 function TTestRunnerApp.RunGocciaScriptInterpreted(const AFileName: string;

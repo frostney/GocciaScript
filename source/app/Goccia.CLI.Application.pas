@@ -527,8 +527,7 @@ begin
     Exit;
 
   { ASI: CLI flag > per-file config > root config > default (false) }
-  AEngine.ASIEnabled := ResolveFlagOption(
-    AEngineOptions.ASI, AFileConfig, 'asi');
+  AEngine.ASIEnabled := ResolveFlagOption(AEngineOptions.ASI, AFileConfig);
 
   { source-type: CLI flag > per-file config > root config > default (script) }
   AEngine.SourceType := ResolveSourceTypeOption(
@@ -536,35 +535,35 @@ begin
 
   { compat-var: CLI flag > per-file config > root config > default (false) }
   AEngine.VarEnabled := ResolveFlagOption(
-    AEngineOptions.CompatVar, AFileConfig, 'compat-var');
+    AEngineOptions.CompatVar, AFileConfig);
 
   { compat-function: CLI flag > per-file config > root config > default (false) }
   AEngine.FunctionEnabled := ResolveFlagOption(
-    AEngineOptions.CompatFunction, AFileConfig, 'compat-function');
+    AEngineOptions.CompatFunction, AFileConfig);
 
   { compat-traditional-for-loop: CLI flag > per-file config > root config > default (false) }
   AEngine.TraditionalForLoopsEnabled := ResolveFlagOption(
-    AEngineOptions.CompatTraditionalFor, AFileConfig, 'compat-traditional-for-loop');
+    AEngineOptions.CompatTraditionalFor, AFileConfig);
 
   { compat-while-loops: CLI flag > per-file config > root config > default (false) }
   AEngine.WhileLoopsEnabled := ResolveFlagOption(
-    AEngineOptions.CompatWhileLoops, AFileConfig, 'compat-while-loops');
+    AEngineOptions.CompatWhileLoops, AFileConfig);
 
   { compat-loose-equality: CLI flag > per-file config > root config > default (false) }
   AEngine.LooseEqualityEnabled := ResolveFlagOption(
-    AEngineOptions.CompatLooseEquality, AFileConfig, 'compat-loose-equality');
+    AEngineOptions.CompatLooseEquality, AFileConfig);
 
   { compat-non-strict-mode: CLI flag > per-file config > root config > default (false) }
   AEngine.NonStrictModeEnabled := ResolveFlagOption(
-    AEngineOptions.CompatNonStrictMode, AFileConfig, 'compat-non-strict-mode');
+    AEngineOptions.CompatNonStrictMode, AFileConfig);
 
   { strict-types: CLI flag > per-file config > root config > default (false) }
   AEngine.StrictTypes := ResolveFlagOption(
-    AEngineOptions.StrictTypes, AFileConfig, 'strict-types');
+    AEngineOptions.StrictTypes, AFileConfig);
 
   { unsafe-function-constructor: CLI flag > per-file config > root config > default (false) }
   AEngine.FunctionConstructor.Enabled := ResolveFlagOption(
-    AEngineOptions.UnsafeFunctionConstructor, AFileConfig, 'unsafe-function-constructor');
+    AEngineOptions.UnsafeFunctionConstructor, AFileConfig);
 
   { max-memory: CLI > per-file config > root config > system default.
     Always set explicitly so a previous file's per-file override does

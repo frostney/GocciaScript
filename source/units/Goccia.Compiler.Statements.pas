@@ -590,8 +590,8 @@ begin
     end;
 
     IsTopLevelGlobalBacked := ACtx.GlobalBackedTopLevel and
-      (AStmt.IsVar or ((not AStmt.IsVar) and (ACtx.Scope.Depth = 0)));
-    if IsTopLevelGlobalBacked and AStmt.IsVar then
+      (AStmt.IsVar or (ACtx.Scope.Depth = 0));
+    if IsTopLevelGlobalBacked then
     begin
       LocalIdx := FindLocalBySlot(ACtx.Scope, Info.Name, Slot);
       if LocalIdx >= 0 then
@@ -4640,6 +4640,7 @@ begin
       begin
         Local := ACtx.Scope.GetLocal(I);
         EmitGlobalDefine(ACtx, Local.Slot, Local.Name, AStmt.IsConst);
+        ACtx.Scope.MarkGlobalBacked(I);
       end;
   end;
 end;
