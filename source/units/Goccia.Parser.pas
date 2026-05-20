@@ -662,7 +662,7 @@ begin
     gttConst, gttLet, gttClass, gttEnum, gttExtends, gttNew, gttThis,
     gttSuper, gttStatic, gttReturn, gttIf, gttElse, gttFor, gttWhile, gttDo,
     gttSwitch, gttCase, gttDefault, gttBreak, gttContinue, gttThrow, gttTry, gttCatch,
-    gttFinally, gttImport, gttExport, gttFrom, gttAs, gttGet, gttSet,
+    gttFinally, gttImport, gttExport, gttFrom, gttAs,
     gttVar, gttWith, gttFunction, gttTypeof, gttVoid, gttInstanceof, gttIn,
     gttDelete:
       Exit(True);

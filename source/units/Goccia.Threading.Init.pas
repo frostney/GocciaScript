@@ -5,13 +5,7 @@
   lazily created on first object construction. Without pre-initialisation,
   two worker threads could race to initialise the same prototype, causing
   data corruption. Calling this procedure forces all lazy init to complete
-  while only the main thread is running.
-
-  The same applies to the lexer keyword table (class var FKeywords) which
-  is populated on the first TGocciaLexer.Create call. The throwaway engine
-  alone does not trigger lexer construction because it never calls Execute,
-  so we explicitly create a throwaway lexer to ensure the keyword table
-  exists before workers start. }
+  while only the main thread is running. }
 
 unit Goccia.Threading.Init;
 
@@ -36,8 +30,7 @@ implementation
 uses
   Classes,
 
-  Goccia.GarbageCollector,
-  Goccia.Lexer;
+  Goccia.GarbageCollector;
 
 procedure EnsureSharedPrototypesInitialized(
   const AInitializer: TGocciaEngineInitializer);
@@ -45,16 +38,7 @@ var
   Source: TStringList;
   Engine: TGocciaEngine;
   Executor: TGocciaInterpreterExecutor;
-  Lexer: TGocciaLexer;
 begin
-  // Force lexer keyword table initialisation. The class var FKeywords is
-  // populated on the first TGocciaLexer.Create call. Without this, two
-  // worker threads creating lexers simultaneously would race on
-  // InitKeywords, corrupting the shared TOrderedStringMap and causing
-  // SIGILL via corrupted hash-table pointers.
-  Lexer := TGocciaLexer.Create('', '<thread-init>');
-  Lexer.Free;
-
   Source := TStringList.Create;
   try
     // Create a minimal engine. The constructor registers all built-in

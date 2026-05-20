@@ -126,7 +126,6 @@ end;
 
 constructor TGocciaLexer.Create(const ASource, AFileName: string);
 begin
-  InitKeywords;
   FSource := ASource;
   FFileName := AFileName;
   FTokens := TObjectList<TGocciaToken>.Create(True);
@@ -217,7 +216,7 @@ procedure TGocciaLexer.AddToken(const ATokenType: TGocciaTokenType; const ALiter
   const AContainsEscape: Boolean);
 begin
   FTokens.Add(TGocciaToken.Create(ATokenType, ALiteral, FLine, FStartColumn,
-    FCurrent - FStart, FColumn - 1, AContainsEscape));
+    FColumn - 1, AContainsEscape));
   UpdateRegexContext(ATokenType);
 end;
 
@@ -433,6 +432,7 @@ end;
 function TGocciaLexer.ScanUnicodeEscape: string;
 var
   CodePoint, LowSurrogate: Cardinal;
+  CodePointValue: QWord;
   HexStr: string;
   I, HexStart, SavedCurrent, SavedColumn: Integer;
 begin
@@ -451,6 +451,11 @@ begin
       raise TGocciaLexerError.Create('Invalid unicode escape', FLine, FColumn, FFileName, GetSourceLines,
         SSuggestUnicodeHexDigits);
     Advance; // consume '}'
+    if not TryStrToQWord('$' + HexStr, CodePointValue) or
+       (CodePointValue > $10FFFF) then
+      raise TGocciaLexerError.Create('Invalid unicode code point', FLine, FColumn, FFileName, GetSourceLines,
+        SSuggestUnicodeCodePointRange);
+    CodePoint := Cardinal(CodePointValue);
   end
   else
   begin
@@ -466,9 +471,8 @@ begin
     if not IsValidHexString(HexStr) then
       raise TGocciaLexerError.Create('Invalid unicode escape', FLine, FColumn, FFileName, GetSourceLines,
         SSuggestUnicodeHexDigits);
+    CodePoint := StrToInt('$' + HexStr);
   end;
-
-  CodePoint := StrToInt('$' + HexStr);
 
   // ES2026 §12.9.4: Combine UTF-16 surrogate pairs into a single code point
   if (CodePoint >= $D800) and (CodePoint <= $DBFF) and (Peek = '\') and (PeekNext = 'u') then
@@ -502,18 +506,10 @@ begin
     end;
   end;
 
-  // Convert code point to UTF-8
-  if CodePoint <= $7F then
-    Result := Chr(CodePoint)
-  else if CodePoint <= $7FF then
-    Result := Chr($C0 or (CodePoint shr 6)) + Chr($80 or (CodePoint and $3F))
-  else if CodePoint <= $FFFF then
-    Result := Chr($E0 or (CodePoint shr 12)) + Chr($80 or ((CodePoint shr 6) and $3F)) + Chr($80 or (CodePoint and $3F))
-  else if CodePoint <= $10FFFF then
-    Result := Chr($F0 or (CodePoint shr 18)) + Chr($80 or ((CodePoint shr 12) and $3F)) + Chr($80 or ((CodePoint shr 6) and $3F)) + Chr($80 or (CodePoint and $3F))
-  else
+  if CodePoint > $10FFFF then
     raise TGocciaLexerError.Create('Invalid unicode code point', FLine, FColumn, FFileName, GetSourceLines,
       SSuggestUnicodeCodePointRange);
+  Result := TextSemantics.CodePointToUTF8(CodePoint);
 end;
 
 function TGocciaLexer.ScanHexEscape: string;
@@ -657,29 +653,9 @@ begin
     end;
   end;
 
-  // Convert code point to UTF-8
-  if CodePoint <= $7F then
-    ASB.AppendChar(Chr(CodePoint))
-  else if CodePoint <= $7FF then
-  begin
-    ASB.AppendChar(Chr($C0 or (CodePoint shr 6)));
-    ASB.AppendChar(Chr($80 or (CodePoint and $3F)));
-  end
-  else if CodePoint <= $FFFF then
-  begin
-    ASB.AppendChar(Chr($E0 or (CodePoint shr 12)));
-    ASB.AppendChar(Chr($80 or ((CodePoint shr 6) and $3F)));
-    ASB.AppendChar(Chr($80 or (CodePoint and $3F)));
-  end
-  else if CodePoint <= $10FFFF then
-  begin
-    ASB.AppendChar(Chr($F0 or (CodePoint shr 18)));
-    ASB.AppendChar(Chr($80 or ((CodePoint shr 12) and $3F)));
-    ASB.AppendChar(Chr($80 or ((CodePoint shr 6) and $3F)));
-    ASB.AppendChar(Chr($80 or (CodePoint and $3F)));
-  end
-  else
+  if CodePoint > $10FFFF then
     Exit(False);
+  ASB.Append(TextSemantics.CodePointToUTF8(CodePoint));
   Result := True;
 end;
 
@@ -1191,6 +1167,23 @@ var
   HasDecimalOrExponent: Boolean;
   IsDecimal: Boolean;
   Lexeme: string;
+
+  procedure ConsumeDigitsWithSeparators(const AValidDigits: TSysCharSet); inline;
+  begin
+    while CharInSet(Peek, AValidDigits) or (Peek = '_') do
+    begin
+      if Peek = '_' then
+      begin
+        HasSeparator := True;
+        Advance;
+        if not CharInSet(Peek, AValidDigits) then
+          raise TGocciaLexerError.Create('Numeric separator must be between digits',
+            FLine, FColumn, FFileName, GetSourceLines, SSuggestNumericSeparator);
+      end
+      else
+        Advance;
+    end;
+  end;
 begin
   HasSeparator := False;
   HasDecimalOrExponent := False;
@@ -1209,19 +1202,7 @@ begin
       if not CharInSet(Peek, ['0'..'9', 'a'..'f', 'A'..'F']) then
         raise TGocciaLexerError.Create('Invalid hexadecimal number', FLine, FColumn, FFileName, GetSourceLines,
           SSuggestHexNumberFormat);
-      while CharInSet(Peek, ['0'..'9', 'a'..'f', 'A'..'F', '_']) do
-      begin
-        if Peek = '_' then
-        begin
-          HasSeparator := True;
-          Advance;
-          if not CharInSet(Peek, ['0'..'9', 'a'..'f', 'A'..'F']) then
-            raise TGocciaLexerError.Create('Numeric separator must be between digits',
-              FLine, FColumn, FFileName, GetSourceLines, SSuggestNumericSeparator);
-        end
-        else
-          Advance;
-      end;
+      ConsumeDigitsWithSeparators(['0'..'9', 'a'..'f', 'A'..'F']);
     end
     else if (Ch = 'b') or (Ch = 'B') then
     begin
@@ -1230,19 +1211,7 @@ begin
       if not CharInSet(Peek, ['0', '1']) then
         raise TGocciaLexerError.Create('Invalid binary number', FLine, FColumn, FFileName, GetSourceLines,
           SSuggestBinaryNumberFormat);
-      while CharInSet(Peek, ['0', '1', '_']) do
-      begin
-        if Peek = '_' then
-        begin
-          HasSeparator := True;
-          Advance;
-          if not CharInSet(Peek, ['0', '1']) then
-            raise TGocciaLexerError.Create('Numeric separator must be between digits',
-              FLine, FColumn, FFileName, GetSourceLines, SSuggestNumericSeparator);
-        end
-        else
-          Advance;
-      end;
+      ConsumeDigitsWithSeparators(['0', '1']);
     end
     else if (Ch = 'o') or (Ch = 'O') then
     begin
@@ -1251,19 +1220,7 @@ begin
       if not CharInSet(Peek, ['0'..'7']) then
         raise TGocciaLexerError.Create('Invalid octal number', FLine, FColumn, FFileName, GetSourceLines,
           SSuggestOctalNumberFormat);
-      while CharInSet(Peek, ['0'..'7', '_']) do
-      begin
-        if Peek = '_' then
-        begin
-          HasSeparator := True;
-          Advance;
-          if not CharInSet(Peek, ['0'..'7']) then
-            raise TGocciaLexerError.Create('Numeric separator must be between digits',
-              FLine, FColumn, FFileName, GetSourceLines, SSuggestNumericSeparator);
-        end
-        else
-          Advance;
-      end;
+      ConsumeDigitsWithSeparators(['0'..'7']);
     end
     else
     begin
@@ -1277,21 +1234,7 @@ begin
     end;
   end
   else
-  begin
-    while CharInSet(Peek, ['0'..'9', '_']) do
-    begin
-      if Peek = '_' then
-      begin
-        HasSeparator := True;
-        Advance;
-        if not CharInSet(Peek, ['0'..'9']) then
-          raise TGocciaLexerError.Create('Numeric separator must be between digits',
-            FLine, FColumn, FFileName, GetSourceLines, SSuggestNumericSeparator);
-      end
-      else
-        Advance;
-    end;
-  end;
+    ConsumeDigitsWithSeparators(['0'..'9']);
 
   // Fraction, trailing dot, and exponent are only valid for decimal literals.
   // Hex (0x), binary (0b), and octal (0o) literals must not consume a
@@ -1305,19 +1248,7 @@ begin
     begin
       HasDecimalOrExponent := True;
       Advance;
-      while CharInSet(Peek, ['0'..'9', '_']) do
-      begin
-        if Peek = '_' then
-        begin
-          HasSeparator := True;
-          Advance;
-          if not CharInSet(Peek, ['0'..'9']) then
-            raise TGocciaLexerError.Create('Numeric separator must be between digits',
-              FLine, FColumn, FFileName, GetSourceLines, SSuggestNumericSeparator);
-        end
-        else
-          Advance;
-      end;
+      ConsumeDigitsWithSeparators(['0'..'9']);
     end
     else if Peek = '.' then
     begin
@@ -1338,19 +1269,7 @@ begin
       if not CharInSet(Peek, ['0'..'9']) then
         raise TGocciaLexerError.Create('Invalid scientific notation', FLine, FColumn, FFileName, GetSourceLines,
           SSuggestScientificNotation);
-      while CharInSet(Peek, ['0'..'9', '_']) do
-      begin
-        if Peek = '_' then
-        begin
-          HasSeparator := True;
-          Advance;
-          if not CharInSet(Peek, ['0'..'9']) then
-            raise TGocciaLexerError.Create('Numeric separator must be between digits',
-              FLine, FColumn, FFileName, GetSourceLines, SSuggestNumericSeparator);
-        end
-        else
-          Advance;
-      end;
+      ConsumeDigitsWithSeparators(['0'..'9']);
     end;
   end;
 
@@ -1454,7 +1373,7 @@ end;
 
 class destructor TGocciaLexer.DestroyClass;
 begin
-  FKeywords.Free;
+  FreeAndNil(FKeywords);
 end;
 
 procedure TGocciaLexer.ScanIdentifier;
@@ -1760,8 +1679,11 @@ begin
       ScanToken;
   end;
 
-  FTokens.Add(TGocciaToken.Create(gttEOF, '', FLine, FColumn, 0, FColumn));
+  FTokens.Add(TGocciaToken.Create(gttEOF, '', FLine, FColumn, FColumn));
   Result := FTokens;
 end;
+
+initialization
+  TGocciaLexer.InitKeywords;
 
 end.

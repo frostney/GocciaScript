@@ -32,6 +32,7 @@ type
     procedure TestAwaitSlashLookaheadStopsAtUnicodeLineTerminators;
     procedure TestNumericSeparatorsNormalize;
     procedure TestTemplateInterpolationTracksLineTerminators;
+    procedure TestUnicodeEscapeOverflowRaisesLexerError;
   public
     procedure SetupTests; override;
   end;
@@ -51,6 +52,7 @@ begin
     TestAwaitSlashLookaheadStopsAtUnicodeLineTerminators);
   Test('Numeric separators normalize', TestNumericSeparatorsNormalize);
   Test('Template interpolation tracks line terminators', TestTemplateInterpolationTracksLineTerminators);
+  Test('Unicode escape overflow raises lexer error', TestUnicodeEscapeOverflowRaisesLexerError);
 end;
 
 procedure TLexerTests.AssertIgnoresLeadingHashbang(const ALineBreak: string);
@@ -352,6 +354,34 @@ begin
     Expect<TGocciaTokenType>(Tokens[2].TokenType).ToBe(gttConst);
     Expect<Integer>(Tokens[2].Line).ToBe(2);
     Expect<Integer>(Tokens[2].Column).ToBe(9);
+  finally
+    Lexer.Free;
+  end;
+end;
+
+procedure TLexerTests.TestUnicodeEscapeOverflowRaisesLexerError;
+var
+  Lexer: TGocciaLexer;
+  Raised: Boolean;
+  MessageMatches: Boolean;
+begin
+  Lexer := TGocciaLexer.Create(
+    'const value = "\u{FFFFFFFFFFFFFFFFFFFFFFFF}";',
+    '<test>');
+  try
+    Raised := False;
+    MessageMatches := False;
+    try
+      Lexer.ScanTokens;
+    except
+      on E: TGocciaLexerError do
+      begin
+        Raised := True;
+        MessageMatches := Pos('Invalid unicode code point', E.Message) > 0;
+      end;
+    end;
+    Expect<Boolean>(Raised).ToBe(True);
+    Expect<Boolean>(MessageMatches).ToBe(True);
   finally
     Lexer.Free;
   end;
