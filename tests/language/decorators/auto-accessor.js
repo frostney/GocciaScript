@@ -31,4 +31,30 @@ describe("auto-accessor", () => {
     const c = new C();
     expect(c.x).toBe(undefined);
   });
+
+  test("computed auto-accessor uses resolved property key", () => {
+    const key = "x";
+
+    class C {
+      accessor [key] = 1;
+    }
+
+    const c = new C();
+    expect(c.x).toBe(1);
+    c.x = 2;
+    expect(c.x).toBe(2);
+  });
+
+  test("symbol computed auto-accessor uses resolved property key", () => {
+    const key = Symbol("x");
+
+    class C {
+      accessor [key] = 1;
+    }
+
+    const c = new C();
+    expect(c[key]).toBe(1);
+    c[key] = 2;
+    expect(c[key]).toBe(2);
+  });
 });

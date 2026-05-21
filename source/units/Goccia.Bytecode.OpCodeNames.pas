@@ -143,12 +143,14 @@ begin
     OP_DEFINE_STATIC_METHOD_CONST:     Result := 'OP_DEFINE_STATIC_METHOD_CONST';
     OP_DEFINE_DATA_PROP:               Result := 'OP_DEFINE_DATA_PROP';
     OP_DEFINE_METHOD_PROP:             Result := 'OP_DEFINE_METHOD_PROP';
+    OP_DEFINE_PROP_DYNAMIC:            Result := 'OP_DEFINE_PROP_DYNAMIC';
     OP_ADD:                            Result := 'OP_ADD';
     OP_SUB:                            Result := 'OP_SUB';
     OP_MUL:                            Result := 'OP_MUL';
     OP_DIV:                            Result := 'OP_DIV';
     OP_MOD:                            Result := 'OP_MOD';
     OP_POW:                            Result := 'OP_POW';
+    OP_SETUP_AUTO_ACCESSOR_DYNAMIC:    Result := 'OP_SETUP_AUTO_ACCESSOR_DYNAMIC';
     OP_BAND:                           Result := 'OP_BAND';
     OP_BOR:                            Result := 'OP_BOR';
     OP_BXOR:                           Result := 'OP_BXOR';
@@ -170,6 +172,7 @@ begin
     OP_CREATE_ARGUMENTS:               Result := 'OP_CREATE_ARGUMENTS';
     OP_TO_OBJECT:                      Result := 'OP_TO_OBJECT';
     OP_HAS_WITH_BINDING:               Result := 'OP_HAS_WITH_BINDING';
+    OP_TO_PROPERTY_KEY:                Result := 'OP_TO_PROPERTY_KEY';
     OP_INC:                            Result := 'OP_INC';
     OP_DEC:                            Result := 'OP_DEC';
     OP_TO_NUMERIC:                     Result := 'OP_TO_NUMERIC';

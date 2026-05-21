@@ -1998,7 +1998,7 @@ begin
         begin
           AsyncStartLine := Token.Line;
           AsyncStartColumn := Token.Column;
-          case TryConsumeAsyncFunction(Token.Line, Token.Column) of
+          case TryConsumeAsyncFunction(AsyncStartLine, AsyncStartColumn) of
             afcNotMatched:
               Result := TGocciaIdentifierExpression.Create(Name, Token.Line, Token.Column);
             afcDisabled:
@@ -5551,8 +5551,8 @@ begin
         Elements[High(Elements)].Name := MemberName;
         Elements[High(Elements)].IsStatic := IsStatic;
         Elements[High(Elements)].IsPrivate := IsPrivate;
-        Elements[High(Elements)].IsComputed := False;
-        Elements[High(Elements)].ComputedKeyExpression := nil;
+        Elements[High(Elements)].IsComputed := IsComputed;
+        Elements[High(Elements)].ComputedKeyExpression := ComputedKeyExpression;
         Elements[High(Elements)].Decorators := MemberDecorators;
         Elements[High(Elements)].FieldInitializer := PropertyValue;
         Elements[High(Elements)].TypeAnnotation := FieldType;
@@ -5565,21 +5565,34 @@ begin
         ConsumeSemicolonOrASI('Expected ";" after property',
           SSuggestAddSemicolon);
 
-        if (Length(MemberDecorators) > 0) or IsStatic then
+        if (Length(MemberDecorators) > 0) or IsStatic or IsComputed then
         begin
           SetLength(Elements, Length(Elements) + 1);
           Elements[High(Elements)].Kind := cekField;
           Elements[High(Elements)].Name := MemberName;
           Elements[High(Elements)].IsStatic := IsStatic;
           Elements[High(Elements)].IsPrivate := IsPrivate;
-          Elements[High(Elements)].IsComputed := False;
-          Elements[High(Elements)].ComputedKeyExpression := nil;
+          Elements[High(Elements)].IsComputed := IsComputed;
+          Elements[High(Elements)].ComputedKeyExpression := ComputedKeyExpression;
           Elements[High(Elements)].Decorators := MemberDecorators;
           Elements[High(Elements)].FieldInitializer := PropertyValue;
           Elements[High(Elements)].TypeAnnotation := FieldType;
         end;
 
-        if IsPrivate and IsStatic then
+        if IsComputed then
+        begin
+          if not IsStatic then
+          begin
+            SetLength(FieldOrder, Length(FieldOrder) + 1);
+            FieldOrder[High(FieldOrder)].Name := '';
+            FieldOrder[High(FieldOrder)].IsPrivate := False;
+            FieldOrder[High(FieldOrder)].IsComputed := True;
+            FieldOrder[High(FieldOrder)].ElementIndex := High(Elements);
+            FieldOrder[High(FieldOrder)].ComputedKeyExpression := ComputedKeyExpression;
+            FieldOrder[High(FieldOrder)].FieldInitializer := PropertyValue;
+          end;
+        end
+        else if IsPrivate and IsStatic then
           PrivateStaticProperties.Add(MemberName, PropertyValue)
         else if IsPrivate then
         begin
@@ -5587,6 +5600,10 @@ begin
           SetLength(FieldOrder, Length(FieldOrder) + 1);
           FieldOrder[High(FieldOrder)].Name := MemberName;
           FieldOrder[High(FieldOrder)].IsPrivate := True;
+          FieldOrder[High(FieldOrder)].IsComputed := False;
+          FieldOrder[High(FieldOrder)].ElementIndex := -1;
+          FieldOrder[High(FieldOrder)].ComputedKeyExpression := nil;
+          FieldOrder[High(FieldOrder)].FieldInitializer := nil;
         end
         else if IsStatic then
           StaticProperties.Add(MemberName, PropertyValue)
@@ -5596,6 +5613,10 @@ begin
           SetLength(FieldOrder, Length(FieldOrder) + 1);
           FieldOrder[High(FieldOrder)].Name := MemberName;
           FieldOrder[High(FieldOrder)].IsPrivate := False;
+          FieldOrder[High(FieldOrder)].IsComputed := False;
+          FieldOrder[High(FieldOrder)].ElementIndex := -1;
+          FieldOrder[High(FieldOrder)].ComputedKeyExpression := nil;
+          FieldOrder[High(FieldOrder)].FieldInitializer := nil;
           if FieldType <> '' then
             InstancePropertyTypes.Add(MemberName, FieldType);
         end;
@@ -5606,21 +5627,34 @@ begin
           Advance;
         PropertyValue := TGocciaLiteralExpression.Create(TGocciaUndefinedLiteralValue.UndefinedValue, Peek.Line, Peek.Column);
 
-        if (Length(MemberDecorators) > 0) or IsStatic then
+        if (Length(MemberDecorators) > 0) or IsStatic or IsComputed then
         begin
           SetLength(Elements, Length(Elements) + 1);
           Elements[High(Elements)].Kind := cekField;
           Elements[High(Elements)].Name := MemberName;
           Elements[High(Elements)].IsStatic := IsStatic;
           Elements[High(Elements)].IsPrivate := IsPrivate;
-          Elements[High(Elements)].IsComputed := False;
-          Elements[High(Elements)].ComputedKeyExpression := nil;
+          Elements[High(Elements)].IsComputed := IsComputed;
+          Elements[High(Elements)].ComputedKeyExpression := ComputedKeyExpression;
           Elements[High(Elements)].Decorators := MemberDecorators;
           Elements[High(Elements)].FieldInitializer := PropertyValue;
           Elements[High(Elements)].TypeAnnotation := FieldType;
         end;
 
-        if IsPrivate and IsStatic then
+        if IsComputed then
+        begin
+          if not IsStatic then
+          begin
+            SetLength(FieldOrder, Length(FieldOrder) + 1);
+            FieldOrder[High(FieldOrder)].Name := '';
+            FieldOrder[High(FieldOrder)].IsPrivate := False;
+            FieldOrder[High(FieldOrder)].IsComputed := True;
+            FieldOrder[High(FieldOrder)].ElementIndex := High(Elements);
+            FieldOrder[High(FieldOrder)].ComputedKeyExpression := ComputedKeyExpression;
+            FieldOrder[High(FieldOrder)].FieldInitializer := PropertyValue;
+          end;
+        end
+        else if IsPrivate and IsStatic then
           PrivateStaticProperties.Add(MemberName, PropertyValue)
         else if IsPrivate then
         begin
@@ -5628,6 +5662,10 @@ begin
           SetLength(FieldOrder, Length(FieldOrder) + 1);
           FieldOrder[High(FieldOrder)].Name := MemberName;
           FieldOrder[High(FieldOrder)].IsPrivate := True;
+          FieldOrder[High(FieldOrder)].IsComputed := False;
+          FieldOrder[High(FieldOrder)].ElementIndex := -1;
+          FieldOrder[High(FieldOrder)].ComputedKeyExpression := nil;
+          FieldOrder[High(FieldOrder)].FieldInitializer := nil;
         end
         else if IsStatic then
           StaticProperties.Add(MemberName, PropertyValue)
@@ -5637,6 +5675,10 @@ begin
           SetLength(FieldOrder, Length(FieldOrder) + 1);
           FieldOrder[High(FieldOrder)].Name := MemberName;
           FieldOrder[High(FieldOrder)].IsPrivate := False;
+          FieldOrder[High(FieldOrder)].IsComputed := False;
+          FieldOrder[High(FieldOrder)].ElementIndex := -1;
+          FieldOrder[High(FieldOrder)].ComputedKeyExpression := nil;
+          FieldOrder[High(FieldOrder)].FieldInitializer := nil;
           if FieldType <> '' then
             InstancePropertyTypes.Add(MemberName, FieldType);
         end;
