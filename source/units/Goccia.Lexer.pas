@@ -9,17 +9,12 @@ uses
   Generics.Collections,
   SysUtils,
 
-  OrderedStringMap,
   StringBuffer,
 
   Goccia.Token;
 
 type
   TGocciaLexer = class
-  private class var
-    FKeywords: TOrderedStringMap<TGocciaTokenType>;
-    class procedure InitKeywords;
-    class destructor DestroyClass;
   private
     FSource: string;
     FTokens: TObjectList<TGocciaToken>;
@@ -114,6 +109,94 @@ const
   UTF8_PARAGRAPH_SEPARATOR_FINAL_BYTE = #$A9;
   UTF8_LINE_TERMINATOR_BYTE_LENGTH = 3;
 
+type
+  TKeywordTokenEntry = record
+    Keyword: string;
+    TokenType: TGocciaTokenType;
+  end;
+
+  TKeywordTokenLengthRange = record
+    KeywordLength: Integer;
+    First: Integer;
+    Last: Integer;
+  end;
+
+const
+  KEYWORD_TOKEN_INDEX_AS         = 0;
+  KEYWORD_TOKEN_INDEX_IN         = 3;
+  KEYWORD_TOKEN_INDEX_FOR        = 4;
+  KEYWORD_TOKEN_INDEX_VAR        = 8;
+  KEYWORD_TOKEN_INDEX_CASE       = 9;
+  KEYWORD_TOKEN_INDEX_WITH       = 17;
+  KEYWORD_TOKEN_INDEX_BREAK      = 18;
+  KEYWORD_TOKEN_INDEX_WHILE      = 25;
+  KEYWORD_TOKEN_INDEX_DELETE     = 26;
+  KEYWORD_TOKEN_INDEX_TYPEOF     = 32;
+  KEYWORD_TOKEN_INDEX_DEFAULT    = 33;
+  KEYWORD_TOKEN_INDEX_FINALLY    = 35;
+  KEYWORD_TOKEN_INDEX_CONTINUE   = 36;
+  KEYWORD_TOKEN_INDEX_FUNCTION   = 37;
+  KEYWORD_TOKEN_INDEX_INSTANCEOF = 38;
+
+  KEYWORD_TOKEN_COUNT = KEYWORD_TOKEN_INDEX_INSTANCEOF + 1;
+  KEYWORD_TOKEN_RANGE_COUNT = 8;
+
+  // Grouped by keyword length so KeywordTokenRanges can point to a
+  // small contiguous slice for each candidate identifier length.
+  KeywordTokens: array[0..KEYWORD_TOKEN_COUNT - 1] of TKeywordTokenEntry = (
+    (Keyword: KEYWORD_AS; TokenType: gttAs),
+    (Keyword: KEYWORD_DO; TokenType: gttDo),
+    (Keyword: KEYWORD_IF; TokenType: gttIf),
+    (Keyword: KEYWORD_IN; TokenType: gttIn),
+    (Keyword: KEYWORD_FOR; TokenType: gttFor),
+    (Keyword: KEYWORD_LET; TokenType: gttLet),
+    (Keyword: KEYWORD_NEW; TokenType: gttNew),
+    (Keyword: KEYWORD_TRY; TokenType: gttTry),
+    (Keyword: KEYWORD_VAR; TokenType: gttVar),
+    (Keyword: KEYWORD_CASE; TokenType: gttCase),
+    (Keyword: KEYWORD_ELSE; TokenType: gttElse),
+    (Keyword: KEYWORD_ENUM; TokenType: gttEnum),
+    (Keyword: KEYWORD_FROM; TokenType: gttFrom),
+    (Keyword: KEYWORD_NULL; TokenType: gttNull),
+    (Keyword: KEYWORD_THIS; TokenType: gttThis),
+    (Keyword: KEYWORD_TRUE; TokenType: gttTrue),
+    (Keyword: KEYWORD_VOID; TokenType: gttVoid),
+    (Keyword: KEYWORD_WITH; TokenType: gttWith),
+    (Keyword: KEYWORD_BREAK; TokenType: gttBreak),
+    (Keyword: KEYWORD_CATCH; TokenType: gttCatch),
+    (Keyword: KEYWORD_CLASS; TokenType: gttClass),
+    (Keyword: KEYWORD_CONST; TokenType: gttConst),
+    (Keyword: KEYWORD_FALSE; TokenType: gttFalse),
+    (Keyword: KEYWORD_SUPER; TokenType: gttSuper),
+    (Keyword: KEYWORD_THROW; TokenType: gttThrow),
+    (Keyword: KEYWORD_WHILE; TokenType: gttWhile),
+    (Keyword: KEYWORD_DELETE; TokenType: gttDelete),
+    (Keyword: KEYWORD_EXPORT; TokenType: gttExport),
+    (Keyword: KEYWORD_IMPORT; TokenType: gttImport),
+    (Keyword: KEYWORD_RETURN; TokenType: gttReturn),
+    (Keyword: KEYWORD_STATIC; TokenType: gttStatic),
+    (Keyword: KEYWORD_SWITCH; TokenType: gttSwitch),
+    (Keyword: KEYWORD_TYPEOF; TokenType: gttTypeof),
+    (Keyword: KEYWORD_DEFAULT; TokenType: gttDefault),
+    (Keyword: KEYWORD_EXTENDS; TokenType: gttExtends),
+    (Keyword: KEYWORD_FINALLY; TokenType: gttFinally),
+    (Keyword: KEYWORD_CONTINUE; TokenType: gttContinue),
+    (Keyword: KEYWORD_FUNCTION; TokenType: gttFunction),
+    (Keyword: KEYWORD_INSTANCEOF; TokenType: gttInstanceof)
+  );
+
+  KeywordTokenRanges: array[0..KEYWORD_TOKEN_RANGE_COUNT - 1] of TKeywordTokenLengthRange = (
+    (KeywordLength: Length(KEYWORD_AS); First: KEYWORD_TOKEN_INDEX_AS; Last: KEYWORD_TOKEN_INDEX_IN),
+    (KeywordLength: Length(KEYWORD_FOR); First: KEYWORD_TOKEN_INDEX_FOR; Last: KEYWORD_TOKEN_INDEX_VAR),
+    (KeywordLength: Length(KEYWORD_CASE); First: KEYWORD_TOKEN_INDEX_CASE; Last: KEYWORD_TOKEN_INDEX_WITH),
+    (KeywordLength: Length(KEYWORD_BREAK); First: KEYWORD_TOKEN_INDEX_BREAK; Last: KEYWORD_TOKEN_INDEX_WHILE),
+    (KeywordLength: Length(KEYWORD_DELETE); First: KEYWORD_TOKEN_INDEX_DELETE; Last: KEYWORD_TOKEN_INDEX_TYPEOF),
+    (KeywordLength: Length(KEYWORD_DEFAULT); First: KEYWORD_TOKEN_INDEX_DEFAULT; Last: KEYWORD_TOKEN_INDEX_FINALLY),
+    (KeywordLength: Length(KEYWORD_CONTINUE); First: KEYWORD_TOKEN_INDEX_CONTINUE; Last: KEYWORD_TOKEN_INDEX_FUNCTION),
+    (KeywordLength: Length(KEYWORD_INSTANCEOF); First: KEYWORD_TOKEN_INDEX_INSTANCEOF;
+      Last: KEYWORD_TOKEN_INDEX_INSTANCEOF)
+  );
+
 function IsValidHexString(const AValue: string): Boolean;
 var
   I: Integer;
@@ -126,9 +209,33 @@ begin
   Result := True;
 end;
 
+function TryKeywordToken(const AText: string; out ATokenType: TGocciaTokenType): Boolean; inline;
+var
+  Len: Integer;
+  Range: TKeywordTokenLengthRange;
+  RangeIndex: Integer;
+  TokenIndex: Integer;
+begin
+  Len := Length(AText);
+
+  for RangeIndex := Low(KeywordTokenRanges) to High(KeywordTokenRanges) do
+    if Len = KeywordTokenRanges[RangeIndex].KeywordLength then
+    begin
+      Range := KeywordTokenRanges[RangeIndex];
+      for TokenIndex := Range.First to Range.Last do
+        if AText = KeywordTokens[TokenIndex].Keyword then
+        begin
+          ATokenType := KeywordTokens[TokenIndex].TokenType;
+          Exit(True);
+        end;
+      Exit(False);
+    end;
+
+  Result := False;
+end;
+
 constructor TGocciaLexer.Create(const ASource, AFileName: string);
 begin
-  InitKeywords;
   FSource := ASource;
   FFileName := AFileName;
   FTokens := TObjectList<TGocciaToken>.Create(True);
@@ -219,7 +326,7 @@ procedure TGocciaLexer.AddToken(const ATokenType: TGocciaTokenType; const ALiter
   const AContainsEscape: Boolean);
 begin
   FTokens.Add(TGocciaToken.Create(ATokenType, ALiteral, FLine, FStartColumn,
-    FCurrent - FStart, FColumn - 1, AContainsEscape));
+    FColumn - 1, AContainsEscape));
   UpdateRegexContext(ATokenType);
 end;
 
@@ -435,6 +542,7 @@ end;
 function TGocciaLexer.ScanUnicodeEscape: string;
 var
   CodePoint, LowSurrogate: Cardinal;
+  CodePointValue: QWord;
   HexStr: string;
   I, HexStart, SavedCurrent, SavedColumn: Integer;
 begin
@@ -453,6 +561,11 @@ begin
       raise TGocciaLexerError.Create('Invalid unicode escape', FLine, FColumn, FFileName, GetSourceLines,
         SSuggestUnicodeHexDigits);
     Advance; // consume '}'
+    if not TryStrToQWord('$' + HexStr, CodePointValue) or
+       (CodePointValue > $10FFFF) then
+      raise TGocciaLexerError.Create('Invalid unicode code point', FLine, FColumn, FFileName, GetSourceLines,
+        SSuggestUnicodeCodePointRange);
+    CodePoint := Cardinal(CodePointValue);
   end
   else
   begin
@@ -468,9 +581,8 @@ begin
     if not IsValidHexString(HexStr) then
       raise TGocciaLexerError.Create('Invalid unicode escape', FLine, FColumn, FFileName, GetSourceLines,
         SSuggestUnicodeHexDigits);
+    CodePoint := StrToInt('$' + HexStr);
   end;
-
-  CodePoint := StrToInt('$' + HexStr);
 
   // ES2026 §12.9.4: Combine UTF-16 surrogate pairs into a single code point
   if (CodePoint >= $D800) and (CodePoint <= $DBFF) and (Peek = '\') and (PeekNext = 'u') then
@@ -504,18 +616,10 @@ begin
     end;
   end;
 
-  // Convert code point to UTF-8
-  if CodePoint <= $7F then
-    Result := Chr(CodePoint)
-  else if CodePoint <= $7FF then
-    Result := Chr($C0 or (CodePoint shr 6)) + Chr($80 or (CodePoint and $3F))
-  else if CodePoint <= $FFFF then
-    Result := Chr($E0 or (CodePoint shr 12)) + Chr($80 or ((CodePoint shr 6) and $3F)) + Chr($80 or (CodePoint and $3F))
-  else if CodePoint <= $10FFFF then
-    Result := Chr($F0 or (CodePoint shr 18)) + Chr($80 or ((CodePoint shr 12) and $3F)) + Chr($80 or ((CodePoint shr 6) and $3F)) + Chr($80 or (CodePoint and $3F))
-  else
+  if CodePoint > $10FFFF then
     raise TGocciaLexerError.Create('Invalid unicode code point', FLine, FColumn, FFileName, GetSourceLines,
       SSuggestUnicodeCodePointRange);
+  Result := TextSemantics.CodePointToUTF8(CodePoint);
 end;
 
 function TGocciaLexer.ScanHexEscape: string;
@@ -659,29 +763,9 @@ begin
     end;
   end;
 
-  // Convert code point to UTF-8
-  if CodePoint <= $7F then
-    ASB.AppendChar(Chr(CodePoint))
-  else if CodePoint <= $7FF then
-  begin
-    ASB.AppendChar(Chr($C0 or (CodePoint shr 6)));
-    ASB.AppendChar(Chr($80 or (CodePoint and $3F)));
-  end
-  else if CodePoint <= $FFFF then
-  begin
-    ASB.AppendChar(Chr($E0 or (CodePoint shr 12)));
-    ASB.AppendChar(Chr($80 or ((CodePoint shr 6) and $3F)));
-    ASB.AppendChar(Chr($80 or (CodePoint and $3F)));
-  end
-  else if CodePoint <= $10FFFF then
-  begin
-    ASB.AppendChar(Chr($F0 or (CodePoint shr 18)));
-    ASB.AppendChar(Chr($80 or ((CodePoint shr 12) and $3F)));
-    ASB.AppendChar(Chr($80 or ((CodePoint shr 6) and $3F)));
-    ASB.AppendChar(Chr($80 or (CodePoint and $3F)));
-  end
-  else
+  if CodePoint > $10FFFF then
     Exit(False);
+  ASB.Append(TextSemantics.CodePointToUTF8(CodePoint));
   Result := True;
 end;
 
@@ -954,6 +1038,9 @@ begin
     gttFalse,
     gttNull,
     gttIdentifier,
+    gttAs,
+    gttFrom,
+    gttStatic,
     gttThis,
     gttSuper,
     gttRightBracket,
@@ -1193,6 +1280,28 @@ var
   HasDecimalOrExponent: Boolean;
   IsDecimal: Boolean;
   Lexeme: string;
+
+  procedure ConsumeDigitsWithSeparators(const AValidDigits: TSysCharSet); inline;
+  var
+    Digit: Char;
+  begin
+    while True do
+    begin
+      Digit := Peek;
+      if CharInSet(Digit, AValidDigits) then
+        Advance
+      else if Digit = '_' then
+      begin
+        HasSeparator := True;
+        Advance;
+        if not CharInSet(Peek, AValidDigits) then
+          raise TGocciaLexerError.Create('Numeric separator must be between digits',
+            FLine, FColumn, FFileName, GetSourceLines, SSuggestNumericSeparator);
+      end
+      else
+        Break;
+    end;
+  end;
 begin
   HasSeparator := False;
   HasDecimalOrExponent := False;
@@ -1211,19 +1320,7 @@ begin
       if not CharInSet(Peek, ['0'..'9', 'a'..'f', 'A'..'F']) then
         raise TGocciaLexerError.Create('Invalid hexadecimal number', FLine, FColumn, FFileName, GetSourceLines,
           SSuggestHexNumberFormat);
-      while CharInSet(Peek, ['0'..'9', 'a'..'f', 'A'..'F', '_']) do
-      begin
-        if Peek = '_' then
-        begin
-          HasSeparator := True;
-          Advance;
-          if not CharInSet(Peek, ['0'..'9', 'a'..'f', 'A'..'F']) then
-            raise TGocciaLexerError.Create('Numeric separator must be between digits',
-              FLine, FColumn, FFileName, GetSourceLines, SSuggestNumericSeparator);
-        end
-        else
-          Advance;
-      end;
+      ConsumeDigitsWithSeparators(['0'..'9', 'a'..'f', 'A'..'F']);
     end
     else if (Ch = 'b') or (Ch = 'B') then
     begin
@@ -1232,19 +1329,7 @@ begin
       if not CharInSet(Peek, ['0', '1']) then
         raise TGocciaLexerError.Create('Invalid binary number', FLine, FColumn, FFileName, GetSourceLines,
           SSuggestBinaryNumberFormat);
-      while CharInSet(Peek, ['0', '1', '_']) do
-      begin
-        if Peek = '_' then
-        begin
-          HasSeparator := True;
-          Advance;
-          if not CharInSet(Peek, ['0', '1']) then
-            raise TGocciaLexerError.Create('Numeric separator must be between digits',
-              FLine, FColumn, FFileName, GetSourceLines, SSuggestNumericSeparator);
-        end
-        else
-          Advance;
-      end;
+      ConsumeDigitsWithSeparators(['0', '1']);
     end
     else if (Ch = 'o') or (Ch = 'O') then
     begin
@@ -1253,19 +1338,7 @@ begin
       if not CharInSet(Peek, ['0'..'7']) then
         raise TGocciaLexerError.Create('Invalid octal number', FLine, FColumn, FFileName, GetSourceLines,
           SSuggestOctalNumberFormat);
-      while CharInSet(Peek, ['0'..'7', '_']) do
-      begin
-        if Peek = '_' then
-        begin
-          HasSeparator := True;
-          Advance;
-          if not CharInSet(Peek, ['0'..'7']) then
-            raise TGocciaLexerError.Create('Numeric separator must be between digits',
-              FLine, FColumn, FFileName, GetSourceLines, SSuggestNumericSeparator);
-        end
-        else
-          Advance;
-      end;
+      ConsumeDigitsWithSeparators(['0'..'7']);
     end
     else
     begin
@@ -1279,21 +1352,7 @@ begin
     end;
   end
   else
-  begin
-    while CharInSet(Peek, ['0'..'9', '_']) do
-    begin
-      if Peek = '_' then
-      begin
-        HasSeparator := True;
-        Advance;
-        if not CharInSet(Peek, ['0'..'9']) then
-          raise TGocciaLexerError.Create('Numeric separator must be between digits',
-            FLine, FColumn, FFileName, GetSourceLines, SSuggestNumericSeparator);
-      end
-      else
-        Advance;
-    end;
-  end;
+    ConsumeDigitsWithSeparators(['0'..'9']);
 
   // Fraction, trailing dot, and exponent are only valid for decimal literals.
   // Hex (0x), binary (0b), and octal (0o) literals must not consume a
@@ -1307,19 +1366,7 @@ begin
     begin
       HasDecimalOrExponent := True;
       Advance;
-      while CharInSet(Peek, ['0'..'9', '_']) do
-      begin
-        if Peek = '_' then
-        begin
-          HasSeparator := True;
-          Advance;
-          if not CharInSet(Peek, ['0'..'9']) then
-            raise TGocciaLexerError.Create('Numeric separator must be between digits',
-              FLine, FColumn, FFileName, GetSourceLines, SSuggestNumericSeparator);
-        end
-        else
-          Advance;
-      end;
+      ConsumeDigitsWithSeparators(['0'..'9']);
     end
     else if Peek = '.' then
     begin
@@ -1340,19 +1387,7 @@ begin
       if not CharInSet(Peek, ['0'..'9']) then
         raise TGocciaLexerError.Create('Invalid scientific notation', FLine, FColumn, FFileName, GetSourceLines,
           SSuggestScientificNotation);
-      while CharInSet(Peek, ['0'..'9', '_']) do
-      begin
-        if Peek = '_' then
-        begin
-          HasSeparator := True;
-          Advance;
-          if not CharInSet(Peek, ['0'..'9']) then
-            raise TGocciaLexerError.Create('Numeric separator must be between digits',
-              FLine, FColumn, FFileName, GetSourceLines, SSuggestNumericSeparator);
-        end
-        else
-          Advance;
-      end;
+      ConsumeDigitsWithSeparators(['0'..'9']);
     end;
   end;
 
@@ -1432,59 +1467,6 @@ begin
     Result := IsSourceIdentifierPartCodePoint(CodePoint);
 end;
 
-class procedure TGocciaLexer.InitKeywords;
-begin
-  if Assigned(FKeywords) then Exit;
-  FKeywords := TOrderedStringMap<TGocciaTokenType>.Create(40);
-  // Reserved keywords
-  FKeywords.Add(KEYWORD_BREAK, gttBreak);
-  FKeywords.Add(KEYWORD_CASE, gttCase);
-  FKeywords.Add(KEYWORD_CONTINUE, gttContinue);
-  FKeywords.Add(KEYWORD_CATCH, gttCatch);
-  FKeywords.Add(KEYWORD_CLASS, gttClass);
-  FKeywords.Add(KEYWORD_CONST, gttConst);
-  FKeywords.Add(KEYWORD_DEFAULT, gttDefault);
-  FKeywords.Add(KEYWORD_DELETE, gttDelete);
-  FKeywords.Add(KEYWORD_DO, gttDo);
-  FKeywords.Add(KEYWORD_ELSE, gttElse);
-  FKeywords.Add(KEYWORD_ENUM, gttEnum);
-  FKeywords.Add(KEYWORD_EXPORT, gttExport);
-  FKeywords.Add(KEYWORD_EXTENDS, gttExtends);
-  FKeywords.Add(KEYWORD_FALSE, gttFalse);
-  FKeywords.Add(KEYWORD_FINALLY, gttFinally);
-  FKeywords.Add(KEYWORD_FOR, gttFor);
-  FKeywords.Add(KEYWORD_FUNCTION, gttFunction);
-  FKeywords.Add(KEYWORD_IF, gttIf);
-  FKeywords.Add(KEYWORD_IMPORT, gttImport);
-  FKeywords.Add(KEYWORD_IN, gttIn);
-  FKeywords.Add(KEYWORD_INSTANCEOF, gttInstanceof);
-  FKeywords.Add(KEYWORD_LET, gttLet);
-  FKeywords.Add(KEYWORD_NEW, gttNew);
-  FKeywords.Add(KEYWORD_NULL, gttNull);
-  FKeywords.Add(KEYWORD_RETURN, gttReturn);
-  FKeywords.Add(KEYWORD_SUPER, gttSuper);
-  FKeywords.Add(KEYWORD_SWITCH, gttSwitch);
-  FKeywords.Add(KEYWORD_THIS, gttThis);
-  FKeywords.Add(KEYWORD_THROW, gttThrow);
-  FKeywords.Add(KEYWORD_TRUE, gttTrue);
-  FKeywords.Add(KEYWORD_TRY, gttTry);
-  FKeywords.Add(KEYWORD_TYPEOF, gttTypeof);
-  FKeywords.Add(KEYWORD_VAR, gttVar);
-  FKeywords.Add(KEYWORD_VOID, gttVoid);
-  FKeywords.Add(KEYWORD_WHILE, gttWhile);
-  FKeywords.Add(KEYWORD_WITH, gttWith);
-
-  // Contextual keywords
-  FKeywords.Add(KEYWORD_AS, gttAs);
-  FKeywords.Add(KEYWORD_FROM, gttFrom);
-  FKeywords.Add(KEYWORD_STATIC, gttStatic);
-end;
-
-class destructor TGocciaLexer.DestroyClass;
-begin
-  FKeywords.Free;
-end;
-
 procedure TGocciaLexer.ScanIdentifier;
 var
   ByteLength: Integer;
@@ -1524,7 +1506,7 @@ begin
 
   Text := SB.ToString;
 
-  if (not HadEscape) and FKeywords.TryGetValue(Text, TokenType) then
+  if (not HadEscape) and TryKeywordToken(Text, TokenType) then
     AddToken(TokenType, Text)
   else
     AddToken(gttIdentifier, Text, HadEscape);
@@ -1801,7 +1783,7 @@ begin
       ScanToken;
   end;
 
-  FTokens.Add(TGocciaToken.Create(gttEOF, '', FLine, FColumn, 0, FColumn));
+  FTokens.Add(TGocciaToken.Create(gttEOF, '', FLine, FColumn, FColumn));
   Result := FTokens;
 end;
 
