@@ -28,10 +28,13 @@ type
     procedure AssertPreservesLineNumbersAfterHashbang(const ALineBreak: string);
     procedure AssertCommentTerminatedBy(const ALineBreak: string);
     procedure AssertTokenizesKeywordToken(const AKeyword: string; const ATokenType: TGocciaTokenType);
+    procedure AssertContextualKeywordEndsExpressionForRegex(const AKeyword: string;
+      const ATokenType: TGocciaTokenType);
     procedure TestIgnoresLeadingHashbang;
     procedure TestPreservesLineNumbersAfterHashbang;
     procedure TestCommentTerminatedByUnicodeLineTerminators;
     procedure TestTokenizesKeywordTokens;
+    procedure TestContextualKeywordTokensEndExpressionForRegex;
     procedure TestCRIncrementsLineInWhitespace;
     procedure TestCRIncrementsLineInBlockComment;
     procedure TestUnicodeLineTerminatorsInBlockComment;
@@ -52,6 +55,8 @@ begin
   Test('Preserves line numbers after hashbang', TestPreservesLineNumbersAfterHashbang);
   Test('Terminates comment on Unicode line terminators', TestCommentTerminatedByUnicodeLineTerminators);
   Test('Tokenizes keyword tokens', TestTokenizesKeywordTokens);
+  Test('Contextual keyword tokens end expressions for regex detection',
+    TestContextualKeywordTokensEndExpressionForRegex);
   Test('CR increments line counter in whitespace', TestCRIncrementsLineInWhitespace);
   Test('CR increments line counter in block comments', TestCRIncrementsLineInBlockComment);
   Test('Unicode line terminators increment line counter in block comments', TestUnicodeLineTerminatorsInBlockComment);
@@ -126,6 +131,25 @@ begin
     Expect<Integer>(Tokens.Count).ToBe(2);
     Expect<TGocciaTokenType>(Tokens[0].TokenType).ToBe(ATokenType);
     Expect<string>(Tokens[0].Lexeme).ToBe(AKeyword);
+  finally
+    Lexer.Free;
+  end;
+end;
+
+procedure TLexerTests.AssertContextualKeywordEndsExpressionForRegex(const AKeyword: string;
+  const ATokenType: TGocciaTokenType);
+var
+  Lexer: TGocciaLexer;
+  Tokens: TObjectList<TGocciaToken>;
+begin
+  Lexer := TGocciaLexer.Create(AKeyword + ' / 2 / 1;', '<test>');
+  try
+    Tokens := Lexer.ScanTokens;
+    Expect<Integer>(Tokens.Count).ToBe(7);
+    Expect<TGocciaTokenType>(Tokens[0].TokenType).ToBe(ATokenType);
+    Expect<string>(Tokens[0].Lexeme).ToBe(AKeyword);
+    Expect<TGocciaTokenType>(Tokens[1].TokenType).ToBe(gttSlash);
+    Expect<TGocciaTokenType>(Tokens[3].TokenType).ToBe(gttSlash);
   finally
     Lexer.Free;
   end;
@@ -218,6 +242,21 @@ var
 begin
   for I := Low(ExpectedKeywordTokens) to High(ExpectedKeywordTokens) do
     AssertTokenizesKeywordToken(ExpectedKeywordTokens[I].Keyword, ExpectedKeywordTokens[I].TokenType);
+end;
+
+procedure TLexerTests.TestContextualKeywordTokensEndExpressionForRegex;
+const
+  ExpectedContextualKeywordTokens: array[0..2] of TExpectedKeywordToken = (
+    (Keyword: KEYWORD_AS; TokenType: gttAs),
+    (Keyword: KEYWORD_FROM; TokenType: gttFrom),
+    (Keyword: KEYWORD_STATIC; TokenType: gttStatic)
+  );
+var
+  I: Integer;
+begin
+  for I := Low(ExpectedContextualKeywordTokens) to High(ExpectedContextualKeywordTokens) do
+    AssertContextualKeywordEndsExpressionForRegex(ExpectedContextualKeywordTokens[I].Keyword,
+      ExpectedContextualKeywordTokens[I].TokenType);
 end;
 
 procedure TLexerTests.TestCRIncrementsLineInWhitespace;
