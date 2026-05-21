@@ -30,3 +30,33 @@ test("continue after capture preserves per-iteration binding in general path", (
   }
   expect(fns.map(fn => fn())).toEqual([0, 1, 2]);
 });
+
+test("closures in update capture the post-body per-iteration binding", () => {
+  const fns = [];
+  for (let i = 0; i < 3; i++, fns.push(() => i)) {}
+  expect(fns.map(fn => fn())).toEqual([1, 2, 3]);
+});
+
+test("body and update closures capture distinct per-iteration bindings", () => {
+  const bodyFns = [];
+  const updateFns = [];
+  for (let i = 0; i < 3; i++, updateFns.push(() => i)) {
+    bodyFns.push(() => i);
+  }
+  expect(bodyFns.map(fn => fn())).toEqual([0, 1, 2]);
+  expect(updateFns.map(fn => fn())).toEqual([1, 2, 3]);
+});
+
+test("continue evaluates update closures in the next per-iteration binding", () => {
+  const fns = [];
+  for (let i = 0; i < 3; i++, fns.push(() => i)) {
+    continue;
+  }
+  expect(fns.map(fn => fn())).toEqual([1, 2, 3]);
+});
+
+test("closures in the test expression capture the body per-iteration binding", () => {
+  const fns = [];
+  for (let i = 0; i < 3 && (fns.push(() => i), true); i++) {}
+  expect(fns.map(fn => fn())).toEqual([0, 1, 2]);
+});

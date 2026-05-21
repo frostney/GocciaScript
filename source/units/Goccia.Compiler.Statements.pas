@@ -536,6 +536,9 @@ function FindVarLocalIndex(const AScope: TGocciaCompilerScope;
 function FindLocalBySlot(const AScope: TGocciaCompilerScope;
   const AName: string; const ASlot: UInt8): Integer; forward;
 
+procedure CopyLocalTypeMetadata(const ACtx: TGocciaCompilationContext;
+  const ASourceIdx, ATargetIdx: Integer); forward;
+
 procedure EmitGlobalDefine(const ACtx: TGocciaCompilationContext;
   const ASlot: UInt8; const AName: string; const AIsConst: Boolean;
   const AIsVar: Boolean = False; const AHasInitializer: Boolean = True);
@@ -965,6 +968,34 @@ begin
       Exit(I);
   end;
   Result := -1;
+end;
+
+procedure CopyLocalTypeMetadata(const ACtx: TGocciaCompilationContext;
+  const ASourceIdx, ATargetIdx: Integer);
+var
+  Source: TGocciaCompilerLocal;
+  Target: TGocciaCompilerLocal;
+begin
+  if (ASourceIdx < 0) or (ATargetIdx < 0) then
+    Exit;
+
+  Source := ACtx.Scope.GetLocal(ASourceIdx);
+  Target := ACtx.Scope.GetLocal(ATargetIdx);
+
+  ACtx.Scope.SetLocalTypeHint(ATargetIdx, Source.TypeHint);
+  ACtx.Scope.SetLocalStrictlyTyped(ATargetIdx, Source.IsStrictlyTyped);
+  ACtx.Scope.SetLocalArrayTyped(ATargetIdx, Source.IsArrayTyped);
+  ACtx.Scope.SetLocalReturnTypeHint(ATargetIdx, Source.ReturnTypeHint);
+  ACtx.Scope.SetLocalParamTypeSignature(ATargetIdx,
+    Source.ParamTypeSignature);
+  ACtx.Scope.SetLocalTypeAnnotation(ATargetIdx, Source.TypeAnnotation);
+  ACtx.Scope.SetLocalElementTypeAnnotation(ATargetIdx,
+    Source.ElementTypeAnnotation);
+
+  if Source.TypeHint <> sltUntyped then
+    ACtx.Template.SetLocalType(Target.Slot, Source.TypeHint);
+  if Source.IsStrictlyTyped then
+    ACtx.Template.SetLocalStrictFlag(Target.Slot, True);
 end;
 
 procedure PredeclareBlockFunctionLocal(const AFunctionDecl: TGocciaFunctionDeclaration;
@@ -2490,14 +2521,20 @@ var
   LoopStart, ExitJump, I: Integer;
   ClosedLocals: array[0..255] of UInt8;
   ClosedCount: Integer;
+  BodyClosedLocals: array[0..255] of UInt8;
+  BodyClosedCount: Integer;
+  UpdateClosedLocals: array[0..255] of UInt8;
+  UpdateClosedCount: Integer;
   LoopControl: TLoopControlState;
   HasLexicalInit: Boolean;
   PerIterNames: TStringList;
   PerIterIsConst: Boolean;
-  OuterSlots, InnerSlots: array of UInt8;
+  OuterSlots, BodySlots, UpdateSlots: array of UInt8;
+  OuterLocalIdxs: array of Integer;
   Name: string;
   VarDecl: TGocciaVariableDeclaration;
   DestructDecl: TGocciaDestructuringDeclaration;
+  LocalIdx: Integer;
 begin
   if TryCompileCountedFor(ACtx, AStmt) then
     Exit;
@@ -2539,79 +2576,151 @@ begin
     BeginLoopControl(ACtx, LoopControl);
 
     try
-      LoopStart := CurrentCodePosition(ACtx);
-      ExitJump := -1;
-
-      if Assigned(AStmt.Condition) then
-      begin
-        CondReg := ACtx.Scope.AllocateRegister;
-        try
-          ACtx.CompileExpression(AStmt.Condition, CondReg);
-          ExitJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, CondReg);
-        finally
-          ACtx.Scope.FreeRegister;
-        end;
-      end;
-
-      // Capture outer slots BEFORE entering the per-iteration scope, where
-      // ResolveLocal would shadow with the inner declaration.
       if HasLexicalInit then
       begin
         SetLength(OuterSlots, PerIterNames.Count);
-        SetLength(InnerSlots, PerIterNames.Count);
+        SetLength(BodySlots, PerIterNames.Count);
+        SetLength(UpdateSlots, PerIterNames.Count);
+        SetLength(OuterLocalIdxs, PerIterNames.Count);
         for I := 0 to PerIterNames.Count - 1 do
         begin
           Name := PerIterNames[I];
-          OuterSlots[I] := ACtx.Scope.GetLocal(ACtx.Scope.ResolveLocal(Name)).Slot;
+          OuterLocalIdxs[I] := ACtx.Scope.ResolveLocal(Name);
+          OuterSlots[I] := ACtx.Scope.GetLocal(OuterLocalIdxs[I]).Slot;
         end;
-      end;
 
-      ACtx.Scope.BeginScope;
-      SetLoopContinueScopeDepth(ACtx);
+        LoopStart := CurrentCodePosition(ACtx);
+        ExitJump := -1;
 
-      if HasLexicalInit then
-      begin
+        // ES2026 §14.7.4.4 step 2: create the per-iteration environment
+        // before evaluating the test and body.
+        ACtx.Scope.BeginScope;
+        SetLoopContinueScopeDepth(ACtx);
         for I := 0 to PerIterNames.Count - 1 do
         begin
           Name := PerIterNames[I];
-          InnerSlots[I] := ACtx.Scope.DeclareLocal(Name, PerIterIsConst);
+          BodySlots[I] := ACtx.Scope.DeclareLocal(Name, PerIterIsConst);
+          LocalIdx := ACtx.Scope.ResolveLocal(Name);
+          CopyLocalTypeMetadata(ACtx, OuterLocalIdxs[I], LocalIdx);
           EmitInstruction(ACtx,
-            EncodeABC(OP_MOVE, InnerSlots[I], OuterSlots[I], 0));
+            EncodeABC(OP_MOVE, BodySlots[I], OuterSlots[I], 0));
         end;
-      end;
 
-      ACtx.CompileStatement(AStmt.Body);
+        if Assigned(AStmt.Condition) then
+        begin
+          CondReg := ACtx.Scope.AllocateRegister;
+          try
+            ACtx.CompileExpression(AStmt.Condition, CondReg);
+            ExitJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, CondReg);
+          finally
+            ACtx.Scope.FreeRegister;
+          end;
+        end;
 
-      PatchJumpList(ACtx, LoopControl.ContinueJumps);
+        ACtx.CompileStatement(AStmt.Body);
 
-      if HasLexicalInit then
-      begin
+        PatchJumpList(ACtx, LoopControl.ContinueJumps);
+
+        // BodySlots are no longer visible to name resolution after EndScope,
+        // but their registers still hold the body iteration values for the
+        // update environment snapshot.
+        ACtx.Scope.EndScope(BodyClosedLocals, BodyClosedCount);
+        for I := 0 to BodyClosedCount - 1 do
+          EmitInstruction(ACtx,
+            EncodeABC(OP_CLOSE_UPVALUE, BodyClosedLocals[I], 0, 0));
+
+        // ES2026 §14.7.4.4 step 3.e: create a fresh per-iteration
+        // environment for the update expression, distinct from the body
+        // iteration environment that closures in the body captured.
+        ACtx.Scope.BeginScope;
+        for I := 0 to PerIterNames.Count - 1 do
+        begin
+          Name := PerIterNames[I];
+          UpdateSlots[I] := ACtx.Scope.DeclareLocal(Name, PerIterIsConst);
+          LocalIdx := ACtx.Scope.ResolveLocal(Name);
+          CopyLocalTypeMetadata(ACtx, OuterLocalIdxs[I], LocalIdx);
+          EmitInstruction(ACtx,
+            EncodeABC(OP_MOVE, UpdateSlots[I], BodySlots[I], 0));
+        end;
+
+        if Assigned(AStmt.Update) then
+        begin
+          TempReg := ACtx.Scope.AllocateRegister;
+          try
+            ACtx.CompileExpression(AStmt.Update, TempReg);
+          finally
+            ACtx.Scope.FreeRegister;
+          end;
+        end;
+
         for I := 0 to PerIterNames.Count - 1 do
           EmitInstruction(ACtx,
-            EncodeABC(OP_MOVE, OuterSlots[I], InnerSlots[I], 0));
-      end;
+            EncodeABC(OP_MOVE, OuterSlots[I], UpdateSlots[I], 0));
 
-      ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
-      for I := 0 to ClosedCount - 1 do
-        EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
+        ACtx.Scope.EndScope(UpdateClosedLocals, UpdateClosedCount);
+        for I := 0 to UpdateClosedCount - 1 do
+          EmitInstruction(ACtx,
+            EncodeABC(OP_CLOSE_UPVALUE, UpdateClosedLocals[I], 0, 0));
 
-      if Assigned(AStmt.Update) then
-      begin
-        TempReg := ACtx.Scope.AllocateRegister;
-        try
-          ACtx.CompileExpression(AStmt.Update, TempReg);
-        finally
-          ACtx.Scope.FreeRegister;
+        EmitInstruction(ACtx,
+          EncodeAx(OP_JUMP, LoopStart - CurrentCodePosition(ACtx) - 1));
+
+        if ExitJump >= 0 then
+        begin
+          PatchJumpTarget(ACtx, ExitJump);
+          for I := 0 to BodyClosedCount - 1 do
+            EmitInstruction(ACtx,
+              EncodeABC(OP_CLOSE_UPVALUE, BodyClosedLocals[I], 0, 0));
         end;
+
+        PatchJumpList(ACtx, LoopControl.BreakJumps);
+      end
+      else
+      begin
+        LoopStart := CurrentCodePosition(ACtx);
+        ExitJump := -1;
+
+        if Assigned(AStmt.Condition) then
+        begin
+          CondReg := ACtx.Scope.AllocateRegister;
+          try
+            ACtx.CompileExpression(AStmt.Condition, CondReg);
+            ExitJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, CondReg);
+          finally
+            ACtx.Scope.FreeRegister;
+          end;
+        end;
+
+        ACtx.Scope.BeginScope;
+        SetLoopContinueScopeDepth(ACtx);
+
+        ACtx.CompileStatement(AStmt.Body);
+
+        PatchJumpList(ACtx, LoopControl.ContinueJumps);
+
+        ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
+        for I := 0 to ClosedCount - 1 do
+          EmitInstruction(ACtx,
+            EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
+
+        if Assigned(AStmt.Update) then
+        begin
+          TempReg := ACtx.Scope.AllocateRegister;
+          try
+            ACtx.CompileExpression(AStmt.Update, TempReg);
+          finally
+            ACtx.Scope.FreeRegister;
+          end;
+        end;
+
+        EmitInstruction(ACtx,
+          EncodeAx(OP_JUMP, LoopStart - CurrentCodePosition(ACtx) - 1));
+
+        if ExitJump >= 0 then
+          PatchJumpTarget(ACtx, ExitJump);
+
+        PatchJumpList(ACtx, LoopControl.BreakJumps);
       end;
-
-      EmitInstruction(ACtx,
-        EncodeAx(OP_JUMP, LoopStart - CurrentCodePosition(ACtx) - 1));
-
-      if ExitJump >= 0 then
-        PatchJumpTarget(ACtx, ExitJump);
-
-      PatchJumpList(ACtx, LoopControl.BreakJumps);
     finally
       EndLoopControl(LoopControl);
     end;
@@ -4692,7 +4801,10 @@ begin
     // when HasNameBinding is true, __super__ lives inside the inner scope
     // and EndScope below will free it together with the name binding local.
     if not HasNameBinding then
+    begin
+      EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, SuperReg, 0, 0));
       ACtx.Scope.FreeRegister;
+    end;
   end
   else
     CompileDecoratorAndAccessorPass(ACtx, ADest, ClassDef, -1,
