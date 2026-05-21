@@ -1099,7 +1099,9 @@ var
   TypedCallback: TGocciaFunctionBase;
   ThisArg: TGocciaValue;
   CallArgs: TGocciaArrayCallbackArgs;
+  GC: TGarbageCollector;
   I: Integer;
+  WasResultRooted: Boolean;
 begin
   View.Init(AThisValue);
   Callback := ValidateArrayMethodCall('map', AArgs, AThisValue, True);
@@ -1115,32 +1117,41 @@ begin
     ResultArray := ArraySpeciesCreate(View.Arr, View.Len)
   else
     ResultArray := TGocciaArrayValue.Create(nil, View.Len);
-
-  TypedCallback := nil;
-  if Callback is TGocciaFunctionBase then
-    TypedCallback := TGocciaFunctionBase(Callback);
-
-  CallArgs := TGocciaArrayCallbackArgs.Create(View.Obj);
+  GC := TGarbageCollector.Instance;
+  WasResultRooted := Assigned(GC) and GC.IsTempRoot(ResultArray);
+  if Assigned(GC) and not WasResultRooted then
+    GC.AddTempRoot(ResultArray);
   try
-    for I := 0 to View.Len - 1 do
-    begin
-      if not View.HasIndex(I) then
-        Continue;
 
-      CallArgs.Element := View.Get(I);
-      CallArgs.Index := TGocciaNumberLiteralValue.Create(I);
-      ArrayCreateDataProperty(ResultArray, I,
-        InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg));
+    TypedCallback := nil;
+    if Callback is TGocciaFunctionBase then
+      TypedCallback := TGocciaFunctionBase(Callback);
+
+    CallArgs := TGocciaArrayCallbackArgs.Create(View.Obj);
+    try
+      for I := 0 to View.Len - 1 do
+      begin
+        if not View.HasIndex(I) then
+          Continue;
+
+        CallArgs.Element := View.Get(I);
+        CallArgs.Index := TGocciaNumberLiteralValue.Create(I);
+        ArrayCreateDataProperty(ResultArray, I,
+          InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg));
+      end;
+    finally
+      CallArgs.Free;
     end;
+
+    // Ensure result has correct length (preserve trailing holes)
+    while ResultArray.Elements.Count < View.Len do
+      ResultArray.Elements.Add(TGocciaHoleValue.HoleValue);
+
+    Result := ResultArray;
   finally
-    CallArgs.Free;
+    if Assigned(GC) and not WasResultRooted then
+      GC.RemoveTempRoot(ResultArray);
   end;
-
-  // Ensure result has correct length (preserve trailing holes)
-  while ResultArray.Elements.Count < View.Len do
-    ResultArray.Elements.Add(TGocciaHoleValue.HoleValue);
-
-  Result := ResultArray;
 end;
 
 // ES2026 §23.1.3.8 Array.prototype.filter(callbackfn [, thisArg])
