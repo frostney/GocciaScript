@@ -532,8 +532,7 @@ begin
       Exit;
     end;
     Slot := Local.Slot;
-    if Slot <> ADest then
-      EmitInstruction(ACtx, EncodeABx(OP_GET_LOCAL, ADest, Slot));
+    EmitInstruction(ACtx, EncodeABx(OP_GET_LOCAL, ADest, Slot));
     Exit;
   end;
 

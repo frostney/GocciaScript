@@ -18,6 +18,18 @@ describe("Temporal Dead Zone", () => {
     }).toThrow(ReferenceError);
   });
 
+  test("let self-reference in initializer throws", () => {
+    expect(() => {
+      let x = x;
+    }).toThrow(ReferenceError);
+  });
+
+  test("const self-reference in initializer throws", () => {
+    expect(() => {
+      const x = x;
+    }).toThrow(ReferenceError);
+  });
+
   test("typeof on undeclared variable returns undefined", () => {
     expect(typeof nonExistentVar).toBe("undefined");
   });
