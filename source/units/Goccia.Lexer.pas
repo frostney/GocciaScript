@@ -93,9 +93,6 @@ type
 implementation
 
 uses
-  TypInfo,
-
-  OrderedStringMap,
   TextSemantics,
 
   Goccia.Error,
@@ -111,13 +108,94 @@ const
   UTF8_LINE_SEPARATOR_FINAL_BYTE = #$A8;
   UTF8_PARAGRAPH_SEPARATOR_FINAL_BYTE = #$A9;
   UTF8_LINE_TERMINATOR_BYTE_LENGTH = 3;
-  TOKEN_TYPE_PREFIX = 'gtt';
 
 type
-  TKeywordTokenMap = TOrderedStringMap<TGocciaTokenType>;
+  TKeywordTokenEntry = record
+    Keyword: string;
+    TokenType: TGocciaTokenType;
+  end;
 
-var
-  KeywordTokens: TKeywordTokenMap;
+  TKeywordTokenLengthRange = record
+    KeywordLength: Integer;
+    First: Integer;
+    Last: Integer;
+  end;
+
+const
+  KEYWORD_TOKEN_INDEX_AS         = 0;
+  KEYWORD_TOKEN_INDEX_IN         = 3;
+  KEYWORD_TOKEN_INDEX_FOR        = 4;
+  KEYWORD_TOKEN_INDEX_VAR        = 8;
+  KEYWORD_TOKEN_INDEX_CASE       = 9;
+  KEYWORD_TOKEN_INDEX_WITH       = 17;
+  KEYWORD_TOKEN_INDEX_BREAK      = 18;
+  KEYWORD_TOKEN_INDEX_WHILE      = 25;
+  KEYWORD_TOKEN_INDEX_DELETE     = 26;
+  KEYWORD_TOKEN_INDEX_TYPEOF     = 32;
+  KEYWORD_TOKEN_INDEX_DEFAULT    = 33;
+  KEYWORD_TOKEN_INDEX_FINALLY    = 35;
+  KEYWORD_TOKEN_INDEX_CONTINUE   = 36;
+  KEYWORD_TOKEN_INDEX_FUNCTION   = 37;
+  KEYWORD_TOKEN_INDEX_INSTANCEOF = 38;
+
+  KEYWORD_TOKEN_COUNT = KEYWORD_TOKEN_INDEX_INSTANCEOF + 1;
+  KEYWORD_TOKEN_RANGE_COUNT = 8;
+
+  // Grouped by keyword length so KeywordTokenRanges can point to a
+  // small contiguous slice for each candidate identifier length.
+  KeywordTokens: array[0..KEYWORD_TOKEN_COUNT - 1] of TKeywordTokenEntry = (
+    (Keyword: KEYWORD_AS; TokenType: gttAs),
+    (Keyword: KEYWORD_DO; TokenType: gttDo),
+    (Keyword: KEYWORD_IF; TokenType: gttIf),
+    (Keyword: KEYWORD_IN; TokenType: gttIn),
+    (Keyword: KEYWORD_FOR; TokenType: gttFor),
+    (Keyword: KEYWORD_LET; TokenType: gttLet),
+    (Keyword: KEYWORD_NEW; TokenType: gttNew),
+    (Keyword: KEYWORD_TRY; TokenType: gttTry),
+    (Keyword: KEYWORD_VAR; TokenType: gttVar),
+    (Keyword: KEYWORD_CASE; TokenType: gttCase),
+    (Keyword: KEYWORD_ELSE; TokenType: gttElse),
+    (Keyword: KEYWORD_ENUM; TokenType: gttEnum),
+    (Keyword: KEYWORD_FROM; TokenType: gttFrom),
+    (Keyword: KEYWORD_NULL; TokenType: gttNull),
+    (Keyword: KEYWORD_THIS; TokenType: gttThis),
+    (Keyword: KEYWORD_TRUE; TokenType: gttTrue),
+    (Keyword: KEYWORD_VOID; TokenType: gttVoid),
+    (Keyword: KEYWORD_WITH; TokenType: gttWith),
+    (Keyword: KEYWORD_BREAK; TokenType: gttBreak),
+    (Keyword: KEYWORD_CATCH; TokenType: gttCatch),
+    (Keyword: KEYWORD_CLASS; TokenType: gttClass),
+    (Keyword: KEYWORD_CONST; TokenType: gttConst),
+    (Keyword: KEYWORD_FALSE; TokenType: gttFalse),
+    (Keyword: KEYWORD_SUPER; TokenType: gttSuper),
+    (Keyword: KEYWORD_THROW; TokenType: gttThrow),
+    (Keyword: KEYWORD_WHILE; TokenType: gttWhile),
+    (Keyword: KEYWORD_DELETE; TokenType: gttDelete),
+    (Keyword: KEYWORD_EXPORT; TokenType: gttExport),
+    (Keyword: KEYWORD_IMPORT; TokenType: gttImport),
+    (Keyword: KEYWORD_RETURN; TokenType: gttReturn),
+    (Keyword: KEYWORD_STATIC; TokenType: gttStatic),
+    (Keyword: KEYWORD_SWITCH; TokenType: gttSwitch),
+    (Keyword: KEYWORD_TYPEOF; TokenType: gttTypeof),
+    (Keyword: KEYWORD_DEFAULT; TokenType: gttDefault),
+    (Keyword: KEYWORD_EXTENDS; TokenType: gttExtends),
+    (Keyword: KEYWORD_FINALLY; TokenType: gttFinally),
+    (Keyword: KEYWORD_CONTINUE; TokenType: gttContinue),
+    (Keyword: KEYWORD_FUNCTION; TokenType: gttFunction),
+    (Keyword: KEYWORD_INSTANCEOF; TokenType: gttInstanceof)
+  );
+
+  KeywordTokenRanges: array[0..KEYWORD_TOKEN_RANGE_COUNT - 1] of TKeywordTokenLengthRange = (
+    (KeywordLength: Length(KEYWORD_AS); First: KEYWORD_TOKEN_INDEX_AS; Last: KEYWORD_TOKEN_INDEX_IN),
+    (KeywordLength: Length(KEYWORD_FOR); First: KEYWORD_TOKEN_INDEX_FOR; Last: KEYWORD_TOKEN_INDEX_VAR),
+    (KeywordLength: Length(KEYWORD_CASE); First: KEYWORD_TOKEN_INDEX_CASE; Last: KEYWORD_TOKEN_INDEX_WITH),
+    (KeywordLength: Length(KEYWORD_BREAK); First: KEYWORD_TOKEN_INDEX_BREAK; Last: KEYWORD_TOKEN_INDEX_WHILE),
+    (KeywordLength: Length(KEYWORD_DELETE); First: KEYWORD_TOKEN_INDEX_DELETE; Last: KEYWORD_TOKEN_INDEX_TYPEOF),
+    (KeywordLength: Length(KEYWORD_DEFAULT); First: KEYWORD_TOKEN_INDEX_DEFAULT; Last: KEYWORD_TOKEN_INDEX_FINALLY),
+    (KeywordLength: Length(KEYWORD_CONTINUE); First: KEYWORD_TOKEN_INDEX_CONTINUE; Last: KEYWORD_TOKEN_INDEX_FUNCTION),
+    (KeywordLength: Length(KEYWORD_INSTANCEOF); First: KEYWORD_TOKEN_INDEX_INSTANCEOF;
+      Last: KEYWORD_TOKEN_INDEX_INSTANCEOF)
+  );
 
 function IsValidHexString(const AValue: string): Boolean;
 var
@@ -131,54 +209,29 @@ begin
   Result := True;
 end;
 
-function TryKeywordTokenTypeForName(const AKeyword: string;
-  out ATokenType: TGocciaTokenType): Boolean;
-var
-  TokenName: string;
-  TokenOrdinal: Integer;
-begin
-  if AKeyword = '' then
-    Exit(False);
-
-  TokenName := TOKEN_TYPE_PREFIX + UpCase(AKeyword[1]) + Copy(AKeyword, 2, MaxInt);
-  TokenOrdinal := GetEnumValue(TypeInfo(TGocciaTokenType), TokenName);
-  if TokenOrdinal < 0 then
-    Exit(False);
-
-  ATokenType := TGocciaTokenType(TokenOrdinal);
-  Result := True;
-end;
-
-procedure RegisterKeywordToken(const AKeyword: string);
-var
-  TokenType: TGocciaTokenType;
-begin
-  if not TryKeywordTokenTypeForName(AKeyword, TokenType) then
-    raise Exception.CreateFmt('Keyword "%s" does not match a token type', [AKeyword]);
-
-  KeywordTokens.Add(AKeyword, TokenType);
-end;
-
-procedure RegisterKeywordTokens(const AKeywords: array of string);
-var
-  I: Integer;
-begin
-  for I := Low(AKeywords) to High(AKeywords) do
-    RegisterKeywordToken(AKeywords[I]);
-end;
-
-procedure BuildKeywordTokenMap;
-begin
-  // Keyword token names intentionally follow the gtt + PascalCase(keyword)
-  // convention, so the lexer map can be derived from the centralized lists.
-  KeywordTokens := TKeywordTokenMap.Create(64);
-  RegisterKeywordTokens(ReservedKeywords);
-  RegisterKeywordTokens(TokenizedContextualKeywords);
-end;
-
 function TryKeywordToken(const AText: string; out ATokenType: TGocciaTokenType): Boolean; inline;
+var
+  Len: Integer;
+  Range: TKeywordTokenLengthRange;
+  RangeIndex: Integer;
+  TokenIndex: Integer;
 begin
-  Result := KeywordTokens.TryGetValue(AText, ATokenType);
+  Len := Length(AText);
+
+  for RangeIndex := Low(KeywordTokenRanges) to High(KeywordTokenRanges) do
+    if Len = KeywordTokenRanges[RangeIndex].KeywordLength then
+    begin
+      Range := KeywordTokenRanges[RangeIndex];
+      for TokenIndex := Range.First to Range.Last do
+        if AText = KeywordTokens[TokenIndex].Keyword then
+        begin
+          ATokenType := KeywordTokens[TokenIndex].TokenType;
+          Exit(True);
+        end;
+      Exit(False);
+    end;
+
+  Result := False;
 end;
 
 constructor TGocciaLexer.Create(const ASource, AFileName: string);
@@ -1730,11 +1783,5 @@ begin
   FTokens.Add(TGocciaToken.Create(gttEOF, '', FLine, FColumn, FColumn));
   Result := FTokens;
 end;
-
-initialization
-  BuildKeywordTokenMap;
-
-finalization
-  KeywordTokens.Free;
 
 end.
