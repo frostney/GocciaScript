@@ -7,6 +7,7 @@ interface
 uses
   SysUtils,
 
+  Goccia.RegExp.&Program,
   Goccia.RegExp.Compiler;
 
 type

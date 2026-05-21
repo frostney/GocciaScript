@@ -42,6 +42,7 @@ uses
   Goccia.Constants.NumericLimits,
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
+  Goccia.RegExp.&Program,
   Goccia.RegExp.VM,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
@@ -50,8 +51,23 @@ uses
   Goccia.Values.ObjectValue,
   Goccia.Values.SymbolValue;
 
+type
+  TGocciaRegExpProgramData = class
+  private
+    FCompiledProgram: TRegExpProgram;
+  public
+    constructor Create(const AProgram: TRegExpProgram);
+    property CompiledProgram: TRegExpProgram read FCompiledProgram;
+  end;
+
 threadvar
   GRegExpPrototype: TGocciaObjectValue;
+
+constructor TGocciaRegExpProgramData.Create(const AProgram: TRegExpProgram);
+begin
+  inherited Create;
+  FCompiledProgram := AProgram;
+end;
 
 function GetRegExpPrototype: TGocciaValue;
 begin
@@ -283,18 +299,20 @@ var
   Obj: TGocciaObjectValue;
   Source: string;
   CanonicalFlags: string;
+  CompiledProgram: TRegExpProgram;
 begin
   try
-    ValidateRegExpPattern(APattern, AFlags);
+    CanonicalFlags := CanonicalizeRegExpFlags(AFlags);
+    CompiledProgram := CompileRegExpProgram(APattern, CanonicalFlags);
   except
     on E: Exception do
       ThrowSyntaxError(E.Message);
   end;
 
   Source := NormalizeRegExpSource(APattern);
-  CanonicalFlags := CanonicalizeRegExpFlags(AFlags);
   Obj := TGocciaObjectValue.Create(GRegExpPrototype);
   Obj.HasRegExpData := True;
+  Obj.RegExpData := TGocciaRegExpProgramData.Create(CompiledProgram);
   Obj.DefineProperty(PROP_SOURCE,
     TGocciaPropertyDescriptorData.Create(
       TGocciaStringLiteralValue.Create(Source), []));
@@ -366,6 +384,7 @@ var
   ExecResult: TGocciaValue;
   MatchText: string;
   MatchResult: TGocciaRegExpMatchResult;
+  ProgramData: TGocciaRegExpProgramData;
   ShouldUpdate: Boolean;
 begin
   Obj := TGocciaObjectValue(AValue);
@@ -412,13 +431,26 @@ begin
     ThrowTypeError(SErrorRegExpExecNonRegExp);
 
   try
-    Result := ExecuteRegExp(
-      GetStringProperty(Obj, PROP_SOURCE),
-      GetStringProperty(Obj, PROP_FLAGS),
-      AInput,
-      AStartIndex,
-      ARequireStart,
-      MatchResult);
+    if Obj.RegExpData is TGocciaRegExpProgramData then
+    begin
+      ProgramData := TGocciaRegExpProgramData(Obj.RegExpData);
+      Result := ExecuteCompiledRegExp(
+        ProgramData.CompiledProgram,
+        GetStringProperty(Obj, PROP_SOURCE),
+        GetStringProperty(Obj, PROP_FLAGS),
+        AInput,
+        AStartIndex,
+        ARequireStart,
+        MatchResult);
+    end
+    else
+      Result := ExecuteRegExp(
+        GetStringProperty(Obj, PROP_SOURCE),
+        GetStringProperty(Obj, PROP_FLAGS),
+        AInput,
+        AStartIndex,
+        ARequireStart,
+        MatchResult);
   except
     on E: ERegExpRuntimeError do
       ThrowError(E.Message);

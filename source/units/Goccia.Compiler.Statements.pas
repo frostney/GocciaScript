@@ -129,6 +129,13 @@ type
     ResourceRegistered: Boolean;
   end;
 
+  TComputedFieldKeyLocal = record
+    ElementIndex: Integer;
+    Name: string;
+  end;
+
+  TComputedFieldKeyLocals = array of TComputedFieldKeyLocal;
+
   TPendingFinallyEntry = record
     FinallyBlock: TGocciaBlockStatement;
     // Non-nil when this entry represents a using block's disposal.
@@ -528,6 +535,9 @@ function FindVarLocalIndex(const AScope: TGocciaCompilerScope;
   const AName: string): Integer; forward;
 function FindLocalBySlot(const AScope: TGocciaCompilerScope;
   const AName: string; const ASlot: UInt8): Integer; forward;
+
+procedure CopyLocalTypeMetadata(const ACtx: TGocciaCompilationContext;
+  const ASourceIdx, ATargetIdx: Integer); forward;
 
 procedure EmitGlobalDefine(const ACtx: TGocciaCompilationContext;
   const ASlot: UInt8; const AName: string; const AIsConst: Boolean;
@@ -958,6 +968,34 @@ begin
       Exit(I);
   end;
   Result := -1;
+end;
+
+procedure CopyLocalTypeMetadata(const ACtx: TGocciaCompilationContext;
+  const ASourceIdx, ATargetIdx: Integer);
+var
+  Source: TGocciaCompilerLocal;
+  Target: TGocciaCompilerLocal;
+begin
+  if (ASourceIdx < 0) or (ATargetIdx < 0) then
+    Exit;
+
+  Source := ACtx.Scope.GetLocal(ASourceIdx);
+  Target := ACtx.Scope.GetLocal(ATargetIdx);
+
+  ACtx.Scope.SetLocalTypeHint(ATargetIdx, Source.TypeHint);
+  ACtx.Scope.SetLocalStrictlyTyped(ATargetIdx, Source.IsStrictlyTyped);
+  ACtx.Scope.SetLocalArrayTyped(ATargetIdx, Source.IsArrayTyped);
+  ACtx.Scope.SetLocalReturnTypeHint(ATargetIdx, Source.ReturnTypeHint);
+  ACtx.Scope.SetLocalParamTypeSignature(ATargetIdx,
+    Source.ParamTypeSignature);
+  ACtx.Scope.SetLocalTypeAnnotation(ATargetIdx, Source.TypeAnnotation);
+  ACtx.Scope.SetLocalElementTypeAnnotation(ATargetIdx,
+    Source.ElementTypeAnnotation);
+
+  if Source.TypeHint <> sltUntyped then
+    ACtx.Template.SetLocalType(Target.Slot, Source.TypeHint);
+  if Source.IsStrictlyTyped then
+    ACtx.Template.SetLocalStrictFlag(Target.Slot, True);
 end;
 
 procedure PredeclareBlockFunctionLocal(const AFunctionDecl: TGocciaFunctionDeclaration;
@@ -2483,14 +2521,20 @@ var
   LoopStart, ExitJump, I: Integer;
   ClosedLocals: array[0..255] of UInt8;
   ClosedCount: Integer;
+  BodyClosedLocals: array[0..255] of UInt8;
+  BodyClosedCount: Integer;
+  UpdateClosedLocals: array[0..255] of UInt8;
+  UpdateClosedCount: Integer;
   LoopControl: TLoopControlState;
   HasLexicalInit: Boolean;
   PerIterNames: TStringList;
   PerIterIsConst: Boolean;
-  OuterSlots, InnerSlots: array of UInt8;
+  OuterSlots, BodySlots, UpdateSlots: array of UInt8;
+  OuterLocalIdxs: array of Integer;
   Name: string;
   VarDecl: TGocciaVariableDeclaration;
   DestructDecl: TGocciaDestructuringDeclaration;
+  LocalIdx: Integer;
 begin
   if TryCompileCountedFor(ACtx, AStmt) then
     Exit;
@@ -2532,79 +2576,151 @@ begin
     BeginLoopControl(ACtx, LoopControl);
 
     try
-      LoopStart := CurrentCodePosition(ACtx);
-      ExitJump := -1;
-
-      if Assigned(AStmt.Condition) then
-      begin
-        CondReg := ACtx.Scope.AllocateRegister;
-        try
-          ACtx.CompileExpression(AStmt.Condition, CondReg);
-          ExitJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, CondReg);
-        finally
-          ACtx.Scope.FreeRegister;
-        end;
-      end;
-
-      // Capture outer slots BEFORE entering the per-iteration scope, where
-      // ResolveLocal would shadow with the inner declaration.
       if HasLexicalInit then
       begin
         SetLength(OuterSlots, PerIterNames.Count);
-        SetLength(InnerSlots, PerIterNames.Count);
+        SetLength(BodySlots, PerIterNames.Count);
+        SetLength(UpdateSlots, PerIterNames.Count);
+        SetLength(OuterLocalIdxs, PerIterNames.Count);
         for I := 0 to PerIterNames.Count - 1 do
         begin
           Name := PerIterNames[I];
-          OuterSlots[I] := ACtx.Scope.GetLocal(ACtx.Scope.ResolveLocal(Name)).Slot;
+          OuterLocalIdxs[I] := ACtx.Scope.ResolveLocal(Name);
+          OuterSlots[I] := ACtx.Scope.GetLocal(OuterLocalIdxs[I]).Slot;
         end;
-      end;
 
-      ACtx.Scope.BeginScope;
-      SetLoopContinueScopeDepth(ACtx);
+        LoopStart := CurrentCodePosition(ACtx);
+        ExitJump := -1;
 
-      if HasLexicalInit then
-      begin
+        // ES2026 §14.7.4.4 step 2: create the per-iteration environment
+        // before evaluating the test and body.
+        ACtx.Scope.BeginScope;
+        SetLoopContinueScopeDepth(ACtx);
         for I := 0 to PerIterNames.Count - 1 do
         begin
           Name := PerIterNames[I];
-          InnerSlots[I] := ACtx.Scope.DeclareLocal(Name, PerIterIsConst);
+          BodySlots[I] := ACtx.Scope.DeclareLocal(Name, PerIterIsConst);
+          LocalIdx := ACtx.Scope.ResolveLocal(Name);
+          CopyLocalTypeMetadata(ACtx, OuterLocalIdxs[I], LocalIdx);
           EmitInstruction(ACtx,
-            EncodeABC(OP_MOVE, InnerSlots[I], OuterSlots[I], 0));
+            EncodeABC(OP_MOVE, BodySlots[I], OuterSlots[I], 0));
         end;
-      end;
 
-      ACtx.CompileStatement(AStmt.Body);
+        if Assigned(AStmt.Condition) then
+        begin
+          CondReg := ACtx.Scope.AllocateRegister;
+          try
+            ACtx.CompileExpression(AStmt.Condition, CondReg);
+            ExitJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, CondReg);
+          finally
+            ACtx.Scope.FreeRegister;
+          end;
+        end;
 
-      PatchJumpList(ACtx, LoopControl.ContinueJumps);
+        ACtx.CompileStatement(AStmt.Body);
 
-      if HasLexicalInit then
-      begin
+        PatchJumpList(ACtx, LoopControl.ContinueJumps);
+
+        // BodySlots are no longer visible to name resolution after EndScope,
+        // but their registers still hold the body iteration values for the
+        // update environment snapshot.
+        ACtx.Scope.EndScope(BodyClosedLocals, BodyClosedCount);
+        for I := 0 to BodyClosedCount - 1 do
+          EmitInstruction(ACtx,
+            EncodeABC(OP_CLOSE_UPVALUE, BodyClosedLocals[I], 0, 0));
+
+        // ES2026 §14.7.4.4 step 3.e: create a fresh per-iteration
+        // environment for the update expression, distinct from the body
+        // iteration environment that closures in the body captured.
+        ACtx.Scope.BeginScope;
+        for I := 0 to PerIterNames.Count - 1 do
+        begin
+          Name := PerIterNames[I];
+          UpdateSlots[I] := ACtx.Scope.DeclareLocal(Name, PerIterIsConst);
+          LocalIdx := ACtx.Scope.ResolveLocal(Name);
+          CopyLocalTypeMetadata(ACtx, OuterLocalIdxs[I], LocalIdx);
+          EmitInstruction(ACtx,
+            EncodeABC(OP_MOVE, UpdateSlots[I], BodySlots[I], 0));
+        end;
+
+        if Assigned(AStmt.Update) then
+        begin
+          TempReg := ACtx.Scope.AllocateRegister;
+          try
+            ACtx.CompileExpression(AStmt.Update, TempReg);
+          finally
+            ACtx.Scope.FreeRegister;
+          end;
+        end;
+
         for I := 0 to PerIterNames.Count - 1 do
           EmitInstruction(ACtx,
-            EncodeABC(OP_MOVE, OuterSlots[I], InnerSlots[I], 0));
-      end;
+            EncodeABC(OP_MOVE, OuterSlots[I], UpdateSlots[I], 0));
 
-      ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
-      for I := 0 to ClosedCount - 1 do
-        EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
+        ACtx.Scope.EndScope(UpdateClosedLocals, UpdateClosedCount);
+        for I := 0 to UpdateClosedCount - 1 do
+          EmitInstruction(ACtx,
+            EncodeABC(OP_CLOSE_UPVALUE, UpdateClosedLocals[I], 0, 0));
 
-      if Assigned(AStmt.Update) then
-      begin
-        TempReg := ACtx.Scope.AllocateRegister;
-        try
-          ACtx.CompileExpression(AStmt.Update, TempReg);
-        finally
-          ACtx.Scope.FreeRegister;
+        EmitInstruction(ACtx,
+          EncodeAx(OP_JUMP, LoopStart - CurrentCodePosition(ACtx) - 1));
+
+        if ExitJump >= 0 then
+        begin
+          PatchJumpTarget(ACtx, ExitJump);
+          for I := 0 to BodyClosedCount - 1 do
+            EmitInstruction(ACtx,
+              EncodeABC(OP_CLOSE_UPVALUE, BodyClosedLocals[I], 0, 0));
         end;
+
+        PatchJumpList(ACtx, LoopControl.BreakJumps);
+      end
+      else
+      begin
+        LoopStart := CurrentCodePosition(ACtx);
+        ExitJump := -1;
+
+        if Assigned(AStmt.Condition) then
+        begin
+          CondReg := ACtx.Scope.AllocateRegister;
+          try
+            ACtx.CompileExpression(AStmt.Condition, CondReg);
+            ExitJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, CondReg);
+          finally
+            ACtx.Scope.FreeRegister;
+          end;
+        end;
+
+        ACtx.Scope.BeginScope;
+        SetLoopContinueScopeDepth(ACtx);
+
+        ACtx.CompileStatement(AStmt.Body);
+
+        PatchJumpList(ACtx, LoopControl.ContinueJumps);
+
+        ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
+        for I := 0 to ClosedCount - 1 do
+          EmitInstruction(ACtx,
+            EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
+
+        if Assigned(AStmt.Update) then
+        begin
+          TempReg := ACtx.Scope.AllocateRegister;
+          try
+            ACtx.CompileExpression(AStmt.Update, TempReg);
+          finally
+            ACtx.Scope.FreeRegister;
+          end;
+        end;
+
+        EmitInstruction(ACtx,
+          EncodeAx(OP_JUMP, LoopStart - CurrentCodePosition(ACtx) - 1));
+
+        if ExitJump >= 0 then
+          PatchJumpTarget(ACtx, ExitJump);
+
+        PatchJumpList(ACtx, LoopControl.BreakJumps);
       end;
-
-      EmitInstruction(ACtx,
-        EncodeAx(OP_JUMP, LoopStart - CurrentCodePosition(ACtx) - 1));
-
-      if ExitJump >= 0 then
-        PatchJumpTarget(ACtx, ExitJump);
-
-      PatchJumpList(ACtx, LoopControl.BreakJumps);
     finally
       EndLoopControl(LoopControl);
     end;
@@ -3680,23 +3796,66 @@ begin
   ACtx.Scope.FreeRegister;
 end;
 
+function FindComputedFieldKeyLocalName(
+  const ALocals: TComputedFieldKeyLocals;
+  const AElementIndex: Integer): string;
+var
+  LocalIndex: Integer;
+begin
+  for LocalIndex := 0 to High(ALocals) do
+    if ALocals[LocalIndex].ElementIndex = AElementIndex then
+      Exit(ALocals[LocalIndex].Name);
+  Result := '';
+end;
+
 procedure CompileComputedElements(const ACtx: TGocciaCompilationContext;
-  const ATargetReg: UInt8; const AClassDef: TGocciaClassDefinition);
+  const ATargetReg: UInt8; const AClassDef: TGocciaClassDefinition;
+  var AComputedFieldKeyLocals: TComputedFieldKeyLocals);
 var
   I: Integer;
   Elem: TGocciaClassElement;
   KeyReg: UInt8;
+  ComputedKeyName: string;
+  ClassKeyPrefix: string;
+  NeedsKeyLocal: Boolean;
+  KeyIsLocal: Boolean;
 begin
+  SetLength(AComputedFieldKeyLocals, 0);
+  ClassKeyPrefix := IntToHex(PtrUInt(AClassDef), SizeOf(PtrUInt) * 2);
   for I := 0 to High(AClassDef.FElements) do
   begin
     Elem := AClassDef.FElements[I];
     if not Elem.IsComputed then
       Continue;
+    if not (Elem.Kind in [cekGetter, cekSetter, cekMethod, cekField, cekAccessor]) then
+      Continue;
 
-    KeyReg := ACtx.Scope.AllocateRegister;
+    NeedsKeyLocal := (Elem.Kind in [cekField, cekAccessor]) or
+      (Length(Elem.Decorators) > 0);
+    KeyIsLocal := False;
+    if NeedsKeyLocal then
+    begin
+      SetLength(AComputedFieldKeyLocals, Length(AComputedFieldKeyLocals) + 1);
+      ComputedKeyName := Format('#computed-element-key:%s:%d',
+        [ClassKeyPrefix, I]);
+      AComputedFieldKeyLocals[High(AComputedFieldKeyLocals)].ElementIndex := I;
+      AComputedFieldKeyLocals[High(AComputedFieldKeyLocals)].Name :=
+        ComputedKeyName;
+      KeyReg := ACtx.Scope.DeclareLocal(ComputedKeyName, False);
+      KeyIsLocal := True;
+    end
+    else
+      KeyReg := ACtx.Scope.AllocateRegister;
     ACtx.CompileExpression(Elem.ComputedKeyExpression, KeyReg);
+    if (Elem.Kind in [cekField, cekAccessor]) or
+       (Length(Elem.Decorators) > 0) then
+      EmitInstruction(ACtx, EncodeABC(OP_TO_PROPERTY_KEY, KeyReg, KeyReg, 0));
 
     case Elem.Kind of
+      cekField:
+      begin
+        Continue;
+      end;
       cekGetter:
         if Elem.IsStatic then
           CompileComputedGetterBody(ACtx, ATargetReg, KeyReg,
@@ -3715,9 +3874,12 @@ begin
       cekMethod:
         CompileComputedMethodBody(ACtx, ATargetReg, KeyReg,
           Elem.MethodNode, Elem.IsStatic);
+      cekAccessor:
+        ; // Auto-accessor installation consumes the captured property key later.
     end;
 
-    ACtx.Scope.FreeRegister;
+    if not KeyIsLocal then
+      ACtx.Scope.FreeRegister;
   end;
 end;
 
@@ -3733,8 +3895,20 @@ begin
   Result := False;
 end;
 
+function HasComputedInstanceFields(
+  const AClassDef: TGocciaClassDefinition): Boolean;
+var
+  I: Integer;
+begin
+  for I := 0 to High(AClassDef.FFieldOrder) do
+    if AClassDef.FFieldOrder[I].IsComputed then
+      Exit(True);
+  Result := False;
+end;
+
 procedure CompileFieldInitializer(const ACtx: TGocciaCompilationContext;
-  const AClassReg: UInt8; const AClassDef: TGocciaClassDefinition);
+  const AClassReg: UInt8; const AClassDef: TGocciaClassDefinition;
+  const AComputedFieldKeyLocals: TComputedFieldKeyLocals);
 var
   OldTemplate: TGocciaFunctionTemplate;
   OldScope: TGocciaCompilerScope;
@@ -3743,12 +3917,14 @@ var
   ChildCtx: TGocciaCompilationContext;
   FuncIdx: UInt16;
   FnReg: UInt8;
-  ValReg, ThisReg: UInt8;
+  ValReg, ThisReg, KeyReg: UInt8;
   KeyIdx: UInt16;
-  I: Integer;
+  I, UpvalueIdx: Integer;
   Entry: TGocciaExpressionMap.TKeyValuePair;
   Elem: TGocciaClassElement;
   FieldExpr: TGocciaExpression;
+  ComputedKeyName: string;
+  AccessorBackingName: string;
 begin
   OldTemplate := ACtx.Template;
   OldScope := ACtx.Scope;
@@ -3773,7 +3949,27 @@ begin
     for I := 0 to High(AClassDef.FFieldOrder) do
     begin
       ValReg := ChildScope.AllocateRegister;
-      if AClassDef.FFieldOrder[I].IsPrivate then
+      if AClassDef.FFieldOrder[I].IsComputed then
+      begin
+        if Assigned(AClassDef.FFieldOrder[I].FieldInitializer) then
+          ACtx.CompileExpression(AClassDef.FFieldOrder[I].FieldInitializer, ValReg)
+        else
+          EmitInstruction(ChildCtx, EncodeABx(OP_LOAD_UNDEFINED, ValReg, 0));
+        KeyReg := ChildScope.AllocateRegister;
+        ComputedKeyName := FindComputedFieldKeyLocalName(
+          AComputedFieldKeyLocals, AClassDef.FFieldOrder[I].ElementIndex);
+        UpvalueIdx := ChildScope.ResolveUpvalue(ComputedKeyName);
+        if UpvalueIdx < 0 then
+          raise Exception.Create('Compiler error: computed class field key was not captured');
+        EmitInstruction(ChildCtx, EncodeABx(OP_GET_UPVALUE, KeyReg,
+          UInt16(UpvalueIdx)));
+        EmitInstruction(ChildCtx, EncodeABC(OP_DEFINE_PROP_DYNAMIC, ThisReg,
+          KeyReg, ValReg));
+        ChildScope.FreeRegister;
+        ChildScope.FreeRegister;
+        Continue;
+      end
+      else if AClassDef.FFieldOrder[I].IsPrivate then
       begin
         if AClassDef.PrivateInstanceProperties.TryGetValue(
             AClassDef.FFieldOrder[I].Name, FieldExpr) then
@@ -3831,7 +4027,11 @@ begin
       Continue;
     ValReg := ChildScope.AllocateRegister;
     ACtx.CompileExpression(Elem.FieldInitializer, ValReg);
-    KeyIdx := ChildTemplate.AddConstantString('__accessor_' + Elem.Name);
+    if Elem.IsComputed then
+      AccessorBackingName := '__accessor_computed_' + IntToStr(I)
+    else
+      AccessorBackingName := '__accessor_' + Elem.Name;
+    KeyIdx := ChildTemplate.AddConstantString(AccessorBackingName);
     if KeyIdx > High(UInt8) then
       raise Exception.Create('Constant pool overflow: accessor backing field name index exceeds 255');
     EmitInstruction(ChildCtx, EncodeABC(OP_SET_PROP_CONST, ThisReg,
@@ -3973,12 +4173,16 @@ begin
 end;
 
 procedure CompileAutoAccessors(const ACtx: TGocciaCompilationContext;
-  const AClassReg: UInt8; const AClassDef: TGocciaClassDefinition);
+  const AClassReg: UInt8; const AClassDef: TGocciaClassDefinition;
+  const AComputedFieldKeyLocals: TComputedFieldKeyLocals);
 var
   I: Integer;
   Elem: TGocciaClassElement;
   NameIdx: UInt16;
-  PairReg, InitReg: UInt8;
+  KeyReg: UInt8;
+  LocalIdx: Integer;
+  ComputedKeyName: string;
+  BackingName: string;
 begin
   for I := 0 to High(AClassDef.FElements) do
   begin
@@ -3986,23 +4190,36 @@ begin
     if Elem.Kind <> cekAccessor then
       Continue;
 
-    NameIdx := ACtx.Template.AddConstantString(Elem.Name);
+    if Elem.IsComputed then
+      BackingName := '__accessor_computed_' + IntToStr(I)
+    else
+      BackingName := Elem.Name;
+
+    NameIdx := ACtx.Template.AddConstantString(BackingName);
     if NameIdx > High(UInt8) then
       raise Exception.Create('Constant pool overflow: accessor name index exceeds 255');
 
-    PairReg := ACtx.Scope.AllocateRegister;
-    InitReg := ACtx.Scope.AllocateRegister;
-    EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, InitReg, 0, 0));
-    EmitInstruction(ACtx, EncodeABC(OP_SETUP_AUTO_ACCESSOR_CONST, PairReg, 0,
-      UInt8(NameIdx)));
-    ACtx.Scope.FreeRegister;
-    ACtx.Scope.FreeRegister;
+    if Elem.IsComputed then
+    begin
+      ComputedKeyName := FindComputedFieldKeyLocalName(
+        AComputedFieldKeyLocals, I);
+      LocalIdx := ACtx.Scope.ResolveLocal(ComputedKeyName);
+      if LocalIdx < 0 then
+        raise Exception.Create('Compiler error: computed auto-accessor key was not captured');
+      KeyReg := ACtx.Scope.GetLocal(LocalIdx).Slot;
+      EmitInstruction(ACtx, EncodeABC(OP_SETUP_AUTO_ACCESSOR_DYNAMIC,
+        KeyReg, Ord(Elem.IsStatic), UInt8(NameIdx)));
+    end
+    else
+      EmitInstruction(ACtx, EncodeABC(OP_SETUP_AUTO_ACCESSOR_CONST,
+        0, Ord(Elem.IsStatic), UInt8(NameIdx)));
   end;
 end;
 
 procedure CompileDecoratorOrchestration(
   const ACtx: TGocciaCompilationContext;
-  const AClassReg: UInt8; const AClassDef: TGocciaClassDefinition);
+  const AClassReg: UInt8; const AClassDef: TGocciaClassDefinition;
+  const AComputedFieldKeyLocals: TComputedFieldKeyLocals);
 var
   I, J: Integer;
   Elem: TGocciaClassElement;
@@ -4012,6 +4229,8 @@ var
   Desc: string;
   PairReg, ExtraReg: UInt8;
   HasElementDecorators: Boolean;
+  ComputedKeyName: string;
+  LocalIdx: Integer;
 begin
   HasElementDecorators := False;
   for I := 0 to High(AClassDef.FElements) do
@@ -4060,9 +4279,24 @@ begin
       PairReg := ACtx.Scope.AllocateRegister;
       ExtraReg := ACtx.Scope.AllocateRegister;
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, PairReg, DecoRegs[I][J], 0));
-      EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, ExtraReg, 0, 0));
-      EmitInstruction(ACtx, EncodeABC(OP_APPLY_ELEMENT_DECORATOR_CONST, PairReg,
-        0, UInt8(DescIdx)));
+      if Elem.IsComputed then
+      begin
+        ComputedKeyName := FindComputedFieldKeyLocalName(
+          AComputedFieldKeyLocals, I);
+        LocalIdx := ACtx.Scope.ResolveLocal(ComputedKeyName);
+        if LocalIdx < 0 then
+          raise Exception.Create('Compiler error: computed decorator element key was not captured');
+        EmitInstruction(ACtx, EncodeABC(OP_MOVE, ExtraReg,
+          ACtx.Scope.GetLocal(LocalIdx).Slot, 0));
+        EmitInstruction(ACtx, EncodeABC(OP_APPLY_ELEMENT_DECORATOR_CONST,
+          PairReg, ExtraReg, UInt8(DescIdx)));
+      end
+      else
+      begin
+        EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, ExtraReg, 0, 0));
+        EmitInstruction(ACtx, EncodeABC(OP_APPLY_ELEMENT_DECORATOR_CONST,
+          PairReg, 0, UInt8(DescIdx)));
+      end;
       ACtx.Scope.FreeRegister;
       ACtx.Scope.FreeRegister;
     end;
@@ -4089,7 +4323,8 @@ end;
 procedure CompileDecoratorAndAccessorPass(
   const ACtx: TGocciaCompilationContext;
   const AClassReg: UInt8; const AClassDef: TGocciaClassDefinition;
-  const ASuperReg: Integer);
+  const ASuperReg: Integer;
+  const AComputedFieldKeyLocals: TComputedFieldKeyLocals);
 var
   PairReg, ExtraReg: UInt8;
 begin
@@ -4107,8 +4342,10 @@ begin
   ACtx.Scope.FreeRegister;
   ACtx.Scope.FreeRegister;
 
-  CompileAutoAccessors(ACtx, AClassReg, AClassDef);
-  CompileDecoratorOrchestration(ACtx, AClassReg, AClassDef);
+  CompileAutoAccessors(ACtx, AClassReg, AClassDef,
+    AComputedFieldKeyLocals);
+  CompileDecoratorOrchestration(ACtx, AClassReg, AClassDef,
+    AComputedFieldKeyLocals);
 
   PairReg := ACtx.Scope.AllocateRegister;
   ExtraReg := ACtx.Scope.AllocateRegister;
@@ -4124,7 +4361,7 @@ procedure CompileClassDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaClassDeclaration);
 var
   ClassDef: TGocciaClassDefinition;
-  ClassReg, SuperReg, ValReg: UInt8;
+  ClassReg, SuperReg, ValReg, KeyReg: UInt8;
   NameIdx, KeyIdx: UInt16;
   MethodPair: TGocciaClassMethodMap.TKeyValuePair;
   GetterPair: TGocciaGetterExpressionMap.TKeyValuePair;
@@ -4133,6 +4370,8 @@ var
   I, LocalIdx, UpvalIdx: Integer;
   HasSuper: Boolean;
   PrivPrefix: string;
+  ComputedFieldKeyLocals: TComputedFieldKeyLocals;
+  ComputedKeyName: string;
 begin
   ClassDef := AStmt.ClassDefinition;
   HasSuper := ClassDef.SuperClass <> '';
@@ -4237,10 +4476,13 @@ begin
         SetterPair.Value, OP_DEFINE_ACCESSOR_CONST, ACCESSOR_FLAG_STATIC or ACCESSOR_FLAG_SETTER);
   end;
 
+  CompileComputedElements(ACtx, ClassReg, ClassDef, ComputedFieldKeyLocals);
+
   if (ClassDef.InstanceProperties.Count > 0) or
      (ClassDef.PrivateInstanceProperties.Count > 0) or
+     HasComputedInstanceFields(ClassDef) or
      HasAccessorInitializers(ClassDef) then
-    CompileFieldInitializer(ACtx, ClassReg, ClassDef);
+    CompileFieldInitializer(ACtx, ClassReg, ClassDef, ComputedFieldKeyLocals);
 
   // Static fields without FElements entries (legacy / no static blocks)
   if Length(ClassDef.FElements) = 0 then
@@ -4272,8 +4514,6 @@ begin
     end;
   end;
 
-  CompileComputedElements(ACtx, ClassReg, ClassDef);
-
   // ES2022 §15.7.14: compile static fields and static blocks in source order
   for I := 0 to High(ClassDef.FElements) do
   begin
@@ -4282,6 +4522,17 @@ begin
     else if (ClassDef.FElements[I].Kind = cekField) and ClassDef.FElements[I].IsStatic then
     begin
       ValReg := ACtx.Scope.AllocateRegister;
+      if ClassDef.FElements[I].IsComputed then
+      begin
+        ComputedKeyName := FindComputedFieldKeyLocalName(
+          ComputedFieldKeyLocals, I);
+        LocalIdx := ACtx.Scope.ResolveLocal(ComputedKeyName);
+        if LocalIdx < 0 then
+          raise Exception.Create('Compiler error: computed static field key was not captured');
+        KeyReg := ACtx.Scope.GetLocal(LocalIdx).Slot;
+      end
+      else
+        KeyReg := 0;
       if Assigned(ClassDef.FElements[I].FieldInitializer) then
         ACtx.CompileExpression(ClassDef.FElements[I].FieldInitializer, ValReg)
       else
@@ -4297,6 +4548,9 @@ begin
         EmitInstruction(ACtx, EncodeABC(OP_SET_PROP_CONST, ClassReg,
           UInt8(KeyIdx), ValReg));
       end
+      else if ClassDef.FElements[I].IsComputed then
+        EmitInstruction(ACtx, EncodeABC(OP_DEFINE_PROP_DYNAMIC,
+          ClassReg, KeyReg, ValReg))
       else
       begin
         KeyIdx := ACtx.Template.AddConstantString(ClassDef.FElements[I].Name);
@@ -4310,9 +4564,11 @@ begin
   end;
 
   if HasSuper then
-    CompileDecoratorAndAccessorPass(ACtx, ClassReg, ClassDef, SuperReg)
+    CompileDecoratorAndAccessorPass(ACtx, ClassReg, ClassDef, SuperReg,
+      ComputedFieldKeyLocals)
   else
-    CompileDecoratorAndAccessorPass(ACtx, ClassReg, ClassDef, -1);
+    CompileDecoratorAndAccessorPass(ACtx, ClassReg, ClassDef, -1,
+      ComputedFieldKeyLocals);
 
   // Sync cell if the class local was pre-declared and captured by a hoisted
   // function (see CompileVariableDeclaration for the full explanation)
@@ -4331,7 +4587,7 @@ procedure CompileClassExpression(const ACtx: TGocciaCompilationContext;
   const AInferredName: string = '');
 var
   ClassDef: TGocciaClassDefinition;
-  SuperReg, ValReg: UInt8;
+  SuperReg, ValReg, KeyReg: UInt8;
   NameIdx, KeyIdx: UInt16;
   MethodPair: TGocciaClassMethodMap.TKeyValuePair;
   GetterPair: TGocciaGetterExpressionMap.TKeyValuePair;
@@ -4343,6 +4599,8 @@ var
   HasNameBinding: Boolean;
   ClosedLocals: array[0..0] of UInt8;
   ClosedCount, I: Integer;
+  ComputedFieldKeyLocals: TComputedFieldKeyLocals;
+  ComputedKeyName: string;
 begin
   ClassDef := AClassDef;
   HasSuper := ClassDef.SuperClass <> '';
@@ -4448,10 +4706,13 @@ begin
         SetterPair.Value, OP_DEFINE_ACCESSOR_CONST, ACCESSOR_FLAG_STATIC or ACCESSOR_FLAG_SETTER);
   end;
 
+  CompileComputedElements(ACtx, ADest, ClassDef, ComputedFieldKeyLocals);
+
   if (ClassDef.InstanceProperties.Count > 0) or
      (ClassDef.PrivateInstanceProperties.Count > 0) or
+     HasComputedInstanceFields(ClassDef) or
      HasAccessorInitializers(ClassDef) then
-    CompileFieldInitializer(ACtx, ADest, ClassDef);
+    CompileFieldInitializer(ACtx, ADest, ClassDef, ComputedFieldKeyLocals);
 
   // Static fields without FElements entries (legacy / no static blocks)
   if Length(ClassDef.FElements) = 0 then
@@ -4483,8 +4744,6 @@ begin
     end;
   end;
 
-  CompileComputedElements(ACtx, ADest, ClassDef);
-
   // ES2022 §15.7.14: compile static fields and static blocks in source order
   for I := 0 to High(ClassDef.FElements) do
   begin
@@ -4493,6 +4752,17 @@ begin
     else if (ClassDef.FElements[I].Kind = cekField) and ClassDef.FElements[I].IsStatic then
     begin
       ValReg := ACtx.Scope.AllocateRegister;
+      if ClassDef.FElements[I].IsComputed then
+      begin
+        ComputedKeyName := FindComputedFieldKeyLocalName(
+          ComputedFieldKeyLocals, I);
+        LocalIdx := ACtx.Scope.ResolveLocal(ComputedKeyName);
+        if LocalIdx < 0 then
+          raise Exception.Create('Compiler error: computed static field key was not captured');
+        KeyReg := ACtx.Scope.GetLocal(LocalIdx).Slot;
+      end
+      else
+        KeyReg := 0;
       if Assigned(ClassDef.FElements[I].FieldInitializer) then
         ACtx.CompileExpression(ClassDef.FElements[I].FieldInitializer, ValReg)
       else
@@ -4508,6 +4778,9 @@ begin
         EmitInstruction(ACtx, EncodeABC(OP_SET_PROP_CONST, ADest,
           UInt8(KeyIdx), ValReg));
       end
+      else if ClassDef.FElements[I].IsComputed then
+        EmitInstruction(ACtx, EncodeABC(OP_DEFINE_PROP_DYNAMIC,
+          ADest, KeyReg, ValReg))
       else
       begin
         KeyIdx := ACtx.Template.AddConstantString(ClassDef.FElements[I].Name);
@@ -4522,15 +4795,20 @@ begin
 
   if HasSuper then
   begin
-    CompileDecoratorAndAccessorPass(ACtx, ADest, ClassDef, SuperReg);
+    CompileDecoratorAndAccessorPass(ACtx, ADest, ClassDef, SuperReg,
+      ComputedFieldKeyLocals);
     // Only free __super__ manually when there is no name binding scope —
     // when HasNameBinding is true, __super__ lives inside the inner scope
     // and EndScope below will free it together with the name binding local.
     if not HasNameBinding then
+    begin
+      EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, SuperReg, 0, 0));
       ACtx.Scope.FreeRegister;
+    end;
   end
   else
-    CompileDecoratorAndAccessorPass(ACtx, ADest, ClassDef, -1);
+    CompileDecoratorAndAccessorPass(ACtx, ADest, ClassDef, -1,
+      ComputedFieldKeyLocals);
 
   if HasNameBinding then
   begin
