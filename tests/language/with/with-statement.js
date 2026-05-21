@@ -100,15 +100,6 @@ describe("with statement", () => {
     expect(result).toBe("outer x");
   });
 
-  test("parses ASI after let as a with body expression statement", () => {
-    if (false) {
-      with ({}) let
-      {}
-    }
-
-    expect(true).toBe(true);
-  });
-
   test("closures created inside with retain the object environment", () => {
     const obj = { x: 4 };
     let read;

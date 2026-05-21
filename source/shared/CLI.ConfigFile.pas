@@ -16,7 +16,7 @@ type
   TConfigEntryArray = array of TConfigEntry;
 
   { Callback that parses file content into flat key-value entries.
-    Keys are option long names (e.g. 'mode', 'timeout').
+    Keys are option long names or config names (e.g. 'mode', 'timeout').
     Values are their string representations (e.g. 'bytecode', '5000').
     Boolean true produces 'true'; false produces 'false'.
     Arrays produce multiple entries with the same key. }
@@ -29,7 +29,7 @@ procedure RegisterConfigParser(const AExtension: string;
   AParser: TConfigParseFunc);
 
 { Apply configuration entries to the given options.
-  Each entry whose key matches an option long name is applied.
+  Each entry whose key matches an option long name or config name is applied.
   Options that are already Present are skipped, so CLI arguments
   parsed before this call naturally take precedence.
   Unknown keys are silently skipped (config files may contain
@@ -75,12 +75,11 @@ function FindConfigEntry(const AEntries: TConfigEntryArray;
 
 { Resolve an effective boolean for a flag option using the
   standard precedence: CLI flag > per-file config > root config >
-  default (False).  AFlag is the parsed option, AFileConfig the
-  per-file config entries, and AConfigKey the config key name
-  (e.g. 'asi', 'compat-var'). }
+  default (False).  AFlag is the parsed option and AFileConfig the
+  per-file config entries.  The config key is resolved from the
+  option metadata, checking ConfigName before LongName. }
 function ResolveFlagOption(const AFlag: TGocciaFlagOption;
-  const AFileConfig: TConfigEntryArray;
-  const AConfigKey: string): Boolean;
+  const AFileConfig: TConfigEntryArray): Boolean;
 
 implementation
 
@@ -306,6 +305,22 @@ begin
   Result := nil;
 end;
 
+function FindOptionConfigEntry(const AEntries: TConfigEntryArray;
+  const AOption: TGocciaOptionBase; out AValue: string): Boolean;
+var
+  I: Integer;
+begin
+  for I := 0 to High(AEntries) do
+    if ((AOption.ConfigName <> '') and
+        (AEntries[I].Key = AOption.ConfigName)) or
+       (AEntries[I].Key = AOption.LongName) then
+    begin
+      AValue := AEntries[I].Value;
+      Exit(True);
+    end;
+  Result := False;
+end;
+
 procedure ApplyConfigEntries(const AEntries: TConfigEntryArray;
   const AOptions: TGocciaOptionArray);
 var
@@ -518,14 +533,13 @@ end;
 { ── Flag resolution ────────────────────────────────────────── }
 
 function ResolveFlagOption(const AFlag: TGocciaFlagOption;
-  const AFileConfig: TConfigEntryArray;
-  const AConfigKey: string): Boolean;
+  const AFileConfig: TConfigEntryArray): Boolean;
 var
   ValueStr: string;
 begin
   if AFlag.FromCommandLine then
     Result := True
-  else if FindConfigEntry(AFileConfig, AConfigKey, ValueStr) then
+  else if FindOptionConfigEntry(AFileConfig, AFlag, ValueStr) then
     Result := (ValueStr = 'true') or (ValueStr = '')
   else
     Result := AFlag.Present;

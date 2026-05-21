@@ -737,9 +737,9 @@ return
 GocciaScript requires explicit semicolons by default, preventing this class of bugs. However, ASI can be enabled as an opt-in feature for greater ECMAScript compatibility:
 
 ```bash
-# Enable ASI via CLI
+# Enable ASI via CLI, or use a subtree goccia.json for tests
 ./build/GocciaScriptLoader example.js --asi
-./build/GocciaTestRunner tests/ --asi
+./build/GocciaTestRunner tests/language/asi
 ./build/GocciaREPL --asi
 ```
 

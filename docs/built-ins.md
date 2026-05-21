@@ -19,7 +19,7 @@ Core language built-ins (Math, Object, Array, Number, JSON, Symbol, Set, Map, We
 
 Runtime globals (Console, JSON5, JSONL, TOML, YAML, CSV, TSV, Performance, TextEncoder/TextDecoder, URL, fetch, Headers, Response, SemVer) are registered by runtime extension classes under `source/units/Goccia.RuntimeExtensions.*.pas`. Frontends such as `GocciaScriptLoader` and `GocciaREPL` apply `TGocciaLoaderRuntimeProfile`; `GocciaTestRunner` applies the loader profile plus `TGocciaTestingLibraryRuntimeExtension`; `GocciaBenchmarkRunner` applies the loader profile plus `TGocciaBenchmarkRuntimeExtension`. `GocciaScriptLoaderBare` does not attach a runtime and exposes only a CLI-local `print(...args)` helper.
 
-FFI is not part of the loader profile. CLI tools install `TGocciaFFIRuntimeExtension` only when `--unsafe-ffi` is passed.
+FFI is not part of the loader profile. CLI tools install `TGocciaFFIRuntimeExtension` when `--unsafe-ffi` is passed or `"unsafe-ffi": true` is set in config.
 
 ## Adding a New Built-in
 
@@ -614,7 +614,7 @@ See [Binary Data Built-ins](built-ins-binary-data.md) for the complete ArrayBuff
 
 ### FFI (`Goccia.Builtins.GlobalFFI.pas`)
 
-Foreign Function Interface for calling native shared libraries. Only available when `TGocciaFFIRuntimeExtension` is installed (CLI tools do this only for `--unsafe-ffi`).
+Foreign Function Interface for calling native shared libraries. Only available when `TGocciaFFIRuntimeExtension` is installed (CLI tools do this for `--unsafe-ffi` or `"unsafe-ffi": true` in config).
 
 **FFI global object:**
 

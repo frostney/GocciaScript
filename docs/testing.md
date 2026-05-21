@@ -7,7 +7,7 @@
 - **Three testing layers** — JavaScript end-to-end tests (primary), CLI behavior tests (secondary), Pascal unit tests (tertiary)
 - **Built-in test framework** — `describe`/`test`/`expect` with async support, mock functions, lifecycle hooks, and Vitest-compatible matchers
 - **One method per file** — Each test file focuses on a single method; edge cases are co-located with happy-path tests
-- **Run with**: `./build.pas testrunner && ./build/GocciaTestRunner tests --asi`
+- **Run with**: `./build.pas testrunner && ./build/GocciaTestRunner tests`
 
 GocciaScript uses three testing layers in priority order:
 
@@ -229,14 +229,14 @@ features: [addition, arithmetic]
 ### Run All Tests
 
 ```bash
-# Interpreted mode (default) — include --asi for ASI test coverage
-./build/GocciaTestRunner tests --asi
+# Interpreted mode (default)
+./build/GocciaTestRunner tests
 
 # Bytecode mode
-./build/GocciaTestRunner tests --mode=bytecode --asi
+./build/GocciaTestRunner tests --mode=bytecode
 ```
 
-Both modes must pass. The `--asi` flag enables automatic semicolon insertion tests under `tests/language/asi/`. CI runs the full suite with `--asi` in both interpreted and bytecode mode as separate matrix jobs.
+Both modes must pass. Test subtrees that require opt-in parser or runtime behavior declare it with a local `goccia.json` (for example, `tests/language/asi/goccia.json` enables ASI and `tests/built-ins/FFI/goccia.json` enables FFI). CI runs the full suite in both interpreted and bytecode mode as separate matrix jobs.
 
 ### Run a Specific Test File
 
@@ -378,7 +378,7 @@ Pascal unit tests (`*.Test.pas`) exist as a tertiary layer for behavior that can
 The `GocciaTestRunner` program:
 
 1. Scans the provided path for `.js`, `.jsx`, `.ts`, `.tsx`, and `.mjs` files.
-2. For each file, creates a fresh `TGocciaEngine`, attaches `TGocciaRuntimeCore`, applies the test-runner runtime profile, and installs the FFI runtime extension only when `--unsafe-ffi` is passed.
+2. For each file, creates a fresh `TGocciaEngine`, attaches `TGocciaRuntimeCore`, applies the test-runner runtime profile, and installs the FFI runtime extension when `--unsafe-ffi` or the file's `goccia.json` enables it.
 3. Loads the source and appends a `runTests()` call.
 4. Executes the script — `describe`/`test` blocks register themselves during execution. Nested `describe` blocks are supported; suite names are composed with ` > ` separators (e.g., `"Outer > Inner"`). Skip state is inherited by nested describes.
 5. `runTests()` executes all registered tests and collects results.

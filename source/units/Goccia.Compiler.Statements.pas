@@ -539,6 +539,30 @@ function FindLocalBySlot(const AScope: TGocciaCompilerScope;
 procedure CopyLocalTypeMetadata(const ACtx: TGocciaCompilationContext;
   const ASourceIdx, ATargetIdx: Integer); forward;
 
+procedure PrepareLexicalDeclarationLocals(
+  const ACtx: TGocciaCompilationContext;
+  const AStmt: TGocciaVariableDeclaration);
+var
+  I, LocalIdx: Integer;
+  Info: TGocciaVariableInfo;
+  Slot: UInt8;
+begin
+  if AStmt.IsVar then
+    Exit;
+
+  for I := 0 to High(AStmt.Variables) do
+  begin
+    Info := AStmt.Variables[I];
+    LocalIdx := ACtx.Scope.ResolveLocal(Info.Name);
+    if (LocalIdx >= 0) and
+       (ACtx.Scope.GetLocal(LocalIdx).Depth = ACtx.Scope.Depth) then
+      Slot := ACtx.Scope.GetLocal(LocalIdx).Slot
+    else
+      Slot := ACtx.Scope.DeclareLocal(Info.Name, AStmt.IsConst);
+    EmitInstruction(ACtx, EncodeABC(OP_LOAD_HOLE, Slot, 0, 0));
+  end;
+end;
+
 procedure EmitGlobalDefine(const ACtx: TGocciaCompilationContext;
   const ASlot: UInt8; const AName: string; const AIsConst: Boolean;
   const AIsVar: Boolean = False; const AHasInitializer: Boolean = True);
@@ -575,6 +599,8 @@ var
   IsVarRedeclaration: Boolean;
   CanTrackConstant: Boolean;
 begin
+  PrepareLexicalDeclarationLocals(ACtx, AStmt);
+
   for I := 0 to High(AStmt.Variables) do
   begin
     Info := AStmt.Variables[I];
@@ -600,7 +626,7 @@ begin
     end;
 
     IsTopLevelGlobalBacked := ACtx.GlobalBackedTopLevel and
-      (AStmt.IsVar or ((not AStmt.IsVar) and (ACtx.Scope.Depth = 0)));
+      (AStmt.IsVar or (ACtx.Scope.Depth = 0));
     if IsTopLevelGlobalBacked and AStmt.IsVar then
     begin
       LocalIdx := FindLocalBySlot(ACtx.Scope, Info.Name, Slot);
@@ -736,8 +762,16 @@ begin
     end;
 
     if IsTopLevelGlobalBacked then
+    begin
+      if not AStmt.IsVar then
+      begin
+        LocalIdx := FindLocalBySlot(ACtx.Scope, Info.Name, Slot);
+        if LocalIdx >= 0 then
+          ACtx.Scope.MarkGlobalBacked(LocalIdx);
+      end;
       EmitGlobalDefine(ACtx, Slot, Info.Name, AStmt.IsConst, AStmt.IsVar,
         HasInitializer);
+    end;
   end;
 end;
 
@@ -4918,6 +4952,7 @@ begin
       begin
         Local := ACtx.Scope.GetLocal(I);
         EmitGlobalDefine(ACtx, Local.Slot, Local.Name, AStmt.IsConst);
+        ACtx.Scope.MarkGlobalBacked(I);
       end;
   end;
 end;

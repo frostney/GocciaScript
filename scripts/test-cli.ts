@@ -36,6 +36,17 @@ console.log("Stdin smoke (bytecode)...");
   if (!containsLine(out, "4")) throw new Error(`Expected 4 on its own line, got: ${out}`);
 }
 
+console.log("Bytecode top-level lexical TDZ...");
+for (const [label, source] of [
+  ["let", "let x = x;\n"],
+  ["const", "const x = x;\n"],
+] as const) {
+  const { exitCode, json } = runLoaderJson(source, ["--mode=bytecode"]);
+  if (exitCode === 0) throw new Error(`Top-level ${label} self-reference should fail in bytecode`);
+  if (json.error?.type !== "ReferenceError")
+    throw new Error(`Top-level ${label} self-reference should throw ReferenceError, got ${json.error?.type}`);
+}
+
 // -- Stdin smoke (TestRunner) --------------------------------------------------
 
 console.log("Stdin smoke (TestRunner)...");

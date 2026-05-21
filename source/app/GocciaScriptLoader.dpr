@@ -106,6 +106,7 @@ type
     FLastPaths: TStringList;
 
     procedure InitializeRuntime(const AEngine: TGocciaEngine);
+    procedure InitializeRuntimeWithUnsafeFFI(const AEngine: TGocciaEngine);
     function IsJsonOutput: Boolean;
     function IsCompactJsonOutput: Boolean;
     function ParseSource(const ASource: TStringList; const AFileName: string;
@@ -262,8 +263,13 @@ var
 begin
   Runtime := AttachRuntime(AEngine);
   TGocciaLoaderRuntimeProfile.Apply(Runtime);
-  if Assigned(EngineOptions) and EngineOptions.UnsafeFFI.Present then
-    Runtime.Install(TGocciaFFIRuntimeExtension.Create);
+end;
+
+procedure TScriptLoaderApp.InitializeRuntimeWithUnsafeFFI(
+  const AEngine: TGocciaEngine);
+begin
+  InitializeRuntime(AEngine);
+  GetRuntime(AEngine).Install(TGocciaFFIRuntimeExtension.Create);
 end;
 
 function TScriptLoaderApp.UsageLine: string;
@@ -298,6 +304,9 @@ var
 begin
   InitializeRuntime(AEngine);
   Runtime := GetRuntime(AEngine);
+  if Assigned(EngineOptions) and
+     ResolveFlagOption(EngineOptions.UnsafeFFI, AFileConfig) then
+    Runtime.Install(TGocciaFFIRuntimeExtension.Create);
   ConsoleExtension := TGocciaConsoleRuntimeExtension(
     Runtime.FindRuntimeExtension(TGocciaConsoleRuntimeExtension));
   if LogFileOpen and Assigned(ConsoleExtension) and
@@ -1045,7 +1054,10 @@ begin
 
   if JobCount > 1 then
   begin
-    EnsureSharedPrototypesInitialized(InitializeRuntime);
+    if AnyFileConfigEnablesFlag(AFiles, EngineOptions.UnsafeFFI) then
+      EnsureSharedPrototypesInitialized(InitializeRuntimeWithUnsafeFFI)
+    else
+      EnsureSharedPrototypesInitialized(InitializeRuntime);
     BeginCLIJSONMemoryMeasurement(MemoryMeasurement);
     Pool := TGocciaThreadPool.Create(JobCount);
     try
@@ -1174,7 +1186,10 @@ var
   Pool: TGocciaThreadPool;
   I: Integer;
 begin
-  EnsureSharedPrototypesInitialized(InitializeRuntime);
+  if AnyFileConfigEnablesFlag(AFiles, EngineOptions.UnsafeFFI) then
+    EnsureSharedPrototypesInitialized(InitializeRuntimeWithUnsafeFFI)
+  else
+    EnsureSharedPrototypesInitialized(InitializeRuntime);
 
   Pool := TGocciaThreadPool.Create(AJobCount);
   try
