@@ -145,6 +145,14 @@ begin
     Result := innStandard;
 end;
 
+function CompactDisplayStringToEnum(const AValue: string): TIntlNumberCompactDisplay;
+begin
+  if AValue = 'long' then
+    Result := incdLong
+  else
+    Result := incdShort;
+end;
+
 function UnitDisplayStringToEnum(const AValue: string): TIntlNumberUnitDisplay;
 begin
   if AValue = 'long' then
@@ -562,6 +570,9 @@ begin
      (FRoundingIncrement <> 2000) and (FRoundingIncrement <> 2500) and
      (FRoundingIncrement <> 5000) then
     ThrowRangeError(Format(SErrorIntlInvalidOption, [IntToStr(FRoundingIncrement), 'roundingIncrement']));
+  if (FRoundingPriority <> 'auto') and (FRoundingPriority <> 'morePrecision') and
+     (FRoundingPriority <> 'lessPrecision') then
+    ThrowRangeError(Format(SErrorIntlInvalidOption, [FRoundingPriority, 'roundingPriority']));
 
   // Default numberingSystem to "latn"
   if FNumberingSystem = '' then
@@ -665,6 +676,7 @@ begin
   FResolvedOptions.UnitIdentifier := FUnitIdentifier;
   FResolvedOptions.UnitDisplay := UnitDisplayStringToEnum(FUnitDisplay);
   FResolvedOptions.Notation := NotationStringToEnum(FNotation);
+  FResolvedOptions.CompactDisplay := CompactDisplayStringToEnum(FCompactDisplay);
   FResolvedOptions.SignDisplay := SignDisplayStringToEnum(FSignDisplay);
   FResolvedOptions.UseGrouping := UseGroupingStringToEnum(FUseGrouping);
   FResolvedOptions.MinimumIntegerDigits := FMinimumIntegerDigits;

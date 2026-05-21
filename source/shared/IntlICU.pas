@@ -1757,6 +1757,17 @@ begin
   end;
 end;
 
+function CanUseLegacyNumberFormatter(const AOptions: TIntlNumberFormatOptions): Boolean;
+begin
+  Result := (AOptions.Notation = innStandard) and
+    (AOptions.RoundingPriority = inrpAuto) and
+    (AOptions.Style <> insUnit);
+
+  if Result and (AOptions.Style = insCurrency) then
+    Result := (AOptions.CurrencyDisplay = incdSymbol) and
+      (AOptions.CurrencySign = incsStandard);
+end;
+
 function TryICUFormatNumberSkeleton(const ALocale: string; AValue: Double;
   const AOptions: TIntlNumberFormatOptions; out AFormatted: string): Boolean;
 var
@@ -1864,7 +1875,8 @@ function TryICUFormatNumber(const ALocale: string; AValue: Double;
 begin
   if TryICUFormatNumberSkeleton(ALocale, AValue, AOptions, AFormatted) then
     Exit(True);
-  Result := TryICUFormatNumberDirect(ALocale, AValue, AOptions, AFormatted);
+  Result := CanUseLegacyNumberFormatter(AOptions) and
+    TryICUFormatNumberDirect(ALocale, AValue, AOptions, AFormatted);
 end;
 
 function TryICUFormatNumberToPartsSkeleton(const ALocale: string; AValue: Double;
@@ -1987,7 +1999,8 @@ function TryICUFormatNumberToParts(const ALocale: string; AValue: Double;
 begin
   if TryICUFormatNumberToPartsSkeleton(ALocale, AValue, AOptions, AParts) then
     Exit(True);
-  Result := TryICUFormatNumberToPartsDirect(ALocale, AValue, AOptions, AParts);
+  Result := CanUseLegacyNumberFormatter(AOptions) and
+    TryICUFormatNumberToPartsDirect(ALocale, AValue, AOptions, AParts);
 end;
 
 function TryICUFormatNumberRangeInternal(const ALocale: string;

@@ -95,4 +95,27 @@ describe.runIf(isIntl)("Intl.NumberFormat.prototype.format", () => {
       maximumFractionDigits: 3,
     }).format(1.5)).toBe("2.500");
   });
+
+  test("notation options use ICU skeleton formatting", () => {
+    expect(new Intl.NumberFormat("en-US", {
+      notation: "scientific",
+      maximumFractionDigits: 2,
+    }).format(12345)).toBe("1.23E4");
+
+    expect(new Intl.NumberFormat("en-US", {
+      notation: "engineering",
+      maximumFractionDigits: 2,
+    }).format(12345)).toBe("12.35E3");
+
+    expect(new Intl.NumberFormat("en-US", {
+      notation: "compact",
+      useGrouping: false,
+    }).format(1234)).toBe("1.2K");
+
+    expect(new Intl.NumberFormat("en-US", {
+      notation: "compact",
+      compactDisplay: "long",
+      useGrouping: false,
+    }).format(1234)).toBe("1.2 thousand");
+  });
 });

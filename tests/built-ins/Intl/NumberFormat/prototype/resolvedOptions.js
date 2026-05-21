@@ -107,4 +107,10 @@ describe("Intl.NumberFormat.prototype.resolvedOptions", () => {
     expect(opts.maximumSignificantDigits).toBe(3);
     expect(opts.roundingPriority).toBe("lessPrecision");
   });
+
+  test("invalid roundingPriority throws RangeError", () => {
+    expect(() => new Intl.NumberFormat("en-US", {
+      roundingPriority: "bad",
+    })).toThrow(RangeError);
+  });
 });
