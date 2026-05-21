@@ -307,11 +307,18 @@ end;
 
 function FindOptionConfigEntry(const AEntries: TConfigEntryArray;
   const AOption: TGocciaOptionBase; out AValue: string): Boolean;
+var
+  I: Integer;
 begin
-  if (AOption.ConfigName <> '') and
-     FindConfigEntry(AEntries, AOption.ConfigName, AValue) then
-    Exit(True);
-  Result := FindConfigEntry(AEntries, AOption.LongName, AValue);
+  for I := 0 to High(AEntries) do
+    if ((AOption.ConfigName <> '') and
+        (AEntries[I].Key = AOption.ConfigName)) or
+       (AEntries[I].Key = AOption.LongName) then
+    begin
+      AValue := AEntries[I].Value;
+      Exit(True);
+    end;
+  Result := False;
 end;
 
 procedure ApplyConfigEntries(const AEntries: TConfigEntryArray;

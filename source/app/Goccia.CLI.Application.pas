@@ -62,6 +62,8 @@ type
       config is found.  Thread-safe: does not mutate shared state. }
     function DiscoverFileConfig(
       const AFileName: string): TConfigEntryArray;
+    function AnyFileConfigEnablesFlag(const AFiles: TStrings;
+      const AFlag: TGocciaFlagOption): Boolean;
     function CreateEngine(const AFileName: string;
       const ASource: TStringList;
       const AExecutor: TGocciaExecutor): TGocciaEngine;
@@ -460,6 +462,21 @@ begin
     [CONFIG_BASE_NAME], CONFIG_EXTENSIONS);
   if ConfigPath <> '' then
     Result := ParseConfigFile(ConfigPath);
+end;
+
+function TGocciaCLIApplication.AnyFileConfigEnablesFlag(
+  const AFiles: TStrings; const AFlag: TGocciaFlagOption): Boolean;
+var
+  I: Integer;
+begin
+  if not Assigned(AFlag) then
+    Exit(False);
+
+  for I := 0 to AFiles.Count - 1 do
+    if ResolveFlagOption(AFlag, DiscoverFileConfig(AFiles[I])) then
+      Exit(True);
+
+  Result := False;
 end;
 
 { Resolve --source-type / config "source-type" into the engine's
