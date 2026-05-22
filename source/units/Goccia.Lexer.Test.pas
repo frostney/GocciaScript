@@ -10,19 +10,31 @@ uses
 
   Goccia.Error,
   Goccia.GarbageCollector,
+  Goccia.Keywords.Contextual,
+  Goccia.Keywords.Reserved,
   Goccia.Lexer,
   Goccia.TestSetup,
   Goccia.Token;
 
 type
+  TExpectedKeywordToken = record
+    Keyword: string;
+    TokenType: TGocciaTokenType;
+  end;
+
   TLexerTests = class(TTestSuite)
   private
     procedure AssertIgnoresLeadingHashbang(const ALineBreak: string);
     procedure AssertPreservesLineNumbersAfterHashbang(const ALineBreak: string);
     procedure AssertCommentTerminatedBy(const ALineBreak: string);
+    procedure AssertTokenizesKeywordToken(const AKeyword: string; const ATokenType: TGocciaTokenType);
+    procedure AssertContextualKeywordEndsExpressionForRegex(const AKeyword: string;
+      const ATokenType: TGocciaTokenType);
     procedure TestIgnoresLeadingHashbang;
     procedure TestPreservesLineNumbersAfterHashbang;
     procedure TestCommentTerminatedByUnicodeLineTerminators;
+    procedure TestTokenizesKeywordTokens;
+    procedure TestContextualKeywordTokensEndExpressionForRegex;
     procedure TestCRIncrementsLineInWhitespace;
     procedure TestCRIncrementsLineInBlockComment;
     procedure TestUnicodeLineTerminatorsInBlockComment;
@@ -32,6 +44,7 @@ type
     procedure TestAwaitSlashLookaheadStopsAtUnicodeLineTerminators;
     procedure TestNumericSeparatorsNormalize;
     procedure TestTemplateInterpolationTracksLineTerminators;
+    procedure TestUnicodeEscapeOverflowRaisesLexerError;
   public
     procedure SetupTests; override;
   end;
@@ -41,6 +54,9 @@ begin
   Test('Ignores leading hashbang', TestIgnoresLeadingHashbang);
   Test('Preserves line numbers after hashbang', TestPreservesLineNumbersAfterHashbang);
   Test('Terminates comment on Unicode line terminators', TestCommentTerminatedByUnicodeLineTerminators);
+  Test('Tokenizes keyword tokens', TestTokenizesKeywordTokens);
+  Test('Contextual keyword tokens end expressions for regex detection',
+    TestContextualKeywordTokensEndExpressionForRegex);
   Test('CR increments line counter in whitespace', TestCRIncrementsLineInWhitespace);
   Test('CR increments line counter in block comments', TestCRIncrementsLineInBlockComment);
   Test('Unicode line terminators increment line counter in block comments', TestUnicodeLineTerminatorsInBlockComment);
@@ -51,6 +67,7 @@ begin
     TestAwaitSlashLookaheadStopsAtUnicodeLineTerminators);
   Test('Numeric separators normalize', TestNumericSeparatorsNormalize);
   Test('Template interpolation tracks line terminators', TestTemplateInterpolationTracksLineTerminators);
+  Test('Unicode escape overflow raises lexer error', TestUnicodeEscapeOverflowRaisesLexerError);
 end;
 
 procedure TLexerTests.AssertIgnoresLeadingHashbang(const ALineBreak: string);
@@ -103,6 +120,41 @@ begin
   end;
 end;
 
+procedure TLexerTests.AssertTokenizesKeywordToken(const AKeyword: string; const ATokenType: TGocciaTokenType);
+var
+  Lexer: TGocciaLexer;
+  Tokens: TObjectList<TGocciaToken>;
+begin
+  Lexer := TGocciaLexer.Create(AKeyword, '<test>');
+  try
+    Tokens := Lexer.ScanTokens;
+    Expect<Integer>(Tokens.Count).ToBe(2);
+    Expect<TGocciaTokenType>(Tokens[0].TokenType).ToBe(ATokenType);
+    Expect<string>(Tokens[0].Lexeme).ToBe(AKeyword);
+  finally
+    Lexer.Free;
+  end;
+end;
+
+procedure TLexerTests.AssertContextualKeywordEndsExpressionForRegex(const AKeyword: string;
+  const ATokenType: TGocciaTokenType);
+var
+  Lexer: TGocciaLexer;
+  Tokens: TObjectList<TGocciaToken>;
+begin
+  Lexer := TGocciaLexer.Create(AKeyword + ' / 2 / 1;', '<test>');
+  try
+    Tokens := Lexer.ScanTokens;
+    Expect<Integer>(Tokens.Count).ToBe(7);
+    Expect<TGocciaTokenType>(Tokens[0].TokenType).ToBe(ATokenType);
+    Expect<string>(Tokens[0].Lexeme).ToBe(AKeyword);
+    Expect<TGocciaTokenType>(Tokens[1].TokenType).ToBe(gttSlash);
+    Expect<TGocciaTokenType>(Tokens[3].TokenType).ToBe(gttSlash);
+  finally
+    Lexer.Free;
+  end;
+end;
+
 procedure TLexerTests.TestIgnoresLeadingHashbang;
 const
   CRLF = #13#10;
@@ -140,6 +192,71 @@ begin
   AssertCommentTerminatedBy(#13);
   AssertCommentTerminatedBy(UTF8_LINE_SEPARATOR);
   AssertCommentTerminatedBy(UTF8_PARAGRAPH_SEPARATOR);
+end;
+
+procedure TLexerTests.TestTokenizesKeywordTokens;
+const
+  ExpectedKeywordTokens: array[0..38] of TExpectedKeywordToken = (
+    (Keyword: KEYWORD_AS; TokenType: gttAs),
+    (Keyword: KEYWORD_DO; TokenType: gttDo),
+    (Keyword: KEYWORD_IF; TokenType: gttIf),
+    (Keyword: KEYWORD_IN; TokenType: gttIn),
+    (Keyword: KEYWORD_FOR; TokenType: gttFor),
+    (Keyword: KEYWORD_LET; TokenType: gttLet),
+    (Keyword: KEYWORD_NEW; TokenType: gttNew),
+    (Keyword: KEYWORD_TRY; TokenType: gttTry),
+    (Keyword: KEYWORD_VAR; TokenType: gttVar),
+    (Keyword: KEYWORD_CASE; TokenType: gttCase),
+    (Keyword: KEYWORD_ELSE; TokenType: gttElse),
+    (Keyword: KEYWORD_ENUM; TokenType: gttEnum),
+    (Keyword: KEYWORD_FROM; TokenType: gttFrom),
+    (Keyword: KEYWORD_NULL; TokenType: gttNull),
+    (Keyword: KEYWORD_THIS; TokenType: gttThis),
+    (Keyword: KEYWORD_TRUE; TokenType: gttTrue),
+    (Keyword: KEYWORD_VOID; TokenType: gttVoid),
+    (Keyword: KEYWORD_WITH; TokenType: gttWith),
+    (Keyword: KEYWORD_BREAK; TokenType: gttBreak),
+    (Keyword: KEYWORD_CATCH; TokenType: gttCatch),
+    (Keyword: KEYWORD_CLASS; TokenType: gttClass),
+    (Keyword: KEYWORD_CONST; TokenType: gttConst),
+    (Keyword: KEYWORD_FALSE; TokenType: gttFalse),
+    (Keyword: KEYWORD_SUPER; TokenType: gttSuper),
+    (Keyword: KEYWORD_THROW; TokenType: gttThrow),
+    (Keyword: KEYWORD_WHILE; TokenType: gttWhile),
+    (Keyword: KEYWORD_DELETE; TokenType: gttDelete),
+    (Keyword: KEYWORD_EXPORT; TokenType: gttExport),
+    (Keyword: KEYWORD_IMPORT; TokenType: gttImport),
+    (Keyword: KEYWORD_RETURN; TokenType: gttReturn),
+    (Keyword: KEYWORD_STATIC; TokenType: gttStatic),
+    (Keyword: KEYWORD_SWITCH; TokenType: gttSwitch),
+    (Keyword: KEYWORD_TYPEOF; TokenType: gttTypeof),
+    (Keyword: KEYWORD_DEFAULT; TokenType: gttDefault),
+    (Keyword: KEYWORD_EXTENDS; TokenType: gttExtends),
+    (Keyword: KEYWORD_FINALLY; TokenType: gttFinally),
+    (Keyword: KEYWORD_CONTINUE; TokenType: gttContinue),
+    (Keyword: KEYWORD_FUNCTION; TokenType: gttFunction),
+    (Keyword: KEYWORD_INSTANCEOF; TokenType: gttInstanceof)
+  );
+var
+  I: Integer;
+begin
+  for I := Low(ExpectedKeywordTokens) to High(ExpectedKeywordTokens) do
+    AssertTokenizesKeywordToken(ExpectedKeywordTokens[I].Keyword, ExpectedKeywordTokens[I].TokenType);
+end;
+
+procedure TLexerTests.TestContextualKeywordTokensEndExpressionForRegex;
+const
+  ExpectedContextualKeywordTokens: array[0..2] of TExpectedKeywordToken = (
+    (Keyword: KEYWORD_AS; TokenType: gttAs),
+    (Keyword: KEYWORD_FROM; TokenType: gttFrom),
+    (Keyword: KEYWORD_STATIC; TokenType: gttStatic)
+  );
+var
+  I: Integer;
+begin
+  for I := Low(ExpectedContextualKeywordTokens) to High(ExpectedContextualKeywordTokens) do
+    AssertContextualKeywordEndsExpressionForRegex(ExpectedContextualKeywordTokens[I].Keyword,
+      ExpectedContextualKeywordTokens[I].TokenType);
 end;
 
 procedure TLexerTests.TestCRIncrementsLineInWhitespace;
@@ -352,6 +469,34 @@ begin
     Expect<TGocciaTokenType>(Tokens[2].TokenType).ToBe(gttConst);
     Expect<Integer>(Tokens[2].Line).ToBe(2);
     Expect<Integer>(Tokens[2].Column).ToBe(9);
+  finally
+    Lexer.Free;
+  end;
+end;
+
+procedure TLexerTests.TestUnicodeEscapeOverflowRaisesLexerError;
+var
+  Lexer: TGocciaLexer;
+  Raised: Boolean;
+  MessageMatches: Boolean;
+begin
+  Lexer := TGocciaLexer.Create(
+    'const value = "\u{FFFFFFFFFFFFFFFFFFFFFFFF}";',
+    '<test>');
+  try
+    Raised := False;
+    MessageMatches := False;
+    try
+      Lexer.ScanTokens;
+    except
+      on E: TGocciaLexerError do
+      begin
+        Raised := True;
+        MessageMatches := Pos('Invalid unicode code point', E.Message) > 0;
+      end;
+    end;
+    Expect<Boolean>(Raised).ToBe(True);
+    Expect<Boolean>(MessageMatches).ToBe(True);
   finally
     Lexer.Free;
   end;

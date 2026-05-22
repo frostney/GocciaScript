@@ -434,7 +434,134 @@ console.log("Per-file ASI config across all apps...");
   }
 }
 
-// -- Per-file compat-var config across all apps ---------------------------------
+// -- Per-file unsafe-ffi config across runtime apps ----------------------------
+
+console.log("Per-file unsafe-ffi config across runtime apps...");
+{
+  const tmp = makeTmp();
+  const noConfigDir = makeTmp();
+  try {
+    writeFileSync(join(tmp, "goccia.json"), '{"unsafe-ffi": true}\n');
+    writeFileSync(join(tmp, "test.js"), "typeof FFI;\n");
+    writeFileSync(join(noConfigDir, "test.js"), "typeof FFI;\n");
+    writeFileSync(
+      join(tmp, "test-runner.js"),
+      'test("unsafe ffi config", () => { expect(typeof FFI).toBe("object"); });\n',
+    );
+    writeFileSync(
+      join(tmp, "bench.js"),
+      [
+        'suite("unsafe-ffi", () => {',
+        '  bench("global", {',
+        "    run: () => {",
+        '      if (typeof FFI !== "object") throw new Error("FFI missing");',
+        "      return FFI.suffix;",
+        "    },",
+        "  });",
+        "});",
+      ].join("\n") + "\n",
+    );
+
+    const loaderNoConfig = await $`${LOADER} --print ${join(noConfigDir, "test.js")} 2>&1`.text();
+    if (!containsLine(loaderNoConfig, "undefined")) throw new Error(`Loader without unsafe-ffi config should leave FFI undefined, got: ${loaderNoConfig}`);
+
+    const loaderOut = await $`${LOADER} --print ${join(tmp, "test.js")} 2>&1`.text();
+    if (!containsLine(loaderOut, "object")) throw new Error(`Loader unsafe-ffi config should expose FFI, got: ${loaderOut}`);
+
+    const loaderBc = await $`${LOADER} --print ${join(tmp, "test.js")} --mode=bytecode 2>&1`.text();
+    if (!containsLine(loaderBc, "object")) throw new Error(`Loader bytecode unsafe-ffi config should expose FFI, got: ${loaderBc}`);
+
+    const trInterp = await $`${TESTRUNNER} ${join(tmp, "test-runner.js")} --no-progress 2>&1`.text();
+    if (!trInterp.includes("Passed: 1")) throw new Error(`TestRunner unsafe-ffi config should pass, got: ${trInterp}`);
+
+    const trBc = await $`${TESTRUNNER} ${join(tmp, "test-runner.js")} --mode=bytecode --no-progress 2>&1`.text();
+    if (!trBc.includes("Passed: 1")) throw new Error(`TestRunner bytecode unsafe-ffi config should pass, got: ${trBc}`);
+
+    const parallelLoaderDir = join(tmp, "loader-parallel");
+    mkdirSync(parallelLoaderDir);
+    writeFileSync(join(parallelLoaderDir, "goccia.json"), '{"unsafe-ffi": true}\n');
+    writeFileSync(
+      join(parallelLoaderDir, "a.js"),
+      'if (typeof FFI !== "object") throw new Error("FFI missing");\n',
+    );
+    writeFileSync(
+      join(parallelLoaderDir, "b.js"),
+      'if (typeof FFI !== "object") throw new Error("FFI missing");\n',
+    );
+    runCwd(LOADER, ["a.js", "b.js", "--jobs=2", "--output=compact-json"], parallelLoaderDir);
+
+    const parallelTestDir = join(tmp, "test-parallel");
+    mkdirSync(parallelTestDir);
+    writeFileSync(join(parallelTestDir, "goccia.json"), '{"unsafe-ffi": true}\n');
+    writeFileSync(
+      join(parallelTestDir, "a.js"),
+      'test("unsafe ffi config a", () => { expect(typeof FFI).toBe("object"); });\n',
+    );
+    writeFileSync(
+      join(parallelTestDir, "b.js"),
+      'test("unsafe ffi config b", () => { expect(typeof FFI).toBe("object"); });\n',
+    );
+    const trParallel = runCwd(TESTRUNNER, [".", "--jobs=2", "--no-progress"], parallelTestDir);
+    if (!trParallel.combined.includes("Passed: 2"))
+      throw new Error(`TestRunner parallel unsafe-ffi config should pass, got: ${trParallel.combined}`);
+
+    for (const modeArgs of [[], ["--mode=bytecode"]] as const) {
+      const bench = Bun.spawnSync(
+        [resolve(BENCHRUNNER), join(tmp, "bench.js"), "--no-progress", ...modeArgs],
+        {
+          stdout: "pipe",
+          stderr: "pipe",
+          env: { ...process.env, GOCCIA_BENCH_CALIBRATION_MS: "50", GOCCIA_BENCH_ROUNDS: "3" } as Record<string, string>,
+          timeout: 60_000,
+        },
+      );
+      if (bench.exitCode !== 0)
+        throw new Error(`BenchmarkRunner unsafe-ffi config ${modeArgs.join(" ")} exited ${bench.exitCode}: ${bench.stderr.toString()}`);
+      if (!bench.stdout.toString().includes("unsafe-ffi"))
+        throw new Error(`BenchmarkRunner unsafe-ffi config output should mention 'unsafe-ffi', got: ${bench.stdout.toString()}`);
+    }
+
+    const parallelBenchDir = join(tmp, "bench-parallel");
+    mkdirSync(parallelBenchDir);
+    writeFileSync(join(parallelBenchDir, "goccia.json"), '{"unsafe-ffi": true}\n');
+    for (const name of ["a", "b"]) {
+      writeFileSync(
+        join(parallelBenchDir, `${name}.js`),
+        [
+          `suite("unsafe-ffi-${name}", () => {`,
+          '  bench("global", {',
+          "    run: () => {",
+          '      if (typeof FFI !== "object") throw new Error("FFI missing");',
+          "      return FFI.suffix;",
+          "    },",
+          "  });",
+          "});",
+        ].join("\n") + "\n",
+      );
+    }
+    const benchParallel = Bun.spawnSync(
+      [resolve(BENCHRUNNER), parallelBenchDir, "--jobs=2", "--no-progress"],
+      {
+        stdout: "pipe",
+        stderr: "pipe",
+        env: { ...process.env, GOCCIA_BENCH_CALIBRATION_MS: "50", GOCCIA_BENCH_ROUNDS: "3" } as Record<string, string>,
+        timeout: 60_000,
+      },
+    );
+    if (benchParallel.exitCode !== 0)
+      throw new Error(`BenchmarkRunner parallel unsafe-ffi config exited ${benchParallel.exitCode}: ${benchParallel.stderr.toString()}`);
+
+    const replOut = runCwd(REPL, [`--config=${join(tmp, "goccia.json")}`], tmp, {
+      stdin: "typeof FFI;\n",
+    });
+    if (!replOut.combined.includes("object")) throw new Error(`REPL unsafe-ffi config should expose FFI, got: ${replOut.combined}`);
+  } finally {
+    clean(tmp);
+    clean(noConfigDir);
+  }
+}
+
+// -- Per-file compat-var config across all apps --------------------------------
 
 console.log("Per-file compat-var config across all apps...");
 {

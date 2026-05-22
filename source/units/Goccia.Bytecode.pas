@@ -57,7 +57,13 @@ const
   //               own data properties instead of assigning through prototypes.
   //   v33 -> v34: added OP_DEFINE_METHOD_PROP so concise object methods get
   //               [[HomeObject]] without affecting plain data properties.
-  GOCCIA_FORMAT_VERSION = 34;
+  //   v34 -> v35: added OP_DEFINE_PROP_DYNAMIC for computed public
+  //               class fields.
+  //   v35 -> v36: added OP_TO_PROPERTY_KEY so delayed computed class field
+  //               definitions can reuse source-order property keys.
+  //   v36 -> v37: added OP_SETUP_AUTO_ACCESSOR_DYNAMIC for computed
+  //               auto-accessor keys.
+  GOCCIA_FORMAT_VERSION = 37;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
@@ -222,12 +228,14 @@ type
     OP_DEFINE_STATIC_METHOD_CONST = 124,
     OP_DEFINE_DATA_PROP = 125,
     OP_DEFINE_METHOD_PROP = 126,
+    OP_DEFINE_PROP_DYNAMIC = 127,
     OP_ADD           = 128,
     OP_SUB           = 129,
     OP_MUL           = 130,
     OP_DIV           = 131,
     OP_MOD           = 132,
     OP_POW           = 133,
+    OP_SETUP_AUTO_ACCESSOR_DYNAMIC = 134,
     OP_BAND          = 135,
     OP_BOR           = 136,
     OP_BXOR          = 137,
@@ -251,7 +259,8 @@ type
     OP_NEW_TARGET    = 181,
     OP_CREATE_ARGUMENTS = 182,
     OP_TO_OBJECT     = 183,
-    OP_HAS_WITH_BINDING = 184
+    OP_HAS_WITH_BINDING = 184,
+    OP_TO_PROPERTY_KEY = 185
   );
 
 function EncodeABC(const AOp: TGocciaOpCode; const A, B, C: UInt8): UInt32; inline;

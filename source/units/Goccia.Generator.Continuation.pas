@@ -58,7 +58,7 @@ type
     gflpIterStart,  // Between iterations: snapshot HeaderScope and create IterScope
     gflpTest,       // IterScope is committed and the test is mid-execution
     gflpBody,       // Test passed and body is mid-execution
-    gflpUpdate      // Body completed and IterScope was synced back; update is mid-execution
+    gflpUpdate      // Body completed and UpdateScope is mid-execution
   );
 
   TGocciaGeneratorForLoopState = class
@@ -66,6 +66,7 @@ type
     Phase: TGocciaGeneratorForLoopPhase;
     HeaderScope: TGocciaScope;  // nil for non-lexical for-loops
     IterScope: TGocciaScope;    // non-nil while test/body is active for lexical loops
+    UpdateScope: TGocciaScope;  // non-nil while update is active for lexical loops
     constructor Create(const AHeaderScope: TGocciaScope);
     procedure MarkReferences;
   end;
@@ -121,6 +122,7 @@ type
       const AContext: TGocciaEvaluationContext): TGocciaValue;
     procedure SaveCompletedExpressionValue(const AExpression: TObject; const AValue: TGocciaValue);
     function TakeCompletedExpressionValue(const AExpression: TObject; out AValue: TGocciaValue): Boolean;
+    procedure ClearCompletedExpressionValue(const AExpression: TObject);
     procedure SaveExpressionValue(const AExpression: TObject; const AValue: TGocciaValue);
     function TakeExpressionValue(const AExpression: TObject; out AValue: TGocciaValue): Boolean;
     procedure ClearExpressionValue(const AExpression: TObject);
@@ -253,6 +255,7 @@ begin
   Phase := gflpIterStart;
   HeaderScope := AHeaderScope;
   IterScope := nil;
+  UpdateScope := nil;
 end;
 
 procedure TGocciaGeneratorForLoopState.MarkReferences;
@@ -261,6 +264,8 @@ begin
     HeaderScope.MarkReferences;
   if Assigned(IterScope) then
     IterScope.MarkReferences;
+  if Assigned(UpdateScope) then
+    UpdateScope.MarkReferences;
 end;
 
 constructor TGocciaAsyncFromSyncIteratorValue.Create(const AIterator: TGocciaIteratorValue);
@@ -964,6 +969,12 @@ begin
   if Result then
     // Consume replayed completed values; statement completion clears the rest.
     FCompletedExpressionValues.Remove(AExpression);
+end;
+
+procedure TGocciaGeneratorContinuation.ClearCompletedExpressionValue(
+  const AExpression: TObject);
+begin
+  FCompletedExpressionValues.Remove(AExpression);
 end;
 
 procedure TGocciaGeneratorContinuation.SaveExpressionValue(

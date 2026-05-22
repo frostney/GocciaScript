@@ -19,6 +19,15 @@ test("async function expression", async () => {
   expect(result).toBe("hello");
 });
 
+test("named async function expression source text starts at async keyword", () => {
+  const source = (async function getValue(value) {
+    return value;
+  }).toString();
+
+  expect(source.startsWith("async function getValue(value)")).toBe(true);
+  expect(source.includes("return value")).toBe(true);
+});
+
 test("async function with await", async () => {
   async function delayed() {
     const value = await Promise.resolve(10);

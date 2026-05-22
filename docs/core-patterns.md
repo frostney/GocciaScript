@@ -361,7 +361,7 @@ This keeps the evaluator fully reentrant — all dependencies are explicit, maki
 - **Loader profile** — `TGocciaLoaderRuntimeProfile` installs the ordinary CLI host surface: console, host globals, structured data modules, text assets, performance, text encoding, URL/fetch, and SemVer.
 - **Testing** — The GocciaTestRunner installs `TGocciaTestingLibraryRuntimeExtension` to inject `describe`, `test`, and `expect` without polluting the loader runtime.
 - **Benchmarking** — The GocciaBenchmarkRunner installs `TGocciaBenchmarkRuntimeExtension` to inject `suite` and `bench`.
-- **FFI** — `TGocciaFFIRuntimeExtension` enables the Foreign Function Interface for calling native shared libraries, and CLI tools install it only for `--unsafe-ffi`.
+- **FFI** — `TGocciaFFIRuntimeExtension` enables the Foreign Function Interface for calling native shared libraries, and CLI tools install it for `--unsafe-ffi` or `"unsafe-ffi": true` in config.
 
 ### Global Function Placement
 

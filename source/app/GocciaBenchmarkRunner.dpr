@@ -222,6 +222,7 @@ type
       const AReports: array of TReportSpec;
       const AMode: TGocciaExecutionMode; const AShowProgress: Boolean);
     procedure InitializeRuntime(const AEngine: TGocciaEngine);
+    procedure InitializeRuntimeWithUnsafeFFI(const AEngine: TGocciaEngine);
   protected
     procedure Configure; override;
     procedure Validate; override;
@@ -976,7 +977,10 @@ begin
         SetLength(WorkerData[I].Entries, 0);
       end;
 
-      EnsureSharedPrototypesInitialized(InitializeRuntime);
+      if AnyFileConfigEnablesFlag(Files, EngineOptions.UnsafeFFI) then
+        EnsureSharedPrototypesInitialized(InitializeRuntimeWithUnsafeFFI)
+      else
+        EnsureSharedPrototypesInitialized(InitializeRuntime);
 
       BeginCLIJSONMemoryMeasurement(MemoryMeasurement);
       WallClockStart := GetNanoseconds;
@@ -1138,6 +1142,9 @@ var
 begin
   InitializeRuntime(AEngine);
   Runtime := GetRuntime(AEngine);
+  if Assigned(EngineOptions) and
+     ResolveFlagOption(EngineOptions.UnsafeFFI, AFileConfig) then
+    Runtime.Install(TGocciaFFIRuntimeExtension.Create);
   ConsoleExtension := TGocciaConsoleRuntimeExtension(
     Runtime.FindRuntimeExtension(TGocciaConsoleRuntimeExtension));
   if LogFileOpen and Assigned(ConsoleExtension) and
@@ -1151,8 +1158,13 @@ var
 begin
   Runtime := AttachRuntime(AEngine);
   TGocciaBenchmarkRunnerRuntimeProfile.Apply(Runtime);
-  if Assigned(EngineOptions) and EngineOptions.UnsafeFFI.Present then
-    Runtime.Install(TGocciaFFIRuntimeExtension.Create);
+end;
+
+procedure TBenchmarkRunnerApp.InitializeRuntimeWithUnsafeFFI(
+  const AEngine: TGocciaEngine);
+begin
+  InitializeRuntime(AEngine);
+  GetRuntime(AEngine).Install(TGocciaFFIRuntimeExtension.Create);
 end;
 
 procedure TBenchmarkRunnerApp.ExecuteWithPaths(const APaths: TStringList);

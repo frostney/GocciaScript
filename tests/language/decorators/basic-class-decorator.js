@@ -78,4 +78,26 @@ describe("class decorators", () => {
     expect(c.x).toBe(1);
     expect(c.wrapped).toBe(true);
   });
+
+  test("static field decorator initializer runs before class replacement", () => {
+    let observedOriginalValue;
+    const field = (value, context) => {
+      return (initialValue) => initialValue + 1;
+    };
+    const replace = (cls, context) => {
+      observedOriginalValue = cls.value;
+      return class Replacement {
+        static value = 100;
+      };
+    };
+
+    @replace
+    class C {
+      @field
+      static value = 41;
+    }
+
+    expect(observedOriginalValue).toBe(42);
+    expect(C.value).toBe(100);
+  });
 });

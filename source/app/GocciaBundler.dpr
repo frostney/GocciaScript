@@ -212,24 +212,23 @@ begin
   { Resolve ASI and compatibility flags: CLI flag > per-file config >
     root config > default (false). }
   FileConfig := DiscoverFileConfig(AFileName);
-  EffectiveASI := ResolveFlagOption(EngineOptions.ASI, FileConfig, 'asi');
+  EffectiveASI := ResolveFlagOption(EngineOptions.ASI, FileConfig);
   EffectiveVar := ResolveFlagOption(
-    EngineOptions.CompatVar, FileConfig, 'compat-var');
+    EngineOptions.CompatVar, FileConfig);
   EffectiveFunction := ResolveFlagOption(
-    EngineOptions.CompatFunction, FileConfig, 'compat-function');
+    EngineOptions.CompatFunction, FileConfig);
   EffectiveTraditionalFor := ResolveFlagOption(
-    EngineOptions.CompatTraditionalFor, FileConfig,
-    'compat-traditional-for-loop');
+    EngineOptions.CompatTraditionalFor, FileConfig);
   EffectiveWhileLoops := ResolveFlagOption(
-    EngineOptions.CompatWhileLoops, FileConfig, 'compat-while-loops');
+    EngineOptions.CompatWhileLoops, FileConfig);
   EffectiveLooseEquality := ResolveFlagOption(
-    EngineOptions.CompatLooseEquality, FileConfig, 'compat-loose-equality');
+    EngineOptions.CompatLooseEquality, FileConfig);
   EffectiveNonStrictMode := ResolveFlagOption(
-    EngineOptions.CompatNonStrictMode, FileConfig, 'compat-non-strict-mode');
+    EngineOptions.CompatNonStrictMode, FileConfig);
   EffectiveSourceType := ResolveSourceTypeOption(EngineOptions.SourceType,
     FileConfig);
   EffectiveStrictTypes := ResolveFlagOption(
-    EngineOptions.StrictTypes, FileConfig, 'strict-types');
+    EngineOptions.StrictTypes, FileConfig);
 
   CompiledModule := nil;
   ProgramNode := ParseSource(ASource, AFileName, EffectiveASI, EffectiveVar,
