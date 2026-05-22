@@ -996,6 +996,7 @@ var
   CallArgs: TGocciaArgumentsCollection;
   KeyValue: TGocciaValue;
   I: Integer;
+  ItemsRoot, ResultRoot: TGocciaTempRoot;
 begin
   TGocciaArgumentValidator.RequireExactly(AArgs, 2, 'Object.groupBy', ThrowError);
 
@@ -1010,39 +1011,46 @@ begin
   // Step 2: Let obj be OrdinaryObjectCreate(null)
   ResultObj := TGocciaObjectValue.Create;
   ResultObj.Prototype := nil;
+  AddTempRootIfNeeded(ItemsRoot, Items);
+  AddTempRootIfNeeded(ResultRoot, ResultObj);
+  try
 
-  // Step 3: For each Record { [[Key]], [[Elements]] } g of groups
-  I := 0;
-  while I < Items.Elements.Count do
-  begin
-    CallArgs := TGocciaArgumentsCollection.Create;
-    try
-      CallArgs.Add(Items.Elements[I]);
-      CallArgs.Add(TGocciaNumberLiteralValue.Create(I));
-
-      KeyValue := InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
-    finally
-      CallArgs.Free;
-    end;
-
-    GroupKey := KeyValue.ToStringLiteral.Value;
-
-    if ResultObj.HasOwnProperty(GroupKey) then
-      GroupArray := TGocciaArrayValue(ResultObj.GetProperty(GroupKey))
-    else
+    // Step 3: For each Record { [[Key]], [[Elements]] } g of groups
+    I := 0;
+    while I < Items.Elements.Count do
     begin
-      // Step 3a: Let elements be CreateArrayFromList(g.[[Elements]])
-      GroupArray := TGocciaArrayValue.Create;
-      // Step 3b: Perform ! CreateDataPropertyOrThrow(obj, g.[[Key]], elements)
-      ResultObj.AssignProperty(GroupKey, GroupArray);
+      CallArgs := TGocciaArgumentsCollection.Create;
+      try
+        CallArgs.Add(Items.Elements[I]);
+        CallArgs.Add(TGocciaNumberLiteralValue.Create(I));
+
+        KeyValue := InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+      finally
+        CallArgs.Free;
+      end;
+
+      GroupKey := KeyValue.ToStringLiteral.Value;
+
+      if ResultObj.HasOwnProperty(GroupKey) then
+        GroupArray := TGocciaArrayValue(ResultObj.GetProperty(GroupKey))
+      else
+      begin
+        // Step 3a: Let elements be CreateArrayFromList(g.[[Elements]])
+        GroupArray := TGocciaArrayValue.Create;
+        // Step 3b: Perform ! CreateDataPropertyOrThrow(obj, g.[[Key]], elements)
+        ResultObj.AssignProperty(GroupKey, GroupArray);
+      end;
+
+      GroupArray.Elements.Add(Items.Elements[I]);
+      Inc(I);
     end;
 
-    GroupArray.Elements.Add(Items.Elements[I]);
-    Inc(I);
+    // Step 4: Return obj
+    Result := ResultObj;
+  finally
+    RemoveTempRootIfNeeded(ResultRoot);
+    RemoveTempRootIfNeeded(ItemsRoot);
   end;
-
-  // Step 4: Return obj
-  Result := ResultObj;
 end;
 
 end.

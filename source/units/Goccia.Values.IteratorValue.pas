@@ -76,6 +76,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.Realm,
+  Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
@@ -134,7 +135,7 @@ var
 begin
   CallArgs := TGocciaArgumentsCollection.Create([AValue, TGocciaNumberLiteralValue.Create(AIndex)]);
   try
-    Result := TGocciaFunctionBase(ACallback).Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+    Result := InvokeCallable(ACallback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
   finally
     CallArgs.Free;
   end;
@@ -469,7 +470,8 @@ begin
         begin
           CallArgs := TGocciaArgumentsCollection.Create([Accumulator, Value, TGocciaNumberLiteralValue.Create(Index)]);
           try
-            NewAccumulator := TGocciaFunctionBase(Callback).Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+            NewAccumulator := InvokeCallable(Callback, CallArgs,
+              TGocciaUndefinedLiteralValue.UndefinedValue);
           finally
             CallArgs.Free;
           end;

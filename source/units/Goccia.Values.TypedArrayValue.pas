@@ -161,6 +161,7 @@ uses
   Goccia.Float16,
   Goccia.GarbageCollector,
   Goccia.Realm,
+  Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.BigIntValue,
   Goccia.Values.ErrorHelper,
@@ -1144,7 +1145,13 @@ end;
 function InvokeCallback(const ACallback: TGocciaValue; const AElement, AIndex, AArray, AThisArg: TGocciaValue): TGocciaValue;
 var
   Args: TGocciaArgumentsCollection;
+  CallbackRoot, ElementRoot, IndexRoot, ArrayRoot, ThisRoot: TGocciaTempRoot;
 begin
+  AddTempRootIfNeeded(CallbackRoot, ACallback);
+  AddTempRootIfNeeded(ElementRoot, AElement);
+  AddTempRootIfNeeded(IndexRoot, AIndex);
+  AddTempRootIfNeeded(ArrayRoot, AArray);
+  AddTempRootIfNeeded(ThisRoot, AThisArg);
   Args := TGocciaArgumentsCollection.Create;
   try
     Args.Add(AElement);
@@ -1153,6 +1160,11 @@ begin
     Result := TGocciaFunctionBase(ACallback).Call(Args, AThisArg);
   finally
     Args.Free;
+    RemoveTempRootIfNeeded(ThisRoot);
+    RemoveTempRootIfNeeded(ArrayRoot);
+    RemoveTempRootIfNeeded(IndexRoot);
+    RemoveTempRootIfNeeded(ElementRoot);
+    RemoveTempRootIfNeeded(CallbackRoot);
   end;
 end;
 
@@ -1512,6 +1524,7 @@ var
   ZeroJ: Double;
   ZeroJBits: Int64 absolute ZeroJ;
   TmpZeroBits: Int64 absolute Tmp;
+  ArrayRoot: TGocciaTempRoot;
 begin
   TA := RequireAttachedTypedArray(AThisValue, 'TypedArray.prototype.sort');
   HasCompare := (AArgs.Length > 0) and AArgs.GetElement(0).IsCallable;
@@ -1540,7 +1553,13 @@ begin
               CompareArgs.Add(TGocciaBigIntValue.Create(TBigInteger.FromInt64(TA.ReadBigIntElement(J))));
               CompareArgs.Add(TGocciaBigIntValue.Create(TBigInteger.FromInt64(TmpBig)));
             end;
-            CompareResult := TGocciaFunctionBase(AArgs.GetElement(0)).Call(CompareArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+            AddTempRootIfNeeded(ArrayRoot, TA);
+            try
+              CompareResult := InvokeCallable(AArgs.GetElement(0), CompareArgs,
+                TGocciaUndefinedLiteralValue.UndefinedValue);
+            finally
+              RemoveTempRootIfNeeded(ArrayRoot);
+            end;
             CompResult := CompareResult.ToNumberLiteral.Value;
           finally
             CompareArgs.Free;
@@ -1617,7 +1636,13 @@ begin
         try
           CompareArgs.Add(TGocciaNumberLiteralValue.Create(TA.ReadElement(J)));
           CompareArgs.Add(TGocciaNumberLiteralValue.Create(Tmp));
-          CompareResult := TGocciaFunctionBase(AArgs.GetElement(0)).Call(CompareArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+          AddTempRootIfNeeded(ArrayRoot, TA);
+          try
+            CompareResult := InvokeCallable(AArgs.GetElement(0), CompareArgs,
+              TGocciaUndefinedLiteralValue.UndefinedValue);
+          finally
+            RemoveTempRootIfNeeded(ArrayRoot);
+          end;
           CompResult := CompareResult.ToNumberLiteral.Value;
         finally
           CompareArgs.Free;
@@ -1918,6 +1943,7 @@ var
   TA, NewTA: TGocciaTypedArrayValue;
   I: Integer;
   CallResult, ThisArg: TGocciaValue;
+  ResultRoot: TGocciaTempRoot;
 begin
   TA := RequireAttachedTypedArray(AThisValue, 'TypedArray.prototype.map');
   if (AArgs.Length = 0) or not AArgs.GetElement(0).IsCallable then
@@ -1927,14 +1953,19 @@ begin
   else
     ThisArg := TGocciaUndefinedLiteralValue.UndefinedValue;
   NewTA := CreateSameKindArray(TA, TA.FLength);
-  for I := 0 to TA.FLength - 1 do
-  begin
-    CallResult := InvokeCallback(AArgs.GetElement(0),
-      TA.GetElementAsValue(I),
-      TGocciaNumberLiteralValue.Create(I), AThisValue, ThisArg);
-    NewTA.WriteValueToElement(I, CallResult);
+  AddTempRootIfNeeded(ResultRoot, NewTA);
+  try
+    for I := 0 to TA.FLength - 1 do
+    begin
+      CallResult := InvokeCallback(AArgs.GetElement(0),
+        TA.GetElementAsValue(I),
+        TGocciaNumberLiteralValue.Create(I), AThisValue, ThisArg);
+      NewTA.WriteValueToElement(I, CallResult);
+    end;
+    Result := NewTA;
+  finally
+    RemoveTempRootIfNeeded(ResultRoot);
   end;
-  Result := NewTA;
 end;
 
 // ES2026 §23.2.3.9 %TypedArray%.prototype.filter(callbackfn [, thisArg])
@@ -2012,7 +2043,8 @@ begin
       CallArgs.Add(TA.GetElementAsValue(I));
       CallArgs.Add(TGocciaNumberLiteralValue.Create(I));
       CallArgs.Add(AThisValue);
-      Accumulator := TGocciaFunctionBase(AArgs.GetElement(0)).Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+      Accumulator := InvokeCallable(AArgs.GetElement(0), CallArgs,
+        TGocciaUndefinedLiteralValue.UndefinedValue);
     finally
       CallArgs.Free;
     end;
@@ -2054,7 +2086,8 @@ begin
       CallArgs.Add(TA.GetElementAsValue(I));
       CallArgs.Add(TGocciaNumberLiteralValue.Create(I));
       CallArgs.Add(AThisValue);
-      Accumulator := TGocciaFunctionBase(AArgs.GetElement(0)).Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+      Accumulator := InvokeCallable(AArgs.GetElement(0), CallArgs,
+        TGocciaUndefinedLiteralValue.UndefinedValue);
     finally
       CallArgs.Free;
     end;
@@ -2465,7 +2498,6 @@ var
   SrcTA: TGocciaTypedArrayValue;
   NewTA: TGocciaTypedArrayValue;
   HasMapFn: Boolean;
-  MapFn: TGocciaFunctionBase;
   MapFnArg: TGocciaValue;
   ThisArg: TGocciaValue;
   I, Len: Integer;
@@ -2475,138 +2507,162 @@ var
   IterResult: TGocciaObjectValue;
   Values: TGocciaValueList;
   SrcObj: TGocciaObjectValue;
+  SourceRoot, ResultRoot: TGocciaTempRoot;
 begin
   if AArgs.Length = 0 then
     ThrowTypeError(SErrorTypedArrayFromRequiresArg, SSuggestTypedArraySetSource);
   Source := AArgs.GetElement(0);
   HasMapFn := False;
-  MapFn := nil;
   if (AArgs.Length > 1) and not (AArgs.GetElement(1) is TGocciaUndefinedLiteralValue) then
   begin
     MapFnArg := AArgs.GetElement(1);
     if not MapFnArg.IsCallable then
       ThrowTypeError(SErrorTypedArrayFromMapFn, SSuggestTypedArrayCallable);
     HasMapFn := True;
-    MapFn := TGocciaFunctionBase(MapFnArg);
   end;
   if AArgs.Length > 2 then
     ThisArg := AArgs.GetElement(2)
   else
     ThisArg := TGocciaUndefinedLiteralValue.UndefinedValue;
 
-  // ES2026 §23.2.2.1 step 5: GetMethod(source, @@iterator) before type fast paths
-  Iterator := GetIteratorFromValue(Source);
-  if Assigned(Iterator) then
-  begin
-    Values := TGocciaValueList.Create(False);
-    try
-      TGarbageCollector.Instance.AddTempRoot(Iterator);
+  AddTempRootIfNeeded(SourceRoot, Source);
+  try
+    // ES2026 §23.2.2.1 step 5: GetMethod(source, @@iterator) before type fast paths
+    Iterator := GetIteratorFromValue(Source);
+    if Assigned(Iterator) then
+    begin
+      Values := TGocciaValueList.Create(False);
       try
+        TGarbageCollector.Instance.AddTempRoot(Iterator);
         try
-          IterResult := Iterator.AdvanceNext;
-          while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
-          begin
-            Values.Add(IterResult.GetProperty(PROP_VALUE));
+          try
             IterResult := Iterator.AdvanceNext;
+            while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
+            begin
+              Values.Add(IterResult.GetProperty(PROP_VALUE));
+              IterResult := Iterator.AdvanceNext;
+            end;
+          except
+            AcquireExceptionObject;
+            CloseIteratorPreservingError(Iterator);
+            raise;
           end;
-        except
-          AcquireExceptionObject;
-          CloseIteratorPreservingError(Iterator);
-          raise;
+        finally
+          TGarbageCollector.Instance.RemoveTempRoot(Iterator);
+        end;
+        NewTA := TGocciaTypedArrayValue.Create(FKind, Values.Count);
+        AddTempRootIfNeeded(ResultRoot, NewTA);
+        try
+          for I := 0 to Values.Count - 1 do
+          begin
+            Val := Values[I];
+            if HasMapFn then
+            begin
+              MapArgs := TGocciaArgumentsCollection.Create;
+              try
+                MapArgs.Add(Val);
+                MapArgs.Add(TGocciaNumberLiteralValue.Create(I));
+                Val := InvokeCallable(MapFnArg, MapArgs, ThisArg);
+              finally
+                MapArgs.Free;
+              end;
+            end;
+            NewTA.WriteValueToElement(I, Val);
+          end;
+        finally
+          RemoveTempRootIfNeeded(ResultRoot);
         end;
       finally
-        TGarbageCollector.Instance.RemoveTempRoot(Iterator);
+        Values.Free;
       end;
-      NewTA := TGocciaTypedArrayValue.Create(FKind, Values.Count);
-      for I := 0 to Values.Count - 1 do
+      Exit(NewTA);
+    end;
+
+    if Source is TGocciaTypedArrayValue then
+    begin
+      SrcTA := TGocciaTypedArrayValue(Source);
+      NewTA := TGocciaTypedArrayValue.Create(FKind, SrcTA.Length);
+      AddTempRootIfNeeded(ResultRoot, NewTA);
+      try
+        for I := 0 to SrcTA.Length - 1 do
+        begin
+          Val := SrcTA.GetElementAsValue(I);
+          if HasMapFn then
+          begin
+            MapArgs := TGocciaArgumentsCollection.Create;
+            try
+              MapArgs.Add(Val);
+              MapArgs.Add(TGocciaNumberLiteralValue.Create(I));
+              Val := InvokeCallable(MapFnArg, MapArgs, ThisArg);
+            finally
+              MapArgs.Free;
+            end;
+          end;
+          NewTA.WriteValueToElement(I, Val);
+        end;
+      finally
+        RemoveTempRootIfNeeded(ResultRoot);
+      end;
+      Exit(NewTA);
+    end;
+
+    if Source is TGocciaArrayValue then
+    begin
+      SrcArr := TGocciaArrayValue(Source);
+      NewTA := TGocciaTypedArrayValue.Create(FKind, SrcArr.Elements.Count);
+      AddTempRootIfNeeded(ResultRoot, NewTA);
+      try
+        for I := 0 to SrcArr.Elements.Count - 1 do
+        begin
+          Val := SrcArr.Elements[I];
+          if HasMapFn then
+          begin
+            MapArgs := TGocciaArgumentsCollection.Create;
+            try
+              MapArgs.Add(Val);
+              MapArgs.Add(TGocciaNumberLiteralValue.Create(I));
+              Val := InvokeCallable(MapFnArg, MapArgs, ThisArg);
+            finally
+              MapArgs.Free;
+            end;
+          end;
+          NewTA.WriteValueToElement(I, Val);
+        end;
+      finally
+        RemoveTempRootIfNeeded(ResultRoot);
+      end;
+      Exit(NewTA);
+    end;
+
+    // Step 7: array-like path — ToObject(source), LengthOfArrayLike, indexed Get
+    SrcObj := ToObject(Source);
+    Len := LengthOfArrayLike(SrcObj);
+    NewTA := TGocciaTypedArrayValue.Create(FKind, Len);
+    AddTempRootIfNeeded(ResultRoot, NewTA);
+    try
+      for I := 0 to Len - 1 do
       begin
-        Val := Values[I];
+        Val := SrcObj.GetProperty(IntToStr(I));
         if HasMapFn then
         begin
           MapArgs := TGocciaArgumentsCollection.Create;
           try
             MapArgs.Add(Val);
             MapArgs.Add(TGocciaNumberLiteralValue.Create(I));
-            Val := MapFn.Call(MapArgs, ThisArg);
+            Val := InvokeCallable(MapFnArg, MapArgs, ThisArg);
           finally
             MapArgs.Free;
           end;
         end;
         NewTA.WriteValueToElement(I, Val);
       end;
+      Result := NewTA;
     finally
-      Values.Free;
+      RemoveTempRootIfNeeded(ResultRoot);
     end;
-    Exit(NewTA);
+  finally
+    RemoveTempRootIfNeeded(SourceRoot);
   end;
-
-  if Source is TGocciaTypedArrayValue then
-  begin
-    SrcTA := TGocciaTypedArrayValue(Source);
-    NewTA := TGocciaTypedArrayValue.Create(FKind, SrcTA.Length);
-    for I := 0 to SrcTA.Length - 1 do
-    begin
-      Val := SrcTA.GetElementAsValue(I);
-      if HasMapFn then
-      begin
-        MapArgs := TGocciaArgumentsCollection.Create;
-        try
-          MapArgs.Add(Val);
-          MapArgs.Add(TGocciaNumberLiteralValue.Create(I));
-          Val := MapFn.Call(MapArgs, ThisArg);
-        finally
-          MapArgs.Free;
-        end;
-      end;
-      NewTA.WriteValueToElement(I, Val);
-    end;
-    Exit(NewTA);
-  end;
-
-  if Source is TGocciaArrayValue then
-  begin
-    SrcArr := TGocciaArrayValue(Source);
-    NewTA := TGocciaTypedArrayValue.Create(FKind, SrcArr.Elements.Count);
-    for I := 0 to SrcArr.Elements.Count - 1 do
-    begin
-      Val := SrcArr.Elements[I];
-      if HasMapFn then
-      begin
-        MapArgs := TGocciaArgumentsCollection.Create;
-        try
-          MapArgs.Add(Val);
-          MapArgs.Add(TGocciaNumberLiteralValue.Create(I));
-          Val := MapFn.Call(MapArgs, ThisArg);
-        finally
-          MapArgs.Free;
-        end;
-      end;
-      NewTA.WriteValueToElement(I, Val);
-    end;
-    Exit(NewTA);
-  end;
-
-  // Step 7: array-like path — ToObject(source), LengthOfArrayLike, indexed Get
-  SrcObj := ToObject(Source);
-  Len := LengthOfArrayLike(SrcObj);
-  NewTA := TGocciaTypedArrayValue.Create(FKind, Len);
-  for I := 0 to Len - 1 do
-  begin
-    Val := SrcObj.GetProperty(IntToStr(I));
-    if HasMapFn then
-    begin
-      MapArgs := TGocciaArgumentsCollection.Create;
-      try
-        MapArgs.Add(Val);
-        MapArgs.Add(TGocciaNumberLiteralValue.Create(I));
-        Val := MapFn.Call(MapArgs, ThisArg);
-      finally
-        MapArgs.Free;
-      end;
-    end;
-    NewTA.WriteValueToElement(I, Val);
-  end;
-  Result := NewTA;
 end;
 
 // ES2026 §23.2.2.2 %TypedArray%.of(...items)

@@ -33,6 +33,11 @@ type
   TGCManagedObjectList = TObjectList<TGCManagedObject>;
   TGCObjectSet = THashMap<TGCManagedObject, Boolean>;
 
+  TGocciaTempRoot = record
+    ObjectValue: TGCManagedObject;
+    Added: Boolean;
+  end;
+
   TGarbageCollector = class
   private
     FManagedObjects: TGCManagedObjectList;
@@ -151,6 +156,9 @@ const
   MAX_BYTES_CAP_32BIT = 700 * 1024 * 1024;          { 700 MB cap for 32-bit }
 
 function DetectDefaultMaxBytes: Int64;
+procedure AddTempRootIfNeeded(var ARoot: TGocciaTempRoot;
+  const AObject: TGCManagedObject);
+procedure RemoveTempRootIfNeeded(var ARoot: TGocciaTempRoot);
 
 implementation
 
@@ -231,6 +239,35 @@ begin
   if Assigned(GC) then
     GC.UnregisterObject(Self);
   inherited;
+end;
+
+procedure AddTempRootIfNeeded(var ARoot: TGocciaTempRoot;
+  const AObject: TGCManagedObject);
+var
+  GC: TGarbageCollector;
+begin
+  ARoot.ObjectValue := AObject;
+  ARoot.Added := False;
+  GC := TGarbageCollector.Instance;
+  if Assigned(GC) and Assigned(AObject) and not GC.IsTempRoot(AObject) then
+  begin
+    GC.AddTempRoot(AObject);
+    ARoot.Added := True;
+  end;
+end;
+
+procedure RemoveTempRootIfNeeded(var ARoot: TGocciaTempRoot);
+var
+  GC: TGarbageCollector;
+begin
+  if ARoot.Added then
+  begin
+    GC := TGarbageCollector.Instance;
+    if Assigned(GC) then
+      GC.RemoveTempRoot(ARoot.ObjectValue);
+  end;
+  ARoot.ObjectValue := nil;
+  ARoot.Added := False;
 end;
 
 { TGarbageCollector }

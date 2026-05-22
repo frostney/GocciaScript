@@ -230,15 +230,31 @@ function InvokeArrayCallback(const ACallback: TGocciaValue;
   const AThisArg: TGocciaValue): TGocciaValue; inline;
 var
   PreviousContinuation: TGocciaGeneratorContinuation;
+  CallbackRoot, ThisRoot: TGocciaTempRoot;
+  ArgRoots: array of TGocciaTempRoot;
+  I: Integer;
 begin
+  AddTempRootIfNeeded(CallbackRoot, ACallback);
+  AddTempRootIfNeeded(ThisRoot, AThisArg);
+  SetLength(ArgRoots, ACallArgs.Length);
+  for I := 0 to High(ArgRoots) do
+    AddTempRootIfNeeded(ArgRoots[I], ACallArgs.GetElement(I));
   PreviousContinuation := SuspendCurrentGeneratorContinuation;
   try
-    if Assigned(ATypedCallback) then
-      Result := ATypedCallback.Call(ACallArgs, AThisArg)
-    else
-      Result := InvokeCallable(ACallback, ACallArgs, AThisArg);
+    try
+      if Assigned(ATypedCallback) then
+        Result := ATypedCallback.Call(ACallArgs, AThisArg)
+      else
+        Result := InvokeCallable(ACallback, ACallArgs, AThisArg);
+    finally
+      RestoreCurrentGeneratorContinuation(PreviousContinuation);
+    end;
   finally
-    RestoreCurrentGeneratorContinuation(PreviousContinuation);
+    for I := High(ArgRoots) downto 0 do
+      RemoveTempRootIfNeeded(ArgRoots[I]);
+    SetLength(ArgRoots, 0);
+    RemoveTempRootIfNeeded(ThisRoot);
+    RemoveTempRootIfNeeded(CallbackRoot);
   end;
 end;
 
@@ -779,14 +795,26 @@ function CallCompareFunc(const ACompareFunc: TGocciaFunctionBase; const ACallArg
 var
   CompResult: TGocciaNumberLiteralValue;
   PreviousContinuation: TGocciaGeneratorContinuation;
+  CompareRoot, AValueRoot, BValueRoot, ThisRoot: TGocciaTempRoot;
 begin
   ACallArgs.SetElement(0, A);
   ACallArgs.SetElement(1, B);
+  AddTempRootIfNeeded(CompareRoot, ACompareFunc);
+  AddTempRootIfNeeded(AValueRoot, A);
+  AddTempRootIfNeeded(BValueRoot, B);
+  AddTempRootIfNeeded(ThisRoot, AThisValue);
   PreviousContinuation := SuspendCurrentGeneratorContinuation;
   try
-    CompResult := ACompareFunc.Call(ACallArgs, AThisValue).ToNumberLiteral;
+    try
+      CompResult := ACompareFunc.Call(ACallArgs, AThisValue).ToNumberLiteral;
+    finally
+      RestoreCurrentGeneratorContinuation(PreviousContinuation);
+    end;
   finally
-    RestoreCurrentGeneratorContinuation(PreviousContinuation);
+    RemoveTempRootIfNeeded(ThisRoot);
+    RemoveTempRootIfNeeded(BValueRoot);
+    RemoveTempRootIfNeeded(AValueRoot);
+    RemoveTempRootIfNeeded(CompareRoot);
   end;
 
   if CompResult.IsNaN then
@@ -1099,9 +1127,8 @@ var
   TypedCallback: TGocciaFunctionBase;
   ThisArg: TGocciaValue;
   CallArgs: TGocciaArrayCallbackArgs;
-  GC: TGarbageCollector;
   I: Integer;
-  WasResultRooted: Boolean;
+  ResultRoot: TGocciaTempRoot;
 begin
   View.Init(AThisValue);
   Callback := ValidateArrayMethodCall('map', AArgs, AThisValue, True);
@@ -1117,12 +1144,8 @@ begin
     ResultArray := ArraySpeciesCreate(View.Arr, View.Len)
   else
     ResultArray := TGocciaArrayValue.Create(nil, View.Len);
-  GC := TGarbageCollector.Instance;
-  WasResultRooted := Assigned(GC) and GC.IsTempRoot(ResultArray);
-  if Assigned(GC) and not WasResultRooted then
-    GC.AddTempRoot(ResultArray);
+  AddTempRootIfNeeded(ResultRoot, ResultArray);
   try
-
     TypedCallback := nil;
     if Callback is TGocciaFunctionBase then
       TypedCallback := TGocciaFunctionBase(Callback);
@@ -1149,8 +1172,7 @@ begin
 
     Result := ResultArray;
   finally
-    if Assigned(GC) and not WasResultRooted then
-      GC.RemoveTempRoot(ResultArray);
+    RemoveTempRootIfNeeded(ResultRoot);
   end;
 end;
 
@@ -1167,6 +1189,7 @@ var
   I: Integer;
   Sparse: TArray<Int64>;
   K: Int64;
+  ResultRoot: TGocciaTempRoot;
 begin
   View.Init(AThisValue);
   Callback := ValidateArrayMethodCall('filter', AArgs, AThisValue, True);
@@ -1175,47 +1198,52 @@ begin
     ResultArray := ArraySpeciesCreate(View.Arr, 0)
   else
     ResultArray := TGocciaArrayValue.Create;
-
-  TypedCallback := nil;
-  if Callback is TGocciaFunctionBase then
-    TypedCallback := TGocciaFunctionBase(Callback);
-
-  CallArgs := TGocciaArrayCallbackArgs.Create(View.Obj);
+  AddTempRootIfNeeded(ResultRoot, ResultArray);
   try
-    if View.NeedsSparsePath then
-    begin
-      Sparse := CollectSparseIndicesInRange(View.Obj, 0, View.Len64);
-      for K in Sparse do
-      begin
-        Element := View.Get64(K);
-        CallArgs.Element := Element;
-        CallArgs.Index := TGocciaNumberLiteralValue.Create(Int64ToDouble(K));
-        PredicateResult := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
-        if PredicateResult.ToBooleanLiteral.Value then
-          ResultArray.Elements.Add(Element);
-      end;
-    end
-    else
-    begin
-      for I := 0 to View.Len - 1 do
-      begin
-        if not View.HasIndex(I) then
-          Continue;
 
-        Element := View.Get(I);
-        CallArgs.Element := Element;
-        CallArgs.Index := TGocciaNumberLiteralValue.Create(I);
-        PredicateResult := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
+    TypedCallback := nil;
+    if Callback is TGocciaFunctionBase then
+      TypedCallback := TGocciaFunctionBase(Callback);
 
-        if PredicateResult.ToBooleanLiteral.Value then
-          ResultArray.Elements.Add(Element);
+    CallArgs := TGocciaArrayCallbackArgs.Create(View.Obj);
+    try
+      if View.NeedsSparsePath then
+      begin
+        Sparse := CollectSparseIndicesInRange(View.Obj, 0, View.Len64);
+        for K in Sparse do
+        begin
+          Element := View.Get64(K);
+          CallArgs.Element := Element;
+          CallArgs.Index := TGocciaNumberLiteralValue.Create(Int64ToDouble(K));
+          PredicateResult := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
+          if PredicateResult.ToBooleanLiteral.Value then
+            ResultArray.Elements.Add(Element);
+        end;
+      end
+      else
+      begin
+        for I := 0 to View.Len - 1 do
+        begin
+          if not View.HasIndex(I) then
+            Continue;
+
+          Element := View.Get(I);
+          CallArgs.Element := Element;
+          CallArgs.Index := TGocciaNumberLiteralValue.Create(I);
+          PredicateResult := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
+
+          if PredicateResult.ToBooleanLiteral.Value then
+            ResultArray.Elements.Add(Element);
+        end;
       end;
+    finally
+      CallArgs.Free;
     end;
-  finally
-    CallArgs.Free;
-  end;
 
-  Result := ResultArray;
+    Result := ResultArray;
+  finally
+    RemoveTempRootIfNeeded(ResultRoot);
+  end;
 end;
 
 // ES2026 §23.1.3.22 Array.prototype.reduce(callbackfn [, initialValue])
@@ -1721,6 +1749,7 @@ var
   CallArgs: TGocciaArrayCallbackArgs;
   I, J: Integer;
   MappedValue: TGocciaValue;
+  ResultRoot: TGocciaTempRoot;
 begin
   View.Init(AThisValue);
   Callback := ValidateArrayMethodCall('flatMap', AArgs, AThisValue, True);
@@ -1729,40 +1758,45 @@ begin
     ResultArray := ArraySpeciesCreate(View.Arr, 0)
   else
     ResultArray := TGocciaArrayValue.Create;
-
-  TypedCallback := nil;
-  if Callback is TGocciaFunctionBase then
-    TypedCallback := TGocciaFunctionBase(Callback);
-
-  CallArgs := TGocciaArrayCallbackArgs.Create(View.Obj);
+  AddTempRootIfNeeded(ResultRoot, ResultArray);
   try
-    for I := 0 to View.Len - 1 do
-    begin
-      if not View.HasIndex(I) then
-        Continue;
 
-      CallArgs.Element := View.Get(I);
-      CallArgs.Index := TGocciaNumberLiteralValue.Create(I);
-      MappedValue := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
+    TypedCallback := nil;
+    if Callback is TGocciaFunctionBase then
+      TypedCallback := TGocciaFunctionBase(Callback);
 
-      if MappedValue is TGocciaArrayValue then
+    CallArgs := TGocciaArrayCallbackArgs.Create(View.Obj);
+    try
+      for I := 0 to View.Len - 1 do
       begin
-        // Use View-based iteration for prototype-aware access
-        MappedView.Init(MappedValue);
-        for J := 0 to MappedView.Len - 1 do
-        begin
-          if MappedView.HasIndex(J) then
-            ResultArray.Elements.Add(MappedView.Get(J));
-        end;
-      end
-      else
-        ResultArray.Elements.Add(MappedValue);
-    end;
-  finally
-    CallArgs.Free;
-  end;
+        if not View.HasIndex(I) then
+          Continue;
 
-  Result := ResultArray;
+        CallArgs.Element := View.Get(I);
+        CallArgs.Index := TGocciaNumberLiteralValue.Create(I);
+        MappedValue := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
+
+        if MappedValue is TGocciaArrayValue then
+        begin
+          // Use View-based iteration for prototype-aware access
+          MappedView.Init(MappedValue);
+          for J := 0 to MappedView.Len - 1 do
+          begin
+            if MappedView.HasIndex(J) then
+              ResultArray.Elements.Add(MappedView.Get(J));
+          end;
+        end
+        else
+          ResultArray.Elements.Add(MappedValue);
+      end;
+    finally
+      CallArgs.Free;
+    end;
+
+    Result := ResultArray;
+  finally
+    RemoveTempRootIfNeeded(ResultRoot);
+  end;
 end;
 
 // ES2026 §23.1.3.21 Array.prototype.push(...items)
@@ -2673,6 +2707,7 @@ var
   CustomSortFunction: TGocciaValue;
   I: Integer;
   CallArgs: TGocciaArgumentsCollection;
+  ReceiverRoot, ResultRoot: TGocciaTempRoot;
 begin
   // Step 1: If comparefn is not undefined and IsCallable(comparefn) is false,
   // throw a TypeError. Spec §23.1.3.34 step 1 — must run BEFORE LengthOfArrayLike
@@ -2689,27 +2724,36 @@ begin
 
   // Step 2-3: Let O be ToObject(this value); Let len be LengthOfArrayLike(O).
   View.Init(AThisValue);
-  // Step 4: Let A be ArrayCreate(len) — RangeError if len > 2^32-1
-  View.CheckArrayCreateLen;
-  ResultArray := TGocciaArrayValue.Create;
-
-  // Step 5: Copy elements from O into A
-  for I := 0 to View.Len - 1 do
-    ResultArray.Elements.Add(View.Get(I));
-
-  if not (CustomSortFunction is TGocciaUndefinedLiteralValue) then
-  begin
-    CallArgs := TGocciaArgumentsCollection.Create([nil, nil]);
+  AddTempRootIfNeeded(ReceiverRoot, View.Obj);
+  try
+    // Step 4: Let A be ArrayCreate(len) — RangeError if len > 2^32-1
+    View.CheckArrayCreateLen;
+    ResultArray := TGocciaArrayValue.Create;
+    AddTempRootIfNeeded(ResultRoot, ResultArray);
     try
-      QuickSortElements(ResultArray.Elements, TGocciaFunctionBase(CustomSortFunction), CallArgs, AThisValue, 0, ResultArray.Elements.Count - 1);
-    finally
-      CallArgs.Free;
-    end;
-  end else
-    ResultArray.Elements.Sort(TComparer<TGocciaValue>.Construct(DefaultCompare));
+      // Step 5: Copy elements from O into A
+      for I := 0 to View.Len - 1 do
+        ResultArray.Elements.Add(View.Get(I));
 
-  // Step 7: Return A
-  Result := ResultArray;
+      if not (CustomSortFunction is TGocciaUndefinedLiteralValue) then
+      begin
+        CallArgs := TGocciaArgumentsCollection.Create([nil, nil]);
+        try
+          QuickSortElements(ResultArray.Elements, TGocciaFunctionBase(CustomSortFunction), CallArgs, AThisValue, 0, ResultArray.Elements.Count - 1);
+        finally
+          CallArgs.Free;
+        end;
+      end else
+        ResultArray.Elements.Sort(TComparer<TGocciaValue>.Construct(DefaultCompare));
+
+      // Step 7: Return A
+      Result := ResultArray;
+    finally
+      RemoveTempRootIfNeeded(ResultRoot);
+    end;
+  finally
+    RemoveTempRootIfNeeded(ReceiverRoot);
+  end;
 end;
 
 // ES2026 §23.1.3.35 Array.prototype.toSpliced(start, skipCount, ...items)
@@ -3172,6 +3216,7 @@ var
   CustomSortFunction: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
   I: Integer;
+  ReceiverRoot, TempRoot: TGocciaTempRoot;
 begin
   // Step 1: If comparefn is not undefined and IsCallable(comparefn) is false,
   // throw a TypeError. Per spec §23.1.3.29 this runs BEFORE LengthOfArrayLike.
@@ -3186,33 +3231,43 @@ begin
     CustomSortFunction := TGocciaUndefinedLiteralValue.UndefinedValue;
 
   View.Init(AThisValue);
+  AddTempRootIfNeeded(ReceiverRoot, View.Obj);
+  try
 
-  // Collect only present elements via View for prototype-aware access
-  TempArr := TGocciaArrayValue.Create;
-  for I := 0 to View.Len - 1 do
-  begin
-    if View.HasIndex(I) then
-      TempArr.Elements.Add(View.Get(I));
-  end;
-
-  if not (CustomSortFunction is TGocciaUndefinedLiteralValue) then
-  begin
-    CallArgs := TGocciaArgumentsCollection.Create([nil, nil]);
+    // Collect only present elements via View for prototype-aware access
+    TempArr := TGocciaArrayValue.Create;
+    AddTempRootIfNeeded(TempRoot, TempArr);
     try
-      if TempArr.Elements.Count > 1 then
-        QuickSortElements(TempArr.Elements, TGocciaFunctionBase(CustomSortFunction), CallArgs, AThisValue, 0, TempArr.Elements.Count - 1);
-    finally
-      CallArgs.Free;
-    end;
-  end else if TempArr.Elements.Count > 1 then
-    TempArr.Elements.Sort(TComparer<TGocciaValue>.Construct(DefaultCompare));
+      for I := 0 to View.Len - 1 do
+      begin
+        if View.HasIndex(I) then
+          TempArr.Elements.Add(View.Get(I));
+      end;
 
-  // Write sorted elements back to front indices
-  for I := 0 to TempArr.Elements.Count - 1 do
-    View.Put(I, TempArr.Elements[I]);
-  // Delete trailing indices (holes moved to end)
-  for I := TempArr.Elements.Count to View.Len - 1 do
-    View.DeleteIndex(I);
+      if not (CustomSortFunction is TGocciaUndefinedLiteralValue) then
+      begin
+        CallArgs := TGocciaArgumentsCollection.Create([nil, nil]);
+        try
+          if TempArr.Elements.Count > 1 then
+            QuickSortElements(TempArr.Elements, TGocciaFunctionBase(CustomSortFunction), CallArgs, AThisValue, 0, TempArr.Elements.Count - 1);
+        finally
+          CallArgs.Free;
+        end;
+      end else if TempArr.Elements.Count > 1 then
+        TempArr.Elements.Sort(TComparer<TGocciaValue>.Construct(DefaultCompare));
+
+      // Write sorted elements back to front indices
+      for I := 0 to TempArr.Elements.Count - 1 do
+        View.Put(I, TempArr.Elements[I]);
+      // Delete trailing indices (holes moved to end)
+      for I := TempArr.Elements.Count to View.Len - 1 do
+        View.DeleteIndex(I);
+    finally
+      RemoveTempRootIfNeeded(TempRoot);
+    end;
+  finally
+    RemoveTempRootIfNeeded(ReceiverRoot);
+  end;
 
   Result := View.Obj;
 end;

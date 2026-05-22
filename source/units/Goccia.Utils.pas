@@ -55,6 +55,7 @@ uses
   SysUtils,
 
   Goccia.Constants.NumericLimits,
+  Goccia.GarbageCollector,
   Goccia.Values.ClassValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase;
@@ -148,13 +149,30 @@ end;
 
 function InvokeCallable(const ACallable: TGocciaValue; const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
+var
+  CallableRoot, ThisRoot: TGocciaTempRoot;
+  ArgRoots: array of TGocciaTempRoot;
+  I: Integer;
 begin
-  if ACallable is TGocciaFunctionBase then
-    Result := TGocciaFunctionBase(ACallable).Call(AArgs, AThisValue)
-  else if ACallable is TGocciaClassValue then
-    Result := TGocciaClassValue(ACallable).Call(AArgs, AThisValue)
-  else
-    ThrowTypeError(Format('%s is not a function', [ACallable.TypeName]));
+  AddTempRootIfNeeded(CallableRoot, ACallable);
+  AddTempRootIfNeeded(ThisRoot, AThisValue);
+  SetLength(ArgRoots, AArgs.Length);
+  for I := 0 to High(ArgRoots) do
+    AddTempRootIfNeeded(ArgRoots[I], AArgs.GetElement(I));
+  try
+    if ACallable is TGocciaFunctionBase then
+      Result := TGocciaFunctionBase(ACallable).Call(AArgs, AThisValue)
+    else if ACallable is TGocciaClassValue then
+      Result := TGocciaClassValue(ACallable).Call(AArgs, AThisValue)
+    else
+      ThrowTypeError(Format('%s is not a function', [ACallable.TypeName]));
+  finally
+    for I := High(ArgRoots) downto 0 do
+      RemoveTempRootIfNeeded(ArgRoots[I]);
+    SetLength(ArgRoots, 0);
+    RemoveTempRootIfNeeded(ThisRoot);
+    RemoveTempRootIfNeeded(CallableRoot);
+  end;
 end;
 
 end.

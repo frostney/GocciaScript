@@ -2658,6 +2658,7 @@ function TGocciaBytecodeFunctionValue.Call(
 var
   Promise: TGocciaPromiseValue;
   EffectiveThis: TGocciaValue;
+  PromiseRoot: TGocciaTempRoot;
 begin
   if (not FStrictThis) and Assigned(FVM.FGlobalThisValue) and
      (not Assigned(AThisValue) or
@@ -2679,18 +2680,23 @@ begin
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsAsync then
   begin
     Promise := TGocciaPromiseValue.Create;
+    AddTempRootIfNeeded(PromiseRoot, Promise);
     try
       try
-        Promise.Resolve(FVM.ExecuteClosure(FClosure, EffectiveThis, AArguments));
+        try
+          Promise.Resolve(FVM.ExecuteClosure(FClosure, EffectiveThis, AArguments));
+        except
+          on E: EGocciaBytecodeThrow do
+            Promise.Reject(E.ThrownValue);
+          on E: TGocciaThrowValue do
+            Promise.Reject(E.Value);
+        end;
       except
-        on E: EGocciaBytecodeThrow do
-          Promise.Reject(E.ThrownValue);
-        on E: TGocciaThrowValue do
-          Promise.Reject(E.Value);
+        Promise.Free;
+        raise;
       end;
-    except
-      Promise.Free;
-      raise;
+    finally
+      RemoveTempRootIfNeeded(PromiseRoot);
     end;
     Exit(Promise);
   end;
@@ -2719,6 +2725,7 @@ function TGocciaBytecodeFunctionValue.CallNoArgs(
 var
   Promise: TGocciaPromiseValue;
   EffectiveThis: TGocciaValue;
+  PromiseRoot: TGocciaTempRoot;
 begin
   if (not FStrictThis) and Assigned(FVM.FGlobalThisValue) and
      (not Assigned(AThisValue) or
@@ -2740,19 +2747,24 @@ begin
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsAsync then
   begin
     Promise := TGocciaPromiseValue.Create;
+    AddTempRootIfNeeded(PromiseRoot, Promise);
     try
       try
-        Promise.Resolve(RegisterToValue(FVM.ExecuteClosureRegisters0(FClosure,
-          VMValueToRegisterFast(EffectiveThis))));
+        try
+          Promise.Resolve(RegisterToValue(FVM.ExecuteClosureRegisters0(FClosure,
+            VMValueToRegisterFast(EffectiveThis))));
+        except
+          on E: EGocciaBytecodeThrow do
+            Promise.Reject(E.ThrownValue);
+          on E: TGocciaThrowValue do
+            Promise.Reject(E.Value);
+        end;
       except
-        on E: EGocciaBytecodeThrow do
-          Promise.Reject(E.ThrownValue);
-        on E: TGocciaThrowValue do
-          Promise.Reject(E.Value);
+        Promise.Free;
+        raise;
       end;
-    except
-      Promise.Free;
-      raise;
+    finally
+      RemoveTempRootIfNeeded(PromiseRoot);
     end;
     Exit(Promise);
   end;
@@ -2766,6 +2778,7 @@ function TGocciaBytecodeFunctionValue.CallOneArg(const AArg0,
 var
   Promise: TGocciaPromiseValue;
   EffectiveThis: TGocciaValue;
+  PromiseRoot: TGocciaTempRoot;
 begin
   if (not FStrictThis) and Assigned(FVM.FGlobalThisValue) and
      (not Assigned(AThisValue) or
@@ -2789,19 +2802,24 @@ begin
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsAsync then
   begin
     Promise := TGocciaPromiseValue.Create;
+    AddTempRootIfNeeded(PromiseRoot, Promise);
     try
       try
-        Promise.Resolve(RegisterToValue(FVM.ExecuteClosureRegisters1(FClosure,
-          VMValueToRegisterFast(EffectiveThis), VMValueToRegisterFast(AArg0))));
+        try
+          Promise.Resolve(RegisterToValue(FVM.ExecuteClosureRegisters1(FClosure,
+            VMValueToRegisterFast(EffectiveThis), VMValueToRegisterFast(AArg0))));
+        except
+          on E: EGocciaBytecodeThrow do
+            Promise.Reject(E.ThrownValue);
+          on E: TGocciaThrowValue do
+            Promise.Reject(E.Value);
+        end;
       except
-        on E: EGocciaBytecodeThrow do
-          Promise.Reject(E.ThrownValue);
-        on E: TGocciaThrowValue do
-          Promise.Reject(E.Value);
+        Promise.Free;
+        raise;
       end;
-    except
-      Promise.Free;
-      raise;
+    finally
+      RemoveTempRootIfNeeded(PromiseRoot);
     end;
     Exit(Promise);
   end;
@@ -2815,6 +2833,7 @@ function TGocciaBytecodeFunctionValue.CallTwoArgs(const AArg0, AArg1,
 var
   Promise: TGocciaPromiseValue;
   EffectiveThis: TGocciaValue;
+  PromiseRoot: TGocciaTempRoot;
 begin
   if (not FStrictThis) and Assigned(FVM.FGlobalThisValue) and
      (not Assigned(AThisValue) or
@@ -2840,20 +2859,25 @@ begin
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsAsync then
   begin
     Promise := TGocciaPromiseValue.Create;
+    AddTempRootIfNeeded(PromiseRoot, Promise);
     try
       try
-        Promise.Resolve(RegisterToValue(FVM.ExecuteClosureRegisters2(FClosure,
-          VMValueToRegisterFast(EffectiveThis), VMValueToRegisterFast(AArg0),
-          VMValueToRegisterFast(AArg1))));
+        try
+          Promise.Resolve(RegisterToValue(FVM.ExecuteClosureRegisters2(FClosure,
+            VMValueToRegisterFast(EffectiveThis), VMValueToRegisterFast(AArg0),
+            VMValueToRegisterFast(AArg1))));
+        except
+          on E: EGocciaBytecodeThrow do
+            Promise.Reject(E.ThrownValue);
+          on E: TGocciaThrowValue do
+            Promise.Reject(E.Value);
+        end;
       except
-        on E: EGocciaBytecodeThrow do
-          Promise.Reject(E.ThrownValue);
-        on E: TGocciaThrowValue do
-          Promise.Reject(E.Value);
+        Promise.Free;
+        raise;
       end;
-    except
-      Promise.Free;
-      raise;
+    finally
+      RemoveTempRootIfNeeded(PromiseRoot);
     end;
     Exit(Promise);
   end;
@@ -2868,6 +2892,7 @@ function TGocciaBytecodeFunctionValue.CallThreeArgs(const AArg0, AArg1, AArg2,
 var
   Promise: TGocciaPromiseValue;
   EffectiveThis: TGocciaValue;
+  PromiseRoot: TGocciaTempRoot;
 begin
   if (not FStrictThis) and Assigned(FVM.FGlobalThisValue) and
      (not Assigned(AThisValue) or
@@ -2893,20 +2918,25 @@ begin
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsAsync then
   begin
     Promise := TGocciaPromiseValue.Create;
+    AddTempRootIfNeeded(PromiseRoot, Promise);
     try
       try
-        Promise.Resolve(RegisterToValue(FVM.ExecuteClosureRegisters3(FClosure,
-          VMValueToRegisterFast(EffectiveThis), VMValueToRegisterFast(AArg0),
-          VMValueToRegisterFast(AArg1), VMValueToRegisterFast(AArg2))));
+        try
+          Promise.Resolve(RegisterToValue(FVM.ExecuteClosureRegisters3(FClosure,
+            VMValueToRegisterFast(EffectiveThis), VMValueToRegisterFast(AArg0),
+            VMValueToRegisterFast(AArg1), VMValueToRegisterFast(AArg2))));
+        except
+          on E: EGocciaBytecodeThrow do
+            Promise.Reject(E.ThrownValue);
+          on E: TGocciaThrowValue do
+            Promise.Reject(E.Value);
+        end;
       except
-        on E: EGocciaBytecodeThrow do
-          Promise.Reject(E.ThrownValue);
-        on E: TGocciaThrowValue do
-          Promise.Reject(E.Value);
+        Promise.Free;
+        raise;
       end;
-    except
-      Promise.Free;
-      raise;
+    finally
+      RemoveTempRootIfNeeded(PromiseRoot);
     end;
     Exit(Promise);
   end;
