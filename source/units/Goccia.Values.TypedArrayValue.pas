@@ -2507,7 +2507,7 @@ var
   IterResult: TGocciaObjectValue;
   Values: TGocciaValueList;
   SrcObj: TGocciaObjectValue;
-  SourceRoot, ResultRoot: TGocciaTempRoot;
+  SourceRoot, MapFnRoot, ThisRoot, ResultRoot: TGocciaTempRoot;
   ValueRoots: array of TGocciaTempRoot;
   ValueRootCount: Integer;
 begin
@@ -2527,7 +2527,16 @@ begin
   else
     ThisArg := TGocciaUndefinedLiteralValue.UndefinedValue;
 
+  MapFnRoot.ObjectValue := nil;
+  MapFnRoot.Added := False;
+  ThisRoot.ObjectValue := nil;
+  ThisRoot.Added := False;
   AddTempRootIfNeeded(SourceRoot, Source);
+  if HasMapFn then
+  begin
+    AddTempRootIfNeeded(MapFnRoot, MapFnArg);
+    AddTempRootIfNeeded(ThisRoot, ThisArg);
+  end;
   try
     // ES2026 §23.2.2.1 step 5: GetMethod(source, @@iterator) before type fast paths
     Iterator := GetIteratorFromValue(Source);
@@ -2672,6 +2681,8 @@ begin
       RemoveTempRootIfNeeded(ResultRoot);
     end;
   finally
+    RemoveTempRootIfNeeded(ThisRoot);
+    RemoveTempRootIfNeeded(MapFnRoot);
     RemoveTempRootIfNeeded(SourceRoot);
   end;
 end;
