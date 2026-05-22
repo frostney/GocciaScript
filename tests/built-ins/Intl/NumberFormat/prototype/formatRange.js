@@ -43,6 +43,18 @@ describe.runIf(isIntl)("Intl.NumberFormat.prototype.formatRange", () => {
     expect(nf.formatRange(1.21, 1.22)).toBe("~1.20");
   });
 
+  test("uses endpoint formatting for mixed rounding priority", () => {
+    const nf = new Intl.NumberFormat("en-US", {
+      useGrouping: false,
+      roundingPriority: "morePrecision",
+      minimumFractionDigits: 1,
+      maximumFractionDigits: 3,
+      minimumSignificantDigits: 3,
+      maximumSignificantDigits: 3,
+    });
+    expect(nf.formatRange(1, 1.23456)).toBe("1.0–1.235");
+  });
+
   test("throws RangeError for NaN endpoints", () => {
     const nf = new Intl.NumberFormat("en-US");
     expect(() => nf.formatRange(NaN, 1)).toThrow(RangeError);

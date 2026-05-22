@@ -238,6 +238,7 @@ Relative paths are resolved against the current working directory. A missing fil
   "compat-traditional-for-loop": true,
   "compat-while-loops": true,
   "strict-types": true,
+  "unsafe-ffi": true,
   "timeout": 5000,
   "max-memory": 10485760,
   "stack-size": 3500,
@@ -268,11 +269,20 @@ This is useful for test subdirectories that need specific flags. For example, `t
 }
 ```
 
+Likewise, `tests/built-ins/FFI/goccia.json` enables FFI only for the FFI tests:
+
+```json
+{
+  "unsafe-ffi": true
+}
+```
+
 TOML equivalent (`goccia.toml`):
 
 ```toml
 asi = true
 mode = "bytecode"
+unsafe-ffi = true
 timeout = 5000
 max-memory = 10485760
 stack-size = 3500

@@ -42,6 +42,58 @@ const
   KEYWORD_WHILE      = 'while';
   KEYWORD_WITH       = 'with';
 
+  ReservedKeywords: array[0..35] of string = (
+    KEYWORD_BREAK,
+    KEYWORD_CASE,
+    KEYWORD_CONTINUE,
+    KEYWORD_CATCH,
+    KEYWORD_CLASS,
+    KEYWORD_CONST,
+    KEYWORD_DEFAULT,
+    KEYWORD_DELETE,
+    KEYWORD_DO,
+    KEYWORD_ELSE,
+    KEYWORD_ENUM,
+    KEYWORD_EXPORT,
+    KEYWORD_EXTENDS,
+    KEYWORD_FALSE,
+    KEYWORD_FINALLY,
+    KEYWORD_FOR,
+    KEYWORD_FUNCTION,
+    KEYWORD_IF,
+    KEYWORD_IMPORT,
+    KEYWORD_IN,
+    KEYWORD_INSTANCEOF,
+    KEYWORD_LET,
+    KEYWORD_NEW,
+    KEYWORD_NULL,
+    KEYWORD_RETURN,
+    KEYWORD_SUPER,
+    KEYWORD_SWITCH,
+    KEYWORD_THIS,
+    KEYWORD_THROW,
+    KEYWORD_TRUE,
+    KEYWORD_TRY,
+    KEYWORD_TYPEOF,
+    KEYWORD_VAR,
+    KEYWORD_VOID,
+    KEYWORD_WHILE,
+    KEYWORD_WITH
+  );
+
+function IsReservedKeyword(const AName: string): Boolean; inline;
+
 implementation
+
+function IsReservedKeyword(const AName: string): Boolean;
+var
+  I: Integer;
+begin
+  for I := Low(ReservedKeywords) to High(ReservedKeywords) do
+    if AName = ReservedKeywords[I] then
+      Exit(True);
+
+  Result := False;
+end;
 
 end.

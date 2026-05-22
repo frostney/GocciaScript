@@ -131,6 +131,7 @@ type
     FTestTimeout: TGocciaIntegerOption;
     FDescribeTimeout: TGocciaIntegerOption;
     procedure InitializeRuntime(const AEngine: TGocciaEngine);
+    procedure InitializeRuntimeWithUnsafeFFI(const AEngine: TGocciaEngine);
   protected
     procedure Configure; override;
     procedure ConfigureCreatedEngine(const AEngine: TGocciaEngine;
@@ -260,6 +261,9 @@ var
 begin
   InitializeRuntime(AEngine);
   Runtime := GetRuntime(AEngine);
+  if Assigned(EngineOptions) and
+     ResolveFlagOption(EngineOptions.UnsafeFFI, AFileConfig) then
+    Runtime.Install(TGocciaFFIRuntimeExtension.Create);
   ConsoleExtension := TGocciaConsoleRuntimeExtension(
     Runtime.FindRuntimeExtension(TGocciaConsoleRuntimeExtension));
   if LogFileOpen and Assigned(ConsoleExtension) and
@@ -461,8 +465,13 @@ var
 begin
   Runtime := AttachRuntime(AEngine);
   TGocciaTestRunnerRuntimeProfile.Apply(Runtime);
-  if Assigned(EngineOptions) and EngineOptions.UnsafeFFI.Present then
-    Runtime.Install(TGocciaFFIRuntimeExtension.Create);
+end;
+
+procedure TTestRunnerApp.InitializeRuntimeWithUnsafeFFI(
+  const AEngine: TGocciaEngine);
+begin
+  InitializeRuntime(AEngine);
+  GetRuntime(AEngine).Install(TGocciaFFIRuntimeExtension.Create);
 end;
 
 function TTestRunnerApp.RunGocciaScriptInterpreted(const AFileName: string;
@@ -1130,7 +1139,10 @@ begin
 
   // Force all shared prototypes to be initialised on the main thread
   // before any worker thread starts, avoiding class-var race conditions.
-  EnsureSharedPrototypesInitialized(InitializeRuntime);
+  if AnyFileConfigEnablesFlag(AFiles, EngineOptions.UnsafeFFI) then
+    EnsureSharedPrototypesInitialized(InitializeRuntimeWithUnsafeFFI)
+  else
+    EnsureSharedPrototypesInitialized(InitializeRuntime);
 
   WallClockStart := GetNanoseconds;
 

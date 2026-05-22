@@ -17,6 +17,7 @@ type
   TIntlNumberTrailingZeroDisplay = (intzAuto, intzStripIfInteger);
   TIntlNumberRoundingMode = (inrmCeil, inrmFloor, inrmExpand, inrmTrunc,
     inrmHalfCeil, inrmHalfFloor, inrmHalfExpand, inrmHalfTrunc, inrmHalfEven);
+  TIntlNumberRoundingPriority = (inrpAuto, inrpMorePrecision, inrpLessPrecision);
   TIntlNumberUseGrouping = (inugAuto, inugAlways, inugMin2, inugFalse);
   TIntlDateTimeStyle = (idtsNone, idtsFull, idtsLong, idtsMedium, idtsShort);
   TIntlPluralType = (iptCardinal, iptOrdinal);
@@ -58,6 +59,7 @@ type
     MinimumSignificantDigits: Integer;
     MaximumSignificantDigits: Integer;
     RoundingIncrement: Integer;
+    RoundingPriority: TIntlNumberRoundingPriority;
     NumberingSystem: string;
   end;
 
@@ -160,6 +162,7 @@ begin
   Result.MinimumSignificantDigits := -1;
   Result.MaximumSignificantDigits := -1;
   Result.RoundingIncrement := 1;
+  Result.RoundingPriority := inrpAuto;
   Result.NumberingSystem := '';
 end;
 
