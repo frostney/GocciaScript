@@ -139,6 +139,23 @@ describe.runIf(hasGoccia)("native callback GC roots", () => {
       Goccia.gc();
       return value * 2;
     });
+    const fromIterableResult = Uint8Array.from({
+      [Symbol.iterator]() {
+        let index = 0;
+        return {
+          next() {
+            index++;
+            if (index > 2) {
+              return { done: true };
+            }
+            return { value: { value: index }, done: false };
+          },
+        };
+      },
+    }, (item) => {
+      Goccia.gc();
+      return item.value;
+    });
 
     expect(sum).toBe(3);
     expect(Array.from(mapped)).toEqual([2, 4]);
@@ -151,6 +168,7 @@ describe.runIf(hasGoccia)("native callback GC roots", () => {
     expect(found).toBe(2);
     expect(foundIndex).toBe(1);
     expect(Array.from(fromResult)).toEqual([2, 4]);
+    expect(Array.from(fromIterableResult)).toEqual([1, 2]);
   });
 
   test("Iterator helper callbacks survive explicit GC", () => {

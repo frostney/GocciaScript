@@ -2508,6 +2508,8 @@ var
   Values: TGocciaValueList;
   SrcObj: TGocciaObjectValue;
   SourceRoot, ResultRoot: TGocciaTempRoot;
+  ValueRoots: array of TGocciaTempRoot;
+  ValueRootCount: Integer;
 begin
   if AArgs.Length = 0 then
     ThrowTypeError(SErrorTypedArrayFromRequiresArg, SSuggestTypedArraySetSource);
@@ -2532,6 +2534,7 @@ begin
     if Assigned(Iterator) then
     begin
       Values := TGocciaValueList.Create(False);
+      ValueRootCount := 0;
       try
         TGarbageCollector.Instance.AddTempRoot(Iterator);
         try
@@ -2539,7 +2542,12 @@ begin
             IterResult := Iterator.AdvanceNext;
             while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
             begin
-              Values.Add(IterResult.GetProperty(PROP_VALUE));
+              Val := IterResult.GetProperty(PROP_VALUE);
+              Values.Add(Val);
+              if ValueRootCount >= Length(ValueRoots) then
+                SetLength(ValueRoots, ValueRootCount * 2 + 4);
+              AddTempRootIfNeeded(ValueRoots[ValueRootCount], Val);
+              Inc(ValueRootCount);
               IterResult := Iterator.AdvanceNext;
             end;
           except
@@ -2573,6 +2581,9 @@ begin
           RemoveTempRootIfNeeded(ResultRoot);
         end;
       finally
+        for I := ValueRootCount - 1 downto 0 do
+          RemoveTempRootIfNeeded(ValueRoots[I]);
+        SetLength(ValueRoots, 0);
         Values.Free;
       end;
       Exit(NewTA);
