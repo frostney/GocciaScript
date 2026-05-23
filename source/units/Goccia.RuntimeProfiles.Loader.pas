@@ -19,7 +19,6 @@ uses
   Goccia.RuntimeExtensions.Console,
   Goccia.RuntimeExtensions.CSV,
   Goccia.RuntimeExtensions.Fetch,
-  Goccia.RuntimeExtensions.HostGlobals,
   Goccia.RuntimeExtensions.JSON5,
   Goccia.RuntimeExtensions.JSONL,
   Goccia.RuntimeExtensions.Performance,
@@ -29,13 +28,14 @@ uses
   Goccia.RuntimeExtensions.TOML,
   Goccia.RuntimeExtensions.TSV,
   Goccia.RuntimeExtensions.URL,
+  Goccia.RuntimeExtensions.UtilityGlobals,
   Goccia.RuntimeExtensions.YAML;
 
 class procedure TGocciaLoaderRuntimeProfile.Apply(
   const ARuntime: TGocciaRuntimeCore);
 begin
   ARuntime.Install(TGocciaConsoleRuntimeExtension.Create);
-  ARuntime.Install(TGocciaHostGlobalsRuntimeExtension.Create);
+  ARuntime.Install(TGocciaUtilityGlobalsRuntimeExtension.Create);
   ARuntime.Install(TGocciaCSVRuntimeExtension.Create);
   ARuntime.Install(TGocciaJSON5RuntimeExtension.Create);
   ARuntime.Install(TGocciaJSONLRuntimeExtension.Create);

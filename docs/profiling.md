@@ -11,7 +11,7 @@
 
 ## Overview
 
-The `--profile` flag on GocciaScriptLoader enables language-level profiling of the bytecode VM. It operates inside the dispatch loop, providing data that external profilers (like `sample` or `callgrind`) cannot see — which opcodes execute, which JS functions are hot, and where the VM allocates.
+The `--profile` option on GocciaScriptLoader enables language-level profiling of the bytecode VM. It operates inside the dispatch loop, providing data that external profilers (like `sample` or `callgrind`) cannot see — which opcodes execute, which JS functions are hot, and where the VM allocates.
 
 Profiling implies `--mode=bytecode` automatically. Near-zero overhead when disabled (boolean guard on the dispatch loop, same pattern as `--coverage`). The guard branches are consistently not-taken and well-predicted, but they are present in the compiled binary.
 

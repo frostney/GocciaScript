@@ -6,7 +6,7 @@
 const validateNativeFunctionSource = (source) => {
   // Accept any string that looks like a function
   if (typeof source !== "string" || source.length === 0) {
-    throw new SyntaxError("Expected a non-empty function source string");
+    throw new SyntaxError("Expected non-empty function source text");
   }
 };
 

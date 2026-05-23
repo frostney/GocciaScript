@@ -6,7 +6,7 @@
 
 - **10-step recipe** — Value type, built-in registration, class value subclass, engine/runtime integration, constants, structuredClone, tests, benchmarks, documentation
 - **Key patterns** — Shared prototype singleton (GC-pinned), `ThisValue` for method callbacks (not `Self`), `MarkReferences` for GC
-- **Engine/runtime integration** — Core language built-ins are registered by the engine; host/runtime globals and special-purpose tools belong in concrete runtime extension classes
+- **Engine/runtime integration** — Core language built-ins are registered by the engine; runtime globals and tool-specific runtime APIs belong in concrete runtime extension classes
 - **Checklist included** — Complete checklist at the end of the document for verification
 
 This guide walks through every step needed to add a new built-in type to GocciaScript. Follow the steps in order; each section references the exact files and patterns involved.
@@ -340,7 +340,7 @@ end;
 
 ## Step 4: Engine Or Runtime Integration
 
-Core language built-ins belong in `Goccia.Engine.pas`. Host/runtime globals that are not part of the language core belong in a dedicated runtime extension unit under `source/units/Goccia.RuntimeExtensions.*.pas`.
+Core language built-ins belong in `Goccia.Engine.pas`. Runtime globals that are not part of the language core belong in a dedicated runtime extension unit under `source/units/Goccia.RuntimeExtensions.*.pas`.
 
 For a core language built-in, make these changes in the engine:
 
@@ -350,7 +350,7 @@ Add `Goccia.Builtins.GlobalYour` (alphabetically sorted).
 
 ### 4b. Runtime extension class (runtime globals only)
 
-Core language built-ins are always registered and do not need a runtime extension. Host/runtime globals and special-purpose tools should add a concrete extension class:
+Core language built-ins are always registered and do not need a runtime extension. Runtime globals and tool-specific runtime APIs should add a concrete extension class:
 
 ```pascal
 TGocciaYourRuntimeExtension = class(TGocciaRuntimeExtension)
@@ -377,7 +377,7 @@ FBuiltinYour := TGocciaGlobalYour.Create(
   CONSTRUCTOR_YOUR, Scope, ThrowError);
 ```
 
-For special-purpose built-ins, guard with a flag check: `if ggYourType in FGlobals then ...`
+For runtime globals installed by an extension, guard with a runtime-global selector check: `if ggYourType in FGlobals then ...`
 
 ### 4e. RegisterBuiltinConstructors
 
@@ -417,7 +417,7 @@ property BuiltinYour: TGocciaGlobalYour read FBuiltinYour;
 
 ### 4i. Runtime-extension registration
 
-For a host/runtime global, use the same built-in/value unit patterns but wire it through a concrete runtime extension instead of `Goccia.Engine.pas`:
+For a runtime global, use the same built-in/value unit patterns but wire it through a concrete runtime extension instead of `Goccia.Engine.pas`:
 
 1. Add a dedicated runtime-extension unit in `source/units/`, following the `Goccia.RuntimeExtensions.<Feature>` naming pattern.
 2. Add a private built-in field to the concrete extension class.

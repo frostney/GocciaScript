@@ -54,7 +54,7 @@ describe("Object.getPrototypeOf", () => {
   test("returns superclass for a class with extends", () => {
     class A {}
     class B extends A {}
-    // In interpreted mode, getPrototypeOf returns the class value identity.
+    // In interpreter mode, getPrototypeOf returns the class value identity.
     // Bytecode VM stores the superclass reference differently; test the
     // prototype chain relationship instead for cross-mode compatibility.
     const proto = Object.getPrototypeOf(B);

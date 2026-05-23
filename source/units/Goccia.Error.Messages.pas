@@ -766,7 +766,7 @@ resourcestring
   SErrorTestTodoExpectsString = 'test.todo expects first argument to be a string';
   SErrorOnTestFinishedExpectsFunction = 'onTestFinished expects a function argument';
 
-  // Other builtin errors — YAML / TOML / Map / Math / Semver / JSON5
+  // Other built-in errors — YAML / TOML / Map / Math / Semver / JSON5
   SErrorYAMLParseArgMustBeString = 'YAML.parse: argument must be a string';
   SErrorYAMLParseDocumentsArgMustBeString = 'YAML.parseDocuments: argument must be a string';
   SErrorTOMLParseArgMustBeString = 'TOML.parse: argument must be a string';

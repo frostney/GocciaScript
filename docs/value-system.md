@@ -381,7 +381,7 @@ end;
 
 ### Property Deletion
 
-`DeleteProperty` returns `True` for configurable or non-existent properties, `False` for non-configurable properties. Delete call sites convert `False` to `TypeError` by default, matching ECMAScript strict mode semantics. With Script-source `--compat-non-strict-mode`, expression-level `delete` keeps the `False` result instead, and identifier delete can remove configurable global object properties through the global scope's `DeleteBinding` path.
+`DeleteProperty` returns `True` for configurable or non-existent properties, `False` for non-configurable properties. Delete call sites convert `False` to `TypeError` by default, matching ECMAScript strict mode semantics. With script source `--compat-non-strict-mode`, expression-level `delete` keeps the `False` result instead, and identifier delete can remove configurable global object properties through the global scope's `DeleteBinding` path.
 
 ### ToPropertyDescriptor
 
@@ -485,9 +485,9 @@ Each helper creates a `TGocciaObjectValue` with `name` and `message` properties 
 
 ## Functions
 
-### User Functions (`TGocciaFunctionValue`)
+### User-Defined Functions (`TGocciaFunctionValue`)
 
-The base runtime type for user-defined functions. Uses call-site `this` binding (like ECMAScript's regular functions).
+The base runtime type for user-defined functions. Uses call-site `this` binding (like ECMAScript's ordinary functions).
 
 - **Parameters** — List of parameter nodes (supports destructuring, defaults, and rest parameters).
 - **Body** — List of AST statements.
@@ -517,7 +517,7 @@ Async functions extend their sync counterparts and return Promises:
 
 ### Generator Values (`Goccia.Values.GeneratorValue.pas`)
 
-Generator functions and methods extend the normal function value hierarchy but return generator objects instead of executing immediately:
+Generator functions and methods extend the source-defined function value hierarchy but return generator objects instead of executing immediately:
 
 | Type | Extends | Returns |
 |------|---------|---------|
@@ -540,7 +540,7 @@ Generator objects hold a resumable `TGocciaGeneratorContinuation`. Sync generato
 | `TGocciaAsyncFunctionValue` / `TGocciaAsyncArrowFunctionValue` / `TGocciaAsyncMethodValue` | Inherited from superclass via `BindThis` | `async` functions |
 | `TGocciaGeneratorFunctionValue` / `TGocciaGeneratorMethodValue` / async generator variants | Inherited from superclass via `BindThis` | generator functions and methods |
 
-Standalone calls to ordinary, method, async, and generator functions receive `undefined` as `this` by default (strict mode, no implicit global). Arrow functions ignore the call-site receiver and keep their lexical `this` from the closure scope walk. Script-source `--compat-non-strict-mode` lets ordinary non-arrow functions coerce nullish `this` to `globalThis`; module source remains strict.
+Standalone calls to ordinary, method, async, and generator functions receive `undefined` as `this` by default (strict mode, no implicit global). Arrow functions ignore the call-site receiver and keep their lexical `this` from the closure scope walk. With script source `--compat-non-strict-mode`, ordinary non-arrow functions coerce nullish `this` to `globalThis`; module source remains strict.
 
 ### Arguments Object (`Goccia.Values.ArgumentsObjectValue.pas`)
 
@@ -574,7 +574,7 @@ All functions share a prototype that provides `call`, `apply`, and `bind`:
 
 ### Native Functions (`TGocciaNativeFunctionValue`)
 
-Wraps a Pascal callback for built-in operations:
+Wraps a Pascal callback exposed to GocciaScript. Native functions may back core language built-ins, runtime globals, or host-provided embedding APIs:
 
 ```pascal
 TGocciaNativeFunctionCallback = function(
@@ -726,8 +726,8 @@ Object properties follow ECMAScript's property descriptor model:
 - **Accessor descriptors** — `{ get, set, enumerable, configurable }`
 - **Insertion order** — Properties maintain their creation order, matching JavaScript's `Object.keys()` ordering guarantee.
 - **Descriptor merging** — `Object.defineProperty` merges the new descriptor with the existing one when the property already exists. Unspecified attributes retain their current values rather than resetting to defaults. This matches ECMAScript specification behavior (e.g., `Object.defineProperty(obj, "x", { enumerable: false })` only changes `enumerable`, preserving `writable`, `configurable`, and `value`).
-- **Strict mode `delete`** — Deleting a non-configurable property throws `TypeError` by default, matching ECMAScript strict mode semantics. `DeleteProperty` returns `False` for non-configurable properties, and delete call sites convert this into a `TypeError` unless Script-source `--compat-non-strict-mode` is enabled. Deleting a non-existent property returns `true` (no error).
-- **Strict mode assignment** — Failed object `[[Set]]` results, such as writes to non-writable data properties, setter-less accessors, or non-extensible objects, become `TypeError` by default. Script-source `--compat-non-strict-mode` keeps the failed write silent while the assignment expression returns the assigned value.
+- **Strict mode `delete`** — Deleting a non-configurable property throws `TypeError` by default, matching ECMAScript strict mode semantics. `DeleteProperty` returns `False` for non-configurable properties, and delete call sites convert this into a `TypeError` unless script source `--compat-non-strict-mode` is enabled. Deleting a non-existent property returns `true` (no error).
+- **Strict mode assignment** — Failed object `[[Set]]` results, such as writes to non-writable data properties, setter-less accessors, or non-extensible objects, become `TypeError` by default. With script source `--compat-non-strict-mode`, the failed write stays silent while the assignment expression returns the assigned value.
 
 This is more complex than a simple key-value map, but it's necessary for `Object.defineProperty`, getters/setters, and non-enumerable properties like prototype methods.
 

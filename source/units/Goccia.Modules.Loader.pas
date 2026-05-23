@@ -22,7 +22,7 @@ type
   { Evaluate the body of a module-form program in AContext.
     Returns the last expression's completion value (or undefined for
     declaration-only bodies).  Module imports discard the return; the
-    --source-type=module entry path uses it so the test runner can
+    entry file using module source uses it so the test runner can
     read the runTests(...) results object. }
   TGocciaModuleBodyEvaluator = function(const AProgram: TGocciaProgram;
     const AContext: TGocciaEvaluationContext): TGocciaValue of object;
@@ -185,7 +185,7 @@ procedure TGocciaModuleLoader.BindRuntime(const AGlobalScope: TGocciaGlobalScope
 begin
   if Assigned(FGlobalScope) and (FGlobalScope <> AGlobalScope) then
     raise Exception.Create(
-      'TGocciaModuleLoader instances are single-runtime; create a new loader per engine/backend.');
+      'TGocciaModuleLoader instances are single-runtime; create a new loader per engine/executor.');
   FGlobalScope := AGlobalScope;
   FOnError := AOnError;
 end;

@@ -486,7 +486,7 @@ begin
   EffectiveValue := AValue;
 
   // §16.1.7: var/function declarations may shadow built-in globals in
-  // script mode.  Only the global scope carries built-in bindings, so
+  // script source.  Only the global scope carries built-in bindings, so
   // skip the lookup for function/module-scoped vars (the common case).
   if (TargetScope.FScopeKind = skGlobal) and
      TargetScope.FLexicalBindings.TryGetValue(AName, ExistingBuiltIn) and

@@ -22,7 +22,8 @@ uses
   CLI.Options,
   Goccia.Constants.PropertyNames,
   Goccia.Engine,
-  Goccia.Engine.Backend,
+  Goccia.Executor.Interpreter,
+  Goccia.Executor.Bytecode,
   Goccia.Executor,
   Goccia.Error,
   Goccia.Error.Detail,
@@ -1246,7 +1247,7 @@ begin
       if IsStdinPath(APaths[I]) then
       begin
         WriteLn(StdErr,
-          'Error: stdin supports only as the sole input path.');
+          'Error: stdin is supported only as the sole input.');
         ExitCode := 1;
         Exit;
       end;

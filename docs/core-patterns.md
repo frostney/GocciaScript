@@ -1,6 +1,6 @@
 # Core patterns
 
-*Recurring implementation conventions in the Pascal codebase (scopes, parser, prototypes, built-ins) and shared vocabulary (Define vs Assign, bindings, …).*
+*Recurring implementation conventions in the Pascal codebase (scopes, parser, prototypes, built-ins) and implementation detail for shared vocabulary such as Define vs Assign.*
 
 ## Executive Summary
 
@@ -10,7 +10,7 @@
 - **Shared prototype singleton** — Each built-in type shares a single class-level prototype instance via `TGocciaSharedPrototype`
 - **Define vs Assign** — `Define` creates a new binding; `Assign` changes an existing one — distinct operations throughout the codebase
 
-For **pipelines and layers**, see [Architecture](architecture.md). For the **execution backends**, see [Interpreter](interpreter.md) (tree-walk) and [Bytecode VM](bytecode-vm.md) (register VM, `.gbc`).
+For **canonical terminology**, see [GocciaScript Context](../CONTEXT.md). For **pipelines and layers**, see [Architecture](architecture.md). For the **execution modes**, see [Interpreter](interpreter.md) (tree-walk) and [Bytecode VM](bytecode-vm.md) (register VM, `.gbc`).
 
 ## Recurring implementation patterns
 
@@ -226,16 +226,7 @@ initialization
 
 ## Terminology
 
-The codebase uses specific terminology consistently:
-
-| Term | Meaning |
-|------|---------|
-| **Define** | Create a new variable binding in the current scope (`DefineLexicalBinding`). Also used for built-in registration. |
-| **Assign** | Re-assign the value of an existing binding (`AssignLexicalBinding`) |
-| **Binding** | A name-to-value association in a scope (not a raw variable) |
-| **Literal** | A value that appears directly in source code |
-| **Native function** | A built-in function implemented in Pascal |
-| **User function** | A function defined in GocciaScript (arrow function) |
+The canonical project glossary lives in [GocciaScript Context](../CONTEXT.md). This section expands implementation details for the Define vs Assign distinction.
 
 ### Define vs Assign
 
@@ -354,11 +345,11 @@ This keeps the evaluator fully reentrant — all dependencies are explicit, maki
 
 ### Configurable Built-ins
 
-`TGocciaEngine` always registers core language built-ins such as Math, Array, Number, Promise, JSON, Symbol, Set, Map, Temporal, ArrayBuffer, and related constructors. Host/runtime globals are installed through class-based runtime extensions on `TGocciaRuntimeCore`; small hosts install only the extensions they need.
+`TGocciaEngine` always registers core language built-ins such as Math, Array, Number, Promise, JSON, Symbol, Set, Map, Temporal, ArrayBuffer, and related constructors. Runtime globals are installed through class-based runtime extensions on `TGocciaRuntimeCore`; small hosts install only the extensions they need.
 
-**Why configurable for special-purpose runtime globals?**
+**Why configurable for runtime globals?**
 
-- **Loader profile** — `TGocciaLoaderRuntimeProfile` installs the ordinary CLI host surface: console, host globals, structured data modules, text assets, performance, text encoding, URL/fetch, and SemVer.
+- **Loader runtime profile** — `TGocciaLoaderRuntimeProfile` installs the ordinary CLI runtime surface: console, structured data modules, text assets, performance, text encoding, URL/fetch, SemVer, and other runtime globals.
 - **Testing** — The GocciaTestRunner installs `TGocciaTestingLibraryRuntimeExtension` to inject `describe`, `test`, and `expect` without polluting the loader runtime.
 - **Benchmarking** — The GocciaBenchmarkRunner installs `TGocciaBenchmarkRuntimeExtension` to inject `suite` and `bench`.
 - **FFI** — `TGocciaFFIRuntimeExtension` enables the Foreign Function Interface for calling native shared libraries, and CLI tools install it for `--unsafe-ffi` or `"unsafe-ffi": true` in config.

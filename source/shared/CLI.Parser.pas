@@ -11,7 +11,7 @@ uses
 
 { Parses command-line arguments against the given option definitions.
   Returns a TStringList of positional (non-option) arguments; the caller
-  owns the returned list.  Raises TGocciaParseError for unknown flags. }
+  owns the returned list.  Raises TGocciaParseError for unknown options. }
 function ParseCommandLine(const AOptions: TGocciaOptionArray): TStringList;
 
 implementation

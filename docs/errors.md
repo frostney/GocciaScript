@@ -4,7 +4,7 @@
 
 ## Executive Summary
 
-- **Error types** -- `Error`, `TypeError`, `ReferenceError`, `RangeError`, `SyntaxError`, `URIError`, `AggregateError`, `SuppressedError`, plus `TimeoutError` for the `--timeout` flag
+- **Error types** -- `Error`, `TypeError`, `ReferenceError`, `RangeError`, `SyntaxError`, `URIError`, `AggregateError`, `SuppressedError`, plus `TimeoutError` for the `--timeout` option
 - **Parser errors** -- Displayed with source context, a caret pointing to the exact column, and optional suggestion text (e.g., "Use 'let' or 'const' instead")
 - **Runtime errors** -- Carry `name`, `message`, `stack`, and optional `cause`; catchable with `try`/`catch`/`finally`
 - **JSON output** -- `--output=json` wraps every execution result in a structured envelope with `ok`, `error.type`, `error.message`, `error.line`, and `error.column`. `--output=compact-json` produces the same envelope without the `build`, `memory`, `stdout`, or `stderr` fields, leaving only the normalized `output` array and structured `error` for console output. The same `compact-json` value is recognised by `GocciaTestRunner` (via `--output`) and `GocciaBenchmarkRunner` (via `--format`).
@@ -101,7 +101,7 @@ TypeError: Cannot read properties of undefined (reading 'x')
    7 | getX(undefined);
 ```
 
-Stdin input uses `<stdin>` as the filename and retains full source context for error display. If source context is not available (e.g., errors originating inside native built-in callbacks without a JavaScript source location), GocciaScript falls back to displaying the stack trace string.
+Stdin input uses `<stdin>` as the filename and retains full source context for error display. If source context is not available (e.g., errors originating inside native function callbacks without a JavaScript source location), GocciaScript falls back to displaying the stack trace string.
 
 ## Error Properties
 

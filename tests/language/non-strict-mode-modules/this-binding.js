@@ -12,7 +12,7 @@ function argumentsType() {
 }
 
 describe("module non-strict compatibility", () => {
-  test("regular function calls keep strict module this", () => {
+  test("ordinary function calls keep strict module this", () => {
     expect(standaloneThis()).toBeUndefined();
   });
 

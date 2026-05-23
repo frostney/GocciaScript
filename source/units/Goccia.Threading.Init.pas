@@ -14,7 +14,8 @@ unit Goccia.Threading.Init;
 interface
 
 uses
-  Goccia.Engine;
+  Goccia.Engine,
+  Goccia.Executor.Interpreter;
 
 type
   TGocciaEngineInitializer = procedure(const AEngine: TGocciaEngine) of object;

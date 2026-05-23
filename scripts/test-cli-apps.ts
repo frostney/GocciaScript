@@ -437,7 +437,7 @@ console.log("Bare Loader: stdin dash path...");
   if (proc.stdout.toString().trim() !== "42") throw new Error(`Bare stdin dash expected 42, got: ${proc.stdout.toString()}`);
 }
 
-console.log("Bare Loader: file input...");
+console.log("Bare Loader: input file...");
 {
   const tmp = makeTmp();
   try {
@@ -494,11 +494,11 @@ console.log("Bare Loader: module source type...");
     stdout: "pipe",
     stderr: "pipe",
   });
-  if (proc.exitCode !== 0) throw new Error(`Bare module mode exited ${proc.exitCode}: ${proc.stderr.toString()}`);
-  if (proc.stdout.toString().trim() !== "true") throw new Error(`Bare module mode expected true, got: ${proc.stdout.toString()}`);
+  if (proc.exitCode !== 0) throw new Error(`Bare module source exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (proc.stdout.toString().trim() !== "true") throw new Error(`Bare module source expected true, got: ${proc.stdout.toString()}`);
 }
 
-// --mode flag: bare loader defaults to bytecode; both values must execute.
+// --mode option: bare loader defaults to interpreter mode; both values must execute.
 console.log("Bare Loader: --mode=interpreted...");
 {
   const proc = Bun.spawnSync([BARE, "--print", "--mode=interpreted"], {
@@ -666,7 +666,7 @@ console.log("Loader: Promise.then drain (bytecode)...");
 
 // -- --global / --globals -------------------------------------------------------
 
-console.log("Loader: --global flag...");
+console.log("Loader: --global option...");
 {
   const { json } = runLoaderJson("x + y;\n", ["--global", "x=10", "--global", "y=20"]);
   if (json.files?.[0]?.result !== 30) throw new Error(`--global x+y should be 30, got ${json.files?.[0]?.result}`);
@@ -1237,7 +1237,7 @@ console.log("TestRunner: --output=compact-json omits build, memory, stdout, stde
       "",
     ].join("\n");
 
-    console.log("Bundler: --source-map flag...");
+    console.log("Bundler: --source-map option...");
     const smSrc = join(tmp, "sm.jsx");
     writeFileSync(smSrc, jsxSource);
     await $`${BUNDLER} ${smSrc} --source-map`.quiet();
@@ -1672,7 +1672,7 @@ console.log("REPL: bytecode evaluation...");
 }
 
 // ============================================================================
-// --allowed-host flag
+// --allowed-host option
 // ============================================================================
 
 console.log("Loader: --allowed-host blocks unlisted host...");
@@ -1834,7 +1834,7 @@ console.log("Loader: --source-map with --multifile is rejected...");
     if (proc.exitCode === 0) throw new Error("Loader --source-map with --multifile should fail");
     const message = proc.stdout.toString() + proc.stderr.toString();
     if (!message.includes("--multifile") || !message.includes("source-map"))
-      throw new Error(`Loader --source-map with --multifile error message should mention both flags, got: ${message}`);
+      throw new Error(`Loader --source-map with --multifile error message should mention both options, got: ${message}`);
   } finally {
     clean(tmp);
   }
@@ -1908,7 +1908,7 @@ console.log("Bundler: --multifile rejects --output=<file>...");
     if (proc.exitCode === 0) throw new Error("Bundler --multifile with --output=<file> should fail");
     const message = proc.stdout.toString() + proc.stderr.toString();
     if (!message.includes("--multifile") || !message.includes("--output"))
-      throw new Error(`Bundler --multifile --output=<file> message should mention both flags, got: ${message}`);
+      throw new Error(`Bundler --multifile --output=<file> message should mention both options, got: ${message}`);
   } finally {
     clean(tmp);
   }

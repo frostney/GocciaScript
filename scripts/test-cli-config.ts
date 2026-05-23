@@ -1041,7 +1041,7 @@ console.log("compat-while-loops OFF emits warning and no-ops...");
   }
 }
 
-// -- Multi-directory TestRunner (lenient + strict, both modes) ------------------
+// -- Multi-directory TestRunner (lenient + strict, both execution modes) ---------
 
 console.log("Multi-directory TestRunner...");
 {
@@ -1091,9 +1091,9 @@ console.log("Multi-directory TestRunner...");
   }
 }
 
-// -- CLI flag overrides file config ---------------------------------------------
+// -- CLI options override file config -------------------------------------------
 
-console.log("CLI flag overrides file config...");
+console.log("CLI options override file config...");
 {
   const tmp = makeTmp();
   const noConfigDir = makeTmp();
@@ -1251,7 +1251,7 @@ console.log("Config allowed-hosts TestRunner integration...");
 
 // -- --config=<file> ------------------------------------------------------------
 //
-// The --config flag points at a specific config file and skips auto-discovery
+// The --config option points at a specific config file and skips auto-discovery
 // entirely.  All three supported extensions must work because the parser is
 // chosen by extension.
 
@@ -1445,9 +1445,9 @@ console.log("--config skips auto-discovery of nearby goccia.*...");
   }
 }
 
-// -- CLI args still beat --config -----------------------------------------------
+// -- CLI options still beat --config --------------------------------------------
 
-console.log("CLI flags override values from --config...");
+console.log("CLI options override values from --config...");
 {
   const tmp = makeTmp();
   const cfgDir = makeTmp();
@@ -1468,7 +1468,7 @@ console.log("CLI flags override values from --config...");
 
 // -- --config across the other CLI tools ---------------------------------------
 //
-// The flag lives in the shared base class, so smoke-test that each consumer
+// The option lives in the shared base class, so smoke-test that each consumer
 // actually honors it.  The Loader is covered above; here we hit the rest.
 
 console.log("--config works on TestRunner...");

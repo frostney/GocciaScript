@@ -31,7 +31,7 @@ test("delete non-configurable properties throws by default", () => {
   }).toThrow(TypeError);
 });
 
-test("regular function calls keep strict this by default", () => {
+test("ordinary function calls keep strict this by default", () => {
   function f() {
     return this;
   }

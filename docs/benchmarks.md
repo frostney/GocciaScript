@@ -44,11 +44,11 @@ printf 'suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n' | ./bu
 ./build/GocciaBenchmarkRunner benchmarks --format=text
 ```
 
-When no path is provided, `GocciaBenchmarkRunner` reads benchmark source from stdin. Use `-` explicitly when you want stdin alongside other CLI flags and still make the input source obvious.
+When no path is provided, `GocciaBenchmarkRunner` reads benchmark source from stdin. Use `-` explicitly when you want stdin alongside other CLI options and still make the input source obvious.
 
 ## Output Formats
 
-The GocciaBenchmarkRunner supports five output formats via the `--format` flag:
+The GocciaBenchmarkRunner supports five output formats via the `--format` option:
 
 | Format | Description |
 |--------|-------------|
@@ -62,7 +62,7 @@ Use `--output=<file>` to write results to a file instead of stdout.
 
 ## Profiling Benchmark Runs
 
-`GocciaBenchmarkRunner` accepts the same VM profiling flags as `GocciaScriptLoader`:
+`GocciaBenchmarkRunner` accepts the same VM profiling options as `GocciaScriptLoader`:
 `--profile=opcodes|functions|all`, `--profile-output=<path>`, and
 `--profile-format=flamegraph`. Profiling forces bytecode mode and serial execution
 because profiler state is per thread.
@@ -165,7 +165,7 @@ setup() → [return value] → warmup(run × N) → calibrate(run × N) → meas
 
 The `GocciaBenchmarkRunner` program:
 
-1. Parses CLI arguments (`--format`, `--output`, and the benchmark path or stdin marker).
+1. Parses CLI inputs (`--format`, `--output`, and the benchmark path or stdin marker).
 2. Scans the provided path for `.js` files.
 3. For each file, creates a `TGocciaEngine`, attaches `TGocciaRuntimeCore`, applies the loader runtime profile, and installs the benchmark runtime extension.
 4. Loads and executes the source so benchmark files register their suites and benchmarks without running measurements from inside the script body.
@@ -254,11 +254,11 @@ When a benchmark has a `setup` or `teardown` function, a second line displays th
 
 ## CI Integration
 
-Benchmarks run as part of the CI pipeline in both **interpreted** and **bytecode** modes. CI uses `GOCCIA_BENCH_CALIBRATION_MS=100` and `GOCCIA_BENCH_ROUNDS=7` for stable measurements with IQR outlier filtering. On pushes to `main`, the ubuntu-latest x64 runner saves JSON baselines for each mode (`benchmark-interpreted-results.json` and `benchmark-bytecode-results.json`) to the GitHub Actions cache. See [testing.md](testing.md#ci-integration) for the full pipeline overview.
+Benchmarks run as part of the CI pipeline in both **interpreter mode** and **bytecode mode**. CI uses `GOCCIA_BENCH_CALIBRATION_MS=100` and `GOCCIA_BENCH_ROUNDS=7` for stable measurements with IQR outlier filtering. On pushes to `main`, the ubuntu-latest x64 runner saves JSON baselines for each mode (`benchmark-interpreted-results.json` and `benchmark-bytecode-results.json`) to the GitHub Actions cache. See [testing.md](testing.md#ci-integration) for the full pipeline overview.
 
 ### PR Benchmark Comparison
 
-The PR workflow (`.github/workflows/pr.yml`) restores the cached baseline JSON from `main`, runs the benchmark matrix, and posts a collapsible comparison comment on the PR. Each benchmark file gets a **unified table** with both modes side by side:
+The PR workflow (`.github/workflows/pr.yml`) restores the cached baseline JSON from `main`, runs the benchmark matrix, and posts a collapsible comparison comment on the PR. Each benchmark file gets a **unified table** with both execution modes side by side:
 
 - Each table row shows `| Benchmark | Interpreted | Δ | Bytecode | Δ |` with the point estimate and cached/PR min-max range in the form `10,000 ops/sec [9,500..10,500] → 9,200 ops/sec [8,700..9,700]`
 - Classification uses **range overlap** instead of a single point value: if the PR run sits fully above the baseline range it is improved, if it sits fully below it is regressed, and overlapping ranges are treated as unchanged noise

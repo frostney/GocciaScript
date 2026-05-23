@@ -668,7 +668,7 @@ interface PerTestRecord {
 // --compat-while-loops, --compat-loose-equality, and --unsafe-function-constructor are also
 // unconditional: stock harness uses `var`, `function`, traditional `for(;;)`
 // loops, while/do-while loops, loose equality, and `Function("return this;")()`.  Non-strict mode
-// compatibility is also enabled for Script-source strict tests: strict
+// compatibility is also enabled for script source strict tests: strict
 // directives and modules decide strict semantics, while the flag exposes
 // compatibility-gated syntax and implicit objects needed by the corpus.
 const TEST262_BARE_FLAGS: readonly string[] = [

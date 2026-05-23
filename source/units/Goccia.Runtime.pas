@@ -11,6 +11,7 @@ uses
   Goccia.Arguments.Collection,
   Goccia.Engine,
   Goccia.Executor,
+  Goccia.Executor.Interpreter,
   Goccia.ModuleResolver,
   Goccia.Modules,
   Goccia.Modules.Loader,
@@ -71,7 +72,7 @@ type
     function FindRuntimeExtension(
       const AClass: TGocciaRuntimeExtensionClass): TGocciaRuntimeExtension;
 
-    procedure RegisterRuntimeBuiltinName(const AName: string);
+    procedure RegisterRuntimeGlobalName(const AName: string);
     procedure RegisterGlobalsFromObject(const AValue: TGocciaObjectValue;
       const AKind: string);
     function SpeciesGetter(const AArgs: TGocciaArgumentsCollection;
@@ -141,6 +142,7 @@ uses
 
   TextSemantics,
 
+  Goccia.Constants.PropertyNames,
   Goccia.Error,
   Goccia.FileExtensions,
   Goccia.GarbageCollector,
@@ -361,16 +363,16 @@ begin
   Result := nil;
 end;
 
-procedure TGocciaRuntimeCore.RegisterRuntimeBuiltinName(const AName: string);
+procedure TGocciaRuntimeCore.RegisterRuntimeGlobalName(const AName: string);
 var
-  BuiltInsValue: TGocciaValue;
+  RuntimeGlobalsValue: TGocciaValue;
 begin
   if not Assigned(FEngine.GocciaGlobal) then
     Exit;
 
-  BuiltInsValue := FEngine.GocciaGlobal.GetProperty('builtIns');
-  if BuiltInsValue is TGocciaArrayValue then
-    TGocciaArrayValue(BuiltInsValue).Elements.Add(
+  RuntimeGlobalsValue := FEngine.GocciaGlobal.GetProperty(PROP_RUNTIME_GLOBALS);
+  if RuntimeGlobalsValue is TGocciaArrayValue then
+    TGocciaArrayValue(RuntimeGlobalsValue).Elements.Add(
       TGocciaStringLiteralValue.Create(AName));
 end;
 

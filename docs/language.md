@@ -81,7 +81,7 @@ class C {
 }
 ```
 
-**`await` expressions:** Valid inside `async` functions and at the top level (ES2022+ top-level `await`). Suspends execution until the Promise settles; returns the fulfilled value or throws the rejection reason. Top-level `await` works identically in both interpreted and bytecode modes.
+**`await` expressions:** Valid inside `async` functions and at the top level (ES2022+ top-level `await`). Suspends execution until the Promise settles; returns the fulfilled value or throws the rejection reason. Top-level `await` works identically in interpreter mode and bytecode mode.
 
 **Return semantics:** Async functions always return a Promise. If the body returns a value, the Promise resolves to that value. If the body throws, the Promise rejects.
 
@@ -160,7 +160,7 @@ const fn = async () => {
 
 ### Modules
 
-ES module syntax with default, named, and namespace imports/exports. Project code convention prefers named exports for internal modules, but default imports and exports are language-supported. Supported script file extensions: `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`. Structured-data imports are also supported for `.json`, `.json5`, `.jsonl`, `.toml`, `.yaml`, `.yml`, `.csv`, and `.tsv`, and text-asset imports are supported for `.txt` and `.md`. Module paths are resolved relative to the importing file. File extensions can be omitted — the resolver tries script, structured-data, and text-asset extensions in order. Directory imports resolve to `index` files. The CLI tools support WHATWG-style import maps through `--import-map=<file.json>`, `--alias key=value`, and implicit `goccia.json` discovery.
+ES module syntax with default, named, and namespace imports/exports. Project code convention prefers named exports for internal modules, but default imports and exports are language-supported. Supported source file extensions: `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`. Structured-data imports are also supported for `.json`, `.json5`, `.jsonl`, `.toml`, `.yaml`, `.yml`, `.csv`, and `.tsv`, and text-asset imports are supported for `.txt` and `.md`. Module paths are resolved relative to the importing file. File extensions can be omitted — the resolver tries source, structured-data, and text-asset extensions in order. Directory imports resolve to `index` files. The CLI tools support WHATWG-style import maps through `--import-map=<file.json>`, `--alias key=value`, and implicit `goccia.json` discovery.
 
 ```javascript
 // Named imports (with or without extension)
@@ -538,7 +538,7 @@ try { throw new Error("oops"); } catch (e: Error) { }
 
 ### Pattern Matching (Stage 1)
 
-GocciaScript supports the Stage 1 [TC39 Pattern Matching](https://tc39.es/proposal-pattern-matching/) draft in interpreted and bytecode modes.
+GocciaScript supports the Stage 1 [TC39 Pattern Matching](https://tc39.es/proposal-pattern-matching/) draft in interpreter mode and bytecode mode.
 
 ```javascript
 const result = match (message) {
@@ -720,7 +720,7 @@ Strict equality requires matching types, eliminating this entire class of bugs.
 
 ### `arguments` Object
 
-**Opt-in for Script source.** Excluded by default; prefer rest parameters. Available via `--compat-non-strict-mode` (CLI flag, `Engine.NonStrictModeEnabled`, or `{"compat-non-strict-mode": true}` in config). Module source remains strict even when this flag is enabled. When enabled in Script source, ordinary functions, shorthand methods, accessors, and generators create an unmapped, array-like `arguments` object whose indexed entries and `length` reflect the call's argument list without aliasing parameter variables. Arrow functions do not create their own `arguments`; they resolve it lexically from the nearest enclosing ordinary function or method that has one. `arguments` is an ordinary identifier, not a reserved keyword, so parameters or body-level lexical declarations named `arguments` shadow the implicit object.
+**Opt-in for script source.** Excluded by default; prefer rest parameters. Available via `--compat-non-strict-mode` (CLI flag, `Engine.NonStrictModeEnabled`, or `{"compat-non-strict-mode": true}` in config). Module source remains strict even when this flag is enabled. When enabled in script source, ordinary functions, shorthand methods, accessors, and generators create an unmapped, array-like `arguments` object whose indexed entries and `length` reflect the call's argument list without aliasing parameter variables. Arrow functions do not create their own `arguments`; they resolve it lexically from the nearest enclosing ordinary function or method that has one. `arguments` is an ordinary identifier, not a reserved keyword, so parameters or body-level lexical declarations named `arguments` shadow the implicit object.
 
 ### Automatic Semicolon Insertion
 
@@ -816,15 +816,15 @@ do {
 
 ### `with` Statement
 
-**Opt-in for Script source.** Excluded by default; use explicit property access. Available via `--compat-non-strict-mode` (CLI flag, `Engine.NonStrictModeEnabled`, or `{"compat-non-strict-mode": true}` in config). Module source remains strict even when this flag is enabled. When enabled in Script source, `with (object) statement` evaluates the object expression, converts it with `ToObject`, and resolves unqualified identifiers through that object before falling back to outer lexical scopes. `Symbol.unscopables` is honored. Calls to functions resolved through the object environment use that object as `this`, closures created inside the body retain the object environment, and writes through non-writable or setter-less object properties silently keep the original value instead of throwing. When disabled (default), the parser accepts the syntax but treats the statement as a no-op and emits a warning suggesting explicit property access or the flag. `with` creates ambiguous scope and is forbidden by JavaScript strict mode, so new GocciaScript code should prefer explicit property access. The keyword is reserved (it cannot be used as a variable name), but it can be used as a property name (for example, `obj.with`).
+**Opt-in for script source.** Excluded by default; use explicit property access. Available via `--compat-non-strict-mode` (CLI flag, `Engine.NonStrictModeEnabled`, or `{"compat-non-strict-mode": true}` in config). Module source remains strict even when this flag is enabled. When enabled in script source, `with (object) statement` evaluates the object expression, converts it with `ToObject`, and resolves unqualified identifiers through that object before falling back to outer lexical scopes. `Symbol.unscopables` is honored. Calls to functions resolved through the object environment use that object as `this`, closures created inside the body retain the object environment, and writes through non-writable or setter-less object properties silently keep the original value instead of throwing. When disabled (default), the parser accepts the syntax but treats the statement as a no-op and emits a warning suggesting explicit property access or the flag. `with` creates ambiguous scope and is forbidden by JavaScript strict mode, so new GocciaScript code should prefer explicit property access. The keyword is reserved (it cannot be used as a variable name), but it can be used as a property name (for example, `obj.with`).
 
 ### Non-Strict Assignment Semantics
 
-By default, assigning to a read-only property, setter-less accessor, or non-extensible object throws `TypeError`. With `--compat-non-strict-mode` in Script source, failed ordinary object and global object writes are ignored instead. The assignment expression still evaluates to the assigned value, matching ECMAScript non-strict `[[Set]]` behavior. Setters that throw still propagate their error, and property access through `null` or `undefined` still throws `TypeError`.
+By default, assigning to a read-only property, setter-less accessor, or non-extensible object throws `TypeError`. With `--compat-non-strict-mode` in script source, failed ordinary object and global object writes are ignored instead. The assignment expression still evaluates to the assigned value, matching ECMAScript non-strict `[[Set]]` behavior. Setters that throw still propagate their error, and property access through `null` or `undefined` still throws `TypeError`.
 
 ### `delete` Semantics
 
-By default, GocciaScript follows strict delete behavior: deleting an unqualified identifier is an error, and deleting a non-configurable property throws `TypeError`. With `--compat-non-strict-mode` in Script source, legacy non-strict delete return values are enabled in both interpreter and bytecode modes. `delete name` returns `false` for declared bindings, deletes configurable global object properties when the identifier resolves there, and returns `true` for unresolvable names. `delete obj.prop` and `delete obj[key]` return `false` for non-configurable properties instead of throwing. Accessing a property through `null` or `undefined` still throws `TypeError`.
+By default, GocciaScript follows strict delete behavior: deleting an unqualified identifier is an error, and deleting a non-configurable property throws `TypeError`. With `--compat-non-strict-mode` in script source, legacy non-strict delete return values are enabled in both interpreter and bytecode modes. `delete name` returns `false` for declared bindings, deletes configurable global object properties when the identifier resolves there, and returns `true` for unresolvable names. `delete obj.prop` and `delete obj[key]` return `false` for non-configurable properties instead of throwing. Accessing a property through `null` or `undefined` still throws `TypeError`.
 
 ### Labeled Statements
 
@@ -879,9 +879,9 @@ GocciaScript operates in an implicit strict mode (see [Errors](errors.md) for th
 - Temporal Dead Zone is enforced for `let`/`const`.
 - `const` reassignment throws `TypeError`.
 - Accessing undeclared variables throws `ReferenceError`.
-- Assigning to read-only properties, setter-less accessors, or non-extensible objects throws `TypeError` unless Script-source `--compat-non-strict-mode` is enabled.
-- Deleting an unqualified identifier or non-configurable property is an error unless Script-source `--compat-non-strict-mode` is enabled.
-- `this` is `undefined` in standalone function calls unless Script-source `--compat-non-strict-mode` is enabled.
+- Assigning to read-only properties, setter-less accessors, or non-extensible objects throws `TypeError` unless script source `--compat-non-strict-mode` is enabled.
+- Deleting an unqualified identifier or non-configurable property is an error unless script source `--compat-non-strict-mode` is enabled.
+- `this` is `undefined` in standalone function calls unless script source `--compat-non-strict-mode` is enabled.
 - Modules remain strict regardless of `--compat-non-strict-mode`.
 - Symbol values cannot be implicitly converted to strings or numbers — throws `TypeError`.
 
@@ -896,8 +896,8 @@ GocciaScript follows ECMAScript strict mode `this` semantics:
 | Shorthand method (`method() {}`) | Call-site object (the receiver) |
 | Class method | Call-site object (the instance) |
 | Getter/setter | Call-site object |
-| Standalone function call | `undefined` by default; `globalThis` for regular functions with Script-source `--compat-non-strict-mode` |
-| `fn.call(thisArg)` / `fn.apply(thisArg)` | Explicit `thisArg`; nullish `thisArg` becomes `globalThis` for regular functions with Script-source `--compat-non-strict-mode` |
+| Standalone function call | `undefined` by default; `globalThis` for ordinary functions with script source `--compat-non-strict-mode` |
+| `fn.call(thisArg)` / `fn.apply(thisArg)` | Explicit `thisArg`; nullish `thisArg` becomes `globalThis` for ordinary functions with script source `--compat-non-strict-mode` |
 | `fn.bind(thisArg)` | Bound `thisArg` |
 
 Arrow functions **never** receive their own `this` — they always inherit from their defining scope:

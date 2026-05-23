@@ -1,6 +1,6 @@
 /*---
 description: >
-  Namespace imports expose a frozen module namespace object for script modules
+  Namespace imports expose a frozen module namespace object for JavaScript modules
   and structured-data modules.
 features: [modules, namespace-imports]
 ---*/

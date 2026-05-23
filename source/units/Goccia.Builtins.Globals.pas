@@ -76,7 +76,7 @@ type
     function DecodeURIComponentCallback(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
-    procedure RegisterRuntimeGlobals;
+    procedure RegisterUtilityRuntimeGlobals;
   end;
 
 implementation
@@ -346,7 +346,7 @@ begin
     TGocciaNativeFunctionValue.Create(DecodeURIComponentCallback, 'decodeURIComponent', 1), dtConst, True);
 end;
 
-procedure TGocciaGlobals.RegisterRuntimeGlobals;
+procedure TGocciaGlobals.RegisterUtilityRuntimeGlobals;
 begin
   FScope.DefineLexicalBinding('queueMicrotask',
     TGocciaNativeFunctionValue.Create(QueueMicrotaskCallback, 'queueMicrotask', 1), dtConst, True);

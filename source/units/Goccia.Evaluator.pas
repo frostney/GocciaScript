@@ -1005,7 +1005,7 @@ begin
     Exit;
   end;
 
-  // Handle method calls vs regular function calls
+  // Handle method calls vs ordinary function calls
   if ACallExpression.Callee is TGocciaMemberExpression then
   begin
     MemberExpr := TGocciaMemberExpression(ACallExpression.Callee);

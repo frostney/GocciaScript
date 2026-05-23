@@ -23,7 +23,8 @@ uses
   Goccia.Coverage,
   Goccia.Coverage.Report,
   Goccia.Engine,
-  Goccia.Engine.Backend,
+  Goccia.Executor.Interpreter,
+  Goccia.Executor.Bytecode,
   Goccia.Executor,
   Goccia.Error,
   Goccia.Error.Detail,
@@ -338,7 +339,7 @@ begin
   if ProfilerOptions.Format.Present and not ProfilerOptions.Mode.Present then
     ProfilerOptions.Mode.Apply('functions');
 
-  // Profiling requires bytecode mode regardless of --mode flag
+  // Profiling requires bytecode mode regardless of the --mode option.
   if ProfilerOptions.Mode.Present then
     EngineOptions.Mode.Apply('bytecode');
 
@@ -1370,7 +1371,7 @@ begin
       begin
         if IsStdinPath(APaths[I]) then
           raise TGocciaParseError.Create(
-            'stdin supports only as the sole input path.');
+            'stdin is supported only as the sole input.');
         if DirectoryExists(APaths[I]) then
           RawFiles.AddStrings(FindAllFiles(APaths[I], ScriptExtensions))
         else if FileExists(APaths[I]) then
@@ -1402,7 +1403,7 @@ begin
     for I := 0 to APaths.Count - 1 do
       if IsStdinPath(APaths[I]) then
         raise TGocciaParseError.Create(
-          'stdin supports only as the sole input path.');
+          'stdin is supported only as the sole input.');
 
     for I := 0 to APaths.Count - 1 do
     begin

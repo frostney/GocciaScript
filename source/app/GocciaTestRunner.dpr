@@ -21,7 +21,8 @@ uses
   Goccia.Coverage,
   Goccia.Coverage.Report,
   Goccia.Engine,
-  Goccia.Engine.Backend,
+  Goccia.Executor.Interpreter,
+  Goccia.Executor.Bytecode,
   Goccia.Executor,
   Goccia.Error,
   Goccia.Error.Detail,
@@ -306,8 +307,8 @@ var
 begin
   { stdin support — match GocciaScriptLoader and GocciaBenchmarkRunner.
     Source is read from stdin and tagged as <stdin> when either:
-      * no path arguments are supplied, OR
-      * the sole path argument is "-".
+      * no positional arguments are supplied, OR
+      * the sole positional argument is "-".
     Mixing "-" with other paths is rejected so structured stdin input
     cannot silently be interleaved with on-disk files. }
   UseStdin := (APaths.Count = 0) or
@@ -318,7 +319,7 @@ begin
       if IsStdinPath(APaths[I]) then
       begin
         WriteLn(StdErr,
-          'Error: stdin supports only as the sole input path.');
+          'Error: stdin is supported only as the sole input.');
         ExitCode := 1;
         Exit;
       end;

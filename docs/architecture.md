@@ -1,19 +1,19 @@
 # Architecture
 
-*How source flows through the engine: shared frontend, two backends, and the main Pascal layers.*
+*How source flows through the engine: shared source frontend, two execution modes, and the main Pascal layers.*
 
 ## Executive Summary
 
-- **Engine/runtime split** — `TGocciaEngine` orchestrates parsing, execution, core language built-ins, and source-list/string execution; `Goccia.Runtime` attaches runtime-provided built-ins, host globals, file helpers, and extensions
+- **Engine/runtime split** — `TGocciaEngine` orchestrates parsing, execution, core language built-ins, and source text execution; `Goccia.Runtime` attaches runtime globals, file helpers, and extensions
 - **Execution mode abstraction** — `TGocciaExecutor` is the abstract class; `TGocciaInterpreterExecutor` and `TGocciaBytecodeExecutor` implement it independently
-- **Shared frontend** — Lexer, Parser, and AST are shared between execution modes
-- **Shared execution substrate** — Both modes share the same value types, core scope model, runtime extension mechanism, and mark-and-sweep GC
+- **Shared source frontend** — Lexer, Parser, and AST are shared between execution modes
+- **Shared execution substrate** — Both execution modes share the same value types, core scope model, runtime extension mechanism, and mark-and-sweep GC
 - **Goccia-specific** — The bytecode VM operates directly on `TGocciaValue`, not a generic VM abstraction
 - **No cross-dependency** — The bytecode executor has no dependency on the interpreter or evaluator units
 
 ## Overview
 
-GocciaScript has two execution modes — interpreter (tree-walk over the AST) and bytecode (`TGocciaVM`). A single `TGocciaEngine` class orchestrates both, delegating execution to a pluggable `TGocciaExecutor`. Both modes share the same frontend, value system, core language built-ins, and garbage collector. Host/runtime globals are attached through runtime extensions; see [Main Layers](#main-layers) for the `Goccia.Engine` / `Goccia.Runtime` split. See [Bytecode VM](bytecode-vm.md) for the bytecode backend's architecture.
+GocciaScript has two execution modes: interpreter mode (tree-walk over the AST) and bytecode mode (`TGocciaVM`). A single `TGocciaEngine` class orchestrates both, delegating execution to a pluggable `TGocciaExecutor`. Both execution modes share the same source frontend, value system, core language built-ins, and garbage collector. Runtime globals are attached through runtime extensions; see [Main Layers](#main-layers) for the `Goccia.Engine` / `Goccia.Runtime` split. See [Bytecode VM](bytecode-vm.md) for the bytecode executor's architecture.
 
 ## Pipelines
 
@@ -33,13 +33,13 @@ Source -> JSX Transformer (optional) -> Lexer -> Parser -> Compiler -> Goccia By
 
 | Layer | Units | Responsibility |
 |-------|-------|----------------|
-| Engine | `Goccia.Engine` | Core language globals, language configuration, source-string/source-list execution, executor dispatch |
-| Runtime | `Goccia.Runtime`, `Goccia.RuntimeExtensions.*`, `Goccia.RuntimeProfiles.*` | Runtime core, class-based host extensions such as console/fetch/data modules/SemVer/testing/benchmarks/FFI, loader/test/benchmark profiles, and file-backed helpers |
+| Engine | `Goccia.Engine` | Core language built-ins, language configuration, source text execution, executor dispatch |
+| Runtime | `Goccia.Runtime`, `Goccia.RuntimeExtensions.*`, `Goccia.RuntimeProfiles.*` | Runtime integration layer, runtime extensions such as console/fetch/data modules/SemVer/testing/benchmarks/FFI, loader/test/benchmark profiles, and file-backed helpers |
 | Executor abstraction | `Goccia.Executor` | Abstract `TGocciaExecutor` base class |
-| Interpreter executor | `Goccia.Engine` (`TGocciaInterpreterExecutor`) | Tree-walk execution via `TGocciaInterpreter` |
-| Bytecode executor | `Goccia.Engine.Backend` (`TGocciaBytecodeExecutor`) | Bytecode compile + VM execution; no interpreter dependency |
+| Interpreter executor | `Goccia.Executor.Interpreter` (`TGocciaInterpreterExecutor`) | Tree-walk execution via `TGocciaInterpreter` |
+| Bytecode executor | `Goccia.Executor.Bytecode` (`TGocciaBytecodeExecutor`) | Bytecode compile + VM execution; no interpreter dependency |
 | JSX | `Goccia.JSX.Transformer` | Optional pre-pass converting JSX to `createElement` calls |
-| Frontend | `Goccia.Lexer`, `Goccia.Parser`, `Goccia.AST.*` | Source to AST |
+| Source frontend | `Goccia.Lexer`, `Goccia.Parser`, `Goccia.AST.*` | Source text to AST |
 | Interpreter | `Goccia.Interpreter`, `Goccia.Evaluator.*` | Tree-walk execution |
 | Bytecode compiler | `Goccia.Compiler*` | AST to bytecode templates/modules |
 | Bytecode format | `Goccia.Bytecode*` | Opcodes, templates, modules, binary I/O, debug info |
@@ -48,15 +48,15 @@ Source -> JSX Transformer (optional) -> Lexer -> Parser -> Compiler -> Goccia By
 | Realm | `Goccia.Realm` | Per-engine container for mutable intrinsic prototypes |
 | GC | `Goccia.GarbageCollector` | Mark-and-sweep garbage collection |
 
-For **tree-walk execution**, see [Interpreter](interpreter.md); for **bytecode execution**, see [Bytecode VM](bytecode-vm.md). For **recurring implementation patterns** and **terminology** (Define vs Assign, bindings, …), see [Core patterns](core-patterns.md).
+For **tree-walk execution**, see [Interpreter](interpreter.md); for **bytecode execution**, see [Bytecode VM](bytecode-vm.md). For **canonical terminology**, see [GocciaScript Context](../CONTEXT.md). For **recurring implementation patterns** and Define vs Assign implementation details, see [Core patterns](core-patterns.md).
 
-Script-vs-module entry semantics belong to `TGocciaEngine.SourceType`, because they change language execution (`this`, import metadata, and top-level scope lifetime). `TGocciaRuntimeCore` may be attached to an engine, but it does not decide whether the entry runs as a Script or Module. File-backed convenience APIs and the default filesystem module content provider live in `Goccia.Runtime`; host globals are added by installing concrete `TGocciaRuntimeExtension` classes or by applying a profile such as `TGocciaLoaderRuntimeProfile`. Engine APIs accept source strings or caller-provided `TStringList` instances. CLI frontends may still read their entry file or stdin before constructing the engine, as `GocciaScriptLoaderBare` does, but that file read is outside the engine API and does not attach runtime globals.
+Source type belongs to the `SourceType` property on `TGocciaEngine`, because script source and module source change language execution (`this`, import metadata, and top-level scope lifetime). `TGocciaRuntimeCore` may be attached to an engine, but it does not decide the entry file's source type. File-backed convenience APIs and the default filesystem module content provider live in `Goccia.Runtime`; runtime globals are added by installing concrete `TGocciaRuntimeExtension` classes or by applying a profile such as `TGocciaLoaderRuntimeProfile`. Engine APIs accept source text or caller-provided `TStringList` instances. CLI frontends may still read their entry file or stdin before constructing the engine, as `GocciaScriptLoaderBare` does, but that file read is outside the engine API and does not attach runtime globals.
 
 ## Design Direction
 
 - Bytecode execution is Goccia-specific, not a generic VM layer.
 - The VM register file uses tagged `TGocciaRegister` values internally; hot scalar kinds stay unboxed until they cross an object/runtime boundary.
-- Arrays, objects, classes, promises, and functions are shared between interpreter and bytecode mode.
+- Arrays, objects, classes, promises, and functions are shared between interpreter mode and bytecode mode.
 - Sparse arrays use a dedicated hole sentinel.
 - Precompiled bytecode uses the `.gbc` format.
 
@@ -102,9 +102,9 @@ The engine uses a **strategy pattern** for execution. `TGocciaExecutor` is the a
 
 ```text
 TGocciaExecutor (abstract — Goccia.Executor.pas)
-├── TGocciaInterpreterExecutor (Goccia.Engine.pas)
+├── TGocciaInterpreterExecutor (Goccia.Executor.Interpreter.pas)
 │     Wraps TGocciaInterpreter for tree-walk execution
-└── TGocciaBytecodeExecutor (Goccia.Engine.Backend.pas)
+└── TGocciaBytecodeExecutor (Goccia.Executor.Bytecode.pas)
       Compiles to bytecode and runs on TGocciaVM
       No dependency on Goccia.Interpreter or Goccia.Evaluator
 ```
@@ -140,7 +140,7 @@ This replaces a previous `threadvar`-cache approach where intrinsic prototypes s
 
 The interpreter and bytecode executors are **intentionally separate control-flow mechanisms** (tree-walk vs register VM). Sharing the **same** `TGocciaValue` model and virtual property access is the architectural consolidation point; you should not try to merge those executors into one execution path.
 
-- **Beneficial separation** — Different layers solving different problems: the lexer/parser/AST frontend vs `Goccia.Evaluator.*` vs `Goccia.Compiler.*` vs `Goccia.VM.*`; standalone format parsers (`Goccia.JSON`, `Goccia.TOML`, …) vs thin `Goccia.Builtins.*` adapters. Duplication *across* those boundaries is often *different representations of the same spec* (AST vs opcodes vs byte streams), not copy-paste to delete blindly.
+- **Beneficial separation** — Different layers solving different problems: the lexer/parser/AST source frontend vs `Goccia.Evaluator.*` vs `Goccia.Compiler.*` vs `Goccia.VM.*`; standalone format parsers (`Goccia.JSON`, `Goccia.TOML`, …) vs thin `Goccia.Builtins.*` adapters. Duplication *across* those boundaries is often *different representations of the same spec* (AST vs opcodes vs byte streams), not copy-paste to delete blindly.
 
 - **Harmful duplication** — The **same rule** maintained twice without a seam: e.g. identical helper functions in two compiler units, or compile-time type compatibility (`TypesAreCompatible`) drifting from runtime `OP_CHECK_TYPE` behavior. That class of duplication should be centralized (shared helpers, single runtime check implementation) so policy stays consistent.
 
@@ -150,7 +150,8 @@ When in doubt: preserve pipeline separation; consolidate **policy and mechanical
 
 - [Interpreter](interpreter.md) — Tree-walk pipeline and evaluator model
 - [Bytecode VM](bytecode-vm.md) — Compiler, opcodes, register VM
-- [Core patterns](core-patterns.md) — Recurring implementation patterns, internal terminology
+- [Core patterns](core-patterns.md) — Recurring implementation patterns
+- [GocciaScript Context](../CONTEXT.md) — Canonical project terminology
 - [Build System](build-system.md)
 - [Decision Log](decision-log.md)
 - [Contributing](../CONTRIBUTING.md) — Single contribution standard (workflow, mandatory rules, testing, Pascal style, quick reference)

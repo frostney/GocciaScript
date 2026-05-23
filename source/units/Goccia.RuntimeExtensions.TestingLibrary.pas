@@ -25,7 +25,7 @@ begin
   inherited Attach(ARuntime);
   FBuiltinTestAssertions := TGocciaTestAssertions.Create('TestAssertions',
     Runtime.Engine.Interpreter.GlobalScope, Runtime.Engine.ThrowError);
-  Runtime.RegisterRuntimeBuiltinName('TestAssertions');
+  Runtime.RegisterRuntimeGlobalName('TestAssertions');
 end;
 
 procedure TGocciaTestingLibraryRuntimeExtension.Detach;

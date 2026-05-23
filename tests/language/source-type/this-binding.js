@@ -1,10 +1,10 @@
 /*---
 description: >
-  --source-type=module loads the entry script as a Module. Per
+  --source-type=module loads the entry file as module source. Per
   ES2026 §16.2.1.6.4, a Module Environment Record's [[ThisValue]] is
   undefined, so top-level `this` resolves to undefined rather than
   globalThis. The directory-level goccia.json sets the source type so
-  every file in this directory runs as a Module.
+  every file in this directory uses module source.
 ---*/
 
 const topLevelThis = this;

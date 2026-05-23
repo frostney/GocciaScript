@@ -41,7 +41,7 @@ begin
     TestConfigureModuleResolverLoadsExplicitImportMap);
   Test('ConfigureModuleResolver preserves UTF-8 import map entries',
     TestConfigureModuleResolverPreservesUTF8ImportMap);
-  Test('ConfigureModuleResolver discovers goccia.json from the entry path',
+  Test('ConfigureModuleResolver discovers goccia.json from the entry file',
     TestConfigureModuleResolverDiscoversProjectConfig);
   Test('ConfigureModuleResolver applies inline aliases after the import map',
     TestConfigureModuleResolverAppliesInlineAliasAfterImportMap);

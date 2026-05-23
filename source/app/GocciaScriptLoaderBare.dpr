@@ -10,10 +10,11 @@ uses
 
   Goccia.Arguments.Collection,
   Goccia.Engine,
-  Goccia.Engine.Backend,
   Goccia.Error,
   Goccia.Error.Detail,
   Goccia.Executor,
+  Goccia.Executor.Bytecode,
+  Goccia.Executor.Interpreter,
   Goccia.GarbageCollector,
   Goccia.InstructionLimit,
   Goccia.ScriptLoader.Input,
@@ -87,7 +88,7 @@ begin
   WriteLn('  --compat-non-strict-mode      Enable non-strict-mode compatibility');
   WriteLn('  --strict-types                Enforce type annotations at runtime');
   WriteLn('  --mode=interpreted|bytecode   Execution mode (default: interpreted)');
-  WriteLn('  --source-type=script|module   Load entry as a script or module');
+  WriteLn('  --source-type=script|module   Load entry as script source or module source');
   WriteLn('  --unsafe-function-constructor Enable dynamic Function constructor');
   WriteLn('  --print                       Print the script''s last value (incl. undefined)');
   WriteLn('  --timeout=MS                  Per-file cooperative timeout in milliseconds');

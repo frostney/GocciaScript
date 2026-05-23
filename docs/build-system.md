@@ -25,7 +25,7 @@ The build script supports two modes via `--dev` (default) and `--prod` flags:
 
 ```bash
 ./build.pas loader              # Dev build (default)
-./build.pas loaderbare          # Dev build of the bare script executor
+./build.pas loaderbare          # Dev build of Bare Script Loader
 ./build.pas --dev loader        # Explicit dev build
 ./build.pas --prod loader       # Production build
 ./build.pas --prod              # Production build of all components
@@ -45,11 +45,11 @@ Runs a clean (removes stale `.ppu`, `.o`, `.res` from `build/compiled/`), then b
 
 ```bash
 ./build.pas repl             # Interactive REPL
-./build.pas loader           # Script file executor
-./build.pas loaderbare       # Bare script executor (core engine only)
+./build.pas loader           # Script Loader
+./build.pas loaderbare       # Bare Script Loader (core engine only)
 ./build.pas testrunner       # JavaScript test runner
 ./build.pas benchmarkrunner  # Performance benchmark runner
-./build.pas bundler          # Bytecode bundler (compile to .gbc)
+./build.pas bundler          # Bundler (compile to .gbc)
 ./build.pas tests            # Pascal unit tests
 ```
 
@@ -139,7 +139,7 @@ printf "name;" | ./build/GocciaScriptLoader --globals=context.toml --output=json
 ./build/GocciaREPL --stack-size=5000         # Custom call stack depth limit
 ./build/GocciaREPL --max-memory=10485760     # 10 MB GC heap limit
 
-# When --import-map is omitted, the CLI walks up from the entry file directory
+# When --import-map is omitted, the CLI walks up from the entry file's directory
 # and uses the first goccia.json (or .json5 / .toml) it finds.
 printf 'import { add } from "@/math"; add(1, 2);' | ./build/GocciaScriptLoader
 
@@ -196,7 +196,7 @@ When `--multifile` is set, each input — whether a file or stdin — is scanned
 - `GocciaBenchmarkRunner` produces one file entry per section in the report.
 - `GocciaREPL` accepts `--multifile` for symmetry but ignores it (the REPL takes no file arguments).
 
-**Combining with other flags.** `--source-map=<file>` is rejected with `--multifile` for the same reason as the bundler's `--output=<file>` — a single source-map output cannot represent multiple section sources. All other flags compose normally, including `--jobs` for parallel section dispatch and `goccia.json` integration via `"multifile": true`.
+**Combining with other options.** `--source-map=<file>` is rejected with `--multifile` for the same reason as the bundler's `--output=<file>` — a single source-map output cannot represent multiple section sources. All other options compose normally, including `--jobs` for parallel section dispatch and `goccia.json` integration via `"multifile": true`.
 
 ### Configuration File (`goccia.json`)
 
@@ -208,9 +208,9 @@ All CLI options can also be set via a project configuration file. The CLI discov
 
 The first file found is loaded and applied as the **root config**. When running multiple files (e.g. via `GocciaTestRunner` or `GocciaBundler`), a **per-file config** is also discovered from each file's directory. The full precedence is:
 
-1. **CLI arguments** (highest priority — always win)
+1. **CLI options** (highest priority — always win)
 2. **Per-file config** (`goccia.toml`, `goccia.json5`, or `goccia.json` nearest to the file being processed)
-3. **Root config** (discovered from the entry path at startup, or supplied via `--config`)
+3. **Root config** (discovered from the entry file's directory at startup, or supplied via `--config`)
 4. **System default** (engine defaults)
 
 **`--config=<path>`** — Override auto-discovery and load the root config from an explicit location. Available on every CLI tool.
@@ -226,7 +226,7 @@ The path may be either a **file** (any registered extension — `.json`, `.json5
 ./build/GocciaScriptLoader example.js --config=./configs/
 ```
 
-Relative paths are resolved against the current working directory. A missing file or a directory with no recognised `goccia.*` is a hard error so a typo is not silently ignored. CLI arguments still take precedence over values from the file, and per-file configs continue to be discovered normally for individual files.
+Relative paths are resolved against the current working directory. A missing file or a directory with no recognised `goccia.*` is a hard error so a typo is not silently ignored. CLI options still take precedence over values from the file, and per-file configs continue to be discovered normally for individual files.
 
 ```json
 {
@@ -250,7 +250,7 @@ Relative paths are resolved against the current working directory. A missing fil
 }
 ```
 
-Config keys mirror CLI flag names (e.g. `--mode` → `"mode"`, `--max-memory` → `"max-memory"`). Boolean flags use `true`/`false`. Array values (like `alias` and `allowed-hosts`) use JSON arrays. The `imports` object is handled by the module resolver and coexists with CLI option keys.
+Config keys mirror CLI option names (e.g. `--mode` -> `"mode"`, `--max-memory` -> `"max-memory"`). A config value is the value assigned to a config key and the setting it carries: boolean flags use `true`/`false`, and array-valued options like `alias` and `allowed-hosts` use JSON arrays. The `imports` object is handled by the module resolver and coexists with CLI option keys.
 
 **`extends`** — A config file can inherit from a base config using the `extends` key. The path is resolved relative to the config file's directory. Child values override parent values:
 
@@ -319,7 +319,7 @@ if ConfigPath <> '' then
   Resolver.LoadImportMap(ConfigPath);
 ```
 
-### GocciaBundler (Standalone Bytecode Compiler)
+### GocciaBundler (Bundler)
 
 GocciaBundler is a dedicated tool for compiling source files to `.gbc` bytecode without executing them. It accepts the same input modes as GocciaScriptLoader (file, multiple files, directory, stdin):
 
@@ -330,7 +330,7 @@ GocciaBundler is a dedicated tool for compiling source files to `.gbc` bytecode 
 # Custom output path
 ./build/GocciaBundler example.js --output=dist/example.gbc
 
-# Compile all scripts in a directory (1:1 .gbc output alongside each source)
+# Compile all source files in a directory (1:1 .gbc output alongside each source)
 ./build/GocciaBundler src/
 
 # Compile a directory to a specific output directory
@@ -339,7 +339,7 @@ GocciaBundler is a dedicated tool for compiling source files to `.gbc` bytecode 
 # Compile from stdin (--output required)
 printf "const x = 2 + 2; x;" | ./build/GocciaBundler --output=out.gbc
 
-# Multiple positional files
+# Multiple positional input files
 ./build/GocciaBundler a.js b.js c.js
 
 # Write source map alongside .gbc
@@ -368,7 +368,7 @@ All compiled binaries go to the `build/` directory:
 | `build/GocciaScriptLoaderBare` | `source/app/GocciaScriptLoaderBare.dpr` | Execute file or stdin source with the core engine and CLI-local `print`; no loader runtime profile |
 | `build/GocciaTestRunner` | `source/app/GocciaTestRunner.dpr` | JavaScript test runner |
 | `build/GocciaBenchmarkRunner` | `source/app/GocciaBenchmarkRunner.dpr` | Performance benchmark runner for files or stdin input |
-| `build/GocciaBundler` | `source/app/GocciaBundler.dpr` | Standalone bytecode compiler (source to `.gbc`) |
+| `build/GocciaBundler` | `source/app/GocciaBundler.dpr` | Bundler (source to `.gbc`) |
 | `build/Goccia.Values.Primitives.Test` | `*.Test.pas` | Pascal unit test binaries |
 
 Intermediate files (`.o`, `.ppu`) go to `build/compiled/` to keep the source tree clean.
@@ -464,7 +464,7 @@ GocciaScript/
 │   │   ├── GocciaScriptLoaderBare.dpr  # Core-engine-only script loader
 │   │   ├── GocciaTestRunner.dpr        # Test runner program source
 │   │   ├── GocciaBenchmarkRunner.dpr   # Benchmark runner program source
-│   │   ├── GocciaBundler.dpr     # Standalone bytecode compiler
+│   │   ├── GocciaBundler.dpr     # Bundler
 │   │   ├── Goccia.CLI.Application.pas  # CLI application base class
 │   │   ├── Goccia.CLI.Help.pas         # CLI help generation
 │   │   └── Goccia.CLI.EngineSetup.pas  # Engine setup utilities
@@ -556,7 +556,7 @@ Runs on the full platform matrix:
 
 **`benchmark`** (needs build) — Runs all benchmarks on all platforms. On main (ubuntu-latest x64), saves benchmark results as JSON to `actions/cache` for PR comparison.
 
-**`cli`** (needs build) — Downloads pre-built binaries and runs CLI behavior smoke tests on all platforms via Bun: flags across all apps, lexer numeric-separator rejection, parser error display, config-file loading, and app-specific features. Windows runs additionally assert that the loader binary does not link OpenSSL DLLs (HTTPS must use the platform TLS stack statically).
+**`cli`** (needs build) — Downloads pre-built binaries and runs CLI behavior smoke tests on all platforms via Bun: options across all apps, lexer numeric-separator rejection, parser error display, config-file loading, and app-specific features. Windows runs additionally assert that the loader binary does not link OpenSSL DLLs (HTTPS must use the platform TLS stack statically).
 
 **`artifacts`** (needs test + toml-compliance + json5-compliance + benchmark + cli, main only) — Uploads production binaries after all checks pass, deriving the executable names from the `source/app/*.dpr` entrypoints.
 
@@ -581,7 +581,7 @@ Runs on **ubuntu-latest x64 only** (single runner, no matrix).
 
 **`test262`** (needs build, **non-blocking**) — Checks out `tc39/test262` at the pinned SHA, runs `bun scripts/run_test262_suite.ts --suite-dir test262-suite --mode=bytecode --jobs=2 --output=test262-results.json`, and uploads the JSON report. Failing tests do not fail the job. The downstream `test262-comment` job (`if: always()`) restores the most recent `test262-baseline-` cache entry from main, then `bun scripts/run_test262_suite.ts --comment test262-results.json <baseline>` builds the markdown body and the workflow posts/updates a comment using marker `<!-- test262-results -->`. The comment shows a per-category breakdown (built-ins, harness, intl402, language, staging) with Δ-vs-main columns when a baseline is cached, an "Areas closest to 100%" sub-table, and a collapsible per-test delta list.
 
-**`cli`** (needs build) — Runs CLI behavior smoke tests via Bun (`scripts/test-cli.ts`, `scripts/test-cli-lexer.ts`, `scripts/test-cli-parser.ts`, `scripts/test-cli-config.ts`, `scripts/test-cli-apps.ts`). `test-cli-apps.ts` includes `GocciaScriptLoaderBare` coverage for stdin, `-`, file input, CLI-local `print`, module source type, absence of the loader runtime profile, and `--mode=interpreted|bytecode` (both values plus invalid-value rejection).
+**`cli`** (needs build) — Runs CLI behavior smoke tests via Bun (`scripts/test-cli.ts`, `scripts/test-cli-lexer.ts`, `scripts/test-cli-parser.ts`, `scripts/test-cli-config.ts`, `scripts/test-cli-apps.ts`). `test-cli-apps.ts` includes `GocciaScriptLoaderBare` coverage for stdin, `-`, input files, CLI-local `print`, module source type, absence of the loader runtime profile, and `--mode=interpreted|bytecode` (both values plus invalid-value rejection).
 
 FPC is only installed once per platform in the `build` job. In `ci.yml`, the test, benchmark, cli, TOML, JSON5, and test262 conformance jobs reuse the pre-built binaries and artifacts from that job; in `pr.yml`, the test, benchmark, test262, and cli jobs do the same.
 
