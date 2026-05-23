@@ -42,6 +42,16 @@ describe.runIf(isIntl)("Intl.NumberFormat.prototype.format", () => {
     }).format(-0.01)).toBe("0");
   });
 
+  test("format treats NaN as unsigned for signDisplay", () => {
+    expect(new Intl.NumberFormat("en-US", { signDisplay: "auto" }).format(NaN)).toBe("NaN");
+    expect(new Intl.NumberFormat("en-US", { signDisplay: "always" }).format(NaN)).toBe("+NaN");
+    expect(new Intl.NumberFormat("en-US", { signDisplay: "never" }).format(NaN)).toBe("NaN");
+    expect(new Intl.NumberFormat("en-US", { signDisplay: "exceptZero" }).format(NaN)).toBe("NaN");
+    expect(new Intl.NumberFormat("en-US", { notation: "scientific" }).format(NaN)).toBe("NaN");
+    expect(new Intl.NumberFormat("en-US", { notation: "engineering" }).format(NaN)).toBe("NaN");
+    expect(new Intl.NumberFormat("en-US", { notation: "compact" }).format(NaN)).toBe("NaN");
+  });
+
   test("significant digit formatting keeps plain decimal precision", () => {
     expect(new Intl.NumberFormat("en-US", {
       useGrouping: false,

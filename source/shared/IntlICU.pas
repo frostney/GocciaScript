@@ -1581,6 +1581,20 @@ begin
     Result := ScaledInt / Scale;
 end;
 
+function CanonicalizeICUNumberFormatInput(AValue: Double): Double; inline;
+var
+  Bits: QWord;
+begin
+  if not IsNan(AValue) then
+    Exit(AValue);
+
+  // ECMA-402 models NaN as the unsigned abstract value not-a-number.
+  // ICU formats a negative NaN payload as "-NaN" on Linux, so normalize
+  // the payload before crossing the ICU boundary.
+  Bits := QWord($7FF8000000000000);
+  Move(Bits, Result, SizeOf(Result));
+end;
+
 procedure AddSkeletonToken(var ASkeleton: string; const AToken: string);
 begin
   if AToken = '' then
@@ -1873,6 +1887,7 @@ end;
 function TryICUFormatNumber(const ALocale: string; AValue: Double;
   const AOptions: TIntlNumberFormatOptions; out AFormatted: string): Boolean;
 begin
+  AValue := CanonicalizeICUNumberFormatInput(AValue);
   if TryICUFormatNumberSkeleton(ALocale, AValue, AOptions, AFormatted) then
     Exit(True);
   Result := CanUseLegacyNumberFormatter(AOptions) and
@@ -1997,6 +2012,7 @@ end;
 function TryICUFormatNumberToParts(const ALocale: string; AValue: Double;
   const AOptions: TIntlNumberFormatOptions; out AParts: TIntlFormatPartArray): Boolean;
 begin
+  AValue := CanonicalizeICUNumberFormatInput(AValue);
   if TryICUFormatNumberToPartsSkeleton(ALocale, AValue, AOptions, AParts) then
     Exit(True);
   Result := CanUseLegacyNumberFormatter(AOptions) and
