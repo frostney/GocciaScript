@@ -25,6 +25,17 @@ describe.runIf(hasGoccia)("native callback GC roots", () => {
       Goccia.gc();
       return [value, value + 1];
     });
+    const flatMappedWithGetter = [1].flatMap((value) => {
+      const mapped = [];
+      Object.defineProperty(mapped, "0", {
+        get() {
+          Goccia.gc();
+          return value;
+        },
+      });
+      mapped.length = 1;
+      return mapped;
+    });
     const reduced = [1, 2].reduce((accumulator, value) => {
       Goccia.gc();
       return accumulator + value;
@@ -66,6 +77,7 @@ describe.runIf(hasGoccia)("native callback GC roots", () => {
     expect(mapped).toEqual([2, 4]);
     expect(filtered).toEqual([1, 2]);
     expect(flatMapped).toEqual([1, 2]);
+    expect(flatMappedWithGetter).toEqual([1]);
     expect(reduced).toBe(3);
     expect(sorted).toEqual([1, 2]);
     expect(toSorted).toEqual([1, 2]);

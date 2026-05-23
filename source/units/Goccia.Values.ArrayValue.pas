@@ -1759,7 +1759,7 @@ var
   CallArgs: TGocciaArrayCallbackArgs;
   I, J: Integer;
   MappedValue: TGocciaValue;
-  ResultRoot: TGocciaTempRoot;
+  ResultRoot, MappedValueRoot: TGocciaTempRoot;
 begin
   View.Init(AThisValue);
   Callback := ValidateArrayMethodCall('flatMap', AArgs, AThisValue, True);
@@ -1769,6 +1769,7 @@ begin
   else
     ResultArray := TGocciaArrayValue.Create;
   InitializeTempRoot(ResultRoot);
+  InitializeTempRoot(MappedValueRoot);
   AddTempRootIfNeeded(ResultRoot, ResultArray);
   try
 
@@ -1786,19 +1787,23 @@ begin
         CallArgs.Element := View.Get(I);
         CallArgs.Index := TGocciaNumberLiteralValue.Create(I);
         MappedValue := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
-
-        if MappedValue is TGocciaArrayValue then
-        begin
-          // Use View-based iteration for prototype-aware access
-          MappedView.Init(MappedValue);
-          for J := 0 to MappedView.Len - 1 do
+        AddTempRootIfNeeded(MappedValueRoot, MappedValue);
+        try
+          if MappedValue is TGocciaArrayValue then
           begin
-            if MappedView.HasIndex(J) then
-              ResultArray.Elements.Add(MappedView.Get(J));
-          end;
-        end
-        else
-          ResultArray.Elements.Add(MappedValue);
+            // Use View-based iteration for prototype-aware access
+            MappedView.Init(MappedValue);
+            for J := 0 to MappedView.Len - 1 do
+            begin
+              if MappedView.HasIndex(J) then
+                ResultArray.Elements.Add(MappedView.Get(J));
+            end;
+          end
+          else
+            ResultArray.Elements.Add(MappedValue);
+        finally
+          RemoveTempRootIfNeeded(MappedValueRoot);
+        end;
       end;
     finally
       CallArgs.Free;

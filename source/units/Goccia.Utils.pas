@@ -156,14 +156,15 @@ var
 begin
   InitializeTempRoot(CallableRoot);
   InitializeTempRoot(ThisRoot);
-  AddTempRootIfNeeded(CallableRoot, ACallable);
-  AddTempRootIfNeeded(ThisRoot, AThisValue);
-  SetLength(ArgRoots, AArgs.Length);
-  for I := 0 to High(ArgRoots) do
-    InitializeTempRoot(ArgRoots[I]);
-  for I := 0 to High(ArgRoots) do
-    AddTempRootIfNeeded(ArgRoots[I], AArgs.GetElement(I));
   try
+    AddTempRootIfNeeded(CallableRoot, ACallable);
+    AddTempRootIfNeeded(ThisRoot, AThisValue);
+    SetLength(ArgRoots, AArgs.Length);
+    for I := 0 to High(ArgRoots) do
+      InitializeTempRoot(ArgRoots[I]);
+    for I := 0 to High(ArgRoots) do
+      AddTempRootIfNeeded(ArgRoots[I], AArgs.GetElement(I));
+
     if ACallable is TGocciaFunctionBase then
       Result := TGocciaFunctionBase(ACallable).Call(AArgs, AThisValue)
     else if ACallable is TGocciaClassValue then
