@@ -393,6 +393,7 @@ var
   TypedCallback: TGocciaFunctionBase;
   CallArgs: TGocciaArgumentsCollection;
   I: Integer;
+  MapRoot, CallbackRoot, ThisRoot: TGocciaTempRoot;
 begin
   // Steps 1-3: If M does not have a [[MapData]] internal slot, throw a TypeError
   if not (AThisValue is TGocciaMapValue) then
@@ -417,23 +418,35 @@ begin
   if Callback is TGocciaFunctionBase then
     TypedCallback := TGocciaFunctionBase(Callback);
 
+  InitializeTempRoot(MapRoot);
+  InitializeTempRoot(CallbackRoot);
+  InitializeTempRoot(ThisRoot);
+  AddTempRootIfNeeded(MapRoot, M);
+  AddTempRootIfNeeded(CallbackRoot, Callback);
+  AddTempRootIfNeeded(ThisRoot, ThisArg);
+  try
   // Step 6: For each Record { [[Key]], [[Value]] } p of M.[[MapData]], do
-  for I := 0 to M.Entries.Count - 1 do
-  begin
-    // Step 6b: Call(callbackfn, thisArg, « p.[[Value]], p.[[Key]], M »)
-    CallArgs := TGocciaArgumentsCollection.Create([M.Entries[I].Value, M.Entries[I].Key, M]);
-    try
-      if Assigned(TypedCallback) then
-        TypedCallback.Call(CallArgs, ThisArg)
-      else
-        InvokeCallable(Callback, CallArgs, ThisArg);
-    finally
-      CallArgs.Free;
+    for I := 0 to M.Entries.Count - 1 do
+    begin
+      // Step 6b: Call(callbackfn, thisArg, « p.[[Value]], p.[[Key]], M »)
+      CallArgs := TGocciaArgumentsCollection.Create([M.Entries[I].Value, M.Entries[I].Key, M]);
+      try
+        if Assigned(TypedCallback) then
+          TypedCallback.Call(CallArgs, ThisArg)
+        else
+          InvokeCallable(Callback, CallArgs, ThisArg);
+      finally
+        CallArgs.Free;
+      end;
     end;
-  end;
 
-  // Step 7: Return undefined
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    // Step 7: Return undefined
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  finally
+    RemoveTempRootIfNeeded(ThisRoot);
+    RemoveTempRootIfNeeded(CallbackRoot);
+    RemoveTempRootIfNeeded(MapRoot);
+  end;
 end;
 
 // ES2026 §24.1.3.8 Map.prototype.keys()
@@ -527,6 +540,7 @@ var
   TypedCallback: TGocciaFunctionBase;
   CallArgs: TGocciaArgumentsCollection;
   Index: Integer;
+  MapRoot, KeyRoot, CallbackRoot: TGocciaTempRoot;
 begin
   // Steps 1-3: If M does not have a [[MapData]] internal slot, throw a TypeError
   if not (AThisValue is TGocciaMapValue) then
@@ -551,20 +565,32 @@ begin
   if Index >= 0 then
     Exit(M.Entries[Index].Value);
 
-  // Step 5: Let value be ? Call(callbackfn, undefined, « key »)
-  TypedCallback := TGocciaFunctionBase(CallbackArg);
-  CallArgs := TGocciaArgumentsCollection.Create([MapKey]);
+  InitializeTempRoot(MapRoot);
+  InitializeTempRoot(KeyRoot);
+  InitializeTempRoot(CallbackRoot);
+  AddTempRootIfNeeded(MapRoot, M);
+  AddTempRootIfNeeded(KeyRoot, MapKey);
+  AddTempRootIfNeeded(CallbackRoot, CallbackArg);
   try
-    ComputedValue := TypedCallback.Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
-  finally
-    CallArgs.Free;
-  end;
+    // Step 5: Let value be ? Call(callbackfn, undefined, « key »)
+    TypedCallback := TGocciaFunctionBase(CallbackArg);
+    CallArgs := TGocciaArgumentsCollection.Create([MapKey]);
+    try
+      ComputedValue := TypedCallback.Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+    finally
+      CallArgs.Free;
+    end;
 
-  // Step 6: Set key to CanonicalizeKeyedCollectionKey(key)
-  // Step 7: Append Record { [[Key]]: key, [[Value]]: value } to M.[[MapData]]
-  M.SetEntry(MapKey, ComputedValue);
-  // Step 8: Return value
-  Result := ComputedValue;
+    // Step 6: Set key to CanonicalizeKeyedCollectionKey(key)
+    // Step 7: Append Record { [[Key]]: key, [[Value]]: value } to M.[[MapData]]
+    M.SetEntry(MapKey, ComputedValue);
+    // Step 8: Return value
+    Result := ComputedValue;
+  finally
+    RemoveTempRootIfNeeded(CallbackRoot);
+    RemoveTempRootIfNeeded(KeyRoot);
+    RemoveTempRootIfNeeded(MapRoot);
+  end;
 end;
 
 initialization

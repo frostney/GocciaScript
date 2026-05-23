@@ -69,6 +69,12 @@ type
   TGocciaBytecodeGeneratorResumeKind = (bgrkNext, bgrkReturn, bgrkThrow);
   TGocciaBytecodeGeneratorState = (bgsSuspendedStart, bgsSuspendedYield,
     bgsExecuting, bgsCompleted);
+  TGocciaVMSavedStateRoot = record
+    Closure: TGocciaBytecodeClosure;
+    NewTarget: TGocciaValue;
+    Arguments: TGocciaRegisterArray;
+  end;
+  TGocciaVMSavedStateRootArray = array of TGocciaVMSavedStateRoot;
 
   TGocciaVM = class
   private
@@ -104,6 +110,8 @@ type
     FLastClosureThisValue: TGocciaRegister;
     FPrivateInitializerReceiver: TGocciaValue;
     FStackRoot: TGocciaVMStackRoot;
+    FTempSavedStateRoots: TGocciaVMSavedStateRootArray;
+    FTempSavedStateRootCount: Integer;
     function ConstantToValue(const AConstant: TGocciaBytecodeConstant): TGocciaValue;
     // ES2026 §13.2.8.3 GetTemplateObject — lazy-build helper for bckTemplateObject constants.
     function BuildTemplateObjectConstant(const ATemplate: TGocciaFunctionTemplate;
@@ -234,6 +242,9 @@ type
       out APrevCovLine: UInt32; out AProfileTimestamp: Int64): Integer;
     procedure TeardownCurrentFrame(const ATemplate: TGocciaFunctionTemplate;
       const AProfileTimestamp: Int64; const ATargetHandlerCount: Integer);
+    procedure PushSavedStateRoot(const AClosure: TGocciaBytecodeClosure;
+      const ANewTarget: TGocciaValue; const AArguments: TGocciaRegisterArray);
+    procedure PopSavedStateRoot;
     procedure SetupNewFrame(const AClosure: TGocciaBytecodeClosure;
       const AThisValue: TGocciaRegister; const AArguments: TGocciaRegisterArray;
       const AArgCount: Integer; const AArg0, AArg1, AArg2: TGocciaRegister;
@@ -1050,6 +1061,14 @@ begin
       FVM.FFrameStack[I].LocalCellCount);
     if Assigned(FVM.FFrameStack[I].NewTarget) then
       TGocciaValue(FVM.FFrameStack[I].NewTarget).MarkReferences;
+  end;
+
+  for I := 0 to FVM.FTempSavedStateRootCount - 1 do
+  begin
+    MarkClosureReferences(FVM.FTempSavedStateRoots[I].Closure);
+    if Assigned(FVM.FTempSavedStateRoots[I].NewTarget) then
+      FVM.FTempSavedStateRoots[I].NewTarget.MarkReferences;
+    MarkRegisterArray(FVM.FTempSavedStateRoots[I].Arguments);
   end;
 
   if Assigned(FVM.FActiveDecoratorSession) then
@@ -2639,6 +2658,7 @@ function TGocciaBytecodeFunctionValue.Call(
 var
   Promise: TGocciaPromiseValue;
   EffectiveThis: TGocciaValue;
+  PromiseRoot: TGocciaTempRoot;
 begin
   if (not FStrictThis) and Assigned(FVM.FGlobalThisValue) and
      (not Assigned(AThisValue) or
@@ -2660,18 +2680,24 @@ begin
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsAsync then
   begin
     Promise := TGocciaPromiseValue.Create;
+    InitializeTempRoot(PromiseRoot);
+    AddTempRootIfNeeded(PromiseRoot, Promise);
     try
       try
-        Promise.Resolve(FVM.ExecuteClosure(FClosure, EffectiveThis, AArguments));
+        try
+          Promise.Resolve(FVM.ExecuteClosure(FClosure, EffectiveThis, AArguments));
+        except
+          on E: EGocciaBytecodeThrow do
+            Promise.Reject(E.ThrownValue);
+          on E: TGocciaThrowValue do
+            Promise.Reject(E.Value);
+        end;
       except
-        on E: EGocciaBytecodeThrow do
-          Promise.Reject(E.ThrownValue);
-        on E: TGocciaThrowValue do
-          Promise.Reject(E.Value);
+        Promise.Free;
+        raise;
       end;
-    except
-      Promise.Free;
-      raise;
+    finally
+      RemoveTempRootIfNeeded(PromiseRoot);
     end;
     Exit(Promise);
   end;
@@ -2700,6 +2726,7 @@ function TGocciaBytecodeFunctionValue.CallNoArgs(
 var
   Promise: TGocciaPromiseValue;
   EffectiveThis: TGocciaValue;
+  PromiseRoot: TGocciaTempRoot;
 begin
   if (not FStrictThis) and Assigned(FVM.FGlobalThisValue) and
      (not Assigned(AThisValue) or
@@ -2721,19 +2748,25 @@ begin
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsAsync then
   begin
     Promise := TGocciaPromiseValue.Create;
+    InitializeTempRoot(PromiseRoot);
+    AddTempRootIfNeeded(PromiseRoot, Promise);
     try
       try
-        Promise.Resolve(RegisterToValue(FVM.ExecuteClosureRegisters0(FClosure,
-          VMValueToRegisterFast(EffectiveThis))));
+        try
+          Promise.Resolve(RegisterToValue(FVM.ExecuteClosureRegisters0(FClosure,
+            VMValueToRegisterFast(EffectiveThis))));
+        except
+          on E: EGocciaBytecodeThrow do
+            Promise.Reject(E.ThrownValue);
+          on E: TGocciaThrowValue do
+            Promise.Reject(E.Value);
+        end;
       except
-        on E: EGocciaBytecodeThrow do
-          Promise.Reject(E.ThrownValue);
-        on E: TGocciaThrowValue do
-          Promise.Reject(E.Value);
+        Promise.Free;
+        raise;
       end;
-    except
-      Promise.Free;
-      raise;
+    finally
+      RemoveTempRootIfNeeded(PromiseRoot);
     end;
     Exit(Promise);
   end;
@@ -2747,6 +2780,7 @@ function TGocciaBytecodeFunctionValue.CallOneArg(const AArg0,
 var
   Promise: TGocciaPromiseValue;
   EffectiveThis: TGocciaValue;
+  PromiseRoot: TGocciaTempRoot;
 begin
   if (not FStrictThis) and Assigned(FVM.FGlobalThisValue) and
      (not Assigned(AThisValue) or
@@ -2770,19 +2804,25 @@ begin
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsAsync then
   begin
     Promise := TGocciaPromiseValue.Create;
+    InitializeTempRoot(PromiseRoot);
+    AddTempRootIfNeeded(PromiseRoot, Promise);
     try
       try
-        Promise.Resolve(RegisterToValue(FVM.ExecuteClosureRegisters1(FClosure,
-          VMValueToRegisterFast(EffectiveThis), VMValueToRegisterFast(AArg0))));
+        try
+          Promise.Resolve(RegisterToValue(FVM.ExecuteClosureRegisters1(FClosure,
+            VMValueToRegisterFast(EffectiveThis), VMValueToRegisterFast(AArg0))));
+        except
+          on E: EGocciaBytecodeThrow do
+            Promise.Reject(E.ThrownValue);
+          on E: TGocciaThrowValue do
+            Promise.Reject(E.Value);
+        end;
       except
-        on E: EGocciaBytecodeThrow do
-          Promise.Reject(E.ThrownValue);
-        on E: TGocciaThrowValue do
-          Promise.Reject(E.Value);
+        Promise.Free;
+        raise;
       end;
-    except
-      Promise.Free;
-      raise;
+    finally
+      RemoveTempRootIfNeeded(PromiseRoot);
     end;
     Exit(Promise);
   end;
@@ -2796,6 +2836,7 @@ function TGocciaBytecodeFunctionValue.CallTwoArgs(const AArg0, AArg1,
 var
   Promise: TGocciaPromiseValue;
   EffectiveThis: TGocciaValue;
+  PromiseRoot: TGocciaTempRoot;
 begin
   if (not FStrictThis) and Assigned(FVM.FGlobalThisValue) and
      (not Assigned(AThisValue) or
@@ -2821,20 +2862,26 @@ begin
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsAsync then
   begin
     Promise := TGocciaPromiseValue.Create;
+    InitializeTempRoot(PromiseRoot);
+    AddTempRootIfNeeded(PromiseRoot, Promise);
     try
       try
-        Promise.Resolve(RegisterToValue(FVM.ExecuteClosureRegisters2(FClosure,
-          VMValueToRegisterFast(EffectiveThis), VMValueToRegisterFast(AArg0),
-          VMValueToRegisterFast(AArg1))));
+        try
+          Promise.Resolve(RegisterToValue(FVM.ExecuteClosureRegisters2(FClosure,
+            VMValueToRegisterFast(EffectiveThis), VMValueToRegisterFast(AArg0),
+            VMValueToRegisterFast(AArg1))));
+        except
+          on E: EGocciaBytecodeThrow do
+            Promise.Reject(E.ThrownValue);
+          on E: TGocciaThrowValue do
+            Promise.Reject(E.Value);
+        end;
       except
-        on E: EGocciaBytecodeThrow do
-          Promise.Reject(E.ThrownValue);
-        on E: TGocciaThrowValue do
-          Promise.Reject(E.Value);
+        Promise.Free;
+        raise;
       end;
-    except
-      Promise.Free;
-      raise;
+    finally
+      RemoveTempRootIfNeeded(PromiseRoot);
     end;
     Exit(Promise);
   end;
@@ -2849,6 +2896,7 @@ function TGocciaBytecodeFunctionValue.CallThreeArgs(const AArg0, AArg1, AArg2,
 var
   Promise: TGocciaPromiseValue;
   EffectiveThis: TGocciaValue;
+  PromiseRoot: TGocciaTempRoot;
 begin
   if (not FStrictThis) and Assigned(FVM.FGlobalThisValue) and
      (not Assigned(AThisValue) or
@@ -2874,20 +2922,26 @@ begin
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsAsync then
   begin
     Promise := TGocciaPromiseValue.Create;
+    InitializeTempRoot(PromiseRoot);
+    AddTempRootIfNeeded(PromiseRoot, Promise);
     try
       try
-        Promise.Resolve(RegisterToValue(FVM.ExecuteClosureRegisters3(FClosure,
-          VMValueToRegisterFast(EffectiveThis), VMValueToRegisterFast(AArg0),
-          VMValueToRegisterFast(AArg1), VMValueToRegisterFast(AArg2))));
+        try
+          Promise.Resolve(RegisterToValue(FVM.ExecuteClosureRegisters3(FClosure,
+            VMValueToRegisterFast(EffectiveThis), VMValueToRegisterFast(AArg0),
+            VMValueToRegisterFast(AArg1), VMValueToRegisterFast(AArg2))));
+        except
+          on E: EGocciaBytecodeThrow do
+            Promise.Reject(E.ThrownValue);
+          on E: TGocciaThrowValue do
+            Promise.Reject(E.Value);
+        end;
       except
-        on E: EGocciaBytecodeThrow do
-          Promise.Reject(E.ThrownValue);
-        on E: TGocciaThrowValue do
-          Promise.Reject(E.Value);
+        Promise.Free;
+        raise;
       end;
-    except
-      Promise.Free;
-      raise;
+    finally
+      RemoveTempRootIfNeeded(PromiseRoot);
     end;
     Exit(Promise);
   end;
@@ -3042,6 +3096,7 @@ begin
   FActiveDecoratorSession := nil;
   FLastClosureThisValue := RegisterUndefined;
   FPrivateInitializerReceiver := nil;
+  FTempSavedStateRootCount := 0;
   SetLength(FRegisterStack, INITIAL_STACK_SIZE);
   FRegisterBase := 0;
   FRegisters := nil;
@@ -3073,6 +3128,7 @@ begin
   for I := 0 to FArgumentPoolCount - 1 do
     FArgumentPool[I].Free;
   SetLength(FArgumentPool, 0);
+  SetLength(FTempSavedStateRoots, 0);
   FHandlerStack.Free;
   SetExceptionMask(FPreviousExceptionMask);
   inherited;
@@ -7387,6 +7443,27 @@ begin
   Dec(FFrameDepth);
 end;
 
+procedure TGocciaVM.PushSavedStateRoot(const AClosure: TGocciaBytecodeClosure;
+  const ANewTarget: TGocciaValue; const AArguments: TGocciaRegisterArray);
+begin
+  if FTempSavedStateRootCount >= Length(FTempSavedStateRoots) then
+    SetLength(FTempSavedStateRoots, FTempSavedStateRootCount * 2 + 4);
+  FTempSavedStateRoots[FTempSavedStateRootCount].Closure := AClosure;
+  FTempSavedStateRoots[FTempSavedStateRootCount].NewTarget := ANewTarget;
+  FTempSavedStateRoots[FTempSavedStateRootCount].Arguments := AArguments;
+  Inc(FTempSavedStateRootCount);
+end;
+
+procedure TGocciaVM.PopSavedStateRoot;
+begin
+  if FTempSavedStateRootCount <= 0 then
+    Exit;
+  Dec(FTempSavedStateRootCount);
+  FTempSavedStateRoots[FTempSavedStateRootCount].Closure := nil;
+  FTempSavedStateRoots[FTempSavedStateRootCount].NewTarget := nil;
+  FTempSavedStateRoots[FTempSavedStateRootCount].Arguments := nil;
+end;
+
 procedure TGocciaVM.SetupNewFrame(const AClosure: TGocciaBytecodeClosure;
   const AThisValue: TGocciaRegister; const AArguments: TGocciaRegisterArray;
   const AArgCount: Integer; const AArg0, AArg1, AArg2: TGocciaRegister;
@@ -7559,6 +7636,7 @@ begin
   SavedHandlerCount := FHandlerStack.Count;
   InitialFrameStackCount := FFrameStackCount;
   FLastClosureThisValue := AThisValue;
+  PushSavedStateRoot(SavedClosure, SavedNewTarget, SavedCurrentArguments);
   try
     SetupNewFrame(AClosure, AThisValue, AArguments, AArgCount,
       AArg0, AArg1, AArg2, AUseFixedArgs,
@@ -10420,26 +10498,30 @@ begin
     end;
     Result := RegisterUndefined;
   finally
-    // Unwind any remaining trampoline frames (exception escape path)
-    while FFrameStackCount > InitialFrameStackCount do
-    begin
-      TeardownCurrentFrame(Template, ProfileEntryTimestamp,
-        FFrameStack[FFrameStackCount - 1].HandlerCount);
-      PopFrame(Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+    try
+      // Unwind any remaining trampoline frames (exception escape path)
+      while FFrameStackCount > InitialFrameStackCount do
+      begin
+        TeardownCurrentFrame(Template, ProfileEntryTimestamp,
+          FFrameStack[FFrameStackCount - 1].HandlerCount);
+        PopFrame(Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+      end;
+      // Teardown the outermost frame
+      TeardownCurrentFrame(Template, ProfileEntryTimestamp, SavedHandlerCount);
+      // Restore the caller's state
+      FCurrentClosure := SavedClosure;
+      FCurrentNewTarget := SavedNewTarget;
+      FCurrentArguments := SavedCurrentArguments;
+      FArgCount := SavedArgCount;
+      FRegisterBase := SavedRegisterBase;
+      FRegisterCount := SavedRegisterCount;
+      FRegisters := @FRegisterStack[FRegisterBase];
+      FLocalCellBase := SavedLocalCellBase;
+      FLocalCellCount := SavedLocalCellCount;
+      FLocalCells := @FLocalCellStack[FLocalCellBase];
+    finally
+      PopSavedStateRoot;
     end;
-    // Teardown the outermost frame
-    TeardownCurrentFrame(Template, ProfileEntryTimestamp, SavedHandlerCount);
-    // Restore the caller's state
-    FCurrentClosure := SavedClosure;
-    FCurrentNewTarget := SavedNewTarget;
-    FCurrentArguments := SavedCurrentArguments;
-    FArgCount := SavedArgCount;
-    FRegisterBase := SavedRegisterBase;
-    FRegisterCount := SavedRegisterCount;
-    FRegisters := @FRegisterStack[FRegisterBase];
-    FLocalCellBase := SavedLocalCellBase;
-    FLocalCellCount := SavedLocalCellCount;
-    FLocalCells := @FLocalCellStack[FLocalCellBase];
   end;
 end;
 

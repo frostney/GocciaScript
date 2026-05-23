@@ -59,6 +59,7 @@ var
   Iterator: TGocciaIteratorValue;
   Done: Boolean;
   I: Integer;
+  SourceRoot, ResultRoot: TGocciaTempRoot;
 
   procedure AddToGroup(const AValue: TGocciaValue; const AIndex: Integer);
   var
@@ -98,59 +99,53 @@ begin
 
   // Step 2: Let map be a new empty Map
   ResultMap := TGocciaMapValue.Create;
+  InitializeTempRoot(SourceRoot);
+  InitializeTempRoot(ResultRoot);
+  AddTempRootIfNeeded(SourceRoot, Source);
+  AddTempRootIfNeeded(ResultRoot, ResultMap);
+  try
 
-  // Fast path: source is an array (avoids iterator overhead)
-  if Source is TGocciaArrayValue then
-  begin
-    SourceArray := TGocciaArrayValue(Source);
-    TGarbageCollector.Instance.AddTempRoot(ResultMap);
-    try
+    // Fast path: source is an array (avoids iterator overhead)
+    if Source is TGocciaArrayValue then
+    begin
+      SourceArray := TGocciaArrayValue(Source);
       I := 0;
       while I < SourceArray.Elements.Count do
       begin
         AddToGroup(SourceArray.Elements[I], I);
         Inc(I);
       end;
-    finally
-      TGarbageCollector.Instance.RemoveTempRoot(ResultMap);
+      Result := ResultMap;
+      Exit;
     end;
-    Result := ResultMap;
-    Exit;
-  end;
 
-  // Iterator path: strings via string iterator
-  if Source is TGocciaStringLiteralValue then
-  begin
-    Iterator := TGocciaStringIteratorValue.Create(Source);
-    TGarbageCollector.Instance.AddTempRoot(Iterator);
-    TGarbageCollector.Instance.AddTempRoot(ResultMap);
-    try
-      I := 0;
-      CurrentValue := Iterator.DirectNext(Done);
-      while not Done do
-      begin
-        AddToGroup(CurrentValue, I);
-        Inc(I);
-        CurrentValue := Iterator.DirectNext(Done);
-      end;
-    finally
-      TGarbageCollector.Instance.RemoveTempRoot(ResultMap);
-      TGarbageCollector.Instance.RemoveTempRoot(Iterator);
-    end;
-    Result := ResultMap;
-    Exit;
-  end;
-
-  // Iterator path: objects with [Symbol.iterator]
-  if Source is TGocciaObjectValue then
-  begin
-    IteratorMethod := TGocciaObjectValue(Source).GetSymbolProperty(TGocciaSymbolValue.WellKnownIterator);
-    if Assigned(IteratorMethod) and not (IteratorMethod is TGocciaUndefinedLiteralValue) and IteratorMethod.IsCallable then
+    // Iterator path: strings via string iterator
+    if Source is TGocciaStringLiteralValue then
     begin
-      // Root ResultMap before calling [Symbol.iterator]() — that call
-      // executes user code and may trigger GC.
-      TGarbageCollector.Instance.AddTempRoot(ResultMap);
+      Iterator := TGocciaStringIteratorValue.Create(Source);
+      TGarbageCollector.Instance.AddTempRoot(Iterator);
       try
+        I := 0;
+        CurrentValue := Iterator.DirectNext(Done);
+        while not Done do
+        begin
+          AddToGroup(CurrentValue, I);
+          Inc(I);
+          CurrentValue := Iterator.DirectNext(Done);
+        end;
+      finally
+        TGarbageCollector.Instance.RemoveTempRoot(Iterator);
+      end;
+      Result := ResultMap;
+      Exit;
+    end;
+
+    // Iterator path: objects with [Symbol.iterator]
+    if Source is TGocciaObjectValue then
+    begin
+      IteratorMethod := TGocciaObjectValue(Source).GetSymbolProperty(TGocciaSymbolValue.WellKnownIterator);
+      if Assigned(IteratorMethod) and not (IteratorMethod is TGocciaUndefinedLiteralValue) and IteratorMethod.IsCallable then
+      begin
         CallArgs := TGocciaArgumentsCollection.Create;
         try
           IteratorObj := TGocciaFunctionBase(IteratorMethod).Call(CallArgs, Source);
@@ -188,17 +183,18 @@ begin
         finally
           TGarbageCollector.Instance.RemoveTempRoot(Iterator);
         end;
-      finally
-        TGarbageCollector.Instance.RemoveTempRoot(ResultMap);
+        Result := ResultMap;
+        Exit;
       end;
-      Result := ResultMap;
-      Exit;
     end;
-  end;
 
-  // Non-iterable: throw TypeError
-  ThrowTypeError(SErrorMapGroupByRequiresIterable, SSuggestNotIterable);
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    // Non-iterable: throw TypeError
+    ThrowTypeError(SErrorMapGroupByRequiresIterable, SSuggestNotIterable);
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  finally
+    RemoveTempRootIfNeeded(ResultRoot);
+    RemoveTempRootIfNeeded(SourceRoot);
+  end;
 end;
 
 end.

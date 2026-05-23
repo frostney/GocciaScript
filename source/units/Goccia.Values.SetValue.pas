@@ -434,6 +434,7 @@ var
   TypedCallback: TGocciaFunctionBase;
   CallArgs: TGocciaArgumentsCollection;
   I: Integer;
+  SetRoot, CallbackRoot, ThisRoot: TGocciaTempRoot;
 begin
   // Steps 1-3: If S does not have a [[SetData]] internal slot, throw a TypeError
   if not (AThisValue is TGocciaSetValue) then
@@ -458,23 +459,35 @@ begin
   if Callback is TGocciaFunctionBase then
     TypedCallback := TGocciaFunctionBase(Callback);
 
+  InitializeTempRoot(SetRoot);
+  InitializeTempRoot(CallbackRoot);
+  InitializeTempRoot(ThisRoot);
+  AddTempRootIfNeeded(SetRoot, S);
+  AddTempRootIfNeeded(CallbackRoot, Callback);
+  AddTempRootIfNeeded(ThisRoot, ThisArg);
+  try
   // Step 6: For each element e of S.[[SetData]], do
-  for I := 0 to S.FItems.Count - 1 do
-  begin
-    // Step 6b: Call(callbackfn, thisArg, « e, e, S »)
-    CallArgs := TGocciaArgumentsCollection.Create([S.FItems[I], S.FItems[I], S]);
-    try
-      if Assigned(TypedCallback) then
-        TypedCallback.Call(CallArgs, ThisArg)
-      else
-        InvokeCallable(Callback, CallArgs, ThisArg);
-    finally
-      CallArgs.Free;
+    for I := 0 to S.FItems.Count - 1 do
+    begin
+      // Step 6b: Call(callbackfn, thisArg, « e, e, S »)
+      CallArgs := TGocciaArgumentsCollection.Create([S.FItems[I], S.FItems[I], S]);
+      try
+        if Assigned(TypedCallback) then
+          TypedCallback.Call(CallArgs, ThisArg)
+        else
+          InvokeCallable(Callback, CallArgs, ThisArg);
+      finally
+        CallArgs.Free;
+      end;
     end;
-  end;
 
-  // Step 7: Return undefined
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    // Step 7: Return undefined
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  finally
+    RemoveTempRootIfNeeded(ThisRoot);
+    RemoveTempRootIfNeeded(CallbackRoot);
+    RemoveTempRootIfNeeded(SetRoot);
+  end;
 end;
 
 // ES2026 §24.2.3.10 Set.prototype.values()

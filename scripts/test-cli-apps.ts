@@ -112,6 +112,35 @@ console.log("Loader: JSON output (bytecode)...");
   if (typeof json.memory?.gc?.peakLiveBytes !== "number") throw new Error("Bytecode JSON memory.gc.peakLiveBytes should be present");
 }
 
+console.log("Loader: bytecode TypedArray.from roots mapper during iterator GC...");
+{
+  const source = `
+let i = 0;
+const iterable = {
+  [Symbol.iterator]() {
+    return {
+      next() {
+        i++;
+        Goccia.gc();
+        if (i > 2) return { done: true };
+        return { done: false, value: { value: i } };
+      }
+    };
+  }
+};
+const ta = Uint8Array.from(
+  iterable,
+  ({ mapper(item) { return item.value + this.offset; } }).mapper,
+  { offset: 0 },
+);
+ta[0] * 10 + ta[1];
+`;
+  const { exitCode, json, stderr } = runLoaderJson(source, ["--mode=bytecode"]);
+  if (exitCode !== 0) throw new Error(`TypedArray.from GC repro exited ${exitCode}: ${stderr}`);
+  const result = json.files?.[0]?.result;
+  if (result !== 12) throw new Error(`TypedArray.from GC repro expected 12, got ${result}`);
+}
+
 console.log("Loader: JSON undefined result...");
 {
   const { json } = runLoaderJson("undefined;\n");
