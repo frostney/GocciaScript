@@ -5,7 +5,7 @@ features: [compat-non-strict-mode]
 
 "use strict";
 
-test("top-level use strict keeps regular function this strict", () => {
+test("top-level use strict keeps ordinary function this strict", () => {
   function f() {
     return this;
   }

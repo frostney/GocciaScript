@@ -30,7 +30,7 @@ procedure RegisterConfigParser(const AExtension: string;
 
 { Apply configuration entries to the given options.
   Each entry whose key matches an option long name or config name is applied.
-  Options that are already Present are skipped, so CLI arguments
+  Options that are already Present are skipped, so CLI options
   parsed before this call naturally take precedence.
   Unknown keys are silently skipped (config files may contain
   keys for other subsystems).

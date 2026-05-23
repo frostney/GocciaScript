@@ -18,7 +18,8 @@ uses
   CLI.ConfigFile,
   CLI.Options,
   Goccia.Engine,
-  Goccia.Engine.Backend,
+  Goccia.Executor.Interpreter,
+  Goccia.Executor.Bytecode,
   Goccia.Executor,
   Goccia.Error,
   Goccia.Error.Detail,
@@ -103,7 +104,7 @@ var
   Editor: TLineEditor;
   ReadResult: TLineReadResult;
 
-  { Interpreted mode }
+  { Interpreter mode }
   Eng: TGocciaEngine;
   InterpExecutor: TGocciaInterpreterExecutor;
   ScriptResult: TGocciaScriptResult;

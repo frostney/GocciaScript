@@ -37,7 +37,7 @@ type
 
     { Mark this option as having been set by the command line.
       Called after ParseCommandLine so that per-file config can
-      distinguish CLI-set values from root-config-set values. }
+      distinguish CLI-set values from root config values. }
     procedure MarkFromCommandLine;
 
     property LongName: string read FLongName;

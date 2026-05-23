@@ -1,6 +1,6 @@
 /*---
 description: >
-  --source-type=module makes the entry script a Module, so import.meta
+  --source-type=module makes the entry file module source, so import.meta
   resolves to a Module Record's import meta object (ES2026 §13.3.12.1)
   and exposes a `url` string identifying this file.
 ---*/

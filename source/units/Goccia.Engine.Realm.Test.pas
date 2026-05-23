@@ -10,6 +10,7 @@ uses
   TestingPascalLibrary,
 
   Goccia.Engine,
+  Goccia.Executor.Interpreter,
   Goccia.Realm,
   Goccia.Runtime,
   Goccia.RuntimeExtensions.URL,

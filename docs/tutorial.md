@@ -314,10 +314,10 @@ Here's a quick reference of GocciaScript's key restrictions:
 | `for (init; test; update)` | Off by default | `for...of`, `.map()`, `.forEach()`, `.reduce()`, or `--compat-traditional-for-loop` for JavaScript compatibility |
 | `while (...)` / `do ... while (...)` | Off by default | `for...of`, `.map()`, `.forEach()`, `.reduce()`, or `--compat-while-loops` for JavaScript compatibility |
 | `eval("code")` | Not supported | No alternative (by design) |
-| `arguments` | Off by default | Prefer rest parameters (`...args`) or Script-source `--compat-non-strict-mode` |
-| sloppy assignment failures | Strict by default | Script-source `--compat-non-strict-mode` when porting code that expects failed property writes to be ignored |
-| sloppy function `this` | Strict by default | Script-source `--compat-non-strict-mode` when porting scripts that expect `globalThis` |
-| legacy `delete` returns | Strict by default | Script-source `--compat-non-strict-mode` when porting sloppy scripts |
+| `arguments` | Off by default | Prefer rest parameters (`...args`) or script source `--compat-non-strict-mode` |
+| sloppy assignment failures | Strict by default | script source `--compat-non-strict-mode` when porting code that expects failed property writes to be ignored |
+| sloppy function `this` | Strict by default | script source `--compat-non-strict-mode` when porting scripts that expect `globalThis` |
+| legacy `delete` returns | Strict by default | script source `--compat-non-strict-mode` when porting sloppy scripts |
 | `parseInt("10")` | Not available as global | `Number.parseInt("10")` |
 | `isNaN(x)` | Not available as global | `Number.isNaN(x)` |
 
@@ -331,5 +331,6 @@ You now have a working understanding of GocciaScript. Here's where to go from he
 - **[Built-in Objects](built-ins.md)** — Complete API reference for all built-in objects (Array, String, Map, Set, Promise, Temporal, etc.)
 - **[`examples/`](../examples/)** — More example programs: classes, promises, and unsupported feature demos
 - **[Architecture](architecture.md)** — Pipelines and main layers
-- **[Interpreter](interpreter.md)** and **[Bytecode VM](bytecode-vm.md)** — Tree-walk vs bytecode execution backends
-- **[Core patterns](core-patterns.md)** — Recurring implementation patterns, internal terminology
+- **[Interpreter](interpreter.md)** and **[Bytecode VM](bytecode-vm.md)** — Tree-walk vs bytecode execution modes
+- **[Core patterns](core-patterns.md)** — Recurring implementation patterns
+- **[GocciaScript Context](../CONTEXT.md)** — Canonical project terminology

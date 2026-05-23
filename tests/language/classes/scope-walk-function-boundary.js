@@ -54,7 +54,7 @@ describe("new.target function boundary", () => {
     expect(f.result).toBe(undefined);
   });
 
-  test("arrow inherits new.target through native callback", () => {
+  test("arrow inherits new.target when called by Array.map", () => {
     class Foo {
       constructor() {
         this.results = [1, 2].map(() => new.target);

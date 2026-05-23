@@ -280,7 +280,7 @@ describe("pattern matching expressions", () => {
     expect({} is Box).toBe(false);
   });
 
-  test("constructor value patterns do not identify builtins by shadowed names", () => {
+  test("constructor value patterns do not identify built-ins by shadowed names", () => {
     class Array {}
     class Object {}
 
@@ -303,7 +303,7 @@ describe("pattern matching expressions", () => {
     expect(box.matches(8)).toBe(false);
   });
 
-  test("builtin primitive constructors match primitive values", () => {
+  test("built-in primitive constructors match primitive values", () => {
     const sym = Symbol("sample");
 
     expect("sample" is String).toBe(true);

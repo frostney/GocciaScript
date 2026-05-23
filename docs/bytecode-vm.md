@@ -1,10 +1,10 @@
 # Bytecode VM
 
-*For contributors working on the bytecode backend.*
+*For contributors working on the bytecode executor and VM.*
 
 ## Executive Summary
 
-- **Two execution modes** — tree-walk interpreter (default) and bytecode VM (`--mode=bytecode`), sharing the same frontend, runtime objects, and GC
+- **Two execution modes** — tree-walk interpreter (default) and bytecode VM (`--mode=bytecode`), sharing the same source frontend, runtime objects, and GC
 - **Executor abstraction** — `TGocciaBytecodeExecutor` implements `TGocciaExecutor` with no dependency on the interpreter or evaluator
 - **Goccia-owned VM** — executes directly on `TGocciaValue` with tagged `TGocciaRegister` values; not a generic VM layer
 - **Opcode space** — core instructions (0-127) for hot paths, non-core generic ops (128-166), and semantic/helper instructions (167-255) for colder operations like imports/exports
@@ -17,7 +17,7 @@ GocciaScript has two execution modes:
 - **Interpreter mode**: tree-walk execution over the AST via `TGocciaInterpreterExecutor`
 - **Bytecode mode**: AST compilation to Goccia bytecode, then execution on `TGocciaVM` via `TGocciaBytecodeExecutor`
 
-Both modes are implementations of `TGocciaExecutor` (see [Architecture](architecture.md#executor-architecture)). The single `TGocciaEngine` class bootstraps the core language environment (global scope, core built-ins, shims) and delegates execution to whichever executor is configured. Optional host/runtime globals are attached through runtime extensions. The bytecode executor has no dependency on the interpreter or evaluator — it only uses the compiler and VM.
+Both execution modes are implementations of `TGocciaExecutor` (see [Architecture](architecture.md#executor-architecture)). The single `TGocciaEngine` class bootstraps the core language environment (global scope, core built-ins, shims) and delegates execution to whichever executor is configured. Optional runtime globals are attached through runtime extensions. The bytecode executor has no dependency on the interpreter or evaluator — it only uses the compiler and VM.
 
 ## Pipeline
 
@@ -38,7 +38,7 @@ Public bytecode artifacts use the `.gbc` extension.
 | Debug metadata | `Goccia.Bytecode.Debug.pas` |
 | VM execution | `Goccia.VM.pas` |
 | Frames / closures / upvalues | `Goccia.VM.CallFrame.pas`, `Goccia.VM.Closure.pas`, `Goccia.VM.Upvalue.pas` |
-| Bytecode executor | `Goccia.Engine.Backend.pas` (`TGocciaBytecodeExecutor`) |
+| Bytecode executor | `Goccia.Executor.Bytecode.pas` (`TGocciaBytecodeExecutor`) |
 | Opcode name lookup | `Goccia.Bytecode.OpCodeNames.pas` |
 | Profiler | `Goccia.Profiler.pas`, `Goccia.Profiler.Report.pas` |
 
@@ -121,7 +121,7 @@ The current optimization target is reducing bytecode-mode suite time further wit
 
 ## Profiling
 
-The `--profile` flag on GocciaScriptLoader enables language-level profiling of the bytecode VM. See [profiling.md](profiling.md) for the full guide.
+The `--profile` option on GocciaScriptLoader enables language-level profiling of the bytecode VM. See [profiling.md](profiling.md) for the full guide.
 
 - `--profile=opcodes` — opcode frequency histogram, opcode pair frequency (superinstruction candidates), and scalar fast-path hit rate for generic arithmetic/comparison opcodes
 - `--profile=functions` — per-function self-time, total-time, call count, and heap allocation count
@@ -149,7 +149,7 @@ The dispatch loop supports an optional instruction counter (`Goccia.InstructionL
 
 ## Design Rationale
 
-GocciaScript includes a bytecode execution backend built specifically for GocciaScript. The current VM is not a language-agnostic subsystem: it executes directly on `TGocciaValue`, shares the same runtime objects as the interpreter, and uses a Goccia-owned opcode surface.
+GocciaScript includes a bytecode executor built specifically for GocciaScript. The current VM is not a language-agnostic subsystem: it executes directly on `TGocciaValue`, shares the same runtime objects as the interpreter, and uses a Goccia-owned opcode surface.
 
 ### Why a Bytecode VM?
 
@@ -167,7 +167,7 @@ The solution is a split opcode space with three tiers:
 - **Non-core generic range (128–166):** generic arithmetic and bitwise operations that are still explicit bytecode but handle mixed or untyped operands.
 - **Semantic helper range (167–255):** colder language-level orchestration operations such as imports/exports, dynamic import, `import.meta`, await, and resource disposal.
 
-This split keeps the dispatch surface organized while still allowing the backend to be explicitly Goccia-specific.
+This split keeps the dispatch surface organized while still allowing the bytecode executor to be explicitly Goccia-specific.
 
 ### Why Shared Runtime Values?
 
@@ -198,11 +198,11 @@ This keeps the emitted bytecode compact and makes opcode additions deliberate in
 
 Compatibility features that alter identifier lookup still compile to explicit VM state instead of falling back to interpreter behavior.
 
-- **`arguments` object** — With `--compat-non-strict-mode` enabled for Script source, function templates snapshot the current call arguments in the frame. `OP_CREATE_ARGUMENTS` materializes an unmapped arguments object into the declared local slot before parameter defaults and body execution, so default initializers can observe `arguments.length` and generators see the original call list after suspension/resume. Module source forces strict compilation, so module function templates do not create compatibility arguments objects.
-- **Non-strict `this` binding** — Function templates serialize their strict-this mode. With `--compat-non-strict-mode` enabled for Script source, ordinary function templates clear it so VM call paths coerce nullish `this` to `globalThis`; arrows and class methods keep their existing lexical or strict receiver behavior. Module source ignores the compatibility flag for this decision.
-- **Non-strict assignment** — Failed object/global writes throw by default. In Script-source non-strict compatibility mode, the compiler emits `OP_SET_PROP_CONST_LOOSE`, `OP_SET_INDEX_LOOSE`, and `OP_SET_GLOBAL_LOOSE` for ordinary writes so failed `[[Set]]` results are ignored while null/undefined property access and throwing setters still raise errors.
-- **`with` statement** — With `--compat-non-strict-mode` enabled for Script source, the compiler lowers `with (expr) body` to `OP_TO_OBJECT`, stores the object in a hidden local, and records that hidden binding in the compiler scope. Identifier reads, writes, updates, and identifier calls inside the dynamic extent emit `OP_HAS_WITH_BINDING` probes from innermost to outermost hidden object before falling back to normal local/upvalue/global resolution. Writes that resolve to a with object use the loose set opcodes in non-strict mode. Nested functions inherit the hidden binding as an upvalue when captured, preserving closures created inside `with`.
-- **Non-strict `delete`** — With `--compat-non-strict-mode` enabled for Script source, member deletes emit `OP_DELETE_PROP_CONST_LOOSE` or `OP_DEL_INDEX_LOOSE`, which preserve strict null/undefined errors but return `false` for non-configurable properties. Identifier deletes compile to local/upvalue false results, `OP_DELETE_GLOBAL` for global object property semantics, or `with` binding probes as needed.
+- **`arguments` object** — With `--compat-non-strict-mode` enabled for script source, function templates snapshot the current call arguments in the frame. `OP_CREATE_ARGUMENTS` materializes an unmapped arguments object into the declared local slot before parameter defaults and body execution, so default initializers can observe `arguments.length` and generators see the original call list after suspension/resume. Module source forces strict compilation, so module function templates do not create compatibility arguments objects.
+- **Non-strict `this` binding** — Function templates serialize their strict-this mode. With `--compat-non-strict-mode` enabled for script source, ordinary function templates clear it so VM call paths coerce nullish `this` to `globalThis`; arrows and class methods keep their existing lexical or strict receiver behavior. Module source ignores the compatibility flag for this decision.
+- **Non-strict assignment** — Failed object/global writes throw by default. In script source non-strict compatibility mode, the compiler emits `OP_SET_PROP_CONST_LOOSE`, `OP_SET_INDEX_LOOSE`, and `OP_SET_GLOBAL_LOOSE` for ordinary writes so failed `[[Set]]` results are ignored while null/undefined property access and throwing setters still raise errors.
+- **`with` statement** — With `--compat-non-strict-mode` enabled for script source, the compiler lowers `with (expr) body` to `OP_TO_OBJECT`, stores the object in a hidden local, and records that hidden binding in the compiler scope. Identifier reads, writes, updates, and identifier calls inside the dynamic extent emit `OP_HAS_WITH_BINDING` probes from innermost to outermost hidden object before falling back to normal local/upvalue/global resolution. Writes that resolve to a with object use the loose set opcodes in non-strict mode. Nested functions inherit the hidden binding as an upvalue when captured, preserving closures created inside `with`.
+- **Non-strict `delete`** — With `--compat-non-strict-mode` enabled for script source, member deletes emit `OP_DELETE_PROP_CONST_LOOSE` or `OP_DEL_INDEX_LOOSE`, which preserve strict null/undefined errors but return `false` for non-configurable properties. Identifier deletes compile to local/upvalue false results, `OP_DELETE_GLOBAL` for global object property semantics, or `with` binding probes as needed.
 
 ### Compiler Optimizer
 
@@ -250,9 +250,10 @@ During code review, the following findings were investigated and determined to b
 
 ## Related documents
 
-- [Architecture](architecture.md) — Shared frontend and both backends at a glance
-- [Interpreter](interpreter.md) — Tree-walk backend (`Goccia.Interpreter`, `Goccia.Evaluator.*`)
-- [Core patterns](core-patterns.md) — Recurring Pascal conventions and terminology
+- [Architecture](architecture.md) — Shared source frontend and both execution modes at a glance
+- [Interpreter](interpreter.md) — Tree-walk execution (`Goccia.Interpreter`, `Goccia.Evaluator.*`)
+- [Core patterns](core-patterns.md) — Recurring Pascal conventions
+- [GocciaScript Context](../CONTEXT.md) — Canonical project terminology
 
 ## Contributor Notes
 

@@ -49,7 +49,7 @@ describe("Function.prototype.toString", () => {
     expect(() => toString.call("str")).toThrow(TypeError);
   });
 
-  test("arrow method on object returns source text", () => {
+  test("arrow function property returns source text", () => {
     const obj = {
       greet: (name) => "hello " + name
     };

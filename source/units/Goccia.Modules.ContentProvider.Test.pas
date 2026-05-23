@@ -15,7 +15,8 @@ uses
   Goccia.Bytecode.Module,
   Goccia.Constants.PropertyNames,
   Goccia.Engine,
-  Goccia.Engine.Backend,
+  Goccia.Executor.Bytecode,
+  Goccia.Executor.Interpreter,
   Goccia.Interpreter,
   Goccia.JSONL,
   Goccia.Lexer,
@@ -85,7 +86,7 @@ type
     procedure TestEngineNormalizesCRLFTextAssetModulesToLF;
     procedure TestModuleLoaderContentProviderSelfAssignment;
     procedure TestModuleLoaderRejectsRebindingAcrossRuntimes;
-    procedure TestBytecodeBackendUsesInjectedContentProvider;
+    procedure TestBytecodeExecutorUsesInjectedContentProvider;
   protected
     procedure BeforeAll; override;
     procedure AfterAll; override;
@@ -183,8 +184,8 @@ begin
     TestModuleLoaderContentProviderSelfAssignment);
   Test('Module loader rejects rebinding across runtimes',
     TestModuleLoaderRejectsRebindingAcrossRuntimes);
-  Test('Bytecode backend uses injected content provider',
-    TestBytecodeBackendUsesInjectedContentProvider);
+  Test('Bytecode executor uses injected content provider',
+    TestBytecodeExecutorUsesInjectedContentProvider);
 end;
 
 procedure TModuleContentProviderTests.BeforeAll;
@@ -340,7 +341,7 @@ begin
   end;
 end;
 
-procedure TModuleContentProviderTests.TestBytecodeBackendUsesInjectedContentProvider;
+procedure TModuleContentProviderTests.TestBytecodeExecutorUsesInjectedContentProvider;
 var
   Engine: TGocciaEngine;
   Executor: TGocciaBytecodeExecutor;

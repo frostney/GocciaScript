@@ -9,6 +9,7 @@ uses
   TestingPascalLibrary,
 
   Goccia.Engine,
+  Goccia.Executor.Interpreter,
   Goccia.ModuleResolver,
   Goccia.Modules,
   Goccia.Modules.Loader,

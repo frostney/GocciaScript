@@ -10,7 +10,8 @@ uses
 
   Goccia.Bytecode.Chunk,
   Goccia.Engine,
-  Goccia.Engine.Backend,
+  Goccia.Executor.Bytecode,
+  Goccia.Executor.Interpreter,
   Goccia.Scope,
   Goccia.TestSetup,
   Goccia.Values.Error,

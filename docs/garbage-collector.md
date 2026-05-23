@@ -4,7 +4,7 @@
 
 ## Executive Summary
 
-- **Mark-and-sweep** — Two-phase tracing GC (`Goccia.GarbageCollector.pas`) shared by both execution backends
+- **Mark-and-sweep** — Two-phase tracing GC (`Goccia.GarbageCollector.pas`) shared by both execution modes
 - **Auto-registration** — Every `TGocciaValue` registers with the GC via `AfterConstruction`; subclasses override `MarkReferences` to mark owned references
 - **Weak reference phase** — WeakMap and WeakSet use post-mark weak tracing/sweeping hooks so weak keys and values do not become strong roots
 - **Generation-counter marking** — O(1) mark-clear via `AdvanceMark` instead of O(n) flag reset per collection
@@ -91,7 +91,7 @@ The GC tracks approximate heap usage via `InstanceSize` per registered object. A
 
 Any allocation that pushes `BytesAllocated` above `MaxBytes` raises a JavaScript `RangeError`. The error is catchable with `try/catch`; after catching, the script can call `Goccia.gc()` to free unreachable objects and retry.
 
-From JavaScript, `Goccia.gc.bytesAllocated` and `Goccia.gc.maxBytes` are read-only getters. The ceiling can only be changed from the engine level (CLI flag or Pascal API: `TGarbageCollector.Instance.MaxBytes`).
+From JavaScript, `Goccia.gc.bytesAllocated` and `Goccia.gc.maxBytes` are read-only getters. The ceiling can only be changed from the engine level (CLI option or Pascal API: `TGarbageCollector.Instance.MaxBytes`).
 
 ### Physical memory detection
 

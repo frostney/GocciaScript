@@ -149,7 +149,7 @@ type
     function GetRejects(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
-  // Main test assertions builtin
+  // Main test assertions built-in
   TGocciaTestAssertions = class(TGocciaBuiltin)
   private
     FTestStats: record
@@ -2450,7 +2450,7 @@ begin
   RegisterPublicGlobal('mock', MockFunctionValue);
   RegisterPublicGlobal('spyOn', SpyOnFunction);
 
-  // Also set them in the builtin object for completeness
+  // Also set them in the built-in object for completeness
   FBuiltinObject.RegisterNativeMethod(ExpectFunction);
   FBuiltinObject.RegisterNativeMethod(DescribeFunction);
   FBuiltinObject.RegisterNativeMethod(TestFunction);

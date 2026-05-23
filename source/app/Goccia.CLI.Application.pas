@@ -13,8 +13,8 @@ uses
 
   Goccia.Application,
   Goccia.Engine,
-  Goccia.Engine.Backend,
   Goccia.Executor,
+  Goccia.Executor.Bytecode,
   Goccia.ScriptLoader.SourceRegistry;
 
 type
@@ -72,13 +72,13 @@ type
     function GetJobCount(const AFileCount: Integer): Integer;
     { True iff --multifile was passed (or set in goccia.json). }
     function MultifileEnabled: Boolean;
-    { Single canonical source-loader.  All runners and workers should
-      load script source through this method instead of calling
+    { Single canonical source text loader.  All runners and workers should
+      load source text through this method instead of calling
       CreateUTF8FileTextLines(ReadUTF8FileText(...)) directly.
       Returns a caller-owned TStringList — registered virtual sections
       return a fresh clone, unregistered names read from disk. }
     function SourceRegistry: TGocciaSourceRegistry;
-    { When --multifile is set, walks AFiles, reads each script file,
+    { When --multifile is set, walks AFiles, reads each input file,
       splits on --- separators, and replaces the original entry with
       its section names.  Sections are registered with SourceRegistry
       under "<original>[partN].<ext>".  Files without separators and
@@ -480,15 +480,15 @@ begin
 end;
 
 { Resolve --source-type / config "source-type" into the engine's
-  TGocciaSourceType enum.  Priority: CLI > per-file config > root
+  TGocciaSourceType enum.  Priority: CLI option > per-file config > root
   config > default (script).
 
-  CLI flag and root-config values are validated by TGocciaEnumOption.Apply
+  CLI option and root config values are validated by TGocciaEnumOption.Apply
   before they reach this function (invalid values raise TGocciaParseError
   at parse/apply time).  Per-file config values come in as raw strings via
   FindConfigEntry, so we validate here: 'module' and 'script' are accepted
   case-insensitively, anything else emits a stderr warning and falls back
-  to stScript so a typo never silently flips into module mode. }
+  to stScript so a typo never silently flips into module source. }
 function ResolveSourceTypeOption(
   const AOption: TGocciaEnumOption<CLI.Options.TGocciaSourceType>;
   const AFileConfig: TConfigEntryArray): Goccia.Engine.TGocciaSourceType;
@@ -526,8 +526,8 @@ begin
 end;
 
 { Apply per-file config entries to the engine.
-  Priority: CLI flag > per-file config > root config > default.
-  FromCommandLine distinguishes CLI-set options from root-config-set options
+  Priority: CLI option > per-file config > root config > default.
+  FromCommandLine distinguishes CLI-set options from root config values
   so that a per-file config can override a root-level config value. }
 procedure ApplyFileConfigToEngine(const AEngine: TGocciaEngine;
   const AEngineOptions: TGocciaEngineOptions;
@@ -546,7 +546,7 @@ begin
   { ASI: CLI flag > per-file config > root config > default (false) }
   AEngine.ASIEnabled := ResolveFlagOption(AEngineOptions.ASI, AFileConfig);
 
-  { source-type: CLI flag > per-file config > root config > default (script) }
+  { source-type: CLI option > per-file config > root config > default (script) }
   AEngine.SourceType := ResolveSourceTypeOption(
     AEngineOptions.SourceType, AFileConfig);
 
@@ -582,7 +582,7 @@ begin
   AEngine.FunctionConstructor.Enabled := ResolveFlagOption(
     AEngineOptions.UnsafeFunctionConstructor, AFileConfig);
 
-  { max-memory: CLI > per-file config > root config > system default.
+  { max-memory: CLI option > per-file config > root config > system default.
     Always set explicitly so a previous file's per-file override does
     not leak into subsequent files (GC.MaxBytes is process-global). }
   GC := TGarbageCollector.Instance;
@@ -603,7 +603,7 @@ begin
       GC.MaxBytes := GC.SuggestedMaxBytes;
   end;
 
-  { allowed-host: CLI > per-file config > root config > empty (fetch blocked).
+  { allowed-host: CLI option > per-file config > root config > empty (fetch blocked).
     CLI wins outright; otherwise per-file config overrides root config. }
   if AEngineOptions.AllowedHosts.FromCommandLine then
     AEngine.SetAllowedFetchHosts(AEngineOptions.AllowedHosts.Values)
@@ -989,7 +989,7 @@ begin
   FAllOptions[High(FAllOptions) - 1] := FMultifile;
   FAllOptions[High(FAllOptions)] := FConfig;
 
-  { Parse CLI first so we know the entry file path. }
+  { Parse CLI first so we know the entry file. }
   Paths := ParseCommandLine(FAllOptions);
   try
     if FHelp.Present then
@@ -1012,8 +1012,8 @@ begin
       to a config file directly or to a directory containing
       goccia.toml / goccia.json5 / goccia.json (priority order); the
       directory form does NOT walk upward.  Otherwise walk up from
-      the entry file's directory.  Either way, options already set by
-      CLI are skipped during application. }
+      the entry file's directory.  Either way, CLI options are skipped
+      during application. }
     EnsureConfigParsersRegistered;
     if FConfig.Present then
     begin

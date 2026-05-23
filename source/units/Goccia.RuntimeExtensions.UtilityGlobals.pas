@@ -1,4 +1,4 @@
-unit Goccia.RuntimeExtensions.HostGlobals;
+unit Goccia.RuntimeExtensions.UtilityGlobals;
 
 {$I Goccia.inc}
 
@@ -8,18 +8,18 @@ uses
   Goccia.Runtime;
 
 type
-  TGocciaHostGlobalsRuntimeExtension = class(TGocciaRuntimeExtension)
+  TGocciaUtilityGlobalsRuntimeExtension = class(TGocciaRuntimeExtension)
   public
     procedure Attach(const ARuntime: TGocciaRuntimeCore); override;
   end;
 
 implementation
 
-procedure TGocciaHostGlobalsRuntimeExtension.Attach(
+procedure TGocciaUtilityGlobalsRuntimeExtension.Attach(
   const ARuntime: TGocciaRuntimeCore);
 begin
   inherited Attach(ARuntime);
-  Runtime.Engine.BuiltinGlobals.RegisterRuntimeGlobals;
+  Runtime.Engine.BuiltinGlobals.RegisterUtilityRuntimeGlobals;
 end;
 
 end.

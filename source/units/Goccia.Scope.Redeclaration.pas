@@ -80,7 +80,7 @@ var
     if AScope.ContainsOwnLexicalBinding(AName) then
     begin
       // §16.1.7: var/function declarations may shadow built-in globals in
-      // script mode, but not user-declared bindings.
+      // script source, but not user-declared bindings.
       if AScope.IsBuiltInBinding(AName) then
         Exit;
       raise TGocciaSyntaxError.Create(
@@ -100,8 +100,8 @@ begin
         DeclName := VarDecl.Variables[J].Name;
         if AScope.ContainsOwnLexicalBinding(DeclName) then
         begin
-          // §16.1.7: var declarations may shadow built-in globals in script
-          // mode, but not user-declared bindings.
+          // §16.1.7: var declarations may shadow built-in globals in
+          // script source, but not user-declared bindings.
           if VarDecl.IsVar and AScope.IsBuiltInBinding(DeclName) then
             Continue;
           raise TGocciaSyntaxError.Create(

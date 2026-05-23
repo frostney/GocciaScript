@@ -27,7 +27,7 @@ begin
   inherited Attach(ARuntime);
   FBuiltinBenchmark := TGocciaBenchmark.Create('Benchmark',
     Runtime.Engine.Interpreter.GlobalScope, Runtime.Engine.ThrowError);
-  Runtime.RegisterRuntimeBuiltinName('Benchmark');
+  Runtime.RegisterRuntimeGlobalName('Benchmark');
 end;
 
 procedure TGocciaBenchmarkRuntimeExtension.Detach;

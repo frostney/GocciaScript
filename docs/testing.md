@@ -11,7 +11,7 @@
 
 GocciaScript uses three testing layers in priority order:
 
-1. **JavaScript end-to-end tests (primary)** -- `.js` tests in `tests/` that exercise the full pipeline through the same public surface that users call. CI runs the full suite in both **interpreted** and **bytecode** mode. Every new feature or bug fix should include tests at this layer.
+1. **JavaScript end-to-end tests (primary)** -- `.js` tests in `tests/` that exercise the full pipeline through the same public surface that users call. CI runs the full suite in both **interpreter mode** and **bytecode mode**. Every new feature or bug fix should include tests at this layer.
 2. **CLI behavior tests (CI integration)** -- Shell-level checks in `.github/workflows/pr.yml` that verify `GocciaScriptLoader`, `GocciaTestRunner`, and `GocciaBenchmarkRunner` CLI behavior: JSON output structure, coverage CLI (console summary, lcov, JSON, branch coverage), error display (source context, caret, suggestions), numeric separator rejection, source map generation, stdin smoke tests, timeout handling, global injection, and benchmark output format.
 3. **Pascal unit tests (tertiary)** -- Native `*.Test.pas` coverage for low-level runtime and value system internals that are not reachable through a stable public API.
 
@@ -229,14 +229,14 @@ features: [addition, arithmetic]
 ### Run All Tests
 
 ```bash
-# Interpreted mode (default)
+# Interpreter mode (default)
 ./build/GocciaTestRunner tests
 
 # Bytecode mode
 ./build/GocciaTestRunner tests --mode=bytecode
 ```
 
-Both modes must pass. Test subtrees that require opt-in parser or runtime behavior declare it with a local `goccia.json` (for example, `tests/language/asi/goccia.json` enables ASI and `tests/built-ins/FFI/goccia.json` enables FFI). CI runs the full suite in both interpreted and bytecode mode as separate matrix jobs.
+Both execution modes must pass. Test subtrees that require opt-in parser or runtime behavior declare it with a local `goccia.json` (for example, `tests/language/asi/goccia.json` enables ASI and `tests/built-ins/FFI/goccia.json` enables FFI). CI runs the full suite in interpreter mode and bytecode mode as separate matrix jobs.
 
 ### Run a Specific Test File
 
@@ -294,7 +294,7 @@ python3 scripts/run_toml_test_suite.py --suite-dir=/path/to/toml-test
 python3 scripts/run_toml_test_suite.py --harness=./build/GocciaTOMLCheck --output=tmp/toml-suite-results.json
 ```
 
-Unlike the YAML script, this harness compares both parse/fail behavior and the official tagged JSON fixtures for valid cases. It uses a Pascal decoder built around `TGocciaTOMLParser.ParseDocument(...)` so TOML scalar kinds like `integer`, `float`, `datetime`, `datetime-local`, `date-local`, and `time-local` remain visible during compliance checks even though the normal runtime surface still maps date/time values to strings.
+Unlike the YAML script, this harness compares both parse/fail behavior and the official tagged JSON fixtures for valid cases. It uses a Pascal decoder built around `TGocciaTOMLParser.ParseDocument(...)` so TOML scalar kinds like `integer`, `float`, `datetime`, `datetime-local`, `date-local`, and `time-local` remain visible during compliance checks even though the normal TOML runtime API still maps date/time values to strings.
 
 The TOML runner exits non-zero when any case fails or times out, so it is safe to use directly in CI. When `--harness` is omitted it compiles `scripts/GocciaTOMLCheck.dpr` automatically; CI uses a prebuilt harness from the matrix build artifacts instead.
 
@@ -362,14 +362,14 @@ promise.catch((err) => {
 
 ## Testing Strategy Design Decision
 
-JavaScript end-to-end tests are the **primary** testing mechanism. Every new feature or bug fix must include tests that validate the behavior through the full pipeline (lexer → parser → interpreter/VM execution) using the most public surface available. CI runs all tests in both interpreted and bytecode mode.
+JavaScript end-to-end tests are the **primary** testing mechanism. Every new feature or bug fix must include tests that validate the behavior through the full pipeline (lexer → parser → interpreter/VM execution) using the most public surface available. CI runs all tests in interpreter mode and bytecode mode.
 
 - **Specification by example** -- Each test file is a runnable specification of expected behavior.
 - **End-to-end validation** -- Tests exercise the full pipeline, catching integration issues that unit tests would miss.
 - **Readable specifications** -- JavaScript test files are readable by anyone familiar with Jest/Vitest conventions.
 - **Source of truth** -- If a behavior isn't covered by a JavaScript test, it isn't guaranteed.
 
-CLI behavior tests in `pr.yml` form the second layer, verifying that the command-line tools produce correct output structure, handle error cases gracefully, and that flags like `--coverage`, `--output=json`, `--source-map`, and `--timeout` work end-to-end. These tests run in CI on every pull request.
+CLI behavior tests in `pr.yml` form the second layer, verifying that the command-line tools produce correct output structure, handle error cases gracefully, and that options like `--coverage`, `--output=json`, `--source-map`, and `--timeout` work end-to-end. These tests run in CI on every pull request.
 
 Pascal unit tests (`*.Test.pas`) exist as a tertiary layer for behavior that cannot be reached through script code or other documented user-facing entry points. Even there, prefer stateless, repeatable input/output checks over tests that are tightly coupled to incidental implementation structure.
 
@@ -404,10 +404,10 @@ The PR workflow (`.github/workflows/pr.yml`) includes shell-level smoke tests th
 | Numeric separator rejection | Trailing, leading, consecutive separators and invalid positions produce errors |
 | Timeout handling | `--timeout` produces `TimeoutError` in JSON output |
 | Global injection | `--global`, `--globals` file/module injection, collision detection |
-| Stdin smoke tests | Piped input executes correctly in both interpreted and bytecode modes |
+| Stdin smoke tests | Piped input executes correctly in interpreter mode and bytecode mode |
 | GocciaBenchmarkRunner output | `--format=json` produces valid JSON with benchmark structure |
 
-This table is non-exhaustive — the [pr.yml workflow](../.github/workflows/pr.yml) is the source of truth. The intent is to check all CLI flags, all parser error display paths, and all output format correctness. To add a new CLI behavior check, add a step to the appropriate job in `pr.yml`.
+This table is non-exhaustive — the [pr.yml workflow](../.github/workflows/pr.yml) is the source of truth. The intent is to check all CLI options, all parser error display paths, and all output format correctness. To add a new CLI behavior check, add a step to the appropriate job in `pr.yml`.
 
 ## Pascal Unit Tests (Tertiary)
 
@@ -529,7 +529,7 @@ build → test             → artifacts
 
 **`benchmark`** (needs build, all platforms) — Downloads pre-built binaries, runs all benchmarks.
 
-**`cli`** (needs build, all platforms) — Downloads pre-built binaries and runs CLI behavior smoke tests via Bun: `test-cli.ts` (flags across all apps), `test-cli-lexer.ts` (numeric-separator rejection), `test-cli-parser.ts` (error display), `test-cli-config.ts` (config-file loading and per-file inheritance), and `test-cli-apps.ts` (app-specific features, including `GocciaScriptLoaderBare` stdin/file checks, CLI-local `print`, and runtime-global absence). Windows runs additionally assert that the loader binary does not link against OpenSSL DLLs.
+**`cli`** (needs build, all platforms) — Downloads pre-built binaries and runs CLI behavior smoke tests via Bun: `test-cli.ts` (options across all apps), `test-cli-lexer.ts` (numeric-separator rejection), `test-cli-parser.ts` (error display), `test-cli-config.ts` (config-file loading and per-file inheritance), and `test-cli-apps.ts` (app-specific features, including `GocciaScriptLoaderBare` stdin/file checks, CLI-local `print`, and runtime-global absence). Windows runs additionally assert that the loader binary does not link against OpenSSL DLLs.
 
 **`artifacts`** (needs test + toml-compliance + json5-compliance + benchmark + cli, `main` only) — Uploads release binaries after all checks pass. `test262` is **not** a gating dependency — failing tests there cannot block a release.
 
@@ -548,7 +548,7 @@ build → test
       → cli
 ```
 
-The PR workflow also posts a **Suite Timing** comment with expandable test-runner and benchmark summaries. Each summary shows timing, top-level GocciaScript GC metrics, and selected FreePascal heap allocation metrics for interpreted and bytecode modes. GC memory rows aggregate the main thread plus all worker thread-local GCs. The test runner does not count worker shutdown reclamation as GC collections, while the benchmark runner explicitly collects between benchmark files, so collection counts are expected to differ. The comment hides negative FreePascal heap free-space deltas because they are valid allocator diagnostics but are noisy in a PR summary. See [benchmarks.md](benchmarks.md#pr-benchmark-comparison) for details on the benchmark comparison format.
+The PR workflow also posts a **Suite Timing** comment with expandable test-runner and benchmark summaries. Each summary shows timing, top-level GocciaScript GC metrics, and selected FreePascal heap allocation metrics for interpreter mode and bytecode mode. GC memory rows aggregate the main thread plus all worker thread-local GCs. The test runner does not count worker shutdown reclamation as GC collections, while the benchmark runner explicitly collects between benchmark files, so collection counts are expected to differ. The comment hides negative FreePascal heap free-space deltas because they are valid allocator diagnostics but are noisy in a PR summary. See [benchmarks.md](benchmarks.md#pr-benchmark-comparison) for details on the benchmark comparison format.
 
 The **test262 conformance comment** posts a non-blocking summary using the [`actions/github-script@v7`](https://github.com/actions/github-script) pattern, marker `<!-- test262-results -->`. The markdown is generated by `bun scripts/run_test262_suite.ts --comment <results.json> <baseline.json|->`. It contains:
 
@@ -575,7 +575,7 @@ Each workflow reuses a fixed branch (`chore/<suite>-bump`), so an unmerged PR is
 bun scripts/run_test262_suite.ts --filter "built-ins/Array/*" --output=results.json
 ```
 
-The runner clones test262 into a tempdir on first use, or accepts an existing checkout via `--suite-dir`. See `bun scripts/run_test262_suite.ts --help` for the full flag set, including `--categories`, `--max-tests`, `--mode={interpreted,bytecode}`, `--jobs`, `--timeout-ms`, and `--max-memory`.
+The runner clones test262 into a tempdir on first use, or accepts an existing checkout via `--suite-dir`. See `bun scripts/run_test262_suite.ts --help` for the full option set, including `--categories`, `--max-tests`, `--mode={interpreted,bytecode}`, `--jobs`, `--timeout-ms`, and `--max-memory`.
 
 ## Coverage
 

@@ -13,7 +13,7 @@ test("shorthand methods bind this, arrow functions do not", () => {
       return "Arrow method called with: " + x;
     },
 
-    // Shorthand method — binds 'this' like a regular function
+    // Shorthand method — binds 'this' from the call-site receiver
     regularMethod(x) {
       return "Regular method called with: " + x + " on " + this.name;
     },

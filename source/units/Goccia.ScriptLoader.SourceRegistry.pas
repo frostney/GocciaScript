@@ -1,7 +1,7 @@
 {
-  TGocciaSourceRegistry — single canonical loader for script source.
+  TGocciaSourceRegistry — single canonical loader for source text.
 
-  Every runner and worker calls Load(AName) to obtain a script source
+  Every runner and worker calls Load(AName) to obtain source text as a
   TStringList, regardless of where the source came from:
 
     - For names that have been Register()'d (stdin, multifile sections),
@@ -10,7 +10,7 @@
       CreateUTF8FileTextLines(ReadUTF8FileText(AName)) — i.e. reads the
       file from disk.
 
-  This unifies the source-loading path so consumers never branch on the
+  This unifies the source text loading path so consumers never branch on the
   origin of a source.  Load always returns a caller-owned TStringList,
   matching the existing "Source := ...; try ... finally Source.Free; end"
   pattern across all runners.

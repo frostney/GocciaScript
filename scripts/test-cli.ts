@@ -2,7 +2,7 @@
 /**
  * test-cli.ts
  *
- * Common CLI flags tested across all apps: stdin smoke, --help, --unsafe-ffi,
+ * Common CLI options tested across all apps: stdin smoke, --help, --unsafe-ffi,
  * --asi, --compat-var, --compat-loose-equality, --compat-non-strict-mode,
  * --compat-while-loops, --mode, --timeout, --max-instructions, --max-memory, --stack-size, --log,
  * example scripts.
@@ -53,7 +53,7 @@ console.log("Stdin smoke (TestRunner)...");
 {
   const src = `test("two plus two", () => { expect(2 + 2).toBe(4); });\n`;
 
-  // No path arg -> stdin
+  // No positional argument -> stdin
   const out = await $`echo ${src} | ${TESTRUNNER} --no-progress`.text();
   if (!out.includes("Passed: 1")) throw new Error(`TestRunner stdin (no arg) expected Passed: 1, got: ${out}`);
 
@@ -86,7 +86,7 @@ console.log("Stdin mixed-with-paths rejection (Loader, TestRunner, BenchmarkRunn
     for (const [bin, label] of [[LOADER, "Loader"], [TESTRUNNER, "TestRunner"], [BENCHRUNNER, "BenchmarkRunner"]] as const) {
       const proc = await $`${bin} - ${f} 2>&1`.nothrow();
       if (proc.exitCode === 0) throw new Error(`${label} should reject "-" mixed with file paths`);
-      if (!proc.text().includes("stdin supports only as the sole input path"))
+      if (!proc.text().includes("stdin is supported only as the sole input"))
         throw new Error(`${label} mixed-path error missing unified message, got: ${proc.text()}`);
     }
   } finally {
@@ -324,7 +324,7 @@ console.log("--compat-non-strict-mode (Loader + Bundler + TestRunner + Bare)..."
     const moduleWithInterp = await $`${LOADER} ${moduleWithSrc} --source-type=module --compat-non-strict-mode 2>&1`.nothrow();
     const moduleWithInterpOutput = moduleWithInterp.text();
     if (moduleWithInterp.exitCode === 0 || !moduleWithInterpOutput.includes("'with' statements are not allowed in strict mode"))
-      throw new Error(`Module with should fail as strict code in interpreted mode, got: ${moduleWithInterpOutput}`);
+      throw new Error(`Module with should fail as strict code in interpreter mode, got: ${moduleWithInterpOutput}`);
     const moduleWithBytecode = await $`${LOADER} ${moduleWithSrc} --source-type=module --mode=bytecode --compat-non-strict-mode 2>&1`.nothrow();
     const moduleWithBytecodeOutput = moduleWithBytecode.text();
     if (moduleWithBytecode.exitCode === 0 || !moduleWithBytecodeOutput.includes("'with' statements are not allowed in strict mode"))
@@ -382,7 +382,7 @@ console.log("--compat-non-strict-mode (Loader + Bundler + TestRunner + Bare)..."
   }
 }
 
-// -- --mode=bytecode (Loader: both modes produce 4) ----------------------------
+// -- --mode=bytecode (Loader: both execution modes produce 4) -------------------
 
 console.log("--mode=bytecode...");
 {
@@ -395,7 +395,7 @@ console.log("--mode=bytecode...");
   if (!bcOut.includes("(bytecode)")) throw new Error(`Expected (bytecode) in output`);
 }
 
-// -- --timeout (Loader: infinite loop, both modes) ------------------------------
+// -- --timeout (Loader: infinite loop, both execution modes) --------------------
 
 console.log("--timeout (interpreted)...");
 {
@@ -413,7 +413,7 @@ console.log("--timeout (bytecode)...");
   if (json.error?.type !== "TimeoutError") throw new Error(`Expected TimeoutError, got ${json.error?.type}`);
 }
 
-// -- --max-instructions (Loader: infinite loop, both modes) ---------------------
+// -- --max-instructions (Loader: infinite loop, both execution modes) -----------
 
 console.log("--max-instructions (interpreted)...");
 {
@@ -504,9 +504,9 @@ console.log("--stack-size (bytecode trampoline)...");
   if (!out.includes("20000")) throw new Error(`Trampoline should reach 20000, got: ${out}`);
 }
 
-// -- --log flag (Loader) --------------------------------------------------------
+// -- --log option (Loader) ------------------------------------------------------
 
-console.log("--log flag...");
+console.log("--log option...");
 {
   const tmp = mkdtemp("goccia-log-");
   try {

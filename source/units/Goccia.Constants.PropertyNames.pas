@@ -124,6 +124,7 @@ const
   PROP_ADOPT                  = 'adopt';
   PROP_DEFER                  = 'defer';
   PROP_MOVE                   = 'move';
+  PROP_RUNTIME_GLOBALS        = 'runtimeGlobals';
 
   // URL and URLSearchParams properties
   PROP_HREF             = 'href';

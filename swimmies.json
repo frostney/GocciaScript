@@ -30,8 +30,7 @@
   },
   {
     "glob": [
-      "source/units/Goccia.Engine.Backend.pas",
-      "source/units/Goccia.Executor.pas",
+      "source/units/Goccia.Executor*.pas",
       "source/app/*.pas",
       "source/app/*.dpr"
     ],

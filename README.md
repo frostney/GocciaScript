@@ -66,9 +66,9 @@ console.log(`Your order total: $${total.toFixed(2)}`);
 ./build.pas --prod
 
 # Build specific components
-./build.pas loader           # Dev build of script executor
-./build.pas loaderbare       # Dev build of core-engine-only script executor
-./build.pas --prod loader    # Production build of script executor
+./build.pas loader           # Dev build of Script Loader
+./build.pas loaderbare       # Dev build of Bare Script Loader
+./build.pas --prod loader    # Production build of Script Loader
 ./build.pas repl             # Interactive REPL
 ./build.pas testrunner       # Test runner
 ./build.pas benchmarkrunner  # Benchmark runner
@@ -90,7 +90,7 @@ printf "undefined;" | ./build/GocciaScriptLoader --print        # prints "undefi
 
 `GocciaScriptLoader` keeps its human-readable timing banner regardless; `--print` only controls the final value line. For programmatic consumers, `--output=json` always carries the result in the `result` field (no `--print` needed).
 
-For a smaller binary surface without the loader runtime profile (console, JSON5/TOML/YAML, fetch, SemVer, etc.), build and run `GocciaScriptLoaderBare`:
+For a smaller runtime surface without the loader runtime profile (console, JSON5/TOML/YAML, fetch, SemVer, etc.), build and run `GocciaScriptLoaderBare`:
 
 ```bash
 ./build.pas loaderbare
@@ -99,13 +99,13 @@ printf "print('hello from bare');" | ./build/GocciaScriptLoaderBare
 ./build/GocciaScriptLoaderBare example.js
 ```
 
-`GocciaScriptLoaderBare` accepts an explicit file path, `-`, or no path for stdin. It reads the entry source in the frontend and passes source text to `TGocciaEngine`; it exposes a CLI-local `print(...args)` helper for stdout, but does not attach `TGocciaRuntime`. Like `GocciaScriptLoader`, it is silent by default — pass `--print` to emit the script's last value (the explicit `print(...)` helper is unaffected by `--print`).
+`GocciaScriptLoaderBare` accepts an explicit entry file, `-`, or no positional argument for stdin. It reads source text in the CLI frontend and passes it to `TGocciaEngine`; it exposes a CLI-local `print(...args)` helper for stdout, but does not attach `TGocciaRuntime`. Like `GocciaScriptLoader`, it is silent by default — pass `--print` to emit the script's last value (the explicit `print(...)` helper is unaffected by `--print`).
 
 Script files may start with a Unix shebang line like `#!/usr/bin/env goccia`; GocciaScript ignores that first line during lexing.
 
 ### Run via Bytecode
 
-GocciaScript includes a bytecode execution backend. The public bytecode artifact is `.gbc`.
+GocciaScript includes bytecode execution. The public bytecode artifact is `.gbc`.
 
 ```bash
 # Compile and execute via bytecode
@@ -146,7 +146,7 @@ printf "name;" | ./build/GocciaScriptLoader --globals=context.yaml --output=json
 printf "const f = () => f(); f();" | ./build/GocciaScriptLoader --timeout=100
 ```
 
-See [Bytecode VM](docs/bytecode-vm.md) for the current bytecode backend architecture.
+See [Bytecode VM](docs/bytecode-vm.md) for the current bytecode executor architecture.
 
 ### Start the REPL
 
@@ -239,7 +239,7 @@ For a full guided walkthrough, see the [Tutorial](docs/tutorial.md). For the com
 
 ## Architecture
 
-GocciaScript supports two execution backends that share the same frontend (lexer, parser, AST):
+GocciaScript supports two execution modes that share the same source frontend (lexer, parser, AST):
 
 ```mermaid
 flowchart LR
@@ -248,9 +248,9 @@ flowchart LR
     AST --> Compiler["Bytecode Compiler"] --> VM["Goccia VM"] --> Result2["Result"]
 ```
 
-Both backends share the same value types, built-ins, scope chain, and mark-and-sweep GC. The bytecode backend is a Goccia-owned VM with tagged `TGocciaRegister` values (unboxed scalars) that fall back to `TGocciaValue` for heap objects, not a generic VM layer.
+Both execution modes share the same value types, built-ins, scope chain, and mark-and-sweep GC. The bytecode executor uses a Goccia-owned VM with tagged `TGocciaRegister` values (unboxed scalars) that fall back to `TGocciaValue` for heap objects, not a generic VM layer.
 
-See [Architecture](docs/architecture.md) for pipelines and layers, [Interpreter](docs/interpreter.md) for the tree-walk backend, [Bytecode VM](docs/bytecode-vm.md) for the bytecode backend, and [Core patterns](docs/core-patterns.md) for implementation patterns and internal terminology.
+See [Architecture](docs/architecture.md) for pipelines and layers, [Interpreter](docs/interpreter.md) for tree-walk execution, [Bytecode VM](docs/bytecode-vm.md) for bytecode execution, [Core patterns](docs/core-patterns.md) for implementation patterns, and [GocciaScript Context](CONTEXT.md) for canonical terminology.
 
 ## Design Principles
 
@@ -276,8 +276,9 @@ See [Core patterns](docs/core-patterns.md) and [Interpreter](docs/interpreter.md
 | [Binary Data Built-ins](docs/built-ins-binary-data.md) | ArrayBuffer, SharedArrayBuffer, TypedArray API |
 | [Errors](docs/errors.md) | Error types, parser/runtime display, JSON output, `Error.cause`, `try`/`catch`/`finally` |
 | [Architecture](docs/architecture.md) | Pipelines, main layers, design direction, duplication boundaries |
-| [Interpreter](docs/interpreter.md) · [Bytecode VM](docs/bytecode-vm.md) | Tree-walk and bytecode execution backends |
-| [Core patterns](docs/core-patterns.md) | Recurring implementation patterns, internal terminology |
+| [Interpreter](docs/interpreter.md) · [Bytecode VM](docs/bytecode-vm.md) | Tree-walk and bytecode execution modes |
+| [Core patterns](docs/core-patterns.md) | Recurring implementation patterns |
+| [GocciaScript Context](CONTEXT.md) | Canonical project terminology and glossary |
 | [Value System](docs/value-system.md) | Type hierarchy, virtual property access, primitives, objects |
 | [Garbage Collector](docs/garbage-collector.md) | Mark-and-sweep GC: architecture, contributor rules, design rationale |
 | [Adding Built-in Types](docs/adding-built-in-types.md) | Step-by-step guide for adding new built-in types |

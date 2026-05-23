@@ -1,5 +1,5 @@
 /*---
-description: top-level var declarations may shadow built-in globals in script mode (§16.1.7)
+description: top-level var declarations may shadow built-in globals in script source (§16.1.7)
 features: [compat-var]
 ---*/
 
