@@ -234,9 +234,13 @@ var
   ArgRoots: array of TGocciaTempRoot;
   I: Integer;
 begin
+  InitializeTempRoot(CallbackRoot);
+  InitializeTempRoot(ThisRoot);
   AddTempRootIfNeeded(CallbackRoot, ACallback);
   AddTempRootIfNeeded(ThisRoot, AThisArg);
   SetLength(ArgRoots, ACallArgs.Length);
+  for I := 0 to High(ArgRoots) do
+    InitializeTempRoot(ArgRoots[I]);
   for I := 0 to High(ArgRoots) do
     AddTempRootIfNeeded(ArgRoots[I], ACallArgs.GetElement(I));
   PreviousContinuation := SuspendCurrentGeneratorContinuation;
@@ -799,6 +803,10 @@ var
 begin
   ACallArgs.SetElement(0, A);
   ACallArgs.SetElement(1, B);
+  InitializeTempRoot(CompareRoot);
+  InitializeTempRoot(AValueRoot);
+  InitializeTempRoot(BValueRoot);
+  InitializeTempRoot(ThisRoot);
   AddTempRootIfNeeded(CompareRoot, ACompareFunc);
   AddTempRootIfNeeded(AValueRoot, A);
   AddTempRootIfNeeded(BValueRoot, B);
@@ -1144,6 +1152,7 @@ begin
     ResultArray := ArraySpeciesCreate(View.Arr, View.Len)
   else
     ResultArray := TGocciaArrayValue.Create(nil, View.Len);
+  InitializeTempRoot(ResultRoot);
   AddTempRootIfNeeded(ResultRoot, ResultArray);
   try
     TypedCallback := nil;
@@ -1198,6 +1207,7 @@ begin
     ResultArray := ArraySpeciesCreate(View.Arr, 0)
   else
     ResultArray := TGocciaArrayValue.Create;
+  InitializeTempRoot(ResultRoot);
   AddTempRootIfNeeded(ResultRoot, ResultArray);
   try
 
@@ -1758,6 +1768,7 @@ begin
     ResultArray := ArraySpeciesCreate(View.Arr, 0)
   else
     ResultArray := TGocciaArrayValue.Create;
+  InitializeTempRoot(ResultRoot);
   AddTempRootIfNeeded(ResultRoot, ResultArray);
   try
 
@@ -2724,6 +2735,8 @@ begin
 
   // Step 2-3: Let O be ToObject(this value); Let len be LengthOfArrayLike(O).
   View.Init(AThisValue);
+  InitializeTempRoot(ReceiverRoot);
+  InitializeTempRoot(ResultRoot);
   AddTempRootIfNeeded(ReceiverRoot, View.Obj);
   try
     // Step 4: Let A be ArrayCreate(len) — RangeError if len > 2^32-1
@@ -3231,6 +3244,8 @@ begin
     CustomSortFunction := TGocciaUndefinedLiteralValue.UndefinedValue;
 
   View.Init(AThisValue);
+  InitializeTempRoot(ReceiverRoot);
+  InitializeTempRoot(TempRoot);
   AddTempRootIfNeeded(ReceiverRoot, View.Obj);
   try
 

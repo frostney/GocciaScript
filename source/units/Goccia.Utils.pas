@@ -154,9 +154,13 @@ var
   ArgRoots: array of TGocciaTempRoot;
   I: Integer;
 begin
+  InitializeTempRoot(CallableRoot);
+  InitializeTempRoot(ThisRoot);
   AddTempRootIfNeeded(CallableRoot, ACallable);
   AddTempRootIfNeeded(ThisRoot, AThisValue);
   SetLength(ArgRoots, AArgs.Length);
+  for I := 0 to High(ArgRoots) do
+    InitializeTempRoot(ArgRoots[I]);
   for I := 0 to High(ArgRoots) do
     AddTempRootIfNeeded(ArgRoots[I], AArgs.GetElement(I));
   try

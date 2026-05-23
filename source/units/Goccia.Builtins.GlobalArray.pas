@@ -171,6 +171,8 @@ begin
   if Mapping then
     MapArgs := TGocciaArgumentsCollection.Create([TGocciaUndefinedLiteralValue.UndefinedValue, TGocciaNumberLiteralValue.ZeroValue]);
 
+  InitializeTempRoot(SourceRoot);
+  InitializeTempRoot(ResultRoot);
   AddTempRootIfNeeded(SourceRoot, Source);
   try
     // Fast path: source is already an array (avoids iterator overhead)
@@ -403,8 +405,7 @@ var
 
 begin
   GC := TGarbageCollector.Instance;
-  SourceRoot.ObjectValue := nil;
-  SourceRoot.Added := False;
+  InitializeTempRoot(SourceRoot);
   Promise := TGocciaPromiseValue.Create;
 
   if Assigned(GC) then

@@ -99,6 +99,8 @@ begin
 
   // Step 2: Let map be a new empty Map
   ResultMap := TGocciaMapValue.Create;
+  InitializeTempRoot(SourceRoot);
+  InitializeTempRoot(ResultRoot);
   AddTempRootIfNeeded(SourceRoot, Source);
   AddTempRootIfNeeded(ResultRoot, ResultMap);
   try

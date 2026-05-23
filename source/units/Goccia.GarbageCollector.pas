@@ -33,6 +33,7 @@ type
   TGCManagedObjectList = TObjectList<TGCManagedObject>;
   TGCObjectSet = THashMap<TGCManagedObject, Boolean>;
 
+  // Initialize stack-local roots with InitializeTempRoot before first use.
   TGocciaTempRoot = record
     ObjectValue: TGCManagedObject;
     Added: Boolean;
@@ -156,6 +157,7 @@ const
   MAX_BYTES_CAP_32BIT = 700 * 1024 * 1024;          { 700 MB cap for 32-bit }
 
 function DetectDefaultMaxBytes: Int64;
+procedure InitializeTempRoot(var ARoot: TGocciaTempRoot); inline;
 procedure AddTempRootIfNeeded(var ARoot: TGocciaTempRoot;
   const AObject: TGCManagedObject);
 procedure RemoveTempRootIfNeeded(var ARoot: TGocciaTempRoot);
@@ -241,11 +243,24 @@ begin
   inherited;
 end;
 
+procedure InitializeTempRoot(var ARoot: TGocciaTempRoot);
+begin
+  ARoot.ObjectValue := nil;
+  ARoot.Added := False;
+end;
+
 procedure AddTempRootIfNeeded(var ARoot: TGocciaTempRoot;
   const AObject: TGCManagedObject);
 var
   GC: TGarbageCollector;
 begin
+  if ARoot.Added then
+  begin
+    if ARoot.ObjectValue = AObject then
+      Exit;
+    RemoveTempRootIfNeeded(ARoot);
+  end;
+
   ARoot.ObjectValue := AObject;
   ARoot.Added := False;
   GC := TGarbageCollector.Instance;

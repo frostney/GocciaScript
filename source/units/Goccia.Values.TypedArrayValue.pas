@@ -1147,6 +1147,11 @@ var
   Args: TGocciaArgumentsCollection;
   CallbackRoot, ElementRoot, IndexRoot, ArrayRoot, ThisRoot: TGocciaTempRoot;
 begin
+  InitializeTempRoot(CallbackRoot);
+  InitializeTempRoot(ElementRoot);
+  InitializeTempRoot(IndexRoot);
+  InitializeTempRoot(ArrayRoot);
+  InitializeTempRoot(ThisRoot);
   AddTempRootIfNeeded(CallbackRoot, ACallback);
   AddTempRootIfNeeded(ElementRoot, AElement);
   AddTempRootIfNeeded(IndexRoot, AIndex);
@@ -1529,6 +1534,7 @@ begin
   TA := RequireAttachedTypedArray(AThisValue, 'TypedArray.prototype.sort');
   HasCompare := (AArgs.Length > 0) and AArgs.GetElement(0).IsCallable;
   SortLen := TA.FLength;
+  InitializeTempRoot(ArrayRoot);
 
   // BigInt sort path
   if IsBigIntKind(TA.FKind) then
@@ -1953,6 +1959,7 @@ begin
   else
     ThisArg := TGocciaUndefinedLiteralValue.UndefinedValue;
   NewTA := CreateSameKindArray(TA, TA.FLength);
+  InitializeTempRoot(ResultRoot);
   AddTempRootIfNeeded(ResultRoot, NewTA);
   try
     for I := 0 to TA.FLength - 1 do
@@ -2527,10 +2534,10 @@ begin
   else
     ThisArg := TGocciaUndefinedLiteralValue.UndefinedValue;
 
-  MapFnRoot.ObjectValue := nil;
-  MapFnRoot.Added := False;
-  ThisRoot.ObjectValue := nil;
-  ThisRoot.Added := False;
+  InitializeTempRoot(SourceRoot);
+  InitializeTempRoot(MapFnRoot);
+  InitializeTempRoot(ThisRoot);
+  InitializeTempRoot(ResultRoot);
   AddTempRootIfNeeded(SourceRoot, Source);
   if HasMapFn then
   begin
@@ -2555,6 +2562,7 @@ begin
               Values.Add(Val);
               if ValueRootCount >= Length(ValueRoots) then
                 SetLength(ValueRoots, ValueRootCount * 2 + 4);
+              InitializeTempRoot(ValueRoots[ValueRootCount]);
               AddTempRootIfNeeded(ValueRoots[ValueRootCount], Val);
               Inc(ValueRootCount);
               IterResult := Iterator.AdvanceNext;

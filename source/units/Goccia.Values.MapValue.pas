@@ -418,6 +418,9 @@ begin
   if Callback is TGocciaFunctionBase then
     TypedCallback := TGocciaFunctionBase(Callback);
 
+  InitializeTempRoot(MapRoot);
+  InitializeTempRoot(CallbackRoot);
+  InitializeTempRoot(ThisRoot);
   AddTempRootIfNeeded(MapRoot, M);
   AddTempRootIfNeeded(CallbackRoot, Callback);
   AddTempRootIfNeeded(ThisRoot, ThisArg);
@@ -562,6 +565,9 @@ begin
   if Index >= 0 then
     Exit(M.Entries[Index].Value);
 
+  InitializeTempRoot(MapRoot);
+  InitializeTempRoot(KeyRoot);
+  InitializeTempRoot(CallbackRoot);
   AddTempRootIfNeeded(MapRoot, M);
   AddTempRootIfNeeded(KeyRoot, MapKey);
   AddTempRootIfNeeded(CallbackRoot, CallbackArg);

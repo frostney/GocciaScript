@@ -2680,6 +2680,7 @@ begin
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsAsync then
   begin
     Promise := TGocciaPromiseValue.Create;
+    InitializeTempRoot(PromiseRoot);
     AddTempRootIfNeeded(PromiseRoot, Promise);
     try
       try
@@ -2747,6 +2748,7 @@ begin
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsAsync then
   begin
     Promise := TGocciaPromiseValue.Create;
+    InitializeTempRoot(PromiseRoot);
     AddTempRootIfNeeded(PromiseRoot, Promise);
     try
       try
@@ -2802,6 +2804,7 @@ begin
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsAsync then
   begin
     Promise := TGocciaPromiseValue.Create;
+    InitializeTempRoot(PromiseRoot);
     AddTempRootIfNeeded(PromiseRoot, Promise);
     try
       try
@@ -2859,6 +2862,7 @@ begin
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsAsync then
   begin
     Promise := TGocciaPromiseValue.Create;
+    InitializeTempRoot(PromiseRoot);
     AddTempRootIfNeeded(PromiseRoot, Promise);
     try
       try
@@ -2918,6 +2922,7 @@ begin
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsAsync then
   begin
     Promise := TGocciaPromiseValue.Create;
+    InitializeTempRoot(PromiseRoot);
     AddTempRootIfNeeded(PromiseRoot, Promise);
     try
       try

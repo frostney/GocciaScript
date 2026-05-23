@@ -459,6 +459,9 @@ begin
   if Callback is TGocciaFunctionBase then
     TypedCallback := TGocciaFunctionBase(Callback);
 
+  InitializeTempRoot(SetRoot);
+  InitializeTempRoot(CallbackRoot);
+  InitializeTempRoot(ThisRoot);
   AddTempRootIfNeeded(SetRoot, S);
   AddTempRootIfNeeded(CallbackRoot, Callback);
   AddTempRootIfNeeded(ThisRoot, ThisArg);

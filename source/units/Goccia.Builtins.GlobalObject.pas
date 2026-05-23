@@ -1011,6 +1011,8 @@ begin
   // Step 2: Let obj be OrdinaryObjectCreate(null)
   ResultObj := TGocciaObjectValue.Create;
   ResultObj.Prototype := nil;
+  InitializeTempRoot(ItemsRoot);
+  InitializeTempRoot(ResultRoot);
   AddTempRootIfNeeded(ItemsRoot, Items);
   AddTempRootIfNeeded(ResultRoot, ResultObj);
   try
