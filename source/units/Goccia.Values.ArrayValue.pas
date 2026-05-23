@@ -1787,8 +1787,8 @@ begin
         CallArgs.Element := View.Get(I);
         CallArgs.Index := TGocciaNumberLiteralValue.Create(I);
         MappedValue := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
-        AddTempRootIfNeeded(MappedValueRoot, MappedValue);
         try
+          AddTempRootIfNeeded(MappedValueRoot, MappedValue);
           if MappedValue is TGocciaArrayValue then
           begin
             // Use View-based iteration for prototype-aware access
