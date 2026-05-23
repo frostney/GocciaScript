@@ -3,6 +3,8 @@ description: Find* scope walks stop at ordinary function boundaries
 features: [class-declaration, new-target, super]
 ---*/
 
+const hasGoccia = typeof Goccia !== "undefined";
+
 describe("new.target function boundary", () => {
   test("arrow inherits new.target from constructor", () => {
     class Foo {
@@ -63,6 +65,20 @@ describe("new.target function boundary", () => {
     const f = new Foo();
     expect(f.results[0]).toBe(Foo);
     expect(f.results[1]).toBe(Foo);
+  });
+
+  test.runIf(hasGoccia)("anonymous class new.target survives explicit GC during native callback", () => {
+    let seen;
+    const instance = new (class {
+      constructor() {
+        seen = [1].map(() => {
+          Goccia.gc();
+          return new.target;
+        })[0];
+      }
+    })();
+
+    expect(seen).toBe(instance.constructor);
   });
 });
 

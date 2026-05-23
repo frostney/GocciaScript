@@ -75,6 +75,7 @@ function TryICULowerCase(const ALocale, AStr: string; out AResult: string): Bool
 implementation
 
 uses
+  Math,
   SysUtils,
 
   DynLibs,
@@ -275,6 +276,18 @@ type
   TUnumSetTextAttribute = procedure(AFormat: Pointer; ATag: LongInt;
     const ANewValue: PUChar; ANewValueLength: LongInt;
     var AStatus: TICUErrorCode); cdecl;
+  TUnumfOpenForSkeletonAndLocale = function(const ASkeleton: PUChar;
+    ASkeletonLength: LongInt; const ALocale: PAnsiChar;
+    var AStatus: TICUErrorCode): Pointer; cdecl;
+  TUnumfOpenResult = function(var AStatus: TICUErrorCode): Pointer; cdecl;
+  TUnumfFormatDouble = procedure(AFormatter: Pointer; AValue: Double;
+    AResult: Pointer; var AStatus: TICUErrorCode); cdecl;
+  TUnumfResultToString = function(AResult: Pointer; ABuffer: PUChar;
+    ABufferCapacity: LongInt; var AStatus: TICUErrorCode): LongInt; cdecl;
+  TUnumfResultAsValue = function(AResult: Pointer;
+    var AStatus: TICUErrorCode): Pointer; cdecl;
+  TUnumfClose = procedure(AFormatter: Pointer); cdecl;
+  TUnumfCloseResult = procedure(AResult: Pointer); cdecl;
   TUdatOpen = function(ATimeStyle: LongInt; ADateStyle: LongInt;
     const ALocale: PAnsiChar; const ATzId: PUChar; ATzIdLength: LongInt;
     const APattern: PUChar; APatternLength: LongInt;
@@ -402,6 +415,13 @@ type
     UnumSetDoubleAttribute: TUnumSetDoubleAttribute;
     UnumApplyPattern: TUnumApplyPattern;
     UnumSetTextAttribute: TUnumSetTextAttribute;
+    UnumfOpenForSkeletonAndLocale: TUnumfOpenForSkeletonAndLocale;
+    UnumfOpenResult: TUnumfOpenResult;
+    UnumfFormatDouble: TUnumfFormatDouble;
+    UnumfResultToString: TUnumfResultToString;
+    UnumfResultAsValue: TUnumfResultAsValue;
+    UnumfClose: TUnumfClose;
+    UnumfCloseResult: TUnumfCloseResult;
     UdatOpen: TUdatOpen;
     UdatClose: TUdatClose;
     UdatFormat: TUdatFormat;
@@ -592,6 +612,20 @@ begin
   if Assigned(S) then F.UnumSetTextAttribute := TUnumSetTextAttribute(S);
   S := ResolveSymbol(AHandle, 'unum_formatDoubleForFields');
   if Assigned(S) then F.UnumFormatDoubleForFields := TUnumFormatDoubleForFields(S);
+  S := ResolveSymbol(AHandle, 'unumf_openForSkeletonAndLocale');
+  if Assigned(S) then F.UnumfOpenForSkeletonAndLocale := TUnumfOpenForSkeletonAndLocale(S);
+  S := ResolveSymbol(AHandle, 'unumf_openResult');
+  if Assigned(S) then F.UnumfOpenResult := TUnumfOpenResult(S);
+  S := ResolveSymbol(AHandle, 'unumf_formatDouble');
+  if Assigned(S) then F.UnumfFormatDouble := TUnumfFormatDouble(S);
+  S := ResolveSymbol(AHandle, 'unumf_resultToString');
+  if Assigned(S) then F.UnumfResultToString := TUnumfResultToString(S);
+  S := ResolveSymbol(AHandle, 'unumf_resultAsValue');
+  if Assigned(S) then F.UnumfResultAsValue := TUnumfResultAsValue(S);
+  S := ResolveSymbol(AHandle, 'unumf_close');
+  if Assigned(S) then F.UnumfClose := TUnumfClose(S);
+  S := ResolveSymbol(AHandle, 'unumf_closeResult');
+  if Assigned(S) then F.UnumfCloseResult := TUnumfCloseResult(S);
   S := ResolveSymbol(AHandle, 'udat_formatForFields');
   if Assigned(S) then F.UdatFormatForFields := TUdatFormatForFields(S);
   S := ResolveSymbol(AHandle, 'udatpg_open');
@@ -1547,6 +1581,20 @@ begin
     Result := ScaledInt / Scale;
 end;
 
+function CanonicalizeICUNumberFormatInput(AValue: Double): Double; inline;
+var
+  Bits: QWord;
+begin
+  if not IsNan(AValue) then
+    Exit(AValue);
+
+  // ECMA-402 models NaN as the unsigned abstract value not-a-number.
+  // ICU formats a negative NaN payload as "-NaN" on Linux, so normalize
+  // the payload before crossing the ICU boundary.
+  Bits := QWord($7FF8000000000000);
+  Move(Bits, Result, SizeOf(Result));
+end;
+
 procedure AddSkeletonToken(var ASkeleton: string; const AToken: string);
 begin
   if AToken = '' then
@@ -1577,6 +1625,18 @@ begin
       StringOfChar('#', MaxFrac - MinFrac);
 end;
 
+function BuildFractionPrecisionStem(const AOptions: TIntlNumberFormatOptions): string;
+var
+  MinFrac, MaxFrac: Integer;
+begin
+  MinFrac := AOptions.MinimumFractionDigits;
+  MaxFrac := AOptions.MaximumFractionDigits;
+  if MinFrac < 0 then MinFrac := 0;
+  if MaxFrac < MinFrac then MaxFrac := MinFrac;
+  Result := '.' + StringOfChar('0', MinFrac) +
+    StringOfChar('#', MaxFrac - MinFrac);
+end;
+
 function BuildSignificantPrecisionSkeleton(const AOptions: TIntlNumberFormatOptions): string;
 var
   MinSig, MaxSig: Integer;
@@ -1587,6 +1647,55 @@ begin
   if MinSig < 1 then MinSig := 1;
   if MaxSig < MinSig then MaxSig := MinSig;
   Result := StringOfChar('@', MinSig) + StringOfChar('#', MaxSig - MinSig);
+end;
+
+function RoundingIncrementSkeletonDecimal(ARoundingIncrement,
+  AMaximumFractionDigits: Integer): string;
+var
+  Digits: string;
+  IntegerDigits: Integer;
+begin
+  Digits := IntToStr(ARoundingIncrement);
+  if AMaximumFractionDigits <= 0 then
+    Exit(Digits);
+
+  if Length(Digits) <= AMaximumFractionDigits then
+    Result := '0.' + StringOfChar('0', AMaximumFractionDigits - Length(Digits)) + Digits
+  else
+  begin
+    IntegerDigits := Length(Digits) - AMaximumFractionDigits;
+    Result := Copy(Digits, 1, IntegerDigits) + '.' +
+      Copy(Digits, IntegerDigits + 1, AMaximumFractionDigits);
+  end;
+end;
+
+function BuildPrecisionSkeleton(const AOptions: TIntlNumberFormatOptions): string;
+begin
+  if AOptions.RoundingIncrement > 1 then
+    Exit('precision-increment/' +
+      RoundingIncrementSkeletonDecimal(AOptions.RoundingIncrement,
+        AOptions.MaximumFractionDigits));
+
+  if (AOptions.RoundingPriority <> inrpAuto) and
+     (AOptions.MinimumFractionDigits >= 0) and
+     (AOptions.MaximumFractionDigits >= 0) and
+     (AOptions.MinimumSignificantDigits > 0) and
+     (AOptions.MaximumSignificantDigits > 0) then
+  begin
+    Result := BuildFractionPrecisionStem(AOptions) + '/' +
+      BuildSignificantPrecisionSkeleton(AOptions);
+    case AOptions.RoundingPriority of
+      inrpMorePrecision: Result := Result + 'r';
+      inrpLessPrecision: Result := Result + 's';
+    end;
+    Exit;
+  end;
+
+  if (AOptions.MinimumSignificantDigits > 0) or
+     (AOptions.MaximumSignificantDigits > 0) then
+    Result := BuildSignificantPrecisionSkeleton(AOptions)
+  else
+    Result := BuildFractionPrecisionSkeleton(AOptions);
 end;
 
 function BuildNumberSkeleton(const AOptions: TIntlNumberFormatOptions): string;
@@ -1630,11 +1739,7 @@ begin
         AddSkeletonToken(Result, 'compact-short');
   end;
 
-  if (AOptions.MinimumSignificantDigits > 0) or
-     (AOptions.MaximumSignificantDigits > 0) then
-    AddSkeletonToken(Result, BuildSignificantPrecisionSkeleton(AOptions))
-  else
-    AddSkeletonToken(Result, BuildFractionPrecisionSkeleton(AOptions));
+  AddSkeletonToken(Result, BuildPrecisionSkeleton(AOptions));
 
   if AOptions.MinimumIntegerDigits > 1 then
     AddSkeletonToken(Result, 'integer-width/*' +
@@ -1658,13 +1763,84 @@ begin
     inrmFloor: AddSkeletonToken(Result, 'rounding-mode-floor');
     inrmExpand: AddSkeletonToken(Result, 'rounding-mode-up');
     inrmTrunc: AddSkeletonToken(Result, 'rounding-mode-down');
+    inrmHalfCeil: AddSkeletonToken(Result, 'rounding-mode-half-ceiling');
+    inrmHalfFloor: AddSkeletonToken(Result, 'rounding-mode-half-floor');
     inrmHalfExpand: AddSkeletonToken(Result, 'rounding-mode-half-up');
     inrmHalfTrunc: AddSkeletonToken(Result, 'rounding-mode-half-down');
     inrmHalfEven: AddSkeletonToken(Result, 'rounding-mode-half-even');
   end;
 end;
 
-function TryICUFormatNumber(const ALocale: string; AValue: Double;
+function CanUseLegacyNumberFormatter(const AOptions: TIntlNumberFormatOptions): Boolean;
+begin
+  Result := (AOptions.Notation = innStandard) and
+    (AOptions.RoundingPriority = inrpAuto) and
+    (AOptions.Style <> insUnit);
+
+  if Result and (AOptions.Style = insCurrency) then
+    Result := (AOptions.CurrencyDisplay = incdSymbol) and
+      (AOptions.CurrencySign = incsStandard);
+end;
+
+function TryICUFormatNumberSkeleton(const ALocale: string; AValue: Double;
+  const AOptions: TIntlNumberFormatOptions; out AFormatted: string): Boolean;
+var
+  Status: TICUErrorCode;
+  Formatter, FormatResult: Pointer;
+  Skeleton: UnicodeString;
+  LocaleAnsi: AnsiString;
+  Buffer: array[0..FORMAT_BUFFER_CAPACITY - 1] of WideChar;
+  ResultLen: LongInt;
+begin
+  Result := False;
+  AFormatted := '';
+
+  if not EnsureLoaded or
+     not Assigned(IntlFunctions.UnumfOpenForSkeletonAndLocale) or
+     not Assigned(IntlFunctions.UnumfOpenResult) or
+     not Assigned(IntlFunctions.UnumfFormatDouble) or
+     not Assigned(IntlFunctions.UnumfResultToString) or
+     not Assigned(IntlFunctions.UnumfClose) or
+     not Assigned(IntlFunctions.UnumfCloseResult) then
+    Exit;
+
+  Skeleton := UnicodeString(BuildNumberSkeleton(AOptions));
+  LocaleAnsi := AnsiString(ALocale);
+  Status := ICU_SUCCESS;
+  Formatter := IntlFunctions.UnumfOpenForSkeletonAndLocale(PWideChar(Skeleton),
+    Length(Skeleton), PAnsiChar(LocaleAnsi), Status);
+  if not ICUSucceeded(Status) or not Assigned(Formatter) then
+    Exit;
+
+  try
+    Status := ICU_SUCCESS;
+    FormatResult := IntlFunctions.UnumfOpenResult(Status);
+    if not ICUSucceeded(Status) or not Assigned(FormatResult) then
+      Exit;
+    try
+      Status := ICU_SUCCESS;
+      IntlFunctions.UnumfFormatDouble(Formatter, AValue, FormatResult, Status);
+      if not ICUSucceeded(Status) then
+        Exit;
+
+      FillChar(Buffer, SizeOf(Buffer), 0);
+      Status := ICU_SUCCESS;
+      ResultLen := IntlFunctions.UnumfResultToString(FormatResult,
+        @Buffer[0], FORMAT_BUFFER_CAPACITY, Status);
+      if not ICUSucceeded(Status) or (ResultLen <= 0) then
+        Exit;
+
+      AFormatted := UnicodeToString(Buffer, ResultLen);
+      Result := True;
+    finally
+      IntlFunctions.UnumfCloseResult(FormatResult);
+    end;
+  finally
+    IntlFunctions.UnumfClose(Formatter);
+  end;
+end;
+
+function TryICUFormatNumberDirect(const ALocale: string; AValue: Double;
   const AOptions: TIntlNumberFormatOptions; out AFormatted: string): Boolean;
 var
   Status: TICUErrorCode;
@@ -1708,7 +1884,72 @@ begin
   end;
 end;
 
-function TryICUFormatNumberToParts(const ALocale: string; AValue: Double;
+function TryICUFormatNumber(const ALocale: string; AValue: Double;
+  const AOptions: TIntlNumberFormatOptions; out AFormatted: string): Boolean;
+begin
+  AValue := CanonicalizeICUNumberFormatInput(AValue);
+  if TryICUFormatNumberSkeleton(ALocale, AValue, AOptions, AFormatted) then
+    Exit(True);
+  Result := CanUseLegacyNumberFormatter(AOptions) and
+    TryICUFormatNumberDirect(ALocale, AValue, AOptions, AFormatted);
+end;
+
+function TryICUFormatNumberToPartsSkeleton(const ALocale: string; AValue: Double;
+  const AOptions: TIntlNumberFormatOptions; out AParts: TIntlFormatPartArray): Boolean;
+var
+  Status: TICUErrorCode;
+  Formatter, FormatResult, FormattedValue: Pointer;
+  Skeleton: UnicodeString;
+  LocaleAnsi: AnsiString;
+  Formatted: string;
+begin
+  Result := False;
+  SetLength(AParts, 0);
+
+  if not EnsureLoaded or
+     not Assigned(IntlFunctions.UnumfOpenForSkeletonAndLocale) or
+     not Assigned(IntlFunctions.UnumfOpenResult) or
+     not Assigned(IntlFunctions.UnumfFormatDouble) or
+     not Assigned(IntlFunctions.UnumfResultAsValue) or
+     not Assigned(IntlFunctions.UnumfClose) or
+     not Assigned(IntlFunctions.UnumfCloseResult) then
+    Exit;
+
+  Skeleton := UnicodeString(BuildNumberSkeleton(AOptions));
+  LocaleAnsi := AnsiString(ALocale);
+  Status := ICU_SUCCESS;
+  Formatter := IntlFunctions.UnumfOpenForSkeletonAndLocale(PWideChar(Skeleton),
+    Length(Skeleton), PAnsiChar(LocaleAnsi), Status);
+  if not ICUSucceeded(Status) or not Assigned(Formatter) then
+    Exit;
+
+  try
+    Status := ICU_SUCCESS;
+    FormatResult := IntlFunctions.UnumfOpenResult(Status);
+    if not ICUSucceeded(Status) or not Assigned(FormatResult) then
+      Exit;
+    try
+      Status := ICU_SUCCESS;
+      IntlFunctions.UnumfFormatDouble(Formatter, AValue, FormatResult, Status);
+      if not ICUSucceeded(Status) then
+        Exit;
+
+      Status := ICU_SUCCESS;
+      FormattedValue := IntlFunctions.UnumfResultAsValue(FormatResult, Status);
+      if not ICUSucceeded(Status) or not Assigned(FormattedValue) then
+        Exit;
+
+      Result := FormattedValueToParts(FormattedValue, UFIELD_CATEGORY_NUMBER,
+        0, NumberFieldToPartType, Formatted, AParts);
+    finally
+      IntlFunctions.UnumfCloseResult(FormatResult);
+    end;
+  finally
+    IntlFunctions.UnumfClose(Formatter);
+  end;
+end;
+
+function TryICUFormatNumberToPartsDirect(const ALocale: string; AValue: Double;
   const AOptions: TIntlNumberFormatOptions; out AParts: TIntlFormatPartArray): Boolean;
 var
   Status: TICUErrorCode;
@@ -1768,6 +2009,16 @@ begin
   end;
 end;
 
+function TryICUFormatNumberToParts(const ALocale: string; AValue: Double;
+  const AOptions: TIntlNumberFormatOptions; out AParts: TIntlFormatPartArray): Boolean;
+begin
+  AValue := CanonicalizeICUNumberFormatInput(AValue);
+  if TryICUFormatNumberToPartsSkeleton(ALocale, AValue, AOptions, AParts) then
+    Exit(True);
+  Result := CanUseLegacyNumberFormatter(AOptions) and
+    TryICUFormatNumberToPartsDirect(ALocale, AValue, AOptions, AParts);
+end;
+
 function TryICUFormatNumberRangeInternal(const ALocale: string;
   AUseDecimal: Boolean; AStartDouble, AEndDouble: Double;
   const AStartDecimal, AEndDecimal: string; const AOptions: TIntlNumberFormatOptions;
@@ -1794,12 +2045,6 @@ begin
     Exit;
   if (not AUseDecimal) and not Assigned(IntlFunctions.UnumrfFormatDoubleRange) then
     Exit;
-
-  if not AUseDecimal then
-  begin
-    AStartDouble := ApplyRoundingIncrement(AStartDouble, AOptions);
-    AEndDouble := ApplyRoundingIncrement(AEndDouble, AOptions);
-  end;
 
   Skeleton := UnicodeString(BuildNumberSkeleton(AOptions));
   LocaleAnsi := AnsiString(ALocale);
