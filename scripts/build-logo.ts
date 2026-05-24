@@ -74,7 +74,7 @@ try {
     await $`${magick} ${source} -resize ${traceSize} -alpha set -bordercolor none -border 1x1 -fill none -fuzz ${opaqueBackgroundFuzz} -draw ${"color 0,0 floodfill"} -shave 1x1 ${cutout}`;
   }
 
-  await $`${vtracer} --input ${cutout} --output ${output} --colormode color --hierarchical stacked --mode spline --filter_speckle 2 --color_precision 6 --gradient_step 4 --corner_threshold 60 --segment_length 3.5 --splice_threshold 45 --path_precision 2`;
+  await $`${vtracer} --input ${cutout} --output ${output} --colormode color --hierarchical stacked --mode spline --filter_speckle 1 --color_precision 7 --gradient_step 2 --corner_threshold 60 --segment_length 3.5 --splice_threshold 45 --path_precision 3`;
 
   console.log(`wrote ${output} (${statSync(output).size} bytes)`);
 } finally {
