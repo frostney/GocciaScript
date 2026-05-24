@@ -3,8 +3,8 @@
  * Trace a raster logo into SVG using ImageMagick and vtracer.
  *
  * Pipeline:
- *   1. ImageMagick strips the near-black background to alpha.
- *   2. vtracer clusters colors and emits clean SVG paths.
+ *   1. ImageMagick preserves source alpha, or flood-fills an opaque background.
+ *   2. vtracer clusters colors and emits detailed SVG paths.
  *
  * One-time setup:
  *   brew install imagemagick
@@ -44,6 +44,13 @@ const vtracer =
   process.env.VTRACER ??
   Bun.which("vtracer") ??
   join(homedir(), ".cache/goccia-logo-venv/bin/vtracer");
+const traceSize = "1024x1024";
+const opaqueBackgroundFuzz = "8%";
+
+async function sourceHasTransparency(path: string): Promise<boolean> {
+  const opaque = await $`${magick} identify -format "%[opaque]" ${path}`.text();
+  return opaque.trim() === "False";
+}
 
 if (source.length === 0) fail(usage);
 if (!existsSync(source) || !statSync(source).isFile()) {
@@ -61,9 +68,13 @@ const scratch = mkdtempSync(join(tmpdir(), "goccia-logo-"));
 try {
   const cutout = join(scratch, "cut.png");
 
-  await $`${magick} ${source} -resize 512x512 -gaussian-blur 0x0.8 -fuzz 14% -transparent black -channel A -morphology Erode Octagon:1 +channel ${cutout}`;
+  if (await sourceHasTransparency(source)) {
+    await $`${magick} ${source} -resize ${traceSize} ${cutout}`;
+  } else {
+    await $`${magick} ${source} -resize ${traceSize} -alpha set -bordercolor none -border 1x1 -fill none -fuzz ${opaqueBackgroundFuzz} -draw ${"color 0,0 floodfill"} -shave 1x1 ${cutout}`;
+  }
 
-  await $`${vtracer} --input ${cutout} --output ${output} --colormode color --hierarchical stacked --mode spline --filter_speckle 12 --color_precision 3 --gradient_step 24 --corner_threshold 60 --segment_length 4 --splice_threshold 45 --path_precision 2`;
+  await $`${vtracer} --input ${cutout} --output ${output} --colormode color --hierarchical stacked --mode spline --filter_speckle 2 --color_precision 6 --gradient_step 4 --corner_threshold 60 --segment_length 3.5 --splice_threshold 45 --path_precision 2`;
 
   console.log(`wrote ${output} (${statSync(output).size} bytes)`);
 } finally {
