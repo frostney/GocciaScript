@@ -90,7 +90,7 @@ begin
           raise TParseError.CreateFmt('Unknown option: --%s', [Name]);
 
         if (Value = '') and (not HasEquals) and
-           not (Option is TFlagOption) then
+           Option.ConsumesSeparateValue then
         begin
           if (I >= Count) or
              (Copy(ParamStr(I + 1), 1, 1) = SHORT_FLAG_CHAR) then

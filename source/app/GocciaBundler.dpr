@@ -73,8 +73,8 @@ begin
   AddEngineOptions;
   FOutputPath := AddString('output',
     'Output path (single file) or output directory (multiple files)');
-  FSourceMap := AddString('source-map',
-    'Write a .map source map file (optional: explicit path)');
+  FSourceMap := TStringOption(Add(TOptionalStringOption.Create('source-map',
+    'Write a .map source map file (optional: explicit path)')));
 end;
 
 { TBundlerApp - Validate }

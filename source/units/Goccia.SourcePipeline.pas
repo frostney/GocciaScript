@@ -28,6 +28,11 @@ type
     SourceType: TGocciaSourceType;
   end;
 
+  TGocciaSourcePipelineOptionsFrame = record
+    HadActiveOptions: Boolean;
+    Options: TGocciaSourcePipelineOptions;
+  end;
+
   TGocciaFunctionBodyParseResult = record
     IsValid: Boolean;
     HasUseStrictDirective: Boolean;
@@ -92,6 +97,12 @@ type
 
   TGocciaSourcePipeline = class
   public
+    class function DefaultOptions: TGocciaSourcePipelineOptions; static;
+    class function CurrentOptionsOrDefault: TGocciaSourcePipelineOptions; static;
+    class function PushActiveOptions(
+      const AOptions: TGocciaSourcePipelineOptions): TGocciaSourcePipelineOptionsFrame; static;
+    class procedure PopActiveOptions(
+      const AFrame: TGocciaSourcePipelineOptionsFrame); static;
     class function Parse(const ASource: TStringList; const AFileName: string;
       const AOptions: TGocciaSourcePipelineOptions): TGocciaSourcePipelineResult; static;
     class function ParseModuleSource(const ASource: UTF8String;
@@ -125,6 +136,10 @@ uses
   Goccia.Lexer,
   Goccia.Parser,
   Goccia.Token;
+
+threadvar
+  GHasActiveSourcePipelineOptions: Boolean;
+  GActiveSourcePipelineOptions: TGocciaSourcePipelineOptions;
 
 function SourceTextToLines(const ASource: UTF8String): TStringList;
 begin
@@ -269,6 +284,40 @@ begin
 end;
 
 { TGocciaSourcePipeline }
+
+class function TGocciaSourcePipeline.DefaultOptions: TGocciaSourcePipelineOptions;
+begin
+  Result.Preprocessors := [];
+  Result.Compatibility := [];
+  Result.SourceType := stScript;
+end;
+
+class function TGocciaSourcePipeline.CurrentOptionsOrDefault: TGocciaSourcePipelineOptions;
+begin
+  if GHasActiveSourcePipelineOptions then
+    Result := GActiveSourcePipelineOptions
+  else
+    Result := DefaultOptions;
+end;
+
+class function TGocciaSourcePipeline.PushActiveOptions(
+  const AOptions: TGocciaSourcePipelineOptions): TGocciaSourcePipelineOptionsFrame;
+begin
+  Result.HadActiveOptions := GHasActiveSourcePipelineOptions;
+  if Result.HadActiveOptions then
+    Result.Options := GActiveSourcePipelineOptions
+  else
+    Result.Options := DefaultOptions;
+  GActiveSourcePipelineOptions := AOptions;
+  GHasActiveSourcePipelineOptions := True;
+end;
+
+class procedure TGocciaSourcePipeline.PopActiveOptions(
+  const AFrame: TGocciaSourcePipelineOptionsFrame);
+begin
+  GHasActiveSourcePipelineOptions := AFrame.HadActiveOptions;
+  GActiveSourcePipelineOptions := AFrame.Options;
+end;
 
 class function TGocciaSourcePipeline.Parse(const ASource: TStringList;
   const AFileName: string;

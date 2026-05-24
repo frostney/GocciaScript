@@ -26,6 +26,7 @@ type
     constructor Create(const ALongName, AHelpText: string; const AGroup: string = '');
 
     procedure Apply(const AValue: string); virtual; abstract;
+    function ConsumesSeparateValue: Boolean; virtual;
     function FormatForHelp: string; virtual; abstract;
     function ValidValues: string; virtual;
 
@@ -64,6 +65,7 @@ type
     FValue: string;
   public
     procedure Apply(const AValue: string); override;
+    function ConsumesSeparateValue: Boolean; override;
     function FormatForHelp: string; override;
 
     function ValueOr(const ADefault: string): string;
@@ -71,11 +73,18 @@ type
     property Value: string read FValue;
   end;
 
+  TOptionalStringOption = class(TStringOption)
+  public
+    function ConsumesSeparateValue: Boolean; override;
+    function FormatForHelp: string; override;
+  end;
+
   TIntegerOption = class(TOptionBase)
   private
     FValue: Integer;
   public
     procedure Apply(const AValue: string); override;
+    function ConsumesSeparateValue: Boolean; override;
     function FormatForHelp: string; override;
 
     function ValueOr(const ADefault: Integer): Integer;
@@ -88,6 +97,7 @@ type
     FValue: Int64;
   public
     procedure Apply(const AValue: string); override;
+    function ConsumesSeparateValue: Boolean; override;
     function FormatForHelp: string; override;
 
     function ValueOr(const ADefault: Int64): Int64;
@@ -103,6 +113,7 @@ type
     destructor Destroy; override;
 
     procedure Apply(const AValue: string); override;
+    function ConsumesSeparateValue: Boolean; override;
     function FormatForHelp: string; override;
 
     property Values: TStringList read FValues;
@@ -118,6 +129,7 @@ type
       const APrefixLength: Integer = 2);
 
     procedure Apply(const AValue: string); override;
+    function ConsumesSeparateValue: Boolean; override;
     function FormatForHelp: string; override;
     function ValidValues: string; override;
 
@@ -203,6 +215,11 @@ begin
   Result := '';
 end;
 
+function TOptionBase.ConsumesSeparateValue: Boolean;
+begin
+  Result := False;
+end;
+
 { TFlagOption }
 
 procedure TFlagOption.Apply(const AValue: string);
@@ -236,6 +253,23 @@ begin
     Result := ADefault;
 end;
 
+function TStringOption.ConsumesSeparateValue: Boolean;
+begin
+  Result := True;
+end;
+
+{ TOptionalStringOption }
+
+function TOptionalStringOption.ConsumesSeparateValue: Boolean;
+begin
+  Result := False;
+end;
+
+function TOptionalStringOption.FormatForHelp: string;
+begin
+  Result := '--' + LongName + '[=<value>]';
+end;
+
 { TIntegerOption }
 
 procedure TIntegerOption.Apply(const AValue: string);
@@ -260,6 +294,11 @@ begin
     Result := FValue
   else
     Result := ADefault;
+end;
+
+function TIntegerOption.ConsumesSeparateValue: Boolean;
+begin
+  Result := True;
 end;
 
 { TInt64Option }
@@ -288,6 +327,11 @@ begin
     Result := ADefault;
 end;
 
+function TInt64Option.ConsumesSeparateValue: Boolean;
+begin
+  Result := True;
+end;
+
 { TRepeatableOption }
 
 constructor TRepeatableOption.Create(const ALongName, AHelpText: string;
@@ -312,6 +356,11 @@ end;
 function TRepeatableOption.FormatForHelp: string;
 begin
   Result := '--' + LongName + ' <value>';
+end;
+
+function TRepeatableOption.ConsumesSeparateValue: Boolean;
+begin
+  Result := True;
 end;
 
 { TEnumOption<T> }
@@ -401,6 +450,11 @@ end;
 function TEnumOption<T>.FormatForHelp: string;
 begin
   Result := '--' + LongName + '=' + JoinStrippedNames('|');
+end;
+
+function TEnumOption<T>.ConsumesSeparateValue: Boolean;
+begin
+  Result := True;
 end;
 
 { TOptionList }

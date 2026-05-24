@@ -1233,6 +1233,7 @@ end;
 function TGocciaEngine.Execute: TGocciaScriptResult;
 var
   PipelineOptions: TGocciaSourcePipelineOptions;
+  ActiveOptionsFrame: TGocciaSourcePipelineOptionsFrame;
   PipelineResult: TGocciaSourcePipelineResult;
   StartTime, ExecStart, ExecEnd: Int64;
   ModuleScope: TGocciaScope;
@@ -1265,6 +1266,7 @@ begin
           FSourcePath, PipelineResult.SourceMap.Clone);
     end;
 
+    ActiveOptionsFrame := TGocciaSourcePipeline.PushActiveOptions(PipelineOptions);
     try
       if FSourceType = stModule then
       begin
@@ -1283,6 +1285,7 @@ begin
         ModuleContext.CurrentFilePath := FSourcePath;
         ModuleContext.NonStrictMode := False;
         ExecStart := GetNanoseconds;
+        ModuleResult := nil;
         GC := TGarbageCollector.Instance;
         if Assigned(GC) then
           GC.AddTempRoot(ModuleScope);
@@ -1321,6 +1324,7 @@ begin
       end;
       FLastTiming.TotalTimeNanoseconds := ExecEnd - StartTime;
     finally
+      TGocciaSourcePipeline.PopActiveOptions(ActiveOptionsFrame);
       if Assigned(TGocciaMicrotaskQueue.Instance) then
         TGocciaMicrotaskQueue.Instance.ClearQueue;
       DiscardRuntimePending;

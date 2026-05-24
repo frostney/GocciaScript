@@ -6365,9 +6365,7 @@ begin
   DeclaredPrivateNames := nil;
 
   try
-    PipelineOptions.Preprocessors := [];
-    PipelineOptions.Compatibility := [];
-    PipelineOptions.SourceType := stScript;
+    PipelineOptions := TGocciaSourcePipeline.CurrentOptionsOrDefault;
     SourceName := Format('%s:%d:%d', [AContext.CurrentFilePath, ALine,
       AColumn]);
     if Pos('#', Trimmed) > 0 then

@@ -285,8 +285,8 @@ begin
   FSilent := AddFlag('silent', 'Suppress console output from the script');
   FPrint := AddFlag('print',
     'Print the script''s last value to stdout (mirrors node -p / bun --print / deno eval -p)');
-  FSourceMap := AddString('source-map',
-    'Write a .map source map file (optional: explicit path)');
+  FSourceMap := TStringOption(Add(TOptionalStringOption.Create('source-map',
+    'Write a .map source map file (optional: explicit path)')));
   FGlobalFiles := AddRepeatable('globals',
     'Inject globals from a JSON/JSON5/TOML/YAML file or a module with named exports');
   FInlineGlobals := AddRepeatable('global',
