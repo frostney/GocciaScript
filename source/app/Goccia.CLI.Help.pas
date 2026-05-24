@@ -8,7 +8,7 @@ uses
   CLI.Options;
 
 function GenerateHelpText(const AProgramName, AUsageLine: string;
-  const AOptions: TGocciaOptionArray): string;
+  const AOptions: TOptionArray): string;
 
 implementation
 
@@ -39,7 +39,7 @@ begin
 end;
 
 function GenerateHelpText(const AProgramName, AUsageLine: string;
-  const AOptions: TGocciaOptionArray): string;
+  const AOptions: TOptionArray): string;
 const
   MAX_GROUPS = 32;
   COLUMN_GAP = 2;
@@ -49,7 +49,7 @@ var
   GroupCount: Integer;
   MaxWidth, I, J, GroupIndex: Integer;
   FormattedName, Header, Padding: string;
-  Option: TGocciaOptionBase;
+  Option: TOptionBase;
 begin
   GroupCount := 0;
   MaxWidth := 0;
@@ -84,7 +84,7 @@ begin
       for J := 0 to Groups[I].Lines.Count - 1 do
       begin
         FormattedName := Groups[I].Lines[J];
-        Option := TGocciaOptionBase(Groups[I].Lines.Objects[J]);
+        Option := TOptionBase(Groups[I].Lines.Objects[J]);
 
         Padding := StringOfChar(' ', MaxWidth - Length(FormattedName) + COLUMN_GAP);
 

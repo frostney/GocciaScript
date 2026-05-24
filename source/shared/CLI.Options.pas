@@ -11,9 +11,9 @@ uses
   TypInfo;
 
 type
-  TGocciaParseError = class(Exception);
+  TParseError = class(Exception);
 
-  TGocciaOptionBase = class
+  TOptionBase = class
   private
     FLongName: string;
     FShortName: string;
@@ -51,15 +51,15 @@ type
     property FromCommandLine: Boolean read FFromCommandLine;
   end;
 
-  TGocciaOptionArray = array of TGocciaOptionBase;
+  TOptionArray = array of TOptionBase;
 
-  TGocciaFlagOption = class(TGocciaOptionBase)
+  TFlagOption = class(TOptionBase)
   public
     procedure Apply(const AValue: string); override;
     function FormatForHelp: string; override;
   end;
 
-  TGocciaStringOption = class(TGocciaOptionBase)
+  TStringOption = class(TOptionBase)
   private
     FValue: string;
   public
@@ -71,7 +71,7 @@ type
     property Value: string read FValue;
   end;
 
-  TGocciaIntegerOption = class(TGocciaOptionBase)
+  TIntegerOption = class(TOptionBase)
   private
     FValue: Integer;
   public
@@ -83,7 +83,7 @@ type
     property Value: Integer read FValue;
   end;
 
-  TGocciaInt64Option = class(TGocciaOptionBase)
+  TInt64Option = class(TOptionBase)
   private
     FValue: Int64;
   public
@@ -95,7 +95,7 @@ type
     property Value: Int64 read FValue;
   end;
 
-  TGocciaRepeatableOption = class(TGocciaOptionBase)
+  TRepeatableOption = class(TOptionBase)
   private
     FValues: TStringList;
   public
@@ -108,7 +108,7 @@ type
     property Values: TStringList read FValues;
   end;
 
-  TGocciaEnumOption<T> = class(TGocciaOptionBase)
+  TEnumOption<T> = class(TOptionBase)
   private
     FOrdinal: Integer;
     FPrefixLength: Integer;
@@ -126,125 +126,35 @@ type
     function Matches(const AValue: T): Boolean;
   end;
 
-  TGocciaOptionBaseList = TObjectList<TGocciaOptionBase>;
+  TOptionBaseList = TObjectList<TOptionBase>;
 
-  TGocciaOptionList = class
+  TOptionList = class
   private
-    FItems: TGocciaOptionBaseList;
+    FItems: TOptionBaseList;
   public
     constructor Create;
     destructor Destroy; override;
 
     function AddFlag(const ALongName, AHelpText: string;
-      const AGroup: string = ''): TGocciaFlagOption;
+      const AGroup: string = ''): TFlagOption;
     function AddString(const ALongName, AHelpText: string;
-      const AGroup: string = ''): TGocciaStringOption;
+      const AGroup: string = ''): TStringOption;
     function AddInteger(const ALongName, AHelpText: string;
-      const AGroup: string = ''): TGocciaIntegerOption;
+      const AGroup: string = ''): TIntegerOption;
     function AddRepeatable(const ALongName, AHelpText: string;
-      const AGroup: string = ''): TGocciaRepeatableOption;
-    function Add(const AOption: TGocciaOptionBase): TGocciaOptionBase;
+      const AGroup: string = ''): TRepeatableOption;
+    function Add(const AOption: TOptionBase): TOptionBase;
 
-    function Options: TGocciaOptionArray;
+    function Options: TOptionArray;
   end;
 
-  TGocciaExecutionMode = (emInterpreted, emBytecode);
-  TGocciaSourceType = (stScript, stModule);
-
-  TGocciaEngineOptions = class
-  private
-    FMode: TGocciaEnumOption<TGocciaExecutionMode>;
-    FSourceType: TGocciaEnumOption<TGocciaSourceType>;
-    FASI: TGocciaFlagOption;
-    FImportMap: TGocciaStringOption;
-    FAliases: TGocciaRepeatableOption;
-    FTimeout: TGocciaIntegerOption;
-    FMaxMemory: TGocciaInt64Option;
-    FMaxInstructions: TGocciaInt64Option;
-    FUnsafeFFI: TGocciaFlagOption;
-    FUnsafeFunctionConstructor: TGocciaFlagOption;
-    FStackSize: TGocciaIntegerOption;
-    FCompatVar: TGocciaFlagOption;
-    FCompatFunction: TGocciaFlagOption;
-    FCompatTraditionalFor: TGocciaFlagOption;
-    FCompatWhileLoops: TGocciaFlagOption;
-    FCompatLooseEquality: TGocciaFlagOption;
-    FCompatNonStrictMode: TGocciaFlagOption;
-    FStrictTypes: TGocciaFlagOption;
-    FAllowedHosts: TGocciaRepeatableOption;
-    FInspectDepth: TGocciaIntegerOption;
-  public
-    constructor Create;
-    destructor Destroy; override;
-
-    function Options: TGocciaOptionArray;
-
-    property Mode: TGocciaEnumOption<TGocciaExecutionMode> read FMode;
-    property SourceType: TGocciaEnumOption<TGocciaSourceType> read FSourceType;
-    property ASI: TGocciaFlagOption read FASI;
-    property ImportMap: TGocciaStringOption read FImportMap;
-    property Aliases: TGocciaRepeatableOption read FAliases;
-    property Timeout: TGocciaIntegerOption read FTimeout;
-    property MaxMemory: TGocciaInt64Option read FMaxMemory;
-    property MaxInstructions: TGocciaInt64Option read FMaxInstructions;
-    property UnsafeFFI: TGocciaFlagOption read FUnsafeFFI;
-    property UnsafeFunctionConstructor: TGocciaFlagOption read FUnsafeFunctionConstructor;
-    property StackSize: TGocciaIntegerOption read FStackSize;
-    property CompatVar: TGocciaFlagOption read FCompatVar;
-    property CompatFunction: TGocciaFlagOption read FCompatFunction;
-    property CompatTraditionalFor: TGocciaFlagOption read FCompatTraditionalFor;
-    property CompatWhileLoops: TGocciaFlagOption read FCompatWhileLoops;
-    property CompatLooseEquality: TGocciaFlagOption read FCompatLooseEquality;
-    property CompatNonStrictMode: TGocciaFlagOption read FCompatNonStrictMode;
-    property StrictTypes: TGocciaFlagOption read FStrictTypes;
-    property AllowedHosts: TGocciaRepeatableOption read FAllowedHosts;
-    property InspectDepth: TGocciaIntegerOption read FInspectDepth;
-  end;
-
-  TGocciaCoverageFormat = (cfLcov, cfJson);
-
-  TGocciaCoverageOptions = class
-  private
-    FEnabled: TGocciaFlagOption;
-    FFormat: TGocciaEnumOption<TGocciaCoverageFormat>;
-    FOutputPath: TGocciaStringOption;
-  public
-    constructor Create;
-    destructor Destroy; override;
-
-    function Options: TGocciaOptionArray;
-
-    property Enabled: TGocciaFlagOption read FEnabled;
-    property Format: TGocciaEnumOption<TGocciaCoverageFormat> read FFormat;
-    property OutputPath: TGocciaStringOption read FOutputPath;
-  end;
-
-  TGocciaProfileMode = (pmOpcodes, pmFunctions, pmAll);
-  TGocciaProfileFormat = (pfFlamegraph);
-
-  TGocciaProfilerOptions = class
-  private
-    FMode: TGocciaEnumOption<TGocciaProfileMode>;
-    FOutputPath: TGocciaStringOption;
-    FFormat: TGocciaEnumOption<TGocciaProfileFormat>;
-  public
-    constructor Create;
-    destructor Destroy; override;
-
-    function Options: TGocciaOptionArray;
-
-    property Mode: TGocciaEnumOption<TGocciaProfileMode> read FMode;
-    property OutputPath: TGocciaStringOption read FOutputPath;
-    property Format: TGocciaEnumOption<TGocciaProfileFormat> read FFormat;
-  end;
-
-function ConcatOptions(const AArrays: array of TGocciaOptionArray): TGocciaOptionArray;
+function ConcatOptions(const AArrays: array of TOptionArray): TOptionArray;
 
 implementation
 
 { ConcatOptions }
 
-function ConcatOptions(const AArrays: array of TGocciaOptionArray): TGocciaOptionArray;
+function ConcatOptions(const AArrays: array of TOptionArray): TOptionArray;
 var
   TotalLength: Integer;
   I, J, Offset: Integer;
@@ -263,9 +173,9 @@ begin
     end;
 end;
 
-{ TGocciaOptionBase }
+{ TOptionBase }
 
-constructor TGocciaOptionBase.Create(const ALongName, AHelpText: string;
+constructor TOptionBase.Create(const ALongName, AHelpText: string;
   const AGroup: string);
 begin
   inherited Create;
@@ -278,47 +188,47 @@ begin
   FFromCommandLine := False;
 end;
 
-procedure TGocciaOptionBase.MarkFromCommandLine;
+procedure TOptionBase.MarkFromCommandLine;
 begin
   FFromCommandLine := True;
 end;
 
-procedure TGocciaOptionBase.MarkPresent;
+procedure TOptionBase.MarkPresent;
 begin
   FPresent := True;
 end;
 
-function TGocciaOptionBase.ValidValues: string;
+function TOptionBase.ValidValues: string;
 begin
   Result := '';
 end;
 
-{ TGocciaFlagOption }
+{ TFlagOption }
 
-procedure TGocciaFlagOption.Apply(const AValue: string);
+procedure TFlagOption.Apply(const AValue: string);
 begin
   FPresent := True;
 end;
 
-function TGocciaFlagOption.FormatForHelp: string;
+function TFlagOption.FormatForHelp: string;
 begin
   Result := '--' + LongName;
 end;
 
-{ TGocciaStringOption }
+{ TStringOption }
 
-procedure TGocciaStringOption.Apply(const AValue: string);
+procedure TStringOption.Apply(const AValue: string);
 begin
   FValue := AValue;
   FPresent := True;
 end;
 
-function TGocciaStringOption.FormatForHelp: string;
+function TStringOption.FormatForHelp: string;
 begin
   Result := '--' + LongName + '=<value>';
 end;
 
-function TGocciaStringOption.ValueOr(const ADefault: string): string;
+function TStringOption.ValueOr(const ADefault: string): string;
 begin
   if FPresent then
     Result := FValue
@@ -326,25 +236,25 @@ begin
     Result := ADefault;
 end;
 
-{ TGocciaIntegerOption }
+{ TIntegerOption }
 
-procedure TGocciaIntegerOption.Apply(const AValue: string);
+procedure TIntegerOption.Apply(const AValue: string);
 var
   Parsed: Integer;
 begin
   if not TryStrToInt(AValue, Parsed) then
-    raise TGocciaParseError.CreateFmt('Invalid integer value for --%s: %s',
+    raise TParseError.CreateFmt('Invalid integer value for --%s: %s',
       [LongName, AValue]);
   FValue := Parsed;
   FPresent := True;
 end;
 
-function TGocciaIntegerOption.FormatForHelp: string;
+function TIntegerOption.FormatForHelp: string;
 begin
   Result := '--' + LongName + '=<N>';
 end;
 
-function TGocciaIntegerOption.ValueOr(const ADefault: Integer): Integer;
+function TIntegerOption.ValueOr(const ADefault: Integer): Integer;
 begin
   if FPresent then
     Result := FValue
@@ -352,25 +262,25 @@ begin
     Result := ADefault;
 end;
 
-{ TGocciaInt64Option }
+{ TInt64Option }
 
-procedure TGocciaInt64Option.Apply(const AValue: string);
+procedure TInt64Option.Apply(const AValue: string);
 var
   Parsed: Int64;
 begin
   if not TryStrToInt64(AValue, Parsed) then
-    raise TGocciaParseError.CreateFmt('Invalid integer value for --%s: %s',
+    raise TParseError.CreateFmt('Invalid integer value for --%s: %s',
       [LongName, AValue]);
   FValue := Parsed;
   FPresent := True;
 end;
 
-function TGocciaInt64Option.FormatForHelp: string;
+function TInt64Option.FormatForHelp: string;
 begin
   Result := '--' + LongName + '=<N>';
 end;
 
-function TGocciaInt64Option.ValueOr(const ADefault: Int64): Int64;
+function TInt64Option.ValueOr(const ADefault: Int64): Int64;
 begin
   if FPresent then
     Result := FValue
@@ -378,35 +288,35 @@ begin
     Result := ADefault;
 end;
 
-{ TGocciaRepeatableOption }
+{ TRepeatableOption }
 
-constructor TGocciaRepeatableOption.Create(const ALongName, AHelpText: string;
+constructor TRepeatableOption.Create(const ALongName, AHelpText: string;
   const AGroup: string);
 begin
   inherited Create(ALongName, AHelpText, AGroup);
   FValues := TStringList.Create;
 end;
 
-destructor TGocciaRepeatableOption.Destroy;
+destructor TRepeatableOption.Destroy;
 begin
   FValues.Free;
   inherited Destroy;
 end;
 
-procedure TGocciaRepeatableOption.Apply(const AValue: string);
+procedure TRepeatableOption.Apply(const AValue: string);
 begin
   FValues.Add(AValue);
   FPresent := True;
 end;
 
-function TGocciaRepeatableOption.FormatForHelp: string;
+function TRepeatableOption.FormatForHelp: string;
 begin
   Result := '--' + LongName + ' <value>';
 end;
 
-{ TGocciaEnumOption<T> }
+{ TEnumOption<T> }
 
-constructor TGocciaEnumOption<T>.Create(const ALongName, AHelpText: string;
+constructor TEnumOption<T>.Create(const ALongName, AHelpText: string;
   const AGroup: string; const APrefixLength: Integer);
 begin
   inherited Create(ALongName, AHelpText, AGroup);
@@ -414,7 +324,7 @@ begin
   FPrefixLength := APrefixLength;
 end;
 
-function TGocciaEnumOption<T>.JoinStrippedNames(
+function TEnumOption<T>.JoinStrippedNames(
   const ASeparator: string): string;
 var
   TypeData: PTypeData;
@@ -435,7 +345,7 @@ begin
   end;
 end;
 
-procedure TGocciaEnumOption<T>.Apply(const AValue: string);
+procedure TEnumOption<T>.Apply(const AValue: string);
 var
   TypeData: PTypeData;
   I: Integer;
@@ -457,16 +367,16 @@ begin
     end;
   end;
 
-  raise TGocciaParseError.CreateFmt('Invalid value for --%s: %s (valid: %s)',
+  raise TParseError.CreateFmt('Invalid value for --%s: %s (valid: %s)',
     [LongName, AValue, JoinStrippedNames(', ')]);
 end;
 
-function TGocciaEnumOption<T>.Value: T;
+function TEnumOption<T>.Value: T;
 begin
   Move(FOrdinal, Result, SizeOf(T));
 end;
 
-function TGocciaEnumOption<T>.ValueOr(const ADefault: T): T;
+function TEnumOption<T>.ValueOr(const ADefault: T): T;
 begin
   if FPresent then
     Result := Value
@@ -474,7 +384,7 @@ begin
     Result := ADefault;
 end;
 
-function TGocciaEnumOption<T>.Matches(const AValue: T): Boolean;
+function TEnumOption<T>.Matches(const AValue: T): Boolean;
 var
   OrdinalValue: Integer;
 begin
@@ -483,227 +393,71 @@ begin
   Result := FPresent and (FOrdinal = OrdinalValue);
 end;
 
-function TGocciaEnumOption<T>.ValidValues: string;
+function TEnumOption<T>.ValidValues: string;
 begin
   Result := JoinStrippedNames(', ');
 end;
 
-function TGocciaEnumOption<T>.FormatForHelp: string;
+function TEnumOption<T>.FormatForHelp: string;
 begin
   Result := '--' + LongName + '=' + JoinStrippedNames('|');
 end;
 
-{ TGocciaOptionList }
+{ TOptionList }
 
-constructor TGocciaOptionList.Create;
+constructor TOptionList.Create;
 begin
   inherited Create;
-  FItems := TGocciaOptionBaseList.Create(True);
+  FItems := TOptionBaseList.Create(True);
 end;
 
-destructor TGocciaOptionList.Destroy;
+destructor TOptionList.Destroy;
 begin
   FItems.Free;
   inherited Destroy;
 end;
 
-function TGocciaOptionList.AddFlag(const ALongName, AHelpText: string;
-  const AGroup: string): TGocciaFlagOption;
+function TOptionList.AddFlag(const ALongName, AHelpText: string;
+  const AGroup: string): TFlagOption;
 begin
-  Result := TGocciaFlagOption.Create(ALongName, AHelpText, AGroup);
+  Result := TFlagOption.Create(ALongName, AHelpText, AGroup);
   FItems.Add(Result);
 end;
 
-function TGocciaOptionList.AddString(const ALongName, AHelpText: string;
-  const AGroup: string): TGocciaStringOption;
+function TOptionList.AddString(const ALongName, AHelpText: string;
+  const AGroup: string): TStringOption;
 begin
-  Result := TGocciaStringOption.Create(ALongName, AHelpText, AGroup);
+  Result := TStringOption.Create(ALongName, AHelpText, AGroup);
   FItems.Add(Result);
 end;
 
-function TGocciaOptionList.AddInteger(const ALongName, AHelpText: string;
-  const AGroup: string): TGocciaIntegerOption;
+function TOptionList.AddInteger(const ALongName, AHelpText: string;
+  const AGroup: string): TIntegerOption;
 begin
-  Result := TGocciaIntegerOption.Create(ALongName, AHelpText, AGroup);
+  Result := TIntegerOption.Create(ALongName, AHelpText, AGroup);
   FItems.Add(Result);
 end;
 
-function TGocciaOptionList.AddRepeatable(const ALongName, AHelpText: string;
-  const AGroup: string): TGocciaRepeatableOption;
+function TOptionList.AddRepeatable(const ALongName, AHelpText: string;
+  const AGroup: string): TRepeatableOption;
 begin
-  Result := TGocciaRepeatableOption.Create(ALongName, AHelpText, AGroup);
+  Result := TRepeatableOption.Create(ALongName, AHelpText, AGroup);
   FItems.Add(Result);
 end;
 
-function TGocciaOptionList.Add(const AOption: TGocciaOptionBase): TGocciaOptionBase;
+function TOptionList.Add(const AOption: TOptionBase): TOptionBase;
 begin
   FItems.Add(AOption);
   Result := AOption;
 end;
 
-function TGocciaOptionList.Options: TGocciaOptionArray;
+function TOptionList.Options: TOptionArray;
 var
   I: Integer;
 begin
   SetLength(Result, FItems.Count);
   for I := 0 to FItems.Count - 1 do
     Result[I] := FItems[I];
-end;
-
-{ TGocciaEngineOptions }
-
-constructor TGocciaEngineOptions.Create;
-begin
-  inherited Create;
-  FMode := TGocciaEnumOption<TGocciaExecutionMode>.Create('mode',
-    'Execution mode', 'Engine');
-  FSourceType := TGocciaEnumOption<TGocciaSourceType>.Create('source-type',
-    'Source loading kind (default: script)', 'Engine');
-  FASI := TGocciaFlagOption.Create('asi',
-    'Enable automatic semicolon insertion', 'Engine');
-  FImportMap := TGocciaStringOption.Create('import-map',
-    'Path to import map JSON file', 'Engine');
-  FAliases := TGocciaRepeatableOption.Create('alias',
-    'Import alias (e.g. @/=./src/)', 'Engine');
-  FTimeout := TGocciaIntegerOption.Create('timeout',
-    'Per-file timeout in milliseconds', 'Engine');
-  FMaxMemory := TGocciaInt64Option.Create('max-memory',
-    'GC heap byte limit (RangeError on exceed)', 'Engine');
-  FMaxInstructions := TGocciaInt64Option.Create('max-instructions',
-    'Maximum execution steps before aborting', 'Engine');
-  FUnsafeFFI := TGocciaFlagOption.Create('unsafe-ffi',
-    'Enable the FFI global (foreign function interface)', 'Runtime');
-  FUnsafeFunctionConstructor := TGocciaFlagOption.Create('unsafe-function-constructor',
-    'Enable the Function constructor (dynamic code generation)', 'Engine');
-  FStackSize := TGocciaIntegerOption.Create('stack-size',
-    'Maximum call stack depth (0 = no limit)', 'Engine');
-  FCompatVar := TGocciaFlagOption.Create('compat-var',
-    'Enable var declarations (compatibility)', 'Engine');
-  FCompatFunction := TGocciaFlagOption.Create('compat-function',
-    'Enable function declarations and expressions (compatibility)', 'Engine');
-  FCompatTraditionalFor := TGocciaFlagOption.Create('compat-traditional-for-loop',
-    'Enable traditional C-style for(init; test; update) loops (compatibility)', 'Engine');
-  FCompatWhileLoops := TGocciaFlagOption.Create('compat-while-loops',
-    'Enable while and do...while loops (compatibility)', 'Engine');
-  FCompatLooseEquality := TGocciaFlagOption.Create('compat-loose-equality',
-    'Enable loose equality and inequality (== and !=) (compatibility)', 'Engine');
-  FCompatNonStrictMode := TGocciaFlagOption.Create('compat-non-strict-mode',
-    'Enable non-strict-mode compatibility semantics', 'Engine');
-  FStrictTypes := TGocciaFlagOption.Create('strict-types',
-    'Enforce type annotations at runtime (interpreter and bytecode)', 'Engine');
-  FAllowedHosts := TGocciaRepeatableOption.Create('allowed-host',
-    'Hostname allowed for fetch requests (repeatable)', 'Engine');
-  FAllowedHosts.ConfigName := 'allowed-hosts';
-  FInspectDepth := TGocciaIntegerOption.Create('inspect-depth',
-    'Maximum object inspection depth for console output (default: 5)', 'Engine');
-end;
-
-destructor TGocciaEngineOptions.Destroy;
-begin
-  FMode.Free;
-  FSourceType.Free;
-  FASI.Free;
-  FImportMap.Free;
-  FAliases.Free;
-  FTimeout.Free;
-  FMaxMemory.Free;
-  FMaxInstructions.Free;
-  FUnsafeFFI.Free;
-  FUnsafeFunctionConstructor.Free;
-  FStackSize.Free;
-  FCompatVar.Free;
-  FCompatFunction.Free;
-  FCompatTraditionalFor.Free;
-  FCompatWhileLoops.Free;
-  FCompatLooseEquality.Free;
-  FCompatNonStrictMode.Free;
-  FStrictTypes.Free;
-  FAllowedHosts.Free;
-  FInspectDepth.Free;
-  inherited Destroy;
-end;
-
-function TGocciaEngineOptions.Options: TGocciaOptionArray;
-begin
-  SetLength(Result, 20);
-  Result[0] := FMode;
-  Result[1] := FSourceType;
-  Result[2] := FASI;
-  Result[3] := FImportMap;
-  Result[4] := FAliases;
-  Result[5] := FTimeout;
-  Result[6] := FMaxMemory;
-  Result[7] := FMaxInstructions;
-  Result[8] := FUnsafeFFI;
-  Result[9] := FUnsafeFunctionConstructor;
-  Result[10] := FStackSize;
-  Result[11] := FCompatVar;
-  Result[12] := FCompatFunction;
-  Result[13] := FCompatTraditionalFor;
-  Result[14] := FCompatWhileLoops;
-  Result[15] := FCompatLooseEquality;
-  Result[16] := FCompatNonStrictMode;
-  Result[17] := FStrictTypes;
-  Result[18] := FAllowedHosts;
-  Result[19] := FInspectDepth;
-end;
-
-{ TGocciaCoverageOptions }
-
-constructor TGocciaCoverageOptions.Create;
-begin
-  inherited Create;
-  FEnabled := TGocciaFlagOption.Create('coverage',
-    'Enable line and branch coverage', 'Coverage');
-  FFormat := TGocciaEnumOption<TGocciaCoverageFormat>.Create('coverage-format',
-    'Coverage output format', 'Coverage');
-  FOutputPath := TGocciaStringOption.Create('coverage-output',
-    'Coverage output file path', 'Coverage');
-end;
-
-destructor TGocciaCoverageOptions.Destroy;
-begin
-  FEnabled.Free;
-  FFormat.Free;
-  FOutputPath.Free;
-  inherited Destroy;
-end;
-
-function TGocciaCoverageOptions.Options: TGocciaOptionArray;
-begin
-  SetLength(Result, 3);
-  Result[0] := FEnabled;
-  Result[1] := FFormat;
-  Result[2] := FOutputPath;
-end;
-
-{ TGocciaProfilerOptions }
-
-constructor TGocciaProfilerOptions.Create;
-begin
-  inherited Create;
-  FMode := TGocciaEnumOption<TGocciaProfileMode>.Create('profile',
-    'Profiling mode', 'Profiler');
-  FOutputPath := TGocciaStringOption.Create('profile-output',
-    'Profile output file path', 'Profiler');
-  FFormat := TGocciaEnumOption<TGocciaProfileFormat>.Create('profile-format',
-    'Profile output format', 'Profiler');
-end;
-
-destructor TGocciaProfilerOptions.Destroy;
-begin
-  FMode.Free;
-  FOutputPath.Free;
-  FFormat.Free;
-  inherited Destroy;
-end;
-
-function TGocciaProfilerOptions.Options: TGocciaOptionArray;
-begin
-  SetLength(Result, 3);
-  Result[0] := FMode;
-  Result[1] := FOutputPath;
-  Result[2] := FFormat;
 end;
 
 end.

@@ -9,7 +9,7 @@
 - **TC39 proposals** — Decorators, decorator metadata, pattern matching, types as comments, enums, `Math.clamp`
 - **Excluded by design** — `eval`, wildcard re-exports
 - **Graceful handling** — Parser-recognized excluded or disabled syntax (`==`/`!=` when `--compat-loose-equality` is off, `while`/`do...while` when `--compat-while-loops` is off, `with` when `--compat-non-strict-mode` is off, traditional `for(;;)` when `--compat-traditional-for-loop` is off) parses successfully but executes as a no-op with a warning and suggestion
-- **Opt-in toggles** — ASI (`--asi`), `var` declarations (`--compat-var`), `function` keyword (`--compat-function`), non-strict Script compatibility (`--compat-non-strict-mode` for `arguments`, `with`, silent assignment failures, legacy `delete` returns, and sloppy `this`), loose equality (`--compat-loose-equality`), traditional `for(init; test; update)` loops (`--compat-traditional-for-loop`), `while`/`do...while` loops (`--compat-while-loops`), runtime type enforcement (`--strict-types`)
+- **Opt-in toggles** — ASI (`--compat-asi`), `var` declarations (`--compat-var`), `function` keyword (`--compat-function`), non-strict Script compatibility (`--compat-non-strict-mode` for `arguments`, `with`, silent assignment failures, legacy `delete` returns, and sloppy `this`), loose equality (`--compat-loose-equality`), traditional `for(init; test; update)` loops (`--compat-traditional-for-loop`), `while`/`do...while` loops (`--compat-while-loops`), runtime type enforcement (`--strict-types`)
 - **Default preprocessors** — JSX (enabled by default via `DefaultPreprocessors`)
 
 GocciaScript implements a curated subset of ECMAScript. This document details what's supported, what's excluded, and the rationale for each decision. For quick-reference tables of every feature and TC39 proposal, see [Language Tables](language-tables.md).
@@ -160,7 +160,7 @@ const fn = async () => {
 
 ### Modules
 
-ES module syntax with default, named, and namespace imports/exports. Project code convention prefers named exports for internal modules, but default imports and exports are language-supported. Supported source file extensions: `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`. Structured-data imports are also supported for `.json`, `.json5`, `.jsonl`, `.toml`, `.yaml`, `.yml`, `.csv`, and `.tsv`, and text-asset imports are supported for `.txt` and `.md`. Module paths are resolved relative to the importing file. File extensions can be omitted — the resolver tries source, structured-data, and text-asset extensions in order. Directory imports resolve to `index` files. The CLI tools support WHATWG-style import maps through `--import-map=<file.json>`, `--alias key=value`, and implicit `goccia.json` discovery.
+ES module syntax with default, named, and namespace imports/exports. Project code convention prefers named exports for internal modules, but default imports and exports are language-supported. Supported source file extensions: `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`; `.mjs` entry files default to module source. Structured-data imports are also supported for `.json`, `.json5`, `.jsonl`, `.toml`, `.yaml`, `.yml`, `.csv`, and `.tsv`, and text-asset imports are supported for `.txt` and `.md`. Module paths are resolved relative to the importing file. File extensions can be omitted — the resolver tries source, structured-data, and text-asset extensions in order. Directory imports resolve to `index` files. The CLI tools support WHATWG-style import maps through `--import-map=<file.json>`, `--alias key=value`, and implicit `goccia.json` discovery.
 
 ```javascript
 // Named imports (with or without extension)
@@ -656,7 +656,7 @@ console.log(x); // 5
 
 With `let`/`const`, accessing before declaration is a `ReferenceError` (Temporal Dead Zone), which catches bugs early.
 
-When enabled (CLI: `--compat-var`, engine API: `Engine.VarEnabled := True`, config: `{"compat-var": true}`), `var` declarations follow ES2026 §14.3.2 semantics: function-scoped (escapes blocks), hoisted to function top as `undefined`, redeclaration allowed, no TDZ, with destructuring and for-of support. Var bindings are stored in a separate binding map (`FVarBindings`) on function/module/global scopes, distinct from lexical bindings. See [interpreter.md § Scope Chain Design](interpreter.md#scope-chain-design).
+When enabled (CLI: `--compat-var`, engine API: include `cfVar` in `Engine.Compatibility`, config: `{"compat-var": true}`), `var` declarations follow ES2026 §14.3.2 semantics: function-scoped (escapes blocks), hoisted to function top as `undefined`, redeclaration allowed, no TDZ, with destructuring and for-of support. Var bindings are stored in a separate binding map (`FVarBindings`) on function/module/global scopes, distinct from lexical bindings. See [interpreter.md § Scope Chain Design](interpreter.md#scope-chain-design).
 
 ### `function` Keyword
 
@@ -677,7 +677,7 @@ GocciaScript provides two function definition styles that cover most use cases w
 - **Arrow functions** (`(x) => x + 1`) — Lexical `this`, no hoisting, no own `arguments`. Use for standalone functions, callbacks, and closures.
 - **Shorthand methods** (`method() {}`) — Call-site `this`. Use in object literals and class definitions where `this` binding is needed.
 
-When enabled (CLI: `--compat-function`, engine API: `Engine.FunctionEnabled := True`, config: `{"compat-function": true}`), `function` declarations and expressions are supported. Their implicit `arguments` object still requires `--compat-non-strict-mode`.
+When enabled (CLI: `--compat-function`, engine API: include `cfFunction` in `Engine.Compatibility`, config: `{"compat-function": true}`), `function` declarations and expressions are supported. Their implicit `arguments` object still requires `--compat-non-strict-mode`.
 
 - **Function declarations** (`function name(params) { body }`) parse as `TGocciaFunctionDeclaration` nodes whose body is backed by `TGocciaFunctionExpression`, which produces call-site `this` binding (not lexical). Declarations are hoisted: both the name and the function value are available before the declaration is reached, matching ES2026 §15.2.6 semantics. Uses the same var binding infrastructure (`DefineVariableBinding`) as `--compat-var`.
 - **Function expressions** (`const f = function(params) { body }`) parse as `TGocciaFunctionExpression` nodes. Named function expressions (`const f = function g(params) { body }`) create a read-only self-binding of the name (`g`) visible only inside the function body for recursion, matching ES2026 §15.2.4 semantics.
@@ -687,7 +687,7 @@ When enabled (CLI: `--compat-function`, engine API: `Engine.FunctionEnabled := T
 
 ### Loose Equality (`==` and `!=`)
 
-**Opt-in.** Excluded by default; use `===` and `!==` unless you are running compatibility code. Available via `--compat-loose-equality` (CLI flag, `Engine.LooseEqualityEnabled`, or `{"compat-loose-equality": true}` in config).
+**Opt-in.** Excluded by default; use `===` and `!==` unless you are running compatibility code. Available via `--compat-loose-equality` (CLI flag, `cfLooseEquality` in `Engine.Compatibility`, or `{"compat-loose-equality": true}` in config).
 
 When enabled, `==` and `!=` follow [ES2026 §7.2.13 IsLooselyEqual](https://tc39.es/ecma262/2026/multipage/abstract-operations.html#sec-islooselyequal) in both interpreter and bytecode modes, including `null == undefined`, string/number coercion, boolean-to-number coercion, BigInt/string and BigInt/number comparisons, and object `ToPrimitive` conversion.
 
@@ -720,7 +720,7 @@ Strict equality requires matching types, eliminating this entire class of bugs.
 
 ### `arguments` Object
 
-**Opt-in for script source.** Excluded by default; prefer rest parameters. Available via `--compat-non-strict-mode` (CLI flag, `Engine.NonStrictModeEnabled`, or `{"compat-non-strict-mode": true}` in config). Module source remains strict even when this flag is enabled. When enabled in script source, ordinary functions, shorthand methods, accessors, and generators create an unmapped, array-like `arguments` object whose indexed entries and `length` reflect the call's argument list without aliasing parameter variables. Arrow functions do not create their own `arguments`; they resolve it lexically from the nearest enclosing ordinary function or method that has one. `arguments` is an ordinary identifier, not a reserved keyword, so parameters or body-level lexical declarations named `arguments` shadow the implicit object.
+**Opt-in for script source.** Excluded by default; prefer rest parameters. Available via `--compat-non-strict-mode` (CLI flag, `cfNonStrictMode` in `Engine.Compatibility`, or `{"compat-non-strict-mode": true}` in config). Module source remains strict even when this flag is enabled. When enabled in script source, ordinary functions, shorthand methods, accessors, and generators create an unmapped, array-like `arguments` object whose indexed entries and `length` reflect the call's argument list without aliasing parameter variables. Arrow functions do not create their own `arguments`; they resolve it lexically from the nearest enclosing ordinary function or method that has one. `arguments` is an ordinary identifier, not a reserved keyword, so parameters or body-level lexical declarations named `arguments` shadow the implicit object.
 
 ### Automatic Semicolon Insertion
 
@@ -738,9 +738,9 @@ GocciaScript requires explicit semicolons by default, preventing this class of b
 
 ```bash
 # Enable ASI via CLI, or use a subtree goccia.json for tests
-./build/GocciaScriptLoader example.js --asi
+./build/GocciaScriptLoader example.js --compat-asi
 ./build/GocciaTestRunner tests/language/asi
-./build/GocciaREPL --asi
+./build/GocciaREPL --compat-asi
 ```
 
 ```pascal
@@ -749,7 +749,7 @@ Executor := TGocciaInterpreterExecutor.Create;
 try
   Engine := TGocciaEngine.Create(FileName, Source, Executor);
   try
-    Engine.ASIEnabled := True;
+    Engine.Compatibility := [cfASI];
     Engine.Execute;
   finally
     Engine.Free;
@@ -767,7 +767,7 @@ When enabled, GocciaScript follows the ECMAScript ASI rules (ES2026 §12.10):
 
 ### Traditional `for(init; test; update)` Loop
 
-**Opt-in for JavaScript compatibility.** Excluded by default. Available via `--compat-traditional-for-loop` (CLI flag, `Engine.TraditionalForLoopsEnabled`, or `{"compat-traditional-for-loop": true}` in config) when a program or conformance suite needs ECMAScript `for(init; test; update)` semantics.
+**Opt-in for JavaScript compatibility.** Excluded by default. Available via `--compat-traditional-for-loop` (CLI flag, `cfTraditionalFor` in `Engine.Compatibility`, or `{"compat-traditional-for-loop": true}` in config) when a program or conformance suite needs ECMAScript `for(init; test; update)` semantics.
 
 When disabled (default), the parser accepts the syntax but treats it as a no-op and emits a warning. When enabled, `for(init; test; update) body` is fully supported in both interpreter and bytecode modes:
 
@@ -791,7 +791,7 @@ items.reduce((acc, item) => acc + item, 0);
 
 ### `while` and `do...while`
 
-**Opt-in for JavaScript compatibility.** Excluded by default. Available via `--compat-while-loops` (CLI flag, `Engine.WhileLoopsEnabled`, or `{"compat-while-loops": true}` in config) when a program or conformance suite needs ECMAScript `while` or `do...while` semantics.
+**Opt-in for JavaScript compatibility.** Excluded by default. Available via `--compat-while-loops` (CLI flag, `cfWhileLoops` in `Engine.Compatibility`, or `{"compat-while-loops": true}` in config) when a program or conformance suite needs ECMAScript `while` or `do...while` semantics.
 
 When disabled (default), the parser accepts `while` and `do...while` syntax but treats each loop as a no-op and emits a warning. When enabled, both loop forms are supported in interpreter and bytecode modes:
 
@@ -816,7 +816,7 @@ do {
 
 ### `with` Statement
 
-**Opt-in for script source.** Excluded by default; use explicit property access. Available via `--compat-non-strict-mode` (CLI flag, `Engine.NonStrictModeEnabled`, or `{"compat-non-strict-mode": true}` in config). Module source remains strict even when this flag is enabled. When enabled in script source, `with (object) statement` evaluates the object expression, converts it with `ToObject`, and resolves unqualified identifiers through that object before falling back to outer lexical scopes. `Symbol.unscopables` is honored. Calls to functions resolved through the object environment use that object as `this`, closures created inside the body retain the object environment, and writes through non-writable or setter-less object properties silently keep the original value instead of throwing. When disabled (default), the parser accepts the syntax but treats the statement as a no-op and emits a warning suggesting explicit property access or the flag. `with` creates ambiguous scope and is forbidden by JavaScript strict mode, so new GocciaScript code should prefer explicit property access. The keyword is reserved (it cannot be used as a variable name), but it can be used as a property name (for example, `obj.with`).
+**Opt-in for script source.** Excluded by default; use explicit property access. Available via `--compat-non-strict-mode` (CLI flag, `cfNonStrictMode` in `Engine.Compatibility`, or `{"compat-non-strict-mode": true}` in config). Module source remains strict even when this flag is enabled. When enabled in script source, `with (object) statement` evaluates the object expression, converts it with `ToObject`, and resolves unqualified identifiers through that object before falling back to outer lexical scopes. `Symbol.unscopables` is honored. Calls to functions resolved through the object environment use that object as `this`, closures created inside the body retain the object environment, and writes through non-writable or setter-less object properties silently keep the original value instead of throwing. When disabled (default), the parser accepts the syntax but treats the statement as a no-op and emits a warning suggesting explicit property access or the flag. `with` creates ambiguous scope and is forbidden by JavaScript strict mode, so new GocciaScript code should prefer explicit property access. The keyword is reserved (it cannot be used as a variable name), but it can be used as a property name (for example, `obj.with`).
 
 ### Non-Strict Assignment Semantics
 

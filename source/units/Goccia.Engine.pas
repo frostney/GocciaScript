@@ -43,10 +43,10 @@ uses
   Goccia.Modules.Resolver,
   Goccia.ObjectModel,
   Goccia.ObjectModel.Engine,
-  Goccia.Parser,
   Goccia.Realm,
   Goccia.Scope,
   Goccia.SourceMap,
+  Goccia.SourcePipeline,
   Goccia.Values.BigIntValue,
   Goccia.Values.ClassValue,
   Goccia.Values.FunctionBase,
@@ -57,14 +57,29 @@ uses
   Goccia.Values.TypedArrayValue;
 
 type
-  TGocciaPreprocessor = (ppJSX);
-  TGocciaPreprocessors = set of TGocciaPreprocessor;
+  TGocciaPreprocessor = Goccia.SourcePipeline.TGocciaPreprocessor;
+  TGocciaPreprocessors = Goccia.SourcePipeline.TGocciaPreprocessors;
 
-  TGocciaCompatibility = (cfASI, cfVar, cfFunction, cfTraditionalFor,
-    cfWhileLoops, cfLooseEquality, cfNonStrictMode);
-  TGocciaCompatibilityFlags = set of TGocciaCompatibility;
+  TGocciaCompatibility = Goccia.SourcePipeline.TGocciaCompatibility;
+  TGocciaCompatibilityFlags = Goccia.SourcePipeline.TGocciaCompatibilityFlags;
 
-  TGocciaSourceType = (stScript, stModule);
+  TGocciaSourceType = Goccia.SourcePipeline.TGocciaSourceType;
+
+const
+  ppJSX = Goccia.SourcePipeline.ppJSX;
+
+  cfASI = Goccia.SourcePipeline.cfASI;
+  cfVar = Goccia.SourcePipeline.cfVar;
+  cfFunction = Goccia.SourcePipeline.cfFunction;
+  cfTraditionalFor = Goccia.SourcePipeline.cfTraditionalFor;
+  cfWhileLoops = Goccia.SourcePipeline.cfWhileLoops;
+  cfLooseEquality = Goccia.SourcePipeline.cfLooseEquality;
+  cfNonStrictMode = Goccia.SourcePipeline.cfNonStrictMode;
+
+  stScript = Goccia.SourcePipeline.stScript;
+  stModule = Goccia.SourcePipeline.stModule;
+
+type
 
   TGocciaScriptResult = record
     Result: TGocciaValue;
@@ -144,20 +159,6 @@ type
     FSuppressWarnings: Boolean;
     FLastTiming: TGocciaScriptResult;
     FLastSourceMap: TGocciaSourceMap;
-    function GetASIEnabled: Boolean;
-    function GetVarEnabled: Boolean;
-    function GetFunctionEnabled: Boolean;
-    function GetTraditionalForLoopsEnabled: Boolean;
-    function GetWhileLoopsEnabled: Boolean;
-    function GetLooseEqualityEnabled: Boolean;
-    function GetNonStrictModeEnabled: Boolean;
-    procedure SetASIEnabled(const AValue: Boolean);
-    procedure SetVarEnabled(const AValue: Boolean);
-    procedure SetFunctionEnabled(const AValue: Boolean);
-    procedure SetTraditionalForLoopsEnabled(const AValue: Boolean);
-    procedure SetWhileLoopsEnabled(const AValue: Boolean);
-    procedure SetLooseEqualityEnabled(const AValue: Boolean);
-    procedure SetNonStrictModeEnabled(const AValue: Boolean);
     procedure SetStrictTypes(const AValue: Boolean);
     function GetContentProvider: TGocciaModuleContentProvider;
     function GetModuleResolver: TGocciaModuleResolver;
@@ -182,7 +183,8 @@ type
     function GocciaGCBytesAllocatedGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     procedure DoRetainModule(const AModule: TObject);
     procedure DiscardRuntimePending;
-    procedure PrintParserWarnings(const AParser: TGocciaParser; const ASourceMap: TGocciaSourceMap = nil);
+    procedure PrintSourcePipelineWarnings(
+      const APipelineResult: TGocciaSourcePipelineResult);
     function CompileDynamicFunction(const AParamsSources: array of string;
       const ABodySource: string): TGocciaFunctionBase;
   public
@@ -243,17 +245,6 @@ type
     property ContentProvider: TGocciaModuleContentProvider read GetContentProvider;
     property ModuleResolver: TGocciaModuleResolver read GetModuleResolver;
     property ModuleLoader: TGocciaModuleLoader read FModuleLoader;
-    property ASIEnabled: Boolean read GetASIEnabled write SetASIEnabled;
-    property VarEnabled: Boolean read GetVarEnabled write SetVarEnabled;
-    property FunctionEnabled: Boolean read GetFunctionEnabled write SetFunctionEnabled;
-    property TraditionalForLoopsEnabled: Boolean
-      read GetTraditionalForLoopsEnabled write SetTraditionalForLoopsEnabled;
-    property WhileLoopsEnabled: Boolean
-      read GetWhileLoopsEnabled write SetWhileLoopsEnabled;
-    property LooseEqualityEnabled: Boolean
-      read GetLooseEqualityEnabled write SetLooseEqualityEnabled;
-    property NonStrictModeEnabled: Boolean
-      read GetNonStrictModeEnabled write SetNonStrictModeEnabled;
     property FunctionConstructor: TGocciaFunctionConstructorClassValue read FFunctionConstructor;
     property ObjectConstructor: TGocciaClassValue read FObjectConstructor;
     property Preprocessors: TGocciaPreprocessors read FPreprocessors write SetPreprocessors;
@@ -281,7 +272,7 @@ type
     property GocciaGlobal: TGocciaObjectValue read FGocciaGlobal;
     property SuppressWarnings: Boolean read FSuppressWarnings write FSuppressWarnings;
     property LastTiming: TGocciaScriptResult read FLastTiming;
-    // Source map from the most recent JSX transform, if any.
+    // Source map from the most recent source pipeline run, if any.
     // Ownership transfers to the caller when read (set to nil after access).
     function TakeLastSourceMap: TGocciaSourceMap;
   end;
@@ -296,8 +287,6 @@ uses
   TextSemantics,
   TimingUtils,
 
-  Goccia.AST.Expressions,
-  Goccia.AST.Statements,
   Goccia.CallStack,
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
@@ -305,17 +294,15 @@ uses
   Goccia.Error,
   Goccia.Executor.Bytecode,
   Goccia.Executor.Interpreter,
+  Goccia.FileExtensions,
   Goccia.GarbageCollector,
   Goccia.ImportMeta,
-  Goccia.JSX.Transformer,
-  Goccia.Lexer,
   Goccia.MicrotaskQueue,
   Goccia.Platform,
   Goccia.Scope.Redeclaration,
   Goccia.Shims,
   Goccia.Spec,
   Goccia.Threading,
-  Goccia.Token,
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ArrayValue,
   Goccia.Values.BooleanObjectValue,
@@ -367,11 +354,6 @@ begin
 end;
 
 { TGocciaEngine }
-
-function TGocciaEngine.GetASIEnabled: Boolean;
-begin
-  Result := cfASI in FCompatibility;
-end;
 
 function TGocciaEngine.GetContentProvider: TGocciaModuleContentProvider;
 begin
@@ -578,7 +560,10 @@ begin
 
   FPreprocessors := DefaultPreprocessors;
   FCompatibility := DefaultCompatibility;
-  FSourceType := DefaultSourceType;
+  if IsModuleSourceFileName(AFileName) then
+    FSourceType := stModule
+  else
+    FSourceType := DefaultSourceType;
   FStrictTypes := False;
   FShims := TStringList.Create;
   FExtensions := TGocciaEngineExtensionList.Create(True);
@@ -1247,134 +1232,91 @@ end;
 
 function TGocciaEngine.Execute: TGocciaScriptResult;
 var
-  Lexer: TGocciaLexer;
-  Parser: TGocciaParser;
-  ProgramNode: TGocciaProgram;
-  Tokens: TObjectList<TGocciaToken>;
-  StartTime, LexEnd, ParseEnd, ExecStart, ExecEnd: Int64;
-  SourceText: string;
-  JSXResult: TGocciaJSXTransformResult;
-  SourceMap: TGocciaSourceMap;
-  OrigLine, OrigCol: Integer;
+  PipelineOptions: TGocciaSourcePipelineOptions;
+  PipelineResult: TGocciaSourcePipelineResult;
+  StartTime, ExecStart, ExecEnd: Int64;
   ModuleScope: TGocciaScope;
   ModuleContext: TGocciaEvaluationContext;
 begin
   FillChar(FLastTiming, SizeOf(FLastTiming), 0);
   FLastTiming.FileName := FSourcePath;
   StartTime := GetNanoseconds;
-
-  if Assigned(FSourceLines) then
-    SourceText := StringListToLFText(FSourceLines)
-  else
-    SourceText := '';
-  SourceMap := nil;
-
-  if ppJSX in FPreprocessors then
-  begin
-    JSXResult := TGocciaJSXTransformer.Transform(SourceText);
-    SourceText := JSXResult.Source;
-    SourceMap := JSXResult.SourceMap;
-    if Assigned(SourceMap) then
-      WarnIfJSXExtensionMismatch(FSourcePath);
-  end;
+  PipelineResult := nil;
 
   try
+    PipelineOptions.Preprocessors := FPreprocessors;
+    PipelineOptions.Compatibility := FCompatibility;
+    PipelineOptions.SourceType := FSourceType;
+    PipelineResult := TGocciaSourcePipeline.Parse(FSourceLines, FSourcePath,
+      PipelineOptions);
+    FLastTiming.LexTimeNanoseconds := PipelineResult.LexTimeNanoseconds;
+    FLastTiming.ParseTimeNanoseconds := PipelineResult.ParseTimeNanoseconds;
+    PrintSourcePipelineWarnings(PipelineResult);
+
+    if Assigned(TGocciaCoverageTracker.Instance) and
+       TGocciaCoverageTracker.Instance.Enabled then
+    begin
+      TGocciaCoverageTracker.Instance.RegisterSourceFile(
+        FSourcePath, CountExecutableLines(PipelineResult.GeneratedSourceLines));
+      if Assigned(PipelineResult.SourceMap) then
+        TGocciaCoverageTracker.Instance.RegisterSourceMap(
+          FSourcePath, PipelineResult.SourceMap.Clone);
+    end;
+
     try
-      Lexer := TGocciaLexer.Create(SourceText, FSourcePath);
-      try
-        Tokens := Lexer.ScanTokens;
-        LexEnd := GetNanoseconds;
-        FLastTiming.LexTimeNanoseconds := LexEnd - StartTime;
-
-        Parser := TGocciaParser.Create(Tokens, FSourcePath, Lexer.SourceLines);
-        Parser.AutomaticSemicolonInsertion := cfASI in FCompatibility;
-        Parser.VarDeclarationsEnabled := cfVar in FCompatibility;
-        Parser.FunctionDeclarationsEnabled := cfFunction in FCompatibility;
-        Parser.TraditionalForLoopsEnabled := cfTraditionalFor in FCompatibility;
-        Parser.WhileLoopsEnabled := cfWhileLoops in FCompatibility;
-        Parser.LooseEqualityEnabled := cfLooseEquality in FCompatibility;
-        Parser.NonStrictModeEnabled := (cfNonStrictMode in FCompatibility) or
-          (FSourceType = stModule);
-        try
-          ProgramNode := Parser.Parse;
-          PrintParserWarnings(Parser, SourceMap);
-          ParseEnd := GetNanoseconds;
-          FLastTiming.ParseTimeNanoseconds := ParseEnd - LexEnd;
-
-          if Assigned(TGocciaCoverageTracker.Instance) and
-             TGocciaCoverageTracker.Instance.Enabled then
-          begin
-            TGocciaCoverageTracker.Instance.RegisterSourceFile(
-              FSourcePath, CountExecutableLines(Lexer.SourceLines));
-            if Assigned(SourceMap) then
-              TGocciaCoverageTracker.Instance.RegisterSourceMap(
-                FSourcePath, SourceMap.Clone);
-          end;
-
-          try
-            if FSourceType = stModule then
-            begin
-              // ES2026 §16.2.1.6.4: a Module Environment Record's
-              // [[ThisValue]] is undefined.  Run the entry program in a
-              // fresh module scope so import.meta resolves and top-level
-              // `this` is undefined, matching the semantics imported
-              // modules already receive via TGocciaModuleLoader.
-              ModuleScope := FInterpreter.GlobalScope.CreateChild(skModule,
-                'Module:' + FSourcePath);
-              ModuleScope.ThisValue :=
-                TGocciaUndefinedLiteralValue.UndefinedValue;
-              ModuleScope.NonStrictMode := False;
-              ModuleContext := FInterpreter.CreateEvaluationContext;
-              ModuleContext.Scope := ModuleScope;
-              ModuleContext.CurrentFilePath := FSourcePath;
-              ModuleContext.NonStrictMode := False;
-              ExecStart := GetNanoseconds;
-              FLastTiming.Result :=
-                FExecutor.EvaluateModuleBody(ProgramNode, ModuleContext);
-              WaitForRuntimeIdle;
-              ExecEnd := GetNanoseconds;
-              FLastTiming.CompileTimeNanoseconds := 0;
-              FLastTiming.ExecuteTimeNanoseconds := ExecEnd - ExecStart;
-            end
-            else
-            begin
-              CheckTopLevelRedeclarations(ProgramNode,
-                FInterpreter.GlobalScope, FSourcePath);
-              FLastTiming.Result := FExecutor.ExecuteProgram(ProgramNode);
-              WaitForRuntimeIdle;
-              ExecEnd := GetNanoseconds;
-              FLastTiming.CompileTimeNanoseconds :=
-                FExecutor.CompileTimeNanoseconds;
-              FLastTiming.ExecuteTimeNanoseconds :=
-                FExecutor.ExecuteTimeNanoseconds;
-            end;
-            FLastTiming.TotalTimeNanoseconds := ExecEnd - StartTime;
-          finally
-            if Assigned(TGocciaMicrotaskQueue.Instance) then
-              TGocciaMicrotaskQueue.Instance.ClearQueue;
-            DiscardRuntimePending;
-            ProgramNode.Free;
-          end;
-        finally
-          Parser.Free;
-        end;
-      finally
-        Lexer.Free;
-      end;
-    except
-      on E: TGocciaError do
+      if FSourceType = stModule then
       begin
-        if Assigned(SourceMap) and
-           SourceMap.Translate(E.Line, E.Column, OrigLine, OrigCol) then
-          E.TranslatePosition(OrigLine, OrigCol, FSourceLines);
-        raise;
+        // ES2026 §16.2.1.6.4: a Module Environment Record's
+        // [[ThisValue]] is undefined.  Run the entry program in a
+        // fresh module scope so import.meta resolves and top-level
+        // `this` is undefined, matching the semantics imported
+        // modules already receive via TGocciaModuleLoader.
+        ModuleScope := FInterpreter.GlobalScope.CreateChild(skModule,
+          'Module:' + FSourcePath);
+        ModuleScope.ThisValue :=
+          TGocciaUndefinedLiteralValue.UndefinedValue;
+        ModuleScope.NonStrictMode := False;
+        ModuleContext := FInterpreter.CreateEvaluationContext;
+        ModuleContext.Scope := ModuleScope;
+        ModuleContext.CurrentFilePath := FSourcePath;
+        ModuleContext.NonStrictMode := False;
+        ExecStart := GetNanoseconds;
+        FLastTiming.Result :=
+          FExecutor.EvaluateModuleBody(PipelineResult.ProgramNode,
+            ModuleContext);
+        WaitForRuntimeIdle;
+        ExecEnd := GetNanoseconds;
+        FLastTiming.CompileTimeNanoseconds := 0;
+        FLastTiming.ExecuteTimeNanoseconds := ExecEnd - ExecStart;
+      end
+      else
+      begin
+        CheckTopLevelRedeclarations(PipelineResult.ProgramNode,
+          FInterpreter.GlobalScope, FSourcePath);
+        FLastTiming.Result := FExecutor.ExecuteProgram(
+          PipelineResult.ProgramNode);
+        WaitForRuntimeIdle;
+        ExecEnd := GetNanoseconds;
+        FLastTiming.CompileTimeNanoseconds :=
+          FExecutor.CompileTimeNanoseconds;
+        FLastTiming.ExecuteTimeNanoseconds :=
+          FExecutor.ExecuteTimeNanoseconds;
       end;
+      FLastTiming.TotalTimeNanoseconds := ExecEnd - StartTime;
+    finally
+      if Assigned(TGocciaMicrotaskQueue.Instance) then
+        TGocciaMicrotaskQueue.Instance.ClearQueue;
+      DiscardRuntimePending;
     end;
   finally
     if FLastTiming.TotalTimeNanoseconds = 0 then
       FLastTiming.TotalTimeNanoseconds := GetNanoseconds - StartTime;
     FLastSourceMap.Free;
-    FLastSourceMap := SourceMap;
+    if Assigned(PipelineResult) then
+      FLastSourceMap := PipelineResult.TakeSourceMap
+    else
+      FLastSourceMap := nil;
+    PipelineResult.Free;
   end;
 
   Result := FLastTiming;
@@ -1430,23 +1372,24 @@ begin
   end;
 end;
 
-procedure TGocciaEngine.PrintParserWarnings(const AParser: TGocciaParser; const ASourceMap: TGocciaSourceMap);
+procedure TGocciaEngine.PrintSourcePipelineWarnings(
+  const APipelineResult: TGocciaSourcePipelineResult);
 var
-  Warning: TGocciaParserWarning;
-  I, OrigLine, OrigCol: Integer;
+  Warning: TGocciaSourcePipelineWarning;
+  I: Integer;
 begin
   if FSuppressWarnings then
     Exit;
-  for I := 0 to AParser.WarningCount - 1 do
+  if not Assigned(APipelineResult) then
+    Exit;
+  for I := 0 to APipelineResult.WarningCount - 1 do
   begin
-    Warning := AParser.GetWarning(I);
+    Warning := APipelineResult.Warnings[I];
     WriteLn(Format('Warning: %s', [Warning.Message]));
     if Warning.Suggestion <> '' then
       WriteLn(Format('  Suggestion: %s', [Warning.Suggestion]));
-    if Assigned(ASourceMap) and ASourceMap.Translate(Warning.Line, Warning.Column, OrigLine, OrigCol) then
-      WriteLn(Format('  --> %s:%d:%d', [FSourcePath, OrigLine, OrigCol]))
-    else
-      WriteLn(Format('  --> %s:%d:%d', [FSourcePath, Warning.Line, Warning.Column]));
+    WriteLn(Format('  --> %s:%d:%d', [FSourcePath, Warning.Line,
+      Warning.Column]));
   end;
 end;
 
@@ -1534,101 +1477,6 @@ begin
     Result := TGocciaNumberLiteralValue.ZeroValue;
 end;
 
-procedure TGocciaEngine.SetASIEnabled(const AValue: Boolean);
-begin
-  if AValue then
-    Include(FCompatibility, cfASI)
-  else
-    Exclude(FCompatibility, cfASI);
-  FInterpreter.ASIEnabled := AValue;
-end;
-
-function TGocciaEngine.GetVarEnabled: Boolean;
-begin
-  Result := cfVar in FCompatibility;
-end;
-
-procedure TGocciaEngine.SetVarEnabled(const AValue: Boolean);
-begin
-  if AValue then
-    Include(FCompatibility, cfVar)
-  else
-    Exclude(FCompatibility, cfVar);
-  FInterpreter.VarEnabled := AValue;
-end;
-
-function TGocciaEngine.GetFunctionEnabled: Boolean;
-begin
-  Result := cfFunction in FCompatibility;
-end;
-
-procedure TGocciaEngine.SetFunctionEnabled(const AValue: Boolean);
-begin
-  if AValue then
-    Include(FCompatibility, cfFunction)
-  else
-    Exclude(FCompatibility, cfFunction);
-  FInterpreter.FunctionEnabled := AValue;
-end;
-
-function TGocciaEngine.GetTraditionalForLoopsEnabled: Boolean;
-begin
-  Result := cfTraditionalFor in FCompatibility;
-end;
-
-procedure TGocciaEngine.SetTraditionalForLoopsEnabled(const AValue: Boolean);
-begin
-  if AValue then
-    Include(FCompatibility, cfTraditionalFor)
-  else
-    Exclude(FCompatibility, cfTraditionalFor);
-  FInterpreter.TraditionalForLoopsEnabled := AValue;
-end;
-
-function TGocciaEngine.GetWhileLoopsEnabled: Boolean;
-begin
-  Result := cfWhileLoops in FCompatibility;
-end;
-
-procedure TGocciaEngine.SetWhileLoopsEnabled(const AValue: Boolean);
-begin
-  if AValue then
-    Include(FCompatibility, cfWhileLoops)
-  else
-    Exclude(FCompatibility, cfWhileLoops);
-  FInterpreter.WhileLoopsEnabled := AValue;
-end;
-
-function TGocciaEngine.GetLooseEqualityEnabled: Boolean;
-begin
-  Result := cfLooseEquality in FCompatibility;
-end;
-
-procedure TGocciaEngine.SetLooseEqualityEnabled(const AValue: Boolean);
-begin
-  if AValue then
-    Include(FCompatibility, cfLooseEquality)
-  else
-    Exclude(FCompatibility, cfLooseEquality);
-  FInterpreter.LooseEqualityEnabled := AValue;
-end;
-
-function TGocciaEngine.GetNonStrictModeEnabled: Boolean;
-begin
-  Result := cfNonStrictMode in FCompatibility;
-end;
-
-procedure TGocciaEngine.SetNonStrictModeEnabled(const AValue: Boolean);
-begin
-  if AValue then
-    Include(FCompatibility, cfNonStrictMode)
-  else
-    Exclude(FCompatibility, cfNonStrictMode);
-  FInterpreter.NonStrictModeEnabled := AValue;
-  if FExecutor is TGocciaBytecodeExecutor then
-    TGocciaBytecodeExecutor(FExecutor).NonStrictMode := AValue;
-end;
-
 procedure TGocciaEngine.SetStrictTypes(const AValue: Boolean);
 begin
   FStrictTypes := AValue;
@@ -1672,12 +1520,10 @@ function TGocciaEngine.CompileDynamicFunction(
   const AParamsSources: array of string;
   const ABodySource: string): TGocciaFunctionBase;
 var
-  ParamStr, Source: string;
+  ParamStr: string;
   I: Integer;
-  BodyHasUseStrictDirective: Boolean;
-  Lexer: TGocciaLexer;
-  Tokens: TObjectList<TGocciaToken>;
-  Parser: TGocciaParser;
+  BodyParseResult: TGocciaFunctionBodyParseResult;
+  PipelineOptions: TGocciaSourcePipelineOptions;
   ProgramNode: TGocciaProgram;
   ResultValue: TGocciaValue;
 begin
@@ -1690,7 +1536,6 @@ begin
   // wrapper will fail validation because it will have unmatched braces when
   // parsed as a standalone function body.
   ParamStr := '';
-  BodyHasUseStrictDirective := False;
   for I := 0 to High(AParamsSources) do
   begin
     if I > 0 then
@@ -1700,114 +1545,38 @@ begin
 
   // Validate params: must parse as a valid parameter list.
   // If params contain tokens that escape the signature, this will throw.
-  if ParamStr <> '' then
-  begin
-    Source := '(' + ParamStr + ') => {}';
-    Lexer := TGocciaLexer.Create(Source, '<Function:params>');
-    try
-      Tokens := Lexer.ScanTokens;
-      Parser := TGocciaParser.Create(Tokens, '<Function:params>', Lexer.SourceLines);
-      Parser.AutomaticSemicolonInsertion := cfASI in FCompatibility;
-      Parser.VarDeclarationsEnabled := cfVar in FCompatibility;
-      Parser.FunctionDeclarationsEnabled := cfFunction in FCompatibility;
-      Parser.TraditionalForLoopsEnabled := cfTraditionalFor in FCompatibility;
-      Parser.WhileLoopsEnabled := cfWhileLoops in FCompatibility;
-      Parser.LooseEqualityEnabled := cfLooseEquality in FCompatibility;
-      Parser.NonStrictModeEnabled := cfNonStrictMode in FCompatibility;
-      try
-        ProgramNode := Parser.Parse;
-        try
-          if (ProgramNode.Body.Count <> 1) or
-             not (ProgramNode.Body[0] is TGocciaExpressionStatement) or
-             not (TGocciaExpressionStatement(ProgramNode.Body[0]).Expression
-               is TGocciaArrowFunctionExpression) then
-            ThrowSyntaxError('Invalid parameter list for Function constructor');
-        finally
-          ProgramNode.Free;
-        end;
-      finally
-        Parser.Free;
-      end;
-    finally
-      Lexer.Free;
-    end;
-  end;
+  PipelineOptions.Preprocessors := [];
+  PipelineOptions.Compatibility := FCompatibility;
+  PipelineOptions.SourceType := stScript;
+  if not TGocciaSourcePipeline.ParseFunctionParameters(ParamStr,
+    '<Function:params>', PipelineOptions) then
+    ThrowSyntaxError('Invalid parameter list for Function constructor');
 
   // Validate body: must parse as a valid function body.
   // An arrow wrapper ensures the body is enclosed in matching braces.
-  if ABodySource <> '' then
-  begin
-    Source := '() => {' + #10 + ABodySource + #10 + '}';
-    Lexer := TGocciaLexer.Create(Source, '<Function:body>');
-    try
-      Tokens := Lexer.ScanTokens;
-      Parser := TGocciaParser.Create(Tokens, '<Function:body>', Lexer.SourceLines);
-      Parser.AutomaticSemicolonInsertion := cfASI in FCompatibility;
-      Parser.VarDeclarationsEnabled := cfVar in FCompatibility;
-      Parser.FunctionDeclarationsEnabled := cfFunction in FCompatibility;
-      Parser.TraditionalForLoopsEnabled := cfTraditionalFor in FCompatibility;
-      Parser.WhileLoopsEnabled := cfWhileLoops in FCompatibility;
-      Parser.LooseEqualityEnabled := cfLooseEquality in FCompatibility;
-      Parser.NonStrictModeEnabled := cfNonStrictMode in FCompatibility;
-      try
-        ProgramNode := Parser.Parse;
-        try
-          if (ProgramNode.Body.Count <> 1) or
-             not (ProgramNode.Body[0] is TGocciaExpressionStatement) or
-             not (TGocciaExpressionStatement(ProgramNode.Body[0]).Expression
-               is TGocciaArrowFunctionExpression) then
-            ThrowSyntaxError('Invalid body for Function constructor');
-          BodyHasUseStrictDirective := HasUseStrictDirective(
-            TGocciaArrowFunctionExpression(
-              TGocciaExpressionStatement(ProgramNode.Body[0]).Expression).Body);
-        finally
-          ProgramNode.Free;
-        end;
-      finally
-        Parser.Free;
-      end;
-    finally
-      Lexer.Free;
-    end;
-  end;
+  BodyParseResult := TGocciaSourcePipeline.ParseFunctionBodyWrapper(
+    ABodySource, '<Function:body>', PipelineOptions);
+  if not BodyParseResult.IsValid then
+    ThrowSyntaxError('Invalid body for Function constructor');
 
   // Both pieces validated — safe to assemble the wrapper
-  Source := '({ anonymous(' + ParamStr + ') {' + #10 + ABodySource + #10 + '} }).anonymous';
-
-  Lexer := TGocciaLexer.Create(Source, '<Function>');
+  ProgramNode := TGocciaSourcePipeline.ParseDynamicFunctionWrapper(ParamStr,
+    ABodySource, '<Function>', PipelineOptions);
   try
-    Tokens := Lexer.ScanTokens;
-    Parser := TGocciaParser.Create(Tokens, '<Function>', Lexer.SourceLines);
-    Parser.AutomaticSemicolonInsertion := cfASI in FCompatibility;
-    Parser.VarDeclarationsEnabled := cfVar in FCompatibility;
-    Parser.FunctionDeclarationsEnabled := cfFunction in FCompatibility;
-    Parser.TraditionalForLoopsEnabled := cfTraditionalFor in FCompatibility;
-    Parser.WhileLoopsEnabled := cfWhileLoops in FCompatibility;
-    Parser.LooseEqualityEnabled := cfLooseEquality in FCompatibility;
-    Parser.NonStrictModeEnabled := cfNonStrictMode in FCompatibility;
-    try
-      ProgramNode := Parser.ParseUnchecked;
-      try
-        ResultValue := FExecutor.ExecuteDynamicFunction(ProgramNode);
-        Result := TGocciaFunctionBase(ResultValue);
-        // ES2026 §20.2.1.1.1: the function's name is 'anonymous'
-        if Result is TGocciaFunctionValue then
-          TGocciaFunctionValue(Result).Name := 'anonymous';
-        // ES2026 §15.2.2.4: Function-constructor bodies are non-strict
-        // unless the parsed body contains a Use Strict Directive (§11.2.2).
-        if not BodyHasUseStrictDirective then
-        begin
-          Result.StrictThis := False;
-          Result.StrictCode := False;
-        end;
-      finally
-        ProgramNode.Free;
-      end;
-    finally
-      Parser.Free;
+    ResultValue := FExecutor.ExecuteDynamicFunction(ProgramNode);
+    Result := TGocciaFunctionBase(ResultValue);
+    // ES2026 §20.2.1.1.1: the function's name is 'anonymous'
+    if Result is TGocciaFunctionValue then
+      TGocciaFunctionValue(Result).Name := 'anonymous';
+    // ES2026 §15.2.2.4: Function-constructor bodies are non-strict
+    // unless the parsed body contains a Use Strict Directive (§11.2.2).
+    if not BodyParseResult.HasUseStrictDirective then
+    begin
+      Result.StrictThis := False;
+      Result.StrictCode := False;
     end;
   finally
-    Lexer.Free;
+    ProgramNode.Free;
   end;
 end;
 

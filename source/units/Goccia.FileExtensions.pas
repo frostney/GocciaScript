@@ -48,6 +48,8 @@ function IsCSVExtension(const AExtension: string): Boolean;
 function IsJSON5Extension(const AExtension: string): Boolean;
 function IsJSONLExtension(const AExtension: string): Boolean;
 function IsJSXNativeExtension(const AExtension: string): Boolean;
+function IsModuleSourceExtension(const AExtension: string): Boolean;
+function IsModuleSourceFileName(const AFileName: string): Boolean;
 function IsTextAssetExtension(const AExtension: string): Boolean;
 function IsTOMLExtension(const AExtension: string): Boolean;
 function IsTSVExtension(const AExtension: string): Boolean;
@@ -82,6 +84,19 @@ begin
     if Ext = JSXNativeExtensions[I] then
       Exit(True);
   Result := False;
+end;
+
+function IsModuleSourceExtension(const AExtension: string): Boolean;
+var
+  Ext: string;
+begin
+  Ext := LowerCase(AExtension);
+  Result := Ext = EXT_MJS;
+end;
+
+function IsModuleSourceFileName(const AFileName: string): Boolean;
+begin
+  Result := IsModuleSourceExtension(ExtractFileExt(AFileName));
 end;
 
 function IsCSVExtension(const AExtension: string): Boolean;

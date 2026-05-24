@@ -9,12 +9,14 @@ uses
   TextSemantics,
 
   Goccia.Arguments.Collection,
+  Goccia.CLI.Options,
   Goccia.Engine,
   Goccia.Error,
   Goccia.Error.Detail,
   Goccia.Executor,
   Goccia.Executor.Bytecode,
   Goccia.Executor.Interpreter,
+  Goccia.FileExtensions,
   Goccia.GarbageCollector,
   Goccia.InstructionLimit,
   Goccia.ScriptLoader.Input,
@@ -35,18 +37,13 @@ type
   TBareExecutionMode = (bemInterpreted, bemBytecode);
 
   TBareOptions = record
-    ASI: Boolean;
-    CompatVar: Boolean;
-    CompatFunction: Boolean;
-    CompatTraditionalFor: Boolean;
-    CompatWhileLoops: Boolean;
-    CompatLooseEquality: Boolean;
-    CompatNonStrictMode: Boolean;
+    Compatibility: TGocciaCompatibilityFlags;
     StrictTypes: Boolean;
     UnsafeFunctionConstructor: Boolean;
     Print: Boolean;
     Mode: TBareExecutionMode;
     SourceType: TGocciaSourceType;
+    SourceTypeExplicit: Boolean;
     FileName: string;
     TimeoutMs: Integer;
     MaxMemoryBytes: Int64;
@@ -75,20 +72,22 @@ begin
 end;
 
 procedure PrintUsage;
+var
+  Flag: TGocciaCompatibility;
+  Descriptor: TGocciaCompatibilityFlagDescriptor;
 begin
   WriteLn('Usage: GocciaScriptLoaderBare [file|-] [options]');
   WriteLn('');
   WriteLn('Options:');
-  WriteLn('  --asi                         Enable automatic semicolon insertion');
-  WriteLn('  --compat-var                  Enable var declarations');
-  WriteLn('  --compat-function             Enable function declarations/expressions');
-  WriteLn('  --compat-traditional-for-loop Enable traditional C-style for(;;) loops');
-  WriteLn('  --compat-while-loops          Enable while and do...while loops');
-  WriteLn('  --compat-loose-equality       Enable loose equality (== and !=)');
-  WriteLn('  --compat-non-strict-mode      Enable non-strict-mode compatibility');
+  for Flag := Low(TGocciaCompatibility) to High(TGocciaCompatibility) do
+  begin
+    Descriptor := CompatibilityFlagDescriptor(Flag);
+    WriteLn(Format('  --%-28s %s', [Descriptor.OptionName,
+      Descriptor.HelpText]));
+  end;
   WriteLn('  --strict-types                Enforce type annotations at runtime');
   WriteLn('  --mode=interpreted|bytecode   Execution mode (default: interpreted)');
-  WriteLn('  --source-type=script|module   Load entry as script source or module source');
+  WriteLn('  --source-type=script|module   Load entry as script source or module source (.mjs infers module)');
   WriteLn('  --unsafe-function-constructor Enable dynamic Function constructor');
   WriteLn('  --print                       Print the script''s last value (incl. undefined)');
   WriteLn('  --timeout=MS                  Per-file cooperative timeout in milliseconds');
@@ -115,6 +114,7 @@ begin
     AOptions.SourceType := stModule
   else
     raise Exception.Create('Invalid --source-type value: ' + AValue);
+  AOptions.SourceTypeExplicit := True;
 end;
 
 procedure ParseTimeout(const AValue: string; var AOptions: TBareOptions);
@@ -156,18 +156,13 @@ var
   I: Integer;
   Arg: string;
 begin
-  Result.ASI := False;
-  Result.CompatVar := False;
-  Result.CompatFunction := False;
-  Result.CompatTraditionalFor := False;
-  Result.CompatWhileLoops := False;
-  Result.CompatLooseEquality := False;
-  Result.CompatNonStrictMode := False;
+  Result.Compatibility := [];
   Result.StrictTypes := False;
   Result.UnsafeFunctionConstructor := False;
   Result.Print := False;
   Result.Mode := bemInterpreted;
   Result.SourceType := stScript;
+  Result.SourceTypeExplicit := False;
   Result.FileName := STDIN_PATH_MARKER;
   Result.TimeoutMs := 0;
   Result.MaxMemoryBytes := 0;
@@ -181,20 +176,10 @@ begin
       PrintUsage;
       Halt(0);
     end
-    else if Arg = '--asi' then
-      Result.ASI := True
-    else if Arg = '--compat-var' then
-      Result.CompatVar := True
-    else if Arg = '--compat-function' then
-      Result.CompatFunction := True
-    else if Arg = '--compat-traditional-for-loop' then
-      Result.CompatTraditionalFor := True
-    else if Arg = '--compat-while-loops' then
-      Result.CompatWhileLoops := True
-    else if Arg = '--compat-loose-equality' then
-      Result.CompatLooseEquality := True
-    else if Arg = '--compat-non-strict-mode' then
-      Result.CompatNonStrictMode := True
+    else if TryApplyCompatibilityFlagArg(Arg, Result.Compatibility) then
+    begin
+      { handled by source compatibility flag registry }
+    end
     else if Arg = '--strict-types' then
       Result.StrictTypes := True
     else if Arg = '--unsafe-function-constructor' then
@@ -219,6 +204,10 @@ begin
     else
       raise Exception.Create('Unexpected argument: ' + Arg);
   end;
+
+  if (not Result.SourceTypeExplicit) and
+     IsModuleSourceFileName(Result.FileName) then
+    Result.SourceType := stModule;
 end;
 
 function ReadBareSource(const AFileName: string): TStringList;
@@ -232,13 +221,7 @@ end;
 procedure ConfigureEngine(const AEngine: TGocciaEngine;
   const AOptions: TBareOptions);
 begin
-  AEngine.ASIEnabled := AOptions.ASI;
-  AEngine.VarEnabled := AOptions.CompatVar;
-  AEngine.FunctionEnabled := AOptions.CompatFunction;
-  AEngine.TraditionalForLoopsEnabled := AOptions.CompatTraditionalFor;
-  AEngine.WhileLoopsEnabled := AOptions.CompatWhileLoops;
-  AEngine.LooseEqualityEnabled := AOptions.CompatLooseEquality;
-  AEngine.NonStrictModeEnabled := AOptions.CompatNonStrictMode;
+  AEngine.Compatibility := AOptions.Compatibility;
   AEngine.StrictTypes := AOptions.StrictTypes;
   AEngine.SourceType := AOptions.SourceType;
   AEngine.FunctionConstructor.Enabled := AOptions.UnsafeFunctionConstructor;

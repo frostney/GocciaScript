@@ -88,7 +88,7 @@ This was not strong enough to claim as a standalone optimization. It stayed in t
 
 ## Final Dispatch Map
 
-Twenty production runs per case. Values are median parser phase duration from `GocciaScriptLoader --output=json --asi`.
+Twenty production runs per case. Values are median parser phase duration from `GocciaScriptLoader --output=json --compat-asi`.
 
 The baseline loader was built from a temporary detached clean `HEAD` worktree. The final loader was built from this parser branch. Both loaders parsed the same generated files, with runs alternated to reduce ordering bias.
 

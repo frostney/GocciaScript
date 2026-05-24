@@ -17,7 +17,7 @@ GocciaScript provides a set of built-in global objects that mirror JavaScript's 
 
 Core language built-ins (Math, Object, Array, Number, JSON, Symbol, Set, Map, WeakSet, WeakMap, Promise, Temporal, Intl, ArrayBuffer, Proxy, Reflect, etc.) are always registered unconditionally by the engine.
 
-Runtime globals (Console, JSON5, JSONL, TOML, YAML, CSV, TSV, Performance, TextEncoder/TextDecoder, URL, fetch, Headers, Response, SemVer) are registered by runtime extension classes under `source/units/Goccia.RuntimeExtensions.*.pas`. CLI frontends such as `GocciaScriptLoader` and `GocciaREPL` apply `TGocciaLoaderRuntimeProfile`; `GocciaTestRunner` applies the loader runtime profile plus `TGocciaTestingLibraryRuntimeExtension`; `GocciaBenchmarkRunner` applies the loader runtime profile plus `TGocciaBenchmarkRuntimeExtension`. `GocciaScriptLoaderBare` does not attach a runtime and exposes only a CLI-local `print(...args)` helper.
+Runtime globals (Console, JSON5, JSONL, TOML, YAML, CSV, TSV, Performance, TextEncoder/TextDecoder, URL, fetch, Headers, Response, SemVer) are registered by runtime extension classes under `source/units/Goccia.RuntimeExtensions.*.pas`. CLI hosts such as `GocciaScriptLoader` and `GocciaREPL` apply `TGocciaLoaderRuntimeProfile`; `GocciaTestRunner` applies the loader runtime profile plus `TGocciaTestingLibraryRuntimeExtension`; `GocciaBenchmarkRunner` applies the loader runtime profile plus `TGocciaBenchmarkRuntimeExtension`. `GocciaScriptLoaderBare` does not attach a runtime and exposes only a CLI-local `print(...args)` helper.
 
 FFI is not part of the loader runtime profile. CLI tools install `TGocciaFFIRuntimeExtension` when `--unsafe-ffi` is passed or `"unsafe-ffi": true` is set in config.
 
@@ -53,7 +53,7 @@ Implements the [WHATWG Console Standard](https://developer.mozilla.org/en-US/doc
 
 **Output capture:** The console supports an `OutputCallback` hook for capturing output programmatically (see [Embedding — Console Output Capture](embedding.md#console-output-capture)).
 
-Separately, the `TGocciaCLIApplication`-based frontends use `LogCallback` for `--log=<file>`, which writes every console call to the specified file in `[method] line` format while preserving normal stdout output.
+Separately, the `TGocciaCLIApplication`-based CLI hosts use `LogCallback` for `--log=<file>`, which writes every console call to the specified file in `[method] line` format while preserving normal stdout output.
 
 ### Math (`Goccia.Builtins.Math.pas`)
 

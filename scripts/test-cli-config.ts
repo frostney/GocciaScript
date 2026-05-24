@@ -65,7 +65,7 @@ console.log("goccia.json loading...");
 {
   const tmp = makeTmp();
   try {
-    writeFileSync(join(tmp, "goccia.json"), '{"asi": true, "mode": "bytecode"}\n');
+    writeFileSync(join(tmp, "goccia.json"), '{"compat-asi": true, "mode": "bytecode"}\n');
     writeFileSync(join(tmp, "test.js"), "const x = 2 + 2\nx\n");
 
     const out = await $`${LOADER} --print ${join(tmp, "test.js")} 2>&1`.text();
@@ -82,7 +82,7 @@ console.log("goccia.toml loading...");
 {
   const tmp = makeTmp();
   try {
-    writeFileSync(join(tmp, "goccia.toml"), 'asi = true\nmode = "bytecode"\n');
+    writeFileSync(join(tmp, "goccia.toml"), 'compat-asi = true\nmode = "bytecode"\n');
     writeFileSync(join(tmp, "test.js"), "const x = 10\nx\n");
 
     const out = await $`${LOADER} --print ${join(tmp, "test.js")} 2>&1`.text();
@@ -99,7 +99,7 @@ console.log("goccia.json5 loading...");
 {
   const tmp = makeTmp();
   try {
-    writeFileSync(join(tmp, "goccia.json5"), '{asi: true, mode: "bytecode"}\n');
+    writeFileSync(join(tmp, "goccia.json5"), '{"compat-asi": true, mode: "bytecode"}\n');
     writeFileSync(join(tmp, "test.js"), "const x = 10\nx\n");
 
     const out = await $`${LOADER} ${join(tmp, "test.js")} 2>&1`.text();
@@ -115,9 +115,9 @@ console.log("Priority: TOML > JSON5 > JSON...");
 {
   const tmp = makeTmp();
   try {
-    writeFileSync(join(tmp, "goccia.json"), '{"mode": "interpreted", "asi": true}\n');
-    writeFileSync(join(tmp, "goccia.json5"), '{asi: true, mode: "interpreted"}\n');
-    writeFileSync(join(tmp, "goccia.toml"), 'asi = true\nmode = "bytecode"\n');
+    writeFileSync(join(tmp, "goccia.json"), '{"mode": "interpreted", "compat-asi": true}\n');
+    writeFileSync(join(tmp, "goccia.json5"), '{"compat-asi": true, mode: "interpreted"}\n');
+    writeFileSync(join(tmp, "goccia.toml"), 'compat-asi = true\nmode = "bytecode"\n');
     writeFileSync(join(tmp, "test.js"), "const x = 1\nx\n");
 
     const out = await $`${LOADER} ${join(tmp, "test.js")} 2>&1`.text();
@@ -134,7 +134,7 @@ console.log("Discovery from entry file directory...");
   const tmp = makeTmp();
   try {
     mkdirSync(join(tmp, "src"), { recursive: true });
-    writeFileSync(join(tmp, "goccia.json"), '{"asi": true, "mode": "bytecode"}\n');
+    writeFileSync(join(tmp, "goccia.json"), '{"compat-asi": true, "mode": "bytecode"}\n');
     writeFileSync(join(tmp, "src", "test.js"), "const x = 7\nx\n");
 
     const out = await $`${LOADER} --print ${join(tmp, "src", "test.js")} 2>&1`.text();
@@ -171,7 +171,7 @@ console.log("Config stack-size...");
 {
   const tmp = makeTmp();
   try {
-    writeFileSync(join(tmp, "goccia.json"), '{"stack-size": 50, "asi": true}\n');
+    writeFileSync(join(tmp, "goccia.json"), '{"stack-size": 50, "compat-asi": true}\n');
     writeFileSync(
       join(tmp, "test.js"),
       "let n=0; const f=()=>{n++;f()}; try{f()}catch(e){console.log(n)};\n",
@@ -190,7 +190,7 @@ console.log("Config without imports field...");
 {
   const tmp = makeTmp();
   try {
-    writeFileSync(join(tmp, "goccia.json"), '{"asi": true}\n');
+    writeFileSync(join(tmp, "goccia.json"), '{"compat-asi": true}\n');
     writeFileSync(join(tmp, "test.js"), "const x = 42\nx\n");
 
     const out = await $`${LOADER} --print ${join(tmp, "test.js")} 2>&1`.text();
@@ -210,7 +210,7 @@ console.log("Config with imports...");
     writeFileSync(join(tmp, "lib", "utils.js"), "export const value = 99;\n");
     writeFileSync(
       join(tmp, "goccia.json"),
-      '{"asi": true, "imports": {"utils": "./lib/utils.js"}}\n',
+      '{"compat-asi": true, "imports": {"utils": "./lib/utils.js"}}\n',
     );
     writeFileSync(join(tmp, "test.js"), 'import { value } from "utils"\nvalue\n');
 
@@ -227,7 +227,7 @@ console.log("Config extends...");
 {
   const tmp = makeTmp();
   try {
-    writeFileSync(join(tmp, "base.json"), '{"asi": true}\n');
+    writeFileSync(join(tmp, "base.json"), '{"compat-asi": true}\n');
     writeFileSync(join(tmp, "goccia.json"), '{"extends": "base.json", "mode": "bytecode"}\n');
     writeFileSync(join(tmp, "test.js"), "const x = 5\nx\n");
 
@@ -246,7 +246,7 @@ console.log("Config extends from subdirectory...");
   const tmp = makeTmp();
   try {
     mkdirSync(join(tmp, "tests", "asi"), { recursive: true });
-    writeFileSync(join(tmp, "goccia.json"), '{"asi": true}\n');
+    writeFileSync(join(tmp, "goccia.json"), '{"compat-asi": true}\n');
     writeFileSync(
       join(tmp, "tests", "asi", "goccia.json"),
       '{"extends": "../../goccia.json", "mode": "bytecode"}\n',
@@ -267,7 +267,7 @@ console.log("TestRunner respects config...");
 {
   const tmp = makeTmp();
   try {
-    writeFileSync(join(tmp, "goccia.json"), '{"asi": true, "mode": "bytecode"}\n');
+    writeFileSync(join(tmp, "goccia.json"), '{"compat-asi": true, "mode": "bytecode"}\n');
     writeFileSync(
       join(tmp, "test.js"),
       [
@@ -336,7 +336,7 @@ console.log("Per-file ASI config across all apps...");
     // ASI subdirectory
     const asiDir = join(tmp, "asi");
     mkdirSync(asiDir);
-    writeFileSync(join(asiDir, "goccia.json"), '{"asi": true}\n');
+    writeFileSync(join(asiDir, "goccia.json"), '{"compat-asi": true}\n');
     writeFileSync(join(asiDir, "test.js"), "const x = 42\nx\n");
     writeFileSync(
       join(asiDir, "test-runner.js"),
@@ -401,8 +401,8 @@ console.log("Per-file ASI config across all apps...");
     const bundleStrictBad = await $`${BUNDLER} ${join(strictDir, "bad.js")} 2>&1`.nothrow();
     if (bundleStrictBad.exitCode === 0) throw new Error("Bundler strict should reject bad.js");
 
-    await $`${BUNDLER} ${join(strictDir, "bad.js")} --asi`.quiet();
-    if (!existsSync(join(strictDir, "bad.gbc"))) throw new Error("Bundler --asi override should compile");
+    await $`${BUNDLER} ${join(strictDir, "bad.js")} --compat-asi`.quiet();
+    if (!existsSync(join(strictDir, "bad.gbc"))) throw new Error("Bundler --compat-asi override should compile");
 
     // BenchmarkRunner (interpreted)
     const benchInterp = Bun.spawnSync(
@@ -1050,7 +1050,7 @@ console.log("Multi-directory TestRunner...");
     // Lenient subdirectory: ASI + compat-var
     const lenientDir = join(tmp, "lenient");
     mkdirSync(lenientDir);
-    writeFileSync(join(lenientDir, "goccia.json"), '{"asi": true, "compat-var": true}\n');
+    writeFileSync(join(lenientDir, "goccia.json"), '{"compat-asi": true, "compat-var": true}\n');
     writeFileSync(
       join(lenientDir, "test.js"),
       [
@@ -1099,7 +1099,7 @@ console.log("CLI options override file config...");
   const noConfigDir = makeTmp();
   try {
     // Config enables ASI
-    writeFileSync(join(tmp, "goccia.json"), '{"asi": true}\n');
+    writeFileSync(join(tmp, "goccia.json"), '{"compat-asi": true}\n');
     writeFileSync(join(tmp, "test.js"), "const x = 1\nx\n");
 
     // No config dir
@@ -1113,22 +1113,22 @@ console.log("CLI options override file config...");
     const noConfigRes = await $`${LOADER} ${join(noConfigDir, "test.js")} 2>&1`.nothrow();
     if (!noConfigRes.text().includes("SyntaxError")) throw new Error("No config should reject");
 
-    // CLI --asi overrides no-config
-    const cliAsi = await $`${LOADER} --print ${join(noConfigDir, "test.js")} --asi 2>&1`.text();
-    if (!containsLine(cliAsi, "1")) throw new Error(`CLI --asi should override, got: ${cliAsi}`);
+    // CLI --compat-asi overrides no-config
+    const cliAsi = await $`${LOADER} --print ${join(noConfigDir, "test.js")} --compat-asi 2>&1`.text();
+    if (!containsLine(cliAsi, "1")) throw new Error(`CLI --compat-asi should override, got: ${cliAsi}`);
 
-    // CLI --asi bytecode
-    const cliAsiBc = await $`${LOADER} --print ${join(noConfigDir, "test.js")} --asi --mode=bytecode 2>&1`.text();
-    if (!containsLine(cliAsiBc, "1")) throw new Error(`CLI --asi bytecode should override, got: ${cliAsiBc}`);
+    // CLI --compat-asi bytecode
+    const cliAsiBc = await $`${LOADER} --print ${join(noConfigDir, "test.js")} --compat-asi --mode=bytecode 2>&1`.text();
+    if (!containsLine(cliAsiBc, "1")) throw new Error(`CLI --compat-asi bytecode should override, got: ${cliAsiBc}`);
 
     // CLI --mode=interpreted overrides config mode
-    writeFileSync(join(tmp, "goccia.json"), '{"asi": true, "mode": "bytecode"}\n');
+    writeFileSync(join(tmp, "goccia.json"), '{"compat-asi": true, "mode": "bytecode"}\n');
     const overrideMode = await $`${LOADER} ${join(tmp, "test.js")} --mode=interpreted 2>&1`.text();
     if (!overrideMode.includes("(interpreted)")) throw new Error(`CLI --mode=interpreted should override config, got: ${overrideMode}`);
 
-    // Bundler CLI --asi overrides no-config
-    await $`${BUNDLER} ${join(noConfigDir, "test.js")} --asi`.quiet();
-    if (!existsSync(join(noConfigDir, "test.gbc"))) throw new Error("Bundler CLI --asi should compile");
+    // Bundler CLI --compat-asi overrides no-config
+    await $`${BUNDLER} ${join(noConfigDir, "test.js")} --compat-asi`.quiet();
+    if (!existsSync(join(noConfigDir, "test.gbc"))) throw new Error("Bundler CLI --compat-asi should compile");
   } finally {
     clean(tmp);
     clean(noConfigDir);
@@ -1263,7 +1263,7 @@ console.log("--config=<file> loads .json explicitly...");
     // Script lives in tmp with no goccia.* anywhere on its parent chain.
     writeFileSync(join(tmp, "test.js"), "const x = 11\nx\n");
     // Config lives in a sibling directory; auto-discovery would never find it.
-    writeFileSync(join(cfgDir, "custom.json"), '{"asi": true, "mode": "bytecode"}\n');
+    writeFileSync(join(cfgDir, "custom.json"), '{"compat-asi": true, "mode": "bytecode"}\n');
 
     const out = await $`${LOADER} --print ${join(tmp, "test.js")} --config=${join(cfgDir, "custom.json")} 2>&1`.text();
     if (!out.includes("(bytecode)")) throw new Error(`--config=.json should enable bytecode, got: ${out}`);
@@ -1280,7 +1280,7 @@ console.log("--config=<file> loads .toml explicitly...");
   const cfgDir = makeTmp();
   try {
     writeFileSync(join(tmp, "test.js"), "const x = 21\nx\n");
-    writeFileSync(join(cfgDir, "custom.toml"), 'asi = true\nmode = "bytecode"\n');
+    writeFileSync(join(cfgDir, "custom.toml"), 'compat-asi = true\nmode = "bytecode"\n');
 
     const out = await $`${LOADER} --print ${join(tmp, "test.js")} --config=${join(cfgDir, "custom.toml")} 2>&1`.text();
     if (!out.includes("(bytecode)")) throw new Error(`--config=.toml should enable bytecode, got: ${out}`);
@@ -1297,7 +1297,7 @@ console.log("--config=<file> loads .json5 explicitly...");
   const cfgDir = makeTmp();
   try {
     writeFileSync(join(tmp, "test.js"), "const x = 31\nx\n");
-    writeFileSync(join(cfgDir, "custom.json5"), '{asi: true, mode: "bytecode"}\n');
+    writeFileSync(join(cfgDir, "custom.json5"), '{"compat-asi": true, mode: "bytecode"}\n');
 
     const out = await $`${LOADER} --print ${join(tmp, "test.js")} --config=${join(cfgDir, "custom.json5")} 2>&1`.text();
     if (!out.includes("(bytecode)")) throw new Error(`--config=.json5 should enable bytecode, got: ${out}`);
@@ -1313,7 +1313,7 @@ console.log("--config=<file> with relative path resolves against cwd...");
   const tmp = makeTmp();
   try {
     writeFileSync(join(tmp, "test.js"), "const x = 41\nx\n");
-    writeFileSync(join(tmp, "custom.json"), '{"asi": true, "mode": "bytecode"}\n');
+    writeFileSync(join(tmp, "custom.json"), '{"compat-asi": true, "mode": "bytecode"}\n');
 
     // Relative path; cwd is tmp.
     const out = runCwd(LOADER, ["--print", "test.js", "--config=./custom.json"], tmp);
@@ -1336,7 +1336,7 @@ console.log("--config=<dir> finds goccia.json...");
   const cfgDir = makeTmp();
   try {
     writeFileSync(join(tmp, "test.js"), "const x = 51\nx\n");
-    writeFileSync(join(cfgDir, "goccia.json"), '{"asi": true, "mode": "bytecode"}\n');
+    writeFileSync(join(cfgDir, "goccia.json"), '{"compat-asi": true, "mode": "bytecode"}\n');
 
     const out = await $`${LOADER} --print ${join(tmp, "test.js")} --config=${cfgDir} 2>&1`.text();
     if (!out.includes("(bytecode)")) throw new Error(`--config=<dir> with goccia.json should enable bytecode, got: ${out}`);
@@ -1354,9 +1354,9 @@ console.log("--config=<dir> respects priority TOML > JSON5 > JSON...");
   try {
     writeFileSync(join(tmp, "test.js"), "const x = 61\nx\n");
     // All three present; TOML must win (matches auto-discovery priority).
-    writeFileSync(join(cfgDir, "goccia.json"), '{"asi": true, "mode": "interpreted"}\n');
-    writeFileSync(join(cfgDir, "goccia.json5"), '{asi: true, mode: "interpreted"}\n');
-    writeFileSync(join(cfgDir, "goccia.toml"), 'asi = true\nmode = "bytecode"\n');
+    writeFileSync(join(cfgDir, "goccia.json"), '{"compat-asi": true, "mode": "interpreted"}\n');
+    writeFileSync(join(cfgDir, "goccia.json5"), '{"compat-asi": true, mode: "interpreted"}\n');
+    writeFileSync(join(cfgDir, "goccia.toml"), 'compat-asi = true\nmode = "bytecode"\n');
 
     const out = await $`${LOADER} ${join(tmp, "test.js")} --config=${cfgDir} 2>&1`.text();
     if (!out.includes("(bytecode)")) throw new Error(`--config=<dir> should pick TOML over JSON5/JSON, got: ${out}`);
@@ -1372,7 +1372,7 @@ console.log("--config=<dir> with trailing slash works...");
   const cfgDir = makeTmp();
   try {
     writeFileSync(join(tmp, "test.js"), "const x = 71\nx\n");
-    writeFileSync(join(cfgDir, "goccia.toml"), 'asi = true\nmode = "bytecode"\n');
+    writeFileSync(join(cfgDir, "goccia.toml"), 'compat-asi = true\nmode = "bytecode"\n');
 
     // Some shells/users will pass the directory with a trailing slash.
     const out = await $`${LOADER} ${join(tmp, "test.js")} --config=${cfgDir + "/"} 2>&1`.text();
@@ -1390,7 +1390,7 @@ console.log("--config=<dir> does not walk upward...");
     // Place a config in tmp; pass an empty subdirectory as --config.
     // Auto-discovery would walk up and find tmp/goccia.toml, but the
     // explicit directory form must NOT — it should error out.
-    writeFileSync(join(tmp, "goccia.toml"), 'asi = true\nmode = "bytecode"\n');
+    writeFileSync(join(tmp, "goccia.toml"), 'compat-asi = true\nmode = "bytecode"\n');
     const empty = join(tmp, "empty");
     mkdirSync(empty);
     writeFileSync(join(tmp, "test.js"), "const x = 81\nx\n");
@@ -1431,10 +1431,10 @@ console.log("--config skips auto-discovery of nearby goccia.*...");
   const cfgDir = makeTmp();
   try {
     // Hostile config alongside the script; auto-discovery would pick this up.
-    writeFileSync(join(tmp, "goccia.json"), '{"asi": true, "mode": "interpreted"}\n');
+    writeFileSync(join(tmp, "goccia.json"), '{"compat-asi": true, "mode": "interpreted"}\n');
     writeFileSync(join(tmp, "test.js"), "const x = 101\nx\n");
     // Explicit config selects bytecode.
-    writeFileSync(join(cfgDir, "good.toml"), 'asi = true\nmode = "bytecode"\n');
+    writeFileSync(join(cfgDir, "good.toml"), 'compat-asi = true\nmode = "bytecode"\n');
 
     const out = await $`${LOADER} --print ${join(tmp, "test.js")} --config=${join(cfgDir, "good.toml")} 2>&1`.text();
     if (!out.includes("(bytecode)")) throw new Error(`--config should skip nearby goccia.json, got: ${out}`);
@@ -1454,7 +1454,7 @@ console.log("CLI options override values from --config...");
   try {
     writeFileSync(join(tmp, "test.js"), "const x = 111\nx\n");
     // --config says interpreted...
-    writeFileSync(join(cfgDir, "custom.toml"), 'asi = true\nmode = "interpreted"\n');
+    writeFileSync(join(cfgDir, "custom.toml"), 'compat-asi = true\nmode = "interpreted"\n');
 
     // ...but a direct --mode=bytecode on the CLI must win.
     const out = await $`${LOADER} --print ${join(tmp, "test.js")} --config=${join(cfgDir, "custom.toml")} --mode=bytecode 2>&1`.text();
@@ -1476,7 +1476,7 @@ console.log("--config works on TestRunner...");
   const tmp = makeTmp();
   const cfgDir = makeTmp();
   try {
-    writeFileSync(join(cfgDir, "ci.toml"), 'asi = true\nmode = "bytecode"\n');
+    writeFileSync(join(cfgDir, "ci.toml"), 'compat-asi = true\nmode = "bytecode"\n');
     writeFileSync(
       join(tmp, "test.js"),
       [
@@ -1503,7 +1503,7 @@ console.log("--config works on Bundler...");
   try {
     // Bad-without-ASI source; --config supplies ASI so compile must succeed.
     writeFileSync(join(tmp, "test.js"), "const x = 1\nx\n");
-    writeFileSync(join(cfgDir, "goccia.json"), '{"asi": true}\n');
+    writeFileSync(join(cfgDir, "goccia.json"), '{"compat-asi": true}\n');
 
     // Sanity: without --config, compile rejects (no goccia.* near tmp).
     const noCfg = await $`${BUNDLER} ${join(tmp, "test.js")} 2>&1`.nothrow();
@@ -1523,7 +1523,7 @@ console.log("--config works on BenchmarkRunner...");
   const tmp = makeTmp();
   const cfgDir = makeTmp();
   try {
-    writeFileSync(join(cfgDir, "goccia.toml"), 'asi = true\n');
+    writeFileSync(join(cfgDir, "goccia.toml"), 'compat-asi = true\n');
     writeFileSync(
       join(tmp, "bench.js"),
       [

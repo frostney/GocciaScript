@@ -220,16 +220,16 @@ end;
 procedure TConfigFileTests.TestJSONStringValue;
 var
   Dir, Path: string;
-  Flag: TGocciaFlagOption;
-  Mode: TGocciaStringOption;
-  Options: TGocciaOptionArray;
+  Flag: TFlagOption;
+  Mode: TStringOption;
+  Options: TOptionArray;
 begin
   Dir := CreateTempDirectory;
   Path := IncludeTrailingPathDelimiter(Dir) + 'test.json';
   WriteTextFile(Path, '{"mode": "bytecode"}');
 
-  Mode := TGocciaStringOption.Create('mode', 'Execution mode');
-  Flag := TGocciaFlagOption.Create('asi', 'ASI');
+  Mode := TStringOption.Create('mode', 'Execution mode');
+  Flag := TFlagOption.Create('feature', 'Flag');
   try
     SetLength(Options, 2);
     Options[0] := Mode;
@@ -249,14 +249,14 @@ end;
 procedure TConfigFileTests.TestJSONIntegerValue;
 var
   Dir, Path: string;
-  Timeout: TGocciaIntegerOption;
-  Options: TGocciaOptionArray;
+  Timeout: TIntegerOption;
+  Options: TOptionArray;
 begin
   Dir := CreateTempDirectory;
   Path := IncludeTrailingPathDelimiter(Dir) + 'test.json';
   WriteTextFile(Path, '{"timeout": 5000}');
 
-  Timeout := TGocciaIntegerOption.Create('timeout', 'Timeout');
+  Timeout := TIntegerOption.Create('timeout', 'Timeout');
   try
     SetLength(Options, 1);
     Options[0] := Timeout;
@@ -273,60 +273,60 @@ end;
 procedure TConfigFileTests.TestJSONBooleanTrueIncluded;
 var
   Dir, Path: string;
-  ASI: TGocciaFlagOption;
-  Options: TGocciaOptionArray;
+  Flag: TFlagOption;
+  Options: TOptionArray;
 begin
   Dir := CreateTempDirectory;
   Path := IncludeTrailingPathDelimiter(Dir) + 'test.json';
-  WriteTextFile(Path, '{"asi": true}');
+  WriteTextFile(Path, '{"feature": true}');
 
-  ASI := TGocciaFlagOption.Create('asi', 'ASI');
+  Flag := TFlagOption.Create('feature', 'Flag');
   try
     SetLength(Options, 1);
-    Options[0] := ASI;
+    Options[0] := Flag;
 
     ApplyConfigFile(Path, Options);
 
-    Expect<Boolean>(ASI.Present).ToBe(True);
+    Expect<Boolean>(Flag.Present).ToBe(True);
   finally
-    ASI.Free;
+    Flag.Free;
   end;
 end;
 
 procedure TConfigFileTests.TestJSONBooleanFalseOmitted;
 var
   Dir, Path: string;
-  ASI: TGocciaFlagOption;
-  Options: TGocciaOptionArray;
+  Flag: TFlagOption;
+  Options: TOptionArray;
 begin
   Dir := CreateTempDirectory;
   Path := IncludeTrailingPathDelimiter(Dir) + 'test.json';
-  WriteTextFile(Path, '{"asi": false}');
+  WriteTextFile(Path, '{"feature": false}');
 
-  ASI := TGocciaFlagOption.Create('asi', 'ASI');
+  Flag := TFlagOption.Create('feature', 'Flag');
   try
     SetLength(Options, 1);
-    Options[0] := ASI;
+    Options[0] := Flag;
 
     ApplyConfigFile(Path, Options);
 
-    Expect<Boolean>(ASI.Present).ToBe(False);
+    Expect<Boolean>(Flag.Present).ToBe(False);
   finally
-    ASI.Free;
+    Flag.Free;
   end;
 end;
 
 procedure TConfigFileTests.TestJSONArrayProducesMultipleEntries;
 var
   Dir, Path: string;
-  Aliases: TGocciaRepeatableOption;
-  Options: TGocciaOptionArray;
+  Aliases: TRepeatableOption;
+  Options: TOptionArray;
 begin
   Dir := CreateTempDirectory;
   Path := IncludeTrailingPathDelimiter(Dir) + 'test.json';
   WriteTextFile(Path, '{"alias": ["@/=./src/", "config=./config.js"]}');
 
-  Aliases := TGocciaRepeatableOption.Create('alias', 'Aliases');
+  Aliases := TRepeatableOption.Create('alias', 'Aliases');
   try
     SetLength(Options, 1);
     Options[0] := Aliases;
@@ -345,14 +345,14 @@ end;
 procedure TConfigFileTests.TestJSONNestedObjectSkipped;
 var
   Dir, Path: string;
-  Mode: TGocciaStringOption;
-  Options: TGocciaOptionArray;
+  Mode: TStringOption;
+  Options: TOptionArray;
 begin
   Dir := CreateTempDirectory;
   Path := IncludeTrailingPathDelimiter(Dir) + 'test.json';
   WriteTextFile(Path, '{"imports": {"@/": "./src/"}, "mode": "bytecode"}');
 
-  Mode := TGocciaStringOption.Create('mode', 'Mode');
+  Mode := TStringOption.Create('mode', 'Mode');
   try
     SetLength(Options, 1);
     Options[0] := Mode;
@@ -369,14 +369,14 @@ end;
 procedure TConfigFileTests.TestJSONNullSkipped;
 var
   Dir, Path: string;
-  Mode: TGocciaStringOption;
-  Options: TGocciaOptionArray;
+  Mode: TStringOption;
+  Options: TOptionArray;
 begin
   Dir := CreateTempDirectory;
   Path := IncludeTrailingPathDelimiter(Dir) + 'test.json';
   WriteTextFile(Path, '{"mode": null}');
 
-  Mode := TGocciaStringOption.Create('mode', 'Mode');
+  Mode := TStringOption.Create('mode', 'Mode');
   try
     SetLength(Options, 1);
     Options[0] := Mode;
@@ -393,16 +393,16 @@ end;
 
 procedure TConfigFileTests.TestApplyFlagOption;
 var
-  Flag: TGocciaFlagOption;
-  Options: TGocciaOptionArray;
+  Flag: TFlagOption;
+  Options: TOptionArray;
   Entries: TConfigEntryArray;
 begin
-  Flag := TGocciaFlagOption.Create('asi', 'ASI');
+  Flag := TFlagOption.Create('feature', 'Flag');
   try
     SetLength(Options, 1);
     Options[0] := Flag;
     SetLength(Entries, 1);
-    Entries[0].Key := 'asi';
+    Entries[0].Key := 'feature';
     Entries[0].Value := 'true';
 
     ApplyConfigEntries(Entries, Options);
@@ -415,16 +415,16 @@ end;
 
 procedure TConfigFileTests.TestApplyFlagFalseNotSet;
 var
-  Flag: TGocciaFlagOption;
-  Options: TGocciaOptionArray;
+  Flag: TFlagOption;
+  Options: TOptionArray;
   Entries: TConfigEntryArray;
 begin
-  Flag := TGocciaFlagOption.Create('asi', 'ASI');
+  Flag := TFlagOption.Create('feature', 'Flag');
   try
     SetLength(Options, 1);
     Options[0] := Flag;
     SetLength(Entries, 1);
-    Entries[0].Key := 'asi';
+    Entries[0].Key := 'feature';
     Entries[0].Value := 'false';
 
     ApplyConfigEntries(Entries, Options);
@@ -437,11 +437,11 @@ end;
 
 procedure TConfigFileTests.TestApplyStringOption;
 var
-  Opt: TGocciaStringOption;
-  Options: TGocciaOptionArray;
+  Opt: TStringOption;
+  Options: TOptionArray;
   Entries: TConfigEntryArray;
 begin
-  Opt := TGocciaStringOption.Create('output', 'Output path');
+  Opt := TStringOption.Create('output', 'Output path');
   try
     SetLength(Options, 1);
     Options[0] := Opt;
@@ -460,11 +460,11 @@ end;
 
 procedure TConfigFileTests.TestApplyIntegerOption;
 var
-  Opt: TGocciaIntegerOption;
-  Options: TGocciaOptionArray;
+  Opt: TIntegerOption;
+  Options: TOptionArray;
   Entries: TConfigEntryArray;
 begin
-  Opt := TGocciaIntegerOption.Create('timeout', 'Timeout');
+  Opt := TIntegerOption.Create('timeout', 'Timeout');
   try
     SetLength(Options, 1);
     Options[0] := Opt;
@@ -486,11 +486,11 @@ type
 
 procedure TConfigFileTests.TestApplyEnumOption;
 var
-  Opt: TGocciaEnumOption<TTestMode>;
-  Options: TGocciaOptionArray;
+  Opt: TEnumOption<TTestMode>;
+  Options: TOptionArray;
   Entries: TConfigEntryArray;
 begin
-  Opt := TGocciaEnumOption<TTestMode>.Create('mode', 'Execution mode');
+  Opt := TEnumOption<TTestMode>.Create('mode', 'Execution mode');
   try
     SetLength(Options, 1);
     Options[0] := Opt;
@@ -509,11 +509,11 @@ end;
 
 procedure TConfigFileTests.TestApplyRepeatableOption;
 var
-  Opt: TGocciaRepeatableOption;
-  Options: TGocciaOptionArray;
+  Opt: TRepeatableOption;
+  Options: TOptionArray;
   Entries: TConfigEntryArray;
 begin
-  Opt := TGocciaRepeatableOption.Create('alias', 'Aliases');
+  Opt := TRepeatableOption.Create('alias', 'Aliases');
   try
     SetLength(Options, 1);
     Options[0] := Opt;
@@ -536,11 +536,11 @@ end;
 
 procedure TConfigFileTests.TestApplyUnknownKeySkipped;
 var
-  Flag: TGocciaFlagOption;
-  Options: TGocciaOptionArray;
+  Flag: TFlagOption;
+  Options: TOptionArray;
   Entries: TConfigEntryArray;
 begin
-  Flag := TGocciaFlagOption.Create('asi', 'ASI');
+  Flag := TFlagOption.Create('feature', 'Flag');
   try
     SetLength(Options, 1);
     Options[0] := Flag;
@@ -561,28 +561,28 @@ end;
 procedure TConfigFileTests.TestApplyConfigFileJSON;
 var
   Dir, Path: string;
-  ASI: TGocciaFlagOption;
-  Timeout: TGocciaIntegerOption;
-  Options: TGocciaOptionArray;
+  Flag: TFlagOption;
+  Timeout: TIntegerOption;
+  Options: TOptionArray;
 begin
   Dir := CreateTempDirectory;
   Path := IncludeTrailingPathDelimiter(Dir) + 'config.json';
-  WriteTextFile(Path, '{"asi": true, "timeout": 2000}');
+  WriteTextFile(Path, '{"feature": true, "timeout": 2000}');
 
-  ASI := TGocciaFlagOption.Create('asi', 'ASI');
-  Timeout := TGocciaIntegerOption.Create('timeout', 'Timeout');
+  Flag := TFlagOption.Create('feature', 'Flag');
+  Timeout := TIntegerOption.Create('timeout', 'Timeout');
   try
     SetLength(Options, 2);
-    Options[0] := ASI;
+    Options[0] := Flag;
     Options[1] := Timeout;
 
     ApplyConfigFile(Path, Options);
 
-    Expect<Boolean>(ASI.Present).ToBe(True);
+    Expect<Boolean>(Flag.Present).ToBe(True);
     Expect<Boolean>(Timeout.Present).ToBe(True);
     Expect<Integer>(Timeout.Value).ToBe(2000);
   finally
-    ASI.Free;
+    Flag.Free;
     Timeout.Free;
   end;
 end;
@@ -592,17 +592,17 @@ const
   JSON_BYTES = '{"mode":"Jos' + #$C3#$A9 + '","alias":["caf' + #$C3#$A9 +
     '=./d' + #$C3#$A9 + 'j' + #$C3#$A0 + '.js"]}';
 var
-  Alias: TGocciaRepeatableOption;
+  Alias: TRepeatableOption;
   Dir, Path: string;
-  Mode: TGocciaStringOption;
-  Options: TGocciaOptionArray;
+  Mode: TStringOption;
+  Options: TOptionArray;
 begin
   Dir := CreateTempDirectory;
   Path := IncludeTrailingPathDelimiter(Dir) + 'config.json';
   WriteRawFile(Path, JSON_BYTES);
 
-  Alias := TGocciaRepeatableOption.Create('alias', 'Alias');
-  Mode := TGocciaStringOption.Create('mode', 'Mode');
+  Alias := TRepeatableOption.Create('alias', 'Alias');
+  Mode := TStringOption.Create('mode', 'Mode');
   try
     SetLength(Options, 2);
     Options[0] := Mode;
@@ -623,15 +623,15 @@ end;
 procedure TConfigFileTests.TestApplyConfigFileUnregisteredExtensionRaises;
 var
   Dir, Path: string;
-  Flag: TGocciaFlagOption;
-  Options: TGocciaOptionArray;
+  Flag: TFlagOption;
+  Options: TOptionArray;
   Raised: Boolean;
 begin
   Dir := CreateTempDirectory;
   Path := IncludeTrailingPathDelimiter(Dir) + 'config.xyz';
   WriteTextFile(Path, 'whatever');
 
-  Flag := TGocciaFlagOption.Create('asi', 'ASI');
+  Flag := TFlagOption.Create('feature', 'Flag');
   try
     SetLength(Options, 1);
     Options[0] := Flag;
@@ -655,14 +655,14 @@ end;
 procedure TConfigFileTests.TestOptionCanBeModifiedAfterConfigApply;
 var
   Dir, Path: string;
-  Mode: TGocciaStringOption;
-  Options: TGocciaOptionArray;
+  Mode: TStringOption;
+  Options: TOptionArray;
 begin
   Dir := CreateTempDirectory;
   Path := IncludeTrailingPathDelimiter(Dir) + 'config.json';
   WriteTextFile(Path, '{"mode": "bytecode"}');
 
-  Mode := TGocciaStringOption.Create('mode', 'Mode');
+  Mode := TStringOption.Create('mode', 'Mode');
   try
     SetLength(Options, 1);
     Options[0] := Mode;
@@ -682,14 +682,14 @@ end;
 procedure TConfigFileTests.TestApplySkipsAlreadyPresentOption;
 var
   Dir, Path: string;
-  Mode: TGocciaStringOption;
-  Options: TGocciaOptionArray;
+  Mode: TStringOption;
+  Options: TOptionArray;
 begin
   Dir := CreateTempDirectory;
   Path := IncludeTrailingPathDelimiter(Dir) + 'config.json';
   WriteTextFile(Path, '{"mode": "bytecode"}');
 
-  Mode := TGocciaStringOption.Create('mode', 'Mode');
+  Mode := TStringOption.Create('mode', 'Mode');
   try
     SetLength(Options, 1);
     Options[0] := Mode;
@@ -710,30 +710,30 @@ end;
 procedure TConfigFileTests.TestExtendsLoadsBaseConfig;
 var
   Dir, BasePath, ChildPath: string;
-  ASI: TGocciaFlagOption;
-  Timeout: TGocciaIntegerOption;
-  Options: TGocciaOptionArray;
+  Flag: TFlagOption;
+  Timeout: TIntegerOption;
+  Options: TOptionArray;
 begin
   Dir := CreateTempDirectory;
   BasePath := IncludeTrailingPathDelimiter(Dir) + 'base.json';
   ChildPath := IncludeTrailingPathDelimiter(Dir) + 'goccia.json';
-  WriteTextFile(BasePath, '{"asi": true, "timeout": 3000}');
+  WriteTextFile(BasePath, '{"feature": true, "timeout": 3000}');
   WriteTextFile(ChildPath, '{"extends": "base.json"}');
 
-  ASI := TGocciaFlagOption.Create('asi', 'ASI');
-  Timeout := TGocciaIntegerOption.Create('timeout', 'Timeout');
+  Flag := TFlagOption.Create('feature', 'Flag');
+  Timeout := TIntegerOption.Create('timeout', 'Timeout');
   try
     SetLength(Options, 2);
-    Options[0] := ASI;
+    Options[0] := Flag;
     Options[1] := Timeout;
 
     ApplyConfigFile(ChildPath, Options);
 
-    Expect<Boolean>(ASI.Present).ToBe(True);
+    Expect<Boolean>(Flag.Present).ToBe(True);
     Expect<Boolean>(Timeout.Present).ToBe(True);
     Expect<Integer>(Timeout.Value).ToBe(3000);
   finally
-    ASI.Free;
+    Flag.Free;
     Timeout.Free;
   end;
 end;
@@ -741,40 +741,40 @@ end;
 procedure TConfigFileTests.TestExtendsChildOverridesParent;
 var
   Dir, BasePath, ChildPath: string;
-  Mode: TGocciaStringOption;
-  ASI: TGocciaFlagOption;
-  Options: TGocciaOptionArray;
+  Mode: TStringOption;
+  Flag: TFlagOption;
+  Options: TOptionArray;
 begin
   Dir := CreateTempDirectory;
   BasePath := IncludeTrailingPathDelimiter(Dir) + 'base.json';
   ChildPath := IncludeTrailingPathDelimiter(Dir) + 'goccia.json';
-  WriteTextFile(BasePath, '{"mode": "interpreted", "asi": true}');
+  WriteTextFile(BasePath, '{"mode": "interpreted", "feature": true}');
   WriteTextFile(ChildPath, '{"extends": "base.json", "mode": "bytecode"}');
 
-  Mode := TGocciaStringOption.Create('mode', 'Mode');
-  ASI := TGocciaFlagOption.Create('asi', 'ASI');
+  Mode := TStringOption.Create('mode', 'Mode');
+  Flag := TFlagOption.Create('feature', 'Flag');
   try
     SetLength(Options, 2);
     Options[0] := Mode;
-    Options[1] := ASI;
+    Options[1] := Flag;
 
     ApplyConfigFile(ChildPath, Options);
 
     { Child's mode overrides parent's }
     Expect<string>(Mode.Value).ToBe('bytecode');
-    { Parent's asi is inherited }
-    Expect<Boolean>(ASI.Present).ToBe(True);
+    { Parent's feature is inherited }
+    Expect<Boolean>(Flag.Present).ToBe(True);
   finally
     Mode.Free;
-    ASI.Free;
+    Flag.Free;
   end;
 end;
 
 procedure TConfigFileTests.TestExtendsCircularRaises;
 var
   Dir, PathA, PathB: string;
-  Flag: TGocciaFlagOption;
-  Options: TGocciaOptionArray;
+  Flag: TFlagOption;
+  Options: TOptionArray;
   Raised: Boolean;
 begin
   Dir := CreateTempDirectory;
@@ -783,7 +783,7 @@ begin
   WriteTextFile(PathA, '{"extends": "b.json"}');
   WriteTextFile(PathB, '{"extends": "a.json"}');
 
-  Flag := TGocciaFlagOption.Create('asi', 'ASI');
+  Flag := TFlagOption.Create('feature', 'Flag');
   try
     SetLength(Options, 1);
     Options[0] := Flag;
@@ -814,8 +814,8 @@ end;
 procedure TConfigFileTests.TestRegisterAndUseCustomParser;
 var
   Dir, Path: string;
-  Mode: TGocciaStringOption;
-  Options: TGocciaOptionArray;
+  Mode: TStringOption;
+  Options: TOptionArray;
 begin
   Dir := CreateTempDirectory;
   Path := IncludeTrailingPathDelimiter(Dir) + 'config.toml';
@@ -823,7 +823,7 @@ begin
 
   RegisterConfigParser('.toml', @DummyTOMLParser);
 
-  Mode := TGocciaStringOption.Create('mode', 'Mode');
+  Mode := TStringOption.Create('mode', 'Mode');
   try
     SetLength(Options, 1);
     Options[0] := Mode;
@@ -905,10 +905,10 @@ begin
   SetLength(Entries, 2);
   Entries[0].Key := 'mode';
   Entries[0].Value := 'bytecode';
-  Entries[1].Key := 'asi';
+  Entries[1].Key := 'feature';
   Entries[1].Value := 'true';
 
-  Expect<Boolean>(FindConfigEntry(Entries, 'asi', Value)).ToBe(True);
+  Expect<Boolean>(FindConfigEntry(Entries, 'feature', Value)).ToBe(True);
   Expect<string>(Value).ToBe('true');
 end;
 
@@ -943,17 +943,17 @@ end;
 
 procedure TConfigFileTests.TestResolveFlagOptionCLIWins;
 var
-  Flag: TGocciaFlagOption;
+  Flag: TFlagOption;
   FileConfig: TConfigEntryArray;
 begin
-  Flag := TGocciaFlagOption.Create('asi', 'ASI');
+  Flag := TFlagOption.Create('feature', 'Flag');
   try
     Flag.Apply('');
     Flag.MarkFromCommandLine;
 
     { Per-file config says false, but CLI should win }
     SetLength(FileConfig, 1);
-    FileConfig[0].Key := 'asi';
+    FileConfig[0].Key := 'feature';
     FileConfig[0].Value := 'false';
 
     Expect<Boolean>(ResolveFlagOption(Flag, FileConfig)).ToBe(True);
@@ -964,25 +964,25 @@ end;
 
 procedure TConfigFileTests.TestResolveFlagOptionPerFileOverridesRoot;
 var
-  Flag: TGocciaFlagOption;
+  Flag: TFlagOption;
   FileConfig: TConfigEntryArray;
-  Options: TGocciaOptionArray;
+  Options: TOptionArray;
   RootEntries: TConfigEntryArray;
 begin
-  Flag := TGocciaFlagOption.Create('asi', 'ASI');
+  Flag := TFlagOption.Create('feature', 'Flag');
   try
-    { Root config sets asi='false' — ApplyConfigEntries skips Apply for
+    { Root config sets feature='false' — ApplyConfigEntries skips Apply for
       flag value 'false', so Present remains False. }
     SetLength(Options, 1);
     Options[0] := Flag;
     SetLength(RootEntries, 1);
-    RootEntries[0].Key := 'asi';
+    RootEntries[0].Key := 'feature';
     RootEntries[0].Value := 'false';
     ApplyConfigEntries(RootEntries, Options);
 
     { Per-file config says true — should override root }
     SetLength(FileConfig, 1);
-    FileConfig[0].Key := 'asi';
+    FileConfig[0].Key := 'feature';
     FileConfig[0].Value := 'true';
 
     Expect<Boolean>(ResolveFlagOption(Flag, FileConfig)).ToBe(True);
@@ -993,25 +993,25 @@ end;
 
 procedure TConfigFileTests.TestResolveFlagOptionPerFileFalseOverridesRoot;
 var
-  Flag: TGocciaFlagOption;
+  Flag: TFlagOption;
   FileConfig: TConfigEntryArray;
-  Options: TGocciaOptionArray;
+  Options: TOptionArray;
   RootEntries: TConfigEntryArray;
 begin
-  Flag := TGocciaFlagOption.Create('asi', 'ASI');
+  Flag := TFlagOption.Create('feature', 'Flag');
   try
-    { Simulate root config setting asi=true (Present but not FromCommandLine) }
+    { Simulate root config setting feature=true (Present but not FromCommandLine) }
     SetLength(Options, 1);
     Options[0] := Flag;
     SetLength(RootEntries, 1);
-    RootEntries[0].Key := 'asi';
+    RootEntries[0].Key := 'feature';
     RootEntries[0].Value := 'true';
     ApplyConfigEntries(RootEntries, Options);
     Expect<Boolean>(Flag.Present).ToBe(True);
 
     { Per-file config says false — should override root }
     SetLength(FileConfig, 1);
-    FileConfig[0].Key := 'asi';
+    FileConfig[0].Key := 'feature';
     FileConfig[0].Value := 'false';
 
     Expect<Boolean>(ResolveFlagOption(Flag, FileConfig)).ToBe(False);
@@ -1022,18 +1022,18 @@ end;
 
 procedure TConfigFileTests.TestResolveFlagOptionFallsBackToRoot;
 var
-  Flag: TGocciaFlagOption;
+  Flag: TFlagOption;
   FileConfig: TConfigEntryArray;
-  Options: TGocciaOptionArray;
+  Options: TOptionArray;
   RootEntries: TConfigEntryArray;
 begin
-  Flag := TGocciaFlagOption.Create('asi', 'ASI');
+  Flag := TFlagOption.Create('feature', 'Flag');
   try
-    { Simulate root config setting asi=true }
+    { Simulate root config setting feature=true }
     SetLength(Options, 1);
     Options[0] := Flag;
     SetLength(RootEntries, 1);
-    RootEntries[0].Key := 'asi';
+    RootEntries[0].Key := 'feature';
     RootEntries[0].Value := 'true';
     ApplyConfigEntries(RootEntries, Options);
 
@@ -1048,14 +1048,14 @@ end;
 
 procedure TConfigFileTests.TestResolveFlagOptionEmptyStringEnablesFlag;
 var
-  Flag: TGocciaFlagOption;
+  Flag: TFlagOption;
   FileConfig: TConfigEntryArray;
 begin
-  Flag := TGocciaFlagOption.Create('asi', 'ASI');
+  Flag := TFlagOption.Create('feature', 'Flag');
   try
     { Per-file config with empty string — matches ApplyConfigEntries behavior }
     SetLength(FileConfig, 1);
-    FileConfig[0].Key := 'asi';
+    FileConfig[0].Key := 'feature';
     FileConfig[0].Value := '';
 
     Expect<Boolean>(ResolveFlagOption(Flag, FileConfig)).ToBe(True);
@@ -1066,10 +1066,10 @@ end;
 
 procedure TConfigFileTests.TestResolveFlagOptionUsesConfigName;
 var
-  Flag: TGocciaFlagOption;
+  Flag: TFlagOption;
   FileConfig: TConfigEntryArray;
 begin
-  Flag := TGocciaFlagOption.Create('enable-ffi', 'FFI');
+  Flag := TFlagOption.Create('enable-ffi', 'FFI');
   try
     Flag.ConfigName := 'unsafe-ffi';
     SetLength(FileConfig, 1);
@@ -1085,7 +1085,7 @@ end;
 procedure TConfigFileTests.TestResolveFlagOptionMixedAliasExtendsPrecedence;
 var
   Dir, BasePath, ChildPath: string;
-  Flag: TGocciaFlagOption;
+  Flag: TFlagOption;
   FileConfig: TConfigEntryArray;
 begin
   Dir := CreateTempDirectory;
@@ -1094,7 +1094,7 @@ begin
   WriteTextFile(BasePath, '{"unsafe-ffi": true}');
   WriteTextFile(ChildPath, '{"extends": "base.json", "enable-ffi": false}');
 
-  Flag := TGocciaFlagOption.Create('enable-ffi', 'FFI');
+  Flag := TFlagOption.Create('enable-ffi', 'FFI');
   try
     Flag.ConfigName := 'unsafe-ffi';
     FileConfig := ParseConfigFile(ChildPath);
@@ -1107,10 +1107,10 @@ end;
 
 procedure TConfigFileTests.TestResolveFlagOptionDefaultsFalse;
 var
-  Flag: TGocciaFlagOption;
+  Flag: TFlagOption;
   FileConfig: TConfigEntryArray;
 begin
-  Flag := TGocciaFlagOption.Create('asi', 'ASI');
+  Flag := TFlagOption.Create('feature', 'Flag');
   try
     { No CLI, no root config, no per-file config — should default to False }
     SetLength(FileConfig, 0);

@@ -211,7 +211,8 @@ The first file found is loaded and applied as the **root config**. When running 
 1. **CLI options** (highest priority — always win)
 2. **Per-file config** (`goccia.toml`, `goccia.json5`, or `goccia.json` nearest to the file being processed)
 3. **Root config** (discovered from the entry file's directory at startup, or supplied via `--config`)
-4. **System default** (engine defaults)
+4. **File extension default** (`.mjs` infers module source)
+5. **System default** (engine defaults)
 
 **`--config=<path>`** — Override auto-discovery and load the root config from an explicit location. Available on every CLI tool.
 
@@ -228,11 +229,13 @@ The path may be either a **file** (any registered extension — `.json`, `.json5
 
 Relative paths are resolved against the current working directory. A missing file or a directory with no recognised `goccia.*` is a hard error so a typo is not silently ignored. CLI options still take precedence over values from the file, and per-file configs continue to be discovered normally for individual files.
 
+`source-type` follows that same precedence. Without an explicit CLI or config value, `.mjs` entry files are parsed and evaluated as module source; other script extensions default to script source.
+
 ```json
 {
   "mode": "bytecode",
   "source-type": "module",
-  "asi": true,
+  "compat-asi": true,
   "compat-non-strict-mode": true,
   "compat-loose-equality": true,
   "compat-traditional-for-loop": true,
@@ -265,7 +268,7 @@ This is useful for test subdirectories that need specific flags. For example, `t
 
 ```json
 {
-  "asi": true
+  "compat-asi": true
 }
 ```
 
@@ -280,7 +283,7 @@ Likewise, `tests/built-ins/FFI/goccia.json` enables FFI only for the FFI tests:
 TOML equivalent (`goccia.toml`):
 
 ```toml
-asi = true
+compat-asi = true
 mode = "bytecode"
 unsafe-ffi = true
 timeout = 5000
@@ -349,7 +352,7 @@ printf "const x = 2 + 2; x;" | ./build/GocciaBundler --output=out.gbc
 ./build/GocciaBundler example.jsx --source-map=out.map
 
 # Enable automatic semicolon insertion during parsing
-./build/GocciaBundler example.js --asi
+./build/GocciaBundler example.js --compat-asi
 
 # Parallel compilation (default: CPU count)
 ./build/GocciaBundler src/ --jobs=4

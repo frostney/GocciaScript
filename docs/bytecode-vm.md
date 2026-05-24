@@ -4,7 +4,7 @@
 
 ## Executive Summary
 
-- **Two execution modes** — tree-walk interpreter (default) and bytecode VM (`--mode=bytecode`), sharing the same source frontend, runtime objects, and GC
+- **Two execution modes** — tree-walk interpreter (default) and bytecode VM (`--mode=bytecode`), sharing the same source pipeline, runtime objects, and GC
 - **Executor abstraction** — `TGocciaBytecodeExecutor` implements `TGocciaExecutor` with no dependency on the interpreter or evaluator
 - **Goccia-owned VM** — executes directly on `TGocciaValue` with tagged `TGocciaRegister` values; not a generic VM layer
 - **Opcode space** — core instructions (0-127) for hot paths, non-core generic ops (128-166), and semantic/helper instructions (167-255) for colder operations like imports/exports
@@ -250,7 +250,7 @@ During code review, the following findings were investigated and determined to b
 
 ## Related documents
 
-- [Architecture](architecture.md) — Shared source frontend and both execution modes at a glance
+- [Architecture](architecture.md) — Shared source pipeline and both execution modes at a glance
 - [Interpreter](interpreter.md) — Tree-walk execution (`Goccia.Interpreter`, `Goccia.Evaluator.*`)
 - [Core patterns](core-patterns.md) — Recurring Pascal conventions
 - [GocciaScript Context](../CONTEXT.md) — Canonical project terminology

@@ -23,7 +23,7 @@ An installable host or special-purpose feature added to a runtime, such as conso
 _Avoid_: Core language built-in when the feature belongs to the optional runtime surface.
 
 **Runtime profile**:
-A named bundle of runtime extensions used by a CLI frontend or embedding host.
+A named bundle of runtime extensions used by a CLI host or embedding host.
 _Avoid_: Mode, preset.
 
 **Runtime surface**:
@@ -52,20 +52,24 @@ _Avoid_: Runtime, runtime profile.
 The implementation object behind an execution mode. GocciaScript has an interpreter executor and a bytecode executor.
 _Avoid_: Execution backend, runtime.
 
-**Source frontend**:
-The shared source-processing pipeline that turns source text into an AST before execution.
-_Avoid_: CLI frontend when discussing lexer/parser/AST behavior.
+**Source pipeline**:
+The shared source-processing pipeline that turns source text into an AST before execution. It owns parser policy and exposes purpose-specific parse entry points for full source, module source, dynamic Function parsing, and expression fragments.
+_Avoid_: Source frontend, CLI host when discussing lexer/parser/AST behavior.
 
-**CLI frontend**:
+**Parser policy**:
+The source-pipeline settings that determine how source text is parsed, including source type and the compatibility flag set.
+_Avoid_: Separate parser booleans when discussing the policy as a whole.
+
+**CLI host**:
 A command-line program that hosts the engine or runtime for a specific workflow.
-_Avoid_: Source frontend.
+_Avoid_: CLI frontend, source pipeline.
 
 **CLI option**:
 A named command-line control such as `--mode=bytecode`, `--output=json`, or `--print`. Use it as the umbrella term for named CLI controls, whether they take a value or not.
 _Avoid_: CLI flag when the option takes a value.
 
 **CLI flag**:
-A boolean CLI option that toggles behavior by its presence, such as `--print`, `--asi`, or `--unsafe-ffi`.
+A boolean CLI option that toggles behavior by its presence, such as `--print`, `--compat-asi`, or `--unsafe-ffi`.
 _Avoid_: CLI flag for value-taking controls.
 
 **Positional argument**:
@@ -77,7 +81,7 @@ The initial script or module file path that starts a single program run. It anch
 _Avoid_: Input file when only the initial program path matters.
 
 **Input file**:
-Any file processed by a CLI frontend, especially batch-capable tools such as the Test Runner, Benchmark Runner, Bundler, or multifile processing.
+Any file processed by a CLI host, especially batch-capable tools such as the Test Runner, Benchmark Runner, Bundler, or multifile processing.
 _Avoid_: Entry file when referring to a batch member or per-file result.
 
 **Config key**:
@@ -110,8 +114,12 @@ _Avoid_: Generic VM layer.
 The textual contents of GocciaScript code, independent of whether it came from a file, stdin, or an embedding host.
 _Avoid_: Source file when referring to in-memory contents.
 
+**Preprocessor**:
+A source-to-source transformation applied before the source pipeline lexes and parses source text. JSX is the current preprocessor.
+_Avoid_: JSX flag when referring to the general mechanism.
+
 **Source type**:
-The setting that chooses whether an entry file is evaluated as script source or module source.
+The setting that chooses whether an entry file is evaluated as script source or module source. It may be explicit or inferred from the entry file name.
 _Avoid_: Mode, module mode, script mode.
 
 **Script source**:
@@ -123,15 +131,15 @@ Source evaluated with module entry semantics, including module `this`, imports, 
 _Avoid_: Script source.
 
 **Script Loader**:
-The CLI frontend that executes source files, stdin, or `.gbc` artifacts.
+The CLI host that executes source files, stdin, or `.gbc` artifacts.
 _Avoid_: Script executor.
 
 **Bare Script Loader**:
-The CLI frontend that executes through the core engine without attaching the runtime surface.
+The CLI host that executes through the core engine without attaching the runtime surface.
 _Avoid_: Loader profile.
 
 **Bundler**:
-The CLI frontend that compiles source to `.gbc` artifacts without executing the program.
+The CLI host that compiles source to `.gbc` artifacts without executing the program.
 _Avoid_: Compiler when referring to the user-facing tool.
 
 ### Values And Bindings
@@ -187,8 +195,12 @@ A class or object shorthand function that receives its call-site receiver as `th
 _Avoid_: Arrow method.
 
 **Compatibility flag**:
-An explicit boolean CLI flag or config value that enables an excluded ECMAScript legacy behavior or stricter runtime check.
-_Avoid_: Feature flag when the option exists for compatibility or enforcement semantics.
+An explicit boolean CLI flag or config value, using canonical `compat-*` spelling, that enables an excluded ECMAScript compatibility behavior.
+_Avoid_: Feature flag when the option exists for compatibility semantics.
+
+**Compatibility flag set**:
+The aggregate source-pipeline setting that carries enabled compatibility flags together, such as `compat-asi`, `compat-var`, `compat-function`, or `compat-non-strict-mode`.
+_Avoid_: Separate compatibility booleans when a caller is passing the whole parser compatibility policy.
 
 ## Flagged Ambiguities
 
@@ -222,8 +234,8 @@ Use **user-defined function** for source-defined functions in general. Use **arr
 **Script Loader**:
 Use **Script Loader** for `GocciaScriptLoader`. Avoid **script executor** except when describing the generic act of executing source.
 
-**Frontend**:
-Use **source frontend** for lexer/parser/AST work. Use **CLI frontend** for command-line programs.
+**Frontend/backend terminology**:
+Avoid frontend/backend terminology in GocciaScript architecture. Use **source pipeline** for lexer/parser/AST work and **CLI host** for command-line programs.
 
 ## Example Dialogue
 

@@ -25,6 +25,16 @@ type
     Column: Integer;
   end;
 
+  TGocciaParserOptions = record
+    AutomaticSemicolonInsertion: Boolean;
+    VarDeclarationsEnabled: Boolean;
+    FunctionDeclarationsEnabled: Boolean;
+    TraditionalForLoopsEnabled: Boolean;
+    WhileLoopsEnabled: Boolean;
+    LooseEqualityEnabled: Boolean;
+    NonStrictModeEnabled: Boolean;
+  end;
+
   TGocciaPrivateNameReference = record
     Name: string;
     Line: Integer;
@@ -235,20 +245,8 @@ type
     function ParseExpressionUnchecked: TGocciaExpression;
     function Expression: TGocciaExpression;
     function GetWarning(const AIndex: Integer): TGocciaParserWarning; inline;
-    property AutomaticSemicolonInsertion: Boolean
-      read FAutomaticSemicolonInsertion write FAutomaticSemicolonInsertion;
-    property VarDeclarationsEnabled: Boolean
-      read FVarDeclarationsEnabled write FVarDeclarationsEnabled;
-    property FunctionDeclarationsEnabled: Boolean
-      read FFunctionDeclarationsEnabled write FFunctionDeclarationsEnabled;
-    property TraditionalForLoopsEnabled: Boolean
-      read FTraditionalForLoopsEnabled write FTraditionalForLoopsEnabled;
-    property WhileLoopsEnabled: Boolean
-      read FWhileLoopsEnabled write FWhileLoopsEnabled;
-    property LooseEqualityEnabled: Boolean
-      read FLooseEqualityEnabled write FLooseEqualityEnabled;
-    property NonStrictModeEnabled: Boolean
-      read FNonStrictModeEnabled write FNonStrictModeEnabled;
+    procedure ApplyOptions(const AOptions: TGocciaParserOptions);
+    function Options: TGocciaParserOptions;
     property WarningCount: Integer read FWarningCount;
   end;
 
@@ -328,6 +326,28 @@ begin
   FInAsyncFunction := 0;
   FFunctionDepth := 0;
   FPrivateClassContexts := TObjectList<TGocciaPrivateClassContext>.Create(True);
+end;
+
+procedure TGocciaParser.ApplyOptions(const AOptions: TGocciaParserOptions);
+begin
+  FAutomaticSemicolonInsertion := AOptions.AutomaticSemicolonInsertion;
+  FVarDeclarationsEnabled := AOptions.VarDeclarationsEnabled;
+  FFunctionDeclarationsEnabled := AOptions.FunctionDeclarationsEnabled;
+  FTraditionalForLoopsEnabled := AOptions.TraditionalForLoopsEnabled;
+  FWhileLoopsEnabled := AOptions.WhileLoopsEnabled;
+  FLooseEqualityEnabled := AOptions.LooseEqualityEnabled;
+  FNonStrictModeEnabled := AOptions.NonStrictModeEnabled;
+end;
+
+function TGocciaParser.Options: TGocciaParserOptions;
+begin
+  Result.AutomaticSemicolonInsertion := FAutomaticSemicolonInsertion;
+  Result.VarDeclarationsEnabled := FVarDeclarationsEnabled;
+  Result.FunctionDeclarationsEnabled := FFunctionDeclarationsEnabled;
+  Result.TraditionalForLoopsEnabled := FTraditionalForLoopsEnabled;
+  Result.WhileLoopsEnabled := FWhileLoopsEnabled;
+  Result.LooseEqualityEnabled := FLooseEqualityEnabled;
+  Result.NonStrictModeEnabled := FNonStrictModeEnabled;
 end;
 
 destructor TGocciaParser.Destroy;
@@ -1539,12 +1559,7 @@ end;
 // Note: Tokens are owned by the Lexer (FTokens with OwnsObjects=True) and freed
 // when the Lexer is destroyed — they must not be freed separately.
 function ParseInterpolationExpression(const AExprText, AFileName: string;
-  const AASI: Boolean = False; const AVarEnabled: Boolean = False;
-  const AFunctionEnabled: Boolean = False;
-  const ATraditionalForLoopsEnabled: Boolean = False;
-  const AWhileLoopsEnabled: Boolean = False;
-  const ALooseEqualityEnabled: Boolean = False;
-  const ANonStrictModeEnabled: Boolean = False): TGocciaExpression;
+  const AOptions: TGocciaParserOptions): TGocciaExpression;
 var
   Lexer: TGocciaLexer;
   Parser: TGocciaParser;
@@ -1563,13 +1578,7 @@ begin
     SourceLines.Text := AExprText;
     try
       Parser := TGocciaParser.Create(Tokens, AFileName, SourceLines);
-      Parser.AutomaticSemicolonInsertion := AASI;
-      Parser.VarDeclarationsEnabled := AVarEnabled;
-      Parser.FunctionDeclarationsEnabled := AFunctionEnabled;
-      Parser.TraditionalForLoopsEnabled := ATraditionalForLoopsEnabled;
-      Parser.WhileLoopsEnabled := AWhileLoopsEnabled;
-      Parser.LooseEqualityEnabled := ALooseEqualityEnabled;
-      Parser.NonStrictModeEnabled := ANonStrictModeEnabled;
+      Parser.ApplyOptions(AOptions);
       try
         ProgramNode := Parser.ParseUnchecked;
         try
@@ -1632,10 +1641,7 @@ begin
   Expressions := TObjectList<TGocciaExpression>.Create(True);
   for I := 0 to Length(ExprTexts) - 1 do
   begin
-    ParsedExpr := ParseInterpolationExpression(ExprTexts[I], FFileName,
-      FAutomaticSemicolonInsertion, FVarDeclarationsEnabled,
-      FFunctionDeclarationsEnabled, FTraditionalForLoopsEnabled,
-      FWhileLoopsEnabled, FLooseEqualityEnabled, FNonStrictModeEnabled);
+    ParsedExpr := ParseInterpolationExpression(ExprTexts[I], FFileName, Options);
     if Assigned(ParsedExpr) then
       Expressions.Add(ParsedExpr);
   end;
@@ -1695,10 +1701,7 @@ begin
       AToken.Line, AToken.Column));
 
     // Parse and add the interpolation expression
-    ParsedExpr := ParseInterpolationExpression(ExprTexts[I], FFileName,
-      FAutomaticSemicolonInsertion, FVarDeclarationsEnabled,
-      FFunctionDeclarationsEnabled, FTraditionalForLoopsEnabled,
-      FWhileLoopsEnabled, FLooseEqualityEnabled, FNonStrictModeEnabled);
+    ParsedExpr := ParseInterpolationExpression(ExprTexts[I], FFileName, Options);
     if Assigned(ParsedExpr) then
       Parts.Add(ParsedExpr);
   end;

@@ -47,7 +47,9 @@ These helpers create, execute, and clean up in a single call. The `TGocciaEngine
 | `TGocciaRuntime.RunScriptFromStringList(Source, FileName)` | Execute from a `TStringList` through the runtime layer |
 All methods return `TGocciaScriptResult` — a record containing the result value, per-phase timing (in microseconds), and the filename.
 
-`SourceType` is an engine-level language option, not a runtime option. Set `Engine.SourceType` (or use the CLI `--source-type=script|module`) to choose script source or module source for the entry file. File loading is separate: `TGocciaEngine` one-shot helpers accept source text or caller-provided `TStringList` instances only, while `TGocciaRuntime.RunScriptFromFile` is the runtime convenience API for loading an entry file.
+`SourceType` is an engine-level language option, not a runtime option. Set `Engine.SourceType` (or use the CLI `--source-type=script|module`) to choose script source or module source for the entry file. File names ending in `.mjs` infer module source unless an explicit source type is provided. File loading is separate: `TGocciaEngine` one-shot helpers accept source text or caller-provided `TStringList` instances only, while `TGocciaRuntime.RunScriptFromFile` is the runtime convenience API for loading an entry file.
+
+`TGocciaEngine.Execute` remains the public "run the whole source pipeline and execute" API for embedders. Hosts that need parse artifacts without executing can call `TGocciaSourcePipeline.Parse` directly; its result object owns the AST and source map until the caller frees the result or transfers ownership with `TakeProgramNode` / `TakeSourceMap`. Hosts should use the source-pipeline entry points for module source, dynamic `Function` validation, and expression fragments rather than constructing `TGocciaParser` directly; this keeps parser policy in one place.
 
 ### Instance Usage (Long-Lived Engine)
 
@@ -98,13 +100,13 @@ Callers must pass an explicit executor — `TGocciaInterpreterExecutor` (in `Goc
 
 ### Automatic Semicolon Insertion
 
-ASI is disabled by default. To enable ECMAScript-compliant automatic semicolon insertion (ES2026 §12.10), set the `ASIEnabled` property after creating the engine:
+ASI is disabled by default. To enable ECMAScript-compliant automatic semicolon insertion (ES2026 §12.10), include `cfASI` in the engine compatibility set after creating the engine:
 
 ```pascal
 Executor := TGocciaInterpreterExecutor.Create;
 try
   Engine := TGocciaEngine.Create('app.js', Source, Executor);
-  Engine.ASIEnabled := True;  // Semicolons are now optional per ES2026 rules
+  Engine.Compatibility := [cfASI];  // Semicolons are now optional per ES2026 rules
   Engine.Execute;
 finally
   Engine.Free;
@@ -204,7 +206,7 @@ Scripts can then import using the alias:
 import { formatDate } from "@/utils/dates";
 ```
 
-`TGocciaModuleResolver` also exposes `LoadImportMap(path)` and `DiscoverProjectConfig(startDirectory)` helpers for browser-style import map JSON and `goccia.json` project configuration files. The shared CLI frontends (`GocciaScriptLoader`, `GocciaTestRunner`, and `GocciaBenchmarkRunner`) all use `Goccia.Modules.Configuration.ConfigureModuleResolver(...)` on top of this resolver surface.
+`TGocciaModuleResolver` also exposes `LoadImportMap(path)` and `DiscoverProjectConfig(startDirectory)` helpers for browser-style import map JSON and `goccia.json` project configuration files. The shared CLI hosts (`GocciaScriptLoader`, `GocciaTestRunner`, and `GocciaBenchmarkRunner`) all use `Goccia.Modules.Configuration.ConfigureModuleResolver(...)` on top of this resolver surface.
 
 **Config file discovery is automatic for CLI apps** — `TGocciaCLIApplication` discovers `goccia.toml` / `goccia.json5` / `goccia.json` (priority order: TOML > JSON5 > JSON) from the entry file's directory upward and applies config values before execution. When embedding the engine directly, this does not happen automatically. To replicate it, use the general-purpose `CLI.ConfigFile` unit (`DiscoverConfigFile`, `ApplyConfigFile`). Note that `ApplyConfigFile` only handles `.json` by default — to support `.json5` and `.toml`, register their parsers first via `RegisterConfigParser` (see `Goccia.CLI.Application.pas` for the pattern). For import-map resolution only, use `TGocciaModuleResolver.DiscoverProjectConfig` and `LoadImportMap`. See [Configuration File](build-system.md#configuration-file-gocciajson) for the full reference.
 
@@ -439,7 +441,7 @@ ConsoleExtension.BuiltinConsole.LogCallback := MyHandler.OnLog;
 ConsoleExtension.BuiltinConsole.Enabled := False;  // no stdout, but LogCallback still fires
 ```
 
-The CLI frontends based on `TGocciaCLIApplication` (ScriptLoader, TestRunner, BenchmarkRunner, and REPL) apply a runtime profile and use `LogCallback` internally for `--log=<file>`, which captures console output to a log file in `[method] line` format. The TestRunner silences workers via `Enabled := False` (not by replacing JS methods), so `LogCallback` fires on every console call even in parallel mode. File writes are serialized with a critical section so `--log` is thread-safe even with `--jobs=N`.
+The CLI hosts based on `TGocciaCLIApplication` (ScriptLoader, TestRunner, BenchmarkRunner, and REPL) apply a runtime profile and use `LogCallback` internally for `--log=<file>`, which captures console output to a log file in `[method] line` format. The TestRunner silences workers via `Enabled := False` (not by replacing JS methods), so `LogCallback` fires on every console call even in parallel mode. File writes are serialized with a critical section so `--log` is thread-safe even with `--jobs=N`.
 
 ## Built-in Registration
 
@@ -505,29 +507,28 @@ Runtime globals can be reduced by installing only a concrete extension, for exam
 |--------|------|---------|---------|
 | `Preprocessors` | `TGocciaPreprocessors` | `[ppJSX]` | Source transformations before parsing |
 | `Compatibility` | `TGocciaCompatibilityFlags` | `[]` | Parser behavior toggles |
-| `SourceType` | `TGocciaSourceType` | `stScript` | Load entry as script source (default) or module source |
+| `SourceType` | `TGocciaSourceType` | `stScript` | Load entry as script source (default) or module source; `.mjs` file names infer `stModule` |
 | `StrictTypes` | `Boolean` | `False` | Runtime enforcement of type annotations (works in both interpreter and bytecode); setter propagates to the active executor and interpreter scope |
-| `NonStrictModeEnabled` | `Boolean` | `False` | Enables script source compatibility semantics for `arguments`, `with`, silent assignment failures, legacy `delete` return values, and regular-function nullish `this`; module source remains strict |
-| `TraditionalForLoopsEnabled` | `Boolean` | `False` | Enables traditional `for(init; test; update)` compatibility semantics |
-| `WhileLoopsEnabled` | `Boolean` | `False` | Enables `while` and `do...while` compatibility semantics |
 
 ```pascal
 Executor := TGocciaInterpreterExecutor.Create;
 try
   Engine := TGocciaEngine.Create('app.js', Source, Executor);
   Engine.Preprocessors := [];              // Disable JSX
-  Engine.ASIEnabled := True;               // Enable ASI (convenience for cfASI)
+  Engine.Compatibility := [
+    cfASI,
+    cfNonStrictMode,
+    cfTraditionalFor,
+    cfWhileLoops
+  ];                                       // Enable selected compatibility semantics
   Engine.SourceType := stModule;           // Run entry as module source (top-level this is undefined; import.meta resolves)
-  Engine.NonStrictModeEnabled := True;     // Enable selected non-strict compatibility semantics
-  Engine.TraditionalForLoopsEnabled := True; // Enable traditional for-loop compatibility
-  Engine.WhileLoopsEnabled := True;        // Enable while/do-while compatibility
   Engine.StrictTypes := True;              // Enforce type annotations in both execution modes
 finally
   Executor.Free;
 end;
 ```
 
-When `SourceType` is `stModule`, `Execute` runs the entry program in a fresh module scope (`skModule`) with `this = undefined`, mirroring the semantics imported modules already receive from the module loader (ES2026 §16.2.1.6.4). The CLI surface for this is `--source-type=script|module` and the matching `goccia.json` key `"source-type"`.
+When `SourceType` is `stModule`, `Execute` runs the entry program in a fresh module scope (`skModule`) with `this = undefined`, mirroring the semantics imported modules already receive from the module loader (ES2026 §16.2.1.6.4). The CLI surface for this is `--source-type=script|module` and the matching `goccia.json` key `"source-type"`. Without an explicit source type, `.mjs` entry files are loaded as module source.
 
 **Top-level binding persistence differs between source types.** With `SourceType = stScript`, the engine reuses `Interpreter.GlobalScope` across every call to `Execute`, which is what makes the [long-lived engine pattern](#instance-usage-long-lived-engine) above work: `const x = 42` defined in one `Execute` is visible to the next. With `SourceType = stModule`, each `Execute` allocates a brand-new `skModule` child scope, so top-level `let`/`const`/`class` declarations live and die with that single call. If callers need cross-`Execute` persistence, keep `SourceType` at `stScript` (the default) or expose the desired symbols through the global scope (e.g. `Engine.RegisterGlobal(...)` or `Engine.Interpreter.GlobalScope.DefineLexicalBinding(...)`).
 
@@ -926,7 +927,7 @@ The repository includes five embedding examples:
 | `GocciaREPL` | `source/app/GocciaREPL.dpr` | Interactive read-eval-print loop (long-lived engine) |
 | `GocciaTestRunner` | `source/app/GocciaTestRunner.dpr` | Runs test suites with the test-runner runtime profile |
 | `GocciaBenchmarkRunner` | `source/app/GocciaBenchmarkRunner.dpr` | Runs benchmarks with the benchmark-runner runtime profile from files or stdin |
-| `GocciaBundler` | `source/app/GocciaBundler.dpr` | Bundler CLI frontend — compiles source files to `.gbc` without execution |
+| `GocciaBundler` | `source/app/GocciaBundler.dpr` | Bundler CLI host — compiles source files to `.gbc` without execution |
 
 These serve as reference implementations for the patterns described above.
 

@@ -99,9 +99,11 @@ printf "print('hello from bare');" | ./build/GocciaScriptLoaderBare
 ./build/GocciaScriptLoaderBare example.js
 ```
 
-`GocciaScriptLoaderBare` accepts an explicit entry file, `-`, or no positional argument for stdin. It reads source text in the CLI frontend and passes it to `TGocciaEngine`; it exposes a CLI-local `print(...args)` helper for stdout, but does not attach `TGocciaRuntime`. Like `GocciaScriptLoader`, it is silent by default — pass `--print` to emit the script's last value (the explicit `print(...)` helper is unaffected by `--print`).
+`GocciaScriptLoaderBare` accepts an explicit entry file, `-`, or no positional argument for stdin. It reads source text in the CLI host and passes it to `TGocciaEngine`; it exposes a CLI-local `print(...args)` helper for stdout, but does not attach `TGocciaRuntime`. Like `GocciaScriptLoader`, it is silent by default — pass `--print` to emit the script's last value (the explicit `print(...)` helper is unaffected by `--print`).
 
 Script files may start with a Unix shebang line like `#!/usr/bin/env goccia`; GocciaScript ignores that first line during lexing.
+
+Files ending in `.mjs` are loaded as module source by default, matching JavaScript runtime convention. Use `--source-type=script` to override that inference, or `--source-type=module` / `"source-type": "module"` to force module source for other extensions.
 
 ### Run via Bytecode
 
@@ -239,11 +241,11 @@ For a full guided walkthrough, see the [Tutorial](docs/tutorial.md). For the com
 
 ## Architecture
 
-GocciaScript supports two execution modes that share the same source frontend (lexer, parser, AST):
+GocciaScript supports two execution modes that share the same source pipeline (preprocessors, lexer, parser, AST):
 
 ```mermaid
 flowchart LR
-    Source["Source Code"] --> Lexer --> Parser --> AST
+    Source["Source Code"] --> Preprocessors["Preprocessors"] --> Lexer --> Parser --> AST
     AST --> Interpreter["Tree-Walk Interpreter"] --> Result1["Result"]
     AST --> Compiler["Bytecode Compiler"] --> VM["Goccia VM"] --> Result2["Result"]
 ```

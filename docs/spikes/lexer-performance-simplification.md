@@ -146,6 +146,6 @@ Final verification after the lexer and docs work:
 ./build.pas clean tests
 ./build/Goccia.Lexer.Test
 ./build.pas clean testrunner
-./build/GocciaTestRunner tests --asi --unsafe-ffi --no-progress
+./build/GocciaTestRunner tests --compat-asi --unsafe-ffi --no-progress
 git diff --check
 ```

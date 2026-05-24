@@ -5,11 +5,9 @@ program GocciaBundler;
 uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
   Classes,
-  Generics.Collections,
   SysUtils,
 
   TimingUtils,
-  TextSemantics,
 
   Goccia.Application,
   Goccia.AST.Node,
@@ -17,33 +15,29 @@ uses
   Goccia.Bytecode.Module,
   CLI.ConfigFile,
   Goccia.CLI.Application,
+  Goccia.CLI.Options,
   CLI.Options,
   Goccia.Compiler,
   Goccia.Engine,
   Goccia.FileExtensions,
   Goccia.GarbageCollector,
-  Goccia.JSX.Transformer,
-  Goccia.Lexer,
-  Goccia.Parser,
   Goccia.ScriptLoader.Input,
+  Goccia.SourcePipeline,
   Goccia.SourceMap,
   Goccia.TextFiles,
   Goccia.Threading,
   Goccia.Threading.Init,
-  Goccia.Token,
 
   FileUtils in 'units/FileUtils.pas';
 
 type
   TBundlerApp = class(TGocciaCLIApplication)
   private
-    FOutputPath: TGocciaStringOption;
-    FSourceMap: TGocciaStringOption;
+    FOutputPath: TStringOption;
+    FSourceMap: TStringOption;
 
     function ParseSource(const ASource: TStringList; const AFileName: string;
-      const AASIEnabled, AVarEnabled, AFunctionEnabled,
-        ATraditionalForLoopsEnabled, AWhileLoopsEnabled, ALooseEqualityEnabled,
-        ANonStrictModeEnabled: Boolean;
+      const AOptions: TGocciaSourcePipelineOptions;
       out ALexTimeNanoseconds, AParseTimeNanoseconds: Int64;
       out ASourceMap: TGocciaSourceMap): TGocciaProgram;
     function CompileSource(const ASource: TStringList;
@@ -93,78 +87,36 @@ end;
 { TBundlerApp - Core logic }
 
 function TBundlerApp.ParseSource(const ASource: TStringList;
-  const AFileName: string; const AASIEnabled, AVarEnabled,
-  AFunctionEnabled, ATraditionalForLoopsEnabled,
-  AWhileLoopsEnabled, ALooseEqualityEnabled, ANonStrictModeEnabled: Boolean;
+  const AFileName: string; const AOptions: TGocciaSourcePipelineOptions;
   out ALexTimeNanoseconds, AParseTimeNanoseconds: Int64;
   out ASourceMap: TGocciaSourceMap): TGocciaProgram;
 var
-  SourceText: string;
-  JSXResult: TGocciaJSXTransformResult;
-  Lexer: TGocciaLexer;
-  Tokens: TObjectList<TGocciaToken>;
-  Parser: TGocciaParser;
-  Warning: TGocciaParserWarning;
-  StartTime, LexEnd, ParseEnd: Int64;
-  OrigLine, OrigCol, I: Integer;
+  PipelineResult: TGocciaSourcePipelineResult;
+  Warning: TGocciaSourcePipelineWarning;
+  I: Integer;
 begin
-  StartTime := GetNanoseconds;
-  SourceText := StringListToLFText(ASource);
-
   ASourceMap := nil;
-  if ppJSX in TGocciaEngine.DefaultPreprocessors then
-  begin
-    JSXResult := TGocciaJSXTransformer.Transform(SourceText);
-    SourceText := JSXResult.Source;
-    ASourceMap := JSXResult.SourceMap;
-    if Assigned(ASourceMap) then
-      ASourceMap.SetSourceContent(0, StringListToLFText(ASource));
-  end;
 
+  PipelineResult := TGocciaSourcePipeline.Parse(ASource, AFileName, AOptions);
   try
-    Lexer := TGocciaLexer.Create(SourceText, AFileName);
-    try
-      Tokens := Lexer.ScanTokens;
-      LexEnd := GetNanoseconds;
-      ALexTimeNanoseconds := LexEnd - StartTime;
+    ALexTimeNanoseconds := PipelineResult.LexTimeNanoseconds;
+    AParseTimeNanoseconds := PipelineResult.ParseTimeNanoseconds;
 
-      Parser := TGocciaParser.Create(Tokens, AFileName, Lexer.SourceLines);
-      Parser.AutomaticSemicolonInsertion := AASIEnabled;
-      Parser.VarDeclarationsEnabled := AVarEnabled;
-      Parser.FunctionDeclarationsEnabled := AFunctionEnabled;
-      Parser.TraditionalForLoopsEnabled := ATraditionalForLoopsEnabled;
-      Parser.WhileLoopsEnabled := AWhileLoopsEnabled;
-      Parser.LooseEqualityEnabled := ALooseEqualityEnabled;
-      Parser.NonStrictModeEnabled := ANonStrictModeEnabled;
-      try
-        Result := Parser.Parse;
-        ParseEnd := GetNanoseconds;
-        AParseTimeNanoseconds := ParseEnd - LexEnd;
-
-        if not GIsWorkerThread then
-          for I := 0 to Parser.WarningCount - 1 do
-          begin
-            Warning := Parser.GetWarning(I);
-            WriteLn(SysUtils.Format('Warning: %s', [Warning.Message]));
-            if Warning.Suggestion <> '' then
-              WriteLn(SysUtils.Format('  Suggestion: %s', [Warning.Suggestion]));
-            if Assigned(ASourceMap) and
-               ASourceMap.Translate(Warning.Line, Warning.Column, OrigLine, OrigCol) then
-              WriteLn(SysUtils.Format('  --> %s:%d:%d', [AFileName, OrigLine, OrigCol]))
-            else
-              WriteLn(SysUtils.Format('  --> %s:%d:%d',
-                [AFileName, Warning.Line, Warning.Column]));
-          end;
-      finally
-        Parser.Free;
+    if not GIsWorkerThread then
+      for I := 0 to PipelineResult.WarningCount - 1 do
+      begin
+        Warning := PipelineResult.Warnings[I];
+        WriteLn(SysUtils.Format('Warning: %s', [Warning.Message]));
+        if Warning.Suggestion <> '' then
+          WriteLn(SysUtils.Format('  Suggestion: %s', [Warning.Suggestion]));
+        WriteLn(SysUtils.Format('  --> %s:%d:%d',
+          [AFileName, Warning.Line, Warning.Column]));
       end;
-    finally
-      Lexer.Free;
-    end;
-  except
-    ASourceMap.Free;
-    ASourceMap := nil;
-    raise;
+
+    Result := PipelineResult.TakeProgramNode;
+    ASourceMap := PipelineResult.TakeSourceMap;
+  finally
+    PipelineResult.Free;
   end;
 end;
 
@@ -204,43 +156,32 @@ var
   LexTimeNanoseconds, ParseTimeNanoseconds: Int64;
   SourceMap: TGocciaSourceMap;
   FileConfig: TConfigEntryArray;
-  EffectiveASI, EffectiveVar, EffectiveFunction, EffectiveStrictTypes,
-    EffectiveTraditionalFor, EffectiveWhileLoops, EffectiveLooseEquality,
-    EffectiveNonStrictMode: Boolean;
+  EffectiveStrictTypes: Boolean;
   EffectiveSourceType: TGocciaSourceType;
+  EffectiveCompatibility: TGocciaCompatibilityFlags;
+  PipelineOptions: TGocciaSourcePipelineOptions;
 begin
-  { Resolve ASI and compatibility flags: CLI flag > per-file config >
-    root config > default (false). }
+  { Resolve source pipeline flags: CLI flag > per-file config >
+    root config > default. }
   FileConfig := DiscoverFileConfig(AFileName);
-  EffectiveASI := ResolveFlagOption(EngineOptions.ASI, FileConfig);
-  EffectiveVar := ResolveFlagOption(
-    EngineOptions.CompatVar, FileConfig);
-  EffectiveFunction := ResolveFlagOption(
-    EngineOptions.CompatFunction, FileConfig);
-  EffectiveTraditionalFor := ResolveFlagOption(
-    EngineOptions.CompatTraditionalFor, FileConfig);
-  EffectiveWhileLoops := ResolveFlagOption(
-    EngineOptions.CompatWhileLoops, FileConfig);
-  EffectiveLooseEquality := ResolveFlagOption(
-    EngineOptions.CompatLooseEquality, FileConfig);
-  EffectiveNonStrictMode := ResolveFlagOption(
-    EngineOptions.CompatNonStrictMode, FileConfig);
+  EffectiveCompatibility := ResolveCompatibilityFlags(
+    EngineOptions, FileConfig);
   EffectiveSourceType := ResolveSourceTypeOption(EngineOptions.SourceType,
-    FileConfig);
+    FileConfig, AFileName);
   EffectiveStrictTypes := ResolveFlagOption(
     EngineOptions.StrictTypes, FileConfig);
 
   CompiledModule := nil;
-  ProgramNode := ParseSource(ASource, AFileName, EffectiveASI, EffectiveVar,
-    EffectiveFunction, EffectiveTraditionalFor, EffectiveWhileLoops,
-    EffectiveLooseEquality, EffectiveNonStrictMode or
-    (EffectiveSourceType = stModule),
+  PipelineOptions.Preprocessors := TGocciaEngine.DefaultPreprocessors;
+  PipelineOptions.Compatibility := EffectiveCompatibility;
+  PipelineOptions.SourceType := EffectiveSourceType;
+  ProgramNode := ParseSource(ASource, AFileName, PipelineOptions,
     LexTimeNanoseconds, ParseTimeNanoseconds, SourceMap);
   try
     Compiler := TGocciaCompiler.Create(AFileName);
     try
       Compiler.StrictTypes := EffectiveStrictTypes;
-      Compiler.NonStrictMode := EffectiveNonStrictMode and
+      Compiler.NonStrictMode := (cfNonStrictMode in EffectiveCompatibility) and
         (EffectiveSourceType = stScript);
       CompiledModule := Compiler.Compile(ProgramNode);
       WriteSourceMapIfEnabled(SourceMap, AFileName);
@@ -341,7 +282,7 @@ var
   I: Integer;
 begin
   if not FOutputPath.Present then
-    raise TGocciaParseError.Create(
+    raise TParseError.Create(
       '--output=<path> is required when compiling from stdin.');
 
   Source := ReadSourceFromText(Input);
@@ -349,7 +290,7 @@ begin
   if MultifileEnabled then
   begin
     if not DirectoryExists(FOutputPath.Value) then
-      raise TGocciaParseError.Create(
+      raise TParseError.Create(
         '--output must be a directory when --multifile is set with stdin.');
 
     // Ownership of Source transfers to SplitStdinMultifile.
@@ -377,7 +318,7 @@ begin
   end;
 
   if DirectoryExists(FOutputPath.Value) then
-    raise TGocciaParseError.Create(
+    raise TParseError.Create(
       '--output must be a file when compiling from stdin.');
 
   try
@@ -502,12 +443,12 @@ begin
      not DirectoryExists(FOutputPath.Value) and
      ((APaths.Count > 1) or
       ((APaths.Count = 1) and DirectoryExists(APaths[0]))) then
-    raise TGocciaParseError.Create(
+    raise TParseError.Create(
       '--output must be a directory when compiling multiple files.');
 
   if MultifileEnabled and FOutputPath.Present and
      (FOutputPath.Value <> '') and not DirectoryExists(FOutputPath.Value) then
-    raise TGocciaParseError.Create(
+    raise TParseError.Create(
       '--output=<file> cannot be combined with --multifile (an input '
       + 'may expand to multiple sections); pass a directory or omit '
       + '--output.');
@@ -515,13 +456,13 @@ begin
   if (FSourceMap.ValueOr('') <> '') and
      ((APaths.Count > 1) or
       ((APaths.Count = 1) and DirectoryExists(APaths[0]))) then
-    raise TGocciaParseError.Create(
+    raise TParseError.Create(
       '--source-map=<file> supports a single input file or stdin.');
 
   // Use Present rather than the value to catch the bare --source-map
   // form too — see ScriptLoader for the rationale.
   if FSourceMap.Present and MultifileEnabled then
-    raise TGocciaParseError.Create(
+    raise TParseError.Create(
       '--source-map cannot be combined with --multifile (an input '
       + 'may expand to multiple sections).');
 

@@ -11,8 +11,8 @@ uses
 
 { Parses command-line arguments against the given option definitions.
   Returns a TStringList of positional (non-option) arguments; the caller
-  owns the returned list.  Raises TGocciaParseError for unknown options. }
-function ParseCommandLine(const AOptions: TGocciaOptionArray): TStringList;
+  owns the returned list.  Raises TParseError for unknown options. }
+function ParseCommandLine(const AOptions: TOptionArray): TStringList;
 
 implementation
 
@@ -43,8 +43,8 @@ begin
   end;
 end;
 
-function FindOption(const AOptions: TGocciaOptionArray;
-  const AName: string): TGocciaOptionBase;
+function FindOption(const AOptions: TOptionArray;
+  const AName: string): TOptionBase;
 var
   I: Integer;
 begin
@@ -54,8 +54,8 @@ begin
   Result := nil;
 end;
 
-function FindOptionShort(const AOptions: TGocciaOptionArray;
-  const AShortName: Char): TGocciaOptionBase;
+function FindOptionShort(const AOptions: TOptionArray;
+  const AShortName: Char): TOptionBase;
 var
   I: Integer;
 begin
@@ -65,11 +65,11 @@ begin
   Result := nil;
 end;
 
-function ParseCommandLine(const AOptions: TGocciaOptionArray): TStringList;
+function ParseCommandLine(const AOptions: TOptionArray): TStringList;
 var
   I, Count: Integer;
   Arg, Name, Value: string;
-  Option: TGocciaOptionBase;
+  Option: TOptionBase;
   HasEquals: Boolean;
 begin
   Result := TStringList.Create;
@@ -87,15 +87,15 @@ begin
         SplitFlag(Arg, Name, Value);
         Option := FindOption(AOptions, Name);
         if Option = nil then
-          raise TGocciaParseError.CreateFmt('Unknown option: --%s', [Name]);
+          raise TParseError.CreateFmt('Unknown option: --%s', [Name]);
 
         if (Value = '') and (not HasEquals) and
-           not (Option is TGocciaFlagOption) and
-           (Option is TGocciaRepeatableOption) then
+           not (Option is TFlagOption) and
+           (Option is TRepeatableOption) then
         begin
           if (I >= Count) or
              (Copy(ParamStr(I + 1), 1, 1) = SHORT_FLAG_CHAR) then
-            raise TGocciaParseError.CreateFmt(
+            raise TParseError.CreateFmt(
               '--%s requires a value', [Name]);
           Inc(I);
           Value := ParamStr(I);
@@ -109,7 +109,7 @@ begin
       begin
         Option := FindOptionShort(AOptions, Arg[2]);
         if Option = nil then
-          raise TGocciaParseError.CreateFmt('Unknown option: %s', [Arg]);
+          raise TParseError.CreateFmt('Unknown option: %s', [Arg]);
         Option.Apply('');
       end
       else
