@@ -1237,6 +1237,8 @@ var
   StartTime, ExecStart, ExecEnd: Int64;
   ModuleScope: TGocciaScope;
   ModuleContext: TGocciaEvaluationContext;
+  ModuleResult: TGocciaValue;
+  GC: TGarbageCollector;
 begin
   FillChar(FLastTiming, SizeOf(FLastTiming), 0);
   FLastTiming.FileName := FSourcePath;
@@ -1281,10 +1283,25 @@ begin
         ModuleContext.CurrentFilePath := FSourcePath;
         ModuleContext.NonStrictMode := False;
         ExecStart := GetNanoseconds;
-        FLastTiming.Result :=
-          FExecutor.EvaluateModuleBody(PipelineResult.ProgramNode,
-            ModuleContext);
-        WaitForRuntimeIdle;
+        GC := TGarbageCollector.Instance;
+        if Assigned(GC) then
+          GC.AddTempRoot(ModuleScope);
+        try
+          ModuleResult := FExecutor.EvaluateModuleBody(
+            PipelineResult.ProgramNode, ModuleContext);
+          if Assigned(ModuleResult) and Assigned(GC) then
+            GC.AddTempRoot(ModuleResult);
+          try
+            WaitForRuntimeIdle;
+            FLastTiming.Result := ModuleResult;
+          finally
+            if Assigned(ModuleResult) and Assigned(GC) then
+              GC.RemoveTempRoot(ModuleResult);
+          end;
+        finally
+          if Assigned(GC) then
+            GC.RemoveTempRoot(ModuleScope);
+        end;
         ExecEnd := GetNanoseconds;
         FLastTiming.CompileTimeNanoseconds := 0;
         FLastTiming.ExecuteTimeNanoseconds := ExecEnd - ExecStart;

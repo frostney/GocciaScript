@@ -138,6 +138,23 @@ begin
     Result.Assign(ASource);
 end;
 
+function ApplyPreprocessors(const ASource: string;
+  const AOptions: TGocciaSourcePipelineOptions;
+  out ASourceMap: TGocciaSourceMap): string;
+var
+  JSXResult: TGocciaJSXTransformResult;
+begin
+  Result := ASource;
+  ASourceMap := nil;
+
+  if ppJSX in AOptions.Preprocessors then
+  begin
+    JSXResult := TGocciaJSXTransformer.Transform(Result);
+    Result := JSXResult.Source;
+    ASourceMap := JSXResult.SourceMap;
+  end;
+end;
+
 function ParserOptionsForSourcePipeline(
   const AOptions: TGocciaSourcePipelineOptions): TGocciaParserOptions;
 begin
@@ -147,8 +164,8 @@ begin
   Result.TraditionalForLoopsEnabled := cfTraditionalFor in AOptions.Compatibility;
   Result.WhileLoopsEnabled := cfWhileLoops in AOptions.Compatibility;
   Result.LooseEqualityEnabled := cfLooseEquality in AOptions.Compatibility;
-  Result.NonStrictModeEnabled := (cfNonStrictMode in AOptions.Compatibility) or
-    (AOptions.SourceType = stModule);
+  Result.NonStrictModeEnabled := (cfNonStrictMode in AOptions.Compatibility) and
+    (AOptions.SourceType <> stModule);
 end;
 
 procedure ConfigureParser(const AParser: TGocciaParser;
@@ -258,11 +275,11 @@ class function TGocciaSourcePipeline.Parse(const ASource: TStringList;
   const AOptions: TGocciaSourcePipelineOptions): TGocciaSourcePipelineResult;
 var
   SourceText, OriginalSourceText: string;
-  JSXResult: TGocciaJSXTransformResult;
   Lexer: TGocciaLexer;
   Tokens: TObjectList<TGocciaToken>;
   Parser: TGocciaParser;
   ParserWarning: TGocciaParserWarning;
+  PreprocessorSourceMap: TGocciaSourceMap;
   StartTime, LexEnd, ParseEnd: Int64;
   OrigLine, OrigCol, I: Integer;
 begin
@@ -275,20 +292,16 @@ begin
       SourceText := '';
     OriginalSourceText := SourceText;
 
-    if ppJSX in AOptions.Preprocessors then
+    SourceText := ApplyPreprocessors(SourceText, AOptions, PreprocessorSourceMap);
+    Result.FSourceMap := PreprocessorSourceMap;
+    if Assigned(Result.FSourceMap) then
     begin
-      JSXResult := TGocciaJSXTransformer.Transform(SourceText);
-      SourceText := JSXResult.Source;
-      Result.FSourceMap := JSXResult.SourceMap;
-      if Assigned(Result.FSourceMap) then
-      begin
-        Result.FSourceMap.SetSourceContent(0, OriginalSourceText);
-        if not IsJSXNativeExtension(ExtractFileExt(AFileName)) then
-          Result.AddWarning(
-            'JSX syntax found in source with a non-JSX extension',
-            'Use a .jsx or .tsx extension for JSX source',
-            1, 1, 1, 1);
-      end;
+      Result.FSourceMap.SetSourceContent(0, OriginalSourceText);
+      if not IsJSXNativeExtension(ExtractFileExt(AFileName)) then
+        Result.AddWarning(
+          'JSX syntax found in source with a non-JSX extension',
+          'Use a .jsx or .tsx extension for JSX source',
+          1, 1, 1, 1);
     end;
 
     try
@@ -309,6 +322,14 @@ begin
           for I := 0 to Parser.WarningCount - 1 do
           begin
             ParserWarning := Parser.GetWarning(I);
+            if (AOptions.SourceType = stModule) and
+               (ParserWarning.Message =
+                 '''with'' statements require --compat-non-strict-mode') then
+              raise TGocciaSyntaxError.Create(
+                '''with'' statements are not allowed in strict mode',
+                ParserWarning.Line, ParserWarning.Column, AFileName,
+                Lexer.SourceLines);
+
             OrigLine := ParserWarning.Line;
             OrigCol := ParserWarning.Column;
             if Assigned(Result.FSourceMap) then
@@ -397,6 +418,11 @@ begin
           Result := Parser.ParseExpressionWithPrivateNames(ADeclaredPrivateNames)
         else
           Result := Parser.Expression;
+        if not Parser.AtEnd then
+        begin
+          Result.Free;
+          Result := nil;
+        end;
       finally
         Parser.Free;
       end;
@@ -466,9 +492,13 @@ var
   Lexer: TGocciaLexer;
   Parser: TGocciaParser;
   Source: string;
+  SourceMap: TGocciaSourceMap;
 begin
   Source := '({ anonymous(' + AParametersSource + ') {' + #10 + ABodySource +
     #10 + '} }).anonymous';
+
+  Source := ApplyPreprocessors(Source, AOptions, SourceMap);
+  SourceMap.Free;
 
   Lexer := TGocciaLexer.Create(Source, AFileName);
   try

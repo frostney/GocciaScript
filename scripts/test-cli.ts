@@ -401,6 +401,10 @@ console.log("--mode=bytecode...");
   const bcOut = await $`echo 'const x = 2 + 2; x;' | ${LOADER} --print - --mode=bytecode`.text();
   if (!containsLine(bcOut, "4")) throw new Error(`Bytecode expected 4 on its own line, got: ${bcOut}`);
   if (!bcOut.includes("(bytecode)")) throw new Error(`Expected (bytecode) in output`);
+
+  const bcSplitOut = await $`echo 'const x = 2 + 2; x;' | ${LOADER} --print - --mode bytecode`.text();
+  if (!containsLine(bcSplitOut, "4")) throw new Error(`Bytecode split option expected 4 on its own line, got: ${bcSplitOut}`);
+  if (!bcSplitOut.includes("(bytecode)")) throw new Error(`Expected (bytecode) in split option output`);
 }
 
 // -- --source-type and .mjs module inference -----------------------------------

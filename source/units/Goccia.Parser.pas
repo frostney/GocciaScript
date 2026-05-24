@@ -244,6 +244,7 @@ type
     function ParseExpressionWithPrivateNames(const ADeclaredNames: TStrings): TGocciaExpression;
     function ParseExpressionUnchecked: TGocciaExpression;
     function Expression: TGocciaExpression;
+    function AtEnd: Boolean;
     function GetWarning(const AIndex: Integer): TGocciaParserWarning; inline;
     procedure ApplyOptions(const AOptions: TGocciaParserOptions);
     function Options: TGocciaParserOptions;
@@ -521,6 +522,11 @@ end;
 function TGocciaParser.IsAtEnd: Boolean;
 begin
   Result := Peek.TokenType = gttEOF;
+end;
+
+function TGocciaParser.AtEnd: Boolean;
+begin
+  Result := IsAtEnd;
 end;
 
 function TGocciaParser.Peek: TGocciaToken;

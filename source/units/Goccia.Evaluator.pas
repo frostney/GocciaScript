@@ -6156,6 +6156,7 @@ var
   Expression: TGocciaExpression;
   DeclaredPrivateNames: TStringList;
   PipelineOptions: TGocciaSourcePipelineOptions;
+  SourceName: string;
   I: Integer;
   IsSimpleIdentifier: Boolean;
 begin
@@ -6367,15 +6368,17 @@ begin
     PipelineOptions.Preprocessors := [];
     PipelineOptions.Compatibility := [];
     PipelineOptions.SourceType := stScript;
+    SourceName := Format('%s:%d:%d', [AContext.CurrentFilePath, ALine,
+      AColumn]);
     if Pos('#', Trimmed) > 0 then
     begin
       DeclaredPrivateNames := CollectDeclaredPrivateNames(AContext);
       Expression := TGocciaSourcePipeline.ParseExpression(AExpressionText,
-        'template-expression', PipelineOptions, DeclaredPrivateNames);
+        SourceName, PipelineOptions, DeclaredPrivateNames);
     end
     else
       Expression := TGocciaSourcePipeline.ParseExpression(AExpressionText,
-        'template-expression', PipelineOptions);
+        SourceName, PipelineOptions);
 
     if Expression = nil then
     begin
