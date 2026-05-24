@@ -24,6 +24,7 @@ type
     procedure TestStringOptionApply;
     procedure TestStringOptionValueOrWhenPresent;
     procedure TestStringOptionValueOrWhenAbsent;
+    procedure TestStringOptionMarkPresentClearsValue;
     procedure TestOptionalStringOptionDoesNotConsumeSeparateValue;
     procedure TestIntegerOptionApply;
     procedure TestIntegerOptionValueOrWhenPresent;
@@ -52,6 +53,7 @@ begin
   Test('StringOption.Apply stores the value', TestStringOptionApply);
   Test('StringOption.ValueOr returns value when present', TestStringOptionValueOrWhenPresent);
   Test('StringOption.ValueOr returns default when absent', TestStringOptionValueOrWhenAbsent);
+  Test('StringOption.MarkPresent clears existing value', TestStringOptionMarkPresentClearsValue);
   Test('OptionalStringOption does not consume a separate value', TestOptionalStringOptionDoesNotConsumeSeparateValue);
   Test('IntegerOption.Apply parses integer value', TestIntegerOptionApply);
   Test('IntegerOption.ValueOr returns value when present', TestIntegerOptionValueOrWhenPresent);
@@ -134,6 +136,22 @@ begin
   Opt := TStringOption.Create('output', 'Output path');
   try
     Expect<string>(Opt.ValueOr('fallback')).ToBe('fallback');
+  finally
+    Opt.Free;
+  end;
+end;
+
+procedure TCLIOptionsTests.TestStringOptionMarkPresentClearsValue;
+var
+  Opt: TStringOption;
+begin
+  Opt := TStringOption.Create('output', 'Output path');
+  try
+    Opt.Apply('configured.map');
+    Opt.MarkPresent;
+    Expect<Boolean>(Opt.Present).ToBe(True);
+    Expect<string>(Opt.Value).ToBe('');
+    Expect<string>(Opt.ValueOr('fallback')).ToBe('');
   finally
     Opt.Free;
   end;

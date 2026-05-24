@@ -34,7 +34,7 @@ type
       Used by the config layer to record that a key existed in the
       config file even when no concrete values were produced (e.g.
       an empty array). }
-    procedure MarkPresent;
+    procedure MarkPresent; virtual;
 
     { Mark this option as having been set by the command line.
       Called after ParseCommandLine so that per-file config can
@@ -64,6 +64,7 @@ type
   private
     FValue: string;
   public
+    procedure MarkPresent; override;
     procedure Apply(const AValue: string); override;
     function ConsumesSeparateValue: Boolean; override;
     function FormatForHelp: string; override;
@@ -233,6 +234,12 @@ begin
 end;
 
 { TStringOption }
+
+procedure TStringOption.MarkPresent;
+begin
+  FValue := '';
+  inherited MarkPresent;
+end;
 
 procedure TStringOption.Apply(const AValue: string);
 begin
