@@ -12,6 +12,7 @@ uses
   CLI.Options,
 
   Goccia.Application,
+  Goccia.CLI.Options,
   Goccia.Engine,
   Goccia.Executor,
   Goccia.Executor.Bytecode,
@@ -20,19 +21,19 @@ uses
 type
   TGocciaCLIApplication = class(TGocciaApplication)
   private
-    FHelp: TGocciaFlagOption;
-    FJobs: TGocciaIntegerOption;
-    FLog: TGocciaStringOption;
-    FMultifile: TGocciaFlagOption;
-    FConfig: TGocciaStringOption;
+    FHelp: TFlagOption;
+    FJobs: TIntegerOption;
+    FLog: TStringOption;
+    FMultifile: TFlagOption;
+    FConfig: TStringOption;
     FLogFileHandle: TextFile;
     FLogLock: TRTLCriticalSection;
     FLogFileOpen: Boolean;
     FEngineOptions: TGocciaEngineOptions;
     FCoverageOptions: TGocciaCoverageOptions;
     FProfilerOptions: TGocciaProfilerOptions;
-    FOwnedOptions: TGocciaOptionBaseList;
-    FAllOptions: TGocciaOptionArray;
+    FOwnedOptions: TOptionBaseList;
+    FAllOptions: TOptionArray;
     FSourceRegistry: TGocciaSourceRegistry;
     procedure BuildAllOptions;
     procedure InitializeSingletons;
@@ -49,11 +50,11 @@ type
     function AddEngineOptions: TGocciaEngineOptions;
     function AddCoverageOptions: TGocciaCoverageOptions;
     function AddProfilerOptions: TGocciaProfilerOptions;
-    function AddFlag(const AName, AHelp: string): TGocciaFlagOption;
-    function AddString(const AName, AHelp: string): TGocciaStringOption;
-    function AddInteger(const AName, AHelp: string): TGocciaIntegerOption;
-    function AddRepeatable(const AName, AHelp: string): TGocciaRepeatableOption;
-    function Add(const AOption: TGocciaOptionBase): TGocciaOptionBase;
+    function AddFlag(const AName, AHelp: string): TFlagOption;
+    function AddString(const AName, AHelp: string): TStringOption;
+    function AddInteger(const AName, AHelp: string): TIntegerOption;
+    function AddRepeatable(const AName, AHelp: string): TRepeatableOption;
+    function Add(const AOption: TOptionBase): TOptionBase;
     procedure ConfigureCreatedEngine(const AEngine: TGocciaEngine;
       const AFileConfig: TConfigEntryArray); virtual;
     procedure HandleConsoleLog(const AMethod, ALine: string);
@@ -63,7 +64,7 @@ type
     function DiscoverFileConfig(
       const AFileName: string): TConfigEntryArray;
     function AnyFileConfigEnablesFlag(const AFiles: TStrings;
-      const AFlag: TGocciaFlagOption): Boolean;
+      const AFlag: TFlagOption): Boolean;
     function CreateEngine(const AFileName: string;
       const ASource: TStringList;
       const AExecutor: TGocciaExecutor): TGocciaEngine;
@@ -105,8 +106,9 @@ type
   end;
 
 function ResolveSourceTypeOption(
-  const AOption: TGocciaEnumOption<CLI.Options.TGocciaSourceType>;
-  const AFileConfig: TConfigEntryArray): Goccia.Engine.TGocciaSourceType;
+  const AOption: TEnumOption<Goccia.CLI.Options.TGocciaSourceType>;
+  const AFileConfig: TConfigEntryArray;
+  const AFileName: string): Goccia.Engine.TGocciaSourceType;
 
 implementation
 
@@ -326,7 +328,7 @@ end;
 constructor TGocciaCLIApplication.Create(const AName: string);
 begin
   inherited Create(AName);
-  FOwnedOptions := TGocciaOptionBaseList.Create(True);
+  FOwnedOptions := TOptionBaseList.Create(True);
   FEngineOptions := nil;
   FCoverageOptions := nil;
   FProfilerOptions := nil;
@@ -359,7 +361,7 @@ end;
 
 procedure TGocciaCLIApplication.BuildAllOptions;
 var
-  Combined: array of TGocciaOptionArray;
+  Combined: array of TOptionArray;
   Count, I: Integer;
 begin
   Count := 0;
@@ -416,31 +418,31 @@ begin
   Result := FProfilerOptions;
 end;
 
-function TGocciaCLIApplication.AddFlag(const AName, AHelp: string): TGocciaFlagOption;
+function TGocciaCLIApplication.AddFlag(const AName, AHelp: string): TFlagOption;
 begin
-  Result := TGocciaFlagOption.Create(AName, AHelp);
+  Result := TFlagOption.Create(AName, AHelp);
   FOwnedOptions.Add(Result);
 end;
 
-function TGocciaCLIApplication.AddString(const AName, AHelp: string): TGocciaStringOption;
+function TGocciaCLIApplication.AddString(const AName, AHelp: string): TStringOption;
 begin
-  Result := TGocciaStringOption.Create(AName, AHelp);
+  Result := TStringOption.Create(AName, AHelp);
   FOwnedOptions.Add(Result);
 end;
 
-function TGocciaCLIApplication.AddInteger(const AName, AHelp: string): TGocciaIntegerOption;
+function TGocciaCLIApplication.AddInteger(const AName, AHelp: string): TIntegerOption;
 begin
-  Result := TGocciaIntegerOption.Create(AName, AHelp);
+  Result := TIntegerOption.Create(AName, AHelp);
   FOwnedOptions.Add(Result);
 end;
 
-function TGocciaCLIApplication.AddRepeatable(const AName, AHelp: string): TGocciaRepeatableOption;
+function TGocciaCLIApplication.AddRepeatable(const AName, AHelp: string): TRepeatableOption;
 begin
-  Result := TGocciaRepeatableOption.Create(AName, AHelp);
+  Result := TRepeatableOption.Create(AName, AHelp);
   FOwnedOptions.Add(Result);
 end;
 
-function TGocciaCLIApplication.Add(const AOption: TGocciaOptionBase): TGocciaOptionBase;
+function TGocciaCLIApplication.Add(const AOption: TOptionBase): TOptionBase;
 begin
   FOwnedOptions.Add(AOption);
   Result := AOption;
@@ -465,7 +467,7 @@ begin
 end;
 
 function TGocciaCLIApplication.AnyFileConfigEnablesFlag(
-  const AFiles: TStrings; const AFlag: TGocciaFlagOption): Boolean;
+  const AFiles: TStrings; const AFlag: TFlagOption): Boolean;
 var
   I: Integer;
 begin
@@ -481,23 +483,32 @@ end;
 
 { Resolve --source-type / config "source-type" into the engine's
   TGocciaSourceType enum.  Priority: CLI option > per-file config > root
-  config > default (script).
+  config > file-extension default (.mjs is module) > default (script).
 
-  CLI option and root config values are validated by TGocciaEnumOption.Apply
-  before they reach this function (invalid values raise TGocciaParseError
+  CLI option and root config values are validated by TEnumOption.Apply
+  before they reach this function (invalid values raise TParseError
   at parse/apply time).  Per-file config values come in as raw strings via
   FindConfigEntry, so we validate here: 'module' and 'script' are accepted
   case-insensitively, anything else emits a stderr warning and falls back
-  to stScript so a typo never silently flips into module source. }
+  to the file-extension default. }
+function DefaultSourceTypeForFileName(
+  const AFileName: string): Goccia.Engine.TGocciaSourceType;
+begin
+  if IsModuleSourceFileName(AFileName) then
+    Exit(Goccia.Engine.stModule);
+  Result := Goccia.Engine.stScript;
+end;
+
 function ResolveSourceTypeOption(
-  const AOption: TGocciaEnumOption<CLI.Options.TGocciaSourceType>;
-  const AFileConfig: TConfigEntryArray): Goccia.Engine.TGocciaSourceType;
+  const AOption: TEnumOption<Goccia.CLI.Options.TGocciaSourceType>;
+  const AFileConfig: TConfigEntryArray;
+  const AFileName: string): Goccia.Engine.TGocciaSourceType;
 var
   ValueStr, NormalizedValue: string;
 begin
   if AOption.FromCommandLine then
   begin
-    if AOption.Matches(CLI.Options.stModule) then
+    if AOption.Matches(Goccia.CLI.Options.stModule) then
       Exit(Goccia.Engine.stModule);
     Exit(Goccia.Engine.stScript);
   end;
@@ -511,18 +522,19 @@ begin
       Exit(Goccia.Engine.stScript);
     WriteLn(StdErr, Format(
       'Warning: invalid per-file config value for "source-type": %s '
-      + '(valid: script, module). Falling back to script.', [ValueStr]));
-    Exit(Goccia.Engine.stScript);
+      + '(valid: script, module). Falling back to file extension default.',
+      [ValueStr]));
+    Exit(DefaultSourceTypeForFileName(AFileName));
   end;
 
   if AOption.Present then
   begin
-    if AOption.Matches(CLI.Options.stModule) then
+    if AOption.Matches(Goccia.CLI.Options.stModule) then
       Exit(Goccia.Engine.stModule);
     Exit(Goccia.Engine.stScript);
   end;
 
-  Result := Goccia.Engine.stScript;
+  Result := DefaultSourceTypeForFileName(AFileName);
 end;
 
 { Apply per-file config entries to the engine.
@@ -531,7 +543,7 @@ end;
   so that a per-file config can override a root-level config value. }
 procedure ApplyFileConfigToEngine(const AEngine: TGocciaEngine;
   const AEngineOptions: TGocciaEngineOptions;
-  const AFileConfig: TConfigEntryArray);
+  const AFileConfig: TConfigEntryArray; const AFileName: string);
 var
   ValueStr: string;
   MemoryLimit: Int64;
@@ -543,36 +555,13 @@ begin
   if not Assigned(AEngineOptions) then
     Exit;
 
-  { ASI: CLI flag > per-file config > root config > default (false) }
-  AEngine.ASIEnabled := ResolveFlagOption(AEngineOptions.ASI, AFileConfig);
-
-  { source-type: CLI option > per-file config > root config > default (script) }
+  { source-type: CLI option > per-file config > root config > .mjs > script }
   AEngine.SourceType := ResolveSourceTypeOption(
-    AEngineOptions.SourceType, AFileConfig);
+    AEngineOptions.SourceType, AFileConfig, AFileName);
 
-  { compat-var: CLI flag > per-file config > root config > default (false) }
-  AEngine.VarEnabled := ResolveFlagOption(
-    AEngineOptions.CompatVar, AFileConfig);
-
-  { compat-function: CLI flag > per-file config > root config > default (false) }
-  AEngine.FunctionEnabled := ResolveFlagOption(
-    AEngineOptions.CompatFunction, AFileConfig);
-
-  { compat-traditional-for-loop: CLI flag > per-file config > root config > default (false) }
-  AEngine.TraditionalForLoopsEnabled := ResolveFlagOption(
-    AEngineOptions.CompatTraditionalFor, AFileConfig);
-
-  { compat-while-loops: CLI flag > per-file config > root config > default (false) }
-  AEngine.WhileLoopsEnabled := ResolveFlagOption(
-    AEngineOptions.CompatWhileLoops, AFileConfig);
-
-  { compat-loose-equality: CLI flag > per-file config > root config > default (false) }
-  AEngine.LooseEqualityEnabled := ResolveFlagOption(
-    AEngineOptions.CompatLooseEquality, AFileConfig);
-
-  { compat-non-strict-mode: CLI flag > per-file config > root config > default (false) }
-  AEngine.NonStrictModeEnabled := ResolveFlagOption(
-    AEngineOptions.CompatNonStrictMode, AFileConfig);
+  { compatibility flags: CLI flag > per-file config > root config > default (empty) }
+  AEngine.Compatibility := ResolveCompatibilityFlags(
+    AEngineOptions, AFileConfig);
 
   { strict-types: CLI flag > per-file config > root config > default (false) }
   AEngine.StrictTypes := ResolveFlagOption(
@@ -661,10 +650,10 @@ begin
     end;
     ConfigureCreatedEngine(Result, FileConfig);
     if Assigned(FEngineOptions) then
-      ApplyFileConfigToEngine(Result, FEngineOptions, FileConfig);
+      ApplyFileConfigToEngine(Result, FEngineOptions, FileConfig, AFileName);
     if AExecutor is TGocciaBytecodeExecutor then
       TGocciaBytecodeExecutor(AExecutor).GlobalBackedTopLevel :=
-        Result.SourceType = stScript;
+        Result.SourceType = Goccia.Engine.stScript;
   except
     Result.Free;
     raise;
@@ -965,19 +954,19 @@ var
 begin
   Configure;
 
-  FHelp := TGocciaFlagOption.Create('help', 'Show this help message');
+  FHelp := TFlagOption.Create('help', 'Show this help message');
   FHelp.ShortName := 'h';
 
-  FJobs := TGocciaIntegerOption.Create('jobs', 'Number of parallel worker threads');
+  FJobs := TIntegerOption.Create('jobs', 'Number of parallel worker threads');
   FJobs.ShortName := 'j';
 
-  FLog := TGocciaStringOption.Create('log', 'Write console output to a log file');
+  FLog := TStringOption.Create('log', 'Write console output to a log file');
 
-  FMultifile := TGocciaFlagOption.Create('multifile',
+  FMultifile := TFlagOption.Create('multifile',
     'Split each input (file or stdin) on "---" lines and run each ' +
     'section as an independent file');
 
-  FConfig := TGocciaStringOption.Create('config',
+  FConfig := TStringOption.Create('config',
     'Path to a config file or a directory containing one (skips auto-discovery)');
 
   BuildAllOptions;

@@ -65,7 +65,7 @@ printf "const x = 2 + 2; x;" | ./build/GocciaScriptLoader # Execute stdin source
 ./build/GocciaScriptLoader example.js --coverage # Execute with line and branch coverage
 ./build/GocciaScriptLoader example.js --coverage --coverage-format=lcov --coverage-output=coverage.lcov # Coverage with lcov output
 ./build/GocciaScriptLoader example.js --coverage --coverage-format=json --coverage-output=coverage.json # Coverage with JSON output
-./build/GocciaScriptLoader example.js --asi # Execute with automatic semicolon insertion
+./build/GocciaScriptLoader example.js --compat-asi # Execute with automatic semicolon insertion
 ./build/GocciaScriptLoader example.js --strict-types # Enforce type annotations at runtime (interpreter and bytecode)
 ./build/GocciaScriptLoader example.js --source-type=module # Load entry as a module (top-level this is undefined; default is script)
 ./build/GocciaScriptLoader example.js --output=json # Execute with structured JSON output
@@ -94,7 +94,7 @@ printf '1;\n---\n2;\n' | ./build/GocciaScriptLoader --multifile # Split stdin on
 ./build/GocciaREPL --mode=bytecode --timing # Bytecode REPL with per-line timing
 ./build/GocciaREPL --import-map=imports.json # Start the REPL with an explicit import map
 ./build/GocciaREPL --config=./configs/dev.json # Start the REPL with an explicit config path (skips auto-discovery)
-./build/GocciaREPL --asi # Start the REPL with automatic semicolon insertion
+./build/GocciaREPL --compat-asi # Start the REPL with automatic semicolon insertion
 ./build/GocciaREPL --unsafe-ffi # Start the REPL with FFI enabled
 ./build/GocciaREPL --log=repl.log # Start the REPL with console log capture
 ./build/GocciaREPL --stack-size=5000 # Start the REPL with custom call stack depth limit
@@ -138,7 +138,7 @@ printf 'suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n' | ./bu
 ./build/GocciaBundler example.js --source-map # Write .map source map alongside .gbc
 printf "const x = 2 + 2; x;" | ./build/GocciaBundler --output=out.gbc # Compile stdin to .gbc
 ./build/GocciaBundler src/ --jobs=4 # Compile with 4 parallel workers
-./build/GocciaBundler example.js --asi # Compile with automatic semicolon insertion
+./build/GocciaBundler example.js --compat-asi # Compile with automatic semicolon insertion
 ./build/GocciaBundler example.js --multifile --output=dist/ # Split on '---' and emit one .gbc per section into dist/
 ./build/GocciaBundler example.js --config=./configs/release.toml # Compile with an explicit config path (skips auto-discovery)
 ```
@@ -168,12 +168,12 @@ All CLI options can be set via `goccia.json` (or `.json5` / `.toml`) discovered 
 
 ```json
 // goccia.json
-{ "asi": true, "mode": "bytecode", "timeout": 5000, "allowed-hosts": ["api.example.com"] }
+{ "compat-asi": true, "mode": "bytecode", "timeout": 5000, "allowed-hosts": ["api.example.com"] }
 ```
 
 ```json
 // tests/language/asi/goccia.json — enables ASI for this subtree
-{ "asi": true }
+{ "compat-asi": true }
 ```
 
 ```json

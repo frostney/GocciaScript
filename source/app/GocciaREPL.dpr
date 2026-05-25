@@ -5,16 +5,15 @@ program GocciaREPL;
 uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
   Classes,
-  Generics.Collections,
   SysUtils,
 
   TimingUtils,
-  TextSemantics,
 
   Goccia.Application,
   Goccia.AST.Node,
   Goccia.Bytecode.Module,
   Goccia.CLI.Application,
+  Goccia.CLI.Options,
   CLI.ConfigFile,
   CLI.Options,
   Goccia.Engine,
@@ -24,19 +23,16 @@ uses
   Goccia.Error,
   Goccia.Error.Detail,
   Goccia.GarbageCollector,
-  Goccia.JSX.Transformer,
-  Goccia.Lexer,
   Goccia.MicrotaskQueue,
-  Goccia.Parser,
   Goccia.REPL.Formatter,
   Goccia.REPL.LineEditor,
   Goccia.Runtime,
   Goccia.RuntimeExtensions.Console,
   Goccia.RuntimeExtensions.FFI,
   Goccia.RuntimeProfiles.Loader,
+  Goccia.SourcePipeline,
   Goccia.Terminal.Colors,
   Goccia.TextFiles,
-  Goccia.Token,
   Goccia.Values.Error,
   Goccia.Values.Primitives,
   Goccia.Version;
@@ -47,7 +43,7 @@ const
 type
   TREPLApp = class(TGocciaCLIApplication)
   private
-    FTiming: TGocciaFlagOption;
+    FTiming: TFlagOption;
     procedure InitializeRuntime(const AEngine: TGocciaEngine);
   protected
     procedure Configure; override;
@@ -112,14 +108,11 @@ var
   { Bytecode mode }
   BcExecutor: TGocciaBytecodeExecutor;
   ResultValue: TGocciaValue;
-  SourceText: string;
-  JSXResult: TGocciaJSXTransformResult;
-  Lexer: TGocciaLexer;
-  Tokens: TObjectList<TGocciaToken>;
-  Parser: TGocciaParser;
-  ProgramNode: TGocciaProgram;
+  PipelineOptions: TGocciaSourcePipelineOptions;
+  PipelineResult: TGocciaSourcePipelineResult;
   Module: TGocciaCompiledModule;
-  StartTime, LexEnd, ParseEnd, CompileEnd, ExecEnd: Int64;
+  StartTime, CompileStart, CompileEnd, ExecStart, ExecEnd: Int64;
+  LexTimeNanoseconds, ParseTimeNanoseconds: Int64;
 begin
   if APaths.Count > 0 then
   begin
@@ -161,58 +154,38 @@ begin
           Source.Add(Line);
 
           StartTime := GetNanoseconds;
-          LexEnd := StartTime;
-          ParseEnd := StartTime;
+          CompileStart := StartTime;
           CompileEnd := StartTime;
+          ExecStart := StartTime;
           ExecEnd := StartTime;
+          LexTimeNanoseconds := 0;
+          ParseTimeNanoseconds := 0;
+          PipelineResult := nil;
           try
-            SourceText := StringListToLFText(Source);
+            PipelineOptions.Preprocessors := Eng.Preprocessors;
+            PipelineOptions.Compatibility := Eng.Compatibility;
+            PipelineOptions.SourceType := Eng.SourceType;
+            PipelineResult := TGocciaSourcePipeline.Parse(Source,
+              REPL_FILE_NAME, PipelineOptions);
+            LexTimeNanoseconds := PipelineResult.LexTimeNanoseconds;
+            ParseTimeNanoseconds := PipelineResult.ParseTimeNanoseconds;
 
-            if ppJSX in TGocciaEngine.DefaultPreprocessors then
-            begin
-              JSXResult := TGocciaJSXTransformer.Transform(SourceText);
-              SourceText := JSXResult.Source;
-              JSXResult.SourceMap.Free;
-            end;
-
-            Lexer := TGocciaLexer.Create(SourceText, REPL_FILE_NAME);
+            CompileStart := GetNanoseconds;
             try
-              Tokens := Lexer.ScanTokens;
-              LexEnd := GetNanoseconds;
-
-              Parser := TGocciaParser.Create(Tokens, REPL_FILE_NAME,
-                Lexer.SourceLines);
-              Parser.AutomaticSemicolonInsertion := Eng.ASIEnabled;
-              Parser.VarDeclarationsEnabled := Eng.VarEnabled;
-              Parser.FunctionDeclarationsEnabled := Eng.FunctionEnabled;
-              Parser.TraditionalForLoopsEnabled := Eng.TraditionalForLoopsEnabled;
-              Parser.WhileLoopsEnabled := Eng.WhileLoopsEnabled;
-              Parser.LooseEqualityEnabled := Eng.LooseEqualityEnabled;
-              Parser.NonStrictModeEnabled := Eng.NonStrictModeEnabled or
-                (Eng.SourceType = stModule);
-              try
-                ProgramNode := Parser.Parse;
-                ParseEnd := GetNanoseconds;
-
-                try
-                  Module := Eng.CompileModule(ProgramNode);
-                  CompileEnd := GetNanoseconds;
-
-                  ResultValue := Eng.RunModuleForSourceType(Module,
-                    REPL_FILE_NAME);
-                  ExecEnd := GetNanoseconds;
-
-                  if ResultValue <> nil then
-                    WriteLn(FormatREPLValue(ResultValue, IsColorTerminal));
-                finally
-                  ProgramNode.Free;
-                end;
-              finally
-                Parser.Free;
-              end;
+              Module := Eng.CompileModule(PipelineResult.ProgramNode);
+              CompileEnd := GetNanoseconds;
             finally
-              Lexer.Free;
+              PipelineResult.Free;
+              PipelineResult := nil;
             end;
+
+            ExecStart := GetNanoseconds;
+            ResultValue := Eng.RunModuleForSourceType(Module,
+              REPL_FILE_NAME);
+            ExecEnd := GetNanoseconds;
+
+            if ResultValue <> nil then
+              WriteLn(FormatREPLValue(ResultValue, IsColorTerminal));
           except
             on E: Exception do
             begin
@@ -230,10 +203,10 @@ begin
           if FTiming.Present then
             WriteLn(SysUtils.Format(
               '  Lex: %s | Parse: %s | Compile: %s | Execute: %s | Total: %s',
-              [FormatDuration(LexEnd - StartTime),
-               FormatDuration(ParseEnd - LexEnd),
-               FormatDuration(CompileEnd - ParseEnd),
-               FormatDuration(ExecEnd - CompileEnd),
+              [FormatDuration(LexTimeNanoseconds),
+               FormatDuration(ParseTimeNanoseconds),
+               FormatDuration(CompileEnd - CompileStart),
+               FormatDuration(ExecEnd - ExecStart),
                FormatDuration(ExecEnd - StartTime)]));
         end;
       finally

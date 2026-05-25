@@ -43,15 +43,11 @@ function LoadShimValue(const AInterpreter: TGocciaInterpreter;
 implementation
 
 uses
-  Generics.Collections,
-
   Goccia.AST.Node,
   Goccia.Evaluator,
   Goccia.Evaluator.Context,
-  Goccia.Lexer,
-  Goccia.Parser,
   Goccia.Scope,
-  Goccia.Token;
+  Goccia.SourcePipeline;
 
 const
   DEFAULT_SHIMS: array[0..7] of TGocciaShimDefinition = (
@@ -285,38 +281,36 @@ end;
 function LoadShimValue(const AInterpreter: TGocciaInterpreter;
   const AShim: TGocciaShimDefinition): TGocciaValue;
 var
-  Lexer: TGocciaLexer;
-  Parser: TGocciaParser;
+  ModuleParseResult: TGocciaSourcePipelineModuleResult;
+  PipelineOptions: TGocciaSourcePipelineOptions;
   ProgramNode: TGocciaProgram;
   ModuleScope: TGocciaScope;
   Context: TGocciaEvaluationContext;
   I: Integer;
 begin
-  Lexer := TGocciaLexer.Create(AShim.Source, AShim.FileName);
+  PipelineOptions.Preprocessors := [];
+  PipelineOptions.Compatibility := [];
+  PipelineOptions.SourceType := stModule;
+  ModuleParseResult := TGocciaSourcePipeline.ParseModuleSource(
+    UTF8String(AShim.Source), AShim.FileName, PipelineOptions);
   try
-    Parser := TGocciaParser.Create(Lexer.ScanTokens, AShim.FileName,
-      Lexer.SourceLines);
+    ProgramNode := ModuleParseResult.TakeProgramNode;
     try
-      ProgramNode := Parser.Parse;
-      try
-        ModuleScope := AInterpreter.GlobalScope.CreateChild(skModule,
-          'Shim:' + AShim.Name);
-        // ES2026 §16.2.1.6.4 InitializeEnvironment: a Module
-        // Environment Record's [[ThisValue]] is undefined.
-        ModuleScope.ThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-        Context := AInterpreter.CreateEvaluationContext;
-        Context.Scope := ModuleScope;
-        for I := 0 to ProgramNode.Body.Count - 1 do
-          EvaluateStatement(ProgramNode.Body[I], Context);
-        Result := ModuleScope.GetValue(AShim.Name);
-      finally
-        ProgramNode.Free;
-      end;
+      ModuleScope := AInterpreter.GlobalScope.CreateChild(skModule,
+        'Shim:' + AShim.Name);
+      // ES2026 §16.2.1.6.4 InitializeEnvironment: a Module
+      // Environment Record's [[ThisValue]] is undefined.
+      ModuleScope.ThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+      Context := AInterpreter.CreateEvaluationContext;
+      Context.Scope := ModuleScope;
+      for I := 0 to ProgramNode.Body.Count - 1 do
+        EvaluateStatement(ProgramNode.Body[I], Context);
+      Result := ModuleScope.GetValue(AShim.Name);
     finally
-      Parser.Free;
+      ProgramNode.Free;
     end;
   finally
-    Lexer.Free;
+    ModuleParseResult.Free;
   end;
 end;
 

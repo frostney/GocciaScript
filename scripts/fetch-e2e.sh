@@ -37,7 +37,7 @@ echo ""
 
 run_js() {
   echo "$1" > "$TMPFILE"
-  "$LOADER" "$TMPFILE" --asi 2>&1
+  "$LOADER" "$TMPFILE" --compat-asi 2>&1
 }
 
 check() {

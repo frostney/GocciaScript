@@ -498,6 +498,33 @@ console.log("Bare Loader: module source type...");
   if (proc.stdout.toString().trim() !== "true") throw new Error(`Bare module source expected true, got: ${proc.stdout.toString()}`);
 }
 
+console.log("Bare Loader: .mjs module inference...");
+{
+  const tmp = makeTmp();
+  try {
+    const file = join(tmp, "entry.mjs");
+    writeFileSync(file, "this === undefined;\n");
+
+    const proc = Bun.spawnSync([BARE, "--print", file], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode !== 0) throw new Error(`Bare .mjs source exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    if (proc.stdout.toString().trim() !== "true") throw new Error(`Bare .mjs source expected true, got: ${proc.stdout.toString()}`);
+
+    const scriptOverride = Bun.spawnSync([BARE, "--print", file, "--source-type=script"], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (scriptOverride.exitCode !== 0)
+      throw new Error(`Bare .mjs script override exited ${scriptOverride.exitCode}: ${scriptOverride.stderr.toString()}`);
+    if (scriptOverride.stdout.toString().trim() !== "false")
+      throw new Error(`Bare .mjs script override expected false, got: ${scriptOverride.stdout.toString()}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
 // --mode option: bare loader defaults to interpreter mode; both values must execute.
 console.log("Bare Loader: --mode=interpreted...");
 {
@@ -1655,7 +1682,7 @@ console.log("REPL: expression evaluation...");
 
 console.log("REPL: ASI mode...");
 {
-  const out = await $`printf 'const x = 5\nx\n' | ${REPL} --asi 2>&1`.text();
+  const out = await $`printf 'const x = 5\nx\n' | ${REPL} --compat-asi 2>&1`.text();
   if (!out.includes("5")) throw new Error(`ASI mode should produce 5, got: ${out}`);
 }
 
@@ -1701,7 +1728,7 @@ console.log("Loader: HTTPS fetch smoke with --allowed-host...");
 {
   const { exitCode, json, stderr } = runLoaderJson(
     'const response = await fetch("https://www.gstatic.com/generate_204", { method: "HEAD" });\nresponse.status;\n',
-    ["--asi", "--allowed-host=www.gstatic.com"],
+    ["--compat-asi", "--allowed-host=www.gstatic.com"],
     { timeout: 10_000 },
   );
   if (exitCode !== 0) throw new Error(`HTTPS fetch should exit 0, got ${exitCode}: ${stderr}`);

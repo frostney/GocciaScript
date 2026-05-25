@@ -37,7 +37,7 @@ procedure RegisterConfigParser(const AExtension: string;
   Flag options are only set when the value is 'true' or empty.
   For repeatable options, values are accumulated even when Present. }
 procedure ApplyConfigEntries(const AEntries: TConfigEntryArray;
-  const AOptions: TGocciaOptionArray);
+  const AOptions: TOptionArray);
 
 { Parse a configuration file and return its entries without
   applying them.  Handles the "extends" key: if present, the
@@ -55,7 +55,7 @@ function ParseConfigFile(const APath: string): TConfigEntryArray;
   by a built-in parser; other formats require prior registration
   via RegisterConfigParser. }
 procedure ApplyConfigFile(const APath: string;
-  const AOptions: TGocciaOptionArray);
+  const AOptions: TOptionArray);
 
 { Walk up from AStartDirectory looking for a configuration file.
   At each directory level, tries every combination of
@@ -78,7 +78,7 @@ function FindConfigEntry(const AEntries: TConfigEntryArray;
   default (False).  AFlag is the parsed option and AFileConfig the
   per-file config entries.  The config key is resolved from the
   option metadata, checking ConfigName before LongName. }
-function ResolveFlagOption(const AFlag: TGocciaFlagOption;
+function ResolveFlagOption(const AFlag: TFlagOption;
   const AFileConfig: TConfigEntryArray): Boolean;
 
 implementation
@@ -292,8 +292,8 @@ end;
 
 { ── Apply entries to options ───────────────────────────────── }
 
-function FindOptionByName(const AOptions: TGocciaOptionArray;
-  const AName: string): TGocciaOptionBase;
+function FindOptionByName(const AOptions: TOptionArray;
+  const AName: string): TOptionBase;
 var
   I: Integer;
 begin
@@ -306,7 +306,7 @@ begin
 end;
 
 function FindOptionConfigEntry(const AEntries: TConfigEntryArray;
-  const AOption: TGocciaOptionBase; out AValue: string): Boolean;
+  const AOption: TOptionBase; out AValue: string): Boolean;
 var
   I: Integer;
 begin
@@ -322,10 +322,10 @@ begin
 end;
 
 procedure ApplyConfigEntries(const AEntries: TConfigEntryArray;
-  const AOptions: TGocciaOptionArray);
+  const AOptions: TOptionArray);
 var
   I: Integer;
-  Option: TGocciaOptionBase;
+  Option: TOptionBase;
 begin
   for I := 0 to High(AEntries) do
   begin
@@ -339,21 +339,21 @@ begin
       them or when the child config explicitly set an empty array
       (Present with zero values). }
     if Option.Present and
-       (not (Option is TGocciaRepeatableOption) or
+       (not (Option is TRepeatableOption) or
         Option.FromCommandLine or
-        (TGocciaRepeatableOption(Option).Values.Count = 0)) then
+        (TRepeatableOption(Option).Values.Count = 0)) then
       Continue;
 
     { Empty-array sentinel: mark the option as present so the
       explicit empty override is visible, but do not add a value. }
-    if (Option is TGocciaRepeatableOption) and
+    if (Option is TRepeatableOption) and
        (AEntries[I].Value = '') then
     begin
       Option.MarkPresent;
       Continue;
     end;
 
-    if Option is TGocciaFlagOption then
+    if Option is TFlagOption then
     begin
       if (AEntries[I].Value = 'true') or (AEntries[I].Value = '') then
         Option.Apply('');
@@ -464,7 +464,7 @@ begin
 end;
 
 procedure ApplyConfigFile(const APath: string;
-  const AOptions: TGocciaOptionArray);
+  const AOptions: TOptionArray);
 var
   Entries: TConfigEntryArray;
 begin
@@ -532,7 +532,7 @@ end;
 
 { ── Flag resolution ────────────────────────────────────────── }
 
-function ResolveFlagOption(const AFlag: TGocciaFlagOption;
+function ResolveFlagOption(const AFlag: TFlagOption;
   const AFileConfig: TConfigEntryArray): Boolean;
 var
   ValueStr: string;

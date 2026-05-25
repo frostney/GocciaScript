@@ -17,6 +17,7 @@ uses
   Goccia.Bytecode.Binary,
   Goccia.Bytecode.Module,
   Goccia.CLI.Application,
+  Goccia.CLI.Options,
   CLI.ConfigFile,
   CLI.Options,
   Goccia.Constants.PropertyNames,
@@ -31,9 +32,6 @@ uses
   Goccia.FileExtensions,
   Goccia.GarbageCollector,
   Goccia.InstructionLimit,
-  Goccia.JSX.Transformer,
-  Goccia.Lexer,
-  Goccia.Parser,
   Goccia.Profiler,
   Goccia.Profiler.Report,
   Goccia.Runtime,
@@ -44,13 +42,13 @@ uses
   Goccia.ScriptLoader.Globals,
   Goccia.ScriptLoader.Input,
   Goccia.CLI.JSON.Reporter,
+  Goccia.SourcePipeline,
   Goccia.SourceMap,
   Goccia.Terminal.Colors,
   Goccia.TextFiles,
   Goccia.Threading,
   Goccia.Threading.Init,
   Goccia.Timeout,
-  Goccia.Token,
   Goccia.Values.Error,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
@@ -98,12 +96,12 @@ type
 
   TScriptLoaderApp = class(TGocciaCLIApplication)
   private
-    FOutputPath: TGocciaStringOption;
-    FSilent: TGocciaFlagOption;
-    FPrint: TGocciaFlagOption;
-    FSourceMap: TGocciaStringOption;
-    FGlobalFiles: TGocciaRepeatableOption;
-    FInlineGlobals: TGocciaRepeatableOption;
+    FOutputPath: TStringOption;
+    FSilent: TFlagOption;
+    FPrint: TFlagOption;
+    FSourceMap: TStringOption;
+    FGlobalFiles: TRepeatableOption;
+    FInlineGlobals: TRepeatableOption;
     FLastPaths: TStringList;
 
     procedure InitializeRuntime(const AEngine: TGocciaEngine);
@@ -111,12 +109,11 @@ type
     function IsJsonOutput: Boolean;
     function IsCompactJsonOutput: Boolean;
     function ParseSource(const ASource: TStringList; const AFileName: string;
-      const APreprocessors: TGocciaPreprocessors; const ASuppressWarnings: Boolean;
-      const AASIEnabled, AVarEnabled, AFunctionEnabled,
-        ATraditionalForLoopsEnabled, AWhileLoopsEnabled, ALooseEqualityEnabled,
-        ANonStrictModeEnabled: Boolean;
+      const AOptions: TGocciaSourcePipelineOptions;
+      const ASuppressWarnings: Boolean;
       out ALexTimeNanoseconds, AParseTimeNanoseconds: Int64;
-      out ASourceMap: TGocciaSourceMap): TGocciaProgram;
+      out ASourceMap: TGocciaSourceMap;
+      out AGeneratedSourceLines: TStringList): TGocciaProgram;
     procedure WriteSourceMapIfEnabled(const ASourceMap: TGocciaSourceMap;
       const AFileName: string);
     procedure ConfigureConsole(const AConsole: TGocciaConsole;
@@ -289,8 +286,8 @@ begin
   FSilent := AddFlag('silent', 'Suppress console output from the script');
   FPrint := AddFlag('print',
     'Print the script''s last value to stdout (mirrors node -p / bun --print / deno eval -p)');
-  FSourceMap := AddString('source-map',
-    'Write a .map source map file (optional: explicit path)');
+  FSourceMap := TStringOption(Add(TOptionalStringOption.Create('source-map',
+    'Write a .map source map file (optional: explicit path)')));
   FGlobalFiles := AddRepeatable('globals',
     'Inject globals from a JSON/JSON5/TOML/YAML file or a module with named exports');
   FInlineGlobals := AddRepeatable('global',
@@ -333,7 +330,7 @@ begin
   inherited Validate;
 
   if EngineOptions.Timeout.Present and (EngineOptions.Timeout.Value < 0) then
-    raise TGocciaParseError.Create('--timeout must be 0 or greater.');
+    raise TParseError.Create('--timeout must be 0 or greater.');
 
   // --profile-format implies --profile=functions when no explicit --profile given
   if ProfilerOptions.Format.Present and not ProfilerOptions.Mode.Present then
@@ -344,90 +341,56 @@ begin
     EngineOptions.Mode.Apply('bytecode');
 
   if ProfilerOptions.OutputPath.Present and not ProfilerOptions.Mode.Present then
-    raise TGocciaParseError.Create(
+    raise TParseError.Create(
       '--profile-output requires --profile=opcodes|functions|all.');
 
   if ProfilerOptions.Format.Matches(pfFlamegraph) and
      not ProfilerOptions.OutputPath.Present then
-    raise TGocciaParseError.Create(
+    raise TParseError.Create(
       '--profile-format=flamegraph requires --profile-output=<path>.');
 end;
 
 { TScriptLoaderApp - Core logic }
 
 function TScriptLoaderApp.ParseSource(const ASource: TStringList;
-  const AFileName: string; const APreprocessors: TGocciaPreprocessors;
-  const ASuppressWarnings: Boolean; const AASIEnabled, AVarEnabled,
-  AFunctionEnabled, ATraditionalForLoopsEnabled,
-  AWhileLoopsEnabled, ALooseEqualityEnabled, ANonStrictModeEnabled: Boolean;
+  const AFileName: string; const AOptions: TGocciaSourcePipelineOptions;
+  const ASuppressWarnings: Boolean;
   out ALexTimeNanoseconds, AParseTimeNanoseconds: Int64;
-  out ASourceMap: TGocciaSourceMap): TGocciaProgram;
+  out ASourceMap: TGocciaSourceMap;
+  out AGeneratedSourceLines: TStringList): TGocciaProgram;
 var
-  SourceText: string;
-  JSXResult: TGocciaJSXTransformResult;
-  Lexer: TGocciaLexer;
-  Tokens: TObjectList<TGocciaToken>;
-  Parser: TGocciaParser;
-  Warning: TGocciaParserWarning;
-  StartTime, LexEnd, ParseEnd: Int64;
-  OrigLine, OrigCol, I: Integer;
+  PipelineResult: TGocciaSourcePipelineResult;
+  Warning: TGocciaSourcePipelineWarning;
+  I: Integer;
 begin
-  StartTime := GetNanoseconds;
-  SourceText := StringListToLFText(ASource);
-
   ASourceMap := nil;
-  if ppJSX in APreprocessors then
-  begin
-    JSXResult := TGocciaJSXTransformer.Transform(SourceText);
-    SourceText := JSXResult.Source;
-    ASourceMap := JSXResult.SourceMap;
-    if Assigned(ASourceMap) then
-      ASourceMap.SetSourceContent(0, StringListToLFText(ASource));
-  end;
+  AGeneratedSourceLines := nil;
 
+  PipelineResult := TGocciaSourcePipeline.Parse(ASource, AFileName, AOptions);
   try
-    Lexer := TGocciaLexer.Create(SourceText, AFileName);
-    try
-      Tokens := Lexer.ScanTokens;
-      LexEnd := GetNanoseconds;
-      ALexTimeNanoseconds := LexEnd - StartTime;
+    ALexTimeNanoseconds := PipelineResult.LexTimeNanoseconds;
+    AParseTimeNanoseconds := PipelineResult.ParseTimeNanoseconds;
 
-      Parser := TGocciaParser.Create(Tokens, AFileName, Lexer.SourceLines);
-      Parser.AutomaticSemicolonInsertion := AASIEnabled;
-      Parser.VarDeclarationsEnabled := AVarEnabled;
-      Parser.FunctionDeclarationsEnabled := AFunctionEnabled;
-      Parser.TraditionalForLoopsEnabled := ATraditionalForLoopsEnabled;
-      Parser.WhileLoopsEnabled := AWhileLoopsEnabled;
-      Parser.LooseEqualityEnabled := ALooseEqualityEnabled;
-      Parser.NonStrictModeEnabled := ANonStrictModeEnabled;
-      try
-        Result := Parser.Parse;
-        ParseEnd := GetNanoseconds;
-        AParseTimeNanoseconds := ParseEnd - LexEnd;
-
-        if (not ASuppressWarnings) and (not GIsWorkerThread) then
-          for I := 0 to Parser.WarningCount - 1 do
-          begin
-            Warning := Parser.GetWarning(I);
-            WriteLn(SysUtils.Format('Warning: %s', [Warning.Message]));
-            if Warning.Suggestion <> '' then
-              WriteLn(SysUtils.Format('  Suggestion: %s', [Warning.Suggestion]));
-            if Assigned(ASourceMap) and
-               ASourceMap.Translate(Warning.Line, Warning.Column, OrigLine, OrigCol) then
-              WriteLn(SysUtils.Format('  --> %s:%d:%d', [AFileName, OrigLine, OrigCol]))
-            else
-              WriteLn(SysUtils.Format('  --> %s:%d:%d', [AFileName, Warning.Line, Warning.Column]));
-          end;
-      finally
-        Parser.Free;
+    if (not ASuppressWarnings) and (not GIsWorkerThread) then
+      for I := 0 to PipelineResult.WarningCount - 1 do
+      begin
+        Warning := PipelineResult.Warnings[I];
+        WriteLn(SysUtils.Format('Warning: %s', [Warning.Message]));
+        if Warning.Suggestion <> '' then
+          WriteLn(SysUtils.Format('  Suggestion: %s', [Warning.Suggestion]));
+        WriteLn(SysUtils.Format('  --> %s:%d:%d',
+          [AFileName, Warning.Line, Warning.Column]));
       end;
-    finally
-      Lexer.Free;
+
+    Result := PipelineResult.TakeProgramNode;
+    ASourceMap := PipelineResult.TakeSourceMap;
+    if Assigned(PipelineResult.GeneratedSourceLines) then
+    begin
+      AGeneratedSourceLines := TStringList.Create;
+      AGeneratedSourceLines.Assign(PipelineResult.GeneratedSourceLines);
     end;
-  except
-    ASourceMap.Free;
-    ASourceMap := nil;
-    raise;
+  finally
+    PipelineResult.Free;
   end;
 end;
 
@@ -660,7 +623,9 @@ var
   Module: TGocciaCompiledModule;
   Executor: TGocciaBytecodeExecutor;
   Engine: TGocciaEngine;
+  PipelineOptions: TGocciaSourcePipelineOptions;
   SourceMap: TGocciaSourceMap;
+  GeneratedSourceLines: TStringList;
   StartTime, CompileStart, CompileEnd, ExecEnd: Int64;
 begin
   StartTime := GetNanoseconds;
@@ -671,21 +636,23 @@ begin
       ConfigureConsole(RuntimeConsole(Engine), ACapture);
       ApplyDataGlobalsToEngine(Engine);
 
-      ProgramNode := ParseSource(ASource, AFileName, TGocciaEngine.DefaultPreprocessors,
-        IsJsonOutput, Engine.ASIEnabled, Engine.VarEnabled, Engine.FunctionEnabled,
-        Engine.TraditionalForLoopsEnabled, Engine.WhileLoopsEnabled,
-        Engine.LooseEqualityEnabled, Engine.NonStrictModeEnabled or
-        (Engine.SourceType = stModule),
+      PipelineOptions.Preprocessors := Engine.Preprocessors;
+      PipelineOptions.Compatibility := Engine.Compatibility;
+      PipelineOptions.SourceType := Engine.SourceType;
+      ProgramNode := ParseSource(ASource, AFileName, PipelineOptions,
+        IsJsonOutput,
         Result.Timing.LexTimeNanoseconds,
-        Result.Timing.ParseTimeNanoseconds, SourceMap);
+        Result.Timing.ParseTimeNanoseconds, SourceMap,
+        GeneratedSourceLines);
       try
         WriteSourceMapIfEnabled(SourceMap, AFileName);
 
         if Assigned(TGocciaCoverageTracker.Instance) and
-           TGocciaCoverageTracker.Instance.Enabled and Assigned(ASource) then
+           TGocciaCoverageTracker.Instance.Enabled and
+           Assigned(GeneratedSourceLines) then
         begin
           TGocciaCoverageTracker.Instance.RegisterSourceFile(
-            AFileName, CountExecutableLines(ASource));
+            AFileName, CountExecutableLines(GeneratedSourceLines));
           if Assigned(SourceMap) then
             TGocciaCoverageTracker.Instance.RegisterSourceMap(
               AFileName, SourceMap.Clone);
@@ -698,6 +665,7 @@ begin
       finally
         ProgramNode.Free;
         SourceMap.Free;
+        GeneratedSourceLines.Free;
       end;
 
       StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
@@ -1298,13 +1266,13 @@ begin
   if FSourceMap.Present and (FSourceMap.ValueOr('') = '') and
      ((APaths.Count = 0) or
       ((APaths.Count = 1) and IsStdinPath(APaths[0]))) then
-    raise TGocciaParseError.Create(
+    raise TParseError.Create(
       '--source-map=<file> is required when reading source from stdin.');
 
   if (FSourceMap.ValueOr('') <> '') and
      ((APaths.Count > 1) or
       ((APaths.Count = 1) and DirectoryExists(APaths[0]))) then
-    raise TGocciaParseError.Create(
+    raise TParseError.Create(
       '--source-map=<file> supports a single input file or stdin.');
 
   // Use Present rather than the value to catch the bare --source-map
@@ -1312,7 +1280,7 @@ begin
   // user passing --source-map alongside --multifile is almost certainly
   // signalling intent that does not match the multi-output reality.
   if FSourceMap.Present and MultifileEnabled then
-    raise TGocciaParseError.Create(
+    raise TParseError.Create(
       '--source-map cannot be combined with --multifile (an input '
       + 'may expand to multiple sections).');
 
@@ -1370,7 +1338,7 @@ begin
       for I := 0 to APaths.Count - 1 do
       begin
         if IsStdinPath(APaths[I]) then
-          raise TGocciaParseError.Create(
+          raise TParseError.Create(
             'stdin is supported only as the sole input.');
         if DirectoryExists(APaths[I]) then
           RawFiles.AddStrings(FindAllFiles(APaths[I], ScriptExtensions))
@@ -1402,7 +1370,7 @@ begin
       --output=json mode and by GocciaTestRunner / GocciaBenchmarkRunner. }
     for I := 0 to APaths.Count - 1 do
       if IsStdinPath(APaths[I]) then
-        raise TGocciaParseError.Create(
+        raise TParseError.Create(
           'stdin is supported only as the sole input.');
 
     for I := 0 to APaths.Count - 1 do
@@ -1431,7 +1399,7 @@ end;
 procedure TScriptLoaderApp.AfterExecute;
 var
   ProfileOpcodes, ProfileFunctions: Boolean;
-  ProfileMode: CLI.Options.TGocciaProfileMode;
+  ProfileMode: Goccia.CLI.Options.TGocciaProfileMode;
 begin
   if (CoverageOptions.Enabled.Present or CoverageOptions.Format.Present or
       CoverageOptions.OutputPath.Present) and
@@ -1459,10 +1427,10 @@ begin
   if ProfilerOptions.Mode.Present then
   begin
     ProfileMode := ProfilerOptions.Mode.Value;
-    ProfileOpcodes := (ProfileMode = CLI.Options.pmOpcodes) or
-                      (ProfileMode = CLI.Options.pmAll);
-    ProfileFunctions := (ProfileMode = CLI.Options.pmFunctions) or
-                        (ProfileMode = CLI.Options.pmAll);
+    ProfileOpcodes := (ProfileMode = Goccia.CLI.Options.pmOpcodes) or
+                      (ProfileMode = Goccia.CLI.Options.pmAll);
+    ProfileFunctions := (ProfileMode = Goccia.CLI.Options.pmFunctions) or
+                        (ProfileMode = Goccia.CLI.Options.pmAll);
   end;
 
   if (ProfileOpcodes or ProfileFunctions) and

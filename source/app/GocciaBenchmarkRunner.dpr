@@ -5,11 +5,9 @@ program GocciaBenchmarkRunner;
 uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
   Classes,
-  Generics.Collections,
   SysUtils,
 
   TimingUtils,
-  TextSemantics,
 
   Goccia.Application,
   Goccia.Arguments.Collection,
@@ -18,6 +16,7 @@ uses
   Goccia.Builtins.Benchmark,
   Goccia.Bytecode.Module,
   Goccia.CLI.Application,
+  Goccia.CLI.Options,
   CLI.ConfigFile,
   CLI.Options,
   Goccia.Constants.PropertyNames,
@@ -30,9 +29,6 @@ uses
   Goccia.FileExtensions,
   Goccia.GarbageCollector,
   Goccia.InstructionLimit,
-  Goccia.JSX.Transformer,
-  Goccia.Lexer,
-  Goccia.Parser,
   Goccia.Profiler,
   Goccia.Profiler.Report,
   Goccia.Runtime,
@@ -43,11 +39,10 @@ uses
   Goccia.Scope,
   Goccia.ScriptLoader.Input,
   Goccia.CLI.JSON.Reporter,
-  Goccia.SourceMap,
+  Goccia.SourcePipeline,
   Goccia.Terminal.Colors,
   Goccia.TextFiles,
   Goccia.Timeout,
-  Goccia.Token,
   Goccia.Values.ArrayValue,
   Goccia.Values.Error,
   Goccia.Values.ObjectValue,
@@ -189,10 +184,10 @@ end;
 type
   TBenchmarkRunnerApp = class(TGocciaCLIApplication)
   private
-    FNoProgress: TGocciaFlagOption;
-    FProfileDeterministic: TGocciaFlagOption;
-    FFormats: TGocciaRepeatableOption;
-    FOutputFile: TGocciaStringOption;
+    FNoProgress: TFlagOption;
+    FProfileDeterministic: TFlagOption;
+    FFormats: TRepeatableOption;
+    FOutputFile: TStringOption;
     FCanPrintProfile: Boolean;
     FWorkerProgressEnabled: Boolean;
     function ProfilingEnabled: Boolean;
@@ -410,21 +405,19 @@ procedure TBenchmarkRunnerApp.CollectBenchmarkFileBytecode(
   const AShowProgress: Boolean);
 var
   Source: TStringList;
-  SourceText: string;
-  JSXResult: TGocciaJSXTransformResult;
-  Lexer: TGocciaLexer;
-  Tokens: TObjectList<TGocciaToken>;
-  Parser: TGocciaParser;
-  ProgramNode: TGocciaProgram;
+  PipelineOptions: TGocciaSourcePipelineOptions;
+  PipelineResult: TGocciaSourcePipelineResult;
   Module: TGocciaCompiledModule;
   Executor: TGocciaBytecodeExecutor;
   Engine: TGocciaEngine;
   GC: TGarbageCollector;
   FileResult: TBenchmarkFileResult;
   ScriptResult: TGocciaObjectValue;
-  LexStart, LexEnd, ParseEnd, CompileEnd, ExecEnd, BenchStart: Int64;
+  LexStart, CompileStart, CompileEnd, ExecEnd, BenchStart: Int64;
+  LexTimeNanoseconds, ParseTimeNanoseconds: Int64;
 begin
   Source := nil;
+  PipelineResult := nil;
   try
     try
       Source := SourceRegistry.Load(AFileName);
@@ -437,13 +430,6 @@ begin
         Exit;
       end;
     end;
-    SourceText := StringListToLFText(Source);
-    if ppJSX in TGocciaEngine.DefaultPreprocessors then
-    begin
-      JSXResult := TGocciaJSXTransformer.Transform(SourceText);
-      SourceText := JSXResult.Source;
-      JSXResult.SourceMap.Free;
-    end;
 
     try
       Executor := TGocciaBytecodeExecutor.Create;
@@ -451,35 +437,21 @@ begin
         Engine := CreateEngine(AFileName, Source, Executor);
         try
           LexStart := GetNanoseconds;
-          Lexer := TGocciaLexer.Create(SourceText, AFileName);
+          PipelineOptions.Preprocessors := Engine.Preprocessors;
+          PipelineOptions.Compatibility := Engine.Compatibility;
+          PipelineOptions.SourceType := Engine.SourceType;
+          PipelineResult := TGocciaSourcePipeline.Parse(Source, AFileName,
+            PipelineOptions);
+          LexTimeNanoseconds := PipelineResult.LexTimeNanoseconds;
+          ParseTimeNanoseconds := PipelineResult.ParseTimeNanoseconds;
+
+          CompileStart := GetNanoseconds;
           try
-            Tokens := Lexer.ScanTokens;
-            LexEnd := GetNanoseconds;
-
-            Parser := TGocciaParser.Create(Tokens, AFileName, Lexer.SourceLines);
-            Parser.AutomaticSemicolonInsertion := Engine.ASIEnabled;
-            Parser.VarDeclarationsEnabled := Engine.VarEnabled;
-            Parser.FunctionDeclarationsEnabled := Engine.FunctionEnabled;
-            Parser.TraditionalForLoopsEnabled := Engine.TraditionalForLoopsEnabled;
-            Parser.WhileLoopsEnabled := Engine.WhileLoopsEnabled;
-            Parser.LooseEqualityEnabled := Engine.LooseEqualityEnabled;
-            Parser.NonStrictModeEnabled := Engine.NonStrictModeEnabled or
-              (Engine.SourceType = stModule);
-            try
-              ProgramNode := Parser.Parse;
-              ParseEnd := GetNanoseconds;
-
-              try
-                Module := Engine.CompileModule(ProgramNode);
-                CompileEnd := GetNanoseconds;
-              finally
-                ProgramNode.Free;
-              end;
-            finally
-              Parser.Free;
-            end;
+            Module := Engine.CompileModule(PipelineResult.ProgramNode);
+            CompileEnd := GetNanoseconds;
           finally
-            Lexer.Free;
+            PipelineResult.Free;
+            PipelineResult := nil;
           end;
 
           ConfigureBenchmarkRuntime(Engine, AShowProgress, True);
@@ -495,9 +467,9 @@ begin
 
             FileResult.FileName := AFileName;
             FileResult.DeterministicProfile := FProfileDeterministic.Present;
-            FileResult.LexTimeNanoseconds := LexEnd - LexStart;
-            FileResult.ParseTimeNanoseconds := ParseEnd - LexEnd;
-            FileResult.CompileTimeNanoseconds := CompileEnd - ParseEnd;
+            FileResult.LexTimeNanoseconds := LexTimeNanoseconds;
+            FileResult.ParseTimeNanoseconds := ParseTimeNanoseconds;
+            FileResult.CompileTimeNanoseconds := CompileEnd - CompileStart;
             BenchStart := GetNanoseconds;
             ScriptResult := RunRegisteredBenchmarks(Engine,
               FProfileDeterministic.Present);
@@ -549,6 +521,7 @@ begin
         MakeErrorFileResult(AFileName, E.Message, AReporter);
     end;
   finally
+    PipelineResult.Free;
     if Assigned(TGarbageCollector.Instance) then
       TGarbageCollector.Instance.Collect;
     Source.Free;
@@ -646,63 +619,39 @@ procedure TBenchmarkRunnerApp.CollectBenchmarkSourceBytecode(
   const ASource: TStringList; const AFileName: string;
   const AReporter: TBenchmarkReporter; const AShowProgress: Boolean);
 var
-  SourceText: string;
-  JSXResult: TGocciaJSXTransformResult;
-  Lexer: TGocciaLexer;
-  Tokens: TObjectList<TGocciaToken>;
-  Parser: TGocciaParser;
-  ProgramNode: TGocciaProgram;
+  PipelineOptions: TGocciaSourcePipelineOptions;
+  PipelineResult: TGocciaSourcePipelineResult;
   Module: TGocciaCompiledModule;
   Executor: TGocciaBytecodeExecutor;
   Engine: TGocciaEngine;
   GC: TGarbageCollector;
   FileResult: TBenchmarkFileResult;
   ScriptResult: TGocciaObjectValue;
-  LexStart, LexEnd, ParseEnd, CompileEnd, ExecEnd, BenchStart: Int64;
+  LexStart, CompileStart, CompileEnd, ExecEnd, BenchStart: Int64;
+  LexTimeNanoseconds, ParseTimeNanoseconds: Int64;
 begin
-  SourceText := StringListToLFText(ASource);
-  if ppJSX in TGocciaEngine.DefaultPreprocessors then
-  begin
-    JSXResult := TGocciaJSXTransformer.Transform(SourceText);
-    SourceText := JSXResult.Source;
-    JSXResult.SourceMap.Free;
-  end;
-
+  PipelineResult := nil;
   try
     Executor := TGocciaBytecodeExecutor.Create;
     try
       Engine := CreateEngine(AFileName, ASource, Executor);
       try
         LexStart := GetNanoseconds;
-        Lexer := TGocciaLexer.Create(SourceText, AFileName);
+        PipelineOptions.Preprocessors := Engine.Preprocessors;
+        PipelineOptions.Compatibility := Engine.Compatibility;
+        PipelineOptions.SourceType := Engine.SourceType;
+        PipelineResult := TGocciaSourcePipeline.Parse(ASource, AFileName,
+          PipelineOptions);
+        LexTimeNanoseconds := PipelineResult.LexTimeNanoseconds;
+        ParseTimeNanoseconds := PipelineResult.ParseTimeNanoseconds;
+
+        CompileStart := GetNanoseconds;
         try
-          Tokens := Lexer.ScanTokens;
-          LexEnd := GetNanoseconds;
-
-          Parser := TGocciaParser.Create(Tokens, AFileName, Lexer.SourceLines);
-          Parser.AutomaticSemicolonInsertion := Engine.ASIEnabled;
-          Parser.VarDeclarationsEnabled := Engine.VarEnabled;
-          Parser.FunctionDeclarationsEnabled := Engine.FunctionEnabled;
-          Parser.TraditionalForLoopsEnabled := Engine.TraditionalForLoopsEnabled;
-          Parser.WhileLoopsEnabled := Engine.WhileLoopsEnabled;
-          Parser.LooseEqualityEnabled := Engine.LooseEqualityEnabled;
-          Parser.NonStrictModeEnabled := Engine.NonStrictModeEnabled or
-            (Engine.SourceType = stModule);
-          try
-            ProgramNode := Parser.Parse;
-            ParseEnd := GetNanoseconds;
-
-            try
-              Module := Engine.CompileModule(ProgramNode);
-              CompileEnd := GetNanoseconds;
-            finally
-              ProgramNode.Free;
-            end;
-          finally
-            Parser.Free;
-          end;
+          Module := Engine.CompileModule(PipelineResult.ProgramNode);
+          CompileEnd := GetNanoseconds;
         finally
-          Lexer.Free;
+          PipelineResult.Free;
+          PipelineResult := nil;
         end;
 
         ConfigureBenchmarkRuntime(Engine, AShowProgress, True);
@@ -718,9 +667,9 @@ begin
 
           FileResult.FileName := AFileName;
           FileResult.DeterministicProfile := FProfileDeterministic.Present;
-          FileResult.LexTimeNanoseconds := LexEnd - LexStart;
-          FileResult.ParseTimeNanoseconds := ParseEnd - LexEnd;
-          FileResult.CompileTimeNanoseconds := CompileEnd - ParseEnd;
+          FileResult.LexTimeNanoseconds := LexTimeNanoseconds;
+          FileResult.ParseTimeNanoseconds := ParseTimeNanoseconds;
+          FileResult.CompileTimeNanoseconds := CompileEnd - CompileStart;
           BenchStart := GetNanoseconds;
           ScriptResult := RunRegisteredBenchmarks(Engine,
             FProfileDeterministic.Present);
@@ -1082,19 +1031,19 @@ begin
     EngineOptions.Mode.Apply('bytecode');
 
   if ProfilerOptions.OutputPath.Present and not ProfilerOptions.Mode.Present then
-    raise TGocciaParseError.Create(
+    raise TParseError.Create(
       '--profile-output requires --profile=opcodes|functions|all.');
 
   if ProfilerOptions.Format.Matches(pfFlamegraph) and
      not ProfilerOptions.OutputPath.Present then
-    raise TGocciaParseError.Create(
+    raise TParseError.Create(
       '--profile-format=flamegraph requires --profile-output=<path>.');
 end;
 
 procedure TBenchmarkRunnerApp.AfterExecute;
 var
   ProfileOpcodes, ProfileFunctions: Boolean;
-  ProfileMode: CLI.Options.TGocciaProfileMode;
+  ProfileMode: Goccia.CLI.Options.TGocciaProfileMode;
 begin
   ProfileOpcodes := False;
   ProfileFunctions := False;
@@ -1102,10 +1051,10 @@ begin
   if ProfilerOptions.Mode.Present then
   begin
     ProfileMode := ProfilerOptions.Mode.Value;
-    ProfileOpcodes := (ProfileMode = CLI.Options.pmOpcodes) or
-                      (ProfileMode = CLI.Options.pmAll);
-    ProfileFunctions := (ProfileMode = CLI.Options.pmFunctions) or
-                        (ProfileMode = CLI.Options.pmAll);
+    ProfileOpcodes := (ProfileMode = Goccia.CLI.Options.pmOpcodes) or
+                      (ProfileMode = Goccia.CLI.Options.pmAll);
+    ProfileFunctions := (ProfileMode = Goccia.CLI.Options.pmFunctions) or
+                        (ProfileMode = Goccia.CLI.Options.pmAll);
   end;
 
   if (ProfileOpcodes or ProfileFunctions) and

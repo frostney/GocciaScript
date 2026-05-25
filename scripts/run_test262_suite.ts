@@ -672,7 +672,7 @@ interface PerTestRecord {
 // directives and modules decide strict semantics, while the flag exposes
 // compatibility-gated syntax and implicit objects needed by the corpus.
 const TEST262_BARE_FLAGS: readonly string[] = [
-  "--asi",
+  "--compat-asi",
   "--compat-var",
   "--compat-function",
   "--compat-traditional-for-loop",

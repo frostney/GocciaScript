@@ -3,11 +3,13 @@ program CLI.Parser.Test;
 {$I Shared.inc}
 
 uses
+  Classes,
   SysUtils,
   TypInfo,
 
   CLI.ConfigFile,
   CLI.Options,
+  CLI.Parser,
   TestingPascalLibrary,
 
   Goccia.CLI.Help;
@@ -24,6 +26,9 @@ type
     procedure TestStringOptionApply;
     procedure TestStringOptionValueOrWhenPresent;
     procedure TestStringOptionValueOrWhenAbsent;
+    procedure TestStringOptionMarkPresentClearsValue;
+    procedure TestOptionalStringOptionParsing;
+    procedure TestRequiredValueOptionAcceptsDashPrefixedValues;
     procedure TestIntegerOptionApply;
     procedure TestIntegerOptionValueOrWhenPresent;
     procedure TestIntegerOptionValueOrWhenAbsent;
@@ -51,14 +56,17 @@ begin
   Test('StringOption.Apply stores the value', TestStringOptionApply);
   Test('StringOption.ValueOr returns value when present', TestStringOptionValueOrWhenPresent);
   Test('StringOption.ValueOr returns default when absent', TestStringOptionValueOrWhenAbsent);
+  Test('StringOption.MarkPresent clears existing value', TestStringOptionMarkPresentClearsValue);
+  Test('OptionalStringOption parsing keeps positionals', TestOptionalStringOptionParsing);
+  Test('Required value option accepts dash-prefixed values', TestRequiredValueOptionAcceptsDashPrefixedValues);
   Test('IntegerOption.Apply parses integer value', TestIntegerOptionApply);
   Test('IntegerOption.ValueOr returns value when present', TestIntegerOptionValueOrWhenPresent);
   Test('IntegerOption.ValueOr returns default when absent', TestIntegerOptionValueOrWhenAbsent);
-  Test('IntegerOption.Apply raises TGocciaParseError for non-integer', TestIntegerOptionInvalidValue);
+  Test('IntegerOption.Apply raises TParseError for non-integer', TestIntegerOptionInvalidValue);
   Test('RepeatableOption accumulates multiple values', TestRepeatableOptionMultipleValues);
   Test('EnumOption applies first value', TestEnumOptionFirstValue);
   Test('EnumOption applies second value', TestEnumOptionSecondValue);
-  Test('EnumOption raises TGocciaParseError for invalid value', TestEnumOptionInvalidValue);
+  Test('EnumOption raises TParseError for invalid value', TestEnumOptionInvalidValue);
   Test('EnumOption.ValidValues returns comma-separated list', TestEnumOptionValidValues);
   Test('EnumOption.FormatForHelp returns pipe-separated values', TestEnumOptionFormatForHelp);
   Test('OptionList tracks added options', TestOptionListAddFlagAndString);
@@ -69,13 +77,13 @@ begin
   Test('Config-applied option has Present but not FromCommandLine', TestConfigAppliedOptionNotFromCommandLine);
 end;
 
-{ TGocciaFlagOption tests }
+{ TFlagOption tests }
 
 procedure TCLIOptionsTests.TestFlagOptionNotPresentInitially;
 var
-  Opt: TGocciaFlagOption;
+  Opt: TFlagOption;
 begin
-  Opt := TGocciaFlagOption.Create('verbose', 'Enable verbose output');
+  Opt := TFlagOption.Create('verbose', 'Enable verbose output');
   try
     Expect<Boolean>(Opt.Present).ToBe(False);
   finally
@@ -85,9 +93,9 @@ end;
 
 procedure TCLIOptionsTests.TestFlagOptionApply;
 var
-  Opt: TGocciaFlagOption;
+  Opt: TFlagOption;
 begin
-  Opt := TGocciaFlagOption.Create('verbose', 'Enable verbose output');
+  Opt := TFlagOption.Create('verbose', 'Enable verbose output');
   try
     Opt.Apply('');
     Expect<Boolean>(Opt.Present).ToBe(True);
@@ -96,13 +104,13 @@ begin
   end;
 end;
 
-{ TGocciaStringOption tests }
+{ TStringOption tests }
 
 procedure TCLIOptionsTests.TestStringOptionApply;
 var
-  Opt: TGocciaStringOption;
+  Opt: TStringOption;
 begin
-  Opt := TGocciaStringOption.Create('output', 'Output path');
+  Opt := TStringOption.Create('output', 'Output path');
   try
     Opt.Apply('hello');
     Expect<Boolean>(Opt.Present).ToBe(True);
@@ -114,9 +122,9 @@ end;
 
 procedure TCLIOptionsTests.TestStringOptionValueOrWhenPresent;
 var
-  Opt: TGocciaStringOption;
+  Opt: TStringOption;
 begin
-  Opt := TGocciaStringOption.Create('output', 'Output path');
+  Opt := TStringOption.Create('output', 'Output path');
   try
     Opt.Apply('hello');
     Expect<string>(Opt.ValueOr('fallback')).ToBe('hello');
@@ -127,9 +135,9 @@ end;
 
 procedure TCLIOptionsTests.TestStringOptionValueOrWhenAbsent;
 var
-  Opt: TGocciaStringOption;
+  Opt: TStringOption;
 begin
-  Opt := TGocciaStringOption.Create('output', 'Output path');
+  Opt := TStringOption.Create('output', 'Output path');
   try
     Expect<string>(Opt.ValueOr('fallback')).ToBe('fallback');
   finally
@@ -137,13 +145,99 @@ begin
   end;
 end;
 
-{ TGocciaIntegerOption tests }
+procedure TCLIOptionsTests.TestStringOptionMarkPresentClearsValue;
+var
+  Opt: TStringOption;
+begin
+  Opt := TStringOption.Create('output', 'Output path');
+  try
+    Opt.Apply('configured.map');
+    Opt.MarkPresent;
+    Expect<Boolean>(Opt.Present).ToBe(True);
+    Expect<string>(Opt.Value).ToBe('');
+    Expect<string>(Opt.ValueOr('fallback')).ToBe('');
+  finally
+    Opt.Free;
+  end;
+end;
+
+procedure TCLIOptionsTests.TestOptionalStringOptionParsing;
+
+  procedure ExpectSourceMapParse(const AExpectedValue: string;
+    const AArgs: array of string);
+  var
+    Opt: TOptionalStringOption;
+    Options: TOptionArray;
+    Positionals: TStringList;
+  begin
+    Opt := TOptionalStringOption.Create('source-map', 'Write source map');
+    try
+      SetLength(Options, 1);
+      Options[0] := Opt;
+      Positionals := ParseArguments(AArgs, Options);
+      try
+        Expect<Boolean>(Opt.Present).ToBe(True);
+        Expect<string>(Opt.Value).ToBe(AExpectedValue);
+        Expect<Integer>(Positionals.Count).ToBe(1);
+        Expect<string>(Positionals[0]).ToBe('positional');
+      finally
+        Positionals.Free;
+      end;
+    finally
+      Opt.Free;
+    end;
+  end;
+
+begin
+  ExpectSourceMapParse('', ['--source-map', 'positional']);
+  ExpectSourceMapParse('out.map', ['--source-map=out.map', 'positional']);
+end;
+
+procedure TCLIOptionsTests.TestRequiredValueOptionAcceptsDashPrefixedValues;
+var
+  IntegerOpt: TIntegerOption;
+  StringOpt: TStringOption;
+  Options: TOptionArray;
+  Positionals: TStringList;
+begin
+  IntegerOpt := TIntegerOption.Create('timeout', 'Timeout in ms');
+  try
+    SetLength(Options, 1);
+    Options[0] := IntegerOpt;
+    Positionals := ParseArguments(['--timeout', '-1'], Options);
+    try
+      Expect<Integer>(IntegerOpt.Value).ToBe(-1);
+      Expect<Integer>(Positionals.Count).ToBe(0);
+    finally
+      Positionals.Free;
+    end;
+  finally
+    IntegerOpt.Free;
+  end;
+
+  StringOpt := TStringOption.Create('output', 'Output path');
+  try
+    SetLength(Options, 1);
+    Options[0] := StringOpt;
+    Positionals := ParseArguments(['--output', '-tmp'], Options);
+    try
+      Expect<string>(StringOpt.Value).ToBe('-tmp');
+      Expect<Integer>(Positionals.Count).ToBe(0);
+    finally
+      Positionals.Free;
+    end;
+  finally
+    StringOpt.Free;
+  end;
+end;
+
+{ TIntegerOption tests }
 
 procedure TCLIOptionsTests.TestIntegerOptionApply;
 var
-  Opt: TGocciaIntegerOption;
+  Opt: TIntegerOption;
 begin
-  Opt := TGocciaIntegerOption.Create('timeout', 'Timeout in ms');
+  Opt := TIntegerOption.Create('timeout', 'Timeout in ms');
   try
     Opt.Apply('42');
     Expect<Boolean>(Opt.Present).ToBe(True);
@@ -155,9 +249,9 @@ end;
 
 procedure TCLIOptionsTests.TestIntegerOptionValueOrWhenPresent;
 var
-  Opt: TGocciaIntegerOption;
+  Opt: TIntegerOption;
 begin
-  Opt := TGocciaIntegerOption.Create('timeout', 'Timeout in ms');
+  Opt := TIntegerOption.Create('timeout', 'Timeout in ms');
   try
     Opt.Apply('42');
     Expect<Integer>(Opt.ValueOr(100)).ToBe(42);
@@ -168,9 +262,9 @@ end;
 
 procedure TCLIOptionsTests.TestIntegerOptionValueOrWhenAbsent;
 var
-  Opt: TGocciaIntegerOption;
+  Opt: TIntegerOption;
 begin
-  Opt := TGocciaIntegerOption.Create('timeout', 'Timeout in ms');
+  Opt := TIntegerOption.Create('timeout', 'Timeout in ms');
   try
     Expect<Integer>(Opt.ValueOr(100)).ToBe(100);
   finally
@@ -180,16 +274,16 @@ end;
 
 procedure TCLIOptionsTests.TestIntegerOptionInvalidValue;
 var
-  Opt: TGocciaIntegerOption;
+  Opt: TIntegerOption;
   Raised: Boolean;
 begin
-  Opt := TGocciaIntegerOption.Create('timeout', 'Timeout in ms');
+  Opt := TIntegerOption.Create('timeout', 'Timeout in ms');
   try
     Raised := False;
     try
       Opt.Apply('notanumber');
     except
-      on E: TGocciaParseError do
+      on E: TParseError do
         Raised := True;
     end;
     Expect<Boolean>(Raised).ToBe(True);
@@ -198,13 +292,13 @@ begin
   end;
 end;
 
-{ TGocciaRepeatableOption tests }
+{ TRepeatableOption tests }
 
 procedure TCLIOptionsTests.TestRepeatableOptionMultipleValues;
 var
-  Opt: TGocciaRepeatableOption;
+  Opt: TRepeatableOption;
 begin
-  Opt := TGocciaRepeatableOption.Create('alias', 'Import alias');
+  Opt := TRepeatableOption.Create('alias', 'Import alias');
   try
     Opt.Apply('@/=./src/');
     Opt.Apply('config=./config/default.js');
@@ -219,13 +313,13 @@ begin
   end;
 end;
 
-{ TGocciaEnumOption tests — uses local TTestColor enum }
+{ TEnumOption tests — uses local TTestColor enum }
 
 procedure TCLIOptionsTests.TestEnumOptionFirstValue;
 var
-  Opt: TGocciaEnumOption<TTestColor>;
+  Opt: TEnumOption<TTestColor>;
 begin
-  Opt := TGocciaEnumOption<TTestColor>.Create('color', 'Pick a color');
+  Opt := TEnumOption<TTestColor>.Create('color', 'Pick a color');
   try
     Opt.Apply('red');
     Expect<Boolean>(Opt.Present).ToBe(True);
@@ -237,9 +331,9 @@ end;
 
 procedure TCLIOptionsTests.TestEnumOptionSecondValue;
 var
-  Opt: TGocciaEnumOption<TTestColor>;
+  Opt: TEnumOption<TTestColor>;
 begin
-  Opt := TGocciaEnumOption<TTestColor>.Create('color', 'Pick a color');
+  Opt := TEnumOption<TTestColor>.Create('color', 'Pick a color');
   try
     Opt.Apply('blue');
     Expect<Boolean>(Opt.Present).ToBe(True);
@@ -251,16 +345,16 @@ end;
 
 procedure TCLIOptionsTests.TestEnumOptionInvalidValue;
 var
-  Opt: TGocciaEnumOption<TTestColor>;
+  Opt: TEnumOption<TTestColor>;
   Raised: Boolean;
 begin
-  Opt := TGocciaEnumOption<TTestColor>.Create('color', 'Pick a color');
+  Opt := TEnumOption<TTestColor>.Create('color', 'Pick a color');
   try
     Raised := False;
     try
       Opt.Apply('invalid');
     except
-      on E: TGocciaParseError do
+      on E: TParseError do
         Raised := True;
     end;
     Expect<Boolean>(Raised).ToBe(True);
@@ -271,9 +365,9 @@ end;
 
 procedure TCLIOptionsTests.TestEnumOptionValidValues;
 var
-  Opt: TGocciaEnumOption<TTestColor>;
+  Opt: TEnumOption<TTestColor>;
 begin
-  Opt := TGocciaEnumOption<TTestColor>.Create('color', 'Pick a color');
+  Opt := TEnumOption<TTestColor>.Create('color', 'Pick a color');
   try
     Expect<string>(Opt.ValidValues).ToBe('red, blue');
   finally
@@ -283,9 +377,9 @@ end;
 
 procedure TCLIOptionsTests.TestEnumOptionFormatForHelp;
 var
-  Opt: TGocciaEnumOption<TTestColor>;
+  Opt: TEnumOption<TTestColor>;
 begin
-  Opt := TGocciaEnumOption<TTestColor>.Create('color', 'Pick a color');
+  Opt := TEnumOption<TTestColor>.Create('color', 'Pick a color');
   try
     Expect<string>(Opt.FormatForHelp).ToBe('--color=red|blue');
   finally
@@ -293,14 +387,14 @@ begin
   end;
 end;
 
-{ TGocciaOptionList tests }
+{ TOptionList tests }
 
 procedure TCLIOptionsTests.TestOptionListAddFlagAndString;
 var
-  List: TGocciaOptionList;
-  Arr: TGocciaOptionArray;
+  List: TOptionList;
+  Arr: TOptionArray;
 begin
-  List := TGocciaOptionList.Create;
+  List := TOptionList.Create;
   try
     List.AddFlag('verbose', 'Enable verbose output');
     List.AddString('output', 'Output file path');
@@ -317,11 +411,11 @@ end;
 
 procedure TCLIOptionsTests.TestConcatOptionsMergesTwoArrays;
 var
-  ListA, ListB: TGocciaOptionList;
-  Combined: TGocciaOptionArray;
+  ListA, ListB: TOptionList;
+  Combined: TOptionArray;
 begin
-  ListA := TGocciaOptionList.Create;
-  ListB := TGocciaOptionList.Create;
+  ListA := TOptionList.Create;
+  ListB := TOptionList.Create;
   try
     ListA.AddFlag('alpha', 'First flag');
     ListA.AddString('beta', 'First string');
@@ -341,10 +435,10 @@ end;
 
 procedure TCLIOptionsTests.TestGenerateHelpText;
 var
-  List: TGocciaOptionList;
+  List: TOptionList;
   HelpText: string;
 begin
-  List := TGocciaOptionList.Create;
+  List := TOptionList.Create;
   try
     List.AddFlag('verbose', 'Enable verbose output');
     List.AddString('output', 'Output file path');
@@ -363,9 +457,9 @@ end;
 
 procedure TCLIOptionsTests.TestFromCommandLineIsFalseInitially;
 var
-  Opt: TGocciaFlagOption;
+  Opt: TFlagOption;
 begin
-  Opt := TGocciaFlagOption.Create('asi', 'Enable ASI');
+  Opt := TFlagOption.Create('feature', 'Enable feature');
   try
     Expect<Boolean>(Opt.FromCommandLine).ToBe(False);
   finally
@@ -375,9 +469,9 @@ end;
 
 procedure TCLIOptionsTests.TestMarkFromCommandLineSetsTrue;
 var
-  Opt: TGocciaFlagOption;
+  Opt: TFlagOption;
 begin
-  Opt := TGocciaFlagOption.Create('asi', 'Enable ASI');
+  Opt := TFlagOption.Create('feature', 'Enable feature');
   try
     Opt.Apply('');
     Opt.MarkFromCommandLine;
@@ -390,16 +484,16 @@ end;
 
 procedure TCLIOptionsTests.TestConfigAppliedOptionNotFromCommandLine;
 var
-  Opt: TGocciaFlagOption;
-  Options: TGocciaOptionArray;
+  Opt: TFlagOption;
+  Options: TOptionArray;
   Entries: TConfigEntryArray;
 begin
-  Opt := TGocciaFlagOption.Create('asi', 'Enable ASI');
+  Opt := TFlagOption.Create('feature', 'Enable feature');
   try
     SetLength(Options, 1);
     Options[0] := Opt;
     SetLength(Entries, 1);
-    Entries[0].Key := 'asi';
+    Entries[0].Key := 'feature';
     Entries[0].Value := 'true';
 
     ApplyConfigEntries(Entries, Options);

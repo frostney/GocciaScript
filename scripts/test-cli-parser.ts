@@ -74,7 +74,7 @@ console.log("Unsupported optional private field access...");
 
 console.log("ASI at EOF...");
 {
-  const asiRes = runLoaderJson("const value = 42", ["--asi"]);
+  const asiRes = runLoaderJson("const value = 42", ["--compat-asi"]);
   if (asiRes.exitCode !== 0) throw new Error(`ASI should accept a final declaration at EOF without a semicolon`);
   if (asiRes.json.ok !== true)
     throw new Error(`ASI EOF declaration should succeed, got: ${JSON.stringify(asiRes.json)}`);
@@ -108,12 +108,12 @@ console.log("Unsupported var recovery (ASI and compat-var flags)...");
     "console.log(after);",
     "",
   ].join("\n");
-  const asiRes = runLoaderJson(sourceBeforeDeclaration, ["--asi"]);
+  const asiRes = runLoaderJson(sourceBeforeDeclaration, ["--compat-asi"]);
   if (asiRes.exitCode !== 0) throw new Error(`Unsupported var with ASI should preserve the following declaration`);
   if (asiRes.json.ok !== true) throw new Error(`Unsupported var with ASI should succeed, got: ${JSON.stringify(asiRes.json)}`);
   if (normalizeLineEndings(asiRes.json.output) !== "2\n") throw new Error(`Expected ASI recovery output 2, got: ${asiRes.json.output}`);
 
-  const compatVarAsiRes = runLoaderJson(sourceBeforeDeclaration, ["--asi", "--compat-var"]);
+  const compatVarAsiRes = runLoaderJson(sourceBeforeDeclaration, ["--compat-asi", "--compat-var"]);
   if (compatVarAsiRes.exitCode !== 0) throw new Error(`compat-var with ASI should parse var without an explicit semicolon`);
   if (compatVarAsiRes.json.ok !== true) throw new Error(`compat-var with ASI should succeed, got: ${JSON.stringify(compatVarAsiRes.json)}`);
   if (normalizeLineEndings(compatVarAsiRes.json.output) !== "2\n") throw new Error(`Expected compat-var ASI output 2, got: ${compatVarAsiRes.json.output}`);

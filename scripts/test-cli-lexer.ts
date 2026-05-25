@@ -69,7 +69,7 @@ console.log("String allows LS/PS (ES2019)...");
 
 console.log("String line continuation...");
 {
-  const { exitCode, json } = runLoaderJson('"hello\\\nworld";\n', ["--print", "--asi"]);
+  const { exitCode, json } = runLoaderJson('"hello\\\nworld";\n', ["--print", "--compat-asi"]);
   if (exitCode !== 0) {
     throw new Error(`Line continuation should succeed, but failed`);
   }

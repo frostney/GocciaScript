@@ -16,6 +16,7 @@ uses
   Goccia.Modules.ContentProvider,
   Goccia.Modules.Resolver,
   Goccia.Scope,
+  Goccia.SourcePipeline,
   Goccia.Values.Primitives;
 
 type
@@ -31,20 +32,14 @@ type
 
   TGocciaModuleLoader = class
   private
-    FASIEnabled: Boolean;
-    FVarEnabled: Boolean;
-    FFunctionEnabled: Boolean;
-    FTraditionalForLoopsEnabled: Boolean;
-    FWhileLoopsEnabled: Boolean;
-    FLooseEqualityEnabled: Boolean;
-    FNonStrictModeEnabled: Boolean;
+    FPreprocessors: TGocciaPreprocessors;
+    FCompatibility: TGocciaCompatibilityFlags;
     FStrictTypesEnabled: Boolean;
     FContentProvider: TGocciaModuleContentProvider;
     FEvaluateModuleBody: TGocciaModuleBodyEvaluator;
     FEntryFileName: string;
     FGlobalModules: TOrderedStringMap<TGocciaModule>;
     FGlobalScope: TGocciaGlobalScope;
-    FJSXEnabled: Boolean;
     FLoadingModules: TOrderedStringMap<Boolean>;
     FModules: TOrderedStringMap<TGocciaModule>;
     FOnError: TGocciaThrowErrorCallback;
@@ -56,6 +51,22 @@ type
     procedure CopyModuleContents(const ASourceModule,
       ATargetModule: TGocciaModule);
     function LoadJSONModule(const AResolvedPath: string): TGocciaModule;
+    function GetASIEnabled: Boolean;
+    function GetJSXEnabled: Boolean;
+    function GetVarEnabled: Boolean;
+    function GetFunctionEnabled: Boolean;
+    function GetTraditionalForLoopsEnabled: Boolean;
+    function GetWhileLoopsEnabled: Boolean;
+    function GetLooseEqualityEnabled: Boolean;
+    function GetNonStrictModeEnabled: Boolean;
+    procedure SetASIEnabled(const AValue: Boolean);
+    procedure SetJSXEnabled(const AValue: Boolean);
+    procedure SetVarEnabled(const AValue: Boolean);
+    procedure SetFunctionEnabled(const AValue: Boolean);
+    procedure SetTraditionalForLoopsEnabled(const AValue: Boolean);
+    procedure SetWhileLoopsEnabled(const AValue: Boolean);
+    procedure SetLooseEqualityEnabled(const AValue: Boolean);
+    procedure SetNonStrictModeEnabled(const AValue: Boolean);
   public
     constructor Create(const AEntryFileName: string;
       const AResolver: TGocciaModuleResolver = nil;
@@ -77,18 +88,22 @@ type
       read FEvaluateModuleBody write FEvaluateModuleBody;
     property GlobalModules: TOrderedStringMap<TGocciaModule>
       read FGlobalModules;
-    property ASIEnabled: Boolean read FASIEnabled write FASIEnabled;
-    property JSXEnabled: Boolean read FJSXEnabled write FJSXEnabled;
-    property VarEnabled: Boolean read FVarEnabled write FVarEnabled;
-    property FunctionEnabled: Boolean read FFunctionEnabled write FFunctionEnabled;
+    property Preprocessors: TGocciaPreprocessors
+      read FPreprocessors write FPreprocessors;
+    property Compatibility: TGocciaCompatibilityFlags
+      read FCompatibility write FCompatibility;
+    property ASIEnabled: Boolean read GetASIEnabled write SetASIEnabled;
+    property JSXEnabled: Boolean read GetJSXEnabled write SetJSXEnabled;
+    property VarEnabled: Boolean read GetVarEnabled write SetVarEnabled;
+    property FunctionEnabled: Boolean read GetFunctionEnabled write SetFunctionEnabled;
     property TraditionalForLoopsEnabled: Boolean
-      read FTraditionalForLoopsEnabled write FTraditionalForLoopsEnabled;
+      read GetTraditionalForLoopsEnabled write SetTraditionalForLoopsEnabled;
     property WhileLoopsEnabled: Boolean
-      read FWhileLoopsEnabled write FWhileLoopsEnabled;
+      read GetWhileLoopsEnabled write SetWhileLoopsEnabled;
     property LooseEqualityEnabled: Boolean
-      read FLooseEqualityEnabled write FLooseEqualityEnabled;
+      read GetLooseEqualityEnabled write SetLooseEqualityEnabled;
     property NonStrictModeEnabled: Boolean
-      read FNonStrictModeEnabled write FNonStrictModeEnabled;
+      read GetNonStrictModeEnabled write SetNonStrictModeEnabled;
     property StrictTypesEnabled: Boolean read FStrictTypesEnabled
       write FStrictTypesEnabled;
     property Resolver: TGocciaModuleResolver read FResolver;
@@ -99,19 +114,13 @@ type
 implementation
 
 uses
-  TextSemantics,
-
   Goccia.AST.Expressions,
   Goccia.AST.Statements,
   Goccia.Error,
   Goccia.FileExtensions,
   Goccia.GarbageCollector,
   Goccia.JSON,
-  Goccia.JSX.Transformer,
   Goccia.Keywords.Reserved,
-  Goccia.Lexer,
-  Goccia.Parser,
-  Goccia.SourceMap,
   Goccia.Values.ObjectValue;
 
 constructor TGocciaModuleLoader.Create(const AEntryFileName: string;
@@ -158,6 +167,111 @@ begin
   if FOwnsContentProvider then
     FContentProvider.Free;
   inherited;
+end;
+
+function TGocciaModuleLoader.GetASIEnabled: Boolean;
+begin
+  Result := cfASI in FCompatibility;
+end;
+
+function TGocciaModuleLoader.GetJSXEnabled: Boolean;
+begin
+  Result := ppJSX in FPreprocessors;
+end;
+
+function TGocciaModuleLoader.GetVarEnabled: Boolean;
+begin
+  Result := cfVar in FCompatibility;
+end;
+
+function TGocciaModuleLoader.GetFunctionEnabled: Boolean;
+begin
+  Result := cfFunction in FCompatibility;
+end;
+
+function TGocciaModuleLoader.GetTraditionalForLoopsEnabled: Boolean;
+begin
+  Result := cfTraditionalFor in FCompatibility;
+end;
+
+function TGocciaModuleLoader.GetWhileLoopsEnabled: Boolean;
+begin
+  Result := cfWhileLoops in FCompatibility;
+end;
+
+function TGocciaModuleLoader.GetLooseEqualityEnabled: Boolean;
+begin
+  Result := cfLooseEquality in FCompatibility;
+end;
+
+function TGocciaModuleLoader.GetNonStrictModeEnabled: Boolean;
+begin
+  Result := cfNonStrictMode in FCompatibility;
+end;
+
+procedure TGocciaModuleLoader.SetASIEnabled(const AValue: Boolean);
+begin
+  if AValue then
+    Include(FCompatibility, cfASI)
+  else
+    Exclude(FCompatibility, cfASI);
+end;
+
+procedure TGocciaModuleLoader.SetJSXEnabled(const AValue: Boolean);
+begin
+  if AValue then
+    Include(FPreprocessors, ppJSX)
+  else
+    Exclude(FPreprocessors, ppJSX);
+end;
+
+procedure TGocciaModuleLoader.SetVarEnabled(const AValue: Boolean);
+begin
+  if AValue then
+    Include(FCompatibility, cfVar)
+  else
+    Exclude(FCompatibility, cfVar);
+end;
+
+procedure TGocciaModuleLoader.SetFunctionEnabled(const AValue: Boolean);
+begin
+  if AValue then
+    Include(FCompatibility, cfFunction)
+  else
+    Exclude(FCompatibility, cfFunction);
+end;
+
+procedure TGocciaModuleLoader.SetTraditionalForLoopsEnabled(
+  const AValue: Boolean);
+begin
+  if AValue then
+    Include(FCompatibility, cfTraditionalFor)
+  else
+    Exclude(FCompatibility, cfTraditionalFor);
+end;
+
+procedure TGocciaModuleLoader.SetWhileLoopsEnabled(const AValue: Boolean);
+begin
+  if AValue then
+    Include(FCompatibility, cfWhileLoops)
+  else
+    Exclude(FCompatibility, cfWhileLoops);
+end;
+
+procedure TGocciaModuleLoader.SetLooseEqualityEnabled(const AValue: Boolean);
+begin
+  if AValue then
+    Include(FCompatibility, cfLooseEquality)
+  else
+    Exclude(FCompatibility, cfLooseEquality);
+end;
+
+procedure TGocciaModuleLoader.SetNonStrictModeEnabled(const AValue: Boolean);
+begin
+  if AValue then
+    Include(FCompatibility, cfNonStrictMode)
+  else
+    Exclude(FCompatibility, cfNonStrictMode);
 end;
 
 procedure TGocciaModuleLoader.SetContentProvider(
@@ -213,19 +327,16 @@ var
   ExportPair: TStringStringMap.TKeyValuePair;
   ExportVarDecl: TGocciaExportVariableDeclaration;
   I: Integer;
-  JSXResult: TGocciaJSXTransformResult;
-  JSXSourceMap: TGocciaSourceMap;
-  Lexer: TGocciaLexer;
   Module: TGocciaModule;
+  ModuleParseResult: TGocciaSourcePipelineModuleResult;
+  ModuleWarning: TGocciaSourcePipelineWarning;
   ModuleScope: TGocciaScope;
-  OrigLine: Integer;
-  OrigCol: Integer;
-  Parser: TGocciaParser;
+  PipelineOptions: TGocciaSourcePipelineOptions;
+  ActiveOptionsScope: TGocciaSourcePipelineOptionsScope;
   ProgramNode: TGocciaProgram;
   ReExportDecl: TGocciaReExportDeclaration;
   ResolvedPath: string;
   SourceModule: TGocciaModule;
-  SourceText: UTF8String;
   Stmt: TGocciaStatement;
   Value: TGocciaValue;
   VarInfo: TGocciaVariableInfo;
@@ -282,149 +393,131 @@ begin
 
   Content := FContentProvider.LoadContent(ResolvedPath);
   try
-    SourceText := NormalizeUTF8NewlinesToLF(Content.Text);
-    JSXSourceMap := nil;
-    if FJSXEnabled then
-    begin
-      JSXResult := TGocciaJSXTransformer.Transform(string(SourceText));
-      SourceText := UTF8String(JSXResult.Source);
-      JSXSourceMap := JSXResult.SourceMap;
-      if Assigned(JSXSourceMap) then
-        WarnIfJSXExtensionMismatch(ResolvedPath);
-    end;
-
+    PipelineOptions.Preprocessors := FPreprocessors;
+    PipelineOptions.Compatibility := FCompatibility;
+    PipelineOptions.SourceType := stModule;
+    ModuleParseResult := TGocciaSourcePipeline.ParseModuleSource(Content.Text,
+      ResolvedPath, PipelineOptions);
     try
+      for I := 0 to ModuleParseResult.WarningCount - 1 do
+      begin
+        ModuleWarning := ModuleParseResult.Warnings[I];
+        WriteLn(Format('Warning: %s', [ModuleWarning.Message]));
+        if ModuleWarning.Suggestion <> '' then
+          WriteLn(Format('  Suggestion: %s', [ModuleWarning.Suggestion]));
+        WriteLn(Format('  --> %s:%d:%d', [ResolvedPath, ModuleWarning.Line,
+          ModuleWarning.Column]));
+      end;
+
+      ProgramNode := ModuleParseResult.TakeProgramNode;
       try
-        Lexer := TGocciaLexer.Create(string(SourceText), ResolvedPath);
+        Module := TGocciaModule.Create(ResolvedPath);
+        Module.LastModified := Content.LastModified;
+        FModules.Add(ResolvedPath, Module);
+        FLoadingModules.Add(ResolvedPath, True);
+        LoadSucceeded := False;
         try
-          Parser := TGocciaParser.Create(Lexer.ScanTokens, ResolvedPath,
-            Lexer.SourceLines);
-          Parser.AutomaticSemicolonInsertion := FASIEnabled;
-          Parser.VarDeclarationsEnabled := FVarEnabled;
-          Parser.FunctionDeclarationsEnabled := FFunctionEnabled;
-          Parser.TraditionalForLoopsEnabled := FTraditionalForLoopsEnabled;
-          Parser.WhileLoopsEnabled := FWhileLoopsEnabled;
-          Parser.LooseEqualityEnabled := FLooseEqualityEnabled;
-          Parser.NonStrictModeEnabled := True;
+          ModuleScope := FGlobalScope.CreateChild(skModule,
+            'Module:' + ResolvedPath);
+          // ES2026 §16.2.1.6.4 InitializeEnvironment: a Module
+          // Environment Record's [[ThisValue]] is undefined.
+          ModuleScope.ThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+          ModuleScope.StrictTypes := FStrictTypesEnabled;
+          ModuleScope.NonStrictMode := False;
+          Context.Scope := ModuleScope;
+          Context.OnError := FOnError;
+          Context.LoadModule := LoadModule;
+          Context.CurrentFilePath := ResolvedPath;
+          Context.CoverageEnabled := False;
+          Context.StrictTypes := FStrictTypesEnabled;
+          Context.NonStrictMode := False;
+          Context.DisposalTracker := nil;
+
+          ActiveOptionsScope := TGocciaSourcePipeline.ActivateOptions(
+            PipelineOptions);
           try
-            ProgramNode := Parser.Parse;
-            try
-              Module := TGocciaModule.Create(ResolvedPath);
-              Module.LastModified := Content.LastModified;
-              FModules.Add(ResolvedPath, Module);
-              FLoadingModules.Add(ResolvedPath, True);
-              LoadSucceeded := False;
-              try
-                ModuleScope := FGlobalScope.CreateChild(skModule,
-                  'Module:' + ResolvedPath);
-                // ES2026 §16.2.1.6.4 InitializeEnvironment: a Module
-                // Environment Record's [[ThisValue]] is undefined.
-                ModuleScope.ThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-                ModuleScope.StrictTypes := FStrictTypesEnabled;
-                ModuleScope.NonStrictMode := False;
-                Context.Scope := ModuleScope;
-                Context.OnError := FOnError;
-                Context.LoadModule := LoadModule;
-                Context.CurrentFilePath := ResolvedPath;
-                Context.CoverageEnabled := False;
-                Context.StrictTypes := FStrictTypesEnabled;
-                Context.NonStrictMode := False;
-                Context.DisposalTracker := nil;
-
-                FEvaluateModuleBody(ProgramNode, Context);
-
-                for I := 0 to ProgramNode.Body.Count - 1 do
-                begin
-                  Stmt := ProgramNode.Body[I];
-
-                  if Stmt is TGocciaExportDeclaration then
-                  begin
-                    ExportDecl := TGocciaExportDeclaration(Stmt);
-                    for ExportPair in ExportDecl.ExportsTable do
-                    begin
-                      Value := ModuleScope.GetValue(ExportPair.Value);
-                      if Assigned(Value) then
-                        Module.ExportsTable.AddOrSetValue(ExportPair.Key, Value);
-                    end;
-                  end
-                  else if Stmt is TGocciaExportDefaultDeclaration then
-                  begin
-                    ExportDefaultDecl := TGocciaExportDefaultDeclaration(Stmt);
-                    Value := ModuleScope.GetValue(ExportDefaultDecl.LocalName);
-                    if Assigned(Value) then
-                      Module.ExportsTable.AddOrSetValue(KEYWORD_DEFAULT, Value);
-                  end
-                  else if Stmt is TGocciaExportVariableDeclaration then
-                  begin
-                    ExportVarDecl := TGocciaExportVariableDeclaration(Stmt);
-                    for VarInfo in ExportVarDecl.Declaration.Variables do
-                    begin
-                      Value := ModuleScope.GetValue(VarInfo.Name);
-                      if Assigned(Value) then
-                        Module.ExportsTable.AddOrSetValue(VarInfo.Name, Value);
-                    end;
-                  end
-                  else if Stmt is TGocciaExportFunctionDeclaration then
-                  begin
-                    ExportFuncDecl := TGocciaExportFunctionDeclaration(Stmt);
-                    Value := ModuleScope.GetValue(ExportFuncDecl.Declaration.Name);
-                    if Assigned(Value) then
-                      Module.ExportsTable.AddOrSetValue(
-                        ExportFuncDecl.Declaration.Name, Value);
-                  end
-                  else if Stmt is TGocciaExportEnumDeclaration then
-                  begin
-                    Value := ModuleScope.GetValue(
-                      TGocciaExportEnumDeclaration(Stmt).Declaration.Name);
-                    if Assigned(Value) then
-                      Module.ExportsTable.AddOrSetValue(
-                        TGocciaExportEnumDeclaration(Stmt).Declaration.Name,
-                        Value);
-                  end
-                  else if Stmt is TGocciaReExportDeclaration then
-                  begin
-                    ReExportDecl := TGocciaReExportDeclaration(Stmt);
-                    SourceModule := LoadModule(ReExportDecl.ModulePath,
-                      ResolvedPath);
-                    for ExportPair in ReExportDecl.ExportsTable do
-                    begin
-                      if SourceModule.ExportsTable.TryGetValue(ExportPair.Value,
-                        Value) then
-                        Module.ExportsTable.AddOrSetValue(ExportPair.Key, Value);
-                    end;
-                  end;
-                end;
-
-                Result := Module;
-                LoadSucceeded := True;
-              finally
-                FLoadingModules.Remove(ResolvedPath);
-                if not LoadSucceeded then
-                begin
-                  FModules.Remove(ResolvedPath);
-                  Module.Free;
-                end;
-              end;
-            finally
-              ProgramNode.Free;
-            end;
+            FEvaluateModuleBody(ProgramNode, Context);
           finally
-            Parser.Free;
+            ActiveOptionsScope.Free;
           end;
+
+          for I := 0 to ProgramNode.Body.Count - 1 do
+          begin
+            Stmt := ProgramNode.Body[I];
+
+            if Stmt is TGocciaExportDeclaration then
+            begin
+              ExportDecl := TGocciaExportDeclaration(Stmt);
+              for ExportPair in ExportDecl.ExportsTable do
+              begin
+                Value := ModuleScope.GetValue(ExportPair.Value);
+                if Assigned(Value) then
+                  Module.ExportsTable.AddOrSetValue(ExportPair.Key, Value);
+              end;
+            end
+            else if Stmt is TGocciaExportDefaultDeclaration then
+            begin
+              ExportDefaultDecl := TGocciaExportDefaultDeclaration(Stmt);
+              Value := ModuleScope.GetValue(ExportDefaultDecl.LocalName);
+              if Assigned(Value) then
+                Module.ExportsTable.AddOrSetValue(KEYWORD_DEFAULT, Value);
+            end
+            else if Stmt is TGocciaExportVariableDeclaration then
+            begin
+              ExportVarDecl := TGocciaExportVariableDeclaration(Stmt);
+              for VarInfo in ExportVarDecl.Declaration.Variables do
+              begin
+                Value := ModuleScope.GetValue(VarInfo.Name);
+                if Assigned(Value) then
+                  Module.ExportsTable.AddOrSetValue(VarInfo.Name, Value);
+              end;
+            end
+            else if Stmt is TGocciaExportFunctionDeclaration then
+            begin
+              ExportFuncDecl := TGocciaExportFunctionDeclaration(Stmt);
+              Value := ModuleScope.GetValue(ExportFuncDecl.Declaration.Name);
+              if Assigned(Value) then
+                Module.ExportsTable.AddOrSetValue(
+                  ExportFuncDecl.Declaration.Name, Value);
+            end
+            else if Stmt is TGocciaExportEnumDeclaration then
+            begin
+              Value := ModuleScope.GetValue(
+                TGocciaExportEnumDeclaration(Stmt).Declaration.Name);
+              if Assigned(Value) then
+                Module.ExportsTable.AddOrSetValue(
+                  TGocciaExportEnumDeclaration(Stmt).Declaration.Name,
+                  Value);
+            end
+            else if Stmt is TGocciaReExportDeclaration then
+            begin
+              ReExportDecl := TGocciaReExportDeclaration(Stmt);
+              SourceModule := LoadModule(ReExportDecl.ModulePath,
+                ResolvedPath);
+              for ExportPair in ReExportDecl.ExportsTable do
+              begin
+                if SourceModule.ExportsTable.TryGetValue(ExportPair.Value,
+                  Value) then
+                  Module.ExportsTable.AddOrSetValue(ExportPair.Key, Value);
+              end;
+            end;
+          end;
+
+          Result := Module;
+          LoadSucceeded := True;
         finally
-          Lexer.Free;
+          FLoadingModules.Remove(ResolvedPath);
+          if not LoadSucceeded then
+          begin
+            FModules.Remove(ResolvedPath);
+            Module.Free;
+          end;
         end;
-      except
-        on E: TGocciaError do
-        begin
-          if Assigned(JSXSourceMap) and
-             JSXSourceMap.Translate(E.Line, E.Column, OrigLine, OrigCol) then
-            E.TranslatePosition(OrigLine, OrigCol, Content.SourceLines);
-          raise;
-        end;
+      finally
+        ProgramNode.Free;
       end;
     finally
-      JSXSourceMap.Free;
+      ModuleParseResult.Free;
     end;
   finally
     Content.Free;

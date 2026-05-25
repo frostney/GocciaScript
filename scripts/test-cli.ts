@@ -3,7 +3,7 @@
  * test-cli.ts
  *
  * Common CLI options tested across all apps: stdin smoke, --help, --unsafe-ffi,
- * --asi, --compat-var, --compat-loose-equality, --compat-non-strict-mode,
+ * --compat-asi, --source-type, .mjs source-type inference, --compat-var, --compat-loose-equality, --compat-non-strict-mode,
  * --compat-while-loops, --mode, --timeout, --max-instructions, --max-memory, --stack-size, --log,
  * example scripts.
  */
@@ -113,31 +113,39 @@ console.log("--unsafe-ffi gating...");
   if (jsonOn.files?.[0]?.result !== "object") throw new Error(`FFI with flag should be "object", got ${jsonOn.files?.[0]?.result}`);
 }
 
-// -- --asi (Loader + Bundler) ---------------------------------------------------
+// -- --compat-asi (Loader + Bundler) ---------------------------------------------------
 
-console.log("--asi (Loader + Bundler)...");
+console.log("--compat-asi (Loader + Bundler)...");
 {
   const tmp = mkdtemp("goccia-asi-");
   try {
     const src = join(tmp, "no-semi.js");
     writeFileSync(src, "const x = 42\nx\n");
 
-    // Loader without --asi should fail
+    // Loader without --compat-asi should fail
     const noAsi = await $`${LOADER} ${src} 2>&1`.nothrow();
-    if (noAsi.exitCode === 0) throw new Error("Loader should reject without --asi");
-    if (!noAsi.text().includes("SyntaxError")) throw new Error("Expected SyntaxError without --asi");
+    if (noAsi.exitCode === 0) throw new Error("Loader should reject without --compat-asi");
+    if (!noAsi.text().includes("SyntaxError")) throw new Error("Expected SyntaxError without --compat-asi");
 
-    // Loader with --asi should succeed
-    const withAsi = await $`${LOADER} --print ${src} --asi 2>&1`.text();
-    if (!containsLine(withAsi, "42")) throw new Error(`Expected 42 with --asi, got: ${withAsi}`);
+    const oldAsi = await $`${LOADER} ${src} --asi 2>&1`.nothrow();
+    if (oldAsi.exitCode === 0) throw new Error("Loader should reject removed --asi alias");
+    if (!oldAsi.text().includes("Unknown option: --asi")) throw new Error(`Expected unknown --asi, got: ${oldAsi.text()}`);
 
-    // Bundler without --asi should fail
+    // Loader with --compat-asi should succeed
+    const withAsi = await $`${LOADER} --print ${src} --compat-asi 2>&1`.text();
+    if (!containsLine(withAsi, "42")) throw new Error(`Expected 42 with --compat-asi, got: ${withAsi}`);
+
+    // Bundler without --compat-asi should fail
     const bundleNoAsi = await $`${BUNDLER} ${src} 2>&1`.nothrow();
-    if (bundleNoAsi.exitCode === 0) throw new Error("Bundler should reject without --asi");
+    if (bundleNoAsi.exitCode === 0) throw new Error("Bundler should reject without --compat-asi");
 
-    // Bundler with --asi should succeed
-    await $`${BUNDLER} ${src} --asi`.quiet();
-    if (!existsSync(join(tmp, "no-semi.gbc"))) throw new Error("Bundler --asi should produce .gbc");
+    const bundleOldAsi = await $`${BUNDLER} ${src} --asi 2>&1`.nothrow();
+    if (bundleOldAsi.exitCode === 0) throw new Error("Bundler should reject removed --asi alias");
+    if (!bundleOldAsi.text().includes("Unknown option: --asi")) throw new Error(`Expected unknown --asi, got: ${bundleOldAsi.text()}`);
+
+    // Bundler with --compat-asi should succeed
+    await $`${BUNDLER} ${src} --compat-asi`.quiet();
+    if (!existsSync(join(tmp, "no-semi.gbc"))) throw new Error("Bundler --compat-asi should produce .gbc");
   } finally {
     clean(tmp);
   }
@@ -393,6 +401,82 @@ console.log("--mode=bytecode...");
   const bcOut = await $`echo 'const x = 2 + 2; x;' | ${LOADER} --print - --mode=bytecode`.text();
   if (!containsLine(bcOut, "4")) throw new Error(`Bytecode expected 4 on its own line, got: ${bcOut}`);
   if (!bcOut.includes("(bytecode)")) throw new Error(`Expected (bytecode) in output`);
+
+  const bcSplitOut = await $`echo 'const x = 2 + 2; x;' | ${LOADER} --print - --mode bytecode`.text();
+  if (!containsLine(bcSplitOut, "4")) throw new Error(`Bytecode split option expected 4 on its own line, got: ${bcSplitOut}`);
+  if (!bcSplitOut.includes("(bytecode)")) throw new Error(`Expected (bytecode) in split option output`);
+}
+
+// -- --source-type and .mjs module inference -----------------------------------
+
+console.log("--source-type and .mjs module inference (Loader + TestRunner + Bundler)...");
+{
+  const tmp = mkdtemp("goccia-source-type-");
+  try {
+    const moduleEntry = join(tmp, "entry.mjs");
+    writeFileSync(moduleEntry, "this === undefined;\n");
+
+    const loaderMjs = await $`${LOADER} --print ${moduleEntry} 2>&1`.text();
+    if (!containsLine(loaderMjs, "true")) throw new Error(`Loader .mjs should infer module source, got: ${loaderMjs}`);
+
+    const loaderMjsBytecode = await $`${LOADER} --print ${moduleEntry} --mode=bytecode 2>&1`.text();
+    if (!containsLine(loaderMjsBytecode, "true"))
+      throw new Error(`Loader .mjs bytecode should infer module source, got: ${loaderMjsBytecode}`);
+
+    const loaderScriptOverride = await $`${LOADER} --print ${moduleEntry} --source-type=script 2>&1`.text();
+    if (!containsLine(loaderScriptOverride, "false"))
+      throw new Error(`Loader --source-type=script should override .mjs inference, got: ${loaderScriptOverride}`);
+
+    const loaderScriptOverrideBytecode = await $`${LOADER} --print ${moduleEntry} --mode=bytecode --source-type=script 2>&1`.text();
+    if (!containsLine(loaderScriptOverrideBytecode, "false"))
+      throw new Error(`Loader bytecode --source-type=script should override .mjs inference, got: ${loaderScriptOverrideBytecode}`);
+
+    const testModuleEntry = join(tmp, "entry-test.mjs");
+    writeFileSync(
+      testModuleEntry,
+      [
+        "const topLevelThis = this;",
+        "const metaUrl = import.meta.url;",
+        'test(".mjs top-level this", () => { expect(topLevelThis).toBeUndefined(); });',
+        'test(".mjs import.meta", () => { expect(metaUrl.endsWith("entry-test.mjs")).toBe(true); });',
+      ].join("\n") + "\n",
+    );
+    const testRunnerMjs = await $`${TESTRUNNER} ${testModuleEntry} --no-progress 2>&1`.text();
+    if (!testRunnerMjs.includes("Passed: 2")) throw new Error(`TestRunner .mjs expected Passed: 2, got: ${testRunnerMjs}`);
+
+    const testRunnerMjsBytecode = await $`${TESTRUNNER} ${testModuleEntry} --mode=bytecode --no-progress 2>&1`.text();
+    if (!testRunnerMjsBytecode.includes("Passed: 2"))
+      throw new Error(`TestRunner .mjs bytecode expected Passed: 2, got: ${testRunnerMjsBytecode}`);
+
+    const testScriptOverride = join(tmp, "entry-test-script.mjs");
+    writeFileSync(
+      testScriptOverride,
+      [
+        "const topLevelThis = this;",
+        'test(".mjs script override", () => { expect(topLevelThis === undefined).toBe(false); });',
+      ].join("\n") + "\n",
+    );
+    const testRunnerScript = await $`${TESTRUNNER} ${testScriptOverride} --source-type=script --no-progress 2>&1`.text();
+    if (!testRunnerScript.includes("Passed: 1"))
+      throw new Error(`TestRunner --source-type=script expected Passed: 1, got: ${testRunnerScript}`);
+
+    const testRunnerScriptBytecode = await $`${TESTRUNNER} ${testScriptOverride} --mode=bytecode --source-type=script --no-progress 2>&1`.text();
+    if (!testRunnerScriptBytecode.includes("Passed: 1"))
+      throw new Error(`TestRunner bytecode --source-type=script expected Passed: 1, got: ${testRunnerScriptBytecode}`);
+
+    const strictModule = join(tmp, "strict-module.mjs");
+    writeFileSync(strictModule, "with ({ x: 1 }) { x; }\n");
+    const bundleModule = await $`${BUNDLER} ${strictModule} --compat-non-strict-mode 2>&1`.nothrow();
+    const bundleModuleOutput = bundleModule.text();
+    if (bundleModule.exitCode === 0 || !bundleModuleOutput.includes("'with' statements are not allowed in strict mode"))
+      throw new Error(`Bundler .mjs should infer strict module source, got: ${bundleModuleOutput}`);
+
+    const bundledScriptOut = join(tmp, "strict-module-script.gbc");
+    await $`${BUNDLER} ${strictModule} --source-type=script --compat-non-strict-mode --output=${bundledScriptOut}`.quiet();
+    if (!existsSync(bundledScriptOut)) throw new Error("Bundler --source-type=script should override .mjs inference and write bytecode");
+  } finally {
+    clean(tmp);
+  }
 }
 
 // -- --timeout (Loader: infinite loop, both execution modes) --------------------
@@ -435,19 +519,19 @@ console.log("--max-instructions (bytecode)...");
 
 console.log("--max-memory (default positive)...");
 {
-  const { json } = runLoaderJson("Goccia.gc.maxBytes\n", ["--asi"]);
+  const { json } = runLoaderJson("Goccia.gc.maxBytes\n", ["--compat-asi"]);
   if (typeof json.files?.[0]?.result !== "number" || json.files[0].result <= 0) throw new Error(`Default maxBytes should be positive, got ${json.files?.[0]?.result}`);
 }
 
 console.log("--max-memory (override)...");
 {
-  const { json } = runLoaderJson("Goccia.gc.maxBytes\n", ["--max-memory=5000000", "--asi"]);
+  const { json } = runLoaderJson("Goccia.gc.maxBytes\n", ["--max-memory=5000000", "--compat-asi"]);
   if (json.files?.[0]?.result !== 5000000) throw new Error(`Override maxBytes should be 5000000, got ${json.files?.[0]?.result}`);
 }
 
 console.log("--max-memory (OOM triggers RangeError)...");
 {
-  const res = await $`echo 'Array.from({length:5000},(_,i)=>({x:i}));' | ${LOADER} --max-memory=200000 --asi 2>&1`.nothrow();
+  const res = await $`echo 'Array.from({length:5000},(_,i)=>({x:i}));' | ${LOADER} --max-memory=200000 --compat-asi 2>&1`.nothrow();
   const out = res.text();
   if (res.exitCode !== 1) throw new Error(`OOM exit code should be 1, got ${res.exitCode}`);
   if (!out.includes("RangeError")) throw new Error(`OOM output should contain RangeError`);
@@ -468,7 +552,7 @@ console.log("--max-memory (manual gc reclaims inside active calls)...");
 
   for (const modeArgs of [[], ["--mode=bytecode"]] as const) {
     const label = modeArgs.length > 0 ? modeArgs.join(" ") : "interpreter";
-    const { exitCode, json, stderr } = runLoaderJson(src, ["--max-memory=500000", "--asi", ...modeArgs], { timeout: 30_000 });
+    const { exitCode, json, stderr } = runLoaderJson(src, ["--max-memory=500000", "--compat-asi", ...modeArgs], { timeout: 30_000 });
     if (exitCode !== 0) throw new Error(`Manual GC active-call ${label} exit code should be 0, got ${exitCode}: ${JSON.stringify(json)}${stderr}`);
     if (typeof json.files?.[0]?.result !== "number" || json.files[0].result <= 0) throw new Error(`Manual GC active-call ${label} should return positive bytesAllocated`);
     if ((json.memory?.gc?.collections ?? 0) < 30) throw new Error(`Manual GC active-call ${label} should report at least 30 collections, got ${json.memory?.gc?.collections}`);
@@ -477,7 +561,7 @@ console.log("--max-memory (manual gc reclaims inside active calls)...");
 
 console.log("--max-memory (maxBytes readonly)...");
 {
-  const res = await $`echo 'Goccia.gc.maxBytes = 999' | ${LOADER} --asi 2>&1`.nothrow();
+  const res = await $`echo 'Goccia.gc.maxBytes = 999' | ${LOADER} --compat-asi 2>&1`.nothrow();
   if (res.exitCode !== 1) throw new Error(`Read-only exit code should be 1, got ${res.exitCode}`);
   if (!res.text().includes("TypeError")) throw new Error(`Read-only should mention TypeError`);
 }

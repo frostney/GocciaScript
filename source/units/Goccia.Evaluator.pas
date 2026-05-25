@@ -121,8 +121,7 @@ uses
   Goccia.Generator.Continuation,
   Goccia.InstructionLimit,
   Goccia.Keywords.Reserved,
-  Goccia.Lexer,
-  Goccia.Parser,
+  Goccia.SourcePipeline,
   Goccia.StackLimit,
   Goccia.Timeout,
   Goccia.Token,
@@ -6154,12 +6153,10 @@ var
   PlusPos, MinusPos, StarPos, SlashPos, DotPos: Integer;
   Left, Right, PropName: string;
   LeftVal, RightVal, ObjVal: TGocciaValue;
-  Lexer: TGocciaLexer;
-  Parser: TGocciaParser;
   Expression: TGocciaExpression;
-  Tokens: TObjectList<TGocciaToken>;
-  SourceLines: TStringList;
   DeclaredPrivateNames: TStringList;
+  PipelineOptions: TGocciaSourcePipelineOptions;
+  SourceName: string;
   I: Integer;
   IsSimpleIdentifier: Boolean;
 begin
@@ -6364,35 +6361,22 @@ begin
 
   // Fall back to full parsing for complex expressions
   // This handles complex cases like nested expressions, function calls, string literals, etc.
-  Lexer := nil;
-  Parser := nil;
-  Tokens := nil;
-  SourceLines := nil;
   Expression := nil;
   DeclaredPrivateNames := nil;
 
   try
-    SourceLines := TStringList.Create;
-    SourceLines.Add(AExpressionText);
-
-    Lexer := TGocciaLexer.Create(AExpressionText, 'template-expression');
-    Tokens := Lexer.ScanTokens;
-    if Tokens = nil then
-    begin
-      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-      Exit;
-    end;
-
-    Parser := TGocciaParser.Create(Tokens, 'template-expression', SourceLines);
-    Tokens := nil; // Parser owns it
-
+    PipelineOptions := TGocciaSourcePipeline.CurrentOptionsOrDefault;
+    SourceName := Format('%s:%d:%d', [AContext.CurrentFilePath, ALine,
+      AColumn]);
     if Pos('#', Trimmed) > 0 then
     begin
       DeclaredPrivateNames := CollectDeclaredPrivateNames(AContext);
-      Expression := Parser.ParseExpressionWithPrivateNames(DeclaredPrivateNames);
+      Expression := TGocciaSourcePipeline.ParseExpression(AExpressionText,
+        SourceName, PipelineOptions, DeclaredPrivateNames);
     end
     else
-      Expression := Parser.Expression;
+      Expression := TGocciaSourcePipeline.ParseExpression(AExpressionText,
+        SourceName, PipelineOptions);
 
     if Expression = nil then
     begin
@@ -6408,10 +6392,6 @@ begin
 
   // Cleanup
   if Assigned(Expression) then Expression.Free;
-  if Assigned(Parser) then Parser.Free;
-  if Assigned(Tokens) then Tokens.Free;
-  if Assigned(Lexer) then Lexer.Free;
-  if Assigned(SourceLines) then SourceLines.Free;
   if Assigned(DeclaredPrivateNames) then DeclaredPrivateNames.Free;
 end;
 

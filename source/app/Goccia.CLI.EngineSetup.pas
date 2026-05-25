@@ -5,7 +5,7 @@ unit Goccia.CLI.EngineSetup;
 interface
 
 uses
-  CLI.Options;
+  Goccia.CLI.Options;
 
 procedure InitializeCoverageIfEnabled(const AOptions: TGocciaCoverageOptions);
 procedure ShutdownCoverageIfEnabled(const AOptions: TGocciaCoverageOptions);
@@ -43,11 +43,11 @@ begin
     TGocciaProfiler.Instance.Enabled := True;
 
     case AOptions.Mode.Value of
-      CLI.Options.pmOpcodes:
+      Goccia.CLI.Options.pmOpcodes:
         TGocciaProfiler.Instance.Mode := [Goccia.Profiler.pmOpcodes];
-      CLI.Options.pmFunctions:
+      Goccia.CLI.Options.pmFunctions:
         TGocciaProfiler.Instance.Mode := [Goccia.Profiler.pmFunctions];
-      CLI.Options.pmAll:
+      Goccia.CLI.Options.pmAll:
         TGocciaProfiler.Instance.Mode := [Goccia.Profiler.pmOpcodes,
           Goccia.Profiler.pmFunctions];
     end;
