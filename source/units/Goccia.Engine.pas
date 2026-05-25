@@ -1233,7 +1233,7 @@ end;
 function TGocciaEngine.Execute: TGocciaScriptResult;
 var
   PipelineOptions: TGocciaSourcePipelineOptions;
-  ActiveOptionsScope: IInterface;
+  ActiveOptionsScope: TGocciaSourcePipelineOptionsScope;
   PipelineResult: TGocciaSourcePipelineResult;
   StartTime, ExecStart, ExecEnd: Int64;
   ModuleScope: TGocciaScope;
@@ -1322,7 +1322,7 @@ begin
       end;
       FLastTiming.TotalTimeNanoseconds := ExecEnd - StartTime;
     finally
-      ActiveOptionsScope := nil;
+      ActiveOptionsScope.Free;
       if Assigned(TGocciaMicrotaskQueue.Instance) then
         TGocciaMicrotaskQueue.Instance.ClearQueue;
       DiscardRuntimePending;
@@ -1351,21 +1351,15 @@ function TGocciaEngine.ExecuteProgram(const AProgram: TGocciaProgram): TGocciaVa
 var
   GC: TGarbageCollector;
 begin
+  Result := FExecutor.ExecuteProgram(AProgram);
+  GC := TGarbageCollector.Instance;
+  if Assigned(Result) and Assigned(GC) then
+    GC.AddTempRoot(Result);
   try
-    Result := FExecutor.ExecuteProgram(AProgram);
-    GC := TGarbageCollector.Instance;
-    if Assigned(Result) and Assigned(GC) then
-      GC.AddTempRoot(Result);
-    try
-      WaitForRuntimeIdle;
-    finally
-      if Assigned(Result) and Assigned(GC) then
-        GC.RemoveTempRoot(Result);
-    end;
+    WaitForRuntimeIdle;
   finally
-    if Assigned(TGocciaMicrotaskQueue.Instance) then
-      TGocciaMicrotaskQueue.Instance.ClearQueue;
-    DiscardRuntimePending;
+    if Assigned(Result) and Assigned(GC) then
+      GC.RemoveTempRoot(Result);
   end;
 end;
 

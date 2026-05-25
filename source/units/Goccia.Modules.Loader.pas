@@ -332,7 +332,7 @@ var
   ModuleWarning: TGocciaSourcePipelineWarning;
   ModuleScope: TGocciaScope;
   PipelineOptions: TGocciaSourcePipelineOptions;
-  ActiveOptionsScope: IInterface;
+  ActiveOptionsScope: TGocciaSourcePipelineOptionsScope;
   ProgramNode: TGocciaProgram;
   ReExportDecl: TGocciaReExportDeclaration;
   ResolvedPath: string;
@@ -438,7 +438,7 @@ begin
           try
             FEvaluateModuleBody(ProgramNode, Context);
           finally
-            ActiveOptionsScope := nil;
+            ActiveOptionsScope.Free;
           end;
 
           for I := 0 to ProgramNode.Body.Count - 1 do

@@ -90,12 +90,23 @@ type
       read GetWarning;
   end;
 
+  TGocciaSourcePipelineOptionsScope = class
+  private
+    FOptions: TGocciaSourcePipelineOptions;
+    FPrevious: TGocciaSourcePipelineOptionsScope;
+    FNext: TGocciaSourcePipelineOptionsScope;
+
+    constructor Create(const AOptions: TGocciaSourcePipelineOptions);
+  public
+    destructor Destroy; override;
+  end;
+
   TGocciaSourcePipeline = class
   public
     class function DefaultOptions: TGocciaSourcePipelineOptions; static;
     class function CurrentOptionsOrDefault: TGocciaSourcePipelineOptions; static;
     class function ActivateOptions(
-      const AOptions: TGocciaSourcePipelineOptions): IInterface; static;
+      const AOptions: TGocciaSourcePipelineOptions): TGocciaSourcePipelineOptionsScope; static;
     class function Parse(const ASource: TStringList; const AFileName: string;
       const AOptions: TGocciaSourcePipelineOptions): TGocciaSourcePipelineResult; static;
     class function ParseModuleSource(const ASource: UTF8String;
@@ -131,22 +142,7 @@ uses
   Goccia.Token;
 
 threadvar
-  GHasActiveSourcePipelineOptions: Boolean;
-  GActiveSourcePipelineOptions: TGocciaSourcePipelineOptions;
-
-type
-  TGocciaSourcePipelineOptionsFrame = record
-    HadActiveOptions: Boolean;
-    Options: TGocciaSourcePipelineOptions;
-  end;
-
-  TActiveSourcePipelineOptionsScope = class(TInterfacedObject)
-  private
-    FFrame: TGocciaSourcePipelineOptionsFrame;
-  public
-    constructor Create(const AOptions: TGocciaSourcePipelineOptions);
-    destructor Destroy; override;
-  end;
+  GActiveSourcePipelineOptionsScope: TGocciaSourcePipelineOptionsScope;
 
 function SourceTextToLines(const ASource: UTF8String): TStringList;
 begin
@@ -214,34 +210,27 @@ begin
       ExpressionStatement.Expression);
 end;
 
-function PushActiveOptions(
-  const AOptions: TGocciaSourcePipelineOptions): TGocciaSourcePipelineOptionsFrame;
-begin
-  Result.HadActiveOptions := GHasActiveSourcePipelineOptions;
-  if Result.HadActiveOptions then
-    Result.Options := GActiveSourcePipelineOptions
-  else
-    Result.Options := TGocciaSourcePipeline.DefaultOptions;
-  GActiveSourcePipelineOptions := AOptions;
-  GHasActiveSourcePipelineOptions := True;
-end;
+{ TGocciaSourcePipelineOptionsScope }
 
-procedure PopActiveOptions(const AFrame: TGocciaSourcePipelineOptionsFrame);
-begin
-  GHasActiveSourcePipelineOptions := AFrame.HadActiveOptions;
-  GActiveSourcePipelineOptions := AFrame.Options;
-end;
-
-constructor TActiveSourcePipelineOptionsScope.Create(
+constructor TGocciaSourcePipelineOptionsScope.Create(
   const AOptions: TGocciaSourcePipelineOptions);
 begin
   inherited Create;
-  FFrame := PushActiveOptions(AOptions);
+  FOptions := AOptions;
+  FPrevious := GActiveSourcePipelineOptionsScope;
+  if Assigned(FPrevious) then
+    FPrevious.FNext := Self;
+  GActiveSourcePipelineOptionsScope := Self;
 end;
 
-destructor TActiveSourcePipelineOptionsScope.Destroy;
+destructor TGocciaSourcePipelineOptionsScope.Destroy;
 begin
-  PopActiveOptions(FFrame);
+  if GActiveSourcePipelineOptionsScope = Self then
+    GActiveSourcePipelineOptionsScope := FPrevious;
+  if Assigned(FPrevious) then
+    FPrevious.FNext := FNext;
+  if Assigned(FNext) then
+    FNext.FPrevious := FPrevious;
   inherited Destroy;
 end;
 
@@ -332,16 +321,16 @@ end;
 
 class function TGocciaSourcePipeline.CurrentOptionsOrDefault: TGocciaSourcePipelineOptions;
 begin
-  if GHasActiveSourcePipelineOptions then
-    Result := GActiveSourcePipelineOptions
+  if Assigned(GActiveSourcePipelineOptionsScope) then
+    Result := GActiveSourcePipelineOptionsScope.FOptions
   else
     Result := DefaultOptions;
 end;
 
 class function TGocciaSourcePipeline.ActivateOptions(
-  const AOptions: TGocciaSourcePipelineOptions): IInterface;
+  const AOptions: TGocciaSourcePipelineOptions): TGocciaSourcePipelineOptionsScope;
 begin
-  Result := TActiveSourcePipelineOptionsScope.Create(AOptions);
+  Result := TGocciaSourcePipelineOptionsScope.Create(AOptions);
 end;
 
 class function TGocciaSourcePipeline.Parse(const ASource: TStringList;
