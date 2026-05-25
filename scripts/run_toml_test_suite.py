@@ -14,7 +14,7 @@ from pathlib import Path
 
 SUITE_REPO_URL = "https://github.com/toml-lang/toml-test.git"
 SUITE_VERSION = "1.1.0"
-SUITE_SHA = "4f76d84def032d092df152eb6efea5a6f78a0cee"
+SUITE_SHA = "af5f8052e9109206ad3977508263c97907f0797d"
 SUITE_FILE_LIST = f"tests/files-toml-{SUITE_VERSION}"
 DEFAULT_TIMEOUT_SECONDS = 5
 HARNESS_SOURCE_PATH = Path("scripts/GocciaTOMLCheck.dpr")
