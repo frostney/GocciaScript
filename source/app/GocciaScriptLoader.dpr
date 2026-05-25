@@ -357,8 +357,8 @@ begin
   MapOutputPath := FSourceMap.ValueOr('');
   if MapOutputPath = '' then
     MapOutputPath := AFileName + EXT_MAP;
-  WriteSourceMapIfRequested(ASourceMap, FSourceMap.Present, MapOutputPath,
-    AFileName, not IsJsonOutput);
+  WriteSourceMapIfAvailable(ASourceMap, MapOutputPath, AFileName,
+    not IsJsonOutput);
 end;
 
 procedure TScriptLoaderApp.ConfigureConsole(const AConsole: TGocciaConsole;

@@ -101,8 +101,8 @@ begin
   SourceName := AFileName;
   if (SourceName = STDIN_FILE_NAME) and FOutputPath.Present then
     SourceName := FOutputPath.Value;
-  WriteSourceMapIfRequested(ASourceMap, FSourceMap.Present, MapOutputPath,
-    SourceName, not GIsWorkerThread);
+  WriteSourceMapIfAvailable(ASourceMap, MapOutputPath, SourceName,
+    not GIsWorkerThread);
 end;
 
 function TBundlerApp.CompileSource(const ASource: TStringList;
