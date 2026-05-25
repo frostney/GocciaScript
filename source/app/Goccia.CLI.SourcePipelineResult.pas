@@ -1,4 +1,4 @@
-unit Goccia.CLI.ParsedSource;
+unit Goccia.CLI.SourcePipelineResult;
 
 {$I Goccia.inc}
 
@@ -12,7 +12,7 @@ uses
   Goccia.SourcePipeline;
 
 type
-  TGocciaCLIParsedSource = class
+  TGocciaCLISourcePipelineResult = class
   private
     FProgramNode: TGocciaProgram;
     FSourceMap: TGocciaSourceMap;
@@ -24,7 +24,7 @@ type
 
     class function Parse(const ASource: TStringList; const AFileName: string;
       const AOptions: TGocciaSourcePipelineOptions;
-      const ASuppressWarnings: Boolean): TGocciaCLIParsedSource; static;
+      const ASuppressWarnings: Boolean): TGocciaCLISourcePipelineResult; static;
 
     procedure RegisterCoverageSource(const AFileName: string);
 
@@ -34,10 +34,6 @@ type
     property LexTimeNanoseconds: Int64 read FLexTimeNanoseconds;
     property ParseTimeNanoseconds: Int64 read FParseTimeNanoseconds;
   end;
-
-procedure WriteCLISourceMapIfRequested(const ASourceMap: TGocciaSourceMap;
-  const ARequested: Boolean; const AOutputPath, ASourceName: string;
-  const APrintMessage: Boolean);
 
 implementation
 
@@ -68,24 +64,7 @@ begin
   end;
 end;
 
-procedure WriteCLISourceMapIfRequested(const ASourceMap: TGocciaSourceMap;
-  const ARequested: Boolean; const AOutputPath, ASourceName: string;
-  const APrintMessage: Boolean);
-begin
-  if not ARequested then
-    Exit;
-  if not Assigned(ASourceMap) then
-    Exit;
-
-  ASourceMap.FileName := ExtractFileName(ASourceName);
-  ASourceMap.SetSourcePath(0, ExtractFileName(ASourceName));
-  ASourceMap.SaveToFile(AOutputPath);
-
-  if APrintMessage then
-    WriteLn(SysUtils.Format('  Source map written to %s', [AOutputPath]));
-end;
-
-destructor TGocciaCLIParsedSource.Destroy;
+destructor TGocciaCLISourcePipelineResult.Destroy;
 begin
   FGeneratedSourceLines.Free;
   FSourceMap.Free;
@@ -93,13 +72,13 @@ begin
   inherited Destroy;
 end;
 
-class function TGocciaCLIParsedSource.Parse(const ASource: TStringList;
+class function TGocciaCLISourcePipelineResult.Parse(const ASource: TStringList;
   const AFileName: string; const AOptions: TGocciaSourcePipelineOptions;
-  const ASuppressWarnings: Boolean): TGocciaCLIParsedSource;
+  const ASuppressWarnings: Boolean): TGocciaCLISourcePipelineResult;
 var
   PipelineResult: TGocciaSourcePipelineResult;
 begin
-  Result := TGocciaCLIParsedSource.Create;
+  Result := TGocciaCLISourcePipelineResult.Create;
   try
     PipelineResult := TGocciaSourcePipeline.Parse(ASource, AFileName,
       AOptions);
@@ -120,7 +99,7 @@ begin
   end;
 end;
 
-procedure TGocciaCLIParsedSource.RegisterCoverageSource(
+procedure TGocciaCLISourcePipelineResult.RegisterCoverageSource(
   const AFileName: string);
 begin
   if not Assigned(TGocciaCoverageTracker.Instance) then

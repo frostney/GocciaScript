@@ -16,7 +16,8 @@ uses
   Goccia.Bytecode.Binary,
   Goccia.Bytecode.Module,
   Goccia.CLI.Application,
-  Goccia.CLI.ParsedSource,
+  Goccia.CLI.SourceMaps,
+  Goccia.CLI.SourcePipelineResult,
   Goccia.CLI.Options,
   CLI.ConfigFile,
   CLI.Options,
@@ -356,7 +357,7 @@ begin
   MapOutputPath := FSourceMap.ValueOr('');
   if MapOutputPath = '' then
     MapOutputPath := AFileName + EXT_MAP;
-  WriteCLISourceMapIfRequested(ASourceMap, FSourceMap.Present, MapOutputPath,
+  WriteSourceMapIfRequested(ASourceMap, FSourceMap.Present, MapOutputPath,
     AFileName, not IsJsonOutput);
 end;
 
@@ -566,7 +567,7 @@ end;
 function TScriptLoaderApp.ExecuteBytecodeFromSource(const ASource: TStringList;
   const AFileName: string; const ACapture: TScriptLoaderConsoleCapture): TScriptExecutionReport;
 var
-  ParsedSource: TGocciaCLIParsedSource;
+  SourcePipelineResult: TGocciaCLISourcePipelineResult;
   Module: TGocciaCompiledModule;
   Executor: TGocciaBytecodeExecutor;
   Engine: TGocciaEngine;
@@ -584,22 +585,22 @@ begin
       PipelineOptions.Preprocessors := Engine.Preprocessors;
       PipelineOptions.Compatibility := Engine.Compatibility;
       PipelineOptions.SourceType := Engine.SourceType;
-      ParsedSource := TGocciaCLIParsedSource.Parse(ASource, AFileName,
+      SourcePipelineResult := TGocciaCLISourcePipelineResult.Parse(ASource, AFileName,
         PipelineOptions, IsJsonOutput);
       try
         Result.Timing.LexTimeNanoseconds :=
-          ParsedSource.LexTimeNanoseconds;
+          SourcePipelineResult.LexTimeNanoseconds;
         Result.Timing.ParseTimeNanoseconds :=
-          ParsedSource.ParseTimeNanoseconds;
-        WriteSourceMapIfEnabled(ParsedSource.SourceMap, AFileName);
-        ParsedSource.RegisterCoverageSource(AFileName);
+          SourcePipelineResult.ParseTimeNanoseconds;
+        WriteSourceMapIfEnabled(SourcePipelineResult.SourceMap, AFileName);
+        SourcePipelineResult.RegisterCoverageSource(AFileName);
 
         CompileStart := GetNanoseconds;
-        Module := Engine.CompileModule(ParsedSource.ProgramNode);
+        Module := Engine.CompileModule(SourcePipelineResult.ProgramNode);
         CompileEnd := GetNanoseconds;
         Result.Timing.CompileTimeNanoseconds := CompileEnd - CompileStart;
       finally
-        ParsedSource.Free;
+        SourcePipelineResult.Free;
       end;
 
       StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));

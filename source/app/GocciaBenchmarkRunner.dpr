@@ -15,7 +15,7 @@ uses
   Goccia.Builtins.Benchmark,
   Goccia.Bytecode.Module,
   Goccia.CLI.Application,
-  Goccia.CLI.ParsedSource,
+  Goccia.CLI.SourcePipelineResult,
   Goccia.CLI.Options,
   CLI.ConfigFile,
   CLI.Options,
@@ -406,7 +406,7 @@ procedure TBenchmarkRunnerApp.CollectBenchmarkFileBytecode(
 var
   Source: TStringList;
   PipelineOptions: TGocciaSourcePipelineOptions;
-  ParsedSource: TGocciaCLIParsedSource;
+  SourcePipelineResult: TGocciaCLISourcePipelineResult;
   Module: TGocciaCompiledModule;
   Executor: TGocciaBytecodeExecutor;
   Engine: TGocciaEngine;
@@ -417,7 +417,7 @@ var
   LexTimeNanoseconds, ParseTimeNanoseconds: Int64;
 begin
   Source := nil;
-  ParsedSource := nil;
+  SourcePipelineResult := nil;
   try
     try
       Source := SourceRegistry.Load(AFileName);
@@ -440,18 +440,18 @@ begin
           PipelineOptions.Preprocessors := Engine.Preprocessors;
           PipelineOptions.Compatibility := Engine.Compatibility;
           PipelineOptions.SourceType := Engine.SourceType;
-          ParsedSource := TGocciaCLIParsedSource.Parse(Source, AFileName,
+          SourcePipelineResult := TGocciaCLISourcePipelineResult.Parse(Source, AFileName,
             PipelineOptions, True);
-          LexTimeNanoseconds := ParsedSource.LexTimeNanoseconds;
-          ParseTimeNanoseconds := ParsedSource.ParseTimeNanoseconds;
+          LexTimeNanoseconds := SourcePipelineResult.LexTimeNanoseconds;
+          ParseTimeNanoseconds := SourcePipelineResult.ParseTimeNanoseconds;
 
           CompileStart := GetNanoseconds;
           try
-            Module := Engine.CompileModule(ParsedSource.ProgramNode);
+            Module := Engine.CompileModule(SourcePipelineResult.ProgramNode);
             CompileEnd := GetNanoseconds;
           finally
-            ParsedSource.Free;
-            ParsedSource := nil;
+            SourcePipelineResult.Free;
+            SourcePipelineResult := nil;
           end;
 
           ConfigureBenchmarkRuntime(Engine, AShowProgress, True);
@@ -521,7 +521,7 @@ begin
         MakeErrorFileResult(AFileName, E.Message, AReporter);
     end;
   finally
-    ParsedSource.Free;
+    SourcePipelineResult.Free;
     if Assigned(TGarbageCollector.Instance) then
       TGarbageCollector.Instance.Collect;
     Source.Free;
@@ -620,7 +620,7 @@ procedure TBenchmarkRunnerApp.CollectBenchmarkSourceBytecode(
   const AReporter: TBenchmarkReporter; const AShowProgress: Boolean);
 var
   PipelineOptions: TGocciaSourcePipelineOptions;
-  ParsedSource: TGocciaCLIParsedSource;
+  SourcePipelineResult: TGocciaCLISourcePipelineResult;
   Module: TGocciaCompiledModule;
   Executor: TGocciaBytecodeExecutor;
   Engine: TGocciaEngine;
@@ -630,7 +630,7 @@ var
   LexStart, CompileStart, CompileEnd, ExecEnd, BenchStart: Int64;
   LexTimeNanoseconds, ParseTimeNanoseconds: Int64;
 begin
-  ParsedSource := nil;
+  SourcePipelineResult := nil;
   try
     Executor := TGocciaBytecodeExecutor.Create;
     try
@@ -640,18 +640,18 @@ begin
         PipelineOptions.Preprocessors := Engine.Preprocessors;
         PipelineOptions.Compatibility := Engine.Compatibility;
         PipelineOptions.SourceType := Engine.SourceType;
-        ParsedSource := TGocciaCLIParsedSource.Parse(ASource, AFileName,
+        SourcePipelineResult := TGocciaCLISourcePipelineResult.Parse(ASource, AFileName,
           PipelineOptions, True);
-        LexTimeNanoseconds := ParsedSource.LexTimeNanoseconds;
-        ParseTimeNanoseconds := ParsedSource.ParseTimeNanoseconds;
+        LexTimeNanoseconds := SourcePipelineResult.LexTimeNanoseconds;
+        ParseTimeNanoseconds := SourcePipelineResult.ParseTimeNanoseconds;
 
         CompileStart := GetNanoseconds;
         try
-          Module := Engine.CompileModule(ParsedSource.ProgramNode);
+          Module := Engine.CompileModule(SourcePipelineResult.ProgramNode);
           CompileEnd := GetNanoseconds;
         finally
-          ParsedSource.Free;
-          ParsedSource := nil;
+          SourcePipelineResult.Free;
+          SourcePipelineResult := nil;
         end;
 
         ConfigureBenchmarkRuntime(Engine, AShowProgress, True);

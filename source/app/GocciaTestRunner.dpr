@@ -13,7 +13,7 @@ uses
   Goccia.Application,
   Goccia.Bytecode.Module,
   Goccia.CLI.Application,
-  Goccia.CLI.ParsedSource,
+  Goccia.CLI.SourcePipelineResult,
   Goccia.CLI.Options,
   CLI.ConfigFile,
   CLI.Options,
@@ -597,7 +597,7 @@ function TTestRunnerApp.RunGocciaScriptBytecode(const AFileName: string;
 var
   Source: TStringList;
   PipelineOptions: TGocciaSourcePipelineOptions;
-  ParsedSource: TGocciaCLIParsedSource;
+  SourcePipelineResult: TGocciaCLISourcePipelineResult;
   Module: TGocciaCompiledModule;
   Executor: TGocciaBytecodeExecutor;
   Engine: TGocciaEngine;
@@ -612,7 +612,7 @@ begin
   ResultValue := nil;
   GC := TGarbageCollector.Instance;
   ResultValueRooted := False;
-  ParsedSource := nil;
+  SourcePipelineResult := nil;
   if Assigned(GC) then
     GC.AddTempRoot(ScriptResult);
 
@@ -654,17 +654,17 @@ begin
             PipelineOptions.Preprocessors := Engine.Preprocessors;
             PipelineOptions.Compatibility := Engine.Compatibility;
             PipelineOptions.SourceType := Engine.SourceType;
-            ParsedSource := TGocciaCLIParsedSource.Parse(Source, AFileName,
+            SourcePipelineResult := TGocciaCLISourcePipelineResult.Parse(Source, AFileName,
               PipelineOptions, FSilent.Present or IsJsonOutput);
-            LexTimeNanoseconds := ParsedSource.LexTimeNanoseconds;
-            ParseTimeNanoseconds := ParsedSource.ParseTimeNanoseconds;
-            ParsedSource.RegisterCoverageSource(AFileName);
+            LexTimeNanoseconds := SourcePipelineResult.LexTimeNanoseconds;
+            ParseTimeNanoseconds := SourcePipelineResult.ParseTimeNanoseconds;
+            SourcePipelineResult.RegisterCoverageSource(AFileName);
 
             CompileStart := GetNanoseconds;
-            Module := Engine.CompileModule(ParsedSource.ProgramNode);
+            Module := Engine.CompileModule(SourcePipelineResult.ProgramNode);
             CompileEnd := GetNanoseconds;
-            ParsedSource.Free;
-            ParsedSource := nil;
+            SourcePipelineResult.Free;
+            SourcePipelineResult := nil;
 
             StartExecutionTimeout(EngineOptions.Timeout.ValueOr(DEFAULT_TIMEOUT_MS));
             StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
@@ -730,7 +730,7 @@ begin
       end;
     end;
   finally
-    ParsedSource.Free;
+    SourcePipelineResult.Free;
     if ResultValueRooted and Assigned(GC) then
       GC.RemoveTempRoot(ResultValue);
     if Assigned(GC) then

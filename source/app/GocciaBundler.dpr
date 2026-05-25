@@ -14,7 +14,8 @@ uses
   Goccia.Bytecode.Module,
   CLI.ConfigFile,
   Goccia.CLI.Application,
-  Goccia.CLI.ParsedSource,
+  Goccia.CLI.SourceMaps,
+  Goccia.CLI.SourcePipelineResult,
   Goccia.CLI.Options,
   CLI.Options,
   Goccia.Compiler,
@@ -100,14 +101,14 @@ begin
   SourceName := AFileName;
   if (SourceName = STDIN_FILE_NAME) and FOutputPath.Present then
     SourceName := FOutputPath.Value;
-  WriteCLISourceMapIfRequested(ASourceMap, FSourceMap.Present, MapOutputPath,
+  WriteSourceMapIfRequested(ASourceMap, FSourceMap.Present, MapOutputPath,
     SourceName, not GIsWorkerThread);
 end;
 
 function TBundlerApp.CompileSource(const ASource: TStringList;
   const AFileName: string): TGocciaBytecodeModule;
 var
-  ParsedSource: TGocciaCLIParsedSource;
+  SourcePipelineResult: TGocciaCLISourcePipelineResult;
   Compiler: TGocciaCompiler;
   CompiledModule: TGocciaBytecodeModule;
   FileConfig: TConfigEntryArray;
@@ -130,7 +131,7 @@ begin
   PipelineOptions.Preprocessors := TGocciaEngine.DefaultPreprocessors;
   PipelineOptions.Compatibility := EffectiveCompatibility;
   PipelineOptions.SourceType := EffectiveSourceType;
-  ParsedSource := TGocciaCLIParsedSource.Parse(ASource, AFileName,
+  SourcePipelineResult := TGocciaCLISourcePipelineResult.Parse(ASource, AFileName,
     PipelineOptions, False);
   try
     Compiler := TGocciaCompiler.Create(AFileName);
@@ -138,15 +139,15 @@ begin
       Compiler.StrictTypes := EffectiveStrictTypes;
       Compiler.NonStrictMode := (cfNonStrictMode in EffectiveCompatibility) and
         (EffectiveSourceType = stScript);
-      CompiledModule := Compiler.Compile(ParsedSource.ProgramNode);
-      WriteSourceMapIfEnabled(ParsedSource.SourceMap, AFileName);
+      CompiledModule := Compiler.Compile(SourcePipelineResult.ProgramNode);
+      WriteSourceMapIfEnabled(SourcePipelineResult.SourceMap, AFileName);
       Result := CompiledModule;
       CompiledModule := nil;
     finally
       Compiler.Free;
     end;
   finally
-    ParsedSource.Free;
+    SourcePipelineResult.Free;
     CompiledModule.Free;
   end;
 end;
