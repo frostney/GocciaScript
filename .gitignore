@@ -6,6 +6,7 @@
 
 # Generated files
 source/units/Goccia.Version.Generated.inc
+tmp/
 
 # Build files
 build/compiled/
