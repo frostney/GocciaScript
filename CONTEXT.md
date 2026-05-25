@@ -114,10 +114,6 @@ _Avoid_: Generic VM layer.
 The textual contents of GocciaScript code, independent of whether it came from a file, stdin, or an embedding host.
 _Avoid_: Source file when referring to in-memory contents.
 
-**CLI source pipeline result**:
-The CLI-owned source pipeline result bundle, including the AST, source map, generated source lines, and parse timings needed before execution or bytecode compilation.
-_Avoid_: Parsed source, parse artifact.
-
 **Preprocessor**:
 A source-to-source transformation applied before the source pipeline lexes and parses source text. JSX is the current preprocessor.
 _Avoid_: JSX flag when referring to the general mechanism.
