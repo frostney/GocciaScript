@@ -30,7 +30,6 @@ type
 
     property ProgramNode: TGocciaProgram read FProgramNode;
     property SourceMap: TGocciaSourceMap read FSourceMap;
-    property GeneratedSourceLines: TStringList read FGeneratedSourceLines;
     property LexTimeNanoseconds: Int64 read FLexTimeNanoseconds;
     property ParseTimeNanoseconds: Int64 read FParseTimeNanoseconds;
   end;
