@@ -3,11 +3,13 @@ program CLI.Parser.Test;
 {$I Shared.inc}
 
 uses
+  Classes,
   SysUtils,
   TypInfo,
 
   CLI.ConfigFile,
   CLI.Options,
+  CLI.Parser,
   TestingPascalLibrary,
 
   Goccia.CLI.Help;
@@ -25,7 +27,8 @@ type
     procedure TestStringOptionValueOrWhenPresent;
     procedure TestStringOptionValueOrWhenAbsent;
     procedure TestStringOptionMarkPresentClearsValue;
-    procedure TestOptionalStringOptionDoesNotConsumeSeparateValue;
+    procedure TestOptionalStringOptionParsing;
+    procedure TestRequiredValueOptionAcceptsDashPrefixedValues;
     procedure TestIntegerOptionApply;
     procedure TestIntegerOptionValueOrWhenPresent;
     procedure TestIntegerOptionValueOrWhenAbsent;
@@ -54,7 +57,8 @@ begin
   Test('StringOption.ValueOr returns value when present', TestStringOptionValueOrWhenPresent);
   Test('StringOption.ValueOr returns default when absent', TestStringOptionValueOrWhenAbsent);
   Test('StringOption.MarkPresent clears existing value', TestStringOptionMarkPresentClearsValue);
-  Test('OptionalStringOption does not consume a separate value', TestOptionalStringOptionDoesNotConsumeSeparateValue);
+  Test('OptionalStringOption parsing keeps positionals', TestOptionalStringOptionParsing);
+  Test('Required value option accepts dash-prefixed values', TestRequiredValueOptionAcceptsDashPrefixedValues);
   Test('IntegerOption.Apply parses integer value', TestIntegerOptionApply);
   Test('IntegerOption.ValueOr returns value when present', TestIntegerOptionValueOrWhenPresent);
   Test('IntegerOption.ValueOr returns default when absent', TestIntegerOptionValueOrWhenAbsent);
@@ -157,19 +161,73 @@ begin
   end;
 end;
 
-procedure TCLIOptionsTests.TestOptionalStringOptionDoesNotConsumeSeparateValue;
-var
-  Opt: TOptionalStringOption;
+procedure TCLIOptionsTests.TestOptionalStringOptionParsing;
+
+  procedure ExpectSourceMapParse(const AExpectedValue: string;
+    const AArgs: array of string);
+  var
+    Opt: TOptionalStringOption;
+    Options: TOptionArray;
+    Positionals: TStringList;
+  begin
+    Opt := TOptionalStringOption.Create('source-map', 'Write source map');
+    try
+      SetLength(Options, 1);
+      Options[0] := Opt;
+      Positionals := ParseArguments(AArgs, Options);
+      try
+        Expect<Boolean>(Opt.Present).ToBe(True);
+        Expect<string>(Opt.Value).ToBe(AExpectedValue);
+        Expect<Integer>(Positionals.Count).ToBe(1);
+        Expect<string>(Positionals[0]).ToBe('positional');
+      finally
+        Positionals.Free;
+      end;
+    finally
+      Opt.Free;
+    end;
+  end;
+
 begin
-  Opt := TOptionalStringOption.Create('source-map', 'Write source map');
+  ExpectSourceMapParse('', ['--source-map', 'positional']);
+  ExpectSourceMapParse('out.map', ['--source-map=out.map', 'positional']);
+end;
+
+procedure TCLIOptionsTests.TestRequiredValueOptionAcceptsDashPrefixedValues;
+var
+  IntegerOpt: TIntegerOption;
+  StringOpt: TStringOption;
+  Options: TOptionArray;
+  Positionals: TStringList;
+begin
+  IntegerOpt := TIntegerOption.Create('timeout', 'Timeout in ms');
   try
-    Expect<Boolean>(Opt.ConsumesSeparateValue).ToBe(False);
-    Opt.Apply('');
-    Expect<Boolean>(Opt.Present).ToBe(True);
-    Expect<string>(Opt.Value).ToBe('');
-    Expect<string>(Opt.FormatForHelp).ToBe('--source-map[=<value>]');
+    SetLength(Options, 1);
+    Options[0] := IntegerOpt;
+    Positionals := ParseArguments(['--timeout', '-1'], Options);
+    try
+      Expect<Integer>(IntegerOpt.Value).ToBe(-1);
+      Expect<Integer>(Positionals.Count).ToBe(0);
+    finally
+      Positionals.Free;
+    end;
   finally
-    Opt.Free;
+    IntegerOpt.Free;
+  end;
+
+  StringOpt := TStringOption.Create('output', 'Output path');
+  try
+    SetLength(Options, 1);
+    Options[0] := StringOpt;
+    Positionals := ParseArguments(['--output', '-tmp'], Options);
+    try
+      Expect<string>(StringOpt.Value).ToBe('-tmp');
+      Expect<Integer>(Positionals.Count).ToBe(0);
+    finally
+      Positionals.Free;
+    end;
+  finally
+    StringOpt.Free;
   end;
 end;
 

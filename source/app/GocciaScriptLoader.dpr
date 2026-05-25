@@ -112,7 +112,8 @@ type
       const AOptions: TGocciaSourcePipelineOptions;
       const ASuppressWarnings: Boolean;
       out ALexTimeNanoseconds, AParseTimeNanoseconds: Int64;
-      out ASourceMap: TGocciaSourceMap): TGocciaProgram;
+      out ASourceMap: TGocciaSourceMap;
+      out AGeneratedSourceLines: TStringList): TGocciaProgram;
     procedure WriteSourceMapIfEnabled(const ASourceMap: TGocciaSourceMap;
       const AFileName: string);
     procedure ConfigureConsole(const AConsole: TGocciaConsole;
@@ -355,13 +356,15 @@ function TScriptLoaderApp.ParseSource(const ASource: TStringList;
   const AFileName: string; const AOptions: TGocciaSourcePipelineOptions;
   const ASuppressWarnings: Boolean;
   out ALexTimeNanoseconds, AParseTimeNanoseconds: Int64;
-  out ASourceMap: TGocciaSourceMap): TGocciaProgram;
+  out ASourceMap: TGocciaSourceMap;
+  out AGeneratedSourceLines: TStringList): TGocciaProgram;
 var
   PipelineResult: TGocciaSourcePipelineResult;
   Warning: TGocciaSourcePipelineWarning;
   I: Integer;
 begin
   ASourceMap := nil;
+  AGeneratedSourceLines := nil;
 
   PipelineResult := TGocciaSourcePipeline.Parse(ASource, AFileName, AOptions);
   try
@@ -381,6 +384,11 @@ begin
 
     Result := PipelineResult.TakeProgramNode;
     ASourceMap := PipelineResult.TakeSourceMap;
+    if Assigned(PipelineResult.GeneratedSourceLines) then
+    begin
+      AGeneratedSourceLines := TStringList.Create;
+      AGeneratedSourceLines.Assign(PipelineResult.GeneratedSourceLines);
+    end;
   finally
     PipelineResult.Free;
   end;
@@ -617,6 +625,7 @@ var
   Engine: TGocciaEngine;
   PipelineOptions: TGocciaSourcePipelineOptions;
   SourceMap: TGocciaSourceMap;
+  GeneratedSourceLines: TStringList;
   StartTime, CompileStart, CompileEnd, ExecEnd: Int64;
 begin
   StartTime := GetNanoseconds;
@@ -633,15 +642,17 @@ begin
       ProgramNode := ParseSource(ASource, AFileName, PipelineOptions,
         IsJsonOutput,
         Result.Timing.LexTimeNanoseconds,
-        Result.Timing.ParseTimeNanoseconds, SourceMap);
+        Result.Timing.ParseTimeNanoseconds, SourceMap,
+        GeneratedSourceLines);
       try
         WriteSourceMapIfEnabled(SourceMap, AFileName);
 
         if Assigned(TGocciaCoverageTracker.Instance) and
-           TGocciaCoverageTracker.Instance.Enabled and Assigned(ASource) then
+           TGocciaCoverageTracker.Instance.Enabled and
+           Assigned(GeneratedSourceLines) then
         begin
           TGocciaCoverageTracker.Instance.RegisterSourceFile(
-            AFileName, CountExecutableLines(ASource));
+            AFileName, CountExecutableLines(GeneratedSourceLines));
           if Assigned(SourceMap) then
             TGocciaCoverageTracker.Instance.RegisterSourceMap(
               AFileName, SourceMap.Clone);
@@ -654,6 +665,7 @@ begin
       finally
         ProgramNode.Free;
         SourceMap.Free;
+        GeneratedSourceLines.Free;
       end;
 
       StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));

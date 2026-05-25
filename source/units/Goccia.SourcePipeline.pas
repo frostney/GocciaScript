@@ -28,11 +28,6 @@ type
     SourceType: TGocciaSourceType;
   end;
 
-  TGocciaSourcePipelineOptionsFrame = record
-    HadActiveOptions: Boolean;
-    Options: TGocciaSourcePipelineOptions;
-  end;
-
   TGocciaFunctionBodyParseResult = record
     IsValid: Boolean;
     HasUseStrictDirective: Boolean;
@@ -99,10 +94,8 @@ type
   public
     class function DefaultOptions: TGocciaSourcePipelineOptions; static;
     class function CurrentOptionsOrDefault: TGocciaSourcePipelineOptions; static;
-    class function PushActiveOptions(
-      const AOptions: TGocciaSourcePipelineOptions): TGocciaSourcePipelineOptionsFrame; static;
-    class procedure PopActiveOptions(
-      const AFrame: TGocciaSourcePipelineOptionsFrame); static;
+    class function ActivateOptions(
+      const AOptions: TGocciaSourcePipelineOptions): IInterface; static;
     class function Parse(const ASource: TStringList; const AFileName: string;
       const AOptions: TGocciaSourcePipelineOptions): TGocciaSourcePipelineResult; static;
     class function ParseModuleSource(const ASource: UTF8String;
@@ -140,6 +133,20 @@ uses
 threadvar
   GHasActiveSourcePipelineOptions: Boolean;
   GActiveSourcePipelineOptions: TGocciaSourcePipelineOptions;
+
+type
+  TGocciaSourcePipelineOptionsFrame = record
+    HadActiveOptions: Boolean;
+    Options: TGocciaSourcePipelineOptions;
+  end;
+
+  TActiveSourcePipelineOptionsScope = class(TInterfacedObject)
+  private
+    FFrame: TGocciaSourcePipelineOptionsFrame;
+  public
+    constructor Create(const AOptions: TGocciaSourcePipelineOptions);
+    destructor Destroy; override;
+  end;
 
 function SourceTextToLines(const ASource: UTF8String): TStringList;
 begin
@@ -205,6 +212,37 @@ begin
   if Result then
     AArrowFunction := TGocciaArrowFunctionExpression(
       ExpressionStatement.Expression);
+end;
+
+function PushActiveOptions(
+  const AOptions: TGocciaSourcePipelineOptions): TGocciaSourcePipelineOptionsFrame;
+begin
+  Result.HadActiveOptions := GHasActiveSourcePipelineOptions;
+  if Result.HadActiveOptions then
+    Result.Options := GActiveSourcePipelineOptions
+  else
+    Result.Options := TGocciaSourcePipeline.DefaultOptions;
+  GActiveSourcePipelineOptions := AOptions;
+  GHasActiveSourcePipelineOptions := True;
+end;
+
+procedure PopActiveOptions(const AFrame: TGocciaSourcePipelineOptionsFrame);
+begin
+  GHasActiveSourcePipelineOptions := AFrame.HadActiveOptions;
+  GActiveSourcePipelineOptions := AFrame.Options;
+end;
+
+constructor TActiveSourcePipelineOptionsScope.Create(
+  const AOptions: TGocciaSourcePipelineOptions);
+begin
+  inherited Create;
+  FFrame := PushActiveOptions(AOptions);
+end;
+
+destructor TActiveSourcePipelineOptionsScope.Destroy;
+begin
+  PopActiveOptions(FFrame);
+  inherited Destroy;
 end;
 
 { TGocciaSourcePipelineResult }
@@ -300,23 +338,10 @@ begin
     Result := DefaultOptions;
 end;
 
-class function TGocciaSourcePipeline.PushActiveOptions(
-  const AOptions: TGocciaSourcePipelineOptions): TGocciaSourcePipelineOptionsFrame;
+class function TGocciaSourcePipeline.ActivateOptions(
+  const AOptions: TGocciaSourcePipelineOptions): IInterface;
 begin
-  Result.HadActiveOptions := GHasActiveSourcePipelineOptions;
-  if Result.HadActiveOptions then
-    Result.Options := GActiveSourcePipelineOptions
-  else
-    Result.Options := DefaultOptions;
-  GActiveSourcePipelineOptions := AOptions;
-  GHasActiveSourcePipelineOptions := True;
-end;
-
-class procedure TGocciaSourcePipeline.PopActiveOptions(
-  const AFrame: TGocciaSourcePipelineOptionsFrame);
-begin
-  GHasActiveSourcePipelineOptions := AFrame.HadActiveOptions;
-  GActiveSourcePipelineOptions := AFrame.Options;
+  Result := TActiveSourcePipelineOptionsScope.Create(AOptions);
 end;
 
 class function TGocciaSourcePipeline.Parse(const ASource: TStringList;
@@ -541,26 +566,45 @@ var
   Lexer: TGocciaLexer;
   Parser: TGocciaParser;
   Source: string;
+  OriginalSourceLines: TStringList;
   SourceMap: TGocciaSourceMap;
+  OrigLine, OrigCol: Integer;
 begin
   Source := '({ anonymous(' + AParametersSource + ') {' + #10 + ABodySource +
     #10 + '} }).anonymous';
 
-  Source := ApplyPreprocessors(Source, AOptions, SourceMap);
-  SourceMap.Free;
-
-  Lexer := TGocciaLexer.Create(Source, AFileName);
+  OriginalSourceLines := CreateECMAScriptSourceLines(Source);
   try
-    Parser := TGocciaParser.Create(Lexer.ScanTokens, AFileName,
-      Lexer.SourceLines);
-    ConfigureParser(Parser, AOptions);
+    Source := ApplyPreprocessors(Source, AOptions, SourceMap);
     try
-      Result := Parser.ParseUnchecked;
+      Lexer := TGocciaLexer.Create(Source, AFileName);
+      try
+        Parser := TGocciaParser.Create(Lexer.ScanTokens, AFileName,
+          Lexer.SourceLines);
+        ConfigureParser(Parser, AOptions);
+        try
+          try
+            Result := Parser.ParseUnchecked;
+          except
+            on E: TGocciaError do
+            begin
+              if Assigned(SourceMap) and
+                 SourceMap.Translate(E.Line, E.Column, OrigLine, OrigCol) then
+                E.TranslatePosition(OrigLine, OrigCol, OriginalSourceLines);
+              raise;
+            end;
+          end;
+        finally
+          Parser.Free;
+        end;
+      finally
+        Lexer.Free;
+      end;
     finally
-      Parser.Free;
+      SourceMap.Free;
     end;
   finally
-    Lexer.Free;
+    OriginalSourceLines.Free;
   end;
 end;
 

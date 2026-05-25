@@ -12,6 +12,8 @@ uses
 { Parses command-line arguments against the given option definitions.
   Returns a TStringList of positional (non-option) arguments; the caller
   owns the returned list.  Raises TParseError for unknown options. }
+function ParseArguments(const AArgs: array of string;
+  const AOptions: TOptionArray): TStringList;
 function ParseCommandLine(const AOptions: TOptionArray): TStringList;
 
 implementation
@@ -65,20 +67,30 @@ begin
   Result := nil;
 end;
 
-function ParseCommandLine(const AOptions: TOptionArray): TStringList;
+function LooksLikeOptionToken(const AArg: string): Boolean;
+begin
+  if Copy(AArg, 1, Length(LONG_FLAG_PREFIX)) = LONG_FLAG_PREFIX then
+    Exit(True);
+
+  Result := (Length(AArg) = 2) and
+    (AArg[1] = SHORT_FLAG_CHAR) and
+    not (AArg[2] in ['0'..'9']);
+end;
+
+function ParseArguments(const AArgs: array of string;
+  const AOptions: TOptionArray): TStringList;
 var
-  I, Count: Integer;
+  I: Integer;
   Arg, Name, Value: string;
   Option: TOptionBase;
   HasEquals: Boolean;
 begin
   Result := TStringList.Create;
   try
-    I := 1;
-    Count := ParamCount;
-    while I <= Count do
+    I := 0;
+    while I <= High(AArgs) do
     begin
-      Arg := ParamStr(I);
+      Arg := AArgs[I];
 
       if Copy(Arg, 1, Length(LONG_FLAG_PREFIX)) = LONG_FLAG_PREFIX then
       begin
@@ -92,12 +104,11 @@ begin
         if (Value = '') and (not HasEquals) and
            Option.ConsumesSeparateValue then
         begin
-          if (I >= Count) or
-             (Copy(ParamStr(I + 1), 1, 1) = SHORT_FLAG_CHAR) then
+          if (I >= High(AArgs)) or LooksLikeOptionToken(AArgs[I + 1]) then
             raise TParseError.CreateFmt(
               '--%s requires a value', [Name]);
           Inc(I);
-          Value := ParamStr(I);
+          Value := AArgs[I];
         end;
 
         Option.Apply(Value);
@@ -120,6 +131,17 @@ begin
     Result.Free;
     raise;
   end;
+end;
+
+function ParseCommandLine(const AOptions: TOptionArray): TStringList;
+var
+  Args: array of string;
+  I: Integer;
+begin
+  SetLength(Args, ParamCount);
+  for I := 0 to High(Args) do
+    Args[I] := ParamStr(I + 1);
+  Result := ParseArguments(Args, AOptions);
 end;
 
 end.

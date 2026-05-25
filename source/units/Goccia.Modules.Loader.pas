@@ -332,7 +332,7 @@ var
   ModuleWarning: TGocciaSourcePipelineWarning;
   ModuleScope: TGocciaScope;
   PipelineOptions: TGocciaSourcePipelineOptions;
-  ActiveOptionsFrame: TGocciaSourcePipelineOptionsFrame;
+  ActiveOptionsScope: IInterface;
   ProgramNode: TGocciaProgram;
   ReExportDecl: TGocciaReExportDeclaration;
   ResolvedPath: string;
@@ -433,12 +433,12 @@ begin
           Context.NonStrictMode := False;
           Context.DisposalTracker := nil;
 
-          ActiveOptionsFrame := TGocciaSourcePipeline.PushActiveOptions(
+          ActiveOptionsScope := TGocciaSourcePipeline.ActivateOptions(
             PipelineOptions);
           try
             FEvaluateModuleBody(ProgramNode, Context);
           finally
-            TGocciaSourcePipeline.PopActiveOptions(ActiveOptionsFrame);
+            ActiveOptionsScope := nil;
           end;
 
           for I := 0 to ProgramNode.Body.Count - 1 do

@@ -1233,12 +1233,13 @@ end;
 function TGocciaEngine.Execute: TGocciaScriptResult;
 var
   PipelineOptions: TGocciaSourcePipelineOptions;
-  ActiveOptionsFrame: TGocciaSourcePipelineOptionsFrame;
+  ActiveOptionsScope: IInterface;
   PipelineResult: TGocciaSourcePipelineResult;
   StartTime, ExecStart, ExecEnd: Int64;
   ModuleScope: TGocciaScope;
   ModuleContext: TGocciaEvaluationContext;
   ModuleResult: TGocciaValue;
+  ScriptResult: TGocciaValue;
   GC: TGarbageCollector;
 begin
   FillChar(FLastTiming, SizeOf(FLastTiming), 0);
@@ -1266,7 +1267,7 @@ begin
           FSourcePath, PipelineResult.SourceMap.Clone);
     end;
 
-    ActiveOptionsFrame := TGocciaSourcePipeline.PushActiveOptions(PipelineOptions);
+    ActiveOptionsScope := TGocciaSourcePipeline.ActivateOptions(PipelineOptions);
     try
       if FSourceType = stModule then
       begin
@@ -1313,9 +1314,18 @@ begin
       begin
         CheckTopLevelRedeclarations(PipelineResult.ProgramNode,
           FInterpreter.GlobalScope, FSourcePath);
-        FLastTiming.Result := FExecutor.ExecuteProgram(
-          PipelineResult.ProgramNode);
-        WaitForRuntimeIdle;
+        ScriptResult := nil;
+        GC := TGarbageCollector.Instance;
+        ScriptResult := FExecutor.ExecuteProgram(PipelineResult.ProgramNode);
+        if Assigned(ScriptResult) and Assigned(GC) then
+          GC.AddTempRoot(ScriptResult);
+        try
+          WaitForRuntimeIdle;
+          FLastTiming.Result := ScriptResult;
+        finally
+          if Assigned(ScriptResult) and Assigned(GC) then
+            GC.RemoveTempRoot(ScriptResult);
+        end;
         ExecEnd := GetNanoseconds;
         FLastTiming.CompileTimeNanoseconds :=
           FExecutor.CompileTimeNanoseconds;
@@ -1324,7 +1334,7 @@ begin
       end;
       FLastTiming.TotalTimeNanoseconds := ExecEnd - StartTime;
     finally
-      TGocciaSourcePipeline.PopActiveOptions(ActiveOptionsFrame);
+      ActiveOptionsScope := nil;
       if Assigned(TGocciaMicrotaskQueue.Instance) then
         TGocciaMicrotaskQueue.Instance.ClearQueue;
       DiscardRuntimePending;
