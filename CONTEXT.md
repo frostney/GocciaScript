@@ -114,6 +114,10 @@ _Avoid_: Generic VM layer.
 The textual contents of GocciaScript code, independent of whether it came from a file, stdin, or an embedding host.
 _Avoid_: Source file when referring to in-memory contents.
 
+**Parsed source**:
+Source text after the source pipeline has produced the host-visible parse result, including the AST and parse metadata needed before execution or bytecode compilation.
+_Avoid_: Parse artifact.
+
 **Preprocessor**:
 A source-to-source transformation applied before the source pipeline lexes and parses source text. JSX is the current preprocessor.
 _Avoid_: JSX flag when referring to the general mechanism.

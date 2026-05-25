@@ -11,11 +11,11 @@ uses
 
   Goccia.Application,
   Goccia.Arguments.Collection,
-  Goccia.AST.Node,
   Goccia.Benchmark.Reporter,
   Goccia.Builtins.Benchmark,
   Goccia.Bytecode.Module,
   Goccia.CLI.Application,
+  Goccia.CLI.ParsedSource,
   Goccia.CLI.Options,
   CLI.ConfigFile,
   CLI.Options,
@@ -406,7 +406,7 @@ procedure TBenchmarkRunnerApp.CollectBenchmarkFileBytecode(
 var
   Source: TStringList;
   PipelineOptions: TGocciaSourcePipelineOptions;
-  PipelineResult: TGocciaSourcePipelineResult;
+  ParsedSource: TGocciaCLIParsedSource;
   Module: TGocciaCompiledModule;
   Executor: TGocciaBytecodeExecutor;
   Engine: TGocciaEngine;
@@ -417,7 +417,7 @@ var
   LexTimeNanoseconds, ParseTimeNanoseconds: Int64;
 begin
   Source := nil;
-  PipelineResult := nil;
+  ParsedSource := nil;
   try
     try
       Source := SourceRegistry.Load(AFileName);
@@ -440,18 +440,18 @@ begin
           PipelineOptions.Preprocessors := Engine.Preprocessors;
           PipelineOptions.Compatibility := Engine.Compatibility;
           PipelineOptions.SourceType := Engine.SourceType;
-          PipelineResult := TGocciaSourcePipeline.Parse(Source, AFileName,
-            PipelineOptions);
-          LexTimeNanoseconds := PipelineResult.LexTimeNanoseconds;
-          ParseTimeNanoseconds := PipelineResult.ParseTimeNanoseconds;
+          ParsedSource := TGocciaCLIParsedSource.Parse(Source, AFileName,
+            PipelineOptions, True);
+          LexTimeNanoseconds := ParsedSource.LexTimeNanoseconds;
+          ParseTimeNanoseconds := ParsedSource.ParseTimeNanoseconds;
 
           CompileStart := GetNanoseconds;
           try
-            Module := Engine.CompileModule(PipelineResult.ProgramNode);
+            Module := Engine.CompileModule(ParsedSource.ProgramNode);
             CompileEnd := GetNanoseconds;
           finally
-            PipelineResult.Free;
-            PipelineResult := nil;
+            ParsedSource.Free;
+            ParsedSource := nil;
           end;
 
           ConfigureBenchmarkRuntime(Engine, AShowProgress, True);
@@ -521,7 +521,7 @@ begin
         MakeErrorFileResult(AFileName, E.Message, AReporter);
     end;
   finally
-    PipelineResult.Free;
+    ParsedSource.Free;
     if Assigned(TGarbageCollector.Instance) then
       TGarbageCollector.Instance.Collect;
     Source.Free;
@@ -620,7 +620,7 @@ procedure TBenchmarkRunnerApp.CollectBenchmarkSourceBytecode(
   const AReporter: TBenchmarkReporter; const AShowProgress: Boolean);
 var
   PipelineOptions: TGocciaSourcePipelineOptions;
-  PipelineResult: TGocciaSourcePipelineResult;
+  ParsedSource: TGocciaCLIParsedSource;
   Module: TGocciaCompiledModule;
   Executor: TGocciaBytecodeExecutor;
   Engine: TGocciaEngine;
@@ -630,7 +630,7 @@ var
   LexStart, CompileStart, CompileEnd, ExecEnd, BenchStart: Int64;
   LexTimeNanoseconds, ParseTimeNanoseconds: Int64;
 begin
-  PipelineResult := nil;
+  ParsedSource := nil;
   try
     Executor := TGocciaBytecodeExecutor.Create;
     try
@@ -640,18 +640,18 @@ begin
         PipelineOptions.Preprocessors := Engine.Preprocessors;
         PipelineOptions.Compatibility := Engine.Compatibility;
         PipelineOptions.SourceType := Engine.SourceType;
-        PipelineResult := TGocciaSourcePipeline.Parse(ASource, AFileName,
-          PipelineOptions);
-        LexTimeNanoseconds := PipelineResult.LexTimeNanoseconds;
-        ParseTimeNanoseconds := PipelineResult.ParseTimeNanoseconds;
+        ParsedSource := TGocciaCLIParsedSource.Parse(ASource, AFileName,
+          PipelineOptions, True);
+        LexTimeNanoseconds := ParsedSource.LexTimeNanoseconds;
+        ParseTimeNanoseconds := ParsedSource.ParseTimeNanoseconds;
 
         CompileStart := GetNanoseconds;
         try
-          Module := Engine.CompileModule(PipelineResult.ProgramNode);
+          Module := Engine.CompileModule(ParsedSource.ProgramNode);
           CompileEnd := GetNanoseconds;
         finally
-          PipelineResult.Free;
-          PipelineResult := nil;
+          ParsedSource.Free;
+          ParsedSource := nil;
         end;
 
         ConfigureBenchmarkRuntime(Engine, AShowProgress, True);

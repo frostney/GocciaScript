@@ -11,9 +11,9 @@ uses
   TimingUtils,
 
   Goccia.Application,
-  Goccia.AST.Node,
   Goccia.Bytecode.Module,
   Goccia.CLI.Application,
+  Goccia.CLI.ParsedSource,
   Goccia.CLI.Options,
   CLI.ConfigFile,
   CLI.Options,
@@ -597,8 +597,7 @@ function TTestRunnerApp.RunGocciaScriptBytecode(const AFileName: string;
 var
   Source: TStringList;
   PipelineOptions: TGocciaSourcePipelineOptions;
-  PipelineResult: TGocciaSourcePipelineResult;
-  Warning: TGocciaSourcePipelineWarning;
+  ParsedSource: TGocciaCLIParsedSource;
   Module: TGocciaCompiledModule;
   Executor: TGocciaBytecodeExecutor;
   Engine: TGocciaEngine;
@@ -606,7 +605,6 @@ var
   ResultValue: TGocciaValue;
   GC: TGarbageCollector;
   ResultValueRooted: Boolean;
-  I: Integer;
   LexStart, CompileStart, CompileEnd, ExecEnd: Int64;
   LexTimeNanoseconds, ParseTimeNanoseconds: Int64;
 begin
@@ -614,7 +612,7 @@ begin
   ResultValue := nil;
   GC := TGarbageCollector.Instance;
   ResultValueRooted := False;
-  PipelineResult := nil;
+  ParsedSource := nil;
   if Assigned(GC) then
     GC.AddTempRoot(ScriptResult);
 
@@ -656,39 +654,17 @@ begin
             PipelineOptions.Preprocessors := Engine.Preprocessors;
             PipelineOptions.Compatibility := Engine.Compatibility;
             PipelineOptions.SourceType := Engine.SourceType;
-            PipelineResult := TGocciaSourcePipeline.Parse(Source, AFileName,
-              PipelineOptions);
-            LexTimeNanoseconds := PipelineResult.LexTimeNanoseconds;
-            ParseTimeNanoseconds := PipelineResult.ParseTimeNanoseconds;
-
-            if Assigned(TGocciaCoverageTracker.Instance) and
-               TGocciaCoverageTracker.Instance.Enabled then
-            begin
-              TGocciaCoverageTracker.Instance.RegisterSourceFile(
-                AFileName,
-                CountExecutableLines(PipelineResult.GeneratedSourceLines));
-              if Assigned(PipelineResult.SourceMap) then
-                TGocciaCoverageTracker.Instance.RegisterSourceMap(
-                  AFileName, PipelineResult.SourceMap.Clone);
-            end;
-
-            if (not FSilent.Present) and (not GIsWorkerThread) and
-               (not IsJsonOutput) then
-              for I := 0 to PipelineResult.WarningCount - 1 do
-              begin
-                Warning := PipelineResult.Warnings[I];
-                WriteLn(Format('Warning: %s', [Warning.Message]));
-                if Warning.Suggestion <> '' then
-                  WriteLn(Format('  Suggestion: %s', [Warning.Suggestion]));
-                WriteLn(Format('  --> %s:%d:%d',
-                  [AFileName, Warning.Line, Warning.Column]));
-              end;
+            ParsedSource := TGocciaCLIParsedSource.Parse(Source, AFileName,
+              PipelineOptions, FSilent.Present or IsJsonOutput);
+            LexTimeNanoseconds := ParsedSource.LexTimeNanoseconds;
+            ParseTimeNanoseconds := ParsedSource.ParseTimeNanoseconds;
+            ParsedSource.RegisterCoverageSource(AFileName);
 
             CompileStart := GetNanoseconds;
-            Module := Engine.CompileModule(PipelineResult.ProgramNode);
+            Module := Engine.CompileModule(ParsedSource.ProgramNode);
             CompileEnd := GetNanoseconds;
-            PipelineResult.Free;
-            PipelineResult := nil;
+            ParsedSource.Free;
+            ParsedSource := nil;
 
             StartExecutionTimeout(EngineOptions.Timeout.ValueOr(DEFAULT_TIMEOUT_MS));
             StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
@@ -754,7 +730,7 @@ begin
       end;
     end;
   finally
-    PipelineResult.Free;
+    ParsedSource.Free;
     if ResultValueRooted and Assigned(GC) then
       GC.RemoveTempRoot(ResultValue);
     if Assigned(GC) then

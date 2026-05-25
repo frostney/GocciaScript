@@ -10,9 +10,9 @@ uses
   TimingUtils,
 
   Goccia.Application,
-  Goccia.AST.Node,
   Goccia.Bytecode.Module,
   Goccia.CLI.Application,
+  Goccia.CLI.ParsedSource,
   Goccia.CLI.Options,
   CLI.ConfigFile,
   CLI.Options,
@@ -109,7 +109,7 @@ var
   BcExecutor: TGocciaBytecodeExecutor;
   ResultValue: TGocciaValue;
   PipelineOptions: TGocciaSourcePipelineOptions;
-  PipelineResult: TGocciaSourcePipelineResult;
+  ParsedSource: TGocciaCLIParsedSource;
   Module: TGocciaCompiledModule;
   StartTime, CompileStart, CompileEnd, ExecStart, ExecEnd: Int64;
   LexTimeNanoseconds, ParseTimeNanoseconds: Int64;
@@ -160,23 +160,23 @@ begin
           ExecEnd := StartTime;
           LexTimeNanoseconds := 0;
           ParseTimeNanoseconds := 0;
-          PipelineResult := nil;
+          ParsedSource := nil;
           try
             PipelineOptions.Preprocessors := Eng.Preprocessors;
             PipelineOptions.Compatibility := Eng.Compatibility;
             PipelineOptions.SourceType := Eng.SourceType;
-            PipelineResult := TGocciaSourcePipeline.Parse(Source,
-              REPL_FILE_NAME, PipelineOptions);
-            LexTimeNanoseconds := PipelineResult.LexTimeNanoseconds;
-            ParseTimeNanoseconds := PipelineResult.ParseTimeNanoseconds;
+            ParsedSource := TGocciaCLIParsedSource.Parse(Source,
+              REPL_FILE_NAME, PipelineOptions, True);
+            LexTimeNanoseconds := ParsedSource.LexTimeNanoseconds;
+            ParseTimeNanoseconds := ParsedSource.ParseTimeNanoseconds;
 
             CompileStart := GetNanoseconds;
             try
-              Module := Eng.CompileModule(PipelineResult.ProgramNode);
+              Module := Eng.CompileModule(ParsedSource.ProgramNode);
               CompileEnd := GetNanoseconds;
             finally
-              PipelineResult.Free;
-              PipelineResult := nil;
+              ParsedSource.Free;
+              ParsedSource := nil;
             end;
 
             ExecStart := GetNanoseconds;

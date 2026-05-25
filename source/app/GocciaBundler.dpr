@@ -10,11 +10,11 @@ uses
   TimingUtils,
 
   Goccia.Application,
-  Goccia.AST.Node,
   Goccia.Bytecode.Binary,
   Goccia.Bytecode.Module,
   CLI.ConfigFile,
   Goccia.CLI.Application,
+  Goccia.CLI.ParsedSource,
   Goccia.CLI.Options,
   CLI.Options,
   Goccia.Compiler,
@@ -36,10 +36,6 @@ type
     FOutputPath: TStringOption;
     FSourceMap: TStringOption;
 
-    function ParseSource(const ASource: TStringList; const AFileName: string;
-      const AOptions: TGocciaSourcePipelineOptions;
-      out ALexTimeNanoseconds, AParseTimeNanoseconds: Int64;
-      out ASourceMap: TGocciaSourceMap): TGocciaProgram;
     function CompileSource(const ASource: TStringList;
       const AFileName: string): TGocciaBytecodeModule;
     procedure WriteSourceMapIfEnabled(const ASourceMap: TGocciaSourceMap;
@@ -86,48 +82,12 @@ end;
 
 { TBundlerApp - Core logic }
 
-function TBundlerApp.ParseSource(const ASource: TStringList;
-  const AFileName: string; const AOptions: TGocciaSourcePipelineOptions;
-  out ALexTimeNanoseconds, AParseTimeNanoseconds: Int64;
-  out ASourceMap: TGocciaSourceMap): TGocciaProgram;
-var
-  PipelineResult: TGocciaSourcePipelineResult;
-  Warning: TGocciaSourcePipelineWarning;
-  I: Integer;
-begin
-  ASourceMap := nil;
-
-  PipelineResult := TGocciaSourcePipeline.Parse(ASource, AFileName, AOptions);
-  try
-    ALexTimeNanoseconds := PipelineResult.LexTimeNanoseconds;
-    AParseTimeNanoseconds := PipelineResult.ParseTimeNanoseconds;
-
-    if not GIsWorkerThread then
-      for I := 0 to PipelineResult.WarningCount - 1 do
-      begin
-        Warning := PipelineResult.Warnings[I];
-        WriteLn(SysUtils.Format('Warning: %s', [Warning.Message]));
-        if Warning.Suggestion <> '' then
-          WriteLn(SysUtils.Format('  Suggestion: %s', [Warning.Suggestion]));
-        WriteLn(SysUtils.Format('  --> %s:%d:%d',
-          [AFileName, Warning.Line, Warning.Column]));
-      end;
-
-    Result := PipelineResult.TakeProgramNode;
-    ASourceMap := PipelineResult.TakeSourceMap;
-  finally
-    PipelineResult.Free;
-  end;
-end;
-
 procedure TBundlerApp.WriteSourceMapIfEnabled(
   const ASourceMap: TGocciaSourceMap; const AFileName: string);
 var
   MapOutputPath, SourceName: string;
 begin
   if not FSourceMap.Present then
-    Exit;
-  if not Assigned(ASourceMap) then
     Exit;
   MapOutputPath := FSourceMap.ValueOr('');
   if MapOutputPath = '' then
@@ -140,21 +100,16 @@ begin
   SourceName := AFileName;
   if (SourceName = STDIN_FILE_NAME) and FOutputPath.Present then
     SourceName := FOutputPath.Value;
-  ASourceMap.FileName := ExtractFileName(SourceName);
-  ASourceMap.SetSourcePath(0, ExtractFileName(SourceName));
-  ASourceMap.SaveToFile(MapOutputPath);
-  if not GIsWorkerThread then
-    WriteLn(SysUtils.Format('  Source map written to %s', [MapOutputPath]));
+  WriteCLISourceMapIfRequested(ASourceMap, FSourceMap.Present, MapOutputPath,
+    SourceName, not GIsWorkerThread);
 end;
 
 function TBundlerApp.CompileSource(const ASource: TStringList;
   const AFileName: string): TGocciaBytecodeModule;
 var
-  ProgramNode: TGocciaProgram;
+  ParsedSource: TGocciaCLIParsedSource;
   Compiler: TGocciaCompiler;
   CompiledModule: TGocciaBytecodeModule;
-  LexTimeNanoseconds, ParseTimeNanoseconds: Int64;
-  SourceMap: TGocciaSourceMap;
   FileConfig: TConfigEntryArray;
   EffectiveStrictTypes: Boolean;
   EffectiveSourceType: TGocciaSourceType;
@@ -175,24 +130,23 @@ begin
   PipelineOptions.Preprocessors := TGocciaEngine.DefaultPreprocessors;
   PipelineOptions.Compatibility := EffectiveCompatibility;
   PipelineOptions.SourceType := EffectiveSourceType;
-  ProgramNode := ParseSource(ASource, AFileName, PipelineOptions,
-    LexTimeNanoseconds, ParseTimeNanoseconds, SourceMap);
+  ParsedSource := TGocciaCLIParsedSource.Parse(ASource, AFileName,
+    PipelineOptions, False);
   try
     Compiler := TGocciaCompiler.Create(AFileName);
     try
       Compiler.StrictTypes := EffectiveStrictTypes;
       Compiler.NonStrictMode := (cfNonStrictMode in EffectiveCompatibility) and
         (EffectiveSourceType = stScript);
-      CompiledModule := Compiler.Compile(ProgramNode);
-      WriteSourceMapIfEnabled(SourceMap, AFileName);
+      CompiledModule := Compiler.Compile(ParsedSource.ProgramNode);
+      WriteSourceMapIfEnabled(ParsedSource.SourceMap, AFileName);
       Result := CompiledModule;
       CompiledModule := nil;
     finally
       Compiler.Free;
     end;
   finally
-    ProgramNode.Free;
-    SourceMap.Free;
+    ParsedSource.Free;
     CompiledModule.Free;
   end;
 end;
