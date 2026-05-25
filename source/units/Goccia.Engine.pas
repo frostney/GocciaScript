@@ -1239,7 +1239,6 @@ var
   ModuleScope: TGocciaScope;
   ModuleContext: TGocciaEvaluationContext;
   ModuleResult: TGocciaValue;
-  ScriptResult: TGocciaValue;
   GC: TGarbageCollector;
 begin
   FillChar(FLastTiming, SizeOf(FLastTiming), 0);
@@ -1314,18 +1313,7 @@ begin
       begin
         CheckTopLevelRedeclarations(PipelineResult.ProgramNode,
           FInterpreter.GlobalScope, FSourcePath);
-        ScriptResult := nil;
-        GC := TGarbageCollector.Instance;
-        ScriptResult := FExecutor.ExecuteProgram(PipelineResult.ProgramNode);
-        if Assigned(ScriptResult) and Assigned(GC) then
-          GC.AddTempRoot(ScriptResult);
-        try
-          WaitForRuntimeIdle;
-          FLastTiming.Result := ScriptResult;
-        finally
-          if Assigned(ScriptResult) and Assigned(GC) then
-            GC.RemoveTempRoot(ScriptResult);
-        end;
+        FLastTiming.Result := ExecuteProgram(PipelineResult.ProgramNode);
         ExecEnd := GetNanoseconds;
         FLastTiming.CompileTimeNanoseconds :=
           FExecutor.CompileTimeNanoseconds;
@@ -1360,10 +1348,20 @@ begin
 end;
 
 function TGocciaEngine.ExecuteProgram(const AProgram: TGocciaProgram): TGocciaValue;
+var
+  GC: TGarbageCollector;
 begin
   try
     Result := FExecutor.ExecuteProgram(AProgram);
-    WaitForRuntimeIdle;
+    GC := TGarbageCollector.Instance;
+    if Assigned(Result) and Assigned(GC) then
+      GC.AddTempRoot(Result);
+    try
+      WaitForRuntimeIdle;
+    finally
+      if Assigned(Result) and Assigned(GC) then
+        GC.RemoveTempRoot(Result);
+    end;
   finally
     if Assigned(TGocciaMicrotaskQueue.Instance) then
       TGocciaMicrotaskQueue.Instance.ClearQueue;
