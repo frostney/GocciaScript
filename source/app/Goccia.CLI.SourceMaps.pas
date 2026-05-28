@@ -8,7 +8,8 @@ uses
   Goccia.SourceMap;
 
 procedure WriteSourceMapIfAvailable(const ASourceMap: TGocciaSourceMap;
-  const AOutputPath, ASourceName: string; const APrintMessage: Boolean);
+  const AMapOutputPath, AGeneratedFileName, ASourceName: string;
+  const APrintMessage: Boolean);
 
 implementation
 
@@ -16,17 +17,18 @@ uses
   SysUtils;
 
 procedure WriteSourceMapIfAvailable(const ASourceMap: TGocciaSourceMap;
-  const AOutputPath, ASourceName: string; const APrintMessage: Boolean);
+  const AMapOutputPath, AGeneratedFileName, ASourceName: string;
+  const APrintMessage: Boolean);
 begin
   if not Assigned(ASourceMap) then
     Exit;
 
-  ASourceMap.FileName := ExtractFileName(ASourceName);
+  ASourceMap.FileName := ExtractFileName(AGeneratedFileName);
   ASourceMap.SetSourcePath(0, ExtractFileName(ASourceName));
-  ASourceMap.SaveToFile(AOutputPath);
+  ASourceMap.SaveToFile(AMapOutputPath);
 
   if APrintMessage then
-    WriteLn(SysUtils.Format('  Source map written to %s', [AOutputPath]));
+    WriteLn(SysUtils.Format('  Source map written to %s', [AMapOutputPath]));
 end;
 
 end.

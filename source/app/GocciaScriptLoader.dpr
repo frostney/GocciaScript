@@ -357,7 +357,7 @@ begin
   MapOutputPath := FSourceMap.ValueOr('');
   if MapOutputPath = '' then
     MapOutputPath := AFileName + EXT_MAP;
-  WriteSourceMapIfAvailable(ASourceMap, MapOutputPath, AFileName,
+  WriteSourceMapIfAvailable(ASourceMap, MapOutputPath, AFileName, AFileName,
     not IsJsonOutput);
 end;
 
