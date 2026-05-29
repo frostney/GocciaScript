@@ -26,6 +26,7 @@ type
     FGlobalBackedTopLevel: Boolean;
     FStrictTypes: Boolean;
     FNonStrictMode: Boolean;
+    FCompileLabelDepth: Integer;
     FOptimizationOptions: TGocciaCompilerOptimizationOptions;
     procedure DoCompileExpression(const AExpr: TGocciaExpression;
       const ADest: UInt8);
@@ -229,6 +230,16 @@ var
 begin
   Result := False;
   Ctx := BuildContext;
+  if (AStmt.LabelCount > 0) and (FCompileLabelDepth = 0) then
+  begin
+    Inc(FCompileLabelDepth);
+    try
+      Exit(Goccia.Compiler.Statements.CompileLabeledStatement(Ctx, AStmt));
+    finally
+      Dec(FCompileLabelDepth);
+    end;
+  end;
+
   EmitLineMapping(Ctx, AStmt.Line, AStmt.Column);
 
   if AStmt is TGocciaExpressionStatement then
@@ -279,12 +290,14 @@ begin
     Goccia.Compiler.Statements.CompileSwitchStatement(Ctx, TGocciaSwitchStatement(AStmt))
   else if AStmt is TGocciaBreakStatement then
   begin
-    Goccia.Compiler.Statements.CompileBreakStatement(Ctx);
+    Goccia.Compiler.Statements.CompileBreakStatement(Ctx,
+      TGocciaBreakStatement(AStmt));
     Result := True;
   end
   else if AStmt is TGocciaContinueStatement then
   begin
-    Goccia.Compiler.Statements.CompileContinueStatement(Ctx);
+    Goccia.Compiler.Statements.CompileContinueStatement(Ctx,
+      TGocciaContinueStatement(AStmt));
     Result := True;
   end
   else if AStmt is TGocciaImportDeclaration then

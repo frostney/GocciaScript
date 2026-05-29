@@ -238,6 +238,7 @@ Relative paths are resolved against the current working directory. A missing fil
   "compat-asi": true,
   "compat-non-strict-mode": true,
   "compat-loose-equality": true,
+  "compat-label": true,
   "compat-traditional-for-loop": true,
   "compat-while-loops": true,
   "strict-types": true,

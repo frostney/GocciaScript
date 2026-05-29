@@ -518,6 +518,7 @@ try
   Engine.Compatibility := [
     cfASI,
     cfNonStrictMode,
+    cfLabel,
     cfTraditionalFor,
     cfWhileLoops
   ];                                       // Enable selected compatibility semantics

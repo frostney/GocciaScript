@@ -8,8 +8,8 @@
 - **Modern subset** — `let`/`const`, arrow functions, classes with private fields, `for...of`, async/await, ES modules
 - **TC39 proposals** — Decorators, decorator metadata, pattern matching, types as comments, enums, `Math.clamp`
 - **Excluded by design** — `eval`, wildcard re-exports
-- **Graceful handling** — Parser-recognized excluded or disabled syntax (`==`/`!=` when `--compat-loose-equality` is off, `while`/`do...while` when `--compat-while-loops` is off, `with` when `--compat-non-strict-mode` is off, traditional `for(;;)` when `--compat-traditional-for-loop` is off) parses successfully but executes as a no-op with a warning and suggestion
-- **Opt-in toggles** — ASI (`--compat-asi`), `var` declarations (`--compat-var`), `function` keyword (`--compat-function`), non-strict Script compatibility (`--compat-non-strict-mode` for `arguments`, `with`, silent assignment failures, legacy `delete` returns, and sloppy `this`), loose equality (`--compat-loose-equality`), traditional `for(init; test; update)` loops (`--compat-traditional-for-loop`), `while`/`do...while` loops (`--compat-while-loops`), runtime type enforcement (`--strict-types`)
+- **Graceful handling** — Parser-recognized excluded or disabled syntax (`==`/`!=` when `--compat-loose-equality` is off, labels when `--compat-label` is off, `while`/`do...while` when `--compat-while-loops` is off, `with` when `--compat-non-strict-mode` is off, traditional `for(;;)` when `--compat-traditional-for-loop` is off) parses successfully but executes as a no-op with a warning and suggestion
+- **Opt-in toggles** — ASI (`--compat-asi`), `var` declarations (`--compat-var`), `function` keyword (`--compat-function`), non-strict Script compatibility (`--compat-non-strict-mode` for `arguments`, `with`, silent assignment failures, legacy `delete` returns, and sloppy `this`), loose equality (`--compat-loose-equality`), labels (`--compat-label`), traditional `for(init; test; update)` loops (`--compat-traditional-for-loop`), `while`/`do...while` loops (`--compat-while-loops`), runtime type enforcement (`--strict-types`)
 - **Default preprocessors** — JSX (enabled by default via `DefaultPreprocessors`)
 
 GocciaScript implements a curated subset of ECMAScript. This document details what's supported, what's excluded, and the rationale for each decision. For quick-reference tables of every feature and TC39 proposal, see [Language Tables](language-tables.md).
@@ -828,7 +828,9 @@ By default, GocciaScript follows strict delete behavior: deleting an unqualified
 
 ### Labeled Statements
 
-**Excluded.** No alternative needed. The parser accepts labeled statements but strips the label and emits a warning:
+**Opt-in for JavaScript compatibility.** Excluded by default. Available via `--compat-label` (CLI flag, `cfLabel` in `Engine.Compatibility`, or `{"compat-label": true}` in config) when a program or conformance suite needs ECMAScript labeled control flow.
+
+When disabled (default), the parser accepts labeled statements but strips the label and emits a warning:
 
 ```text
 Warning: Labeled statements are not supported in GocciaScript
@@ -837,7 +839,10 @@ Warning: Labeled statements are not supported in GocciaScript
 
 The labeled statement itself (the statement after the `:`) is still parsed and executed normally. For example, `myLabel: x = 2;` strips the label and executes `x = 2;`. If the labeled statement is itself unsupported (e.g., `outer: for (...)`), both a label warning and a loop warning are emitted.
 
-Labels exist primarily for `break`/`continue` targets in nested loops. GocciaScript supports `for...of`, `for await...of`, traditional `for(;;)` with `--compat-traditional-for-loop`, and `while`/`do...while` with `--compat-while-loops`, but doesn't implement labeled `break`/`continue` against any of them; nested-loop control flow uses `return` from a closure or an early-exit flag.
+When enabled, labels can target `break` and `continue` statements in interpreter and bytecode modes:
+
+- `break label;` exits the matching enclosing labeled statement, including labeled blocks, `switch`, `for...of`, `for await...of`, traditional `for(;;)` with `--compat-traditional-for-loop`, and `while`/`do...while` with `--compat-while-loops`.
+- `continue label;` targets matching enclosing labeled iteration statements only: `for...of`, `for await...of`, traditional `for(;;)` with `--compat-traditional-for-loop`, and `while`/`do...while` with `--compat-while-loops`.
 
 ### Generators and Iterators
 

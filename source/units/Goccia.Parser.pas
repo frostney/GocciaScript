@@ -33,6 +33,7 @@ type
     WhileLoopsEnabled: Boolean;
     LooseEqualityEnabled: Boolean;
     NonStrictModeEnabled: Boolean;
+    LabelStatementsEnabled: Boolean;
   end;
 
   TGocciaPrivateNameReference = record
@@ -76,6 +77,7 @@ type
     FInGeneratorFunction: Integer;
     FFunctionDepth: Integer;
     FPrivateClassContexts: TObjectList<TGocciaPrivateClassContext>;
+    FActiveLabels: TStringList;
     FSkipPrivateNameValidation: Integer;
     FAutomaticSemicolonInsertion: Boolean;
     FVarDeclarationsEnabled: Boolean;
@@ -84,6 +86,7 @@ type
     FWhileLoopsEnabled: Boolean;
     FLooseEqualityEnabled: Boolean;
     FNonStrictModeEnabled: Boolean;
+    FLabelStatementsEnabled: Boolean;
 
     procedure AddWarning(const AMessage, ASuggestion: string; const ALine, AColumn: Integer);
     procedure PushPrivateClassContext;
@@ -235,6 +238,7 @@ type
     function SwitchStatement: TGocciaStatement;
     function BreakStatement: TGocciaStatement;
     function ContinueStatement: TGocciaStatement;
+    function LabeledStatement: TGocciaStatement;
   public
     constructor Create(const ATokens: TObjectList<TGocciaToken>;
       const AFileName: string; const ASourceLines: TStringList);
@@ -327,6 +331,8 @@ begin
   FInAsyncFunction := 0;
   FFunctionDepth := 0;
   FPrivateClassContexts := TObjectList<TGocciaPrivateClassContext>.Create(True);
+  FActiveLabels := TStringList.Create;
+  FActiveLabels.CaseSensitive := True;
 end;
 
 procedure TGocciaParser.ApplyOptions(const AOptions: TGocciaParserOptions);
@@ -338,6 +344,7 @@ begin
   FWhileLoopsEnabled := AOptions.WhileLoopsEnabled;
   FLooseEqualityEnabled := AOptions.LooseEqualityEnabled;
   FNonStrictModeEnabled := AOptions.NonStrictModeEnabled;
+  FLabelStatementsEnabled := AOptions.LabelStatementsEnabled;
 end;
 
 function TGocciaParser.Options: TGocciaParserOptions;
@@ -349,10 +356,12 @@ begin
   Result.WhileLoopsEnabled := FWhileLoopsEnabled;
   Result.LooseEqualityEnabled := FLooseEqualityEnabled;
   Result.NonStrictModeEnabled := FNonStrictModeEnabled;
+  Result.LabelStatementsEnabled := FLabelStatementsEnabled;
 end;
 
 destructor TGocciaParser.Destroy;
 begin
+  FActiveLabels.Free;
   FPrivateClassContexts.Free;
   inherited;
 end;
@@ -3519,13 +3528,19 @@ begin
   end
   else if Check(gttIdentifier) and CheckNext(gttColon) then
   begin
-    Line := Peek.Line;
-    Column := Peek.Column;
-    AddWarning('Labeled statements are not supported in GocciaScript', '',
-      Line, Column);
-    Advance;
-    Advance;
-    Result := Statement;
+    if FLabelStatementsEnabled then
+      Result := LabeledStatement
+    else
+    begin
+      Line := Peek.Line;
+      Column := Peek.Column;
+      AddWarning('Labeled statements are not supported in GocciaScript',
+        'Enable --compat-label for JavaScript labeled break/continue compatibility',
+        Line, Column);
+      Advance;
+      Advance;
+      Result := Statement;
+    end;
   end
   else if Match(gttSemicolon) then
   begin
@@ -3533,6 +3548,28 @@ begin
   end
   else
     Result := ExpressionStatement;
+end;
+
+// ES2026 §14.13 Labelled Statements
+function TGocciaParser.LabeledStatement: TGocciaStatement;
+var
+  LabelToken: TGocciaToken;
+begin
+  LabelToken := Advance;
+  if FActiveLabels.IndexOf(LabelToken.Lexeme) >= 0 then
+    raise TGocciaSyntaxError.Create('Duplicate statement label',
+      LabelToken.Line, LabelToken.Column, FFileName, FSourceLines,
+      'Use a unique label name for nested labeled statements');
+
+  Consume(gttColon, 'Expected ":" after statement label',
+    'Add ":" between the label and labeled statement');
+  FActiveLabels.Add(LabelToken.Lexeme);
+  try
+    Result := Statement;
+    Result.AddLabel(LabelToken.Lexeme);
+  finally
+    FActiveLabels.Delete(FActiveLabels.Count - 1);
+  end;
 end;
 
 function TGocciaParser.DeclarationStatement: TGocciaStatement;
@@ -6576,25 +6613,49 @@ end;
 function TGocciaParser.BreakStatement: TGocciaStatement;
 var
   Line, Column: Integer;
+  TargetLabel: string;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
+  TargetLabel := '';
+
+  if FLabelStatementsEnabled and Check(gttIdentifier) and
+     (Previous.Line = Peek.Line) then
+  begin
+    TargetLabel := Advance.Lexeme;
+    if FActiveLabels.IndexOf(TargetLabel) < 0 then
+      raise TGocciaSyntaxError.Create('Undefined break target',
+        Previous.Line, Previous.Column, FFileName, FSourceLines,
+        'Use the name of an enclosing statement label');
+  end;
 
   ConsumeSemicolonOrASI('Expected ";" after break statement',
     SSuggestAddSemicolon);
-  Result := TGocciaBreakStatement.Create(Line, Column);
+  Result := TGocciaBreakStatement.Create(Line, Column, TargetLabel);
 end;
 
 function TGocciaParser.ContinueStatement: TGocciaStatement;
 var
   Line, Column: Integer;
+  TargetLabel: string;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
+  TargetLabel := '';
+
+  if FLabelStatementsEnabled and Check(gttIdentifier) and
+     (Previous.Line = Peek.Line) then
+  begin
+    TargetLabel := Advance.Lexeme;
+    if FActiveLabels.IndexOf(TargetLabel) < 0 then
+      raise TGocciaSyntaxError.Create('Undefined continue target',
+        Previous.Line, Previous.Column, FFileName, FSourceLines,
+        'Use the name of an enclosing iteration label');
+  end;
 
   ConsumeSemicolonOrASI('Expected ";" after continue statement',
     SSuggestAddSemicolon);
-  Result := TGocciaContinueStatement.Create(Line, Column);
+  Result := TGocciaContinueStatement.Create(Line, Column, TargetLabel);
 end;
 
 procedure TGocciaParser.SkipDestructuringPattern;

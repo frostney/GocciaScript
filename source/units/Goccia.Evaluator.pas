@@ -481,6 +481,16 @@ begin
     TGocciaCoverageTracker.Instance.RecordLineHit(
       AContext.CurrentFilePath, AStatement.Line);
   Result := AStatement.Execute(AContext);
+  if (Result.Kind = cfkBreak) and (Result.TargetLabel <> '') and
+     AStatement.HasLabel(Result.TargetLabel) then
+    Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
+end;
+
+function TargetsStatementOrUnlabeled(const AControlFlow: TGocciaControlFlow;
+  const AStatement: TGocciaStatement): Boolean;
+begin
+  Result := (AControlFlow.TargetLabel = '') or
+    AStatement.HasLabel(AControlFlow.TargetLabel);
 end;
 
 function EvaluateLoopBodyStatement(const AStatement: TGocciaStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
@@ -1842,6 +1852,11 @@ begin
       end;
       if CF.Kind = cfkBreak then
       begin
+        if not TargetsStatementOrUnlabeled(CF, AForOfStatement) then
+        begin
+          Result := CF;
+          Exit;
+        end;
         if Assigned(Continuation) then
           Continuation.ClearLoopState(AForOfStatement);
         Goccia.Values.IteratorSupport.CloseIteratorPreservingError(Iterator);
@@ -1852,6 +1867,12 @@ begin
         if Assigned(Continuation) then
           Continuation.ClearLoopState(AForOfStatement);
         Goccia.Values.IteratorSupport.CloseIteratorPreservingError(Iterator);
+        Result := CF;
+        Exit;
+      end;
+      if (CF.Kind = cfkContinue) and
+         not TargetsStatementOrUnlabeled(CF, AForOfStatement) then
+      begin
         Result := CF;
         Exit;
       end;
@@ -2072,6 +2093,11 @@ begin
           CF := EvaluateLoopBodyStatement(AForStatement.Body, IterContext);
           if CF.Kind = cfkBreak then
           begin
+            if not TargetsStatementOrUnlabeled(CF, AForStatement) then
+            begin
+              Result := CF;
+              Exit;
+            end;
             if Assigned(Continuation) then
               Continuation.ClearForLoopState(AForStatement);
             Break;
@@ -2080,6 +2106,12 @@ begin
           begin
             if Assigned(Continuation) then
               Continuation.ClearForLoopState(AForStatement);
+            Result := CF;
+            Exit;
+          end;
+          if (CF.Kind = cfkContinue) and
+             not TargetsStatementOrUnlabeled(CF, AForStatement) then
+          begin
             Result := CF;
             Exit;
           end;
@@ -2232,6 +2264,11 @@ begin
         case CF.Kind of
           cfkBreak:
           begin
+            if not TargetsStatementOrUnlabeled(CF, AWhileStatement) then
+            begin
+              Result := CF;
+              Exit;
+            end;
             ClearGeneratorLoopState(Continuation, AWhileStatement);
             Break;
           end;
@@ -2243,6 +2280,11 @@ begin
           end;
           cfkContinue:
           begin
+            if not TargetsStatementOrUnlabeled(CF, AWhileStatement) then
+            begin
+              Result := CF;
+              Exit;
+            end;
             MarkGeneratorLoopPhase(LoopState, gflpTest, ResumePhase);
             Continue;
           end;
@@ -2291,6 +2333,11 @@ begin
         case CF.Kind of
           cfkBreak:
           begin
+            if not TargetsStatementOrUnlabeled(CF, ADoWhileStatement) then
+            begin
+              Result := CF;
+              Exit;
+            end;
             ClearGeneratorLoopState(Continuation, ADoWhileStatement);
             Break;
           end;
@@ -2299,6 +2346,14 @@ begin
             ClearGeneratorLoopState(Continuation, ADoWhileStatement);
             Result := CF;
             Exit;
+          end;
+          cfkContinue:
+          begin
+            if not TargetsStatementOrUnlabeled(CF, ADoWhileStatement) then
+            begin
+              Result := CF;
+              Exit;
+            end;
           end;
         end;
 
@@ -2587,6 +2642,11 @@ begin
           end;
           if CF.Kind = cfkBreak then
           begin
+            if not TargetsStatementOrUnlabeled(CF, AForAwaitOfStatement) then
+            begin
+              Result := CF;
+              Exit;
+            end;
             if Assigned(Continuation) then
               Continuation.ClearLoopState(AForAwaitOfStatement);
             CloseAsyncIterator(IteratorObj);
@@ -2597,6 +2657,12 @@ begin
             if Assigned(Continuation) then
               Continuation.ClearLoopState(AForAwaitOfStatement);
             CloseAsyncIterator(IteratorObj);
+            Result := CF;
+            Exit;
+          end;
+          if (CF.Kind = cfkContinue) and
+             not TargetsStatementOrUnlabeled(CF, AForAwaitOfStatement) then
+          begin
             Result := CF;
             Exit;
           end;
@@ -2754,6 +2820,11 @@ begin
         end;
         if CF.Kind = cfkBreak then
         begin
+          if not TargetsStatementOrUnlabeled(CF, AForAwaitOfStatement) then
+          begin
+            Result := CF;
+            Exit;
+          end;
           if Assigned(Continuation) then
             Continuation.ClearLoopState(AForAwaitOfStatement);
           Iterator.Close;
@@ -2764,6 +2835,12 @@ begin
           if Assigned(Continuation) then
             Continuation.ClearLoopState(AForAwaitOfStatement);
           Iterator.Close;
+          Result := CF;
+          Exit;
+        end;
+        if (CF.Kind = cfkContinue) and
+           not TargetsStatementOrUnlabeled(CF, AForAwaitOfStatement) then
+        begin
           Result := CF;
           Exit;
         end;
@@ -3847,7 +3924,15 @@ begin
         begin
           CF := EvaluateCaseConsequent(CaseClause.Consequent);
           if CF.Kind = cfkBreak then
-            Done := True
+          begin
+            if TargetsStatementOrUnlabeled(CF, ASwitchStatement) then
+              Done := True
+            else
+            begin
+              Result := CF;
+              Exit;
+            end;
+          end
           else if CF.Kind in [cfkReturn, cfkContinue] then
           begin
             Result := CF;
@@ -3870,7 +3955,15 @@ begin
           CaseClause := ASwitchStatement.Cases[I];
           CF := EvaluateCaseConsequent(CaseClause.Consequent);
           if CF.Kind = cfkBreak then
-            Done := True
+          begin
+            if TargetsStatementOrUnlabeled(CF, ASwitchStatement) then
+              Done := True
+            else
+            begin
+              Result := CF;
+              Exit;
+            end;
+          end
           else if CF.Kind in [cfkReturn, cfkContinue] then
           begin
             Result := CF;

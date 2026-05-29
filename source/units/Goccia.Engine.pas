@@ -75,6 +75,7 @@ const
   cfWhileLoops = Goccia.SourcePipeline.cfWhileLoops;
   cfLooseEquality = Goccia.SourcePipeline.cfLooseEquality;
   cfNonStrictMode = Goccia.SourcePipeline.cfNonStrictMode;
+  cfLabel = Goccia.SourcePipeline.cfLabel;
 
   stScript = Goccia.SourcePipeline.stScript;
   stModule = Goccia.SourcePipeline.stModule;
