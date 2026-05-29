@@ -161,6 +161,10 @@ begin
     if not Assigned(FLoadModule) then
       raise Exception.Create('Module loader is not available.');
     Module := FLoadModule(FModulePath, FImportingFilePath);
+    if not Assigned(Module) then
+      raise Exception.CreateFmt(
+        'Module loader returned nil for "%s" imported from "%s".',
+        [FModulePath, FImportingFilePath]);
     FNamespaceObject := Module.GetNamespaceObject;
   end;
   Result := FNamespaceObject;

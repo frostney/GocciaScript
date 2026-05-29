@@ -10168,38 +10168,23 @@ begin
         try
           try
             if Assigned(Template.DebugInfo) and (Template.DebugInfo.SourceFile <> '') then
-            begin
-              case C of
-                Ord(icpSource):
-                  DynImportPromise.Resolve(ImportModuleSourceValue(
-                    VMRegisterToStringFast(FRegisters[B]).Value,
-                    Template.DebugInfo.SourceFile));
-                Ord(icpDefer):
-                  DynImportPromise.Resolve(ImportDeferredModuleNamespaceValue(
-                    VMRegisterToStringFast(FRegisters[B]).Value,
-                    Template.DebugInfo.SourceFile));
-              else
-                DynImportPromise.Resolve(ImportModuleValue(
-                  VMRegisterToStringFast(FRegisters[B]).Value,
-                  Template.DebugInfo.SourceFile));
-              end;
-            end
+              GlobalName := Template.DebugInfo.SourceFile
             else
-            begin
-              case C of
-                Ord(icpSource):
-                  DynImportPromise.Resolve(ImportModuleSourceValue(
-                    VMRegisterToStringFast(FRegisters[B]).Value,
-                    FCurrentModuleSourcePath));
-                Ord(icpDefer):
-                  DynImportPromise.Resolve(ImportDeferredModuleNamespaceValue(
-                    VMRegisterToStringFast(FRegisters[B]).Value,
-                    FCurrentModuleSourcePath));
-              else
+              GlobalName := FCurrentModuleSourcePath;
+
+            case C of
+              Ord(icpEvaluation):
                 DynImportPromise.Resolve(ImportModuleValue(
-                  VMRegisterToStringFast(FRegisters[B]).Value,
-                  FCurrentModuleSourcePath));
-              end;
+                  VMRegisterToStringFast(FRegisters[B]).Value, GlobalName));
+              Ord(icpSource):
+                DynImportPromise.Resolve(ImportModuleSourceValue(
+                  VMRegisterToStringFast(FRegisters[B]).Value, GlobalName));
+              Ord(icpDefer):
+                DynImportPromise.Resolve(ImportDeferredModuleNamespaceValue(
+                  VMRegisterToStringFast(FRegisters[B]).Value, GlobalName));
+            else
+              raise Exception.CreateFmt(
+                'Unsupported dynamic import phase: %d', [C]);
             end;
           except
             on E: EGocciaBytecodeThrow do
