@@ -520,6 +520,7 @@ begin
   Context.Scope := CallScope;
   Context.OnError := FClosure.OnError;
   Context.LoadModule := FClosure.LoadModule;
+  Context.LoadModuleSource := FClosure.LoadModuleSource;
   Context.CurrentFilePath := FSourceFilePath;
   Context.CoverageEnabled := False;
   // EffectiveStrictTypes walks to the root scope so generator bodies
@@ -670,6 +671,7 @@ begin
   Context.Scope := CallScope;
   Context.OnError := FClosure.OnError;
   Context.LoadModule := FClosure.LoadModule;
+  Context.LoadModuleSource := FClosure.LoadModuleSource;
   Context.CurrentFilePath := FSourceFilePath;
   Context.CoverageEnabled := False;
   // EffectiveStrictTypes — see CreateContinuation above.

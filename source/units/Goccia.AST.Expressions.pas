@@ -13,6 +13,7 @@ uses
 
   Goccia.AST.Node,
   Goccia.Evaluator.Context,
+  Goccia.Modules,
   Goccia.Scope.BindingMap,
   Goccia.Token,
   Goccia.Values.Primitives;
@@ -487,10 +488,15 @@ type
   TGocciaImportCallExpression = class(TGocciaExpression)
   private
     FSpecifier: TGocciaExpression;
+    FOptions: TGocciaExpression;
+    FPhase: TGocciaImportCallPhase;
   public
-    constructor Create(const ASpecifier: TGocciaExpression; const ALine, AColumn: Integer);
+    constructor Create(const ASpecifier: TGocciaExpression; const AOptions: TGocciaExpression;
+      const APhase: TGocciaImportCallPhase; const ALine, AColumn: Integer);
     function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Specifier: TGocciaExpression read FSpecifier;
+    property Options: TGocciaExpression read FOptions;
+    property Phase: TGocciaImportCallPhase read FPhase;
   end;
 
   TGocciaHoleExpression = class(TGocciaExpression)
@@ -866,7 +872,6 @@ uses
   Goccia.Evaluator.PatternMatching,
   Goccia.GarbageCollector,
   Goccia.ImportMeta,
-  Goccia.Modules,
   Goccia.RegExp.Runtime,
   Goccia.Scope,
   Goccia.Values.BigIntValue,
@@ -2083,10 +2088,14 @@ begin
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
-constructor TGocciaImportCallExpression.Create(const ASpecifier: TGocciaExpression; const ALine, AColumn: Integer);
+constructor TGocciaImportCallExpression.Create(const ASpecifier: TGocciaExpression;
+  const AOptions: TGocciaExpression; const APhase: TGocciaImportCallPhase;
+  const ALine, AColumn: Integer);
 begin
   inherited Create(ALine, AColumn);
   FSpecifier := ASpecifier;
+  FOptions := AOptions;
+  FPhase := APhase;
 end;
 
 // ES2026 §13.3.10.1 Runtime Semantics: Evaluation — ImportCall
@@ -2105,11 +2114,33 @@ begin
     try
       // ES2026 §13.3.10.1 step 3: Evaluate specifier
       SpecifierValue := EvaluateExpression(FSpecifier, AContext);
-      // ES2026 §13.3.10.1 step 6-7: HostLoadImportedModule
-      Module := AContext.LoadModule(SpecifierValue.ToStringLiteral.Value,
-        AContext.CurrentFilePath);
-      // ES2026 §13.3.10.1 step 11: Resolve promise with namespace
-      Promise.Resolve(Module.GetNamespaceObject);
+      // ES2026 §13.3.10.1: optional import attributes are evaluated for
+      // observable side effects. Goccia does not consume them semantically yet.
+      if Assigned(FOptions) then
+        EvaluateExpression(FOptions, AContext);
+
+      case FPhase of
+        icpSource:
+          begin
+            if not Assigned(AContext.LoadModuleSource) then
+              raise Exception.Create('Module source loader is not available.');
+            Promise.Resolve(AContext.LoadModuleSource(
+              SpecifierValue.ToStringLiteral.Value, AContext.CurrentFilePath));
+          end;
+        icpDefer:
+          begin
+            if not Assigned(AContext.Scope.LoadDeferredModule) then
+              raise Exception.Create('Deferred module loader is not available.');
+            Promise.Resolve(AContext.Scope.LoadDeferredModule(
+              SpecifierValue.ToStringLiteral.Value, AContext.CurrentFilePath));
+          end;
+      else
+        // ES2026 §13.3.10.1 step 6-7: HostLoadImportedModule
+        Module := AContext.LoadModule(SpecifierValue.ToStringLiteral.Value,
+          AContext.CurrentFilePath);
+        // ES2026 §13.3.10.1 step 11: Resolve promise with namespace
+        Promise.Resolve(Module.GetNamespaceObject);
+      end;
     except
       on E: TGocciaThrowValue do
         Promise.Reject(E.Value);
