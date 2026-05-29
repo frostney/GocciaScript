@@ -21,15 +21,17 @@ type
     FNumeric: Boolean;
     FCaseFirst: string;
     FCollation: string;
+    FBoundCompare: TGocciaValue;
 
     procedure InitializePrototype;
-    function BoundCompare(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const ALocale: string; const AOptions: TGocciaObjectValue = nil);
 
     function ToStringTag: string; override;
+    procedure MarkReferences; override;
     class procedure ExposePrototype(const AConstructor: TGocciaObjectValue);
   published
+    function IntlCollatorCompareGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function IntlCollatorCompare(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function IntlCollatorResolvedOptions(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   end;
@@ -58,6 +60,16 @@ var
 threadvar
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
 
+type
+  TGocciaIntlCollatorBoundCompareValue = class(TGocciaNativeFunctionValue)
+  private
+    FCollator: TGocciaIntlCollatorValue;
+    function Compare(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+  public
+    constructor Create(const ACollator: TGocciaIntlCollatorValue);
+    procedure MarkReferences; override;
+  end;
+
 function GetIntlCollatorShared: TGocciaSharedPrototype; inline;
 begin
   if Assigned(CurrentRealm) then
@@ -71,6 +83,30 @@ begin
   if not (AValue is TGocciaIntlCollatorValue) then
     ThrowTypeError(AMethod + ' called on non-Collator');
   Result := TGocciaIntlCollatorValue(AValue);
+end;
+
+{ TGocciaIntlCollatorBoundCompareValue }
+
+constructor TGocciaIntlCollatorBoundCompareValue.Create(
+  const ACollator: TGocciaIntlCollatorValue);
+begin
+  inherited CreateWithoutPrototype(Compare, '', 2);
+  FCollator := ACollator;
+end;
+
+function TGocciaIntlCollatorBoundCompareValue.Compare(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := FCollator.IntlCollatorCompare(AArgs, FCollator);
+end;
+
+procedure TGocciaIntlCollatorBoundCompareValue.MarkReferences;
+begin
+  if GCMarked then Exit;
+  inherited;
+  if Assigned(FCollator) then
+    FCollator.MarkReferences;
 end;
 
 function SensitivityStringToEnum(const AValue: string): TIntlCollatorSensitivity;
@@ -126,17 +162,19 @@ begin
   InitializePrototype;
   if Assigned(GetIntlCollatorShared) then
     FPrototype := GetIntlCollatorShared.Prototype;
-
-  // ES2024 §10.2.1: Intl.Collator.prototype.compare is a getter that returns
-  // a bound compare function.  Define an own 'compare' property so that
-  // extracting `collator.compare` as a callback works without losing `this`.
-  AssignProperty('compare',
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(BoundCompare, 'compare', 2));
 end;
 
 function TGocciaIntlCollatorValue.ToStringTag: string;
 begin
   Result := 'Intl.Collator';
+end;
+
+procedure TGocciaIntlCollatorValue.MarkReferences;
+begin
+  if GCMarked then Exit;
+  inherited;
+  if Assigned(FBoundCompare) then
+    FBoundCompare.MarkReferences;
 end;
 
 procedure TGocciaIntlCollatorValue.InitializePrototype;
@@ -153,8 +191,8 @@ begin
   begin
     Members := TGocciaMemberCollection.Create;
     try
-      Members.AddNamedMethod('compare', IntlCollatorCompare, 2,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddAccessor('compare', IntlCollatorCompareGetter, nil,
+        [pfConfigurable]);
       Members.AddNamedMethod('resolvedOptions', IntlCollatorResolvedOptions, 0,
         gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddSymbolDataProperty(
@@ -183,25 +221,21 @@ begin
     ExposeSharedPrototypeOnConstructor(Shared, AConstructor);
 end;
 
-function TGocciaIntlCollatorValue.BoundCompare(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+function TGocciaIntlCollatorValue.IntlCollatorCompareGetter(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
 var
-  Str1, Str2: UnicodeString;
-  CompareResult: Integer;
+  C: TGocciaIntlCollatorValue;
 begin
-  // Bound compare uses Self directly, so it works when detached from the
-  // Collator (e.g. passed as a callback to Array.prototype.sort).
-  // Per ECMA-402, missing arguments are ToString-coerced (undefined -> "undefined").
-  Str1 := UnicodeString(AArgs.GetElement(0).ToStringLiteral.Value);
-  Str2 := UnicodeString(AArgs.GetElement(1).ToStringLiteral.Value);
-
-  if TryICUCompareStrings(FLocale, Str1, Str2,
-    SensitivityStringToEnum(FSensitivity), FIgnorePunctuation, CompareResult) then
-    Result := TGocciaNumberLiteralValue.Create(CompareResult)
-  else
-    Result := TGocciaNumberLiteralValue.Create(CompareStr(string(Str1), string(Str2)));
+  C := AsCollator(AThisValue, 'get Intl.Collator.prototype.compare');
+  if not Assigned(C.FBoundCompare) then
+    C.FBoundCompare := TGocciaIntlCollatorBoundCompareValue.Create(C);
+  Result := C.FBoundCompare;
 end;
 
-function TGocciaIntlCollatorValue.IntlCollatorCompare(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+function TGocciaIntlCollatorValue.IntlCollatorCompare(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
 var
   C: TGocciaIntlCollatorValue;
   Str1, Str2: UnicodeString;

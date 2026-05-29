@@ -37,6 +37,7 @@ type
     FTimeZoneName: string;
     FResolvedOptions: TIntlDateTimeFormatOptions;
     FHasExplicitCoreOptions: Boolean;
+    FBoundFormat: TGocciaValue;
 
     procedure InitializePrototype;
     procedure ReadOptions(const AOptions: TGocciaObjectValue);
@@ -44,8 +45,10 @@ type
     constructor Create(const ALocale: string; const AOptions: TGocciaObjectValue = nil);
 
     function ToStringTag: string; override;
+    procedure MarkReferences; override;
     class procedure ExposePrototype(const AConstructor: TGocciaObjectValue);
   published
+    function IntlDateTimeFormatFormatGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function IntlDateTimeFormatFormat(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function IntlDateTimeFormatFormatToParts(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function IntlDateTimeFormatFormatRange(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -61,6 +64,7 @@ uses
 
   IntlICU,
   IntlLocaleResolver,
+  TimingUtils,
 
   Goccia.Error.Messages,
   Goccia.Intl.Helpers,
@@ -69,6 +73,7 @@ uses
   Goccia.Temporal.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
+  Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue,
   Goccia.Values.TemporalInstant,
@@ -87,11 +92,21 @@ threadvar
 
 const
   GREGORIAN_CYCLE_YEARS = 400;
+  NANOSECONDS_PER_MILLISECOND = 1000000;
   TEMPORAL_SURROGATE_YEAR_BASE = 2000;
   TEMPORAL_DIRECT_ICU_YEAR_LIMIT = 9999;
   TWO_DIGIT_YEAR_MODULUS = 100;
 
 type
+  TGocciaIntlDateTimeFormatBoundFormatValue = class(TGocciaNativeFunctionValue)
+  private
+    FDateTimeFormat: TGocciaIntlDateTimeFormatValue;
+    function Format(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+  public
+    constructor Create(const ADateTimeFormat: TGocciaIntlDateTimeFormatValue);
+    procedure MarkReferences; override;
+  end;
+
   TDateTimeFormattableKind = (dtfkNumber, dtfkPlainDate, dtfkPlainDateTime,
     dtfkPlainTime, dtfkPlainYearMonth, dtfkPlainMonthDay, dtfkInstant,
     dtfkZonedDateTime);
@@ -232,6 +247,30 @@ begin
   Result := TGocciaIntlDateTimeFormatValue(AValue);
 end;
 
+{ TGocciaIntlDateTimeFormatBoundFormatValue }
+
+constructor TGocciaIntlDateTimeFormatBoundFormatValue.Create(
+  const ADateTimeFormat: TGocciaIntlDateTimeFormatValue);
+begin
+  inherited CreateWithoutPrototype(Format, '', 1);
+  FDateTimeFormat := ADateTimeFormat;
+end;
+
+function TGocciaIntlDateTimeFormatBoundFormatValue.Format(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := FDateTimeFormat.IntlDateTimeFormatFormat(AArgs, FDateTimeFormat);
+end;
+
+procedure TGocciaIntlDateTimeFormatBoundFormatValue.MarkReferences;
+begin
+  if GCMarked then Exit;
+  inherited;
+  if Assigned(FDateTimeFormat) then
+    FDateTimeFormat.MarkReferences;
+end;
+
 function DateStyleStringToEnum(const AValue: string): TIntlDateTimeStyle;
 begin
   if AValue = 'full' then
@@ -251,6 +290,23 @@ begin
   if IsNan(AValue) or Math.IsInfinite(AValue) or (Abs(AValue) > 8.64e15) then
     Exit(Math.NaN);
   Result := Trunc(AValue);
+end;
+
+function CurrentEpochMilliseconds: Double;
+begin
+  Result := GetEpochNanoseconds div NANOSECONDS_PER_MILLISECOND;
+end;
+
+function DateTimeFormatArgumentMilliseconds(
+  const AArgs: TGocciaArgumentsCollection): Double;
+var
+  DateValue: TGocciaValue;
+begin
+  DateValue := AArgs.GetElement(0);
+  if DateValue is TGocciaUndefinedLiteralValue then
+    Result := CurrentEpochMilliseconds
+  else
+    Result := TimeClipMillis(DateValue.ToNumberLiteral.Value);
 end;
 
 function EpochMillisFromDateTimeParts(const AYear, AMonth, ADay, AHour,
@@ -1002,6 +1058,14 @@ begin
   Result := 'Intl.DateTimeFormat';
 end;
 
+procedure TGocciaIntlDateTimeFormatValue.MarkReferences;
+begin
+  if GCMarked then Exit;
+  inherited;
+  if Assigned(FBoundFormat) then
+    FBoundFormat.MarkReferences;
+end;
+
 procedure TGocciaIntlDateTimeFormatValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
@@ -1016,8 +1080,8 @@ begin
   begin
     Members := TGocciaMemberCollection.Create;
     try
-      Members.AddNamedMethod('format', IntlDateTimeFormatFormat, 1,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddAccessor('format', IntlDateTimeFormatFormatGetter, nil,
+        [pfConfigurable]);
       Members.AddNamedMethod('formatToParts', IntlDateTimeFormatFormatToParts, 1,
         gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddNamedMethod('formatRange', IntlDateTimeFormatFormatRange, 2,
@@ -1052,6 +1116,18 @@ begin
     ExposeSharedPrototypeOnConstructor(Shared, AConstructor);
 end;
 
+function TGocciaIntlDateTimeFormatValue.IntlDateTimeFormatFormatGetter(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  DTF: TGocciaIntlDateTimeFormatValue;
+begin
+  DTF := AsDateTimeFormat(AThisValue, 'get Intl.DateTimeFormat.prototype.format');
+  if not Assigned(DTF.FBoundFormat) then
+    DTF.FBoundFormat := TGocciaIntlDateTimeFormatBoundFormatValue.Create(DTF);
+  Result := DTF.FBoundFormat;
+end;
+
 function TGocciaIntlDateTimeFormatValue.IntlDateTimeFormatFormat(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   DTF: TGocciaIntlDateTimeFormatValue;
@@ -1059,9 +1135,7 @@ var
   Formatted: string;
 begin
   DTF := AsDateTimeFormat(AThisValue, 'Intl.DateTimeFormat.prototype.format');
-  if AArgs.Length < 1 then
-    ThrowTypeError('Intl.DateTimeFormat.prototype.format requires a date value');
-  Millis := TimeClipMillis(AArgs.GetElement(0).ToNumberLiteral.Value);
+  Millis := DateTimeFormatArgumentMilliseconds(AArgs);
   if IsNan(Millis) then
     ThrowRangeError('Invalid time value');
 
@@ -1078,9 +1152,7 @@ var
   Parts: TIntlFormatPartArray;
 begin
   DTF := AsDateTimeFormat(AThisValue, 'Intl.DateTimeFormat.prototype.formatToParts');
-  if AArgs.Length < 1 then
-    ThrowTypeError('Intl.DateTimeFormat.prototype.formatToParts requires a date value');
-  Millis := TimeClipMillis(AArgs.GetElement(0).ToNumberLiteral.Value);
+  Millis := DateTimeFormatArgumentMilliseconds(AArgs);
   if IsNan(Millis) then
     ThrowRangeError('Invalid time value');
 
