@@ -38,7 +38,8 @@ type
     FSourceMap: TStringOption;
 
     function CompileSource(const ASource: TStringList;
-      const AFileName, AOutputPath: string): TGocciaBytecodeModule;
+      const AFileName: string;
+      out ASourceMap: TGocciaSourceMap): TGocciaBytecodeModule;
     procedure WriteSourceMapIfEnabled(const ASourceMap: TGocciaSourceMap;
       const AFileName, AOutputPath: string);
     procedure EmitBytecode(const ASource: TStringList; const AFileName,
@@ -101,7 +102,8 @@ begin
 end;
 
 function TBundlerApp.CompileSource(const ASource: TStringList;
-  const AFileName, AOutputPath: string): TGocciaBytecodeModule;
+  const AFileName: string;
+  out ASourceMap: TGocciaSourceMap): TGocciaBytecodeModule;
 var
   SourcePipelineResult: TGocciaCLISourcePipelineResult;
   Compiler: TGocciaCompiler;
@@ -112,6 +114,7 @@ var
   EffectiveCompatibility: TGocciaCompatibilityFlags;
   PipelineOptions: TGocciaSourcePipelineOptions;
 begin
+  ASourceMap := nil;
   { Resolve source pipeline flags: CLI flag > per-file config >
     root config > default. }
   FileConfig := DiscoverFileConfig(AFileName);
@@ -135,8 +138,7 @@ begin
       Compiler.NonStrictMode := (cfNonStrictMode in EffectiveCompatibility) and
         (EffectiveSourceType = stScript);
       CompiledModule := Compiler.Compile(SourcePipelineResult.ProgramNode);
-      WriteSourceMapIfEnabled(SourcePipelineResult.SourceMap, AFileName,
-        AOutputPath);
+      ASourceMap := SourcePipelineResult.TakeSourceMap;
       Result := CompiledModule;
       CompiledModule := nil;
     finally
@@ -152,20 +154,24 @@ procedure TBundlerApp.EmitBytecode(const ASource: TStringList;
   const AFileName, AOutputPath: string);
 var
   Module: TGocciaBytecodeModule;
+  SourceMap: TGocciaSourceMap;
   StartTime, EndTime: Int64;
 begin
   if not GIsWorkerThread then
     WriteLn('Compiling: ', AFileName);
   StartTime := GetNanoseconds;
 
-  Module := CompileSource(ASource, AFileName, AOutputPath);
+  SourceMap := nil;
+  Module := CompileSource(ASource, AFileName, SourceMap);
   try
     Goccia.Bytecode.Binary.SaveModuleToFile(Module, AOutputPath);
+    WriteSourceMapIfEnabled(SourceMap, AFileName, AOutputPath);
     EndTime := GetNanoseconds;
     if not GIsWorkerThread then
       WriteLn(SysUtils.Format('  Compiled to %s (%s)',
         [AOutputPath, FormatDuration(EndTime - StartTime)]));
   finally
+    SourceMap.Free;
     Module.Free;
   end;
 end;

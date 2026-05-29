@@ -27,6 +27,7 @@ type
       const ASuppressWarnings: Boolean): TGocciaCLISourcePipelineResult; static;
 
     procedure RegisterCoverageSource(const AFileName: string);
+    function TakeSourceMap: TGocciaSourceMap;
 
     property ProgramNode: TGocciaProgram read FProgramNode;
     property SourceMap: TGocciaSourceMap read FSourceMap;
@@ -113,6 +114,12 @@ begin
   if Assigned(FSourceMap) then
     TGocciaCoverageTracker.Instance.RegisterSourceMap(
       AFileName, FSourceMap.Clone);
+end;
+
+function TGocciaCLISourcePipelineResult.TakeSourceMap: TGocciaSourceMap;
+begin
+  Result := FSourceMap;
+  FSourceMap := nil;
 end;
 
 end.
