@@ -1,4 +1,5 @@
 {
   "compat-label": true,
-  "compat-while-loops": true
+  "compat-while-loops": true,
+  "unsafe-function-constructor": true
 }

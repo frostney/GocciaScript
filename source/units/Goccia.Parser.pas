@@ -78,6 +78,8 @@ type
     FFunctionDepth: Integer;
     FPrivateClassContexts: TObjectList<TGocciaPrivateClassContext>;
     FActiveLabels: TStringList;
+    FActiveIterationLabels: TStringList;
+    FDirectLabelStart: Integer;
     FSkipPrivateNameValidation: Integer;
     FAutomaticSemicolonInsertion: Boolean;
     FVarDeclarationsEnabled: Boolean;
@@ -210,6 +212,8 @@ type
     // These return the base TGocciaStatement type; narrowing to specific subtypes
     // (e.g., TGocciaIfStatement) would improve type safety but requires updating all callers.
     function Statement: TGocciaStatement;
+    function StatementWithoutDirectLabels: TGocciaStatement;
+    function IterationBodyStatement: TGocciaStatement;
     function DeclarationStatement: TGocciaStatement;
     function ExpressionStatement: TGocciaStatement;
     function BlockStatement: TGocciaBlockStatement;
@@ -333,6 +337,9 @@ begin
   FPrivateClassContexts := TObjectList<TGocciaPrivateClassContext>.Create(True);
   FActiveLabels := TStringList.Create;
   FActiveLabels.CaseSensitive := True;
+  FActiveIterationLabels := TStringList.Create;
+  FActiveIterationLabels.CaseSensitive := True;
+  FDirectLabelStart := -1;
 end;
 
 procedure TGocciaParser.ApplyOptions(const AOptions: TGocciaParserOptions);
@@ -361,6 +368,7 @@ end;
 
 destructor TGocciaParser.Destroy;
 begin
+  FActiveIterationLabels.Free;
   FActiveLabels.Free;
   FPrivateClassContexts.Free;
   inherited;
@@ -3550,10 +3558,47 @@ begin
     Result := ExpressionStatement;
 end;
 
+function TGocciaParser.StatementWithoutDirectLabels: TGocciaStatement;
+var
+  SavedDirectLabelStart: Integer;
+begin
+  SavedDirectLabelStart := FDirectLabelStart;
+  FDirectLabelStart := -1;
+  try
+    Result := Statement;
+  finally
+    FDirectLabelStart := SavedDirectLabelStart;
+  end;
+end;
+
+function TGocciaParser.IterationBodyStatement: TGocciaStatement;
+var
+  SavedDirectLabelStart: Integer;
+  SavedIterationLabelCount: Integer;
+  I: Integer;
+begin
+  SavedDirectLabelStart := FDirectLabelStart;
+  SavedIterationLabelCount := FActiveIterationLabels.Count;
+
+  if FDirectLabelStart >= 0 then
+    for I := FDirectLabelStart to FActiveLabels.Count - 1 do
+      FActiveIterationLabels.Add(FActiveLabels[I]);
+
+  FDirectLabelStart := -1;
+  try
+    Result := Statement;
+  finally
+    while FActiveIterationLabels.Count > SavedIterationLabelCount do
+      FActiveIterationLabels.Delete(FActiveIterationLabels.Count - 1);
+    FDirectLabelStart := SavedDirectLabelStart;
+  end;
+end;
+
 // ES2026 §14.13 Labelled Statements
 function TGocciaParser.LabeledStatement: TGocciaStatement;
 var
   LabelToken: TGocciaToken;
+  SavedDirectLabelStart: Integer;
 begin
   LabelToken := Advance;
   if FActiveLabels.IndexOf(LabelToken.Lexeme) >= 0 then
@@ -3563,12 +3608,16 @@ begin
 
   Consume(gttColon, 'Expected ":" after statement label',
     'Add ":" between the label and labeled statement');
+  SavedDirectLabelStart := FDirectLabelStart;
+  if FDirectLabelStart < 0 then
+    FDirectLabelStart := FActiveLabels.Count;
   FActiveLabels.Add(LabelToken.Lexeme);
   try
     Result := Statement;
     Result.AddLabel(LabelToken.Lexeme);
   finally
     FActiveLabels.Delete(FActiveLabels.Count - 1);
+    FDirectLabelStart := SavedDirectLabelStart;
   end;
 end;
 
@@ -3733,7 +3782,7 @@ begin
   Nodes := TObjectList<TGocciaASTNode>.Create(True);
 
   while not Check(gttRightBrace) and not IsAtEnd do
-    Nodes.Add(Statement);
+    Nodes.Add(StatementWithoutDirectLabels);
 
   Consume(gttRightBrace, 'Expected "}" after block',
     SSuggestCloseBlock);
@@ -3755,10 +3804,10 @@ begin
   Consume(gttRightParen, 'Expected ")" after if condition',
     SSuggestCloseParenCondition);
 
-  Consequent := Statement;
+  Consequent := StatementWithoutDirectLabels;
 
   if Match(gttElse) then
-    Alternate := Statement
+    Alternate := StatementWithoutDirectLabels
   else
     Alternate := nil;
 
@@ -4147,7 +4196,7 @@ begin
         Consume(gttRightParen, 'Expected ")" after for...of expression',
           SSuggestCloseParenForOf);
 
-        BodyStmt := Statement;
+        BodyStmt := IterationBodyStatement;
 
         if IsAwait then
         begin
@@ -4353,7 +4402,7 @@ begin
     SSuggestCloseParenExpression);
 
   // ---- BODY ----
-  BodyStmt := Statement;
+  BodyStmt := IterationBodyStatement;
 
   Result := TGocciaForStatement.Create(InitStmt, CondExpr, UpdateExpr,
     BodyStmt, ALine, AColumn);
@@ -4375,7 +4424,7 @@ begin
       Line, Column);
 
     SkipBalancedParens;
-    BodyStmt := Statement;
+    BodyStmt := StatementWithoutDirectLabels;
     BodyStmt.Free;
 
     Result := TGocciaEmptyStatement.Create(Line, Column);
@@ -4388,7 +4437,7 @@ begin
   Consume(gttRightParen, 'Expected ")" after while condition',
     SSuggestCloseParenCondition);
 
-  BodyStmt := Statement;
+  BodyStmt := IterationBodyStatement;
 
   Result := TGocciaWhileStatement.Create(Condition, BodyStmt, Line, Column);
 end;
@@ -4408,7 +4457,7 @@ begin
       'Use for...of/array methods, or enable --compat-while-loops',
       Line, Column);
 
-    BodyStmt := Statement;
+    BodyStmt := StatementWithoutDirectLabels;
     try
       Consume(gttWhile, 'Expected "while" after do body',
         SSuggestAddWhileAfterDo);
@@ -4423,7 +4472,7 @@ begin
     Exit;
   end;
 
-  BodyStmt := Statement;
+  BodyStmt := IterationBodyStatement;
 
   Consume(gttWhile, 'Expected "while" after do body',
     SSuggestAddWhileAfterDo);
@@ -4464,7 +4513,7 @@ begin
   Consume(gttRightParen, 'Expected '')'' after with object',
     SSuggestCloseParenExpression);
 
-  BodyStmt := Statement;
+  BodyStmt := StatementWithoutDirectLabels;
 
   Result := TGocciaWithStatement.Create(ObjectExpr, BodyStmt, Line, Column);
 end;
@@ -6598,7 +6647,7 @@ begin
     Statements := TObjectList<TGocciaStatement>.Create(True);
     while not Check(gttCase) and not Check(gttDefault) and not Check(gttRightBrace) and not IsAtEnd do
     begin
-      Statements.Add(Statement);
+      Statements.Add(StatementWithoutDirectLabels);
     end;
 
     CaseClause := TGocciaCaseClause.Create(TestExpression, Statements, Line, Column);
@@ -6649,6 +6698,10 @@ begin
     TargetLabel := Advance.Lexeme;
     if FActiveLabels.IndexOf(TargetLabel) < 0 then
       raise TGocciaSyntaxError.Create('Undefined continue target',
+        Previous.Line, Previous.Column, FFileName, FSourceLines,
+        'Use the name of an enclosing iteration label');
+    if FActiveIterationLabels.IndexOf(TargetLabel) < 0 then
+      raise TGocciaSyntaxError.Create('Invalid continue target',
         Previous.Line, Previous.Column, FFileName, FSourceLines,
         'Use the name of an enclosing iteration label');
   end;

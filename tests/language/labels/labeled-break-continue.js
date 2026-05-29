@@ -63,4 +63,60 @@ describe("labeled statements", () => {
 
     expect(visited).toBe("1:1;2:1;3:1;");
   });
+
+  test("continue label must target an enclosing iteration statement", () => {
+    expect(() => new Function("block: { continue block; }")).toThrow(SyntaxError);
+  });
+
+  test("break to an outer label closes the active iterator", () => {
+    let closed = false;
+    const iterable = {
+      [Symbol.iterator]() {
+        return {
+          next() {
+            return { value: 1, done: false };
+          },
+          return() {
+            closed = true;
+            return { done: true };
+          },
+        };
+      },
+    };
+
+    outer: {
+      for (const value of iterable) {
+        break outer;
+      }
+    }
+
+    expect(closed).toBe(true);
+  });
+
+  test("continue to an outer label closes the active iterator", () => {
+    let closed = false;
+    let outerCount = 0;
+    const iterable = {
+      [Symbol.iterator]() {
+        return {
+          next() {
+            return { value: 1, done: false };
+          },
+          return() {
+            closed = true;
+            return { done: true };
+          },
+        };
+      },
+    };
+
+    outer: while (outerCount < 1) {
+      outerCount++;
+      for (const value of iterable) {
+        continue outer;
+      }
+    }
+
+    expect(closed).toBe(true);
+  });
 });

@@ -281,6 +281,27 @@ begin
   end;
 end;
 
+procedure SetLabeledContinueCleanupBase(const AStmt: TGocciaStatement);
+var
+  I, LabelIndex: Integer;
+  State: TLabelControlState;
+begin
+  if not Assigned(GLabelControls) then
+    Exit;
+
+  for I := 0 to AStmt.LabelCount - 1 do
+  begin
+    LabelIndex := FindLabelControlIndex(AStmt.Labels[I]);
+    if LabelIndex >= 0 then
+    begin
+      State := GLabelControls[LabelIndex];
+      State.ContinueFinallyBase := GContinueFinallyBase;
+      State.ContinueScopeDepth := GContinueScopeDepth;
+      GLabelControls[LabelIndex] := State;
+    end;
+  end;
+end;
+
 procedure CompileExpressionStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaExpressionStatement);
 var
@@ -1406,8 +1427,10 @@ begin
      (AStmt is TGocciaThrowStatement) then
     Exit(True);
 
+  if AStmt is TGocciaContinueStatement then
+    Exit(TGocciaContinueStatement(AStmt).TargetLabel <> '');
+
   if (AStmt is TGocciaEmptyStatement) or
-     (AStmt is TGocciaContinueStatement) or
      (AStmt is TGocciaFunctionDeclaration) or
      (AStmt is TGocciaExportFunctionDeclaration) then
     Exit(False);
@@ -2006,6 +2029,7 @@ begin
 
     ACtx.Scope.BeginScope;
     SetLoopContinueScopeDepth(ACtx);
+    SetLabeledContinueCleanupBase(AStmt);
 
     if Assigned(AStmt.BindingPattern) then
     begin
@@ -2136,6 +2160,7 @@ begin
 
     ACtx.Scope.BeginScope;
     SetLoopContinueScopeDepth(ACtx);
+    SetLabeledContinueCleanupBase(AStmt);
 
     if Assigned(AStmt.BindingPattern) then
     begin
@@ -2246,6 +2271,7 @@ begin
 
     ACtx.Scope.BeginScope;
     SetLoopContinueScopeDepth(ACtx);
+    SetLabeledContinueCleanupBase(AStmt);
 
     if Assigned(AStmt.BindingPattern) then
     begin
@@ -2446,6 +2472,7 @@ begin
     OuterSlot := StartReg;
     ACtx.Scope.BeginScope;
     SetLoopContinueScopeDepth(ACtx);
+    SetLabeledContinueCleanupBase(AStmt);
     Slot := ACtx.Scope.DeclareLocal(LoopName, False);
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, Slot, OuterSlot, 0));
 
@@ -2688,6 +2715,7 @@ begin
         // before evaluating the test and body.
         ACtx.Scope.BeginScope;
         SetLoopContinueScopeDepth(ACtx);
+        SetLabeledContinueCleanupBase(AStmt);
         for I := 0 to PerIterNames.Count - 1 do
         begin
           Name := PerIterNames[I];
@@ -2786,6 +2814,7 @@ begin
 
         ACtx.Scope.BeginScope;
         SetLoopContinueScopeDepth(ACtx);
+        SetLabeledContinueCleanupBase(AStmt);
 
         ACtx.CompileStatement(AStmt.Body);
 
@@ -2841,6 +2870,7 @@ var
 begin
   BeginLoopControl(ACtx, LoopControl);
   try
+    SetLabeledContinueCleanupBase(AStmt);
     LoopStart := CurrentCodePosition(ACtx);
     CondReg := ACtx.Scope.AllocateRegister;
     try
@@ -2876,6 +2906,7 @@ var
 begin
   BeginLoopControl(ACtx, LoopControl);
   try
+    SetLabeledContinueCleanupBase(AStmt);
     LoopStart := CurrentCodePosition(ACtx);
 
     ACtx.CompileStatement(AStmt.Body);
@@ -3502,7 +3533,7 @@ begin
       Exit;
     State := GLabelControls[LabelIndex];
     EmitLoopControlCleanup(ACtx, State.ContinueFinallyBase,
-      State.ContinueScopeDepth, False);
+      State.ContinueScopeDepth, True);
     State.ContinueJumps.Add(EmitJumpInstruction(ACtx, OP_JUMP, 0));
     GLabelControls[LabelIndex] := State;
     Exit;

@@ -1854,6 +1854,9 @@ begin
       begin
         if not TargetsStatementOrUnlabeled(CF, AForOfStatement) then
         begin
+          if Assigned(Continuation) then
+            Continuation.ClearLoopState(AForOfStatement);
+          Goccia.Values.IteratorSupport.CloseIteratorPreservingError(Iterator);
           Result := CF;
           Exit;
         end;
@@ -1873,6 +1876,9 @@ begin
       if (CF.Kind = cfkContinue) and
          not TargetsStatementOrUnlabeled(CF, AForOfStatement) then
       begin
+        if Assigned(Continuation) then
+          Continuation.ClearLoopState(AForOfStatement);
+        Goccia.Values.IteratorSupport.CloseIteratorPreservingError(Iterator);
         Result := CF;
         Exit;
       end;
@@ -2644,6 +2650,9 @@ begin
           begin
             if not TargetsStatementOrUnlabeled(CF, AForAwaitOfStatement) then
             begin
+              if Assigned(Continuation) then
+                Continuation.ClearLoopState(AForAwaitOfStatement);
+              CloseAsyncIterator(IteratorObj);
               Result := CF;
               Exit;
             end;
@@ -2663,6 +2672,9 @@ begin
           if (CF.Kind = cfkContinue) and
              not TargetsStatementOrUnlabeled(CF, AForAwaitOfStatement) then
           begin
+            if Assigned(Continuation) then
+              Continuation.ClearLoopState(AForAwaitOfStatement);
+            CloseAsyncIterator(IteratorObj);
             Result := CF;
             Exit;
           end;
@@ -2822,6 +2834,9 @@ begin
         begin
           if not TargetsStatementOrUnlabeled(CF, AForAwaitOfStatement) then
           begin
+            if Assigned(Continuation) then
+              Continuation.ClearLoopState(AForAwaitOfStatement);
+            Iterator.Close;
             Result := CF;
             Exit;
           end;
@@ -2841,6 +2856,9 @@ begin
         if (CF.Kind = cfkContinue) and
            not TargetsStatementOrUnlabeled(CF, AForAwaitOfStatement) then
         begin
+          if Assigned(Continuation) then
+            Continuation.ClearLoopState(AForAwaitOfStatement);
+          Iterator.Close;
           Result := CF;
           Exit;
         end;
