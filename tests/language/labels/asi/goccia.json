@@ -1,0 +1,5 @@
+{
+  "extends": "../goccia.json",
+  "compat-asi": true,
+  "compat-non-strict-mode": true
+}

@@ -120,6 +120,7 @@ type
     function IsReservedKeywordName(const AName: string): Boolean;
     function CheckUnescapedIdentifierKeyword(const AKeyword: string): Boolean;
     function CheckEscapedIdentifierKeyword(const AKeyword: string): Boolean;
+    function IsLexicalDeclarationStart: Boolean;
     procedure ValidateIdentifierReference(const AToken: TGocciaToken);
     procedure ValidateIdentifierBinding(const AToken: TGocciaToken);
     function ConsumeIdentifierBinding(const AMessage: string): TGocciaToken; overload;
@@ -780,6 +781,29 @@ function TGocciaParser.CheckEscapedIdentifierKeyword(
 begin
   Result := Check(gttIdentifier) and (Peek.Lexeme = AKeyword) and
             Peek.ContainsEscape;
+end;
+
+function TGocciaParser.IsLexicalDeclarationStart: Boolean;
+var
+  NextToken: TGocciaToken;
+begin
+  if Check(gttConst) then
+    Exit(True);
+
+  if not Check(gttLet) then
+    Exit(False);
+
+  if not FNonStrictModeEnabled then
+    Exit(True);
+
+  if FCurrent + 1 >= FTokens.Count then
+    Exit(False);
+
+  NextToken := FTokens[FCurrent + 1];
+  if FAutomaticSemicolonInsertion and (Peek.Line < NextToken.Line) then
+    Exit(False);
+
+  Result := NextToken.TokenType in [gttIdentifier, gttLeftBracket, gttLeftBrace];
 end;
 
 procedure TGocciaParser.ValidateIdentifierReference(const AToken: TGocciaToken);
@@ -2051,6 +2075,17 @@ begin
         end
         else
           Result := TGocciaIdentifierExpression.Create(Name, Token.Line, Token.Column);
+      end;
+    gttLet:
+      begin
+        if not FNonStrictModeEnabled then
+          raise TGocciaSyntaxError.Create('Expected expression',
+            Peek.Line, Peek.Column, FFileName, FSourceLines,
+            SSuggestExpressionExpected);
+
+        Token := Advance;
+        Result := TGocciaIdentifierExpression.Create(Token.Lexeme,
+          Token.Line, Token.Column);
       end;
     gttHash:
       begin
@@ -3461,7 +3496,6 @@ end;
 function TGocciaParser.Statement: TGocciaStatement;
 var
   Line, Column: Integer;
-  Token: TGocciaToken;
 begin
   if CheckUnescapedIdentifierKeyword(KEYWORD_TYPE) and IsTypeDeclaration then
   begin
@@ -3480,19 +3514,11 @@ begin
     SkipInterfaceDeclaration;
     Result := TGocciaEmptyStatement.Create(Line, Column);
   end
-  else if Check(gttLet) and FNonStrictModeEnabled and
-          FAutomaticSemicolonInsertion and
-          (FCurrent + 1 < FTokens.Count) and
-          (FTokens[FCurrent + 1].TokenType = gttLeftBrace) and
-          (Peek.Line < FTokens[FCurrent + 1].Line) then
+  else if IsLexicalDeclarationStart then
   begin
-    Token := Advance;
-    Result := TGocciaExpressionStatement.Create(
-      TGocciaIdentifierExpression.Create(Token.Lexeme, Token.Line,
-        Token.Column), Token.Line, Token.Column);
-  end
-  else if Match([gttConst, gttLet]) then
+    Advance;
     Result := DeclarationStatement
+  end
   else if Match(gttVar) then
     Result := VarStatement
   else if Check(gttAt) then
