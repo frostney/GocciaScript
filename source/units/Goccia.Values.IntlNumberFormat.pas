@@ -38,6 +38,7 @@ type
     FTrailingZeroDisplay: string;
     FNumberingSystem: string;
     FResolvedOptions: TIntlNumberFormatOptions;
+    FBoundFormat: TGocciaValue;
 
     procedure InitializePrototype;
     procedure ReadOptions(const AOptions: TGocciaObjectValue);
@@ -45,8 +46,10 @@ type
     constructor Create(const ALocale: string; const AOptions: TGocciaObjectValue = nil);
 
     function ToStringTag: string; override;
+    procedure MarkReferences; override;
     class procedure ExposePrototype(const AConstructor: TGocciaObjectValue);
   published
+    function IntlNumberFormatFormatGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function IntlNumberFormatFormat(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function IntlNumberFormatFormatToParts(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function IntlNumberFormatFormatRange(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -71,6 +74,7 @@ uses
   Goccia.Values.ArrayValue,
   Goccia.Values.BigIntValue,
   Goccia.Values.ErrorHelper,
+  Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
 
@@ -79,6 +83,16 @@ var
 
 threadvar
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+
+type
+  TGocciaIntlNumberFormatBoundFormatValue = class(TGocciaNativeFunctionValue)
+  private
+    FNumberFormat: TGocciaIntlNumberFormatValue;
+    function Format(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+  public
+    constructor Create(const ANumberFormat: TGocciaIntlNumberFormatValue);
+    procedure MarkReferences; override;
+  end;
 
 function GetIntlNumberFormatShared: TGocciaSharedPrototype; inline;
 begin
@@ -93,6 +107,30 @@ begin
   if not (AValue is TGocciaIntlNumberFormatValue) then
     ThrowTypeError(AMethod + ' called on non-NumberFormat');
   Result := TGocciaIntlNumberFormatValue(AValue);
+end;
+
+{ TGocciaIntlNumberFormatBoundFormatValue }
+
+constructor TGocciaIntlNumberFormatBoundFormatValue.Create(
+  const ANumberFormat: TGocciaIntlNumberFormatValue);
+begin
+  inherited CreateWithoutPrototype(Format, '', 1);
+  FNumberFormat := ANumberFormat;
+end;
+
+function TGocciaIntlNumberFormatBoundFormatValue.Format(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := FNumberFormat.IntlNumberFormatFormat(AArgs, FNumberFormat);
+end;
+
+procedure TGocciaIntlNumberFormatBoundFormatValue.MarkReferences;
+begin
+  if GCMarked then Exit;
+  inherited;
+  if Assigned(FNumberFormat) then
+    FNumberFormat.MarkReferences;
 end;
 
 function StyleStringToEnum(const AValue: string): TIntlNumberStyle;
@@ -699,6 +737,14 @@ begin
   Result := 'Intl.NumberFormat';
 end;
 
+procedure TGocciaIntlNumberFormatValue.MarkReferences;
+begin
+  if GCMarked then Exit;
+  inherited;
+  if Assigned(FBoundFormat) then
+    FBoundFormat.MarkReferences;
+end;
+
 procedure TGocciaIntlNumberFormatValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
@@ -713,8 +759,8 @@ begin
   begin
     Members := TGocciaMemberCollection.Create;
     try
-      Members.AddNamedMethod('format', IntlNumberFormatFormat, 1,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddAccessor('format', IntlNumberFormatFormatGetter, nil,
+        [pfConfigurable]);
       Members.AddNamedMethod('formatToParts', IntlNumberFormatFormatToParts, 1,
         gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddNamedMethod('formatRange', IntlNumberFormatFormatRange, 2,
@@ -749,6 +795,18 @@ begin
     ExposeSharedPrototypeOnConstructor(Shared, AConstructor);
 end;
 
+function TGocciaIntlNumberFormatValue.IntlNumberFormatFormatGetter(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  NF: TGocciaIntlNumberFormatValue;
+begin
+  NF := AsNumberFormat(AThisValue, 'get Intl.NumberFormat.prototype.format');
+  if not Assigned(NF.FBoundFormat) then
+    NF.FBoundFormat := TGocciaIntlNumberFormatBoundFormatValue.Create(NF);
+  Result := NF.FBoundFormat;
+end;
+
 function TGocciaIntlNumberFormatValue.IntlNumberFormatFormat(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   NF: TGocciaIntlNumberFormatValue;
@@ -756,8 +814,6 @@ var
   Formatted: string;
 begin
   NF := AsNumberFormat(AThisValue, 'Intl.NumberFormat.prototype.format');
-  if AArgs.Length < 1 then
-    ThrowTypeError('Intl.NumberFormat.prototype.format requires a value');
   NumValue := AArgs.GetElement(0).ToNumberLiteral.Value;
 
   if TryICUFormatNumber(NF.FLocale, NumValue, NF.FResolvedOptions, Formatted) then
@@ -774,8 +830,6 @@ var
   Parts: TIntlFormatPartArray;
 begin
   NF := AsNumberFormat(AThisValue, 'Intl.NumberFormat.prototype.formatToParts');
-  if AArgs.Length < 1 then
-    ThrowTypeError('Intl.NumberFormat.prototype.formatToParts requires a value');
   NumValue := AArgs.GetElement(0).ToNumberLiteral.Value;
 
   if TryICUFormatNumberToParts(NF.FLocale, NumValue, NF.FResolvedOptions, Parts) then
