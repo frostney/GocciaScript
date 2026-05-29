@@ -35,6 +35,8 @@ type
     FCustomLabel: string;
     FOnError: TGocciaThrowErrorCallback;
     FLoadModule: TLoadModuleCallback;
+    FLoadModuleSource: TLoadModuleSourceCallback;
+    FLoadDeferredModule: TLoadDeferredModuleCallback;
     FStrictTypes: Boolean;
     FNonStrictMode: Boolean;
   protected
@@ -111,6 +113,10 @@ type
     property CustomLabel: string read FCustomLabel;
     property OnError: TGocciaThrowErrorCallback read FOnError write FOnError;
     property LoadModule: TLoadModuleCallback read FLoadModule write FLoadModule;
+    property LoadModuleSource: TLoadModuleSourceCallback
+      read FLoadModuleSource write FLoadModuleSource;
+    property LoadDeferredModule: TLoadDeferredModuleCallback
+      read FLoadDeferredModule write FLoadDeferredModule;
     { Strict-types enforcement flag.  Inherited from parent at scope
       creation so nested closures observe the same setting as the
       surrounding lexical scope.  For live engine state use
@@ -241,6 +247,8 @@ begin
   begin
     FOnError := AParent.FOnError;
     FLoadModule := AParent.FLoadModule;
+    FLoadModuleSource := AParent.FLoadModuleSource;
+    FLoadDeferredModule := AParent.FLoadDeferredModule;
     FStrictTypes := AParent.FStrictTypes;
     FNonStrictMode := AParent.FNonStrictMode;
   end;

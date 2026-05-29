@@ -29,6 +29,47 @@ describe("dynamic import()", () => {
     expect(mod.multiply(5, 6)).toBe(30);
   });
 
+  test("accepts trailing commas and import options", async () => {
+    let optionsEvaluated = false;
+    const mod = await import("./helpers/math-utils.js", { with: { type: "javascript" }, seen: (optionsEvaluated = true) },);
+    expect(optionsEvaluated).toBe(true);
+    expect(mod.add(3, 4)).toBe(7);
+  });
+
+  test("accepts source and defer import call forms", () => {
+    const sourcePromise = import.source("./helpers/math-utils.js");
+    const deferPromise = import.defer("./helpers/math-utils.js");
+    expect(typeof sourcePromise.then).toBe("function");
+    expect(typeof deferPromise.then).toBe("function");
+    expect(sourcePromise.constructor).toBe(Promise);
+    expect(deferPromise.constructor).toBe(Promise);
+  });
+
+  test("source import returns module source without evaluating the module", async () => {
+    globalThis.__gocciaSourceDynamicImportEvaluated = false;
+    const source = await import.source("./helpers/source-dynamic-import-side-effect.js");
+    expect(Object.prototype.toString.call(source)).toBe("[object ModuleSource]");
+    expect(globalThis.__gocciaSourceDynamicImportEvaluated).toBe(false);
+  });
+
+  test("deferred import evaluates the module when the namespace is observed", async () => {
+    globalThis.__gocciaDeferredDynamicImportEvaluated = false;
+    const mod = await import.defer("./helpers/deferred-dynamic-import-side-effect.js");
+    expect(globalThis.__gocciaDeferredDynamicImportEvaluated).toBe(false);
+    expect(mod.value).toBe(17);
+    expect(globalThis.__gocciaDeferredDynamicImportEvaluated).toBe(true);
+  });
+
+  test("deferred import rejects when the module cannot be resolved", async () => {
+    let caught = false;
+    try {
+      await import.defer("./helpers/nonexistent.js");
+    } catch (e) {
+      caught = true;
+    }
+    expect(caught).toBe(true);
+  });
+
   test("rejects for non-existent module", async () => {
     let caught = false;
     try {
