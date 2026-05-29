@@ -6,10 +6,43 @@ features: [Intl]
 const isIntl = typeof Intl !== "undefined";
 
 describe.runIf(isIntl)("Intl.NumberFormat.prototype.format", () => {
+  test("format is an accessor property on the prototype", () => {
+    const desc = Object.getOwnPropertyDescriptor(Intl.NumberFormat.prototype, "format");
+    expect(typeof desc.get).toBe("function");
+    expect(desc.set).toBe(undefined);
+    expect(desc.value).toBe(undefined);
+    expect(desc.enumerable).toBe(false);
+    expect(desc.configurable).toBe(true);
+  });
+
+  test("format getter returns a cached bound function", () => {
+    const nf = new Intl.NumberFormat("en-US");
+    const first = nf.format;
+    const second = nf.format;
+
+    expect(typeof first).toBe("function");
+    expect(first).toBe(second);
+    expect(first(1234)).toBe(nf.format(1234));
+    expect(Object.prototype.hasOwnProperty.call(nf, "format")).toBe(false);
+  });
+
+  test("format getter creates distinct functions for distinct instances", () => {
+    const first = new Intl.NumberFormat("en-US").format;
+    const second = new Intl.NumberFormat("en-US").format;
+
+    expect(first === second).toBe(false);
+  });
+
   test("format returns a string", () => {
     const nf = new Intl.NumberFormat("en-US");
     const result = nf.format(1234.56);
     expect(typeof result).toBe("string");
+  });
+
+  test("format converts omitted and undefined values to NaN", () => {
+    const nf = new Intl.NumberFormat("en-US");
+    expect(nf.format()).toBe("NaN");
+    expect(nf.format(undefined)).toBe("NaN");
   });
 
   test("format includes grouping separator for large numbers", () => {
