@@ -186,6 +186,7 @@ begin
   Context.Scope := FClosure;
   Context.OnError := FClosure.OnError;
   Context.LoadModule := FClosure.LoadModule;
+  Context.LoadModuleSource := FClosure.LoadModuleSource;
   Context.CurrentFilePath := FSourceFilePath;
   Context.CoverageEnabled := Assigned(TGocciaCoverageTracker.Instance)
     and TGocciaCoverageTracker.Instance.Enabled;

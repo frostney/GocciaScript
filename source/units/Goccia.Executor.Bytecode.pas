@@ -86,6 +86,8 @@ begin
   FVM.GlobalScope := AGlobalScope;
   FVM.GlobalThisValue := AGlobalScope.ThisValue;
   FVM.LoadModule := AModuleLoader.LoadModule;
+  FVM.LoadModuleSource := AModuleLoader.LoadModuleSourceValue;
+  FVM.LoadDeferredModule := AModuleLoader.LoadDeferredModuleNamespaceValue;
   AModuleLoader.EvaluateModuleBody := EvaluateModuleBody;
 end;
 

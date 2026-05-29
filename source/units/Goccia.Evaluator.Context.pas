@@ -14,6 +14,7 @@ type
     Scope: TGocciaScope;
     OnError: TGocciaThrowErrorCallback;
     LoadModule: TLoadModuleCallback;
+    LoadModuleSource: TLoadModuleSourceCallback;
     CurrentFilePath: string;
     CoverageEnabled: Boolean;
     StrictTypes: Boolean;

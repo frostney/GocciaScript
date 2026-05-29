@@ -33,6 +33,7 @@ TGocciaEvaluationContext = record
   Scope: TGocciaScope;
   OnError: TGocciaThrowErrorCallback;
   LoadModule: TLoadModuleCallback;
+  LoadModuleSource: TLoadModuleSourceCallback;
   CurrentFilePath: string;
   CoverageEnabled: Boolean;
   DisposalTracker: TObject; // TGocciaDisposalTracker or nil

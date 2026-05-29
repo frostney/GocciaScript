@@ -78,6 +78,10 @@ type
     procedure CheckForModuleReload(const AModule: TGocciaModule);
     function LoadModule(const AModulePath,
       AImportingFilePath: string): TGocciaModule;
+    function LoadModuleSourceValue(const AModulePath,
+      AImportingFilePath: string): TGocciaValue;
+    function LoadDeferredModuleNamespaceValue(const AModulePath,
+      AImportingFilePath: string): TGocciaValue;
     procedure SetContentProvider(
       const AContentProvider: TGocciaModuleContentProvider;
       const AOwnsContentProvider: Boolean);
@@ -427,6 +431,7 @@ begin
           Context.Scope := ModuleScope;
           Context.OnError := FOnError;
           Context.LoadModule := LoadModule;
+          Context.LoadModuleSource := LoadModuleSourceValue;
           Context.CurrentFilePath := ResolvedPath;
           Context.CoverageEnabled := False;
           Context.StrictTypes := FStrictTypesEnabled;
@@ -522,6 +527,64 @@ begin
   finally
     Content.Free;
   end;
+end;
+
+function TGocciaModuleLoader.LoadModuleSourceValue(const AModulePath,
+  AImportingFilePath: string): TGocciaValue;
+var
+  Content: TGocciaModuleContent;
+  ResolvedPath: string;
+begin
+  try
+    if Assigned(FResolver) then
+      ResolvedPath := FResolver.Resolve(AModulePath, AImportingFilePath)
+    else
+      raise EGocciaModuleNotFound.CreateFmt(
+        'No module resolver configured and cannot resolve "%s"', [AModulePath]);
+  except
+    on E: TGocciaRuntimeError do
+      raise;
+    on E: Exception do
+      raise TGocciaRuntimeError.Create(E.Message, 0, 0, AImportingFilePath, nil);
+  end;
+
+  if not IsScriptExtension(ExtractFileExt(ResolvedPath)) then
+    raise TGocciaSyntaxError.Create(
+      Format('Module source is not available for "%s"', [ResolvedPath]),
+      0, 0, AImportingFilePath, nil);
+
+  Content := FContentProvider.LoadContent(ResolvedPath);
+  try
+    Result := TGocciaModuleSourceValue.Create(ResolvedPath, Content.Text);
+  finally
+    Content.Free;
+  end;
+end;
+
+function TGocciaModuleLoader.LoadDeferredModuleNamespaceValue(
+  const AModulePath, AImportingFilePath: string): TGocciaValue;
+var
+  ResolvedPath: string;
+begin
+  if FGlobalModules.ContainsKey(AModulePath) then
+    Exit(TGocciaDeferredModuleNamespaceObject.Create(AModulePath,
+      AImportingFilePath, LoadModule));
+
+  try
+    if Assigned(FResolver) then
+      ResolvedPath := FResolver.Resolve(AModulePath, AImportingFilePath)
+    else
+      raise EGocciaModuleNotFound.CreateFmt(
+        'No module resolver configured and cannot resolve "%s"', [AModulePath]);
+  except
+    on E: TGocciaRuntimeError do
+      raise;
+    on E: Exception do
+      raise TGocciaRuntimeError.Create(E.Message, 0, 0, AImportingFilePath, nil);
+  end;
+
+  Result := TGocciaDeferredModuleNamespaceObject.Create(ResolvedPath,
+    AImportingFilePath, LoadModule);
 end;
 
 procedure TGocciaModuleLoader.CheckForModuleReload(const AModule: TGocciaModule);

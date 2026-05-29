@@ -260,6 +260,8 @@ const helperUrl = import.meta.resolve("./helpers/math.js");
 
 Dynamic `import()` (ES2026 §13.3.10) is supported. It accepts an arbitrary expression as the module specifier, loads the module synchronously, and returns a Promise that resolves with the module namespace object. On failure, the returned Promise is rejected with the error. Dynamic imports work anywhere expressions are valid — including inside functions, conditionals, and async callbacks.
 
+The parser accepts import attributes syntax (`import(specifier, options)`) and trailing commas. The options expression is evaluated for side effects, but GocciaScript does not consume import attributes semantically yet. Proposal-phase `import.source(specifier)` resolves with a `ModuleSource` object without evaluating the module, and `import.defer(specifier)` resolves with a namespace object that evaluates the module when its exports are observed.
+
 ```javascript
 // Dynamic import with a computed specifier
 const moduleName = "./helpers/math.js";
@@ -270,6 +272,13 @@ console.log(mod.add(2, 3)); // 5
 import("./config.json").then((config) => {
   console.log(config.name);
 });
+
+// Import attributes syntax is accepted; attributes are not interpreted yet.
+const json = await import("./config.json", { with: { type: "json" } });
+
+// Proposal-phase call forms are accepted.
+const sourcePromise = import.source("./helpers/math.js");
+const deferredPromise = import.defer("./helpers/math.js");
 ```
 
 ### Data Structures

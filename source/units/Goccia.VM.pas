@@ -91,6 +91,8 @@ type
     FGlobalScope: TGocciaScope;
     FGlobalThisValue: TGocciaValue;
     FLoadModule: TLoadModuleCallback;
+    FLoadModuleSource: TLoadModuleSourceCallback;
+    FLoadDeferredModule: TLoadDeferredModuleCallback;
     FCurrentClosure: TGocciaBytecodeClosure;
     FHandlerStack: TGocciaBytecodeHandlerStack;
     FFrameDepth: Integer;
@@ -166,6 +168,9 @@ type
       const AArguments: TGocciaArgumentsCollection): TGocciaValue;
     function ImportModuleValue(const APath: string): TGocciaValue; overload;
     function ImportModuleValue(const APath, AReferrer: string): TGocciaValue; overload;
+    function ImportModuleSourceValue(const APath, AReferrer: string): TGocciaValue;
+    function ImportDeferredModuleNamespaceValue(const APath,
+      AReferrer: string): TGocciaValue;
     procedure ExportBindingValue(const AName: string; const AValue: TGocciaValue);
     procedure DefineGetterProperty(const ATarget: TGocciaValue; const AName: string;
       const AGetter: TGocciaValue);
@@ -279,6 +284,10 @@ type
     property GlobalScope: TGocciaScope read FGlobalScope write FGlobalScope;
     property GlobalThisValue: TGocciaValue read FGlobalThisValue write FGlobalThisValue;
     property LoadModule: TLoadModuleCallback read FLoadModule write FLoadModule;
+    property LoadModuleSource: TLoadModuleSourceCallback
+      read FLoadModuleSource write FLoadModuleSource;
+    property LoadDeferredModule: TLoadDeferredModuleCallback
+      read FLoadDeferredModule write FLoadDeferredModule;
     property CoverageEnabled: Boolean read FCoverageEnabled write FCoverageEnabled;
     property ProfilingOpcodes: Boolean read FProfilingOpcodes write FProfilingOpcodes;
     property ProfilingFunctions: Boolean read FProfilingFunctions write FProfilingFunctions;
@@ -5147,6 +5156,23 @@ begin
 
   Module := FLoadModule(APath, AReferrer);
   Result := CreateModuleNamespaceObject(Module);
+end;
+
+function TGocciaVM.ImportModuleSourceValue(const APath, AReferrer: string): TGocciaValue;
+begin
+  if not Assigned(FLoadModuleSource) then
+    ThrowTypeError(SErrorModuleNotAvailableInVM);
+
+  Result := FLoadModuleSource(APath, AReferrer);
+end;
+
+function TGocciaVM.ImportDeferredModuleNamespaceValue(const APath,
+  AReferrer: string): TGocciaValue;
+begin
+  if not Assigned(FLoadDeferredModule) then
+    ThrowTypeError(SErrorModuleNotAvailableInVM);
+
+  Result := FLoadDeferredModule(APath, AReferrer);
 end;
 
 procedure TGocciaVM.ExportBindingValue(const AName: string; const AValue: TGocciaValue);
@@ -10142,13 +10168,24 @@ begin
         try
           try
             if Assigned(Template.DebugInfo) and (Template.DebugInfo.SourceFile <> '') then
-              DynImportPromise.Resolve(ImportModuleValue(
-                VMRegisterToStringFast(FRegisters[B]).Value,
-                Template.DebugInfo.SourceFile))
+              GlobalName := Template.DebugInfo.SourceFile
             else
-              DynImportPromise.Resolve(ImportModuleValue(
-                VMRegisterToStringFast(FRegisters[B]).Value,
-                FCurrentModuleSourcePath));
+              GlobalName := FCurrentModuleSourcePath;
+
+            case C of
+              Ord(icpEvaluation):
+                DynImportPromise.Resolve(ImportModuleValue(
+                  VMRegisterToStringFast(FRegisters[B]).Value, GlobalName));
+              Ord(icpSource):
+                DynImportPromise.Resolve(ImportModuleSourceValue(
+                  VMRegisterToStringFast(FRegisters[B]).Value, GlobalName));
+              Ord(icpDefer):
+                DynImportPromise.Resolve(ImportDeferredModuleNamespaceValue(
+                  VMRegisterToStringFast(FRegisters[B]).Value, GlobalName));
+            else
+              raise Exception.CreateFmt(
+                'Unsupported dynamic import phase: %d', [C]);
+            end;
           except
             on E: EGocciaBytecodeThrow do
               DynImportPromise.Reject(E.ThrownValue);

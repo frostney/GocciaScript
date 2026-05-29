@@ -3821,15 +3821,23 @@ begin
   EmitInstruction(ACtx, EncodeABC(OP_NEW_TARGET, ADest, 0, 0));
 end;
 
-// ES2026 §13.3.10 ImportCall — import(specifier)
+// ES2026 §13.3.10 ImportCall — import(specifier [, options])
 procedure CompileDynamicImport(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaImportCallExpression; const ADest: UInt8);
 var
   SpecReg: UInt8;
+  OptionsReg: UInt8;
 begin
   SpecReg := ACtx.Scope.AllocateRegister;
   ACtx.CompileExpression(AExpr.Specifier, SpecReg);
-  EmitInstruction(ACtx, EncodeABC(OP_DYNAMIC_IMPORT, ADest, SpecReg, 0));
+  if Assigned(AExpr.Options) then
+  begin
+    OptionsReg := ACtx.Scope.AllocateRegister;
+    ACtx.CompileExpression(AExpr.Options, OptionsReg);
+    ACtx.Scope.FreeRegister;
+  end;
+  EmitInstruction(ACtx, EncodeABC(OP_DYNAMIC_IMPORT, ADest, SpecReg,
+    Ord(AExpr.Phase)));
   ACtx.Scope.FreeRegister;
 end;
 

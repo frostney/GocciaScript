@@ -66,6 +66,10 @@ type
     destructor Destroy; override;
     function Execute(const AProgram: TGocciaProgram): TGocciaValue;
     function LoadModule(const AModulePath, AImportingFilePath: string): TGocciaModule;
+    function LoadModuleSourceValue(
+      const AModulePath, AImportingFilePath: string): TGocciaValue;
+    function LoadDeferredModuleNamespaceValue(
+      const AModulePath, AImportingFilePath: string): TGocciaValue;
 
     property ASIEnabled: Boolean read FASIEnabled write SetASIEnabled;
     property VarEnabled: Boolean read FVarEnabled write SetVarEnabled;
@@ -124,6 +128,8 @@ begin
   FModuleLoader.BindRuntime(FGlobalScope, ThrowError);
   FModuleLoader.EvaluateModuleBody := EvaluateModuleBody;
   FGlobalScope.LoadModule := LoadModule;
+  FGlobalScope.LoadModuleSource := LoadModuleSourceValue;
+  FGlobalScope.LoadDeferredModule := LoadDeferredModuleNamespaceValue;
 end;
 
 destructor TGocciaInterpreter.Destroy;
@@ -145,6 +151,7 @@ begin
   Result.Scope := FGlobalScope;
   Result.OnError := ThrowError;
   Result.LoadModule := LoadModule;
+  Result.LoadModuleSource := LoadModuleSourceValue;
   Result.CurrentFilePath := FFileName;
   Result.CoverageEnabled := Assigned(TGocciaCoverageTracker.Instance)
     and TGocciaCoverageTracker.Instance.Enabled;
@@ -179,6 +186,19 @@ end;
 function TGocciaInterpreter.LoadModule(const AModulePath, AImportingFilePath: string): TGocciaModule;
 begin
   Result := FModuleLoader.LoadModule(AModulePath, AImportingFilePath);
+end;
+
+function TGocciaInterpreter.LoadModuleSourceValue(
+  const AModulePath, AImportingFilePath: string): TGocciaValue;
+begin
+  Result := FModuleLoader.LoadModuleSourceValue(AModulePath, AImportingFilePath);
+end;
+
+function TGocciaInterpreter.LoadDeferredModuleNamespaceValue(
+  const AModulePath, AImportingFilePath: string): TGocciaValue;
+begin
+  Result := FModuleLoader.LoadDeferredModuleNamespaceValue(AModulePath,
+    AImportingFilePath);
 end;
 
 function TGocciaInterpreter.GetContentProvider: TGocciaModuleContentProvider;

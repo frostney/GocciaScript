@@ -10,6 +10,7 @@ const
   KEYWORD_DEFER        = 'defer';
   KEYWORD_FROM         = 'from';
   KEYWORD_META         = 'meta';
+  KEYWORD_SOURCE       = 'source';
 
   // Meta-properties
   KEYWORD_TARGET       = 'target';

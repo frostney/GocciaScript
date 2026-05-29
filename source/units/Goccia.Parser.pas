@@ -14,6 +14,7 @@ uses
   Goccia.AST.Expressions,
   Goccia.AST.Node,
   Goccia.AST.Statements,
+  Goccia.Modules,
   Goccia.Token,
   Goccia.Values.Primitives;
 
@@ -204,6 +205,8 @@ type
       const ATemplateToken: TGocciaToken;
       const ALine, AColumn: Integer): TGocciaTaggedTemplateExpression;
     function ParseTemplateLiteral(const AToken: TGocciaToken): TGocciaExpression;
+    function ParseImportCallExpression(const AToken: TGocciaToken;
+      const APhase: TGocciaImportCallPhase): TGocciaImportCallExpression;
     function Primary: TGocciaExpression;
     function ArrayLiteral: TGocciaExpression;
     function ObjectLiteral: TGocciaExpression;
@@ -1787,6 +1790,33 @@ begin
   Result := TGocciaTemplateWithInterpolationExpression.Create(Parts, AToken.Line, AToken.Column);
 end;
 
+// ES2026 §13.3.10 ImportCall — import(specifier [, options] [,])
+function TGocciaParser.ParseImportCallExpression(const AToken: TGocciaToken;
+  const APhase: TGocciaImportCallPhase): TGocciaImportCallExpression;
+var
+  Specifier: TGocciaExpression;
+  Options: TGocciaExpression;
+begin
+  Consume(gttLeftParen, 'Expected "(" after import call phase',
+    SSuggestDynamicImportSyntax);
+  Specifier := Assignment;
+  Options := nil;
+
+  if Match(gttComma) then
+  begin
+    if not Check(gttRightParen) then
+    begin
+      Options := Assignment;
+      Match(gttComma);
+    end;
+  end;
+
+  Consume(gttRightParen, 'Expected ")" after import() specifier',
+    SSuggestDynamicImportSyntax);
+  Result := TGocciaImportCallExpression.Create(Specifier, Options, APhase,
+    AToken.Line, AToken.Column);
+end;
+
 function TGocciaParser.Primary: TGocciaExpression;
 const
   REGEX_SEPARATOR = #0;
@@ -1872,27 +1902,32 @@ begin
       begin
         Token := Advance;
         if Check(gttLeftParen) then
-        begin
-          // ES2026 §13.3.10 ImportCall — import(specifier)
-          Advance; // consume '('
-          Expr := Assignment;
-          Consume(gttRightParen, 'Expected ")" after import() specifier',
-            SSuggestDynamicImportSyntax);
-          Result := TGocciaImportCallExpression.Create(Expr, Token.Line, Token.Column);
-        end
+          Result := ParseImportCallExpression(Token, icpEvaluation)
         else
         begin
-          // ES2026 §13.3.12 MetaProperty — import.meta
           Consume(gttDot, 'Expected "." or "(" after "import" in expression context',
             SSuggestDynamicImportSyntax);
           if CheckUnescapedIdentifierKeyword(KEYWORD_META) then
           begin
+            // ES2026 §13.3.12 MetaProperty — import.meta
             Advance;
             Result := TGocciaImportMetaExpression.Create(Token.Line, Token.Column);
           end
+          else if CheckUnescapedIdentifierKeyword(KEYWORD_SOURCE) then
+          begin
+            // TC39 Source Phase Imports — import.source(specifier)
+            Advance;
+            Result := ParseImportCallExpression(Token, icpSource);
+          end
+          else if CheckUnescapedIdentifierKeyword(KEYWORD_DEFER) then
+          begin
+            // TC39 Deferred Imports Evaluation — import.defer(specifier)
+            Advance;
+            Result := ParseImportCallExpression(Token, icpDefer);
+          end
           else
             raise TGocciaSyntaxError.Create(
-              'The only valid meta property for import is "import.meta"',
+              'Expected "meta", "source", or "defer" after "import."',
               Peek.Line, Peek.Column, FFileName, FSourceLines,
               SSuggestImportMetaSyntax);
         end;
