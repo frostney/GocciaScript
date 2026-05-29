@@ -41,6 +41,7 @@ uses
 
   Goccia.Error.Messages,
   Goccia.Intl.CLDRData,
+  Goccia.Intl.Helpers,
   Goccia.ObjectModel.Types,
   Goccia.Realm,
   Goccia.Values.ArrayValue,
@@ -174,6 +175,131 @@ begin
     Result := AItems[0] + ', ' + Result;
 end;
 
+procedure AppendListPart(var AParts: TIntlFormatPartArray;
+  const AType, AValue: string);
+var
+  Index: Integer;
+begin
+  if AValue = '' then Exit;
+  SetLength(AParts, Length(AParts) + 1);
+  Index := Length(AParts) - 1;
+  AParts[Index].PartType := AType;
+  AParts[Index].Value := AValue;
+  AParts[Index].Source := '';
+  AParts[Index].UnitIdentifier := '';
+end;
+
+procedure AppendListPartArray(var ADest: TIntlFormatPartArray;
+  const ASrc: TIntlFormatPartArray);
+var
+  I, OldLength: Integer;
+begin
+  OldLength := Length(ADest);
+  SetLength(ADest, OldLength + Length(ASrc));
+  for I := 0 to Length(ASrc) - 1 do
+    ADest[OldLength + I] := ASrc[I];
+end;
+
+function FormatListElementPart(const AValue: string): TIntlFormatPartArray;
+begin
+  SetLength(Result, 0);
+  AppendListPart(Result, 'element', AValue);
+end;
+
+function ApplyListTemplateParts(const ATemplate: string;
+  const ALeft, ARight: TIntlFormatPartArray): TIntlFormatPartArray;
+var
+  I: Integer;
+  Literal: string;
+begin
+  SetLength(Result, 0);
+  Literal := '';
+  I := 1;
+  while I <= Length(ATemplate) do
+  begin
+    if Copy(ATemplate, I, 3) = '{0}' then
+    begin
+      AppendListPart(Result, 'literal', Literal);
+      Literal := '';
+      AppendListPartArray(Result, ALeft);
+      Inc(I, 3);
+    end
+    else if Copy(ATemplate, I, 3) = '{1}' then
+    begin
+      AppendListPart(Result, 'literal', Literal);
+      Literal := '';
+      AppendListPartArray(Result, ARight);
+      Inc(I, 3);
+    end
+    else
+    begin
+      Literal := Literal + ATemplate[I];
+      Inc(I);
+    end;
+  end;
+  AppendListPart(Result, 'literal', Literal);
+end;
+
+function FormatListPartsWithCLDR(const AItems: TStringArray; const ALocale: string;
+  AType: TIntlListFormatType; AStyle: TIntlListFormatStyle): TIntlFormatPartArray;
+var
+  Pattern: TIntlListPattern;
+  Count, I: Integer;
+  Template: string;
+begin
+  SetLength(Result, 0);
+  Count := Length(AItems);
+  if Count = 0 then
+    Exit;
+  if Count = 1 then
+    Exit(FormatListElementPart(AItems[0]));
+
+  if not TryGetListPattern(ALocale, AType, AStyle, Pattern) then
+  begin
+    for I := 0 to Count - 1 do
+    begin
+      if I > 0 then
+        AppendListPart(Result, 'literal', ', ');
+      AppendListPartArray(Result, FormatListElementPart(AItems[I]));
+    end;
+    Exit;
+  end;
+
+  if Count = 2 then
+  begin
+    if Pattern.Pair <> '' then
+      Template := Pattern.Pair
+    else if Pattern.EndPart <> '' then
+      Template := Pattern.EndPart
+    else
+      Template := '{0}, {1}';
+    Exit(ApplyListTemplateParts(Template, FormatListElementPart(AItems[0]),
+      FormatListElementPart(AItems[1])));
+  end;
+
+  if Pattern.EndPart <> '' then
+    Template := Pattern.EndPart
+  else
+    Template := '{0}, {1}';
+  Result := ApplyListTemplateParts(Template, FormatListElementPart(AItems[Count - 2]),
+    FormatListElementPart(AItems[Count - 1]));
+
+  for I := Count - 3 downto 1 do
+  begin
+    if Pattern.Middle <> '' then
+      Template := Pattern.Middle
+    else
+      Template := '{0}, {1}';
+    Result := ApplyListTemplateParts(Template, FormatListElementPart(AItems[I]), Result);
+  end;
+
+  if Pattern.Start <> '' then
+    Template := Pattern.Start
+  else
+    Template := '{0}, {1}';
+  Result := ApplyListTemplateParts(Template, FormatListElementPart(AItems[0]), Result);
+end;
+
 { TGocciaIntlListFormatValue }
 
 constructor TGocciaIntlListFormatValue.Create(const ALocale: string; const AOptions: TGocciaObjectValue);
@@ -291,38 +417,19 @@ function TGocciaIntlListFormatValue.IntlListFormatFormatToParts(const AArgs: TGo
 var
   LF: TGocciaIntlListFormatValue;
   Items: TStringArray;
-  Formatted: string;
-  Arr: TGocciaArrayValue;
-  PartObj: TGocciaObjectValue;
-  I: Integer;
+  Parts: TIntlFormatPartArray;
 begin
   LF := AsListFormat(AThisValue, 'Intl.ListFormat.prototype.formatToParts');
   if AArgs.Length < 1 then
     ThrowTypeError('Intl.ListFormat.prototype.formatToParts requires a list argument');
 
   Items := ExtractStringArray(AArgs.GetElement(0));
-  Arr := TGocciaArrayValue.Create;
+  if TryICUFormatListToParts(LF.FLocale, Items, ListTypeStringToEnum(LF.FType),
+    ListStyleStringToEnum(LF.FStyle), Parts) then
+    Exit(FormatPartsToArray(Parts));
 
-  if not TryICUFormatList(LF.FLocale, Items, ListTypeStringToEnum(LF.FType),
-    ListStyleStringToEnum(LF.FStyle), Formatted) then
-    Formatted := FormatListWithCLDR(Items, LF.FLocale,
-      ListTypeStringToEnum(LF.FType), ListStyleStringToEnum(LF.FStyle));
-
-  for I := 0 to Length(Items) - 1 do
-  begin
-    if I > 0 then
-    begin
-      PartObj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
-      PartObj.AssignProperty('type', TGocciaStringLiteralValue.Create('literal'));
-      PartObj.AssignProperty('value', TGocciaStringLiteralValue.Create(', '));
-      Arr.Elements.Add(PartObj);
-    end;
-    PartObj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
-    PartObj.AssignProperty('type', TGocciaStringLiteralValue.Create('element'));
-    PartObj.AssignProperty('value', TGocciaStringLiteralValue.Create(Items[I]));
-    Arr.Elements.Add(PartObj);
-  end;
-  Result := Arr;
+  Result := FormatPartsToArray(FormatListPartsWithCLDR(Items, LF.FLocale,
+    ListTypeStringToEnum(LF.FType), ListStyleStringToEnum(LF.FStyle)));
 end;
 
 function TGocciaIntlListFormatValue.IntlListFormatResolvedOptions(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;

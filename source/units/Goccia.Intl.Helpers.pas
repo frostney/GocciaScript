@@ -47,6 +47,8 @@ begin
     PartObj.AssignProperty(PROP_VALUE, TGocciaStringLiteralValue.Create(AParts[I].Value));
     if AParts[I].Source <> '' then
       PartObj.AssignProperty(PROP_SOURCE, TGocciaStringLiteralValue.Create(AParts[I].Source));
+    if AParts[I].UnitIdentifier <> '' then
+      PartObj.AssignProperty(PROP_UNIT, TGocciaStringLiteralValue.Create(AParts[I].UnitIdentifier));
     Result.Elements.Add(PartObj);
   end;
 end;

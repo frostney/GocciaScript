@@ -37,6 +37,7 @@ type
     PartType: string;
     Value: string;
     Source: string;
+    UnitIdentifier: string;
   end;
   TIntlFormatPartArray = array of TIntlFormatPart;
 
