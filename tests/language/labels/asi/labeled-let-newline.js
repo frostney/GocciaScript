@@ -17,4 +17,15 @@ describe("labeled contextual let", () => {
     expect(() => new Function("label: let x = 1;")).toThrow(SyntaxError);
     expect(() => new Function("label: let [x] = [1];")).toThrow(SyntaxError);
   });
+
+  test("let followed by newline and bracket remains a lexical declaration", () => {
+    expect(() => new Function("if (false) { label: let\n[x] = [1]; }")).toThrow(SyntaxError);
+  });
+
+  test("strict directive rejects let identifier expressions", () => {
+    expect(() => new Function('"use strict"; let + 1;')).toThrow(SyntaxError);
+    expect(() => new Function('"use strict"; if (false) { label: let\nx = 1; }')).toThrow(SyntaxError);
+    expect(() => new Function('function f() { "use strict"; let + 1; }')).toThrow(SyntaxError);
+    expect(() => new Function('(() => { "use strict"; let + 1; });')).toThrow(SyntaxError);
+  });
 });

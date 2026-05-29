@@ -90,6 +90,7 @@ type
     FLooseEqualityEnabled: Boolean;
     FNonStrictModeEnabled: Boolean;
     FLabelStatementsEnabled: Boolean;
+    FStrictModeActive: Boolean;
 
     procedure AddWarning(const AMessage, ASuggestion: string; const ALine, AColumn: Integer);
     procedure PushPrivateClassContext;
@@ -121,7 +122,10 @@ type
     function IsReservedKeywordName(const AName: string): Boolean;
     function CheckUnescapedIdentifierKeyword(const AKeyword: string): Boolean;
     function CheckEscapedIdentifierKeyword(const AKeyword: string): Boolean;
+    function EffectiveNonStrictModeEnabled: Boolean;
     function IsLexicalDeclarationStart: Boolean;
+    function StatementIsDirective(const AStatement: TGocciaStatement;
+      out AIsUseStrict: Boolean): Boolean;
     procedure ValidateIdentifierReference(const AToken: TGocciaToken);
     procedure ValidateIdentifierBinding(const AToken: TGocciaToken);
     function ConsumeIdentifierBinding(const AMessage: string): TGocciaToken; overload;
@@ -149,6 +153,7 @@ type
 
     // Function body parsing: (params) { stmts } -> function expression
     function ParseFunctionBodyExpression(const ALine, AColumn: Integer; const AIsAsync: Boolean = False; const AIsGenerator: Boolean = False): TGocciaExpression;
+    function ParseFunctionBodyBlock(const ALine, AColumn: Integer): TGocciaBlockStatement;
 
     // Destructuring pattern parsing
     function ParsePattern: TGocciaDestructuringPattern;
@@ -274,6 +279,7 @@ uses
   StringBuffer,
   TextSemantics,
 
+  Goccia.Constants,
   Goccia.Error,
   Goccia.Error.Suggestions,
   Goccia.Keywords.Contextual,
@@ -786,6 +792,11 @@ begin
             Peek.ContainsEscape;
 end;
 
+function TGocciaParser.EffectiveNonStrictModeEnabled: Boolean;
+begin
+  Result := FNonStrictModeEnabled and not FStrictModeActive;
+end;
+
 function TGocciaParser.IsLexicalDeclarationStart: Boolean;
 var
   NextToken: TGocciaToken;
@@ -796,17 +807,47 @@ begin
   if not Check(gttLet) then
     Exit(False);
 
-  if not FNonStrictModeEnabled then
+  if not EffectiveNonStrictModeEnabled then
     Exit(True);
 
   if FCurrent + 1 >= FTokens.Count then
     Exit(False);
 
   NextToken := FTokens[FCurrent + 1];
+  if NextToken.TokenType = gttLeftBracket then
+    Exit(True);
+
   if FAutomaticSemicolonInsertion and (Peek.Line < NextToken.Line) then
     Exit(False);
 
-  Result := NextToken.TokenType in [gttIdentifier, gttLeftBracket, gttLeftBrace];
+  Result := NextToken.TokenType in [gttIdentifier, gttLeftBrace];
+end;
+
+function TGocciaParser.StatementIsDirective(const AStatement: TGocciaStatement;
+  out AIsUseStrict: Boolean): Boolean;
+var
+  Expression: TGocciaExpression;
+  Literal: TGocciaValue;
+  SourceText: string;
+begin
+  Result := False;
+  AIsUseStrict := False;
+
+  if not (AStatement is TGocciaExpressionStatement) then
+    Exit;
+
+  Expression := TGocciaExpressionStatement(AStatement).Expression;
+  if not (Expression is TGocciaLiteralExpression) then
+    Exit;
+
+  Literal := TGocciaLiteralExpression(Expression).Value;
+  if not (Literal is TGocciaStringLiteralValue) then
+    Exit;
+
+  Result := True;
+  SourceText := TGocciaLiteralExpression(Expression).SourceText;
+  AIsUseStrict := (SourceText = #34 + USE_STRICT_DIRECTIVE + #34) or
+    (SourceText = #39 + USE_STRICT_DIRECTIVE + #39);
 end;
 
 procedure TGocciaParser.ValidateIdentifierReference(const AToken: TGocciaToken);
@@ -2113,7 +2154,7 @@ begin
       end;
     gttLet:
       begin
-        if not FNonStrictModeEnabled then
+        if not EffectiveNonStrictModeEnabled then
           raise TGocciaSyntaxError.Create('Expected expression',
             Peek.Line, Peek.Column, FFileName, FSourceLines,
             SSuggestExpressionExpected);
@@ -3254,8 +3295,6 @@ function TGocciaParser.ParseFunctionBodyExpression(const ALine, AColumn: Integer
 var
   Parameters: TGocciaParameterArray;
   Body: TGocciaASTNode;
-  Statements: TObjectList<TGocciaASTNode>;
-  Stmt: TGocciaStatement;
   SavedActiveLabels, SavedActiveIterationLabels: TStringList;
   SavedDirectLabelStart: Integer;
 begin
@@ -3282,24 +3321,10 @@ begin
     EnterFunctionLabelScope(SavedActiveLabels, SavedActiveIterationLabels,
       SavedDirectLabelStart);
     try
-      Statements := TObjectList<TGocciaASTNode>.Create(True);
-      try
-        while not Check(gttRightBrace) and not IsAtEnd do
-        begin
-          Stmt := Statement;
-          Statements.Add(Stmt);
-        end;
-
-        Consume(gttRightBrace, 'Expected "}" after function body',
-          SSuggestCloseBlock);
-        Body := TGocciaBlockStatement.Create(Statements, ALine, AColumn);
-        Result := TGocciaFunctionExpression.Create(Parameters, Body, ALine, AColumn);
-        TGocciaFunctionExpression(Result).IsAsync := AIsAsync;
-        TGocciaFunctionExpression(Result).IsGenerator := AIsGenerator;
-      except
-        Statements.Free;
-        raise;
-      end;
+      Body := ParseFunctionBodyBlock(ALine, AColumn);
+      Result := TGocciaFunctionExpression.Create(Parameters, Body, ALine, AColumn);
+      TGocciaFunctionExpression(Result).IsAsync := AIsAsync;
+      TGocciaFunctionExpression(Result).IsGenerator := AIsGenerator;
     finally
       LeaveFunctionLabelScope(SavedActiveLabels, SavedActiveIterationLabels,
         SavedDirectLabelStart);
@@ -3308,6 +3333,48 @@ begin
     end;
   finally
     Dec(FFunctionDepth);
+  end;
+end;
+
+function TGocciaParser.ParseFunctionBodyBlock(const ALine,
+  AColumn: Integer): TGocciaBlockStatement;
+var
+  Statements: TObjectList<TGocciaASTNode>;
+  Stmt: TGocciaStatement;
+  SavedStrictModeActive: Boolean;
+  InDirectivePrologue: Boolean;
+  IsUseStrict: Boolean;
+begin
+  SavedStrictModeActive := FStrictModeActive;
+  InDirectivePrologue := True;
+  Statements := TObjectList<TGocciaASTNode>.Create(True);
+  try
+    try
+      while not Check(gttRightBrace) and not IsAtEnd do
+      begin
+        Stmt := Statement;
+        Statements.Add(Stmt);
+        if InDirectivePrologue then
+        begin
+          if StatementIsDirective(Stmt, IsUseStrict) then
+          begin
+            if IsUseStrict then
+              FStrictModeActive := True;
+          end
+          else
+            InDirectivePrologue := False;
+        end;
+      end;
+
+      Consume(gttRightBrace, 'Expected "}" after function body',
+        SSuggestCloseBlock);
+      Result := TGocciaBlockStatement.Create(Statements, ALine, AColumn);
+    except
+      Statements.Free;
+      raise;
+    end;
+  finally
+    FStrictModeActive := SavedStrictModeActive;
   end;
 end;
 
@@ -3345,7 +3412,7 @@ begin
       SavedDirectLabelStart);
     try
       if Match(gttLeftBrace) then
-        Body := BlockStatement
+        Body := ParseFunctionBodyBlock(Previous.Line, Previous.Column)
       else
         Body := Assignment;
     finally
@@ -6044,13 +6111,36 @@ end;
 function TGocciaParser.Parse: TGocciaProgram;
 var
   Statements: TObjectList<TGocciaStatement>;
+  Stmt: TGocciaStatement;
+  SavedStrictModeActive: Boolean;
+  InDirectivePrologue: Boolean;
+  IsUseStrict: Boolean;
 begin
+  SavedStrictModeActive := FStrictModeActive;
+  FStrictModeActive := not FNonStrictModeEnabled;
+  InDirectivePrologue := True;
   Statements := TObjectList<TGocciaStatement>.Create(True);
+  try
+    while not IsAtEnd do
+    begin
+      Stmt := Statement;
+      Statements.Add(Stmt);
+      if InDirectivePrologue then
+      begin
+        if StatementIsDirective(Stmt, IsUseStrict) then
+        begin
+          if IsUseStrict then
+            FStrictModeActive := True;
+        end
+        else
+          InDirectivePrologue := False;
+      end;
+    end;
 
-  while not IsAtEnd do
-    Statements.Add(Statement);
-
-  Result := TGocciaProgram.Create(Statements);
+    Result := TGocciaProgram.Create(Statements);
+  finally
+    FStrictModeActive := SavedStrictModeActive;
+  end;
 end;
 
 function TGocciaParser.IsArrowFunction: Boolean;
