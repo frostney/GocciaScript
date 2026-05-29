@@ -5617,6 +5617,7 @@ var
   IsGenerator: Boolean;
   MemberStartLine, MemberStartColumn: Integer;
   TypePair: TStringStringMap.TKeyValuePair;
+  SavedStrictModeActive: Boolean;
 begin
   SetLength(Elements, 0);
   SetLength(FieldOrder, 0);
@@ -5658,6 +5659,8 @@ begin
   SetLength(ComputedInstanceGetters, 0);
   SetLength(ComputedInstanceSetters, 0);
 
+  SavedStrictModeActive := FStrictModeActive;
+  FStrictModeActive := True;
   try
     while not Check(gttRightBrace) and not IsAtEnd do
     begin
@@ -6085,6 +6088,7 @@ begin
       SSuggestCloseClassBody);
     ValidateCurrentPrivateClassContext;
   finally
+    FStrictModeActive := SavedStrictModeActive;
     PopPrivateClassContext;
   end;
 
