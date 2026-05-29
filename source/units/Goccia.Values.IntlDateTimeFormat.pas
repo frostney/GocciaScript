@@ -37,6 +37,7 @@ type
     FTimeZoneName: string;
     FResolvedOptions: TIntlDateTimeFormatOptions;
     FHasExplicitCoreOptions: Boolean;
+    FBoundFormat: TGocciaValue;
 
     procedure InitializePrototype;
     procedure ReadOptions(const AOptions: TGocciaObjectValue);
@@ -44,8 +45,10 @@ type
     constructor Create(const ALocale: string; const AOptions: TGocciaObjectValue = nil);
 
     function ToStringTag: string; override;
+    procedure MarkReferences; override;
     class procedure ExposePrototype(const AConstructor: TGocciaObjectValue);
   published
+    function IntlDateTimeFormatFormatGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function IntlDateTimeFormatFormat(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function IntlDateTimeFormatFormatToParts(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function IntlDateTimeFormatFormatRange(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -69,6 +72,7 @@ uses
   Goccia.Temporal.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
+  Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue,
   Goccia.Values.TemporalInstant,
@@ -92,6 +96,15 @@ const
   TWO_DIGIT_YEAR_MODULUS = 100;
 
 type
+  TGocciaIntlDateTimeFormatBoundFormatValue = class(TGocciaNativeFunctionValue)
+  private
+    FDateTimeFormat: TGocciaIntlDateTimeFormatValue;
+    function Format(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+  public
+    constructor Create(const ADateTimeFormat: TGocciaIntlDateTimeFormatValue);
+    procedure MarkReferences; override;
+  end;
+
   TDateTimeFormattableKind = (dtfkNumber, dtfkPlainDate, dtfkPlainDateTime,
     dtfkPlainTime, dtfkPlainYearMonth, dtfkPlainMonthDay, dtfkInstant,
     dtfkZonedDateTime);
@@ -230,6 +243,30 @@ begin
   if not (AValue is TGocciaIntlDateTimeFormatValue) then
     ThrowTypeError(AMethod + ' called on non-DateTimeFormat');
   Result := TGocciaIntlDateTimeFormatValue(AValue);
+end;
+
+{ TGocciaIntlDateTimeFormatBoundFormatValue }
+
+constructor TGocciaIntlDateTimeFormatBoundFormatValue.Create(
+  const ADateTimeFormat: TGocciaIntlDateTimeFormatValue);
+begin
+  inherited CreateWithoutPrototype(Format, '', 1);
+  FDateTimeFormat := ADateTimeFormat;
+end;
+
+function TGocciaIntlDateTimeFormatBoundFormatValue.Format(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := FDateTimeFormat.IntlDateTimeFormatFormat(AArgs, FDateTimeFormat);
+end;
+
+procedure TGocciaIntlDateTimeFormatBoundFormatValue.MarkReferences;
+begin
+  if GCMarked then Exit;
+  inherited;
+  if Assigned(FDateTimeFormat) then
+    FDateTimeFormat.MarkReferences;
 end;
 
 function DateStyleStringToEnum(const AValue: string): TIntlDateTimeStyle;
@@ -1002,6 +1039,14 @@ begin
   Result := 'Intl.DateTimeFormat';
 end;
 
+procedure TGocciaIntlDateTimeFormatValue.MarkReferences;
+begin
+  if GCMarked then Exit;
+  inherited;
+  if Assigned(FBoundFormat) then
+    FBoundFormat.MarkReferences;
+end;
+
 procedure TGocciaIntlDateTimeFormatValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
@@ -1016,8 +1061,8 @@ begin
   begin
     Members := TGocciaMemberCollection.Create;
     try
-      Members.AddNamedMethod('format', IntlDateTimeFormatFormat, 1,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddAccessor('format', IntlDateTimeFormatFormatGetter, nil,
+        [pfConfigurable]);
       Members.AddNamedMethod('formatToParts', IntlDateTimeFormatFormatToParts, 1,
         gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddNamedMethod('formatRange', IntlDateTimeFormatFormatRange, 2,
@@ -1050,6 +1095,18 @@ begin
   end;
   if Assigned(Shared) then
     ExposeSharedPrototypeOnConstructor(Shared, AConstructor);
+end;
+
+function TGocciaIntlDateTimeFormatValue.IntlDateTimeFormatFormatGetter(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  DTF: TGocciaIntlDateTimeFormatValue;
+begin
+  DTF := AsDateTimeFormat(AThisValue, 'get Intl.DateTimeFormat.prototype.format');
+  if not Assigned(DTF.FBoundFormat) then
+    DTF.FBoundFormat := TGocciaIntlDateTimeFormatBoundFormatValue.Create(DTF);
+  Result := DTF.FBoundFormat;
 end;
 
 function TGocciaIntlDateTimeFormatValue.IntlDateTimeFormatFormat(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
