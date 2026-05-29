@@ -60,6 +60,7 @@ type
 
     function TakeProgramNode: TGocciaProgram;
     function TakeSourceMap: TGocciaSourceMap;
+    function TakeGeneratedSourceLines: TStringList;
 
     property ProgramNode: TGocciaProgram read FProgramNode;
     property SourceMap: TGocciaSourceMap read FSourceMap;
@@ -277,6 +278,12 @@ function TGocciaSourcePipelineResult.TakeSourceMap: TGocciaSourceMap;
 begin
   Result := FSourceMap;
   FSourceMap := nil;
+end;
+
+function TGocciaSourcePipelineResult.TakeGeneratedSourceLines: TStringList;
+begin
+  Result := FGeneratedSourceLines;
+  FGeneratedSourceLines := nil;
 end;
 
 { TGocciaSourcePipelineModuleResult }

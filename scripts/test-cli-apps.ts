@@ -1268,10 +1268,25 @@ console.log("TestRunner: --output=compact-json omits build, memory, stdout, stde
     const smSrc = join(tmp, "sm.jsx");
     writeFileSync(smSrc, jsxSource);
     await $`${BUNDLER} ${smSrc} --source-map`.quiet();
-    const smMap = join(tmp, "sm.jsx.map");
+    const smMap = join(tmp, "sm.map");
     if (!existsSync(join(tmp, "sm.gbc"))) throw new Error("--source-map: .gbc should exist");
     if (!existsSync(smMap)) throw new Error("--source-map: .map should exist");
+    if (existsSync(join(tmp, "sm.jsx.map"))) throw new Error("--source-map should not write map beside source extension");
     assertValidSourceMap(smMap);
+
+    console.log("Bundler: --source-map defaults beside custom --output...");
+    const smOutSrc = join(tmp, "sm-output.jsx");
+    const smOutDir = join(tmp, "maps");
+    const smOutGbc = join(smOutDir, "out.gbc");
+    const smOutMap = join(smOutDir, "out.map");
+    mkdirSync(smOutDir, { recursive: true });
+    writeFileSync(smOutSrc, jsxSource);
+    await $`${BUNDLER} ${smOutSrc} --output=${smOutGbc} --source-map`.quiet();
+    if (!existsSync(smOutGbc)) throw new Error("--source-map with --output: .gbc should exist");
+    if (!existsSync(smOutMap)) throw new Error("--source-map with --output: .map should exist beside .gbc");
+    if (existsSync(join(tmp, "sm-output.map")) || existsSync(join(tmp, "sm-output.jsx.map")))
+      throw new Error("--source-map with --output should not write .map beside source");
+    assertValidSourceMap(smOutMap);
 
     console.log("Bundler: --source-map=<custom path>...");
     const smCustomSrc = join(tmp, "sm-custom.jsx");
@@ -1285,14 +1300,15 @@ console.log("TestRunner: --output=compact-json omits build, memory, stdout, stde
     const noSmSrc = join(tmp, "no-sm.jsx");
     writeFileSync(noSmSrc, jsxSource);
     await $`${BUNDLER} ${noSmSrc}`.quiet();
+    if (existsSync(join(tmp, "no-sm.map"))) throw new Error("No .map file should exist without --source-map");
     if (existsSync(join(tmp, "no-sm.jsx.map"))) throw new Error("No .map file should exist without --source-map");
 
     console.log("Bundler: stdin --source-map --output...");
     const stdinSmOut = join(tmp, "stdin-sm.gbc");
     await $`echo ${jsxSource} | ${BUNDLER} --source-map --output=${stdinSmOut}`.quiet();
-    const stdinSmMap = stdinSmOut + ".map";
+    const stdinSmMap = join(tmp, "stdin-sm.map");
     if (!existsSync(stdinSmOut)) throw new Error("Stdin --source-map: .gbc should exist");
-    if (!existsSync(stdinSmMap)) throw new Error("Stdin --source-map: .gbc.map should exist");
+    if (!existsSync(stdinSmMap)) throw new Error("Stdin --source-map: .map should exist beside .gbc");
     assertValidSourceMap(stdinSmMap);
   } finally {
     clean(tmp);

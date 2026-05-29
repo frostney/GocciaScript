@@ -87,6 +87,8 @@ The CLI tools share a two-level application class hierarchy and a declarative op
 6. `AfterExecute` — reporting hooks
 7. `ShutdownSingletons` — cleanup in reverse order
 
+CLI bytecode paths that need parse artifacts use `TGocciaCLISourcePipelineResult` (`Goccia.CLI.SourcePipelineResult.pas`) around the shared `TGocciaSourcePipeline.Parse` result. The helper stays in `source/app/`: it applies CLI warning display, transfers AST/source-map/generated-line ownership for compilation and coverage, and leaves bytecode compilation to each caller. `Goccia.CLI.SourceMaps.pas` owns the shared CLI source-map file output policy used by the Script Loader and Bundler.
+
 **Tool mapping:**
 
 | Tool | Base Class | Overrides |
