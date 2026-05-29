@@ -26,7 +26,7 @@ type
     FGlobalBackedTopLevel: Boolean;
     FStrictTypes: Boolean;
     FNonStrictMode: Boolean;
-    FCompileLabelDepth: Integer;
+    FLabelReentryStatement: TGocciaStatement;
     FOptimizationOptions: TGocciaCompilerOptimizationOptions;
     procedure DoCompileExpression(const AExpr: TGocciaExpression;
       const ADest: UInt8);
@@ -227,16 +227,18 @@ end;
 function TGocciaCompiler.DoCompileStatement(const AStmt: TGocciaStatement): Boolean;
 var
   Ctx: TGocciaCompilationContext;
+  PreviousLabelReentryStatement: TGocciaStatement;
 begin
   Result := False;
   Ctx := BuildContext;
-  if (AStmt.LabelCount > 0) and (FCompileLabelDepth = 0) then
+  if (AStmt.LabelCount > 0) and (FLabelReentryStatement <> AStmt) then
   begin
-    Inc(FCompileLabelDepth);
+    PreviousLabelReentryStatement := FLabelReentryStatement;
+    FLabelReentryStatement := AStmt;
     try
       Exit(Goccia.Compiler.Statements.CompileLabeledStatement(Ctx, AStmt));
     finally
-      Dec(FCompileLabelDepth);
+      FLabelReentryStatement := PreviousLabelReentryStatement;
     end;
   end;
 

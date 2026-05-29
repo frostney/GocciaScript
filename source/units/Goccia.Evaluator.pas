@@ -2101,6 +2101,8 @@ begin
           begin
             if not TargetsStatementOrUnlabeled(CF, AForStatement) then
             begin
+              if Assigned(Continuation) then
+                Continuation.ClearForLoopState(AForStatement);
               Result := CF;
               Exit;
             end;
@@ -2118,6 +2120,8 @@ begin
           if (CF.Kind = cfkContinue) and
              not TargetsStatementOrUnlabeled(CF, AForStatement) then
           begin
+            if Assigned(Continuation) then
+              Continuation.ClearForLoopState(AForStatement);
             Result := CF;
             Exit;
           end;
@@ -2272,6 +2276,7 @@ begin
           begin
             if not TargetsStatementOrUnlabeled(CF, AWhileStatement) then
             begin
+              ClearGeneratorLoopState(Continuation, AWhileStatement);
               Result := CF;
               Exit;
             end;
@@ -2288,6 +2293,7 @@ begin
           begin
             if not TargetsStatementOrUnlabeled(CF, AWhileStatement) then
             begin
+              ClearGeneratorLoopState(Continuation, AWhileStatement);
               Result := CF;
               Exit;
             end;
@@ -2341,6 +2347,7 @@ begin
           begin
             if not TargetsStatementOrUnlabeled(CF, ADoWhileStatement) then
             begin
+              ClearGeneratorLoopState(Continuation, ADoWhileStatement);
               Result := CF;
               Exit;
             end;
@@ -2357,6 +2364,7 @@ begin
           begin
             if not TargetsStatementOrUnlabeled(CF, ADoWhileStatement) then
             begin
+              ClearGeneratorLoopState(Continuation, ADoWhileStatement);
               Result := CF;
               Exit;
             end;

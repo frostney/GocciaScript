@@ -97,6 +97,8 @@ type
     procedure DeclarePrivateName(const AName: string);
     procedure RecordPrivateNameReference(const AName: string; const ALine, AColumn: Integer);
     function CurrentPrivateClassContext: TGocciaPrivateClassContext;
+    procedure EnterFunctionLabelScope(out ASavedActiveLabels, ASavedActiveIterationLabels: TStringList; out ASavedDirectLabelStart: Integer);
+    procedure LeaveFunctionLabelScope(const ASavedActiveLabels, ASavedActiveIterationLabels: TStringList; const ASavedDirectLabelStart: Integer);
 
     function IsAtEnd: Boolean; inline;
     function Peek: TGocciaToken; inline;
@@ -442,6 +444,30 @@ begin
   if FPrivateClassContexts.Count = 0 then
     Exit(nil);
   Result := FPrivateClassContexts[FPrivateClassContexts.Count - 1];
+end;
+
+procedure TGocciaParser.EnterFunctionLabelScope(out ASavedActiveLabels,
+  ASavedActiveIterationLabels: TStringList; out ASavedDirectLabelStart: Integer);
+begin
+  ASavedActiveLabels := FActiveLabels;
+  ASavedActiveIterationLabels := FActiveIterationLabels;
+  ASavedDirectLabelStart := FDirectLabelStart;
+
+  FActiveLabels := TStringList.Create;
+  FActiveLabels.CaseSensitive := True;
+  FActiveIterationLabels := TStringList.Create;
+  FActiveIterationLabels.CaseSensitive := True;
+  FDirectLabelStart := -1;
+end;
+
+procedure TGocciaParser.LeaveFunctionLabelScope(const ASavedActiveLabels,
+  ASavedActiveIterationLabels: TStringList; const ASavedDirectLabelStart: Integer);
+begin
+  FActiveIterationLabels.Free;
+  FActiveLabels.Free;
+  FActiveLabels := ASavedActiveLabels;
+  FActiveIterationLabels := ASavedActiveIterationLabels;
+  FDirectLabelStart := ASavedDirectLabelStart;
 end;
 
 // ES2026 §15.7.7 Static Semantics: AllPrivateIdentifiersValid
@@ -3083,6 +3109,8 @@ end;
 function TGocciaParser.ParseGetterExpression: TGocciaGetterExpression;
 var
   Line, Column: Integer;
+  SavedActiveLabels, SavedActiveIterationLabels: TStringList;
+  SavedDirectLabelStart: Integer;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
@@ -3098,9 +3126,13 @@ begin
   Consume(gttLeftBrace, 'Expected "{" before getter body',
     SSuggestOpenBraceGetterBody);
   Inc(FFunctionDepth);
+  EnterFunctionLabelScope(SavedActiveLabels, SavedActiveIterationLabels,
+    SavedDirectLabelStart);
   try
     Result := TGocciaGetterExpression.Create(BlockStatement, Line, Column);
   finally
+    LeaveFunctionLabelScope(SavedActiveLabels, SavedActiveIterationLabels,
+      SavedDirectLabelStart);
     Dec(FFunctionDepth);
   end;
 end;
@@ -3109,6 +3141,8 @@ function TGocciaParser.ParseSetterExpression: TGocciaSetterExpression;
 var
   ParamName: string;
   Line, Column: Integer;
+  SavedActiveLabels, SavedActiveIterationLabels: TStringList;
+  SavedDirectLabelStart: Integer;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
@@ -3135,9 +3169,13 @@ begin
   Consume(gttLeftBrace, 'Expected "{" before setter body',
     SSuggestOpenBraceSetterBody);
   Inc(FFunctionDepth);
+  EnterFunctionLabelScope(SavedActiveLabels, SavedActiveIterationLabels,
+    SavedDirectLabelStart);
   try
     Result := TGocciaSetterExpression.Create(ParamName, BlockStatement, Line, Column);
   finally
+    LeaveFunctionLabelScope(SavedActiveLabels, SavedActiveIterationLabels,
+      SavedDirectLabelStart);
     Dec(FFunctionDepth);
   end;
 end;
@@ -3148,6 +3186,8 @@ var
   Body: TGocciaASTNode;
   Statements: TObjectList<TGocciaASTNode>;
   Stmt: TGocciaStatement;
+  SavedActiveLabels, SavedActiveIterationLabels: TStringList;
+  SavedDirectLabelStart: Integer;
 begin
   Consume(gttLeftParen, 'Expected "(" before function parameters',
     SSuggestOpenParenMethodParameterList);
@@ -3169,6 +3209,8 @@ begin
 
     if AIsAsync then Inc(FInAsyncFunction);
     if AIsGenerator then Inc(FInGeneratorFunction);
+    EnterFunctionLabelScope(SavedActiveLabels, SavedActiveIterationLabels,
+      SavedDirectLabelStart);
     try
       Statements := TObjectList<TGocciaASTNode>.Create(True);
       try
@@ -3189,6 +3231,8 @@ begin
         raise;
       end;
     finally
+      LeaveFunctionLabelScope(SavedActiveLabels, SavedActiveIterationLabels,
+        SavedDirectLabelStart);
       if AIsGenerator then Dec(FInGeneratorFunction);
       if AIsAsync then Dec(FInAsyncFunction);
     end;
@@ -3204,6 +3248,8 @@ var
   Line, Column: Integer;
   ArrowFn: TGocciaArrowFunctionExpression;
   FnReturnType: string;
+  SavedActiveLabels, SavedActiveIterationLabels: TStringList;
+  SavedDirectLabelStart: Integer;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
@@ -3225,12 +3271,16 @@ begin
       SSuggestArrowFunctionSyntax);
 
     if AIsAsync then Inc(FInAsyncFunction);
+    EnterFunctionLabelScope(SavedActiveLabels, SavedActiveIterationLabels,
+      SavedDirectLabelStart);
     try
       if Match(gttLeftBrace) then
         Body := BlockStatement
       else
         Body := Assignment;
     finally
+      LeaveFunctionLabelScope(SavedActiveLabels, SavedActiveIterationLabels,
+        SavedDirectLabelStart);
       if AIsAsync then Dec(FInAsyncFunction);
     end;
   finally
@@ -3253,6 +3303,8 @@ var
   ArrowBody: TGocciaASTNode;
   ArrowFn: TGocciaArrowFunctionExpression;
   OperatorToken: TGocciaToken;
+  SavedActiveLabels, SavedActiveIterationLabels: TStringList;
+  SavedDirectLabelStart: Integer;
 begin
   Left := Conditional;
 
@@ -3269,12 +3321,16 @@ begin
     Parameters[0].IsOptional := False;
     Advance; // consume =>
     Inc(FFunctionDepth);
+    EnterFunctionLabelScope(SavedActiveLabels, SavedActiveIterationLabels,
+      SavedDirectLabelStart);
     try
       if Match(gttLeftBrace) then
         ArrowBody := BlockStatement
       else
         ArrowBody := Assignment;
     finally
+      LeaveFunctionLabelScope(SavedActiveLabels, SavedActiveIterationLabels,
+        SavedDirectLabelStart);
       Dec(FFunctionDepth);
     end;
     ArrowFn := TGocciaArrowFunctionExpression.Create(Parameters, ArrowBody, Line, Column);
@@ -3599,6 +3655,25 @@ function TGocciaParser.LabeledStatement: TGocciaStatement;
 var
   LabelToken: TGocciaToken;
   SavedDirectLabelStart: Integer;
+
+  function IsInvalidLabeledDeclaration(const AStatement: TGocciaStatement): Boolean;
+  begin
+    Result := False;
+    if AStatement is TGocciaVariableDeclaration then
+      Exit(not TGocciaVariableDeclaration(AStatement).IsVar);
+    if AStatement is TGocciaDestructuringDeclaration then
+      Exit(not TGocciaDestructuringDeclaration(AStatement).IsVar);
+    Result := (AStatement is TGocciaClassDeclaration) or
+      (AStatement is TGocciaEnumDeclaration) or
+      (AStatement is TGocciaImportDeclaration) or
+      (AStatement is TGocciaExportDeclaration) or
+      (AStatement is TGocciaExportDefaultDeclaration) or
+      (AStatement is TGocciaExportVariableDeclaration) or
+      (AStatement is TGocciaExportFunctionDeclaration) or
+      (AStatement is TGocciaExportEnumDeclaration) or
+      (AStatement is TGocciaReExportDeclaration) or
+      (AStatement is TGocciaUsingDeclaration);
+  end;
 begin
   LabelToken := Advance;
   if FActiveLabels.IndexOf(LabelToken.Lexeme) >= 0 then
@@ -3614,6 +3689,13 @@ begin
   FActiveLabels.Add(LabelToken.Lexeme);
   try
     Result := Statement;
+    if IsInvalidLabeledDeclaration(Result) then
+    begin
+      Result.Free;
+      raise TGocciaSyntaxError.Create('Invalid labeled declaration',
+        LabelToken.Line, LabelToken.Column, FFileName, FSourceLines,
+        'Labels can only target statements, not lexical declarations');
+    end;
     Result.AddLabel(LabelToken.Lexeme);
   finally
     FActiveLabels.Delete(FActiveLabels.Count - 1);
@@ -4679,6 +4761,8 @@ var
   Statements: TObjectList<TGocciaASTNode>;
   Stmt: TGocciaStatement;
   MethodGenericParams, MethodReturnType: string;
+  SavedActiveLabels, SavedActiveIterationLabels: TStringList;
+  SavedDirectLabelStart: Integer;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
@@ -4706,6 +4790,8 @@ begin
 
     if AIsAsync then Inc(FInAsyncFunction);
     if AIsGenerator then Inc(FInGeneratorFunction);
+    EnterFunctionLabelScope(SavedActiveLabels, SavedActiveIterationLabels,
+      SavedDirectLabelStart);
     try
       Statements := TObjectList<TGocciaASTNode>.Create(True);
       try
@@ -4740,6 +4826,8 @@ begin
         raise;
       end;
     finally
+      LeaveFunctionLabelScope(SavedActiveLabels, SavedActiveIterationLabels,
+        SavedDirectLabelStart);
       if AIsGenerator then Dec(FInGeneratorFunction);
       if AIsAsync then Dec(FInAsyncFunction);
     end;
