@@ -64,6 +64,7 @@ uses
 
   IntlICU,
   IntlLocaleResolver,
+  TimingUtils,
 
   Goccia.Error.Messages,
   Goccia.Intl.Helpers,
@@ -91,6 +92,7 @@ threadvar
 
 const
   GREGORIAN_CYCLE_YEARS = 400;
+  NANOSECONDS_PER_MILLISECOND = 1000000;
   TEMPORAL_SURROGATE_YEAR_BASE = 2000;
   TEMPORAL_DIRECT_ICU_YEAR_LIMIT = 9999;
   TWO_DIGIT_YEAR_MODULUS = 100;
@@ -288,6 +290,23 @@ begin
   if IsNan(AValue) or Math.IsInfinite(AValue) or (Abs(AValue) > 8.64e15) then
     Exit(Math.NaN);
   Result := Trunc(AValue);
+end;
+
+function CurrentEpochMilliseconds: Double;
+begin
+  Result := GetEpochNanoseconds div NANOSECONDS_PER_MILLISECOND;
+end;
+
+function DateTimeFormatArgumentMilliseconds(
+  const AArgs: TGocciaArgumentsCollection): Double;
+var
+  DateValue: TGocciaValue;
+begin
+  DateValue := AArgs.GetElement(0);
+  if DateValue is TGocciaUndefinedLiteralValue then
+    Result := CurrentEpochMilliseconds
+  else
+    Result := TimeClipMillis(DateValue.ToNumberLiteral.Value);
 end;
 
 function EpochMillisFromDateTimeParts(const AYear, AMonth, ADay, AHour,
@@ -1116,9 +1135,7 @@ var
   Formatted: string;
 begin
   DTF := AsDateTimeFormat(AThisValue, 'Intl.DateTimeFormat.prototype.format');
-  if AArgs.Length < 1 then
-    ThrowTypeError('Intl.DateTimeFormat.prototype.format requires a date value');
-  Millis := TimeClipMillis(AArgs.GetElement(0).ToNumberLiteral.Value);
+  Millis := DateTimeFormatArgumentMilliseconds(AArgs);
   if IsNan(Millis) then
     ThrowRangeError('Invalid time value');
 
@@ -1135,9 +1152,7 @@ var
   Parts: TIntlFormatPartArray;
 begin
   DTF := AsDateTimeFormat(AThisValue, 'Intl.DateTimeFormat.prototype.formatToParts');
-  if AArgs.Length < 1 then
-    ThrowTypeError('Intl.DateTimeFormat.prototype.formatToParts requires a date value');
-  Millis := TimeClipMillis(AArgs.GetElement(0).ToNumberLiteral.Value);
+  Millis := DateTimeFormatArgumentMilliseconds(AArgs);
   if IsNan(Millis) then
     ThrowRangeError('Invalid time value');
 

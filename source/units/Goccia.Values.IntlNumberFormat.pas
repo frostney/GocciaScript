@@ -814,8 +814,6 @@ var
   Formatted: string;
 begin
   NF := AsNumberFormat(AThisValue, 'Intl.NumberFormat.prototype.format');
-  if AArgs.Length < 1 then
-    ThrowTypeError('Intl.NumberFormat.prototype.format requires a value');
   NumValue := AArgs.GetElement(0).ToNumberLiteral.Value;
 
   if TryICUFormatNumber(NF.FLocale, NumValue, NF.FResolvedOptions, Formatted) then
@@ -832,8 +830,6 @@ var
   Parts: TIntlFormatPartArray;
 begin
   NF := AsNumberFormat(AThisValue, 'Intl.NumberFormat.prototype.formatToParts');
-  if AArgs.Length < 1 then
-    ThrowTypeError('Intl.NumberFormat.prototype.formatToParts requires a value');
   NumValue := AArgs.GetElement(0).ToNumberLiteral.Value;
 
   if TryICUFormatNumberToParts(NF.FLocale, NumValue, NF.FResolvedOptions, Parts) then

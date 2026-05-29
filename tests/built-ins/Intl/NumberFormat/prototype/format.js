@@ -39,6 +39,12 @@ describe.runIf(isIntl)("Intl.NumberFormat.prototype.format", () => {
     expect(typeof result).toBe("string");
   });
 
+  test("format converts omitted and undefined values to NaN", () => {
+    const nf = new Intl.NumberFormat("en-US");
+    expect(nf.format()).toBe("NaN");
+    expect(nf.format(undefined)).toBe("NaN");
+  });
+
   test("format includes grouping separator for large numbers", () => {
     const nf = new Intl.NumberFormat("en-US");
     const result = nf.format(1234567);
