@@ -24,6 +24,7 @@ type
   TIntlRelativeTimeUnit = (irtuYear, irtuQuarter, irtuMonth, irtuWeek,
     irtuDay, irtuHour, irtuMinute, irtuSecond);
   TIntlRelativeTimeNumeric = (irtnAlways, irtnAuto);
+  TIntlRelativeTimeStyle = (irtsLong, irtsShort, irtsNarrow);
   TIntlListFormatType = (ilftConjunction, ilftDisjunction, ilftUnit);
   TIntlListFormatStyle = (ilfsLong, ilfsShort, ilfsNarrow);
   TIntlDisplayNameType = (idntLanguage, idntRegion, idntScript,

@@ -68,10 +68,10 @@ function TryICUFormatListToParts(const ALocale: string; const AItems: IntlTypes.
 
 function TryICUFormatRelativeTime(const ALocale: string; AValue: Double;
   AUnit: TIntlRelativeTimeUnit; ANumeric: TIntlRelativeTimeNumeric;
-  out AFormatted: string): Boolean;
+  AStyle: TIntlRelativeTimeStyle; out AFormatted: string): Boolean;
 function TryICUFormatRelativeTimeToParts(const ALocale: string; AValue: Double;
   AUnit: TIntlRelativeTimeUnit; ANumeric: TIntlRelativeTimeNumeric;
-  out AParts: TIntlFormatPartArray): Boolean;
+  AStyle: TIntlRelativeTimeStyle; out AParts: TIntlFormatPartArray): Boolean;
 
 function TryICUGetDefaultLocale(out ALocale: string): Boolean;
 
@@ -217,8 +217,8 @@ const
   UDAT_RELATIVE_DAYS = 3;
   UDAT_RELATIVE_WEEKS = 4;
   UDAT_RELATIVE_MONTHS = 5;
-  UDAT_RELATIVE_QUARTERS = 6;
-  UDAT_RELATIVE_YEARS = 7;
+  UDAT_RELATIVE_YEARS = 6;
+  UDAT_RELATIVE_QUARTERS = 7;
 
 type
   TICUErrorCode = LongInt;
@@ -3011,6 +3011,16 @@ begin
   end;
 end;
 
+function RelativeTimeStyleToICU(AStyle: TIntlRelativeTimeStyle): LongInt;
+begin
+  case AStyle of
+    irtsShort: Result := URELDATEFMT_STYLE_SHORT;
+    irtsNarrow: Result := URELDATEFMT_STYLE_NARROW;
+  else
+    Result := URELDATEFMT_STYLE_LONG;
+  end;
+end;
+
 function TryICUFormatList(const ALocale: string; const AItems: IntlTypes.TStringArray;
   AListType: TIntlListFormatType; AListStyle: TIntlListFormatStyle;
   out AFormatted: string): Boolean;
@@ -3160,8 +3170,8 @@ begin
     irtuDay: Result := UDAT_RELATIVE_DAYS;
     irtuWeek: Result := UDAT_RELATIVE_WEEKS;
     irtuMonth: Result := UDAT_RELATIVE_MONTHS;
-    irtuQuarter: Result := UDAT_RELATIVE_QUARTERS;
     irtuYear: Result := UDAT_RELATIVE_YEARS;
+    irtuQuarter: Result := UDAT_RELATIVE_QUARTERS;
   else
     Result := UDAT_RELATIVE_DAYS;
   end;
@@ -3185,7 +3195,7 @@ end;
 
 function TryICUFormatRelativeTime(const ALocale: string; AValue: Double;
   AUnit: TIntlRelativeTimeUnit; ANumeric: TIntlRelativeTimeNumeric;
-  out AFormatted: string): Boolean;
+  AStyle: TIntlRelativeTimeStyle; out AFormatted: string): Boolean;
 var
   Status: TICUErrorCode;
   Reldatefmt: Pointer;
@@ -3210,7 +3220,7 @@ begin
   LocaleAnsi := AnsiString(ALocale);
   Status := ICU_SUCCESS;
   Reldatefmt := IntlFunctions.UreldatefmtOpen(PAnsiChar(LocaleAnsi),
-    nil, URELDATEFMT_STYLE_LONG, 0, Status);
+    nil, RelativeTimeStyleToICU(AStyle), 0, Status);
   if not ICUSucceeded(Status) or not Assigned(Reldatefmt) then
     Exit;
 
@@ -3237,7 +3247,7 @@ end;
 
 function TryICUFormatRelativeTimeToParts(const ALocale: string; AValue: Double;
   AUnit: TIntlRelativeTimeUnit; ANumeric: TIntlRelativeTimeNumeric;
-  out AParts: TIntlFormatPartArray): Boolean;
+  AStyle: TIntlRelativeTimeStyle; out AParts: TIntlFormatPartArray): Boolean;
 var
   Status: TICUErrorCode;
   Reldatefmt, RelativeResult, FormattedValue: Pointer;
@@ -3265,7 +3275,7 @@ begin
   LocaleAnsi := AnsiString(ALocale);
   Status := ICU_SUCCESS;
   Reldatefmt := IntlFunctions.UreldatefmtOpen(PAnsiChar(LocaleAnsi),
-    nil, URELDATEFMT_STYLE_LONG, 0, Status);
+    nil, RelativeTimeStyleToICU(AStyle), 0, Status);
   if not ICUSucceeded(Status) or not Assigned(Reldatefmt) then
     Exit;
 

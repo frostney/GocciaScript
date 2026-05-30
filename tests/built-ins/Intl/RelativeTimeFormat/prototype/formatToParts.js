@@ -25,8 +25,8 @@ describe.runIf(isIntl && typeof Intl.RelativeTimeFormat !== "undefined")("Intl.R
     const parts = rtf.formatToParts(1234.5, "day");
     const numericParts = parts.filter((part) => part.type !== "literal");
 
-    expect(numericParts.map((part) => part.type)).toEqual(["integer", "decimal", "fraction"]);
-    expect(numericParts.map((part) => part.value)).toEqual(["1234", ".", "5"]);
+    expect(numericParts.map((part) => part.type)).toEqual(["integer", "group", "integer", "decimal", "fraction"]);
+    expect(numericParts.map((part) => part.value)).toEqual(["1", ",", "234", ".", "5"]);
     expect(numericParts.every((part) => part.unit === "day")).toBe(true);
     expect(partsString(parts)).toBe(rtf.format(1234.5, "day"));
   });
