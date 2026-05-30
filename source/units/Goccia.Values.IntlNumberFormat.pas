@@ -547,7 +547,7 @@ end;
 
 constructor TGocciaIntlNumberFormatValue.Create(const ALocale: string; const AOptions: TGocciaObjectValue);
 var
-  Canonical, CurrSymbol, CurrNarrow: string;
+  Canonical, CurrSymbol, CurrNarrow, LocaleNumberingSystem: string;
   CurrDigits, MinimumFractionDefault, MaximumFractionDefault: Integer;
   HasFractionDigits, HasSignificantDigits: Boolean;
   NeedFractionDigits, NeedSignificantDigits: Boolean;
@@ -579,6 +579,25 @@ begin
   FMaximumSignificantDigits := -1;
 
   ReadOptions(AOptions);
+
+  if FNumberingSystem <> '' then
+  begin
+    if IsSupportedNumberingSystem(FNumberingSystem) then
+    begin
+      if not (TryGetUnicodeLocaleExtensionKeyword(FLocale, 'nu', LocaleNumberingSystem) and
+              (LocaleNumberingSystem = FNumberingSystem)) then
+        FLocale := LocaleWithoutUnicodeExtension(FLocale);
+    end
+    else
+      FNumberingSystem := '';
+  end
+  else if TryGetUnicodeLocaleExtensionKeyword(FLocale, 'nu', LocaleNumberingSystem) then
+  begin
+    if IsSupportedNumberingSystem(LocaleNumberingSystem) then
+      FNumberingSystem := LocaleNumberingSystem
+    else
+      FLocale := LocaleWithoutUnicodeExtension(FLocale);
+  end;
 
   // Validate style-dependent required options
   if (FStyle = 'currency') and (FCurrency = '') then

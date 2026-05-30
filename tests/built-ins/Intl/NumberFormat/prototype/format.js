@@ -51,6 +51,11 @@ describe.runIf(isIntl)("Intl.NumberFormat.prototype.format", () => {
     expect(result.includes(",")).toBe(true);
   });
 
+  test("format applies numberingSystem through ICU", () => {
+    expect(new Intl.NumberFormat("en-US", { numberingSystem: "arab" }).format(12345)).toBe("\u0661\u0662\u066c\u0663\u0664\u0665");
+    expect(new Intl.NumberFormat("en-US", { numberingSystem: "arabext" }).format(12345)).toBe("\u06f1\u06f2\u066c\u06f3\u06f4\u06f5");
+  });
+
   test("currency format produces a string containing the currency symbol", () => {
     const nf = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
     const result = nf.format(9.99);
