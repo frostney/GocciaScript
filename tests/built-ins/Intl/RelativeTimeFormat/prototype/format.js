@@ -31,4 +31,12 @@ describe.runIf(isIntl && typeof Intl.RelativeTimeFormat !== "undefined")("Intl.R
     expect(shortFormat.format(2, "quarter")).toBe("in 2 qtrs.");
     expect(narrowFormat.format(-2, "quarter")).toBe("2 q ago");
   });
+
+  test("formats numbers with the resolved numbering system", () => {
+    const optionFormat = new Intl.RelativeTimeFormat("en-US", { numberingSystem: "arab" });
+    const localeFormat = new Intl.RelativeTimeFormat("en-US-u-nu-arabext");
+
+    expect(optionFormat.format(-1234, "day")).toBe("\u0661\u066c\u0662\u0663\u0664 days ago");
+    expect(localeFormat.format(-1234, "day")).toBe("\u06f1\u066c\u06f2\u06f3\u06f4 days ago");
+  });
 });

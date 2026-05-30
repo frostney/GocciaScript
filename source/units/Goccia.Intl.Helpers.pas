@@ -25,9 +25,15 @@ function TryReadStringOption(const AOptions: TGocciaObjectValue;
 procedure ReadValidatedStringOption(const AOptions: TGocciaObjectValue;
   const AName: string; var AValue: string);
 
+function LocaleWithoutUnicodeExtension(const ALocale: string): string;
+function TryGetUnicodeLocaleExtensionKeyword(const ALocale, AKey: string;
+  out AValue: string): Boolean;
+function IsSupportedNumberingSystem(const AValue: string): Boolean;
+
 implementation
 
 uses
+  StrUtils,
   SysUtils,
 
   Goccia.Constants.PropertyNames,
@@ -78,6 +84,77 @@ begin
     if ContainsNulCharacter(S) then
       ThrowRangeError(Format(SErrorIntlInvalidOption, [S, AName]));
     AValue := S;
+  end;
+end;
+
+function LocaleWithoutUnicodeExtension(const ALocale: string): string;
+var
+  ExtensionStart: Integer;
+begin
+  ExtensionStart := Pos('-u-', ALocale);
+  if ExtensionStart = 0 then
+    Result := ALocale
+  else
+    Result := Copy(ALocale, 1, ExtensionStart - 1);
+end;
+
+function TryGetUnicodeLocaleExtensionKeyword(const ALocale, AKey: string;
+  out AValue: string): Boolean;
+var
+  ExtensionStart, Index, NextDash: Integer;
+  Tail, Subtag: string;
+begin
+  Result := False;
+  AValue := '';
+  ExtensionStart := Pos('-u-', ALocale);
+  if ExtensionStart = 0 then
+    Exit;
+
+  Tail := Copy(ALocale, ExtensionStart + 3, MaxInt);
+  Index := 1;
+  while Index <= Length(Tail) do
+  begin
+    NextDash := PosEx('-', Tail, Index);
+    if NextDash = 0 then
+      NextDash := Length(Tail) + 1;
+    Subtag := Copy(Tail, Index, NextDash - Index);
+    Index := NextDash + 1;
+
+    if SameText(Subtag, AKey) then
+    begin
+      NextDash := PosEx('-', Tail, Index);
+      if NextDash = 0 then
+        NextDash := Length(Tail) + 1;
+      AValue := Copy(Tail, Index, NextDash - Index);
+      Result := AValue <> '';
+      Exit;
+    end;
+  end;
+end;
+
+function IsSupportedNumberingSystem(const AValue: string): Boolean;
+const
+  SupportedNumberingSystems: array[0..62] of string = (
+    'adlm', 'ahom', 'arab', 'arabext', 'bali', 'beng', 'bhks', 'brah',
+    'cakm', 'cham', 'deva', 'fullwide', 'gong', 'gonm', 'gujr', 'guru',
+    'hanidec', 'hmng', 'java', 'kali', 'khmr', 'knda', 'lana',
+    'lanatham', 'laoo', 'latn', 'lepc', 'limb', 'mathbold', 'mathdbl',
+    'mathmono', 'mathsanb', 'mathsans', 'mlym', 'modi', 'mong', 'mroo',
+    'mtei', 'mymr', 'mymrshan', 'mymrtlng', 'newa', 'nkoo', 'olck',
+    'orya', 'osma', 'rohg', 'saur', 'shrd', 'sind', 'sinh', 'sora',
+    'sund', 'takr', 'talu', 'tamldec', 'telu', 'thai', 'tibt', 'tirh',
+    'vaii', 'wara', 'wcho');
+var
+  I: Integer;
+begin
+  Result := False;
+  for I := Low(SupportedNumberingSystems) to High(SupportedNumberingSystems) do
+  begin
+    if AValue = SupportedNumberingSystems[I] then
+    begin
+      Result := True;
+      Exit;
+    end;
   end;
 end;
 

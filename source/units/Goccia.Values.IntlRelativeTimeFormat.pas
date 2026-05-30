@@ -38,6 +38,7 @@ uses
   StrUtils,
   SysUtils,
 
+  BCP47,
   IntlICU,
   IntlLocaleResolver,
   IntlTypes,
@@ -163,65 +164,38 @@ begin
   Result := (SubtagLength >= 3) and (SubtagLength <= 8);
 end;
 
-function IsSupportedNumberingSystem(const AValue: string): Boolean;
-begin
-  Result := (AValue = 'latn') or (AValue = 'arab') or
-            (AValue = 'deva') or (AValue = 'hanidec');
-end;
-
-function LocaleWithoutUnicodeExtension(const ALocale: string): string;
-var
-  ExtensionStart: Integer;
-begin
-  ExtensionStart := Pos('-u-', ALocale);
-  if ExtensionStart = 0 then
-    Result := ALocale
-  else
-    Result := Copy(ALocale, 1, ExtensionStart - 1);
-end;
-
 function TryGetLocaleNumberingSystemExtension(const ALocale: string;
   out ANumberingSystem: string): Boolean;
-var
-  ExtensionStart, Index, NextDash: Integer;
-  Tail, Subtag: string;
 begin
-  Result := False;
-  ANumberingSystem := '';
-  ExtensionStart := Pos('-u-', ALocale);
-  if ExtensionStart = 0 then
-    Exit;
+  Result := TryGetUnicodeLocaleExtensionKeyword(ALocale, 'nu', ANumberingSystem);
+end;
 
-  Tail := Copy(ALocale, ExtensionStart + 3, MaxInt);
-  Index := 1;
-  while Index <= Length(Tail) do
-  begin
-    NextDash := PosEx('-', Tail, Index);
-    if NextDash = 0 then
-      NextDash := Length(Tail) + 1;
-    Subtag := Copy(Tail, Index, NextDash - Index);
-    Index := NextDash + 1;
+function IsLocaleLanguage(const ALocale, ALanguage: string): Boolean;
+var
+  Parsed: TBcp47Tag;
+  FirstHyphen: Integer;
+  PrimaryLanguage: string;
+begin
+  Parsed := ParseBcp47Tag(ALocale);
+  if Parsed.IsValid then
+    Exit(SameText(Parsed.Language, ALanguage));
 
-    if Subtag = 'nu' then
-    begin
-      NextDash := PosEx('-', Tail, Index);
-      if NextDash = 0 then
-        NextDash := Length(Tail) + 1;
-      ANumberingSystem := Copy(Tail, Index, NextDash - Index);
-      Result := ANumberingSystem <> '';
-      Exit;
-    end;
-  end;
+  FirstHyphen := Pos('-', ALocale);
+  if FirstHyphen = 0 then
+    PrimaryLanguage := ALocale
+  else
+    PrimaryLanguage := Copy(ALocale, 1, FirstHyphen - 1);
+  Result := SameText(PrimaryLanguage, ALanguage);
 end;
 
 function IsEnglishLocale(const ALocale: string): Boolean;
 begin
-  Result := SameText(Copy(ALocale, 1, 2), 'en');
+  Result := IsLocaleLanguage(ALocale, 'en');
 end;
 
 function IsPolishLocale(const ALocale: string): Boolean;
 begin
-  Result := SameText(Copy(ALocale, 1, 2), 'pl');
+  Result := IsLocaleLanguage(ALocale, 'pl');
 end;
 
 function RelativeTimeNumberOptions(const ANumberingSystem: string): TIntlNumberFormatOptions;

@@ -1940,6 +1940,9 @@ begin
       end;
   end;
 
+  if AOptions.NumberingSystem <> '' then
+    AddSkeletonToken(Result, 'numbering-system/' + AOptions.NumberingSystem);
+
   case AOptions.Notation of
     innScientific: AddSkeletonToken(Result, 'scientific');
     innEngineering: AddSkeletonToken(Result, 'engineering');
