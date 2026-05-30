@@ -17,7 +17,7 @@ type
   TGocciaPreprocessors = set of TGocciaPreprocessor;
 
   TGocciaCompatibility = (cfASI, cfVar, cfFunction, cfTraditionalFor,
-    cfWhileLoops, cfLooseEquality, cfNonStrictMode);
+    cfWhileLoops, cfLooseEquality, cfNonStrictMode, cfLabel);
   TGocciaCompatibilityFlags = set of TGocciaCompatibility;
 
   TGocciaSourceType = (stScript, stModule);
@@ -185,6 +185,7 @@ begin
   Result.LooseEqualityEnabled := cfLooseEquality in AOptions.Compatibility;
   Result.NonStrictModeEnabled := (cfNonStrictMode in AOptions.Compatibility) and
     (AOptions.SourceType <> stModule);
+  Result.LabelStatementsEnabled := cfLabel in AOptions.Compatibility;
 end;
 
 procedure ConfigureParser(const AParser: TGocciaParser;

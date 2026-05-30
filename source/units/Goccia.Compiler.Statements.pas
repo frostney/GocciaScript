@@ -59,8 +59,12 @@ procedure CompileReExportDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaReExportDeclaration);
 procedure CompileSwitchStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaSwitchStatement);
-procedure CompileBreakStatement(const ACtx: TGocciaCompilationContext);
-procedure CompileContinueStatement(const ACtx: TGocciaCompilationContext);
+function CompileLabeledStatement(const ACtx: TGocciaCompilationContext;
+  const AStmt: TGocciaStatement): Boolean;
+procedure CompileBreakStatement(const ACtx: TGocciaCompilationContext;
+  const AStmt: TGocciaBreakStatement);
+procedure CompileContinueStatement(const ACtx: TGocciaCompilationContext;
+  const AStmt: TGocciaContinueStatement);
 procedure CompileDestructuringDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaDestructuringDeclaration);
 procedure CompileEnumDeclaration(const ACtx: TGocciaCompilationContext;
@@ -159,6 +163,17 @@ type
     OldContinueScopeDepth: Integer;
   end;
 
+  TLabelControlState = record
+    LabelName: string;
+    BreakJumps: TList<Integer>;
+    ContinueJumps: TList<Integer>;
+    BreakFinallyBase: Integer;
+    ContinueFinallyBase: Integer;
+    BreakScopeDepth: Integer;
+    ContinueScopeDepth: Integer;
+    IsIteration: Boolean;
+  end;
+
 threadvar
   GBreakJumps: TList<Integer>;
   GContinueJumps: TList<Integer>;
@@ -167,6 +182,7 @@ threadvar
   GContinueFinallyBase: Integer;
   GBreakScopeDepth: Integer;
   GContinueScopeDepth: Integer;
+  GLabelControls: TList<TLabelControlState>;
 
 function CurrentPendingFinallyBase: Integer;
 begin
@@ -225,6 +241,65 @@ var
 begin
   for I := 0 to AJumps.Count - 1 do
     PatchJumpTarget(ACtx, AJumps[I]);
+end;
+
+function StatementIsIteration(const AStmt: TGocciaStatement): Boolean;
+begin
+  Result := (AStmt is TGocciaForStatement) or
+    (AStmt is TGocciaForOfStatement) or
+    (AStmt is TGocciaForAwaitOfStatement) or
+    (AStmt is TGocciaWhileStatement) or
+    (AStmt is TGocciaDoWhileStatement);
+end;
+
+function FindLabelControlIndex(const ALabelName: string): Integer;
+var
+  I: Integer;
+begin
+  Result := -1;
+  if not Assigned(GLabelControls) then
+    Exit;
+
+  for I := GLabelControls.Count - 1 downto 0 do
+    if GLabelControls[I].LabelName = ALabelName then
+      Exit(I);
+end;
+
+procedure PatchLabeledContinueJumps(const ACtx: TGocciaCompilationContext;
+  const AStmt: TGocciaStatement);
+var
+  I, LabelIndex: Integer;
+begin
+  if not Assigned(GLabelControls) then
+    Exit;
+
+  for I := 0 to AStmt.LabelCount - 1 do
+  begin
+    LabelIndex := FindLabelControlIndex(AStmt.Labels[I]);
+    if LabelIndex >= 0 then
+      PatchJumpList(ACtx, GLabelControls[LabelIndex].ContinueJumps);
+  end;
+end;
+
+procedure SetLabeledContinueCleanupBase(const AStmt: TGocciaStatement);
+var
+  I, LabelIndex: Integer;
+  State: TLabelControlState;
+begin
+  if not Assigned(GLabelControls) then
+    Exit;
+
+  for I := 0 to AStmt.LabelCount - 1 do
+  begin
+    LabelIndex := FindLabelControlIndex(AStmt.Labels[I]);
+    if LabelIndex >= 0 then
+    begin
+      State := GLabelControls[LabelIndex];
+      State.ContinueFinallyBase := GContinueFinallyBase;
+      State.ContinueScopeDepth := GContinueScopeDepth;
+      GLabelControls[LabelIndex] := State;
+    end;
+  end;
 end;
 
 procedure CompileExpressionStatement(const ACtx: TGocciaCompilationContext;
@@ -1352,8 +1427,10 @@ begin
      (AStmt is TGocciaThrowStatement) then
     Exit(True);
 
+  if AStmt is TGocciaContinueStatement then
+    Exit(TGocciaContinueStatement(AStmt).TargetLabel <> '');
+
   if (AStmt is TGocciaEmptyStatement) or
-     (AStmt is TGocciaContinueStatement) or
      (AStmt is TGocciaFunctionDeclaration) or
      (AStmt is TGocciaExportFunctionDeclaration) then
     Exit(False);
@@ -1952,6 +2029,7 @@ begin
 
     ACtx.Scope.BeginScope;
     SetLoopContinueScopeDepth(ACtx);
+    SetLabeledContinueCleanupBase(AStmt);
 
     if Assigned(AStmt.BindingPattern) then
     begin
@@ -2001,6 +2079,7 @@ begin
 
     // Patch continue jumps before close-upvalue so closures see correct iteration values
     PatchJumpList(ACtx, LoopControl.ContinueJumps);
+    PatchLabeledContinueJumps(ACtx, AStmt);
     if MismatchJump >= 0 then
       PatchJumpTarget(ACtx, MismatchJump);
 
@@ -2081,6 +2160,7 @@ begin
 
     ACtx.Scope.BeginScope;
     SetLoopContinueScopeDepth(ACtx);
+    SetLabeledContinueCleanupBase(AStmt);
 
     if Assigned(AStmt.BindingPattern) then
     begin
@@ -2107,6 +2187,7 @@ begin
 
     // Patch continue jumps before close-upvalue so closures see correct iteration values
     PatchJumpList(ACtx, LoopControl.ContinueJumps);
+    PatchLabeledContinueJumps(ACtx, AStmt);
 
     ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
     for I := 0 to ClosedCount - 1 do
@@ -2190,6 +2271,7 @@ begin
 
     ACtx.Scope.BeginScope;
     SetLoopContinueScopeDepth(ACtx);
+    SetLabeledContinueCleanupBase(AStmt);
 
     if Assigned(AStmt.BindingPattern) then
     begin
@@ -2213,6 +2295,7 @@ begin
 
     // Patch continue jumps before close-upvalue so closures see correct iteration values
     PatchJumpList(ACtx, LoopControl.ContinueJumps);
+    PatchLabeledContinueJumps(ACtx, AStmt);
     if MismatchJump >= 0 then
       PatchJumpTarget(ACtx, MismatchJump);
 
@@ -2389,12 +2472,14 @@ begin
     OuterSlot := StartReg;
     ACtx.Scope.BeginScope;
     SetLoopContinueScopeDepth(ACtx);
+    SetLabeledContinueCleanupBase(AStmt);
     Slot := ACtx.Scope.DeclareLocal(LoopName, False);
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, Slot, OuterSlot, 0));
 
     ACtx.CompileStatement(AStmt.Body);
 
     PatchJumpList(ACtx, LoopControl.ContinueJumps);
+    PatchLabeledContinueJumps(ACtx, AStmt);
 
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, OuterSlot, Slot, 0));
     ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
@@ -2630,6 +2715,7 @@ begin
         // before evaluating the test and body.
         ACtx.Scope.BeginScope;
         SetLoopContinueScopeDepth(ACtx);
+        SetLabeledContinueCleanupBase(AStmt);
         for I := 0 to PerIterNames.Count - 1 do
         begin
           Name := PerIterNames[I];
@@ -2654,6 +2740,7 @@ begin
         ACtx.CompileStatement(AStmt.Body);
 
         PatchJumpList(ACtx, LoopControl.ContinueJumps);
+        PatchLabeledContinueJumps(ACtx, AStmt);
 
         // BodySlots are no longer visible to name resolution after EndScope,
         // but their registers still hold the body iteration values for the
@@ -2727,10 +2814,12 @@ begin
 
         ACtx.Scope.BeginScope;
         SetLoopContinueScopeDepth(ACtx);
+        SetLabeledContinueCleanupBase(AStmt);
 
         ACtx.CompileStatement(AStmt.Body);
 
         PatchJumpList(ACtx, LoopControl.ContinueJumps);
+        PatchLabeledContinueJumps(ACtx, AStmt);
 
         ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
         for I := 0 to ClosedCount - 1 do
@@ -2781,6 +2870,7 @@ var
 begin
   BeginLoopControl(ACtx, LoopControl);
   try
+    SetLabeledContinueCleanupBase(AStmt);
     LoopStart := CurrentCodePosition(ACtx);
     CondReg := ACtx.Scope.AllocateRegister;
     try
@@ -2793,6 +2883,7 @@ begin
     ACtx.CompileStatement(AStmt.Body);
 
     PatchJumpList(ACtx, LoopControl.ContinueJumps);
+    PatchLabeledContinueJumps(ACtx, AStmt);
 
     EmitInstruction(ACtx,
       EncodeAx(OP_JUMP, LoopStart - CurrentCodePosition(ACtx) - 1));
@@ -2815,11 +2906,13 @@ var
 begin
   BeginLoopControl(ACtx, LoopControl);
   try
+    SetLabeledContinueCleanupBase(AStmt);
     LoopStart := CurrentCodePosition(ACtx);
 
     ACtx.CompileStatement(AStmt.Body);
 
     PatchJumpList(ACtx, LoopControl.ContinueJumps);
+    PatchLabeledContinueJumps(ACtx, AStmt);
 
     CondReg := ACtx.Scope.AllocateRegister;
     try
@@ -3359,8 +3452,67 @@ begin
   end;
 end;
 
-procedure CompileBreakStatement(const ACtx: TGocciaCompilationContext);
+function CompileLabeledStatement(const ACtx: TGocciaCompilationContext;
+  const AStmt: TGocciaStatement): Boolean;
+var
+  CreatedControls: array of TLabelControlState;
+  State: TLabelControlState;
+  StartIndex, I: Integer;
 begin
+  if not Assigned(GLabelControls) then
+    GLabelControls := TList<TLabelControlState>.Create;
+
+  StartIndex := GLabelControls.Count;
+  SetLength(CreatedControls, AStmt.LabelCount);
+  for I := 0 to AStmt.LabelCount - 1 do
+  begin
+    State.LabelName := AStmt.Labels[I];
+    State.BreakJumps := TList<Integer>.Create;
+    State.ContinueJumps := TList<Integer>.Create;
+    State.BreakFinallyBase := CurrentPendingFinallyBase;
+    State.ContinueFinallyBase := CurrentPendingFinallyBase;
+    State.BreakScopeDepth := ACtx.Scope.Depth;
+    State.ContinueScopeDepth := ACtx.Scope.Depth;
+    State.IsIteration := StatementIsIteration(AStmt);
+    CreatedControls[I] := State;
+    GLabelControls.Add(State);
+  end;
+
+  try
+    ACtx.CompileStatement(AStmt);
+    for I := StartIndex to GLabelControls.Count - 1 do
+      PatchJumpList(ACtx, GLabelControls[I].BreakJumps);
+    Result := False;
+  finally
+    for I := GLabelControls.Count - 1 downto StartIndex do
+      GLabelControls.Delete(I);
+    for I := 0 to Length(CreatedControls) - 1 do
+    begin
+      CreatedControls[I].BreakJumps.Free;
+      CreatedControls[I].ContinueJumps.Free;
+    end;
+  end;
+end;
+
+procedure CompileBreakStatement(const ACtx: TGocciaCompilationContext;
+  const AStmt: TGocciaBreakStatement);
+var
+  LabelIndex: Integer;
+  State: TLabelControlState;
+begin
+  if AStmt.TargetLabel <> '' then
+  begin
+    LabelIndex := FindLabelControlIndex(AStmt.TargetLabel);
+    if LabelIndex < 0 then
+      Exit;
+    State := GLabelControls[LabelIndex];
+    EmitLoopControlCleanup(ACtx, State.BreakFinallyBase,
+      State.BreakScopeDepth, True);
+    State.BreakJumps.Add(EmitJumpInstruction(ACtx, OP_JUMP, 0));
+    GLabelControls[LabelIndex] := State;
+    Exit;
+  end;
+
   if not Assigned(GBreakJumps) then
     Exit;
 
@@ -3368,8 +3520,25 @@ begin
   GBreakJumps.Add(EmitJumpInstruction(ACtx, OP_JUMP, 0));
 end;
 
-procedure CompileContinueStatement(const ACtx: TGocciaCompilationContext);
+procedure CompileContinueStatement(const ACtx: TGocciaCompilationContext;
+  const AStmt: TGocciaContinueStatement);
+var
+  LabelIndex: Integer;
+  State: TLabelControlState;
 begin
+  if AStmt.TargetLabel <> '' then
+  begin
+    LabelIndex := FindLabelControlIndex(AStmt.TargetLabel);
+    if (LabelIndex < 0) or not GLabelControls[LabelIndex].IsIteration then
+      Exit;
+    State := GLabelControls[LabelIndex];
+    EmitLoopControlCleanup(ACtx, State.ContinueFinallyBase,
+      State.ContinueScopeDepth, True);
+    State.ContinueJumps.Add(EmitJumpInstruction(ACtx, OP_JUMP, 0));
+    GLabelControls[LabelIndex] := State;
+    Exit;
+  end;
+
   if not Assigned(GContinueJumps) then
     Exit;
 

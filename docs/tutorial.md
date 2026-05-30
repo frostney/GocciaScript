@@ -311,6 +311,7 @@ Here's a quick reference of GocciaScript's key restrictions:
 | `var x = 1` | Not supported | `let x = 1` or `const x = 1` |
 | `function foo() {}` | Not supported | `const foo = () => {}` |
 | `==` / `!=` | Off by default | `===` / `!==` or `--compat-loose-equality` |
+| labels / `break label` / `continue label` | Off by default | `return` from a helper, an early-exit flag, or `--compat-label` for JavaScript compatibility |
 | `for (init; test; update)` | Off by default | `for...of`, `.map()`, `.forEach()`, `.reduce()`, or `--compat-traditional-for-loop` for JavaScript compatibility |
 | `while (...)` / `do ... while (...)` | Off by default | `for...of`, `.map()`, `.forEach()`, `.reduce()`, or `--compat-while-loops` for JavaScript compatibility |
 | `eval("code")` | Not supported | No alternative (by design) |

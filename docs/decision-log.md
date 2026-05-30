@@ -17,6 +17,8 @@ Chronological record of key architectural and implementation decisions, newest f
 
 ---
 
+**2026-05-29** · `engine` — Labeled `break` and `continue` targets are available behind `--compat-label` / `"compat-label"` for JavaScript compatibility and test262 coverage. Labels stay disabled by default, but when enabled the parser preserves label targets and both interpreter and bytecode paths resolve named breaks and iteration-only continues. [language.md § Labeled Statements](language.md#labeled-statements).
+
 **2026-05-24** · `parser` — Parser policy now lives behind the source pipeline instead of being repeated at host call sites. `TGocciaSourcePipeline` owns compatibility/source-type mapping and exposes narrow parse entry points for full source, module source, dynamic `Function` validation/wrapping, and expression fragments; module loading consumes a module-specific result rather than the full host-facing parse report. [architecture.md § Overview](architecture.md#overview). [embedding.md § Engine API](embedding.md#engine-api).
 
 **2026-05-24** · `parser` — ASI now uses the compatibility flag surface as `--compat-asi` / `"compat-asi"` with no legacy alias. Goccia-specific CLI option metadata lives in `Goccia.CLI.Options`, where compatibility flags are table-driven and resolved into the source-pipeline compatibility set; embedders use `TGocciaEngine.Compatibility` rather than per-flag convenience properties. [language.md § Automatic Semicolon Insertion](language.md#automatic-semicolon-insertion). [embedding.md § Preprocessors and Compatibility](embedding.md#preprocessors-and-compatibility).

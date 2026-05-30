@@ -21,6 +21,7 @@
 | Non-strict function `this` binding | ES1 | Strict by default; script source `--compat-non-strict-mode` coerces nullish regular-function `this` to `globalThis`; modules remain strict and arrows remain lexical |
 | `arguments` object | ES1 | Opt-in for script source (`--compat-non-strict-mode`) as an unmapped object for ordinary functions, methods, accessors, and generators; modules remain strict; arrows resolve it lexically; prefer rest parameters for new code |
 | Non-strict assignment failures | ES1 | Strict by default; script source `--compat-non-strict-mode` silently ignores failed ordinary object/global writes while assignment expressions return the assigned value |
+| Labeled statements | ES1 | Opt-in for JavaScript compatibility (`--compat-label`); disabled by default |
 | Traditional `for(init; test; update)` loop | ES1 | Opt-in for JavaScript compatibility (`--compat-traditional-for-loop`); disabled by default |
 | `while` / `do...while` | ES1 | Opt-in for JavaScript compatibility (`--compat-while-loops`); disabled by default |
 | `with` statement | ES1 | Opt-in for script source (`--compat-non-strict-mode`) for compatibility with object-environment lookup, `Symbol.unscopables`, closure capture, method-call receivers, and non-strict write failures — prefer explicit property access |

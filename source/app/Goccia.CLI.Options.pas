@@ -122,7 +122,9 @@ const
     (OptionName: 'compat-loose-equality';
      HelpText: 'Enable loose equality and inequality (== and !=) (compatibility)'),
     (OptionName: 'compat-non-strict-mode';
-     HelpText: 'Enable non-strict-mode compatibility semantics')
+     HelpText: 'Enable non-strict-mode compatibility semantics'),
+    (OptionName: 'compat-label';
+     HelpText: 'Enable labeled break and continue targets (compatibility)')
   );
 
 function CompatibilityFlagCount: Integer;
