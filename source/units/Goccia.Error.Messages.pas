@@ -399,6 +399,7 @@ resourcestring
   SErrorSymbolSearchNotCallable = '@@search is not callable';
   SErrorFirstArgMustNotBeRegExp = 'First argument to %s must not be a regular expression';
   SErrorInvalidRepeatCount = 'Invalid count value: %s';
+  SErrorInvalidStringLength = 'Invalid string length';
   SErrorInvalidNormalizationForm = 'The normalization form should be one of NFC, NFD, NFKC, NFKD';
   SErrorStringPrototypeRequiresNonNullish = 'String.prototype method requires that ''this'' not be null or undefined';
   SErrorIsWellFormedRequiresNonNullish = 'String.prototype.isWellFormed requires that ''this'' not be null or undefined';

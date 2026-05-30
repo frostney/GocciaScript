@@ -87,6 +87,27 @@ describe('String.prototype.replace', () => {
     expect('ab'.replace(/(?:)/g, '-')).toBe('-a-b-');
   });
 
+  test('replace throws RangeError for replacement expansions that exceed string limits', () => {
+    const input = '1'.repeat(1 << 20);
+    const replacement = '$1'.repeat(1 << 15);
+
+    expect(() => input.replace(/(.+)/g, replacement)).toThrow(RangeError);
+  });
+
+  test('replace throws RangeError for huge named capture replacement expansions', () => {
+    const input = '1'.repeat(1 << 20);
+    const replacement = '$<value>'.repeat(1 << 13);
+
+    expect(() => input.replace(/(?<value>.+)/g, replacement)).toThrow(RangeError);
+  });
+
+  test('replace throws RangeError for huge suffix replacement expansions', () => {
+    const input = '0' + '1'.repeat(1 << 20);
+    const replacement = "$'".repeat(1 << 15);
+
+    expect(() => input.replace(/0/, replacement)).toThrow(RangeError);
+  });
+
   test('replace advances unicode empty regex matches over explicit surrogate pairs', () => {
     const pair = String.fromCharCode(0xD83D, 0xDE00);
 
