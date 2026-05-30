@@ -35,8 +35,10 @@ describe.runIf(isIntl && typeof Intl.RelativeTimeFormat !== "undefined")("Intl.R
   test("formats numbers with the resolved numbering system", () => {
     const optionFormat = new Intl.RelativeTimeFormat("en-US", { numberingSystem: "arab" });
     const localeFormat = new Intl.RelativeTimeFormat("en-US-u-nu-arabext");
+    const icuFormat = new Intl.RelativeTimeFormat("fr", { numberingSystem: "arab" });
 
     expect(optionFormat.format(-1234, "day")).toBe("\u0661\u066c\u0662\u0663\u0664 days ago");
     expect(localeFormat.format(-1234, "day")).toBe("\u06f1\u066c\u06f2\u06f3\u06f4 days ago");
+    expect(icuFormat.format(1234, "day")).toBe("dans \u0661\u066c\u0662\u0663\u0664 jours");
   });
 });

@@ -170,6 +170,19 @@ begin
   Result := TryGetUnicodeLocaleExtensionKeyword(ALocale, 'nu', ANumberingSystem);
 end;
 
+function LocaleWithNumberingSystem(const ALocale, ANumberingSystem: string): string;
+var
+  LocaleNumberingSystem: string;
+begin
+  Result := ALocale;
+  if ANumberingSystem = '' then
+    Exit;
+  if TryGetLocaleNumberingSystemExtension(ALocale, LocaleNumberingSystem) and
+     (LocaleNumberingSystem = ANumberingSystem) then
+    Exit;
+  Result := LocaleWithoutUnicodeExtension(ALocale) + '-u-nu-' + ANumberingSystem;
+end;
+
 function IsLocaleLanguage(const ALocale, ALanguage: string): Boolean;
 var
   Parsed: TBcp47Tag;
@@ -586,6 +599,40 @@ begin
     Result := Result + AParts[I].Value;
 end;
 
+function TryReplaceFormattedNumber(const AFormatted, ALocale, ANumberingSystem: string;
+  AValue: Double; out AAdjusted: string): Boolean;
+var
+  BaseOptions, TargetOptions: TIntlNumberFormatOptions;
+  BaseNumber, TargetNumber: string;
+  NumberStart: Integer;
+begin
+  Result := False;
+  AAdjusted := AFormatted;
+
+  BaseOptions := DefaultNumberFormatOptions;
+  if not TryICUFormatNumber(ALocale, Abs(AValue), BaseOptions, BaseNumber) then
+    Exit;
+
+  NumberStart := PosEx(BaseNumber, AFormatted, 1);
+  if NumberStart = 0 then
+  begin
+    BaseOptions.UseGrouping := inugFalse;
+    if TryICUFormatNumber(ALocale, Abs(AValue), BaseOptions, BaseNumber) then
+      NumberStart := PosEx(BaseNumber, AFormatted, 1);
+  end;
+  if NumberStart = 0 then
+    Exit;
+
+  TargetOptions := DefaultNumberFormatOptions;
+  TargetOptions.NumberingSystem := ANumberingSystem;
+  if not TryICUFormatNumber(ALocale, Abs(AValue), TargetOptions, TargetNumber) then
+    Exit;
+
+  AAdjusted := Copy(AFormatted, 1, NumberStart - 1) + TargetNumber +
+    Copy(AFormatted, NumberStart + Length(BaseNumber), MaxInt);
+  Result := True;
+end;
+
 function FormatRelativeTimePartsFallback(const AFormatted: string;
   const ALocale: string; AValue: Double; const AUnit: string): TIntlFormatPartArray;
 var
@@ -768,7 +815,7 @@ var
   RTF: TGocciaIntlRelativeTimeFormatValue;
   NumberArg: TGocciaNumberLiteralValue;
   NumValue: Double;
-  UnitStr: string;
+  UnitStr, FormatLocale, AdjustedFormatted: string;
   UnitValue: TIntlRelativeTimeUnit;
   NumericValue: TIntlRelativeTimeNumeric;
   StyleValue: TIntlRelativeTimeStyle;
@@ -790,6 +837,7 @@ begin
   NumericValue := NumericStringToEnum(RTF.FNumeric);
   StyleValue := StyleStringToEnum(RTF.FStyle);
   IsPast := (NumValue < 0) or NumberArg.IsNegativeZero;
+  FormatLocale := LocaleWithNumberingSystem(RTF.FLocale, RTF.FNumberingSystem);
 
   if (NumericValue = irtnAuto) and
      TryFormatRelativeTimeAutoName(NumValue, RTF.FLocale, UnitValue, Formatted) then
@@ -799,10 +847,20 @@ begin
     Result := TGocciaStringLiteralValue.Create(Formatted)
   else if TryICUFormatRelativeTime(RTF.FLocale, NumValue, UnitValue,
     NumericValue, StyleValue, Formatted) then
+  begin
+    if TryReplaceFormattedNumber(Formatted, RTF.FLocale, RTF.FNumberingSystem,
+      NumValue, AdjustedFormatted) then
+      Formatted := AdjustedFormatted;
     Result := TGocciaStringLiteralValue.Create(Formatted)
+  end
   else
-    Result := TGocciaStringLiteralValue.Create(
-      FormatRelativeTimeWithCLDR(NumValue, RTF.FLocale, UnitValue));
+  begin
+    Formatted := FormatRelativeTimeWithCLDR(NumValue, RTF.FLocale, UnitValue);
+    if TryReplaceFormattedNumber(Formatted, RTF.FLocale, RTF.FNumberingSystem,
+      NumValue, AdjustedFormatted) then
+      Formatted := AdjustedFormatted;
+    Result := TGocciaStringLiteralValue.Create(Formatted);
+  end;
 end;
 
 function TGocciaIntlRelativeTimeFormatValue.IntlRelativeTimeFormatFormatToParts(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -810,7 +868,7 @@ var
   RTF: TGocciaIntlRelativeTimeFormatValue;
   NumberArg: TGocciaNumberLiteralValue;
   NumValue: Double;
-  UnitStr, Formatted: string;
+  UnitStr, Formatted, FormatLocale, AdjustedFormatted: string;
   UnitValue: TIntlRelativeTimeUnit;
   NumericValue: TIntlRelativeTimeNumeric;
   StyleValue: TIntlRelativeTimeStyle;
@@ -832,6 +890,7 @@ begin
   NumericValue := NumericStringToEnum(RTF.FNumeric);
   StyleValue := StyleStringToEnum(RTF.FStyle);
   IsPast := (NumValue < 0) or NumberArg.IsNegativeZero;
+  FormatLocale := LocaleWithNumberingSystem(RTF.FLocale, RTF.FNumberingSystem);
 
   if (NumericValue = irtnAuto) and
      TryFormatRelativeTimeAutoName(NumValue, RTF.FLocale, UnitValue, Formatted) then
@@ -848,6 +907,13 @@ begin
     RTF.FNumberingSystem, UnitValue, StyleValue, Parts) then
     Exit(FormatPartsToArray(Parts));
 
+  if TryICUFormatRelativeTime(RTF.FLocale, NumValue, UnitValue,
+    NumericValue, StyleValue, Formatted) and
+     TryReplaceFormattedNumber(Formatted, RTF.FLocale, RTF.FNumberingSystem,
+       NumValue, AdjustedFormatted) then
+    Exit(FormatPartsToArray(FormatRelativeTimePartsFallback(AdjustedFormatted,
+      FormatLocale, NumValue, UnitStr)));
+
   if TryICUFormatRelativeTimeToParts(RTF.FLocale, NumValue, UnitValue,
     NumericValue, StyleValue, Parts) then
     Exit(FormatPartsToArray(Parts));
@@ -859,9 +925,12 @@ begin
        not TryFormatRelativeTimeAutoName(NumValue, RTF.FLocale, UnitValue, Formatted) then
       Formatted := FormatRelativeTimeWithCLDR(NumValue, RTF.FLocale, UnitValue);
   end;
+  if TryReplaceFormattedNumber(Formatted, RTF.FLocale, RTF.FNumberingSystem,
+    NumValue, AdjustedFormatted) then
+    Formatted := AdjustedFormatted;
 
   Result := FormatPartsToArray(FormatRelativeTimePartsFallback(Formatted,
-    RTF.FLocale, NumValue, UnitStr));
+    FormatLocale, NumValue, UnitStr));
 end;
 
 function TGocciaIntlRelativeTimeFormatValue.IntlRelativeTimeFormatResolvedOptions(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;

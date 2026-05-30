@@ -38,6 +38,11 @@ describe.runIf(isIntl && typeof Intl.RelativeTimeFormat !== "undefined")("Intl.R
     expect(numericParts.map((part) => part.type)).toEqual(["integer", "group", "integer"]);
     expect(numericParts.map((part) => part.value)).toEqual(["\u0661", "\u066c", "\u0662\u0663\u0664"]);
     expect(numericParts.every((part) => part.unit === "day")).toBe(true);
+
+    const icuParts = new Intl.RelativeTimeFormat("fr", { numberingSystem: "arab" }).formatToParts(1234, "day");
+    expect(icuParts.map((part) => part.type)).toEqual(["literal", "integer", "group", "integer", "literal"]);
+    expect(icuParts.map((part) => part.value)).toEqual(["dans ", "\u0661", "\u066c", "\u0662\u0663\u0664", " jours"]);
+    expect(icuParts.filter((part) => part.type !== "literal").every((part) => part.unit === "day")).toBe(true);
   });
 
   test("returns literal relative names for numeric auto", () => {
