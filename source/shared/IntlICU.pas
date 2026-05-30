@@ -62,10 +62,16 @@ procedure ICUBreakIteratorClose(var AIterator: TIntlBreakIterator);
 function TryICUFormatList(const ALocale: string; const AItems: IntlTypes.TStringArray;
   AListType: TIntlListFormatType; AListStyle: TIntlListFormatStyle;
   out AFormatted: string): Boolean;
+function TryICUFormatListToParts(const ALocale: string; const AItems: IntlTypes.TStringArray;
+  AListType: TIntlListFormatType; AListStyle: TIntlListFormatStyle;
+  out AParts: TIntlFormatPartArray): Boolean;
 
 function TryICUFormatRelativeTime(const ALocale: string; AValue: Double;
   AUnit: TIntlRelativeTimeUnit; ANumeric: TIntlRelativeTimeNumeric;
   out AFormatted: string): Boolean;
+function TryICUFormatRelativeTimeToParts(const ALocale: string; AValue: Double;
+  AUnit: TIntlRelativeTimeUnit; ANumeric: TIntlRelativeTimeNumeric;
+  out AParts: TIntlFormatPartArray): Boolean;
 
 function TryICUGetDefaultLocale(out ALocale: string): Boolean;
 
@@ -159,6 +165,9 @@ const
   UDAT_TIME_SEPARATOR_FIELD = 37;
   UFIELD_CATEGORY_DATE = 1;
   UFIELD_CATEGORY_NUMBER = 2;
+  UFIELD_CATEGORY_LIST = 3;
+  UFIELD_CATEGORY_RELATIVE_DATETIME = 4;
+  UFIELD_CATEGORY_LIST_SPAN = 4099;
   UFIELD_CATEGORY_DATE_INTERVAL_SPAN = 4101;
   UFIELD_CATEGORY_NUMBER_RANGE_SPAN = 4098;
   UNUM_RANGE_COLLAPSE_AUTO = 0;
@@ -195,9 +204,13 @@ const
   ULISTFMT_WIDTH_WIDE = 0;
   ULISTFMT_WIDTH_SHORT = 1;
   ULISTFMT_WIDTH_NARROW = 2;
+  ULISTFMT_LITERAL_FIELD = 0;
+  ULISTFMT_ELEMENT_FIELD = 1;
   URELDATEFMT_STYLE_LONG = 0;
   URELDATEFMT_STYLE_SHORT = 1;
   URELDATEFMT_STYLE_NARROW = 2;
+  UDAT_REL_LITERAL_FIELD = 0;
+  UDAT_REL_NUMERIC_FIELD = 1;
   UDAT_RELATIVE_SECONDS = 0;
   UDAT_RELATIVE_MINUTES = 1;
   UDAT_RELATIVE_HOURS = 2;
@@ -369,6 +382,13 @@ type
     const AStrings: PPUChar; const AStringLengths: PLongInt;
     AStringCount: LongInt; AResult: PUChar; AResultCapacity: LongInt;
     var AStatus: TICUErrorCode): LongInt; cdecl;
+  TUlistfmtOpenResult = function(var AStatus: TICUErrorCode): Pointer; cdecl;
+  TUlistfmtCloseResult = procedure(AResult: Pointer); cdecl;
+  TUlistfmtFormatStringsToResult = procedure(AListfmt: Pointer;
+    const AStrings: PPUChar; const AStringLengths: PLongInt;
+    AStringCount: LongInt; AResult: Pointer; var AStatus: TICUErrorCode); cdecl;
+  TUlistfmtResultAsValue = function(AResult: Pointer;
+    var AStatus: TICUErrorCode): Pointer; cdecl;
   TUreldatefmtOpen = function(const ALocale: PAnsiChar;
     ANfToAdopt: Pointer; AWidth: LongInt; ACapitalizationContext: LongInt;
     var AStatus: TICUErrorCode): Pointer; cdecl;
@@ -377,6 +397,20 @@ type
     AOffset: Double; ADirection: LongInt;
     AResult: PUChar; AResultCapacity: LongInt;
     var AStatus: TICUErrorCode): LongInt; cdecl;
+  TUreldatefmtFormat = function(AReldatefmt: Pointer;
+    AOffset: Double; ADirection: LongInt;
+    AResult: PUChar; AResultCapacity: LongInt;
+    var AStatus: TICUErrorCode): LongInt; cdecl;
+  TUreldatefmtOpenResult = function(var AStatus: TICUErrorCode): Pointer; cdecl;
+  TUreldatefmtCloseResult = procedure(AResult: Pointer); cdecl;
+  TUreldatefmtFormatNumericToResult = procedure(AReldatefmt: Pointer;
+    AOffset: Double; AUnit: LongInt; AResult: Pointer;
+    var AStatus: TICUErrorCode); cdecl;
+  TUreldatefmtFormatToResult = procedure(AReldatefmt: Pointer;
+    AOffset: Double; AUnit: LongInt; AResult: Pointer;
+    var AStatus: TICUErrorCode); cdecl;
+  TUreldatefmtResultAsValue = function(AResult: Pointer;
+    var AStatus: TICUErrorCode): Pointer; cdecl;
   TUCaseMap = Pointer;
   TUcasemapOpen = function(const ALocale: PAnsiChar; AOptions: LongInt;
     var AStatus: TICUErrorCode): TUCaseMap; cdecl;
@@ -465,9 +499,19 @@ type
     UlistfmtOpenForType: TUlistfmtOpenForType;
     UlistfmtClose: TUlistfmtClose;
     UlistfmtFormat: TUlistfmtFormat;
+    UlistfmtOpenResult: TUlistfmtOpenResult;
+    UlistfmtCloseResult: TUlistfmtCloseResult;
+    UlistfmtFormatStringsToResult: TUlistfmtFormatStringsToResult;
+    UlistfmtResultAsValue: TUlistfmtResultAsValue;
     UreldatefmtOpen: TUreldatefmtOpen;
     UreldatefmtClose: TUreldatefmtClose;
     UreldatefmtFormatNumeric: TUreldatefmtFormatNumeric;
+    UreldatefmtFormat: TUreldatefmtFormat;
+    UreldatefmtOpenResult: TUreldatefmtOpenResult;
+    UreldatefmtCloseResult: TUreldatefmtCloseResult;
+    UreldatefmtFormatNumericToResult: TUreldatefmtFormatNumericToResult;
+    UreldatefmtFormatToResult: TUreldatefmtFormatToResult;
+    UreldatefmtResultAsValue: TUreldatefmtResultAsValue;
     UcasemapOpen: TUcasemapOpen;
     UcasemapClose: TUcasemapClose;
     UcasemapUtf8ToUpper: TUcasemapUtf8ToUpper;
@@ -708,12 +752,32 @@ begin
   if Assigned(S) then F.UlistfmtClose := TUlistfmtClose(S);
   S := ResolveSymbol(AHandle, 'ulistfmt_format');
   if Assigned(S) then F.UlistfmtFormat := TUlistfmtFormat(S);
+  S := ResolveSymbol(AHandle, 'ulistfmt_openResult');
+  if Assigned(S) then F.UlistfmtOpenResult := TUlistfmtOpenResult(S);
+  S := ResolveSymbol(AHandle, 'ulistfmt_closeResult');
+  if Assigned(S) then F.UlistfmtCloseResult := TUlistfmtCloseResult(S);
+  S := ResolveSymbol(AHandle, 'ulistfmt_formatStringsToResult');
+  if Assigned(S) then F.UlistfmtFormatStringsToResult := TUlistfmtFormatStringsToResult(S);
+  S := ResolveSymbol(AHandle, 'ulistfmt_resultAsValue');
+  if Assigned(S) then F.UlistfmtResultAsValue := TUlistfmtResultAsValue(S);
   S := ResolveSymbol(AHandle, 'ureldatefmt_open');
   if Assigned(S) then F.UreldatefmtOpen := TUreldatefmtOpen(S);
   S := ResolveSymbol(AHandle, 'ureldatefmt_close');
   if Assigned(S) then F.UreldatefmtClose := TUreldatefmtClose(S);
   S := ResolveSymbol(AHandle, 'ureldatefmt_formatNumeric');
   if Assigned(S) then F.UreldatefmtFormatNumeric := TUreldatefmtFormatNumeric(S);
+  S := ResolveSymbol(AHandle, 'ureldatefmt_format');
+  if Assigned(S) then F.UreldatefmtFormat := TUreldatefmtFormat(S);
+  S := ResolveSymbol(AHandle, 'ureldatefmt_openResult');
+  if Assigned(S) then F.UreldatefmtOpenResult := TUreldatefmtOpenResult(S);
+  S := ResolveSymbol(AHandle, 'ureldatefmt_closeResult');
+  if Assigned(S) then F.UreldatefmtCloseResult := TUreldatefmtCloseResult(S);
+  S := ResolveSymbol(AHandle, 'ureldatefmt_formatNumericToResult');
+  if Assigned(S) then F.UreldatefmtFormatNumericToResult := TUreldatefmtFormatNumericToResult(S);
+  S := ResolveSymbol(AHandle, 'ureldatefmt_formatToResult');
+  if Assigned(S) then F.UreldatefmtFormatToResult := TUreldatefmtFormatToResult(S);
+  S := ResolveSymbol(AHandle, 'ureldatefmt_resultAsValue');
+  if Assigned(S) then F.UreldatefmtResultAsValue := TUreldatefmtResultAsValue(S);
   S := ResolveSymbol(AHandle, 'ucasemap_open');
   if Assigned(S) then F.UcasemapOpen := TUcasemapOpen(S);
   S := ResolveSymbol(AHandle, 'ucasemap_close');
@@ -804,6 +868,7 @@ begin
   AParts[Index].PartType := APartType;
   AParts[Index].Value := AValue;
   AParts[Index].Source := ASource;
+  AParts[Index].UnitIdentifier := '';
 end;
 
 procedure AppendFieldSpan(var ASpans: TICUFieldSpanArray;
@@ -905,6 +970,15 @@ begin
   end;
 end;
 
+function ListFieldToPartType(AField: Integer): string;
+begin
+  case AField of
+    ULISTFMT_ELEMENT_FIELD: Result := 'element';
+  else
+    Result := 'literal';
+  end;
+end;
+
 function BestPartTypeForSegment(const ASpans: TICUFieldSpanArray;
   AFieldCategory, AStartIndex, AEndIndex: Integer;
   AMapper: TICUFieldTypeMapper): string;
@@ -930,6 +1004,23 @@ begin
     Result := AMapper(BestField)
   else
     Result := 'literal';
+end;
+
+function HasContainingField(const ASpans: TICUFieldSpanArray;
+  AFieldCategory, AField, AStartIndex, AEndIndex: Integer): Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  for I := 0 to Length(ASpans) - 1 do
+    if (ASpans[I].Category = AFieldCategory) and
+       ((AField < 0) or (ASpans[I].Field = AField)) and
+       (AStartIndex >= ASpans[I].StartIndex) and
+       (AEndIndex <= ASpans[I].EndIndex) then
+    begin
+      Result := True;
+      Exit;
+    end;
 end;
 
 function RangeSourceForSegment(const ASpans: TICUFieldSpanArray;
@@ -1005,6 +1096,64 @@ begin
   Result := True;
 end;
 
+function BuildRelativeTimePartsFromFieldSpans(const AFormatted: UnicodeString;
+  const ASpans: TICUFieldSpanArray; const AUnitIdentifier: string;
+  out AParts: TIntlFormatPartArray): Boolean;
+var
+  Boundaries: array of Integer;
+  BoundaryCount, I, SegStart, SegEnd, FormattedLength: Integer;
+  PartType, Value: string;
+  IsNumeric: Boolean;
+begin
+  Result := False;
+  SetLength(AParts, 0);
+  FormattedLength := Length(AFormatted);
+  SetLength(Boundaries, (Length(ASpans) * 2) + 2);
+  BoundaryCount := 0;
+  AddBoundary(Boundaries, BoundaryCount, 0);
+  AddBoundary(Boundaries, BoundaryCount, FormattedLength);
+
+  for I := 0 to Length(ASpans) - 1 do
+    if (ASpans[I].StartIndex >= 0) and
+       (ASpans[I].EndIndex <= FormattedLength) and
+       ((ASpans[I].Category = UFIELD_CATEGORY_NUMBER) or
+        ((ASpans[I].Category = UFIELD_CATEGORY_RELATIVE_DATETIME) and
+         (ASpans[I].Field = UDAT_REL_NUMERIC_FIELD))) then
+    begin
+      AddBoundary(Boundaries, BoundaryCount, ASpans[I].StartIndex);
+      AddBoundary(Boundaries, BoundaryCount, ASpans[I].EndIndex);
+    end;
+
+  SortBoundaries(Boundaries, BoundaryCount);
+  for I := 0 to BoundaryCount - 2 do
+  begin
+    SegStart := Boundaries[I];
+    SegEnd := Boundaries[I + 1];
+    if SegEnd <= SegStart then
+      Continue;
+
+    Value := string(Copy(AFormatted, SegStart + 1, SegEnd - SegStart));
+    IsNumeric := HasContainingField(ASpans, UFIELD_CATEGORY_RELATIVE_DATETIME,
+      UDAT_REL_NUMERIC_FIELD, SegStart, SegEnd);
+    PartType := BestPartTypeForSegment(ASpans, UFIELD_CATEGORY_NUMBER,
+      SegStart, SegEnd, NumberFieldToPartType);
+    if (PartType = 'literal') and IsNumeric then
+      PartType := 'integer';
+    if PartType = 'sign' then
+    begin
+      if Pos('+', Value) > 0 then
+        PartType := 'plusSign'
+      else
+        PartType := 'minusSign';
+    end;
+    AppendFormatPart(AParts, PartType, Value, '');
+    if IsNumeric and (PartType <> 'literal') then
+      AParts[High(AParts)].UnitIdentifier := AUnitIdentifier;
+  end;
+
+  Result := True;
+end;
+
 procedure CollectIteratorFieldSpans(AIterator: Pointer; ACategory: Integer;
   var ASpans: TICUFieldSpanArray);
 var
@@ -1019,6 +1168,68 @@ begin
       Break;
     AppendFieldSpan(ASpans, ACategory, Field, StartIndex, EndIndex);
   end;
+end;
+
+function FormattedValueToFieldSpans(AFormattedValue: Pointer;
+  out AFormatted: string; out ASpans: TICUFieldSpanArray): Boolean;
+var
+  Status: TICUErrorCode;
+  Len, Category, Field, StartIndex, EndIndex: LongInt;
+  UText: PUChar;
+  Position: Pointer;
+begin
+  Result := False;
+  AFormatted := '';
+  SetLength(ASpans, 0);
+
+  if not Assigned(IntlFunctions.UfmtvalGetString) or
+     not Assigned(IntlFunctions.UfmtvalNextPosition) or
+     not Assigned(IntlFunctions.UcfposOpen) or
+     not Assigned(IntlFunctions.UcfposClose) or
+     not Assigned(IntlFunctions.UcfposGetCategory) or
+     not Assigned(IntlFunctions.UcfposGetField) or
+     not Assigned(IntlFunctions.UcfposGetIndexes) then
+    Exit;
+
+  Status := ICU_SUCCESS;
+  Len := 0;
+  UText := IntlFunctions.UfmtvalGetString(AFormattedValue, @Len, Status);
+  if not ICUSucceeded(Status) or not Assigned(UText) then
+    Exit;
+
+  AFormatted := UnicodePointerToString(UText, Len);
+
+  Status := ICU_SUCCESS;
+  Position := IntlFunctions.UcfposOpen(Status);
+  if not ICUSucceeded(Status) or not Assigned(Position) then
+    Exit;
+  try
+    while True do
+    begin
+      Status := ICU_SUCCESS;
+      if not IntlFunctions.UfmtvalNextPosition(AFormattedValue, Position, Status) then
+        Break;
+      if not ICUSucceeded(Status) then
+        Exit;
+
+      Status := ICU_SUCCESS;
+      Category := IntlFunctions.UcfposGetCategory(Position, Status);
+      if not ICUSucceeded(Status) then Exit;
+      Status := ICU_SUCCESS;
+      Field := IntlFunctions.UcfposGetField(Position, Status);
+      if not ICUSucceeded(Status) then Exit;
+      Status := ICU_SUCCESS;
+      StartIndex := 0;
+      EndIndex := 0;
+      IntlFunctions.UcfposGetIndexes(Position, @StartIndex, @EndIndex, Status);
+      if not ICUSucceeded(Status) then Exit;
+      AppendFieldSpan(ASpans, Category, Field, StartIndex, EndIndex);
+    end;
+  finally
+    IntlFunctions.UcfposClose(Position);
+  end;
+
+  Result := True;
 end;
 
 function FormattedValueToParts(AFormattedValue: Pointer; AFieldCategory,
@@ -2865,6 +3076,81 @@ begin
   end;
 end;
 
+function TryICUFormatListToParts(const ALocale: string;
+  const AItems: IntlTypes.TStringArray; AListType: TIntlListFormatType;
+  AListStyle: TIntlListFormatStyle; out AParts: TIntlFormatPartArray): Boolean;
+var
+  Status: TICUErrorCode;
+  Listfmt, ListResult, FormattedValue: Pointer;
+  LocaleAnsi: AnsiString;
+  UStrings: array of UnicodeString;
+  UPtrs: array of PUChar;
+  ULens: array of LongInt;
+  I: Integer;
+  Formatted: string;
+begin
+  Result := False;
+  SetLength(AParts, 0);
+
+  if not EnsureLoaded then
+    Exit;
+
+  if not Assigned(IntlFunctions.UlistfmtOpenForType) or
+     not Assigned(IntlFunctions.UlistfmtClose) or
+     not Assigned(IntlFunctions.UlistfmtOpenResult) or
+     not Assigned(IntlFunctions.UlistfmtCloseResult) or
+     not Assigned(IntlFunctions.UlistfmtFormatStringsToResult) or
+     not Assigned(IntlFunctions.UlistfmtResultAsValue) then
+    Exit;
+
+  LocaleAnsi := AnsiString(ALocale);
+  Status := ICU_SUCCESS;
+  Listfmt := IntlFunctions.UlistfmtOpenForType(PAnsiChar(LocaleAnsi),
+    ListTypeToICU(AListType), ListStyleToICU(AListStyle), Status);
+  if not ICUSucceeded(Status) or not Assigned(Listfmt) then
+    Exit;
+
+  try
+    SetLength(UStrings, Length(AItems));
+    SetLength(UPtrs, Length(AItems));
+    SetLength(ULens, Length(AItems));
+    for I := 0 to High(AItems) do
+    begin
+      UStrings[I] := UnicodeString(AItems[I]);
+      UPtrs[I] := PWideChar(UStrings[I]);
+      ULens[I] := Length(UStrings[I]);
+    end;
+
+    Status := ICU_SUCCESS;
+    ListResult := IntlFunctions.UlistfmtOpenResult(Status);
+    if not ICUSucceeded(Status) or not Assigned(ListResult) then
+      Exit;
+    try
+      Status := ICU_SUCCESS;
+      if Length(AItems) > 0 then
+        IntlFunctions.UlistfmtFormatStringsToResult(Listfmt,
+          @UPtrs[0], @ULens[0], Length(AItems), ListResult, Status)
+      else
+        IntlFunctions.UlistfmtFormatStringsToResult(Listfmt,
+          nil, nil, 0, ListResult, Status);
+      if not ICUSucceeded(Status) then
+        Exit;
+
+      Status := ICU_SUCCESS;
+      FormattedValue := IntlFunctions.UlistfmtResultAsValue(ListResult, Status);
+      if not ICUSucceeded(Status) or not Assigned(FormattedValue) then
+        Exit;
+
+      Result := FormattedValueToParts(FormattedValue, UFIELD_CATEGORY_LIST,
+        0, ListFieldToPartType, Formatted, AParts);
+    finally
+      IntlFunctions.UlistfmtCloseResult(ListResult);
+    end;
+  finally
+    IntlFunctions.UlistfmtClose(Listfmt);
+  end;
+end;
+
 function RelativeTimeUnitToICU(AUnit: TIntlRelativeTimeUnit): LongInt;
 begin
   case AUnit of
@@ -2878,6 +3164,22 @@ begin
     irtuYear: Result := UDAT_RELATIVE_YEARS;
   else
     Result := UDAT_RELATIVE_DAYS;
+  end;
+end;
+
+function RelativeTimeUnitToPartUnit(AUnit: TIntlRelativeTimeUnit): string;
+begin
+  case AUnit of
+    irtuSecond: Result := 'second';
+    irtuMinute: Result := 'minute';
+    irtuHour: Result := 'hour';
+    irtuDay: Result := 'day';
+    irtuWeek: Result := 'week';
+    irtuMonth: Result := 'month';
+    irtuQuarter: Result := 'quarter';
+    irtuYear: Result := 'year';
+  else
+    Result := 'day';
   end;
 end;
 
@@ -2902,6 +3204,9 @@ begin
      not Assigned(IntlFunctions.UreldatefmtFormatNumeric) then
     Exit;
 
+  if (ANumeric = irtnAuto) and not Assigned(IntlFunctions.UreldatefmtFormat) then
+    Exit;
+
   LocaleAnsi := AnsiString(ALocale);
   Status := ICU_SUCCESS;
   Reldatefmt := IntlFunctions.UreldatefmtOpen(PAnsiChar(LocaleAnsi),
@@ -2912,14 +3217,87 @@ begin
   try
     FillChar(Buffer, SizeOf(Buffer), 0);
     Status := ICU_SUCCESS;
-    ResultLen := IntlFunctions.UreldatefmtFormatNumeric(Reldatefmt,
-      AValue, RelativeTimeUnitToICU(AUnit),
-      @Buffer[0], FORMAT_BUFFER_CAPACITY, Status);
+    if ANumeric = irtnAuto then
+      ResultLen := IntlFunctions.UreldatefmtFormat(Reldatefmt,
+        AValue, RelativeTimeUnitToICU(AUnit),
+        @Buffer[0], FORMAT_BUFFER_CAPACITY, Status)
+    else
+      ResultLen := IntlFunctions.UreldatefmtFormatNumeric(Reldatefmt,
+        AValue, RelativeTimeUnitToICU(AUnit),
+        @Buffer[0], FORMAT_BUFFER_CAPACITY, Status);
     if not ICUSucceeded(Status) or (ResultLen <= 0) then
       Exit;
 
     AFormatted := UnicodeToString(Buffer, ResultLen);
     Result := True;
+  finally
+    IntlFunctions.UreldatefmtClose(Reldatefmt);
+  end;
+end;
+
+function TryICUFormatRelativeTimeToParts(const ALocale: string; AValue: Double;
+  AUnit: TIntlRelativeTimeUnit; ANumeric: TIntlRelativeTimeNumeric;
+  out AParts: TIntlFormatPartArray): Boolean;
+var
+  Status: TICUErrorCode;
+  Reldatefmt, RelativeResult, FormattedValue: Pointer;
+  LocaleAnsi: AnsiString;
+  Formatted: string;
+  Spans: TICUFieldSpanArray;
+begin
+  Result := False;
+  SetLength(AParts, 0);
+
+  if not EnsureLoaded then
+    Exit;
+
+  if not Assigned(IntlFunctions.UreldatefmtOpen) or
+     not Assigned(IntlFunctions.UreldatefmtClose) or
+     not Assigned(IntlFunctions.UreldatefmtOpenResult) or
+     not Assigned(IntlFunctions.UreldatefmtCloseResult) or
+     not Assigned(IntlFunctions.UreldatefmtFormatNumericToResult) or
+     not Assigned(IntlFunctions.UreldatefmtResultAsValue) then
+    Exit;
+
+  if (ANumeric = irtnAuto) and not Assigned(IntlFunctions.UreldatefmtFormatToResult) then
+    Exit;
+
+  LocaleAnsi := AnsiString(ALocale);
+  Status := ICU_SUCCESS;
+  Reldatefmt := IntlFunctions.UreldatefmtOpen(PAnsiChar(LocaleAnsi),
+    nil, URELDATEFMT_STYLE_LONG, 0, Status);
+  if not ICUSucceeded(Status) or not Assigned(Reldatefmt) then
+    Exit;
+
+  try
+    Status := ICU_SUCCESS;
+    RelativeResult := IntlFunctions.UreldatefmtOpenResult(Status);
+    if not ICUSucceeded(Status) or not Assigned(RelativeResult) then
+      Exit;
+    try
+      Status := ICU_SUCCESS;
+      if ANumeric = irtnAuto then
+        IntlFunctions.UreldatefmtFormatToResult(Reldatefmt,
+          AValue, RelativeTimeUnitToICU(AUnit), RelativeResult, Status)
+      else
+        IntlFunctions.UreldatefmtFormatNumericToResult(Reldatefmt,
+          AValue, RelativeTimeUnitToICU(AUnit), RelativeResult, Status);
+      if not ICUSucceeded(Status) then
+        Exit;
+
+      Status := ICU_SUCCESS;
+      FormattedValue := IntlFunctions.UreldatefmtResultAsValue(RelativeResult, Status);
+      if not ICUSucceeded(Status) or not Assigned(FormattedValue) then
+        Exit;
+
+      if not FormattedValueToFieldSpans(FormattedValue, Formatted, Spans) then
+        Exit;
+
+      Result := BuildRelativeTimePartsFromFieldSpans(UnicodeString(Formatted),
+        Spans, RelativeTimeUnitToPartUnit(AUnit), AParts);
+    finally
+      IntlFunctions.UreldatefmtCloseResult(RelativeResult);
+    end;
   finally
     IntlFunctions.UreldatefmtClose(Reldatefmt);
   end;

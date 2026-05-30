@@ -34,6 +34,7 @@ type
 implementation
 
 uses
+  StrUtils,
   SysUtils,
 
   IntlICU,
@@ -42,6 +43,7 @@ uses
 
   Goccia.Error.Messages,
   Goccia.Intl.CLDRData,
+  Goccia.Intl.Helpers,
   Goccia.ObjectModel.Types,
   Goccia.Realm,
   Goccia.Values.ArrayValue,
@@ -103,6 +105,62 @@ begin
     Result := irtnAlways;
 end;
 
+function TryFormatRelativeTimeAutoName(AValue: Double; const ALocale: string;
+  AUnit: TIntlRelativeTimeUnit; out AFormatted: string): Boolean;
+var
+  Offset: Integer;
+begin
+  Result := False;
+  AFormatted := '';
+  if (Copy(ALocale, 1, 2) <> 'en') or (Frac(AValue) <> 0) then
+    Exit;
+
+  Offset := Trunc(AValue);
+  if (Offset < -1) or (Offset > 1) then
+    Exit;
+
+  case AUnit of
+    irtuSecond:
+      if Offset = 0 then AFormatted := 'now';
+    irtuMinute:
+      if Offset = 0 then AFormatted := 'this minute';
+    irtuHour:
+      if Offset = 0 then AFormatted := 'this hour';
+    irtuDay:
+      case Offset of
+        -1: AFormatted := 'yesterday';
+        0: AFormatted := 'today';
+        1: AFormatted := 'tomorrow';
+      end;
+    irtuWeek:
+      case Offset of
+        -1: AFormatted := 'last week';
+        0: AFormatted := 'this week';
+        1: AFormatted := 'next week';
+      end;
+    irtuMonth:
+      case Offset of
+        -1: AFormatted := 'last month';
+        0: AFormatted := 'this month';
+        1: AFormatted := 'next month';
+      end;
+    irtuQuarter:
+      case Offset of
+        -1: AFormatted := 'last quarter';
+        0: AFormatted := 'this quarter';
+        1: AFormatted := 'next quarter';
+      end;
+    irtuYear:
+      case Offset of
+        -1: AFormatted := 'last year';
+        0: AFormatted := 'this year';
+        1: AFormatted := 'next year';
+      end;
+  end;
+
+  Result := AFormatted <> '';
+end;
+
 function FormatRelativeTimeWithCLDR(AValue: Double; const ALocale: string;
   AUnit: TIntlRelativeTimeUnit): string;
 var
@@ -139,6 +197,81 @@ begin
     Result := StringReplace(Template, '{0}', ValueStr, [])
   else
     Result := FloatToStr(AValue);
+end;
+
+function NormalizeRelativeTimeUnit(const AUnit: string): string;
+begin
+  if (AUnit = 'years') then Result := 'year'
+  else if (AUnit = 'quarters') then Result := 'quarter'
+  else if (AUnit = 'months') then Result := 'month'
+  else if (AUnit = 'weeks') then Result := 'week'
+  else if (AUnit = 'days') then Result := 'day'
+  else if (AUnit = 'hours') then Result := 'hour'
+  else if (AUnit = 'minutes') then Result := 'minute'
+  else if (AUnit = 'seconds') then Result := 'second'
+  else
+    Result := AUnit;
+end;
+
+function FormatPartsString(const AParts: TIntlFormatPartArray): string;
+var
+  I: Integer;
+begin
+  Result := '';
+  for I := 0 to Length(AParts) - 1 do
+    Result := Result + AParts[I].Value;
+end;
+
+function FormatRelativeTimePartsFallback(const AFormatted: string;
+  const ALocale: string; AValue: Double; const AUnit: string): TIntlFormatPartArray;
+var
+  NumberOptions: TIntlNumberFormatOptions;
+  NumberParts: TIntlFormatPartArray;
+  NumberText: string;
+  NumberStart, I, Index: Integer;
+
+  procedure AppendPart(const AType, AValue, AUnitIdentifier: string);
+  begin
+    if AValue = '' then Exit;
+    SetLength(Result, Length(Result) + 1);
+    Index := Length(Result) - 1;
+    Result[Index].PartType := AType;
+    Result[Index].Value := AValue;
+    Result[Index].Source := '';
+    Result[Index].UnitIdentifier := AUnitIdentifier;
+  end;
+
+begin
+  SetLength(Result, 0);
+  NumberOptions := DefaultNumberFormatOptions;
+  if not TryICUFormatNumberToParts(ALocale, Abs(AValue), NumberOptions, NumberParts) then
+  begin
+    AppendPart('literal', AFormatted, '');
+    Exit;
+  end;
+
+  NumberText := FormatPartsString(NumberParts);
+  NumberStart := PosEx(NumberText, AFormatted, 1);
+  if NumberStart = 0 then
+  begin
+    NumberOptions.UseGrouping := inugFalse;
+    if TryICUFormatNumberToParts(ALocale, Abs(AValue), NumberOptions, NumberParts) then
+    begin
+      NumberText := FormatPartsString(NumberParts);
+      NumberStart := PosEx(NumberText, AFormatted, 1);
+    end;
+  end;
+  if NumberStart = 0 then
+  begin
+    AppendPart('literal', AFormatted, '');
+    Exit;
+  end;
+
+  AppendPart('literal', Copy(AFormatted, 1, NumberStart - 1), '');
+  for I := 0 to Length(NumberParts) - 1 do
+    AppendPart(NumberParts[I].PartType, NumberParts[I].Value,
+      NormalizeRelativeTimeUnit(AUnit));
+  AppendPart('literal', Copy(AFormatted, NumberStart + Length(NumberText), MaxInt), '');
 end;
 
 { TGocciaIntlRelativeTimeFormatValue }
@@ -263,6 +396,10 @@ begin
   if TryICUFormatRelativeTime(RTF.FLocale, NumValue, UnitStringToEnum(UnitStr),
     NumericStringToEnum(RTF.FNumeric), Formatted) then
     Result := TGocciaStringLiteralValue.Create(Formatted)
+  else if (RTF.FNumeric = 'auto') and
+          TryFormatRelativeTimeAutoName(NumValue, RTF.FLocale,
+            UnitStringToEnum(UnitStr), Formatted) then
+    Result := TGocciaStringLiteralValue.Create(Formatted)
   else
     Result := TGocciaStringLiteralValue.Create(
       FormatRelativeTimeWithCLDR(NumValue, RTF.FLocale, UnitStringToEnum(UnitStr)));
@@ -273,8 +410,7 @@ var
   RTF: TGocciaIntlRelativeTimeFormatValue;
   NumValue: Double;
   UnitStr, Formatted: string;
-  Arr: TGocciaArrayValue;
-  PartObj: TGocciaObjectValue;
+  Parts: TIntlFormatPartArray;
 begin
   RTF := AsRelativeTimeFormat(AThisValue, 'Intl.RelativeTimeFormat.prototype.formatToParts');
   if AArgs.Length < 2 then
@@ -284,19 +420,22 @@ begin
   if ContainsNulCharacter(UnitStr) then
     ThrowRangeError('Invalid unit for Intl.RelativeTimeFormat: ' + UnitStr);
 
-  // Produce a single-element parts array with the formatted string
-  Arr := TGocciaArrayValue.Create;
+  if TryICUFormatRelativeTimeToParts(RTF.FLocale, NumValue, UnitStringToEnum(UnitStr),
+    NumericStringToEnum(RTF.FNumeric), Parts) then
+    Exit(FormatPartsToArray(Parts));
+
   if not TryICUFormatRelativeTime(RTF.FLocale, NumValue, UnitStringToEnum(UnitStr),
     NumericStringToEnum(RTF.FNumeric), Formatted) then
-    Formatted := FormatRelativeTimeWithCLDR(NumValue, RTF.FLocale,
-      UnitStringToEnum(UnitStr));
+  begin
+    if (RTF.FNumeric <> 'auto') or
+       not TryFormatRelativeTimeAutoName(NumValue, RTF.FLocale,
+         UnitStringToEnum(UnitStr), Formatted) then
+      Formatted := FormatRelativeTimeWithCLDR(NumValue, RTF.FLocale,
+        UnitStringToEnum(UnitStr));
+  end;
 
-  PartObj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
-  PartObj.AssignProperty('type', TGocciaStringLiteralValue.Create('literal'));
-  PartObj.AssignProperty('value', TGocciaStringLiteralValue.Create(Formatted));
-  PartObj.AssignProperty('unit', TGocciaStringLiteralValue.Create(UnitStr));
-  Arr.Elements.Add(PartObj);
-  Result := Arr;
+  Result := FormatPartsToArray(FormatRelativeTimePartsFallback(Formatted,
+    RTF.FLocale, NumValue, UnitStr));
 end;
 
 function TGocciaIntlRelativeTimeFormatValue.IntlRelativeTimeFormatResolvedOptions(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
