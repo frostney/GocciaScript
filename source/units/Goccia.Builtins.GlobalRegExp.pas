@@ -111,6 +111,20 @@ type
 
   TRegexReplacementCaptures = array of TRegexReplacementCapture;
 
+  TReplacementFragmentKind = (rfkText, rfkInputSlice);
+
+  TReplacementFragment = record
+    Kind: TReplacementFragmentKind;
+    Text: string;
+    StartIndex: Integer;
+    Count: Integer;
+  end;
+
+  TReplacementFragments = array of TReplacementFragment;
+
+const
+  INITIAL_REPLACEMENT_FRAGMENT_CAPACITY = 8;
+
 function RequireRegExpObjectReceiver(const AValue: TGocciaValue;
   const AMethodName: string): TGocciaObjectValue;
 begin
@@ -240,6 +254,174 @@ begin
   Result := '$' + AReferenceText;
 end;
 
+procedure AddReplacementByteLength(var ATotalLength: Int64;
+  const AFragment: string);
+var
+  FragmentLength: Integer;
+begin
+  FragmentLength := Length(AFragment);
+  if FragmentLength = 0 then
+    Exit;
+  if ATotalLength > MaxInt - FragmentLength then
+    ThrowRangeError(SErrorInvalidStringLength);
+  Inc(ATotalLength, FragmentLength);
+end;
+
+procedure AppendReplacementFragment(var ATarget: string;
+  const AFragment: string);
+var
+  TargetLength: Int64;
+begin
+  TargetLength := Length(ATarget);
+  AddReplacementByteLength(TargetLength, AFragment);
+  ATarget := ATarget + AFragment;
+end;
+
+function UTF16CodeUnitByteLength(const ACodeUnit: Cardinal): Integer;
+begin
+  if ACodeUnit <= $7F then
+    Result := 1
+  else if ACodeUnit <= $7FF then
+    Result := 2
+  else
+    Result := 3;
+end;
+
+function UTF16SubstringByteLength(const AText: string; const AStart,
+  ACount: Integer): Integer;
+var
+  ByteLength: Integer;
+  CodePoint: Cardinal;
+  CodeUnitIndex: Integer;
+  HighSurrogate: Cardinal;
+  Index: Integer;
+  LowSelected: Boolean;
+  LowSurrogate: Cardinal;
+  HighSelected: Boolean;
+  TargetEnd: Integer;
+  Supplementary: Cardinal;
+begin
+  Result := 0;
+  if (AStart < 0) or (ACount <= 0) then
+    Exit;
+
+  CodeUnitIndex := 0;
+  Index := 1;
+  TargetEnd := AStart + ACount;
+  while (Index <= Length(AText)) and (CodeUnitIndex < TargetEnd) do
+  begin
+    if TryReadUTF8CodePointAllowSurrogates(AText, Index, CodePoint,
+      ByteLength) then
+    begin
+      if CodePoint <= $FFFF then
+      begin
+        if (CodeUnitIndex >= AStart) and (CodeUnitIndex < TargetEnd) then
+          Inc(Result, ByteLength);
+        Inc(CodeUnitIndex);
+      end
+      else
+      begin
+        HighSelected := (CodeUnitIndex >= AStart) and
+          (CodeUnitIndex < TargetEnd);
+        LowSelected := (CodeUnitIndex + 1 >= AStart) and
+          (CodeUnitIndex + 1 < TargetEnd);
+        if HighSelected and LowSelected then
+          Inc(Result, ByteLength)
+        else
+        begin
+          Supplementary := CodePoint - $10000;
+          HighSurrogate := $D800 + (Supplementary shr 10);
+          LowSurrogate := $DC00 + (Supplementary and $3FF);
+          if HighSelected then
+            Inc(Result, UTF16CodeUnitByteLength(HighSurrogate));
+          if LowSelected then
+            Inc(Result, UTF16CodeUnitByteLength(LowSurrogate));
+        end;
+        Inc(CodeUnitIndex, 2);
+      end;
+      Inc(Index, ByteLength);
+    end
+    else
+    begin
+      if (CodeUnitIndex >= AStart) and (CodeUnitIndex < TargetEnd) then
+        Inc(Result);
+      Inc(CodeUnitIndex);
+      Inc(Index);
+    end;
+  end;
+end;
+
+procedure EnsureReplacementFragmentCapacity(
+  var AFragments: TReplacementFragments; const ARequiredCount: Integer);
+var
+  NewCapacity: Integer;
+begin
+  if Length(AFragments) >= ARequiredCount then
+    Exit;
+
+  NewCapacity := Length(AFragments);
+  if NewCapacity = 0 then
+    NewCapacity := INITIAL_REPLACEMENT_FRAGMENT_CAPACITY;
+  while NewCapacity < ARequiredCount do
+    if NewCapacity > MaxInt div 2 then
+      NewCapacity := ARequiredCount
+    else
+      NewCapacity := NewCapacity * 2;
+  SetLength(AFragments, NewCapacity);
+end;
+
+procedure AddReplacementTextFragment(var AFragments: TReplacementFragments;
+  var AFragmentCount: Integer; var ATotalLength: Int64;
+  const AText: string);
+begin
+  if AText = '' then
+    Exit;
+
+  AddReplacementByteLength(ATotalLength, AText);
+  EnsureReplacementFragmentCapacity(AFragments, AFragmentCount + 1);
+  AFragments[AFragmentCount].Kind := rfkText;
+  AFragments[AFragmentCount].Text := AText;
+  AFragments[AFragmentCount].StartIndex := 0;
+  AFragments[AFragmentCount].Count := 0;
+  Inc(AFragmentCount);
+end;
+
+procedure AddReplacementInputSliceFragment(
+  var AFragments: TReplacementFragments; var AFragmentCount: Integer;
+  var ATotalLength: Int64; const AStart, ACount: Integer;
+  const AFragmentLength: Integer);
+begin
+  if AFragmentLength = 0 then
+    Exit;
+
+  if ATotalLength > MaxInt - AFragmentLength then
+    ThrowRangeError(SErrorInvalidStringLength);
+  Inc(ATotalLength, AFragmentLength);
+  EnsureReplacementFragmentCapacity(AFragments, AFragmentCount + 1);
+  AFragments[AFragmentCount].Kind := rfkInputSlice;
+  AFragments[AFragmentCount].Text := '';
+  AFragments[AFragmentCount].StartIndex := AStart;
+  AFragments[AFragmentCount].Count := ACount;
+  Inc(AFragmentCount);
+end;
+
+function BuildReplacementFragmentsString(const AInput: string;
+  const AFragments: TReplacementFragments;
+  const AFragmentCount: Integer): string;
+var
+  I: Integer;
+begin
+  Result := '';
+  for I := 0 to AFragmentCount - 1 do
+    case AFragments[I].Kind of
+      rfkText:
+        AppendReplacementFragment(Result, AFragments[I].Text);
+      rfkInputSlice:
+        AppendReplacementFragment(Result, UTF16Substring(AInput,
+          AFragments[I].StartIndex, AFragments[I].Count));
+    end;
+end;
+
 function ExpandRegexReplacementString(const AReplaceValue: string;
   const AMatched: string; const AInput: string; const AMatchIndex: Integer;
   const ACaptures: TRegexReplacementCaptures;
@@ -253,8 +435,16 @@ var
   GroupName: string;
   MatchLength: Integer;
   GroupValue: TGocciaValue;
+  Fragments: TReplacementFragments;
+  FragmentCount: Integer;
+  PrefixByteLength: Integer;
+  SuffixByteLength: Integer;
+  TotalLength: Int64;
 begin
-  Result := '';
+  FragmentCount := 0;
+  PrefixByteLength := -1;
+  SuffixByteLength := -1;
+  TotalLength := 0;
   InputLength := UTF16CodeUnitLength(AInput);
   MatchLength := UTF16CodeUnitLength(AMatched);
   I := 1;
@@ -262,14 +452,15 @@ begin
   begin
     if AReplaceValue[I] <> '$' then
     begin
-      Result := Result + AReplaceValue[I];
+      AddReplacementTextFragment(Fragments, FragmentCount, TotalLength,
+        AReplaceValue[I]);
       Inc(I);
       Continue;
     end;
 
     if I = Length(AReplaceValue) then
     begin
-      Result := Result + '$';
+      AddReplacementTextFragment(Fragments, FragmentCount, TotalLength, '$');
       Break;
     end;
 
@@ -277,24 +468,33 @@ begin
     case NextChar of
       '$':
         begin
-          Result := Result + '$';
+          AddReplacementTextFragment(Fragments, FragmentCount, TotalLength, '$');
           Inc(I, 2);
         end;
       '&':
         begin
-          Result := Result + AMatched;
+          AddReplacementTextFragment(Fragments, FragmentCount, TotalLength,
+            AMatched);
           Inc(I, 2);
         end;
       '`':
         begin
-          Result := Result + UTF16Substring(AInput, 0, AMatchIndex);
+          if PrefixByteLength < 0 then
+            PrefixByteLength := UTF16SubstringByteLength(AInput, 0,
+              AMatchIndex);
+          AddReplacementInputSliceFragment(Fragments, FragmentCount,
+            TotalLength, 0, AMatchIndex, PrefixByteLength);
           Inc(I, 2);
         end;
       '''':
         begin
-          Result := Result + UTF16Substring(AInput,
-            AMatchIndex + MatchLength,
-            InputLength - AMatchIndex - MatchLength);
+          if SuffixByteLength < 0 then
+            SuffixByteLength := UTF16SubstringByteLength(AInput,
+              AMatchIndex + MatchLength,
+              InputLength - AMatchIndex - MatchLength);
+          AddReplacementInputSliceFragment(Fragments, FragmentCount,
+            TotalLength, AMatchIndex + MatchLength,
+            InputLength - AMatchIndex - MatchLength, SuffixByteLength);
           Inc(I, 2);
         end;
       '<':
@@ -302,22 +502,27 @@ begin
           CloseAngle := PosEx('>', AReplaceValue, I + 2);
           if CloseAngle = 0 then
           begin
-            Result := Result + '$<';
+            AddReplacementTextFragment(Fragments, FragmentCount, TotalLength,
+              '$<');
             Inc(I, 2);
           end
           else
           begin
             GroupName := Copy(AReplaceValue, I + 2, CloseAngle - I - 2);
             if not Assigned(ANamedCaptures) then
-              Result := Result + Copy(AReplaceValue, I, CloseAngle - I + 1)
+              AddReplacementTextFragment(Fragments, FragmentCount, TotalLength,
+                Copy(AReplaceValue, I, CloseAngle - I + 1))
             else
             begin
               GroupValue := ANamedCaptures.GetProperty(GroupName);
               if (GroupValue = nil) or
                  (GroupValue is TGocciaUndefinedLiteralValue) then
-                Result := Result + ''
+                AddReplacementTextFragment(Fragments, FragmentCount,
+                  TotalLength, '')
               else
-                Result := Result + GroupValue.ToStringLiteral.Value;
+                AddReplacementTextFragment(Fragments, FragmentCount,
+                  TotalLength,
+                  GroupValue.ToStringLiteral.Value);
             end;
             I := CloseAngle + 1;
           end;
@@ -334,15 +539,19 @@ begin
           else
             Inc(I, 2);
 
-          Result := Result + ExpandRegexCaptureReference(ACaptures, GroupText);
+          AddReplacementTextFragment(Fragments, FragmentCount, TotalLength,
+            ExpandRegexCaptureReference(ACaptures, GroupText));
         end;
     else
       begin
-        Result := Result + '$' + NextChar;
+        AddReplacementTextFragment(Fragments, FragmentCount, TotalLength,
+          '$' + NextChar);
         Inc(I, 2);
       end;
     end;
   end;
+
+  Result := BuildReplacementFragmentsString(AInput, Fragments, FragmentCount);
 end;
 
 constructor TGocciaGlobalRegExp.Create(const AName: string;
@@ -1099,10 +1308,10 @@ begin
 
       if Position >= NextSourcePosition then
       begin
-        AccumulatedResult := AccumulatedResult +
+        AppendReplacementFragment(AccumulatedResult,
           UTF16Substring(Input, NextSourcePosition,
-            Position - NextSourcePosition) +
-          ReplacementString;
+            Position - NextSourcePosition));
+        AppendReplacementFragment(AccumulatedResult, ReplacementString);
         NextSourcePosition := Position + MatchLength;
       end;
     end;
@@ -1110,9 +1319,12 @@ begin
     if NextSourcePosition >= UTF16CodeUnitLength(Input) then
       Result := TGocciaStringLiteralValue.Create(AccumulatedResult)
     else
-      Result := TGocciaStringLiteralValue.Create(AccumulatedResult +
+    begin
+      AppendReplacementFragment(AccumulatedResult,
         UTF16Substring(Input, NextSourcePosition,
           UTF16CodeUnitLength(Input) - NextSourcePosition));
+      Result := TGocciaStringLiteralValue.Create(AccumulatedResult);
+    end;
   finally
     for I := 0 to Results.Count - 1 do
       if Results[I] is TGocciaObjectValue then
