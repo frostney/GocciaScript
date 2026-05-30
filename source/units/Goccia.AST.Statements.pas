@@ -504,15 +504,23 @@ type
   end;
 
   TGocciaBreakStatement = class(TGocciaStatement)
+  private
+    FTargetLabel: string;
   public
-    constructor Create(const ALine, AColumn: Integer);
+    constructor Create(const ALine, AColumn: Integer;
+      const ATargetLabel: string = '');
     function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
+    property TargetLabel: string read FTargetLabel;
   end;
 
   TGocciaContinueStatement = class(TGocciaStatement)
+  private
+    FTargetLabel: string;
   public
-    constructor Create(const ALine, AColumn: Integer);
+    constructor Create(const ALine, AColumn: Integer;
+      const ATargetLabel: string = '');
     function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
+    property TargetLabel: string read FTargetLabel;
   end;
 
   TGocciaUsingDeclaration = class(TGocciaStatement)
@@ -1007,16 +1015,20 @@ end;
 
   { TGocciaBreakStatement }
 
-  constructor TGocciaBreakStatement.Create(const ALine, AColumn: Integer);
+  constructor TGocciaBreakStatement.Create(const ALine, AColumn: Integer;
+    const ATargetLabel: string);
   begin
     inherited Create(ALine, AColumn);
+    FTargetLabel := ATargetLabel;
   end;
 
   { TGocciaContinueStatement }
 
-  constructor TGocciaContinueStatement.Create(const ALine, AColumn: Integer);
+  constructor TGocciaContinueStatement.Create(const ALine, AColumn: Integer;
+    const ATargetLabel: string);
   begin
     inherited Create(ALine, AColumn);
+    FTargetLabel := ATargetLabel;
   end;
 
   { Execute / Evaluate overrides }
@@ -1220,12 +1232,12 @@ end;
 
   function TGocciaBreakStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
   begin
-    Result := TGocciaControlFlow.Break;
+    Result := TGocciaControlFlow.Break(FTargetLabel);
   end;
 
   function TGocciaContinueStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
   begin
-    Result := TGocciaControlFlow.Continue;
+    Result := TGocciaControlFlow.Continue(FTargetLabel);
   end;
 
   function TGocciaClassDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;

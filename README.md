@@ -8,7 +8,7 @@ It's based on the thought "What if we implement ECMAScript today, but without th
 
 ## Features
 
-GocciaScript implements a modern subset of ECMAScript: `let`/`const`, arrow functions, classes with private fields, `for...of`, async/await, ES modules, decorators, and TypeScript-style type annotations. Features that are error-prone, redundant, or security risks (`var`, `function` keyword, `==`/`!=`, `eval`, traditional loops) are excluded by default; selected legacy forms are available through explicit compatibility flags.
+GocciaScript implements a modern subset of ECMAScript: `let`/`const`, arrow functions, classes with private fields, `for...of`, async/await, ES modules, decorators, and TypeScript-style type annotations. Features that are error-prone, redundant, or security risks (`var`, `function` keyword, `==`/`!=`, `eval`, labels, traditional loops) are excluded by default; selected legacy forms are available through explicit compatibility flags.
 
 See [Language](docs/language.md) for the complete specification of supported features, TC39 proposals, and exclusions.
 

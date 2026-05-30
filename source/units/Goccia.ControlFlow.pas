@@ -18,15 +18,17 @@ type
   TGocciaControlFlow = record
   private
     FBits: PtrUInt;
+    FTargetLabel: string;
     function GetKind: TGocciaControlFlowKind; inline;
     function GetValue: TGocciaValue; inline;
   public
     class function Normal(const AValue: TGocciaValue): TGocciaControlFlow; static; inline;
     class function Return(const AValue: TGocciaValue): TGocciaControlFlow; static; inline;
-    class function Break: TGocciaControlFlow; static; inline;
-    class function Continue: TGocciaControlFlow; static; inline;
+    class function Break(const ATargetLabel: string = ''): TGocciaControlFlow; static; inline;
+    class function Continue(const ATargetLabel: string = ''): TGocciaControlFlow; static; inline;
     property Kind: TGocciaControlFlowKind read GetKind;
     property Value: TGocciaValue read GetValue;
+    property TargetLabel: string read FTargetLabel;
   end;
 
 implementation
@@ -44,21 +46,27 @@ end;
 class function TGocciaControlFlow.Normal(const AValue: TGocciaValue): TGocciaControlFlow;
 begin
   Result.FBits := PtrUInt(AValue);
+  Result.FTargetLabel := '';
 end;
 
 class function TGocciaControlFlow.Return(const AValue: TGocciaValue): TGocciaControlFlow;
 begin
   Result.FBits := PtrUInt(AValue) or 1;
+  Result.FTargetLabel := '';
 end;
 
-class function TGocciaControlFlow.Break: TGocciaControlFlow;
+class function TGocciaControlFlow.Break(
+  const ATargetLabel: string): TGocciaControlFlow;
 begin
   Result.FBits := 2;
+  Result.FTargetLabel := ATargetLabel;
 end;
 
-class function TGocciaControlFlow.Continue: TGocciaControlFlow;
+class function TGocciaControlFlow.Continue(
+  const ATargetLabel: string): TGocciaControlFlow;
 begin
   Result.FBits := 3;
+  Result.FTargetLabel := ATargetLabel;
 end;
 
 end.
