@@ -219,6 +219,7 @@ const
   UDAT_RELATIVE_MONTHS = 5;
   UDAT_RELATIVE_YEARS = 6;
   UDAT_RELATIVE_QUARTERS = 7;
+  UCURR_LONG_NAME = 1;
 
 type
   TICUErrorCode = LongInt;
@@ -226,6 +227,7 @@ type
   PUChar = PWideChar;
   PPUChar = ^PUChar;
   PLongInt = ^LongInt;
+  PByteBool = ^ByteBool;
 
   TUlocGetDefault = function: PAnsiChar; cdecl;
   TUlocForLanguageTag = function(const ATag: PAnsiChar; ALocaleId: PAnsiChar;
@@ -252,6 +254,9 @@ type
   TUlocGetDisplayCountry = function(const ALocaleId: PAnsiChar; const AInLocaleId: PAnsiChar;
     AResult: PUChar; AMaxResultSize: LongInt;
     var AStatus: TICUErrorCode): LongInt; cdecl;
+  TUcurrGetName = function(const ACurrency: PUChar; const ALocale: PAnsiChar;
+    ANameStyle: LongInt; AIsChoiceFormat: PByteBool; ALength: PLongInt;
+    var AStatus: TICUErrorCode): PUChar; cdecl;
   TUcolOpen = function(const ALocale: PAnsiChar;
     var AStatus: TICUErrorCode): Pointer; cdecl;
   TUcolClose = procedure(ACollator: Pointer); cdecl;
@@ -433,6 +438,7 @@ type
     UlocGetDisplayLanguage: TUlocGetDisplayLanguage;
     UlocGetDisplayScript: TUlocGetDisplayScript;
     UlocGetDisplayCountry: TUlocGetDisplayCountry;
+    UcurrGetName: TUcurrGetName;
     UcolOpen: TUcolOpen;
     UcolClose: TUcolClose;
     UcolStrcoll: TUcolStrcoll;
@@ -590,6 +596,10 @@ begin
   S := ResolveSymbol(AHandle, 'uloc_getDisplayCountry');
   if not Assigned(S) then Exit;
   F.UlocGetDisplayCountry := TUlocGetDisplayCountry(S);
+
+  S := ResolveSymbol(AHandle, 'ucurr_getName');
+  if not Assigned(S) then Exit;
+  F.UcurrGetName := TUcurrGetName(S);
 
   S := ResolveSymbol(AHandle, 'ucol_open');
   if not Assigned(S) then Exit;
@@ -2893,8 +2903,13 @@ var
   Status: TICUErrorCode;
   Buffer: array[0..DISPLAY_BUFFER_CAPACITY - 1] of WideChar;
   ResultLen: LongInt;
-  LocaleAnsi, CodeAnsi: AnsiString;
+  LocaleAnsi, CodeAnsi, LocaleIdAnsi: AnsiString;
   DisplayFn: TUlocGetDisplayName;
+  CurrencyCode: UnicodeString;
+  CurrencyName: PUChar;
+  IsChoiceFormat: ByteBool;
+  LocaleId: string;
+  CurrencyNameStyle: LongInt;
 begin
   Result := False;
   AName := '';
@@ -2904,13 +2919,51 @@ begin
 
   LocaleAnsi := AnsiString(ALocale);
   CodeAnsi := AnsiString(ACode);
+  LocaleId := '';
+
+  if ADisplayType = idntCurrency then
+  begin
+    case AStyle of
+      idnsLong, idnsShort, idnsNarrow: CurrencyNameStyle := UCURR_LONG_NAME;
+    else
+      CurrencyNameStyle := UCURR_LONG_NAME;
+    end;
+    CurrencyCode := UnicodeString(UpperCase(ACode));
+    Status := ICU_SUCCESS;
+    ResultLen := 0;
+    IsChoiceFormat := False;
+    CurrencyName := IntlFunctions.UcurrGetName(PWideChar(CurrencyCode),
+      PAnsiChar(LocaleAnsi), CurrencyNameStyle, @IsChoiceFormat, @ResultLen, Status);
+    if not ICUSucceeded(Status) or not Assigned(CurrencyName) or (ResultLen <= 0) then
+      Exit;
+
+    AName := UnicodePointerToString(CurrencyName, ResultLen);
+    if SameText(AName, string(CurrencyCode)) then
+      Exit;
+    Result := True;
+    Exit;
+  end;
 
   case ADisplayType of
     idntLanguage: DisplayFn := TUlocGetDisplayName(IntlFunctions.UlocGetDisplayLanguage);
-    idntRegion: DisplayFn := TUlocGetDisplayName(IntlFunctions.UlocGetDisplayCountry);
-    idntScript: DisplayFn := TUlocGetDisplayName(IntlFunctions.UlocGetDisplayScript);
+    idntRegion:
+      begin
+        DisplayFn := TUlocGetDisplayName(IntlFunctions.UlocGetDisplayCountry);
+        LocaleId := '_' + ACode;
+      end;
+    idntScript:
+      begin
+        DisplayFn := TUlocGetDisplayName(IntlFunctions.UlocGetDisplayScript);
+        LocaleId := '_' + ACode;
+      end;
   else
     DisplayFn := IntlFunctions.UlocGetDisplayName;
+  end;
+
+  if LocaleId <> '' then
+  begin
+    LocaleIdAnsi := AnsiString(LocaleId);
+    CodeAnsi := LocaleIdAnsi;
   end;
 
   FillChar(Buffer, SizeOf(Buffer), 0);
