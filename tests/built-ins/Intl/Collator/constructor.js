@@ -44,4 +44,9 @@ describe.runIf(isIntl)("Intl.Collator constructor", () => {
     expect(collation.locale).toBe("de-u-co-phonebk");
     expect(collation.collation).toBe("phonebk");
   });
+
+  test("ignores Unicode extension-like private-use subtags", () => {
+    const options = new Intl.Collator("de-x-u-co-phonebk").resolvedOptions();
+    expect(options.collation).toBe("default");
+  });
 });

@@ -213,21 +213,14 @@ begin
   end
   else if Key = 'collation' then
   begin
-    AddString('big5han');
     AddString('compat');
     AddString('dict');
-    AddString('direct');
-    AddString('ducet');
     AddString('emoji');
     AddString('eor');
-    AddString('gb2312');
     AddString('phonebk');
     AddString('phonetic');
     AddString('pinyin');
-    AddString('reformed');
-    AddString('search');
     AddString('searchjl');
-    AddString('standard');
     AddString('stroke');
     AddString('trad');
     AddString('unihan');
