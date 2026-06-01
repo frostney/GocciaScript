@@ -79,6 +79,11 @@ describe.runIf(isIntl)("Intl.Collator.prototype.compare", () => {
     expect(collator.compare("2", "10") < 0).toBe(true);
   });
 
+  test("numeric Unicode extension compares decimal digit sequences by numeric value", () => {
+    const collator = new Intl.Collator("en-u-kn-true");
+    expect(collator.compare("2", "10") < 0).toBe(true);
+  });
+
   test("ignored Unicode extension values do not affect comparison", () => {
     const values = ["\u212b", "\u00c5", "A\u030a", "hello"];
     const defaultCollator = new Intl.Collator();

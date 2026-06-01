@@ -20,7 +20,7 @@ function TryICUGetLocaleCollations(const ALocale: string;
 
 function TryICUCompareStrings(const ALocale: string; const AStr1, AStr2: UnicodeString;
   ASensitivity: TIntlCollatorSensitivity; AIgnorePunctuation, ANumeric: Boolean;
-  out AResult: Integer): Boolean;
+  const ACaseFirst: string; out AResult: Integer): Boolean;
 
 function TryICUFormatNumber(const ALocale: string; AValue: Double;
   const AOptions: TIntlNumberFormatOptions; out AFormatted: string): Boolean;
@@ -189,11 +189,15 @@ const
   UCOL_QUATERNARY = 3;
   UCOL_IDENTICAL = 15;
   UCOL_STRENGTH = 5;
+  UCOL_CASE_FIRST = 2;
   UCOL_CASE_LEVEL = 3;
   UCOL_ALTERNATE_HANDLING = 1;
   UCOL_NUMERIC_COLLATION = 7;
+  UCOL_OFF = 16;
   UCOL_SHIFTED = 20;
   UCOL_ON = 17;
+  UCOL_LOWER_FIRST = 24;
+  UCOL_UPPER_FIRST = 25;
   UCOL_LESS = -1;
   UCOL_EQUAL = 0;
   UCOL_GREATER = 1;
@@ -1548,7 +1552,7 @@ end;
 
 function TryICUCompareStrings(const ALocale: string; const AStr1, AStr2: UnicodeString;
   ASensitivity: TIntlCollatorSensitivity; AIgnorePunctuation, ANumeric: Boolean;
-  out AResult: Integer): Boolean;
+  const ACaseFirst: string; out AResult: Integer): Boolean;
 var
   Status: TICUErrorCode;
   Collator: Pointer;
@@ -1587,6 +1591,28 @@ begin
     begin
       Status := ICU_SUCCESS;
       IntlFunctions.UcolSetAttribute(Collator, UCOL_NUMERIC_COLLATION, UCOL_ON, Status);
+      if not ICUSucceeded(Status) then
+        Exit;
+    end;
+
+    if ACaseFirst = 'upper' then
+    begin
+      Status := ICU_SUCCESS;
+      IntlFunctions.UcolSetAttribute(Collator, UCOL_CASE_FIRST, UCOL_UPPER_FIRST, Status);
+      if not ICUSucceeded(Status) then
+        Exit;
+    end
+    else if ACaseFirst = 'lower' then
+    begin
+      Status := ICU_SUCCESS;
+      IntlFunctions.UcolSetAttribute(Collator, UCOL_CASE_FIRST, UCOL_LOWER_FIRST, Status);
+      if not ICUSucceeded(Status) then
+        Exit;
+    end
+    else if ACaseFirst = 'false' then
+    begin
+      Status := ICU_SUCCESS;
+      IntlFunctions.UcolSetAttribute(Collator, UCOL_CASE_FIRST, UCOL_OFF, Status);
       if not ICUSucceeded(Status) then
         Exit;
     end;
