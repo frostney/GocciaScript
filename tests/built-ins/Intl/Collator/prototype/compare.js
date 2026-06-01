@@ -55,4 +55,27 @@ describe.runIf(isIntl)("Intl.Collator.prototype.compare", () => {
     expect(sorted[1]).toBe("banana");
     expect(sorted[2]).toBe("cherry");
   });
+
+  test("base sensitivity ignores case and accents", () => {
+    const collator = new Intl.Collator("en", { sensitivity: "base" });
+    expect(collator.compare("a", "A")).toBe(0);
+    expect(collator.compare("a", "\u00e1")).toBe(0);
+  });
+
+  test("accent sensitivity ignores case but distinguishes accents", () => {
+    const collator = new Intl.Collator("en", { sensitivity: "accent" });
+    expect(collator.compare("a", "A")).toBe(0);
+    expect(collator.compare("a", "\u00e1") === 0).toBe(false);
+  });
+
+  test("case sensitivity ignores accents but distinguishes case", () => {
+    const collator = new Intl.Collator("en", { sensitivity: "case" });
+    expect(collator.compare("a", "\u00e1")).toBe(0);
+    expect(collator.compare("a", "A") === 0).toBe(false);
+  });
+
+  test("numeric collation compares decimal digit sequences by numeric value", () => {
+    const collator = new Intl.Collator("en", { numeric: true });
+    expect(collator.compare("2", "10") < 0).toBe(true);
+  });
 });

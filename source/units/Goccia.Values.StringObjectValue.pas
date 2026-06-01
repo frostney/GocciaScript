@@ -1951,7 +1951,7 @@ begin
     Locale := AArgs.GetElement(1).ToStringLiteral.Value;
 
   if TryICUCompareStrings(Locale, UnicodeString(StringValue),
-    UnicodeString(ThatString), icsVariant, False, ICUResult) then
+    UnicodeString(ThatString), icsVariant, False, False, ICUResult) then
     Result := TGocciaNumberLiteralValue.Create(ICUResult)
   else if StringValue < ThatString then
     Result := TGocciaNumberLiteralValue.Create(-1)

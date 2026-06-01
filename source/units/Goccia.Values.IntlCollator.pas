@@ -247,7 +247,8 @@ begin
   Str2 := UnicodeString(AArgs.GetElement(1).ToStringLiteral.Value);
 
   if TryICUCompareStrings(C.FLocale, Str1, Str2,
-    SensitivityStringToEnum(C.FSensitivity), C.FIgnorePunctuation, CompareResult) then
+    SensitivityStringToEnum(C.FSensitivity), C.FIgnorePunctuation, C.FNumeric,
+    CompareResult) then
     Result := TGocciaNumberLiteralValue.Create(CompareResult)
   else
     Result := TGocciaNumberLiteralValue.Create(CompareStr(string(Str1), string(Str2)));
