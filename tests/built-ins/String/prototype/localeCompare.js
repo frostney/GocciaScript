@@ -23,4 +23,9 @@ describe("String.prototype.localeCompare", () => {
     const result = "A".localeCompare("a");
     expect(result !== 0).toBe(true);
   });
+
+  test("uses Intl.Collator options", () => {
+    expect("A".localeCompare("a", "en", { sensitivity: "base" })).toBe(0);
+    expect("2".localeCompare("10", "en", { numeric: true }) < 0).toBe(true);
+  });
 });

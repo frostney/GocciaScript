@@ -84,6 +84,19 @@ describe("Array.prototype.sort", () => {
     expect(arr).toEqual([1, 1, 1]);
   });
 
+  test("sort is stable when comparator returns zero", () => {
+    const arr = [
+      { group: 1, id: "a" },
+      { group: 1, id: "b" },
+      { group: 0, id: "c" },
+      { group: 1, id: "d" },
+    ];
+
+    arr.sort((a, b) => a.group - b.group);
+
+    expect(arr.map((item) => item.id).join("")).toBe("cabd");
+  });
+
   test("default sort converts to string comparison", () => {
     const arr = [80, 9, 700, 40, 1, 5, 200];
     arr.sort();

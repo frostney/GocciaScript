@@ -103,6 +103,7 @@ uses
   Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
+  Goccia.Values.IntlCollator,
   Goccia.Values.Iterator.Concrete,
   Goccia.Values.Iterator.RegExp,
   Goccia.Values.ProxyValue,
@@ -1937,7 +1938,8 @@ end;
 function TGocciaStringObjectValue.StringLocaleCompare(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   StringValue, ThatString, Locale: string;
-  ICUResult: Integer;
+  Options: TGocciaObjectValue;
+  Collator: TGocciaIntlCollatorValue;
 begin
   StringValue := ExtractStringValue(AThisValue);
 
@@ -1950,15 +1952,12 @@ begin
   if (AArgs.Length > 1) and not (AArgs.GetElement(1) is TGocciaUndefinedLiteralValue) then
     Locale := AArgs.GetElement(1).ToStringLiteral.Value;
 
-  if TryICUCompareStrings(Locale, UnicodeString(StringValue),
-    UnicodeString(ThatString), icsVariant, False, False, ICUResult) then
-    Result := TGocciaNumberLiteralValue.Create(ICUResult)
-  else if StringValue < ThatString then
-    Result := TGocciaNumberLiteralValue.Create(-1)
-  else if StringValue > ThatString then
-    Result := TGocciaNumberLiteralValue.Create(1)
-  else
-    Result := TGocciaNumberLiteralValue.Create(0);
+  Options := nil;
+  if (AArgs.Length > 2) and (AArgs.GetElement(2) is TGocciaObjectValue) then
+    Options := TGocciaObjectValue(AArgs.GetElement(2));
+
+  Collator := TGocciaIntlCollatorValue.Create(Locale, Options);
+  Result := TGocciaNumberLiteralValue.Create(Collator.CompareStrings(StringValue, ThatString));
 end;
 
 // ES2026 §22.1.3.13 String.prototype.normalize([form])

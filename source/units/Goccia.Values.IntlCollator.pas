@@ -15,6 +15,7 @@ type
   TGocciaIntlCollatorValue = class(TGocciaObjectValue)
   private
     FLocale: string;
+    FICULocale: string;
     FSensitivity: string;
     FUsage: string;
     FIgnorePunctuation: Boolean;
@@ -30,6 +31,7 @@ type
     function ToStringTag: string; override;
     procedure MarkReferences; override;
     class procedure ExposePrototype(const AConstructor: TGocciaObjectValue);
+    function CompareStrings(const AString1, AString2: string): Integer;
   published
     function IntlCollatorCompareGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function IntlCollatorCompare(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -135,6 +137,7 @@ begin
     FLocale := DefaultLocale
   else
     FLocale := Canonical;
+  FICULocale := LocaleWithoutUnicodeExtension(FLocale);
 
   // Defaults
   FSensitivity := 'variant';
@@ -239,19 +242,21 @@ function TGocciaIntlCollatorValue.IntlCollatorCompare(
 var
   C: TGocciaIntlCollatorValue;
   Str1, Str2: UnicodeString;
-  CompareResult: Integer;
 begin
   C := AsCollator(AThisValue, 'Intl.Collator.prototype.compare');
   // Per ECMA-402, missing arguments are ToString-coerced (undefined -> "undefined").
   Str1 := UnicodeString(AArgs.GetElement(0).ToStringLiteral.Value);
   Str2 := UnicodeString(AArgs.GetElement(1).ToStringLiteral.Value);
 
-  if TryICUCompareStrings(C.FLocale, Str1, Str2,
-    SensitivityStringToEnum(C.FSensitivity), C.FIgnorePunctuation, C.FNumeric,
-    CompareResult) then
-    Result := TGocciaNumberLiteralValue.Create(CompareResult)
-  else
-    Result := TGocciaNumberLiteralValue.Create(CompareStr(string(Str1), string(Str2)));
+  Result := TGocciaNumberLiteralValue.Create(C.CompareStrings(string(Str1), string(Str2)));
+end;
+
+function TGocciaIntlCollatorValue.CompareStrings(const AString1, AString2: string): Integer;
+begin
+  if TryICUCompareStrings(FICULocale, UnicodeString(AString1), UnicodeString(AString2),
+    SensitivityStringToEnum(FSensitivity), FIgnorePunctuation, FNumeric, Result) then
+    Exit;
+  Result := CompareStr(AString1, AString2);
 end;
 
 function TGocciaIntlCollatorValue.IntlCollatorResolvedOptions(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;

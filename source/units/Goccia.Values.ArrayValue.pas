@@ -835,37 +835,119 @@ begin
     Result := CompResult.Value;
 end;
 
-procedure QuickSortElements(const AElements: TGocciaValueList; const ACompareFunc: TGocciaFunctionBase;
-  const ACallArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue; const ALo, AHi: Integer);
+procedure StableSortElements(const AElements: TGocciaValueList; const ACompareFunc: TGocciaFunctionBase;
+  const ACallArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue);
 var
-  I, J: Integer;
-  Pivot: TGocciaValue;
-begin
-  if ALo >= AHi then Exit;
+  Buffer: array of TGocciaValue;
 
-  Pivot := AElements[(ALo + AHi) div 2];
-  I := ALo;
-  J := AHi;
-
-  while I <= J do
+  procedure SortRange(const ALo, AHi: Integer);
+  var
+    Mid, I, J, K: Integer;
   begin
-    while CallCompareFunc(ACompareFunc, ACallArgs, AElements[I], Pivot, AThisValue) < 0 do
-      Inc(I);
-    while CallCompareFunc(ACompareFunc, ACallArgs, AElements[J], Pivot, AThisValue) > 0 do
-      Dec(J);
+    if AHi - ALo < 2 then
+      Exit;
 
-    if I <= J then
+    Mid := ALo + ((AHi - ALo) div 2);
+    SortRange(ALo, Mid);
+    SortRange(Mid, AHi);
+
+    I := ALo;
+    J := Mid;
+    K := ALo;
+    while (I < Mid) and (J < AHi) do
     begin
-      AElements.Exchange(I, J);
-      Inc(I);
-      Dec(J);
+      if CallCompareFunc(ACompareFunc, ACallArgs, AElements[I], AElements[J], AThisValue) <= 0 then
+      begin
+        Buffer[K] := AElements[I];
+        Inc(I);
+      end
+      else
+      begin
+        Buffer[K] := AElements[J];
+        Inc(J);
+      end;
+      Inc(K);
     end;
+    while I < Mid do
+    begin
+      Buffer[K] := AElements[I];
+      Inc(I);
+      Inc(K);
+    end;
+    while J < AHi do
+    begin
+      Buffer[K] := AElements[J];
+      Inc(J);
+      Inc(K);
+    end;
+
+    for K := ALo to AHi - 1 do
+      AElements[K] := Buffer[K];
   end;
 
-  if ALo < J then
-    QuickSortElements(AElements, ACompareFunc, ACallArgs, AThisValue, ALo, J);
-  if I < AHi then
-    QuickSortElements(AElements, ACompareFunc, ACallArgs, AThisValue, I, AHi);
+begin
+  if AElements.Count < 2 then
+    Exit;
+
+  SetLength(Buffer, AElements.Count);
+  SortRange(0, AElements.Count);
+end;
+
+procedure StableSortElementsDefault(const AElements: TGocciaValueList);
+var
+  Buffer: array of TGocciaValue;
+
+  procedure SortRange(const ALo, AHi: Integer);
+  var
+    Mid, I, J, K: Integer;
+  begin
+    if AHi - ALo < 2 then
+      Exit;
+
+    Mid := ALo + ((AHi - ALo) div 2);
+    SortRange(ALo, Mid);
+    SortRange(Mid, AHi);
+
+    I := ALo;
+    J := Mid;
+    K := ALo;
+    while (I < Mid) and (J < AHi) do
+    begin
+      if DefaultCompare(AElements[I], AElements[J]) <= 0 then
+      begin
+        Buffer[K] := AElements[I];
+        Inc(I);
+      end
+      else
+      begin
+        Buffer[K] := AElements[J];
+        Inc(J);
+      end;
+      Inc(K);
+    end;
+    while I < Mid do
+    begin
+      Buffer[K] := AElements[I];
+      Inc(I);
+      Inc(K);
+    end;
+    while J < AHi do
+    begin
+      Buffer[K] := AElements[J];
+      Inc(J);
+      Inc(K);
+    end;
+
+    for K := ALo to AHi - 1 do
+      AElements[K] := Buffer[K];
+  end;
+
+begin
+  if AElements.Count < 2 then
+    Exit;
+
+  SetLength(Buffer, AElements.Count);
+  SortRange(0, AElements.Count);
 end;
 
 constructor TGocciaArrayValue.Create(const AClass: TGocciaClassValue = nil;
@@ -2757,12 +2839,12 @@ begin
       begin
         CallArgs := TGocciaArgumentsCollection.Create([nil, nil]);
         try
-          QuickSortElements(ResultArray.Elements, TGocciaFunctionBase(CustomSortFunction), CallArgs, AThisValue, 0, ResultArray.Elements.Count - 1);
+          StableSortElements(ResultArray.Elements, TGocciaFunctionBase(CustomSortFunction), CallArgs, AThisValue);
         finally
           CallArgs.Free;
         end;
       end else
-        ResultArray.Elements.Sort(TComparer<TGocciaValue>.Construct(DefaultCompare));
+        StableSortElementsDefault(ResultArray.Elements);
 
       // Step 7: Return A
       Result := ResultArray;
@@ -3269,12 +3351,12 @@ begin
         CallArgs := TGocciaArgumentsCollection.Create([nil, nil]);
         try
           if TempArr.Elements.Count > 1 then
-            QuickSortElements(TempArr.Elements, TGocciaFunctionBase(CustomSortFunction), CallArgs, AThisValue, 0, TempArr.Elements.Count - 1);
+            StableSortElements(TempArr.Elements, TGocciaFunctionBase(CustomSortFunction), CallArgs, AThisValue);
         finally
           CallArgs.Free;
         end;
       end else if TempArr.Elements.Count > 1 then
-        TempArr.Elements.Sort(TComparer<TGocciaValue>.Construct(DefaultCompare));
+        StableSortElementsDefault(TempArr.Elements);
 
       // Write sorted elements back to front indices
       for I := 0 to TempArr.Elements.Count - 1 do

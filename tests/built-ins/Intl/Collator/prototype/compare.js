@@ -78,4 +78,15 @@ describe.runIf(isIntl)("Intl.Collator.prototype.compare", () => {
     const collator = new Intl.Collator("en", { numeric: true });
     expect(collator.compare("2", "10") < 0).toBe(true);
   });
+
+  test("ignored Unicode extension values do not affect comparison", () => {
+    const values = ["\u212b", "\u00c5", "A\u030a", "hello"];
+    const defaultCollator = new Intl.Collator();
+    const locale = defaultCollator.resolvedOptions().locale;
+    const ignoredExtensionCollator = new Intl.Collator(locale + "-u-co-search");
+
+    expect(values.slice().sort(ignoredExtensionCollator.compare).join("|")).toBe(
+      values.slice().sort(defaultCollator.compare).join("|"),
+    );
+  });
 });
