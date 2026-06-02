@@ -76,6 +76,8 @@ describe("class length property", () => {
     expect(Boolean.length).toBe(1);
     expect(ArrayBuffer.length).toBe(1);
     expect(SharedArrayBuffer.length).toBe(1);
+    expect(WeakRef.length).toBe(1);
+    expect(FinalizationRegistry.length).toBe(1);
     // WHATWG: URL(url, base?) — required url means length 1.
     expect(URL.length).toBe(1);
     // Fetch: Response constructor reports 1 in WPT/V8.

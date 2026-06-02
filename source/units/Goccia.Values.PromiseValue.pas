@@ -366,6 +366,8 @@ begin
       FAlreadyResolved := False;
       ResolveFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(DoResolve, 'resolve', 1);
       RejectFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(DoReject, 'reject', 1);
+      ResolveFn.CapturedRoot := Self;
+      RejectFn.CapturedRoot := Self;
       ThenArgs := TGocciaArgumentsCollection.Create([ResolveFn, RejectFn]);
       GC := TGarbageCollector.Instance;
       try

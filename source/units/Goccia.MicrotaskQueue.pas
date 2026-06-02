@@ -22,7 +22,14 @@ type
   TGocciaMicrotaskQueue = class
   private
     FQueue: TList<TGocciaMicrotask>;
+    FFinalizationQueue: TList<TGocciaMicrotask>;
     FHead: Integer;
+    FFinalizationHead: Integer;
+    procedure AddQueuedRoots(const AMicrotask: TGocciaMicrotask);
+    procedure RemoveQueuedRoots(const AMicrotask: TGocciaMicrotask);
+    procedure ExecuteTask(const ATask: TGocciaMicrotask);
+    procedure CompactQueueIfEmpty;
+    procedure CompactFinalizationQueueIfEmpty;
   public
     class function Instance: TGocciaMicrotaskQueue;
     class procedure Initialize;
@@ -32,6 +39,7 @@ type
     destructor Destroy; override;
 
     procedure Enqueue(const AMicrotask: TGocciaMicrotask);
+    procedure EnqueueFinalizationCleanup(const AMicrotask: TGocciaMicrotask);
     procedure DrainQueue;
     procedure ClearQueue;
     function HasPending: Boolean;
@@ -73,26 +81,155 @@ end;
 constructor TGocciaMicrotaskQueue.Create;
 begin
   FQueue := TList<TGocciaMicrotask>.Create;
+  FFinalizationQueue := TList<TGocciaMicrotask>.Create;
   FHead := 0;
+  FFinalizationHead := 0;
 end;
 
 destructor TGocciaMicrotaskQueue.Destroy;
 begin
+  FFinalizationQueue.Free;
   FQueue.Free;
   inherited;
 end;
 
 procedure TGocciaMicrotaskQueue.Enqueue(const AMicrotask: TGocciaMicrotask);
 begin
+  AddQueuedRoots(AMicrotask);
   FQueue.Add(AMicrotask);
+end;
+
+procedure TGocciaMicrotaskQueue.EnqueueFinalizationCleanup(
+  const AMicrotask: TGocciaMicrotask);
+begin
+  AddQueuedRoots(AMicrotask);
+  FFinalizationQueue.Add(AMicrotask);
+end;
+
+procedure TGocciaMicrotaskQueue.AddQueuedRoots(
+  const AMicrotask: TGocciaMicrotask);
+var
+  GC: TGarbageCollector;
+begin
+  GC := TGarbageCollector.Instance;
+  if not Assigned(GC) then
+    Exit;
+  if Assigned(AMicrotask.Handler) then
+    GC.AddQueuedRoot(AMicrotask.Handler);
+  if Assigned(AMicrotask.Value) then
+    GC.AddQueuedRoot(AMicrotask.Value);
+  if Assigned(AMicrotask.ResultPromise) then
+    GC.AddQueuedRoot(AMicrotask.ResultPromise);
+end;
+
+procedure TGocciaMicrotaskQueue.RemoveQueuedRoots(
+  const AMicrotask: TGocciaMicrotask);
+var
+  GC: TGarbageCollector;
+begin
+  GC := TGarbageCollector.Instance;
+  if not Assigned(GC) then
+    Exit;
+  if Assigned(AMicrotask.Handler) then
+    GC.RemoveQueuedRoot(AMicrotask.Handler);
+  if Assigned(AMicrotask.Value) then
+    GC.RemoveQueuedRoot(AMicrotask.Value);
+  if Assigned(AMicrotask.ResultPromise) then
+    GC.RemoveQueuedRoot(AMicrotask.ResultPromise);
+end;
+
+procedure TGocciaMicrotaskQueue.ExecuteTask(
+  const ATask: TGocciaMicrotask);
+var
+  Promise: TGocciaPromiseValue;
+  HandlerResult: TGocciaValue;
+  CallArgs: TGocciaArgumentsCollection;
+begin
+  Promise := TGocciaPromiseValue(ATask.ResultPromise);
+
+  if Assigned(TGarbageCollector.Instance) then
+  begin
+    if Assigned(ATask.Handler) then
+      TGarbageCollector.Instance.AddTempRoot(ATask.Handler);
+    if Assigned(ATask.Value) then
+      TGarbageCollector.Instance.AddTempRoot(ATask.Value);
+    if Assigned(Promise) then
+      TGarbageCollector.Instance.AddTempRoot(Promise);
+  end;
+
+  try
+    if Assigned(ATask.Handler) and ATask.Handler.IsCallable then
+    begin
+      CallArgs := TGocciaArgumentsCollection.Create([ATask.Value]);
+      try
+        try
+          HandlerResult := TGocciaFunctionBase(ATask.Handler).Call(
+            CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+          if Assigned(Promise) then
+            Promise.Resolve(HandlerResult);
+        except
+          on E: EGocciaBytecodeThrow do
+            if Assigned(Promise) then
+              Promise.Reject(E.ThrownValue)
+            else
+              raise;
+          on E: TGocciaThrowValue do
+            if Assigned(Promise) then
+              Promise.Reject(E.Value)
+            else
+              raise;
+        end;
+      finally
+        CallArgs.Free;
+      end;
+    end
+    else
+    begin
+      if Assigned(Promise) then
+      begin
+        case ATask.ReactionType of
+          prtFulfill: Promise.Resolve(ATask.Value);
+          prtReject: Promise.Reject(ATask.Value);
+          prtThenableResolve:
+            if ATask.Value is TGocciaPromiseValue then
+              Promise.SubscribeTo(TGocciaPromiseValue(ATask.Value));
+        end;
+      end;
+    end;
+  finally
+    if Assigned(TGarbageCollector.Instance) then
+    begin
+      if Assigned(ATask.Handler) then
+        TGarbageCollector.Instance.RemoveTempRoot(ATask.Handler);
+      if Assigned(ATask.Value) then
+        TGarbageCollector.Instance.RemoveTempRoot(ATask.Value);
+      if Assigned(Promise) then
+        TGarbageCollector.Instance.RemoveTempRoot(Promise);
+    end;
+  end;
+end;
+
+procedure TGocciaMicrotaskQueue.CompactQueueIfEmpty;
+begin
+  if FHead >= FQueue.Count then
+  begin
+    FQueue.Clear;
+    FHead := 0;
+  end;
+end;
+
+procedure TGocciaMicrotaskQueue.CompactFinalizationQueueIfEmpty;
+begin
+  if FFinalizationHead >= FFinalizationQueue.Count then
+  begin
+    FFinalizationQueue.Clear;
+    FFinalizationHead := 0;
+  end;
 end;
 
 procedure TGocciaMicrotaskQueue.DrainQueue;
 var
   Task: TGocciaMicrotask;
-  Promise: TGocciaPromiseValue;
-  HandlerResult: TGocciaValue;
-  CallArgs: TGocciaArgumentsCollection;
 begin
   // Advance the head index BEFORE running each task so that recursive
   // DrainQueue calls (e.g. when a handler awaits a settled promise, which
@@ -109,75 +246,39 @@ begin
   // microtask bursts (Promise-heavy fan-outs, await-loops in async iterators).
   // Once FHead catches up to Count we compact by clearing the underlying list
   // so the buffer does not grow unboundedly across drains.
-  while FHead < FQueue.Count do
+  while (FHead < FQueue.Count) or
+        (FFinalizationHead < FFinalizationQueue.Count) do
   begin
-    CheckExecutionTimeout;
-    CheckInstructionLimit;
-    Task := FQueue[FHead];
-    Inc(FHead);
-
-    Promise := TGocciaPromiseValue(Task.ResultPromise);
-
-    if Assigned(TGarbageCollector.Instance) then
+    while FHead < FQueue.Count do
     begin
-      if Assigned(Task.Handler) then
-        TGarbageCollector.Instance.AddTempRoot(Task.Handler);
-      if Assigned(Task.Value) then
-        TGarbageCollector.Instance.AddTempRoot(Task.Value);
-      if Assigned(Promise) then
-        TGarbageCollector.Instance.AddTempRoot(Promise);
+      CheckExecutionTimeout;
+      CheckInstructionLimit;
+      Task := FQueue[FHead];
+      Inc(FHead);
+      try
+        ExecuteTask(Task);
+      finally
+        RemoveQueuedRoots(Task);
+        if Assigned(TGarbageCollector.Instance) then
+          TGarbageCollector.Instance.ClearKeptObjects;
+      end;
     end;
+    CompactQueueIfEmpty;
 
-    try
-      if Assigned(Task.Handler) and Task.Handler.IsCallable then
-      begin
-        CallArgs := TGocciaArgumentsCollection.Create([Task.Value]);
-        try
-          try
-            HandlerResult := TGocciaFunctionBase(Task.Handler).Call(
-              CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
-            if Assigned(Promise) then
-              Promise.Resolve(HandlerResult);
-          except
-            on E: EGocciaBytecodeThrow do
-              if Assigned(Promise) then
-                Promise.Reject(E.ThrownValue);
-            on E: TGocciaThrowValue do
-              if Assigned(Promise) then
-                Promise.Reject(E.Value);
-              // TODO: Per HTML spec, queueMicrotask callback errors should be
-              // "reported" (Node.js: uncaughtException, browsers: global error
-              // event). Currently silently discarded because GocciaScript has no
-              // process-level error reporting. Add reporting when/if an error
-              // event mechanism is implemented.
-          end;
-        finally
-          CallArgs.Free;
-        end;
-      end
-      else
-      begin
-        if Assigned(Promise) then
-        begin
-          case Task.ReactionType of
-            prtFulfill: Promise.Resolve(Task.Value);
-            prtReject: Promise.Reject(Task.Value);
-            prtThenableResolve:
-              if Task.Value is TGocciaPromiseValue then
-                Promise.SubscribeTo(TGocciaPromiseValue(Task.Value));
-          end;
-        end;
+    if FFinalizationHead < FFinalizationQueue.Count then
+    begin
+      CheckExecutionTimeout;
+      CheckInstructionLimit;
+      Task := FFinalizationQueue[FFinalizationHead];
+      Inc(FFinalizationHead);
+      try
+        ExecuteTask(Task);
+      finally
+        RemoveQueuedRoots(Task);
+        if Assigned(TGarbageCollector.Instance) then
+          TGarbageCollector.Instance.ClearKeptObjects;
       end;
-    finally
-      if Assigned(TGarbageCollector.Instance) then
-      begin
-        if Assigned(Task.Handler) then
-          TGarbageCollector.Instance.RemoveTempRoot(Task.Handler);
-        if Assigned(Task.Value) then
-          TGarbageCollector.Instance.RemoveTempRoot(Task.Value);
-        if Assigned(Promise) then
-          TGarbageCollector.Instance.RemoveTempRoot(Promise);
-      end;
+      CompactFinalizationQueueIfEmpty;
     end;
   end;
 
@@ -186,10 +287,7 @@ begin
   // the underlying TList<TGocciaMicrotask> array) any longer than necessary
   // and so FHead/Count cannot drift unbounded across many drains.
   if FHead >= FQueue.Count then
-  begin
-    FQueue.Clear;
-    FHead := 0;
-  end;
+    CompactQueueIfEmpty;
 end;
 
 procedure TGocciaMicrotaskQueue.ClearQueue;
@@ -197,20 +295,26 @@ var
   I: Integer;
   Task: TGocciaMicrotask;
 begin
-  if Assigned(TGarbageCollector.Instance) then
-    for I := FHead to FQueue.Count - 1 do
-    begin
-      Task := FQueue[I];
-      if Assigned(Task.Handler) then
-        TGarbageCollector.Instance.RemoveTempRoot(Task.Handler);
-    end;
+  for I := FHead to FQueue.Count - 1 do
+  begin
+    Task := FQueue[I];
+    RemoveQueuedRoots(Task);
+  end;
+  for I := FFinalizationHead to FFinalizationQueue.Count - 1 do
+  begin
+    Task := FFinalizationQueue[I];
+    RemoveQueuedRoots(Task);
+  end;
   FQueue.Clear;
+  FFinalizationQueue.Clear;
   FHead := 0;
+  FFinalizationHead := 0;
 end;
 
 function TGocciaMicrotaskQueue.HasPending: Boolean;
 begin
-  Result := FHead < FQueue.Count;
+  Result := (FHead < FQueue.Count) or
+    (FFinalizationHead < FFinalizationQueue.Count);
 end;
 
 end.

@@ -645,6 +645,14 @@ Get existing value or insert a default/computed value: `map.getOrInsert(key, def
 
 WeakMap also implements the ES2026 upsert methods: `weakMap.getOrInsert(key, default)` and `weakMap.getOrInsertComputed(key, callbackFn)`. WeakMap keys must be objects or non-registered symbols.
 
+### WeakRef and FinalizationRegistry (ES2021)
+
+Weak references and finalization registries are supported for objects and non-registered symbols, matching the existing weak-key domain used by WeakMap and WeakSet. Primitives and `Symbol.for()` registry symbols are rejected because they cannot be held weakly.
+
+`new WeakRef(target)` creates a weak reference. `weakRef.deref()` returns the target while it is still live and returns `undefined` after the target has been collected. Both construction and `deref()` add the target to the current job's kept-objects set, so repeated `deref()` calls in the same job are stable.
+
+`new FinalizationRegistry(cleanupCallback)` creates a registry. `registry.register(target, heldValue, unregisterToken?)` registers a weak target and held value, and `registry.unregister(unregisterToken)` removes matching registrations. Explicit `Goccia.gc()` performs collection and enqueues cleanup jobs; cleanup callbacks run through the runtime's idle checkpoint after the normal microtask queue, not synchronously inside `Goccia.gc()`. Cleanup callback errors are surfaced as uncaught host callback errors.
+
 ### Error.isError (ES2026)
 
 Reliable brand check for error objects: `Error.isError(value)`. See [ES2026 §20.5.3.2](https://tc39.es/ecma262/#sec-error.iserror).
@@ -856,12 +864,6 @@ When enabled, labels can target `break` and `continue` statements in interpreter
 ### Generators and Iterators
 
 Generator method shorthand (`*method()` and `async *method()`) is supported by default. Generator function syntax (`function*` and `async function*`) is supported only when `--compat-function` is enabled. Iterator protocol and Iterator Helpers are also implemented.
-
-### Deferred Built-ins
-
-The following standard ECMAScript built-ins are **not yet implemented** and may be added in future versions:
-
-- **WeakRef / FinalizationRegistry** — Weak references and finalizers. Deferred until demand warrants the additional cleanup scheduling complexity.
 
 ## Intentional Divergences from ECMAScript
 

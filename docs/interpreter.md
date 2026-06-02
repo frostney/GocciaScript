@@ -171,11 +171,11 @@ This follows the ECMAScript specification's microtask ordering semantics. Thenab
 
 For fetch-backed Promises, these integration points also pump fetch completions before treating a pending Promise as permanently unsettled.
 
-**`queueMicrotask`:** The global `queueMicrotask(callback)` function enqueues a user-provided callback into the same microtask queue used by Promise reactions. This matches the [HTML spec](https://html.spec.whatwg.org/multipage/timers-and-user-prompts.html#microtask-queuing). If a `queueMicrotask` callback throws, the error is silently discarded and the queue keeps draining — remaining microtasks and Promise reactions still run. This matches the observable behavior in Node.js/browsers where uncaught microtask errors don't prevent other microtasks from executing.
+**`queueMicrotask`:** The global `queueMicrotask(callback)` function enqueues a user-provided callback into the same microtask queue used by Promise reactions. This matches the [HTML spec](https://html.spec.whatwg.org/multipage/timers-and-user-prompts.html#microtask-queuing). If a `queueMicrotask` callback throws, the error is surfaced as an uncaught host callback error instead of being converted into a Promise rejection. Promise reaction handler errors still reject their result promises.
 
 **Error safety:** `TGocciaEngine.Execute` wraps the whole source pipeline and execution path in a `try..finally` that calls `ClearQueue` and discards pending fetch completions. If the interpreter throws, stale microtasks and fetch callbacks are discarded rather than leaking into subsequent executions; outstanding fetch workers are detached so cleanup does not wait on network I/O that can no longer affect the script. Lower-level callers that bypass `Execute` and call `ExecuteProgram` directly still get the idle drain, but they own any surrounding runtime cleanup.
 
-**GC safety:** During `DrainQueue`, each microtask's handler, value, and result promise are temp-rooted to prevent collection mid-callback.
+**GC safety:** During `DrainQueue`, each microtask's handler, value, and result promise are temp-rooted to prevent collection mid-callback. Queued microtasks and FinalizationRegistry cleanup jobs are also registered as queued GC roots until they run.
 
 ## Related documents
 
