@@ -32,6 +32,12 @@ test("Array.prototype.toSorted with custom sort function", () => {
   expect(sorted2).toEqual([1, 2, 3, 4, 5]);
 });
 
+test("toSorted moves undefined after defined values", () => {
+  const arr = [undefined, "z", "a"];
+  expect(arr.toSorted()).toEqual(["a", "z", undefined]);
+  expect(arr.toSorted(() => -1)[2]).toBe(undefined);
+});
+
 test("toSorted returns a new array, not the original", () => {
   const arr = [3, 1, 2];
   const sorted = arr.toSorted();
