@@ -90,6 +90,7 @@ uses
   SysUtils,
 
   IntlICU,
+  IntlLocaleResolver,
   IntlTypes,
   TextSemantics,
 
@@ -107,7 +108,8 @@ uses
   Goccia.Values.Iterator.Concrete,
   Goccia.Values.Iterator.RegExp,
   Goccia.Values.ProxyValue,
-  Goccia.Values.SymbolValue;
+  Goccia.Values.SymbolValue,
+  Goccia.Values.ToObject;
 
 // String.prototype lives in a per-realm slot.  Method host and member
 // definitions stay process-wide (immutable across realms).
@@ -124,6 +126,57 @@ begin
     Result := TGocciaObjectValue(CurrentRealm.GetSlot(GStringPrototypeSlot))
   else
     Result := nil;
+end;
+
+function LocaleCompareArgumentToLocale(const AArg: TGocciaValue): string;
+var
+  Element: TGocciaValue;
+  Tag, Canonical: string;
+  FirstUnicodeExtension, SecondUnicodeExtension: Integer;
+  LowerTag, Tail: string;
+begin
+  Result := '';
+  if (AArg is TGocciaUndefinedLiteralValue) or (AArg = nil) then
+    Exit;
+
+  if AArg is TGocciaStringLiteralValue then
+    Tag := TGocciaStringLiteralValue(AArg).Value
+  else if AArg is TGocciaArrayValue then
+  begin
+    if TGocciaArrayValue(AArg).GetLength = 0 then
+      Exit;
+    Element := TGocciaArrayValue(AArg).GetElement(0);
+    if Element is TGocciaStringLiteralValue then
+      Tag := TGocciaStringLiteralValue(Element).Value
+    else if Element is TGocciaObjectValue then
+      Tag := Element.ToStringLiteral.Value
+    else
+      ThrowTypeError('locales array elements must be strings or objects');
+  end
+  else if AArg is TGocciaObjectValue then
+    Tag := AArg.ToStringLiteral.Value
+  else
+    ThrowTypeError('locales argument must be a string, object, array, or undefined');
+
+  Canonical := CanonicalizeUnicodeLocaleId(Tag);
+  if Canonical = '' then
+  begin
+    LowerTag := LowerCase(Tag);
+    FirstUnicodeExtension := Pos('-u-', LowerTag);
+    if FirstUnicodeExtension <> 0 then
+    begin
+      Tail := Copy(LowerTag, FirstUnicodeExtension + 3, MaxInt);
+      SecondUnicodeExtension := Pos('-u-', Tail);
+      if SecondUnicodeExtension <> 0 then
+      begin
+        SecondUnicodeExtension := FirstUnicodeExtension + 3 + SecondUnicodeExtension - 1;
+        Canonical := CanonicalizeUnicodeLocaleId(Copy(Tag, 1, SecondUnicodeExtension - 1));
+      end;
+    end;
+    if Canonical = '' then
+      ThrowRangeError(Format('invalid language tag: %s', [Tag]));
+  end;
+  Result := Tag;
 end;
 
 { TGocciaStringObjectValue }
@@ -1950,11 +2003,11 @@ begin
 
   Locale := '';
   if (AArgs.Length > 1) and not (AArgs.GetElement(1) is TGocciaUndefinedLiteralValue) then
-    Locale := AArgs.GetElement(1).ToStringLiteral.Value;
+    Locale := LocaleCompareArgumentToLocale(AArgs.GetElement(1));
 
   Options := nil;
-  if (AArgs.Length > 2) and (AArgs.GetElement(2) is TGocciaObjectValue) then
-    Options := TGocciaObjectValue(AArgs.GetElement(2));
+  if (AArgs.Length > 2) and not (AArgs.GetElement(2) is TGocciaUndefinedLiteralValue) then
+    Options := ToObject(AArgs.GetElement(2));
 
   Collator := TGocciaIntlCollatorValue.Create(Locale, Options);
   Result := TGocciaNumberLiteralValue.Create(Collator.CompareStrings(StringValue, ThatString));

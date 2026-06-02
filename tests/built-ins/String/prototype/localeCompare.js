@@ -28,4 +28,16 @@ describe("String.prototype.localeCompare", () => {
     expect("A".localeCompare("a", "en", { sensitivity: "base" })).toBe(0);
     expect("2".localeCompare("10", "en", { numeric: true }) < 0).toBe(true);
   });
+
+  test("object-coerces non-undefined options", () => {
+    expect(() => "a".localeCompare("b", "en", null)).toThrow(TypeError);
+    expect(typeof "a".localeCompare("b", "en", true)).toBe("number");
+  });
+
+  test("rejects invalid locale arguments", () => {
+    expect(() => "a".localeCompare("b", null)).toThrow(TypeError);
+    expect(() => "a".localeCompare("b", [NaN])).toThrow(TypeError);
+    expect(() => "a".localeCompare("b", ["i"])).toThrow(RangeError);
+    expect(() => "a".localeCompare("b", ["de_DE"])).toThrow(RangeError);
+  });
 });

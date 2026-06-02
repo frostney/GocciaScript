@@ -128,6 +128,34 @@ begin
   Result := (AValue = 'upper') or (AValue = 'lower') or (AValue = 'false');
 end;
 
+procedure ValidateStringOptionValue(const AValue, AName: string; const AAllowed: array of string);
+var
+  I: Integer;
+begin
+  for I := Low(AAllowed) to High(AAllowed) do
+  begin
+    if AValue = AAllowed[I] then
+      Exit;
+  end;
+  ThrowRangeError(Format(SErrorIntlInvalidOption, [AValue, AName]));
+end;
+
+function ReadCollatorStringOption(const AOptions: TGocciaObjectValue;
+  const AName: string; var AValue: string; const AAllowed: array of string): Boolean;
+var
+  S: string;
+begin
+  Result := False;
+  if TryReadStringOption(AOptions, AName, S) then
+  begin
+    if ContainsNulCharacter(S) then
+      ThrowRangeError(Format(SErrorIntlInvalidOption, [S, AName]));
+    ValidateStringOptionValue(S, AName, AAllowed);
+    AValue := S;
+    Result := True;
+  end;
+end;
+
 function NormalizeCollationValue(const AValue: string): string;
 begin
   if AValue = 'phonebook' then
@@ -471,8 +499,9 @@ begin
 
   if Assigned(AOptions) then
   begin
-    ReadValidatedStringOption(AOptions, 'sensitivity', FSensitivity);
-    ReadValidatedStringOption(AOptions, 'usage', FUsage);
+    ReadCollatorStringOption(AOptions, 'sensitivity', FSensitivity,
+      ['base', 'accent', 'case', 'variant']);
+    ReadCollatorStringOption(AOptions, 'usage', FUsage, ['sort', 'search']);
     V := AOptions.GetProperty('ignorePunctuation');
     if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
       FIgnorePunctuation := V.ToBooleanLiteral.Value;
@@ -487,13 +516,15 @@ begin
     begin
       if ContainsNulCharacter(Ignored) then
         ThrowRangeError(Format(SErrorIntlInvalidOption, [Ignored, 'caseFirst']));
+      if not IsValidCaseFirstValue(Ignored) then
+        ThrowRangeError(Format(SErrorIntlInvalidOption, [Ignored, 'caseFirst']));
       FCaseFirst := Ignored;
     end;
     CollationOptionPresent := TryReadStringOption(AOptions, 'collation', CollationOption);
     CollationOption := NormalizeCollationValue(CollationOption);
     if CollationOptionPresent and IsSupportedCollationValue(FLocale, CollationOption) then
       FCollation := CollationOption;
-    ReadValidatedStringOption(AOptions, 'localeMatcher', Ignored);
+    ReadCollatorStringOption(AOptions, 'localeMatcher', Ignored, ['lookup', 'best fit']);
   end;
 
   if NumericOptionPresent and TryGetUnicodeExtensionKey(FLocale, 'kn', LocaleNumeric) then

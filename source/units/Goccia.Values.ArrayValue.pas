@@ -464,6 +464,15 @@ function DefaultCompare(constref A, B: TGocciaValue): Integer;
 var
   StrA, StrB: string;
 begin
+  if A is TGocciaUndefinedLiteralValue then
+  begin
+    if B is TGocciaUndefinedLiteralValue then
+      Exit(0);
+    Exit(1);
+  end;
+  if B is TGocciaUndefinedLiteralValue then
+    Exit(-1);
+
   StrA := A.ToStringLiteral.Value;
   StrB := B.ToStringLiteral.Value;
   if StrA < StrB then
@@ -801,6 +810,15 @@ var
   PreviousContinuation: TGocciaGeneratorContinuation;
   CompareRoot, AValueRoot, BValueRoot, ThisRoot: TGocciaTempRoot;
 begin
+  if A is TGocciaUndefinedLiteralValue then
+  begin
+    if B is TGocciaUndefinedLiteralValue then
+      Exit(0);
+    Exit(1);
+  end;
+  if B is TGocciaUndefinedLiteralValue then
+    Exit(-1);
+
   ACallArgs.SetElement(0, A);
   ACallArgs.SetElement(1, B);
   InitializeTempRoot(CompareRoot);

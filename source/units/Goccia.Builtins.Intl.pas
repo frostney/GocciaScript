@@ -75,7 +75,8 @@ uses
   Goccia.Values.IntlSegmenter,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
-  Goccia.Values.SymbolValue;
+  Goccia.Values.SymbolValue,
+  Goccia.Values.ToObject;
 
 { TGocciaIntlBuiltin }
 
@@ -704,6 +705,57 @@ end;
 
 { Collator }
 
+function CollatorLocaleArgumentToLocale(const AArg: TGocciaValue): string;
+var
+  Element: TGocciaValue;
+  Tag, Canonical: string;
+  FirstUnicodeExtension, SecondUnicodeExtension: Integer;
+  LowerTag, Tail: string;
+begin
+  Result := '';
+  if (AArg is TGocciaUndefinedLiteralValue) or (AArg = nil) then
+    Exit;
+
+  if AArg is TGocciaStringLiteralValue then
+    Tag := TGocciaStringLiteralValue(AArg).Value
+  else if AArg is TGocciaArrayValue then
+  begin
+    if TGocciaArrayValue(AArg).GetLength = 0 then
+      Exit;
+    Element := TGocciaArrayValue(AArg).GetElement(0);
+    if Element is TGocciaStringLiteralValue then
+      Tag := TGocciaStringLiteralValue(Element).Value
+    else if Element is TGocciaObjectValue then
+      Tag := Element.ToStringLiteral.Value
+    else
+      ThrowTypeError('locales array elements must be strings or objects');
+  end
+  else if AArg is TGocciaObjectValue then
+    Tag := AArg.ToStringLiteral.Value
+  else
+    ThrowTypeError('locales argument must be a string, object, array, or undefined');
+
+  Canonical := CanonicalizeUnicodeLocaleId(Tag);
+  if Canonical = '' then
+  begin
+    LowerTag := LowerCase(Tag);
+    FirstUnicodeExtension := Pos('-u-', LowerTag);
+    if FirstUnicodeExtension <> 0 then
+    begin
+      Tail := Copy(LowerTag, FirstUnicodeExtension + 3, MaxInt);
+      SecondUnicodeExtension := Pos('-u-', Tail);
+      if SecondUnicodeExtension <> 0 then
+      begin
+        SecondUnicodeExtension := FirstUnicodeExtension + 3 + SecondUnicodeExtension - 1;
+        Canonical := CanonicalizeUnicodeLocaleId(Copy(Tag, 1, SecondUnicodeExtension - 1));
+      end;
+    end;
+    if Canonical = '' then
+      ThrowRangeError(Format('invalid language tag: %s', [Tag]));
+  end;
+  Result := Tag;
+end;
+
 function TGocciaIntlBuiltin.CollatorConstructorFn(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
@@ -712,10 +764,10 @@ var
 begin
   Locale := '';
   if AArgs.Length >= 1 then
-    Locale := AArgs.GetElement(0).ToStringLiteral.Value;
+    Locale := CollatorLocaleArgumentToLocale(AArgs.GetElement(0));
   Options := nil;
-  if (AArgs.Length >= 2) and (AArgs.GetElement(1) is TGocciaObjectValue) then
-    Options := TGocciaObjectValue(AArgs.GetElement(1));
+  if (AArgs.Length >= 2) and not (AArgs.GetElement(1) is TGocciaUndefinedLiteralValue) then
+    Options := ToObject(AArgs.GetElement(1));
   Result := TGocciaIntlCollatorValue.Create(Locale, Options);
 end;
 

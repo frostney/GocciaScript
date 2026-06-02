@@ -16,6 +16,18 @@ describe.runIf(isIntl)("Intl.Collator constructor", () => {
     expect(collator).toBeInstanceOf(Intl.Collator);
   });
 
+  test("creates an instance with an array locale argument", () => {
+    const collator = new Intl.Collator(["en-US"]);
+    expect(collator).toBeInstanceOf(Intl.Collator);
+  });
+
+  test("rejects invalid locale arguments", () => {
+    expect(() => new Intl.Collator(null)).toThrow(TypeError);
+    expect(() => new Intl.Collator([NaN])).toThrow(TypeError);
+    expect(() => new Intl.Collator(["i"])).toThrow(RangeError);
+    expect(() => new Intl.Collator(["de_DE"])).toThrow(RangeError);
+  });
+
   test("compare property is a function", () => {
     const collator = new Intl.Collator();
     expect(typeof collator.compare).toBe("function");
@@ -48,5 +60,20 @@ describe.runIf(isIntl)("Intl.Collator constructor", () => {
   test("ignores Unicode extension-like private-use subtags", () => {
     const options = new Intl.Collator("de-x-u-co-phonebk").resolvedOptions();
     expect(options.collation).toBe("default");
+  });
+
+  test("rejects invalid caseFirst option values", () => {
+    expect(() => new Intl.Collator("en", { caseFirst: "invalid" })).toThrow(RangeError);
+  });
+
+  test("rejects invalid string option values", () => {
+    expect(() => new Intl.Collator("en", { usage: "invalid" })).toThrow(RangeError);
+    expect(() => new Intl.Collator("en", { sensitivity: "invalid" })).toThrow(RangeError);
+    expect(() => new Intl.Collator("en", { localeMatcher: "invalid" })).toThrow(RangeError);
+  });
+
+  test("object-coerces non-undefined options", () => {
+    expect(() => new Intl.Collator("en", null)).toThrow(TypeError);
+    expect(new Intl.Collator("en", true)).toBeInstanceOf(Intl.Collator);
   });
 });

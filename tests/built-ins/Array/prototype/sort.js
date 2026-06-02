@@ -103,6 +103,20 @@ describe("Array.prototype.sort", () => {
     expect(arr).toEqual([1, 200, 40, 5, 700, 80, 9]);
   });
 
+  test("sort moves undefined after defined values", () => {
+    const arr = [undefined, "z", "a"];
+    arr.sort();
+    expect(arr[0]).toBe("a");
+    expect(arr[1]).toBe("z");
+    expect(arr[2]).toBe(undefined);
+  });
+
+  test("sort moves undefined after defined values with comparator", () => {
+    const arr = [undefined, "z", "a"];
+    arr.sort(() => -1);
+    expect(arr[2]).toBe(undefined);
+  });
+
   test("sort moves holes to end in sparse array", () => {
     const arr = [3, , 1];
     arr.sort();
