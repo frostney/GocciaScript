@@ -28,6 +28,8 @@ procedure ReadValidatedStringOption(const AOptions: TGocciaObjectValue;
 function LocaleWithoutUnicodeExtension(const ALocale: string): string;
 function TryGetUnicodeLocaleExtensionKeyword(const ALocale, AKey: string;
   out AValue: string): Boolean;
+function RemoveUnicodeLocaleExtensionKeyword(const ALocale, AKey: string): string;
+function AddUnicodeLocaleExtensionKeyword(const ALocale, AKey, AValue: string): string;
 function IsSupportedNumberingSystem(const AValue: string): Boolean;
 
 implementation
@@ -87,49 +89,227 @@ begin
   end;
 end;
 
+function FindSingletonExtensionStart(const ALocale, ASingleton: string; out AStart: Integer): Boolean;
+var
+  Index, NextDash, SubtagStart: Integer;
+  Subtag, SingletonLower: string;
+begin
+  Result := False;
+  AStart := 0;
+  SingletonLower := LowerCase(ASingleton);
+  Index := 1;
+  while Index <= Length(ALocale) do
+  begin
+    SubtagStart := Index;
+    NextDash := Pos('-', Copy(ALocale, Index, MaxInt));
+    if NextDash = 0 then
+      NextDash := Length(ALocale) + 1
+    else
+      NextDash := Index + NextDash - 1;
+    Subtag := LowerCase(Copy(ALocale, Index, NextDash - Index));
+
+    if Length(Subtag) = 1 then
+    begin
+      if Subtag = SingletonLower then
+      begin
+        AStart := SubtagStart - 1;
+        Result := True;
+        Exit;
+      end;
+      if Subtag = 'x' then
+        Exit;
+    end;
+
+    Index := NextDash + 1;
+  end;
+end;
+
+function FindUnicodeExtensionRangeFrom(const ALocale: string; ASearchStart: Integer;
+  out AStart, AEnd: Integer): Boolean;
+var
+  Index, NextDash, SubtagStart: Integer;
+  Subtag: string;
+begin
+  Result := False;
+  AStart := 0;
+  AEnd := 0;
+  Index := ASearchStart;
+  if Index < 1 then
+    Index := 1;
+  while Index <= Length(ALocale) do
+  begin
+    SubtagStart := Index;
+    NextDash := Pos('-', Copy(ALocale, Index, MaxInt));
+    if NextDash = 0 then
+      NextDash := Length(ALocale) + 1
+    else
+      NextDash := Index + NextDash - 1;
+    Subtag := LowerCase(Copy(ALocale, Index, NextDash - Index));
+
+    if Length(Subtag) = 1 then
+    begin
+      if Subtag = 'x' then
+        Exit;
+      if Subtag = 'u' then
+      begin
+        AStart := SubtagStart - 1;
+        AEnd := Length(ALocale) + 1;
+        Index := NextDash + 1;
+        while Index <= Length(ALocale) do
+        begin
+          SubtagStart := Index;
+          NextDash := Pos('-', Copy(ALocale, Index, MaxInt));
+          if NextDash = 0 then
+            NextDash := Length(ALocale) + 1
+          else
+            NextDash := Index + NextDash - 1;
+          Subtag := LowerCase(Copy(ALocale, Index, NextDash - Index));
+          if Length(Subtag) = 1 then
+          begin
+            AEnd := SubtagStart - 1;
+            Break;
+          end;
+          Index := NextDash + 1;
+        end;
+        Result := True;
+        Exit;
+      end;
+    end;
+
+    Index := NextDash + 1;
+  end;
+end;
+
+function FindUnicodeExtensionRange(const ALocale: string; out AStart, AEnd: Integer): Boolean;
+begin
+  Result := FindUnicodeExtensionRangeFrom(ALocale, 1, AStart, AEnd);
+end;
+
 function LocaleWithoutUnicodeExtension(const ALocale: string): string;
 var
-  ExtensionStart: Integer;
+  ExtensionStart, ExtensionEnd: Integer;
 begin
-  ExtensionStart := Pos('-u-', ALocale);
-  if ExtensionStart = 0 then
-    Result := ALocale
+  if FindUnicodeExtensionRange(ALocale, ExtensionStart, ExtensionEnd) then
+    Result := Copy(ALocale, 1, ExtensionStart - 1) + Copy(ALocale, ExtensionEnd, MaxInt)
   else
-    Result := Copy(ALocale, 1, ExtensionStart - 1);
+    Result := ALocale;
 end;
 
 function TryGetUnicodeLocaleExtensionKeyword(const ALocale, AKey: string;
   out AValue: string): Boolean;
 var
-  ExtensionStart, Index, NextDash: Integer;
-  Tail, Subtag: string;
+  SearchStart, ExtensionStart, ExtensionEnd, Index, NextDash: Integer;
+  Tail, Subtag, KeyLower: string;
 begin
   Result := False;
   AValue := '';
-  ExtensionStart := Pos('-u-', ALocale);
-  if ExtensionStart = 0 then
-    Exit;
+  KeyLower := LowerCase(AKey);
+  SearchStart := 1;
+  while FindUnicodeExtensionRangeFrom(ALocale, SearchStart, ExtensionStart, ExtensionEnd) do
+  begin
+    Tail := Copy(ALocale, ExtensionStart + 3, ExtensionEnd - ExtensionStart - 3);
+    Index := 1;
+    while Index <= Length(Tail) do
+    begin
+      NextDash := Pos('-', Copy(Tail, Index, MaxInt));
+      if NextDash = 0 then
+        NextDash := Length(Tail) + 1
+      else
+        NextDash := Index + NextDash - 1;
+      Subtag := LowerCase(Copy(Tail, Index, NextDash - Index));
+      Index := NextDash + 1;
 
-  Tail := Copy(ALocale, ExtensionStart + 3, MaxInt);
+      if Length(Subtag) <> 2 then
+        Continue;
+
+      if Subtag = KeyLower then
+      begin
+        Result := True;
+        while Index <= Length(Tail) do
+        begin
+          NextDash := Pos('-', Copy(Tail, Index, MaxInt));
+          if NextDash = 0 then
+            NextDash := Length(Tail) + 1
+          else
+            NextDash := Index + NextDash - 1;
+          Subtag := LowerCase(Copy(Tail, Index, NextDash - Index));
+          if Length(Subtag) = 2 then
+            Exit;
+          if AValue = '' then
+            AValue := Subtag
+          else
+            AValue := AValue + '-' + Subtag;
+          Index := NextDash + 1;
+        end;
+        Exit;
+      end;
+    end;
+
+    SearchStart := ExtensionEnd + 1;
+  end;
+end;
+
+function RemoveUnicodeLocaleExtensionKeyword(const ALocale, AKey: string): string;
+var
+  ExtensionStart, ExtensionEnd, Index, NextDash: Integer;
+  Base, Tail, Suffix, Subtag, KeyLower, NewTail: string;
+  Removing: Boolean;
+begin
+  KeyLower := LowerCase(AKey);
+  if not FindUnicodeExtensionRange(ALocale, ExtensionStart, ExtensionEnd) then
+  begin
+    Result := ALocale;
+    Exit;
+  end;
+
+  Base := Copy(ALocale, 1, ExtensionStart - 1);
+  Tail := Copy(ALocale, ExtensionStart + 3, ExtensionEnd - ExtensionStart - 3);
+  Suffix := Copy(ALocale, ExtensionEnd, MaxInt);
+  NewTail := '';
+  Removing := False;
   Index := 1;
   while Index <= Length(Tail) do
   begin
-    NextDash := PosEx('-', Tail, Index);
+    NextDash := Pos('-', Copy(Tail, Index, MaxInt));
     if NextDash = 0 then
-      NextDash := Length(Tail) + 1;
+      NextDash := Length(Tail) + 1
+    else
+      NextDash := Index + NextDash - 1;
     Subtag := Copy(Tail, Index, NextDash - Index);
     Index := NextDash + 1;
 
-    if SameText(Subtag, AKey) then
-    begin
-      NextDash := PosEx('-', Tail, Index);
-      if NextDash = 0 then
-        NextDash := Length(Tail) + 1;
-      AValue := Copy(Tail, Index, NextDash - Index);
-      Result := AValue <> '';
-      Exit;
-    end;
+    if Length(Subtag) = 2 then
+      Removing := LowerCase(Subtag) = KeyLower;
+    if Removing then
+      Continue;
+    if NewTail <> '' then
+      NewTail := NewTail + '-';
+    NewTail := NewTail + Subtag;
   end;
+
+  if NewTail = '' then
+    Result := Base + Suffix
+  else
+    Result := Base + '-u-' + NewTail + Suffix;
+end;
+
+function AddUnicodeLocaleExtensionKeyword(const ALocale, AKey, AValue: string): string;
+var
+  ExtensionStart, ExtensionEnd, PrivateUseStart: Integer;
+  Addition: string;
+begin
+  Addition := AKey;
+  if AValue <> '' then
+    Addition := Addition + '-' + AValue;
+
+  if FindUnicodeExtensionRange(ALocale, ExtensionStart, ExtensionEnd) then
+    Result := Copy(ALocale, 1, ExtensionEnd - 1) + '-' + Addition +
+      Copy(ALocale, ExtensionEnd, MaxInt)
+  else if FindSingletonExtensionStart(ALocale, 'x', PrivateUseStart) then
+    Result := Copy(ALocale, 1, PrivateUseStart - 1) + '-u-' + Addition +
+      Copy(ALocale, PrivateUseStart, MaxInt)
+  else
+    Result := ALocale + '-u-' + Addition;
 end;
 
 function IsSupportedNumberingSystem(const AValue: string): Boolean;

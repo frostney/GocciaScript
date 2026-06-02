@@ -122,55 +122,6 @@ begin
   end;
 end;
 
-function TryGetUnicodeExtensionKeyword(const AParsed: TBcp47Tag;
-  const AKey: string; out AValue: string): Boolean;
-var
-  ExtensionIndex, PartIndex, ValueStart, ValueEnd: Integer;
-  Parts: IntlTypes.TStringArray;
-begin
-  Result := False;
-  AValue := '';
-
-  for ExtensionIndex := 0 to High(AParsed.Extensions) do
-  begin
-    if AParsed.Extensions[ExtensionIndex].Singleton <> 'u' then
-      Continue;
-
-    Parts := SplitSubtags(AParsed.Extensions[ExtensionIndex].Value);
-    PartIndex := 0;
-    while PartIndex <= High(Parts) do
-    begin
-      if Length(Parts[PartIndex]) = 2 then
-      begin
-        ValueStart := PartIndex + 1;
-        ValueEnd := ValueStart;
-        while (ValueEnd <= High(Parts)) and (Length(Parts[ValueEnd]) <> 2) do
-          Inc(ValueEnd);
-
-        if Parts[PartIndex] = AKey then
-        begin
-          if ValueEnd > ValueStart then
-          begin
-            AValue := Parts[ValueStart];
-            Inc(ValueStart);
-            while ValueStart < ValueEnd do
-            begin
-              AValue := AValue + '-' + Parts[ValueStart];
-              Inc(ValueStart);
-            end;
-          end;
-          Result := AValue <> '';
-          Exit;
-        end;
-
-        PartIndex := ValueEnd;
-      end
-      else
-        Inc(PartIndex);
-    end;
-  end;
-end;
-
 function NormalizeCalendarType(const AValue: string): string;
 begin
   if AValue = 'gregorian' then
@@ -277,7 +228,7 @@ begin
 end;
 
 procedure SetUnicodeExtensionKeyword(var AParsed: TBcp47Tag;
-  const AKey, AValue: string);
+  const AKey, AValue: string; const AIncludeEmptyValue: Boolean = False);
 var
   ExtensionIndex, PartIndex, ValueIndex, ValueEnd: Integer;
   Parts: IntlTypes.TStringArray;
@@ -308,7 +259,7 @@ begin
         if Parts[PartIndex] = AKey then
         begin
           Found := True;
-          if AValue <> '' then
+          if (AValue <> '') or AIncludeEmptyValue then
           begin
             AppendSubtag(NewValue, AKey);
             AppendSubtag(NewValue, AValue);
@@ -330,7 +281,7 @@ begin
       end;
     end;
 
-    if (not Found) and (AValue <> '') then
+    if (not Found) and ((AValue <> '') or AIncludeEmptyValue) then
     begin
       AppendSubtag(NewValue, AKey);
       AppendSubtag(NewValue, AValue);
@@ -340,11 +291,14 @@ begin
     Exit;
   end;
 
-  if (not HasUnicodeExtension) and (AValue <> '') then
+  if (not HasUnicodeExtension) and ((AValue <> '') or AIncludeEmptyValue) then
   begin
     SetLength(AParsed.Extensions, Length(AParsed.Extensions) + 1);
     AParsed.Extensions[High(AParsed.Extensions)].Singleton := 'u';
-    AParsed.Extensions[High(AParsed.Extensions)].Value := AKey + '-' + AValue;
+    AParsed.Extensions[High(AParsed.Extensions)].Value := AKey;
+    if AValue <> '' then
+      AParsed.Extensions[High(AParsed.Extensions)].Value :=
+        AParsed.Extensions[High(AParsed.Extensions)].Value + '-' + AValue;
   end;
 end;
 
@@ -433,7 +387,11 @@ var
   V: TGocciaValue;
   Parsed, BaseParsed: TBcp47Tag;
   ExtensionValue, FirstDayOption: string;
+  CaseFirstExtensionPresent, NumericExtensionPresent, NumericOptionPresent: Boolean;
 begin
+  CaseFirstExtensionPresent := False;
+  NumericExtensionPresent := False;
+  NumericOptionPresent := False;
   if ContainsNulCharacter(ATag) then
     ThrowRangeError('Invalid language tag: ' + ATag);
   Canonical := CanonicalizeUnicodeLocaleId(ATag);
@@ -455,16 +413,26 @@ begin
     FScript := Parsed.Script;
     FRegion := Parsed.Region;
 
-    if TryGetUnicodeExtensionKeyword(Parsed, 'ca', ExtensionValue) then
+    if TryGetUnicodeLocaleExtensionKeyword(Canonical, 'ca', ExtensionValue) then
       FCalendar := NormalizeCalendarType(ExtensionValue);
-    if TryGetUnicodeExtensionKeyword(Parsed, 'co', ExtensionValue) then
+    if TryGetUnicodeLocaleExtensionKeyword(Canonical, 'co', ExtensionValue) then
       FCollation := NormalizeCollationType(ExtensionValue);
-    if TryGetUnicodeExtensionKeyword(Parsed, 'hc', ExtensionValue) then
+    if TryGetUnicodeLocaleExtensionKeyword(Canonical, 'hc', ExtensionValue) then
       FHourCycle := ExtensionValue;
-    if TryGetUnicodeExtensionKeyword(Parsed, 'nu', ExtensionValue) then
+    if TryGetUnicodeLocaleExtensionKeyword(Canonical, 'nu', ExtensionValue) then
       FNumberingSystem := ExtensionValue;
-    if TryGetUnicodeExtensionKeyword(Parsed, 'fw', ExtensionValue) then
+    if TryGetUnicodeLocaleExtensionKeyword(Canonical, 'fw', ExtensionValue) then
       FFirstDayOfWeek := DayIdentifierToNumber(ExtensionValue);
+    if TryGetUnicodeLocaleExtensionKeyword(Canonical, 'kf', ExtensionValue) then
+    begin
+      CaseFirstExtensionPresent := True;
+      FCaseFirst := ExtensionValue;
+    end;
+    if TryGetUnicodeLocaleExtensionKeyword(Canonical, 'kn', ExtensionValue) then
+    begin
+      NumericExtensionPresent := True;
+      FNumeric := ExtensionValue <> 'false';
+    end;
   end
   else
   begin
@@ -498,7 +466,10 @@ begin
     end;
     V := AOptions.GetProperty('numeric');
     if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
+    begin
+      NumericOptionPresent := True;
       FNumeric := V.ToBooleanLiteral.Value;
+    end;
   end;
 
   if Parsed.IsValid then
@@ -511,6 +482,11 @@ begin
     SetUnicodeExtensionKeyword(Parsed, 'hc', FHourCycle);
     SetUnicodeExtensionKeyword(Parsed, 'nu', FNumberingSystem);
     SetUnicodeExtensionKeyword(Parsed, 'fw', DayNumberToIdentifier(FFirstDayOfWeek));
+    SetUnicodeExtensionKeyword(Parsed, 'kf', FCaseFirst, CaseFirstExtensionPresent);
+    if FNumeric then
+      SetUnicodeExtensionKeyword(Parsed, 'kn', '', True)
+    else if NumericExtensionPresent or NumericOptionPresent then
+      SetUnicodeExtensionKeyword(Parsed, 'kn', 'false');
     RemoveEmptyExtensions(Parsed);
 
     Canonical := CanonicalizeBcp47Tag(Parsed);
