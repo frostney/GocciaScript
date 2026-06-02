@@ -31,6 +31,21 @@ describe("Array.prototype.toLocaleString", () => {
   test("throws when an element toLocaleString is not callable", () => {
     expect(() => [{ toLocaleString: 1 }].toLocaleString()).toThrow(TypeError);
   });
+
+  test("does not delegate to mutable Array helpers", () => {
+    const originalFrom = Array.from;
+    const originalJoin = Array.prototype.join;
+
+    try {
+      Array.from = () => ["tainted"];
+      Array.prototype.join = () => "tainted";
+
+      expect([1, 2].toLocaleString()).toBe("1,2");
+    } finally {
+      Array.from = originalFrom;
+      Array.prototype.join = originalJoin;
+    }
+  });
 });
 
 describe.runIf(isIntl)("Array.prototype.toLocaleString Intl elements", () => {

@@ -195,7 +195,7 @@ const
         '        const array: any = Object(this);'#10 +
         '        const length: number = Number(array.length);'#10 +
         '        const len: number = !Number.isFinite(length) || length <= 0 ? 0 : Math.trunc(length);'#10 +
-        '        return Array.from({ length: len }, (_: any, index: number): string => {'#10 +
+        '        const elementString = (index: number): string => {'#10 +
         '          const nextElement: any = array[index];'#10 +
         '          if (nextElement !== undefined && nextElement !== null) {'#10 +
         '            const method: any = Object(nextElement).toLocaleString;'#10 +
@@ -204,7 +204,9 @@ const
         '            return String(method.call(nextElement, args[0], args[1]));'#10 +
         '          }'#10 +
         '          return "";'#10 +
-        '        }).join(",");'#10 +
+        '        };'#10 +
+        '        const build = (index: number, result: string): string => index >= len ? result : build(index + 1, result + (index > 0 ? "," : "") + elementString(index));'#10 +
+        '        return build(0, "");'#10 +
         '      }'#10 +
         '    }.toLocaleString;'#10 +
         '    Object.defineProperty(Number.prototype, "toLocaleString", { value: numberLocale, writable: true, configurable: true });'#10 +
@@ -290,18 +292,21 @@ const
         '    return out;'#10 +
         '  }'#10 +
         '  toLocaleString(...args: any[]): string {'#10 +
-        '    if (!(this instanceof Date)) throw new TypeError("Date.prototype.toLocaleString called on non-Date");'#10 +
-        '    if (!this.#valid()) return "Invalid Date";'#10 +
+        '    let valid: boolean;'#10 +
+        '    try { valid = this.#valid(); } catch (e) { throw new TypeError("Date.prototype.toLocaleString called on non-Date"); }'#10 +
+        '    if (!valid) return "Invalid Date";'#10 +
         '    return new __GocciaShimDateTimeFormat(args[0], this.#localeOptions(args[1], true, true)).format(this.#ms);'#10 +
         '  }'#10 +
         '  toLocaleDateString(...args: any[]): string {'#10 +
-        '    if (!(this instanceof Date)) throw new TypeError("Date.prototype.toLocaleDateString called on non-Date");'#10 +
-        '    if (!this.#valid()) return "Invalid Date";'#10 +
+        '    let valid: boolean;'#10 +
+        '    try { valid = this.#valid(); } catch (e) { throw new TypeError("Date.prototype.toLocaleDateString called on non-Date"); }'#10 +
+        '    if (!valid) return "Invalid Date";'#10 +
         '    return new __GocciaShimDateTimeFormat(args[0], this.#localeOptions(args[1], true, false)).format(this.#ms);'#10 +
         '  }'#10 +
         '  toLocaleTimeString(...args: any[]): string {'#10 +
-        '    if (!(this instanceof Date)) throw new TypeError("Date.prototype.toLocaleTimeString called on non-Date");'#10 +
-        '    if (!this.#valid()) return "Invalid Date";'#10 +
+        '    let valid: boolean;'#10 +
+        '    try { valid = this.#valid(); } catch (e) { throw new TypeError("Date.prototype.toLocaleTimeString called on non-Date"); }'#10 +
+        '    if (!valid) return "Invalid Date";'#10 +
         '    return new __GocciaShimDateTimeFormat(args[0], this.#localeOptions(args[1], false, true)).format(this.#ms);'#10 +
         '  }'#10 +
         '};'

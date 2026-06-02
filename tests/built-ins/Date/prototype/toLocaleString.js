@@ -27,4 +27,10 @@ describe.runIf(isIntl)("Date.prototype.toLocaleString", () => {
 
     expect(date.toLocaleString("en-US", options)).toBe(new Intl.DateTimeFormat("en-US", options).format(date));
   });
+
+  test("throws TypeError for fake Date receiver", () => {
+    const fakeDate = Object.create(Date.prototype);
+
+    expect(() => Date.prototype.toLocaleString.call(fakeDate)).toThrow(TypeError);
+  });
 });
