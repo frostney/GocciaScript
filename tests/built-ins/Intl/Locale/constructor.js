@@ -26,6 +26,45 @@ describe.runIf(isIntl && typeof Intl.Locale !== "undefined")("Intl.Locale constr
     expect(locale.toString()).toBe("en-US");
   });
 
+  test("parses Unicode extension keywords into properties", () => {
+    const locale = new Intl.Locale("en-US-u-nu-latn-ca-gregory-co-phonebk-hc-h24-kf-upper-kn");
+    expect(locale.calendar).toBe("gregory");
+    expect(locale.numberingSystem).toBe("latn");
+    expect(locale.collation).toBe("phonebk");
+    expect(locale.hourCycle).toBe("h24");
+    expect(locale.caseFirst).toBe("upper");
+    expect(locale.numeric).toBe(true);
+    expect(locale.baseName).toBe("en-US");
+  });
+
+  test("constructor options override Unicode extension keywords", () => {
+    const locale = new Intl.Locale("en-u-kf-upper-kn", {
+      caseFirst: "lower",
+      numeric: false,
+    });
+    expect(locale.caseFirst).toBe("lower");
+    expect(locale.numeric).toBe(false);
+    expect(locale.toString()).toBe("en-u-kf-lower-kn-false");
+  });
+
+  test("numeric Unicode extension canonicalizes true to a keyword", () => {
+    const locale = new Intl.Locale("en-u-kn-true");
+    expect(locale.numeric).toBe(true);
+    expect(locale.toString()).toBe("en-u-kn");
+  });
+
+  test("preserves empty caseFirst Unicode extension keyword", () => {
+    const locale = new Intl.Locale("de-u-kf");
+    expect(locale.toString()).toBe("de-u-kf");
+    expect(locale.maximize().toString()).toBe("de-Latn-DE-u-kf");
+  });
+
+  test("baseName strips all extensions and private use subtags", () => {
+    const locale = new Intl.Locale("en-US-a-foo-u-ca-gregory-x-bar");
+    expect(locale.baseName).toBe("en-US");
+    expect(locale.calendar).toBe("gregory");
+  });
+
   test("script property returns the script subtag when present", () => {
     const locale = new Intl.Locale("zh-Hant-TW");
     expect(locale.script).toBe("Hant");
