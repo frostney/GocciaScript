@@ -4319,6 +4319,7 @@ var
   BodyStmt: TGocciaStatement;
   TargetExpr: TGocciaExpression;
   SavedCurrent: Integer;
+  AfterLeftParen: Integer;
   Token: TGocciaToken;
 begin
   Line := Previous.Line;
@@ -4343,6 +4344,7 @@ begin
   if Check(gttLeftParen) then
   begin
     Advance; // consume '('
+    AfterLeftParen := FCurrent;
 
     // Check for const/let/var binding
     if Check(gttConst) or Check(gttLet) or (FVarDeclarationsEnabled and Check(gttVar)) then
@@ -4463,6 +4465,11 @@ begin
     end
     else if not Check(gttSemicolon) then
     begin
+      FCurrent := SavedCurrent;
+      if FTraditionalForLoopsEnabled and LooksLikeTraditionalForHeader then
+        Exit(ParseTraditionalForBody(Line, Column));
+      FCurrent := AfterLeftParen;
+
       TargetExpr := Call;
       if Check(gttIn) then
       begin
