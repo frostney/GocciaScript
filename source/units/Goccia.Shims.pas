@@ -180,7 +180,36 @@ const
         '    return Math.trunc(epochMilliseconds);'#10 +
         '  } catch (e) { return NaN; }'#10 +
         '};'#10 +
+        'const __GocciaShimNumberFormat: any = Intl.NumberFormat;'#10 +
+        'const __GocciaShimDateTimeFormat: any = Intl.DateTimeFormat;'#10 +
         'export const Date = class Date {'#10 +
+        '  static {'#10 +
+        '    const numberLocale = {'#10 +
+        '      toLocaleString(...args: any[]): string {'#10 +
+        '        const value: number = Number.prototype.valueOf.call(this);'#10 +
+        '        return new __GocciaShimNumberFormat(args[0], args[1]).format(value);'#10 +
+        '      }'#10 +
+        '    }.toLocaleString;'#10 +
+        '    const arrayLocale = {'#10 +
+        '      toLocaleString(...args: any[]): string {'#10 +
+        '        const array: any = Object(this);'#10 +
+        '        const length: number = Number(array.length);'#10 +
+        '        const len: number = !Number.isFinite(length) || length <= 0 ? 0 : Math.trunc(length);'#10 +
+        '        return Array.from({ length: len }, (_: any, index: number): string => {'#10 +
+        '          const nextElement: any = array[index];'#10 +
+        '          if (nextElement !== undefined && nextElement !== null) {'#10 +
+        '            const method: any = Object(nextElement).toLocaleString;'#10 +
+        '            if (typeof method !== "function")'#10 +
+        '              throw new TypeError("Array.prototype.toLocaleString element toLocaleString is not a function");'#10 +
+        '            return String(method.call(nextElement, args[0], args[1]));'#10 +
+        '          }'#10 +
+        '          return "";'#10 +
+        '        }).join(",");'#10 +
+        '      }'#10 +
+        '    }.toLocaleString;'#10 +
+        '    Object.defineProperty(Number.prototype, "toLocaleString", { value: numberLocale, writable: true, configurable: true });'#10 +
+        '    Object.defineProperty(Array.prototype, "toLocaleString", { value: arrayLocale, writable: true, configurable: true });'#10 +
+        '  }'#10 +
         '  #ms;'#10 +
         '  static now(): number { return Temporal.Now.instant().epochMilliseconds; }'#10 +
         '  static parse(str: string): number {'#10 +
@@ -243,6 +272,37 @@ const
         '    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];'#10 +
         '    return days[z.dayOfWeek % 7] + " " + months[z.month - 1] + " " + pad(z.day) + " " +'#10 +
         '      String(z.year) + " " + pad(z.hour) + ":" + pad(z.minute) + ":" + pad(z.second) + " GMT" + z.offset;'#10 +
+        '  }'#10 +
+        '  #localeOptions(options: any, needDate: boolean, needTime: boolean): any {'#10 +
+        '    const out: any = {};'#10 +
+        '    if (options !== undefined) {'#10 +
+        '      ["localeMatcher", "calendar", "numberingSystem", "timeZone", "hour12", "hourCycle", "formatMatcher",'#10 +
+        '       "weekday", "era", "year", "month", "day", "dayPeriod", "hour", "minute", "second",'#10 +
+        '       "fractionalSecondDigits", "timeZoneName", "dateStyle", "timeStyle"].forEach((key: string): void => {'#10 +
+        '        const value: any = options[key];'#10 +
+        '        if (value !== undefined) out[key] = value;'#10 +
+        '      });'#10 +
+        '    }'#10 +
+        '    const hasDate = out.weekday !== undefined || out.year !== undefined || out.month !== undefined || out.day !== undefined || out.dateStyle !== undefined;'#10 +
+        '    const hasTime = out.dayPeriod !== undefined || out.hour !== undefined || out.minute !== undefined || out.second !== undefined || out.fractionalSecondDigits !== undefined || out.timeStyle !== undefined;'#10 +
+        '    if (needDate && !hasDate) { out.year = "numeric"; out.month = "numeric"; out.day = "numeric"; }'#10 +
+        '    if (needTime && !hasTime) { out.hour = "numeric"; out.minute = "numeric"; out.second = "numeric"; }'#10 +
+        '    return out;'#10 +
+        '  }'#10 +
+        '  toLocaleString(...args: any[]): string {'#10 +
+        '    if (!(this instanceof Date)) throw new TypeError("Date.prototype.toLocaleString called on non-Date");'#10 +
+        '    if (!this.#valid()) return "Invalid Date";'#10 +
+        '    return new __GocciaShimDateTimeFormat(args[0], this.#localeOptions(args[1], true, true)).format(this.#ms);'#10 +
+        '  }'#10 +
+        '  toLocaleDateString(...args: any[]): string {'#10 +
+        '    if (!(this instanceof Date)) throw new TypeError("Date.prototype.toLocaleDateString called on non-Date");'#10 +
+        '    if (!this.#valid()) return "Invalid Date";'#10 +
+        '    return new __GocciaShimDateTimeFormat(args[0], this.#localeOptions(args[1], true, false)).format(this.#ms);'#10 +
+        '  }'#10 +
+        '  toLocaleTimeString(...args: any[]): string {'#10 +
+        '    if (!(this instanceof Date)) throw new TypeError("Date.prototype.toLocaleTimeString called on non-Date");'#10 +
+        '    if (!this.#valid()) return "Invalid Date";'#10 +
+        '    return new __GocciaShimDateTimeFormat(args[0], this.#localeOptions(args[1], false, true)).format(this.#ms);'#10 +
         '  }'#10 +
         '};'
     ),
