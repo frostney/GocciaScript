@@ -4,7 +4,7 @@
  *
  * Common CLI options tested across all apps: stdin smoke, --help, --unsafe-ffi,
  * --compat-asi, --source-type, .mjs source-type inference, --compat-var, --compat-loose-equality, --compat-non-strict-mode,
- * --compat-while-loops, --mode, --timeout, --max-instructions, --max-memory, --stack-size, --log,
+ * --compat-for-in-loop, --compat-while-loops, --mode, --timeout, --max-instructions, --max-memory, --stack-size, --log,
  * example scripts.
  */
 
@@ -225,6 +225,11 @@ console.log("--compat-function (Loader) + Bare loader compat parsing...");
     writeFileSync(forSrc, "let s = 0;\nfor (let i = 1; i <= 5; i++) { s = s + i; }\ns;\n");
     const forOut = await $`${BARE} --print ${forSrc} --compat-traditional-for-loop 2>&1`.text();
     if (forOut.trim() !== "15") throw new Error(`Bare --compat-traditional-for-loop expected 15, got: ${forOut}`);
+
+    const forInSrc = join(tmp, "use-for-in.js");
+    writeFileSync(forInSrc, "const obj = { a: 1, b: 2 };\nlet out = '';\nfor (const k in obj) { out = out + k; }\nout;\n");
+    const forInOut = await $`${BARE} --print ${forInSrc} --compat-for-in-loop 2>&1`.text();
+    if (forInOut.trim() !== "ab") throw new Error(`Bare --compat-for-in-loop expected ab, got: ${forInOut}`);
 
     const whileSrc = join(tmp, "use-while.js");
     writeFileSync(whileSrc, "let s = 0;\nlet i = 1;\nwhile (i <= 5) { s = s + i; i++; }\ns;\n");

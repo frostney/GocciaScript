@@ -70,6 +70,7 @@ type
     function GetAllPropertyNames: TArray<string>; virtual;
     function GetOwnPropertyNames: TArray<string>; virtual;
     function GetOwnPropertyKeys: TArray<string>; virtual;
+    function EnumerateForInPropertyNames: TArray<string>; virtual;
 
     procedure DefineSymbolProperty(const ASymbol: TGocciaSymbolValue; const ADescriptor: TGocciaPropertyDescriptor); virtual;
     function TryDefineSymbolProperty(const ASymbol: TGocciaSymbolValue; const ADescriptor: TGocciaPropertyDescriptor): Boolean; virtual;
@@ -113,6 +114,7 @@ type
 implementation
 
 uses
+  Classes,
   SysUtils,
 
   Goccia.Arithmetic,
@@ -1095,6 +1097,47 @@ end;
 function TGocciaObjectValue.GetAllPropertyNames: TArray<string>;
 begin
   Result := FProperties.Keys;
+end;
+
+// ES2026 §14.7.5.9 EnumerateObjectProperties(O)
+function TGocciaObjectValue.EnumerateForInPropertyNames: TArray<string>;
+var
+  Current: TGocciaObjectValue;
+  Keys: TArray<string>;
+  Descriptor: TGocciaPropertyDescriptor;
+  Names: TList<string>;
+  Visited: TStringList;
+  Key: string;
+begin
+  Visited := TStringList.Create;
+  Names := TList<string>.Create;
+  try
+    Visited.CaseSensitive := True;
+    Current := Self;
+    while Assigned(Current) do
+    begin
+      Keys := Current.GetAllPropertyNames;
+      for Key in Keys do
+      begin
+        if Visited.IndexOf(Key) >= 0 then
+          Continue;
+
+        Descriptor := Current.GetOwnPropertyDescriptor(Key);
+        if not Assigned(Descriptor) then
+          Continue;
+
+        Visited.Add(Key);
+        if Descriptor.Enumerable then
+          Names.Add(Key);
+      end;
+      Current := Current.Prototype;
+    end;
+
+    Result := Names.ToArray;
+  finally
+    Names.Free;
+    Visited.Free;
+  end;
 end;
 
 { Symbol property methods }
