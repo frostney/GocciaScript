@@ -176,6 +176,10 @@ type
     IsIteration: Boolean;
   end;
 
+procedure EmitGlobalDefinesForPattern(const ACtx: TGocciaCompilationContext;
+  const APattern: TGocciaDestructuringPattern; const AIsConst: Boolean;
+  const AIsVar: Boolean; const AHasInitializer: Boolean); forward;
+
 threadvar
   GBreakJumps: TList<Integer>;
   GContinueJumps: TList<Integer>;
@@ -2234,6 +2238,7 @@ var
     ValidReg: UInt8;
   LoopStart, ExitJump, I: Integer;
   Slot: UInt8;
+  LocalIdx: Integer;
   ClosedLocals: array[0..255] of UInt8;
   ClosedCount: Integer;
   LoopControl: TLoopControlState;
@@ -2246,6 +2251,24 @@ begin
   EntryReg := ACtx.Scope.AllocateRegister;
   KeyReg := ACtx.Scope.AllocateRegister;
   ValidReg := ACtx.Scope.AllocateRegister;
+
+  if AStmt.IsVar and ACtx.GlobalBackedTopLevel then
+  begin
+    if Assigned(AStmt.BindingPattern) then
+    begin
+      CollectDestructuringVarBindings(AStmt.BindingPattern, ACtx.Scope);
+      EmitGlobalDefinesForPattern(ACtx, AStmt.BindingPattern, False, True,
+        False);
+    end
+    else if AStmt.BindingName <> '' then
+    begin
+      Slot := ACtx.Scope.DeclareVarLocal(AStmt.BindingName);
+      LocalIdx := FindLocalBySlot(ACtx.Scope, AStmt.BindingName, Slot);
+      if LocalIdx >= 0 then
+        ACtx.Scope.MarkGlobalBacked(LocalIdx);
+      EmitGlobalDefine(ACtx, Slot, AStmt.BindingName, False, True, False);
+    end;
+  end;
 
   ACtx.CompileExpression(AStmt.ObjectExpression, EntriesReg);
   EmitInstruction(ACtx, EncodeABC(OP_ENUM_KEYS, EntriesReg, EntriesReg, 0));
@@ -2286,7 +2309,8 @@ begin
         Slot := ACtx.Scope.DeclareVarLocal(AStmt.BindingName)
       else
         Slot := ACtx.Scope.DeclareLocal(AStmt.BindingName, AStmt.IsConst);
-      EmitInstruction(ACtx, EncodeABC(OP_MOVE, Slot, KeyReg, 0));
+      EmitBindingAssignmentFromRegister(ACtx, AStmt.BindingName, KeyReg,
+        False);
     end;
 
     ACtx.CompileStatement(AStmt.Body);
@@ -2605,6 +2629,25 @@ begin
   Result := True;
 end;
 
+function PatternAssignsIdentifier(const APattern: TGocciaDestructuringPattern;
+  const AName: string): Boolean;
+var
+  Names: TStringList;
+begin
+  Result := False;
+  if not Assigned(APattern) then
+    Exit;
+
+  Names := TStringList.Create;
+  Names.CaseSensitive := True;
+  try
+    CollectPatternBindingNames(APattern, Names);
+    Result := Names.IndexOf(AName) >= 0;
+  finally
+    Names.Free;
+  end;
+end;
+
 function ForBodyAssignsIdentifier(const ANode: TGocciaASTNode;
   const AName: string): Boolean;
 var
@@ -2673,16 +2716,28 @@ begin
   else if ANode is TGocciaForOfStatement then
   begin
     ForOf := TGocciaForOfStatement(ANode);
-    if (ForOf.BindingName = AName) and ForOf.IsVar then
-      Exit(True);
+    if ForOf.IsVar then
+    begin
+      if ForOf.BindingName = AName then
+        Exit(True);
+      if PatternAssignsIdentifier(ForOf.BindingPattern, AName) then
+        Exit(True);
+    end;
     if ForBodyAssignsIdentifier(ForOf.Iterable, AName) then Exit(True);
     Result := ForBodyAssignsIdentifier(ForOf.Body, AName);
   end
   else if ANode is TGocciaForInStatement then
   begin
     ForIn := TGocciaForInStatement(ANode);
-    if (ForIn.BindingName = AName) and ForIn.IsVar then
+    if PatternAssignsIdentifier(ForIn.AssignmentTarget, AName) then
       Exit(True);
+    if ForIn.IsVar then
+    begin
+      if ForIn.BindingName = AName then
+        Exit(True);
+      if PatternAssignsIdentifier(ForIn.BindingPattern, AName) then
+        Exit(True);
+    end;
     if ForBodyAssignsIdentifier(ForIn.ObjectExpression, AName) then Exit(True);
     Result := ForBodyAssignsIdentifier(ForIn.Body, AName);
   end
@@ -5147,7 +5202,7 @@ end;
 
 procedure EmitGlobalDefinesForPattern(const ACtx: TGocciaCompilationContext;
   const APattern: TGocciaDestructuringPattern; const AIsConst: Boolean;
-  const AIsVar: Boolean = False; const AHasInitializer: Boolean = True);
+  const AIsVar: Boolean; const AHasInitializer: Boolean);
 var
   ObjPat: TGocciaObjectDestructuringPattern;
   ArrPat: TGocciaArrayDestructuringPattern;

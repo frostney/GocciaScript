@@ -3,9 +3,34 @@ description: var in for-in heads hoists out of the loop
 features: [compat-for-in-loop, compat-var]
 ---*/
 
+for (var __gocciaForInEmptyGlobal in {}) {}
+for (var [__gocciaForInEmptyDestructured] in {}) {}
+
 test("var in for-in is visible after the loop", () => {
   for (var key in { a: 1, b: 2 }) {}
   expect(key).toBe("b");
+});
+
+test("top-level var in empty for-in creates global property", () => {
+  const desc = Object.getOwnPropertyDescriptor(
+    globalThis,
+    "__gocciaForInEmptyGlobal"
+  );
+  expect(typeof desc).toBe("object");
+  expect(globalThis.__gocciaForInEmptyGlobal).toBeUndefined();
+
+  delete globalThis.__gocciaForInEmptyGlobal;
+});
+
+test("top-level var destructuring in empty for-in creates global property", () => {
+  const desc = Object.getOwnPropertyDescriptor(
+    globalThis,
+    "__gocciaForInEmptyDestructured"
+  );
+  expect(typeof desc).toBe("object");
+  expect(globalThis.__gocciaForInEmptyDestructured).toBeUndefined();
+
+  delete globalThis.__gocciaForInEmptyDestructured;
 });
 
 test("var in for-in hoists into enclosing function", () => {

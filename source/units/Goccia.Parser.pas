@@ -6799,6 +6799,7 @@ var
   ObjectExpr: TGocciaObjectExpression;
   IdentifierExpr: TGocciaIdentifierExpression;
   AssignmentExpr: TGocciaAssignmentExpression;
+  PrivateMemberExpr: TGocciaPrivateMemberExpression;
   Elements: TObjectList<TGocciaDestructuringPattern>;
   Properties: TObjectList<TGocciaDestructuringProperty>;
   I: Integer;
@@ -6881,6 +6882,12 @@ begin
   begin
     Result := TGocciaMemberExpressionDestructuringPattern.Create(
       TGocciaMemberExpression(AExpr), AExpr.Line, AExpr.Column);
+  end
+  else if AExpr is TGocciaPrivateMemberExpression then
+  begin
+    PrivateMemberExpr := TGocciaPrivateMemberExpression(AExpr);
+    Result := TGocciaPrivateMemberExpressionDestructuringPattern.Create(
+      PrivateMemberExpr, AExpr.Line, AExpr.Column);
   end
   else if AExpr is TGocciaPropertyAssignmentExpression then
   begin

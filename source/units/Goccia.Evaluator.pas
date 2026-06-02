@@ -155,6 +155,7 @@ procedure RunClassInstanceInitializers(const AClassValue: TGocciaClassValue;
 const
   FOR_IN_ENTRY_OWNER = '__gocciaForInOwner';
   FOR_IN_ENTRY_KEY = '__gocciaForInKey';
+  FOR_IN_MAX_PROTOTYPE_CHAIN_DEPTH = 256;
 
 // Helper: create a non-owning copy of a statement list (AST owns the nodes)
 function CopyStatementList(const ASource: TObjectList<TGocciaASTNode>): TObjectList<TGocciaASTNode>;
@@ -1905,39 +1906,74 @@ var
   Current, Obj, EntryObj: TGocciaObjectValue;
   Keys: TArray<string>;
   Key: string;
+  KeyValue: TGocciaStringLiteralValue;
   Visited: TStringList;
+  GC: TGarbageCollector;
+  ChainDepth: Integer;
 begin
+  GC := TGarbageCollector.Instance;
   Result := TGocciaArrayValue.Create;
-  if (AValue is TGocciaUndefinedLiteralValue) or
-     (AValue is TGocciaNullLiteralValue) then
-    Exit;
-
-  Obj := ToObject(AValue);
-  Visited := TStringList.Create;
+  if Assigned(GC) then
+    GC.AddTempRoot(Result);
   try
-    Visited.CaseSensitive := True;
-    Current := Obj;
-    while Assigned(Current) do
-    begin
-      Keys := Current.GetAllPropertyNames;
-      for Key in Keys do
-      begin
-        if Visited.IndexOf(Key) >= 0 then
-          Continue;
+    if (AValue is TGocciaUndefinedLiteralValue) or
+       (AValue is TGocciaNullLiteralValue) then
+      Exit;
 
-        Visited.Add(Key);
-        EntryObj := TGocciaObjectValue.Create;
-        EntryObj.DefineProperty(FOR_IN_ENTRY_OWNER,
-          TGocciaPropertyDescriptorData.Create(Current, []));
-        EntryObj.DefineProperty(FOR_IN_ENTRY_KEY,
-          TGocciaPropertyDescriptorData.Create(
-            TGocciaStringLiteralValue.Create(Key), []));
-        Result.Elements.Add(EntryObj);
+    Obj := ToObject(AValue);
+    if Assigned(GC) then
+      GC.AddTempRoot(Obj);
+    Visited := TStringList.Create;
+    try
+      Visited.CaseSensitive := True;
+      Current := Obj;
+      ChainDepth := 0;
+      while Assigned(Current) do
+      begin
+        Inc(ChainDepth);
+        if ChainDepth > FOR_IN_MAX_PROTOTYPE_CHAIN_DEPTH then
+          ThrowTypeError(Format(SErrorProtoChainDepthExceeded, ['for...in']),
+            SSuggestPrototypeChainTooDeep);
+
+        Keys := Current.GetAllPropertyNames;
+        for Key in Keys do
+        begin
+          if Visited.IndexOf(Key) >= 0 then
+            Continue;
+
+          Visited.Add(Key);
+          EntryObj := TGocciaObjectValue.Create;
+          if Assigned(GC) then
+            GC.AddTempRoot(EntryObj);
+          try
+            EntryObj.DefineProperty(FOR_IN_ENTRY_OWNER,
+              TGocciaPropertyDescriptorData.Create(Current, []));
+            KeyValue := TGocciaStringLiteralValue.Create(Key);
+            if Assigned(GC) then
+              GC.AddTempRoot(KeyValue);
+            try
+              EntryObj.DefineProperty(FOR_IN_ENTRY_KEY,
+                TGocciaPropertyDescriptorData.Create(KeyValue, []));
+            finally
+              if Assigned(GC) then
+                GC.RemoveTempRoot(KeyValue);
+            end;
+            Result.Elements.Add(EntryObj);
+          finally
+            if Assigned(GC) then
+              GC.RemoveTempRoot(EntryObj);
+          end;
+        end;
+        Current := Current.Prototype;
       end;
-      Current := Current.Prototype;
+    finally
+      Visited.Free;
+      if Assigned(GC) then
+        GC.RemoveTempRoot(Obj);
     end;
   finally
-    Visited.Free;
+    if Assigned(GC) then
+      GC.RemoveTempRoot(Result);
   end;
 end;
 
@@ -2058,24 +2094,40 @@ begin
         IterContext := AContext;
         IterContext.Scope := IterScope;
 
-        if AForInStatement.IsVar then
-        begin
-          if AForInStatement.BindingPattern <> nil then
-            AssignPattern(AForInStatement.BindingPattern, CurrentValue,
+        if Assigned(Continuation) then
+          Continuation.SaveLoopState(AForInStatement, EntriesArray,
+            CurrentValue, TGocciaNumberLiteralValue.Create(EntryIndex), nil,
+            nil);
+
+        try
+          if AForInStatement.IsVar then
+          begin
+            if AForInStatement.BindingPattern <> nil then
+              AssignPattern(AForInStatement.BindingPattern, CurrentValue,
+                IterContext)
+            else
+              AContext.Scope.DefineVariableBinding(
+                AForInStatement.BindingName, CurrentValue, True);
+          end
+          else if AForInStatement.AssignmentTarget <> nil then
+            AssignPattern(AForInStatement.AssignmentTarget, CurrentValue,
               IterContext)
+          else if AForInStatement.BindingPattern <> nil then
+            AssignPattern(AForInStatement.BindingPattern, CurrentValue,
+              IterContext, True, DeclarationType)
           else
-            AContext.Scope.DefineVariableBinding(
-              AForInStatement.BindingName, CurrentValue, True);
-        end
-        else if AForInStatement.AssignmentTarget <> nil then
-          AssignPattern(AForInStatement.AssignmentTarget, CurrentValue,
-            IterContext)
-        else if AForInStatement.BindingPattern <> nil then
-          AssignPattern(AForInStatement.BindingPattern, CurrentValue,
-            IterContext, True, DeclarationType)
-        else
-          IterScope.DefineLexicalBinding(AForInStatement.BindingName,
-            CurrentValue, DeclarationType);
+            IterScope.DefineLexicalBinding(AForInStatement.BindingName,
+              CurrentValue, DeclarationType);
+        except
+          on E: EGocciaGeneratorYield do
+            raise;
+          else
+          begin
+            if Assigned(Continuation) then
+              Continuation.ClearLoopState(AForInStatement);
+            raise;
+          end;
+        end;
 
         if Assigned(Continuation) then
           Continuation.SaveLoopState(AForInStatement, EntriesArray, CurrentValue,
@@ -7042,12 +7094,64 @@ begin
       APattern.Line, APattern.Column, AContext.NonStrictMode);
 end;
 
+procedure AssignPrivateMemberExpressionPattern(
+  const APattern: TGocciaPrivateMemberExpressionDestructuringPattern;
+  const AValue: TGocciaValue; const AContext: TGocciaEvaluationContext);
+var
+  ObjectValue: TGocciaValue;
+  Instance: TGocciaInstanceValue;
+  ClassValue: TGocciaClassValue;
+  AccessClass: TGocciaClassValue;
+  SetterFn: TGocciaFunctionBase;
+  SetterArgs: TGocciaArgumentsCollection;
+begin
+  ObjectValue := EvaluateExpression(APattern.Expression.ObjectExpr, AContext);
+
+  if ObjectValue is TGocciaInstanceValue then
+  begin
+    Instance := TGocciaInstanceValue(ObjectValue);
+    AccessClass := ResolveOwningClass(Instance, AContext);
+
+    if AccessClass.HasPrivateSetter(APattern.Expression.PrivateName) then
+    begin
+      SetterFn := AccessClass.PrivatePropertySetter[APattern.Expression.PrivateName];
+      SetterArgs := TGocciaArgumentsCollection.Create;
+      try
+        SetterArgs.Add(AValue);
+        SetterFn.Call(SetterArgs, Instance);
+      finally
+        SetterArgs.Free;
+      end;
+    end
+    else if AccessClass.HasPrivateGetter(APattern.Expression.PrivateName) then
+      ThrowPrivateSetterMissingError(APattern.Expression.PrivateName)
+    else
+      Instance.SetPrivateProperty(APattern.Expression.PrivateName, AValue,
+        AccessClass);
+  end
+  else if ObjectValue is TGocciaClassValue then
+  begin
+    ClassValue := TGocciaClassValue(ObjectValue);
+    AssignPrivateMemberOnClass(ClassValue, APattern.Expression.PrivateName,
+      AValue, AContext);
+  end
+  else if ObjectValue is TGocciaObjectValue then
+    AssignPrivateMemberOnObject(TGocciaObjectValue(ObjectValue),
+      APattern.Expression.PrivateName, AValue, AContext)
+  else
+    AContext.OnError(
+      Format('Private fields can only be assigned on class instances or classes, not %s',
+        [ObjectValue.TypeName]), APattern.Line, APattern.Column);
+end;
+
 procedure AssignPattern(const APattern: TGocciaDestructuringPattern; const AValue: TGocciaValue; const AContext: TGocciaEvaluationContext; const AIsDeclaration: Boolean = False; const ADeclarationType: TGocciaDeclarationType = dtLet);
 begin
   if APattern is TGocciaIdentifierDestructuringPattern then
     AssignIdentifierPattern(TGocciaIdentifierDestructuringPattern(APattern), AValue, AContext, AIsDeclaration, ADeclarationType)
   else if APattern is TGocciaMemberExpressionDestructuringPattern then
     AssignMemberExpressionPattern(TGocciaMemberExpressionDestructuringPattern(APattern), AValue, AContext)
+  else if APattern is TGocciaPrivateMemberExpressionDestructuringPattern then
+    AssignPrivateMemberExpressionPattern(TGocciaPrivateMemberExpressionDestructuringPattern(APattern), AValue, AContext)
   else if APattern is TGocciaArrayDestructuringPattern then
     AssignArrayPattern(TGocciaArrayDestructuringPattern(APattern), AValue, AContext, AIsDeclaration, ADeclarationType)
   else if APattern is TGocciaObjectDestructuringPattern then

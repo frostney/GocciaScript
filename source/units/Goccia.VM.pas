@@ -353,6 +353,7 @@ const
   BYTECODE_PRIVATE_BRAND_PREFIX = '#brand:';
   FOR_IN_ENTRY_OWNER = '__gocciaForInOwner';
   FOR_IN_ENTRY_KEY = '__gocciaForInKey';
+  FOR_IN_MAX_PROTOTYPE_CHAIN_DEPTH = 256;
 
 function IsBytecodePrivateKey(const AKey: string): Boolean; forward;
 function IsBytecodePrivateBrandKey(const AKey: string): Boolean; forward;
@@ -4859,39 +4860,74 @@ var
   Current, Obj, EntryObj: TGocciaObjectValue;
   Keys: TArray<string>;
   Key: string;
+  KeyValue: TGocciaStringLiteralValue;
   Visited: TStringList;
+  GC: TGarbageCollector;
+  ChainDepth: Integer;
 begin
+  GC := TGarbageCollector.Instance;
   Result := TGocciaArrayValue.Create;
-  if (AValue is TGocciaUndefinedLiteralValue) or
-     (AValue is TGocciaNullLiteralValue) then
-    Exit;
-
-  Obj := ToObject(AValue);
-  Visited := TStringList.Create;
+  if Assigned(GC) then
+    GC.AddTempRoot(Result);
   try
-    Visited.CaseSensitive := True;
-    Current := Obj;
-    while Assigned(Current) do
-    begin
-      Keys := Current.GetAllPropertyNames;
-      for Key in Keys do
-      begin
-        if Visited.IndexOf(Key) >= 0 then
-          Continue;
+    if (AValue is TGocciaUndefinedLiteralValue) or
+       (AValue is TGocciaNullLiteralValue) then
+      Exit;
 
-        Visited.Add(Key);
-        EntryObj := TGocciaObjectValue.Create;
-        EntryObj.DefineProperty(FOR_IN_ENTRY_OWNER,
-          TGocciaPropertyDescriptorData.Create(Current, []));
-        EntryObj.DefineProperty(FOR_IN_ENTRY_KEY,
-          TGocciaPropertyDescriptorData.Create(
-            TGocciaStringLiteralValue.Create(Key), []));
-        Result.Elements.Add(EntryObj);
+    Obj := ToObject(AValue);
+    if Assigned(GC) then
+      GC.AddTempRoot(Obj);
+    Visited := TStringList.Create;
+    try
+      Visited.CaseSensitive := True;
+      Current := Obj;
+      ChainDepth := 0;
+      while Assigned(Current) do
+      begin
+        Inc(ChainDepth);
+        if ChainDepth > FOR_IN_MAX_PROTOTYPE_CHAIN_DEPTH then
+          ThrowTypeError(Format(SErrorProtoChainDepthExceeded, ['for...in']),
+            SSuggestPrototypeChainTooDeep);
+
+        Keys := Current.GetAllPropertyNames;
+        for Key in Keys do
+        begin
+          if Visited.IndexOf(Key) >= 0 then
+            Continue;
+
+          Visited.Add(Key);
+          EntryObj := TGocciaObjectValue.Create;
+          if Assigned(GC) then
+            GC.AddTempRoot(EntryObj);
+          try
+            EntryObj.DefineProperty(FOR_IN_ENTRY_OWNER,
+              TGocciaPropertyDescriptorData.Create(Current, []));
+            KeyValue := TGocciaStringLiteralValue.Create(Key);
+            if Assigned(GC) then
+              GC.AddTempRoot(KeyValue);
+            try
+              EntryObj.DefineProperty(FOR_IN_ENTRY_KEY,
+                TGocciaPropertyDescriptorData.Create(KeyValue, []));
+            finally
+              if Assigned(GC) then
+                GC.RemoveTempRoot(KeyValue);
+            end;
+            Result.Elements.Add(EntryObj);
+          finally
+            if Assigned(GC) then
+              GC.RemoveTempRoot(EntryObj);
+          end;
+        end;
+        Current := Current.Prototype;
       end;
-      Current := Current.Prototype;
+    finally
+      Visited.Free;
+      if Assigned(GC) then
+        GC.RemoveTempRoot(Obj);
     end;
   finally
-    Visited.Free;
+    if Assigned(GC) then
+      GC.RemoveTempRoot(Result);
   end;
 end;
 

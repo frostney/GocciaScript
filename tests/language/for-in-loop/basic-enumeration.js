@@ -30,6 +30,24 @@ test("assigns to an existing member target", () => {
   expect(state.key).toBe("b");
 });
 
+test("assigns to an existing private member target", () => {
+  class Collector {
+    #key = "";
+
+    collect() {
+      const keys = [];
+      for (this.#key in { a: 1, b: 2 }) {
+        keys.push(this.#key);
+      }
+      return [keys, this.#key];
+    }
+  }
+
+  const result = new Collector().collect();
+  expect(result[0]).toEqual(["a", "b"]);
+  expect(result[1]).toBe("b");
+});
+
 test("skips non-enumerable own properties", () => {
   const obj = { visible: 1 };
   Object.defineProperty(obj, "hidden", {

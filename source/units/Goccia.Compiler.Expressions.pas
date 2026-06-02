@@ -96,6 +96,9 @@ procedure EmitCreateArgumentsObject(const ACtx: TGocciaCompilationContext;
   const AArgumentsSlot: Integer);
 procedure CollectDestructuringBindings(const APattern: TGocciaDestructuringPattern;
   const AScope: TGocciaCompilerScope; const AIsConst: Boolean = False);
+procedure EmitBindingAssignmentFromRegister(const ACtx: TGocciaCompilationContext;
+  const AName: string; const AValueReg: UInt8;
+  const AAssignmentMode: Boolean);
 procedure EmitDestructuring(const ACtx: TGocciaCompilationContext;
   const APattern: TGocciaDestructuringPattern; const ASrcReg: UInt8;
   const AAssignmentMode: Boolean = False);
@@ -422,10 +425,6 @@ procedure CompileIdentifier(const ACtx: TGocciaCompilationContext;
 begin
   CompileIdentifierAccess(ACtx, AExpr, ADest, False);
 end;
-
-procedure EmitBindingAssignmentFromRegister(const ACtx: TGocciaCompilationContext;
-  const AName: string; const AValueReg: UInt8;
-  const AAssignmentMode: Boolean); forward;
 
 function HiddenWithBindingName(const AName: string): Boolean;
 begin
@@ -1601,6 +1600,18 @@ begin
         TGocciaMemberExpressionDestructuringPattern(APattern).Expression.PropertyName,
         ASrcReg);
     end;
+    ACtx.Scope.FreeRegister;
+  end
+  else if APattern is TGocciaPrivateMemberExpressionDestructuringPattern then
+  begin
+    DestSlot := ACtx.Scope.AllocateRegister;
+    ACtx.CompileExpression(
+      TGocciaPrivateMemberExpressionDestructuringPattern(APattern).Expression.ObjectExpr,
+      DestSlot);
+    EmitStorePropertyByName(ACtx, DestSlot,
+      PrivateKey(ACtx.Scope,
+        TGocciaPrivateMemberExpressionDestructuringPattern(APattern).Expression.PrivateName),
+      ASrcReg);
     ACtx.Scope.FreeRegister;
   end;
 end;
