@@ -17,13 +17,13 @@ describe.runIf(isIntl)("Intl.supportedValuesOf", () => {
     expect(Array.isArray(result)).toBe(true);
   });
 
-  test("collation values exclude Collator-disallowed entries", () => {
+  test("collation values match Collator-accepted entries", () => {
     const result = Intl.supportedValuesOf("collation");
-    expect(result.includes("big5han")).toBe(false);
-    expect(result.includes("direct")).toBe(false);
-    expect(result.includes("ducet")).toBe(false);
-    expect(result.includes("gb2312")).toBe(false);
-    expect(result.includes("reformed")).toBe(false);
+    expect(result.includes("big5han")).toBe(true);
+    expect(result.includes("direct")).toBe(true);
+    expect(result.includes("ducet")).toBe(true);
+    expect(result.includes("gb2312")).toBe(true);
+    expect(result.includes("reformed")).toBe(true);
     expect(result.includes("search")).toBe(false);
     expect(result.includes("standard")).toBe(false);
   });

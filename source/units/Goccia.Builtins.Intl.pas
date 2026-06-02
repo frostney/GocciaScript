@@ -214,13 +214,18 @@ begin
   end
   else if Key = 'collation' then
   begin
+    AddString('big5han');
     AddString('compat');
     AddString('dict');
+    AddString('direct');
+    AddString('ducet');
     AddString('emoji');
     AddString('eor');
+    AddString('gb2312');
     AddString('phonebk');
     AddString('phonetic');
     AddString('pinyin');
+    AddString('reformed');
     AddString('searchjl');
     AddString('stroke');
     AddString('trad');
@@ -712,6 +717,8 @@ var
   FirstUnicodeExtension, SecondUnicodeExtension: Integer;
   LowerTag, Tail: string;
 begin
+  // TODO: CollatorLocaleArgumentToLocale duplicates LocaleCompareArgumentToLocale;
+  // extract both into a shared Intl locale parsing utility.
   Result := '';
   if (AArg is TGocciaUndefinedLiteralValue) or (AArg = nil) then
     Exit;

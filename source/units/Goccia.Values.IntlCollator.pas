@@ -288,7 +288,6 @@ begin
         Exit;
       end;
     end;
-    Exit;
   end;
 
   for I := Low(SupportedCollations) to High(SupportedCollations) do
