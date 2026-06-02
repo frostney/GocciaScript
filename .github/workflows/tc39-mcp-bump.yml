@@ -1,0 +1,66 @@
+name: tc39-mcp weekly bump
+
+# Pulls the latest tc39-mcp npm version, updates the pinned agent MCP
+# config/docs, and opens a PR. This affects agent spec-lookup tooling only;
+# it does not affect GocciaScript runtime behavior or conformance gates.
+#
+# Cadence: weekly (Mondays 07:30 UTC). Manual trigger available via
+# workflow_dispatch.
+
+on:
+  schedule:
+    - cron: '30 7 * * 1'
+  workflow_dispatch:
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+
+      - id: latest
+        run: |
+          version=$(npm view tc39-mcp version)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Update pin in agent docs
+        env:
+          VERSION: ${{ steps.latest.outputs.version }}
+        run: bun scripts/tc39-mcp-bump-pin.ts "$VERSION"
+
+      - id: changed
+        env:
+          VERSION: ${{ steps.latest.outputs.version }}
+        run: |
+          if git diff --quiet -- .mcp.example.json AGENTS.md .agents/skills/gocciascript-issue-validation/SKILL.md; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "tc39-mcp already pinned to v${VERSION} — no PR to open."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open or update PR
+        if: steps.changed.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676 # v7
+        with:
+          branch: chore/tc39-mcp-bump
+          commit-message: "chore(tc39-mcp): bump pin to v${{ steps.latest.outputs.version }}"
+          title: "chore(tc39-mcp): bump pin to v${{ steps.latest.outputs.version }}"
+          body: |
+            Automated bump of the tc39-mcp npm pin to `v${{ steps.latest.outputs.version }}`.
+
+            This updates agent spec-lookup tooling only. It does not change
+            GocciaScript runtime behavior, build outputs, or CI conformance
+            gates.
+
+            Cron: weekly, Mondays 07:30 UTC. See `.github/workflows/tc39-mcp-bump.yml`.
+          labels: |
+            spec compliance
+            automated
