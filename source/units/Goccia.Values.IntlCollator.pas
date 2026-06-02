@@ -168,102 +168,6 @@ begin
     Result := AValue;
 end;
 
-function FindSingletonExtensionStart(const ALocale, ASingleton: string; out AStart: Integer): Boolean;
-var
-  Index, NextDash, SubtagStart: Integer;
-  Subtag, SingletonLower: string;
-begin
-  Result := False;
-  AStart := 0;
-  SingletonLower := LowerCase(ASingleton);
-  Index := 1;
-  while Index <= Length(ALocale) do
-  begin
-    SubtagStart := Index;
-    NextDash := Pos('-', Copy(ALocale, Index, MaxInt));
-    if NextDash = 0 then
-      NextDash := Length(ALocale) + 1
-    else
-      NextDash := Index + NextDash - 1;
-    Subtag := LowerCase(Copy(ALocale, Index, NextDash - Index));
-
-    if Length(Subtag) = 1 then
-    begin
-      if Subtag = SingletonLower then
-      begin
-        AStart := SubtagStart - 1;
-        Result := True;
-        Exit;
-      end;
-      if Subtag = 'x' then
-        Exit;
-    end;
-
-    Index := NextDash + 1;
-  end;
-end;
-
-function FindUnicodeExtensionRangeFrom(const ALocale: string; ASearchStart: Integer;
-  out AStart, AEnd: Integer): Boolean;
-var
-  Index, NextDash, SubtagStart: Integer;
-  Subtag: string;
-begin
-  Result := False;
-  AStart := 0;
-  AEnd := 0;
-  Index := ASearchStart;
-  if Index < 1 then
-    Index := 1;
-  while Index <= Length(ALocale) do
-  begin
-    SubtagStart := Index;
-    NextDash := Pos('-', Copy(ALocale, Index, MaxInt));
-    if NextDash = 0 then
-      NextDash := Length(ALocale) + 1
-    else
-      NextDash := Index + NextDash - 1;
-    Subtag := LowerCase(Copy(ALocale, Index, NextDash - Index));
-
-    if Length(Subtag) = 1 then
-    begin
-      if Subtag = 'x' then
-        Exit;
-      if Subtag = 'u' then
-      begin
-        AStart := SubtagStart - 1;
-        AEnd := Length(ALocale) + 1;
-        Index := NextDash + 1;
-        while Index <= Length(ALocale) do
-        begin
-          SubtagStart := Index;
-          NextDash := Pos('-', Copy(ALocale, Index, MaxInt));
-          if NextDash = 0 then
-            NextDash := Length(ALocale) + 1
-          else
-            NextDash := Index + NextDash - 1;
-          Subtag := LowerCase(Copy(ALocale, Index, NextDash - Index));
-          if Length(Subtag) = 1 then
-          begin
-            AEnd := SubtagStart - 1;
-            Break;
-          end;
-          Index := NextDash + 1;
-        end;
-        Result := True;
-        Exit;
-      end;
-    end;
-
-    Index := NextDash + 1;
-  end;
-end;
-
-function FindUnicodeExtensionRange(const ALocale: string; out AStart, AEnd: Integer): Boolean;
-begin
-  Result := FindUnicodeExtensionRangeFrom(ALocale, 1, AStart, AEnd);
-end;
-
 function IsSupportedCollationValue(const ALocale, AValue: string): Boolean;
 const
   SupportedCollations: array[0..16] of string = (
@@ -300,122 +204,6 @@ begin
   end;
 end;
 
-function TryGetUnicodeExtensionKey(const ALocale, AKey: string; out AValue: string): Boolean;
-var
-  SearchStart, ExtensionStart, ExtensionEnd, Index, NextDash: Integer;
-  Tail, Subtag, KeyLower: string;
-begin
-  Result := False;
-  AValue := '';
-  KeyLower := LowerCase(AKey);
-  SearchStart := 1;
-  while FindUnicodeExtensionRangeFrom(ALocale, SearchStart, ExtensionStart, ExtensionEnd) do
-  begin
-    Tail := Copy(ALocale, ExtensionStart + 3, ExtensionEnd - ExtensionStart - 3);
-    Index := 1;
-    while Index <= Length(Tail) do
-    begin
-      NextDash := Pos('-', Copy(Tail, Index, MaxInt));
-      if NextDash = 0 then
-        NextDash := Length(Tail) + 1
-      else
-        NextDash := Index + NextDash - 1;
-      Subtag := LowerCase(Copy(Tail, Index, NextDash - Index));
-      Index := NextDash + 1;
-
-      if Length(Subtag) <> 2 then
-        Continue;
-
-      if Subtag = KeyLower then
-      begin
-        Result := True;
-        while Index <= Length(Tail) do
-        begin
-          NextDash := Pos('-', Copy(Tail, Index, MaxInt));
-          if NextDash = 0 then
-            NextDash := Length(Tail) + 1
-          else
-            NextDash := Index + NextDash - 1;
-          Subtag := LowerCase(Copy(Tail, Index, NextDash - Index));
-          if Length(Subtag) = 2 then
-            Exit;
-          if AValue = '' then
-            AValue := Subtag
-          else
-            AValue := AValue + '-' + Subtag;
-          Index := NextDash + 1;
-        end;
-        Exit;
-      end;
-    end;
-
-    SearchStart := ExtensionEnd + 1;
-  end;
-end;
-
-function RemoveUnicodeExtensionKey(const ALocale, AKey: string): string;
-var
-  ExtensionStart, ExtensionEnd, Index, NextDash: Integer;
-  Base, Tail, Suffix, Subtag, KeyLower, NewTail: string;
-  Removing: Boolean;
-begin
-  KeyLower := LowerCase(AKey);
-  if not FindUnicodeExtensionRange(ALocale, ExtensionStart, ExtensionEnd) then
-  begin
-    Result := ALocale;
-    Exit;
-  end;
-
-  Base := Copy(ALocale, 1, ExtensionStart - 1);
-  Tail := Copy(ALocale, ExtensionStart + 3, ExtensionEnd - ExtensionStart - 3);
-  Suffix := Copy(ALocale, ExtensionEnd, MaxInt);
-  NewTail := '';
-  Removing := False;
-  Index := 1;
-  while Index <= Length(Tail) do
-  begin
-    NextDash := Pos('-', Copy(Tail, Index, MaxInt));
-    if NextDash = 0 then
-      NextDash := Length(Tail) + 1
-    else
-      NextDash := Index + NextDash - 1;
-    Subtag := Copy(Tail, Index, NextDash - Index);
-    Index := NextDash + 1;
-
-    if Length(Subtag) = 2 then
-      Removing := LowerCase(Subtag) = KeyLower;
-    if Removing then
-      Continue;
-    if NewTail <> '' then
-      NewTail := NewTail + '-';
-    NewTail := NewTail + Subtag;
-  end;
-
-  if NewTail = '' then
-    Result := Base + Suffix
-  else
-    Result := Base + '-u-' + NewTail + Suffix;
-end;
-
-function AddUnicodeExtensionKey(const ALocale, AKey, AValue: string): string;
-var
-  ExtensionStart, ExtensionEnd, PrivateUseStart: Integer;
-  Addition: string;
-begin
-  Addition := AKey;
-  if AValue <> '' then
-    Addition := Addition + '-' + AValue;
-
-  if FindUnicodeExtensionRange(ALocale, ExtensionStart, ExtensionEnd) then
-    Result := Copy(ALocale, 1, ExtensionEnd - 1) + '-' + Addition +
-      Copy(ALocale, ExtensionEnd, MaxInt)
-  else if FindSingletonExtensionStart(ALocale, 'x', PrivateUseStart) then
-    Result := Copy(ALocale, 1, PrivateUseStart - 1) + '-u-' + Addition +
-      Copy(ALocale, PrivateUseStart, MaxInt)
-  else
-    Result := ALocale + '-u-' + Addition
-end;
-
 { TGocciaIntlCollatorValue }
 
 constructor TGocciaIntlCollatorValue.Create(const ALocale: string; const AOptions: TGocciaObjectValue);
@@ -444,8 +232,8 @@ begin
   CaseFirstOptionPresent := False;
   CollationOptionPresent := False;
 
-  if TryGetUnicodeExtensionKey(FLocale, 'kn', LocaleNumeric) or
-     TryGetUnicodeExtensionKey(RawLocale, 'kn', LocaleNumeric) then
+  if TryGetUnicodeLocaleExtensionKeyword(FLocale, 'kn', LocaleNumeric) or
+     TryGetUnicodeLocaleExtensionKeyword(RawLocale, 'kn', LocaleNumeric) then
   begin
     if (LocaleNumeric = '') or (LocaleNumeric = 'true') then
     begin
@@ -454,46 +242,46 @@ begin
     else if LocaleNumeric = 'false' then
       FNumeric := False
     else
-      FLocale := RemoveUnicodeExtensionKey(FLocale, 'kn');
-    if not TryGetUnicodeExtensionKey(FLocale, 'kn', Ignored) and
+      FLocale := RemoveUnicodeLocaleExtensionKeyword(FLocale, 'kn');
+    if not TryGetUnicodeLocaleExtensionKeyword(FLocale, 'kn', Ignored) and
        ((LocaleNumeric = '') or (LocaleNumeric = 'true') or (LocaleNumeric = 'false')) then
     begin
       if LocaleNumeric = 'true' then
-        FLocale := AddUnicodeExtensionKey(FLocale, 'kn', '')
+        FLocale := AddUnicodeLocaleExtensionKeyword(FLocale, 'kn', '')
       else
-        FLocale := AddUnicodeExtensionKey(FLocale, 'kn', LocaleNumeric);
+        FLocale := AddUnicodeLocaleExtensionKeyword(FLocale, 'kn', LocaleNumeric);
     end;
   end;
 
-  if TryGetUnicodeExtensionKey(FLocale, 'kf', LocaleCaseFirst) or
-     TryGetUnicodeExtensionKey(RawLocale, 'kf', LocaleCaseFirst) then
+  if TryGetUnicodeLocaleExtensionKeyword(FLocale, 'kf', LocaleCaseFirst) or
+     TryGetUnicodeLocaleExtensionKeyword(RawLocale, 'kf', LocaleCaseFirst) then
   begin
     if IsValidCaseFirstValue(LocaleCaseFirst) then
     begin
       FCaseFirst := LocaleCaseFirst
     end
     else
-      FLocale := RemoveUnicodeExtensionKey(FLocale, 'kf');
-    if not TryGetUnicodeExtensionKey(FLocale, 'kf', Ignored) and
+      FLocale := RemoveUnicodeLocaleExtensionKeyword(FLocale, 'kf');
+    if not TryGetUnicodeLocaleExtensionKeyword(FLocale, 'kf', Ignored) and
        IsValidCaseFirstValue(LocaleCaseFirst) then
-      FLocale := AddUnicodeExtensionKey(FLocale, 'kf', LocaleCaseFirst);
+      FLocale := AddUnicodeLocaleExtensionKeyword(FLocale, 'kf', LocaleCaseFirst);
   end;
 
-  if TryGetUnicodeExtensionKey(FLocale, 'co', LocaleCollation) or
-     TryGetUnicodeExtensionKey(RawLocale, 'co', LocaleCollation) then
+  if TryGetUnicodeLocaleExtensionKeyword(FLocale, 'co', LocaleCollation) or
+     TryGetUnicodeLocaleExtensionKeyword(RawLocale, 'co', LocaleCollation) then
   begin
     LocaleCollation := NormalizeCollationValue(LocaleCollation);
     if IsSupportedCollationValue(FLocale, LocaleCollation) then
     begin
       FCollation := LocaleCollation;
-      if TryGetUnicodeExtensionKey(FLocale, 'co', Ignored) and
+      if TryGetUnicodeLocaleExtensionKeyword(FLocale, 'co', Ignored) and
          (NormalizeCollationValue(Ignored) <> LocaleCollation) then
-        FLocale := RemoveUnicodeExtensionKey(FLocale, 'co');
-      if not TryGetUnicodeExtensionKey(FLocale, 'co', Ignored) then
-        FLocale := AddUnicodeExtensionKey(FLocale, 'co', LocaleCollation);
+        FLocale := RemoveUnicodeLocaleExtensionKeyword(FLocale, 'co');
+      if not TryGetUnicodeLocaleExtensionKeyword(FLocale, 'co', Ignored) then
+        FLocale := AddUnicodeLocaleExtensionKeyword(FLocale, 'co', LocaleCollation);
     end
     else
-      FLocale := RemoveUnicodeExtensionKey(FLocale, 'co');
+      FLocale := RemoveUnicodeLocaleExtensionKeyword(FLocale, 'co');
   end;
 
   if Assigned(AOptions) then
@@ -526,25 +314,25 @@ begin
     ReadCollatorStringOption(AOptions, 'localeMatcher', Ignored, ['lookup', 'best fit']);
   end;
 
-  if NumericOptionPresent and TryGetUnicodeExtensionKey(FLocale, 'kn', LocaleNumeric) then
+  if NumericOptionPresent and TryGetUnicodeLocaleExtensionKeyword(FLocale, 'kn', LocaleNumeric) then
   begin
     if ((LocaleNumeric = '') or (LocaleNumeric = 'true')) <> FNumeric then
-      FLocale := RemoveUnicodeExtensionKey(FLocale, 'kn');
+      FLocale := RemoveUnicodeLocaleExtensionKeyword(FLocale, 'kn');
   end;
-  if CaseFirstOptionPresent and TryGetUnicodeExtensionKey(FLocale, 'kf', LocaleCaseFirst) then
+  if CaseFirstOptionPresent and TryGetUnicodeLocaleExtensionKeyword(FLocale, 'kf', LocaleCaseFirst) then
   begin
     if LocaleCaseFirst <> FCaseFirst then
-      FLocale := RemoveUnicodeExtensionKey(FLocale, 'kf');
+      FLocale := RemoveUnicodeLocaleExtensionKeyword(FLocale, 'kf');
   end;
-  if CollationOptionPresent and TryGetUnicodeExtensionKey(FLocale, 'co', LocaleCollation) then
+  if CollationOptionPresent and TryGetUnicodeLocaleExtensionKeyword(FLocale, 'co', LocaleCollation) then
   begin
     if NormalizeCollationValue(LocaleCollation) <> FCollation then
-      FLocale := RemoveUnicodeExtensionKey(FLocale, 'co');
+      FLocale := RemoveUnicodeLocaleExtensionKeyword(FLocale, 'co');
   end;
 
   FICULocale := LocaleWithoutUnicodeExtension(FLocale);
   if FCollation <> 'default' then
-    FICULocale := AddUnicodeExtensionKey(FICULocale, 'co', FCollation);
+    FICULocale := AddUnicodeLocaleExtensionKeyword(FICULocale, 'co', FCollation);
 
   InitializePrototype;
   if Assigned(GetIntlCollatorShared) then
