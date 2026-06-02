@@ -1,0 +1,60 @@
+name: tc39-mcp weekly bump
+
+# Pulls the latest tc39-mcp npm version, updates the pinned agent MCP
+# config/docs, and opens a PR. This affects agent spec-lookup tooling only;
+# it does not affect GocciaScript runtime behavior or conformance gates.
+#
+# Cadence: weekly (Mondays 07:30 UTC). Manual trigger available via
+# workflow_dispatch.
+
+on:
+  schedule:
+    - cron: '30 7 * * 1'
+  workflow_dispatch:
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: oven-sh/setup-bun@v2
+
+      - id: latest
+        run: |
+          version=$(npm view tc39-mcp version)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Update pin in agent docs
+        run: bun scripts/tc39-mcp-bump-pin.ts ${{ steps.latest.outputs.version }}
+
+      - id: changed
+        run: |
+          if git diff --quiet -- .mcp.example.json AGENTS.md .agents/skills/gocciascript-issue-validation/SKILL.md; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "tc39-mcp already pinned to v${{ steps.latest.outputs.version }} — no PR to open."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open or update PR
+        if: steps.changed.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: chore/tc39-mcp-bump
+          commit-message: "chore(tc39-mcp): bump pin to v${{ steps.latest.outputs.version }}"
+          title: "chore(tc39-mcp): bump pin to v${{ steps.latest.outputs.version }}"
+          body: |
+            Automated bump of the tc39-mcp npm pin to `v${{ steps.latest.outputs.version }}`.
+
+            This updates agent spec-lookup tooling only. It does not change
+            GocciaScript runtime behavior, build outputs, or CI conformance
+            gates.
+
+            Cron: weekly, Mondays 07:30 UTC. See `.github/workflows/tc39-mcp-bump.yml`.
+          labels: |
+            spec compliance
+            automated

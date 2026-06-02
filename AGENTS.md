@@ -23,6 +23,23 @@ Assistants should treat CONTRIBUTING as authoritative for contribution requireme
 - **Match the project's workflow**: branch from `main`, focused diffs, tests and docs updated per CONTRIBUTING.
 - **Do not paste large chunks of CONTRIBUTING into this file** when CONTRIBUTING changes—edit CONTRIBUTING instead, and keep AGENTS short.
 
+## TC39 spec lookup
+
+For ECMAScript or ECMA-402 behavior, prefer the `tc39-mcp` MCP server when it is available. The repo includes `.mcp.example.json` with the pinned local stdio setup:
+
+```json
+{
+  "mcpServers": {
+    "tc39": {
+      "command": "npx",
+      "args": ["tc39-mcp@0.1.4"]
+    }
+  }
+}
+```
+
+Use `spec.search` when you do not know the clause id, `clause.get` when you do, `spec.crossrefs` to follow abstract-operation dependencies, `spec.diff` / `spec.history` for prose drift, `test262.search` to map clauses to conformance tests, and `proposal.list` / `proposal.get` for proposal-stage features. When making durable claims in code review, issues, or PR notes, record the spec, edition, clause id, section number, and snapshot SHA when the MCP response provides one. If `tc39-mcp` is unavailable, fall back to the official TC39 sources (`tc39.es/ecma262`, `tc39.es/ecma402`) rather than guessing.
+
 ## Quick checks
 
 ```bash
