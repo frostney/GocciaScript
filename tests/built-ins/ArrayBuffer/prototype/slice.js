@@ -83,6 +83,45 @@ describe("ArrayBuffer.prototype.slice", () => {
     const sliced = buf.slice(0, 0);
     expect(sliced.byteLength).toBe(0);
   });
+
+  test("throws if start coercion detaches buffer before copy", () => {
+    const buf = new ArrayBuffer(0x1000);
+    const start = {
+      valueOf() {
+        buf.transfer();
+        return 0x800;
+      }
+    };
+
+    expect(() => buf.slice(start)).toThrow(TypeError);
+    expect(buf.byteLength).toBe(0);
+  });
+
+  test("throws if end coercion detaches buffer before copy", () => {
+    const buf = new ArrayBuffer(0x1000);
+    const end = {
+      valueOf() {
+        buf.transfer();
+        return 0xc00;
+      }
+    };
+
+    expect(() => buf.slice(0x800, end)).toThrow(TypeError);
+    expect(buf.byteLength).toBe(0);
+  });
+
+  test("throws when detachment leaves an empty computed slice", () => {
+    const buf = new ArrayBuffer(8);
+    const start = {
+      valueOf() {
+        buf.transfer();
+        return 8;
+      }
+    };
+
+    expect(() => buf.slice(start)).toThrow(TypeError);
+    expect(buf.byteLength).toBe(0);
+  });
 });
 
 describe("ArrayBuffer.prototype.slice edge cases", () => {

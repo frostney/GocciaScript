@@ -118,6 +118,19 @@ describe("ArrayBuffer.prototype.transfer", () => {
     expect(() => buf.transfer()).toThrow(TypeError);
   });
 
+  test("throws TypeError if newLength coercion detaches buffer", () => {
+    const buf = new ArrayBuffer(8);
+    const newLength = {
+      valueOf() {
+        buf.transfer();
+        return 4;
+      }
+    };
+
+    expect(() => buf.transfer(newLength)).toThrow(TypeError);
+    expect(buf.byteLength).toBe(0);
+  });
+
   test("throws TypeError when called on non-ArrayBuffer", () => {
     const transfer = ArrayBuffer.prototype.transfer;
     expect(() => transfer.call({})).toThrow(TypeError);

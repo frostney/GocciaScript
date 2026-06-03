@@ -25,6 +25,7 @@ type
     PrevCovLine: UInt32;
     ProfileEntryTimestamp: Int64;
     NewTarget: Pointer;
+    ExecutionContextPushed: Boolean;
   end;
 
 implementation

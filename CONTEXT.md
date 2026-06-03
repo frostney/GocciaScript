@@ -169,8 +169,8 @@ Change the value of an existing binding.
 _Avoid_: Define.
 
 **Realm**:
-The per-engine home for mutable intrinsic state such as built-in prototypes.
-_Avoid_: Runtime, process-wide singleton.
+The ECMAScript execution domain for code: its own intrinsics, global object, global environment, loaded code state, and host-associated resources.
+_Avoid_: Runtime, process-wide singleton, prototype cache.
 
 ### Functions And Objects
 

@@ -5,7 +5,7 @@ unit Goccia.StackLimit;
 interface
 
 const
-  DEFAULT_MAX_STACK_DEPTH = 3500;
+  DEFAULT_MAX_STACK_DEPTH = 2900;
 
 procedure SetMaxStackDepth(const AMaxDepth: Integer);
 procedure CheckStackDepth(const ACurrentDepth: Integer);

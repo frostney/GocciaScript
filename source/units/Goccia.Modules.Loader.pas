@@ -125,6 +125,7 @@ uses
   Goccia.GarbageCollector,
   Goccia.JSON,
   Goccia.Keywords.Reserved,
+  Goccia.Realm,
   Goccia.Values.ObjectValue;
 
 constructor TGocciaModuleLoader.Create(const AEntryFileName: string;
@@ -428,6 +429,7 @@ begin
           ModuleScope.ThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
           ModuleScope.StrictTypes := FStrictTypesEnabled;
           ModuleScope.NonStrictMode := False;
+          Context.Realm := CurrentRealm;
           Context.Scope := ModuleScope;
           Context.OnError := FOnError;
           Context.LoadModule := LoadModule;
