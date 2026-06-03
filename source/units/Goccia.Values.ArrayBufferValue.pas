@@ -92,6 +92,12 @@ begin
   Result := TGocciaArrayBufferValue(AThisValue);
 end;
 
+procedure EnsureArrayBufferAttached(const ABuffer: TGocciaArrayBufferValue; const AErrorMessage: string);
+begin
+  if ABuffer.FDetached then
+    ThrowTypeError(AErrorMessage, SSuggestArrayBufferDetached);
+end;
+
 // ES2026 §6.2.4.2 ToIndex(value)
 function ToIndex(const AValue: TGocciaValue): Integer;
 var
@@ -398,19 +404,18 @@ var
 begin
   Buf := RequireArrayBuffer(AThisValue, 'ArrayBuffer.prototype.resize');
 
-  // ES2026 §25.1.6.5 step 4: If IsDetachedBuffer(O), throw TypeError
-  if Buf.FDetached then
-    ThrowTypeError(SErrorCannotResizeDetachedArrayBuffer, SSuggestArrayBufferDetached);
-
-  // ES2026 §25.1.6.5 step 5: If IsFixedLengthArrayBuffer(O), throw TypeError
-  if Buf.FMaxByteLength < 0 then
-    ThrowTypeError(SErrorCannotResizeFixedLengthArrayBuffer, SSuggestArrayBufferResizable);
-
-  // ES2026 §25.1.6.5 step 6: Let newByteLength be ToIndex(newLength)
+  // ES2026 §25.1.6.5: ToIndex(newLength) can detach the receiver.
   if AArgs.Length > 0 then
     NewByteLength := ToIndex(AArgs.GetElement(0))
   else
     NewByteLength := 0;
+
+  // Revalidate before checking fixed/resizable state or touching storage.
+  EnsureArrayBufferAttached(Buf, SErrorCannotResizeDetachedArrayBuffer);
+
+  // ES2026 §25.1.6.5 step 5: If IsFixedLengthArrayBuffer(O), throw TypeError
+  if Buf.FMaxByteLength < 0 then
+    ThrowTypeError(SErrorCannotResizeFixedLengthArrayBuffer, SSuggestArrayBufferResizable);
 
   // ES2026 §25.1.6.5 step 7: If newByteLength > maxByteLength, throw RangeError
   if NewByteLength > Buf.FMaxByteLength then
@@ -436,6 +441,9 @@ function ArrayBufferCopyAndDetach(const ABuf: TGocciaArrayBufferValue;
 var
   NewMaxByteLength, CopyLength: Integer;
 begin
+  // Callers have converted newLength; revalidate before reading storage.
+  EnsureArrayBufferAttached(ABuf, SErrorCannotTransferDetachedArrayBuffer);
+
   // ES2026 §25.1.2.4 steps 5-6: Determine new maxByteLength
   // Preserve the original maxByteLength; AllocateArrayBuffer throws RangeError
   // if newByteLength > newMaxByteLength
@@ -468,11 +476,7 @@ var
 begin
   Buf := RequireArrayBuffer(AThisValue, 'ArrayBuffer.prototype.transfer');
 
-  // ES2026 §25.1.6.6 step 2: If IsDetachedBuffer(O), throw TypeError
-  if Buf.FDetached then
-    ThrowTypeError(SErrorCannotTransferDetachedArrayBuffer, SSuggestArrayBufferDetached);
-
-  // ES2026 §25.1.6.6 step 1: newLength defaults to current byteLength
+  // ES2026 §25.1.6.6: ArrayBufferCopyAndDetach converts newLength before the detached check.
   if (AArgs.Length = 0) or (AArgs.GetElement(0) is TGocciaUndefinedLiteralValue) then
     NewByteLength := Length(Buf.FData)
   else
@@ -490,11 +494,7 @@ var
 begin
   Buf := RequireArrayBuffer(AThisValue, 'ArrayBuffer.prototype.transferToFixedLength');
 
-  // ES2026 §25.1.6.7 step 2: If IsDetachedBuffer(O), throw TypeError
-  if Buf.FDetached then
-    ThrowTypeError(SErrorCannotTransferDetachedArrayBuffer, SSuggestArrayBufferDetached);
-
-  // ES2026 §25.1.6.7 step 1: newLength defaults to current byteLength
+  // ES2026 §25.1.6.7: ArrayBufferCopyAndDetach converts newLength before the detached check.
   if (AArgs.Length = 0) or (AArgs.GetElement(0) is TGocciaUndefinedLiteralValue) then
     NewByteLength := Length(Buf.FData)
   else
@@ -555,6 +555,9 @@ begin
     Final := Max(Len + Final, 0)
   else
     Final := Min(Final, Len);
+
+  // Side effects from argument coercion may have detached the receiver.
+  EnsureArrayBufferAttached(Buf, SErrorCannotSliceDetachedArrayBuffer);
 
   // Step 15: Let newLen be max(final - first, 0)
   NewLen := Max(Final - First, 0);
