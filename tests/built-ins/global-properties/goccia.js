@@ -36,5 +36,14 @@ describe.runIf(hasGoccia)("Goccia global", () => {
       Goccia.gc();
       Goccia.gc();
     });
+
+    test("gc preserves reachable objects after expression temporaries", () => {
+      const array = [];
+      array.length;
+      Goccia.gc();
+      array.t = 3;
+      Goccia.gc();
+      expect(array.t).toBe(3);
+    });
   });
 });

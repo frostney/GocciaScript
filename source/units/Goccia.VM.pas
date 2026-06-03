@@ -112,6 +112,7 @@ type
     FLastClosureThisValue: TGocciaRegister;
     FPrivateInitializerReceiver: TGocciaValue;
     FStackRoot: TGocciaVMStackRoot;
+    FStackRootRegistered: Boolean;
     FTempSavedStateRoots: TGocciaVMSavedStateRootArray;
     FTempSavedStateRootCount: Integer;
     function ConstantToValue(const AConstant: TGocciaBytecodeConstant): TGocciaValue;
@@ -281,6 +282,7 @@ type
   public
     constructor Create;
     destructor Destroy; override;
+    procedure EnsureStackRootRegistered;
     function ExecuteFunction(const ATemplate: TGocciaFunctionTemplate): TGocciaValue;
     function ExecuteModule(const AModule: TGocciaBytecodeModule): TGocciaValue;
     property GlobalScope: TGocciaScope read FGlobalScope write FGlobalScope;
@@ -970,6 +972,7 @@ constructor TGocciaVMStackRoot.Create(const AVM: TGocciaVM);
 begin
   FVM := AVM;
   inherited Create;
+  GCIndex := -1;
   if Assigned(TGarbageCollector.Instance) then
     TGarbageCollector.Instance.RegisterObject(Self);
 end;
@@ -3122,15 +3125,15 @@ begin
   SetLength(FFrameStack, 64);
   FFrameStackCount := 0;
   FStackRoot := TGocciaVMStackRoot.Create(Self);
-  if Assigned(TGarbageCollector.Instance) then
-    TGarbageCollector.Instance.AddRootObject(FStackRoot);
+  EnsureStackRootRegistered;
 end;
 
 destructor TGocciaVM.Destroy;
 var
   I: Integer;
 begin
-  if Assigned(TGarbageCollector.Instance) and Assigned(FStackRoot) then
+  if Assigned(TGarbageCollector.Instance) and Assigned(FStackRoot) and
+     FStackRootRegistered then
     TGarbageCollector.Instance.RemoveRootObject(FStackRoot);
   FStackRoot.Free;
   if Assigned(FActiveDecoratorSession) then
@@ -3146,6 +3149,23 @@ begin
   FHandlerStack.Free;
   SetExceptionMask(FPreviousExceptionMask);
   inherited;
+end;
+
+procedure TGocciaVM.EnsureStackRootRegistered;
+var
+  GC: TGarbageCollector;
+begin
+  if FStackRootRegistered or not Assigned(FStackRoot) then
+    Exit;
+
+  GC := TGarbageCollector.Instance;
+  if not Assigned(GC) then
+    Exit;
+
+  if FStackRoot.GCIndex < 0 then
+    GC.RegisterObject(FStackRoot);
+  GC.AddRootObject(FStackRoot);
+  FStackRootRegistered := True;
 end;
 
 destructor TGocciaBytecodeFunctionValue.Destroy;

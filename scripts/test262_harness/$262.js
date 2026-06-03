@@ -16,4 +16,8 @@ var $262 = {
   detachArrayBuffer(buffer) {
     buffer.transfer();
   },
+
+  gc() {
+    Goccia.gc();
+  },
 };
