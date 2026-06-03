@@ -28,6 +28,13 @@ describe.runIf(isIntl)("Date.prototype.toLocaleString", () => {
     expect(date.toLocaleString("en-US", options)).toBe(new Intl.DateTimeFormat("en-US", options).format(date));
   });
 
+  test("preserves style-only options without adding component defaults", () => {
+    const date = new Date(Date.UTC(2026, 0, 1, 15, 30, 45));
+    const options = { timeZone: "UTC", dateStyle: "short" };
+
+    expect(date.toLocaleString("en-US", options)).toBe(new Intl.DateTimeFormat("en-US", options).format(date));
+  });
+
   test("throws TypeError for fake Date receiver", () => {
     const fakeDate = Object.create(Date.prototype);
 

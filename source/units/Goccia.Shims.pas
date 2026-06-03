@@ -287,8 +287,9 @@ const
         '    }'#10 +
         '    const hasDate = out.weekday !== undefined || out.year !== undefined || out.month !== undefined || out.day !== undefined || out.dateStyle !== undefined;'#10 +
         '    const hasTime = out.dayPeriod !== undefined || out.hour !== undefined || out.minute !== undefined || out.second !== undefined || out.fractionalSecondDigits !== undefined || out.timeStyle !== undefined;'#10 +
-        '    if (needDate && !hasDate) { out.year = "numeric"; out.month = "numeric"; out.day = "numeric"; }'#10 +
-        '    if (needTime && !hasTime) { out.hour = "numeric"; out.minute = "numeric"; out.second = "numeric"; }'#10 +
+        '    const needDefaults = !hasDate && !hasTime;'#10 +
+        '    if (needDefaults && needDate) { out.year = "numeric"; out.month = "numeric"; out.day = "numeric"; }'#10 +
+        '    if (needDefaults && needTime) { out.hour = "numeric"; out.minute = "numeric"; out.second = "numeric"; }'#10 +
         '    return out;'#10 +
         '  }'#10 +
         '  toLocaleString(...args: any[]): string {'#10 +
