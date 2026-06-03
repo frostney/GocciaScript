@@ -891,7 +891,7 @@ begin
     TGocciaPropertyDescriptorData.Create(TGocciaStringLiteralValue.Create('TypedArray'), [pfConfigurable]));
   FTypedArrayIntrinsic.DefineProperty(PROP_LENGTH,
     TGocciaPropertyDescriptorData.Create(TGocciaNumberLiteralValue.Create(0), [pfConfigurable]));
-  TypedArrayStatic := TGocciaTypedArrayStaticFrom.Create(takUint8);
+  TypedArrayStatic := TGocciaTypedArrayStaticFrom.Create;
   FTypedArrayIntrinsic.DefineProperty(PROP_FROM,
     TGocciaPropertyDescriptorData.Create(
       TGocciaNativeFunctionValue.CreateWithoutPrototype(

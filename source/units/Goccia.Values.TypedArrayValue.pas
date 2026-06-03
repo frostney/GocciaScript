@@ -140,10 +140,8 @@ type
   end;
 
   TGocciaTypedArrayStaticFrom = class
-  private
-    FKind: TGocciaTypedArrayKind;
   public
-    constructor Create(const AKind: TGocciaTypedArrayKind);
+    constructor Create;
     function TypedArrayFrom(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function TypedArrayOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   end;
@@ -192,9 +190,22 @@ end;
 function RequireTypedArrayConstructorKind(
   const AThisValue: TGocciaValue;
   const AMethod: string): TGocciaTypedArrayKind;
+var
+  ClassValue: TGocciaClassValue;
 begin
   if AThisValue is TGocciaTypedArrayClassValue then
     Exit(TGocciaTypedArrayClassValue(AThisValue).Kind);
+
+  if AThisValue is TGocciaClassValue then
+  begin
+    ClassValue := TGocciaClassValue(AThisValue).SuperClass;
+    while Assigned(ClassValue) do
+    begin
+      if ClassValue is TGocciaTypedArrayClassValue then
+        Exit(TGocciaTypedArrayClassValue(ClassValue).Kind);
+      ClassValue := ClassValue.SuperClass;
+    end;
+  end;
 
   ThrowTypeError(Format(SErrorTypedArrayStaticReceiver, [AMethod]),
     SSuggestTypedArrayConstructorReceiver);
@@ -2503,10 +2514,9 @@ end;
 
 { TGocciaTypedArrayStaticFrom }
 
-constructor TGocciaTypedArrayStaticFrom.Create(const AKind: TGocciaTypedArrayKind);
+constructor TGocciaTypedArrayStaticFrom.Create;
 begin
   inherited Create;
-  FKind := AKind;
 end;
 
 // ES2026 §23.2.2.1 %TypedArray%.from(source [, mapfn [, thisArg]])
