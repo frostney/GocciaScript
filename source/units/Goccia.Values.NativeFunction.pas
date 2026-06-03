@@ -21,6 +21,7 @@ type
     FName: string;
     FArity: Integer;
     FNotConstructable: Boolean;
+    FCapturedRoot: TGocciaValue;
   protected
     function GetFunctionLength: Integer; override;
     function GetFunctionName: string; override;
@@ -32,11 +33,13 @@ type
     function Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; override;
     function Construct(const AArguments: TGocciaArgumentsCollection; const ANewTarget: TGocciaValue): TGocciaValue;
     function IsConstructable: Boolean; override;
+    procedure MarkReferences; override;
     property NativeFunction: TGocciaNativeFunctionCallback read FFunction;
     property ConstructCallback: TGocciaNativeConstructorCallback read FConstructCallback write FConstructCallback;
     property Name: string read FName;
     property Arity: Integer read FArity;
     property NotConstructable: Boolean read FNotConstructable write FNotConstructable;
+    property CapturedRoot: TGocciaValue read FCapturedRoot write FCapturedRoot;
   end;
 
 
@@ -102,6 +105,14 @@ end;
 function TGocciaNativeFunctionValue.IsConstructable: Boolean;
 begin
   Result := not FNotConstructable;
+end;
+
+procedure TGocciaNativeFunctionValue.MarkReferences;
+begin
+  if GCMarked then Exit;
+  inherited;
+  if Assigned(FCapturedRoot) then
+    FCapturedRoot.MarkReferences;
 end;
 
 function TGocciaNativeFunctionValue.GetFunctionLength: Integer;

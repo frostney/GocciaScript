@@ -83,6 +83,14 @@ describe("Object.prototype.toString", () => {
       expect(Object.prototype.toString.call(new WeakMap())).toBe("[object WeakMap]");
     });
 
+    test("WeakRef returns [object WeakRef]", () => {
+      expect(Object.prototype.toString.call(new WeakRef({}))).toBe("[object WeakRef]");
+    });
+
+    test("FinalizationRegistry returns [object FinalizationRegistry]", () => {
+      expect(Object.prototype.toString.call(new FinalizationRegistry(() => {}))).toBe("[object FinalizationRegistry]");
+    });
+
     test("Promise returns [object Promise]", () => {
       expect(Object.prototype.toString.call(new Promise((r) => r()))).toBe("[object Promise]");
     });
@@ -242,6 +250,11 @@ describe("Object.prototype.toString", () => {
       const key = {};
       expect(Object.prototype.toString.call(new WeakMap([[key, 1]]))).toBe("[object WeakMap]");
       expect(Object.prototype.toString.call(new WeakSet([key]))).toBe("[object WeakSet]");
+    });
+
+    test("WeakRef and FinalizationRegistry with values return their built-in tags", () => {
+      expect(Object.prototype.toString.call(new WeakRef({}))).toBe("[object WeakRef]");
+      expect(Object.prototype.toString.call(new FinalizationRegistry(() => {}))).toBe("[object FinalizationRegistry]");
     });
   });
 });

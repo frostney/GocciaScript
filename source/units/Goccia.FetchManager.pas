@@ -576,24 +576,34 @@ end;
 procedure DrainMicrotasksAndFetchCompletions;
 var
   DidWork: Boolean;
+  GC: TGarbageCollector;
   Queue: TGocciaMicrotaskQueue;
   Manager: TGocciaFetchManager;
 begin
-  repeat
-    DidWork := False;
+  GC := TGarbageCollector.Instance;
+  try
+    if Assigned(GC) then
+      GC.ClearKeptObjects;
 
-    Queue := TGocciaMicrotaskQueue.Instance;
-    if Assigned(Queue) and Queue.HasPending then
-    begin
-      Queue.DrainQueue;
-      DidWork := True;
-    end;
+    repeat
+      DidWork := False;
 
-    Manager := TGocciaFetchManager.Instance;
-    if Assigned(Manager) and Manager.HasPending and
-       (Manager.PumpCompletions > 0) then
-      DidWork := True;
-  until not DidWork;
+      Queue := TGocciaMicrotaskQueue.Instance;
+      if Assigned(Queue) and Queue.HasPending then
+      begin
+        Queue.DrainQueue;
+        DidWork := True;
+      end;
+
+      Manager := TGocciaFetchManager.Instance;
+      if Assigned(Manager) and Manager.HasPending and
+         (Manager.PumpCompletions > 0) then
+        DidWork := True;
+    until not DidWork;
+  finally
+    if Assigned(GC) then
+      GC.ClearKeptObjects;
+  end;
 end;
 
 function WaitForFetchPromise(const APromise: TGocciaPromiseValue): Boolean;

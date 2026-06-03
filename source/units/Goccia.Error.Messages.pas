@@ -682,6 +682,11 @@ resourcestring
   SErrorWeakCollectionInvalidKey = '%s: key must be an object or non-registered symbol';
   SErrorWeakMapConstructorEntryNotObject = 'WeakMap constructor requires each entry to be an object';
   SErrorWeakCollectionConstructorNotIterable = '%s constructor requires an iterable';
+  SErrorWeakRefDerefNonWeakRef = 'WeakRef.prototype.deref called on non-WeakRef object';
+  SErrorFinalizationRegistryCleanupNotCallable = 'FinalizationRegistry cleanup callback must be callable';
+  SErrorFinalizationRegistryRegisterNonRegistry = 'FinalizationRegistry.prototype.register called on non-FinalizationRegistry object';
+  SErrorFinalizationRegistryUnregisterNonRegistry = 'FinalizationRegistry.prototype.unregister called on non-FinalizationRegistry object';
+  SErrorFinalizationRegistryTargetHeldValueSame = 'FinalizationRegistry.prototype.register target and heldValue must not be the same value';
 
   // Set/Map forEach errors
   SErrorSetForEachNotCallable = 'Set.prototype.forEach: callback is not a function';

@@ -8,8 +8,8 @@
 - **Modern subset** — `let`/`const`, arrow functions, classes with private fields, `for...of`, async/await, ES modules
 - **TC39 proposals** — Decorators, decorator metadata, pattern matching, types as comments, enums, `Math.clamp`
 - **Excluded by design** — `eval`, wildcard re-exports
-- **Graceful handling** — Parser-recognized excluded or disabled syntax (`==`/`!=` when `--compat-loose-equality` is off, labels when `--compat-label` is off, `while`/`do...while` when `--compat-while-loops` is off, `with` when `--compat-non-strict-mode` is off, traditional `for(;;)` when `--compat-traditional-for-loop` is off) parses successfully but executes as a no-op with a warning and suggestion
-- **Opt-in toggles** — ASI (`--compat-asi`), `var` declarations (`--compat-var`), `function` keyword (`--compat-function`), non-strict Script compatibility (`--compat-non-strict-mode` for `arguments`, `with`, silent assignment failures, legacy `delete` returns, and sloppy `this`), loose equality (`--compat-loose-equality`), labels (`--compat-label`), traditional `for(init; test; update)` loops (`--compat-traditional-for-loop`), `while`/`do...while` loops (`--compat-while-loops`), runtime type enforcement (`--strict-types`)
+- **Graceful handling** — Parser-recognized excluded or disabled syntax (`==`/`!=` when `--compat-loose-equality` is off, labels when `--compat-label` is off, `while`/`do...while` when `--compat-while-loops` is off, `with` when `--compat-non-strict-mode` is off, traditional `for(;;)` when `--compat-traditional-for-loop` is off, `for...in` when `--compat-for-in-loop` is off) parses successfully but executes as a no-op with a warning and suggestion
+- **Opt-in toggles** — ASI (`--compat-asi`), `var` declarations (`--compat-var`), `function` keyword (`--compat-function`), non-strict Script compatibility (`--compat-non-strict-mode` for `arguments`, `with`, silent assignment failures, legacy `delete` returns, and sloppy `this`), loose equality (`--compat-loose-equality`), labels (`--compat-label`), traditional `for(init; test; update)` loops (`--compat-traditional-for-loop`), `for...in` loops (`--compat-for-in-loop`), `while`/`do...while` loops (`--compat-while-loops`), runtime type enforcement (`--strict-types`)
 - **Default preprocessors** — JSX (enabled by default via `DefaultPreprocessors`)
 
 GocciaScript implements a curated subset of ECMAScript. This document details what's supported, what's excluded, and the rationale for each decision. For quick-reference tables of every feature and TC39 proposal, see [Language Tables](language-tables.md).
@@ -133,6 +133,7 @@ class Counter {
 - `return`
 - Block statements
 - `for...of` and `for await...of` (see [Supported Iteration](#supported-iteration))
+- `for...in` via `--compat-for-in-loop` (see [`for...in`](#forin-loop))
 - `while` and `do...while` via `--compat-while-loops` (see [`while` and `do...while`](#while-and-dowhile))
 - `import`/`export` (ES module system)
 
@@ -645,6 +646,14 @@ Get existing value or insert a default/computed value: `map.getOrInsert(key, def
 
 WeakMap also implements the ES2026 upsert methods: `weakMap.getOrInsert(key, default)` and `weakMap.getOrInsertComputed(key, callbackFn)`. WeakMap keys must be objects or non-registered symbols.
 
+### WeakRef and FinalizationRegistry (ES2021)
+
+Weak references and finalization registries are supported for objects and non-registered symbols, matching the existing weak-key domain used by WeakMap and WeakSet. Primitives and `Symbol.for()` registry symbols are rejected because they cannot be held weakly.
+
+`new WeakRef(target)` creates a weak reference. `weakRef.deref()` returns the target while it is still live and returns `undefined` after the target has been collected. Both construction and `deref()` add the target to the current job's kept-objects set, so repeated `deref()` calls in the same job are stable.
+
+`new FinalizationRegistry(cleanupCallback)` creates a registry. `registry.register(target, heldValue, unregisterToken?)` registers a weak target and held value, and `registry.unregister(unregisterToken)` removes matching registrations. Explicit `Goccia.gc()` performs collection and enqueues cleanup jobs; cleanup callbacks run through the runtime's idle checkpoint after the normal microtask queue, not synchronously inside `Goccia.gc()`. Cleanup callback errors are surfaced as uncaught host callback errors.
+
 ### Error.isError (ES2026)
 
 Reliable brand check for error objects: `Error.isError(value)`. See [ES2026 §20.5.3.2](https://tc39.es/ecma262/#sec-error.iserror).
@@ -665,7 +674,7 @@ console.log(x); // 5
 
 With `let`/`const`, accessing before declaration is a `ReferenceError` (Temporal Dead Zone), which catches bugs early.
 
-When enabled (CLI: `--compat-var`, engine API: include `cfVar` in `Engine.Compatibility`, config: `{"compat-var": true}`), `var` declarations follow ES2026 §14.3.2 semantics: function-scoped (escapes blocks), hoisted to function top as `undefined`, redeclaration allowed, no TDZ, with destructuring and for-of support. Var bindings are stored in a separate binding map (`FVarBindings`) on function/module/global scopes, distinct from lexical bindings. See [interpreter.md § Scope Chain Design](interpreter.md#scope-chain-design).
+When enabled (CLI: `--compat-var`, engine API: include `cfVar` in `Engine.Compatibility`, config: `{"compat-var": true}`), `var` declarations follow ES2026 §14.3.2 semantics: function-scoped (escapes blocks), hoisted to function top as `undefined`, redeclaration allowed, no TDZ, with destructuring, for-of, and enabled for-in support. Var bindings are stored in a separate binding map (`FVarBindings`) on function/module/global scopes, distinct from lexical bindings. See [interpreter.md § Scope Chain Design](interpreter.md#scope-chain-design).
 
 ### `function` Keyword
 
@@ -796,7 +805,27 @@ items.filter((item) => item.isValid);
 items.reduce((acc, item) => acc + item, 0);
 ```
 
-`break` exits the nearest enclosing `switch`, `for...of`, `for await...of`, enabled traditional `for` loop, or enabled `while`/`do...while` loop. `continue` only applies to iteration constructs — `for...of`, `for await...of`, enabled traditional `for`, and enabled `while`/`do...while` — never to `switch`.
+`break` exits the nearest enclosing `switch`, `for...of`, `for await...of`, enabled traditional `for` loop, enabled `for...in` loop, or enabled `while`/`do...while` loop. `continue` only applies to iteration constructs — `for...of`, `for await...of`, enabled traditional `for`, enabled `for...in`, and enabled `while`/`do...while` — never to `switch`.
+
+### `for...in` Loop
+
+**Opt-in for JavaScript compatibility.** Excluded by default. Available via `--compat-for-in-loop` (CLI flag, `cfForIn` in `Engine.Compatibility`, or `{"compat-for-in-loop": true}` in config) when a program or conformance suite needs ECMAScript property enumeration semantics.
+
+When disabled (default), the parser accepts `for...in` declaration and assignment-target forms but treats the loop as a no-op and emits a warning. When enabled, declaration-head loops such as `for (const key in object) body` / `for (let key in object) body` and assignment-target loops such as `for (key in object) body` are supported in interpreter and bytecode modes:
+
+- The right-hand side follows ECMAScript `ForIn/OfHeadEvaluation`: `null` and `undefined` produce an empty loop; other primitives are boxed with `ToObject`.
+- The loop enumerates enumerable string property names, including inherited enumerable properties, and never returns symbol keys.
+- A property name appears at most once. An own property shadows a prototype property with the same name even when the own property is non-enumerable.
+- `var` declaration heads, including destructuring heads, require both `--compat-var` and `--compat-for-in-loop`; the bindings hoist out of the loop and are shared across iterations.
+- `break`, `continue`, and `return` unwind as they do in other supported loops.
+
+New GocciaScript code should usually prefer `Object.keys(obj)`, `Object.entries(obj)`, or explicit `for...of` over property names:
+
+```javascript
+for (const key of Object.keys(obj)) {
+  // ...
+}
+```
 
 ### `while` and `do...while`
 
@@ -850,18 +879,12 @@ The labeled statement itself (the statement after the `:`) is still parsed and e
 
 When enabled, labels can target `break` and `continue` statements in interpreter and bytecode modes:
 
-- `break label;` exits the matching enclosing labeled statement, including labeled blocks, `switch`, `for...of`, `for await...of`, traditional `for(;;)` with `--compat-traditional-for-loop`, and `while`/`do...while` with `--compat-while-loops`.
-- `continue label;` targets matching enclosing labeled iteration statements only: `for...of`, `for await...of`, traditional `for(;;)` with `--compat-traditional-for-loop`, and `while`/`do...while` with `--compat-while-loops`.
+- `break label;` exits the matching enclosing labeled statement, including labeled blocks, `switch`, `for...of`, `for await...of`, traditional `for(;;)` with `--compat-traditional-for-loop`, `for...in` with `--compat-for-in-loop`, and `while`/`do...while` with `--compat-while-loops`.
+- `continue label;` targets matching enclosing iteration statements only: `for...of`, `for await...of`, traditional `for(;;)` with `--compat-traditional-for-loop`, `for...in` with `--compat-for-in-loop`, and `while`/`do...while` with `--compat-while-loops`.
 
 ### Generators and Iterators
 
 Generator method shorthand (`*method()` and `async *method()`) is supported by default. Generator function syntax (`function*` and `async function*`) is supported only when `--compat-function` is enabled. Iterator protocol and Iterator Helpers are also implemented.
-
-### Deferred Built-ins
-
-The following standard ECMAScript built-ins are **not yet implemented** and may be added in future versions:
-
-- **WeakRef / FinalizationRegistry** — Weak references and finalizers. Deferred until demand warrants the additional cleanup scheduling complexity.
 
 ## Intentional Divergences from ECMAScript
 

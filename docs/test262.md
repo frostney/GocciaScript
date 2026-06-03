@@ -256,10 +256,15 @@ Script tests also receive the flag, but the injected directive keeps
 `arguments`, `with`, non-strict assignment failures, legacy `delete`
 return values, and regular-function nullish `this` coercion on the strict
 path. Remaining `noStrict` tests rely on sloppy-only behaviors that
-GocciaScript still does not provide and fail naturally. They are
-documented in `scripts/test262_compatibility_roadmap.json` as
-`excluded-by-language-design` and counted as expected failures, not as
-wrapper-infra failures.
+GocciaScript still does not provide and fail naturally as ordinary
+conformance failures, not as wrapper-infra failures.
+
+The runner passes syntax compatibility flags such as
+`--compat-traditional-for-loop`, `--compat-for-in-loop`,
+`--compat-while-loops`, and `--compat-label` unconditionally because
+test262 uses those forms across both harness helpers and test bodies; the
+test's source type and strictness still decide runtime strict-mode
+semantics.
 
 ## Path normalization
 

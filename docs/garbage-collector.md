@@ -6,8 +6,10 @@
 
 - **Mark-and-sweep** — Two-phase tracing GC (`Goccia.GarbageCollector.pas`) shared by both execution modes
 - **Auto-registration** — Every `TGocciaValue` registers with the GC via `AfterConstruction`; subclasses override `MarkReferences` to mark owned references
-- **Weak reference phase** — WeakMap and WeakSet use post-mark weak tracing/sweeping hooks so weak keys and values do not become strong roots
-- **Generation-counter marking** — O(1) mark-clear via `AdvanceMark` instead of O(n) flag reset per collection
+- **Weak reference phase** — WeakMap, WeakSet, WeakRef, and FinalizationRegistry use post-mark weak tracing/sweeping hooks so weak targets do not become strong roots
+- **Kept objects** — WeakRef construction and `deref()` keep targets stable until the next host job checkpoint
+- **Finalization cleanup** — FinalizationRegistry cleanup jobs are enqueued by GC and run after the normal microtask queue
+- **Generation-counter marking** — O(1) mark-clear via `AdvanceMark` instead of O(n) flag reset per collection; explicit collections are serialized across worker threads because some intrinsic objects are shared
 - **Pinned singletons** — `undefined`, `null`, `true`, `false`, `NaN`, `Infinity` are pinned once at engine startup; built-in prototypes are pinned per-engine via [realm slots](core-patterns.md#realm-ownership--slot-registration) and released atomically when the realm is destroyed
 - **Adaptive threshold** — Collection frequency scales with surviving object count to amortize cost on large heaps
 
@@ -16,8 +18,8 @@
 Every `TGocciaValue` participates in the garbage collector:
 
 ```pascal
-threadvar
-  GCCurrentMark: Cardinal;  // Per-thread generation counter
+var
+  GCCurrentMark: Cardinal;  // Shared generation counter
 
 TGCManagedObject = class
 private
@@ -40,8 +42,8 @@ end;
 ```
 
 - **`AfterConstruction` / `BeforeDestruction`** — Every value auto-registers with the thread-local `TGarbageCollector.Instance` upon creation and unregisters before destruction so root sets cannot retain stale object pointers.
-- **`MarkReferences`** — Base implementation sets `FGCMark := GCCurrentMark` (marking the object as alive for the current thread's collection). `AdvanceMark` increments the thread-local `GCCurrentMark`, and `TGarbageCollector.Instance` uses that thread-local mark while traversing objects. Subclasses override `MarkReferences` to also mark values they reference (e.g., `TGocciaObjectValue` marks its prototype and property values, `TGocciaFunctionValue` marks its closure scope, `TGocciaArrayValue` marks its elements). The `if GCMarked then Exit;` guard at the top of each override prevents re-visiting objects in cyclic reference graphs.
-- **`TraceWeakReferences` / `SweepWeakReferences`** — Optional hooks for weak containers. The default implementations do nothing. WeakMap uses `TraceWeakReferences` as an ephemeron pass: if a key is already marked by normal roots, its value is marked, but the key is never marked by the map. WeakMap and WeakSet use `SweepWeakReferences` to remove entries whose keys/values remain unmarked.
+- **`MarkReferences`** — Base implementation sets `FGCMark := GCCurrentMark` (marking the object as alive for the current collection). `AdvanceMark` increments the shared `GCCurrentMark` while the collector lock is held, and `TGarbageCollector.Instance` uses that mark while traversing objects. Subclasses override `MarkReferences` to also mark values they reference (e.g., `TGocciaObjectValue` marks its prototype and property values, `TGocciaFunctionValue` marks its closure scope, `TGocciaArrayValue` marks its elements). The `if GCMarked then Exit;` guard at the top of each override prevents re-visiting objects in cyclic reference graphs.
+- **`TraceWeakReferences` / `SweepWeakReferences`** — Optional hooks for weak containers and weak references. The default implementations do nothing. WeakMap uses `TraceWeakReferences` as an ephemeron pass: if a key is already marked by normal roots, its value is marked, but the key is never marked by the map. WeakMap and WeakSet use `SweepWeakReferences` to remove entries whose keys/values remain unmarked. WeakRef clears an unmarked target, and FinalizationRegistry removes dead cells while enqueueing cleanup jobs for their held values.
 - **`RuntimeCopy`** — Creates a fresh GC-managed copy of the value. Used by the evaluator when evaluating literal expressions: AST-owned literal values are not tracked by the GC, so `RuntimeCopy` produces a runtime value that is. The default implementation returns `Self` (for singletons and complex values). Primitives override this: numbers use the `SmallInt` cache for 0-255, booleans return singletons, strings create new instances (cheap due to copy-on-write).
 
 ## Contributor Rules
@@ -53,10 +55,12 @@ When working with the GC, follow these rules:
 - **Realm-owned pinning** — Built-in prototypes are stored in per-engine [realm slots](core-patterns.md#realm-ownership--slot-registration). `TGocciaRealm.SetSlot` pins the stored object via `PinObject`; the realm tracks every pin it took and releases all of them in `Destroy` via `UnpinObject`. Owned-slot helpers (`TGocciaSharedPrototype` instances) are `Free`d before the pin-release pass, so their destructors can still call `UnpinObject` on objects they own. This means engine tear-down releases the entire intrinsic prototype graph atomically — embedders should not pin or unpin built-in prototypes manually.
 - **Protect stack-held values** — Values held only by Pascal code (not in any GocciaScript scope) must be protected with `AddTempRoot`/`RemoveTempRoot`.
 - **Use `CollectIfNeeded(AProtect)`** when holding a `TGCManagedObject` on the stack. The no-arg `CollectIfNeeded` is only safe when all live values are already rooted.
-- **Weak containers must not mark keys during `MarkReferences`**. Put weak-value propagation in `TraceWeakReferences` and dead-entry pruning in `SweepWeakReferences`; otherwise WeakMap/WeakSet semantics collapse into strong Map/Set semantics.
+- **Weak containers and weak references must not mark weak targets during `MarkReferences`**. Put weak-value propagation in `TraceWeakReferences` and dead-target pruning or cleanup scheduling in `SweepWeakReferences`; otherwise weak semantics collapse into strong references.
+- **Queued jobs must root their callback payloads**. Promise reactions, `queueMicrotask` callbacks, and FinalizationRegistry cleanup jobs use queued roots so callback functions, held values, and result promises survive collections until the job runs.
+- **Clear kept objects at host job boundaries**. Engine idle checkpoints and the shared microtask/fetch drain helper clear the kept-objects set before and after draining; individual microtask/finalization jobs clear it after they complete.
 - **Scopes** register with the GC in their constructor and unregister through `BeforeDestruction`. Active call scopes are tracked via `PushActiveRoot`/`PopActiveRoot`.
 - **VM register rooting** uses a bytecode VM stack root and only traverses object-bearing register slots.
-- Automatic collection is disabled during bytecode execution. CLI hosts may still call `Collect` explicitly between files; the benchmark runner does this after each benchmark file, while parallel test workers reclaim their thread-local GC heap at worker shutdown.
+- Automatic collection is disabled during bytecode execution. CLI hosts may still call `Collect` explicitly between files; the benchmark runner does this after each benchmark file, while parallel test workers reclaim their thread-local GC heap at worker shutdown. Explicit `Goccia.gc()` is still available in worker threads and is serialized by the collector lock.
 
 ## Design Rationale
 
@@ -75,10 +79,10 @@ When working with the GC, follow these rules:
 - **Simplicity** — Two phases (mark reachable, sweep unreachable) with straightforward implementation.
 - **Handles cycles** — Circular references between objects, closures, and scopes are collected correctly.
 - **O(1) membership checks** — Pinned objects, temp roots, and root objects are stored in `THashMap<TGCManagedObject, Boolean>` (`TGCObjectSet`) for O(1) `PinObject`, `AddRootObject`, `AddTempRoot`, and `RemoveTempRoot` operations, avoiding O(n) linear scans on every allocation.
-- **Generation-counter mark tracking** — Instead of clearing the `GCMarked` flag on every object at the start of each collection (an O(n) pass), the GC uses a generation counter (`TGCManagedObject.FCurrentMark`). `AdvanceMark` increments the counter in O(1), and an object is considered "marked" when its `FGCMark` matches `FCurrentMark`. This eliminates a full pass over the managed objects list per collection.
+- **Generation-counter mark tracking** — Instead of clearing the `GCMarked` flag on every object at the start of each collection (an O(n) pass), the GC uses a generation counter. `AdvanceMark` increments the counter in O(1), and an object is considered "marked" when its `FGCMark` matches the current generation. This eliminates a full pass over the managed objects list per collection. The counter is shared across threads, and full/young collection holds a global collector lock so shared intrinsic objects cannot race on mark state.
 - **O(1) `UnregisterObject`** — Each managed object stores its index in the managed objects list (`GCIndex`). Unregistration nils the slot at the known index instead of performing an O(n) linear scan. The sweep phase compacts nil slots during its existing pass.
 - **Adaptive threshold** — After each collection, the threshold scales to `max(DEFAULT_GC_THRESHOLD, surviving_count)`, so large heaps collect proportionally less often, amortizing collection cost to O(1) per allocation.
-- **Weak fixed-point tracing** — After normal root marking, the collector repeatedly visits marked objects' weak hooks until no hook marks anything new. This handles ephemeron chains such as a live WeakMap key exposing a value that then keeps another WeakMap key alive. After the fixed point, marked weak containers sweep entries whose weak keys or values are still unmarked, then the normal object sweep frees unreachable objects.
+- **Weak fixed-point tracing** — After normal root marking, the collector repeatedly visits marked objects' weak hooks until no hook marks anything new. This handles ephemeron chains such as a live WeakMap key exposing a value that then keeps another WeakMap key alive. After the fixed point, marked weak containers sweep entries whose weak keys or values are still unmarked, WeakRefs clear dead targets, FinalizationRegistries enqueue cleanup jobs for dead cells, and then the normal object sweep frees unreachable objects.
 - **`Recycle` virtual method** — Sweep calls `Obj.Recycle` instead of `Obj.Free`. The default calls `Free`, but subclasses can override to return objects to a pool.
 - **Measurable impact** — Both the GocciaBenchmarkRunner and GocciaTestRunner call `Collect` after each file to reclaim memory between script executions.
 
@@ -121,7 +125,7 @@ Each worker thread creates its own `TGarbageCollector` instance via `threadvar`.
 
 Key behavior on worker threads:
 
-- **Automatic GC collection is disabled** (`Enabled := False`) to avoid `FGCMark` races on shared immutable objects (primitive singletons, shared prototypes). Explicit host-side `Collect` calls can still run; `GocciaBenchmarkRunner` uses this after each benchmark file, while `GocciaTestRunner` avoids worker-side collection and lets worker shutdown reclaim the thread-local GC heap.
+- **Automatic GC collection is disabled** (`Enabled := False`) so worker execution does not collect between ordinary allocations. Explicit `Collect` calls still run under the global collector lock; `Goccia.gc()` therefore has the same observable behavior in worker threads as on the main thread. `GocciaTestRunner` still lets worker shutdown reclaim each thread-local GC heap instead of collecting after every file.
 - **`BytesAllocated` still increments** on every allocation, even with automatic collection disabled. Without explicit host collection, the counter grows across all files a worker processes.
 - **The memory ceiling check still fires.** The limit check in `TGocciaValue.AfterConstruction` does not depend on `GC.Enabled` — it checks `MaxBytes > 0` and `BytesAllocated > MaxBytes` regardless. This is the sole protection against unbounded memory growth on workers.
 - **No pre-allocation.** `MaxBytes` is a threshold, not a reservation. Memory is allocated on demand by the FPC heap manager; the GC only checks whether the running total exceeds the ceiling.
@@ -133,7 +137,7 @@ The separate `memory.heap` JSON object comes from FreePascal's `GetHeapStatus`, 
 
 ## JavaScript API
 
-`Goccia.gc()` manually triggers a full mark-and-sweep collection on the main thread, bypassing the automatic collection threshold. Active interpreter calls and bytecode VM registers are treated as roots while collection runs. On worker threads the call is a no-op because shared immutable objects (singletons, prototypes) have a single `FGCMark` field that is not thread-safe for concurrent marking. It is safe to call repeatedly and returns `undefined`.
+`Goccia.gc()` manually triggers a full mark-and-sweep collection, bypassing the automatic collection threshold. Active interpreter calls and bytecode VM registers are treated as roots while collection runs. Collections are serialized by a global collector lock so explicit calls are safe in parallel test workers even though intrinsic prototype objects can be shared. It is safe to call repeatedly and returns `undefined`.
 
 | Property | Type | Description |
 |----------|------|-------------|

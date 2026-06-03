@@ -100,6 +100,7 @@ var
   Block: TGocciaBlockStatement;
   IfStmt: TGocciaIfStatement;
   ForOf: TGocciaForOfStatement;
+  ForIn: TGocciaForInStatement;
   ForStmt: TGocciaForStatement;
   WhileStmt: TGocciaWhileStatement;
   DoWhileStmt: TGocciaDoWhileStatement;
@@ -159,6 +160,18 @@ begin
         AddBindingName(ANames, ForOf.BindingName, True);
     end;
     CollectVarBindingNamesFromNode(ForOf.Body, ANames);
+  end
+  else if ANode is TGocciaForInStatement then
+  begin
+    ForIn := TGocciaForInStatement(ANode);
+    if ForIn.IsVar then
+    begin
+      if Assigned(ForIn.BindingPattern) then
+        CollectPatternBindingNames(ForIn.BindingPattern, ANames, True)
+      else
+        AddBindingName(ANames, ForIn.BindingName, True);
+    end;
+    CollectVarBindingNamesFromNode(ForIn.Body, ANames);
   end
   else if ANode is TGocciaForStatement then
   begin

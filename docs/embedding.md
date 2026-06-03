@@ -520,6 +520,7 @@ try
     cfNonStrictMode,
     cfLabel,
     cfTraditionalFor,
+    cfForIn,
     cfWhileLoops
   ];                                       // Enable selected compatibility semantics
   Engine.SourceType := stModule;           // Run entry as module source (top-level this is undefined; import.meta resolves)
