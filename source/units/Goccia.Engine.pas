@@ -308,6 +308,7 @@ uses
   Goccia.Values.ArrayValue,
   Goccia.Values.BooleanObjectValue,
   Goccia.Values.ErrorHelper,
+  Goccia.Values.FinalizationRegistryValue,
   Goccia.Values.FunctionValue,
   Goccia.Values.MapValue,
   Goccia.Values.NativeFunction,
@@ -319,6 +320,7 @@ uses
   Goccia.Values.SymbolValue,
   Goccia.Values.Uint8ArrayEncoding,
   Goccia.Values.WeakMapValue,
+  Goccia.Values.WeakRefValue,
   Goccia.Values.WeakSetValue,
   Goccia.Version;
 
@@ -749,6 +751,16 @@ begin
   TGocciaWeakSetValue.ExposePrototype(AConstructor);
 end;
 
+procedure ExposeWeakRefPrototype(const AConstructor: TGocciaValue);
+begin
+  TGocciaWeakRefValue.ExposePrototype(AConstructor);
+end;
+
+procedure ExposeFinalizationRegistryPrototype(const AConstructor: TGocciaValue);
+begin
+  TGocciaFinalizationRegistryValue.ExposePrototype(AConstructor);
+end;
+
 procedure TGocciaEngine.RegisterBuiltinConstructors;
 var
   Key: string;
@@ -759,6 +771,8 @@ var
   SetConstructor: TGocciaSetClassValue;
   WeakMapConstructor: TGocciaWeakMapClassValue;
   WeakSetConstructor: TGocciaWeakSetClassValue;
+  WeakRefConstructor: TGocciaWeakRefClassValue;
+  FinalizationRegistryConstructor: TGocciaFinalizationRegistryClassValue;
   ArrayBufferConstructor: TGocciaArrayBufferClassValue;
   SharedArrayBufferConstructor: TGocciaSharedArrayBufferClassValue;
   StringConstructor: TGocciaStringClassValue;
@@ -832,6 +846,29 @@ begin
   TypeDef.AddSpeciesGetter := False;
   RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
   WeakSetConstructor := TGocciaWeakSetClassValue(GenericConstructor);
+
+  TypeDef.ConstructorName := CONSTRUCTOR_WEAK_REF;
+  TypeDef.Kind := gtdkNativeInstanceType;
+  TypeDef.ClassValueClass := TGocciaWeakRefClassValue;
+  TypeDef.ExposePrototype := @ExposeWeakRefPrototype;
+  TypeDef.PrototypeProvider := nil;
+  TypeDef.StaticSource := nil;
+  TypeDef.PrototypeParent := ObjectConstructor.Prototype;
+  TypeDef.AddSpeciesGetter := False;
+  RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
+  WeakRefConstructor := TGocciaWeakRefClassValue(GenericConstructor);
+
+  TypeDef.ConstructorName := CONSTRUCTOR_FINALIZATION_REGISTRY;
+  TypeDef.Kind := gtdkNativeInstanceType;
+  TypeDef.ClassValueClass := TGocciaFinalizationRegistryClassValue;
+  TypeDef.ExposePrototype := @ExposeFinalizationRegistryPrototype;
+  TypeDef.PrototypeProvider := nil;
+  TypeDef.StaticSource := nil;
+  TypeDef.PrototypeParent := ObjectConstructor.Prototype;
+  TypeDef.AddSpeciesGetter := False;
+  RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
+  FinalizationRegistryConstructor :=
+    TGocciaFinalizationRegistryClassValue(GenericConstructor);
 
   ArrayBufferConstructor := TGocciaArrayBufferClassValue.Create(CONSTRUCTOR_ARRAY_BUFFER, nil);
   TGocciaArrayBufferValue.ExposePrototype(ArrayBufferConstructor);
@@ -932,6 +969,8 @@ begin
   TGocciaClassValue.PatchDefaultPrototype(SetConstructor);
   TGocciaClassValue.PatchDefaultPrototype(WeakMapConstructor);
   TGocciaClassValue.PatchDefaultPrototype(WeakSetConstructor);
+  TGocciaClassValue.PatchDefaultPrototype(WeakRefConstructor);
+  TGocciaClassValue.PatchDefaultPrototype(FinalizationRegistryConstructor);
   TGocciaClassValue.PatchDefaultPrototype(ArrayBufferConstructor);
   TGocciaClassValue.PatchDefaultPrototype(SharedArrayBufferConstructor);
   TGocciaClassValue.PatchDefaultPrototype(FTypedArrayIntrinsic);
@@ -1122,12 +1161,22 @@ procedure TGocciaEngine.WaitForRuntimeIdle;
 var
   I: Integer;
   Queue: TGocciaMicrotaskQueue;
+  GC: TGarbageCollector;
 begin
-  for I := 0 to FExtensions.Count - 1 do
-    FExtensions[I].WaitForIdle;
-  Queue := TGocciaMicrotaskQueue.Instance;
-  if Assigned(Queue) and Queue.HasPending then
-    Queue.DrainQueue;
+  try
+    for I := 0 to FExtensions.Count - 1 do
+      FExtensions[I].WaitForIdle;
+    GC := TGarbageCollector.Instance;
+    if Assigned(GC) then
+      GC.ClearKeptObjects;
+    Queue := TGocciaMicrotaskQueue.Instance;
+    if Assigned(Queue) and Queue.HasPending then
+      Queue.DrainQueue;
+  finally
+    GC := TGarbageCollector.Instance;
+    if Assigned(GC) then
+      GC.ClearKeptObjects;
+  end;
 end;
 
 procedure TGocciaEngine.DoRetainModule(const AModule: TObject);
@@ -1427,10 +1476,7 @@ var
   GC: TGarbageCollector;
 begin
   GC := TGarbageCollector.Instance;
-  // Skip on worker threads: shared immutable objects (singletons, prototypes)
-  // have a single FGCMark field that is not thread-safe — running mark-sweep
-  // on a worker would race on that field and crash.
-  if Assigned(GC) and (not GIsWorkerThread) then
+  if Assigned(GC) then
     GC.Collect;
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;

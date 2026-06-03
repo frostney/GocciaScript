@@ -299,7 +299,7 @@ The constructor-backed objects mirror the `node-semver` public fields and core i
 | Function | Description |
 |----------|-------------|
 | `queueMicrotask(callback)` | Enqueue a callback to run as a microtask. Throws `TypeError` if the argument is not callable. |
-| `structuredClone(value)` | Deep-clone a value using the structured clone algorithm. Handles objects, arrays, `Map`, `Set`, and circular references. Throws `DOMException` with name `"DataCloneError"` (code 25) for non-cloneable types (functions, symbols, `WeakMap`, `WeakSet`). |
+| `structuredClone(value)` | Deep-clone a value using the structured clone algorithm. Handles objects, arrays, `Map`, `Set`, and circular references. Throws `DOMException` with name `"DataCloneError"` (code 25) for non-cloneable types (functions, symbols, `WeakMap`, `WeakSet`, `WeakRef`, `FinalizationRegistry`). |
 | `btoa(data)` | Encode a binary string (each character code ≤ U+00FF) to base64. Throws `DOMException` with name `"InvalidCharacterError"` (code 5) if any character code exceeds U+00FF. |
 | `atob(data)` | Decode a base64 string to a binary string. Uses WHATWG forgiving-base64-decode: strips ASCII whitespace, tolerates missing `=` padding. Throws `DOMException` with name `"InvalidCharacterError"` (code 5) for invalid base64 input. |
 | `encodeURI(uriString)` | Encode a complete URI, preserving reserved characters (`;/?:@&=+$,#`) and unreserved characters. Multi-byte characters are UTF-8 encoded. Throws `URIError` for lone surrogates. |
@@ -307,9 +307,9 @@ The constructor-backed objects mirror the `node-semver` public fields and core i
 | `encodeURIComponent(uriComponent)` | Encode a URI component. Only unreserved characters (`A-Z a-z 0-9 - _ . ! ~ * ' ( )`) are preserved. Throws `URIError` for lone surrogates. |
 | `decodeURIComponent(encodedURIComponent)` | Decode a percent-encoded URI component. Decodes all percent sequences including reserved characters. Throws `URIError` for malformed percent sequences or invalid UTF-8. |
 
-`queueMicrotask` shares the same microtask queue used by Promise reactions. Callbacks run after the current synchronous code completes but before the engine returns control. If a callback throws, the error is silently discarded and remaining microtasks still execute.
+`queueMicrotask` shares the same microtask queue used by Promise reactions. Callbacks run after the current synchronous code completes but before the engine returns control. If a callback throws, the error is surfaced as an uncaught host callback error.
 
-`structuredClone` creates a deep copy following the HTML spec's structured clone algorithm. Primitives are returned as-is. Objects, arrays, Maps, and Sets are recursively cloned. Circular references and shared references within the object graph are preserved (the same cloned object is reused). Non-serializable values (functions, symbols, WeakMaps, WeakSets) throw a `DOMException` with `name: "DataCloneError"` and `code: 25`, matching browser and Node.js behavior. Accessor properties (getters/setters) are read via the getter and the resulting value is cloned as a data property on the clone.
+`structuredClone` creates a deep copy following the HTML spec's structured clone algorithm. Primitives are returned as-is. Objects, arrays, Maps, and Sets are recursively cloned. Circular references and shared references within the object graph are preserved (the same cloned object is reused). Non-serializable values (functions, symbols, WeakMaps, WeakSets, WeakRefs, FinalizationRegistries) throw a `DOMException` with `name: "DataCloneError"` and `code: 25`, matching browser and Node.js behavior. Accessor properties (getters/setters) are read via the getter and the resulting value is cloned as a data property on the clone.
 
 `btoa` encodes a string to base64 following the WHATWG HTML spec §8.3. Each character in the input must have a code point ≤ U+00FF (Latin-1 range); characters outside this range throw a `DOMException` with name `"InvalidCharacterError"` and legacy code 5. The input is interpreted as a byte sequence where each code point maps 1:1 to a byte value.
 
@@ -522,6 +522,33 @@ A weak key-value collection where keys are objects or non-registered symbols. We
 | `weakMap.getOrInsertComputed(key, cb)` | Return value for key if present; otherwise call `cb(key)`, insert result, and return it |
 
 WeakMaps intentionally do **not** expose `size`, `clear`, `forEach`, iteration, `keys`, `values`, or `entries`. Keys must satisfy ECMAScript `CanBeHeldWeakly`: objects and non-registered symbols are accepted; primitives and `Symbol.for()` registry symbols throw from `set()`, upsert methods, and construction.
+
+### WeakRef (`Goccia.Values.WeakRefValue.pas`)
+
+Implements the [ECMAScript WeakRef](https://tc39.es/ecma262/#sec-weak-ref-objects).
+
+A weak reference to an object or non-registered symbol target. A WeakRef does not keep its target alive, but `new WeakRef(target)` and `weakRef.deref()` add the target to the current job's kept-objects set so it remains stable until the next job checkpoint.
+
+| Method/Property | Description |
+|--------|-------------|
+| `new WeakRef(target)` | Create a weak reference to an object or non-registered symbol |
+| `weakRef.deref()` | Return the target if it is still live, otherwise `undefined` |
+
+Targets must satisfy ECMAScript `CanBeHeldWeakly`: objects and non-registered symbols are accepted; primitives and `Symbol.for()` registry symbols throw from construction. `WeakRef.prototype[Symbol.toStringTag]` is `"WeakRef"`.
+
+### FinalizationRegistry (`Goccia.Values.FinalizationRegistryValue.pas`)
+
+Implements the [ECMAScript FinalizationRegistry](https://tc39.es/ecma262/#sec-finalization-registry-objects).
+
+A finalization registry associates weakly held targets with held values. When a target becomes unreachable and `Goccia.gc()` runs, GocciaScript enqueues a cleanup job; cleanup callbacks run after the normal microtask queue rather than synchronously inside `Goccia.gc()`.
+
+| Method/Property | Description |
+|--------|-------------|
+| `new FinalizationRegistry(cleanupCallback)` | Create a registry with a callable cleanup callback |
+| `registry.register(target, heldValue, unregisterToken?)` | Register an object or non-registered symbol target with a held value |
+| `registry.unregister(unregisterToken)` | Remove matching registrations and return whether anything was removed |
+
+Targets and unregister tokens must satisfy `CanBeHeldWeakly`. A held value may be any value except the exact same value as the target. Cleanup callbacks receive one held value argument. If a cleanup callback throws, the error is surfaced as an uncaught host callback error.
 
 ### Promise (`Goccia.Builtins.GlobalPromise.pas`, `Goccia.Values.PromiseValue.pas`)
 

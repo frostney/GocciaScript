@@ -181,6 +181,16 @@ type
     function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
   end;
 
+  TGocciaWeakRefClassValue = class(TGocciaClassValue)
+    function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
+    function GetClassLength: Integer; override;
+  end;
+
+  TGocciaFinalizationRegistryClassValue = class(TGocciaClassValue)
+    function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
+    function GetClassLength: Integer; override;
+  end;
+
   TGocciaStringClassValue = class(TGocciaClassValue)
     function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
     // ECMAScript 22.1.1.1: String constructor length is 1.
@@ -302,6 +312,7 @@ uses
   Goccia.Values.AutoAccessor,
   Goccia.Values.ClassHelper,
   Goccia.Values.ErrorHelper,
+  Goccia.Values.FinalizationRegistryValue,
   Goccia.Values.HeadersValue,
   Goccia.Values.MapValue,
   Goccia.Values.NativeFunction,
@@ -314,6 +325,7 @@ uses
   Goccia.Values.URLSearchParamsValue,
   Goccia.Values.URLValue,
   Goccia.Values.WeakMapValue,
+  Goccia.Values.WeakRefValue,
   Goccia.Values.WeakSetValue;
 
 // SetDefaultPrototype / PatchDefaultPrototype previously cached the
@@ -1413,6 +1425,30 @@ end;
 function TGocciaWeakSetClassValue.CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue;
 begin
   Result := TGocciaWeakSetValue.Create;
+end;
+
+{ TGocciaWeakRefClassValue }
+
+function TGocciaWeakRefClassValue.CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue;
+begin
+  Result := TGocciaWeakRefValue.Create;
+end;
+
+function TGocciaWeakRefClassValue.GetClassLength: Integer;
+begin
+  Result := 1;
+end;
+
+{ TGocciaFinalizationRegistryClassValue }
+
+function TGocciaFinalizationRegistryClassValue.CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue;
+begin
+  Result := TGocciaFinalizationRegistryValue.Create;
+end;
+
+function TGocciaFinalizationRegistryClassValue.GetClassLength: Integer;
+begin
+  Result := 1;
 end;
 
 { TGocciaArrayBufferClassValue }

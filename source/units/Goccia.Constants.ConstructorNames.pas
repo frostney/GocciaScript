@@ -18,6 +18,8 @@ const
   CONSTRUCTOR_MAP      = 'Map';
   CONSTRUCTOR_WEAK_SET = 'WeakSet';
   CONSTRUCTOR_WEAK_MAP = 'WeakMap';
+  CONSTRUCTOR_WEAK_REF = 'WeakRef';
+  CONSTRUCTOR_FINALIZATION_REGISTRY = 'FinalizationRegistry';
   CONSTRUCTOR_PROXY    = 'Proxy';
   CONSTRUCTOR_PERFORMANCE  = 'Performance';
   CONSTRUCTOR_PROMISE      = 'Promise';

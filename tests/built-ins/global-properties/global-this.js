@@ -68,6 +68,22 @@ describe("globalThis exposes built-in constructors", () => {
     expect(typeof globalThis.Map).toBe("function");
   });
 
+  test("WeakSet", () => {
+    expect(typeof globalThis.WeakSet).toBe("function");
+  });
+
+  test("WeakMap", () => {
+    expect(typeof globalThis.WeakMap).toBe("function");
+  });
+
+  test("WeakRef", () => {
+    expect(typeof globalThis.WeakRef).toBe("function");
+  });
+
+  test("FinalizationRegistry", () => {
+    expect(typeof globalThis.FinalizationRegistry).toBe("function");
+  });
+
   test("Promise", () => {
     expect(typeof globalThis.Promise).toBe("function");
   });
