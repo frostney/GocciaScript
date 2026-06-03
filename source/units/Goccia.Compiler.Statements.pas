@@ -35,6 +35,8 @@ procedure CompileTryStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaTryStatement);
 procedure CompileForOfStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaForOfStatement);
+procedure CompileForInStatement(const ACtx: TGocciaCompilationContext;
+  const AStmt: TGocciaForInStatement);
 procedure CompileForAwaitOfStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaForAwaitOfStatement);
 procedure CompileForStatement(const ACtx: TGocciaCompilationContext;
@@ -174,6 +176,10 @@ type
     IsIteration: Boolean;
   end;
 
+procedure EmitGlobalDefinesForPattern(const ACtx: TGocciaCompilationContext;
+  const APattern: TGocciaDestructuringPattern; const AIsConst: Boolean;
+  const AIsVar: Boolean; const AHasInitializer: Boolean); forward;
+
 threadvar
   GBreakJumps: TList<Integer>;
   GContinueJumps: TList<Integer>;
@@ -247,6 +253,7 @@ function StatementIsIteration(const AStmt: TGocciaStatement): Boolean;
 begin
   Result := (AStmt is TGocciaForStatement) or
     (AStmt is TGocciaForOfStatement) or
+    (AStmt is TGocciaForInStatement) or
     (AStmt is TGocciaForAwaitOfStatement) or
     (AStmt is TGocciaWhileStatement) or
     (AStmt is TGocciaDoWhileStatement);
@@ -1474,6 +1481,9 @@ begin
   if AStmt is TGocciaForOfStatement then
     Exit(True);
 
+  if AStmt is TGocciaForInStatement then
+    Exit(True);
+
   if AStmt is TGocciaForStatement then
     Exit(True);
 
@@ -2221,6 +2231,116 @@ begin
     ACtx.Scope.FreeRegister;
 end;
 
+procedure CompileForInStatement(const ACtx: TGocciaCompilationContext;
+  const AStmt: TGocciaForInStatement);
+var
+  EntriesReg, LenReg, IdxReg, OneReg, CmpReg, EntryReg, KeyReg,
+    ValidReg: UInt8;
+  LoopStart, ExitJump, I: Integer;
+  Slot: UInt8;
+  LocalIdx: Integer;
+  ClosedLocals: array[0..255] of UInt8;
+  ClosedCount: Integer;
+  LoopControl: TLoopControlState;
+begin
+  EntriesReg := ACtx.Scope.AllocateRegister;
+  LenReg := ACtx.Scope.AllocateRegister;
+  IdxReg := ACtx.Scope.AllocateRegister;
+  OneReg := ACtx.Scope.AllocateRegister;
+  CmpReg := ACtx.Scope.AllocateRegister;
+  EntryReg := ACtx.Scope.AllocateRegister;
+  KeyReg := ACtx.Scope.AllocateRegister;
+  ValidReg := ACtx.Scope.AllocateRegister;
+
+  if AStmt.IsVar and ACtx.GlobalBackedTopLevel then
+  begin
+    if Assigned(AStmt.BindingPattern) then
+    begin
+      CollectDestructuringVarBindings(AStmt.BindingPattern, ACtx.Scope);
+      EmitGlobalDefinesForPattern(ACtx, AStmt.BindingPattern, False, True,
+        False);
+    end
+    else if AStmt.BindingName <> '' then
+    begin
+      Slot := ACtx.Scope.DeclareVarLocal(AStmt.BindingName);
+      LocalIdx := FindLocalBySlot(ACtx.Scope, AStmt.BindingName, Slot);
+      if LocalIdx >= 0 then
+        ACtx.Scope.MarkGlobalBacked(LocalIdx);
+      EmitGlobalDefine(ACtx, Slot, AStmt.BindingName, False, True, False);
+    end;
+  end;
+
+  ACtx.CompileExpression(AStmt.ObjectExpression, EntriesReg);
+  EmitInstruction(ACtx, EncodeABC(OP_ENUM_KEYS, EntriesReg, EntriesReg, 0));
+  EmitInstruction(ACtx, EncodeABC(OP_GET_LENGTH, LenReg, EntriesReg, 0));
+  EmitInstruction(ACtx, EncodeAsBx(OP_LOAD_INT, IdxReg, 0));
+  EmitInstruction(ACtx, EncodeAsBx(OP_LOAD_INT, OneReg, 1));
+
+  BeginLoopControl(ACtx, LoopControl);
+  try
+    LoopStart := CurrentCodePosition(ACtx);
+    EmitInstruction(ACtx, EncodeABC(OP_GTE_INT, CmpReg, IdxReg, LenReg));
+    ExitJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, CmpReg);
+    EmitInstruction(ACtx, EncodeABC(OP_ARRAY_GET, EntryReg, EntriesReg, IdxReg));
+    EmitInstruction(ACtx, EncodeABC(OP_ADD_INT, IdxReg, IdxReg, OneReg));
+    EmitInstruction(ACtx, EncodeABC(OP_ENUM_ENTRY, KeyReg, ValidReg, EntryReg));
+    EmitInstruction(ACtx,
+      EncodeAsBx(OP_JUMP_IF_FALSE, ValidReg,
+        LoopStart - CurrentCodePosition(ACtx) - 1));
+
+    ACtx.Scope.BeginScope;
+    SetLoopContinueScopeDepth(ACtx);
+    SetLabeledContinueCleanupBase(AStmt);
+
+    if Assigned(AStmt.AssignmentTarget) then
+      EmitDestructuring(ACtx, AStmt.AssignmentTarget, KeyReg, True)
+    else if Assigned(AStmt.BindingPattern) then
+    begin
+      if AStmt.IsVar then
+        CollectDestructuringVarBindings(AStmt.BindingPattern, ACtx.Scope)
+      else
+        CollectDestructuringBindings(AStmt.BindingPattern, ACtx.Scope,
+          AStmt.IsConst);
+      EmitDestructuring(ACtx, AStmt.BindingPattern, KeyReg);
+    end
+    else if AStmt.BindingName <> '' then
+    begin
+      if AStmt.IsVar then
+        Slot := ACtx.Scope.DeclareVarLocal(AStmt.BindingName)
+      else
+        Slot := ACtx.Scope.DeclareLocal(AStmt.BindingName, AStmt.IsConst);
+      EmitBindingAssignmentFromRegister(ACtx, AStmt.BindingName, KeyReg,
+        False);
+    end;
+
+    ACtx.CompileStatement(AStmt.Body);
+
+    PatchJumpList(ACtx, LoopControl.ContinueJumps);
+    PatchLabeledContinueJumps(ACtx, AStmt);
+
+    ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
+    for I := 0 to ClosedCount - 1 do
+      EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
+
+    EmitInstruction(ACtx,
+      EncodeAx(OP_JUMP, LoopStart - CurrentCodePosition(ACtx) - 1));
+
+    PatchJumpTarget(ACtx, ExitJump);
+    PatchJumpList(ACtx, LoopControl.BreakJumps);
+  finally
+    EndLoopControl(LoopControl);
+  end;
+
+  ACtx.Scope.FreeRegister;
+  ACtx.Scope.FreeRegister;
+  ACtx.Scope.FreeRegister;
+  ACtx.Scope.FreeRegister;
+  ACtx.Scope.FreeRegister;
+  ACtx.Scope.FreeRegister;
+  ACtx.Scope.FreeRegister;
+  ACtx.Scope.FreeRegister;
+end;
+
 procedure CompileForAwaitOfStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaForAwaitOfStatement);
 var
@@ -2509,12 +2629,32 @@ begin
   Result := True;
 end;
 
+function PatternAssignsIdentifier(const APattern: TGocciaDestructuringPattern;
+  const AName: string): Boolean;
+var
+  Names: TStringList;
+begin
+  Result := False;
+  if not Assigned(APattern) then
+    Exit;
+
+  Names := TStringList.Create;
+  Names.CaseSensitive := True;
+  try
+    CollectPatternBindingNames(APattern, Names);
+    Result := Names.IndexOf(AName) >= 0;
+  finally
+    Names.Free;
+  end;
+end;
+
 function ForBodyAssignsIdentifier(const ANode: TGocciaASTNode;
   const AName: string): Boolean;
 var
   Block: TGocciaBlockStatement;
   IfStmt: TGocciaIfStatement;
   ForOf: TGocciaForOfStatement;
+  ForIn: TGocciaForInStatement;
   ForStmt: TGocciaForStatement;
   WhileStmt: TGocciaWhileStatement;
   DoWhileStmt: TGocciaDoWhileStatement;
@@ -2576,10 +2716,30 @@ begin
   else if ANode is TGocciaForOfStatement then
   begin
     ForOf := TGocciaForOfStatement(ANode);
-    if (ForOf.BindingName = AName) and ForOf.IsVar then
-      Exit(True);
+    if ForOf.IsVar then
+    begin
+      if ForOf.BindingName = AName then
+        Exit(True);
+      if PatternAssignsIdentifier(ForOf.BindingPattern, AName) then
+        Exit(True);
+    end;
     if ForBodyAssignsIdentifier(ForOf.Iterable, AName) then Exit(True);
     Result := ForBodyAssignsIdentifier(ForOf.Body, AName);
+  end
+  else if ANode is TGocciaForInStatement then
+  begin
+    ForIn := TGocciaForInStatement(ANode);
+    if PatternAssignsIdentifier(ForIn.AssignmentTarget, AName) then
+      Exit(True);
+    if ForIn.IsVar then
+    begin
+      if ForIn.BindingName = AName then
+        Exit(True);
+      if PatternAssignsIdentifier(ForIn.BindingPattern, AName) then
+        Exit(True);
+    end;
+    if ForBodyAssignsIdentifier(ForIn.ObjectExpression, AName) then Exit(True);
+    Result := ForBodyAssignsIdentifier(ForIn.Body, AName);
   end
   else if ANode is TGocciaForStatement then
   begin
@@ -5042,7 +5202,7 @@ end;
 
 procedure EmitGlobalDefinesForPattern(const ACtx: TGocciaCompilationContext;
   const APattern: TGocciaDestructuringPattern; const AIsConst: Boolean;
-  const AIsVar: Boolean = False; const AHasInitializer: Boolean = True);
+  const AIsVar: Boolean; const AHasInitializer: Boolean);
 var
   ObjPat: TGocciaObjectDestructuringPattern;
   ArrPat: TGocciaArrayDestructuringPattern;

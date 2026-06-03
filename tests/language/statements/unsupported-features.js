@@ -16,6 +16,20 @@ describe.runIf(hasGoccia)("unsupported features are skipped", () => {
     expect(x).toBe(1);
   });
 
+  test("code after skipped for-in loop executes", () => {
+    let x = 1;
+    for (const key in { a: 1 }) { x = 99; }
+    expect(x).toBe(1);
+  });
+
+  test("code after skipped for-in assignment target loop executes", () => {
+    let x = 1;
+    let key;
+    for (key in { a: 1 }) { x = 99; }
+    expect(x).toBe(1);
+    expect(key).toBe(undefined);
+  });
+
   test("for loop with nested parentheses is skipped correctly", () => {
     let x = 1;
     for (let i = Math.max(0, 1); i < Math.min(10, 20); i++) { x = 99; }

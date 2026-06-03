@@ -179,6 +179,31 @@ type
     property Body: TGocciaStatement read FBody;
   end;
 
+  TGocciaForInStatement = class(TGocciaStatement)
+  private
+    FIsConst: Boolean;
+    FIsVar: Boolean;
+    FBindingName: string;
+    FBindingPattern: TGocciaDestructuringPattern;
+    FAssignmentTarget: TGocciaDestructuringPattern;
+    FObjectExpression: TGocciaExpression;
+    FBody: TGocciaStatement;
+  public
+    constructor Create(const AIsConst: Boolean; const ABindingName: string;
+      const ABindingPattern: TGocciaDestructuringPattern;
+      const AObjectExpression: TGocciaExpression; const ABody: TGocciaStatement;
+      const ALine, AColumn: Integer;
+      const AAssignmentTarget: TGocciaDestructuringPattern = nil);
+    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
+    property IsConst: Boolean read FIsConst;
+    property IsVar: Boolean read FIsVar write FIsVar;
+    property BindingName: string read FBindingName;
+    property BindingPattern: TGocciaDestructuringPattern read FBindingPattern;
+    property AssignmentTarget: TGocciaDestructuringPattern read FAssignmentTarget;
+    property ObjectExpression: TGocciaExpression read FObjectExpression;
+    property Body: TGocciaStatement read FBody;
+  end;
+
   TGocciaForAwaitOfStatement = class(TGocciaForOfStatement)
   public
     function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
@@ -790,6 +815,24 @@ begin
   FBody := ABody;
 end;
 
+{ TGocciaForInStatement }
+
+constructor TGocciaForInStatement.Create(const AIsConst: Boolean;
+  const ABindingName: string;
+  const ABindingPattern: TGocciaDestructuringPattern;
+  const AObjectExpression: TGocciaExpression; const ABody: TGocciaStatement;
+  const ALine, AColumn: Integer;
+  const AAssignmentTarget: TGocciaDestructuringPattern = nil);
+begin
+  inherited Create(ALine, AColumn);
+  FIsConst := AIsConst;
+  FBindingName := ABindingName;
+  FBindingPattern := ABindingPattern;
+  FAssignmentTarget := AAssignmentTarget;
+  FObjectExpression := AObjectExpression;
+  FBody := ABody;
+end;
+
   { TGocciaReturnStatement }
 
   constructor TGocciaReturnStatement.Create(const AValue: TGocciaExpression;
@@ -1190,6 +1233,11 @@ end;
   function TGocciaForOfStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
   begin
     Result := EvaluateForOf(Self, AContext);
+  end;
+
+  function TGocciaForInStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  begin
+    Result := EvaluateForIn(Self, AContext);
   end;
 
   function TGocciaForAwaitOfStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;

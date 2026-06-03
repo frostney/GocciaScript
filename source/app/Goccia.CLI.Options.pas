@@ -124,7 +124,9 @@ const
     (OptionName: 'compat-non-strict-mode';
      HelpText: 'Enable non-strict-mode compatibility semantics'),
     (OptionName: 'compat-label';
-     HelpText: 'Enable labeled break and continue targets (compatibility)')
+     HelpText: 'Enable labeled break and continue targets (compatibility)'),
+    (OptionName: 'compat-for-in-loop';
+     HelpText: 'Enable for...in property enumeration loops (compatibility)')
   );
 
 function CompatibilityFlagCount: Integer;

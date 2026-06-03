@@ -35,6 +35,7 @@ type
     LooseEqualityEnabled: Boolean;
     NonStrictModeEnabled: Boolean;
     LabelStatementsEnabled: Boolean;
+    ForInLoopsEnabled: Boolean;
   end;
 
   TGocciaPrivateNameReference = record
@@ -90,6 +91,7 @@ type
     FLooseEqualityEnabled: Boolean;
     FNonStrictModeEnabled: Boolean;
     FLabelStatementsEnabled: Boolean;
+    FForInLoopsEnabled: Boolean;
     FStrictModeActive: Boolean;
 
     procedure AddWarning(const AMessage, ASuggestion: string; const ALine, AColumn: Integer);
@@ -364,6 +366,7 @@ begin
   FLooseEqualityEnabled := AOptions.LooseEqualityEnabled;
   FNonStrictModeEnabled := AOptions.NonStrictModeEnabled;
   FLabelStatementsEnabled := AOptions.LabelStatementsEnabled;
+  FForInLoopsEnabled := AOptions.ForInLoopsEnabled;
 end;
 
 function TGocciaParser.Options: TGocciaParserOptions;
@@ -376,6 +379,7 @@ begin
   Result.LooseEqualityEnabled := FLooseEqualityEnabled;
   Result.NonStrictModeEnabled := FNonStrictModeEnabled;
   Result.LabelStatementsEnabled := FLabelStatementsEnabled;
+  Result.ForInLoopsEnabled := FForInLoopsEnabled;
 end;
 
 destructor TGocciaParser.Destroy;
@@ -4309,10 +4313,13 @@ var
   IsVar: Boolean;
   BindingName: string;
   BindingPattern: TGocciaDestructuringPattern;
+  AssignmentTarget: TGocciaDestructuringPattern;
   MatchPattern: TGocciaMatchPattern;
   IterableExpr: TGocciaExpression;
   BodyStmt: TGocciaStatement;
+  TargetExpr: TGocciaExpression;
   SavedCurrent: Integer;
+  AfterLeftParen: Integer;
   Token: TGocciaToken;
 begin
   Line := Previous.Line;
@@ -4321,8 +4328,10 @@ begin
   // Try to parse for...of / for-await-of
   SavedCurrent := FCurrent;
   IsAwait := False;
+  IsConst := False;
   IsVar := False;
   BindingPattern := nil;
+  AssignmentTarget := nil;
   MatchPattern := nil;
 
   // for-await-of: 'await' appears between 'for' and '(' (async or top-level)
@@ -4335,6 +4344,7 @@ begin
   if Check(gttLeftParen) then
   begin
     Advance; // consume '('
+    AfterLeftParen := FCurrent;
 
     // Check for const/let/var binding
     if Check(gttConst) or Check(gttLet) or (FVarDeclarationsEnabled and Check(gttVar)) then
@@ -4398,6 +4408,38 @@ begin
           'Keyword must not contain escaped characters',
           Peek.Line, Peek.Column, FFileName, FSourceLines);
 
+      if Check(gttIn) then
+      begin
+        if IsAwait then
+          raise TGocciaSyntaxError.Create(
+            '''for await...in'' is not valid JavaScript syntax',
+            Line, Column, FFileName, FSourceLines,
+            'Use ''for await...of'' for async iteration or ''for...in'' for property enumeration');
+
+        if not FForInLoopsEnabled then
+        begin
+          AddWarning('''for...in'' loops are not supported by default in GocciaScript',
+            'Use Object.keys()/Object.entries() with for...of, or enable --compat-for-in-loop',
+            Line, Column);
+          FCurrent := SavedCurrent;
+          SkipBalancedParens;
+          SkipStatementOrBlock;
+          Result := TGocciaEmptyStatement.Create(Line, Column);
+          Exit;
+        end;
+
+        Advance; // consume 'in'
+        IterableExpr := Expression;
+        Consume(gttRightParen, 'Expected ")" after for...in expression',
+          SSuggestCloseParenForOf);
+
+        BodyStmt := IterationBodyStatement;
+        Result := TGocciaForInStatement.Create(IsConst, BindingName,
+          BindingPattern, IterableExpr, BodyStmt, Line, Column);
+        TGocciaForInStatement(Result).IsVar := IsVar;
+        Exit;
+      end;
+
       if CheckContextualKeyword(KEYWORD_OF) then
       begin
         Advance; // consume 'of'
@@ -4418,6 +4460,46 @@ begin
           Result := TGocciaForOfStatement.Create(IsConst, BindingName, BindingPattern, IterableExpr, BodyStmt, Line, Column, MatchPattern);
           TGocciaForOfStatement(Result).IsVar := IsVar;
         end;
+        Exit;
+      end;
+    end
+    else if not Check(gttSemicolon) then
+    begin
+      FCurrent := SavedCurrent;
+      if FTraditionalForLoopsEnabled and LooksLikeTraditionalForHeader then
+        Exit(ParseTraditionalForBody(Line, Column));
+      FCurrent := AfterLeftParen;
+
+      TargetExpr := Call;
+      if Check(gttIn) then
+      begin
+        if IsAwait then
+          raise TGocciaSyntaxError.Create(
+            '''for await...in'' is not valid JavaScript syntax',
+            Line, Column, FFileName, FSourceLines,
+            'Use ''for await...of'' for async iteration or ''for...in'' for property enumeration');
+
+        if not FForInLoopsEnabled then
+        begin
+          AddWarning('''for...in'' loops are not supported by default in GocciaScript',
+            'Use Object.keys()/Object.entries() with for...of, or enable --compat-for-in-loop',
+            Line, Column);
+          FCurrent := SavedCurrent;
+          SkipBalancedParens;
+          SkipStatementOrBlock;
+          Result := TGocciaEmptyStatement.Create(Line, Column);
+          Exit;
+        end;
+
+        AssignmentTarget := ConvertToPattern(TargetExpr);
+        Advance; // consume 'in'
+        IterableExpr := Expression;
+        Consume(gttRightParen, 'Expected ")" after for...in expression',
+          SSuggestCloseParenForOf);
+
+        BodyStmt := IterationBodyStatement;
+        Result := TGocciaForInStatement.Create(False, '', nil,
+          IterableExpr, BodyStmt, Line, Column, AssignmentTarget);
         Exit;
       end;
     end;
@@ -6724,6 +6806,7 @@ var
   ObjectExpr: TGocciaObjectExpression;
   IdentifierExpr: TGocciaIdentifierExpression;
   AssignmentExpr: TGocciaAssignmentExpression;
+  PrivateMemberExpr: TGocciaPrivateMemberExpression;
   Elements: TObjectList<TGocciaDestructuringPattern>;
   Properties: TObjectList<TGocciaDestructuringProperty>;
   I: Integer;
@@ -6806,6 +6889,12 @@ begin
   begin
     Result := TGocciaMemberExpressionDestructuringPattern.Create(
       TGocciaMemberExpression(AExpr), AExpr.Line, AExpr.Column);
+  end
+  else if AExpr is TGocciaPrivateMemberExpression then
+  begin
+    PrivateMemberExpr := TGocciaPrivateMemberExpression(AExpr);
+    Result := TGocciaPrivateMemberExpressionDestructuringPattern.Create(
+      PrivateMemberExpr, AExpr.Line, AExpr.Column);
   end
   else if AExpr is TGocciaPropertyAssignmentExpression then
   begin

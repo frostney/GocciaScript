@@ -23,6 +23,7 @@ type
   TGocciaDestructuringPattern = class;
   TGocciaGetterExpression = class;
   TGocciaMatchPattern = class;
+  TGocciaPrivateMemberExpression = class;
   TGocciaSetterExpression = class;
 
   TGocciaParameter = record
@@ -621,6 +622,16 @@ type
     constructor Create(const AExpression: TGocciaMemberExpression; const ALine, AColumn: Integer);
     function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Expression: TGocciaMemberExpression read FExpression;
+  end;
+
+  // Private member expression pattern: this.#x
+  TGocciaPrivateMemberExpressionDestructuringPattern = class(TGocciaDestructuringPattern)
+  private
+    FExpression: TGocciaPrivateMemberExpression;
+  public
+    constructor Create(const AExpression: TGocciaPrivateMemberExpression; const ALine, AColumn: Integer);
+    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
+    property Expression: TGocciaPrivateMemberExpression read FExpression;
   end;
 
   // Destructuring assignment expression
@@ -1453,6 +1464,14 @@ begin
   FExpression := AExpression;
 end;
 
+{ TGocciaPrivateMemberExpressionDestructuringPattern }
+
+constructor TGocciaPrivateMemberExpressionDestructuringPattern.Create(const AExpression: TGocciaPrivateMemberExpression; const ALine, AColumn: Integer);
+begin
+  inherited Create(ALine, AColumn);
+  FExpression := AExpression;
+end;
+
 { TGocciaDestructuringAssignmentExpression }
 
 constructor TGocciaDestructuringAssignmentExpression.Create(const ALeft: TGocciaDestructuringPattern; const ARight: TGocciaExpression; const ALine, AColumn: Integer);
@@ -2212,6 +2231,11 @@ begin
 end;
 
 function TGocciaMemberExpressionDestructuringPattern.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
+begin
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TGocciaPrivateMemberExpressionDestructuringPattern.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
