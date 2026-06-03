@@ -1368,6 +1368,8 @@ begin
     Final := TA.FLength;
 
   NewLen := Max(Final - First, 0);
+  if NewLen > 0 then
+    EnsureTypedArrayAttached(TA, 'TypedArray.prototype.slice');
   NewTA := CreateSameKindArray(TA, NewLen);
   if IsBigIntKind(TA.FKind) then
   begin
