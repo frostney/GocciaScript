@@ -380,7 +380,9 @@ var
   OuterRealm, InnerRealm: TGocciaRealm;
   Guard: TGocciaExecutionContextScope;
   Running: TGocciaExecutionContext;
+  PreviousRealm: TGocciaRealm;
 begin
+  PreviousRealm := CurrentRealm;
   OuterRealm := TGocciaRealm.Create('outer');
   InnerRealm := TGocciaRealm.Create('inner');
   Guard := nil;
@@ -400,7 +402,7 @@ begin
   finally
     if Assigned(Guard) then
       Guard.Free;
-    SetCurrentRealm(nil);
+    SetCurrentRealm(PreviousRealm);
     InnerRealm.Free;
     OuterRealm.Free;
   end;

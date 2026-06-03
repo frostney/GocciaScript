@@ -7649,10 +7649,17 @@ procedure TGocciaVM.SetupNewFrame(const AClosure: TGocciaBytecodeClosure;
   out APrevCovLine: UInt32; out AProfileTimestamp: Int64);
 var
   I: Integer;
+  ExecutionSourcePath: string;
 begin
   AProfileTimestamp := 0;
-  AcquireRegisters(Max(AClosure.Template.MaxRegisters, 1));
-  AcquireLocalCells(Max(AClosure.Template.MaxRegisters, 1));
+  ATemplate := AClosure.Template;
+  if Assigned(ATemplate.DebugInfo) and (ATemplate.DebugInfo.SourceFile <> '') then
+    ExecutionSourcePath := ATemplate.DebugInfo.SourceFile
+  else
+    ExecutionSourcePath := FCurrentModuleSourcePath;
+
+  AcquireRegisters(Max(ATemplate.MaxRegisters, 1));
+  AcquireLocalCells(Max(ATemplate.MaxRegisters, 1));
   SetLength(FCurrentArguments, AArgCount);
   for I := 0 to AArgCount - 1 do
     if AUseFixedArgs then
@@ -7674,12 +7681,11 @@ begin
   Inc(FFrameDepth);
   if Assigned(TGocciaCallStack.Instance) then
     TGocciaCallStack.Instance.Push(
-      AClosure.Template.Name,
-      FCurrentModuleSourcePath,
+      ATemplate.Name,
+      ExecutionSourcePath,
       0, 0);
 
   AFrame := Default(TGocciaVMCallFrame);
-  ATemplate := AClosure.Template;
   AFrame.Template := ATemplate;
 
   if not ATemplate.IsArrow then
@@ -7715,7 +7721,7 @@ begin
   if APushExecutionContext and Assigned(FRealm) then
   begin
     TGocciaExecutionContextStack.Push(
-      CreateExecutionContext(FRealm, FGlobalScope, FCurrentModuleSourcePath,
+      CreateExecutionContext(FRealm, FGlobalScope, ExecutionSourcePath,
         nil, AClosure.FunctionValue));
     FCurrentExecutionContextPushed := True;
   end;
@@ -10796,12 +10802,17 @@ function TGocciaVM.ExecuteFunction(const ATemplate: TGocciaFunctionTemplate): TG
 var
   EmptyArgs: TGocciaArgumentsCollection;
   TopClosure: TGocciaBytecodeClosure;
+  ExecutionSourcePath: string;
 begin
   EmptyArgs := TGocciaArgumentsCollection.Create;
   TopClosure := TGocciaBytecodeClosure.Create(ATemplate);
+  if Assigned(ATemplate.DebugInfo) and (ATemplate.DebugInfo.SourceFile <> '') then
+    ExecutionSourcePath := ATemplate.DebugInfo.SourceFile
+  else
+    ExecutionSourcePath := FCurrentModuleSourcePath;
   if Assigned(FRealm) then
     TGocciaExecutionContextStack.Push(
-      CreateExecutionContext(FRealm, FGlobalScope, FCurrentModuleSourcePath,
+      CreateExecutionContext(FRealm, FGlobalScope, ExecutionSourcePath,
         ATemplate));
   try
     Result := ExecuteClosure(TopClosure,

@@ -123,8 +123,8 @@ begin
   Dec(GExecutionContextStackCount);
   Result := GExecutionContextStack[GExecutionContextStackCount].Context;
   PreviousRealm := GExecutionContextStack[GExecutionContextStackCount].PreviousRealm;
-  FillChar(GExecutionContextStack[GExecutionContextStackCount],
-    SizeOf(GExecutionContextStack[GExecutionContextStackCount]), 0);
+  GExecutionContextStack[GExecutionContextStackCount] :=
+    Default(TGocciaExecutionContextStackEntry);
   SetCurrentRealm(PreviousRealm);
 end;
 
@@ -153,9 +153,8 @@ begin
     raise Exception.Create('Function execution context stack underflow.');
 
   Dec(GFunctionExecutionContextStackCount);
-  FillChar(GFunctionExecutionContextStack[GFunctionExecutionContextStackCount],
-    SizeOf(GFunctionExecutionContextStack[GFunctionExecutionContextStackCount]),
-    0);
+  GFunctionExecutionContextStack[GFunctionExecutionContextStackCount] :=
+    Default(TGocciaFunctionExecutionContextEntry);
 end;
 
 class function TGocciaExecutionContextStack.Running: TGocciaExecutionContext;
@@ -163,7 +162,7 @@ begin
   if GExecutionContextStackCount > 0 then
     Result := GExecutionContextStack[GExecutionContextStackCount - 1].Context
   else
-    FillChar(Result, SizeOf(Result), 0);
+    Result := Default(TGocciaExecutionContext);
 
   if Goccia.Realm.HasCurrentFunctionExecutionContext then
   begin
