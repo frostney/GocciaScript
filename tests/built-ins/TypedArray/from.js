@@ -1,4 +1,18 @@
 describe("TypedArray.from", () => {
+  test("is inherited from %TypedArray% with built-in method attributes", () => {
+    const typedArrayIntrinsic = Object.getPrototypeOf(Uint8Array);
+
+    expect(Object.getOwnPropertyDescriptor(Uint8Array, "from")).toBeUndefined();
+    expect(Object.getOwnPropertyDescriptor(typedArrayIntrinsic, "from")).toEqual({
+      value: Uint8Array.from,
+      writable: true,
+      enumerable: false,
+      configurable: true,
+    });
+    expect(Int16Array.from([256])[0]).toBe(256);
+    expect(Uint8Array.from.call(Int16Array, [256])[0]).toBe(256);
+  });
+
   test("from another typed array with truncation", () => {
     const src = new Float64Array([1.7, 2.3, 3.9]);
     const ta = Int32Array.from(src);

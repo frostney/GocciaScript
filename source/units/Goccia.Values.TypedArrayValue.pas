@@ -189,6 +189,18 @@ begin
     Result := nil;
 end;
 
+function RequireTypedArrayConstructorKind(
+  const AThisValue: TGocciaValue;
+  const AMethod: string): TGocciaTypedArrayKind;
+begin
+  if AThisValue is TGocciaTypedArrayClassValue then
+    Exit(TGocciaTypedArrayClassValue(AThisValue).Kind);
+
+  ThrowTypeError(Format(SErrorTypedArrayStaticReceiver, [AMethod]),
+    SSuggestTypedArrayConstructorReceiver);
+  Result := takUint8;
+end;
+
 class function TGocciaTypedArrayValue.BytesPerElement(const AKind: TGocciaTypedArrayKind): Integer;
 begin
   case AKind of
@@ -2512,12 +2524,14 @@ var
   MapArgs: TGocciaArgumentsCollection;
   Iterator: TGocciaIteratorValue;
   IterResult: TGocciaObjectValue;
+  ConstructorKind: TGocciaTypedArrayKind;
   Values: TGocciaValueList;
   SrcObj: TGocciaObjectValue;
   SourceRoot, MapFnRoot, ThisRoot, ResultRoot: TGocciaTempRoot;
   ValueRoots: array of TGocciaTempRoot;
   ValueRootCount: Integer;
 begin
+  ConstructorKind := RequireTypedArrayConstructorKind(AThisValue, 'TypedArray.from');
   if AArgs.Length = 0 then
     ThrowTypeError(SErrorTypedArrayFromRequiresArg, SSuggestTypedArraySetSource);
   Source := AArgs.GetElement(0);
@@ -2575,7 +2589,7 @@ begin
         finally
           TGarbageCollector.Instance.RemoveTempRoot(Iterator);
         end;
-        NewTA := TGocciaTypedArrayValue.Create(FKind, Values.Count);
+        NewTA := TGocciaTypedArrayValue.Create(ConstructorKind, Values.Count);
         AddTempRootIfNeeded(ResultRoot, NewTA);
         try
           for I := 0 to Values.Count - 1 do
@@ -2609,7 +2623,7 @@ begin
     if Source is TGocciaTypedArrayValue then
     begin
       SrcTA := TGocciaTypedArrayValue(Source);
-      NewTA := TGocciaTypedArrayValue.Create(FKind, SrcTA.Length);
+      NewTA := TGocciaTypedArrayValue.Create(ConstructorKind, SrcTA.Length);
       AddTempRootIfNeeded(ResultRoot, NewTA);
       try
         for I := 0 to SrcTA.Length - 1 do
@@ -2637,7 +2651,7 @@ begin
     if Source is TGocciaArrayValue then
     begin
       SrcArr := TGocciaArrayValue(Source);
-      NewTA := TGocciaTypedArrayValue.Create(FKind, SrcArr.Elements.Count);
+      NewTA := TGocciaTypedArrayValue.Create(ConstructorKind, SrcArr.Elements.Count);
       AddTempRootIfNeeded(ResultRoot, NewTA);
       try
         for I := 0 to SrcArr.Elements.Count - 1 do
@@ -2665,7 +2679,7 @@ begin
     // Step 7: array-like path — ToObject(source), LengthOfArrayLike, indexed Get
     SrcObj := ToObject(Source);
     Len := LengthOfArrayLike(SrcObj);
-    NewTA := TGocciaTypedArrayValue.Create(FKind, Len);
+    NewTA := TGocciaTypedArrayValue.Create(ConstructorKind, Len);
     AddTempRootIfNeeded(ResultRoot, NewTA);
     try
       for I := 0 to Len - 1 do
@@ -2699,9 +2713,11 @@ end;
 function TGocciaTypedArrayStaticFrom.TypedArrayOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   NewTA: TGocciaTypedArrayValue;
+  ConstructorKind: TGocciaTypedArrayKind;
   I: Integer;
 begin
-  NewTA := TGocciaTypedArrayValue.Create(FKind, AArgs.Length);
+  ConstructorKind := RequireTypedArrayConstructorKind(AThisValue, 'TypedArray.of');
+  NewTA := TGocciaTypedArrayValue.Create(ConstructorKind, AArgs.Length);
   for I := 0 to AArgs.Length - 1 do
     NewTA.WriteValueToElement(I, AArgs.GetElement(I));
   Result := NewTA;
