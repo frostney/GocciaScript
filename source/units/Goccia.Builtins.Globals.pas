@@ -99,6 +99,7 @@ uses
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
+  Goccia.Values.FinalizationRegistryValue,
   Goccia.Values.FunctionBase,
   Goccia.Values.HoleValue,
   Goccia.Values.MapValue,
@@ -108,6 +109,7 @@ uses
   Goccia.Values.SharedArrayBufferValue,
   Goccia.Values.SymbolValue,
   Goccia.Values.WeakMapValue,
+  Goccia.Values.WeakRefValue,
   Goccia.Values.WeakSetValue;
 
 var
@@ -699,8 +701,6 @@ begin
   Task.Value := TGocciaUndefinedLiteralValue.UndefinedValue;
   Task.ReactionType := prtFulfill;
 
-  if Assigned(TGarbageCollector.Instance) then
-    TGarbageCollector.Instance.AddTempRoot(Callback);
   TGocciaMicrotaskQueue.Instance.Enqueue(Task);
 
   { Step 3: Return undefined }
@@ -862,6 +862,10 @@ begin
     ThrowDataCloneError(Format(SErrorStructuredCloneNotCloneable, [CONSTRUCTOR_WEAK_MAP]), SSuggestStructuredClone)
   else if AValue is TGocciaWeakSetValue then
     ThrowDataCloneError(Format(SErrorStructuredCloneNotCloneable, [CONSTRUCTOR_WEAK_SET]), SSuggestStructuredClone)
+  else if AValue is TGocciaWeakRefValue then
+    ThrowDataCloneError(Format(SErrorStructuredCloneNotCloneable, [CONSTRUCTOR_WEAK_REF]), SSuggestStructuredClone)
+  else if AValue is TGocciaFinalizationRegistryValue then
+    ThrowDataCloneError(Format(SErrorStructuredCloneNotCloneable, [CONSTRUCTOR_FINALIZATION_REGISTRY]), SSuggestStructuredClone)
   else if AValue is TGocciaObjectValue then
     Result := CloneObject(TGocciaObjectValue(AValue), AMemory)
   else

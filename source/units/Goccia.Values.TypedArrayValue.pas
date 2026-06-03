@@ -116,6 +116,7 @@ type
     function TypedArrayReduce(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function TypedArrayReduceRight(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function TypedArrayJoin(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function TypedArrayToLocaleString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function TypedArrayToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function TypedArrayToReversed(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function TypedArrayToSorted(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -846,6 +847,7 @@ begin
     Members.AddMethod(TypedArrayReduce, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
     Members.AddMethod(TypedArrayReduceRight, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
     Members.AddMethod(TypedArrayJoin, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod(PROP_TO_LOCALE_STRING, TypedArrayToLocaleString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
     Members.AddMethod(TypedArrayToString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
     Members.AddMethod(TypedArrayToReversed, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
     Members.AddMethod(TypedArrayToSorted, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
@@ -2125,6 +2127,48 @@ begin
     if not ((Element is TGocciaUndefinedLiteralValue) or
             (Element is TGocciaNullLiteralValue)) then
       S := S + Element.ToStringLiteral.Value;
+  end;
+  Result := TGocciaStringLiteralValue.Create(S);
+end;
+
+// ECMA-402 §17.1.6 %TypedArray%.prototype.toLocaleString([locales [, options]])
+function TGocciaTypedArrayValue.TypedArrayToLocaleString(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  TA: TGocciaTypedArrayValue;
+  I, Len: Integer;
+  S: string;
+  Element, Method, Formatted: TGocciaValue;
+  ElementObject: TGocciaObjectValue;
+  CallArgs: TGocciaArgumentsCollection;
+begin
+  TA := RequireAttachedTypedArray(AThisValue, '%TypedArray%.prototype.toLocaleString');
+  Len := TA.FLength;
+  S := '';
+  for I := 0 to Len - 1 do
+  begin
+    if I > 0 then S := S + ',';
+    Element := TA.GetElementAsValue(I);
+    ElementObject := ToObject(Element);
+    Method := ElementObject.GetPropertyWithContext(PROP_TO_LOCALE_STRING, Element);
+    if (Method = nil) or not Method.IsCallable then
+      ThrowTypeError('TypedArray.prototype.toLocaleString element toLocaleString is not a function');
+
+    CallArgs := TGocciaArgumentsCollection.CreateWithCapacity(2);
+    try
+      if AArgs.Length > 0 then
+        CallArgs.Add(AArgs.GetElement(0))
+      else
+        CallArgs.Add(TGocciaUndefinedLiteralValue.UndefinedValue);
+      if AArgs.Length > 1 then
+        CallArgs.Add(AArgs.GetElement(1))
+      else
+        CallArgs.Add(TGocciaUndefinedLiteralValue.UndefinedValue);
+      Formatted := InvokeCallable(Method, CallArgs, Element);
+    finally
+      CallArgs.Free;
+    end;
+    S := S + Formatted.ToStringLiteral.Value;
   end;
   Result := TGocciaStringLiteralValue.Create(S);
 end;

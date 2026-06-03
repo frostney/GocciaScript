@@ -344,7 +344,10 @@ resourcestring
   // Runtime errors — WeakMap / WeakSet
   SSuggestWeakMapThisType = 'WeakMap prototype methods must be called on a WeakMap instance';
   SSuggestWeakSetThisType = 'WeakSet prototype methods must be called on a WeakSet instance';
+  SSuggestWeakRefThisType = 'WeakRef prototype methods must be called on a WeakRef instance';
+  SSuggestFinalizationRegistryThisType = 'FinalizationRegistry prototype methods must be called on a FinalizationRegistry instance';
   SSuggestWeakCollectionKey = 'use an object or a Symbol() value; registered symbols from Symbol.for() and primitive values cannot be held weakly';
+  SSuggestFinalizationRegistryHeldValue = 'pass cleanup data that does not strongly reference the target';
 
   // Runtime errors — Number
   SSuggestNumberRange = 'the argument must be within the valid range';

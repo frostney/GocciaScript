@@ -1032,9 +1032,9 @@ begin
     end;
   end;
 
-  // No GC.Collect — worker GC is disabled to avoid FGCMark races on
-  // shared objects. All thread-local objects are freed in bulk when
-  // ShutdownThreadRuntime destroys the thread-local GC.
+  // No per-file GC.Collect here. Explicit script-level Goccia.gc() is
+  // serialized by the collector lock, but the runner still lets worker
+  // shutdown reclaim each thread-local heap in bulk.
 end;
 
 function TTestRunnerApp.RunScriptsFromFilesParallel(

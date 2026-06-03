@@ -7,7 +7,7 @@
 - **`TGocciaValue` hierarchy** — All runtime values inherit from `TGocciaValue`; primitives, objects, arrays, functions, classes, iterators, and typed arrays each have dedicated subclasses
 - **Virtual property access** — `GetProperty`/`SetProperty` are virtual methods on the base class, eliminating type checks at call sites
 - **GC integration** — Every value auto-registers via `AfterConstruction`; subclasses override `MarkReferences` to mark owned references
-- **Shared prototype singletons** — String, Number, Array, Set, Map, WeakSet, WeakMap, Symbol, Function, and TypedArray types share a single prototype instance per engine; the prototype lives in a [realm slot](core-patterns.md#realm-ownership--slot-registration) and is unpinned when the engine is freed
+- **Shared prototype singletons** — String, Number, Array, Set, Map, WeakSet, WeakMap, WeakRef, FinalizationRegistry, Symbol, Function, and TypedArray types share a single prototype instance per engine; the prototype lives in a [realm slot](core-patterns.md#realm-ownership--slot-registration) and is unpinned when the engine is freed
 
 The value system is the foundation of GocciaScript's runtime. Every piece of data — numbers, strings, objects, functions — is represented as a `TGocciaValue` or one of its subclasses.
 
@@ -35,6 +35,8 @@ classDiagram
     TGocciaObjectValue <|-- TGocciaInstanceValue
     TGocciaInstanceValue <|-- TGocciaWeakSetValue
     TGocciaInstanceValue <|-- TGocciaWeakMapValue
+    TGocciaInstanceValue <|-- TGocciaWeakRefValue
+    TGocciaInstanceValue <|-- TGocciaFinalizationRegistryValue
     TGocciaObjectValue <|-- TGocciaEnumValue
     TGocciaObjectValue <|-- TGocciaIteratorValue
     TGocciaIteratorValue <|-- TGocciaArrayIteratorValue
@@ -463,13 +465,15 @@ Each helper creates a `TGocciaObjectValue` with `name` and `message` properties 
 
 ## Weak Collections
 
-`TGocciaWeakMapValue` and `TGocciaWeakSetValue` extend `TGocciaInstanceValue` (`Goccia.Values.WeakMapValue.pas`, `Goccia.Values.WeakSetValue.pas`). They are class-backed native instances so subclassing and constructor semantics match other built-in native classes.
+`TGocciaWeakMapValue`, `TGocciaWeakSetValue`, `TGocciaWeakRefValue`, and `TGocciaFinalizationRegistryValue` extend `TGocciaInstanceValue` (`Goccia.Values.WeakMapValue.pas`, `Goccia.Values.WeakSetValue.pas`, `Goccia.Values.WeakRefValue.pas`, `Goccia.Values.FinalizationRegistryValue.pas`). They are class-backed native instances so subclassing and constructor semantics match other built-in native classes.
 
 - **Weak eligibility** — `Goccia.Values.WeakReferenceSupport.CanBeHeldWeakly` accepts objects and non-registered symbols. Primitives and `Symbol.for()` registry symbols are rejected by mutators and constructors.
 - **Internal storage** — WeakMap stores entries in `THashMap<TGocciaValue,TGocciaValue>`; WeakSet stores membership in `THashMap<TGocciaValue,Boolean>`. Allowed keys are object/symbol identity values, so pointer identity matches the required `SameValue` behavior for this domain.
 - **No enumeration surface** — WeakMap/WeakSet intentionally do not expose `size`, `clear`, `forEach`, iterators, `keys`, `values`, or `entries`.
 - **Shared prototype singleton** — Each weak collection has a per-engine shared prototype stored in a realm-owned slot. Prototype methods operate through `ThisValue`, matching the built-in method-host pattern.
-- **GC behavior** — WeakMap/WeakSet do not mark weak keys/values during normal `MarkReferences`. WeakMap's weak tracing hook marks a value only when its key is already live from outside the map, and sweeping removes entries whose keys remain unmarked. WeakSet sweeping removes unmarked members.
+- **WeakRef kept objects** — WeakRef construction and `deref()` add the target to the GC kept-objects set. The set is cleared at host job checkpoints so repeated `deref()` calls in the same job are stable without making the target strongly reachable forever.
+- **FinalizationRegistry cleanup** — FinalizationRegistry marks cleanup callbacks and held values, but never marks registered targets or unregister tokens. Sweeping dead cells queues cleanup jobs through the microtask queue's finalization lane. Cleanup jobs run after normal microtasks and root their held values until execution.
+- **GC behavior** — WeakMap/WeakSet do not mark weak keys/values during normal `MarkReferences`. WeakMap's weak tracing hook marks a value only when its key is already live from outside the map, and sweeping removes entries whose keys remain unmarked. WeakSet sweeping removes unmarked members. WeakRef clears an unmarked target. FinalizationRegistry removes unmarked-target cells and schedules cleanup.
 
 ## Promises
 

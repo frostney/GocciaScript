@@ -522,6 +522,8 @@ begin
   { Step 7: Let resolvingFunctions = CreateResolvingFunctions(promise) }
   ResolveFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(Promise.DoResolve, 'resolve', 1);
   RejectFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(Promise.DoReject, 'reject', 1);
+  ResolveFn.CapturedRoot := Promise;
+  RejectFn.CapturedRoot := Promise;
 
   { Step 8: Let completion = Call(executor, undefined, « resolve, reject ») }
   ExecutorArgs := TGocciaArgumentsCollection.Create([ResolveFn, RejectFn]);
@@ -579,6 +581,8 @@ begin
 
   ResolveFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(Promise.DoResolve, 'resolve', 1);
   RejectFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(Promise.DoReject, 'reject', 1);
+  ResolveFn.CapturedRoot := Promise;
+  RejectFn.CapturedRoot := Promise;
 
   ExecutorArgs := TGocciaArgumentsCollection.Create([ResolveFn, RejectFn]);
   try
@@ -995,6 +999,8 @@ begin
   Promise := TGocciaPromiseValue.Create;
   ResolveFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(Promise.DoResolve, 'resolve', 1);
   RejectFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(Promise.DoReject, 'reject', 1);
+  ResolveFn.CapturedRoot := Promise;
+  RejectFn.CapturedRoot := Promise;
 
   { Steps 3-6: Create result object with promise, resolve, reject properties }
   ResultObj := TGocciaObjectValue.Create;

@@ -89,4 +89,28 @@ describe("Weak collection cloning", () => {
     }
     expect(true).toBe(false);
   });
+
+  test("WeakRef is not cloneable", () => {
+    try {
+      structuredClone(new WeakRef({}));
+    } catch (e) {
+      expect(e instanceof DOMException).toBe(true);
+      expect(e.name).toBe("DataCloneError");
+      expect(e.code).toBe(25);
+      return;
+    }
+    expect(true).toBe(false);
+  });
+
+  test("FinalizationRegistry is not cloneable", () => {
+    try {
+      structuredClone(new FinalizationRegistry(() => {}));
+    } catch (e) {
+      expect(e instanceof DOMException).toBe(true);
+      expect(e.name).toBe("DataCloneError");
+      expect(e.code).toBe(25);
+      return;
+    }
+    expect(true).toBe(false);
+  });
 });
