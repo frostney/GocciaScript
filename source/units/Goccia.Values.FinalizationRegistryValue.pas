@@ -192,6 +192,13 @@ begin
     begin
       EnqueueCleanup(Cell.HeldValue);
       FCells.Delete(I);
+    end
+    else if Cell.HasUnregisterToken and Assigned(Cell.UnregisterToken) and
+            not Cell.UnregisterToken.GCMarked then
+    begin
+      Cell.UnregisterToken := nil;
+      Cell.HasUnregisterToken := False;
+      FCells[I] := Cell;
     end;
   end;
 end;

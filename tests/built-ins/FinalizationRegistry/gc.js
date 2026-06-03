@@ -137,6 +137,40 @@ describe.runIf(hasGoccia)("FinalizationRegistry GC behavior", () => {
     });
   });
 
+  test("dead unregister tokens are cleared without dropping the target cell", () => {
+    let done;
+    const registry = new FinalizationRegistry((held) => {
+      done(held);
+    });
+    globalThis.__finalizationRegistryKeep = registry;
+    globalThis.__finalizationRegistryTarget = {};
+
+    const result = new Promise((resolve) => {
+      done = resolve;
+    });
+
+    queueMicrotask(() => {
+      const token = {};
+      registry.register(globalThis.__finalizationRegistryTarget, "held", token);
+    });
+    queueMicrotask(() => {
+      Goccia.gc();
+      expect(registry.unregister({})).toBe(false);
+      globalThis.__finalizationRegistryTarget = undefined;
+    });
+    queueMicrotask(() => {
+      Goccia.gc();
+    });
+    queueMicrotask(() => {
+      Goccia.gc();
+    });
+
+    return result.then((held) => {
+      globalThis.__finalizationRegistryKeep = undefined;
+      expect(held).toBe("held");
+    });
+  });
+
   test("cleanup jobs enqueue microtasks before the next cleanup job runs", () => {
     const log = [];
     let cleanupCount = 0;
