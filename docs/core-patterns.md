@@ -143,7 +143,9 @@ Prototype **methods** take `(AArgs, AThisValue)`; use **`AThisValue`** for the r
 
 ### Realm Ownership & Slot Registration
 
-Built-in prototypes are not module-level singletons; they live in a per-engine **realm** (`Goccia.Realm.pas`, `TGocciaRealm`). Each `TGocciaEngine` constructs its own realm and frees it in `Destroy`, which unpins every prototype the realm owns. The next engine on the same worker thread starts from pristine intrinsics — userland mutations of `Array.prototype`, including non-configurable property additions, do not leak across engine boundaries.
+Built-in prototypes are not module-level singletons; they live in a per-engine **realm** (`Goccia.Realm.pas`, `TGocciaRealm`). Each `TGocciaEngine` constructs its initial ECMA-262 Realm Record and frees it in `Destroy`, which unpins every prototype and cached template object the realm owns. The next engine on the same worker thread starts from pristine intrinsics — userland mutations of `Array.prototype`, including non-configurable property additions, do not leak across engine boundaries.
+
+`CurrentRealm` is set by `TGocciaExecutionContextStack` (`Goccia.ExecutionContext.pas`) as interpreter and bytecode code enters script, module, and function execution. Treat it as a lookup facade for realm-scoped state, not as process-global ownership.
 
 Two slot kinds are registered at unit `initialization` time:
 

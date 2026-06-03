@@ -143,7 +143,7 @@ end;
 
 ## Engine Lifecycle & Realm Isolation
 
-Every `TGocciaEngine` owns a `TGocciaRealm` (`Goccia.Realm.pas`) — a per-engine container for the mutable intrinsic prototype objects (`Array.prototype`, `Object.prototype`, `Map.prototype`, every error prototype, every Temporal prototype, and so on). The realm is created in the engine constructor and torn down in the engine destructor; tear-down unpins every prototype the realm owns so the GC can collect them before the next engine starts up.
+Every `TGocciaEngine` owns an initial `TGocciaRealm` (`Goccia.Realm.pas`) — the engine's ECMA-262 Realm Record for mutable intrinsic prototype objects (`Array.prototype`, `Object.prototype`, `Map.prototype`, every error prototype, every Temporal prototype, and so on), global state links, the realm `[[TemplateMap]]`, loaded-module host state, and host-defined data. The realm is created in the engine constructor and torn down in the engine destructor; tear-down unpins every prototype and cached template object the realm owns so the GC can collect them before the next engine starts up.
 
 This is the **strongest** isolation boundary the engine provides. Two engines created back-to-back on the same thread see pristine intrinsics — userland mutations on one engine's `Array.prototype` cannot leak into the next engine's `Array.prototype`, even if the mutation added a non-configurable property that JS-level cleanup cannot reverse.
 
@@ -155,13 +155,13 @@ This is the **strongest** isolation boundary the engine provides. Two engines cr
 
 ### What you do not need to do
 
-- **Do not** call `SetCurrentRealm` directly. The engine sets `CurrentRealm` (a thread-local pointer) on construction and clears it on tear-down.
+- **Do not** call `SetCurrentRealm` directly. Engine, interpreter, and bytecode entry points make the realm current through `TGocciaExecutionContextStack`; `CurrentRealm` remains only as the lookup facade used by value units.
 - **Do not** pin or unpin prototype objects manually after engine startup. The realm pins everything stored in a slot via `SetSlot`, and unpins them all at tear-down.
 - **Do not** cache prototype object pointers in long-lived Pascal state. Those objects are realm-scoped — they become invalid the moment the engine that owns them is freed. If you need the current `Array.prototype`, look it up live (e.g. via `Engine.Interpreter.GlobalScope`).
 
 ### Threading
 
-`CurrentRealm` is a `threadvar`. Each worker thread that constructs an engine gets its own realm pointer. The thread pool used by `GocciaTestRunner --jobs=N` relies on this: each worker creates and destroys engines on its own thread, and realm tear-down on one worker has no effect on intrinsics seen by the others.
+`CurrentRealm` is backed by thread-local execution-context state. Each worker thread that executes an engine gets its own realm stack. The thread pool used by `GocciaTestRunner --jobs=N` relies on this: each worker creates, enters, and destroys engines on its own thread, and realm tear-down on one worker has no effect on intrinsics seen by the others.
 
 ## Module Resolution
 
@@ -847,7 +847,7 @@ Raises `TGocciaInstructionLimitError` when the limit is reached. A value of zero
 
 ### Call Stack Depth Limit
 
-`SetMaxStackDepth` caps the number of nested function calls. Exceeding the limit throws a JavaScript `RangeError` with the message `"Maximum call stack size exceeded"` (matching V8 convention). The default is 3 500 frames. A value of zero disables the limit entirely.
+`SetMaxStackDepth` caps the number of nested function calls. Exceeding the limit throws a JavaScript `RangeError` with the message `"Maximum call stack size exceeded"` (matching V8 convention). The default is 2 900 frames. A value of zero disables the limit entirely.
 
 In bytecode mode the VM uses a trampoline: bytecode-to-bytecode calls are dispatched iteratively via an explicit frame stack, so the Pascal call stack stays flat regardless of JS call depth. The interpreter mode uses Pascal recursion and relies on the depth check to prevent overflow.
 

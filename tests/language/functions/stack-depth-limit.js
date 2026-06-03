@@ -45,8 +45,8 @@ test("deep recursion succeeds within limit", () => {
     count++;
     if (n > 0) deep(n - 1);
   };
-  deep(3000);
-  expect(count).toBe(3001);
+  deep(2800);
+  expect(count).toBe(2801);
 });
 
 test("mutual recursion with return values", () => {

@@ -8,6 +8,7 @@ uses
   Goccia.AST.Node,
   Goccia.Evaluator.Context,
   Goccia.Modules.Loader,
+  Goccia.Realm,
   Goccia.Scope,
   Goccia.Values.Primitives;
 
@@ -24,6 +25,7 @@ type
   protected
     FGlobalScope: TGocciaScope;
     FModuleLoader: TGocciaModuleLoader;
+    FRealm: TGocciaRealm;
     FSourcePath: string;
     FRetainModule: TRetainObjectCallback;
   public
@@ -52,6 +54,7 @@ type
       write FCompileTimeNanoseconds;
     property ExecuteTimeNanoseconds: Int64 read FExecuteTimeNanoseconds
       write FExecuteTimeNanoseconds;
+    property Realm: TGocciaRealm read FRealm;
     property RetainModuleCallback: TRetainObjectCallback
       read FRetainModule write FRetainModule;
   end;
@@ -63,6 +66,7 @@ procedure TGocciaExecutor.Initialize(const AGlobalScope: TGocciaScope;
 begin
   FGlobalScope := AGlobalScope;
   FModuleLoader := AModuleLoader;
+  FRealm := CurrentRealm;
   FSourcePath := ASourcePath;
 end;
 

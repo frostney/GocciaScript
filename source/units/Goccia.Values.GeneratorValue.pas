@@ -100,6 +100,7 @@ uses
   Goccia.Evaluator,
   Goccia.Evaluator.Context,
   Goccia.GarbageCollector,
+  Goccia.Realm,
   Goccia.Types.Enforcement,
   Goccia.Values.ArgumentsObjectValue,
   Goccia.Values.ArrayValue,
@@ -517,6 +518,8 @@ begin
   CallScope := CreateCallScope;
   BindThis(CallScope, AThisValue);
 
+  FillChar(Context, SizeOf(Context), 0);
+  Context.Realm := CurrentRealm;
   Context.Scope := CallScope;
   Context.OnError := FClosure.OnError;
   Context.LoadModule := FClosure.LoadModule;
@@ -668,6 +671,8 @@ begin
   CallScope := CreateCallScope;
   BindThis(CallScope, AThisValue);
 
+  FillChar(Context, SizeOf(Context), 0);
+  Context.Realm := CurrentRealm;
   Context.Scope := CallScope;
   Context.OnError := FClosure.OnError;
   Context.LoadModule := FClosure.LoadModule;

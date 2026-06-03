@@ -9,19 +9,36 @@ uses
 
   TestingPascalLibrary,
 
+  Goccia.Arguments.Collection,
   Goccia.Engine,
+  Goccia.ExecutionContext,
+  Goccia.Executor,
+  Goccia.Executor.Bytecode,
   Goccia.Executor.Interpreter,
   Goccia.Realm,
   Goccia.Runtime,
   Goccia.RuntimeExtensions.URL,
   Goccia.TestSetup,
+  Goccia.Values.NativeFunction,
   Goccia.Values.Primitives;
 
 type
   TTestEngineRealm = class(TTestSuite)
   private
+    FExpectedRealm: TGocciaRealm;
     function RunInline(const ASource: string): TGocciaScriptResult;
     function RunRuntimeInline(const ASource: string): TGocciaScriptResult;
+    function RealmProbe(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function FunctionContextProbe(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    procedure AssertRealmProbeWithExecutor(const AExecutor: TGocciaExecutor);
+    procedure AssertFunctionContextProbeWithExecutor(
+      const AExecutor: TGocciaExecutor);
+    procedure AssertConstructorFunctionContextProbeWithExecutor(
+      const AExecutor: TGocciaExecutor);
+    procedure AssertRepeatedTaggedTemplateExecutionWithExecutor(
+      const AExecutor: TGocciaExecutor);
   public
     procedure SetupTests; override;
 
@@ -34,6 +51,14 @@ type
     procedure TestSequentialEnginesHaveFreshURLPrototype;
     procedure TestNestedEngineRestoresOuterRealmOnDestroy;
     procedure TestEachEngineGetsADistinctRealm;
+    procedure TestInterpreterExecutionContextUsesEngineRealm;
+    procedure TestBytecodeExecutionContextUsesEngineRealm;
+    procedure TestInterpreterFunctionExecutionContextUsesFunctionValue;
+    procedure TestBytecodeFunctionExecutionContextUsesFunctionValue;
+    procedure TestInterpreterConstructorExecutionContextUsesFunctionValue;
+    procedure TestBytecodeConstructorExecutionContextUsesFunctionValue;
+    procedure TestInterpreterRepeatedEngineExecutionGetsFreshTemplateSites;
+    procedure TestBytecodeRepeatedEngineExecutionGetsFreshTemplateSites;
   end;
 
 procedure TTestEngineRealm.SetupTests;
@@ -56,6 +81,22 @@ begin
     TestNestedEngineRestoresOuterRealmOnDestroy);
   Test('Each engine owns a distinct realm instance',
     TestEachEngineGetsADistinctRealm);
+  Test('Interpreter execution context uses the engine realm',
+    TestInterpreterExecutionContextUsesEngineRealm);
+  Test('Bytecode execution context uses the engine realm',
+    TestBytecodeExecutionContextUsesEngineRealm);
+  Test('Interpreter function execution context carries function value',
+    TestInterpreterFunctionExecutionContextUsesFunctionValue);
+  Test('Bytecode function execution context carries function value',
+    TestBytecodeFunctionExecutionContextUsesFunctionValue);
+  Test('Interpreter constructor execution context carries function value',
+    TestInterpreterConstructorExecutionContextUsesFunctionValue);
+  Test('Bytecode constructor execution context carries function value',
+    TestBytecodeConstructorExecutionContextUsesFunctionValue);
+  Test('Interpreter repeated engine execution gets fresh template sites',
+    TestInterpreterRepeatedEngineExecutionGetsFreshTemplateSites);
+  Test('Bytecode repeated engine execution gets fresh template sites',
+    TestBytecodeRepeatedEngineExecutionGetsFreshTemplateSites);
 end;
 
 function TTestEngineRealm.RunInline(const ASource: string): TGocciaScriptResult;
@@ -86,6 +127,159 @@ begin
     Engine.Free;
     Source.Free;
     Executor.Free;
+  end;
+end;
+
+function TTestEngineRealm.RealmProbe(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Running: TGocciaExecutionContext;
+begin
+  Running := RunningExecutionContext;
+  Result := TGocciaBooleanLiteralValue.FromBoolean(
+    Assigned(FExpectedRealm) and
+    (CurrentRealm = FExpectedRealm) and
+    (Running.Realm = FExpectedRealm) and
+    Assigned(Running.Scope) and
+    not Assigned(Running.FunctionValue));
+end;
+
+function TTestEngineRealm.FunctionContextProbe(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Running: TGocciaExecutionContext;
+begin
+  Running := RunningExecutionContext;
+  Result := TGocciaBooleanLiteralValue.FromBoolean(
+    Assigned(FExpectedRealm) and
+    (CurrentRealm = FExpectedRealm) and
+    (Running.Realm = FExpectedRealm) and
+    Assigned(Running.Scope) and
+    Assigned(Running.FunctionValue));
+end;
+
+procedure TTestEngineRealm.AssertRealmProbeWithExecutor(
+  const AExecutor: TGocciaExecutor);
+var
+  Engine: TGocciaEngine;
+  Source: TStringList;
+  ResultValue: TGocciaScriptResult;
+begin
+  Source := TStringList.Create;
+  Source.Text := 'realmProbe();';
+  Engine := nil;
+  try
+    Engine := TGocciaEngine.Create('<realm-execution-context>', Source,
+      AExecutor);
+    FExpectedRealm := Engine.Realm;
+    Engine.InjectGlobal('realmProbe',
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(RealmProbe,
+        'realmProbe', 0));
+    ResultValue := Engine.Execute;
+    Expect<Boolean>(
+      (ResultValue.Result as TGocciaBooleanLiteralValue).Value).ToBe(True);
+  finally
+    FExpectedRealm := nil;
+    Engine.Free;
+    Source.Free;
+  end;
+end;
+
+procedure TTestEngineRealm.AssertFunctionContextProbeWithExecutor(
+  const AExecutor: TGocciaExecutor);
+var
+  Engine: TGocciaEngine;
+  Source: TStringList;
+  ResultValue: TGocciaScriptResult;
+begin
+  Source := TStringList.Create;
+  Source.Text := 'const checked = () => functionContextProbe(); checked();';
+  Engine := nil;
+  try
+    Engine := TGocciaEngine.Create('<realm-function-context>', Source,
+      AExecutor);
+    FExpectedRealm := Engine.Realm;
+    Engine.InjectGlobal('functionContextProbe',
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(FunctionContextProbe,
+        'functionContextProbe', 0));
+    ResultValue := Engine.Execute;
+    Expect<Boolean>(
+      (ResultValue.Result as TGocciaBooleanLiteralValue).Value).ToBe(True);
+  finally
+    FExpectedRealm := nil;
+    Engine.Free;
+    Source.Free;
+  end;
+end;
+
+procedure TTestEngineRealm.AssertConstructorFunctionContextProbeWithExecutor(
+  const AExecutor: TGocciaExecutor);
+var
+  Engine: TGocciaEngine;
+  Source: TStringList;
+  ResultValue: TGocciaScriptResult;
+begin
+  Source := TStringList.Create;
+  Source.Text :=
+    'class Checked {' +
+    '  constructor() {' +
+    '    this.ok = functionContextProbe();' +
+    '  }' +
+    '}' +
+    'new Checked().ok;';
+  Engine := nil;
+  try
+    Engine := TGocciaEngine.Create('<realm-constructor-context>', Source,
+      AExecutor);
+    FExpectedRealm := Engine.Realm;
+    Engine.InjectGlobal('functionContextProbe',
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(FunctionContextProbe,
+        'functionContextProbe', 0));
+    ResultValue := Engine.Execute;
+    Expect<Boolean>(
+      (ResultValue.Result as TGocciaBooleanLiteralValue).Value).ToBe(True);
+  finally
+    FExpectedRealm := nil;
+    Engine.Free;
+    Source.Free;
+  end;
+end;
+
+procedure TTestEngineRealm.AssertRepeatedTaggedTemplateExecutionWithExecutor(
+  const AExecutor: TGocciaExecutor);
+var
+  Engine: TGocciaEngine;
+  Source: TStringList;
+  FirstResult, SecondResult: TGocciaScriptResult;
+begin
+  Source := TStringList.Create;
+  Source.Text :=
+    'globalThis.tag = (strings) => {' +
+    '  globalThis.firstTemplate = strings;' +
+    '  return strings[0];' +
+    '};' +
+    'tag`first`;';
+  Engine := nil;
+  try
+    Engine := TGocciaEngine.Create('<realm-repeated-template>', Source,
+      AExecutor);
+    FirstResult := Engine.Execute;
+    Expect<string>((FirstResult.Result as TGocciaStringLiteralValue).Value).
+      ToBe('first');
+    Expect<Integer>(Engine.Realm.TemplateMapCount).ToBe(1);
+
+    Source.Text :=
+      'globalThis.tag = (strings) => ' +
+      '  globalThis.firstTemplate === strings ? "stale" : strings[0];' +
+      'tag`second`;';
+    SecondResult := Engine.Execute;
+    Expect<string>((SecondResult.Result as TGocciaStringLiteralValue).Value).
+      ToBe('second');
+    Expect<Integer>(Engine.Realm.TemplateMapCount).ToBe(2);
+  finally
+    Engine.Free;
+    Source.Free;
   end;
 end;
 
@@ -295,6 +489,102 @@ begin
   finally
     ExecutorB.Free;
     ExecutorA.Free;
+  end;
+end;
+
+procedure TTestEngineRealm.TestInterpreterExecutionContextUsesEngineRealm;
+var
+  Executor: TGocciaInterpreterExecutor;
+begin
+  Executor := TGocciaInterpreterExecutor.Create;
+  try
+    AssertRealmProbeWithExecutor(Executor);
+  finally
+    Executor.Free;
+  end;
+end;
+
+procedure TTestEngineRealm.TestBytecodeExecutionContextUsesEngineRealm;
+var
+  Executor: TGocciaBytecodeExecutor;
+begin
+  Executor := TGocciaBytecodeExecutor.Create;
+  try
+    AssertRealmProbeWithExecutor(Executor);
+  finally
+    Executor.Free;
+  end;
+end;
+
+procedure TTestEngineRealm.TestInterpreterFunctionExecutionContextUsesFunctionValue;
+var
+  Executor: TGocciaInterpreterExecutor;
+begin
+  Executor := TGocciaInterpreterExecutor.Create;
+  try
+    AssertFunctionContextProbeWithExecutor(Executor);
+  finally
+    Executor.Free;
+  end;
+end;
+
+procedure TTestEngineRealm.TestBytecodeFunctionExecutionContextUsesFunctionValue;
+var
+  Executor: TGocciaBytecodeExecutor;
+begin
+  Executor := TGocciaBytecodeExecutor.Create;
+  try
+    AssertFunctionContextProbeWithExecutor(Executor);
+  finally
+    Executor.Free;
+  end;
+end;
+
+procedure TTestEngineRealm.TestInterpreterConstructorExecutionContextUsesFunctionValue;
+var
+  Executor: TGocciaInterpreterExecutor;
+begin
+  Executor := TGocciaInterpreterExecutor.Create;
+  try
+    AssertConstructorFunctionContextProbeWithExecutor(Executor);
+  finally
+    Executor.Free;
+  end;
+end;
+
+procedure TTestEngineRealm.TestBytecodeConstructorExecutionContextUsesFunctionValue;
+var
+  Executor: TGocciaBytecodeExecutor;
+begin
+  Executor := TGocciaBytecodeExecutor.Create;
+  try
+    AssertConstructorFunctionContextProbeWithExecutor(Executor);
+  finally
+    Executor.Free;
+  end;
+end;
+
+procedure TTestEngineRealm.TestInterpreterRepeatedEngineExecutionGetsFreshTemplateSites;
+var
+  Executor: TGocciaInterpreterExecutor;
+begin
+  Executor := TGocciaInterpreterExecutor.Create;
+  try
+    AssertRepeatedTaggedTemplateExecutionWithExecutor(Executor);
+  finally
+    Executor.Free;
+  end;
+end;
+
+procedure TTestEngineRealm.TestBytecodeRepeatedEngineExecutionGetsFreshTemplateSites;
+var
+  Executor: TGocciaBytecodeExecutor;
+begin
+  Executor := TGocciaBytecodeExecutor.Create;
+  try
+    AssertRepeatedTaggedTemplateExecutionWithExecutor(Executor);
+  finally
+    Executor.Free;
   end;
 end;
 

@@ -55,6 +55,7 @@ uses
 
   Goccia.ControlFlow,
   Goccia.Evaluator,
+  Goccia.ExecutionContext,
   Goccia.Scope.Redeclaration;
 
 { TGocciaInterpreterExecutor }
@@ -95,17 +96,28 @@ function TGocciaInterpreterExecutor.EvaluateModuleBody(
 var
   I: Integer;
   CF: TGocciaControlFlow;
+  ExecutionContext: TGocciaExecutionContextScope;
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   if FInterpreter.VarEnabled then
     HoistVarDeclarations(AProgram.Body, AContext.Scope);
   if FInterpreter.FunctionEnabled then
     HoistFunctionDeclarations(AProgram.Body, AContext);
-  for I := 0 to AProgram.Body.Count - 1 do
-  begin
-    CF := EvaluateStatement(AProgram.Body[I], AContext);
-    Result := CF.Value;
-    if CF.Kind = cfkReturn then Exit;
+  ExecutionContext := nil;
+  if Assigned(AContext.Realm) then
+    ExecutionContext := TGocciaExecutionContextScope.Create(
+      CreateExecutionContext(AContext.Realm, AContext.Scope,
+        AContext.CurrentFilePath, AProgram));
+  try
+    for I := 0 to AProgram.Body.Count - 1 do
+    begin
+      CF := EvaluateStatement(AProgram.Body[I], AContext);
+      Result := CF.Value;
+      if CF.Kind = cfkReturn then Exit;
+    end;
+  finally
+    if Assigned(ExecutionContext) then
+      ExecutionContext.Free;
   end;
 end;
 
@@ -136,6 +148,7 @@ var
 begin
   Context := FInterpreter.CreateEvaluationContext;
   Context.Scope := AScope;
+  Context.Realm := FRealm;
   Context.CurrentFilePath := FSourcePath;
   Context.NonStrictMode := AScope.NonStrictMode;
   Result := EvaluateModuleBody(

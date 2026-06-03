@@ -16,10 +16,12 @@ uses
   Goccia.Error,
   Goccia.Evaluator,
   Goccia.Evaluator.Context,
+  Goccia.ExecutionContext,
   Goccia.Modules,
   Goccia.Modules.ContentProvider,
   Goccia.Modules.Loader,
   Goccia.Modules.Resolver,
+  Goccia.Realm,
   Goccia.Scope,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
@@ -41,6 +43,7 @@ type
     FStrictTypesEnabled: Boolean;
     FModuleLoader: TGocciaModuleLoader;
     FOwnsModuleLoader: Boolean;
+    FRealm: TGocciaRealm;
 
     function EvaluateModuleBody(const AProgram: TGocciaProgram;
       const AContext: TGocciaEvaluationContext): TGocciaValue;
@@ -85,6 +88,7 @@ type
     property StrictTypesEnabled: Boolean read FStrictTypesEnabled
       write SetStrictTypesEnabled;
     property GlobalScope: TGocciaGlobalScope read FGlobalScope;
+    property Realm: TGocciaRealm read FRealm write FRealm;
     property JSXEnabled: Boolean read FJSXEnabled write SetJSXEnabled;
     property ContentProvider: TGocciaModuleContentProvider read GetContentProvider;
     property ModuleLoader: TGocciaModuleLoader read FModuleLoader;
@@ -114,6 +118,7 @@ constructor TGocciaInterpreter.Create(const AFileName: string;
 begin
   FFileName := AFileName;
   FSourceLines := ASourceLines;
+  FRealm := CurrentRealm;
   FGlobalScope := TGocciaGlobalScope.Create;
   if Assigned(AModuleLoader) then
   begin
@@ -148,6 +153,10 @@ end;
 
 function TGocciaInterpreter.CreateEvaluationContext: TGocciaEvaluationContext;
 begin
+  if Assigned(FRealm) then
+    Result.Realm := FRealm
+  else
+    Result.Realm := CurrentRealm;
   Result.Scope := FGlobalScope;
   Result.OnError := ThrowError;
   Result.LoadModule := LoadModule;
@@ -164,6 +173,7 @@ var
   I: Integer;
   CF: TGocciaControlFlow;
   Context: TGocciaEvaluationContext;
+  ExecutionContext: TGocciaExecutionContextScope;
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   Context := CreateEvaluationContext;
@@ -175,11 +185,21 @@ begin
   if FFunctionEnabled then
     HoistFunctionDeclarations(AProgram.Body, Context);
 
-  for I := 0 to AProgram.Body.Count - 1 do
-  begin
-    CF := EvaluateStatement(AProgram.Body[I], Context);
-    Result := CF.Value;
-    if CF.Kind = cfkReturn then Exit;
+  ExecutionContext := nil;
+  if Assigned(Context.Realm) then
+    ExecutionContext := TGocciaExecutionContextScope.Create(
+      CreateExecutionContext(Context.Realm, Context.Scope,
+        Context.CurrentFilePath, AProgram));
+  try
+    for I := 0 to AProgram.Body.Count - 1 do
+    begin
+      CF := EvaluateStatement(AProgram.Body[I], Context);
+      Result := CF.Value;
+      if CF.Kind = cfkReturn then Exit;
+    end;
+  finally
+    if Assigned(ExecutionContext) then
+      ExecutionContext.Free;
   end;
 end;
 
@@ -288,17 +308,28 @@ function TGocciaInterpreter.EvaluateModuleBody(
 var
   I: Integer;
   CF: TGocciaControlFlow;
+  ExecutionContext: TGocciaExecutionContextScope;
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   if FVarEnabled then
     HoistVarDeclarations(AProgram.Body, AContext.Scope);
   if FFunctionEnabled then
     HoistFunctionDeclarations(AProgram.Body, AContext);
-  for I := 0 to AProgram.Body.Count - 1 do
-  begin
-    CF := EvaluateStatement(AProgram.Body[I], AContext);
-    Result := CF.Value;
-    if CF.Kind = cfkReturn then Exit;
+  ExecutionContext := nil;
+  if Assigned(AContext.Realm) then
+    ExecutionContext := TGocciaExecutionContextScope.Create(
+      CreateExecutionContext(AContext.Realm, AContext.Scope,
+        AContext.CurrentFilePath, AProgram));
+  try
+    for I := 0 to AProgram.Body.Count - 1 do
+    begin
+      CF := EvaluateStatement(AProgram.Body[I], AContext);
+      Result := CF.Value;
+      if CF.Kind = cfkReturn then Exit;
+    end;
+  finally
+    if Assigned(ExecutionContext) then
+      ExecutionContext.Free;
   end;
 end;
 

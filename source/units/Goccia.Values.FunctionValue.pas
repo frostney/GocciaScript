@@ -94,6 +94,7 @@ uses
   Goccia.Evaluator,
   Goccia.Evaluator.Context,
   Goccia.GarbageCollector,
+  Goccia.Realm,
   Goccia.Types.Enforcement,
   Goccia.Values.ArgumentsObjectValue,
   Goccia.Values.ArrayValue,
@@ -183,6 +184,8 @@ begin
   // EffectiveStrictTypes walks to the root scope so closures observe
   // updates made by TGocciaEngine.SetStrictTypes after the closure's
   // lexical scope was created.
+  FillChar(Context, SizeOf(Context), 0);
+  Context.Realm := CurrentRealm;
   Context.Scope := FClosure;
   Context.OnError := FClosure.OnError;
   Context.LoadModule := FClosure.LoadModule;
@@ -374,10 +377,12 @@ var
   GC: TGarbageCollector;
   SelfRooted: Boolean;
   CallScopeRooted: Boolean;
+  FunctionContextPushed: Boolean;
 begin
   GC := TGarbageCollector.Instance;
   SelfRooted := False;
   CallScopeRooted := False;
+  FunctionContextPushed := False;
   CallScope := nil;
   if Assigned(GC) then
   begin
@@ -391,8 +396,12 @@ begin
       GC.PushActiveRoot(CallScope);
       CallScopeRooted := True;
     end;
+    PushCurrentFunctionExecutionContext(CallScope, Self);
+    FunctionContextPushed := True;
     Result := ExecuteBody(CallScope, AArguments, AThisValue);
   finally
+    if FunctionContextPushed then
+      PopCurrentFunctionExecutionContext;
     if Assigned(GC) then
     begin
       if CallScopeRooted then
@@ -468,11 +477,13 @@ var
   GC: TGarbageCollector;
   SelfRooted: Boolean;
   CallScopeRooted: Boolean;
+  FunctionContextPushed: Boolean;
 begin
   AFinalThisValue := AThisValue;
   GC := TGarbageCollector.Instance;
   SelfRooted := False;
   CallScopeRooted := False;
+  FunctionContextPushed := False;
   CallScope := nil;
   if Assigned(GC) then
   begin
@@ -488,9 +499,13 @@ begin
       GC.PushActiveRoot(CallScope);
       CallScopeRooted := True;
     end;
+    PushCurrentFunctionExecutionContext(CallScope, Self);
+    FunctionContextPushed := True;
     Result := ExecuteBody(CallScope, AArguments, AThisValue);
     AFinalThisValue := CallScope.ThisValue;
   finally
+    if FunctionContextPushed then
+      PopCurrentFunctionExecutionContext;
     if Assigned(GC) then
     begin
       if CallScopeRooted then
