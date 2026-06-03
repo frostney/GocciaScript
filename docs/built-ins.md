@@ -83,7 +83,7 @@ Implements the [ECMAScript Object](https://developer.mozilla.org/en-US/docs/Web/
 
 ### Array (`Goccia.Builtins.GlobalArray.pas`)
 
-Implements the [ECMAScript Array](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array). **Not implemented:** `Array.prototype.reduceRight`, `Array.prototype.toLocaleString`.
+Implements the [ECMAScript Array](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array). **Not implemented:** `Array.prototype.reduceRight`.
 
 **Static methods:**
 
@@ -115,6 +115,7 @@ Implements the [ECMAScript Array](https://developer.mozilla.org/en-US/docs/Web/J
 | `includes(value, fromIndex?)` | Check if array contains value |
 | `join(separator?)` | Join elements into string |
 | `toString()` | Returns comma-separated string (delegates to `join()`) |
+| `toLocaleString(locales?, options?)` | Join element locale strings |
 | `concat(...arrays)` | Concatenate arrays |
 | `slice(start?, end?)` | Extract a section |
 | `push(...items)` | Add to end (mutating) |
