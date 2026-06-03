@@ -147,64 +147,42 @@ var
 begin
   Promise := TGocciaPromiseValue(ATask.ResultPromise);
 
-  if Assigned(TGarbageCollector.Instance) then
+  if Assigned(ATask.Handler) and ATask.Handler.IsCallable then
   begin
-    if Assigned(ATask.Handler) then
-      TGarbageCollector.Instance.AddTempRoot(ATask.Handler);
-    if Assigned(ATask.Value) then
-      TGarbageCollector.Instance.AddTempRoot(ATask.Value);
-    if Assigned(Promise) then
-      TGarbageCollector.Instance.AddTempRoot(Promise);
-  end;
-
-  try
-    if Assigned(ATask.Handler) and ATask.Handler.IsCallable then
-    begin
-      CallArgs := TGocciaArgumentsCollection.Create([ATask.Value]);
+    CallArgs := TGocciaArgumentsCollection.Create([ATask.Value]);
+    try
       try
-        try
-          HandlerResult := TGocciaFunctionBase(ATask.Handler).Call(
-            CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+        HandlerResult := TGocciaFunctionBase(ATask.Handler).Call(
+          CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+        if Assigned(Promise) then
+          Promise.Resolve(HandlerResult);
+      except
+        on E: EGocciaBytecodeThrow do
           if Assigned(Promise) then
-            Promise.Resolve(HandlerResult);
-        except
-          on E: EGocciaBytecodeThrow do
-            if Assigned(Promise) then
-              Promise.Reject(E.ThrownValue)
-            else
-              raise;
-          on E: TGocciaThrowValue do
-            if Assigned(Promise) then
-              Promise.Reject(E.Value)
-            else
-              raise;
-        end;
-      finally
-        CallArgs.Free;
+            Promise.Reject(E.ThrownValue)
+          else
+            raise;
+        on E: TGocciaThrowValue do
+          if Assigned(Promise) then
+            Promise.Reject(E.Value)
+          else
+            raise;
       end;
-    end
-    else
-    begin
-      if Assigned(Promise) then
-      begin
-        case ATask.ReactionType of
-          prtFulfill: Promise.Resolve(ATask.Value);
-          prtReject: Promise.Reject(ATask.Value);
-          prtThenableResolve:
-            if ATask.Value is TGocciaPromiseValue then
-              Promise.SubscribeTo(TGocciaPromiseValue(ATask.Value));
-        end;
-      end;
+    finally
+      CallArgs.Free;
     end;
-  finally
-    if Assigned(TGarbageCollector.Instance) then
+  end
+  else
+  begin
+    if Assigned(Promise) then
     begin
-      if Assigned(ATask.Handler) then
-        TGarbageCollector.Instance.RemoveTempRoot(ATask.Handler);
-      if Assigned(ATask.Value) then
-        TGarbageCollector.Instance.RemoveTempRoot(ATask.Value);
-      if Assigned(Promise) then
-        TGarbageCollector.Instance.RemoveTempRoot(Promise);
+      case ATask.ReactionType of
+        prtFulfill: Promise.Resolve(ATask.Value);
+        prtReject: Promise.Reject(ATask.Value);
+        prtThenableResolve:
+          if ATask.Value is TGocciaPromiseValue then
+            Promise.SubscribeTo(TGocciaPromiseValue(ATask.Value));
+      end;
     end;
   end;
 end;
