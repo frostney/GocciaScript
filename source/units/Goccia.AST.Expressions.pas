@@ -96,6 +96,7 @@ type
     FRawStrings: TGocciaTemplateStrings;
     FCookedValid: TGocciaTemplateCookedValid;
     FExpressions: TObjectList<TGocciaExpression>;
+    FTemplateSiteId: UInt64;
     // ES2026 §13.2.8.3: cached per-call-site template object (nil until first evaluation)
     FTemplateObject: TGocciaValue;
   public
@@ -115,6 +116,7 @@ type
     property RawStrings: TGocciaTemplateStrings read FRawStrings;
     property CookedValid: TGocciaTemplateCookedValid read FCookedValid;
     property Expressions: TObjectList<TGocciaExpression> read FExpressions;
+    property TemplateSiteId: UInt64 read FTemplateSiteId;
     property TemplateObject: TGocciaValue read FTemplateObject;
   end;
 
@@ -884,6 +886,21 @@ uses
   Goccia.Values.SymbolValue,
   Goccia.Values.ToPrimitive;
 
+var
+  GTemplateSiteIdLock: TRTLCriticalSection;
+  GNextTemplateSiteId: UInt64;
+
+function AllocateTemplateSiteId: UInt64;
+begin
+  EnterCriticalSection(GTemplateSiteIdLock);
+  try
+    Inc(GNextTemplateSiteId);
+    Result := GNextTemplateSiteId;
+  finally
+    LeaveCriticalSection(GTemplateSiteIdLock);
+  end;
+end;
+
 function IsNullishAssignmentValue(const AValue: TGocciaValue): Boolean; inline;
 begin
   Result := not Assigned(AValue) or
@@ -967,6 +984,7 @@ begin
   FRawStrings := ARawStrings;
   FCookedValid := ACookedValid;
   FExpressions := AExpressions;
+  FTemplateSiteId := AllocateTemplateSiteId;
 end;
 
 destructor TGocciaTaggedTemplateExpression.Destroy;
@@ -2245,5 +2263,12 @@ function TGocciaPrivatePropertyCompoundAssignmentExpression.Evaluate(const ACont
 begin
   Result := EvaluatePrivatePropertyCompoundAssignment(Self, AContext);
 end;
+
+initialization
+  InitCriticalSection(GTemplateSiteIdLock);
+  GNextTemplateSiteId := 0;
+
+finalization
+  DoneCriticalSection(GTemplateSiteIdLock);
 
 end.

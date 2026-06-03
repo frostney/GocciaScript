@@ -94,6 +94,7 @@ uses
   Goccia.Evaluator,
   Goccia.Evaluator.Context,
   Goccia.GarbageCollector,
+  Goccia.Realm,
   Goccia.Types.Enforcement,
   Goccia.Values.ArgumentsObjectValue,
   Goccia.Values.ArrayValue,
@@ -183,6 +184,8 @@ begin
   // EffectiveStrictTypes walks to the root scope so closures observe
   // updates made by TGocciaEngine.SetStrictTypes after the closure's
   // lexical scope was created.
+  FillChar(Context, SizeOf(Context), 0);
+  Context.Realm := CurrentRealm;
   Context.Scope := FClosure;
   Context.OnError := FClosure.OnError;
   Context.LoadModule := FClosure.LoadModule;
@@ -391,8 +394,10 @@ begin
       GC.PushActiveRoot(CallScope);
       CallScopeRooted := True;
     end;
+    PushCurrentFunctionExecutionContext(CallScope, Self);
     Result := ExecuteBody(CallScope, AArguments, AThisValue);
   finally
+    PopCurrentFunctionExecutionContext;
     if Assigned(GC) then
     begin
       if CallScopeRooted then

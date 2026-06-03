@@ -13,8 +13,10 @@ uses
   Goccia.Bytecode.Chunk,
   Goccia.Bytecode.Module,
   Goccia.Evaluator.Context,
+  Goccia.ExecutionContext,
   Goccia.GarbageCollector,
   Goccia.Modules,
+  Goccia.Realm,
   Goccia.Scope,
   Goccia.Scope.BindingMap,
   Goccia.Values.ArrayValue,
@@ -90,6 +92,7 @@ type
     FArgCount: Integer;
     FGlobalScope: TGocciaScope;
     FGlobalThisValue: TGocciaValue;
+    FRealm: TGocciaRealm;
     FLoadModule: TLoadModuleCallback;
     FLoadModuleSource: TLoadModuleSourceCallback;
     FLoadDeferredModule: TLoadDeferredModuleCallback;
@@ -98,6 +101,7 @@ type
     FFrameDepth: Integer;
     FFrameStack: array of TGocciaVMCallFrame;
     FFrameStackCount: Integer;
+    FCurrentExecutionContextPushed: Boolean;
     FCurrentModuleSourcePath: string;
     FCurrentModuleExports: TGocciaValueMap;
     FPendingNewTarget: TGocciaValue;
@@ -253,7 +257,7 @@ type
     procedure SetupNewFrame(const AClosure: TGocciaBytecodeClosure;
       const AThisValue: TGocciaRegister; const AArguments: TGocciaRegisterArray;
       const AArgCount: Integer; const AArg0, AArg1, AArg2: TGocciaRegister;
-      const AUseFixedArgs: Boolean;
+      const AUseFixedArgs: Boolean; const APushExecutionContext: Boolean;
       var AFrame: TGocciaVMCallFrame; out ATemplate: TGocciaFunctionTemplate;
       out APrevCovLine: UInt32; out AProfileTimestamp: Int64);
     procedure HandleExceptionUnwind(const AErrorValue: TGocciaValue;
@@ -263,19 +267,28 @@ type
     function ExecuteClosureRegistersInternal(const AClosure: TGocciaBytecodeClosure;
       const AThisValue: TGocciaRegister; const AArguments: TGocciaRegisterArray;
       const AArgCount: Integer; const AArg0, AArg1, AArg2: TGocciaRegister;
-      const AUseFixedArgs: Boolean): TGocciaRegister;
+      const AUseFixedArgs: Boolean;
+      const APushExecutionContext: Boolean): TGocciaRegister;
     function ExecuteClosureRegisters0(const AClosure: TGocciaBytecodeClosure;
-      const AThisValue: TGocciaRegister): TGocciaRegister;
+      const AThisValue: TGocciaRegister;
+      const APushExecutionContext: Boolean = True): TGocciaRegister;
     function ExecuteClosureRegisters1(const AClosure: TGocciaBytecodeClosure;
-      const AThisValue, AArg0: TGocciaRegister): TGocciaRegister;
+      const AThisValue, AArg0: TGocciaRegister;
+      const APushExecutionContext: Boolean = True): TGocciaRegister;
     function ExecuteClosureRegisters2(const AClosure: TGocciaBytecodeClosure;
-      const AThisValue, AArg0, AArg1: TGocciaRegister): TGocciaRegister;
+      const AThisValue, AArg0, AArg1: TGocciaRegister;
+      const APushExecutionContext: Boolean = True): TGocciaRegister;
     function ExecuteClosureRegisters3(const AClosure: TGocciaBytecodeClosure;
-      const AThisValue, AArg0, AArg1, AArg2: TGocciaRegister): TGocciaRegister;
+      const AThisValue, AArg0, AArg1, AArg2: TGocciaRegister;
+      const APushExecutionContext: Boolean = True): TGocciaRegister;
     function ExecuteClosureRegisters(const AClosure: TGocciaBytecodeClosure;
-      const AThisValue: TGocciaRegister; const AArguments: TGocciaRegisterArray): TGocciaRegister;
+      const AThisValue: TGocciaRegister;
+      const AArguments: TGocciaRegisterArray;
+      const APushExecutionContext: Boolean = True): TGocciaRegister;
     function ExecuteClosure(const AClosure: TGocciaBytecodeClosure;
-      const AThisValue: TGocciaValue; const AArguments: TGocciaArgumentsCollection): TGocciaValue;
+      const AThisValue: TGocciaValue;
+      const AArguments: TGocciaArgumentsCollection;
+      const APushExecutionContext: Boolean = True): TGocciaValue;
   public
     constructor Create;
     destructor Destroy; override;
@@ -283,6 +296,7 @@ type
     function ExecuteModule(const AModule: TGocciaBytecodeModule): TGocciaValue;
     property GlobalScope: TGocciaScope read FGlobalScope write FGlobalScope;
     property GlobalThisValue: TGocciaValue read FGlobalThisValue write FGlobalThisValue;
+    property Realm: TGocciaRealm read FRealm write FRealm;
     property LoadModule: TLoadModuleCallback read FLoadModule write FLoadModule;
     property LoadModuleSource: TLoadModuleSourceCallback
       read FLoadModuleSource write FLoadModuleSource;
@@ -1095,6 +1109,8 @@ begin
   inherited Create;
   FVM := AVM;
   FClosure := AClosure;
+  if Assigned(FClosure) then
+    FClosure.FunctionValue := Self;
   if Assigned(AClosure) and Assigned(AClosure.Template) then
   begin
     FStrictThis := AClosure.Template.StrictThis;
@@ -3106,6 +3122,7 @@ begin
   FLastClosureThisValue := RegisterUndefined;
   FPrivateInitializerReceiver := nil;
   FTempSavedStateRootCount := 0;
+  FCurrentExecutionContextPushed := False;
   SetLength(FRegisterStack, INITIAL_STACK_SIZE);
   FRegisterBase := 0;
   FRegisters := nil;
@@ -3876,10 +3893,16 @@ var
   Slot: Integer;
   CookedArray, RawArray: TGocciaArrayValue;
   I: Integer;
+  TemplateKey: string;
 begin
   Constant := ATemplate.GetConstantUnchecked(AConstantIndex);
   Slot := Integer(Constant.IntValue);
-  Result := TGocciaValue(ATemplate.GetTemplateObjectCache(Slot));
+  TemplateKey := 'bc:' + IntToHex(ATemplate.TemplateSiteId, 16) + ':' +
+    IntToStr(Slot);
+  if Assigned(FRealm) then
+    Result := TGocciaValue(FRealm.GetTemplateObject(TemplateKey))
+  else
+    Result := TGocciaValue(ATemplate.GetTemplateObjectCache(Slot));
   if Assigned(Result) then
     Exit;
 
@@ -3909,8 +3932,13 @@ begin
       // ES2026 §13.2.8.3 step 12: freeze the template object
       CookedArray.Freeze;
       // ES2026 §13.2.8.3 step 13: cache keyed by this Parse Node (template slot)
-      TGarbageCollector.Instance.PinObject(CookedArray);
-      ATemplate.SetTemplateObjectCache(Slot, CookedArray);
+      if Assigned(FRealm) then
+        FRealm.SetTemplateObject(TemplateKey, CookedArray)
+      else
+      begin
+        TGarbageCollector.Instance.PinObject(CookedArray);
+        ATemplate.SetTemplateObjectCache(Slot, CookedArray);
+      end;
       Result := CookedArray;
     finally
       TGarbageCollector.Instance.RemoveTempRoot(CookedArray);
@@ -5018,6 +5046,7 @@ begin
   if AConstructor is TGocciaClassValue then
   begin
     FillChar(Context, SizeOf(Context), 0);
+    Context.Realm := FRealm;
     Context.Scope := FGlobalScope;
     Result := InstantiateClass(TGocciaClassValue(AConstructor), AArguments, Context);
     Exit;
@@ -7369,43 +7398,50 @@ begin
 end;
 
 function TGocciaVM.ExecuteClosureRegisters(const AClosure: TGocciaBytecodeClosure;
-  const AThisValue: TGocciaRegister; const AArguments: TGocciaRegisterArray): TGocciaRegister;
+  const AThisValue: TGocciaRegister; const AArguments: TGocciaRegisterArray;
+  const APushExecutionContext: Boolean): TGocciaRegister;
 begin
   CheckExecutionTimeout;
   CheckInstructionLimit;
   Result := ExecuteClosureRegistersInternal(AClosure, AThisValue, AArguments,
     Length(AArguments), RegisterUndefined, RegisterUndefined, RegisterUndefined,
-    False);
+    False, APushExecutionContext);
 end;
 
 function TGocciaVM.ExecuteClosureRegisters0(const AClosure: TGocciaBytecodeClosure;
-  const AThisValue: TGocciaRegister): TGocciaRegister;
+  const AThisValue: TGocciaRegister;
+  const APushExecutionContext: Boolean): TGocciaRegister;
 begin
   Result := ExecuteClosureRegistersInternal(AClosure, AThisValue,
     TGocciaRegisterArray(nil), 0, RegisterUndefined, RegisterUndefined,
-    RegisterUndefined, True);
+    RegisterUndefined, True, APushExecutionContext);
 end;
 
 function TGocciaVM.ExecuteClosureRegisters1(const AClosure: TGocciaBytecodeClosure;
-  const AThisValue, AArg0: TGocciaRegister): TGocciaRegister;
+  const AThisValue, AArg0: TGocciaRegister;
+  const APushExecutionContext: Boolean): TGocciaRegister;
 begin
   Result := ExecuteClosureRegistersInternal(AClosure, AThisValue,
     TGocciaRegisterArray(nil), 1, AArg0, RegisterUndefined, RegisterUndefined,
-    True);
+    True, APushExecutionContext);
 end;
 
 function TGocciaVM.ExecuteClosureRegisters2(const AClosure: TGocciaBytecodeClosure;
-  const AThisValue, AArg0, AArg1: TGocciaRegister): TGocciaRegister;
+  const AThisValue, AArg0, AArg1: TGocciaRegister;
+  const APushExecutionContext: Boolean): TGocciaRegister;
 begin
   Result := ExecuteClosureRegistersInternal(AClosure, AThisValue,
-    TGocciaRegisterArray(nil), 2, AArg0, AArg1, RegisterUndefined, True);
+    TGocciaRegisterArray(nil), 2, AArg0, AArg1, RegisterUndefined, True,
+    APushExecutionContext);
 end;
 
 function TGocciaVM.ExecuteClosureRegisters3(const AClosure: TGocciaBytecodeClosure;
-  const AThisValue, AArg0, AArg1, AArg2: TGocciaRegister): TGocciaRegister;
+  const AThisValue, AArg0, AArg1, AArg2: TGocciaRegister;
+  const APushExecutionContext: Boolean): TGocciaRegister;
 begin
   Result := ExecuteClosureRegistersInternal(AClosure, AThisValue,
-    TGocciaRegisterArray(nil), 3, AArg0, AArg1, AArg2, True);
+    TGocciaRegisterArray(nil), 3, AArg0, AArg1, AArg2, True,
+    APushExecutionContext);
 end;
 
 procedure TGocciaVM.PushFrame(const AResultRegister, AFrameIP: Integer;
@@ -7429,6 +7465,8 @@ begin
   FFrameStack[FFrameStackCount].PrevCovLine := APrevCovLine;
   FFrameStack[FFrameStackCount].ProfileEntryTimestamp := AProfileTimestamp;
   FFrameStack[FFrameStackCount].NewTarget := Pointer(FCurrentNewTarget);
+  FFrameStack[FFrameStackCount].ExecutionContextPushed :=
+    FCurrentExecutionContextPushed;
   Inc(FFrameStackCount);
 end;
 
@@ -7453,6 +7491,8 @@ begin
   APrevCovLine := FFrameStack[FFrameStackCount].PrevCovLine;
   AProfileTimestamp := FFrameStack[FFrameStackCount].ProfileEntryTimestamp;
   FCurrentNewTarget := TGocciaValue(FFrameStack[FFrameStackCount].NewTarget);
+  FCurrentExecutionContextPushed :=
+    FFrameStack[FFrameStackCount].ExecutionContextPushed;
   Result := FFrameStack[FFrameStackCount].ReturnRegister;
 end;
 
@@ -7464,6 +7504,11 @@ begin
     TGocciaProfiler.Instance.PopFunction(ATemplate.ProfileIndex, GetNanoseconds);
   if Assigned(TGocciaCallStack.Instance) then
     TGocciaCallStack.Instance.Pop;
+  if FCurrentExecutionContextPushed then
+  begin
+    TGocciaExecutionContextStack.Pop;
+    FCurrentExecutionContextPushed := False;
+  end;
   while FHandlerStack.Count > ATargetHandlerCount do
     FHandlerStack.Pop;
   Dec(FFrameDepth);
@@ -7493,7 +7538,7 @@ end;
 procedure TGocciaVM.SetupNewFrame(const AClosure: TGocciaBytecodeClosure;
   const AThisValue: TGocciaRegister; const AArguments: TGocciaRegisterArray;
   const AArgCount: Integer; const AArg0, AArg1, AArg2: TGocciaRegister;
-  const AUseFixedArgs: Boolean;
+  const AUseFixedArgs: Boolean; const APushExecutionContext: Boolean;
   var AFrame: TGocciaVMCallFrame; out ATemplate: TGocciaFunctionTemplate;
   out APrevCovLine: UInt32; out AProfileTimestamp: Int64);
 var
@@ -7519,6 +7564,7 @@ begin
       FCurrentArguments[I] := AArguments[I];
   FArgCount := AArgCount;
   FCurrentClosure := AClosure;
+  FCurrentExecutionContextPushed := False;
   Inc(FFrameDepth);
   if Assigned(TGocciaCallStack.Instance) then
     TGocciaCallStack.Instance.Push(
@@ -7560,6 +7606,14 @@ begin
   for I := 0 to FArgCount - 1 do
     SetLocalRaw(I + 1, FCurrentArguments[I]);
 
+  if APushExecutionContext and Assigned(FRealm) then
+  begin
+    TGocciaExecutionContextStack.Push(
+      CreateExecutionContext(FRealm, FGlobalScope, FCurrentModuleSourcePath,
+        nil, AClosure.FunctionValue));
+    FCurrentExecutionContextPushed := True;
+  end;
+
   if FCoverageEnabled and Assigned(ATemplate.DebugInfo) and
      (ATemplate.DebugInfo.LineMapCount > 0) then
     APrevCovLine := ATemplate.DebugInfo.GetLineMapEntry(0).Line
@@ -7599,7 +7653,8 @@ end;
 function TGocciaVM.ExecuteClosureRegistersInternal(
   const AClosure: TGocciaBytecodeClosure; const AThisValue: TGocciaRegister;
   const AArguments: TGocciaRegisterArray; const AArgCount: Integer;
-  const AArg0, AArg1, AArg2: TGocciaRegister; const AUseFixedArgs: Boolean): TGocciaRegister;
+  const AArg0, AArg1, AArg2: TGocciaRegister; const AUseFixedArgs: Boolean;
+  const APushExecutionContext: Boolean): TGocciaRegister;
 var
   Frame: TGocciaVMCallFrame;
   SavedRegisterBase: Integer;
@@ -7610,6 +7665,7 @@ var
   SavedArgCount: Integer;
   SavedClosure: TGocciaBytecodeClosure;
   SavedNewTarget: TGocciaValue;
+  SavedExecutionContextPushed: Boolean;
   SavedHandlerCount: Integer;
   InitialFrameStackCount: Integer;
   ReturnValue: TGocciaRegister;
@@ -7659,13 +7715,14 @@ begin
   SavedArgCount := FArgCount;
   SavedClosure := FCurrentClosure;
   SavedNewTarget := FCurrentNewTarget;
+  SavedExecutionContextPushed := FCurrentExecutionContextPushed;
   SavedHandlerCount := FHandlerStack.Count;
   InitialFrameStackCount := FFrameStackCount;
   FLastClosureThisValue := AThisValue;
   PushSavedStateRoot(SavedClosure, SavedNewTarget, SavedCurrentArguments);
   try
     SetupNewFrame(AClosure, AThisValue, AArguments, AArgCount,
-      AArg0, AArg1, AArg2, AUseFixedArgs,
+      AArg0, AArg1, AArg2, AUseFixedArgs, APushExecutionContext,
       Frame, Template, PrevCovLine, ProfileEntryTimestamp);
     if Assigned(FPendingNewTarget) then
       FCurrentNewTarget := FPendingNewTarget;
@@ -8432,7 +8489,7 @@ begin
           SetupNewFrame(
             TGocciaBytecodeFunctionValue(FRegisters[B].ObjectValue).FClosure,
             FRegisters[A], TGocciaRegisterArray(nil), 0,
-            RegisterUndefined, RegisterUndefined, RegisterUndefined, True,
+            RegisterUndefined, RegisterUndefined, RegisterUndefined, True, True,
             Frame, Template, PrevCovLine, ProfileEntryTimestamp);
           Continue;
         end
@@ -9610,7 +9667,7 @@ begin
                 SetupNewFrame(BytecodeFunction.FClosure,
                   ValueToRegister(BoundFunction.BoundThis), RegisterArgs,
                   Length(RegisterArgs), RegisterUndefined, RegisterUndefined,
-                  RegisterUndefined, False,
+                  RegisterUndefined, False, True,
                   Frame, Template, PrevCovLine, ProfileEntryTimestamp);
                 Continue;
               end
@@ -9629,7 +9686,7 @@ begin
                 SetupNewFrame(BytecodeFunction.FClosure,
                   ValueToRegister(BoundFunction.BoundThis), RegisterArgs,
                   Length(RegisterArgs), RegisterUndefined, RegisterUndefined,
-                  RegisterUndefined, False,
+                  RegisterUndefined, False, True,
                   Frame, Template, PrevCovLine, ProfileEntryTimestamp);
                 Continue;
               end;
@@ -9658,7 +9715,7 @@ begin
               PushFrame(A, Frame.IP, Template, PrevCovLine, ProfileEntryTimestamp);
               SetupNewFrame(BytecodeFunction.FClosure,
                 CallThisRegister, RegisterArgs, B,
-                RegisterUndefined, RegisterUndefined, RegisterUndefined, False,
+                RegisterUndefined, RegisterUndefined, RegisterUndefined, False, True,
                 Frame, Template, PrevCovLine, ProfileEntryTimestamp);
               Continue;
             end
@@ -9673,7 +9730,7 @@ begin
               PushFrame(A, Frame.IP, Template, PrevCovLine, ProfileEntryTimestamp);
               SetupNewFrame(BytecodeFunction.FClosure,
                 CallThisRegister, RegisterArgs, Length(RegisterArgs),
-                RegisterUndefined, RegisterUndefined, RegisterUndefined, False,
+                RegisterUndefined, RegisterUndefined, RegisterUndefined, False, True,
                 Frame, Template, PrevCovLine, ProfileEntryTimestamp);
               Continue;
             end;
@@ -9761,27 +9818,27 @@ begin
                       SetupNewFrame(BytecodeFunction.FClosure,
                         CallThisRegister, TGocciaRegisterArray(nil), 0,
                         RegisterUndefined, RegisterUndefined, RegisterUndefined,
-                        True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+                        True, True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
                     1:
                       SetupNewFrame(BytecodeFunction.FClosure,
                         CallThisRegister, TGocciaRegisterArray(nil), 0,
                         RegisterUndefined, RegisterUndefined, RegisterUndefined,
-                        True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+                        True, True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
                     2:
                       SetupNewFrame(BytecodeFunction.FClosure,
                         CallThisRegister, TGocciaRegisterArray(nil), 1,
                         FRegisters[A + 2], RegisterUndefined, RegisterUndefined,
-                        True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+                        True, True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
                     3:
                       SetupNewFrame(BytecodeFunction.FClosure,
                         CallThisRegister, TGocciaRegisterArray(nil), 2,
                         FRegisters[A + 2], FRegisters[A + 3], RegisterUndefined,
-                        True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+                        True, True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
                     4:
                       SetupNewFrame(BytecodeFunction.FClosure,
                         CallThisRegister, TGocciaRegisterArray(nil), 3,
                         FRegisters[A + 2], FRegisters[A + 3], FRegisters[A + 4],
-                        True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+                        True, True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
                   else
                     begin
                       SetLength(RegisterArgs, B - 1);
@@ -9790,7 +9847,7 @@ begin
                       SetupNewFrame(BytecodeFunction.FClosure,
                         CallThisRegister, RegisterArgs, Length(RegisterArgs),
                         RegisterUndefined, RegisterUndefined, RegisterUndefined,
-                        False, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+                        False, True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
                     end;
                   end;
                   Continue;
@@ -9810,27 +9867,27 @@ begin
                       SetupNewFrame(BytecodeFunction.FClosure,
                         CallThisRegister, TGocciaRegisterArray(nil), 0,
                         RegisterUndefined, RegisterUndefined, RegisterUndefined,
-                        True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+                        True, True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
                     1:
                       SetupNewFrame(BytecodeFunction.FClosure,
                         CallThisRegister, TGocciaRegisterArray(nil), 1,
                         VMValueToRegisterFast(ArgsArray.Elements[0]),
                         RegisterUndefined, RegisterUndefined,
-                        True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+                        True, True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
                     2:
                       SetupNewFrame(BytecodeFunction.FClosure,
                         CallThisRegister, TGocciaRegisterArray(nil), 2,
                         VMValueToRegisterFast(ArgsArray.Elements[0]),
                         VMValueToRegisterFast(ArgsArray.Elements[1]),
                         RegisterUndefined,
-                        True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+                        True, True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
                     3:
                       SetupNewFrame(BytecodeFunction.FClosure,
                         CallThisRegister, TGocciaRegisterArray(nil), 3,
                         VMValueToRegisterFast(ArgsArray.Elements[0]),
                         VMValueToRegisterFast(ArgsArray.Elements[1]),
                         VMValueToRegisterFast(ArgsArray.Elements[2]),
-                        True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+                        True, True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
                   else
                     begin
                       SetLength(RegisterArgs, ArgsArray.Elements.Count);
@@ -9839,7 +9896,7 @@ begin
                       SetupNewFrame(BytecodeFunction.FClosure,
                         CallThisRegister, RegisterArgs, Length(RegisterArgs),
                         RegisterUndefined, RegisterUndefined, RegisterUndefined,
-                        False, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+                        False, True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
                     end;
                   end;
                   Continue;
@@ -9866,7 +9923,7 @@ begin
               PushFrame(A, Frame.IP, Template, PrevCovLine, ProfileEntryTimestamp);
               SetupNewFrame(BytecodeFunction.FClosure,
                 FRegisters[A - 1], RegisterArgs, B,
-                RegisterUndefined, RegisterUndefined, RegisterUndefined, False,
+                RegisterUndefined, RegisterUndefined, RegisterUndefined, False, True,
                 Frame, Template, PrevCovLine, ProfileEntryTimestamp);
               Continue;
             end
@@ -9881,7 +9938,7 @@ begin
               PushFrame(A, Frame.IP, Template, PrevCovLine, ProfileEntryTimestamp);
               SetupNewFrame(BytecodeFunction.FClosure,
                 FRegisters[A - 1], RegisterArgs, Length(RegisterArgs),
-                RegisterUndefined, RegisterUndefined, RegisterUndefined, False,
+                RegisterUndefined, RegisterUndefined, RegisterUndefined, False, True,
                 Frame, Template, PrevCovLine, ProfileEntryTimestamp);
               Continue;
             end;
@@ -10548,6 +10605,7 @@ begin
       // Restore the caller's state
       FCurrentClosure := SavedClosure;
       FCurrentNewTarget := SavedNewTarget;
+      FCurrentExecutionContextPushed := SavedExecutionContextPushed;
       FCurrentArguments := SavedCurrentArguments;
       FArgCount := SavedArgCount;
       FRegisterBase := SavedRegisterBase;
@@ -10563,7 +10621,8 @@ begin
 end;
 
 function TGocciaVM.ExecuteClosure(const AClosure: TGocciaBytecodeClosure;
-  const AThisValue: TGocciaValue; const AArguments: TGocciaArgumentsCollection): TGocciaValue;
+  const AThisValue: TGocciaValue; const AArguments: TGocciaArgumentsCollection;
+  const APushExecutionContext: Boolean): TGocciaValue;
 var
   RegisterArgs: TGocciaRegisterArray;
   I: Integer;
@@ -10572,7 +10631,7 @@ begin
   for I := 0 to AArguments.Length - 1 do
     RegisterArgs[I] := VMValueToRegisterFast(AArguments.GetElement(I));
   Result := RegisterToValue(ExecuteClosureRegisters(AClosure,
-    VMValueToRegisterFast(AThisValue), RegisterArgs));
+    VMValueToRegisterFast(AThisValue), RegisterArgs, APushExecutionContext));
 end;
 
 function TGocciaVM.ExecuteModule(const AModule: TGocciaBytecodeModule): TGocciaValue;
@@ -10588,11 +10647,16 @@ begin
   SavedModuleExports := FCurrentModuleExports;
   FCurrentModuleSourcePath := AModule.SourcePath;
   FCurrentModuleExports := TGocciaValueMap.Create;
+  if Assigned(FRealm) then
+    TGocciaExecutionContextStack.Push(
+      CreateExecutionContext(FRealm, FGlobalScope, AModule.SourcePath, AModule));
   try
     try
       Result := ExecuteClosure(TopClosure,
-        TGocciaUndefinedLiteralValue.UndefinedValue, EmptyArgs);
+        TGocciaUndefinedLiteralValue.UndefinedValue, EmptyArgs, False);
     finally
+      if Assigned(FRealm) then
+        TGocciaExecutionContextStack.Pop;
       FCurrentModuleExports.Free;
       FCurrentModuleExports := SavedModuleExports;
       FCurrentModuleSourcePath := SavedModuleSourcePath;
@@ -10610,10 +10674,16 @@ var
 begin
   EmptyArgs := TGocciaArgumentsCollection.Create;
   TopClosure := TGocciaBytecodeClosure.Create(ATemplate);
+  if Assigned(FRealm) then
+    TGocciaExecutionContextStack.Push(
+      CreateExecutionContext(FRealm, FGlobalScope, FCurrentModuleSourcePath,
+        ATemplate));
   try
     Result := ExecuteClosure(TopClosure,
-      TGocciaUndefinedLiteralValue.UndefinedValue, EmptyArgs);
+      TGocciaUndefinedLiteralValue.UndefinedValue, EmptyArgs, False);
   finally
+    if Assigned(FRealm) then
+      TGocciaExecutionContextStack.Pop;
     TopClosure.Free;
     EmptyArgs.Free;
   end;

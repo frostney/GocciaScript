@@ -83,6 +83,7 @@ procedure TGocciaBytecodeExecutor.Initialize(const AGlobalScope: TGocciaScope;
   const AModuleLoader: TGocciaModuleLoader; const ASourcePath: string);
 begin
   inherited;
+  FVM.Realm := FRealm;
   FVM.GlobalScope := AGlobalScope;
   FVM.GlobalThisValue := AGlobalScope.ThisValue;
   FVM.LoadModule := AModuleLoader.LoadModule;
@@ -119,9 +120,12 @@ begin
   SavedGlobalScope := FVM.GlobalScope;
   FVM.GlobalScope := AContext.Scope;
   try
+    if Assigned(AContext.Realm) then
+      FVM.Realm := AContext.Realm;
     Result := FVM.ExecuteModule(BytecodeModule);
   finally
     FVM.GlobalScope := SavedGlobalScope;
+    FVM.Realm := FRealm;
   end;
 end;
 

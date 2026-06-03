@@ -1090,9 +1090,10 @@ begin
     begin
       TGocciaCallStack.Instance.Push(CalleeName, AContext.CurrentFilePath,
         ACallExpression.Line, ACallExpression.Column);
-      CheckStackDepth(TGocciaCallStack.Instance.Count);
     end;
     try
+      if Assigned(TGocciaCallStack.Instance) then
+        CheckStackDepth(TGocciaCallStack.Instance.Count);
       if Callee is TGocciaProxyValue then
         Result := TGocciaProxyValue(Callee).ApplyTrap(Arguments, ThisValue)
       else if Callee is TGocciaNativeFunctionValue then
@@ -4176,9 +4177,10 @@ begin
     begin
       TGocciaCallStack.Instance.Push(CalleeName, AContext.CurrentFilePath,
         ANewExpression.Line, ANewExpression.Column);
-      CheckStackDepth(TGocciaCallStack.Instance.Count);
     end;
     try
+      if Assigned(TGocciaCallStack.Instance) then
+        CheckStackDepth(TGocciaCallStack.Instance.Count);
       if Callee is TGocciaProxyValue then
       begin
         Result := TGocciaProxyValue(Callee).ConstructTrap(Arguments);
@@ -6152,6 +6154,7 @@ var
   Arguments: TGocciaArgumentsCollection;
   I: Integer;
   CalleeName: string;
+  TemplateKey: string;
 begin
   CheckExecutionTimeout;
   IncrementInstructionCounter;
@@ -6175,9 +6178,16 @@ begin
 
   // ES2026 §13.2.8.3 GetTemplateObject — return the cached template object for
   // this Parse Node, or build it on first evaluation and pin it for reuse.
-  if Assigned(ATaggedTemplateExpression.TemplateObject) then
+  TemplateKey := 'ast:' + IntToHex(ATaggedTemplateExpression.TemplateSiteId,
+    16);
+  if Assigned(AContext.Realm) then
+    TemplateObject := TGocciaValue(AContext.Realm.GetTemplateObject(TemplateKey))
+  else if Assigned(ATaggedTemplateExpression.TemplateObject) then
     TemplateObject := ATaggedTemplateExpression.TemplateObject
   else
+    TemplateObject := nil;
+
+  if not Assigned(TemplateObject) then
   begin
     // Build the raw array
     RawArray := TGocciaArrayValue.Create;
@@ -6207,7 +6217,10 @@ begin
         CookedArray.Freeze;
         // ES2026 §13.2.8.3 step 13: Store in realm [[TemplateMap]] keyed by this
         // Parse Node so subsequent evaluations return the identical object.
-        ATaggedTemplateExpression.SetCachedTemplateObject(CookedArray);
+        if Assigned(AContext.Realm) then
+          AContext.Realm.SetTemplateObject(TemplateKey, CookedArray)
+        else
+          ATaggedTemplateExpression.SetCachedTemplateObject(CookedArray);
         TemplateObject := CookedArray;
       finally
         TGarbageCollector.Instance.RemoveTempRoot(CookedArray);
@@ -6239,9 +6252,10 @@ begin
     begin
       TGocciaCallStack.Instance.Push(CalleeName, AContext.CurrentFilePath,
         ATaggedTemplateExpression.Line, ATaggedTemplateExpression.Column);
-      CheckStackDepth(TGocciaCallStack.Instance.Count);
     end;
     try
+      if Assigned(TGocciaCallStack.Instance) then
+        CheckStackDepth(TGocciaCallStack.Instance.Count);
       if Callee is TGocciaProxyValue then
         Result := TGocciaProxyValue(Callee).ApplyTrap(Arguments, ThisValue)
       else if Callee is TGocciaNativeFunctionValue then

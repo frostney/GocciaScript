@@ -149,7 +149,7 @@ printf "const f = () => f(); f();" | ./build/GocciaScriptLoader --timeout=100
 # Abort after a fixed number of bytecode instructions
 printf "const f = () => f(); f();" | ./build/GocciaScriptLoader --max-instructions=1000000 --mode=bytecode
 
-# Set call stack depth limit (default 3500; 0 = unlimited)
+# Set call stack depth limit (default 2900; 0 = unlimited)
 ./build/GocciaScriptLoader example.js --stack-size=5000
 ./build/GocciaScriptLoader example.js --stack-size=0
 
@@ -245,7 +245,7 @@ Relative paths are resolved against the current working directory. A missing fil
   "unsafe-ffi": true,
   "timeout": 5000,
   "max-memory": 10485760,
-  "stack-size": 3500,
+  "stack-size": 2900,
   "inspect-depth": 5,
   "allowed-hosts": ["api.example.com", "cdn.example.com"],
   "imports": {
@@ -289,7 +289,7 @@ mode = "bytecode"
 unsafe-ffi = true
 timeout = 5000
 max-memory = 10485760
-stack-size = 3500
+stack-size = 2900
 inspect-depth = 5
 ```
 

@@ -7,6 +7,7 @@ interface
 uses
   Goccia.Bytecode.Chunk,
   Goccia.Values.ObjectValue,
+  Goccia.Values.Primitives,
   Goccia.VM.Upvalue;
 
 type
@@ -15,6 +16,7 @@ type
     FTemplate: TGocciaFunctionTemplate;
     FUpvalues: array of TGocciaBytecodeUpvalue;
     FHomeObject: TGocciaObjectValue;
+    FFunctionValue: TGocciaValue;
   public
     constructor Create(const ATemplate: TGocciaFunctionTemplate;
       const AUpvalueCount: Integer = 0);
@@ -26,6 +28,7 @@ type
     property Template: TGocciaFunctionTemplate read FTemplate;
     property UpvalueCount: Integer read GetUpvalueCount;
     property HomeObject: TGocciaObjectValue read FHomeObject write FHomeObject;
+    property FunctionValue: TGocciaValue read FFunctionValue write FFunctionValue;
   end;
 
 implementation
@@ -36,6 +39,7 @@ begin
   inherited Create;
   FTemplate := ATemplate;
   FHomeObject := nil;
+  FFunctionValue := nil;
   SetLength(FUpvalues, AUpvalueCount);
 end;
 
@@ -51,6 +55,7 @@ var
 begin
   Result := TGocciaBytecodeClosure.Create(FTemplate, Length(FUpvalues));
   Result.FHomeObject := FHomeObject;
+  Result.FFunctionValue := FFunctionValue;
   for I := 0 to High(FUpvalues) do
     Result.FUpvalues[I] := FUpvalues[I];
 end;
