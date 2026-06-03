@@ -173,6 +173,8 @@ begin
     OP_TO_OBJECT:                      Result := 'OP_TO_OBJECT';
     OP_HAS_WITH_BINDING:               Result := 'OP_HAS_WITH_BINDING';
     OP_TO_PROPERTY_KEY:                Result := 'OP_TO_PROPERTY_KEY';
+    OP_ENUM_KEYS:                      Result := 'OP_ENUM_KEYS';
+    OP_ENUM_ENTRY:                     Result := 'OP_ENUM_ENTRY';
     OP_INC:                            Result := 'OP_INC';
     OP_DEC:                            Result := 'OP_DEC';
     OP_TO_NUMERIC:                     Result := 'OP_TO_NUMERIC';

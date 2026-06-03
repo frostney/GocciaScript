@@ -113,6 +113,7 @@ type
 implementation
 
 uses
+  Classes,
   SysUtils,
 
   Goccia.Arithmetic,

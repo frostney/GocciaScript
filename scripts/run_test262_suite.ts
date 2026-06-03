@@ -665,17 +665,20 @@ interface PerTestRecord {
 
 // test262 source is overwhelmingly semicolon-omitted; ASI is required to parse
 // the corpus.  --compat-var, --compat-function, --compat-traditional-for-loop,
-// --compat-while-loops, --compat-loose-equality, --compat-label, and --unsafe-function-constructor are also
-// unconditional: stock harness uses `var`, `function`, traditional `for(;;)`
-// loops, while/do-while loops, loose equality, labels, and `Function("return this;")()`.  Non-strict mode
-// compatibility is also enabled for script source strict tests: strict
-// directives and modules decide strict semantics, while the flag exposes
-// compatibility-gated syntax and implicit objects needed by the corpus.
+// --compat-for-in-loop, --compat-while-loops, --compat-loose-equality,
+// --compat-label, and --unsafe-function-constructor are also unconditional:
+// stock harness and tests use `var`, `function`, traditional `for(;;)` loops,
+// for-in loops, while/do-while loops, loose equality, labels, and
+// `Function("return this;")()`.  Non-strict mode compatibility is enabled
+// for Script tests separately: strict directives and modules decide strict
+// semantics, while the flag exposes compatibility-gated syntax and implicit
+// objects needed by the corpus.
 const TEST262_BARE_FLAGS: readonly string[] = [
   "--compat-asi",
   "--compat-var",
   "--compat-function",
   "--compat-traditional-for-loop",
+  "--compat-for-in-loop",
   "--compat-while-loops",
   "--compat-loose-equality",
   "--compat-label",

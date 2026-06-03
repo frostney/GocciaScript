@@ -166,6 +166,8 @@ type
       const ASource: TGocciaValue);
     function ObjectRestValue(const ASource: TGocciaValue;
       const AExclusionKeys: TGocciaArrayValue): TGocciaObjectValue;
+    function ForInEntriesArray(const AValue: TGocciaValue): TGocciaArrayValue;
+    function TryForInEntryKey(const AEntry: TGocciaValue; out AKey: string): Boolean;
     function GetIteratorValue(const AIterable: TGocciaValue;
       const ATryAsync: Boolean): TGocciaValue;
     function ConstructValue(const AConstructor: TGocciaValue;
@@ -363,6 +365,9 @@ uses
 const
   BYTECODE_PRIVATE_SLOT_PREFIX = '#slot:';
   BYTECODE_PRIVATE_BRAND_PREFIX = '#brand:';
+  FOR_IN_ENTRY_OWNER = '__gocciaForInOwner';
+  FOR_IN_ENTRY_KEY = '__gocciaForInKey';
+  FOR_IN_MAX_PROTOTYPE_CHAIN_DEPTH = 256;
 
 function IsBytecodePrivateKey(const AKey: string): Boolean; forward;
 function IsBytecodePrivateBrandKey(const AKey: string): Boolean; forward;
@@ -4877,6 +4882,107 @@ begin
   end;
 end;
 
+function TGocciaVM.ForInEntriesArray(
+  const AValue: TGocciaValue): TGocciaArrayValue;
+var
+  Current, Obj, EntryObj: TGocciaObjectValue;
+  Keys: TArray<string>;
+  Key: string;
+  KeyValue: TGocciaStringLiteralValue;
+  Visited: TStringList;
+  GC: TGarbageCollector;
+  ChainDepth: Integer;
+begin
+  GC := TGarbageCollector.Instance;
+  Result := TGocciaArrayValue.Create;
+  if Assigned(GC) then
+    GC.AddTempRoot(Result);
+  try
+    if (AValue is TGocciaUndefinedLiteralValue) or
+       (AValue is TGocciaNullLiteralValue) then
+      Exit;
+
+    Obj := ToObject(AValue);
+    if Assigned(GC) then
+      GC.AddTempRoot(Obj);
+    Visited := TStringList.Create;
+    try
+      Visited.CaseSensitive := True;
+      Current := Obj;
+      ChainDepth := 0;
+      while Assigned(Current) do
+      begin
+        Inc(ChainDepth);
+        if ChainDepth > FOR_IN_MAX_PROTOTYPE_CHAIN_DEPTH then
+          ThrowTypeError(Format(SErrorProtoChainDepthExceeded, ['for...in']),
+            SSuggestPrototypeChainTooDeep);
+
+        Keys := Current.GetAllPropertyNames;
+        for Key in Keys do
+        begin
+          if Visited.IndexOf(Key) >= 0 then
+            Continue;
+
+          Visited.Add(Key);
+          EntryObj := TGocciaObjectValue.Create;
+          if Assigned(GC) then
+            GC.AddTempRoot(EntryObj);
+          try
+            EntryObj.DefineProperty(FOR_IN_ENTRY_OWNER,
+              TGocciaPropertyDescriptorData.Create(Current, []));
+            KeyValue := TGocciaStringLiteralValue.Create(Key);
+            if Assigned(GC) then
+              GC.AddTempRoot(KeyValue);
+            try
+              EntryObj.DefineProperty(FOR_IN_ENTRY_KEY,
+                TGocciaPropertyDescriptorData.Create(KeyValue, []));
+            finally
+              if Assigned(GC) then
+                GC.RemoveTempRoot(KeyValue);
+            end;
+            Result.Elements.Add(EntryObj);
+          finally
+            if Assigned(GC) then
+              GC.RemoveTempRoot(EntryObj);
+          end;
+        end;
+        Current := Current.Prototype;
+      end;
+    finally
+      Visited.Free;
+      if Assigned(GC) then
+        GC.RemoveTempRoot(Obj);
+    end;
+  finally
+    if Assigned(GC) then
+      GC.RemoveTempRoot(Result);
+  end;
+end;
+
+function TGocciaVM.TryForInEntryKey(const AEntry: TGocciaValue;
+  out AKey: string): Boolean;
+var
+  EntryObj, Owner: TGocciaObjectValue;
+  OwnerValue, KeyValue: TGocciaValue;
+  Descriptor: TGocciaPropertyDescriptor;
+begin
+  AKey := '';
+  if not (AEntry is TGocciaObjectValue) then
+    Exit(False);
+
+  EntryObj := TGocciaObjectValue(AEntry);
+  OwnerValue := EntryObj.GetProperty(FOR_IN_ENTRY_OWNER);
+  KeyValue := EntryObj.GetProperty(FOR_IN_ENTRY_KEY);
+  if not (OwnerValue is TGocciaObjectValue) or
+     not (KeyValue is TGocciaStringLiteralValue) then
+    Exit(False);
+
+  Owner := TGocciaObjectValue(OwnerValue);
+  AKey := TGocciaStringLiteralValue(KeyValue).Value;
+  Descriptor := Owner.GetOwnPropertyDescriptor(AKey);
+  Result := Assigned(Descriptor) and Descriptor.Enumerable;
+end;
+
 function TGocciaVM.GetIteratorValue(const AIterable: TGocciaValue;
   const ATryAsync: Boolean): TGocciaValue;
 var
@@ -7706,6 +7812,7 @@ var
   DynImportPromise: TGocciaPromiseValue;
   SpreadArray: TGocciaArrayValue;
   RestoredContinuation: Boolean;
+  ForInKey: string;
 begin
   SavedRegisterBase := FRegisterBase;
   SavedRegisterCount := FRegisterCount;
@@ -7842,6 +7949,24 @@ begin
       // ES2026 §7.1.19 ToPropertyKey(argument)
       OP_TO_PROPERTY_KEY:
         SetRegister(A, ToPropertyKey(RegisterToValue(FRegisters[B])));
+
+      OP_ENUM_KEYS:
+        SetRegister(A, ForInEntriesArray(GetRegister(B)));
+
+      OP_ENUM_ENTRY:
+      begin
+        if TryForInEntryKey(GetRegister(C), ForInKey) then
+        begin
+          FRegisters[A] := VMValueToRegisterFast(
+            TGocciaStringLiteralValue.Create(ForInKey));
+          FRegisters[B] := RegisterBoolean(True);
+        end
+        else
+        begin
+          FRegisters[A] := RegisterUndefined;
+          FRegisters[B] := RegisterBoolean(False);
+        end;
+      end;
 
       OP_LOAD_INT:
         FRegisters[A] := RegisterInt(DecodesBx(Instruction));

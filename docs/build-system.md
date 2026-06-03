@@ -240,6 +240,7 @@ Relative paths are resolved against the current working directory. A missing fil
   "compat-loose-equality": true,
   "compat-label": true,
   "compat-traditional-for-loop": true,
+  "compat-for-in-loop": true,
   "compat-while-loops": true,
   "strict-types": true,
   "unsafe-ffi": true,

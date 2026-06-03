@@ -63,7 +63,10 @@ const
   //               definitions can reuse source-order property keys.
   //   v36 -> v37: added OP_SETUP_AUTO_ACCESSOR_DYNAMIC for computed
   //               auto-accessor keys.
-  GOCCIA_FORMAT_VERSION = 37;
+  //   v37 -> v38: added OP_ENUM_KEYS for --compat-for-in-loop bytecode.
+  //   v38 -> v39: OP_ENUM_KEYS now creates revalidating for-in entry arrays,
+  //               and OP_ENUM_ENTRY validates entries.
+  GOCCIA_FORMAT_VERSION = 39;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
@@ -260,7 +263,9 @@ type
     OP_CREATE_ARGUMENTS = 182,
     OP_TO_OBJECT     = 183,
     OP_HAS_WITH_BINDING = 184,
-    OP_TO_PROPERTY_KEY = 185
+    OP_TO_PROPERTY_KEY = 185,
+    OP_ENUM_KEYS     = 186,
+    OP_ENUM_ENTRY    = 187
   );
 
 function EncodeABC(const AOp: TGocciaOpCode; const A, B, C: UInt8): UInt32; inline;

@@ -275,6 +275,9 @@ begin
     Goccia.Compiler.Statements.CompileTryStatement(Ctx, TGocciaTryStatement(AStmt))
   else if AStmt is TGocciaForAwaitOfStatement then
     Goccia.Compiler.Statements.CompileForAwaitOfStatement(Ctx, TGocciaForAwaitOfStatement(AStmt))
+  else if AStmt is TGocciaForInStatement then
+    Goccia.Compiler.Statements.CompileForInStatement(Ctx,
+      TGocciaForInStatement(AStmt))
   else if AStmt is TGocciaForOfStatement then
     Goccia.Compiler.Statements.CompileForOfStatement(Ctx, TGocciaForOfStatement(AStmt))
   else if AStmt is TGocciaForStatement then
@@ -546,6 +549,7 @@ var
   Block: TGocciaBlockStatement;
   IfStmt: TGocciaIfStatement;
   ForOf: TGocciaForOfStatement;
+  ForIn: TGocciaForInStatement;
   ForStmt: TGocciaForStatement;
   WhileStmt: TGocciaWhileStatement;
   DoWhileStmt: TGocciaDoWhileStatement;
@@ -591,6 +595,18 @@ begin
   begin
     ForOf := TGocciaForOfStatement(ANode);
     HoistVarLocals(ForOf.Body, AScope);
+  end
+  else if ANode is TGocciaForInStatement then
+  begin
+    ForIn := TGocciaForInStatement(ANode);
+    if ForIn.IsVar then
+    begin
+      if Assigned(ForIn.BindingPattern) then
+        CollectDestructuringVarBindings(ForIn.BindingPattern, AScope)
+      else if ForIn.BindingName <> '' then
+        AScope.DeclareVarLocal(ForIn.BindingName);
+    end;
+    HoistVarLocals(ForIn.Body, AScope);
   end
   else if ANode is TGocciaForStatement then
   begin
