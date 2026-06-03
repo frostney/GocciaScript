@@ -12,7 +12,10 @@ describe("TypedArray.of", () => {
     expect(Int16Array.of(256)[0]).toBe(256);
     expect(Uint8Array.of.call(Int16Array, 256)[0]).toBe(256);
     class MyInt16Array extends Int16Array {}
-    expect(MyInt16Array.of(256)[0]).toBe(256);
+    const subclassResult = MyInt16Array.of(256);
+    expect(subclassResult[0]).toBe(256);
+    expect(subclassResult instanceof MyInt16Array).toBe(true);
+    expect(Object.getPrototypeOf(subclassResult)).toBe(MyInt16Array.prototype);
   });
 
   test("Float64Array.of with decimals", () => {

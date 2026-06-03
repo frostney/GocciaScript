@@ -12,7 +12,10 @@ describe("TypedArray.from", () => {
     expect(Int16Array.from([256])[0]).toBe(256);
     expect(Uint8Array.from.call(Int16Array, [256])[0]).toBe(256);
     class MyInt16Array extends Int16Array {}
-    expect(MyInt16Array.from([256])[0]).toBe(256);
+    const subclassResult = MyInt16Array.from([256]);
+    expect(subclassResult[0]).toBe(256);
+    expect(subclassResult instanceof MyInt16Array).toBe(true);
+    expect(Object.getPrototypeOf(subclassResult)).toBe(MyInt16Array.prototype);
   });
 
   test("from another typed array with truncation", () => {
