@@ -89,6 +89,19 @@ describe("ArrayBuffer.prototype.transferToFixedLength", () => {
     expect(() => buf.transferToFixedLength()).toThrow(TypeError);
   });
 
+  test("throws TypeError if newLength coercion detaches buffer", () => {
+    const buf = new ArrayBuffer(8);
+    const newLength = {
+      valueOf() {
+        buf.transfer();
+        return 4;
+      }
+    };
+
+    expect(() => buf.transferToFixedLength(newLength)).toThrow(TypeError);
+    expect(buf.byteLength).toBe(0);
+  });
+
   test("throws TypeError when called on non-ArrayBuffer", () => {
     const transferToFixedLength = ArrayBuffer.prototype.transferToFixedLength;
     expect(() => transferToFixedLength.call({})).toThrow(TypeError);

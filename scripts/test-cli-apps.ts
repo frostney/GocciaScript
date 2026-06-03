@@ -1714,6 +1714,31 @@ console.log("REPL: bytecode evaluation...");
   if (!out.includes("4")) throw new Error(`Bytecode 2+2 should produce 4, got: ${out}`);
 }
 
+console.log("REPL: repeated tagged template execution (interpreted + bytecode)...");
+{
+  const src = [
+    "globalThis.tag = (strings) => { globalThis.firstTemplate = strings; return strings[0]; }; tag`first`;",
+    'globalThis.tag = (strings) => globalThis.firstTemplate === strings ? "stale" : strings[0]; tag`second`;',
+  ].join("\n") + "\n";
+
+  for (const [label, args] of [
+    ["interpreted", []],
+    ["bytecode", ["--mode=bytecode"]],
+  ] as const) {
+    const proc = Bun.spawnSync([REPL, ...args], {
+      stdin: new TextEncoder().encode(src),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const out = `${proc.stdout.toString()}${proc.stderr.toString()}`;
+    if (proc.exitCode !== 0)
+      throw new Error(`REPL ${label} tagged-template run failed: ${out}`);
+    if (!out.includes("'first'") || !out.includes("'second'") ||
+        out.includes("'stale'"))
+      throw new Error(`REPL ${label} should keep repeated parse template sites distinct, got: ${out}`);
+  }
+}
+
 // ============================================================================
 // --allowed-host option
 // ============================================================================

@@ -93,6 +93,7 @@ type
     FTypeCheckPreambleSize: UInt8;
     FProfileIndex: Integer;
     FSourceText: string;
+    FTemplateSiteId: UInt64;
     FStringConstantIndex: TOrderedStringMap<UInt16>;
     // Runtime-only cache for bckTemplateObject constants.  Indexed by the slot
     // number stored in the constant's IntValue field.  Not serialised to .gbc.
@@ -165,6 +166,7 @@ type
     property TypeCheckPreambleSize: UInt8 read FTypeCheckPreambleSize write FTypeCheckPreambleSize;
     property ProfileIndex: Integer read FProfileIndex write FProfileIndex;
     property SourceText: string read FSourceText write FSourceText;
+    property TemplateSiteId: UInt64 read FTemplateSiteId;
   end;
 
 implementation
@@ -173,6 +175,21 @@ uses
   SysUtils,
 
   Goccia.GarbageCollector;
+
+var
+  GTemplateSiteIdLock: TRTLCriticalSection;
+  GNextTemplateSiteId: UInt64;
+
+function AllocateTemplateSiteId: UInt64;
+begin
+  EnterCriticalSection(GTemplateSiteIdLock);
+  try
+    Inc(GNextTemplateSiteId);
+    Result := GNextTemplateSiteId;
+  finally
+    LeaveCriticalSection(GTemplateSiteIdLock);
+  end;
+end;
 
 function FloatBitsAreNaN(const AValue: Double): Boolean; inline;
 var
@@ -204,6 +221,7 @@ begin
   FStrictThis := True;
   FStrictCode := True;
   FProfileIndex := -1;
+  FTemplateSiteId := AllocateTemplateSiteId;
 end;
 
 destructor TGocciaFunctionTemplate.Destroy;
@@ -556,5 +574,12 @@ begin
   else
     Result := False;
 end;
+
+initialization
+  InitCriticalSection(GTemplateSiteIdLock);
+  GNextTemplateSiteId := 0;
+
+finalization
+  DoneCriticalSection(GTemplateSiteIdLock);
 
 end.

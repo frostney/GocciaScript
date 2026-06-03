@@ -34,6 +34,7 @@ uses
   Goccia.Builtins.Math,
   Goccia.Builtins.Temporal,
   Goccia.Evaluator.Context,
+  Goccia.ExecutionContext,
   Goccia.Executor,
   Goccia.Interpreter,
   Goccia.JSON,
@@ -152,7 +153,7 @@ type
     FBuiltinDisposableStack: TGocciaBuiltinDisposableStack;
     FGocciaGlobal: TGocciaObjectValue;
     FRealm: TGocciaRealm;
-    FPrevRealm: TGocciaRealm;
+    FRealmExecutionContext: TGocciaExecutionContextScope;
     FObjectConstructor: TGocciaClassValue;
     FFunctionConstructor: TGocciaFunctionConstructorClassValue;
     FTypedArrayIntrinsic: TGocciaClassValue;
@@ -271,6 +272,7 @@ type
     property BuiltinProxy: TGocciaGlobalProxy read FBuiltinProxy;
     property BuiltinReflect: TGocciaGlobalReflect read FBuiltinReflect;
     property GocciaGlobal: TGocciaObjectValue read FGocciaGlobal;
+    property Realm: TGocciaRealm read FRealm;
     property SuppressWarnings: Boolean read FSuppressWarnings write FSuppressWarnings;
     property LastTiming: TGocciaScriptResult read FLastTiming;
     // Source map from the most recent source pipeline run, if any.
@@ -551,15 +553,10 @@ begin
   TGocciaCallStack.Initialize;
   TGocciaMicrotaskQueue.Initialize;
 
-  // Per-realm intrinsic state (Array.prototype, ...) lives on FRealm.  Must
-  // be assigned before any value is constructed so lazy prototype init in
-  // value units finds a realm to write into.  The previous engine's realm
-  // (if any) was freed in Destroy, so its prototype state is gone.
-  // Save any pre-existing CurrentRealm so a nested TGocciaEngine on the same
-  // thread can restore the outer realm on teardown rather than clobbering it.
-  FPrevRealm := CurrentRealm;
-  FRealm := TGocciaRealm.Create;
-  SetCurrentRealm(FRealm);
+  // Per-realm intrinsic state (Array.prototype, ...) lives on FRealm.  The
+  // execution-context stack makes it current after the global environment is
+  // available, before any built-in construction performs lazy intrinsic lookup.
+  FRealm := TGocciaRealm.Create(AFileName);
 
   FPreprocessors := DefaultPreprocessors;
   FCompatibility := DefaultCompatibility;
@@ -573,7 +570,12 @@ begin
 
   FInterpreter := TGocciaInterpreter.Create(AFileName, ASourceLines,
     FModuleLoader);
+  FInterpreter.Realm := FRealm;
   FInterpreter.JSXEnabled := ppJSX in FPreprocessors;
+  FRealm.GlobalEnv := FInterpreter.GlobalScope;
+  FRealm.LoadedModules := FModuleLoader;
+  FRealmExecutionContext := TGocciaExecutionContextScope.Create(
+    CreateExecutionContext(FRealm, FInterpreter.GlobalScope, AFileName));
 
   TGarbageCollector.Instance.AddRootObject(FInterpreter.GlobalScope);
 
@@ -642,15 +644,10 @@ begin
     // engine on this worker thread starts up.
     if Assigned(FRealm) then
     begin
-      // Restore the realm that was current when this engine was constructed
-      // (typically nil; for nested engines, the outer engine's realm).  Only
-      // touch CurrentRealm if it still points at our realm — preserve any
-      // intentional reassignment by intervening code.
-      if CurrentRealm = FRealm then
-        SetCurrentRealm(FPrevRealm);
+      FRealmExecutionContext.Free;
+      FRealmExecutionContext := nil;
       FRealm.Free;
       FRealm := nil;
-      FPrevRealm := nil;
     end;
   finally
     SetExceptionMask(FPreviousExceptionMask);
@@ -1076,6 +1073,7 @@ begin
   // [[GlobalThisValue]] is the global object. Top-level `this` resolves
   // here via §9.4.3 ResolveThisBinding -> GlobalEnvironmentRecord.GetThisBinding.
   Scope.ThisValue := GlobalThisObj;
+  FRealm.GlobalObject := GlobalThisObj;
 end;
 
 procedure TGocciaEngine.RefreshGlobalThis;
@@ -1331,6 +1329,7 @@ begin
           TGocciaUndefinedLiteralValue.UndefinedValue;
         ModuleScope.NonStrictMode := False;
         ModuleContext := FInterpreter.CreateEvaluationContext;
+        ModuleContext.Realm := FRealm;
         ModuleContext.Scope := ModuleScope;
         ModuleContext.CurrentFilePath := FSourcePath;
         ModuleContext.NonStrictMode := False;

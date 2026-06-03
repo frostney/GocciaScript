@@ -2,10 +2,10 @@ unit Goccia.Realm;
 
 {$I Goccia.inc}
 
-// Per-engine realm storage for built-in intrinsic objects (e.g. Array.prototype,
-// Object.prototype, Map.prototype, ...).  These objects are mutable from JS:
-// userland code can install or delete properties on them, and ECMAScript spec
-// requires that mutations on one realm do not leak into another realm.
+// ECMA-262 Realm Record storage.  The realm owns per-realm intrinsics
+// (e.g. Array.prototype, Object.prototype, Map.prototype, ...), its global
+// object/environment links, template object map, loaded-module host state, and
+// host-defined payload.
 //
 // Historically the GocciaScript engine cached these prototype objects in
 // unit-level threadvars, which meant the prototype state survived engine
@@ -27,24 +27,37 @@ unit Goccia.Realm;
 // freed, so callers do not need to pair PinObject / UnpinObject across the
 // realm boundary themselves.
 //
-// CurrentRealm is a thread-local pointer that the engine assigns on
-// Initialize and ResetRealm.  It is never nil-and-rebuilt mid-flight: we are
-// not relying on lazy reinitialisation of cleared threadvars to produce a
-// fresh realm.  Replacing the pointer simply tells the worker thread which
-// realm now owns the intrinsics it should look up.
+// CurrentRealm is a compatibility facade over the active execution context.
+// New execution paths should push/pop TGocciaExecutionContext records; the
+// facade remains because many value units lookup realm-scoped intrinsics
+// through this unit.
 
 interface
 
 uses
+  Classes,
+
   Goccia.GarbageCollector;
 
 type
+  TGocciaRealmHostFinalize = procedure(const AHostDefined: TObject) of object;
   TGocciaRealmSlotId = type Integer;
   TGocciaRealmOwnedSlotId = type Integer;
 
+  TGocciaRealmIntrinsics = class
+  end;
+
   TGocciaRealm = class
   private
+    FAgentSignifier: string;
+    FGlobalObject: TGCManagedObject;
+    FGlobalEnv: TGCManagedObject;
+    FHostDefined: TObject;
+    FHostFinalize: TGocciaRealmHostFinalize;
+    FIntrinsics: TGocciaRealmIntrinsics;
+    FLoadedModules: TObject;
     FSlots: array of TGCManagedObject;
+    FTemplateMap: TStringList;
     // Tracks every object ever stored in a slot so the realm can unpin them
     // wholesale on Free.  We keep history (not just the current slot value)
     // because some units register multiple distinct objects per slot over
@@ -57,8 +70,9 @@ type
     // and need their lifetime tied to the realm.
     FOwnedSlots: array of TObject;
     procedure RememberPin(const AObject: TGCManagedObject);
+    function GetTemplateMapCount: Integer;
   public
-    constructor Create;
+    constructor Create(const AAgentSignifier: string = '');
     destructor Destroy; override;
 
     function GetSlot(const ASlotId: TGocciaRealmSlotId): TGCManagedObject;
@@ -67,6 +81,18 @@ type
 
     function GetOwnedSlot(const ASlotId: TGocciaRealmOwnedSlotId): TObject;
     procedure SetOwnedSlot(const ASlotId: TGocciaRealmOwnedSlotId; const AValue: TObject);
+
+    function GetTemplateObject(const AKey: string): TGCManagedObject;
+    procedure SetTemplateObject(const AKey: string; const AValue: TGCManagedObject);
+
+    property AgentSignifier: string read FAgentSignifier write FAgentSignifier;
+    property Intrinsics: TGocciaRealmIntrinsics read FIntrinsics;
+    property GlobalObject: TGCManagedObject read FGlobalObject write FGlobalObject;
+    property GlobalEnv: TGCManagedObject read FGlobalEnv write FGlobalEnv;
+    property TemplateMapCount: Integer read GetTemplateMapCount;
+    property LoadedModules: TObject read FLoadedModules write FLoadedModules;
+    property HostDefined: TObject read FHostDefined write FHostDefined;
+    property HostFinalize: TGocciaRealmHostFinalize read FHostFinalize write FHostFinalize;
   end;
 
 // Allocates a new slot id.  Call from the initialization section of a unit
@@ -89,6 +115,13 @@ function CurrentRealm: TGocciaRealm; inline;
 // other host code generally should not call this directly.
 procedure SetCurrentRealm(const ARealm: TGocciaRealm);
 
+procedure PushCurrentFunctionExecutionContext(const AScope: TObject;
+  const AFunctionValue: TObject);
+procedure PopCurrentFunctionExecutionContext;
+function HasCurrentFunctionExecutionContext: Boolean;
+function CurrentFunctionExecutionContextScope: TObject;
+function CurrentFunctionExecutionContextValue: TObject;
+
 implementation
 
 uses
@@ -96,6 +129,11 @@ uses
 
 threadvar
   GCurrentRealm: TGocciaRealm;
+  GCurrentFunctionContextStack: array of record
+    Scope: TObject;
+    FunctionValue: TObject;
+  end;
+  GCurrentFunctionContextStackCount: Integer;
 
 var
   GSlotCount: Integer;
@@ -140,11 +178,68 @@ begin
   GCurrentRealm := ARealm;
 end;
 
+procedure PushCurrentFunctionExecutionContext(const AScope: TObject;
+  const AFunctionValue: TObject);
+begin
+  if not Assigned(AFunctionValue) then
+    raise Exception.Create('Function execution context requires a function value.');
+
+  if GCurrentFunctionContextStackCount >=
+     Length(GCurrentFunctionContextStack) then
+    SetLength(GCurrentFunctionContextStack,
+      GCurrentFunctionContextStackCount * 2 + 8);
+
+  GCurrentFunctionContextStack[GCurrentFunctionContextStackCount].Scope :=
+    AScope;
+  GCurrentFunctionContextStack[GCurrentFunctionContextStackCount].FunctionValue :=
+    AFunctionValue;
+  Inc(GCurrentFunctionContextStackCount);
+end;
+
+procedure PopCurrentFunctionExecutionContext;
+begin
+  if GCurrentFunctionContextStackCount <= 0 then
+    raise Exception.Create('Function execution context stack underflow.');
+
+  Dec(GCurrentFunctionContextStackCount);
+  FillChar(GCurrentFunctionContextStack[GCurrentFunctionContextStackCount],
+    SizeOf(GCurrentFunctionContextStack[GCurrentFunctionContextStackCount]),
+    0);
+end;
+
+function HasCurrentFunctionExecutionContext: Boolean;
+begin
+  Result := GCurrentFunctionContextStackCount > 0;
+end;
+
+function CurrentFunctionExecutionContextScope: TObject;
+begin
+  if GCurrentFunctionContextStackCount > 0 then
+    Result :=
+      GCurrentFunctionContextStack[GCurrentFunctionContextStackCount - 1].Scope
+  else
+    Result := nil;
+end;
+
+function CurrentFunctionExecutionContextValue: TObject;
+begin
+  if GCurrentFunctionContextStackCount > 0 then
+    Result :=
+      GCurrentFunctionContextStack[GCurrentFunctionContextStackCount - 1].FunctionValue
+  else
+    Result := nil;
+end;
+
 { TGocciaRealm }
 
-constructor TGocciaRealm.Create;
+constructor TGocciaRealm.Create(const AAgentSignifier: string);
 begin
   inherited Create;
+  FAgentSignifier := AAgentSignifier;
+  FIntrinsics := TGocciaRealmIntrinsics.Create;
+  FTemplateMap := TStringList.Create;
+  FTemplateMap.Sorted := True;
+  FTemplateMap.Duplicates := dupError;
   // Slot count is monotonic; size the array to the count seen so far.  Slots
   // registered after this realm exists will trigger a grow on first GetSlot /
   // SetSlot (see HasSlot below); in practice all slots are registered at unit
@@ -158,6 +253,13 @@ destructor TGocciaRealm.Destroy;
 var
   I: Integer;
 begin
+  if Assigned(FHostDefined) and Assigned(FHostFinalize) then
+    FHostFinalize(FHostDefined);
+  FHostDefined := nil;
+  FLoadedModules := nil;
+  FGlobalObject := nil;
+  FGlobalEnv := nil;
+
   // Free the plain TObjects this realm owns first.  Their destructors may need
   // to ask the GC to unpin objects they pinned (e.g. TGocciaSharedPrototype),
   // which must happen before our own GC unpinning loop runs - otherwise an
@@ -183,6 +285,8 @@ begin
   end;
   FPinned := nil;
   FSlots := nil;
+  FTemplateMap.Free;
+  FIntrinsics.Free;
   inherited;
 end;
 
@@ -273,12 +377,48 @@ begin
     Existing.Free;
 end;
 
+function TGocciaRealm.GetTemplateMapCount: Integer;
+begin
+  Result := FTemplateMap.Count;
+end;
+
+function TGocciaRealm.GetTemplateObject(const AKey: string): TGCManagedObject;
+var
+  Index: Integer;
+begin
+  if FTemplateMap.Find(AKey, Index) then
+    Result := TGCManagedObject(FTemplateMap.Objects[Index])
+  else
+    Result := nil;
+end;
+
+procedure TGocciaRealm.SetTemplateObject(const AKey: string;
+  const AValue: TGCManagedObject);
+var
+  Index: Integer;
+begin
+  if AKey = '' then
+    raise Exception.Create('TGocciaRealm.SetTemplateObject: key is empty.');
+  if FTemplateMap.Find(AKey, Index) then
+    FTemplateMap.Objects[Index] := AValue
+  else
+    FTemplateMap.AddObject(AKey, AValue);
+
+  if Assigned(AValue) and Assigned(TGarbageCollector.Instance) then
+  begin
+    TGarbageCollector.Instance.PinObject(AValue);
+    RememberPin(AValue);
+  end;
+end;
+
 initialization
   InitCriticalSection(GSlotLock);
   GSlotCount := 0;
   GOwnedSlotCount := 0;
 
 finalization
+  SetLength(GCurrentFunctionContextStack, 0);
+  GCurrentFunctionContextStackCount := 0;
   DoneCriticalSection(GSlotLock);
 
 end.

@@ -84,4 +84,40 @@ describe("TypedArray.prototype.slice", () => {
     ta.buffer.transfer();
     expect(() => ta.slice()).toThrow(TypeError);
   });
+
+  test("throws if start coercion detaches buffer before copy", () => {
+    const ta = new Int32Array([1, 2, 3, 4]);
+    const start = {
+      valueOf() {
+        ta.buffer.transfer();
+        return 1;
+      }
+    };
+
+    expect(() => ta.slice(start)).toThrow(TypeError);
+  });
+
+  test("throws if end coercion detaches buffer before copy", () => {
+    const ta = new Int32Array([1, 2, 3, 4]);
+    const end = {
+      valueOf() {
+        ta.buffer.transfer();
+        return 3;
+      }
+    };
+
+    expect(() => ta.slice(1, end)).toThrow(TypeError);
+  });
+
+  test("returns empty if detachment happens after the slice is clamped empty", () => {
+    const ta = new Int32Array([1, 2, 3]);
+    const start = {
+      valueOf() {
+        ta.buffer.transfer();
+        return 3;
+      }
+    };
+
+    expect(ta.slice(start).length).toBe(0);
+  });
 });

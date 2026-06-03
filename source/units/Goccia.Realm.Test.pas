@@ -8,6 +8,7 @@ uses
   SysUtils,
 
   Goccia.GarbageCollector,
+  Goccia.ExecutionContext,
   Goccia.Realm,
   TestingPascalLibrary,
 
@@ -63,6 +64,9 @@ type
     procedure TestDestructorFreesOwnedSlots;
     procedure TestDestructorUnpinsSlotObjects;
     procedure TestSlotIdGrowsArrayLazily;
+    procedure TestRealmRecordFieldsRoundtrip;
+    procedure TestRealmTemplateMapRoundtrip;
+    procedure TestExecutionContextStackSetsCurrentRealm;
     procedure TestThreadLocalityOfCurrentRealm;
   end;
 
@@ -89,6 +93,11 @@ begin
     TestDestructorUnpinsSlotObjects);
   Test('SetSlot grows the slot array when the id was registered later',
     TestSlotIdGrowsArrayLazily);
+  Test('Realm Record fields roundtrip', TestRealmRecordFieldsRoundtrip);
+  Test('Realm [[TemplateMap]] stores cached objects',
+    TestRealmTemplateMapRoundtrip);
+  Test('Execution context stack drives CurrentRealm',
+    TestExecutionContextStackSetsCurrentRealm);
   Test('CurrentRealm is thread-local',
     TestThreadLocalityOfCurrentRealm);
 end;
@@ -313,6 +322,89 @@ begin
   finally
     Realm.Free;
     Obj.Free;
+  end;
+end;
+
+procedure TTestRealm.TestRealmRecordFieldsRoundtrip;
+var
+  Realm: TGocciaRealm;
+  GlobalEnv, GlobalObject: TCountingManaged;
+  LoadedModules, HostDefined: TObject;
+begin
+  Realm := TGocciaRealm.Create('agent:test');
+  GlobalEnv := TCountingManaged.Create;
+  GlobalObject := TCountingManaged.Create;
+  LoadedModules := TObject.Create;
+  HostDefined := TObject.Create;
+  try
+    Realm.GlobalEnv := GlobalEnv;
+    Realm.GlobalObject := GlobalObject;
+    Realm.LoadedModules := LoadedModules;
+    Realm.HostDefined := HostDefined;
+
+    Expect<string>(Realm.AgentSignifier).ToBe('agent:test');
+    Expect<Boolean>(Realm.Intrinsics <> nil).ToBe(True);
+    Expect<Boolean>(Realm.GlobalEnv = GlobalEnv).ToBe(True);
+    Expect<Boolean>(Realm.GlobalObject = GlobalObject).ToBe(True);
+    Expect<Boolean>(Realm.LoadedModules = LoadedModules).ToBe(True);
+    Expect<Boolean>(Realm.HostDefined = HostDefined).ToBe(True);
+  finally
+    Realm.Free;
+    GlobalEnv.Free;
+    GlobalObject.Free;
+    LoadedModules.Free;
+    HostDefined.Free;
+  end;
+end;
+
+procedure TTestRealm.TestRealmTemplateMapRoundtrip;
+var
+  Realm: TGocciaRealm;
+  Obj: TCountingManaged;
+begin
+  Realm := TGocciaRealm.Create;
+  Obj := TCountingManaged.Create;
+  try
+    Expect<Boolean>(Realm.GetTemplateObject('template:test') = nil).ToBe(True);
+    Realm.SetTemplateObject('template:test', Obj);
+    Expect<Boolean>(Realm.GetTemplateObject('template:test') = Obj).ToBe(True);
+    Expect<Integer>(Realm.TemplateMapCount).ToBe(1);
+  finally
+    Realm.Free;
+    Obj.Free;
+  end;
+end;
+
+procedure TTestRealm.TestExecutionContextStackSetsCurrentRealm;
+var
+  OuterRealm, InnerRealm: TGocciaRealm;
+  Guard: TGocciaExecutionContextScope;
+  Running: TGocciaExecutionContext;
+  PreviousRealm: TGocciaRealm;
+begin
+  PreviousRealm := CurrentRealm;
+  OuterRealm := TGocciaRealm.Create('outer');
+  InnerRealm := TGocciaRealm.Create('inner');
+  Guard := nil;
+  try
+    SetCurrentRealm(OuterRealm);
+    Guard := TGocciaExecutionContextScope.Create(
+      CreateExecutionContext(InnerRealm, nil, '<realm-test>'));
+    Running := RunningExecutionContext;
+
+    Expect<Boolean>(CurrentRealm = InnerRealm).ToBe(True);
+    Expect<Boolean>(Running.Realm = InnerRealm).ToBe(True);
+    Expect<string>(Running.SourcePath).ToBe('<realm-test>');
+
+    Guard.Free;
+    Guard := nil;
+    Expect<Boolean>(CurrentRealm = OuterRealm).ToBe(True);
+  finally
+    if Assigned(Guard) then
+      Guard.Free;
+    SetCurrentRealm(PreviousRealm);
+    InnerRealm.Free;
+    OuterRealm.Free;
   end;
 end;
 

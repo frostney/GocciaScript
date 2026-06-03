@@ -63,6 +63,7 @@ uses
   Goccia.Coverage,
   Goccia.GarbageCollector,
   Goccia.Profiler,
+  Goccia.Realm,
   Goccia.Scope.Redeclaration;
 
 { TGocciaBytecodeExecutor }
@@ -84,6 +85,7 @@ procedure TGocciaBytecodeExecutor.Initialize(const AGlobalScope: TGocciaScope;
 begin
   inherited;
   FVM.EnsureStackRootRegistered;
+  FVM.Realm := FRealm;
   FVM.GlobalScope := AGlobalScope;
   FVM.GlobalThisValue := AGlobalScope.ThisValue;
   FVM.LoadModule := AModuleLoader.LoadModule;
@@ -99,6 +101,7 @@ var
   Compiler: TGocciaCompiler;
   BytecodeModule: TGocciaBytecodeModule;
   SavedGlobalScope: TGocciaScope;
+  SavedRealm: TGocciaRealm;
   Options: TGocciaCompilerOptimizationOptions;
 begin
   Compiler := TGocciaCompiler.Create(AContext.CurrentFilePath);
@@ -118,11 +121,15 @@ begin
   if Assigned(FRetainModule) then
     FRetainModule(BytecodeModule);
   SavedGlobalScope := FVM.GlobalScope;
+  SavedRealm := FVM.Realm;
   FVM.GlobalScope := AContext.Scope;
   try
+    if Assigned(AContext.Realm) then
+      FVM.Realm := AContext.Realm;
     Result := FVM.ExecuteModule(BytecodeModule);
   finally
     FVM.GlobalScope := SavedGlobalScope;
+    FVM.Realm := SavedRealm;
   end;
 end;
 
