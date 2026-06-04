@@ -16,6 +16,8 @@ const VERSION_RE =
 const PIN_RE = /tc39-mcp@((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)/g;
 
 const DEFAULT_TARGETS = [
+  ".agents/mcp/mcp.json",
+  ".agents/mcp/codex.config.toml",
   ".mcp.example.json",
   "AGENTS.md",
   ".agents/skills/gocciascript-issue-validation/SKILL.md",
