@@ -37,4 +37,11 @@ test("toLocaleString(locales, options)", () => {
   expect(BigInt.prototype.toLocaleString.call(Object(value), "de-DE", options)).toBe(
     new Intl.NumberFormat("de-DE", options).format(value)
   );
+  expect(value.toLocaleString(["de-DE", "en-US"], options)).toBe(
+    new Intl.NumberFormat(["de-DE", "en-US"], options).format(value)
+  );
+});
+
+test("toLocaleString rejects null options", () => {
+  expect(() => (1234n).toLocaleString("en-US", null)).toThrow(TypeError);
 });

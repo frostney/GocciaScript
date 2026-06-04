@@ -44,6 +44,7 @@ type
     procedure ReadOptions(const AOptions: TGocciaObjectValue);
   public
     constructor Create(const ALocale: string; const AOptions: TGocciaObjectValue = nil);
+    class function CreateFromArguments(const ALocales, AOptions: TGocciaValue): TGocciaIntlNumberFormatValue; static;
 
     function ToStringTag: string; override;
     procedure MarkReferences; override;
@@ -739,6 +740,71 @@ begin
     Result := False;
 end;
 
+function NumberFormatLocaleArgumentToLocale(const AArg: TGocciaValue): string;
+var
+  Tag, Canonical, LowerTag, Tail: string;
+  FirstUnicodeExtension, SecondUnicodeExtension: Integer;
+  Element: TGocciaValue;
+begin
+  Result := '';
+  if (AArg = nil) or (AArg is TGocciaUndefinedLiteralValue) then
+    Exit;
+
+  if AArg is TGocciaStringLiteralValue then
+    Tag := TGocciaStringLiteralValue(AArg).Value
+  else if AArg is TGocciaArrayValue then
+  begin
+    if TGocciaArrayValue(AArg).GetLength = 0 then
+      Exit;
+    Element := TGocciaArrayValue(AArg).GetElement(0);
+    if Element is TGocciaStringLiteralValue then
+      Tag := TGocciaStringLiteralValue(Element).Value
+    else if Element is TGocciaObjectValue then
+      Tag := Element.ToStringLiteral.Value
+    else
+      ThrowTypeError('locales array elements must be strings or objects');
+  end
+  else if AArg is TGocciaObjectValue then
+    Tag := AArg.ToStringLiteral.Value
+  else
+    ThrowTypeError('locales argument must be a string, object, array, or undefined');
+
+  Canonical := CanonicalizeUnicodeLocaleId(Tag);
+  if Canonical = '' then
+  begin
+    LowerTag := LowerCase(Tag);
+    FirstUnicodeExtension := Pos('-u-', LowerTag);
+    if FirstUnicodeExtension <> 0 then
+    begin
+      Tail := Copy(LowerTag, FirstUnicodeExtension + 3, MaxInt);
+      SecondUnicodeExtension := Pos('-u-', Tail);
+      if SecondUnicodeExtension <> 0 then
+      begin
+        SecondUnicodeExtension := FirstUnicodeExtension + 3 +
+          SecondUnicodeExtension - 1;
+        Canonical := CanonicalizeUnicodeLocaleId(Copy(Tag, 1,
+          SecondUnicodeExtension - 1));
+      end;
+    end;
+    if Canonical = '' then
+      ThrowRangeError(Format('invalid language tag: %s', [Tag]));
+  end;
+  Result := Tag;
+end;
+
+function NumberFormatOptionsArgumentToObject(
+  const AArg: TGocciaValue): TGocciaObjectValue;
+begin
+  if (AArg = nil) or (AArg is TGocciaUndefinedLiteralValue) then
+    Result := nil
+  else if AArg is TGocciaNullLiteralValue then
+    ThrowTypeError('Cannot convert null or undefined to object')
+  else if AArg is TGocciaObjectValue then
+    Result := TGocciaObjectValue(AArg)
+  else
+    Result := nil;
+end;
+
 { TGocciaIntlNumberFormatValue }
 
 procedure TGocciaIntlNumberFormatValue.ReadOptions(const AOptions: TGocciaObjectValue);
@@ -990,6 +1056,14 @@ begin
   InitializePrototype;
   if Assigned(GetIntlNumberFormatShared) then
     FPrototype := GetIntlNumberFormatShared.Prototype;
+end;
+
+class function TGocciaIntlNumberFormatValue.CreateFromArguments(
+  const ALocales, AOptions: TGocciaValue): TGocciaIntlNumberFormatValue;
+begin
+  Result := TGocciaIntlNumberFormatValue.Create(
+    NumberFormatLocaleArgumentToLocale(ALocales),
+    NumberFormatOptionsArgumentToObject(AOptions));
 end;
 
 function TGocciaIntlNumberFormatValue.ToStringTag: string;

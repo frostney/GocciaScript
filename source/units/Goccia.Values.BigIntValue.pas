@@ -309,22 +309,22 @@ function TGocciaBigIntValue.BigIntToLocaleString(const AArgs: TGocciaArgumentsCo
   const AThisValue: TGocciaValue): TGocciaValue;
 var
   BigIntValue: TGocciaBigIntValue;
-  Locale: string;
-  Options: TGocciaObjectValue;
+  LocalesArg: TGocciaValue;
+  OptionsArg: TGocciaValue;
   FormatArgs: TGocciaArgumentsCollection;
   NumberFormat: TGocciaIntlNumberFormatValue;
 begin
   BigIntValue := ThisBigIntValue(AThisValue, 'BigInt.prototype.toLocaleString');
-  Locale := '';
-  if (AArgs.Length > 0) and
-     not (AArgs.GetElement(0) is TGocciaUndefinedLiteralValue) then
-    Locale := AArgs.GetElement(0).ToStringLiteral.Value;
+  if AArgs.Length > 0 then
+    LocalesArg := AArgs.GetElement(0)
+  else
+    LocalesArg := nil;
+  if AArgs.Length > 1 then
+    OptionsArg := AArgs.GetElement(1)
+  else
+    OptionsArg := nil;
 
-  Options := nil;
-  if (AArgs.Length > 1) and (AArgs.GetElement(1) is TGocciaObjectValue) then
-    Options := TGocciaObjectValue(AArgs.GetElement(1));
-
-  NumberFormat := TGocciaIntlNumberFormatValue.Create(Locale, Options);
+  NumberFormat := TGocciaIntlNumberFormatValue.CreateFromArguments(LocalesArg, OptionsArg);
   FormatArgs := TGocciaArgumentsCollection.Create([BigIntValue]);
   try
     Result := NumberFormat.IntlNumberFormatFormat(FormatArgs, NumberFormat);
