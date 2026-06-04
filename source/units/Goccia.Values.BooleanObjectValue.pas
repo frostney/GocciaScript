@@ -38,7 +38,6 @@ uses
   Goccia.GarbageCollector,
   Goccia.Realm,
   Goccia.Values.ErrorHelper,
-  Goccia.Values.NativeFunction,
   Goccia.Values.ToObject;
 
 // Boolean.prototype lives in a per-realm slot.  Method host and member
