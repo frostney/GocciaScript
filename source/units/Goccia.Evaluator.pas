@@ -506,25 +506,41 @@ begin
     AStatement.HasLabel(AControlFlow.TargetLabel);
 end;
 
-function EvaluateLoopBodyStatement(const AStatement: TGocciaStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+function EvaluateLoopBodyWithActiveScope(const AStatement: TGocciaStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 var
   Continuation: TGocciaGeneratorContinuation;
+  GC: TGarbageCollector;
+  ScopeRooted: Boolean;
 begin
   Continuation := CurrentGeneratorContinuation;
+  GC := TGarbageCollector.Instance;
+  ScopeRooted := Assigned(GC) and Assigned(AContext.Scope);
+  if ScopeRooted then
+    GC.PushActiveRoot(AContext.Scope);
   try
-    Result := EvaluateStatement(AStatement, AContext);
-    if Assigned(Continuation) then
-      Continuation.ClearExpressionValues;
-  except
-    on E: EGocciaGeneratorYield do
-      raise;
-    else
-    begin
+    try
+      Result := EvaluateStatement(AStatement, AContext);
       if Assigned(Continuation) then
         Continuation.ClearExpressionValues;
-      raise;
+    except
+      on E: EGocciaGeneratorYield do
+        raise;
+      else
+      begin
+        if Assigned(Continuation) then
+          Continuation.ClearExpressionValues;
+        raise;
+      end;
     end;
+  finally
+    if ScopeRooted then
+      GC.PopActiveRoot;
   end;
+end;
+
+function EvaluateLoopBodyStatement(const AStatement: TGocciaStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+begin
+  Result := EvaluateLoopBodyWithActiveScope(AStatement, AContext);
 end;
 
 function EvaluateBinary(const ABinaryExpression: TGocciaBinaryExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;

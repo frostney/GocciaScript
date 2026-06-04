@@ -1,4 +1,13 @@
 describe("Uint8Array.prototype.toHex", () => {
+  test("has built-in method attributes", () => {
+    expect(Object.getOwnPropertyDescriptor(Uint8Array.prototype, "toHex")).toEqual({
+      value: Uint8Array.prototype.toHex,
+      writable: true,
+      enumerable: false,
+      configurable: true,
+    });
+  });
+
   test("encodes bytes as lowercase hex pairs", () => {
     const bytes = new Uint8Array([0x48, 0x65, 0x6c, 0x6c, 0x6f]);
     expect(bytes.toHex()).toBe("48656c6c6f");

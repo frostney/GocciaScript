@@ -248,6 +248,38 @@ describe("TypedArray constructors", () => {
       expect(new Int32Array(0).BYTES_PER_ELEMENT).toBe(4);
       expect(new Float64Array(0).BYTES_PER_ELEMENT).toBe(8);
     });
+
+    test("BYTES_PER_ELEMENT descriptors are non-writable, non-enumerable, and non-configurable", () => {
+      const cases = [
+        [Int8Array, 1],
+        [Uint8Array, 1],
+        [Uint8ClampedArray, 1],
+        [Int16Array, 2],
+        [Uint16Array, 2],
+        [Int32Array, 4],
+        [Uint32Array, 4],
+        [Float16Array, 2],
+        [Float32Array, 4],
+        [Float64Array, 8],
+        [BigInt64Array, 8],
+        [BigUint64Array, 8],
+      ];
+
+      for (const [TA, bytes] of cases) {
+        expect(Object.getOwnPropertyDescriptor(TA, "BYTES_PER_ELEMENT")).toEqual({
+          value: bytes,
+          writable: false,
+          enumerable: false,
+          configurable: false,
+        });
+        expect(Object.getOwnPropertyDescriptor(TA.prototype, "BYTES_PER_ELEMENT")).toEqual({
+          value: bytes,
+          writable: false,
+          enumerable: false,
+          configurable: false,
+        });
+      }
+    });
   });
 
   describe("negative length throws RangeError", () => {

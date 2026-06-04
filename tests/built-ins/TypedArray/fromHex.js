@@ -1,4 +1,13 @@
 describe("Uint8Array.fromHex", () => {
+  test("has built-in method attributes", () => {
+    expect(Object.getOwnPropertyDescriptor(Uint8Array, "fromHex")).toEqual({
+      value: Uint8Array.fromHex,
+      writable: true,
+      enumerable: false,
+      configurable: true,
+    });
+  });
+
   test("decodes hex string to Uint8Array", () => {
     const result = Uint8Array.fromHex("48656c6c6f");
     expect(result.length).toBe(5);

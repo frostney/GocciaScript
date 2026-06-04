@@ -99,6 +99,19 @@ describe("ArrayBuffer.prototype.resize", () => {
     expect(() => buf.resize(4)).toThrow(TypeError);
   });
 
+  test("throws TypeError if newLength coercion detaches buffer", () => {
+    const buf = new ArrayBuffer(8, { maxByteLength: 16 });
+    const newLength = {
+      valueOf() {
+        buf.transfer();
+        return 4;
+      }
+    };
+
+    expect(() => buf.resize(newLength)).toThrow(TypeError);
+    expect(buf.byteLength).toBe(0);
+  });
+
   test("throws RangeError when newLength exceeds maxByteLength", () => {
     const buf = new ArrayBuffer(4, { maxByteLength: 16 });
     expect(() => buf.resize(17)).toThrow(RangeError);

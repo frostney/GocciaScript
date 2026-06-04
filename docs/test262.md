@@ -163,6 +163,8 @@ Bodies see only the identifiers stock test262 expects:
 - `assert` and its methods (from `assert.js`)
 - `$DONE`, `$DONOTEVALUATE` (from `sta.js` / `doneprintHandle.js` when included)
 - `print` (Goccia engine global; the `positive_async` wrapper calls it to emit the `Test262:Async*` markers after `await __donePromise`. The bundled `doneprintHandle.js` itself only resolves / rejects `__donePromise`; it does NOT call `print`.)
+- `$262` host hooks implemented by Goccia's bundled adaptation:
+  `detachArrayBuffer` and `gc`
 - Anything declared in test-included harness files (e.g. `compareArray`,
   `propertyHelper`)
 
@@ -173,8 +175,8 @@ Bodies do NOT see:
   `spyOn` — none of these exist on the Bare engine.
 - `console`, `fetch`, `URL`, `performance` — Bare doesn't register
   Goccia's runtime extension.
-- `$262` — Goccia doesn't implement test262's optional host hooks
-  object. Tests that depend on it fail honestly.
+- Optional `$262` hooks outside the bundled implementation. Tests that
+  depend on unavailable host hooks fail honestly.
 
 ## Bundled harness adaptations
 
