@@ -308,6 +308,13 @@ resourcestring
   SErrorBigIntTypedArrayRequiresBigInt = 'Cannot convert a non-BigInt value to a BigInt; use BigInt() to wrap';
   SErrorBigIntTypedArrayCannotMix = 'Cannot mix BigInt and non-BigInt typed arrays';
 
+  // DataView errors
+  SErrorDataViewRequiresDataView = '%s requires a DataView';
+  SErrorDataViewRequiresArrayBuffer = 'DataView constructor requires an ArrayBuffer or SharedArrayBuffer';
+  SErrorCannotUseDetachedDataView = 'DataView cannot be used with a detached or out-of-bounds ArrayBuffer';
+  SErrorInvalidDataViewOffset = 'Invalid DataView byte offset';
+  SErrorInvalidDataViewLength = 'Invalid DataView byte length';
+
   // Proxy trap errors
   SErrorProxyRevoked = 'Cannot perform operation on a revoked proxy';
   SErrorProxyTrapNotFunction = 'Proxy handler trap ''%s'' is not a function';

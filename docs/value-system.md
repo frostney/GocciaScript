@@ -55,6 +55,7 @@ classDiagram
     TGocciaIteratorHelperValue <|-- TGocciaZipKeyedIteratorValue
     TGocciaObjectValue <|-- TGocciaArrayBufferValue
     TGocciaObjectValue <|-- TGocciaSharedArrayBufferValue
+    TGocciaInstanceValue <|-- TGocciaDataViewValue
     TGocciaObjectValue <|-- TGocciaTypedArrayValue
     TGocciaObjectValue <|-- TGocciaNumberObjectValue
     TGocciaObjectValue <|-- TGocciaStringObjectValue
@@ -110,6 +111,9 @@ classDiagram
     }
     class TGocciaSharedArrayBufferValue {
         Shared-memory binary data buffer
+    }
+    class TGocciaDataViewValue {
+        Endian-aware view over binary data
     }
     class TGocciaTypedArrayValue {
         Typed view over ArrayBuffer
@@ -269,7 +273,7 @@ TGocciaStringLiteralValue = class(TGocciaValue)
 end;
 ```
 
-String values implement property access for methods like `.length`, `.charAt()`, `.includes()`, etc. through the string prototype system. When strings are boxed into `TGocciaStringObjectValue` (e.g., via `new String()` or implicit boxing), all instances share a single per-engine string prototype singleton — methods are registered once and reused across all string object instances of that engine. The prototype graph is per-engine and lives in a [realm slot](core-patterns.md#realm-ownership--slot-registration), but the wiring varies by type. `TGocciaArrayValue`, `TGocciaSetValue`, `TGocciaMapValue`, `TGocciaFunctionBase`, `TGocciaArrayBufferValue`, `TGocciaSharedArrayBufferValue`, and `TGocciaTypedArrayValue` use `TGocciaSharedPrototype` — a managed wrapper that bundles the prototype object and method host together; the realm pins both via `TGocciaRealm.SetOwnedSlot` when it takes ownership and unpins them on tear-down. `TGocciaStringObjectValue` reads its prototype directly via `CurrentRealm.GetSlot(GStringPrototypeSlot)` (set with `CurrentRealm.SetSlot`), with the method host held in a thread-local `FPrototypeMethodHost` and pinned manually via `TGarbageCollector.Instance.PinObject`. `TGocciaNumberObjectValue` and `TGocciaSymbolValue` use a similar raw-slot pattern with a process-wide method-host singleton. In all cases mutations on one engine's `String.prototype` do not leak into the next engine on the same worker thread.
+String values implement property access for methods like `.length`, `.charAt()`, `.includes()`, etc. through the string prototype system. When strings are boxed into `TGocciaStringObjectValue` (e.g., via `new String()` or implicit boxing), all instances share a single per-engine string prototype singleton — methods are registered once and reused across all string object instances of that engine. The prototype graph is per-engine and lives in a [realm slot](core-patterns.md#realm-ownership--slot-registration), but the wiring varies by type. `TGocciaArrayValue`, `TGocciaSetValue`, `TGocciaMapValue`, `TGocciaFunctionBase`, `TGocciaArrayBufferValue`, `TGocciaSharedArrayBufferValue`, `TGocciaDataViewValue`, and `TGocciaTypedArrayValue` use `TGocciaSharedPrototype` — a managed wrapper that bundles the prototype object and method host together; the realm pins both via `TGocciaRealm.SetOwnedSlot` when it takes ownership and unpins them on tear-down. `TGocciaStringObjectValue` reads its prototype directly via `CurrentRealm.GetSlot(GStringPrototypeSlot)` (set with `CurrentRealm.SetSlot`), with the method host held in a thread-local `FPrototypeMethodHost` and pinned manually via `TGarbageCollector.Instance.PinObject`. `TGocciaNumberObjectValue` and `TGocciaSymbolValue` use a similar raw-slot pattern with a process-wide method-host singleton. In all cases mutations on one engine's `String.prototype` do not leak into the next engine on the same worker thread.
 
 ### Symbols
 
@@ -664,15 +668,24 @@ Self-references in initializers are supported via a child scope that binds each 
 - **`slice(begin?, end?)`** — Returns a new SharedArrayBuffer (not ArrayBuffer).
 - **structuredClone** — Byte contents are copied into a new buffer.
 
+## DataView
+
+`TGocciaDataViewValue` extends `TGocciaInstanceValue` (`Goccia.Values.DataViewValue.pas`). It provides endian-aware typed reads and writes over `ArrayBuffer` or `SharedArrayBuffer` storage.
+
+- **Internal storage** — `FBufferValue: TGocciaValue` stores the underlying buffer, `FBufferData: TBytes` mirrors the current backing byte array, `FByteOffset: Integer` stores the view offset, and `FByteLength: Integer` stores either a fixed byte length or the auto-length sentinel for resizable ArrayBuffer views.
+- **Shared prototype singleton** — All DataView instances within an engine share a single per-engine prototype (`TGocciaSharedPrototype`), stored in a realm slot. Prototype methods are registered once during `InitializePrototype`.
+- **Element access** — DataView and TypedArray raw byte encoding use `Goccia.BinaryData`, which centralizes endian-aware integer, BigInt, Float16, Float32, and Float64 serialization.
+- **Detached and out-of-bounds checks** — Accessors and prototype methods reject detached ArrayBuffers and views that no longer fit after a resizable ArrayBuffer shrink. Auto-length views over resizable ArrayBuffers compute byte length from the current backing buffer.
+- **GC integration** — `MarkReferences` marks `FBufferValue`, preserving the viewed ArrayBuffer or SharedArrayBuffer.
+
 ## TypedArray
 
 `TGocciaTypedArrayValue` extends `TGocciaInstanceValue` (`Goccia.Values.TypedArrayValue.pas`). Provides array-like views over ArrayBuffer data with fixed element types. Ten non-BigInt types are supported: `Int8Array`, `Uint8Array`, `Uint8ClampedArray`, `Int16Array`, `Uint16Array`, `Int32Array`, `Uint32Array`, `Float16Array`, `Float32Array`, `Float64Array`. `Float16Array` uses IEEE 754 half-precision (binary16) with conversion helpers in `Goccia.Float16.pas`.
 
 - **Internal storage** — `FBufferValue: TGocciaValue` (the underlying buffer — either `TGocciaArrayBufferValue` or `TGocciaSharedArrayBufferValue`, returned by `.buffer`), `FBufferData: TBytes` (shared reference to the buffer's byte array for element access), `FByteOffset: Integer`, `FLength: Integer`, `FKind: TGocciaTypedArrayKind`.
 - **Shared prototype singleton** — All TypedArray instances (regardless of kind) within an engine share a single per-engine prototype (`TGocciaSharedPrototype`), stored in a [realm slot](core-patterns.md#realm-ownership--slot-registration). Prototype methods are registered once during `InitializePrototype`. The prototype and method host are pinned automatically by `TGocciaRealm.SetOwnedSlot` when the realm takes ownership of the `TGocciaSharedPrototype`.
-- **Element access** — `ReadElement(index): Double` reads raw bytes from `FBufferData` and converts to `Double`. `WriteElement(index, value)` converts from `Double` to the target element type with overflow wrapping (integer types) or clamping (`Uint8ClampedArray`).
-- **`WriteNumberLiteral(index, num)`** — Handles `TGocciaNumberLiteralValue` special values (`NaN`, `Infinity`, `-Infinity`) correctly: NaN → 0 for integer types, NaN for float types; Infinity → 255 for `Uint8ClampedArray`, 0 for other integer types; raw IEEE 754 bytes for float types via `WriteFloatSpecial`. All write sites (property assignment, `fill`, `set`, `map`, `with`, constructors, `from`, `of`) use this helper.
-- **`WriteFloatSpecial`** — Writes canonical IEEE 754 byte representations of NaN, Infinity, and -Infinity directly into `FBufferData` via `Move`, bypassing FPC's floating-point conversion.
+- **Element access** — `ReadElement(index): Double` and `WriteElement(index, value)` delegate raw byte encoding to `Goccia.BinaryData`, using the same endian-aware helpers as DataView. Integer types wrap, `Uint8ClampedArray` clamps, and float types preserve IEEE 754 encodings.
+- **`WriteNumberLiteral(index, num)`** — Handles `TGocciaNumberLiteralValue` special values (`NaN`, `Infinity`, `-Infinity`) correctly: NaN → 0 for integer types, NaN for float types; Infinity → 255 for `Uint8ClampedArray`, 0 for other integer types; raw IEEE 754 bytes for float types through `Goccia.BinaryData`. All write sites (property assignment, `fill`, `set`, `map`, `with`, constructors, `from`, `of`) use this helper.
 - **Buffer sharing** — Multiple TypedArrays can share the same ArrayBuffer or SharedArrayBuffer with different byte offsets and element types. Changes through one view are visible in others. `FBufferData` is a FPC dynamic array reference that shares the underlying byte array with the buffer object, so element writes are visible across all views without copying.
 - **SharedArrayBuffer support** — TypedArrays can be constructed from both `TGocciaArrayBufferValue` and `TGocciaSharedArrayBufferValue`. The `.buffer` property returns the original buffer object (preserving its type). `subarray` creates a new view sharing the same buffer; `slice` always creates a new `TGocciaArrayBufferValue` copy.
 - **Prototype methods** — `at`, `fill`, `copyWithin`, `slice`, `subarray`, `set`, `reverse`, `sort`, `indexOf`, `lastIndexOf`, `includes`, `find`, `findIndex`, `findLast`, `findLastIndex`, `every`, `some`, `forEach`, `map`, `filter`, `reduce`, `reduceRight`, `join`, `toString`, `toReversed`, `toSorted`, `with`, `values`, `keys`, `entries`, `[Symbol.iterator]`.

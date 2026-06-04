@@ -22,6 +22,23 @@ describe("%TypedArray%.prototype.toLocaleString", () => {
       Number.prototype.toLocaleString = original;
     }
   });
+
+  test("invokes BigInt element toLocaleString with locales and options", () => {
+    const original = BigInt.prototype.toLocaleString;
+    const options = { marker: "yes" };
+
+    try {
+      BigInt.prototype.toLocaleString = {
+        method(locales, receivedOptions) {
+          return "bigint:" + locales + ":" + receivedOptions.marker;
+        },
+      }.method;
+
+      expect(new BigInt64Array([0n]).toLocaleString("xx", options)).toBe("bigint:xx:yes");
+    } finally {
+      BigInt.prototype.toLocaleString = original;
+    }
+  });
 });
 
 describe.runIf(isIntl)("%TypedArray%.prototype.toLocaleString Intl elements", () => {
@@ -30,5 +47,12 @@ describe.runIf(isIntl)("%TypedArray%.prototype.toLocaleString Intl elements", ()
     const expected = new Intl.NumberFormat("th-u-nu-thai", options).format(0);
 
     expect(new Uint8Array([0]).toLocaleString("th-u-nu-thai", options)).toBe(expected);
+  });
+
+  test("formats BigInt elements through BigInt.prototype.toLocaleString", () => {
+    const options = { useGrouping: false };
+    const expected = new Intl.NumberFormat("de-DE", options).format(1234n);
+
+    expect(new BigInt64Array([1234n]).toLocaleString("de-DE", options)).toBe(expected);
   });
 });

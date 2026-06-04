@@ -26,6 +26,7 @@ const
   CONSTRUCTOR_ITERATOR     = 'Iterator';
   CONSTRUCTOR_ARRAY_BUFFER        = 'ArrayBuffer';
   CONSTRUCTOR_SHARED_ARRAY_BUFFER = 'SharedArrayBuffer';
+  CONSTRUCTOR_DATA_VIEW           = 'DataView';
   CONSTRUCTOR_COMPARATOR          = 'Comparator';
   CONSTRUCTOR_RANGE               = 'Range';
   CONSTRUCTOR_SEMVER              = 'SemVer';

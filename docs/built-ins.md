@@ -637,9 +637,9 @@ Core High Resolution Time API:
 
 See [Temporal Built-ins](built-ins-temporal.md) for the complete Temporal API reference (PlainDate, PlainTime, PlainDateTime, Duration, Instant, ZonedDateTime, and more).
 
-### Binary Data (ArrayBuffer, SharedArrayBuffer, TypedArrays)
+### Binary Data (ArrayBuffer, SharedArrayBuffer, DataView, TypedArrays)
 
-See [Binary Data Built-ins](built-ins-binary-data.md) for the complete ArrayBuffer, SharedArrayBuffer, and TypedArray API reference.
+See [Binary Data Built-ins](built-ins-binary-data.md) for the complete ArrayBuffer, SharedArrayBuffer, DataView, and TypedArray API reference.
 
 ### FFI (`Goccia.Builtins.GlobalFFI.pas`)
 
