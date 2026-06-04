@@ -92,4 +92,65 @@ describe("Date methods", () => {
     expect(result).toBe(value.getTime());
     expect(value.getDate()).toBe(2);
   });
+
+  test("prototype methods reject nullish receivers", () => {
+    const methods = [
+      "getTime",
+      "valueOf",
+      "getFullYear",
+      "getMonth",
+      "getDate",
+      "getDay",
+      "getHours",
+      "getMinutes",
+      "getSeconds",
+      "getMilliseconds",
+      "getUTCFullYear",
+      "getUTCMonth",
+      "getUTCDate",
+      "getUTCDay",
+      "getUTCHours",
+      "getUTCMinutes",
+      "getUTCSeconds",
+      "getUTCMilliseconds",
+      "setDate",
+      "getTimezoneOffset",
+      "toISOString",
+      "toJSON",
+      "toString",
+      "toLocaleString",
+      "toLocaleDateString",
+      "toLocaleTimeString",
+    ];
+
+    for (const method of methods) {
+      const fn = Date.prototype[method];
+      expect(() => fn.call(null)).toThrow(TypeError);
+      expect(() => fn.call(undefined)).toThrow(TypeError);
+      expect(() => fn()).toThrow(TypeError);
+    }
+  });
+
+  test("toJSON remains generic for object receivers", () => {
+    const receiver = {
+      valueOf() { return 1; },
+      toISOString() { return "generic"; },
+    };
+
+    expect(Date.prototype.toJSON.call(receiver)).toBe("generic");
+  });
+
+  test("toJSON only returns null for non-finite number primitives", () => {
+    const stringPrimitiveReceiver = {
+      valueOf() { return "not-a-number"; },
+      toISOString() { return "generic"; },
+    };
+    const nonFiniteNumberReceiver = {
+      valueOf() { return NaN; },
+      toISOString() { return "unreachable"; },
+    };
+
+    expect(Date.prototype.toJSON.call(stringPrimitiveReceiver)).toBe("generic");
+    expect(Date.prototype.toJSON.call(nonFiniteNumberReceiver)).toBe(null);
+  });
 });

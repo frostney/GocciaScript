@@ -124,6 +124,7 @@ uses
   Goccia.GarbageCollector,
   Goccia.ObjectModel,
   Goccia.Realm,
+  Goccia.Values.ClassHelper,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.FunctionValue,
@@ -143,6 +144,32 @@ threadvar
 
 const
   MAX_PROTOTYPE_CHAIN_DEPTH = 256;
+
+// Local ToObject variant for Object.prototype methods.  Keeping this here
+// avoids a unit cycle with the shared ToObject unit.
+function ObjectPrototypeToObject(const AValue: TGocciaValue): TGocciaObjectValue;
+var
+  Boxed: TGocciaObjectValue;
+begin
+  if (AValue is TGocciaUndefinedLiteralValue) or (AValue is TGocciaNullLiteralValue) then
+    ThrowTypeError(SErrorCannotConvertNullOrUndefined, SSuggestCheckNullBeforeAccess);
+
+  if AValue is TGocciaObjectValue then
+  begin
+    Result := TGocciaObjectValue(AValue);
+    Exit;
+  end;
+
+  Boxed := AValue.Box;
+  if Assigned(Boxed) then
+  begin
+    Result := Boxed;
+    Exit;
+  end;
+
+  ThrowTypeError(SErrorCannotConvertValueToObject, SSuggestObjectArgType);
+  Result := nil;
+end;
 
 procedure MarkPropertyDescriptor(const ADescriptor: TGocciaPropertyDescriptor);
 begin
@@ -303,38 +330,37 @@ end;
 // ES2026 §20.1.3.5 Object.prototype.toLocaleString()
 function TGocciaObjectValue.ObjectPrototypeToLocaleString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
+  Obj: TGocciaObjectValue;
   ToStringMethod: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
 begin
   // Step 1: Let O be the this value
   // Step 2: Return ? Invoke(O, "toString")
-  if AThisValue is TGocciaObjectValue then
-  begin
-    ToStringMethod := TGocciaObjectValue(AThisValue).GetProperty(PROP_TO_STRING);
-    if Assigned(ToStringMethod) and ToStringMethod.IsCallable then
-    begin
-      CallArgs := TGocciaArgumentsCollection.Create;
-      try
-        if ToStringMethod is TGocciaFunctionBase then
-          Result := TGocciaFunctionBase(ToStringMethod).Call(CallArgs, AThisValue)
-        else
-          Result := AThisValue.ToStringLiteral;
-      finally
-        CallArgs.Free;
-      end;
-    end
-    else
-      Result := AThisValue.ToStringLiteral;
-  end
-  else
-    Result := AThisValue.ToStringLiteral;
+  Obj := ObjectPrototypeToObject(AThisValue);
+  if Assigned(TGarbageCollector.Instance) and not (AThisValue is TGocciaObjectValue) then
+    TGarbageCollector.Instance.AddTempRoot(Obj);
+  try
+    ToStringMethod := Obj.GetProperty(PROP_TO_STRING);
+    if not Assigned(ToStringMethod) or not ToStringMethod.IsCallable then
+      ThrowTypeError(Format(SErrorValueNotFunction, [PROP_TO_STRING]), SSuggestNotFunctionType);
+
+    CallArgs := TGocciaArgumentsCollection.Create;
+    try
+      Result := DispatchCall(ToStringMethod, CallArgs, AThisValue);
+    finally
+      CallArgs.Free;
+    end;
+  finally
+    if Assigned(TGarbageCollector.Instance) and not (AThisValue is TGocciaObjectValue) then
+      TGarbageCollector.Instance.RemoveTempRoot(Obj);
+  end;
 end;
 
 // ES2026 §20.1.3.7 Object.prototype.valueOf()
 function TGocciaObjectValue.ObjectPrototypeValueOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   // Step 1: Return ? ToObject(this value)
-  Result := AThisValue;
+  Result := ObjectPrototypeToObject(AThisValue);
 end;
 
 class procedure TGocciaObjectValue.InitializeSharedPrototype;

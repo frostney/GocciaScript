@@ -110,6 +110,11 @@ type
     property BoundArgCount: Integer read FBoundArgCount;
   end;
 
+// ES2026 §7.3.14 Call(F, V, argumentsList)
+function DispatchCall(const ACallee: TGocciaValue;
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+
 // ES2026 §10.1.14 GetPrototypeFromConstructor: Get(constructor, "prototype")
 // directly — no bound-function unwrap. If the property is not an Object,
 // fall back to %Object.prototype%. Shared by Reflect.construct (§28.1.2)

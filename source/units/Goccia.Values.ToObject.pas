@@ -12,6 +12,10 @@ uses
 // Throws TypeError for undefined/null. Returns objects as-is. Boxes primitives.
 function ToObject(const AValue: TGocciaValue): TGocciaObjectValue;
 
+// ES2026 §7.2.1 RequireObjectCoercible(argument)
+// Throws TypeError for undefined/null and otherwise returns the original value.
+function RequireObjectCoercible(const AValue: TGocciaValue): TGocciaValue;
+
 // ES2026 §7.3.3 LengthOfArrayLike(obj)
 // Returns ToLength(? Get(obj, "length")).
 function LengthOfArrayLike(const AObj: TGocciaObjectValue): Integer;
@@ -39,8 +43,7 @@ function ToObject(const AValue: TGocciaValue): TGocciaObjectValue;
 var
   Boxed: TGocciaObjectValue;
 begin
-  if (AValue is TGocciaUndefinedLiteralValue) or (AValue is TGocciaNullLiteralValue) then
-    ThrowTypeError(SErrorCannotConvertNullOrUndefined, SSuggestCheckNullBeforeAccess);
+  RequireObjectCoercible(AValue);
 
   if AValue is TGocciaObjectValue then
   begin
@@ -59,6 +62,14 @@ begin
   // Symbol and other non-coercible types
   ThrowTypeError(SErrorCannotConvertValueToObject, SSuggestObjectArgType);
   Result := nil;
+end;
+
+// ES2026 §7.2.1 RequireObjectCoercible(argument)
+function RequireObjectCoercible(const AValue: TGocciaValue): TGocciaValue;
+begin
+  if (AValue is TGocciaUndefinedLiteralValue) or (AValue is TGocciaNullLiteralValue) then
+    ThrowTypeError(SErrorCannotConvertNullOrUndefined, SSuggestCheckNullBeforeAccess);
+  Result := AValue;
 end;
 
 // ES2026 §7.3.3 LengthOfArrayLike(obj)
