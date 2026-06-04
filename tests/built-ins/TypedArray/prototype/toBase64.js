@@ -1,4 +1,13 @@
 describe("Uint8Array.prototype.toBase64", () => {
+  test("has built-in method attributes", () => {
+    expect(Object.getOwnPropertyDescriptor(Uint8Array.prototype, "toBase64")).toEqual({
+      value: Uint8Array.prototype.toBase64,
+      writable: true,
+      enumerable: false,
+      configurable: true,
+    });
+  });
+
   test("encodes bytes to base64 with padding", () => {
     const bytes = new Uint8Array([72, 101, 108, 108, 111]);
     expect(bytes.toBase64()).toBe("SGVsbG8=");

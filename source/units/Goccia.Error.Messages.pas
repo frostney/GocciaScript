@@ -298,6 +298,7 @@ resourcestring
   SErrorTypedArrayFromRequiresArg = 'TypedArray.from requires at least one argument';
   SErrorTypedArrayFromMapFn = 'TypedArray.from mapfn must be a function';
   SErrorTypedArrayFromSource = 'TypedArray.from requires an array-like or iterable source';
+  SErrorTypedArrayStaticReceiver = '%s requires a TypedArray constructor receiver';
   SErrorInvalidTypedArrayIndex = 'Invalid index';
   SErrorInvalidTypedArrayLength = 'Invalid typed array length';
   SErrorTypedArrayStartOffsetNonNegative = 'Start offset of %s must be non-negative';

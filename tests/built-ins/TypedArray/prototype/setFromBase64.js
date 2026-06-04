@@ -1,4 +1,13 @@
 describe("Uint8Array.prototype.setFromBase64", () => {
+  test("has built-in method attributes", () => {
+    expect(Object.getOwnPropertyDescriptor(Uint8Array.prototype, "setFromBase64")).toEqual({
+      value: Uint8Array.prototype.setFromBase64,
+      writable: true,
+      enumerable: false,
+      configurable: true,
+    });
+  });
+
   test("decodes base64 into existing array", () => {
     const target = new Uint8Array(5);
     const result = target.setFromBase64("SGVsbG8=");

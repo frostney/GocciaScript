@@ -1,4 +1,13 @@
 describe("Uint8Array.prototype.setFromHex", () => {
+  test("has built-in method attributes", () => {
+    expect(Object.getOwnPropertyDescriptor(Uint8Array.prototype, "setFromHex")).toEqual({
+      value: Uint8Array.prototype.setFromHex,
+      writable: true,
+      enumerable: false,
+      configurable: true,
+    });
+  });
+
   test("decodes hex into existing array", () => {
     const target = new Uint8Array(5);
     const result = target.setFromHex("48656c6c6f");
