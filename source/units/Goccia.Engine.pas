@@ -309,6 +309,7 @@ uses
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ArrayValue,
   Goccia.Values.BooleanObjectValue,
+  Goccia.Values.DataViewValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FinalizationRegistryValue,
   Goccia.Values.FunctionValue,
@@ -772,6 +773,7 @@ var
   FinalizationRegistryConstructor: TGocciaFinalizationRegistryClassValue;
   ArrayBufferConstructor: TGocciaArrayBufferClassValue;
   SharedArrayBufferConstructor: TGocciaSharedArrayBufferClassValue;
+  DataViewConstructor: TGocciaDataViewClassValue;
   StringConstructor: TGocciaStringClassValue;
   NumberConstructor: TGocciaNumberClassValue;
   BooleanConstructor: TGocciaBooleanClassValue;
@@ -881,6 +883,11 @@ begin
   SharedArrayBufferConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
   FInterpreter.GlobalScope.DefineLexicalBinding(CONSTRUCTOR_SHARED_ARRAY_BUFFER, SharedArrayBufferConstructor, dtConst, True);
 
+  DataViewConstructor := TGocciaDataViewClassValue.Create(CONSTRUCTOR_DATA_VIEW, nil);
+  TGocciaDataViewValue.ExposePrototype(DataViewConstructor);
+  DataViewConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
+  FInterpreter.GlobalScope.DefineLexicalBinding(CONSTRUCTOR_DATA_VIEW, DataViewConstructor, dtConst, True);
+
   // Create %TypedArray% intrinsic (not globally exposed per spec §23.2.1)
   FTypedArrayIntrinsic := TGocciaClassValue.Create('TypedArray', nil);
   // §17: built-in name/length are {writable: false, enumerable: false, configurable: true}
@@ -982,6 +989,7 @@ begin
   TGocciaClassValue.PatchDefaultPrototype(FinalizationRegistryConstructor);
   TGocciaClassValue.PatchDefaultPrototype(ArrayBufferConstructor);
   TGocciaClassValue.PatchDefaultPrototype(SharedArrayBufferConstructor);
+  TGocciaClassValue.PatchDefaultPrototype(DataViewConstructor);
   TGocciaClassValue.PatchDefaultPrototype(FTypedArrayIntrinsic);
   TGocciaClassValue.PatchDefaultPrototype(StringConstructor);
   TGocciaClassValue.PatchDefaultPrototype(NumberConstructor);

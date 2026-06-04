@@ -200,6 +200,7 @@ resourcestring
   SSuggestArrayBufferThisType = 'ArrayBuffer methods must be called on an ArrayBuffer instance';
   SSuggestArrayBufferDetached = 'the ArrayBuffer has been detached (transferred) and can no longer be used';
   SSuggestArrayBufferResizable = 'create a resizable ArrayBuffer with: new ArrayBuffer(length, { maxByteLength: ... })';
+  SSuggestDataViewThisType = 'DataView prototype methods must be called on a DataView instance';
 
   // Runtime errors — DisposableStack
   SSuggestDisposableStackThisType = 'DisposableStack methods must be called on a DisposableStack instance';

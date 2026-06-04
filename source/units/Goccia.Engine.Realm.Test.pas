@@ -47,6 +47,7 @@ type
     procedure TestSequentialEnginesHaveIsolatedArrayPrototype;
     procedure TestSequentialEnginesHaveIsolatedObjectPrototype;
     procedure TestSequentialEnginesHaveIsolatedStringPrototype;
+    procedure TestSequentialEnginesHaveFreshDataViewPrototypeMembers;
     procedure TestSequentialEnginesHaveFreshURLSearchParamsPrototype;
     procedure TestSequentialEnginesHaveFreshURLPrototype;
     procedure TestNestedEngineRestoresOuterRealmOnDestroy;
@@ -73,6 +74,8 @@ begin
     TestSequentialEnginesHaveIsolatedObjectPrototype);
   Test('String.prototype mutations do not leak to the next engine',
     TestSequentialEnginesHaveIsolatedStringPrototype);
+  Test('DataView.prototype methods are fresh for each engine',
+    TestSequentialEnginesHaveFreshDataViewPrototypeMembers);
   Test('URLSearchParams.prototype is fresh for each engine',
     TestSequentialEnginesHaveFreshURLSearchParamsPrototype);
   Test('URL.prototype is fresh for each engine',
@@ -370,6 +373,20 @@ begin
     'function');
 
   ResultB := RunInline('typeof String.prototype.__poisonStr;');
+  Expect<string>((ResultB.Result as TGocciaStringLiteralValue).Value).ToBe(
+    'undefined');
+end;
+
+procedure TTestEngineRealm.TestSequentialEnginesHaveFreshDataViewPrototypeMembers;
+var
+  ResultA, ResultB: TGocciaScriptResult;
+begin
+  ResultA := RunInline(
+    'DataView.prototype.getUint8.__poisonDV = 7;' +
+    'DataView.prototype.getUint8.__poisonDV;');
+  Expect<Double>((ResultA.Result as TGocciaNumberLiteralValue).Value).ToBe(7);
+
+  ResultB := RunInline('typeof DataView.prototype.getUint8.__poisonDV;');
   Expect<string>((ResultB.Result as TGocciaStringLiteralValue).Value).ToBe(
     'undefined');
 end;
