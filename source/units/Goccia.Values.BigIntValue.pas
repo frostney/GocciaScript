@@ -64,7 +64,9 @@ uses
   Goccia.ObjectModel,
   Goccia.Realm,
   Goccia.Threading,
+  Goccia.Values.BigIntObjectValue,
   Goccia.Values.ErrorHelper,
+  Goccia.Values.IntlNumberFormat,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue;
 
@@ -125,6 +127,21 @@ begin
     Result := TGocciaObjectValue(CurrentRealm.GetSlot(GBigIntPrimitivePrototypeSlot))
   else
     Result := nil;
+end;
+
+function ThisBigIntValue(const AThisValue: TGocciaValue;
+  const AMethodName: string): TGocciaBigIntValue;
+begin
+  if AThisValue is TGocciaBigIntValue then
+    Exit(TGocciaBigIntValue(AThisValue));
+
+  if (AThisValue is TGocciaBigIntObjectValue) and
+     (TGocciaBigIntObjectValue(AThisValue).Primitive is TGocciaBigIntValue) then
+    Exit(TGocciaBigIntValue(TGocciaBigIntObjectValue(AThisValue).Primitive));
+
+  ThrowTypeError(Format(SErrorBigIntRequiresBigIntValue, [AMethodName]),
+    SSuggestBigIntRequiresBigIntValue);
+  Result := nil;
 end;
 
 { TGocciaBigIntValue }
@@ -258,12 +275,11 @@ end;
 function TGocciaBigIntValue.BigIntToString(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
+  BigIntValue: TGocciaBigIntValue;
   Radix: Integer;
   RadixValue: TGocciaValue;
 begin
-  if not (AThisValue is TGocciaBigIntValue) then
-    ThrowTypeError(Format(SErrorBigIntRequiresBigIntValue, ['BigInt.prototype.toString']),
-      SSuggestBigIntRequiresBigIntValue);
+  BigIntValue := ThisBigIntValue(AThisValue, 'BigInt.prototype.toString');
 
   Radix := 10;
   if AArgs.Length > 0 then
@@ -278,28 +294,43 @@ begin
   end;
 
   Result := TGocciaStringLiteralValue.Create(
-    TGocciaBigIntValue(AThisValue).FValue.ToRadixString(Radix));
+    BigIntValue.FValue.ToRadixString(Radix));
 end;
 
 // ES2026 §21.2.3.4 BigInt.prototype.valueOf()
 function TGocciaBigIntValue.BigIntValueOf(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  if not (AThisValue is TGocciaBigIntValue) then
-    ThrowTypeError(Format(SErrorBigIntRequiresBigIntValue, ['BigInt.prototype.valueOf']),
-      SSuggestBigIntRequiresBigIntValue);
-  Result := AThisValue;
+  Result := ThisBigIntValue(AThisValue, 'BigInt.prototype.valueOf');
 end;
 
 // ES2026 §21.2.3.2 BigInt.prototype.toLocaleString()
 function TGocciaBigIntValue.BigIntToLocaleString(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
+var
+  BigIntValue: TGocciaBigIntValue;
+  Locale: string;
+  Options: TGocciaObjectValue;
+  FormatArgs: TGocciaArgumentsCollection;
+  NumberFormat: TGocciaIntlNumberFormatValue;
 begin
-  if not (AThisValue is TGocciaBigIntValue) then
-    ThrowTypeError(Format(SErrorBigIntRequiresBigIntValue, ['BigInt.prototype.toLocaleString']),
-      SSuggestBigIntRequiresBigIntValue);
-  Result := TGocciaStringLiteralValue.Create(
-    TGocciaBigIntValue(AThisValue).FValue.ToString);
+  BigIntValue := ThisBigIntValue(AThisValue, 'BigInt.prototype.toLocaleString');
+  Locale := '';
+  if (AArgs.Length > 0) and
+     not (AArgs.GetElement(0) is TGocciaUndefinedLiteralValue) then
+    Locale := AArgs.GetElement(0).ToStringLiteral.Value;
+
+  Options := nil;
+  if (AArgs.Length > 1) and (AArgs.GetElement(1) is TGocciaObjectValue) then
+    Options := TGocciaObjectValue(AArgs.GetElement(1));
+
+  NumberFormat := TGocciaIntlNumberFormatValue.Create(Locale, Options);
+  FormatArgs := TGocciaArgumentsCollection.Create([BigIntValue]);
+  try
+    Result := NumberFormat.IntlNumberFormatFormat(FormatArgs, NumberFormat);
+  finally
+    FormatArgs.Free;
+  end;
 end;
 
 initialization

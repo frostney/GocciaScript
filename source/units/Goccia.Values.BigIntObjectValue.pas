@@ -68,8 +68,11 @@ var
 begin
   inherited Create(AClass);
   FPrimitive := APrimitive;
-  InitializePrototype;
-  SharedPrototype := GetSharedBigIntPrototype;
+  if APrimitive is TGocciaBigIntValue then
+    TGocciaBigIntValue(APrimitive).InitializePrototype
+  else
+    TGocciaBigIntValue.BigIntZero.InitializePrototype;
+  SharedPrototype := TGocciaObjectValue(TGocciaBigIntValue.SharedPrototype);
   if not Assigned(AClass) and Assigned(SharedPrototype) then
     FPrototype := SharedPrototype;
 end;
@@ -117,15 +120,16 @@ begin
   if not (Result is TGocciaUndefinedLiteralValue) then
     Exit;
 
-  if Assigned(GetSharedBigIntPrototype) then
-    Result := GetSharedBigIntPrototype.GetPropertyWithContext(AName, AThisContext);
+  if Assigned(TGocciaBigIntValue.SharedPrototype) then
+    Result := TGocciaObjectValue(TGocciaBigIntValue.SharedPrototype)
+      .GetPropertyWithContext(AName, AThisContext);
 end;
 
 class function TGocciaBigIntObjectValue.GetSharedPrototype: TGocciaObjectValue;
 begin
-  if not Assigned(GetSharedBigIntPrototype) then
-    TGocciaBigIntObjectValue.Create(TGocciaBigIntValue.BigIntZero);
-  Result := GetSharedBigIntPrototype;
+  if not Assigned(TGocciaBigIntValue.SharedPrototype) then
+    TGocciaBigIntValue.BigIntZero.InitializePrototype;
+  Result := TGocciaObjectValue(TGocciaBigIntValue.SharedPrototype);
 end;
 
 function TGocciaBigIntObjectValue.BigIntObjectValueOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -180,10 +184,9 @@ begin
 end;
 
 initialization
-  // Registered separately from the JS-visible BigInt.prototype (which lives on
-  // the primitive class TGocciaBigIntValue).  The wrapper prototype here is
-  // used by the rare Object(1n) wrapping path; keeping its slot name distinct
-  // makes diagnostic output unambiguous.
+  // Registered separately from the JS-visible BigInt.prototype for legacy
+  // wrapper diagnostics.  Object(1n) itself uses TGocciaBigIntValue's shared
+  // BigInt.prototype slot.
   GBigIntPrototypeSlot := RegisterRealmSlot('BigInt.wrapperPrototype');
 
 end.

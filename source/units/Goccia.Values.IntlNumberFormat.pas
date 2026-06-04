@@ -72,6 +72,7 @@ uses
   Goccia.ObjectModel.Types,
   Goccia.Realm,
   Goccia.Values.ArrayValue,
+  Goccia.Values.BigIntObjectValue,
   Goccia.Values.BigIntValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction,
@@ -155,6 +156,14 @@ begin
     Result := incdName
   else
     Result := incdSymbol;
+end;
+
+function CurrencySignStringToEnum(const AValue: string): TIntlNumberCurrencySign;
+begin
+  if AValue = 'accounting' then
+    Result := incsAccounting
+  else
+    Result := incsStandard;
 end;
 
 function SignDisplayStringToEnum(const AValue: string): TIntlNumberSignDisplay;
@@ -243,6 +252,15 @@ begin
     Result := inrpLessPrecision
   else
     Result := inrpAuto;
+end;
+
+function TrailingZeroDisplayStringToEnum(
+  const AValue: string): TIntlNumberTrailingZeroDisplay;
+begin
+  if AValue = 'stripIfInteger' then
+    Result := intzStripIfInteger
+  else
+    Result := intzAuto;
 end;
 
 function InsertGroupingSeparator(const AIntPart, ASep: string): string;
@@ -396,6 +414,213 @@ begin
     Result := MinusSign + Result;
 end;
 
+function NormalizeDecimalIntegerString(const AValue: string; out AIsNegative: Boolean;
+  out ADigits: string): Boolean;
+var
+  I, StartIndex: Integer;
+begin
+  Result := False;
+  AIsNegative := False;
+  ADigits := Trim(AValue);
+  if ADigits = '' then
+    Exit;
+
+  StartIndex := 1;
+  if ADigits[1] in ['+', '-'] then
+  begin
+    AIsNegative := ADigits[1] = '-';
+    StartIndex := 2;
+  end;
+
+  if StartIndex > Length(ADigits) then
+    Exit;
+
+  for I := StartIndex to Length(ADigits) do
+    if not (ADigits[I] in ['0'..'9']) then
+      Exit;
+
+  ADigits := Copy(ADigits, StartIndex, MaxInt);
+  while (Length(ADigits) > 1) and (ADigits[1] = '0') do
+    Delete(ADigits, 1, 1);
+  if ADigits = '0' then
+    AIsNegative := False;
+
+  Result := True;
+end;
+
+function FormatDecimalStringWithCLDR(const AValue, ALocale: string;
+  const AOptions: TIntlNumberFormatOptions): string;
+var
+  DecimalSep, GroupSep, PercentSign, MinusSign, PlusSign: string;
+  IsNeg, IsZero: Boolean;
+  IntPart, FracPart: string;
+  MinFrac, MaxFrac: Integer;
+  CurrSymbol, CurrNarrow: string;
+  CurrDigits: Integer;
+begin
+  if not NormalizeDecimalIntegerString(AValue, IsNeg, IntPart) then
+    Exit(AValue);
+  IsZero := IntPart = '0';
+
+  if not TryGetNumberSymbol(ALocale, 'decimal', DecimalSep) then
+    DecimalSep := '.';
+  if not TryGetNumberSymbol(ALocale, 'group', GroupSep) then
+    GroupSep := ',';
+  if not TryGetNumberSymbol(ALocale, 'percentSign', PercentSign) then
+    PercentSign := '%';
+  if not TryGetNumberSymbol(ALocale, 'minusSign', MinusSign) then
+    MinusSign := '-';
+  if not TryGetNumberSymbol(ALocale, 'plusSign', PlusSign) then
+    PlusSign := '+';
+
+  case AOptions.Style of
+    insPercent:
+      IntPart := IntPart + '00';
+    insCurrency:
+    begin
+      if not TryGetCurrencyInfo(ALocale, AOptions.Currency,
+        CurrSymbol, CurrNarrow, CurrDigits) then
+      begin
+        CurrDigits := 2;
+        if AOptions.Currency = 'USD' then CurrSymbol := '$'
+        else if AOptions.Currency = 'EUR' then CurrSymbol := #$E2#$82#$AC
+        else if AOptions.Currency = 'GBP' then CurrSymbol := #$C2#$A3
+        else if (AOptions.Currency = 'JPY') or (AOptions.Currency = 'CNY') then
+        begin
+          CurrSymbol := #$C2#$A5;
+          CurrDigits := 0;
+        end
+        else
+          CurrSymbol := AOptions.Currency;
+        CurrNarrow := CurrSymbol;
+      end;
+    end;
+  end;
+
+  MinFrac := AOptions.MinimumFractionDigits;
+  MaxFrac := AOptions.MaximumFractionDigits;
+  if (MinFrac < 0) and (MaxFrac < 0) then
+  begin
+    case AOptions.Style of
+      insCurrency:
+      begin
+        MinFrac := CurrDigits;
+        MaxFrac := CurrDigits;
+      end;
+      insPercent:
+      begin
+        MinFrac := 0;
+        MaxFrac := 0;
+      end;
+    else
+      MinFrac := 0;
+      MaxFrac := 3;
+    end;
+  end;
+  if MinFrac < 0 then MinFrac := 0;
+  if MaxFrac < 0 then MaxFrac := 3;
+  if MaxFrac < MinFrac then MaxFrac := MinFrac;
+
+  while Length(IntPart) < AOptions.MinimumIntegerDigits do
+    IntPart := '0' + IntPart;
+  if AOptions.UseGrouping <> inugFalse then
+    IntPart := InsertGroupingSeparator(IntPart, GroupSep);
+
+  FracPart := StringOfChar('0', MinFrac);
+  if FracPart <> '' then
+    Result := IntPart + DecimalSep + FracPart
+  else
+    Result := IntPart;
+
+  case AOptions.Style of
+    insPercent:
+      Result := Result + PercentSign;
+    insCurrency:
+    begin
+      case AOptions.CurrencyDisplay of
+        incdCode:
+          Result := AOptions.Currency + ' ' + Result;
+        incdNarrowSymbol:
+          Result := CurrNarrow + Result;
+      else
+        Result := CurrSymbol + Result;
+      end;
+    end;
+  end;
+
+  case AOptions.SignDisplay of
+    insdNever:
+      ;
+    insdAlways:
+      if IsNeg then
+        Result := MinusSign + Result
+      else
+        Result := PlusSign + Result;
+    insdExceptZero:
+      if IsNeg then
+        Result := MinusSign + Result
+      else if not IsZero then
+        Result := PlusSign + Result;
+    insdNegative:
+      if IsNeg then
+        Result := MinusSign + Result;
+  else
+    if IsNeg then
+      Result := MinusSign + Result;
+  end;
+end;
+
+function CanFormatDecimalStringWithCLDR(
+  const AOptions: TIntlNumberFormatOptions): Boolean;
+begin
+  Result :=
+    (AOptions.Notation = innStandard) and
+    (AOptions.Style <> insUnit) and
+    (AOptions.NumberingSystem = 'latn') and
+    (AOptions.CurrencyDisplay <> incdName) and
+    (AOptions.CurrencySign = incsStandard) and
+    (AOptions.UseGrouping <> inugMin2) and
+    (AOptions.MinimumSignificantDigits < 0) and
+    (AOptions.MaximumSignificantDigits < 0) and
+    (AOptions.RoundingIncrement = 1) and
+    (AOptions.RoundingMode = inrmHalfExpand) and
+    (AOptions.RoundingPriority = inrpAuto) and
+    (AOptions.TrailingZeroDisplay = intzAuto);
+end;
+
+function TryFormatDecimalStringFallback(const ALocale, ADecimal: string;
+  const AOptions: TIntlNumberFormatOptions; out AFormatted: string): Boolean;
+var
+  NumberValue: Double;
+begin
+  if CanFormatDecimalStringWithCLDR(AOptions) then
+  begin
+    AFormatted := FormatDecimalStringWithCLDR(ADecimal, ALocale, AOptions);
+    Exit(True);
+  end;
+
+  Result := TryStrToFloat(ADecimal, NumberValue, InvariantFormatSettings) and
+    TryICUFormatNumber(ALocale, NumberValue, AOptions, AFormatted);
+end;
+
+function TryFormatDecimalStringPartsFallback(const ALocale, ADecimal: string;
+  const AOptions: TIntlNumberFormatOptions; out AParts: TIntlFormatPartArray): Boolean;
+var
+  NumberValue: Double;
+begin
+  SetLength(AParts, 0);
+  if CanFormatDecimalStringWithCLDR(AOptions) then
+  begin
+    SetLength(AParts, 1);
+    AParts[0].PartType := 'literal';
+    AParts[0].Value := FormatDecimalStringWithCLDR(ADecimal, ALocale, AOptions);
+    Exit(True);
+  end;
+
+  Result := TryStrToFloat(ADecimal, NumberValue, InvariantFormatSettings) and
+    TryICUFormatNumberToParts(ALocale, NumberValue, AOptions, AParts);
+end;
+
 function NumberRangeSeparator(const AOptions: TIntlNumberFormatOptions): string;
 begin
   if (AOptions.Style = insDecimal) and (AOptions.SignDisplay = insdAuto) then
@@ -499,6 +724,19 @@ begin
 
   ANumber := AValue.ToNumberLiteral.Value;
   Result := not IsNan(ANumber);
+end;
+
+function TryReadBigIntDecimalInput(const AValue: TGocciaValue;
+  out ADecimal: string): Boolean;
+begin
+  Result := True;
+  if AValue is TGocciaBigIntValue then
+    ADecimal := TGocciaBigIntValue(AValue).Value.ToString
+  else if (AValue is TGocciaBigIntObjectValue) and
+          (TGocciaBigIntObjectValue(AValue).Primitive is TGocciaBigIntValue) then
+    ADecimal := TGocciaBigIntValue(TGocciaBigIntObjectValue(AValue).Primitive).Value.ToString
+  else
+    Result := False;
 end;
 
 { TGocciaIntlNumberFormatValue }
@@ -730,6 +968,7 @@ begin
   FResolvedOptions.Style := StyleStringToEnum(FStyle);
   FResolvedOptions.Currency := FCurrency;
   FResolvedOptions.CurrencyDisplay := CurrencyDisplayStringToEnum(FCurrencyDisplay);
+  FResolvedOptions.CurrencySign := CurrencySignStringToEnum(FCurrencySign);
   FResolvedOptions.UnitIdentifier := FUnitIdentifier;
   FResolvedOptions.UnitDisplay := UnitDisplayStringToEnum(FUnitDisplay);
   FResolvedOptions.Notation := NotationStringToEnum(FNotation);
@@ -744,6 +983,8 @@ begin
   FResolvedOptions.RoundingMode := RoundingModeStringToEnum(FRoundingMode);
   FResolvedOptions.RoundingIncrement := FRoundingIncrement;
   FResolvedOptions.RoundingPriority := RoundingPriorityStringToEnum(FRoundingPriority);
+  FResolvedOptions.TrailingZeroDisplay :=
+    TrailingZeroDisplayStringToEnum(FTrailingZeroDisplay);
   FResolvedOptions.NumberingSystem := FNumberingSystem;
 
   InitializePrototype;
@@ -829,12 +1070,26 @@ end;
 function TGocciaIntlNumberFormatValue.IntlNumberFormatFormat(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   NF: TGocciaIntlNumberFormatValue;
+  InputValue: TGocciaValue;
   NumValue: Double;
-  Formatted: string;
+  DecimalValue, Formatted: string;
 begin
   NF := AsNumberFormat(AThisValue, 'Intl.NumberFormat.prototype.format');
-  NumValue := AArgs.GetElement(0).ToNumberLiteral.Value;
+  InputValue := AArgs.GetElement(0);
 
+  if TryReadBigIntDecimalInput(InputValue, DecimalValue) then
+  begin
+    if TryICUFormatNumberDecimal(NF.FLocale, DecimalValue,
+      NF.FResolvedOptions, Formatted) then
+      Exit(TGocciaStringLiteralValue.Create(Formatted));
+    if TryFormatDecimalStringFallback(NF.FLocale, DecimalValue,
+      NF.FResolvedOptions, Formatted) then
+      Exit(TGocciaStringLiteralValue.Create(Formatted));
+    ThrowTypeError(
+      'Intl.NumberFormat BigInt fallback cannot format this option set without ICU decimal support');
+  end;
+
+  NumValue := InputValue.ToNumberLiteral.Value;
   if TryICUFormatNumber(NF.FLocale, NumValue, NF.FResolvedOptions, Formatted) then
     Result := TGocciaStringLiteralValue.Create(Formatted)
   else
@@ -845,12 +1100,27 @@ end;
 function TGocciaIntlNumberFormatValue.IntlNumberFormatFormatToParts(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   NF: TGocciaIntlNumberFormatValue;
+  InputValue: TGocciaValue;
   NumValue: Double;
+  DecimalValue: string;
   Parts: TIntlFormatPartArray;
 begin
   NF := AsNumberFormat(AThisValue, 'Intl.NumberFormat.prototype.formatToParts');
-  NumValue := AArgs.GetElement(0).ToNumberLiteral.Value;
+  InputValue := AArgs.GetElement(0);
 
+  if TryReadBigIntDecimalInput(InputValue, DecimalValue) then
+  begin
+    if TryICUFormatNumberDecimalToParts(NF.FLocale, DecimalValue,
+      NF.FResolvedOptions, Parts) then
+      Exit(FormatPartsToArray(Parts));
+    if not TryFormatDecimalStringPartsFallback(NF.FLocale, DecimalValue,
+      NF.FResolvedOptions, Parts) then
+      ThrowTypeError(
+        'Intl.NumberFormat BigInt fallback cannot format this option set without ICU decimal support');
+    Exit(FormatPartsToArray(Parts));
+  end;
+
+  NumValue := InputValue.ToNumberLiteral.Value;
   if TryICUFormatNumberToParts(NF.FLocale, NumValue, NF.FResolvedOptions, Parts) then
     Result := FormatPartsToArray(Parts)
   else
