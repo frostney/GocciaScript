@@ -367,12 +367,17 @@ uses
 const
   BYTECODE_PRIVATE_SLOT_PREFIX = '#slot:';
   BYTECODE_PRIVATE_BRAND_PREFIX = '#brand:';
+  BYTECODE_PRIVATE_INITIALIZED_PREFIX = '#initialized:';
   FOR_IN_ENTRY_OWNER = '__gocciaForInOwner';
   FOR_IN_ENTRY_KEY = '__gocciaForInKey';
   FOR_IN_MAX_PROTOTYPE_CHAIN_DEPTH = 256;
 
 function IsBytecodePrivateKey(const AKey: string): Boolean; forward;
 function IsBytecodePrivateBrandKey(const AKey: string): Boolean; forward;
+function HasBytecodePrivateInitializersApplied(const AInstance: TGocciaValue;
+  const AClassValue: TGocciaClassValue): Boolean; forward;
+procedure StampBytecodePrivateInitializersApplied(const AInstance: TGocciaValue;
+  const AClassValue: TGocciaClassValue); forward;
 function NormalizeBytecodePrivateKey(const AName,
   APrivateBrandToken: string): string; forward;
 function BytecodePrivateBrandKey(const AKey,
@@ -3010,8 +3015,12 @@ var
     if (AReplacement is TGocciaObjectValue) and
        (AReplacement <> AThisValue) and
        (FNewTarget is TGocciaVMClassValue) then
+    begin
       TGocciaVMClassValue(FNewTarget).FVM.RunClassInitializers(
         TGocciaClassValue(FNewTarget), AReplacement, False);
+      StampBytecodePrivateInitializersApplied(AReplacement,
+        TGocciaClassValue(FNewTarget));
+    end;
   end;
 begin
   if (FSuperClass is TGocciaObjectValue) and
@@ -3327,7 +3336,8 @@ begin
         ConstructorThisValue := Instance;
       ApplyOwnConstructorResult(ConstructedValue, ConstructorThisValue);
       if Assigned(InitializerReplayReceiver) and
-         (Instance = InitializerReplayReceiver) then
+         (Instance = InitializerReplayReceiver) and
+         not HasBytecodePrivateInitializersApplied(Instance, Self) then
         FVM.RunClassInitializers(Self, Instance, True);
     finally
       TGarbageCollector.Instance.RemoveTempRoot(RootedInstance);
@@ -3406,7 +3416,8 @@ begin
         FVM.RunClassInitializers(Self, Instance);
 
       if Assigned(InitializerReplayReceiver) and
-         (Instance = InitializerReplayReceiver) then
+         (Instance = InitializerReplayReceiver) and
+         not HasBytecodePrivateInitializersApplied(Instance, Self) then
         FVM.RunClassInitializers(Self, Instance, True);
     finally
       TGarbageCollector.Instance.RemoveTempRoot(RootedInstance);
@@ -3739,7 +3750,8 @@ begin
           FVM.RunClassInitializers(Self, Instance);
       end;
       if Assigned(InitializerReplayReceiver) and
-         (Instance = InitializerReplayReceiver) then
+         (Instance = InitializerReplayReceiver) and
+         not HasBytecodePrivateInitializersApplied(Instance, Self) then
         FVM.RunClassInitializers(Self, Instance, True);
     finally
       TGarbageCollector.Instance.RemoveTempRoot(RootedInstance);
@@ -5740,6 +5752,40 @@ begin
   else
     Result := BYTECODE_PRIVATE_BRAND_PREFIX + APrivateBrandToken + ':' +
       NormalizeBytecodePrivateKey(AKey, APrivateBrandToken);
+end;
+
+function BytecodePrivateInitializedKey(
+  const APrivateBrandToken: string): string;
+begin
+  Result := BYTECODE_PRIVATE_INITIALIZED_PREFIX + APrivateBrandToken;
+end;
+
+function HasBytecodePrivateInitializersApplied(const AInstance: TGocciaValue;
+  const AClassValue: TGocciaClassValue): Boolean;
+var
+  Descriptor: TGocciaPropertyDescriptor;
+begin
+  Result := False;
+  if (not Assigned(AClassValue)) or
+     not (AInstance is TGocciaObjectValue) then
+    Exit;
+  Descriptor := TGocciaObjectValue(AInstance).GetOwnPropertyDescriptor(
+    BytecodePrivateInitializedKey(AClassValue.PrivateBrandToken));
+  Result := Descriptor is TGocciaPropertyDescriptorData;
+end;
+
+procedure StampBytecodePrivateInitializersApplied(const AInstance: TGocciaValue;
+  const AClassValue: TGocciaClassValue);
+begin
+  if (not Assigned(AClassValue)) or
+     (not AClassValue.HasInstanceInitializerWork) or
+     HasBytecodePrivateInitializersApplied(AInstance, AClassValue) then
+    Exit;
+  if AInstance is TGocciaObjectValue then
+    TGocciaObjectValue(AInstance).DefineProperty(
+    BytecodePrivateInitializedKey(AClassValue.PrivateBrandToken),
+    TGocciaPropertyDescriptorData.Create(
+      TGocciaBooleanLiteralValue.TrueValue, []));
 end;
 
 procedure TGocciaVM.StampBytecodePrivateBrands(

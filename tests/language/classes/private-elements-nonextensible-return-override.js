@@ -117,6 +117,36 @@ describe("Private elements on constructor return overrides", () => {
     expect(WithPrivateAccessorWrite.read(obj)).toBe(42);
   });
 
+  test("replacement initialization is not replayed after constructor body writes", () => {
+    class WithPublicAndPrivateInitializers extends ReturnOverrideBase {
+      value = 1;
+      #privateValue = 0;
+
+      set #accessor(value) {
+        this.#privateValue = value;
+      };
+
+      get #accessor() {
+        return this.#privateValue;
+      };
+
+      constructor(obj) {
+        super(obj);
+        this.value = 2;
+        this.#accessor = 42;
+      }
+
+      static readPrivate(obj) {
+        return obj.#accessor;
+      }
+    }
+
+    const obj = {};
+    new WithPublicAndPrivateInitializers(obj);
+    expect(obj.value).toBe(2);
+    expect(WithPublicAndPrivateInitializers.readPrivate(obj)).toBe(42);
+  });
+
   test("replacement initialization overwrites copied raw private state", () => {
     class WithPrivateFieldInitializer extends ReturnOverrideBase {
       #value = 1;

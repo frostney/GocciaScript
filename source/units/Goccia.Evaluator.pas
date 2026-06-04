@@ -24,6 +24,11 @@ uses
 
 type
   PGocciaValue = ^TGocciaValue;
+  TGocciaInstanceInitializationMode = (
+    iimFirstPass,
+    iimEagerReplacement,
+    iimReplay
+  );
 
 function Evaluate(const ANode: TGocciaASTNode; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 function EvaluateExpression(const AExpression: TGocciaExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
@@ -79,7 +84,7 @@ procedure AssignObjectPattern(const APattern: TGocciaObjectDestructuringPattern;
 procedure AssignAssignmentPattern(const APattern: TGocciaAssignmentDestructuringPattern; const AValue: TGocciaValue; const AContext: TGocciaEvaluationContext; const AIsDeclaration: Boolean = False; const ADeclarationType: TGocciaDeclarationType = dtLet);
 procedure AssignRestPattern(const APattern: TGocciaRestDestructuringPattern; const AValue: TGocciaValue; const AContext: TGocciaEvaluationContext; const AIsDeclaration: Boolean = False; const ADeclarationType: TGocciaDeclarationType = dtLet);
 procedure InitializeInstanceProperties(const AInstance: TGocciaInstanceValue; const AClassValue: TGocciaClassValue; const AContext: TGocciaEvaluationContext);
-procedure InitializePrivateInstanceProperties(const AInstance: TGocciaObjectValue; const AClassValue: TGocciaClassValue; const AContext: TGocciaEvaluationContext);
+procedure InitializePrivateInstanceProperties(const AInstance: TGocciaObjectValue; const AClassValue: TGocciaClassValue; const AContext: TGocciaEvaluationContext; const AInitializationMode: TGocciaInstanceInitializationMode = iimFirstPass);
 function InstantiateClass(const AClassValue: TGocciaClassValue; const AArguments: TGocciaArgumentsCollection; const AContext: TGocciaEvaluationContext): TGocciaValue;
 procedure ValidateClassConstructorReturn(const AClassValue: TGocciaClassValue; const AValue: TGocciaValue);
 
@@ -151,7 +156,7 @@ uses
 procedure RunClassInstanceInitializers(const AClassValue: TGocciaClassValue;
   const AInstance: TGocciaObjectValue;
   const AContext: TGocciaEvaluationContext;
-  const APreserveExistingRawPrivateSlots: Boolean); forward;
+  const AInitializationMode: TGocciaInstanceInitializationMode); forward;
 
 const
   FOR_IN_ENTRY_OWNER = '__gocciaForInOwner';
@@ -827,11 +832,11 @@ var
     ValidateClassConstructorReturn(ClassConstructor, Result);
     if Result is TGocciaObjectValue then
       RunClassInstanceInitializers(ClassConstructor,
-        TGocciaObjectValue(Result), AContext, False)
+        TGocciaObjectValue(Result), AContext, iimFirstPass)
     else if AReceiver is TGocciaObjectValue then
     begin
       RunClassInstanceInitializers(ClassConstructor,
-        TGocciaObjectValue(AReceiver), AContext, False);
+        TGocciaObjectValue(AReceiver), AContext, iimFirstPass);
       Result := AReceiver;
     end;
   end;
@@ -881,7 +886,7 @@ begin
     begin
       if AReceiver is TGocciaObjectValue then
         RunClassInstanceInitializers(ClassConstructor,
-          TGocciaObjectValue(AReceiver), AContext, False);
+          TGocciaObjectValue(AReceiver), AContext, iimFirstPass);
       SuperResult := ClassConstructor.ConstructorMethod.CallWithThisValue(
         AArguments, AReceiver, ConstructorThisValue, EffectiveNewTarget);
       ValidateClassConstructorReturn(ClassConstructor, SuperResult);
@@ -892,7 +897,7 @@ begin
          (SuperResult <> AReceiver) and
          (SuperResult = ConstructorThisValue) then
         RunClassInstanceInitializers(ClassConstructor,
-          TGocciaObjectValue(SuperResult), AContext, False);
+          TGocciaObjectValue(SuperResult), AContext, iimFirstPass);
     end
     else
       SuperResult := InvokeImplicitClassConstructor;
@@ -933,7 +938,7 @@ var
     NewTargetValue := AContext.Scope.FindNewTarget;
     if NewTargetValue is TGocciaClassValue then
       RunClassInstanceInitializers(TGocciaClassValue(NewTargetValue),
-        AReplacement, AContext, False);
+        AReplacement, AContext, iimEagerReplacement);
   end;
 begin
   CheckExecutionTimeout;
@@ -4005,7 +4010,7 @@ procedure InitializeRawPrivateInstanceProperty(
   const AValue: TGocciaValue; const AAccessClass: TGocciaClassValue;
   const APreserveExisting: Boolean); forward;
 
-procedure InitializeObjectInstanceProperties(const AInstance: TGocciaObjectValue; const AClassValue: TGocciaClassValue; const AContext: TGocciaEvaluationContext; const APreserveExistingRawPrivateSlots: Boolean);
+procedure InitializeObjectInstanceProperties(const AInstance: TGocciaObjectValue; const AClassValue: TGocciaClassValue; const AContext: TGocciaEvaluationContext; const AInitializationMode: TGocciaInstanceInitializationMode);
 var
   PropertyValue: TGocciaValue;
   Entry: TGocciaExpressionMap.TKeyValuePair;
@@ -4022,7 +4027,7 @@ begin
     SuperInitScope.ThisValue := AInstance;
     SuperInitContext.Scope := SuperInitScope;
     InitializeObjectInstanceProperties(AInstance, AClassValue.SuperClass,
-      SuperInitContext, APreserveExistingRawPrivateSlots);
+      SuperInitContext, AInitializationMode);
   end;
 
   if AClassValue.HasPrivateInstanceElements then
@@ -4056,7 +4061,7 @@ begin
         begin
           PropertyValue := EvaluateExpression(Expr, AContext);
           InitializeRawPrivateInstanceProperty(AInstance, FOEntry.Name,
-            PropertyValue, AClassValue, APreserveExistingRawPrivateSlots);
+            PropertyValue, AClassValue, AInitializationMode = iimReplay);
         end;
       end
       else
@@ -4077,7 +4082,8 @@ begin
       PropertyValue := EvaluateExpression(Entry.Value, AContext);
       AInstance.AssignProperty(Entry.Key, PropertyValue);
     end;
-    InitializePrivateInstanceProperties(AInstance, AClassValue, AContext);
+    InitializePrivateInstanceProperties(AInstance, AClassValue, AContext,
+      AInitializationMode);
   end;
 end;
 
@@ -5639,6 +5645,41 @@ begin
   Result := '#slot:' + AAccessClass.PrivateBrandToken + ':' + APrivateName;
 end;
 
+function RawPrivateInitializedKey(const AAccessClass: TGocciaClassValue): string;
+begin
+  Result := '#initialized:' + AAccessClass.PrivateBrandToken;
+end;
+
+function HasRawPrivateInstanceInitializersApplied(
+  const AReceiver: TGocciaObjectValue;
+  const AAccessClass: TGocciaClassValue): Boolean;
+var
+  Descriptor: TGocciaPropertyDescriptor;
+begin
+  Result := False;
+  if not Assigned(AAccessClass) then
+    Exit;
+  Descriptor := AReceiver.GetOwnPropertyDescriptor(
+    RawPrivateInitializedKey(AAccessClass));
+  Result := Descriptor is TGocciaPropertyDescriptorData;
+end;
+
+procedure StampRawPrivateInstanceInitializersApplied(
+  const AReceiver: TGocciaObjectValue;
+  const AAccessClass: TGocciaClassValue);
+begin
+  if not Assigned(AAccessClass) then
+    Exit;
+  if not AAccessClass.HasInstanceInitializerWork then
+    Exit;
+  if HasRawPrivateInstanceInitializersApplied(AReceiver, AAccessClass) then
+    Exit;
+  AReceiver.DefineProperty(
+    RawPrivateInitializedKey(AAccessClass),
+    TGocciaPropertyDescriptorData.Create(
+      TGocciaBooleanLiteralValue.TrueValue, []));
+end;
+
 function HasRawPrivateInstanceBrand(const AReceiver: TGocciaObjectValue;
   const AAccessClass: TGocciaClassValue): Boolean;
 var
@@ -6188,7 +6229,7 @@ begin
       AContext);
 end;
 
-procedure InitializePrivateInstanceProperties(const AInstance: TGocciaObjectValue; const AClassValue: TGocciaClassValue; const AContext: TGocciaEvaluationContext);
+procedure InitializePrivateInstanceProperties(const AInstance: TGocciaObjectValue; const AClassValue: TGocciaClassValue; const AContext: TGocciaEvaluationContext; const AInitializationMode: TGocciaInstanceInitializationMode);
 var
   PropertyValue: TGocciaValue;
   Entry: TGocciaExpressionMap.TKeyValuePair;
@@ -6203,14 +6244,15 @@ begin
         Entry.Key, PropertyValue, AClassValue)
     else
       InitializeRawPrivateInstanceProperty(
-        AInstance, Entry.Key, PropertyValue, AClassValue, False);
+        AInstance, Entry.Key, PropertyValue, AClassValue,
+        AInitializationMode = iimReplay);
   end;
 end;
 
 procedure RunClassInstanceInitializers(const AClassValue: TGocciaClassValue;
   const AInstance: TGocciaObjectValue;
   const AContext: TGocciaEvaluationContext;
-  const APreserveExistingRawPrivateSlots: Boolean);
+  const AInitializationMode: TGocciaInstanceInitializationMode);
 var
   InitContext, SuperInitContext: TGocciaEvaluationContext;
   InitScope, SuperInitScope: TGocciaScope;
@@ -6239,20 +6281,24 @@ begin
         SuperInitContext.Scope := SuperInitScope;
         if WalkClass.FieldOrderCount = 0 then
           InitializePrivateInstanceProperties(
-            AInstance, WalkClass, SuperInitContext);
+            AInstance, WalkClass, SuperInitContext, AInitializationMode);
         WalkClass := WalkClass.SuperClass;
       end;
 
-      InitializePrivateInstanceProperties(AInstance, AClassValue, InitContext);
+      InitializePrivateInstanceProperties(AInstance, AClassValue, InitContext,
+        AInitializationMode);
     end;
   end
   else
     InitializeObjectInstanceProperties(AInstance, AClassValue, InitContext,
-      APreserveExistingRawPrivateSlots);
+      AInitializationMode);
 
   AClassValue.RunMethodInitializers(AInstance);
   AClassValue.RunFieldInitializers(AInstance);
   AClassValue.RunDecoratorFieldInitializers(AInstance);
+  if (AInitializationMode = iimEagerReplacement) and
+     (not (AInstance is TGocciaInstanceValue)) then
+    StampRawPrivateInstanceInitializersApplied(AInstance, AClassValue);
 end;
 
 function InstantiateClass(const AClassValue: TGocciaClassValue;
@@ -6357,10 +6403,10 @@ var
     end;
   end;
   procedure RunInstanceInitializers(
-    const APreserveExistingRawPrivateSlots: Boolean);
+    const AInitializationMode: TGocciaInstanceInitializationMode);
   begin
     RunClassInstanceInitializers(AClassValue, Instance, AContext,
-      APreserveExistingRawPrivateSlots);
+      AInitializationMode);
   end;
 begin
   CheckExecutionTimeout;
@@ -6401,7 +6447,7 @@ begin
   InitializerReplayReceiver := nil;
   TGarbageCollector.Instance.AddTempRoot(RootedInstance);
   try
-    RunInstanceInitializers(False);
+    RunInstanceInitializers(iimFirstPass);
 
     if Assigned(AClassValue.ConstructorMethod) then
     begin
@@ -6431,8 +6477,9 @@ begin
       TGocciaInstanceValue(NativeInstance).InitializeNativeFromArguments(AArguments);
 
     if Assigned(InitializerReplayReceiver) and
-       (Instance = InitializerReplayReceiver) then
-      RunInstanceInitializers(True);
+       (Instance = InitializerReplayReceiver) and
+       not HasRawPrivateInstanceInitializersApplied(Instance, AClassValue) then
+      RunInstanceInitializers(iimReplay);
   finally
     TGarbageCollector.Instance.RemoveTempRoot(RootedInstance);
   end;
