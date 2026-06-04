@@ -147,6 +147,45 @@ describe("TypedArray constructors", () => {
   });
 
   describe("new TypedArray(iterable)", () => {
+    test("Reflect.construct resolves newTarget prototype before reading iterable source", () => {
+      const events = [];
+      class NewTargetBase {}
+      const NewTarget = new Proxy(NewTargetBase, {
+        get(target, property) {
+          if (property === "prototype") {
+            events.push("prototype");
+            throw new Error("prototype");
+          }
+          return target[property];
+        },
+      });
+      const iterable = {
+        [Symbol.iterator]() {
+          events.push("iterator");
+          return [][Symbol.iterator]();
+        },
+      };
+
+      expect(() => Reflect.construct(Int8Array, [iterable], NewTarget)).toThrow(Error);
+      expect(events).toEqual(["prototype"]);
+    });
+
+    test("Reflect.construct falls back to typed array prototype for non-object newTarget prototype", () => {
+      const NewTargetBase = (class {}).bind(null);
+      const NewTarget = new Proxy(NewTargetBase, {
+        get(target, property) {
+          if (property === "prototype") {
+            return 1;
+          }
+          return target[property];
+        },
+      });
+
+      const typedArray = Reflect.construct(Int8Array, [2], NewTarget);
+
+      expect(Object.getPrototypeOf(typedArray)).toBe(Int8Array.prototype);
+    });
+
     test("construct from custom iterable", () => {
       const iterable = { [Symbol.iterator]() { let i = 0; const vals = [10, 20, 30]; return { next() { return i < vals.length ? { value: vals[i++], done: false } : { done: true }; } }; } };
       const ta = new Int32Array(iterable);

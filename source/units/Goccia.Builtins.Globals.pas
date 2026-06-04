@@ -360,16 +360,20 @@ begin
   AScope.DefineLexicalBinding(DOM_EXCEPTION_NAME, DOMExceptionConstructorFunc, dtConst, True);
 
   AScope.DefineLexicalBinding('encodeURI',
-    TGocciaNativeFunctionValue.Create(EncodeURICallback, 'encodeURI', 1), dtConst, True);
+    TGocciaNativeFunctionValue.CreateWithoutPrototype(
+      EncodeURICallback, 'encodeURI', 1), dtConst, True);
 
   AScope.DefineLexicalBinding('decodeURI',
-    TGocciaNativeFunctionValue.Create(DecodeURICallback, 'decodeURI', 1), dtConst, True);
+    TGocciaNativeFunctionValue.CreateWithoutPrototype(
+      DecodeURICallback, 'decodeURI', 1), dtConst, True);
 
   AScope.DefineLexicalBinding('encodeURIComponent',
-    TGocciaNativeFunctionValue.Create(EncodeURIComponentCallback, 'encodeURIComponent', 1), dtConst, True);
+    TGocciaNativeFunctionValue.CreateWithoutPrototype(
+      EncodeURIComponentCallback, 'encodeURIComponent', 1), dtConst, True);
 
   AScope.DefineLexicalBinding('decodeURIComponent',
-    TGocciaNativeFunctionValue.Create(DecodeURIComponentCallback, 'decodeURIComponent', 1), dtConst, True);
+    TGocciaNativeFunctionValue.CreateWithoutPrototype(
+      DecodeURIComponentCallback, 'decodeURIComponent', 1), dtConst, True);
 end;
 
 procedure TGocciaGlobals.RegisterUtilityRuntimeGlobals;

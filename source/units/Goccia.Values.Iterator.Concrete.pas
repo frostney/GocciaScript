@@ -107,19 +107,47 @@ uses
 
   TextSemantics,
 
+  Goccia.Realm,
   Goccia.Values.ArrayValue,
   Goccia.Values.HeadersValue,
   Goccia.Values.HoleValue,
   Goccia.Values.MapValue,
+  Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SetValue,
+  Goccia.Values.SymbolValue,
   Goccia.Values.ToObject,
   Goccia.Values.URLSearchParamsValue;
+
+var
+  GArrayIteratorPrototypeSlot: TGocciaRealmSlotId;
+
+function GetSharedArrayIteratorPrototype: TGocciaObjectValue; inline;
+begin
+  if Assigned(CurrentRealm) then
+    Result := TGocciaObjectValue(CurrentRealm.GetSlot(GArrayIteratorPrototypeSlot))
+  else
+    Result := nil;
+end;
 
 { TGocciaArrayIteratorValue }
 
 constructor TGocciaArrayIteratorValue.Create(const ASource: TGocciaValue; const AKind: TGocciaArrayIteratorKind);
+var
+  SharedPrototype: TGocciaObjectValue;
 begin
   inherited Create;
+  SharedPrototype := GetSharedArrayIteratorPrototype;
+  if (not Assigned(SharedPrototype)) and Assigned(CurrentRealm) then
+  begin
+    SharedPrototype := TGocciaObjectValue.Create(FPrototype);
+    SharedPrototype.DefineSymbolProperty(
+      TGocciaSymbolValue.WellKnownToStringTag,
+      TGocciaPropertyDescriptorData.Create(
+        TGocciaStringLiteralValue.Create('Array Iterator'), [pfConfigurable]));
+    CurrentRealm.SetSlot(GArrayIteratorPrototypeSlot, SharedPrototype);
+  end;
+  if Assigned(SharedPrototype) then
+    FPrototype := SharedPrototype;
   FSource := ASource;
   FIndex := 0;
   FKind := AKind;
@@ -707,5 +735,8 @@ begin
   if Assigned(FSource) then
     FSource.MarkReferences;
 end;
+
+initialization
+  GArrayIteratorPrototypeSlot := RegisterRealmSlot('ArrayIterator.prototype');
 
 end.

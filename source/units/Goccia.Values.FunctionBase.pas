@@ -631,6 +631,10 @@ begin
   if Assigned(CurrentRealm) then
     CurrentRealm.SetSlot(GFunctionPrototypeSlot, Self);
   try
+    DefineProperty(PROP_LENGTH, TGocciaPropertyDescriptorData.Create(
+      TGocciaNumberLiteralValue.ZeroValue, [pfConfigurable]));
+    DefineProperty(PROP_NAME, TGocciaPropertyDescriptorData.Create(
+      TGocciaStringLiteralValue.Create(''), [pfConfigurable]));
     Members[0] := DefineNamedMethod('call', FunctionCall, 1);
     Members[1] := DefineNamedMethod('apply', FunctionApply, 2);
     Members[2] := DefineNamedMethod('bind', FunctionBind, 1);

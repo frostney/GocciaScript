@@ -1080,6 +1080,10 @@ begin
   else
     GlobalThisObj := TGocciaObjectValue.Create;
 
+  if (not Assigned(GlobalThisObj.Prototype)) and
+     Assigned(TGocciaObjectValue.SharedObjectPrototype) then
+    GlobalThisObj.Prototype := TGocciaObjectValue.SharedObjectPrototype;
+
   for Name in Scope.GetOwnBindingNames do
   begin
     // ES2026 §19.1: Value properties (NaN, Infinity, undefined) are

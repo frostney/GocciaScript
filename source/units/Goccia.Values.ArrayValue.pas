@@ -48,6 +48,8 @@ type
     function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; override;
     procedure SetProperty(const AName: string; const AValue: TGocciaValue); override;
     function HasOwnProperty(const AName: string): Boolean; override;
+    function GetOwnPropertyKeys: TArray<string>; override;
+    function GetAllPropertyNames: TArray<string>; override;
     function GetOwnPropertyDescriptor(const AName: string): TGocciaPropertyDescriptor; override;
     procedure DefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor); override;
     function TryDefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor): Boolean; override;
@@ -3204,6 +3206,47 @@ begin
     Result := True
   else
     Result := inherited HasOwnProperty(AName);
+end;
+
+function TGocciaArrayValue.GetOwnPropertyKeys: TArray<string>;
+var
+  Keys: TArray<string>;
+  Count, I, J: Integer;
+  Key: string;
+begin
+  Keys := inherited GetOwnPropertyKeys;
+  Count := 0;
+  SetLength(Result, FElements.Count + Length(Keys));
+
+  for I := 0 to FElements.Count - 1 do
+    if not IsArrayHole(FElements[I]) then
+    begin
+      Result[Count] := IntToStr(I);
+      Inc(Count);
+    end;
+
+  for I := 0 to Length(Keys) - 1 do
+  begin
+    Key := Keys[I];
+    for J := 0 to Count - 1 do
+      if Result[J] = Key then
+      begin
+        Key := '';
+        Break;
+      end;
+    if Key <> '' then
+    begin
+      Result[Count] := Key;
+      Inc(Count);
+    end;
+  end;
+
+  SetLength(Result, Count);
+end;
+
+function TGocciaArrayValue.GetAllPropertyNames: TArray<string>;
+begin
+  Result := GetOwnPropertyKeys;
 end;
 
 function TGocciaArrayValue.GetOwnPropertyDescriptor(const AName: string): TGocciaPropertyDescriptor;

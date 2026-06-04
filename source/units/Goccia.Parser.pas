@@ -119,6 +119,8 @@ type
     function CheckSemicolonOrASI: Boolean;
     function IsIdentifierNameToken(
       const ATokenType: TGocciaTokenType): Boolean;
+    function IsIdentifierBindingToken(
+      const ATokenType: TGocciaTokenType): Boolean;
     function ConsumeModuleExportName(const AMessage: string): TGocciaToken; overload;
     function ConsumeModuleExportName(const AMessage, ASuggestion: string): TGocciaToken; overload;
     function IsReservedKeywordName(const AName: string): Boolean;
@@ -753,6 +755,17 @@ begin
   Result := False;
 end;
 
+function TGocciaParser.IsIdentifierBindingToken(
+  const ATokenType: TGocciaTokenType): Boolean;
+begin
+  case ATokenType of
+    gttIdentifier,
+    gttAs, gttFrom, gttStatic:
+      Exit(True);
+  end;
+  Result := False;
+end;
+
 function TGocciaParser.ConsumeModuleExportName(
   const AMessage: string): TGocciaToken;
 begin
@@ -824,7 +837,8 @@ begin
   if FAutomaticSemicolonInsertion and (Peek.Line < NextToken.Line) then
     Exit(False);
 
-  Result := NextToken.TokenType in [gttIdentifier, gttLeftBrace];
+  Result := IsIdentifierBindingToken(NextToken.TokenType) or
+    (NextToken.TokenType = gttLeftBrace);
 end;
 
 function TGocciaParser.StatementIsDirective(const AStatement: TGocciaStatement;
@@ -870,14 +884,26 @@ end;
 function TGocciaParser.ConsumeIdentifierBinding(
   const AMessage: string): TGocciaToken;
 begin
-  Result := Consume(gttIdentifier, AMessage);
+  if not IsIdentifierBindingToken(Peek.TokenType) then
+    raise TGocciaSyntaxError.Create(AMessage, Peek.Line, Peek.Column,
+      FFileName, FSourceLines);
+  Result := Advance;
   ValidateIdentifierBinding(Result);
 end;
 
 function TGocciaParser.ConsumeIdentifierBinding(const AMessage,
   ASuggestion: string): TGocciaToken;
+var
+  Error: TGocciaSyntaxError;
 begin
-  Result := Consume(gttIdentifier, AMessage, ASuggestion);
+  if not IsIdentifierBindingToken(Peek.TokenType) then
+  begin
+    Error := TGocciaSyntaxError.Create(AMessage, Peek.Line, Peek.Column,
+      FFileName, FSourceLines);
+    Error.Suggestion := ASuggestion;
+    raise Error;
+  end;
+  Result := Advance;
   ValidateIdentifierBinding(Result);
 end;
 
@@ -4773,8 +4799,14 @@ begin
   Condition := Expression;
   Consume(gttRightParen, 'Expected ")" after do-while condition',
     SSuggestCloseParenCondition);
-  ConsumeSemicolonOrASI('Expected ";" after do-while statement',
-    SSuggestAddSemicolon);
+  if Check(gttSemicolon) then
+    Advance
+  else if Check(gttRightBrace) or Check(gttEOF) then
+  begin
+  end
+  else if not FAutomaticSemicolonInsertion then
+    Consume(gttSemicolon, 'Expected ";" after do-while statement',
+      SSuggestAddSemicolon);
 
   Result := TGocciaDoWhileStatement.Create(BodyStmt, Condition, Line, Column);
 end;

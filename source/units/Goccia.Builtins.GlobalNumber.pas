@@ -82,7 +82,7 @@ var
   I, StartPos: Integer;
   C: Char;
   Sign: Integer;
-  ResultValue: Int64;
+  ResultValue: Double;
   ValidChars: string;
 begin
   TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Number.parseInt', ThrowError);
@@ -105,7 +105,18 @@ begin
     if Math.IsNaN(RadixNum) or Math.IsInfinite(RadixNum) then
       Radix := 0
     else
+    begin
+      if RadixNum < 0 then
+        RadixNum := -Floor(Abs(RadixNum))
+      else
+        RadixNum := Floor(RadixNum);
+      RadixNum := FMod(RadixNum, 4294967296.0);
+      if RadixNum < 0 then
+        RadixNum := RadixNum + 4294967296.0;
+      if RadixNum >= 2147483648.0 then
+        RadixNum := RadixNum - 4294967296.0;
       Radix := Trunc(RadixNum);
+    end;
   end
   else
     Radix := 0;
