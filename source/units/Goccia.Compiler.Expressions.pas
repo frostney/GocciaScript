@@ -102,6 +102,8 @@ procedure EmitBindingAssignmentFromRegister(const ACtx: TGocciaCompilationContex
 procedure EmitDestructuring(const ACtx: TGocciaCompilationContext;
   const APattern: TGocciaDestructuringPattern; const ASrcReg: UInt8;
   const AAssignmentMode: Boolean = False);
+procedure EmitDestructuringParameters(const ACtx: TGocciaCompilationContext;
+  const AParams: TGocciaParameterArray);
 procedure CompileDestructuringAssignment(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaDestructuringAssignmentExpression; const ADest: UInt8);
 

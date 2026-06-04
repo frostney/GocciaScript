@@ -3747,8 +3747,14 @@ begin
       if AMethod.Parameters[I].IsRest then
         RestParamIndex := I;
     end;
-    ChildScope.DeclareLocal(AMethod.Parameters[I].Name, False);
+    if AMethod.Parameters[I].IsPattern then
+      ChildScope.DeclareLocal('__param' + IntToStr(I), False)
+    else
+      ChildScope.DeclareLocal(AMethod.Parameters[I].Name, False);
   end;
+  for I := 0 to High(AMethod.Parameters) do
+    if AMethod.Parameters[I].IsPattern and Assigned(AMethod.Parameters[I].Pattern) then
+      CollectDestructuringBindings(AMethod.Parameters[I].Pattern, ChildScope);
   ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, AMethod.Parameters);
   if FormalCount < 0 then
     FormalCount := Length(AMethod.Parameters);
@@ -3774,6 +3780,7 @@ begin
       UInt8(RestParamIndex), 0));
 
   EmitDefaultParameters(ChildCtx, AMethod.Parameters);
+  EmitDestructuringParameters(ChildCtx, AMethod.Parameters);
 
   ACtx.CompileFunctionBody(AMethod.Body);
   ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
@@ -4100,8 +4107,14 @@ begin
       if AMethod.Parameters[I].IsRest then
         RestParamIndex := I;
     end;
-    ChildScope.DeclareLocal(AMethod.Parameters[I].Name, False);
+    if AMethod.Parameters[I].IsPattern then
+      ChildScope.DeclareLocal('__param' + IntToStr(I), False)
+    else
+      ChildScope.DeclareLocal(AMethod.Parameters[I].Name, False);
   end;
+  for I := 0 to High(AMethod.Parameters) do
+    if AMethod.Parameters[I].IsPattern and Assigned(AMethod.Parameters[I].Pattern) then
+      CollectDestructuringBindings(AMethod.Parameters[I].Pattern, ChildScope);
   ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, AMethod.Parameters);
   if FormalCount < 0 then
     FormalCount := Length(AMethod.Parameters);
@@ -4127,6 +4140,7 @@ begin
       UInt8(RestParamIndex), 0));
 
   EmitDefaultParameters(ChildCtx, AMethod.Parameters);
+  EmitDestructuringParameters(ChildCtx, AMethod.Parameters);
 
   ACtx.CompileFunctionBody(AMethod.Body);
   ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
