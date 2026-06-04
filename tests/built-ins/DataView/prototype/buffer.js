@@ -10,6 +10,12 @@ describe("get DataView.prototype.buffer", () => {
     expect(view.buffer).toBe(buffer);
   });
 
+  test("returns the viewed SharedArrayBuffer", () => {
+    const buffer = new SharedArrayBuffer(8);
+    const view = new DataView(buffer, 2, 4);
+    expect(view.buffer).toBe(buffer);
+  });
+
   test("returns a detached viewed buffer", () => {
     const buffer = new ArrayBuffer(8);
     const view = new DataView(buffer);
