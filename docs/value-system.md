@@ -55,7 +55,7 @@ classDiagram
     TGocciaIteratorHelperValue <|-- TGocciaZipKeyedIteratorValue
     TGocciaObjectValue <|-- TGocciaArrayBufferValue
     TGocciaObjectValue <|-- TGocciaSharedArrayBufferValue
-    TGocciaObjectValue <|-- TGocciaDataViewValue
+    TGocciaInstanceValue <|-- TGocciaDataViewValue
     TGocciaObjectValue <|-- TGocciaTypedArrayValue
     TGocciaObjectValue <|-- TGocciaNumberObjectValue
     TGocciaObjectValue <|-- TGocciaStringObjectValue

@@ -47,8 +47,6 @@ type
     constructor Create(const ABuffer: TGocciaSharedArrayBufferValue;
       const AByteOffset: Integer = 0; const AByteLength: Integer = AUTO_BYTE_LENGTH); overload;
 
-    function GetProperty(const AName: string): TGocciaValue; override;
-    function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; override;
     function ToStringTag: string; override;
 
     procedure InitializeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); override;
@@ -425,31 +423,6 @@ begin
     ThrowTypeError(SErrorCannotUseDetachedDataView, SSuggestArrayBufferDetached);
   if IsViewOutOfBounds then
     ThrowRangeError(SErrorInvalidDataViewLength, SSuggestTypedArrayLength);
-end;
-
-function TGocciaDataViewValue.GetProperty(const AName: string): TGocciaValue;
-begin
-  Result := GetPropertyWithContext(AName, Self);
-end;
-
-function TGocciaDataViewValue.GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue;
-begin
-  if AName = PROP_BUFFER then
-    Result := FBufferValue
-  else if AName = PROP_BYTE_LENGTH then
-  begin
-    if IsViewOutOfBounds then
-      ThrowTypeError(SErrorCannotUseDetachedDataView, SSuggestArrayBufferDetached);
-    Result := TGocciaNumberLiteralValue.Create(GetViewByteLength);
-  end
-  else if AName = PROP_BYTE_OFFSET then
-  begin
-    if IsViewOutOfBounds then
-      ThrowTypeError(SErrorCannotUseDetachedDataView, SSuggestArrayBufferDetached);
-    Result := TGocciaNumberLiteralValue.Create(FByteOffset);
-  end
-  else
-    Result := inherited GetPropertyWithContext(AName, AThisContext);
 end;
 
 function TGocciaDataViewValue.ToStringTag: string;

@@ -17,8 +17,21 @@ describe("get DataView.prototype.buffer", () => {
     expect(view.buffer).toBe(buffer);
   });
 
+  test("can be shadowed by an own property", () => {
+    const buffer = new ArrayBuffer(8);
+    const view = new DataView(buffer);
+    Object.defineProperty(view, "buffer", { value: "shadow" });
+    expect(view.buffer).toBe("shadow");
+  });
+
   test("throws TypeError when called on non-DataView", () => {
     const getter = Object.getOwnPropertyDescriptor(DataView.prototype, "buffer").get;
     expect(() => getter.call({})).toThrow(TypeError);
+  });
+
+  test("throws TypeError when inherited from a DataView", () => {
+    const view = new DataView(new ArrayBuffer(8));
+    const child = Object.create(view);
+    expect(() => child.buffer).toThrow(TypeError);
   });
 });

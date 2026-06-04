@@ -16,6 +16,12 @@ describe("get DataView.prototype.byteLength", () => {
     expect(view.byteLength).toBe(9);
   });
 
+  test("can be shadowed by an own property", () => {
+    const view = new DataView(new ArrayBuffer(8), 2, 4);
+    Object.defineProperty(view, "byteLength", { value: 99 });
+    expect(view.byteLength).toBe(99);
+  });
+
   test("throws TypeError for detached buffer", () => {
     const buffer = new ArrayBuffer(8);
     const view = new DataView(buffer);
@@ -28,5 +34,11 @@ describe("get DataView.prototype.byteLength", () => {
     const view = new DataView(buffer, 4, 4);
     buffer.resize(6);
     expect(() => view.byteLength).toThrow(TypeError);
+  });
+
+  test("throws TypeError when inherited from a DataView", () => {
+    const view = new DataView(new ArrayBuffer(8));
+    const child = Object.create(view);
+    expect(() => child.byteLength).toThrow(TypeError);
   });
 });
