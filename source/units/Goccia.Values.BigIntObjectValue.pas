@@ -51,7 +51,10 @@ var
 begin
   inherited Create(AClass);
   FPrimitive := APrimitive;
-  InitializePrototype;
+  if APrimitive is TGocciaBigIntValue then
+    TGocciaBigIntValue(APrimitive).InitializePrototype
+  else
+    TGocciaBigIntValue.BigIntZero.InitializePrototype;
   SharedPrototype := TGocciaObjectValue(TGocciaBigIntValue.SharedPrototype);
   if not Assigned(AClass) and Assigned(SharedPrototype) then
     FPrototype := SharedPrototype;
@@ -75,7 +78,8 @@ begin
     Exit;
 
   if Assigned(TGocciaBigIntValue.SharedPrototype) then
-    Result := TGocciaObjectValue(TGocciaBigIntValue.SharedPrototype).GetPropertyWithContext(AName, AThisContext);
+    Result := TGocciaObjectValue(TGocciaBigIntValue.SharedPrototype)
+      .GetPropertyWithContext(AName, AThisContext);
 end;
 
 class function TGocciaBigIntObjectValue.GetSharedPrototype: TGocciaObjectValue;

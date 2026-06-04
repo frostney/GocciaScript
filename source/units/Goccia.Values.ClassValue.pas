@@ -107,6 +107,7 @@ type
     function Instantiate(const AArguments: TGocciaArgumentsCollection;
       const ANewTarget: TGocciaValue = nil): TGocciaValue; virtual;
     function EstimatedInstancePropertyCapacity: Integer;
+    function HasInstanceInitializerWork: Boolean;
     // ECMAScript: number of expected constructor parameters before the first
     // default/rest. Built-in classes default to 0; user classes derive from
     // their constructor method's formal parameters.
@@ -221,6 +222,12 @@ type
     function GetClassLength: Integer; override;
   end;
 
+  TGocciaDataViewClassValue = class(TGocciaClassValue)
+    function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
+    // ECMAScript 25.3.2.1: DataView constructor length is 1.
+    function GetClassLength: Integer; override;
+  end;
+
   TGocciaTextEncoderClassValue = class(TGocciaClassValue)
     function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
   end;
@@ -311,6 +318,7 @@ uses
   Goccia.Values.ArrayValue,
   Goccia.Values.AutoAccessor,
   Goccia.Values.ClassHelper,
+  Goccia.Values.DataViewValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FinalizationRegistryValue,
   Goccia.Values.HeadersValue,
@@ -1100,6 +1108,23 @@ begin
   end;
 end;
 
+function TGocciaClassValue.HasInstanceInitializerWork: Boolean;
+var
+  I: Integer;
+begin
+  if HasPrivateInstanceElements or
+     (Length(FFieldOrder) > 0) or
+     (Length(FMethodInitializers) > 0) or
+     (Length(FFieldInitializers) > 0) then
+    Exit(True);
+
+  for I := 0 to High(FDecoratorFieldInitializers) do
+    if not FDecoratorFieldInitializers[I].IsStatic then
+      Exit(True);
+
+  Result := False;
+end;
+
 // ES2026 §10.2.2 [[Construct]](argumentsList, newTarget)
 function TGocciaClassValue.Instantiate(const AArguments: TGocciaArgumentsCollection;
   const ANewTarget: TGocciaValue): TGocciaValue;
@@ -1471,6 +1496,18 @@ begin
 end;
 
 function TGocciaSharedArrayBufferClassValue.GetClassLength: Integer;
+begin
+  Result := 1;
+end;
+
+{ TGocciaDataViewClassValue }
+
+function TGocciaDataViewClassValue.CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue;
+begin
+  Result := TGocciaDataViewValue.Create(TGocciaClassValue(nil));
+end;
+
+function TGocciaDataViewClassValue.GetClassLength: Integer;
 begin
   Result := 1;
 end;

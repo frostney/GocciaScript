@@ -69,4 +69,11 @@ describe.runIf(isIntl)("Array.prototype.toLocaleString Intl elements", () => {
 
     expect([1234.5].toLocaleString("de-DE", options)).toBe(expected);
   });
+
+  test("formats BigInt elements through BigInt.prototype.toLocaleString", () => {
+    const options = { style: "currency", currency: "EUR" };
+    const expected = new Intl.NumberFormat("de-DE", options).format(1234n);
+
+    expect([1234n].toLocaleString("de-DE", options)).toBe(expected);
+  });
 });

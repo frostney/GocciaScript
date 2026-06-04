@@ -62,6 +62,17 @@ describe.runIf(isIntl)("Intl.NumberFormat.prototype.format", () => {
     expect(result.includes("$")).toBe(true);
   });
 
+  test("format accepts BigInt values without losing precision", () => {
+    const value = 123456789012345678901234567890n;
+
+    expect(new Intl.NumberFormat("en-US", { useGrouping: false }).format(value)).toBe(
+      "123456789012345678901234567890"
+    );
+    expect(new Intl.NumberFormat("de-DE").format(value)).toBe(
+      "123.456.789.012.345.678.901.234.567.890"
+    );
+  });
+
   test("percent format produces a string containing the percent sign", () => {
     const nf = new Intl.NumberFormat("en-US", { style: "percent" });
     const result = nf.format(0.75);

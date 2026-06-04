@@ -11,6 +11,10 @@ describe("ArrayBuffer.isView", () => {
     expect(ArrayBuffer.isView(new Float64Array(1))).toBe(true);
   });
 
+  test("returns true for DataView", () => {
+    expect(ArrayBuffer.isView(new DataView(new ArrayBuffer(1)))).toBe(true);
+  });
+
   test("returns false for ArrayBuffer", () => {
     const buf = new ArrayBuffer(8);
     expect(ArrayBuffer.isView(buf)).toBe(false);

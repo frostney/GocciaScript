@@ -1,14 +1,14 @@
 # Binary Data Built-ins
 
-*ArrayBuffer, SharedArrayBuffer, and TypedArray API reference.*
+*ArrayBuffer, SharedArrayBuffer, DataView, and TypedArray API reference.*
 
 ## Executive Summary
 
 - **ArrayBuffer** — raw binary data buffers with fixed-length and resizable modes, transfer semantics, and detachment
 - **SharedArrayBuffer** — fixed-length binary buffer with the same API shape as ArrayBuffer but as a distinct type
+- **DataView** — endian-aware typed reads and writes over ArrayBuffer and SharedArrayBuffer storage
 - **TypedArrays** — array-like views over buffer data with 12 element types (Int8 through Float64, BigInt64, BigUint64)
 - **Uint8Array encoding** — Base64 and hex encoding/decoding
-- **Not supported** — `DataView`
 
 ## ArrayBuffer (`Goccia.Builtins.GlobalArrayBuffer.pas`, `Goccia.Values.ArrayBufferValue.pas`)
 
@@ -23,6 +23,12 @@ Internally backed by a zero-initialized `TBytes` array. ArrayBuffer instances ar
 Implements the [ECMAScript SharedArrayBuffer](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/SharedArrayBuffer). See [MDN SharedArrayBuffer reference](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/SharedArrayBuffer) for the full API.
 
 **Full standard compliance.** In GocciaScript, `SharedArrayBuffer` has the same API as `ArrayBuffer` but is a distinct type (not an instance of `ArrayBuffer`). SharedArrayBuffer instances are cloneable via `structuredClone`.
+
+## DataView (`Goccia.Values.DataViewValue.pas`)
+
+Implements the [ECMAScript DataView](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/DataView). DataView instances provide endian-aware typed reads and writes over `ArrayBuffer` and `SharedArrayBuffer` storage.
+
+**Full standard compliance** — includes integer, BigInt, Float16, Float32, and Float64 getters and setters, `buffer`, `byteLength`, `byteOffset`, and detached/out-of-bounds buffer checks. Auto-length views over resizable `ArrayBuffer` instances track the current buffer length.
 
 ## TypedArrays (`Goccia.Values.TypedArrayValue.pas`)
 
@@ -46,8 +52,6 @@ Implements the [ECMAScript TypedArray](https://developer.mozilla.org/en-US/docs/
 | `Float64Array` | 8 bytes | IEEE 754 double-precision |
 | `BigInt64Array` | 8 bytes | -2⁶³ to 2⁶³-1 (BigInt) |
 | `BigUint64Array` | 8 bytes | 0 to 2⁶⁴-1 (BigInt) |
-
-**Not supported:** `DataView`.
 
 **Value encoding:** Integer types use fixed-width truncation (overflow wraps). `Uint8ClampedArray` clamps to [0, 255] with half-to-even rounding. `Float16Array` rounds to IEEE 754 half precision (max finite ±65504, epsilon 2⁻¹⁰ at 1.0). `Float32Array` rounds to IEEE 754 single precision. `Float64Array` preserves full double precision. NaN is stored as 0 in integer types and as NaN in float types.
 
