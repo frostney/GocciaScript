@@ -828,6 +828,9 @@ jobs:
       - name: Check app-specific CLI features
         run: bun run scripts/test-cli-apps.ts
 
+      - name: Check embedded resource CLI behaviour
+        run: bun run scripts/test-cli-embedded-resources.ts
+
       - name: Check Windows TLS dependencies
         if: runner.os == 'Windows'
         shell: pwsh

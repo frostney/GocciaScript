@@ -267,6 +267,9 @@ jobs:
       - name: Check app-specific CLI features
         run: bun run scripts/test-cli-apps.ts
 
+      - name: Check embedded resource CLI behaviour
+        run: bun run scripts/test-cli-embedded-resources.ts
+
   test262:
     needs: build
     runs-on: ubuntu-latest
