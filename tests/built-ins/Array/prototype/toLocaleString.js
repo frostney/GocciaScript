@@ -46,6 +46,20 @@ describe("Array.prototype.toLocaleString", () => {
       Array.prototype.join = originalJoin;
     }
   });
+
+  test("rejects nullish receivers", () => {
+    const toLocaleString = Array.prototype.toLocaleString;
+
+    expect(() => toLocaleString.call(null)).toThrow(TypeError);
+    expect(() => toLocaleString.call(undefined)).toThrow(TypeError);
+    expect(() => toLocaleString()).toThrow(TypeError);
+  });
+
+  test("works with generic array-like receivers", () => {
+    const receiver = { 0: 1, 1: null, 2: "x", length: 3 };
+
+    expect(Array.prototype.toLocaleString.call(receiver)).toBe("1,,x");
+  });
 });
 
 describe.runIf(isIntl)("Array.prototype.toLocaleString Intl elements", () => {

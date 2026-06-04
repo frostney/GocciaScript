@@ -53,4 +53,18 @@ describe('Object.prototype.valueOf', () => {
     const child = Object.create(parent);
     expect(child.valueOf()).toBe(child);
   });
+
+  test('rejects nullish receivers', () => {
+    const valueOf = Object.prototype.valueOf;
+
+    expect(() => valueOf.call(null)).toThrow(TypeError);
+    expect(() => valueOf.call(undefined)).toThrow(TypeError);
+    expect(() => valueOf()).toThrow(TypeError);
+  });
+
+  test('boxes primitive receivers', () => {
+    expect(Object.prototype.valueOf.call(1).toString()).toBe('1');
+    expect(Object.prototype.valueOf.call(true).toString()).toBe('true');
+    expect(Object.prototype.valueOf.call('x').toString()).toBe('x');
+  });
 });
