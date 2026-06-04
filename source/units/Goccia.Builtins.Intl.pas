@@ -798,16 +798,17 @@ end;
 function TGocciaIntlBuiltin.NumberFormatConstructorFn(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
-  Locale: string;
-  Options: TGocciaObjectValue;
+  LocalesArg, OptionsArg: TGocciaValue;
 begin
-  Locale := '';
   if AArgs.Length >= 1 then
-    Locale := AArgs.GetElement(0).ToStringLiteral.Value;
-  Options := nil;
-  if (AArgs.Length >= 2) and (AArgs.GetElement(1) is TGocciaObjectValue) then
-    Options := TGocciaObjectValue(AArgs.GetElement(1));
-  Result := TGocciaIntlNumberFormatValue.Create(Locale, Options);
+    LocalesArg := AArgs.GetElement(0)
+  else
+    LocalesArg := nil;
+  if AArgs.Length >= 2 then
+    OptionsArg := AArgs.GetElement(1)
+  else
+    OptionsArg := nil;
+  Result := TGocciaIntlNumberFormatValue.CreateFromArguments(LocalesArg, OptionsArg);
 end;
 
 procedure TGocciaIntlBuiltin.RegisterNumberFormat;

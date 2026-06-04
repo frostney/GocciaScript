@@ -24,7 +24,11 @@ function TryICUCompareStrings(const ALocale: string; const AStr1, AStr2: Unicode
 
 function TryICUFormatNumber(const ALocale: string; AValue: Double;
   const AOptions: TIntlNumberFormatOptions; out AFormatted: string): Boolean;
+function TryICUFormatNumberDecimal(const ALocale, AValue: string;
+  const AOptions: TIntlNumberFormatOptions; out AFormatted: string): Boolean;
 function TryICUFormatNumberToParts(const ALocale: string; AValue: Double;
+  const AOptions: TIntlNumberFormatOptions; out AParts: TIntlFormatPartArray): Boolean;
+function TryICUFormatNumberDecimalToParts(const ALocale, AValue: string;
   const AOptions: TIntlNumberFormatOptions; out AParts: TIntlFormatPartArray): Boolean;
 function TryICUFormatNumberRange(const ALocale: string; AStartValue, AEndValue: Double;
   const AOptions: TIntlNumberFormatOptions; out AFormatted: string): Boolean;
@@ -305,6 +309,8 @@ type
   TUnumfOpenResult = function(var AStatus: TICUErrorCode): Pointer; cdecl;
   TUnumfFormatDouble = procedure(AFormatter: Pointer; AValue: Double;
     AResult: Pointer; var AStatus: TICUErrorCode); cdecl;
+  TUnumfFormatDecimal = procedure(AFormatter: Pointer; const AValue: PAnsiChar;
+    AValueLength: LongInt; AResult: Pointer; var AStatus: TICUErrorCode); cdecl;
   TUnumfResultToString = function(AResult: Pointer; ABuffer: PUChar;
     ABufferCapacity: LongInt; var AStatus: TICUErrorCode): LongInt; cdecl;
   TUnumfResultAsValue = function(AResult: Pointer;
@@ -463,6 +469,7 @@ type
     UnumfOpenForSkeletonAndLocale: TUnumfOpenForSkeletonAndLocale;
     UnumfOpenResult: TUnumfOpenResult;
     UnumfFormatDouble: TUnumfFormatDouble;
+    UnumfFormatDecimal: TUnumfFormatDecimal;
     UnumfResultToString: TUnumfResultToString;
     UnumfResultAsValue: TUnumfResultAsValue;
     UnumfClose: TUnumfClose;
@@ -677,6 +684,8 @@ begin
   if Assigned(S) then F.UnumfOpenResult := TUnumfOpenResult(S);
   S := ResolveSymbol(AHandle, 'unumf_formatDouble');
   if Assigned(S) then F.UnumfFormatDouble := TUnumfFormatDouble(S);
+  S := ResolveSymbol(AHandle, 'unumf_formatDecimal');
+  if Assigned(S) then F.UnumfFormatDecimal := TUnumfFormatDecimal(S);
   S := ResolveSymbol(AHandle, 'unumf_resultToString');
   if Assigned(S) then F.UnumfResultToString := TUnumfResultToString(S);
   S := ResolveSymbol(AHandle, 'unumf_resultAsValue');
@@ -2099,6 +2108,66 @@ begin
   end;
 end;
 
+function TryICUFormatNumberDecimalSkeleton(const ALocale, AValue: string;
+  const AOptions: TIntlNumberFormatOptions; out AFormatted: string): Boolean;
+var
+  Status: TICUErrorCode;
+  Formatter, FormatResult: Pointer;
+  Skeleton: UnicodeString;
+  LocaleAnsi, ValueAnsi: AnsiString;
+  Buffer: array[0..FORMAT_BUFFER_CAPACITY - 1] of WideChar;
+  ResultLen: LongInt;
+begin
+  Result := False;
+  AFormatted := '';
+
+  if not EnsureLoaded or
+     not Assigned(IntlFunctions.UnumfOpenForSkeletonAndLocale) or
+     not Assigned(IntlFunctions.UnumfOpenResult) or
+     not Assigned(IntlFunctions.UnumfFormatDecimal) or
+     not Assigned(IntlFunctions.UnumfResultToString) or
+     not Assigned(IntlFunctions.UnumfClose) or
+     not Assigned(IntlFunctions.UnumfCloseResult) then
+    Exit;
+
+  Skeleton := UnicodeString(BuildNumberSkeleton(AOptions));
+  LocaleAnsi := AnsiString(ALocale);
+  ValueAnsi := AnsiString(AValue);
+  Status := ICU_SUCCESS;
+  Formatter := IntlFunctions.UnumfOpenForSkeletonAndLocale(PWideChar(Skeleton),
+    Length(Skeleton), PAnsiChar(LocaleAnsi), Status);
+  if not ICUSucceeded(Status) or not Assigned(Formatter) then
+    Exit;
+
+  try
+    Status := ICU_SUCCESS;
+    FormatResult := IntlFunctions.UnumfOpenResult(Status);
+    if not ICUSucceeded(Status) or not Assigned(FormatResult) then
+      Exit;
+    try
+      Status := ICU_SUCCESS;
+      IntlFunctions.UnumfFormatDecimal(Formatter, PAnsiChar(ValueAnsi),
+        Length(ValueAnsi), FormatResult, Status);
+      if not ICUSucceeded(Status) then
+        Exit;
+
+      FillChar(Buffer, SizeOf(Buffer), 0);
+      Status := ICU_SUCCESS;
+      ResultLen := IntlFunctions.UnumfResultToString(FormatResult,
+        @Buffer[0], FORMAT_BUFFER_CAPACITY, Status);
+      if not ICUSucceeded(Status) or (ResultLen <= 0) then
+        Exit;
+
+      AFormatted := UnicodeToString(Buffer, ResultLen);
+      Result := True;
+    finally
+      IntlFunctions.UnumfCloseResult(FormatResult);
+    end;
+  finally
+    IntlFunctions.UnumfClose(Formatter);
+  end;
+end;
+
 function TryICUFormatNumberDirect(const ALocale: string; AValue: Double;
   const AOptions: TIntlNumberFormatOptions; out AFormatted: string): Boolean;
 var
@@ -2153,6 +2222,13 @@ begin
     TryICUFormatNumberDirect(ALocale, AValue, AOptions, AFormatted);
 end;
 
+function TryICUFormatNumberDecimal(const ALocale, AValue: string;
+  const AOptions: TIntlNumberFormatOptions; out AFormatted: string): Boolean;
+begin
+  Result := TryICUFormatNumberDecimalSkeleton(ALocale, AValue, AOptions,
+    AFormatted);
+end;
+
 function TryICUFormatNumberToPartsSkeleton(const ALocale: string; AValue: Double;
   const AOptions: TIntlNumberFormatOptions; out AParts: TIntlFormatPartArray): Boolean;
 var
@@ -2190,6 +2266,63 @@ begin
     try
       Status := ICU_SUCCESS;
       IntlFunctions.UnumfFormatDouble(Formatter, AValue, FormatResult, Status);
+      if not ICUSucceeded(Status) then
+        Exit;
+
+      Status := ICU_SUCCESS;
+      FormattedValue := IntlFunctions.UnumfResultAsValue(FormatResult, Status);
+      if not ICUSucceeded(Status) or not Assigned(FormattedValue) then
+        Exit;
+
+      Result := FormattedValueToParts(FormattedValue, UFIELD_CATEGORY_NUMBER,
+        0, NumberFieldToPartType, Formatted, AParts);
+    finally
+      IntlFunctions.UnumfCloseResult(FormatResult);
+    end;
+  finally
+    IntlFunctions.UnumfClose(Formatter);
+  end;
+end;
+
+function TryICUFormatNumberDecimalToPartsSkeleton(const ALocale, AValue: string;
+  const AOptions: TIntlNumberFormatOptions; out AParts: TIntlFormatPartArray): Boolean;
+var
+  Status: TICUErrorCode;
+  Formatter, FormatResult, FormattedValue: Pointer;
+  Skeleton: UnicodeString;
+  LocaleAnsi, ValueAnsi: AnsiString;
+  Formatted: string;
+begin
+  Result := False;
+  SetLength(AParts, 0);
+
+  if not EnsureLoaded or
+     not Assigned(IntlFunctions.UnumfOpenForSkeletonAndLocale) or
+     not Assigned(IntlFunctions.UnumfOpenResult) or
+     not Assigned(IntlFunctions.UnumfFormatDecimal) or
+     not Assigned(IntlFunctions.UnumfResultAsValue) or
+     not Assigned(IntlFunctions.UnumfClose) or
+     not Assigned(IntlFunctions.UnumfCloseResult) then
+    Exit;
+
+  Skeleton := UnicodeString(BuildNumberSkeleton(AOptions));
+  LocaleAnsi := AnsiString(ALocale);
+  ValueAnsi := AnsiString(AValue);
+  Status := ICU_SUCCESS;
+  Formatter := IntlFunctions.UnumfOpenForSkeletonAndLocale(PWideChar(Skeleton),
+    Length(Skeleton), PAnsiChar(LocaleAnsi), Status);
+  if not ICUSucceeded(Status) or not Assigned(Formatter) then
+    Exit;
+
+  try
+    Status := ICU_SUCCESS;
+    FormatResult := IntlFunctions.UnumfOpenResult(Status);
+    if not ICUSucceeded(Status) or not Assigned(FormatResult) then
+      Exit;
+    try
+      Status := ICU_SUCCESS;
+      IntlFunctions.UnumfFormatDecimal(Formatter, PAnsiChar(ValueAnsi),
+        Length(ValueAnsi), FormatResult, Status);
       if not ICUSucceeded(Status) then
         Exit;
 
@@ -2276,6 +2409,13 @@ begin
     Exit(True);
   Result := CanUseLegacyNumberFormatter(AOptions) and
     TryICUFormatNumberToPartsDirect(ALocale, AValue, AOptions, AParts);
+end;
+
+function TryICUFormatNumberDecimalToParts(const ALocale, AValue: string;
+  const AOptions: TIntlNumberFormatOptions; out AParts: TIntlFormatPartArray): Boolean;
+begin
+  Result := TryICUFormatNumberDecimalToPartsSkeleton(ALocale, AValue, AOptions,
+    AParts);
 end;
 
 function TryICUFormatNumberRangeInternal(const ALocale: string;
