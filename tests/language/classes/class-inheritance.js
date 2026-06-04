@@ -243,6 +243,58 @@ test("super() replacement receives superclass initializers", () => {
   expect(leaf.readBase()).toBe("base");
 });
 
+test("super() replacement initializes constructor layers in order", () => {
+  const order = [];
+  let leafPrototype;
+  let replacement;
+
+  class Base {
+    constructor() {
+      replacement = Object.create(leafPrototype);
+      return replacement;
+    }
+  }
+
+  class Middle extends Base {
+    middleField = this === replacement ? order.push("middle field") : -1;
+    #middlePrivate = this === replacement ? order.push("middle private") : -1;
+
+    constructor() {
+      super();
+      order.push("middle body");
+    }
+
+    readMiddlePrivate() {
+      return this.#middlePrivate;
+    }
+  }
+
+  class Leaf extends Middle {
+    leafField = this === replacement ? order.push("leaf field") : -1;
+    #leafPrivate = this === replacement ? order.push("leaf private") : -1;
+
+    constructor() {
+      super();
+      order.push("leaf body");
+    }
+
+    readLeafPrivate() {
+      return this.#leafPrivate;
+    }
+  }
+
+  leafPrototype = Leaf.prototype;
+
+  const leaf = new Leaf();
+  expect(order.join(",")).toBe(
+    "middle field,middle private,middle body,leaf field,leaf private,leaf body"
+  );
+  expect(leaf.middleField).toBe(1);
+  expect(leaf.readMiddlePrivate()).toBe(2);
+  expect(leaf.leafField).toBe(4);
+  expect(leaf.readLeafPrivate()).toBe(5);
+});
+
 test("implicit super preserves derived constructor receiver replacement", () => {
   let leafPrototype;
 

@@ -958,10 +958,12 @@ type
   private
     FSuperClass: TGocciaValue;
     FNewTarget: TGocciaValue;
+    FCurrentCtorClass: TGocciaClassValue;
   protected
     function GetFunctionName: string; override;
   public
-    constructor Create(const ASuperClass, ANewTarget: TGocciaValue);
+    constructor Create(const ASuperClass, ANewTarget: TGocciaValue;
+      const ACurrentCtorClass: TGocciaClassValue);
     function Call(const AArguments: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue; override;
     procedure MarkReferences; override;
@@ -1257,11 +1259,13 @@ begin
 end;
 
 constructor TGocciaVMSuperConstructorValue.Create(
-  const ASuperClass, ANewTarget: TGocciaValue);
+  const ASuperClass, ANewTarget: TGocciaValue;
+  const ACurrentCtorClass: TGocciaClassValue);
 begin
   inherited Create;
   FSuperClass := ASuperClass;
   FNewTarget := ANewTarget;
+  FCurrentCtorClass := ACurrentCtorClass;
 end;
 
 function TGocciaBytecodeFunctionValue.GetFunctionLength: Integer;
@@ -3013,16 +3017,16 @@ var
         'Derived constructor returned non-object',
         SSuggestNotConstructorType);
   end;
-  procedure InitializeNewTargetReplacement(const AReplacement: TGocciaValue);
+  procedure InitializeCurrentCtorReplacement(const AReplacement: TGocciaValue);
   begin
     if (AReplacement is TGocciaObjectValue) and
        (AReplacement <> AThisValue) and
-       (FNewTarget is TGocciaVMClassValue) then
+       (FCurrentCtorClass is TGocciaVMClassValue) then
     begin
-      TGocciaVMClassValue(FNewTarget).FVM.RunClassInitializers(
-        TGocciaClassValue(FNewTarget), AReplacement, False);
+      TGocciaVMClassValue(FCurrentCtorClass).FVM.RunClassInitializers(
+        FCurrentCtorClass, AReplacement, False);
       StampBytecodePrivateInitializersApplied(AReplacement,
-        TGocciaClassValue(FNewTarget));
+        FCurrentCtorClass);
     end;
   end;
 begin
@@ -3032,7 +3036,7 @@ begin
   begin
     SuperResult := InvokeConstructableWithReceiver(FSuperClass, AArguments,
       AThisValue, FNewTarget);
-    InitializeNewTargetReplacement(SuperResult);
+    InitializeCurrentCtorReplacement(SuperResult);
     Exit(SuperResult);
   end;
 
@@ -3054,10 +3058,11 @@ begin
       AArguments, AThisValue);
     if SuperResult is TGocciaObjectValue then
     begin
-      if SuperResult <> AThisValue then
+      if (SuperResult <> AThisValue) and
+         not HasBytecodePrivateInitializersApplied(SuperResult, SuperClass) then
         TGocciaVMClassValue(SuperClass).FVM.RunClassInitializers(
           SuperClass, SuperResult);
-      InitializeNewTargetReplacement(SuperResult);
+      InitializeCurrentCtorReplacement(SuperResult);
       Exit(SuperResult);
     end;
     ValidateSuperConstructorResult(SuperResult);
@@ -3069,10 +3074,11 @@ begin
         BytecodeConstructor.FVM.FLastClosureThisValue);
       if ConstructorThisValue is TGocciaObjectValue then
       begin
-        if ConstructorThisValue <> AThisValue then
+        if (ConstructorThisValue <> AThisValue) and
+           not HasBytecodePrivateInitializersApplied(ConstructorThisValue, SuperClass) then
           TGocciaVMClassValue(SuperClass).FVM.RunClassInitializers(
             SuperClass, ConstructorThisValue);
-        InitializeNewTargetReplacement(ConstructorThisValue);
+        InitializeCurrentCtorReplacement(ConstructorThisValue);
         Exit(ConstructorThisValue);
       end;
     end;
@@ -3089,20 +3095,22 @@ begin
     if SuperResult is TGocciaObjectValue then
     begin
       if (SuperResult <> AThisValue) and
-         (SuperClass is TGocciaVMClassValue) then
+         (SuperClass is TGocciaVMClassValue) and
+         not HasBytecodePrivateInitializersApplied(SuperResult, SuperClass) then
         TGocciaVMClassValue(SuperClass).FVM.RunClassInitializers(
           SuperClass, SuperResult);
-      InitializeNewTargetReplacement(SuperResult);
+      InitializeCurrentCtorReplacement(SuperResult);
       Exit(SuperResult);
     end;
     ValidateSuperConstructorResult(SuperResult);
     if ConstructorThisValue is TGocciaObjectValue then
     begin
       if (ConstructorThisValue <> AThisValue) and
-         (SuperClass is TGocciaVMClassValue) then
+         (SuperClass is TGocciaVMClassValue) and
+         not HasBytecodePrivateInitializersApplied(ConstructorThisValue, SuperClass) then
         TGocciaVMClassValue(SuperClass).FVM.RunClassInitializers(
           SuperClass, ConstructorThisValue);
-      InitializeNewTargetReplacement(ConstructorThisValue);
+      InitializeCurrentCtorReplacement(ConstructorThisValue);
       Exit(ConstructorThisValue);
     end;
     Exit(AThisValue);
@@ -3135,7 +3143,7 @@ begin
       TGocciaInstanceValue(NewThis).InitializeNativeFromArguments(AArguments);
     if NewThis is TGocciaObjectValue then
     begin
-      InitializeNewTargetReplacement(NewThis);
+      InitializeCurrentCtorReplacement(NewThis);
       Exit(NewThis);
     end;
     Exit(AThisValue);
@@ -3884,6 +3892,8 @@ begin
     FSuperClass.MarkReferences;
   if Assigned(FNewTarget) then
     FNewTarget.MarkReferences;
+  if Assigned(FCurrentCtorClass) then
+    FCurrentCtorClass.MarkReferences;
 end;
 
 procedure TGocciaBytecodeFunctionValue.MarkReferences;
@@ -6850,6 +6860,17 @@ var
   SuperObject: TGocciaObjectValue;
   HomeObject: TGocciaObjectValue;
   SuperPrototype: TGocciaValue;
+  function ResolveCurrentCtorClass: TGocciaClassValue;
+  var
+    CtorValue: TGocciaValue;
+  begin
+    Result := nil;
+    if not Assigned(HomeObject) then
+      Exit;
+    CtorValue := HomeObject.GetProperty(PROP_CONSTRUCTOR);
+    if CtorValue is TGocciaClassValue then
+      Result := TGocciaClassValue(CtorValue);
+  end;
 begin
   HomeObject := nil;
   if Assigned(FCurrentClosure) then
@@ -6862,7 +6883,7 @@ begin
     SuperObject := TGocciaObjectValue(ASuperValue);
     if AUseSuperConstructor and (AName = PROP_CONSTRUCTOR) then
       Exit(TGocciaVMSuperConstructorValue.Create(SuperObject,
-        FCurrentNewTarget));
+        FCurrentNewTarget, ResolveCurrentCtorClass));
 
     if AThisValue is TGocciaClassValue then
       Exit(SuperObject.GetPropertyWithContext(AName, AThisValue));
@@ -6890,7 +6911,7 @@ begin
   SuperClass := TGocciaClassValue(ASuperValue);
   if AUseSuperConstructor and (AName = PROP_CONSTRUCTOR) then
     Exit(TGocciaVMSuperConstructorValue.Create(SuperClass,
-      FCurrentNewTarget));
+      FCurrentNewTarget, ResolveCurrentCtorClass));
 
   if AThisValue is TGocciaClassValue then
     Exit(SuperClass.GetPropertyWithContext(AName, AThisValue));

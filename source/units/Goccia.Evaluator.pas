@@ -945,16 +945,19 @@ var
   I: Integer;
   ThisScope: TGocciaScope;
   ConstructorThisValue: TGocciaValue;
-  NewTargetValue: TGocciaValue;
+  CurrentCtorClassValue: TGocciaValue;
+  CurrentCtorClass: TGocciaClassValue;
   procedure InitializeReplacementThis(const AReplacement: TGocciaObjectValue;
     const APreviousThis: TGocciaValue);
   begin
     if (not Assigned(AReplacement)) or (AReplacement = APreviousThis) then
       Exit;
-    NewTargetValue := AContext.Scope.FindNewTarget;
-    if NewTargetValue is TGocciaClassValue then
-      RunClassInstanceInitializers(TGocciaClassValue(NewTargetValue),
-        AReplacement, AContext, iimEagerReplacement);
+    CurrentCtorClassValue := AContext.Scope.FindOwningClass;
+    if not (CurrentCtorClassValue is TGocciaClassValue) then
+      Exit;
+    CurrentCtorClass := TGocciaClassValue(CurrentCtorClassValue);
+    RunClassInstanceInitializers(CurrentCtorClass, AReplacement, AContext,
+      iimEagerReplacement);
   end;
 begin
   CheckExecutionTimeout;
@@ -4036,7 +4039,8 @@ var
   SuperInitContext: TGocciaEvaluationContext;
   SuperInitScope: TGocciaScope;
 begin
-  if Assigned(AClassValue.SuperClass) then
+  if (AInitializationMode <> iimEagerReplacement) and
+     Assigned(AClassValue.SuperClass) then
   begin
     SuperInitContext := AContext;
     SuperInitScope := TGocciaClassInitScope.Create(AContext.Scope, AClassValue.SuperClass);
