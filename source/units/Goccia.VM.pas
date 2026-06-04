@@ -1010,6 +1010,8 @@ begin
     Exit;
   if Assigned(AClosure.HomeObject) then
     AClosure.HomeObject.MarkReferences;
+  if Assigned(AClosure.HomeClass) then
+    AClosure.HomeClass.MarkReferences;
   for I := 0 to AClosure.UpvalueCount - 1 do
   begin
     Upvalue := AClosure.GetUpvalue(I);
@@ -2372,6 +2374,8 @@ begin
   begin
     if Assigned(FClosure.HomeObject) then
       FClosure.HomeObject.MarkReferences;
+    if Assigned(FClosure.HomeClass) then
+      FClosure.HomeClass.MarkReferences;
     for I := 0 to FClosure.UpvalueCount - 1 do
     begin
       Upvalue := FClosure.GetUpvalue(I);
@@ -3909,6 +3913,8 @@ begin
 
   if Assigned(FClosure.HomeObject) then
     FClosure.HomeObject.MarkReferences;
+  if Assigned(FClosure.HomeClass) then
+    FClosure.HomeClass.MarkReferences;
 
   for I := 0 to FClosure.UpvalueCount - 1 do
   begin
@@ -4222,19 +4228,38 @@ procedure SetBytecodeHomeObject(const AFunctionValue: TGocciaValue;
   const AHomeObject: TGocciaValue);
 var
   EffectiveHomeObject: TGocciaObjectValue;
+  EffectiveHomeClass: TGocciaClassValue;
+  Closure: TGocciaBytecodeClosure;
 begin
   if AHomeObject is TGocciaClassValue then
-    EffectiveHomeObject := TGocciaClassValue(AHomeObject).Prototype
+  begin
+    EffectiveHomeObject := TGocciaClassValue(AHomeObject).Prototype;
+    EffectiveHomeClass := TGocciaClassValue(AHomeObject);
+  end
   else if AHomeObject is TGocciaObjectValue then
-    EffectiveHomeObject := TGocciaObjectValue(AHomeObject)
+  begin
+    EffectiveHomeObject := TGocciaObjectValue(AHomeObject);
+    EffectiveHomeClass := nil;
+  end
   else
+  begin
     EffectiveHomeObject := nil;
+    EffectiveHomeClass := nil;
+  end;
 
-  if (AFunctionValue is TGocciaBytecodeFunctionValue) and
-     Assigned(EffectiveHomeObject) and
-     Assigned(TGocciaBytecodeFunctionValue(AFunctionValue).FClosure) and
-     not Assigned(TGocciaBytecodeFunctionValue(AFunctionValue).FClosure.HomeObject) then
-    TGocciaBytecodeFunctionValue(AFunctionValue).FClosure.HomeObject := EffectiveHomeObject;
+  if not ((AFunctionValue is TGocciaBytecodeFunctionValue) and
+     Assigned(EffectiveHomeObject)) then
+    Exit;
+
+  Closure := TGocciaBytecodeFunctionValue(AFunctionValue).FClosure;
+  if not Assigned(Closure) then
+    Exit;
+
+  if not Assigned(Closure.HomeObject) then
+    Closure.HomeObject := EffectiveHomeObject;
+  if Assigned(EffectiveHomeClass) and not Assigned(Closure.HomeClass) and
+     (Closure.HomeObject = EffectiveHomeObject) then
+    Closure.HomeClass := EffectiveHomeClass;
 end;
 
 function TGocciaVM.GetLocal(const AIndex: Integer): TGocciaValue;
@@ -6861,15 +6886,11 @@ var
   HomeObject: TGocciaObjectValue;
   SuperPrototype: TGocciaValue;
   function ResolveCurrentCtorClass: TGocciaClassValue;
-  var
-    CtorValue: TGocciaValue;
   begin
     Result := nil;
-    if not Assigned(HomeObject) then
-      Exit;
-    CtorValue := HomeObject.GetProperty(PROP_CONSTRUCTOR);
-    if CtorValue is TGocciaClassValue then
-      Result := TGocciaClassValue(CtorValue);
+    if Assigned(FCurrentClosure) and
+       (FCurrentClosure.HomeClass is TGocciaClassValue) then
+      Result := TGocciaClassValue(FCurrentClosure.HomeClass);
   end;
 begin
   HomeObject := nil;
@@ -8719,7 +8740,7 @@ begin
            (FRegisters[A].ObjectValue is TGocciaVMClassValue) then
         begin
           SetBytecodeHomeObject(RegisterToValue(FRegisters[C]),
-            TGocciaVMClassValue(FRegisters[A].ObjectValue).Prototype);
+            FRegisters[A].ObjectValue);
           if GlobalName = PROP_CONSTRUCTOR then
           begin
             TGocciaVMClassValue(FRegisters[A].ObjectValue).SetVMConstructor(

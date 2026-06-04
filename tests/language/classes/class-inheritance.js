@@ -295,6 +295,47 @@ test("super() replacement initializes constructor layers in order", () => {
   expect(leaf.readLeafPrivate()).toBe(5);
 });
 
+test("super() replacement ignores mutable prototype constructor", () => {
+  const order = [];
+  let leafPrototype;
+  let replacement;
+  let constructorReads = 0;
+
+  class Base {
+    constructor() {
+      replacement = Object.create(leafPrototype);
+      return replacement;
+    }
+  }
+
+  class Leaf extends Base {
+    #privateValue = this === replacement ? order.push("private") : -1;
+
+    constructor() {
+      super();
+      order.push("body");
+    }
+
+    readPrivate() {
+      return this.#privateValue;
+    }
+  }
+
+  Object.defineProperty(Leaf.prototype, "constructor", {
+    get() {
+      constructorReads++;
+      return class Wrong {};
+    },
+    configurable: true
+  });
+  leafPrototype = Leaf.prototype;
+
+  const leaf = new Leaf();
+  expect(leaf.readPrivate()).toBe(1);
+  expect(order.join(",")).toBe("private,body");
+  expect(constructorReads).toBe(0);
+});
+
 test("implicit super preserves derived constructor receiver replacement", () => {
   let leafPrototype;
 
