@@ -87,4 +87,65 @@ describe("Private elements on constructor return overrides", () => {
     new WithPrivateAccessor(obj);
     expect(WithPrivateAccessor.read(obj)).toBe(7);
   });
+
+  test("private accessors are initialized before constructor body resumes", () => {
+    class WithPrivateAccessorWrite extends ReturnOverrideBase {
+      #value = 0;
+
+      set #accessor(value) {
+        this.#value = value;
+      };
+
+      get #accessor() {
+        return this.#value;
+      };
+
+      constructor(obj) {
+        super(obj);
+        this.#accessor = 42;
+      }
+
+      static read(obj) {
+        return obj.#accessor;
+      }
+    }
+
+    expect(() => new WithPrivateAccessorWrite(Object.preventExtensions({}))).toThrow(TypeError);
+
+    const obj = {};
+    new WithPrivateAccessorWrite(obj);
+    expect(WithPrivateAccessorWrite.read(obj)).toBe(42);
+  });
+
+  test("replacement initialization overwrites copied raw private state", () => {
+    class WithPrivateFieldInitializer extends ReturnOverrideBase {
+      #value = 1;
+
+      constructor(obj, replacementValue) {
+        super(obj);
+        if (replacementValue !== undefined) {
+          this.#value = replacementValue;
+        }
+      }
+
+      static read(obj) {
+        return obj.#value;
+      }
+    }
+
+    const donor = {};
+    new WithPrivateFieldInitializer(donor, 99);
+
+    const forged = {};
+    for (const key of Object.getOwnPropertyNames(donor)) {
+      Object.defineProperty(
+        forged,
+        key,
+        Object.getOwnPropertyDescriptor(donor, key)
+      );
+    }
+
+    new WithPrivateFieldInitializer(forged);
+    expect(WithPrivateFieldInitializer.read(forged)).toBe(1);
+  });
 });

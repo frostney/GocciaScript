@@ -150,7 +150,8 @@ uses
 
 procedure RunClassInstanceInitializers(const AClassValue: TGocciaClassValue;
   const AInstance: TGocciaObjectValue;
-  const AContext: TGocciaEvaluationContext); forward;
+  const AContext: TGocciaEvaluationContext;
+  const APreserveExistingRawPrivateSlots: Boolean); forward;
 
 const
   FOR_IN_ENTRY_OWNER = '__gocciaForInOwner';
@@ -826,11 +827,11 @@ var
     ValidateClassConstructorReturn(ClassConstructor, Result);
     if Result is TGocciaObjectValue then
       RunClassInstanceInitializers(ClassConstructor,
-        TGocciaObjectValue(Result), AContext)
+        TGocciaObjectValue(Result), AContext, False)
     else if AReceiver is TGocciaObjectValue then
     begin
       RunClassInstanceInitializers(ClassConstructor,
-        TGocciaObjectValue(AReceiver), AContext);
+        TGocciaObjectValue(AReceiver), AContext, False);
       Result := AReceiver;
     end;
   end;
@@ -880,7 +881,7 @@ begin
     begin
       if AReceiver is TGocciaObjectValue then
         RunClassInstanceInitializers(ClassConstructor,
-          TGocciaObjectValue(AReceiver), AContext);
+          TGocciaObjectValue(AReceiver), AContext, False);
       SuperResult := ClassConstructor.ConstructorMethod.CallWithThisValue(
         AArguments, AReceiver, ConstructorThisValue, EffectiveNewTarget);
       ValidateClassConstructorReturn(ClassConstructor, SuperResult);
@@ -891,7 +892,7 @@ begin
          (SuperResult <> AReceiver) and
          (SuperResult = ConstructorThisValue) then
         RunClassInstanceInitializers(ClassConstructor,
-          TGocciaObjectValue(SuperResult), AContext);
+          TGocciaObjectValue(SuperResult), AContext, False);
     end
     else
       SuperResult := InvokeImplicitClassConstructor;
@@ -923,6 +924,17 @@ var
   I: Integer;
   ThisScope: TGocciaScope;
   ConstructorThisValue: TGocciaValue;
+  NewTargetValue: TGocciaValue;
+  procedure InitializeReplacementThis(const AReplacement: TGocciaObjectValue;
+    const APreviousThis: TGocciaValue);
+  begin
+    if (not Assigned(AReplacement)) or (AReplacement = APreviousThis) then
+      Exit;
+    NewTargetValue := AContext.Scope.FindNewTarget;
+    if NewTargetValue is TGocciaClassValue then
+      RunClassInstanceInitializers(TGocciaClassValue(NewTargetValue),
+        AReplacement, AContext, False);
+  end;
 begin
   CheckExecutionTimeout;
   IncrementInstructionCounter;
@@ -965,6 +977,8 @@ begin
           AContext.Scope.FindNewTarget);
         if SuperResult is TGocciaObjectValue then
         begin
+          InitializeReplacementThis(TGocciaObjectValue(SuperResult),
+            AContext.Scope.ThisValue);
           AContext.Scope.ThisValue := TGocciaObjectValue(SuperResult);
           ThisScope := AContext.Scope.FindFunctionOrModuleScope;
           if Assigned(ThisScope) then
@@ -980,6 +994,8 @@ begin
             SSuggestNotConstructorType)
         else if ConstructorThisValue is TGocciaObjectValue then
         begin
+          InitializeReplacementThis(TGocciaObjectValue(ConstructorThisValue),
+            AContext.Scope.ThisValue);
           AContext.Scope.ThisValue := TGocciaObjectValue(ConstructorThisValue);
           ThisScope := AContext.Scope.FindFunctionOrModuleScope;
           if Assigned(ThisScope) then
@@ -1002,6 +1018,8 @@ begin
           AContext.Scope.FindNewTarget);
         if SuperResult is TGocciaObjectValue then
         begin
+          InitializeReplacementThis(TGocciaObjectValue(SuperResult),
+            AContext.Scope.ThisValue);
           AContext.Scope.ThisValue := TGocciaObjectValue(SuperResult);
           ThisScope := AContext.Scope.FindFunctionOrModuleScope;
           if Assigned(ThisScope) then
@@ -3984,9 +4002,10 @@ procedure StampRawPrivateInstanceBrand(const AReceiver: TGocciaObjectValue;
 
 procedure InitializeRawPrivateInstanceProperty(
   const AReceiver: TGocciaObjectValue; const APrivateName: string;
-  const AValue: TGocciaValue; const AAccessClass: TGocciaClassValue); forward;
+  const AValue: TGocciaValue; const AAccessClass: TGocciaClassValue;
+  const APreserveExisting: Boolean); forward;
 
-procedure InitializeObjectInstanceProperties(const AInstance: TGocciaObjectValue; const AClassValue: TGocciaClassValue; const AContext: TGocciaEvaluationContext);
+procedure InitializeObjectInstanceProperties(const AInstance: TGocciaObjectValue; const AClassValue: TGocciaClassValue; const AContext: TGocciaEvaluationContext; const APreserveExistingRawPrivateSlots: Boolean);
 var
   PropertyValue: TGocciaValue;
   Entry: TGocciaExpressionMap.TKeyValuePair;
@@ -4002,7 +4021,8 @@ begin
     SuperInitScope := TGocciaClassInitScope.Create(AContext.Scope, AClassValue.SuperClass);
     SuperInitScope.ThisValue := AInstance;
     SuperInitContext.Scope := SuperInitScope;
-    InitializeObjectInstanceProperties(AInstance, AClassValue.SuperClass, SuperInitContext);
+    InitializeObjectInstanceProperties(AInstance, AClassValue.SuperClass,
+      SuperInitContext, APreserveExistingRawPrivateSlots);
   end;
 
   if AClassValue.HasPrivateInstanceElements then
@@ -4036,7 +4056,7 @@ begin
         begin
           PropertyValue := EvaluateExpression(Expr, AContext);
           InitializeRawPrivateInstanceProperty(AInstance, FOEntry.Name,
-            PropertyValue, AClassValue);
+            PropertyValue, AClassValue, APreserveExistingRawPrivateSlots);
         end;
       end
       else
@@ -5673,12 +5693,13 @@ end;
 
 procedure InitializeRawPrivateInstanceProperty(
   const AReceiver: TGocciaObjectValue; const APrivateName: string;
-  const AValue: TGocciaValue; const AAccessClass: TGocciaClassValue);
+  const AValue: TGocciaValue; const AAccessClass: TGocciaClassValue;
+  const APreserveExisting: Boolean);
 begin
   if not Assigned(AAccessClass) then
     ThrowPrivateBrandError(APrivateName);
   StampRawPrivateInstanceBrand(AReceiver, AAccessClass);
-  if Assigned(AReceiver.GetOwnPropertyDescriptor(
+  if APreserveExisting and Assigned(AReceiver.GetOwnPropertyDescriptor(
     RawPrivateInstanceKey(AAccessClass, APrivateName))) then
     Exit;
   AReceiver.DefineProperty(
@@ -5871,8 +5892,9 @@ begin
        AccessClass.PrivateInstancePropertyDefs.TryGetValue(
          APrivateName, FieldInitializer) then
     begin
-      InitializeRawPrivateInstanceProperty(AReceiver, APrivateName,
-        AValue, AccessClass);
+      StampRawPrivateInstanceBrand(AReceiver, AccessClass);
+      SetRawPrivateInstanceProperty(AReceiver, APrivateName, AValue,
+        AccessClass);
       Exit;
     end;
     ThrowPrivateBrandError(APrivateName);
@@ -6181,13 +6203,14 @@ begin
         Entry.Key, PropertyValue, AClassValue)
     else
       InitializeRawPrivateInstanceProperty(
-        AInstance, Entry.Key, PropertyValue, AClassValue);
+        AInstance, Entry.Key, PropertyValue, AClassValue, False);
   end;
 end;
 
 procedure RunClassInstanceInitializers(const AClassValue: TGocciaClassValue;
   const AInstance: TGocciaObjectValue;
-  const AContext: TGocciaEvaluationContext);
+  const AContext: TGocciaEvaluationContext;
+  const APreserveExistingRawPrivateSlots: Boolean);
 var
   InitContext, SuperInitContext: TGocciaEvaluationContext;
   InitScope, SuperInitScope: TGocciaScope;
@@ -6224,7 +6247,8 @@ begin
     end;
   end
   else
-    InitializeObjectInstanceProperties(AInstance, AClassValue, InitContext);
+    InitializeObjectInstanceProperties(AInstance, AClassValue, InitContext,
+      APreserveExistingRawPrivateSlots);
 
   AClassValue.RunMethodInitializers(AInstance);
   AClassValue.RunFieldInitializers(AInstance);
@@ -6332,9 +6356,11 @@ var
       InitializerReplayReceiver := Instance;
     end;
   end;
-  procedure RunInstanceInitializers;
+  procedure RunInstanceInitializers(
+    const APreserveExistingRawPrivateSlots: Boolean);
   begin
-    RunClassInstanceInitializers(AClassValue, Instance, AContext);
+    RunClassInstanceInitializers(AClassValue, Instance, AContext,
+      APreserveExistingRawPrivateSlots);
   end;
 begin
   CheckExecutionTimeout;
@@ -6375,7 +6401,7 @@ begin
   InitializerReplayReceiver := nil;
   TGarbageCollector.Instance.AddTempRoot(RootedInstance);
   try
-    RunInstanceInitializers;
+    RunInstanceInitializers(False);
 
     if Assigned(AClassValue.ConstructorMethod) then
     begin
@@ -6406,7 +6432,7 @@ begin
 
     if Assigned(InitializerReplayReceiver) and
        (Instance = InitializerReplayReceiver) then
-      RunInstanceInitializers;
+      RunInstanceInitializers(True);
   finally
     TGarbageCollector.Instance.RemoveTempRoot(RootedInstance);
   end;

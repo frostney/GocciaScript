@@ -115,6 +115,7 @@ type
     FArgumentPoolCount: Integer;
     FLastClosureThisValue: TGocciaRegister;
     FPrivateInitializerReceiver: TGocciaValue;
+    FPrivateInitializerPreserveExisting: Boolean;
     FStackRoot: TGocciaVMStackRoot;
     FTempSavedStateRoots: TGocciaVMSavedStateRootArray;
     FTempSavedStateRootCount: Integer;
@@ -207,7 +208,8 @@ type
     procedure SetupAutoAccessorValueByKey(const AKey: TGocciaValue;
       const ABackingName: string; const AIsStatic: Boolean);
     procedure RunClassInitializers(const AClassValue: TGocciaClassValue;
-      const AInstance: TGocciaValue);
+      const AInstance: TGocciaValue;
+      const APreserveExistingPrivateSlots: Boolean = False);
     function MaterializeArguments(
       const AArguments: TGocciaRegisterArray): TGocciaArgumentsCollection;
     function CreateArgumentsObjectFromCurrentFrame: TGocciaObjectValue;
@@ -3003,6 +3005,14 @@ var
         'Derived constructor returned non-object',
         SSuggestNotConstructorType);
   end;
+  procedure InitializeNewTargetReplacement(const AReplacement: TGocciaValue);
+  begin
+    if (AReplacement is TGocciaObjectValue) and
+       (AReplacement <> AThisValue) and
+       (FNewTarget is TGocciaVMClassValue) then
+      TGocciaVMClassValue(FNewTarget).FVM.RunClassInitializers(
+        TGocciaClassValue(FNewTarget), AReplacement, False);
+  end;
 begin
   if (FSuperClass is TGocciaObjectValue) and
      (not (FSuperClass is TGocciaClassValue)) and
@@ -3010,6 +3020,7 @@ begin
   begin
     SuperResult := InvokeConstructableWithReceiver(FSuperClass, AArguments,
       AThisValue, FNewTarget);
+    InitializeNewTargetReplacement(SuperResult);
     Exit(SuperResult);
   end;
 
@@ -3034,6 +3045,7 @@ begin
       if SuperResult <> AThisValue then
         TGocciaVMClassValue(SuperClass).FVM.RunClassInitializers(
           SuperClass, SuperResult);
+      InitializeNewTargetReplacement(SuperResult);
       Exit(SuperResult);
     end;
     ValidateSuperConstructorResult(SuperResult);
@@ -3048,6 +3060,7 @@ begin
         if ConstructorThisValue <> AThisValue then
           TGocciaVMClassValue(SuperClass).FVM.RunClassInitializers(
             SuperClass, ConstructorThisValue);
+        InitializeNewTargetReplacement(ConstructorThisValue);
         Exit(ConstructorThisValue);
       end;
     end;
@@ -3067,6 +3080,7 @@ begin
          (SuperClass is TGocciaVMClassValue) then
         TGocciaVMClassValue(SuperClass).FVM.RunClassInitializers(
           SuperClass, SuperResult);
+      InitializeNewTargetReplacement(SuperResult);
       Exit(SuperResult);
     end;
     ValidateSuperConstructorResult(SuperResult);
@@ -3076,6 +3090,7 @@ begin
          (SuperClass is TGocciaVMClassValue) then
         TGocciaVMClassValue(SuperClass).FVM.RunClassInitializers(
           SuperClass, ConstructorThisValue);
+      InitializeNewTargetReplacement(ConstructorThisValue);
       Exit(ConstructorThisValue);
     end;
     Exit(AThisValue);
@@ -3107,7 +3122,10 @@ begin
     if NewThis is TGocciaInstanceValue then
       TGocciaInstanceValue(NewThis).InitializeNativeFromArguments(AArguments);
     if NewThis is TGocciaObjectValue then
+    begin
+      InitializeNewTargetReplacement(NewThis);
       Exit(NewThis);
+    end;
     Exit(AThisValue);
   end;
 
@@ -3126,6 +3144,7 @@ begin
   FActiveDecoratorSession := nil;
   FLastClosureThisValue := RegisterUndefined;
   FPrivateInitializerReceiver := nil;
+  FPrivateInitializerPreserveExisting := False;
   FTempSavedStateRootCount := 0;
   FCurrentExecutionContextPushed := False;
   SetLength(FRegisterStack, INITIAL_STACK_SIZE);
@@ -3309,7 +3328,7 @@ begin
       ApplyOwnConstructorResult(ConstructedValue, ConstructorThisValue);
       if Assigned(InitializerReplayReceiver) and
          (Instance = InitializerReplayReceiver) then
-        FVM.RunClassInitializers(Self, Instance);
+        FVM.RunClassInitializers(Self, Instance, True);
     finally
       TGarbageCollector.Instance.RemoveTempRoot(RootedInstance);
     end;
@@ -3388,7 +3407,7 @@ begin
 
       if Assigned(InitializerReplayReceiver) and
          (Instance = InitializerReplayReceiver) then
-        FVM.RunClassInitializers(Self, Instance);
+        FVM.RunClassInitializers(Self, Instance, True);
     finally
       TGarbageCollector.Instance.RemoveTempRoot(RootedInstance);
     end;
@@ -3721,7 +3740,7 @@ begin
       end;
       if Assigned(InitializerReplayReceiver) and
          (Instance = InitializerReplayReceiver) then
-        FVM.RunClassInitializers(Self, Instance);
+        FVM.RunClassInitializers(Self, Instance, True);
     finally
       TGarbageCollector.Instance.RemoveTempRoot(RootedInstance);
     end;
@@ -5780,19 +5799,26 @@ begin
 end;
 
 procedure TGocciaVM.RunClassInitializers(const AClassValue: TGocciaClassValue;
-  const AInstance: TGocciaValue);
+  const AInstance: TGocciaValue;
+  const APreserveExistingPrivateSlots: Boolean);
 var
   PreviousPrivateInitializerReceiver: TGocciaValue;
+  PreviousPrivateInitializerPreserveExisting: Boolean;
 begin
   StampBytecodePrivateBrands(AClassValue, AInstance);
   PreviousPrivateInitializerReceiver := FPrivateInitializerReceiver;
+  PreviousPrivateInitializerPreserveExisting :=
+    FPrivateInitializerPreserveExisting;
   FPrivateInitializerReceiver := AInstance;
+  FPrivateInitializerPreserveExisting := APreserveExistingPrivateSlots;
   try
     AClassValue.RunMethodInitializers(AInstance);
     AClassValue.RunFieldInitializers(AInstance);
     AClassValue.RunDecoratorFieldInitializers(AInstance);
   finally
     FPrivateInitializerReceiver := PreviousPrivateInitializerReceiver;
+    FPrivateInitializerPreserveExisting :=
+      PreviousPrivateInitializerPreserveExisting;
   end;
 end;
 
@@ -7055,7 +7081,8 @@ begin
     end;
     if TryGetRawPrivateValue(AObject, AKey, ExistingValue) then
     begin
-      if AObject = FPrivateInitializerReceiver then
+      if (AObject = FPrivateInitializerReceiver) and
+         FPrivateInitializerPreserveExisting then
         Exit;
     end
     else
