@@ -11,7 +11,11 @@ uses
   Goccia.ObjectModel,
   Goccia.Scope,
   Goccia.Values.ObjectValue,
-  Goccia.Values.Primitives;
+  Goccia.Values.Primitives,
+  Goccia.Values.PromiseValue;
+
+function PumpAtomicsWaitAsyncCompletions: Integer;
+function WaitForAtomicsPromise(const APromise: TGocciaPromiseValue): Boolean;
 
 type
   TGocciaAtomics = class(TGocciaBuiltin)
@@ -69,7 +73,6 @@ uses
   Goccia.Values.BigIntValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
-  Goccia.Values.PromiseValue,
   Goccia.Values.SharedArrayBufferValue,
   Goccia.Values.SymbolValue,
   Goccia.Values.ToPrimitive,
@@ -89,18 +92,23 @@ type
     FAsync: Boolean;
     FBuffer: TGocciaSharedArrayBufferValue;
     FByteOffset: Integer;
+    FDeadlineMilliseconds: QWord;
     FEvent: TEvent;
+    FHasDeadline: Boolean;
     FInList: Boolean;
     FPromise: TGocciaPromiseValue;
   public
     constructor Create(ABuffer: TGocciaSharedArrayBufferValue; AByteOffset: Integer;
-      AAsync: Boolean; APromise: TGocciaPromiseValue);
+      AAsync: Boolean; APromise: TGocciaPromiseValue;
+      ADeadlineMilliseconds: QWord = 0; AHasDeadline: Boolean = False);
     destructor Destroy; override;
 
     property Async: Boolean read FAsync;
     property Buffer: TGocciaSharedArrayBufferValue read FBuffer;
     property ByteOffset: Integer read FByteOffset;
+    property DeadlineMilliseconds: QWord read FDeadlineMilliseconds;
     property Event: TEvent read FEvent;
+    property HasDeadline: Boolean read FHasDeadline;
     property InList: Boolean read FInList write FInList;
     property Promise: TGocciaPromiseValue read FPromise;
   end;
@@ -110,13 +118,16 @@ var
   GAtomicsWaiters: TObjectList<TAtomicsWaiter>;
 
 constructor TAtomicsWaiter.Create(ABuffer: TGocciaSharedArrayBufferValue;
-  AByteOffset: Integer; AAsync: Boolean; APromise: TGocciaPromiseValue);
+  AByteOffset: Integer; AAsync: Boolean; APromise: TGocciaPromiseValue;
+  ADeadlineMilliseconds: QWord; AHasDeadline: Boolean);
 begin
   inherited Create;
   FAsync := AAsync;
   FBuffer := ABuffer;
   FByteOffset := AByteOffset;
+  FDeadlineMilliseconds := ADeadlineMilliseconds;
   FPromise := APromise;
+  FHasDeadline := AHasDeadline;
   FEvent := TEvent.Create(nil, True, False, '');
   FInList := False;
 
@@ -568,6 +579,86 @@ begin
   AWaiter.InList := False;
 end;
 
+function PromiseHasAtomicsWaiter(const APromise: TGocciaPromiseValue): Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  EnterCriticalSection(GAtomicsLock);
+  try
+    for I := 0 to GAtomicsWaiters.Count - 1 do
+      if GAtomicsWaiters[I].Async and (GAtomicsWaiters[I].Promise = APromise) then
+        Exit(True);
+  finally
+    LeaveCriticalSection(GAtomicsLock);
+  end;
+end;
+
+function PumpAtomicsWaitAsyncCompletions: Integer;
+var
+  DueWaiters: TList<TAtomicsWaiter>;
+  I: Integer;
+  NowMilliseconds: QWord;
+  Waiter: TAtomicsWaiter;
+begin
+  Result := 0;
+  DueWaiters := TList<TAtomicsWaiter>.Create;
+  try
+    NowMilliseconds := GetTickCount64;
+    EnterCriticalSection(GAtomicsLock);
+    try
+      I := 0;
+      while I < GAtomicsWaiters.Count do
+      begin
+        Waiter := GAtomicsWaiters[I];
+        if Waiter.Async and Waiter.HasDeadline and
+          (NowMilliseconds >= Waiter.DeadlineMilliseconds) then
+        begin
+          Waiter.InList := False;
+          GAtomicsWaiters.Delete(I);
+          DueWaiters.Add(Waiter);
+        end
+        else
+          Inc(I);
+      end;
+    finally
+      LeaveCriticalSection(GAtomicsLock);
+    end;
+
+    for Waiter in DueWaiters do
+    begin
+      Waiter.Promise.Resolve(TGocciaStringLiteralValue.Create(
+        ATOMICS_WAIT_TIMED_OUT));
+      Waiter.Free;
+      Inc(Result);
+    end;
+  finally
+    DueWaiters.Free;
+  end;
+end;
+
+function WaitForAtomicsPromise(const APromise: TGocciaPromiseValue): Boolean;
+begin
+  if not Assigned(APromise) then
+    Exit(False);
+
+  while APromise.State = gpsPending do
+  begin
+    PumpAtomicsWaitAsyncCompletions;
+    if APromise.State <> gpsPending then
+      Exit(True);
+
+    if not PromiseHasAtomicsWaiter(APromise) then
+      Exit(False);
+
+    CheckInstructionLimit;
+    CheckExecutionTimeout;
+    Sleep(1);
+  end;
+
+  Result := True;
+end;
+
 function CurrentWaitValueMatches(ATypedArray: TGocciaTypedArrayValue;
   AByteOffset: Integer; const AExpected: TGocciaValue): Boolean;
 var
@@ -947,6 +1038,8 @@ function TGocciaAtomics.AtomicsWaitAsync(const AArgs: TGocciaArgumentsCollection
 var
   Buffer: TGocciaSharedArrayBufferValue;
   ByteOffset: Integer;
+  DeadlineMilliseconds: QWord;
+  HasDeadline: Boolean;
   Index: Integer;
   Promise: TGocciaPromiseValue;
   TimeoutMilliseconds: Int64;
@@ -968,8 +1061,15 @@ begin
       Exit(CreateWaitAsyncResult(False,
         TGocciaStringLiteralValue.Create(ATOMICS_WAIT_TIMED_OUT)));
 
+    HasDeadline := TimeoutMilliseconds >= 0;
+    if HasDeadline then
+      DeadlineMilliseconds := GetTickCount64 + QWord(TimeoutMilliseconds)
+    else
+      DeadlineMilliseconds := 0;
+
     Promise := TGocciaPromiseValue.Create;
-    Waiter := TAtomicsWaiter.Create(Buffer, ByteOffset, True, Promise);
+    Waiter := TAtomicsWaiter.Create(Buffer, ByteOffset, True, Promise,
+      DeadlineMilliseconds, HasDeadline);
     AddWaiter(Waiter);
     Result := CreateWaitAsyncResult(True, Promise);
   finally

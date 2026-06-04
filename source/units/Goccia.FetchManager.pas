@@ -38,6 +38,7 @@ uses
   SyncObjs,
   SysUtils,
 
+  Goccia.Builtins.Atomics,
   Goccia.GarbageCollector,
   Goccia.MicrotaskQueue,
   Goccia.Values.ErrorHelper,
@@ -598,6 +599,9 @@ begin
       Manager := TGocciaFetchManager.Instance;
       if Assigned(Manager) and Manager.HasPending and
          (Manager.PumpCompletions > 0) then
+        DidWork := True;
+
+      if PumpAtomicsWaitAsyncCompletions > 0 then
         DidWork := True;
     until not DidWork;
   finally

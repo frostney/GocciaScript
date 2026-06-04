@@ -29,4 +29,14 @@ describe("Atomics.waitAsync", () => {
     expect(result.value instanceof Promise).toBe(true);
     expect(Atomics.notify(i32, 0, 1)).toBe(1);
   });
+
+  test("finite timeout promise resolves to timed-out", async () => {
+    const sab = new SharedArrayBuffer(4);
+    const i32 = new Int32Array(sab);
+    i32[0] = 1;
+
+    const result = Atomics.waitAsync(i32, 0, 1, 1);
+    expect(result.async).toBe(true);
+    expect(await result.value).toBe("timed-out");
+  });
 });
