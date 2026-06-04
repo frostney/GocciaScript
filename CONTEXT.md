@@ -138,6 +138,10 @@ _Avoid_: Script executor.
 The CLI host that executes through the core engine without attaching the runtime surface.
 _Avoid_: Loader profile.
 
+**Test262 host capability**:
+A JavaScript-visible hook exposed on the `Goccia` namespace only when a CLI host opts into the test262 conformance contract, such as `GocciaScriptLoaderBare --test262-host`. It is not a core language built-in and not part of the normal runtime surface.
+_Avoid_: Runtime global, compatibility flag.
+
 **Bundler**:
 The CLI host that compiles source to `.gbc` artifacts without executing the program.
 _Avoid_: Compiler when referring to the user-facing tool.

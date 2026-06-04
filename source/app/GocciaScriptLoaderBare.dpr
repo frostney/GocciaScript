@@ -40,6 +40,7 @@ type
     Compatibility: TGocciaCompatibilityFlags;
     StrictTypes: Boolean;
     UnsafeFunctionConstructor: Boolean;
+    Test262Host: Boolean;
     Print: Boolean;
     Mode: TBareExecutionMode;
     SourceType: TGocciaSourceType;
@@ -89,6 +90,7 @@ begin
   WriteLn('  --mode=interpreted|bytecode   Execution mode (default: interpreted)');
   WriteLn('  --source-type=script|module   Load entry as script source or module source (.mjs infers module)');
   WriteLn('  --unsafe-function-constructor Enable dynamic Function constructor');
+  WriteLn('  --test262-host                Expose Goccia.test262Host for test262 host hooks');
   WriteLn('  --print                       Print the script''s last value (incl. undefined)');
   WriteLn('  --timeout=MS                  Per-file cooperative timeout in milliseconds');
   WriteLn('  --max-memory=BYTES            GC heap byte limit (RangeError on exceed)');
@@ -159,6 +161,7 @@ begin
   Result.Compatibility := [];
   Result.StrictTypes := False;
   Result.UnsafeFunctionConstructor := False;
+  Result.Test262Host := False;
   Result.Print := False;
   Result.Mode := bemInterpreted;
   Result.SourceType := stScript;
@@ -184,6 +187,8 @@ begin
       Result.StrictTypes := True
     else if Arg = '--unsafe-function-constructor' then
       Result.UnsafeFunctionConstructor := True
+    else if Arg = '--test262-host' then
+      Result.Test262Host := True
     else if Arg = '--print' then
       Result.Print := True
     else if Copy(Arg, 1, Length('--mode=')) = '--mode=' then
@@ -219,20 +224,26 @@ begin
 end;
 
 procedure ConfigureEngine(const AEngine: TGocciaEngine;
-  const AOptions: TBareOptions);
+  const AExecutor: TGocciaExecutor; const AOptions: TBareOptions);
 begin
   AEngine.Compatibility := AOptions.Compatibility;
   AEngine.StrictTypes := AOptions.StrictTypes;
   AEngine.SourceType := AOptions.SourceType;
   AEngine.FunctionConstructor.Enabled := AOptions.UnsafeFunctionConstructor;
+  if AExecutor is TGocciaBytecodeExecutor then
+    TGocciaBytecodeExecutor(AExecutor).GlobalBackedTopLevel :=
+      AOptions.SourceType = stScript;
 end;
 
 procedure RegisterBareGlobals(const AEngine: TGocciaEngine;
-  const APrintHost: TBarePrintHost);
+  const APrintHost: TBarePrintHost; const AOptions: TBareOptions);
 begin
   AEngine.RegisterGlobal(BARE_PRINT_GLOBAL_NAME,
     TGocciaNativeFunctionValue.CreateWithoutPrototype(APrintHost.Print,
       BARE_PRINT_GLOBAL_NAME, -1));
+  if AOptions.Test262Host then
+    AEngine.GocciaGlobal.AssignProperty('test262Host',
+      TGocciaBooleanLiteralValue.TrueValue);
   AEngine.RefreshGlobalThis;
 end;
 
@@ -289,13 +300,13 @@ begin
       try
         Engine := TGocciaEngine.Create(DisplayName, Source, Executor);
         try
-          ConfigureEngine(Engine, AOptions);
+          ConfigureEngine(Engine, Executor, AOptions);
 
           GC := TGarbageCollector.Instance;
           if Assigned(GC) and (AOptions.MaxMemoryBytes > 0) then
             GC.MaxBytes := AOptions.MaxMemoryBytes;
 
-          RegisterBareGlobals(Engine, PrintHost);
+          RegisterBareGlobals(Engine, PrintHost, AOptions);
           try
             ScriptResult := Engine.Execute;
             PrintResult(ScriptResult.Result, AOptions.Print);

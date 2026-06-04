@@ -57,7 +57,9 @@ test("Number() throws TypeError for BigInt", () => {
 test("Object() boxing", () => {
   const boxed = Object(1n);
   expect(typeof boxed).toBe("object");
+  expect(boxed instanceof BigInt).toBe(true);
   expect(boxed.valueOf() === 1n).toBe(true);
+  expect(BigInt.prototype.valueOf.call(boxed) === 1n).toBe(true);
   expect(boxed.toString()).toBe("1");
 });
 

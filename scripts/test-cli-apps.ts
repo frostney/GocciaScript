@@ -581,6 +581,61 @@ console.log("Bare Loader: --mode=bytecode...");
   if (proc.stdout.toString().trim() !== "42") throw new Error(`Bare --mode=bytecode expected 42, got: ${proc.stdout.toString()}`);
 }
 
+console.log("Bare Loader: bytecode top-level declarations back globalThis...");
+{
+  const source = [
+    "var x = 1;",
+    "function f() {}",
+    "print(",
+    "  Object.prototype.hasOwnProperty.call(globalThis, 'x') + ':' +",
+    "  Object.prototype.hasOwnProperty.call(globalThis, 'f') + ':' +",
+    "  typeof f",
+    ");",
+    "",
+  ].join("\n");
+  const proc = Bun.spawnSync([
+    BARE,
+    "--mode=bytecode",
+    "--compat-var",
+    "--compat-function",
+    "--compat-non-strict-mode",
+  ], {
+    stdin: new TextEncoder().encode(source),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0)
+    throw new Error(`Bare bytecode global-backed top-level exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (proc.stdout.toString().trim() !== "true:true:function")
+    throw new Error(`Bare bytecode global-backed top-level mismatch, got: ${proc.stdout.toString()}`);
+}
+
+console.log("Bare Loader: test262 host marker is hidden by default...");
+{
+  const proc = Bun.spawnSync([BARE], {
+    stdin: new TextEncoder().encode("print(typeof Goccia.test262Host);\n"),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0)
+    throw new Error(`Bare default test262 marker probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (proc.stdout.toString().trim() !== "undefined")
+    throw new Error(`Bare default should hide test262 marker, got: ${proc.stdout.toString()}`);
+}
+
+console.log("Bare Loader: --test262-host exposes Goccia test262 marker...");
+{
+  const proc = Bun.spawnSync([BARE, "--test262-host"], {
+    stdin: new TextEncoder().encode("print(Goccia.test262Host);\n"),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0)
+    throw new Error(`Bare --test262-host marker probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (proc.stdout.toString().trim() !== "true")
+    throw new Error(`Bare --test262-host should expose true marker, got: ${proc.stdout.toString()}`);
+}
+
 console.log("Bare Loader: --mode default is interpreted...");
 {
   const proc = Bun.spawnSync([BARE, "--help"], {
@@ -593,6 +648,8 @@ console.log("Bare Loader: --mode default is interpreted...");
     throw new Error(`Bare --help should document --mode, got: ${help}`);
   if (!help.includes("default: interpreted"))
     throw new Error(`Bare --help should document interpreted as default, got: ${help}`);
+  if (!help.includes("--test262-host"))
+    throw new Error(`Bare --help should document --test262-host, got: ${help}`);
 }
 
 console.log("Bare Loader: --mode invalid value rejected...");

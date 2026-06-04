@@ -170,88 +170,10 @@ function toStringArray(value: unknown): string[] {
 // Harness loading
 // ---------------------------------------------------------------------------
 
-// Stock test262 harness JS depends on language features GocciaScript either
-// gates behind compatibility flags (`arguments`, `with`, traditional
-// `for (var i = 0; ...)`) or intentionally excludes (`while` loops, whose
-// bodies the parser warns and drops).  Loading affected stock files without
-// the right handling produces silently-broken helpers — `propertyHelper`
-// verification never reaches the actual assertion, `decimalToHexString`
-// returns wrong values because its loop body never runs, and so on.
-// Tests that include those files then fail with harness-environment
-// errors, not engine surface differences.
-//
-// To keep conformance numbers a faithful signal of engine behavior,
-// `BUNDLED_INCLUDES` maps the test262 include names that need it to
-// GocciaScript-compatible reimplementations under `scripts/test262_harness/`.
-// Anything NOT listed here loads stock from the test262 checkout's
-// `harness/` directory directly.
-//
-// To minimise our surface against the stock harness, only files that
-// were empirically shown to break are bundled.  Each entry has a one-line
-// rationale; if a future stock harness change makes a bundled file
-// unnecessary, delete the entry and the corresponding file.
+// test262 expects each host to provide a `$262` object for host hooks.
+// Everything else loads from the pinned stock harness checkout.
 const BUNDLED_INCLUDES: Record<string, string> = {
-  // $262 host hooks (detachArrayBuffer, etc.).  Always loaded before all
-  // other harness files so stock includes like detachArrayBuffer.js find
-  // the methods they expect.  No stock equivalent — this is host-provided.
   "$262.js": "$262.js",
-  // Subsumes stock sta.js + assert.js + compareArray.js.  Stock assert.js
-  // uses `arguments` in `assert.compareArray` and traditional for-loop shapes
-  // that still differ from the bundled helper style.
-  "assert.js": "assert.js",
-  "sta.js": "assert.js",
-  "compareArray.js": "assert.js",
-  // Stock uses `arguments` (3x) and `for (var i = 0; ...)` (1x) in
-  // `verifyProperty`; without adaptation every property-descriptor test
-  // fails before reaching the actual conformance check.
-  "propertyHelper.js": "propertyHelper.js",
-  // Stock uses `arguments` (1x) and `for (var i = 0; ...)` (2x) in
-  // `assert.deepEqual`'s recursive comparator.
-  "deepEqual.js": "deepEqual.js",
-  // Stock uses `arguments` (3x) for variadic helpers used by every
-  // Temporal test.
-  "temporalHelpers.js": "temporalHelpers.js",
-  // Stock uses `for (var i = 0; ...)` (7x) and `with (...)` (2x) in
-  // `testWithTypedArrayConstructors` — the principal entry point used
-  // by every TypedArray conformance test.
-  "testTypedArray.js": "testTypedArray.js",
-  "testBigIntTypedArray.js": "testTypedArray.js",
-  // Stock uses `arguments` and `for (var i = 0; ...)` in the intrinsics
-  // walker.
-  "wellKnownIntrinsicObjects.js": "wellKnownIntrinsicObjects.js",
-  // Historical adaptation for stock `for (...)` loop bodies in iterator
-  // comparators; re-evaluate against stock now that compatibility flags cover
-  // traditional for-loop semantics.
-  "compareIterator.js": "compareIterator.js",
-  // Historical adaptation for stock `while (...)` in the digit-conversion loop;
-  // re-evaluate against stock now that --compat-while-loops is available.
-  "decimalToHexString.js": "decimalToHexString.js",
-  // Stock uses `while (...)` in the matcher loop.
-  "nativeFunctionMatcher.js": "nativeFunctionMatcher.js",
-  // Stock uses `for (...)` over RegExp result iterators.
-  "regExpUtils.js": "regExpUtils.js",
-  // Engine bug #516: stock probes constructor-ness via
-  // `Reflect.construct(function(){}, [], f)`, but Goccia rejects function
-  // expressions as the proxy target.  Adapted version uses
-  // `Reflect.construct(class {}, [], f)` which Goccia accepts.  Delete
-  // this entry and the bundled file when #516 is fixed.
-  "isConstructor.js": "isConstructor.js",
-  // Engine bug #517: stock uses `Function("return this;")()` but Goccia's
-  // `Function` constructor doesn't bind `this` to the global, so the
-  // stock helper returns the Function instance instead of globalThis.
-  // Adapted version uses `() => globalThis`.  Delete this entry and the
-  // bundled file when #517 is fixed.
-  "fnGlobalObject.js": "fnGlobalObject.js",
-  // Engine bug #518: stock would `print('Test262:AsyncTestComplete')` from
-  // inside `$DONE`, but Goccia's bytecode VM has a Range check error in
-  // the top-level `Promise.then` continuation drain (exercised by every
-  // test written like `p.then(v => $DONE())`).  The bundled adaptation
-  // routes completion through `__donePromise`; the `positive_async`
-  // wrapper awaits it inside an async IIFE (which drains via the VM's
-  // continuation machinery, not the broken top-level path) and prints
-  // the markers itself.  Delete this entry, the bundled file, and the
-  // async-IIFE wrapper template when #518 is fixed.
-  "doneprintHandle.js": "doneprintHandle.js",
 };
 
 const BUNDLED_HARNESS_DIR = join(import.meta.dir, "test262_harness");
@@ -274,16 +196,16 @@ class HarnessCache {
   }
 
   /**
-   * Always prepend `$262.js` (host hooks) and `assert.js` (which subsumes
-   * stock `sta.js`, `assert.js`, and `compareArray.js`).  Then append
-   * every name from the test's `includes:` list, dedup'd against names
-   * already covered by the prepended bundle.  The `raw` flag (caller's
-   * responsibility) skips this entirely.
+   * Always prepend `$262.js` (host hooks), stock `sta.js`, and stock
+   * `assert.js`. Then append every name from the test's `includes:` list,
+   * dedup'd against names already covered by the prelude. The `raw` flag
+   * (caller's responsibility) skips this entirely.
    */
   async build(includes: string[]): Promise<string> {
-    const seen = new Set<string>(["$262.js", "assert.js", "sta.js", "compareArray.js"]);
+    const seen = new Set<string>(["$262.js", "sta.js", "assert.js"]);
     const parts: string[] = [
       await this.read("$262.js"),
+      await this.read("sta.js"),
       await this.read("assert.js"),
     ];
     for (const name of includes) {
@@ -358,32 +280,7 @@ ${body}
 `;
   }
   if (opts.kind === "positive_async") {
-    // The bundled doneprintHandle.js declares __donePromise; route completion
-    // through it via an async IIFE so the await drains the body's microtasks
-    // through the VM's continuation machinery (which works in bytecode
-    // mode), and emit the stock marker strings from this wrapper rather
-    // than from $DONE itself.  See scripts/test262_harness/doneprintHandle.js.
-    //
-    // The `;` between body and IIFE is mandatory: many test262 async test
-    // bodies end with `foo().then(function() { $DONE(); })` (no trailing
-    // semicolon — relying on ASI), and the leading `(` of our IIFE would
-    // otherwise be parsed as a call on the body's last expression
-    // (`then(...)(async () => ...)`), producing "object is not a function".
-    return `${strictPrefix}${harnessSource}
-${body};
-(async () => {
-  try {
-    await __donePromise;
-    print("Test262:AsyncTestComplete");
-  } catch (__gocciaT262_e) {
-    if (__gocciaT262_e && typeof __gocciaT262_e === "object" && "name" in __gocciaT262_e) {
-      print("Test262:AsyncTestFailure:" + __gocciaT262_e.name + ": " + __gocciaT262_e.message);
-    } else {
-      print("Test262:AsyncTestFailure:Test262Error: " + String(__gocciaT262_e));
-    }
-  }
-})();
-`;
+    return `${strictPrefix}${harnessSource}\n${body}`;
   }
   // positive_sync
   return `${strictPrefix}${harnessSource}\n${body}`;
@@ -683,6 +580,7 @@ const TEST262_BARE_FLAGS: readonly string[] = [
   "--compat-loose-equality",
   "--compat-label",
   "--unsafe-function-constructor",
+  "--test262-host",
 ];
 
 function needsNonStrictCompat(isModule: boolean): boolean {

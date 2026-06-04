@@ -64,6 +64,7 @@ uses
   Goccia.ObjectModel,
   Goccia.Realm,
   Goccia.Threading,
+  Goccia.Values.BigIntObjectValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue;
@@ -258,10 +259,15 @@ end;
 function TGocciaBigIntValue.BigIntToString(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
+  Prim: TGocciaBigIntValue;
   Radix: Integer;
   RadixValue: TGocciaValue;
 begin
-  if not (AThisValue is TGocciaBigIntValue) then
+  if AThisValue is TGocciaBigIntValue then
+    Prim := TGocciaBigIntValue(AThisValue)
+  else if AThisValue is TGocciaBigIntObjectValue then
+    Prim := TGocciaBigIntValue(TGocciaBigIntObjectValue(AThisValue).Primitive)
+  else
     ThrowTypeError(Format(SErrorBigIntRequiresBigIntValue, ['BigInt.prototype.toString']),
       SSuggestBigIntRequiresBigIntValue);
 
@@ -278,28 +284,36 @@ begin
   end;
 
   Result := TGocciaStringLiteralValue.Create(
-    TGocciaBigIntValue(AThisValue).FValue.ToRadixString(Radix));
+    Prim.FValue.ToRadixString(Radix));
 end;
 
 // ES2026 §21.2.3.4 BigInt.prototype.valueOf()
 function TGocciaBigIntValue.BigIntValueOf(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  if not (AThisValue is TGocciaBigIntValue) then
+  if AThisValue is TGocciaBigIntValue then
+    Result := AThisValue
+  else if AThisValue is TGocciaBigIntObjectValue then
+    Result := TGocciaBigIntObjectValue(AThisValue).Primitive
+  else
     ThrowTypeError(Format(SErrorBigIntRequiresBigIntValue, ['BigInt.prototype.valueOf']),
       SSuggestBigIntRequiresBigIntValue);
-  Result := AThisValue;
 end;
 
 // ES2026 §21.2.3.2 BigInt.prototype.toLocaleString()
 function TGocciaBigIntValue.BigIntToLocaleString(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Prim: TGocciaBigIntValue;
 begin
-  if not (AThisValue is TGocciaBigIntValue) then
+  if AThisValue is TGocciaBigIntValue then
+    Prim := TGocciaBigIntValue(AThisValue)
+  else if AThisValue is TGocciaBigIntObjectValue then
+    Prim := TGocciaBigIntValue(TGocciaBigIntObjectValue(AThisValue).Primitive)
+  else
     ThrowTypeError(Format(SErrorBigIntRequiresBigIntValue, ['BigInt.prototype.toLocaleString']),
       SSuggestBigIntRequiresBigIntValue);
-  Result := TGocciaStringLiteralValue.Create(
-    TGocciaBigIntValue(AThisValue).FValue.ToString);
+  Result := TGocciaStringLiteralValue.Create(Prim.FValue.ToString);
 end;
 
 initialization
