@@ -537,6 +537,39 @@ console.log("Bare Loader: --mode=interpreted...");
   if (proc.stdout.toString().trim() !== "42") throw new Error(`Bare --mode=interpreted expected 42, got: ${proc.stdout.toString()}`);
 }
 
+console.log("Bare Loader: interpreted for-in scope survives Goccia.gc...");
+{
+  const source = [
+    "function f() {",
+    "  let obj = { p: 1, r: 3, s: 4 };",
+    "  let seen = '';",
+    "  for (let key in obj) {",
+    "    Goccia.gc();",
+    "    seen = seen + key;",
+    "  }",
+    "  return seen;",
+    "}",
+    "print(f());",
+    "",
+  ].join("\n");
+  const proc = Bun.spawnSync([
+    BARE,
+    "--mode=interpreted",
+    "--compat-asi",
+    "--compat-function",
+    "--compat-for-in-loop",
+    "--compat-non-strict-mode",
+  ], {
+    stdin: new TextEncoder().encode(source),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0)
+    throw new Error(`Bare interpreted for-in Goccia.gc exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (proc.stdout.toString().trim() !== "prs")
+    throw new Error(`Bare interpreted for-in Goccia.gc expected prs, got: ${proc.stdout.toString()}`);
+}
+
 console.log("Bare Loader: --mode=bytecode...");
 {
   const proc = Bun.spawnSync([BARE, "--print", "--mode=bytecode"], {
