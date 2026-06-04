@@ -11,6 +11,14 @@ describe('Object.prototype.toLocaleString', () => {
     expect(obj.toLocaleString()).toBe('custom');
   });
 
+  test('calls proxied toString methods', () => {
+    const obj = {
+      toString: new Proxy(() => 'proxied', {}),
+    };
+
+    expect(obj.toLocaleString()).toBe('proxied');
+  });
+
   test('works on arrays', () => {
     const arr = [1, 2, 3];
     expect(arr.toLocaleString()).toBe(arr.toString());
@@ -36,5 +44,23 @@ describe('Object.prototype.toLocaleString', () => {
     class Child extends Base {}
     const c = new Child();
     expect(c.toLocaleString()).toBe('Base');
+  });
+
+  test('rejects nullish receivers', () => {
+    const toLocaleString = Object.prototype.toLocaleString;
+
+    expect(() => toLocaleString.call(null)).toThrow(TypeError);
+    expect(() => toLocaleString.call(undefined)).toThrow(TypeError);
+    expect(() => toLocaleString()).toThrow(TypeError);
+  });
+
+  test('throws when toString is not callable', () => {
+    expect(() => Object.prototype.toLocaleString.call({ toString: 1 })).toThrow(TypeError);
+  });
+
+  test('uses primitive receiver toString methods', () => {
+    expect(Object.prototype.toLocaleString.call(1)).toBe('1');
+    expect(Object.prototype.toLocaleString.call(true)).toBe('true');
+    expect(Object.prototype.toLocaleString.call('x')).toBe('x');
   });
 });

@@ -15,6 +15,8 @@ type
   TGocciaBooleanObjectValue = class(TGocciaInstanceValue)
   private
     FPrimitive: TGocciaBooleanLiteralValue;
+
+    function ExtractPrimitive(const AValue: TGocciaValue): TGocciaBooleanLiteralValue;
   public
     constructor Create(const APrimitive: TGocciaBooleanLiteralValue; const AClass: TGocciaClassValue = nil);
     procedure InitializePrototype;
@@ -35,7 +37,8 @@ implementation
 uses
   Goccia.GarbageCollector,
   Goccia.Realm,
-  Goccia.Values.NativeFunction;
+  Goccia.Values.ErrorHelper,
+  Goccia.Values.ToObject;
 
 // Boolean.prototype lives in a per-realm slot.  Method host and member
 // definitions stay process-wide (immutable across realms).
@@ -52,6 +55,19 @@ begin
     Result := TGocciaObjectValue(CurrentRealm.GetSlot(GBooleanPrototypeSlot))
   else
     Result := nil;
+end;
+
+// ES2026 §20.3.3.3.1 ThisBooleanValue(value)
+function TGocciaBooleanObjectValue.ExtractPrimitive(const AValue: TGocciaValue): TGocciaBooleanLiteralValue;
+begin
+  RequireObjectCoercible(AValue);
+
+  if AValue is TGocciaBooleanLiteralValue then
+    Result := TGocciaBooleanLiteralValue(AValue)
+  else if AValue is TGocciaBooleanObjectValue then
+    Result := TGocciaBooleanObjectValue(AValue).Primitive
+  else
+    ThrowTypeError('Boolean.prototype method called on non-Boolean');
 end;
 
 constructor TGocciaBooleanObjectValue.Create(const APrimitive: TGocciaBooleanLiteralValue; const AClass: TGocciaClassValue = nil);
@@ -120,24 +136,14 @@ end;
 
 function TGocciaBooleanObjectValue.BooleanValueOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  if AThisValue is TGocciaBooleanObjectValue then
-    Result := TGocciaBooleanObjectValue(AThisValue).Primitive
-  else if AThisValue is TGocciaBooleanLiteralValue then
-    Result := AThisValue
-  else
-    Result := AThisValue.ToBooleanLiteral;
+  Result := ExtractPrimitive(AThisValue);
 end;
 
 function TGocciaBooleanObjectValue.BooleanToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Prim: TGocciaBooleanLiteralValue;
 begin
-  if AThisValue is TGocciaBooleanObjectValue then
-    Prim := TGocciaBooleanObjectValue(AThisValue).Primitive
-  else if AThisValue is TGocciaBooleanLiteralValue then
-    Prim := TGocciaBooleanLiteralValue(AThisValue)
-  else
-    Prim := AThisValue.ToBooleanLiteral;
+  Prim := ExtractPrimitive(AThisValue);
 
   if Prim.Value then
     Result := TGocciaStringLiteralValue.Create('true')
