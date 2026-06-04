@@ -119,6 +119,8 @@ begin
       SSuggestBigIntNoImplicitConversion);
 
   Arg := AArgs.GetElement(0);
+  if Arg is TGocciaObjectValue then
+    Arg := ToPrimitive(Arg, tphNumber);
 
   // Already a BigInt — return as-is
   if Arg is TGocciaBigIntValue then
