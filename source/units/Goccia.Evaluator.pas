@@ -6312,8 +6312,7 @@ begin
   AClassValue.RunMethodInitializers(AInstance);
   AClassValue.RunFieldInitializers(AInstance);
   AClassValue.RunDecoratorFieldInitializers(AInstance);
-  if (AInitializationMode = iimEagerReplacement) and
-     (not (AInstance is TGocciaInstanceValue)) then
+  if AInitializationMode = iimEagerReplacement then
     StampRawPrivateInstanceInitializersApplied(AInstance, AClassValue);
 end;
 
