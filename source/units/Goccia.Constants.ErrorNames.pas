@@ -6,6 +6,7 @@ interface
 
 const
   ERROR_NAME            = 'Error';
+  EVAL_ERROR_NAME       = 'EvalError';
   TYPE_ERROR_NAME       = 'TypeError';
   RANGE_ERROR_NAME      = 'RangeError';
   REFERENCE_ERROR_NAME  = 'ReferenceError';

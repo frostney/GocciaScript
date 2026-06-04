@@ -24,11 +24,10 @@ LoaderBare-plus-stock-harness setup, see the
 - Wrapper bodies execute inside a neutral engine — `expect`, `describe`,
   `test`, lifecycle hooks, mocks, `runTests` are not registered.
 - Stock tc39/test262 harness files are loaded from the pinned test262
-  checkout's `harness/` directory by default. A small number (currently
-  13) are bundled as GocciaScript-compatible reimplementations under
-  `scripts/test262_harness/` — only the stock files that depend on
-  language features Goccia intentionally excludes or implements
-  differently. See "Bundled harness adaptations" below.
+  checkout's `harness/` directory. The only bundled harness file is
+  `scripts/test262_harness/$262.js`, the host-provided hook object.
+- The orchestrator passes `GocciaScriptLoaderBare --test262-host` so those
+  host hooks are available only during conformance runs.
 - The orchestrator drives via process exit code + stdout markers, the
   same convention `test262-harness`/`eshost`/test262.fyi use.
 - Wrapper-infrastructure failures are classified separately from
@@ -43,7 +42,7 @@ scripts/run_test262_suite.ts
       → read frontmatter, classify by phase (parse / runtime / positive)
       → build source = (stock harness includes) + body, with a tiny
         marker-emitting wrapper for negative-runtime
-      → spawn ./build/GocciaScriptLoaderBare with stdin = source
+      → spawn ./build/GocciaScriptLoaderBare --test262-host with stdin = source
       → capture (exitCode, stdout, stderr)
       → classify into PASS / FAIL / WRAPPER_INFRA / TIMEOUT
   → aggregate per top-level category
@@ -59,17 +58,9 @@ scripts/run_test262_suite.ts
 | Negative runtime  | stdout contains `Test262:NegativeTestError:<expected-type>`           | `Test262:NegativeTestNoError`, OR `Test262:NegativeTestError:<other>`    |
 | Negative parse    | exit non-zero (parse failed as expected)                              | exit 0 (parse succeeded)                                                 |
 
-The async markers are emitted by the `positive_async` wrapper template
-in `scripts/run_test262_suite.ts` (NOT by `$DONE`). The bundled
-`scripts/test262_harness/doneprintHandle.js` defines `$DONE` to
-resolve/reject the `__donePromise`; the wrapper `await`s that promise
-in an async IIFE and prints `Test262:AsyncTestComplete` /
-`Test262:AsyncTestFailure:...` from there. (Stock test262
-`doneprintHandle.js` would print the markers from inside `$DONE`
-directly, but that path triggers a bytecode VM crash on the top-level
-`Promise.then` drain — see "Bundled harness adaptations" below.)
-Async-debugging starts at `__donePromise` and the `positive_async`
-branch of `buildTestSource`. The negative-runtime markers
+Async markers are emitted by stock test262 `doneprintHandle.js` via
+`$DONE`; the runner only scans stdout for those strings. The
+negative-runtime markers
 (`Test262:NegativeTestError:...` / `Test262:NegativeTestNoError`) are
 the only Goccia-specific marker addition; see "Wrapper templates"
 below.
@@ -162,9 +153,12 @@ Bodies see only the identifiers stock test262 expects:
 - `Test262Error` (from `sta.js`)
 - `assert` and its methods (from `assert.js`)
 - `$DONE`, `$DONOTEVALUATE` (from `sta.js` / `doneprintHandle.js` when included)
-- `print` (Goccia engine global; the `positive_async` wrapper calls it to emit the `Test262:Async*` markers after `await __donePromise`. The bundled `doneprintHandle.js` itself only resolves / rejects `__donePromise`; it does NOT call `print`.)
-- `$262` host hooks implemented by Goccia's bundled adaptation:
-  `detachArrayBuffer` and `gc`
+- `print` (Goccia engine global; stock `doneprintHandle.js` uses it for async markers)
+- `$262` helpers implemented by Goccia's bundled host object:
+  `detachArrayBuffer`, `gc`, and a harness-local `createRealm`
+- `test262Host`, a private marker on the `Goccia` namespace exposed only by
+  `GocciaScriptLoaderBare --test262-host` so `$262.js` can reject accidental
+  use outside the conformance host.
 - Anything declared in test-included harness files (e.g. `compareArray`,
   `propertyHelper`)
 
@@ -181,65 +175,21 @@ Bodies do NOT see:
 ## Bundled harness adaptations
 
 The orchestrator loads stock tc39/test262 harness files from the pinned
-checkout's `harness/` directory by default. A small `BUNDLED_INCLUDES`
-map in `scripts/run_test262_suite.ts` overrides specific includes with
-GocciaScript-compatible reimplementations under `scripts/test262_harness/`.
-This is the minimum compatibility layer needed to keep conformance
-numbers honest — without it, ~7K tests fail with harness-environment
-errors instead of real engine surfaces.
+checkout's `harness/` directory. `BUNDLED_INCLUDES` contains only
+`$262.js`, because `$262` is not a stock harness helper: it is the
+host-provided object test262 expects engines to supply.
 
-Bundling rule: only override a stock file when it depends on missing
-language/runtime coverage or on compatibility syntax that the harness
-cannot currently exercise directly. Each entry has a one-line rationale
-in `BUNDLED_INCLUDES`. If a future stock harness change or engine
-implementation makes a bundled file unnecessary, delete the entry.
+Bundling rule: do not add compatibility copies of stock harness files.
+If a stock helper fails, fix the language/runtime behavior or classify the
+test as a genuine conformance failure. `$262.js` may grow only by adding
+test262 host hooks or harness-local `$262` behavior.
 
-Current bundled set (13 files):
-
-Each entry below describes the current Goccia behavior that requires
-the adaptation. The bundled file's source comment carries the
-mechanical "delete this when …" instruction and references the
-tracking issue; this doc captures the rationale by describing what
-Goccia does today, so it stays accurate even if the underlying gap
-moves.
-
-- `assert.js` (subsumes stock `sta.js` + `assert.js` + `compareArray.js`):
-  `assert.compareArray` still uses the historical for-of adaptation from
-  before the runner enabled traditional for-loop compatibility; it should be
-  re-evaluated against stock. `assert.throws` uses `instanceof`
-  instead of stock's `thrown.constructor !== ctor` because caught
-  Errors have `e.constructor === undefined` in Goccia.
-- `propertyHelper.js`, `deepEqual.js`, `temporalHelpers.js`,
-  `wellKnownIntrinsicObjects.js`: stock helpers use `arguments`; the
-  runner now enables `--compat-non-strict-mode` for eligible Script tests,
-  so these entries should be re-evaluated against the stock helpers during
-  the next harness cleanup.
-- `testTypedArray.js`: stock uses `for (var i = 0; ...)` and
-  `with (...)` blocks; the runner now enables the corresponding
-  compatibility flags for eligible Script tests, so this helper should be
-  re-evaluated against stock during the next harness cleanup.
-- `compareIterator.js`, `decimalToHexString.js`,
-  `nativeFunctionMatcher.js`, `regExpUtils.js`: stock uses traditional
-  `for` or `while` loops. These helpers were reimplemented with for-of or
-  recursion before loop compatibility flags covered the stock forms, and
-  should be re-evaluated against stock during the next harness cleanup.
-- `isConstructor.js`: stock probes constructor-ness via
-  `Reflect.construct(function(){}, [], f)`; Goccia's `Reflect.construct`
-  rejects `function` declarations and expressions as the proxy target.
-  Adapted version uses `Reflect.construct(class {}, [], f)`.
-- `fnGlobalObject.js`: stock uses `Function("return this;")()`.
-  The runner now enables `--compat-function` and
-  `--compat-non-strict-mode` for eligible Script tests, so this helper
-  should be re-evaluated against the stock version during the next harness
-  cleanup. Adapted version still uses `() => globalThis`.
-- `doneprintHandle.js`: stock has `$DONE` print
-  `Test262:AsyncTestComplete` / `Test262:AsyncTestFailure:...` directly;
-  in Goccia bytecode mode draining a top-level `Promise.then`
-  continuation crashes the VM (interpreter mode is fine). Adapted
-  version routes completion through `__donePromise` so the
-  `positive_async` wrapper template can `await` it inside an async
-  IIFE — which drives the drain through the VM's continuation
-  machinery, the working path.
+`$262.createRealm()` lives entirely in `$262.js`. It currently models the
+cross-constructor identity needed by the stock harness same-realm assertion
+tests; it does not expose a GocciaScript realm-creation global. If future
+test262 coverage needs true fresh ECMAScript realms, add that as an explicit,
+flagged host capability under `--test262-host` instead of silently registering
+an ambient loader global.
 
 ## Strict mode
 

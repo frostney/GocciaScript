@@ -56,6 +56,8 @@ function GetErrorPrototype(const AName: string): TGocciaObjectValue;
 begin
   if AName = TYPE_ERROR_NAME then
     Result := GetTypeErrorProto
+  else if AName = EVAL_ERROR_NAME then
+    Result := GetEvalErrorProto
   else if AName = RANGE_ERROR_NAME then
     Result := GetRangeErrorProto
   else if AName = REFERENCE_ERROR_NAME then

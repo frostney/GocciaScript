@@ -19,6 +19,7 @@ uses
 // error prototypes don't survive engine teardown on a worker thread.  Each
 // returns nil when no realm is active.
 function GetErrorProto: TGocciaObjectValue;
+function GetEvalErrorProto: TGocciaObjectValue;
 function GetTypeErrorProto: TGocciaObjectValue;
 function GetReferenceErrorProto: TGocciaObjectValue;
 function GetRangeErrorProto: TGocciaObjectValue;
@@ -32,6 +33,7 @@ type
   TGocciaGlobals = class(TGocciaBuiltin)
   private
     FErrorProto: TGocciaObjectValue;
+    FEvalErrorProto: TGocciaObjectValue;
     FTypeErrorProto: TGocciaObjectValue;
     FReferenceErrorProto: TGocciaObjectValue;
     FRangeErrorProto: TGocciaObjectValue;
@@ -47,6 +49,7 @@ type
     function BuildDOMException(const AArgs: TGocciaArgumentsCollection; const AProto: TGocciaObjectValue): TGocciaObjectValue;
 
     function ErrorConstruct(const AArgs: TGocciaArgumentsCollection; const ANewTarget: TGocciaValue): TGocciaValue;
+    function EvalErrorConstruct(const AArgs: TGocciaArgumentsCollection; const ANewTarget: TGocciaValue): TGocciaValue;
     function TypeErrorConstruct(const AArgs: TGocciaArgumentsCollection; const ANewTarget: TGocciaValue): TGocciaValue;
     function ReferenceErrorConstruct(const AArgs: TGocciaArgumentsCollection; const ANewTarget: TGocciaValue): TGocciaValue;
     function RangeErrorConstruct(const AArgs: TGocciaArgumentsCollection; const ANewTarget: TGocciaValue): TGocciaValue;
@@ -58,6 +61,7 @@ type
   protected
   published
     function ErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function EvalErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function TypeErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ReferenceErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function RangeErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -114,6 +118,7 @@ uses
 
 var
   GErrorProtoSlot: TGocciaRealmSlotId;
+  GEvalErrorProtoSlot: TGocciaRealmSlotId;
   GTypeErrorProtoSlot: TGocciaRealmSlotId;
   GReferenceErrorProtoSlot: TGocciaRealmSlotId;
   GRangeErrorProtoSlot: TGocciaRealmSlotId;
@@ -127,6 +132,14 @@ function GetErrorProto: TGocciaObjectValue;
 begin
   if Assigned(CurrentRealm) then
     Result := TGocciaObjectValue(CurrentRealm.GetSlot(GErrorProtoSlot))
+  else
+    Result := nil;
+end;
+
+function GetEvalErrorProto: TGocciaObjectValue;
+begin
+  if Assigned(CurrentRealm) then
+    Result := TGocciaObjectValue(CurrentRealm.GetSlot(GEvalErrorProtoSlot))
   else
     Result := nil;
 end;
@@ -198,6 +211,7 @@ end;
 constructor TGocciaGlobals.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 var
   ErrorConstructorFunc: TGocciaNativeFunctionValue;
+  EvalErrorConstructorFunc: TGocciaNativeFunctionValue;
   TypeErrorConstructorFunc: TGocciaNativeFunctionValue;
   ReferenceErrorConstructorFunc: TGocciaNativeFunctionValue;
   RangeErrorConstructorFunc: TGocciaNativeFunctionValue;
@@ -227,6 +241,10 @@ begin
     Free;
   end;
   RegisterMemberDefinitions(FErrorProto, ErrorProtoMembers);
+
+  FEvalErrorProto := TGocciaObjectValue.Create(FErrorProto);
+  FEvalErrorProto.DefineProperty(PROP_NAME, TGocciaPropertyDescriptorData.Create(TGocciaStringLiteralValue.Create(EVAL_ERROR_NAME), [pfConfigurable, pfWritable]));
+  FEvalErrorProto.DefineProperty(PROP_MESSAGE, TGocciaPropertyDescriptorData.Create(TGocciaStringLiteralValue.Create(''), [pfConfigurable, pfWritable]));
 
   FTypeErrorProto := TGocciaObjectValue.Create(FErrorProto);
   FTypeErrorProto.DefineProperty(PROP_NAME, TGocciaPropertyDescriptorData.Create(TGocciaStringLiteralValue.Create(TYPE_ERROR_NAME), [pfConfigurable, pfWritable]));
@@ -268,6 +286,7 @@ begin
   if Assigned(CurrentRealm) then
   begin
     CurrentRealm.SetSlot(GErrorProtoSlot, FErrorProto);
+    CurrentRealm.SetSlot(GEvalErrorProtoSlot, FEvalErrorProto);
     CurrentRealm.SetSlot(GTypeErrorProtoSlot, FTypeErrorProto);
     CurrentRealm.SetSlot(GReferenceErrorProtoSlot, FReferenceErrorProto);
     CurrentRealm.SetSlot(GRangeErrorProtoSlot, FRangeErrorProto);
@@ -280,6 +299,8 @@ begin
 
   ErrorConstructorFunc := TGocciaNativeFunctionValue.Create(ErrorConstructor, ERROR_NAME, 1);
   ErrorConstructorFunc.ConstructCallback := ErrorConstruct;
+  EvalErrorConstructorFunc := TGocciaNativeFunctionValue.Create(EvalErrorConstructor, EVAL_ERROR_NAME, 1);
+  EvalErrorConstructorFunc.ConstructCallback := EvalErrorConstruct;
   TypeErrorConstructorFunc := TGocciaNativeFunctionValue.Create(TypeErrorConstructor, TYPE_ERROR_NAME, 1);
   TypeErrorConstructorFunc.ConstructCallback := TypeErrorConstruct;
   ReferenceErrorConstructorFunc := TGocciaNativeFunctionValue.Create(ReferenceErrorConstructor, REFERENCE_ERROR_NAME, 1);
@@ -306,6 +327,7 @@ begin
     Free;
   end;
   RegisterMemberDefinitions(ErrorConstructorFunc, ErrorStaticMembers);
+  EvalErrorConstructorFunc.DefineProperty(PROP_PROTOTYPE, TGocciaPropertyDescriptorData.Create(FEvalErrorProto, []));
   TypeErrorConstructorFunc.DefineProperty(PROP_PROTOTYPE, TGocciaPropertyDescriptorData.Create(FTypeErrorProto, []));
   ReferenceErrorConstructorFunc.DefineProperty(PROP_PROTOTYPE, TGocciaPropertyDescriptorData.Create(FReferenceErrorProto, []));
   RangeErrorConstructorFunc.DefineProperty(PROP_PROTOTYPE, TGocciaPropertyDescriptorData.Create(FRangeErrorProto, []));
@@ -316,6 +338,7 @@ begin
   DOMExceptionConstructorFunc.DefineProperty(PROP_PROTOTYPE, TGocciaPropertyDescriptorData.Create(FDOMExceptionProto, []));
 
   FErrorProto.DefineProperty(PROP_CONSTRUCTOR, TGocciaPropertyDescriptorData.Create(ErrorConstructorFunc, [pfConfigurable, pfWritable]));
+  FEvalErrorProto.DefineProperty(PROP_CONSTRUCTOR, TGocciaPropertyDescriptorData.Create(EvalErrorConstructorFunc, [pfConfigurable, pfWritable]));
   FTypeErrorProto.DefineProperty(PROP_CONSTRUCTOR, TGocciaPropertyDescriptorData.Create(TypeErrorConstructorFunc, [pfConfigurable, pfWritable]));
   FReferenceErrorProto.DefineProperty(PROP_CONSTRUCTOR, TGocciaPropertyDescriptorData.Create(ReferenceErrorConstructorFunc, [pfConfigurable, pfWritable]));
   FRangeErrorProto.DefineProperty(PROP_CONSTRUCTOR, TGocciaPropertyDescriptorData.Create(RangeErrorConstructorFunc, [pfConfigurable, pfWritable]));
@@ -326,6 +349,7 @@ begin
   FDOMExceptionProto.DefineProperty(PROP_CONSTRUCTOR, TGocciaPropertyDescriptorData.Create(DOMExceptionConstructorFunc, [pfConfigurable, pfWritable]));
 
   AScope.DefineLexicalBinding(ERROR_NAME, ErrorConstructorFunc, dtConst, True);
+  AScope.DefineLexicalBinding(EVAL_ERROR_NAME, EvalErrorConstructorFunc, dtConst, True);
   AScope.DefineLexicalBinding(TYPE_ERROR_NAME, TypeErrorConstructorFunc, dtConst, True);
   AScope.DefineLexicalBinding(REFERENCE_ERROR_NAME, ReferenceErrorConstructorFunc, dtConst, True);
   AScope.DefineLexicalBinding(RANGE_ERROR_NAME, RangeErrorConstructorFunc, dtConst, True);
@@ -455,6 +479,12 @@ begin
     Result := TGocciaStringLiteralValue.Create(Name)
   else
     Result := TGocciaStringLiteralValue.Create(Name + ': ' + Msg);
+end;
+
+{ EvalError ( message [ , options ] ) — §20.5.6.1.1 (NativeError) }
+function TGocciaGlobals.EvalErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := BuildErrorObject(EVAL_ERROR_NAME, FEvalErrorProto, AArgs);
 end;
 
 { TypeError ( message [ , options ] ) — §20.5.6.1.1 (NativeError) }
@@ -628,6 +658,12 @@ function TGocciaGlobals.ErrorConstruct(const AArgs: TGocciaArgumentsCollection; 
 begin
   Result := BuildErrorObject(ERROR_NAME,
     GetProtoFromConstructorWithIntrinsic(ANewTarget, FErrorProto), AArgs);
+end;
+
+function TGocciaGlobals.EvalErrorConstruct(const AArgs: TGocciaArgumentsCollection; const ANewTarget: TGocciaValue): TGocciaValue;
+begin
+  Result := BuildErrorObject(EVAL_ERROR_NAME,
+    GetProtoFromConstructorWithIntrinsic(ANewTarget, FEvalErrorProto), AArgs);
 end;
 
 function TGocciaGlobals.TypeErrorConstruct(const AArgs: TGocciaArgumentsCollection; const ANewTarget: TGocciaValue): TGocciaValue;
@@ -965,6 +1001,7 @@ end;
 
 initialization
   GErrorProtoSlot := RegisterRealmSlot('Error.prototype');
+  GEvalErrorProtoSlot := RegisterRealmSlot('EvalError.prototype');
   GTypeErrorProtoSlot := RegisterRealmSlot('TypeError.prototype');
   GReferenceErrorProtoSlot := RegisterRealmSlot('ReferenceError.prototype');
   GRangeErrorProtoSlot := RegisterRealmSlot('RangeError.prototype');

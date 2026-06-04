@@ -82,6 +82,62 @@ test("setting length to a larger value extends the array with holes", () => {
   expect(4 in arr).toBe(false);
 });
 
+test("setting length to 2**32 - 1 is valid and does not allocate holes", () => {
+  const arr = [1, 2, 3];
+  arr.length = 4294967295;
+  expect(arr.length).toBe(4294967295);
+  expect(arr[0]).toBe(1);
+  expect(arr[2]).toBe(3);
+  expect(4294967294 in arr).toBe(false);
+
+  arr.length = 3;
+  expect(arr.length).toBe(3);
+  expect(arr[0]).toBe(1);
+  expect(arr[2]).toBe(3);
+});
+
+test("setting a high valid array index updates length without dense allocation", () => {
+  const arr = [];
+  arr[4294967294] = 7;
+
+  expect(arr.length).toBe(4294967295);
+  expect(arr[4294967294]).toBe(7);
+  expect(Object.prototype.hasOwnProperty.call(arr, "4294967294")).toBe(true);
+});
+
+test("defining a high valid array index updates length", () => {
+  const arr = [];
+  Object.defineProperty(arr, "4294967294", {
+    value: "last",
+    writable: true,
+    enumerable: true,
+    configurable: true,
+  });
+
+  expect(arr.length).toBe(4294967295);
+  expect(arr[4294967294]).toBe("last");
+});
+
+test("2**32 - 1 is a plain property name, not an array index", () => {
+  const arr = [];
+  arr[4294967295] = "plain";
+
+  expect(arr.length).toBe(0);
+  expect(arr[4294967295]).toBe("plain");
+  expect(Object.prototype.hasOwnProperty.call(arr, "4294967295")).toBe(true);
+});
+
+test("non-writable length rejects high indices that would grow the array", () => {
+  const arr = [];
+  Object.defineProperty(arr, "length", { writable: false });
+
+  expect(() => {
+    arr[4294967294] = 7;
+  }).toThrow(TypeError);
+  expect(arr.length).toBe(0);
+  expect(Object.prototype.hasOwnProperty.call(arr, "4294967294")).toBe(false);
+});
+
 test("setting length to 2**32 throws RangeError", () => {
   expect(() => {
     [].length = 4294967296;
