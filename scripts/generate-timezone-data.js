@@ -1,11 +1,17 @@
 #!/usr/bin/env node
 
 const fs = require("fs");
-const http = require("http");
-const https = require("https");
 const os = require("os");
 const path = require("path");
 const { execFileSync } = require("child_process");
+const {
+  buildResourceContainer,
+  downloadFileToDisk,
+  generateResourceFile,
+  isUrl,
+  pascalUnitNameForOutput,
+  resourceFileForOutput,
+} = require("./lib/resource-container");
 
 const REPO_ROOT = path.resolve(__dirname, "..");
 const DEFAULT_OUTPUT = path.join(
@@ -32,12 +38,6 @@ const SKIPPED_FILES = new Set(["localtime", "posixrules"]);
 const TZIF_MAGIC = Buffer.from("TZif");
 const RESOURCE_NAME = "GOCCIA_TZDATA";
 const RESOURCE_MAGIC = Buffer.from("GOCCIATZ", "ascii");
-const RESOURCE_FORMAT_VERSION = 1;
-const RESOURCE_HEADER_SIZE = RESOURCE_MAGIC.length + 6 * 4;
-const RESOURCE_ENTRY_SIZE = 4 * 4;
-const MAX_REDIRECTS = 5;
-const DOWNLOAD_TIMEOUT_MS = 30000;
-const PASCAL_UNIT_IDENTIFIER_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 function usage() {
   console.error("Usage: node scripts/generate-timezone-data.js [zoneinfo-dir|tzdata.tar.gz|url] [output-file]");
@@ -51,35 +51,14 @@ function parseArguments() {
 
   const source = process.argv[2] || IANA_TZDATA_LATEST_URL;
   const outputFile = process.argv[3] ? path.resolve(process.argv[3]) : DEFAULT_OUTPUT;
-  const outputResourceFile = resourceFileForOutput(outputFile);
-  const unitName = pascalUnitNameForOutput(outputFile);
+  const outputResourceFile = resourceFileForOutput(outputFile, "Timezone data");
+  const unitName = pascalUnitNameForOutput(outputFile, "Timezone data");
 
   if (path.resolve(outputFile) === path.resolve(outputResourceFile)) {
     throw new Error(`Refusing to use ${outputFile} for both Pascal and resource output`);
   }
 
   return { source, outputFile, outputResourceFile, unitName };
-}
-
-function pascalUnitNameForOutput(outputFile) {
-  if (path.extname(outputFile).toLowerCase() !== ".pas") {
-    throw new Error(`Timezone data output must be a .pas file: ${outputFile}`);
-  }
-
-  const unitName = path.basename(outputFile, path.extname(outputFile));
-  if (unitName.length === 0) {
-    throw new Error(`Timezone data output must have a non-empty Pascal unit name: ${outputFile}`);
-  }
-
-  const unitNameParts = unitName.split(".");
-  if (
-    unitNameParts.length === 0 ||
-    unitNameParts.some((unitNamePart) => !PASCAL_UNIT_IDENTIFIER_PATTERN.test(unitNamePart))
-  ) {
-    throw new Error(`Timezone data output basename is not a valid Pascal unit name: ${unitName}`);
-  }
-
-  return unitName;
 }
 
 function isTimeZoneInformationFile(buffer) {
@@ -107,149 +86,6 @@ function readVersion(zoneInfoDir) {
   }
 
   return "unknown";
-}
-
-function isUrl(source) {
-  return /^https?:\/\//.test(source);
-}
-
-function downloadFile(url, outputFile) {
-  return new Promise((resolve, reject) => {
-    function get(currentUrl, redirectsLeft) {
-      if (redirectsLeft < 0) {
-        reject(new Error(`Too many redirects while downloading ${currentUrl}`));
-        return;
-      }
-
-      const protocol = new URL(currentUrl).protocol;
-      const client = protocol === "http:" ? http : protocol === "https:" ? https : null;
-      if (!client) {
-        reject(new Error(`Unsupported URL protocol ${protocol} while downloading ${currentUrl}`));
-        return;
-      }
-
-      let file = null;
-      let response = null;
-      let req = null;
-      let settled = false;
-
-      function cleanup() {
-        if (req) {
-          req.setTimeout(0);
-          req.removeListener("timeout", onTimeout);
-          req.removeListener("error", onRequestError);
-        }
-
-        if (response && response.socket) {
-          response.socket.setTimeout(0);
-          response.socket.removeListener("timeout", onTimeout);
-        }
-
-        if (response) {
-          response.removeListener("error", onResponseError);
-        }
-
-        if (file) {
-          file.removeListener("finish", onFileFinish);
-          file.removeListener("error", onFileError);
-        }
-      }
-
-      function abortRequest() {
-        req.once("error", () => {});
-        req.abort();
-      }
-
-      function fail(error) {
-        if (settled) {
-          return;
-        }
-
-        settled = true;
-        cleanup();
-        if (file) {
-          file.destroy();
-        }
-        reject(error);
-      }
-
-      function onTimeout() {
-        abortRequest();
-        fail(new Error(`Timeout downloading ${currentUrl}`));
-      }
-
-      function onRequestError(error) {
-        fail(error);
-      }
-
-      function onResponseError(error) {
-        fail(error);
-      }
-
-      function onFileError(error) {
-        abortRequest();
-        fail(error);
-      }
-
-      function onFileFinish() {
-        if (settled) {
-          return;
-        }
-
-        settled = true;
-        cleanup();
-        file.close((error) => {
-          if (error) {
-            reject(error);
-            return;
-          }
-
-          resolve();
-        });
-      }
-
-      req = client
-        .get(currentUrl, (downloadResponse) => {
-          response = downloadResponse;
-          response.on("error", onResponseError);
-          if (response.socket) {
-            response.socket.setTimeout(DOWNLOAD_TIMEOUT_MS, onTimeout);
-          }
-
-          if (
-            response.statusCode >= 300 &&
-            response.statusCode < 400 &&
-            response.headers.location
-          ) {
-            cleanup();
-            response.resume();
-            if (redirectsLeft <= 0) {
-              reject(new Error(`Too many redirects while downloading ${currentUrl}`));
-              return;
-            }
-            get(new URL(response.headers.location, currentUrl).toString(), redirectsLeft - 1);
-            return;
-          }
-
-          if (response.statusCode !== 200) {
-            cleanup();
-            response.resume();
-            reject(new Error(`HTTP ${response.statusCode} while downloading ${currentUrl}`));
-            return;
-          }
-
-          file = fs.createWriteStream(outputFile);
-          response.pipe(file);
-          file.on("finish", onFileFinish);
-          file.on("error", onFileError);
-        })
-        .on("error", onRequestError);
-
-      req.setTimeout(DOWNLOAD_TIMEOUT_MS, onTimeout);
-    }
-
-    get(url, MAX_REDIRECTS);
-  });
 }
 
 function extractTarball(tarballPath, outputDirectory) {
@@ -300,7 +136,7 @@ async function prepareZoneInfoSource(source) {
 
   try {
     if (isUrl(source)) {
-      await downloadFile(source, tarballPath);
+      await downloadFileToDisk(source, tarballPath);
     } else {
       fs.copyFileSync(path.resolve(source), tarballPath);
     }
@@ -416,89 +252,6 @@ function packEntries(entries) {
   };
 }
 
-function writeUInt32LE(buffer, value, offset) {
-  if (value < 0 || value > 0xffffffff) {
-    throw new Error(`Resource integer ${value} is outside UInt32 range`);
-  }
-
-  buffer.writeUInt32LE(value, offset);
-}
-
-function buildResourceContainer(version, entries, blob) {
-  const versionBuffer = Buffer.from(version, "utf8");
-  const nameBuffers = entries.map((entry) => Buffer.from(entry.name, "utf8"));
-  const namesByteCount = nameBuffers.reduce((total, nameBuffer) => total + nameBuffer.length, 0);
-  const entryTableByteCount = entries.length * RESOURCE_ENTRY_SIZE;
-  const totalByteCount =
-    RESOURCE_HEADER_SIZE +
-    versionBuffer.length +
-    entryTableByteCount +
-    namesByteCount +
-    blob.length;
-
-  const resource = Buffer.alloc(totalByteCount);
-  let offset = 0;
-
-  RESOURCE_MAGIC.copy(resource, offset);
-  offset += RESOURCE_MAGIC.length;
-  writeUInt32LE(resource, RESOURCE_FORMAT_VERSION, offset); offset += 4;
-  writeUInt32LE(resource, versionBuffer.length, offset); offset += 4;
-  writeUInt32LE(resource, entries.length, offset); offset += 4;
-  writeUInt32LE(resource, namesByteCount, offset); offset += 4;
-  writeUInt32LE(resource, blob.length, offset); offset += 4;
-  writeUInt32LE(resource, 0, offset); offset += 4;
-
-  versionBuffer.copy(resource, offset);
-  offset += versionBuffer.length;
-
-  let nameOffset = 0;
-  const namesOffset = RESOURCE_HEADER_SIZE + versionBuffer.length + entryTableByteCount;
-  for (let index = 0; index < entries.length; index += 1) {
-    const entry = entries[index];
-    const nameBuffer = nameBuffers[index];
-    writeUInt32LE(resource, nameOffset, offset); offset += 4;
-    writeUInt32LE(resource, nameBuffer.length, offset); offset += 4;
-    writeUInt32LE(resource, entry.offset, offset); offset += 4;
-    writeUInt32LE(resource, entry.length, offset); offset += 4;
-    nameBuffer.copy(resource, namesOffset + nameOffset);
-    nameOffset += nameBuffer.length;
-  }
-
-  blob.copy(resource, namesOffset + namesByteCount);
-  return resource;
-}
-
-function resourceFileForOutput(outputFile) {
-  if (path.extname(outputFile).toLowerCase() !== ".pas") {
-    throw new Error(`Timezone data output must be a .pas file: ${outputFile}`);
-  }
-
-  return path.join(
-    path.dirname(outputFile),
-    `${path.basename(outputFile, path.extname(outputFile))}.res`,
-  );
-}
-
-function generateResourceFile(resourceBytes, outputResourceFile) {
-  const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "goccia-tzresource-"));
-  const resourceDataFile = path.join(temporaryDirectory, "timezone-data.bin");
-  const resourceScriptFile = path.join(temporaryDirectory, "timezone-data.rc");
-
-  try {
-    fs.writeFileSync(resourceDataFile, resourceBytes);
-    fs.writeFileSync(
-      resourceScriptFile,
-      `${RESOURCE_NAME} RCDATA "${resourceDataFile.replaceAll("\\", "\\\\")}"\n`,
-      "utf8",
-    );
-    execFileSync("fpcres", ["-of", "res", resourceScriptFile, "-o", outputResourceFile], {
-      stdio: "inherit",
-    });
-  } finally {
-    fs.rmSync(temporaryDirectory, { recursive: true, force: true });
-  }
-}
-
 function generatePascalUnit(sourceDescription, version, entryCount, blobByteCount, unitName, resourceReference) {
   return `unit ${unitName};
 
@@ -540,6 +293,7 @@ async function main() {
 
     const { indexedEntries, blob } = packEntries(entries);
     const resource = buildResourceContainer(
+      RESOURCE_MAGIC,
       preparedSource.version,
       indexedEntries,
       blob,
@@ -555,7 +309,11 @@ async function main() {
 
     fs.mkdirSync(path.dirname(outputFile), { recursive: true });
     fs.writeFileSync(outputFile, pascal, "utf8");
-    generateResourceFile(resource, outputResourceFile);
+    generateResourceFile(resource, outputResourceFile, RESOURCE_NAME, {
+      temporaryDirectoryPrefix: "goccia-tzresource-",
+      dataFileName: "timezone-data.bin",
+      scriptFileName: "timezone-data.rc",
+    });
 
     console.log(
       `Generated ${path.relative(REPO_ROOT, outputFile)} and ${path.relative(REPO_ROOT, outputResourceFile)} with ${indexedEntries.length} zones, ${blob.length} bytes, tzdata ${preparedSource.version}`,

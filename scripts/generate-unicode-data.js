@@ -1,10 +1,15 @@
 #!/usr/bin/env node
 
 const fs = require("fs");
-const https = require("https");
 const os = require("os");
 const path = require("path");
-const { execFileSync } = require("child_process");
+const {
+  buildResourceContainer,
+  downloadText,
+  generateResourceFile,
+  pascalUnitNameForOutput,
+  resourceFileForOutput,
+} = require("./lib/resource-container");
 
 const REPO_ROOT = path.resolve(__dirname, "..");
 const DEFAULT_OUTPUT = path.join(
@@ -15,8 +20,6 @@ const DEFAULT_OUTPUT = path.join(
 );
 const DEFAULT_UNICODE_VERSION = "16.0.0";
 const UCD_BASE_URL = "https://www.unicode.org/Public";
-const DOWNLOAD_TIMEOUT_MS = 30000;
-const MAX_REDIRECTS = 5;
 
 const UCD_FILES = [
   "extracted/DerivedGeneralCategory.txt",
@@ -34,10 +37,6 @@ const UCD_FILES = [
 
 const RESOURCE_NAME = "GOCCIA_UCD";
 const RESOURCE_MAGIC = Buffer.from("GOCCIAUC", "ascii");
-const RESOURCE_FORMAT_VERSION = 1;
-const RESOURCE_HEADER_SIZE = RESOURCE_MAGIC.length + 6 * 4;
-const RESOURCE_ENTRY_SIZE = 4 * 4;
-const PASCAL_UNIT_IDENTIFIER_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 const GC_GROUPS = {
   LC: ["Lu", "Ll", "Lt"],
@@ -66,8 +65,8 @@ function parseArguments() {
   const outputFile = process.argv[3]
     ? path.resolve(process.argv[3])
     : DEFAULT_OUTPUT;
-  const outputResourceFile = resourceFileForOutput(outputFile);
-  const unitName = pascalUnitNameForOutput(outputFile);
+  const outputResourceFile = resourceFileForOutput(outputFile, "Unicode data");
+  const unitName = pascalUnitNameForOutput(outputFile, "Unicode data");
 
   if (path.resolve(outputFile) === path.resolve(outputResourceFile)) {
     throw new Error(
@@ -78,81 +77,10 @@ function parseArguments() {
   return { unicodeVersion, outputFile, outputResourceFile, unitName };
 }
 
-function pascalUnitNameForOutput(outputFile) {
-  if (path.extname(outputFile).toLowerCase() !== ".pas") {
-    throw new Error(
-      `Unicode data output must be a .pas file: ${outputFile}`,
-    );
-  }
-
-  const unitName = path.basename(outputFile, path.extname(outputFile));
-  if (unitName.length === 0) {
-    throw new Error(
-      `Unicode data output must have a non-empty Pascal unit name: ${outputFile}`,
-    );
-  }
-
-  const unitNameParts = unitName.split(".");
-  if (
-    unitNameParts.length === 0 ||
-    unitNameParts.some(
-      (unitNamePart) => !PASCAL_UNIT_IDENTIFIER_PATTERN.test(unitNamePart),
-    )
-  ) {
-    throw new Error(
-      `Unicode data output basename is not a valid Pascal unit name: ${unitName}`,
-    );
-  }
-
-  return unitName;
-}
-
-function resourceFileForOutput(outputFile) {
-  const directory = path.dirname(outputFile);
-  const base = path.basename(outputFile, path.extname(outputFile));
-  return path.join(directory, base + ".res");
-}
-
-function downloadFile(url, redirectCount) {
-  if (redirectCount === undefined) {
-    redirectCount = 0;
-  }
-
-  return new Promise((resolve, reject) => {
-    if (redirectCount > MAX_REDIRECTS) {
-      reject(new Error(`Too many redirects downloading ${url}`));
-      return;
-    }
-
-    const request = https.get(url, { timeout: DOWNLOAD_TIMEOUT_MS }, (response) => {
-      if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
-        resolve(downloadFile(response.headers.location, redirectCount + 1));
-        return;
-      }
-
-      if (response.statusCode !== 200) {
-        reject(new Error(`HTTP ${response.statusCode} downloading ${url}`));
-        return;
-      }
-
-      const chunks = [];
-      response.on("data", (chunk) => chunks.push(chunk));
-      response.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
-      response.on("error", reject);
-    });
-
-    request.on("error", reject);
-    request.on("timeout", () => {
-      request.destroy();
-      reject(new Error(`Timeout downloading ${url}`));
-    });
-  });
-}
-
 async function downloadUCDFile(unicodeVersion, filePath) {
   const url = `${UCD_BASE_URL}/${unicodeVersion}/ucd/${filePath}`;
   console.log(`  Downloading ${filePath}...`);
-  return downloadFile(url);
+  return downloadText(url);
 }
 
 function parseRange(rangePart) {
@@ -332,85 +260,6 @@ function buildRangeDataBlob(ranges) {
     buffer.writeUInt32LE(ranges[i].hi, i * 8 + 4);
   }
   return buffer;
-}
-
-function writeUInt32LE(buffer, value, offset) {
-  if (value < 0 || value > 0xffffffff) {
-    throw new Error(`Resource integer ${value} is outside UInt32 range`);
-  }
-  buffer.writeUInt32LE(value, offset);
-}
-
-function buildResourceContainer(version, entries, blob) {
-  const versionBuffer = Buffer.from(version, "utf8");
-  const nameBuffers = entries.map((entry) => Buffer.from(entry.name, "utf8"));
-  const namesByteCount = nameBuffers.reduce(
-    (total, nameBuffer) => total + nameBuffer.length,
-    0,
-  );
-  const entryTableByteCount = entries.length * RESOURCE_ENTRY_SIZE;
-  const totalByteCount =
-    RESOURCE_HEADER_SIZE +
-    versionBuffer.length +
-    entryTableByteCount +
-    namesByteCount +
-    blob.length;
-
-  const resource = Buffer.alloc(totalByteCount);
-  let offset = 0;
-
-  RESOURCE_MAGIC.copy(resource, offset);
-  offset += RESOURCE_MAGIC.length;
-  writeUInt32LE(resource, RESOURCE_FORMAT_VERSION, offset); offset += 4;
-  writeUInt32LE(resource, versionBuffer.length, offset); offset += 4;
-  writeUInt32LE(resource, entries.length, offset); offset += 4;
-  writeUInt32LE(resource, namesByteCount, offset); offset += 4;
-  writeUInt32LE(resource, blob.length, offset); offset += 4;
-  writeUInt32LE(resource, 0, offset); offset += 4;
-
-  versionBuffer.copy(resource, offset);
-  offset += versionBuffer.length;
-
-  let nameOffset = 0;
-  const namesOffset =
-    RESOURCE_HEADER_SIZE + versionBuffer.length + entryTableByteCount;
-  for (let index = 0; index < entries.length; index += 1) {
-    const entry = entries[index];
-    const nameBuffer = nameBuffers[index];
-    writeUInt32LE(resource, nameOffset, offset); offset += 4;
-    writeUInt32LE(resource, nameBuffer.length, offset); offset += 4;
-    writeUInt32LE(resource, entry.offset, offset); offset += 4;
-    writeUInt32LE(resource, entry.length, offset); offset += 4;
-    nameBuffer.copy(resource, namesOffset + nameOffset);
-    nameOffset += nameBuffer.length;
-  }
-
-  blob.copy(resource, namesOffset + namesByteCount);
-  return resource;
-}
-
-function generateResourceFile(resourceBytes, outputResourceFile) {
-  const temporaryDirectory = fs.mkdtempSync(
-    path.join(os.tmpdir(), "goccia-ucdresource-"),
-  );
-  const resourceDataFile = path.join(temporaryDirectory, "unicode-data.bin");
-  const resourceScriptFile = path.join(temporaryDirectory, "unicode-data.rc");
-
-  try {
-    fs.writeFileSync(resourceDataFile, resourceBytes);
-    fs.writeFileSync(
-      resourceScriptFile,
-      `${RESOURCE_NAME} RCDATA "${resourceDataFile.replaceAll("\\", "\\\\")}"\n`,
-      "utf8",
-    );
-    execFileSync(
-      "fpcres",
-      ["-of", "res", resourceScriptFile, "-o", outputResourceFile],
-      { stdio: "inherit" },
-    );
-  } finally {
-    fs.rmSync(temporaryDirectory, { recursive: true, force: true });
-  }
 }
 
 function generatePascalUnit(
@@ -705,6 +554,7 @@ async function main() {
   console.log("Building resource...");
   const { indexedEntries, blob } = buildResourceFromEntries(allEntries);
   const resource = buildResourceContainer(
+    RESOURCE_MAGIC,
     unicodeVersion,
     indexedEntries,
     blob,
@@ -712,7 +562,11 @@ async function main() {
 
   const resourceReference = path.basename(outputResourceFile);
   console.log(`Writing ${resourceReference}...`);
-  generateResourceFile(resource, outputResourceFile);
+  generateResourceFile(resource, outputResourceFile, RESOURCE_NAME, {
+    temporaryDirectoryPrefix: "goccia-ucdresource-",
+    dataFileName: "unicode-data.bin",
+    scriptFileName: "unicode-data.rc",
+  });
 
   console.log(`Writing ${path.basename(outputFile)}...`);
   const pascalSource = generatePascalUnit(

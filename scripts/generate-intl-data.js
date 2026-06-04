@@ -4,6 +4,12 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { execFileSync } = require("child_process");
+const {
+  buildResourceContainer,
+  generateResourceFile,
+  pascalUnitNameForOutput,
+  resourceFileForOutput,
+} = require("./lib/resource-container");
 
 const REPO_ROOT = path.resolve(__dirname, "..");
 const DEFAULT_OUTPUT = path.join(
@@ -30,10 +36,6 @@ const RELATIVE_TIME_UNITS = [
 ];
 const RESOURCE_NAME = "GOCCIA_CLDR";
 const RESOURCE_MAGIC = Buffer.from("GOCCIACL", "ascii");
-const RESOURCE_FORMAT_VERSION = 1;
-const RESOURCE_HEADER_SIZE = RESOURCE_MAGIC.length + 6 * 4;
-const RESOURCE_ENTRY_SIZE = 4 * 4;
-const PASCAL_UNIT_IDENTIFIER_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 function usage() {
   console.error("Usage: node scripts/generate-intl-data.js [cldr-version] [output-file]");
@@ -47,46 +49,14 @@ function parseArguments() {
 
   const cldrVersion = process.argv[2] || DEFAULT_CLDR_VERSION;
   const outputFile = process.argv[3] ? path.resolve(process.argv[3]) : DEFAULT_OUTPUT;
-  const outputResourceFile = resourceFileForOutput(outputFile);
-  const unitName = pascalUnitNameForOutput(outputFile);
+  const outputResourceFile = resourceFileForOutput(outputFile, "Intl data");
+  const unitName = pascalUnitNameForOutput(outputFile, "Intl data");
 
   if (path.resolve(outputFile) === path.resolve(outputResourceFile)) {
     throw new Error(`Refusing to use ${outputFile} for both Pascal and resource output`);
   }
 
   return { cldrVersion, outputFile, outputResourceFile, unitName };
-}
-
-function pascalUnitNameForOutput(outputFile) {
-  if (path.extname(outputFile).toLowerCase() !== ".pas") {
-    throw new Error(`Intl data output must be a .pas file: ${outputFile}`);
-  }
-
-  const unitName = path.basename(outputFile, path.extname(outputFile));
-  if (unitName.length === 0) {
-    throw new Error(`Intl data output must have a non-empty Pascal unit name: ${outputFile}`);
-  }
-
-  const unitNameParts = unitName.split(".");
-  if (
-    unitNameParts.length === 0 ||
-    unitNameParts.some((unitNamePart) => !PASCAL_UNIT_IDENTIFIER_PATTERN.test(unitNamePart))
-  ) {
-    throw new Error(`Intl data output basename is not a valid Pascal unit name: ${unitName}`);
-  }
-
-  return unitName;
-}
-
-function resourceFileForOutput(outputFile) {
-  if (path.extname(outputFile).toLowerCase() !== ".pas") {
-    throw new Error(`Intl data output must be a .pas file: ${outputFile}`);
-  }
-
-  return path.join(
-    path.dirname(outputFile),
-    `${path.basename(outputFile, path.extname(outputFile))}.res`,
-  );
 }
 
 function downloadCldrPackages(cldrVersion, outputDirectory) {
@@ -658,77 +628,6 @@ function packSections(sections) {
   };
 }
 
-function writeUInt32LE(buffer, value, offset) {
-  if (value < 0 || value > 0xffffffff) {
-    throw new Error(`Resource integer ${value} is outside UInt32 range`);
-  }
-  buffer.writeUInt32LE(value, offset);
-}
-
-function buildResourceContainer(version, entries, blob) {
-  const versionBuffer = Buffer.from(version, "utf8");
-  const nameBuffers = entries.map((entry) => Buffer.from(entry.name, "utf8"));
-  const namesByteCount = nameBuffers.reduce((total, nameBuffer) => total + nameBuffer.length, 0);
-  const entryTableByteCount = entries.length * RESOURCE_ENTRY_SIZE;
-  const totalByteCount =
-    RESOURCE_HEADER_SIZE +
-    versionBuffer.length +
-    entryTableByteCount +
-    namesByteCount +
-    blob.length;
-
-  const resource = Buffer.alloc(totalByteCount);
-  let offset = 0;
-
-  RESOURCE_MAGIC.copy(resource, offset);
-  offset += RESOURCE_MAGIC.length;
-  writeUInt32LE(resource, RESOURCE_FORMAT_VERSION, offset); offset += 4;
-  writeUInt32LE(resource, versionBuffer.length, offset); offset += 4;
-  writeUInt32LE(resource, entries.length, offset); offset += 4;
-  writeUInt32LE(resource, namesByteCount, offset); offset += 4;
-  writeUInt32LE(resource, blob.length, offset); offset += 4;
-  writeUInt32LE(resource, 0, offset); offset += 4;
-
-  versionBuffer.copy(resource, offset);
-  offset += versionBuffer.length;
-
-  let nameOffset = 0;
-  const namesOffset = RESOURCE_HEADER_SIZE + versionBuffer.length + entryTableByteCount;
-  for (let index = 0; index < entries.length; index += 1) {
-    const entry = entries[index];
-    const nameBuffer = nameBuffers[index];
-    writeUInt32LE(resource, nameOffset, offset); offset += 4;
-    writeUInt32LE(resource, nameBuffer.length, offset); offset += 4;
-    writeUInt32LE(resource, entry.offset, offset); offset += 4;
-    writeUInt32LE(resource, entry.length, offset); offset += 4;
-    nameBuffer.copy(resource, namesOffset + nameOffset);
-    nameOffset += nameBuffer.length;
-  }
-
-  blob.copy(resource, namesOffset + namesByteCount);
-  return resource;
-}
-
-function generateResourceFile(resourceBytes, outputResourceFile) {
-  const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "goccia-cldrresource-"));
-  const resourceDataFile = path.join(temporaryDirectory, "intl-data.bin");
-  const resourceScriptFile = path.join(temporaryDirectory, "intl-data.rc");
-
-  try {
-    fs.writeFileSync(resourceDataFile, resourceBytes);
-    fs.writeFileSync(
-      resourceScriptFile,
-      `${RESOURCE_NAME} RCDATA "${resourceDataFile.replaceAll("\\", "\\\\")}"\n`,
-      "utf8",
-    );
-    execFileSync("fpcres", ["-of", "res", resourceScriptFile, "-o", outputResourceFile], {
-      stdio: "inherit",
-    });
-  } finally {
-    fs.rmSync(temporaryDirectory, { recursive: true, force: true });
-  }
-}
-
 function generatePascalUnit(cldrVersion, sectionCount, blobByteCount, unitName, resourceReference) {
   return `unit ${unitName};
 
@@ -771,6 +670,7 @@ function main() {
 
     const { indexedEntries, blob } = packSections(sections);
     const resource = buildResourceContainer(
+      RESOURCE_MAGIC,
       cldrVersion,
       indexedEntries,
       blob,
@@ -785,7 +685,11 @@ function main() {
 
     fs.mkdirSync(path.dirname(outputFile), { recursive: true });
     fs.writeFileSync(outputFile, pascal, "utf8");
-    generateResourceFile(resource, outputResourceFile);
+    generateResourceFile(resource, outputResourceFile, RESOURCE_NAME, {
+      temporaryDirectoryPrefix: "goccia-cldrresource-",
+      dataFileName: "intl-data.bin",
+      scriptFileName: "intl-data.rc",
+    });
 
     console.log(
       `Generated ${path.relative(REPO_ROOT, outputFile)} and ${path.relative(REPO_ROOT, outputResourceFile)} with ${indexedEntries.length} sections, ${blob.length} bytes, CLDR ${cldrVersion}`,
