@@ -5678,6 +5678,9 @@ begin
   if not Assigned(AAccessClass) then
     ThrowPrivateBrandError(APrivateName);
   StampRawPrivateInstanceBrand(AReceiver, AAccessClass);
+  if Assigned(AReceiver.GetOwnPropertyDescriptor(
+    RawPrivateInstanceKey(AAccessClass, APrivateName))) then
+    Exit;
   AReceiver.DefineProperty(
     RawPrivateInstanceKey(AAccessClass, APrivateName),
     TGocciaPropertyDescriptorData.Create(AValue, [pfWritable, pfConfigurable]));
@@ -5852,12 +5855,28 @@ var
   AccessClass: TGocciaClassValue;
   SetterFn: TGocciaFunctionBase;
   SetterArgs: TGocciaArgumentsCollection;
+  PendingNewTarget: TGocciaValue;
+  FieldInitializer: TGocciaExpression;
 begin
   AccessClass := ResolveLexicalOwningClass(AContext);
   if not Assigned(AccessClass) then
     ThrowPrivateBrandError(APrivateName);
 
-  EnsureRawPrivateInstanceBrand(AReceiver, APrivateName, AccessClass);
+  if not HasRawPrivateInstanceBrand(AReceiver, AccessClass) then
+  begin
+    PendingNewTarget := AContext.Scope.FindNewTarget;
+    if (AReceiver = AContext.Scope.ThisValue) and
+       (PendingNewTarget is TGocciaClassValue) and
+       (TGocciaClassValue(PendingNewTarget) = AccessClass) and
+       AccessClass.PrivateInstancePropertyDefs.TryGetValue(
+         APrivateName, FieldInitializer) then
+    begin
+      InitializeRawPrivateInstanceProperty(AReceiver, APrivateName,
+        AValue, AccessClass);
+      Exit;
+    end;
+    ThrowPrivateBrandError(APrivateName);
+  end;
 
   if AccessClass.HasPrivateSetter(APrivateName) then
   begin

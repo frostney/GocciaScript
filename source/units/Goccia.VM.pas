@@ -5730,11 +5730,15 @@ var
   PrototypeNames: TArray<string>;
   PrototypeName: string;
   PrivateBrandToken: string;
+  PrototypeDescriptor: TGocciaPropertyDescriptor;
+  ReceiverObject: TGocciaObjectValue;
   I: Integer;
 begin
   if (not Assigned(AClassValue)) or
      not (AInstance is TGocciaObjectValue) then
     Exit;
+
+  ReceiverObject := TGocciaObjectValue(AInstance);
 
   Names := TStringList.Create;
   try
@@ -5758,6 +5762,17 @@ begin
         NormalizeBytecodePrivateKey(Names[I], PrivateBrandToken),
         PrivateBrandToken),
         TGocciaBooleanLiteralValue.TrueValue);
+
+      if (not (AInstance is TGocciaInstanceValue)) and
+         Assigned(AClassValue.Prototype) and
+         IsBytecodePrivateKey(Names[I]) then
+      begin
+        PrototypeDescriptor := AClassValue.Prototype.GetOwnPropertyDescriptor(
+          Names[I]);
+        if Assigned(PrototypeDescriptor) then
+          ReceiverObject.DefineProperty(Names[I],
+            ClonePropertyDescriptor(PrototypeDescriptor));
+      end;
     end;
   finally
     Names.Free;
@@ -6974,6 +6989,7 @@ var
   BoxedValue: TGocciaObjectValue;
   PrivateBrandToken: string;
   ExistingValue: TGocciaValue;
+  CurrentClass: TGocciaClassValue;
 begin
   if AObject is TGocciaNullLiteralValue then
     ThrowTypeError(Format(SErrorCannotSetPropertiesOfNull, [AKey]),
@@ -7037,11 +7053,28 @@ begin
         Current := Current.Prototype;
       end;
     end;
-    if not TryGetRawPrivateValue(AObject, AKey, ExistingValue) then
+    if TryGetRawPrivateValue(AObject, AKey, ExistingValue) then
+    begin
+      if AObject = FPrivateInitializerReceiver then
+        Exit;
+    end
+    else
     begin
       if AObject <> FPrivateInitializerReceiver then
-        ThrowTypeError(Format(SErrorPrivateFieldNotAccessible, [AKey]),
-          SSuggestPrivateFieldAccess);
+      begin
+        if (AObject = RegisterToValue(GetLocalRegister(0))) and
+           (FCurrentNewTarget is TGocciaClassValue) then
+        begin
+          CurrentClass := TGocciaClassValue(FCurrentNewTarget);
+          if Assigned(CurrentClass.Prototype) and
+             Assigned(CurrentClass.Prototype.GetOwnPropertyDescriptor(AKey)) then
+            ThrowTypeError(Format(SErrorPrivateFieldNotAccessible, [AKey]),
+              SSuggestPrivateFieldAccess);
+        end
+        else
+          ThrowTypeError(Format(SErrorPrivateFieldNotAccessible, [AKey]),
+            SSuggestPrivateFieldAccess);
+      end;
       SetRawPrivateValue(AObject, BytecodePrivateBrandKey(AKey,
         PrivateBrandToken),
         TGocciaBooleanLiteralValue.TrueValue);
