@@ -38,6 +38,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.Values.DataViewValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.HoleValue,
@@ -150,7 +151,9 @@ end;
 // ES2026 §25.1.5.1 ArrayBuffer.isView(arg)
 function TGocciaGlobalArrayBuffer.ArrayBufferIsView(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  if (AArgs.Length > 0) and (AArgs.GetElement(0) is TGocciaTypedArrayValue) then
+  if (AArgs.Length > 0) and
+     ((AArgs.GetElement(0) is TGocciaTypedArrayValue) or
+      (AArgs.GetElement(0) is TGocciaDataViewValue)) then
     Result := TGocciaBooleanLiteralValue.TrueValue
   else
     Result := TGocciaBooleanLiteralValue.FalseValue;

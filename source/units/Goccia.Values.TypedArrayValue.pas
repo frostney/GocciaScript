@@ -155,11 +155,11 @@ uses
   Math,
 
   Goccia.Arithmetic,
+  Goccia.BinaryData,
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
-  Goccia.Float16,
   Goccia.GarbageCollector,
   Goccia.Realm,
   Goccia.Utils,
@@ -182,6 +182,9 @@ threadvar
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
   FUint8Prototype: TGocciaObjectValue;
 
+const
+  TYPED_ARRAY_LITTLE_ENDIAN = True;
+
 function GetTypedArrayShared: TGocciaSharedPrototype; inline;
 begin
   if Assigned(CurrentRealm) then
@@ -190,26 +193,51 @@ begin
     Result := nil;
 end;
 
-class function TGocciaTypedArrayValue.BytesPerElement(const AKind: TGocciaTypedArrayKind): Integer;
+function ToBinaryElementKind(const AKind: TGocciaTypedArrayKind): TGocciaBinaryElementKind;
 begin
   case AKind of
-    takInt8, takUint8, takUint8Clamped: Result := 1;
-    takInt16, takUint16, takFloat16: Result := 2;
-    takInt32, takUint32, takFloat32: Result := 4;
-    takFloat64, takBigInt64, takBigUint64: Result := 8;
+    takInt8:
+      Result := bekInt8;
+    takUint8:
+      Result := bekUint8;
+    takUint8Clamped:
+      Result := bekUint8Clamped;
+    takInt16:
+      Result := bekInt16;
+    takUint16:
+      Result := bekUint16;
+    takInt32:
+      Result := bekInt32;
+    takUint32:
+      Result := bekUint32;
+    takFloat16:
+      Result := bekFloat16;
+    takFloat32:
+      Result := bekFloat32;
+    takFloat64:
+      Result := bekFloat64;
+    takBigInt64:
+      Result := bekBigInt64;
+    takBigUint64:
+      Result := bekBigUint64;
   else
-    Result := 1;
+    Result := bekUint8;
   end;
+end;
+
+class function TGocciaTypedArrayValue.BytesPerElement(const AKind: TGocciaTypedArrayKind): Integer;
+begin
+  Result := BinaryBytesPerElement(ToBinaryElementKind(AKind));
 end;
 
 class function TGocciaTypedArrayValue.IsFloatKind(const AKind: TGocciaTypedArrayKind): Boolean;
 begin
-  Result := AKind in [takFloat16, takFloat32, takFloat64];
+  Result := BinaryIsFloatElement(ToBinaryElementKind(AKind));
 end;
 
 class function TGocciaTypedArrayValue.IsBigIntKind(const AKind: TGocciaTypedArrayKind): Boolean;
 begin
-  Result := AKind in [takBigInt64, takBigUint64];
+  Result := BinaryIsBigIntElement(ToBinaryElementKind(AKind));
 end;
 
 class function TGocciaTypedArrayValue.KindName(const AKind: TGocciaTypedArrayKind): string;
@@ -287,174 +315,27 @@ end;
 function TGocciaTypedArrayValue.ReadElement(const AIndex: Integer): Double;
 var
   Offset: Integer;
-  I8: ShortInt;
-  U8: Byte;
-  I16: SmallInt;
-  U16: Word;
-  I32: LongInt;
-  U32: LongWord;
-  I64: Int64;
-  F32: Single;
-  F64: Double;
 begin
   if not HasValidElementIndex(AIndex) then
     Exit(0);
 
   SyncBufferData;
   Offset := FByteOffset + AIndex * BytesPerElement(FKind);
-  case FKind of
-    takInt8:
-    begin
-      I8 := ShortInt(FBufferData[Offset]);
-      Result := I8;
-    end;
-    takUint8, takUint8Clamped:
-    begin
-      U8 := FBufferData[Offset];
-      Result := U8;
-    end;
-    takInt16:
-    begin
-      Move(FBufferData[Offset], I16, 2);
-      Result := I16;
-    end;
-    takUint16:
-    begin
-      Move(FBufferData[Offset], U16, 2);
-      Result := U16;
-    end;
-    takInt32:
-    begin
-      Move(FBufferData[Offset], I32, 4);
-      I64 := I32;
-      Result := I64;
-    end;
-    takUint32:
-    begin
-      Move(FBufferData[Offset], U32, 4);
-      I64 := U32;
-      Result := I64;
-    end;
-    takFloat16:
-    begin
-      Move(FBufferData[Offset], U16, 2);
-      Result := Float16ToDouble(U16);
-    end;
-    takFloat32:
-    begin
-      Move(FBufferData[Offset], F32, 4);
-      Result := F32;
-    end;
-    takFloat64:
-    begin
-      Move(FBufferData[Offset], F64, 8);
-      Result := F64;
-    end;
-  else
-    Result := 0;
-  end;
+  Result := ReadBinaryNumberElement(FBufferData, Offset,
+    ToBinaryElementKind(FKind), TYPED_ARRAY_LITTLE_ENDIAN);
 end;
 
 procedure TGocciaTypedArrayValue.WriteElement(const AIndex: Integer; const AValue: Double);
 var
   Offset: Integer;
-  I8: ShortInt;
-  U8: Byte;
-  I16: SmallInt;
-  U16: Word;
-  I32: LongInt;
-  U32: LongWord;
-  F32: Single;
-  F64: Double;
-  Clamped: Integer;
 begin
   if not HasValidElementIndex(AIndex) then
     Exit;
 
   SyncBufferData;
   Offset := FByteOffset + AIndex * BytesPerElement(FKind);
-  case FKind of
-    takInt8:
-    begin
-      I8 := ShortInt(Trunc(AValue));
-      FBufferData[Offset] := Byte(I8);
-    end;
-    takUint8:
-    begin
-      U8 := Byte(Trunc(AValue));
-      FBufferData[Offset] := U8;
-    end;
-    takUint8Clamped:
-    begin
-      if IsNan(AValue) then
-        Clamped := 0
-      else if AValue <= 0 then
-        Clamped := 0
-      else if AValue >= 255 then
-        Clamped := 255
-      else
-        Clamped := Round(AValue);
-      FBufferData[Offset] := Byte(Clamped);
-    end;
-    takInt16:
-    begin
-      I16 := SmallInt(Trunc(AValue));
-      Move(I16, FBufferData[Offset], 2);
-    end;
-    takUint16:
-    begin
-      U16 := Word(Trunc(AValue));
-      Move(U16, FBufferData[Offset], 2);
-    end;
-    takInt32:
-    begin
-      I32 := LongInt(Trunc(AValue));
-      Move(I32, FBufferData[Offset], 4);
-    end;
-    takUint32:
-    begin
-      U32 := LongWord(Trunc(AValue));
-      Move(U32, FBufferData[Offset], 4);
-    end;
-    takFloat16:
-    begin
-      U16 := DoubleToFloat16(AValue);
-      Move(U16, FBufferData[Offset], 2);
-    end;
-    takFloat32:
-    begin
-      F32 := AValue;
-      Move(F32, FBufferData[Offset], 4);
-    end;
-    takFloat64:
-    begin
-      F64 := AValue;
-      Move(F64, FBufferData[Offset], 8);
-    end;
-  end;
-end;
-
-procedure WriteFloatDirect(var AData: TBytes;
-  const AOffset: Integer; const AKind: TGocciaTypedArrayKind;
-  const AValue: Double);
-var
-  F16: Word;
-  F32: Single;
-begin
-  case AKind of
-    takFloat16:
-    begin
-      F16 := DoubleToFloat16(AValue);
-      Move(F16, AData[AOffset], 2);
-    end;
-    takFloat32:
-    begin
-      F32 := AValue;
-      Move(F32, AData[AOffset], 4);
-    end;
-    takFloat64:
-      Move(AValue, AData[AOffset], 8);
-  end;
+  WriteBinaryNumberElement(FBufferData, Offset, ToBinaryElementKind(FKind),
+    AValue, TYPED_ARRAY_LITTLE_ENDIAN);
 end;
 
 procedure TGocciaTypedArrayValue.WriteNumberLiteral(const AIndex: Integer; const ANum: TGocciaNumberLiteralValue);
@@ -470,7 +351,8 @@ begin
     if IsFloatKind(FKind) then
     begin
       Offset := FByteOffset + AIndex * BytesPerElement(FKind);
-      WriteFloatDirect(FBufferData, Offset, FKind, ANum.Value);
+      WriteBinaryNumberElement(FBufferData, Offset, ToBinaryElementKind(FKind),
+        ANum.Value, TYPED_ARRAY_LITTLE_ENDIAN);
     end
     else
       WriteElement(AIndex, 0);
@@ -482,7 +364,8 @@ begin
       takFloat16, takFloat32, takFloat64:
       begin
         Offset := FByteOffset + AIndex * BytesPerElement(FKind);
-        WriteFloatDirect(FBufferData, Offset, FKind, ANum.Value);
+        WriteBinaryNumberElement(FBufferData, Offset, ToBinaryElementKind(FKind),
+          ANum.Value, TYPED_ARRAY_LITTLE_ENDIAN);
       end;
     else
       WriteElement(AIndex, 0);
@@ -494,7 +377,8 @@ begin
       takFloat16, takFloat32, takFloat64:
       begin
         Offset := FByteOffset + AIndex * BytesPerElement(FKind);
-        WriteFloatDirect(FBufferData, Offset, FKind, ANum.Value);
+        WriteBinaryNumberElement(FBufferData, Offset, ToBinaryElementKind(FKind),
+          ANum.Value, TYPED_ARRAY_LITTLE_ENDIAN);
       end;
     else
       WriteElement(AIndex, 0);
@@ -507,28 +391,14 @@ end;
 function TGocciaTypedArrayValue.ReadBigIntElement(const AIndex: Integer): Int64;
 var
   Offset: Integer;
-  I64: Int64;
-  U64: QWord;
 begin
   if not HasValidElementIndex(AIndex) then
     Exit(0);
 
   SyncBufferData;
   Offset := FByteOffset + AIndex * 8;
-  case FKind of
-    takBigInt64:
-    begin
-      Move(FBufferData[Offset], I64, 8);
-      Result := I64;
-    end;
-    takBigUint64:
-    begin
-      Move(FBufferData[Offset], U64, 8);
-      Result := Int64(U64);
-    end;
-  else
-    Result := 0;
-  end;
+  Result := ReadBinaryBigIntElement(FBufferData, Offset,
+    ToBinaryElementKind(FKind), TYPED_ARRAY_LITTLE_ENDIAN);
 end;
 
 procedure TGocciaTypedArrayValue.WriteBigIntElement(const AIndex: Integer; const AValue: Int64);
@@ -540,7 +410,8 @@ begin
 
   SyncBufferData;
   Offset := FByteOffset + AIndex * 8;
-  Move(AValue, FBufferData[Offset], 8);
+  WriteBinaryBigIntElement(FBufferData, Offset, AValue,
+    TYPED_ARRAY_LITTLE_ENDIAN);
 end;
 
 function BigIntFromQWord(const AValue: QWord): TBigInteger;

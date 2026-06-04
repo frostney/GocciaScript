@@ -221,6 +221,12 @@ type
     function GetClassLength: Integer; override;
   end;
 
+  TGocciaDataViewClassValue = class(TGocciaClassValue)
+    function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
+    // ECMAScript 25.3.2.1: DataView constructor length is 1.
+    function GetClassLength: Integer; override;
+  end;
+
   TGocciaTextEncoderClassValue = class(TGocciaClassValue)
     function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
   end;
@@ -311,6 +317,7 @@ uses
   Goccia.Values.ArrayValue,
   Goccia.Values.AutoAccessor,
   Goccia.Values.ClassHelper,
+  Goccia.Values.DataViewValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FinalizationRegistryValue,
   Goccia.Values.HeadersValue,
@@ -1471,6 +1478,18 @@ begin
 end;
 
 function TGocciaSharedArrayBufferClassValue.GetClassLength: Integer;
+begin
+  Result := 1;
+end;
+
+{ TGocciaDataViewClassValue }
+
+function TGocciaDataViewClassValue.CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue;
+begin
+  Result := TGocciaDataViewValue.Create(TGocciaClassValue(nil));
+end;
+
+function TGocciaDataViewClassValue.GetClassLength: Integer;
 begin
   Result := 1;
 end;

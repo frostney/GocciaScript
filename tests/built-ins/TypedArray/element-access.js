@@ -135,6 +135,12 @@ describe("TypedArray element access", () => {
       expect(ta[0]).toBe(0);
       expect(ta[1]).toBe(4294967295);
     });
+
+    test("wraps large finite numbers modulo 2^32", () => {
+      const ta = new Uint32Array(1);
+      ta[0] = 1e20;
+      expect(ta[0]).toBe(1661992960);
+    });
   });
 
   describe("Float32Array precision", () => {
