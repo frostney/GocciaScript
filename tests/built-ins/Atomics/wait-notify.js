@@ -22,6 +22,14 @@ describe("Atomics.wait and Atomics.notify", () => {
     expect(Atomics.notify(i32, 0)).toBe(0);
   });
 
+  test("notify returns zero for non-shared waitable arrays", () => {
+    const i32 = new Int32Array(1);
+    const i64 = new BigInt64Array(1);
+
+    expect(Atomics.notify(i32, 0)).toBe(0);
+    expect(Atomics.notify(i64, 0)).toBe(0);
+  });
+
   test("wait only accepts Int32Array and BigInt64Array", () => {
     const sab = new SharedArrayBuffer(4);
     const u32 = new Uint32Array(sab);

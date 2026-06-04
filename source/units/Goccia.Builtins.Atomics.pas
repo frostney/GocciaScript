@@ -272,10 +272,9 @@ begin
   Result := Trunc(CountNumber);
 end;
 
-procedure ValidateAtomicAccess(const AArgs: TGocciaArgumentsCollection;
+procedure ValidateAtomicTypedArrayAccess(const AArgs: TGocciaArgumentsCollection;
   const AMethodName: string; ARequireWaitable: Boolean;
-  out ATypedArray: TGocciaTypedArrayValue;
-  out ABuffer: TGocciaSharedArrayBufferValue; out AIndex, AByteOffset: Integer);
+  out ATypedArray: TGocciaTypedArrayValue; out AIndex, AByteOffset: Integer);
 var
   Bpe: Integer;
   IndexValue: TGocciaValue;
@@ -296,11 +295,6 @@ begin
     ThrowTypeError(AtomicsErrorMessage(AMethodName,
       'typedArray must be an Int32Array or BigInt64Array'));
 
-  if not (ATypedArray.BufferValue is TGocciaSharedArrayBufferValue) then
-    ThrowTypeError(AtomicsErrorMessage(AMethodName,
-      SErrorRequiresSharedArrayBuffer));
-
-  ABuffer := TGocciaSharedArrayBufferValue(ATypedArray.BufferValue);
   IndexValue := GetArgumentOrUndefined(AArgs, 1);
   AIndex := ToIndexForAtomics(IndexValue, AMethodName);
   if AIndex >= ATypedArray.Length then
@@ -309,6 +303,21 @@ begin
 
   Bpe := TGocciaTypedArrayValue.BytesPerElement(ATypedArray.Kind);
   AByteOffset := ATypedArray.ByteOffset + AIndex * Bpe;
+end;
+
+procedure ValidateAtomicAccess(const AArgs: TGocciaArgumentsCollection;
+  const AMethodName: string; ARequireWaitable: Boolean;
+  out ATypedArray: TGocciaTypedArrayValue;
+  out ABuffer: TGocciaSharedArrayBufferValue; out AIndex, AByteOffset: Integer);
+begin
+  ValidateAtomicTypedArrayAccess(AArgs, AMethodName, ARequireWaitable,
+    ATypedArray, AIndex, AByteOffset);
+
+  if not (ATypedArray.BufferValue is TGocciaSharedArrayBufferValue) then
+    ThrowTypeError(AtomicsErrorMessage(AMethodName,
+      SErrorRequiresSharedArrayBuffer));
+
+  ABuffer := TGocciaSharedArrayBufferValue(ATypedArray.BufferValue);
 end;
 
 function ReadNumberElement(ATypedArray: TGocciaTypedArrayValue;
@@ -870,17 +879,20 @@ var
   Count: Integer;
   Index: Integer;
   NotifiedCount: Integer;
-  Promise: TGocciaPromiseValue;
-  ResolvePromises: TList<TGocciaPromiseValue>;
+  ResolveWaiters: TList<TAtomicsWaiter>;
   TypedArray: TGocciaTypedArrayValue;
   Waiter: TAtomicsWaiter;
   WaiterIndex: Integer;
 begin
-  ValidateAtomicAccess(AArgs, 'notify', True, TypedArray, Buffer, Index,
+  ValidateAtomicTypedArrayAccess(AArgs, 'notify', True, TypedArray, Index,
     ByteOffset);
   Count := ToWaiterCount(GetArgumentOrUndefined(AArgs, 2));
+  if not (TypedArray.BufferValue is TGocciaSharedArrayBufferValue) then
+    Exit(TGocciaNumberLiteralValue.Create(0));
+
+  Buffer := TGocciaSharedArrayBufferValue(TypedArray.BufferValue);
   NotifiedCount := 0;
-  ResolvePromises := TList<TGocciaPromiseValue>.Create;
+  ResolveWaiters := TList<TAtomicsWaiter>.Create;
   try
     EnterCriticalSection(GAtomicsLock);
     try
@@ -895,11 +907,7 @@ begin
           GAtomicsWaiters.Delete(WaiterIndex);
           Inc(NotifiedCount);
           if Waiter.Async then
-          begin
-            Promise := Waiter.Promise;
-            ResolvePromises.Add(Promise);
-            Waiter.Free;
-          end
+            ResolveWaiters.Add(Waiter)
           else
             Waiter.Event.SetEvent;
         end
@@ -910,10 +918,13 @@ begin
       LeaveCriticalSection(GAtomicsLock);
     end;
 
-    for Promise in ResolvePromises do
-      Promise.Resolve(TGocciaStringLiteralValue.Create(ATOMICS_WAIT_OK));
+    for Waiter in ResolveWaiters do
+    begin
+      Waiter.Promise.Resolve(TGocciaStringLiteralValue.Create(ATOMICS_WAIT_OK));
+      Waiter.Free;
+    end;
   finally
-    ResolvePromises.Free;
+    ResolveWaiters.Free;
   end;
 
   Result := TGocciaNumberLiteralValue.Create(NotifiedCount);
