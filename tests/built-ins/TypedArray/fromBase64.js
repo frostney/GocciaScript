@@ -1,4 +1,13 @@
 describe("Uint8Array.fromBase64", () => {
+  test("has built-in method attributes", () => {
+    expect(Object.getOwnPropertyDescriptor(Uint8Array, "fromBase64")).toEqual({
+      value: Uint8Array.fromBase64,
+      writable: true,
+      enumerable: false,
+      configurable: true,
+    });
+  });
+
   test("decodes standard base64 string", () => {
     const result = Uint8Array.fromBase64("SGVsbG8=");
     expect(result.length).toBe(5);

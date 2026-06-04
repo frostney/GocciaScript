@@ -1,4 +1,23 @@
 describe("TypedArray.of", () => {
+  test("is inherited from %TypedArray% with built-in method attributes", () => {
+    const typedArrayIntrinsic = Object.getPrototypeOf(Uint8Array);
+
+    expect(Object.getOwnPropertyDescriptor(Uint8Array, "of")).toBeUndefined();
+    expect(Object.getOwnPropertyDescriptor(typedArrayIntrinsic, "of")).toEqual({
+      value: Uint8Array.of,
+      writable: true,
+      enumerable: false,
+      configurable: true,
+    });
+    expect(Int16Array.of(256)[0]).toBe(256);
+    expect(Uint8Array.of.call(Int16Array, 256)[0]).toBe(256);
+    class MyInt16Array extends Int16Array {}
+    const subclassResult = MyInt16Array.of(256);
+    expect(subclassResult[0]).toBe(256);
+    expect(subclassResult instanceof MyInt16Array).toBe(true);
+    expect(Object.getPrototypeOf(subclassResult)).toBe(MyInt16Array.prototype);
+  });
+
   test("Float64Array.of with decimals", () => {
     const ta = Float64Array.of(1.5, 2.5);
     expect(ta.length).toBe(2);

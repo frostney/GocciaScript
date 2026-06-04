@@ -269,6 +269,7 @@ resourcestring
   SSuggestTypedArrayThisType = 'TypedArray methods must be called on a TypedArray instance';
   SSuggestTypedArrayCallable = 'pass a function as the callback argument';
   SSuggestTypedArraySetSource = 'pass an Array or TypedArray as the source';
+  SSuggestTypedArrayConstructorReceiver = 'call the method on a TypedArray constructor such as Uint8Array';
   SSuggestTypedArrayLength = 'the length or offset is outside the valid range for this buffer';
   SSuggestTypedArrayAlignment = 'the byte offset must be aligned to the element size of the TypedArray';
   SSuggestBigIntTypedArrayValue = 'BigInt64Array and BigUint64Array only accept BigInt values — use BigInt(n) to convert';

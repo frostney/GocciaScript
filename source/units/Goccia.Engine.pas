@@ -776,6 +776,7 @@ var
   NumberConstructor: TGocciaNumberClassValue;
   BooleanConstructor: TGocciaBooleanClassValue;
   TypeDef: TGocciaTypeDefinition;
+  TypedArrayStatic: TGocciaTypedArrayStaticFrom;
 begin
   TGocciaObjectValue.InitializeSharedPrototype;
   TypeDef.ConstructorName := CONSTRUCTOR_OBJECT;
@@ -887,6 +888,17 @@ begin
     TGocciaPropertyDescriptorData.Create(TGocciaStringLiteralValue.Create('TypedArray'), [pfConfigurable]));
   FTypedArrayIntrinsic.DefineProperty(PROP_LENGTH,
     TGocciaPropertyDescriptorData.Create(TGocciaNumberLiteralValue.Create(0), [pfConfigurable]));
+  TypedArrayStatic := TGocciaTypedArrayStaticFrom.Create;
+  FTypedArrayIntrinsic.DefineProperty(PROP_FROM,
+    TGocciaPropertyDescriptorData.Create(
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(
+        TypedArrayStatic.TypedArrayFrom, PROP_FROM, 1),
+      [pfConfigurable, pfWritable]));
+  FTypedArrayIntrinsic.DefineProperty(PROP_OF,
+    TGocciaPropertyDescriptorData.Create(
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(
+        TypedArrayStatic.TypedArrayOf, PROP_OF, 0),
+      [pfConfigurable, pfWritable]));
 
   RegisterTypedArrayConstructor(CONSTRUCTOR_INT8_ARRAY, takInt8, ObjectConstructor);
   RegisterTypedArrayConstructor(CONSTRUCTOR_UINT8_ARRAY, takUint8, ObjectConstructor);
@@ -989,22 +1001,16 @@ procedure TGocciaEngine.RegisterTypedArrayConstructor(const AName: string; const
 var
   TAConstructor: TGocciaTypedArrayClassValue;
   BPE: TGocciaNumberLiteralValue;
-  FromFn, OfFn: TGocciaTypedArrayStaticFrom;
   Encoding: TGocciaUint8ArrayEncoding;
 begin
   TAConstructor := TGocciaTypedArrayClassValue.Create(AName, FTypedArrayIntrinsic, AKind);
   TGocciaTypedArrayValue.ExposePrototype(TAConstructor);
   TGocciaTypedArrayValue.SetSharedPrototypeParent(AObjectConstructor.Prototype);
   BPE := TGocciaNumberLiteralValue.Create(TGocciaTypedArrayValue.BytesPerElement(AKind));
-  TAConstructor.SetProperty(PROP_BYTES_PER_ELEMENT, BPE);
-  TAConstructor.Prototype.AssignProperty(PROP_BYTES_PER_ELEMENT, BPE);
-
-  FromFn := TGocciaTypedArrayStaticFrom.Create(AKind);
-  TAConstructor.SetProperty(PROP_FROM,
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(FromFn.TypedArrayFrom, 'from', 1));
-  OfFn := TGocciaTypedArrayStaticFrom.Create(AKind);
-  TAConstructor.SetProperty(PROP_OF,
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(OfFn.TypedArrayOf, 'of', 0));
+  TAConstructor.DefineProperty(PROP_BYTES_PER_ELEMENT,
+    TGocciaPropertyDescriptorData.Create(BPE, []));
+  TAConstructor.Prototype.DefineProperty(PROP_BYTES_PER_ELEMENT,
+    TGocciaPropertyDescriptorData.Create(BPE, []));
 
   // Uint8Array-only: Base64/Hex encoding methods (TC39 Uint8Array Base64)
   if AKind = takUint8 then
@@ -1012,20 +1018,38 @@ begin
     Encoding := TGocciaUint8ArrayEncoding.Create;
 
     // Static methods on Uint8Array constructor
-    TAConstructor.SetProperty(PROP_FROM_BASE64,
-      TGocciaNativeFunctionValue.CreateWithoutPrototype(Encoding.FromBase64, 'fromBase64', 1));
-    TAConstructor.SetProperty(PROP_FROM_HEX,
-      TGocciaNativeFunctionValue.CreateWithoutPrototype(Encoding.FromHex, 'fromHex', 1));
+    TAConstructor.DefineProperty(PROP_FROM_BASE64,
+      TGocciaPropertyDescriptorData.Create(
+        TGocciaNativeFunctionValue.CreateWithoutPrototype(
+          Encoding.FromBase64, PROP_FROM_BASE64, 1),
+        [pfConfigurable, pfWritable]));
+    TAConstructor.DefineProperty(PROP_FROM_HEX,
+      TGocciaPropertyDescriptorData.Create(
+        TGocciaNativeFunctionValue.CreateWithoutPrototype(
+          Encoding.FromHex, PROP_FROM_HEX, 1),
+        [pfConfigurable, pfWritable]));
 
     // Prototype methods on Uint8Array.prototype
-    TAConstructor.Prototype.AssignProperty(PROP_TO_BASE64,
-      TGocciaNativeFunctionValue.CreateWithoutPrototype(Encoding.ToBase64, 'toBase64', 0));
-    TAConstructor.Prototype.AssignProperty(PROP_TO_HEX,
-      TGocciaNativeFunctionValue.CreateWithoutPrototype(Encoding.ToHex, 'toHex', 0));
-    TAConstructor.Prototype.AssignProperty(PROP_SET_FROM_BASE64,
-      TGocciaNativeFunctionValue.CreateWithoutPrototype(Encoding.SetFromBase64, 'setFromBase64', 1));
-    TAConstructor.Prototype.AssignProperty(PROP_SET_FROM_HEX,
-      TGocciaNativeFunctionValue.CreateWithoutPrototype(Encoding.SetFromHex, 'setFromHex', 1));
+    TAConstructor.Prototype.DefineProperty(PROP_TO_BASE64,
+      TGocciaPropertyDescriptorData.Create(
+        TGocciaNativeFunctionValue.CreateWithoutPrototype(
+          Encoding.ToBase64, PROP_TO_BASE64, 0),
+        [pfConfigurable, pfWritable]));
+    TAConstructor.Prototype.DefineProperty(PROP_TO_HEX,
+      TGocciaPropertyDescriptorData.Create(
+        TGocciaNativeFunctionValue.CreateWithoutPrototype(
+          Encoding.ToHex, PROP_TO_HEX, 0),
+        [pfConfigurable, pfWritable]));
+    TAConstructor.Prototype.DefineProperty(PROP_SET_FROM_BASE64,
+      TGocciaPropertyDescriptorData.Create(
+        TGocciaNativeFunctionValue.CreateWithoutPrototype(
+          Encoding.SetFromBase64, PROP_SET_FROM_BASE64, 1),
+        [pfConfigurable, pfWritable]));
+    TAConstructor.Prototype.DefineProperty(PROP_SET_FROM_HEX,
+      TGocciaPropertyDescriptorData.Create(
+        TGocciaNativeFunctionValue.CreateWithoutPrototype(
+          Encoding.SetFromHex, PROP_SET_FROM_HEX, 1),
+        [pfConfigurable, pfWritable]));
 
     // Uint8Array instances use constructor's prototype (encoding methods + shared chain)
     TGocciaTypedArrayValue.SetUint8Prototype(TAConstructor.Prototype);
