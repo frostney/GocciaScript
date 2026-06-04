@@ -53,8 +53,8 @@ When working with the GC, follow these rules:
 - **Override `MarkReferences`** in every value type that holds `TGocciaValue` references. Call `inherited` first, then mark each owned reference.
 - **Pin singletons** — `UndefinedValue`, `TrueValue`, `NaNValue`, etc. are pinned via `PinObject` during engine initialization (consolidated in `PinPrimitiveSingletons`). Built-in prototype singletons are stored per-engine in realm slots (see next bullet); the realm pins them on `SetSlot` and releases them on `Destroy`, so contributors do not need to call `PinObject` from `InitializePrototype` themselves.
 - **Realm-owned pinning** — Built-in prototypes are stored in per-engine [realm slots](core-patterns.md#realm-ownership--slot-registration). `TGocciaRealm.SetSlot` pins the stored object via `PinObject`; the realm tracks every pin it took and releases all of them in `Destroy` via `UnpinObject`. Owned-slot helpers (`TGocciaSharedPrototype` instances) are `Free`d before the pin-release pass, so their destructors can still call `UnpinObject` on objects they own. This means engine tear-down releases the entire intrinsic prototype graph atomically — embedders should not pin or unpin built-in prototypes manually.
-- **Protect stack-held values** — Values held only by Pascal code (not in any GocciaScript scope) must be protected with `AddTempRoot`/`RemoveTempRoot`.
-- **Use `CollectIfNeeded(AProtect)`** when holding a `TGCManagedObject` on the stack. The no-arg `CollectIfNeeded` is only safe when all live values are already rooted.
+- **Protect stack-held values** — Values held only by Pascal code (not in any GocciaScript scope) must be protected. Use `TGocciaActiveRootFrame` for stack-local groups of roots, especially nested evaluator paths where the same object may be rooted more than once; use `AddTempRoot`/`RemoveTempRoot` for simple one-off temporary ownership.
+- **Use `CollectIfNeeded(AProtect)` or `CollectForMemoryPressure(AProtect)`** when holding a `TGCManagedObject` on the stack. The no-arg `CollectIfNeeded` is only safe when all live values are already rooted.
 - **Weak containers and weak references must not mark weak targets during `MarkReferences`**. Put weak-value propagation in `TraceWeakReferences` and dead-target pruning or cleanup scheduling in `SweepWeakReferences`; otherwise weak semantics collapse into strong references.
 - **Queued jobs must root their callback payloads**. Promise reactions, `queueMicrotask` callbacks, and FinalizationRegistry cleanup jobs use queued roots so callback functions, held values, and result promises survive collections until the job runs.
 - **Clear kept objects at host job boundaries**. Engine idle checkpoints and the shared microtask/fetch drain helper clear the kept-objects set before and after draining; individual microtask/finalization jobs clear it after they complete.
@@ -94,6 +94,8 @@ The GC tracks approximate heap usage via `InstanceSize` per registered object. A
 - **Override:** `--max-memory=<bytes>` sets an explicit limit.
 
 Any allocation that pushes `BytesAllocated` above `MaxBytes` raises a JavaScript `RangeError`. The error is catchable with `try/catch`; after catching, the script can call `Goccia.gc()` to free unreachable objects and retry.
+
+The interpreter also has safe checkpoints that call `CollectForMemoryPressure` as live bytes approach the ceiling. These checkpoints protect the current expression result and active Pascal-local temporaries, allowing transient-heavy programs to reclaim unreachable values before the hard allocation guard fires. If a collection cannot bring usage below the ceiling, the next allocation still raises `RangeError`.
 
 From JavaScript, `Goccia.gc.bytesAllocated` and `Goccia.gc.maxBytes` are read-only getters. The ceiling can only be changed from the engine level (CLI option or Pascal API: `TGarbageCollector.Instance.MaxBytes`).
 

@@ -163,6 +163,31 @@ const
   FOR_IN_ENTRY_KEY = '__gocciaForInKey';
   FOR_IN_MAX_PROTOTYPE_CHAIN_DEPTH = 256;
 
+procedure AddValueRoot(var ARoots: TGocciaActiveRootFrame;
+  const AValue: TGocciaValue); inline;
+begin
+  if Assigned(AValue) then
+    ARoots.Add(AValue);
+end;
+
+procedure RootArgumentsFrom(var ARoots: TGocciaActiveRootFrame;
+  const AArguments: TGocciaArgumentsCollection; const AStartIndex: Integer);
+var
+  I: Integer;
+begin
+  for I := AStartIndex to AArguments.Length - 1 do
+    AddValueRoot(ARoots, AArguments.GetElement(I));
+end;
+
+procedure CollectInterpreterMemoryPressure(const AProtect: TGocciaValue); inline;
+var
+  GC: TGarbageCollector;
+begin
+  GC := TGarbageCollector.Instance;
+  if Assigned(GC) then
+    GC.CollectForMemoryPressure(AProtect);
+end;
+
 // Helper: create a non-owning copy of a statement list (AST owns the nodes)
 function CopyStatementList(const ASource: TObjectList<TGocciaASTNode>): TObjectList<TGocciaASTNode>;
 var
@@ -479,13 +504,17 @@ var
 begin
   Continuation := CurrentGeneratorContinuation;
   if Assigned(Continuation) and Continuation.TakeCompletedExpressionValue(AExpression, Result) then
+  begin
+    CollectInterpreterMemoryPressure(Result);
     Exit;
+  end;
   if AContext.CoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) then
     TGocciaCoverageTracker.Instance.RecordLineHit(
       AContext.CurrentFilePath, AExpression.Line);
   Result := AExpression.Evaluate(AContext);
   if Assigned(Continuation) then
     Continuation.SaveCompletedExpressionValue(AExpression, Result);
+  CollectInterpreterMemoryPressure(Result);
 end;
 
 function EvaluateStatement(const AStatement: TGocciaStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
@@ -546,8 +575,12 @@ end;
 function EvaluateBinary(const ABinaryExpression: TGocciaBinaryExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
 var
   Left, Right: TGocciaValue;
+  Roots: TGocciaActiveRootFrame;
 begin
-  // Handle short-circuiting logical operators first
+  Roots.Initialize;
+  // Handle short-circuiting logical operators first. The left value is not
+  // needed across right-side evaluation when the right side is taken, and
+  // CollectForMemoryPressure protects the returned value directly.
   if ABinaryExpression.Operator = gttAnd then
   begin
     Left := EvaluateExpression(ABinaryExpression.Left, AContext);
@@ -568,6 +601,7 @@ begin
       Right := EvaluateExpression(ABinaryExpression.Right, AContext);
       Result := Right;  // Return right operand
     end;
+    CollectInterpreterMemoryPressure(Result);
     Exit;
   end
   else if ABinaryExpression.Operator = gttOr then
@@ -590,6 +624,7 @@ begin
       Right := EvaluateExpression(ABinaryExpression.Right, AContext);
       Result := Right;  // Return right operand
     end;
+    CollectInterpreterMemoryPressure(Result);
     Exit;
   end
   else if ABinaryExpression.Operator = gttNullishCoalescing then
@@ -613,6 +648,7 @@ begin
           ABinaryExpression.Column, 1);
       Result := Left;  // Return left operand for all other values (including falsy ones)
     end;
+    CollectInterpreterMemoryPressure(Result);
     Exit;
   end;
 
@@ -622,82 +658,96 @@ begin
   if not Assigned(CurrentGeneratorContinuation) or
      not CurrentGeneratorContinuation.TakeExpressionValue(ABinaryExpression, Left) then
     Left := EvaluateExpression(ABinaryExpression.Left, AContext);
+  AddValueRoot(Roots, Left);
   try
     Right := EvaluateExpression(ABinaryExpression.Right, AContext);
+    AddValueRoot(Roots, Right);
     if Assigned(CurrentGeneratorContinuation) then
       CurrentGeneratorContinuation.ClearExpressionValue(ABinaryExpression);
+
+    case ABinaryExpression.Operator of
+      gttPlus:
+        Result := EvaluateAddition(Left, Right);
+      gttMinus:
+        Result := EvaluateSubtraction(Left, Right);
+      gttStar:
+        Result := EvaluateMultiplication(Left, Right);
+      gttSlash:
+        Result := EvaluateDivision(Left, Right);
+      gttPercent:
+        Result := EvaluateModulo(Left, Right);
+      gttPower:
+        Result := EvaluateExponentiation(Left, Right);
+      gttEqual:
+        Result := TGocciaBooleanLiteralValue.FromBoolean(
+          Goccia.Arithmetic.IsStrictEqual(Left, Right));
+      gttNotEqual:
+        Result := TGocciaBooleanLiteralValue.FromBoolean(
+          Goccia.Arithmetic.IsNotStrictEqual(Left, Right));
+      gttLooseEqual:
+        Result := TGocciaBooleanLiteralValue.FromBoolean(
+          Goccia.Arithmetic.IsLooselyEqual(Left, Right));
+      gttLooseNotEqual:
+        Result := TGocciaBooleanLiteralValue.FromBoolean(
+          Goccia.Arithmetic.IsNotLooselyEqual(Left, Right));
+      gttLess:
+        Result := TGocciaBooleanLiteralValue.FromBoolean(
+          Goccia.Arithmetic.LessThan(Left, Right));
+      gttGreater:
+        Result := TGocciaBooleanLiteralValue.FromBoolean(
+          Goccia.Arithmetic.GreaterThan(Left, Right));
+      gttLessEqual:
+        Result := TGocciaBooleanLiteralValue.FromBoolean(
+          Goccia.Arithmetic.LessThanOrEqual(Left, Right));
+      gttGreaterEqual:
+        Result := TGocciaBooleanLiteralValue.FromBoolean(
+          Goccia.Arithmetic.GreaterThanOrEqual(Left, Right));
+      gttInstanceof:
+        Result := EvaluateInstanceof(Left, Right, IsObjectInstanceOfClass);
+      gttIn:
+        Result := EvaluateInOperator(Left, Right);
+      // Bitwise operators
+      gttBitwiseAnd:
+        Result := EvaluateBitwiseAnd(Left, Right);
+      gttBitwiseOr:
+        Result := EvaluateBitwiseOr(Left, Right);
+      gttBitwiseXor:
+        Result := EvaluateBitwiseXor(Left, Right);
+      gttLeftShift:
+        Result := EvaluateLeftShift(Left, Right);
+      gttRightShift:
+        Result := EvaluateRightShift(Left, Right);
+      gttUnsignedRightShift:
+        Result := EvaluateUnsignedRightShift(Left, Right);
+    else
+      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    end;
   except
     on E: EGocciaGeneratorYield do
     begin
       if Assigned(CurrentGeneratorContinuation) then
         CurrentGeneratorContinuation.SaveExpressionValue(ABinaryExpression, Left);
+      Roots.Clear;
+      raise;
+    end;
+    else
+    begin
+      Roots.Clear;
       raise;
     end;
   end;
-
-  case ABinaryExpression.Operator of
-    gttPlus:
-      Result := EvaluateAddition(Left, Right);
-    gttMinus:
-      Result := EvaluateSubtraction(Left, Right);
-    gttStar:
-      Result := EvaluateMultiplication(Left, Right);
-    gttSlash:
-      Result := EvaluateDivision(Left, Right);
-    gttPercent:
-      Result := EvaluateModulo(Left, Right);
-    gttPower:
-      Result := EvaluateExponentiation(Left, Right);
-    gttEqual:
-      Result := TGocciaBooleanLiteralValue.FromBoolean(
-        Goccia.Arithmetic.IsStrictEqual(Left, Right));
-    gttNotEqual:
-      Result := TGocciaBooleanLiteralValue.FromBoolean(
-        Goccia.Arithmetic.IsNotStrictEqual(Left, Right));
-    gttLooseEqual:
-      Result := TGocciaBooleanLiteralValue.FromBoolean(
-        Goccia.Arithmetic.IsLooselyEqual(Left, Right));
-    gttLooseNotEqual:
-      Result := TGocciaBooleanLiteralValue.FromBoolean(
-        Goccia.Arithmetic.IsNotLooselyEqual(Left, Right));
-    gttLess:
-      Result := TGocciaBooleanLiteralValue.FromBoolean(
-        Goccia.Arithmetic.LessThan(Left, Right));
-    gttGreater:
-      Result := TGocciaBooleanLiteralValue.FromBoolean(
-        Goccia.Arithmetic.GreaterThan(Left, Right));
-    gttLessEqual:
-      Result := TGocciaBooleanLiteralValue.FromBoolean(
-        Goccia.Arithmetic.LessThanOrEqual(Left, Right));
-    gttGreaterEqual:
-      Result := TGocciaBooleanLiteralValue.FromBoolean(
-        Goccia.Arithmetic.GreaterThanOrEqual(Left, Right));
-    gttInstanceof:
-      Result := EvaluateInstanceof(Left, Right, IsObjectInstanceOfClass);
-    gttIn:
-      Result := EvaluateInOperator(Left, Right);
-    // Bitwise operators
-    gttBitwiseAnd:
-      Result := EvaluateBitwiseAnd(Left, Right);
-    gttBitwiseOr:
-      Result := EvaluateBitwiseOr(Left, Right);
-    gttBitwiseXor:
-      Result := EvaluateBitwiseXor(Left, Right);
-    gttLeftShift:
-      Result := EvaluateLeftShift(Left, Right);
-    gttRightShift:
-      Result := EvaluateRightShift(Left, Right);
-    gttUnsignedRightShift:
-      Result := EvaluateUnsignedRightShift(Left, Right);
-  else
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-  end;
+  AddValueRoot(Roots, Result);
+  CollectInterpreterMemoryPressure(Result);
+  Roots.Clear;
 end;
 
 function EvaluateUnary(const AUnaryExpression: TGocciaUnaryExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
 var
   Operand: TGocciaValue;
+  Roots: TGocciaActiveRootFrame;
 begin
+  Roots.Initialize;
+  try
   // Special handling for delete operator
   if AUnaryExpression.Operator = gttDelete then
   begin
@@ -710,6 +760,7 @@ begin
   begin
     try
       Operand := EvaluateExpression(AUnaryExpression.Operand, AContext);
+      AddValueRoot(Roots, Operand);
     except
       on E: TGocciaReferenceError do
       begin
@@ -723,6 +774,7 @@ begin
   end;
 
   Operand := EvaluateExpression(AUnaryExpression.Operand, AContext);
+  AddValueRoot(Roots, Operand);
 
   case AUnaryExpression.Operator of
     gttNot:
@@ -738,6 +790,7 @@ begin
         // instead of being silently coerced to NaN by the boxed
         // object's ToNumberLiteral.
         Operand := ToPrimitive(Operand);
+        AddValueRoot(Roots, Operand);
         if Operand is TGocciaSymbolValue then
           ThrowTypeError(SErrorSymbolToNumber, SSuggestSymbolNoImplicitConversion);
         // ES2026 §6.1.6.2.1 BigInt::unaryMinus
@@ -775,6 +828,7 @@ begin
       // surface the spec-mandated TypeError instead of silently
       // producing a number from the boxed object's coercion path.
       Operand := ToPrimitive(Operand);
+      AddValueRoot(Roots, Operand);
       if Operand is TGocciaSymbolValue then
         ThrowTypeError(SErrorSymbolToNumber, SSuggestSymbolNoImplicitConversion);
       // ES2026 §7.1.4: unary + on BigInt throws TypeError
@@ -790,6 +844,11 @@ begin
       Result := EvaluateBitwiseNot(Operand);
   else
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  end;
+  AddValueRoot(Roots, Result);
+  CollectInterpreterMemoryPressure(Result);
+  finally
+    Roots.Clear;
   end;
 end;
 
@@ -941,12 +1000,14 @@ var
   SuperClassValue, SuperResult: TGocciaValue;
   MemberExpr: TGocciaMemberExpression;
   SpreadValue: TGocciaValue;
+  ArgumentValue: TGocciaValue;
   CalleeName: string;
-  I: Integer;
+  FirstAddedIndex, I: Integer;
   ThisScope: TGocciaScope;
   ConstructorThisValue: TGocciaValue;
   CurrentCtorClassValue: TGocciaValue;
   CurrentCtorClass: TGocciaClassValue;
+  Roots: TGocciaActiveRootFrame;
   procedure InitializeReplacementThis(const AReplacement: TGocciaObjectValue;
     const APreviousThis: TGocciaValue);
   begin
@@ -960,6 +1021,7 @@ var
       iimEagerReplacement);
   end;
 begin
+  Roots.Initialize;
   CheckExecutionTimeout;
   IncrementInstructionCounter;
   CheckInstructionLimit;
@@ -967,6 +1029,7 @@ begin
   if ACallExpression.Callee is TGocciaSuperExpression then
   begin
     SuperClassValue := EvaluateExpression(ACallExpression.Callee, AContext);
+    AddValueRoot(Roots, SuperClassValue);
     if SuperClassValue is TGocciaClassValue then
       SuperClass := TGocciaClassValue(SuperClassValue)
     else
@@ -977,6 +1040,7 @@ begin
       AContext.OnError('super() can only be called within a method with a superclass',
         ACallExpression.Line, ACallExpression.Column);
       Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+      Roots.Clear;
       Exit;
     end;
 
@@ -988,10 +1052,17 @@ begin
         if ArgumentExpr is TGocciaSpreadExpression then
         begin
           SpreadValue := EvaluateExpression(TGocciaSpreadExpression(ArgumentExpr).Argument, AContext);
+          AddValueRoot(Roots, SpreadValue);
+          FirstAddedIndex := Arguments.Length;
           SpreadIterableIntoArgs(SpreadValue, Arguments);
+          RootArgumentsFrom(Roots, Arguments, FirstAddedIndex);
         end
         else
-          Arguments.Add(EvaluateExpression(ArgumentExpr, AContext));
+        begin
+          ArgumentValue := EvaluateExpression(ArgumentExpr, AContext);
+          Arguments.Add(ArgumentValue);
+          AddValueRoot(Roots, ArgumentValue);
+        end;
       end;
 
       if Assigned(SuperClass) and Assigned(SuperClass.ConstructorMethod) then
@@ -1059,7 +1130,11 @@ begin
       end;
     finally
       Arguments.Free;
+      Roots.Clear;
     end;
+    AddValueRoot(Roots, Result);
+    CollectInterpreterMemoryPressure(Result);
+    Roots.Clear;
     Exit;
   end;
 
@@ -1072,15 +1147,20 @@ begin
       // Super method calls: evaluate normally
       Callee := EvaluateExpression(ACallExpression.Callee, AContext);
       ThisValue := AContext.Scope.ThisValue;  // Use current instance's 'this'
+      AddValueRoot(Roots, Callee);
+      AddValueRoot(Roots, ThisValue);
     end
     else
     begin
       // Regular method calls: use overloaded function to get both method and object
       Callee := EvaluateMember(MemberExpr, AContext, ThisValue);
+      AddValueRoot(Roots, Callee);
+      AddValueRoot(Roots, ThisValue);
       if MemberExpr.Optional and
          ((ThisValue is TGocciaNullLiteralValue) or (ThisValue is TGocciaUndefinedLiteralValue)) then
       begin
         Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+        Roots.Clear;
         Exit;
       end;
     end;
@@ -1089,6 +1169,8 @@ begin
   begin
     // Private method calls: use overloaded function to get both method and object
     Callee := EvaluatePrivateMember(TGocciaPrivateMemberExpression(ACallExpression.Callee), AContext, ThisValue);
+    AddValueRoot(Roots, Callee);
+    AddValueRoot(Roots, ThisValue);
   end
   else
   begin
@@ -1102,12 +1184,15 @@ begin
       Callee := EvaluateExpression(ACallExpression.Callee, AContext);
       ThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
     end;
+    AddValueRoot(Roots, Callee);
+    AddValueRoot(Roots, ThisValue);
   end;
 
   if ACallExpression.Optional and
      ((Callee is TGocciaNullLiteralValue) or (Callee is TGocciaUndefinedLiteralValue)) then
   begin
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Roots.Clear;
     Exit;
   end;
 
@@ -1118,11 +1203,16 @@ begin
       if ArgumentExpr is TGocciaSpreadExpression then
       begin
         SpreadValue := EvaluateExpression(TGocciaSpreadExpression(ArgumentExpr).Argument, AContext);
+        AddValueRoot(Roots, SpreadValue);
+        FirstAddedIndex := Arguments.Length;
         SpreadIterableIntoArgs(SpreadValue, Arguments);
+        RootArgumentsFrom(Roots, Arguments, FirstAddedIndex);
       end
       else
       begin
-        Arguments.Add(EvaluateExpression(ArgumentExpr, AContext));
+        ArgumentValue := EvaluateExpression(ArgumentExpr, AContext);
+        Arguments.Add(ArgumentValue);
+        AddValueRoot(Roots, ArgumentValue);
       end;
     end;
 
@@ -1191,9 +1281,12 @@ begin
       if Assigned(TGocciaCallStack.Instance) then
         TGocciaCallStack.Instance.Pop;
     end;
+    AddValueRoot(Roots, Result);
+    CollectInterpreterMemoryPressure(Result);
 
   finally
     Arguments.Free;
+    Roots.Clear;
   end;
 end;
 
@@ -4464,8 +4557,9 @@ var
   Callee: TGocciaValue;
   Arguments: TGocciaArgumentsCollection;
   SpreadValue: TGocciaValue;
+  ArgumentValue: TGocciaValue;
   CalleeName: string;
-  I: Integer;
+  FirstAddedIndex, I: Integer;
   Instance: TGocciaInstanceValue;
   NativeInstance: TGocciaObjectValue;
   WalkClass, ClassValue: TGocciaClassValue;
@@ -4476,11 +4570,14 @@ var
   PrototypeValue: TGocciaValue;
   ReceiverPrototype: TGocciaObjectValue;
   ReceiverInstance: TGocciaObjectValue;
+  Roots: TGocciaActiveRootFrame;
 begin
+  Roots.Initialize;
   CheckExecutionTimeout;
   IncrementInstructionCounter;
   CheckInstructionLimit;
   Callee := EvaluateExpression(ANewExpression.Callee, AContext);
+  AddValueRoot(Roots, Callee);
 
   Arguments := TGocciaArgumentsCollection.Create;
   try
@@ -4489,10 +4586,17 @@ begin
       if ANewExpression.Arguments[I] is TGocciaSpreadExpression then
       begin
         SpreadValue := EvaluateExpression(TGocciaSpreadExpression(ANewExpression.Arguments[I]).Argument, AContext);
+        AddValueRoot(Roots, SpreadValue);
+        FirstAddedIndex := Arguments.Length;
         SpreadIterableIntoArgs(SpreadValue, Arguments);
+        RootArgumentsFrom(Roots, Arguments, FirstAddedIndex);
       end
       else
-        Arguments.Add(EvaluateExpression(ANewExpression.Arguments[I], AContext));
+      begin
+        ArgumentValue := EvaluateExpression(ANewExpression.Arguments[I], AContext);
+        Arguments.Add(ArgumentValue);
+        AddValueRoot(Roots, ArgumentValue);
+      end;
     end;
 
     if Callee is TGocciaClassValue then
@@ -4590,8 +4694,11 @@ begin
       if Assigned(TGocciaCallStack.Instance) then
         TGocciaCallStack.Instance.Pop;
     end;
+    AddValueRoot(Roots, Result);
+    CollectInterpreterMemoryPressure(Result);
   finally
     Arguments.Free;
+    Roots.Clear;
   end;
 end;
 

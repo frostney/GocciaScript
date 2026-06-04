@@ -564,6 +564,20 @@ console.log("--max-memory (manual gc reclaims inside active calls)...");
   }
 }
 
+console.log("--max-memory (interpreter recursive expression pressure reclaims)...");
+{
+  const src = [
+    "const fib = (n) => n < 2 ? n : fib(n - 1) + fib(n - 2);",
+    "fib(24);",
+    "",
+  ].join("\n");
+
+  const { exitCode, json, stderr } = runLoaderJson(src, ["--max-memory=500000", "--compat-asi"], { timeout: 30_000 });
+  if (exitCode !== 0) throw new Error(`Recursive expression pressure exit code should be 0, got ${exitCode}: ${JSON.stringify(json)}${stderr}`);
+  if (json.files?.[0]?.result !== 46368) throw new Error(`Recursive expression pressure should return 46368, got ${json.files?.[0]?.result}`);
+  if ((json.memory?.gc?.collections ?? 0) <= 0) throw new Error(`Recursive expression pressure should report collections, got ${json.memory?.gc?.collections}`);
+}
+
 console.log("--max-memory (maxBytes readonly)...");
 {
   const res = await $`echo 'Goccia.gc.maxBytes = 999' | ${LOADER} --compat-asi 2>&1`.nothrow();

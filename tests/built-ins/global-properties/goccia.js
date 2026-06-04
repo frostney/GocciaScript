@@ -45,5 +45,14 @@ describe.runIf(hasGoccia)("Goccia global", () => {
       Goccia.gc();
       expect(array.t).toBe(3);
     });
+
+    test("gc preserves nested recursive binary expression temporaries", () => {
+      const fib = (n) => {
+        Goccia.gc();
+        return n < 2 ? n : fib(n - 1) + fib(n - 2);
+      };
+
+      expect(fib(8)).toBe(21);
+    });
   });
 });

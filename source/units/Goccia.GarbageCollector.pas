@@ -40,6 +40,15 @@ type
     Added: Boolean;
   end;
 
+  TGocciaActiveRootFrame = record
+  private
+    FCount: Integer;
+  public
+    procedure Initialize; inline;
+    procedure Add(const AObject: TGCManagedObject);
+    procedure Clear;
+  end;
+
   TGarbageCollector = class
   private
     FManagedObjects: TGCManagedObjectList;
@@ -118,6 +127,9 @@ type
     // active root stack so a stack-held object survives the collection.
     procedure CollectIfNeeded(const AProtect: TGCManagedObject); overload;
 
+    function NeedsMemoryPressureCollection: Boolean;
+    procedure CollectForMemoryPressure(const AProtect: TGCManagedObject);
+
     // Young-generation collection: pre-marks objects before AWatermark
     // as surviving, then runs mark-and-sweep. MarkReferences on old
     // objects short-circuits via "if GCMarked then Exit", and the sweep
@@ -162,6 +174,8 @@ const
   DEFAULT_MAX_BYTES   = 512 * 1024 * 1024;         { 512 MB fallback }
   MAX_BYTES_CAP_64BIT = Int64(8192) * 1024 * 1024;  { 8 GB cap for 64-bit }
   MAX_BYTES_CAP_32BIT = 700 * 1024 * 1024;          { 700 MB cap for 32-bit }
+  MEMORY_PRESSURE_COLLECTION_MIN_RESERVE = 16 * 1024;
+  MEMORY_PRESSURE_COLLECTION_MAX_RESERVE = 1024 * 1024;
 
 function DetectDefaultMaxBytes: Int64;
 procedure InitializeTempRoot(var ARoot: TGocciaTempRoot); inline;
@@ -295,6 +309,43 @@ begin
   end;
   ARoot.ObjectValue := nil;
   ARoot.Added := False;
+end;
+
+{ TGocciaActiveRootFrame }
+
+procedure TGocciaActiveRootFrame.Initialize;
+begin
+  FCount := 0;
+end;
+
+procedure TGocciaActiveRootFrame.Add(const AObject: TGCManagedObject);
+var
+  GC: TGarbageCollector;
+begin
+  if not Assigned(AObject) then
+    Exit;
+  GC := TGarbageCollector.Instance;
+  if not Assigned(GC) then
+    Exit;
+  GC.PushActiveRoot(AObject);
+  Inc(FCount);
+end;
+
+procedure TGocciaActiveRootFrame.Clear;
+var
+  GC: TGarbageCollector;
+begin
+  if FCount <= 0 then
+    Exit;
+  GC := TGarbageCollector.Instance;
+  if Assigned(GC) then
+    while FCount > 0 do
+    begin
+      GC.PopActiveRoot;
+      Dec(FCount);
+    end
+  else
+    FCount := 0;
 end;
 
 { TGarbageCollector }
@@ -694,6 +745,46 @@ begin
   try
     Collect;
   finally
+    if Assigned(AProtect) then
+      FActiveRootStack.Delete(FActiveRootStack.Count - 1);
+  end;
+end;
+
+function TGarbageCollector.NeedsMemoryPressureCollection: Boolean;
+var
+  Reserve: Int64;
+begin
+  Result := False;
+  if not FEnabled or (FMaxBytes <= 0) or FCollecting or FMemoryLimitFiring then
+    Exit;
+
+  Reserve := FMaxBytes div 8;
+  if Reserve < MEMORY_PRESSURE_COLLECTION_MIN_RESERVE then
+    Reserve := MEMORY_PRESSURE_COLLECTION_MIN_RESERVE;
+  if Reserve > MEMORY_PRESSURE_COLLECTION_MAX_RESERVE then
+    Reserve := MEMORY_PRESSURE_COLLECTION_MAX_RESERVE;
+  if Reserve >= FMaxBytes then
+    Reserve := FMaxBytes div 2;
+
+  Result := FBytesAllocated >= (FMaxBytes - Reserve);
+end;
+
+procedure TGarbageCollector.CollectForMemoryPressure(
+  const AProtect: TGCManagedObject);
+var
+  WasFiring: Boolean;
+begin
+  if not NeedsMemoryPressureCollection then
+    Exit;
+
+  if Assigned(AProtect) then
+    FActiveRootStack.Add(AProtect);
+  WasFiring := FMemoryLimitFiring;
+  FMemoryLimitFiring := True;
+  try
+    Collect;
+  finally
+    FMemoryLimitFiring := WasFiring;
     if Assigned(AProtect) then
       FActiveRootStack.Delete(FActiveRootStack.Count - 1);
   end;
