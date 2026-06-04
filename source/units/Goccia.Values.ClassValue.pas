@@ -107,6 +107,7 @@ type
     function Instantiate(const AArguments: TGocciaArgumentsCollection;
       const ANewTarget: TGocciaValue = nil): TGocciaValue; virtual;
     function EstimatedInstancePropertyCapacity: Integer;
+    function HasInstanceInitializerWork: Boolean;
     // ECMAScript: number of expected constructor parameters before the first
     // default/rest. Built-in classes default to 0; user classes derive from
     // their constructor method's formal parameters.
@@ -1105,6 +1106,23 @@ begin
         Inc(Result);
     WalkClass := WalkClass.SuperClass;
   end;
+end;
+
+function TGocciaClassValue.HasInstanceInitializerWork: Boolean;
+var
+  I: Integer;
+begin
+  if HasPrivateInstanceElements or
+     (Length(FFieldOrder) > 0) or
+     (Length(FMethodInitializers) > 0) or
+     (Length(FFieldInitializers) > 0) then
+    Exit(True);
+
+  for I := 0 to High(FDecoratorFieldInitializers) do
+    if not FDecoratorFieldInitializers[I].IsStatic then
+      Exit(True);
+
+  Result := False;
 end;
 
 // ES2026 §10.2.2 [[Construct]](argumentsList, newTarget)

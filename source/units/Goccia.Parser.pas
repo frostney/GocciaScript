@@ -5746,6 +5746,12 @@ begin
   try
     while not Check(gttRightBrace) and not IsAtEnd do
     begin
+      if Check(gttSemicolon) then
+      begin
+        Advance;
+        Continue;
+      end;
+
       MemberDecorators := ParseDecorators;
       IsAccessor := False;
       MemberStartLine := Peek.Line;

@@ -16,6 +16,7 @@ type
     FTemplate: TGocciaFunctionTemplate;
     FUpvalues: array of TGocciaBytecodeUpvalue;
     FHomeObject: TGocciaObjectValue;
+    FHomeClass: TGocciaObjectValue;
     FFunctionValue: TGocciaValue;
   public
     constructor Create(const ATemplate: TGocciaFunctionTemplate;
@@ -28,6 +29,7 @@ type
     property Template: TGocciaFunctionTemplate read FTemplate;
     property UpvalueCount: Integer read GetUpvalueCount;
     property HomeObject: TGocciaObjectValue read FHomeObject write FHomeObject;
+    property HomeClass: TGocciaObjectValue read FHomeClass write FHomeClass;
     property FunctionValue: TGocciaValue read FFunctionValue write FFunctionValue;
   end;
 
@@ -39,6 +41,7 @@ begin
   inherited Create;
   FTemplate := ATemplate;
   FHomeObject := nil;
+  FHomeClass := nil;
   FFunctionValue := nil;
   SetLength(FUpvalues, AUpvalueCount);
 end;
@@ -55,6 +58,7 @@ var
 begin
   Result := TGocciaBytecodeClosure.Create(FTemplate, Length(FUpvalues));
   Result.FHomeObject := FHomeObject;
+  Result.FHomeClass := FHomeClass;
   Result.FFunctionValue := FFunctionValue;
   for I := 0 to High(FUpvalues) do
     Result.FUpvalues[I] := FUpvalues[I];
