@@ -84,6 +84,7 @@ procedure TGocciaBytecodeExecutor.Initialize(const AGlobalScope: TGocciaScope;
   const AModuleLoader: TGocciaModuleLoader; const ASourcePath: string);
 begin
   inherited;
+  FVM.EnsureStackRootRegistered;
   FVM.Realm := FRealm;
   FVM.GlobalScope := AGlobalScope;
   FVM.GlobalThisValue := AGlobalScope.ThisValue;
