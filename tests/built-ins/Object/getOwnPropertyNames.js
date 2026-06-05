@@ -98,6 +98,21 @@ describe("Object.getOwnPropertyNames", () => {
     expect(names).toContain("length");
   });
 
+  test("array index names are sorted across dense and descriptor-backed elements", () => {
+    const array = [];
+    array[5] = "dense";
+    Object.defineProperty(array, "1", {
+      get() {
+        return "accessor";
+      },
+      configurable: true,
+      enumerable: true,
+    });
+
+    const names = Object.getOwnPropertyNames(array);
+    expect(names.indexOf("1")).toBeLessThan(names.indexOf("5"));
+  });
+
   test("throws for null", () => {
     expect(() => Object.getOwnPropertyNames(null)).toThrow(TypeError);
   });

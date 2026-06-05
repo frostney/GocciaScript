@@ -4799,14 +4799,8 @@ begin
   Condition := Expression;
   Consume(gttRightParen, 'Expected ")" after do-while condition',
     SSuggestCloseParenCondition);
-  if Check(gttSemicolon) then
-    Advance
-  else if Check(gttRightBrace) or Check(gttEOF) then
-  begin
-  end
-  else if not FAutomaticSemicolonInsertion then
-    Consume(gttSemicolon, 'Expected ";" after do-while statement',
-      SSuggestAddSemicolon);
+  ConsumeSemicolonOrASI('Expected ";" after do-while statement',
+    SSuggestAddSemicolon);
 
   Result := TGocciaDoWhileStatement.Create(BodyStmt, Condition, Line, Column);
 end;

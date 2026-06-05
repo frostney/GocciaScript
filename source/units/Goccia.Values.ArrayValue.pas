@@ -3211,37 +3211,57 @@ end;
 function TGocciaArrayValue.GetOwnPropertyKeys: TArray<string>;
 var
   Keys: TArray<string>;
-  Count, I, J: Integer;
+  NumericKeys: TList<Int64>;
+  SeenNumericKeys: TDictionary<Int64, Boolean>;
+  OtherKeys: TList<string>;
+  Count, I: Integer;
   Key: string;
+  Index: Int64;
 begin
   Keys := inherited GetOwnPropertyKeys;
-  Count := 0;
-  SetLength(Result, FElements.Count + Length(Keys));
-
-  for I := 0 to FElements.Count - 1 do
-    if not IsArrayHole(FElements[I]) then
-    begin
-      Result[Count] := IntToStr(I);
-      Inc(Count);
-    end;
-
-  for I := 0 to Length(Keys) - 1 do
-  begin
-    Key := Keys[I];
-    for J := 0 to Count - 1 do
-      if Result[J] = Key then
+  NumericKeys := TList<Int64>.Create;
+  SeenNumericKeys := TDictionary<Int64, Boolean>.Create;
+  OtherKeys := TList<string>.Create;
+  try
+    for I := 0 to FElements.Count - 1 do
+      if not IsArrayHole(FElements[I]) then
       begin
-        Key := '';
-        Break;
+        NumericKeys.Add(I);
+        SeenNumericKeys.Add(I, True);
       end;
-    if Key <> '' then
+
+    for Key in Keys do
     begin
-      Result[Count] := Key;
+      if TryParseArrayElementIndex(Key, Index) then
+      begin
+        if not SeenNumericKeys.ContainsKey(Index) then
+        begin
+          NumericKeys.Add(Index);
+          SeenNumericKeys.Add(Index, True);
+        end;
+      end
+      else
+        OtherKeys.Add(Key);
+    end;
+
+    NumericKeys.Sort(TComparer<Int64>.Construct(CompareInt64));
+    SetLength(Result, NumericKeys.Count + OtherKeys.Count);
+    Count := 0;
+    for I := 0 to NumericKeys.Count - 1 do
+    begin
+      Result[Count] := IntToStr(NumericKeys[I]);
       Inc(Count);
     end;
+    for I := 0 to OtherKeys.Count - 1 do
+    begin
+      Result[Count] := OtherKeys[I];
+      Inc(Count);
+    end;
+  finally
+    OtherKeys.Free;
+    SeenNumericKeys.Free;
+    NumericKeys.Free;
   end;
-
-  SetLength(Result, Count);
 end;
 
 function TGocciaArrayValue.GetAllPropertyNames: TArray<string>;
