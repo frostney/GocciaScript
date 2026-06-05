@@ -5691,6 +5691,7 @@ function TGocciaParser.ParseClassBody(const AClassName: string): TGocciaClassDef
 var
   SuperClass: string;
   Methods: TGocciaClassMethodMap;
+  StaticMethods: TGocciaClassMethodMap;
   Getters: TGocciaGetterExpressionMap;
   Setters: TGocciaSetterExpressionMap;
   StaticProperties: TGocciaExpressionMap;
@@ -5752,6 +5753,7 @@ begin
   PushPrivateClassContext;
 
   Methods := TGocciaClassMethodMap.Create;
+  StaticMethods := TGocciaClassMethodMap.Create;
   Getters := TGocciaGetterExpressionMap.Create;
   Setters := TGocciaSetterExpressionMap.Create;
   StaticProperties := TGocciaExpressionMap.Create;
@@ -6189,6 +6191,8 @@ begin
         end
         else if IsPrivate then
           PrivateMethods.Add(MemberName, Method)
+        else if IsStatic then
+          StaticMethods.Add(MemberName, Method)
         else
           Methods.Add(MemberName, Method);
       end
@@ -6206,7 +6210,7 @@ begin
     PopPrivateClassContext;
   end;
 
-  Result := TGocciaClassDefinition.Create(AClassName, SuperClass, Methods, Getters, Setters, StaticProperties, InstanceProperties, PrivateInstanceProperties, PrivateMethods, PrivateStaticProperties);
+  Result := TGocciaClassDefinition.Create(AClassName, SuperClass, Methods, StaticMethods, Getters, Setters, StaticProperties, InstanceProperties, PrivateInstanceProperties, PrivateMethods, PrivateStaticProperties);
   Result.GenericParams := ClassGenericParams;
   Result.ImplementsClause := ClassImplementsClause;
   for TypePair in InstancePropertyTypes do

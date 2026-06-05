@@ -4297,11 +4297,11 @@ begin
   // function whose value is a fresh ordinary object.  Shape differs by kind:
   //   - Ordinary function (§15.2): prototype is { writable, !enumerable,
   //     !configurable } with an own `constructor` pointing at the function.
-  //   - (Async) generator (§15.5 / §15.6): prototype is { !writable,
-  //     !enumerable, !configurable } with NO own `constructor` — per spec it
-  //     inherits `constructor` from %GeneratorFunction.prototype.prototype%
-  //     (which points at %GeneratorFunction.prototype%, not the specific
-  //     generator function), so an own back-reference would be wrong.
+  //   - (Async) generator (§15.5 / §15.6): prototype is also writable, but
+  //     has NO own `constructor` — per spec it inherits `constructor` from
+  //     %GeneratorFunction.prototype.prototype% (which points at
+  //     %GeneratorFunction.prototype%, not the specific generator function),
+  //     so an own back-reference would be wrong.
   //
   // Match the lazy-init guard used by OP_NEW_OBJECT — the bytecode VM can be
   // exercised outside the normal engine bootstrap (e.g. Goccia.VM.Test.pas),
@@ -4312,13 +4312,9 @@ begin
   else
     PrototypeObj := TGocciaObjectValue.Create(
       TGocciaObjectValue.SharedObjectPrototype);
-  if AKind in [foikGenerator, foikAsyncGenerator] then
+  PrototypeFlags := [pfWritable];
+  if not (AKind in [foikGenerator, foikAsyncGenerator]) then
   begin
-    PrototypeFlags := [];
-  end
-  else
-  begin
-    PrototypeFlags := [pfWritable];
     PrototypeObj.DefineProperty(PROP_CONSTRUCTOR,
       TGocciaPropertyDescriptorData.Create(AFunction, [pfWritable, pfConfigurable]));
   end;

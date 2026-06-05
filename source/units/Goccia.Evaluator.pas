@@ -5028,11 +5028,16 @@ begin
     Method := TGocciaMethodValue(EvaluateClassMethod(MethodPair.Value, AContext, MethodSuperClass));
     Method.OwningClass := ClassValue;
 
-    if MethodPair.Value.IsStatic then
-      ClassValue.DefineProperty(MethodPair.Key,
-        TGocciaPropertyDescriptorData.Create(Method, [pfConfigurable, pfWritable]))
-    else
-      ClassValue.AddMethod(MethodPair.Key, Method);
+    ClassValue.AddMethod(MethodPair.Key, Method);
+  end;
+
+  for MethodPair in AClassDef.StaticMethods do
+  begin
+    Method := TGocciaMethodValue(EvaluateClassMethod(MethodPair.Value, AContext, MethodSuperClass));
+    Method.OwningClass := ClassValue;
+
+    ClassValue.DefineProperty(MethodPair.Key,
+      TGocciaPropertyDescriptorData.Create(Method, [pfConfigurable, pfWritable]));
   end;
 
   // Static fields without FElements entries (legacy / no static blocks)

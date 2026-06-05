@@ -227,25 +227,37 @@ begin
   if not Assigned(APrototype) then
     Exit;
 
-  Host := GeneratorPrototypeMethodHost;
+  Host := nil;
   if not APrototype.HasOwnProperty(PROP_NEXT) then
+  begin
+    if not Assigned(Host) then
+      Host := GeneratorPrototypeMethodHost;
     APrototype.DefineProperty(PROP_NEXT,
       TGocciaPropertyDescriptorData.Create(
         TGocciaNativeFunctionValue.CreateWithoutPrototype(
           Host.GeneratorNext, PROP_NEXT, 1),
         [pfConfigurable, pfWritable]));
+  end;
   if not APrototype.HasOwnProperty(PROP_RETURN) then
+  begin
+    if not Assigned(Host) then
+      Host := GeneratorPrototypeMethodHost;
     APrototype.DefineProperty(PROP_RETURN,
       TGocciaPropertyDescriptorData.Create(
         TGocciaNativeFunctionValue.CreateWithoutPrototype(
           Host.GeneratorReturn, PROP_RETURN, 1),
         [pfConfigurable, pfWritable]));
+  end;
   if not APrototype.HasOwnProperty(PROP_THROW) then
+  begin
+    if not Assigned(Host) then
+      Host := GeneratorPrototypeMethodHost;
     APrototype.DefineProperty(PROP_THROW,
       TGocciaPropertyDescriptorData.Create(
         TGocciaNativeFunctionValue.CreateWithoutPrototype(
           Host.GeneratorThrow, PROP_THROW, 1),
         [pfConfigurable, pfWritable]));
+  end;
 end;
 
 { TGocciaGeneratorObjectValue }

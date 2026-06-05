@@ -322,21 +322,19 @@ test("generator function expression: prototype has no own constructor back-refer
   expect(g.prototype.constructor).not.toBe(g);
 });
 
-test("generator function prototype is non-writable, non-configurable", () => {
+test("generator function prototype is writable and non-configurable", () => {
   function* g() {}
   const desc = Object.getOwnPropertyDescriptor(g, "prototype");
-  expect(desc.writable).toBe(false);
+  expect(desc.writable).toBe(true);
   expect(desc.enumerable).toBe(false);
   expect(desc.configurable).toBe(false);
 });
 
-test("generator prototype assignment throws TypeError and leaves the prototype unchanged", () => {
+test("generator prototype assignment updates the own prototype property", () => {
   function* g() {}
-  const original = g.prototype;
-  expect(() => {
-    g.prototype = {};
-  }).toThrow(TypeError);
-  expect(g.prototype).toBe(original);
+  const replacement = {};
+  g.prototype = replacement;
+  expect(g.prototype).toBe(replacement);
 });
 
 test("async function declaration does NOT have own prototype property", () => {
@@ -381,33 +379,31 @@ test("async generator expression: prototype has no own constructor back-referenc
   expect(g.prototype.constructor).not.toBe(g);
 });
 
-test("async generator declaration prototype descriptor matches generator (non-writable, non-configurable)", () => {
+test("async generator declaration prototype descriptor matches generator (writable, non-configurable)", () => {
   async function* g() {}
   const desc = Object.getOwnPropertyDescriptor(g, "prototype");
   expect(typeof desc.value).toBe("object");
   expect(desc.value).not.toBeNull();
-  expect(desc.writable).toBe(false);
+  expect(desc.writable).toBe(true);
   expect(desc.enumerable).toBe(false);
   expect(desc.configurable).toBe(false);
 });
 
-test("async generator expression prototype descriptor matches generator (non-writable, non-configurable)", () => {
+test("async generator expression prototype descriptor matches generator (writable, non-configurable)", () => {
   const g = async function* () {};
   const desc = Object.getOwnPropertyDescriptor(g, "prototype");
   expect(typeof desc.value).toBe("object");
   expect(desc.value).not.toBeNull();
-  expect(desc.writable).toBe(false);
+  expect(desc.writable).toBe(true);
   expect(desc.enumerable).toBe(false);
   expect(desc.configurable).toBe(false);
 });
 
-test("async generator prototype assignment throws TypeError in strict mode", () => {
+test("async generator prototype assignment updates the own prototype property", () => {
   async function* g() {}
-  const original = g.prototype;
-  expect(() => {
-    g.prototype = null;
-  }).toThrow(TypeError);
-  expect(g.prototype).toBe(original);
+  const replacement = {};
+  g.prototype = replacement;
+  expect(g.prototype).toBe(replacement);
 });
 
 test("arrow function does NOT have own prototype property", () => {
