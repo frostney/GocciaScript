@@ -189,6 +189,7 @@ uses
 
   TimingUtils,
 
+  Goccia.Builtins.Atomics,
   Goccia.Builtins.DisposableStack,
   Goccia.Builtins.Semver,
   Goccia.CallStack,
@@ -229,6 +230,7 @@ begin
   // Coverage tracker is NOT shut down here — the main thread reads it
   // after workers complete, then merges into the main tracker.
   ClearImportMetaCache;
+  ShutdownAtomicsWaiters;
   ClearDisposableStackSlotMap;
   ClearSemverHosts;
   ClearTimeZoneCache;

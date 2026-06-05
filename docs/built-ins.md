@@ -6,7 +6,7 @@
 
 ## Executive Summary
 
-- **Core vs runtime registration** — `TGocciaEngine` always registers core language built-ins (Math, Object, Array, String, Number, RegExp, JSON, Symbol, Set, Map, Promise, Temporal, Intl, ArrayBuffer, TypedArrays, Proxy, Reflect, Iterator, DisposableStack, etc.); `Goccia.Runtime` provides optional runtime globals (Console, JSON5, JSONL, TOML, YAML, CSV, TSV, Performance, TextEncoder/TextDecoder, URL, fetch, Headers, Response, SemVer)
+- **Core vs runtime registration** — `TGocciaEngine` always registers core language built-ins (Math, Object, Array, String, Number, RegExp, JSON, Symbol, Set, Map, Promise, Temporal, Intl, ArrayBuffer, SharedArrayBuffer, Atomics, TypedArrays, Proxy, Reflect, Iterator, DisposableStack, etc.); `Goccia.Runtime` provides optional runtime globals (Console, JSON5, JSONL, TOML, YAML, CSV, TSV, Performance, TextEncoder/TextDecoder, URL, fetch, Headers, Response, SemVer)
 - **Runtime opt-ins** — Testing, benchmarking, FFI, and data-format APIs extend the runtime surface through concrete runtime extension classes
 - **Adding new built-ins** — See [Adding Built-in Types](adding-built-in-types.md) for the step-by-step recipe
 - **Always-present globals** — `globalThis` and `Goccia` namespace are registered after all built-ins
@@ -15,7 +15,7 @@ GocciaScript provides a set of built-in global objects that mirror JavaScript's 
 
 ## Registration System
 
-Core language built-ins (Math, Object, Array, Number, JSON, Symbol, Set, Map, WeakSet, WeakMap, Promise, Temporal, Intl, ArrayBuffer, Proxy, Reflect, etc.) are always registered unconditionally by the engine.
+Core language built-ins (Math, Object, Array, Number, JSON, Symbol, Set, Map, WeakSet, WeakMap, Promise, Temporal, Intl, ArrayBuffer, SharedArrayBuffer, Atomics, Proxy, Reflect, etc.) are always registered unconditionally by the engine.
 
 Runtime globals (Console, JSON5, JSONL, TOML, YAML, CSV, TSV, Performance, TextEncoder/TextDecoder, URL, fetch, Headers, Response, SemVer) are registered by runtime extension classes under `source/units/Goccia.RuntimeExtensions.*.pas`. CLI hosts such as `GocciaScriptLoader` and `GocciaREPL` apply `TGocciaLoaderRuntimeProfile`; `GocciaTestRunner` applies the loader runtime profile plus `TGocciaTestingLibraryRuntimeExtension`; `GocciaBenchmarkRunner` applies the loader runtime profile plus `TGocciaBenchmarkRuntimeExtension`. `GocciaScriptLoaderBare` does not attach a runtime and exposes only a CLI-local `print(...args)` helper by default; the test262 conformance runner may opt into private test262 host capabilities with `--test262-host`.
 
@@ -637,9 +637,9 @@ Core High Resolution Time API:
 
 See [Temporal Built-ins](built-ins-temporal.md) for the complete Temporal API reference (PlainDate, PlainTime, PlainDateTime, Duration, Instant, ZonedDateTime, and more).
 
-### Binary Data (ArrayBuffer, SharedArrayBuffer, DataView, TypedArrays)
+### Binary Data (ArrayBuffer, SharedArrayBuffer, Atomics, DataView, TypedArrays)
 
-See [Binary Data Built-ins](built-ins-binary-data.md) for the complete ArrayBuffer, SharedArrayBuffer, DataView, and TypedArray API reference.
+See [Binary Data Built-ins](built-ins-binary-data.md) for the complete ArrayBuffer, SharedArrayBuffer, Atomics, DataView, and TypedArray API reference.
 
 ### FFI (`Goccia.Builtins.GlobalFFI.pas`)
 

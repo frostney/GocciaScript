@@ -11,6 +11,7 @@ uses
 
   Goccia.Arguments.Collection,
   Goccia.AST.Node,
+  Goccia.Builtins.Atomics,
   Goccia.Builtins.Base,
   Goccia.Builtins.DisposableStack,
   Goccia.Builtins.GlobalArray,
@@ -147,6 +148,7 @@ type
     FBuiltinPromise: TGocciaGlobalPromise;
     FBuiltinTemporal: TGocciaTemporalBuiltin;
     FBuiltinIntl: TGocciaIntlBuiltin;
+    FBuiltinAtomics: TGocciaAtomics;
     FBuiltinArrayBuffer: TGocciaGlobalArrayBuffer;
     FBuiltinProxy: TGocciaGlobalProxy;
     FBuiltinReflect: TGocciaGlobalReflect;
@@ -268,6 +270,7 @@ type
     property BuiltinPromise: TGocciaGlobalPromise read FBuiltinPromise;
     property BuiltinTemporal: TGocciaTemporalBuiltin read FBuiltinTemporal;
     property BuiltinIntl: TGocciaIntlBuiltin read FBuiltinIntl;
+    property BuiltinAtomics: TGocciaAtomics read FBuiltinAtomics;
     property BuiltinArrayBuffer: TGocciaGlobalArrayBuffer read FBuiltinArrayBuffer;
     property BuiltinProxy: TGocciaGlobalProxy read FBuiltinProxy;
     property BuiltinReflect: TGocciaGlobalReflect read FBuiltinReflect;
@@ -626,6 +629,7 @@ begin
     FBuiltinPromise.Free;
     FBuiltinTemporal.Free;
     FBuiltinIntl.Free;
+    FBuiltinAtomics.Free;
     FBuiltinArrayBuffer.Free;
     FBuiltinProxy.Free;
     FBuiltinReflect.Free;
@@ -686,6 +690,7 @@ begin
   FBuiltinPromise := TGocciaGlobalPromise.Create(CONSTRUCTOR_PROMISE, Scope, ThrowError);
   FBuiltinTemporal := TGocciaTemporalBuiltin.Create('Temporal', Scope, ThrowError);
   FBuiltinIntl := TGocciaIntlBuiltin.Create('Intl', Scope, ThrowError);
+  FBuiltinAtomics := TGocciaAtomics.Create(CONSTRUCTOR_ATOMICS, Scope, ThrowError);
   FBuiltinArrayBuffer := TGocciaGlobalArrayBuffer.Create(CONSTRUCTOR_ARRAY_BUFFER, Scope, ThrowError);
   FBuiltinProxy := TGocciaGlobalProxy.Create(Scope);
   FBuiltinReflect := TGocciaGlobalReflect.Create('Reflect', Scope, ThrowError);

@@ -1,11 +1,12 @@
 # Binary Data Built-ins
 
-*ArrayBuffer, SharedArrayBuffer, DataView, and TypedArray API reference.*
+*ArrayBuffer, SharedArrayBuffer, Atomics, DataView, and TypedArray API reference.*
 
 ## Executive Summary
 
 - **ArrayBuffer** — raw binary data buffers with fixed-length and resizable modes, transfer semantics, and detachment
 - **SharedArrayBuffer** — fixed-length binary buffer with the same API shape as ArrayBuffer but as a distinct type
+- **Atomics** — atomic read-modify-write, wait/notify, waitAsync, and pause operations over shared integer TypedArray views
 - **DataView** — endian-aware typed reads and writes over ArrayBuffer and SharedArrayBuffer storage
 - **TypedArrays** — array-like views over buffer data with 12 element types (Int8 through Float64, BigInt64, BigUint64)
 - **Uint8Array encoding** — Base64 and hex encoding/decoding
@@ -23,6 +24,14 @@ Internally backed by a zero-initialized `TBytes` array. ArrayBuffer instances ar
 Implements the [ECMAScript SharedArrayBuffer](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/SharedArrayBuffer). See [MDN SharedArrayBuffer reference](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/SharedArrayBuffer) for the full API.
 
 **Full standard compliance.** In GocciaScript, `SharedArrayBuffer` has the same API as `ArrayBuffer` but is a distinct type (not an instance of `ArrayBuffer`). SharedArrayBuffer instances are cloneable via `structuredClone`.
+
+## Atomics (`Goccia.Builtins.Atomics.pas`)
+
+Implements the [ECMAScript Atomics](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Atomics) namespace for shared integer TypedArray views.
+
+Supported operations: `add`, `and`, `compareExchange`, `exchange`, `isLockFree`, `load`, `notify`, `or`, `pause`, `store`, `sub`, `wait`, `waitAsync`, and `xor`.
+
+Atomic memory operations require an integer TypedArray backed by `SharedArrayBuffer`. `wait`, `waitAsync`, and `notify` require `Int32Array` or `BigInt64Array` views.
 
 ## DataView (`Goccia.Values.DataViewValue.pas`)
 
