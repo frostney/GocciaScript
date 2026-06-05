@@ -12,6 +12,7 @@ uses
   Goccia.Arguments.Collection,
   Goccia.AST.Expressions,
   Goccia.AST.Node,
+  Goccia.Constants,
   Goccia.Values.FunctionBase,
   Goccia.Values.FunctionValue,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -267,15 +268,18 @@ type
   end;
 
   TGocciaCompileDynamicFunction = function(const AParamsSources: array of string;
-    const ABodySource: string): TGocciaFunctionBase of object;
+    const ABodySource: string;
+    const AKind: TGocciaDynamicFunctionKind): TGocciaFunctionBase of object;
 
   TGocciaFunctionConstructorClassValue = class(TGocciaClassValue)
   private
     FEnabled: Boolean;
     FCompileDynamicFunction: TGocciaCompileDynamicFunction;
+    FDynamicKind: TGocciaDynamicFunctionKind;
     function BuildFunction(const AArguments: TGocciaArgumentsCollection): TGocciaFunctionBase;
   public
-    constructor Create(const AName: string; const ASuperClass: TGocciaClassValue);
+    constructor Create(const AName: string; const ASuperClass: TGocciaClassValue;
+      const ADynamicKind: TGocciaDynamicFunctionKind = dfkNormal);
     function Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; override;
     function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
     // ECMAScript 20.2.2: Function constructor length is 1.
@@ -1781,11 +1785,13 @@ end;
 { TGocciaFunctionConstructorClassValue }
 
 constructor TGocciaFunctionConstructorClassValue.Create(const AName: string;
-  const ASuperClass: TGocciaClassValue);
+  const ASuperClass: TGocciaClassValue;
+  const ADynamicKind: TGocciaDynamicFunctionKind);
 begin
   inherited Create(AName, ASuperClass);
   FEnabled := False;
   FCompileDynamicFunction := nil;
+  FDynamicKind := ADynamicKind;
 end;
 
 function TGocciaFunctionConstructorClassValue.BuildFunction(
@@ -1794,6 +1800,8 @@ var
   ParamSources: array of string;
   BodyStr: string;
   I: Integer;
+  PrototypeDescriptor: TGocciaPropertyDescriptor;
+  PrototypeValue: TGocciaValue;
 begin
   if not FEnabled then
     ThrowTypeError('Dynamic code generation is disabled. ' +
@@ -1821,7 +1829,19 @@ begin
     BodyStr := AArguments.GetElement(AArguments.Length - 1).ToStringLiteral.Value;
   end;
 
-  Result := FCompileDynamicFunction(ParamSources, BodyStr);
+  Result := FCompileDynamicFunction(ParamSources, BodyStr, FDynamicKind);
+  if FDynamicKind in [dfkGenerator, dfkAsyncGenerator] then
+  begin
+    PrototypeDescriptor := Result.GetOwnPropertyDescriptor(PROP_PROTOTYPE);
+    if PrototypeDescriptor is TGocciaPropertyDescriptorData then
+    begin
+      PrototypeValue := TGocciaPropertyDescriptorData(
+        PrototypeDescriptor).Value;
+      PrototypeDescriptor.Free;
+      Result.Properties.Add(PROP_PROTOTYPE,
+        TGocciaPropertyDescriptorData.Create(PrototypeValue, [pfWritable]));
+    end;
+  end;
 end;
 
 function TGocciaFunctionConstructorClassValue.Call(

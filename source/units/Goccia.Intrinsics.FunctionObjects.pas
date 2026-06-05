@@ -6,6 +6,8 @@ interface
 
 uses
   Goccia.Arguments.Collection,
+  Goccia.Constants,
+  Goccia.Values.ClassValue,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
@@ -20,24 +22,22 @@ type
 
   TGocciaFunctionObjectIntrinsics = class
   private
-    FAsyncFunctionConstructor: TGocciaNativeFunctionValue;
+    FAsyncFunctionConstructor: TGocciaFunctionConstructorClassValue;
     FAsyncFunctionPrototype: TGocciaObjectValue;
-    FGeneratorFunctionConstructor: TGocciaNativeFunctionValue;
+    FGeneratorFunctionConstructor: TGocciaFunctionConstructorClassValue;
     FGeneratorFunctionPrototype: TGocciaObjectValue;
     FGeneratorPrototype: TGocciaObjectValue;
     FAsyncIteratorPrototype: TGocciaObjectValue;
-    FAsyncGeneratorFunctionConstructor: TGocciaNativeFunctionValue;
+    FAsyncGeneratorFunctionConstructor: TGocciaFunctionConstructorClassValue;
     FAsyncGeneratorFunctionPrototype: TGocciaObjectValue;
     FAsyncGeneratorPrototype: TGocciaObjectValue;
 
     function AsyncIteratorSelf(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
-    function DynamicConstructorUnavailable(
-      const AArgs: TGocciaArgumentsCollection;
-      const AThisValue: TGocciaValue): TGocciaValue;
     function CreateHiddenFunctionConstructor(const AName: string;
-      const AFunctionPrototype, AConstructorPrototype: TGocciaObjectValue):
-      TGocciaNativeFunctionValue;
+      const AFunctionPrototype, AConstructorPrototype: TGocciaObjectValue;
+      const AKind: TGocciaDynamicFunctionKind):
+      TGocciaFunctionConstructorClassValue;
     procedure DefineToStringTag(const AObject: TGocciaObjectValue;
       const ATag: string);
     procedure EnsureAsyncFunctionPrototype(
@@ -118,27 +118,30 @@ begin
   Result := AThisValue;
 end;
 
-function TGocciaFunctionObjectIntrinsics.DynamicConstructorUnavailable(
-  const AArgs: TGocciaArgumentsCollection;
-  const AThisValue: TGocciaValue): TGocciaValue;
-begin
-  ThrowTypeError('Dynamic generator and async function constructors are not available yet');
-  Result := nil;
-end;
-
 function TGocciaFunctionObjectIntrinsics.CreateHiddenFunctionConstructor(
   const AName: string;
-  const AFunctionPrototype, AConstructorPrototype: TGocciaObjectValue):
-  TGocciaNativeFunctionValue;
+  const AFunctionPrototype, AConstructorPrototype: TGocciaObjectValue;
+  const AKind: TGocciaDynamicFunctionKind):
+  TGocciaFunctionConstructorClassValue;
+var
+  FunctionConstructorValue: TGocciaValue;
+  FunctionConstructor: TGocciaFunctionConstructorClassValue;
 begin
   RequirePrototype(AFunctionPrototype, '%Function.prototype%');
   RequirePrototype(AConstructorPrototype, '%' + AName + '.prototype%');
 
-  Result := TGocciaNativeFunctionValue.Create(DynamicConstructorUnavailable,
-    AName, 1);
-  Result.Prototype := AFunctionPrototype;
-  Result.DefineProperty(PROP_PROTOTYPE,
-    TGocciaPropertyDescriptorData.Create(AConstructorPrototype, []));
+  Result := TGocciaFunctionConstructorClassValue.Create(AName, nil, AKind);
+  Result.SetConstructorPrototype(AFunctionPrototype);
+  Result.ReplacePrototype(AConstructorPrototype);
+
+  FunctionConstructorValue := AFunctionPrototype.GetProperty(PROP_CONSTRUCTOR);
+  if FunctionConstructorValue is TGocciaFunctionConstructorClassValue then
+  begin
+    FunctionConstructor := TGocciaFunctionConstructorClassValue(
+      FunctionConstructorValue);
+    Result.Enabled := FunctionConstructor.Enabled;
+    Result.CompileDynamicFunction := FunctionConstructor.CompileDynamicFunction;
+  end;
 end;
 
 procedure TGocciaFunctionObjectIntrinsics.DefineToStringTag(
@@ -152,7 +155,7 @@ end;
 procedure TGocciaFunctionObjectIntrinsics.EnsureAsyncFunctionPrototype(
   const AFunctionPrototype: TGocciaObjectValue);
 var
-  ConstructorFunction: TGocciaNativeFunctionValue;
+  ConstructorFunction: TGocciaFunctionConstructorClassValue;
   Prototype: TGocciaObjectValue;
 begin
   if Assigned(FAsyncFunctionPrototype) then
@@ -165,7 +168,7 @@ begin
   begin
     Prototype := TGocciaObjectValue.Create(AFunctionPrototype);
     ConstructorFunction := CreateHiddenFunctionConstructor('AsyncFunction',
-      AFunctionPrototype, Prototype);
+      AFunctionPrototype, Prototype, dfkAsync);
     Prototype.DefineProperty(PROP_CONSTRUCTOR,
       TGocciaPropertyDescriptorData.Create(ConstructorFunction, [pfConfigurable]));
     DefineToStringTag(Prototype, 'AsyncFunction');
@@ -174,7 +177,7 @@ begin
   else
   begin
     ConstructorFunction := Prototype.GetProperty(PROP_CONSTRUCTOR) as
-      TGocciaNativeFunctionValue;
+      TGocciaFunctionConstructorClassValue;
   end;
   FAsyncFunctionConstructor := ConstructorFunction;
   FAsyncFunctionPrototype := Prototype;
@@ -183,7 +186,7 @@ end;
 procedure TGocciaFunctionObjectIntrinsics.EnsureGeneratorIntrinsics(
   const AFunctionPrototype, AIteratorPrototype: TGocciaObjectValue);
 var
-  ConstructorFunction: TGocciaNativeFunctionValue;
+  ConstructorFunction: TGocciaFunctionConstructorClassValue;
   FunctionPrototype: TGocciaObjectValue;
   GeneratorPrototype: TGocciaObjectValue;
 begin
@@ -201,7 +204,7 @@ begin
     FunctionPrototype := TGocciaObjectValue.Create(AFunctionPrototype);
     GeneratorPrototype := TGocciaObjectValue.Create(AIteratorPrototype);
     ConstructorFunction := CreateHiddenFunctionConstructor('GeneratorFunction',
-      AFunctionPrototype, FunctionPrototype);
+      AFunctionPrototype, FunctionPrototype, dfkGenerator);
 
     FunctionPrototype.DefineProperty(PROP_PROTOTYPE,
       TGocciaPropertyDescriptorData.Create(GeneratorPrototype,
@@ -221,7 +224,7 @@ begin
   else
   begin
     ConstructorFunction := FunctionPrototype.GetProperty(PROP_CONSTRUCTOR) as
-      TGocciaNativeFunctionValue;
+      TGocciaFunctionConstructorClassValue;
   end;
   FGeneratorFunctionConstructor := ConstructorFunction;
   FGeneratorFunctionPrototype := FunctionPrototype;
@@ -231,7 +234,7 @@ end;
 procedure TGocciaFunctionObjectIntrinsics.EnsureAsyncGeneratorIntrinsics(
   const AFunctionPrototype, AObjectPrototype: TGocciaObjectValue);
 var
-  ConstructorFunction: TGocciaNativeFunctionValue;
+  ConstructorFunction: TGocciaFunctionConstructorClassValue;
   FunctionPrototype: TGocciaObjectValue;
   AsyncIteratorPrototype: TGocciaObjectValue;
   AsyncGeneratorPrototype: TGocciaObjectValue;
@@ -258,7 +261,7 @@ begin
     AsyncGeneratorPrototype := TGocciaObjectValue.Create(
       AsyncIteratorPrototype);
     ConstructorFunction := CreateHiddenFunctionConstructor('AsyncGeneratorFunction',
-      AFunctionPrototype, FunctionPrototype);
+      AFunctionPrototype, FunctionPrototype, dfkAsyncGenerator);
 
     AsyncIteratorPrototype.DefineSymbolProperty(
       TGocciaSymbolValue.WellKnownAsyncIterator,
@@ -287,7 +290,7 @@ begin
   else
   begin
     ConstructorFunction := FunctionPrototype.GetProperty(PROP_CONSTRUCTOR) as
-      TGocciaNativeFunctionValue;
+      TGocciaFunctionConstructorClassValue;
   end;
   FAsyncGeneratorFunctionConstructor := ConstructorFunction;
   FAsyncGeneratorFunctionPrototype := FunctionPrototype;

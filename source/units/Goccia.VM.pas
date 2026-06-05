@@ -425,6 +425,8 @@ begin
     TGocciaFunctionBase.GetSharedPrototype,
     TGocciaObjectValue.SharedObjectPrototype,
     IteratorPrototype);
+  if AKind = foikGenerator then
+    EnsureGeneratorPrototypeMethods(Result);
 end;
 
 function IsBytecodePrivateKey(const AKey: string): Boolean; forward;
@@ -1870,15 +1872,6 @@ begin
   FState := bgsSuspendedStart;
   FResumeValue := RegisterUndefined;
   FIgnoreNextResume := False;
-  DefineProperty(PROP_NEXT, TGocciaPropertyDescriptorData.Create(
-    TGocciaNativeFunctionValue.Create(GeneratorNext, PROP_NEXT, 1),
-    [pfConfigurable, pfWritable]));
-  DefineProperty(PROP_RETURN, TGocciaPropertyDescriptorData.Create(
-    TGocciaNativeFunctionValue.Create(GeneratorReturn, PROP_RETURN, 1),
-    [pfConfigurable, pfWritable]));
-  DefineProperty(PROP_THROW, TGocciaPropertyDescriptorData.Create(
-    TGocciaNativeFunctionValue.Create(GeneratorThrow, PROP_THROW, 1),
-    [pfConfigurable, pfWritable]));
   if Assigned(FClosure.Template) and (FClosure.Template.ParameterPreambleSize > 0) then
     FVM.ExecuteGeneratorParameterPreamble(Self);
 end;
@@ -1906,15 +1899,6 @@ begin
   FState := bgsSuspendedStart;
   FResumeValue := RegisterUndefined;
   FIgnoreNextResume := False;
-  DefineProperty(PROP_NEXT, TGocciaPropertyDescriptorData.Create(
-    TGocciaNativeFunctionValue.Create(GeneratorNext, PROP_NEXT, 1),
-    [pfConfigurable, pfWritable]));
-  DefineProperty(PROP_RETURN, TGocciaPropertyDescriptorData.Create(
-    TGocciaNativeFunctionValue.Create(GeneratorReturn, PROP_RETURN, 1),
-    [pfConfigurable, pfWritable]));
-  DefineProperty(PROP_THROW, TGocciaPropertyDescriptorData.Create(
-    TGocciaNativeFunctionValue.Create(GeneratorThrow, PROP_THROW, 1),
-    [pfConfigurable, pfWritable]));
   if Assigned(FClosure.Template) and (FClosure.Template.ParameterPreambleSize > 0) then
     FVM.ExecuteGeneratorParameterPreamble(Self);
 end;
@@ -2635,6 +2619,18 @@ begin
   Result := FClosure.Template.SourceText;
 end;
 
+function BytecodeGeneratorResultWithFunctionPrototype(
+  const AFunction: TGocciaBytecodeFunctionValue;
+  const AGeneratorObject: TGocciaObjectValue): TGocciaValue;
+var
+  PrototypeValue: TGocciaValue;
+begin
+  PrototypeValue := AFunction.GetProperty(PROP_PROTOTYPE);
+  if PrototypeValue is TGocciaObjectValue then
+    AGeneratorObject.Prototype := TGocciaObjectValue(PrototypeValue);
+  Result := AGeneratorObject;
+end;
+
 function TGocciaBytecodeFunctionValue.IsConstructable: Boolean;
 begin
   if not inherited IsConstructable then
@@ -2799,10 +2795,12 @@ begin
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsGenerator then
   begin
     if FClosure.Template.IsAsync then
-      Exit(TGocciaBytecodeAsyncGeneratorObjectValue.Create(FVM, FClosure,
-        EffectiveThis, AArguments));
-    Exit(TGocciaBytecodeGeneratorObjectValue.Create(FVM, FClosure,
-      EffectiveThis, AArguments));
+      Exit(BytecodeGeneratorResultWithFunctionPrototype(Self,
+        TGocciaBytecodeAsyncGeneratorObjectValue.Create(FVM, FClosure,
+          EffectiveThis, AArguments)));
+    Exit(BytecodeGeneratorResultWithFunctionPrototype(Self,
+      TGocciaBytecodeGeneratorObjectValue.Create(FVM, FClosure,
+        EffectiveThis, AArguments)));
   end;
 
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsAsync then
@@ -2867,10 +2865,12 @@ begin
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsGenerator then
   begin
     if FClosure.Template.IsAsync then
-      Exit(TGocciaBytecodeAsyncGeneratorObjectValue.CreateRegisters(FVM, FClosure,
-        VMValueToRegisterFast(EffectiveThis), TGocciaRegisterArray(nil)));
-    Exit(TGocciaBytecodeGeneratorObjectValue.CreateRegisters(FVM, FClosure,
-      VMValueToRegisterFast(EffectiveThis), TGocciaRegisterArray(nil)));
+      Exit(BytecodeGeneratorResultWithFunctionPrototype(Self,
+        TGocciaBytecodeAsyncGeneratorObjectValue.CreateRegisters(FVM, FClosure,
+          VMValueToRegisterFast(EffectiveThis), TGocciaRegisterArray(nil))));
+    Exit(BytecodeGeneratorResultWithFunctionPrototype(Self,
+      TGocciaBytecodeGeneratorObjectValue.CreateRegisters(FVM, FClosure,
+        VMValueToRegisterFast(EffectiveThis), TGocciaRegisterArray(nil))));
   end;
 
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsAsync then
@@ -2921,12 +2921,14 @@ begin
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsGenerator then
   begin
     if FClosure.Template.IsAsync then
-      Exit(TGocciaBytecodeAsyncGeneratorObjectValue.CreateRegisters(FVM, FClosure,
+      Exit(BytecodeGeneratorResultWithFunctionPrototype(Self,
+        TGocciaBytecodeAsyncGeneratorObjectValue.CreateRegisters(FVM, FClosure,
+          VMValueToRegisterFast(EffectiveThis),
+          TGocciaRegisterArray.Create(VMValueToRegisterFast(AArg0)))));
+    Exit(BytecodeGeneratorResultWithFunctionPrototype(Self,
+      TGocciaBytecodeGeneratorObjectValue.CreateRegisters(FVM, FClosure,
         VMValueToRegisterFast(EffectiveThis),
-        TGocciaRegisterArray.Create(VMValueToRegisterFast(AArg0))));
-    Exit(TGocciaBytecodeGeneratorObjectValue.CreateRegisters(FVM, FClosure,
-      VMValueToRegisterFast(EffectiveThis),
-      TGocciaRegisterArray.Create(VMValueToRegisterFast(AArg0))));
+        TGocciaRegisterArray.Create(VMValueToRegisterFast(AArg0)))));
   end;
 
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsAsync then
@@ -2977,14 +2979,16 @@ begin
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsGenerator then
   begin
     if FClosure.Template.IsAsync then
-      Exit(TGocciaBytecodeAsyncGeneratorObjectValue.CreateRegisters(FVM, FClosure,
+      Exit(BytecodeGeneratorResultWithFunctionPrototype(Self,
+        TGocciaBytecodeAsyncGeneratorObjectValue.CreateRegisters(FVM, FClosure,
+          VMValueToRegisterFast(EffectiveThis),
+          TGocciaRegisterArray.Create(VMValueToRegisterFast(AArg0),
+            VMValueToRegisterFast(AArg1)))));
+    Exit(BytecodeGeneratorResultWithFunctionPrototype(Self,
+      TGocciaBytecodeGeneratorObjectValue.CreateRegisters(FVM, FClosure,
         VMValueToRegisterFast(EffectiveThis),
         TGocciaRegisterArray.Create(VMValueToRegisterFast(AArg0),
-          VMValueToRegisterFast(AArg1))));
-    Exit(TGocciaBytecodeGeneratorObjectValue.CreateRegisters(FVM, FClosure,
-      VMValueToRegisterFast(EffectiveThis),
-      TGocciaRegisterArray.Create(VMValueToRegisterFast(AArg0),
-        VMValueToRegisterFast(AArg1))));
+          VMValueToRegisterFast(AArg1)))));
   end;
 
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsAsync then
@@ -3037,14 +3041,16 @@ begin
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsGenerator then
   begin
     if FClosure.Template.IsAsync then
-      Exit(TGocciaBytecodeAsyncGeneratorObjectValue.CreateRegisters(FVM, FClosure,
+      Exit(BytecodeGeneratorResultWithFunctionPrototype(Self,
+        TGocciaBytecodeAsyncGeneratorObjectValue.CreateRegisters(FVM, FClosure,
+          VMValueToRegisterFast(EffectiveThis),
+          TGocciaRegisterArray.Create(VMValueToRegisterFast(AArg0),
+            VMValueToRegisterFast(AArg1), VMValueToRegisterFast(AArg2)))));
+    Exit(BytecodeGeneratorResultWithFunctionPrototype(Self,
+      TGocciaBytecodeGeneratorObjectValue.CreateRegisters(FVM, FClosure,
         VMValueToRegisterFast(EffectiveThis),
         TGocciaRegisterArray.Create(VMValueToRegisterFast(AArg0),
-          VMValueToRegisterFast(AArg1), VMValueToRegisterFast(AArg2))));
-    Exit(TGocciaBytecodeGeneratorObjectValue.CreateRegisters(FVM, FClosure,
-      VMValueToRegisterFast(EffectiveThis),
-      TGocciaRegisterArray.Create(VMValueToRegisterFast(AArg0),
-        VMValueToRegisterFast(AArg1), VMValueToRegisterFast(AArg2))));
+          VMValueToRegisterFast(AArg1), VMValueToRegisterFast(AArg2)))));
   end;
 
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsAsync then

@@ -236,8 +236,9 @@ test("async generator function.prototype's [[Prototype]] is AsyncGeneratorFuncti
   const asyncGeneratorFunctionPrototype = Object.getPrototypeOf(g);
   const asyncGenerator = g();
   expect(Object.getPrototypeOf(g.prototype)).toBe(asyncGeneratorFunctionPrototype.prototype);
-  expect(Object.getPrototypeOf(asyncGeneratorFunctionPrototype.prototype)).toBe(
-    Object.getPrototypeOf(Object.getPrototypeOf(asyncGenerator))
+  expect(Object.getPrototypeOf(asyncGenerator)).toBe(g.prototype);
+  expect(Object.getPrototypeOf(Object.getPrototypeOf(asyncGenerator))).toBe(
+    asyncGeneratorFunctionPrototype.prototype
   );
 });
 
