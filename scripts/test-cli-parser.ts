@@ -86,6 +86,31 @@ console.log("ASI at EOF...");
     throw new Error(`Non-ASI EOF declaration should succeed, got: ${JSON.stringify(noAsiRes.json)}`);
 }
 
+// -- ASI after do...while --------------------------------------------------------
+
+console.log("ASI after do...while...");
+{
+  const sameLine = runLoaderJson(
+    "do {} while (false) console.log('bad');\n",
+    ["--compat-asi", "--compat-while-loops"],
+  );
+  if (sameLine.exitCode === 0)
+    throw new Error(`do...while without semicolon or newline should fail under ASI`);
+  if (sameLine.json.ok !== false)
+    throw new Error(`do...while missing semicolon should report JSON failure, got: ${JSON.stringify(sameLine.json)}`);
+  if (sameLine.json.error?.type !== "SyntaxError")
+    throw new Error(`Expected SyntaxError for do...while missing semicolon, got: ${sameLine.json.error?.type}`);
+
+  const newline = runLoaderJson(
+    "do {} while (false)\nconsole.log('after');\n",
+    ["--compat-asi", "--compat-while-loops"],
+  );
+  if (newline.exitCode !== 0)
+    throw new Error(`do...while followed by newline should apply ASI, got: ${JSON.stringify(newline.json)}`);
+  if (normalizeLineEndings(newline.json.output) !== "after\n")
+    throw new Error(`Expected do...while newline ASI output after, got: ${newline.json.output}`);
+}
+
 // -- Unsupported var recovery (ASI and compat-var flags) ------------------------
 
 console.log("Unsupported var recovery (ASI and compat-var flags)...");

@@ -137,6 +137,7 @@ type
   public
     constructor Create(const AName: string; const ASuperClass: TGocciaClassValue; const AKind: TGocciaTypedArrayKind);
     function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
+    function NativeInstanceDefaultPrototype: TGocciaObjectValue; override;
     property Kind: TGocciaTypedArrayKind read FKind;
   end;
 
@@ -2260,6 +2261,11 @@ constructor TGocciaTypedArrayClassValue.Create(const AName: string; const ASuper
 begin
   inherited Create(AName, ASuperClass);
   FKind := AKind;
+end;
+
+function TGocciaTypedArrayClassValue.NativeInstanceDefaultPrototype: TGocciaObjectValue;
+begin
+  Result := Prototype;
 end;
 
 function TGocciaTypedArrayClassValue.CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue;

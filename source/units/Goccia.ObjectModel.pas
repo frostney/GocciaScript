@@ -623,7 +623,8 @@ end;
 function CreateNativeFunctionFromDef(
   const ADefinition: TGocciaMemberDefinition): TGocciaNativeFunctionValue;
 begin
-  if gmfNoFunctionPrototype in ADefinition.MemberFlags then
+  if (ADefinition.Kind in [gmkPrototypeMethod, gmkStaticMethod]) or
+     (gmfNoFunctionPrototype in ADefinition.MemberFlags) then
     Result := TGocciaNativeFunctionValue.CreateWithoutPrototype(
       ADefinition.Callback, ADefinition.ExposedName, ADefinition.Arity)
   else

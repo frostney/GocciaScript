@@ -48,6 +48,8 @@ type
     function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; override;
     procedure SetProperty(const AName: string; const AValue: TGocciaValue); override;
     function HasOwnProperty(const AName: string): Boolean; override;
+    function GetOwnPropertyKeys: TArray<string>; override;
+    function GetAllPropertyNames: TArray<string>; override;
     function GetOwnPropertyDescriptor(const AName: string): TGocciaPropertyDescriptor; override;
     procedure DefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor); override;
     function TryDefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor): Boolean; override;
@@ -3204,6 +3206,67 @@ begin
     Result := True
   else
     Result := inherited HasOwnProperty(AName);
+end;
+
+function TGocciaArrayValue.GetOwnPropertyKeys: TArray<string>;
+var
+  Keys: TArray<string>;
+  NumericKeys: TList<Int64>;
+  SeenNumericKeys: TDictionary<Int64, Boolean>;
+  OtherKeys: TList<string>;
+  Count, I: Integer;
+  Key: string;
+  Index: Int64;
+begin
+  Keys := inherited GetOwnPropertyKeys;
+  NumericKeys := TList<Int64>.Create;
+  SeenNumericKeys := TDictionary<Int64, Boolean>.Create;
+  OtherKeys := TList<string>.Create;
+  try
+    for I := 0 to FElements.Count - 1 do
+      if not IsArrayHole(FElements[I]) then
+      begin
+        NumericKeys.Add(I);
+        SeenNumericKeys.Add(I, True);
+      end;
+
+    for Key in Keys do
+    begin
+      if TryParseArrayElementIndex(Key, Index) then
+      begin
+        if not SeenNumericKeys.ContainsKey(Index) then
+        begin
+          NumericKeys.Add(Index);
+          SeenNumericKeys.Add(Index, True);
+        end;
+      end
+      else
+        OtherKeys.Add(Key);
+    end;
+
+    NumericKeys.Sort(TComparer<Int64>.Construct(CompareInt64));
+    SetLength(Result, NumericKeys.Count + OtherKeys.Count);
+    Count := 0;
+    for I := 0 to NumericKeys.Count - 1 do
+    begin
+      Result[Count] := IntToStr(NumericKeys[I]);
+      Inc(Count);
+    end;
+    for I := 0 to OtherKeys.Count - 1 do
+    begin
+      Result[Count] := OtherKeys[I];
+      Inc(Count);
+    end;
+  finally
+    OtherKeys.Free;
+    SeenNumericKeys.Free;
+    NumericKeys.Free;
+  end;
+end;
+
+function TGocciaArrayValue.GetAllPropertyNames: TArray<string>;
+begin
+  Result := GetOwnPropertyKeys;
 end;
 
 function TGocciaArrayValue.GetOwnPropertyDescriptor(const AName: string): TGocciaPropertyDescriptor;

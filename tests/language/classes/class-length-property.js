@@ -102,4 +102,16 @@ describe("class length property", () => {
     const descriptor = Object.getOwnPropertyDescriptor(Foo, "length");
     expect(descriptor.value).toBe(99);
   });
+
+  test("computed static length method overrides constructor length", () => {
+    const key = "length";
+    class Foo {
+      static [key]() {
+        return "static length";
+      }
+    }
+
+    expect(typeof Foo.length).toBe("function");
+    expect(Foo.length()).toBe("static length");
+  });
 });

@@ -62,6 +62,8 @@ type
     FFieldInitializers: array of TGocciaValue;
     FDecoratorFieldInitializers: array of TGocciaDecoratorFieldInitializerEntry;
     FStaticDecoratorFieldInitializers: array of TGocciaDecoratorFieldInitializerEntry;
+    FNameDeleted: Boolean;
+    FLengthDeleted: Boolean;
     function GetPropertyGetter(const AName: string): TGocciaFunctionBase; inline;
     function GetPropertySetter(const AName: string): TGocciaFunctionBase; inline;
     function GetStaticPropertyGetter(const AName: string): TGocciaFunctionBase; inline;
@@ -104,6 +106,7 @@ type
     function GetPrivateMethod(const AName: string): TGocciaMethodValue;
     procedure AppendOwnPrivateNames(const ANames: TStrings);
     function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; virtual;
+    function NativeInstanceDefaultPrototype: TGocciaObjectValue; virtual;
     function Instantiate(const AArguments: TGocciaArgumentsCollection;
       const ANewTarget: TGocciaValue = nil): TGocciaValue; virtual;
     function EstimatedInstancePropertyCapacity: Integer;
@@ -114,9 +117,12 @@ type
     function GetClassLength: Integer; virtual;
     function GetProperty(const AName: string): TGocciaValue; override;
     function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; override;
+    procedure DefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor); override;
+    function TryDefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor): Boolean; override;
     procedure SetProperty(const AName: string; const AValue: TGocciaValue); override;
     function GetOwnPropertyDescriptor(const AName: string): TGocciaPropertyDescriptor; override;
     function HasOwnProperty(const AName: string): Boolean; override;
+    function DeleteProperty(const AName: string): Boolean; override;
     function Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; virtual;
 
     procedure ReplacePrototype(const APrototype: TGocciaObjectValue);
@@ -386,6 +392,8 @@ begin
   FNativeSuperConstructor := nil;
   FClassPrototype := TGocciaObjectValue.Create;
   FConstructorMethod := nil;
+  FNameDeleted := False;
+  FLengthDeleted := False;
   if Assigned(FSuperClass) then
     FClassPrototype.Prototype := FSuperClass.Prototype
   else if Assigned(TGocciaObjectValue.SharedObjectPrototype) then
@@ -1046,6 +1054,33 @@ begin
   Result := nil;
 end;
 
+function TGocciaClassValue.NativeInstanceDefaultPrototype: TGocciaObjectValue;
+begin
+  if (Self is TGocciaArrayClassValue) or
+     (Self is TGocciaMapClassValue) or
+     (Self is TGocciaSetClassValue) or
+     (Self is TGocciaWeakMapClassValue) or
+     (Self is TGocciaWeakSetClassValue) or
+     (Self is TGocciaWeakRefClassValue) or
+     (Self is TGocciaFinalizationRegistryClassValue) or
+     (Self is TGocciaStringClassValue) or
+     (Self is TGocciaNumberClassValue) or
+     (Self is TGocciaBooleanClassValue) or
+     (Self is TGocciaArrayBufferClassValue) or
+     (Self is TGocciaSharedArrayBufferClassValue) or
+     (Self is TGocciaDataViewClassValue) or
+     (Self is TGocciaTextEncoderClassValue) or
+     (Self is TGocciaTextDecoderClassValue) or
+     (Self is TGocciaURLClassValue) or
+     (Self is TGocciaURLSearchParamsClassValue) or
+     (Self is TGocciaHeadersClassValue) or
+     (Self is TGocciaResponseClassValue) or
+     (Self is TGocciaFunctionConstructorClassValue) then
+    Result := Prototype
+  else
+    Result := nil;
+end;
+
 procedure TGocciaClassValue.ReplacePrototype(const APrototype: TGocciaObjectValue);
 begin
   FClassPrototype := APrototype;
@@ -1131,27 +1166,43 @@ function TGocciaClassValue.Instantiate(const AArguments: TGocciaArgumentsCollect
 var
   Instance: TGocciaObjectValue;
   WalkClass: TGocciaClassValue;
+  NativeClass: TGocciaClassValue;
   NativeInstance: TGocciaObjectValue;
+  NativeIntrinsicPrototype: TGocciaObjectValue;
   ConstructorToCall: TGocciaMethodValue;
   InstancePrototype: TGocciaObjectValue;
   FinalThis: TGocciaValue;
   ConstructResult: TGocciaValue;
 begin
-  // ES2026 §10.2.2 step 5: Let proto be ? GetPrototypeFromConstructor(newTarget)
-  if Assigned(ANewTarget) then
-    InstancePrototype := GetProtoFromConstructor(ANewTarget)
-  else
-    InstancePrototype := FClassPrototype;
-
+  NativeClass := nil;
   NativeInstance := nil;
+  NativeIntrinsicPrototype := nil;
   WalkClass := Self;
   while Assigned(WalkClass) do
   begin
-    NativeInstance := WalkClass.CreateNativeInstance(AArguments);
-    if Assigned(NativeInstance) then
+    NativeIntrinsicPrototype := WalkClass.NativeInstanceDefaultPrototype;
+    if Assigned(NativeIntrinsicPrototype) then
+    begin
+      NativeClass := WalkClass;
       Break;
+    end;
     WalkClass := WalkClass.SuperClass;
   end;
+
+  // ES2026 §10.2.2 step 5: Let proto be ? GetPrototypeFromConstructor(newTarget)
+  if Assigned(ANewTarget) then
+  begin
+    if Assigned(NativeClass) then
+      InstancePrototype := GetProtoFromConstructorWithIntrinsic(ANewTarget,
+        NativeIntrinsicPrototype)
+    else
+      InstancePrototype := GetProtoFromConstructor(ANewTarget);
+  end
+  else
+    InstancePrototype := FClassPrototype;
+
+  if Assigned(NativeClass) then
+    NativeInstance := NativeClass.CreateNativeInstance(AArguments);
 
   // ES2026 §10.2.2 step 6: Set proto on the instance before constructor runs
   if Assigned(NativeInstance) then
@@ -1246,6 +1297,12 @@ begin
 
   if AName = PROP_NAME then
   begin
+    if FNameDeleted then
+    begin
+      Result := inherited GetPropertyWithContext(AName, AThisContext);
+      Exit;
+    end;
+
     Descriptor := inherited GetOwnPropertyDescriptor(AName);
     if Assigned(Descriptor) then
     begin
@@ -1262,6 +1319,12 @@ begin
 
   if AName = PROP_LENGTH then
   begin
+    if FLengthDeleted then
+    begin
+      Result := inherited GetPropertyWithContext(AName, AThisContext);
+      Exit;
+    end;
+
     Descriptor := inherited GetOwnPropertyDescriptor(AName);
     if Assigned(Descriptor) then
     begin
@@ -1278,6 +1341,29 @@ begin
   Result := inherited GetPropertyWithContext(AName, AThisContext);
 end;
 
+procedure TGocciaClassValue.DefineProperty(const AName: string;
+  const ADescriptor: TGocciaPropertyDescriptor);
+begin
+  if AName = PROP_NAME then
+    FNameDeleted := False
+  else if AName = PROP_LENGTH then
+    FLengthDeleted := False;
+  inherited DefineProperty(AName, ADescriptor);
+end;
+
+function TGocciaClassValue.TryDefineProperty(const AName: string;
+  const ADescriptor: TGocciaPropertyDescriptor): Boolean;
+begin
+  Result := inherited TryDefineProperty(AName, ADescriptor);
+  if Result then
+  begin
+    if AName = PROP_NAME then
+      FNameDeleted := False
+    else if AName = PROP_LENGTH then
+      FLengthDeleted := False;
+  end;
+end;
+
 procedure TGocciaClassValue.SetProperty(const AName: string; const AValue: TGocciaValue);
 var
   Descriptor: TGocciaPropertyDescriptor;
@@ -1286,6 +1372,7 @@ begin
   // override the synthesized non-writable descriptor (which is configurable)
   if AName = PROP_NAME then
   begin
+    FNameDeleted := False;
     Descriptor := inherited GetOwnPropertyDescriptor(AName);
     if Assigned(Descriptor) then
     begin
@@ -1323,6 +1410,9 @@ begin
     Result := TGocciaPropertyDescriptorData.Create(FClassPrototype, [])
   else if AName = PROP_NAME then
   begin
+    if FNameDeleted then
+      Exit(nil);
+
     // Check if .name was explicitly set (e.g. static name = 'Custom')
     Result := inherited GetOwnPropertyDescriptor(AName);
     if not Assigned(Result) then
@@ -1338,6 +1428,9 @@ begin
   end
   else if AName = PROP_LENGTH then
   begin
+    if FLengthDeleted then
+      Exit(nil);
+
     // Honour explicit own-property redefinitions (length is configurable, so
     // userland may override via Object.defineProperty); fall back to a
     // synthesized descriptor only when no own descriptor exists.
@@ -1352,10 +1445,50 @@ end;
 
 function TGocciaClassValue.HasOwnProperty(const AName: string): Boolean;
 begin
-  if (AName = PROP_PROTOTYPE) or (AName = PROP_NAME) or (AName = PROP_LENGTH) then
+  if AName = PROP_PROTOTYPE then
     Result := True
+  else if AName = PROP_NAME then
+    Result := not FNameDeleted
+  else if AName = PROP_LENGTH then
+    Result := not FLengthDeleted
   else
     Result := inherited HasOwnProperty(AName);
+end;
+
+function TGocciaClassValue.DeleteProperty(const AName: string): Boolean;
+var
+  Descriptor: TGocciaPropertyDescriptor;
+begin
+  Descriptor := inherited GetOwnPropertyDescriptor(AName);
+  if Assigned(Descriptor) then
+  begin
+    Result := inherited DeleteProperty(AName);
+    if Result then
+    begin
+      if AName = PROP_NAME then
+        FNameDeleted := True
+      else if AName = PROP_LENGTH then
+        FLengthDeleted := True;
+    end;
+    Exit;
+  end;
+
+  if AName = PROP_PROTOTYPE then
+    Exit(False);
+
+  if AName = PROP_NAME then
+  begin
+    FNameDeleted := True;
+    Exit(True);
+  end;
+
+  if AName = PROP_LENGTH then
+  begin
+    FLengthDeleted := True;
+    Exit(True);
+  end;
+
+  Result := inherited DeleteProperty(AName);
 end;
 
 function TGocciaClassValue.GetOwnStaticSymbolDescriptor(const ASymbol: TGocciaSymbolValue): TGocciaPropertyDescriptor;

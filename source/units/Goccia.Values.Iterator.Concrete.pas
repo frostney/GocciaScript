@@ -107,19 +107,63 @@ uses
 
   TextSemantics,
 
+  Goccia.GarbageCollector,
+  Goccia.Realm,
   Goccia.Values.ArrayValue,
   Goccia.Values.HeadersValue,
   Goccia.Values.HoleValue,
   Goccia.Values.MapValue,
+  Goccia.Values.NativeFunction,
+  Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SetValue,
+  Goccia.Values.SymbolValue,
   Goccia.Values.ToObject,
   Goccia.Values.URLSearchParamsValue;
+
+var
+  GArrayIteratorPrototypeSlot: TGocciaRealmSlotId;
+
+threadvar
+  FArrayIteratorMethodHost: TGocciaIteratorValue;
+
+function GetSharedArrayIteratorPrototype: TGocciaObjectValue; inline;
+begin
+  if Assigned(CurrentRealm) then
+    Result := TGocciaObjectValue(CurrentRealm.GetSlot(GArrayIteratorPrototypeSlot))
+  else
+    Result := nil;
+end;
 
 { TGocciaArrayIteratorValue }
 
 constructor TGocciaArrayIteratorValue.Create(const ASource: TGocciaValue; const AKind: TGocciaArrayIteratorKind);
+var
+  SharedPrototype: TGocciaObjectValue;
 begin
   inherited Create;
+  SharedPrototype := GetSharedArrayIteratorPrototype;
+  if (not Assigned(SharedPrototype)) and Assigned(CurrentRealm) then
+  begin
+    SharedPrototype := TGocciaObjectValue.Create(FPrototype);
+    if not Assigned(FArrayIteratorMethodHost) then
+    begin
+      FArrayIteratorMethodHost := TGocciaIteratorValue.Create;
+      if Assigned(TGarbageCollector.Instance) then
+        TGarbageCollector.Instance.PinObject(FArrayIteratorMethodHost);
+    end;
+    SharedPrototype.DefineProperty('next',
+      TGocciaPropertyDescriptorData.Create(
+        TGocciaNativeFunctionValue.CreateWithoutPrototype(
+          FArrayIteratorMethodHost.IteratorNext, 'next', 0),
+        [pfConfigurable, pfWritable]));
+    SharedPrototype.DefineSymbolProperty(
+      TGocciaSymbolValue.WellKnownToStringTag,
+      TGocciaPropertyDescriptorData.Create(
+        TGocciaStringLiteralValue.Create('Array Iterator'), [pfConfigurable]));
+    CurrentRealm.SetSlot(GArrayIteratorPrototypeSlot, SharedPrototype);
+  end;
+  if Assigned(SharedPrototype) then
+    FPrototype := SharedPrototype;
   FSource := ASource;
   FIndex := 0;
   FKind := AKind;
@@ -707,5 +751,8 @@ begin
   if Assigned(FSource) then
     FSource.MarkReferences;
 end;
+
+initialization
+  GArrayIteratorPrototypeSlot := RegisterRealmSlot('ArrayIterator.prototype');
 
 end.

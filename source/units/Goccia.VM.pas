@@ -9171,13 +9171,17 @@ begin
           SetBytecodeHomeObject(RightValue, RegisterToValue(FRegisters[A]));
           if (FRegisters[B].Kind = grkObject) and
              (FRegisters[B].ObjectValue is TGocciaSymbolValue) then
-            TGocciaClassValue(FRegisters[A].ObjectValue).AssignSymbolProperty(
-              TGocciaSymbolValue(FRegisters[B].ObjectValue), RightValue)
+            TGocciaClassValue(FRegisters[A].ObjectValue).DefineSymbolProperty(
+              TGocciaSymbolValue(FRegisters[B].ObjectValue),
+              TGocciaPropertyDescriptorData.Create(
+                RightValue, [pfConfigurable, pfWritable]))
           else if TryResolveObjectKey(FRegisters[B], PropKeyValue) then
           begin
             if PropKeyValue is TGocciaSymbolValue then
-              TGocciaClassValue(FRegisters[A].ObjectValue).AssignSymbolProperty(
-                TGocciaSymbolValue(PropKeyValue), RightValue)
+              TGocciaClassValue(FRegisters[A].ObjectValue).DefineSymbolProperty(
+                TGocciaSymbolValue(PropKeyValue),
+                TGocciaPropertyDescriptorData.Create(
+                  RightValue, [pfConfigurable, pfWritable]))
             else
             begin
               GlobalName := TGocciaStringLiteralValue(PropKeyValue).Value;
@@ -9185,8 +9189,10 @@ begin
                 SetPropertyValue(FRegisters[A].ObjectValue, GlobalName,
                   RightValue)
               else
-                TGocciaClassValue(FRegisters[A].ObjectValue).SetProperty(
-                  GlobalName, RightValue);
+                TGocciaClassValue(FRegisters[A].ObjectValue).DefineProperty(
+                  GlobalName,
+                  TGocciaPropertyDescriptorData.Create(
+                    RightValue, [pfConfigurable, pfWritable]));
             end;
           end
           else
@@ -9196,8 +9202,10 @@ begin
               SetPropertyValue(FRegisters[A].ObjectValue, GlobalName,
                 RightValue)
             else
-              TGocciaClassValue(FRegisters[A].ObjectValue).SetProperty(
-                GlobalName, RightValue);
+              TGocciaClassValue(FRegisters[A].ObjectValue).DefineProperty(
+                GlobalName,
+                TGocciaPropertyDescriptorData.Create(
+                  RightValue, [pfConfigurable, pfWritable]));
           end;
         end
         else if (FRegisters[A].Kind = grkObject) and
