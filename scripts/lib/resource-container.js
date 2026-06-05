@@ -223,6 +223,43 @@ function writeUInt32LE(buffer, value, offset) {
 }
 
 function buildResourceContainer(resourceMagic, version, entries, blob) {
+  if (!Buffer.isBuffer(resourceMagic) || resourceMagic.length !== 8) {
+    throw new Error("Resource magic must be an 8-byte Buffer");
+  }
+
+  if (RESOURCE_ENTRY_SIZE !== 16) {
+    throw new Error(`Resource entry size must be 16 bytes, got ${RESOURCE_ENTRY_SIZE}`);
+  }
+
+  if (!Buffer.isBuffer(blob)) {
+    throw new Error("Resource blob must be a Buffer");
+  }
+
+  let previousName = null;
+  for (const entry of entries) {
+    if (typeof entry.name !== "string" || entry.name.length === 0) {
+      throw new Error("Resource entry name must be a non-empty string");
+    }
+
+    if (previousName !== null && entry.name < previousName) {
+      throw new Error(
+        `Resource entries must be sorted by name: ${entry.name} appears after ${previousName}`,
+      );
+    }
+
+    if (
+      !Number.isInteger(entry.offset) ||
+      !Number.isInteger(entry.length) ||
+      entry.offset < 0 ||
+      entry.length < 0 ||
+      entry.offset > blob.length - entry.length
+    ) {
+      throw new Error(`Invalid resource entry bounds for ${entry.name}`);
+    }
+
+    previousName = entry.name;
+  }
+
   const versionBuffer = Buffer.from(version, "utf8");
   const nameBuffers = entries.map((entry) => Buffer.from(entry.name, "utf8"));
   const namesByteCount = nameBuffers.reduce((total, nameBuffer) => total + nameBuffer.length, 0);
