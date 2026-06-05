@@ -22,6 +22,7 @@ type
   public
     constructor Create(const AName: string; AScope: TGocciaScope;
       AThrowError: TGocciaThrowErrorCallback);
+    destructor Destroy; override;
   published
     function AtomicsAdd(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
@@ -96,9 +97,11 @@ type
     FEvent: TEvent;
     FHasDeadline: Boolean;
     FInList: Boolean;
+    FOwner: TGocciaAtomics;
     FPromise: TGocciaPromiseValue;
   public
-    constructor Create(ABuffer: TGocciaSharedArrayBufferValue; AByteOffset: Integer;
+    constructor Create(AOwner: TGocciaAtomics;
+      ABuffer: TGocciaSharedArrayBufferValue; AByteOffset: Integer;
       AAsync: Boolean; APromise: TGocciaPromiseValue;
       ADeadlineMilliseconds: QWord = 0; AHasDeadline: Boolean = False);
     destructor Destroy; override;
@@ -110,6 +113,7 @@ type
     property Event: TEvent read FEvent;
     property HasDeadline: Boolean read FHasDeadline;
     property InList: Boolean read FInList write FInList;
+    property Owner: TGocciaAtomics read FOwner;
     property Promise: TGocciaPromiseValue read FPromise;
   end;
 
@@ -117,11 +121,13 @@ var
   GAtomicsLock: TRTLCriticalSection;
   GAtomicsWaiters: TObjectList<TAtomicsWaiter>;
 
-constructor TAtomicsWaiter.Create(ABuffer: TGocciaSharedArrayBufferValue;
-  AByteOffset: Integer; AAsync: Boolean; APromise: TGocciaPromiseValue;
-  ADeadlineMilliseconds: QWord; AHasDeadline: Boolean);
+constructor TAtomicsWaiter.Create(AOwner: TGocciaAtomics;
+  ABuffer: TGocciaSharedArrayBufferValue; AByteOffset: Integer; AAsync: Boolean;
+  APromise: TGocciaPromiseValue; ADeadlineMilliseconds: QWord;
+  AHasDeadline: Boolean);
 begin
   inherited Create;
+  FOwner := AOwner;
   FAsync := AAsync;
   FBuffer := ABuffer;
   FByteOffset := AByteOffset;
@@ -722,6 +728,43 @@ begin
   until False;
 end;
 
+procedure CancelAtomicsWaitAsyncForOwner(AOwner: TGocciaAtomics);
+var
+  CancelledWaiters: TList<TAtomicsWaiter>;
+  I: Integer;
+  Waiter: TAtomicsWaiter;
+begin
+  if not Assigned(GAtomicsWaiters) then
+    Exit;
+
+  CancelledWaiters := TList<TAtomicsWaiter>.Create;
+  try
+    EnterCriticalSection(GAtomicsLock);
+    try
+      I := 0;
+      while I < GAtomicsWaiters.Count do
+      begin
+        Waiter := GAtomicsWaiters[I];
+        if Waiter.Async and (Waiter.Owner = AOwner) then
+        begin
+          Waiter.InList := False;
+          GAtomicsWaiters.Delete(I);
+          CancelledWaiters.Add(Waiter);
+        end
+        else
+          Inc(I);
+      end;
+    finally
+      LeaveCriticalSection(GAtomicsLock);
+    end;
+
+    for Waiter in CancelledWaiters do
+      Waiter.Free;
+  finally
+    CancelledWaiters.Free;
+  end;
+end;
+
 constructor TGocciaAtomics.Create(const AName: string; AScope: TGocciaScope;
   AThrowError: TGocciaThrowErrorCallback);
 var
@@ -771,6 +814,12 @@ begin
 
   RegisterMemberDefinitions(FBuiltinObject, StaticMembers);
   AScope.DefineLexicalBinding(AName, FBuiltinObject, dtLet, True);
+end;
+
+destructor TGocciaAtomics.Destroy;
+begin
+  CancelAtomicsWaitAsyncForOwner(Self);
+  inherited Destroy;
 end;
 
 function TGocciaAtomics.AtomicsAdd(const AArgs: TGocciaArgumentsCollection;
@@ -1024,7 +1073,7 @@ begin
     if TimeoutMilliseconds = 0 then
       Exit(TGocciaStringLiteralValue.Create(ATOMICS_WAIT_TIMED_OUT));
 
-    Waiter := TAtomicsWaiter.Create(Buffer, ByteOffset, False, nil);
+    Waiter := TAtomicsWaiter.Create(Self, Buffer, ByteOffset, False, nil);
     AddWaiter(Waiter);
   finally
     LeaveCriticalSection(GAtomicsLock);
@@ -1079,7 +1128,7 @@ begin
       DeadlineMilliseconds := 0;
 
     Promise := TGocciaPromiseValue.Create;
-    Waiter := TAtomicsWaiter.Create(Buffer, ByteOffset, True, Promise,
+    Waiter := TAtomicsWaiter.Create(Self, Buffer, ByteOffset, True, Promise,
       DeadlineMilliseconds, HasDeadline);
     AddWaiter(Waiter);
     Result := CreateWaitAsyncResult(True, Promise);
