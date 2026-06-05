@@ -53,6 +53,7 @@ type
     FPrivateInstancePropertyDefs: TGocciaExpressionMap;
     FFieldOrder: array of TGocciaClassFieldOrderEntry;
     FPrivateStaticProperties: TGocciaValueMap;
+    FPrivateStaticMethods: TGocciaValueMap;
     FPrivateMethods: TOrderedStringMap<TGocciaMethodValue>;
     FPrivateGetters: TOrderedStringMap<TGocciaFunctionBase>;
     FPrivateSetters: TOrderedStringMap<TGocciaFunctionBase>;
@@ -94,6 +95,7 @@ type
     function HasOwnPrivateGetter(const AName: string): Boolean;
     function HasOwnPrivateSetter(const AName: string): Boolean;
     function HasOwnPrivateStaticProperty(const AName: string): Boolean;
+    function HasOwnPrivateStaticMethod(const AName: string): Boolean;
     function HasPrivateInstanceElements: Boolean;
     function GetOwnPrivatePropertyGetter(
       const AName: string): TGocciaFunctionBase;
@@ -102,6 +104,7 @@ type
     procedure AddInstanceProperty(const AName: string; const AExpression: TGocciaExpression);
     procedure AddPrivateInstanceProperty(const AName: string; const AExpression: TGocciaExpression);
     procedure AddPrivateStaticProperty(const AName: string; const AValue: TGocciaValue);
+    procedure AddPrivateStaticMethod(const AName: string; const AValue: TGocciaValue);
     procedure AddPrivateMethod(const AName: string; const AMethod: TGocciaMethodValue);
     function GetPrivateMethod(const AName: string): TGocciaMethodValue;
     procedure AppendOwnPrivateNames(const ANames: TStrings);
@@ -143,6 +146,7 @@ type
     function FieldOrderCount: Integer;
     function FieldOrderEntry(const AIndex: Integer): TGocciaClassFieldOrderEntry;
     property PrivateStaticProperties: TGocciaValueMap read FPrivateStaticProperties;
+    property PrivateStaticMethods: TGocciaValueMap read FPrivateStaticMethods;
     property PrivateMethods: TOrderedStringMap<TGocciaMethodValue> read FPrivateMethods;
     property PropertyGetter[const AName: string]: TGocciaFunctionBase read GetPropertyGetter;
     property PropertySetter[const AName: string]: TGocciaFunctionBase read GetPropertySetter;
@@ -386,6 +390,7 @@ begin
   FInstancePropertyDefs := TGocciaExpressionMap.Create;
   FPrivateInstancePropertyDefs := TGocciaExpressionMap.Create;
   FPrivateStaticProperties := TGocciaValueMap.Create;
+  FPrivateStaticMethods := TGocciaValueMap.Create;
   FPrivateMethods := TOrderedStringMap<TGocciaMethodValue>.Create;
   FPrivateGetters := TOrderedStringMap<TGocciaFunctionBase>.Create;
   FPrivateSetters := TOrderedStringMap<TGocciaFunctionBase>.Create;
@@ -412,6 +417,7 @@ begin
   FInstancePropertyDefs.Free;
   FPrivateInstancePropertyDefs.Free;
   FPrivateStaticProperties.Free;
+  FPrivateStaticMethods.Free;
   FPrivateMethods.Free;
   FPrivateGetters.Free;
   FPrivateSetters.Free;
@@ -454,6 +460,10 @@ begin
       ValPair.Value.MarkReferences;
 
   for ValPair in FPrivateStaticProperties do
+    if Assigned(ValPair.Value) then
+      ValPair.Value.MarkReferences;
+
+  for ValPair in FPrivateStaticMethods do
     if Assigned(ValPair.Value) then
       ValPair.Value.MarkReferences;
 
@@ -667,6 +677,12 @@ function TGocciaClassValue.HasOwnPrivateStaticProperty(
   const AName: string): Boolean;
 begin
   Result := FPrivateStaticProperties.ContainsKey(AName);
+end;
+
+function TGocciaClassValue.HasOwnPrivateStaticMethod(
+  const AName: string): Boolean;
+begin
+  Result := FPrivateStaticMethods.ContainsKey(AName);
 end;
 
 function TGocciaClassValue.HasPrivateInstanceElements: Boolean;
@@ -1007,6 +1023,11 @@ begin
   FPrivateStaticProperties.AddOrSetValue(AName, AValue);
 end;
 
+procedure TGocciaClassValue.AddPrivateStaticMethod(const AName: string; const AValue: TGocciaValue);
+begin
+  FPrivateStaticMethods.AddOrSetValue(AName, AValue);
+end;
+
 procedure TGocciaClassValue.AddPrivateMethod(const AName: string; const AMethod: TGocciaMethodValue);
 begin
   FPrivateMethods.AddOrSetValue(AName, AMethod);
@@ -1033,6 +1054,10 @@ begin
       ANames.Add(PropertyPair.Key);
 
   for StaticPair in FPrivateStaticProperties do
+    if ANames.IndexOf(StaticPair.Key) < 0 then
+      ANames.Add(StaticPair.Key);
+
+  for StaticPair in FPrivateStaticMethods do
     if ANames.IndexOf(StaticPair.Key) < 0 then
       ANames.Add(StaticPair.Key);
 

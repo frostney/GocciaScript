@@ -37,6 +37,18 @@ test("object destructuring with defaults triggered", () => {
   expect(c).toBe(3);
 });
 
+test("object destructuring numeric keys use canonical property names", () => {
+  let { 0x10: hex, 1e2: exp, 1.0: one } = {
+    16: "hex",
+    100: "exp",
+    1: "one"
+  };
+
+  expect(hex).toBe("hex");
+  expect(exp).toBe("exp");
+  expect(one).toBe("one");
+});
+
 test("array destructuring with defaults and rest", () => {
   let [a = 1, b = 2, c = 3, ...rest] = [4, 5, 6, 7, 8];
   expect(a).toBe(4);

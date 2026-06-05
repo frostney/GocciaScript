@@ -1,6 +1,6 @@
 /*---
 description: String.prototype.matchAll with regex arguments
-features: [String.prototype.matchAll]
+features: [String.prototype.matchAll, Iterator]
 ---*/
 
 test("matchAll returns an iterator of match arrays", () => {
@@ -175,4 +175,25 @@ test("matchAll throws TypeError when IsRegExp object has undefined flags", () =>
   expect(() => {
     "abc".matchAll({ [Symbol.match]: true });
   }).toThrow(TypeError);
+});
+
+test("RegExp string iterator prototype inherits from Iterator.prototype", () => {
+  const iteratorPrototype = Object.getPrototypeOf(
+    Object.getPrototypeOf([][Symbol.iterator]())
+  );
+  const regexpStringIteratorPrototype = Object.getPrototypeOf(
+    "abc".matchAll(/a/g)
+  );
+  const tagDescriptor = Object.getOwnPropertyDescriptor(
+    regexpStringIteratorPrototype,
+    Symbol.toStringTag
+  );
+
+  expect(Object.getPrototypeOf(regexpStringIteratorPrototype)).toBe(
+    iteratorPrototype
+  );
+  expect(tagDescriptor.value).toBe("RegExp String Iterator");
+  expect(tagDescriptor.writable).toBe(false);
+  expect(tagDescriptor.enumerable).toBe(false);
+  expect(tagDescriptor.configurable).toBe(true);
 });

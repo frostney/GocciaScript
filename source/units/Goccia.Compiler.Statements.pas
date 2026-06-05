@@ -3781,6 +3781,9 @@ begin
 
   EmitDefaultParameters(ChildCtx, AMethod.Parameters);
   EmitDestructuringParameters(ChildCtx, AMethod.Parameters);
+  if ChildTemplate.CodeCount > High(UInt16) then
+    raise Exception.Create('Parameter preamble is too large to encode');
+  ChildTemplate.ParameterPreambleSize := UInt16(ChildTemplate.CodeCount);
 
   ACtx.CompileFunctionBody(AMethod.Body);
   ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
@@ -4141,6 +4144,9 @@ begin
 
   EmitDefaultParameters(ChildCtx, AMethod.Parameters);
   EmitDestructuringParameters(ChildCtx, AMethod.Parameters);
+  if ChildTemplate.CodeCount > High(UInt16) then
+    raise Exception.Create('Parameter preamble is too large to encode');
+  ChildTemplate.ParameterPreambleSize := UInt16(ChildTemplate.CodeCount);
 
   ACtx.CompileFunctionBody(AMethod.Body);
   ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
@@ -4806,8 +4812,14 @@ begin
   end;
 
   for MethodPair in ClassDef.PrivateMethods do
-    CompileMethodBody(ACtx, ClassReg, '#slot:' + PrivPrefix + MethodPair.Key,
-      MethodPair.Value, OP_CLASS_ADD_METHOD_CONST);
+  begin
+    if MethodPair.Value.IsStatic then
+      CompileMethodBody(ACtx, ClassReg, '#slot:' + PrivPrefix + MethodPair.Key,
+        MethodPair.Value, OP_DEFINE_STATIC_METHOD_CONST)
+    else
+      CompileMethodBody(ACtx, ClassReg, '#slot:' + PrivPrefix + MethodPair.Key,
+        MethodPair.Value, OP_CLASS_ADD_METHOD_CONST);
+  end;
 
   for GetterPair in ClassDef.Getters do
   begin
@@ -5036,8 +5048,14 @@ begin
   end;
 
   for MethodPair in ClassDef.PrivateMethods do
-    CompileMethodBody(ACtx, ADest, '#slot:' + PrivPrefix + MethodPair.Key,
-      MethodPair.Value, OP_CLASS_ADD_METHOD_CONST);
+  begin
+    if MethodPair.Value.IsStatic then
+      CompileMethodBody(ACtx, ADest, '#slot:' + PrivPrefix + MethodPair.Key,
+        MethodPair.Value, OP_DEFINE_STATIC_METHOD_CONST)
+    else
+      CompileMethodBody(ACtx, ADest, '#slot:' + PrivPrefix + MethodPair.Key,
+        MethodPair.Value, OP_CLASS_ADD_METHOD_CONST);
+  end;
 
   for GetterPair in ClassDef.Getters do
   begin

@@ -7,11 +7,16 @@ interface
 uses
   Goccia.Arguments.Collection,
   Goccia.ObjectModel,
+  Goccia.Realm,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
 type
   TGocciaIteratorValue = class(TGocciaObjectValue)
+  protected
+    class function EnsureConcreteIteratorPrototype(
+      const ASlotId: TGocciaRealmSlotId;
+      const AToStringTag: string): TGocciaObjectValue; static;
   public
     function IteratorNext(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function IteratorSelf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -76,7 +81,6 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
-  Goccia.Realm,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
@@ -228,6 +232,34 @@ class function TGocciaIteratorValue.SharedPrototype: TGocciaObjectValue;
 begin
   EnsurePrototypeInitialized;
   Result := GetSharedIteratorPrototype;
+end;
+
+class function TGocciaIteratorValue.EnsureConcreteIteratorPrototype(
+  const ASlotId: TGocciaRealmSlotId;
+  const AToStringTag: string): TGocciaObjectValue;
+var
+  IteratorPrototype: TGocciaObjectValue;
+begin
+  if not Assigned(CurrentRealm) then
+    Exit(nil);
+
+  Result := TGocciaObjectValue(CurrentRealm.GetSlot(ASlotId));
+  if Assigned(Result) then
+    Exit;
+
+  EnsurePrototypeInitialized;
+  IteratorPrototype := GetSharedIteratorPrototype;
+  Result := TGocciaObjectValue.Create(IteratorPrototype);
+  Result.DefineProperty('next',
+    TGocciaPropertyDescriptorData.Create(
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(
+        FPrototypeMethodHost.IteratorNext, 'next', 0),
+      [pfConfigurable, pfWritable]));
+  Result.DefineSymbolProperty(
+    TGocciaSymbolValue.WellKnownToStringTag,
+    TGocciaPropertyDescriptorData.Create(
+      TGocciaStringLiteralValue.Create(AToStringTag), [pfConfigurable]));
+  CurrentRealm.SetSlot(ASlotId, Result);
 end;
 
 procedure TGocciaIteratorValue.InitializePrototype;

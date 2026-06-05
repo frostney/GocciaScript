@@ -90,6 +90,7 @@ type
     FHasOwnPrototype: Boolean;
     FStrictThis: Boolean;
     FStrictCode: Boolean;
+    FParameterPreambleSize: UInt16;
     FTypeCheckPreambleSize: UInt8;
     FProfileIndex: Integer;
     FSourceText: string;
@@ -163,6 +164,7 @@ type
     // time pointing at a fresh ordinary object whose `constructor` is the
     // function itself.
     property HasOwnPrototype: Boolean read FHasOwnPrototype write FHasOwnPrototype;
+    property ParameterPreambleSize: UInt16 read FParameterPreambleSize write FParameterPreambleSize;
     property TypeCheckPreambleSize: UInt8 read FTypeCheckPreambleSize write FTypeCheckPreambleSize;
     property ProfileIndex: Integer read FProfileIndex write FProfileIndex;
     property SourceText: string read FSourceText write FSourceText;
@@ -220,6 +222,8 @@ begin
   FHasOwnPrototype := False;
   FStrictThis := True;
   FStrictCode := True;
+  FParameterPreambleSize := 0;
+  FTypeCheckPreambleSize := 0;
   FProfileIndex := -1;
   FTemplateSiteId := AllocateTemplateSiteId;
 end;
