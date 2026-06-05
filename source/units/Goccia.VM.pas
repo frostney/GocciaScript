@@ -1872,6 +1872,15 @@ begin
   FState := bgsSuspendedStart;
   FResumeValue := RegisterUndefined;
   FIgnoreNextResume := False;
+  DefineProperty(PROP_NEXT, TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(GeneratorNext, PROP_NEXT, 1),
+    [pfConfigurable, pfWritable]));
+  DefineProperty(PROP_RETURN, TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(GeneratorReturn, PROP_RETURN, 1),
+    [pfConfigurable, pfWritable]));
+  DefineProperty(PROP_THROW, TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(GeneratorThrow, PROP_THROW, 1),
+    [pfConfigurable, pfWritable]));
   if Assigned(FClosure.Template) and (FClosure.Template.ParameterPreambleSize > 0) then
     FVM.ExecuteGeneratorParameterPreamble(Self);
 end;
@@ -1899,6 +1908,15 @@ begin
   FState := bgsSuspendedStart;
   FResumeValue := RegisterUndefined;
   FIgnoreNextResume := False;
+  DefineProperty(PROP_NEXT, TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(GeneratorNext, PROP_NEXT, 1),
+    [pfConfigurable, pfWritable]));
+  DefineProperty(PROP_RETURN, TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(GeneratorReturn, PROP_RETURN, 1),
+    [pfConfigurable, pfWritable]));
+  DefineProperty(PROP_THROW, TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(GeneratorThrow, PROP_THROW, 1),
+    [pfConfigurable, pfWritable]));
   if Assigned(FClosure.Template) and (FClosure.Template.ParameterPreambleSize > 0) then
     FVM.ExecuteGeneratorParameterPreamble(Self);
 end;
