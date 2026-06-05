@@ -16,6 +16,7 @@ uses
 
 function PumpAtomicsWaitAsyncCompletions: Integer;
 function WaitForAtomicsPromise(const APromise: TGocciaPromiseValue): Boolean;
+procedure ShutdownAtomicsWaiters;
 
 type
   TGocciaAtomics = class(TGocciaBuiltin)
@@ -119,7 +120,16 @@ type
 
 var
   GAtomicsLock: TRTLCriticalSection;
+
+threadvar
   GAtomicsWaiters: TObjectList<TAtomicsWaiter>;
+
+function GetAtomicsWaiters: TObjectList<TAtomicsWaiter>;
+begin
+  if not Assigned(GAtomicsWaiters) then
+    GAtomicsWaiters := TObjectList<TAtomicsWaiter>.Create(False);
+  Result := GAtomicsWaiters;
+end;
 
 constructor TAtomicsWaiter.Create(AOwner: TGocciaAtomics;
   ABuffer: TGocciaSharedArrayBufferValue; AByteOffset: Integer; AAsync: Boolean;
@@ -578,31 +588,35 @@ end;
 procedure AddWaiter(AWaiter: TAtomicsWaiter);
 begin
   AWaiter.InList := True;
-  GAtomicsWaiters.Add(AWaiter);
+  GetAtomicsWaiters.Add(AWaiter);
 end;
 
 procedure RemoveWaiter(AWaiter: TAtomicsWaiter);
 var
   Index: Integer;
+  Waiters: TObjectList<TAtomicsWaiter>;
 begin
   if not AWaiter.InList then
     Exit;
 
-  Index := GAtomicsWaiters.IndexOf(AWaiter);
+  Waiters := GetAtomicsWaiters;
+  Index := Waiters.IndexOf(AWaiter);
   if Index >= 0 then
-    GAtomicsWaiters.Delete(Index);
+    Waiters.Delete(Index);
   AWaiter.InList := False;
 end;
 
 function PromiseHasAtomicsWaiter(const APromise: TGocciaPromiseValue): Boolean;
 var
   I: Integer;
+  Waiters: TObjectList<TAtomicsWaiter>;
 begin
   Result := False;
   EnterCriticalSection(GAtomicsLock);
   try
-    for I := 0 to GAtomicsWaiters.Count - 1 do
-      if GAtomicsWaiters[I].Async and (GAtomicsWaiters[I].Promise = APromise) then
+    Waiters := GetAtomicsWaiters;
+    for I := 0 to Waiters.Count - 1 do
+      if Waiters[I].Async and (Waiters[I].Promise = APromise) then
         Exit(True);
   finally
     LeaveCriticalSection(GAtomicsLock);
@@ -615,6 +629,7 @@ var
   I: Integer;
   NowMilliseconds: QWord;
   Waiter: TAtomicsWaiter;
+  Waiters: TObjectList<TAtomicsWaiter>;
 begin
   Result := 0;
   DueWaiters := TList<TAtomicsWaiter>.Create;
@@ -622,15 +637,16 @@ begin
     NowMilliseconds := GetTickCount64;
     EnterCriticalSection(GAtomicsLock);
     try
+      Waiters := GetAtomicsWaiters;
       I := 0;
-      while I < GAtomicsWaiters.Count do
+      while I < Waiters.Count do
       begin
-        Waiter := GAtomicsWaiters[I];
+        Waiter := Waiters[I];
         if Waiter.Async and Waiter.HasDeadline and
           (NowMilliseconds >= Waiter.DeadlineMilliseconds) then
         begin
           Waiter.InList := False;
-          GAtomicsWaiters.Delete(I);
+          Waiters.Delete(I);
           DueWaiters.Add(Waiter);
         end
         else
@@ -733,6 +749,7 @@ var
   CancelledWaiters: TList<TAtomicsWaiter>;
   I: Integer;
   Waiter: TAtomicsWaiter;
+  Waiters: TObjectList<TAtomicsWaiter>;
 begin
   if not Assigned(GAtomicsWaiters) then
     Exit;
@@ -741,14 +758,15 @@ begin
   try
     EnterCriticalSection(GAtomicsLock);
     try
+      Waiters := GetAtomicsWaiters;
       I := 0;
-      while I < GAtomicsWaiters.Count do
+      while I < Waiters.Count do
       begin
-        Waiter := GAtomicsWaiters[I];
+        Waiter := Waiters[I];
         if Waiter.Async and (Waiter.Owner = AOwner) then
         begin
           Waiter.InList := False;
-          GAtomicsWaiters.Delete(I);
+          Waiters.Delete(I);
           CancelledWaiters.Add(Waiter);
         end
         else
@@ -763,6 +781,23 @@ begin
   finally
     CancelledWaiters.Free;
   end;
+end;
+
+procedure ShutdownAtomicsWaiters;
+var
+  Waiter: TAtomicsWaiter;
+begin
+  if not Assigned(GAtomicsWaiters) then
+    Exit;
+
+  while GAtomicsWaiters.Count > 0 do
+  begin
+    Waiter := GAtomicsWaiters[GAtomicsWaiters.Count - 1];
+    Waiter.InList := False;
+    GAtomicsWaiters.Delete(GAtomicsWaiters.Count - 1);
+    Waiter.Free;
+  end;
+  FreeAndNil(GAtomicsWaiters);
 end;
 
 constructor TGocciaAtomics.Create(const AName: string; AScope: TGocciaScope;
@@ -932,6 +967,7 @@ var
   TypedArray: TGocciaTypedArrayValue;
   Waiter: TAtomicsWaiter;
   WaiterIndex: Integer;
+  Waiters: TObjectList<TAtomicsWaiter>;
 begin
   ValidateAtomicTypedArrayAccess(AArgs, 'notify', True, TypedArray, Index,
     ByteOffset);
@@ -945,15 +981,16 @@ begin
   try
     EnterCriticalSection(GAtomicsLock);
     try
+      Waiters := GetAtomicsWaiters;
       WaiterIndex := 0;
-      while WaiterIndex < GAtomicsWaiters.Count do
+      while WaiterIndex < Waiters.Count do
       begin
-        Waiter := GAtomicsWaiters[WaiterIndex];
+        Waiter := Waiters[WaiterIndex];
         if (Waiter.Buffer = Buffer) and (Waiter.ByteOffset = ByteOffset) and
           ((Count < 0) or (NotifiedCount < Count)) then
         begin
           Waiter.InList := False;
-          GAtomicsWaiters.Delete(WaiterIndex);
+          Waiters.Delete(WaiterIndex);
           Inc(NotifiedCount);
           if Waiter.Async then
             ResolveWaiters.Add(Waiter)
@@ -1145,10 +1182,9 @@ end;
 
 initialization
   InitCriticalSection(GAtomicsLock);
-  GAtomicsWaiters := TObjectList<TAtomicsWaiter>.Create(False);
 
 finalization
-  GAtomicsWaiters.Free;
+  ShutdownAtomicsWaiters;
   DoneCriticalSection(GAtomicsLock);
 
 end.
