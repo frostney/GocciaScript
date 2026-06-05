@@ -148,6 +148,50 @@ begin
     Result := InferLocalType(AExpr);
 end;
 
+procedure CompileExpressionWithInferredName(const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaExpression; const ADest: UInt8;
+  const AInferredName: string);
+var
+  FuncCount: Integer;
+  InferredTemplate: TGocciaFunctionTemplate;
+begin
+  if AInferredName = '' then
+  begin
+    ACtx.CompileExpression(AExpr, ADest);
+    Exit;
+  end;
+
+  FuncCount := ACtx.Template.FunctionCount;
+  if (AExpr is TGocciaClassExpression) and
+     (TGocciaClassExpression(AExpr).ClassDefinition.Name = '') then
+  begin
+    Goccia.Compiler.Statements.CompileClassExpression(ACtx,
+      TGocciaClassExpression(AExpr).ClassDefinition, ADest, AInferredName);
+    Exit;
+  end;
+
+  ACtx.CompileExpression(AExpr, ADest);
+  if ((AExpr is TGocciaArrowFunctionExpression) or
+      (AExpr is TGocciaFunctionExpression)) and
+     (ACtx.Template.FunctionCount > FuncCount) then
+  begin
+    InferredTemplate := ACtx.Template.GetFunction(
+      ACtx.Template.FunctionCount - 1);
+    if (InferredTemplate.Name = '<arrow>') or
+       (InferredTemplate.Name = '<function>') or
+       (InferredTemplate.Name = '<method>') then
+      InferredTemplate.Name := AInferredName;
+  end;
+end;
+
+function SingleIdentifierPatternName(
+  const APattern: TGocciaDestructuringPattern): string;
+begin
+  if APattern is TGocciaIdentifierDestructuringPattern then
+    Exit(TGocciaIdentifierDestructuringPattern(APattern).Name);
+  Result := '';
+end;
+
 procedure SetNonStrictLocalTypeHint(const ACtx: TGocciaCompilationContext;
   const ALocalIdx: Integer; const ATypeHint: TGocciaLocalType);
 var
@@ -1315,7 +1359,8 @@ begin
 
     Slot := ACtx.Scope.GetLocal(LocalIdx).Slot;
     EmitUndefinedCheck(ACtx, Slot, JumpIdx);
-    ACtx.CompileExpression(AParams[I].DefaultValue, Slot);
+    CompileExpressionWithInferredName(ACtx, AParams[I].DefaultValue, Slot,
+      AParams[I].Name);
     PatchJumpTarget(ACtx, JumpIdx);
   end;
 end;
@@ -1582,7 +1627,8 @@ begin
   begin
     AssignPat := TGocciaAssignmentDestructuringPattern(APattern);
     EmitUndefinedCheck(ACtx, ASrcReg, JumpIdx);
-    ACtx.CompileExpression(AssignPat.Right, ASrcReg);
+    CompileExpressionWithInferredName(ACtx, AssignPat.Right, ASrcReg,
+      SingleIdentifierPatternName(AssignPat.Left));
     PatchJumpTarget(ACtx, JumpIdx);
     EmitDestructuring(ACtx, AssignPat.Left, ASrcReg, AAssignmentMode);
   end
@@ -1807,6 +1853,9 @@ begin
     EmitDefaultParameters(ChildCtx, AExpr.Parameters);
     EmitDestructuringParameters(ChildCtx, AExpr.Parameters);
     EmitParameterTypeChecks(ChildCtx, AExpr.Parameters);
+    if ChildTemplate.CodeCount > High(UInt16) then
+      raise Exception.Create('Parameter preamble is too large to encode');
+    ChildTemplate.ParameterPreambleSize := UInt16(ChildTemplate.CodeCount);
 
     ACtx.CompileFunctionBody(AExpr.Body);
 
@@ -3130,6 +3179,9 @@ begin
     EmitDefaultParameters(ChildCtx, AExpr.Parameters);
     EmitDestructuringParameters(ChildCtx, AExpr.Parameters);
     EmitParameterTypeChecks(ChildCtx, AExpr.Parameters);
+    if ChildTemplate.CodeCount > High(UInt16) then
+      raise Exception.Create('Parameter preamble is too large to encode');
+    ChildTemplate.ParameterPreambleSize := UInt16(ChildTemplate.CodeCount);
 
     ACtx.CompileFunctionBody(AExpr.Body);
 

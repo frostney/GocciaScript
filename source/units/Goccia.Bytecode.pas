@@ -66,7 +66,10 @@ const
   //   v37 -> v38: added OP_ENUM_KEYS for --compat-for-in-loop bytecode.
   //   v38 -> v39: OP_ENUM_KEYS now creates revalidating for-in entry arrays,
   //               and OP_ENUM_ENTRY validates entries.
-  GOCCIA_FORMAT_VERSION = 39;
+  //   v39 -> v40: serialized ParameterPreambleSize so bytecode generators
+  //               run FunctionDeclarationInstantiation-side parameter
+  //               binding at call time while keeping the body suspended.
+  GOCCIA_FORMAT_VERSION = 40;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;

@@ -6791,6 +6791,10 @@ begin
       begin
         Key := Advance.Lexeme;
       end
+      else if Check(gttNumber) then
+      begin
+        Key := Advance.Lexeme;
+      end
       else
         raise TGocciaSyntaxError.Create('Expected property name in object pattern', Peek.Line, Peek.Column, FFileName, FSourceLines,
           SSuggestObjectPatternPropertyName);

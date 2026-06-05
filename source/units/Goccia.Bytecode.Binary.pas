@@ -226,6 +226,7 @@ begin
     WriteBoolean(AProto.GetLocalStrictFlag(UInt8(I)));
 
   WriteUInt8(AProto.TypeCheckPreambleSize);
+  WriteUInt16(AProto.ParameterPreambleSize);
 end;
 
 procedure TGocciaBytecodeWriter.WriteModule(
@@ -426,6 +427,7 @@ begin
     Result.SetLocalStrictFlag(UInt8(I), ReadBoolean);
 
   Result.TypeCheckPreambleSize := ReadUInt8;
+  Result.ParameterPreambleSize := ReadUInt16;
 end;
 
 function TGocciaBytecodeReader.ReadModule: TGocciaBytecodeModule;
