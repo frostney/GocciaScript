@@ -126,6 +126,7 @@ uses
   Goccia.GarbageCollector,
   Goccia.Generator.Continuation,
   Goccia.InstructionLimit,
+  Goccia.Intrinsics.FunctionObjects,
   Goccia.Keywords.Reserved,
   Goccia.SourcePipeline,
   Goccia.StackLimit,
@@ -162,6 +163,67 @@ const
   FOR_IN_ENTRY_OWNER = '__gocciaForInOwner';
   FOR_IN_ENTRY_KEY = '__gocciaForInKey';
   FOR_IN_MAX_PROTOTYPE_CHAIN_DEPTH = 256;
+
+function FunctionIntrinsicKind(const AIsAsync,
+  AIsGenerator: Boolean): TGocciaFunctionObjectIntrinsicKind; inline;
+begin
+  if AIsAsync and AIsGenerator then
+    Result := foikAsyncGenerator
+  else if AIsGenerator then
+    Result := foikGenerator
+  else if AIsAsync then
+    Result := foikAsync
+  else
+    Result := foikOrdinary;
+end;
+
+procedure EnsureObjectPrototypeInitialized; inline;
+begin
+  if not Assigned(TGocciaObjectValue.SharedObjectPrototype) then
+    TGocciaObjectValue.InitializeSharedPrototype;
+end;
+
+function CurrentFunctionObjectPrototype(
+  const AKind: TGocciaFunctionObjectIntrinsicKind): TGocciaObjectValue;
+var
+  IteratorPrototype: TGocciaObjectValue;
+begin
+  EnsureObjectPrototypeInitialized;
+  IteratorPrototype := nil;
+  if AKind = foikGenerator then
+    IteratorPrototype := TGocciaIteratorValue.SharedPrototype;
+  Result := FunctionObjectIntrinsicPrototype(AKind,
+    TGocciaFunctionBase.GetSharedPrototype,
+    TGocciaObjectValue.SharedObjectPrototype,
+    IteratorPrototype);
+end;
+
+function CurrentGeneratorObjectPrototype(
+  const AKind: TGocciaFunctionObjectIntrinsicKind): TGocciaObjectValue;
+var
+  IteratorPrototype: TGocciaObjectValue;
+begin
+  EnsureObjectPrototypeInitialized;
+  IteratorPrototype := nil;
+  if AKind = foikGenerator then
+    IteratorPrototype := TGocciaIteratorValue.SharedPrototype;
+  Result := GeneratorObjectIntrinsicPrototype(AKind,
+    TGocciaFunctionBase.GetSharedPrototype,
+    TGocciaObjectValue.SharedObjectPrototype,
+    IteratorPrototype);
+end;
+
+procedure ApplyFunctionObjectPrototype(const AFunction: TGocciaValue;
+  const AKind: TGocciaFunctionObjectIntrinsicKind);
+var
+  Prototype: TGocciaObjectValue;
+begin
+  if not (AFunction is TGocciaObjectValue) then
+    Exit;
+  Prototype := CurrentFunctionObjectPrototype(AKind);
+  if Assigned(Prototype) then
+    TGocciaObjectValue(AFunction).Prototype := Prototype;
+end;
 
 procedure AddValueRoot(var ARoots: TGocciaActiveRootFrame;
   const AValue: TGocciaValue); inline;
@@ -3320,6 +3382,8 @@ begin
     Result := TGocciaAsyncArrowFunctionValue.Create(AArrowFunctionExpression.Parameters, Statements, AContext.Scope.CreateChild)
   else
     Result := TGocciaArrowFunctionValue.Create(AArrowFunctionExpression.Parameters, Statements, AContext.Scope.CreateChild);
+  ApplyFunctionObjectPrototype(Result,
+    FunctionIntrinsicKind(AArrowFunctionExpression.IsAsync, False));
   TGocciaFunctionValue(Result).StrictCode :=
     (not AContext.NonStrictMode) or
     HasUseStrictDirective(AArrowFunctionExpression.Body);
@@ -3361,6 +3425,9 @@ begin
     Result := TGocciaAsyncFunctionValue.Create(AFunctionExpression.Parameters, Statements, ClosureScope)
   else
     Result := TGocciaFunctionValue.Create(AFunctionExpression.Parameters, Statements, ClosureScope);
+  ApplyFunctionObjectPrototype(Result,
+    FunctionIntrinsicKind(AFunctionExpression.IsAsync,
+      AFunctionExpression.IsGenerator));
   TGocciaFunctionValue(Result).Name := AFunctionExpression.Name;
   if AContext.NonStrictMode and not HasStrictDirective then
   begin
@@ -3389,12 +3456,11 @@ begin
   //     specific generator), so an own back-reference here would be wrong.
   if AFunctionExpression.HasOwnPrototype then
   begin
-    // The prototype object's [[Prototype]] is %Object.prototype% per ES2026
-    // §10.2.5.1 OrdinaryFunctionCreate.  (For generators it should be
-    // %Generator%, but GocciaScript does not yet expose that intrinsic; falling
-    // back to Object.prototype keeps the chain non-null and lets generic object
-    // methods like hasOwnProperty resolve.)
-    PrototypeObj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
+    if AFunctionExpression.IsGenerator then
+      PrototypeObj := TGocciaObjectValue.Create(CurrentGeneratorObjectPrototype(
+        FunctionIntrinsicKind(AFunctionExpression.IsAsync, True)))
+    else
+      PrototypeObj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
     if AFunctionExpression.IsGenerator then
     begin
       PrototypeFlags := [];
@@ -3976,6 +4042,8 @@ begin
     Result := TGocciaAsyncMethodValue.Create(AClassMethod.Parameters, Statements, AContext.Scope.CreateChild, AClassMethod.Name, ASuperClass)
   else
     Result := TGocciaMethodValue.Create(AClassMethod.Parameters, Statements, AContext.Scope.CreateChild, AClassMethod.Name, ASuperClass);
+  ApplyFunctionObjectPrototype(Result,
+    FunctionIntrinsicKind(AClassMethod.IsAsync, AClassMethod.IsGenerator));
   TGocciaFunctionValue(Result).SourceFilePath := AContext.CurrentFilePath;
   TGocciaFunctionValue(Result).SourceLine := AClassMethod.Line;
   TGocciaFunctionValue(Result).SourceText := AClassMethod.SourceText;

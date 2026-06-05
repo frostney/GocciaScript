@@ -100,6 +100,7 @@ uses
   Goccia.Evaluator,
   Goccia.Evaluator.Context,
   Goccia.GarbageCollector,
+  Goccia.Intrinsics.FunctionObjects,
   Goccia.Realm,
   Goccia.Types.Enforcement,
   Goccia.Values.ArgumentsObjectValue,
@@ -107,10 +108,27 @@ uses
   Goccia.Values.Await,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
+  Goccia.Values.FunctionBase,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.PromiseValue,
   Goccia.Values.SymbolValue;
+
+function GeneratorObjectIntrinsicParent(
+  const AKind: TGocciaFunctionObjectIntrinsicKind): TGocciaObjectValue;
+var
+  IteratorPrototype: TGocciaObjectValue;
+begin
+  if not Assigned(TGocciaObjectValue.SharedObjectPrototype) then
+    TGocciaObjectValue.InitializeSharedPrototype;
+  IteratorPrototype := nil;
+  if AKind = foikGenerator then
+    IteratorPrototype := TGocciaIteratorValue.SharedPrototype;
+  Result := GeneratorObjectIntrinsicPrototype(AKind,
+    TGocciaFunctionBase.GetSharedPrototype,
+    TGocciaObjectValue.SharedObjectPrototype,
+    IteratorPrototype);
+end;
 
 function ArgumentOrUndefined(const AArguments: TGocciaArgumentsCollection): TGocciaValue;
 begin
@@ -149,6 +167,7 @@ begin
   inherited Create;
   FContinuation := AContinuation;
   FState := gsSuspendedStart;
+  Prototype := GeneratorObjectIntrinsicParent(foikGenerator);
   DefineProperty(PROP_NEXT,
     TGocciaPropertyDescriptorData.Create(
       TGocciaNativeFunctionValue.Create(GeneratorNext, PROP_NEXT, 1),
@@ -373,6 +392,7 @@ begin
   inherited Create(nil);
   FContinuation := AContinuation;
   FState := gsSuspendedStart;
+  Prototype := GeneratorObjectIntrinsicParent(foikAsyncGenerator);
   DefineProperty(PROP_NEXT,
     TGocciaPropertyDescriptorData.Create(
       TGocciaNativeFunctionValue.Create(AsyncGeneratorNext, PROP_NEXT, 1),
