@@ -224,25 +224,28 @@ procedure EnsureGeneratorPrototypeMethods(const APrototype: TGocciaObjectValue);
 var
   Host: TGocciaGeneratorPrototypeMethodHost;
 begin
-  if not Assigned(APrototype) or APrototype.HasOwnProperty(PROP_NEXT) then
+  if not Assigned(APrototype) then
     Exit;
 
   Host := GeneratorPrototypeMethodHost;
-  APrototype.DefineProperty(PROP_NEXT,
-    TGocciaPropertyDescriptorData.Create(
-      TGocciaNativeFunctionValue.CreateWithoutPrototype(
-        Host.GeneratorNext, PROP_NEXT, 1),
-      [pfConfigurable, pfWritable]));
-  APrototype.DefineProperty(PROP_RETURN,
-    TGocciaPropertyDescriptorData.Create(
-      TGocciaNativeFunctionValue.CreateWithoutPrototype(
-        Host.GeneratorReturn, PROP_RETURN, 1),
-      [pfConfigurable, pfWritable]));
-  APrototype.DefineProperty(PROP_THROW,
-    TGocciaPropertyDescriptorData.Create(
-      TGocciaNativeFunctionValue.CreateWithoutPrototype(
-        Host.GeneratorThrow, PROP_THROW, 1),
-      [pfConfigurable, pfWritable]));
+  if not APrototype.HasOwnProperty(PROP_NEXT) then
+    APrototype.DefineProperty(PROP_NEXT,
+      TGocciaPropertyDescriptorData.Create(
+        TGocciaNativeFunctionValue.CreateWithoutPrototype(
+          Host.GeneratorNext, PROP_NEXT, 1),
+        [pfConfigurable, pfWritable]));
+  if not APrototype.HasOwnProperty(PROP_RETURN) then
+    APrototype.DefineProperty(PROP_RETURN,
+      TGocciaPropertyDescriptorData.Create(
+        TGocciaNativeFunctionValue.CreateWithoutPrototype(
+          Host.GeneratorReturn, PROP_RETURN, 1),
+        [pfConfigurable, pfWritable]));
+  if not APrototype.HasOwnProperty(PROP_THROW) then
+    APrototype.DefineProperty(PROP_THROW,
+      TGocciaPropertyDescriptorData.Create(
+        TGocciaNativeFunctionValue.CreateWithoutPrototype(
+          Host.GeneratorThrow, PROP_THROW, 1),
+        [pfConfigurable, pfWritable]));
 end;
 
 { TGocciaGeneratorObjectValue }

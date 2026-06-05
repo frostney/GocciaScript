@@ -544,7 +544,10 @@ begin
     try
       Result := Assigned(PipelineResult.ProgramNode) and
         (PipelineResult.ProgramNode.Body.Count = 1) and
-        (PipelineResult.ProgramNode.Body[0] is TGocciaExpressionStatement);
+        (PipelineResult.ProgramNode.Body[0] is TGocciaExpressionStatement) and
+        (TGocciaExpressionStatement(
+          PipelineResult.ProgramNode.Body[0]).Expression is
+          TGocciaFunctionExpression);
     finally
       PipelineResult.Free;
     end;
