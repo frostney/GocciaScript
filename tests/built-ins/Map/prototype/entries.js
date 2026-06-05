@@ -55,3 +55,20 @@ test("[Symbol.iterator] throws TypeError when called on non-Map", () => {
   expect(() => iter.call(Map.prototype)).toThrow(TypeError);
   expect(() => iter.call({})).toThrow(TypeError);
 });
+
+test("Map iterator prototype inherits from Iterator.prototype", () => {
+  const iteratorPrototype = Object.getPrototypeOf(
+    Object.getPrototypeOf([][Symbol.iterator]())
+  );
+  const mapIteratorPrototype = Object.getPrototypeOf(new Map().entries());
+  const tagDescriptor = Object.getOwnPropertyDescriptor(
+    mapIteratorPrototype,
+    Symbol.toStringTag
+  );
+
+  expect(Object.getPrototypeOf(mapIteratorPrototype)).toBe(iteratorPrototype);
+  expect(tagDescriptor.value).toBe("Map Iterator");
+  expect(tagDescriptor.writable).toBe(false);
+  expect(tagDescriptor.enumerable).toBe(false);
+  expect(tagDescriptor.configurable).toBe(true);
+});

@@ -91,3 +91,20 @@ test("[Symbol.iterator] throws TypeError when called on non-Set", () => {
   expect(() => iter.call(Set.prototype)).toThrow(TypeError);
   expect(() => iter.call({})).toThrow(TypeError);
 });
+
+test("Set iterator prototype inherits from Iterator.prototype", () => {
+  const iteratorPrototype = Object.getPrototypeOf(
+    Object.getPrototypeOf([][Symbol.iterator]())
+  );
+  const setIteratorPrototype = Object.getPrototypeOf(new Set().values());
+  const tagDescriptor = Object.getOwnPropertyDescriptor(
+    setIteratorPrototype,
+    Symbol.toStringTag
+  );
+
+  expect(Object.getPrototypeOf(setIteratorPrototype)).toBe(iteratorPrototype);
+  expect(tagDescriptor.value).toBe("Set Iterator");
+  expect(tagDescriptor.writable).toBe(false);
+  expect(tagDescriptor.enumerable).toBe(false);
+  expect(tagDescriptor.configurable).toBe(true);
+});

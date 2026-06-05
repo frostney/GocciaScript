@@ -37,3 +37,20 @@ test("rest pattern with string destructuring", () => {
   expect(first).toBe("a");
   expect(rest).toEqual(["b", "c", "d"]);
 });
+
+test("String iterator prototype inherits from Iterator.prototype", () => {
+  const iteratorPrototype = Object.getPrototypeOf(
+    Object.getPrototypeOf([][Symbol.iterator]())
+  );
+  const stringIteratorPrototype = Object.getPrototypeOf(""[Symbol.iterator]());
+  const tagDescriptor = Object.getOwnPropertyDescriptor(
+    stringIteratorPrototype,
+    Symbol.toStringTag
+  );
+
+  expect(Object.getPrototypeOf(stringIteratorPrototype)).toBe(iteratorPrototype);
+  expect(tagDescriptor.value).toBe("String Iterator");
+  expect(tagDescriptor.writable).toBe(false);
+  expect(tagDescriptor.enumerable).toBe(false);
+  expect(tagDescriptor.configurable).toBe(true);
+});
