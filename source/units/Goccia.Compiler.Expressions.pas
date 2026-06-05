@@ -1349,6 +1349,8 @@ begin
       Slot := ACtx.Scope.GetLocal(LocalIdx).Slot;
       EmitUndefinedCheck(ACtx, Slot, JumpIdx);
       ACtx.CompileExpression(AParams[I].DefaultValue, Slot);
+      if ACtx.Scope.GetLocal(LocalIdx).IsCaptured then
+        EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, Slot, UInt16(Slot)));
       PatchJumpTarget(ACtx, JumpIdx);
       Continue;
     end;
@@ -1361,6 +1363,8 @@ begin
     EmitUndefinedCheck(ACtx, Slot, JumpIdx);
     CompileExpressionWithInferredName(ACtx, AParams[I].DefaultValue, Slot,
       AParams[I].Name);
+    if ACtx.Scope.GetLocal(LocalIdx).IsCaptured then
+      EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, Slot, UInt16(Slot)));
     PatchJumpTarget(ACtx, JumpIdx);
   end;
 end;

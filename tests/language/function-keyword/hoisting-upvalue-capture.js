@@ -33,6 +33,14 @@ test("hoisted function captures destructured with default", () => {
   expect(inner()).toBe(55);
 });
 
+test("default parameter function captures initialized parameter binding", () => {
+  function inner(value = () => value) {
+    return value() === value;
+  }
+
+  expect(inner()).toBe(true);
+});
+
 test("hoisted function captures class declaration", () => {
   function inner() { return new MyClass().value; }
   class MyClass {

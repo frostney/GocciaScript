@@ -6753,6 +6753,8 @@ var
   Prop: TGocciaDestructuringProperty;
   Line, Column: Integer;
   IsComputed: Boolean;
+  CanUseShorthand: Boolean;
+  NumericValue: Double;
   KeyExpression: TGocciaExpression;
 begin
   Line := Previous.Line;
@@ -6762,6 +6764,7 @@ begin
   while not Check(gttRightBrace) and not IsAtEnd do
   begin
     IsComputed := False;
+    CanUseShorthand := False;
     KeyExpression := nil;
 
     if Match(gttSpread) then
@@ -6785,6 +6788,7 @@ begin
       end
       else if Check(gttIdentifier) then
       begin
+        CanUseShorthand := True;
         Key := Advance.Lexeme;
       end
       else if Check(gttString) then
@@ -6793,7 +6797,8 @@ begin
       end
       else if Check(gttNumber) then
       begin
-        Key := Advance.Lexeme;
+        NumericValue := ConvertNumberLiteral(Advance.Lexeme);
+        Key := FormatDouble(NumericValue);
       end
       else
         raise TGocciaSyntaxError.Create('Expected property name in object pattern', Peek.Line, Peek.Column, FFileName, FSourceLines,
@@ -6813,6 +6818,11 @@ begin
       end
       else
       begin
+        if not CanUseShorthand then
+          raise TGocciaSyntaxError.Create(
+            'Object pattern shorthand requires an identifier property name',
+            Previous.Line, Previous.Column, FFileName, FSourceLines,
+            'Use "key: binding" for string, numeric, or computed keys');
         // Shorthand syntax: {name} means {name: name}
         Pattern := TGocciaIdentifierDestructuringPattern.Create(Key, Previous.Line, Previous.Column);
 
