@@ -256,12 +256,6 @@ function buildTestSource(
   const strictPrefix = opts.strictMode ? '"use strict";\n' : "";
   if (opts.kind === "negative_parse") return `${strictPrefix}${body}`;
   if (opts.kind === "negative_runtime") {
-    // For the error-class identification we prefer `e.constructor.name`
-    // (the spec-canonical path) but fall back to `e.name` because
-    // Goccia's native Error class hierarchy is missing
-    // `prototype.constructor` (#519) — caught Errors have
-    // `e.constructor === undefined` despite `e.name` being set
-    // correctly to "TypeError" / "ReferenceError" / etc.
     return `${strictPrefix}${harnessSource}
 try {
 ${body}
@@ -271,8 +265,6 @@ ${body}
   if (__gocciaT262_e && typeof __gocciaT262_e === "object") {
     if (__gocciaT262_e.constructor && __gocciaT262_e.constructor.name) {
       __gocciaT262_n = __gocciaT262_e.constructor.name;
-    } else if (typeof __gocciaT262_e.name === "string") {
-      __gocciaT262_n = __gocciaT262_e.name;
     }
   }
   print("Test262:NegativeTestError:" + __gocciaT262_n);

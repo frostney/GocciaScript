@@ -879,6 +879,11 @@ end;
 procedure TGocciaParser.ValidateIdentifierBinding(const AToken: TGocciaToken);
 begin
   ValidateIdentifierReference(AToken);
+  if (not EffectiveNonStrictModeEnabled) and
+     IsStrictModeReservedKeyword(AToken.Lexeme) then
+    raise TGocciaSyntaxError.Create(
+      'Strict mode code must not bind reserved word ''' + AToken.Lexeme + '''',
+      AToken.Line, AToken.Column, FFileName, FSourceLines);
 end;
 
 function TGocciaParser.ConsumeIdentifierBinding(
@@ -2931,6 +2936,8 @@ var
   IsAsync: Boolean;
   IsGenerator: Boolean;
   MethodFunction: TGocciaFunctionExpression;
+  GetterExpression: TGocciaGetterExpression;
+  SetterExpression: TGocciaSetterExpression;
   ComputedCount, SourceOrderCount: Integer;
   MemberStartLine, MemberStartColumn: Integer;
 begin
@@ -3044,29 +3051,73 @@ begin
     // Handle getter/setter syntax
     if IsGetter then
     begin
-      Getters.Add(Key, ParseGetterExpression);
-      Getters[Key].SourceText := ExtractSourceRange(MemberStartLine, MemberStartColumn);
+      GetterExpression := ParseGetterExpression;
+      GetterExpression.SourceText := ExtractSourceRange(MemberStartLine,
+        MemberStartColumn);
 
-      // Track in source order
-      Inc(SourceOrderCount);
-      SetLength(PropertySourceOrder, SourceOrderCount);
-      PropertySourceOrder[SourceOrderCount - 1].PropertyType := pstGetter;
-      PropertySourceOrder[SourceOrderCount - 1].StaticKey := Key;
-      PropertySourceOrder[SourceOrderCount - 1].ComputedIndex := -1;
-      PropertySourceOrder[SourceOrderCount - 1].Expression := nil;
+      if IsComputed then
+      begin
+        ComputedProperties.Add(KeyExpression, GetterExpression);
+
+        Inc(ComputedCount);
+        SetLength(ComputedPropertiesInOrder, ComputedCount);
+        ComputedPropertiesInOrder[ComputedCount - 1].Key := KeyExpression;
+        ComputedPropertiesInOrder[ComputedCount - 1].Value := GetterExpression;
+
+        Inc(SourceOrderCount);
+        SetLength(PropertySourceOrder, SourceOrderCount);
+        PropertySourceOrder[SourceOrderCount - 1].PropertyType := pstComputedGetter;
+        PropertySourceOrder[SourceOrderCount - 1].ComputedIndex := ComputedCount - 1;
+        PropertySourceOrder[SourceOrderCount - 1].StaticKey := '';
+        PropertySourceOrder[SourceOrderCount - 1].Expression := nil;
+      end
+      else
+      begin
+        Getters.Add(Key, GetterExpression);
+
+        // Track in source order
+        Inc(SourceOrderCount);
+        SetLength(PropertySourceOrder, SourceOrderCount);
+        PropertySourceOrder[SourceOrderCount - 1].PropertyType := pstGetter;
+        PropertySourceOrder[SourceOrderCount - 1].StaticKey := Key;
+        PropertySourceOrder[SourceOrderCount - 1].ComputedIndex := -1;
+        PropertySourceOrder[SourceOrderCount - 1].Expression := nil;
+      end;
     end
     else if IsSetter then
     begin
-      Setters.Add(Key, ParseSetterExpression);
-      Setters[Key].SourceText := ExtractSourceRange(MemberStartLine, MemberStartColumn);
+      SetterExpression := ParseSetterExpression;
+      SetterExpression.SourceText := ExtractSourceRange(MemberStartLine,
+        MemberStartColumn);
 
-      // Track in source order
-      Inc(SourceOrderCount);
-      SetLength(PropertySourceOrder, SourceOrderCount);
-      PropertySourceOrder[SourceOrderCount - 1].PropertyType := pstSetter;
-      PropertySourceOrder[SourceOrderCount - 1].StaticKey := Key;
-      PropertySourceOrder[SourceOrderCount - 1].ComputedIndex := -1;
-      PropertySourceOrder[SourceOrderCount - 1].Expression := nil;
+      if IsComputed then
+      begin
+        ComputedProperties.Add(KeyExpression, SetterExpression);
+
+        Inc(ComputedCount);
+        SetLength(ComputedPropertiesInOrder, ComputedCount);
+        ComputedPropertiesInOrder[ComputedCount - 1].Key := KeyExpression;
+        ComputedPropertiesInOrder[ComputedCount - 1].Value := SetterExpression;
+
+        Inc(SourceOrderCount);
+        SetLength(PropertySourceOrder, SourceOrderCount);
+        PropertySourceOrder[SourceOrderCount - 1].PropertyType := pstComputedSetter;
+        PropertySourceOrder[SourceOrderCount - 1].ComputedIndex := ComputedCount - 1;
+        PropertySourceOrder[SourceOrderCount - 1].StaticKey := '';
+        PropertySourceOrder[SourceOrderCount - 1].Expression := nil;
+      end
+      else
+      begin
+        Setters.Add(Key, SetterExpression);
+
+        // Track in source order
+        Inc(SourceOrderCount);
+        SetLength(PropertySourceOrder, SourceOrderCount);
+        PropertySourceOrder[SourceOrderCount - 1].PropertyType := pstSetter;
+        PropertySourceOrder[SourceOrderCount - 1].StaticKey := Key;
+        PropertySourceOrder[SourceOrderCount - 1].ComputedIndex := -1;
+        PropertySourceOrder[SourceOrderCount - 1].Expression := nil;
+      end;
     end
     // Check for method shorthand syntax: methodName() { ... } or [expr]() { ... }
     else if Check(gttLeftParen) then
@@ -3729,7 +3780,8 @@ begin
   // Disambiguate: 'using' followed by identifier is a declaration,
   // 'using(' or 'using.x' is an expression (function call / member access).
   else if CheckUnescapedIdentifierKeyword(KEYWORD_USING) and
-          CheckNext(gttIdentifier) then
+          CheckNext(gttIdentifier) and
+          (Peek.Line = FTokens[FCurrent + 1].Line) then
     Result := UsingStatement
   // TC39 Explicit Resource Management: await using x = expr;
   // Detect 'await using identifier' regardless of context, then validate.
@@ -3738,7 +3790,9 @@ begin
           (FTokens[FCurrent + 1].TokenType = gttIdentifier) and
           (FTokens[FCurrent + 1].Lexeme = KEYWORD_USING) and
           not FTokens[FCurrent + 1].ContainsEscape and
-          (FTokens[FCurrent + 2].TokenType = gttIdentifier) then
+          (FTokens[FCurrent + 2].TokenType = gttIdentifier) and
+          (Peek.Line = FTokens[FCurrent + 1].Line) and
+          (FTokens[FCurrent + 1].Line = FTokens[FCurrent + 2].Line) then
   begin
     // Reject await using in synchronous function bodies
     if (FInAsyncFunction = 0) and (FFunctionDepth > 0) then
@@ -4259,6 +4313,14 @@ var
   Pattern: TGocciaDestructuringPattern;
   DestructuringType: string;
   DestructuringDecl: TGocciaDestructuringDeclaration;
+
+  function ConsumeVarBindingName: TGocciaToken;
+  begin
+    if Check(gttLet) and EffectiveNonStrictModeEnabled then
+      Exit(Advance);
+    Result := ConsumeIdentifierBinding('Expected variable name',
+      SSuggestProvideVariableName);
+  end;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
@@ -4299,8 +4361,7 @@ begin
     repeat
       SetLength(Variables, VariableCount + 1);
 
-      Name := ConsumeIdentifierBinding('Expected variable name',
-        SSuggestProvideVariableName).Lexeme;
+      Name := ConsumeVarBindingName.Lexeme;
       Variables[VariableCount].Name := Name;
 
       if Check(gttColon) then
@@ -4371,6 +4432,100 @@ begin
   begin
     Advance; // consume '('
     AfterLeftParen := FCurrent;
+
+    // `for (await using x of iterable)` is a synchronous for-of loop whose
+    // per-iteration binding uses the async-dispose hint. This is distinct from
+    // `for await (...)`, where `await` appears before the opening paren.
+    if CheckUnescapedIdentifierKeyword(KEYWORD_AWAIT) and
+       (FCurrent + 2 < FTokens.Count) and
+       (FTokens[FCurrent + 1].TokenType = gttIdentifier) and
+       (FTokens[FCurrent + 1].Lexeme = KEYWORD_USING) and
+       not FTokens[FCurrent + 1].ContainsEscape and
+       (FTokens[FCurrent + 2].TokenType = gttIdentifier) and
+       (Peek.Line = FTokens[FCurrent + 1].Line) and
+       (FTokens[FCurrent + 1].Line = FTokens[FCurrent + 2].Line) then
+    begin
+      if (FInAsyncFunction = 0) and (FFunctionDepth > 0) then
+        raise TGocciaSyntaxError.Create(
+          '''await using'' is only valid in async functions or at the top level',
+          Peek.Line, Peek.Column, FFileName, FSourceLines,
+          'Wrap in an async function or use ''using'' for synchronous disposal');
+
+      Advance; // consume 'await'
+      Advance; // consume 'using'
+      Token := Advance;
+      ValidateIdentifierBinding(Token);
+      BindingName := Token.Lexeme;
+
+      if Check(gttIn) then
+        raise TGocciaSyntaxError.Create(
+          '''await using'' declarations are not valid in for...in loop heads',
+          Line, Column, FFileName, FSourceLines,
+          'Use ''for (await using x of iterable)'' for per-iteration disposal');
+
+      if CheckEscapedIdentifierKeyword(KEYWORD_OF) then
+        raise TGocciaSyntaxError.Create(
+          'Keyword must not contain escaped characters',
+          Peek.Line, Peek.Column, FFileName, FSourceLines);
+
+      if CheckContextualKeyword(KEYWORD_OF) then
+      begin
+        Advance; // consume 'of'
+
+        IterableExpr := Assignment;
+        Consume(gttRightParen, 'Expected ")" after for...of expression',
+          SSuggestCloseParenForOf);
+
+        BodyStmt := IterationBodyStatement;
+        Result := TGocciaForOfStatement.Create(True, BindingName, nil,
+          IterableExpr, BodyStmt, Line, Column, nil, nil, True, True);
+        Exit;
+      end;
+
+      FCurrent := AfterLeftParen;
+      BindingName := '';
+    end;
+
+    // `for (using x of iterable)` is a loop-head using declaration, but
+    // `for (using of iterable)` keeps `using` as the assignment target.
+    if CheckUnescapedIdentifierKeyword(KEYWORD_USING) and
+       CheckNext(gttIdentifier) and
+       (Peek.Line = FTokens[FCurrent + 1].Line) and
+       (FTokens[FCurrent + 1].Lexeme <> KEYWORD_OF) then
+    begin
+      Advance; // consume 'using'
+      Token := Advance;
+      ValidateIdentifierBinding(Token);
+      BindingName := Token.Lexeme;
+
+      if Check(gttIn) then
+        raise TGocciaSyntaxError.Create(
+          '''using'' declarations are not valid in for...in loop heads',
+          Line, Column, FFileName, FSourceLines,
+          'Use ''for (using x of iterable)'' for per-iteration disposal');
+
+      if CheckEscapedIdentifierKeyword(KEYWORD_OF) then
+        raise TGocciaSyntaxError.Create(
+          'Keyword must not contain escaped characters',
+          Peek.Line, Peek.Column, FFileName, FSourceLines);
+
+      if CheckContextualKeyword(KEYWORD_OF) then
+      begin
+        Advance; // consume 'of'
+
+        IterableExpr := Assignment;
+        Consume(gttRightParen, 'Expected ")" after for...of expression',
+          SSuggestCloseParenForOf);
+
+        BodyStmt := IterationBodyStatement;
+        Result := TGocciaForOfStatement.Create(True, BindingName, nil,
+          IterableExpr, BodyStmt, Line, Column, nil, nil, True, False);
+        Exit;
+      end;
+
+      FCurrent := AfterLeftParen;
+      BindingName := '';
+    end;
 
     // Check for const/let/var binding
     if Check(gttConst) or Check(gttLet) or (FVarDeclarationsEnabled and Check(gttVar)) then
@@ -4526,6 +4681,29 @@ begin
         BodyStmt := IterationBodyStatement;
         Result := TGocciaForInStatement.Create(False, '', nil,
           IterableExpr, BodyStmt, Line, Column, AssignmentTarget);
+        Exit;
+      end;
+
+      if CheckEscapedIdentifierKeyword(KEYWORD_OF) then
+        raise TGocciaSyntaxError.Create(
+          'Keyword must not contain escaped characters',
+          Peek.Line, Peek.Column, FFileName, FSourceLines);
+
+      if CheckContextualKeyword(KEYWORD_OF) then
+      begin
+        AssignmentTarget := ConvertToPattern(TargetExpr);
+        Advance; // consume 'of'
+        IterableExpr := Assignment;
+        Consume(gttRightParen, 'Expected ")" after for...of expression',
+          SSuggestCloseParenForOf);
+
+        BodyStmt := IterationBodyStatement;
+        if IsAwait then
+          Result := TGocciaForAwaitOfStatement.Create(False, '', nil,
+            IterableExpr, BodyStmt, Line, Column, nil, AssignmentTarget)
+        else
+          Result := TGocciaForOfStatement.Create(False, '', nil,
+            IterableExpr, BodyStmt, Line, Column, nil, AssignmentTarget);
         Exit;
       end;
     end;
@@ -4690,6 +4868,28 @@ begin
       Peek.Line, Peek.Column);
     SkipUntilSemicolon;
     InitStmt := nil;
+  end
+  else if CheckUnescapedIdentifierKeyword(KEYWORD_AWAIT) and
+          (FCurrent + 2 < FTokens.Count) and
+          (FTokens[FCurrent + 1].TokenType = gttIdentifier) and
+          (FTokens[FCurrent + 1].Lexeme = KEYWORD_USING) and
+          not FTokens[FCurrent + 1].ContainsEscape and
+          (FTokens[FCurrent + 2].TokenType = gttIdentifier) and
+          (Peek.Line = FTokens[FCurrent + 1].Line) and
+          (FTokens[FCurrent + 1].Line = FTokens[FCurrent + 2].Line) then
+  begin
+    if (FInAsyncFunction = 0) and (FFunctionDepth > 0) then
+      raise TGocciaSyntaxError.Create(
+        '''await using'' is only valid in async functions or at the top level',
+        Peek.Line, Peek.Column, FFileName, FSourceLines,
+        'Wrap in an async function or use ''using'' for synchronous disposal');
+    InitStmt := UsingStatement;
+  end
+  else if CheckUnescapedIdentifierKeyword(KEYWORD_USING) and
+          CheckNext(gttIdentifier) and
+          (Peek.Line = FTokens[FCurrent + 1].Line) then
+  begin
+    InitStmt := UsingStatement;
   end
   else
   begin

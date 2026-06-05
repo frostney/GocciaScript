@@ -310,7 +310,9 @@ type
     pstStatic,    // Regular property: {key: value}
     pstComputed,  // Computed property: {[expr]: value}
     pstGetter,    // Getter: {get prop() {}}
-    pstSetter     // Setter: {set prop(val) {}}
+    pstSetter,    // Setter: {set prop(val) {}}
+    pstComputedGetter, // Getter: {get [expr]() {}}
+    pstComputedSetter  // Setter: {set [expr](val) {}}
   );
 
   TGocciaPropertySourceOrder = record

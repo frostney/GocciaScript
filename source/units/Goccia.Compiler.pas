@@ -699,7 +699,6 @@ function TGocciaCompiler.Compile(
   const AProgram: TGocciaProgram): TGocciaBytecodeModule;
 var
   I: Integer;
-  LastStmt: TGocciaStatement;
   RetReg: UInt8;
   Ctx: TGocciaCompilationContext;
   HasFunctionDecl, BodyAbrupt, StatementAbrupt: Boolean;
@@ -744,57 +743,38 @@ begin
           DoCompileStatement(AProgram.Body[I]);
     end;
 
-    if AProgram.Body.Count > 0 then
-    begin
-      BodyAbrupt := False;
-      for I := 0 to AProgram.Body.Count - 2 do
-      begin
-        // Skip function declarations — already compiled during hoisting
-        if GetFunctionDecl(AProgram.Body[I]) <> nil then
-          Continue;
-        StatementAbrupt := DoCompileStatement(AProgram.Body[I]);
-        if FOptimizationOptions.EnableDeadBranchElimination and
-           not FOptimizationOptions.PreserveCoverageShape and
-           StatementAbrupt then
-        begin
-          BodyAbrupt := True;
-          Break;
-        end;
-      end;
+    RetReg := FCurrentScope.AllocateRegister;
+    Ctx := BuildContext;
+    EmitInstruction(Ctx, EncodeABC(OP_LOAD_UNDEFINED, RetReg, 0, 0));
+    BodyAbrupt := False;
 
-      LastStmt := AProgram.Body[AProgram.Body.Count - 1];
-      // Function declarations already compiled during hoisting — just emit return undefined
-      if BodyAbrupt then
+    for I := 0 to AProgram.Body.Count - 1 do
+    begin
+      // Skip function declarations — already compiled during hoisting.
+      if GetFunctionDecl(AProgram.Body[I]) <> nil then
+        Continue;
+
+      if AProgram.Body[I] is TGocciaExpressionStatement then
       begin
-        EmitInstruction(BuildContext, EncodeABC(OP_LOAD_UNDEFINED, 0, 0, 0));
-        EmitInstruction(BuildContext, EncodeABC(OP_RETURN, 0, 0, 0));
-      end
-      else if GetFunctionDecl(LastStmt) <> nil then
-      begin
-        EmitInstruction(BuildContext, EncodeABC(OP_LOAD_UNDEFINED, 0, 0, 0));
-        EmitInstruction(BuildContext, EncodeABC(OP_RETURN, 0, 0, 0));
-      end
-      else if LastStmt is TGocciaExpressionStatement then
-      begin
-        RetReg := FCurrentScope.AllocateRegister;
-        Ctx := BuildContext;
-        EmitLineMapping(Ctx, LastStmt.Line, LastStmt.Column);
-        DoCompileExpression(TGocciaExpressionStatement(LastStmt).Expression, RetReg);
-        EmitInstruction(Ctx, EncodeABC(OP_RETURN, RetReg, 0, 0));
-        FCurrentScope.FreeRegister;
+        EmitLineMapping(Ctx, AProgram.Body[I].Line, AProgram.Body[I].Column);
+        DoCompileExpression(
+          TGocciaExpressionStatement(AProgram.Body[I]).Expression, RetReg);
+        StatementAbrupt := False;
       end
       else
+        StatementAbrupt := DoCompileStatement(AProgram.Body[I]);
+
+      if FOptimizationOptions.EnableDeadBranchElimination and
+         not FOptimizationOptions.PreserveCoverageShape and
+         StatementAbrupt then
       begin
-        DoCompileStatement(LastStmt);
-        EmitInstruction(BuildContext, EncodeABC(OP_LOAD_UNDEFINED, 0, 0, 0));
-        EmitInstruction(BuildContext, EncodeABC(OP_RETURN, 0, 0, 0));
+        BodyAbrupt := True;
+        Break;
       end;
-    end
-    else
-    begin
-      EmitInstruction(BuildContext, EncodeABC(OP_LOAD_UNDEFINED, 0, 0, 0));
-      EmitInstruction(BuildContext, EncodeABC(OP_RETURN, 0, 0, 0));
     end;
+
+    EmitInstruction(Ctx, EncodeABC(OP_RETURN, RetReg, 0, 0));
+    FCurrentScope.FreeRegister;
 
     FCurrentTemplate.MaxRegisters := FCurrentScope.MaxSlot;
     FModule.TopLevel := FCurrentTemplate;

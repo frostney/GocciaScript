@@ -13,7 +13,9 @@ type
   TGocciaDisposableResource = record
     ResourceValue: TGocciaValue;
     DisposeMethod: TGocciaValue;
+    DisposeArgument: TGocciaValue;
     Hint: TGocciaDisposalHint;
+    HasDisposeArgument: Boolean;
   end;
 
   { Tracks disposable resources for a block scope. Resources are disposed in
@@ -31,6 +33,9 @@ type
     { TC39 Explicit Resource Management §3.5 AddDisposableResource }
     procedure AddResource(const AValue, ADisposeMethod: TGocciaValue;
       const AHint: TGocciaDisposalHint);
+    procedure AddResourceWithArgument(const AValue, ADisposeMethod,
+      ADisposeArgument: TGocciaValue; const AHint: TGocciaDisposalHint);
+    procedure MoveResourcesFrom(const ASource: TGocciaDisposalTracker);
 
     function GetResource(const AIndex: Integer): TGocciaDisposableResource;
     property Count: Integer read FCount;
@@ -89,6 +94,9 @@ begin
         GC.RemoveTempRoot(FResources[I].ResourceValue);
       if Assigned(FResources[I].DisposeMethod) then
         GC.RemoveTempRoot(FResources[I].DisposeMethod);
+      if FResources[I].HasDisposeArgument and
+         Assigned(FResources[I].DisposeArgument) then
+        GC.RemoveTempRoot(FResources[I].DisposeArgument);
     end;
   end;
   inherited;
@@ -97,13 +105,21 @@ end;
 // TC39 Explicit Resource Management §3.5 AddDisposableResource(disposeCapability, V, hint [, method])
 procedure TGocciaDisposalTracker.AddResource(const AValue, ADisposeMethod: TGocciaValue;
   const AHint: TGocciaDisposalHint);
+begin
+  AddResourceWithArgument(AValue, ADisposeMethod, nil, AHint);
+end;
+
+procedure TGocciaDisposalTracker.AddResourceWithArgument(const AValue, ADisposeMethod,
+  ADisposeArgument: TGocciaValue; const AHint: TGocciaDisposalHint);
 var
   GC: TGarbageCollector;
 begin
   SetLength(FResources, FCount + 1);
   FResources[FCount].ResourceValue := AValue;
   FResources[FCount].DisposeMethod := ADisposeMethod;
+  FResources[FCount].DisposeArgument := ADisposeArgument;
   FResources[FCount].Hint := AHint;
+  FResources[FCount].HasDisposeArgument := Assigned(ADisposeArgument);
   Inc(FCount);
 
   // Root tracked values so the GC cannot collect them before disposal
@@ -114,7 +130,27 @@ begin
       GC.AddTempRoot(AValue);
     if Assigned(ADisposeMethod) then
       GC.AddTempRoot(ADisposeMethod);
+    if Assigned(ADisposeArgument) then
+      GC.AddTempRoot(ADisposeArgument);
   end;
+end;
+
+procedure TGocciaDisposalTracker.MoveResourcesFrom(
+  const ASource: TGocciaDisposalTracker);
+var
+  BaseIndex, I: Integer;
+begin
+  if not Assigned(ASource) or (ASource.FCount = 0) then
+    Exit;
+
+  BaseIndex := FCount;
+  SetLength(FResources, FCount + ASource.FCount);
+  for I := 0 to ASource.FCount - 1 do
+    FResources[BaseIndex + I] := ASource.FResources[I];
+  Inc(FCount, ASource.FCount);
+
+  SetLength(ASource.FResources, 0);
+  ASource.FCount := 0;
 end;
 
 function TGocciaDisposalTracker.GetResource(const AIndex: Integer): TGocciaDisposableResource;
@@ -179,7 +215,9 @@ begin
     // Step 1: Try @@asyncDispose first
     Method := TGocciaObjectValue(AValue).GetSymbolProperty(
       TGocciaSymbolValue.WellKnownAsyncDispose);
-    if Assigned(Method) and not (Method is TGocciaUndefinedLiteralValue) then
+    if Assigned(Method) and
+       not (Method is TGocciaUndefinedLiteralValue) and
+       not (Method is TGocciaNullLiteralValue) then
     begin
       if not Method.IsCallable then
         ThrowTypeError(Format(SErrorDisposePropertyNotFunction, ['asyncDispose']), SSuggestDisposable);
@@ -190,7 +228,9 @@ begin
     // Step 2: Fall back to @@dispose for async-dispose hint
     Method := TGocciaObjectValue(AValue).GetSymbolProperty(
       TGocciaSymbolValue.WellKnownDispose);
-    if Assigned(Method) and not (Method is TGocciaUndefinedLiteralValue) then
+    if Assigned(Method) and
+       not (Method is TGocciaUndefinedLiteralValue) and
+       not (Method is TGocciaNullLiteralValue) then
     begin
       if not Method.IsCallable then
         ThrowTypeError(Format(SErrorDisposePropertyNotFunction, ['dispose']), SSuggestDisposable);
@@ -205,7 +245,9 @@ begin
     // Sync dispose: just check @@dispose
     Method := TGocciaObjectValue(AValue).GetSymbolProperty(
       TGocciaSymbolValue.WellKnownDispose);
-    if Assigned(Method) and not (Method is TGocciaUndefinedLiteralValue) then
+    if Assigned(Method) and
+       not (Method is TGocciaUndefinedLiteralValue) and
+       not (Method is TGocciaNullLiteralValue) then
     begin
       if not Method.IsCallable then
         ThrowTypeError(Format(SErrorDisposePropertyNotFunction, ['dispose']), SSuggestDisposable);

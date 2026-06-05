@@ -24,6 +24,7 @@ type
     DeclarationType: TGocciaDeclarationType;
     Initialized: Boolean;
     BuiltIn: Boolean;
+    CanDelete: Boolean;
     { Strict-types annotation enforced on every assignment.  Default
       sltUntyped means no enforcement (typical untyped binding). }
     TypeHint: TGocciaLocalType;

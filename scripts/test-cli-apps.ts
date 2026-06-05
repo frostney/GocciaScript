@@ -613,27 +613,131 @@ console.log("Bare Loader: bytecode top-level declarations back globalThis...");
 console.log("Bare Loader: test262 host marker is hidden by default...");
 {
   const proc = Bun.spawnSync([BARE], {
-    stdin: new TextEncoder().encode("print(typeof Goccia.test262Host);\n"),
+    stdin: new TextEncoder().encode("print(typeof Goccia.test262Host); print(typeof Goccia.test262);\n"),
     stdout: "pipe",
     stderr: "pipe",
   });
   if (proc.exitCode !== 0)
     throw new Error(`Bare default test262 marker probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
-  if (proc.stdout.toString().trim() !== "undefined")
-    throw new Error(`Bare default should hide test262 marker, got: ${proc.stdout.toString()}`);
+  if (proc.stdout.toString().trim() !== "undefined\nundefined")
+    throw new Error(`Bare default should hide test262 host hooks, got: ${proc.stdout.toString()}`);
 }
 
-console.log("Bare Loader: --test262-host exposes Goccia test262 marker...");
+console.log("Bare Loader: --test262-host exposes Goccia test262 hooks...");
 {
   const proc = Bun.spawnSync([BARE, "--test262-host"], {
-    stdin: new TextEncoder().encode("print(Goccia.test262Host);\n"),
+    stdin: new TextEncoder().encode([
+      "print(Goccia.test262Host);",
+      "print(typeof Goccia.test262);",
+      "print(typeof Goccia.test262.createRealm);",
+      "print(typeof Goccia.test262.evalScript);",
+      "const realm = Goccia.test262.createRealm();",
+      "print(realm.global.Object !== Object);",
+      "print(typeof realm.global.eval);",
+      "print(realm.global.eval('1 + 2'));",
+      "",
+    ].join("\n")),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const expected = "true\nobject\nfunction\nfunction\ntrue\nfunction\n3";
+  if (proc.exitCode !== 0)
+    throw new Error(`Bare --test262-host hook probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (proc.stdout.toString().trim() !== expected)
+    throw new Error(`Bare --test262-host should expose realm hooks, got: ${proc.stdout.toString()}`);
+}
+
+console.log("Bare Loader: --test262-host child realms expose host records...");
+{
+  const proc = Bun.spawnSync([BARE, "--test262-host"], {
+    stdin: new TextEncoder().encode([
+      "const child = Goccia.test262.createRealm();",
+      "print(typeof child.evalScript);",
+      "print(typeof child.createRealm);",
+      "child.evalScript('globalThis.childRealmValue = 42;');",
+      "print(child.global.childRealmValue);",
+      "print(typeof globalThis.childRealmValue);",
+      "const grandchild = child.createRealm();",
+      "print(typeof grandchild.evalScript);",
+      "print(typeof grandchild.createRealm);",
+      "print(grandchild.global.Object !== child.global.Object);",
+      "print(grandchild.global.Object !== Object);",
+      "grandchild.evalScript('globalThis.grandchildRealmValue = 43;');",
+      "print(grandchild.global.grandchildRealmValue);",
+      "print(typeof child.global.grandchildRealmValue);",
+      "",
+    ].join("\n")),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const expected = [
+    "function",
+    "function",
+    "42",
+    "undefined",
+    "function",
+    "function",
+    "true",
+    "true",
+    "43",
+    "undefined",
+  ].join("\n");
+  if (proc.exitCode !== 0)
+    throw new Error(`Bare --test262-host child realm probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (proc.stdout.toString().trim() !== expected)
+    throw new Error(`Bare --test262-host child realm hooks got: ${proc.stdout.toString()}`);
+}
+
+console.log("Bare Loader: bytecode --test262-host eval is direct eval...");
+{
+  const proc = Bun.spawnSync([BARE, "--test262-host", "--mode=bytecode"], {
+    stdin: new TextEncoder().encode([
+      "{",
+      "  let x = 41;",
+      "  print(eval('x + 1'));",
+      "  eval('x = 7');",
+      "  print(x);",
+      "  const shadow = () => { const eval = (source) => 'shadow:' + source; return eval('x'); };",
+      "  print(shadow());",
+      "}",
+      "{",
+      "  let y = 3;",
+      "  const f = () => eval('y + 4');",
+      "  print(f());",
+      "}",
+      "",
+    ].join("\n")),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const expected = "42\n7\nshadow:x\n7";
+  if (proc.exitCode !== 0)
+    throw new Error(`Bare bytecode direct eval probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (proc.stdout.toString().trim() !== expected)
+    throw new Error(`Bare bytecode direct eval got: ${proc.stdout.toString()}`);
+}
+
+console.log("Bare Loader: bytecode direct eval creates top-level sloppy var...");
+{
+  const proc = Bun.spawnSync([
+    BARE,
+    "--test262-host",
+    "--mode=bytecode",
+    "--compat-var",
+    "--compat-non-strict-mode",
+  ], {
+    stdin: new TextEncoder().encode([
+      "eval('var t262EvalGlobal = 33');",
+      "print(t262EvalGlobal);",
+      "",
+    ].join("\n")),
     stdout: "pipe",
     stderr: "pipe",
   });
   if (proc.exitCode !== 0)
-    throw new Error(`Bare --test262-host marker probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
-  if (proc.stdout.toString().trim() !== "true")
-    throw new Error(`Bare --test262-host should expose true marker, got: ${proc.stdout.toString()}`);
+    throw new Error(`Bare bytecode sloppy direct eval var probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (proc.stdout.toString().trim() !== "33")
+    throw new Error(`Bare bytecode sloppy direct eval var got: ${proc.stdout.toString()}`);
 }
 
 console.log("Bare Loader: --mode default is interpreted...");

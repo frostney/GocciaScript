@@ -382,14 +382,15 @@ begin
     KeyValue := ToPropertyKey(AArgs.GetElement(1));
     if KeyValue is TGocciaSymbolValue then
     begin
-      if not (ClassObj.GetSymbolProperty(TGocciaSymbolValue(KeyValue)) is TGocciaUndefinedLiteralValue) then
+      if Assigned(ClassObj.GetOwnSymbolPropertyDescriptor(
+        TGocciaSymbolValue(KeyValue))) then
         Result := TGocciaBooleanLiteralValue.TrueValue
       else
         Result := TGocciaBooleanLiteralValue.FalseValue;
     end
     else
     begin
-      if not (ClassObj.GetProperty(TGocciaStringLiteralValue(KeyValue).Value) is TGocciaUndefinedLiteralValue) then
+      if ClassObj.HasOwnProperty(TGocciaStringLiteralValue(KeyValue).Value) then
         Result := TGocciaBooleanLiteralValue.TrueValue
       else
         Result := TGocciaBooleanLiteralValue.FalseValue;
