@@ -1,6 +1,6 @@
 /*---
 description: String.prototype.matchAll with regex arguments
-features: [String.prototype.matchAll]
+features: [String.prototype.matchAll, Iterator]
 ---*/
 
 test("matchAll returns an iterator of match arrays", () => {
