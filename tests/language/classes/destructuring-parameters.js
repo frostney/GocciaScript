@@ -44,4 +44,21 @@ describe("class method destructuring parameters", () => {
 
     expect(new Calculator().count([10, 20, 30, 40])).toBe(13);
   });
+
+  test("synthetic pattern parameter locals do not shadow source parameters", () => {
+    class Calculator {
+      beforePattern(__param1, [value]) {
+        return __param1 + value;
+      }
+
+      afterPattern([value], __param0) {
+        return value + __param0;
+      }
+    }
+
+    const calculator = new Calculator();
+
+    expect(calculator.beforePattern(3, [4])).toBe(7);
+    expect(calculator.afterPattern([5], 6)).toBe(11);
+  });
 });

@@ -3748,7 +3748,7 @@ begin
         RestParamIndex := I;
     end;
     if AMethod.Parameters[I].IsPattern then
-      ChildScope.DeclareLocal('__param' + IntToStr(I), False)
+      ChildScope.DeclareLocal(SyntheticParamLocalName(I), False)
     else
       ChildScope.DeclareLocal(AMethod.Parameters[I].Name, False);
   end;
@@ -4108,7 +4108,7 @@ begin
         RestParamIndex := I;
     end;
     if AMethod.Parameters[I].IsPattern then
-      ChildScope.DeclareLocal('__param' + IntToStr(I), False)
+      ChildScope.DeclareLocal(SyntheticParamLocalName(I), False)
     else
       ChildScope.DeclareLocal(AMethod.Parameters[I].Name, False);
   end;
