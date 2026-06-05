@@ -38,6 +38,7 @@ type
     function IteratorZipKeyed(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
     class procedure EnsurePrototypeInitialized;
+    class function SharedPrototype: TGocciaObjectValue; static;
     procedure InitializePrototype;
   protected
     FDone: Boolean;
@@ -225,6 +226,12 @@ class procedure TGocciaIteratorValue.EnsurePrototypeInitialized;
 begin
   if Assigned(GetSharedIteratorPrototype) then Exit;
   TGocciaIteratorValue.Create;
+end;
+
+class function TGocciaIteratorValue.SharedPrototype: TGocciaObjectValue;
+begin
+  EnsurePrototypeInitialized;
+  Result := GetSharedIteratorPrototype;
 end;
 
 class function TGocciaIteratorValue.EnsureConcreteIteratorPrototype(

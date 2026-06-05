@@ -10,6 +10,7 @@ uses
 
   Goccia.AST.Expressions,
   Goccia.AST.Node,
+  Goccia.Constants,
   Goccia.SourceMap;
 
 type
@@ -117,13 +118,16 @@ type
       AFileName: string; const AOptions: TGocciaSourcePipelineOptions;
       const ADeclaredPrivateNames: TStrings = nil): TGocciaExpression; static;
     class function ParseFunctionParameters(const AParametersSource,
-      AFileName: string; const AOptions: TGocciaSourcePipelineOptions): Boolean; static;
+      AFileName: string; const AOptions: TGocciaSourcePipelineOptions;
+      const AKind: TGocciaDynamicFunctionKind = dfkNormal): Boolean; static;
     class function ParseFunctionBodyWrapper(const ABodySource,
       AFileName: string;
-      const AOptions: TGocciaSourcePipelineOptions): TGocciaFunctionBodyParseResult; static;
+      const AOptions: TGocciaSourcePipelineOptions;
+      const AKind: TGocciaDynamicFunctionKind = dfkNormal): TGocciaFunctionBodyParseResult; static;
     class function ParseDynamicFunctionWrapper(const AParametersSource,
       ABodySource, AFileName: string;
-      const AOptions: TGocciaSourcePipelineOptions): TGocciaProgram; static;
+      const AOptions: TGocciaSourcePipelineOptions;
+      const AKind: TGocciaDynamicFunctionKind = dfkNormal): TGocciaProgram; static;
   end;
 
 implementation
@@ -211,6 +215,25 @@ begin
   if Result then
     AArrowFunction := TGocciaArrowFunctionExpression(
       ExpressionStatement.Expression);
+end;
+
+function DynamicFunctionWrapperSource(const AParametersSource,
+  ABodySource: string; const AKind: TGocciaDynamicFunctionKind): string;
+var
+  Prefix: string;
+begin
+  case AKind of
+    dfkGenerator:
+      Prefix := 'function*';
+    dfkAsync:
+      Prefix := 'async function';
+    dfkAsyncGenerator:
+      Prefix := 'async function*';
+  else
+    Prefix := 'function';
+  end;
+  Result := '(' + Prefix + ' anonymous(' + AParametersSource + ') {' + #10 +
+    ABodySource + #10 + '})';
 end;
 
 { TGocciaSourcePipelineOptionsScope }
@@ -508,19 +531,23 @@ end;
 
 class function TGocciaSourcePipeline.ParseFunctionParameters(
   const AParametersSource, AFileName: string;
-  const AOptions: TGocciaSourcePipelineOptions): Boolean;
+  const AOptions: TGocciaSourcePipelineOptions;
+  const AKind: TGocciaDynamicFunctionKind): Boolean;
 var
-  ArrowFunction: TGocciaArrowFunctionExpression;
   PipelineResult: TGocciaSourcePipelineResult;
   Source: TStringList;
 begin
   Source := TStringList.Create;
   try
-    Source.Text := '(' + AParametersSource + ') => {}';
+    Source.Text := DynamicFunctionWrapperSource(AParametersSource, '', AKind);
     PipelineResult := Parse(Source, AFileName, AOptions);
     try
-      Result := HasSingleArrowFunctionProgram(PipelineResult.ProgramNode,
-        ArrowFunction);
+      Result := Assigned(PipelineResult.ProgramNode) and
+        (PipelineResult.ProgramNode.Body.Count = 1) and
+        (PipelineResult.ProgramNode.Body[0] is TGocciaExpressionStatement) and
+        (TGocciaExpressionStatement(
+          PipelineResult.ProgramNode.Body[0]).Expression is
+          TGocciaFunctionExpression);
     finally
       PipelineResult.Free;
     end;
@@ -531,9 +558,11 @@ end;
 
 class function TGocciaSourcePipeline.ParseFunctionBodyWrapper(
   const ABodySource, AFileName: string;
-  const AOptions: TGocciaSourcePipelineOptions): TGocciaFunctionBodyParseResult;
+  const AOptions: TGocciaSourcePipelineOptions;
+  const AKind: TGocciaDynamicFunctionKind): TGocciaFunctionBodyParseResult;
 var
-  ArrowFunction: TGocciaArrowFunctionExpression;
+  ExpressionStatement: TGocciaExpressionStatement;
+  FunctionExpression: TGocciaFunctionExpression;
   PipelineResult: TGocciaSourcePipelineResult;
   Source: TStringList;
 begin
@@ -541,14 +570,24 @@ begin
   Result.HasUseStrictDirective := False;
   Source := TStringList.Create;
   try
-    Source.Text := '() => {' + #10 + ABodySource + #10 + '}';
+    Source.Text := DynamicFunctionWrapperSource('', ABodySource, AKind);
     PipelineResult := Parse(Source, AFileName, AOptions);
     try
-      Result.IsValid := HasSingleArrowFunctionProgram(PipelineResult.ProgramNode,
-        ArrowFunction);
+      FunctionExpression := nil;
+      if Assigned(PipelineResult.ProgramNode) and
+         (PipelineResult.ProgramNode.Body.Count = 1) and
+         (PipelineResult.ProgramNode.Body[0] is TGocciaExpressionStatement) then
+      begin
+        ExpressionStatement := TGocciaExpressionStatement(
+          PipelineResult.ProgramNode.Body[0]);
+        if ExpressionStatement.Expression is TGocciaFunctionExpression then
+          FunctionExpression := TGocciaFunctionExpression(
+            ExpressionStatement.Expression);
+      end;
+      Result.IsValid := Assigned(FunctionExpression);
       if Result.IsValid then
         Result.HasUseStrictDirective := HasUseStrictDirective(
-          ArrowFunction.Body);
+          FunctionExpression.Body);
     finally
       PipelineResult.Free;
     end;
@@ -559,7 +598,8 @@ end;
 
 class function TGocciaSourcePipeline.ParseDynamicFunctionWrapper(
   const AParametersSource, ABodySource, AFileName: string;
-  const AOptions: TGocciaSourcePipelineOptions): TGocciaProgram;
+  const AOptions: TGocciaSourcePipelineOptions;
+  const AKind: TGocciaDynamicFunctionKind): TGocciaProgram;
 var
   Lexer: TGocciaLexer;
   Parser: TGocciaParser;
@@ -568,8 +608,7 @@ var
   SourceMap: TGocciaSourceMap;
   OrigLine, OrigCol: Integer;
 begin
-  Source := '({ anonymous(' + AParametersSource + ') {' + #10 + ABodySource +
-    #10 + '} }).anonymous';
+  Source := DynamicFunctionWrapperSource(AParametersSource, ABodySource, AKind);
 
   OriginalSourceLines := CreateECMAScriptSourceLines(Source);
   try

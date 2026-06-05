@@ -15,6 +15,7 @@ uses
   Goccia.Evaluator.Context,
   Goccia.ExecutionContext,
   Goccia.GarbageCollector,
+  Goccia.Intrinsics.FunctionObjects,
   Goccia.Modules,
   Goccia.Realm,
   Goccia.Scope,
@@ -138,7 +139,7 @@ type
     procedure SetRegisterFast(const AIndex: Integer; const AValue: TGocciaValue); inline;
     procedure SetRegisterRaw(const AIndex: Integer; const AValue: TGocciaRegister); inline;
     procedure InstallFunctionPrototype(const AFunction: TGocciaObjectValue;
-      const AIsGenerator: Boolean);
+      const AKind: TGocciaFunctionObjectIntrinsicKind);
     function GetLocal(const AIndex: Integer): TGocciaValue; inline;
     function GetLocalFast(const AIndex: Integer): TGocciaValue; inline;
     procedure SetLocal(const AIndex: Integer; const AValue: TGocciaValue); inline;
@@ -376,6 +377,57 @@ const
   FOR_IN_ENTRY_OWNER = '__gocciaForInOwner';
   FOR_IN_ENTRY_KEY = '__gocciaForInKey';
   FOR_IN_MAX_PROTOTYPE_CHAIN_DEPTH = 256;
+
+function BytecodeFunctionIntrinsicKind(const ATemplate: TGocciaFunctionTemplate):
+  TGocciaFunctionObjectIntrinsicKind; inline;
+begin
+  if Assigned(ATemplate) and ATemplate.IsAsync and ATemplate.IsGenerator then
+    Result := foikAsyncGenerator
+  else if Assigned(ATemplate) and ATemplate.IsGenerator then
+    Result := foikGenerator
+  else if Assigned(ATemplate) and ATemplate.IsAsync then
+    Result := foikAsync
+  else
+    Result := foikOrdinary;
+end;
+
+procedure EnsureVMObjectPrototypeInitialized; inline;
+begin
+  if not Assigned(TGocciaObjectValue.SharedObjectPrototype) then
+    TGocciaObjectValue.InitializeSharedPrototype;
+end;
+
+function VMFunctionObjectPrototype(
+  const AKind: TGocciaFunctionObjectIntrinsicKind): TGocciaObjectValue;
+var
+  IteratorPrototype: TGocciaObjectValue;
+begin
+  EnsureVMObjectPrototypeInitialized;
+  IteratorPrototype := nil;
+  if AKind = foikGenerator then
+    IteratorPrototype := TGocciaIteratorValue.SharedPrototype;
+  Result := FunctionObjectIntrinsicPrototype(AKind,
+    TGocciaFunctionBase.GetSharedPrototype,
+    TGocciaObjectValue.SharedObjectPrototype,
+    IteratorPrototype);
+end;
+
+function VMGeneratorObjectPrototype(
+  const AKind: TGocciaFunctionObjectIntrinsicKind): TGocciaObjectValue;
+var
+  IteratorPrototype: TGocciaObjectValue;
+begin
+  EnsureVMObjectPrototypeInitialized;
+  IteratorPrototype := nil;
+  if AKind = foikGenerator then
+    IteratorPrototype := TGocciaIteratorValue.SharedPrototype;
+  Result := GeneratorObjectIntrinsicPrototype(AKind,
+    TGocciaFunctionBase.GetSharedPrototype,
+    TGocciaObjectValue.SharedObjectPrototype,
+    IteratorPrototype);
+  if AKind = foikGenerator then
+    EnsureGeneratorPrototypeMethods(Result);
+end;
 
 function IsBytecodePrivateKey(const AKey: string): Boolean; forward;
 function IsBytecodePrivateBrandKey(const AKey: string): Boolean; forward;
@@ -1131,6 +1183,8 @@ end;
 
 constructor TGocciaBytecodeFunctionValue.Create(const AVM: TGocciaVM;
   const AClosure: TGocciaBytecodeClosure);
+var
+  Kind: TGocciaFunctionObjectIntrinsicKind;
 begin
   inherited Create;
   FVM := AVM;
@@ -1141,6 +1195,8 @@ begin
   begin
     FStrictThis := AClosure.Template.StrictThis;
     FStrictCode := AClosure.Template.StrictCode;
+    Kind := BytecodeFunctionIntrinsicKind(AClosure.Template);
+    Prototype := VMFunctionObjectPrototype(Kind);
   end;
 end;
 
@@ -1803,6 +1859,7 @@ var
   I: Integer;
 begin
   inherited Create;
+  Prototype := VMGeneratorObjectPrototype(foikGenerator);
   FVM := AVM;
   FClosure := AClosure.Clone;
   FThisValue := VMValueToRegisterFast(AThisValue);
@@ -1841,6 +1898,7 @@ var
   I: Integer;
 begin
   inherited Create;
+  Prototype := VMGeneratorObjectPrototype(foikGenerator);
   FVM := AVM;
   FClosure := AClosure.Clone;
   FThisValue := AThisValue;
@@ -2436,6 +2494,7 @@ constructor TGocciaBytecodeAsyncGeneratorObjectValue.Create(const AVM: TGocciaVM
   const AArguments: TGocciaArgumentsCollection);
 begin
   inherited Create;
+  Prototype := VMGeneratorObjectPrototype(foikAsyncGenerator);
   FInner := TGocciaBytecodeGeneratorObjectValue.Create(AVM, AClosure,
     AThisValue, AArguments);
   DefineProperty(PROP_NEXT, TGocciaPropertyDescriptorData.Create(
@@ -2458,6 +2517,7 @@ constructor TGocciaBytecodeAsyncGeneratorObjectValue.CreateRegisters(
   const AThisValue: TGocciaRegister; const AArguments: TGocciaRegisterArray);
 begin
   inherited Create;
+  Prototype := VMGeneratorObjectPrototype(foikAsyncGenerator);
   FInner := TGocciaBytecodeGeneratorObjectValue.CreateRegisters(AVM, AClosure,
     AThisValue, AArguments);
   DefineProperty(PROP_NEXT, TGocciaPropertyDescriptorData.Create(
@@ -2575,6 +2635,18 @@ end;
 function TGocciaBytecodeFunctionValue.GetSourceText: string;
 begin
   Result := FClosure.Template.SourceText;
+end;
+
+function BytecodeGeneratorResultWithFunctionPrototype(
+  const AFunction: TGocciaBytecodeFunctionValue;
+  const AGeneratorObject: TGocciaObjectValue): TGocciaValue;
+var
+  PrototypeValue: TGocciaValue;
+begin
+  PrototypeValue := AFunction.GetProperty(PROP_PROTOTYPE);
+  if PrototypeValue is TGocciaObjectValue then
+    AGeneratorObject.Prototype := TGocciaObjectValue(PrototypeValue);
+  Result := AGeneratorObject;
 end;
 
 function TGocciaBytecodeFunctionValue.IsConstructable: Boolean;
@@ -2741,10 +2813,12 @@ begin
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsGenerator then
   begin
     if FClosure.Template.IsAsync then
-      Exit(TGocciaBytecodeAsyncGeneratorObjectValue.Create(FVM, FClosure,
-        EffectiveThis, AArguments));
-    Exit(TGocciaBytecodeGeneratorObjectValue.Create(FVM, FClosure,
-      EffectiveThis, AArguments));
+      Exit(BytecodeGeneratorResultWithFunctionPrototype(Self,
+        TGocciaBytecodeAsyncGeneratorObjectValue.Create(FVM, FClosure,
+          EffectiveThis, AArguments)));
+    Exit(BytecodeGeneratorResultWithFunctionPrototype(Self,
+      TGocciaBytecodeGeneratorObjectValue.Create(FVM, FClosure,
+        EffectiveThis, AArguments)));
   end;
 
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsAsync then
@@ -2809,10 +2883,12 @@ begin
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsGenerator then
   begin
     if FClosure.Template.IsAsync then
-      Exit(TGocciaBytecodeAsyncGeneratorObjectValue.CreateRegisters(FVM, FClosure,
-        VMValueToRegisterFast(EffectiveThis), TGocciaRegisterArray(nil)));
-    Exit(TGocciaBytecodeGeneratorObjectValue.CreateRegisters(FVM, FClosure,
-      VMValueToRegisterFast(EffectiveThis), TGocciaRegisterArray(nil)));
+      Exit(BytecodeGeneratorResultWithFunctionPrototype(Self,
+        TGocciaBytecodeAsyncGeneratorObjectValue.CreateRegisters(FVM, FClosure,
+          VMValueToRegisterFast(EffectiveThis), TGocciaRegisterArray(nil))));
+    Exit(BytecodeGeneratorResultWithFunctionPrototype(Self,
+      TGocciaBytecodeGeneratorObjectValue.CreateRegisters(FVM, FClosure,
+        VMValueToRegisterFast(EffectiveThis), TGocciaRegisterArray(nil))));
   end;
 
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsAsync then
@@ -2863,12 +2939,14 @@ begin
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsGenerator then
   begin
     if FClosure.Template.IsAsync then
-      Exit(TGocciaBytecodeAsyncGeneratorObjectValue.CreateRegisters(FVM, FClosure,
+      Exit(BytecodeGeneratorResultWithFunctionPrototype(Self,
+        TGocciaBytecodeAsyncGeneratorObjectValue.CreateRegisters(FVM, FClosure,
+          VMValueToRegisterFast(EffectiveThis),
+          TGocciaRegisterArray.Create(VMValueToRegisterFast(AArg0)))));
+    Exit(BytecodeGeneratorResultWithFunctionPrototype(Self,
+      TGocciaBytecodeGeneratorObjectValue.CreateRegisters(FVM, FClosure,
         VMValueToRegisterFast(EffectiveThis),
-        TGocciaRegisterArray.Create(VMValueToRegisterFast(AArg0))));
-    Exit(TGocciaBytecodeGeneratorObjectValue.CreateRegisters(FVM, FClosure,
-      VMValueToRegisterFast(EffectiveThis),
-      TGocciaRegisterArray.Create(VMValueToRegisterFast(AArg0))));
+        TGocciaRegisterArray.Create(VMValueToRegisterFast(AArg0)))));
   end;
 
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsAsync then
@@ -2919,14 +2997,16 @@ begin
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsGenerator then
   begin
     if FClosure.Template.IsAsync then
-      Exit(TGocciaBytecodeAsyncGeneratorObjectValue.CreateRegisters(FVM, FClosure,
+      Exit(BytecodeGeneratorResultWithFunctionPrototype(Self,
+        TGocciaBytecodeAsyncGeneratorObjectValue.CreateRegisters(FVM, FClosure,
+          VMValueToRegisterFast(EffectiveThis),
+          TGocciaRegisterArray.Create(VMValueToRegisterFast(AArg0),
+            VMValueToRegisterFast(AArg1)))));
+    Exit(BytecodeGeneratorResultWithFunctionPrototype(Self,
+      TGocciaBytecodeGeneratorObjectValue.CreateRegisters(FVM, FClosure,
         VMValueToRegisterFast(EffectiveThis),
         TGocciaRegisterArray.Create(VMValueToRegisterFast(AArg0),
-          VMValueToRegisterFast(AArg1))));
-    Exit(TGocciaBytecodeGeneratorObjectValue.CreateRegisters(FVM, FClosure,
-      VMValueToRegisterFast(EffectiveThis),
-      TGocciaRegisterArray.Create(VMValueToRegisterFast(AArg0),
-        VMValueToRegisterFast(AArg1))));
+          VMValueToRegisterFast(AArg1)))));
   end;
 
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsAsync then
@@ -2979,14 +3059,16 @@ begin
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsGenerator then
   begin
     if FClosure.Template.IsAsync then
-      Exit(TGocciaBytecodeAsyncGeneratorObjectValue.CreateRegisters(FVM, FClosure,
+      Exit(BytecodeGeneratorResultWithFunctionPrototype(Self,
+        TGocciaBytecodeAsyncGeneratorObjectValue.CreateRegisters(FVM, FClosure,
+          VMValueToRegisterFast(EffectiveThis),
+          TGocciaRegisterArray.Create(VMValueToRegisterFast(AArg0),
+            VMValueToRegisterFast(AArg1), VMValueToRegisterFast(AArg2)))));
+    Exit(BytecodeGeneratorResultWithFunctionPrototype(Self,
+      TGocciaBytecodeGeneratorObjectValue.CreateRegisters(FVM, FClosure,
         VMValueToRegisterFast(EffectiveThis),
         TGocciaRegisterArray.Create(VMValueToRegisterFast(AArg0),
-          VMValueToRegisterFast(AArg1), VMValueToRegisterFast(AArg2))));
-    Exit(TGocciaBytecodeGeneratorObjectValue.CreateRegisters(FVM, FClosure,
-      VMValueToRegisterFast(EffectiveThis),
-      TGocciaRegisterArray.Create(VMValueToRegisterFast(AArg0),
-        VMValueToRegisterFast(AArg1), VMValueToRegisterFast(AArg2))));
+          VMValueToRegisterFast(AArg1), VMValueToRegisterFast(AArg2)))));
   end;
 
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsAsync then
@@ -4206,7 +4288,7 @@ end;
 
 procedure TGocciaVM.InstallFunctionPrototype(
   const AFunction: TGocciaObjectValue;
-  const AIsGenerator: Boolean);
+  const AKind: TGocciaFunctionObjectIntrinsicKind);
 var
   PrototypeObj: TGocciaObjectValue;
   PrototypeFlags: TPropertyFlags;
@@ -4215,30 +4297,24 @@ begin
   // function whose value is a fresh ordinary object.  Shape differs by kind:
   //   - Ordinary function (§15.2): prototype is { writable, !enumerable,
   //     !configurable } with an own `constructor` pointing at the function.
-  //   - (Async) generator (§15.5 / §15.6): prototype is { !writable,
-  //     !enumerable, !configurable } with NO own `constructor` — per spec it
-  //     inherits `constructor` from %GeneratorFunction.prototype.prototype%
-  //     (which points at %GeneratorFunction.prototype%, not the specific
-  //     generator function), so an own back-reference would be wrong.
-  // The prototype object's [[Prototype]] is %Object.prototype% per ES2026
-  // §10.2.5.1 OrdinaryFunctionCreate.  (For generators it should be %Generator%,
-  // but GocciaScript does not yet expose that intrinsic; falling back to
-  // Object.prototype keeps the chain non-null and lets generic object methods
-  // like hasOwnProperty resolve.)
+  //   - (Async) generator (§15.5 / §15.6): prototype is also writable, but
+  //     has NO own `constructor` — per spec it inherits `constructor` from
+  //     %GeneratorFunction.prototype.prototype% (which points at
+  //     %GeneratorFunction.prototype%, not the specific generator function),
+  //     so an own back-reference would be wrong.
   //
   // Match the lazy-init guard used by OP_NEW_OBJECT — the bytecode VM can be
   // exercised outside the normal engine bootstrap (e.g. Goccia.VM.Test.pas),
   // so the realm slot may not be primed yet on the first OP_CLOSURE.
-  if not Assigned(TGocciaObjectValue.SharedObjectPrototype) then
-    TGocciaObjectValue.InitializeSharedPrototype;
-  PrototypeObj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
-  if AIsGenerator then
-  begin
-    PrototypeFlags := [];
-  end
+  EnsureVMObjectPrototypeInitialized;
+  if AKind in [foikGenerator, foikAsyncGenerator] then
+    PrototypeObj := TGocciaObjectValue.Create(VMGeneratorObjectPrototype(AKind))
   else
+    PrototypeObj := TGocciaObjectValue.Create(
+      TGocciaObjectValue.SharedObjectPrototype);
+  PrototypeFlags := [pfWritable];
+  if not (AKind in [foikGenerator, foikAsyncGenerator]) then
   begin
-    PrototypeFlags := [pfWritable];
     PrototypeObj.DefineProperty(PROP_CONSTRUCTOR,
       TGocciaPropertyDescriptorData.Create(AFunction, [pfWritable, pfConfigurable]));
   end;
@@ -10060,7 +10136,8 @@ begin
         // async generators).  The prototype is a fresh ordinary object whose
         // `constructor` data property back-references the function.
         if ChildTemplate.HasOwnPrototype then
-          InstallFunctionPrototype(BytecodeFunction, ChildTemplate.IsGenerator);
+          InstallFunctionPrototype(BytecodeFunction,
+            BytecodeFunctionIntrinsicKind(ChildTemplate));
         SetRegister(A, BytecodeFunction);
       end;
 
