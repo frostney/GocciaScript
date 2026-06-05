@@ -15,6 +15,7 @@ uses
   SysUtils,
 
   Goccia.Arguments.Collection,
+  Goccia.Builtins.Atomics,
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
   Goccia.Error,
@@ -144,6 +145,8 @@ begin
     end;
 
     WaitForFetchPromise(Promise);
+    if Promise.State = gpsPending then
+      WaitForAtomicsPromise(Promise);
 
     if Promise.State = gpsFulfilled then
       Result := Promise.PromiseResult

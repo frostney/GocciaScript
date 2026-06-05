@@ -24,6 +24,7 @@ const
   CONSTRUCTOR_PERFORMANCE  = 'Performance';
   CONSTRUCTOR_PROMISE      = 'Promise';
   CONSTRUCTOR_ITERATOR     = 'Iterator';
+  CONSTRUCTOR_ATOMICS             = 'Atomics';
   CONSTRUCTOR_ARRAY_BUFFER        = 'ArrayBuffer';
   CONSTRUCTOR_SHARED_ARRAY_BUFFER = 'SharedArrayBuffer';
   CONSTRUCTOR_DATA_VIEW           = 'DataView';
