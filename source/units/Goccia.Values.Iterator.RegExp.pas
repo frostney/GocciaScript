@@ -29,19 +29,29 @@ type
 implementation
 
 uses
+  Goccia.Realm,
   Goccia.RegExp.Runtime;
 
 const
   REGEXP_STRING_ITERATOR_TAG = 'RegExp String Iterator';
   MATCH_TEXT_PROPERTY = '0';
 
+var
+  GRegExpStringIteratorPrototypeSlot: TGocciaRealmSlotId;
+
 { TGocciaRegExpMatchAllIteratorValue }
 
 constructor TGocciaRegExpMatchAllIteratorValue.Create(
   const ARegExp: TGocciaObjectValue; const AInput: string;
   const AGlobal, AUnicode: Boolean);
+var
+  SharedPrototype: TGocciaObjectValue;
 begin
   inherited Create;
+  SharedPrototype := EnsureConcreteIteratorPrototype(
+    GRegExpStringIteratorPrototypeSlot, REGEXP_STRING_ITERATOR_TAG);
+  if Assigned(SharedPrototype) then
+    FPrototype := SharedPrototype;
   FRegExp := ARegExp;
   FInput := AInput;
   FGlobal := AGlobal;
@@ -142,5 +152,9 @@ begin
   if Assigned(FRegExp) then
     FRegExp.MarkReferences;
 end;
+
+initialization
+  GRegExpStringIteratorPrototypeSlot := RegisterRealmSlot(
+    'RegExpStringIterator.prototype');
 
 end.

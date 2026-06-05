@@ -107,32 +107,20 @@ uses
 
   TextSemantics,
 
-  Goccia.GarbageCollector,
   Goccia.Realm,
   Goccia.Values.ArrayValue,
   Goccia.Values.HeadersValue,
   Goccia.Values.HoleValue,
   Goccia.Values.MapValue,
-  Goccia.Values.NativeFunction,
-  Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SetValue,
-  Goccia.Values.SymbolValue,
   Goccia.Values.ToObject,
   Goccia.Values.URLSearchParamsValue;
 
 var
   GArrayIteratorPrototypeSlot: TGocciaRealmSlotId;
-
-threadvar
-  FArrayIteratorMethodHost: TGocciaIteratorValue;
-
-function GetSharedArrayIteratorPrototype: TGocciaObjectValue; inline;
-begin
-  if Assigned(CurrentRealm) then
-    Result := TGocciaObjectValue(CurrentRealm.GetSlot(GArrayIteratorPrototypeSlot))
-  else
-    Result := nil;
-end;
+  GStringIteratorPrototypeSlot: TGocciaRealmSlotId;
+  GMapIteratorPrototypeSlot: TGocciaRealmSlotId;
+  GSetIteratorPrototypeSlot: TGocciaRealmSlotId;
 
 { TGocciaArrayIteratorValue }
 
@@ -141,27 +129,8 @@ var
   SharedPrototype: TGocciaObjectValue;
 begin
   inherited Create;
-  SharedPrototype := GetSharedArrayIteratorPrototype;
-  if (not Assigned(SharedPrototype)) and Assigned(CurrentRealm) then
-  begin
-    SharedPrototype := TGocciaObjectValue.Create(FPrototype);
-    if not Assigned(FArrayIteratorMethodHost) then
-    begin
-      FArrayIteratorMethodHost := TGocciaIteratorValue.Create;
-      if Assigned(TGarbageCollector.Instance) then
-        TGarbageCollector.Instance.PinObject(FArrayIteratorMethodHost);
-    end;
-    SharedPrototype.DefineProperty('next',
-      TGocciaPropertyDescriptorData.Create(
-        TGocciaNativeFunctionValue.CreateWithoutPrototype(
-          FArrayIteratorMethodHost.IteratorNext, 'next', 0),
-        [pfConfigurable, pfWritable]));
-    SharedPrototype.DefineSymbolProperty(
-      TGocciaSymbolValue.WellKnownToStringTag,
-      TGocciaPropertyDescriptorData.Create(
-        TGocciaStringLiteralValue.Create('Array Iterator'), [pfConfigurable]));
-    CurrentRealm.SetSlot(GArrayIteratorPrototypeSlot, SharedPrototype);
-  end;
+  SharedPrototype := EnsureConcreteIteratorPrototype(
+    GArrayIteratorPrototypeSlot, 'Array Iterator');
   if Assigned(SharedPrototype) then
     FPrototype := SharedPrototype;
   FSource := ASource;
@@ -285,8 +254,14 @@ end;
 { TGocciaStringIteratorValue }
 
 constructor TGocciaStringIteratorValue.Create(const ASource: TGocciaValue);
+var
+  SharedPrototype: TGocciaObjectValue;
 begin
   inherited Create;
+  SharedPrototype := EnsureConcreteIteratorPrototype(
+    GStringIteratorPrototypeSlot, 'String Iterator');
+  if Assigned(SharedPrototype) then
+    FPrototype := SharedPrototype;
   FSource := ASource;
   FIndex := 0;
 end;
@@ -361,8 +336,14 @@ end;
 { TGocciaMapIteratorValue }
 
 constructor TGocciaMapIteratorValue.Create(const ASource: TGocciaValue; const AKind: TGocciaMapIteratorKind);
+var
+  SharedPrototype: TGocciaObjectValue;
 begin
   inherited Create;
+  SharedPrototype := EnsureConcreteIteratorPrototype(
+    GMapIteratorPrototypeSlot, 'Map Iterator');
+  if Assigned(SharedPrototype) then
+    FPrototype := SharedPrototype;
   FSource := ASource;
   FIndex := 0;
   FKind := AKind;
@@ -457,8 +438,14 @@ end;
 { TGocciaSetIteratorValue }
 
 constructor TGocciaSetIteratorValue.Create(const ASource: TGocciaValue; const AKind: TGocciaSetIteratorKind);
+var
+  SharedPrototype: TGocciaObjectValue;
 begin
   inherited Create;
+  SharedPrototype := EnsureConcreteIteratorPrototype(
+    GSetIteratorPrototypeSlot, 'Set Iterator');
+  if Assigned(SharedPrototype) then
+    FPrototype := SharedPrototype;
   FSource := ASource;
   FIndex := 0;
   FKind := AKind;
@@ -754,5 +741,8 @@ end;
 
 initialization
   GArrayIteratorPrototypeSlot := RegisterRealmSlot('ArrayIterator.prototype');
+  GStringIteratorPrototypeSlot := RegisterRealmSlot('StringIterator.prototype');
+  GMapIteratorPrototypeSlot := RegisterRealmSlot('MapIterator.prototype');
+  GSetIteratorPrototypeSlot := RegisterRealmSlot('SetIterator.prototype');
 
 end.
