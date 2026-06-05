@@ -124,17 +124,6 @@ begin
     end;
   end;
 
-  if AValue is TGocciaStringLiteralValue then
-  begin
-    WasSourceRooted := AddRootIfNeeded(AValue);
-    try
-      Result := TGocciaStringIteratorValue.Create(AValue);
-    finally
-      RemoveRootIfNeeded(AValue, WasSourceRooted);
-    end;
-    Exit;
-  end;
-
   Result := nil;
 end;
 

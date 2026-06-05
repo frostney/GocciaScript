@@ -85,6 +85,21 @@ test("private methods", () => {
   expect(calc.validate).toBeUndefined();
 });
 
+test("assigning to private methods throws TypeError", () => {
+  class TestClass {
+    #method() {
+      return 1;
+    }
+
+    assign() {
+      this.#method = 0;
+    }
+  }
+
+  const instance = new TestClass();
+  expect(() => instance.assign()).toThrow(TypeError);
+});
+
 test("comprehensive private fields with inheritance", () => {
   class Counter {
     #count = 0;

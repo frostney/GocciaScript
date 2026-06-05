@@ -160,3 +160,17 @@ test("reading from setter-only private static accessors throws TypeError", () =>
     expect(e.message).toContain("was defined without a getter");
   }
 });
+
+test("assigning to private static methods throws TypeError", () => {
+  class TestClass {
+    static #method() {
+      return 1;
+    }
+
+    static assign() {
+      this.#method = 0;
+    }
+  }
+
+  expect(() => TestClass.assign()).toThrow(TypeError);
+});
