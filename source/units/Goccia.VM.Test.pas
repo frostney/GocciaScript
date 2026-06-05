@@ -10,15 +10,20 @@ uses
   Goccia.Arguments.Collection,
   Goccia.Bytecode,
   Goccia.Bytecode.Chunk,
+  Goccia.ExecutionContext,
+  Goccia.Realm,
   Goccia.TestSetup,
   Goccia.Values.FunctionBase,
   Goccia.Values.HoleValue,
+  Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
   Goccia.VM;
 
 type
   TTestGocciaVM = class(TTestSuite)
   private
+    FRealm: TGocciaRealm;
+    FRealmExecutionContext: TGocciaExecutionContextScope;
     procedure TestExecuteIntegerAddition;
     procedure TestExecuteLocalsRoundTrip;
     procedure TestExecuteLiteralLoads;
@@ -30,9 +35,32 @@ type
     procedure TestExecuteIndexedObjectOps;
     procedure TestExecuteClosureCall;
     procedure TestExecuteCapturedClosure;
+  protected
+    procedure BeforeEach; override;
+    procedure AfterEach; override;
   public
     procedure SetupTests; override;
   end;
+
+procedure TTestGocciaVM.BeforeEach;
+begin
+  inherited BeforeEach;
+  FRealm := TGocciaRealm.Create('<vm-test>');
+  FRealmExecutionContext := TGocciaExecutionContextScope.Create(
+    CreateExecutionContext(FRealm, nil, '<vm-test>'));
+  TGocciaObjectValue.InitializeSharedPrototype;
+  TGocciaFunctionBase.SetSharedPrototypeParent(
+    TGocciaObjectValue.SharedObjectPrototype);
+end;
+
+procedure TTestGocciaVM.AfterEach;
+begin
+  FRealmExecutionContext.Free;
+  FRealmExecutionContext := nil;
+  FRealm.Free;
+  FRealm := nil;
+  inherited AfterEach;
+end;
 
 procedure TTestGocciaVM.SetupTests;
 begin

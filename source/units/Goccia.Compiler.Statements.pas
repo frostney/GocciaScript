@@ -4987,14 +4987,12 @@ begin
   end;
 
   for MethodPair in ClassDef.Methods do
-  begin
-    if MethodPair.Value.IsStatic then
-      CompileMethodBody(ACtx, ClassReg, MethodPair.Key,
-        MethodPair.Value, OP_DEFINE_STATIC_METHOD_CONST)
-    else
-      CompileMethodBody(ACtx, ClassReg, MethodPair.Key,
-        MethodPair.Value, OP_CLASS_ADD_METHOD_CONST);
-  end;
+    CompileMethodBody(ACtx, ClassReg, MethodPair.Key,
+      MethodPair.Value, OP_CLASS_ADD_METHOD_CONST);
+
+  for MethodPair in ClassDef.StaticMethods do
+    CompileMethodBody(ACtx, ClassReg, MethodPair.Key,
+      MethodPair.Value, OP_DEFINE_STATIC_METHOD_CONST);
 
   for MethodPair in ClassDef.PrivateMethods do
   begin
@@ -5223,14 +5221,12 @@ begin
   end;
 
   for MethodPair in ClassDef.Methods do
-  begin
-    if MethodPair.Value.IsStatic then
-      CompileMethodBody(ACtx, ADest, MethodPair.Key,
-        MethodPair.Value, OP_DEFINE_STATIC_METHOD_CONST)
-    else
-      CompileMethodBody(ACtx, ADest, MethodPair.Key,
-        MethodPair.Value, OP_CLASS_ADD_METHOD_CONST);
-  end;
+    CompileMethodBody(ACtx, ADest, MethodPair.Key,
+      MethodPair.Value, OP_CLASS_ADD_METHOD_CONST);
+
+  for MethodPair in ClassDef.StaticMethods do
+    CompileMethodBody(ACtx, ADest, MethodPair.Key,
+      MethodPair.Value, OP_DEFINE_STATIC_METHOD_CONST);
 
   for MethodPair in ClassDef.PrivateMethods do
   begin

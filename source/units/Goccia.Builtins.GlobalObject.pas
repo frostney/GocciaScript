@@ -367,8 +367,8 @@ end;
 function TGocciaGlobalObject.ObjectHasOwn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Obj: TGocciaObjectValue;
-  PropertyName: string;
   ClassObj: TGocciaClassValue;
+  PropertyName: string;
   KeyValue: TGocciaValue;
 begin
   TGocciaArgumentValidator.RequireExactly(AArgs, 2, 'Object.hasOwn', ThrowError);

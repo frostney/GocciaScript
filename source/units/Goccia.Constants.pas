@@ -4,6 +4,14 @@ unit Goccia.Constants;
 
 interface
 
+type
+  TGocciaDynamicFunctionKind = (
+    dfkNormal,
+    dfkGenerator,
+    dfkAsync,
+    dfkAsyncGenerator
+  );
+
 const
   // Literal value strings
   BOOLEAN_TRUE_LITERAL      = 'true';

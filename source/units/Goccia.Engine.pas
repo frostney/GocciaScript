@@ -34,6 +34,7 @@ uses
   Goccia.Builtins.JSON,
   Goccia.Builtins.Math,
   Goccia.Builtins.Temporal,
+  Goccia.Constants,
   Goccia.Evaluator.Context,
   Goccia.ExecutionContext,
   Goccia.Executor,
@@ -190,7 +191,8 @@ type
     procedure PrintSourcePipelineWarnings(
       const APipelineResult: TGocciaSourcePipelineResult);
     function CompileDynamicFunction(const AParamsSources: array of string;
-      const ABodySource: string): TGocciaFunctionBase;
+      const ABodySource: string;
+      const AKind: TGocciaDynamicFunctionKind): TGocciaFunctionBase;
   public
     { Callers always provide an explicit executor — no implicit interpreter
       fallback. Pair an executor with the engine that owns it; the engine
@@ -1643,7 +1645,8 @@ end;
 
 function TGocciaEngine.CompileDynamicFunction(
   const AParamsSources: array of string;
-  const ABodySource: string): TGocciaFunctionBase;
+  const ABodySource: string;
+  const AKind: TGocciaDynamicFunctionKind): TGocciaFunctionBase;
 var
   ParamStr: string;
   I: Integer;
@@ -1652,9 +1655,8 @@ var
   ProgramNode: TGocciaProgram;
   ResultValue: TGocciaValue;
 begin
-  // ES2026 §20.2.1.1: parse as  function anonymous(P) { body }
-  // We use method shorthand so the function gets its own this binding.
-  // The member access extracts the function from the wrapper object.
+  // ES2026 §20.2.1.1.1 CreateDynamicFunction: parse the requested dynamic
+  // function kind as function anonymous(P) { body }.
   //
   // Params and body are parsed as separate, self-contained programs first.
   // This prevents injection: a crafted body that tries to close the method
@@ -1671,22 +1673,22 @@ begin
   // Validate params: must parse as a valid parameter list.
   // If params contain tokens that escape the signature, this will throw.
   PipelineOptions.Preprocessors := [];
-  PipelineOptions.Compatibility := FCompatibility;
+  PipelineOptions.Compatibility := FCompatibility + [cfFunction];
   PipelineOptions.SourceType := stScript;
   if not TGocciaSourcePipeline.ParseFunctionParameters(ParamStr,
-    '<Function:params>', PipelineOptions) then
+    '<Function:params>', PipelineOptions, AKind) then
     ThrowSyntaxError('Invalid parameter list for Function constructor');
 
   // Validate body: must parse as a valid function body.
   // An arrow wrapper ensures the body is enclosed in matching braces.
   BodyParseResult := TGocciaSourcePipeline.ParseFunctionBodyWrapper(
-    ABodySource, '<Function:body>', PipelineOptions);
+    ABodySource, '<Function:body>', PipelineOptions, AKind);
   if not BodyParseResult.IsValid then
     ThrowSyntaxError('Invalid body for Function constructor');
 
   // Both pieces validated — safe to assemble the wrapper
   ProgramNode := TGocciaSourcePipeline.ParseDynamicFunctionWrapper(ParamStr,
-    ABodySource, '<Function>', PipelineOptions);
+    ABodySource, '<Function>', PipelineOptions, AKind);
   try
     ResultValue := FExecutor.ExecuteDynamicFunction(ProgramNode);
     Result := TGocciaFunctionBase(ResultValue);

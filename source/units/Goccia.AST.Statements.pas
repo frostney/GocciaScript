@@ -342,6 +342,7 @@ type
     FName: string;
     FSuperClass: string;
     FMethods: TGocciaClassMethodMap;
+    FStaticMethods: TGocciaClassMethodMap;
     FGetters: TGocciaGetterExpressionMap;
     FSetters: TGocciaSetterExpressionMap;
     FStaticGetters: TGocciaGetterExpressionMap;
@@ -364,6 +365,7 @@ type
 
     constructor Create(const AName, ASuperClass: string;
       const AMethods: TGocciaClassMethodMap;
+      const AStaticMethods: TGocciaClassMethodMap;
       const AGetters: TGocciaGetterExpressionMap;
       const ASetters: TGocciaSetterExpressionMap;
       const AStaticProperties: TGocciaExpressionMap;
@@ -375,6 +377,7 @@ type
     property Name: string read FName;
     property SuperClass: string read FSuperClass;
     property Methods: TGocciaClassMethodMap read FMethods;
+    property StaticMethods: TGocciaClassMethodMap read FStaticMethods;
     property Getters: TGocciaGetterExpressionMap read FGetters;
     property Setters: TGocciaSetterExpressionMap read FSetters;
     property StaticGetters: TGocciaGetterExpressionMap read FStaticGetters;
@@ -726,6 +729,7 @@ end;
 
   constructor TGocciaClassDefinition.Create(const AName, ASuperClass: string;
     const AMethods: TGocciaClassMethodMap;
+    const AStaticMethods: TGocciaClassMethodMap;
     const AGetters: TGocciaGetterExpressionMap;
     const ASetters: TGocciaSetterExpressionMap;
     const AStaticProperties: TGocciaExpressionMap;
@@ -737,6 +741,7 @@ end;
     FName := AName;
     FSuperClass := ASuperClass;
     FMethods := AMethods;
+    FStaticMethods := AStaticMethods;
     FGetters := AGetters;
     FSetters := ASetters;
     FStaticGetters := TGocciaGetterExpressionMap.Create;
@@ -767,6 +772,7 @@ end;
     I: Integer;
   begin
     FMethods.Free;
+    FStaticMethods.Free;
     FGetters.Free;
     FSetters.Free;
     FStaticGetters.Free;

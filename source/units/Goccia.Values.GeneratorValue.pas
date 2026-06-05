@@ -86,6 +86,8 @@ type
     function Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; override;
   end;
 
+procedure EnsureGeneratorPrototypeMethods(const APrototype: TGocciaObjectValue);
+
 implementation
 
 uses
@@ -100,6 +102,7 @@ uses
   Goccia.Evaluator,
   Goccia.Evaluator.Context,
   Goccia.GarbageCollector,
+  Goccia.Intrinsics.FunctionObjects,
   Goccia.Realm,
   Goccia.Types.Enforcement,
   Goccia.Values.ArgumentsObjectValue,
@@ -107,10 +110,43 @@ uses
   Goccia.Values.Await,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
+  Goccia.Values.FunctionBase,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.PromiseValue,
   Goccia.Values.SymbolValue;
+
+type
+  TGocciaGeneratorPrototypeMethodHost = class
+  public
+    function GeneratorNext(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function GeneratorReturn(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function GeneratorThrow(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+  end;
+
+var
+  GGeneratorPrototypeMethodHostSlot: TGocciaRealmOwnedSlotId;
+
+function GeneratorObjectIntrinsicParent(
+  const AKind: TGocciaFunctionObjectIntrinsicKind): TGocciaObjectValue;
+var
+  IteratorPrototype: TGocciaObjectValue;
+begin
+  if not Assigned(TGocciaObjectValue.SharedObjectPrototype) then
+    TGocciaObjectValue.InitializeSharedPrototype;
+  IteratorPrototype := nil;
+  if AKind = foikGenerator then
+    IteratorPrototype := TGocciaIteratorValue.SharedPrototype;
+  Result := GeneratorObjectIntrinsicPrototype(AKind,
+    TGocciaFunctionBase.GetSharedPrototype,
+    TGocciaObjectValue.SharedObjectPrototype,
+    IteratorPrototype);
+  if AKind = foikGenerator then
+    EnsureGeneratorPrototypeMethods(Result);
+end;
 
 function ArgumentOrUndefined(const AArguments: TGocciaArgumentsCollection): TGocciaValue;
 begin
@@ -142,6 +178,88 @@ begin
   end;
 end;
 
+function GeneratorPrototypeMethodHost: TGocciaGeneratorPrototypeMethodHost;
+begin
+  if not Assigned(CurrentRealm) then
+    raise Exception.Create('Generator prototype methods require an active realm');
+  Result := TGocciaGeneratorPrototypeMethodHost(
+    CurrentRealm.GetOwnedSlot(GGeneratorPrototypeMethodHostSlot));
+  if Assigned(Result) then
+    Exit;
+  Result := TGocciaGeneratorPrototypeMethodHost.Create;
+  CurrentRealm.SetOwnedSlot(GGeneratorPrototypeMethodHostSlot, Result);
+end;
+
+function TGocciaGeneratorPrototypeMethodHost.GeneratorNext(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  if not (AThisValue is TGocciaGeneratorObjectValue) then
+    raise TGocciaThrowValue.Create(GeneratorIncompatibleReceiverError);
+  Result := TGocciaGeneratorObjectValue(AThisValue).GeneratorNext(AArgs,
+    AThisValue);
+end;
+
+function TGocciaGeneratorPrototypeMethodHost.GeneratorReturn(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  if not (AThisValue is TGocciaGeneratorObjectValue) then
+    raise TGocciaThrowValue.Create(GeneratorIncompatibleReceiverError);
+  Result := TGocciaGeneratorObjectValue(AThisValue).GeneratorReturn(AArgs,
+    AThisValue);
+end;
+
+function TGocciaGeneratorPrototypeMethodHost.GeneratorThrow(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  if not (AThisValue is TGocciaGeneratorObjectValue) then
+    raise TGocciaThrowValue.Create(GeneratorIncompatibleReceiverError);
+  Result := TGocciaGeneratorObjectValue(AThisValue).GeneratorThrow(AArgs,
+    AThisValue);
+end;
+
+procedure EnsureGeneratorPrototypeMethods(const APrototype: TGocciaObjectValue);
+var
+  Host: TGocciaGeneratorPrototypeMethodHost;
+begin
+  if not Assigned(APrototype) then
+    Exit;
+
+  Host := nil;
+  if not APrototype.HasOwnProperty(PROP_NEXT) then
+  begin
+    if not Assigned(Host) then
+      Host := GeneratorPrototypeMethodHost;
+    APrototype.DefineProperty(PROP_NEXT,
+      TGocciaPropertyDescriptorData.Create(
+        TGocciaNativeFunctionValue.CreateWithoutPrototype(
+          Host.GeneratorNext, PROP_NEXT, 1),
+        [pfConfigurable, pfWritable]));
+  end;
+  if not APrototype.HasOwnProperty(PROP_RETURN) then
+  begin
+    if not Assigned(Host) then
+      Host := GeneratorPrototypeMethodHost;
+    APrototype.DefineProperty(PROP_RETURN,
+      TGocciaPropertyDescriptorData.Create(
+        TGocciaNativeFunctionValue.CreateWithoutPrototype(
+          Host.GeneratorReturn, PROP_RETURN, 1),
+        [pfConfigurable, pfWritable]));
+  end;
+  if not APrototype.HasOwnProperty(PROP_THROW) then
+  begin
+    if not Assigned(Host) then
+      Host := GeneratorPrototypeMethodHost;
+    APrototype.DefineProperty(PROP_THROW,
+      TGocciaPropertyDescriptorData.Create(
+        TGocciaNativeFunctionValue.CreateWithoutPrototype(
+          Host.GeneratorThrow, PROP_THROW, 1),
+        [pfConfigurable, pfWritable]));
+  end;
+end;
+
 { TGocciaGeneratorObjectValue }
 
 constructor TGocciaGeneratorObjectValue.Create(const AContinuation: TGocciaGeneratorContinuation);
@@ -149,18 +267,7 @@ begin
   inherited Create;
   FContinuation := AContinuation;
   FState := gsSuspendedStart;
-  DefineProperty(PROP_NEXT,
-    TGocciaPropertyDescriptorData.Create(
-      TGocciaNativeFunctionValue.Create(GeneratorNext, PROP_NEXT, 1),
-      [pfConfigurable, pfWritable]));
-  DefineProperty(PROP_RETURN,
-    TGocciaPropertyDescriptorData.Create(
-      TGocciaNativeFunctionValue.Create(GeneratorReturn, PROP_RETURN, 1),
-      [pfConfigurable, pfWritable]));
-  DefineProperty(PROP_THROW,
-    TGocciaPropertyDescriptorData.Create(
-      TGocciaNativeFunctionValue.Create(GeneratorThrow, PROP_THROW, 1),
-      [pfConfigurable, pfWritable]));
+  Prototype := GeneratorObjectIntrinsicParent(foikGenerator);
 end;
 
 destructor TGocciaGeneratorObjectValue.Destroy;
@@ -373,6 +480,7 @@ begin
   inherited Create(nil);
   FContinuation := AContinuation;
   FState := gsSuspendedStart;
+  Prototype := GeneratorObjectIntrinsicParent(foikAsyncGenerator);
   DefineProperty(PROP_NEXT,
     TGocciaPropertyDescriptorData.Create(
       TGocciaNativeFunctionValue.Create(AsyncGeneratorNext, PROP_NEXT, 1),
@@ -638,8 +746,16 @@ end;
 
 function TGocciaGeneratorFunctionValue.Call(
   const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  GeneratorObject: TGocciaGeneratorObjectValue;
+  PrototypeValue: TGocciaValue;
 begin
-  Result := TGocciaGeneratorObjectValue.Create(CreateContinuation(AArguments, AThisValue));
+  GeneratorObject := TGocciaGeneratorObjectValue.Create(
+    CreateContinuation(AArguments, AThisValue));
+  PrototypeValue := GetProperty(PROP_PROTOTYPE);
+  if PrototypeValue is TGocciaObjectValue then
+    GeneratorObject.Prototype := TGocciaObjectValue(PrototypeValue);
+  Result := GeneratorObject;
 end;
 
 function TGocciaGeneratorFunctionValue.IsConstructable: Boolean;
@@ -649,9 +765,16 @@ end;
 
 function TGocciaAsyncGeneratorFunctionValue.Call(
   const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  AsyncGeneratorObject: TGocciaAsyncGeneratorObjectValue;
+  PrototypeValue: TGocciaValue;
 begin
-  Result := TGocciaAsyncGeneratorObjectValue.Create(
+  AsyncGeneratorObject := TGocciaAsyncGeneratorObjectValue.Create(
     CreateContinuation(AArguments, AThisValue, True));
+  PrototypeValue := GetProperty(PROP_PROTOTYPE);
+  if PrototypeValue is TGocciaObjectValue then
+    AsyncGeneratorObject.Prototype := TGocciaObjectValue(PrototypeValue);
+  Result := AsyncGeneratorObject;
 end;
 
 { TGocciaGeneratorMethodValue }
@@ -791,5 +914,9 @@ begin
   Result := TGocciaAsyncGeneratorObjectValue.Create(
     CreateContinuation(AArguments, AThisValue, True));
 end;
+
+initialization
+  GGeneratorPrototypeMethodHostSlot := RegisterRealmOwnedSlot(
+    'Generator prototype method host');
 
 end.
