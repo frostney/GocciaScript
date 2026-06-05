@@ -90,6 +90,7 @@ procedure CompileYield(const ACtx: TGocciaCompilationContext;
 
 procedure EmitDefaultParameters(const ACtx: TGocciaCompilationContext;
   const AParams: TGocciaParameterArray);
+function SyntheticParamLocalName(const AIndex: Integer): string;
 function DeclareArgumentsObjectLocal(const ACtx: TGocciaCompilationContext;
   const AScope: TGocciaCompilerScope; const AParams: TGocciaParameterArray): Integer;
 procedure EmitCreateArgumentsObject(const ACtx: TGocciaCompilationContext;
@@ -102,6 +103,8 @@ procedure EmitBindingAssignmentFromRegister(const ACtx: TGocciaCompilationContex
 procedure EmitDestructuring(const ACtx: TGocciaCompilationContext;
   const APattern: TGocciaDestructuringPattern; const ASrcReg: UInt8;
   const AAssignmentMode: Boolean = False);
+procedure EmitDestructuringParameters(const ACtx: TGocciaCompilationContext;
+  const AParams: TGocciaParameterArray);
 procedure CompileDestructuringAssignment(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaDestructuringAssignmentExpression; const ADest: UInt8);
 
@@ -1270,6 +1273,11 @@ begin
   Result := AScope.DeclareLocal(IDENTIFIER_ARGUMENTS, False);
 end;
 
+function SyntheticParamLocalName(const AIndex: Integer): string;
+begin
+  Result := '`#param`:' + IntToStr(AIndex);
+end;
+
 procedure EmitCreateArgumentsObject(const ACtx: TGocciaCompilationContext;
   const AArgumentsSlot: Integer);
 begin
@@ -1291,7 +1299,7 @@ begin
       Continue;
     if AParams[I].IsPattern then
     begin
-      LocalIdx := ACtx.Scope.ResolveLocal('__param' + IntToStr(I));
+      LocalIdx := ACtx.Scope.ResolveLocal(SyntheticParamLocalName(I));
       if LocalIdx < 0 then
         Continue;
       Slot := ACtx.Scope.GetLocal(LocalIdx).Slot;
@@ -1642,7 +1650,7 @@ begin
     if not Assigned(AParams[I].Pattern) then
       Continue;
 
-    LocalIdx := ACtx.Scope.ResolveLocal('__param' + IntToStr(I));
+    LocalIdx := ACtx.Scope.ResolveLocal(SyntheticParamLocalName(I));
     if LocalIdx < 0 then
       Continue;
     ParamSlot := ACtx.Scope.GetLocal(LocalIdx).Slot;
@@ -1675,7 +1683,7 @@ begin
     if AnnotationType = sltUntyped then
       Continue;
     if AParameters[I].IsPattern then
-      ParamName := '__param' + IntToStr(I)
+      ParamName := SyntheticParamLocalName(I)
     else
       ParamName := AParameters[I].Name;
     LocalIdx := AScope.ResolveLocal(ParamName);
@@ -1706,7 +1714,7 @@ begin
     if AParameters[I].IsRest then
       Continue;
     if AParameters[I].IsPattern then
-      ParamName := '__param' + IntToStr(I)
+      ParamName := SyntheticParamLocalName(I)
     else
       ParamName := AParameters[I].Name;
     LocalIdx := ACtx.Scope.ResolveLocal(ParamName);
@@ -1764,7 +1772,7 @@ begin
         RestParamIndex := I;
     end;
     if AExpr.Parameters[I].IsPattern then
-      ChildScope.DeclareLocal('__param' + IntToStr(I), False)
+      ChildScope.DeclareLocal(SyntheticParamLocalName(I), False)
     else
       ChildScope.DeclareLocal(AExpr.Parameters[I].Name, False);
   end;
@@ -3083,7 +3091,7 @@ begin
         RestParamIndex := I;
     end;
     if AExpr.Parameters[I].IsPattern then
-      ChildScope.DeclareLocal('__param' + IntToStr(I), False)
+      ChildScope.DeclareLocal(SyntheticParamLocalName(I), False)
     else
       ChildScope.DeclareLocal(AExpr.Parameters[I].Name, False);
   end;
