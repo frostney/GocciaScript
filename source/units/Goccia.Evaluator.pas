@@ -3449,11 +3449,11 @@ begin
   //   - Ordinary function (§15.2): prototype is { writable, !enumerable,
   //     !configurable } and has an own `constructor` data property pointing
   //     back at the function.
-  //   - (Async) generator (§15.5 / §15.6): prototype is { !writable,
-  //     !enumerable, !configurable } and has NO own `constructor`.  Per spec
-  //     it inherits `constructor` from %GeneratorFunction.prototype.prototype%
-  //     (which itself points at %GeneratorFunction.prototype%, not the
-  //     specific generator), so an own back-reference here would be wrong.
+  //   - (Async) generator (§15.5 / §15.6): prototype is also writable, but
+  //     has NO own `constructor`.  Per spec it inherits `constructor` from
+  //     %GeneratorFunction.prototype.prototype% (which itself points at
+  //     %GeneratorFunction.prototype%, not the specific generator), so an own
+  //     back-reference here would be wrong.
   if AFunctionExpression.HasOwnPrototype then
   begin
     if AFunctionExpression.IsGenerator then
@@ -3461,13 +3461,9 @@ begin
         FunctionIntrinsicKind(AFunctionExpression.IsAsync, True)))
     else
       PrototypeObj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
-    if AFunctionExpression.IsGenerator then
+    PrototypeFlags := [pfWritable];
+    if not AFunctionExpression.IsGenerator then
     begin
-      PrototypeFlags := [];
-    end
-    else
-    begin
-      PrototypeFlags := [pfWritable];
       // prototype.constructor: { writable, !enumerable, configurable }
       PrototypeObj.DefineProperty(PROP_CONSTRUCTOR,
         TGocciaPropertyDescriptorData.Create(Result, [pfWritable, pfConfigurable]));
