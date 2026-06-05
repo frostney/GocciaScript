@@ -4823,7 +4823,7 @@ var
   begin
     if AIsStatic then
     begin
-      if not ClassValue.PrivateStaticProperties.TryGetValue(AName, Result) then
+      if not ClassValue.PrivateStaticMethods.TryGetValue(AName, Result) then
         Result := TGocciaUndefinedLiteralValue.UndefinedValue;
     end
     else
@@ -4834,7 +4834,7 @@ var
     const AIsStatic: Boolean; const AValue: TGocciaValue);
   begin
     if AIsStatic then
-      ClassValue.AddPrivateStaticProperty(AName, AValue)
+      ClassValue.AddPrivateStaticMethod(AName, AValue)
     else if AValue is TGocciaMethodValue then
       ClassValue.AddPrivateMethod(AName, TGocciaMethodValue(AValue));
   end;
@@ -5004,7 +5004,7 @@ begin
     Method := TGocciaMethodValue(EvaluateClassMethod(MethodPair.Value, AContext, MethodSuperClass));
     Method.OwningClass := ClassValue;
     if MethodPair.Value.IsStatic then
-      ClassValue.AddPrivateStaticProperty(MethodPair.Key, Method)
+      ClassValue.AddPrivateStaticMethod(MethodPair.Key, Method)
     else
       ClassValue.AddPrivateMethod(MethodPair.Key, Method);
   end;
@@ -6021,6 +6021,9 @@ begin
   if AccessClass.HasOwnPrivateSetter(APrivateName) then
     ThrowPrivateGetterMissingError(APrivateName);
 
+  if AccessClass.PrivateStaticMethods.TryGetValue(APrivateName, Result) then
+    Exit;
+
   if not AccessClass.PrivateStaticProperties.TryGetValue(APrivateName, Result) then
     ThrowPrivateBrandError(APrivateName);
 end;
@@ -6055,10 +6058,47 @@ begin
   if AccessClass.HasOwnPrivateGetter(APrivateName) then
     ThrowPrivateSetterMissingError(APrivateName);
 
+  if AccessClass.HasOwnPrivateStaticMethod(APrivateName) then
+    ThrowTypeError(Format('Private method #%s is not writable', [APrivateName]),
+      SSuggestPrivateFieldAccess);
+
   if not AccessClass.HasOwnPrivateStaticProperty(APrivateName) then
     ThrowPrivateBrandError(APrivateName);
 
   AccessClass.AddPrivateStaticProperty(APrivateName, AValue);
+end;
+
+procedure AssignPrivateMemberOnInstance(const AInstance: TGocciaInstanceValue;
+  const APrivateName: string; const AValue: TGocciaValue;
+  const AContext: TGocciaEvaluationContext);
+var
+  AccessClass: TGocciaClassValue;
+  SetterFn: TGocciaFunctionBase;
+  SetterArgs: TGocciaArgumentsCollection;
+begin
+  AccessClass := ResolveOwningClass(AInstance, AContext);
+
+  if AccessClass.HasPrivateSetter(APrivateName) then
+  begin
+    SetterFn := AccessClass.PrivatePropertySetter[APrivateName];
+    SetterArgs := TGocciaArgumentsCollection.Create;
+    try
+      SetterArgs.Add(AValue);
+      SetterFn.Call(SetterArgs, AInstance);
+    finally
+      SetterArgs.Free;
+    end;
+    Exit;
+  end;
+
+  if AccessClass.HasPrivateGetter(APrivateName) then
+    ThrowPrivateSetterMissingError(APrivateName);
+
+  if AccessClass.PrivateMethods.ContainsKey(APrivateName) then
+    ThrowTypeError(Format('Private method #%s is not writable', [APrivateName]),
+      SSuggestPrivateFieldAccess);
+
+  AInstance.SetPrivateProperty(APrivateName, AValue, AccessClass);
 end;
 
 procedure AssignPrivateMemberOnObject(const AReceiver: TGocciaObjectValue;
@@ -6107,6 +6147,10 @@ begin
 
   if AccessClass.HasPrivateGetter(APrivateName) then
     ThrowPrivateSetterMissingError(APrivateName);
+
+  if AccessClass.PrivateMethods.ContainsKey(APrivateName) then
+    ThrowTypeError(Format('Private method #%s is not writable', [APrivateName]),
+      SSuggestPrivateFieldAccess);
 
   SetRawPrivateInstanceProperty(AReceiver, APrivateName, AValue, AccessClass);
 end;
@@ -6180,10 +6224,7 @@ var
   ObjectValue: TGocciaValue;
   Instance: TGocciaInstanceValue;
   ClassValue: TGocciaClassValue;
-  AccessClass: TGocciaClassValue;
   Value: TGocciaValue;
-  SetterFn: TGocciaFunctionBase;
-  SetterArgs: TGocciaArgumentsCollection;
 begin
   // Evaluate the object expression
   ObjectValue := EvaluateExpression(APrivatePropertyAssignmentExpression.ObjectExpr, AContext);
@@ -6193,31 +6234,10 @@ begin
 
   if ObjectValue is TGocciaInstanceValue then
   begin
-    // Private field assignment on instance
     Instance := TGocciaInstanceValue(ObjectValue);
-
-    // Determine the access class from the owning class of the current method
-    AccessClass := ResolveOwningClass(Instance, AContext);
-
-    // Check if this is a private setter
-    if AccessClass.HasPrivateSetter(APrivatePropertyAssignmentExpression.PrivateName) then
-    begin
-      SetterFn := AccessClass.PrivatePropertySetter[APrivatePropertyAssignmentExpression.PrivateName];
-      SetterArgs := TGocciaArgumentsCollection.Create;
-      try
-        SetterArgs.Add(Value);
-        SetterFn.Call(SetterArgs, Instance);
-      finally
-        SetterArgs.Free;
-      end;
-    end
-    else if AccessClass.HasPrivateGetter(APrivatePropertyAssignmentExpression.PrivateName) then
-      ThrowPrivateSetterMissingError(APrivatePropertyAssignmentExpression.PrivateName)
-    else
-    begin
-      // Set the private property
-      Instance.SetPrivateProperty(APrivatePropertyAssignmentExpression.PrivateName, Value, AccessClass);
-    end;
+    AssignPrivateMemberOnInstance(
+      Instance, APrivatePropertyAssignmentExpression.PrivateName, Value,
+      AContext);
   end
   else if ObjectValue is TGocciaClassValue then
   begin
@@ -6247,11 +6267,8 @@ var
   ObjectValue: TGocciaValue;
   Instance: TGocciaInstanceValue;
   ClassValue: TGocciaClassValue;
-  AccessClass: TGocciaClassValue;
   CurrentValue: TGocciaValue;
   Value: TGocciaValue;
-  SetterFn: TGocciaFunctionBase;
-  SetterArgs: TGocciaArgumentsCollection;
 begin
   // Evaluate the object expression
   ObjectValue := EvaluateExpression(APrivatePropertyCompoundAssignmentExpression.ObjectExpr, AContext);
@@ -6259,7 +6276,6 @@ begin
   if ObjectValue is TGocciaInstanceValue then
   begin
     Instance := TGocciaInstanceValue(ObjectValue);
-    AccessClass := ResolveOwningClass(Instance, AContext);
     CurrentValue := EvaluatePrivateMemberOnInstance(
       Instance, APrivatePropertyCompoundAssignmentExpression.PrivateName, AContext);
   end
@@ -6312,23 +6328,9 @@ begin
     Result := Value;
 
     if ObjectValue is TGocciaInstanceValue then
-    begin
-      if AccessClass.HasPrivateSetter(APrivatePropertyCompoundAssignmentExpression.PrivateName) then
-      begin
-        SetterFn := AccessClass.PrivatePropertySetter[APrivatePropertyCompoundAssignmentExpression.PrivateName];
-        SetterArgs := TGocciaArgumentsCollection.Create;
-        try
-          SetterArgs.Add(Value);
-          SetterFn.Call(SetterArgs, Instance);
-        finally
-          SetterArgs.Free;
-        end;
-      end
-      else if AccessClass.HasPrivateGetter(APrivatePropertyCompoundAssignmentExpression.PrivateName) then
-        ThrowPrivateSetterMissingError(APrivatePropertyCompoundAssignmentExpression.PrivateName)
-      else
-        Instance.SetPrivateProperty(APrivatePropertyCompoundAssignmentExpression.PrivateName, Result, AccessClass);
-    end
+      AssignPrivateMemberOnInstance(
+        Instance, APrivatePropertyCompoundAssignmentExpression.PrivateName,
+        Result, AContext)
     else if ObjectValue is TGocciaClassValue then
       AssignPrivateMemberOnClass(
         ClassValue, APrivatePropertyCompoundAssignmentExpression.PrivateName,
@@ -6350,25 +6352,9 @@ begin
 
   // Set the new value
   if ObjectValue is TGocciaInstanceValue then
-  begin
-    if AccessClass.HasPrivateSetter(APrivatePropertyCompoundAssignmentExpression.PrivateName) then
-    begin
-      SetterFn := AccessClass.PrivatePropertySetter[
-        APrivatePropertyCompoundAssignmentExpression.PrivateName];
-      SetterArgs := TGocciaArgumentsCollection.Create;
-      try
-        SetterArgs.Add(Result);
-        SetterFn.Call(SetterArgs, Instance);
-      finally
-        SetterArgs.Free;
-      end;
-    end
-    else if AccessClass.HasPrivateGetter(APrivatePropertyCompoundAssignmentExpression.PrivateName) then
-      ThrowPrivateSetterMissingError(APrivatePropertyCompoundAssignmentExpression.PrivateName)
-    else
-      Instance.SetPrivateProperty(
-        APrivatePropertyCompoundAssignmentExpression.PrivateName, Result, AccessClass);
-  end
+    AssignPrivateMemberOnInstance(
+      Instance, APrivatePropertyCompoundAssignmentExpression.PrivateName,
+      Result, AContext)
   else if ObjectValue is TGocciaClassValue then
     AssignPrivateMemberOnClass(
       ClassValue, APrivatePropertyCompoundAssignmentExpression.PrivateName,
@@ -7327,8 +7313,8 @@ begin
     else if AccessClass.HasPrivateGetter(APattern.Expression.PrivateName) then
       ThrowPrivateSetterMissingError(APattern.Expression.PrivateName)
     else
-      Instance.SetPrivateProperty(APattern.Expression.PrivateName, AValue,
-        AccessClass);
+      AssignPrivateMemberOnInstance(Instance, APattern.Expression.PrivateName,
+        AValue, AContext);
   end
   else if ObjectValue is TGocciaClassValue then
   begin

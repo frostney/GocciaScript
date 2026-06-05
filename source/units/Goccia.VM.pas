@@ -6406,11 +6406,11 @@ var
   begin
     Result := NormalizeBytecodePrivateKey(
       AName, TGocciaClassValue(ClassVal).PrivateBrandToken);
-    if TGocciaClassValue(ClassVal).PrivateStaticProperties.ContainsKey(Result) then
+    if TGocciaClassValue(ClassVal).PrivateStaticMethods.ContainsKey(Result) then
       Exit;
 
     KeySuffix := '$' + AName;
-    for Pair in TGocciaClassValue(ClassVal).PrivateStaticProperties do
+    for Pair in TGocciaClassValue(ClassVal).PrivateStaticMethods do
       if (Length(Pair.Key) >= Length(KeySuffix)) and
          (Copy(Pair.Key, Length(Pair.Key) - Length(KeySuffix) + 1,
            Length(KeySuffix)) = KeySuffix) then
@@ -6422,7 +6422,7 @@ var
   begin
     if AIsStatic then
     begin
-      if not TGocciaClassValue(ClassVal).PrivateStaticProperties.TryGetValue(
+      if not TGocciaClassValue(ClassVal).PrivateStaticMethods.TryGetValue(
         PrivateStaticKey(AName), Result) then
         Result := TGocciaUndefinedLiteralValue.UndefinedValue;
     end
@@ -6434,7 +6434,7 @@ var
     const AIsStatic: Boolean; const AValue: TGocciaValue);
   begin
     if AIsStatic then
-      TGocciaClassValue(ClassVal).AddPrivateStaticProperty(
+      TGocciaClassValue(ClassVal).AddPrivateStaticMethod(
         PrivateStaticKey(AName), AValue)
     else if AValue is TGocciaMethodValue then
       TGocciaClassValue(ClassVal).AddPrivateMethod(
@@ -7116,6 +7116,9 @@ begin
       if TGocciaClassValue(AObject).HasOwnPrivateSetter(PrivateName) then
         ThrowTypeError(Format(SErrorPrivateAccessorNoGetter, [AKey]),
           SSuggestPrivateFieldAccess);
+      if TGocciaClassValue(AObject).PrivateStaticMethods.TryGetValue(
+        AKey, Result) then
+        Exit;
       if TryGetRawPrivateValue(AObject, AKey, Result) then
         Exit;
       ThrowTypeError(Format(SErrorPrivateFieldNotAccessible, [AKey]),
@@ -7211,6 +7214,9 @@ begin
       end;
       if TGocciaClassValue(AObject).HasOwnPrivateGetter(PrivateName) then
         ThrowTypeError(Format(SErrorPrivateAccessorNoSetter, [AKey]),
+          SSuggestPrivateFieldAccess);
+      if TGocciaClassValue(AObject).HasOwnPrivateStaticMethod(AKey) then
+        ThrowTypeError(Format('Private method %s is not writable', [AKey]),
           SSuggestPrivateFieldAccess);
       if TGocciaClassValue(AObject).HasOwnPrivateStaticProperty(AKey) then
       begin
@@ -9026,7 +9032,7 @@ begin
              (FRegisters[A].ObjectValue is TGocciaVMClassValue) then
           begin
             SetBytecodeHomeObject(RightValue, RegisterToValue(FRegisters[A]));
-            TGocciaVMClassValue(FRegisters[A].ObjectValue).AddPrivateStaticProperty(
+            TGocciaVMClassValue(FRegisters[A].ObjectValue).AddPrivateStaticMethod(
               GlobalName, RightValue);
             Continue;
           end;
