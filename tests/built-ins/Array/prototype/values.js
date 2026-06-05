@@ -39,3 +39,14 @@ test("generic receiver iterates array-like values", () => {
   expect(iter.next().value).toBe('b');
   expect(iter.next().done).toBe(true);
 });
+
+test("array iterator prototype owns next with spec descriptor", () => {
+  const proto = Object.getPrototypeOf([].values());
+  const descriptor = Object.getOwnPropertyDescriptor(proto, "next");
+
+  expect(Object.prototype.hasOwnProperty.call(proto, "next")).toBe(true);
+  expect(typeof descriptor.value).toBe("function");
+  expect(descriptor.writable).toBe(true);
+  expect(descriptor.enumerable).toBe(false);
+  expect(descriptor.configurable).toBe(true);
+});
