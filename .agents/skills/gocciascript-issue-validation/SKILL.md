@@ -9,14 +9,15 @@ Project-specific validation rules for GocciaScript issues. Use this skill with t
 
 ## Spec Lookup
 
-For ECMA-262 or ECMA-402 semantics, use the pinned `tc39-mcp@0.1.4` server from `.mcp.example.json` when it is available:
+For ECMA-262 or ECMA-402 semantics, use the pinned `tc39-mcp@0.3.0` server from the project MCP config under `.agents/mcp/` when it is available:
 
 1. Use `spec.search` when the exact clause id is unknown.
 2. Use `clause.get` for the relevant clause before deciding expected behavior.
 3. Use `spec.crossrefs` when behavior depends on abstract operations or cross-spec references.
 4. Use `spec.diff` or `spec.history` when the issue may involve recent prose drift.
 5. Use `test262.search` to map a clause id or feature area to conformance tests.
-6. Use `proposal.list` or `proposal.get` for proposal-stage features.
+6. Use `test262.get` to inspect a specific conformance test when the MCP server returns one.
+7. Use `proposal.list` or `proposal.get` for proposal-stage features.
 
 Record the spec, edition, clause id, section number, and snapshot SHA when the MCP response provides one. If `tc39-mcp` is not available, fall back to the official TC39 sources (`tc39.es/ecma262`, `tc39.es/ecma402`) rather than guessing.
 

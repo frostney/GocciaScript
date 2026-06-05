@@ -39,7 +39,7 @@ jobs:
         env:
           VERSION: ${{ steps.latest.outputs.version }}
         run: |
-          if git diff --quiet -- .mcp.example.json AGENTS.md .agents/skills/gocciascript-issue-validation/SKILL.md; then
+          if git diff --quiet -- .agents/mcp/mcp.json .agents/mcp/codex.config.toml .mcp.example.json AGENTS.md .agents/skills/gocciascript-issue-validation/SKILL.md; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "tc39-mcp already pinned to v${VERSION} — no PR to open."
           else

@@ -25,20 +25,20 @@ Assistants should treat CONTRIBUTING as authoritative for contribution requireme
 
 ## TC39 spec lookup
 
-For ECMAScript or ECMA-402 behavior, prefer the `tc39-mcp` MCP server when it is available. The repo includes `.mcp.example.json` with the pinned local stdio setup:
+For ECMAScript or ECMA-402 behavior, use the project TC39 MCP server before falling back to web sources or large spec HTML files. The canonical project MCP config lives under `.agents/mcp/`, with client-facing links/adapters for supported tools. The shared JSON shape is:
 
 ```json
 {
   "mcpServers": {
     "tc39": {
       "command": "npx",
-      "args": ["tc39-mcp@0.1.4"]
+      "args": ["-y", "tc39-mcp@0.3.0"]
     }
   }
 }
 ```
 
-Use `spec.search` when you do not know the clause id, `clause.get` when you do, `spec.crossrefs` to follow abstract-operation dependencies, `spec.diff` / `spec.history` for prose drift, `test262.search` to map clauses to conformance tests, and `proposal.list` / `proposal.get` for proposal-stage features. When making durable claims in code review, issues, or PR notes, record the spec, edition, clause id, section number, and snapshot SHA when the MCP response provides one. If `tc39-mcp` is unavailable, fall back to the official TC39 sources (`tc39.es/ecma262`, `tc39.es/ecma402`) rather than guessing.
+Use `spec.search` when you do not know the clause id, `clause.get` when you do, `spec.crossrefs` to follow abstract-operation dependencies, `spec.diff` / `spec.history` for prose drift, `test262.search` and `test262.get` to map clauses to conformance tests, and `proposal.list` / `proposal.get` for proposal-stage features. When making durable claims in code review, issues, or PR notes, record the spec, edition, clause id, section number, and snapshot SHA when the MCP response provides one. If `tc39-mcp` is unavailable, fall back to the official TC39 sources (`tc39.es/ecma262`, `tc39.es/ecma402`) rather than guessing.
 
 ## Quick checks
 
