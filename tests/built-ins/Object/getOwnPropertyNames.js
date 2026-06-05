@@ -110,7 +110,11 @@ describe("Object.getOwnPropertyNames", () => {
     });
 
     const names = Object.getOwnPropertyNames(array);
-    expect(names.indexOf("1")).toBeLessThan(names.indexOf("5"));
+    const descriptorIndex = names.indexOf("1");
+    const denseIndex = names.indexOf("5");
+    expect(descriptorIndex).not.toBe(-1);
+    expect(denseIndex).not.toBe(-1);
+    expect(descriptorIndex).toBeLessThan(denseIndex);
   });
 
   test("throws for null", () => {
