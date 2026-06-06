@@ -544,6 +544,7 @@ begin
   // If this is the constructor, store it separately
   if AName = PROP_CONSTRUCTOR then
   begin
+    AMethod.Name := PROP_CONSTRUCTOR;
     FConstructorMethod := AMethod;
     Exit;
   end;
@@ -1202,6 +1203,11 @@ var
   InstancePrototype: TGocciaObjectValue;
   FinalThis: TGocciaValue;
   ConstructResult: TGocciaValue;
+  function IsUndefinedConstructResult(const AValue: TGocciaValue): Boolean;
+  begin
+    Result := (not Assigned(AValue)) or
+      (AValue is TGocciaUndefinedLiteralValue);
+  end;
 begin
   NativeClass := nil;
   NativeInstance := nil;
@@ -1275,8 +1281,17 @@ begin
         ThrowTypeError('Derived constructor returned non-object',
           SSuggestNotConstructorType);
 
+      if (ConstructorToCall = FConstructorMethod) and
+         IsUndefinedConstructResult(ConstructResult) and
+         not ConstructorToCall.LastSuperConstructorCalled then
+        ThrowReferenceError(
+          'Must call super constructor before returning from derived constructor');
+
       if (FinalThis is TGocciaObjectValue) then
         Exit(TGocciaObjectValue(FinalThis));
+      if IsUndefinedConstructResult(ConstructResult) then
+        ThrowReferenceError(
+          'Must call super constructor before returning from derived constructor');
     end;
   end
   else if Assigned(NativeInstance) and (NativeInstance is TGocciaInstanceValue) then

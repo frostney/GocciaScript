@@ -73,6 +73,11 @@ type
   TGocciaBytecodeGeneratorResumeKind = (bgrkNext, bgrkReturn, bgrkThrow);
   TGocciaBytecodeGeneratorState = (bgsSuspendedStart, bgsSuspendedYield,
     bgsExecuting, bgsCompleted);
+  TGocciaBytecodeAsyncGeneratorRequest = record
+    Kind: TGocciaBytecodeGeneratorResumeKind;
+    Value: TGocciaValue;
+    Promise: TGocciaPromiseValue;
+  end;
   TGocciaVMSavedStateRoot = record
     Closure: TGocciaBytecodeClosure;
     NewTarget: TGocciaValue;
@@ -118,6 +123,7 @@ type
     FArgumentPool: TGocciaArgumentsPoolArray;
     FArgumentPoolCount: Integer;
     FLastClosureThisValue: TGocciaRegister;
+    FCurrentConstructorSuperCalled: Boolean;
     FPrivateInitializerReceiver: TGocciaValue;
     FPrivateInitializerPreserveExisting: Boolean;
     FStackRoot: TGocciaVMStackRoot;
@@ -1429,7 +1435,8 @@ type
       const AThisValue: TGocciaValue; const AArguments: TGocciaArgumentsCollection);
     constructor CreateRegisters(const AVM: TGocciaVM;
       const AClosure: TGocciaBytecodeClosure; const AThisValue: TGocciaRegister;
-      const AArguments: TGocciaRegisterArray);
+      const AArguments: TGocciaRegisterArray;
+      const ARunParameterPreamble: Boolean = True);
     destructor Destroy; override;
     function AdvanceNext: TGocciaObjectValue; override;
     function AdvanceNextValue(const AValue: TGocciaValue): TGocciaObjectValue; override;
@@ -1459,8 +1466,20 @@ type
   TGocciaBytecodeAsyncGeneratorObjectValue = class(TGocciaObjectValue)
   private
     FInner: TGocciaBytecodeGeneratorObjectValue;
+    FQueue: array of TGocciaBytecodeAsyncGeneratorRequest;
+    FQueueHead: Integer;
+    FQueueCount: Integer;
+    FQueueRunning: Boolean;
+    function ContinueQueue(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function DequeueRequest(
+      out ARequest: TGocciaBytecodeAsyncGeneratorRequest): Boolean;
+    procedure EnqueueRequest(
+      const ARequest: TGocciaBytecodeAsyncGeneratorRequest);
+    procedure ProcessQueue;
     function ResumeAsPromise(const AKind: TGocciaBytecodeGeneratorResumeKind;
       const AValue: TGocciaValue): TGocciaValue;
+    procedure StartRequest(const ARequest: TGocciaBytecodeAsyncGeneratorRequest);
   public
     constructor Create(const AVM: TGocciaVM; const AClosure: TGocciaBytecodeClosure;
       const AThisValue: TGocciaValue; const AArguments: TGocciaArgumentsCollection);
@@ -2463,7 +2482,8 @@ end;
 
 constructor TGocciaBytecodeGeneratorObjectValue.CreateRegisters(const AVM: TGocciaVM;
   const AClosure: TGocciaBytecodeClosure; const AThisValue: TGocciaRegister;
-  const AArguments: TGocciaRegisterArray);
+  const AArguments: TGocciaRegisterArray;
+  const ARunParameterPreamble: Boolean);
 var
   I: Integer;
 begin
@@ -2487,7 +2507,8 @@ begin
   DefineProperty(PROP_THROW, TGocciaPropertyDescriptorData.Create(
     TGocciaNativeFunctionValue.Create(GeneratorThrow, PROP_THROW, 1),
     [pfConfigurable, pfWritable]));
-  if Assigned(FClosure.Template) and (FClosure.Template.ParameterPreambleSize > 0) then
+  if ARunParameterPreamble and Assigned(FClosure.Template) and
+     (FClosure.Template.ParameterPreambleSize > 0) then
     FVM.ExecuteGeneratorParameterPreamble(Self);
 end;
 
@@ -3178,27 +3199,130 @@ end;
 function TGocciaBytecodeAsyncGeneratorObjectValue.ResumeAsPromise(
   const AKind: TGocciaBytecodeGeneratorResumeKind; const AValue: TGocciaValue): TGocciaValue;
 var
-  Promise: TGocciaPromiseValue;
+  Request: TGocciaBytecodeAsyncGeneratorRequest;
+begin
+  Request.Kind := AKind;
+  Request.Value := AValue;
+  Request.Promise := TGocciaPromiseValue.Create;
+  EnqueueRequest(Request);
+  ProcessQueue;
+  Result := Request.Promise;
+end;
+
+function TGocciaBytecodeAsyncGeneratorObjectValue.ContinueQueue(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  FQueueRunning := False;
+  ProcessQueue;
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TGocciaBytecodeAsyncGeneratorObjectValue.DequeueRequest(
+  out ARequest: TGocciaBytecodeAsyncGeneratorRequest): Boolean;
+begin
+  Result := FQueueCount > 0;
+  if not Result then
+    Exit;
+
+  ARequest := FQueue[FQueueHead];
+  FQueue[FQueueHead].Value := nil;
+  FQueue[FQueueHead].Promise := nil;
+  Inc(FQueueHead);
+  Dec(FQueueCount);
+  if FQueueCount = 0 then
+    FQueueHead := 0;
+end;
+
+procedure TGocciaBytecodeAsyncGeneratorObjectValue.EnqueueRequest(
+  const ARequest: TGocciaBytecodeAsyncGeneratorRequest);
+var
+  I: Integer;
+begin
+  if FQueueHead > 0 then
+  begin
+    for I := 0 to FQueueCount - 1 do
+      FQueue[I] := FQueue[FQueueHead + I];
+    for I := FQueueCount to High(FQueue) do
+    begin
+      FQueue[I].Value := nil;
+      FQueue[I].Promise := nil;
+    end;
+    FQueueHead := 0;
+  end;
+
+  if FQueueCount >= Length(FQueue) then
+    SetLength(FQueue, FQueueCount * 2 + 4);
+
+  FQueue[FQueueCount] := ARequest;
+  Inc(FQueueCount);
+end;
+
+procedure TGocciaBytecodeAsyncGeneratorObjectValue.ProcessQueue;
+var
+  Request: TGocciaBytecodeAsyncGeneratorRequest;
+begin
+  if FQueueRunning then
+    Exit;
+  if not DequeueRequest(Request) then
+    Exit;
+
+  FQueueRunning := True;
+  StartRequest(Request);
+end;
+
+procedure TGocciaBytecodeAsyncGeneratorObjectValue.StartRequest(
+  const ARequest: TGocciaBytecodeAsyncGeneratorRequest);
+var
+  ContinueFunction: TGocciaNativeFunctionValue;
   PreviousAsyncPromise: TGocciaPromiseValue;
   Done: Boolean;
   IsRooted: Boolean;
   UnwrappedValue: TGocciaValue;
   Value: TGocciaValue;
 begin
-  Promise := TGocciaPromiseValue.Create;
+  ContinueFunction := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+    ContinueQueue, 'async-generator-continue', 1);
+  ContinueFunction.CapturedRoot := Self;
+  ARequest.Promise.InvokeThen(ContinueFunction, ContinueFunction);
+
   IsRooted := Assigned(TGarbageCollector.Instance);
   if IsRooted then
-    TGarbageCollector.Instance.AddTempRoot(Promise);
+    TGarbageCollector.Instance.AddTempRoot(ARequest.Promise);
   try
     try
       try
         PreviousAsyncPromise := FInner.FVM.FCurrentAsyncPromise;
-        FInner.FVM.FCurrentAsyncPromise := Promise;
+        FInner.FVM.FCurrentAsyncPromise := ARequest.Promise;
         try
           try
-            Value := FInner.ResumeRaw(AKind, AValue, Done);
+            if FInner.FState = bgsCompleted then
+            begin
+              case ARequest.Kind of
+                bgrkNext:
+                  begin
+                    ARequest.Promise.Resolve(CreateIteratorResult(
+                      TGocciaUndefinedLiteralValue.UndefinedValue, True));
+                    Exit;
+                  end;
+                bgrkThrow:
+                  begin
+                    ARequest.Promise.Reject(ARequest.Value);
+                    Exit;
+                  end;
+              else
+                begin
+                  UnwrappedValue := AwaitValue(ARequest.Value);
+                  ARequest.Promise.Resolve(CreateIteratorResult(
+                    UnwrappedValue, True));
+                  Exit;
+                end;
+              end;
+            end;
+
+            Value := FInner.ResumeRaw(ARequest.Kind, ARequest.Value, Done);
             UnwrappedValue := AwaitValue(Value);
-            Promise.Resolve(CreateIteratorResult(UnwrappedValue, Done));
+            ARequest.Promise.Resolve(CreateIteratorResult(UnwrappedValue, Done));
           except
             on E: EGocciaBytecodeAsyncSuspend do
             begin
@@ -3209,24 +3333,22 @@ begin
         end;
       except
         on E: EGocciaBytecodeThrow do
-          Promise.Reject(E.ThrownValue);
+          ARequest.Promise.Reject(E.ThrownValue);
         on E: TGocciaThrowValue do
-          Promise.Reject(E.Value);
+          ARequest.Promise.Reject(E.Value);
       end;
     except
       if IsRooted then
       begin
-        TGarbageCollector.Instance.RemoveTempRoot(Promise);
+        TGarbageCollector.Instance.RemoveTempRoot(ARequest.Promise);
         IsRooted := False;
       end;
-      Promise.Free;
       raise;
     end;
   finally
     if IsRooted then
-      TGarbageCollector.Instance.RemoveTempRoot(Promise);
+      TGarbageCollector.Instance.RemoveTempRoot(ARequest.Promise);
   end;
-  Result := Promise;
 end;
 
 function TGocciaBytecodeAsyncGeneratorObjectValue.AsyncGeneratorNext(
@@ -3269,10 +3391,23 @@ begin
 end;
 
 procedure TGocciaBytecodeAsyncGeneratorObjectValue.MarkReferences;
+var
+  I: Integer;
+  Index: Integer;
 begin
   inherited;
   if Assigned(FInner) then
     FInner.MarkReferences;
+  for I := 0 to FQueueCount - 1 do
+  begin
+    Index := FQueueHead + I;
+    if (Index < 0) or (Index > High(FQueue)) then
+      Continue;
+    if Assigned(FQueue[Index].Value) then
+      FQueue[Index].Value.MarkReferences;
+    if Assigned(FQueue[Index].Promise) then
+      FQueue[Index].Promise.MarkReferences;
+  end;
 end;
 
 function TGocciaBytecodeAsyncGeneratorObjectValue.ToStringTag: string;
@@ -3857,6 +3992,10 @@ var
     end;
   end;
 begin
+  if FCurrentCtorClass is TGocciaVMClassValue then
+    TGocciaVMClassValue(FCurrentCtorClass).FVM.FCurrentConstructorSuperCalled :=
+      True;
+
   if (FSuperClass is TGocciaObjectValue) and
      (not (FSuperClass is TGocciaClassValue)) and
      FSuperClass.IsConstructable then
@@ -3990,6 +4129,7 @@ begin
   FArgumentPoolCount := 0;
   FActiveDecoratorSession := nil;
   FLastClosureThisValue := RegisterUndefined;
+  FCurrentConstructorSuperCalled := False;
   FPrivateInitializerReceiver := nil;
   FPrivateInitializerPreserveExisting := False;
   FTempSavedStateRootCount := 0;
@@ -4069,6 +4209,8 @@ var
   ConstructedValue: TGocciaValue;
   ConstructorThisValue: TGocciaValue;
   InitializerReplayReceiver: TGocciaObjectValue;
+  PreviousConstructorSuperCalled: Boolean;
+  ConstructorSuperCalled: Boolean;
   function IsUndefinedConstructedValue(const AValue: TGocciaValue): Boolean;
   begin
     Result := (not Assigned(AValue)) or (AValue is TGocciaUndefinedLiteralValue);
@@ -4133,6 +4275,15 @@ var
         'Derived constructor returned non-object',
         SSuggestNotConstructorType);
   end;
+  procedure RequireDerivedConstructorThisInitialized(
+    const AValue: TGocciaValue);
+  begin
+    if HasDerivedConstructorReturnRestriction and
+       IsUndefinedConstructedValue(AValue) and
+       not ConstructorSuperCalled then
+      ThrowReferenceError(
+        'Must call super constructor before returning from derived constructor');
+  end;
   procedure ApplyReplacementResult(const AValue: TGocciaValue);
   begin
     if AValue is TGocciaObjectValue then
@@ -4184,13 +4335,21 @@ begin
       FVM.FPendingNewTarget := ANewTarget;
       if not Assigned(FVM.FPendingNewTarget) then
         FVM.FPendingNewTarget := Self;
-      ConstructedValue := FVM.InvokeFunctionValue(
-        FConstructorValue, AArguments, Instance);
+      PreviousConstructorSuperCalled := FVM.FCurrentConstructorSuperCalled;
+      FVM.FCurrentConstructorSuperCalled := False;
+      try
+        ConstructedValue := FVM.InvokeFunctionValue(
+          FConstructorValue, AArguments, Instance);
+        ConstructorSuperCalled := FVM.FCurrentConstructorSuperCalled;
+      finally
+        FVM.FCurrentConstructorSuperCalled := PreviousConstructorSuperCalled;
+      end;
       if FConstructorValue is TGocciaBytecodeFunctionValue then
         ConstructorThisValue := RegisterToValue(FVM.FLastClosureThisValue)
       else
         ConstructorThisValue := Instance;
       ApplyOwnConstructorResult(ConstructedValue, ConstructorThisValue);
+      RequireDerivedConstructorThisInitialized(ConstructedValue);
       if Assigned(InitializerReplayReceiver) and
          (Instance = InitializerReplayReceiver) and
          not HasBytecodePrivateInitializersApplied(Instance, Self) then
@@ -4299,6 +4458,8 @@ var
   ReturnRegister: TGocciaRegister;
   ConstructorThisRegister: TGocciaRegister;
   InitializerReplayReceiver: TGocciaObjectValue;
+  PreviousConstructorSuperCalled: Boolean;
+  ConstructorSuperCalled: Boolean;
   procedure EnsureBoxedArgs;
   begin
     if not Assigned(BoxedArgs) then
@@ -4407,6 +4568,24 @@ var
         'Derived constructor returned non-object',
         SSuggestNotConstructorType);
   end;
+  procedure RequireDerivedConstructorThisInitializedValue(
+    const AValue: TGocciaValue);
+  begin
+    if HasDerivedConstructorReturnRestriction and
+       IsUndefinedConstructedValue(AValue) and
+       not ConstructorSuperCalled then
+      ThrowReferenceError(
+        'Must call super constructor before returning from derived constructor');
+  end;
+  procedure RequireDerivedConstructorThisInitializedRegister(
+    const AValue: TGocciaRegister);
+  begin
+    if HasDerivedConstructorReturnRestriction and
+       IsUndefinedConstructedRegister(AValue) and
+       not ConstructorSuperCalled then
+      ThrowReferenceError(
+        'Must call super constructor before returning from derived constructor');
+  end;
   procedure ApplyReplacementResult(const AValue: TGocciaValue);
   begin
     if AValue is TGocciaObjectValue then
@@ -4473,38 +4652,56 @@ begin
       begin
         FVM.RunClassInitializers(Self, Instance);
         FVM.FPendingNewTarget := Self;
+        PreviousConstructorSuperCalled := FVM.FCurrentConstructorSuperCalled;
+        FVM.FCurrentConstructorSuperCalled := False;
         if FConstructorValue is TGocciaBytecodeFunctionValue then
         begin
-          BytecodeConstructor := TGocciaBytecodeFunctionValue(FConstructorValue);
-          if Assigned(BytecodeConstructor.FClosure) and
-             Assigned(BytecodeConstructor.FClosure.Template) and
-             (not BytecodeConstructor.FClosure.Template.IsAsync) then
-          begin
-            ReturnRegister := FVM.ExecuteClosureRegisters(
-              BytecodeConstructor.FClosure, RegisterObject(Instance),
-              AArguments);
-            ConstructorThisRegister := FVM.FLastClosureThisValue;
-            ApplyOwnConstructorThisRegister(ConstructorThisRegister);
-            ApplyOwnConstructorRegister(ReturnRegister);
-          end
-          else
-          begin
-            EnsureBoxedArgs;
-            ConstructedValue := FVM.InvokeFunctionValue(
-              FConstructorValue, BoxedArgs, Instance);
-            if FConstructorValue is TGocciaBytecodeFunctionValue then
-              ApplyOwnConstructorThisRegister(FVM.FLastClosureThisValue);
-            ApplyOwnConstructorResult(ConstructedValue);
+          try
+            BytecodeConstructor := TGocciaBytecodeFunctionValue(FConstructorValue);
+            if Assigned(BytecodeConstructor.FClosure) and
+               Assigned(BytecodeConstructor.FClosure.Template) and
+               (not BytecodeConstructor.FClosure.Template.IsAsync) then
+            begin
+              ReturnRegister := FVM.ExecuteClosureRegisters(
+                BytecodeConstructor.FClosure, RegisterObject(Instance),
+                AArguments);
+              ConstructorSuperCalled := FVM.FCurrentConstructorSuperCalled;
+              ConstructorThisRegister := FVM.FLastClosureThisValue;
+              ApplyOwnConstructorThisRegister(ConstructorThisRegister);
+              ApplyOwnConstructorRegister(ReturnRegister);
+              RequireDerivedConstructorThisInitializedRegister(ReturnRegister);
+            end
+            else
+            begin
+              EnsureBoxedArgs;
+              ConstructedValue := FVM.InvokeFunctionValue(
+                FConstructorValue, BoxedArgs, Instance);
+              ConstructorSuperCalled := FVM.FCurrentConstructorSuperCalled;
+              if FConstructorValue is TGocciaBytecodeFunctionValue then
+                ApplyOwnConstructorThisRegister(FVM.FLastClosureThisValue);
+              ApplyOwnConstructorResult(ConstructedValue);
+              RequireDerivedConstructorThisInitializedValue(ConstructedValue);
+            end;
+          finally
+            FVM.FCurrentConstructorSuperCalled :=
+              PreviousConstructorSuperCalled;
           end;
         end
         else
         begin
-          EnsureBoxedArgs;
-          ConstructedValue := FVM.InvokeFunctionValue(
-            FConstructorValue, BoxedArgs, Instance);
-          if FConstructorValue is TGocciaBytecodeFunctionValue then
-            ApplyOwnConstructorThisRegister(FVM.FLastClosureThisValue);
-          ApplyOwnConstructorResult(ConstructedValue);
+          try
+            EnsureBoxedArgs;
+            ConstructedValue := FVM.InvokeFunctionValue(
+              FConstructorValue, BoxedArgs, Instance);
+            ConstructorSuperCalled := FVM.FCurrentConstructorSuperCalled;
+            if FConstructorValue is TGocciaBytecodeFunctionValue then
+              ApplyOwnConstructorThisRegister(FVM.FLastClosureThisValue);
+            ApplyOwnConstructorResult(ConstructedValue);
+            RequireDerivedConstructorThisInitializedValue(ConstructedValue);
+          finally
+            FVM.FCurrentConstructorSuperCalled :=
+              PreviousConstructorSuperCalled;
+          end;
         end;
       end
       else
@@ -9084,6 +9281,7 @@ begin
       FCurrentNewTarget := FPendingNewTarget;
     FPendingNewTarget := nil;
     RestoredContinuation := Assigned(GActiveBytecodeGenerator) and
+      (GActiveBytecodeGenerator.FClosure = AClosure) and
       GActiveBytecodeGenerator.RestoreContinuation(
         Frame, SavedHandlerCount, PrevCovLine);
     if RestoredContinuation then
@@ -11528,7 +11726,7 @@ begin
             AwaitContinuation := GActiveBytecodeGenerator
           else if not Template.IsGenerator then
             AwaitContinuation := TGocciaBytecodeGeneratorObjectValue.CreateRegisters(
-              Self, FCurrentClosure, GetLocalRegister(0), FCurrentArguments)
+              Self, FCurrentClosure, GetLocalRegister(0), FCurrentArguments, False)
           else
             AwaitContinuation := nil;
 

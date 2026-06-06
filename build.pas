@@ -273,17 +273,42 @@ begin
   end;
 end;
 
+function HasStaleArtifactSignature(const AOutput: string): Boolean;
+var
+  LowerOutput: string;
+begin
+  LowerOutput := LowerCase(AOutput);
+  Result :=
+    (Pos('compilation raised exception internally', LowerOutput) > 0) or
+    (Pos('error while compiling resources', LowerOutput) > 0) or
+    ((Pos('.reslst', LowerOutput) > 0) and
+     ((Pos('cannot open', LowerOutput) > 0) or
+      (Pos('not found', LowerOutput) > 0) or
+      (Pos('no such file', LowerOutput) > 0)));
+end;
+
+procedure PrintBuildFailureAndExit(const AOutput, AFailureMessage,
+  ATarget: string);
+begin
+  WriteLn(AOutput);
+  if HasStaleArtifactSignature(AOutput) then
+  begin
+    WriteLn('');
+    WriteLn('Hint: stale FPC build artifacts can cause this error.');
+    WriteLn('Retry with: ./build.pas clean ', ATarget);
+    WriteLn('');
+  end;
+  WriteLn(AFailureMessage);
+  Halt(1);
+end;
+
 procedure BuildREPL;
 var
   Output: string;
 begin
   WriteLn('Building GocciaREPL...');
   if not RunCommand('fpc', FPCArgs('source/app/GocciaREPL.dpr'), Output) then
-  begin
-    WriteLn(Output);
-    WriteLn('GocciaREPL build failed');
-    Halt(1);
-  end;
+    PrintBuildFailureAndExit(Output, 'GocciaREPL build failed', 'repl');
   WriteLn(Output);
   WriteLn('GocciaREPL built successfully');
 end;
@@ -295,11 +320,8 @@ begin
   WriteLn('');
   WriteLn('Building GocciaScriptLoader...');
   if not RunCommand('fpc', FPCArgs('source/app/GocciaScriptLoader.dpr'), Output) then
-  begin
-    WriteLn(Output);
-    WriteLn('GocciaScriptLoader build failed');
-    Halt(1);
-  end;
+    PrintBuildFailureAndExit(Output, 'GocciaScriptLoader build failed',
+      'loader');
   WriteLn(Output);
   WriteLn('GocciaScriptLoader built successfully');
   WriteLn('');
@@ -312,11 +334,8 @@ begin
   WriteLn('');
   WriteLn('Building GocciaScriptLoaderBare...');
   if not RunCommand('fpc', FPCArgs('source/app/GocciaScriptLoaderBare.dpr'), Output) then
-  begin
-    WriteLn(Output);
-    WriteLn('GocciaScriptLoaderBare build failed');
-    Halt(1);
-  end;
+    PrintBuildFailureAndExit(Output, 'GocciaScriptLoaderBare build failed',
+      'loaderbare');
   WriteLn(Output);
   WriteLn('GocciaScriptLoaderBare built successfully');
   WriteLn('');
@@ -345,11 +364,8 @@ begin
   for K := 0 to TestFiles.Count - 1 do
   begin
     if not RunCommand('fpc', FPCArgs(TestFiles[K]), Output) then
-    begin
-      WriteLn(Output);
-      WriteLn('Test build failed: ', TestFiles[K]);
-      Halt(1);
-    end;
+      PrintBuildFailureAndExit(Output, 'Test build failed: ' + TestFiles[K],
+        'tests');
     WriteLn(Output);
   end;
 
@@ -362,11 +378,8 @@ var
 begin
   WriteLn('Building GocciaTestRunner...');
   if not RunCommand('fpc', FPCArgs('source/app/GocciaTestRunner.dpr'), Output) then
-  begin
-    WriteLn(Output);
-    WriteLn('GocciaTestRunner build failed');
-    Halt(1);
-  end;
+    PrintBuildFailureAndExit(Output, 'GocciaTestRunner build failed',
+      'testrunner');
   WriteLn(Output);
   WriteLn('GocciaTestRunner built successfully');
 end;
@@ -377,11 +390,8 @@ var
 begin
   WriteLn('Building GocciaBenchmarkRunner...');
   if not RunCommand('fpc', FPCArgs('source/app/GocciaBenchmarkRunner.dpr'), Output) then
-  begin
-    WriteLn(Output);
-    WriteLn('GocciaBenchmarkRunner build failed');
-    Halt(1);
-  end;
+    PrintBuildFailureAndExit(Output, 'GocciaBenchmarkRunner build failed',
+      'benchmarkrunner');
   WriteLn(Output);
   WriteLn('GocciaBenchmarkRunner built successfully');
 end;
@@ -392,11 +402,7 @@ var
 begin
   WriteLn('Building GocciaBundler...');
   if not RunCommand('fpc', FPCArgs('source/app/GocciaBundler.dpr'), Output) then
-  begin
-    WriteLn(Output);
-    WriteLn('GocciaBundler build failed');
-    Halt(1);
-  end;
+    PrintBuildFailureAndExit(Output, 'GocciaBundler build failed', 'bundler');
   WriteLn(Output);
   WriteLn('GocciaBundler built successfully');
 end;
@@ -418,6 +424,7 @@ begin
     Files.AddStrings(FindAllFiles('build/compiled', '.ppu'));
     Files.AddStrings(FindAllFiles('build/compiled', '.o'));
     Files.AddStrings(FindAllFiles('build/compiled', '.res'));
+    Files.AddStrings(FindAllFiles('build/compiled', '.reslst'));
 
     for K := 0 to Files.Count - 1 do
       DeleteFile(Files[K]);

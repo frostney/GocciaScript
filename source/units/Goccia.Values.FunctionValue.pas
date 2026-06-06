@@ -65,6 +65,7 @@ type
   private
     FSuperClass: TGocciaValue;
     FOwningClass: TGocciaValue; // TGocciaClassValue stored as TGocciaValue to avoid circular dependency
+    FLastSuperConstructorCalled: Boolean;
   protected
     function CreateCallScope: TGocciaScope; override;
   public
@@ -76,6 +77,8 @@ type
 
     property SuperClass: TGocciaValue read FSuperClass write FSuperClass;
     property OwningClass: TGocciaValue read FOwningClass write FOwningClass;
+    property LastSuperConstructorCalled: Boolean
+      read FLastSuperConstructorCalled;
   end;
 
 implementation
@@ -466,6 +469,7 @@ constructor TGocciaMethodValue.Create(const AParameters: TGocciaParameterArray; 
 begin
   inherited Create(AParameters, ABodyStatements, AClosure, AName);
   FSuperClass := ASuperClass;
+  FLastSuperConstructorCalled := False;
 end;
 
 function TGocciaMethodValue.CallWithThisValue(
@@ -501,8 +505,19 @@ begin
     end;
     PushCurrentFunctionExecutionContext(CallScope, Self);
     FunctionContextPushed := True;
+    if CallScope is TGocciaMethodCallScope then
+      TGocciaMethodCallScope(CallScope).SuperConstructorCalled := False;
     Result := ExecuteBody(CallScope, AArguments, AThisValue);
-    AFinalThisValue := CallScope.ThisValue;
+    if (CallScope is TGocciaMethodCallScope) and
+       not TGocciaMethodCallScope(CallScope).SuperConstructorCalled then
+      AFinalThisValue := TGocciaUndefinedLiteralValue.UndefinedValue
+    else
+      AFinalThisValue := CallScope.ThisValue;
+    if CallScope is TGocciaMethodCallScope then
+      FLastSuperConstructorCalled :=
+        TGocciaMethodCallScope(CallScope).SuperConstructorCalled
+    else
+      FLastSuperConstructorCalled := False;
   finally
     if FunctionContextPushed then
       PopCurrentFunctionExecutionContext;

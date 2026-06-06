@@ -41,6 +41,11 @@ begin
         SysUtils.Format('Identifier ''%s'' has already been declared',
           [DeclName]), 0, 0, ASourcePath, nil);
     end;
+    if AIsVar and (AScope.ScopeKind = skGlobal) and
+       not AScope.CanDeclareGlobalVar(DeclName) then
+      raise TGocciaTypeError.Create(
+        SysUtils.Format('Cannot declare global var ''%s''', [DeclName]),
+        0, 0, ASourcePath, nil);
   end
   else if APattern is TGocciaObjectDestructuringPattern then
   begin
@@ -87,6 +92,11 @@ var
         SysUtils.Format('Identifier ''%s'' has already been declared',
           [AName]), ALine, AColumn, ASourcePath, nil);
     end;
+    if (AScope.ScopeKind = skGlobal) and
+       not AScope.CanDeclareGlobalFunction(AName) then
+      raise TGocciaTypeError.Create(
+        SysUtils.Format('Cannot declare global function ''%s''', [AName]),
+        ALine, AColumn, ASourcePath, nil);
   end;
 begin
   for I := 0 to AProgram.Body.Count - 1 do
@@ -108,6 +118,11 @@ begin
             SysUtils.Format('Identifier ''%s'' has already been declared',
               [DeclName]), Stmt.Line, Stmt.Column, ASourcePath, nil);
         end;
+        if VarDecl.IsVar and (AScope.ScopeKind = skGlobal) and
+           not AScope.CanDeclareGlobalVar(DeclName) then
+          raise TGocciaTypeError.Create(
+            SysUtils.Format('Cannot declare global var ''%s''', [DeclName]),
+            Stmt.Line, Stmt.Column, ASourcePath, nil);
       end;
     end
     else if Stmt is TGocciaFunctionDeclaration then

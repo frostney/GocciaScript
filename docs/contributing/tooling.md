@@ -6,7 +6,7 @@
 
 - **Auto-formatter** — `./format.pas` auto-fixes uses clauses, PascalCase naming, parameter prefixes, and stray spaces; runs via Lefthook pre-commit hook
 - **Editor config** — `.editorconfig` + VSCode/Cursor extensions for zero-config formatting on save
-- **Platform pitfalls** — FPC 3.2.2 `Int64`→`Double` conversion bugs (all platforms + AArch64-specific); endian-dependent byte indexing
+- **Platform pitfalls** — stale FPC artifacts after branch changes, FPC 3.2.2 `Int64`→`Double` conversion bugs (all platforms + AArch64-specific), endian-dependent byte indexing
 
 ## Auto-Formatting
 
@@ -86,6 +86,24 @@ The `runOnSave` command runs silently (`"runIn": "backend"`), so it will not ope
 All four layers enforce the same rules, providing defence in depth. The typical developer experience is: EditorConfig handles whitespace while you type, format-on-save fixes everything else when you save, and the pre-commit hook and CI catch anything that slips through.
 
 ## Platform-Specific Pitfalls
+
+### Stale FPC Build Artifacts
+
+After a branch switch, merge, PR sync, generated resource update, or unexplained
+compiler/resource failure, start by cleaning the target before diagnosing source
+code. FPC 3.2.2 can report stale compiled state as misleading internal compiler
+exceptions or resource-list errors.
+
+```bash
+./build.pas clean loaderbare
+./build.pas clean testrunner
+./build.pas clean
+```
+
+Treat messages such as `Compilation raised exception internally` and
+`Error while compiling resources` as "clean first, diagnose second". Only
+investigate the reported Pascal source line after the same target still fails
+from a clean build.
 
 ### `Int64` to `Double` Conversion on FPC 3.2.2
 

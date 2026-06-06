@@ -639,6 +639,12 @@ var
   SwitchStmt: TGocciaSwitchStatement;
   UsingDecl: TGocciaUsingDeclaration;
   I, J: Integer;
+  function IsLabelledFunctionDeclaration(
+    const AStatement: TGocciaStatement): Boolean;
+  begin
+    Result := Assigned(AStatement) and (AStatement.LabelCount > 0) and
+      (AStatement is TGocciaFunctionDeclaration);
+  end;
 begin
   if not Assigned(AStmt) then
     Exit;
@@ -674,6 +680,9 @@ begin
   else if AStmt is TGocciaIfStatement then
   begin
     IfStmt := TGocciaIfStatement(AStmt);
+    if IsLabelledFunctionDeclaration(IfStmt.Consequent) or
+       IsLabelledFunctionDeclaration(IfStmt.Alternate) then
+      ThrowSyntaxError('Invalid labelled function declaration');
     ValidateEvalEarlyErrorExpression(IfStmt.Condition, AAllowNewTarget,
       AAllowSuperProperty, AAllowSuperCall);
     ValidateEvalEarlyErrorStatement(IfStmt.Consequent, AAllowNewTarget,
@@ -1936,6 +1945,21 @@ var
     RunClassInstanceInitializers(CurrentCtorClass, AReplacement, AContext,
       iimEagerReplacement);
   end;
+  procedure MarkSuperConstructorCalled;
+  var
+    CurrentScope: TGocciaScope;
+  begin
+    CurrentScope := AContext.Scope;
+    while Assigned(CurrentScope) do
+    begin
+      if CurrentScope is TGocciaMethodCallScope then
+      begin
+        TGocciaMethodCallScope(CurrentScope).SuperConstructorCalled := True;
+        Exit;
+      end;
+      CurrentScope := CurrentScope.Parent;
+    end;
+  end;
 begin
   Roots.Initialize;
   CheckExecutionTimeout;
@@ -2048,6 +2072,7 @@ begin
       Arguments.Free;
       Roots.Clear;
     end;
+    MarkSuperConstructorCalled;
     AddValueRoot(Roots, Result);
     CollectInterpreterMemoryPressure(Result);
     Roots.Clear;
@@ -4713,6 +4738,16 @@ var
   ConditionResult: Boolean;
   BodyContext: TGocciaEvaluationContext;
   PatternHandled: Boolean;
+  procedure ActivateAnnexBFunctionDeclaration(
+    const AStatement: TGocciaStatement;
+    const ABodyContext: TGocciaEvaluationContext);
+  begin
+    if not ABodyContext.NonStrictMode then
+      Exit;
+    if (AStatement is TGocciaFunctionDeclaration) or
+       (AStatement is TGocciaExportFunctionDeclaration) then
+      HoistSingleFunctionDeclaration(AStatement, ABodyContext, False);
+  end;
 begin
   ConditionResult := EvaluateConditionWithPatternBindings(AIfStatement.Condition,
     AContext, BodyContext, PatternHandled);
@@ -4730,6 +4765,7 @@ begin
   if ConditionResult then
   begin
     try
+      ActivateAnnexBFunctionDeclaration(AIfStatement.Consequent, BodyContext);
       Result := EvaluateStatement(AIfStatement.Consequent, BodyContext);
     finally
       if PatternHandled then
@@ -4737,7 +4773,10 @@ begin
     end;
   end
   else if Assigned(AIfStatement.Alternate) then
+  begin
+    ActivateAnnexBFunctionDeclaration(AIfStatement.Alternate, AContext);
     Result := EvaluateStatement(AIfStatement.Alternate, AContext)
+  end
   else
     Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
 end;
@@ -7609,6 +7648,11 @@ begin
       ConstructedValue := AClassValue.ConstructorMethod.CallWithThisValue(
         AArguments, Instance, ConstructorThisValue, AClassValue);
       ApplyOwnConstructorResult(ConstructedValue, ConstructorThisValue);
+      if HasDerivedConstructorReturnRestriction and
+         IsUndefinedConstructedValue(ConstructedValue) and
+         not AClassValue.ConstructorMethod.LastSuperConstructorCalled then
+        ThrowReferenceError(
+          'Must call super constructor before returning from derived constructor');
     end
     else if Assigned(AClassValue.SuperClass) and Assigned(AClassValue.SuperClass.ConstructorMethod) then
     begin

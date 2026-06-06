@@ -164,6 +164,7 @@ type
     FSuperClass: TGocciaValue;
     FOwningClass: TGocciaValue;
     FNewTarget: TGocciaValue;
+    FSuperConstructorCalled: Boolean;
   protected
     function GetOwningClass: TGocciaValue; override;
     function GetSuperClass: TGocciaValue; override;
@@ -175,6 +176,8 @@ type
     property SuperClass: TGocciaValue read FSuperClass;
     property OwningClass: TGocciaValue read FOwningClass;
     property NewTarget: TGocciaValue read FNewTarget write FNewTarget;
+    property SuperConstructorCalled: Boolean
+      read FSuperConstructorCalled write FSuperConstructorCalled;
   end;
 
   // Scope for instance property initialization -- carries owning class

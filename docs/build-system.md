@@ -8,6 +8,7 @@
 - **Two modes** — `--dev` (default: debug info, checks) and `--prod` (O4, stripped, smart-linked)
 - **CI/CD** — `ci.yml` for main/tags (full platform matrix), `pr.yml` for PRs (ubuntu-latest x64 only, with benchmark comparison)
 - **Auto-formatter** — `./format.pas` with Lefthook pre-commit hook enforces code style automatically
+- **Clean recovery** — `./build.pas clean <target>` clears stale FPC artifacts before diagnosing misleading compiler/resource failures
 
 GocciaScript uses a self-hosted build script written in FreePascal, executed via `instantfpc`. No external build tools (Make, CMake, npm) are required beyond the FreePascal compiler itself.
 
@@ -39,7 +40,7 @@ The build script supports two modes via `--dev` (default) and `--prod` flags:
 ./build.pas --prod    # Production build of all components
 ```
 
-Runs a clean (removes stale `.ppu`, `.o`, `.res` from `build/compiled/`), then builds all components in order: tests, loader, loaderbare, testrunner, benchmarkrunner, bundler, repl.
+Runs a clean (removes stale `.ppu`, `.o`, `.res`, and `.reslst` from `build/compiled/`), then builds all components in order: tests, loader, loaderbare, testrunner, benchmarkrunner, bundler, repl.
 
 ### Build Specific Components
 
@@ -62,11 +63,17 @@ Multiple components can be specified:
 ### Clean Build Artifacts
 
 ```bash
-./build.pas clean              # Remove stale .ppu, .o, .res from build/compiled/
+./build.pas clean              # Remove stale .ppu, .o, .res, .reslst from build/compiled/
 ./build.pas clean loader       # Clean then build loader
 ```
 
 A full build (no specific targets) automatically cleans first.
+
+Use the clean form after a branch switch, merge, PR sync, generated resource
+update, or unexplained FPC/resource compiler error. FPC 3.2.2 can report stale
+compiled state as misleading messages such as `Compilation raised exception
+internally` or `Error while compiling resources`; clean the target first, then
+diagnose the reported source line only if it still fails.
 
 ### Compile and Run
 
@@ -376,7 +383,7 @@ All compiled binaries go to the `build/` directory:
 | `build/GocciaBundler` | `source/app/GocciaBundler.dpr` | Bundler (source to `.gbc`) |
 | `build/Goccia.Values.Primitives.Test` | `*.Test.pas` | Pascal unit test binaries |
 
-Intermediate files (`.o`, `.ppu`) go to `build/compiled/` to keep the source tree clean.
+Intermediate files (`.o`, `.ppu`, generated resource lists) go to `build/compiled/` to keep the source tree clean.
 
 ## Compiler Configuration
 

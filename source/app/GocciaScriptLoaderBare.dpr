@@ -35,6 +35,7 @@ uses
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction,
+  Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
@@ -106,6 +107,21 @@ const
 
 procedure ConfigureEngine(const AEngine: TGocciaEngine;
   const AExecutor: TGocciaExecutor; const AOptions: TBareOptions); forward;
+
+procedure InstallTest262EvalGlobal(const AEngine: TGocciaEngine;
+  const AEvalHost: TBareTest262EvalHost);
+var
+  EvalFunction: TGocciaNativeFunctionValue;
+  GlobalObject: TGocciaObjectValue;
+begin
+  EvalFunction := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+    AEvalHost.Eval, 'eval', 1);
+  EvalFunction.DirectEvalHost := True;
+  GlobalObject := TGocciaObjectValue(AEngine.Realm.GlobalObject);
+  GlobalObject.DefineProperty('eval',
+    TGocciaPropertyDescriptorData.Create(EvalFunction,
+      [pfWritable, pfConfigurable]));
+end;
 
 function TBarePrintHost.Print(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
@@ -271,7 +287,6 @@ end;
 constructor TBareTest262Realm.Create(const AOptions: TBareOptions);
 var
   ChildOptions: TBareOptions;
-  EvalFunction: TGocciaNativeFunctionValue;
 begin
   inherited Create;
   FSource := TStringList.Create;
@@ -283,11 +298,8 @@ begin
   ConfigureEngine(FEngine, FExecutor, ChildOptions);
 
   FEvalHost := TBareTest262EvalHost.Create(FEngine);
-  EvalFunction :=
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(FEvalHost.Eval, 'eval', 1);
-  EvalFunction.DirectEvalHost := True;
-  FEngine.RegisterGlobal('eval', EvalFunction);
   FEngine.RefreshGlobalThis;
+  InstallTest262EvalGlobal(FEngine, FEvalHost);
   FEngine.SuspendRealmExecutionContext;
 end;
 
@@ -525,17 +537,12 @@ procedure RegisterBareGlobals(const AEngine: TGocciaEngine;
   const AOptions: TBareOptions);
 var
   Test262Obj: TGocciaObjectValue;
-  EvalFunction: TGocciaNativeFunctionValue;
 begin
   AEngine.RegisterGlobal(BARE_PRINT_GLOBAL_NAME,
     TGocciaNativeFunctionValue.CreateWithoutPrototype(APrintHost.Print,
       BARE_PRINT_GLOBAL_NAME, -1));
   if AOptions.Test262Host then
   begin
-    EvalFunction := TGocciaNativeFunctionValue.CreateWithoutPrototype(
-      ATest262EvalHost.Eval, 'eval', 1);
-    EvalFunction.DirectEvalHost := True;
-    AEngine.RegisterGlobal('eval', EvalFunction);
     AEngine.GocciaGlobal.AssignProperty('test262Host',
       TGocciaBooleanLiteralValue.TrueValue);
     Test262Obj := TGocciaObjectValue.Create;
@@ -548,6 +555,8 @@ begin
     AEngine.GocciaGlobal.AssignProperty('test262', Test262Obj);
   end;
   AEngine.RefreshGlobalThis;
+  if AOptions.Test262Host then
+    InstallTest262EvalGlobal(AEngine, ATest262EvalHost);
 end;
 
 procedure PrintResult(const AResult: TGocciaValue; const APrint: Boolean);
