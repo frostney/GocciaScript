@@ -613,15 +613,26 @@ end;
 function WaitForFetchPromise(const APromise: TGocciaPromiseValue): Boolean;
 var
   Manager: TGocciaFetchManager;
+  HasPendingFetch: Boolean;
 begin
-  DrainMicrotasksAndFetchCompletions;
-  if not Assigned(APromise) or (APromise.State <> gpsPending) then
-    Exit(Assigned(APromise));
-
-  Manager := TGocciaFetchManager.Instance;
-  if not Assigned(Manager) then
+  if not Assigned(APromise) then
     Exit(False);
-  Result := Manager.WaitForPromise(APromise);
+
+  while APromise.State = gpsPending do
+  begin
+    DrainMicrotasksAndFetchCompletions;
+    if APromise.State <> gpsPending then
+      Exit(True);
+
+    Manager := TGocciaFetchManager.Instance;
+    HasPendingFetch := Assigned(Manager) and Manager.HasPending;
+    if not HasPendingFetch and not HasPendingAtomicsWaitAsyncCompletions then
+      Exit(False);
+
+    Sleep(FETCH_POLL_INTERVAL_MS);
+  end;
+
+  Result := True;
 end;
 
 procedure WaitForFetchIdle;
