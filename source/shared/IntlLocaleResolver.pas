@@ -50,17 +50,17 @@ begin
 end;
 
 // ECMA-402 ES2026 §9.2.3 LookupMatchingLocaleByPrefix(availableLocales, requestedLocales)
-function LocaleWithoutUnicodeExtension(const ALocale: string): string;
+function LocaleWithoutUnicodeExtension(const AParsed: TBcp47Tag): string; overload;
 var
   Parsed: TBcp47Tag;
   FilteredExtensions: TBcp47ExtensionArray;
   I, Count: Integer;
 begin
   Result := '';
-  Parsed := ParseBcp47Tag(ALocale);
-  if not Parsed.IsValid then
+  if not AParsed.IsValid then
     Exit;
 
+  Parsed := AParsed;
   Count := 0;
   SetLength(FilteredExtensions, Length(Parsed.Extensions));
   for I := 0 to High(Parsed.Extensions) do
@@ -74,6 +74,14 @@ begin
   Parsed.Extensions := FilteredExtensions;
 
   Result := CanonicalizeBcp47Tag(Parsed);
+end;
+
+function LocaleWithoutUnicodeExtension(const ALocale: string): string; overload;
+var
+  Parsed: TBcp47Tag;
+begin
+  Parsed := ParseBcp47Tag(ALocale);
+  Result := LocaleWithoutUnicodeExtension(Parsed);
 end;
 
 // ECMA-402 ES2026 supportedLocalesOf constructors use [[AvailableLocales]].
@@ -301,7 +309,7 @@ begin
     if not Parsed.IsValid then
       Continue;
 
-    NoExtensionTag := LocaleWithoutUnicodeExtension(ARequestedLocales[I]);
+    NoExtensionTag := LocaleWithoutUnicodeExtension(Parsed);
     if NoExtensionTag = '' then
       Continue;
 

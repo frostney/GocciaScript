@@ -12,6 +12,7 @@ describe.runIf(isIntl)("Intl constructor supportedLocalesOf", () => {
     Intl.DisplayNames,
     Intl.DurationFormat,
     Intl.ListFormat,
+    Intl.Locale,
     Intl.NumberFormat,
     Intl.PluralRules,
     Intl.RelativeTimeFormat,
