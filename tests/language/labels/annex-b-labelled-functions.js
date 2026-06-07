@@ -23,6 +23,7 @@ describe("Annex B labelled function declarations", () => {
       "do l: function f() {} while (false);",
       "for (let i = 0; i < 0; i++) l: function f() {}",
       "for (const key in {}) l: function f() {}",
+      "let key; for (key in {}) l: function f() {}",
       "for (const value of []) l: function f() {}",
     ];
 

@@ -4710,6 +4710,7 @@ begin
           SSuggestCloseParenForOf);
 
         BodyStmt := IterationBodyStatement;
+        RejectLabelledFunctionStatementBody(BodyStmt, Line, Column);
         Result := TGocciaForInStatement.Create(False, '', nil,
           IterableExpr, BodyStmt, Line, Column, AssignmentTarget);
         Exit;
