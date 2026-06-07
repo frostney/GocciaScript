@@ -11,6 +11,17 @@ test("regex literals create RegExp objects", () => {
   expect(regex.test("zABz")).toBe(true);
 });
 
+test("regex literals create a fresh object on each evaluation", () => {
+  const create = () => /ab/g;
+  const first = create();
+  const second = create();
+
+  first.lastIndex = 2;
+
+  expect(first === second).toBe(false);
+  expect(second.lastIndex).toBe(0);
+});
+
 test("regex literals coexist with division expressions", () => {
   expect(/ab/.test("zabz")).toBe(true);
   expect(8 / 2).toBe(4);

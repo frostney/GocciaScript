@@ -160,6 +160,11 @@ begin
         WriteDouble(Constant.FloatValue);
       bckString:
         WriteString(Constant.StringValue);
+      bckRegExpLiteral:
+      begin
+        WriteString(Constant.StringValue);
+        WriteString(Constant.RegExpFlags);
+      end;
       bckTemplateObject:
       begin
         // Serialise cooked and raw string arrays; CachedValue is runtime-only
@@ -360,7 +365,7 @@ var
   EvalBinding: TGocciaDirectEvalBindingInfo;
   HasDebug: Boolean;
   DebugInfo: TGocciaDebugInfo;
-  SourceFile: string;
+  SourceFile, RegExpPattern, RegExpFlags: string;
   LineMapCount, LocalCount: UInt32;
   CookedStrings, RawStrings: TGocciaBytecodeStringArray;
   CookedValid: TGocciaBytecodeTemplateCookedValid;
@@ -398,6 +403,12 @@ begin
       bckInteger: Result.AddConstantInteger(ReadInt64);
       bckFloat:   Result.AddConstantFloat(ReadDouble);
       bckString:  Result.AddConstantString(ReadString);
+      bckRegExpLiteral:
+      begin
+        RegExpPattern := ReadString;
+        RegExpFlags := ReadString;
+        Result.AddConstantRegExpLiteral(RegExpPattern, RegExpFlags);
+      end;
       bckTemplateObject:
       begin
         StrCount := ReadUInt16;

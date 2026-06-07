@@ -135,6 +135,8 @@ type
     // ES2026 §13.2.8.3 GetTemplateObject — lazy-build helper for bckTemplateObject constants.
     function BuildTemplateObjectConstant(const ATemplate: TGocciaFunctionTemplate;
       const AConstantIndex: Integer): TGocciaValue;
+    function BuildRegExpLiteralConstant(const ATemplate: TGocciaFunctionTemplate;
+      const AConstantIndex: Integer): TGocciaValue;
     function AcquireArguments(const ACapacity: Integer = 0): TGocciaArgumentsCollection;
     procedure ReleaseArguments(const AArguments: TGocciaArgumentsCollection);
     procedure AcquireRegisters(const ACount: Integer);
@@ -366,6 +368,7 @@ uses
   Goccia.InstructionLimit,
   Goccia.PatternMatching,
   Goccia.Profiler,
+  Goccia.RegExp.Runtime,
   Goccia.SourcePipeline,
   Goccia.StackLimit,
   Goccia.Timeout,
@@ -5217,6 +5220,22 @@ begin
   end;
 end;
 
+function TGocciaVM.BuildRegExpLiteralConstant(const ATemplate: TGocciaFunctionTemplate;
+  const AConstantIndex: Integer): TGocciaValue;
+var
+  Constant: TGocciaBytecodeConstant;
+  Slot: Integer;
+  Cached, UpdatedCache: TObject;
+begin
+  Constant := ATemplate.GetConstantUnchecked(AConstantIndex);
+  Slot := Integer(Constant.IntValue);
+  Cached := ATemplate.GetRegExpProgramCache(Slot);
+  Result := CreateRegExpLiteralObject(
+    Constant.StringValue, Constant.RegExpFlags, Cached, UpdatedCache);
+  if UpdatedCache <> Cached then
+    ATemplate.SetRegExpProgramCache(Slot, UpdatedCache);
+end;
+
 function TGocciaVM.AcquireArguments(
   const ACapacity: Integer): TGocciaArgumentsCollection;
 begin
@@ -9553,6 +9572,10 @@ begin
         else
           FRegisters[A] := ValueToRegister(
             ConstantToValue(Template.GetConstantUnchecked(DecodeBx(Instruction))));
+
+      OP_LOAD_REGEXP:
+        FRegisters[A] := ValueToRegister(
+          BuildRegExpLiteralConstant(Template, DecodeBx(Instruction)));
 
       OP_LOAD_UNDEFINED:
         FRegisters[A] := RegisterUndefined;

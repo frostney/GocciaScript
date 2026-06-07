@@ -25,6 +25,10 @@ type
     // runtime-only (starts nil, populated by the VM on first execution).
     // IntValue stores the cache slot index in TGocciaFunctionTemplate.
     bckTemplateObject,
+    // ES2026 §13.2.7.1: regexp literal payload. Each evaluation creates a
+    // fresh RegExp object, while IntValue identifies a runtime-only compiled
+    // program cache slot on the owning TGocciaFunctionTemplate.
+    bckRegExpLiteral,
     bckBigInt
   );
 
@@ -37,6 +41,7 @@ type
     IntValue: Int64;
     FloatValue: Double;
     StringValue: string;
+    RegExpFlags: string;                                  // for bckRegExpLiteral
     CookedStrings: TGocciaBytecodeStringArray;          // for bckTemplateObject
     RawStrings: TGocciaBytecodeStringArray;             // for bckTemplateObject
     CookedValid: TGocciaBytecodeTemplateCookedValid;    // for bckTemplateObject
@@ -127,6 +132,8 @@ type
     // number stored in the constant's IntValue field.  Not serialised to .gbc.
     FTemplateObjectCaches: array of TObject;  // TGocciaValue — typed as TObject to keep GC import out of interface
     FTemplateObjectCacheCount: Integer;
+    FRegExpProgramCaches: array of TObject;
+    FRegExpProgramCacheCount: Integer;
     function GetFunctionCount: Integer;
   public
     constructor Create(const AName: string);
@@ -145,8 +152,11 @@ type
     // no deduplication is performed.
     function AddConstantTemplateObject(const ACookedStrings, ARawStrings: array of string;
       const ACookedValid: array of Boolean): UInt16;
+    function AddConstantRegExpLiteral(const APattern, AFlags: string): UInt16;
     function GetTemplateObjectCache(const ASlot: Integer): TObject;
     procedure SetTemplateObjectCache(const ASlot: Integer; const AValue: TObject);
+    function GetRegExpProgramCache(const ASlot: Integer): TObject;
+    procedure SetRegExpProgramCache(const ASlot: Integer; const AValue: TObject);
     function AddFunction(const AFunction: TGocciaFunctionTemplate): UInt16;
     procedure AddUpvalueDescriptor(const AIsLocal: Boolean; const AIndex: UInt8);
     procedure AddDirectEvalEnvironment(const APC: UInt32;
@@ -263,6 +273,7 @@ begin
   FDirectEvalSyntheticArgumentsSlot := -1;
   FProfileIndex := -1;
   FTemplateSiteId := AllocateTemplateSiteId;
+  FRegExpProgramCacheCount := 0;
 end;
 
 destructor TGocciaFunctionTemplate.Destroy;
@@ -276,6 +287,8 @@ begin
       if Assigned(FTemplateObjectCaches[I]) then
         TGarbageCollector.Instance.UnpinObject(
           TGCManagedObject(FTemplateObjectCaches[I]));
+  for I := 0 to FRegExpProgramCacheCount - 1 do
+    FRegExpProgramCaches[I].Free;
   FStringConstantIndex.Free;
   FFunctions.Free;
   FDebugInfo.Free;
@@ -451,6 +464,27 @@ begin
   Inc(FConstantCount);
 end;
 
+// ES2026 §13.2.7.1 Runtime Semantics: Evaluation
+function TGocciaFunctionTemplate.AddConstantRegExpLiteral(
+  const APattern, AFlags: string): UInt16;
+begin
+  if FConstantCount > High(UInt16) then
+    raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
+  if FConstantCount >= Length(FConstants) then
+    SetLength(FConstants, FConstantCount * 2 + 8);
+  FConstants[FConstantCount].Kind := bckRegExpLiteral;
+  FConstants[FConstantCount].StringValue := APattern;
+  FConstants[FConstantCount].RegExpFlags := AFlags;
+  FConstants[FConstantCount].IntValue := FRegExpProgramCacheCount;
+
+  if FRegExpProgramCacheCount >= Length(FRegExpProgramCaches) then
+    SetLength(FRegExpProgramCaches, FRegExpProgramCacheCount * 2 + 4);
+  Inc(FRegExpProgramCacheCount);
+
+  Result := UInt16(FConstantCount);
+  Inc(FConstantCount);
+end;
+
 function TGocciaFunctionTemplate.GetTemplateObjectCache(const ASlot: Integer): TObject;
 begin
   if (ASlot >= 0) and (ASlot < FTemplateObjectCacheCount) then
@@ -464,6 +498,22 @@ procedure TGocciaFunctionTemplate.SetTemplateObjectCache(const ASlot: Integer;
 begin
   if (ASlot >= 0) and (ASlot < FTemplateObjectCacheCount) then
     FTemplateObjectCaches[ASlot] := AValue;
+end;
+
+function TGocciaFunctionTemplate.GetRegExpProgramCache(
+  const ASlot: Integer): TObject;
+begin
+  if (ASlot >= 0) and (ASlot < FRegExpProgramCacheCount) then
+    Result := FRegExpProgramCaches[ASlot]
+  else
+    Result := nil;
+end;
+
+procedure TGocciaFunctionTemplate.SetRegExpProgramCache(const ASlot: Integer;
+  const AValue: TObject);
+begin
+  if (ASlot >= 0) and (ASlot < FRegExpProgramCacheCount) then
+    FRegExpProgramCaches[ASlot] := AValue;
 end;
 
 function TGocciaFunctionTemplate.AddFunction(

@@ -14,6 +14,8 @@ procedure SetRegExpPrototype(const APrototype: TGocciaValue);
 function IsRegExpInstance(const AValue: TGocciaValue): Boolean;
 function IsRegExp(const AValue: TGocciaValue): Boolean;
 function CreateRegExpObject(const APattern, AFlags: string): TGocciaValue;
+function CreateRegExpLiteralObject(const APattern, AFlags: string;
+  const AProgramCache: TObject; out AUpdatedProgramCache: TObject): TGocciaValue;
 function CloneRegExpObject(const AValue: TGocciaValue): TGocciaValue;
 function MatchRegExpObjectOnce(const AValue: TGocciaValue; const AInput: string;
   out AMatchArray: TGocciaValue): Boolean;
@@ -60,6 +62,16 @@ type
     property CompiledProgram: TRegExpProgram read FCompiledProgram;
   end;
 
+  TGocciaCachedRegExpProgram = class
+  private
+    FFlags: string;
+    FProgram: TRegExpProgram;
+  public
+    constructor Create(const AProgram: TRegExpProgram; const AFlags: string);
+    property Flags: string read FFlags;
+    property Program_: TRegExpProgram read FProgram;
+  end;
+
 threadvar
   GRegExpPrototype: TGocciaObjectValue;
 
@@ -67,6 +79,14 @@ constructor TGocciaRegExpProgramData.Create(const AProgram: TRegExpProgram);
 begin
   inherited Create;
   FCompiledProgram := AProgram;
+end;
+
+constructor TGocciaCachedRegExpProgram.Create(const AProgram: TRegExpProgram;
+  const AFlags: string);
+begin
+  inherited Create;
+  FProgram := AProgram;
+  FFlags := AFlags;
 end;
 
 function GetRegExpPrototype: TGocciaValue;
@@ -78,6 +98,9 @@ procedure SetRegExpPrototype(const APrototype: TGocciaValue);
 begin
   GRegExpPrototype := TGocciaObjectValue(APrototype);
 end;
+
+function CreateRegExpObjectFromProgram(const APattern, AFlags: string;
+  const ACompiledProgram: TRegExpProgram): TGocciaValue; forward;
 
 function GetStringProperty(const AObject: TGocciaObjectValue;
   const AName: string): string;
@@ -296,8 +319,6 @@ end;
 
 function CreateRegExpObject(const APattern, AFlags: string): TGocciaValue;
 var
-  Obj: TGocciaObjectValue;
-  Source: string;
   CanonicalFlags: string;
   CompiledProgram: TRegExpProgram;
 begin
@@ -309,20 +330,53 @@ begin
       ThrowSyntaxError(E.Message);
   end;
 
+  Result := CreateRegExpObjectFromProgram(APattern, CanonicalFlags, CompiledProgram);
+end;
+
+function CreateRegExpObjectFromProgram(const APattern, AFlags: string;
+  const ACompiledProgram: TRegExpProgram): TGocciaValue;
+var
+  Obj: TGocciaObjectValue;
+  Source: string;
+begin
   Source := NormalizeRegExpSource(APattern);
   Obj := TGocciaObjectValue.Create(GRegExpPrototype);
   Obj.HasRegExpData := True;
-  Obj.RegExpData := TGocciaRegExpProgramData.Create(CompiledProgram);
+  Obj.RegExpData := TGocciaRegExpProgramData.Create(ACompiledProgram);
   Obj.DefineProperty(PROP_SOURCE,
     TGocciaPropertyDescriptorData.Create(
       TGocciaStringLiteralValue.Create(Source), []));
   Obj.DefineProperty(PROP_FLAGS,
     TGocciaPropertyDescriptorData.Create(
-      TGocciaStringLiteralValue.Create(CanonicalFlags), []));
+      TGocciaStringLiteralValue.Create(AFlags), []));
   Obj.DefineProperty(PROP_LAST_INDEX,
     TGocciaPropertyDescriptorData.Create(
       TGocciaNumberLiteralValue.Create(0), [pfWritable]));
   Result := Obj;
+end;
+
+function CreateRegExpLiteralObject(const APattern, AFlags: string;
+  const AProgramCache: TObject; out AUpdatedProgramCache: TObject): TGocciaValue;
+var
+  Cached: TGocciaCachedRegExpProgram;
+  CanonicalFlags: string;
+  CompiledProgram: TRegExpProgram;
+begin
+  Cached := TGocciaCachedRegExpProgram(AProgramCache);
+  if not Assigned(Cached) then
+  begin
+    try
+      CanonicalFlags := CanonicalizeRegExpFlags(AFlags);
+      CompiledProgram := CompileRegExpProgram(APattern, CanonicalFlags);
+    except
+      on E: Exception do
+        ThrowSyntaxError(E.Message);
+    end;
+    Cached := TGocciaCachedRegExpProgram.Create(CompiledProgram, CanonicalFlags);
+  end;
+
+  AUpdatedProgramCache := Cached;
+  Result := CreateRegExpObjectFromProgram(APattern, Cached.Flags, Cached.Program_);
 end;
 
 function CloneRegExpObject(const AValue: TGocciaValue): TGocciaValue;
