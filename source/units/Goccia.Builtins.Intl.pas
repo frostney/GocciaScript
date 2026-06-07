@@ -52,7 +52,6 @@ implementation
 uses
   SysUtils,
 
-  IntlICU,
   IntlLocaleResolver,
   IntlTypes,
 
@@ -592,11 +591,9 @@ var
   Arg, OptionsArg, V: TGocciaValue;
   Tags: TStringArray;
   Canonical: TStringArray;
-  Available: TStringArray;
-  AvailableTags: TStringArray;
+  Supported: TStringArray;
   ResultArr: TGocciaArrayValue;
-  I, Len, AvailCount: Integer;
-  AvailTag: string;
+  I, Len: Integer;
 begin
   Arg := AArgs.GetElement(0);
 
@@ -639,30 +636,11 @@ begin
   end;
 
   Canonical := CanonicalizeLocaleList(Tags);
-
-  // Get available locales from ICU and convert to BCP 47 tags
-  SetLength(AvailableTags, 0);
-  if TryICUGetAvailableLocales(Available) then
-  begin
-    AvailCount := 0;
-    SetLength(AvailableTags, Length(Available));
-    for I := 0 to High(Available) do
-    begin
-      if TryICUCanonicalizeLocale(Available[I], AvailTag) then
-      begin
-        AvailableTags[AvailCount] := AvailTag;
-        Inc(AvailCount);
-      end;
-    end;
-    SetLength(AvailableTags, AvailCount);
-  end;
+  Supported := SupportedLocalesOf(Canonical);
 
   ResultArr := TGocciaArrayValue.Create;
-  for I := 0 to High(Canonical) do
-  begin
-    if BestAvailableLocale(AvailableTags, Canonical[I]) <> '' then
-      ResultArr.Elements.Add(TGocciaStringLiteralValue.Create(Canonical[I]));
-  end;
+  for I := 0 to High(Supported) do
+    ResultArr.Elements.Add(TGocciaStringLiteralValue.Create(Supported[I]));
 
   Result := ResultArr;
 end;

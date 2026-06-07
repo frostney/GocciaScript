@@ -28,6 +28,10 @@ describe.runIf(isIntl)("Intl.getCanonicalLocales", () => {
     expect(result[1]).toBe("fr-FR");
   });
 
+  test("canonicalises grandfathered tags through CLDR aliases", () => {
+    expect(Intl.getCanonicalLocales("zh-guoyu")[0]).toBe("zh");
+  });
+
   test("throws RangeError for structurally invalid locale tag", () => {
     expect(() => Intl.getCanonicalLocales("!")).toThrow(RangeError);
   });
