@@ -884,7 +884,7 @@ When enabled, labels can target `break` and `continue` statements in interpreter
 - `break label;` exits the matching enclosing labeled statement, including labeled blocks, `switch`, `for...of`, `for await...of`, traditional `for(;;)` with `--compat-traditional-for-loop`, `for...in` with `--compat-for-in-loop`, and `while`/`do...while` with `--compat-while-loops`.
 - `continue label;` targets matching enclosing iteration statements only: `for...of`, `for await...of`, traditional `for(;;)` with `--compat-traditional-for-loop`, `for...in` with `--compat-for-in-loop`, and `while`/`do...while` with `--compat-while-loops`.
 
-With `--compat-function` and `--compat-non-strict-mode`, sloppy labelled function declarations follow the same Annex B compatibility rules as unlabelled block-level function declarations. Direct sloppy labelled function declarations are valid, but a labelled function declaration cannot be the immediate body of `if`, `else`, `with`, or an iteration statement; wrap it in a block if that legacy shape is required.
+With `--compat-function` and `--compat-non-strict-mode`, sloppy labeled function declarations follow the same Annex B compatibility rules as unlabeled block-level function declarations. Direct sloppy labeled function declarations are valid, but a labeled function declaration cannot be the immediate body of `if`, `else`, `with`, or an iteration statement; wrap it in a block if that legacy shape is required.
 
 ### Generators and Iterators
 
