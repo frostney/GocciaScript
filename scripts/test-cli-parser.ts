@@ -7,7 +7,7 @@
 
 import { $ } from "bun";
 import { LOADER } from "./test-cli/binaries";
-import { normalizeLineEndings, runLoaderJson } from "./test-cli/assertions";
+import { assertSyntaxError, normalizeLineEndings, runLoaderJson } from "./test-cli/assertions";
 
 // -- Error display (SyntaxError with caret and suggestion) ----------------------
 
@@ -67,6 +67,23 @@ console.log("Unsupported optional private field access...");
   if (res.json.error?.type !== "SyntaxError") throw new Error(`Expected SyntaxError for optional private access, got: ${res.json.error?.type}`);
   if (!String(res.json.error?.message).includes("Optional chaining with private fields is not supported")) {
     throw new Error(`Expected optional-private error message, got: ${JSON.stringify(res.json.error)}`);
+  }
+}
+
+// -- Malformed literal class accessors ------------------------------------------
+
+console.log("Malformed literal class accessors...");
+{
+  for (const [source, desc] of [
+    ['class C { get "dash-key" = 1; }\n', "string-named getter field"],
+    ["class C { get 1 = 1; }\n", "numeric-named getter field"],
+    ["class C { get class = 1; }\n", "keyword-named getter field"],
+    ['class C { set "dash-key" = 1; }\n', "string-named setter field"],
+    ["class C { set 1; }\n", "numeric-named setter declaration"],
+    ["class C { set class = 1; }\n", "keyword-named setter field"],
+  ] as const) {
+    assertSyntaxError(source, desc);
+    assertSyntaxError(source, `${desc} (bytecode)`, ["--mode=bytecode"]);
   }
 }
 

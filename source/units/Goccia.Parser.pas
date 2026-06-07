@@ -121,6 +121,8 @@ type
       const ATokenType: TGocciaTokenType): Boolean;
     function IsIdentifierBindingToken(
       const ATokenType: TGocciaTokenType): Boolean;
+    function ConsumeLiteralPropertyName(const AMessage,
+      ASuggestion: string): string;
     function ConsumeModuleExportName(const AMessage: string): TGocciaToken; overload;
     function ConsumeModuleExportName(const AMessage, ASuggestion: string): TGocciaToken; overload;
     function IsReservedKeywordName(const AName: string): Boolean;
@@ -764,6 +766,28 @@ begin
       Exit(True);
   end;
   Result := False;
+end;
+
+// ES2026 §13.2.5 LiteralPropertyName:
+// IdentifierName, StringLiteral, or NumericLiteral.
+function TGocciaParser.ConsumeLiteralPropertyName(const AMessage,
+  ASuggestion: string): string;
+var
+  Error: TGocciaSyntaxError;
+begin
+  if Check(gttString) then
+    Exit(Advance.Lexeme);
+
+  if Check(gttNumber) then
+    Exit(FormatDouble(ConvertNumberLiteral(Advance.Lexeme)));
+
+  if IsIdentifierNameToken(Peek.TokenType) then
+    Exit(Advance.Lexeme);
+
+  Error := TGocciaSyntaxError.Create(AMessage, Peek.Line, Peek.Column,
+    FFileName, FSourceLines);
+  Error.Suggestion := ASuggestion;
+  raise Error;
 end;
 
 function TGocciaParser.ConsumeModuleExportName(
@@ -6068,8 +6092,9 @@ begin
             SSuggestPrivateFieldMustFollow).Lexeme;
         end
         else
-          MemberName := Consume(gttIdentifier, 'Expected property name after "get"',
-            SSuggestProvideGetterPropertyName).Lexeme;
+          MemberName := ConsumeLiteralPropertyName(
+            'Expected property name after "get"',
+            SSuggestProvideGetterPropertyName);
       end
       else if not IsAccessor and CheckUnescapedIdentifierKeyword(KEYWORD_SET) and not CheckNext(gttColon) and not CheckNext(gttLeftParen) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) and not CheckNext(gttSemicolon) and not CheckNext(gttAssign) and not CheckNext(gttQuestion) then
       begin
@@ -6093,8 +6118,9 @@ begin
             SSuggestPrivateFieldMustFollow).Lexeme;
         end
         else
-          MemberName := Consume(gttIdentifier, 'Expected property name after "set"',
-            SSuggestProvideSetterPropertyName).Lexeme;
+          MemberName := ConsumeLiteralPropertyName(
+            'Expected property name after "set"',
+            SSuggestProvideSetterPropertyName);
       end
       else if Check(gttLeftBracket) then
       begin
@@ -6105,18 +6131,10 @@ begin
         IsComputed := True;
         MemberName := '';
       end
-      else if Check(gttNumber) then
-      begin
-        MemberName := FormatDouble(ConvertNumberLiteral(Advance.Lexeme));
-      end
-      else if Check(gttString) then
-      begin
-        MemberName := Advance.Lexeme;
-      end
       else
       begin
-        MemberName := Consume(gttIdentifier, 'Expected method or property name',
-          SSuggestClassMemberSyntax).Lexeme;
+        MemberName := ConsumeLiteralPropertyName(
+          'Expected method or property name', SSuggestClassMemberSyntax);
       end;
 
       if IsPrivate and not IsComputed and (MemberName <> '') then
@@ -6154,7 +6172,7 @@ begin
         Elements[High(Elements)].FieldInitializer := PropertyValue;
         Elements[High(Elements)].TypeAnnotation := FieldType;
       end
-      else if Check(gttAssign) then
+      else if (not IsGetter) and (not IsSetter) and Check(gttAssign) then
       begin
         Consume(gttAssign, 'Expected "=" in property',
           SSuggestAddPropertyInitializer);
@@ -6218,7 +6236,7 @@ begin
             InstancePropertyTypes.Add(MemberName, FieldType);
         end;
       end
-      else if CheckSemicolonOrASI then
+      else if (not IsGetter) and (not IsSetter) and CheckSemicolonOrASI then
       begin
         if Check(gttSemicolon) then
           Advance;
