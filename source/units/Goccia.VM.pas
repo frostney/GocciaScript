@@ -689,38 +689,110 @@ begin
   end;
 end;
 
+function DirectEvalLexicalClosure(const AVM: TGocciaVM): TGocciaBytecodeClosure;
+var
+  Candidate: TGocciaBytecodeClosure;
+  I: Integer;
+begin
+  Result := nil;
+  if not Assigned(AVM) then
+    Exit;
+
+  Candidate := AVM.FCurrentClosure;
+  if not Assigned(Candidate) then
+    Exit;
+
+  if not (Assigned(Candidate.Template) and Candidate.Template.IsArrow) then
+    Exit(Candidate);
+  if Assigned(Candidate.HomeObject) or Assigned(Candidate.HomeClass) then
+    Exit(Candidate);
+
+  for I := AVM.FFrameStackCount - 1 downto 0 do
+  begin
+    Candidate := AVM.FFrameStack[I].Closure;
+    if Assigned(Candidate) and Assigned(Candidate.Template) and
+       not Candidate.Template.IsArrow then
+      Exit(Candidate);
+  end;
+end;
+
+function DirectEvalLexicalThisValue(const AVM: TGocciaVM;
+  const AUseGlobalVarEnvironment: Boolean): TGocciaValue;
+var
+  Candidate: TGocciaBytecodeClosure;
+  I, Slot: Integer;
+begin
+  if Assigned(AVM) and Assigned(AVM.FCurrentClosure) and
+     Assigned(AVM.FCurrentClosure.Template) and
+     AVM.FCurrentClosure.Template.IsArrow then
+    for I := AVM.FFrameStackCount - 1 downto 0 do
+    begin
+      Candidate := AVM.FFrameStack[I].Closure;
+      if Assigned(Candidate) and Assigned(Candidate.Template) and
+         not Candidate.Template.IsArrow then
+      begin
+        if AVM.FFrameStack[I].LocalCellCount > 0 then
+        begin
+          Slot := AVM.FFrameStack[I].LocalCellBase;
+          if (Slot >= 0) and (Slot < Length(AVM.FLocalCellStack)) and
+             Assigned(AVM.FLocalCellStack[Slot]) then
+            Exit(RegisterToValue(AVM.FLocalCellStack[Slot].Value));
+        end;
+        if AVM.FFrameStack[I].RegisterCount > 0 then
+        begin
+          Slot := AVM.FFrameStack[I].RegisterBase;
+          if (Slot >= 0) and (Slot < Length(AVM.FRegisterStack)) then
+            Exit(RegisterToValue(AVM.FRegisterStack[Slot]));
+        end;
+        Break;
+      end;
+    end;
+
+  if Assigned(AVM) and (AVM.FLocalCellCount > 0) then
+    Exit(AVM.GetLocal(0));
+  if AUseGlobalVarEnvironment then
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  if Assigned(AVM) and Assigned(AVM.FGlobalThisValue) then
+    Exit(AVM.FGlobalThisValue);
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
 function TGocciaVMDirectEvalScope.GetSuperClass: TGocciaValue;
 var
+  Closure: TGocciaBytecodeClosure;
   HomeClass: TGocciaClassValue;
 begin
   Result := nil;
-  if not (Assigned(FVM) and Assigned(FVM.FCurrentClosure)) then
+  Closure := DirectEvalLexicalClosure(FVM);
+  if not Assigned(Closure) then
     Exit;
 
-  if FVM.FCurrentClosure.HomeClass is TGocciaClassValue then
+  if Closure.HomeClass is TGocciaClassValue then
   begin
-    HomeClass := TGocciaClassValue(FVM.FCurrentClosure.HomeClass);
+    HomeClass := TGocciaClassValue(Closure.HomeClass);
     if Assigned(HomeClass.SuperClass) then
       Exit(HomeClass.SuperClass);
     if Assigned(HomeClass.NativeSuperConstructor) then
       Exit(HomeClass.NativeSuperConstructor);
   end;
 
-  if Assigned(FVM.FCurrentClosure.HomeObject) then
-    Result := FVM.FCurrentClosure.HomeObject;
+  if Assigned(Closure.HomeObject) then
+    Result := Closure.HomeObject;
 end;
 
 function TGocciaVMDirectEvalScope.GetSuperConstructor: TGocciaValue;
 var
+  Closure: TGocciaBytecodeClosure;
   HomeClass: TGocciaClassValue;
   SuperConstructor: TGocciaValue;
 begin
   Result := nil;
-  if not (Assigned(FVM) and Assigned(FVM.FCurrentClosure) and
-     (FVM.FCurrentClosure.HomeClass is TGocciaClassValue)) then
+  Closure := DirectEvalLexicalClosure(FVM);
+  if not (Assigned(FVM) and Assigned(Closure) and
+     (Closure.HomeClass is TGocciaClassValue)) then
     Exit;
 
-  HomeClass := TGocciaClassValue(FVM.FCurrentClosure.HomeClass);
+  HomeClass := TGocciaClassValue(Closure.HomeClass);
   if Assigned(HomeClass.SuperClass) then
     SuperConstructor := HomeClass.SuperClass
   else if Assigned(HomeClass.NativeSuperConstructor) then
@@ -2636,6 +2708,7 @@ begin
 
   AFrame.IP := FContinuationIP;
   FVM.FCurrentDynamicVarScope := FContinuationDynamicVarScope;
+  FContinuationDynamicVarScope := nil;
   APrevCovLine := FContinuationPrevCovLine;
   SetLength(FContinuationRegisters, 0);
   SetLength(FContinuationLocalCells, 0);
@@ -8859,6 +8932,7 @@ var
   EvalContext: TGocciaEvaluationContext;
   ExecutionContext: TGocciaExecutionContextScope;
   SourceName: string;
+  CallerClosure: TGocciaBytecodeClosure;
   CurrentFunctionValue: TGocciaValue;
   CurrentCtorClass: TGocciaClassValue;
   RejectArgumentsVarDeclaration: Boolean;
@@ -8897,12 +8971,8 @@ begin
 
       CallerScope := TGocciaVMDirectEvalScope.Create(CallerParentScope, Self,
         ATemplate, EnvIndex, UseGlobalVarEnvironment);
-      if FLocalCellCount > 0 then
-        CallerScope.ThisValue := GetLocal(0)
-      else if UseGlobalVarEnvironment then
-        CallerScope.ThisValue := TGocciaUndefinedLiteralValue.UndefinedValue
-      else if Assigned(FGlobalThisValue) then
-        CallerScope.ThisValue := FGlobalThisValue;
+      CallerScope.ThisValue := DirectEvalLexicalThisValue(Self,
+        UseGlobalVarEnvironment);
 
       if Assigned(TGarbageCollector.Instance) then
         TGarbageCollector.Instance.AddTempRoot(CallerScope);
@@ -8935,21 +9005,19 @@ begin
             EvalContext.StrictTypes := FGlobalScope.EffectiveStrictTypes;
           EvalContext.NonStrictMode := not StrictEval;
 
-          if Assigned(FCurrentClosure) then
-          begin
-            CurrentFunctionValue := FCurrentClosure.FunctionValue
-          end
+          CallerClosure := DirectEvalLexicalClosure(Self);
+          if Assigned(CallerClosure) then
+            CurrentFunctionValue := CallerClosure.FunctionValue
           else
             CurrentFunctionValue := nil;
-          if Assigned(FCurrentClosure) and
-             (FCurrentClosure.HomeClass is TGocciaClassValue) then
-            CurrentCtorClass := TGocciaClassValue(FCurrentClosure.HomeClass)
+          if Assigned(CallerClosure) and
+             (CallerClosure.HomeClass is TGocciaClassValue) then
+            CurrentCtorClass := TGocciaClassValue(CallerClosure.HomeClass)
           else
             CurrentCtorClass := nil;
-          AllowNewTarget := Assigned(CurrentFunctionValue) and
-            not ATemplate.IsArrow;
-          AllowSuperProperty := Assigned(FCurrentClosure) and
-            Assigned(FCurrentClosure.HomeObject) and not ATemplate.IsArrow;
+          AllowNewTarget := Assigned(CurrentFunctionValue);
+          AllowSuperProperty := Assigned(CallerClosure) and
+            Assigned(CallerClosure.HomeObject);
           AllowSuperCall := Assigned(FCurrentNewTarget) and
             Assigned(CurrentCtorClass) and
             (Assigned(CurrentCtorClass.SuperClass) or
@@ -11315,6 +11383,11 @@ begin
         ChildTemplate := Template.GetFunctionUnchecked(DecodeBx(Instruction));
         ChildClosure := TGocciaBytecodeClosure.Create(
           ChildTemplate, ChildTemplate.UpvalueCount);
+        if ChildTemplate.IsArrow and Assigned(FCurrentClosure) then
+        begin
+          ChildClosure.HomeObject := FCurrentClosure.HomeObject;
+          ChildClosure.HomeClass := FCurrentClosure.HomeClass;
+        end;
         for I := 0 to ChildTemplate.UpvalueCount - 1 do
         begin
           Desc := ChildTemplate.GetUpvalueDescriptor(I);

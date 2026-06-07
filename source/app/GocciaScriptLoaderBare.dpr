@@ -64,6 +64,7 @@ type
   end;
 
   TBareTest262Realm = class;
+  TBareTest262Host = class;
 
   TBareTest262EvalHost = class
   private
@@ -81,6 +82,7 @@ type
     FEngine: TGocciaEngine;
     FExecutor: TGocciaExecutor;
     FEvalHost: TBareTest262EvalHost;
+    FTest262Host: TBareTest262Host;
     FSource: TStringList;
   public
     constructor Create(const AOptions: TBareOptions);
@@ -123,6 +125,24 @@ begin
   GlobalObject.DefineProperty('eval',
     TGocciaPropertyDescriptorData.Create(EvalFunction,
       [pfWritable, pfConfigurable]));
+end;
+
+procedure InstallTest262HostGlobals(const AEngine: TGocciaEngine;
+  const ATest262Host: TBareTest262Host;
+  const ATest262EvalHost: TBareTest262EvalHost);
+var
+  Test262Obj: TGocciaObjectValue;
+begin
+  AEngine.GocciaGlobal.AssignProperty('test262Host',
+    TGocciaBooleanLiteralValue.TrueValue);
+  Test262Obj := TGocciaObjectValue.Create;
+  Test262Obj.AssignProperty('createRealm',
+    TGocciaNativeFunctionValue.CreateWithoutPrototype(
+      ATest262Host.CreateRealm, 'createRealm', 0));
+  Test262Obj.AssignProperty('evalScript',
+    TGocciaNativeFunctionValue.CreateWithoutPrototype(
+      ATest262EvalHost.EvalScript, 'evalScript', 1));
+  AEngine.GocciaGlobal.AssignProperty('test262', Test262Obj);
 end;
 
 function TBarePrintHost.Print(const AArgs: TGocciaArgumentsCollection;
@@ -303,10 +323,13 @@ begin
   FEngine := TGocciaEngine.Create('<test262-realm>', FSource, FExecutor);
   ChildOptions := AOptions;
   ChildOptions.SourceType := stScript;
+  ChildOptions.Test262Host := True;
   ConfigureEngine(FEngine, FExecutor, ChildOptions);
 
   FEvalHost := TBareTest262EvalHost.Create(FEngine);
+  FTest262Host := TBareTest262Host.Create(ChildOptions);
   FEngine.RefreshGlobalThis;
+  InstallTest262HostGlobals(FEngine, FTest262Host, FEvalHost);
   InstallTest262EvalGlobal(FEngine, FEvalHost);
   FEngine.SuspendRealmExecutionContext;
 end;
@@ -324,6 +347,7 @@ begin
       RealmScope.Free;
     end;
   end;
+  FTest262Host.Free;
   FEvalHost.Free;
   FExecutor.Free;
   FSource.Free;
@@ -543,25 +567,12 @@ procedure RegisterBareGlobals(const AEngine: TGocciaEngine;
   const APrintHost: TBarePrintHost; const ATest262Host: TBareTest262Host;
   const ATest262EvalHost: TBareTest262EvalHost;
   const AOptions: TBareOptions);
-var
-  Test262Obj: TGocciaObjectValue;
 begin
   AEngine.RegisterGlobal(BARE_PRINT_GLOBAL_NAME,
     TGocciaNativeFunctionValue.CreateWithoutPrototype(APrintHost.Print,
       BARE_PRINT_GLOBAL_NAME, -1));
   if AOptions.Test262Host then
-  begin
-    AEngine.GocciaGlobal.AssignProperty('test262Host',
-      TGocciaBooleanLiteralValue.TrueValue);
-    Test262Obj := TGocciaObjectValue.Create;
-    Test262Obj.AssignProperty('createRealm',
-      TGocciaNativeFunctionValue.CreateWithoutPrototype(
-        ATest262Host.CreateRealm, 'createRealm', 0));
-    Test262Obj.AssignProperty('evalScript',
-      TGocciaNativeFunctionValue.CreateWithoutPrototype(
-        ATest262EvalHost.EvalScript, 'evalScript', 1));
-    AEngine.GocciaGlobal.AssignProperty('test262', Test262Obj);
-  end;
+    InstallTest262HostGlobals(AEngine, ATest262Host, ATest262EvalHost);
   AEngine.RefreshGlobalThis;
   if AOptions.Test262Host then
     InstallTest262EvalGlobal(AEngine, ATest262EvalHost);

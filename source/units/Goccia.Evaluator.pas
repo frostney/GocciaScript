@@ -619,6 +619,9 @@ end;
 
 procedure ValidateEvalEarlyErrorExpression(const AExpr: TGocciaExpression;
   const AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall: Boolean); forward;
+procedure ValidateEvalEarlyErrorPattern(
+  const APattern: TGocciaDestructuringPattern; const AAllowNewTarget,
+  AAllowSuperProperty, AAllowSuperCall: Boolean); forward;
 
 procedure ValidateEvalEarlyErrorStatement(const AStmt: TGocciaStatement;
   const AStrictEval, AAllowNewTarget, AAllowSuperProperty,
@@ -667,6 +670,8 @@ begin
   else if AStmt is TGocciaDestructuringDeclaration then
   begin
     DestructDecl := TGocciaDestructuringDeclaration(AStmt);
+    ValidateEvalEarlyErrorPattern(DestructDecl.Pattern, AAllowNewTarget,
+      AAllowSuperProperty, AAllowSuperCall);
     ValidateEvalEarlyErrorExpression(DestructDecl.Initializer,
       AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
   end
@@ -995,9 +1000,14 @@ begin
         AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
   end
   else if AExpr is TGocciaDestructuringAssignmentExpression then
+  begin
+    ValidateEvalEarlyErrorPattern(
+      TGocciaDestructuringAssignmentExpression(AExpr).Left, AAllowNewTarget,
+      AAllowSuperProperty, AAllowSuperCall);
     ValidateEvalEarlyErrorExpression(
       TGocciaDestructuringAssignmentExpression(AExpr).Right, AAllowNewTarget,
-      AAllowSuperProperty, AAllowSuperCall)
+      AAllowSuperProperty, AAllowSuperCall);
+  end
   else if AExpr is TGocciaPrivateMemberExpression then
     ValidateEvalEarlyErrorExpression(
       TGocciaPrivateMemberExpression(AExpr).ObjectExpr, AAllowNewTarget,
@@ -1020,6 +1030,64 @@ begin
       TGocciaPrivatePropertyCompoundAssignmentExpression(AExpr).Value,
       AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
   end;
+end;
+
+procedure ValidateEvalEarlyErrorPattern(
+  const APattern: TGocciaDestructuringPattern; const AAllowNewTarget,
+  AAllowSuperProperty, AAllowSuperCall: Boolean);
+var
+  ArrayPattern: TGocciaArrayDestructuringPattern;
+  ObjectPattern: TGocciaObjectDestructuringPattern;
+  AssignmentPattern: TGocciaAssignmentDestructuringPattern;
+  RestPattern: TGocciaRestDestructuringPattern;
+  Prop: TGocciaDestructuringProperty;
+  I: Integer;
+begin
+  if not Assigned(APattern) then
+    Exit;
+
+  if APattern is TGocciaArrayDestructuringPattern then
+  begin
+    ArrayPattern := TGocciaArrayDestructuringPattern(APattern);
+    for I := 0 to ArrayPattern.Elements.Count - 1 do
+      ValidateEvalEarlyErrorPattern(ArrayPattern.Elements[I], AAllowNewTarget,
+        AAllowSuperProperty, AAllowSuperCall);
+  end
+  else if APattern is TGocciaObjectDestructuringPattern then
+  begin
+    ObjectPattern := TGocciaObjectDestructuringPattern(APattern);
+    for I := 0 to ObjectPattern.Properties.Count - 1 do
+    begin
+      Prop := ObjectPattern.Properties[I];
+      if Prop.Computed then
+        ValidateEvalEarlyErrorExpression(Prop.KeyExpression, AAllowNewTarget,
+          AAllowSuperProperty, AAllowSuperCall);
+      ValidateEvalEarlyErrorPattern(Prop.Pattern, AAllowNewTarget,
+        AAllowSuperProperty, AAllowSuperCall);
+    end;
+  end
+  else if APattern is TGocciaAssignmentDestructuringPattern then
+  begin
+    AssignmentPattern := TGocciaAssignmentDestructuringPattern(APattern);
+    ValidateEvalEarlyErrorPattern(AssignmentPattern.Left, AAllowNewTarget,
+      AAllowSuperProperty, AAllowSuperCall);
+    ValidateEvalEarlyErrorExpression(AssignmentPattern.Right, AAllowNewTarget,
+      AAllowSuperProperty, AAllowSuperCall);
+  end
+  else if APattern is TGocciaRestDestructuringPattern then
+  begin
+    RestPattern := TGocciaRestDestructuringPattern(APattern);
+    ValidateEvalEarlyErrorPattern(RestPattern.Argument, AAllowNewTarget,
+      AAllowSuperProperty, AAllowSuperCall);
+  end
+  else if APattern is TGocciaMemberExpressionDestructuringPattern then
+    ValidateEvalEarlyErrorExpression(
+      TGocciaMemberExpressionDestructuringPattern(APattern).Expression,
+      AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall)
+  else if APattern is TGocciaPrivateMemberExpressionDestructuringPattern then
+    ValidateEvalEarlyErrorExpression(
+      TGocciaPrivateMemberExpressionDestructuringPattern(APattern).Expression,
+      AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
 end;
 
 procedure ValidateEvalEarlyErrors(const AProgram: TGocciaProgram;
@@ -1947,8 +2015,9 @@ begin
         end;
         CallerFunctionScope := FindDirectEvalCallerFunctionScope(AContext.Scope);
         AllowNewTarget := Assigned(CallerFunctionScope);
-        AllowSuperProperty := Assigned(AContext.Scope.FindSuperClass);
-        AllowSuperCall := DirectEvalAllowsSuperCall(AContext.Scope);
+        AllowSuperProperty := Assigned(CallerFunctionScope) and
+          Assigned(CallerFunctionScope.FindSuperClass);
+        AllowSuperCall := DirectEvalAllowsSuperCall(CallerFunctionScope);
         AResult := EvaluateEvalProgram(PipelineResult.ProgramNode,
           EvalContext, VarScope, EvalScope, StrictEval,
           EvalContext.RejectArgumentsVarDeclarationInEval, AllowNewTarget,
