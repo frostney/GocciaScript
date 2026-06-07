@@ -9,6 +9,7 @@ uses
 
 function CanonicalizeUnicodeLocaleId(const ATag: string): string;
 function CanonicalizeLocaleList(const ATags: IntlTypes.TStringArray): IntlTypes.TStringArray;
+function SupportedLocalesOf(const ARequestedLocales: IntlTypes.TStringArray): IntlTypes.TStringArray;
 function BestAvailableLocale(const AAvailableLocales: IntlTypes.TStringArray;
   const ALocale: string): string;
 function LookupMatcher(const AAvailableLocales, ARequestedLocales: IntlTypes.TStringArray): TIntlResolvedLocale;
@@ -25,6 +26,89 @@ uses
 
   Goccia.Intl.CLDRData;
 
+var
+  AvailableLocalesCache: IntlTypes.TStringArray;
+  AvailableLocalesLoaded: Boolean;
+  AvailableLocalesLock: TRTLCriticalSection;
+
+procedure AppendUniqueLocale(var ALocales: IntlTypes.TStringArray;
+  var ACount: Integer; const ALocale: string);
+var
+  I: Integer;
+begin
+  if ALocale = '' then
+    Exit;
+
+  for I := 0 to ACount - 1 do
+    if CompareText(ALocales[I], ALocale) = 0 then
+      Exit;
+
+  if ACount >= Length(ALocales) then
+    SetLength(ALocales, ACount + 16);
+  ALocales[ACount] := ALocale;
+  Inc(ACount);
+end;
+
+// ECMA-402 ES2026 §9.2.3 LookupMatchingLocaleByPrefix(availableLocales, requestedLocales)
+function LocaleWithoutUnicodeExtension(const ALocale: string): string;
+var
+  Parsed: TBcp47Tag;
+  FilteredExtensions: TBcp47ExtensionArray;
+  I, Count: Integer;
+begin
+  Result := '';
+  Parsed := ParseBcp47Tag(ALocale);
+  if not Parsed.IsValid then
+    Exit;
+
+  Count := 0;
+  SetLength(FilteredExtensions, Length(Parsed.Extensions));
+  for I := 0 to High(Parsed.Extensions) do
+  begin
+    if Parsed.Extensions[I].Singleton = 'u' then
+      Continue;
+    FilteredExtensions[Count] := Parsed.Extensions[I];
+    Inc(Count);
+  end;
+  SetLength(FilteredExtensions, Count);
+  Parsed.Extensions := FilteredExtensions;
+
+  Result := CanonicalizeBcp47Tag(Parsed);
+end;
+
+// ECMA-402 ES2026 supportedLocalesOf constructors use [[AvailableLocales]].
+function AvailableLocaleList: IntlTypes.TStringArray;
+var
+  Available: IntlTypes.TStringArray;
+  Canonical: string;
+  I, Count: Integer;
+begin
+  EnterCriticalSection(AvailableLocalesLock);
+  try
+    if not AvailableLocalesLoaded then
+    begin
+      SetLength(AvailableLocalesCache, 0);
+      if TryICUGetAvailableLocales(Available) then
+      begin
+        Count := 0;
+        SetLength(AvailableLocalesCache, Length(Available));
+        for I := 0 to High(Available) do
+        begin
+          Canonical := CanonicalizeUnicodeLocaleId(Available[I]);
+          AppendUniqueLocale(AvailableLocalesCache, Count, Canonical);
+        end;
+        SetLength(AvailableLocalesCache, Count);
+      end;
+      AvailableLocalesLoaded := True;
+    end;
+
+    Result := AvailableLocalesCache;
+  finally
+    LeaveCriticalSection(AvailableLocalesLock);
+  end;
+end;
+
+// ECMA-402 ES2026 §6.2.2 CanonicalizeUnicodeLocaleId(locale)
 function CanonicalizeUnicodeLocaleId(const ATag: string): string;
 var
   Parsed: TBcp47Tag;
@@ -39,12 +123,6 @@ begin
   if not Parsed.IsValid then
     Exit;
 
-  if TryICUCanonicalizeLocale(ATag, ICUCanonical) then
-  begin
-    Result := ICUCanonical;
-    Exit;
-  end;
-
   if TryGetGrandfatheredTag(LowerCase(ATag), CLDRReplacement) then
   begin
     Parsed := ParseBcp47Tag(CLDRReplacement);
@@ -53,6 +131,12 @@ begin
       Result := CanonicalizeBcp47Tag(Parsed);
       Exit;
     end;
+  end;
+
+  if TryICUCanonicalizeLocale(ATag, ICUCanonical) then
+  begin
+    Result := ICUCanonical;
+    Exit;
   end;
 
   if Parsed.Language <> '' then
@@ -79,6 +163,7 @@ begin
   Result := CanonicalizeBcp47Tag(Parsed);
 end;
 
+// ECMA-402 ES2026 §9.2.1 CanonicalizeLocaleList(locales)
 function CanonicalizeLocaleList(const ATags: IntlTypes.TStringArray): IntlTypes.TStringArray;
 var
   I, Count: Integer;
@@ -117,6 +202,31 @@ begin
     Result[Count] := Canonical;
     Seen[Count] := Canonical;
     Inc(Count);
+  end;
+
+  SetLength(Result, Count);
+end;
+
+// ECMA-402 ES2026 §9.2.9 FilterLocales(availableLocales, requestedLocales, options)
+function SupportedLocalesOf(const ARequestedLocales: IntlTypes.TStringArray): IntlTypes.TStringArray;
+var
+  AvailableLocales: IntlTypes.TStringArray;
+  LookupLocale: string;
+  I, Count: Integer;
+begin
+  AvailableLocales := AvailableLocaleList;
+  Count := 0;
+  SetLength(Result, Length(ARequestedLocales));
+
+  for I := 0 to High(ARequestedLocales) do
+  begin
+    LookupLocale := LocaleWithoutUnicodeExtension(ARequestedLocales[I]);
+    if (LookupLocale <> '') and
+       (BestAvailableLocale(AvailableLocales, LookupLocale) <> '') then
+    begin
+      Result[Count] := ARequestedLocales[I];
+      Inc(Count);
+    end;
   end;
 
   SetLength(Result, Count);
@@ -191,8 +301,7 @@ begin
     if not Parsed.IsValid then
       Continue;
 
-    SetLength(Parsed.Extensions, 0);
-    NoExtensionTag := CanonicalizeBcp47Tag(Parsed);
+    NoExtensionTag := LocaleWithoutUnicodeExtension(ARequestedLocales[I]);
     if NoExtensionTag = '' then
       Continue;
 
@@ -221,5 +330,13 @@ begin
 
   Result := 'en';
 end;
+
+initialization
+  InitCriticalSection(AvailableLocalesLock);
+  AvailableLocalesLoaded := False;
+
+finalization
+  DoneCriticalSection(AvailableLocalesLock);
+  SetLength(AvailableLocalesCache, 0);
 
 end.
