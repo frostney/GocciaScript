@@ -3875,6 +3875,8 @@ var
       Exit(not TGocciaVariableDeclaration(AStatement).IsVar);
     if AStatement is TGocciaDestructuringDeclaration then
       Exit(not TGocciaDestructuringDeclaration(AStatement).IsVar);
+    if AStatement is TGocciaFunctionDeclaration then
+      Exit(FStrictModeActive);
     Result := (AStatement is TGocciaClassDeclaration) or
       (AStatement is TGocciaEnumDeclaration) or
       (AStatement is TGocciaImportDeclaration) or

@@ -43,6 +43,7 @@ type
     function GetThisValue: TGocciaValue; virtual;
     function GetOwningClass: TGocciaValue; virtual;
     function GetSuperClass: TGocciaValue; virtual;
+    function GetSuperConstructor: TGocciaValue; virtual;
     function GetNewTarget: TGocciaValue; virtual;
     function IsFunctionBoundary: Boolean; virtual;
   public
@@ -104,7 +105,9 @@ type
     // Walk the parent chain to find the nearest owning class / superclass
     function FindOwningClass: TGocciaValue;
     function FindSuperClass: TGocciaValue;
+    function FindSuperConstructor: TGocciaValue;
     function FindNewTarget: TGocciaValue;
+    function MarkSuperConstructorCalled: Boolean; virtual;
 
     { Read StrictTypes from the root (global) scope so that
       TGocciaEngine.SetStrictTypes propagates uniformly to closures
@@ -169,6 +172,7 @@ type
     function GetOwningClass: TGocciaValue; override;
     function GetSuperClass: TGocciaValue; override;
     function GetNewTarget: TGocciaValue; override;
+    function MarkSuperConstructorCalled: Boolean; override;
   public
     constructor Create(const AParent: TGocciaScope; const AFunctionName: string;
       const ASuperClass, AOwningClass: TGocciaValue; const ACapacity: Integer = 0);
@@ -304,6 +308,11 @@ begin
   Result := nil;
 end;
 
+function TGocciaScope.GetSuperConstructor: TGocciaValue;
+begin
+  Result := nil;
+end;
+
 function TGocciaScope.GetNewTarget: TGocciaValue;
 begin
   Result := nil;
@@ -383,6 +392,22 @@ begin
   Result := nil;
 end;
 
+function TGocciaScope.FindSuperConstructor: TGocciaValue;
+var
+  Current: TGocciaScope;
+begin
+  Current := Self;
+  while Assigned(Current) do
+  begin
+    Result := Current.GetSuperConstructor;
+    if Assigned(Result) then Exit;
+    if Current.IsFunctionBoundary then
+      Exit(nil);
+    Current := Current.FParent;
+  end;
+  Result := nil;
+end;
+
 function TGocciaScope.FindNewTarget: TGocciaValue;
 var
   Current: TGocciaScope;
@@ -397,6 +422,11 @@ begin
     Current := Current.FParent;
   end;
   Result := nil;
+end;
+
+function TGocciaScope.MarkSuperConstructorCalled: Boolean;
+begin
+  Result := False;
 end;
 
 procedure TGocciaScope.PredeclareLexicalBinding(const AName: string;
@@ -1001,6 +1031,12 @@ end;
 function TGocciaMethodCallScope.GetNewTarget: TGocciaValue;
 begin
   Result := FNewTarget;
+end;
+
+function TGocciaMethodCallScope.MarkSuperConstructorCalled: Boolean;
+begin
+  FSuperConstructorCalled := True;
+  Result := True;
 end;
 
 procedure TGocciaMethodCallScope.MarkReferences;

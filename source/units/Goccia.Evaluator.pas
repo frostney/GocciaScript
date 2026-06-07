@@ -621,7 +621,8 @@ procedure ValidateEvalEarlyErrorExpression(const AExpr: TGocciaExpression;
   const AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall: Boolean); forward;
 
 procedure ValidateEvalEarlyErrorStatement(const AStmt: TGocciaStatement;
-  const AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall: Boolean);
+  const AStrictEval, AAllowNewTarget, AAllowSuperProperty,
+  AAllowSuperCall: Boolean);
 var
   VarDecl: TGocciaVariableDeclaration;
   DestructDecl: TGocciaDestructuringDeclaration;
@@ -649,6 +650,9 @@ begin
   if not Assigned(AStmt) then
     Exit;
 
+  if AStrictEval and IsLabelledFunctionDeclaration(AStmt) then
+    ThrowSyntaxError('Invalid labelled function declaration');
+
   if AStmt is TGocciaExpressionStatement then
     ValidateEvalEarlyErrorExpression(
       TGocciaExpressionStatement(AStmt).Expression, AAllowNewTarget,
@@ -672,7 +676,7 @@ begin
     for I := 0 to BlockStmt.Nodes.Count - 1 do
       if BlockStmt.Nodes[I] is TGocciaStatement then
         ValidateEvalEarlyErrorStatement(TGocciaStatement(BlockStmt.Nodes[I]),
-          AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall)
+          AStrictEval, AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall)
       else if BlockStmt.Nodes[I] is TGocciaExpression then
         ValidateEvalEarlyErrorExpression(TGocciaExpression(BlockStmt.Nodes[I]),
           AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
@@ -680,26 +684,26 @@ begin
   else if AStmt is TGocciaIfStatement then
   begin
     IfStmt := TGocciaIfStatement(AStmt);
-    if IsLabelledFunctionDeclaration(IfStmt.Consequent) or
-       IsLabelledFunctionDeclaration(IfStmt.Alternate) then
+    if AStrictEval and (IsLabelledFunctionDeclaration(IfStmt.Consequent) or
+       IsLabelledFunctionDeclaration(IfStmt.Alternate)) then
       ThrowSyntaxError('Invalid labelled function declaration');
     ValidateEvalEarlyErrorExpression(IfStmt.Condition, AAllowNewTarget,
       AAllowSuperProperty, AAllowSuperCall);
-    ValidateEvalEarlyErrorStatement(IfStmt.Consequent, AAllowNewTarget,
-      AAllowSuperProperty, AAllowSuperCall);
-    ValidateEvalEarlyErrorStatement(IfStmt.Alternate, AAllowNewTarget,
-      AAllowSuperProperty, AAllowSuperCall);
+    ValidateEvalEarlyErrorStatement(IfStmt.Consequent, AStrictEval,
+      AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
+    ValidateEvalEarlyErrorStatement(IfStmt.Alternate, AStrictEval,
+      AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
   end
   else if AStmt is TGocciaForStatement then
   begin
     ForStmt := TGocciaForStatement(AStmt);
-    ValidateEvalEarlyErrorStatement(ForStmt.Init, AAllowNewTarget,
+    ValidateEvalEarlyErrorStatement(ForStmt.Init, AStrictEval, AAllowNewTarget,
       AAllowSuperProperty, AAllowSuperCall);
     ValidateEvalEarlyErrorExpression(ForStmt.Condition, AAllowNewTarget,
       AAllowSuperProperty, AAllowSuperCall);
     ValidateEvalEarlyErrorExpression(ForStmt.Update, AAllowNewTarget,
       AAllowSuperProperty, AAllowSuperCall);
-    ValidateEvalEarlyErrorStatement(ForStmt.Body, AAllowNewTarget,
+    ValidateEvalEarlyErrorStatement(ForStmt.Body, AStrictEval, AAllowNewTarget,
       AAllowSuperProperty, AAllowSuperCall);
   end
   else if AStmt is TGocciaForOfStatement then
@@ -707,30 +711,30 @@ begin
     ForOfStmt := TGocciaForOfStatement(AStmt);
     ValidateEvalEarlyErrorExpression(ForOfStmt.Iterable, AAllowNewTarget,
       AAllowSuperProperty, AAllowSuperCall);
-    ValidateEvalEarlyErrorStatement(ForOfStmt.Body, AAllowNewTarget,
-      AAllowSuperProperty, AAllowSuperCall);
+    ValidateEvalEarlyErrorStatement(ForOfStmt.Body, AStrictEval,
+      AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
   end
   else if AStmt is TGocciaForInStatement then
   begin
     ForInStmt := TGocciaForInStatement(AStmt);
     ValidateEvalEarlyErrorExpression(ForInStmt.ObjectExpression,
       AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
-    ValidateEvalEarlyErrorStatement(ForInStmt.Body, AAllowNewTarget,
-      AAllowSuperProperty, AAllowSuperCall);
+    ValidateEvalEarlyErrorStatement(ForInStmt.Body, AStrictEval,
+      AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
   end
   else if AStmt is TGocciaWhileStatement then
   begin
     WhileStmt := TGocciaWhileStatement(AStmt);
     ValidateEvalEarlyErrorExpression(WhileStmt.Condition, AAllowNewTarget,
       AAllowSuperProperty, AAllowSuperCall);
-    ValidateEvalEarlyErrorStatement(WhileStmt.Body, AAllowNewTarget,
-      AAllowSuperProperty, AAllowSuperCall);
+    ValidateEvalEarlyErrorStatement(WhileStmt.Body, AStrictEval,
+      AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
   end
   else if AStmt is TGocciaDoWhileStatement then
   begin
     DoWhileStmt := TGocciaDoWhileStatement(AStmt);
-    ValidateEvalEarlyErrorStatement(DoWhileStmt.Body, AAllowNewTarget,
-      AAllowSuperProperty, AAllowSuperCall);
+    ValidateEvalEarlyErrorStatement(DoWhileStmt.Body, AStrictEval,
+      AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
     ValidateEvalEarlyErrorExpression(DoWhileStmt.Condition, AAllowNewTarget,
       AAllowSuperProperty, AAllowSuperCall);
   end
@@ -739,8 +743,8 @@ begin
     WithStmt := TGocciaWithStatement(AStmt);
     ValidateEvalEarlyErrorExpression(WithStmt.ObjectExpression,
       AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
-    ValidateEvalEarlyErrorStatement(WithStmt.Body, AAllowNewTarget,
-      AAllowSuperProperty, AAllowSuperCall);
+    ValidateEvalEarlyErrorStatement(WithStmt.Body, AStrictEval,
+      AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
   end
   else if AStmt is TGocciaReturnStatement then
   begin
@@ -757,12 +761,12 @@ begin
   else if AStmt is TGocciaTryStatement then
   begin
     TryStmt := TGocciaTryStatement(AStmt);
-    ValidateEvalEarlyErrorStatement(TryStmt.Block, AAllowNewTarget,
-      AAllowSuperProperty, AAllowSuperCall);
-    ValidateEvalEarlyErrorStatement(TryStmt.CatchBlock, AAllowNewTarget,
-      AAllowSuperProperty, AAllowSuperCall);
-    ValidateEvalEarlyErrorStatement(TryStmt.FinallyBlock, AAllowNewTarget,
-      AAllowSuperProperty, AAllowSuperCall);
+    ValidateEvalEarlyErrorStatement(TryStmt.Block, AStrictEval,
+      AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
+    ValidateEvalEarlyErrorStatement(TryStmt.CatchBlock, AStrictEval,
+      AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
+    ValidateEvalEarlyErrorStatement(TryStmt.FinallyBlock, AStrictEval,
+      AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
   end
   else if AStmt is TGocciaSwitchStatement then
   begin
@@ -775,7 +779,7 @@ begin
         AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
       for J := 0 to SwitchStmt.Cases[I].Consequent.Count - 1 do
         ValidateEvalEarlyErrorStatement(SwitchStmt.Cases[I].Consequent[J],
-          AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
+          AStrictEval, AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
     end;
   end
   else if AStmt is TGocciaUsingDeclaration then
@@ -937,6 +941,14 @@ begin
             ValidateEvalEarlyErrorExpression(Pair.Value, AAllowNewTarget,
               AAllowSuperProperty, AAllowSuperCall);
           end;
+        pstComputedGetter,
+        pstComputedSetter:
+          begin
+            Pair := ObjectExpr.ComputedPropertiesInOrder[
+              ObjectExpr.PropertySourceOrder[I].ComputedIndex];
+            ValidateEvalEarlyErrorExpression(Pair.Key, AAllowNewTarget,
+              AAllowSuperProperty, AAllowSuperCall);
+          end;
       end;
   end
   else if AExpr is TGocciaYieldExpression then
@@ -1011,13 +1023,14 @@ begin
 end;
 
 procedure ValidateEvalEarlyErrors(const AProgram: TGocciaProgram;
-  const AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall: Boolean);
+  const AStrictEval, AAllowNewTarget, AAllowSuperProperty,
+  AAllowSuperCall: Boolean);
 var
   I: Integer;
 begin
   for I := 0 to AProgram.Body.Count - 1 do
-    ValidateEvalEarlyErrorStatement(AProgram.Body[I], AAllowNewTarget,
-      AAllowSuperProperty, AAllowSuperCall);
+    ValidateEvalEarlyErrorStatement(AProgram.Body[I], AStrictEval,
+      AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
 end;
 
 procedure EvalDeclarationInstantiation(const AProgram: TGocciaProgram;
@@ -1174,8 +1187,8 @@ var
   I: Integer;
 begin
   ValidateEvalScriptBody(AProgram.Body);
-  ValidateEvalEarlyErrors(AProgram, AAllowNewTarget, AAllowSuperProperty,
-    AAllowSuperCall);
+  ValidateEvalEarlyErrors(AProgram, AStrictEval, AAllowNewTarget,
+    AAllowSuperProperty, AAllowSuperCall);
   EvalContext := AContext;
   EvalContext.Scope := ALexicalScope;
   EvalContext.NonStrictMode := not AStrictEval;
@@ -1824,6 +1837,34 @@ begin
     Result := AReceiver;
 end;
 
+function FindDirectEvalCallerFunctionScope(
+  const AScope: TGocciaScope): TGocciaScope;
+var
+  Current: TGocciaScope;
+begin
+  Current := AScope;
+  while Assigned(Current) do
+  begin
+    if (Current is TGocciaCallScope) and
+       not (Current is TGocciaArrowCallScope) then
+      Exit(Current);
+    if Current.ScopeKind in [skGlobal, skModule] then
+      Exit(nil);
+    Current := Current.Parent;
+  end;
+  Result := nil;
+end;
+
+function DirectEvalAllowsSuperCall(const AScope: TGocciaScope): Boolean;
+var
+  CallerFunctionScope: TGocciaScope;
+begin
+  CallerFunctionScope := FindDirectEvalCallerFunctionScope(AScope);
+  Result := (CallerFunctionScope is TGocciaMethodCallScope) and
+    (TGocciaMethodCallScope(CallerFunctionScope).CustomLabel = 'constructor') and
+    Assigned(TGocciaMethodCallScope(CallerFunctionScope).SuperClass);
+end;
+
 function TryEvaluateInterpreterDirectEval(
   const ACallExpression: TGocciaCallExpression;
   const AContext: TGocciaEvaluationContext;
@@ -1839,8 +1880,12 @@ var
   EvalContext: TGocciaEvaluationContext;
   EvalScope: TGocciaScope;
   VarScope: TGocciaScope;
+  CallerFunctionScope: TGocciaScope;
   CallerStrict: Boolean;
   StrictEval: Boolean;
+  AllowNewTarget: Boolean;
+  AllowSuperProperty: Boolean;
+  AllowSuperCall: Boolean;
 begin
   Result := False;
   if not ((ACallee is TGocciaNativeFunctionValue) and
@@ -1900,8 +1945,14 @@ begin
           if not Assigned(VarScope) then
             VarScope := AContext.Scope;
         end;
+        CallerFunctionScope := FindDirectEvalCallerFunctionScope(AContext.Scope);
+        AllowNewTarget := Assigned(CallerFunctionScope);
+        AllowSuperProperty := Assigned(AContext.Scope.FindSuperClass);
+        AllowSuperCall := DirectEvalAllowsSuperCall(AContext.Scope);
         AResult := EvaluateEvalProgram(PipelineResult.ProgramNode,
-          EvalContext, VarScope, EvalScope, StrictEval, False);
+          EvalContext, VarScope, EvalScope, StrictEval,
+          EvalContext.RejectArgumentsVarDeclarationInEval, AllowNewTarget,
+          AllowSuperProperty, AllowSuperCall);
       finally
         if Assigned(TGarbageCollector.Instance) then
           TGarbageCollector.Instance.RemoveTempRoot(EvalScope);
@@ -1952,11 +2003,8 @@ var
     CurrentScope := AContext.Scope;
     while Assigned(CurrentScope) do
     begin
-      if CurrentScope is TGocciaMethodCallScope then
-      begin
-        TGocciaMethodCallScope(CurrentScope).SuperConstructorCalled := True;
+      if CurrentScope.MarkSuperConstructorCalled then
         Exit;
-      end;
       CurrentScope := CurrentScope.Parent;
     end;
   end;
@@ -1968,7 +2016,9 @@ begin
   // Handle super() calls specially
   if ACallExpression.Callee is TGocciaSuperExpression then
   begin
-    SuperClassValue := EvaluateExpression(ACallExpression.Callee, AContext);
+    SuperClassValue := AContext.Scope.FindSuperConstructor;
+    if not Assigned(SuperClassValue) then
+      SuperClassValue := EvaluateExpression(ACallExpression.Callee, AContext);
     AddValueRoot(Roots, SuperClassValue);
     if SuperClassValue is TGocciaClassValue then
       SuperClass := TGocciaClassValue(SuperClassValue)

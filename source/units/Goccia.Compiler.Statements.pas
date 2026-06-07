@@ -2187,8 +2187,9 @@ begin
   UsingErrorReg := 0;
   UsingCatchReg := 0;
 
-  NeedsIteratorClose := AStmt.IsUsing or Assigned(AStmt.BindingPattern) or
-    Assigned(AStmt.MatchPattern) or StatementNeedsIteratorClose(AStmt.Body);
+  NeedsIteratorClose := AStmt.IsUsing or Assigned(AStmt.AssignmentTarget) or
+    Assigned(AStmt.BindingPattern) or Assigned(AStmt.MatchPattern) or
+    StatementNeedsIteratorClose(AStmt.Body);
   if NeedsIteratorClose then
     CloseErrorReg := ACtx.Scope.AllocateRegister;
   if AStmt.IsUsing then
@@ -2479,8 +2480,9 @@ begin
   DoneReg := ACtx.Scope.AllocateRegister;
   CloseErrorReg := 0;
 
-  NeedsIteratorClose := Assigned(AStmt.BindingPattern) or
-    Assigned(AStmt.MatchPattern) or StatementNeedsIteratorClose(AStmt.Body);
+  NeedsIteratorClose := Assigned(AStmt.AssignmentTarget) or
+    Assigned(AStmt.BindingPattern) or Assigned(AStmt.MatchPattern) or
+    StatementNeedsIteratorClose(AStmt.Body);
   if NeedsIteratorClose then
     CloseErrorReg := ACtx.Scope.AllocateRegister;
 

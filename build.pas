@@ -278,9 +278,14 @@ begin
 end;
 
 function TestUnitOutputDirectory(const ATestFile: string): string;
+var
+  RelativePath, SafePath: string;
 begin
+  RelativePath := ChangeFileExt(ATestFile, '');
+  SafePath := StringReplace(RelativePath, '/', DirectorySeparator, [rfReplaceAll]);
+  SafePath := StringReplace(SafePath, '\', DirectorySeparator, [rfReplaceAll]);
   Result := 'build' + DirectorySeparator + 'compiled' + DirectorySeparator +
-    'tests' + DirectorySeparator + ChangeFileExt(ExtractFileName(ATestFile), '');
+    'tests' + DirectorySeparator + SafePath;
 end;
 
 function TargetUnitOutputDirectory(const ATarget: string): string;

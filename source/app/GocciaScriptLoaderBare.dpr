@@ -163,6 +163,7 @@ end;
 function TBareTest262EvalHost.Eval(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
+  ActiveOptionsScope: TGocciaSourcePipelineOptionsScope;
   EvalOptions: TGocciaSourcePipelineOptions;
   EvalSource: TStringList;
   PipelineResult: TGocciaSourcePipelineResult;
@@ -190,44 +191,50 @@ begin
     EvalOptions.Compatibility := FEngine.Compatibility;
     EvalOptions.SourceType := stScript;
 
-    RealmScope := FEngine.ActivateRealmExecutionContext;
+    ActiveOptionsScope := TGocciaSourcePipeline.ActivateOptions(EvalOptions);
     try
-      PipelineResult := TGocciaSourcePipeline.Parse(EvalSource,
-        '<test262-realm-eval>', EvalOptions);
+      RealmScope := FEngine.ActivateRealmExecutionContext;
       try
-        if HasEvalTopLevelUsingDeclaration(PipelineResult.ProgramNode) then
-          ThrowSyntaxError(
-            'Using declarations are not allowed at the top level of eval');
-        StrictEval := HasUseStrictDirective(PipelineResult.ProgramNode);
-        if StrictEval then
-          EvalScope := FEngine.Interpreter.GlobalScope.CreateChild(skFunction,
-            'StrictTest262Eval')
-        else
-          EvalScope := FEngine.Interpreter.GlobalScope.CreateChild(skBlock,
-            'Test262Eval');
-        EvalScope.ThisValue := FEngine.Interpreter.GlobalScope.ThisValue;
-        if Assigned(TGarbageCollector.Instance) then
-          TGarbageCollector.Instance.AddTempRoot(EvalScope);
+        PipelineResult := TGocciaSourcePipeline.Parse(EvalSource,
+          '<test262-realm-eval>', EvalOptions);
         try
-          EvalContext := FEngine.Interpreter.CreateEvaluationContext;
-          EvalContext.Scope := EvalScope;
-          EvalContext.CurrentFilePath := '<test262-realm-eval>';
-          EvalContext.NonStrictMode := not StrictEval;
+          if HasEvalTopLevelUsingDeclaration(PipelineResult.ProgramNode) then
+            ThrowSyntaxError(
+              'Using declarations are not allowed at the top level of eval');
+          StrictEval := HasUseStrictDirective(PipelineResult.ProgramNode);
           if StrictEval then
-            VarScope := EvalScope
+            EvalScope := FEngine.Interpreter.GlobalScope.CreateChild(skFunction,
+              'StrictTest262Eval')
           else
-            VarScope := FEngine.Interpreter.GlobalScope;
-          Result := EvaluateEvalProgram(PipelineResult.ProgramNode,
-            EvalContext, VarScope, EvalScope, StrictEval, False);
-        finally
+            EvalScope := FEngine.Interpreter.GlobalScope.CreateChild(skBlock,
+              'Test262Eval');
+          EvalScope.ThisValue := FEngine.Interpreter.GlobalScope.ThisValue;
           if Assigned(TGarbageCollector.Instance) then
-            TGarbageCollector.Instance.RemoveTempRoot(EvalScope);
+            TGarbageCollector.Instance.AddTempRoot(EvalScope);
+          try
+            EvalContext := FEngine.Interpreter.CreateEvaluationContext;
+            EvalContext.Scope := EvalScope;
+            EvalContext.CurrentFilePath := '<test262-realm-eval>';
+            EvalContext.NonStrictMode := not StrictEval;
+            if StrictEval then
+              VarScope := EvalScope
+            else
+              VarScope := FEngine.Interpreter.GlobalScope;
+            Result := EvaluateEvalProgram(PipelineResult.ProgramNode,
+              EvalContext, VarScope, EvalScope, StrictEval, False, False, False,
+              False);
+          finally
+            if Assigned(TGarbageCollector.Instance) then
+              TGarbageCollector.Instance.RemoveTempRoot(EvalScope);
+          end;
+        finally
+          PipelineResult.Free;
         end;
       finally
-        PipelineResult.Free;
+        RealmScope.Free;
       end;
     finally
-      RealmScope.Free;
+      ActiveOptionsScope.Free;
     end;
   finally
     EvalSource.Free;

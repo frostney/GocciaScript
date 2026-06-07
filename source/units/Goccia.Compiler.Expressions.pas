@@ -891,6 +891,14 @@ begin
                ExpressionContainsDirectEval(Pair.Value) then
               Exit(True);
           end;
+        pstComputedGetter,
+        pstComputedSetter:
+          begin
+            Pair := ObjectExpr.ComputedPropertiesInOrder[
+              ObjectExpr.PropertySourceOrder[I].ComputedIndex];
+            if ExpressionContainsDirectEval(Pair.Key) then
+              Exit(True);
+          end;
       end;
   end
   else if AExpr is TGocciaYieldExpression then
