@@ -688,6 +688,34 @@ console.log("Bare Loader: --test262-host child realms expose host records...");
     throw new Error(`Bare --test262-host child realm hooks got: ${proc.stdout.toString()}`);
 }
 
+console.log("Bare Loader: --test262-host child realm globals expose host hooks...");
+{
+  const proc = Bun.spawnSync([BARE, "--test262-host"], {
+    stdin: new TextEncoder().encode([
+      "const child = Goccia.test262.createRealm();",
+      "print(child.global.Goccia.test262Host);",
+      "print(typeof child.global.Goccia.test262);",
+      "print(typeof child.global.Goccia.test262.createRealm);",
+      "print(typeof child.global.Goccia.test262.evalScript);",
+      "print(typeof child.global.eval);",
+      "",
+    ].join("\n")),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const expected = [
+    "true",
+    "object",
+    "function",
+    "function",
+    "function",
+  ].join("\n");
+  if (proc.exitCode !== 0)
+    throw new Error(`Bare --test262-host child global hook probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (proc.stdout.toString().trim() !== expected)
+    throw new Error(`Bare --test262-host child global hooks got: ${proc.stdout.toString()}`);
+}
+
 console.log("Bare Loader: bytecode --test262-host eval is direct eval...");
 {
   const proc = Bun.spawnSync([BARE, "--test262-host", "--mode=bytecode"], {
@@ -719,6 +747,119 @@ console.log("Bare Loader: bytecode --test262-host eval is direct eval...");
     throw new Error(`Bare bytecode direct eval probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (proc.stdout.toString().trim() !== expected)
     throw new Error(`Bare bytecode direct eval got: ${proc.stdout.toString()}`);
+}
+
+console.log("Bare Loader: --test262-host eval validates destructuring pattern early errors...");
+{
+  const source = [
+    "const cases = [",
+    "  'let { [super.x]: y } = {};',",
+    "  'let { a = super.x } = {};',",
+    "  'let { a = super() } = {};',",
+    "  'let { a = new.target } = {};',",
+    "  '({ [super.x]: y } = {});',",
+    "  '({ a = super.x } = {});'",
+    "];",
+    "for (const source of cases) {",
+    "  try {",
+    "    eval(source);",
+    "    print('no error');",
+    "  } catch (e) {",
+    "    print(e.name);",
+    "  }",
+    "}",
+    "",
+  ].join("\n");
+  const expected = [
+    "SyntaxError",
+    "SyntaxError",
+    "SyntaxError",
+    "SyntaxError",
+    "SyntaxError",
+    "SyntaxError",
+  ].join("\n");
+  for (const mode of [
+    { label: "interpreted", args: [BARE, "--test262-host"] },
+    { label: "bytecode", args: [BARE, "--test262-host", "--mode=bytecode"] },
+  ]) {
+    const proc = Bun.spawnSync(mode.args, {
+      stdin: new TextEncoder().encode(source),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode !== 0)
+      throw new Error(`Bare ${mode.label} eval destructuring early-error probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    if (proc.stdout.toString().trim() !== expected)
+      throw new Error(`Bare ${mode.label} eval destructuring early errors got: ${proc.stdout.toString()}`);
+  }
+}
+
+console.log("Bare Loader: --test262-host eval super permissions stop at ordinary function boundary...");
+{
+  const source = [
+    "class Base { method() { return 11; } }",
+    "class Derived extends Base {",
+    "  method() {",
+    "    function inner() {",
+    "      try {",
+    "        return eval('super.method()');",
+    "      } catch (e) {",
+    "        return e.name;",
+    "      }",
+    "    }",
+    "    return inner();",
+    "  }",
+    "}",
+    "print(new Derived().method());",
+    "",
+  ].join("\n");
+  for (const mode of [
+    { label: "interpreted", args: [BARE, "--test262-host", "--compat-function", "--compat-non-strict-mode"] },
+    { label: "bytecode", args: [BARE, "--test262-host", "--mode=bytecode", "--compat-function", "--compat-non-strict-mode"] },
+  ]) {
+    const proc = Bun.spawnSync(mode.args, {
+      stdin: new TextEncoder().encode(source),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode !== 0)
+      throw new Error(`Bare ${mode.label} eval ordinary-boundary probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    if (proc.stdout.toString().trim() !== "SyntaxError")
+      throw new Error(`Bare ${mode.label} eval ordinary-boundary got: ${proc.stdout.toString()}`);
+  }
+}
+
+console.log("Bare Loader: bytecode --test262-host eval inherits arrow lexical super and new.target...");
+{
+  const proc = Bun.spawnSync([BARE, "--test262-host", "--mode=bytecode"], {
+    stdin: new TextEncoder().encode([
+      "class Base {",
+      "  constructor() { this.x = 1; }",
+      "  m() { return 7; }",
+      "}",
+      "class Derived extends Base {",
+      "  constructor() {",
+      "    (() => eval('super()'))();",
+      "    this.nt = (() => eval('new.target === Derived'))();",
+      "  }",
+      "  method() { return (() => eval('super.m()'))(); }",
+      "  detached() { return () => eval('super.m()'); }",
+      "}",
+      "const d = new Derived();",
+      "print(d.method());",
+      "print(d.detached()());",
+      "print(d.x);",
+      "print(d.nt);",
+      "",
+    ].join("\n")),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const expected = "7\n7\n1\ntrue";
+  if (proc.exitCode !== 0)
+    throw new Error(`Bare bytecode eval arrow lexical probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (proc.stdout.toString().trim() !== expected)
+    throw new Error(`Bare bytecode eval arrow lexical got: ${proc.stdout.toString()}`);
 }
 
 console.log("Bare Loader: bytecode direct eval creates top-level sloppy var...");
