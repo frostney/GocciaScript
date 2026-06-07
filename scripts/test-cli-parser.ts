@@ -77,8 +77,10 @@ console.log("Malformed literal class accessors...");
   for (const [source, desc] of [
     ['class C { get "dash-key" = 1; }\n', "string-named getter field"],
     ["class C { get 1 = 1; }\n", "numeric-named getter field"],
+    ["class C { get class = 1; }\n", "keyword-named getter field"],
     ['class C { set "dash-key" = 1; }\n', "string-named setter field"],
     ["class C { set 1; }\n", "numeric-named setter declaration"],
+    ["class C { set class = 1; }\n", "keyword-named setter field"],
   ] as const) {
     assertSyntaxError(source, desc);
     assertSyntaxError(source, `${desc} (bytecode)`, ["--mode=bytecode"]);
