@@ -17,6 +17,8 @@ Chronological record of key architectural and implementation decisions, newest f
 
 ---
 
+**2026-06-07** · `parser` — Labelled function declarations now follow Annex B compatibility boundaries. Direct sloppy labelled functions remain available behind `--compat-label` plus `--compat-function`, immediate labelled-function bodies under `if`/`else`/`with`/iteration statements are rejected per Annex B.3.1, and sloppy block/switch function declarations update the nearest var binding only when `--compat-non-strict-mode` is also active. [language.md § function Keyword](language.md#function-keyword). [language.md § Labeled Statements](language.md#labeled-statements).
+
 **2026-06-02** · `engine` — Added opt-in `for...in` JavaScript compatibility behind `--compat-for-in-loop` / `"compat-for-in-loop"` / `cfForIn`. The flag remains separate from `--compat-traditional-for-loop` because `for...in` uses property-name enumeration rather than counted-loop control flow. It stays off by default with the existing parser warning/no-op posture and supports enumerable string own and inherited keys in interpreter and bytecode modes. [language.md](language.md#forin-loop).
 
 **2026-05-29** · `engine` — Labeled `break` and `continue` targets are available behind `--compat-label` / `"compat-label"` for JavaScript compatibility and test262 coverage. Labels stay disabled by default, but when enabled the parser preserves label targets and both interpreter and bytecode paths resolve named breaks and iteration-only continues. [language.md § Labeled Statements](language.md#labeled-statements).
