@@ -107,6 +107,8 @@ const
 
 procedure ConfigureEngine(const AEngine: TGocciaEngine;
   const AExecutor: TGocciaExecutor; const AOptions: TBareOptions); forward;
+function CreateExecutorForMode(
+  const AMode: TBareExecutionMode): TGocciaExecutor; forward;
 
 procedure InstallTest262EvalGlobal(const AEngine: TGocciaEngine;
   const AEvalHost: TBareTest262EvalHost);
@@ -290,10 +292,9 @@ var
 begin
   inherited Create;
   FSource := TStringList.Create;
-  FExecutor := TGocciaInterpreterExecutor.Create;
+  FExecutor := CreateExecutorForMode(AOptions.Mode);
   FEngine := TGocciaEngine.Create('<test262-realm>', FSource, FExecutor);
   ChildOptions := AOptions;
-  ChildOptions.Mode := bemInterpreted;
   ChildOptions.SourceType := stScript;
   ConfigureEngine(FEngine, FExecutor, ChildOptions);
 

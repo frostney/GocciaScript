@@ -719,9 +719,12 @@ begin
       raise TGocciaTypeError.Create(
         Format(SErrorAssignToConstant, [AName]),
         ALine, AColumn, '', nil, SSuggestUseLetNotConst);
+    // ES2026 §19.2.1.1 PerformEval step 18: direct eval's lexical
+    // environment has the caller lexical environment as its outer
+    // environment.  Captured bytecode locals are aliases for that caller
+    // environment, so assignments update the captured slot/upvalue directly
+    // instead of creating a local var shadow in this adapter scope.
     SetBindingValue(Binding, AValue);
-    if Binding.Kind <> debGlobal then
-      DefineVariableBinding(AName, AValue, True);
     Exit;
   end;
   inherited AssignBinding(AName, AValue, ALine, AColumn, ANonStrictMode);
@@ -7960,7 +7963,9 @@ var
     Result := nil;
     if Assigned(FCurrentClosure) and
        (FCurrentClosure.HomeClass is TGocciaClassValue) then
-      Result := TGocciaClassValue(FCurrentClosure.HomeClass);
+      Exit(TGocciaClassValue(FCurrentClosure.HomeClass));
+    if AThisValue is TGocciaInstanceValue then
+      Result := TGocciaInstanceValue(AThisValue).ClassValue;
   end;
 begin
   HomeObject := nil;

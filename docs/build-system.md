@@ -8,7 +8,7 @@
 - **Two modes** — `--dev` (default: debug info, checks) and `--prod` (O4, stripped, smart-linked)
 - **CI/CD** — `ci.yml` for main/tags (full platform matrix), `pr.yml` for PRs (ubuntu-latest x64 only, with benchmark comparison)
 - **Auto-formatter** — `./format.pas` with Lefthook pre-commit hook enforces code style automatically
-- **Clean recovery** — `./build.pas clean <target>` clears stale FPC artifacts before diagnosing misleading compiler/resource failures
+- **Explicit clean recovery** — `./build.pas --clean <target>` clears stale FPC artifacts before diagnosing misleading compiler/resource failures
 
 GocciaScript uses a self-hosted build script written in FreePascal, executed via `instantfpc`. No external build tools (Make, CMake, npm) are required beyond the FreePascal compiler itself.
 
@@ -30,6 +30,7 @@ The build script supports two modes via `--dev` (default) and `--prod` flags:
 ./build.pas --dev loader        # Explicit dev build
 ./build.pas --prod loader       # Production build
 ./build.pas --prod              # Production build of all components
+./build.pas --clean --prod      # Clean, then production build of all components
 ./build.pas --prod loader repl  # Production build of specific components
 ```
 
@@ -40,7 +41,7 @@ The build script supports two modes via `--dev` (default) and `--prod` flags:
 ./build.pas --prod    # Production build of all components
 ```
 
-Runs a clean (removes stale `.ppu`, `.o`, `.res`, and `.reslst` from `build/compiled/`), then builds all components in order: tests, loader, loaderbare, testrunner, benchmarkrunner, bundler, repl.
+Builds all components in order: tests, loader, loaderbare, testrunner, benchmarkrunner, bundler, repl. The default full build does not clean first; pass `--clean` explicitly when you need to remove stale build artifacts.
 
 ### Build Specific Components
 
@@ -60,20 +61,20 @@ Multiple components can be specified:
 ./build.pas loader repl
 ```
 
-### Clean Build Artifacts
+### Clean Builds
 
 ```bash
-./build.pas clean              # Remove stale .ppu, .o, .res, .reslst from build/compiled/
-./build.pas clean loader       # Clean then build loader
+./build.pas --clean              # Clean, then build all components
+./build.pas --clean loader       # Clean then build loader
 ```
 
-A full build (no specific targets) automatically cleans first.
+Cleaning is explicit. `./build.pas` and `./build.pas --prod` build all components without cleaning; use `./build.pas --clean` for a clean full build or `./build.pas --clean <target...>` to clean before selected targets.
 
-Use the clean form after a branch switch, merge, PR sync, generated resource
+Use the explicit clean form after a branch switch, merge, PR sync, generated resource
 update, or unexplained FPC/resource compiler error. FPC 3.2.2 can report stale
 compiled state as misleading messages such as `Compilation raised exception
-internally` or `Error while compiling resources`; clean the target first, then
-diagnose the reported source line only if it still fails.
+internally` or `Error while compiling resources`; retry with `--clean` first,
+then diagnose the reported source line only if the same target still fails.
 
 ### Compile and Run
 
@@ -383,7 +384,7 @@ All compiled binaries go to the `build/` directory:
 | `build/GocciaBundler` | `source/app/GocciaBundler.dpr` | Bundler (source to `.gbc`) |
 | `build/Goccia.Values.Primitives.Test` | `*.Test.pas` | Pascal unit test binaries |
 
-Intermediate files (`.o`, `.ppu`, generated resource lists) go to `build/compiled/` to keep the source tree clean.
+Intermediate files (`.o`, `.or`, `.ppu`, generated resource lists) go to `build/compiled/` to keep the source tree clean. Each executable target compiles into an isolated `build/compiled/targets/<target>/` unit cache, and Pascal unit test programs compile into isolated `build/compiled/tests/<test-program>/` subdirectories so one program's FPC unit cache cannot poison the next.
 
 ## Compiler Configuration
 
@@ -396,11 +397,11 @@ Intermediate files (`.o`, `.ppu`, generated resource lists) go to `build/compile
 -Fu./source/app      # CLI application unit search path
 -Fi./source/units    # Engine include file search path
 -Fi./source/shared   # Shared include file search path
--FUbuild/compiled         # Unit output directory
+-FUbuild/compiled    # Default unit output directory
 -FEbuild             # Executable output directory
 ```
 
-These path flags are shared by both build modes. Mode-specific flags are added by `build.pas`.
+These path flags are shared by both build modes. Mode-specific flags are added by `build.pas`. Each build target overrides `-FU` to isolate its own Pascal unit cache.
 
 ### Build Mode Flags
 
@@ -457,9 +458,9 @@ It:
 2. Parses `--dev`/`--prod` flags to determine the build mode (defaults to `--dev`).
 3. Parses remaining arguments to determine which components to build.
 4. Counts and prints source statistics: total lines of code (LOC), significant lines of code (SLOC, excluding blanks and comments), and file count.
-5. Calls `fpc` with `@config.cfg`, mode-specific flags, and suppressed verbose output flags (`-vw-n-h-i-l-d-u-t-p-c-x-`).
+5. Calls `fpc` with `@config.cfg`, a target-specific `-FUbuild/compiled/...` override, mode-specific flags, and suppressed verbose output flags (`-vw-n-h-i-l-d-u-t-p-c-x-`).
 6. If the `FPC_TARGET_CPU` environment variable is set, prepends `-P<arch>` to the compiler arguments (used by CI to target x86_64 on Windows where the FPC package defaults to i386).
-7. For the `tests` target, auto-discovers all `*.Test.pas` files in `source/units/` and `source/shared/`.
+7. For the `tests` target, auto-discovers all `*.Test.pas` files in `source/units/` and `source/shared/`, compiling each program with its own `build/compiled/tests/<test-program>/` unit-output directory.
 
 The GitHub Actions cross-compilation workflow uses a reduced cached FPC toolchain rather than a full target-side FCL install. It prebuilds the RTL, `rtl-objpas`, `rtl-generics`, and `fcl-process`, and also caches the official `fcl-base` sources so cross builds can resolve units such as `Base64` on demand from the shipped FPC packages.
 
@@ -503,7 +504,10 @@ GocciaScript/
 └── build/             # All output (gitignored)
     ├── compiled/      # Intermediate files
     │   ├── *.o        # Object files
-    │   └── *.ppu      # Compiled unit files
+    │   ├── *.or       # Resource object files
+    │   ├── *.ppu      # Compiled unit files
+    │   ├── targets/   # Isolated executable target unit caches
+    │   └── tests/     # Isolated Pascal test unit caches
     └── (binaries)     # Executable output
 ```
 

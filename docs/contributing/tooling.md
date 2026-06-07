@@ -90,14 +90,14 @@ All four layers enforce the same rules, providing defence in depth. The typical 
 ### Stale FPC Build Artifacts
 
 After a branch switch, merge, PR sync, generated resource update, or unexplained
-compiler/resource failure, start by cleaning the target before diagnosing source
-code. FPC 3.2.2 can report stale compiled state as misleading internal compiler
-exceptions or resource-list errors.
+compiler/resource failure, start with an explicit `--clean` build before
+diagnosing source code. FPC 3.2.2 can report stale compiled state as misleading
+internal compiler exceptions or resource-list errors.
 
 ```bash
-./build.pas clean loaderbare
-./build.pas clean testrunner
-./build.pas clean
+./build.pas --clean loaderbare
+./build.pas --clean testrunner
+./build.pas --clean
 ```
 
 Treat messages such as `Compilation raised exception internally` and

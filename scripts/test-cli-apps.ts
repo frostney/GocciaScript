@@ -705,12 +705,16 @@ console.log("Bare Loader: bytecode --test262-host eval is direct eval...");
       "  const f = () => eval('y + 4');",
       "  print(f());",
       "}",
+      "{",
+      "  const update = () => { let local = 1; print(eval('local = 2; local;')); print(local); return local; };",
+      "  print(update());",
+      "}",
       "",
     ].join("\n")),
     stdout: "pipe",
     stderr: "pipe",
   });
-  const expected = "42\n7\nshadow:x\n7";
+  const expected = "42\n7\nshadow:x\n7\n2\n2\n2";
   if (proc.exitCode !== 0)
     throw new Error(`Bare bytecode direct eval probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (proc.stdout.toString().trim() !== expected)

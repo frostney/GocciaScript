@@ -23,7 +23,7 @@ Assistants should treat CONTRIBUTING as authoritative for contribution requireme
 - **Match the project's workflow**: branch from `main`, focused diffs, tests and docs updated per CONTRIBUTING.
 - **Clean first for stale FPC failures**: after a merge, branch switch, PR sync,
   generated resource change, or unexplained compiler/resource error, retry with
-  `./build.pas clean <target>` (or `./build.pas clean`) before diagnosing the
+  `./build.pas --clean <target>` (or `./build.pas --clean`) before diagnosing the
   reported source line. See [Tooling — Stale FPC Build Artifacts](docs/contributing/tooling.md#stale-fpc-build-artifacts).
 - **Do not paste large chunks of CONTRIBUTING into this file** when CONTRIBUTING changes—edit CONTRIBUTING instead, and keep AGENTS short.
 
@@ -57,10 +57,10 @@ Use `spec.search` when you do not know the clause id, `clause.get` when you do, 
 ### Build commands
 
 ```bash
-./build.pas # Clean + dev build of everything (default)
+./build.pas # Dev build of everything (default, no clean)
 ./build.pas --dev loader # Dev build of GocciaScriptLoader
 ./build.pas --dev loaderbare # Dev build of GocciaScriptLoaderBare
-./build.pas --prod # Clean + production build of everything
+./build.pas --prod # Production build of everything (no clean)
 ./build.pas --prod loader repl # Production build of specific components
 ./build.pas loader # Dev build (--dev is the default)
 ./build.pas loaderbare # Dev build of the bare ScriptLoader
@@ -68,8 +68,8 @@ Use `spec.search` when you do not know the clause id, `clause.get` when you do, 
 ./build.pas benchmarkrunner # Dev build of GocciaBenchmarkRunner
 ./build.pas bundler # Dev build of GocciaBundler
 ./build.pas tests # Dev build of Pascal unit tests
-./build.pas clean # Clean stale artifacts only (no build)
-./build.pas clean loader # Clean, then dev build of ScriptLoader
+./build.pas --clean # Clean, then dev build of everything
+./build.pas --clean loader # Clean, then dev build of ScriptLoader
 ```
 
 ### Run commands

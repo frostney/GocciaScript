@@ -31,7 +31,7 @@ When an issue references test262 files, patterns, or categories:
 4. Build the bare loader from a clean artifact state first:
 
 ```bash
-./build.pas clean loaderbare
+./build.pas --clean loaderbare
 ```
 
 Use the clean form after merges, branch switches, PR syncs, generated

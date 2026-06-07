@@ -582,7 +582,7 @@ Use this checklist when adding a new built-in type:
 - [ ] Benchmarks in `benchmarks/yourtype.js`
 - [ ] Documentation in `docs/built-ins.md`, `README.md`, and other docs as needed (see [CONTRIBUTING.md](../CONTRIBUTING.md))
 - [ ] All existing tests still pass
-- [ ] Build succeeds (`./build.pas clean loader`)
+- [ ] Build succeeds (`./build.pas --clean loader`)
 
 ## GC Considerations
 
@@ -600,5 +600,5 @@ Use this checklist when adding a new built-in type:
 3. **Caching realm-scoped objects in `threadvar`s or class vars** -- The cached pointer survives engine destruction and becomes a dangling reference on the next engine. Always read the shared prototype through `CurrentRealm.GetSlot`/`GetOwnedSlot`. See [Core patterns § Realm Ownership & Slot Registration](core-patterns.md#realm-ownership--slot-registration) for the stale-cache antipattern.
 4. **`IsInfinity` vs `IsInfinite`** -- `IsInfinity` checks only positive infinity. Use `IsInfinite` to check both positive and negative.
 5. **Circular interface dependencies** -- If your value type and `ClassValue` need each other, put the value type in `ClassValue`'s *implementation* uses clause (not interface).
-6. **Stale build artifacts** -- After adding new units, run `./build.pas clean loader` to avoid FPC internal errors from stale `.ppu` files.
+6. **Stale build artifacts** -- After adding new units, run `./build.pas --clean loader` to avoid FPC internal errors from stale `.ppu` files.
 7. **Use property accessors for special numbers** -- `TGocciaNumberLiteralValue` stores a single `Double` in `FValue` using standard IEEE 754 bit patterns. Use the `IsNaN`, `IsInfinity`, and `IsNegativeZero` property accessors rather than raw `FValue` comparisons when you need to distinguish special values. For negative zero specifically, `IsNegativeZero` uses an endian-neutral sign-bit check. See `Goccia.Values.TypedArrayValue.WriteNumberLiteral` and `Goccia.Arithmetic.pas` for the canonical patterns.
