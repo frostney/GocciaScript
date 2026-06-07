@@ -6172,7 +6172,7 @@ begin
         Elements[High(Elements)].FieldInitializer := PropertyValue;
         Elements[High(Elements)].TypeAnnotation := FieldType;
       end
-      else if Check(gttAssign) then
+      else if (not IsGetter) and (not IsSetter) and Check(gttAssign) then
       begin
         Consume(gttAssign, 'Expected "=" in property',
           SSuggestAddPropertyInitializer);
@@ -6236,7 +6236,7 @@ begin
             InstancePropertyTypes.Add(MemberName, FieldType);
         end;
       end
-      else if CheckSemicolonOrASI then
+      else if (not IsGetter) and (not IsSetter) and CheckSemicolonOrASI then
       begin
         if Check(gttSemicolon) then
           Advance;
