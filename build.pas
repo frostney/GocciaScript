@@ -17,6 +17,7 @@ var
   I: Integer;
   BuildTriggers: TStringList;
   BuildMode: TBuildMode = bmDev;
+  CleanRequested: Boolean = False;
   GVersion, GCommit, GBuildDate: string;
 
 function ComputeVersion: string;
@@ -229,7 +230,8 @@ begin
   end;
 end;
 
-function FPCArgs(const ASource: string): TStringArray;
+function FPCArgs(const ASource: string;
+  const AUnitOutputDirectory: string = ''): TStringArray;
 var
   Arch: string;
   Args: TStringList;
@@ -242,6 +244,8 @@ begin
       Args.Add('-P' + Arch);
 
     Args.Add('@config.cfg');
+    if AUnitOutputDirectory <> '' then
+      Args.Add('-FU' + AUnitOutputDirectory);
 
     if BuildMode = bmProd then
     begin
@@ -273,17 +277,68 @@ begin
   end;
 end;
 
+function TestUnitOutputDirectory(const ATestFile: string): string;
+var
+  RelativePath, SafePath: string;
+begin
+  RelativePath := ChangeFileExt(ATestFile, '');
+  SafePath := StringReplace(RelativePath, '/', DirectorySeparator, [rfReplaceAll]);
+  SafePath := StringReplace(SafePath, '\', DirectorySeparator, [rfReplaceAll]);
+  Result := 'build' + DirectorySeparator + 'compiled' + DirectorySeparator +
+    'tests' + DirectorySeparator + SafePath;
+end;
+
+function TargetUnitOutputDirectory(const ATarget: string): string;
+begin
+  Result := 'build' + DirectorySeparator + 'compiled' + DirectorySeparator +
+    'targets' + DirectorySeparator + ATarget;
+end;
+
+function EnsureUnitOutputDirectory(const ADirectory: string): string;
+begin
+  if not DirectoryExists(ADirectory) then
+    ForceDirectories(ADirectory);
+  Result := ADirectory;
+end;
+
+function HasStaleArtifactSignature(const AOutput: string): Boolean;
+var
+  LowerOutput: string;
+begin
+  LowerOutput := LowerCase(AOutput);
+  Result :=
+    (Pos('compilation raised exception internally', LowerOutput) > 0) or
+    (Pos('error while compiling resources', LowerOutput) > 0) or
+    ((Pos('.reslst', LowerOutput) > 0) and
+     ((Pos('cannot open', LowerOutput) > 0) or
+      (Pos('not found', LowerOutput) > 0) or
+      (Pos('no such file', LowerOutput) > 0)));
+end;
+
+procedure PrintBuildFailureAndExit(const AOutput, AFailureMessage,
+  ATarget: string);
+begin
+  WriteLn(AOutput);
+  if HasStaleArtifactSignature(AOutput) then
+  begin
+    WriteLn('');
+    WriteLn('Hint: stale FPC build artifacts can cause this error.');
+    WriteLn('Retry with: ./build.pas --clean ', ATarget);
+    WriteLn('');
+  end;
+  WriteLn(AFailureMessage);
+  Halt(1);
+end;
+
 procedure BuildREPL;
 var
   Output: string;
 begin
   WriteLn('Building GocciaREPL...');
-  if not RunCommand('fpc', FPCArgs('source/app/GocciaREPL.dpr'), Output) then
-  begin
-    WriteLn(Output);
-    WriteLn('GocciaREPL build failed');
-    Halt(1);
-  end;
+  if not RunCommand('fpc', FPCArgs('source/app/GocciaREPL.dpr',
+      EnsureUnitOutputDirectory(TargetUnitOutputDirectory('repl'))),
+      Output) then
+    PrintBuildFailureAndExit(Output, 'GocciaREPL build failed', 'repl');
   WriteLn(Output);
   WriteLn('GocciaREPL built successfully');
 end;
@@ -294,12 +349,11 @@ var
 begin
   WriteLn('');
   WriteLn('Building GocciaScriptLoader...');
-  if not RunCommand('fpc', FPCArgs('source/app/GocciaScriptLoader.dpr'), Output) then
-  begin
-    WriteLn(Output);
-    WriteLn('GocciaScriptLoader build failed');
-    Halt(1);
-  end;
+  if not RunCommand('fpc', FPCArgs('source/app/GocciaScriptLoader.dpr',
+      EnsureUnitOutputDirectory(TargetUnitOutputDirectory('loader'))),
+      Output) then
+    PrintBuildFailureAndExit(Output, 'GocciaScriptLoader build failed',
+      'loader');
   WriteLn(Output);
   WriteLn('GocciaScriptLoader built successfully');
   WriteLn('');
@@ -311,12 +365,11 @@ var
 begin
   WriteLn('');
   WriteLn('Building GocciaScriptLoaderBare...');
-  if not RunCommand('fpc', FPCArgs('source/app/GocciaScriptLoaderBare.dpr'), Output) then
-  begin
-    WriteLn(Output);
-    WriteLn('GocciaScriptLoaderBare build failed');
-    Halt(1);
-  end;
+  if not RunCommand('fpc', FPCArgs('source/app/GocciaScriptLoaderBare.dpr',
+      EnsureUnitOutputDirectory(TargetUnitOutputDirectory('loaderbare'))),
+      Output) then
+    PrintBuildFailureAndExit(Output, 'GocciaScriptLoaderBare build failed',
+      'loaderbare');
   WriteLn(Output);
   WriteLn('GocciaScriptLoaderBare built successfully');
   WriteLn('');
@@ -327,6 +380,7 @@ var
   AllUnitFiles: TStringList;
   TestFiles: TStringList;
   Output: string;
+  UnitOutputDirectory: string;
   K: Integer;
 begin
   WriteLn('Building Tests...');
@@ -344,12 +398,12 @@ begin
 
   for K := 0 to TestFiles.Count - 1 do
   begin
-    if not RunCommand('fpc', FPCArgs(TestFiles[K]), Output) then
-    begin
-      WriteLn(Output);
-      WriteLn('Test build failed: ', TestFiles[K]);
-      Halt(1);
-    end;
+    UnitOutputDirectory := TestUnitOutputDirectory(TestFiles[K]);
+
+    if not RunCommand('fpc', FPCArgs(TestFiles[K],
+        EnsureUnitOutputDirectory(UnitOutputDirectory)), Output) then
+      PrintBuildFailureAndExit(Output, 'Test build failed: ' + TestFiles[K],
+        'tests');
     WriteLn(Output);
   end;
 
@@ -361,12 +415,11 @@ var
   Output: string;
 begin
   WriteLn('Building GocciaTestRunner...');
-  if not RunCommand('fpc', FPCArgs('source/app/GocciaTestRunner.dpr'), Output) then
-  begin
-    WriteLn(Output);
-    WriteLn('GocciaTestRunner build failed');
-    Halt(1);
-  end;
+  if not RunCommand('fpc', FPCArgs('source/app/GocciaTestRunner.dpr',
+      EnsureUnitOutputDirectory(TargetUnitOutputDirectory('testrunner'))),
+      Output) then
+    PrintBuildFailureAndExit(Output, 'GocciaTestRunner build failed',
+      'testrunner');
   WriteLn(Output);
   WriteLn('GocciaTestRunner built successfully');
 end;
@@ -376,12 +429,11 @@ var
   Output: string;
 begin
   WriteLn('Building GocciaBenchmarkRunner...');
-  if not RunCommand('fpc', FPCArgs('source/app/GocciaBenchmarkRunner.dpr'), Output) then
-  begin
-    WriteLn(Output);
-    WriteLn('GocciaBenchmarkRunner build failed');
-    Halt(1);
-  end;
+  if not RunCommand('fpc', FPCArgs('source/app/GocciaBenchmarkRunner.dpr',
+      EnsureUnitOutputDirectory(TargetUnitOutputDirectory('benchmarkrunner'))),
+      Output) then
+    PrintBuildFailureAndExit(Output, 'GocciaBenchmarkRunner build failed',
+      'benchmarkrunner');
   WriteLn(Output);
   WriteLn('GocciaBenchmarkRunner built successfully');
 end;
@@ -391,12 +443,10 @@ var
   Output: string;
 begin
   WriteLn('Building GocciaBundler...');
-  if not RunCommand('fpc', FPCArgs('source/app/GocciaBundler.dpr'), Output) then
-  begin
-    WriteLn(Output);
-    WriteLn('GocciaBundler build failed');
-    Halt(1);
-  end;
+  if not RunCommand('fpc', FPCArgs('source/app/GocciaBundler.dpr',
+      EnsureUnitOutputDirectory(TargetUnitOutputDirectory('bundler'))),
+      Output) then
+    PrintBuildFailureAndExit(Output, 'GocciaBundler build failed', 'bundler');
   WriteLn(Output);
   WriteLn('GocciaBundler built successfully');
 end;
@@ -417,7 +467,9 @@ begin
   try
     Files.AddStrings(FindAllFiles('build/compiled', '.ppu'));
     Files.AddStrings(FindAllFiles('build/compiled', '.o'));
+    Files.AddStrings(FindAllFiles('build/compiled', '.or'));
     Files.AddStrings(FindAllFiles('build/compiled', '.res'));
+    Files.AddStrings(FindAllFiles('build/compiled', '.reslst'));
 
     for K := 0 to Files.Count - 1 do
       DeleteFile(Files[K]);
@@ -430,9 +482,7 @@ end;
 
 procedure Build(const ATrigger: string);
 begin
-  if ATrigger = 'clean' then
-    Clean
-  else if ATrigger = 'repl' then
+  if ATrigger = 'repl' then
     BuildREPL
   else if ATrigger = 'loader' then
     BuildScriptLoader
@@ -445,7 +495,14 @@ begin
   else if ATrigger = 'benchmarkrunner' then
     BuildBenchmarkRunner
   else if ATrigger = 'bundler' then
-    BuildGocciaBundler;
+    BuildGocciaBundler
+  else
+  begin
+    WriteLn('Unknown build target: ', ATrigger);
+    if ATrigger = 'clean' then
+      WriteLn('Use --clean as an option, for example: ./build.pas --clean loader');
+    Halt(1);
+  end;
 end;
 
 begin
@@ -462,6 +519,8 @@ begin
       BuildMode := bmDev
     else if ParamStr(I) = '--prod' then
       BuildMode := bmProd
+    else if ParamStr(I) = '--clean' then
+      CleanRequested := True
     else
       BuildTriggers.Add(LowerCase(ParamStr(I)));
   end;
@@ -479,9 +538,11 @@ begin
   PrintVersion(GVersion, GCommit, GBuildDate);
   PrintSourceStats;
 
+  if CleanRequested then
+    Clean;
+
   if BuildTriggers.Count = 0 then
   begin
-    BuildTriggers.Add('clean');
     BuildTriggers.Add('tests');
     BuildTriggers.Add('loader');
     BuildTriggers.Add('loaderbare');

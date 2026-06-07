@@ -47,6 +47,30 @@ type
     Index: UInt8;
   end;
 
+  TGocciaDirectEvalBindingKind = (
+    debLocal,
+    debUpvalue,
+    debGlobal,
+    debWithLocal,
+    debWithUpvalue
+  );
+
+  TGocciaDirectEvalBindingInfo = record
+    Name: string;
+    Kind: TGocciaDirectEvalBindingKind;
+    Index: UInt8;
+    IsConst: Boolean;
+    IsVarEnvironmentBinding: Boolean;
+    IsEvalSyntheticArguments: Boolean;
+  end;
+
+  TGocciaDirectEvalBindingArray = array of TGocciaDirectEvalBindingInfo;
+
+  TGocciaDirectEvalEnvironment = record
+    PC: UInt32;
+    Bindings: TGocciaDirectEvalBindingArray;
+  end;
+
   TGocciaExceptionHandler = record
     TryStart: UInt32;
     TryEnd: UInt32;
@@ -73,6 +97,8 @@ type
     FConstantCount: Integer;
     FFunctions: TObjectList<TGocciaFunctionTemplate>;
     FUpvalueDescriptors: array of TGocciaUpvalueDescriptor;
+    FDirectEvalEnvironments: array of TGocciaDirectEvalEnvironment;
+    FDirectEvalEnvironmentCount: Integer;
     FExceptionHandlers: array of TGocciaExceptionHandler;
     FExceptionHandlerCount: Integer;
     FMaxRegisters: UInt8;
@@ -92,6 +118,7 @@ type
     FStrictCode: Boolean;
     FParameterPreambleSize: UInt16;
     FTypeCheckPreambleSize: UInt8;
+    FDirectEvalSyntheticArgumentsSlot: Integer;
     FProfileIndex: Integer;
     FSourceText: string;
     FTemplateSiteId: UInt64;
@@ -122,6 +149,8 @@ type
     procedure SetTemplateObjectCache(const ASlot: Integer; const AValue: TObject);
     function AddFunction(const AFunction: TGocciaFunctionTemplate): UInt16;
     procedure AddUpvalueDescriptor(const AIsLocal: Boolean; const AIndex: UInt8);
+    procedure AddDirectEvalEnvironment(const APC: UInt32;
+      const ABindings: TGocciaDirectEvalBindingArray);
     procedure AddExceptionHandler(const ATryStart, ATryEnd, ACatchTarget,
       AFinallyTarget: UInt32; const ACatchRegister: UInt8);
 
@@ -132,6 +161,10 @@ type
     function GetConstantUnchecked(const AIndex: Integer): TGocciaBytecodeConstant; inline;
     function GetFunctionUnchecked(const AIndex: Integer): TGocciaFunctionTemplate; inline;
     function GetUpvalueDescriptor(const AIndex: Integer): TGocciaUpvalueDescriptor;
+    function GetDirectEvalEnvironment(
+      const AIndex: Integer): TGocciaDirectEvalEnvironment;
+    function FindDirectEvalEnvironment(const APC: UInt32;
+      out AIndex: Integer): Boolean;
     function GetExceptionHandler(const AIndex: Integer): TGocciaExceptionHandler;
 
     property Name: string read FName write FName;
@@ -143,6 +176,7 @@ type
     property ParameterCount: UInt8 read FParameterCount write FParameterCount;
     property FormalParameterCount: UInt8 read FFormalParameterCount write FFormalParameterCount;
     property UpvalueCount: UInt8 read FUpvalueCount;
+    property DirectEvalEnvironmentCount: Integer read FDirectEvalEnvironmentCount;
     property DebugInfo: TGocciaDebugInfo read FDebugInfo write FDebugInfo;
 
     procedure SetLocalType(const ASlot: UInt8; const AKind: TGocciaLocalType);
@@ -166,6 +200,7 @@ type
     property HasOwnPrototype: Boolean read FHasOwnPrototype write FHasOwnPrototype;
     property ParameterPreambleSize: UInt16 read FParameterPreambleSize write FParameterPreambleSize;
     property TypeCheckPreambleSize: UInt8 read FTypeCheckPreambleSize write FTypeCheckPreambleSize;
+    property DirectEvalSyntheticArgumentsSlot: Integer read FDirectEvalSyntheticArgumentsSlot write FDirectEvalSyntheticArgumentsSlot;
     property ProfileIndex: Integer read FProfileIndex write FProfileIndex;
     property SourceText: string read FSourceText write FSourceText;
     property TemplateSiteId: UInt64 read FTemplateSiteId;
@@ -210,6 +245,7 @@ begin
   FConstantCount := 0;
   FFunctions := TObjectList<TGocciaFunctionTemplate>.Create(True);
   FStringConstantIndex := TOrderedStringMap<UInt16>.Create;
+  FDirectEvalEnvironmentCount := 0;
   FExceptionHandlerCount := 0;
   FMaxRegisters := 0;
   FParameterCount := 0;
@@ -224,6 +260,7 @@ begin
   FStrictCode := True;
   FParameterPreambleSize := 0;
   FTypeCheckPreambleSize := 0;
+  FDirectEvalSyntheticArgumentsSlot := -1;
   FProfileIndex := -1;
   FTemplateSiteId := AllocateTemplateSiteId;
 end;
@@ -450,6 +487,24 @@ begin
   Inc(FUpvalueCount);
 end;
 
+procedure TGocciaFunctionTemplate.AddDirectEvalEnvironment(const APC: UInt32;
+  const ABindings: TGocciaDirectEvalBindingArray);
+var
+  I: Integer;
+begin
+  if FDirectEvalEnvironmentCount >= High(UInt16) then
+    raise Exception.Create('Direct eval environment overflow: exceeds 65535 entries');
+  if FDirectEvalEnvironmentCount >= Length(FDirectEvalEnvironments) then
+    SetLength(FDirectEvalEnvironments, FDirectEvalEnvironmentCount * 2 + 4);
+  FDirectEvalEnvironments[FDirectEvalEnvironmentCount].PC := APC;
+  SetLength(FDirectEvalEnvironments[FDirectEvalEnvironmentCount].Bindings,
+    Length(ABindings));
+  for I := 0 to High(ABindings) do
+    FDirectEvalEnvironments[FDirectEvalEnvironmentCount].Bindings[I] :=
+      ABindings[I];
+  Inc(FDirectEvalEnvironmentCount);
+end;
+
 procedure TGocciaFunctionTemplate.AddExceptionHandler(
   const ATryStart, ATryEnd, ACatchTarget, AFinallyTarget: UInt32;
   const ACatchRegister: UInt8);
@@ -523,6 +578,33 @@ begin
       [AIndex, FUpvalueCount - 1]);
   {$ENDIF}
   Result := FUpvalueDescriptors[AIndex];
+end;
+
+function TGocciaFunctionTemplate.GetDirectEvalEnvironment(
+  const AIndex: Integer): TGocciaDirectEvalEnvironment;
+begin
+  {$IFDEF DEBUG}
+  if (AIndex < 0) or (AIndex >= FDirectEvalEnvironmentCount) then
+    raise ERangeError.CreateFmt(
+      'GetDirectEvalEnvironment: index %d out of range 0..%d',
+      [AIndex, FDirectEvalEnvironmentCount - 1]);
+  {$ENDIF}
+  Result := FDirectEvalEnvironments[AIndex];
+end;
+
+function TGocciaFunctionTemplate.FindDirectEvalEnvironment(const APC: UInt32;
+  out AIndex: Integer): Boolean;
+var
+  I: Integer;
+begin
+  for I := 0 to FDirectEvalEnvironmentCount - 1 do
+    if FDirectEvalEnvironments[I].PC = APC then
+    begin
+      AIndex := I;
+      Exit(True);
+    end;
+  AIndex := -1;
+  Result := False;
 end;
 
 function TGocciaFunctionTemplate.GetFunctionCount: Integer;

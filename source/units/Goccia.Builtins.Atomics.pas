@@ -15,6 +15,7 @@ uses
   Goccia.Values.PromiseValue;
 
 function PumpAtomicsWaitAsyncCompletions: Integer;
+function HasPendingAtomicsWaitAsyncCompletions: Boolean;
 function WaitForAtomicsPromise(const APromise: TGocciaPromiseValue): Boolean;
 procedure ShutdownAtomicsWaiters;
 
@@ -665,6 +666,23 @@ begin
     end;
   finally
     DueWaiters.Free;
+  end;
+end;
+
+function HasPendingAtomicsWaitAsyncCompletions: Boolean;
+var
+  I: Integer;
+  Waiters: TObjectList<TAtomicsWaiter>;
+begin
+  Result := False;
+  EnterCriticalSection(GAtomicsLock);
+  try
+    Waiters := GetAtomicsWaiters;
+    for I := 0 to Waiters.Count - 1 do
+      if Waiters[I].Async then
+        Exit(True);
+  finally
+    LeaveCriticalSection(GAtomicsLock);
   end;
 end;
 

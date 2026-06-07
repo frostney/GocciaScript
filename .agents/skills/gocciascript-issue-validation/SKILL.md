@@ -28,11 +28,16 @@ When an issue references test262 files, patterns, or categories:
 1. Read `docs/test262.md` before running the reproduction.
 2. Use `scripts/run_test262_suite.ts` with `GocciaScriptLoaderBare`; do not run stock test262 files directly through `GocciaScriptLoader`, `GocciaTestRunner`, or hand-built wrappers.
 3. Use the pinned test262 SHA from `.github/workflows/pr.yml` or `.github/workflows/ci.yml` unless the issue explicitly targets another SHA.
-4. Build the bare loader first:
+4. Build the bare loader from a clean artifact state first:
 
 ```bash
-./build.pas loaderbare
+./build.pas --clean loaderbare
 ```
+
+Use the clean form after merges, branch switches, PR syncs, generated
+resource changes, or any unexplained FPC/resource compiler failure. A plain
+`./build.pas loaderbare` is only appropriate for tight iteration after a
+known-clean build.
 
 5. Run exact issue paths through the project runner, for example:
 

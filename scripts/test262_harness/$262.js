@@ -17,8 +17,14 @@ if (typeof Goccia === "undefined" || Goccia.test262Host !== true) {
 }
 
 var $262 = {
+  global: globalThis,
+
   detachArrayBuffer(buffer) {
     buffer.transfer();
+  },
+
+  evalScript(sourceText) {
+    return Goccia.test262.evalScript(sourceText);
   },
 
   gc() {
@@ -26,40 +32,6 @@ var $262 = {
   },
 
   createRealm() {
-    return {
-      global: createTest262RealmGlobal(),
-    };
+    return Goccia.test262.createRealm();
   },
 };
-
-function createTest262RealmGlobal() {
-  var realmGlobal = {};
-  realmGlobal.Error = createRealmErrorConstructor("Error", Error, Error.prototype);
-  realmGlobal.EvalError = createRealmErrorConstructor("EvalError", EvalError, realmGlobal.Error.prototype);
-  realmGlobal.RangeError = createRealmErrorConstructor("RangeError", RangeError, realmGlobal.Error.prototype);
-  realmGlobal.ReferenceError = createRealmErrorConstructor("ReferenceError", ReferenceError, realmGlobal.Error.prototype);
-  realmGlobal.SyntaxError = createRealmErrorConstructor("SyntaxError", SyntaxError, realmGlobal.Error.prototype);
-  realmGlobal.TypeError = createRealmErrorConstructor("TypeError", TypeError, realmGlobal.Error.prototype);
-  realmGlobal.URIError = createRealmErrorConstructor("URIError", URIError, realmGlobal.Error.prototype);
-  return realmGlobal;
-}
-
-function createRealmErrorConstructor(name, baseConstructor, parentPrototype) {
-  var constructor = function(message) {
-    var error = new baseConstructor(message);
-    error.name = name;
-    Object.setPrototypeOf(error, constructor.prototype);
-    return error;
-  };
-  Object.defineProperty(constructor, "name", {
-    value: name,
-    configurable: true,
-  });
-  constructor.prototype = Object.create(parentPrototype);
-  Object.defineProperty(constructor.prototype, "constructor", {
-    value: constructor,
-    writable: true,
-    configurable: true,
-  });
-  return constructor;
-}

@@ -94,20 +94,16 @@ try {
   if (__gocciaT262_e && typeof __gocciaT262_e === "object") {
     if (__gocciaT262_e.constructor && __gocciaT262_e.constructor.name) {
       __gocciaT262_n = __gocciaT262_e.constructor.name;
-    } else if (typeof __gocciaT262_e.name === "string") {
-      __gocciaT262_n = __gocciaT262_e.name;
     }
   }
   print("Test262:NegativeTestError:" + __gocciaT262_n);
 }
 ```
 
-The error-class identification has a two-step fallback: prefer
-`e.constructor.name` (the spec-canonical path), fall back to `e.name`.
-The fallback exists because Goccia's native Error class hierarchy is
-currently missing `prototype.constructor` — caught Errors have
-`e.constructor === undefined` despite `e.name` being set correctly to
-`"TypeError"` / `"ReferenceError"` / etc.
+The error-class identification uses `e.constructor.name`, matching the
+spec-visible constructor/prototype path. If this cannot identify the
+thrown error class, the test is treated as an engine failure rather than
+papered over by the harness.
 
 The bindings `__gocciaT262_e` (catch parameter) and `__gocciaT262_n`
 (local var inside catch) are the only Goccia-specific identifiers in
@@ -155,7 +151,7 @@ Bodies see only the identifiers stock test262 expects:
 - `$DONE`, `$DONOTEVALUATE` (from `sta.js` / `doneprintHandle.js` when included)
 - `print` (Goccia engine global; stock `doneprintHandle.js` uses it for async markers)
 - `$262` helpers implemented by Goccia's bundled host object:
-  `detachArrayBuffer`, `gc`, and a harness-local `createRealm`
+  `detachArrayBuffer`, `evalScript`, `gc`, `global`, and `createRealm`
 - `test262Host`, a private marker on the `Goccia` namespace exposed only by
   `GocciaScriptLoaderBare --test262-host` so `$262.js` can reject accidental
   use outside the conformance host.
@@ -184,12 +180,19 @@ If a stock helper fails, fix the language/runtime behavior or classify the
 test as a genuine conformance failure. `$262.js` may grow only by adding
 test262 host hooks or harness-local `$262` behavior.
 
-`$262.createRealm()` lives entirely in `$262.js`. It currently models the
-cross-constructor identity needed by the stock harness same-realm assertion
-tests; it does not expose a GocciaScript realm-creation global. If future
-test262 coverage needs true fresh ECMAScript realms, add that as an explicit,
-flagged host capability under `--test262-host` instead of silently registering
-an ambient loader global.
+`$262.evalScript()` and `$262.createRealm()` delegate to flagged test262 host
+hooks exposed by the bare loader. `evalScript` parses and executes its source
+as script code in the current realm. `createRealm` creates a fresh Goccia
+engine/realm, returns a host record with the child realm's `globalThis`, its
+own `evalScript`, and `createRealm`, and keeps the child engine alive for the
+duration of the test run so cross-realm intrinsics remain valid. The hooks are
+only exposed when `GocciaScriptLoaderBare --test262-host` is enabled.
+
+`eval` is also host-gated. `GocciaScriptLoaderBare --test262-host` installs
+the official test262 host eval only for conformance runs; default Bare
+execution does not expose it. Bytecode direct calls to that host eval preserve
+the caller realm and caller lexical bindings, while shadowed or indirect eval
+calls use ordinary function-call semantics.
 
 ## Strict mode
 
@@ -200,7 +203,6 @@ strict-mode behaviors statically:
 
 - Implicit globals throw `ReferenceError` (sloppy would create a global)
 - `delete <identifier>` and non-configurable property deletion throw by default
-- `eval` is not implemented
 
 The orchestrator enables `--compat-non-strict-mode` per test, not globally:
 Script tests receive it, while module tests stay strict. `onlyStrict`

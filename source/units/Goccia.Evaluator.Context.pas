@@ -21,6 +21,8 @@ type
     CoverageEnabled: Boolean;
     StrictTypes: Boolean;
     NonStrictMode: Boolean;
+    InEvalCode: Boolean;
+    RejectArgumentsVarDeclarationInEval: Boolean;
     DisposalTracker: TObject; // TGocciaDisposalTracker or nil
   end;
 

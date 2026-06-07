@@ -780,7 +780,338 @@ begin
       Exit;
   end;
 
-  Result := 2;
+  Result := CALL_FLAG_TRUSTED;
+end;
+
+function IsDirectEvalCall(const AExpr: TGocciaCallExpression): Boolean;
+begin
+  Result := (not AExpr.Optional) and
+    (AExpr.Callee is TGocciaIdentifierExpression) and
+    (TGocciaIdentifierExpression(AExpr.Callee).Name = 'eval');
+end;
+
+function ExpressionContainsDirectEval(const AExpr: TGocciaExpression): Boolean;
+var
+  CallExpr: TGocciaCallExpression;
+  MemberExpr: TGocciaMemberExpression;
+  ArrayExpr: TGocciaArrayExpression;
+  ObjectExpr: TGocciaObjectExpression;
+  NewExpr: TGocciaNewExpression;
+  ImportExpr: TGocciaImportCallExpression;
+  Pair: TPair<TGocciaExpression, TGocciaExpression>;
+  I: Integer;
+begin
+  if not Assigned(AExpr) then
+    Exit(False);
+
+  if AExpr is TGocciaCallExpression then
+  begin
+    CallExpr := TGocciaCallExpression(AExpr);
+    if IsDirectEvalCall(CallExpr) then
+      Exit(True);
+    if ExpressionContainsDirectEval(CallExpr.Callee) then
+      Exit(True);
+    for I := 0 to CallExpr.Arguments.Count - 1 do
+      if ExpressionContainsDirectEval(CallExpr.Arguments[I]) then
+        Exit(True);
+  end
+  else if AExpr is TGocciaMemberExpression then
+  begin
+    MemberExpr := TGocciaMemberExpression(AExpr);
+    if ExpressionContainsDirectEval(MemberExpr.ObjectExpr) then
+      Exit(True);
+    if MemberExpr.Computed and
+       ExpressionContainsDirectEval(MemberExpr.PropertyExpression) then
+      Exit(True);
+  end
+  else if AExpr is TGocciaBinaryExpression then
+    Exit(ExpressionContainsDirectEval(TGocciaBinaryExpression(AExpr).Left) or
+      ExpressionContainsDirectEval(TGocciaBinaryExpression(AExpr).Right))
+  else if AExpr is TGocciaSequenceExpression then
+  begin
+    for I := 0 to TGocciaSequenceExpression(AExpr).Expressions.Count - 1 do
+      if ExpressionContainsDirectEval(
+        TGocciaSequenceExpression(AExpr).Expressions[I]) then
+        Exit(True);
+  end
+  else if AExpr is TGocciaUnaryExpression then
+    Exit(ExpressionContainsDirectEval(TGocciaUnaryExpression(AExpr).Operand))
+  else if AExpr is TGocciaAssignmentExpression then
+    Exit(ExpressionContainsDirectEval(TGocciaAssignmentExpression(AExpr).Value))
+  else if AExpr is TGocciaPropertyAssignmentExpression then
+    Exit(ExpressionContainsDirectEval(
+      TGocciaPropertyAssignmentExpression(AExpr).ObjectExpr) or
+      ExpressionContainsDirectEval(
+        TGocciaPropertyAssignmentExpression(AExpr).Value))
+  else if AExpr is TGocciaComputedPropertyAssignmentExpression then
+    Exit(ExpressionContainsDirectEval(
+      TGocciaComputedPropertyAssignmentExpression(AExpr).ObjectExpr) or
+      ExpressionContainsDirectEval(
+        TGocciaComputedPropertyAssignmentExpression(AExpr).PropertyExpression) or
+      ExpressionContainsDirectEval(
+        TGocciaComputedPropertyAssignmentExpression(AExpr).Value))
+  else if AExpr is TGocciaCompoundAssignmentExpression then
+    Exit(ExpressionContainsDirectEval(
+      TGocciaCompoundAssignmentExpression(AExpr).Value))
+  else if AExpr is TGocciaPropertyCompoundAssignmentExpression then
+    Exit(ExpressionContainsDirectEval(
+      TGocciaPropertyCompoundAssignmentExpression(AExpr).ObjectExpr) or
+      ExpressionContainsDirectEval(
+        TGocciaPropertyCompoundAssignmentExpression(AExpr).Value))
+  else if AExpr is TGocciaComputedPropertyCompoundAssignmentExpression then
+    Exit(ExpressionContainsDirectEval(
+      TGocciaComputedPropertyCompoundAssignmentExpression(AExpr).ObjectExpr) or
+      ExpressionContainsDirectEval(
+        TGocciaComputedPropertyCompoundAssignmentExpression(AExpr).PropertyExpression) or
+      ExpressionContainsDirectEval(
+        TGocciaComputedPropertyCompoundAssignmentExpression(AExpr).Value))
+  else if AExpr is TGocciaIncrementExpression then
+    Exit(ExpressionContainsDirectEval(TGocciaIncrementExpression(AExpr).Operand))
+  else if AExpr is TGocciaArrayExpression then
+  begin
+    ArrayExpr := TGocciaArrayExpression(AExpr);
+    for I := 0 to ArrayExpr.Elements.Count - 1 do
+      if ExpressionContainsDirectEval(ArrayExpr.Elements[I]) then
+        Exit(True);
+  end
+  else if AExpr is TGocciaObjectExpression then
+  begin
+    ObjectExpr := TGocciaObjectExpression(AExpr);
+    for I := 0 to High(ObjectExpr.PropertySourceOrder) do
+      case ObjectExpr.PropertySourceOrder[I].PropertyType of
+        pstStatic:
+          if ExpressionContainsDirectEval(
+            ObjectExpr.PropertySourceOrder[I].Expression) then
+            Exit(True);
+        pstComputed:
+          begin
+            Pair := ObjectExpr.ComputedPropertiesInOrder[
+              ObjectExpr.PropertySourceOrder[I].ComputedIndex];
+            if ExpressionContainsDirectEval(Pair.Key) or
+               ExpressionContainsDirectEval(Pair.Value) then
+              Exit(True);
+          end;
+        pstComputedGetter,
+        pstComputedSetter:
+          begin
+            Pair := ObjectExpr.ComputedPropertiesInOrder[
+              ObjectExpr.PropertySourceOrder[I].ComputedIndex];
+            if ExpressionContainsDirectEval(Pair.Key) then
+              Exit(True);
+          end;
+      end;
+  end
+  else if AExpr is TGocciaYieldExpression then
+    Exit(ExpressionContainsDirectEval(TGocciaYieldExpression(AExpr).Operand))
+  else if AExpr is TGocciaAwaitExpression then
+    Exit(ExpressionContainsDirectEval(TGocciaAwaitExpression(AExpr).Operand))
+  else if AExpr is TGocciaConditionalExpression then
+    Exit(ExpressionContainsDirectEval(TGocciaConditionalExpression(AExpr).Condition) or
+      ExpressionContainsDirectEval(TGocciaConditionalExpression(AExpr).Consequent) or
+      ExpressionContainsDirectEval(TGocciaConditionalExpression(AExpr).Alternate))
+  else if AExpr is TGocciaNewExpression then
+  begin
+    NewExpr := TGocciaNewExpression(AExpr);
+    if ExpressionContainsDirectEval(NewExpr.Callee) then
+      Exit(True);
+    for I := 0 to NewExpr.Arguments.Count - 1 do
+      if ExpressionContainsDirectEval(NewExpr.Arguments[I]) then
+        Exit(True);
+  end
+  else if AExpr is TGocciaImportCallExpression then
+  begin
+    ImportExpr := TGocciaImportCallExpression(AExpr);
+    Exit(ExpressionContainsDirectEval(ImportExpr.Specifier) or
+      ExpressionContainsDirectEval(ImportExpr.Options));
+  end
+  else if AExpr is TGocciaSpreadExpression then
+    Exit(ExpressionContainsDirectEval(TGocciaSpreadExpression(AExpr).Argument))
+  else if AExpr is TGocciaTemplateWithInterpolationExpression then
+  begin
+    for I := 0 to TGocciaTemplateWithInterpolationExpression(AExpr).Parts.Count - 1 do
+      if ExpressionContainsDirectEval(
+        TGocciaTemplateWithInterpolationExpression(AExpr).Parts[I]) then
+        Exit(True);
+  end
+  else if AExpr is TGocciaTaggedTemplateExpression then
+  begin
+    if ExpressionContainsDirectEval(TGocciaTaggedTemplateExpression(AExpr).Tag) then
+      Exit(True);
+    for I := 0 to TGocciaTaggedTemplateExpression(AExpr).Expressions.Count - 1 do
+      if ExpressionContainsDirectEval(
+        TGocciaTaggedTemplateExpression(AExpr).Expressions[I]) then
+        Exit(True);
+  end
+  else if AExpr is TGocciaDestructuringAssignmentExpression then
+    Exit(ExpressionContainsDirectEval(
+      TGocciaDestructuringAssignmentExpression(AExpr).Right))
+  else if AExpr is TGocciaPrivateMemberExpression then
+    Exit(ExpressionContainsDirectEval(
+      TGocciaPrivateMemberExpression(AExpr).ObjectExpr))
+  else if AExpr is TGocciaPrivatePropertyAssignmentExpression then
+    Exit(ExpressionContainsDirectEval(
+      TGocciaPrivatePropertyAssignmentExpression(AExpr).ObjectExpr) or
+      ExpressionContainsDirectEval(
+        TGocciaPrivatePropertyAssignmentExpression(AExpr).Value))
+  else if AExpr is TGocciaPrivatePropertyCompoundAssignmentExpression then
+    Exit(ExpressionContainsDirectEval(
+      TGocciaPrivatePropertyCompoundAssignmentExpression(AExpr).ObjectExpr) or
+      ExpressionContainsDirectEval(
+        TGocciaPrivatePropertyCompoundAssignmentExpression(AExpr).Value));
+
+  Result := False;
+end;
+
+function ParameterDefaultsContainDirectEval(
+  const AParams: TGocciaParameterArray): Boolean;
+var
+  I: Integer;
+begin
+  for I := 0 to High(AParams) do
+    if Assigned(AParams[I].DefaultValue) and
+       ExpressionContainsDirectEval(AParams[I].DefaultValue) then
+      Exit(True);
+  Result := False;
+end;
+
+function IsDirectEvalVisibleCompilerName(const AName: string): Boolean;
+begin
+  Result := (AName <> '') and
+    (AName <> KEYWORD_THIS) and
+    (AName <> '__receiver') and
+    (AName <> '__super__') and
+    (Copy(AName, 1, 1) <> '#') and
+    (Copy(AName, 1, 7) <> '__param') and
+    (Copy(AName, 1, 19) <> '__accessor_computed');
+end;
+
+function DirectEvalBindingNameSeen(const ANames: TStringList;
+  const AName: string): Boolean;
+begin
+  Result := ANames.IndexOf(AName) >= 0;
+end;
+
+procedure AddDirectEvalBinding(var ABindings: TGocciaDirectEvalBindingArray;
+  const ANames: TStringList; const AName: string;
+  const AKind: TGocciaDirectEvalBindingKind; const AIndex: UInt8;
+  const AIsConst: Boolean; const AIsVarEnvironmentBinding: Boolean = False;
+  const AIsEvalSyntheticArguments: Boolean = False);
+var
+  BindingIndex: Integer;
+begin
+  if (AKind <> debWithLocal) and (AKind <> debWithUpvalue) and
+     not IsDirectEvalVisibleCompilerName(AName) then
+    Exit;
+  if DirectEvalBindingNameSeen(ANames, AName) then
+    Exit;
+
+  ANames.Add(AName);
+  BindingIndex := Length(ABindings);
+  SetLength(ABindings, BindingIndex + 1);
+  ABindings[BindingIndex].Name := AName;
+  ABindings[BindingIndex].Kind := AKind;
+  ABindings[BindingIndex].Index := AIndex;
+  ABindings[BindingIndex].IsConst := AIsConst;
+  ABindings[BindingIndex].IsVarEnvironmentBinding :=
+    AIsVarEnvironmentBinding;
+  ABindings[BindingIndex].IsEvalSyntheticArguments :=
+    AIsEvalSyntheticArguments;
+end;
+
+procedure CaptureDirectEvalEnvironment(const ACtx: TGocciaCompilationContext;
+  const APC: UInt32);
+var
+  Bindings: TGocciaDirectEvalBindingArray;
+  Names: TStringList;
+  ScopeCursor: TGocciaCompilerScope;
+  Local: TGocciaCompilerLocal;
+  UV: TGocciaCompilerUpvalue;
+  LocalIdx, UpvalueIdx: Integer;
+  IsSyntheticArguments: Boolean;
+begin
+  Names := TStringList.Create;
+  try
+    Names.CaseSensitive := True;
+    for LocalIdx := ACtx.Scope.LocalCount - 1 downto 0 do
+    begin
+      Local := ACtx.Scope.GetLocal(LocalIdx);
+      if HiddenWithBindingName(Local.Name) then
+        AddDirectEvalBinding(Bindings, Names, Local.Name, debWithLocal,
+          Local.Slot, False)
+      else if Local.IsGlobalBacked then
+        AddDirectEvalBinding(Bindings, Names, Local.Name, debGlobal, 0,
+          Local.IsConst, Local.IsVar)
+      else
+      begin
+        IsSyntheticArguments := (Local.Name = IDENTIFIER_ARGUMENTS) and
+          (ACtx.Template.DirectEvalSyntheticArgumentsSlot = Local.Slot);
+        AddDirectEvalBinding(Bindings, Names, Local.Name, debLocal,
+          Local.Slot, Local.IsConst, Local.IsVar or IsSyntheticArguments,
+          IsSyntheticArguments);
+      end;
+    end;
+
+    ScopeCursor := ACtx.Scope.Parent;
+    while Assigned(ScopeCursor) do
+    begin
+      for LocalIdx := ScopeCursor.LocalCount - 1 downto 0 do
+      begin
+        Local := ScopeCursor.GetLocal(LocalIdx);
+        if DirectEvalBindingNameSeen(Names, Local.Name) then
+          Continue;
+        if HiddenWithBindingName(Local.Name) then
+        begin
+          UpvalueIdx := ACtx.Scope.ResolveUpvalue(Local.Name);
+          if UpvalueIdx >= 0 then
+            AddDirectEvalBinding(Bindings, Names, Local.Name, debWithUpvalue,
+              UInt8(UpvalueIdx), False);
+          Continue;
+        end;
+        if not IsDirectEvalVisibleCompilerName(Local.Name) then
+          Continue;
+        if Local.IsGlobalBacked then
+          AddDirectEvalBinding(Bindings, Names, Local.Name, debGlobal, 0,
+            Local.IsConst, Local.IsVar)
+        else
+        begin
+          UpvalueIdx := ACtx.Scope.ResolveUpvalue(Local.Name);
+          if UpvalueIdx >= 0 then
+          begin
+            UV := ACtx.Scope.GetUpvalue(UpvalueIdx);
+            AddDirectEvalBinding(Bindings, Names, Local.Name, debUpvalue,
+              UInt8(UpvalueIdx), UV.IsConst, UV.IsVar);
+          end;
+        end;
+      end;
+      ScopeCursor := ScopeCursor.Parent;
+    end;
+
+    ACtx.Template.AddDirectEvalEnvironment(APC, Bindings);
+  finally
+    Names.Free;
+  end;
+end;
+
+function CallFlags(const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaCallExpression; const ACallPC: UInt32): UInt8;
+begin
+  Result := CallTrustedFlag(ACtx, AExpr);
+  if IsDirectEvalCall(AExpr) then
+  begin
+    CaptureDirectEvalEnvironment(ACtx, ACallPC);
+    Result := Result or CALL_FLAG_DIRECT_EVAL;
+  end;
+end;
+
+function SpreadCallFlags(const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaCallExpression; const ACallPC: UInt32): UInt8;
+begin
+  Result := CALL_FLAG_SPREAD;
+  if IsDirectEvalCall(AExpr) then
+  begin
+    CaptureDirectEvalEnvironment(ACtx, ACallPC);
+    Result := Result or CALL_FLAG_DIRECT_EVAL;
+  end;
 end;
 
 function TryIntegerOp(const AOperator: TGocciaTokenType;
@@ -1830,6 +2161,15 @@ begin
     if AExpr.Parameters[I].IsPattern and Assigned(AExpr.Parameters[I].Pattern) then
       CollectDestructuringBindings(AExpr.Parameters[I].Pattern, ChildScope);
 
+  if ParameterDefaultsContainDirectEval(AExpr.Parameters) and
+     not ParameterListBindsName(AExpr.Parameters, IDENTIFIER_ARGUMENTS) then
+  begin
+    ChildTemplate.DirectEvalSyntheticArgumentsSlot :=
+      ChildScope.DeclareLocal(IDENTIFIER_ARGUMENTS, False);
+    ChildScope.DirectEvalSyntheticArgumentsSlot :=
+      ChildTemplate.DirectEvalSyntheticArgumentsSlot;
+  end;
+
   ApplyParameterTypeAnnotations(ChildScope, ChildTemplate, AExpr.Parameters,
     ACtx.StrictTypes);
 
@@ -1958,7 +2298,8 @@ var
       if AIsMethodCall then
         EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, BaseReg, ArgsReg, 1))
       else
-        EmitInstruction(ACtx, EncodeABC(OP_CALL, BaseReg, ArgsReg, 1));
+        EmitInstruction(ACtx, EncodeABC(OP_CALL, BaseReg, ArgsReg,
+          SpreadCallFlags(ACtx, AExpr, CurrentCodePosition(ACtx))));
       ACtx.Scope.FreeRegister;
     end
     else
@@ -1971,7 +2312,7 @@ var
           UInt8(AArgCount), 0))
       else
         EmitInstruction(ACtx, EncodeABC(OP_CALL, BaseReg, UInt8(AArgCount),
-          CallTrustedFlag(ACtx, AExpr)));
+          CallFlags(ACtx, AExpr, CurrentCodePosition(ACtx))));
       for ArgIndex := 0 to AArgCount - 1 do
         ACtx.Scope.FreeRegister;
     end;
@@ -2335,7 +2676,8 @@ begin
     begin
       ArgsReg := ACtx.Scope.AllocateRegister;
       CompileSpreadArgsArray(ACtx, AExpr, ArgsReg);
-      EmitInstruction(ACtx, EncodeABC(OP_CALL, BaseReg, ArgsReg, 1));
+      EmitInstruction(ACtx, EncodeABC(OP_CALL, BaseReg, ArgsReg,
+        SpreadCallFlags(ACtx, AExpr, CurrentCodePosition(ACtx))));
       ACtx.Scope.FreeRegister;
     end
     else
@@ -2343,7 +2685,7 @@ begin
       for I := 0 to ArgCount - 1 do
         ACtx.CompileExpression(AExpr.Arguments[I], ACtx.Scope.AllocateRegister);
       EmitInstruction(ACtx, EncodeABC(OP_CALL, BaseReg, UInt8(ArgCount),
-        CallTrustedFlag(ACtx, AExpr)));
+        CallFlags(ACtx, AExpr, CurrentCodePosition(ACtx))));
       for I := 0 to ArgCount - 1 do
         ACtx.Scope.FreeRegister;
     end;
@@ -2671,6 +3013,134 @@ begin
   ACtx.Scope.FreeRegister;
 end;
 
+procedure CompileComputedGetterProperty(const ACtx: TGocciaCompilationContext;
+  const ADest: UInt8; const AKeyReg: UInt8;
+  const AGetter: TGocciaGetterExpression);
+var
+  OldTemplate: TGocciaFunctionTemplate;
+  OldScope: TGocciaCompilerScope;
+  ChildTemplate: TGocciaFunctionTemplate;
+  ChildScope: TGocciaCompilerScope;
+  ChildCtx: TGocciaCompilationContext;
+  FuncIdx: UInt16;
+  TargetReg, AccessorReg: UInt8;
+  EmptyParams: TGocciaParameterArray;
+  ArgumentsSlot: Integer;
+  I: Integer;
+begin
+  OldTemplate := ACtx.Template;
+  OldScope := ACtx.Scope;
+
+  ChildTemplate := TGocciaFunctionTemplate.Create('get [computed]');
+  ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
+  ChildTemplate.StrictCode := ChildBodyIsStrictCode(ACtx, AGetter.Body);
+  ChildTemplate.StrictThis := ChildTemplate.StrictCode;
+  ChildTemplate.SourceText := AGetter.SourceText;
+  ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
+  ChildScope.DeclareLocal(KEYWORD_THIS, False);
+  ChildTemplate.ParameterCount := 0;
+  SetLength(EmptyParams, 0);
+  ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, EmptyParams);
+
+  ACtx.SwapState(ChildTemplate, ChildScope);
+  try
+    ChildCtx := ACtx;
+    ChildCtx.Template := ChildTemplate;
+    ChildCtx.Scope := ChildScope;
+    ChildCtx.NonStrictMode := ACtx.NonStrictMode and
+      not ChildTemplate.StrictCode;
+    EmitLineMapping(ChildCtx, AGetter.Line, AGetter.Column);
+    EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot);
+    ACtx.CompileFunctionBody(AGetter.Body);
+    ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
+
+    for I := 0 to ChildScope.UpvalueCount - 1 do
+      ChildTemplate.AddUpvalueDescriptor(
+        ChildScope.GetUpvalue(I).IsLocal,
+        ChildScope.GetUpvalue(I).Index);
+  finally
+    ACtx.SwapState(OldTemplate, OldScope);
+    ChildScope.Free;
+  end;
+
+  FuncIdx := OldTemplate.AddFunction(ChildTemplate);
+  TargetReg := ACtx.Scope.AllocateRegister;
+  AccessorReg := ACtx.Scope.AllocateRegister;
+  Assert(AccessorReg = TargetReg + 1,
+    'OP_DEFINE_ACCESSOR_* expects accessor register at target + 1');
+  EmitInstruction(ACtx, EncodeABC(OP_MOVE, TargetReg, ADest, 0));
+  EmitInstruction(ACtx, EncodeABx(OP_CLOSURE, AccessorReg, FuncIdx));
+  EmitInstruction(ACtx, EncodeABC(OP_DEFINE_ACCESSOR_DYNAMIC, TargetReg, 0,
+    AKeyReg));
+  ACtx.Scope.FreeRegister;
+  ACtx.Scope.FreeRegister;
+end;
+
+procedure CompileComputedSetterProperty(const ACtx: TGocciaCompilationContext;
+  const ADest: UInt8; const AKeyReg: UInt8;
+  const ASetter: TGocciaSetterExpression);
+var
+  OldTemplate: TGocciaFunctionTemplate;
+  OldScope: TGocciaCompilerScope;
+  ChildTemplate: TGocciaFunctionTemplate;
+  ChildScope: TGocciaCompilerScope;
+  ChildCtx: TGocciaCompilationContext;
+  FuncIdx: UInt16;
+  TargetReg, AccessorReg: UInt8;
+  SetterParams: TGocciaParameterArray;
+  ArgumentsSlot: Integer;
+  I: Integer;
+begin
+  OldTemplate := ACtx.Template;
+  OldScope := ACtx.Scope;
+
+  ChildTemplate := TGocciaFunctionTemplate.Create('set [computed]');
+  ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
+  ChildTemplate.StrictCode := ChildBodyIsStrictCode(ACtx, ASetter.Body);
+  ChildTemplate.StrictThis := ChildTemplate.StrictCode;
+  ChildTemplate.SourceText := ASetter.SourceText;
+  ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
+  ChildScope.DeclareLocal(KEYWORD_THIS, False);
+  ChildScope.DeclareLocal(ASetter.Parameter, False);
+  ChildTemplate.ParameterCount := 1;
+  SetLength(SetterParams, 1);
+  SetterParams[0].Name := ASetter.Parameter;
+  ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, SetterParams);
+
+  ACtx.SwapState(ChildTemplate, ChildScope);
+  try
+    ChildCtx := ACtx;
+    ChildCtx.Template := ChildTemplate;
+    ChildCtx.Scope := ChildScope;
+    ChildCtx.NonStrictMode := ACtx.NonStrictMode and
+      not ChildTemplate.StrictCode;
+    EmitLineMapping(ChildCtx, ASetter.Line, ASetter.Column);
+    EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot);
+    ACtx.CompileFunctionBody(ASetter.Body);
+    ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
+
+    for I := 0 to ChildScope.UpvalueCount - 1 do
+      ChildTemplate.AddUpvalueDescriptor(
+        ChildScope.GetUpvalue(I).IsLocal,
+        ChildScope.GetUpvalue(I).Index);
+  finally
+    ACtx.SwapState(OldTemplate, OldScope);
+    ChildScope.Free;
+  end;
+
+  FuncIdx := OldTemplate.AddFunction(ChildTemplate);
+  TargetReg := ACtx.Scope.AllocateRegister;
+  AccessorReg := ACtx.Scope.AllocateRegister;
+  Assert(AccessorReg = TargetReg + 1,
+    'OP_DEFINE_ACCESSOR_* expects accessor register at target + 1');
+  EmitInstruction(ACtx, EncodeABC(OP_MOVE, TargetReg, ADest, 0));
+  EmitInstruction(ACtx, EncodeABx(OP_CLOSURE, AccessorReg, FuncIdx));
+  EmitInstruction(ACtx, EncodeABC(OP_DEFINE_ACCESSOR_DYNAMIC, TargetReg,
+    ACCESSOR_FLAG_SETTER, AKeyReg));
+  ACtx.Scope.FreeRegister;
+  ACtx.Scope.FreeRegister;
+end;
+
 procedure CompileObject(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaObjectExpression; const ADest: UInt8);
 var
@@ -2758,6 +3228,36 @@ begin
         pstSetter:
           if Assigned(AExpr.Setters) and AExpr.Setters.TryGetValue(Key, SetterExpr) then
             CompileSetterProperty(ACtx, ADest, Key, SetterExpr);
+        pstComputedGetter:
+        begin
+          if (Order[I].ComputedIndex >= 0) and
+             (Order[I].ComputedIndex <= High(AExpr.ComputedPropertiesInOrder)) then
+          begin
+            Pair := AExpr.ComputedPropertiesInOrder[Order[I].ComputedIndex];
+            KeyReg := ACtx.Scope.AllocateRegister;
+            ACtx.CompileExpression(Pair.Key, KeyReg);
+            EmitInstruction(ACtx, EncodeABC(OP_TO_PROPERTY_KEY, KeyReg,
+              KeyReg, 0));
+            CompileComputedGetterProperty(ACtx, ADest, KeyReg,
+              TGocciaGetterExpression(Pair.Value));
+            ACtx.Scope.FreeRegister;
+          end;
+        end;
+        pstComputedSetter:
+        begin
+          if (Order[I].ComputedIndex >= 0) and
+             (Order[I].ComputedIndex <= High(AExpr.ComputedPropertiesInOrder)) then
+          begin
+            Pair := AExpr.ComputedPropertiesInOrder[Order[I].ComputedIndex];
+            KeyReg := ACtx.Scope.AllocateRegister;
+            ACtx.CompileExpression(Pair.Key, KeyReg);
+            EmitInstruction(ACtx, EncodeABC(OP_TO_PROPERTY_KEY, KeyReg,
+              KeyReg, 0));
+            CompileComputedSetterProperty(ACtx, ADest, KeyReg,
+              TGocciaSetterExpression(Pair.Value));
+            ACtx.Scope.FreeRegister;
+          end;
+        end;
       end;
     end;
   end

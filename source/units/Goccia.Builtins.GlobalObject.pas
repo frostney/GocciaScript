@@ -367,10 +367,36 @@ end;
 function TGocciaGlobalObject.ObjectHasOwn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Obj: TGocciaObjectValue;
+  ClassObj: TGocciaClassValue;
   PropertyName: string;
   KeyValue: TGocciaValue;
 begin
   TGocciaArgumentValidator.RequireExactly(AArgs, 2, 'Object.hasOwn', ThrowError);
+
+  // Step 1: Let obj be ? ToObject(O)
+  if AArgs.GetElement(0) is TGocciaClassValue then
+  begin
+    ClassObj := TGocciaClassValue(AArgs.GetElement(0));
+    // Step 2: Let key be ? ToPropertyKey(P)
+    // Step 3: Return ? HasOwnProperty(obj, key)
+    KeyValue := ToPropertyKey(AArgs.GetElement(1));
+    if KeyValue is TGocciaSymbolValue then
+    begin
+      if Assigned(ClassObj.GetOwnSymbolPropertyDescriptor(
+        TGocciaSymbolValue(KeyValue))) then
+        Result := TGocciaBooleanLiteralValue.TrueValue
+      else
+        Result := TGocciaBooleanLiteralValue.FalseValue;
+    end
+    else
+    begin
+      if ClassObj.HasOwnProperty(TGocciaStringLiteralValue(KeyValue).Value) then
+        Result := TGocciaBooleanLiteralValue.TrueValue
+      else
+        Result := TGocciaBooleanLiteralValue.FalseValue;
+    end;
+    Exit;
+  end;
 
   if AArgs.GetElement(0) is TGocciaSymbolValue then
   begin

@@ -69,7 +69,15 @@ const
   //   v39 -> v40: serialized ParameterPreambleSize so bytecode generators
   //               run FunctionDeclarationInstantiation-side parameter
   //               binding at call time while keeping the body suspended.
-  GOCCIA_FORMAT_VERSION = 40;
+  //   v40 -> v41: serialized direct-eval caller binding snapshots and added
+  //               an OP_CALL flag for syntactic eval call sites.
+  //   v41 -> v42: direct-eval binding snapshots mark arrow synthetic
+  //               arguments bindings and templates serialize that local slot.
+  //   v42 -> v43: direct-eval binding snapshots include hidden with-object
+  //               environment slots.
+  //   v43 -> v44: direct-eval snapshots mark caller var-environment bindings
+  //               separately from intervening lexical bindings.
+  GOCCIA_FORMAT_VERSION = 44;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
@@ -83,6 +91,9 @@ const
   COLLECTION_OP_TRY_ITERABLE_TO_ARRAY = 3;
   VALIDATE_OP_REQUIRE_OBJECT = 0;
   VALIDATE_OP_REQUIRE_ITERABLE = 1;
+  CALL_FLAG_SPREAD = 1;
+  CALL_FLAG_TRUSTED = 2;
+  CALL_FLAG_DIRECT_EVAL = 4;
 
   // Sentinel for the C operand of OP_VALIDATE_VALUE / VALIDATE_OP_REQUIRE_ITERABLE.
   //   0..254 = exact element count to consume (0 = empty pattern, drain

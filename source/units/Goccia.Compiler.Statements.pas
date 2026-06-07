@@ -637,7 +637,9 @@ begin
     Info := AStmt.Variables[I];
     LocalIdx := ACtx.Scope.ResolveLocal(Info.Name);
     if (LocalIdx >= 0) and
-       (ACtx.Scope.GetLocal(LocalIdx).Depth = ACtx.Scope.Depth) then
+       (ACtx.Scope.GetLocal(LocalIdx).Depth = ACtx.Scope.Depth) and
+       (ACtx.Scope.GetLocal(LocalIdx).Slot <>
+        ACtx.Scope.DirectEvalSyntheticArgumentsSlot) then
       Slot := ACtx.Scope.GetLocal(LocalIdx).Slot
     else
       Slot := ACtx.Scope.DeclareLocal(Info.Name, AStmt.IsConst);
@@ -970,11 +972,12 @@ end;
 procedure CompileUsingDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaUsingDeclaration);
 var
-  I, LocalIdx: Integer;
+  I, FuncCount, LocalIdx: Integer;
   Info: TGocciaVariableInfo;
   ValueSlot, DisposeSlot: UInt8;
   Flags: UInt8;
   Entry: TUsingResourceEntry;
+  InferredTemplate: TGocciaFunctionTemplate;
   ResourceRegistered: Boolean;
 begin
   for I := 0 to High(AStmt.Variables) do
@@ -993,16 +996,40 @@ begin
       LocalIdx := ACtx.Scope.ResolveLocal(Info.Name);
     end;
 
-    // Compile the initializer into the value slot
-    ACtx.CompileExpression(Info.Initializer, ValueSlot);
-
-    // Allocate a hidden register for the dispose method, or reuse a switch
-    // prelude slot that was initialized before case dispatch.
+    // Allocate and clear the hidden dispose-method register before the
+    // initializer runs. If a later initializer throws, the unwind path skips
+    // this resource unless OP_USING_INIT actually stored a callable disposer.
     if not TryUsePreallocatedUsingDisposeSlot(AStmt, I, DisposeSlot,
       ResourceRegistered) then
     begin
       DisposeSlot := ACtx.Scope.AllocateRegister;
       ResourceRegistered := False;
+      EmitInstruction(ACtx, EncodeABC(OP_LOAD_NULL, DisposeSlot, 0, 0));
+    end;
+
+    // Compile the initializer into the value slot, applying NamedEvaluation
+    // for anonymous function/class definitions bound by `using`.
+    FuncCount := ACtx.Template.FunctionCount;
+    if (Info.Initializer is TGocciaClassExpression) and
+       (TGocciaClassExpression(Info.Initializer).ClassDefinition.Name = '') then
+      CompileClassExpression(ACtx,
+        TGocciaClassExpression(Info.Initializer).ClassDefinition, ValueSlot,
+        Info.Name)
+    else
+      ACtx.CompileExpression(Info.Initializer, ValueSlot);
+
+    if (Info.Initializer is TGocciaArrowFunctionExpression) or
+       (Info.Initializer is TGocciaFunctionExpression) then
+    begin
+      if ACtx.Template.FunctionCount > FuncCount then
+      begin
+        InferredTemplate := ACtx.Template.GetFunction(
+          ACtx.Template.FunctionCount - 1);
+        if (InferredTemplate.Name = '<arrow>') or
+           (InferredTemplate.Name = '<function>') or
+           (InferredTemplate.Name = '<method>') then
+          InferredTemplate.Name := Info.Name;
+      end;
     end;
 
     // OP_USING_INIT: A=disposeMethodDest, B=valueSource, C=flags (0=sync, 1=async)
@@ -1120,7 +1147,9 @@ var
   LocalIdx: Integer;
 begin
   LocalIdx := AScope.ResolveLocal(AFunctionDecl.Name);
-  if (LocalIdx < 0) or (AScope.GetLocal(LocalIdx).Depth <> AScope.Depth) then
+  if (LocalIdx < 0) or (AScope.GetLocal(LocalIdx).Depth <> AScope.Depth) or
+     (AScope.GetLocal(LocalIdx).Slot =
+      AScope.DirectEvalSyntheticArgumentsSlot) then
     AScope.DeclareLocal(AFunctionDecl.Name, False);
 end;
 
@@ -1134,7 +1163,10 @@ begin
   for I := 0 to High(AVarDecl.Variables) do
   begin
     LocalIdx := ACtx.Scope.ResolveLocal(AVarDecl.Variables[I].Name);
-    if (LocalIdx < 0) or (ACtx.Scope.GetLocal(LocalIdx).Depth <> ACtx.Scope.Depth) then
+    if (LocalIdx < 0) or
+       (ACtx.Scope.GetLocal(LocalIdx).Depth <> ACtx.Scope.Depth) or
+       (ACtx.Scope.GetLocal(LocalIdx).Slot =
+        ACtx.Scope.DirectEvalSyntheticArgumentsSlot) then
     begin
       Slot := ACtx.Scope.DeclareLocal(AVarDecl.Variables[I].Name,
         AVarDecl.IsConst);
@@ -1160,7 +1192,9 @@ begin
     begin
       LocalIdx := ACtx.Scope.ResolveLocal(Names[I]);
       if (LocalIdx < 0) or
-         (ACtx.Scope.GetLocal(LocalIdx).Depth <> ACtx.Scope.Depth) then
+         (ACtx.Scope.GetLocal(LocalIdx).Depth <> ACtx.Scope.Depth) or
+         (ACtx.Scope.GetLocal(LocalIdx).Slot =
+          ACtx.Scope.DirectEvalSyntheticArgumentsSlot) then
       begin
         Slot := ACtx.Scope.DeclareLocal(Names[I], AIsConst);
         if AEmitInitializers then
@@ -1181,7 +1215,9 @@ var
 begin
   LocalIdx := ACtx.Scope.ResolveLocal(AName);
   if (LocalIdx < 0) or
-     (ACtx.Scope.GetLocal(LocalIdx).Depth <> ACtx.Scope.Depth) then
+     (ACtx.Scope.GetLocal(LocalIdx).Depth <> ACtx.Scope.Depth) or
+     (ACtx.Scope.GetLocal(LocalIdx).Slot =
+      ACtx.Scope.DirectEvalSyntheticArgumentsSlot) then
   begin
     Slot := ACtx.Scope.DeclareLocal(AName, AIsConst);
     if AEmitInitializer then
@@ -1509,7 +1545,7 @@ begin
     EmitDisposalSequence(ACtx, AEntry.UsingResources,
       Length(AEntry.UsingResources), AEntry.UsingErrorReg);
     NullishJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH,
-      AEntry.UsingErrorReg);
+      AEntry.UsingErrorReg, GOCCIA_NULLISH_MATCH_HOLE);
     EmitInstruction(ACtx, EncodeABC(OP_THROW, AEntry.UsingErrorReg, 0, 0));
     PatchJumpTarget(ACtx, NullishJump);
   end
@@ -1607,8 +1643,9 @@ begin
   CatchReg := ACtx.Scope.AllocateRegister;
   ErrorReg := ACtx.Scope.AllocateRegister;
 
-  // Initialize error accumulator to null (no error yet)
-  EmitInstruction(ACtx, EncodeABC(OP_LOAD_NULL, ErrorReg, 0, 0));
+  // Initialize error accumulator to the internal hole sentinel so user-thrown
+  // null/undefined remain real disposal errors.
+  EmitInstruction(ACtx, EncodeABC(OP_LOAD_HOLE, ErrorReg, 0, 0));
 
   // Set up exception handler — catches any throw from the block body
   HandlerJump := EmitJumpInstruction(ACtx, OP_PUSH_HANDLER, CatchReg);
@@ -1666,7 +1703,8 @@ begin
   EmitDisposalSequence(ACtx, SavedResources, ResourceCount, ErrorReg);
 
   // If any disposal error accumulated, throw it
-  NullishJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH, ErrorReg);
+  NullishJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH, ErrorReg,
+    GOCCIA_NULLISH_MATCH_HOLE);
   EmitInstruction(ACtx, EncodeABC(OP_THROW, ErrorReg, 0, 0));
   PatchJumpTarget(ACtx, NullishJump);
 
@@ -2041,7 +2079,9 @@ begin
     SetLoopContinueScopeDepth(ACtx);
     SetLabeledContinueCleanupBase(AStmt);
 
-    if Assigned(AStmt.BindingPattern) then
+    if Assigned(AStmt.AssignmentTarget) then
+      EmitDestructuring(ACtx, AStmt.AssignmentTarget, ValueReg, True)
+    else if Assigned(AStmt.BindingPattern) then
     begin
       CollectDestructuringBindings(AStmt.BindingPattern, ACtx.Scope, AStmt.IsConst);
       EmitDestructuring(ACtx, AStmt.BindingPattern, ValueReg);
@@ -2118,17 +2158,22 @@ end;
 procedure CompileForOfStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaForOfStatement);
 var
-  IterReg, ValueReg, DoneReg, CloseErrorReg: UInt8;
-  LoopStart, ExitJump, MismatchJump, HandlerJump, I: Integer;
+  IterReg, ValueReg, DoneReg, CloseErrorReg, DisposeReg, UsingErrorReg,
+    UsingCatchReg: UInt8;
+  LoopStart, ExitJump, MismatchJump, HandlerJump, UsingHandlerJump,
+    UsingEndJump, NullishJump, I: Integer;
   Slot: UInt8;
   ClosedLocals: array[0..255] of UInt8;
   ClosedCount: Integer;
   LoopControl: TLoopControlState;
   ArrayLocalIdx: Integer;
-  PendingEntry: TPendingFinallyEntry;
+  PendingEntry, UsingPendingEntry: TPendingFinallyEntry;
+  ResourceEntry: TUsingResourceEntry;
   NeedsIteratorClose: Boolean;
+  UsingPendingActive: Boolean;
 begin
-  if IsConstArrayLocal(ACtx, AStmt.Iterable, ArrayLocalIdx) then
+  if (not AStmt.IsUsing) and (not Assigned(AStmt.AssignmentTarget)) and
+     IsConstArrayLocal(ACtx, AStmt.Iterable, ArrayLocalIdx) then
   begin
     CompileCountedForOf(ACtx, AStmt, ArrayLocalIdx);
     Exit;
@@ -2138,11 +2183,21 @@ begin
   ValueReg := ACtx.Scope.AllocateRegister;
   DoneReg := ACtx.Scope.AllocateRegister;
   CloseErrorReg := 0;
+  DisposeReg := 0;
+  UsingErrorReg := 0;
+  UsingCatchReg := 0;
 
-  NeedsIteratorClose := Assigned(AStmt.BindingPattern) or
-    Assigned(AStmt.MatchPattern) or StatementNeedsIteratorClose(AStmt.Body);
+  NeedsIteratorClose := AStmt.IsUsing or Assigned(AStmt.AssignmentTarget) or
+    Assigned(AStmt.BindingPattern) or Assigned(AStmt.MatchPattern) or
+    StatementNeedsIteratorClose(AStmt.Body);
   if NeedsIteratorClose then
     CloseErrorReg := ACtx.Scope.AllocateRegister;
+  if AStmt.IsUsing then
+  begin
+    DisposeReg := ACtx.Scope.AllocateRegister;
+    UsingErrorReg := ACtx.Scope.AllocateRegister;
+    UsingCatchReg := ACtx.Scope.AllocateRegister;
+  end;
 
   ACtx.CompileExpression(AStmt.Iterable, IterReg);
   EmitInstruction(ACtx, EncodeABC(OP_GET_ITER, IterReg, IterReg, 0));
@@ -2172,7 +2227,19 @@ begin
     SetLoopContinueScopeDepth(ACtx);
     SetLabeledContinueCleanupBase(AStmt);
 
-    if Assigned(AStmt.BindingPattern) then
+    UsingPendingActive := False;
+    UsingHandlerJump := -1;
+    if AStmt.IsUsing then
+    begin
+      EmitInstruction(ACtx, EncodeABC(OP_LOAD_HOLE, UsingErrorReg, 0, 0));
+      EmitInstruction(ACtx, EncodeABC(OP_LOAD_NULL, DisposeReg, 0, 0));
+      UsingHandlerJump := EmitJumpInstruction(ACtx, OP_PUSH_HANDLER,
+        UsingCatchReg);
+    end;
+
+    if Assigned(AStmt.AssignmentTarget) then
+      EmitDestructuring(ACtx, AStmt.AssignmentTarget, ValueReg, True)
+    else if Assigned(AStmt.BindingPattern) then
     begin
       CollectDestructuringBindings(AStmt.BindingPattern, ACtx.Scope, AStmt.IsConst);
       EmitDestructuring(ACtx, AStmt.BindingPattern, ValueReg);
@@ -2181,6 +2248,28 @@ begin
     begin
       Slot := ACtx.Scope.DeclareLocal(AStmt.BindingName, AStmt.IsConst);
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, Slot, ValueReg, 0));
+    end;
+
+    if AStmt.IsUsing then
+    begin
+      ResourceEntry.ValueSlot := ValueReg;
+      if AStmt.BindingName <> '' then
+        ResourceEntry.ValueSlot := Slot;
+      ResourceEntry.DisposeSlot := DisposeReg;
+      ResourceEntry.IsAwait := AStmt.IsAwaitUsing;
+      EmitInstruction(ACtx, EncodeABC(OP_USING_INIT, DisposeReg,
+        ResourceEntry.ValueSlot, Ord(AStmt.IsAwaitUsing)));
+
+      if not Assigned(GPendingFinally) then
+        GPendingFinally := TList<TPendingFinallyEntry>.Create;
+      FillChar(UsingPendingEntry, SizeOf(UsingPendingEntry), 0);
+      UsingPendingEntry.UsingErrorReg := UsingErrorReg;
+      SetLength(UsingPendingEntry.UsingResources, 1);
+      UsingPendingEntry.UsingResources[0] := ResourceEntry;
+      GPendingFinally.Add(UsingPendingEntry);
+      UsingPendingActive := True;
+      GContinueFinallyBase := GPendingFinally.Count;
+      SetLabeledContinueCleanupBase(AStmt);
     end;
 
     if Assigned(AStmt.MatchPattern) then
@@ -2195,15 +2284,42 @@ begin
     if MismatchJump >= 0 then
       PatchJumpTarget(ACtx, MismatchJump);
 
-    // Patch continue jumps before close-upvalue so closures see correct iteration values
+    // Continue targets run the normal per-iteration disposal path.
     PatchJumpList(ACtx, LoopControl.ContinueJumps);
     PatchLabeledContinueJumps(ACtx, AStmt);
+
+    if AStmt.IsUsing then
+    begin
+      if UsingPendingActive then
+      begin
+        GPendingFinally.Delete(GPendingFinally.Count - 1);
+        UsingPendingActive := False;
+      end;
+
+      EmitInstruction(ACtx, EncodeABC(OP_POP_HANDLER, 0, 0, 0));
+      EmitDisposalSequence(ACtx, [ResourceEntry], 1, UsingErrorReg);
+      NullishJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH,
+        UsingErrorReg, GOCCIA_NULLISH_MATCH_HOLE);
+      EmitInstruction(ACtx, EncodeABC(OP_THROW, UsingErrorReg, 0, 0));
+      PatchJumpTarget(ACtx, NullishJump);
+
+      UsingEndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+
+      PatchJumpTarget(ACtx, UsingHandlerJump);
+      EmitInstruction(ACtx, EncodeABC(OP_MOVE, UsingErrorReg,
+        UsingCatchReg, 0));
+      EmitDisposalSequence(ACtx, [ResourceEntry], 1, UsingErrorReg);
+      EmitInstruction(ACtx, EncodeABC(OP_THROW, UsingErrorReg, 0, 0));
+
+      PatchJumpTarget(ACtx, UsingEndJump);
+    end;
 
     ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
     for I := 0 to ClosedCount - 1 do
       EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
 
-    EmitInstruction(ACtx, EncodeAx(OP_JUMP, LoopStart - CurrentCodePosition(ACtx) - 1));
+    EmitInstruction(ACtx, EncodeAx(OP_JUMP,
+      LoopStart - CurrentCodePosition(ACtx) - 1));
 
     if NeedsIteratorClose then
     begin
@@ -2229,6 +2345,12 @@ begin
   ACtx.Scope.FreeRegister;
   if NeedsIteratorClose then
     ACtx.Scope.FreeRegister;
+  if AStmt.IsUsing then
+  begin
+    ACtx.Scope.FreeRegister;
+    ACtx.Scope.FreeRegister;
+    ACtx.Scope.FreeRegister;
+  end;
 end;
 
 procedure CompileForInStatement(const ACtx: TGocciaCompilationContext;
@@ -2358,8 +2480,9 @@ begin
   DoneReg := ACtx.Scope.AllocateRegister;
   CloseErrorReg := 0;
 
-  NeedsIteratorClose := Assigned(AStmt.BindingPattern) or
-    Assigned(AStmt.MatchPattern) or StatementNeedsIteratorClose(AStmt.Body);
+  NeedsIteratorClose := Assigned(AStmt.AssignmentTarget) or
+    Assigned(AStmt.BindingPattern) or Assigned(AStmt.MatchPattern) or
+    StatementNeedsIteratorClose(AStmt.Body);
   if NeedsIteratorClose then
     CloseErrorReg := ACtx.Scope.AllocateRegister;
 
@@ -2393,7 +2516,9 @@ begin
     SetLoopContinueScopeDepth(ACtx);
     SetLabeledContinueCleanupBase(AStmt);
 
-    if Assigned(AStmt.BindingPattern) then
+    if Assigned(AStmt.AssignmentTarget) then
+      EmitDestructuring(ACtx, AStmt.AssignmentTarget, ValueReg, True)
+    else if Assigned(AStmt.BindingPattern) then
     begin
       CollectDestructuringBindings(AStmt.BindingPattern, ACtx.Scope, AStmt.IsConst);
       EmitDestructuring(ACtx, AStmt.BindingPattern, ValueReg);
@@ -2814,11 +2939,19 @@ var
   VarDecl: TGocciaVariableDeclaration;
   DestructDecl: TGocciaDestructuringDeclaration;
   LocalIdx: Integer;
+  HasUsingInit: Boolean;
+  SavedResourceBase, ResourceCount: Integer;
+  CatchReg, ErrorReg: UInt8;
+  HandlerJump, EndJump, NullishJump: Integer;
+  PendingEntry: TPendingFinallyEntry;
+  SavedResources: array of TUsingResourceEntry;
+  UsingDecl: TGocciaUsingDeclaration;
 begin
   if TryCompileCountedFor(ACtx, AStmt) then
     Exit;
 
   HasLexicalInit := False;
+  HasUsingInit := AStmt.Init is TGocciaUsingDeclaration;
   PerIterIsConst := False;
   PerIterNames := nil;
 
@@ -2842,6 +2975,15 @@ begin
       PerIterIsConst := DestructDecl.IsConst;
       PerIterNames := TStringList.Create;
       CollectPatternBindingNames(DestructDecl.Pattern, PerIterNames, True);
+    end
+    else if HasUsingInit then
+    begin
+      HasLexicalInit := True;
+      PerIterIsConst := True;
+      UsingDecl := TGocciaUsingDeclaration(AStmt.Init);
+      PerIterNames := TStringList.Create;
+      for I := 0 to High(UsingDecl.Variables) do
+        PerIterNames.Add(UsingDecl.Variables[I].Name);
     end;
   end;
 
@@ -2849,13 +2991,36 @@ begin
     if HasLexicalInit then
       ACtx.Scope.BeginScope;
 
-    if Assigned(AStmt.Init) then
-      ACtx.CompileStatement(AStmt.Init);
+    SavedResourceBase := 0;
+    CatchReg := 0;
+    ErrorReg := 0;
+    HandlerJump := -1;
+    if HasUsingInit then
+    begin
+      if not Assigned(GUsingResources) then
+        GUsingResources := TList<TUsingResourceEntry>.Create;
+      SavedResourceBase := GUsingResources.Count;
+      CatchReg := ACtx.Scope.AllocateRegister;
+      ErrorReg := ACtx.Scope.AllocateRegister;
+      EmitInstruction(ACtx, EncodeABC(OP_LOAD_HOLE, ErrorReg, 0, 0));
+      HandlerJump := EmitJumpInstruction(ACtx, OP_PUSH_HANDLER, CatchReg);
 
-    BeginLoopControl(ACtx, LoopControl);
+      if not Assigned(GPendingFinally) then
+        GPendingFinally := TList<TPendingFinallyEntry>.Create;
+      FillChar(PendingEntry, SizeOf(PendingEntry), 0);
+      PendingEntry.FinallyBlock := nil;
+      PendingEntry.UsingErrorReg := ErrorReg;
+      GPendingFinally.Add(PendingEntry);
+    end;
 
     try
-      if HasLexicalInit then
+      if Assigned(AStmt.Init) then
+        ACtx.CompileStatement(AStmt.Init);
+
+      BeginLoopControl(ACtx, LoopControl);
+
+      try
+        if HasLexicalInit then
       begin
         SetLength(OuterSlots, PerIterNames.Count);
         SetLength(BodySlots, PerIterNames.Count);
@@ -3006,6 +3171,47 @@ begin
       end;
     finally
       EndLoopControl(LoopControl);
+    end;
+
+      if HasUsingInit then
+      begin
+        GPendingFinally.Delete(GPendingFinally.Count - 1);
+
+        EmitInstruction(ACtx, EncodeABC(OP_POP_HANDLER, 0, 0, 0));
+
+        ResourceCount := GUsingResources.Count - SavedResourceBase;
+        SetLength(SavedResources, ResourceCount);
+        for I := 0 to ResourceCount - 1 do
+          SavedResources[I] := GUsingResources[SavedResourceBase + I];
+
+        for I := GUsingResources.Count - 1 downto SavedResourceBase do
+          GUsingResources.Delete(I);
+
+        EmitDisposalSequence(ACtx, SavedResources, ResourceCount, ErrorReg);
+        NullishJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH,
+          ErrorReg, GOCCIA_NULLISH_MATCH_HOLE);
+        EmitInstruction(ACtx, EncodeABC(OP_THROW, ErrorReg, 0, 0));
+        PatchJumpTarget(ACtx, NullishJump);
+
+        EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+
+        PatchJumpTarget(ACtx, HandlerJump);
+        EmitInstruction(ACtx, EncodeABC(OP_MOVE, ErrorReg, CatchReg, 0));
+        EmitDisposalSequence(ACtx, SavedResources, ResourceCount, ErrorReg);
+        EmitInstruction(ACtx, EncodeABC(OP_THROW, ErrorReg, 0, 0));
+
+        PatchJumpTarget(ACtx, EndJump);
+
+        for I := ResourceCount - 1 downto 0 do
+          ACtx.Scope.FreeRegister;
+        ACtx.Scope.FreeRegister; // ErrorReg
+        ACtx.Scope.FreeRegister; // CatchReg
+      end;
+    except
+      if HasUsingInit and Assigned(GPendingFinally) and
+         (GPendingFinally.Count > 0) then
+        GPendingFinally.Delete(GPendingFinally.Count - 1);
+      raise;
     end;
 
     if HasLexicalInit then
@@ -3324,7 +3530,7 @@ var
 
     CatchReg := ACtx.Scope.AllocateRegister;
     ErrorReg := ACtx.Scope.AllocateRegister;
-    EmitInstruction(ACtx, EncodeABC(OP_LOAD_NULL, ErrorReg, 0, 0));
+    EmitInstruction(ACtx, EncodeABC(OP_LOAD_HOLE, ErrorReg, 0, 0));
     HandlerJump := EmitJumpInstruction(ACtx, OP_PUSH_HANDLER, CatchReg);
 
     if not Assigned(GPendingFinally) then
@@ -3534,7 +3740,8 @@ begin
         GUsingResources.Delete(I);
 
       EmitDisposalSequence(ACtx, SavedResources, ResourceCount, ErrorReg);
-      NullishJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH, ErrorReg);
+      NullishJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH, ErrorReg,
+        GOCCIA_NULLISH_MATCH_HOLE);
       EmitInstruction(ACtx, EncodeABC(OP_THROW, ErrorReg, 0, 0));
       PatchJumpTarget(ACtx, NullishJump);
 
@@ -4453,9 +4660,6 @@ var
   FuncIdx: UInt16;
   FnReg: UInt8;
   I: Integer;
-  Node: TGocciaASTNode;
-  Reg: UInt8;
-  StatementAbrupt: Boolean;
 begin
   OldTemplate := ACtx.Template;
   OldScope := ACtx.Scope;
@@ -4475,24 +4679,7 @@ begin
   ChildCtx.NonStrictMode := ACtx.NonStrictMode and
     not ChildTemplate.StrictCode;
 
-  for I := 0 to ABody.Nodes.Count - 1 do
-  begin
-    Node := ABody.Nodes[I];
-    if Node is TGocciaStatement then
-    begin
-      StatementAbrupt := ACtx.CompileStatement(TGocciaStatement(Node));
-      if ACtx.OptimizationOptions.EnableDeadBranchElimination and
-         not ACtx.OptimizationOptions.PreserveCoverageShape and
-         StatementAbrupt then
-        Break;
-    end
-    else if Node is TGocciaExpression then
-    begin
-      Reg := ACtx.Scope.AllocateRegister;
-      ACtx.CompileExpression(TGocciaExpression(Node), Reg);
-      ACtx.Scope.FreeRegister;
-    end;
-  end;
+  CompileBlockStatement(ChildCtx, ABody);
 
   EmitInstruction(ChildCtx, EncodeABx(OP_LOAD_UNDEFINED, 0, 0));
   EmitInstruction(ChildCtx, EncodeABC(OP_RETURN, 0, 0, 0));

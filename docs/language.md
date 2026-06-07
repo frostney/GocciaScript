@@ -7,9 +7,10 @@
 
 - **Modern subset** — `let`/`const`, arrow functions, classes with private fields, `for...of`, async/await, ES modules
 - **TC39 proposals** — Decorators, decorator metadata, pattern matching, types as comments, enums, `Math.clamp`
-- **Excluded by design** — `eval`, wildcard re-exports
+- **Excluded by design** — Runtime `eval`, wildcard re-exports
 - **Graceful handling** — Parser-recognized excluded or disabled syntax (`==`/`!=` when `--compat-loose-equality` is off, labels when `--compat-label` is off, `while`/`do...while` when `--compat-while-loops` is off, `with` when `--compat-non-strict-mode` is off, traditional `for(;;)` when `--compat-traditional-for-loop` is off, `for...in` when `--compat-for-in-loop` is off) parses successfully but executes as a no-op with a warning and suggestion
 - **Opt-in toggles** — ASI (`--compat-asi`), `var` declarations (`--compat-var`), `function` keyword (`--compat-function`), non-strict Script compatibility (`--compat-non-strict-mode` for `arguments`, `with`, silent assignment failures, legacy `delete` returns, and sloppy `this`), loose equality (`--compat-loose-equality`), labels (`--compat-label`), traditional `for(init; test; update)` loops (`--compat-traditional-for-loop`), `for...in` loops (`--compat-for-in-loop`), `while`/`do...while` loops (`--compat-while-loops`), runtime type enforcement (`--strict-types`)
+- **Conformance-only host hooks** — `GocciaScriptLoaderBare --test262-host` exposes private test262 hooks (`eval`, `evalScript`, `createRealm`) without making them part of the public runtime surface
 - **Default preprocessors** — JSX (enabled by default via `DefaultPreprocessors`)
 
 GocciaScript implements a curated subset of ECMAScript. This document details what's supported, what's excluded, and the rationale for each decision. For quick-reference tables of every feature and TC39 proposal, see [Language Tables](language-tables.md).
@@ -139,7 +140,7 @@ class Counter {
 
 ### Explicit Resource Management
 
-`using` and `await using` declarations (ES2026 [Explicit Resource Management](https://tc39.es/ecma262/#sec-using-declaration)) are supported.
+`using` and `await using` declarations (ES2026 [Explicit Resource Management](https://tc39.es/ecma262/#sec-using-declaration)) are supported in interpreter and bytecode mode.
 
 - `using` — Synchronous disposal. When the enclosing block exits, `[Symbol.dispose]()` is called on the bound value.
 - `await using` — Asynchronous disposal. When the enclosing block exits, `[Symbol.asyncDispose]()` is awaited.
@@ -674,7 +675,7 @@ console.log(x); // 5
 
 With `let`/`const`, accessing before declaration is a `ReferenceError` (Temporal Dead Zone), which catches bugs early.
 
-When enabled (CLI: `--compat-var`, engine API: include `cfVar` in `Engine.Compatibility`, config: `{"compat-var": true}`), `var` declarations follow ES2026 §14.3.2 semantics: function-scoped (escapes blocks), hoisted to function top as `undefined`, redeclaration allowed, no TDZ, with destructuring, for-of, and enabled for-in support. Var bindings are stored in a separate binding map (`FVarBindings`) on function/module/global scopes, distinct from lexical bindings. See [interpreter.md § Scope Chain Design](interpreter.md#scope-chain-design).
+When enabled (CLI: `--compat-var`, engine API: include `cfVar` in `Engine.Compatibility`, config: `{"compat-var": true}`), `var` declarations follow ES2026 §14.3.2 semantics: function-scoped (escapes blocks), hoisted to function top as `undefined`, redeclaration allowed, no TDZ, with destructuring, for-of, and enabled for-in support. Script-level `var` bindings are global-backed: they create or reuse own `globalThis` properties, new properties are writable/enumerable/non-configurable, and declaration-only redeclarations preserve an existing own global property value. Var bindings are stored in a separate binding map (`FVarBindings`) on function/module/global scopes, distinct from lexical bindings. See [interpreter.md § Scope Chain Design](interpreter.md#scope-chain-design).
 
 ### `function` Keyword
 
@@ -732,9 +733,9 @@ Strict equality requires matching types, eliminating this entire class of bugs.
 
 ### `eval()`
 
-**Excluded.** No alternative provided.
+**Excluded from normal runtimes.** Runtime `eval` is intentionally unavailable in `GocciaScriptLoader`, `GocciaREPL`, `GocciaTestRunner`, and default `GocciaScriptLoaderBare`.
 
-`eval` is a security risk — it executes arbitrary strings as code. In an embedded scripting environment, this is especially dangerous.
+`eval` is a security risk — it executes arbitrary strings as code. In an embedded scripting environment, this is especially dangerous. The only implementation is a private conformance host hook: `GocciaScriptLoaderBare --test262-host` installs the official test262 host `eval`, plus `evalScript(sourceText)` and `createRealm()` properties on the private test262 host object, so the stock test262 harness can exercise ECMAScript direct-eval and realm semantics. Those hooks are not exposed outside conformance runs and should not be used as an application API.
 
 ### `arguments` Object
 
@@ -816,7 +817,7 @@ When disabled (default), the parser accepts `for...in` declaration and assignmen
 - The right-hand side follows ECMAScript `ForIn/OfHeadEvaluation`: `null` and `undefined` produce an empty loop; other primitives are boxed with `ToObject`.
 - The loop enumerates enumerable string property names, including inherited enumerable properties, and never returns symbol keys.
 - A property name appears at most once. An own property shadows a prototype property with the same name even when the own property is non-enumerable.
-- `var` declaration heads, including destructuring heads, require both `--compat-var` and `--compat-for-in-loop`; the bindings hoist out of the loop and are shared across iterations.
+- `var` declaration heads, including destructuring heads, require both `--compat-var` and `--compat-for-in-loop`; the bindings hoist out of the loop and are shared across iterations. At script top level, even an empty `for (var name in {}) {}` instantiates the same non-configurable global-backed `var` binding as any other script `var`.
 - `break`, `continue`, and `return` unwind as they do in other supported loops.
 
 New GocciaScript code should usually prefer `Object.keys(obj)`, `Object.entries(obj)`, or explicit `for...of` over property names:

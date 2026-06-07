@@ -21,6 +21,7 @@ type
     FName: string;
     FArity: Integer;
     FNotConstructable: Boolean;
+    FDirectEvalHost: Boolean;
     FCapturedRoot: TGocciaValue;
   protected
     function GetFunctionLength: Integer; override;
@@ -39,6 +40,7 @@ type
     property Name: string read FName;
     property Arity: Integer read FArity;
     property NotConstructable: Boolean read FNotConstructable write FNotConstructable;
+    property DirectEvalHost: Boolean read FDirectEvalHost write FDirectEvalHost;
     property CapturedRoot: TGocciaValue read FCapturedRoot write FCapturedRoot;
   end;
 

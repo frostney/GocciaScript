@@ -237,6 +237,8 @@ type
     procedure ClearTransientCaches;
     procedure RegisterGlobalModule(const AName: string; const AModule: TGocciaModule);
     procedure RefreshGlobalThis;
+    procedure SuspendRealmExecutionContext;
+    function ActivateRealmExecutionContext: TGocciaExecutionContextScope;
     function AddExtension(
       const AExtension: TGocciaEngineExtension): TGocciaEngineExtension;
     function FindExtension(
@@ -1122,6 +1124,19 @@ end;
 procedure TGocciaEngine.RefreshGlobalThis;
 begin
   RegisterGlobalThis;
+end;
+
+procedure TGocciaEngine.SuspendRealmExecutionContext;
+begin
+  if Assigned(FRealmExecutionContext) then
+    FRealmExecutionContext.Pop;
+end;
+
+function TGocciaEngine.ActivateRealmExecutionContext:
+  TGocciaExecutionContextScope;
+begin
+  Result := TGocciaExecutionContextScope.Create(
+    CreateExecutionContext(FRealm, FInterpreter.GlobalScope, FSourcePath));
 end;
 
 procedure TGocciaEngine.RegisterGocciaScriptGlobal;

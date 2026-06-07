@@ -65,6 +65,7 @@ type
   private
     FSuperClass: TGocciaValue;
     FOwningClass: TGocciaValue; // TGocciaClassValue stored as TGocciaValue to avoid circular dependency
+    FLastSuperConstructorCalled: Boolean;
   protected
     function CreateCallScope: TGocciaScope; override;
   public
@@ -76,6 +77,8 @@ type
 
     property SuperClass: TGocciaValue read FSuperClass write FSuperClass;
     property OwningClass: TGocciaValue read FOwningClass write FOwningClass;
+    property LastSuperConstructorCalled: Boolean
+      read FLastSuperConstructorCalled;
   end;
 
 implementation
@@ -177,6 +180,21 @@ var
   CF: TGocciaControlFlow;
   Context: TGocciaEvaluationContext;
   ParamTypeHint: TGocciaLocalType;
+  function EvaluateParameterDefault(
+    const AExpression: TGocciaExpression): TGocciaValue;
+  var
+    SavedRejectArgumentsVarDeclaration: Boolean;
+  begin
+    SavedRejectArgumentsVarDeclaration :=
+      Context.RejectArgumentsVarDeclarationInEval;
+    Context.RejectArgumentsVarDeclarationInEval := CreatesArgumentsObject;
+    try
+      Result := EvaluateExpression(AExpression, Context);
+    finally
+      Context.RejectArgumentsVarDeclarationInEval :=
+        SavedRejectArgumentsVarDeclaration;
+    end;
+  end;
 begin
   // Set up evaluation context — inherit OnError, LoadModule and the
   // strict-types flag from the closure scope so the body sees the
@@ -259,7 +277,7 @@ begin
           ReturnValue := TGocciaUndefinedLiteralValue.UndefinedValue;
         if Assigned(FParameters[I].DefaultValue) and
            (ReturnValue is TGocciaUndefinedLiteralValue) then
-          ReturnValue := EvaluateExpression(FParameters[I].DefaultValue, Context);
+          ReturnValue := EvaluateParameterDefault(FParameters[I].DefaultValue);
 
         // Strict-types enforcement on destructured parameters: enforce on the
         // raw pre-destructured value, matching the bytecode side which checks
@@ -286,7 +304,7 @@ begin
           ReturnValue := TGocciaUndefinedLiteralValue.UndefinedValue;
         if Assigned(FParameters[I].DefaultValue) and
            (ReturnValue is TGocciaUndefinedLiteralValue) then
-          ReturnValue := EvaluateExpression(FParameters[I].DefaultValue, Context);
+          ReturnValue := EvaluateParameterDefault(FParameters[I].DefaultValue);
         ACallScope.DefineLexicalBinding(FParameters[I].Name, ReturnValue, dtParameter);
       end;
     end;
@@ -466,6 +484,7 @@ constructor TGocciaMethodValue.Create(const AParameters: TGocciaParameterArray; 
 begin
   inherited Create(AParameters, ABodyStatements, AClosure, AName);
   FSuperClass := ASuperClass;
+  FLastSuperConstructorCalled := False;
 end;
 
 function TGocciaMethodValue.CallWithThisValue(
@@ -501,8 +520,20 @@ begin
     end;
     PushCurrentFunctionExecutionContext(CallScope, Self);
     FunctionContextPushed := True;
+    if CallScope is TGocciaMethodCallScope then
+      TGocciaMethodCallScope(CallScope).SuperConstructorCalled := False;
     Result := ExecuteBody(CallScope, AArguments, AThisValue);
-    AFinalThisValue := CallScope.ThisValue;
+    if (CallScope is TGocciaMethodCallScope) and
+       Assigned(TGocciaMethodCallScope(CallScope).SuperClass) and
+       not TGocciaMethodCallScope(CallScope).SuperConstructorCalled then
+      AFinalThisValue := TGocciaUndefinedLiteralValue.UndefinedValue
+    else
+      AFinalThisValue := CallScope.ThisValue;
+    if CallScope is TGocciaMethodCallScope then
+      FLastSuperConstructorCalled :=
+        TGocciaMethodCallScope(CallScope).SuperConstructorCalled
+    else
+      FLastSuperConstructorCalled := False;
   finally
     if FunctionContextPushed then
       PopCurrentFunctionExecutionContext;

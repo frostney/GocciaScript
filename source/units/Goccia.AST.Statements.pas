@@ -161,22 +161,31 @@ type
     FIsVar: Boolean;
     FBindingName: string;
     FBindingPattern: TGocciaDestructuringPattern;
+    FAssignmentTarget: TGocciaDestructuringPattern;
     FMatchPattern: TGocciaMatchPattern;
     FIterable: TGocciaExpression;
     FBody: TGocciaStatement;
+    FIsUsing: Boolean;
+    FIsAwaitUsing: Boolean;
   public
     constructor Create(const AIsConst: Boolean; const ABindingName: string;
       const ABindingPattern: TGocciaDestructuringPattern; const AIterable: TGocciaExpression;
       const ABody: TGocciaStatement; const ALine, AColumn: Integer;
-      const AMatchPattern: TGocciaMatchPattern = nil);
+      const AMatchPattern: TGocciaMatchPattern = nil;
+      const AAssignmentTarget: TGocciaDestructuringPattern = nil;
+      const AIsUsing: Boolean = False;
+      const AIsAwaitUsing: Boolean = False);
     function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property IsConst: Boolean read FIsConst;
     property IsVar: Boolean read FIsVar write FIsVar;
     property BindingName: string read FBindingName;
     property BindingPattern: TGocciaDestructuringPattern read FBindingPattern;
+    property AssignmentTarget: TGocciaDestructuringPattern read FAssignmentTarget;
     property MatchPattern: TGocciaMatchPattern read FMatchPattern;
     property Iterable: TGocciaExpression read FIterable;
     property Body: TGocciaStatement read FBody;
+    property IsUsing: Boolean read FIsUsing;
+    property IsAwaitUsing: Boolean read FIsAwaitUsing;
   end;
 
   TGocciaForInStatement = class(TGocciaStatement)
@@ -810,15 +819,21 @@ end;
   constructor TGocciaForOfStatement.Create(const AIsConst: Boolean; const ABindingName: string;
     const ABindingPattern: TGocciaDestructuringPattern; const AIterable: TGocciaExpression;
     const ABody: TGocciaStatement; const ALine, AColumn: Integer;
-    const AMatchPattern: TGocciaMatchPattern = nil);
+    const AMatchPattern: TGocciaMatchPattern = nil;
+    const AAssignmentTarget: TGocciaDestructuringPattern = nil;
+    const AIsUsing: Boolean = False;
+    const AIsAwaitUsing: Boolean = False);
 begin
   inherited Create(ALine, AColumn);
   FIsConst := AIsConst;
   FBindingName := ABindingName;
   FBindingPattern := ABindingPattern;
+  FAssignmentTarget := AAssignmentTarget;
   FMatchPattern := AMatchPattern;
   FIterable := AIterable;
   FBody := ABody;
+  FIsUsing := AIsUsing;
+  FIsAwaitUsing := AIsAwaitUsing;
 end;
 
 { TGocciaForInStatement }
@@ -1151,8 +1166,15 @@ end;
 
       if IsVar then
       begin
-        AContext.Scope.DefineVariableBinding(Variables[I].Name, Value,
-          Variables[I].HasInitializer);
+        if AContext.InEvalCode then
+        begin
+          if Variables[I].HasInitializer then
+            AContext.Scope.AssignBinding(Variables[I].Name, Value, Line,
+              Column, AContext.NonStrictMode);
+        end
+        else
+          AContext.Scope.DefineVariableBinding(Variables[I].Name, Value,
+            Variables[I].HasInitializer);
       end
       else if IsConst then
         AContext.Scope.DefineFromToken(Variables[I].Name, Value, gttConst)

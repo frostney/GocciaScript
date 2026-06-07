@@ -16,13 +16,11 @@ try {
   var __gocciaInheritedGlobalVarDeclaration;
   __gocciaInheritedGlobalVarDeclarationOwn = Object.hasOwn(globalThis, "__gocciaInheritedGlobalVarDeclaration");
   __gocciaInheritedGlobalVarDeclarationValue = globalThis.__gocciaInheritedGlobalVarDeclaration;
-  delete globalThis.__gocciaInheritedGlobalVarDeclaration;
 } finally {
   Object.setPrototypeOf(globalThis, __gocciaOriginalGlobalPrototypeForVar);
 }
 
 var __gocciaDeletedInheritedGlobalVarDeclaration = 42;
-delete globalThis.__gocciaDeletedInheritedGlobalVarDeclaration;
 const __gocciaDeletedOriginalGlobalPrototypeForVar = Object.getPrototypeOf(globalThis);
 let __gocciaDeletedInheritedGlobalVarDeclarationOwn;
 let __gocciaDeletedInheritedGlobalVarDeclarationValue;
@@ -33,7 +31,6 @@ try {
   var __gocciaDeletedInheritedGlobalVarDeclaration;
   __gocciaDeletedInheritedGlobalVarDeclarationOwn = Object.hasOwn(globalThis, "__gocciaDeletedInheritedGlobalVarDeclaration");
   __gocciaDeletedInheritedGlobalVarDeclarationValue = globalThis.__gocciaDeletedInheritedGlobalVarDeclaration;
-  delete globalThis.__gocciaDeletedInheritedGlobalVarDeclaration;
 } finally {
   Object.setPrototypeOf(globalThis, __gocciaDeletedOriginalGlobalPrototypeForVar);
 }
@@ -88,14 +85,14 @@ test("top-level var undefined initializer updates global-backed binding", () => 
   expect(globalThis.__gocciaGlobalVarUndefinedInitializer).toBeUndefined();
 });
 
-test("declaration-only top-level var creates own property over inherited global", () => {
+test("declaration-only top-level var stays own property when prototype has same name", () => {
   expect(__gocciaInheritedGlobalVarDeclarationOwn).toBe(true);
   expect(__gocciaInheritedGlobalVarDeclarationValue).toBeUndefined();
 });
 
-test("declaration-only redeclared top-level var does not reuse stale register value", () => {
+test("declaration-only redeclared top-level var preserves existing own global property", () => {
   expect(__gocciaDeletedInheritedGlobalVarDeclarationOwn).toBe(true);
-  expect(__gocciaDeletedInheritedGlobalVarDeclarationValue).toBeUndefined();
+  expect(__gocciaDeletedInheritedGlobalVarDeclarationValue).toBe(42);
 });
 
 test("top-level var is visible before its declaration executes", () => {

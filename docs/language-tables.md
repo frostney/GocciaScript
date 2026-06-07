@@ -13,17 +13,17 @@
 
 | Feature | Spec | Status |
 |---------|------|--------|
-| `var` | ES1 | Opt-in (`--compat-var`) — use `let`/`const` by default |
+| `var` | ES1 | Opt-in (`--compat-var`) — ES script-global bindings are global-backed and non-configurable; use `let`/`const` by default |
 | `function` keyword | ES1 | Opt-in (`--compat-function`) — use arrow functions or shorthand methods by default |
 | Comma operator (`,`) | ES1 | Supported |
 | `==` / `!=` (loose equality) | ES1 | Opt-in (`--compat-loose-equality`) — use `===` / `!==` by default |
-| `eval()` | ES1 | Excluded |
+| `eval()` | ES1 | Excluded from normal runtimes; private `GocciaScriptLoaderBare --test262-host` hook only for conformance |
 | Non-strict function `this` binding | ES1 | Strict by default; script source `--compat-non-strict-mode` coerces nullish regular-function `this` to `globalThis`; modules remain strict and arrows remain lexical |
 | `arguments` object | ES1 | Opt-in for script source (`--compat-non-strict-mode`) as an unmapped object for ordinary functions, methods, accessors, and generators; modules remain strict; arrows resolve it lexically; prefer rest parameters for new code |
 | Non-strict assignment failures | ES1 | Strict by default; script source `--compat-non-strict-mode` silently ignores failed ordinary object/global writes while assignment expressions return the assigned value |
 | Labeled statements | ES1 | Opt-in for JavaScript compatibility (`--compat-label`); disabled by default |
 | Traditional `for(init; test; update)` loop | ES1 | Opt-in for JavaScript compatibility (`--compat-traditional-for-loop`); disabled by default |
-| `for...in` | ES1 | Opt-in for JavaScript compatibility (`--compat-for-in-loop`); disabled by default |
+| `for...in` | ES1 | Opt-in for JavaScript compatibility (`--compat-for-in-loop`); supports `var` heads with `--compat-var`; disabled by default |
 | `while` / `do...while` | ES1 | Opt-in for JavaScript compatibility (`--compat-while-loops`); disabled by default |
 | `with` statement | ES1 | Opt-in for script source (`--compat-non-strict-mode`) for compatibility with object-environment lookup, `Symbol.unscopables`, closure capture, method-call receivers, and non-strict write failures — prefer explicit property access |
 | `delete` non-strict return values | ES1 | Strict by default; script source `--compat-non-strict-mode` makes `delete identifier` handle declared bindings, configurable global object properties, and unresolvable names with legacy booleans; non-configurable property deletion returns `false` |
@@ -75,7 +75,7 @@
 | `Map.prototype.getOrInsert`, `getOrInsertComputed` | ES2026 | Supported |
 | `WeakMap.prototype.getOrInsert`, `getOrInsertComputed` | ES2026 | Supported |
 | `Iterator.concat` (Iterator Sequencing) | ES2026 | Supported |
-| Explicit Resource Management (`using`, `await using`) | ES2026 | Supported |
+| Explicit Resource Management (`using`, `await using`) | ES2026 | Supported in interpreter and bytecode mode |
 | JSON.parse source text access (`JSON.rawJSON`, `JSON.isRawJSON`) | ES2026 | Supported |
 | `Temporal` (dates, times, durations, time zones) | ES2027 | Supported |
 | `Intl` (ECMA-402) | ECMA-402 | Supported |

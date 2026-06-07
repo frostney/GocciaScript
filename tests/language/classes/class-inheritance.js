@@ -53,6 +53,51 @@ test("super() in constructor", () => {
   expect(car.getInfo()).toBe("2020 Toyota with 4 doors");
 });
 
+test("super() in constructor arrow initializes derived this", () => {
+  let count = 0;
+
+  class Base {
+    constructor() {
+      count++;
+    }
+  }
+
+  class Derived extends Base {
+    constructor() {
+      (_ => super())();
+    }
+  }
+
+  const derived = new Derived();
+  expect(count).toBe(1);
+  expect(derived instanceof Derived).toBeTruthy();
+  expect(derived instanceof Base).toBeTruthy();
+});
+
+test("super() in constructor arrow initializes replacement receiver fields", () => {
+  let replacementPrototype;
+
+  class Base {
+    constructor() {
+      return Object.create(replacementPrototype);
+    }
+  }
+
+  class Derived extends Base {
+    field = "derived";
+
+    constructor() {
+      return (_ => super())();
+    }
+  }
+
+  replacementPrototype = Derived.prototype;
+
+  const derived = new Derived();
+  expect(derived.field).toBe("derived");
+  expect(derived instanceof Derived).toBeTruthy();
+});
+
 test("new.target flows through superclass constructors", () => {
   class Base {
     constructor() {

@@ -21,6 +21,7 @@ type
     Depth: Integer;
     IsCaptured: Boolean;
     IsConst: Boolean;
+    IsVar: Boolean;
     IsGlobalBacked: Boolean;
     IsArrayTyped: Boolean;
     TypeHint: TGocciaLocalType;
@@ -37,6 +38,7 @@ type
     Index: UInt8;
     IsLocal: Boolean;
     IsConst: Boolean;
+    IsVar: Boolean;
     IsGlobalBacked: Boolean;
     TypeHint: TGocciaLocalType;
     IsStrictlyTyped: Boolean;
@@ -57,6 +59,7 @@ type
     FMaxSlot: UInt8;
     FPrivatePrefix: string;
     FIsArrow: Boolean;
+    FDirectEvalSyntheticArgumentsSlot: Integer;
     FWithBindingNames: array of string;
     FWithBindingDepths: array of Integer;
     FWithBindingCount: Integer;
@@ -73,7 +76,8 @@ type
     function ResolveLocal(const AName: string): Integer;
     function ResolveUpvalue(const AName: string): Integer;
     function AddUpvalue(const AIndex: UInt8;
-      const AIsLocal: Boolean; const AIsConst: Boolean = False): Integer;
+      const AIsLocal: Boolean; const AIsConst: Boolean = False;
+      const AIsVar: Boolean = False): Integer;
 
     function AllocateRegister: UInt8;
     procedure FreeRegister;
@@ -119,6 +123,7 @@ type
     function GetWithBindingDepth(const AIndex: Integer): Integer;
     property PrivatePrefix: string read FPrivatePrefix write FPrivatePrefix;
     property IsArrow: Boolean read FIsArrow write FIsArrow;
+    property DirectEvalSyntheticArgumentsSlot: Integer read FDirectEvalSyntheticArgumentsSlot write FDirectEvalSyntheticArgumentsSlot;
     property WithBindingCount: Integer read FWithBindingCount;
   end;
 
@@ -182,6 +187,7 @@ begin
   FDepth := ADepth;
   FNextSlot := 0;
   FMaxSlot := 0;
+  FDirectEvalSyntheticArgumentsSlot := -1;
   FWithBindingCount := 0;
   if Assigned(AParent) and (AParent.FWithBindingCount > 0) then
   begin
@@ -214,6 +220,7 @@ begin
   FLocals[FLocalCount].Depth := FDepth;
   FLocals[FLocalCount].IsCaptured := False;
   FLocals[FLocalCount].IsConst := AIsConst;
+  FLocals[FLocalCount].IsVar := False;
   FLocals[FLocalCount].IsGlobalBacked := False;
   FLocals[FLocalCount].IsArrayTyped := False;
   FLocals[FLocalCount].TypeHint := sltUntyped;
@@ -242,7 +249,11 @@ begin
   // Block-scoped declarations with the same name must not capture var writes.
   for I := 0 to FLocalCount - 1 do
     if (FLocals[I].Name = AName) and (FLocals[I].Depth = 0) then
+    begin
+      if FLocals[I].Slot = FDirectEvalSyntheticArgumentsSlot then
+        Continue;
       Exit(FLocals[I].Slot);
+    end;
 
   // Declare at depth 0 so EndScope never pops it
   if FNextSlot >= High(UInt8) then
@@ -254,6 +265,7 @@ begin
   FLocals[FLocalCount].Depth := 0;
   FLocals[FLocalCount].IsCaptured := False;
   FLocals[FLocalCount].IsConst := False;
+  FLocals[FLocalCount].IsVar := True;
   FLocals[FLocalCount].IsGlobalBacked := False;
   FLocals[FLocalCount].IsArrayTyped := False;
   FLocals[FLocalCount].TypeHint := sltUntyped;
@@ -305,7 +317,7 @@ begin
   begin
     FParent.MarkCaptured(LocalIdx);
     Idx := AddUpvalue(FParent.FLocals[LocalIdx].Slot, True,
-      FParent.FLocals[LocalIdx].IsConst);
+      FParent.FLocals[LocalIdx].IsConst, FParent.FLocals[LocalIdx].IsVar);
     FUpvalues[Idx].IsGlobalBacked := FParent.FLocals[LocalIdx].IsGlobalBacked;
     FUpvalues[Idx].TypeHint := FParent.FLocals[LocalIdx].TypeHint;
     FUpvalues[Idx].IsStrictlyTyped := FParent.FLocals[LocalIdx].IsStrictlyTyped;
@@ -323,7 +335,8 @@ begin
     if UpvalueIdx > High(UInt8) then
       raise Exception.Create('Compiler error: upvalue index overflow (>255)');
     Idx := AddUpvalue(UInt8(UpvalueIdx), False,
-      FParent.FUpvalues[UpvalueIdx].IsConst);
+      FParent.FUpvalues[UpvalueIdx].IsConst,
+      FParent.FUpvalues[UpvalueIdx].IsVar);
     FUpvalues[Idx].IsGlobalBacked := FParent.FUpvalues[UpvalueIdx].IsGlobalBacked;
     FUpvalues[Idx].TypeHint := FParent.FUpvalues[UpvalueIdx].TypeHint;
     FUpvalues[Idx].IsStrictlyTyped := FParent.FUpvalues[UpvalueIdx].IsStrictlyTyped;
@@ -336,7 +349,8 @@ begin
 end;
 
 function TGocciaCompilerScope.AddUpvalue(const AIndex: UInt8;
-  const AIsLocal: Boolean; const AIsConst: Boolean): Integer;
+  const AIsLocal: Boolean; const AIsConst: Boolean;
+  const AIsVar: Boolean): Integer;
 var
   I: Integer;
 begin
@@ -351,6 +365,7 @@ begin
   FUpvalues[FUpvalueCount].Index := AIndex;
   FUpvalues[FUpvalueCount].IsLocal := AIsLocal;
   FUpvalues[FUpvalueCount].IsConst := AIsConst;
+  FUpvalues[FUpvalueCount].IsVar := AIsVar;
   FUpvalues[FUpvalueCount].IsGlobalBacked := False;
   FUpvalues[FUpvalueCount].TypeHint := sltUntyped;
   FUpvalues[FUpvalueCount].IsStrictlyTyped := False;

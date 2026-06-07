@@ -17,9 +17,8 @@ test("top-level var in empty for-in creates global property", () => {
     "__gocciaForInEmptyGlobal"
   );
   expect(typeof desc).toBe("object");
+  expect(desc.configurable).toBe(false);
   expect(globalThis.__gocciaForInEmptyGlobal).toBeUndefined();
-
-  delete globalThis.__gocciaForInEmptyGlobal;
 });
 
 test("top-level var destructuring in empty for-in creates global property", () => {
@@ -28,9 +27,8 @@ test("top-level var destructuring in empty for-in creates global property", () =
     "__gocciaForInEmptyDestructured"
   );
   expect(typeof desc).toBe("object");
+  expect(desc.configurable).toBe(false);
   expect(globalThis.__gocciaForInEmptyDestructured).toBeUndefined();
-
-  delete globalThis.__gocciaForInEmptyDestructured;
 });
 
 test("var in for-in hoists into enclosing function", () => {

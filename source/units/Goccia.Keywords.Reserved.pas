@@ -41,6 +41,12 @@ const
   KEYWORD_VOID       = 'void';
   KEYWORD_WHILE      = 'while';
   KEYWORD_WITH       = 'with';
+  KEYWORD_IMPLEMENTS = 'implements';
+  KEYWORD_INTERFACE  = 'interface';
+  KEYWORD_PACKAGE    = 'package';
+  KEYWORD_PRIVATE    = 'private';
+  KEYWORD_PROTECTED  = 'protected';
+  KEYWORD_PUBLIC     = 'public';
 
   ReservedKeywords: array[0..35] of string = (
     KEYWORD_BREAK,
@@ -81,7 +87,17 @@ const
     KEYWORD_WITH
   );
 
+  StrictModeReservedKeywords: array[0..5] of string = (
+    KEYWORD_IMPLEMENTS,
+    KEYWORD_INTERFACE,
+    KEYWORD_PACKAGE,
+    KEYWORD_PRIVATE,
+    KEYWORD_PROTECTED,
+    KEYWORD_PUBLIC
+  );
+
 function IsReservedKeyword(const AName: string): Boolean; inline;
+function IsStrictModeReservedKeyword(const AName: string): Boolean; inline;
 
 implementation
 
@@ -91,6 +107,17 @@ var
 begin
   for I := Low(ReservedKeywords) to High(ReservedKeywords) do
     if AName = ReservedKeywords[I] then
+      Exit(True);
+
+  Result := False;
+end;
+
+function IsStrictModeReservedKeyword(const AName: string): Boolean;
+var
+  I: Integer;
+begin
+  for I := Low(StrictModeReservedKeywords) to High(StrictModeReservedKeywords) do
+    if AName = StrictModeReservedKeywords[I] then
       Exit(True);
 
   Result := False;
