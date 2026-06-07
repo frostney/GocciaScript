@@ -872,8 +872,11 @@ console.log("Bare Loader: bytecode direct eval creates top-level sloppy var...")
     "--compat-non-strict-mode",
   ], {
     stdin: new TextEncoder().encode([
-      "eval('var t262EvalGlobal = 33');",
+      "print(eval('var t262EvalGlobal = 33; this === globalThis'));",
       "print(t262EvalGlobal);",
+      "print(globalThis.t262EvalGlobal);",
+      "const topLevelArrow = () => eval('this === globalThis');",
+      "print(topLevelArrow());",
       "",
     ].join("\n")),
     stdout: "pipe",
@@ -881,8 +884,31 @@ console.log("Bare Loader: bytecode direct eval creates top-level sloppy var...")
   });
   if (proc.exitCode !== 0)
     throw new Error(`Bare bytecode sloppy direct eval var probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
-  if (proc.stdout.toString().trim() !== "33")
+  if (proc.stdout.toString().trim() !== "true\n33\n33\ntrue")
     throw new Error(`Bare bytecode sloppy direct eval var got: ${proc.stdout.toString()}`);
+}
+
+console.log("Bare Loader: bytecode module direct eval keeps module this binding...");
+{
+  const proc = Bun.spawnSync([
+    BARE,
+    "--test262-host",
+    "--mode=bytecode",
+    "--source-type=module",
+  ], {
+    stdin: new TextEncoder().encode([
+      "print(eval('this === undefined'));",
+      "const topLevelArrow = () => eval('this === undefined');",
+      "print(topLevelArrow());",
+      "",
+    ].join("\n")),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0)
+    throw new Error(`Bare bytecode module direct eval this probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (proc.stdout.toString().trim() !== "true\ntrue")
+    throw new Error(`Bare bytecode module direct eval this got: ${proc.stdout.toString()}`);
 }
 
 console.log("Bare Loader: --mode default is interpreted...");

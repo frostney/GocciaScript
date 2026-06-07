@@ -102,6 +102,7 @@ var
   BytecodeModule: TGocciaBytecodeModule;
   SavedGlobalScope: TGocciaScope;
   SavedRealm: TGocciaRealm;
+  SavedGlobalBackedTopLevel: Boolean;
   Options: TGocciaCompilerOptimizationOptions;
 begin
   Compiler := TGocciaCompiler.Create(AContext.CurrentFilePath);
@@ -122,7 +123,9 @@ begin
     FRetainModule(BytecodeModule);
   SavedGlobalScope := FVM.GlobalScope;
   SavedRealm := FVM.Realm;
+  SavedGlobalBackedTopLevel := FVM.GlobalBackedTopLevel;
   FVM.GlobalScope := AContext.Scope;
+  FVM.GlobalBackedTopLevel := False;
   try
     if Assigned(AContext.Realm) then
       FVM.Realm := AContext.Realm;
@@ -130,6 +133,7 @@ begin
   finally
     FVM.GlobalScope := SavedGlobalScope;
     FVM.Realm := SavedRealm;
+    FVM.GlobalBackedTopLevel := SavedGlobalBackedTopLevel;
   end;
 end;
 
@@ -204,6 +208,7 @@ begin
   FVM.ProfilingFunctions := Assigned(TGocciaProfiler.Instance)
     and TGocciaProfiler.Instance.Enabled
     and (pmFunctions in TGocciaProfiler.Instance.Mode);
+  FVM.GlobalBackedTopLevel := FGlobalBackedTopLevel;
   GProfilingAllocations := FVM.ProfilingFunctions;
   try
     Result := FVM.ExecuteModule(TGocciaBytecodeModule(AModule));

@@ -116,6 +116,7 @@ type
     FCurrentDynamicVarScope: TGocciaScope;
     FCurrentAsyncPromise: TGocciaPromiseValue;
     FActiveDecoratorSession: TObject;
+    FGlobalBackedTopLevel: Boolean;
     FCoverageEnabled: Boolean;
     FProfilingOpcodes: Boolean;
     FProfilingFunctions: Boolean;
@@ -326,6 +327,8 @@ type
       read FLoadModuleSource write FLoadModuleSource;
     property LoadDeferredModule: TLoadDeferredModuleCallback
       read FLoadDeferredModule write FLoadDeferredModule;
+    property GlobalBackedTopLevel: Boolean read FGlobalBackedTopLevel
+      write FGlobalBackedTopLevel;
     property CoverageEnabled: Boolean read FCoverageEnabled write FCoverageEnabled;
     property ProfilingOpcodes: Boolean read FProfilingOpcodes write FProfilingOpcodes;
     property ProfilingFunctions: Boolean read FProfilingFunctions write FProfilingFunctions;
@@ -689,6 +692,19 @@ begin
   end;
 end;
 
+function TemplateUsesGlobalEvalEnvironment(
+  const ATemplate: TGocciaFunctionTemplate): Boolean;
+begin
+  Result := Assigned(ATemplate) and (ATemplate.Name = '<module>');
+end;
+
+function ClosureUsesGlobalScriptThis(const AVM: TGocciaVM;
+  const AClosure: TGocciaBytecodeClosure): Boolean;
+begin
+  Result := Assigned(AVM) and AVM.FGlobalBackedTopLevel and
+    Assigned(AClosure) and TemplateUsesGlobalEvalEnvironment(AClosure.Template);
+end;
+
 function DirectEvalLexicalClosure(const AVM: TGocciaVM): TGocciaBytecodeClosure;
 var
   Candidate: TGocciaBytecodeClosure;
@@ -731,6 +747,12 @@ begin
       if Assigned(Candidate) and Assigned(Candidate.Template) and
          not Candidate.Template.IsArrow then
       begin
+        if ClosureUsesGlobalScriptThis(AVM, Candidate) then
+        begin
+          if Assigned(AVM.FGlobalThisValue) then
+            Exit(AVM.FGlobalThisValue);
+          Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+        end;
         if AVM.FFrameStack[I].LocalCellCount > 0 then
         begin
           Slot := AVM.FFrameStack[I].LocalCellBase;
@@ -748,6 +770,12 @@ begin
       end;
     end;
 
+  if Assigned(AVM) and ClosureUsesGlobalScriptThis(AVM, AVM.FCurrentClosure) then
+  begin
+    if Assigned(AVM.FGlobalThisValue) then
+      Exit(AVM.FGlobalThisValue);
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  end;
   if Assigned(AVM) and (AVM.FLocalCellCount > 0) then
     Exit(AVM.GetLocal(0));
   if AUseGlobalVarEnvironment then
@@ -4282,6 +4310,7 @@ begin
   FTempSavedStateRootCount := 0;
   FCurrentExecutionContextPushed := False;
   FCurrentDynamicVarScope := nil;
+  FGlobalBackedTopLevel := False;
   SetLength(FRegisterStack, INITIAL_STACK_SIZE);
   FRegisterBase := 0;
   FRegisters := nil;
@@ -8963,7 +8992,7 @@ begin
       if not ATemplate.FindDirectEvalEnvironment(APC, EnvIndex) then
         EnvIndex := -1;
       StrictEval := ACallerStrict or HasUseStrictDirective(PipelineResult.ProgramNode);
-      UseGlobalVarEnvironment := ATemplate.Name = '<module>';
+      UseGlobalVarEnvironment := TemplateUsesGlobalEvalEnvironment(ATemplate);
       if UseGlobalVarEnvironment then
         CallerParentScope := FGlobalScope
       else
