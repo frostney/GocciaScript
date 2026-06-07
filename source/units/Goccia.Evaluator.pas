@@ -468,6 +468,9 @@ begin
   else
     Exit;
 
+  if FuncDecl.FunctionExpression.IsAsync or FuncDecl.FunctionExpression.IsGenerator then
+    Exit;
+
   Name := FuncDecl.Name;
   if not AContext.Scope.ContainsOwnLexicalBinding(Name) then
     Exit;
@@ -4885,12 +4888,20 @@ var
   procedure ActivateAnnexBFunctionDeclaration(
     const AStatement: TGocciaStatement;
     const ABodyContext: TGocciaEvaluationContext);
+  var
+    FuncDecl: TGocciaFunctionDeclaration;
   begin
     if not ABodyContext.NonStrictMode then
       Exit;
-    if (AStatement is TGocciaFunctionDeclaration) or
-       (AStatement is TGocciaExportFunctionDeclaration) then
-      HoistSingleFunctionDeclaration(AStatement, ABodyContext, False);
+    if AStatement is TGocciaFunctionDeclaration then
+      FuncDecl := TGocciaFunctionDeclaration(AStatement)
+    else if AStatement is TGocciaExportFunctionDeclaration then
+      FuncDecl := TGocciaExportFunctionDeclaration(AStatement).Declaration
+    else
+      Exit;
+    if FuncDecl.FunctionExpression.IsAsync or FuncDecl.FunctionExpression.IsGenerator then
+      Exit;
+    HoistSingleFunctionDeclaration(AStatement, ABodyContext, False);
   end;
 begin
   ConditionResult := EvaluateConditionWithPatternBindings(AIfStatement.Condition,

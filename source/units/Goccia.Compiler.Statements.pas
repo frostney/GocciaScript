@@ -917,6 +917,8 @@ var
 begin
   if (not ACtx.NonStrictMode) or (ACtx.Scope.Depth = 0) then
     Exit;
+  if AStmt.FunctionExpression.IsAsync or AStmt.FunctionExpression.IsGenerator then
+    Exit;
 
   LocalIdx := ACtx.Scope.ResolveLocal(AStmt.Name);
   if (LocalIdx < 0) or

@@ -1,0 +1,6 @@
+{
+  "compat-function": true,
+  "compat-non-strict-mode": true,
+  "compat-var": true,
+  "unsafe-function-constructor": true
+}
