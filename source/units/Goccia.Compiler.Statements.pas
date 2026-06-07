@@ -909,6 +909,32 @@ begin
     EmitGlobalDefine(ACtx, Slot, AStmt.Name, False, True, True);
 end;
 
+procedure CompileAnnexBBlockFunctionActivation(
+  const ACtx: TGocciaCompilationContext; const AStmt: TGocciaFunctionDeclaration);
+var
+  LocalIdx, VarLocalIdx: Integer;
+  Slot: UInt8;
+begin
+  if (not ACtx.NonStrictMode) or (ACtx.Scope.Depth = 0) then
+    Exit;
+
+  LocalIdx := ACtx.Scope.ResolveLocal(AStmt.Name);
+  if (LocalIdx < 0) or
+     (ACtx.Scope.GetLocal(LocalIdx).Depth <> ACtx.Scope.Depth) then
+    Exit;
+
+  VarLocalIdx := FindVarLocalIndex(ACtx.Scope, AStmt.Name);
+  if VarLocalIdx < 0 then
+    Exit;
+
+  Slot := ACtx.Scope.GetLocal(LocalIdx).Slot;
+  if ACtx.Scope.GetLocal(VarLocalIdx).IsGlobalBacked then
+    EmitGlobalDefine(ACtx, Slot, AStmt.Name, False, True, True)
+  else if ACtx.Scope.GetLocal(VarLocalIdx).Slot <> Slot then
+    EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, Slot,
+      UInt16(ACtx.Scope.GetLocal(VarLocalIdx).Slot)));
+end;
+
 threadvar
   // Module-level stack of using resource entries for the current block.
   // Populated by CompileUsingDeclaration, consumed by CompileBlockStatement.
@@ -1602,7 +1628,11 @@ begin
     begin
       Node := AStmt.Nodes[I];
       if GetBlockFunctionDeclaration(Node) <> nil then
+      begin
+        CompileAnnexBBlockFunctionActivation(ACtx,
+          GetBlockFunctionDeclaration(Node));
         Continue;
+      end;
       if Node is TGocciaStatement then
       begin
         StatementAbrupt := ACtx.CompileStatement(TGocciaStatement(Node));
@@ -1665,7 +1695,11 @@ begin
   begin
     Node := AStmt.Nodes[I];
     if GetBlockFunctionDeclaration(Node) <> nil then
+    begin
+      CompileAnnexBBlockFunctionActivation(ACtx,
+        GetBlockFunctionDeclaration(Node));
       Continue;
+    end;
     if Node is TGocciaStatement then
     begin
       StatementAbrupt := ACtx.CompileStatement(TGocciaStatement(Node));
@@ -3702,7 +3736,11 @@ begin
       begin
         Node := CaseClause.Consequent[J];
         if GetBlockFunctionDeclaration(Node) <> nil then
+        begin
+          CompileAnnexBBlockFunctionActivation(ACtx,
+            GetBlockFunctionDeclaration(Node));
           Continue;
+        end;
         if Node is TGocciaStatement then
         begin
           StatementAbrupt := ACtx.CompileStatement(TGocciaStatement(Node));
