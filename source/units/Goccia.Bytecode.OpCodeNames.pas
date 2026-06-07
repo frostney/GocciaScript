@@ -18,6 +18,7 @@ function OpCodeName(const AOp: UInt8): string;
 begin
   case TGocciaOpCode(AOp) of
     OP_LOAD_CONST:                     Result := 'OP_LOAD_CONST';
+    OP_LOAD_REGEXP:                    Result := 'OP_LOAD_REGEXP';
     OP_LOAD_TRUE:                      Result := 'OP_LOAD_TRUE';
     OP_LOAD_FALSE:                     Result := 'OP_LOAD_FALSE';
     OP_LOAD_INT:                       Result := 'OP_LOAD_INT';

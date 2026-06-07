@@ -444,27 +444,10 @@ end;
 procedure CompileRegexLiteral(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaRegexLiteralExpression; const ADest: UInt8);
 var
-  BaseReg, PatternReg, FlagsReg: UInt8;
-  NameIdx: UInt16;
+  LiteralIdx: UInt16;
 begin
-  BaseReg := ACtx.Scope.AllocateRegister;
-
-  NameIdx := ACtx.Template.AddConstantString(CONSTRUCTOR_REGEXP);
-  EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, BaseReg, NameIdx));
-
-  PatternReg := ACtx.Scope.AllocateRegister;
-  FlagsReg := ACtx.Scope.AllocateRegister;
-  EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, PatternReg,
-    ACtx.Template.AddConstantString(AExpr.Pattern)));
-  EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, FlagsReg,
-    ACtx.Template.AddConstantString(AExpr.Flags)));
-  EmitInstruction(ACtx, EncodeABC(OP_CALL, BaseReg, 2, 0));
-  ACtx.Scope.FreeRegister;
-  ACtx.Scope.FreeRegister;
-
-  if BaseReg <> ADest then
-    EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, BaseReg, 0));
-  ACtx.Scope.FreeRegister;
+  LiteralIdx := ACtx.Template.AddConstantRegExpLiteral(AExpr.Pattern, AExpr.Flags);
+  EmitInstruction(ACtx, EncodeABx(OP_LOAD_REGEXP, ADest, LiteralIdx));
 end;
 
 procedure CompileIdentifier(const ACtx: TGocciaCompilationContext;

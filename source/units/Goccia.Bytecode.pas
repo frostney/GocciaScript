@@ -77,7 +77,10 @@ const
   //               environment slots.
   //   v43 -> v44: direct-eval snapshots mark caller var-environment bindings
   //               separately from intervening lexical bindings.
-  GOCCIA_FORMAT_VERSION = 44;
+  //   v44 -> v45: added bckRegExpLiteral constants so bytecode regexp
+  //               literals create fresh RegExp objects from cached compiled
+  //               programs instead of calling the global RegExp constructor.
+  GOCCIA_FORMAT_VERSION = 45;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
@@ -120,6 +123,7 @@ type
     semantic helper/orchestration ops in 167..255 }
   TGocciaOpCode = (
     OP_LOAD_CONST    = 0,
+    OP_LOAD_REGEXP   = 1,
     OP_LOAD_TRUE     = 2,
     OP_LOAD_FALSE    = 3,
     OP_LOAD_INT      = 4,

@@ -344,12 +344,30 @@ end;
 procedure TTestCompiler.TestCompileRegExpLiteral;
 var
   Module: TGocciaBytecodeModule;
+  Constant: TGocciaBytecodeConstant;
+  I: Integer;
+  FoundLiteralConstant: Boolean;
 begin
   Module := CompileSource('const re = /ab+c/gi;');
   try
     Expect<Boolean>(Assigned(Module)).ToBe(True);
     Expect<Boolean>(Assigned(Module.TopLevel)).ToBe(True);
     Expect<Boolean>(Module.TopLevel.CodeCount > 0).ToBe(True);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_LOAD_REGEXP)).ToBe(1);
+
+    FoundLiteralConstant := False;
+    for I := 0 to Module.TopLevel.ConstantCount - 1 do
+    begin
+      Constant := Module.TopLevel.GetConstant(I);
+      if (Constant.Kind = bckRegExpLiteral) and
+         (Constant.StringValue = 'ab+c') and
+         (Constant.RegExpFlags = 'gi') then
+      begin
+        FoundLiteralConstant := True;
+        Break;
+      end;
+    end;
+    Expect<Boolean>(FoundLiteralConstant).ToBe(True);
   finally
     Module.Free;
   end;
@@ -467,7 +485,8 @@ begin
     'const c = "hello world";' +
     'const d = true;' +
     'const e = null;' +
-    'const f = 9007199254740992;'
+    'const f = 9007199254740992;' +
+    'const g = /roundtrip/im;'
   );
   TempFile := GetTempFileName + '.gbc';
   try
@@ -494,6 +513,11 @@ begin
           end;
           bckString:
             Expect<string>(LoadConst.StringValue).ToBe(OrigConst.StringValue);
+          bckRegExpLiteral:
+          begin
+            Expect<string>(LoadConst.StringValue).ToBe(OrigConst.StringValue);
+            Expect<string>(LoadConst.RegExpFlags).ToBe(OrigConst.RegExpFlags);
+          end;
         end;
       end;
 
