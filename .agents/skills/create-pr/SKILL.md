@@ -32,7 +32,11 @@ Explicit permission to commit relevant changes, push the branch, and open a draf
 
 4. If the current branch is the base branch, create a focused branch first. Use the issue number or a change summary; ask when ambiguous.
 5. Stage only relevant files. Exclude secrets and unrelated local changes.
-6. Commit with a concise message passed via HEREDOC.
+6. Commit with a concise Conventional Commit message passed via HEREDOC:
+   - Subject format: `type(scope): summary`.
+   - Use one of: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`.
+   - Pick the narrowest accurate scope; omit the scope only when no meaningful scope exists.
+   - Use imperative mood, lowercase the summary after the type/scope, and do not end the subject with a period.
 7. Push with upstream tracking when needed: `git push -u origin HEAD`.
 8. Resolve the PR template:
    - Read `.github/pull_request_template.md`, or pick the matching template under `.github/PULL_REQUEST_TEMPLATE/` if the repo uses multiple.

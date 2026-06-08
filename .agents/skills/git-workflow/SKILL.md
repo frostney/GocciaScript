@@ -51,6 +51,8 @@ Resolve any conflicts and commit the merge before continuing. Do not `git rebase
 ### Commits
 
 - Each logical change is its own commit. Use a HEREDOC for multi-line messages so formatting is preserved.
+- Always use Conventional Commit subjects: `type(scope): summary`, with type from `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, or `revert`. Pick the narrowest accurate scope; omit the scope only when no meaningful scope exists.
+- Write the subject in imperative mood, lowercase after the type/scope, no trailing period, and keep it concise. Use the body for rationale or verification details when helpful.
 - Do not amend. If a commit needs a fix-up, add a new commit.
 - Do not skip hooks (`--no-verify`) unless the user explicitly asks.
 

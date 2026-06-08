@@ -51,6 +51,18 @@ If you cannot run the grill skill, do not silently downgrade it to "doc-grounded
 - Discovery hint: look for a skill or command named `grill-with-docs` or `grill-me` (e.g. `~/.cursor/skills/grill-with-docs/`, `~/.cursor/skills/grill-me/`, `.cursor/skills/...`, `.agents/skills/...`).
 - If neither is registered, state explicitly that no grill skill was found, then proceed with the workflow on the input as given.
 
+When this workflow invokes an external grill skill, treat it as a nested issue-shaping dependency: obey that skill's procedure exactly, do not implement product code during the grill sub-session unless that skill explicitly requires documentation/context updates, then return to this workflow and draft the issue.
+
+### Active context declaration
+
+Do not declare the active context at invocation time. First resolve the issue template, investigate duplicates/related code, read project/area context, discover matching skills, and run the grill skill when available. Then, immediately before drafting the issue, briefly state the context and skills that are now active, for example:
+
+```text
+Active context before drafting: AGENTS.md, project-area/AGENTS.md, project-area/CONTEXT.md, docs/adr/0003-..., react-stack, convex, grill-with-docs. No matching <domain> skill found.
+```
+
+This is a gate immediately before drafting: if a relevant project, stack, domain, or grill skill exists but is missing from the declaration, load it before continuing. A context note before grill does not satisfy this gate; the active context must be restated with the issue draft.
+
 ### Steps
 
 1. Parse the tagline or short description. If missing, ask.
@@ -62,8 +74,8 @@ If you cannot run the grill skill, do not silently downgrade it to "doc-grounded
    - Search code, docs, tests, and existing open/closed issues for duplicates and related work.
    - Read the implementation area the issue touches. Do not draft from the tagline alone.
    - If the tagline cannot become a concrete issue without guessing, stop and ask.
-4. **Run the grill skill (GATE A).** When `grill-with-docs` / `grill-me` is registered, **read that skill and execute its actual question loop now** on the tagline plus your investigation findings — ask the questions, wait for answers, iterate to completion — then fold its output into the issue body. Do not substitute a "doc-grounded" answer or your own ad-hoc questions for the skill. If none is registered, say so explicitly and continue.
-5. Draft the issue. A good issue typically includes:
+4. **Run the grill skill (GATE A).** When `grill-with-docs` / `grill-me` is registered, **read that skill and execute its actual question loop now** on the tagline plus your investigation findings — ask the questions, wait for answers, iterate to completion — then fold its output into the issue body. Provide the grill skill with the project, stack, domain, docs, ADR, and investigation context discovered in steps 2–3. Do not substitute a "doc-grounded" answer or your own ad-hoc questions for the skill. Do not implement product code during the grill sub-session unless the grill skill explicitly requires documentation/context updates. If no grill skill is registered, say so explicitly and continue.
+5. **Declare active context, then draft the issue.** Before drafting, state the active context/skills discovered and used in steps 2–4, including any applicable project, stack, domain, docs, ADR, and grill skills. If the declaration reveals a relevant missing skill or context file, load it before continuing. A good issue typically includes:
    - A specific, plain-language title with no area prefix (use labels for area/type).
    - A short problem summary.
    - For bugs: reproduction command or minimal code/UI sample; current vs expected behavior.

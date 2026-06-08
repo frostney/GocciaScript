@@ -7,10 +7,11 @@ description: >-
   code path, no shortcuts), handles already-fixed issues by closing or adding
   regression tests, invokes the grill skill when registered, then presents
   implementation options and stops for the user's choice before coding.
-  Implements the chosen option, runs verification (UI/UX checks plus the
-  project's full check gate), reviews for shortcuts and tech debt, and prepares
-  a draft PR via /create-pr. Use when the user runs /implement-issue with an
-  issue number.
+  Updates the branch against origin's default branch, implements the chosen
+  option, runs verification (UI/UX checks plus the project's full check gate),
+  reviews against the issue's acceptance criteria for shortcuts and tech debt,
+  runs a /review code review, and always hands off via /create-pr. Use when the
+  user runs /implement-issue with an issue number.
 license: Unlicense OR MIT
 compatibility: >-
   Requires the GitHub CLI (gh) authenticated to the target repository and
@@ -25,11 +26,12 @@ Validate and implement a GitHub issue in the current repository.
 
 ### Non-negotiable gates (do not skip, do not rationalize)
 
-These three gates are mandatory. Most failures of this skill come from skipping one of them under time pressure or because the task "looks simple." Being an implementation command is **not** a license to skip any gate.
+These four gates are mandatory. Most failures of this skill come from skipping one of them under time pressure or because the task "looks simple." Being an implementation command is **not** a license to skip any gate.
 
 1. **GATE A — Grill before planning.** When a grill skill is registered, you **must** invoke it (step 6) before forming a hypothesis or presenting options. Do not proceed to options without it.
 2. **GATE B — Full-context investigation before concluding.** You **must** complete the investigation in step 5 (enumerate the project's real commands, trace the full code path, reproduce) before forming any conclusion. A conclusion drawn from a single file or a guessed command is invalid.
 3. **GATE C — Wait for the user's choice.** After presenting options (step 8) you **must stop and wait** for the user to pick one. Do **not** continue to implementation on your own.
+4. **GATE D — Code review, then hand off (do not stop early).** Whenever there is a code or test change to ship, you **must** run a code review via `/review` (step 16) and then invoke `/create-pr` (step 17). Finishing by only summarizing the change in chat, without running the review and opening the PR, is a failure of this skill.
 
 **Forbidden rationalizations** — if you catch yourself writing any of these, you are violating the skill, stop and follow the gate instead:
 
@@ -39,8 +41,10 @@ These three gates are mandatory. Most failures of this skill come from skipping 
 - ❌ "I treated `grill-with-docs` as 'answer with doc-grounding' instead of actually running the grilling loop." → No. Invoking grill means **executing the grill skill itself** — its real, interactive question loop — not answering in a doc-grounded style, not paraphrasing what it would ask. Load the skill and run it.
 - ❌ "I'll ask a couple of clarifying questions of my own; that's basically grilling." → No. That is not the grill skill. Run the actual `grill-with-docs` / `grill-me` skill.
 - ❌ "I found the likely cause in this one file, no need to look further." → No. Complete the full-context investigation first.
+- ❌ "The change looks complete, I'll summarize it here instead of opening a PR." → No. Run `/review`, then always invoke `/create-pr` (GATE D).
+- ❌ "I already self-reviewed, so I'll skip the `/review` code review." → No. The `/review` pass is a separate, mandatory code review of the diff.
 
-If you are a smaller / non-frontier model: treat steps 6, 5, and 8 as literal hard stops. Run the tool, finish the checklist, ask the question, then wait.
+If you are a smaller / non-frontier model: treat steps 6, 5, and 8 as literal hard stops, and treat steps 16 and 17 as mandatory always-run endings. Run the tool, finish the checklist, ask the question, then wait — and at the end, run the review and open the PR.
 
 ### Use the grill skill for thoroughness (always when available)
 
@@ -58,6 +62,18 @@ If you cannot run the grill skill, do not silently downgrade it to "doc-grounded
 - **`/grill-with-docs` is preferred.** Use `/grill-me` only when `/grill-with-docs` is not registered.
 - Discovery hint: look for a skill or command named `grill-with-docs` or `grill-me` (e.g. `~/.cursor/skills/grill-with-docs/`, `~/.cursor/skills/grill-me/`, `.cursor/skills/...`, `.agents/skills/...`).
 - If neither is registered, state explicitly that no grill skill was found, then proceed with the workflow on the input as given.
+
+When this workflow invokes an external grill skill, treat it as a nested planning dependency: obey that skill's procedure exactly, do not implement product code during the grill sub-session unless that skill explicitly requires documentation/context updates, then return to this workflow and continue with validation and options.
+
+### Active context declaration
+
+Do not declare the active context at invocation time. First fetch the issue, read project/area context, discover matching skills, investigate/reproduce the relevant behavior, and run the grill skill when available. Then, immediately before presenting implementation options, briefly state the context and skills that are now active, for example:
+
+```text
+Active context before planning: AGENTS.md, project-area/AGENTS.md, project-area/CONTEXT.md, docs/adr/0003-..., react-stack, convex, grill-with-docs. No matching <domain> skill found.
+```
+
+This is a gate immediately before options: if a relevant project, stack, domain, or grill skill exists but is missing from the declaration, load it before continuing. A context note before grill does not satisfy this gate; the active context must be restated with the implementation options.
 
 ### Steps
 
@@ -93,29 +109,30 @@ If you cannot run the grill skill, do not silently downgrade it to "doc-grounded
    - **Case: already fixed BUT not covered by a regression test.** The behavior works but nothing prevents it from regressing. The work becomes **adding a regression test** (and any missing edge-case tests) that would fail against the pre-fix code and passes now — no production-code change. Name the test after the issue so the linkage is obvious.
    - **Case: fixed for the reported path but adjacent paths are untested or still broken.** Add tests for the sibling paths surfaced in the broad search above, and fix any that are genuinely broken. Treat each broken sibling as in-scope only if it shares the issue's root cause; otherwise note it for a separate issue.
    - In all three cases, confirm the "already fixed" conclusion with evidence (the passing reproduction, the responsible code, the existing or missing test) before presenting it — a behavior that merely looks fixed in one spot may still fail on another path.
-6. **Run the grill skill (GATE A).** When `grill-with-docs` / `grill-me` is registered, **read that skill and execute its actual question loop now** on the issue plus your investigation findings — ask the questions, wait for answers, iterate to completion — then fold its output into the options and verification plan. Do not substitute a "doc-grounded" answer or your own ad-hoc questions for the skill. If none is registered, say so explicitly and continue.
+6. **Run the grill skill (GATE A).** When `grill-with-docs` / `grill-me` is registered, **read that skill and execute its actual question loop now** on the issue plus your investigation findings — ask the questions, wait for answers, iterate to completion — then fold its output into the options and verification plan. Provide the grill skill with the project, stack, domain, docs, ADR, and investigation context discovered in steps 4–5. Do not substitute a "doc-grounded" answer or your own ad-hoc questions for the skill. Do not implement product code during the grill sub-session unless the grill skill explicitly requires documentation/context updates. If no grill skill is registered, say so explicitly and continue.
 7. Validate before coding:
    - The issue exists, is open, and is not a pull request.
    - No `blocked`, `duplicate`, `wontfix`, or equivalent label/comment.
    - Expected behavior and acceptance criteria are clear enough to implement.
    - If validation fails or requirements are ambiguous, stop and ask.
-8. **Present implementation options, then STOP and wait (GATE C).** Always present exactly three distinct options with tradeoffs, a verification plan, and a recommendation grounded in the step 5 investigation and step 6 grill output. The three must be genuinely different approaches, not trivial variations of one. When step 5 found the issue **already fixed**, the options reflect that situation instead of inventing a code change — e.g. (a) close as already resolved citing the fixing commit and covering test, (b) add a regression test (plus missing edge-case tests) that would have caught the original bug, (c) extend coverage/fixes to the adjacent paths surfaced in the search. **Do not write any implementation code until the user explicitly picks an option or explicitly tells you to proceed with the recommendation.** Do not interpret "this is an implementation command" as permission to skip the choice. End your turn here and wait for the user's reply.
-   *If the chosen option is "close as already resolved" with no code or test change, skip steps 9–16: instead, comment on the issue with the evidence (fixing commit + covering test) and close it (or ask the user to). The remaining steps apply only when there is a code or test change to ship.*
+8. **Declare active context, present implementation options, then STOP and wait (GATE C).** Before listing options, state the active context/skills discovered and used in steps 4–6, including any applicable project, stack, domain, docs, ADR, and grill skills. If the declaration reveals a relevant missing skill or context file, load it before continuing. Then present exactly three distinct options with tradeoffs, a verification plan, and a recommendation grounded in the step 5 investigation and step 6 grill output. The three must be genuinely different approaches, not trivial variations of one. When step 5 found the issue **already fixed**, the options reflect that situation instead of inventing a code change — e.g. (a) close as already resolved citing the fixing commit and covering test, (b) add a regression test (plus missing edge-case tests) that would have caught the original bug, (c) extend coverage/fixes to the adjacent paths surfaced in the search. **Do not write any implementation code until the user explicitly picks an option or explicitly tells you to proceed with the recommendation.** Do not interpret "this is an implementation command" as permission to skip the choice. End your turn here and wait for the user's reply.
+   *If the chosen option is "close as already resolved" with no code or test change, skip steps 9–17: instead, comment on the issue with the evidence (fixing commit + covering test) and close it (or ask the user to). The remaining steps apply only when there is a code or test change to ship.*
 
 9. Branch / worktree:
    - Prefer reusing an existing focused branch or worktree for the issue.
    - If a branch exists without a worktree, use or create a worktree when that best isolates the work.
    - Otherwise create a focused branch named from the issue (e.g. `issue-123-short-slug`); use a worktree when practical.
+   - **Update the branch/worktree against the latest baseline before implementing.** Run `git fetch origin`, then merge the remote default branch into the working branch (e.g. `git merge origin/<default-branch>` — never rebase, per the `git-workflow` skill). Resolve any conflicts and commit the merge before writing new code, so the work starts from the current `origin` main.
 10. Implement the smallest complete change that satisfies the chosen approach.
 11. Update tests and documentation per the repository's contribution guidance (`CONTRIBUTING.md`, `AGENTS.md`, or equivalent) when present.
 12. Run targeted verification first (focused tests, types, lint) on the changed area, then broader verification when the change has wider impact.
-13. **If the change is UI/UX, also:**
-    - Run the app (or Storybook / component sandbox) and load the affected screens or components.
-    - Compare against the design or current state from the issue. Capture before/after screenshots or short recordings.
+13. **If the change is UI/UX, rendering and visual evidence are mandatory (do not skip).** A UI/UX change handed off without screenshots of the actual rendered result is incomplete:
+    - Run the app (or Storybook / component sandbox) and load every affected screen, component, and state — never assert the UI is correct without rendering it.
+    - Capture before/after screenshots (or short recordings) of each affected screen and state, at the project's supported breakpoints and across light/dark/system themes when applicable.
+    - Compare the captures against the design or the issue's expected state, and fix any discrepancy before handoff.
     - Verify accessibility: keyboard navigation and focus order, visible focus styles, ARIA roles/labels for new interactive elements, color contrast meeting WCAG AA (or the project's standard), and `prefers-reduced-motion` respected for animations.
-    - Verify responsive behavior at the project's supported breakpoints and across light/dark/system themes when applicable.
     - Reuse existing design-system components and tokens; do not introduce one-off styles for primitives that already exist.
-    - Attach before/after media and accessibility notes to the PR description so reviewers can evaluate without re-running the app.
+    - **Attach the screenshots/recordings and accessibility notes to the PR — this is mandatory, not optional.** The PR must be fully reviewable from these artifacts alone, without re-running the app, so the change can be judged asynchronously. A UI/UX PR missing this visual evidence is not ready for `/create-pr`.
 14. **Run the project's full verification gate before invoking `/create-pr`.** Prefer the project's aggregator script when it exists (e.g. `bun run check`) — that's the canonical "ready to commit" signal. Otherwise run the per-step gate explicitly:
 
     ```bash
@@ -130,9 +147,13 @@ If you cannot run the grill skill, do not silently downgrade it to "doc-grounded
     Do not skip steps because they "should pass." If any step fails, fix the cause; do not invoke `/create-pr` with a red gate.
 
 15. **Review the implementation before handoff (do not skip).** After the gate is green but before `/create-pr`, audit your own change critically — as a reviewer who did not write it would:
-    - **Matches the issue.** The change satisfies the original issue's intent, description, and acceptance criteria. The exception: when the scope was deliberately changed across later turns or grill sessions, match that updated intent instead — and note the divergence from the original issue text in the PR description so reviewers understand why.
+    - **Check against the spec, criterion by criterion.** Walk each acceptance criterion in the issue (and any scope confirmed across later turns/grill) and confirm the change actually satisfies it, citing the code or test that does so. Anything unmet is unfinished work, not a follow-up. When the scope was deliberately changed, match that updated intent instead — and note the divergence from the original issue text in the PR description so reviewers understand why.
     - **No shortcuts.** No stubbed logic, hardcoded values standing in for real behavior, `TODO`/`FIXME` left behind, swallowed errors, skipped/`.only`/commented-out tests, or "happy path only" handling of cases the issue requires. Re-trace the full code path from step 5 and confirm the real layer was fixed, not just the symptom.
     - **No tech debt introduced.** No dead code, no duplication that should be extracted, no copy-paste of an existing pattern that has a shared helper, no weakened types (`any`, unsafe casts) or loosened lint/type rules to make the gate pass, no leftover debug output.
     - **Consistency.** The change follows the repo's conventions (from step 4 agent context and `docs/code-style.md`) and reuses existing components/utilities rather than reinventing them.
     - If this review surfaces a problem, fix it and re-run the relevant verification (step 12/14) before proceeding. Do not defer found issues to "a follow-up" unless the user explicitly agrees.
-16. Invoke `/create-pr` to commit, push, and open the draft pull request. Include `Closes #<issue>` in the PR body.
+16. **Run a code review before handoff (GATE D, do not skip).** Invoke the `/review` skill/command on the change (the branch diff) and address its findings before opening the PR. This is a separate, fresh review of the diff — distinct from your own step-15 self-review.
+    - Discovery hint: look for a skill or command named `review` / `code-review` (e.g. `~/.cursor/skills/review/`, `.cursor/skills/...`, `.agents/skills/...`). Run the actual skill; do not substitute a self-summary for it.
+    - Fix every issue it surfaces and re-run the relevant verification (step 12/14) before proceeding. Do not defer findings to "a follow-up" unless the user explicitly agrees.
+    - If no `/review` skill is registered, say so explicitly, then perform a thorough manual diff review covering correctness, security, error handling, tests, and style.
+17. **Hand off via `/create-pr` (GATE D, mandatory).** Always invoke `/create-pr` to commit, push, and open the draft pull request — this is the required end of the workflow whenever there is a code or test change to ship. The commit created during this handoff must use a Conventional Commit subject (`type(scope): summary`). Do not end the turn by only summarizing the change in chat; the opened PR is the deliverable. Include `Closes #<issue>` in the PR body.
