@@ -42,7 +42,11 @@ This workflow is explicit permission to commit relevant changes and push to the 
 
 5. If there is nothing new to commit (aside from an already-finished merge), skip to step 8.
 6. Stage only relevant files. Exclude secrets and unrelated local changes.
-7. Commit with a concise message via HEREDOC.
+7. Commit with a concise Conventional Commit message via HEREDOC:
+   - Subject format: `type(scope): summary`.
+   - Use one of: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`.
+   - Pick the narrowest accurate scope; omit the scope only when no meaningful scope exists.
+   - Use imperative mood, lowercase the summary after the type/scope, and do not end the subject with a period.
 8. Push (set upstream if needed):
 
    ```bash
