@@ -9,7 +9,7 @@ Project-specific validation rules for GocciaScript issues. Use this skill with t
 
 ## Spec Lookup
 
-For ECMA-262 or ECMA-402 semantics, use the pinned `tc39-mcp@0.3.0` server from the project MCP config under `.agents/mcp/` when it is available:
+For ECMA-262 or ECMA-402 semantics, use the pinned `tc39-mcp@0.4.0` server from the project MCP config under `.agents/mcp/` when it is available:
 
 1. Use `spec.search` when the exact clause id is unknown.
 2. Use `clause.get` for the relevant clause before deciding expected behavior.
