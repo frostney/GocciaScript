@@ -1,7 +1,7 @@
 name: test262 weekly bump
 
-# Pulls the latest tc39/test262 main SHA, updates the pin in ci.yml +
-# pr.yml, and opens a PR.  CI on the PR runs the conformance suite
+# Pulls the latest tc39/test262 main SHA, updates the shared pin file,
+# and opens a PR.  CI on the PR runs the conformance suite
 # against the new SHA and posts the per-category delta vs. the cached
 # main baseline; merge once the delta is acceptable.
 #
@@ -34,7 +34,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Update pin in workflows
+      - name: Update pin
         run: bun scripts/test262-bump-pin.ts ${{ steps.latest.outputs.sha }}
 
       # Skip PR creation when the pin is already at the latest SHA.  Without
@@ -44,7 +44,7 @@ jobs:
       # tree matches HEAD, so bump-pin made no edits.
       - id: changed
         run: |
-          if git diff --quiet -- .github/workflows/ci.yml .github/workflows/pr.yml; then
+          if git diff --quiet -- scripts/test262-suite-sha.txt; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "test262 already pinned to ${{ steps.latest.outputs.short }} — no PR to open."
           else

@@ -584,6 +584,16 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
 
+      - name: Read test262 pin
+        id: test262-pin
+        run: |
+          sha="$(tr -d '[:space:]' < scripts/test262-suite-sha.txt)"
+          if ! [[ "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Invalid test262 pin in scripts/test262-suite-sha.txt"
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
       - name: Checkout test262 suite
         uses: actions/checkout@v5
         with:
@@ -591,10 +601,9 @@ jobs:
           # Pin to an immutable SHA so the cached `main` baseline and a PR
           # run measure the same upstream test corpus.  `ref: main` would
           # let new tests land mid-PR and surface as spurious deltas
-          # against the cached baseline.  Bump in lockstep with pr.yml
-          # when refreshing the suite.  The weekly cron at
-          # .github/workflows/test262-bump.yml updates both files together.
-          ref: d0c1b4555b03dd404873fd6422a4b5da00136500
+          # against the cached baseline.  The weekly cron at
+          # .github/workflows/test262-bump.yml updates the shared pin file.
+          ref: ${{ steps.test262-pin.outputs.sha }}
           path: test262-suite
           fetch-depth: 1
 
