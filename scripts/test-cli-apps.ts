@@ -27,7 +27,7 @@ import {
   BUNDLER,
   BENCHRUNNER,
 } from "./test-cli/binaries";
-import { containsLine, runLoaderJson } from "./test-cli/assertions";
+import { containsLine, normalizeLineEndings, runLoaderJson } from "./test-cli/assertions";
 import { makeTmpFactory, clean } from "./test-cli/tmpdir";
 
 const makeTmp = makeTmpFactory("goccia-apps-");
@@ -619,7 +619,7 @@ console.log("Bare Loader: test262 host marker is hidden by default...");
   });
   if (proc.exitCode !== 0)
     throw new Error(`Bare default test262 marker probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
-  if (proc.stdout.toString().trim() !== "undefined\nundefined")
+  if (normalizeLineEndings(proc.stdout.toString()).trim() !== "undefined\nundefined")
     throw new Error(`Bare default should hide test262 host hooks, got: ${proc.stdout.toString()}`);
 }
 
@@ -643,7 +643,7 @@ console.log("Bare Loader: --test262-host exposes Goccia test262 hooks...");
   const expected = "true\nobject\nfunction\nfunction\ntrue\nfunction\n3";
   if (proc.exitCode !== 0)
     throw new Error(`Bare --test262-host hook probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
-  if (proc.stdout.toString().trim() !== expected)
+  if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
     throw new Error(`Bare --test262-host should expose realm hooks, got: ${proc.stdout.toString()}`);
 }
 
@@ -684,7 +684,7 @@ console.log("Bare Loader: --test262-host child realms expose host records...");
   ].join("\n");
   if (proc.exitCode !== 0)
     throw new Error(`Bare --test262-host child realm probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
-  if (proc.stdout.toString().trim() !== expected)
+  if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
     throw new Error(`Bare --test262-host child realm hooks got: ${proc.stdout.toString()}`);
 }
 
@@ -712,7 +712,7 @@ console.log("Bare Loader: --test262-host child realm globals expose host hooks..
   ].join("\n");
   if (proc.exitCode !== 0)
     throw new Error(`Bare --test262-host child global hook probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
-  if (proc.stdout.toString().trim() !== expected)
+  if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
     throw new Error(`Bare --test262-host child global hooks got: ${proc.stdout.toString()}`);
 }
 
@@ -745,7 +745,7 @@ console.log("Bare Loader: bytecode --test262-host eval is direct eval...");
   const expected = "42\n7\nshadow:x\n7\n2\n2\n2";
   if (proc.exitCode !== 0)
     throw new Error(`Bare bytecode direct eval probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
-  if (proc.stdout.toString().trim() !== expected)
+  if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
     throw new Error(`Bare bytecode direct eval got: ${proc.stdout.toString()}`);
 }
 
@@ -789,7 +789,7 @@ console.log("Bare Loader: --test262-host eval validates destructuring pattern ea
     });
     if (proc.exitCode !== 0)
       throw new Error(`Bare ${mode.label} eval destructuring early-error probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
-    if (proc.stdout.toString().trim() !== expected)
+    if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
       throw new Error(`Bare ${mode.label} eval destructuring early errors got: ${proc.stdout.toString()}`);
   }
 }
@@ -858,7 +858,7 @@ console.log("Bare Loader: bytecode --test262-host eval inherits arrow lexical su
   const expected = "7\n7\n1\ntrue";
   if (proc.exitCode !== 0)
     throw new Error(`Bare bytecode eval arrow lexical probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
-  if (proc.stdout.toString().trim() !== expected)
+  if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
     throw new Error(`Bare bytecode eval arrow lexical got: ${proc.stdout.toString()}`);
 }
 
@@ -884,7 +884,7 @@ console.log("Bare Loader: bytecode direct eval creates top-level sloppy var...")
   });
   if (proc.exitCode !== 0)
     throw new Error(`Bare bytecode sloppy direct eval var probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
-  if (proc.stdout.toString().trim() !== "true\n33\n33\ntrue")
+  if (normalizeLineEndings(proc.stdout.toString()).trim() !== "true\n33\n33\ntrue")
     throw new Error(`Bare bytecode sloppy direct eval var got: ${proc.stdout.toString()}`);
 }
 
@@ -907,7 +907,7 @@ console.log("Bare Loader: bytecode module direct eval keeps module this binding.
   });
   if (proc.exitCode !== 0)
     throw new Error(`Bare bytecode module direct eval this probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
-  if (proc.stdout.toString().trim() !== "true\ntrue")
+  if (normalizeLineEndings(proc.stdout.toString()).trim() !== "true\ntrue")
     throw new Error(`Bare bytecode module direct eval this got: ${proc.stdout.toString()}`);
 }
 
