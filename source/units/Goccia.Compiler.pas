@@ -702,6 +702,8 @@ var
   RetReg: UInt8;
   Ctx: TGocciaCompilationContext;
   HasFunctionDecl, BodyAbrupt, StatementAbrupt: Boolean;
+  PredeclaredLexicalStart, PredeclaredLexicalIndex: Integer;
+  PredeclaredLocal: TGocciaCompilerLocal;
 begin
   FModule := TGocciaBytecodeModule.Create(GOCCIA_RUNTIME_TAG, FSourcePath);
   FCurrentTemplate := TGocciaFunctionTemplate.Create('<module>');
@@ -734,8 +736,18 @@ begin
     begin
       // Pre-declare lexical locals so function declarations can resolve
       // upvalue captures for let/const variables declared later in the body
+      PredeclaredLexicalStart := FCurrentScope.LocalCount;
       for I := 0 to AProgram.Body.Count - 1 do
         PredeclareLexicalLocals(AProgram.Body[I], FCurrentScope);
+      Ctx := BuildContext;
+      for PredeclaredLexicalIndex := PredeclaredLexicalStart to
+        FCurrentScope.LocalCount - 1 do
+      begin
+        PredeclaredLocal := FCurrentScope.GetLocal(PredeclaredLexicalIndex);
+        if not PredeclaredLocal.IsVar then
+          EmitInstruction(Ctx, EncodeABC(OP_LOAD_HOLE,
+            PredeclaredLocal.Slot, 0, 0));
+      end;
 
       // Hoist function declarations: compile initializers before other statements
       for I := 0 to AProgram.Body.Count - 1 do

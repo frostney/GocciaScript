@@ -104,6 +104,7 @@ type
 
     // Walk the parent chain to find the nearest owning class / superclass
     function FindOwningClass: TGocciaValue;
+    function FindOwningClassAfter(const AAfter: TGocciaValue): TGocciaValue;
     function FindSuperClass: TGocciaValue;
     function FindSuperConstructor: TGocciaValue;
     function FindNewTarget: TGocciaValue;
@@ -371,6 +372,29 @@ begin
     if Assigned(Result) then Exit;
     if Current.IsFunctionBoundary then
       Exit(nil);
+    Current := Current.FParent;
+  end;
+  Result := nil;
+end;
+
+function TGocciaScope.FindOwningClassAfter(const AAfter: TGocciaValue): TGocciaValue;
+var
+  Current: TGocciaScope;
+  Candidate: TGocciaValue;
+  FoundAfter: Boolean;
+begin
+  Current := Self;
+  FoundAfter := not Assigned(AAfter);
+  while Assigned(Current) do
+  begin
+    Candidate := Current.GetOwningClass;
+    if Assigned(Candidate) then
+    begin
+      if FoundAfter and (Candidate <> AAfter) then
+        Exit(Candidate);
+      if Candidate = AAfter then
+        FoundAfter := True;
+    end;
     Current := Current.FParent;
   end;
   Result := nil;

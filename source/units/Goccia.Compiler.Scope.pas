@@ -58,6 +58,9 @@ type
     FNextSlot: UInt8;
     FMaxSlot: UInt8;
     FPrivatePrefix: string;
+    FPrivateNames: array of string;
+    FPrivatePrefixes: array of string;
+    FPrivateNameCount: Integer;
     FIsArrow: Boolean;
     FDirectEvalSyntheticArgumentsSlot: Integer;
     FWithBindingNames: array of string;
@@ -117,6 +120,10 @@ type
       out AValue: TGocciaCompileTimeValue): Boolean;
     function HasVisibleLocal(const AName: string): Boolean;
     function ResolvePrivatePrefix: string;
+    function ResolvePrivatePrefixForName(const AName: string): string;
+    procedure DeclarePrivateNamePrefix(const AName, APrefix: string);
+    function PrivateNameMark: Integer;
+    procedure RestorePrivateNameMark(const AMark: Integer);
     procedure PushWithBinding(const AHiddenName: string);
     procedure PopWithBinding;
     function GetWithBindingName(const AIndex: Integer): string;
@@ -187,6 +194,7 @@ begin
   FDepth := ADepth;
   FNextSlot := 0;
   FMaxSlot := 0;
+  FPrivateNameCount := 0;
   FDirectEvalSyntheticArgumentsSlot := -1;
   FWithBindingCount := 0;
   if Assigned(AParent) and (AParent.FWithBindingCount > 0) then
@@ -538,6 +546,47 @@ begin
     S := S.FParent;
   end;
   Result := '';
+end;
+
+function TGocciaCompilerScope.ResolvePrivatePrefixForName(
+  const AName: string): string;
+var
+  I: Integer;
+begin
+  for I := FPrivateNameCount - 1 downto 0 do
+    if FPrivateNames[I] = AName then
+      Exit(FPrivatePrefixes[I]);
+
+  if Assigned(FParent) then
+    Exit(FParent.ResolvePrivatePrefixForName(AName));
+
+  Result := ResolvePrivatePrefix;
+end;
+
+procedure TGocciaCompilerScope.DeclarePrivateNamePrefix(const AName,
+  APrefix: string);
+begin
+  if FPrivateNameCount >= Length(FPrivateNames) then
+  begin
+    SetLength(FPrivateNames, FPrivateNameCount * 2 + 8);
+    SetLength(FPrivatePrefixes, FPrivateNameCount * 2 + 8);
+  end;
+  FPrivateNames[FPrivateNameCount] := AName;
+  FPrivatePrefixes[FPrivateNameCount] := APrefix;
+  Inc(FPrivateNameCount);
+end;
+
+function TGocciaCompilerScope.PrivateNameMark: Integer;
+begin
+  Result := FPrivateNameCount;
+end;
+
+procedure TGocciaCompilerScope.RestorePrivateNameMark(const AMark: Integer);
+begin
+  if AMark < 0 then
+    Exit;
+  if AMark < FPrivateNameCount then
+    FPrivateNameCount := AMark;
 end;
 
 procedure TGocciaCompilerScope.PushWithBinding(const AHiddenName: string);

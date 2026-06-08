@@ -244,10 +244,12 @@ type
     FFinallyBlock: TGocciaBlockStatement;
     FCatchParamType: string;
     FCatchPattern: TGocciaMatchPattern;
+    FCatchBindingPattern: TGocciaDestructuringPattern;
   public
     constructor Create(const ABlock: TGocciaBlockStatement; const ACatchParam: string;
       const ACatchBlock, AFinallyBlock: TGocciaBlockStatement; const ALine, AColumn: Integer;
-      const ACatchPattern: TGocciaMatchPattern = nil);
+      const ACatchPattern: TGocciaMatchPattern = nil;
+      const ACatchBindingPattern: TGocciaDestructuringPattern = nil);
     function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property Block: TGocciaBlockStatement read FBlock;
     property CatchParam: string read FCatchParam;
@@ -255,6 +257,7 @@ type
     property FinallyBlock: TGocciaBlockStatement read FFinallyBlock;
     property CatchParamType: string read FCatchParamType write FCatchParamType;
     property CatchPattern: TGocciaMatchPattern read FCatchPattern;
+    property CatchBindingPattern: TGocciaDestructuringPattern read FCatchBindingPattern;
   end;
 
   // Is this not a statement?
@@ -879,7 +882,8 @@ end;
 
   constructor TGocciaTryStatement.Create(const ABlock: TGocciaBlockStatement;
     const ACatchParam: string; const ACatchBlock, AFinallyBlock: TGocciaBlockStatement;
-    const ALine, AColumn: Integer; const ACatchPattern: TGocciaMatchPattern = nil);
+    const ALine, AColumn: Integer; const ACatchPattern: TGocciaMatchPattern = nil;
+    const ACatchBindingPattern: TGocciaDestructuringPattern = nil);
 begin
   inherited Create(ALine, AColumn);
   FBlock := ABlock;
@@ -887,6 +891,7 @@ begin
   FCatchBlock := ACatchBlock;
   FFinallyBlock := AFinallyBlock;
   FCatchPattern := ACatchPattern;
+  FCatchBindingPattern := ACatchBindingPattern;
 end;
 
   { TGocciaClassMethod }

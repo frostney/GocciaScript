@@ -26,6 +26,59 @@ test("catch without parameter doesn't affect outer variables", () => {
   expect(outerVar2).toBe("original");
 });
 
+test("catch destructuring closes iterators before entering catch block", () => {
+  let doneCallCount = 0;
+  const iter = {};
+  iter[Symbol.iterator] = () => ({
+    next() {
+      return { value: null, done: false };
+    },
+    return() {
+      doneCallCount += 1;
+      return {};
+    },
+  });
+
+  let ranCatch = false;
+  try {
+    throw iter;
+  } catch ([x]) {
+    expect(x).toBe(null);
+    expect(doneCallCount).toBe(1);
+    ranCatch = true;
+  }
+
+  expect(ranCatch).toBe(true);
+});
+
+test("catch destructuring failure runs finally before rethrowing", () => {
+  let log = "";
+
+  try {
+    try {
+      throw null;
+    } catch ({ x }) {
+      log += "catch";
+    } finally {
+      log += "finally";
+    }
+  } catch {
+    log += "outer";
+  }
+
+  expect(log).toBe("finallyouter");
+});
+
+test("catch destructuring defaults observe catch parameter TDZ", () => {
+  expect(() => {
+    try {
+      throw [];
+    } catch ([x = x]) {
+      x;
+    }
+  }).toThrow(ReferenceError);
+});
+
 test("nested catch parameters with same name", () => {
   let finalResult = "";
   try {
