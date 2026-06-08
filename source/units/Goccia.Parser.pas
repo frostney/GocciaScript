@@ -232,6 +232,10 @@ type
     function Statement: TGocciaStatement;
     function StatementWithoutDirectLabels: TGocciaStatement;
     function IterationBodyStatement: TGocciaStatement;
+    function IsLabelledFunctionDeclaration(
+      const AStatement: TGocciaStatement): Boolean;
+    procedure RejectLabelledFunctionStatementBody(
+      const AStatement: TGocciaStatement; const ALine, AColumn: Integer);
     function DeclarationStatement: TGocciaStatement;
     function ExpressionStatement: TGocciaStatement;
     function BlockStatement: TGocciaBlockStatement;
@@ -3898,6 +3902,23 @@ begin
   end;
 end;
 
+function TGocciaParser.IsLabelledFunctionDeclaration(
+  const AStatement: TGocciaStatement): Boolean;
+begin
+  Result := Assigned(AStatement) and (AStatement.LabelCount > 0) and
+    (AStatement is TGocciaFunctionDeclaration);
+end;
+
+procedure TGocciaParser.RejectLabelledFunctionStatementBody(
+  const AStatement: TGocciaStatement; const ALine, AColumn: Integer);
+begin
+  if IsLabelledFunctionDeclaration(AStatement) then
+    raise TGocciaSyntaxError.Create(
+      'Invalid labelled function declaration',
+      ALine, AColumn, FFileName, FSourceLines,
+      'Wrap the labelled function in a block or move it out of this statement body');
+end;
+
 // ES2026 §14.13 Labelled Statements
 function TGocciaParser.LabeledStatement: TGocciaStatement;
 var
@@ -4137,9 +4158,13 @@ begin
     SSuggestCloseParenCondition);
 
   Consequent := StatementWithoutDirectLabels;
+  RejectLabelledFunctionStatementBody(Consequent, Line, Column);
 
   if Match(gttElse) then
-    Alternate := StatementWithoutDirectLabels
+  begin
+    Alternate := StatementWithoutDirectLabels;
+    RejectLabelledFunctionStatementBody(Alternate, Line, Column);
+  end
   else
     Alternate := nil;
 
@@ -4515,6 +4540,7 @@ begin
           SSuggestCloseParenForOf);
 
         BodyStmt := IterationBodyStatement;
+        RejectLabelledFunctionStatementBody(BodyStmt, Line, Column);
         Result := TGocciaForOfStatement.Create(True, BindingName, nil,
           IterableExpr, BodyStmt, Line, Column, nil, nil, True, True);
         Exit;
@@ -4556,6 +4582,7 @@ begin
           SSuggestCloseParenForOf);
 
         BodyStmt := IterationBodyStatement;
+        RejectLabelledFunctionStatementBody(BodyStmt, Line, Column);
         Result := TGocciaForOfStatement.Create(True, BindingName, nil,
           IterableExpr, BodyStmt, Line, Column, nil, nil, True, False);
         Exit;
@@ -4653,6 +4680,7 @@ begin
           SSuggestCloseParenForOf);
 
         BodyStmt := IterationBodyStatement;
+        RejectLabelledFunctionStatementBody(BodyStmt, Line, Column);
         Result := TGocciaForInStatement.Create(IsConst, BindingName,
           BindingPattern, IterableExpr, BodyStmt, Line, Column);
         TGocciaForInStatement(Result).IsVar := IsVar;
@@ -4668,6 +4696,7 @@ begin
           SSuggestCloseParenForOf);
 
         BodyStmt := IterationBodyStatement;
+        RejectLabelledFunctionStatementBody(BodyStmt, Line, Column);
 
         if IsAwait then
         begin
@@ -4717,6 +4746,7 @@ begin
           SSuggestCloseParenForOf);
 
         BodyStmt := IterationBodyStatement;
+        RejectLabelledFunctionStatementBody(BodyStmt, Line, Column);
         Result := TGocciaForInStatement.Create(False, '', nil,
           IterableExpr, BodyStmt, Line, Column, AssignmentTarget);
         Exit;
@@ -4736,6 +4766,7 @@ begin
           SSuggestCloseParenForOf);
 
         BodyStmt := IterationBodyStatement;
+        RejectLabelledFunctionStatementBody(BodyStmt, Line, Column);
         if IsAwait then
           Result := TGocciaForAwaitOfStatement.Create(False, '', nil,
             IterableExpr, BodyStmt, Line, Column, nil, AssignmentTarget)
@@ -4959,6 +4990,7 @@ begin
 
   // ---- BODY ----
   BodyStmt := IterationBodyStatement;
+  RejectLabelledFunctionStatementBody(BodyStmt, ALine, AColumn);
 
   Result := TGocciaForStatement.Create(InitStmt, CondExpr, UpdateExpr,
     BodyStmt, ALine, AColumn);
@@ -4994,6 +5026,7 @@ begin
     SSuggestCloseParenCondition);
 
   BodyStmt := IterationBodyStatement;
+  RejectLabelledFunctionStatementBody(BodyStmt, Line, Column);
 
   Result := TGocciaWhileStatement.Create(Condition, BodyStmt, Line, Column);
 end;
@@ -5029,6 +5062,7 @@ begin
   end;
 
   BodyStmt := IterationBodyStatement;
+  RejectLabelledFunctionStatementBody(BodyStmt, Line, Column);
 
   Consume(gttWhile, 'Expected "while" after do body',
     SSuggestAddWhileAfterDo);
@@ -5070,6 +5104,7 @@ begin
     SSuggestCloseParenExpression);
 
   BodyStmt := StatementWithoutDirectLabels;
+  RejectLabelledFunctionStatementBody(BodyStmt, Line, Column);
 
   Result := TGocciaWithStatement.Create(ObjectExpr, BodyStmt, Line, Column);
 end;

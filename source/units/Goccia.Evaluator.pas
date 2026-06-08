@@ -452,6 +452,33 @@ begin
     HoistSingleFunctionDeclaration(ANodes[I], AContext, ABlockScoped);
 end;
 
+procedure ActivateAnnexBBlockFunctionDeclaration(
+  const AStatement: TGocciaStatement; const AContext: TGocciaEvaluationContext);
+var
+  FuncDecl: TGocciaFunctionDeclaration;
+  Name: string;
+  Value: TGocciaValue;
+begin
+  if not AContext.NonStrictMode then
+    Exit;
+  if AStatement is TGocciaFunctionDeclaration then
+    FuncDecl := TGocciaFunctionDeclaration(AStatement)
+  else if AStatement is TGocciaExportFunctionDeclaration then
+    FuncDecl := TGocciaExportFunctionDeclaration(AStatement).Declaration
+  else
+    Exit;
+
+  if FuncDecl.FunctionExpression.IsAsync or FuncDecl.FunctionExpression.IsGenerator then
+    Exit;
+
+  Name := FuncDecl.Name;
+  if not AContext.Scope.ContainsOwnLexicalBinding(Name) then
+    Exit;
+
+  Value := AContext.Scope.GetBinding(Name, AStatement.Line, AStatement.Column).Value;
+  AContext.Scope.DefineVariableBinding(Name, Value, True);
+end;
+
 procedure AddUniqueEvalName(const ANames: TStringList; const AName: string);
 begin
   if (AName <> '') and (ANames.IndexOf(AName) < 0) then
@@ -1433,6 +1460,7 @@ begin
   if AContext.CoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) then
     TGocciaCoverageTracker.Instance.RecordLineHit(
       AContext.CurrentFilePath, AStatement.Line);
+  ActivateAnnexBBlockFunctionDeclaration(AStatement, AContext);
   Result := AStatement.Execute(AContext);
   if (Result.Kind = cfkBreak) and (Result.TargetLabel <> '') and
      AStatement.HasLabel(Result.TargetLabel) then
@@ -4860,12 +4888,20 @@ var
   procedure ActivateAnnexBFunctionDeclaration(
     const AStatement: TGocciaStatement;
     const ABodyContext: TGocciaEvaluationContext);
+  var
+    FuncDecl: TGocciaFunctionDeclaration;
   begin
     if not ABodyContext.NonStrictMode then
       Exit;
-    if (AStatement is TGocciaFunctionDeclaration) or
-       (AStatement is TGocciaExportFunctionDeclaration) then
-      HoistSingleFunctionDeclaration(AStatement, ABodyContext, False);
+    if AStatement is TGocciaFunctionDeclaration then
+      FuncDecl := TGocciaFunctionDeclaration(AStatement)
+    else if AStatement is TGocciaExportFunctionDeclaration then
+      FuncDecl := TGocciaExportFunctionDeclaration(AStatement).Declaration
+    else
+      Exit;
+    if FuncDecl.FunctionExpression.IsAsync or FuncDecl.FunctionExpression.IsGenerator then
+      Exit;
+    HoistSingleFunctionDeclaration(AStatement, ABodyContext, False);
   end;
 begin
   ConditionResult := EvaluateConditionWithPatternBindings(AIfStatement.Condition,
@@ -5514,6 +5550,8 @@ begin
   CaughtError := nil;
   HasCaughtError := False;
   GC := TGarbageCollector.Instance;
+  if NeedsSwitchScope and Assigned(GC) then
+    GC.AddTempRoot(SwitchBlockContext.Scope);
   if HasUsingDeclarations then
   begin
     Tracker := TGocciaDisposalTracker.Create;
@@ -5644,8 +5682,8 @@ begin
       SwitchBlockContext.DisposalTracker := nil;
     end;
 
-    if NeedsSwitchScope then
-      SwitchBlockContext.Scope.Free;
+    if NeedsSwitchScope and Assigned(GC) then
+      GC.RemoveTempRoot(SwitchBlockContext.Scope);
 
     if HasCaughtError and Assigned(GC) and Assigned(CaughtError) then
       GC.RemoveTempRoot(CaughtError);
