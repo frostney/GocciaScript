@@ -116,3 +116,14 @@ test("destructuring with computed symbol key on class reaches static symbol-keye
   expect(typeof m).toBe("function");
   expect(m()).toBe("static-method-result");
 });
+
+test("object rest excludes the originally evaluated computed key", () => {
+  let index = 0;
+  let value, rest;
+
+  ({ [++index]: value, ...rest } = { 1: "one", 2: "two" });
+
+  expect(index).toBe(1);
+  expect(value).toBe("one");
+  expect(rest).toEqual({ 2: "two" });
+});

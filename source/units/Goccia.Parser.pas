@@ -101,6 +101,7 @@ type
     procedure DeclarePrivateName(const AName: string);
     procedure RecordPrivateNameReference(const AName: string; const ALine, AColumn: Integer);
     function CurrentPrivateClassContext: TGocciaPrivateClassContext;
+    function HasVisiblePrivateNameDeclaration(const AName: string): Boolean;
     procedure EnterFunctionLabelScope(out ASavedActiveLabels, ASavedActiveIterationLabels: TStringList; out ASavedDirectLabelStart: Integer);
     procedure LeaveFunctionLabelScope(const ASavedActiveLabels, ASavedActiveIterationLabels: TStringList; const ASavedDirectLabelStart: Integer);
 
@@ -464,6 +465,16 @@ begin
   Result := FPrivateClassContexts[FPrivateClassContexts.Count - 1];
 end;
 
+function TGocciaParser.HasVisiblePrivateNameDeclaration(const AName: string): Boolean;
+var
+  I: Integer;
+begin
+  for I := FPrivateClassContexts.Count - 1 downto 0 do
+    if FPrivateClassContexts[I].HasDeclaration(AName) then
+      Exit(True);
+  Result := False;
+end;
+
 procedure TGocciaParser.EnterFunctionLabelScope(out ASavedActiveLabels,
   ASavedActiveIterationLabels: TStringList; out ASavedDirectLabelStart: Integer);
 begin
@@ -504,7 +515,7 @@ begin
   for I := 0 to Context.ReferenceCount - 1 do
   begin
     Ref := Context.GetReference(I);
-    if not Context.HasDeclaration(Ref.Name) then
+    if not HasVisiblePrivateNameDeclaration(Ref.Name) then
       raise TGocciaSyntaxError.Create(
         Format('Private field ''#%s'' must be declared in an enclosing class', [Ref.Name]),
         Ref.Line, Ref.Column, FFileName, FSourceLines,
@@ -1191,7 +1202,8 @@ begin
     Operator := Advance; // consume 'yield'
     if Match(gttStar) then
       Result := TGocciaYieldExpression.Create(Assignment, True, Operator.Line, Operator.Column)
-    else if CheckSemicolonOrASI or Check(gttRightBrace) or Check(gttRightParen) or Check(gttComma) then
+    else if CheckSemicolonOrASI or Check(gttRightBrace) or
+      Check(gttRightParen) or Check(gttRightBracket) or Check(gttComma) then
       Result := TGocciaYieldExpression.Create(nil, False, Operator.Line, Operator.Column)
     else
       Result := TGocciaYieldExpression.Create(Assignment, False, Operator.Line, Operator.Column);
@@ -5154,6 +5166,7 @@ var
   TryStmt: TGocciaTryStatement;
   CatchType: string;
   CatchPattern: TGocciaMatchPattern;
+  CatchBindingPattern: TGocciaDestructuringPattern;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
@@ -5166,6 +5179,7 @@ begin
   FinallyBlock := nil;
   CatchType := '';
   CatchPattern := nil;
+  CatchBindingPattern := nil;
 
   if Match(gttCatch) then
   begin
@@ -5173,18 +5187,23 @@ begin
     begin
       Consume(gttLeftParen, 'Expected "(" after "catch"',
         SSuggestOpenParenCatchClause);
-      CatchParam := ConsumeIdentifierBinding('Expected catch parameter',
-        SSuggestProvideCatchParameter).Lexeme;
-      if Check(gttColon) then
+      if Check(gttLeftBracket) or Check(gttLeftBrace) then
+        CatchBindingPattern := ParsePattern
+      else
       begin
-        Advance;
-        CatchType := CollectTypeAnnotation([gttRightParen]);
-        if CatchType = '' then
-          raise TGocciaSyntaxError.Create('Expected type annotation after ":"',
-            Peek.Line, Peek.Column, FFileName, FSourceLines);
+        CatchParam := ConsumeIdentifierBinding('Expected catch parameter',
+          SSuggestProvideCatchParameter).Lexeme;
+        if Check(gttColon) then
+        begin
+          Advance;
+          CatchType := CollectTypeAnnotation([gttRightParen]);
+          if CatchType = '' then
+            raise TGocciaSyntaxError.Create('Expected type annotation after ":"',
+              Peek.Line, Peek.Column, FFileName, FSourceLines);
+        end;
+        if (CatchType = '') and MatchContextualKeyword(KEYWORD_IS) then
+          CatchPattern := ParseMatchPattern;
       end;
-      if (CatchType = '') and MatchContextualKeyword(KEYWORD_IS) then
-        CatchPattern := ParseMatchPattern;
       Consume(gttRightParen, 'Expected ")" after catch parameter',
         SSuggestCloseParenCatchClause);
     end
@@ -5209,7 +5228,7 @@ begin
       SSuggestMissingCatchOrFinally);
 
   TryStmt := TGocciaTryStatement.Create(Block, CatchParam, CatchBlock,
-    FinallyBlock, Line, Column, CatchPattern);
+    FinallyBlock, Line, Column, CatchPattern, CatchBindingPattern);
   TryStmt.CatchParamType := CatchType;
   Result := TryStmt;
 end;
@@ -7076,6 +7095,7 @@ var
   ObjectExpr: TGocciaObjectExpression;
   IdentifierExpr: TGocciaIdentifierExpression;
   AssignmentExpr: TGocciaAssignmentExpression;
+  DestructuringAssignmentExpr: TGocciaDestructuringAssignmentExpression;
   PrivateMemberExpr: TGocciaPrivateMemberExpression;
   Elements: TObjectList<TGocciaDestructuringPattern>;
   Properties: TObjectList<TGocciaDestructuringProperty>;
@@ -7100,6 +7120,16 @@ begin
       AExpr.Column
     );
   end
+  else if AExpr is TGocciaDestructuringAssignmentExpression then
+  begin
+    DestructuringAssignmentExpr := TGocciaDestructuringAssignmentExpression(AExpr);
+    Result := TGocciaAssignmentDestructuringPattern.Create(
+      DestructuringAssignmentExpr.Left,
+      DestructuringAssignmentExpr.Right,
+      AExpr.Line,
+      AExpr.Column
+    );
+  end
   else if AExpr is TGocciaArrayExpression then
   begin
     ArrayExpr := TGocciaArrayExpression(AExpr);
@@ -7107,7 +7137,8 @@ begin
 
     for I := 0 to ArrayExpr.Elements.Count - 1 do
     begin
-      if ArrayExpr.Elements[I] = nil then
+      if (ArrayExpr.Elements[I] = nil) or
+        (ArrayExpr.Elements[I] is TGocciaHoleExpression) then
         Elements.Add(nil)  // Hole
       else if ArrayExpr.Elements[I] is TGocciaSpreadExpression then
         Elements.Add(TGocciaRestDestructuringPattern.Create(

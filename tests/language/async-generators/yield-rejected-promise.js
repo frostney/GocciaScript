@@ -8,11 +8,7 @@ test("calling next() from a rejection handler does not recurse infinitely", asyn
   // already-processed task during a recursive drain. An async generator
   // yielding a rejected promise rejects iter.next()'s outer promise inside
   // an AwaitValue, and any handler that called iter.next() again would loop
-  // until the call stack overflowed (observed as SIGSEGV). This test only
-  // requires the chain to terminate; the post-rejection iterator semantics
-  // (whether the generator is "completed" or resumes after the failed yield)
-  // are not asserted here because they depend on AsyncGeneratorYield handling
-  // tracked separately.
+  // until the call stack overflowed (observed as SIGSEGV).
   const source = {
     async *gen() {
       yield Promise.reject(0);
@@ -22,6 +18,7 @@ test("calling next() from a rejection handler does not recurse infinitely", asyn
   const iter = source.gen();
 
   let firstRejection;
+  let secondResult;
   let chainSettled = false;
   await new Promise((resolve, reject) => {
     iter.next().then(
@@ -29,7 +26,7 @@ test("calling next() from a rejection handler does not recurse infinitely", asyn
       (err) => {
         firstRejection = err;
         iter.next().then(
-          () => { chainSettled = true; resolve(); },
+          (result) => { secondResult = result; chainSettled = true; resolve(); },
           () => { chainSettled = true; resolve(); },
         );
       },
@@ -37,6 +34,7 @@ test("calling next() from a rejection handler does not recurse infinitely", asyn
   });
 
   expect(firstRejection).toBe(0);
+  expect(secondResult).toEqual({ value: undefined, done: true });
   expect(chainSettled).toBe(true);
 });
 

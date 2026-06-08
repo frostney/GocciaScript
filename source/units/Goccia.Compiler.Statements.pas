@@ -1921,9 +1921,11 @@ end;
 procedure CompileTryStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaTryStatement);
 var
-  CatchReg, PatternTestReg: UInt8;
+  CatchReg, PatternTestReg, CatchInitErrorReg: UInt8;
   HandlerJump, EndJump, PatternMismatchJump, CatchSuccessJump: Integer;
+  CatchInitHandlerJump, CatchInitSuccessJump: Integer;
   HasCatch, HasFinally: Boolean;
+  HasCatchInitHandler: Boolean;
   I: Integer;
   ClosedLocals: array[0..255] of UInt8;
   ClosedCount: Integer;
@@ -1931,8 +1933,12 @@ var
 begin
   HasCatch := Assigned(AStmt.CatchBlock);
   HasFinally := Assigned(AStmt.FinallyBlock);
+  HasCatchInitHandler := Assigned(AStmt.CatchBindingPattern) and HasFinally;
 
   CatchReg := ACtx.Scope.AllocateRegister;
+  CatchInitErrorReg := 0;
+  CatchInitHandlerJump := -1;
+  CatchInitSuccessJump := -1;
   PatternTestReg := 0;
   HandlerJump := EmitJumpInstruction(ACtx, OP_PUSH_HANDLER, CatchReg);
 
@@ -1966,12 +1972,27 @@ begin
     PatternMismatchJump := -1;
     if Assigned(AStmt.CatchPattern) then
       PatternTestReg := ACtx.Scope.AllocateRegister;
+    if HasCatchInitHandler then
+      CatchInitErrorReg := ACtx.Scope.AllocateRegister;
 
-    if AStmt.CatchParam <> '' then
+    if (AStmt.CatchParam <> '') or Assigned(AStmt.CatchBindingPattern) then
     begin
       ACtx.Scope.BeginScope;
-      ACtx.Scope.DeclareLocal(AStmt.CatchParam, False);
-      EmitInstruction(ACtx, EncodeABC(OP_MOVE, ACtx.Scope.NextSlot - 1, CatchReg, 0));
+      if AStmt.CatchParam <> '' then
+      begin
+        ACtx.Scope.DeclareLocal(AStmt.CatchParam, False);
+        EmitInstruction(ACtx, EncodeABC(OP_MOVE, ACtx.Scope.NextSlot - 1, CatchReg, 0));
+      end
+      else
+      begin
+        CollectDestructuringBindings(AStmt.CatchBindingPattern, ACtx.Scope);
+        if HasCatchInitHandler then
+          CatchInitHandlerJump := EmitJumpInstruction(ACtx, OP_PUSH_HANDLER,
+            CatchInitErrorReg);
+        EmitDestructuring(ACtx, AStmt.CatchBindingPattern, CatchReg);
+        if HasCatchInitHandler then
+          EmitInstruction(ACtx, EncodeABC(OP_POP_HANDLER, 0, 0, 0));
+      end;
     end;
 
     if Assigned(AStmt.CatchPattern) then
@@ -1984,7 +2005,7 @@ begin
 
     CompileBlockStatement(ACtx, AStmt.CatchBlock);
 
-    if AStmt.CatchParam <> '' then
+    if (AStmt.CatchParam <> '') or Assigned(AStmt.CatchBindingPattern) then
     begin
       ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
       for I := 0 to ClosedCount - 1 do
@@ -2001,13 +2022,25 @@ begin
     begin
       CatchSuccessJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
       PatchJumpTarget(ACtx, PatternMismatchJump);
-      if AStmt.CatchParam <> '' then
+      if (AStmt.CatchParam <> '') or Assigned(AStmt.CatchBindingPattern) then
         for I := 0 to ClosedCount - 1 do
           EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
       if HasFinally then
         CompileBlockStatement(ACtx, AStmt.FinallyBlock);
       EmitInstruction(ACtx, EncodeABC(OP_THROW, CatchReg, 0, 0));
       PatchJumpTarget(ACtx, CatchSuccessJump);
+      ACtx.Scope.FreeRegister;
+    end;
+
+    if HasCatchInitHandler then
+    begin
+      CatchInitSuccessJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+      PatchJumpTarget(ACtx, CatchInitHandlerJump);
+      for I := 0 to ClosedCount - 1 do
+        EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
+      CompileBlockStatement(ACtx, AStmt.FinallyBlock);
+      EmitInstruction(ACtx, EncodeABC(OP_THROW, CatchInitErrorReg, 0, 0));
+      PatchJumpTarget(ACtx, CatchInitSuccessJump);
       ACtx.Scope.FreeRegister;
     end;
   end
@@ -4496,6 +4529,50 @@ begin
   Result := False;
 end;
 
+procedure RegisterPrivateName(const AScope: TGocciaCompilerScope;
+  const AName, APrefix: string);
+begin
+  if AName = '' then
+    Exit;
+  if AName[1] = '#' then
+    AScope.DeclarePrivateNamePrefix(Copy(AName, 2, MaxInt), APrefix)
+  else
+    AScope.DeclarePrivateNamePrefix(AName, APrefix);
+end;
+
+procedure RegisterClassPrivateNames(const AScope: TGocciaCompilerScope;
+  const AClassDef: TGocciaClassDefinition; const APrefix: string);
+var
+  I: Integer;
+  MethodPair: TGocciaClassMethodMap.TKeyValuePair;
+  ExprPair: TGocciaExpressionMap.TKeyValuePair;
+  GetterPair: TGocciaGetterExpressionMap.TKeyValuePair;
+  SetterPair: TGocciaSetterExpressionMap.TKeyValuePair;
+begin
+  for I := 0 to High(AClassDef.FElements) do
+    if AClassDef.FElements[I].IsPrivate then
+      RegisterPrivateName(AScope, AClassDef.FElements[I].Name, APrefix);
+
+  for ExprPair in AClassDef.PrivateInstanceProperties do
+    RegisterPrivateName(AScope, ExprPair.Key, APrefix);
+  for ExprPair in AClassDef.PrivateStaticProperties do
+    RegisterPrivateName(AScope, ExprPair.Key, APrefix);
+  for MethodPair in AClassDef.PrivateMethods do
+    RegisterPrivateName(AScope, MethodPair.Key, APrefix);
+  for GetterPair in AClassDef.Getters do
+    if (GetterPair.Key <> '') and (GetterPair.Key[1] = '#') then
+      RegisterPrivateName(AScope, GetterPair.Key, APrefix);
+  for SetterPair in AClassDef.Setters do
+    if (SetterPair.Key <> '') and (SetterPair.Key[1] = '#') then
+      RegisterPrivateName(AScope, SetterPair.Key, APrefix);
+  for GetterPair in AClassDef.StaticGetters do
+    if (GetterPair.Key <> '') and (GetterPair.Key[1] = '#') then
+      RegisterPrivateName(AScope, GetterPair.Key, APrefix);
+  for SetterPair in AClassDef.StaticSetters do
+    if (SetterPair.Key <> '') and (SetterPair.Key[1] = '#') then
+      RegisterPrivateName(AScope, SetterPair.Key, APrefix);
+end;
+
 procedure CompileFieldInitializer(const ACtx: TGocciaCompilationContext;
   const AClassReg: UInt8; const AClassDef: TGocciaClassDefinition;
   const AComputedFieldKeyLocals: TComputedFieldKeyLocals);
@@ -4940,6 +5017,7 @@ var
   I, LocalIdx, UpvalIdx: Integer;
   HasSuper: Boolean;
   PrivPrefix: string;
+  PrivateNameMark: Integer;
   ComputedFieldKeyLocals: TComputedFieldKeyLocals;
   ComputedKeyName: string;
 begin
@@ -4947,7 +5025,9 @@ begin
   HasSuper := ClassDef.SuperClass <> '';
 
   PrivPrefix := NextClassPrivatePrefix;
+  PrivateNameMark := ACtx.Scope.PrivateNameMark;
   ACtx.Scope.PrivatePrefix := PrivPrefix;
+  RegisterClassPrivateNames(ACtx.Scope, ClassDef, PrivPrefix);
 
   // Reuse pre-declared slot if it exists at the same scope depth
   // (for function declaration upvalue resolution)
@@ -5154,6 +5234,7 @@ begin
     EmitGlobalDefine(ACtx, ClassReg, ClassDef.Name, True);
 
   ACtx.Scope.PrivatePrefix := '';
+  ACtx.Scope.RestorePrivateNameMark(PrivateNameMark);
 end;
 
 procedure CompileClassExpression(const ACtx: TGocciaCompilationContext;
@@ -5170,6 +5251,7 @@ var
   LocalIdx, UpvalIdx: Integer;
   HasSuper: Boolean;
   PrivPrefix: string;
+  PrivateNameMark: Integer;
   HasNameBinding: Boolean;
   ClosedLocals: array[0..0] of UInt8;
   ClosedCount, I: Integer;
@@ -5181,7 +5263,9 @@ begin
   HasNameBinding := ClassDef.Name <> '';
 
   PrivPrefix := NextClassPrivatePrefix;
+  PrivateNameMark := ACtx.Scope.PrivateNameMark;
   ACtx.Scope.PrivatePrefix := PrivPrefix;
+  RegisterClassPrivateNames(ACtx.Scope, ClassDef, PrivPrefix);
 
   if HasNameBinding then
     NameIdx := ACtx.Template.AddConstantString(ClassDef.Name)
@@ -5396,6 +5480,7 @@ begin
   end;
 
   ACtx.Scope.PrivatePrefix := '';
+  ACtx.Scope.RestorePrivateNameMark(PrivateNameMark);
 end;
 
 procedure CollectDestructuringVarBindings(const APattern: TGocciaDestructuringPattern;

@@ -136,7 +136,7 @@ function PrivateKey(const AScope: TGocciaCompilerScope;
 var
   Prefix: string;
 begin
-  Prefix := AScope.ResolvePrivatePrefix;
+  Prefix := AScope.ResolvePrivatePrefixForName(AName);
   Result := '#slot:' + Prefix + AName;
 end;
 
@@ -1789,6 +1789,8 @@ var
   HasRest: Boolean;
   Limit: Integer;
   RestIndex: Integer;
+  ComputedKeySlot: Integer;
+  ComputedKeySlots: array of Integer;
 begin
   if APattern is TGocciaIdentifierDestructuringPattern then
   begin
@@ -1801,6 +1803,17 @@ begin
     EmitInstruction(ACtx, EncodeABC(OP_VALIDATE_VALUE, ASrcReg,
       VALIDATE_OP_REQUIRE_OBJECT, 0));
     ObjPat := TGocciaObjectDestructuringPattern(APattern);
+    SetLength(ComputedKeySlots, ObjPat.Properties.Count);
+    for I := 0 to High(ComputedKeySlots) do
+      ComputedKeySlots[I] := -1;
+    RestIndex := -1;
+    for I := 0 to ObjPat.Properties.Count - 1 do
+      if ObjPat.Properties[I].Pattern is TGocciaRestDestructuringPattern then
+      begin
+        RestIndex := I;
+        Break;
+      end;
+
     for I := 0 to ObjPat.Properties.Count - 1 do
     begin
       Prop := ObjPat.Properties[I];
@@ -1811,11 +1824,22 @@ begin
         EmitInstruction(ACtx, EncodeABC(OP_NEW_ARRAY, IdxReg, UInt8(I), 0));
         for JumpIdx := 0 to I - 1 do
         begin
-          DestSlot := ACtx.Scope.AllocateRegister;
-          PropIdx := ACtx.Template.AddConstantString(ObjPat.Properties[JumpIdx].Key);
-          EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, DestSlot, PropIdx));
-          EmitInstruction(ACtx, EncodeABC(OP_ARRAY_PUSH, IdxReg, DestSlot, 0));
-          ACtx.Scope.FreeRegister;
+          if ObjPat.Properties[JumpIdx].Computed and
+             Assigned(ObjPat.Properties[JumpIdx].KeyExpression) then
+          begin
+            if ComputedKeySlots[JumpIdx] < 0 then
+              raise Exception.Create('Compiler error: computed object rest key was not preserved');
+            EmitInstruction(ACtx, EncodeABC(OP_ARRAY_PUSH, IdxReg,
+              UInt8(ComputedKeySlots[JumpIdx]), 0));
+          end
+          else
+          begin
+            DestSlot := ACtx.Scope.AllocateRegister;
+            PropIdx := ACtx.Template.AddConstantString(ObjPat.Properties[JumpIdx].Key);
+            EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, DestSlot, PropIdx));
+            EmitInstruction(ACtx, EncodeABC(OP_ARRAY_PUSH, IdxReg, DestSlot, 0));
+            ACtx.Scope.FreeRegister;
+          end;
         end;
         DestSlot := ACtx.Scope.AllocateRegister;
         if IdxReg <> DestSlot + 1 then
@@ -1830,17 +1854,33 @@ begin
         Break;
       end;
 
-      DestSlot := ACtx.Scope.AllocateRegister;
       if Prop.Computed and Assigned(Prop.KeyExpression) then
       begin
-        IdxReg := ACtx.Scope.AllocateRegister;
-        ACtx.CompileExpression(Prop.KeyExpression, IdxReg);
-        EmitInstruction(ACtx, EncodeABC(OP_GET_INDEX, DestSlot, ASrcReg,
-          IdxReg));
-        ACtx.Scope.FreeRegister;
+        if (RestIndex >= 0) and (I < RestIndex) then
+        begin
+          ComputedKeySlot := ACtx.Scope.DeclareLocal(
+            '#object-rest-key:' + IntToStr(ACtx.Template.CodeCount) + ':' +
+            IntToStr(ACtx.Scope.NextSlot) + ':' + IntToStr(I), False);
+          ACtx.CompileExpression(Prop.KeyExpression, UInt8(ComputedKeySlot));
+          ComputedKeySlots[I] := ComputedKeySlot;
+          IdxReg := UInt8(ComputedKeySlot);
+          DestSlot := ACtx.Scope.AllocateRegister;
+          EmitInstruction(ACtx, EncodeABC(OP_GET_INDEX, DestSlot, ASrcReg,
+            IdxReg));
+        end
+        else
+        begin
+          DestSlot := ACtx.Scope.AllocateRegister;
+          IdxReg := ACtx.Scope.AllocateRegister;
+          ACtx.CompileExpression(Prop.KeyExpression, IdxReg);
+          EmitInstruction(ACtx, EncodeABC(OP_GET_INDEX, DestSlot, ASrcReg,
+            IdxReg));
+          ACtx.Scope.FreeRegister;
+        end;
       end
       else
       begin
+        DestSlot := ACtx.Scope.AllocateRegister;
         EmitLoadPropertyByName(ACtx, DestSlot, ASrcReg, Prop.Key);
       end;
 
@@ -1995,9 +2035,9 @@ var
 begin
   SrcReg := ACtx.Scope.AllocateRegister;
   ACtx.CompileExpression(AExpr.Right, SrcReg);
-  EmitDestructuring(ACtx, AExpr.Left, SrcReg, True);
   if ADest <> SrcReg then
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, SrcReg, 0));
+  EmitDestructuring(ACtx, AExpr.Left, SrcReg, True);
   ACtx.Scope.FreeRegister;
 end;
 

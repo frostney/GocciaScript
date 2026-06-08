@@ -4929,6 +4929,19 @@ begin
       CatchScope.Free;
     end;
   end
+  else if Assigned(ATryStatement.CatchBindingPattern) then
+  begin
+    CatchScope := AContext.Scope.CreateChild(skBlock, 'CatchBlock');
+    try
+      CatchContext := AContext;
+      CatchContext.Scope := CatchScope;
+      AssignPattern(ATryStatement.CatchBindingPattern, AErrorValue, CatchContext,
+        True, dtParameter);
+      Result := EvaluateBlock(ATryStatement.CatchBlock, CatchContext);
+    finally
+      CatchScope.Free;
+    end;
+  end
   else
     Result := EvaluateBlock(ATryStatement.CatchBlock, AContext);
 end;

@@ -3483,7 +3483,17 @@ begin
             end;
 
             Value := FInner.ResumeRaw(ARequest.Kind, ARequest.Value, Done);
-            UnwrappedValue := AwaitValue(Value);
+            try
+              UnwrappedValue := AwaitValue(Value);
+            except
+              on E: TGocciaThrowValue do
+              begin
+                FInner.FState := bgsCompleted;
+                FInner.ClearDelegateState;
+                ARequest.Promise.Reject(E.Value);
+                Exit;
+              end;
+            end;
             ARequest.Promise.Resolve(CreateIteratorResult(UnwrappedValue, Done));
           except
             on E: EGocciaBytecodeAsyncSuspend do
