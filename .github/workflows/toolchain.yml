@@ -21,7 +21,7 @@ jobs:
     steps:
       - name: Check cache
         id: cache-check
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: |
             fpc-cross
@@ -417,7 +417,7 @@ jobs:
 
       - name: Save to cache
         if: steps.cache-check.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: |
             fpc-cross
