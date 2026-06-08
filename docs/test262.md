@@ -288,11 +288,13 @@ suite). After any wrapper-template change:
 
 ## Updating the SHA pin
 
-The test262 SHA is pinned in `.github/workflows/ci.yml` and
-`.github/workflows/pr.yml` so the cached `main` baseline and a PR run
-measure the same upstream corpus. The weekly cron at `.github/workflows/test262-bump.yml` opens
-a PR every Monday with the latest tc39/test262 main SHA; the PR's
-standard CI run posts the per-category delta vs. the previous main
-baseline. Merge once the delta is acceptable.
+The test262 SHA is pinned in `scripts/test262-suite-sha.txt`. Both
+`.github/workflows/ci.yml` and `.github/workflows/pr.yml` read that file
+before checking out `tc39/test262`, so the cached `main` baseline and a PR
+run measure the same upstream corpus without weekly bump PRs needing to
+modify workflow files. The weekly cron at `.github/workflows/test262-bump.yml`
+opens a PR every Monday with the latest tc39/test262 main SHA; the PR's
+standard CI run posts the per-category delta vs. the previous main baseline.
+Merge once the delta is acceptable.
 
 Manual bump: `bun scripts/test262-bump-pin.ts <40-hex-sha>`.

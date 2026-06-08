@@ -525,7 +525,7 @@ build → test             → artifacts
 
 **`json5-compliance`** (all platforms) — Downloads the prebuilt `GocciaJSON5Check` harness and `GocciaTestRunner` binary from the matrix build artifacts, resolves `python3` or `python`, runs `scripts/run_json5_test_suite.py --harness=... --test-runner=... --output=json5-test-results-<target>.json`, checks that both the parser and stringify summaries report zero failures, and uploads the per-platform JSON5 conformance report as a workflow artifact.
 
-**`test262`** (needs build, ubuntu-latest x64 only, **non-blocking**) — Downloads the `gocciascript-x86_64-linux` build, checks out [`tc39/test262`](https://github.com/tc39/test262) at the SHA pinned in `ci.yml`/`pr.yml`, runs `bun scripts/run_test262_suite.ts --suite-dir test262-suite --mode=bytecode --jobs=2 --output=test262-results.json`, and uploads the JSON report as a 30-day workflow artifact. The run step is `continue-on-error: true` because GocciaScript intentionally excludes parts of the language that test262 covers — this lane is an indicator metric, not a regression gate. On `main` the result is also stashed as a cache entry keyed `test262-baseline-<sha>`, which the PR workflow restores to compute Δ vs main. **See [test262.md](test262.md) for the full harness contract** (per-test ScriptLoaderBare subprocess, stock test262 harness files, exit-code + stdout-marker wire protocol, classification, SHA-pin update process).
+**`test262`** (needs build, ubuntu-latest x64 only, **non-blocking**) — Runs the official conformance suite in bytecode mode from the shared pin in `scripts/test262-suite-sha.txt`, uploads the JSON report, and saves a `main` baseline cache for PR deltas. The run step is `continue-on-error: true` because this lane is an indicator metric, not a release gate. **See [test262.md](test262.md) for the harness contract** and [Build System](build-system.md#ciyml--push-to-main--tags) for the workflow wiring.
 
 **`benchmark`** (needs build, all platforms) — Downloads pre-built binaries, runs all benchmarks.
 
@@ -562,7 +562,7 @@ Weekly crons open (or update) a single PR every Monday with the latest upstream 
 
 | Suite | Workflow | Schedule | Pin location |
 |-------|----------|----------|--------------|
-| test262 | `test262-bump.yml` | 06:00 UTC | `.github/workflows/ci.yml` & `pr.yml` |
+| test262 | `test262-bump.yml` | 06:00 UTC | `scripts/test262-suite-sha.txt` |
 | toml-test | `toml-test-bump.yml` | 06:30 UTC | `scripts/run_toml_test_suite.py` |
 | yaml-test-suite | `yaml-test-bump.yml` | 07:00 UTC | `scripts/run_yaml_test_suite.py` |
 
