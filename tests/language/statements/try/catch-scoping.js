@@ -69,6 +69,16 @@ test("catch destructuring failure runs finally before rethrowing", () => {
   expect(log).toBe("finallyouter");
 });
 
+test("catch destructuring defaults observe catch parameter TDZ", () => {
+  expect(() => {
+    try {
+      throw [];
+    } catch ([x = x]) {
+      x;
+    }
+  }).toThrow(ReferenceError);
+});
+
 test("nested catch parameters with same name", () => {
   let finalResult = "";
   try {

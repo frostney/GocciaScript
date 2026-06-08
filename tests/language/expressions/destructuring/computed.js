@@ -127,3 +127,20 @@ test("object rest excludes the originally evaluated computed key", () => {
   expect(value).toBe("one");
   expect(rest).toEqual({ 2: "two" });
 });
+
+test("object rest excludes the canonical computed property key", () => {
+  let coercions = 0;
+  let value, rest;
+  const key = {
+    toString() {
+      coercions += 1;
+      return "1";
+    },
+  };
+
+  ({ [key]: value, ...rest } = { 1: "one", 2: "two" });
+
+  expect(coercions).toBe(1);
+  expect(value).toBe("one");
+  expect(rest).toEqual({ 2: "two" });
+});

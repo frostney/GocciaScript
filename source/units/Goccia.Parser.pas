@@ -507,6 +507,7 @@ end;
 procedure TGocciaParser.ValidateCurrentPrivateClassContext;
 var
   Context: TGocciaPrivateClassContext;
+  ParentContext: TGocciaPrivateClassContext;
   Ref: TGocciaPrivateNameReference;
   I: Integer;
 begin
@@ -520,10 +521,18 @@ begin
   begin
     Ref := Context.GetReference(I);
     if not HasVisiblePrivateNameDeclaration(Ref.Name) then
+    begin
+      if FPrivateClassContexts.Count > 1 then
+      begin
+        ParentContext := FPrivateClassContexts[FPrivateClassContexts.Count - 2];
+        ParentContext.AddReference(Ref.Name, Ref.Line, Ref.Column);
+        Continue;
+      end;
       raise TGocciaSyntaxError.Create(
         Format('Private field ''#%s'' must be declared in an enclosing class', [Ref.Name]),
         Ref.Line, Ref.Column, FFileName, FSourceLines,
         SSuggestDeclarePrivateField);
+    end;
   end;
 end;
 

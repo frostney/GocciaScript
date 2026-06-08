@@ -1862,6 +1862,8 @@ begin
             '#object-rest-key:' + IntToStr(ACtx.Template.CodeCount) + ':' +
             IntToStr(ACtx.Scope.NextSlot) + ':' + IntToStr(I), False);
           ACtx.CompileExpression(Prop.KeyExpression, UInt8(ComputedKeySlot));
+          EmitInstruction(ACtx, EncodeABC(OP_TO_PROPERTY_KEY,
+            UInt8(ComputedKeySlot), UInt8(ComputedKeySlot), 0));
           ComputedKeySlots[I] := ComputedKeySlot;
           IdxReg := UInt8(ComputedKeySlot);
           DestSlot := ACtx.Scope.AllocateRegister;

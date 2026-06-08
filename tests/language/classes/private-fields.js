@@ -507,3 +507,21 @@ test("nested class methods can access private names from an enclosing class", ()
   const Inner = new Outer().innerClass();
   expect(new Inner().readOuter()).toBe(42);
 });
+
+test("nested class methods can access later private names from an enclosing class", () => {
+  class Outer {
+    innerClass() {
+      const self = this;
+      return class {
+        readOuter() {
+          return self.#later;
+        }
+      };
+    }
+
+    #later = 7;
+  }
+
+  const Inner = new Outer().innerClass();
+  expect(new Inner().readOuter()).toBe(7);
+});

@@ -97,6 +97,7 @@ type
     function HasOwnPrivateSetter(const AName: string): Boolean;
     function HasOwnPrivateStaticProperty(const AName: string): Boolean;
     function HasOwnPrivateStaticMethod(const AName: string): Boolean;
+    function HasOwnPrivateName(const AName: string): Boolean;
     function HasPrivateInstanceElements: Boolean;
     function GetOwnPrivatePropertyGetter(
       const AName: string): TGocciaFunctionBase;
@@ -688,6 +689,16 @@ function TGocciaClassValue.HasOwnPrivateStaticMethod(
   const AName: string): Boolean;
 begin
   Result := FPrivateStaticMethods.ContainsKey(AName);
+end;
+
+function TGocciaClassValue.HasOwnPrivateName(const AName: string): Boolean;
+begin
+  Result := FPrivateInstancePropertyDefs.ContainsKey(AName) or
+    FPrivateStaticProperties.ContainsKey(AName) or
+    FPrivateStaticMethods.ContainsKey(AName) or
+    FPrivateMethods.ContainsKey(AName) or
+    FPrivateGetters.ContainsKey(AName) or
+    FPrivateSetters.ContainsKey(AName);
 end;
 
 function TGocciaClassValue.HasPrivateInstanceElements: Boolean;

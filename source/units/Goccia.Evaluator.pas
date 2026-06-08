@@ -4940,6 +4940,8 @@ function ExecuteCatchBlock(const ATryStatement: TGocciaTryStatement; const AErro
 var
   CatchScope: TGocciaScope;
   CatchContext, MatchContext: TGocciaEvaluationContext;
+  PatternNames: TStringList;
+  I: Integer;
 begin
   if ATryStatement.CatchParam <> '' then
   begin
@@ -4971,6 +4973,18 @@ begin
     try
       CatchContext := AContext;
       CatchContext.Scope := CatchScope;
+      PatternNames := TStringList.Create;
+      PatternNames.CaseSensitive := True;
+      try
+        CollectPatternBindingNames(ATryStatement.CatchBindingPattern,
+          PatternNames, True);
+        for I := 0 to PatternNames.Count - 1 do
+          if not CatchScope.ContainsOwnLexicalBinding(PatternNames[I]) then
+            CatchScope.PredeclareLexicalBinding(PatternNames[I], dtLet,
+              ATryStatement.Line, ATryStatement.Column);
+      finally
+        PatternNames.Free;
+      end;
       AssignPattern(ATryStatement.CatchBindingPattern, AErrorValue, CatchContext,
         True, dtParameter);
       Result := EvaluateBlock(ATryStatement.CatchBlock, CatchContext);
@@ -6948,15 +6962,36 @@ begin
   Result := ClassValue;
 end;
 
-function ResolveOwningClass(const AInstance: TGocciaInstanceValue; const AContext: TGocciaEvaluationContext): TGocciaClassValue;
+function ResolveLexicalPrivateAccessClass(
+  const AContext: TGocciaEvaluationContext;
+  const APrivateName: string): TGocciaClassValue;
 var
   OwningClassValue: TGocciaValue;
+  LastOwningClass: TGocciaValue;
+  CandidateClass: TGocciaClassValue;
 begin
-  // Walk the scope chain to find the owning class (set on TGocciaMethodCallScope or TGocciaClassInitScope)
-  OwningClassValue := AContext.Scope.FindOwningClass;
-  if (OwningClassValue is TGocciaClassValue) then
+  Result := nil;
+  LastOwningClass := nil;
+  repeat
+    OwningClassValue := AContext.Scope.FindOwningClassAfter(LastOwningClass);
+    if not (OwningClassValue is TGocciaClassValue) then
+      Exit;
+
+    CandidateClass := TGocciaClassValue(OwningClassValue);
+    if CandidateClass.HasOwnPrivateName(APrivateName) then
+      Exit(CandidateClass);
+
+    LastOwningClass := OwningClassValue;
+  until False;
+end;
+
+function ResolveOwningClass(const AInstance: TGocciaInstanceValue;
+  const AContext: TGocciaEvaluationContext;
+  const APrivateName: string): TGocciaClassValue;
+begin
+  Result := ResolveLexicalPrivateAccessClass(AContext, APrivateName);
+  if Assigned(Result) then
   begin
-    Result := TGocciaClassValue(OwningClassValue);
     Exit;
   end;
   // Fallback: use the instance's class
@@ -6977,15 +7012,23 @@ end;
 function CollectDeclaredPrivateNames(const AContext: TGocciaEvaluationContext): TStringList;
 var
   OwningClassValue: TGocciaClassValue;
+  LastOwningClass: TGocciaValue;
+  CandidateClassValue: TGocciaValue;
 begin
   Result := TStringList.Create;
   Result.CaseSensitive := True;
   Result.Sorted := False;
   Result.Duplicates := dupIgnore;
 
-  OwningClassValue := ResolveLexicalOwningClass(AContext);
-  if Assigned(OwningClassValue) then
+  LastOwningClass := nil;
+  repeat
+    CandidateClassValue := AContext.Scope.FindOwningClassAfter(LastOwningClass);
+    if not (CandidateClassValue is TGocciaClassValue) then
+      Exit;
+    OwningClassValue := TGocciaClassValue(CandidateClassValue);
     OwningClassValue.AppendOwnPrivateNames(Result);
+    LastOwningClass := CandidateClassValue;
+  until False;
 end;
 
 procedure ThrowPrivateGetterMissingError(const APrivateName: string);
@@ -7144,8 +7187,7 @@ var
   GetterFn: TGocciaFunctionBase;
   EmptyArgs: TGocciaArgumentsCollection;
 begin
-  // Determine the access class from the owning class of the current method
-  AccessClass := ResolveOwningClass(AInstance, AContext);
+  AccessClass := ResolveOwningClass(AInstance, AContext, APrivateName);
 
   // Check if this is a private getter
   if AccessClass.HasPrivateGetter(APrivateName) then
@@ -7164,9 +7206,9 @@ begin
     ThrowPrivateGetterMissingError(APrivateName);
 
   // Check if this is a private method call
-  if AInstance.ClassValue.PrivateMethods.ContainsKey(APrivateName) then
+  if AccessClass.PrivateMethods.ContainsKey(APrivateName) then
   begin
-    Result := AInstance.ClassValue.GetPrivateMethod(APrivateName);
+    Result := AccessClass.GetPrivateMethod(APrivateName);
     if Result = nil then
       Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end
@@ -7184,7 +7226,7 @@ var
   GetterFn: TGocciaFunctionBase;
   EmptyArgs: TGocciaArgumentsCollection;
 begin
-  AccessClass := ResolveLexicalOwningClass(AContext);
+  AccessClass := ResolveLexicalPrivateAccessClass(AContext, APrivateName);
   if not Assigned(AccessClass) then
     ThrowPrivateBrandError(APrivateName);
 
@@ -7228,7 +7270,7 @@ var
   GetterFn: TGocciaFunctionBase;
   EmptyArgs: TGocciaArgumentsCollection;
 begin
-  AccessClass := ResolveLexicalOwningClass(AContext);
+  AccessClass := ResolveLexicalPrivateAccessClass(AContext, APrivateName);
   if not Assigned(AccessClass) then
     AccessClass := AClassValue;
 
@@ -7264,7 +7306,7 @@ var
   SetterFn: TGocciaFunctionBase;
   SetterArgs: TGocciaArgumentsCollection;
 begin
-  AccessClass := ResolveLexicalOwningClass(AContext);
+  AccessClass := ResolveLexicalPrivateAccessClass(AContext, APrivateName);
   if not Assigned(AccessClass) then
     AccessClass := AClassValue;
 
@@ -7304,7 +7346,7 @@ var
   SetterFn: TGocciaFunctionBase;
   SetterArgs: TGocciaArgumentsCollection;
 begin
-  AccessClass := ResolveOwningClass(AInstance, AContext);
+  AccessClass := ResolveOwningClass(AInstance, AContext, APrivateName);
 
   if AccessClass.HasPrivateSetter(APrivateName) then
   begin
@@ -7339,7 +7381,7 @@ var
   PendingNewTarget: TGocciaValue;
   FieldInitializer: TGocciaExpression;
 begin
-  AccessClass := ResolveLexicalOwningClass(AContext);
+  AccessClass := ResolveLexicalPrivateAccessClass(AContext, APrivateName);
   if not Assigned(AccessClass) then
     ThrowPrivateBrandError(APrivateName);
 
@@ -8530,7 +8572,8 @@ begin
   if ObjectValue is TGocciaInstanceValue then
   begin
     Instance := TGocciaInstanceValue(ObjectValue);
-    AccessClass := ResolveOwningClass(Instance, AContext);
+    AccessClass := ResolveOwningClass(Instance, AContext,
+      APattern.Expression.PrivateName);
 
     if AccessClass.HasPrivateSetter(APattern.Expression.PrivateName) then
     begin

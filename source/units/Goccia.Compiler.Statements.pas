@@ -2022,6 +2022,7 @@ begin
       else
       begin
         CollectDestructuringBindings(AStmt.CatchBindingPattern, ACtx.Scope);
+        EmitBlockPatternHoleInitializers(ACtx, AStmt.CatchBindingPattern);
         if HasCatchInitHandler then
           CatchInitHandlerJump := EmitJumpInstruction(ACtx, OP_PUSH_HANDLER,
             CatchInitErrorReg);
