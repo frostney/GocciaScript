@@ -875,6 +875,43 @@ console.log("Bare Loader: --test262-host eval rejects arguments in class field i
   }
 }
 
+console.log("Bare Loader: --test262-host eval rejects arguments in generator method defaults...");
+{
+  const source = [
+    "const cases = [",
+    "  { label: 'generator', run: () => ({ *method(value = eval('var value = 42')) { yield value; } }).method() },",
+    "  { label: 'async-generator', run: () => ({ async *method(value = eval('var value = 42')) { yield value; } }).method() }",
+    "];",
+    "for (const item of cases) {",
+    "  try {",
+    "    item.run();",
+    "    print(item.label + ':none');",
+    "  } catch (e) {",
+    "    print(item.label + ':' + e.name);",
+    "  }",
+    "}",
+    "",
+  ].join("\n");
+  const expected = [
+    "generator:SyntaxError",
+    "async-generator:SyntaxError",
+  ].join("\n");
+  for (const mode of [
+    { label: "interpreted", args: [BARE, "--test262-host", "--compat-var", "--compat-non-strict-mode"] },
+    { label: "bytecode", args: [BARE, "--test262-host", "--mode=bytecode", "--compat-var", "--compat-non-strict-mode"] },
+  ]) {
+    const proc = Bun.spawnSync(mode.args, {
+      stdin: new TextEncoder().encode(source),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode !== 0)
+      throw new Error(`Bare ${mode.label} eval generator-method arguments probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+      throw new Error(`Bare ${mode.label} eval generator-method arguments got: ${proc.stdout.toString()}`);
+  }
+}
+
 console.log("Bare Loader: --test262-host eval super permissions stop at ordinary function boundary...");
 {
   const source = [

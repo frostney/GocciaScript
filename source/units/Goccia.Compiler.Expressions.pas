@@ -965,6 +965,180 @@ begin
   Result := False;
 end;
 
+function ExpressionContainsSuspension(const AExpr: TGocciaExpression): Boolean;
+var
+  CallExpr: TGocciaCallExpression;
+  MemberExpr: TGocciaMemberExpression;
+  ArrayExpr: TGocciaArrayExpression;
+  ObjectExpr: TGocciaObjectExpression;
+  NewExpr: TGocciaNewExpression;
+  ImportExpr: TGocciaImportCallExpression;
+  Pair: TPair<TGocciaExpression, TGocciaExpression>;
+  I: Integer;
+begin
+  if not Assigned(AExpr) then
+    Exit(False);
+
+  if (AExpr is TGocciaYieldExpression) or
+     (AExpr is TGocciaAwaitExpression) then
+    Exit(True);
+
+  if (AExpr is TGocciaFunctionExpression) or
+     (AExpr is TGocciaArrowFunctionExpression) then
+    Exit(False);
+
+  if AExpr is TGocciaCallExpression then
+  begin
+    CallExpr := TGocciaCallExpression(AExpr);
+    if ExpressionContainsSuspension(CallExpr.Callee) then
+      Exit(True);
+    for I := 0 to CallExpr.Arguments.Count - 1 do
+      if ExpressionContainsSuspension(CallExpr.Arguments[I]) then
+        Exit(True);
+  end
+  else if AExpr is TGocciaMemberExpression then
+  begin
+    MemberExpr := TGocciaMemberExpression(AExpr);
+    if ExpressionContainsSuspension(MemberExpr.ObjectExpr) then
+      Exit(True);
+    if MemberExpr.Computed and
+       ExpressionContainsSuspension(MemberExpr.PropertyExpression) then
+      Exit(True);
+  end
+  else if AExpr is TGocciaBinaryExpression then
+    Exit(ExpressionContainsSuspension(TGocciaBinaryExpression(AExpr).Left) or
+      ExpressionContainsSuspension(TGocciaBinaryExpression(AExpr).Right))
+  else if AExpr is TGocciaSequenceExpression then
+  begin
+    for I := 0 to TGocciaSequenceExpression(AExpr).Expressions.Count - 1 do
+      if ExpressionContainsSuspension(
+        TGocciaSequenceExpression(AExpr).Expressions[I]) then
+        Exit(True);
+  end
+  else if AExpr is TGocciaUnaryExpression then
+    Exit(ExpressionContainsSuspension(TGocciaUnaryExpression(AExpr).Operand))
+  else if AExpr is TGocciaAssignmentExpression then
+    Exit(ExpressionContainsSuspension(TGocciaAssignmentExpression(AExpr).Value))
+  else if AExpr is TGocciaPropertyAssignmentExpression then
+    Exit(ExpressionContainsSuspension(
+      TGocciaPropertyAssignmentExpression(AExpr).ObjectExpr) or
+      ExpressionContainsSuspension(
+        TGocciaPropertyAssignmentExpression(AExpr).Value))
+  else if AExpr is TGocciaComputedPropertyAssignmentExpression then
+    Exit(ExpressionContainsSuspension(
+      TGocciaComputedPropertyAssignmentExpression(AExpr).ObjectExpr) or
+      ExpressionContainsSuspension(
+        TGocciaComputedPropertyAssignmentExpression(AExpr).PropertyExpression) or
+      ExpressionContainsSuspension(
+        TGocciaComputedPropertyAssignmentExpression(AExpr).Value))
+  else if AExpr is TGocciaCompoundAssignmentExpression then
+    Exit(ExpressionContainsSuspension(
+      TGocciaCompoundAssignmentExpression(AExpr).Value))
+  else if AExpr is TGocciaPropertyCompoundAssignmentExpression then
+    Exit(ExpressionContainsSuspension(
+      TGocciaPropertyCompoundAssignmentExpression(AExpr).ObjectExpr) or
+      ExpressionContainsSuspension(
+        TGocciaPropertyCompoundAssignmentExpression(AExpr).Value))
+  else if AExpr is TGocciaComputedPropertyCompoundAssignmentExpression then
+    Exit(ExpressionContainsSuspension(
+      TGocciaComputedPropertyCompoundAssignmentExpression(AExpr).ObjectExpr) or
+      ExpressionContainsSuspension(
+        TGocciaComputedPropertyCompoundAssignmentExpression(AExpr).PropertyExpression) or
+      ExpressionContainsSuspension(
+        TGocciaComputedPropertyCompoundAssignmentExpression(AExpr).Value))
+  else if AExpr is TGocciaIncrementExpression then
+    Exit(ExpressionContainsSuspension(TGocciaIncrementExpression(AExpr).Operand))
+  else if AExpr is TGocciaArrayExpression then
+  begin
+    ArrayExpr := TGocciaArrayExpression(AExpr);
+    for I := 0 to ArrayExpr.Elements.Count - 1 do
+      if ExpressionContainsSuspension(ArrayExpr.Elements[I]) then
+        Exit(True);
+  end
+  else if AExpr is TGocciaObjectExpression then
+  begin
+    ObjectExpr := TGocciaObjectExpression(AExpr);
+    for I := 0 to High(ObjectExpr.PropertySourceOrder) do
+      case ObjectExpr.PropertySourceOrder[I].PropertyType of
+        pstStatic:
+          if ExpressionContainsSuspension(
+            ObjectExpr.PropertySourceOrder[I].Expression) then
+            Exit(True);
+        pstComputed:
+          begin
+            Pair := ObjectExpr.ComputedPropertiesInOrder[
+              ObjectExpr.PropertySourceOrder[I].ComputedIndex];
+            if ExpressionContainsSuspension(Pair.Key) or
+               ExpressionContainsSuspension(Pair.Value) then
+              Exit(True);
+          end;
+        pstComputedGetter,
+        pstComputedSetter:
+          begin
+            Pair := ObjectExpr.ComputedPropertiesInOrder[
+              ObjectExpr.PropertySourceOrder[I].ComputedIndex];
+            if ExpressionContainsSuspension(Pair.Key) then
+              Exit(True);
+          end;
+      end;
+  end
+  else if AExpr is TGocciaConditionalExpression then
+    Exit(ExpressionContainsSuspension(TGocciaConditionalExpression(AExpr).Condition) or
+      ExpressionContainsSuspension(TGocciaConditionalExpression(AExpr).Consequent) or
+      ExpressionContainsSuspension(TGocciaConditionalExpression(AExpr).Alternate))
+  else if AExpr is TGocciaNewExpression then
+  begin
+    NewExpr := TGocciaNewExpression(AExpr);
+    if ExpressionContainsSuspension(NewExpr.Callee) then
+      Exit(True);
+    for I := 0 to NewExpr.Arguments.Count - 1 do
+      if ExpressionContainsSuspension(NewExpr.Arguments[I]) then
+        Exit(True);
+  end
+  else if AExpr is TGocciaImportCallExpression then
+  begin
+    ImportExpr := TGocciaImportCallExpression(AExpr);
+    Exit(ExpressionContainsSuspension(ImportExpr.Specifier) or
+      ExpressionContainsSuspension(ImportExpr.Options));
+  end
+  else if AExpr is TGocciaSpreadExpression then
+    Exit(ExpressionContainsSuspension(TGocciaSpreadExpression(AExpr).Argument))
+  else if AExpr is TGocciaTemplateWithInterpolationExpression then
+  begin
+    for I := 0 to TGocciaTemplateWithInterpolationExpression(AExpr).Parts.Count - 1 do
+      if ExpressionContainsSuspension(
+        TGocciaTemplateWithInterpolationExpression(AExpr).Parts[I]) then
+        Exit(True);
+  end
+  else if AExpr is TGocciaTaggedTemplateExpression then
+  begin
+    if ExpressionContainsSuspension(TGocciaTaggedTemplateExpression(AExpr).Tag) then
+      Exit(True);
+    for I := 0 to TGocciaTaggedTemplateExpression(AExpr).Expressions.Count - 1 do
+      if ExpressionContainsSuspension(
+        TGocciaTaggedTemplateExpression(AExpr).Expressions[I]) then
+        Exit(True);
+  end
+  else if AExpr is TGocciaDestructuringAssignmentExpression then
+    Exit(ExpressionContainsSuspension(
+      TGocciaDestructuringAssignmentExpression(AExpr).Right))
+  else if AExpr is TGocciaPrivateMemberExpression then
+    Exit(ExpressionContainsSuspension(
+      TGocciaPrivateMemberExpression(AExpr).ObjectExpr))
+  else if AExpr is TGocciaPrivatePropertyAssignmentExpression then
+    Exit(ExpressionContainsSuspension(
+      TGocciaPrivatePropertyAssignmentExpression(AExpr).ObjectExpr) or
+      ExpressionContainsSuspension(
+        TGocciaPrivatePropertyAssignmentExpression(AExpr).Value))
+  else if AExpr is TGocciaPrivatePropertyCompoundAssignmentExpression then
+    Exit(ExpressionContainsSuspension(
+      TGocciaPrivatePropertyCompoundAssignmentExpression(AExpr).ObjectExpr) or
+      ExpressionContainsSuspension(
+        TGocciaPrivatePropertyCompoundAssignmentExpression(AExpr).Value));
+
+  Result := False;
+end;
+
 function ParameterDefaultsContainDirectEval(
   const AParams: TGocciaParameterArray): Boolean;
 var
@@ -1868,8 +2042,7 @@ begin
   if APattern is TGocciaAssignmentDestructuringPattern then
   begin
     AssignPat := TGocciaAssignmentDestructuringPattern(APattern);
-    if (AssignPat.Right is TGocciaYieldExpression) or
-       (AssignPat.Right is TGocciaAwaitExpression) then
+    if ExpressionContainsSuspension(AssignPat.Right) then
       Exit(True);
     Exit(DestructuringPatternHasSuspendingDefault(AssignPat.Left));
   end;
@@ -2368,9 +2541,11 @@ var
   RestParamIndex: Integer;
   RestReg: Integer;
   I: Integer;
+  OldDerivedGuard: Boolean;
 begin
   OldTemplate := ACtx.Template;
   OldScope := ACtx.Scope;
+  OldDerivedGuard := ACtx.DerivedConstructorThisGuard;
 
   ChildTemplate := TGocciaFunctionTemplate.Create('<arrow>');
   ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
@@ -2425,12 +2600,15 @@ begin
     ACtx.FormalParameterCounts.AddOrSetValue(ChildTemplate, FormalCount);
 
   ACtx.SwapState(ChildTemplate, ChildScope);
+  if Assigned(ACtx.SetDerivedConstructorThisGuard) then
+    ACtx.SetDerivedConstructorThisGuard(OldDerivedGuard);
   try
     ChildCtx := ACtx;
     ChildCtx.Template := ChildTemplate;
     ChildCtx.Scope := ChildScope;
     ChildCtx.NonStrictMode := ACtx.NonStrictMode and
       not ChildTemplate.StrictCode;
+    ChildCtx.DerivedConstructorThisGuard := OldDerivedGuard;
 
     if (RestParamIndex >= 0) and
        not ParameterListHasDefaultValues(AExpr.Parameters) then
@@ -3182,6 +3360,7 @@ begin
     ChildCtx.Scope := ChildScope;
     ChildCtx.NonStrictMode := ACtx.NonStrictMode and
       not ChildTemplate.StrictCode;
+    ChildCtx.DerivedConstructorThisGuard := False;
     EmitLineMapping(ChildCtx, AGetter.Line, AGetter.Column);
     EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot);
     ACtx.CompileFunctionBody(AGetter.Body);
@@ -3249,6 +3428,7 @@ begin
     ChildCtx.Scope := ChildScope;
     ChildCtx.NonStrictMode := ACtx.NonStrictMode and
       not ChildTemplate.StrictCode;
+    ChildCtx.DerivedConstructorThisGuard := False;
     EmitLineMapping(ChildCtx, ASetter.Line, ASetter.Column);
     EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot);
     ACtx.CompileFunctionBody(ASetter.Body);
@@ -3313,6 +3493,7 @@ begin
     ChildCtx.Scope := ChildScope;
     ChildCtx.NonStrictMode := ACtx.NonStrictMode and
       not ChildTemplate.StrictCode;
+    ChildCtx.DerivedConstructorThisGuard := False;
     EmitLineMapping(ChildCtx, AGetter.Line, AGetter.Column);
     EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot);
     ACtx.CompileFunctionBody(AGetter.Body);
@@ -3379,6 +3560,7 @@ begin
     ChildCtx.Scope := ChildScope;
     ChildCtx.NonStrictMode := ACtx.NonStrictMode and
       not ChildTemplate.StrictCode;
+    ChildCtx.DerivedConstructorThisGuard := False;
     EmitLineMapping(ChildCtx, ASetter.Line, ASetter.Column);
     EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot);
     ACtx.CompileFunctionBody(ASetter.Body);
@@ -3957,6 +4139,7 @@ begin
     ChildCtx.Scope := ChildScope;
     ChildCtx.NonStrictMode := ACtx.NonStrictMode and
       not ChildTemplate.StrictCode;
+    ChildCtx.DerivedConstructorThisGuard := False;
 
     EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot);
 
@@ -4512,8 +4695,31 @@ procedure CompileIncrementMember(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaIncrementExpression; const AMember: TGocciaMemberExpression;
   const ADest: UInt8; const AOp: TGocciaOpCode);
 var
-  ObjReg, CurReg: UInt8;
+  ObjReg, CurReg, KeyReg, SuperReg, ThisReg: UInt8;
+  PropIdx: UInt16;
 begin
+  if AMember.ObjectExpr is TGocciaSuperExpression then
+  begin
+    PrepareSuperPropertyBase(ACtx, ThisReg, CurReg, SuperReg);
+    KeyReg := ACtx.Scope.AllocateRegister;
+    PropIdx := ACtx.Template.AddConstantString(AMember.PropertyName);
+    EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, KeyReg, PropIdx));
+    EmitInstruction(ACtx, EncodeABC(OP_SUPER_GET, CurReg, 0, KeyReg));
+    EmitInstruction(ACtx, EncodeABC(OP_TO_NUMERIC, CurReg, CurReg, 0));
+    if not AExpr.IsPrefix then
+      EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, CurReg, 0));
+    EmitInstruction(ACtx, EncodeABC(AOp, CurReg, CurReg, 0));
+    EmitInstruction(ACtx, EncodeABC(OP_SUPER_SET, CurReg, KeyReg, CurReg));
+    if AExpr.IsPrefix then
+      EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, CurReg, 0));
+
+    ACtx.Scope.FreeRegister;
+    ACtx.Scope.FreeRegister;
+    ACtx.Scope.FreeRegister;
+    ACtx.Scope.FreeRegister;
+    Exit;
+  end;
+
   ObjReg := ACtx.Scope.AllocateRegister;
   CurReg := ACtx.Scope.AllocateRegister;
 
@@ -4535,8 +4741,30 @@ procedure CompileIncrementComputedMember(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaIncrementExpression; const AMember: TGocciaMemberExpression;
   const ADest: UInt8; const AOp: TGocciaOpCode);
 var
-  ObjReg, KeyReg, CurReg: UInt8;
+  ObjReg, KeyReg, CurReg, SuperReg, ThisReg: UInt8;
 begin
+  if AMember.ObjectExpr is TGocciaSuperExpression then
+  begin
+    PrepareSuperPropertyBase(ACtx, ThisReg, CurReg, SuperReg);
+    KeyReg := ACtx.Scope.AllocateRegister;
+    ACtx.CompileExpression(AMember.PropertyExpression, KeyReg);
+    EmitInstruction(ACtx, EncodeABC(OP_TO_PROPERTY_KEY, KeyReg, KeyReg, 0));
+    EmitInstruction(ACtx, EncodeABC(OP_SUPER_GET, CurReg, 0, KeyReg));
+    EmitInstruction(ACtx, EncodeABC(OP_TO_NUMERIC, CurReg, CurReg, 0));
+    if not AExpr.IsPrefix then
+      EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, CurReg, 0));
+    EmitInstruction(ACtx, EncodeABC(AOp, CurReg, CurReg, 0));
+    EmitInstruction(ACtx, EncodeABC(OP_SUPER_SET, CurReg, KeyReg, CurReg));
+    if AExpr.IsPrefix then
+      EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, CurReg, 0));
+
+    ACtx.Scope.FreeRegister;
+    ACtx.Scope.FreeRegister;
+    ACtx.Scope.FreeRegister;
+    ACtx.Scope.FreeRegister;
+    Exit;
+  end;
+
   ObjReg := ACtx.Scope.AllocateRegister;
   KeyReg := ACtx.Scope.AllocateRegister;
   CurReg := ACtx.Scope.AllocateRegister;

@@ -4003,7 +4003,7 @@ begin
   if Pos('#slot:', AStorageName) = 1 then
   begin
     SeparatorIndex := 0;
-    for I := Length(AStorageName) downto 1 do
+    for I := Length('#slot:') + 1 to Length(AStorageName) do
       if AStorageName[I] = '$' then
       begin
         SeparatorIndex := I;
@@ -4165,6 +4165,7 @@ begin
   ChildCtx.Scope := ChildScope;
   ChildCtx.NonStrictMode := ACtx.NonStrictMode and
     not ChildTemplate.StrictCode;
+  ChildCtx.DerivedConstructorThisGuard := False;
   EmitLineMapping(ChildCtx, AGetter.Line, AGetter.Column);
   EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot);
   ACtx.CompileFunctionBody(AGetter.Body);
@@ -4255,6 +4256,7 @@ begin
   ChildCtx.Scope := ChildScope;
   ChildCtx.NonStrictMode := ACtx.NonStrictMode and
     not ChildTemplate.StrictCode;
+  ChildCtx.DerivedConstructorThisGuard := False;
   EmitLineMapping(ChildCtx, ASetter.Line, ASetter.Column);
   EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot);
   EmitDefaultParameters(ChildCtx, SetterParams);
@@ -4326,6 +4328,7 @@ begin
   ChildCtx.Scope := ChildScope;
   ChildCtx.NonStrictMode := ACtx.NonStrictMode and
     not ChildTemplate.StrictCode;
+  ChildCtx.DerivedConstructorThisGuard := False;
   EmitLineMapping(ChildCtx, AGetter.Line, AGetter.Column);
   EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot);
   ACtx.CompileFunctionBody(AGetter.Body);
@@ -4411,6 +4414,7 @@ begin
   ChildCtx.Scope := ChildScope;
   ChildCtx.NonStrictMode := ACtx.NonStrictMode and
     not ChildTemplate.StrictCode;
+  ChildCtx.DerivedConstructorThisGuard := False;
   EmitLineMapping(ChildCtx, ASetter.Line, ASetter.Column);
   EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot);
   EmitDefaultParameters(ChildCtx, SetterParams);
@@ -4511,6 +4515,7 @@ begin
   ChildCtx.Scope := ChildScope;
   ChildCtx.NonStrictMode := ACtx.NonStrictMode and
     not ChildTemplate.StrictCode;
+  ChildCtx.DerivedConstructorThisGuard := False;
 
   EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot);
 
@@ -4814,6 +4819,7 @@ begin
   ChildCtx.Scope := ChildScope;
   ChildCtx.NonStrictMode := ACtx.NonStrictMode and
     not ChildTemplate.StrictCode;
+  ChildCtx.DerivedConstructorThisGuard := False;
 
   if Length(AClassDef.FFieldOrder) > 0 then
   begin
@@ -4964,6 +4970,7 @@ begin
   ChildCtx.Scope := ChildScope;
   ChildCtx.NonStrictMode := ACtx.NonStrictMode and
     not ChildTemplate.StrictCode;
+  ChildCtx.DerivedConstructorThisGuard := False;
 
   CompileBlockStatement(ChildCtx, ABody);
 

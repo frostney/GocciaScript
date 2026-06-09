@@ -5,6 +5,8 @@ unit Goccia.Compiler;
 interface
 
 uses
+  Generics.Collections,
+
   Goccia.AST.Expressions,
   Goccia.AST.Node,
   Goccia.AST.Statements,
@@ -29,6 +31,7 @@ type
     FLabelReentryStatement: TGocciaStatement;
     FOptimizationOptions: TGocciaCompilerOptimizationOptions;
     FDerivedConstructorThisGuard: Boolean;
+    FTemplateDerivedConstructorThisGuards: TDictionary<TGocciaFunctionTemplate, Boolean>;
     procedure DoCompileExpression(const AExpr: TGocciaExpression;
       const ADest: UInt8);
     function DoCompileStatement(const AStmt: TGocciaStatement): Boolean;
@@ -58,7 +61,6 @@ const
 implementation
 
 uses
-  Generics.Collections,
   SysUtils,
 
   Goccia.Bytecode,
@@ -75,6 +77,8 @@ begin
   inherited Create;
   FSourcePath := ASourcePath;
   FFormalParameterCounts := TFormalParameterCountMap.Create;
+  FTemplateDerivedConstructorThisGuards :=
+    TDictionary<TGocciaFunctionTemplate, Boolean>.Create;
   FDerivedConstructorThisGuard := False;
   FModule := nil;
   FCurrentTemplate := nil;
@@ -85,6 +89,7 @@ end;
 
 destructor TGocciaCompiler.Destroy;
 begin
+  FTemplateDerivedConstructorThisGuards.Free;
   FFormalParameterCounts.Free;
   inherited;
 end;
@@ -113,14 +118,24 @@ procedure TGocciaCompiler.DoSetDerivedConstructorThisGuard(
   const AGuard: Boolean);
 begin
   FDerivedConstructorThisGuard := AGuard;
+  if Assigned(FCurrentTemplate) then
+    FTemplateDerivedConstructorThisGuards.AddOrSetValue(
+      FCurrentTemplate, AGuard);
 end;
 
 procedure TGocciaCompiler.DoSwapState(
   const ATemplate: TGocciaFunctionTemplate;
   const AScope: TGocciaCompilerScope);
 begin
+  if Assigned(FCurrentTemplate) then
+    FTemplateDerivedConstructorThisGuards.AddOrSetValue(
+      FCurrentTemplate, FDerivedConstructorThisGuard);
   FCurrentTemplate := ATemplate;
   FCurrentScope := AScope;
+  if not Assigned(FCurrentTemplate) or
+     not FTemplateDerivedConstructorThisGuards.TryGetValue(
+       FCurrentTemplate, FDerivedConstructorThisGuard) then
+    FDerivedConstructorThisGuard := False;
 end;
 
 procedure TGocciaCompiler.DoCompileExpression(

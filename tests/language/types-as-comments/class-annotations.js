@@ -76,6 +76,24 @@ test("class with extends and implements", () => {
   expect(d.serialize()).toBe("base");
 });
 
+test("class heritage with generic type arguments stops before the body", () => {
+  class Base<T> {
+    value: T;
+    constructor(value: T) {
+      this.value = value;
+    }
+  }
+
+  class Derived<T> extends Base<T> {
+    read(): T {
+      return this.value;
+    }
+  }
+
+  const d = new Derived(42);
+  expect(d.read()).toBe(42);
+});
+
 test("access modifiers are parsed", () => {
   class Person {
     public name: string;

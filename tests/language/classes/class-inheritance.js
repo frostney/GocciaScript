@@ -98,6 +98,64 @@ test("super() in constructor arrow initializes replacement receiver fields", () 
   expect(derived instanceof Derived).toBeTruthy();
 });
 
+test("super property update uses receiver for instance accessors", () => {
+  let setterReceiver;
+
+  class Base {
+    get count() {
+      return this._count === undefined ? 0 : this._count;
+    }
+
+    set count(value) {
+      setterReceiver = this;
+      this._count = value;
+    }
+  }
+
+  class Derived extends Base {
+    incrementPostfix() {
+      return super.count++;
+    }
+
+    incrementPrefixComputed() {
+      return ++super["count"];
+    }
+  }
+
+  const d = new Derived();
+  expect(d.incrementPostfix()).toBe(0);
+  expect(d._count).toBe(1);
+  expect(setterReceiver).toBe(d);
+  expect(d.incrementPrefixComputed()).toBe(2);
+  expect(d._count).toBe(2);
+});
+
+test("static super property update writes through the derived constructor receiver", () => {
+  let setterReceiver;
+
+  class Base {
+    static get value() {
+      return this._value === undefined ? 0 : this._value;
+    }
+
+    static set value(next) {
+      setterReceiver = this;
+      this._value = next;
+    }
+  }
+
+  class Derived extends Base {
+    static bump() {
+      return super.value++;
+    }
+  }
+
+  expect(Derived.bump()).toBe(0);
+  expect(Derived._value).toBe(1);
+  expect(Base._value).toBeUndefined();
+  expect(setterReceiver).toBe(Derived);
+});
+
 test("new.target flows through superclass constructors", () => {
   class Base {
     constructor() {

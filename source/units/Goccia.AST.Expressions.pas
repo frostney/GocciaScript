@@ -2092,6 +2092,25 @@ begin
   else if Operand is TGocciaMemberExpression then
   begin
     MemberExpr := TGocciaMemberExpression(Operand);
+    if MemberExpr.ObjectExpr is TGocciaSuperExpression then
+    begin
+      if MemberExpr.Computed then
+        PropertyKeyValue := ToPropertyKey(
+          MemberExpr.PropertyExpression.Evaluate(AContext))
+      else
+        PropertyKeyValue := TGocciaStringLiteralValue.Create(
+          MemberExpr.PropertyName);
+      OldValue := ToNumericValue(NormalizeAssignmentValue(
+        GetSuperProperty(AContext, PropertyKeyValue)));
+      NewValue := PerformIncrement(OldValue, Operator = gttIncrement);
+      AssignSuperProperty(AContext, PropertyKeyValue, NewValue);
+      if IsPrefix then
+        Result := NewValue
+      else
+        Result := OldValue;
+      Exit;
+    end;
+
     Obj := MemberExpr.ObjectExpr.Evaluate(AContext);
     if MemberExpr.Computed then
     begin

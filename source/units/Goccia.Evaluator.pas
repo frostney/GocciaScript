@@ -2878,7 +2878,9 @@ begin
 end;
 
 function EvaluateMemberCore(const AMemberExpression: TGocciaMemberExpression; const AContext: TGocciaEvaluationContext; const AOutObjectValue: PGocciaValue): TGocciaValue; forward;
-function ResolveSuperPropertyBase(const AContext: TGocciaEvaluationContext): TGocciaValue; forward;
+function ResolveSuperThisValue(const AContext: TGocciaEvaluationContext): TGocciaValue; forward;
+function ResolveSuperPropertyBase(const AContext: TGocciaEvaluationContext;
+  const AThisValue: TGocciaValue): TGocciaValue; forward;
 
 procedure AssignSuperProperty(const AContext: TGocciaEvaluationContext;
   const APropertyKey, AValue: TGocciaValue);
@@ -2887,9 +2889,11 @@ var
   BaseValue: TGocciaValue;
   KeyValue: TGocciaValue;
   PropertyName: string;
+  ThisValue: TGocciaValue;
   Success: Boolean;
 begin
-  BaseValue := ResolveSuperPropertyBase(AContext);
+  ThisValue := ResolveSuperThisValue(AContext);
+  BaseValue := ResolveSuperPropertyBase(AContext, ThisValue);
   KeyValue := ToPropertyKey(APropertyKey);
   if KeyValue is TGocciaSymbolValue then
     PropertyName := TGocciaSymbolValue(KeyValue).ToDisplayString.Value
@@ -2903,17 +2907,40 @@ begin
   BaseObject := TGocciaObjectValue(BaseValue);
   if KeyValue is TGocciaSymbolValue then
     Success := BaseObject.AssignSymbolPropertyWithReceiver(
-      TGocciaSymbolValue(KeyValue), AValue, AContext.Scope.ThisValue)
+      TGocciaSymbolValue(KeyValue), AValue, ThisValue)
   else
     Success := BaseObject.AssignPropertyWithReceiver(PropertyName, AValue,
-      AContext.Scope.ThisValue);
+      ThisValue);
 
   if not Success then
     ThrowTypeError(Format(SErrorCannotAssignReadOnly, [PropertyName]),
       SSuggestCannotDeleteNonConfigurable);
 end;
 
-function ResolveSuperPropertyBase(const AContext: TGocciaEvaluationContext): TGocciaValue;
+function ResolveSuperThisValue(const AContext: TGocciaEvaluationContext): TGocciaValue;
+var
+  ScopeCursor: TGocciaScope;
+begin
+  ScopeCursor := AContext.Scope;
+  while Assigned(ScopeCursor) do
+  begin
+    if ScopeCursor is TGocciaMethodCallScope then
+    begin
+      if (ScopeCursor.CustomLabel = PROP_CONSTRUCTOR) and
+         Assigned(TGocciaMethodCallScope(ScopeCursor).SuperClass) and
+         not TGocciaMethodCallScope(ScopeCursor).SuperConstructorCalled then
+        ThrowReferenceError(
+          'Must call super constructor before accessing this',
+          'call super() before reading this or super properties');
+      Break;
+    end;
+    ScopeCursor := ScopeCursor.Parent;
+  end;
+  Result := AContext.Scope.ThisValue;
+end;
+
+function ResolveSuperPropertyBase(const AContext: TGocciaEvaluationContext;
+  const AThisValue: TGocciaValue): TGocciaValue;
 var
   OwningClass: TGocciaClassValue;
   OwningClassValue: TGocciaValue;
@@ -2922,7 +2949,7 @@ begin
   Result := nil;
   OwningClassValue := AContext.Scope.FindOwningClass;
 
-  if AContext.Scope.ThisValue is TGocciaClassValue then
+  if AThisValue is TGocciaClassValue then
   begin
     if OwningClassValue is TGocciaObjectValue then
       Exit(TGocciaObjectValue(OwningClassValue).Prototype);
@@ -2954,8 +2981,10 @@ var
   BaseValue: TGocciaValue;
   KeyValue: TGocciaValue;
   PropertyName: string;
+  ThisValue: TGocciaValue;
 begin
-  BaseValue := ResolveSuperPropertyBase(AContext);
+  ThisValue := ResolveSuperThisValue(AContext);
+  BaseValue := ResolveSuperPropertyBase(AContext, ThisValue);
   KeyValue := ToPropertyKey(APropertyKey);
   if KeyValue is TGocciaSymbolValue then
     PropertyName := TGocciaSymbolValue(KeyValue).ToDisplayString.Value
@@ -2969,10 +2998,10 @@ begin
   BaseObject := TGocciaObjectValue(BaseValue);
   if KeyValue is TGocciaSymbolValue then
     Result := BaseObject.GetSymbolPropertyWithReceiver(
-      TGocciaSymbolValue(KeyValue), AContext.Scope.ThisValue)
+      TGocciaSymbolValue(KeyValue), ThisValue)
   else
     Result := BaseObject.GetPropertyWithContext(PropertyName,
-      AContext.Scope.ThisValue);
+      ThisValue);
 end;
 
 function EvaluateMember(const AMemberExpression: TGocciaMemberExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
@@ -3021,28 +3050,6 @@ var
 
     Result := nil;
   end;
-
-  function ResolveSuperThisValue: TGocciaValue;
-  var
-    ScopeCursor: TGocciaScope;
-  begin
-    ScopeCursor := AContext.Scope;
-    while Assigned(ScopeCursor) do
-    begin
-      if ScopeCursor is TGocciaMethodCallScope then
-      begin
-        if (ScopeCursor.CustomLabel = PROP_CONSTRUCTOR) and
-           Assigned(TGocciaMethodCallScope(ScopeCursor).SuperClass) and
-           not TGocciaMethodCallScope(ScopeCursor).SuperConstructorCalled then
-          ThrowReferenceError(
-            'Must call super constructor before accessing this',
-            'call super() before reading this or super properties');
-        Break;
-      end;
-      ScopeCursor := ScopeCursor.Parent;
-    end;
-    Result := AContext.Scope.ThisValue;
-  end;
 begin
   ObjectEvaluated := False;
 
@@ -3063,7 +3070,7 @@ begin
   // Handle super.method() specially
   if AMemberExpression.ObjectExpr is TGocciaSuperExpression then
   begin
-    ThisValue := ResolveSuperThisValue;
+    ThisValue := ResolveSuperThisValue(AContext);
     SuperClassValue := EvaluateExpression(AMemberExpression.ObjectExpr, AContext);
     if SuperClassValue is TGocciaClassValue then
       SuperClass := TGocciaClassValue(SuperClassValue)

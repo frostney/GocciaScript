@@ -920,8 +920,20 @@ begin
 end;
 
 function TGocciaObjectValue.GetOwnPropertyKeys: TArray<string>;
+var
+  Key: string;
+  Count: Integer;
 begin
-  Result := FProperties.Keys;
+  SetLength(Result, FProperties.Count);
+  Count := 0;
+  for Key in FProperties.Keys do
+  begin
+    if IsBytecodePrivateInitializerMarker(Key) then
+      Continue;
+    Result[Count] := Key;
+    Inc(Count);
+  end;
+  SetLength(Result, Count);
 end;
 
 

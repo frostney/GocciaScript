@@ -30,6 +30,20 @@ describe("decorator expressions", () => {
     expect(called).toBe(true);
   });
 
+  test("@obj.default accepts keyword property names", () => {
+    let called = false;
+    const decorators = {
+      default: (value, context) => { called = true; },
+    };
+
+    class C {
+      @decorators.default
+      foo() {}
+    }
+
+    expect(called).toBe(true);
+  });
+
   test("@factory(arg)", () => {
     let receivedArg;
 

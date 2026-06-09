@@ -154,7 +154,7 @@ function ToArrayBufferSliceIndex(const AValue: TGocciaValue;
   const ALength: Integer): Integer;
 var
   Num: TGocciaNumberLiteralValue;
-  RawIndex: Double;
+  IntegerIndex: Double;
 begin
   Num := AValue.ToNumberLiteral;
   if Num.IsNaN or Num.IsNegativeInfinity then
@@ -162,17 +162,17 @@ begin
   if Num.IsInfinity then
     Exit(ALength);
 
-  RawIndex := Num.Value;
-  if RawIndex < 0 then
+  IntegerIndex := Trunc(Num.Value);
+  if IntegerIndex < 0 then
   begin
-    if RawIndex <= -ALength then
+    if IntegerIndex <= -ALength then
       Exit(0);
-    Exit(Max(ALength + Trunc(RawIndex), 0));
+    Exit(Max(ALength + Trunc(IntegerIndex), 0));
   end;
 
-  if RawIndex >= ALength then
+  if IntegerIndex >= ALength then
     Exit(ALength);
-  Result := Trunc(RawIndex);
+  Result := Trunc(IntegerIndex);
 end;
 
 function TGocciaArrayBufferValue.GetByteLength: Integer;

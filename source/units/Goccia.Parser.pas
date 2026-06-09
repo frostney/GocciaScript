@@ -5455,9 +5455,13 @@ begin
       end
       else
       begin
-        PropertyName := Consume(gttIdentifier,
-          'Expected property name after "."',
-          SSuggestPropertyNameIdentifier).Lexeme;
+        if IsIdentifierNameToken(Peek.TokenType) then
+          PropertyName := Advance.Lexeme
+        else
+          raise TGocciaSyntaxError.Create(
+            'Expected property name after "."',
+            Peek.Line, Peek.Column, FFileName, FSourceLines,
+            SSuggestPropertyNameIdentifier);
         Result := TGocciaMemberExpression.Create(
           Result, PropertyName, False, Line, Column);
       end;
@@ -6060,7 +6064,7 @@ begin
 
   if Match(gttExtends) then
   begin
-    SuperClassExpression := Expression;
+    SuperClassExpression := Call;
     if not Assigned(SuperClassExpression) then
       raise TGocciaSyntaxError.Create('Expected superclass expression',
         Previous.Line, Previous.Column, FFileName, FSourceLines,
@@ -6144,8 +6148,8 @@ begin
       end;
 
       if IsStatic and
-         (Check(gttAssign) or Check(gttSemicolon) or Check(gttColon) or
-          Check(gttQuestion) or
+         (Check(gttLeftParen) or Check(gttLess) or Check(gttAssign) or
+          Check(gttSemicolon) or Check(gttColon) or Check(gttQuestion) or
           (FAutomaticSemicolonInsertion and (Previous.Line < Peek.Line))) then
       begin
         IsStatic := False;
@@ -6165,6 +6169,7 @@ begin
          (FCurrent + 1 < FTokens.Count) and
          (FTokens[FCurrent + 1].Line = Peek.Line) and
          not CheckNext(gttLeftParen) and not CheckNext(gttColon) and
+         not CheckNext(gttLess) and
          not CheckNext(gttSemicolon) and not CheckNext(gttAssign) then
       begin
         Advance;
@@ -6209,7 +6214,7 @@ begin
         MemberName := Advance.Lexeme;
         PresetMemberName := True;
       end
-      else if not IsAccessor and CheckUnescapedIdentifierKeyword(KEYWORD_GET) and not CheckNext(gttColon) and not CheckNext(gttLeftParen) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) and not CheckNext(gttSemicolon) and not CheckNext(gttAssign) and not CheckNext(gttQuestion) then
+      else if not IsAccessor and CheckUnescapedIdentifierKeyword(KEYWORD_GET) and not CheckNext(gttColon) and not CheckNext(gttLeftParen) and not CheckNext(gttLess) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) and not CheckNext(gttSemicolon) and not CheckNext(gttAssign) and not CheckNext(gttQuestion) then
       begin
         Advance;
         IsGetter := True;
@@ -6235,7 +6240,7 @@ begin
             'Expected property name after "get"',
             SSuggestProvideGetterPropertyName);
       end
-      else if not IsAccessor and CheckUnescapedIdentifierKeyword(KEYWORD_SET) and not CheckNext(gttColon) and not CheckNext(gttLeftParen) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) and not CheckNext(gttSemicolon) and not CheckNext(gttAssign) and not CheckNext(gttQuestion) then
+      else if not IsAccessor and CheckUnescapedIdentifierKeyword(KEYWORD_SET) and not CheckNext(gttColon) and not CheckNext(gttLeftParen) and not CheckNext(gttLess) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) and not CheckNext(gttSemicolon) and not CheckNext(gttAssign) and not CheckNext(gttQuestion) then
       begin
         Advance;
         IsSetter := True;
