@@ -169,6 +169,7 @@ var
   InitArg: TGocciaValue;
   ArrValue: TGocciaArrayValue;
   EntryArr: TGocciaArrayValue;
+  EntryObj: TGocciaObjectValue;
   I: Integer;
 begin
   if AArguments.Length = 0 then
@@ -184,6 +185,12 @@ begin
         EntryArr := TGocciaArrayValue(ArrValue.Elements[I]);
         if EntryArr.Elements.Count >= 2 then
           SetEntry(EntryArr.Elements[0], EntryArr.Elements[1]);
+      end
+      else if Assigned(ArrValue.Elements[I]) and
+              (ArrValue.Elements[I] is TGocciaObjectValue) then
+      begin
+        EntryObj := TGocciaObjectValue(ArrValue.Elements[I]);
+        SetEntry(EntryObj.GetProperty('0'), EntryObj.GetProperty('1'));
       end;
     end;
   end;

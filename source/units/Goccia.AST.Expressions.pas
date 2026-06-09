@@ -535,12 +535,15 @@ type
   TGocciaSetterExpression = class(TGocciaExpression)
   private
     FParameter: string;
+    FParameters: TGocciaParameterArray;
     FBody: TGocciaASTNode;
     FSourceText: string;
   public
-    constructor Create(const AParameter: string; const ABody: TGocciaASTNode; const ALine, AColumn: Integer);
+    constructor Create(const AParameter: string; const ABody: TGocciaASTNode; const ALine, AColumn: Integer); overload;
+    constructor Create(const AParameters: TGocciaParameterArray; const ABody: TGocciaASTNode; const ALine, AColumn: Integer); overload;
     function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Parameter: string read FParameter;
+    property Parameters: TGocciaParameterArray read FParameters;
     property Body: TGocciaASTNode read FBody;
     property SourceText: string read FSourceText write FSourceText;
   end;
@@ -834,11 +837,13 @@ type
   private
     FObject: TGocciaExpression;
     FPrivateName: string;
+    FOptional: Boolean;
   public
-    constructor Create(const AObject: TGocciaExpression; const APrivateName: string; const ALine, AColumn: Integer);
+    constructor Create(const AObject: TGocciaExpression; const APrivateName: string; const ALine, AColumn: Integer; const AOptional: Boolean = False);
     function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property ObjectExpr: TGocciaExpression read FObject;
     property PrivateName: string read FPrivateName;
+    property Optional: Boolean read FOptional;
   end;
 
   TGocciaPrivatePropertyAssignmentExpression = class(TGocciaExpression)
@@ -1365,11 +1370,12 @@ end;
 
 { TGocciaPrivateMemberExpression }
 
-constructor TGocciaPrivateMemberExpression.Create(const AObject: TGocciaExpression; const APrivateName: string; const ALine, AColumn: Integer);
+constructor TGocciaPrivateMemberExpression.Create(const AObject: TGocciaExpression; const APrivateName: string; const ALine, AColumn: Integer; const AOptional: Boolean = False);
 begin
   inherited Create(ALine, AColumn);
   FObject := AObject;
   FPrivateName := APrivateName;
+  FOptional := AOptional;
 end;
 
 { TGocciaPrivatePropertyAssignmentExpression }
@@ -1422,6 +1428,25 @@ constructor TGocciaSetterExpression.Create(const AParameter: string; const ABody
 begin
   inherited Create(ALine, AColumn);
   FParameter := AParameter;
+  SetLength(FParameters, 1);
+  FParameters[0].Name := AParameter;
+  FParameters[0].DefaultValue := nil;
+  FParameters[0].IsPattern := False;
+  FParameters[0].Pattern := nil;
+  FParameters[0].IsRest := False;
+  FParameters[0].IsOptional := False;
+  FParameters[0].TypeAnnotation := '';
+  FBody := ABody;
+end;
+
+constructor TGocciaSetterExpression.Create(const AParameters: TGocciaParameterArray; const ABody: TGocciaASTNode; const ALine, AColumn: Integer);
+begin
+  inherited Create(ALine, AColumn);
+  FParameters := AParameters;
+  if Length(FParameters) > 0 then
+    FParameter := FParameters[0].Name
+  else
+    FParameter := '';
   FBody := ABody;
 end;
 

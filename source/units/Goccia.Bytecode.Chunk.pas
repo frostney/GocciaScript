@@ -48,6 +48,7 @@ type
   end;
 
   TGocciaUpvalueDescriptor = record
+    Name: string;
     IsLocal: Boolean;
     Index: UInt8;
   end;
@@ -124,6 +125,7 @@ type
     FParameterPreambleSize: UInt16;
     FTypeCheckPreambleSize: UInt8;
     FDirectEvalSyntheticArgumentsSlot: Integer;
+    FRejectArgumentsInDirectEval: Boolean;
     FProfileIndex: Integer;
     FSourceText: string;
     FTemplateSiteId: UInt64;
@@ -158,7 +160,8 @@ type
     function GetRegExpProgramCache(const ASlot: Integer): TObject;
     procedure SetRegExpProgramCache(const ASlot: Integer; const AValue: TObject);
     function AddFunction(const AFunction: TGocciaFunctionTemplate): UInt16;
-    procedure AddUpvalueDescriptor(const AIsLocal: Boolean; const AIndex: UInt8);
+    procedure AddUpvalueDescriptor(const AIsLocal: Boolean; const AIndex: UInt8;
+      const AName: string = '');
     procedure AddDirectEvalEnvironment(const APC: UInt32;
       const ABindings: TGocciaDirectEvalBindingArray);
     procedure AddExceptionHandler(const ATryStart, ATryEnd, ACatchTarget,
@@ -211,6 +214,7 @@ type
     property ParameterPreambleSize: UInt16 read FParameterPreambleSize write FParameterPreambleSize;
     property TypeCheckPreambleSize: UInt8 read FTypeCheckPreambleSize write FTypeCheckPreambleSize;
     property DirectEvalSyntheticArgumentsSlot: Integer read FDirectEvalSyntheticArgumentsSlot write FDirectEvalSyntheticArgumentsSlot;
+    property RejectArgumentsInDirectEval: Boolean read FRejectArgumentsInDirectEval write FRejectArgumentsInDirectEval;
     property ProfileIndex: Integer read FProfileIndex write FProfileIndex;
     property SourceText: string read FSourceText write FSourceText;
     property TemplateSiteId: UInt64 read FTemplateSiteId;
@@ -271,6 +275,7 @@ begin
   FParameterPreambleSize := 0;
   FTypeCheckPreambleSize := 0;
   FDirectEvalSyntheticArgumentsSlot := -1;
+  FRejectArgumentsInDirectEval := False;
   FProfileIndex := -1;
   FTemplateSiteId := AllocateTemplateSiteId;
   FRegExpProgramCacheCount := 0;
@@ -526,12 +531,13 @@ begin
 end;
 
 procedure TGocciaFunctionTemplate.AddUpvalueDescriptor(
-  const AIsLocal: Boolean; const AIndex: UInt8);
+  const AIsLocal: Boolean; const AIndex: UInt8; const AName: string);
 begin
   if FUpvalueCount >= High(UInt8) then
     raise Exception.Create('Upvalue descriptor overflow: exceeds 255 entries');
   if FUpvalueCount >= Length(FUpvalueDescriptors) then
     SetLength(FUpvalueDescriptors, FUpvalueCount * 2 + 4);
+  FUpvalueDescriptors[FUpvalueCount].Name := AName;
   FUpvalueDescriptors[FUpvalueCount].IsLocal := AIsLocal;
   FUpvalueDescriptors[FUpvalueCount].Index := AIndex;
   Inc(FUpvalueCount);

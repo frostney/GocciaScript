@@ -58,6 +58,8 @@ type
     FPrivateMethods: TOrderedStringMap<TGocciaMethodValue>;
     FPrivateGetters: TOrderedStringMap<TGocciaFunctionBase>;
     FPrivateSetters: TOrderedStringMap<TGocciaFunctionBase>;
+    FDeclaredPrivateNames: TStringList;
+    FDeclaredPrivateKeys: TStringList;
     FNativeSuperConstructor: TGocciaObjectValue;
     FPrivateBrandToken: string;
     FMethodInitializers: array of TGocciaValue;
@@ -109,6 +111,10 @@ type
     procedure AddPrivateStaticMethod(const AName: string; const AValue: TGocciaValue);
     procedure AddPrivateMethod(const AName: string; const AMethod: TGocciaMethodValue);
     function GetPrivateMethod(const AName: string): TGocciaMethodValue;
+    procedure DeclarePrivateName(const AName: string;
+      const AInternalKey: string = '');
+    function ResolveDeclaredPrivateKey(const AName: string;
+      out AInternalKey: string): Boolean;
     procedure AppendOwnPrivateNames(const ANames: TStrings);
     function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; virtual;
     function NativeInstanceDefaultPrototype: TGocciaObjectValue; virtual;
@@ -126,6 +132,7 @@ type
     function TryDefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor): Boolean; override;
     procedure SetProperty(const AName: string; const AValue: TGocciaValue); override;
     function GetOwnPropertyDescriptor(const AName: string): TGocciaPropertyDescriptor; override;
+    function GetAllPropertyNames: TArray<string>; override;
     function HasOwnProperty(const AName: string): Boolean; override;
     function DeleteProperty(const AName: string): Boolean; override;
     function Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; virtual;
@@ -321,6 +328,7 @@ uses
   Generics.Collections,
   SysUtils,
 
+  Goccia.Arithmetic,
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
@@ -377,6 +385,36 @@ begin
     AClassValue.FPrototype := FunctionPrototype;
 end;
 
+function ClassPrototypeDescriptorChangeAllowed(
+  const APrototype: TGocciaObjectValue;
+  const ADescriptor: TGocciaPropertyDescriptor): Boolean;
+var
+  DataDescriptor: TGocciaPropertyDescriptorData;
+begin
+  Result := False;
+  if not Assigned(ADescriptor) then
+    Exit(True);
+
+  if ADescriptor.HasConfigurableField and ADescriptor.Configurable then
+    Exit;
+  if ADescriptor.HasEnumerableField and ADescriptor.Enumerable then
+    Exit;
+  if IsAccessorDescriptor(ADescriptor) then
+    Exit;
+
+  if IsDataDescriptor(ADescriptor) then
+  begin
+    DataDescriptor := TGocciaPropertyDescriptorData(ADescriptor);
+    if ADescriptor.HasWritableField and DataDescriptor.Writable then
+      Exit;
+    if ADescriptor.HasValue and
+       not IsSameValue(APrototype, DataDescriptor.Value) then
+      Exit;
+  end;
+
+  Result := True;
+end;
+
 constructor TGocciaClassValue.Create(const AName: string; const ASuperClass: TGocciaClassValue);
 begin
   inherited Create;
@@ -399,6 +437,13 @@ begin
   FPrivateMethods := TOrderedStringMap<TGocciaMethodValue>.Create;
   FPrivateGetters := TOrderedStringMap<TGocciaFunctionBase>.Create;
   FPrivateSetters := TOrderedStringMap<TGocciaFunctionBase>.Create;
+  FDeclaredPrivateNames := TStringList.Create;
+  FDeclaredPrivateNames.CaseSensitive := True;
+  FDeclaredPrivateNames.Sorted := False;
+  FDeclaredPrivateNames.Duplicates := dupIgnore;
+  FDeclaredPrivateKeys := TStringList.Create;
+  FDeclaredPrivateKeys.CaseSensitive := True;
+  FDeclaredPrivateKeys.Sorted := False;
   FNativeSuperConstructor := nil;
   FClassPrototype := TGocciaObjectValue.Create;
   FConstructorMethod := nil;
@@ -426,6 +471,8 @@ begin
   FPrivateMethods.Free;
   FPrivateGetters.Free;
   FPrivateSetters.Free;
+  FDeclaredPrivateNames.Free;
+  FDeclaredPrivateKeys.Free;
   // Don't free FClassPrototype - it's GC-managed
   inherited;
 end;
@@ -618,6 +665,10 @@ var
   ExistingDescriptor: TGocciaPropertyDescriptor;
   ExistingSetter: TGocciaValue;
 begin
+  if AName = PROP_PROTOTYPE then
+    ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [AName]),
+      SSuggestCannotDeleteNonConfigurable);
+
   ExistingDescriptor := inherited GetOwnPropertyDescriptor(AName);
   ExistingSetter := nil;
   if (ExistingDescriptor is TGocciaPropertyDescriptorAccessor) and
@@ -634,6 +685,10 @@ var
   ExistingDescriptor: TGocciaPropertyDescriptor;
   ExistingGetter: TGocciaValue;
 begin
+  if AName = PROP_PROTOTYPE then
+    ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [AName]),
+      SSuggestCannotDeleteNonConfigurable);
+
   ExistingDescriptor := inherited GetOwnPropertyDescriptor(AName);
   ExistingGetter := nil;
   if (ExistingDescriptor is TGocciaPropertyDescriptorAccessor) and
@@ -693,7 +748,8 @@ end;
 
 function TGocciaClassValue.HasOwnPrivateName(const AName: string): Boolean;
 begin
-  Result := FPrivateInstancePropertyDefs.ContainsKey(AName) or
+  Result := (FDeclaredPrivateNames.IndexOf(AName) >= 0) or
+    FPrivateInstancePropertyDefs.ContainsKey(AName) or
     FPrivateStaticProperties.ContainsKey(AName) or
     FPrivateStaticMethods.ContainsKey(AName) or
     FPrivateMethods.ContainsKey(AName) or
@@ -1031,21 +1087,28 @@ end;
 
 procedure TGocciaClassValue.AddPrivateInstanceProperty(const AName: string; const AExpression: TGocciaExpression);
 begin
+  DeclarePrivateName(AName);
   FPrivateInstancePropertyDefs.Add(AName, AExpression);
 end;
 
 procedure TGocciaClassValue.AddPrivateStaticProperty(const AName: string; const AValue: TGocciaValue);
 begin
+  DeclarePrivateName(AName);
+  if (not FPrivateStaticProperties.ContainsKey(AName)) and not Extensible then
+    ThrowTypeError('Cannot add private elements to a non-extensible object',
+      SSuggestObjectNotExtensible);
   FPrivateStaticProperties.AddOrSetValue(AName, AValue);
 end;
 
 procedure TGocciaClassValue.AddPrivateStaticMethod(const AName: string; const AValue: TGocciaValue);
 begin
+  DeclarePrivateName(AName);
   FPrivateStaticMethods.AddOrSetValue(AName, AValue);
 end;
 
 procedure TGocciaClassValue.AddPrivateMethod(const AName: string; const AMethod: TGocciaMethodValue);
 begin
+  DeclarePrivateName(AName);
   FPrivateMethods.AddOrSetValue(AName, AMethod);
 end;
 
@@ -1055,8 +1118,29 @@ begin
     Result := nil;
 end;
 
+procedure TGocciaClassValue.DeclarePrivateName(const AName: string;
+  const AInternalKey: string);
+begin
+  if AName = '' then
+    Exit;
+  if FDeclaredPrivateNames.IndexOf(AName) < 0 then
+    FDeclaredPrivateNames.Add(AName);
+  if AInternalKey <> '' then
+    FDeclaredPrivateKeys.Values[AName] := AInternalKey;
+end;
+
+function TGocciaClassValue.ResolveDeclaredPrivateKey(const AName: string;
+  out AInternalKey: string): Boolean;
+begin
+  AInternalKey := FDeclaredPrivateKeys.Values[AName];
+  Result := AInternalKey <> '';
+end;
+
 procedure TGocciaClassValue.AppendOwnPrivateNames(const ANames: TStrings);
 var
+  I: Integer;
+  DeclaredName: string;
+  DeclaredKey: string;
   PropertyPair: TGocciaExpressionMap.TKeyValuePair;
   StaticPair: TGocciaValueMap.TKeyValuePair;
   MethodPair: TOrderedStringMap<TGocciaMethodValue>.TKeyValuePair;
@@ -1064,6 +1148,16 @@ var
 begin
   if not Assigned(ANames) then
     Exit;
+
+  for I := 0 to FDeclaredPrivateNames.Count - 1 do
+  begin
+    DeclaredName := FDeclaredPrivateNames[I];
+    DeclaredKey := FDeclaredPrivateKeys.Values[DeclaredName];
+    if DeclaredKey = '' then
+      DeclaredKey := DeclaredName;
+    if ANames.IndexOf(DeclaredKey) < 0 then
+      ANames.Add(DeclaredKey);
+  end;
 
   for PropertyPair in FPrivateInstancePropertyDefs do
     if ANames.IndexOf(PropertyPair.Key) < 0 then
@@ -1399,6 +1493,18 @@ end;
 procedure TGocciaClassValue.DefineProperty(const AName: string;
   const ADescriptor: TGocciaPropertyDescriptor);
 begin
+  if AName = PROP_PROTOTYPE then
+  begin
+    if ClassPrototypeDescriptorChangeAllowed(FClassPrototype, ADescriptor) then
+    begin
+      ADescriptor.Free;
+      Exit;
+    end;
+    ADescriptor.Free;
+    ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [AName]),
+      SSuggestCannotDeleteNonConfigurable);
+  end;
+
   if AName = PROP_NAME then
     FNameDeleted := False
   else if AName = PROP_LENGTH then
@@ -1409,6 +1515,17 @@ end;
 function TGocciaClassValue.TryDefineProperty(const AName: string;
   const ADescriptor: TGocciaPropertyDescriptor): Boolean;
 begin
+  if AName = PROP_PROTOTYPE then
+  begin
+    if ClassPrototypeDescriptorChangeAllowed(FClassPrototype, ADescriptor) then
+    begin
+      ADescriptor.Free;
+      Exit(True);
+    end;
+    ADescriptor.Free;
+    Exit(False);
+  end;
+
   Result := inherited TryDefineProperty(AName, ADescriptor);
   if Result then
   begin
@@ -1496,6 +1613,42 @@ begin
   end
   else
     Result := inherited GetOwnPropertyDescriptor(AName);
+end;
+
+function TGocciaClassValue.GetAllPropertyNames: TArray<string>;
+var
+  OwnNames: TArray<string>;
+  Count: Integer;
+  I: Integer;
+
+  procedure AppendName(const AName: string);
+  var
+    J: Integer;
+  begin
+    for J := 0 to Count - 1 do
+      if Result[J] = AName then
+        Exit;
+    if Count >= Length(Result) then
+      SetLength(Result, Count + 8);
+    Result[Count] := AName;
+    Inc(Count);
+  end;
+
+begin
+  OwnNames := inherited GetAllPropertyNames;
+  SetLength(Result, Length(OwnNames) + 3);
+  Count := 0;
+
+  if not FLengthDeleted then
+    AppendName(PROP_LENGTH);
+  if not FNameDeleted then
+    AppendName(PROP_NAME);
+  AppendName(PROP_PROTOTYPE);
+
+  for I := 0 to High(OwnNames) do
+    AppendName(OwnNames[I]);
+
+  SetLength(Result, Count);
 end;
 
 function TGocciaClassValue.HasOwnProperty(const AName: string): Boolean;

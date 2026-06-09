@@ -68,6 +68,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.Realm,
   Goccia.Values.ErrorHelper,
+  Goccia.Values.FunctionBase,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
 
@@ -90,6 +91,27 @@ begin
   if not (AThisValue is TGocciaArrayBufferValue) then
     ThrowTypeError(Format(SErrorRequiresArrayBuffer, [AMethodName]), SSuggestArrayBufferThisType);
   Result := TGocciaArrayBufferValue(AThisValue);
+end;
+
+function ArrayBufferSpeciesConstructor(const ABuffer: TGocciaArrayBufferValue): TGocciaValue;
+var
+  ConstructorValue, SpeciesValue: TGocciaValue;
+begin
+  // ES2026 §7.3.22 SpeciesConstructor(O, defaultConstructor)
+  ConstructorValue := ABuffer.GetProperty(PROP_CONSTRUCTOR);
+  if ConstructorValue is TGocciaUndefinedLiteralValue then
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  if not (ConstructorValue is TGocciaObjectValue) then
+    ThrowTypeError(SErrorSpeciesNotConstructor, SSuggestSpeciesConstructor);
+
+  SpeciesValue := TGocciaObjectValue(ConstructorValue).GetSymbolProperty(
+    TGocciaSymbolValue.WellKnownSpecies);
+  if (SpeciesValue is TGocciaUndefinedLiteralValue) or
+     (SpeciesValue is TGocciaNullLiteralValue) then
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  if not SpeciesValue.IsConstructable then
+    ThrowTypeError(SErrorSpeciesNotConstructor, SSuggestSpeciesConstructor);
+  Result := SpeciesValue;
 end;
 
 procedure EnsureArrayBufferAttached(const ABuffer: TGocciaArrayBufferValue; const AErrorMessage: string);
@@ -126,6 +148,31 @@ begin
     ThrowRangeError(SErrorInvalidArrayBufferLength, SSuggestArrayLengthRange);
 
   Result := Trunc(IntegerIndex);
+end;
+
+function ToArrayBufferSliceIndex(const AValue: TGocciaValue;
+  const ALength: Integer): Integer;
+var
+  Num: TGocciaNumberLiteralValue;
+  RawIndex: Double;
+begin
+  Num := AValue.ToNumberLiteral;
+  if Num.IsNaN or Num.IsNegativeInfinity then
+    Exit(0);
+  if Num.IsInfinity then
+    Exit(ALength);
+
+  RawIndex := Num.Value;
+  if RawIndex < 0 then
+  begin
+    if RawIndex <= -ALength then
+      Exit(0);
+    Exit(Max(ALength + Trunc(RawIndex), 0));
+  end;
+
+  if RawIndex >= ALength then
+    Exit(ALength);
+  Result := Trunc(RawIndex);
 end;
 
 function TGocciaArrayBufferValue.GetByteLength: Integer;
@@ -508,8 +555,10 @@ end;
 function TGocciaArrayBufferValue.ArrayBufferSlice(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Buf: TGocciaArrayBufferValue;
-  Len, First, Final, NewLen: Integer;
-  StartNum, EndNum: TGocciaNumberLiteralValue;
+  Len, First, Final, NewLen, CurrentLen, CopyCount: Integer;
+  SpeciesConstructor: TGocciaValue;
+  ConstructedValue: TGocciaValue;
+  ConstructorArgs: TGocciaArgumentsCollection;
   NewBuf: TGocciaArrayBufferValue;
 begin
   Buf := RequireArrayBuffer(AThisValue, 'ArrayBuffer.prototype.slice');
@@ -520,41 +569,17 @@ begin
 
   Len := Length(Buf.FData);
 
-  // Step 7: Let relativeStart be ToIntegerOrInfinity(start)
-  if AArgs.Length > 0 then
-  begin
-    StartNum := AArgs.GetElement(0).ToNumberLiteral;
-    if StartNum.IsNaN then
-      First := 0
-    else
-      First := Trunc(StartNum.Value);
-  end
+  // Step 7-10: Let relativeStart be ToIntegerOrInfinity(start), then clamp.
+  if AArgs.Length = 0 then
+    First := 0
   else
-    First := 0;
-
-  // Step 8-10: Clamp start
-  if First < 0 then
-    First := Max(Len + First, 0)
-  else
-    First := Min(First, Len);
+    First := ToArrayBufferSliceIndex(AArgs.GetElement(0), Len);
 
   // ES2026 §25.1.6.8 step 11: If end is undefined, let relativeEnd be len
   if (AArgs.Length > 1) and not (AArgs.GetElement(1) is TGocciaUndefinedLiteralValue) then
-  begin
-    EndNum := AArgs.GetElement(1).ToNumberLiteral;
-    if EndNum.IsNaN then
-      Final := 0
-    else
-      Final := Trunc(EndNum.Value);
-  end
+    Final := ToArrayBufferSliceIndex(AArgs.GetElement(1), Len)
   else
     Final := Len;
-
-  // Step 12-14: Clamp end
-  if Final < 0 then
-    Final := Max(Len + Final, 0)
-  else
-    Final := Min(Final, Len);
 
   // Side effects from argument coercion may have detached the receiver.
   EnsureArrayBufferAttached(Buf, SErrorCannotSliceDetachedArrayBuffer);
@@ -562,10 +587,40 @@ begin
   // Step 15: Let newLen be max(final - first, 0)
   NewLen := Max(Final - First, 0);
 
-  // Step 16-17: Create new ArrayBuffer and copy data
-  NewBuf := TGocciaArrayBufferValue.Create(NewLen);
-  if NewLen > 0 then
-    Move(Buf.FData[First], NewBuf.FData[0], NewLen);
+  SpeciesConstructor := ArrayBufferSpeciesConstructor(Buf);
+  if SpeciesConstructor is TGocciaUndefinedLiteralValue then
+    NewBuf := TGocciaArrayBufferValue.Create(NewLen)
+  else
+  begin
+    ConstructorArgs := TGocciaArgumentsCollection.Create(
+      [TGocciaNumberLiteralValue.Create(NewLen)]);
+    try
+      ConstructedValue := ConstructValue(SpeciesConstructor, ConstructorArgs,
+        SpeciesConstructor);
+    finally
+      ConstructorArgs.Free;
+    end;
+    if not (ConstructedValue is TGocciaArrayBufferValue) then
+      ThrowTypeError('ArrayBuffer species constructor did not return an ArrayBuffer',
+        SSuggestArrayBufferThisType);
+    if ConstructedValue = Buf then
+      ThrowTypeError('ArrayBuffer species constructor returned this',
+        SSuggestArrayBufferThisType);
+    NewBuf := TGocciaArrayBufferValue(ConstructedValue);
+    if Length(NewBuf.FData) < NewLen then
+      ThrowTypeError('ArrayBuffer species constructor returned a buffer that is too small',
+        SSuggestArrayBufferThisType);
+  end;
+
+  // Species construction can run user code that detaches or resizes O.
+  EnsureArrayBufferAttached(Buf, SErrorCannotSliceDetachedArrayBuffer);
+  CurrentLen := Length(Buf.FData);
+  if First < CurrentLen then
+  begin
+    CopyCount := Min(NewLen, CurrentLen - First);
+    if CopyCount > 0 then
+      Move(Buf.FData[First], NewBuf.FData[0], CopyCount);
+  end;
 
   Result := NewBuf;
 end;

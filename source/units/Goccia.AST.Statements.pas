@@ -344,6 +344,7 @@ type
   public
     FName: string;
     FSuperClass: string;
+    FSuperClassExpression: TGocciaExpression;
     FMethods: TGocciaClassMethodMap;
     FStaticMethods: TGocciaClassMethodMap;
     FGetters: TGocciaGetterExpressionMap;
@@ -375,10 +376,12 @@ type
       const AInstanceProperties: TGocciaExpressionMap;
       const APrivateInstanceProperties: TGocciaExpressionMap;
       const APrivateMethods: TGocciaClassMethodMap = nil;
-      const APrivateStaticProperties: TGocciaExpressionMap = nil);
+      const APrivateStaticProperties: TGocciaExpressionMap = nil;
+      const ASuperClassExpression: TGocciaExpression = nil);
     destructor Destroy; override;
     property Name: string read FName;
     property SuperClass: string read FSuperClass;
+    property SuperClassExpression: TGocciaExpression read FSuperClassExpression;
     property Methods: TGocciaClassMethodMap read FMethods;
     property StaticMethods: TGocciaClassMethodMap read FStaticMethods;
     property Getters: TGocciaGetterExpressionMap read FGetters;
@@ -739,10 +742,12 @@ end;
     const AInstanceProperties: TGocciaExpressionMap;
     const APrivateInstanceProperties: TGocciaExpressionMap;
     const APrivateMethods: TGocciaClassMethodMap = nil;
-    const APrivateStaticProperties: TGocciaExpressionMap = nil);
+    const APrivateStaticProperties: TGocciaExpressionMap = nil;
+    const ASuperClassExpression: TGocciaExpression = nil);
   begin
     FName := AName;
     FSuperClass := ASuperClass;
+    FSuperClassExpression := ASuperClassExpression;
     FMethods := AMethods;
     FStaticMethods := AStaticMethods;
     FGetters := AGetters;
@@ -783,6 +788,7 @@ end;
     FStaticProperties.Free;
     FInstanceProperties.Free;
     FPrivateInstanceProperties.Free;
+    FSuperClassExpression.Free;
     FInstancePropertyTypes.Free;
     if Assigned(FPrivateMethods) then
       FPrivateMethods.Free;
@@ -1323,7 +1329,8 @@ end;
 
   function TGocciaClassDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
   begin
-    Result := TGocciaControlFlow.Normal(EvaluateClass(Self, AContext));
+    EvaluateClass(Self, AContext);
+    Result := TGocciaControlFlow.Normal(nil);
   end;
 
   function TGocciaEnumDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;

@@ -505,7 +505,6 @@ function walkJs(
 ): void {
   const entries = readdirSync(dir, { withFileTypes: true });
   for (const ent of entries) {
-    if (ent.name.startsWith("_")) continue;
     const full = join(dir, ent.name);
     if (ent.isDirectory()) {
       walkJs(full, base, filterGlob, out);

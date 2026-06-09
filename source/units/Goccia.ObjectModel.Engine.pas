@@ -60,6 +60,9 @@ begin
 
   for Key in ASource.GetAllPropertyNames do
   begin
+    if Key = PROP_PROTOTYPE then
+      Continue;
+
     Descriptor := ASource.GetOwnPropertyDescriptor(Key);
     if not Assigned(Descriptor) then
       Continue;

@@ -91,6 +91,7 @@ uses
 
   HashMap,
 
+  Goccia.CallStack,
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
@@ -415,15 +416,29 @@ end;
 
 function TGocciaGlobals.BuildErrorObject(const AName: string; const AProto: TGocciaObjectValue; const AArgs: TGocciaArgumentsCollection): TGocciaObjectValue;
 var
-  Message: string;
+  MessageText: string;
+  MessageValue: TGocciaValue;
 begin
-  if AArgs.Length > 0 then
-    Message := AArgs.GetElement(0).ToStringLiteral.Value
-  else
-    Message := '';
+  Result := TGocciaObjectValue.Create(AProto);
+  Result.HasErrorData := True;
+  MessageText := '';
 
-  Result := CreateErrorObject(AName, Message, 1);
-  Result.Prototype := AProto;
+  if (AArgs.Length > 0) and
+     not (AArgs.GetElement(0) is TGocciaUndefinedLiteralValue) then
+  begin
+    MessageText := AArgs.GetElement(0).ToStringLiteral.Value;
+    MessageValue := TGocciaStringLiteralValue.Create(
+      MessageText);
+    Result.DefineProperty(PROP_MESSAGE,
+      TGocciaPropertyDescriptorData.Create(MessageValue, [pfConfigurable, pfWritable]));
+  end;
+
+  if Assigned(TGocciaCallStack.Instance) then
+    Result.DefineProperty(PROP_STACK,
+      TGocciaPropertyDescriptorData.Create(
+        TGocciaStringLiteralValue.Create(
+          TGocciaCallStack.Instance.CaptureStackTrace(AName, MessageText, 1)),
+        [pfConfigurable, pfWritable]));
 
   if AArgs.Length > 1 then
     InstallErrorCause(Result, AArgs.GetElement(1));

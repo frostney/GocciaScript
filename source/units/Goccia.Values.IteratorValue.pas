@@ -270,7 +270,8 @@ begin
   if not Assigned(CurrentRealm) then Exit;
   if Assigned(GetSharedIteratorPrototype) then Exit;
 
-  SharedPrototype := TGocciaObjectValue.Create;
+  SharedPrototype := TGocciaObjectValue.Create(
+    TGocciaObjectValue.SharedObjectPrototype);
   CurrentRealm.SetSlot(GIteratorPrototypeSlot, SharedPrototype);
   if Length(FPrototypeMembers) = 0 then
   begin

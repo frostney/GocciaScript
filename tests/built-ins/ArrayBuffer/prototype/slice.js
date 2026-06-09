@@ -165,4 +165,18 @@ describe("ArrayBuffer.prototype.slice edge cases", () => {
     const sliced = buf.slice(0, 4);
     expect(sliced instanceof SharedArrayBuffer).toBe(false);
   });
+
+  test("uses constructor Symbol.species override", () => {
+    class DerivedArrayBuffer extends ArrayBuffer {
+      static get [Symbol.species]() {
+        return ArrayBuffer;
+      }
+    }
+
+    const buf = new DerivedArrayBuffer(8);
+    const sliced = buf.slice(0, 4);
+    expect(sliced instanceof DerivedArrayBuffer).toBe(false);
+    expect(sliced instanceof ArrayBuffer).toBe(true);
+    expect(sliced.byteLength).toBe(4);
+  });
 });

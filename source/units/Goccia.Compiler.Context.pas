@@ -24,6 +24,8 @@ type
   TCompileFunctionBodyProc = procedure(const ABody: TGocciaASTNode) of object;
   TSwapStateProc = procedure(const ATemplate: TGocciaFunctionTemplate;
     const AScope: TGocciaCompilerScope) of object;
+  TSetDerivedConstructorThisGuardProc = procedure(
+    const AGuard: Boolean) of object;
 
   TFormalParameterCountMap = THashMap<TGocciaFunctionTemplate, Integer>;
 
@@ -36,11 +38,13 @@ type
     StrictTypes: Boolean;
     CompatibilityNonStrictMode: Boolean;
     NonStrictMode: Boolean;
+    DerivedConstructorThisGuard: Boolean;
     OptimizationOptions: TGocciaCompilerOptimizationOptions;
     CompileExpression: TCompileExpressionProc;
     CompileStatement: TCompileStatementProc;
     CompileFunctionBody: TCompileFunctionBodyProc;
     SwapState: TSwapStateProc;
+    SetDerivedConstructorThisGuard: TSetDerivedConstructorThisGuardProc;
   end;
 
 function EmitInstruction(const ACtx: TGocciaCompilationContext;

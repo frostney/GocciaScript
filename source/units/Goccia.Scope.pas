@@ -192,6 +192,7 @@ type
   protected
     function GetThisValue: TGocciaValue; override;
     function GetOwningClass: TGocciaValue; override;
+    function GetSuperClass: TGocciaValue; override;
   public
     constructor Create(const AParent: TGocciaScope; const AOwningClass: TGocciaValue);
     procedure MarkReferences; override;
@@ -247,6 +248,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.Keywords.Reserved,
   Goccia.Types.Enforcement,
+  Goccia.Values.ClassValue,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
 
@@ -1090,6 +1092,21 @@ end;
 function TGocciaClassInitScope.GetOwningClass: TGocciaValue;
 begin
   Result := FOwningClass;
+end;
+
+function TGocciaClassInitScope.GetSuperClass: TGocciaValue;
+var
+  ClassValue: TGocciaClassValue;
+begin
+  Result := nil;
+  if not (FOwningClass is TGocciaClassValue) then
+    Exit;
+
+  ClassValue := TGocciaClassValue(FOwningClass);
+  if Assigned(ClassValue.SuperClass) then
+    Result := ClassValue.SuperClass
+  else if Assigned(ClassValue.NativeSuperConstructor) then
+    Result := ClassValue.NativeSuperConstructor;
 end;
 
 procedure TGocciaClassInitScope.MarkReferences;

@@ -176,6 +176,11 @@ begin
     OP_TO_PROPERTY_KEY:                Result := 'OP_TO_PROPERTY_KEY';
     OP_ENUM_KEYS:                      Result := 'OP_ENUM_KEYS';
     OP_ENUM_ENTRY:                     Result := 'OP_ENUM_ENTRY';
+    OP_ASYNC_ITER_NEXT:                Result := 'OP_ASYNC_ITER_NEXT';
+    OP_ITER_UNPACK:                    Result := 'OP_ITER_UNPACK';
+    OP_SET_FUNCTION_NAME:              Result := 'OP_SET_FUNCTION_NAME';
+    OP_LOAD_ARGUMENT:                  Result := 'OP_LOAD_ARGUMENT';
+    OP_CHECK_DERIVED_THIS:             Result := 'OP_CHECK_DERIVED_THIS';
     OP_INC:                            Result := 'OP_INC';
     OP_DEC:                            Result := 'OP_DEC';
     OP_TO_NUMERIC:                     Result := 'OP_TO_NUMERIC';
