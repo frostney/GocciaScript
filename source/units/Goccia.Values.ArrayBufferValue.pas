@@ -603,6 +603,9 @@ begin
     if not (ConstructedValue is TGocciaArrayBufferValue) then
       ThrowTypeError('ArrayBuffer species constructor did not return an ArrayBuffer',
         SSuggestArrayBufferThisType);
+    if TGocciaArrayBufferValue(ConstructedValue).Detached then
+      ThrowTypeError(SErrorCannotSliceDetachedArrayBuffer,
+        SSuggestArrayBufferDetached);
     if ConstructedValue = Buf then
       ThrowTypeError('ArrayBuffer species constructor returned this',
         SSuggestArrayBufferThisType);

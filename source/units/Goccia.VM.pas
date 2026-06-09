@@ -9899,6 +9899,7 @@ var
   EvalOptions: TGocciaSourcePipelineOptions;
   PipelineResult: TGocciaSourcePipelineResult;
   EnvIndex: Integer;
+  DirectEvalEnv: TGocciaDirectEvalEnvironment;
   StrictEval: Boolean;
   CallerScope, EvalScope: TGocciaVMDirectEvalScope;
   CallerParentScope: TGocciaScope;
@@ -10016,6 +10017,12 @@ begin
               DirectEvalParameterPreambleVarRejectNames(
                 ATemplate, EnvIndex, APC);
             RejectArgumentsReference := ATemplate.RejectArgumentsInDirectEval;
+            if EnvIndex >= 0 then
+            begin
+              DirectEvalEnv := ATemplate.GetDirectEvalEnvironment(EnvIndex);
+              RejectArgumentsReference := RejectArgumentsReference or
+                DirectEvalEnv.RejectArgumentsReference;
+            end;
             try
               Result := EvaluateEvalProgram(PipelineResult.ProgramNode,
                 EvalContext, VarScope, ActiveScope, StrictEval,

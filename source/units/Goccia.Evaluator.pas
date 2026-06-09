@@ -2429,6 +2429,26 @@ begin
     Assigned(TGocciaMethodCallScope(CallerFunctionScope).SuperClass);
 end;
 
+function DirectEvalRejectsArgumentsReference(
+  const AScope: TGocciaScope): Boolean;
+var
+  Current: TGocciaScope;
+begin
+  Current := AScope;
+  while Assigned(Current) do
+  begin
+    if (Current is TGocciaCallScope) and
+       not (Current is TGocciaArrowCallScope) then
+      Exit(False);
+    if Current.RejectArgumentsReferenceInDirectEval then
+      Exit(True);
+    if Current.ScopeKind in [skGlobal, skModule] then
+      Exit(False);
+    Current := Current.Parent;
+  end;
+  Result := False;
+end;
+
 function TryEvaluateInterpreterDirectEval(
   const ACallExpression: TGocciaCallExpression;
   const AContext: TGocciaEvaluationContext;
@@ -2518,7 +2538,8 @@ begin
           EvalContext, VarScope, EvalScope, StrictEval,
           EvalContext.RejectArgumentsVarDeclarationInEval,
           EvalContext.RejectVarDeclarationNamesInEval, AllowNewTarget,
-          AllowSuperProperty, AllowSuperCall, False);
+          AllowSuperProperty, AllowSuperCall,
+          DirectEvalRejectsArgumentsReference(AContext.Scope));
       finally
         if Assigned(TGarbageCollector.Instance) then
           TGarbageCollector.Instance.RemoveTempRoot(EvalScope);
@@ -6620,6 +6641,8 @@ var
   InitializerResults: TArray<TGocciaValue>;
   AccessorBackingName: string;
   ExistingDescriptor: TGocciaPropertyDescriptor;
+  StaticFieldContext: TGocciaEvaluationContext;
+  StaticFieldScope: TGocciaScope;
 
   function BuildClassGetter(const AGetterExpression: TGocciaGetterExpression): TGocciaFunctionValue;
   begin
@@ -7072,7 +7095,15 @@ begin
     else if (Elem.Kind = cekField) and Elem.IsStatic then
     begin
       if Assigned(Elem.FieldInitializer) then
-        PropertyValue := EvaluateExpression(Elem.FieldInitializer, AContext)
+      begin
+        StaticFieldContext := AContext;
+        StaticFieldScope := TGocciaClassInitScope.Create(AContext.Scope,
+          ClassValue);
+        StaticFieldScope.ThisValue := ClassValue;
+        StaticFieldContext.Scope := StaticFieldScope;
+        PropertyValue := EvaluateExpression(Elem.FieldInitializer,
+          StaticFieldContext);
+      end
       else
         PropertyValue := TGocciaUndefinedLiteralValue.UndefinedValue;
       if Elem.IsPrivate then

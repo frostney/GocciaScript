@@ -194,6 +194,7 @@ begin
   begin
     EvalEnv := AProto.GetDirectEvalEnvironment(I);
     WriteUInt32(EvalEnv.PC);
+    WriteBoolean(EvalEnv.RejectArgumentsReference);
     WriteUInt16(UInt16(Length(EvalEnv.Bindings)));
     for J := 0 to High(EvalEnv.Bindings) do
     begin
@@ -363,6 +364,7 @@ var
   I, J: Integer;
   ConstKind: UInt8;
   EvalPC: UInt32;
+  EvalRejectArgumentsReference: Boolean;
   EvalBindings: TGocciaDirectEvalBindingArray;
   EvalBinding: TGocciaDirectEvalBindingInfo;
   UpvalueIsLocal: Boolean;
@@ -445,6 +447,7 @@ begin
   for I := 0 to EvalEnvCount - 1 do
   begin
     EvalPC := ReadUInt32;
+    EvalRejectArgumentsReference := ReadBoolean;
     EvalBindingCount := ReadUInt16;
     SetLength(EvalBindings, EvalBindingCount);
     for J := 0 to EvalBindingCount - 1 do
@@ -457,7 +460,8 @@ begin
       EvalBinding.IsEvalSyntheticArguments := ReadBoolean;
       EvalBindings[J] := EvalBinding;
     end;
-    Result.AddDirectEvalEnvironment(EvalPC, EvalBindings);
+    Result.AddDirectEvalEnvironment(EvalPC, EvalRejectArgumentsReference,
+      EvalBindings);
   end;
 
   HandlerCount := ReadUInt16;

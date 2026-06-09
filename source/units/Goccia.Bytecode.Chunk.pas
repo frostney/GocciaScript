@@ -74,6 +74,7 @@ type
 
   TGocciaDirectEvalEnvironment = record
     PC: UInt32;
+    RejectArgumentsReference: Boolean;
     Bindings: TGocciaDirectEvalBindingArray;
   end;
 
@@ -163,6 +164,7 @@ type
     procedure AddUpvalueDescriptor(const AIsLocal: Boolean; const AIndex: UInt8;
       const AName: string = '');
     procedure AddDirectEvalEnvironment(const APC: UInt32;
+      const ARejectArgumentsReference: Boolean;
       const ABindings: TGocciaDirectEvalBindingArray);
     procedure AddExceptionHandler(const ATryStart, ATryEnd, ACatchTarget,
       AFinallyTarget: UInt32; const ACatchRegister: UInt8);
@@ -544,6 +546,7 @@ begin
 end;
 
 procedure TGocciaFunctionTemplate.AddDirectEvalEnvironment(const APC: UInt32;
+  const ARejectArgumentsReference: Boolean;
   const ABindings: TGocciaDirectEvalBindingArray);
 var
   I: Integer;
@@ -553,6 +556,8 @@ begin
   if FDirectEvalEnvironmentCount >= Length(FDirectEvalEnvironments) then
     SetLength(FDirectEvalEnvironments, FDirectEvalEnvironmentCount * 2 + 4);
   FDirectEvalEnvironments[FDirectEvalEnvironmentCount].PC := APC;
+  FDirectEvalEnvironments[FDirectEvalEnvironmentCount].RejectArgumentsReference :=
+    ARejectArgumentsReference;
   SetLength(FDirectEvalEnvironments[FDirectEvalEnvironmentCount].Bindings,
     Length(ABindings));
   for I := 0 to High(ABindings) do

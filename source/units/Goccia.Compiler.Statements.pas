@@ -4712,14 +4712,24 @@ var
   ClosedLocals: array[0..0] of UInt8;
   ClosedCount, I: Integer;
   ThisReg: UInt8;
+  OldRejectArgumentsInDirectEval: Boolean;
 begin
+  OldRejectArgumentsInDirectEval := ACtx.Template.RejectArgumentsInDirectEval;
+  ACtx.Template.RejectArgumentsInDirectEval := True;
   ACtx.Scope.BeginScope;
-  ThisReg := ACtx.Scope.DeclareLocal(KEYWORD_THIS, False);
-  EmitInstruction(ACtx, EncodeABC(OP_MOVE, ThisReg, AClassReg, 0));
-  CompileFieldValueWithInferredName(ACtx, AExpression, ADest, AInferredName);
-  ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
-  for I := 0 to ClosedCount - 1 do
-    EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
+  try
+    ThisReg := ACtx.Scope.DeclareLocal(KEYWORD_THIS, False);
+    EmitInstruction(ACtx, EncodeABC(OP_MOVE, ThisReg, AClassReg, 0));
+    CompileFieldValueWithInferredName(ACtx, AExpression, ADest,
+      AInferredName);
+    ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
+    for I := 0 to ClosedCount - 1 do
+      EmitInstruction(ACtx,
+        EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
+  finally
+    ACtx.Template.RejectArgumentsInDirectEval :=
+      OldRejectArgumentsInDirectEval;
+  end;
 end;
 
 procedure RegisterPrivateName(const AScope: TGocciaCompilerScope;

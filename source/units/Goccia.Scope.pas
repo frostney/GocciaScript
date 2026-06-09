@@ -39,6 +39,7 @@ type
     FLoadDeferredModule: TLoadDeferredModuleCallback;
     FStrictTypes: Boolean;
     FNonStrictMode: Boolean;
+    FRejectArgumentsReferenceInDirectEval: Boolean;
   protected
     function GetThisValue: TGocciaValue; virtual;
     function GetOwningClass: TGocciaValue; virtual;
@@ -135,6 +136,7 @@ type
       EffectiveStrictTypes, which always reads the root scope. }
     property StrictTypes: Boolean read FStrictTypes write FStrictTypes;
     property NonStrictMode: Boolean read FNonStrictMode write FNonStrictMode;
+    property RejectArgumentsReferenceInDirectEval: Boolean read FRejectArgumentsReferenceInDirectEval write FRejectArgumentsReferenceInDirectEval;
   end;
 
   // Root scope with no parent -- used by the interpreter/engine
@@ -270,6 +272,8 @@ begin
     FLoadDeferredModule := AParent.FLoadDeferredModule;
     FStrictTypes := AParent.FStrictTypes;
     FNonStrictMode := AParent.FNonStrictMode;
+    FRejectArgumentsReferenceInDirectEval :=
+      AParent.FRejectArgumentsReferenceInDirectEval;
   end;
 
   if Assigned(TGarbageCollector.Instance) then
@@ -1082,6 +1086,7 @@ constructor TGocciaClassInitScope.Create(const AParent: TGocciaScope; const AOwn
 begin
   inherited Create(AParent, skBlock, 'ClassInit');
   FOwningClass := AOwningClass;
+  RejectArgumentsReferenceInDirectEval := True;
 end;
 
 function TGocciaClassInitScope.GetThisValue: TGocciaValue;

@@ -96,7 +96,11 @@ const
   //   v50 -> v51: added OP_SUPER_SET so super property writes use the
   //               super base with the actual receiver instead of ordinary
   //               assignment to this.
-  GOCCIA_FORMAT_VERSION = 51;
+  //   v51 -> v52: serialized class-field direct-eval `arguments`
+  //               rejection at each direct-eval call site, so static
+  //               field initializers compiled into enclosing templates do
+  //               not affect unrelated eval calls.
+  GOCCIA_FORMAT_VERSION = 52;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;

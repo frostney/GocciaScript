@@ -1102,7 +1102,8 @@ begin
       ScopeCursor := ScopeCursor.Parent;
     end;
 
-    ACtx.Template.AddDirectEvalEnvironment(APC, Bindings);
+    ACtx.Template.AddDirectEvalEnvironment(APC,
+      ACtx.Template.RejectArgumentsInDirectEval, Bindings);
   finally
     Names.Free;
   end;

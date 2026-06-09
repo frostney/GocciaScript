@@ -179,4 +179,19 @@ describe("ArrayBuffer.prototype.slice edge cases", () => {
     expect(sliced instanceof ArrayBuffer).toBe(true);
     expect(sliced.byteLength).toBe(4);
   });
+
+  test("throws when species constructor returns a detached ArrayBuffer", () => {
+    class DetachedArrayBuffer {
+      constructor(length) {
+        const buffer = new ArrayBuffer(length);
+        buffer.transfer();
+        return buffer;
+      }
+    }
+
+    const buf = new ArrayBuffer(8);
+    buf.constructor = { [Symbol.species]: DetachedArrayBuffer };
+
+    expect(() => buf.slice(0, 0)).toThrow(TypeError);
+  });
 });
