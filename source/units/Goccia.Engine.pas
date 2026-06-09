@@ -533,7 +533,9 @@ begin
   for I := 0 to DefaultShimCount - 1 do
   begin
     Shim := DefaultShim(I);
-    if Shim.Name = 'hasOwnProperty' then
+    if (Shim.Name = 'hasOwnProperty') or (Shim.Name = '__proto__') or
+       (Shim.Name = 'defineGetter') or (Shim.Name = 'defineSetter') or
+       (Shim.Name = 'lookupGetter') or (Shim.Name = 'lookupSetter') then
       LoadShimValue(FInterpreter, Shim)
     else
       FInterpreter.GlobalScope.DefineLexicalBinding(Shim.Name,
@@ -800,6 +802,8 @@ begin
   TypeDef.AddSpeciesGetter := False;
   RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, ObjectConstructor);
   FObjectConstructor := ObjectConstructor;
+  if Assigned(GetErrorProto) and not Assigned(GetErrorProto.Prototype) then
+    GetErrorProto.Prototype := ObjectConstructor.Prototype;
 
   TypeDef.ConstructorName := CONSTRUCTOR_ARRAY;
   TypeDef.Kind := gtdkNativeInstanceType;
@@ -882,6 +886,12 @@ begin
   ArrayBufferConstructor := TGocciaArrayBufferClassValue.Create(CONSTRUCTOR_ARRAY_BUFFER, nil);
   TGocciaArrayBufferValue.ExposePrototype(ArrayBufferConstructor);
   ArrayBufferConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
+  ArrayBufferConstructor.DefineSymbolProperty(
+    TGocciaSymbolValue.WellKnownSpecies,
+    TGocciaPropertyDescriptorAccessor.Create(
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(
+        SpeciesGetter, 'get [Symbol.species]', 0),
+      nil, [pfConfigurable]));
   if Assigned(FBuiltinArrayBuffer) then
     for Key in FBuiltinArrayBuffer.BuiltinObject.GetAllPropertyNames do
       ArrayBufferConstructor.SetProperty(Key, FBuiltinArrayBuffer.BuiltinObject.GetProperty(Key));
@@ -890,6 +900,12 @@ begin
   SharedArrayBufferConstructor := TGocciaSharedArrayBufferClassValue.Create(CONSTRUCTOR_SHARED_ARRAY_BUFFER, nil);
   TGocciaSharedArrayBufferValue.ExposePrototype(SharedArrayBufferConstructor);
   SharedArrayBufferConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
+  SharedArrayBufferConstructor.DefineSymbolProperty(
+    TGocciaSymbolValue.WellKnownSpecies,
+    TGocciaPropertyDescriptorAccessor.Create(
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(
+        SpeciesGetter, 'get [Symbol.species]', 0),
+      nil, [pfConfigurable]));
   FInterpreter.GlobalScope.DefineLexicalBinding(CONSTRUCTOR_SHARED_ARRAY_BUFFER, SharedArrayBufferConstructor, dtConst, True);
 
   DataViewConstructor := TGocciaDataViewClassValue.Create(CONSTRUCTOR_DATA_VIEW, nil);

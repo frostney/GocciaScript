@@ -39,6 +39,7 @@ type
     FLoadDeferredModule: TLoadDeferredModuleCallback;
     FStrictTypes: Boolean;
     FNonStrictMode: Boolean;
+    FRejectArgumentsReferenceInDirectEval: Boolean;
   protected
     function GetThisValue: TGocciaValue; virtual;
     function GetOwningClass: TGocciaValue; virtual;
@@ -135,6 +136,7 @@ type
       EffectiveStrictTypes, which always reads the root scope. }
     property StrictTypes: Boolean read FStrictTypes write FStrictTypes;
     property NonStrictMode: Boolean read FNonStrictMode write FNonStrictMode;
+    property RejectArgumentsReferenceInDirectEval: Boolean read FRejectArgumentsReferenceInDirectEval write FRejectArgumentsReferenceInDirectEval;
   end;
 
   // Root scope with no parent -- used by the interpreter/engine
@@ -192,6 +194,7 @@ type
   protected
     function GetThisValue: TGocciaValue; override;
     function GetOwningClass: TGocciaValue; override;
+    function GetSuperClass: TGocciaValue; override;
   public
     constructor Create(const AParent: TGocciaScope; const AOwningClass: TGocciaValue);
     procedure MarkReferences; override;
@@ -247,6 +250,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.Keywords.Reserved,
   Goccia.Types.Enforcement,
+  Goccia.Values.ClassValue,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
 
@@ -268,6 +272,8 @@ begin
     FLoadDeferredModule := AParent.FLoadDeferredModule;
     FStrictTypes := AParent.FStrictTypes;
     FNonStrictMode := AParent.FNonStrictMode;
+    FRejectArgumentsReferenceInDirectEval :=
+      AParent.FRejectArgumentsReferenceInDirectEval;
   end;
 
   if Assigned(TGarbageCollector.Instance) then
@@ -1080,6 +1086,7 @@ constructor TGocciaClassInitScope.Create(const AParent: TGocciaScope; const AOwn
 begin
   inherited Create(AParent, skBlock, 'ClassInit');
   FOwningClass := AOwningClass;
+  RejectArgumentsReferenceInDirectEval := True;
 end;
 
 function TGocciaClassInitScope.GetThisValue: TGocciaValue;
@@ -1090,6 +1097,21 @@ end;
 function TGocciaClassInitScope.GetOwningClass: TGocciaValue;
 begin
   Result := FOwningClass;
+end;
+
+function TGocciaClassInitScope.GetSuperClass: TGocciaValue;
+var
+  ClassValue: TGocciaClassValue;
+begin
+  Result := nil;
+  if not (FOwningClass is TGocciaClassValue) then
+    Exit;
+
+  ClassValue := TGocciaClassValue(FOwningClass);
+  if Assigned(ClassValue.SuperClass) then
+    Result := ClassValue.SuperClass
+  else if Assigned(ClassValue.NativeSuperConstructor) then
+    Result := ClassValue.NativeSuperConstructor;
 end;
 
 procedure TGocciaClassInitScope.MarkReferences;

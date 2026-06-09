@@ -50,7 +50,7 @@ uses
   Goccia.SourcePipeline;
 
 const
-  DEFAULT_SHIMS: array[0..7] of TGocciaShimDefinition = (
+  DEFAULT_SHIMS: array[0..12] of TGocciaShimDefinition = (
     ( // WHATWG HTML spec §8.3 — legacy btoa(data) via Uint8Array.toBase64
       Name: 'btoa';
       FileName: '<shim:btoa>';
@@ -347,6 +347,112 @@ const
         '    writable: true, enumerable: false, configurable: true'#10 +
         '  });'#10 +
         '  return proto.hasOwnProperty;'#10 +
+        '})(Object.getPrototypeOf({}));'
+    ),
+    ( // ES2026 §20.1.3.8 Object.prototype.__proto__
+      Name: '__proto__';
+      FileName: '<shim:__proto__>';
+      Source:
+        'export const __proto__ = ((objectPrototype) => {'#10 +
+        '  Object.defineProperty(objectPrototype, "__proto__", {'#10 +
+        '    get() { return Object.getPrototypeOf(this); },'#10 +
+        '    set(value) {'#10 +
+        '      if (this === null || this === undefined) throw new TypeError("Object.prototype.__proto__ called on null or undefined");'#10 +
+        '      if (value !== null && typeof value !== "object" && typeof value !== "function") return undefined;'#10 +
+        '      if (typeof this !== "object" && typeof this !== "function") return undefined;'#10 +
+        '      Object.setPrototypeOf(this, value);'#10 +
+        '      return undefined;'#10 +
+        '    },'#10 +
+        '    enumerable: false, configurable: true'#10 +
+        '  });'#10 +
+        '  const descriptor = Object.getOwnPropertyDescriptor(objectPrototype, "__proto__");'#10 +
+        '  Object.defineProperty(descriptor.get, "name", { value: "get __proto__", configurable: true });'#10 +
+        '  Object.defineProperty(descriptor.set, "name", { value: "set __proto__", configurable: true });'#10 +
+        '  return descriptor;'#10 +
+        '})(Object.getPrototypeOf({}));'
+    ),
+    ( // ES2026 §20.1.3.9.1 Object.prototype.__defineGetter__(P, getter)
+      Name: 'defineGetter';
+      FileName: '<shim:defineGetter>';
+      Source:
+        'export const defineGetter = ((proto) => {'#10 +
+        '  Object.defineProperty(proto, "__defineGetter__", {'#10 +
+        '    value(prop, getter) {'#10 +
+        '      if (this === null || this === undefined) throw new TypeError("__defineGetter__ called on null or undefined");'#10 +
+        '      if (typeof getter !== "function") throw new TypeError("Object.prototype.__defineGetter__ getter must be callable");'#10 +
+        '      Object.defineProperty(Object(this), prop, { get: getter, enumerable: true, configurable: true });'#10 +
+        '      return undefined;'#10 +
+        '    },'#10 +
+        '    writable: true, enumerable: false, configurable: true'#10 +
+        '  });'#10 +
+        '  Object.defineProperty(proto.__defineGetter__, "name", { value: "__defineGetter__", configurable: true });'#10 +
+        '  Object.defineProperty(proto.__defineGetter__, "length", { value: 2, configurable: true });'#10 +
+        '  return proto.__defineGetter__;'#10 +
+        '})(Object.getPrototypeOf({}));'
+    ),
+    ( // ES2026 §20.1.3.9.2 Object.prototype.__defineSetter__(P, setter)
+      Name: 'defineSetter';
+      FileName: '<shim:defineSetter>';
+      Source:
+        'export const defineSetter = ((proto) => {'#10 +
+        '  Object.defineProperty(proto, "__defineSetter__", {'#10 +
+        '    value(prop, setter) {'#10 +
+        '      if (this === null || this === undefined) throw new TypeError("__defineSetter__ called on null or undefined");'#10 +
+        '      if (typeof setter !== "function") throw new TypeError("Object.prototype.__defineSetter__ setter must be callable");'#10 +
+        '      Object.defineProperty(Object(this), prop, { set: setter, enumerable: true, configurable: true });'#10 +
+        '      return undefined;'#10 +
+        '    },'#10 +
+        '    writable: true, enumerable: false, configurable: true'#10 +
+        '  });'#10 +
+        '  Object.defineProperty(proto.__defineSetter__, "name", { value: "__defineSetter__", configurable: true });'#10 +
+        '  Object.defineProperty(proto.__defineSetter__, "length", { value: 2, configurable: true });'#10 +
+        '  return proto.__defineSetter__;'#10 +
+        '})(Object.getPrototypeOf({}));'
+    ),
+    ( // ES2026 Annex B §B.2.2.4 Object.prototype.__lookupGetter__(P)
+      Name: 'lookupGetter';
+      FileName: '<shim:lookupGetter>';
+      Source:
+        'export const lookupGetter = ((proto) => {'#10 +
+        '  Object.defineProperty(proto, "__lookupGetter__", {'#10 +
+        '    value(prop) {'#10 +
+        '      if (this === null || this === undefined) throw new TypeError("__lookupGetter__ called on null or undefined");'#10 +
+        '      const key = Reflect.ownKeys(Object.defineProperty({}, prop, { value: undefined }))[0];'#10 +
+        '      const find = (object) => {'#10 +
+        '        if (object === null) return undefined;'#10 +
+        '        const descriptor = Object.getOwnPropertyDescriptor(object, key);'#10 +
+        '        if (descriptor !== undefined) return descriptor.get;'#10 +
+        '        return find(Object.getPrototypeOf(object));'#10 +
+        '      };'#10 +
+        '      return find(this);'#10 +
+        '    },'#10 +
+        '    writable: true, enumerable: false, configurable: true'#10 +
+        '  });'#10 +
+        '  Object.defineProperty(proto.__lookupGetter__, "name", { value: "__lookupGetter__", configurable: true });'#10 +
+        '  return proto.__lookupGetter__;'#10 +
+        '})(Object.getPrototypeOf({}));'
+    ),
+    ( // ES2026 Annex B §B.2.2.5 Object.prototype.__lookupSetter__(P)
+      Name: 'lookupSetter';
+      FileName: '<shim:lookupSetter>';
+      Source:
+        'export const lookupSetter = ((proto) => {'#10 +
+        '  Object.defineProperty(proto, "__lookupSetter__", {'#10 +
+        '    value(prop) {'#10 +
+        '      if (this === null || this === undefined) throw new TypeError("__lookupSetter__ called on null or undefined");'#10 +
+        '      const key = Reflect.ownKeys(Object.defineProperty({}, prop, { value: undefined }))[0];'#10 +
+        '      const find = (object) => {'#10 +
+        '        if (object === null) return undefined;'#10 +
+        '        const descriptor = Object.getOwnPropertyDescriptor(object, key);'#10 +
+        '        if (descriptor !== undefined) return descriptor.set;'#10 +
+        '        return find(Object.getPrototypeOf(object));'#10 +
+        '      };'#10 +
+        '      return find(this);'#10 +
+        '    },'#10 +
+        '    writable: true, enumerable: false, configurable: true'#10 +
+        '  });'#10 +
+        '  Object.defineProperty(proto.__lookupSetter__, "name", { value: "__lookupSetter__", configurable: true });'#10 +
+        '  return proto.__lookupSetter__;'#10 +
         '})(Object.getPrototypeOf({}));'
     )
   );

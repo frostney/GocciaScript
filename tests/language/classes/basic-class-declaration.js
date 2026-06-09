@@ -129,3 +129,44 @@ test("instance auto-accessor installs on prototype not constructor", () => {
   const ctorDesc = Object.getOwnPropertyDescriptor(C, "y");
   expect(ctorDesc).toBe(undefined);
 });
+
+test("class member names that look like modifiers can be generic methods", () => {
+  class C {
+    static<T>() {
+      return "static";
+    }
+
+    get<T>() {
+      return "get";
+    }
+
+    set<T>() {
+      return "set";
+    }
+
+    accessor<T>() {
+      return "accessor";
+    }
+  }
+
+  const c = new C();
+  expect(c.static()).toBe("static");
+  expect(c.get()).toBe("get");
+  expect(c.set()).toBe("set");
+  expect(c.accessor()).toBe("accessor");
+});
+
+test("private initializer markers are not observable own keys", () => {
+  class C {
+    #value = 42;
+
+    read() {
+      return this.#value;
+    }
+  }
+
+  const c = new C();
+  expect(c.read()).toBe(42);
+  expect(Reflect.ownKeys(c).some(key => String(key).indexOf("#initialized:") === 0)).toBe(false);
+  expect(Object.getOwnPropertyNames(c).some(key => key.indexOf("#initialized:") === 0)).toBe(false);
+});

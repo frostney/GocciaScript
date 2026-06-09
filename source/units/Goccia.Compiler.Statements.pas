@@ -847,14 +847,11 @@ begin
 
     if IsTopLevelGlobalBacked then
     begin
-      if not AStmt.IsVar then
-      begin
-        LocalIdx := FindLocalBySlot(ACtx.Scope, Info.Name, Slot);
-        if LocalIdx >= 0 then
-          ACtx.Scope.MarkGlobalBacked(LocalIdx);
-      end;
       EmitGlobalDefine(ACtx, Slot, Info.Name, AStmt.IsConst, AStmt.IsVar,
         HasInitializer);
+      LocalIdx := FindLocalBySlot(ACtx.Scope, Info.Name, Slot);
+      if LocalIdx >= 0 then
+        ACtx.Scope.MarkGlobalBacked(LocalIdx);
     end;
   end;
 end;
@@ -1297,7 +1294,7 @@ begin
       AEmitInitializers)
   else if ANode is TGocciaClassDeclaration then
     PredeclareBlockNamedLexicalLocal(ACtx,
-      TGocciaClassDeclaration(ANode).ClassDefinition.Name, True,
+      TGocciaClassDeclaration(ANode).ClassDefinition.Name, False,
       AEmitInitializers)
   else if ANode is TGocciaEnumDeclaration then
     PredeclareBlockNamedLexicalLocal(ACtx,
@@ -2578,9 +2575,10 @@ begin
     LoopStart := CurrentCodePosition(ACtx);
     MismatchJump := -1;
 
-    EmitInstruction(ACtx, EncodeABC(OP_ITER_NEXT, ValueReg, DoneReg, IterReg));
-    ExitJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, DoneReg);
+    EmitInstruction(ACtx, EncodeABC(OP_ASYNC_ITER_NEXT, ValueReg, 0, IterReg));
     EmitInstruction(ACtx, EncodeABC(OP_AWAIT, ValueReg, ValueReg, 0));
+    EmitInstruction(ACtx, EncodeABC(OP_ITER_UNPACK, ValueReg, DoneReg, ValueReg));
+    ExitJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, DoneReg);
 
     ACtx.Scope.BeginScope;
     SetLoopContinueScopeDepth(ACtx);
@@ -3418,17 +3416,28 @@ procedure CompileExportDeclaration(const ACtx: TGocciaCompilationContext;
 var
   Pair: TStringStringMap.TKeyValuePair;
   LocalIdx: Integer;
+  Local: TGocciaCompilerLocal;
   Reg: UInt8;
-  NameIdx: UInt16;
+  NameIdx, SourceNameIdx: UInt16;
 begin
   for Pair in AStmt.ExportsTable do
   begin
     LocalIdx := ACtx.Scope.ResolveLocal(Pair.Value);
     if LocalIdx >= 0 then
     begin
-      Reg := ACtx.Scope.GetLocal(LocalIdx).Slot;
+      Local := ACtx.Scope.GetLocal(LocalIdx);
+      if Local.IsGlobalBacked then
+      begin
+        Reg := ACtx.Scope.AllocateRegister;
+        SourceNameIdx := ACtx.Template.AddConstantString(Pair.Value);
+        EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, Reg, SourceNameIdx));
+      end
+      else
+        Reg := Local.Slot;
       NameIdx := ACtx.Template.AddConstantString(Pair.Key);
       EmitInstruction(ACtx, EncodeABx(OP_EXPORT, Reg, NameIdx));
+      if Local.IsGlobalBacked then
+        ACtx.Scope.FreeRegister;
     end;
   end;
 end;
@@ -3987,9 +3996,29 @@ begin
   GContinueJumps.Add(EmitJumpInstruction(ACtx, OP_JUMP, 0));
 end;
 
+function DisplayClassElementName(const AStorageName: string): string;
+var
+  I, SeparatorIndex: Integer;
+begin
+  if Pos('#slot:', AStorageName) = 1 then
+  begin
+    SeparatorIndex := 0;
+    for I := Length('#slot:') + 1 to Length(AStorageName) do
+      if AStorageName[I] = '$' then
+      begin
+        SeparatorIndex := I;
+        Break;
+      end;
+    if SeparatorIndex > 0 then
+      Exit('#' + Copy(AStorageName, SeparatorIndex + 1, MaxInt));
+  end;
+  Result := AStorageName;
+end;
+
 procedure CompileMethodBody(const ACtx: TGocciaCompilationContext;
   const AClassReg: UInt8; const AMethodName: string;
-  const AMethod: TGocciaClassMethod; const AStoreOpcode: TGocciaOpCode);
+  const AMethod: TGocciaClassMethod; const AStoreOpcode: TGocciaOpCode;
+  const AGuardDerivedThis: Boolean = False);
 var
   OldTemplate: TGocciaFunctionTemplate;
   OldScope: TGocciaCompilerScope;
@@ -4001,12 +4030,15 @@ var
   MethodNameIdx: UInt16;
   FormalCount, RestParamIndex, I: Integer;
   ArgumentsSlot: Integer;
+  DisplayName: string;
+  OldDerivedGuard: Boolean;
 begin
   OldTemplate := ACtx.Template;
   OldScope := ACtx.Scope;
+  OldDerivedGuard := ACtx.DerivedConstructorThisGuard;
+  DisplayName := DisplayClassElementName(AMethodName);
 
-  ChildTemplate := TGocciaFunctionTemplate.Create(
-    '<method ' + AMethodName + '>');
+  ChildTemplate := TGocciaFunctionTemplate.Create(DisplayName);
   ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
   ChildTemplate.IsAsync := AMethod.IsAsync;
   ChildTemplate.IsGenerator := AMethod.IsGenerator;
@@ -4044,6 +4076,8 @@ begin
     ACtx.FormalParameterCounts.AddOrSetValue(ChildTemplate, FormalCount);
 
   ACtx.SwapState(ChildTemplate, ChildScope);
+  if Assigned(ACtx.SetDerivedConstructorThisGuard) then
+    ACtx.SetDerivedConstructorThisGuard(AGuardDerivedThis);
   EmitLineMapping(ACtx, AMethod.Line, AMethod.Column);
 
   ChildCtx := ACtx;
@@ -4051,10 +4085,12 @@ begin
   ChildCtx.Scope := ChildScope;
   ChildCtx.NonStrictMode := ACtx.NonStrictMode and
     not ChildTemplate.StrictCode;
+  ChildCtx.DerivedConstructorThisGuard := AGuardDerivedThis;
 
   EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot);
 
-  if RestParamIndex >= 0 then
+  if (RestParamIndex >= 0) and
+     not ParameterListHasDefaultValues(AMethod.Parameters) then
     EmitInstruction(ChildCtx, EncodeABC(OP_PACK_ARGS,
       UInt8(ChildScope.ResolveLocal(
         AMethod.Parameters[RestParamIndex].Name)),
@@ -4072,8 +4108,11 @@ begin
   for I := 0 to ChildScope.UpvalueCount - 1 do
     ChildTemplate.AddUpvalueDescriptor(
       ChildScope.GetUpvalue(I).IsLocal,
-      ChildScope.GetUpvalue(I).Index);
+      ChildScope.GetUpvalue(I).Index,
+      ChildScope.GetUpvalue(I).Name);
 
+  if Assigned(ACtx.SetDerivedConstructorThisGuard) then
+    ACtx.SetDerivedConstructorThisGuard(OldDerivedGuard);
   ACtx.SwapState(OldTemplate, OldScope);
   ChildScope.Free;
 
@@ -4105,11 +4144,13 @@ var
   EmptyParams: TGocciaParameterArray;
   ArgumentsSlot: Integer;
   I: Integer;
+  DisplayName: string;
 begin
   OldTemplate := ACtx.Template;
   OldScope := ACtx.Scope;
+  DisplayName := DisplayClassElementName(AName);
 
-  ChildTemplate := TGocciaFunctionTemplate.Create('<get ' + AName + '>');
+  ChildTemplate := TGocciaFunctionTemplate.Create('get ' + DisplayName);
   ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
   ChildTemplate.SourceText := AGetter.SourceText;
   ChildTemplate.ParameterCount := 0;
@@ -4124,6 +4165,7 @@ begin
   ChildCtx.Scope := ChildScope;
   ChildCtx.NonStrictMode := ACtx.NonStrictMode and
     not ChildTemplate.StrictCode;
+  ChildCtx.DerivedConstructorThisGuard := False;
   EmitLineMapping(ChildCtx, AGetter.Line, AGetter.Column);
   EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot);
   ACtx.CompileFunctionBody(AGetter.Body);
@@ -4132,7 +4174,8 @@ begin
   for I := 0 to ChildScope.UpvalueCount - 1 do
     ChildTemplate.AddUpvalueDescriptor(
       ChildScope.GetUpvalue(I).IsLocal,
-      ChildScope.GetUpvalue(I).Index);
+      ChildScope.GetUpvalue(I).Index,
+      ChildScope.GetUpvalue(I).Name);
 
   ACtx.SwapState(OldTemplate, OldScope);
   ChildScope.Free;
@@ -4171,20 +4214,40 @@ var
   NameIdx: UInt16;
   SetterParams: TGocciaParameterArray;
   ArgumentsSlot: Integer;
-  I: Integer;
+  FormalCount, I: Integer;
+  DisplayName: string;
 begin
   OldTemplate := ACtx.Template;
   OldScope := ACtx.Scope;
+  DisplayName := DisplayClassElementName(AName);
 
-  ChildTemplate := TGocciaFunctionTemplate.Create('<set ' + AName + '>');
+  ChildTemplate := TGocciaFunctionTemplate.Create('set ' + DisplayName);
   ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
   ChildTemplate.SourceText := ASetter.SourceText;
-  ChildTemplate.ParameterCount := 1;
+  SetterParams := ASetter.Parameters;
+  if Length(SetterParams) = 0 then
+  begin
+    SetLength(SetterParams, 1);
+    SetterParams[0].Name := ASetter.Parameter;
+  end;
+  ChildTemplate.ParameterCount := Length(SetterParams);
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
-  ChildScope.DeclareLocal(ASetter.Parameter, False);
-  SetLength(SetterParams, 1);
-  SetterParams[0].Name := ASetter.Parameter;
+  for I := 0 to High(SetterParams) do
+    if SetterParams[I].IsPattern then
+      ChildScope.DeclareLocal(SyntheticParamLocalName(I), False)
+    else
+      ChildScope.DeclareLocal(SetterParams[I].Name, False);
+  for I := 0 to High(SetterParams) do
+    if SetterParams[I].IsPattern and Assigned(SetterParams[I].Pattern) then
+      CollectDestructuringBindings(SetterParams[I].Pattern, ChildScope);
+  FormalCount := Length(SetterParams);
+  if (Length(SetterParams) > 0) and
+     (SetterParams[0].IsRest or Assigned(SetterParams[0].DefaultValue)) then
+    FormalCount := 0;
+  ChildTemplate.FormalParameterCount := UInt8(FormalCount);
+  if Assigned(ACtx.FormalParameterCounts) then
+    ACtx.FormalParameterCounts.AddOrSetValue(ChildTemplate, FormalCount);
   ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, SetterParams);
 
   ACtx.SwapState(ChildTemplate, ChildScope);
@@ -4193,15 +4256,22 @@ begin
   ChildCtx.Scope := ChildScope;
   ChildCtx.NonStrictMode := ACtx.NonStrictMode and
     not ChildTemplate.StrictCode;
+  ChildCtx.DerivedConstructorThisGuard := False;
   EmitLineMapping(ChildCtx, ASetter.Line, ASetter.Column);
   EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot);
+  EmitDefaultParameters(ChildCtx, SetterParams);
+  EmitDestructuringParameters(ChildCtx, SetterParams);
+  if ChildTemplate.CodeCount > High(UInt16) then
+    raise Exception.Create('Parameter preamble is too large to encode');
+  ChildTemplate.ParameterPreambleSize := UInt16(ChildTemplate.CodeCount);
   ACtx.CompileFunctionBody(ASetter.Body);
   ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
 
   for I := 0 to ChildScope.UpvalueCount - 1 do
     ChildTemplate.AddUpvalueDescriptor(
       ChildScope.GetUpvalue(I).IsLocal,
-      ChildScope.GetUpvalue(I).Index);
+      ChildScope.GetUpvalue(I).Index,
+      ChildScope.GetUpvalue(I).Name);
 
   ACtx.SwapState(OldTemplate, OldScope);
   ChildScope.Free;
@@ -4258,6 +4328,7 @@ begin
   ChildCtx.Scope := ChildScope;
   ChildCtx.NonStrictMode := ACtx.NonStrictMode and
     not ChildTemplate.StrictCode;
+  ChildCtx.DerivedConstructorThisGuard := False;
   EmitLineMapping(ChildCtx, AGetter.Line, AGetter.Column);
   EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot);
   ACtx.CompileFunctionBody(AGetter.Body);
@@ -4266,7 +4337,8 @@ begin
   for I := 0 to ChildScope.UpvalueCount - 1 do
     ChildTemplate.AddUpvalueDescriptor(
       ChildScope.GetUpvalue(I).IsLocal,
-      ChildScope.GetUpvalue(I).Index);
+      ChildScope.GetUpvalue(I).Index,
+      ChildScope.GetUpvalue(I).Name);
 
   ACtx.SwapState(OldTemplate, OldScope);
   ChildScope.Free;
@@ -4274,6 +4346,8 @@ begin
   FuncIdx := OldTemplate.AddFunction(ChildTemplate);
   FnReg := ACtx.Scope.AllocateRegister;
   EmitInstruction(ACtx, EncodeABx(OP_CLOSURE, FnReg, FuncIdx));
+  EmitInstruction(ACtx, EncodeABC(OP_SET_FUNCTION_NAME, FnReg, AKeyReg,
+    FUNCTION_NAME_PREFIX_GET));
 
   TargetReg := ACtx.Scope.AllocateRegister;
   AccessorReg := ACtx.Scope.AllocateRegister;
@@ -4301,19 +4375,37 @@ var
   FnReg, TargetReg, AccessorReg: UInt8;
   SetterParams: TGocciaParameterArray;
   ArgumentsSlot: Integer;
-  I: Integer;
+  FormalCount, I: Integer;
 begin
   OldTemplate := ACtx.Template;
   OldScope := ACtx.Scope;
 
   ChildTemplate := TGocciaFunctionTemplate.Create('<set [computed]>');
   ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
-  ChildTemplate.ParameterCount := 1;
+  SetterParams := ASetter.Parameters;
+  if Length(SetterParams) = 0 then
+  begin
+    SetLength(SetterParams, 1);
+    SetterParams[0].Name := ASetter.Parameter;
+  end;
+  ChildTemplate.ParameterCount := Length(SetterParams);
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
-  ChildScope.DeclareLocal(ASetter.Parameter, False);
-  SetLength(SetterParams, 1);
-  SetterParams[0].Name := ASetter.Parameter;
+  for I := 0 to High(SetterParams) do
+    if SetterParams[I].IsPattern then
+      ChildScope.DeclareLocal(SyntheticParamLocalName(I), False)
+    else
+      ChildScope.DeclareLocal(SetterParams[I].Name, False);
+  for I := 0 to High(SetterParams) do
+    if SetterParams[I].IsPattern and Assigned(SetterParams[I].Pattern) then
+      CollectDestructuringBindings(SetterParams[I].Pattern, ChildScope);
+  FormalCount := Length(SetterParams);
+  if (Length(SetterParams) > 0) and
+     (SetterParams[0].IsRest or Assigned(SetterParams[0].DefaultValue)) then
+    FormalCount := 0;
+  ChildTemplate.FormalParameterCount := UInt8(FormalCount);
+  if Assigned(ACtx.FormalParameterCounts) then
+    ACtx.FormalParameterCounts.AddOrSetValue(ChildTemplate, FormalCount);
   ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, SetterParams);
 
   ACtx.SwapState(ChildTemplate, ChildScope);
@@ -4322,15 +4414,22 @@ begin
   ChildCtx.Scope := ChildScope;
   ChildCtx.NonStrictMode := ACtx.NonStrictMode and
     not ChildTemplate.StrictCode;
+  ChildCtx.DerivedConstructorThisGuard := False;
   EmitLineMapping(ChildCtx, ASetter.Line, ASetter.Column);
   EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot);
+  EmitDefaultParameters(ChildCtx, SetterParams);
+  EmitDestructuringParameters(ChildCtx, SetterParams);
+  if ChildTemplate.CodeCount > High(UInt16) then
+    raise Exception.Create('Parameter preamble is too large to encode');
+  ChildTemplate.ParameterPreambleSize := UInt16(ChildTemplate.CodeCount);
   ACtx.CompileFunctionBody(ASetter.Body);
   ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
 
   for I := 0 to ChildScope.UpvalueCount - 1 do
     ChildTemplate.AddUpvalueDescriptor(
       ChildScope.GetUpvalue(I).IsLocal,
-      ChildScope.GetUpvalue(I).Index);
+      ChildScope.GetUpvalue(I).Index,
+      ChildScope.GetUpvalue(I).Name);
 
   ACtx.SwapState(OldTemplate, OldScope);
   ChildScope.Free;
@@ -4338,6 +4437,8 @@ begin
   FuncIdx := OldTemplate.AddFunction(ChildTemplate);
   FnReg := ACtx.Scope.AllocateRegister;
   EmitInstruction(ACtx, EncodeABx(OP_CLOSURE, FnReg, FuncIdx));
+  EmitInstruction(ACtx, EncodeABC(OP_SET_FUNCTION_NAME, FnReg, AKeyReg,
+    FUNCTION_NAME_PREFIX_SET));
 
   TargetReg := ACtx.Scope.AllocateRegister;
   AccessorReg := ACtx.Scope.AllocateRegister;
@@ -4414,10 +4515,12 @@ begin
   ChildCtx.Scope := ChildScope;
   ChildCtx.NonStrictMode := ACtx.NonStrictMode and
     not ChildTemplate.StrictCode;
+  ChildCtx.DerivedConstructorThisGuard := False;
 
   EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot);
 
-  if RestParamIndex >= 0 then
+  if (RestParamIndex >= 0) and
+     not ParameterListHasDefaultValues(AMethod.Parameters) then
     EmitInstruction(ChildCtx, EncodeABC(OP_PACK_ARGS,
       UInt8(ChildScope.ResolveLocal(
         AMethod.Parameters[RestParamIndex].Name)),
@@ -4435,7 +4538,8 @@ begin
   for I := 0 to ChildScope.UpvalueCount - 1 do
     ChildTemplate.AddUpvalueDescriptor(
       ChildScope.GetUpvalue(I).IsLocal,
-      ChildScope.GetUpvalue(I).Index);
+      ChildScope.GetUpvalue(I).Index,
+      ChildScope.GetUpvalue(I).Name);
 
   ACtx.SwapState(OldTemplate, OldScope);
   ChildScope.Free;
@@ -4443,6 +4547,8 @@ begin
   FuncIdx := OldTemplate.AddFunction(ChildTemplate);
   FnReg := ACtx.Scope.AllocateRegister;
   EmitInstruction(ACtx, EncodeABx(OP_CLOSURE, FnReg, FuncIdx));
+  EmitInstruction(ACtx, EncodeABC(OP_SET_FUNCTION_NAME, FnReg, AKeyReg,
+    FUNCTION_NAME_PREFIX_NONE));
 
   if AIsStatic then
     // Static: class[key] = method
@@ -4570,6 +4676,67 @@ begin
   Result := False;
 end;
 
+function IsAnonymousFunctionNameInitializer(
+  const AExpression: TGocciaExpression): Boolean;
+begin
+  Result := (AExpression is TGocciaArrowFunctionExpression) or
+    ((AExpression is TGocciaFunctionExpression) and
+     (TGocciaFunctionExpression(AExpression).Name = '')) or
+    ((AExpression is TGocciaClassExpression) and
+     (TGocciaClassExpression(AExpression).ClassDefinition.Name = ''));
+end;
+
+function ClassFieldInferredName(const AElement: TGocciaClassElement): string;
+begin
+  if AElement.IsComputed then
+    Exit('');
+  if AElement.IsPrivate then
+    Exit('#' + AElement.Name);
+  Result := AElement.Name;
+end;
+
+procedure CompileFieldValueWithInferredName(
+  const ACtx: TGocciaCompilationContext; const AExpression: TGocciaExpression;
+  const ADest: UInt8; const AInferredName: string);
+begin
+  if not Assigned(AExpression) then
+  begin
+    EmitInstruction(ACtx, EncodeABx(OP_LOAD_UNDEFINED, ADest, 0));
+    Exit;
+  end;
+
+  Goccia.Compiler.Expressions.CompileExpressionWithInferredName(
+    ACtx, AExpression, ADest, AInferredName);
+end;
+
+procedure CompileStaticFieldInitializerExpression(
+  const ACtx: TGocciaCompilationContext; const AClassReg: UInt8;
+  const AExpression: TGocciaExpression; const ADest: UInt8;
+  const AInferredName: string = '');
+var
+  ClosedLocals: array[0..0] of UInt8;
+  ClosedCount, I: Integer;
+  ThisReg: UInt8;
+  OldRejectArgumentsInDirectEval: Boolean;
+begin
+  OldRejectArgumentsInDirectEval := ACtx.Template.RejectArgumentsInDirectEval;
+  ACtx.Template.RejectArgumentsInDirectEval := True;
+  ACtx.Scope.BeginScope;
+  try
+    ThisReg := ACtx.Scope.DeclareLocal(KEYWORD_THIS, False);
+    EmitInstruction(ACtx, EncodeABC(OP_MOVE, ThisReg, AClassReg, 0));
+    CompileFieldValueWithInferredName(ACtx, AExpression, ADest,
+      AInferredName);
+    ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
+    for I := 0 to ClosedCount - 1 do
+      EmitInstruction(ACtx,
+        EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
+  finally
+    ACtx.Template.RejectArgumentsInDirectEval :=
+      OldRejectArgumentsInDirectEval;
+  end;
+end;
+
 procedure RegisterPrivateName(const AScope: TGocciaCompilerScope;
   const AName, APrefix: string);
 begin
@@ -4630,9 +4797,9 @@ var
   I, UpvalueIdx: Integer;
   Entry: TGocciaExpressionMap.TKeyValuePair;
   Elem: TGocciaClassElement;
-  FieldExpr: TGocciaExpression;
   ComputedKeyName: string;
   AccessorBackingName: string;
+  StoreOpcode: TGocciaOpCode;
 begin
   OldTemplate := ACtx.Template;
   OldScope := ACtx.Scope;
@@ -4640,6 +4807,7 @@ begin
   ChildTemplate := TGocciaFunctionTemplate.Create('<fields>');
   ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
   ChildTemplate.ParameterCount := 0;
+  ChildTemplate.RejectArgumentsInDirectEval := True;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
 
   ThisReg := ChildScope.DeclareLocal(KEYWORD_THIS, False);
@@ -4651,6 +4819,7 @@ begin
   ChildCtx.Scope := ChildScope;
   ChildCtx.NonStrictMode := ACtx.NonStrictMode and
     not ChildTemplate.StrictCode;
+  ChildCtx.DerivedConstructorThisGuard := False;
 
   if Length(AClassDef.FFieldOrder) > 0 then
   begin
@@ -4659,10 +4828,8 @@ begin
       ValReg := ChildScope.AllocateRegister;
       if AClassDef.FFieldOrder[I].IsComputed then
       begin
-        if Assigned(AClassDef.FFieldOrder[I].FieldInitializer) then
-          ACtx.CompileExpression(AClassDef.FFieldOrder[I].FieldInitializer, ValReg)
-        else
-          EmitInstruction(ChildCtx, EncodeABx(OP_LOAD_UNDEFINED, ValReg, 0));
+        CompileFieldValueWithInferredName(ChildCtx,
+          AClassDef.FFieldOrder[I].FieldInitializer, ValReg, '');
         KeyReg := ChildScope.AllocateRegister;
         ComputedKeyName := FindComputedFieldKeyLocalName(
           AComputedFieldKeyLocals, AClassDef.FFieldOrder[I].ElementIndex);
@@ -4671,6 +4838,10 @@ begin
           raise Exception.Create('Compiler error: computed class field key was not captured');
         EmitInstruction(ChildCtx, EncodeABx(OP_GET_UPVALUE, KeyReg,
           UInt16(UpvalueIdx)));
+        if IsAnonymousFunctionNameInitializer(
+           AClassDef.FFieldOrder[I].FieldInitializer) then
+          EmitInstruction(ChildCtx, EncodeABC(OP_SET_FUNCTION_NAME, ValReg,
+            KeyReg, 0));
         EmitInstruction(ChildCtx, EncodeABC(OP_DEFINE_PROP_DYNAMIC, ThisReg,
           KeyReg, ValReg));
         ChildScope.FreeRegister;
@@ -4679,22 +4850,24 @@ begin
       end
       else if AClassDef.FFieldOrder[I].IsPrivate then
       begin
-        if AClassDef.PrivateInstanceProperties.TryGetValue(
-            AClassDef.FFieldOrder[I].Name, FieldExpr) then
-          ACtx.CompileExpression(FieldExpr, ValReg);
+        CompileFieldValueWithInferredName(ChildCtx,
+          AClassDef.FFieldOrder[I].FieldInitializer, ValReg,
+          '#' + AClassDef.FFieldOrder[I].Name);
         KeyIdx := ChildTemplate.AddConstantString(
           '#slot:' + ChildScope.ResolvePrivatePrefix + AClassDef.FFieldOrder[I].Name);
+        StoreOpcode := OP_DEFINE_STATIC_PROP_CONST;
       end
       else
       begin
-        if AClassDef.InstanceProperties.TryGetValue(
-            AClassDef.FFieldOrder[I].Name, FieldExpr) then
-          ACtx.CompileExpression(FieldExpr, ValReg);
+        CompileFieldValueWithInferredName(ChildCtx,
+          AClassDef.FFieldOrder[I].FieldInitializer, ValReg,
+          AClassDef.FFieldOrder[I].Name);
         KeyIdx := ChildTemplate.AddConstantString(AClassDef.FFieldOrder[I].Name);
+        StoreOpcode := OP_DEFINE_STATIC_PROP_CONST;
       end;
       if KeyIdx > High(UInt8) then
         raise Exception.Create('Constant pool overflow: field name index exceeds 255');
-      EmitInstruction(ChildCtx, EncodeABC(OP_SET_PROP_CONST, ThisReg,
+      EmitInstruction(ChildCtx, EncodeABC(StoreOpcode, ThisReg,
         UInt8(KeyIdx), ValReg));
       ChildScope.FreeRegister;
     end;
@@ -4709,7 +4882,7 @@ begin
       KeyIdx := ChildTemplate.AddConstantString(Entry.Key);
       if KeyIdx > High(UInt8) then
         raise Exception.Create('Constant pool overflow: field name index exceeds 255');
-      EmitInstruction(ChildCtx, EncodeABC(OP_SET_PROP_CONST, ThisReg,
+      EmitInstruction(ChildCtx, EncodeABC(OP_DEFINE_STATIC_PROP_CONST, ThisReg,
         UInt8(KeyIdx), ValReg));
       ChildScope.FreeRegister;
     end;
@@ -4722,7 +4895,7 @@ begin
       KeyIdx := ChildTemplate.AddConstantString('#slot:' + ChildScope.ResolvePrivatePrefix + Entry.Key);
       if KeyIdx > High(UInt8) then
         raise Exception.Create('Constant pool overflow: field name index exceeds 255');
-      EmitInstruction(ChildCtx, EncodeABC(OP_SET_PROP_CONST, ThisReg,
+      EmitInstruction(ChildCtx, EncodeABC(OP_DEFINE_STATIC_PROP_CONST, ThisReg,
         UInt8(KeyIdx), ValReg));
       ChildScope.FreeRegister;
     end;
@@ -4752,7 +4925,8 @@ begin
   for I := 0 to ChildScope.UpvalueCount - 1 do
     ChildTemplate.AddUpvalueDescriptor(
       ChildScope.GetUpvalue(I).IsLocal,
-      ChildScope.GetUpvalue(I).Index);
+      ChildScope.GetUpvalue(I).Index,
+      ChildScope.GetUpvalue(I).Name);
 
   ACtx.SwapState(OldTemplate, OldScope);
   ChildScope.Free;
@@ -4796,6 +4970,7 @@ begin
   ChildCtx.Scope := ChildScope;
   ChildCtx.NonStrictMode := ACtx.NonStrictMode and
     not ChildTemplate.StrictCode;
+  ChildCtx.DerivedConstructorThisGuard := False;
 
   CompileBlockStatement(ChildCtx, ABody);
 
@@ -4807,7 +4982,8 @@ begin
   for I := 0 to ChildScope.UpvalueCount - 1 do
     ChildTemplate.AddUpvalueDescriptor(
       ChildScope.GetUpvalue(I).IsLocal,
-      ChildScope.GetUpvalue(I).Index);
+      ChildScope.GetUpvalue(I).Index,
+      ChildScope.GetUpvalue(I).Name);
 
   ACtx.SwapState(OldTemplate, OldScope);
   ChildScope.Free;
@@ -5055,15 +5231,23 @@ var
   GetterPair: TGocciaGetterExpressionMap.TKeyValuePair;
   SetterPair: TGocciaSetterExpressionMap.TKeyValuePair;
   StaticPropPair: TGocciaExpressionMap.TKeyValuePair;
-  I, LocalIdx, UpvalIdx: Integer;
+  I, ClassLocalIdx, LocalIdx, UpvalIdx: Integer;
   HasSuper: Boolean;
+  IsTopLevelGlobalBacked: Boolean;
   PrivPrefix: string;
   PrivateNameMark: Integer;
   ComputedFieldKeyLocals: TComputedFieldKeyLocals;
   ComputedKeyName: string;
+  InnerNameSlot: UInt8;
+  HasInnerNameBinding: Boolean;
+  ClosedLocals: array[0..255] of UInt8;
+  ClosedCount: Integer;
 begin
   ClassDef := AStmt.ClassDefinition;
-  HasSuper := ClassDef.SuperClass <> '';
+  HasSuper := Assigned(ClassDef.SuperClassExpression) or
+    (ClassDef.SuperClass <> '');
+  IsTopLevelGlobalBacked := ACtx.GlobalBackedTopLevel and
+    (ACtx.Scope.Depth = 0);
 
   PrivPrefix := NextClassPrivatePrefix;
   PrivateNameMark := ACtx.Scope.PrivateNameMark;
@@ -5077,41 +5261,62 @@ begin
      (ACtx.Scope.GetLocal(LocalIdx).Depth = ACtx.Scope.Depth) then
     ClassReg := ACtx.Scope.GetLocal(LocalIdx).Slot
   else
-    ClassReg := ACtx.Scope.DeclareLocal(ClassDef.Name, True);
-  if ACtx.GlobalBackedTopLevel and (ACtx.Scope.Depth = 0) then
   begin
+    ClassReg := ACtx.Scope.DeclareLocal(ClassDef.Name, False);
     LocalIdx := ACtx.Scope.ResolveLocal(ClassDef.Name);
-    if LocalIdx >= 0 then
-      ACtx.Scope.MarkGlobalBacked(LocalIdx);
   end;
+  ClassLocalIdx := LocalIdx;
+  if IsTopLevelGlobalBacked and (ClassLocalIdx >= 0) then
+    ACtx.Scope.MarkGlobalBacked(ClassLocalIdx);
   NameIdx := ACtx.Template.AddConstantString(ClassDef.Name);
   EmitInstruction(ACtx, EncodeABx(OP_NEW_CLASS, ClassReg, NameIdx));
+
+  HasInnerNameBinding := ClassDef.Name <> '';
+  InnerNameSlot := 0;
+  if HasInnerNameBinding then
+  begin
+    ACtx.Scope.BeginScope;
+    InnerNameSlot := ACtx.Scope.DeclareLocal(ClassDef.Name, True);
+    if HasSuper then
+      EmitInstruction(ACtx, EncodeABC(OP_LOAD_HOLE, InnerNameSlot, 0, 0))
+    else
+      EmitInstruction(ACtx, EncodeABC(OP_MOVE, InnerNameSlot, ClassReg, 0));
+  end;
 
   if HasSuper then
   begin
     SuperReg := ACtx.Scope.DeclareLocal('__super__', False);
 
-    LocalIdx := ACtx.Scope.ResolveLocal(ClassDef.SuperClass);
-    if LocalIdx >= 0 then
-      EmitInstruction(ACtx, EncodeABC(OP_MOVE, SuperReg,
-        ACtx.Scope.GetLocal(LocalIdx).Slot, 0))
+    if Assigned(ClassDef.SuperClassExpression) then
+      ACtx.CompileExpression(ClassDef.SuperClassExpression, SuperReg)
     else
     begin
-      UpvalIdx := ACtx.Scope.ResolveUpvalue(ClassDef.SuperClass);
-      if UpvalIdx >= 0 then
-        EmitInstruction(ACtx, EncodeABx(OP_GET_UPVALUE, SuperReg,
-          UInt16(UpvalIdx)))
+      LocalIdx := ACtx.Scope.ResolveLocal(ClassDef.SuperClass);
+      if LocalIdx >= 0 then
+        EmitInstruction(ACtx, EncodeABC(OP_MOVE, SuperReg,
+          ACtx.Scope.GetLocal(LocalIdx).Slot, 0))
       else
-        EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, SuperReg,
-          ACtx.Template.AddConstantString(ClassDef.SuperClass)));
+      begin
+        UpvalIdx := ACtx.Scope.ResolveUpvalue(ClassDef.SuperClass);
+        if UpvalIdx >= 0 then
+          EmitInstruction(ACtx, EncodeABx(OP_GET_UPVALUE, SuperReg,
+            UInt16(UpvalIdx)))
+        else
+          EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, SuperReg,
+            ACtx.Template.AddConstantString(ClassDef.SuperClass)));
+      end;
     end;
 
     EmitInstruction(ACtx, EncodeABC(OP_CLASS_SET_SUPER, ClassReg, SuperReg, 0));
   end;
 
+  if HasInnerNameBinding and HasSuper then
+    EmitInstruction(ACtx, EncodeABC(OP_MOVE, InnerNameSlot, ClassReg, 0));
+
   for MethodPair in ClassDef.Methods do
     CompileMethodBody(ACtx, ClassReg, MethodPair.Key,
-      MethodPair.Value, OP_CLASS_ADD_METHOD_CONST);
+      MethodPair.Value, OP_CLASS_ADD_METHOD_CONST,
+      HasSuper and (MethodPair.Key = PROP_CONSTRUCTOR));
 
   for MethodPair in ClassDef.StaticMethods do
     CompileMethodBody(ACtx, ClassReg, MethodPair.Key,
@@ -5185,7 +5390,8 @@ begin
     for StaticPropPair in ClassDef.StaticProperties do
     begin
       ValReg := ACtx.Scope.AllocateRegister;
-      ACtx.CompileExpression(StaticPropPair.Value, ValReg);
+      CompileStaticFieldInitializerExpression(
+        ACtx, ClassReg, StaticPropPair.Value, ValReg, StaticPropPair.Key);
       KeyIdx := ACtx.Template.AddConstantString(StaticPropPair.Key);
       if KeyIdx > High(UInt8) then
         raise Exception.Create('Constant pool overflow: static property name index exceeds 255');
@@ -5197,13 +5403,15 @@ begin
     for StaticPropPair in ClassDef.PrivateStaticProperties do
     begin
       ValReg := ACtx.Scope.AllocateRegister;
-      ACtx.CompileExpression(StaticPropPair.Value, ValReg);
+      CompileStaticFieldInitializerExpression(
+        ACtx, ClassReg, StaticPropPair.Value, ValReg,
+        '#' + StaticPropPair.Key);
       KeyIdx := ACtx.Template.AddConstantString('#slot:' + PrivPrefix + StaticPropPair.Key);
       if KeyIdx > High(UInt8) then
         raise Exception.Create('Constant pool overflow: static property name index exceeds 255');
       EmitInstruction(ACtx, EncodeABC(OP_CLASS_DECLARE_PRIVATE_STATIC_CONST,
         ClassReg, UInt8(KeyIdx), 0));
-      EmitInstruction(ACtx, EncodeABC(OP_SET_PROP_CONST, ClassReg,
+      EmitInstruction(ACtx, EncodeABC(OP_DEFINE_STATIC_PROP_CONST, ClassReg,
         UInt8(KeyIdx), ValReg));
       ACtx.Scope.FreeRegister;
     end;
@@ -5229,9 +5437,16 @@ begin
       else
         KeyReg := 0;
       if Assigned(ClassDef.FElements[I].FieldInitializer) then
-        ACtx.CompileExpression(ClassDef.FElements[I].FieldInitializer, ValReg)
+        CompileStaticFieldInitializerExpression(
+          ACtx, ClassReg, ClassDef.FElements[I].FieldInitializer, ValReg,
+          ClassFieldInferredName(ClassDef.FElements[I]))
       else
         EmitInstruction(ACtx, EncodeABx(OP_LOAD_UNDEFINED, ValReg, 0));
+      if ClassDef.FElements[I].IsComputed and
+         IsAnonymousFunctionNameInitializer(
+           ClassDef.FElements[I].FieldInitializer) then
+        EmitInstruction(ACtx, EncodeABC(OP_SET_FUNCTION_NAME, ValReg,
+          KeyReg, 0));
       if ClassDef.FElements[I].IsPrivate then
       begin
         KeyIdx := ACtx.Template.AddConstantString(
@@ -5240,7 +5455,7 @@ begin
           raise Exception.Create('Constant pool overflow: static property name index exceeds 255');
         EmitInstruction(ACtx, EncodeABC(OP_CLASS_DECLARE_PRIVATE_STATIC_CONST,
           ClassReg, UInt8(KeyIdx), 0));
-        EmitInstruction(ACtx, EncodeABC(OP_SET_PROP_CONST, ClassReg,
+        EmitInstruction(ACtx, EncodeABC(OP_DEFINE_STATIC_PROP_CONST, ClassReg,
           UInt8(KeyIdx), ValReg));
       end
       else if ClassDef.FElements[I].IsComputed then
@@ -5267,12 +5482,19 @@ begin
 
   // Sync cell if the class local was pre-declared and captured by a hoisted
   // function (see CompileVariableDeclaration for the full explanation)
-  LocalIdx := ACtx.Scope.ResolveLocal(ClassDef.Name);
-  if (LocalIdx >= 0) and ACtx.Scope.GetLocal(LocalIdx).IsCaptured then
+  if (ClassLocalIdx >= 0) and
+     ACtx.Scope.GetLocal(ClassLocalIdx).IsCaptured then
     EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, ClassReg, UInt16(ClassReg)));
 
-  if ACtx.GlobalBackedTopLevel and (ACtx.Scope.Depth = 0) then
-    EmitGlobalDefine(ACtx, ClassReg, ClassDef.Name, True);
+  if IsTopLevelGlobalBacked then
+    EmitGlobalDefine(ACtx, ClassReg, ClassDef.Name, False);
+
+  if HasInnerNameBinding then
+  begin
+    ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
+    for I := 0 to ClosedCount - 1 do
+      EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
+  end;
 
   ACtx.Scope.PrivatePrefix := '';
   ACtx.Scope.RestorePrivateNameMark(PrivateNameMark);
@@ -5294,13 +5516,15 @@ var
   PrivPrefix: string;
   PrivateNameMark: Integer;
   HasNameBinding: Boolean;
-  ClosedLocals: array[0..0] of UInt8;
+  ClosedLocals: array[0..255] of UInt8;
   ClosedCount, I: Integer;
   ComputedFieldKeyLocals: TComputedFieldKeyLocals;
   ComputedKeyName: string;
+  NameSlot: UInt8;
 begin
   ClassDef := AClassDef;
-  HasSuper := ClassDef.SuperClass <> '';
+  HasSuper := Assigned(ClassDef.SuperClassExpression) or
+    (ClassDef.SuperClass <> '');
   HasNameBinding := ClassDef.Name <> '';
 
   PrivPrefix := NextClassPrivatePrefix;
@@ -5321,35 +5545,47 @@ begin
   if HasNameBinding then
   begin
     ACtx.Scope.BeginScope;
-    ACtx.Scope.DeclareLocal(ClassDef.Name, True);
-    EmitInstruction(ACtx, EncodeABC(OP_MOVE, ACtx.Scope.NextSlot - 1, ADest, 0));
+    NameSlot := ACtx.Scope.DeclareLocal(ClassDef.Name, True);
+    if HasSuper then
+      EmitInstruction(ACtx, EncodeABC(OP_LOAD_HOLE, NameSlot, 0, 0))
+    else
+      EmitInstruction(ACtx, EncodeABC(OP_MOVE, NameSlot, ADest, 0));
   end;
 
   if HasSuper then
   begin
     SuperReg := ACtx.Scope.DeclareLocal('__super__', False);
 
-    LocalIdx := ACtx.Scope.ResolveLocal(ClassDef.SuperClass);
-    if LocalIdx >= 0 then
-      EmitInstruction(ACtx, EncodeABC(OP_MOVE, SuperReg,
-        ACtx.Scope.GetLocal(LocalIdx).Slot, 0))
+    if Assigned(ClassDef.SuperClassExpression) then
+      ACtx.CompileExpression(ClassDef.SuperClassExpression, SuperReg)
     else
     begin
-      UpvalIdx := ACtx.Scope.ResolveUpvalue(ClassDef.SuperClass);
-      if UpvalIdx >= 0 then
-        EmitInstruction(ACtx, EncodeABx(OP_GET_UPVALUE, SuperReg,
-          UInt16(UpvalIdx)))
+      LocalIdx := ACtx.Scope.ResolveLocal(ClassDef.SuperClass);
+      if LocalIdx >= 0 then
+        EmitInstruction(ACtx, EncodeABC(OP_MOVE, SuperReg,
+          ACtx.Scope.GetLocal(LocalIdx).Slot, 0))
       else
-        EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, SuperReg,
-          ACtx.Template.AddConstantString(ClassDef.SuperClass)));
+      begin
+        UpvalIdx := ACtx.Scope.ResolveUpvalue(ClassDef.SuperClass);
+        if UpvalIdx >= 0 then
+          EmitInstruction(ACtx, EncodeABx(OP_GET_UPVALUE, SuperReg,
+            UInt16(UpvalIdx)))
+        else
+          EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, SuperReg,
+            ACtx.Template.AddConstantString(ClassDef.SuperClass)));
+      end;
     end;
 
     EmitInstruction(ACtx, EncodeABC(OP_CLASS_SET_SUPER, ADest, SuperReg, 0));
   end;
 
+  if HasNameBinding and HasSuper then
+    EmitInstruction(ACtx, EncodeABC(OP_MOVE, NameSlot, ADest, 0));
+
   for MethodPair in ClassDef.Methods do
     CompileMethodBody(ACtx, ADest, MethodPair.Key,
-      MethodPair.Value, OP_CLASS_ADD_METHOD_CONST);
+      MethodPair.Value, OP_CLASS_ADD_METHOD_CONST,
+      HasSuper and (MethodPair.Key = PROP_CONSTRUCTOR));
 
   for MethodPair in ClassDef.StaticMethods do
     CompileMethodBody(ACtx, ADest, MethodPair.Key,
@@ -5423,7 +5659,8 @@ begin
     for StaticPropPair in ClassDef.StaticProperties do
     begin
       ValReg := ACtx.Scope.AllocateRegister;
-      ACtx.CompileExpression(StaticPropPair.Value, ValReg);
+      CompileStaticFieldInitializerExpression(
+        ACtx, ADest, StaticPropPair.Value, ValReg, StaticPropPair.Key);
       KeyIdx := ACtx.Template.AddConstantString(StaticPropPair.Key);
       if KeyIdx > High(UInt8) then
         raise Exception.Create('Constant pool overflow: static property name index exceeds 255');
@@ -5435,13 +5672,15 @@ begin
     for StaticPropPair in ClassDef.PrivateStaticProperties do
     begin
       ValReg := ACtx.Scope.AllocateRegister;
-      ACtx.CompileExpression(StaticPropPair.Value, ValReg);
+      CompileStaticFieldInitializerExpression(
+        ACtx, ADest, StaticPropPair.Value, ValReg,
+        '#' + StaticPropPair.Key);
       KeyIdx := ACtx.Template.AddConstantString('#slot:' + PrivPrefix + StaticPropPair.Key);
       if KeyIdx > High(UInt8) then
         raise Exception.Create('Constant pool overflow: static property name index exceeds 255');
       EmitInstruction(ACtx, EncodeABC(OP_CLASS_DECLARE_PRIVATE_STATIC_CONST,
         ADest, UInt8(KeyIdx), 0));
-      EmitInstruction(ACtx, EncodeABC(OP_SET_PROP_CONST, ADest,
+      EmitInstruction(ACtx, EncodeABC(OP_DEFINE_STATIC_PROP_CONST, ADest,
         UInt8(KeyIdx), ValReg));
       ACtx.Scope.FreeRegister;
     end;
@@ -5467,9 +5706,16 @@ begin
       else
         KeyReg := 0;
       if Assigned(ClassDef.FElements[I].FieldInitializer) then
-        ACtx.CompileExpression(ClassDef.FElements[I].FieldInitializer, ValReg)
+        CompileStaticFieldInitializerExpression(
+          ACtx, ADest, ClassDef.FElements[I].FieldInitializer, ValReg,
+          ClassFieldInferredName(ClassDef.FElements[I]))
       else
         EmitInstruction(ACtx, EncodeABx(OP_LOAD_UNDEFINED, ValReg, 0));
+      if ClassDef.FElements[I].IsComputed and
+         IsAnonymousFunctionNameInitializer(
+           ClassDef.FElements[I].FieldInitializer) then
+        EmitInstruction(ACtx, EncodeABC(OP_SET_FUNCTION_NAME, ValReg,
+          KeyReg, 0));
       if ClassDef.FElements[I].IsPrivate then
       begin
         KeyIdx := ACtx.Template.AddConstantString(
@@ -5478,7 +5724,7 @@ begin
           raise Exception.Create('Constant pool overflow: static property name index exceeds 255');
         EmitInstruction(ACtx, EncodeABC(OP_CLASS_DECLARE_PRIVATE_STATIC_CONST,
           ADest, UInt8(KeyIdx), 0));
-        EmitInstruction(ACtx, EncodeABC(OP_SET_PROP_CONST, ADest,
+        EmitInstruction(ACtx, EncodeABC(OP_DEFINE_STATIC_PROP_CONST, ADest,
           UInt8(KeyIdx), ValReg));
       end
       else if ClassDef.FElements[I].IsComputed then

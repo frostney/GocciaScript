@@ -11,6 +11,8 @@ uses
   Goccia.Scope;
 
 type
+  TGocciaEvalRejectNameArray = array of string;
+
   TGocciaEvaluationContext = record
     Realm: TGocciaRealm;
     Scope: TGocciaScope;
@@ -23,6 +25,7 @@ type
     NonStrictMode: Boolean;
     InEvalCode: Boolean;
     RejectArgumentsVarDeclarationInEval: Boolean;
+    RejectVarDeclarationNamesInEval: TGocciaEvalRejectNameArray;
     DisposalTracker: TObject; // TGocciaDisposalTracker or nil
   end;
 

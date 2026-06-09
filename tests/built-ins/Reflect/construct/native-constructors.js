@@ -109,7 +109,7 @@ describe("Reflect.construct with native RegExp constructor", () => {
   test("RegExp source captured before newTarget prototype getter fires", () => {
     let getterFired = false;
     const re = Reflect.construct(RegExp, [/abc/],
-      Object.defineProperty((() => {}).bind(null), "prototype", {
+      Object.defineProperty((class Target {}).bind(null), "prototype", {
         get() { getterFired = true; return RegExp.prototype; },
       }));
     expect(getterFired).toBe(true);
@@ -123,7 +123,7 @@ describe("Reflect.construct with native RegExp constructor", () => {
       return "g";
     }};
     const re = Reflect.construct(RegExp, [/abc/, flags],
-      Object.defineProperty((() => {}).bind(null), "prototype", {
+      Object.defineProperty((class Target {}).bind(null), "prototype", {
         get() { didLookup = true; return RegExp.prototype; },
       }));
     expect(re.flags).toBe("g");

@@ -148,6 +148,14 @@ describe("ArrayBuffer.prototype.slice edge cases", () => {
     expect(buf.slice(0, NaN).byteLength).toBe(0);
   });
 
+  test("negative fractional indexes truncate toward zero before clamping", () => {
+    const buf = new ArrayBuffer(8);
+    expect(buf.slice(-0.5).byteLength).toBe(8);
+    expect(buf.slice(0, -0.5).byteLength).toBe(0);
+    expect(buf.slice(-1.5).byteLength).toBe(1);
+    expect(buf.slice(0, -1.5).byteLength).toBe(7);
+  });
+
   test("both NaN gives empty buffer", () => {
     const buf = new ArrayBuffer(8);
     expect(buf.slice(NaN, NaN).byteLength).toBe(0);
@@ -164,5 +172,34 @@ describe("ArrayBuffer.prototype.slice edge cases", () => {
     const buf = new ArrayBuffer(8);
     const sliced = buf.slice(0, 4);
     expect(sliced instanceof SharedArrayBuffer).toBe(false);
+  });
+
+  test("uses constructor Symbol.species override", () => {
+    class DerivedArrayBuffer extends ArrayBuffer {
+      static get [Symbol.species]() {
+        return ArrayBuffer;
+      }
+    }
+
+    const buf = new DerivedArrayBuffer(8);
+    const sliced = buf.slice(0, 4);
+    expect(sliced instanceof DerivedArrayBuffer).toBe(false);
+    expect(sliced instanceof ArrayBuffer).toBe(true);
+    expect(sliced.byteLength).toBe(4);
+  });
+
+  test("throws when species constructor returns a detached ArrayBuffer", () => {
+    class DetachedArrayBuffer {
+      constructor(length) {
+        const buffer = new ArrayBuffer(length);
+        buffer.transfer();
+        return buffer;
+      }
+    }
+
+    const buf = new ArrayBuffer(8);
+    buf.constructor = { [Symbol.species]: DetachedArrayBuffer };
+
+    expect(() => buf.slice(0, 0)).toThrow(TypeError);
   });
 });

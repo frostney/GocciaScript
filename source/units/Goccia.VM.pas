@@ -16,6 +16,7 @@ uses
   Goccia.ExecutionContext,
   Goccia.GarbageCollector,
   Goccia.Intrinsics.FunctionObjects,
+  Goccia.Keywords.Reserved,
   Goccia.Modules,
   Goccia.Realm,
   Goccia.Scope,
@@ -164,6 +165,8 @@ type
     function KeyToPropertyName(const AKey: TGocciaValue): string;
     function KeyToPropertyNameRegister(const AKey: TGocciaRegister): string;
     function TryResolveObjectKey(const AKeyReg: TGocciaRegister; out AResolved: TGocciaValue): Boolean; inline;
+    procedure SetFunctionNameFromKey(const AFunction, AKey: TGocciaValue;
+      const APrefixKind: UInt8);
     function EnsureCurrentDynamicVarScope: TGocciaScope;
     function KeyDisplaySafe(const AKey: TGocciaRegister): string;
     // ALimit semantics:
@@ -184,6 +187,8 @@ type
       const AExclusionKeys: TGocciaArrayValue): TGocciaObjectValue;
     function ForInEntriesArray(const AValue: TGocciaValue): TGocciaArrayValue;
     function TryForInEntryKey(const AEntry: TGocciaValue; out AKey: string): Boolean;
+    function PromiseConstructorIntrinsic: TGocciaValue;
+    function PromiseResolveIntrinsic(const AValue: TGocciaValue): TGocciaPromiseValue;
     function GetIteratorValue(const AIterable: TGocciaValue;
       const ATryAsync: Boolean): TGocciaValue;
     function ConstructValue(const AConstructor: TGocciaValue;
@@ -218,7 +223,8 @@ type
       const ADeclarationType: TGocciaDeclarationType);
     function FinalizeEnumValue(const AValue: TGocciaValue; const AName: string): TGocciaValue;
     procedure StampBytecodePrivateBrands(const AClassValue: TGocciaClassValue;
-      const AInstance: TGocciaValue);
+      const AInstance: TGocciaValue;
+      const APreserveExistingPrivateSlots: Boolean);
     procedure SetupAutoAccessorValue(const AName: string; const AIsStatic: Boolean);
     procedure SetupAutoAccessorValueByKey(const AKey: TGocciaValue;
       const ABackingName: string; const AIsStatic: Boolean);
@@ -242,6 +248,10 @@ type
       const AName: string; const AUseSuperConstructor: Boolean): TGocciaValue;
     function GetSuperPropertyValueByKey(const ASuperValue, AThisValue,
       AKey: TGocciaValue; const AUseSuperConstructor: Boolean): TGocciaValue;
+    procedure SetSuperPropertyValueByKey(const ASuperValue, AThisValue,
+      AKey, AValue: TGocciaValue);
+    function ResolveBytecodePrivateBrandToken(const AKey: string;
+      const AObject: TGocciaValue): string;
     function GetPropertyValue(const AObject: TGocciaValue; const AKey: string): TGocciaValue;
     procedure SetPropertyValue(const AObject: TGocciaValue; const AKey: string;
       const AValue: TGocciaValue);
@@ -424,6 +434,9 @@ type
     FVM: TGocciaVM;
     FTemplate: TGocciaFunctionTemplate;
     FEnvironmentIndex: Integer;
+    FHomeObject: TGocciaValue;
+    FHomeClass: TGocciaValue;
+    FNewTarget: TGocciaValue;
     function TryFindBinding(const AName: string;
       out ABinding: TGocciaDirectEvalBindingInfo): Boolean;
     function BindingValue(
@@ -435,6 +448,7 @@ type
     procedure SetBindingValue(const ABinding: TGocciaDirectEvalBindingInfo;
       const AValue: TGocciaValue);
   protected
+    function GetOwningClass: TGocciaValue; override;
     function GetSuperClass: TGocciaValue; override;
     function GetSuperConstructor: TGocciaValue; override;
     function GetNewTarget: TGocciaValue; override;
@@ -444,7 +458,10 @@ type
   public
     constructor Create(const AParent: TGocciaScope; const AVM: TGocciaVM;
       const ATemplate: TGocciaFunctionTemplate; const AEnvironmentIndex: Integer;
-      const AUseGlobalVarEnvironment: Boolean);
+      const AUseGlobalVarEnvironment: Boolean;
+      const ALexicalClosure: TGocciaBytecodeClosure;
+      const ANewTarget: TGocciaValue);
+    procedure MarkReferences; override;
     procedure AssignBinding(const AName: string; const AValue: TGocciaValue;
       const ALine: Integer = 0; const AColumn: Integer = 0;
       const ANonStrictMode: Boolean = False); override;
@@ -520,6 +537,7 @@ procedure StampBytecodePrivateInitializersApplied(const AInstance: TGocciaValue;
   const AClassValue: TGocciaClassValue); forward;
 function NormalizeBytecodePrivateKey(const AName,
   APrivateBrandToken: string): string; forward;
+function BytecodePrivateSourceName(const AName: string): string; forward;
 function BytecodePrivateBrandKey(const AKey,
   APrivateBrandToken: string): string; forward;
 function BytecodePrivateTokenForKey(const AKey,
@@ -531,10 +549,14 @@ function BytecodePrivateReceiverBrandToken(
 
 constructor TGocciaVMDirectEvalScope.Create(const AParent: TGocciaScope;
   const AVM: TGocciaVM; const ATemplate: TGocciaFunctionTemplate;
-  const AEnvironmentIndex: Integer; const AUseGlobalVarEnvironment: Boolean);
+  const AEnvironmentIndex: Integer; const AUseGlobalVarEnvironment: Boolean;
+  const ALexicalClosure: TGocciaBytecodeClosure;
+  const ANewTarget: TGocciaValue);
 var
   Env: TGocciaDirectEvalEnvironment;
   Binding: TGocciaDirectEvalBindingInfo;
+  BindingRuntimeValue: TGocciaValue;
+  ThisBindingValue: TGocciaValue;
   I: Integer;
 begin
   if AUseGlobalVarEnvironment then
@@ -544,6 +566,12 @@ begin
   FVM := AVM;
   FTemplate := ATemplate;
   FEnvironmentIndex := AEnvironmentIndex;
+  FNewTarget := ANewTarget;
+  if Assigned(ALexicalClosure) then
+  begin
+    FHomeObject := ALexicalClosure.HomeObject;
+    FHomeClass := ALexicalClosure.HomeClass;
+  end;
   if Assigned(FVM) and Assigned(FVM.FGlobalThisValue) then
     ThisValue := FVM.FGlobalThisValue;
   if (FEnvironmentIndex < 0) or not Assigned(FTemplate) then
@@ -553,15 +581,41 @@ begin
   for I := 0 to High(Env.Bindings) do
   begin
     Binding := Env.Bindings[I];
+    if Binding.Name = KEYWORD_THIS then
+    begin
+      if Binding.Kind <> debGlobal then
+      begin
+        ThisBindingValue := BindingValue(Binding);
+        if ThisBindingValue <> TGocciaHoleValue.HoleValue then
+          ThisValue := ThisBindingValue;
+      end;
+      Continue;
+    end;
     if Binding.IsVarEnvironmentBinding then
       Continue;
     if Binding.Kind in [debWithLocal, debWithUpvalue] then
       Continue;
+    if Binding.Kind = debGlobal then
+      Continue;
+    BindingRuntimeValue := BindingValue(Binding);
+    if BindingRuntimeValue = TGocciaHoleValue.HoleValue then
+      Continue;
     if Binding.IsConst then
-      DefineLexicalBinding(Binding.Name, BindingValue(Binding), dtConst)
+      DefineLexicalBinding(Binding.Name, BindingRuntimeValue, dtConst)
     else
-      DefineLexicalBinding(Binding.Name, BindingValue(Binding), dtLet);
+      DefineLexicalBinding(Binding.Name, BindingRuntimeValue, dtLet);
   end;
+end;
+
+procedure TGocciaVMDirectEvalScope.MarkReferences;
+begin
+  inherited;
+  if Assigned(FHomeObject) then
+    FHomeObject.MarkReferences;
+  if Assigned(FHomeClass) then
+    FHomeClass.MarkReferences;
+  if Assigned(FNewTarget) then
+    FNewTarget.MarkReferences;
 end;
 
 function TGocciaVMDirectEvalScope.TryFindBinding(const AName: string;
@@ -735,12 +789,97 @@ begin
   end;
 end;
 
+function CollectBytecodeDirectEvalPrivateNames(
+  const AVM: TGocciaVM): TStringList;
+var
+  Closure: TGocciaBytecodeClosure;
+  RawNames: TStringList;
+  SourceName: string;
+  I: Integer;
+begin
+  Result := TStringList.Create;
+  Result.CaseSensitive := True;
+  Result.Sorted := False;
+  Result.Duplicates := dupIgnore;
+
+  Closure := DirectEvalLexicalClosure(AVM);
+  if not (Assigned(Closure) and (Closure.HomeClass is TGocciaClassValue)) then
+    Exit;
+
+  RawNames := TStringList.Create;
+  try
+    RawNames.CaseSensitive := True;
+    RawNames.Sorted := False;
+    RawNames.Duplicates := dupIgnore;
+    TGocciaClassValue(Closure.HomeClass).AppendOwnPrivateNames(RawNames);
+
+    for I := 0 to RawNames.Count - 1 do
+    begin
+      SourceName := BytecodePrivateSourceName(RawNames[I]);
+      if (SourceName <> '') and (Result.IndexOf(SourceName) < 0) then
+        Result.Add(SourceName);
+    end;
+  finally
+    RawNames.Free;
+  end;
+end;
+
+function DirectEvalCapturedThisValue(const AVM: TGocciaVM;
+  const ATemplate: TGocciaFunctionTemplate;
+  const AEnvironmentIndex: Integer; out AValue: TGocciaValue): Boolean;
+var
+  Env: TGocciaDirectEvalEnvironment;
+  Binding: TGocciaDirectEvalBindingInfo;
+  Upvalue: TGocciaBytecodeUpvalue;
+  I: Integer;
+begin
+  Result := False;
+  if (not Assigned(AVM)) or (not Assigned(ATemplate)) or
+     (AEnvironmentIndex < 0) then
+    Exit;
+
+  Env := ATemplate.GetDirectEvalEnvironment(AEnvironmentIndex);
+  for I := 0 to High(Env.Bindings) do
+  begin
+    Binding := Env.Bindings[I];
+    if Binding.Name <> KEYWORD_THIS then
+      Continue;
+
+    case Binding.Kind of
+      debLocal:
+        AValue := AVM.GetLocal(Binding.Index);
+      debUpvalue:
+      begin
+        AValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+        if Assigned(AVM.FCurrentClosure) then
+        begin
+          Upvalue := AVM.FCurrentClosure.GetUpvalue(Binding.Index);
+          if Assigned(Upvalue) and Assigned(Upvalue.Cell) then
+            AValue := RegisterToValue(Upvalue.Cell.Value);
+        end;
+      end;
+      debGlobal:
+        Exit(False);
+    else
+      AValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+    end;
+    if AValue = TGocciaHoleValue.HoleValue then
+      Exit(False);
+    Exit(True);
+  end;
+end;
+
 function DirectEvalLexicalThisValue(const AVM: TGocciaVM;
-  const AUseGlobalVarEnvironment: Boolean): TGocciaValue;
+  const AUseGlobalVarEnvironment: Boolean;
+  const ATemplate: TGocciaFunctionTemplate;
+  const AEnvironmentIndex: Integer): TGocciaValue;
 var
   Candidate: TGocciaBytecodeClosure;
   I, Slot: Integer;
 begin
+  if DirectEvalCapturedThisValue(AVM, ATemplate, AEnvironmentIndex, Result) then
+    Exit;
+
   if Assigned(AVM) and Assigned(AVM.FCurrentClosure) and
      Assigned(AVM.FCurrentClosure.Template) and
      AVM.FCurrentClosure.Template.IsArrow then
@@ -790,40 +929,38 @@ end;
 
 function TGocciaVMDirectEvalScope.GetSuperClass: TGocciaValue;
 var
-  Closure: TGocciaBytecodeClosure;
   HomeClass: TGocciaClassValue;
 begin
   Result := nil;
-  Closure := DirectEvalLexicalClosure(FVM);
-  if not Assigned(Closure) then
-    Exit;
 
-  if Closure.HomeClass is TGocciaClassValue then
+  if FHomeClass is TGocciaClassValue then
   begin
-    HomeClass := TGocciaClassValue(Closure.HomeClass);
+    HomeClass := TGocciaClassValue(FHomeClass);
     if Assigned(HomeClass.SuperClass) then
       Exit(HomeClass.SuperClass);
     if Assigned(HomeClass.NativeSuperConstructor) then
       Exit(HomeClass.NativeSuperConstructor);
   end;
 
-  if Assigned(Closure.HomeObject) then
-    Result := Closure.HomeObject;
+  if Assigned(FHomeObject) then
+    Result := FHomeObject;
+end;
+
+function TGocciaVMDirectEvalScope.GetOwningClass: TGocciaValue;
+begin
+  Result := FHomeClass;
 end;
 
 function TGocciaVMDirectEvalScope.GetSuperConstructor: TGocciaValue;
 var
-  Closure: TGocciaBytecodeClosure;
   HomeClass: TGocciaClassValue;
   SuperConstructor: TGocciaValue;
 begin
   Result := nil;
-  Closure := DirectEvalLexicalClosure(FVM);
-  if not (Assigned(FVM) and Assigned(Closure) and
-     (Closure.HomeClass is TGocciaClassValue)) then
+  if not (Assigned(FVM) and (FHomeClass is TGocciaClassValue)) then
     Exit;
 
-  HomeClass := TGocciaClassValue(Closure.HomeClass);
+  HomeClass := TGocciaClassValue(FHomeClass);
   if Assigned(HomeClass.SuperClass) then
     SuperConstructor := HomeClass.SuperClass
   else if Assigned(HomeClass.NativeSuperConstructor) then
@@ -832,15 +969,12 @@ begin
     Exit;
 
   Result := TGocciaVMSuperConstructorValue.Create(SuperConstructor,
-    FVM.FCurrentNewTarget, HomeClass);
+    FNewTarget, HomeClass);
 end;
 
 function TGocciaVMDirectEvalScope.GetNewTarget: TGocciaValue;
 begin
-  if Assigned(FVM) then
-    Result := FVM.FCurrentNewTarget
-  else
-    Result := nil;
+  Result := FNewTarget;
 end;
 
 function TGocciaVMDirectEvalScope.GetThisValue: TGocciaValue;
@@ -862,7 +996,7 @@ end;
 
 function TGocciaVMDirectEvalScope.IsFunctionBoundary: Boolean;
 begin
-  Result := True;
+  Result := False;
 end;
 
 procedure TGocciaVMDirectEvalScope.AssignBinding(const AName: string;
@@ -878,6 +1012,12 @@ begin
       WithObject.AssignPropertyWithReceiver(AName, AValue, WithObject)
     else
       WithObject.AssignProperty(AName, AValue);
+    Exit;
+  end;
+
+  if ContainsOwnVarBinding(AName) then
+  begin
+    inherited AssignBinding(AName, AValue, ALine, AColumn, ANonStrictMode);
     Exit;
   end;
 
@@ -973,6 +1113,13 @@ begin
     Exit;
   end;
 
+  if ContainsOwnVarBinding(AName) then
+  begin
+    AObjectBinding := nil;
+    AScopeBinding := Self;
+    Exit;
+  end;
+
   if TryFindBinding(AName, Binding) then
   begin
     AObjectBinding := nil;
@@ -987,8 +1134,10 @@ var
   Binding: TGocciaDirectEvalBindingInfo;
   WithObject: TGocciaObjectValue;
 begin
-  Result := TryFindWithObjectBinding(AName, WithObject) or
-    TryFindBinding(AName, Binding) or inherited Contains(AName);
+  if TryFindWithObjectBinding(AName, WithObject) or inherited Contains(AName) then
+    Exit(True);
+  Result := TryFindBinding(AName, Binding) and
+    (Binding.Kind in [debLocal, debGlobal]);
 end;
 
 procedure TGocciaVMDirectEvalScope.CopyBackVariableBindings;
@@ -1007,7 +1156,7 @@ begin
     if Binding.IsConst or (Binding.Kind in [debGlobal, debWithLocal,
        debWithUpvalue]) then
       Continue;
-    if ContainsOwnVarBinding(Binding.Name) then
+    if ContainsOwnVarBinding(Binding.Name) and (Binding.Kind <> debUpvalue) then
     begin
       LexicalBinding := inherited GetBinding(Binding.Name);
       SetBindingValue(Binding, LexicalBinding.Value);
@@ -1967,12 +2116,29 @@ end;
 
 function TGocciaVMLiteralObjectValue.TrySetLiteralDataPropertyFast(
   const AName: string; const AValue: TGocciaValue): Boolean;
+var
+  Current: TGocciaObjectValue;
+  Descriptor: TGocciaPropertyDescriptor;
+  ChainDepth: Integer;
 begin
   if not FFastLiteralMode then
     Exit(False);
 
   if VMSetOwnWritableDataDescriptorValue(Self, AName, AValue) then
     Exit(True);
+
+  Current := FPrototype;
+  ChainDepth := 0;
+  while Assigned(Current) do
+  begin
+    Inc(ChainDepth);
+    if ChainDepth > FOR_IN_MAX_PROTOTYPE_CHAIN_DEPTH then
+      Exit(False);
+    Descriptor := Current.GetOwnPropertyDescriptor(AName);
+    if Assigned(Descriptor) then
+      Exit(False);
+    Current := Current.Prototype;
+  end;
 
   inherited DefineProperty(AName, TGocciaPropertyDescriptorData.Create(AValue,
     [pfEnumerable, pfConfigurable, pfWritable]));
@@ -2050,6 +2216,9 @@ begin
   Result := inherited CreateNativeInstance(AArguments);
   if Assigned(Result) or not Assigned(NativeSuperConstructor) then
     Exit;
+
+  if NativeSuperConstructor = TGocciaFunctionBase.GetSharedPrototype then
+    Exit(nil);
 
   if (NativeSuperConstructor is TGocciaFunctionBase) and
      not (NativeSuperConstructor is TGocciaNativeFunctionValue) then
@@ -2151,28 +2320,187 @@ threadvar
   GActiveBytecodeGenerator: TGocciaBytecodeGeneratorObjectValue;
 
 type
+  TGocciaVMAsyncIteratorRecordValue = class(TGocciaObjectValue)
+  private
+    FIteratorValue: TGocciaValue;
+    FNextMethod: TGocciaValue;
+    function Next(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function ReturnValue(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function ThrowValue(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+  public
+    constructor Create(const AIteratorValue, ANextMethod: TGocciaValue);
+    procedure MarkReferences; override;
+  end;
+
   TGocciaVMAsyncFromSyncIteratorValue = class(TGocciaObjectValue)
   private
+    FVM: TGocciaVM;
     FIteratorValue: TGocciaValue;
     FNextMethod: TGocciaValue;
     function PromiseResolve(const AValue: TGocciaValue): TGocciaValue;
     function PromiseReject(const AValue: TGocciaValue): TGocciaValue;
     procedure ClearIteratorState;
     procedure CloseIteratorAfterRejectedValue;
+    function AsyncFromSyncIteratorContinuation(const AValue: TGocciaValue;
+      const ADone, ACloseOnRejection: Boolean): TGocciaValue;
     function AwaitIteratorValue(const AValue: TGocciaValue;
       const ADone, ACloseOnRejection: Boolean): TGocciaValue;
     function Next(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ReturnValue(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ThrowValue(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   public
-    constructor Create(const AIteratorValue, ANextMethod: TGocciaValue);
+    constructor Create(const AVM: TGocciaVM; const AIteratorValue,
+      ANextMethod: TGocciaValue);
     procedure MarkReferences; override;
   end;
 
-constructor TGocciaVMAsyncFromSyncIteratorValue.Create(
+  TGocciaVMAsyncFromSyncFulfillValue = class(TGocciaObjectValue)
+  private
+    FDone: Boolean;
+  public
+    constructor Create(const ADone: Boolean);
+    function Invoke(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+  end;
+
+  TGocciaVMAsyncFromSyncRejectValue = class(TGocciaObjectValue)
+  private
+    FIterator: TGocciaVMAsyncFromSyncIteratorValue;
+  public
+    constructor Create(const AIterator: TGocciaVMAsyncFromSyncIteratorValue);
+    function Invoke(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    procedure MarkReferences; override;
+  end;
+
+constructor TGocciaVMAsyncIteratorRecordValue.Create(
   const AIteratorValue, ANextMethod: TGocciaValue);
 begin
   inherited Create;
+  FIteratorValue := AIteratorValue;
+  FNextMethod := ANextMethod;
+  AssignProperty(PROP_NEXT, TGocciaNativeFunctionValue.Create(Next, PROP_NEXT, 1));
+  AssignProperty(PROP_RETURN,
+    TGocciaNativeFunctionValue.Create(ReturnValue, PROP_RETURN, 1));
+  AssignProperty(PROP_THROW,
+    TGocciaNativeFunctionValue.Create(ThrowValue, PROP_THROW, 1));
+end;
+
+function TGocciaVMAsyncIteratorRecordValue.Next(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  if not Assigned(FNextMethod) or
+     (FNextMethod is TGocciaUndefinedLiteralValue) or
+     not FNextMethod.IsCallable then
+    ThrowTypeError(SErrorAsyncIteratorNextNotCallable,
+      SSuggestAsyncIteratorProtocol);
+  Result := TGocciaFunctionBase(FNextMethod).Call(AArgs, FIteratorValue);
+end;
+
+function TGocciaVMAsyncIteratorRecordValue.ReturnValue(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  CallArgs: TGocciaArgumentsCollection;
+  ReturnMethod: TGocciaValue;
+  Value: TGocciaValue;
+begin
+  if Assigned(AArgs) and (AArgs.Length > 0) then
+    Value := AArgs.GetElement(0)
+  else
+    Value := TGocciaUndefinedLiteralValue.UndefinedValue;
+  if not Assigned(FIteratorValue) then
+    Exit(CreateIteratorResult(Value, True));
+
+  ReturnMethod := FIteratorValue.GetProperty(PROP_RETURN);
+  if not Assigned(ReturnMethod) or
+     (ReturnMethod is TGocciaUndefinedLiteralValue) or
+     (ReturnMethod is TGocciaNullLiteralValue) then
+    Exit(CreateIteratorResult(Value, True));
+  if not ReturnMethod.IsCallable then
+    ThrowTypeError('Iterator return is not callable');
+
+  CallArgs := TGocciaArgumentsCollection.Create([Value]);
+  try
+    Result := TGocciaFunctionBase(ReturnMethod).Call(CallArgs, FIteratorValue);
+  finally
+    CallArgs.Free;
+  end;
+end;
+
+function TGocciaVMAsyncIteratorRecordValue.ThrowValue(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  CallArgs: TGocciaArgumentsCollection;
+  ReturnResult: TGocciaValue;
+  ReturnMethod: TGocciaValue;
+  ThrowMethod: TGocciaValue;
+  Value: TGocciaValue;
+begin
+  if Assigned(AArgs) and (AArgs.Length > 0) then
+    Value := AArgs.GetElement(0)
+  else
+    Value := TGocciaUndefinedLiteralValue.UndefinedValue;
+  if not Assigned(FIteratorValue) then
+    raise TGocciaThrowValue.Create(Value);
+
+  ThrowMethod := FIteratorValue.GetProperty(PROP_THROW);
+  if Assigned(ThrowMethod) and
+     not (ThrowMethod is TGocciaUndefinedLiteralValue) and
+     not (ThrowMethod is TGocciaNullLiteralValue) then
+  begin
+    if not ThrowMethod.IsCallable then
+      ThrowTypeError('Iterator throw is not callable');
+    CallArgs := TGocciaArgumentsCollection.Create([Value]);
+    try
+      Exit(TGocciaFunctionBase(ThrowMethod).Call(CallArgs, FIteratorValue));
+    finally
+      CallArgs.Free;
+    end;
+  end;
+
+  ReturnMethod := FIteratorValue.GetProperty(PROP_RETURN);
+  if Assigned(ReturnMethod) and
+     not (ReturnMethod is TGocciaUndefinedLiteralValue) and
+     not (ReturnMethod is TGocciaNullLiteralValue) then
+  begin
+    if not ReturnMethod.IsCallable then
+      ThrowTypeError('Iterator return is not callable');
+    CallArgs := TGocciaArgumentsCollection.Create;
+    try
+      ReturnResult := AwaitValue(TGocciaFunctionBase(ReturnMethod).Call(
+        CallArgs, FIteratorValue));
+    finally
+      CallArgs.Free;
+    end;
+    if not (ReturnResult is TGocciaObjectValue) then
+      ThrowTypeError('Iterator return result is not an object');
+  end;
+
+  ThrowTypeError('Iterator throw is not callable');
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+procedure TGocciaVMAsyncIteratorRecordValue.MarkReferences;
+begin
+  if GCMarked then Exit;
+  inherited;
+  if Assigned(FIteratorValue) then
+    FIteratorValue.MarkReferences;
+  if Assigned(FNextMethod) then
+    FNextMethod.MarkReferences;
+end;
+
+constructor TGocciaVMAsyncFromSyncIteratorValue.Create(const AVM: TGocciaVM;
+  const AIteratorValue, ANextMethod: TGocciaValue);
+begin
+  inherited Create;
+  FVM := AVM;
   FIteratorValue := AIteratorValue;
   FNextMethod := ANextMethod;
   AssignProperty(PROP_NEXT, TGocciaNativeFunctionValue.Create(Next, PROP_NEXT, 1));
@@ -2219,6 +2547,35 @@ begin
   ClearIteratorState;
 end;
 
+function TGocciaVMAsyncFromSyncIteratorValue.AsyncFromSyncIteratorContinuation(
+  const AValue: TGocciaValue; const ADone,
+  ACloseOnRejection: Boolean): TGocciaValue;
+var
+  FulfillHandler: TGocciaVMAsyncFromSyncFulfillValue;
+  FulfillFunction: TGocciaNativeFunctionValue;
+  RejectHandler: TGocciaVMAsyncFromSyncRejectValue;
+  RejectFunction: TGocciaNativeFunctionValue;
+  ValueWrapper: TGocciaPromiseValue;
+begin
+  ValueWrapper := TGocciaPromiseValue(PromiseResolve(AValue));
+
+  FulfillHandler := TGocciaVMAsyncFromSyncFulfillValue.Create(ADone);
+  FulfillFunction := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+    FulfillHandler.Invoke, 'async-from-sync-fulfill', 1);
+  FulfillFunction.CapturedRoot := FulfillHandler;
+
+  RejectFunction := nil;
+  if ACloseOnRejection and not ADone then
+  begin
+    RejectHandler := TGocciaVMAsyncFromSyncRejectValue.Create(Self);
+    RejectFunction := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+      RejectHandler.Invoke, 'async-from-sync-reject', 1);
+    RejectFunction.CapturedRoot := RejectHandler;
+  end;
+
+  Result := ValueWrapper.InvokeThen(FulfillFunction, RejectFunction);
+end;
+
 function TGocciaVMAsyncFromSyncIteratorValue.AwaitIteratorValue(
   const AValue: TGocciaValue; const ADone, ACloseOnRejection: Boolean): TGocciaValue;
 begin
@@ -2231,30 +2588,62 @@ begin
   end;
 end;
 
+constructor TGocciaVMAsyncFromSyncFulfillValue.Create(const ADone: Boolean);
+begin
+  inherited Create;
+  FDone := ADone;
+end;
+
+function TGocciaVMAsyncFromSyncFulfillValue.Invoke(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Value: TGocciaValue;
+begin
+  if Assigned(AArgs) and (AArgs.Length > 0) then
+    Value := AArgs.GetElement(0)
+  else
+    Value := TGocciaUndefinedLiteralValue.UndefinedValue;
+  Result := CreateIteratorResult(Value, FDone);
+end;
+
+constructor TGocciaVMAsyncFromSyncRejectValue.Create(
+  const AIterator: TGocciaVMAsyncFromSyncIteratorValue);
+begin
+  inherited Create;
+  FIterator := AIterator;
+end;
+
+function TGocciaVMAsyncFromSyncRejectValue.Invoke(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Reason: TGocciaValue;
+begin
+  if Assigned(FIterator) then
+    FIterator.CloseIteratorAfterRejectedValue;
+  if Assigned(AArgs) and (AArgs.Length > 0) then
+    Reason := AArgs.GetElement(0)
+  else
+    Reason := TGocciaUndefinedLiteralValue.UndefinedValue;
+  raise TGocciaThrowValue.Create(Reason);
+end;
+
+procedure TGocciaVMAsyncFromSyncRejectValue.MarkReferences;
+begin
+  if GCMarked then Exit;
+  inherited;
+  if Assigned(FIterator) then
+    FIterator.MarkReferences;
+end;
+
 function TGocciaVMAsyncFromSyncIteratorValue.PromiseResolve(
   const AValue: TGocciaValue): TGocciaValue;
-var
-  IsRooted: Boolean;
-  Promise: TGocciaPromiseValue;
 begin
-  Promise := TGocciaPromiseValue.Create;
-  IsRooted := Assigned(TGarbageCollector.Instance);
-  if IsRooted then
-    TGarbageCollector.Instance.AddTempRoot(Promise);
-  try
-    Promise.Resolve(AValue);
-  except
-    if IsRooted then
-    begin
-      TGarbageCollector.Instance.RemoveTempRoot(Promise);
-      IsRooted := False;
-    end;
-    Promise.Free;
-    raise;
-  end;
-  if IsRooted then
-    TGarbageCollector.Instance.RemoveTempRoot(Promise);
-  Result := Promise;
+  if Assigned(FVM) then
+    Result := FVM.PromiseResolveIntrinsic(AValue)
+  else
+    Result := AValue;
 end;
 
 function TGocciaVMAsyncFromSyncIteratorValue.PromiseReject(
@@ -2290,7 +2679,6 @@ var
   Done: Boolean;
   DoneValue: TGocciaValue;
   IteratorResult: TGocciaValue;
-  UnwrappedValue: TGocciaValue;
   Value: TGocciaValue;
 begin
   try
@@ -2307,9 +2695,7 @@ begin
         Value := TGocciaIteratorValue(FIteratorValue).DirectNext(Done);
       if Done then
         ClearIteratorState;
-      UnwrappedValue := AwaitIteratorValue(Value, Done, True);
-      IteratorResult := CreateIteratorResult(UnwrappedValue, Done);
-      Exit(PromiseResolve(IteratorResult));
+      Exit(AsyncFromSyncIteratorContinuation(Value, Done, True));
     end;
 
     if AArgs.Length > 0 then
@@ -2333,8 +2719,7 @@ begin
       Value := TGocciaUndefinedLiteralValue.UndefinedValue;
     if Done then
       ClearIteratorState;
-    UnwrappedValue := AwaitIteratorValue(Value, Done, True);
-    Result := PromiseResolve(CreateIteratorResult(UnwrappedValue, Done));
+    Result := AsyncFromSyncIteratorContinuation(Value, Done, True);
   except
     on E: EGocciaBytecodeThrow do
       Result := PromiseReject(E.ThrownValue);
@@ -2361,7 +2746,6 @@ var
   DoneValue: TGocciaValue;
   IteratorResult: TGocciaValue;
   ReturnMethod: TGocciaValue;
-  UnwrappedValue: TGocciaValue;
   Value: TGocciaValue;
 begin
   if Assigned(AArgs) and (AArgs.Length > 0) then
@@ -2370,10 +2754,7 @@ begin
     Value := TGocciaUndefinedLiteralValue.UndefinedValue;
   try
     if not Assigned(FIteratorValue) then
-    begin
-      UnwrappedValue := AwaitIteratorValue(Value, True, False);
-      Exit(PromiseResolve(CreateIteratorResult(UnwrappedValue, True)));
-    end;
+      Exit(AsyncFromSyncIteratorContinuation(Value, True, False));
 
     if FIteratorValue is TGocciaIteratorValue then
     begin
@@ -2385,8 +2766,7 @@ begin
         Value := TGocciaUndefinedLiteralValue.UndefinedValue;
       if Done then
         ClearIteratorState;
-      UnwrappedValue := AwaitIteratorValue(Value, Done, False);
-      Exit(PromiseResolve(CreateIteratorResult(UnwrappedValue, Done)));
+      Exit(AsyncFromSyncIteratorContinuation(Value, Done, False));
     end;
 
     ReturnMethod := FIteratorValue.GetProperty(PROP_RETURN);
@@ -2395,8 +2775,7 @@ begin
        (ReturnMethod is TGocciaNullLiteralValue) then
     begin
       ClearIteratorState;
-      UnwrappedValue := AwaitIteratorValue(Value, True, False);
-      Exit(PromiseResolve(CreateIteratorResult(UnwrappedValue, True)));
+      Exit(AsyncFromSyncIteratorContinuation(Value, True, False));
     end;
     if not ReturnMethod.IsCallable then
       ThrowTypeError('Iterator return is not callable');
@@ -2416,8 +2795,7 @@ begin
       Value := TGocciaUndefinedLiteralValue.UndefinedValue;
     if Done then
       ClearIteratorState;
-    UnwrappedValue := AwaitIteratorValue(Value, Done, False);
-    Result := PromiseResolve(CreateIteratorResult(UnwrappedValue, Done));
+    Result := AsyncFromSyncIteratorContinuation(Value, Done, False);
   except
     on E: EGocciaBytecodeThrow do
       Result := PromiseReject(E.ThrownValue);
@@ -2445,7 +2823,6 @@ var
   IteratorResult: TGocciaValue;
   ReturnMethod: TGocciaValue;
   ThrowMethod: TGocciaValue;
-  UnwrappedValue: TGocciaValue;
   Value: TGocciaValue;
 begin
   if Assigned(AArgs) and (AArgs.Length > 0) then
@@ -2466,8 +2843,7 @@ begin
         Value := TGocciaUndefinedLiteralValue.UndefinedValue;
       if Done then
         ClearIteratorState;
-      UnwrappedValue := AwaitIteratorValue(Value, Done, True);
-      Exit(PromiseResolve(CreateIteratorResult(UnwrappedValue, Done)));
+      Exit(AsyncFromSyncIteratorContinuation(Value, Done, True));
     end;
 
     ThrowMethod := FIteratorValue.GetProperty(PROP_THROW);
@@ -2492,8 +2868,7 @@ begin
         Value := TGocciaUndefinedLiteralValue.UndefinedValue;
       if Done then
         ClearIteratorState;
-      UnwrappedValue := AwaitIteratorValue(Value, Done, True);
-      Exit(PromiseResolve(CreateIteratorResult(UnwrappedValue, Done)));
+      Exit(AsyncFromSyncIteratorContinuation(Value, Done, True));
     end;
 
     ReturnMethod := FIteratorValue.GetProperty(PROP_RETURN);
@@ -2778,6 +3153,7 @@ var
   ReturnMethod: TGocciaValue;
   YieldedValue: TGocciaValue;
   HadDelegateContinuation: Boolean;
+  NextArgument: TGocciaValue;
 
   procedure ClearDelegateAndThrowTypeError(const AMessage: string);
   begin
@@ -2965,22 +3341,20 @@ begin
 
     while True do
     begin
+      if HadDelegateContinuation and (FResumeKind = bgrkNext) then
+        NextArgument := RegisterToValue(FResumeValue)
+      else
+        NextArgument := TGocciaUndefinedLiteralValue.UndefinedValue;
+
       if Assigned(FDelegateIterator) then
       begin
-        if HadDelegateContinuation and (FResumeKind = bgrkNext) then
-          YieldedValue := FDelegateIterator.DirectNextValue(
-            RegisterToValue(FResumeValue), Done)
-        else
-          YieldedValue := FDelegateIterator.DirectNext(Done);
+        YieldedValue := FDelegateIterator.DirectNextValue(NextArgument, Done);
       end
       else
       begin
         if not Assigned(FDelegateNextMethod) or not FDelegateNextMethod.IsCallable then
           ClearDelegateAndThrowTypeError('Iterator.next is not a function');
-        if HadDelegateContinuation and (FResumeKind = bgrkNext) then
-          CallArgs := TGocciaArgumentsCollection.Create([RegisterToValue(FResumeValue)])
-        else
-          CallArgs := TGocciaArgumentsCollection.Create;
+        CallArgs := TGocciaArgumentsCollection.Create([NextArgument]);
         try
           NextResult := CallDelegateMethod(FDelegateNextMethod,
             FDelegateIteratorValue, CallArgs);
@@ -4143,6 +4517,8 @@ var
   SuperResult: TGocciaValue;
   ConstructorThisValue: TGocciaValue;
   ImplicitSuperInitialized: Boolean;
+  WasSuperAlreadyCalled: Boolean;
+  ReceiverPrototype: TGocciaObjectValue;
   function IsUndefinedConstructedValue(const AValue: TGocciaValue): Boolean;
   begin
     Result := (not Assigned(AValue)) or (AValue is TGocciaUndefinedLiteralValue);
@@ -4156,33 +4532,49 @@ var
         'Derived constructor returned non-object',
         SSuggestNotConstructorType);
   end;
-  procedure InitializeCurrentCtorReplacement(const AReplacement: TGocciaValue);
+  procedure InitializeCurrentCtorReceiver(const AReceiver: TGocciaValue);
+  var
+    CurrentVM: TGocciaVM;
   begin
-    if (AReplacement is TGocciaObjectValue) and
-       (AReplacement <> AThisValue) and
+    if (AReceiver is TGocciaObjectValue) and
        (FCurrentCtorClass is TGocciaVMClassValue) then
     begin
-      TGocciaVMClassValue(FCurrentCtorClass).FVM.RunClassInitializers(
-        FCurrentCtorClass, AReplacement, False);
-      StampBytecodePrivateInitializersApplied(AReplacement,
+      CurrentVM := TGocciaVMClassValue(FCurrentCtorClass).FVM;
+      CurrentVM.SetLocal(0, AReceiver);
+      CurrentVM.FLastClosureThisValue := VMValueToRegisterFast(AReceiver);
+      if HasBytecodePrivateInitializersApplied(AReceiver,
+        TGocciaClassValue(FCurrentCtorClass)) then
+        ThrowTypeError('Cannot initialize private elements twice',
+          SSuggestPrivateFieldAccess);
+      CurrentVM.RunClassInitializers(FCurrentCtorClass, AReceiver, False);
+      StampBytecodePrivateInitializersApplied(AReceiver,
         FCurrentCtorClass);
     end;
   end;
   procedure MarkCurrentConstructorSuperCalled;
   begin
+    if WasSuperAlreadyCalled then
+      ThrowReferenceError(
+        'Super constructor may only be called once');
     if FCurrentCtorClass is TGocciaVMClassValue then
       TGocciaVMClassValue(FCurrentCtorClass).FVM.FCurrentConstructorSuperCalled :=
         True;
   end;
 begin
+  WasSuperAlreadyCalled := (FCurrentCtorClass is TGocciaVMClassValue) and
+    TGocciaVMClassValue(FCurrentCtorClass).FVM.FCurrentConstructorSuperCalled;
+
   if (FSuperClass is TGocciaObjectValue) and
      (not (FSuperClass is TGocciaClassValue)) and
      FSuperClass.IsConstructable then
   begin
     SuperResult := InvokeConstructableWithReceiver(FSuperClass, AArguments,
       AThisValue, FNewTarget);
-    InitializeCurrentCtorReplacement(SuperResult);
     MarkCurrentConstructorSuperCalled;
+    if SuperResult is TGocciaObjectValue then
+      InitializeCurrentCtorReceiver(SuperResult)
+    else
+      InitializeCurrentCtorReceiver(AThisValue);
     Exit(SuperResult);
   end;
 
@@ -4208,8 +4600,8 @@ begin
            not HasBytecodePrivateInitializersApplied(SuperResult, SuperClass) then
           TGocciaVMClassValue(SuperClass).FVM.RunClassInitializers(
             SuperClass, SuperResult);
-        InitializeCurrentCtorReplacement(SuperResult);
         MarkCurrentConstructorSuperCalled;
+        InitializeCurrentCtorReceiver(SuperResult);
         Exit(SuperResult);
       end;
     ValidateSuperConstructorResult(SuperResult);
@@ -4225,12 +4617,13 @@ begin
            not HasBytecodePrivateInitializersApplied(ConstructorThisValue, SuperClass) then
           TGocciaVMClassValue(SuperClass).FVM.RunClassInitializers(
             SuperClass, ConstructorThisValue);
-        InitializeCurrentCtorReplacement(ConstructorThisValue);
         MarkCurrentConstructorSuperCalled;
+        InitializeCurrentCtorReceiver(ConstructorThisValue);
         Exit(ConstructorThisValue);
       end;
     end;
     MarkCurrentConstructorSuperCalled;
+    InitializeCurrentCtorReceiver(AThisValue);
     Exit(AThisValue);
   end;
 
@@ -4248,8 +4641,8 @@ begin
            not HasBytecodePrivateInitializersApplied(SuperResult, SuperClass) then
           TGocciaVMClassValue(SuperClass).FVM.RunClassInitializers(
             SuperClass, SuperResult);
-        InitializeCurrentCtorReplacement(SuperResult);
         MarkCurrentConstructorSuperCalled;
+        InitializeCurrentCtorReceiver(SuperResult);
         Exit(SuperResult);
       end;
     ValidateSuperConstructorResult(SuperResult);
@@ -4260,12 +4653,32 @@ begin
            not HasBytecodePrivateInitializersApplied(ConstructorThisValue, SuperClass) then
           TGocciaVMClassValue(SuperClass).FVM.RunClassInitializers(
             SuperClass, ConstructorThisValue);
-        InitializeCurrentCtorReplacement(ConstructorThisValue);
         MarkCurrentConstructorSuperCalled;
+        InitializeCurrentCtorReceiver(ConstructorThisValue);
         Exit(ConstructorThisValue);
       end;
     MarkCurrentConstructorSuperCalled;
+    InitializeCurrentCtorReceiver(AThisValue);
     Exit(AThisValue);
+  end;
+
+  if Assigned(SuperClass.NativeInstanceDefaultPrototype) then
+  begin
+    NewThis := SuperClass.CreateNativeInstance(AArguments);
+    if not (NewThis is TGocciaObjectValue) then
+      ThrowTypeError(
+        'Superclass constructor did not return an object',
+        SSuggestNotConstructorType);
+    ReceiverPrototype := GetProtoFromConstructor(FNewTarget);
+    TGocciaObjectValue(NewThis).Prototype := ReceiverPrototype;
+    if NewThis is TGocciaInstanceValue then
+    begin
+      TGocciaInstanceValue(NewThis).ClassValue := FCurrentCtorClass;
+      TGocciaInstanceValue(NewThis).InitializeNativeFromArguments(AArguments);
+    end;
+    MarkCurrentConstructorSuperCalled;
+    InitializeCurrentCtorReceiver(NewThis);
+    Exit(NewThis);
   end;
 
   if Assigned(SuperClass.SuperClass) and
@@ -4295,11 +4708,12 @@ begin
       TGocciaInstanceValue(NewThis).InitializeNativeFromArguments(AArguments);
     if NewThis is TGocciaObjectValue then
     begin
-      InitializeCurrentCtorReplacement(NewThis);
       MarkCurrentConstructorSuperCalled;
+      InitializeCurrentCtorReceiver(NewThis);
       Exit(NewThis);
     end;
     MarkCurrentConstructorSuperCalled;
+    InitializeCurrentCtorReceiver(AThisValue);
     Exit(AThisValue);
   end;
 
@@ -4491,13 +4905,16 @@ begin
     InstancePrototype := Prototype;
 
   NativeInstance := nil;
-  WalkClass := Self;
-  while Assigned(WalkClass) do
+  if not (Assigned(FConstructorValue) and HasDerivedConstructorReturnRestriction) then
   begin
-    NativeInstance := WalkClass.CreateNativeInstance(AArguments);
-    if Assigned(NativeInstance) then
-      Break;
-    WalkClass := WalkClass.SuperClass;
+    WalkClass := Self;
+    while Assigned(WalkClass) do
+    begin
+      NativeInstance := WalkClass.CreateNativeInstance(AArguments);
+      if Assigned(NativeInstance) then
+        Break;
+      WalkClass := WalkClass.SuperClass;
+    end;
   end;
 
   // ES2026 §10.2.2 step 6: Set proto on the instance before constructor runs
@@ -4520,7 +4937,8 @@ begin
     InitializerReplayReceiver := nil;
     TGarbageCollector.Instance.AddTempRoot(RootedInstance);
     try
-      FVM.RunClassInitializers(Self, Instance);
+      if not HasDerivedConstructorReturnRestriction then
+        FVM.RunClassInitializers(Self, Instance);
       FVM.FPendingNewTarget := ANewTarget;
       if not Assigned(FVM.FPendingNewTarget) then
         FVM.FPendingNewTarget := Self;
@@ -4540,9 +4958,14 @@ begin
       ApplyOwnConstructorResult(ConstructedValue, ConstructorThisValue);
       RequireDerivedConstructorThisInitialized(ConstructedValue);
       if Assigned(InitializerReplayReceiver) and
-         (Instance = InitializerReplayReceiver) and
-         not HasBytecodePrivateInitializersApplied(Instance, Self) then
-        FVM.RunClassInitializers(Self, Instance, True);
+         (Instance = InitializerReplayReceiver) then
+      begin
+        if not HasBytecodePrivateInitializersApplied(Instance, Self) then
+        begin
+          FVM.RunClassInitializers(Self, Instance, False);
+          StampBytecodePrivateInitializersApplied(Instance, Self);
+        end;
+      end;
     finally
       TGarbageCollector.Instance.RemoveTempRoot(RootedInstance);
     end;
@@ -4553,76 +4976,93 @@ begin
     InitializerReplayReceiver := nil;
     TGarbageCollector.Instance.AddTempRoot(RootedInstance);
     try
-      ConstructorToCall := nil;
-      if (SuperClass is TGocciaVMClassValue) and
-         Assigned(TGocciaVMClassValue(SuperClass).FConstructorValue) then
-      begin
-        TGocciaVMClassValue(SuperClass).FVM.RunClassInitializers(
-          SuperClass, Instance);
-        if Assigned(ANewTarget) then
-          TGocciaVMClassValue(SuperClass).FVM.FPendingNewTarget := ANewTarget
-        else
-          TGocciaVMClassValue(SuperClass).FVM.FPendingNewTarget := Self;
-        ConstructedValue := TGocciaVMClassValue(SuperClass).FVM.InvokeFunctionValue(
-          TGocciaVMClassValue(SuperClass).FConstructorValue,
-          AArguments, Instance);
-        if TGocciaVMClassValue(SuperClass).FConstructorValue is TGocciaBytecodeFunctionValue then
-          ConstructorThisValue := RegisterToValue(
-            TGocciaVMClassValue(SuperClass).FVM.FLastClosureThisValue)
-        else
-          ConstructorThisValue := Instance;
-        ValidateClassConstructorReturn(SuperClass, ConstructedValue);
-        if IsUndefinedConstructedValue(ConstructedValue) then
-          ApplyReplacementResult(ConstructorThisValue)
-        else
-          ApplyReplacementResult(ConstructedValue);
-      end
-      else
-      begin
-        if Assigned(SuperClass) then
-          ConstructorToCall := SuperClass.ConstructorMethod;
-
-        if Assigned(ConstructorToCall) then
+      PreviousConstructorSuperCalled := FVM.FCurrentConstructorSuperCalled;
+      FVM.FCurrentConstructorSuperCalled := False;
+      try
+        ConstructorToCall := nil;
+        if (SuperClass is TGocciaVMClassValue) and
+           Assigned(TGocciaVMClassValue(SuperClass).FConstructorValue) then
         begin
           FVM.RunClassInitializers(SuperClass, Instance);
           if Assigned(ANewTarget) then
-            ConstructedValue := ConstructorToCall.CallWithThisValue(
-              AArguments, Instance, ConstructorThisValue, ANewTarget)
+            TGocciaVMClassValue(SuperClass).FVM.FPendingNewTarget := ANewTarget
           else
-            ConstructedValue := ConstructorToCall.CallWithThisValue(
-              AArguments, Instance, ConstructorThisValue, Self);
+            TGocciaVMClassValue(SuperClass).FVM.FPendingNewTarget := Self;
+          ConstructedValue := TGocciaVMClassValue(SuperClass).FVM.InvokeFunctionValue(
+            TGocciaVMClassValue(SuperClass).FConstructorValue,
+            AArguments, Instance);
+          if TGocciaVMClassValue(SuperClass).FConstructorValue is TGocciaBytecodeFunctionValue then
+            ConstructorThisValue := RegisterToValue(
+              TGocciaVMClassValue(SuperClass).FVM.FLastClosureThisValue)
+          else
+            ConstructorThisValue := Instance;
           ValidateClassConstructorReturn(SuperClass, ConstructedValue);
           if IsUndefinedConstructedValue(ConstructedValue) then
             ApplyReplacementResult(ConstructorThisValue)
           else
             ApplyReplacementResult(ConstructedValue);
         end
-        else if Assigned(SuperClass) then
+        else
         begin
-          ConstructedValue := FVM.InvokeImplicitSuperInitialization(
-            SuperClass, Instance, AArguments);
-          ApplyReplacementResult(ConstructedValue);
-        end
-        else if Assigned(NativeSuperConstructor) and
-                (NativeSuperConstructor is TGocciaFunctionBase) and
-                not (NativeSuperConstructor is TGocciaNativeFunctionValue) then
-        begin
-          ConstructedValue := InvokeConstructableWithReceiver(
-            NativeSuperConstructor, AArguments, Instance);
-          ApplyReplacementResult(ConstructedValue);
-        end
-        else if Instance is TGocciaInstanceValue then
-          TGocciaInstanceValue(Instance).InitializeNativeFromArguments(AArguments);
+          if Assigned(SuperClass) then
+            ConstructorToCall := SuperClass.ConstructorMethod;
+
+          if Assigned(ConstructorToCall) then
+          begin
+            FVM.RunClassInitializers(SuperClass, Instance);
+            if Assigned(ANewTarget) then
+              ConstructedValue := ConstructorToCall.CallWithThisValue(
+                AArguments, Instance, ConstructorThisValue, ANewTarget)
+            else
+              ConstructedValue := ConstructorToCall.CallWithThisValue(
+                AArguments, Instance, ConstructorThisValue, Self);
+            ValidateClassConstructorReturn(SuperClass, ConstructedValue);
+            if IsUndefinedConstructedValue(ConstructedValue) then
+              ApplyReplacementResult(ConstructorThisValue)
+            else
+              ApplyReplacementResult(ConstructedValue);
+          end
+          else if Assigned(SuperClass) then
+          begin
+            ConstructedValue := FVM.InvokeImplicitSuperInitialization(
+              SuperClass, Instance, AArguments);
+            ApplyReplacementResult(ConstructedValue);
+          end
+          else if Assigned(NativeSuperConstructor) and
+                  (NativeSuperConstructor is TGocciaFunctionBase) and
+                  not (NativeSuperConstructor is TGocciaNativeFunctionValue) then
+          begin
+            ConstructedValue := InvokeConstructableWithReceiver(
+              NativeSuperConstructor, AArguments, Instance);
+            ApplyReplacementResult(ConstructedValue);
+          end
+          else if Instance is TGocciaInstanceValue then
+            TGocciaInstanceValue(Instance).InitializeNativeFromArguments(AArguments);
+        end;
+      finally
+        FVM.FCurrentConstructorSuperCalled := PreviousConstructorSuperCalled;
       end;
 
       if not Assigned(InitializerReplayReceiver) or
          (Instance <> InitializerReplayReceiver) then
-        FVM.RunClassInitializers(Self, Instance);
+        if not HasDerivedConstructorReturnRestriction then
+          FVM.RunClassInitializers(Self, Instance);
 
       if Assigned(InitializerReplayReceiver) and
-         (Instance = InitializerReplayReceiver) and
-         not HasBytecodePrivateInitializersApplied(Instance, Self) then
-        FVM.RunClassInitializers(Self, Instance, True);
+         (Instance = InitializerReplayReceiver) then
+      begin
+        if HasBytecodePrivateInitializersApplied(Instance, Self) then
+        begin
+          if not Assigned(FConstructorValue) then
+            ThrowTypeError('Cannot initialize private elements twice',
+              SSuggestPrivateFieldAccess);
+        end
+        else
+        begin
+          FVM.RunClassInitializers(Self, Instance, False);
+          StampBytecodePrivateInitializersApplied(Instance, Self);
+        end;
+      end;
     finally
       TGarbageCollector.Instance.RemoveTempRoot(RootedInstance);
     end;
@@ -4802,22 +5242,25 @@ begin
   BoxedArgs := nil;
   try
     NativeInstance := nil;
-    WalkClass := Self;
-    while Assigned(WalkClass) do
+    if not (Assigned(FConstructorValue) and HasDerivedConstructorReturnRestriction) then
     begin
-      if not (WalkClass is TGocciaVMClassValue) then
+      WalkClass := Self;
+      while Assigned(WalkClass) do
       begin
-        EnsureBoxedArgs;
-        NativeInstance := WalkClass.CreateNativeInstance(BoxedArgs);
-      end
-      else if Assigned(TGocciaVMClassValue(WalkClass).NativeSuperConstructor) then
-      begin
-        EnsureBoxedArgs;
-        NativeInstance := WalkClass.CreateNativeInstance(BoxedArgs);
+        if not (WalkClass is TGocciaVMClassValue) then
+        begin
+          EnsureBoxedArgs;
+          NativeInstance := WalkClass.CreateNativeInstance(BoxedArgs);
+        end
+        else if Assigned(TGocciaVMClassValue(WalkClass).NativeSuperConstructor) then
+        begin
+          EnsureBoxedArgs;
+          NativeInstance := WalkClass.CreateNativeInstance(BoxedArgs);
+        end;
+        if Assigned(NativeInstance) then
+          Break;
+        WalkClass := WalkClass.SuperClass;
       end;
-      if Assigned(NativeInstance) then
-        Break;
-      WalkClass := WalkClass.SuperClass;
     end;
 
     if Assigned(NativeInstance) then
@@ -4839,7 +5282,8 @@ begin
     try
       if Assigned(FConstructorValue) then
       begin
-        FVM.RunClassInitializers(Self, Instance);
+        if not HasDerivedConstructorReturnRestriction then
+          FVM.RunClassInitializers(Self, Instance);
         FVM.FPendingNewTarget := Self;
         PreviousConstructorSuperCalled := FVM.FCurrentConstructorSuperCalled;
         FVM.FCurrentConstructorSuperCalled := False;
@@ -4895,32 +5339,50 @@ begin
       end
       else
       begin
-        ConstructorToCall := nil;
+        PreviousConstructorSuperCalled := FVM.FCurrentConstructorSuperCalled;
+        FVM.FCurrentConstructorSuperCalled := False;
+        try
+          ConstructorToCall := nil;
 
-        if (SuperClass is TGocciaVMClassValue) and
-           Assigned(TGocciaVMClassValue(SuperClass).FConstructorValue) then
-        begin
-          TGocciaVMClassValue(SuperClass).FVM.RunClassInitializers(
-            SuperClass, Instance);
-          TGocciaVMClassValue(SuperClass).FVM.FPendingNewTarget := Self;
-          if TGocciaVMClassValue(SuperClass).FConstructorValue is TGocciaBytecodeFunctionValue then
+          if (SuperClass is TGocciaVMClassValue) and
+             Assigned(TGocciaVMClassValue(SuperClass).FConstructorValue) then
           begin
-            BytecodeSuperConstructor := TGocciaBytecodeFunctionValue(
-              TGocciaVMClassValue(SuperClass).FConstructorValue);
-            if Assigned(BytecodeSuperConstructor.FClosure) and
-               Assigned(BytecodeSuperConstructor.FClosure.Template) and
-               (not BytecodeSuperConstructor.FClosure.Template.IsAsync) then
+            TGocciaVMClassValue(SuperClass).FVM.RunClassInitializers(
+              SuperClass, Instance);
+            TGocciaVMClassValue(SuperClass).FVM.FPendingNewTarget := Self;
+            if TGocciaVMClassValue(SuperClass).FConstructorValue is TGocciaBytecodeFunctionValue then
             begin
-              ReturnRegister := TGocciaVMClassValue(SuperClass).FVM.ExecuteClosureRegisters(
-                BytecodeSuperConstructor.FClosure,
-                RegisterObject(Instance), AArguments);
-              ConstructorThisRegister :=
-                TGocciaVMClassValue(SuperClass).FVM.FLastClosureThisValue;
-              ValidateClassConstructorRegister(SuperClass, ReturnRegister);
-              if IsUndefinedConstructedRegister(ReturnRegister) then
-                ApplyReplacementRegister(ConstructorThisRegister)
+              BytecodeSuperConstructor := TGocciaBytecodeFunctionValue(
+                TGocciaVMClassValue(SuperClass).FConstructorValue);
+              if Assigned(BytecodeSuperConstructor.FClosure) and
+                 Assigned(BytecodeSuperConstructor.FClosure.Template) and
+                 (not BytecodeSuperConstructor.FClosure.Template.IsAsync) then
+              begin
+                ReturnRegister := TGocciaVMClassValue(SuperClass).FVM.ExecuteClosureRegisters(
+                  BytecodeSuperConstructor.FClosure,
+                  RegisterObject(Instance), AArguments);
+                ConstructorThisRegister :=
+                  TGocciaVMClassValue(SuperClass).FVM.FLastClosureThisValue;
+                ValidateClassConstructorRegister(SuperClass, ReturnRegister);
+                if IsUndefinedConstructedRegister(ReturnRegister) then
+                  ApplyReplacementRegister(ConstructorThisRegister)
+                else
+                  ApplyReplacementRegister(ReturnRegister);
+              end
               else
-                ApplyReplacementRegister(ReturnRegister);
+              begin
+                EnsureBoxedArgs;
+                ConstructedValue := TGocciaVMClassValue(SuperClass).FVM.InvokeFunctionValue(
+                  TGocciaVMClassValue(SuperClass).FConstructorValue,
+                  BoxedArgs, Instance);
+                ConstructorThisRegister :=
+                  TGocciaVMClassValue(SuperClass).FVM.FLastClosureThisValue;
+                ValidateClassConstructorReturn(SuperClass, ConstructedValue);
+                if IsUndefinedConstructedValue(ConstructedValue) then
+                  ApplyReplacementRegister(ConstructorThisRegister)
+                else
+                  ApplyReplacementResult(ConstructedValue);
+              end;
             end
             else
             begin
@@ -4928,63 +5390,51 @@ begin
               ConstructedValue := TGocciaVMClassValue(SuperClass).FVM.InvokeFunctionValue(
                 TGocciaVMClassValue(SuperClass).FConstructorValue,
                 BoxedArgs, Instance);
-              ConstructorThisRegister :=
-                TGocciaVMClassValue(SuperClass).FVM.FLastClosureThisValue;
               ValidateClassConstructorReturn(SuperClass, ConstructedValue);
-              if IsUndefinedConstructedValue(ConstructedValue) then
-                ApplyReplacementRegister(ConstructorThisRegister)
-              else
-                ApplyReplacementResult(ConstructedValue);
+              ApplyReplacementResult(ConstructedValue);
             end;
           end
           else
           begin
-            EnsureBoxedArgs;
-            ConstructedValue := TGocciaVMClassValue(SuperClass).FVM.InvokeFunctionValue(
-              TGocciaVMClassValue(SuperClass).FConstructorValue,
-              BoxedArgs, Instance);
-            ValidateClassConstructorReturn(SuperClass, ConstructedValue);
-            ApplyReplacementResult(ConstructedValue);
-          end;
-        end
-        else
-        begin
-          if Assigned(SuperClass) then
-            ConstructorToCall := SuperClass.ConstructorMethod;
+            if Assigned(SuperClass) then
+              ConstructorToCall := SuperClass.ConstructorMethod;
 
-          if Assigned(ConstructorToCall) then
-          begin
-            EnsureBoxedArgs;
-            FVM.RunClassInitializers(SuperClass, Instance);
-            ConstructedValue := ConstructorToCall.CallWithThisValue(
-              BoxedArgs, Instance, ConstructorThisValue, Self);
-            ValidateClassConstructorReturn(SuperClass, ConstructedValue);
-            if IsUndefinedConstructedValue(ConstructedValue) then
-              ApplyReplacementResult(ConstructorThisValue)
-            else
+            if Assigned(ConstructorToCall) then
+            begin
+              EnsureBoxedArgs;
+              FVM.RunClassInitializers(SuperClass, Instance);
+              ConstructedValue := ConstructorToCall.CallWithThisValue(
+                BoxedArgs, Instance, ConstructorThisValue, Self);
+              ValidateClassConstructorReturn(SuperClass, ConstructedValue);
+              if IsUndefinedConstructedValue(ConstructedValue) then
+                ApplyReplacementResult(ConstructorThisValue)
+              else
+                ApplyReplacementResult(ConstructedValue);
+            end
+            else if Assigned(SuperClass) then
+            begin
+              ConstructedValue := FVM.InvokeImplicitSuperInitializationRegisters(
+                SuperClass, Instance, AArguments);
               ApplyReplacementResult(ConstructedValue);
-          end
-          else if Assigned(SuperClass) then
-          begin
-            ConstructedValue := FVM.InvokeImplicitSuperInitializationRegisters(
-              SuperClass, Instance, AArguments);
-            ApplyReplacementResult(ConstructedValue);
-          end
-          else if Assigned(NativeSuperConstructor) and
-                  (NativeSuperConstructor is TGocciaFunctionBase) and
-                  not (NativeSuperConstructor is TGocciaNativeFunctionValue) then
-          begin
-            EnsureBoxedArgs;
-            ConstructedValue := InvokeConstructableWithReceiver(
-              NativeSuperConstructor, BoxedArgs, Instance);
-            ApplyReplacementResult(ConstructedValue);
-          end
-          else
-          begin
-            EnsureBoxedArgs;
-            if Instance is TGocciaInstanceValue then
-              TGocciaInstanceValue(Instance).InitializeNativeFromArguments(BoxedArgs);
+            end
+            else if Assigned(NativeSuperConstructor) and
+                    (NativeSuperConstructor is TGocciaFunctionBase) and
+                    not (NativeSuperConstructor is TGocciaNativeFunctionValue) then
+            begin
+              EnsureBoxedArgs;
+              ConstructedValue := InvokeConstructableWithReceiver(
+                NativeSuperConstructor, BoxedArgs, Instance);
+              ApplyReplacementResult(ConstructedValue);
+            end
+            else
+            begin
+              EnsureBoxedArgs;
+              if Instance is TGocciaInstanceValue then
+                TGocciaInstanceValue(Instance).InitializeNativeFromArguments(BoxedArgs);
+            end;
           end;
+        finally
+          FVM.FCurrentConstructorSuperCalled := PreviousConstructorSuperCalled;
         end;
 
         if not Assigned(InitializerReplayReceiver) or
@@ -4992,9 +5442,20 @@ begin
           FVM.RunClassInitializers(Self, Instance);
       end;
       if Assigned(InitializerReplayReceiver) and
-         (Instance = InitializerReplayReceiver) and
-         not HasBytecodePrivateInitializersApplied(Instance, Self) then
-        FVM.RunClassInitializers(Self, Instance, True);
+         (Instance = InitializerReplayReceiver) then
+      begin
+        if HasBytecodePrivateInitializersApplied(Instance, Self) then
+        begin
+          if not Assigned(FConstructorValue) then
+            ThrowTypeError('Cannot initialize private elements twice',
+              SSuggestPrivateFieldAccess);
+        end
+        else
+        begin
+          FVM.RunClassInitializers(Self, Instance, False);
+          StampBytecodePrivateInitializersApplied(Instance, Self);
+        end;
+      end;
     finally
       TGarbageCollector.Instance.RemoveTempRoot(RootedInstance);
     end;
@@ -5445,7 +5906,7 @@ begin
 end;
 
 procedure SetBytecodeHomeObject(const AFunctionValue: TGocciaValue;
-  const AHomeObject: TGocciaValue);
+  const AHomeObject: TGocciaValue; const AStaticHome: Boolean = False);
 var
   EffectiveHomeObject: TGocciaObjectValue;
   EffectiveHomeClass: TGocciaClassValue;
@@ -5453,7 +5914,10 @@ var
 begin
   if AHomeObject is TGocciaClassValue then
   begin
-    EffectiveHomeObject := TGocciaClassValue(AHomeObject).Prototype;
+    if AStaticHome then
+      EffectiveHomeObject := TGocciaObjectValue(AHomeObject)
+    else
+      EffectiveHomeObject := TGocciaClassValue(AHomeObject).Prototype;
     EffectiveHomeClass := TGocciaClassValue(AHomeObject);
   end
   else if AHomeObject is TGocciaObjectValue then
@@ -5480,6 +5944,40 @@ begin
   if Assigned(EffectiveHomeClass) and not Assigned(Closure.HomeClass) and
      (Closure.HomeObject = EffectiveHomeObject) then
     Closure.HomeClass := EffectiveHomeClass;
+end;
+
+procedure DeclareBytecodePrivateNameForClass(const AClassValue: TGocciaValue;
+  const AName: string);
+var
+  SourceName: string;
+begin
+  if not (AClassValue is TGocciaClassValue) then
+    Exit;
+  SourceName := BytecodePrivateSourceName(AName);
+  if SourceName <> '' then
+    TGocciaClassValue(AClassValue).DeclarePrivateName(SourceName, AName);
+end;
+
+procedure DeclareBytecodePrivateNamesFromTemplate(
+  const AClassValue: TGocciaValue; const ATemplate: TGocciaFunctionTemplate);
+var
+  ConstantValue: TGocciaBytecodeConstant;
+  I: Integer;
+begin
+  if not (Assigned(ATemplate) and (AClassValue is TGocciaClassValue)) then
+    Exit;
+
+  for I := 0 to ATemplate.ConstantCount - 1 do
+  begin
+    ConstantValue := ATemplate.GetConstantUnchecked(I);
+    if (ConstantValue.Kind = bckString) and
+       IsBytecodePrivateKey(ConstantValue.StringValue) then
+      DeclareBytecodePrivateNameForClass(AClassValue, ConstantValue.StringValue);
+  end;
+
+  for I := 0 to ATemplate.FunctionCount - 1 do
+    DeclareBytecodePrivateNamesFromTemplate(
+      AClassValue, ATemplate.GetFunctionUnchecked(I));
 end;
 
 function TGocciaVM.GetLocal(const AIndex: Integer): TGocciaValue;
@@ -5641,6 +6139,44 @@ begin
   Result := (AKeyReg.Kind = grkObject) and (AKeyReg.ObjectValue is TGocciaObjectValue);
   if Result then
     AResolved := ToPropertyKey(AKeyReg.ObjectValue);
+end;
+
+procedure TGocciaVM.SetFunctionNameFromKey(const AFunction, AKey: TGocciaValue;
+  const APrefixKind: UInt8);
+var
+  Name: string;
+  Prefix: string;
+  Symbol: TGocciaSymbolValue;
+begin
+  if not (AFunction is TGocciaObjectValue) then
+    Exit;
+
+  if AKey is TGocciaSymbolValue then
+  begin
+    Symbol := TGocciaSymbolValue(AKey);
+    if Symbol.HasDescription then
+      Name := '[' + Symbol.Description + ']'
+    else
+      Name := '';
+  end
+  else
+    Name := KeyToPropertyName(AKey);
+
+  case APrefixKind of
+    FUNCTION_NAME_PREFIX_GET:
+      Prefix := 'get';
+    FUNCTION_NAME_PREFIX_SET:
+      Prefix := 'set';
+  else
+    Prefix := '';
+  end;
+
+  if Prefix <> '' then
+    Name := Prefix + ' ' + Name;
+
+  TGocciaObjectValue(AFunction).DefineProperty(PROP_NAME,
+    TGocciaPropertyDescriptorData.Create(
+      TGocciaStringLiteralValue.Create(Name), [pfConfigurable]));
 end;
 
 function TGocciaVM.KeyDisplaySafe(const AKey: TGocciaRegister): string;
@@ -5855,11 +6391,11 @@ begin
           end;
         until DoneFlag;
       except
-        // §7.4.10 step 5 abrupt-completion path: DirectNext (and any
-        // user code it calls) can throw.  Close the iterator, swallow
-        // any error from iter.return(), and re-raise the original.
+        // If IteratorStep/IteratorNext itself throws, array destructuring
+        // propagates that abrupt completion without calling return().
+        // IteratorClose is only for abrupt completions after a step has
+        // successfully produced a non-done value.
         AcquireExceptionObject;
-        CloseIteratorPreservingError(TGocciaIteratorValue(IteratorValue));
         raise;
       end;
       Exit;
@@ -5935,13 +6471,11 @@ begin
           end;
         until DoneFlag;
       except
-        // §7.4.10 step 5 abrupt-completion path covering the
-        // SErrorIteratorNextMustBeCallable throw above, the
-        // SErrorIteratorResultNotObject throw, AwaitValue rejections,
-        // and any error raised by user-supplied next().  iter.return()
-        // is best-effort and must not replace the original error.
+        // If IteratorStep/IteratorNext itself throws, array destructuring
+        // propagates that abrupt completion without calling return().
+        // IteratorClose is only for abrupt completions after a step has
+        // successfully produced a non-done value.
         AcquireExceptionObject;
-        CloseRawIteratorPreservingError(IteratorValue);
         raise;
       end;
       Exit;
@@ -6033,12 +6567,8 @@ begin
             AArray.Elements.Add(NextResult);
         until DoneFlag;
       except
-        // §7.4.10 step 5 abrupt-completion path: DirectNext can throw
-        // (user next() / wrapped iterator may execute arbitrary code).
-        // Close the iterator while preserving the original error per
-        // ES2024 IteratorClose semantics.
+        // If IteratorStep/IteratorNext itself throws, do not call return().
         AcquireExceptionObject;
-        CloseIteratorPreservingError(TGocciaIteratorValue(IteratorValue));
         raise;
       end;
       Exit(True);
@@ -6074,11 +6604,8 @@ begin
         end;
       until DoneFlag;
     except
-      // §7.4.10 step 5 abrupt-completion path: covers user next()
-      // throws and our SErrorIteratorResultNotObject TypeError.  Call
-      // iter.return() best-effort and surface the original exception.
+      // If IteratorStep/IteratorNext itself throws, do not call return().
       AcquireExceptionObject;
-      CloseRawIteratorPreservingError(IteratorValue);
       raise;
     end;
     Result := True;
@@ -6294,6 +6821,48 @@ begin
   Result := Assigned(Descriptor) and Descriptor.Enumerable;
 end;
 
+function TGocciaVM.PromiseConstructorIntrinsic: TGocciaValue;
+begin
+  Result := nil;
+  if Assigned(FGlobalScope) and FGlobalScope.Contains(CONSTRUCTOR_PROMISE) then
+    Result := FGlobalScope.GetValue(CONSTRUCTOR_PROMISE);
+  if not Assigned(Result) then
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TGocciaVM.PromiseResolveIntrinsic(
+  const AValue: TGocciaValue): TGocciaPromiseValue;
+var
+  ConstructorValue, ValueConstructor: TGocciaValue;
+  IsRooted: Boolean;
+begin
+  ConstructorValue := PromiseConstructorIntrinsic;
+  if AValue is TGocciaPromiseValue then
+  begin
+    ValueConstructor := TGocciaPromiseValue(AValue).GetProperty(PROP_CONSTRUCTOR);
+    if IsSameValue(ValueConstructor, ConstructorValue) then
+      Exit(TGocciaPromiseValue(AValue));
+  end;
+
+  Result := TGocciaPromiseValue.Create;
+  IsRooted := Assigned(TGarbageCollector.Instance);
+  if IsRooted then
+    TGarbageCollector.Instance.AddTempRoot(Result);
+  try
+    Result.Resolve(AValue);
+  except
+    if IsRooted then
+    begin
+      TGarbageCollector.Instance.RemoveTempRoot(Result);
+      IsRooted := False;
+    end;
+    Result.Free;
+    raise;
+  end;
+  if IsRooted then
+    TGarbageCollector.Instance.RemoveTempRoot(Result);
+end;
+
 function TGocciaVM.GetIteratorValue(const AIterable: TGocciaValue;
   const ATryAsync: Boolean): TGocciaValue;
 var
@@ -6337,6 +6906,7 @@ begin
       // that exists, downstream consumers (for-await-of dispatch)
       // re-resolve PROP_NEXT per iteration.  The §7.4.2 validation
       // above still ensures `next` is callable at acquisition time.
+      Result := TGocciaVMAsyncIteratorRecordValue.Create(Result, NextMethod);
       Exit;
     end
     else if Assigned(IteratorMethod) and
@@ -6379,7 +6949,7 @@ begin
       if IteratorObject is TGocciaIteratorValue then
       begin
         if ATryAsync then
-          Exit(TGocciaVMAsyncFromSyncIteratorValue.Create(IteratorObject,
+          Exit(TGocciaVMAsyncFromSyncIteratorValue.Create(Self, IteratorObject,
             IteratorObject.GetProperty(PROP_NEXT)));
         Exit(IteratorObject);
       end;
@@ -6392,7 +6962,7 @@ begin
            NextMethod.IsCallable then
         begin
           if ATryAsync then
-            Exit(TGocciaVMAsyncFromSyncIteratorValue.Create(IteratorObject,
+            Exit(TGocciaVMAsyncFromSyncIteratorValue.Create(Self, IteratorObject,
               NextMethod));
           // Wrap the raw iterator object in a TGocciaGenericIteratorValue
           // so callers (OP_ITER_NEXT, IterableToArray, etc.) get a
@@ -6676,22 +7246,32 @@ var
   TargetObject: TGocciaObjectValue;
   ExistingDescriptor: TGocciaPropertyDescriptor;
   ExistingSetter: TGocciaValue;
+  DescriptorFlags: TPropertyFlags;
 begin
   if ATarget is TGocciaVMClassValue then
-    TargetObject := TGocciaVMClassValue(ATarget).Prototype
+  begin
+    TargetObject := TGocciaVMClassValue(ATarget).Prototype;
+    DescriptorFlags := [pfConfigurable];
+  end
   else if ATarget is TGocciaObjectValue then
-    TargetObject := TGocciaObjectValue(ATarget)
+  begin
+    TargetObject := TGocciaObjectValue(ATarget);
+    DescriptorFlags := [pfEnumerable, pfConfigurable, pfWritable];
+  end
   else
     Exit;
 
-  SetBytecodeHomeObject(AGetter, TargetObject);
+  if ATarget is TGocciaVMClassValue then
+    SetBytecodeHomeObject(AGetter, ATarget)
+  else
+    SetBytecodeHomeObject(AGetter, TargetObject);
   ExistingDescriptor := TargetObject.GetOwnPropertyDescriptor(AName);
   ExistingSetter := nil;
   if (ExistingDescriptor is TGocciaPropertyDescriptorAccessor) and
      Assigned(TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Setter) then
     ExistingSetter := TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Setter;
   TargetObject.DefineProperty(AName, TGocciaPropertyDescriptorAccessor.Create(
-    AGetter, ExistingSetter, [pfEnumerable, pfConfigurable, pfWritable]));
+    AGetter, ExistingSetter, DescriptorFlags));
 end;
 
 procedure TGocciaVM.DefineSetterProperty(const ATarget: TGocciaValue;
@@ -6700,22 +7280,32 @@ var
   TargetObject: TGocciaObjectValue;
   ExistingDescriptor: TGocciaPropertyDescriptor;
   ExistingGetter: TGocciaValue;
+  DescriptorFlags: TPropertyFlags;
 begin
   if ATarget is TGocciaVMClassValue then
-    TargetObject := TGocciaVMClassValue(ATarget).Prototype
+  begin
+    TargetObject := TGocciaVMClassValue(ATarget).Prototype;
+    DescriptorFlags := [pfConfigurable];
+  end
   else if ATarget is TGocciaObjectValue then
-    TargetObject := TGocciaObjectValue(ATarget)
+  begin
+    TargetObject := TGocciaObjectValue(ATarget);
+    DescriptorFlags := [pfEnumerable, pfConfigurable, pfWritable];
+  end
   else
     Exit;
 
-  SetBytecodeHomeObject(ASetter, TargetObject);
+  if ATarget is TGocciaVMClassValue then
+    SetBytecodeHomeObject(ASetter, ATarget)
+  else
+    SetBytecodeHomeObject(ASetter, TargetObject);
   ExistingDescriptor := TargetObject.GetOwnPropertyDescriptor(AName);
   ExistingGetter := nil;
   if (ExistingDescriptor is TGocciaPropertyDescriptorAccessor) and
      Assigned(TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Getter) then
     ExistingGetter := TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Getter;
   TargetObject.DefineProperty(AName, TGocciaPropertyDescriptorAccessor.Create(
-    ExistingGetter, ASetter, [pfEnumerable, pfConfigurable, pfWritable]));
+    ExistingGetter, ASetter, DescriptorFlags));
 end;
 
 procedure TGocciaVM.DefineStaticGetterProperty(const ATarget: TGocciaValue;
@@ -6725,7 +7315,7 @@ var
 begin
   if ATarget is TGocciaClassValue then
   begin
-    SetBytecodeHomeObject(AGetter, ATarget);
+    SetBytecodeHomeObject(AGetter, ATarget, True);
     if IsBytecodePrivateKey(AName) then
     begin
       PrivateBrandToken := BytecodePrivateTokenForKey(AName,
@@ -6746,7 +7336,7 @@ var
 begin
   if ATarget is TGocciaClassValue then
   begin
-    SetBytecodeHomeObject(ASetter, ATarget);
+    SetBytecodeHomeObject(ASetter, ATarget, True);
     if IsBytecodePrivateKey(AName) then
     begin
       PrivateBrandToken := BytecodePrivateTokenForKey(AName,
@@ -6765,12 +7355,14 @@ procedure TGocciaVM.DefineGetterPropertyByKey(const ATarget, AKey,
 var
   ExistingDescriptor: TGocciaPropertyDescriptor;
   ExistingSetter: TGocciaValue;
+  DescriptorFlags: TPropertyFlags;
 begin
   if AKey is TGocciaSymbolValue then
   begin
     if ATarget is TGocciaVMClassValue then
     begin
-      SetBytecodeHomeObject(AGetter, TGocciaVMClassValue(ATarget).Prototype);
+      SetBytecodeHomeObject(AGetter, ATarget);
+      DescriptorFlags := [pfConfigurable];
       ExistingDescriptor := TGocciaVMClassValue(ATarget).Prototype
         .GetOwnSymbolPropertyDescriptor(TGocciaSymbolValue(AKey));
       ExistingSetter := nil;
@@ -6780,11 +7372,12 @@ begin
       TGocciaVMClassValue(ATarget).Prototype.DefineSymbolProperty(
         TGocciaSymbolValue(AKey),
         TGocciaPropertyDescriptorAccessor.Create(
-          AGetter, ExistingSetter, [pfEnumerable, pfConfigurable, pfWritable]));
+          AGetter, ExistingSetter, DescriptorFlags));
     end
     else if ATarget is TGocciaObjectValue then
     begin
       SetBytecodeHomeObject(AGetter, TGocciaObjectValue(ATarget));
+      DescriptorFlags := [pfEnumerable, pfConfigurable, pfWritable];
       ExistingDescriptor := TGocciaObjectValue(ATarget)
         .GetOwnSymbolPropertyDescriptor(TGocciaSymbolValue(AKey));
       ExistingSetter := nil;
@@ -6794,7 +7387,7 @@ begin
       TGocciaObjectValue(ATarget).DefineSymbolProperty(
         TGocciaSymbolValue(AKey),
         TGocciaPropertyDescriptorAccessor.Create(
-          AGetter, ExistingSetter, [pfEnumerable, pfConfigurable, pfWritable]));
+          AGetter, ExistingSetter, DescriptorFlags));
     end;
     Exit;
   end;
@@ -6807,12 +7400,14 @@ procedure TGocciaVM.DefineSetterPropertyByKey(const ATarget, AKey,
 var
   ExistingDescriptor: TGocciaPropertyDescriptor;
   ExistingGetter: TGocciaValue;
+  DescriptorFlags: TPropertyFlags;
 begin
   if AKey is TGocciaSymbolValue then
   begin
     if ATarget is TGocciaVMClassValue then
     begin
-      SetBytecodeHomeObject(ASetter, TGocciaVMClassValue(ATarget).Prototype);
+      SetBytecodeHomeObject(ASetter, ATarget);
+      DescriptorFlags := [pfConfigurable];
       ExistingDescriptor := TGocciaVMClassValue(ATarget).Prototype
         .GetOwnSymbolPropertyDescriptor(TGocciaSymbolValue(AKey));
       ExistingGetter := nil;
@@ -6822,11 +7417,12 @@ begin
       TGocciaVMClassValue(ATarget).Prototype.DefineSymbolProperty(
         TGocciaSymbolValue(AKey),
         TGocciaPropertyDescriptorAccessor.Create(
-          ExistingGetter, ASetter, [pfEnumerable, pfConfigurable, pfWritable]));
+          ExistingGetter, ASetter, DescriptorFlags));
     end
     else if ATarget is TGocciaObjectValue then
     begin
       SetBytecodeHomeObject(ASetter, TGocciaObjectValue(ATarget));
+      DescriptorFlags := [pfEnumerable, pfConfigurable, pfWritable];
       ExistingDescriptor := TGocciaObjectValue(ATarget)
         .GetOwnSymbolPropertyDescriptor(TGocciaSymbolValue(AKey));
       ExistingGetter := nil;
@@ -6836,7 +7432,7 @@ begin
       TGocciaObjectValue(ATarget).DefineSymbolProperty(
         TGocciaSymbolValue(AKey),
         TGocciaPropertyDescriptorAccessor.Create(
-          ExistingGetter, ASetter, [pfEnumerable, pfConfigurable, pfWritable]));
+          ExistingGetter, ASetter, DescriptorFlags));
     end;
     Exit;
   end;
@@ -6852,7 +7448,7 @@ var
 begin
   if (ATarget is TGocciaClassValue) and (AKey is TGocciaSymbolValue) then
   begin
-    SetBytecodeHomeObject(AGetter, ATarget);
+    SetBytecodeHomeObject(AGetter, ATarget, True);
     ExistingDescriptor := TGocciaClassValue(ATarget)
       .GetOwnStaticSymbolDescriptor(TGocciaSymbolValue(AKey));
     ExistingSetter := nil;
@@ -6877,7 +7473,7 @@ var
 begin
   if (ATarget is TGocciaClassValue) and (AKey is TGocciaSymbolValue) then
   begin
-    SetBytecodeHomeObject(ASetter, ATarget);
+    SetBytecodeHomeObject(ASetter, ATarget, True);
     ExistingDescriptor := TGocciaClassValue(ATarget)
       .GetOwnStaticSymbolDescriptor(TGocciaSymbolValue(AKey));
     ExistingGetter := nil;
@@ -6910,6 +7506,14 @@ begin
     FCurrentDynamicVarScope.ThisValue := FGlobalThisValue;
   FCurrentDynamicVarScope.NonStrictMode := True;
   Result := FCurrentDynamicVarScope;
+end;
+
+function HasDynamicVarBinding(const AScope: TGocciaScope;
+  const AName: string): Boolean; inline;
+begin
+  Result := Assigned(AScope) and
+    (AScope.ContainsOwnVarBinding(AName) or
+     AScope.ContainsOwnLexicalBinding(AName));
 end;
 
 procedure TGocciaVM.DefineGlobalBinding(const AName: string;
@@ -7003,9 +7607,34 @@ begin
     DelimiterPos := Pos(':', KeyBody);
     if DelimiterPos > 1 then
       Result := Copy(KeyBody, 1, DelimiterPos - 1)
-    else if KeyBody <> '' then
+    else if (KeyBody <> '') and (Pos('$', KeyBody) = 0) then
       Result := KeyBody;
   end;
+end;
+
+function BytecodePrivateSourceName(const AName: string): string;
+var
+  Body: string;
+  DelimiterPos: SizeInt;
+begin
+  Result := AName;
+  if IsBytecodePrivateKey(Result) then
+  begin
+    Body := Copy(Result, Length(BYTECODE_PRIVATE_SLOT_PREFIX) + 1, MaxInt);
+    DelimiterPos := Pos('$', Body);
+    if DelimiterPos > 0 then
+      Result := Copy(Body, DelimiterPos + 1, MaxInt)
+    else
+    begin
+      DelimiterPos := Pos(':', Body);
+      if DelimiterPos > 0 then
+        Result := Copy(Body, DelimiterPos + 1, MaxInt)
+      else
+        Result := Body;
+    end;
+  end;
+  if (Result <> '') and (Result[1] = '#') then
+    Result := Copy(Result, 2, MaxInt);
 end;
 
 function BytecodePrivateReceiverBrandToken(
@@ -7043,6 +7672,72 @@ begin
       NormalizeBytecodePrivateKey(AKey, APrivateBrandToken);
 end;
 
+function TGocciaVM.ResolveBytecodePrivateBrandToken(const AKey: string;
+  const AObject: TGocciaValue): string;
+var
+  HomeClass: TGocciaClassValue;
+  CandidateClass: TGocciaClassValue;
+  ExactReceiverClass: TGocciaClassValue;
+  SourceName: string;
+  DeclaredKey: string;
+
+  function IsSuperclassOfHome(const AClassValue: TGocciaClassValue): Boolean;
+  var
+    CurrentClass: TGocciaClassValue;
+  begin
+    Result := False;
+    if (not Assigned(HomeClass)) or not Assigned(AClassValue) then
+      Exit;
+    CurrentClass := HomeClass.SuperClass;
+    while Assigned(CurrentClass) do
+    begin
+      if CurrentClass = AClassValue then
+        Exit(True);
+      CurrentClass := CurrentClass.SuperClass;
+    end;
+  end;
+begin
+  Result := BytecodePrivateTokenForKey(AKey,
+    BytecodePrivateReceiverBrandToken(AObject));
+
+  SourceName := BytecodePrivateSourceName(AKey);
+  HomeClass := nil;
+  if Assigned(FCurrentClosure) and
+     (FCurrentClosure.HomeClass is TGocciaClassValue) then
+    HomeClass := TGocciaClassValue(FCurrentClosure.HomeClass);
+
+  CandidateClass := nil;
+  if AObject is TGocciaClassValue then
+    CandidateClass := TGocciaClassValue(AObject)
+  else if (AObject is TGocciaInstanceValue) and
+          Assigned(TGocciaInstanceValue(AObject).ClassValue) then
+    CandidateClass := TGocciaInstanceValue(AObject).ClassValue;
+
+  ExactReceiverClass := nil;
+  while Assigned(CandidateClass) do
+  begin
+    if (SourceName <> '') and
+       CandidateClass.ResolveDeclaredPrivateKey(SourceName, DeclaredKey) and
+       (DeclaredKey = AKey) then
+    begin
+      ExactReceiverClass := CandidateClass;
+      Break;
+    end;
+    CandidateClass := CandidateClass.SuperClass;
+  end;
+
+  if Assigned(HomeClass) and (SourceName <> '') and
+     HomeClass.ResolveDeclaredPrivateKey(SourceName, DeclaredKey) then
+  begin
+    if Assigned(ExactReceiverClass) and IsSuperclassOfHome(ExactReceiverClass) then
+      Exit(ExactReceiverClass.PrivateBrandToken);
+    Exit(HomeClass.PrivateBrandToken);
+  end;
+
+  if Assigned(ExactReceiverClass) then
+    Exit(ExactReceiverClass.PrivateBrandToken);
+end;
+
 function BytecodePrivateInitializedKey(
   const APrivateBrandToken: string): string;
 begin
@@ -7058,34 +7753,71 @@ begin
   if (not Assigned(AClassValue)) or
      not (AInstance is TGocciaObjectValue) then
     Exit;
-  Descriptor := TGocciaObjectValue(AInstance).GetOwnPropertyDescriptor(
-    BytecodePrivateInitializedKey(AClassValue.PrivateBrandToken));
+  Descriptor := nil;
+  TGocciaObjectValue(AInstance).Properties.TryGetValue(
+    BytecodePrivateInitializedKey(AClassValue.PrivateBrandToken), Descriptor);
   Result := Descriptor is TGocciaPropertyDescriptorData;
+end;
+
+function TryGetRawObjectPrivateDescriptor(const AObject: TGocciaObjectValue;
+  const AKey: string; out ADescriptor: TGocciaPropertyDescriptor): Boolean;
+begin
+  ADescriptor := nil;
+  Result := Assigned(AObject) and AObject.Properties.TryGetValue(AKey,
+    ADescriptor);
+end;
+
+procedure DefineRawObjectPrivateProperty(const AObject: TGocciaObjectValue;
+  const AKey: string; const AValue: TGocciaValue;
+  const AFlags: TPropertyFlags);
+var
+  Descriptor: TGocciaPropertyDescriptor;
+begin
+  if AObject.Properties.TryGetValue(AKey, Descriptor) then
+    Descriptor.Free;
+  AObject.Properties.Add(AKey,
+    TGocciaPropertyDescriptorData.Create(AValue, AFlags));
+end;
+
+procedure DefineRawObjectPrivateDescriptor(const AObject: TGocciaObjectValue;
+  const AKey: string; const ADescriptor: TGocciaPropertyDescriptor);
+var
+  ExistingDescriptor: TGocciaPropertyDescriptor;
+begin
+  if not Assigned(ADescriptor) then
+    Exit;
+  if AObject.Properties.TryGetValue(AKey, ExistingDescriptor) then
+    ExistingDescriptor.Free;
+  AObject.Properties.Add(AKey, ADescriptor);
 end;
 
 procedure StampBytecodePrivateInitializersApplied(const AInstance: TGocciaValue;
   const AClassValue: TGocciaClassValue);
 begin
   if (not Assigned(AClassValue)) or
-     (not AClassValue.HasInstanceInitializerWork) or
      HasBytecodePrivateInitializersApplied(AInstance, AClassValue) then
     Exit;
   if AInstance is TGocciaObjectValue then
-    TGocciaObjectValue(AInstance).DefineProperty(
-    BytecodePrivateInitializedKey(AClassValue.PrivateBrandToken),
-    TGocciaPropertyDescriptorData.Create(
-      TGocciaBooleanLiteralValue.TrueValue, []));
+    DefineRawObjectPrivateProperty(TGocciaObjectValue(AInstance),
+      BytecodePrivateInitializedKey(AClassValue.PrivateBrandToken),
+      TGocciaBooleanLiteralValue.TrueValue, []);
 end;
 
 procedure TGocciaVM.StampBytecodePrivateBrands(
-  const AClassValue: TGocciaClassValue; const AInstance: TGocciaValue);
+  const AClassValue: TGocciaClassValue; const AInstance: TGocciaValue;
+  const APreserveExistingPrivateSlots: Boolean);
 var
   Names: TStringList;
   PrototypeNames: TArray<string>;
   PrototypeName: string;
   PrivateBrandToken: string;
+  BrandKey: string;
+  ExistingValue: TGocciaValue;
   PrototypeDescriptor: TGocciaPropertyDescriptor;
   ReceiverObject: TGocciaObjectValue;
+  SeenBrandKeys: TStringList;
+  SourcePrivateName: string;
+  IsPrivateFieldBrand: Boolean;
   I: Integer;
 begin
   if (not Assigned(AClassValue)) or
@@ -7095,10 +7827,14 @@ begin
   ReceiverObject := TGocciaObjectValue(AInstance);
 
   Names := TStringList.Create;
+  SeenBrandKeys := TStringList.Create;
   try
     Names.CaseSensitive := True;
     Names.Sorted := False;
     Names.Duplicates := dupIgnore;
+    SeenBrandKeys.CaseSensitive := True;
+    SeenBrandKeys.Sorted := False;
+    SeenBrandKeys.Duplicates := dupIgnore;
     AClassValue.AppendOwnPrivateNames(Names);
     if Assigned(AClassValue.Prototype) then
     begin
@@ -7108,13 +7844,77 @@ begin
            (Names.IndexOf(PrototypeName) < 0) then
           Names.Add(PrototypeName);
     end;
+    if (Names.Count > 0) and not ReceiverObject.Extensible then
+      ThrowTypeError('Cannot add private elements to a non-extensible object',
+        SSuggestObjectNotExtensible);
     for I := 0 to Names.Count - 1 do
     begin
       PrivateBrandToken := BytecodePrivateTokenForKey(Names[I],
         AClassValue.PrivateBrandToken);
-      SetRawPrivateValue(AInstance, BytecodePrivateBrandKey(
+      BrandKey := BytecodePrivateBrandKey(
         NormalizeBytecodePrivateKey(Names[I], PrivateBrandToken),
-        PrivateBrandToken),
+        PrivateBrandToken);
+      if SeenBrandKeys.IndexOf(BrandKey) >= 0 then
+        Continue;
+      if TryGetRawObjectPrivateDescriptor(ReceiverObject, Names[I],
+         PrototypeDescriptor) and
+         not HasBytecodePrivateInitializersApplied(AInstance, AClassValue) then
+      begin
+        if not ReceiverObject.Extensible then
+          ThrowTypeError(
+            'Cannot add private elements to a non-extensible object',
+            SSuggestObjectNotExtensible);
+        if not ((AClassValue is TGocciaVMClassValue) and
+           Assigned(TGocciaVMClassValue(AClassValue).FConstructorValue)) then
+          ThrowTypeError('Cannot initialize private elements twice',
+            SSuggestPrivateFieldAccess);
+        Continue;
+      end;
+      if TryGetRawPrivateValue(AInstance, BrandKey, ExistingValue) then
+      begin
+        if not HasBytecodePrivateInitializersApplied(AInstance, AClassValue) then
+        begin
+          if not ReceiverObject.Extensible then
+            ThrowTypeError(
+              'Cannot add private elements to a non-extensible object',
+              SSuggestObjectNotExtensible);
+          if (AClassValue is TGocciaVMClassValue) and
+             Assigned(TGocciaVMClassValue(AClassValue).FConstructorValue) then
+            Continue;
+        end;
+        SourcePrivateName := NormalizeBytecodePrivateKey(Names[I],
+          PrivateBrandToken);
+        if IsBytecodePrivateKey(SourcePrivateName) then
+        begin
+          SourcePrivateName := Copy(SourcePrivateName,
+            Length(BYTECODE_PRIVATE_SLOT_PREFIX) + 1, MaxInt);
+          if Pos('$', SourcePrivateName) > 0 then
+            SourcePrivateName := Copy(SourcePrivateName,
+              Pos('$', SourcePrivateName) + 1, MaxInt)
+          else if Pos(':', SourcePrivateName) > 0 then
+            SourcePrivateName := Copy(SourcePrivateName,
+              Pos(':', SourcePrivateName) + 1, MaxInt);
+        end;
+        IsPrivateFieldBrand :=
+          (AClassValue.PrivateInstancePropertyDefs.Count > 0) or
+          (AClassValue.FieldOrderCount > 0) or
+          AClassValue.PrivateInstancePropertyDefs.ContainsKey(Names[I]) or
+          AClassValue.PrivateInstancePropertyDefs.ContainsKey(SourcePrivateName);
+        if IsPrivateFieldBrand then
+        begin
+          if not ReceiverObject.Extensible then
+            ThrowTypeError(
+              'Cannot add private elements to a non-extensible object',
+              SSuggestObjectNotExtensible);
+          Continue;
+        end;
+        if APreserveExistingPrivateSlots then
+          Continue;
+        ThrowTypeError('Cannot initialize private elements twice',
+          SSuggestPrivateFieldAccess);
+      end;
+      SeenBrandKeys.Add(BrandKey);
+      SetRawPrivateValue(AInstance, BrandKey,
         TGocciaBooleanLiteralValue.TrueValue);
 
       if (not (AInstance is TGocciaInstanceValue)) and
@@ -7124,11 +7924,12 @@ begin
         PrototypeDescriptor := AClassValue.Prototype.GetOwnPropertyDescriptor(
           Names[I]);
         if Assigned(PrototypeDescriptor) then
-          ReceiverObject.DefineProperty(Names[I],
+          DefineRawObjectPrivateDescriptor(ReceiverObject, Names[I],
             ClonePropertyDescriptor(PrototypeDescriptor));
       end;
     end;
   finally
+    SeenBrandKeys.Free;
     Names.Free;
   end;
 end;
@@ -7140,7 +7941,8 @@ var
   PreviousPrivateInitializerReceiver: TGocciaValue;
   PreviousPrivateInitializerPreserveExisting: Boolean;
 begin
-  StampBytecodePrivateBrands(AClassValue, AInstance);
+  StampBytecodePrivateBrands(AClassValue, AInstance,
+    APreserveExistingPrivateSlots);
   PreviousPrivateInitializerReceiver := FPrivateInitializerReceiver;
   PreviousPrivateInitializerPreserveExisting :=
     FPrivateInitializerPreserveExisting;
@@ -7672,7 +8474,7 @@ var
     else
       KeyValue := TGocciaStringLiteralValue.Create(AName);
     if AIsStatic then
-      SetBytecodeHomeObject(AValue, TGocciaClassValue(ClassVal))
+      SetBytecodeHomeObject(AValue, TGocciaClassValue(ClassVal), True)
     else
       SetBytecodeHomeObject(AValue, TargetObject);
     if KeyValue is TGocciaSymbolValue then
@@ -7724,7 +8526,7 @@ var
       KeyValue := TGocciaStringLiteralValue.Create(AName);
 
     if AIsStatic then
-      SetBytecodeHomeObject(AGetter, TGocciaClassValue(ClassVal))
+      SetBytecodeHomeObject(AGetter, TGocciaClassValue(ClassVal), True)
     else
       SetBytecodeHomeObject(AGetter, TargetObject);
     if KeyValue is TGocciaSymbolValue then
@@ -7775,7 +8577,7 @@ var
       KeyValue := TGocciaStringLiteralValue.Create(AName);
 
     if AIsStatic then
-      SetBytecodeHomeObject(ASetter, TGocciaClassValue(ClassVal))
+      SetBytecodeHomeObject(ASetter, TGocciaClassValue(ClassVal), True)
     else
       SetBytecodeHomeObject(ASetter, TargetObject);
     if KeyValue is TGocciaSymbolValue then
@@ -8204,7 +9006,16 @@ begin
   end;
 
   if not (ASuperValue is TGocciaClassValue) then
+  begin
+    if Assigned(HomeObject) then
+    begin
+      SuperPrototype := HomeObject.Prototype;
+      if SuperPrototype is TGocciaObjectValue then
+        Exit(TGocciaObjectValue(SuperPrototype).GetPropertyWithContext(
+          AName, AThisValue));
+    end;
     Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  end;
 
   SuperClass := TGocciaClassValue(ASuperValue);
   if AUseSuperConstructor and (AName = PROP_CONSTRUCTOR) then
@@ -8272,7 +9083,16 @@ begin
   end;
 
   if not (ASuperValue is TGocciaClassValue) then
+  begin
+    if Assigned(HomeObject) then
+    begin
+      SuperPrototype := HomeObject.Prototype;
+      if SuperPrototype is TGocciaObjectValue then
+        Exit(TGocciaObjectValue(SuperPrototype).GetSymbolPropertyWithReceiver(
+          TGocciaSymbolValue(AKey), AThisValue));
+    end;
     Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  end;
 
   SuperClass := TGocciaClassValue(ASuperValue);
   if AThisValue is TGocciaClassValue then
@@ -8295,6 +9115,56 @@ begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
+procedure TGocciaVM.SetSuperPropertyValueByKey(const ASuperValue, AThisValue,
+  AKey, AValue: TGocciaValue);
+var
+  BaseObject: TGocciaObjectValue;
+  BaseValue: TGocciaValue;
+  HomeObject: TGocciaObjectValue;
+  KeyValue: TGocciaValue;
+  PropertyName: string;
+  Success: Boolean;
+begin
+  BaseValue := nil;
+  HomeObject := nil;
+  if Assigned(FCurrentClosure) then
+    HomeObject := FCurrentClosure.HomeObject;
+
+  if Assigned(HomeObject) then
+    BaseValue := HomeObject.Prototype
+  else if AThisValue is TGocciaClassValue then
+  begin
+    if ASuperValue is TGocciaObjectValue then
+      BaseValue := ASuperValue;
+  end
+  else if ASuperValue is TGocciaClassValue then
+    BaseValue := TGocciaClassValue(ASuperValue).Prototype
+  else if ASuperValue is TGocciaObjectValue then
+    BaseValue := TGocciaObjectValue(ASuperValue).Prototype;
+
+  KeyValue := ToPropertyKey(AKey);
+  if KeyValue is TGocciaSymbolValue then
+    PropertyName := TGocciaSymbolValue(KeyValue).ToDisplayString.Value
+  else
+    PropertyName := TGocciaStringLiteralValue(KeyValue).Value;
+
+  if not (BaseValue is TGocciaObjectValue) then
+    ThrowTypeError(Format(SErrorCannotSetPropertiesOfNull, [PropertyName]),
+      SSuggestCheckNullBeforeAccess);
+
+  BaseObject := TGocciaObjectValue(BaseValue);
+  if KeyValue is TGocciaSymbolValue then
+    Success := BaseObject.AssignSymbolPropertyWithReceiver(
+      TGocciaSymbolValue(KeyValue), AValue, AThisValue)
+  else
+    Success := BaseObject.AssignPropertyWithReceiver(PropertyName, AValue,
+      AThisValue);
+
+  if not Success then
+    ThrowTypeError(Format(SErrorCannotAssignReadOnly, [PropertyName]),
+      SSuggestCannotDeleteNonConfigurable);
+end;
+
 function TGocciaVM.GetPropertyValue(const AObject: TGocciaValue;
   const AKey: string): TGocciaValue;
 var
@@ -8315,8 +9185,7 @@ begin
 
   if IsBytecodePrivateKey(AKey) then
   begin
-    PrivateBrandToken := BytecodePrivateTokenForKey(AKey,
-      BytecodePrivateReceiverBrandToken(AObject));
+    PrivateBrandToken := ResolveBytecodePrivateBrandToken(AKey, AObject);
     PrivateName := NormalizeBytecodePrivateKey(AKey, PrivateBrandToken);
     if AObject is TGocciaClassValue then
     begin
@@ -8348,7 +9217,8 @@ begin
       Current := TGocciaObjectValue(AObject);
       while Assigned(Current) do
       begin
-        Descriptor := Current.GetOwnPropertyDescriptor(AKey);
+        if not TryGetRawObjectPrivateDescriptor(Current, AKey, Descriptor) then
+          Descriptor := Current.GetOwnPropertyDescriptor(AKey);
         if Descriptor is TGocciaPropertyDescriptorAccessor then
         begin
           if not TryGetRawPrivateValue(
@@ -8357,7 +9227,16 @@ begin
             ThrowTypeError(Format(SErrorPrivateFieldNotAccessible, [AKey]),
               SSuggestPrivateFieldAccess);
           if Assigned(TGocciaPropertyDescriptorAccessor(Descriptor).Getter) then
-            Exit(AObject.GetProperty(AKey));
+          begin
+            EmptyArgs := TGocciaArgumentsCollection.Create;
+            try
+              Exit(InvokeFunctionValue(
+                TGocciaPropertyDescriptorAccessor(Descriptor).Getter,
+                EmptyArgs, AObject));
+            finally
+              EmptyArgs.Free;
+            end;
+          end;
           ThrowTypeError(Format(SErrorPrivateAccessorNoGetter, [AKey]),
             SSuggestPrivateFieldAccess);
         end;
@@ -8403,7 +9282,6 @@ var
   BoxedValue: TGocciaObjectValue;
   PrivateBrandToken: string;
   ExistingValue: TGocciaValue;
-  CurrentClass: TGocciaClassValue;
 begin
   if AObject is TGocciaNullLiteralValue then
     ThrowTypeError(Format(SErrorCannotSetPropertiesOfNull, [AKey]),
@@ -8413,8 +9291,7 @@ begin
       SSuggestCheckNullBeforeAccess);
   if IsBytecodePrivateKey(AKey) then
   begin
-    PrivateBrandToken := BytecodePrivateTokenForKey(AKey,
-      BytecodePrivateReceiverBrandToken(AObject));
+    PrivateBrandToken := ResolveBytecodePrivateBrandToken(AKey, AObject);
     PrivateName := NormalizeBytecodePrivateKey(AKey, PrivateBrandToken);
     if AObject is TGocciaClassValue then
     begin
@@ -8450,7 +9327,8 @@ begin
       Current := TGocciaObjectValue(AObject);
       while Assigned(Current) do
       begin
-        Descriptor := Current.GetOwnPropertyDescriptor(AKey);
+        if not TryGetRawObjectPrivateDescriptor(Current, AKey, Descriptor) then
+          Descriptor := Current.GetOwnPropertyDescriptor(AKey);
         if (Descriptor is TGocciaPropertyDescriptorAccessor) and
            Assigned(TGocciaPropertyDescriptorAccessor(Descriptor).Setter) then
         begin
@@ -8459,7 +9337,14 @@ begin
             ExistingValue) then
             ThrowTypeError(Format(SErrorPrivateFieldNotAccessible, [AKey]),
               SSuggestPrivateFieldAccess);
-          AObject.SetProperty(AKey, AValue);
+          SetterArgs := TGocciaArgumentsCollection.Create([AValue]);
+          try
+            InvokeFunctionValue(
+              TGocciaPropertyDescriptorAccessor(Descriptor).Setter,
+              SetterArgs, AObject);
+          finally
+            SetterArgs.Free;
+          end;
           Exit;
         end;
         if Descriptor is TGocciaPropertyDescriptorData then
@@ -8477,26 +9362,8 @@ begin
         Exit;
     end
     else
-    begin
-      if AObject <> FPrivateInitializerReceiver then
-      begin
-        if (AObject = RegisterToValue(GetLocalRegister(0))) and
-           (FCurrentNewTarget is TGocciaClassValue) then
-        begin
-          CurrentClass := TGocciaClassValue(FCurrentNewTarget);
-          if Assigned(CurrentClass.Prototype) and
-             Assigned(CurrentClass.Prototype.GetOwnPropertyDescriptor(AKey)) then
-            ThrowTypeError(Format(SErrorPrivateFieldNotAccessible, [AKey]),
-              SSuggestPrivateFieldAccess);
-        end
-        else
-          ThrowTypeError(Format(SErrorPrivateFieldNotAccessible, [AKey]),
-            SSuggestPrivateFieldAccess);
-      end;
-      SetRawPrivateValue(AObject, BytecodePrivateBrandKey(AKey,
-        PrivateBrandToken),
-        TGocciaBooleanLiteralValue.TrueValue);
-    end;
+      ThrowTypeError(Format(SErrorPrivateFieldNotAccessible, [AKey]),
+        SSuggestPrivateFieldAccess);
     SetRawPrivateValue(AObject, AKey, AValue);
     Exit;
   end;
@@ -8645,8 +9512,7 @@ begin
     InstanceValue := TGocciaInstanceValue(AObject);
     if InstanceValue.TryGetRawPrivateProperty(AKey, AValue) then
     begin
-      PrivateBrandToken := BytecodePrivateTokenForKey(AKey,
-        BytecodePrivateReceiverBrandToken(AObject));
+      PrivateBrandToken := ResolveBytecodePrivateBrandToken(AKey, AObject);
       Result := IsBytecodePrivateBrandKey(AKey) or
         InstanceValue.TryGetRawPrivateProperty(
           BytecodePrivateBrandKey(AKey, PrivateBrandToken), BrandValue);
@@ -8665,15 +9531,15 @@ begin
   begin
     if not IsBytecodePrivateBrandKey(AKey) then
     begin
-      PrivateBrandToken := BytecodePrivateTokenForKey(AKey,
-        BytecodePrivateReceiverBrandToken(AObject));
-      BrandDescriptor := TGocciaObjectValue(AObject).GetOwnPropertyDescriptor(
-        BytecodePrivateBrandKey(AKey, PrivateBrandToken));
+      PrivateBrandToken := ResolveBytecodePrivateBrandToken(AKey, AObject);
+      TryGetRawObjectPrivateDescriptor(TGocciaObjectValue(AObject),
+        BytecodePrivateBrandKey(AKey, PrivateBrandToken), BrandDescriptor);
       if not (BrandDescriptor is TGocciaPropertyDescriptorData) then
         Exit;
     end;
 
-    Descriptor := TGocciaObjectValue(AObject).GetOwnPropertyDescriptor(AKey);
+    TryGetRawObjectPrivateDescriptor(TGocciaObjectValue(AObject), AKey,
+      Descriptor);
     if Descriptor is TGocciaPropertyDescriptorData then
     begin
       AValue := TGocciaPropertyDescriptorData(Descriptor).Value;
@@ -8699,9 +9565,8 @@ begin
 
   if AObject is TGocciaObjectValue then
   begin
-    TGocciaObjectValue(AObject).DefineProperty(
-      AKey, TGocciaPropertyDescriptorData.Create(
-        AValue, [pfWritable, pfConfigurable]));
+    DefineRawObjectPrivateProperty(TGocciaObjectValue(AObject), AKey,
+      AValue, [pfWritable, pfConfigurable]);
     Exit;
   end;
 
@@ -8973,6 +9838,58 @@ begin
   Result := not ATemplate.IsArrow;
 end;
 
+function DirectEvalParameterPreambleVarRejectNames(
+  const ATemplate: TGocciaFunctionTemplate; const AEnvironmentIndex: Integer;
+  const APC: UInt32): TGocciaEvalRejectNameArray;
+var
+  Env: TGocciaDirectEvalEnvironment;
+  Binding: TGocciaDirectEvalBindingInfo;
+  Names: TGocciaEvalRejectNameArray;
+  I, Len: Integer;
+  function IsVisibleParameterBindingName(const AName: string): Boolean;
+  begin
+    Result := (AName <> '') and
+      (AName <> KEYWORD_THIS) and
+      (AName <> '__receiver') and
+      (AName <> '__super__') and
+      (Copy(AName, 1, 1) <> '#') and
+      (Copy(AName, 1, 7) <> '__param') and
+      (Copy(AName, 1, 8) <> '`#param`') and
+      (Copy(AName, 1, 19) <> '__accessor_computed');
+  end;
+  function NameSeen(const AName: string): Boolean;
+  var
+    J: Integer;
+  begin
+    for J := 0 to High(Names) do
+      if Names[J] = AName then
+        Exit(True);
+    Result := False;
+  end;
+  procedure AddName(const AName: string);
+  begin
+    if (not IsVisibleParameterBindingName(AName)) or NameSeen(AName) then
+      Exit;
+    Len := Length(Names);
+    SetLength(Names, Len + 1);
+    Names[Len] := AName;
+  end;
+begin
+  Names := nil;
+  if (not Assigned(ATemplate)) or (AEnvironmentIndex < 0) or
+     (APC >= ATemplate.ParameterPreambleSize) then
+    Exit(nil);
+
+  Env := ATemplate.GetDirectEvalEnvironment(AEnvironmentIndex);
+  for I := 0 to High(Env.Bindings) do
+  begin
+    Binding := Env.Bindings[I];
+    if (Binding.Kind = debLocal) and not Binding.IsVarEnvironmentBinding then
+      AddName(Binding.Name);
+  end;
+  Result := Names;
+end;
+
 function TGocciaVM.ExecuteDirectEval(const ASourceValue: TGocciaValue;
   const ATemplate: TGocciaFunctionTemplate; const APC: UInt32;
   const ACallerStrict: Boolean): TGocciaValue;
@@ -8982,6 +9899,7 @@ var
   EvalOptions: TGocciaSourcePipelineOptions;
   PipelineResult: TGocciaSourcePipelineResult;
   EnvIndex: Integer;
+  DirectEvalEnv: TGocciaDirectEvalEnvironment;
   StrictEval: Boolean;
   CallerScope, EvalScope: TGocciaVMDirectEvalScope;
   CallerParentScope: TGocciaScope;
@@ -8991,9 +9909,12 @@ var
   ExecutionContext: TGocciaExecutionContextScope;
   SourceName: string;
   CallerClosure: TGocciaBytecodeClosure;
+  DeclaredPrivateNames: TStringList;
   CurrentFunctionValue: TGocciaValue;
   CurrentCtorClass: TGocciaClassValue;
   RejectArgumentsVarDeclaration: Boolean;
+  RejectVarDeclarationNames: TGocciaEvalRejectNameArray;
+  RejectArgumentsReference: Boolean;
   AllowNewTarget: Boolean;
   AllowSuperProperty: Boolean;
   AllowSuperCall: Boolean;
@@ -9011,8 +9932,13 @@ begin
     EvalOptions.SourceType := stScript;
     if ACallerStrict then
       Exclude(EvalOptions.Compatibility, cfNonStrictMode);
-    PipelineResult := TGocciaSourcePipeline.Parse(EvalSource, SourceName,
-      EvalOptions);
+    DeclaredPrivateNames := CollectBytecodeDirectEvalPrivateNames(Self);
+    try
+      PipelineResult := TGocciaSourcePipeline.Parse(EvalSource, SourceName,
+        EvalOptions, DeclaredPrivateNames);
+    finally
+      DeclaredPrivateNames.Free;
+    end;
     try
       if HasDirectEvalTopLevelUsingDeclaration(PipelineResult.ProgramNode) then
         ThrowSyntaxError(
@@ -9022,15 +9948,17 @@ begin
         EnvIndex := -1;
       StrictEval := ACallerStrict or HasUseStrictDirective(PipelineResult.ProgramNode);
       UseGlobalVarEnvironment := TemplateUsesGlobalEvalEnvironment(ATemplate);
+      CallerClosure := DirectEvalLexicalClosure(Self);
       if UseGlobalVarEnvironment then
         CallerParentScope := FGlobalScope
       else
         CallerParentScope := EnsureCurrentDynamicVarScope;
 
       CallerScope := TGocciaVMDirectEvalScope.Create(CallerParentScope, Self,
-        ATemplate, EnvIndex, UseGlobalVarEnvironment);
+        ATemplate, EnvIndex, UseGlobalVarEnvironment, CallerClosure,
+        FCurrentNewTarget);
       CallerScope.ThisValue := DirectEvalLexicalThisValue(Self,
-        UseGlobalVarEnvironment);
+        UseGlobalVarEnvironment, ATemplate, EnvIndex);
 
       if Assigned(TGarbageCollector.Instance) then
         TGarbageCollector.Instance.AddTempRoot(CallerScope);
@@ -9063,7 +9991,6 @@ begin
             EvalContext.StrictTypes := FGlobalScope.EffectiveStrictTypes;
           EvalContext.NonStrictMode := not StrictEval;
 
-          CallerClosure := DirectEvalLexicalClosure(Self);
           if Assigned(CallerClosure) then
             CurrentFunctionValue := CallerClosure.FunctionValue
           else
@@ -9086,11 +10013,22 @@ begin
           try
             RejectArgumentsVarDeclaration :=
               DirectEvalRejectsArgumentsVarDeclaration(ATemplate, APC);
+            RejectVarDeclarationNames :=
+              DirectEvalParameterPreambleVarRejectNames(
+                ATemplate, EnvIndex, APC);
+            RejectArgumentsReference := ATemplate.RejectArgumentsInDirectEval;
+            if EnvIndex >= 0 then
+            begin
+              DirectEvalEnv := ATemplate.GetDirectEvalEnvironment(EnvIndex);
+              RejectArgumentsReference := RejectArgumentsReference or
+                DirectEvalEnv.RejectArgumentsReference;
+            end;
             try
               Result := EvaluateEvalProgram(PipelineResult.ProgramNode,
                 EvalContext, VarScope, ActiveScope, StrictEval,
-                RejectArgumentsVarDeclaration, AllowNewTarget,
-                AllowSuperProperty, AllowSuperCall);
+                RejectArgumentsVarDeclaration, RejectVarDeclarationNames,
+                AllowNewTarget,
+                AllowSuperProperty, AllowSuperCall, RejectArgumentsReference);
             finally
               CallerScope.CopyBackVariableBindings;
               if not UseGlobalVarEnvironment then
@@ -9450,6 +10388,7 @@ var
   Desc: TGocciaUpvalueDescriptor;
   Handler: TGocciaBytecodeHandlerEntry;
   DoneValue: TGocciaValue;
+  IteratorElementValue: TGocciaValue;
   IterResult: TGocciaValue;
   NextMethod: TGocciaValue;
   DoneFlag: Boolean;
@@ -9457,6 +10396,7 @@ var
   Template: TGocciaFunctionTemplate;
   ChildTemplate: TGocciaFunctionTemplate;
   LeftValue, RightValue, TargetValue, PropKeyValue, EvalSourceValue: TGocciaValue;
+  PrivateDescriptor: TGocciaPropertyDescriptor;
   FunctionConstructorValue, ObjectConstructorValue: TGocciaValue;
   CustomMatcherValue, MatchResultValue: TGocciaValue;
   MatchHintObject: TGocciaObjectValue;
@@ -9670,6 +10610,15 @@ begin
       begin
         if Assigned(FCurrentClosure) then
         begin
+          Desc := Template.GetUpvalueDescriptor(DecodeBx(Instruction));
+          if (Desc.Name <> '') and
+             HasDynamicVarBinding(FCurrentDynamicVarScope, Desc.Name) then
+          begin
+            FRegisters[A] := VMValueToRegisterFast(
+              FCurrentDynamicVarScope.GetValue(Desc.Name));
+            Continue;
+          end;
+
           Upvalue := FCurrentClosure.GetUpvalue(DecodeBx(Instruction));
           if Assigned(Upvalue) and Assigned(Upvalue.Cell) then
           begin
@@ -9704,6 +10653,17 @@ begin
 
       OP_ARG_COUNT:
         FRegisters[A] := RegisterInt(FArgCount);
+
+      OP_LOAD_ARGUMENT:
+        if (B < Length(FCurrentArguments)) then
+          SetRegisterRaw(A, FCurrentArguments[B])
+        else
+          FRegisters[A] := RegisterUndefined;
+
+      OP_CHECK_DERIVED_THIS:
+        if not FCurrentConstructorSuperCalled then
+          ThrowReferenceError(
+            'Must call super constructor before accessing this');
 
       OP_CREATE_ARGUMENTS:
         SetRegister(A, CreateArgumentsObjectFromCurrentFrame);
@@ -9971,7 +10931,10 @@ begin
 
       OP_ARRAY_GET:
       begin
-        if (FRegisters[B].Kind = grkObject) and
+        if FRegisters[B].Kind in [grkUndefined, grkNull] then
+          ThrowTypeError(SErrorCannotConvertNullOrUndefined,
+            SSuggestCheckNullBeforeAccess)
+        else if (FRegisters[B].Kind = grkObject) and
            (FRegisters[B].ObjectValue is TGocciaArrayValue) then
         begin
           if (FRegisters[C].Kind = grkObject) and
@@ -10215,6 +11178,17 @@ begin
         end
         else if (FRegisters[A].Kind = grkObject) and
                 (FRegisters[A].ObjectValue is TGocciaVMClassValue) and
+                (FRegisters[B].Kind = grkNull) then
+        begin
+          TGocciaVMClassValue(FRegisters[A].ObjectValue).SuperClass := nil;
+          TGocciaVMClassValue(FRegisters[A].ObjectValue).NativeSuperConstructor :=
+            TGocciaFunctionBase.GetSharedPrototype;
+          TGocciaVMClassValue(FRegisters[A].ObjectValue).SetConstructorPrototype(
+            TGocciaFunctionBase.GetSharedPrototype);
+          TGocciaVMClassValue(FRegisters[A].ObjectValue).Prototype.Prototype := nil;
+        end
+        else if (FRegisters[A].Kind = grkObject) and
+                (FRegisters[A].ObjectValue is TGocciaVMClassValue) and
                 (FRegisters[B].Kind = grkObject) and
                 (FRegisters[B].ObjectValue is TGocciaObjectValue) and
                 FRegisters[B].ObjectValue.IsConstructable then
@@ -10247,6 +11221,9 @@ begin
         if (FRegisters[A].Kind = grkObject) and
            (FRegisters[A].ObjectValue is TGocciaVMClassValue) then
         begin
+          if IsBytecodePrivateKey(GlobalName) then
+            DeclareBytecodePrivateNameForClass(
+              FRegisters[A].ObjectValue, GlobalName);
           SetBytecodeHomeObject(RegisterToValue(FRegisters[C]),
             FRegisters[A].ObjectValue);
           if GlobalName = PROP_CONSTRUCTOR then
@@ -10273,8 +11250,17 @@ begin
       begin
         if (FRegisters[A].Kind = grkObject) and
            (FRegisters[A].ObjectValue is TGocciaVMClassValue) then
+        begin
+          SetBytecodeHomeObject(RegisterToValue(FRegisters[B]),
+            FRegisters[A].ObjectValue);
+          if RegisterToValue(FRegisters[B]) is TGocciaBytecodeFunctionValue then
+            DeclareBytecodePrivateNamesFromTemplate(
+              FRegisters[A].ObjectValue,
+              TGocciaBytecodeFunctionValue(RegisterToValue(FRegisters[B]))
+                .FClosure.Template);
           TGocciaVMClassValue(FRegisters[A].ObjectValue).SetMethodInitializers(
             [RegisterToValue(FRegisters[B])]);
+        end;
       end;
 
       OP_CLASS_DECLARE_PRIVATE_STATIC_CONST:
@@ -10282,8 +11268,12 @@ begin
         GlobalName := Template.GetConstantUnchecked(B).StringValue;
         if (FRegisters[A].Kind = grkObject) and
            (FRegisters[A].ObjectValue is TGocciaVMClassValue) then
+        begin
+          DeclareBytecodePrivateNameForClass(FRegisters[A].ObjectValue,
+            GlobalName);
           TGocciaVMClassValue(FRegisters[A].ObjectValue).AddPrivateStaticProperty(
             GlobalName, TGocciaUndefinedLiteralValue.UndefinedValue);
+        end;
       end;
 
       // ES2022 §15.7.14: execute static block closure with this = class
@@ -10292,6 +11282,8 @@ begin
         if (FRegisters[B].Kind = grkObject) and
            (FRegisters[B].ObjectValue is TGocciaBytecodeFunctionValue) then
         begin
+          SetBytecodeHomeObject(RegisterToValue(FRegisters[B]),
+            FRegisters[A].ObjectValue);
           PushFrame(B, Frame.IP, Template, PrevCovLine, ProfileEntryTimestamp);
           SetupNewFrame(
             TGocciaBytecodeFunctionValue(FRegisters[B].ObjectValue).FClosure,
@@ -10373,7 +11365,33 @@ begin
            (FRegisters[A].ObjectValue is TGocciaObjectValue) then
         begin
           if FRegisters[A].ObjectValue is TGocciaVMClassValue then
-            SetBytecodeHomeObject(RightValue, RegisterToValue(FRegisters[A]));
+            SetBytecodeHomeObject(RightValue, RegisterToValue(FRegisters[A]),
+              True);
+          if IsBytecodePrivateKey(GlobalName) then
+          begin
+            if (FRegisters[A].ObjectValue is TGocciaInstanceValue) then
+            begin
+              if (not TGocciaInstanceValue(FRegisters[A].ObjectValue)
+                    .TryGetRawPrivateProperty(GlobalName, TargetValue)) and
+                 (not TGocciaInstanceValue(FRegisters[A].ObjectValue)
+                    .Extensible) then
+                ThrowTypeError(
+                  'Cannot add private elements to a non-extensible object',
+                  SSuggestObjectNotExtensible);
+            end
+            else if (FRegisters[A].ObjectValue is TGocciaObjectValue) and
+                    (not TryGetRawObjectPrivateDescriptor(
+                      TGocciaObjectValue(FRegisters[A].ObjectValue),
+                      GlobalName, PrivateDescriptor)) and
+                    (not TGocciaObjectValue(FRegisters[A].ObjectValue)
+                      .Extensible) then
+              ThrowTypeError(
+                'Cannot add private elements to a non-extensible object',
+                SSuggestObjectNotExtensible);
+            SetRawPrivateValue(FRegisters[A].ObjectValue, GlobalName,
+              RightValue);
+            Continue;
+          end;
           TGocciaObjectValue(FRegisters[A].ObjectValue).DefineProperty(
             GlobalName,
             TGocciaPropertyDescriptorData.Create(
@@ -10431,13 +11449,17 @@ begin
           if IsBytecodePrivateKey(GlobalName) and
              (FRegisters[A].ObjectValue is TGocciaVMClassValue) then
           begin
-            SetBytecodeHomeObject(RightValue, RegisterToValue(FRegisters[A]));
+            DeclareBytecodePrivateNameForClass(FRegisters[A].ObjectValue,
+              GlobalName);
+            SetBytecodeHomeObject(RightValue, RegisterToValue(FRegisters[A]),
+              True);
             TGocciaVMClassValue(FRegisters[A].ObjectValue).AddPrivateStaticMethod(
               GlobalName, RightValue);
             Continue;
           end;
           if FRegisters[A].ObjectValue is TGocciaVMClassValue then
-            SetBytecodeHomeObject(RightValue, RegisterToValue(FRegisters[A]));
+            SetBytecodeHomeObject(RightValue, RegisterToValue(FRegisters[A]),
+              True);
           TGocciaObjectValue(FRegisters[A].ObjectValue).DefineProperty(
             GlobalName,
             TGocciaPropertyDescriptorData.Create(
@@ -11931,6 +12953,64 @@ begin
         end;
       end;
 
+      OP_ASYNC_ITER_NEXT:
+      begin
+        if (FRegisters[C].Kind = grkObject) and
+           (FRegisters[C].ObjectValue is TGocciaIteratorValue) then
+        begin
+          IterResult := TGocciaIteratorValue(FRegisters[C].ObjectValue).DirectNext(DoneFlag);
+          SetRegister(A, CreateIteratorResult(IterResult, DoneFlag));
+        end
+        else if (FRegisters[C].Kind = grkObject) and
+                (FRegisters[C].ObjectValue is TGocciaObjectValue) then
+        begin
+          IterResult := FRegisters[C].ObjectValue;
+          NextMethod := IterResult.GetProperty(PROP_NEXT);
+          if not Assigned(NextMethod) or
+             (NextMethod is TGocciaUndefinedLiteralValue) or
+             not NextMethod.IsCallable then
+            ThrowTypeError(SErrorAsyncIteratorNextNotCallable,
+              SSuggestAsyncIteratorProtocol);
+
+          CallArgs := AcquireArguments;
+          try
+            IterResult := TGocciaFunctionBase(NextMethod).Call(CallArgs, IterResult);
+          finally
+            ReleaseArguments(CallArgs);
+          end;
+          SetRegister(A, IterResult);
+        end
+        else
+          SetRegister(A, CreateIteratorResult(
+            TGocciaUndefinedLiteralValue.UndefinedValue, True));
+      end;
+
+      OP_ITER_UNPACK:
+      begin
+        IterResult := GetRegister(C);
+        if IterResult.IsPrimitive then
+          ThrowTypeError(Format(SErrorIteratorResultNotObject,
+            [IterResult.ToStringLiteral.Value]), SSuggestIteratorResultObject);
+
+        DoneValue := IterResult.GetProperty(PROP_DONE);
+        if Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value then
+        begin
+          FRegisters[A] := RegisterUndefined;
+          FRegisters[B] := RegisterBoolean(True);
+        end
+        else
+        begin
+          IteratorElementValue := IterResult.GetProperty(PROP_VALUE);
+          if not Assigned(IteratorElementValue) then
+            IteratorElementValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+          FRegisters[A] := VMValueToRegisterFast(IteratorElementValue);
+          FRegisters[B] := RegisterBoolean(False);
+        end;
+      end;
+
+      OP_SET_FUNCTION_NAME:
+        SetFunctionNameFromKey(GetRegister(A), GetRegister(B), C);
+
       OP_ITER_CLOSE:
         if FRegisters[A].Kind = grkObject then
         begin
@@ -11960,8 +13040,7 @@ begin
             AwaitContinuation.CaptureContinuation(Frame, SavedHandlerCount,
               PrevCovLine, A, Frame.IP);
             AwaitContinuation.FState := bgsSuspendedYield;
-            AwaitPromise := TGocciaPromiseValue.Create;
-            AwaitPromise.Resolve(GetRegister(B));
+            AwaitPromise := PromiseResolveIntrinsic(GetRegister(B));
             AwaitPromise.InvokeThen(
               TGocciaVMAsyncAwaitContinuationValue.Create(Self,
                 AwaitContinuation, FCurrentAsyncPromise, bgrkNext,
@@ -12021,8 +13100,7 @@ begin
       OP_GET_GLOBAL:
       begin
         GlobalName := Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue;
-        if Assigned(FCurrentDynamicVarScope) and
-           FCurrentDynamicVarScope.Contains(GlobalName) then
+        if HasDynamicVarBinding(FCurrentDynamicVarScope, GlobalName) then
           FRegisters[A] := VMValueToRegisterFast(
             FCurrentDynamicVarScope.GetValue(GlobalName))
         else if Assigned(FGlobalScope) and FGlobalScope.Contains(GlobalName) then
@@ -12034,8 +13112,7 @@ begin
       OP_SET_GLOBAL:
       begin
         GlobalName := Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue;
-        if Assigned(FCurrentDynamicVarScope) and
-           FCurrentDynamicVarScope.Contains(GlobalName) then
+        if HasDynamicVarBinding(FCurrentDynamicVarScope, GlobalName) then
           FCurrentDynamicVarScope.AssignBinding(GlobalName,
             RegisterToValue(FRegisters[A]))
         else if Assigned(FGlobalScope) then
@@ -12050,8 +13127,7 @@ begin
       OP_SET_GLOBAL_LOOSE:
       begin
         GlobalName := Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue;
-        if Assigned(FCurrentDynamicVarScope) and
-           FCurrentDynamicVarScope.Contains(GlobalName) then
+        if HasDynamicVarBinding(FCurrentDynamicVarScope, GlobalName) then
           FCurrentDynamicVarScope.AssignBinding(GlobalName,
             RegisterToValue(FRegisters[A]), 0, 0, True)
         else if Assigned(FGlobalScope) then
@@ -12068,8 +13144,7 @@ begin
       OP_HAS_GLOBAL:
       begin
         GlobalName := Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue;
-        if Assigned(FCurrentDynamicVarScope) and
-           FCurrentDynamicVarScope.Contains(GlobalName) then
+        if HasDynamicVarBinding(FCurrentDynamicVarScope, GlobalName) then
           FRegisters[A] := RegisterBoolean(True)
         else if Assigned(FGlobalScope) and FGlobalScope.Contains(GlobalName) then
           FRegisters[A] := RegisterBoolean(True)
@@ -12080,8 +13155,7 @@ begin
       OP_DELETE_GLOBAL:
       begin
         GlobalName := Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue;
-        if Assigned(FCurrentDynamicVarScope) and
-           FCurrentDynamicVarScope.Contains(GlobalName) then
+        if HasDynamicVarBinding(FCurrentDynamicVarScope, GlobalName) then
           FRegisters[A] := RegisterBoolean(
             FCurrentDynamicVarScope.DeleteBinding(GlobalName))
         else if Assigned(FGlobalScope) then
@@ -12307,6 +13381,9 @@ begin
       OP_DEFINE_ACCESSOR_CONST:
       begin
         GlobalName := Template.GetConstantUnchecked(C).StringValue;
+        if IsBytecodePrivateKey(GlobalName) then
+          DeclareBytecodePrivateNameForClass(
+            RegisterToValue(FRegisters[A]), GlobalName);
         if (B and ACCESSOR_FLAG_STATIC) <> 0 then
         begin
           if (B and ACCESSOR_FLAG_SETTER) <> 0 then
@@ -12467,6 +13544,14 @@ begin
             GetRegister(A - 1), GetRegister(C), B <> 0))
         else
           SetRegister(A, TGocciaUndefinedLiteralValue.UndefinedValue);
+
+      OP_SUPER_SET:
+        if A > 0 then
+          SetSuperPropertyValueByKey(GetRegister(A + 1), GetRegister(A - 1),
+            GetRegister(B), GetRegister(C))
+        else
+          ThrowTypeError(SErrorCannotSetPropertyOnNonObject,
+            SSuggestCheckNullBeforeAccess);
 
       OP_RETURN:
       begin

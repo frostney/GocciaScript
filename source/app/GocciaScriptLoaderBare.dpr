@@ -241,8 +241,8 @@ begin
             else
               VarScope := FEngine.Interpreter.GlobalScope;
             Result := EvaluateEvalProgram(PipelineResult.ProgramNode,
-              EvalContext, VarScope, EvalScope, StrictEval, False, False, False,
-              False);
+              EvalContext, VarScope, EvalScope, StrictEval, False, nil, False,
+              False, False);
           finally
             if Assigned(TGarbageCollector.Instance) then
               TGarbageCollector.Instance.RemoveTempRoot(EvalScope);

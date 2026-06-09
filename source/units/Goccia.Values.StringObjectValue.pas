@@ -405,6 +405,9 @@ begin
     Exit(TGocciaStringLiteralValue.Create(
       UTF16CodeUnitAt(StringValue, Index)));
 
+  if AName = PROP_LENGTH then
+    Exit(TGocciaNumberLiteralValue.Create(UTF16CodeUnitLength(StringValue)));
+
   Result := inherited GetPropertyWithContext(AName, AThisContext);
 end;
 

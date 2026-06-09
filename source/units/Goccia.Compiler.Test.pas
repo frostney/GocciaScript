@@ -66,6 +66,7 @@ type
     procedure TestCompileVariable;
     procedure TestCompileFunction;
     procedure TestBinaryRoundTrip;
+    procedure TestBinaryRoundTripUpvalueNames;
     procedure TestBinaryLittleEndian;
     procedure TestBinaryRoundTripConstants;
     procedure TestUndeclaredPrivateNameRaisesSyntaxError;
@@ -108,6 +109,7 @@ begin
   Test('Compile variable', TestCompileVariable);
   Test('Compile function', TestCompileFunction);
   Test('Binary round-trip', TestBinaryRoundTrip);
+  Test('Binary round-trip upvalue names', TestBinaryRoundTripUpvalueNames);
   Test('Binary little-endian format', TestBinaryLittleEndian);
   Test('Binary round-trip constants', TestBinaryRoundTripConstants);
   Test('Undeclared private name raises SyntaxError', TestUndeclaredPrivateNameRaisesSyntaxError);
@@ -429,6 +431,41 @@ begin
       Expect<Integer>(Loaded.TopLevel.CodeCount).ToBe(Original.TopLevel.CodeCount);
       Expect<Integer>(Loaded.TopLevel.ConstantCount).ToBe(Original.TopLevel.ConstantCount);
       Expect<Integer>(Loaded.TopLevel.FunctionCount).ToBe(Original.TopLevel.FunctionCount);
+    finally
+      Loaded.Free;
+    end;
+  finally
+    Original.Free;
+    DeleteFile(TempFile);
+  end;
+end;
+
+procedure TTestCompiler.TestBinaryRoundTripUpvalueNames;
+var
+  Original, Loaded: TGocciaBytecodeModule;
+  OriginalFunc, LoadedFunc: TGocciaFunctionTemplate;
+  OriginalDesc, LoadedDesc: TGocciaUpvalueDescriptor;
+  TempFile: string;
+begin
+  Original := CompileSource(
+    'let x = 1; const f = () => x; x = 2;',
+    False, False, False, False, False, False);
+  TempFile := GetTempFileName + '.gbc';
+  try
+    OriginalFunc := FindFunctionWithOp(Original.TopLevel, OP_GET_UPVALUE);
+    Expect<Boolean>(Assigned(OriginalFunc)).ToBe(True);
+    Expect<Integer>(OriginalFunc.UpvalueCount).ToBe(1);
+    OriginalDesc := OriginalFunc.GetUpvalueDescriptor(0);
+    Expect<string>(OriginalDesc.Name).ToBe('x');
+
+    SaveModuleToFile(Original, TempFile);
+    Loaded := LoadModuleFromFile(TempFile);
+    try
+      LoadedFunc := FindFunctionWithOp(Loaded.TopLevel, OP_GET_UPVALUE);
+      Expect<Boolean>(Assigned(LoadedFunc)).ToBe(True);
+      Expect<Integer>(LoadedFunc.UpvalueCount).ToBe(1);
+      LoadedDesc := LoadedFunc.GetUpvalueDescriptor(0);
+      Expect<string>(LoadedDesc.Name).ToBe(OriginalDesc.Name);
     finally
       Loaded.Free;
     end;

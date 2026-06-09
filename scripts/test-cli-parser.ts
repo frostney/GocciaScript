@@ -48,26 +48,13 @@ console.log("Error display (bytecode SyntaxError)...");
   if (typeof json.error?.column !== "number") throw new Error(`Bytecode JSON error should include numeric column, got ${json.error?.column}`);
 }
 
-// -- Unsupported optional private field access ----------------------------------
+// -- Malformed optional private field access ------------------------------------
 
-console.log("Unsupported optional private field access...");
+console.log("Malformed optional private field access...");
 {
-  const source = [
-    "class Box {",
-    "  #value = 1;",
-    "  read(obj) {",
-    "    return obj?.#value;",
-    "  }",
-    "}",
-    "",
-  ].join("\n");
-  const res = runLoaderJson(source);
-  if (res.exitCode === 0) throw new Error(`Optional private field access should fail`);
-  if (res.json.ok !== false) throw new Error(`Optional private field access should fail, got: ${JSON.stringify(res.json)}`);
-  if (res.json.error?.type !== "SyntaxError") throw new Error(`Expected SyntaxError for optional private access, got: ${res.json.error?.type}`);
-  if (!String(res.json.error?.message).includes("Optional chaining with private fields is not supported")) {
-    throw new Error(`Expected optional-private error message, got: ${JSON.stringify(res.json.error)}`);
-  }
+  const source = "class Box { #value = 1; read(obj) { return obj?.#; } }\n";
+  assertSyntaxError(source, "optional private access without name");
+  assertSyntaxError(source, "optional private access without name (bytecode)", ["--mode=bytecode"]);
 }
 
 // -- Malformed literal class accessors ------------------------------------------

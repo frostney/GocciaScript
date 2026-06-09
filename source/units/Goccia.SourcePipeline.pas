@@ -110,7 +110,8 @@ type
     class function ActivateOptions(
       const AOptions: TGocciaSourcePipelineOptions): TGocciaSourcePipelineOptionsScope; static;
     class function Parse(const ASource: TStringList; const AFileName: string;
-      const AOptions: TGocciaSourcePipelineOptions): TGocciaSourcePipelineResult; static;
+      const AOptions: TGocciaSourcePipelineOptions;
+      const ADeclaredPrivateNames: TStrings = nil): TGocciaSourcePipelineResult; static;
     class function ParseModuleSource(const ASource: UTF8String;
       const AFileName: string;
       const AOptions: TGocciaSourcePipelineOptions): TGocciaSourcePipelineModuleResult; static;
@@ -367,7 +368,8 @@ end;
 
 class function TGocciaSourcePipeline.Parse(const ASource: TStringList;
   const AFileName: string;
-  const AOptions: TGocciaSourcePipelineOptions): TGocciaSourcePipelineResult;
+  const AOptions: TGocciaSourcePipelineOptions;
+  const ADeclaredPrivateNames: TStrings): TGocciaSourcePipelineResult;
 var
   SourceText, OriginalSourceText: string;
   Lexer: TGocciaLexer;
@@ -410,7 +412,11 @@ begin
         Parser := TGocciaParser.Create(Tokens, AFileName, Lexer.SourceLines);
         ConfigureParser(Parser, AOptions);
         try
-          Result.FProgramNode := Parser.Parse;
+          if Assigned(ADeclaredPrivateNames) then
+            Result.FProgramNode :=
+              Parser.ParseWithPrivateNames(ADeclaredPrivateNames)
+          else
+            Result.FProgramNode := Parser.Parse;
           ParseEnd := GetNanoseconds;
           Result.FParseTimeNanoseconds := ParseEnd - LexEnd;
 

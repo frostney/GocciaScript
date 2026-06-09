@@ -271,6 +271,7 @@ type
     destructor Destroy; override;
     function Parse: TGocciaProgram;
     function ParseUnchecked: TGocciaProgram;
+    function ParseWithPrivateNames(const ADeclaredNames: TStrings): TGocciaProgram;
     function ParseExpressionWithPrivateNames(const ADeclaredNames: TStrings): TGocciaExpression;
     function ParseExpressionUnchecked: TGocciaExpression;
     function Expression: TGocciaExpression;
@@ -578,6 +579,23 @@ begin
         DeclarePrivateName(ADeclaredNames[I]);
 
     Result := Expression;
+    ValidateCurrentPrivateClassContext;
+  finally
+    PopPrivateClassContext;
+  end;
+end;
+
+function TGocciaParser.ParseWithPrivateNames(const ADeclaredNames: TStrings): TGocciaProgram;
+var
+  I: Integer;
+begin
+  PushPrivateClassContext;
+  try
+    if Assigned(ADeclaredNames) then
+      for I := 0 to ADeclaredNames.Count - 1 do
+        DeclarePrivateName(ADeclaredNames[I]);
+
+    Result := Parse;
     ValidateCurrentPrivateClassContext;
   finally
     PopPrivateClassContext;
@@ -1216,7 +1234,8 @@ begin
     if Match(gttStar) then
       Result := TGocciaYieldExpression.Create(Assignment, True, Operator.Line, Operator.Column)
     else if CheckSemicolonOrASI or Check(gttRightBrace) or
-      Check(gttRightParen) or Check(gttRightBracket) or Check(gttComma) then
+      Check(gttRightParen) or Check(gttRightBracket) or Check(gttComma) or
+      Check(gttColon) or Check(gttQuestion) then
       Result := TGocciaYieldExpression.Create(nil, False, Operator.Line, Operator.Column)
     else
       Result := TGocciaYieldExpression.Create(Assignment, False, Operator.Line, Operator.Column);
@@ -1303,15 +1322,13 @@ begin
           // Check if this is a private field access (this.#field)
           if Check(gttHash) then
           begin
-            if IsOptionalChain then
-              raise TGocciaSyntaxError.Create('Optional chaining with private fields is not supported',
-                Peek.Line, Peek.Column, FFileName, FSourceLines);
             Advance; // consume the #
             Token := Consume(gttIdentifier, 'Expected private field name after "#"',
               SSuggestPrivateFieldMustFollow);
             PropertyName := Token.Lexeme;
             RecordPrivateNameReference(PropertyName, Token.Line, Token.Column);
-            Result := TGocciaPrivateMemberExpression.Create(Result, PropertyName, Line, Column);
+            Result := TGocciaPrivateMemberExpression.Create(
+              Result, PropertyName, Line, Column, IsOptionalChain);
           end
           else if Check(gttLeftBracket) and IsOptionalChain then
           begin
@@ -3380,7 +3397,7 @@ end;
 
 function TGocciaParser.ParseSetterExpression: TGocciaSetterExpression;
 var
-  ParamName: string;
+  Params: TGocciaParameterArray;
   Line, Column: Integer;
   SavedActiveLabels, SavedActiveIterationLabels: TStringList;
   SavedDirectLabelStart: Integer;
@@ -3393,13 +3410,15 @@ begin
     raise TGocciaSyntaxError.Create('Setter must have exactly one parameter',
       Peek.Line, Peek.Column, FFileName, FSourceLines,
       SSuggestSetterOneParameter);
-  ParamName := ConsumeIdentifierBinding('Expected parameter name in setter',
-    SSuggestProvideSetterParameterName).Lexeme;
-  if Check(gttColon) then
-  begin
-    Advance;
-    CollectTypeAnnotation([gttRightParen]);
-  end;
+  Params := ParseParameterList;
+  if Length(Params) <> 1 then
+    raise TGocciaSyntaxError.Create('Setter must have exactly one parameter',
+      Previous.Line, Previous.Column, FFileName, FSourceLines,
+      SSuggestSetterOneParameter);
+  if Params[0].IsRest then
+    raise TGocciaSyntaxError.Create('Setter parameter cannot be a rest parameter',
+      Previous.Line, Previous.Column, FFileName, FSourceLines,
+      SSuggestSetterOneParameter);
   Consume(gttRightParen, 'Expected ")" after setter parameter',
     SSuggestCloseParenSetterParameter);
   if Check(gttColon) then
@@ -3413,7 +3432,8 @@ begin
   EnterFunctionLabelScope(SavedActiveLabels, SavedActiveIterationLabels,
     SavedDirectLabelStart);
   try
-    Result := TGocciaSetterExpression.Create(ParamName, BlockStatement, Line, Column);
+    Result := TGocciaSetterExpression.Create(Params, BlockStatement, Line,
+      Column);
   finally
     LeaveFunctionLabelScope(SavedActiveLabels, SavedActiveIterationLabels,
       SavedDirectLabelStart);
@@ -5424,9 +5444,27 @@ begin
     begin
       Line := Previous.Line;
       Column := Previous.Column;
-      PropertyName := Consume(gttIdentifier, 'Expected property name after "."',
-        SSuggestPropertyNameIdentifier).Lexeme;
-      Result := TGocciaMemberExpression.Create(Result, PropertyName, False, Line, Column);
+      if Match(gttHash) then
+      begin
+        PropertyName := Consume(gttIdentifier,
+          'Expected private field name after "#"',
+          SSuggestPrivateFieldMustFollow).Lexeme;
+        RecordPrivateNameReference(PropertyName, Previous.Line, Previous.Column);
+        Result := TGocciaPrivateMemberExpression.Create(
+          Result, PropertyName, Line, Column);
+      end
+      else
+      begin
+        if IsIdentifierNameToken(Peek.TokenType) then
+          PropertyName := Advance.Lexeme
+        else
+          raise TGocciaSyntaxError.Create(
+            'Expected property name after "."',
+            Peek.Line, Peek.Column, FFileName, FSourceLines,
+            SSuggestPropertyNameIdentifier);
+        Result := TGocciaMemberExpression.Create(
+          Result, PropertyName, False, Line, Column);
+      end;
     end
     else
       Break;
@@ -5979,6 +6017,7 @@ end;
 function TGocciaParser.ParseClassBody(const AClassName: string): TGocciaClassDefinition;
 var
   SuperClass: string;
+  SuperClassExpression: TGocciaExpression;
   Methods: TGocciaClassMethodMap;
   StaticMethods: TGocciaClassMethodMap;
   Getters: TGocciaGetterExpressionMap;
@@ -6013,6 +6052,7 @@ var
   IsAccessor: Boolean;
   IsAsync: Boolean;
   IsGenerator: Boolean;
+  PresetMemberName: Boolean;
   MemberStartLine, MemberStartColumn: Integer;
   TypePair: TStringStringMap.TKeyValuePair;
   SavedStrictModeActive: Boolean;
@@ -6020,11 +6060,19 @@ begin
   SetLength(Elements, 0);
   SetLength(FieldOrder, 0);
   ClassGenericParams := CollectGenericParameters;
+  SuperClassExpression := nil;
 
   if Match(gttExtends) then
   begin
-    SuperClass := Consume(gttIdentifier, 'Expected superclass name',
-      SSuggestProvideSuperclassName).Lexeme;
+    SuperClassExpression := Call;
+    if not Assigned(SuperClassExpression) then
+      raise TGocciaSyntaxError.Create('Expected superclass expression',
+        Previous.Line, Previous.Column, FFileName, FSourceLines,
+        SSuggestProvideSuperclassName);
+    if SuperClassExpression is TGocciaIdentifierExpression then
+      SuperClass := TGocciaIdentifierExpression(SuperClassExpression).Name
+    else
+      SuperClass := '';
     CollectGenericParameters;
   end
   else
@@ -6075,6 +6123,7 @@ begin
       MemberStartColumn := Peek.Column;
 
       IsStatic := Match(gttStatic);
+      PresetMemberName := False;
 
       // ES2022 §15.7.14 ClassStaticBlockDefinition: static { ... }
       if IsStatic and Check(gttLeftBrace) then
@@ -6098,6 +6147,16 @@ begin
         Continue;
       end;
 
+      if IsStatic and
+         (Check(gttLeftParen) or Check(gttLess) or Check(gttAssign) or
+          Check(gttSemicolon) or Check(gttColon) or Check(gttQuestion) or
+          (FAutomaticSemicolonInsertion and (Previous.Line < Peek.Line))) then
+      begin
+        IsStatic := False;
+        MemberName := KEYWORD_STATIC;
+        PresetMemberName := True;
+      end;
+
       while Check(gttIdentifier) and not Peek.ContainsEscape and
         ((Peek.Lexeme = KEYWORD_PUBLIC) or (Peek.Lexeme = KEYWORD_PROTECTED) or (Peek.Lexeme = KEYWORD_PRIVATE) or
          (Peek.Lexeme = KEYWORD_READONLY) or (Peek.Lexeme = KEYWORD_OVERRIDE) or (Peek.Lexeme = KEYWORD_ABSTRACT)) do
@@ -6106,7 +6165,12 @@ begin
       if not IsStatic and Check(gttStatic) then
         IsStatic := Match(gttStatic);
 
-      if CheckUnescapedIdentifierKeyword(KEYWORD_ACCESSOR) and not CheckNext(gttLeftParen) and not CheckNext(gttColon) and not CheckNext(gttSemicolon) and not CheckNext(gttAssign) then
+      if CheckUnescapedIdentifierKeyword(KEYWORD_ACCESSOR) and
+         (FCurrent + 1 < FTokens.Count) and
+         (FTokens[FCurrent + 1].Line = Peek.Line) and
+         not CheckNext(gttLeftParen) and not CheckNext(gttColon) and
+         not CheckNext(gttLess) and
+         not CheckNext(gttSemicolon) and not CheckNext(gttAssign) then
       begin
         Advance;
         IsAccessor := True;
@@ -6133,7 +6197,24 @@ begin
       IsComputed := False;
       ComputedKeyExpression := nil;
 
-      if not IsAccessor and CheckUnescapedIdentifierKeyword(KEYWORD_GET) and not CheckNext(gttColon) and not CheckNext(gttLeftParen) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) and not CheckNext(gttSemicolon) and not CheckNext(gttAssign) and not CheckNext(gttQuestion) then
+      if PresetMemberName then
+      begin
+      end
+      else if not IsAccessor and CheckUnescapedIdentifierKeyword(KEYWORD_GET) and
+        CheckNext(gttStar) and (FCurrent + 1 < FTokens.Count) and
+        (FTokens[FCurrent + 1].Line > Peek.Line) then
+      begin
+        MemberName := Advance.Lexeme;
+        PresetMemberName := True;
+      end
+      else if not IsAccessor and CheckUnescapedIdentifierKeyword(KEYWORD_SET) and
+        CheckNext(gttStar) and (FCurrent + 1 < FTokens.Count) and
+        (FTokens[FCurrent + 1].Line > Peek.Line) then
+      begin
+        MemberName := Advance.Lexeme;
+        PresetMemberName := True;
+      end
+      else if not IsAccessor and CheckUnescapedIdentifierKeyword(KEYWORD_GET) and not CheckNext(gttColon) and not CheckNext(gttLeftParen) and not CheckNext(gttLess) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) and not CheckNext(gttSemicolon) and not CheckNext(gttAssign) and not CheckNext(gttQuestion) then
       begin
         Advance;
         IsGetter := True;
@@ -6159,7 +6240,7 @@ begin
             'Expected property name after "get"',
             SSuggestProvideGetterPropertyName);
       end
-      else if not IsAccessor and CheckUnescapedIdentifierKeyword(KEYWORD_SET) and not CheckNext(gttColon) and not CheckNext(gttLeftParen) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) and not CheckNext(gttSemicolon) and not CheckNext(gttAssign) and not CheckNext(gttQuestion) then
+      else if not IsAccessor and CheckUnescapedIdentifierKeyword(KEYWORD_SET) and not CheckNext(gttColon) and not CheckNext(gttLeftParen) and not CheckNext(gttLess) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) and not CheckNext(gttSemicolon) and not CheckNext(gttAssign) and not CheckNext(gttQuestion) then
       begin
         Advance;
         IsSetter := True;
@@ -6281,7 +6362,7 @@ begin
           FieldOrder[High(FieldOrder)].IsComputed := False;
           FieldOrder[High(FieldOrder)].ElementIndex := -1;
           FieldOrder[High(FieldOrder)].ComputedKeyExpression := nil;
-          FieldOrder[High(FieldOrder)].FieldInitializer := nil;
+          FieldOrder[High(FieldOrder)].FieldInitializer := PropertyValue;
         end
         else if IsStatic then
           StaticProperties.Add(MemberName, PropertyValue)
@@ -6294,7 +6375,7 @@ begin
           FieldOrder[High(FieldOrder)].IsComputed := False;
           FieldOrder[High(FieldOrder)].ElementIndex := -1;
           FieldOrder[High(FieldOrder)].ComputedKeyExpression := nil;
-          FieldOrder[High(FieldOrder)].FieldInitializer := nil;
+          FieldOrder[High(FieldOrder)].FieldInitializer := PropertyValue;
           if FieldType <> '' then
             InstancePropertyTypes.Add(MemberName, FieldType);
         end;
@@ -6343,7 +6424,7 @@ begin
           FieldOrder[High(FieldOrder)].IsComputed := False;
           FieldOrder[High(FieldOrder)].ElementIndex := -1;
           FieldOrder[High(FieldOrder)].ComputedKeyExpression := nil;
-          FieldOrder[High(FieldOrder)].FieldInitializer := nil;
+          FieldOrder[High(FieldOrder)].FieldInitializer := PropertyValue;
         end
         else if IsStatic then
           StaticProperties.Add(MemberName, PropertyValue)
@@ -6356,7 +6437,7 @@ begin
           FieldOrder[High(FieldOrder)].IsComputed := False;
           FieldOrder[High(FieldOrder)].ElementIndex := -1;
           FieldOrder[High(FieldOrder)].ComputedKeyExpression := nil;
-          FieldOrder[High(FieldOrder)].FieldInitializer := nil;
+          FieldOrder[High(FieldOrder)].FieldInitializer := PropertyValue;
           if FieldType <> '' then
             InstancePropertyTypes.Add(MemberName, FieldType);
         end;
@@ -6493,7 +6574,7 @@ begin
     PopPrivateClassContext;
   end;
 
-  Result := TGocciaClassDefinition.Create(AClassName, SuperClass, Methods, StaticMethods, Getters, Setters, StaticProperties, InstanceProperties, PrivateInstanceProperties, PrivateMethods, PrivateStaticProperties);
+  Result := TGocciaClassDefinition.Create(AClassName, SuperClass, Methods, StaticMethods, Getters, Setters, StaticProperties, InstanceProperties, PrivateInstanceProperties, PrivateMethods, PrivateStaticProperties, SuperClassExpression);
   Result.GenericParams := ClassGenericParams;
   Result.ImplementsClause := ClassImplementsClause;
   for TypePair in InstancePropertyTypes do

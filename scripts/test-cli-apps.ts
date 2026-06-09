@@ -794,6 +794,124 @@ console.log("Bare Loader: --test262-host eval validates destructuring pattern ea
   }
 }
 
+console.log("Bare Loader: --test262-host eval rejects arguments in class field initializers...");
+{
+  const source = [
+    "let instanceExecuted = false;",
+    "try {",
+    "  class C { x = eval('instanceExecuted = true; arguments;'); }",
+    "  new C();",
+    "  print('instance:none');",
+    "} catch (e) {",
+    "  print('instance:' + e.name);",
+    "}",
+    "print(instanceExecuted);",
+    "",
+    "let privateExecuted = false;",
+    "try {",
+    "  class C { #x = eval('privateExecuted = true; arguments;'); }",
+    "  new C();",
+    "  print('private:none');",
+    "} catch (e) {",
+    "  print('private:' + e.name);",
+    "}",
+    "print(privateExecuted);",
+    "",
+    "let arrowExecuted = false;",
+    "class ArrowField { x = () => eval('arrowExecuted = true; arguments;'); }",
+    "try {",
+    "  new ArrowField().x();",
+    "  print('arrow:none');",
+    "} catch (e) {",
+    "  print('arrow:' + e.name);",
+    "}",
+    "print(arrowExecuted);",
+    "",
+    "let staticExecuted = false;",
+    "try {",
+    "  class StaticField { static x = eval('staticExecuted = true; arguments;'); }",
+    "  print('static:none');",
+    "} catch (e) {",
+    "  print('static:' + e.name);",
+    "}",
+    "print(staticExecuted);",
+    "",
+    "let staticArrowExecuted = false;",
+    "class StaticArrowField { static x = () => eval('staticArrowExecuted = true; arguments;'); }",
+    "try {",
+    "  StaticArrowField.x();",
+    "  print('static-arrow:none');",
+    "} catch (e) {",
+    "  print('static-arrow:' + e.name);",
+    "}",
+    "print(staticArrowExecuted);",
+    "",
+  ].join("\n");
+  const expected = [
+    "instance:SyntaxError",
+    "false",
+    "private:SyntaxError",
+    "false",
+    "arrow:SyntaxError",
+    "false",
+    "static:SyntaxError",
+    "false",
+    "static-arrow:SyntaxError",
+    "false",
+  ].join("\n");
+  for (const mode of [
+    { label: "interpreted", args: [BARE, "--test262-host"] },
+    { label: "bytecode", args: [BARE, "--test262-host", "--mode=bytecode"] },
+  ]) {
+    const proc = Bun.spawnSync(mode.args, {
+      stdin: new TextEncoder().encode(source),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode !== 0)
+      throw new Error(`Bare ${mode.label} eval class-field arguments probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+      throw new Error(`Bare ${mode.label} eval class-field arguments got: ${proc.stdout.toString()}`);
+  }
+}
+
+console.log("Bare Loader: --test262-host eval rejects arguments in generator method defaults...");
+{
+  const source = [
+    "const cases = [",
+    "  { label: 'generator', run: () => ({ *method(value = eval('var value = 42')) { yield value; } }).method() },",
+    "  { label: 'async-generator', run: () => ({ async *method(value = eval('var value = 42')) { yield value; } }).method() }",
+    "];",
+    "for (const item of cases) {",
+    "  try {",
+    "    item.run();",
+    "    print(item.label + ':none');",
+    "  } catch (e) {",
+    "    print(item.label + ':' + e.name);",
+    "  }",
+    "}",
+    "",
+  ].join("\n");
+  const expected = [
+    "generator:SyntaxError",
+    "async-generator:SyntaxError",
+  ].join("\n");
+  for (const mode of [
+    { label: "interpreted", args: [BARE, "--test262-host", "--compat-var", "--compat-non-strict-mode"] },
+    { label: "bytecode", args: [BARE, "--test262-host", "--mode=bytecode", "--compat-var", "--compat-non-strict-mode"] },
+  ]) {
+    const proc = Bun.spawnSync(mode.args, {
+      stdin: new TextEncoder().encode(source),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode !== 0)
+      throw new Error(`Bare ${mode.label} eval generator-method arguments probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+      throw new Error(`Bare ${mode.label} eval generator-method arguments got: ${proc.stdout.toString()}`);
+  }
+}
+
 console.log("Bare Loader: --test262-host eval super permissions stop at ordinary function boundary...");
 {
   const source = [

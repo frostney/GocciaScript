@@ -35,6 +35,7 @@ type
   end;
 
   TGocciaCompilerUpvalue = record
+    Name: string;
     Index: UInt8;
     IsLocal: Boolean;
     IsConst: Boolean;
@@ -78,7 +79,7 @@ type
     function DeclareVarLocal(const AName: string): UInt8;
     function ResolveLocal(const AName: string): Integer;
     function ResolveUpvalue(const AName: string): Integer;
-    function AddUpvalue(const AIndex: UInt8;
+    function AddUpvalue(const AName: string; const AIndex: UInt8;
       const AIsLocal: Boolean; const AIsConst: Boolean = False;
       const AIsVar: Boolean = False): Integer;
 
@@ -324,7 +325,7 @@ begin
   if LocalIdx >= 0 then
   begin
     FParent.MarkCaptured(LocalIdx);
-    Idx := AddUpvalue(FParent.FLocals[LocalIdx].Slot, True,
+    Idx := AddUpvalue(AName, FParent.FLocals[LocalIdx].Slot, True,
       FParent.FLocals[LocalIdx].IsConst, FParent.FLocals[LocalIdx].IsVar);
     FUpvalues[Idx].IsGlobalBacked := FParent.FLocals[LocalIdx].IsGlobalBacked;
     FUpvalues[Idx].TypeHint := FParent.FLocals[LocalIdx].TypeHint;
@@ -342,7 +343,7 @@ begin
   begin
     if UpvalueIdx > High(UInt8) then
       raise Exception.Create('Compiler error: upvalue index overflow (>255)');
-    Idx := AddUpvalue(UInt8(UpvalueIdx), False,
+    Idx := AddUpvalue(AName, UInt8(UpvalueIdx), False,
       FParent.FUpvalues[UpvalueIdx].IsConst,
       FParent.FUpvalues[UpvalueIdx].IsVar);
     FUpvalues[Idx].IsGlobalBacked := FParent.FUpvalues[UpvalueIdx].IsGlobalBacked;
@@ -356,7 +357,7 @@ begin
   Result := -1;
 end;
 
-function TGocciaCompilerScope.AddUpvalue(const AIndex: UInt8;
+function TGocciaCompilerScope.AddUpvalue(const AName: string; const AIndex: UInt8;
   const AIsLocal: Boolean; const AIsConst: Boolean;
   const AIsVar: Boolean): Integer;
 var
@@ -370,6 +371,7 @@ begin
     raise Exception.Create('Compiler error: upvalue count overflow (>255)');
   if FUpvalueCount >= Length(FUpvalues) then
     SetLength(FUpvalues, FUpvalueCount * 2 + 4);
+  FUpvalues[FUpvalueCount].Name := AName;
   FUpvalues[FUpvalueCount].Index := AIndex;
   FUpvalues[FUpvalueCount].IsLocal := AIsLocal;
   FUpvalues[FUpvalueCount].IsConst := AIsConst;

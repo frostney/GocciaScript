@@ -186,6 +186,7 @@ begin
     Descriptor := AProto.GetUpvalueDescriptor(I);
     WriteBoolean(Descriptor.IsLocal);
     WriteUInt8(Descriptor.Index);
+    WriteString(Descriptor.Name);
   end;
 
   WriteUInt16(UInt16(AProto.DirectEvalEnvironmentCount));
@@ -193,6 +194,7 @@ begin
   begin
     EvalEnv := AProto.GetDirectEvalEnvironment(I);
     WriteUInt32(EvalEnv.PC);
+    WriteBoolean(EvalEnv.RejectArgumentsReference);
     WriteUInt16(UInt16(Length(EvalEnv.Bindings)));
     for J := 0 to High(EvalEnv.Bindings) do
     begin
@@ -256,6 +258,7 @@ begin
     WriteUInt16(High(UInt16))
   else
     WriteUInt16(UInt16(AProto.DirectEvalSyntheticArgumentsSlot));
+  WriteBoolean(AProto.RejectArgumentsInDirectEval);
 end;
 
 procedure TGocciaBytecodeWriter.WriteModule(
@@ -361,8 +364,12 @@ var
   I, J: Integer;
   ConstKind: UInt8;
   EvalPC: UInt32;
+  EvalRejectArgumentsReference: Boolean;
   EvalBindings: TGocciaDirectEvalBindingArray;
   EvalBinding: TGocciaDirectEvalBindingInfo;
+  UpvalueIsLocal: Boolean;
+  UpvalueIndex: UInt8;
+  UpvalueName: string;
   HasDebug: Boolean;
   DebugInfo: TGocciaDebugInfo;
   SourceFile, RegExpPattern, RegExpFlags: string;
@@ -429,12 +436,18 @@ begin
   end;
 
   for I := 0 to UpvalueCount - 1 do
-    Result.AddUpvalueDescriptor(ReadBoolean, ReadUInt8);
+  begin
+    UpvalueIsLocal := ReadBoolean;
+    UpvalueIndex := ReadUInt8;
+    UpvalueName := ReadString;
+    Result.AddUpvalueDescriptor(UpvalueIsLocal, UpvalueIndex, UpvalueName);
+  end;
 
   EvalEnvCount := ReadUInt16;
   for I := 0 to EvalEnvCount - 1 do
   begin
     EvalPC := ReadUInt32;
+    EvalRejectArgumentsReference := ReadBoolean;
     EvalBindingCount := ReadUInt16;
     SetLength(EvalBindings, EvalBindingCount);
     for J := 0 to EvalBindingCount - 1 do
@@ -447,7 +460,8 @@ begin
       EvalBinding.IsEvalSyntheticArguments := ReadBoolean;
       EvalBindings[J] := EvalBinding;
     end;
-    Result.AddDirectEvalEnvironment(EvalPC, EvalBindings);
+    Result.AddDirectEvalEnvironment(EvalPC, EvalRejectArgumentsReference,
+      EvalBindings);
   end;
 
   HandlerCount := ReadUInt16;
@@ -491,6 +505,7 @@ begin
     Result.DirectEvalSyntheticArgumentsSlot := -1
   else
     Result.DirectEvalSyntheticArgumentsSlot := I;
+  Result.RejectArgumentsInDirectEval := ReadBoolean;
 end;
 
 function TGocciaBytecodeReader.ReadModule: TGocciaBytecodeModule;

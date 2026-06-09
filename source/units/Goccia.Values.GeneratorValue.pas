@@ -94,6 +94,7 @@ uses
   SysUtils,
 
   Goccia.AST.BindingPatterns,
+  Goccia.AST.Expressions,
   Goccia.AST.Statements,
   Goccia.Bytecode.Chunk,
   Goccia.Constants,
@@ -622,6 +623,25 @@ var
   Context: TGocciaEvaluationContext;
   ParamTypeHint: TGocciaLocalType;
   CompatibilityNonStrictMode: Boolean;
+  EvalRejectNames, SavedEvalRejectNames: TGocciaEvalRejectNameArray;
+  function EvaluateParameterDefault(
+    const AExpression: TGocciaExpression): TGocciaValue;
+  var
+    SavedRejectArgumentsVarDeclaration: Boolean;
+  begin
+    SavedRejectArgumentsVarDeclaration :=
+      Context.RejectArgumentsVarDeclarationInEval;
+    SavedEvalRejectNames := Context.RejectVarDeclarationNamesInEval;
+    Context.RejectArgumentsVarDeclarationInEval := CreatesArgumentsObject;
+    Context.RejectVarDeclarationNamesInEval := EvalRejectNames;
+    try
+      Result := EvaluateExpression(AExpression, Context);
+    finally
+      Context.RejectArgumentsVarDeclarationInEval :=
+        SavedRejectArgumentsVarDeclaration;
+      Context.RejectVarDeclarationNamesInEval := SavedEvalRejectNames;
+    end;
+  end;
 begin
   CallScope := CreateCallScope;
   BindThis(CallScope, AThisValue);
@@ -641,6 +661,9 @@ begin
   CompatibilityNonStrictMode := FClosure.EffectiveNonStrictMode;
   Context.NonStrictMode := CompatibilityNonStrictMode and not FStrictCode;
   Context.DisposalTracker := nil;
+  EvalRejectNames := BuildParameterEvalVarDeclarationRejectNames(
+    CompatibilityNonStrictMode and CreatesArgumentsObject and
+    not ParameterListBindsName(FParameters, IDENTIFIER_ARGUMENTS));
 
   if CompatibilityNonStrictMode and CreatesArgumentsObject and
      not ParameterListBindsName(FParameters, IDENTIFIER_ARGUMENTS) and
@@ -679,7 +702,7 @@ begin
         Value := TGocciaUndefinedLiteralValue.UndefinedValue;
       if Assigned(FParameters[I].DefaultValue) and
          (Value is TGocciaUndefinedLiteralValue) then
-        Value := EvaluateExpression(FParameters[I].DefaultValue, Context);
+        Value := EvaluateParameterDefault(FParameters[I].DefaultValue);
 
       // Mirrors TGocciaFunctionValue.ExecuteBody's IsPattern branch:
       // enforce on the raw pre-destructured value (defaults and
@@ -705,7 +728,7 @@ begin
         Value := TGocciaUndefinedLiteralValue.UndefinedValue;
       if Assigned(FParameters[I].DefaultValue) and
          (Value is TGocciaUndefinedLiteralValue) then
-        Value := EvaluateExpression(FParameters[I].DefaultValue, Context);
+        Value := EvaluateParameterDefault(FParameters[I].DefaultValue);
       CallScope.DefineLexicalBinding(FParameters[I].Name, Value, dtParameter);
     end;
   end;
@@ -790,6 +813,25 @@ var
   Context: TGocciaEvaluationContext;
   ParamTypeHint: TGocciaLocalType;
   CompatibilityNonStrictMode: Boolean;
+  EvalRejectNames, SavedEvalRejectNames: TGocciaEvalRejectNameArray;
+  function EvaluateParameterDefault(
+    const AExpression: TGocciaExpression): TGocciaValue;
+  var
+    SavedRejectArgumentsVarDeclaration: Boolean;
+  begin
+    SavedRejectArgumentsVarDeclaration :=
+      Context.RejectArgumentsVarDeclarationInEval;
+    SavedEvalRejectNames := Context.RejectVarDeclarationNamesInEval;
+    Context.RejectArgumentsVarDeclarationInEval := CreatesArgumentsObject;
+    Context.RejectVarDeclarationNamesInEval := EvalRejectNames;
+    try
+      Result := EvaluateExpression(AExpression, Context);
+    finally
+      Context.RejectArgumentsVarDeclarationInEval :=
+        SavedRejectArgumentsVarDeclaration;
+      Context.RejectVarDeclarationNamesInEval := SavedEvalRejectNames;
+    end;
+  end;
 begin
   CallScope := CreateCallScope;
   BindThis(CallScope, AThisValue);
@@ -807,6 +849,9 @@ begin
   CompatibilityNonStrictMode := FClosure.EffectiveNonStrictMode;
   Context.NonStrictMode := CompatibilityNonStrictMode and not FStrictCode;
   Context.DisposalTracker := nil;
+  EvalRejectNames := BuildParameterEvalVarDeclarationRejectNames(
+    CompatibilityNonStrictMode and CreatesArgumentsObject and
+    not ParameterListBindsName(FParameters, IDENTIFIER_ARGUMENTS));
 
   if CompatibilityNonStrictMode and CreatesArgumentsObject and
      not ParameterListBindsName(FParameters, IDENTIFIER_ARGUMENTS) and
@@ -843,7 +888,7 @@ begin
         Value := TGocciaUndefinedLiteralValue.UndefinedValue;
       if Assigned(FParameters[I].DefaultValue) and
          (Value is TGocciaUndefinedLiteralValue) then
-        Value := EvaluateExpression(FParameters[I].DefaultValue, Context);
+        Value := EvaluateParameterDefault(FParameters[I].DefaultValue);
 
       // Mirrors TGocciaFunctionValue.ExecuteBody's IsPattern branch.
       if Context.StrictTypes
@@ -866,7 +911,7 @@ begin
         Value := TGocciaUndefinedLiteralValue.UndefinedValue;
       if Assigned(FParameters[I].DefaultValue) and
          (Value is TGocciaUndefinedLiteralValue) then
-        Value := EvaluateExpression(FParameters[I].DefaultValue, Context);
+        Value := EvaluateParameterDefault(FParameters[I].DefaultValue);
       CallScope.DefineLexicalBinding(FParameters[I].Name, Value, dtParameter);
     end;
   end;

@@ -16,6 +16,12 @@ describe.runIf(hasGoccia)("Goccia.shims", () => {
     expect(Goccia.shims).toContain("parseInt");
     expect(Goccia.shims).toContain("parseFloat");
     expect(Goccia.shims).toContain("Date");
+    expect(Goccia.shims).toContain("hasOwnProperty");
+    expect(Goccia.shims).toContain("__proto__");
+    expect(Goccia.shims).toContain("defineGetter");
+    expect(Goccia.shims).toContain("defineSetter");
+    expect(Goccia.shims).toContain("lookupGetter");
+    expect(Goccia.shims).toContain("lookupSetter");
   });
 
   test("shims is read-only", () => {

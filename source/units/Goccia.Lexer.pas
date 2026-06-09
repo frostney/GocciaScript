@@ -108,6 +108,10 @@ const
   UTF8_LINE_SEPARATOR_FINAL_BYTE = #$A8;
   UTF8_PARAGRAPH_SEPARATOR_FINAL_BYTE = #$A9;
   UTF8_LINE_TERMINATOR_BYTE_LENGTH = 3;
+  UTF8_NO_BREAK_SPACE_LEAD_BYTE = #$C2;
+  UTF8_NO_BREAK_SPACE_FINAL_BYTE = #$A0;
+  NO_BREAK_SPACE_CODE_POINT = $00A0;
+  ZERO_WIDTH_NO_BREAK_SPACE_CODE_POINT = $FEFF;
 
 type
   TKeywordTokenEntry = record
@@ -446,8 +450,18 @@ begin
   while not IsAtEnd do
   begin
     case Peek of
-      ' ', #9:
+      ' ', #9, #11, #12:
         Advance;
+      // ES2026 §12.2 White Space — NBSP (U+00A0)
+      UTF8_NO_BREAK_SPACE_LEAD_BYTE:
+        if (FCurrent < Length(FSource)) and
+           (FSource[FCurrent + 1] = UTF8_NO_BREAK_SPACE_FINAL_BYTE) then
+        begin
+          Inc(FCurrent, 2);
+          Inc(FColumn, 2);
+        end
+        else
+          Break;
       // ES2026 §12.3 LineTerminator — CR and CRLF
       #13, #10:
         ConsumeLineTerminator;
@@ -1412,6 +1426,10 @@ end;
 function TGocciaLexer.IsSourceIdentifierStartCodePoint(
   ACodePoint: Cardinal): Boolean;
 begin
+  if (ACodePoint = NO_BREAK_SPACE_CODE_POINT) or
+     (ACodePoint = ZERO_WIDTH_NO_BREAK_SPACE_CODE_POINT) then
+    Exit(False);
+
   // GocciaScript intentionally keeps its historical non-ASCII identifier
   // extension, including emoji identifiers, while using the standard helper
   // for ordinary Unicode identifier code points.
@@ -1421,6 +1439,10 @@ end;
 function TGocciaLexer.IsSourceIdentifierPartCodePoint(
   ACodePoint: Cardinal): Boolean;
 begin
+  if (ACodePoint = NO_BREAK_SPACE_CODE_POINT) or
+     (ACodePoint = ZERO_WIDTH_NO_BREAK_SPACE_CODE_POINT) then
+    Exit(False);
+
   Result := IsIdentifierPartCodePoint(ACodePoint) or (ACodePoint > $7F);
 end;
 

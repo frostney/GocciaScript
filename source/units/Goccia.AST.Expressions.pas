@@ -535,12 +535,15 @@ type
   TGocciaSetterExpression = class(TGocciaExpression)
   private
     FParameter: string;
+    FParameters: TGocciaParameterArray;
     FBody: TGocciaASTNode;
     FSourceText: string;
   public
-    constructor Create(const AParameter: string; const ABody: TGocciaASTNode; const ALine, AColumn: Integer);
+    constructor Create(const AParameter: string; const ABody: TGocciaASTNode; const ALine, AColumn: Integer); overload;
+    constructor Create(const AParameters: TGocciaParameterArray; const ABody: TGocciaASTNode; const ALine, AColumn: Integer); overload;
     function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Parameter: string read FParameter;
+    property Parameters: TGocciaParameterArray read FParameters;
     property Body: TGocciaASTNode read FBody;
     property SourceText: string read FSourceText write FSourceText;
   end;
@@ -834,11 +837,13 @@ type
   private
     FObject: TGocciaExpression;
     FPrivateName: string;
+    FOptional: Boolean;
   public
-    constructor Create(const AObject: TGocciaExpression; const APrivateName: string; const ALine, AColumn: Integer);
+    constructor Create(const AObject: TGocciaExpression; const APrivateName: string; const ALine, AColumn: Integer; const AOptional: Boolean = False);
     function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property ObjectExpr: TGocciaExpression read FObject;
     property PrivateName: string read FPrivateName;
+    property Optional: Boolean read FOptional;
   end;
 
   TGocciaPrivatePropertyAssignmentExpression = class(TGocciaExpression)
@@ -1365,11 +1370,12 @@ end;
 
 { TGocciaPrivateMemberExpression }
 
-constructor TGocciaPrivateMemberExpression.Create(const AObject: TGocciaExpression; const APrivateName: string; const ALine, AColumn: Integer);
+constructor TGocciaPrivateMemberExpression.Create(const AObject: TGocciaExpression; const APrivateName: string; const ALine, AColumn: Integer; const AOptional: Boolean = False);
 begin
   inherited Create(ALine, AColumn);
   FObject := AObject;
   FPrivateName := APrivateName;
+  FOptional := AOptional;
 end;
 
 { TGocciaPrivatePropertyAssignmentExpression }
@@ -1422,6 +1428,25 @@ constructor TGocciaSetterExpression.Create(const AParameter: string; const ABody
 begin
   inherited Create(ALine, AColumn);
   FParameter := AParameter;
+  SetLength(FParameters, 1);
+  FParameters[0].Name := AParameter;
+  FParameters[0].DefaultValue := nil;
+  FParameters[0].IsPattern := False;
+  FParameters[0].Pattern := nil;
+  FParameters[0].IsRest := False;
+  FParameters[0].IsOptional := False;
+  FParameters[0].TypeAnnotation := '';
+  FBody := ABody;
+end;
+
+constructor TGocciaSetterExpression.Create(const AParameters: TGocciaParameterArray; const ABody: TGocciaASTNode; const ALine, AColumn: Integer);
+begin
+  inherited Create(ALine, AColumn);
+  FParameters := AParameters;
+  if Length(FParameters) > 0 then
+    FParameter := FParameters[0].Name
+  else
+    FParameter := '';
   FBody := ABody;
 end;
 
@@ -1737,6 +1762,14 @@ function TGocciaPropertyAssignmentExpression.Evaluate(const AContext: TGocciaEva
 var
   Obj: TGocciaValue;
 begin
+  if ObjectExpr is TGocciaSuperExpression then
+  begin
+    Result := Value.Evaluate(AContext);
+    AssignSuperProperty(AContext,
+      TGocciaStringLiteralValue.Create(PropertyName), Result);
+    Exit;
+  end;
+
   Obj := ObjectExpr.Evaluate(AContext);
   Result := Value.Evaluate(AContext);
   AssignProperty(Obj, PropertyName, Result, AContext.OnError, Line, Column,
@@ -1748,6 +1781,14 @@ var
   Obj, PropertyValue: TGocciaValue;
   PropName: string;
 begin
+  if ObjectExpr is TGocciaSuperExpression then
+  begin
+    PropertyValue := ToPropertyKey(PropertyExpression.Evaluate(AContext));
+    Result := Value.Evaluate(AContext);
+    AssignSuperProperty(AContext, PropertyValue, Result);
+    Exit;
+  end;
+
   Obj := ObjectExpr.Evaluate(AContext);
   PropertyValue := ToPropertyKey(PropertyExpression.Evaluate(AContext));
   Result := Value.Evaluate(AContext);
@@ -1815,8 +1856,50 @@ end;
 // ES2026 §13.15.2 AssignmentExpression : LeftHandSideExpression AssignmentOperator AssignmentExpression
 function TGocciaPropertyCompoundAssignmentExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
 var
-  Obj, CurrentValue, RhsValue: TGocciaValue;
+  Obj, PropertyKeyValue, CurrentValue, RhsValue: TGocciaValue;
 begin
+  if ObjectExpr is TGocciaSuperExpression then
+  begin
+    PropertyKeyValue := TGocciaStringLiteralValue.Create(PropertyName);
+    CurrentValue := NormalizeAssignmentValue(GetSuperProperty(AContext,
+      PropertyKeyValue));
+    if Operator = gttNullishCoalescingAssign then
+    begin
+      if not IsNullishAssignmentValue(CurrentValue) then
+        Exit(CurrentValue);
+
+      Result := Value.Evaluate(AContext);
+      AssignSuperProperty(AContext, PropertyKeyValue, Result);
+      Exit;
+    end;
+
+    if Operator = gttLogicalAndAssign then
+    begin
+      if not CurrentValue.ToBooleanLiteral.Value then
+        Exit(CurrentValue);
+
+      Result := Value.Evaluate(AContext);
+      AssignSuperProperty(AContext, PropertyKeyValue, Result);
+      Exit;
+    end;
+
+    if Operator = gttLogicalOrAssign then
+    begin
+      if CurrentValue.ToBooleanLiteral.Value then
+        Exit(CurrentValue);
+
+      Result := Value.Evaluate(AContext);
+      AssignSuperProperty(AContext, PropertyKeyValue, Result);
+      Exit;
+    end;
+
+    RhsValue := Value.Evaluate(AContext);
+    Result := Goccia.Arithmetic.CompoundOperations(CurrentValue, RhsValue,
+      Operator);
+    AssignSuperProperty(AContext, PropertyKeyValue, Result);
+    Exit;
+  end;
+
   Obj := ObjectExpr.Evaluate(AContext);
   CurrentValue := NormalizeAssignmentValue(Obj.GetProperty(PropertyName));
   // ES2026 §13.15.2 step 3: ??=
@@ -1915,6 +1998,29 @@ var
   end;
 
 begin
+  if ObjectExpr is TGocciaSuperExpression then
+  begin
+    PropertyKeyValue := ToPropertyKey(PropertyExpression.Evaluate(AContext));
+    CurrentValue := NormalizeAssignmentValue(GetSuperProperty(AContext,
+      PropertyKeyValue));
+
+    if IsShortCircuitOperator then
+    begin
+      if ShortCircuits then
+        Exit(CurrentValue);
+
+      Result := Value.Evaluate(AContext);
+      AssignSuperProperty(AContext, PropertyKeyValue, Result);
+      Exit;
+    end;
+
+    RhsValue := Value.Evaluate(AContext);
+    Result := Goccia.Arithmetic.CompoundOperations(CurrentValue, RhsValue,
+      Operator);
+    AssignSuperProperty(AContext, PropertyKeyValue, Result);
+    Exit;
+  end;
+
   Obj := ObjectExpr.Evaluate(AContext);
   PropertyKeyValue := ToPropertyKey(PropertyExpression.Evaluate(AContext));
   if PropertyKeyValue is TGocciaSymbolValue then
@@ -1986,6 +2092,25 @@ begin
   else if Operand is TGocciaMemberExpression then
   begin
     MemberExpr := TGocciaMemberExpression(Operand);
+    if MemberExpr.ObjectExpr is TGocciaSuperExpression then
+    begin
+      if MemberExpr.Computed then
+        PropertyKeyValue := ToPropertyKey(
+          MemberExpr.PropertyExpression.Evaluate(AContext))
+      else
+        PropertyKeyValue := TGocciaStringLiteralValue.Create(
+          MemberExpr.PropertyName);
+      OldValue := ToNumericValue(NormalizeAssignmentValue(
+        GetSuperProperty(AContext, PropertyKeyValue)));
+      NewValue := PerformIncrement(OldValue, Operator = gttIncrement);
+      AssignSuperProperty(AContext, PropertyKeyValue, NewValue);
+      if IsPrefix then
+        Result := NewValue
+      else
+        Result := OldValue;
+      Exit;
+    end;
+
     Obj := MemberExpr.ObjectExpr.Evaluate(AContext);
     if MemberExpr.Computed then
     begin

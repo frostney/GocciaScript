@@ -5,6 +5,8 @@ unit Goccia.Compiler;
 interface
 
 uses
+  Generics.Collections,
+
   Goccia.AST.Expressions,
   Goccia.AST.Node,
   Goccia.AST.Statements,
@@ -28,12 +30,15 @@ type
     FNonStrictMode: Boolean;
     FLabelReentryStatement: TGocciaStatement;
     FOptimizationOptions: TGocciaCompilerOptimizationOptions;
+    FDerivedConstructorThisGuard: Boolean;
+    FTemplateDerivedConstructorThisGuards: TDictionary<TGocciaFunctionTemplate, Boolean>;
     procedure DoCompileExpression(const AExpr: TGocciaExpression;
       const ADest: UInt8);
     function DoCompileStatement(const AStmt: TGocciaStatement): Boolean;
     procedure DoCompileFunctionBody(const ABody: TGocciaASTNode);
     procedure DoSwapState(const ATemplate: TGocciaFunctionTemplate;
       const AScope: TGocciaCompilerScope);
+    procedure DoSetDerivedConstructorThisGuard(const AGuard: Boolean);
     function BuildContext: TGocciaCompilationContext;
   public
     constructor Create(const ASourcePath: string);
@@ -56,7 +61,6 @@ const
 implementation
 
 uses
-  Generics.Collections,
   SysUtils,
 
   Goccia.Bytecode,
@@ -73,6 +77,9 @@ begin
   inherited Create;
   FSourcePath := ASourcePath;
   FFormalParameterCounts := TFormalParameterCountMap.Create;
+  FTemplateDerivedConstructorThisGuards :=
+    TDictionary<TGocciaFunctionTemplate, Boolean>.Create;
+  FDerivedConstructorThisGuard := False;
   FModule := nil;
   FCurrentTemplate := nil;
   FTopLevelTemplate := nil;
@@ -82,6 +89,7 @@ end;
 
 destructor TGocciaCompiler.Destroy;
 begin
+  FTemplateDerivedConstructorThisGuards.Free;
   FFormalParameterCounts.Free;
   inherited;
 end;
@@ -97,19 +105,37 @@ begin
   Result.StrictTypes := FStrictTypes;
   Result.CompatibilityNonStrictMode := FNonStrictMode;
   Result.NonStrictMode := FNonStrictMode and not FCurrentTemplate.StrictCode;
+  Result.DerivedConstructorThisGuard := FDerivedConstructorThisGuard;
   Result.OptimizationOptions := FOptimizationOptions;
   Result.CompileExpression := DoCompileExpression;
   Result.CompileStatement := DoCompileStatement;
   Result.CompileFunctionBody := DoCompileFunctionBody;
   Result.SwapState := DoSwapState;
+  Result.SetDerivedConstructorThisGuard := DoSetDerivedConstructorThisGuard;
+end;
+
+procedure TGocciaCompiler.DoSetDerivedConstructorThisGuard(
+  const AGuard: Boolean);
+begin
+  FDerivedConstructorThisGuard := AGuard;
+  if Assigned(FCurrentTemplate) then
+    FTemplateDerivedConstructorThisGuards.AddOrSetValue(
+      FCurrentTemplate, AGuard);
 end;
 
 procedure TGocciaCompiler.DoSwapState(
   const ATemplate: TGocciaFunctionTemplate;
   const AScope: TGocciaCompilerScope);
 begin
+  if Assigned(FCurrentTemplate) then
+    FTemplateDerivedConstructorThisGuards.AddOrSetValue(
+      FCurrentTemplate, FDerivedConstructorThisGuard);
   FCurrentTemplate := ATemplate;
   FCurrentScope := AScope;
+  if not Assigned(FCurrentTemplate) or
+     not FTemplateDerivedConstructorThisGuards.TryGetValue(
+       FCurrentTemplate, FDerivedConstructorThisGuard) then
+    FDerivedConstructorThisGuard := False;
 end;
 
 procedure TGocciaCompiler.DoCompileExpression(
@@ -407,7 +433,7 @@ begin
   else if ANode is TGocciaClassDeclaration then
   begin
     if AScope.ResolveLocal(TGocciaClassDeclaration(ANode).ClassDefinition.Name) < 0 then
-      AScope.DeclareLocal(TGocciaClassDeclaration(ANode).ClassDefinition.Name, True);
+      AScope.DeclareLocal(TGocciaClassDeclaration(ANode).ClassDefinition.Name, False);
   end
   else if (ANode is TGocciaExportDefaultDeclaration) and
           (TGocciaExportDefaultDeclaration(ANode).LocalName <> GOCCIA_DEFAULT_EXPORT_BINDING) then

@@ -80,7 +80,27 @@ const
   //   v44 -> v45: added bckRegExpLiteral constants so bytecode regexp
   //               literals create fresh RegExp objects from cached compiled
   //               programs instead of calling the global RegExp constructor.
-  GOCCIA_FORMAT_VERSION = 45;
+  //   v45 -> v46: split for-await-of iteration into OP_ASYNC_ITER_NEXT,
+  //               OP_AWAIT, and OP_ITER_UNPACK so IteratorResult promises
+  //               are awaited before done/value extraction.
+  //   v46 -> v47: added OP_SET_FUNCTION_NAME so computed class elements can
+  //               derive method/accessor names from runtime property keys.
+  //   v47 -> v48: added OP_LOAD_ARGUMENT so default-parameter preambles can
+  //               restore actual argument values while enforcing TDZ for
+  //               later parameters during earlier default initializers, and
+  //               OP_CHECK_DERIVED_THIS for derived constructor `this` TDZ.
+  //   v48 -> v49: serialized the class-field-initializer direct-eval
+  //               `arguments` rejection flag on function templates.
+  //   v49 -> v50: serialized upvalue descriptor names for bytecode
+  //               direct-eval dynamic-scope lookups.
+  //   v50 -> v51: added OP_SUPER_SET so super property writes use the
+  //               super base with the actual receiver instead of ordinary
+  //               assignment to this.
+  //   v51 -> v52: serialized class-field direct-eval `arguments`
+  //               rejection at each direct-eval call site, so static
+  //               field initializers compiled into enclosing templates do
+  //               not affect unrelated eval calls.
+  GOCCIA_FORMAT_VERSION = 52;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
@@ -88,6 +108,9 @@ const
   GOCCIA_NULLISH_MATCH_ANY = 255;
   ACCESSOR_FLAG_SETTER = 1;
   ACCESSOR_FLAG_STATIC = 2;
+  FUNCTION_NAME_PREFIX_NONE = 0;
+  FUNCTION_NAME_PREFIX_GET  = 1;
+  FUNCTION_NAME_PREFIX_SET  = 2;
   COLLECTION_OP_SPREAD_OBJECT = 0;
   COLLECTION_OP_OBJECT_REST = 1;
   COLLECTION_OP_SPREAD_ITERABLE_INTO_ARRAY = 2;
@@ -283,7 +306,13 @@ type
     OP_HAS_WITH_BINDING = 184,
     OP_TO_PROPERTY_KEY = 185,
     OP_ENUM_KEYS     = 186,
-    OP_ENUM_ENTRY    = 187
+    OP_ENUM_ENTRY    = 187,
+    OP_ASYNC_ITER_NEXT = 188,
+    OP_ITER_UNPACK   = 189,
+    OP_SET_FUNCTION_NAME = 190,
+    OP_LOAD_ARGUMENT = 191,
+    OP_CHECK_DERIVED_THIS = 192,
+    OP_SUPER_SET     = 193
   );
 
 function EncodeABC(const AOp: TGocciaOpCode; const A, B, C: UInt8): UInt32; inline;

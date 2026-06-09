@@ -16,6 +16,8 @@ const
   PROP_STACK        = 'stack';
   PROP_ERRORS       = 'errors';
   PROP_ERROR        = 'error';
+  PROP_CALLER       = 'caller';
+  PROP_ARGUMENTS    = 'arguments';
   PROP_CALLEE       = 'callee';
   PROP_CONSTRUCTOR  = 'constructor';
   PROP_PROTOTYPE    = 'prototype';
