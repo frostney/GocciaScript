@@ -13,6 +13,7 @@ uses
   Goccia.Arguments.Collection,
   Goccia.AST.Expressions,
   Goccia.AST.Node,
+  Goccia.Evaluator.Context,
   Goccia.Scope,
   Goccia.Values.FunctionBase,
   Goccia.Values.Primitives;
@@ -35,6 +36,8 @@ type
     procedure BindThis(const ACallScope: TGocciaScope; const AThisValue: TGocciaValue); virtual;
     function CreateCallScope: TGocciaScope; virtual;
     function CreatesArgumentsObject: Boolean; virtual;
+    function BuildParameterEvalVarDeclarationRejectNames(
+      const AIncludeArgumentsObject: Boolean): TGocciaEvalRejectNameArray;
     function ExecuteBody(const ACallScope: TGocciaScope; const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const AParameters: TGocciaParameterArray; const ABodyStatements: TObjectList<TGocciaASTNode>; const AClosure: TGocciaScope; const AName: string = '');
@@ -84,6 +87,7 @@ type
 implementation
 
 uses
+  Classes,
   SysUtils,
 
   Goccia.AST.BindingPatterns,
@@ -95,7 +99,6 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.Evaluator,
-  Goccia.Evaluator.Context,
   Goccia.GarbageCollector,
   Goccia.Realm,
   Goccia.Types.Enforcement,
@@ -172,10 +175,43 @@ begin
   Result := True;
 end;
 
+function TGocciaFunctionValue.BuildParameterEvalVarDeclarationRejectNames(
+  const AIncludeArgumentsObject: Boolean): TGocciaEvalRejectNameArray;
+var
+  Names: TStringList;
+  I, J: Integer;
+  procedure AddName(const AName: string);
+  begin
+    if (AName <> '') and (Names.IndexOf(AName) < 0) then
+      Names.Add(AName);
+  end;
+begin
+  Names := TStringList.Create;
+  try
+    Names.CaseSensitive := True;
+    if AIncludeArgumentsObject then
+      AddName(IDENTIFIER_ARGUMENTS);
+    for I := 0 to High(FParameters) do
+    begin
+      if FParameters[I].IsPattern then
+        CollectPatternBindingNames(FParameters[I].Pattern, Names, True)
+      else
+        AddName(FParameters[I].Name);
+    end;
+
+    SetLength(Result, Names.Count);
+    for J := 0 to Names.Count - 1 do
+      Result[J] := Names[J];
+  finally
+    Names.Free;
+  end;
+end;
+
 function TGocciaFunctionValue.ExecuteBody(const ACallScope: TGocciaScope; const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   I, J: Integer;
   CompatibilityNonStrictMode: Boolean;
+  EvalRejectNames, SavedEvalRejectNames: TGocciaEvalRejectNameArray;
   ReturnValue: TGocciaValue;
   CF: TGocciaControlFlow;
   Context: TGocciaEvaluationContext;
@@ -187,12 +223,15 @@ var
   begin
     SavedRejectArgumentsVarDeclaration :=
       Context.RejectArgumentsVarDeclarationInEval;
+    SavedEvalRejectNames := Context.RejectVarDeclarationNamesInEval;
     Context.RejectArgumentsVarDeclarationInEval := CreatesArgumentsObject;
+    Context.RejectVarDeclarationNamesInEval := EvalRejectNames;
     try
       Result := EvaluateExpression(AExpression, Context);
     finally
       Context.RejectArgumentsVarDeclarationInEval :=
         SavedRejectArgumentsVarDeclaration;
+      Context.RejectVarDeclarationNamesInEval := SavedEvalRejectNames;
     end;
   end;
 begin
@@ -215,6 +254,9 @@ begin
   CompatibilityNonStrictMode := FClosure.EffectiveNonStrictMode;
   Context.NonStrictMode := CompatibilityNonStrictMode and not FStrictCode;
   Context.DisposalTracker := nil;
+  EvalRejectNames := BuildParameterEvalVarDeclarationRejectNames(
+    CompatibilityNonStrictMode and CreatesArgumentsObject and
+    not ParameterListBindsName(FParameters, IDENTIFIER_ARGUMENTS));
 
   // Record coverage hit on the declaration line (get/set/constructor/method)
   if Context.CoverageEnabled and (FSourceLine > 0) and (FSourceFilePath <> '') then

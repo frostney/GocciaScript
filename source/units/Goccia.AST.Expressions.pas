@@ -1762,6 +1762,14 @@ function TGocciaPropertyAssignmentExpression.Evaluate(const AContext: TGocciaEva
 var
   Obj: TGocciaValue;
 begin
+  if ObjectExpr is TGocciaSuperExpression then
+  begin
+    Result := Value.Evaluate(AContext);
+    AssignSuperProperty(AContext,
+      TGocciaStringLiteralValue.Create(PropertyName), Result);
+    Exit;
+  end;
+
   Obj := ObjectExpr.Evaluate(AContext);
   Result := Value.Evaluate(AContext);
   AssignProperty(Obj, PropertyName, Result, AContext.OnError, Line, Column,
@@ -1773,6 +1781,14 @@ var
   Obj, PropertyValue: TGocciaValue;
   PropName: string;
 begin
+  if ObjectExpr is TGocciaSuperExpression then
+  begin
+    PropertyValue := ToPropertyKey(PropertyExpression.Evaluate(AContext));
+    Result := Value.Evaluate(AContext);
+    AssignSuperProperty(AContext, PropertyValue, Result);
+    Exit;
+  end;
+
   Obj := ObjectExpr.Evaluate(AContext);
   PropertyValue := ToPropertyKey(PropertyExpression.Evaluate(AContext));
   Result := Value.Evaluate(AContext);
@@ -1840,8 +1856,50 @@ end;
 // ES2026 §13.15.2 AssignmentExpression : LeftHandSideExpression AssignmentOperator AssignmentExpression
 function TGocciaPropertyCompoundAssignmentExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
 var
-  Obj, CurrentValue, RhsValue: TGocciaValue;
+  Obj, PropertyKeyValue, CurrentValue, RhsValue: TGocciaValue;
 begin
+  if ObjectExpr is TGocciaSuperExpression then
+  begin
+    PropertyKeyValue := TGocciaStringLiteralValue.Create(PropertyName);
+    CurrentValue := NormalizeAssignmentValue(GetSuperProperty(AContext,
+      PropertyKeyValue));
+    if Operator = gttNullishCoalescingAssign then
+    begin
+      if not IsNullishAssignmentValue(CurrentValue) then
+        Exit(CurrentValue);
+
+      Result := Value.Evaluate(AContext);
+      AssignSuperProperty(AContext, PropertyKeyValue, Result);
+      Exit;
+    end;
+
+    if Operator = gttLogicalAndAssign then
+    begin
+      if not CurrentValue.ToBooleanLiteral.Value then
+        Exit(CurrentValue);
+
+      Result := Value.Evaluate(AContext);
+      AssignSuperProperty(AContext, PropertyKeyValue, Result);
+      Exit;
+    end;
+
+    if Operator = gttLogicalOrAssign then
+    begin
+      if CurrentValue.ToBooleanLiteral.Value then
+        Exit(CurrentValue);
+
+      Result := Value.Evaluate(AContext);
+      AssignSuperProperty(AContext, PropertyKeyValue, Result);
+      Exit;
+    end;
+
+    RhsValue := Value.Evaluate(AContext);
+    Result := Goccia.Arithmetic.CompoundOperations(CurrentValue, RhsValue,
+      Operator);
+    AssignSuperProperty(AContext, PropertyKeyValue, Result);
+    Exit;
+  end;
+
   Obj := ObjectExpr.Evaluate(AContext);
   CurrentValue := NormalizeAssignmentValue(Obj.GetProperty(PropertyName));
   // ES2026 §13.15.2 step 3: ??=
@@ -1940,6 +1998,29 @@ var
   end;
 
 begin
+  if ObjectExpr is TGocciaSuperExpression then
+  begin
+    PropertyKeyValue := ToPropertyKey(PropertyExpression.Evaluate(AContext));
+    CurrentValue := NormalizeAssignmentValue(GetSuperProperty(AContext,
+      PropertyKeyValue));
+
+    if IsShortCircuitOperator then
+    begin
+      if ShortCircuits then
+        Exit(CurrentValue);
+
+      Result := Value.Evaluate(AContext);
+      AssignSuperProperty(AContext, PropertyKeyValue, Result);
+      Exit;
+    end;
+
+    RhsValue := Value.Evaluate(AContext);
+    Result := Goccia.Arithmetic.CompoundOperations(CurrentValue, RhsValue,
+      Operator);
+    AssignSuperProperty(AContext, PropertyKeyValue, Result);
+    Exit;
+  end;
+
   Obj := ObjectExpr.Evaluate(AContext);
   PropertyKeyValue := ToPropertyKey(PropertyExpression.Evaluate(AContext));
   if PropertyKeyValue is TGocciaSymbolValue then

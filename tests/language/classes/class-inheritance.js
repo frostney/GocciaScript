@@ -573,8 +573,8 @@ test("super.constructor member calls are ordinary class calls", () => {
     }
   }
 
-  expect(() => new DotDerived()).toThrow(TypeError);
-  expect(() => new ComputedDerived()).toThrow(TypeError);
+  expect(() => new DotDerived()).toThrow(ReferenceError);
+  expect(() => new ComputedDerived()).toThrow(ReferenceError);
 });
 
 test("static super observes ordinary own properties on intermediate constructors", () => {

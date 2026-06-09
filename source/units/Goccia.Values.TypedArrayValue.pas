@@ -73,6 +73,7 @@ type
     procedure AssignProperty(const AName: string; const AValue: TGocciaValue; const ACanCreate: Boolean = True); override;
     function AssignPropertyWithReceiver(const AName: string; const AValue: TGocciaValue; const AReceiver: TGocciaValue): Boolean; override;
     function GetOwnPropertyDescriptor(const AName: string): TGocciaPropertyDescriptor; override;
+    function HasProperty(const AName: string): Boolean; override;
     function HasOwnProperty(const AName: string): Boolean; override;
     function ToStringTag: string; override;
 
@@ -986,6 +987,18 @@ begin
   end;
 
   Result := inherited GetOwnPropertyDescriptor(AName);
+end;
+
+function TGocciaTypedArrayValue.HasProperty(const AName: string): Boolean;
+var
+  IsNegativeZero: Boolean;
+  Index: Integer;
+  NumericIndex: Double;
+begin
+  if TryCanonicalNumericIndexString(AName, NumericIndex, IsNegativeZero) then
+    Exit(IsValidIntegerIndexedElement(NumericIndex, IsNegativeZero, Index));
+
+  Result := inherited HasProperty(AName);
 end;
 
 function TGocciaTypedArrayValue.HasOwnProperty(const AName: string): Boolean;

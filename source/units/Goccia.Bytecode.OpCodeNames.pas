@@ -181,6 +181,7 @@ begin
     OP_SET_FUNCTION_NAME:              Result := 'OP_SET_FUNCTION_NAME';
     OP_LOAD_ARGUMENT:                  Result := 'OP_LOAD_ARGUMENT';
     OP_CHECK_DERIVED_THIS:             Result := 'OP_CHECK_DERIVED_THIS';
+    OP_SUPER_SET:                      Result := 'OP_SUPER_SET';
     OP_INC:                            Result := 'OP_INC';
     OP_DEC:                            Result := 'OP_DEC';
     OP_TO_NUMERIC:                     Result := 'OP_TO_NUMERIC';

@@ -849,6 +849,9 @@ begin
     begin
       EmitGlobalDefine(ACtx, Slot, Info.Name, AStmt.IsConst, AStmt.IsVar,
         HasInitializer);
+      LocalIdx := FindLocalBySlot(ACtx.Scope, Info.Name, Slot);
+      if LocalIdx >= 0 then
+        ACtx.Scope.MarkGlobalBacked(LocalIdx);
     end;
   end;
 end;
@@ -3413,17 +3416,28 @@ procedure CompileExportDeclaration(const ACtx: TGocciaCompilationContext;
 var
   Pair: TStringStringMap.TKeyValuePair;
   LocalIdx: Integer;
+  Local: TGocciaCompilerLocal;
   Reg: UInt8;
-  NameIdx: UInt16;
+  NameIdx, SourceNameIdx: UInt16;
 begin
   for Pair in AStmt.ExportsTable do
   begin
     LocalIdx := ACtx.Scope.ResolveLocal(Pair.Value);
     if LocalIdx >= 0 then
     begin
-      Reg := ACtx.Scope.GetLocal(LocalIdx).Slot;
+      Local := ACtx.Scope.GetLocal(LocalIdx);
+      if Local.IsGlobalBacked then
+      begin
+        Reg := ACtx.Scope.AllocateRegister;
+        SourceNameIdx := ACtx.Template.AddConstantString(Pair.Value);
+        EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, Reg, SourceNameIdx));
+      end
+      else
+        Reg := Local.Slot;
       NameIdx := ACtx.Template.AddConstantString(Pair.Key);
       EmitInstruction(ACtx, EncodeABx(OP_EXPORT, Reg, NameIdx));
+      if Local.IsGlobalBacked then
+        ACtx.Scope.FreeRegister;
     end;
   end;
 end;
@@ -5202,6 +5216,7 @@ var
   StaticPropPair: TGocciaExpressionMap.TKeyValuePair;
   I, ClassLocalIdx, LocalIdx, UpvalIdx: Integer;
   HasSuper: Boolean;
+  IsTopLevelGlobalBacked: Boolean;
   PrivPrefix: string;
   PrivateNameMark: Integer;
   ComputedFieldKeyLocals: TComputedFieldKeyLocals;
@@ -5214,6 +5229,8 @@ begin
   ClassDef := AStmt.ClassDefinition;
   HasSuper := Assigned(ClassDef.SuperClassExpression) or
     (ClassDef.SuperClass <> '');
+  IsTopLevelGlobalBacked := ACtx.GlobalBackedTopLevel and
+    (ACtx.Scope.Depth = 0);
 
   PrivPrefix := NextClassPrivatePrefix;
   PrivateNameMark := ACtx.Scope.PrivateNameMark;
@@ -5232,6 +5249,8 @@ begin
     LocalIdx := ACtx.Scope.ResolveLocal(ClassDef.Name);
   end;
   ClassLocalIdx := LocalIdx;
+  if IsTopLevelGlobalBacked and (ClassLocalIdx >= 0) then
+    ACtx.Scope.MarkGlobalBacked(ClassLocalIdx);
   NameIdx := ACtx.Template.AddConstantString(ClassDef.Name);
   EmitInstruction(ACtx, EncodeABx(OP_NEW_CLASS, ClassReg, NameIdx));
 
@@ -5450,7 +5469,7 @@ begin
      ACtx.Scope.GetLocal(ClassLocalIdx).IsCaptured then
     EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, ClassReg, UInt16(ClassReg)));
 
-  if ACtx.GlobalBackedTopLevel and (ACtx.Scope.Depth = 0) then
+  if IsTopLevelGlobalBacked then
     EmitGlobalDefine(ACtx, ClassReg, ClassDef.Name, False);
 
   if HasInnerNameBinding then
@@ -5832,6 +5851,7 @@ begin
       begin
         Local := ACtx.Scope.GetLocal(I);
         EmitGlobalDefine(ACtx, Local.Slot, Local.Name, AStmt.IsConst);
+        ACtx.Scope.MarkGlobalBacked(I);
       end;
   end;
 end;

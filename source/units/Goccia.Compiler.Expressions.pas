@@ -373,6 +373,18 @@ begin
   end;
 end;
 
+procedure PrepareSuperPropertyBase(const ACtx: TGocciaCompilationContext;
+  out AThisReg, ABaseReg, ASuperReg: UInt8);
+begin
+  AThisReg := ACtx.Scope.AllocateRegister;
+  CompileThis(ACtx, AThisReg);
+  ABaseReg := ACtx.Scope.AllocateRegister;
+  ASuperReg := ACtx.Scope.AllocateRegister;
+  CompileSuperAccess(ACtx, ASuperReg);
+  if ASuperReg <> ABaseReg + 1 then
+    EmitInstruction(ACtx, EncodeABC(OP_MOVE, ABaseReg + 1, ASuperReg, 0));
+end;
+
 procedure EmitConstAssignmentError(const ACtx: TGocciaCompilationContext);
 var
   MsgIdx: UInt16;
@@ -1615,16 +1627,36 @@ end;
 procedure CompilePropertyAssignment(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaPropertyAssignmentExpression; const ADest: UInt8);
 var
-  ObjReg, ValReg: UInt8;
+  BaseReg, KeyReg, ObjReg, SuperReg, ThisReg, ValReg: UInt8;
   KeyIdx: UInt16;
 begin
+  if AExpr.ObjectExpr is TGocciaSuperExpression then
+  begin
+    PrepareSuperPropertyBase(ACtx, ThisReg, BaseReg, SuperReg);
+    KeyReg := ACtx.Scope.AllocateRegister;
+    ValReg := ACtx.Scope.AllocateRegister;
+    KeyIdx := ACtx.Template.AddConstantString(AExpr.PropertyName);
+    EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, KeyReg, KeyIdx));
+    // PutValue(super reference, RHS): RHS is evaluated before a null super base
+    // throws, so tests observe RHS side effects exactly once.
+    ACtx.CompileExpression(AExpr.Value, ValReg);
+    EmitInstruction(ACtx, EncodeABC(OP_SUPER_SET, BaseReg, KeyReg, ValReg));
+
+    if ADest <> ValReg then
+      EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, ValReg, 0));
+
+    ACtx.Scope.FreeRegister;
+    ACtx.Scope.FreeRegister;
+    ACtx.Scope.FreeRegister;
+    ACtx.Scope.FreeRegister;
+    ACtx.Scope.FreeRegister;
+    Exit;
+  end;
+
   ObjReg := ACtx.Scope.AllocateRegister;
   ValReg := ACtx.Scope.AllocateRegister;
 
-  if AExpr.ObjectExpr is TGocciaSuperExpression then
-    CompileThis(ACtx, ObjReg)
-  else
-    ACtx.CompileExpression(AExpr.ObjectExpr, ObjReg);
+  ACtx.CompileExpression(AExpr.ObjectExpr, ObjReg);
   ACtx.CompileExpression(AExpr.Value, ValReg);
 
   EmitStorePropertyByName(ACtx, ObjReg, AExpr.PropertyName, ValReg);
@@ -3797,16 +3829,34 @@ end;
 procedure CompileComputedPropertyAssignment(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaComputedPropertyAssignmentExpression; const ADest: UInt8);
 var
-  ObjReg, KeyReg, ValReg: UInt8;
+  BaseReg, KeyReg, ObjReg, SuperReg, ThisReg, ValReg: UInt8;
 begin
+  if AExpr.ObjectExpr is TGocciaSuperExpression then
+  begin
+    PrepareSuperPropertyBase(ACtx, ThisReg, BaseReg, SuperReg);
+    KeyReg := ACtx.Scope.AllocateRegister;
+    ValReg := ACtx.Scope.AllocateRegister;
+    ACtx.CompileExpression(AExpr.PropertyExpression, KeyReg);
+    EmitInstruction(ACtx, EncodeABC(OP_TO_PROPERTY_KEY, KeyReg, KeyReg, 0));
+    ACtx.CompileExpression(AExpr.Value, ValReg);
+    EmitInstruction(ACtx, EncodeABC(OP_SUPER_SET, BaseReg, KeyReg, ValReg));
+
+    if ADest <> ValReg then
+      EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, ValReg, 0));
+
+    ACtx.Scope.FreeRegister;
+    ACtx.Scope.FreeRegister;
+    ACtx.Scope.FreeRegister;
+    ACtx.Scope.FreeRegister;
+    ACtx.Scope.FreeRegister;
+    Exit;
+  end;
+
   ObjReg := ACtx.Scope.AllocateRegister;
   KeyReg := ACtx.Scope.AllocateRegister;
   ValReg := ACtx.Scope.AllocateRegister;
 
-  if AExpr.ObjectExpr is TGocciaSuperExpression then
-    CompileThis(ACtx, ObjReg)
-  else
-    ACtx.CompileExpression(AExpr.ObjectExpr, ObjReg);
+  ACtx.CompileExpression(AExpr.ObjectExpr, ObjReg);
   ACtx.CompileExpression(AExpr.PropertyExpression, KeyReg);
   ACtx.CompileExpression(AExpr.Value, ValReg);
 
@@ -4261,11 +4311,55 @@ end;
 procedure CompilePropertyCompoundAssignment(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaPropertyCompoundAssignmentExpression; const ADest: UInt8);
 var
-  ObjReg, CurReg, ValReg: UInt8;
+  BaseReg, CurReg, KeyReg, ObjReg, SuperReg, ThisReg, ValReg: UInt8;
   Op: TGocciaOpCode;
   PropIdx: UInt16;
   JumpIdx: Integer;
 begin
+  if AExpr.ObjectExpr is TGocciaSuperExpression then
+  begin
+    PrepareSuperPropertyBase(ACtx, ThisReg, BaseReg, SuperReg);
+    KeyReg := ACtx.Scope.AllocateRegister;
+    PropIdx := ACtx.Template.AddConstantString(AExpr.PropertyName);
+    EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, KeyReg, PropIdx));
+    EmitInstruction(ACtx, EncodeABC(OP_SUPER_GET, BaseReg, 0, KeyReg));
+
+    if IsShortCircuitAssignment(AExpr.Operator) then
+    begin
+      JumpIdx := EmitJumpInstruction(ACtx,
+        ShortCircuitJumpOp(AExpr.Operator), BaseReg);
+      ACtx.CompileExpression(AExpr.Value, BaseReg);
+      EmitInstruction(ACtx, EncodeABC(OP_SUPER_SET, BaseReg, KeyReg,
+        BaseReg));
+      PatchJumpTarget(ACtx, JumpIdx);
+
+      if ADest <> BaseReg then
+        EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, BaseReg, 0));
+
+      ACtx.Scope.FreeRegister;
+      ACtx.Scope.FreeRegister;
+      ACtx.Scope.FreeRegister;
+      ACtx.Scope.FreeRegister;
+      Exit;
+    end;
+
+    Op := CompoundOpToRuntimeOp(AExpr.Operator);
+    ValReg := ACtx.Scope.AllocateRegister;
+    ACtx.CompileExpression(AExpr.Value, ValReg);
+    EmitInstruction(ACtx, EncodeABC(Op, BaseReg, BaseReg, ValReg));
+    EmitInstruction(ACtx, EncodeABC(OP_SUPER_SET, BaseReg, KeyReg, BaseReg));
+
+    if ADest <> BaseReg then
+      EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, BaseReg, 0));
+
+    ACtx.Scope.FreeRegister;
+    ACtx.Scope.FreeRegister;
+    ACtx.Scope.FreeRegister;
+    ACtx.Scope.FreeRegister;
+    ACtx.Scope.FreeRegister;
+    Exit;
+  end;
+
   // ES2026 §13.15.2 AssignmentExpression : LeftHandSideExpression ??=/&&=/||= AssignmentExpression
   if IsShortCircuitAssignment(AExpr.Operator) then
   begin
@@ -4311,10 +4405,54 @@ procedure CompileComputedPropertyCompoundAssignment(
   const AExpr: TGocciaComputedPropertyCompoundAssignmentExpression;
   const ADest: UInt8);
 var
-  ObjReg, KeyReg, CurReg, ValReg: UInt8;
+  BaseReg, ObjReg, KeyReg, CurReg, SuperReg, ThisReg, ValReg: UInt8;
   Op: TGocciaOpCode;
   JumpIdx: Integer;
 begin
+  if AExpr.ObjectExpr is TGocciaSuperExpression then
+  begin
+    PrepareSuperPropertyBase(ACtx, ThisReg, BaseReg, SuperReg);
+    KeyReg := ACtx.Scope.AllocateRegister;
+    ACtx.CompileExpression(AExpr.PropertyExpression, KeyReg);
+    EmitInstruction(ACtx, EncodeABC(OP_TO_PROPERTY_KEY, KeyReg, KeyReg, 0));
+    EmitInstruction(ACtx, EncodeABC(OP_SUPER_GET, BaseReg, 0, KeyReg));
+
+    if IsShortCircuitAssignment(AExpr.Operator) then
+    begin
+      JumpIdx := EmitJumpInstruction(ACtx,
+        ShortCircuitJumpOp(AExpr.Operator), BaseReg);
+      ACtx.CompileExpression(AExpr.Value, BaseReg);
+      EmitInstruction(ACtx, EncodeABC(OP_SUPER_SET, BaseReg, KeyReg,
+        BaseReg));
+      PatchJumpTarget(ACtx, JumpIdx);
+
+      if ADest <> BaseReg then
+        EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, BaseReg, 0));
+
+      ACtx.Scope.FreeRegister;
+      ACtx.Scope.FreeRegister;
+      ACtx.Scope.FreeRegister;
+      ACtx.Scope.FreeRegister;
+      Exit;
+    end;
+
+    Op := CompoundOpToRuntimeOp(AExpr.Operator);
+    ValReg := ACtx.Scope.AllocateRegister;
+    ACtx.CompileExpression(AExpr.Value, ValReg);
+    EmitInstruction(ACtx, EncodeABC(Op, BaseReg, BaseReg, ValReg));
+    EmitInstruction(ACtx, EncodeABC(OP_SUPER_SET, BaseReg, KeyReg, BaseReg));
+
+    if ADest <> BaseReg then
+      EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, BaseReg, 0));
+
+    ACtx.Scope.FreeRegister;
+    ACtx.Scope.FreeRegister;
+    ACtx.Scope.FreeRegister;
+    ACtx.Scope.FreeRegister;
+    ACtx.Scope.FreeRegister;
+    Exit;
+  end;
+
   // ES2026 §13.15.2 AssignmentExpression : LeftHandSideExpression ??=/&&=/||= AssignmentExpression
   if IsShortCircuitAssignment(AExpr.Operator) then
   begin
@@ -4490,6 +4628,8 @@ begin
       Exit;
     end;
     Slot := ACtx.Scope.GetLocal(LocalIdx).Slot;
+    if ACtx.Scope.GetLocal(LocalIdx).IsCaptured then
+      EmitInstruction(ACtx, EncodeABx(OP_GET_LOCAL, Slot, UInt16(Slot)));
     EmitInstruction(ACtx, EncodeABC(OP_TO_NUMERIC, Slot, Slot, 0));
     if not AExpr.IsPrefix then
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, Slot, 0));

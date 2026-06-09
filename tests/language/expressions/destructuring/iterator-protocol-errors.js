@@ -5,15 +5,16 @@ description: |
   source IS iterable (its [@@iterator] returned an object), the
   iterator returned just doesn't satisfy the protocol.
 
-  Also covers the abrupt-completion IteratorClose path: when user
-  next() throws, iter.return() must run best-effort before the
-  original error propagates (ES2024 §7.4.10 step 5).
+  Also covers the abrupt-completion IteratorStepValue path: when user
+  next() throws, the original error propagates without calling
+  iter.return() (ES2026 §7.4.10).
 
   Guards against:
     - GetIteratorValue (Goccia.VM.pas) previously falling through to
       SErrorNotIterable when the inner next was non-callable.
-    - TryIterableToArray (Goccia.VM.pas) previously not invoking
-      iter.return() when DirectNext or NextMethod.Call threw.
+    - TryIterableToArray (Goccia.VM.pas) must not invoke iter.return()
+      when DirectNext or NextMethod.Call throws before producing an
+      IteratorResult.
 features: [iterators]
 ---*/
 
@@ -44,7 +45,7 @@ test("[@@iterator]() returning null throws TypeError", () => {
   expect(() => [...iter]).toThrow(TypeError);
 });
 
-test("destructuring with user next() that throws closes the iterator (abrupt completion)", () => {
+test("destructuring with user next() that throws does not close the iterator", () => {
   let returnCalled = 0;
   const iter = {
     [Symbol.iterator]() {
@@ -71,10 +72,10 @@ test("destructuring with user next() that throws closes the iterator (abrupt com
   }
   expect(caught instanceof Error).toBe(true);
   expect(caught.message).toBe("user-next-threw");
-  expect(returnCalled).toBe(1);
+  expect(returnCalled).toBe(0);
 });
 
-test("destructuring with primitive IteratorResult throws TypeError + closes iterator", () => {
+test("destructuring with primitive IteratorResult throws TypeError without closing", () => {
   let returnCalled = 0;
   const iter = {
     [Symbol.iterator]() {
@@ -94,7 +95,7 @@ test("destructuring with primitive IteratorResult throws TypeError + closes iter
     caught = e;
   }
   expect(caught instanceof TypeError).toBe(true);
-  expect(returnCalled).toBe(1);
+  expect(returnCalled).toBe(0);
 });
 
 test("missing IteratorResult.value normalizes to undefined in rest pattern", () => {

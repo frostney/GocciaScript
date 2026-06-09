@@ -26,12 +26,6 @@ type
     function FunctionToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
-  TFunctionRestrictedPropertyHost = class
-  public
-    function ThrowTypeError(const AArgs: TGocciaArgumentsCollection;
-      const AThisValue: TGocciaValue): TGocciaValue;
-  end;
-
   // Base class for all callable functions
   TGocciaFunctionBase = class(TGocciaObjectValue)
   protected
@@ -180,7 +174,6 @@ uses
 // (Function.prototype.foo = ...) must not leak across engine recreation.
 var
   GFunctionPrototypeSlot: TGocciaRealmSlotId;
-  GFunctionRestrictedPropertyHost: TFunctionRestrictedPropertyHost;
 
 function GetSharedFunctionPrototype: TGocciaFunctionSharedPrototype; inline;
 begin
@@ -188,23 +181,6 @@ begin
     Result := TGocciaFunctionSharedPrototype(CurrentRealm.GetSlot(GFunctionPrototypeSlot))
   else
     Result := nil;
-end;
-
-function TFunctionRestrictedPropertyHost.ThrowTypeError(
-  const AArgs: TGocciaArgumentsCollection;
-  const AThisValue: TGocciaValue): TGocciaValue;
-begin
-  Goccia.Values.ErrorHelper.ThrowTypeError(
-    '''caller'' and ''arguments'' properties may not be accessed');
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-end;
-
-function CreateFunctionRestrictedThrower: TGocciaNativeFunctionValue;
-begin
-  if not Assigned(GFunctionRestrictedPropertyHost) then
-    GFunctionRestrictedPropertyHost := TFunctionRestrictedPropertyHost.Create;
-  Result := TGocciaNativeFunctionValue.CreateWithoutPrototype(
-    GFunctionRestrictedPropertyHost.ThrowTypeError, 'ThrowTypeError', 0);
 end;
 
 function GetProtoFromConstructor(const ANewTarget: TGocciaValue): TGocciaObjectValue;
@@ -645,7 +621,6 @@ end;
 constructor TGocciaFunctionSharedPrototype.Create;
 var
   Members: array[0..3] of TGocciaMemberDefinition;
-  Thrower: TGocciaNativeFunctionValue;
 begin
   inherited Create;
 
@@ -661,11 +636,6 @@ begin
       TGocciaNumberLiteralValue.ZeroValue, [pfConfigurable]));
     DefineProperty(PROP_NAME, TGocciaPropertyDescriptorData.Create(
       TGocciaStringLiteralValue.Create(''), [pfConfigurable]));
-    Thrower := CreateFunctionRestrictedThrower;
-    DefineProperty(PROP_CALLER, TGocciaPropertyDescriptorAccessor.Create(
-      Thrower, Thrower, []));
-    DefineProperty(PROP_ARGUMENTS, TGocciaPropertyDescriptorAccessor.Create(
-      Thrower, Thrower, []));
     Members[0] := DefineNamedMethod('call', FunctionCall, 1);
     Members[1] := DefineNamedMethod('apply', FunctionApply, 2);
     Members[2] := DefineNamedMethod('bind', FunctionBind, 1);
@@ -1117,8 +1087,5 @@ end;
 
 initialization
   GFunctionPrototypeSlot := RegisterRealmSlot('Function.prototype');
-
-finalization
-  GFunctionRestrictedPropertyHost.Free;
 
 end.

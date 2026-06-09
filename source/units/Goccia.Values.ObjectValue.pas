@@ -144,6 +144,13 @@ threadvar
 
 const
   MAX_PROTOTYPE_CHAIN_DEPTH = 256;
+  BYTECODE_PRIVATE_INITIALIZED_PREFIX = '#initialized:';
+
+function IsBytecodePrivateInitializerMarker(const AName: string): Boolean;
+begin
+  Result := Copy(AName, 1, Length(BYTECODE_PRIVATE_INITIALIZED_PREFIX)) =
+    BYTECODE_PRIVATE_INITIALIZED_PREFIX;
+end;
 
 // Local ToObject variant for Object.prototype methods.  Keeping this here
 // avoids a unit cycle with the shared ToObject unit.
@@ -1120,8 +1127,20 @@ begin
 end;
 
 function TGocciaObjectValue.GetAllPropertyNames: TArray<string>;
+var
+  Key: string;
+  Count: Integer;
 begin
-  Result := FProperties.Keys;
+  SetLength(Result, FProperties.Count);
+  Count := 0;
+  for Key in FProperties.Keys do
+  begin
+    if IsBytecodePrivateInitializerMarker(Key) then
+      Continue;
+    Result[Count] := Key;
+    Inc(Count);
+  end;
+  SetLength(Result, Count);
 end;
 
 { Symbol property methods }

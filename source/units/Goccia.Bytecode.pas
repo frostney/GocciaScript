@@ -93,7 +93,10 @@ const
   //               `arguments` rejection flag on function templates.
   //   v49 -> v50: serialized upvalue descriptor names for bytecode
   //               direct-eval dynamic-scope lookups.
-  GOCCIA_FORMAT_VERSION = 50;
+  //   v50 -> v51: added OP_SUPER_SET so super property writes use the
+  //               super base with the actual receiver instead of ordinary
+  //               assignment to this.
+  GOCCIA_FORMAT_VERSION = 51;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
@@ -304,7 +307,8 @@ type
     OP_ITER_UNPACK   = 189,
     OP_SET_FUNCTION_NAME = 190,
     OP_LOAD_ARGUMENT = 191,
-    OP_CHECK_DERIVED_THIS = 192
+    OP_CHECK_DERIVED_THIS = 192,
+    OP_SUPER_SET     = 193
   );
 
 function EncodeABC(const AOp: TGocciaOpCode; const A, B, C: UInt8): UInt32; inline;
