@@ -48,33 +48,13 @@ console.log("Error display (bytecode SyntaxError)...");
   if (typeof json.error?.column !== "number") throw new Error(`Bytecode JSON error should include numeric column, got ${json.error?.column}`);
 }
 
-// -- Optional private field access ----------------------------------------------
+// -- Malformed optional private field access ------------------------------------
 
-console.log("Optional private field access...");
+console.log("Malformed optional private field access...");
 {
-  const source = [
-    "class Box {",
-    "  #value = 1;",
-    "  read(obj) {",
-    "    return obj?.#value;",
-    "  }",
-    "}",
-    "const box = new Box();",
-    "if (box.read(box) !== 1) throw new Error('expected branded access');",
-    "if (box.read(null) !== undefined) throw new Error('expected nullish short-circuit');",
-    "try {",
-    "  box.read({});",
-    "  throw new Error('expected private brand check');",
-    "} catch (error) {",
-    "  if (!(error instanceof TypeError)) throw error;",
-    "}",
-    "",
-  ].join("\n");
-  for (const modeArgs of [[], ["--mode=bytecode"]] as const) {
-    const res = runLoaderJson(source, modeArgs);
-    if (res.exitCode !== 0) throw new Error(`Optional private field access should pass, got: ${JSON.stringify(res.json)}`);
-    if (res.json.ok !== true) throw new Error(`Optional private field access should be ok, got: ${JSON.stringify(res.json)}`);
-  }
+  const source = "class Box { #value = 1; read(obj) { return obj?.#; } }\n";
+  assertSyntaxError(source, "optional private access without name");
+  assertSyntaxError(source, "optional private access without name (bytecode)", ["--mode=bytecode"]);
 }
 
 // -- Malformed literal class accessors ------------------------------------------
