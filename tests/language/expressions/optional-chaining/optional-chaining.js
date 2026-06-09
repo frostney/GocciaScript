@@ -157,4 +157,34 @@ describe('Optional Chaining', () => {
 
     expect(obj.getValue?.()).toBe(42);
   });
+
+  test('supports optional access to private fields', () => {
+    class Box {
+      #value = 42;
+
+      read(obj) {
+        return obj?.#value;
+      }
+    }
+
+    const box = new Box();
+
+    expect(box.read(box)).toBe(42);
+    expect(box.read(null)).toBe(undefined);
+    expect(box.read(undefined)).toBe(undefined);
+  });
+
+  test('optional private field access still checks private brand', () => {
+    class Box {
+      #value = 42;
+
+      read(obj) {
+        return obj?.#value;
+      }
+    }
+
+    const box = new Box();
+
+    expect(() => box.read({})).toThrow(TypeError);
+  });
 });

@@ -1322,11 +1322,6 @@ begin
           // Check if this is a private field access (this.#field)
           if Check(gttHash) then
           begin
-            if IsOptionalChain then
-              raise TGocciaSyntaxError.Create(
-                'Optional chaining with private fields is not supported',
-                Line, Column, FFileName, FSourceLines,
-                SSuggestPrivateFieldMustFollow);
             Advance; // consume the #
             Token := Consume(gttIdentifier, 'Expected private field name after "#"',
               SSuggestPrivateFieldMustFollow);
