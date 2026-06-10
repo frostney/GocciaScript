@@ -97,7 +97,8 @@ type
     procedure BindRuntime(const AGlobalScope: TGocciaGlobalScope;
       const AOnError: TGocciaThrowErrorCallback);
     procedure BeginEvaluatingModulePath(const APath: string);
-    procedure CheckForModuleReload(const AModule: TGocciaModule);
+    procedure CheckForModuleReload(const AModule: TGocciaModule;
+      const ACacheKey: string = '');
     procedure EndEvaluatingModulePath(const APath: string);
     function IsEvaluatingModulePath(const APath: string): Boolean;
     function LoadModule(const AModulePath,
@@ -211,6 +212,13 @@ type
   end;
 
 { TGocciaModuleEvaluationWaitState }
+
+function EncodeReExportModuleRequest(
+  const AReExportDecl: TGocciaReExportDeclaration): string;
+begin
+  Result := EncodeImportSpecifierAttribute(AReExportDecl.ModulePath,
+    AReExportDecl.AttributeType);
+end;
 
 constructor TGocciaModuleEvaluationWaitState.Create(
   const AResultPromise: TGocciaPromiseValue; const ACount: Integer);
@@ -799,7 +807,8 @@ var
       else if Stmt is TGocciaReExportDeclaration then
       begin
         RequestedModule := LoadModule(
-          TGocciaReExportDeclaration(Stmt).ModulePath, ResolvedPath);
+          EncodeReExportModuleRequest(TGocciaReExportDeclaration(Stmt)),
+          ResolvedPath);
         if Assigned(RequestedModule) then
         begin
           if (RequestedModule <> Module) and
@@ -917,7 +926,8 @@ var
         if ReExportDecl.IsStarExport then
           Continue;
 
-        SourceModule := LoadModule(ReExportDecl.ModulePath, ResolvedPath);
+        SourceModule := LoadModule(EncodeReExportModuleRequest(ReExportDecl),
+          ResolvedPath);
         for ExportPair in ReExportDecl.ExportsTable do
           if (not Module.CanResolveExport(ExportPair.Key)) and
              (not IsEvaluatingModulePath(SourceModule.Path)) then
@@ -1028,7 +1038,8 @@ var
       else if Stmt is TGocciaReExportDeclaration then
       begin
         ReExportDecl := TGocciaReExportDeclaration(Stmt);
-        SourceModule := LoadModule(ReExportDecl.ModulePath, ResolvedPath);
+        SourceModule := LoadModule(EncodeReExportModuleRequest(ReExportDecl),
+          ResolvedPath);
         if ReExportDecl.IsStarExport then
         begin
           if ReExportDecl.NamespaceName <> '' then
@@ -1121,7 +1132,7 @@ begin
   if FModules.TryGetValue(CacheKey, Result) then
   begin
     if not FLoadingModules.ContainsKey(CacheKey) then
-      CheckForModuleReload(Result);
+      CheckForModuleReload(Result, CacheKey);
     Exit;
   end;
 
@@ -1678,9 +1689,11 @@ begin
     TGarbageCollector.Instance.AddRootObject(Result);
 end;
 
-procedure TGocciaModuleLoader.CheckForModuleReload(const AModule: TGocciaModule);
+procedure TGocciaModuleLoader.CheckForModuleReload(const AModule: TGocciaModule;
+  const ACacheKey: string);
 var
   CurrentModified: TDateTime;
+  ReloadCacheKey: string;
   ReloadedModule: TGocciaModule;
 begin
   if not FContentProvider.TryGetLastModified(AModule.Path, CurrentModified) then
@@ -1688,11 +1701,15 @@ begin
 
   if CurrentModified > AModule.LastModified then
   begin
-    FModules.Remove(AModule.Path);
+    ReloadCacheKey := ACacheKey;
+    if ReloadCacheKey = '' then
+      ReloadCacheKey := AModule.Path;
+
+    FModules.Remove(ReloadCacheKey);
     try
-      ReloadedModule := LoadModule(AModule.Path, AModule.Path);
+      ReloadedModule := LoadModule(ReloadCacheKey, AModule.Path);
     except
-      FModules.AddOrSetValue(AModule.Path, AModule);
+      FModules.AddOrSetValue(ReloadCacheKey, AModule);
       raise;
     end;
 
@@ -1701,8 +1718,8 @@ begin
       try
         CopyModuleContents(ReloadedModule, AModule);
       finally
-        FModules.Remove(AModule.Path);
-        FModules.AddOrSetValue(AModule.Path, AModule);
+        FModules.Remove(ReloadCacheKey);
+        FModules.AddOrSetValue(ReloadCacheKey, AModule);
         ReloadedModule.Free;
       end;
     end;

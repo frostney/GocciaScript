@@ -5856,7 +5856,7 @@ end;
 function TGocciaParser.ExportDeclaration: TGocciaStatement;
 var
   ExportsTable: TStringStringMap;
-  LocalName, ExportedName, ModulePath, NamespaceName: string;
+  LocalName, ExportedName, ModulePath, NamespaceName, AttributeType: string;
   Line, Column: Integer;
   InnerDecl: TGocciaStatement;
   VarDecl: TGocciaVariableDeclaration;
@@ -5890,12 +5890,14 @@ var
       (FTokens[ScanIndex + 1].TokenType = gttFrom);
   end;
 
-  procedure ConsumeReExportAttributesIfPresent;
+  function ParseReExportAttributeTypeIfPresent: string;
   var
     AttributeKey: string;
     AttributeKeyColumn: Integer;
     AttributeKeyLine: Integer;
+    AttributeValueToken: TGocciaToken;
   begin
+    Result := '';
     if not Match(gttWith) then
       Exit;
 
@@ -5909,13 +5911,15 @@ var
       AttributeKeyColumn := Previous.Column;
       Consume(gttColon, 'Expected ":" after import attribute key',
         'Add ":" between the attribute key and value');
-      Consume(gttString, 'Expected string import attribute value',
+      AttributeValueToken := Consume(gttString,
+        'Expected string import attribute value',
         'Import attribute values must be string literals');
       if AttributeKey <> KEYWORD_TYPE then
         raise TGocciaSyntaxError.Create(
           Format('Unsupported import attribute "%s"', [AttributeKey]),
           AttributeKeyLine, AttributeKeyColumn, FFileName, FSourceLines,
           'GocciaScript currently supports only the "type" import attribute.');
+      Result := AttributeValueToken.Lexeme;
       if not Match(gttComma) then
         Break;
     end;
@@ -6113,12 +6117,12 @@ begin
       SSuggestAddFromAfterImportList);
     ModulePath := Consume(gttString, 'Expected module path after "from"',
       SSuggestProvideModulePath).Lexeme;
-    ConsumeReExportAttributesIfPresent;
+    AttributeType := ParseReExportAttributeTypeIfPresent;
     ConsumeSemicolonOrASI('Expected ";" after re-export declaration',
       SSuggestAddSemicolon);
     ExportsTable := TStringStringMap.Create;
     Result := TGocciaReExportDeclaration.Create(ExportsTable, ModulePath,
-      Line, Column, True, NamespaceName);
+      Line, Column, True, NamespaceName, AttributeType);
     Exit;
   end;
 
@@ -6183,10 +6187,11 @@ begin
   begin
     ModulePath := Consume(gttString, 'Expected module path after "from"',
       SSuggestProvideModulePath).Lexeme;
-    ConsumeReExportAttributesIfPresent;
+    AttributeType := ParseReExportAttributeTypeIfPresent;
     ConsumeSemicolonOrASI('Expected ";" after re-export declaration',
       SSuggestAddSemicolon);
-    Result := TGocciaReExportDeclaration.Create(ExportsTable, ModulePath, Line, Column);
+    Result := TGocciaReExportDeclaration.Create(ExportsTable, ModulePath,
+      Line, Column, False, '', AttributeType);
   end
   else
   begin

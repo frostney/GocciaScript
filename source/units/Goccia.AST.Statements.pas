@@ -538,6 +538,7 @@ type
 
   TGocciaReExportDeclaration = class(TGocciaStatement)
   private
+    FAttributeType: string;
     FExportsTable: TStringStringMap; // exported name -> source name
     FIsStarExport: Boolean;
     FModulePath: string;
@@ -546,8 +547,10 @@ type
     constructor Create(const AExportsTable: TStringStringMap;
       const AModulePath: string; const ALine, AColumn: Integer;
       const AIsStarExport: Boolean = False;
-      const ANamespaceName: string = '');
+      const ANamespaceName: string = '';
+      const AAttributeType: string = '');
     function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
+    property AttributeType: string read FAttributeType;
     property ExportsTable: TStringStringMap read FExportsTable;
     property IsStarExport: Boolean read FIsStarExport;
     property ModulePath: string read FModulePath;
@@ -1080,9 +1083,11 @@ end;
 
   constructor TGocciaReExportDeclaration.Create(const AExportsTable: TStringStringMap;
     const AModulePath: string; const ALine, AColumn: Integer;
-    const AIsStarExport: Boolean = False; const ANamespaceName: string = '');
+    const AIsStarExport: Boolean = False; const ANamespaceName: string = '';
+    const AAttributeType: string = '');
   begin
     inherited Create(ALine, AColumn);
+    FAttributeType := AAttributeType;
     FExportsTable := AExportsTable;
     FIsStarExport := AIsStarExport;
     FModulePath := AModulePath;
@@ -1570,7 +1575,8 @@ end;
   function TGocciaReExportDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
   begin
     if Assigned(AContext.LoadModule) then
-      AContext.LoadModule(ModulePath, AContext.CurrentFilePath);
+      AContext.LoadModule(EncodeImportSpecifierAttribute(ModulePath,
+        AttributeType), AContext.CurrentFilePath);
     Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
   end;
 
