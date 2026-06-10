@@ -9677,7 +9677,8 @@ begin
       if Prop.Pattern is TGocciaRestDestructuringPattern then
       begin
         // Rest pattern: collect remaining properties
-        RestObject := TGocciaObjectValue.Create;
+        RestObject := TGocciaObjectValue.Create(
+          TGocciaObjectValue.SharedObjectPrototype);
         for Key in ObjectValue.GetEnumerablePropertyNames do
         begin
           if UsedKeys.IndexOf(Key) = -1 then

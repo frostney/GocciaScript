@@ -275,7 +275,7 @@ begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   if FState.Settled then Exit;
 
-  Entry := TGocciaObjectValue.Create;
+  Entry := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
   Entry.AssignProperty('status', TGocciaStringLiteralValue.Create('fulfilled'));
   Entry.AssignProperty(PROP_VALUE, AArgs.GetElement(0));
   FState.Results.Elements[FIndex] := Entry;
@@ -312,7 +312,7 @@ begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   if FState.Settled then Exit;
 
-  Entry := TGocciaObjectValue.Create;
+  Entry := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
   Entry.AssignProperty('status', TGocciaStringLiteralValue.Create('rejected'));
   Entry.AssignProperty('reason', AArgs.GetElement(0));
   FState.Results.Elements[FIndex] := Entry;
@@ -1003,7 +1003,7 @@ begin
   RejectFn.CapturedRoot := Promise;
 
   { Steps 3-6: Create result object with promise, resolve, reject properties }
-  ResultObj := TGocciaObjectValue.Create;
+  ResultObj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
   ResultObj.AssignProperty('promise', Promise);
   ResultObj.AssignProperty('resolve', ResolveFn);
   ResultObj.AssignProperty('reject', RejectFn);

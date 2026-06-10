@@ -16,8 +16,10 @@ test("Promise.allSettled with all fulfilled", () => {
   ]).then((results) => {
     expect(results[0].status).toBe("fulfilled");
     expect(results[0].value).toBe(1);
+    expect(results[0] instanceof Object).toBe(true);
     expect(results[1].status).toBe("fulfilled");
     expect(results[1].value).toBe(2);
+    expect(results[1] instanceof Object).toBe(true);
   });
 });
 

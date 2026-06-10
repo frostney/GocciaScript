@@ -75,7 +75,7 @@ threadvar
 // ES2026 §6.2.6.4 FromPropertyDescriptor(Desc)
 function FromPropertyDescriptor(const ADescriptor: TGocciaPropertyDescriptor): TGocciaObjectValue;
 begin
-  Result := TGocciaObjectValue.Create;
+  Result := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
   if ADescriptor.HasEnumerableField then
   begin
     if ADescriptor.Enumerable then
@@ -519,7 +519,7 @@ begin
   try
     // Step 2: Let ownKeys be ? obj.[[OwnPropertyKeys]]()
     // Step 3: Let descriptors be OrdinaryObjectCreate(%Object.prototype%)
-    Descriptors := TGocciaObjectValue.Create;
+    Descriptors := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
 
     // Step 4: For each element key of ownKeys (string keys)
     PropertyNames := Obj.GetAllPropertyNames;
@@ -795,7 +795,7 @@ begin
 
   Entries := TGocciaArrayValue(AArgs.GetElement(0));
   // Step 2: Let obj be OrdinaryObjectCreate(%Object.prototype%)
-  Obj := TGocciaObjectValue.Create;
+  Obj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
 
   // Step 3: For each entry of iterable
   for I := 0 to Entries.Elements.Count - 1 do

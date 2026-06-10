@@ -117,6 +117,7 @@ describe("Object.getOwnPropertyDescriptors", () => {
     const obj = Object.create({ inherited: true });
     const descs = Object.getOwnPropertyDescriptors(obj);
     expect(Object.keys(descs).length).toBe(0);
+    expect(descs instanceof Object).toBe(true);
   });
 
   test("does not include inherited properties", () => {

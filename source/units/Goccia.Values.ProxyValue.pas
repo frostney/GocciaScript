@@ -1073,10 +1073,14 @@ var
   TrapResult: TGocciaValue;
   ResultArray: TGocciaArrayValue;
   Keys: TArray<string>;
-  I, J, Count: Integer;
+  SymbolKeys: TArray<TGocciaSymbolValue>;
+  TargetSymbols: TArray<TGocciaSymbolValue>;
+  I, J, Count, SymbolCount: Integer;
   Element: TGocciaValue;
+  SymbolElement: TGocciaSymbolValue;
   TargetKeys: TArray<string>;
   TargetDesc: TGocciaPropertyDescriptor;
+  TargetObj: TGocciaObjectValue;
   Found: Boolean;
 begin
   CheckRevoked;
@@ -1096,7 +1100,9 @@ begin
 
     ResultArray := TGocciaArrayValue(TrapResult);
     SetLength(Keys, ResultArray.Elements.Count);
+    SetLength(SymbolKeys, ResultArray.Elements.Count);
     Count := 0;
+    SymbolCount := 0;
     for I := 0 to ResultArray.Elements.Count - 1 do
     begin
       Element := ResultArray.Elements[I];
@@ -1106,20 +1112,36 @@ begin
         ThrowTypeError(SErrorProxyOwnKeysTypes, SSuggestProxyTrapReturnType);
       if Element is TGocciaStringLiteralValue then
       begin
+        for J := 0 to Count - 1 do
+          if Keys[J] = TGocciaStringLiteralValue(Element).Value then
+            ThrowTypeError(SErrorProxyOwnKeysDuplicate,
+              SSuggestProxyTrapInvariant);
         Keys[Count] := TGocciaStringLiteralValue(Element).Value;
         Inc(Count);
+      end
+      else
+      begin
+        SymbolElement := TGocciaSymbolValue(Element);
+        for J := 0 to SymbolCount - 1 do
+          if SymbolKeys[J] = SymbolElement then
+            ThrowTypeError(SErrorProxyOwnKeysDuplicate,
+              SSuggestProxyTrapInvariant);
+        SymbolKeys[SymbolCount] := SymbolElement;
+        Inc(SymbolCount);
       end;
     end;
     SetLength(Keys, Count);
+    SetLength(SymbolKeys, SymbolCount);
 
     // ES2026 §28.1.1 step 17-18: Non-configurable target properties
     // must appear in the trap result.
     if FTarget is TGocciaObjectValue then
     begin
-      TargetKeys := TGocciaObjectValue(FTarget).GetOwnPropertyKeys;
+      TargetObj := TGocciaObjectValue(FTarget);
+      TargetKeys := TargetObj.GetOwnPropertyKeys;
       for I := 0 to Length(TargetKeys) - 1 do
       begin
-        TargetDesc := TGocciaObjectValue(FTarget).GetOwnPropertyDescriptor(TargetKeys[I]);
+        TargetDesc := TargetObj.GetOwnPropertyDescriptor(TargetKeys[I]);
         if Assigned(TargetDesc) and not TargetDesc.Configurable then
         begin
           Found := False;
@@ -1127,6 +1149,81 @@ begin
             if Keys[J] = TargetKeys[I] then begin Found := True; Break; end;
           if not Found then
             ThrowTypeError(Format(SErrorProxyOwnKeysMissing, [TargetKeys[I]]), SSuggestProxyTrapInvariant);
+        end;
+      end;
+      TargetSymbols := TargetObj.GetOwnSymbols;
+      for I := 0 to Length(TargetSymbols) - 1 do
+      begin
+        TargetDesc := TargetObj.GetOwnSymbolPropertyDescriptor(TargetSymbols[I]);
+        if Assigned(TargetDesc) and not TargetDesc.Configurable then
+        begin
+          Found := False;
+          for J := 0 to Length(SymbolKeys) - 1 do
+            if SymbolKeys[J] = TargetSymbols[I] then
+            begin
+              Found := True;
+              Break;
+            end;
+          if not Found then
+            ThrowTypeError(Format(SErrorProxyOwnKeysMissing,
+              [TargetSymbols[I].ToStringLiteral.Value]),
+              SSuggestProxyTrapInvariant);
+        end;
+      end;
+      if not TargetObj.Extensible then
+      begin
+        for I := 0 to Length(TargetKeys) - 1 do
+        begin
+          Found := False;
+          for J := 0 to Length(Keys) - 1 do
+            if Keys[J] = TargetKeys[I] then
+            begin
+              Found := True;
+              Break;
+            end;
+          if not Found then
+            ThrowTypeError(Format(SErrorProxyOwnKeysMissing, [TargetKeys[I]]),
+              SSuggestProxyTrapInvariant);
+        end;
+        for I := 0 to Length(TargetSymbols) - 1 do
+        begin
+          Found := False;
+          for J := 0 to Length(SymbolKeys) - 1 do
+            if SymbolKeys[J] = TargetSymbols[I] then
+            begin
+              Found := True;
+              Break;
+            end;
+          if not Found then
+            ThrowTypeError(Format(SErrorProxyOwnKeysMissing,
+              [TargetSymbols[I].ToStringLiteral.Value]),
+              SSuggestProxyTrapInvariant);
+        end;
+        for I := 0 to Length(Keys) - 1 do
+        begin
+          Found := False;
+          for J := 0 to Length(TargetKeys) - 1 do
+            if TargetKeys[J] = Keys[I] then
+            begin
+              Found := True;
+              Break;
+            end;
+          if not Found then
+            ThrowTypeError(SErrorProxyOwnKeysExtra,
+              SSuggestProxyTrapInvariant);
+        end;
+        for I := 0 to Length(SymbolKeys) - 1 do
+        begin
+          Found := False;
+          for J := 0 to Length(TargetSymbols) - 1 do
+            if TargetSymbols[J] = SymbolKeys[I] then
+            begin
+              Found := True;
+              Break;
+            end;
+          if not Found then
+            ThrowTypeError(SErrorProxyOwnKeysExtra,
+              SSuggestProxyTrapInvariant);
         end;
       end;
     end;

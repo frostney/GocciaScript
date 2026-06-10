@@ -343,7 +343,7 @@ begin
     Exit;
   end;
 
-  DescriptorObj := TGocciaObjectValue.Create;
+  DescriptorObj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
   if Descriptor.HasEnumerableField then
   begin
     if Descriptor.Enumerable then

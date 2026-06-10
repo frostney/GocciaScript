@@ -117,6 +117,31 @@ describe("Object.getOwnPropertyNames", () => {
     expect(descriptorIndex).toBeLessThan(denseIndex);
   });
 
+  test("proxy validates duplicate symbol keys before returning string names", () => {
+    const symbol = Symbol("duplicate");
+    const proxy = new Proxy({}, {
+      ownKeys() {
+        return [symbol, symbol];
+      },
+    });
+
+    expect(() => Object.getOwnPropertyNames(proxy)).toThrow(TypeError);
+  });
+
+  test("proxy validates extra symbol keys on non-extensible targets", () => {
+    const target = {};
+    const symbol = Symbol("extra");
+    const proxy = new Proxy(target, {
+      ownKeys() {
+        return [symbol];
+      },
+    });
+
+    Object.preventExtensions(target);
+
+    expect(() => Object.getOwnPropertyNames(proxy)).toThrow(TypeError);
+  });
+
   test("throws for null", () => {
     expect(() => Object.getOwnPropertyNames(null)).toThrow(TypeError);
   });

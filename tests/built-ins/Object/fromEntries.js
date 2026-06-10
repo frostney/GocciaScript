@@ -22,6 +22,7 @@ describe("Object.fromEntries", () => {
   test("empty entries array produces empty object", () => {
     const obj = Object.fromEntries([]);
     expect(Object.keys(obj).length).toBe(0);
+    expect(obj instanceof Object).toBe(true);
   });
 
   test("duplicate keys use last value", () => {

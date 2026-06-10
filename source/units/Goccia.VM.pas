@@ -6861,7 +6861,7 @@ var
   J: Integer;
   Excluded: Boolean;
 begin
-  Result := TGocciaObjectValue.Create;
+  Result := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
   if ASource is TGocciaObjectValue then
     SourceObject := TGocciaObjectValue(ASource)
   else
@@ -12197,9 +12197,9 @@ begin
 
       OP_INC:
         if FRegisters[B].Kind = grkInt then
-          FRegisters[A] := VMIntResult(FRegisters[B].IntValue + 1)
+          SetRegisterRaw(A, VMIntResult(FRegisters[B].IntValue + 1))
         else if FRegisters[B].Kind = grkFloat then
-          FRegisters[A] := VMNumberRegister(FRegisters[B].FloatValue + 1.0)
+          SetRegisterRaw(A, VMNumberRegister(FRegisters[B].FloatValue + 1.0))
         else if (FRegisters[B].Kind = grkObject) and
                 (FRegisters[B].ObjectValue is TGocciaBigIntValue) then
           SetRegister(A, TGocciaBigIntValue.Create(
@@ -12209,9 +12209,9 @@ begin
 
       OP_DEC:
         if FRegisters[B].Kind = grkInt then
-          FRegisters[A] := VMIntResult(FRegisters[B].IntValue - 1)
+          SetRegisterRaw(A, VMIntResult(FRegisters[B].IntValue - 1))
         else if FRegisters[B].Kind = grkFloat then
-          FRegisters[A] := VMNumberRegister(FRegisters[B].FloatValue - 1.0)
+          SetRegisterRaw(A, VMNumberRegister(FRegisters[B].FloatValue - 1.0))
         else if (FRegisters[B].Kind = grkObject) and
                 (FRegisters[B].ObjectValue is TGocciaBigIntValue) then
           SetRegister(A, TGocciaBigIntValue.Create(

@@ -47,4 +47,13 @@ describe("Proxy ownKeys trap", () => {
     const keys = Object.getOwnPropertyNames(proxy);
     expect(keys).toEqual(["virtual1", "virtual2"]);
   });
+
+  test("rejects duplicate symbol entries even when caller filters strings", () => {
+    const symbol = Symbol("duplicate");
+    const proxy = new Proxy({}, {
+      ownKeys: () => [symbol, symbol],
+    });
+
+    expect(() => Object.keys(proxy)).toThrow(TypeError);
+  });
 });

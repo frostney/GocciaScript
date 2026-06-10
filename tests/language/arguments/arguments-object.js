@@ -29,6 +29,21 @@ describe("arguments object", () => {
     expect(capture(1, 2)).toEqual([[1, 1, 2, 2], 20, 20, 30, 30]);
   });
 
+  test("mapped parameter bindings stay current after increment operations", () => {
+    function increment(first) {
+      first++;
+      return [first, arguments[0]];
+    }
+
+    function decrement(first) {
+      --first;
+      return [first, arguments[0]];
+    }
+
+    expect(increment(1)).toEqual([2, 2]);
+    expect(decrement(3)).toEqual([2, 2]);
+  });
+
   test("deleting an indexed property breaks the parameter mapping", () => {
     function capture(first) {
       delete arguments[0];
@@ -136,6 +151,22 @@ describe("arguments object", () => {
     expect(iterator.next().value).toBe(8);
     expect(iterator.next().value).toBe(9);
     expect(iterator.next().value).toBe(1);
+  });
+
+  test("generator yield delegation sees updated mapped parameters", () => {
+    function* countdown(n) {
+      if (n > 0) {
+        yield n;
+        yield* countdown(--n);
+      }
+      return 34;
+    }
+
+    const iterator = countdown(3);
+    expect(iterator.next()).toEqual({ value: 3, done: false });
+    expect(iterator.next()).toEqual({ value: 2, done: false });
+    expect(iterator.next()).toEqual({ value: 1, done: false });
+    expect(iterator.next()).toEqual({ value: 34, done: true });
   });
 
   test("generator methods receive arguments objects", () => {
