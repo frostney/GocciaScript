@@ -56,4 +56,41 @@ describe("Proxy ownKeys trap", () => {
 
     expect(() => Object.keys(proxy)).toThrow(TypeError);
   });
+
+  test("Reflect.ownKeys preserves symbol entries and trap order", () => {
+    const symbol = Symbol("s");
+    const proxy = new Proxy({}, {
+      ownKeys: () => [symbol, "a"],
+      getOwnPropertyDescriptor() {
+        return {
+          configurable: true,
+          enumerable: true,
+          value: 1,
+          writable: true,
+        };
+      },
+    });
+
+    const keys = Reflect.ownKeys(proxy);
+    expect(keys.length).toBe(2);
+    expect(keys[0]).toBe(symbol);
+    expect(keys[1]).toBe("a");
+  });
+
+  test("Object.getOwnPropertySymbols observes proxy ownKeys symbols", () => {
+    const symbol = Symbol("visible");
+    const proxy = new Proxy({}, {
+      ownKeys: () => ["a", symbol],
+      getOwnPropertyDescriptor() {
+        return {
+          configurable: true,
+          enumerable: true,
+          value: 1,
+          writable: true,
+        };
+      },
+    });
+
+    expect(Object.getOwnPropertySymbols(proxy)).toEqual([symbol]);
+  });
 });

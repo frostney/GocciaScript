@@ -1366,8 +1366,8 @@ var
       if ReExportDecl.IsStarExport then
         Continue;
 
-      SourceModule := AModuleLoader.LoadModule(ReExportDecl.ModulePath,
-        AModule.Path);
+      SourceModule := AModuleLoader.LoadModule(EncodeImportSpecifierAttribute(
+        ReExportDecl.ModulePath, ReExportDecl.AttributeType), AModule.Path);
       for ExportPair in ReExportDecl.ExportsTable do
         if (not AModule.CanResolveExport(ExportPair.Key)) and
            (not AModuleLoader.IsEvaluatingModulePath(SourceModule.Path)) then
@@ -1546,8 +1546,8 @@ begin
     else if (Stmt is TGocciaReExportDeclaration) and Assigned(AModuleLoader) then
     begin
       ReExportDecl := TGocciaReExportDeclaration(Stmt);
-      SourceModule := AModuleLoader.LoadModule(ReExportDecl.ModulePath,
-        AModule.Path);
+      SourceModule := AModuleLoader.LoadModule(EncodeImportSpecifierAttribute(
+        ReExportDecl.ModulePath, ReExportDecl.AttributeType), AModule.Path);
       if ReExportDecl.IsStarExport then
       begin
         if ReExportDecl.NamespaceName <> '' then
@@ -1618,7 +1618,9 @@ begin
     else if Stmt is TGocciaReExportDeclaration then
     begin
       RequestedModule := AModuleLoader.LoadModule(
-        TGocciaReExportDeclaration(Stmt).ModulePath,
+        EncodeImportSpecifierAttribute(
+          TGocciaReExportDeclaration(Stmt).ModulePath,
+          TGocciaReExportDeclaration(Stmt).AttributeType),
         AImportingFilePath);
       if Assigned(RequestedModule) and Assigned(ARequestedModules) then
         ARequestedModules.Add(RequestedModule);

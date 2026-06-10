@@ -49,6 +49,7 @@ uses
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.ProxyValue,
   Goccia.Values.SymbolValue,
   Goccia.Values.ToPrimitive;
 
@@ -472,6 +473,7 @@ var
   Target: TGocciaValue;
   Obj: TGocciaObjectValue;
   Keys: TGocciaArrayValue;
+  KeyValues: TArray<TGocciaValue>;
   PropertyNames: TArray<string>;
   OwnSymbols: TArray<TGocciaSymbolValue>;
   I: Integer;
@@ -487,6 +489,15 @@ begin
   Keys := TGocciaArrayValue.Create;
 
   // Step 2: Let keys be ? target.[[OwnPropertyKeys]]()
+  if Obj is TGocciaProxyValue then
+  begin
+    KeyValues := TGocciaProxyValue(Obj).GetOwnPropertyKeyValues;
+    for I := 0 to High(KeyValues) do
+      Keys.Elements.Add(KeyValues[I]);
+    Result := Keys;
+    Exit;
+  end;
+
   // String keys first, then symbol keys (per spec ordering)
   PropertyNames := Obj.GetAllPropertyNames;
   for I := 0 to High(PropertyNames) do
