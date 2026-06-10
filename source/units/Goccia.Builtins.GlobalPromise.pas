@@ -1004,9 +1004,9 @@ begin
 
   { Steps 3-6: Create result object with promise, resolve, reject properties }
   ResultObj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
-  ResultObj.AssignProperty('promise', Promise);
-  ResultObj.AssignProperty('resolve', ResolveFn);
-  ResultObj.AssignProperty('reject', RejectFn);
+  ResultObj.CreateDataPropertyOrThrow('promise', Promise);
+  ResultObj.CreateDataPropertyOrThrow('resolve', ResolveFn);
+  ResultObj.CreateDataPropertyOrThrow('reject', RejectFn);
 
   { Step 7: Return obj }
   Result := ResultObj;

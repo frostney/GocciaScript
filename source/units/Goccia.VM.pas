@@ -1334,17 +1334,14 @@ begin
        .TrySetLiteralDataPropertyFast(AName, AValue) then
     Exit;
 
-  ATarget.DefineProperty(AName, TGocciaPropertyDescriptorData.Create(AValue,
-    [pfEnumerable, pfConfigurable, pfWritable]));
+  ATarget.CreateDataPropertyOrThrow(AName, AValue);
 end;
 
 // ES2026 §7.3.6 CreateDataPropertyOrThrow(O, P, V) — symbol variant
 procedure DefineSymbolDataPropertyOnObject(const ATarget: TGocciaObjectValue;
   const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue); inline;
 begin
-  ATarget.DefineSymbolProperty(ASymbol,
-    TGocciaPropertyDescriptorData.Create(AValue,
-      [pfEnumerable, pfConfigurable, pfWritable]));
+  ATarget.CreateDataPropertyOrThrow(ASymbol, AValue);
 end;
 
 function VMNumberValue(const AValue: Double): TGocciaNumberLiteralValue; inline;

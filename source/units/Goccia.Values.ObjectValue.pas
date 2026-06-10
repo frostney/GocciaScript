@@ -50,6 +50,18 @@ type
 
     procedure DefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor); virtual;
     function TryDefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor): Boolean; virtual;
+    procedure CreateDataPropertyOrThrow(const AName: string;
+      const AValue: TGocciaValue); overload;
+    procedure CreateDataPropertyOrThrow(const ASymbol: TGocciaSymbolValue;
+      const AValue: TGocciaValue); overload;
+    procedure CreateDataPropertyOrThrow(const APropertyKey: TGocciaValue;
+      const AValue: TGocciaValue); overload;
+    function TryCreateDataProperty(const AName: string;
+      const AValue: TGocciaValue): Boolean; overload;
+    function TryCreateDataProperty(const ASymbol: TGocciaSymbolValue;
+      const AValue: TGocciaValue): Boolean; overload;
+    function TryCreateDataProperty(const APropertyKey: TGocciaValue;
+      const AValue: TGocciaValue): Boolean; overload;
     procedure AssignProperty(const AName: string; const AValue: TGocciaValue; const ACanCreate: Boolean = True); virtual;
     function AssignPropertyWithReceiver(const AName: string; const AValue: TGocciaValue; const AReceiver: TGocciaValue): Boolean; virtual;
 
@@ -912,6 +924,59 @@ begin
   FProperties.Add(AName, Applied);
   ADescriptor.Free;
   Result := True;
+end;
+
+// ES2026 §7.3.6 CreateDataPropertyOrThrow(O, P, V)
+procedure TGocciaObjectValue.CreateDataPropertyOrThrow(const AName: string;
+  const AValue: TGocciaValue);
+begin
+  DefineProperty(AName, TGocciaPropertyDescriptorData.Create(AValue,
+    [pfEnumerable, pfConfigurable, pfWritable]));
+end;
+
+// ES2026 §7.3.6 CreateDataPropertyOrThrow(O, P, V) — symbol key variant
+procedure TGocciaObjectValue.CreateDataPropertyOrThrow(
+  const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue);
+begin
+  DefineSymbolProperty(ASymbol, TGocciaPropertyDescriptorData.Create(AValue,
+    [pfEnumerable, pfConfigurable, pfWritable]));
+end;
+
+// APropertyKey must already be the result of ToPropertyKey.
+procedure TGocciaObjectValue.CreateDataPropertyOrThrow(
+  const APropertyKey: TGocciaValue; const AValue: TGocciaValue);
+begin
+  if APropertyKey is TGocciaSymbolValue then
+    CreateDataPropertyOrThrow(TGocciaSymbolValue(APropertyKey), AValue)
+  else
+    CreateDataPropertyOrThrow(APropertyKey.ToStringLiteral.Value, AValue);
+end;
+
+// ES2026 §7.3.5 CreateDataProperty(O, P, V)
+function TGocciaObjectValue.TryCreateDataProperty(const AName: string;
+  const AValue: TGocciaValue): Boolean;
+begin
+  Result := TryDefineProperty(AName, TGocciaPropertyDescriptorData.Create(
+    AValue, [pfEnumerable, pfConfigurable, pfWritable]));
+end;
+
+// ES2026 §7.3.5 CreateDataProperty(O, P, V) — symbol key variant
+function TGocciaObjectValue.TryCreateDataProperty(
+  const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue): Boolean;
+begin
+  Result := TryDefineSymbolProperty(ASymbol,
+    TGocciaPropertyDescriptorData.Create(AValue,
+      [pfEnumerable, pfConfigurable, pfWritable]));
+end;
+
+// APropertyKey must already be the result of ToPropertyKey.
+function TGocciaObjectValue.TryCreateDataProperty(
+  const APropertyKey: TGocciaValue; const AValue: TGocciaValue): Boolean;
+begin
+  if APropertyKey is TGocciaSymbolValue then
+    Result := TryCreateDataProperty(TGocciaSymbolValue(APropertyKey), AValue)
+  else
+    Result := TryCreateDataProperty(APropertyKey.ToStringLiteral.Value, AValue);
 end;
 
 function TGocciaObjectValue.GetOwnPropertyNames: TArray<string>;

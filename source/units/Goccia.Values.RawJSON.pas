@@ -24,8 +24,7 @@ type
 implementation
 
 uses
-  Goccia.Constants.PropertyNames,
-  Goccia.Values.ObjectPropertyDescriptor;
+  Goccia.Constants.PropertyNames;
 
 constructor TGocciaRawJSONValue.Create(const ARawText: string);
 begin
@@ -34,9 +33,8 @@ begin
   FRawText := ARawText;
 
   // ES2026 §25.5.2.4 step 6: CreateDataPropertyOrThrow(obj, "rawJSON", jsonString)
-  DefineProperty(PROP_RAW_JSON, TGocciaPropertyDescriptorData.Create(
-    TGocciaStringLiteralValue.Create(ARawText),
-    [pfWritable, pfEnumerable, pfConfigurable]));
+  CreateDataPropertyOrThrow(PROP_RAW_JSON,
+    TGocciaStringLiteralValue.Create(ARawText));
 
   // ES2026 §25.5.2.4 step 7: SetIntegrityLevel(obj, frozen)
   Freeze;

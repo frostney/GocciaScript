@@ -203,13 +203,6 @@ var
   GroupIndex: Integer;
   I: Integer;
 
-  procedure CreateDataProperty(const AObject: TGocciaObjectValue;
-    const AName: string; const AValue: TGocciaValue);
-  begin
-    AObject.DefineProperty(AName, TGocciaPropertyDescriptorData.Create(
-      AValue, [pfEnumerable, pfConfigurable, pfWritable]));
-  end;
-
   function CreateIndexPair(const AStartIndex, AEndIndex: Integer):
     TGocciaArrayValue;
   begin
@@ -227,9 +220,10 @@ begin
     else
       MatchArray.Elements.Add(TGocciaUndefinedLiteralValue.UndefinedValue);
   end;
-  CreateDataProperty(MatchArray, PROP_INDEX,
+  MatchArray.CreateDataPropertyOrThrow(PROP_INDEX,
     TGocciaNumberLiteralValue.Create(AMatchResult.MatchIndex));
-  CreateDataProperty(MatchArray, PROP_INPUT, TGocciaStringLiteralValue.Create(AInput));
+  MatchArray.CreateDataPropertyOrThrow(PROP_INPUT,
+    TGocciaStringLiteralValue.Create(AInput));
   if Length(AMatchResult.NamedGroups) > 0 then
   begin
     GroupsObject := TGocciaObjectValue.Create(nil);
@@ -250,10 +244,10 @@ begin
           TGocciaStringLiteralValue.Create(
             AMatchResult.Groups[GroupIndex].Value));
     end;
-    CreateDataProperty(MatchArray, PROP_GROUPS, GroupsObject);
+    MatchArray.CreateDataPropertyOrThrow(PROP_GROUPS, GroupsObject);
   end
   else
-    CreateDataProperty(MatchArray, PROP_GROUPS,
+    MatchArray.CreateDataPropertyOrThrow(PROP_GROUPS,
       TGocciaUndefinedLiteralValue.UndefinedValue);
 
   if AMatchResult.HasIndices then
@@ -273,25 +267,25 @@ begin
     begin
       IndicesGroupsObject := TGocciaObjectValue.Create(nil);
       for I := 0 to High(AMatchResult.NamedGroups) do
-        CreateDataProperty(IndicesGroupsObject, AMatchResult.NamedGroups[I].Name,
+        IndicesGroupsObject.CreateDataPropertyOrThrow(AMatchResult.NamedGroups[I].Name,
           TGocciaUndefinedLiteralValue.UndefinedValue);
       for I := 0 to High(AMatchResult.NamedGroups) do
       begin
         GroupIndex := AMatchResult.NamedGroups[I].Index;
         if (GroupIndex <= High(AMatchResult.Groups)) and
            AMatchResult.Groups[GroupIndex].Matched then
-          CreateDataProperty(IndicesGroupsObject,
+          IndicesGroupsObject.CreateDataPropertyOrThrow(
             AMatchResult.NamedGroups[I].Name,
             CreateIndexPair(AMatchResult.Groups[GroupIndex].StartIndex,
               AMatchResult.Groups[GroupIndex].EndIndex));
       end;
-      CreateDataProperty(IndicesArray, PROP_GROUPS, IndicesGroupsObject);
+      IndicesArray.CreateDataPropertyOrThrow(PROP_GROUPS, IndicesGroupsObject);
     end
     else
-      CreateDataProperty(IndicesArray, PROP_GROUPS,
+      IndicesArray.CreateDataPropertyOrThrow(PROP_GROUPS,
         TGocciaUndefinedLiteralValue.UndefinedValue);
 
-    CreateDataProperty(MatchArray, PROP_INDICES, IndicesArray);
+    MatchArray.CreateDataPropertyOrThrow(PROP_INDICES, IndicesArray);
   end;
 
   Result := MatchArray;

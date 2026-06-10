@@ -30,4 +30,34 @@ describe("Object.fromEntries", () => {
     const obj = Object.fromEntries(entries);
     expect(obj.a).toBe(2);
   });
+
+  test("uses define semantics for result properties", () => {
+    let setterCalled = false;
+    Object.defineProperty(Object.prototype, "property", {
+      configurable: true,
+      get() {
+        throw new Error("getter should not run");
+      },
+      set(value) {
+        setterCalled = true;
+        throw new Error("setter should not run");
+      },
+    });
+
+    try {
+      const obj = Object.fromEntries([["property", "value"]]);
+      expect(obj.property).toBe("value");
+      expect(Object.hasOwn(obj, "property")).toBe(true);
+      expect(setterCalled).toBe(false);
+    } finally {
+      delete Object.prototype.property;
+    }
+  });
+
+  test("uses ToPropertyKey for symbol keys", () => {
+    const key = Symbol("entry");
+    const obj = Object.fromEntries([[key, 42]]);
+    expect(obj[key]).toBe(42);
+    expect(Object.getOwnPropertySymbols(obj)[0]).toBe(key);
+  });
 });
