@@ -32,6 +32,12 @@ function log(message: string) {
   console.log(`[sync-test262] ${message}`);
 }
 
+function shouldFailOnSyncError(): boolean {
+  return (
+    process.env.SKIP_TEST262_SYNC !== "1" && !!process.env.BLOB_READ_WRITE_TOKEN
+  );
+}
+
 async function resetOutputDir() {
   log(
     `reset output directory ${path.relative(websiteRoot, dataPaths.dataDir)}`,
@@ -94,12 +100,11 @@ async function syncReports() {
   if (process.env.BLOB_READ_WRITE_TOKEN) {
     log("BLOB_READ_WRITE_TOKEN present; reading Vercel Blob test262 manifest");
     if (await syncReportsFromBlob()) return;
-    await preserveSnapshotOrWriteFallback(
-      "empty",
-      "The Vercel Blob test262 manifest was missing or did not contain any readable reports.",
-    );
+    const message =
+      "The Vercel Blob test262 manifest was missing or did not contain any readable reports.";
+    await preserveSnapshotOrWriteFallback("empty", message);
     log("Vercel Blob sync found no usable reports");
-    return;
+    throw new Error(message);
   }
 
   await preserveSnapshotOrWriteFallback(
@@ -173,8 +178,17 @@ async function syncReportsFromBlob(): Promise<boolean> {
 syncReports().catch(async (err) => {
   const message = err instanceof Error ? err.message : String(err);
   console.error(`[sync-test262] failed: ${message}`);
-  await preserveSnapshotOrWriteFallback(
-    "error",
-    "test262 dashboard sync failed during the website build.",
-  );
+  try {
+    await preserveSnapshotOrWriteFallback(
+      "error",
+      "test262 dashboard sync failed during the website build.",
+    );
+  } catch (fallbackErr) {
+    const fallbackMessage =
+      fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
+    console.error(
+      `[sync-test262] failed to write fallback: ${fallbackMessage}`,
+    );
+  }
+  if (shouldFailOnSyncError()) process.exit(1);
 });

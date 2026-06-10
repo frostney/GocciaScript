@@ -25,6 +25,13 @@ function numberFromEnv(name: string): number | null {
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
+function timestampFromEnv(name: string): string | null {
+  const value = process.env[name]?.trim();
+  if (!value) return null;
+  const time = Date.parse(value);
+  return Number.isNaN(time) ? null : new Date(time).toISOString();
+}
+
 function pointFromCurrentRun(report: Test262Report): Test262TimelinePoint {
   const runId = numberFromEnv("GITHUB_RUN_ID");
   const runNumber = numberFromEnv("GITHUB_RUN_NUMBER");
@@ -36,6 +43,7 @@ function pointFromCurrentRun(report: Test262Report): Test262TimelinePoint {
   const server = process.env.GITHUB_SERVER_URL ?? "https://github.com";
   const headSha = process.env.GITHUB_SHA ?? "unknown";
   const now = new Date().toISOString();
+  const createdAt = timestampFromEnv("TEST262_RUN_CREATED_AT") ?? now;
   return {
     runId: runId ?? artifactId,
     runNumber: runNumber ?? 0,
@@ -45,7 +53,7 @@ function pointFromCurrentRun(report: Test262Report): Test262TimelinePoint {
     runUrl: runId
       ? `${server}/${repository}/actions/runs/${runId}`
       : GITHUB_REPO_URL,
-    createdAt: process.env.TEST262_RUN_CREATED_AT ?? now,
+    createdAt,
     updatedAt: now,
     artifactId,
     artifactCreatedAt: now,

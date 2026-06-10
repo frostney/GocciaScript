@@ -647,6 +647,7 @@ jobs:
         if: github.ref == 'refs/heads/main' && hashFiles('test262-results.json') != ''
         env:
           BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
+          TEST262_RUN_CREATED_AT: ${{ github.event.head_commit.timestamp }}
         run: |
           if [ -z "${BLOB_READ_WRITE_TOKEN:-}" ]; then
             echo "BLOB_READ_WRITE_TOKEN is not configured; skipping dashboard publish."
