@@ -3,9 +3,9 @@
  * Build-time test262 dashboard sync.
  *
  * Set SKIP_TEST262_SYNC=1 for local/offline builds that should not contact
- * external services. Set BLOB_READ_WRITE_TOKEN during deployment so the
- * website build can materialize the durable Vercel Blob manifest into
- * content/test262/.
+ * external services. Set BLOB_READ_WRITE_TOKEN or attach a Vercel Blob store
+ * during deployment so the website build can materialize the durable Vercel
+ * Blob manifest into content/test262/.
  */
 
 import { access, mkdir, rm, writeFile } from "node:fs/promises";
@@ -36,11 +36,29 @@ function isVercelBuild(): boolean {
   return process.env.VERCEL === "1";
 }
 
+function hasBlobReadCredentials(): boolean {
+  return !!(
+    process.env.BLOB_READ_WRITE_TOKEN ||
+    (process.env.BLOB_STORE_ID &&
+      (process.env.VERCEL_OIDC_TOKEN || isVercelBuild()))
+  );
+}
+
 function shouldFailOnSyncError(): boolean {
   return (
     process.env.SKIP_TEST262_SYNC !== "1" &&
-    (isVercelBuild() || !!process.env.BLOB_READ_WRITE_TOKEN)
+    (isVercelBuild() || hasBlobReadCredentials())
   );
+}
+
+function blobCredentialMode(): string {
+  if (process.env.BLOB_READ_WRITE_TOKEN) return "BLOB_READ_WRITE_TOKEN";
+  if (process.env.BLOB_STORE_ID && process.env.VERCEL_OIDC_TOKEN) {
+    return "Vercel OIDC + BLOB_STORE_ID";
+  }
+  if (process.env.BLOB_STORE_ID) return "BLOB_STORE_ID";
+  if (process.env.VERCEL_OIDC_TOKEN) return "Vercel OIDC";
+  return "none";
 }
 
 async function resetOutputDir() {
@@ -102,8 +120,10 @@ async function syncReports() {
     return;
   }
 
-  if (process.env.BLOB_READ_WRITE_TOKEN) {
-    log("BLOB_READ_WRITE_TOKEN present; reading Vercel Blob test262 manifest");
+  if (hasBlobReadCredentials()) {
+    log(
+      `${blobCredentialMode()} present; reading Vercel Blob test262 manifest`,
+    );
     if (await syncReportsFromBlob()) return;
     const message =
       "The Vercel Blob test262 manifest was missing or did not contain any readable reports.";
@@ -113,9 +133,9 @@ async function syncReports() {
   }
 
   const message =
-    "Set BLOB_READ_WRITE_TOKEN during the website build to read the Vercel Blob test262 manifest.";
+    "Attach a Vercel Blob store to the website project or set BLOB_READ_WRITE_TOKEN during the website build to read the test262 manifest.";
   await preserveSnapshotOrWriteFallback("needs-build-token", message);
-  log("BLOB_READ_WRITE_TOKEN missing");
+  log("Vercel Blob credentials missing");
   if (isVercelBuild()) throw new Error(message);
 }
 

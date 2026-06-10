@@ -65,15 +65,17 @@ The backfill defaults to `--since=2026-05-01` and today's UTC date; pass
 the range. It stores immutable run reports under `test262/runs/`, updates
 `test262/manifest.json`, and computes the daily timeline from the latest
 published main run for each UTC day. During `prebuild`,
-`website/scripts/sync-test262-results.ts` reads that Blob manifest when
-`BLOB_READ_WRITE_TOKEN` is present. It does not download GitHub Actions artifact
-ZIPs during website builds.
+`website/scripts/sync-test262-results.ts` reads that Blob manifest through the
+attached Vercel Blob store (`BLOB_STORE_ID` with Vercel OIDC) or an explicit
+`BLOB_READ_WRITE_TOKEN`. It does not download GitHub Actions artifact ZIPs
+during website builds.
 
-Configure `BLOB_READ_WRITE_TOKEN` in the Vercel project for both Preview and
-Production deployments. The GitHub repository secret with the same name is only
-used by CI to publish new reports; it is not available to Vercel preview builds.
-Vercel builds fail when the token is missing so preview deployments cannot
-silently ship the empty dashboard fallback.
+Configure the Vercel project so both Preview and Production deployments have
+access to the Blob store. CI and one-off backfills still need the GitHub
+repository secret `BLOB_READ_WRITE_TOKEN` because they publish new reports from
+GitHub Actions rather than from inside the Vercel project. Vercel builds fail
+when Blob credentials are missing so preview deployments cannot silently ship
+the empty dashboard fallback.
 
 ## Architecture
 
