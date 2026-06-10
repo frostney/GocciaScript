@@ -643,6 +643,19 @@ jobs:
           retention-days: 30
           path: test262-results.json
 
+      - name: Publish test262 dashboard point
+        if: github.ref == 'refs/heads/main' && hashFiles('test262-results.json') != ''
+        env:
+          BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
+        run: |
+          if [ -z "${BLOB_READ_WRITE_TOKEN:-}" ]; then
+            echo "BLOB_READ_WRITE_TOKEN is not configured; skipping dashboard publish."
+            exit 0
+          fi
+          cd website
+          bun install --frozen-lockfile
+          bun run publish-test262 ../test262-results.json
+
   benchmark:
     needs: build
     strategy:

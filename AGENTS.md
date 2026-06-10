@@ -21,6 +21,8 @@ Assistants should treat CONTRIBUTING as authoritative for contribution requireme
   4. Keep implementation details private; test only public APIs.
 - **Run verification yourself** when the environment allows (tests, format check); do not only tell the human what to run unless execution is impossible.
 - **Match the project's workflow**: branch from `main`, focused diffs, tests and docs updated per CONTRIBUTING.
+- **Treat project-local skills as external playbooks**: files under `.agents/skills/` are not normal repo documentation. Do not edit them unless the user explicitly asks to change that skill. Put repo-specific assistant expectations in this file, or create/update a separate skill only when explicitly requested.
+- **Infer architecture boundaries during planning**: when a change touches website routes, API handlers, generated reports, external services, credentials, artifacts, caches, CI outputs, or deployment/build steps, identify where the work belongs (build time, request time, client time, CI/scheduled time) and compare against existing project patterns before implementing. Do not rely on the user or a skill checklist to spell this out.
 - **Clean first for stale FPC failures**: after a merge, branch switch, PR sync,
   generated resource change, or unexplained compiler/resource error, retry with
   `./build.pas --clean <target>` (or `./build.pas --clean`) before diagnosing the

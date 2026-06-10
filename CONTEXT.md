@@ -1,14 +1,18 @@
 # GocciaScript Context
 
-GocciaScript is a FreePascal implementation of a deliberately constrained modern ECMAScript subset. This glossary is the canonical language for project-specific terms used in code, docs, issues, and reviews.
+GocciaScript is a FreePascal implementation of ECMAScript with sandbox-first recommended defaults and opt-in compatibility/runtime surfaces. This glossary is the canonical language for project-specific terms used in code, docs, issues, and reviews.
 
 ## Language
 
 ### Project And Layers
 
 **GocciaScript**:
-A JavaScript-family language runtime and toolchain focused on a safer, smaller ECMAScript surface for embedding and agent execution.
-_Avoid_: JS engine when the intentional subset or host-tooling shape matters.
+A JavaScript-family language runtime and toolchain focused on safer ECMAScript defaults for embedding and agent execution, while keeping conformance and host customization explicit.
+_Avoid_: JS engine when the recommended defaults or host-tooling shape matters.
+
+**Recommended defaults**:
+The recommended out-of-the-box way to use GocciaScript: sandbox-first, modern, and intentionally conservative about legacy JavaScript forms. It describes guidance for new code, not the limit of what the engine or runtime can support when a host opts into compatibility or custom runtime capabilities.
+_Avoid_: Language ceiling, hard limit.
 
 **Engine**:
 The core language execution layer. It owns language semantics, source type, execution mode dispatch, and core language built-ins.
@@ -41,6 +45,10 @@ _Avoid_: Runtime global.
 **Runtime global**:
 An optional global object, function, constructor, or namespace installed by a runtime extension.
 _Avoid_: Core language built-in, runtime surface when referring to one global.
+
+**Shim**:
+A GocciaScript-provided legacy ECMAScript surface layered over a newer native capability so conformance can include old names without making them the recommended path for new code.
+_Avoid_: Polyfill, compatibility flag.
 
 ### Execution
 

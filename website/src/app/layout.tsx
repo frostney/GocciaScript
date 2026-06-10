@@ -55,7 +55,7 @@ export const metadata: Metadata = {
     template: "%s · GocciaScript",
   },
   description:
-    "A strict subset of ECMAScript 2027+, implemented from scratch — with a sandbox-first runtime designed for tinkerers, embedding and AI agents.",
+    "A sandbox-first ECMAScript runtime implemented from scratch for tinkerers, embedding and AI agents, with compatibility tracked through generated test262 reports.",
   applicationName: "GocciaScript",
   keywords: [
     "GocciaScript",
@@ -83,7 +83,7 @@ export const metadata: Metadata = {
     siteName: "GocciaScript",
     title: "GocciaScript — A drop of JavaScript",
     description:
-      "A strict subset of ECMAScript 2027+, implemented from scratch — with a sandbox-first runtime designed for tinkerers, embedding and AI agents.",
+      "A sandbox-first ECMAScript runtime implemented from scratch for tinkerers, embedding and AI agents.",
     url: SITE_URL,
     locale: "en_US",
   },
@@ -91,7 +91,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title: "GocciaScript — A drop of JavaScript",
     description:
-      "A strict subset of ECMAScript 2027+, implemented from scratch — with a sandbox-first runtime designed for tinkerers, embedding and AI agents.",
+      "A sandbox-first ECMAScript runtime implemented from scratch for tinkerers, embedding and AI agents.",
   },
   robots: {
     index: true,
@@ -110,14 +110,6 @@ export default async function RootLayout({
       className={`${instrumentSerif.variable} ${ibmPlexSans.variable} ${jetbrainsMono.variable}`}
       suppressHydrationWarning
     >
-      <head>
-        <script
-          // biome-ignore lint/security/noDangerouslySetInnerHtml: pre-paint theme bootstrap, no user data
-          dangerouslySetInnerHTML={{
-            __html: `(function(){try{var m=window.matchMedia('(prefers-color-scheme: dark)');document.documentElement.dataset.theme=m.matches?'espresso':'cream';}catch(e){}})();`,
-          }}
-        />
-      </head>
       <body data-grain="true">
         <SiteShell stars={stars}>{children}</SiteShell>
         {/* `<Analytics>` reads `useSearchParams()` for page-view URLs,

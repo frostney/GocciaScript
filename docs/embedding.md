@@ -506,7 +506,7 @@ Runtime globals can be reduced by installing only a concrete extension, for exam
 | System | Type | Default | Purpose |
 |--------|------|---------|---------|
 | `Preprocessors` | `TGocciaPreprocessors` | `[ppJSX]` | Source transformations before parsing |
-| `Compatibility` | `TGocciaCompatibilityFlags` | `[]` | Parser behavior toggles |
+| `Compatibility` | `TGocciaCompatibilityFlags` | `[]` | ECMAScript conformance and legacy-behavior toggles; leave empty for the recommended defaults |
 | `SourceType` | `TGocciaSourceType` | `stScript` | Load entry as script source (default) or module source; `.mjs` file names infer `stModule` |
 | `StrictTypes` | `Boolean` | `False` | Runtime enforcement of type annotations (works in both interpreter and bytecode); setter propagates to the active executor and interpreter scope |
 

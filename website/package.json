@@ -4,8 +4,10 @@
   "private": true,
   "scripts": {
     "sync-docs": "node scripts/sync-docs.mjs",
+    "publish-test262": "bun scripts/publish-test262-results.ts",
+    "backfill-test262": "bun scripts/backfill-test262-dashboard.ts",
     "predev": "node scripts/sync-docs.mjs",
-    "prebuild": "node scripts/sync-docs.mjs && bun scripts/fetch-binaries.ts",
+    "prebuild": "node scripts/sync-docs.mjs && bun scripts/sync-test262-results.ts && bun scripts/fetch-binaries.ts",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
@@ -29,6 +31,7 @@
     ]
   },
   "dependencies": {
+    "@vercel/blob": "^2.4.0",
     "mermaid": "^11.14.0",
     "next": "16.2.4",
     "posthog-js": "^1.372.1",

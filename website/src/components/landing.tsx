@@ -799,7 +799,7 @@ export function Landing({
                 Java<span className="script">Script</span>.
               </h1>
               <p className="hero-lede">
-                A strict subset of{" "}
+                A sandbox-first{" "}
                 <a
                   href="https://tc39.es/ecma262/"
                   target="_blank"
@@ -814,12 +814,12 @@ export function Landing({
                     className="info-tooltip"
                   >
                     ECMAScript is the language specified by ECMA-262.
-                    GocciaScript implements a strict subset of that standard,
-                    plus selected TC39 proposals.
+                    GocciaScript uses modern recommended defaults while tracking
+                    conformance with generated test262 reports.
                   </span>
                 </a>
-                , implemented from scratch — with a sandbox-first runtime
-                designed for tinkerers, embedding and AI agents.
+                runtime implemented from scratch for tinkerers, embedding and AI
+                agents.
               </p>
               <div className="hero-cta-row">
                 <Link
@@ -970,7 +970,8 @@ export function Landing({
                 })}
               </div>
               <p className="compat-note">
-                Compatibility mode can opt back into selected syntax such as{" "}
+                Compatibility flags primarily exist for ECMAScript conformance
+                and legacy code. They can opt back into syntax such as{" "}
                 <code className={inlineCodeClass}>var</code>,{" "}
                 <code className={inlineCodeClass}>function</code>, and ASI via
                 CLI or config flags.

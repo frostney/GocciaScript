@@ -5,14 +5,19 @@ const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? "https://gocciascript.dev";
 
 export default function sitemap(): MetadataRoute.Sitemap {
   const lastModified = new Date();
-  const top = ["/", "/installation", "/docs", "/playground", "/sandbox"].map(
-    (path) => ({
-      url: `${SITE_URL}${path}`,
-      lastModified,
-      changeFrequency: "weekly" as const,
-      priority: path === "/" ? 1.0 : 0.8,
-    }),
-  );
+  const top = [
+    "/",
+    "/installation",
+    "/docs",
+    "/compatibility",
+    "/playground",
+    "/sandbox",
+  ].map((path) => ({
+    url: `${SITE_URL}${path}`,
+    lastModified,
+    changeFrequency: "weekly" as const,
+    priority: path === "/" ? 1.0 : 0.8,
+  }));
   const docs = DOC_PAGES.filter((p) => p.id !== "readme").map((p) => ({
     url: `${SITE_URL}/docs/${p.id}`,
     lastModified,

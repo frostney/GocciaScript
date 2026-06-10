@@ -126,8 +126,8 @@ export default async function OpenGraphImage() {
             maxWidth: 980,
           }}
         >
-          A strict subset of ECMAScript 2027+, sandboxed by default — built for
-          tinkerers, embedding and AI agents.
+          A sandbox-first ECMAScript runtime — built for tinkerers, embedding
+          and AI agents.
         </div>
       </div>
 

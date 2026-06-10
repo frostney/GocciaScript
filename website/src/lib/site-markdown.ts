@@ -15,6 +15,7 @@ export type MarkdownRoute =
   | { kind: "home" }
   | { kind: "docs"; id: string }
   | { kind: "installation" }
+  | { kind: "compatibility" }
   | { kind: "playground" }
   | { kind: "sandbox" };
 
@@ -93,6 +94,7 @@ export function resolveMarkdownRoute(
   }
   if (path.length !== 1) return null;
   if (section === "installation") return { kind: "installation" };
+  if (section === "compatibility") return { kind: "compatibility" };
   if (section === "playground") return { kind: "playground" };
   if (section === "sandbox") return { kind: "sandbox" };
   return null;
@@ -128,12 +130,12 @@ async function homeMarkdown(): Promise<string> {
   return [
     frontmatter(
       "GocciaScript",
-      "A strict JavaScript subset with a sandbox-first runtime for embedding and AI agents.",
+      "A sandbox-first ECMAScript runtime for embedding and AI agents.",
     ),
     "",
     "# GocciaScript",
     "",
-    "A strict subset of ECMAScript 2027+, implemented from scratch with a sandbox-first runtime designed for tinkerers, embedding, and AI agents.",
+    "A sandbox-first ECMAScript runtime implemented from scratch for tinkerers, embedding, and AI agents.",
     "",
     releaseSummary(release),
     "",
@@ -152,6 +154,7 @@ async function homeMarkdown(): Promise<string> {
     list([
       "[Open the Playground](/playground?example=coffee-typed)",
       "[Read the docs](/docs)",
+      "[Check ECMAScript compatibility](/compatibility)",
       "[Installation options](/installation)",
       `[Source on GitHub](${GITHUB_REPO_URL})`,
     ]),
@@ -162,7 +165,7 @@ async function homeMarkdown(): Promise<string> {
     "",
     "## Intentionally excluded",
     "",
-    "Dynamic code construction and scope-changing syntax are left out to keep execution predictable in embedded runtimes. Compatibility mode can opt back into selected syntax such as `var`, `function`, and ASI via CLI or config flags.",
+    "Dynamic code construction and scope-changing syntax are left out of the recommended defaults to keep execution predictable in embedded runtimes. Compatibility flags primarily exist for ECMAScript conformance and legacy code; they can opt back into selected syntax such as `var`, `function`, and ASI via CLI or config flags.",
     "",
     list(EXCLUDED.map((item) => `\`${item.name}\` - ${item.why}`)),
     "",
@@ -232,6 +235,30 @@ async function installationMarkdown(): Promise<string> {
       "[Try the playground](/playground?example=coffee-typed)",
       `[Source on GitHub](${GITHUB_REPO_URL})`,
     ]),
+  ].join("\n");
+}
+
+function compatibilityMarkdown(): string {
+  return [
+    frontmatter(
+      "ECMAScript Compatibility - GocciaScript",
+      "test262 compatibility dashboard generated from main-branch CI reports.",
+    ),
+    "",
+    "# ECMAScript Compatibility",
+    "",
+    "GocciaScript tracks ECMAScript compatibility with generated test262 reports from main-branch CI. The HTML dashboard shows the latest available result for each day, pass-rate and runtime timelines, top-level test groups, and the five least-covered test262 path groups.",
+    "",
+    "## Links",
+    "",
+    list([
+      "[Open the dashboard](/compatibility)",
+      "[Latest test262 JSON](/api/test262/latest)",
+      "[test262 harness docs](/docs/test262)",
+      `[CI workflow](${GITHUB_REPO_URL}/actions/workflows/ci.yml)`,
+    ]),
+    "",
+    "The JSON endpoints serve the test262 snapshot generated during the website build; route requests do not download GitHub Actions artifacts or Blob objects.",
   ].join("\n");
 }
 
@@ -318,6 +345,8 @@ export async function createSiteMarkdown(
       return docsMarkdown(route.id);
     case "installation":
       return installationMarkdown();
+    case "compatibility":
+      return compatibilityMarkdown();
     case "playground":
       return playgroundMarkdown(searchParams);
     case "sandbox":

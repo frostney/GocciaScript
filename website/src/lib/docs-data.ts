@@ -36,7 +36,7 @@ export const DOC_PAGES: DocPage[] = [
     id: "language",
     title: "Language",
     group: "Language",
-    desc: "Complete ECMAScript subset specification, excluded features, and rationale.",
+    desc: "ECMAScript support, recommended defaults, compatibility flags, and rationale.",
     file: "language.md",
   },
   {
@@ -150,6 +150,13 @@ export const DOC_PAGES: DocPage[] = [
     group: "Tooling",
     desc: "Test organization, running tests, coverage, CI.",
     file: "testing.md",
+  },
+  {
+    id: "test262",
+    title: "test262 Harness",
+    group: "Tooling",
+    desc: "ECMAScript conformance runner, CI reports, and baseline contract.",
+    file: "test262.md",
   },
   {
     id: "testing-api",

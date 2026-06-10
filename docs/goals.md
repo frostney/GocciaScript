@@ -6,8 +6,9 @@
 
 - **Primary goal** — A sandboxed JavaScript runtime for AI agents: reduced attack surface with no ambient file system, network, or process access by default
 - **Secondary goal** — A modern ECMAScript platform embeddable in desktop applications, enabling portable code that runs both on the desktop (via FreePascal) and on the web (via standard browsers)
-- **Design philosophy** — Include only the parts of JavaScript that lead to clear and predictable code; exclude features that are error-prone, redundant, or widen the attack surface
-- **Not a goal** — Full ECMAScript conformance, Node.js API compatibility, or server-side workloads
+- **Design philosophy** — Default to the parts of JavaScript that lead to clear and predictable code; keep legacy and high-risk behavior opt-in
+- **Release-track objective** — Reach full ECMAScript conformance as closely as possible for the next major version, measured by the generated test262 reports
+- **Not a goal** — Node.js API compatibility, browser API compatibility, or server-side workloads
 
 ## Primary: Sandboxed Runtime for AI Agents
 
@@ -19,7 +20,7 @@ AI agents need to execute generated code in a constrained environment. GocciaScr
 - **Deterministic execution** — Same input produces the same output; no implicit global state leakage between executions
 - **Timeout enforcement** — The `--timeout` option and embedding API allow hosts to kill runaway scripts
 - **Controlled runtime surface** — The host chooses which runtime extensions or profiles to install (see [Embedding](embedding.md))
-- **No eval** — `eval()` is excluded by design, preventing code injection from within scripts
+- **No eval by default** — `eval()` is excluded from normal runtimes, preventing code injection from within scripts; the private test262 host exposes a conformance-only eval hook
 - **No dynamic code generation by default** — The `Function()` constructor is excluded unless the host opts in via `--unsafe-function-constructor`; the `function` keyword (declarations and expressions) is excluded by default and only re-enabled in compatibility mode via `--compat-function`
 
 The sandbox is a *reduced attack surface*, not a formally verified security boundary. The engine has not been audited by a third party. The sandboxing relies on the host not exposing dangerous APIs, on `eval` being unconditionally absent, and on the host not opting in to `--unsafe-function-constructor` (which would re-enable dynamic code generation via `Function()`).
@@ -28,7 +29,7 @@ The sandbox is a *reduced attack surface*, not a formally verified security boun
 
 Desktop applications built with FreePascal (Lazarus, command-line tools, game engines) can embed GocciaScript to add scripting capabilities:
 
-- **Portable code** — Scripts written for GocciaScript's ECMAScript subset run identically in a browser (since the subset is valid standard JavaScript). This enables sharing logic between a desktop app and a web frontend.
+- **Portable code** — Scripts written with GocciaScript's recommended defaults use modern standard JavaScript forms and can be shared with browser code. Hosts can opt into compatibility behavior when they need older ECMAScript semantics.
 - **Single-binary deployment** — GocciaScript compiles into the host application with no external runtime dependencies
 - **Custom globals** — The host injects application-specific APIs through `DefineLexicalBinding` and custom built-in types (see [Embedding](embedding.md) and [Adding Built-in Types](adding-built-in-types.md))
 - **Cross-platform** — Runs on macOS, Linux, Windows, and FreeBSD via FreePascal's cross-compilation
@@ -36,13 +37,14 @@ Desktop applications built with FreePascal (Lazarus, command-line tools, game en
 ## What GocciaScript is Not
 
 - **Not a Node.js replacement** — No `require()`, no `node:` built-in modules, no event loop with I/O callbacks
-- **Not aiming for 100% ECMAScript conformance** — Features excluded by design, such as `eval`, will not be added. `var`, the `function` keyword, `arguments`/`with`/`delete`/`this` non-strict semantics, loose equality, labels, the traditional `for(init; test; update)` loop, `for...in`, and `while`/`do...while` loops are disabled by default and exposed through targeted JavaScript compatibility toggles (`--compat-var`, `--compat-function`, `--compat-non-strict-mode`, `--compat-loose-equality`, `--compat-label`, `--compat-traditional-for-loop`, `--compat-for-in-loop`, `--compat-while-loops`) for cases such as conformance tests or legacy semantic requirements. Runtime enforcement of type annotations is also opt-in (`--strict-types`). See [Language](language.md) for the full list.
+- **Not browser API compatible** — Web-platform APIs appear only when they are explicitly implemented or installed by a runtime profile
+- **Not a single fixed runtime surface** — The recommended defaults are sandbox-first and modern, but the engine and runtime are customizable. Compatibility flags exist primarily for ECMAScript conformance and legacy semantic requirements; userland code should usually prefer the default forms instead of enabling flags preemptively. Runtime enforcement of type annotations is also opt-in (`--strict-types`). See [Language](language.md) for the full list.
 - **Not a formally verified sandbox** — The sandbox reduces attack surface but has not been independently audited
 - **Not performance-competitive with V8/SpiderMonkey** — GocciaScript prioritizes correctness, embeddability, and reduced attack surface over raw throughput
 
 ## Related documents
 
-- [Language](language.md) — The ECMAScript subset: what's supported, excluded, and why
+- [Language](language.md) — ECMAScript support, recommended defaults, compatibility flags, and shims
 - [Embedding](embedding.md) — How to embed GocciaScript in a FreePascal application
 - [Architecture](architecture.md) — Engine pipeline and execution modes
 - [Errors](errors.md) — Error system and sandboxing behavior

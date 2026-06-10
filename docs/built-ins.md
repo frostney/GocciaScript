@@ -8,6 +8,7 @@
 
 - **Core vs runtime registration** — `TGocciaEngine` always registers core language built-ins (Math, Object, Array, String, Number, RegExp, JSON, Symbol, Set, Map, Promise, Temporal, Intl, ArrayBuffer, SharedArrayBuffer, Atomics, TypedArrays, Proxy, Reflect, Iterator, DisposableStack, etc.); `Goccia.Runtime` provides optional runtime globals (Console, JSON5, JSONL, TOML, YAML, CSV, TSV, Performance, TextEncoder/TextDecoder, URL, fetch, Headers, Response, SemVer)
 - **Runtime opt-ins** — Testing, benchmarking, FFI, and data-format APIs extend the runtime surface through concrete runtime extension classes
+- **ECMAScript shims** — Legacy standard names such as global `parseInt`, `parseFloat`, `isNaN`, `isFinite`, `Date`, `__proto__`, and legacy getter/setter helpers are installed through Goccia.shims
 - **Adding new built-ins** — See [Adding Built-in Types](adding-built-in-types.md) for the step-by-step recipe
 - **Always-present globals** — `globalThis` and `Goccia` namespace are registered after all built-ins
 
@@ -143,7 +144,7 @@ Implements the [ECMAScript Number](https://developer.mozilla.org/en-US/docs/Web/
 
 **Full standard compliance** — all standard static methods, constants, and prototype methods are available.
 
-**GocciaScript difference:** `parseInt`, `parseFloat`, `isNaN`, and `isFinite` are only available as `Number.*` static methods — not as global functions. See [language.md](language.md#no-global-parseint-parsefloat-isnan-isfinite) for the rationale.
+**Default guidance:** Prefer `Number.parseInt`, `Number.parseFloat`, `Number.isNaN`, and `Number.isFinite` in new code. The legacy global names are installed as shims for ECMAScript compatibility; `parseInt` and `parseFloat` delegate to their `Number.*` counterparts, while `isNaN` and `isFinite` preserve the standard global coercion behavior.
 
 ### BigInt (`Goccia.Builtins.GlobalBigInt.pas`)
 
@@ -253,8 +254,30 @@ A `const` global providing engine metadata and Goccia-owned utility APIs:
 | `spec` | `object` | ES specification features implemented by GocciaScript, keyed by year (e.g., `"2015"`, `"2025"`). Each year maps to an array of `{ name, link }` entries. |
 | `proposal` | `object` | TC39 proposals implemented by GocciaScript, keyed by stage (e.g., `"stage-3"`, `"stage-1"`). Each stage maps to an array of `{ name, link }` entries. |
 | `runtimeGlobals` | `string[]` | Names of runtime globals installed by the active runtime profile or runtime extensions. Empty in core-language-only engines. |
-| `shims` | `string[]` | Names of registered shims (currently empty, infrastructure for future shim support) |
+| `shims` | `string[]` | Names of registered ECMAScript shims installed by the engine |
 | `gc` | `function` | Trigger manual garbage collection. Returns `undefined`. Also exposes read-only `gc.bytesAllocated` (approximate GC heap size in bytes) and `gc.maxBytes` (active ceiling; defaults to half of physical memory capped at 8 GB on 64-bit or 700 MB on 32-bit, overridable via `--max-memory`). Allocations exceeding the ceiling throw a `RangeError`. |
+
+**Goccia.shims**
+
+Goccia.shims lists the shim names registered by the engine for the current realm. These shims are active by default and are part of the ECMAScript conformance track, not a recommendation for new userland code. When a legacy ECMAScript global or prototype surface has a newer JavaScript spelling, the older surface should live here as a shim over the newer implementation.
+
+Current default shims:
+
+| Shim name | Installed surface | Backing implementation |
+|-----------|-------------------|------------------------|
+| `btoa` | `globalThis.btoa` | `Uint8Array.prototype.toBase64` |
+| `atob` | `globalThis.atob` | `Uint8Array.fromBase64` |
+| `parseInt` | `globalThis.parseInt` | `Number.parseInt` |
+| `parseFloat` | `globalThis.parseFloat` | `Number.parseFloat` |
+| `isNaN` | `globalThis.isNaN` | `Number.isNaN(Number(value))` coercion wrapper |
+| `isFinite` | `globalThis.isFinite` | `Number.isFinite(Number(value))` coercion wrapper |
+| `Date` | `globalThis.Date` | Temporal-backed legacy Date shim |
+| `hasOwnProperty` | `Object.prototype.hasOwnProperty` | `Object.hasOwn` |
+| `__proto__` | `Object.prototype.__proto__` | `Object.getPrototypeOf` / `Object.setPrototypeOf` |
+| `defineGetter` | `Object.prototype.__defineGetter__` | `Object.defineProperty` accessor descriptor |
+| `defineSetter` | `Object.prototype.__defineSetter__` | `Object.defineProperty` accessor descriptor |
+| `lookupGetter` | `Object.prototype.__lookupGetter__` | Prototype-chain descriptor lookup |
+| `lookupSetter` | `Object.prototype.__lookupSetter__` | Prototype-chain descriptor lookup |
 
 **`Goccia.build`**
 
