@@ -567,7 +567,7 @@ procedure EmitImportBindingAccess(const ACtx: TGocciaCompilationContext;
   const APhase: TGocciaImportCallPhase; const AModulePath, AExportName: string;
   const ADest: UInt8);
 var
-  PathIdx, NameIdx: UInt16;
+  PathIdx: UInt16;
 begin
   PathIdx := ACtx.Template.AddConstantString(AModulePath);
   if APhase = icpSource then
@@ -578,13 +578,7 @@ begin
     EmitInstruction(ACtx, EncodeABx(OP_IMPORT, ADest, PathIdx));
 
   if (APhase = icpEvaluation) and (AExportName <> '') then
-  begin
-    NameIdx := ACtx.Template.AddConstantString(AExportName);
-    if NameIdx > High(UInt8) then
-      raise Exception.Create('Constant pool overflow: import name index exceeds 255');
-    EmitInstruction(ACtx, EncodeABC(OP_GET_PROP_CONST, ADest, ADest,
-      UInt8(NameIdx)));
-  end;
+    EmitLoadPropertyByName(ACtx, ADest, ADest, AExportName);
 end;
 
 procedure EmitExportBindingUpdates(const ACtx: TGocciaCompilationContext;

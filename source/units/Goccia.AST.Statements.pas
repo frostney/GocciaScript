@@ -511,6 +511,7 @@ type
   public
     constructor Create(const ADeclaration: TGocciaDestructuringDeclaration;
       const ALine, AColumn: Integer);
+    destructor Destroy; override;
     function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property Declaration: TGocciaDestructuringDeclaration read FDeclaration;
   end;
@@ -1053,6 +1054,12 @@ end;
     FDeclaration := ADeclaration;
   end;
 
+  destructor TGocciaExportDestructuringDeclaration.Destroy;
+  begin
+    FDeclaration.Free;
+    inherited;
+  end;
+
   { TGocciaExportFunctionDeclaration }
 
   constructor TGocciaExportFunctionDeclaration.Create(
@@ -1423,6 +1430,7 @@ end;
     Module: TGocciaModule;
     ImportPair: TStringStringMap.TKeyValuePair;
     NamespaceObject: TGocciaValue;
+    SourceLoader: TLoadModuleSourceCallback;
     Value: TGocciaValue;
   begin
     Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
@@ -1461,14 +1469,17 @@ end;
 
     if Phase = icpSource then
     begin
-      if not Assigned(AContext.LoadModuleSource) then
+      SourceLoader := AContext.LoadModuleSource;
+      if (not Assigned(SourceLoader)) and Assigned(AContext.Scope) then
+        SourceLoader := AContext.Scope.LoadModuleSource;
+      if not Assigned(SourceLoader) then
       begin
         AContext.OnError('Module source loader is not available.',
           Line, Column);
         Exit;
       end;
 
-      Value := AContext.LoadModuleSource(EncodeImportSpecifierAttribute(
+      Value := SourceLoader(EncodeImportSpecifierAttribute(
         ModulePath, AttributeType), AContext.CurrentFilePath);
       if Assigned(TGarbageCollector.Instance) then
         TGarbageCollector.Instance.AddTempRoot(Value);

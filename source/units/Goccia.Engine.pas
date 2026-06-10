@@ -1316,6 +1316,7 @@ var
   ExportDecl: TGocciaExportDeclaration;
   ExportDefaultDecl: TGocciaExportDefaultDeclaration;
   ExportDestructuringDecl: TGocciaExportDestructuringDeclaration;
+  ExportEnumDecl: TGocciaExportEnumDeclaration;
   ExportFuncDecl: TGocciaExportFunctionDeclaration;
   ImportDecl: TGocciaImportDeclaration;
   ImportPair: TStringStringMap.TKeyValuePair;
@@ -1525,7 +1526,13 @@ begin
       ExportClassDecl := TGocciaExportClassDeclaration(Stmt);
       AModule.AddExportBinding(ExportClassDecl.Declaration.ClassDefinition.Name,
         ExportClassDecl.Declaration.ClassDefinition.Name, AModuleScope);
-      end
+    end
+    else if Stmt is TGocciaExportEnumDeclaration then
+    begin
+      ExportEnumDecl := TGocciaExportEnumDeclaration(Stmt);
+      AModule.AddExportBinding(ExportEnumDecl.Declaration.Name,
+        ExportEnumDecl.Declaration.Name, AModuleScope);
+    end
     end;
 
     AModule.InvalidateNamespaceObject;
@@ -1900,6 +1907,8 @@ begin
                 ModuleScope);
             RegisterEntryModuleExports(EntryModule, PipelineResult.ProgramNode,
               ModuleScope, FModuleLoader, ModuleContext, False);
+            RegisterEntryModuleExports(EntryModule, PipelineResult.ProgramNode,
+              ModuleScope, FModuleLoader, ModuleContext, True);
             EvaluateEntryRequestedModulesInSourceOrder(
               PipelineResult.ProgramNode, FModuleLoader, FSourcePath,
               EntryRequestedModules);

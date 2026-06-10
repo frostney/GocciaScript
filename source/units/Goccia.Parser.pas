@@ -4140,6 +4140,8 @@ begin
   if CheckUnescapedIdentifierKeyword(KEYWORD_AWAIT) then
   begin
     IsAwait := True;
+    if FFunctionDepth = 0 then
+      FHasTopLevelAwait := True;
     Advance; // consume 'await'
   end;
 
@@ -4559,6 +4561,8 @@ begin
   if ((FInAsyncFunction > 0) or (FFunctionDepth = 0)) and CheckUnescapedIdentifierKeyword(KEYWORD_AWAIT) then
   begin
     IsAwait := True;
+    if FFunctionDepth = 0 then
+      FHasTopLevelAwait := True;
     Advance; // consume 'await'
   end;
 
@@ -4585,6 +4589,8 @@ begin
           Peek.Line, Peek.Column, FFileName, FSourceLines,
           'Wrap in an async function or use ''using'' for synchronous disposal');
 
+      if FFunctionDepth = 0 then
+        FHasTopLevelAwait := True;
       Advance; // consume 'await'
       Advance; // consume 'using'
       Token := Advance;

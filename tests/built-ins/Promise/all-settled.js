@@ -76,3 +76,34 @@ test("Promise.allSettled with single rejected element", () => {
     expect(results[0].reason).toBe("err");
   });
 });
+
+test("Promise.allSettled creates data properties for result records", () => {
+  const calls = [];
+  const statusDescriptor = Object.create(null);
+  statusDescriptor.set = () => { calls.push("status"); };
+  statusDescriptor.configurable = true;
+  const valueDescriptor = Object.create(null);
+  valueDescriptor.set = () => { calls.push("value"); };
+  valueDescriptor.configurable = true;
+  const reasonDescriptor = Object.create(null);
+  reasonDescriptor.set = () => { calls.push("reason"); };
+  reasonDescriptor.configurable = true;
+  Object.defineProperty(Object.prototype, "status", statusDescriptor);
+  Object.defineProperty(Object.prototype, "value", valueDescriptor);
+  Object.defineProperty(Object.prototype, "reason", reasonDescriptor);
+
+  return Promise.allSettled([
+    Promise.resolve("ok"),
+    Promise.reject("bad")
+  ]).then((results) => {
+    expect(calls).toEqual([]);
+    expect(results[0].status).toBe("fulfilled");
+    expect(results[0].value).toBe("ok");
+    expect(results[1].status).toBe("rejected");
+    expect(results[1].reason).toBe("bad");
+  }).finally(() => {
+    delete Object.prototype.status;
+    delete Object.prototype.value;
+    delete Object.prototype.reason;
+  });
+});

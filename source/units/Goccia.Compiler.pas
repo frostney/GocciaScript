@@ -602,6 +602,28 @@ begin
     Result := nil;
 end;
 
+function IsNamedDefaultFunctionDeclaration(
+  const ANode: TGocciaASTNode): Boolean;
+var
+  ExportDefault: TGocciaExportDefaultDeclaration;
+begin
+  Result := False;
+  if not (ANode is TGocciaExportDefaultDeclaration) then
+    Exit;
+
+  ExportDefault := TGocciaExportDefaultDeclaration(ANode);
+  Result := (ExportDefault.LocalName <> GOCCIA_DEFAULT_EXPORT_BINDING) and
+    (ExportDefault.Expression is TGocciaFunctionExpression) and
+    (TGocciaFunctionExpression(ExportDefault.Expression).Name =
+    ExportDefault.LocalName);
+end;
+
+function IsHoistedFunctionDeclaration(const ANode: TGocciaASTNode): Boolean;
+begin
+  Result := (GetFunctionDecl(ANode) <> nil) or
+    IsNamedDefaultFunctionDeclaration(ANode);
+end;
+
 procedure TGocciaCompiler.DoCompileFunctionBody(const ABody: TGocciaASTNode);
 var
   Block: TGocciaBlockStatement;
@@ -625,7 +647,7 @@ begin
       // Check if there are function declarations to hoist
       HasFunctionDecl := False;
       for I := 0 to Block.Nodes.Count - 1 do
-        if GetFunctionDecl(Block.Nodes[I]) <> nil then
+        if IsHoistedFunctionDeclaration(Block.Nodes[I]) then
         begin
           HasFunctionDecl := True;
           Break;
@@ -640,7 +662,7 @@ begin
 
         // Hoist function declarations: compile initializers before other statements
         for I := 0 to Block.Nodes.Count - 1 do
-          if GetFunctionDecl(Block.Nodes[I]) <> nil then
+          if IsHoistedFunctionDeclaration(Block.Nodes[I]) then
             DoCompileStatement(TGocciaStatement(Block.Nodes[I]));
       end;
 
@@ -664,7 +686,7 @@ begin
         begin
           Node := Block.Nodes[I];
           // Skip function declarations — already compiled during hoisting
-          if GetFunctionDecl(Node) <> nil then
+          if IsHoistedFunctionDeclaration(Node) then
             Continue;
           if Node is TGocciaStatement then
           begin
@@ -946,7 +968,7 @@ begin
     // Check if there are function declarations to hoist
     HasFunctionDecl := False;
     for I := 0 to AProgram.Body.Count - 1 do
-      if GetFunctionDecl(AProgram.Body[I]) <> nil then
+      if IsHoistedFunctionDeclaration(AProgram.Body[I]) then
       begin
         HasFunctionDecl := True;
         Break;
@@ -956,7 +978,7 @@ begin
     begin
       // Hoist function declarations: compile initializers before other statements
       for I := 0 to AProgram.Body.Count - 1 do
-        if GetFunctionDecl(AProgram.Body[I]) <> nil then
+        if IsHoistedFunctionDeclaration(AProgram.Body[I]) then
           DoCompileStatement(AProgram.Body[I]);
     end;
 
@@ -973,7 +995,7 @@ begin
     for I := 0 to AProgram.Body.Count - 1 do
     begin
       // Skip function declarations — already compiled during hoisting.
-      if (GetFunctionDecl(AProgram.Body[I]) <> nil) or
+      if IsHoistedFunctionDeclaration(AProgram.Body[I]) or
          (AProgram.Body[I] is TGocciaImportDeclaration) or
          (AProgram.Body[I] is TGocciaReExportDeclaration) then
         Continue;

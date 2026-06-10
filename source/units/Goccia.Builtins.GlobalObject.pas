@@ -510,6 +510,8 @@ function TGocciaGlobalObject.ObjectGetOwnPropertyDescriptors(const AArgs: TGocci
 var
   Obj, Descriptors: TGocciaObjectValue;
   PropertyNames: TArray<string>;
+  PropertyKeys: TArray<TGocciaValue>;
+  KeyValue: TGocciaValue;
   OwnSymbols: TArray<TGocciaSymbolValue>;
   Descriptor: TGocciaPropertyDescriptor;
   I: Integer;
@@ -525,6 +527,24 @@ begin
     // Step 2: Let ownKeys be ? obj.[[OwnPropertyKeys]]()
     // Step 3: Let descriptors be OrdinaryObjectCreate(%Object.prototype%)
     Descriptors := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
+
+    if Obj is TGocciaProxyValue then
+    begin
+      PropertyKeys := TGocciaProxyValue(Obj).GetOwnPropertyKeyValues;
+      for KeyValue in PropertyKeys do
+      begin
+        if KeyValue is TGocciaSymbolValue then
+          Descriptor := Obj.GetOwnSymbolPropertyDescriptor(
+            TGocciaSymbolValue(KeyValue))
+        else
+          Descriptor := Obj.GetOwnPropertyDescriptor(
+            KeyValue.ToStringLiteral.Value);
+        if Descriptor <> nil then
+          Descriptors.CreateDataPropertyOrThrow(KeyValue,
+            FromPropertyDescriptor(Descriptor));
+      end;
+      Exit(Descriptors);
+    end;
 
     // Step 4: For each element key of ownKeys (string keys)
     PropertyNames := Obj.GetAllPropertyNames;

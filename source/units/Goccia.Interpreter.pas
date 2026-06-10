@@ -157,6 +157,7 @@ end;
 
 function TGocciaInterpreter.CreateEvaluationContext: TGocciaEvaluationContext;
 begin
+  Result := Default(TGocciaEvaluationContext);
   if Assigned(FRealm) then
     Result.Realm := FRealm
   else

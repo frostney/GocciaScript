@@ -888,14 +888,8 @@ begin
   UsePreinitializedBinding := False;
   IsPreinitializedTopLevel := ACtx.PreinitializedTopLevelFunctions and
     not IsBlockScoped;
-  if IsPreinitializedTopLevel then
-  begin
-    LocalIdx := FindLocalBySlot(ACtx.Scope, AStmt.Name, Slot);
-    if LocalIdx >= 0 then
-      ACtx.Scope.MarkGlobalBacked(LocalIdx);
-  end;
 
-  if IsPreinitializedTopLevel then
+  if IsPreinitializedTopLevel and IsTopLevelGlobalBacked then
   begin
     LocalIdx := FindLocalBySlot(ACtx.Scope, AStmt.Name, Slot);
     UsePreinitializedBinding := (LocalIdx >= 0) and
@@ -919,7 +913,7 @@ begin
       if InferredTemplate.Name = '<function>' then
         InferredTemplate.Name := AStmt.Name;
     end;
-    if IsPreinitializedTopLevel then
+    if IsPreinitializedTopLevel and IsTopLevelGlobalBacked then
     begin
       NameIdx := ACtx.Template.AddConstantString(AStmt.Name);
       EmitInstruction(ACtx, EncodeABx(OP_SET_GLOBAL, Slot, NameIdx));

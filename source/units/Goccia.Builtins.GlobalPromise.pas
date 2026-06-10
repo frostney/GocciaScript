@@ -276,8 +276,9 @@ begin
   if FState.Settled then Exit;
 
   Entry := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
-  Entry.AssignProperty('status', TGocciaStringLiteralValue.Create('fulfilled'));
-  Entry.AssignProperty(PROP_VALUE, AArgs.GetElement(0));
+  Entry.CreateDataPropertyOrThrow('status',
+    TGocciaStringLiteralValue.Create('fulfilled'));
+  Entry.CreateDataPropertyOrThrow(PROP_VALUE, AArgs.GetElement(0));
   FState.Results.Elements[FIndex] := Entry;
   FState.Remaining := FState.Remaining - 1;
 
@@ -313,8 +314,9 @@ begin
   if FState.Settled then Exit;
 
   Entry := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
-  Entry.AssignProperty('status', TGocciaStringLiteralValue.Create('rejected'));
-  Entry.AssignProperty('reason', AArgs.GetElement(0));
+  Entry.CreateDataPropertyOrThrow('status',
+    TGocciaStringLiteralValue.Create('rejected'));
+  Entry.CreateDataPropertyOrThrow('reason', AArgs.GetElement(0));
   FState.Results.Elements[FIndex] := Entry;
   FState.Remaining := FState.Remaining - 1;
 

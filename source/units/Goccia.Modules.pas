@@ -452,6 +452,9 @@ begin
   if not Assigned(ASourceModule) then
     Exit;
 
+  if Assigned(ASourceModule.FEnvironment) then
+    SetEnvironment(ASourceModule.FEnvironment);
+
   for BindingPair in ASourceModule.FExportBindings do
   begin
     Binding := BindingPair.Value;
@@ -1011,10 +1014,17 @@ begin
         raise TGocciaThrowValue.Create(FEvaluationError);
       end;
       on E: TGocciaThrowValue do
+      begin
+        FEvaluationError := E.Value;
+        FHasEvaluationError := True;
         raise;
+      end;
       on E: TGocciaTypeError do
-        raise TGocciaThrowValue.Create(
-          CreateErrorObject(TYPE_ERROR_NAME, E.Message));
+      begin
+        FEvaluationError := CreateErrorObject(TYPE_ERROR_NAME, E.Message);
+        FHasEvaluationError := True;
+        raise TGocciaThrowValue.Create(FEvaluationError);
+      end;
     end;
     if not Assigned(Module) then
       raise Exception.CreateFmt(

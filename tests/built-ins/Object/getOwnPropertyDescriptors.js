@@ -245,4 +245,31 @@ describe("Object.getOwnPropertyDescriptors", () => {
     const cloneDescs = Object.getOwnPropertyDescriptors(clone);
     expect(cloneDescs.z.enumerable).toBe(false);
   });
+
+  test("proxy observes ownKeys once before descriptor lookups", () => {
+    const log = [];
+    const target = { a: 1, b: 2, c: 3 };
+    const proxy = new Proxy(target, {
+      ownKeys() {
+        log.push("ownKeys");
+        return ["a", "b", "c"];
+      },
+      getOwnPropertyDescriptor(targetObject, key) {
+        log.push("getOwnPropertyDescriptor:" + key);
+        return Object.getOwnPropertyDescriptor(targetObject, key);
+      },
+    });
+
+    const descs = Object.getOwnPropertyDescriptors(proxy);
+
+    expect(descs.a.value).toBe(1);
+    expect(descs.b.value).toBe(2);
+    expect(descs.c.value).toBe(3);
+    expect(log).toEqual([
+      "ownKeys",
+      "getOwnPropertyDescriptor:a",
+      "getOwnPropertyDescriptor:b",
+      "getOwnPropertyDescriptor:c",
+    ]);
+  });
 });

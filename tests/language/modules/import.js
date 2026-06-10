@@ -1,6 +1,7 @@
 import { localFunction, localValue } from "./local-module.js";
 import defer * as deferredMath from "./helpers/math-utils.js";
 import defer * as attributedDeferredMath from "./helpers/math-utils.js" with { };
+import defer * as deferredConfig from "./helpers/config.json" with { type: "json" };
 import defer * as deferredTLA from "./helpers/deferred-tla.js";
 import defer * as deferredAwaitText from "./helpers/deferred-await-text.js";
 import "./helpers/side-effect-marker.js";
@@ -17,6 +18,11 @@ describe("basic import", () => {
   test("import defer namespace syntax binds deferred module namespaces", () => {
     expect(deferredMath.add(2, 3)).toBe(5);
     expect(attributedDeferredMath.multiply(3, 4)).toBe(12);
+  });
+
+  test("import defer preserves attributes for asset modules", () => {
+    expect(deferredConfig.name).toBe("goccia-test");
+    expect(deferredConfig.default.name).toBe("goccia-test");
   });
 
   test("import defer eagerly evaluates top-level await dependencies", () => {

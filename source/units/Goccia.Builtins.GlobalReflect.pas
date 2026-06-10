@@ -535,17 +535,16 @@ var
   PropertyName: string;
   Success: Boolean;
 begin
-  TGocciaArgumentValidator.RequireAtLeast(AArgs, 2, 'Reflect.set', ThrowError);
-
   Target := AArgs.GetElement(0);
+  // Step 1: If target is not an Object, throw a TypeError exception
+  RequireObjectTarget(Target, 'Reflect.set');
+
+  // Step 2: Let key be ? ToPropertyKey(propertyKey)
   PropKey := ToPropertyKey(AArgs.GetElement(1));
   if AArgs.Length >= 3 then
     Value := AArgs.GetElement(2)
   else
     Value := TGocciaUndefinedLiteralValue.UndefinedValue;
-
-  // Step 1: If target is not an Object, throw a TypeError exception
-  RequireObjectTarget(Target, 'Reflect.set');
 
   // Step 4: If receiver is not present, set receiver to target
   if AArgs.Length >= 4 then
@@ -553,7 +552,6 @@ begin
   else
     Receiver := Target;
 
-  // Step 2: Let key be ? ToPropertyKey(propertyKey)
   // Step 3, 5: Return ? target.[[Set]](key, V, receiver)
   if PropKey is TGocciaSymbolValue then
     Success := TGocciaObjectValue(Target).AssignSymbolPropertyWithReceiver(

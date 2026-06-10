@@ -340,8 +340,8 @@ var
   MappingDescriptor: TGocciaPropertyDescriptor;
 begin
   MappingDescriptor := ClonePropertyDescriptor(ADescriptor);
-  inherited DefineProperty(AName, ADescriptor);
   try
+    inherited DefineProperty(AName, ADescriptor);
     ApplyDefineMapping(AName, MappingDescriptor);
   finally
     MappingDescriptor.Free;
@@ -354,8 +354,8 @@ var
   MappingDescriptor: TGocciaPropertyDescriptor;
 begin
   MappingDescriptor := ClonePropertyDescriptor(ADescriptor);
-  Result := inherited TryDefineProperty(AName, ADescriptor);
   try
+    Result := inherited TryDefineProperty(AName, ADescriptor);
     if Result then
       ApplyDefineMapping(AName, MappingDescriptor);
   finally

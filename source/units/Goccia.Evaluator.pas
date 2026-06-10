@@ -327,6 +327,7 @@ end;
 procedure PredeclareBlockLexicalBinding(const ANode: TGocciaASTNode;
   const AScope: TGocciaScope; const AIncludeFunctionDeclarations: Boolean = True);
 var
+  ExportDefaultDecl: TGocciaExportDefaultDeclaration;
   VarDecl: TGocciaVariableDeclaration;
   DestructDecl: TGocciaDestructuringDeclaration;
   ImportDecl: TGocciaImportDeclaration;
@@ -425,9 +426,17 @@ begin
       TGocciaExportClassDeclaration(ANode).Declaration.ClassDefinition.Name,
       dtLet, ANode.Line, ANode.Column)
   else if ANode is TGocciaExportDefaultDeclaration then
+  begin
+    ExportDefaultDecl := TGocciaExportDefaultDeclaration(ANode);
     PredeclareBlockLexicalName(AScope,
-      TGocciaExportDefaultDeclaration(ANode).LocalName, dtConst, ANode.Line,
-      ANode.Column)
+      ExportDefaultDecl.LocalName,
+      BlockLexicalDeclarationType(
+        not ((ExportDefaultDecl.LocalName <> GOCCIA_DEFAULT_EXPORT_BINDING) and
+        (ExportDefaultDecl.Expression is TGocciaFunctionExpression) and
+        (TGocciaFunctionExpression(ExportDefaultDecl.Expression).Name =
+        ExportDefaultDecl.LocalName))),
+      ANode.Line, ANode.Column);
+  end
   else if ANode is TGocciaEnumDeclaration then
     PredeclareBlockLexicalName(AScope, TGocciaEnumDeclaration(ANode).Name,
       dtLet, ANode.Line, ANode.Column)
@@ -458,19 +467,48 @@ end;
 procedure HoistSingleFunctionDeclaration(const ANode: TGocciaASTNode;
   const AContext: TGocciaEvaluationContext; const ABlockScoped: Boolean);
 var
+  ExportDefaultDecl: TGocciaExportDefaultDeclaration;
   FuncDecl: TGocciaFunctionDeclaration;
+  FuncExpr: TGocciaFunctionExpression;
   Value: TGocciaValue;
   Name: string;
 begin
+  FuncDecl := nil;
+  FuncExpr := nil;
+  Name := '';
   if ANode is TGocciaFunctionDeclaration then
+  begin
     FuncDecl := TGocciaFunctionDeclaration(ANode)
+  end
   else if ANode is TGocciaExportFunctionDeclaration then
+  begin
     FuncDecl := TGocciaExportFunctionDeclaration(ANode).Declaration
+  end
+  else if ANode is TGocciaExportDefaultDeclaration then
+  begin
+    ExportDefaultDecl := TGocciaExportDefaultDeclaration(ANode);
+    if (ExportDefaultDecl.LocalName <> GOCCIA_DEFAULT_EXPORT_BINDING) and
+       (ExportDefaultDecl.Expression is TGocciaFunctionExpression) and
+       (TGocciaFunctionExpression(ExportDefaultDecl.Expression).Name =
+       ExportDefaultDecl.LocalName) then
+    begin
+      FuncExpr := TGocciaFunctionExpression(ExportDefaultDecl.Expression);
+      Name := ExportDefaultDecl.LocalName;
+    end;
+  end
   else
     Exit;
 
-  Name := FuncDecl.Name;
-  Value := FuncDecl.FunctionExpression.Evaluate(AContext);
+  if Assigned(FuncDecl) then
+  begin
+    Name := FuncDecl.Name;
+    FuncExpr := FuncDecl.FunctionExpression;
+  end;
+
+  if not Assigned(FuncExpr) then
+    Exit;
+
+  Value := FuncExpr.Evaluate(AContext);
   if Assigned(TGarbageCollector.Instance) then
     TGarbageCollector.Instance.AddTempRoot(Value);
   try
@@ -2510,6 +2548,7 @@ var
   SourceValue: TGocciaValue;
   SourceText: string;
   EvalSource: TStringList;
+  EvalSourcePath: string;
   EvalOptions: TGocciaSourcePipelineOptions;
   PipelineResult: TGocciaSourcePipelineResult;
   EvalContext: TGocciaEvaluationContext;
@@ -2554,8 +2593,9 @@ begin
     if CallerStrict then
       Exclude(EvalOptions.Compatibility, cfNonStrictMode);
 
+    EvalSourcePath := Format('%s::<direct-eval>', [AContext.CurrentFilePath]);
     PipelineResult := TGocciaSourcePipeline.Parse(EvalSource,
-      AContext.CurrentFilePath, EvalOptions);
+      EvalSourcePath, EvalOptions);
     try
       StrictEval := CallerStrict or HasUseStrictDirective(PipelineResult.ProgramNode);
       if StrictEval then
@@ -2570,7 +2610,7 @@ begin
       try
         EvalContext := AContext;
         EvalContext.Scope := EvalScope;
-        EvalContext.CurrentFilePath := AContext.CurrentFilePath;
+        EvalContext.CurrentFilePath := EvalSourcePath;
         EvalContext.NonStrictMode := not StrictEval;
         if StrictEval then
           VarScope := EvalScope
