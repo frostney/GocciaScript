@@ -2549,7 +2549,8 @@ begin
       else
         CollectDestructuringBindings(AStmt.BindingPattern, ACtx.Scope,
           AStmt.IsConst);
-      EmitDestructuring(ACtx, AStmt.BindingPattern, KeyReg);
+      EmitDestructuring(ACtx, AStmt.BindingPattern, KeyReg,
+        AStmt.IsVar and ACtx.GlobalBackedTopLevel);
     end
     else if AStmt.BindingName <> '' then
     begin
@@ -2558,7 +2559,7 @@ begin
       else
         Slot := ACtx.Scope.DeclareLocal(AStmt.BindingName, AStmt.IsConst);
       EmitBindingAssignmentFromRegister(ACtx, AStmt.BindingName, KeyReg,
-        False);
+        AStmt.IsVar and ACtx.GlobalBackedTopLevel);
     end;
 
     ACtx.CompileStatement(AStmt.Body);
