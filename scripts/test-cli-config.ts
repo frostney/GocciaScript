@@ -919,7 +919,7 @@ console.log("Per-file compat-non-strict-mode config across all apps...");
   try {
     writeFileSync(
       join(tmp, "goccia.json"),
-      '{"compat-function": true, "compat-non-strict-mode": true}\n',
+      '{"compat-function": true, "compat-non-strict-mode": true, "compat-arguments-object": true}\n',
     );
     const nonStrictSource = [
       "function f(a) {",

@@ -402,6 +402,7 @@ var
   Interpreter: TGocciaInterpreter;
   ModuleLoader: TGocciaModuleLoader;
   ModuleValue: TGocciaModule;
+  ExportValue: TGocciaValue;
   Provider: TMemoryModuleContentProvider;
   Resolver: TInMemoryModuleResolver;
   Source: TStringList;
@@ -419,13 +420,17 @@ begin
       Interpreter := TGocciaInterpreter.Create(ENTRY_PATH, Source, ModuleLoader);
       try
         ModuleValue := Interpreter.LoadModule(MODULE_PATH, ENTRY_PATH);
-        Expect<Boolean>(ModuleValue.ExportsTable['value'] is TGocciaNumberLiteralValue).ToBe(True);
-        Expect<Double>(TGocciaNumberLiteralValue(ModuleValue.ExportsTable['value']).Value).ToBe(1);
+        Expect<Boolean>(ModuleValue.TryGetExportValue('value', ExportValue))
+          .ToBe(True);
+        Expect<Boolean>(ExportValue is TGocciaNumberLiteralValue).ToBe(True);
+        Expect<Double>(TGocciaNumberLiteralValue(ExportValue).Value).ToBe(1);
 
         Provider.SetModule(MODULE_PATH, 'export const value = 2;', 2);
         ModuleValue := Interpreter.LoadModule(MODULE_PATH, ENTRY_PATH);
-        Expect<Boolean>(ModuleValue.ExportsTable['value'] is TGocciaNumberLiteralValue).ToBe(True);
-        Expect<Double>(TGocciaNumberLiteralValue(ModuleValue.ExportsTable['value']).Value).ToBe(2);
+        Expect<Boolean>(ModuleValue.TryGetExportValue('value', ExportValue))
+          .ToBe(True);
+        Expect<Boolean>(ExportValue is TGocciaNumberLiteralValue).ToBe(True);
+        Expect<Double>(TGocciaNumberLiteralValue(ExportValue).Value).ToBe(2);
       finally
         Interpreter.Free;
       end;
