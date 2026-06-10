@@ -69,6 +69,12 @@ published main run for each UTC day. During `prebuild`,
 `BLOB_READ_WRITE_TOKEN` is present. It does not download GitHub Actions artifact
 ZIPs during website builds.
 
+Configure `BLOB_READ_WRITE_TOKEN` in the Vercel project for both Preview and
+Production deployments. The GitHub repository secret with the same name is only
+used by CI to publish new reports; it is not available to Vercel preview builds.
+Vercel builds fail when the token is missing so preview deployments cannot
+silently ship the empty dashboard fallback.
+
 ## Architecture
 
 ```text

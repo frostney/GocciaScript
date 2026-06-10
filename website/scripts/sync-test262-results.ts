@@ -32,9 +32,14 @@ function log(message: string) {
   console.log(`[sync-test262] ${message}`);
 }
 
+function isVercelBuild(): boolean {
+  return process.env.VERCEL === "1";
+}
+
 function shouldFailOnSyncError(): boolean {
   return (
-    process.env.SKIP_TEST262_SYNC !== "1" && !!process.env.BLOB_READ_WRITE_TOKEN
+    process.env.SKIP_TEST262_SYNC !== "1" &&
+    (isVercelBuild() || !!process.env.BLOB_READ_WRITE_TOKEN)
   );
 }
 
@@ -107,11 +112,11 @@ async function syncReports() {
     throw new Error(message);
   }
 
-  await preserveSnapshotOrWriteFallback(
-    "needs-build-token",
-    "Set BLOB_READ_WRITE_TOKEN during the website build to read the Vercel Blob test262 manifest.",
-  );
+  const message =
+    "Set BLOB_READ_WRITE_TOKEN during the website build to read the Vercel Blob test262 manifest.";
+  await preserveSnapshotOrWriteFallback("needs-build-token", message);
   log("BLOB_READ_WRITE_TOKEN missing");
+  if (isVercelBuild()) throw new Error(message);
 }
 
 async function syncReportsFromBlob(): Promise<boolean> {
