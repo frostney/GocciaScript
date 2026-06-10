@@ -472,12 +472,16 @@ end;
 
 procedure TGocciaEngine.InjectGlobalsFromModule(const APath: string);
 var
+  ExportName: string;
+  ExportNames: TArray<string>;
+  ExportValue: TGocciaValue;
   Module: TGocciaModule;
-  ExportPair: TGocciaValueMap.TKeyValuePair;
 begin
   Module := FModuleLoader.LoadModule(APath, FSourcePath);
-  for ExportPair in Module.ExportsTable do
-    RegisterGlobal(ExportPair.Key, ExportPair.Value);
+  ExportNames := Module.GetExportNames;
+  for ExportName in ExportNames do
+    if Module.TryGetExportValue(ExportName, ExportValue) then
+      RegisterGlobal(ExportName, ExportValue);
 end;
 
 procedure TGocciaEngine.ClearTransientCaches;

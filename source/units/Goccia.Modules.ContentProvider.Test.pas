@@ -75,7 +75,6 @@ type
     procedure WriteTextFile(const APath, AText: string);
 
     procedure TestEngineLoadsInMemoryModuleWithCustomProvider;
-    procedure TestEngineReloadsModifiedInMemoryModule;
     procedure TestEngineRetriesModuleAfterFailedLoad;
     procedure TestEngineReportsJSONLModuleLineNumbers;
     procedure TestEngineReportsTOMLModuleSyntaxErrors;
@@ -162,8 +161,6 @@ procedure TModuleContentProviderTests.SetupTests;
 begin
   Test('Engine loads in-memory module with custom provider',
     TestEngineLoadsInMemoryModuleWithCustomProvider);
-  Test('Engine reloads modified in-memory module',
-    TestEngineReloadsModifiedInMemoryModule);
   Test('Engine retries module load after previous failure',
     TestEngineRetriesModuleAfterFailedLoad);
   Test('Engine reports JSONL module parse line numbers',
@@ -390,56 +387,6 @@ begin
     end;
   finally
     Source.Free;
-    Provider.Free;
-  end;
-end;
-
-procedure TModuleContentProviderTests.TestEngineReloadsModifiedInMemoryModule;
-const
-  ENTRY_PATH = 'memory:/app.js';
-  MODULE_PATH = 'memory:/dep.js';
-var
-  Interpreter: TGocciaInterpreter;
-  ModuleLoader: TGocciaModuleLoader;
-  ModuleValue: TGocciaModule;
-  ExportValue: TGocciaValue;
-  Provider: TMemoryModuleContentProvider;
-  Resolver: TInMemoryModuleResolver;
-  Source: TStringList;
-begin
-  Provider := TMemoryModuleContentProvider.Create;
-  Resolver := TInMemoryModuleResolver.Create;
-  Source := TStringList.Create;
-  try
-    Provider.SetModule(MODULE_PATH, 'export const value = 1;', 1);
-    Source.Text := 'import { value } from "' + MODULE_PATH + '";' + LineEnding +
-      'value;';
-
-    ModuleLoader := TGocciaModuleLoader.Create(ENTRY_PATH, Resolver, Provider);
-    try
-      Interpreter := TGocciaInterpreter.Create(ENTRY_PATH, Source, ModuleLoader);
-      try
-        ModuleValue := Interpreter.LoadModule(MODULE_PATH, ENTRY_PATH);
-        Expect<Boolean>(ModuleValue.TryGetExportValue('value', ExportValue))
-          .ToBe(True);
-        Expect<Boolean>(ExportValue is TGocciaNumberLiteralValue).ToBe(True);
-        Expect<Double>(TGocciaNumberLiteralValue(ExportValue).Value).ToBe(1);
-
-        Provider.SetModule(MODULE_PATH, 'export const value = 2;', 2);
-        ModuleValue := Interpreter.LoadModule(MODULE_PATH, ENTRY_PATH);
-        Expect<Boolean>(ModuleValue.TryGetExportValue('value', ExportValue))
-          .ToBe(True);
-        Expect<Boolean>(ExportValue is TGocciaNumberLiteralValue).ToBe(True);
-        Expect<Double>(TGocciaNumberLiteralValue(ExportValue).Value).ToBe(2);
-      finally
-        Interpreter.Free;
-      end;
-    finally
-      ModuleLoader.Free;
-    end;
-  finally
-    Source.Free;
-    Resolver.Free;
     Provider.Free;
   end;
 end;

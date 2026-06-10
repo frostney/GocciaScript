@@ -609,17 +609,6 @@ begin
   end;
 end;
 
-{ B field encodes the declaration mode for OP_DEFINE_GLOBAL_CONST:
-  0 = var declaration
-  1 = let declaration (throws on re-declaration)
-  2 = const declaration (throws on re-declaration, non-writable)
-  3 = var declaration without syntactic initializer }
-const
-  GLOBAL_DEFINE_VAR = 0;
-  GLOBAL_DEFINE_LET = 1;
-  GLOBAL_DEFINE_CONST = 2;
-  GLOBAL_DEFINE_VAR_DECL = 3;
-
 function FindVarLocalIndex(const AScope: TGocciaCompilerScope;
   const AName: string): Integer; forward;
 function FindLocalBySlot(const AScope: TGocciaCompilerScope;

@@ -112,8 +112,18 @@ const
   //               lists, and operand C carries the formal parameter count.
   //   v56 -> v57: added phase-specific dynamic import option opcodes so
   //               import.source/import.defer preserve import attributes.
-  GOCCIA_FORMAT_VERSION = 57;
+  //   v57 -> v58: OP_DEFINE_GLOBAL_CONST operand B gained global lexical
+  //               predeclaration modes so top-level bytecode scripts preserve
+  //               TDZ for global-backed let/const/class/enum bindings.
+  GOCCIA_FORMAT_VERSION = 58;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
+  // OP_DEFINE_GLOBAL_CONST operand B declaration modes.
+  GLOBAL_DEFINE_VAR = 0;
+  GLOBAL_DEFINE_LET = 1;
+  GLOBAL_DEFINE_CONST = 2;
+  GLOBAL_DEFINE_VAR_DECL = 3;
+  GLOBAL_DEFINE_LET_PREDECLARE = 4;
+  GLOBAL_DEFINE_CONST_PREDECLARE = 5;
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
   GOCCIA_NULLISH_MATCH_HOLE = 2;

@@ -848,8 +848,6 @@ end;
 
 procedure EmitHoistedGlobalVarDeclarations(const ACtx: TGocciaCompilationContext;
   const AScope: TGocciaCompilerScope);
-const
-  GLOBAL_DEFINE_VAR_DECL = 3;
 var
   I: Integer;
   Local: TGocciaCompilerLocal;
@@ -867,6 +865,33 @@ begin
     EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, Local.Slot, 0, 0));
     EmitInstruction(ACtx, EncodeABC(OP_DEFINE_GLOBAL_CONST, Local.Slot,
       GLOBAL_DEFINE_VAR_DECL, UInt8(NameIdx)));
+  end;
+end;
+
+procedure EmitGlobalLexicalPredeclarations(const ACtx: TGocciaCompilationContext;
+  const AScope: TGocciaCompilerScope; const AStartIndex: Integer);
+var
+  I: Integer;
+  DeclMode: UInt8;
+  Local: TGocciaCompilerLocal;
+  NameIdx: UInt16;
+begin
+  for I := AStartIndex to AScope.LocalCount - 1 do
+  begin
+    Local := AScope.GetLocal(I);
+    if (Local.Depth <> 0) or Local.IsVar or Local.IsImportBinding or
+       (Local.Name = '__receiver') then
+      Continue;
+
+    if Local.IsConst then
+      DeclMode := GLOBAL_DEFINE_CONST_PREDECLARE
+    else
+      DeclMode := GLOBAL_DEFINE_LET_PREDECLARE;
+    NameIdx := ACtx.Template.AddConstantString(Local.Name);
+    if NameIdx > High(UInt8) then
+      raise Exception.Create('Constant pool overflow: global name index exceeds 255');
+    EmitInstruction(ACtx, EncodeABC(OP_DEFINE_GLOBAL_CONST, Local.Slot,
+      DeclMode, UInt8(NameIdx)));
   end;
 end;
 
@@ -906,6 +931,9 @@ begin
     if FGlobalBackedTopLevel then
       MarkTopLevelGlobalBackedLocals(FCurrentScope);
     Ctx := BuildContext;
+    if FGlobalBackedTopLevel then
+      EmitGlobalLexicalPredeclarations(Ctx, FCurrentScope,
+        PredeclaredLexicalStart);
     for PredeclaredLexicalIndex := PredeclaredLexicalStart to
       FCurrentScope.LocalCount - 1 do
     begin

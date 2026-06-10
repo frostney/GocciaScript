@@ -13969,16 +13969,26 @@ begin
       OP_DEFINE_GLOBAL_CONST:
       begin
         GlobalName := Template.GetConstantUnchecked(C).StringValue;
-        if B = 0 then
+        if B = GLOBAL_DEFINE_VAR then
           DefineGlobalBinding(GlobalName, GetRegister(A), dtVar)
-        else if B = 3 then
+        else if B = GLOBAL_DEFINE_VAR_DECL then
         begin
           if Assigned(FGlobalScope) then
             FGlobalScope.DefineVariableBinding(GlobalName,
               TGocciaUndefinedLiteralValue.UndefinedValue, False);
         end
-        else if B = 2 then
+        else if B = GLOBAL_DEFINE_CONST then
           DefineGlobalBinding(GlobalName, GetRegister(A), dtConst)
+        else if B = GLOBAL_DEFINE_LET_PREDECLARE then
+        begin
+          if Assigned(FGlobalScope) then
+            FGlobalScope.PredeclareLexicalBinding(GlobalName, dtLet);
+        end
+        else if B = GLOBAL_DEFINE_CONST_PREDECLARE then
+        begin
+          if Assigned(FGlobalScope) then
+            FGlobalScope.PredeclareLexicalBinding(GlobalName, dtConst);
+        end
         else
           DefineGlobalBinding(GlobalName, GetRegister(A), dtLet);
       end;

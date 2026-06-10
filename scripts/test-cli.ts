@@ -280,14 +280,14 @@ console.log("--compat-non-strict-mode (Loader + Bundler + TestRunner + Bare)..."
       ].join("\n") + "\n",
     );
 
-    const loaderOut = await $`${LOADER} --print ${src} --compat-function --compat-non-strict-mode 2>&1`.text();
+    const loaderOut = await $`${LOADER} --print ${src} --compat-function --compat-non-strict-mode --compat-arguments-object 2>&1`.text();
     if (!containsLine(loaderOut, "7")) throw new Error(`Loader --compat-non-strict-mode expected 7, got: ${loaderOut}`);
 
-    const loaderBcOut = await $`${LOADER} --print ${src} --mode=bytecode --compat-function --compat-non-strict-mode 2>&1`.text();
+    const loaderBcOut = await $`${LOADER} --print ${src} --mode=bytecode --compat-function --compat-non-strict-mode --compat-arguments-object 2>&1`.text();
     if (!containsLine(loaderBcOut, "7")) throw new Error(`Loader bytecode --compat-non-strict-mode expected 7, got: ${loaderBcOut}`);
 
     const outPath = join(tmp, "use-nonstrict.gbc");
-    await $`${BUNDLER} ${src} --output=${outPath} --compat-function --compat-non-strict-mode`.quiet();
+    await $`${BUNDLER} ${src} --output=${outPath} --compat-function --compat-non-strict-mode --compat-arguments-object`.quiet();
     if (!existsSync(outPath)) throw new Error("Bundler --compat-non-strict-mode should compile");
 
     const deleteSrc = join(tmp, "delete-nonstrict.js");
@@ -356,10 +356,10 @@ console.log("--compat-non-strict-mode (Loader + Bundler + TestRunner + Bare)..."
         'test("non-strict mode compat", () => { expect(f(1, 2)).toBe(7); });',
       ].join("\n") + "\n",
     );
-    const trOut = await $`${TESTRUNNER} ${testSrc} --no-progress --compat-function --compat-non-strict-mode 2>&1`.text();
+    const trOut = await $`${TESTRUNNER} ${testSrc} --no-progress --compat-function --compat-non-strict-mode --compat-arguments-object 2>&1`.text();
     if (!trOut.includes("Passed: 1")) throw new Error(`TestRunner --compat-non-strict-mode expected Passed: 1, got: ${trOut}`);
 
-    const bareOut = await $`${BARE} --print ${src} --compat-function --compat-non-strict-mode 2>&1`.text();
+    const bareOut = await $`${BARE} --print ${src} --compat-function --compat-non-strict-mode --compat-arguments-object 2>&1`.text();
     if (bareOut.trim() !== "7") throw new Error(`Bare --compat-non-strict-mode expected 7, got: ${bareOut}`);
 
     const staticSetterSrc = join(tmp, "static-setter-nonstrict.js");
