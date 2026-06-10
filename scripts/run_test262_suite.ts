@@ -80,27 +80,29 @@ const KNOWN_ENGINE_CRASHES = new Set<string>([
 // Frontmatter
 // ---------------------------------------------------------------------------
 //
-// test262 frontmatter is YAML, but the orchestrator only consumes three
+// test262 frontmatter is YAML, but the orchestrator only consumes four
 // fields: `flags` (e.g. async / module / raw), `includes` (extra harness
-// files), and `negative.{phase, type}`.  Free-form fields like `info`,
-// `description`, `esid`, `features` are not read by the orchestrator —
+// files), `features` for feature-to-flag mapping, and
+// `negative.{phase, type}`.  Free-form fields like `info`,
+// `description`, `esid` are not read by the orchestrator —
 // and `info` in particular routinely contains unbalanced brackets like
 // `String.fromCharCode ( [ char0 [ , char1 [ , ... ] ] ] )` that Bun's
 // strict YAML parser rejects.
 //
 // Strategy: line-walk the frontmatter block, copy lines that belong to
-// `flags`, `includes`, or `negative` (top-level key + its indented
+// `flags`, `includes`, `features`, or `negative` (top-level key + its indented
 // continuation), and drop everything else.  Pass the cleaned text to
 // Bun's built-in YAML parser.  No regex; no custom YAML; we just trim
 // the input to what we need before handing it to a real YAML parser.
 
-const KEPT_KEYS = new Set(["flags", "includes", "negative"]);
+const KEPT_KEYS = new Set(["flags", "includes", "features", "negative"]);
 const FRONTMATTER_OPEN = "/*---";
 const FRONTMATTER_CLOSE = "---*/";
 
 interface Frontmatter {
   flags: string[];
   includes: string[];
+  features: string[];
   negative?: { phase?: string; type?: string };
 }
 
@@ -113,7 +115,7 @@ function parseTest(source: string): ParsedTest {
   const open = source.indexOf(FRONTMATTER_OPEN);
   const close = open < 0 ? -1 : source.indexOf(FRONTMATTER_CLOSE, open);
   if (open < 0 || close < 0) {
-    return { body: source, meta: { flags: [], includes: [] } };
+    return { body: source, meta: { flags: [], includes: [], features: [] } };
   }
   const blockStart = source.indexOf("\n", open) + 1;
   const yaml = source.slice(blockStart, close).trimEnd();
@@ -129,6 +131,7 @@ function parseTest(source: string): ParsedTest {
     meta: {
       flags: toStringArray(parsed.flags),
       includes: toStringArray(parsed.includes),
+      features: toStringArray(parsed.features),
       negative:
         parsed.negative && typeof parsed.negative === "object"
           ? { phase: parsed.negative.phase, type: parsed.negative.type }
@@ -174,6 +177,7 @@ function toStringArray(value: unknown): string[] {
 // Everything else loads from the pinned stock harness checkout.
 const BUNDLED_INCLUDES: Record<string, string> = {
   "$262.js": "$262.js",
+  "goccia-global-shim.js": "goccia-global-shim.js",
 };
 
 const BUNDLED_HARNESS_DIR = join(import.meta.dir, "test262_harness");
@@ -219,6 +223,7 @@ class HarnessCache {
         throw new Error(`Missing harness include "${name}": ${err}`);
       }
     }
+    parts.push(await this.read("goccia-global-shim.js"));
     return parts.join("\n");
   }
 }
@@ -552,19 +557,21 @@ interface PerTestRecord {
 }
 
 // test262 source is overwhelmingly semicolon-omitted; ASI is required to parse
-// the corpus.  --compat-var, --compat-function, --compat-traditional-for-loop,
-// --compat-for-in-loop, --compat-while-loops, --compat-loose-equality,
-// --compat-label, and --unsafe-function-constructor are also unconditional:
+// the corpus.  --compat-var, --compat-function, --compat-arguments-object,
+// --compat-traditional-for-loop, --compat-for-in-loop, --compat-while-loops,
+// --compat-loose-equality, --compat-label, and --unsafe-function-constructor
+// are also unconditional:
 // stock harness and tests use `var`, `function`, traditional `for(;;)` loops,
-// for-in loops, while/do-while loops, loose equality, labels, and
-// `Function("return this;")()`.  Non-strict mode compatibility is enabled
-// for Script tests separately: strict directives and modules decide strict
-// semantics, while the flag exposes compatibility-gated syntax and implicit
-// objects needed by the corpus.
+// implicit arguments objects, for-in loops, while/do-while loops, loose
+// equality, labels, and `Function("return this;")()`. Non-strict mode
+// compatibility is enabled for Script tests separately: strict directives and
+// modules decide strict semantics, while the flag exposes the sloppy-only
+// runtime behavior needed by the corpus.
 const TEST262_BARE_FLAGS: readonly string[] = [
   "--compat-asi",
   "--compat-var",
   "--compat-function",
+  "--compat-arguments-object",
   "--compat-traditional-for-loop",
   "--compat-for-in-loop",
   "--compat-while-loops",
@@ -576,6 +583,14 @@ const TEST262_BARE_FLAGS: readonly string[] = [
 
 function needsNonStrictCompat(isModule: boolean): boolean {
   return !isModule;
+}
+
+function test262FeatureFlags(features: readonly string[]): string[] {
+  const flags: string[] = [];
+  if (features.includes("source-phase-imports-module-source")) {
+    flags.push("--experimental-js-module-source");
+  }
+  return flags;
 }
 
 async function runOneTest(
@@ -664,7 +679,9 @@ async function runOneTest(
   if (needsNonStrictCompat(isModule)) {
     args.push("--compat-non-strict-mode");
   }
+  args.push(...test262FeatureFlags(parsed.meta.features));
   if (isModule) args.unshift("--source-type=module");
+  args.push(`--source-name=${test.path}`);
   args.push("-");
 
   const result = await spawnBareWithTimeout(

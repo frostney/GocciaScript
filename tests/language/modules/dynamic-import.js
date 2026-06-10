@@ -31,25 +31,115 @@ describe("dynamic import()", () => {
 
   test("accepts trailing commas and import options", async () => {
     let optionsEvaluated = false;
-    const mod = await import("./helpers/math-utils.js", { with: { type: "javascript" }, seen: (optionsEvaluated = true) },);
+    const mod = await import("./helpers/math-utils.js", { with: {}, seen: (optionsEvaluated = true) },);
     expect(optionsEvaluated).toBe(true);
     expect(mod.add(3, 4)).toBe(7);
   });
 
-  test("accepts source and defer import call forms", () => {
+  test("rejects unsupported import attribute type", async () => {
+    let caught = false;
+    try {
+      await import("./helpers/math-utils.js", { with: { type: "javascript" } });
+    } catch (e) {
+      caught = true;
+    }
+    expect(caught).toBe(true);
+  });
+
+  test("rejects unsupported dynamic import attribute keys", async () => {
+    let caught = false;
+    try {
+      await import("./helpers/math-utils.js", { with: { unsupported: "x" } });
+    } catch (e) {
+      caught = true;
+    }
+    expect(caught).toBe(true);
+  });
+
+  test("source and deferred import options validate import attributes", async () => {
+    let sourceError;
+    try {
+      await import.source("./helpers/math-utils.js", { with: { type: "javascript" } });
+    } catch (e) {
+      sourceError = e;
+    }
+    expect(sourceError instanceof TypeError).toBe(true);
+
+    let deferError;
+    try {
+      await import.defer("./helpers/math-utils.js", { with: { type: "javascript" } });
+    } catch (e) {
+      deferError = e;
+    }
+    expect(deferError instanceof TypeError).toBe(true);
+  });
+
+  test("rejects unsupported static import attribute keys", async () => {
+    let caught = false;
+    try {
+      await import("../../../fixtures/modules/static-unsupported-attribute.js");
+    } catch (e) {
+      caught = true;
+    }
+    expect(caught).toBe(true);
+  });
+
+  test("ignores symbol and non-enumerable import attribute keys", async () => {
+    const key = Symbol("attribute");
+    const options = {
+      with: new Proxy({}, {
+        ownKeys: () => [key, "hidden", "missing"],
+        get() {
+          throw new Error("attribute getter should not run");
+        },
+        getOwnPropertyDescriptor(target, name) {
+          if (name === "hidden") {
+            return { configurable: true, enumerable: false };
+          }
+          return undefined;
+        },
+      }),
+    };
+    const mod = await import("./helpers/math-utils.js", options);
+    expect(mod.add(1, 1)).toBe(2);
+  });
+
+  test("accepts source and defer import call forms", async () => {
     const sourcePromise = import.source("./helpers/math-utils.js");
     const deferPromise = import.defer("./helpers/math-utils.js");
     expect(typeof sourcePromise.then).toBe("function");
     expect(typeof deferPromise.then).toBe("function");
     expect(sourcePromise.constructor).toBe(Promise);
     expect(deferPromise.constructor).toBe(Promise);
+    let sourceRejected = false;
+    try {
+      await sourcePromise;
+    } catch (e) {
+      sourceRejected = e instanceof SyntaxError;
+    }
+    expect(sourceRejected).toBe(true);
   });
 
-  test("source import returns module source without evaluating the module", async () => {
+  test("source import rejects JavaScript modules by default", async () => {
     globalThis.__gocciaSourceDynamicImportEvaluated = false;
-    const source = await import.source("./helpers/source-dynamic-import-side-effect.js");
-    expect(Object.prototype.toString.call(source)).toBe("[object ModuleSource]");
+    let caught = false;
+    try {
+      await import.source("./helpers/source-dynamic-import-side-effect.js");
+    } catch (e) {
+      caught = e instanceof SyntaxError;
+    }
+    expect(caught).toBe(true);
     expect(globalThis.__gocciaSourceDynamicImportEvaluated).toBe(false);
+  });
+
+  test("static source imports reject JavaScript modules by default", async () => {
+    let caught = false;
+    try {
+      await import("../../../fixtures/modules/static-source-import.js");
+    } catch (e) {
+      caught = e instanceof SyntaxError;
+    }
+    expect(caught).toBe(true);
   });
 
   test("deferred import evaluates the module when the namespace is observed", async () => {

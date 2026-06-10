@@ -130,8 +130,10 @@ begin
     end
     else if (ALeft is TGocciaObjectValue) and (TGocciaClassValue(ARight).Name = CONSTRUCTOR_OBJECT) then
     begin
-      // Objects are instances of Object
-      Result := TGocciaBooleanLiteralValue.TrueValue;
+      if AIsObjectInstanceOfClass(TGocciaObjectValue(ALeft), TGocciaClassValue(ARight)) then
+        Result := TGocciaBooleanLiteralValue.TrueValue
+      else
+        Result := TGocciaBooleanLiteralValue.FalseValue;
     end
     else if ALeft is TGocciaObjectValue then
     begin

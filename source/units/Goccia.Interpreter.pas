@@ -40,6 +40,7 @@ type
     FWhileLoopsEnabled: Boolean;
     FLooseEqualityEnabled: Boolean;
     FNonStrictModeEnabled: Boolean;
+    FArgumentsObjectEnabled: Boolean;
     FStrictTypesEnabled: Boolean;
     FModuleLoader: TGocciaModuleLoader;
     FOwnsModuleLoader: Boolean;
@@ -59,6 +60,7 @@ type
     procedure SetWhileLoopsEnabled(const AValue: Boolean);
     procedure SetLooseEqualityEnabled(const AValue: Boolean);
     procedure SetNonStrictModeEnabled(const AValue: Boolean);
+    procedure SetArgumentsObjectEnabled(const AValue: Boolean);
     procedure SetStrictTypesEnabled(const AValue: Boolean);
     procedure SetResolver(const AValue: TGocciaModuleResolver);
   public
@@ -85,6 +87,8 @@ type
       read FLooseEqualityEnabled write SetLooseEqualityEnabled;
     property NonStrictModeEnabled: Boolean
       read FNonStrictModeEnabled write SetNonStrictModeEnabled;
+    property ArgumentsObjectEnabled: Boolean
+      read FArgumentsObjectEnabled write SetArgumentsObjectEnabled;
     property StrictTypesEnabled: Boolean read FStrictTypesEnabled
       write SetStrictTypesEnabled;
     property GlobalScope: TGocciaGlobalScope read FGlobalScope;
@@ -161,11 +165,14 @@ begin
   Result.OnError := ThrowError;
   Result.LoadModule := LoadModule;
   Result.LoadModuleSource := LoadModuleSourceValue;
+  Result.LoadDeferredModule := LoadDeferredModuleNamespaceValue;
   Result.CurrentFilePath := FFileName;
   Result.CoverageEnabled := Assigned(TGocciaCoverageTracker.Instance)
     and TGocciaCoverageTracker.Instance.Enabled;
   Result.StrictTypes := FStrictTypesEnabled;
   Result.NonStrictMode := FNonStrictModeEnabled;
+  if Assigned(FGlobalScope) then
+    FGlobalScope.ArgumentsObjectEnabled := FArgumentsObjectEnabled;
 end;
 
 function TGocciaInterpreter.Execute(const AProgram: TGocciaProgram): TGocciaValue;
@@ -286,6 +293,13 @@ begin
   FModuleLoader.NonStrictModeEnabled := AValue;
 end;
 
+procedure TGocciaInterpreter.SetArgumentsObjectEnabled(const AValue: Boolean);
+begin
+  FArgumentsObjectEnabled := AValue;
+  if Assigned(FGlobalScope) then
+    FGlobalScope.ArgumentsObjectEnabled := AValue;
+end;
+
 procedure TGocciaInterpreter.SetStrictTypesEnabled(const AValue: Boolean);
 begin
   FStrictTypesEnabled := AValue;
@@ -311,6 +325,7 @@ var
   ExecutionContext: TGocciaExecutionContextScope;
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  PredeclareModuleLexicalDeclarations(AProgram, AContext.Scope);
   if FVarEnabled then
     HoistVarDeclarations(AProgram.Body, AContext.Scope);
   if FFunctionEnabled then
@@ -322,7 +337,18 @@ begin
         AContext.CurrentFilePath, AProgram));
   try
     for I := 0 to AProgram.Body.Count - 1 do
+      if (AProgram.Body[I] is TGocciaImportDeclaration) or
+         (AProgram.Body[I] is TGocciaReExportDeclaration) then
+      begin
+        CF := EvaluateStatement(AProgram.Body[I], AContext);
+        if CF.Kind = cfkReturn then Exit(CF.Value);
+      end;
+
+    for I := 0 to AProgram.Body.Count - 1 do
     begin
+      if (AProgram.Body[I] is TGocciaImportDeclaration) or
+         (AProgram.Body[I] is TGocciaReExportDeclaration) then
+        Continue;
       CF := EvaluateStatement(AProgram.Body[I], AContext);
       Result := CF.Value;
       if CF.Kind = cfkReturn then Exit;

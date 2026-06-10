@@ -524,11 +524,14 @@ var
   PropertyName: string;
   Success: Boolean;
 begin
-  TGocciaArgumentValidator.RequireAtLeast(AArgs, 3, 'Reflect.set', ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 2, 'Reflect.set', ThrowError);
 
   Target := AArgs.GetElement(0);
   PropKey := ToPropertyKey(AArgs.GetElement(1));
-  Value := AArgs.GetElement(2);
+  if AArgs.Length >= 3 then
+    Value := AArgs.GetElement(2)
+  else
+    Value := TGocciaUndefinedLiteralValue.UndefinedValue;
 
   // Step 1: If target is not an Object, throw a TypeError exception
   RequireObjectTarget(Target, 'Reflect.set');

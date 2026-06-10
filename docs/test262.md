@@ -28,6 +28,8 @@ LoaderBare-plus-stock-harness setup, see the
   `scripts/test262_harness/$262.js`, the host-provided hook object.
 - The orchestrator passes `GocciaScriptLoaderBare --test262-host` so those
   host hooks are available only during conformance runs.
+- Test feature metadata may add explicit engine options when test262 splits
+  proposal layers more narrowly than the base engine flag set.
 - The orchestrator drives via process exit code + stdout markers, the
   same convention `test262-harness`/`eshost`/test262.fyi use.
 - Wrapper-infrastructure failures are classified separately from
@@ -207,18 +209,30 @@ strict-mode behaviors statically:
 The orchestrator enables `--compat-non-strict-mode` per test, not globally:
 Script tests receive it, while module tests stay strict. `onlyStrict`
 Script tests also receive the flag, but the injected directive keeps
-`arguments`, `with`, non-strict assignment failures, legacy `delete`
-return values, and regular-function nullish `this` coercion on the strict
-path. Remaining `noStrict` tests rely on sloppy-only behaviors that
+`with`, non-strict assignment failures, legacy `delete` return values, and
+regular-function nullish `this` coercion on the strict path. Remaining
+`noStrict` tests rely on sloppy-only behaviors that
 GocciaScript still does not provide and fail naturally as ordinary
 conformance failures, not as wrapper-infra failures.
 
 The runner passes syntax compatibility flags such as
 `--compat-traditional-for-loop`, `--compat-for-in-loop`,
-`--compat-while-loops`, and `--compat-label` unconditionally because
-test262 uses those forms across both harness helpers and test bodies; the
-test's source type and strictness still decide runtime strict-mode
-semantics.
+`--compat-while-loops`, `--compat-label`, and the semantic
+`--compat-arguments-object` flag unconditionally because test262 uses those
+forms across both harness helpers and test bodies. The test's source type and
+strictness still decide strict-mode semantics; `--compat-arguments-object`
+only enables the implicit `arguments` binding. Strictness and parameter-list
+shape decide whether that binding is unmapped or mapped.
+
+## Source-phase import feature flags
+
+The runner reads the test262 `features` frontmatter when a feature maps to a
+Goccia engine option. `source-phase-imports` tests run with the base test262
+flag set only. Tests that also declare `source-phase-imports-module-source`
+receive `--experimental-js-module-source`, which enables JavaScript
+`ModuleSource` objects for the separate ESM Phase Imports proposal. This is not
+an eligibility filter: every discovered test still runs, and feature metadata
+only changes the host options used for that test.
 
 ## Path normalization
 

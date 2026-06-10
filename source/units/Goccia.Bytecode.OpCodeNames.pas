@@ -182,6 +182,11 @@ begin
     OP_LOAD_ARGUMENT:                  Result := 'OP_LOAD_ARGUMENT';
     OP_CHECK_DERIVED_THIS:             Result := 'OP_CHECK_DERIVED_THIS';
     OP_SUPER_SET:                      Result := 'OP_SUPER_SET';
+    OP_IMPORT_DEFER:                   Result := 'OP_IMPORT_DEFER';
+    OP_IMPORT_SOURCE:                  Result := 'OP_IMPORT_SOURCE';
+    OP_DYNAMIC_IMPORT_OPTIONS:         Result := 'OP_DYNAMIC_IMPORT_OPTIONS';
+    OP_DYNAMIC_IMPORT_SOURCE_OPTIONS:  Result := 'OP_DYNAMIC_IMPORT_SOURCE_OPTIONS';
+    OP_DYNAMIC_IMPORT_DEFER_OPTIONS:   Result := 'OP_DYNAMIC_IMPORT_DEFER_OPTIONS';
     OP_INC:                            Result := 'OP_INC';
     OP_DEC:                            Result := 'OP_DEC';
     OP_TO_NUMERIC:                     Result := 'OP_TO_NUMERIC';

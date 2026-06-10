@@ -15,6 +15,7 @@ uses
   Goccia.Bytecode.Chunk,
   Goccia.ControlFlow,
   Goccia.Evaluator.Context,
+  Goccia.Modules,
   Goccia.Values.Primitives;
 
 const
@@ -451,16 +452,22 @@ type
   TGocciaImportDeclaration = class(TGocciaStatement)
   private
     FImports: TStringStringMap; // local name -> imported name
+    FAttributeType: string;
     FModulePath: string;
     FNamespaceName: string;
+    FPhase: TGocciaImportCallPhase;
   public
     constructor Create(const AImports: TStringStringMap;
       const AModulePath: string; const ALine, AColumn: Integer;
-      const ANamespaceName: string = '');
+      const ANamespaceName: string = '';
+      const APhase: TGocciaImportCallPhase = icpEvaluation;
+      const AAttributeType: string = '');
     function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property Imports: TStringStringMap read FImports;
+    property AttributeType: string read FAttributeType;
     property ModulePath: string read FModulePath;
     property NamespaceName: string read FNamespaceName;
+    property Phase: TGocciaImportCallPhase read FPhase;
   end;
 
   TGocciaExportDeclaration = class(TGocciaStatement)
@@ -476,12 +483,15 @@ type
   TGocciaExportDefaultDeclaration = class(TGocciaStatement)
   private
     FExpression: TGocciaExpression;
+    FIsDirectDeclaration: Boolean;
     FLocalName: string;
   public
     constructor Create(const AExpression: TGocciaExpression;
-      const ALocalName: string; const ALine, AColumn: Integer);
+      const ALocalName: string; const AIsDirectDeclaration: Boolean;
+      const ALine, AColumn: Integer);
     function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property Expression: TGocciaExpression read FExpression;
+    property IsDirectDeclaration: Boolean read FIsDirectDeclaration;
     property LocalName: string read FLocalName;
   end;
 
@@ -495,6 +505,16 @@ type
     property Declaration: TGocciaVariableDeclaration read FDeclaration;
   end;
 
+  TGocciaExportDestructuringDeclaration = class(TGocciaStatement)
+  private
+    FDeclaration: TGocciaDestructuringDeclaration;
+  public
+    constructor Create(const ADeclaration: TGocciaDestructuringDeclaration;
+      const ALine, AColumn: Integer);
+    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
+    property Declaration: TGocciaDestructuringDeclaration read FDeclaration;
+  end;
+
   TGocciaExportFunctionDeclaration = class(TGocciaStatement)
   private
     FDeclaration: TGocciaFunctionDeclaration;
@@ -505,16 +525,33 @@ type
     property Declaration: TGocciaFunctionDeclaration read FDeclaration;
   end;
 
+  TGocciaExportClassDeclaration = class(TGocciaStatement)
+  private
+    FDeclaration: TGocciaClassDeclaration;
+  public
+    constructor Create(const ADeclaration: TGocciaClassDeclaration;
+      const ALine, AColumn: Integer);
+    destructor Destroy; override;
+    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
+    property Declaration: TGocciaClassDeclaration read FDeclaration;
+  end;
+
   TGocciaReExportDeclaration = class(TGocciaStatement)
   private
     FExportsTable: TStringStringMap; // exported name -> source name
+    FIsStarExport: Boolean;
     FModulePath: string;
+    FNamespaceName: string;
   public
     constructor Create(const AExportsTable: TStringStringMap;
-      const AModulePath: string; const ALine, AColumn: Integer);
+      const AModulePath: string; const ALine, AColumn: Integer;
+      const AIsStarExport: Boolean = False;
+      const ANamespaceName: string = '');
     function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property ExportsTable: TStringStringMap read FExportsTable;
+    property IsStarExport: Boolean read FIsStarExport;
     property ModulePath: string read FModulePath;
+    property NamespaceName: string read FNamespaceName;
   end;
 
   TGocciaEmptyStatement = class(TGocciaStatement)
@@ -592,7 +629,6 @@ uses
   Goccia.GarbageCollector,
   Goccia.Generator.Continuation,
   Goccia.Keywords.Reserved,
-  Goccia.Modules,
   Goccia.Scope,
   Goccia.Scope.BindingMap,
   Goccia.Token,
@@ -963,12 +999,15 @@ end;
 
   constructor TGocciaImportDeclaration.Create(const AImports: TStringStringMap;
     const AModulePath: string; const ALine, AColumn: Integer;
-    const ANamespaceName: string);
+    const ANamespaceName: string; const APhase: TGocciaImportCallPhase;
+    const AAttributeType: string);
   begin
     inherited Create(ALine, AColumn);
     FImports := AImports;
+    FAttributeType := AAttributeType;
     FModulePath := AModulePath;
     FNamespaceName := ANamespaceName;
+    FPhase := APhase;
   end;
 
   { TGocciaExportDeclaration }
@@ -984,16 +1023,27 @@ end;
 
   constructor TGocciaExportDefaultDeclaration.Create(
     const AExpression: TGocciaExpression; const ALocalName: string;
-    const ALine, AColumn: Integer);
+    const AIsDirectDeclaration: Boolean; const ALine, AColumn: Integer);
   begin
     inherited Create(ALine, AColumn);
     FExpression := AExpression;
+    FIsDirectDeclaration := AIsDirectDeclaration;
     FLocalName := ALocalName;
   end;
 
   { TGocciaExportVariableDeclaration }
 
   constructor TGocciaExportVariableDeclaration.Create(const ADeclaration: TGocciaVariableDeclaration;
+    const ALine, AColumn: Integer);
+  begin
+    inherited Create(ALine, AColumn);
+    FDeclaration := ADeclaration;
+  end;
+
+  { TGocciaExportDestructuringDeclaration }
+
+  constructor TGocciaExportDestructuringDeclaration.Create(
+    const ADeclaration: TGocciaDestructuringDeclaration;
     const ALine, AColumn: Integer);
   begin
     inherited Create(ALine, AColumn);
@@ -1010,14 +1060,33 @@ end;
     FDeclaration := ADeclaration;
   end;
 
+  { TGocciaExportClassDeclaration }
+
+  constructor TGocciaExportClassDeclaration.Create(
+    const ADeclaration: TGocciaClassDeclaration;
+    const ALine, AColumn: Integer);
+  begin
+    inherited Create(ALine, AColumn);
+    FDeclaration := ADeclaration;
+  end;
+
+  destructor TGocciaExportClassDeclaration.Destroy;
+  begin
+    FDeclaration.Free;
+    inherited;
+  end;
+
   { TGocciaReExportDeclaration }
 
   constructor TGocciaReExportDeclaration.Create(const AExportsTable: TStringStringMap;
-    const AModulePath: string; const ALine, AColumn: Integer);
+    const AModulePath: string; const ALine, AColumn: Integer;
+    const AIsStarExport: Boolean = False; const ANamespaceName: string = '');
   begin
     inherited Create(ALine, AColumn);
     FExportsTable := AExportsTable;
+    FIsStarExport := AIsStarExport;
     FModulePath := AModulePath;
+    FNamespaceName := ANamespaceName;
   end;
 
   { TGocciaEmptyStatement }
@@ -1345,18 +1414,76 @@ end;
 
   function TGocciaImportDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
   var
+    DeferredLoader: TLoadDeferredModuleCallback;
     Module: TGocciaModule;
     ImportPair: TStringStringMap.TKeyValuePair;
     NamespaceObject: TGocciaValue;
     Value: TGocciaValue;
   begin
     Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
-    Module := AContext.LoadModule(ModulePath, AContext.CurrentFilePath);
+
+    if Phase = icpDefer then
+    begin
+      if NamespaceName = '' then
+      begin
+        AContext.OnError('Deferred imports require a namespace binding',
+          Line, Column);
+        Exit;
+      end;
+      DeferredLoader := AContext.LoadDeferredModule;
+      if (not Assigned(DeferredLoader)) and Assigned(AContext.Scope) then
+        DeferredLoader := AContext.Scope.LoadDeferredModule;
+      if not Assigned(DeferredLoader) then
+      begin
+        AContext.OnError('Deferred module loader is not available.',
+          Line, Column);
+        Exit;
+      end;
+
+      NamespaceObject := DeferredLoader(EncodeImportSpecifierAttribute(
+        ModulePath, AttributeType), AContext.CurrentFilePath);
+      if Assigned(TGarbageCollector.Instance) then
+        TGarbageCollector.Instance.AddTempRoot(NamespaceObject);
+      try
+        AContext.Scope.DefineLexicalBinding(NamespaceName, NamespaceObject,
+          dtConst);
+      finally
+        if Assigned(TGarbageCollector.Instance) then
+          TGarbageCollector.Instance.RemoveTempRoot(NamespaceObject);
+      end;
+      Exit;
+    end;
+
+    if Phase = icpSource then
+    begin
+      if not Assigned(AContext.LoadModuleSource) then
+      begin
+        AContext.OnError('Module source loader is not available.',
+          Line, Column);
+        Exit;
+      end;
+
+      Value := AContext.LoadModuleSource(EncodeImportSpecifierAttribute(
+        ModulePath, AttributeType), AContext.CurrentFilePath);
+      if Assigned(TGarbageCollector.Instance) then
+        TGarbageCollector.Instance.AddTempRoot(Value);
+      try
+        for ImportPair in Imports do
+          AContext.Scope.DefineLexicalBinding(ImportPair.Key, Value, dtConst);
+      finally
+        if Assigned(TGarbageCollector.Instance) then
+          TGarbageCollector.Instance.RemoveTempRoot(Value);
+      end;
+      Exit;
+    end;
+
+    Module := AContext.LoadModule(EncodeImportSpecifierAttribute(ModulePath,
+      AttributeType), AContext.CurrentFilePath);
     for ImportPair in Imports do
     begin
-      if Module.ExportsTable.TryGetValue(ImportPair.Value, Value) then
+      if Module.TryGetExportValue(ImportPair.Value, Value) then
       begin
-        AContext.Scope.DefineLexicalBinding(ImportPair.Key, Value, dtLet);
+        AContext.Scope.DefineLexicalBinding(ImportPair.Key, Value, dtConst);
       end
       else
       begin
@@ -1396,6 +1523,11 @@ end;
   var
     Value: TGocciaValue;
   begin
+    if IsDirectDeclaration and (Expression is TGocciaFunctionExpression) and
+       AContext.Scope.ContainsOwnLexicalBinding(LocalName) then
+      Exit(TGocciaControlFlow.Normal(
+        TGocciaUndefinedLiteralValue.UndefinedValue));
+
     Value := EvaluateExpression(Expression, AContext);
     if ((Expression is TGocciaArrowFunctionExpression) or
        ((Expression is TGocciaFunctionExpression) and
@@ -1407,12 +1539,20 @@ end;
             (Value is TGocciaClassValue) then
       TGocciaClassValue(Value).SetInferredName(KEYWORD_DEFAULT);
 
-    AContext.Scope.DefineLexicalBinding(LocalName, Value, dtConst, False, Line,
-      Column);
+    if AContext.Scope.ContainsOwnLexicalBinding(LocalName) then
+      AContext.Scope.ForceUpdateBinding(LocalName, Value)
+    else
+      AContext.Scope.DefineLexicalBinding(LocalName, Value, dtConst, False,
+        Line, Column);
     Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
   end;
 
   function TGocciaExportVariableDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  begin
+    Result := Declaration.Execute(AContext);
+  end;
+
+  function TGocciaExportDestructuringDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
   begin
     Result := Declaration.Execute(AContext);
   end;
@@ -1422,8 +1562,15 @@ end;
     Result := Declaration.Execute(AContext);
   end;
 
+  function TGocciaExportClassDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  begin
+    Result := Declaration.Execute(AContext);
+  end;
+
   function TGocciaReExportDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
   begin
+    if Assigned(AContext.LoadModule) then
+      AContext.LoadModule(ModulePath, AContext.CurrentFilePath);
     Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
   end;
 

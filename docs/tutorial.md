@@ -316,7 +316,7 @@ Here's a quick reference of GocciaScript's key restrictions:
 | `for (key in object)` | Off by default | `Object.keys()` / `Object.entries()` with `for...of`, or `--compat-for-in-loop` for JavaScript compatibility |
 | `while (...)` / `do ... while (...)` | Off by default | `for...of`, `.map()`, `.forEach()`, `.reduce()`, or `--compat-while-loops` for JavaScript compatibility |
 | `eval("code")` | Not supported | No alternative (by design) |
-| `arguments` | Off by default | Prefer rest parameters (`...args`) or script source `--compat-non-strict-mode` |
+| `arguments` | Off by default | Prefer rest parameters (`...args`) or `--compat-arguments-object` |
 | sloppy assignment failures | Strict by default | script source `--compat-non-strict-mode` when porting code that expects failed property writes to be ignored |
 | sloppy function `this` | Strict by default | script source `--compat-non-strict-mode` when porting scripts that expect `globalThis` |
 | legacy `delete` returns | Strict by default | script source `--compat-non-strict-mode` when porting sloppy scripts |

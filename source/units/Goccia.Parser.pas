@@ -78,6 +78,7 @@ type
     FInAsyncFunction: Integer;
     FInGeneratorFunction: Integer;
     FFunctionDepth: Integer;
+    FHasTopLevelAwait: Boolean;
     FPrivateClassContexts: TObjectList<TGocciaPrivateClassContext>;
     FActiveLabels: TStringList;
     FActiveIterationLabels: TStringList;
@@ -358,6 +359,7 @@ begin
   FWarningCount := 0;
   FInAsyncFunction := 0;
   FFunctionDepth := 0;
+  FHasTopLevelAwait := False;
   FPrivateClassContexts := TObjectList<TGocciaPrivateClassContext>.Create(True);
   FActiveLabels := TStringList.Create;
   FActiveLabels.CaseSensitive := True;
@@ -782,6 +784,24 @@ begin
   Result := Previous.Line < Peek.Line;
 end;
 
+// ES2026 §16.2.2.1 Static Semantics: Early Errors for ModuleExportName
+function IsWellFormedModuleExportName(const AName: string): Boolean;
+var
+  ByteLength: Integer;
+  CodePoint: Cardinal;
+  Index: Integer;
+begin
+  Index := 1;
+  while Index <= Length(AName) do
+  begin
+    if (not TryReadUTF8CodePointAllowSurrogates(AName, Index, CodePoint,
+       ByteLength)) or IsUnicodeSurrogateCodePoint(CodePoint) then
+      Exit(False);
+    Inc(Index, ByteLength);
+  end;
+  Result := True;
+end;
+
 function TGocciaParser.IsIdentifierNameToken(
   const ATokenType: TGocciaTokenType): Boolean;
 begin
@@ -835,7 +855,17 @@ end;
 function TGocciaParser.ConsumeModuleExportName(
   const AMessage: string): TGocciaToken;
 begin
-  if Check(gttString) or IsIdentifierNameToken(Peek.TokenType) then
+  if Check(gttString) then
+  begin
+    if not IsWellFormedModuleExportName(Peek.Lexeme) then
+      raise TGocciaSyntaxError.Create(
+        'String-literal module export names must be well-formed Unicode',
+        Peek.Line, Peek.Column, FFileName, FSourceLines,
+        SSuggestUnicodeCodePointRange);
+    Exit(Advance);
+  end;
+
+  if IsIdentifierNameToken(Peek.TokenType) then
     Exit(Advance);
 
   raise TGocciaSyntaxError.Create(AMessage, Peek.Line, Peek.Column,
@@ -847,7 +877,17 @@ function TGocciaParser.ConsumeModuleExportName(
 var
   Error: TGocciaSyntaxError;
 begin
-  if Check(gttString) or IsIdentifierNameToken(Peek.TokenType) then
+  if Check(gttString) then
+  begin
+    if not IsWellFormedModuleExportName(Peek.Lexeme) then
+      raise TGocciaSyntaxError.Create(
+        'String-literal module export names must be well-formed Unicode',
+        Peek.Line, Peek.Column, FFileName, FSourceLines,
+        SSuggestUnicodeCodePointRange);
+    Exit(Advance);
+  end;
+
+  if IsIdentifierNameToken(Peek.TokenType) then
     Exit(Advance);
 
   Error := TGocciaSyntaxError.Create(AMessage, Peek.Line, Peek.Column,
@@ -1216,6 +1256,8 @@ begin
      CheckUnescapedIdentifierKeyword(KEYWORD_AWAIT) and
      IsAwaitOperandStart then
   begin
+    if FFunctionDepth = 0 then
+      FHasTopLevelAwait := True;
     Operator := Advance; // consume 'await'
     Right := Unary;
     Result := TGocciaAwaitExpression.Create(Right, Operator.Line, Operator.Column);
@@ -2142,7 +2184,7 @@ begin
           Result := TGocciaNewExpression.Create(Expr, Args, Token.Line, Token.Column);
         end;
       end;
-    gttIdentifier:
+    gttIdentifier, gttAs, gttFrom, gttStatic:
       begin
         if IsMatchExpressionAhead then
         begin
@@ -5550,35 +5592,57 @@ end;
 function TGocciaParser.ImportDeclaration: TGocciaStatement;
 var
   Imports: TStringStringMap;
-  ImportedName, LocalName, ModulePath, NamespaceName: string;
+  AttributeType, ImportedName, LocalName, ModulePath, NamespaceName: string;
   ImportedNameToken: TGocciaToken;
   Line, Column: Integer;
   IsTypeOnlyBinding: Boolean;
 
-  procedure SkipImportAttributesIfPresent;
+  function ParseImportAttributeTypeIfPresent: string;
   var
-    Depth: Integer;
+    AttributeKey: string;
+    AttributeKeyColumn: Integer;
+    AttributeKeyLine: Integer;
+    AttributeValueToken: TGocciaToken;
   begin
+    Result := '';
     if not Match(gttWith) then
       Exit;
 
-    AddWarning('Import attributes are not supported in GocciaScript',
-      'The attribute bag is ignored for now',
-      Previous.Line, Previous.Column);
-
     Consume(gttLeftBrace, 'Expected "{" after import attributes "with"',
       SSuggestOpenBraceImportList);
-    Depth := 1;
-    while (Depth > 0) and not IsAtEnd do
+
+    while not Check(gttRightBrace) and not IsAtEnd do
     begin
-      if Check(gttLeftBrace) then Inc(Depth);
-      if Check(gttRightBrace) then Dec(Depth);
-      Advance;
+      AttributeKey := ConsumeLiteralPropertyName(
+        'Expected import attribute key',
+        'Use an identifier or string key in the import attribute bag');
+      AttributeKeyLine := Previous.Line;
+      AttributeKeyColumn := Previous.Column;
+      Consume(gttColon, 'Expected ":" after import attribute key',
+        'Add ":" between the attribute key and value');
+      AttributeValueToken := Consume(gttString,
+        'Expected string import attribute value',
+        'Import attribute values must be string literals');
+      if AttributeKey <> KEYWORD_TYPE then
+        raise TGocciaSyntaxError.Create(
+          Format('Unsupported import attribute "%s"', [AttributeKey]),
+          AttributeKeyLine, AttributeKeyColumn, FFileName, FSourceLines,
+          'GocciaScript currently supports only the "type" import attribute.');
+      Result := AttributeValueToken.Lexeme;
+      if not Match(gttComma) then
+        Break;
     end;
 
-    if Depth > 0 then
-      Consume(gttRightBrace, 'Expected "}" after import attributes',
-        SSuggestCloseImportList);
+    Consume(gttRightBrace, 'Expected "}" after import attributes',
+      SSuggestCloseImportList);
+  end;
+
+  function IsSourcePhaseImportStart: Boolean;
+  begin
+    Result := CheckUnescapedIdentifierKeyword(KEYWORD_SOURCE) and
+      (FCurrent + 2 < FTokens.Count) and
+      IsIdentifierBindingToken(FTokens[FCurrent + 1].TokenType) and
+      (FTokens[FCurrent + 2].TokenType = gttFrom);
   end;
 begin
   Line := Previous.Line;
@@ -5592,12 +5656,28 @@ begin
     Exit;
   end;
 
+  if IsSourcePhaseImportStart then
+  begin
+    Advance;
+    Imports := TStringStringMap.Create;
+    LocalName := ConsumeIdentifierBinding('Expected local name after "import source"',
+      SSuggestProvideLocalName).Lexeme;
+    Imports.Add(LocalName, KEYWORD_DEFAULT);
+    Consume(gttFrom, 'Expected "from" after source import binding',
+      SSuggestAddFromAfterImport);
+    ModulePath := Consume(gttString, 'Expected module path',
+      SSuggestProvideModulePath).Lexeme;
+    AttributeType := ParseImportAttributeTypeIfPresent;
+    ConsumeSemicolonOrASI('Expected ";" after import declaration',
+      SSuggestAddSemicolon);
+    Result := TGocciaImportDeclaration.Create(Imports, ModulePath, Line,
+      Column, '', icpSource, AttributeType);
+    Exit;
+  end;
+
   if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_DEFER) and
      CheckNext(gttStar) then
   begin
-    AddWarning('Import defer is not supported in GocciaScript',
-      'The deferred namespace import is ignored for now',
-      Peek.Line, Peek.Column);
     Advance;
     Advance;
     Consume(gttAs, 'Expected "as" after "*" in namespace import',
@@ -5609,10 +5689,11 @@ begin
       SSuggestAddFromAfterImport);
     ModulePath := Consume(gttString, 'Expected module path',
       SSuggestProvideModulePath).Lexeme;
-    SkipImportAttributesIfPresent;
+    AttributeType := ParseImportAttributeTypeIfPresent;
     ConsumeSemicolonOrASI('Expected ";" after import declaration',
       SSuggestAddSemicolon);
-    Result := TGocciaEmptyStatement.Create(Line, Column);
+    Result := TGocciaImportDeclaration.Create(TStringStringMap.Create,
+      ModulePath, Line, Column, NamespaceName, icpDefer, AttributeType);
     Exit;
   end;
 
@@ -5628,17 +5709,19 @@ begin
       SSuggestAddFromAfterImport);
     ModulePath := Consume(gttString, 'Expected module path',
       SSuggestProvideModulePath).Lexeme;
+    AttributeType := ParseImportAttributeTypeIfPresent;
     ConsumeSemicolonOrASI('Expected ";" after import declaration',
       SSuggestAddSemicolon);
     Result := TGocciaImportDeclaration.Create(TStringStringMap.Create,
-      ModulePath, Line, Column, NamespaceName);
+      ModulePath, Line, Column, NamespaceName, icpEvaluation, AttributeType);
     Exit;
   end;
 
-  if Check(gttIdentifier) then
+  if IsIdentifierBindingToken(Peek.TokenType) then
   begin
     Imports := TStringStringMap.Create;
-    LocalName := Advance.Lexeme;
+    LocalName := ConsumeIdentifierBinding('Expected import binding',
+      SSuggestProvideLocalName).Lexeme;
     Imports.Add(LocalName, KEYWORD_DEFAULT);
 
     if Match(gttComma) then
@@ -5655,10 +5738,11 @@ begin
           SSuggestAddFromAfterImport);
         ModulePath := Consume(gttString, 'Expected module path',
           SSuggestProvideModulePath).Lexeme;
+        AttributeType := ParseImportAttributeTypeIfPresent;
         ConsumeSemicolonOrASI('Expected ";" after import declaration',
           SSuggestAddSemicolon);
         Result := TGocciaImportDeclaration.Create(Imports, ModulePath, Line,
-          Column, NamespaceName);
+          Column, NamespaceName, icpEvaluation, AttributeType);
         Exit;
       end;
 
@@ -5701,19 +5785,23 @@ begin
       SSuggestAddFromAfterImport);
     ModulePath := Consume(gttString, 'Expected module path',
       SSuggestProvideModulePath).Lexeme;
+    AttributeType := ParseImportAttributeTypeIfPresent;
     ConsumeSemicolonOrASI('Expected ";" after import declaration',
       SSuggestAddSemicolon);
-    Result := TGocciaImportDeclaration.Create(Imports, ModulePath, Line, Column);
+    Result := TGocciaImportDeclaration.Create(Imports, ModulePath, Line, Column,
+      '', icpEvaluation, AttributeType);
     Exit;
   end;
 
   if Check(gttString) then
   begin
-    AddWarning('Side-effect imports (import ''module'') are not supported in GocciaScript',
-      'Use named imports instead: import { name } from ''module''',
-      Line, Column);
-    SkipUntilSemicolon;
-    Result := TGocciaEmptyStatement.Create(Line, Column);
+    Imports := TStringStringMap.Create;
+    ModulePath := Advance.Lexeme;
+    AttributeType := ParseImportAttributeTypeIfPresent;
+    ConsumeSemicolonOrASI('Expected ";" after import declaration',
+      SSuggestAddSemicolon);
+    Result := TGocciaImportDeclaration.Create(Imports, ModulePath, Line,
+      Column, '', icpEvaluation, AttributeType);
     Exit;
   end;
 
@@ -5757,20 +5845,24 @@ begin
     SSuggestAddFromAfterImportList);
   ModulePath := Consume(gttString, 'Expected module path',
     SSuggestProvideModulePath).Lexeme;
+  AttributeType := ParseImportAttributeTypeIfPresent;
   ConsumeSemicolonOrASI('Expected ";" after import declaration',
     SSuggestAddSemicolon);
 
-  Result := TGocciaImportDeclaration.Create(Imports, ModulePath, Line, Column);
+  Result := TGocciaImportDeclaration.Create(Imports, ModulePath, Line, Column,
+    '', icpEvaluation, AttributeType);
 end;
 
 function TGocciaParser.ExportDeclaration: TGocciaStatement;
 var
   ExportsTable: TStringStringMap;
-  LocalName, ExportedName, ModulePath: string;
+  LocalName, ExportedName, ModulePath, NamespaceName: string;
   Line, Column: Integer;
   InnerDecl: TGocciaStatement;
   VarDecl: TGocciaVariableDeclaration;
+  DestructuringDecl: TGocciaDestructuringDeclaration;
   FunctionDecl: TGocciaFunctionDeclaration;
+  ClassDecl: TGocciaClassDeclaration;
   DefaultValue: TGocciaExpression;
   DefaultLocalName: string;
   DirectDefaultDeclaration: Boolean;
@@ -5796,6 +5888,39 @@ var
       Inc(ScanIndex);
     Result := (ScanIndex + 1 < FTokens.Count) and
       (FTokens[ScanIndex + 1].TokenType = gttFrom);
+  end;
+
+  procedure ConsumeReExportAttributesIfPresent;
+  var
+    AttributeKey: string;
+    AttributeKeyColumn: Integer;
+    AttributeKeyLine: Integer;
+  begin
+    if not Match(gttWith) then
+      Exit;
+
+    Consume(gttLeftBrace, 'Expected "{" after import attributes "with"',
+      SSuggestOpenBraceImportList);
+    while not Check(gttRightBrace) and not IsAtEnd do
+    begin
+      AttributeKey := ConsumeLiteralPropertyName('Expected import attribute key',
+        'Use an identifier or string key in the import attribute bag');
+      AttributeKeyLine := Previous.Line;
+      AttributeKeyColumn := Previous.Column;
+      Consume(gttColon, 'Expected ":" after import attribute key',
+        'Add ":" between the attribute key and value');
+      Consume(gttString, 'Expected string import attribute value',
+        'Import attribute values must be string literals');
+      if AttributeKey <> KEYWORD_TYPE then
+        raise TGocciaSyntaxError.Create(
+          Format('Unsupported import attribute "%s"', [AttributeKey]),
+          AttributeKeyLine, AttributeKeyColumn, FFileName, FSourceLines,
+          'GocciaScript currently supports only the "type" import attribute.');
+      if not Match(gttComma) then
+        Break;
+    end;
+    Consume(gttRightBrace, 'Expected "}" after import attributes',
+      SSuggestCloseImportList);
   end;
 begin
   Line := Previous.Line;
@@ -5842,7 +5967,7 @@ begin
       ConsumeSemicolonOrASI('Expected ";" after default export',
         SSuggestAddSemicolon);
     Result := TGocciaExportDefaultDeclaration.Create(DefaultValue,
-      DefaultLocalName, Line, Column);
+      DefaultLocalName, DirectDefaultDeclaration, Line, Column);
     Exit;
   end;
 
@@ -5853,13 +5978,58 @@ begin
     Exit;
   end;
 
+  if Match(gttClass) then
+  begin
+    InnerDecl := ClassDeclaration;
+    ClassDecl := TGocciaClassDeclaration(InnerDecl);
+    Result := TGocciaExportClassDeclaration.Create(ClassDecl, Line, Column);
+    Exit;
+  end;
+
+  if Match(gttVar) then
+  begin
+    InnerDecl := VarStatement;
+    if not (InnerDecl is TGocciaVariableDeclaration) then
+    begin
+      if InnerDecl is TGocciaEmptyStatement then
+      begin
+        Result := InnerDecl;
+        Exit;
+      end;
+      if InnerDecl is TGocciaDestructuringDeclaration then
+      begin
+        DestructuringDecl := TGocciaDestructuringDeclaration(InnerDecl);
+        Result := TGocciaExportDestructuringDeclaration.Create(
+          DestructuringDecl, Line, Column);
+        Exit;
+      end;
+      raise TGocciaSyntaxError.Create(
+        'Expected variable declaration after "export var"',
+        Line, Column, FFileName, FSourceLines,
+        SSuggestProvideVariableName);
+    end;
+    VarDecl := TGocciaVariableDeclaration(InnerDecl);
+    Result := TGocciaExportVariableDeclaration.Create(VarDecl, Line, Column);
+    Exit;
+  end;
+
   if Match([gttConst, gttLet]) then
   begin
     InnerDecl := DeclarationStatement;
     if not (InnerDecl is TGocciaVariableDeclaration) then
-      raise TGocciaSyntaxError.Create('Destructuring exports are not supported; use export { name } instead',
+    begin
+      if InnerDecl is TGocciaDestructuringDeclaration then
+      begin
+        DestructuringDecl := TGocciaDestructuringDeclaration(InnerDecl);
+        Result := TGocciaExportDestructuringDeclaration.Create(
+          DestructuringDecl, Line, Column);
+        Exit;
+      end;
+      raise TGocciaSyntaxError.Create(
+        'Expected lexical declaration after export',
         Line, Column, FFileName, FSourceLines,
-        SSuggestDestructuringExportDeclareFirst);
+        SSuggestProvideVariableName);
+    end;
     VarDecl := TGocciaVariableDeclaration(InnerDecl);
     Result := TGocciaExportVariableDeclaration.Create(VarDecl, Line, Column);
     Exit;
@@ -5933,15 +6103,26 @@ begin
 
   if Check(gttStar) then
   begin
-    AddWarning('Wildcard re-exports (export * from ...) are not supported in GocciaScript',
-      'Use named re-exports instead: export { name } from ''module''',
-      Line, Column);
-    SkipUntilSemicolon;
-    Result := TGocciaEmptyStatement.Create(Line, Column);
+    Advance;
+    NamespaceName := '';
+    if Match(gttAs) then
+      NamespaceName := ConsumeModuleExportName(
+        'Expected namespace export name after "as"',
+        SSuggestProvideExportedName).Lexeme;
+    Consume(gttFrom, 'Expected "from" after wildcard export',
+      SSuggestAddFromAfterImportList);
+    ModulePath := Consume(gttString, 'Expected module path after "from"',
+      SSuggestProvideModulePath).Lexeme;
+    ConsumeReExportAttributesIfPresent;
+    ConsumeSemicolonOrASI('Expected ";" after re-export declaration',
+      SSuggestAddSemicolon);
+    ExportsTable := TStringStringMap.Create;
+    Result := TGocciaReExportDeclaration.Create(ExportsTable, ModulePath,
+      Line, Column, True, NamespaceName);
     Exit;
   end;
 
-  Consume(gttLeftBrace, 'Expected "{", "const", or "let" after "export"',
+  Consume(gttLeftBrace, 'Expected "{", "const", "let", or "var" after "export"',
     SSuggestOpenBraceExportOrDeclaration);
 
   IsReExport := HasFromClauseAfterNamedExports;
@@ -6002,6 +6183,7 @@ begin
   begin
     ModulePath := Consume(gttString, 'Expected module path after "from"',
       SSuggestProvideModulePath).Lexeme;
+    ConsumeReExportAttributesIfPresent;
     ConsumeSemicolonOrASI('Expected ";" after re-export declaration',
       SSuggestAddSemicolon);
     Result := TGocciaReExportDeclaration.Create(ExportsTable, ModulePath, Line, Column);
@@ -6604,6 +6786,7 @@ var
 begin
   SavedStrictModeActive := FStrictModeActive;
   FStrictModeActive := not FNonStrictModeEnabled;
+  FHasTopLevelAwait := False;
   InDirectivePrologue := True;
   Statements := TObjectList<TGocciaStatement>.Create(True);
   try
@@ -6624,6 +6807,7 @@ begin
     end;
 
     Result := TGocciaProgram.Create(Statements);
+    Result.HasTopLevelAwait := FHasTopLevelAwait;
   finally
     FStrictModeActive := SavedStrictModeActive;
   end;

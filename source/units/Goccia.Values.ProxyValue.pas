@@ -1073,7 +1073,7 @@ var
   TrapResult: TGocciaValue;
   ResultArray: TGocciaArrayValue;
   Keys: TArray<string>;
-  I, J: Integer;
+  I, J, Count: Integer;
   Element: TGocciaValue;
   TargetKeys: TArray<string>;
   TargetDesc: TGocciaPropertyDescriptor;
@@ -1096,6 +1096,7 @@ begin
 
     ResultArray := TGocciaArrayValue(TrapResult);
     SetLength(Keys, ResultArray.Elements.Count);
+    Count := 0;
     for I := 0 to ResultArray.Elements.Count - 1 do
     begin
       Element := ResultArray.Elements[I];
@@ -1103,8 +1104,13 @@ begin
       if not (Element is TGocciaStringLiteralValue) and
          not (Element is TGocciaSymbolValue) then
         ThrowTypeError(SErrorProxyOwnKeysTypes, SSuggestProxyTrapReturnType);
-      Keys[I] := Element.ToStringLiteral.Value;
+      if Element is TGocciaStringLiteralValue then
+      begin
+        Keys[Count] := TGocciaStringLiteralValue(Element).Value;
+        Inc(Count);
+      end;
     end;
+    SetLength(Keys, Count);
 
     // ES2026 §28.1.1 step 17-18: Non-configurable target properties
     // must appear in the trap result.

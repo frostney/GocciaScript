@@ -100,7 +100,19 @@ const
   //               rejection at each direct-eval call site, so static
   //               field initializers compiled into enclosing templates do
   //               not affect unrelated eval calls.
-  GOCCIA_FORMAT_VERSION = 52;
+  //   v52 -> v53: added OP_IMPORT_DEFER so bytecode can bind static
+  //               `import defer * as ns from "mod"` to a synchronous
+  //               deferred module namespace.
+  //   v53 -> v54: added OP_IMPORT_SOURCE so bytecode can bind static
+  //               `import source x from "mod"` to a ModuleSource object.
+  //   v54 -> v55: added OP_DYNAMIC_IMPORT_OPTIONS so bytecode can preserve
+  //               dynamic import attribute option validation.
+  //   v55 -> v56: OP_CREATE_ARGUMENTS operand B now selects mapped
+  //               arguments-object semantics for sloppy simple parameter
+  //               lists, and operand C carries the formal parameter count.
+  //   v56 -> v57: added phase-specific dynamic import option opcodes so
+  //               import.source/import.defer preserve import attributes.
+  GOCCIA_FORMAT_VERSION = 57;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
@@ -312,7 +324,12 @@ type
     OP_SET_FUNCTION_NAME = 190,
     OP_LOAD_ARGUMENT = 191,
     OP_CHECK_DERIVED_THIS = 192,
-    OP_SUPER_SET     = 193
+    OP_SUPER_SET     = 193,
+    OP_IMPORT_DEFER  = 194,
+    OP_IMPORT_SOURCE = 195,
+    OP_DYNAMIC_IMPORT_OPTIONS = 196,
+    OP_DYNAMIC_IMPORT_SOURCE_OPTIONS = 197,
+    OP_DYNAMIC_IMPORT_DEFER_OPTIONS = 198
   );
 
 function EncodeABC(const AOp: TGocciaOpCode; const A, B, C: UInt8): UInt32; inline;

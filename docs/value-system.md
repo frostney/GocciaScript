@@ -552,7 +552,7 @@ Standalone calls to ordinary, method, async, and generator functions receive `un
 
 ### Arguments Object (`Goccia.Values.ArgumentsObjectValue.pas`)
 
-Compatibility `arguments` objects are ordinary `TGocciaObjectValue` instances created by `CreateUnmappedArgumentsObject`. The helper lives in the value-system namespace because both interpreter function calls and bytecode `OP_CREATE_ARGUMENTS` need the same array-like object shape. It is intentionally not a separate runtime type: indexed properties and `length` are enough for the current unmapped `arguments` semantics.
+Compatibility `arguments` objects are created by `Goccia.Values.ArgumentsObjectValue`. Unmapped objects are ordinary `TGocciaObjectValue` instances. Sloppy simple-parameter functions use a mapped arguments-object subclass that keeps an internal parameter map and overrides get/set/define/delete so indexed properties alias parameter bindings until deletion, accessor conversion, or non-writable descriptor changes break the mapping. Bytecode mapped objects store parameter cells; interpreter mapped objects store the call scope.
 
 ### Array Method Callbacks
 

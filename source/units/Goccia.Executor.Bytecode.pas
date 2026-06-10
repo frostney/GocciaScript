@@ -10,6 +10,7 @@ uses
   Goccia.Compiler,
   Goccia.Evaluator.Context,
   Goccia.Executor,
+  Goccia.Modules,
   Goccia.Modules.Loader,
   Goccia.Scope,
   Goccia.Values.Primitives,
@@ -22,6 +23,7 @@ type
     FGlobalBackedTopLevel: Boolean;
     FStrictTypes: Boolean;
     FNonStrictMode: Boolean;
+    FArgumentsObjectEnabled: Boolean;
   public
     constructor Create;
     destructor Destroy; override;
@@ -50,6 +52,8 @@ type
       write FGlobalBackedTopLevel;
     property StrictTypes: Boolean read FStrictTypes write FStrictTypes;
     property NonStrictMode: Boolean read FNonStrictMode write FNonStrictMode;
+    property ArgumentsObjectEnabled: Boolean
+      read FArgumentsObjectEnabled write FArgumentsObjectEnabled;
   end;
 
 implementation
@@ -64,7 +68,8 @@ uses
   Goccia.GarbageCollector,
   Goccia.Profiler,
   Goccia.Realm,
-  Goccia.Scope.Redeclaration;
+  Goccia.Scope.Redeclaration,
+  Goccia.Values.PromiseValue;
 
 { TGocciaBytecodeExecutor }
 
@@ -103,13 +108,18 @@ var
   SavedGlobalScope: TGocciaScope;
   SavedRealm: TGocciaRealm;
   SavedGlobalBackedTopLevel: Boolean;
+  SavedRuntimeModule: TGocciaModule;
   Options: TGocciaCompilerOptimizationOptions;
 begin
-  Compiler := TGocciaCompiler.Create(AContext.CurrentFilePath);
+    Compiler := TGocciaCompiler.Create(AContext.CurrentFilePath);
   try
-    Compiler.GlobalBackedTopLevel := True;
+    Compiler.GlobalBackedTopLevel := False;
+    Compiler.AsyncTopLevel := AProgram.HasTopLevelAwait;
+    Compiler.PreinitializedTopLevelFunctions := True;
     Compiler.StrictTypes := FStrictTypes;
     Compiler.NonStrictMode := AContext.NonStrictMode;
+    Compiler.ArgumentsObjectEnabled :=
+      AContext.Scope.EffectiveArgumentsObjectEnabled;
     Options := Compiler.OptimizationOptions;
     Options.PreserveCoverageShape :=
       Assigned(TGocciaCoverageTracker.Instance) and
@@ -124,16 +134,22 @@ begin
   SavedGlobalScope := FVM.GlobalScope;
   SavedRealm := FVM.Realm;
   SavedGlobalBackedTopLevel := FVM.GlobalBackedTopLevel;
+  SavedRuntimeModule := FVM.CurrentRuntimeModule;
   FVM.GlobalScope := AContext.Scope;
   FVM.GlobalBackedTopLevel := False;
+  FVM.CurrentRuntimeModule := AContext.CurrentModule;
   try
     if Assigned(AContext.Realm) then
       FVM.Realm := AContext.Realm;
     Result := FVM.ExecuteModule(BytecodeModule);
+    if AProgram.HasTopLevelAwait and Assigned(AContext.CurrentModule) and
+       (Result is TGocciaPromiseValue) then
+      AContext.CurrentModule.EvaluationPromise := Result;
   finally
     FVM.GlobalScope := SavedGlobalScope;
     FVM.Realm := SavedRealm;
     FVM.GlobalBackedTopLevel := SavedGlobalBackedTopLevel;
+    FVM.CurrentRuntimeModule := SavedRuntimeModule;
   end;
 end;
 
@@ -180,6 +196,7 @@ begin
     Compiler.GlobalBackedTopLevel := FGlobalBackedTopLevel;
     Compiler.StrictTypes := FStrictTypes;
     Compiler.NonStrictMode := FNonStrictMode;
+    Compiler.ArgumentsObjectEnabled := FArgumentsObjectEnabled;
     Options := Compiler.OptimizationOptions;
     Options.PreserveCoverageShape :=
       Assigned(TGocciaCoverageTracker.Instance) and

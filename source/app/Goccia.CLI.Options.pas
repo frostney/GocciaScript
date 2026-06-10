@@ -123,10 +123,14 @@ const
      HelpText: 'Enable loose equality and inequality (== and !=) (compatibility)'),
     (OptionName: 'compat-non-strict-mode';
      HelpText: 'Enable non-strict-mode compatibility semantics'),
+    (OptionName: 'compat-arguments-object';
+     HelpText: 'Enable implicit arguments objects (compatibility)'),
     (OptionName: 'compat-label';
      HelpText: 'Enable labeled break and continue targets (compatibility)'),
     (OptionName: 'compat-for-in-loop';
-     HelpText: 'Enable for...in property enumeration loops (compatibility)')
+     HelpText: 'Enable for...in property enumeration loops (compatibility)'),
+    (OptionName: 'experimental-js-module-source';
+     HelpText: 'Enable experimental JavaScript ModuleSource objects')
   );
 
 function CompatibilityFlagCount: Integer;

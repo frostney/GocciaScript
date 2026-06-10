@@ -53,6 +53,7 @@ implementation
 uses
   TimingUtils,
 
+  Goccia.AST.Statements,
   Goccia.ControlFlow,
   Goccia.Evaluator,
   Goccia.ExecutionContext,
@@ -99,6 +100,7 @@ var
   ExecutionContext: TGocciaExecutionContextScope;
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  PredeclareModuleLexicalDeclarations(AProgram, AContext.Scope);
   if FInterpreter.VarEnabled then
     HoistVarDeclarations(AProgram.Body, AContext.Scope);
   if FInterpreter.FunctionEnabled then
@@ -110,7 +112,18 @@ begin
         AContext.CurrentFilePath, AProgram));
   try
     for I := 0 to AProgram.Body.Count - 1 do
+      if (AProgram.Body[I] is TGocciaImportDeclaration) or
+         (AProgram.Body[I] is TGocciaReExportDeclaration) then
+      begin
+        CF := EvaluateStatement(AProgram.Body[I], AContext);
+        if CF.Kind = cfkReturn then Exit(CF.Value);
+      end;
+
+    for I := 0 to AProgram.Body.Count - 1 do
     begin
+      if (AProgram.Body[I] is TGocciaImportDeclaration) or
+         (AProgram.Body[I] is TGocciaReExportDeclaration) then
+        Continue;
       CF := EvaluateStatement(AProgram.Body[I], AContext);
       Result := CF.Value;
       if CF.Kind = cfkReturn then Exit;

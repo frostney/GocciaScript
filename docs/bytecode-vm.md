@@ -89,7 +89,7 @@ Current instruction families:
 - object and array operations
 - class construction and member definition
 - calls, construction, iteration, globals, and string coercion
-- opt-in compatibility scope helpers: `arguments` object creation and `with` object binding probes
+- opt-in compatibility scope helpers: unmapped `arguments` object creation and `with` object binding probes
 - semantic-only imports/exports, dynamic import, import.meta, await, and yield
 
 Some opcode families intentionally use flags or mode operands instead of one opcode per syntax form. For example:
@@ -198,7 +198,7 @@ This keeps the emitted bytecode compact and makes opcode additions deliberate in
 
 Compatibility features that alter identifier lookup still compile to explicit VM state instead of falling back to interpreter behavior.
 
-- **`arguments` object** — With `--compat-non-strict-mode` enabled for script source, function templates snapshot the current call arguments in the frame. `OP_CREATE_ARGUMENTS` materializes an unmapped arguments object into the declared local slot before parameter defaults and body execution, so default initializers can observe `arguments.length` and generators see the original call list after suspension/resume. Module source forces strict compilation, so module function templates do not create compatibility arguments objects.
+- **`arguments` object** — With `--compat-arguments-object` enabled, function templates snapshot the current call arguments in the frame. `--compat-non-strict-mode` does not enable this helper by itself. `OP_CREATE_ARGUMENTS` materializes the object into the declared local slot before parameter defaults and body execution, so default initializers can observe `arguments.length` and generators see the original call list after suspension/resume. Operand `B` selects mapped semantics for sloppy simple parameter lists and operand `C` carries the formal parameter count; the VM forces those parameter locals into cells so indexed properties alias parameter bindings even if the object escapes. Strict functions, modules, and non-simple parameter lists use unmapped arguments objects.
 - **Non-strict `this` binding** — Function templates serialize their strict-this mode. With `--compat-non-strict-mode` enabled for script source, ordinary function templates clear it so VM call paths coerce nullish `this` to `globalThis`; arrows and class methods keep their existing lexical or strict receiver behavior. Module source ignores the compatibility flag for this decision.
 - **Non-strict assignment** — Failed object/global writes throw by default. In script source non-strict compatibility mode, the compiler emits `OP_SET_PROP_CONST_LOOSE`, `OP_SET_INDEX_LOOSE`, and `OP_SET_GLOBAL_LOOSE` for ordinary writes so failed `[[Set]]` results are ignored while null/undefined property access and throwing setters still raise errors.
 - **`with` statement** — With `--compat-non-strict-mode` enabled for script source, the compiler lowers `with (expr) body` to `OP_TO_OBJECT`, stores the object in a hidden local, and records that hidden binding in the compiler scope. Identifier reads, writes, updates, and identifier calls inside the dynamic extent emit `OP_HAS_WITH_BINDING` probes from innermost to outermost hidden object before falling back to normal local/upvalue/global resolution. Writes that resolve to a with object use the loose set opcodes in non-strict mode. Nested functions inherit the hidden binding as an upvalue when captured, preserving closures created inside `with`.

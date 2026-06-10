@@ -5,6 +5,9 @@ unit Goccia.Modules.Loader;
 interface
 
 uses
+  Classes,
+  Generics.Collections,
+  StrUtils,
   SysUtils,
 
   OrderedStringMap,
@@ -12,12 +15,14 @@ uses
   Goccia.AST.Node,
   Goccia.Error.ThrowErrorCallback,
   Goccia.Evaluator.Context,
+  Goccia.MicrotaskQueue,
   Goccia.Modules,
   Goccia.Modules.ContentProvider,
   Goccia.Modules.Resolver,
   Goccia.Scope,
   Goccia.SourcePipeline,
-  Goccia.Values.Primitives;
+  Goccia.Values.Primitives,
+  Goccia.Values.PromiseValue;
 
 type
   { Evaluate the body of a module-form program in AContext.
@@ -38,10 +43,14 @@ type
     FContentProvider: TGocciaModuleContentProvider;
     FEvaluateModuleBody: TGocciaModuleBodyEvaluator;
     FEntryFileName: string;
+    FDeferredModuleNamespaces: TOrderedStringMap<TGocciaValue>;
+    FEvaluatingModules: TOrderedStringMap<Boolean>;
+    FFailedModuleErrors: TOrderedStringMap<TGocciaValue>;
     FGlobalModules: TOrderedStringMap<TGocciaModule>;
     FGlobalScope: TGocciaGlobalScope;
     FLoadingModules: TOrderedStringMap<Boolean>;
     FModules: TOrderedStringMap<TGocciaModule>;
+    FModuleSourceValues: TOrderedStringMap<TGocciaValue>;
     FOnError: TGocciaThrowErrorCallback;
     FOwnsContentProvider: Boolean;
     FOwnsResolver: Boolean;
@@ -50,7 +59,17 @@ type
 
     procedure CopyModuleContents(const ASourceModule,
       ATargetModule: TGocciaModule);
-    function LoadJSONModule(const AResolvedPath: string): TGocciaModule;
+    function LoadJSONModule(const AResolvedPath,
+      ACacheKey: string): TGocciaModule;
+    function LoadTextModule(const AResolvedPath,
+      ACacheKey: string; const ADefaultOnly: Boolean): TGocciaModule;
+    function DeferredGraphTouchesEvaluating(const AResolvedPath: string;
+      const ASeen: TOrderedStringMap<Boolean>): Boolean;
+    procedure EvaluateDeferredAsyncDependencies(const AResolvedPath,
+      AImportingFilePath: string; const ASeen: TOrderedStringMap<Boolean>;
+      const ARequestedModules: TGocciaModuleList = nil);
+    procedure ValidateDeferredModuleLinks(const AResolvedPath,
+      AImportingFilePath: string; const ASeen: TOrderedStringMap<Boolean>);
     function GetASIEnabled: Boolean;
     function GetJSXEnabled: Boolean;
     function GetVarEnabled: Boolean;
@@ -59,6 +78,7 @@ type
     function GetWhileLoopsEnabled: Boolean;
     function GetLooseEqualityEnabled: Boolean;
     function GetNonStrictModeEnabled: Boolean;
+    function GetArgumentsObjectEnabled: Boolean;
     procedure SetASIEnabled(const AValue: Boolean);
     procedure SetJSXEnabled(const AValue: Boolean);
     procedure SetVarEnabled(const AValue: Boolean);
@@ -67,6 +87,7 @@ type
     procedure SetWhileLoopsEnabled(const AValue: Boolean);
     procedure SetLooseEqualityEnabled(const AValue: Boolean);
     procedure SetNonStrictModeEnabled(const AValue: Boolean);
+    procedure SetArgumentsObjectEnabled(const AValue: Boolean);
   public
     constructor Create(const AEntryFileName: string;
       const AResolver: TGocciaModuleResolver = nil;
@@ -75,13 +96,21 @@ type
 
     procedure BindRuntime(const AGlobalScope: TGocciaGlobalScope;
       const AOnError: TGocciaThrowErrorCallback);
+    procedure BeginEvaluatingModulePath(const APath: string);
     procedure CheckForModuleReload(const AModule: TGocciaModule);
+    procedure EndEvaluatingModulePath(const APath: string);
+    function IsEvaluatingModulePath(const APath: string): Boolean;
     function LoadModule(const AModulePath,
       AImportingFilePath: string): TGocciaModule;
     function LoadModuleSourceValue(const AModulePath,
       AImportingFilePath: string): TGocciaValue;
     function LoadDeferredModuleNamespaceValue(const AModulePath,
       AImportingFilePath: string): TGocciaValue;
+    function LoadDeferredModuleNamespaceValueForEvaluation(
+      const AModulePath, AImportingFilePath: string;
+      const ARequestedModules: TGocciaModuleList): TGocciaValue;
+    procedure RegisterModule(const AResolvedPath: string;
+      const AModule: TGocciaModule);
     procedure SetContentProvider(
       const AContentProvider: TGocciaModuleContentProvider;
       const AOwnsContentProvider: Boolean);
@@ -108,6 +137,8 @@ type
       read GetLooseEqualityEnabled write SetLooseEqualityEnabled;
     property NonStrictModeEnabled: Boolean
       read GetNonStrictModeEnabled write SetNonStrictModeEnabled;
+    property ArgumentsObjectEnabled: Boolean
+      read GetArgumentsObjectEnabled write SetArgumentsObjectEnabled;
     property StrictTypesEnabled: Boolean read FStrictTypesEnabled
       write FStrictTypesEnabled;
     property Resolver: TGocciaModuleResolver read FResolver;
@@ -118,15 +149,181 @@ type
 implementation
 
 uses
+  TextSemantics,
+
+  Goccia.Arguments.Collection,
+  Goccia.AST.BindingPatterns,
   Goccia.AST.Expressions,
   Goccia.AST.Statements,
+  Goccia.Constants.PropertyNames,
   Goccia.Error,
+  Goccia.Evaluator,
   Goccia.FileExtensions,
   Goccia.GarbageCollector,
   Goccia.JSON,
   Goccia.Keywords.Reserved,
   Goccia.Realm,
-  Goccia.Values.ObjectValue;
+  Goccia.Values.Error,
+  Goccia.Values.ErrorHelper,
+  Goccia.Values.FunctionValue,
+  Goccia.Values.NativeFunction,
+  Goccia.Values.ObjectValue,
+  Goccia.VM.Exception;
+
+const
+  MODULE_SOURCE_SENTINEL = '<module source>';
+
+type
+  TGocciaModuleEvaluationWaitState = class(TGocciaObjectValue)
+  private
+    FRemaining: Integer;
+    FResultPromise: TGocciaPromiseValue;
+    FSettled: Boolean;
+  public
+    constructor Create(const AResultPromise: TGocciaPromiseValue;
+      const ACount: Integer);
+    function Fulfill(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function Reject(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    procedure MarkReferences; override;
+  end;
+
+  TGocciaDeferredModuleBody = class(TGocciaObjectValue)
+  private
+    FContext: TGocciaEvaluationContext;
+    FLoader: TGocciaModuleLoader;
+    FModule: TGocciaModule;
+    FHasTopLevelAwait: Boolean;
+    FPipelineOptions: TGocciaSourcePipelineOptions;
+    FProgramNode: TGocciaProgram;
+  public
+    constructor Create(const ALoader: TGocciaModuleLoader;
+      const AProgramNode: TGocciaProgram;
+      const AContext: TGocciaEvaluationContext;
+      const AModule: TGocciaModule;
+      const AHasTopLevelAwait: Boolean;
+      const APipelineOptions: TGocciaSourcePipelineOptions);
+    destructor Destroy; override;
+    function Invoke(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    procedure MarkReferences; override;
+  end;
+
+{ TGocciaModuleEvaluationWaitState }
+
+constructor TGocciaModuleEvaluationWaitState.Create(
+  const AResultPromise: TGocciaPromiseValue; const ACount: Integer);
+begin
+  inherited Create(nil);
+  FResultPromise := AResultPromise;
+  FRemaining := ACount;
+  FSettled := False;
+end;
+
+function TGocciaModuleEvaluationWaitState.Fulfill(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  if FSettled then
+    Exit;
+  Dec(FRemaining);
+  if FRemaining = 0 then
+  begin
+    FSettled := True;
+    FResultPromise.Resolve(TGocciaUndefinedLiteralValue.UndefinedValue);
+  end;
+end;
+
+function TGocciaModuleEvaluationWaitState.Reject(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  if FSettled then
+    Exit;
+  FSettled := True;
+  FResultPromise.Reject(AArgs.GetElement(0));
+end;
+
+procedure TGocciaModuleEvaluationWaitState.MarkReferences;
+begin
+  if GCMarked then
+    Exit;
+  inherited;
+  if Assigned(FResultPromise) then
+    FResultPromise.MarkReferences;
+end;
+
+{ TGocciaDeferredModuleBody }
+
+constructor TGocciaDeferredModuleBody.Create(
+  const ALoader: TGocciaModuleLoader; const AProgramNode: TGocciaProgram;
+  const AContext: TGocciaEvaluationContext; const AModule: TGocciaModule;
+  const AHasTopLevelAwait: Boolean;
+  const APipelineOptions: TGocciaSourcePipelineOptions);
+begin
+  inherited Create(nil);
+  FLoader := ALoader;
+  FProgramNode := AProgramNode;
+  FContext := AContext;
+  FModule := AModule;
+  FHasTopLevelAwait := AHasTopLevelAwait;
+  FPipelineOptions := APipelineOptions;
+end;
+
+destructor TGocciaDeferredModuleBody.Destroy;
+begin
+  FProgramNode.Free;
+  inherited;
+end;
+
+function TGocciaDeferredModuleBody.Invoke(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  ActiveOptionsScope: TGocciaSourcePipelineOptionsScope;
+  BodyResult: TGocciaValue;
+begin
+  ActiveOptionsScope := TGocciaSourcePipeline.ActivateOptions(
+    FPipelineOptions);
+  try
+    try
+      BodyResult := FLoader.FEvaluateModuleBody(FProgramNode, FContext);
+      if FHasTopLevelAwait then
+        Result := BodyResult
+      else
+        Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    except
+      on E: EGocciaBytecodeThrow do
+      begin
+        if Assigned(FModule) then
+          FLoader.FFailedModuleErrors.AddOrSetValue(
+            FModule.Path, E.ThrownValue);
+        raise;
+      end;
+      on E: TGocciaThrowValue do
+      begin
+        if Assigned(FModule) then
+          FLoader.FFailedModuleErrors.AddOrSetValue(FModule.Path, E.Value);
+        raise;
+      end;
+    end;
+  finally
+    ActiveOptionsScope.Free;
+    FreeAndNil(FProgramNode);
+  end;
+end;
+
+procedure TGocciaDeferredModuleBody.MarkReferences;
+begin
+  if GCMarked then
+    Exit;
+  inherited;
+  if Assigned(FContext.Scope) then
+    FContext.Scope.MarkReferences;
+end;
 
 constructor TGocciaModuleLoader.Create(const AEntryFileName: string;
   const AResolver: TGocciaModuleResolver;
@@ -134,7 +331,11 @@ constructor TGocciaModuleLoader.Create(const AEntryFileName: string;
 begin
   inherited Create;
   FEntryFileName := AEntryFileName;
+  FDeferredModuleNamespaces := TOrderedStringMap<TGocciaValue>.Create;
+  FEvaluatingModules := TOrderedStringMap<Boolean>.Create;
+  FFailedModuleErrors := TOrderedStringMap<TGocciaValue>.Create;
   FModules := TOrderedStringMap<TGocciaModule>.Create;
+  FModuleSourceValues := TOrderedStringMap<TGocciaValue>.Create;
   FLoadingModules := TOrderedStringMap<Boolean>.Create;
   FGlobalModules := TOrderedStringMap<TGocciaModule>.Create;
 
@@ -163,8 +364,24 @@ begin
 end;
 
 destructor TGocciaModuleLoader.Destroy;
+var
+  NamespacePair: TOrderedStringMap<TGocciaValue>.TKeyValuePair;
+  SourceValuePair: TOrderedStringMap<TGocciaValue>.TKeyValuePair;
 begin
+  if Assigned(TGarbageCollector.Instance) then
+  begin
+    for NamespacePair in FDeferredModuleNamespaces do
+      if Assigned(NamespacePair.Value) then
+        TGarbageCollector.Instance.RemoveRootObject(NamespacePair.Value);
+    for SourceValuePair in FModuleSourceValues do
+      if Assigned(SourceValuePair.Value) then
+        TGarbageCollector.Instance.RemoveRootObject(SourceValuePair.Value);
+  end;
+  FDeferredModuleNamespaces.Free;
+  FEvaluatingModules.Free;
+  FFailedModuleErrors.Free;
   FModules.Free;
+  FModuleSourceValues.Free;
   FLoadingModules.Free;
   FGlobalModules.Free;
   if FOwnsResolver then
@@ -212,6 +429,11 @@ end;
 function TGocciaModuleLoader.GetNonStrictModeEnabled: Boolean;
 begin
   Result := cfNonStrictMode in FCompatibility;
+end;
+
+function TGocciaModuleLoader.GetArgumentsObjectEnabled: Boolean;
+begin
+  Result := cfArgumentsObject in FCompatibility;
 end;
 
 procedure TGocciaModuleLoader.SetASIEnabled(const AValue: Boolean);
@@ -279,6 +501,14 @@ begin
     Exclude(FCompatibility, cfNonStrictMode);
 end;
 
+procedure TGocciaModuleLoader.SetArgumentsObjectEnabled(const AValue: Boolean);
+begin
+  if AValue then
+    Include(FCompatibility, cfArgumentsObject)
+  else
+    Exclude(FCompatibility, cfArgumentsObject);
+end;
+
 procedure TGocciaModuleLoader.SetContentProvider(
   const AContentProvider: TGocciaModuleContentProvider;
   const AOwnsContentProvider: Boolean);
@@ -309,16 +539,54 @@ begin
   FOnError := AOnError;
 end;
 
+procedure TGocciaModuleLoader.BeginEvaluatingModulePath(const APath: string);
+begin
+  if APath = '' then
+    Exit;
+  FEvaluatingModules.AddOrSetValue(APath, True);
+  FEvaluatingModules.AddOrSetValue(ExpandFileName(APath), True);
+  FLoadingModules.AddOrSetValue(APath, True);
+  FLoadingModules.AddOrSetValue(ExpandFileName(APath), True);
+end;
+
+procedure TGocciaModuleLoader.EndEvaluatingModulePath(const APath: string);
+begin
+  if APath = '' then
+    Exit;
+  FEvaluatingModules.Remove(APath);
+  FEvaluatingModules.Remove(ExpandFileName(APath));
+  FLoadingModules.Remove(APath);
+  FLoadingModules.Remove(ExpandFileName(APath));
+end;
+
+function TGocciaModuleLoader.IsEvaluatingModulePath(
+  const APath: string): Boolean;
+begin
+  Result := (APath <> '') and
+    (FEvaluatingModules.ContainsKey(APath) or
+    FEvaluatingModules.ContainsKey(ExpandFileName(APath)) or
+    FLoadingModules.ContainsKey(APath) or
+    FLoadingModules.ContainsKey(ExpandFileName(APath)));
+end;
+
+procedure TGocciaModuleLoader.RegisterModule(const AResolvedPath: string;
+  const AModule: TGocciaModule);
+var
+  CacheKey: string;
+begin
+  if (AResolvedPath = '') or not Assigned(AModule) then
+    Exit;
+
+  CacheKey := ExpandFileName(AResolvedPath);
+  FModules.AddOrSetValue(CacheKey, AModule);
+  if CacheKey <> AResolvedPath then
+    FModules.AddOrSetValue(AResolvedPath, AModule);
+end;
+
 procedure TGocciaModuleLoader.CopyModuleContents(const ASourceModule,
   ATargetModule: TGocciaModule);
-var
-  ExportPair: TGocciaValueMap.TKeyValuePair;
 begin
-  ATargetModule.InvalidateNamespaceObject;
-  ATargetModule.ExportsTable.Clear;
-  for ExportPair in ASourceModule.ExportsTable do
-    ATargetModule.ExportsTable.AddOrSetValue(ExportPair.Key, ExportPair.Value);
-  ATargetModule.LastModified := ASourceModule.LastModified;
+  ATargetModule.CopyExportsFrom(ASourceModule);
 end;
 
 function TGocciaModuleLoader.LoadModule(const AModulePath,
@@ -326,56 +594,558 @@ function TGocciaModuleLoader.LoadModule(const AModulePath,
 var
   Content: TGocciaModuleContent;
   Context: TGocciaEvaluationContext;
+  ExportClassDecl: TGocciaExportClassDeclaration;
   ExportDecl: TGocciaExportDeclaration;
   ExportDefaultDecl: TGocciaExportDefaultDeclaration;
+  ExportDestructuringDecl: TGocciaExportDestructuringDeclaration;
   ExportFuncDecl: TGocciaExportFunctionDeclaration;
   ExportPair: TStringStringMap.TKeyValuePair;
+  ExportName: string;
   ExportVarDecl: TGocciaExportVariableDeclaration;
+  AttributeType: string;
+  CacheKey: string;
+  FailedValue: TGocciaValue;
   I: Integer;
+  ImportingFilePath: string;
+  IsDeferredEvaluation: Boolean;
   Module: TGocciaModule;
   ModuleParseResult: TGocciaSourcePipelineModuleResult;
   ModuleWarning: TGocciaSourcePipelineWarning;
   ModuleScope: TGocciaScope;
   PipelineOptions: TGocciaSourcePipelineOptions;
+  PendingDependencyPromise: TGocciaPromiseValue;
+  RequestedModules: TGocciaModuleList;
   ActiveOptionsScope: TGocciaSourcePipelineOptionsScope;
   ProgramNode: TGocciaProgram;
   ReExportDecl: TGocciaReExportDeclaration;
+  RequestedModulePath: string;
   ResolvedPath: string;
+  Seen: TOrderedStringMap<Boolean>;
   SourceModule: TGocciaModule;
   Stmt: TGocciaStatement;
   Value: TGocciaValue;
   VarInfo: TGocciaVariableInfo;
   LoadSucceeded: Boolean;
+  Name: string;
+  Names: TStringList;
+  DeferredBody: TGocciaDeferredModuleBody;
+  DeferredHandler: TGocciaNativeFunctionValue;
+
+  function TryResolveImportedLocal(const ALocalName: string;
+    out AValue: TGocciaValue): Boolean;
+  var
+    ImportDecl: TGocciaImportDeclaration;
+    ImportPair: TStringStringMap.TKeyValuePair;
+    J: Integer;
+  begin
+    AValue := nil;
+    Result := False;
+
+    for J := 0 to ProgramNode.Body.Count - 1 do
+    begin
+      if not (ProgramNode.Body[J] is TGocciaImportDeclaration) then
+        Continue;
+
+      ImportDecl := TGocciaImportDeclaration(ProgramNode.Body[J]);
+      if ImportDecl.NamespaceName = ALocalName then
+      begin
+        case ImportDecl.Phase of
+          icpDefer:
+            AValue := LoadDeferredModuleNamespaceValue(
+              EncodeImportSpecifierAttribute(ImportDecl.ModulePath,
+              ImportDecl.AttributeType), ResolvedPath);
+          icpSource:
+            AValue := LoadModuleSourceValue(EncodeImportSpecifierAttribute(
+              ImportDecl.ModulePath, ImportDecl.AttributeType), ResolvedPath);
+        else
+          AValue := LoadModule(EncodeImportSpecifierAttribute(
+            ImportDecl.ModulePath, ImportDecl.AttributeType),
+            ResolvedPath).GetNamespaceObject;
+        end;
+        Exit(Assigned(AValue));
+      end;
+
+      for ImportPair in ImportDecl.Imports do
+      begin
+        if ImportPair.Key <> ALocalName then
+          Continue;
+
+        if ImportDecl.Phase = icpSource then
+        begin
+          AValue := LoadModuleSourceValue(EncodeImportSpecifierAttribute(
+            ImportDecl.ModulePath, ImportDecl.AttributeType), ResolvedPath);
+          Exit(Assigned(AValue));
+        end;
+
+        SourceModule := LoadModule(EncodeImportSpecifierAttribute(
+          ImportDecl.ModulePath, ImportDecl.AttributeType), ResolvedPath);
+        Result := SourceModule.TryGetExportValue(ImportPair.Value, AValue);
+        Exit;
+      end;
+    end;
+  end;
+
+  function TryAddImportedLocalExport(const ALocalName,
+    AExportName: string): Boolean;
+  var
+    ImportDecl: TGocciaImportDeclaration;
+    ImportPair: TStringStringMap.TKeyValuePair;
+    J: Integer;
+  begin
+    Result := False;
+
+    for J := 0 to ProgramNode.Body.Count - 1 do
+    begin
+      if not (ProgramNode.Body[J] is TGocciaImportDeclaration) then
+        Continue;
+
+      ImportDecl := TGocciaImportDeclaration(ProgramNode.Body[J]);
+      if ImportDecl.NamespaceName = ALocalName then
+      begin
+        case ImportDecl.Phase of
+          icpDefer:
+            Value := LoadDeferredModuleNamespaceValue(
+              EncodeImportSpecifierAttribute(ImportDecl.ModulePath,
+              ImportDecl.AttributeType), ResolvedPath);
+          icpSource:
+            Value := LoadModuleSourceValue(EncodeImportSpecifierAttribute(
+              ImportDecl.ModulePath, ImportDecl.AttributeType), ResolvedPath);
+        else
+          Value := LoadModule(EncodeImportSpecifierAttribute(
+            ImportDecl.ModulePath, ImportDecl.AttributeType),
+            ResolvedPath).GetNamespaceObject;
+        end;
+        Module.AddExportValue(AExportName, Value);
+        Exit(True);
+      end;
+
+      for ImportPair in ImportDecl.Imports do
+      begin
+        if ImportPair.Key <> ALocalName then
+          Continue;
+
+        if ImportDecl.Phase = icpSource then
+        begin
+          Value := LoadModuleSourceValue(EncodeImportSpecifierAttribute(
+            ImportDecl.ModulePath, ImportDecl.AttributeType), ResolvedPath);
+          Module.AddExportValue(AExportName, Value);
+        end
+        else
+        begin
+          SourceModule := LoadModule(EncodeImportSpecifierAttribute(
+            ImportDecl.ModulePath, ImportDecl.AttributeType), ResolvedPath);
+          Module.AddExportForwarding(AExportName, SourceModule,
+            ImportPair.Value);
+        end;
+        Exit(True);
+      end;
+    end;
+  end;
+
+  function IsImportedLocalName(const ALocalName: string): Boolean;
+  var
+    ImportDecl: TGocciaImportDeclaration;
+    ImportPair: TStringStringMap.TKeyValuePair;
+    J: Integer;
+  begin
+    Result := False;
+
+    for J := 0 to ProgramNode.Body.Count - 1 do
+    begin
+      if not (ProgramNode.Body[J] is TGocciaImportDeclaration) then
+        Continue;
+
+      ImportDecl := TGocciaImportDeclaration(ProgramNode.Body[J]);
+      if ImportDecl.NamespaceName = ALocalName then
+        Exit(True);
+
+      for ImportPair in ImportDecl.Imports do
+        if ImportPair.Key = ALocalName then
+          Exit(True);
+    end;
+  end;
+
+  procedure EvaluateRequestedModulesInSourceOrder;
+  var
+    ImportDecl: TGocciaImportDeclaration;
+    J: Integer;
+    RequestedModule: TGocciaModule;
+  begin
+    for J := 0 to ProgramNode.Body.Count - 1 do
+    begin
+      Stmt := ProgramNode.Body[J];
+      if Stmt is TGocciaImportDeclaration then
+      begin
+        ImportDecl := TGocciaImportDeclaration(Stmt);
+        case ImportDecl.Phase of
+          icpEvaluation:
+          begin
+            RequestedModule := LoadModule(EncodeImportSpecifierAttribute(
+              ImportDecl.ModulePath, ImportDecl.AttributeType), ResolvedPath);
+            if Assigned(RequestedModule) then
+            begin
+              if (RequestedModule <> Module) and
+                 FEvaluatingModules.ContainsKey(RequestedModule.Path) then
+                Module.AsyncCycleRoot := RequestedModule;
+              RequestedModules.Add(RequestedModule);
+            end;
+          end;
+          icpDefer:
+            LoadDeferredModuleNamespaceValueForEvaluation(
+              EncodeImportSpecifierAttribute(ImportDecl.ModulePath,
+              ImportDecl.AttributeType), ResolvedPath, RequestedModules);
+        end;
+      end
+      else if Stmt is TGocciaReExportDeclaration then
+      begin
+        RequestedModule := LoadModule(
+          TGocciaReExportDeclaration(Stmt).ModulePath, ResolvedPath);
+        if Assigned(RequestedModule) then
+        begin
+          if (RequestedModule <> Module) and
+             FEvaluatingModules.ContainsKey(RequestedModule.Path) then
+            Module.AsyncCycleRoot := RequestedModule;
+          RequestedModules.Add(RequestedModule);
+        end;
+      end;
+    end;
+  end;
+
+  procedure DrainRequestedModuleEvaluationPromises;
+  var
+    AggregatePromise: TGocciaPromiseValue;
+    EvalPromise: TGocciaPromiseValue;
+    FulfillHandler: TGocciaNativeFunctionValue;
+    J: Integer;
+    PendingPromises: TList<TGocciaPromiseValue>;
+    RejectHandler: TGocciaNativeFunctionValue;
+    WaitState: TGocciaModuleEvaluationWaitState;
+
+    function WaitPromiseFor(const ARequestedModule: TGocciaModule): TGocciaPromiseValue;
+    var
+      WaitModule: TGocciaModule;
+    begin
+      Result := nil;
+      if not Assigned(ARequestedModule) then
+        Exit;
+
+      WaitModule := ARequestedModule.AsyncCycleRoot;
+      if Assigned(WaitModule) and (WaitModule <> Module) and
+         (WaitModule.EvaluationPromise is TGocciaPromiseValue) then
+        Exit(TGocciaPromiseValue(WaitModule.EvaluationPromise));
+
+      if ARequestedModule.EvaluationPromise is TGocciaPromiseValue then
+        Result := TGocciaPromiseValue(ARequestedModule.EvaluationPromise);
+    end;
+  begin
+    PendingDependencyPromise := nil;
+
+    PendingPromises := TList<TGocciaPromiseValue>.Create;
+    try
+      for J := 0 to RequestedModules.Count - 1 do
+      begin
+        EvalPromise := WaitPromiseFor(RequestedModules[J]);
+        if not Assigned(EvalPromise) then
+          Continue;
+
+        case EvalPromise.State of
+          gpsRejected:
+            raise TGocciaThrowValue.Create(EvalPromise.PromiseResult);
+          gpsPending:
+            PendingPromises.Add(EvalPromise);
+        end;
+      end;
+
+      if PendingPromises.Count = 0 then
+        Exit;
+      if PendingPromises.Count = 1 then
+      begin
+        PendingDependencyPromise := PendingPromises[0];
+        Exit;
+      end;
+
+      AggregatePromise := TGocciaPromiseValue.Create;
+      WaitState := TGocciaModuleEvaluationWaitState.Create(AggregatePromise,
+        PendingPromises.Count);
+      FulfillHandler := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+        WaitState.Fulfill, '<module-dependency-fulfill>', 1);
+      FulfillHandler.CapturedRoot := WaitState;
+      RejectHandler := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+        WaitState.Reject, '<module-dependency-reject>', 1);
+      RejectHandler.CapturedRoot := WaitState;
+      for J := 0 to PendingPromises.Count - 1 do
+        PendingPromises[J].InvokeThen(FulfillHandler, RejectHandler);
+      PendingDependencyPromise := AggregatePromise;
+    finally
+      PendingPromises.Free;
+    end;
+  end;
+
+  procedure RegisterStaticModuleExports(const ARegisterIndirectExports: Boolean);
+  var
+    J: Integer;
+
+    procedure AddStarExportForwardings(const ASourceModule: TGocciaModule);
+    var
+      Changed: Boolean;
+      ExportName: string;
+    begin
+      repeat
+        Changed := False;
+        for ExportName in ASourceModule.GetExportNames do
+          if ExportName <> KEYWORD_DEFAULT then
+            Changed := Module.AddStarExportForwarding(ExportName,
+              ASourceModule, ExportName) or Changed;
+      until not Changed;
+    end;
+
+    procedure ValidateIndirectReExports;
+    var
+      ExportPair: TStringStringMap.TKeyValuePair;
+      ReExportDecl: TGocciaReExportDeclaration;
+      SourceModule: TGocciaModule;
+      Stmt: TGocciaStatement;
+      ValidationIndex: Integer;
+    begin
+      for ValidationIndex := 0 to ProgramNode.Body.Count - 1 do
+      begin
+        Stmt := ProgramNode.Body[ValidationIndex];
+        if not (Stmt is TGocciaReExportDeclaration) then
+          Continue;
+
+        ReExportDecl := TGocciaReExportDeclaration(Stmt);
+        if ReExportDecl.IsStarExport then
+          Continue;
+
+        SourceModule := LoadModule(ReExportDecl.ModulePath, ResolvedPath);
+        for ExportPair in ReExportDecl.ExportsTable do
+          if (not Module.CanResolveExport(ExportPair.Key)) and
+             (not IsEvaluatingModulePath(SourceModule.Path)) then
+            raise TGocciaSyntaxError.Create(
+              Format('Module "%s" has no export named "%s"',
+                [ReExportDecl.ModulePath, ExportPair.Value]),
+              ReExportDecl.Line, ReExportDecl.Column, ResolvedPath, nil);
+      end;
+    end;
+  begin
+    if not ARegisterIndirectExports then
+    begin
+      Module.ClearExports;
+
+      for J := 0 to ProgramNode.Body.Count - 1 do
+      begin
+        Stmt := ProgramNode.Body[J];
+
+        if Stmt is TGocciaExportDeclaration then
+        begin
+          ExportDecl := TGocciaExportDeclaration(Stmt);
+          for ExportPair in ExportDecl.ExportsTable do
+            if (not IsImportedLocalName(ExportPair.Value)) and
+               ModuleScope.Contains(ExportPair.Value) then
+              Module.AddExportBinding(ExportPair.Key, ExportPair.Value,
+                ModuleScope);
+        end
+        else if Stmt is TGocciaExportDefaultDeclaration then
+        begin
+          ExportDefaultDecl := TGocciaExportDefaultDeclaration(Stmt);
+          Module.AddExportBinding(KEYWORD_DEFAULT,
+            ExportDefaultDecl.LocalName, ModuleScope);
+          if ExportDefaultDecl.IsDirectDeclaration and
+             (ExportDefaultDecl.Expression is TGocciaFunctionExpression) then
+          begin
+            Value := ExportDefaultDecl.Expression.Evaluate(Context);
+            if (Value is TGocciaFunctionValue) and
+               (TGocciaFunctionValue(Value).Name = '') then
+              TGocciaFunctionValue(Value).Name := KEYWORD_DEFAULT;
+            ModuleScope.ForceUpdateBinding(ExportDefaultDecl.LocalName, Value);
+          end;
+        end
+        else if Stmt is TGocciaExportVariableDeclaration then
+        begin
+          ExportVarDecl := TGocciaExportVariableDeclaration(Stmt);
+          for VarInfo in ExportVarDecl.Declaration.Variables do
+            Module.AddExportBinding(VarInfo.Name, VarInfo.Name, ModuleScope);
+        end
+        else if Stmt is TGocciaExportDestructuringDeclaration then
+        begin
+          ExportDestructuringDecl :=
+            TGocciaExportDestructuringDeclaration(Stmt);
+          Names := TStringList.Create;
+          try
+            Names.CaseSensitive := True;
+            CollectPatternBindingNames(
+              ExportDestructuringDecl.Declaration.Pattern, Names, True);
+            for Name in Names do
+              Module.AddExportBinding(Name, Name, ModuleScope);
+          finally
+            Names.Free;
+          end;
+        end
+        else if Stmt is TGocciaExportFunctionDeclaration then
+        begin
+          ExportFuncDecl := TGocciaExportFunctionDeclaration(Stmt);
+          Module.AddExportBinding(ExportFuncDecl.Declaration.Name,
+            ExportFuncDecl.Declaration.Name, ModuleScope);
+        end
+        else if Stmt is TGocciaExportClassDeclaration then
+        begin
+          ExportClassDecl := TGocciaExportClassDeclaration(Stmt);
+          Module.AddExportBinding(
+            ExportClassDecl.Declaration.ClassDefinition.Name,
+            ExportClassDecl.Declaration.ClassDefinition.Name, ModuleScope);
+        end
+        else if Stmt is TGocciaExportEnumDeclaration then
+        begin
+          Module.AddExportBinding(
+            TGocciaExportEnumDeclaration(Stmt).Declaration.Name,
+            TGocciaExportEnumDeclaration(Stmt).Declaration.Name, ModuleScope);
+        end;
+      end;
+    end;
+
+    if not ARegisterIndirectExports then
+    begin
+      Module.InvalidateNamespaceObject;
+      Exit;
+    end;
+
+    for J := 0 to ProgramNode.Body.Count - 1 do
+    begin
+      Stmt := ProgramNode.Body[J];
+
+      if Stmt is TGocciaExportDeclaration then
+      begin
+        ExportDecl := TGocciaExportDeclaration(Stmt);
+        for ExportPair in ExportDecl.ExportsTable do
+        begin
+          if TryAddImportedLocalExport(ExportPair.Value, ExportPair.Key) then
+            Continue
+          else if (not Module.HasExport(ExportPair.Key)) and
+                  TryResolveImportedLocal(ExportPair.Value, Value) then
+            Module.AddExportValue(ExportPair.Key, Value);
+        end;
+      end
+      else if Stmt is TGocciaReExportDeclaration then
+      begin
+        ReExportDecl := TGocciaReExportDeclaration(Stmt);
+        SourceModule := LoadModule(ReExportDecl.ModulePath, ResolvedPath);
+        if ReExportDecl.IsStarExport then
+        begin
+          if ReExportDecl.NamespaceName <> '' then
+            Module.AddExportValue(ReExportDecl.NamespaceName,
+              SourceModule.GetNamespaceObject)
+          else
+            AddStarExportForwardings(SourceModule);
+        end
+        else
+        begin
+          for ExportPair in ReExportDecl.ExportsTable do
+          begin
+            if SourceModule.IsAmbiguousExport(ExportPair.Value) then
+              raise TGocciaSyntaxError.Create(
+                Format('Module "%s" has ambiguous export named "%s"',
+                  [ReExportDecl.ModulePath, ExportPair.Value]),
+                ReExportDecl.Line, ReExportDecl.Column, ResolvedPath, nil);
+            if (not SourceModule.HasExport(ExportPair.Value)) and
+               (not IsEvaluatingModulePath(SourceModule.Path)) then
+              raise TGocciaSyntaxError.Create(
+                Format('Module "%s" has no export named "%s"',
+                  [ReExportDecl.ModulePath, ExportPair.Value]),
+                ReExportDecl.Line, ReExportDecl.Column, ResolvedPath, nil);
+            Module.AddExportForwarding(ExportPair.Key, SourceModule,
+              ExportPair.Value);
+          end;
+        end;
+      end;
+    end;
+
+    ValidateIndirectReExports;
+    Module.InvalidateNamespaceObject;
+  end;
 begin
   if not Assigned(FGlobalScope) then
     raise Exception.Create('Module loader runtime is not bound.');
 
-  if FGlobalModules.TryGetValue(AModulePath, Result) then
+  ImportingFilePath := AImportingFilePath;
+  IsDeferredEvaluation := StartsStr(DEFERRED_EVALUATION_REFERRER_PREFIX,
+    ImportingFilePath);
+  if IsDeferredEvaluation then
+    Delete(ImportingFilePath, 1,
+      Length(DEFERRED_EVALUATION_REFERRER_PREFIX));
+
+  DecodeImportSpecifierAttribute(AModulePath, RequestedModulePath,
+    AttributeType);
+  if (AttributeType <> '') and (AttributeType <> 'json') and
+     (AttributeType <> 'text') then
+    raise TGocciaSyntaxError.Create(
+      Format('Unsupported import attribute type "%s"', [AttributeType]),
+      0, 0, AImportingFilePath, nil);
+
+  if (AttributeType = '') and FGlobalModules.TryGetValue(RequestedModulePath,
+     Result) then
     Exit;
 
   try
     if Assigned(FResolver) then
-      ResolvedPath := FResolver.Resolve(AModulePath, AImportingFilePath)
+      ResolvedPath := FResolver.Resolve(RequestedModulePath,
+        ImportingFilePath)
     else
       raise EGocciaModuleNotFound.CreateFmt(
-        'No module resolver configured and cannot resolve "%s"', [AModulePath]);
+        'No module resolver configured and cannot resolve "%s"',
+        [RequestedModulePath]);
   except
     on E: TGocciaRuntimeError do
       raise;
     on E: Exception do
-      raise TGocciaRuntimeError.Create(E.Message, 0, 0, AImportingFilePath, nil);
+      raise TGocciaRuntimeError.Create(E.Message, 0, 0, ImportingFilePath, nil);
   end;
 
-  if FModules.TryGetValue(ResolvedPath, Result) then
+  CacheKey := ResolvedPath;
+  if AttributeType <> '' then
+    CacheKey := EncodeImportSpecifierAttribute(ResolvedPath, AttributeType);
+
+  if FFailedModuleErrors.TryGetValue(CacheKey, FailedValue) then
+    raise TGocciaThrowValue.Create(FailedValue);
+
+  if IsDeferredEvaluation then
   begin
-    if not FLoadingModules.ContainsKey(ResolvedPath) then
+    Seen := TOrderedStringMap<Boolean>.Create;
+    try
+      if DeferredGraphTouchesEvaluating(ResolvedPath, Seen) then
+        ThrowTypeError('Deferred module cannot be synchronously evaluated while it or one of its dependencies is evaluating');
+    finally
+      Seen.Free;
+    end;
+  end;
+
+  if FModules.TryGetValue(CacheKey, Result) then
+  begin
+    if not FLoadingModules.ContainsKey(CacheKey) then
       CheckForModuleReload(Result);
+    Exit;
+  end;
+
+  if AttributeType = 'json' then
+  begin
+    Result := LoadJSONModule(ResolvedPath, CacheKey);
+    Exit;
+  end;
+
+  if AttributeType = 'text' then
+  begin
+    Result := LoadTextModule(ResolvedPath, CacheKey, True);
     Exit;
   end;
 
   if LowerCase(ExtractFileExt(ResolvedPath)) = EXT_JSON then
   begin
-    Result := LoadJSONModule(ResolvedPath);
+    Result := LoadJSONModule(ResolvedPath, CacheKey);
+    Exit;
+  end;
+
+  if IsTextAssetExtension(ExtractFileExt(ResolvedPath)) then
+  begin
+    Result := LoadTextModule(ResolvedPath, CacheKey, False);
     Exit;
   end;
 
@@ -386,7 +1156,7 @@ begin
     if Assigned(Module) then
     begin
       try
-        FModules.Add(ResolvedPath, Module);
+        FModules.Add(CacheKey, Module);
       except
         Module.Free;
         raise;
@@ -415,112 +1185,98 @@ begin
       end;
 
       ProgramNode := ModuleParseResult.TakeProgramNode;
+        RequestedModules := TGocciaModuleList.Create;
       try
         Module := TGocciaModule.Create(ResolvedPath);
         Module.LastModified := Content.LastModified;
-        FModules.Add(ResolvedPath, Module);
-        FLoadingModules.Add(ResolvedPath, True);
+        FModules.Add(CacheKey, Module);
+        FLoadingModules.Add(CacheKey, True);
+        FEvaluatingModules.AddOrSetValue(CacheKey, True);
+        FEvaluatingModules.AddOrSetValue(ResolvedPath, True);
         LoadSucceeded := False;
         try
           ModuleScope := FGlobalScope.CreateChild(skModule,
             'Module:' + ResolvedPath);
+          Module.SetEnvironment(ModuleScope);
           // ES2026 §16.2.1.6.4 InitializeEnvironment: a Module
           // Environment Record's [[ThisValue]] is undefined.
           ModuleScope.ThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
           ModuleScope.StrictTypes := FStrictTypesEnabled;
           ModuleScope.NonStrictMode := False;
+          ModuleScope.ArgumentsObjectEnabled :=
+            cfArgumentsObject in FCompatibility;
           Context.Realm := CurrentRealm;
           Context.Scope := ModuleScope;
           Context.OnError := FOnError;
           Context.LoadModule := LoadModule;
           Context.LoadModuleSource := LoadModuleSourceValue;
+          Context.LoadDeferredModule := LoadDeferredModuleNamespaceValue;
           Context.CurrentFilePath := ResolvedPath;
+          Context.CurrentModule := Module;
           Context.CoverageEnabled := False;
           Context.StrictTypes := FStrictTypesEnabled;
           Context.NonStrictMode := False;
           Context.DisposalTracker := nil;
 
+          PredeclareModuleLexicalDeclarations(ProgramNode, ModuleScope);
+          HoistFunctionDeclarations(ProgramNode.Body, Context, True);
+          if GetVarEnabled then
+            HoistVarDeclarations(ProgramNode.Body, ModuleScope);
+          RegisterStaticModuleExports(False);
+          EvaluateRequestedModulesInSourceOrder;
+          RegisterStaticModuleExports(True);
+          DrainRequestedModuleEvaluationPromises;
+
+          if Assigned(PendingDependencyPromise) then
+          begin
+            DeferredBody := TGocciaDeferredModuleBody.Create(Self,
+              ProgramNode, Context, Module, ProgramNode.HasTopLevelAwait,
+              PipelineOptions);
+            ProgramNode := nil;
+            DeferredHandler := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+              DeferredBody.Invoke, '<module-evaluation-continuation>', 1);
+            DeferredHandler.CapturedRoot := DeferredBody;
+            Module.EvaluationPromise := PendingDependencyPromise.InvokeThen(
+              DeferredHandler, nil);
+            Result := Module;
+            LoadSucceeded := True;
+            Exit;
+          end;
+
           ActiveOptionsScope := TGocciaSourcePipeline.ActivateOptions(
             PipelineOptions);
           try
-            FEvaluateModuleBody(ProgramNode, Context);
+            try
+              FEvaluateModuleBody(ProgramNode, Context);
+            except
+              on E: EGocciaBytecodeThrow do
+              begin
+                FFailedModuleErrors.AddOrSetValue(CacheKey, E.ThrownValue);
+                raise;
+              end;
+              on E: TGocciaThrowValue do
+              begin
+                FFailedModuleErrors.AddOrSetValue(CacheKey, E.Value);
+                raise;
+              end;
+            end;
           finally
             ActiveOptionsScope.Free;
           end;
-
-          for I := 0 to ProgramNode.Body.Count - 1 do
-          begin
-            Stmt := ProgramNode.Body[I];
-
-            if Stmt is TGocciaExportDeclaration then
-            begin
-              ExportDecl := TGocciaExportDeclaration(Stmt);
-              for ExportPair in ExportDecl.ExportsTable do
-              begin
-                Value := ModuleScope.GetValue(ExportPair.Value);
-                if Assigned(Value) then
-                  Module.ExportsTable.AddOrSetValue(ExportPair.Key, Value);
-              end;
-            end
-            else if Stmt is TGocciaExportDefaultDeclaration then
-            begin
-              ExportDefaultDecl := TGocciaExportDefaultDeclaration(Stmt);
-              Value := ModuleScope.GetValue(ExportDefaultDecl.LocalName);
-              if Assigned(Value) then
-                Module.ExportsTable.AddOrSetValue(KEYWORD_DEFAULT, Value);
-            end
-            else if Stmt is TGocciaExportVariableDeclaration then
-            begin
-              ExportVarDecl := TGocciaExportVariableDeclaration(Stmt);
-              for VarInfo in ExportVarDecl.Declaration.Variables do
-              begin
-                Value := ModuleScope.GetValue(VarInfo.Name);
-                if Assigned(Value) then
-                  Module.ExportsTable.AddOrSetValue(VarInfo.Name, Value);
-              end;
-            end
-            else if Stmt is TGocciaExportFunctionDeclaration then
-            begin
-              ExportFuncDecl := TGocciaExportFunctionDeclaration(Stmt);
-              Value := ModuleScope.GetValue(ExportFuncDecl.Declaration.Name);
-              if Assigned(Value) then
-                Module.ExportsTable.AddOrSetValue(
-                  ExportFuncDecl.Declaration.Name, Value);
-            end
-            else if Stmt is TGocciaExportEnumDeclaration then
-            begin
-              Value := ModuleScope.GetValue(
-                TGocciaExportEnumDeclaration(Stmt).Declaration.Name);
-              if Assigned(Value) then
-                Module.ExportsTable.AddOrSetValue(
-                  TGocciaExportEnumDeclaration(Stmt).Declaration.Name,
-                  Value);
-            end
-            else if Stmt is TGocciaReExportDeclaration then
-            begin
-              ReExportDecl := TGocciaReExportDeclaration(Stmt);
-              SourceModule := LoadModule(ReExportDecl.ModulePath,
-                ResolvedPath);
-              for ExportPair in ReExportDecl.ExportsTable do
-              begin
-                if SourceModule.ExportsTable.TryGetValue(ExportPair.Value,
-                  Value) then
-                  Module.ExportsTable.AddOrSetValue(ExportPair.Key, Value);
-              end;
-            end;
-          end;
-
           Result := Module;
           LoadSucceeded := True;
         finally
-          FLoadingModules.Remove(ResolvedPath);
+          FEvaluatingModules.Remove(CacheKey);
+          FEvaluatingModules.Remove(ResolvedPath);
+          FLoadingModules.Remove(CacheKey);
           if not LoadSucceeded then
           begin
-            FModules.Remove(ResolvedPath);
+            FModules.Remove(CacheKey);
             Module.Free;
           end;
         end;
       finally
+        RequestedModules.Free;
         ProgramNode.Free;
       end;
     finally
@@ -534,15 +1290,48 @@ end;
 function TGocciaModuleLoader.LoadModuleSourceValue(const AModulePath,
   AImportingFilePath: string): TGocciaValue;
 var
+  AttributeType: string;
+  CacheKey: string;
   Content: TGocciaModuleContent;
+  I: Integer;
+  ModuleParseResult: TGocciaSourcePipelineModuleResult;
+  ModuleWarning: TGocciaSourcePipelineWarning;
+  PipelineOptions: TGocciaSourcePipelineOptions;
+  RequestedModulePath: string;
   ResolvedPath: string;
+  SourceValue: TGocciaValue;
 begin
+  DecodeImportSpecifierAttribute(AModulePath, RequestedModulePath,
+    AttributeType);
+  if (AttributeType <> '') and (AttributeType <> 'json') and
+     (AttributeType <> 'text') then
+    raise TGocciaSyntaxError.Create(
+      Format('Unsupported import attribute type "%s"', [AttributeType]),
+      0, 0, AImportingFilePath, nil);
+
+  if RequestedModulePath = MODULE_SOURCE_SENTINEL then
+  begin
+    if AttributeType <> '' then
+      raise TGocciaSyntaxError.Create(
+        'Module source is not available for attributed test262 sentinel',
+        0, 0, AImportingFilePath, nil);
+    if FModuleSourceValues.TryGetValue(RequestedModulePath, SourceValue) then
+      Exit(SourceValue);
+    SourceValue := TGocciaModuleSourceValue.Create(RequestedModulePath, '');
+    FModuleSourceValues.Add(RequestedModulePath, SourceValue);
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.AddRootObject(SourceValue);
+    Exit(SourceValue);
+  end;
+
   try
     if Assigned(FResolver) then
-      ResolvedPath := FResolver.Resolve(AModulePath, AImportingFilePath)
+      ResolvedPath := FResolver.Resolve(RequestedModulePath,
+        AImportingFilePath)
     else
       raise EGocciaModuleNotFound.CreateFmt(
-        'No module resolver configured and cannot resolve "%s"', [AModulePath]);
+        'No module resolver configured and cannot resolve "%s"',
+        [RequestedModulePath]);
   except
     on E: TGocciaRuntimeError do
       raise;
@@ -550,14 +1339,262 @@ begin
       raise TGocciaRuntimeError.Create(E.Message, 0, 0, AImportingFilePath, nil);
   end;
 
-  if not IsScriptExtension(ExtractFileExt(ResolvedPath)) then
+  CacheKey := ResolvedPath;
+  if AttributeType <> '' then
+    CacheKey := EncodeImportSpecifierAttribute(ResolvedPath, AttributeType);
+  if FModuleSourceValues.TryGetValue(CacheKey, SourceValue) then
+    Exit(SourceValue);
+
+  if (AttributeType <> '') or
+     (not IsScriptExtension(ExtractFileExt(ResolvedPath))) then
     raise TGocciaSyntaxError.Create(
       Format('Module source is not available for "%s"', [ResolvedPath]),
       0, 0, AImportingFilePath, nil);
 
+  if not (cfExperimentalJSModuleSource in FCompatibility) then
+    raise TGocciaSyntaxError.Create(
+      'JavaScript ModuleSource objects require --experimental-js-module-source',
+      0, 0, AImportingFilePath, nil);
+
   Content := FContentProvider.LoadContent(ResolvedPath);
   try
-    Result := TGocciaModuleSourceValue.Create(ResolvedPath, Content.Text);
+    PipelineOptions.Preprocessors := FPreprocessors;
+    PipelineOptions.Compatibility := FCompatibility;
+    PipelineOptions.SourceType := stModule;
+    ModuleParseResult := TGocciaSourcePipeline.ParseModuleSource(Content.Text,
+      ResolvedPath, PipelineOptions);
+    try
+      for I := 0 to ModuleParseResult.WarningCount - 1 do
+      begin
+        ModuleWarning := ModuleParseResult.Warnings[I];
+        WriteLn(Format('Warning: %s', [ModuleWarning.Message]));
+        if ModuleWarning.Suggestion <> '' then
+          WriteLn(Format('  Suggestion: %s', [ModuleWarning.Suggestion]));
+        WriteLn(Format('  --> %s:%d:%d', [ResolvedPath, ModuleWarning.Line,
+          ModuleWarning.Column]));
+      end;
+
+      SourceValue := TGocciaModuleSourceValue.Create(ResolvedPath,
+        Content.Text);
+      FModuleSourceValues.Add(CacheKey, SourceValue);
+      if Assigned(TGarbageCollector.Instance) then
+        TGarbageCollector.Instance.AddRootObject(SourceValue);
+      Result := SourceValue;
+    finally
+      ModuleParseResult.Free;
+    end;
+  finally
+    Content.Free;
+  end;
+end;
+
+function TGocciaModuleLoader.DeferredGraphTouchesEvaluating(
+  const AResolvedPath: string; const ASeen: TOrderedStringMap<Boolean>): Boolean;
+var
+  Content: TGocciaModuleContent;
+  ExistingModule: TGocciaModule;
+  ExistingPromise: TGocciaPromiseValue;
+  ModuleParseResult: TGocciaSourcePipelineModuleResult;
+  PipelineOptions: TGocciaSourcePipelineOptions;
+  ProgramNode: TGocciaProgram;
+  RequestedPath: string;
+  ResolvedPath: string;
+  Stmt: TGocciaStatement;
+  I: Integer;
+begin
+  if ASeen.ContainsKey(AResolvedPath) then
+    Exit(False);
+  ASeen.Add(AResolvedPath, True);
+
+  if FEvaluatingModules.ContainsKey(AResolvedPath) or
+     FLoadingModules.ContainsKey(AResolvedPath) then
+    Exit(True);
+
+  if FModules.TryGetValue(AResolvedPath, ExistingModule) and
+     (ExistingModule.EvaluationPromise is TGocciaPromiseValue) then
+  begin
+    ExistingPromise := TGocciaPromiseValue(ExistingModule.EvaluationPromise);
+    if ExistingPromise.State = gpsPending then
+      Exit(True);
+  end;
+
+  if not IsScriptExtension(ExtractFileExt(AResolvedPath)) then
+    Exit(False);
+
+  Content := FContentProvider.LoadContent(AResolvedPath);
+  try
+    PipelineOptions.Preprocessors := FPreprocessors;
+    PipelineOptions.Compatibility := FCompatibility;
+    PipelineOptions.SourceType := stModule;
+    ModuleParseResult := TGocciaSourcePipeline.ParseModuleSource(Content.Text,
+      AResolvedPath, PipelineOptions);
+    try
+      ProgramNode := ModuleParseResult.TakeProgramNode;
+      try
+        for I := 0 to ProgramNode.Body.Count - 1 do
+        begin
+          Stmt := ProgramNode.Body[I];
+          if Stmt is TGocciaImportDeclaration then
+            RequestedPath := TGocciaImportDeclaration(Stmt).ModulePath
+          else if Stmt is TGocciaReExportDeclaration then
+            RequestedPath := TGocciaReExportDeclaration(Stmt).ModulePath
+          else
+            Continue;
+
+          if Assigned(FResolver) then
+            ResolvedPath := FResolver.Resolve(RequestedPath, AResolvedPath)
+          else
+            raise EGocciaModuleNotFound.CreateFmt(
+              'No module resolver configured and cannot resolve "%s"',
+              [RequestedPath]);
+          if DeferredGraphTouchesEvaluating(ResolvedPath, ASeen) then
+            Exit(True);
+        end;
+      finally
+        ProgramNode.Free;
+      end;
+    finally
+      ModuleParseResult.Free;
+    end;
+  finally
+    Content.Free;
+  end;
+
+  Result := False;
+end;
+
+procedure TGocciaModuleLoader.EvaluateDeferredAsyncDependencies(
+  const AResolvedPath, AImportingFilePath: string;
+  const ASeen: TOrderedStringMap<Boolean>;
+  const ARequestedModules: TGocciaModuleList);
+var
+  Content: TGocciaModuleContent;
+  LoadedModule: TGocciaModule;
+  ModuleParseResult: TGocciaSourcePipelineModuleResult;
+  PipelineOptions: TGocciaSourcePipelineOptions;
+  ProgramNode: TGocciaProgram;
+  RequestedPath: string;
+  ResolvedPath: string;
+  Stmt: TGocciaStatement;
+  I: Integer;
+begin
+  if ASeen.ContainsKey(AResolvedPath) then
+    Exit;
+  ASeen.Add(AResolvedPath, True);
+
+  if not IsScriptExtension(ExtractFileExt(AResolvedPath)) then
+    Exit;
+
+  Content := FContentProvider.LoadContent(AResolvedPath);
+  try
+    PipelineOptions.Preprocessors := FPreprocessors;
+    PipelineOptions.Compatibility := FCompatibility;
+    PipelineOptions.SourceType := stModule;
+    ModuleParseResult := TGocciaSourcePipeline.ParseModuleSource(Content.Text,
+      AResolvedPath, PipelineOptions);
+    try
+      ProgramNode := ModuleParseResult.TakeProgramNode;
+      try
+        if ProgramNode.HasTopLevelAwait then
+        begin
+          LoadedModule := LoadModule(AResolvedPath, AImportingFilePath);
+          if Assigned(ARequestedModules) and Assigned(LoadedModule) then
+            ARequestedModules.Add(LoadedModule)
+          else if Assigned(LoadedModule) and
+                  (LoadedModule.EvaluationPromise is TGocciaPromiseValue) and
+                  (TGocciaPromiseValue(LoadedModule.EvaluationPromise).State =
+                  gpsRejected) then
+            raise TGocciaThrowValue.Create(
+              TGocciaPromiseValue(LoadedModule.EvaluationPromise).PromiseResult);
+          Exit;
+        end;
+
+        for I := 0 to ProgramNode.Body.Count - 1 do
+        begin
+          Stmt := ProgramNode.Body[I];
+          if Stmt is TGocciaImportDeclaration then
+            RequestedPath := TGocciaImportDeclaration(Stmt).ModulePath
+          else if Stmt is TGocciaReExportDeclaration then
+            RequestedPath := TGocciaReExportDeclaration(Stmt).ModulePath
+          else
+            Continue;
+
+          if Assigned(FResolver) then
+            ResolvedPath := FResolver.Resolve(RequestedPath, AResolvedPath)
+          else
+            raise EGocciaModuleNotFound.CreateFmt(
+              'No module resolver configured and cannot resolve "%s"',
+              [RequestedPath]);
+          EvaluateDeferredAsyncDependencies(ResolvedPath, AResolvedPath, ASeen,
+            ARequestedModules);
+        end;
+      finally
+        ProgramNode.Free;
+      end;
+    finally
+      ModuleParseResult.Free;
+    end;
+  finally
+    Content.Free;
+  end;
+end;
+
+procedure TGocciaModuleLoader.ValidateDeferredModuleLinks(
+  const AResolvedPath, AImportingFilePath: string;
+  const ASeen: TOrderedStringMap<Boolean>);
+var
+  Content: TGocciaModuleContent;
+  ImportDecl: TGocciaImportDeclaration;
+  ModuleParseResult: TGocciaSourcePipelineModuleResult;
+  PipelineOptions: TGocciaSourcePipelineOptions;
+  ProgramNode: TGocciaProgram;
+  ReExportDecl: TGocciaReExportDeclaration;
+  RequestedPath: string;
+  ResolvedPath: string;
+  Stmt: TGocciaStatement;
+  I: Integer;
+begin
+  if ASeen.ContainsKey(AResolvedPath) then
+    Exit;
+  ASeen.Add(AResolvedPath, True);
+
+  if not IsScriptExtension(ExtractFileExt(AResolvedPath)) then
+    Exit;
+
+  Content := FContentProvider.LoadContent(AResolvedPath);
+  try
+    PipelineOptions.Preprocessors := FPreprocessors;
+    PipelineOptions.Compatibility := FCompatibility;
+    PipelineOptions.SourceType := stModule;
+    ModuleParseResult := TGocciaSourcePipeline.ParseModuleSource(Content.Text,
+      AResolvedPath, PipelineOptions);
+    try
+      ProgramNode := ModuleParseResult.TakeProgramNode;
+      try
+        for I := 0 to ProgramNode.Body.Count - 1 do
+        begin
+          Stmt := ProgramNode.Body[I];
+          if Stmt is TGocciaImportDeclaration then
+            RequestedPath := TGocciaImportDeclaration(Stmt).ModulePath
+          else if Stmt is TGocciaReExportDeclaration then
+            RequestedPath := TGocciaReExportDeclaration(Stmt).ModulePath
+          else
+            Continue;
+
+          if Assigned(FResolver) then
+            ResolvedPath := FResolver.Resolve(RequestedPath, AResolvedPath)
+          else
+            raise EGocciaModuleNotFound.CreateFmt(
+              'No module resolver configured and cannot resolve "%s"',
+              [RequestedPath]);
+          ValidateDeferredModuleLinks(ResolvedPath, AResolvedPath, ASeen);
+        end;
+      finally
+        ProgramNode.Free;
+      end;
+    finally
+      ModuleParseResult.Free;
+    end;
   finally
     Content.Free;
   end;
@@ -565,28 +1602,80 @@ end;
 
 function TGocciaModuleLoader.LoadDeferredModuleNamespaceValue(
   const AModulePath, AImportingFilePath: string): TGocciaValue;
-var
-  ResolvedPath: string;
 begin
-  if FGlobalModules.ContainsKey(AModulePath) then
-    Exit(TGocciaDeferredModuleNamespaceObject.Create(AModulePath,
-      AImportingFilePath, LoadModule));
+  Result := LoadDeferredModuleNamespaceValueForEvaluation(AModulePath,
+    AImportingFilePath, nil);
+end;
 
-  try
-    if Assigned(FResolver) then
-      ResolvedPath := FResolver.Resolve(AModulePath, AImportingFilePath)
-    else
-      raise EGocciaModuleNotFound.CreateFmt(
-        'No module resolver configured and cannot resolve "%s"', [AModulePath]);
-  except
-    on E: TGocciaRuntimeError do
-      raise;
-    on E: Exception do
-      raise TGocciaRuntimeError.Create(E.Message, 0, 0, AImportingFilePath, nil);
+function TGocciaModuleLoader.LoadDeferredModuleNamespaceValueForEvaluation(
+  const AModulePath, AImportingFilePath: string;
+  const ARequestedModules: TGocciaModuleList): TGocciaValue;
+var
+  AttributeType: string;
+  CacheKey: string;
+  DeferredModulePath: string;
+  RequestedModulePath: string;
+  ResolvedPath: string;
+  Seen: TOrderedStringMap<Boolean>;
+begin
+  DecodeImportSpecifierAttribute(AModulePath, RequestedModulePath,
+    AttributeType);
+  if (AttributeType <> '') and (AttributeType <> 'json') and
+     (AttributeType <> 'text') then
+    raise TGocciaSyntaxError.Create(
+      Format('Unsupported import attribute type "%s"', [AttributeType]),
+      0, 0, AImportingFilePath, nil);
+
+  if (AttributeType = '') and FGlobalModules.ContainsKey(RequestedModulePath) then
+    ResolvedPath := RequestedModulePath
+  else
+  begin
+    try
+      if Assigned(FResolver) then
+        ResolvedPath := FResolver.Resolve(RequestedModulePath,
+          AImportingFilePath)
+      else
+        raise EGocciaModuleNotFound.CreateFmt(
+          'No module resolver configured and cannot resolve "%s"',
+          [RequestedModulePath]);
+    except
+      on E: TGocciaRuntimeError do
+        raise;
+      on E: Exception do
+        raise TGocciaRuntimeError.Create(E.Message, 0, 0, AImportingFilePath,
+          nil);
+    end;
   end;
 
-  Result := TGocciaDeferredModuleNamespaceObject.Create(ResolvedPath,
+  CacheKey := ResolvedPath;
+  if AttributeType <> '' then
+    CacheKey := EncodeImportSpecifierAttribute(ResolvedPath, AttributeType);
+
+  if FDeferredModuleNamespaces.TryGetValue(CacheKey, Result) then
+    Exit;
+
+  Seen := TOrderedStringMap<Boolean>.Create;
+  try
+    ValidateDeferredModuleLinks(ResolvedPath, AImportingFilePath, Seen);
+  finally
+    Seen.Free;
+  end;
+
+  Seen := TOrderedStringMap<Boolean>.Create;
+  try
+    EvaluateDeferredAsyncDependencies(ResolvedPath, AImportingFilePath, Seen,
+      ARequestedModules);
+  finally
+    Seen.Free;
+  end;
+
+  DeferredModulePath := EncodeImportSpecifierAttribute(ResolvedPath,
+    AttributeType);
+  Result := TGocciaDeferredModuleNamespaceObject.Create(DeferredModulePath,
     AImportingFilePath, LoadModule);
+  FDeferredModuleNamespaces.Add(CacheKey, Result);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AddRootObject(Result);
 end;
 
 procedure TGocciaModuleLoader.CheckForModuleReload(const AModule: TGocciaModule);
@@ -620,10 +1709,11 @@ begin
   end;
 end;
 
-function TGocciaModuleLoader.LoadJSONModule(
-  const AResolvedPath: string): TGocciaModule;
+function TGocciaModuleLoader.LoadJSONModule(const AResolvedPath,
+  ACacheKey: string): TGocciaModule;
 var
   Content: TGocciaModuleContent;
+  HasDefaultKey: Boolean;
   Key: string;
   Module: TGocciaModule;
   Obj: TGocciaObjectValue;
@@ -655,14 +1745,20 @@ begin
       Module.LastModified := Content.LastModified;
       LoadSucceeded := False;
       try
+        HasDefaultKey := False;
         if ParsedValue is TGocciaObjectValue then
         begin
           Obj := TGocciaObjectValue(ParsedValue);
           for Key in Obj.GetOwnPropertyKeys do
-            Module.ExportsTable.AddOrSetValue(Key, Obj.GetProperty(Key));
+          begin
+            HasDefaultKey := HasDefaultKey or (Key = KEYWORD_DEFAULT);
+            Module.AddExportValue(Key, Obj.GetProperty(Key));
+          end;
         end;
+        if not HasDefaultKey then
+          Module.AddExportValue(KEYWORD_DEFAULT, ParsedValue);
 
-        FModules.Add(AResolvedPath, Module);
+        FModules.Add(ACacheKey, Module);
         Result := Module;
         LoadSucceeded := True;
       finally
@@ -672,6 +1768,60 @@ begin
     finally
       if Assigned(TGarbageCollector.Instance) and Assigned(ParsedValue) then
         TGarbageCollector.Instance.RemoveTempRoot(ParsedValue);
+    end;
+  finally
+    Content.Free;
+  end;
+end;
+
+function TGocciaModuleLoader.LoadTextModule(const AResolvedPath,
+  ACacheKey: string; const ADefaultOnly: Boolean): TGocciaModule;
+var
+  Content: TGocciaModuleContent;
+  LoadSucceeded: Boolean;
+  Metadata: TGocciaObjectValue;
+  Module: TGocciaModule;
+  NormalizedText: UTF8String;
+  TextValue: TGocciaValue;
+begin
+  Content := FContentProvider.LoadContent(AResolvedPath);
+  try
+    NormalizedText := NormalizeUTF8NewlinesToLF(Content.Text);
+    TextValue := TGocciaStringLiteralValue.FromUTF8(NormalizedText);
+
+    Metadata := nil;
+    if not ADefaultOnly then
+    begin
+      Metadata := TGocciaObjectValue.Create(
+        TGocciaObjectValue.SharedObjectPrototype, 5);
+      Metadata.SetProperty(PROP_KIND, TGocciaStringLiteralValue.Create('text'));
+      Metadata.SetProperty(PROP_PATH,
+        TGocciaStringLiteralValue.Create(AResolvedPath));
+      Metadata.SetProperty(PROP_FILE_NAME,
+        TGocciaStringLiteralValue.Create(ExtractFileName(AResolvedPath)));
+      Metadata.SetProperty(PROP_EXTENSION,
+        TGocciaStringLiteralValue.Create(ExtractFileExt(AResolvedPath)));
+      Metadata.SetProperty(PROP_BYTE_LENGTH,
+        TGocciaNumberLiteralValue.Create(Length(Content.Text)));
+      Metadata.Freeze;
+    end;
+
+    Module := TGocciaModule.Create(AResolvedPath);
+    Module.LastModified := Content.LastModified;
+    LoadSucceeded := False;
+    try
+      if not ADefaultOnly then
+      begin
+        Module.AddExportValue(PROP_METADATA, Metadata);
+        Module.AddExportValue(PROP_CONTENT, TextValue);
+      end;
+      Module.AddExportValue(KEYWORD_DEFAULT, TextValue);
+      FModules.Add(ACacheKey, Module);
+      Result := Module;
+      LoadSucceeded := True;
+    finally
+      if not LoadSucceeded then
+        Module.Free;
     end;
   finally
     Content.Free;

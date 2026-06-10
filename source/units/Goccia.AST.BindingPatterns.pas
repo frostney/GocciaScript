@@ -109,6 +109,7 @@ var
   SwitchStmt: TGocciaSwitchStatement;
   VarDecl: TGocciaVariableDeclaration;
   DestructDecl: TGocciaDestructuringDeclaration;
+  ExportDestructDecl: TGocciaExportDestructuringDeclaration;
   ExportVarDecl: TGocciaExportVariableDeclaration;
   I, J: Integer;
 begin
@@ -119,6 +120,11 @@ begin
   begin
     ExportVarDecl := TGocciaExportVariableDeclaration(ANode);
     CollectVarBindingNamesFromNode(ExportVarDecl.Declaration, ANames);
+  end
+  else if ANode is TGocciaExportDestructuringDeclaration then
+  begin
+    ExportDestructDecl := TGocciaExportDestructuringDeclaration(ANode);
+    CollectVarBindingNamesFromNode(ExportDestructDecl.Declaration, ANames);
   end
   else if ANode is TGocciaVariableDeclaration then
   begin
