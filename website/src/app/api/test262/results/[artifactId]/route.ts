@@ -1,4 +1,7 @@
-import { readTest262ReportJsonByArtifactId } from "@/lib/test262-dashboard";
+import {
+  loadTest262DashboardData,
+  readTest262ReportJsonByArtifactId,
+} from "@/lib/test262-dashboard";
 
 export async function GET(
   _request: Request,
@@ -10,21 +13,30 @@ export async function GET(
   }
 
   const json = await readTest262ReportJsonByArtifactId(Number(artifactId));
-  if (!json) {
-    return Response.json(
-      {
-        error:
-          "test262 report unavailable. No build-time test262 snapshot exists for this report.",
+  if (json) {
+    return new Response(json, {
+      headers: {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "public, max-age=0, s-maxage=900",
+        "x-goccia-test262-report": artifactId,
       },
-      { status: 503 },
-    );
+    });
   }
 
-  return new Response(json, {
-    headers: {
-      "content-type": "application/json; charset=utf-8",
-      "cache-control": "public, max-age=0, s-maxage=900",
-      "x-goccia-test262-report": artifactId,
+  const data = await loadTest262DashboardData();
+  const point = data.timeline.find(
+    (entry) => entry.artifactId === Number(artifactId),
+  );
+  const localUrl = `/api/test262/results/${artifactId}`;
+  if (point?.jsonUrl && point.jsonUrl !== localUrl) {
+    return Response.redirect(point.jsonUrl, 302);
+  }
+
+  return Response.json(
+    {
+      error:
+        "test262 report unavailable. No build-time test262 snapshot exists for this report.",
     },
-  });
+    { status: 503 },
+  );
 }

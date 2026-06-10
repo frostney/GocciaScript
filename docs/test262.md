@@ -68,7 +68,10 @@ published main run for each UTC day. During `prebuild`,
 `website/scripts/sync-test262-results.ts` reads that Blob manifest through the
 attached Vercel Blob store (`BLOB_STORE_ID` with Vercel OIDC) or an explicit
 `BLOB_READ_WRITE_TOKEN`. It does not download GitHub Actions artifact ZIPs
-during website builds.
+during website builds, and it does not bake every historical report into the
+deployment output. Historical report links point back to Vercel Blob; the site
+only materializes the dashboard snapshot and the latest full JSON report needed
+by `/api/test262/latest`.
 
 Configure the Vercel project so both Preview and Production deployments have
 access to the Blob store. CI and one-off backfills still need the GitHub

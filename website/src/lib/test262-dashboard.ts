@@ -60,6 +60,9 @@ export type Test262RunMeta = {
   artifactId: number;
   artifactCreatedAt: string;
   jsonUrl: string;
+  reportDownloadUrl?: string;
+  reportPath?: string;
+  reportUrl?: string;
 };
 
 export type Test262TimelinePoint = Test262RunMeta & {

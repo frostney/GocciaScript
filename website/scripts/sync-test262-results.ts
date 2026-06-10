@@ -15,7 +15,6 @@ import {
   createTest262DashboardData,
   createTest262DashboardFallback,
   normalizeTest262Report,
-  type Test262Report,
   type Test262TimelinePoint,
   test262DataPaths,
 } from "../src/lib/test262-dashboard";
@@ -66,7 +65,7 @@ async function resetOutputDir() {
     `reset output directory ${path.relative(websiteRoot, dataPaths.dataDir)}`,
   );
   await rm(dataPaths.dataDir, { recursive: true, force: true });
-  await mkdir(dataPaths.reportsDir, { recursive: true });
+  await mkdir(dataPaths.dataDir, { recursive: true });
 }
 
 async function writeJson(filePath: string, value: unknown) {
@@ -147,52 +146,53 @@ async function syncReportsFromBlob(): Promise<boolean> {
   }
 
   await resetOutputDir();
-  const entries: { point: Test262TimelinePoint; report: Test262Report }[] = [];
-  for (const [index, point] of manifest.daily.entries()) {
-    log(
-      `reading Blob report ${index + 1}/${manifest.daily.length}: ${
-        point.reportPath
-      }`,
+
+  const timeline = manifest.daily
+    .map(
+      (point): Test262TimelinePoint => ({
+        ...point,
+        jsonUrl: point.reportDownloadUrl || point.reportUrl || point.jsonUrl,
+      }),
+    )
+    .sort(
+      (a, b) =>
+        Date.parse(a.createdAt) - Date.parse(b.createdAt) ||
+        a.runNumber - b.runNumber,
     );
-    const json = await readTest262BlobReportJson(point);
-    if (!json) {
-      log(`Blob report unavailable: ${point.reportPath}`);
-      continue;
-    }
-    const report = normalizeTest262Report(JSON.parse(json));
-    if (!report) {
-      log(`Blob report invalid: ${point.reportPath}`);
-      continue;
-    }
-    await writeFile(
-      path.join(dataPaths.reportsDir, `${point.artifactId}.json`),
-      `${json.trimEnd()}\n`,
-    );
-    entries.push({ point, report });
-    log(
-      `stored Blob report ${index + 1}/${manifest.daily.length}: ${
-        report.summary.passed
-      }/${report.summary.totalRun} passing`,
-    );
+  const latestPoint = timeline[timeline.length - 1];
+  if (!latestPoint) return false;
+  if (!latestPoint.reportPath) {
+    log("latest Blob timeline point has no report path");
+    return false;
   }
 
-  entries.sort(
-    (a, b) => Date.parse(a.point.createdAt) - Date.parse(b.point.createdAt),
+  log(
+    `reading latest Blob report for dashboard groups: ${latestPoint.reportPath}`,
   );
-  const latest = entries[entries.length - 1];
-  if (!latest) return false;
+  const latestJson = await readTest262BlobReportJson({
+    reportPath: latestPoint.reportPath,
+  });
+  if (!latestJson) {
+    log(`latest Blob report unavailable: ${latestPoint.reportPath}`);
+    return false;
+  }
+  const latestReport = normalizeTest262Report(JSON.parse(latestJson));
+  if (!latestReport) {
+    log(`latest Blob report invalid: ${latestPoint.reportPath}`);
+    return false;
+  }
 
-  await writeFile(dataPaths.latestPath, `${JSON.stringify(latest.report)}\n`);
+  await writeFile(dataPaths.latestPath, `${latestJson.trimEnd()}\n`);
   await writeJson(
     dataPaths.dashboardPath,
     createTest262DashboardData({
       generatedAt: new Date().toISOString(),
-      timeline: entries.map((entry) => entry.point),
-      latestReport: latest.report,
+      timeline,
+      latestReport,
     }),
   );
   log(
-    `wrote ${entries.length} reports from Vercel Blob manifest to ${path.relative(
+    `wrote ${timeline.length} timeline points from Vercel Blob manifest to ${path.relative(
       websiteRoot,
       dataPaths.dataDir,
     )}`,
