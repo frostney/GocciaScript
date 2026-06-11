@@ -59,8 +59,11 @@ uses
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
   Goccia.Values.HoleValue,
+  Goccia.Values.NumberObjectValue,
   Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.StringObjectValue,
   Goccia.Values.SymbolValue,
+  Goccia.Values.ToPrimitive,
   Goccia.VM.Exception;
 
 threadvar
@@ -312,17 +315,27 @@ begin
   Result := TGocciaRawJSONValue.Create(JSONString);
 end;
 
-// §25.5.2 steps 7-8: Resolve the gap (indentation) string from the space argument.
+// ES2026 §25.5.4 (sec-json.stringify) steps 6-9: Resolve the gap (indentation)
+// string from the space argument.
 function TGocciaJSONBuiltin.ResolveGap(const ASpaceArg: TGocciaValue): string;
 var
+  Space: TGocciaValue;
   SpaceCount: Integer;
   I: Integer;
 begin
   Result := '';
-  // Step 7: If space is a Number, let gap be min(10, ToInteger(space)) spaces.
-  if ASpaceArg is TGocciaNumberLiteralValue then
+  Space := ASpaceArg;
+  // Step 6: If space is an Object with a [[NumberData]] slot, set space to
+  // ? ToNumber(space); with a [[StringData]] slot, to ? ToString(space).
+  // Both go through ToPrimitive so user-defined valueOf/toString are honored.
+  if Space is TGocciaNumberObjectValue then
+    Space := ToPrimitive(Space, tphNumber).ToNumberLiteral
+  else if Space is TGocciaStringObjectValue then
+    Space := ToPrimitive(Space, tphString).ToStringLiteral;
+  // Step 7: If space is a Number, let gap be min(10, ToIntegerOrInfinity(space)) spaces.
+  if Space is TGocciaNumberLiteralValue then
   begin
-    SpaceCount := Trunc(ASpaceArg.ToNumberLiteral.Value);
+    SpaceCount := Trunc(Space.ToNumberLiteral.Value);
     if SpaceCount > 10 then
       SpaceCount := 10;
     if SpaceCount < 1 then
@@ -331,9 +344,9 @@ begin
       Result := Result + ' ';
   end
   // Step 8: Else if space is a String, let gap be the first 10 characters.
-  else if ASpaceArg is TGocciaStringLiteralValue then
+  else if Space is TGocciaStringLiteralValue then
   begin
-    Result := ASpaceArg.ToStringLiteral.Value;
+    Result := Space.ToStringLiteral.Value;
     if Length(Result) > 10 then
       Result := Copy(Result, 1, 10);
   end;

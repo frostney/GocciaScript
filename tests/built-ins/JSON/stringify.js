@@ -237,6 +237,75 @@ test("JSON.stringify treats non-positive space as no indentation", () => {
   expect(JSON.stringify(obj, null, -4)).toBe('{"a":1}');
 });
 
+test("JSON.stringify space as boxed Number indents like the primitive", () => {
+  const obj = { a: 1, b: [1, 2] };
+
+  expect(JSON.stringify(obj, null, new Number(2))).toBe(
+    JSON.stringify(obj, null, 2),
+  );
+});
+
+test("JSON.stringify space as boxed Number truncates fractional values", () => {
+  const obj = { a: 1, b: [1, 2] };
+
+  expect(JSON.stringify(obj, null, new Number(5.11111))).toBe(
+    JSON.stringify(obj, null, 5),
+  );
+});
+
+test("JSON.stringify space as boxed Number uses an overridden valueOf", () => {
+  const obj = { a: 1 };
+  const space = new Number(1);
+  space.valueOf = () => 3;
+
+  expect(JSON.stringify(obj, null, space)).toBe(JSON.stringify(obj, null, 3));
+});
+
+test("JSON.stringify space as boxed Number propagates valueOf exceptions", () => {
+  const space = new Number(4);
+  space.valueOf = () => {
+    throw new TypeError("abrupt valueOf");
+  };
+  space.toString = () => {
+    throw new TypeError("abrupt toString");
+  };
+
+  expect(() => JSON.stringify({ a: 1 }, null, space)).toThrow(TypeError);
+});
+
+test("JSON.stringify space as boxed String indents like the primitive", () => {
+  const obj = { a: 1, b: [1, 2] };
+
+  expect(JSON.stringify(obj, null, new String("xx"))).toBe(
+    JSON.stringify(obj, null, "xx"),
+  );
+});
+
+test("JSON.stringify space as boxed String uses an overridden toString without calling valueOf", () => {
+  const obj = { a: 1 };
+  const space = new String("xx");
+  space.toString = () => "--";
+  space.valueOf = () => {
+    throw new TypeError("valueOf must not be called");
+  };
+
+  expect(JSON.stringify(obj, null, space)).toBe(
+    JSON.stringify(obj, null, "--"),
+  );
+});
+
+test("JSON.stringify space as boxed String propagates toString exceptions", () => {
+  const space = new String("xx");
+  space.toString = () => {
+    throw new TypeError("abrupt toString");
+  };
+  space.valueOf = () => {
+    throw new TypeError("abrupt valueOf");
+  };
+
+  expect(() => JSON.stringify({ a: 1 }, null, space)).toThrow(TypeError);
+});
+
 test("JSON.stringify serializes sparse array holes as null", () => {
   expect(JSON.stringify([1, , 3])).toBe("[1,null,3]");
 });
