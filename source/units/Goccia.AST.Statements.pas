@@ -1537,6 +1537,7 @@ end;
 
   function TGocciaExportDefaultDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
   var
+    DeclarationType: TGocciaDeclarationType;
     Value: TGocciaValue;
   begin
     if IsDirectDeclaration and (Expression is TGocciaFunctionExpression) and
@@ -1558,8 +1559,19 @@ end;
     if AContext.Scope.ContainsOwnLexicalBinding(LocalName) then
       AContext.Scope.ForceUpdateBinding(LocalName, Value)
     else
-      AContext.Scope.DefineLexicalBinding(LocalName, Value, dtConst, False,
-        Line, Column);
+    begin
+      if IsDirectDeclaration and (LocalName <> GOCCIA_DEFAULT_EXPORT_BINDING) and
+         (((Expression is TGocciaFunctionExpression) and
+         (TGocciaFunctionExpression(Expression).Name = LocalName)) or
+         ((Expression is TGocciaClassExpression) and
+         (TGocciaClassExpression(Expression).ClassDefinition.Name =
+         LocalName))) then
+        DeclarationType := dtLet
+      else
+        DeclarationType := dtConst;
+      AContext.Scope.DefineLexicalBinding(LocalName, Value, DeclarationType,
+        False, Line, Column);
+    end;
     Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
   end;
 

@@ -317,6 +317,23 @@ begin
     Result := dtLet;
 end;
 
+function IsNamedDefaultFunctionDeclaration(
+  const ADecl: TGocciaExportDefaultDeclaration): Boolean;
+begin
+  Result := (ADecl.LocalName <> GOCCIA_DEFAULT_EXPORT_BINDING) and
+    (ADecl.Expression is TGocciaFunctionExpression) and
+    (TGocciaFunctionExpression(ADecl.Expression).Name = ADecl.LocalName);
+end;
+
+function IsNamedDefaultClassDeclaration(
+  const ADecl: TGocciaExportDefaultDeclaration): Boolean;
+begin
+  Result := (ADecl.LocalName <> GOCCIA_DEFAULT_EXPORT_BINDING) and
+    (ADecl.Expression is TGocciaClassExpression) and
+    (TGocciaClassExpression(ADecl.Expression).ClassDefinition.Name =
+    ADecl.LocalName);
+end;
+
 procedure PredeclareBlockLexicalName(const AScope: TGocciaScope; const AName: string;
   const ADeclarationType: TGocciaDeclarationType; const ALine, AColumn: Integer);
 begin
@@ -431,10 +448,8 @@ begin
     PredeclareBlockLexicalName(AScope,
       ExportDefaultDecl.LocalName,
       BlockLexicalDeclarationType(
-        not ((ExportDefaultDecl.LocalName <> GOCCIA_DEFAULT_EXPORT_BINDING) and
-        (ExportDefaultDecl.Expression is TGocciaFunctionExpression) and
-        (TGocciaFunctionExpression(ExportDefaultDecl.Expression).Name =
-        ExportDefaultDecl.LocalName))),
+        not (IsNamedDefaultFunctionDeclaration(ExportDefaultDecl) or
+        IsNamedDefaultClassDeclaration(ExportDefaultDecl))),
       ANode.Line, ANode.Column);
   end
   else if ANode is TGocciaEnumDeclaration then
@@ -487,10 +502,7 @@ begin
   else if ANode is TGocciaExportDefaultDeclaration then
   begin
     ExportDefaultDecl := TGocciaExportDefaultDeclaration(ANode);
-    if (ExportDefaultDecl.LocalName <> GOCCIA_DEFAULT_EXPORT_BINDING) and
-       (ExportDefaultDecl.Expression is TGocciaFunctionExpression) and
-       (TGocciaFunctionExpression(ExportDefaultDecl.Expression).Name =
-       ExportDefaultDecl.LocalName) then
+    if IsNamedDefaultFunctionDeclaration(ExportDefaultDecl) then
     begin
       FuncExpr := TGocciaFunctionExpression(ExportDefaultDecl.Expression);
       Name := ExportDefaultDecl.LocalName;

@@ -477,8 +477,13 @@ begin
   begin
     if AScope.ResolveLocal(TGocciaExportDefaultDeclaration(ANode).LocalName) < 0 then
       AScope.DeclareLocal(TGocciaExportDefaultDeclaration(ANode).LocalName,
-        not (TGocciaExportDefaultDeclaration(ANode).Expression is
-          TGocciaFunctionExpression));
+        not ((TGocciaExportDefaultDeclaration(ANode).Expression is
+          TGocciaFunctionExpression) or
+        ((TGocciaExportDefaultDeclaration(ANode).Expression is
+          TGocciaClassExpression) and
+        (TGocciaClassExpression(TGocciaExportDefaultDeclaration(ANode)
+          .Expression).ClassDefinition.Name =
+          TGocciaExportDefaultDeclaration(ANode).LocalName))));
   end
   else if ANode is TGocciaEnumDeclaration then
   begin

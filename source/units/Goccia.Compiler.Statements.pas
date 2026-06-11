@@ -3537,17 +3537,23 @@ var
   NameIdx: UInt16;
   BindingName: string;
   IsNamedDefaultFunction: Boolean;
+  IsNamedDefaultClass: Boolean;
 begin
   BindingName := AStmt.LocalName;
   IsNamedDefaultFunction := (BindingName <> GOCCIA_DEFAULT_EXPORT_BINDING) and
     (AStmt.Expression is TGocciaFunctionExpression) and
     (TGocciaFunctionExpression(AStmt.Expression).Name = BindingName);
+  IsNamedDefaultClass := (BindingName <> GOCCIA_DEFAULT_EXPORT_BINDING) and
+    (AStmt.Expression is TGocciaClassExpression) and
+    (TGocciaClassExpression(AStmt.Expression).ClassDefinition.Name =
+    BindingName);
   LocalIdx := ACtx.Scope.ResolveLocal(BindingName);
   if (LocalIdx >= 0) and
      (ACtx.Scope.GetLocal(LocalIdx).Depth = ACtx.Scope.Depth) then
     Slot := ACtx.Scope.GetLocal(LocalIdx).Slot
   else
-    Slot := ACtx.Scope.DeclareLocal(BindingName, not IsNamedDefaultFunction);
+    Slot := ACtx.Scope.DeclareLocal(BindingName,
+      not (IsNamedDefaultFunction or IsNamedDefaultClass));
 
   if ACtx.GlobalBackedTopLevel and (ACtx.Scope.Depth = 0) then
   begin
@@ -3589,7 +3595,8 @@ begin
     EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, Slot, UInt16(Slot)));
 
   if ACtx.GlobalBackedTopLevel and (ACtx.Scope.Depth = 0) then
-    EmitGlobalDefine(ACtx, Slot, BindingName, not IsNamedDefaultFunction);
+    EmitGlobalDefine(ACtx, Slot, BindingName,
+      not (IsNamedDefaultFunction or IsNamedDefaultClass));
 
   NameIdx := ACtx.Template.AddConstantString(KEYWORD_DEFAULT);
   EmitInstruction(ACtx, EncodeABx(OP_EXPORT, Slot, NameIdx));
