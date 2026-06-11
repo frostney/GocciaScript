@@ -166,6 +166,8 @@ type
     function KeyToPropertyName(const AKey: TGocciaValue): string;
     function KeyToPropertyNameRegister(const AKey: TGocciaRegister): string;
     function TryResolveObjectKey(const AKeyReg: TGocciaRegister; out AResolved: TGocciaValue): Boolean; inline;
+    procedure ExecGetComputedPropertyFallback(const ADest: Integer;
+      const AReceiverReg, AKeyReg: TGocciaRegister);
     procedure SetFunctionNameFromKey(const AFunction, AKey: TGocciaValue;
       const APrefixKind: UInt8);
     function EnsureCurrentDynamicVarScope: TGocciaScope;
@@ -9588,6 +9590,87 @@ begin
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
+// Computed GET for receivers that are not arrays, classes, or objects:
+// string/number/boolean/bigint/symbol primitives resolve through their
+// boxed object per OrdinaryGet, mirroring the interpreter. Deliberately
+// bypasses GetPropertyValue so user string keys that collide with the
+// '#slot:' private-key mangling stay ordinary property names.
+procedure TGocciaVM.ExecGetComputedPropertyFallback(const ADest: Integer;
+  const AReceiverReg, AKeyReg: TGocciaRegister);
+var
+  ReceiverValue: TGocciaValue;
+  PropKeyValue: TGocciaValue;
+  PropertyValue: TGocciaValue;
+  Boxed: TGocciaObjectValue;
+  PropertyName: string;
+  StringValue: string;
+  KeyIndex: Integer;
+begin
+  if (AReceiverReg.Kind = grkObject) and
+     (AReceiverReg.ObjectValue is TGocciaStringLiteralValue) and
+     TryGetArrayIndexRegister(AKeyReg, KeyIndex) then
+  begin
+    StringValue := TGocciaStringLiteralValue(AReceiverReg.ObjectValue).Value;
+    if (KeyIndex >= 0) and (KeyIndex < UTF16CodeUnitLength(StringValue)) then
+    begin
+      SetRegister(ADest, TGocciaStringLiteralValue.Create(
+        UTF16CodeUnitAt(StringValue, KeyIndex)));
+      Exit;
+    end;
+  end;
+
+  ReceiverValue := RegisterToValue(AReceiverReg);
+
+  if (AKeyReg.Kind = grkObject) and
+     (AKeyReg.ObjectValue is TGocciaSymbolValue) then
+    PropKeyValue := AKeyReg.ObjectValue
+  else if not TryResolveObjectKey(AKeyReg, PropKeyValue) then
+    PropKeyValue := nil;
+
+  if PropKeyValue is TGocciaSymbolValue then
+  begin
+    if (ReceiverValue is TGocciaSymbolValue) and
+       Assigned(TGocciaSymbolValue.SharedPrototype) then
+      SetRegister(ADest, TGocciaObjectValue(TGocciaSymbolValue.SharedPrototype)
+        .GetSymbolPropertyWithReceiver(
+          TGocciaSymbolValue(PropKeyValue), ReceiverValue))
+    else
+    begin
+      Boxed := ReceiverValue.Box;
+      if Assigned(Boxed) then
+        SetRegister(ADest, Boxed.GetSymbolProperty(
+          TGocciaSymbolValue(PropKeyValue)))
+      else
+        FRegisters[ADest] := RegisterUndefined;
+    end;
+    Exit;
+  end;
+
+  if PropKeyValue is TGocciaStringLiteralValue then
+    PropertyName := TGocciaStringLiteralValue(PropKeyValue).Value
+  else
+    PropertyName := KeyToPropertyNameRegister(AKeyReg);
+
+  if (ReceiverValue is TGocciaStringLiteralValue) and
+     (PropertyName = PROP_LENGTH) then
+  begin
+    FRegisters[ADest] := VMNumberRegister(UTF16CodeUnitLength(
+      TGocciaStringLiteralValue(ReceiverValue).Value));
+    Exit;
+  end;
+
+  PropertyValue := ReceiverValue.GetProperty(PropertyName);
+  if not Assigned(PropertyValue) then
+  begin
+    Boxed := ReceiverValue.Box;
+    if Assigned(Boxed) then
+      PropertyValue := Boxed.GetProperty(PropertyName)
+    else
+      PropertyValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+  end;
+  SetRegister(ADest, PropertyValue);
+end;
+
 procedure TGocciaVM.SetPropertyValue(const AObject: TGocciaValue;
   const AKey: string; const AValue: TGocciaValue);
 var
@@ -11351,49 +11434,8 @@ begin
             SetRegister(A, TGocciaObjectValue(FRegisters[B].ObjectValue).GetProperty(
               KeyToPropertyNameRegister(FRegisters[C])));
         end
-        else if (FRegisters[B].Kind = grkObject) and
-                (FRegisters[B].ObjectValue is TGocciaStringLiteralValue) then
-        begin
-          if (FRegisters[C].Kind = grkObject) and
-             (FRegisters[C].ObjectValue is TGocciaSymbolValue) then
-            SetRegister(A, FRegisters[B].ObjectValue.Box.GetSymbolProperty(
-              TGocciaSymbolValue(FRegisters[C].ObjectValue)))
-          else if TryGetArrayIndexRegister(FRegisters[C], KeyIndex) and
-             (KeyIndex >= 0) and
-             (KeyIndex < UTF16CodeUnitLength(TGocciaStringLiteralValue(
-               FRegisters[B].ObjectValue).Value)) then
-            SetRegister(A, TGocciaStringLiteralValue.Create(
-              UTF16CodeUnitAt(TGocciaStringLiteralValue(
-                FRegisters[B].ObjectValue).Value, KeyIndex)))
-          else if TryResolveObjectKey(FRegisters[C], PropKeyValue) then
-          begin
-            if PropKeyValue is TGocciaSymbolValue then
-              SetRegister(A, FRegisters[B].ObjectValue.Box.GetSymbolProperty(
-                TGocciaSymbolValue(PropKeyValue)))
-            else
-              SetRegister(A, GetPropertyValue(FRegisters[B].ObjectValue,
-                TGocciaStringLiteralValue(PropKeyValue).Value));
-          end
-          else
-            SetRegister(A, GetPropertyValue(FRegisters[B].ObjectValue,
-              KeyToPropertyNameRegister(FRegisters[C])));
-        end
-        else if (FRegisters[B].Kind = grkObject) and
-                (FRegisters[B].ObjectValue is TGocciaSymbolValue) then
-        begin
-          if (FRegisters[C].Kind = grkObject) and
-             (FRegisters[C].ObjectValue is TGocciaSymbolValue) and
-             Assigned(TGocciaSymbolValue.SharedPrototype) then
-            SetRegister(A, TGocciaObjectValue(TGocciaSymbolValue.SharedPrototype)
-              .GetSymbolPropertyWithReceiver(
-                TGocciaSymbolValue(FRegisters[C].ObjectValue),
-                FRegisters[B].ObjectValue))
-          else
-            SetRegister(A, FRegisters[B].ObjectValue.GetProperty(
-              KeyToPropertyNameRegister(FRegisters[C])));
-        end
         else
-          FRegisters[A] := RegisterUndefined;
+          ExecGetComputedPropertyFallback(A, FRegisters[B], FRegisters[C]);
       end;
 
       OP_ARRAY_SET:
@@ -12007,35 +12049,8 @@ begin
                 GlobalName));
           end;
         end
-        else if (FRegisters[B].Kind = grkObject) and
-                (FRegisters[B].ObjectValue is TGocciaStringLiteralValue) then
-        begin
-          if (FRegisters[C].Kind = grkObject) and
-             (FRegisters[C].ObjectValue is TGocciaSymbolValue) then
-            SetRegister(A, FRegisters[B].ObjectValue.Box.GetSymbolProperty(
-              TGocciaSymbolValue(FRegisters[C].ObjectValue)))
-          else if TryGetArrayIndexRegister(FRegisters[C], KeyIndex) and
-             (KeyIndex >= 0) and
-             (KeyIndex < UTF16CodeUnitLength(TGocciaStringLiteralValue(
-               FRegisters[B].ObjectValue).Value)) then
-            SetRegister(A, TGocciaStringLiteralValue.Create(
-              UTF16CodeUnitAt(TGocciaStringLiteralValue(
-                FRegisters[B].ObjectValue).Value, KeyIndex)))
-          else if TryResolveObjectKey(FRegisters[C], PropKeyValue) then
-          begin
-            if PropKeyValue is TGocciaSymbolValue then
-              SetRegister(A, FRegisters[B].ObjectValue.Box.GetSymbolProperty(
-                TGocciaSymbolValue(PropKeyValue)))
-            else
-              SetRegister(A, GetPropertyValue(FRegisters[B].ObjectValue,
-                TGocciaStringLiteralValue(PropKeyValue).Value));
-          end
-          else
-            SetRegister(A, GetPropertyValue(FRegisters[B].ObjectValue,
-              KeyToPropertyNameRegister(FRegisters[C])));
-        end
         else
-          FRegisters[A] := RegisterUndefined;
+          ExecGetComputedPropertyFallback(A, FRegisters[B], FRegisters[C]);
       end;
 
       OP_SET_INDEX:

@@ -56,6 +56,12 @@ describe("computed property access on string primitives", () => {
     expect(s[k]).toBeUndefined();
   });
 
+  test("computed key colliding with internal private-slot naming returns undefined", () => {
+    const s = "abc";
+    const k = "#slot:x";
+    expect(s[k]).toBeUndefined();
+  });
+
   test("computed assignment to 'length' on a string primitive throws", () => {
     const s = "abc";
     const k = "length";
