@@ -40,6 +40,11 @@ const DEFAULT_PREFIX = "test262";
 const DEFAULT_ACCESS: Test262BlobAccess = "public";
 const MANIFEST_WRITE_ATTEMPTS = 3;
 
+type ReadBlobTextOptions = {
+  access?: Test262BlobAccess;
+  useCache?: boolean;
+};
+
 function cleanPrefix(value: string | undefined): string {
   const trimmed = (value ?? DEFAULT_PREFIX).trim().replace(/^\/+|\/+$/g, "");
   return trimmed || DEFAULT_PREFIX;
@@ -94,10 +99,14 @@ async function streamToBytes(stream: ReadableStream<Uint8Array>) {
 
 async function readBlobTextWithMeta(
   pathname: string,
-  access = test262BlobAccess(),
+  options: ReadBlobTextOptions = {},
 ): Promise<{ text: string; etag: string } | null> {
+  const access = options.access ?? test262BlobAccess();
   try {
-    const result = await get(pathname, { access });
+    const result = await get(pathname, {
+      access,
+      ...(options.useCache === undefined ? {} : { useCache: options.useCache }),
+    });
     if (!result || result.statusCode !== 200 || !result.stream) return null;
     return {
       text: new TextDecoder().decode(await streamToBytes(result.stream)),
@@ -160,8 +169,12 @@ export async function loadTest262BlobManifest(
 
 async function loadTest262BlobManifestSnapshot(
   prefix = test262BlobPrefix(),
+  options: ReadBlobTextOptions = {},
 ): Promise<{ manifest: Test262BlobManifest; etag: string } | null> {
-  const result = await readBlobTextWithMeta(test262BlobManifestPath(prefix));
+  const result = await readBlobTextWithMeta(
+    test262BlobManifestPath(prefix),
+    options,
+  );
   if (!result) return null;
   const manifest = normalizeManifest(JSON.parse(result.text), prefix);
   return manifest ? { manifest, etag: result.etag } : null;
@@ -260,7 +273,10 @@ async function publishManifestWithRetry(
     publishedRuns.map((run) => run.createdAt.slice(0, 10)),
   );
   for (let attempt = 1; attempt <= MANIFEST_WRITE_ATTEMPTS; attempt++) {
-    const existing = await loadTest262BlobManifestSnapshot(prefix);
+    const existing = await loadTest262BlobManifestSnapshot(prefix, {
+      access,
+      useCache: false,
+    });
     const merged = new Map<number, Test262BlobRun>();
     for (const run of existing?.manifest.runs ?? []) {
       merged.set(run.artifactId, run);
