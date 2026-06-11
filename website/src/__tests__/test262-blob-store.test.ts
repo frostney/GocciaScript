@@ -17,8 +17,21 @@ type BlobPutCall = {
   options: Record<string, unknown>;
 };
 
+const MANIFEST_PATH = "test262/manifest.json";
+const MANIFEST_ETAG = '"origin-etag"';
+
 const getCalls: BlobGetCall[] = [];
 const putCalls: BlobPutCall[] = [];
+const state = {
+  manifestExists: true,
+  failManifestPuts: 0,
+};
+
+class BlobNotFoundError extends Error {
+  constructor() {
+    super("The requested blob does not exist");
+  }
+}
 
 class BlobPreconditionFailedError extends Error {
   constructor() {
@@ -66,14 +79,21 @@ const existingRun: Test262BlobRun = {
 };
 
 mock.module("@vercel/blob", () => ({
+  BlobNotFoundError,
   BlobPreconditionFailedError,
   get: async (pathname: string, options: Record<string, unknown>) => {
     getCalls.push({ pathname, options });
+    if (options.access === "public" && options.useCache === false) {
+      // The real public CDN rejects the SDK's cache=0 parameter.
+      throw new Error("Vercel Blob: Failed to fetch blob: 400 Bad Request");
+    }
+    // The real SDK signals a missing blob by returning null, not throwing.
+    if (pathname === MANIFEST_PATH && !state.manifestExists) return null;
     return {
       statusCode: 200,
       stream: textStream(JSON.stringify({ version: 1, runs: [existingRun] })),
       blob: {
-        etag: '"fresh-origin-etag"',
+        etag: MANIFEST_ETAG,
       },
     };
   },
@@ -83,8 +103,13 @@ mock.module("@vercel/blob", () => ({
     options: Record<string, unknown>,
   ) => {
     putCalls.push({ pathname, body, options });
-    if (pathname === "test262/manifest.json") {
-      if (options.ifMatch !== '"fresh-origin-etag"') {
+    if (pathname === MANIFEST_PATH) {
+      if (state.failManifestPuts > 0) {
+        state.failManifestPuts -= 1;
+        throw new BlobPreconditionFailedError();
+      }
+      const expectedIfMatch = state.manifestExists ? MANIFEST_ETAG : undefined;
+      if (options.ifMatch !== expectedIfMatch) {
         throw new BlobPreconditionFailedError();
       }
     }
@@ -99,53 +124,106 @@ mock.module("@vercel/blob", () => ({
   },
 }));
 
+function resetState() {
+  getCalls.length = 0;
+  putCalls.length = 0;
+  state.manifestExists = true;
+  state.failManifestPuts = 0;
+}
+
+function manifestGets() {
+  return getCalls.filter((call) => call.pathname === MANIFEST_PATH);
+}
+
+function manifestPuts() {
+  return putCalls.filter((call) => call.pathname === MANIFEST_PATH);
+}
+
+function dailyPuts() {
+  return putCalls.filter((call) => call.pathname.startsWith("test262/daily/"));
+}
+
+function publishEntry() {
+  const report: Test262Report = {
+    summary: summary(2),
+    results: [],
+  };
+  const point: Test262TimelinePoint = {
+    runId: 202,
+    runNumber: 2,
+    title: "CI",
+    headSha: "new-sha",
+    shortSha: "new-sha",
+    runUrl: "https://example.test/runs/202",
+    createdAt: "2026-06-11T01:00:00.000Z",
+    updatedAt: "2026-06-11T01:05:00.000Z",
+    artifactId: 1002,
+    artifactCreatedAt: "2026-06-11T01:05:00.000Z",
+    jsonUrl: "/api/test262/results/1002",
+    summary: report.summary,
+  };
+  return { point, report, reportJson: JSON.stringify(report) };
+}
+
+async function importPublish() {
+  const { publishTest262ReportsToBlob } = await import(
+    "../../scripts/test262-blob-store"
+  );
+  return publishTest262ReportsToBlob;
+}
+
 describe("test262 Blob publishing", () => {
-  test("bypasses manifest cache and preserves get ETags for conditional writes", async () => {
-    getCalls.length = 0;
-    putCalls.length = 0;
+  test("merges into the existing manifest with its ETag as ifMatch", async () => {
+    resetState();
+    const publish = await importPublish();
 
-    const { publishTest262ReportsToBlob } = await import(
-      "../../scripts/test262-blob-store"
-    );
-    const report: Test262Report = {
-      summary: summary(2),
-      results: [],
-    };
-    const point: Test262TimelinePoint = {
-      runId: 202,
-      runNumber: 2,
-      title: "CI",
-      headSha: "new-sha",
-      shortSha: "new-sha",
-      runUrl: "https://example.test/runs/202",
-      createdAt: "2026-06-11T01:00:00.000Z",
-      updatedAt: "2026-06-11T01:05:00.000Z",
-      artifactId: 1002,
-      artifactCreatedAt: "2026-06-11T01:05:00.000Z",
-      jsonUrl: "/api/test262/results/1002",
-      summary: report.summary,
-    };
+    const manifest = await publish([publishEntry()]);
 
-    const manifest = await publishTest262ReportsToBlob([
-      {
-        point,
-        report,
-        reportJson: JSON.stringify(report),
-      },
-    ]);
-
-    const manifestRead = getCalls.find(
-      (call) => call.pathname === "test262/manifest.json",
-    );
-    const manifestWrite = putCalls.find(
-      (call) => call.pathname === "test262/manifest.json",
-    );
-
-    expect(manifestRead?.options).toMatchObject({ useCache: false });
-    expect(manifestWrite?.options).toMatchObject({
+    const [manifestRead] = manifestGets();
+    expect(manifestRead?.options).toEqual({ access: "public" });
+    expect(manifestPuts().at(-1)?.options).toMatchObject({
       allowOverwrite: true,
-      ifMatch: '"fresh-origin-etag"',
+      ifMatch: MANIFEST_ETAG,
     });
     expect(manifest.runs.map((run) => run.artifactId)).toEqual([1001, 1002]);
+  });
+
+  test("creates the manifest without ifMatch when none exists", async () => {
+    resetState();
+    state.manifestExists = false;
+    const publish = await importPublish();
+
+    const manifest = await publish([publishEntry()]);
+
+    const manifestWrite = manifestPuts().at(-1);
+    expect(manifestWrite?.options).toMatchObject({ allowOverwrite: false });
+    expect(manifestWrite?.options.ifMatch).toBeUndefined();
+    expect(manifest.runs.map((run) => run.artifactId)).toEqual([1002]);
+  });
+
+  test("re-reads the manifest and retries when the conditional write conflicts", async () => {
+    resetState();
+    state.failManifestPuts = 1;
+    const publish = await importPublish();
+
+    const manifest = await publish([publishEntry()]);
+
+    expect(manifestGets()).toHaveLength(2);
+    expect(manifestPuts()).toHaveLength(2);
+    expect(dailyPuts()).toHaveLength(1);
+    expect(manifest.runs.map((run) => run.artifactId)).toEqual([1001, 1002]);
+  });
+
+  test("gives up after repeated write conflicts", async () => {
+    resetState();
+    state.failManifestPuts = Number.POSITIVE_INFINITY;
+    const publish = await importPublish();
+
+    await expect(publish([publishEntry()])).rejects.toThrow(
+      /precondition failed/i,
+    );
+    expect(manifestGets()).toHaveLength(3);
+    expect(manifestPuts()).toHaveLength(3);
+    expect(dailyPuts()).toHaveLength(0);
   });
 });
