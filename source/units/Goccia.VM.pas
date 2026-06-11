@@ -215,14 +215,20 @@ type
     function ClassifyPropertyKey(const AKeyReg: TGocciaRegister;
       const AProbeArrayIndex: Boolean): TGocciaPropertyKey;
     function PropertyKeyName(const AKey: TGocciaPropertyKey): string; inline;
+    // Register parameters are passed BY VALUE deliberately: callers pass
+    // FRegisters[..] slots, and ClassifyPropertyKey can run user code
+    // (ToPropertyKey -> toString) that grows and reallocates the register
+    // stack. A `const` record parameter may be passed by reference on some
+    // targets (e.g. win64), which would leave the parameter dangling into
+    // the freed old block; a value copy taken at the call is immune.
     procedure ExecGetComputedProperty(const ADest: Integer;
-      const AObjReg, AKeyReg: TGocciaRegister;
+      AObjReg, AKeyReg: TGocciaRegister;
       const AOptions: TGocciaComputedAccessOptions);
     procedure ExecSetComputedProperty(const ATargetIndex: Integer;
-      const AKeyReg, AValueReg: TGocciaRegister;
+      AKeyReg, AValueReg: TGocciaRegister;
       const AOptions: TGocciaComputedAccessOptions);
     procedure ExecDeleteComputedProperty(const ADest: Integer;
-      const AObjReg, AKeyReg: TGocciaRegister;
+      AObjReg, AKeyReg: TGocciaRegister;
       const AThrowOnFailure: Boolean);
     procedure SetFunctionNameFromKey(const AFunction, AKey: TGocciaValue;
       const APrefixKind: UInt8);
@@ -1404,7 +1410,15 @@ begin
     AObject.Properties.TryGetValueAtEntry(ACache^.EntryIndex, Descriptor) and
     (Descriptor is TGocciaPropertyDescriptorData);
   if Result then
-    AValue := TGocciaPropertyDescriptorData(Descriptor).Value
+  begin
+    AValue := TGocciaPropertyDescriptorData(Descriptor).Value;
+    // A validated hit proves the site is currently serving a stable shape:
+    // reset the streak so only CONSECUTIVE misses count toward megamorphic
+    // saturation (transient warm-up polymorphism must not permanently
+    // disable a site that settles down).
+    if ACache^.MissStreak <> 0 then
+      ACache^.MissStreak := 0;
+  end
   else
     AValue := nil;
 end;
@@ -1433,8 +1447,16 @@ var
 begin
   AValue := nil;
   ReceiverShape := TGocciaShapedPropertyMap(AObject.Properties).EnsureShape;
-  if (not Assigned(ReceiverShape)) or
-     (ReceiverShape = DictionaryShapeSentinel) then
+  if ReceiverShape = DictionaryShapeSentinel then
+  begin
+    // Dictionary-mode receivers can never fill; advance the streak so the
+    // site converges on the dormant fast path instead of paying this probe
+    // forever. Empty layouts (nil shape) stay free of the bump: they cost
+    // no hash here and may legitimately precede cacheable receivers.
+    Inc(ACache^.MissStreak);
+    Exit(False);
+  end;
+  if not Assigned(ReceiverShape) then
     Exit(False);
   Result := AObject.Properties.TryGetEntryIndex(AName, EntryIndex) and
     AObject.Properties.TryGetValueAtEntry(EntryIndex, Descriptor) and
@@ -1508,6 +1530,10 @@ begin
     AValue := nil;
     Exit;
   end;
+  // Validated hit: reset the streak so only consecutive misses count (see
+  // VMTryGetCachedOwnDataProperty).
+  if ACache^.MissStreak <> 0 then
+    ACache^.MissStreak := 0;
   Result := True;
 end;
 
@@ -6702,7 +6728,7 @@ begin
 end;
 
 procedure TGocciaVM.ExecGetComputedProperty(const ADest: Integer;
-  const AObjReg, AKeyReg: TGocciaRegister;
+  AObjReg, AKeyReg: TGocciaRegister;
   const AOptions: TGocciaComputedAccessOptions);
 var
   Key: TGocciaPropertyKey;
@@ -6825,7 +6851,7 @@ begin
 end;
 
 procedure TGocciaVM.ExecSetComputedProperty(const ATargetIndex: Integer;
-  const AKeyReg, AValueReg: TGocciaRegister;
+  AKeyReg, AValueReg: TGocciaRegister;
   const AOptions: TGocciaComputedAccessOptions);
 var
   Key: TGocciaPropertyKey;
@@ -6921,7 +6947,7 @@ begin
 end;
 
 procedure TGocciaVM.ExecDeleteComputedProperty(const ADest: Integer;
-  const AObjReg, AKeyReg: TGocciaRegister; const AThrowOnFailure: Boolean);
+  AObjReg, AKeyReg: TGocciaRegister; const AThrowOnFailure: Boolean);
 var
   Key: TGocciaPropertyKey;
   Receiver: TGocciaObjectValue;
@@ -12099,6 +12125,7 @@ begin
           if Assigned(PropertyReadCache) and
              (PropertyReadCache^.MissStreak <
               PROPERTY_READ_CACHE_POLYMORPHIC_LIMIT) and
+             VMPropertyReadCacheableReceiver(FRegisters[B].ObjectValue) and
              VMTryGetCachedOwnDataProperty(
                TGocciaObjectValue(FRegisters[B].ObjectValue),
                PropertyReadCache, GlobalBindingValue) then

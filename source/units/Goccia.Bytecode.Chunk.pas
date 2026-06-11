@@ -115,10 +115,11 @@ type
   // engine's lifetime, and function templates never outlive their engine —
   // so a cached pointer can never validate against a recycled address.
   // Fills never store nil or the dictionary sentinel.  MissStreak counts
-  // consecutive refills that replaced a different shape; once it saturates
-  // the site is treated as megamorphic and reads go through the uncached
-  // own-data fast path instead of thrashing the cache.  Not serialised to
-  // .gbc.
+  // consecutive misses (different-shape refills and fill declines); every
+  // validated hit resets it, so transient warm-up polymorphism cannot
+  // permanently disable a site.  Once it saturates the site is treated as
+  // megamorphic and reads go through the uncached own-data fast path
+  // instead of thrashing the cache.  Not serialised to .gbc.
   TGocciaPropertyReadCacheEntry = record
     Shape: Pointer;
     EntryIndex: Integer;
