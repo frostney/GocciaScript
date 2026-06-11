@@ -9585,7 +9585,7 @@ begin
 
   Boxed := AObject.Box;
   if Assigned(Boxed) then
-    Result := Boxed.GetProperty(AKey)
+    Result := Boxed.GetPropertyWithContext(AKey, AObject)
   else
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
@@ -9638,8 +9638,8 @@ begin
     begin
       Boxed := ReceiverValue.Box;
       if Assigned(Boxed) then
-        SetRegister(ADest, Boxed.GetSymbolProperty(
-          TGocciaSymbolValue(PropKeyValue)))
+        SetRegister(ADest, Boxed.GetSymbolPropertyWithReceiver(
+          TGocciaSymbolValue(PropKeyValue), ReceiverValue))
       else
         FRegisters[ADest] := RegisterUndefined;
     end;
@@ -9664,7 +9664,8 @@ begin
   begin
     Boxed := ReceiverValue.Box;
     if Assigned(Boxed) then
-      PropertyValue := Boxed.GetProperty(PropertyName)
+      PropertyValue := Boxed.GetPropertyWithContext(PropertyName,
+        ReceiverValue)
     else
       PropertyValue := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;

@@ -1993,7 +1993,7 @@ var
     begin
       BoxedValue := AObj.Box;
       if Assigned(BoxedValue) then
-        Result := BoxedValue.GetSymbolProperty(ASymbol)
+        Result := BoxedValue.GetSymbolPropertyWithReceiver(ASymbol, AObj)
       else
         Result := TGocciaUndefinedLiteralValue.UndefinedValue;
     end;
