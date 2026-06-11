@@ -107,18 +107,20 @@ type
   PGocciaGlobalReadCacheEntry = ^TGocciaGlobalReadCacheEntry;
 
   // Runtime-only inline cache for OP_GET_PROP_CONST sites, indexed by the
-  // instruction's name-constant index.  Map is a weak pointer to the
-  // receiver's own property map, compared for identity only (never
-  // dereferenced); Version/EntryIndex validate against that map's entry
-  // version, whose global counter makes (Map, Version) pairs unique across
-  // map address reuse.  Filled only for own plain data properties on
-  // receivers with ordinary own-data lookup.  MissStreak counts consecutive
-  // refills that replaced a different live map; once it saturates the site
-  // is treated as megamorphic and reads go through the uncached own-data
-  // fast path instead of thrashing the cache.  Not serialised to .gbc.
+  // instruction's name-constant index.  Shape is a weak pointer to an
+  // interned per-realm shape (Goccia.Values.Shape), compared for identity
+  // only and never dereferenced.  No version stamp is needed: same shape
+  // implies same key at the same entry index (shaped maps are append-only;
+  // delete/clear leave shaped mode), shapes are never freed within an
+  // engine's lifetime, and function templates never outlive their engine —
+  // so a cached pointer can never validate against a recycled address.
+  // Fills never store nil or the dictionary sentinel.  MissStreak counts
+  // consecutive refills that replaced a different shape; once it saturates
+  // the site is treated as megamorphic and reads go through the uncached
+  // own-data fast path instead of thrashing the cache.  Not serialised to
+  // .gbc.
   TGocciaPropertyReadCacheEntry = record
-    Map: Pointer;
-    Version: Cardinal;
+    Shape: Pointer;
     EntryIndex: Integer;
     MissStreak: Byte;
   end;

@@ -79,20 +79,29 @@ type
     property RootShape: TGocciaShape read FRootShape;
   end;
 
-  // The Decision-A mutation funnel: every property-map write path
-  // (DefineProperty, AssignProperty, freeze/seal rewrites, direct Add call
-  // sites) reaches TOrderedStringMap.Add, so layout tracking lives on the
-  // map itself and cannot be bypassed.
+  // The Decision-A mutation funnel, computed lazily: shapes are derived
+  // from the map's own entry sequence on demand (EnsureShape), so property
+  // appends pay nothing — no hook, no transition, no realm lookup at
+  // object construction. Staleness is benign by construction: while a map
+  // is append-only, an earlier shape is a true prefix description of the
+  // layout, so a stale Shape read by the cache hit path can only produce a
+  // miss, never a wrong entry index. Only Remove and Clear — the
+  // operations that break the append-only invariant — are intercepted,
+  // and they live on the map itself so no mutation path can bypass them.
   TGocciaShapedPropertyMap = class(TGocciaPropertyMap)
   private
     FShape: TGocciaShape;
-  protected
-    procedure AfterNewEntryAdded(const AKey: string); override;
+    FShapeEntryCount: Integer;
   public
     function Remove(const AKey: string): Boolean; override;
     procedure Clear; override;
-    // nil = empty layout (no string keys yet); DictionaryShapeSentinel =
-    // dictionary mode; anything else = interned shape of this realm.
+    // Recompute the shape to cover all current entries (resuming from the
+    // stale prefix shape, so each appended key is transitioned exactly
+    // once per map). Returns nil for an empty layout and the dictionary
+    // sentinel for maps that left shaped mode; cache fills reject both.
+    function EnsureShape: TGocciaShape;
+    // Raw last-computed shape for the cache hit path: one field load, may
+    // lag behind the live layout (benign — see unit header).
     property Shape: TGocciaShape read FShape;
   end;
 
@@ -204,31 +213,45 @@ end;
 
 { TGocciaShapedPropertyMap }
 
-procedure TGocciaShapedPropertyMap.AfterNewEntryAdded(const AKey: string);
+function TGocciaShapedPropertyMap.EnsureShape: TGocciaShape;
 var
   Table: TGocciaShapeTable;
-  NextShape: TGocciaShape;
+  Walk: TGocciaShape;
+  I: Integer;
 begin
   if FShape = GDictionaryShape then
-    Exit;
+    Exit(GDictionaryShape);
+  if FShapeEntryCount = Count then
+    Exit(FShape);
 
-  if not Assigned(FShape) then
+  Walk := FShape;
+  if not Assigned(Walk) then
   begin
     Table := CurrentRealmShapeTable;
     if not Assigned(Table) then
     begin
       FShape := GDictionaryShape;
-      Exit;
+      Exit(GDictionaryShape);
     end;
-    NextShape := Table.RootShape.Transition(AKey);
-  end
-  else
-    NextShape := FShape.Transition(AKey);
+    Walk := Table.RootShape;
+  end;
 
-  if Assigned(NextShape) then
-    FShape := NextShape
-  else
-    FShape := GDictionaryShape;
+  // While shaped, the map is append-only: no tombstones, so entry indices
+  // 0..Count-1 are exactly the appended keys in order, and the stale shape
+  // covers the first FShapeEntryCount of them.
+  for I := FShapeEntryCount to Count - 1 do
+  begin
+    Walk := Walk.Transition(KeyAtEntry(I));
+    if not Assigned(Walk) then
+    begin
+      FShape := GDictionaryShape;
+      Exit(GDictionaryShape);
+    end;
+  end;
+
+  FShape := Walk;
+  FShapeEntryCount := Count;
+  Result := Walk;
 end;
 
 function TGocciaShapedPropertyMap.Remove(const AKey: string): Boolean;

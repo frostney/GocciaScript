@@ -469,6 +469,7 @@ uses
   Goccia.Values.IteratorValue,
   Goccia.Values.NativeFunction,
   Goccia.Values.ProxyValue,
+  Goccia.Values.Shape,
   Goccia.Values.ToObject,
   Goccia.Values.ToPrimitive;
 
@@ -1382,20 +1383,24 @@ begin
     (AObject.ClassType = TGocciaInstanceValue);
 end;
 
-// Validate a property-read inline cache entry against the receiver's own
-// property map and read the current value through it. The cached Map
-// pointer is compared for identity only; methods run on the receiver's
-// live map. The descriptor kind is re-checked on every hit because value
-// replacement and data->accessor redefinition keep the entry index and
-// version (TOrderedStringMap.Add on an existing key).
+// Validate a property-read inline cache entry against the receiver's shape
+// and read the current value through the receiver's live map. The cached
+// Shape pointer is compared for identity only; same shape implies the same
+// key at the cached entry index. Every TGocciaObjectValue property map is
+// constructed as TGocciaShapedPropertyMap (single construction site in
+// TGocciaObjectValue.Create), so the static cast is structurally safe.
+// The descriptor kind is re-checked on every hit because data->accessor
+// redefinition replaces the descriptor without changing the layout
+// (TOrderedStringMap.Add on an existing key).
 function VMTryGetCachedOwnDataProperty(const AObject: TGocciaObjectValue;
   const ACache: PGocciaPropertyReadCacheEntry;
   out AValue: TGocciaValue): Boolean; inline;
 var
   Descriptor: TGocciaPropertyDescriptor;
 begin
-  Result := (ACache^.Map = Pointer(AObject.Properties)) and
-    (ACache^.Version = AObject.Properties.EntryVersion) and
+  Result := (ACache^.Shape = Pointer(
+      TGocciaShapedPropertyMap(AObject.Properties).Shape)) and
+    (ACache^.Shape <> nil) and
     AObject.Properties.TryGetValueAtEntry(ACache^.EntryIndex, Descriptor) and
     (Descriptor is TGocciaPropertyDescriptorData);
   if Result then
@@ -1413,28 +1418,32 @@ const
 // One uncached own-data lookup that also primes the inline cache for the
 // next read. Returns False (cache untouched) when the property is not an
 // own plain data property — accessor, prototype-resolved, and absent names
-// stay on the generic GetPropertyValue path. Refills that replace a
-// different live map advance MissStreak so polymorphic sites converge on
-// the megamorphic fast path.
+// stay on the generic GetPropertyValue path — or when the receiver is not
+// shape-tracked (empty layout or dictionary mode), so nil and the
+// dictionary sentinel are never stored in a cache entry. Refills that
+// replace a different shape advance MissStreak so polymorphic sites
+// converge on the megamorphic fast path.
 function VMFillPropertyReadCache(const AObject: TGocciaObjectValue;
   const AName: string; const ACache: PGocciaPropertyReadCacheEntry;
   out AValue: TGocciaValue): Boolean; inline;
 var
+  ReceiverShape: TGocciaShape;
   EntryIndex: Integer;
   Descriptor: TGocciaPropertyDescriptor;
 begin
+  AValue := nil;
+  ReceiverShape := TGocciaShapedPropertyMap(AObject.Properties).EnsureShape;
+  if (not Assigned(ReceiverShape)) or
+     (ReceiverShape = DictionaryShapeSentinel) then
+    Exit(False);
   Result := AObject.Properties.TryGetEntryIndex(AName, EntryIndex) and
     AObject.Properties.TryGetValueAtEntry(EntryIndex, Descriptor) and
     (Descriptor is TGocciaPropertyDescriptorData);
   if not Result then
-  begin
-    AValue := nil;
     Exit;
-  end;
-  if (ACache^.Map <> nil) and (ACache^.Map <> Pointer(AObject.Properties)) then
+  if (ACache^.Shape <> nil) and (ACache^.Shape <> Pointer(ReceiverShape)) then
     Inc(ACache^.MissStreak);
-  ACache^.Map := Pointer(AObject.Properties);
-  ACache^.Version := AObject.Properties.EntryVersion;
+  ACache^.Shape := Pointer(ReceiverShape);
   ACache^.EntryIndex := EntryIndex;
   AValue := TGocciaPropertyDescriptorData(Descriptor).Value;
 end;
