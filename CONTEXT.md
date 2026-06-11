@@ -116,6 +116,10 @@ _Avoid_: Generic VM bytecode.
 The virtual machine that executes Goccia bytecode for GocciaScript.
 _Avoid_: Generic VM layer.
 
+**Inline cache**:
+A per-site, version-validated cache on a function template that lets the Goccia VM re-read a previously resolved global binding or own data property by entry index instead of by name. A site whose receivers keep changing becomes megamorphic and reads through the uncached fast path instead.
+_Avoid_: Shape cache, hidden class — GocciaScript inline caches validate map identity and entry version, not object shapes.
+
 ### Source And Tools
 
 **Source text**:

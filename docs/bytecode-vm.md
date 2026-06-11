@@ -117,6 +117,17 @@ Recent VM cleanup and optimization work has focused on reducing per-instruction 
 - use unchecked template access in the dispatch loop where bounds are already guaranteed
 - keep fast register access limited to proven hot/simple paths; local-slot and complex property paths should only move to fast access when they stay correct and measurably improve throughput
 
+### Inline Caches
+
+Two per-site inline caches live on `TGocciaFunctionTemplate`, both indexed by the instruction's name-constant index, both runtime-only (never serialised to `.gbc`):
+
+- **Global reads** (`OP_GET_GLOBAL`) — `TGocciaGlobalReadCacheEntry` validates `(scope identity, binding-map entry version)` and re-reads the binding by entry index, skipping the name hash.
+- **Property reads** (`OP_GET_PROP_CONST`) — `TGocciaPropertyReadCacheEntry` validates `(own-map identity, map entry version)` and re-reads the descriptor by entry index. Hits and fills serve only own plain data properties on exact-class `TGocciaObjectValue` / `TGocciaVMLiteralObjectValue` / `TGocciaInstanceValue` receivers, so overridden lookup semantics (proxies, exotic objects, accessors, private names) always take the generic path. The descriptor kind is re-checked on every hit because data-to-accessor redefinition keeps the entry index and version. After `PROPERTY_READ_CACHE_POLYMORPHIC_LIMIT` consecutive different-map refills a site is megamorphic: it stops rewriting the cache and serves gated receivers through the uncached own-data fast path.
+
+Cached pointers (scope, property map) are compared for identity only and never dereferenced; the globally monotonic entry-version counter makes `(pointer, version)` pairs unique across allocator address reuse.
+
+Computed property access (`OP_ARRAY_GET`/`OP_ARRAY_SET`, `OP_GET_INDEX`/`OP_SET_INDEX`, `OP_DEL_INDEX`) shares one key-classification and receiver-dispatch implementation (`ClassifyPropertyKey` plus the `ExecGet/ExecSet/ExecDeleteComputedProperty` cores in `Goccia.VM.pas`); per-opcode semantic differences are explicit `TGocciaComputedAccessOptions`, not divergent copies.
+
 The current optimization target is reducing bytecode-mode suite time further without diverging interpreter and bytecode semantics.
 
 ## Profiling
