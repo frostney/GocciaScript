@@ -383,21 +383,10 @@ begin
   // Step 1: Let x be ? thisNumberValue(this value)
   Prim := ExtractPrimitive(AThisValue);
 
-  // Step 3: If x is NaN, return "NaN"
-  if Prim.IsNaN then
+  // Steps 3-4: If x is not finite, return Number::toString(x, 10)
+  if Prim.IsNaN or Prim.IsInfinity or Prim.IsNegativeInfinity then
   begin
-    Result := TGocciaStringLiteralValue.Create('NaN');
-    Exit;
-  end;
-  // Step 4: If x is +∞𝔽 or -∞𝔽, return the string representation
-  if Prim.IsInfinity then
-  begin
-    Result := TGocciaStringLiteralValue.Create('Infinity');
-    Exit;
-  end;
-  if Prim.IsNegativeInfinity then
-  begin
-    Result := TGocciaStringLiteralValue.Create('-Infinity');
+    Result := Prim.ToStringLiteral;
     Exit;
   end;
 

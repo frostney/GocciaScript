@@ -9,6 +9,9 @@ pre-commit:
     check-swimmies:
       glob: "**/*.{pas,dpr}"
       run: bun check-swimmies.ts {staged_files}
+    check-trunc-guards:
+      glob: "**/*.{pas,dpr}"
+      run: npx tsx scripts/check-trunc-guards.ts
     lint-markdown:
       glob: "**/*.md"
       run: npx markdownlint-cli2 {staged_files}

@@ -145,9 +145,21 @@ begin
   Result := Trunc(NumberValue.Value);
 end;
 
-function ToInt64Value(const AValue: TGocciaValue): Int64;
+// Shared finite-double → Int64 saturation for the two 64-bit coercers below.
+// Callers handle NaN/±∞ first (they differ: marshaling maps them to 0,
+// ToIntegerWithTruncation throws).
+function SaturateFiniteToInt64(const AFiniteValue: Double): Int64;
 const
   INT64_BOUND_F = 9.2233720368547758E18; // 2^63
+begin
+  if AFiniteValue >= INT64_BOUND_F then
+    Exit(High(Int64));
+  if AFiniteValue < -INT64_BOUND_F then
+    Exit(Low(Int64));
+  Result := Trunc(AFiniteValue);
+end;
+
+function ToInt64Value(const AValue: TGocciaValue): Int64;
 var
   NumberValue: TGocciaNumberLiteralValue;
 begin
@@ -155,16 +167,10 @@ begin
   if NumberValue.IsNaN or NumberValue.IsInfinity or
      NumberValue.IsNegativeInfinity then
     Exit(0);
-  if NumberValue.Value >= INT64_BOUND_F then
-    Exit(High(Int64));
-  if NumberValue.Value < -INT64_BOUND_F then
-    Exit(Low(Int64));
-  Result := Trunc(NumberValue.Value);
+  Result := SaturateFiniteToInt64(NumberValue.Value);
 end;
 
 function ToIntegerWithTruncation64Value(const AValue: TGocciaValue): Int64;
-const
-  INT64_BOUND_F = 9.2233720368547758E18; // 2^63
 var
   NumberValue: TGocciaNumberLiteralValue;
 begin
@@ -172,11 +178,7 @@ begin
   if NumberValue.IsNaN or NumberValue.IsInfinity or
      NumberValue.IsNegativeInfinity then
     ThrowRangeError(SErrorNumberNotFinite, SSuggestNumberRange);
-  if NumberValue.Value >= INT64_BOUND_F then
-    Exit(High(Int64));
-  if NumberValue.Value < -INT64_BOUND_F then
-    Exit(Low(Int64));
-  Result := Trunc(NumberValue.Value);
+  Result := SaturateFiniteToInt64(NumberValue.Value);
 end;
 
 function ToInteger64FromArgs(const AArgs: TGocciaArgumentsCollection; const AIndex: Integer; const ADefault: Int64): Int64;

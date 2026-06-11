@@ -2619,21 +2619,24 @@ var
 
   function FormatPlaceholder(const AValue: TGocciaValue;
     const AToken: Char): string;
+  var
+    NumVal: TGocciaNumberLiteralValue;
   begin
     if not Assigned(AValue) then
       Exit('%' + AToken);
 
     case AToken of
       'd', 'i':
+      begin
         // NaN/±∞ and doubles beyond Integer cannot be Trunc'd; render them
         // like %f so test.each("%d") titles never crash on non-finite rows.
-        if AValue.ToNumberLiteral.IsNaN or
-           AValue.ToNumberLiteral.IsInfinity or
-           AValue.ToNumberLiteral.IsNegativeInfinity or
-           (Abs(AValue.ToNumberLiteral.Value) >= MaxInt) then
-          Result := FormatDouble(AValue.ToNumberLiteral.Value)
+        NumVal := AValue.ToNumberLiteral;
+        if NumVal.IsNaN or NumVal.IsInfinity or NumVal.IsNegativeInfinity or
+           (Abs(NumVal.Value) >= MaxInt) then
+          Result := FormatDouble(NumVal.Value)
         else
-          Result := IntToStr(Trunc(AValue.ToNumberLiteral.Value));
+          Result := IntToStr(Trunc(NumVal.Value));
+      end;
       'f':
         Result := FormatDouble(AValue.ToNumberLiteral.Value);
       'j', 'o', 's':
