@@ -28,3 +28,17 @@ describe("Number.prototype.toPrecision", () => {
     expect(Infinity.toPrecision(5)).toBe("Infinity");
   });
 });
+
+describe("Number.prototype.toPrecision precision range", () => {
+  test("Infinity precision throws RangeError", () => {
+    expect(() => (5).toPrecision(Infinity)).toThrow(RangeError);
+  });
+
+  test("NaN this value returns NaN before the range check", () => {
+    expect(NaN.toPrecision(Infinity)).toBe("NaN");
+  });
+
+  test("NaN precision counts as 0 and throws RangeError", () => {
+    expect(() => (5).toPrecision(NaN)).toThrow(RangeError);
+  });
+});

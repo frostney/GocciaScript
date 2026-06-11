@@ -322,7 +322,7 @@ begin
   // Step 7: If space is a Number, let gap be min(10, ToInteger(space)) spaces.
   if ASpaceArg is TGocciaNumberLiteralValue then
   begin
-    SpaceCount := Trunc(ASpaceArg.ToNumberLiteral.Value);
+    SpaceCount := ToIntegerValue(ASpaceArg);
     if SpaceCount > 10 then
       SpaceCount := 10;
     if SpaceCount < 1 then

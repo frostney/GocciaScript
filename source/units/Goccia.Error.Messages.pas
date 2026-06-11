@@ -646,6 +646,8 @@ resourcestring
 
   // Number method errors
   SErrorToExponentialArgRange = 'toExponential() argument must be between 0 and 100';
+  SErrorToFixedArgRange = 'toFixed() digits argument must be between 0 and 100';
+  SErrorToPrecisionArgRange = 'toPrecision() argument must be between 1 and 100';
 
   // Set brand-check errors
   SErrorSetHasNonSet = 'Set.prototype.has called on non-Set object';

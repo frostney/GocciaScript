@@ -48,6 +48,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.Realm,
+  Goccia.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction;
 
@@ -162,16 +163,26 @@ var
   Prim: TGocciaNumberLiteralValue;
   Digits: Integer;
 begin
-  // Step 3: Let x be ? thisNumberValue(this value)
+  // Step 1: Let x be ? thisNumberValue(this value)
   Prim := ExtractPrimitive(AThisValue);
 
-  // Step 4: If x is NaN, return "NaN"
+  // Step 2: Let f be ? ToIntegerOrInfinity(fractionDigits)
+  if AArgs.Length > 0 then
+    Digits := ToIntegerFromArgs(AArgs, 0)
+  else
+    Digits := 0;
+
+  // Step 4: If f < 0 or f > 100, throw a RangeError exception
+  // (precedes the non-finite returns below, so (NaN).toFixed(101) throws)
+  if (Digits < 0) or (Digits > 100) then
+    ThrowRangeError(SErrorToFixedArgRange, SSuggestNumberRange);
+
+  // Step 5: If x is not finite, return Number::toString(x, 10)
   if Prim.IsNaN then
   begin
     Result := TGocciaStringLiteralValue.Create('NaN');
     Exit;
   end;
-  // Step 5: If x is +∞𝔽 or -∞𝔽, return the string representation
   if Prim.IsInfinity then
   begin
     Result := TGocciaStringLiteralValue.Create('Infinity');
@@ -180,19 +191,6 @@ begin
   if Prim.IsNegativeInfinity then
   begin
     Result := TGocciaStringLiteralValue.Create('-Infinity');
-    Exit;
-  end;
-
-  // Step 1: Let f be ? ToIntegerOrInfinity(fractionDigits)
-  if AArgs.Length > 0 then
-    Digits := Trunc(AArgs.GetElement(0).ToNumberLiteral.Value)
-  else
-    Digits := 0;
-
-  // Step 2: If f < 0 or f > 100, throw a RangeError exception
-  if (Digits < 0) or (Digits > 100) then
-  begin
-    Result := TGocciaStringLiteralValue.Create('');
     Exit;
   end;
 
@@ -299,7 +297,7 @@ begin
   // Step 2: If radix is undefined, let radixMV be 10
   if (AArgs.Length > 0) and not (AArgs.GetElement(0) is TGocciaUndefinedLiteralValue) then
   begin
-    Radix := Trunc(AArgs.GetElement(0).ToNumberLiteral.Value);
+    Radix := ToIntegerFromArgs(AArgs, 0);
     // Step 3: If radixMV < 2 or radixMV > 36, throw a RangeError exception
     if (Radix < 2) or (Radix > 36) then
       ThrowRangeError(SErrorBigIntInvalidRadix, SSuggestBigIntInvalidRadix);
@@ -373,14 +371,11 @@ begin
   end;
 
   // Step 3: Let p be ? ToIntegerOrInfinity(precision)
-  Precision := Trunc(AArgs.GetElement(0).ToNumberLiteral.Value);
+  Precision := ToIntegerFromArgs(AArgs, 0);
 
   // Step 6: If p < 1 or p > 100, throw a RangeError exception
   if (Precision < 1) or (Precision > 100) then
-  begin
-    Result := TGocciaStringLiteralValue.Create('');
-    Exit;
-  end;
+    ThrowRangeError(SErrorToPrecisionArgRange, SSuggestNumberRange);
 
   // Step 7: Format x with p significant digits
   Result := TGocciaStringLiteralValue.Create(FloatToStrF(Prim.Value, ffGeneral, Precision, 0, InvariantFormatSettings));
@@ -420,7 +415,7 @@ begin
   HasExplicitDigits := (AArgs.Length > 0) and not (AArgs.GetElement(0) is TGocciaUndefinedLiteralValue);
   if HasExplicitDigits then
   begin
-    FractionDigits := Trunc(AArgs.GetElement(0).ToNumberLiteral.Value);
+    FractionDigits := ToIntegerFromArgs(AArgs, 0);
     // Step 5: If f < 0 or f > 100, throw a RangeError exception
     if (FractionDigits < 0) or (FractionDigits > 100) then
       ThrowRangeError(SErrorToExponentialArgRange, SSuggestNumberRange);

@@ -1161,7 +1161,7 @@ begin
   TA := RequireAttachedTypedArray(AThisValue, 'TypedArray.prototype.at');
   if AArgs.Length = 0 then
     Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
-  RelIndex := Trunc(AArgs.GetElement(0).ToNumberLiteral.Value);
+  RelIndex := ToIntegerFromArgs(AArgs, 0);
   if RelIndex >= 0 then
     ActualIndex := RelIndex
   else
@@ -1199,7 +1199,7 @@ begin
   // ES2026 §23.2.3.8 step 5-6: RelativeIndex → clamp
   if (AArgs.Length > 1) and not (AArgs.GetElement(1) is TGocciaUndefinedLiteralValue) then
   begin
-    RelStart := Trunc(AArgs.GetElement(1).ToNumberLiteral.Value);
+    RelStart := ToIntegerFromArgs(AArgs, 1);
     if RelStart < 0 then
       First := Max(TA.FLength + RelStart, 0)
     else
@@ -1211,7 +1211,7 @@ begin
   // ES2026 §23.2.3.8 step 7-8
   if (AArgs.Length > 2) and not (AArgs.GetElement(2) is TGocciaUndefinedLiteralValue) then
   begin
-    RelEnd := Trunc(AArgs.GetElement(2).ToNumberLiteral.Value);
+    RelEnd := ToIntegerFromArgs(AArgs, 2);
     if RelEnd < 0 then
       Final := Max(TA.FLength + RelEnd, 0)
     else
@@ -1247,15 +1247,15 @@ begin
   if AArgs.Length < 2 then
     Exit(AThisValue);
 
-  Target := Trunc(AArgs.GetElement(0).ToNumberLiteral.Value);
-  Start := Trunc(AArgs.GetElement(1).ToNumberLiteral.Value);
+  Target := ToIntegerFromArgs(AArgs, 0);
+  Start := ToIntegerFromArgs(AArgs, 1);
 
   if Target < 0 then Target := Max(TA.FLength + Target, 0) else Target := Min(Target, TA.FLength);
   if Start < 0 then Start := Max(TA.FLength + Start, 0) else Start := Min(Start, TA.FLength);
 
   if (AArgs.Length > 2) and not (AArgs.GetElement(2) is TGocciaUndefinedLiteralValue) then
   begin
-    Final := Trunc(AArgs.GetElement(2).ToNumberLiteral.Value);
+    Final := ToIntegerFromArgs(AArgs, 2);
     if Final < 0 then Final := Max(TA.FLength + Final, 0) else Final := Min(Final, TA.FLength);
   end
   else
@@ -1286,7 +1286,7 @@ begin
 
   if AArgs.Length > 0 then
   begin
-    First := Trunc(AArgs.GetElement(0).ToNumberLiteral.Value);
+    First := ToIntegerFromArgs(AArgs, 0);
     if First < 0 then First := Max(TA.FLength + First, 0) else First := Min(First, TA.FLength);
   end
   else
@@ -1294,7 +1294,7 @@ begin
 
   if (AArgs.Length > 1) and not (AArgs.GetElement(1) is TGocciaUndefinedLiteralValue) then
   begin
-    Final := Trunc(AArgs.GetElement(1).ToNumberLiteral.Value);
+    Final := ToIntegerFromArgs(AArgs, 1);
     if Final < 0 then Final := Max(TA.FLength + Final, 0) else Final := Min(Final, TA.FLength);
   end
   else
@@ -1328,7 +1328,7 @@ begin
 
   if AArgs.Length > 0 then
   begin
-    BeginIdx := Trunc(AArgs.GetElement(0).ToNumberLiteral.Value);
+    BeginIdx := ToIntegerFromArgs(AArgs, 0);
     if BeginIdx < 0 then BeginIdx := Max(TA.FLength + BeginIdx, 0) else BeginIdx := Min(BeginIdx, TA.FLength);
   end
   else
@@ -1336,7 +1336,7 @@ begin
 
   if (AArgs.Length > 1) and not (AArgs.GetElement(1) is TGocciaUndefinedLiteralValue) then
   begin
-    EndIdx := Trunc(AArgs.GetElement(1).ToNumberLiteral.Value);
+    EndIdx := ToIntegerFromArgs(AArgs, 1);
     if EndIdx < 0 then EndIdx := Max(TA.FLength + EndIdx, 0) else EndIdx := Min(EndIdx, TA.FLength);
   end
   else
@@ -1638,7 +1638,7 @@ begin
 
   if AArgs.Length > 1 then
   begin
-    StartIdx := Trunc(AArgs.GetElement(1).ToNumberLiteral.Value);
+    StartIdx := ToIntegerFromArgs(AArgs, 1);
     if StartIdx < 0 then StartIdx := Max(TA.FLength + StartIdx, 0);
   end
   else
@@ -1668,7 +1668,7 @@ begin
     Exit(TGocciaNumberLiteralValue.Create(-1));
   if AArgs.Length > 1 then
   begin
-    StartIdx := Trunc(AArgs.GetElement(1).ToNumberLiteral.Value);
+    StartIdx := ToIntegerFromArgs(AArgs, 1);
     if StartIdx < 0 then StartIdx := TA.FLength + StartIdx;
   end
   else
@@ -1698,7 +1698,7 @@ begin
     Exit(TGocciaBooleanLiteralValue.FalseValue);
   if AArgs.Length > 1 then
   begin
-    StartIdx := Trunc(AArgs.GetElement(1).ToNumberLiteral.Value);
+    StartIdx := ToIntegerFromArgs(AArgs, 1);
     if StartIdx < 0 then StartIdx := Max(TA.FLength + StartIdx, 0);
   end
   else
@@ -2175,7 +2175,7 @@ begin
   TA := RequireAttachedTypedArray(AThisValue, 'TypedArray.prototype.with');
   // ES2026 §23.2.3.36 step 3: Let relativeIndex be ? ToIntegerOrInfinity(index)
   if AArgs.Length > 0 then
-    ActualIndex := Trunc(AArgs.GetElement(0).ToNumberLiteral.Value)
+    ActualIndex := ToIntegerFromArgs(AArgs, 0)
   else
     ActualIndex := 0;
   if ActualIndex < 0 then

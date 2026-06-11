@@ -154,3 +154,17 @@ describe("Iterator.prototype.take()", () => {
     expect(result).toEqual([[1, 2, 3], [1, 2, 3], [1, 2, 3]]);
   });
 });
+
+describe("Iterator.prototype.take non-finite limits", () => {
+  test("Infinity takes all remaining values", () => {
+    expect([1, 2].values().take(Infinity).toArray()).toEqual([1, 2]);
+  });
+
+  test("NaN throws RangeError", () => {
+    expect(() => [1, 2].values().take(NaN)).toThrow(RangeError);
+  });
+
+  test("-Infinity throws RangeError", () => {
+    expect(() => [1, 2].values().take(-Infinity)).toThrow(RangeError);
+  });
+});

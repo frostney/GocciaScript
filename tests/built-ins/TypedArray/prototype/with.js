@@ -62,3 +62,13 @@ describe("TypedArray.prototype.with", () => {
     });
   });
 });
+
+describe("TypedArray.prototype.with non-finite index", () => {
+  test("Infinity index throws RangeError", () => {
+    expect(() => new Int8Array([1, 2]).with(Infinity, 9)).toThrow(RangeError);
+  });
+
+  test("-Infinity index throws RangeError", () => {
+    expect(() => new Int8Array([1, 2]).with(-Infinity, 9)).toThrow(RangeError);
+  });
+});

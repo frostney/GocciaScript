@@ -25,6 +25,7 @@ type
 implementation
 
 uses
+  Math,
   SysUtils,
 
   StringBuffer,
@@ -32,6 +33,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction,
@@ -68,8 +70,8 @@ begin
   I := 0;
   while I < AArgs.Length do
   begin
-    CodeUnit := Trunc(AArgs.GetElement(I).ToNumberLiteral.Value);
-    CodeUnit := CodeUnit and $FFFF;
+    // ES2026 §7.1.10 ToUint16: NaN/±0/±∞ → 0, otherwise truncate mod 2^16.
+    CodeUnit := ToUint16Value(AArgs.GetElement(I));
     if CodeUnit < $80 then
       ResultStr := ResultStr + Chr(CodeUnit)
     else if CodeUnit < $800 then
@@ -120,6 +122,7 @@ function TGocciaGlobalString.StringRaw(const AArgs: TGocciaArgumentsCollection; 
 var
   TemplateObj, RawValue, RawElement: TGocciaValue;
   RawObj: TGocciaValue;
+  LengthValue: Double;
   LiteralSegments: Integer;
   SB: TStringBuffer;
   I: Integer;
@@ -142,11 +145,21 @@ begin
   RawObj := RawValue;
 
   // ES2026 §22.1.2.4 step 4: Let literalSegments be LengthOfArrayLike(raw)
+  // ES2026 §7.1.22 ToLength: NaN/negative → 0, spec caps at 2^53−1.
+  // Trunc raises a range-check error for NaN/±∞ in FPC, so guard first.
   RawElement := RawObj.GetProperty(PROP_LENGTH);
   if not Assigned(RawElement) or (RawElement is TGocciaUndefinedLiteralValue) then
     LiteralSegments := 0
   else
-    LiteralSegments := Trunc(RawElement.ToNumberLiteral.Value);
+  begin
+    LengthValue := RawElement.ToNumberLiteral.Value;
+    if IsNan(LengthValue) or (LengthValue <= 0) then
+      LiteralSegments := 0
+    else if LengthValue >= MaxInt then
+      LiteralSegments := MaxInt
+    else
+      LiteralSegments := Trunc(LengthValue);
+  end;
 
   // ES2026 §22.1.2.4 step 5: If literalSegments <= 0, return ""
   if LiteralSegments <= 0 then

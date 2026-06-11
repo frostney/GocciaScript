@@ -60,3 +60,13 @@ describe("TypedArray.prototype.includes", () => {
     expect(ta.includes(undefined, fromIndex)).toBe(true);
   });
 });
+
+describe("TypedArray.prototype.includes non-finite fromIndex", () => {
+  test("Infinity fromIndex finds nothing", () => {
+    expect(new Int8Array([1, 2]).includes(1, Infinity)).toBe(false);
+  });
+
+  test("-Infinity fromIndex searches from the start", () => {
+    expect(new Int8Array([1, 2]).includes(2, -Infinity)).toBe(true);
+  });
+});

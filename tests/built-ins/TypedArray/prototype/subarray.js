@@ -64,3 +64,13 @@ describe("TypedArray.prototype.subarray", () => {
     expect(sub[0]).toBe(99n);
   });
 });
+
+describe("TypedArray.prototype.subarray non-finite range arguments", () => {
+  test("Infinity begin yields an empty view", () => {
+    expect(new Int8Array([1, 2]).subarray(Infinity).length).toBe(0);
+  });
+
+  test("-Infinity begin keeps the full view", () => {
+    expect(new Int8Array([1, 2]).subarray(-Infinity).length).toBe(2);
+  });
+});

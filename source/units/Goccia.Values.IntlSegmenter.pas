@@ -81,6 +81,7 @@ uses
   Goccia.Error.Messages,
   Goccia.ObjectModel.Types,
   Goccia.Realm,
+  Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -321,7 +322,7 @@ begin
   if AArgs.Length < 1 then
     Idx := 0
   else
-    Idx := Trunc(AArgs.GetElement(0).ToNumberLiteral.Value);
+    Idx := ToIntegerFromArgs(AArgs, 0);
 
   // Build all segments and find the one containing the index
   Iter := TGocciaIntlSegmentIteratorValue.Create(Segs.FLocale, Segs.FGranularity,

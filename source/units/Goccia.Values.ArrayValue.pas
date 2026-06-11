@@ -3880,7 +3880,7 @@ begin
   end;
 
   // Step 3: Let relativeIndex be ToIntegerOrInfinity(index)
-  Index := Trunc(AArgs.GetElement(0).ToNumberLiteral.Value);
+  Index := ToIntegerFromArgs(AArgs, 0);
 
   // Step 4: If relativeIndex >= 0, let k be relativeIndex; else len + relativeIndex
   if Index < 0 then

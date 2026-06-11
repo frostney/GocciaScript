@@ -43,3 +43,13 @@ describe("TypedArray.prototype.lastIndexOf", () => {
     expect(ta.lastIndexOf(undefined, fromIndex)).toBe(-1);
   });
 });
+
+describe("TypedArray.prototype.lastIndexOf non-finite fromIndex", () => {
+  test("-Infinity fromIndex finds nothing", () => {
+    expect(new Int8Array([1, 2]).lastIndexOf(1, -Infinity)).toBe(-1);
+  });
+
+  test("Infinity fromIndex searches from the end", () => {
+    expect(new Int8Array([1, 2]).lastIndexOf(1, Infinity)).toBe(0);
+  });
+});

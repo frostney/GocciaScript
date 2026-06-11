@@ -39,3 +39,13 @@ describe("Array.prototype.at", () => {
     expect(Array.prototype.at.call(arrayLike, -1)).toBe('c');
   });
 });
+
+describe("Array.prototype.at non-finite index", () => {
+  test("Infinity returns undefined", () => {
+    expect([1, 2].at(Infinity)).toBeUndefined();
+  });
+
+  test("-Infinity returns undefined", () => {
+    expect([1, 2].at(-Infinity)).toBeUndefined();
+  });
+});

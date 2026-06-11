@@ -379,6 +379,7 @@ end;
 
 function TGocciaIteratorValue.IteratorTake(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
+  NumArg: TGocciaNumberLiteralValue;
   Limit: Integer;
 begin
   if not (AThisValue is TGocciaIteratorValue) then
@@ -386,7 +387,13 @@ begin
   if AArgs.Length < 1 then
     ThrowRangeError(SErrorIteratorTakeRequiresArg, SSuggestIteratorNonNegative);
 
-  Limit := Trunc(AArgs.GetElement(0).ToNumberLiteral.Value);
+  // ES2026 §27.1.4.2 steps 4-7: NaN and negative (incl. -∞) limits throw
+  // RangeError; +∞ takes everything (saturated to MaxInt here).
+  NumArg := AArgs.GetElement(0).ToNumberLiteral;
+  if NumArg.IsNaN then
+    ThrowRangeError(SErrorIteratorTakeNonNegative,
+      SSuggestIteratorNonNegative);
+  Limit := ToIntegerValue(NumArg);
   if Limit < 0 then
     ThrowRangeError(SErrorIteratorTakeNonNegative,
       SSuggestIteratorNonNegative);
@@ -398,6 +405,7 @@ end;
 
 function TGocciaIteratorValue.IteratorDrop(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
+  NumArg: TGocciaNumberLiteralValue;
   DropCount: Integer;
 begin
   if not (AThisValue is TGocciaIteratorValue) then
@@ -405,7 +413,13 @@ begin
   if AArgs.Length < 1 then
     ThrowRangeError(SErrorIteratorDropRequiresArg, SSuggestIteratorNonNegative);
 
-  DropCount := Trunc(AArgs.GetElement(0).ToNumberLiteral.Value);
+  // ES2026 §27.1.4.1 steps 4-7: NaN and negative (incl. -∞) counts throw
+  // RangeError; +∞ drops everything (saturated to MaxInt here).
+  NumArg := AArgs.GetElement(0).ToNumberLiteral;
+  if NumArg.IsNaN then
+    ThrowRangeError(SErrorIteratorDropNonNegative,
+      SSuggestIteratorNonNegative);
+  DropCount := ToIntegerValue(NumArg);
   if DropCount < 0 then
     ThrowRangeError(SErrorIteratorDropNonNegative,
       SSuggestIteratorNonNegative);

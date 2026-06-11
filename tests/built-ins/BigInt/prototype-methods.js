@@ -45,3 +45,13 @@ test("toLocaleString(locales, options)", () => {
 test("toLocaleString rejects null options", () => {
   expect(() => (1234n).toLocaleString("en-US", null)).toThrow(TypeError);
 });
+
+describe("BigInt.prototype.toString non-finite radix", () => {
+  test("Infinity radix throws RangeError", () => {
+    expect(() => (5n).toString(Infinity)).toThrow(RangeError);
+  });
+
+  test("NaN radix throws RangeError", () => {
+    expect(() => (5n).toString(NaN)).toThrow(RangeError);
+  });
+});

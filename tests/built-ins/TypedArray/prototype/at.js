@@ -30,3 +30,13 @@ describe("TypedArray.prototype.at", () => {
     expect(ta.at(-1)).toBe(30n);
   });
 });
+
+describe("TypedArray.prototype.at non-finite index", () => {
+  test("Infinity returns undefined", () => {
+    expect(new Int8Array([1, 2]).at(Infinity)).toBeUndefined();
+  });
+
+  test("-Infinity returns undefined", () => {
+    expect(new Int8Array([1, 2]).at(-Infinity)).toBeUndefined();
+  });
+});

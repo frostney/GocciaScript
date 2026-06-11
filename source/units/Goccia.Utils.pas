@@ -12,6 +12,10 @@ uses
 // Returns Trunc(ToNumber(AArgs[AIndex])) or ADefault if index out of range.
 function ToIntegerFromArgs(const AArgs: TGocciaArgumentsCollection; const AIndex: Integer = 0; const ADefault: Integer = 0): Integer; inline;
 
+// Value-level variant of ToIntegerFromArgs: ES2026 §7.1.6 ToIntegerOrInfinity
+// saturated to Integer.  NaN → 0, ±∞ and out-of-range doubles → ±MaxInt.
+function ToIntegerValue(const AValue: TGocciaValue): Integer; inline;
+
 // 64-bit variant of ToIntegerFromArgs.  Used by Array prototype methods that
 // must reach indices above MaxInt when the receiver is a generic array-like
 // with a length up to 2^53 - 1 (e.g. test262
@@ -39,6 +43,10 @@ function ToInt32Value(const AValue: TGocciaValue): Int32; inline;
 // ES2026 §7.1.7 ToUint32(argument)
 function ToUint32Value(const AValue: TGocciaValue): Cardinal; inline;
 
+// ES2026 §7.1.10 ToUint16(argument)
+// NaN, ±0, ±∞ → 0; otherwise truncate and reduce modulo 2^16.
+function ToUint16Value(const AValue: TGocciaValue): Word; inline;
+
 // ES2026 relative index normalization (used by slice, splice, at, with, copyWithin, fill, etc.)
 // If ARelative < 0, returns max(ALength + ARelative, 0); else min(ARelative, ALength).
 function NormalizeRelativeIndex(const ARelative, ALength: Integer): Integer; inline;
@@ -61,26 +69,29 @@ uses
   Goccia.Values.FunctionBase;
 
 function ToIntegerFromArgs(const AArgs: TGocciaArgumentsCollection; const AIndex: Integer; const ADefault: Integer): Integer;
+begin
+  if AArgs.Length > AIndex then
+    Result := ToIntegerValue(AArgs.GetElement(AIndex))
+  else
+    Result := ADefault;
+end;
+
+function ToIntegerValue(const AValue: TGocciaValue): Integer;
 var
   NumberValue: TGocciaNumberLiteralValue;
 begin
-  if AArgs.Length > AIndex then
-  begin
-    NumberValue := AArgs.GetElement(AIndex).ToNumberLiteral;
-    if NumberValue.IsNaN then
-      Exit(0);
-    if NumberValue.IsInfinity then
-      Exit(MaxInt);
-    if NumberValue.IsNegativeInfinity then
-      Exit(-MaxInt);
-    if NumberValue.Value >= MaxInt then
-      Exit(MaxInt);
-    if NumberValue.Value <= -MaxInt then
-      Exit(-MaxInt);
-    Result := Trunc(NumberValue.Value);
-    Exit;
-  end;
-  Result := ADefault;
+  NumberValue := AValue.ToNumberLiteral;
+  if NumberValue.IsNaN then
+    Exit(0);
+  if NumberValue.IsInfinity then
+    Exit(MaxInt);
+  if NumberValue.IsNegativeInfinity then
+    Exit(-MaxInt);
+  if NumberValue.Value >= MaxInt then
+    Exit(MaxInt);
+  if NumberValue.Value <= -MaxInt then
+    Exit(-MaxInt);
+  Result := Trunc(NumberValue.Value);
 end;
 
 function ToInteger64FromArgs(const AArgs: TGocciaArgumentsCollection; const AIndex: Integer; const ADefault: Int64): Int64;
@@ -137,6 +148,14 @@ begin
   // directly without any FP path that could trip Trunc(NaN).
   AsUint := ToUint32Value(AValue);
   Result := Int32(AsUint);
+end;
+
+function ToUint16Value(const AValue: TGocciaValue): Word;
+begin
+  // ToUint16 differs from ToUint32 only in the modulus (2^16 vs 2^32), and
+  // 2^16 divides 2^32, so the low 16 bits of the ToUint32 result are exactly
+  // the ToUint16 result.  Reuses the NaN/Infinity-safe path above.
+  Result := Word(ToUint32Value(AValue));
 end;
 
 function NormalizeRelativeIndex(const ARelative, ALength: Integer): Integer;

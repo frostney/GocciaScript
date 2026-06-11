@@ -277,3 +277,17 @@ test("JSON.stringify preserves enumerable property order", () => {
 
   expect(JSON.stringify(obj)).toBe('{"beta":2,"alpha":1,"gamma":3}');
 });
+
+describe("JSON.stringify non-finite space argument", () => {
+  test("Infinity space is capped at 10 spaces", () => {
+    expect(JSON.stringify({ a: 1 }, null, Infinity)).toBe(JSON.stringify({ a: 1 }, null, 10));
+  });
+
+  test("-Infinity space produces no indentation", () => {
+    expect(JSON.stringify({ a: 1 }, null, -Infinity)).toBe(JSON.stringify({ a: 1 }));
+  });
+
+  test("NaN space produces no indentation", () => {
+    expect(JSON.stringify({ a: 1 }, null, NaN)).toBe(JSON.stringify({ a: 1 }));
+  });
+});

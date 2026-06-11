@@ -30,3 +30,17 @@ describe("Iterator.prototype.drop()", () => {
     expect(dropped.next().done).toBe(true);
   });
 });
+
+describe("Iterator.prototype.drop non-finite counts", () => {
+  test("Infinity drops all values", () => {
+    expect([1, 2].values().drop(Infinity).toArray()).toEqual([]);
+  });
+
+  test("NaN throws RangeError", () => {
+    expect(() => [1, 2].values().drop(NaN)).toThrow(RangeError);
+  });
+
+  test("-Infinity throws RangeError", () => {
+    expect(() => [1, 2].values().drop(-Infinity)).toThrow(RangeError);
+  });
+});

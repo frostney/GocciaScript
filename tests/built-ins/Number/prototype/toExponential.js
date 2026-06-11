@@ -39,3 +39,13 @@ describe("Number.prototype.toExponential", () => {
     expect(() => (1).toExponential(101)).toThrow(RangeError);
   });
 });
+
+describe("Number.prototype.toExponential non-finite digits", () => {
+  test("Infinity digits throws RangeError", () => {
+    expect(() => (5).toExponential(Infinity)).toThrow(RangeError);
+  });
+
+  test("-Infinity digits throws RangeError", () => {
+    expect(() => (5).toExponential(-Infinity)).toThrow(RangeError);
+  });
+});
