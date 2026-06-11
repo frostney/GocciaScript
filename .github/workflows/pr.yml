@@ -318,6 +318,10 @@ jobs:
 
       - name: Run test262 conformance suite
         continue-on-error: true
+        # --timeout-ms=20000: the per-test deadline is wall-clock, and at
+        # --jobs=4 the workers fully subscribe the runner, inflating each
+        # test's wall time ~30-40% vs the old --jobs=2 baseline; borderline
+        # 7-9s tests must not trip the deadline purely from contention.
         # --jobs=4 matches the 4 vCPUs on GH-hosted ubuntu-latest runners
         # for public repos.  Per-test subprocesses tolerate scheduler
         # jitter (each test gets its own engine-side deadline), so the
@@ -327,6 +331,7 @@ jobs:
             --suite-dir test262-suite \
             --mode=bytecode \
             --jobs=4 \
+            --timeout-ms=20000 \
             --output=test262-results.json
 
       - name: Upload test262 results

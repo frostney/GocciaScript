@@ -44,7 +44,8 @@ type
     // Shared tail of TryGetBinding / TryGetBindingValueFillCache:
     // resolution after the own lexical map has already been consulted.
     function TryGetBindingSkipLexical(const AName: string;
-      out ABinding: TLexicalBinding): Boolean;
+      out ABinding: TLexicalBinding; const ALine: Integer = 0;
+      const AColumn: Integer = 0): Boolean;
     procedure RaiseBindingNotInitialized(const AName: string;
       const ALine, AColumn: Integer);
     procedure RaiseUndefinedVariable(const AName: string;
@@ -942,7 +943,7 @@ begin
       RaiseBindingNotInitialized(AName, ALine, AColumn);
     Exit(True);
   end;
-  Result := TryGetBindingSkipLexical(AName, ABinding);
+  Result := TryGetBindingSkipLexical(AName, ABinding, ALine, AColumn);
 end;
 
 function TGocciaScope.TryGetOwnBinding(const AName: string;
@@ -973,7 +974,8 @@ begin
 end;
 
 function TGocciaScope.TryGetBindingSkipLexical(const AName: string;
-  out ABinding: TLexicalBinding): Boolean;
+  out ABinding: TLexicalBinding; const ALine: Integer = 0;
+  const AColumn: Integer = 0): Boolean;
 begin
   if (FScopeKind = skGlobal) and (FThisValue is TGocciaObjectValue) and
      TGocciaObjectValue(FThisValue).HasProperty(AName) then
@@ -989,7 +991,7 @@ begin
   if Assigned(FVarBindings) and FVarBindings.TryGetValue(AName, ABinding) then
     Exit(True);
   if Assigned(FParent) then
-    Exit(FParent.TryGetBinding(AName, ABinding));
+    Exit(FParent.TryGetBinding(AName, ABinding, ALine, AColumn));
   ABinding := Default(TLexicalBinding);
   Result := False;
 end;

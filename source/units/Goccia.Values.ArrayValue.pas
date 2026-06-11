@@ -686,7 +686,7 @@ begin
     NewWritable := not (ADescriptor.HasWritableField and not ADescriptor.Writable);
     if not DeleteArrayIndexesAtOrAbove(AArray, NewLen, FailedIndex) then
     begin
-      if FailedIndex < MaxInt then
+      if CanStoreDenseElementIndex(FailedIndex, AArray.FElements.Count) then
         ExtendElementsWithHoles(AArray.FElements, FailedIndex + 1);
       AArray.FLength := FailedIndex + 1;
       if not NewWritable then

@@ -1073,6 +1073,13 @@ begin
 
   if TryFindBinding(AName, Binding) then
   begin
+    // TDZ: a captured lexical binding still holding the hole sentinel has
+    // not been initialized yet; assignment through direct eval must raise
+    // the same ReferenceError the ordinary local/upvalue paths produce.
+    if BindingValue(Binding) = TGocciaHoleValue.HoleValue then
+      raise TGocciaReferenceError.Create(
+        Format(SErrorCannotAccessBeforeInit, [AName]),
+        ALine, AColumn, '', nil, SSuggestTemporalDeadZone);
     if Binding.IsConst then
       raise TGocciaTypeError.Create(
         Format(SErrorAssignToConstant, [AName]),
