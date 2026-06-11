@@ -266,9 +266,6 @@ test("JSON.stringify space as boxed Number propagates valueOf exceptions", () =>
   space.valueOf = () => {
     throw new TypeError("abrupt valueOf");
   };
-  space.toString = () => {
-    throw new TypeError("abrupt toString");
-  };
 
   expect(() => JSON.stringify({ a: 1 }, null, space)).toThrow(TypeError);
 });
@@ -299,11 +296,47 @@ test("JSON.stringify space as boxed String propagates toString exceptions", () =
   space.toString = () => {
     throw new TypeError("abrupt toString");
   };
-  space.valueOf = () => {
-    throw new TypeError("abrupt valueOf");
-  };
 
   expect(() => JSON.stringify({ a: 1 }, null, space)).toThrow(TypeError);
+});
+
+test("JSON.stringify truncates a fractional primitive space", () => {
+  const obj = { a: 1, b: [1, 2] };
+
+  expect(JSON.stringify(obj, null, 5.99999)).toBe(JSON.stringify(obj, null, 5));
+});
+
+test("JSON.stringify treats NaN space as no indentation", () => {
+  expect(JSON.stringify({ a: 1 }, null, NaN)).toBe('{"a":1}');
+});
+
+test("JSON.stringify clamps Infinity space to 10 spaces", () => {
+  const obj = { a: 1, b: [1, 2] };
+
+  expect(JSON.stringify(obj, null, Infinity)).toBe(
+    JSON.stringify(obj, null, 10),
+  );
+});
+
+test("JSON.stringify treats -Infinity space as no indentation", () => {
+  expect(JSON.stringify({ a: 1 }, null, -Infinity)).toBe('{"a":1}');
+});
+
+test("JSON.stringify clamps huge finite space to 10 spaces", () => {
+  const obj = { a: 1, b: [1, 2] };
+
+  expect(JSON.stringify(obj, null, 2147483648)).toBe(
+    JSON.stringify(obj, null, 10),
+  );
+  expect(JSON.stringify(obj, null, 1e15)).toBe(JSON.stringify(obj, null, 10));
+});
+
+test("JSON.stringify clamps boxed Number Infinity space to 10 spaces", () => {
+  const obj = { a: 1, b: [1, 2] };
+
+  expect(JSON.stringify(obj, null, new Number(Infinity))).toBe(
+    JSON.stringify(obj, null, 10),
+  );
 });
 
 test("JSON.stringify serializes sparse array holes as null", () => {
