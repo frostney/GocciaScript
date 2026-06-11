@@ -1175,8 +1175,12 @@ begin
       Continue;
     if ContainsOwnVarBinding(Binding.Name) and (Binding.Kind <> debUpvalue) then
     begin
-      LexicalBinding := inherited GetBinding(Binding.Name);
-      SetBindingValue(Binding, LexicalBinding.Value);
+      // Read this scope's own var environment directly: GetBinding would
+      // dispatch back through this scope's TryGetBinding override, whose
+      // with-object head shadows the var binding being copied back
+      // (Annex B function-in-block hoisting inside `with`).
+      if TryGetOwnBinding(Binding.Name, LexicalBinding) then
+        SetBindingValue(Binding, LexicalBinding.Value);
     end;
   end;
 end;
@@ -1195,7 +1199,8 @@ begin
   begin
     if not ContainsOwnVarBinding(Name) then
       Continue;
-    Binding := inherited GetBinding(Name);
+    if not TryGetOwnBinding(Name, Binding) then
+      Continue;
     Parent.DefineVariableBinding(Name, Binding.Value, True, True);
   end;
 end;

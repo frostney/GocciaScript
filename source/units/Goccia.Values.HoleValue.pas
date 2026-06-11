@@ -46,6 +46,16 @@ var
   StartCount: Integer;
 begin
   StartCount := AElements.Count;
+  // Fast path: small extensions skip both the poll and the rollback frame.
+  // Sequential element writes extend by one slot at a time, and an FPC
+  // try/except frame per append is a measurable tax on every array-building
+  // loop; a bounded extension cannot stall, so neither is needed.
+  if ACount - StartCount <= 1024 then
+  begin
+    while AElements.Count < ACount do
+      AElements.Add(TGocciaHoleValue.HoleValue);
+    Exit;
+  end;
   try
     while AElements.Count < ACount do
     begin

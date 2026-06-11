@@ -511,7 +511,9 @@ console.log("--timeout (bytecode)...");
 
 console.log("--timeout (native sparse-array fill, interpreted)...");
 {
-  const fill = "const x = []; x[2 ** 31 - 2] = 1;\n";
+  // Far single-index writes route to sparse storage and complete instantly;
+  // the Array constructor still materializes dense holes, so it stalls.
+  const fill = "const x = new Array(2 ** 30); x.length;\n";
   const { exitCode, json } = runLoaderJson(fill, ["--timeout=50"], { timeout: 10_000 });
   if (exitCode !== 1) throw new Error(`Array-fill timeout exit code should be 1, got ${exitCode}`);
   if (json.error?.type !== "TimeoutError") throw new Error(`Expected TimeoutError, got ${json.error?.type}`);
@@ -519,7 +521,9 @@ console.log("--timeout (native sparse-array fill, interpreted)...");
 
 console.log("--timeout (native sparse-array fill, bytecode)...");
 {
-  const fill = "const x = []; x[2 ** 31 - 2] = 1;\n";
+  // Far single-index writes route to sparse storage and complete instantly;
+  // the Array constructor still materializes dense holes, so it stalls.
+  const fill = "const x = new Array(2 ** 30); x.length;\n";
   const { exitCode, json } = runLoaderJson(fill, ["--timeout=50", "--mode=bytecode"], { timeout: 10_000 });
   if (exitCode !== 1) throw new Error(`Bytecode array-fill timeout exit code should be 1, got ${exitCode}`);
   if (json.error?.type !== "TimeoutError") throw new Error(`Expected TimeoutError, got ${json.error?.type}`);

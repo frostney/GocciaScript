@@ -97,6 +97,13 @@ type
     // with the unbound-name raise, and TryGetBindingValue extracts the value.
     function TryGetBinding(const AName: string; out ABinding: TLexicalBinding;
       const ALine: Integer = 0; const AColumn: Integer = 0): Boolean; virtual;
+    // Own-scope read (own lexical, then own var) with no virtual dispatch
+    // and no parent walk — for adapter scopes that must read their own
+    // storage even when their TryGetBinding override resolves elsewhere
+    // first (e.g. direct-eval scopes whose override consults with-object
+    // bindings before the scope's own var environment).
+    function TryGetOwnBinding(const AName: string;
+      out ABinding: TLexicalBinding): Boolean;
     function GetBinding(const AName: string; const ALine: Integer = 0; const AColumn: Integer = 0): TLexicalBinding; virtual;
     function GetValue(const AName: string): TGocciaValue; virtual;
     function TryGetBindingValue(const AName: string;
@@ -936,6 +943,21 @@ begin
     Exit(True);
   end;
   Result := TryGetBindingSkipLexical(AName, ABinding);
+end;
+
+function TGocciaScope.TryGetOwnBinding(const AName: string;
+  out ABinding: TLexicalBinding): Boolean;
+begin
+  if FLexicalBindings.TryGetValue(AName, ABinding) then
+  begin
+    if not ABinding.IsAccessible then
+      RaiseBindingNotInitialized(AName, 0, 0);
+    Exit(True);
+  end;
+  if Assigned(FVarBindings) and FVarBindings.TryGetValue(AName, ABinding) then
+    Exit(True);
+  ABinding := Default(TLexicalBinding);
+  Result := False;
 end;
 
 function TGocciaScope.TryGetBindingValue(const AName: string;
