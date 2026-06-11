@@ -45,20 +45,17 @@ test("repeated reads through one site observe deletion and re-addition", () => {
 
 test("one site reading many receivers returns each receiver's own value", () => {
   const readX = (o) => o.x;
-  const objects = [];
-  for (let i = 0; i < 64; i++) {
-    objects.push({ x: i });
-  }
-  for (let i = 0; i < 64; i++) {
-    expect(readX(objects[i])).toBe(i);
-  }
+  const objects = Array.from({ length: 64 }, (_, i) => ({ x: i }));
+  objects.forEach((o, i) => {
+    expect(readX(o)).toBe(i);
+  });
 });
 
 test("one site reading many receivers still observes a later accessor receiver", () => {
   const readX = (o) => o.x;
-  for (let i = 0; i < 64; i++) {
-    expect(readX({ x: i })).toBe(i);
-  }
+  Array.from({ length: 64 }, (_, i) => ({ x: i })).forEach((o, i) => {
+    expect(readX(o)).toBe(i);
+  });
   const withGetter = {};
   Object.defineProperty(withGetter, "x", {
     get() {
