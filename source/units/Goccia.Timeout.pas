@@ -44,7 +44,22 @@ procedure PopTimeoutScope;
 
 { Polled by the bytecode VM and other long-running loops. Raises
   TGocciaTimeoutError tagged with the soonest-deadline scope when
-  the deadline has elapsed. }
+  the deadline has elapsed.
+
+  Chokepoint rule for native loops: any native loop whose iteration count
+  scales with a JS-controlled value (array index/length, string length,
+  regex subject length, element count) must poll this between iterations —
+  the dispatch-loop polls cannot fire while a single native call runs.
+  Self-throttling makes an unmasked per-iteration call cheap (1023 of 1024
+  calls are a counter increment); loops too hot even for that should use a
+  small local mask (and 255), never larger — local masks COMPOSE with the
+  internal 1/1024 throttle, so a 4096 local mask would stretch real clock
+  reads to one per ~4.2M iterations and let deadlines overshoot by seconds.
+  Loops that mutate JS-visible state must restore consistency before the
+  raise propagates (see ExtendElementsWithHoles in Goccia.Values.HoleValue
+  for the rollback pattern).  Known not-yet-covered stalls: TypedArray
+  sort/fill over huge views, JSON parse/stringify of huge structures, and
+  String.prototype.repeat/pad building multi-GB strings in one call. }
 procedure CheckExecutionTimeout;
 
 implementation

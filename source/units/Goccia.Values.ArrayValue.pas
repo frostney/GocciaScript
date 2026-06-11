@@ -461,8 +461,7 @@ begin
   begin
     while Arr.Elements.Count > ANewLen do
       Arr.Elements.Delete(Arr.Elements.Count - 1);
-    while Arr.Elements.Count < ANewLen do
-      Arr.Elements.Add(TGocciaHoleValue.HoleValue);
+    ExtendElementsWithHoles(Arr.Elements, ANewLen);
     Arr.FLength := ANewLen;
   end
   else
@@ -526,11 +525,22 @@ begin
     (AIndex < MAX_ARRAY_LENGTH);
 end;
 
-function CanStoreDenseElementIndex(const AIndex: Int64): Boolean;
+// Largest hole-pad a single index assignment may add to dense storage.
+// A write within this gap of the current element count stays dense (the
+// pad is at most ~8 MB of pointers); a farther jump routes to the ordinary
+// property map — the same sparse storage indices >= MaxInt always use —
+// so `x[2 ** 31 - 2] = v` no longer materializes billions of dense slots.
+const
+  MAX_DENSE_EXTENSION_GAP = 1024 * 1024;
+
+function CanStoreDenseElementIndex(const AIndex: Int64;
+  const ACurrentCount: Integer): Boolean;
 begin
   // FElements is backed by Integer-indexed TList; keep the final legal dense
   // slot below MaxInt so growing Count never needs MaxInt + 1 entries.
-  Result := (AIndex >= 0) and (AIndex < MaxInt);
+  // Indices below ACurrentCount always pass (existing dense storage).
+  Result := (AIndex >= 0) and (AIndex < MaxInt) and
+    (AIndex <= Int64(ACurrentCount) + MAX_DENSE_EXTENSION_GAP);
 end;
 
 function CompareInt64(constref A, B: Int64): Integer;
@@ -655,11 +665,18 @@ begin
     if (NewLen <> AArray.FLength) and not AArray.FLengthWritable then
       Exit(False);
 
-    if NewLen >= AArray.FElements.Count then
+    // Grow/keep vs shrink must compare against the spec-visible length, not
+    // the dense element count: sparse arrays (property-map indices) keep
+    // FLength above FElements.Count, and a shrink must still delete those
+    // map-stored indices via DeleteArrayIndexesAtOrAbove below.
+    if NewLen >= AArray.FLength then
     begin
-      if NewLen <= MaxInt then
-        while AArray.FElements.Count < NewLen do
-          AArray.FElements.Add(TGocciaHoleValue.HoleValue);
+      // Only materialize dense holes when the new length stays within the
+      // dense extension gap; a far-out length leaves the tail sparse, the
+      // same storage a far index assignment uses.
+      if (NewLen <= MaxInt) and
+         (NewLen <= Int64(AArray.FElements.Count) + MAX_DENSE_EXTENSION_GAP) then
+        ExtendElementsWithHoles(AArray.FElements, NewLen);
       AArray.FLength := NewLen;
       if ADescriptor.HasWritableField and not ADescriptor.Writable then
         AArray.FLengthWritable := False;
@@ -669,8 +686,8 @@ begin
     NewWritable := not (ADescriptor.HasWritableField and not ADescriptor.Writable);
     if not DeleteArrayIndexesAtOrAbove(AArray, NewLen, FailedIndex) then
     begin
-      while (FailedIndex < MaxInt) and (AArray.FElements.Count <= FailedIndex) do
-        AArray.FElements.Add(TGocciaHoleValue.HoleValue);
+      if FailedIndex < MaxInt then
+        ExtendElementsWithHoles(AArray.FElements, FailedIndex + 1);
       AArray.FLength := FailedIndex + 1;
       if not NewWritable then
         AArray.FLengthWritable := False;
@@ -1139,10 +1156,7 @@ begin
       FLength := IntLen;
       if IntLen > MaxInt then
         Exit;
-      // FPC rejects Int64 as a for-loop counter on 32-bit targets; IntLen
-      // is bounded by MaxInt above, so the Integer narrowing is safe.
-      for I := 0 to Integer(IntLen) - 1 do
-        FElements.Add(TGocciaHoleValue.HoleValue);
+      ExtendElementsWithHoles(FElements, IntLen);
     end
     else
     begin
@@ -1225,8 +1239,7 @@ begin
   end;
 
   // Extend array if necessary
-  while FElements.Count <= AIndex do
-    FElements.Add(TGocciaHoleValue.HoleValue);
+  ExtendElementsWithHoles(FElements, Int64(AIndex) + 1);
 
   FElements[AIndex] := AValue;
   if AIndex + 1 > FLength then
@@ -1311,8 +1324,7 @@ begin
     end;
 
     // Ensure result has correct length (preserve trailing holes)
-    while ResultArray.Elements.Count < View.Len do
-      ResultArray.Elements.Add(TGocciaHoleValue.HoleValue);
+    ExtendElementsWithHoles(ResultArray.Elements, View.Len);
 
     Result := ResultArray;
   finally
@@ -2143,8 +2155,7 @@ begin
   end;
 
   // Ensure result has correct length (preserve trailing holes)
-  while ResultArray.Elements.Count < N do
-    ResultArray.Elements.Add(TGocciaHoleValue.HoleValue);
+  ExtendElementsWithHoles(ResultArray.Elements, N);
 
   // Step 11: Return A
   Result := ResultArray;
@@ -2732,8 +2743,7 @@ begin
     Inc(N);
   end;
   // Ensure result reflects trailing holes from this spread
-  while AResult.Elements.Count < N do
-    AResult.Elements.Add(TGocciaHoleValue.HoleValue);
+  ExtendElementsWithHoles(AResult.Elements, N);
 end;
 
 // ES2026 §23.1.3.1 Array.prototype.concat(...arguments)
@@ -3120,7 +3130,7 @@ begin
   // Check if property name is a numeric index
   if TryParseArrayElementIndex(AName, Index) then
   begin
-    if CanStoreDenseElementIndex(Index) and
+    if CanStoreDenseElementIndex(Index, FElements.Count) and
        (Index < FElements.Count) and
        not IsArrayHole(FElements[Integer(Index)]) then
     begin
@@ -3158,11 +3168,10 @@ begin
       ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [AName]),
         SSuggestCannotDeleteNonConfigurable);
 
-    if CanStoreDenseElementIndex(Index) then
+    if CanStoreDenseElementIndex(Index, FElements.Count) then
     begin
       // Expand array if necessary
-      while FElements.Count <= Index do
-        FElements.Add(TGocciaHoleValue.HoleValue);
+      ExtendElementsWithHoles(FElements, Int64(Index) + 1);
 
       // Set the element
       FElements[Integer(Index)] := AValue;
@@ -3198,7 +3207,7 @@ var
   Index: Int64;
 begin
   if TryParseArrayElementIndex(AName, Index) and
-     CanStoreDenseElementIndex(Index) and
+     CanStoreDenseElementIndex(Index, FElements.Count) and
      (Index < FElements.Count) and
      not IsArrayHole(FElements[Integer(Index)]) then
     Result := True
@@ -3277,7 +3286,7 @@ var
   Index: Int64;
 begin
   if TryParseArrayElementIndex(AName, Index) and
-     CanStoreDenseElementIndex(Index) and
+     CanStoreDenseElementIndex(Index, FElements.Count) and
      (Index < FElements.Count) and
      not IsArrayHole(FElements[Integer(Index)]) then
     Result := TGocciaPropertyDescriptorData.Create(FElements[Integer(Index)], [pfEnumerable, pfConfigurable, pfWritable])
@@ -3323,7 +3332,7 @@ begin
       ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [AName]),
         SSuggestCannotDeleteNonConfigurable);
 
-    if CanStoreDenseElementIndex(Index) and
+    if CanStoreDenseElementIndex(Index, FElements.Count) and
        (Index < FElements.Count) and
        (FElements[Integer(Index)] <> TGocciaHoleValue.HoleValue) then
     begin
@@ -3350,11 +3359,10 @@ begin
       Exit;
     end;
 
-    if CanStoreDenseElementIndex(Index) and
+    if CanStoreDenseElementIndex(Index, FElements.Count) and
        CanCreateDenseArrayElement(ADescriptor) then
     begin
-      while FElements.Count <= Index do
-        FElements.Add(TGocciaHoleValue.HoleValue);
+      ExtendElementsWithHoles(FElements, Int64(Index) + 1);
       FElements[Integer(Index)] := TGocciaPropertyDescriptorData(ADescriptor).Value;
       if Index + 1 > FLength then
         FLength := Index + 1;
@@ -3365,12 +3373,11 @@ begin
     // Non-dense descriptors must be stored in the ordinary property map so
     // missing/defaulted attributes keep their spec values.
     inherited DefineProperty(AName, ADescriptor);
-    if CanStoreDenseElementIndex(Index) then
-      while FElements.Count <= Index do
-        FElements.Add(TGocciaHoleValue.HoleValue);
+    if CanStoreDenseElementIndex(Index, FElements.Count) then
+      ExtendElementsWithHoles(FElements, Int64(Index) + 1);
     if Index + 1 > FLength then
       FLength := Index + 1;
-    if CanStoreDenseElementIndex(Index) and
+    if CanStoreDenseElementIndex(Index, FElements.Count) and
        not IsArrayHole(FElements[Integer(Index)]) then
       FElements[Integer(Index)] := TGocciaHoleValue.HoleValue;
     Exit;
@@ -3404,7 +3411,7 @@ begin
       Exit(False);
     end;
 
-    if CanStoreDenseElementIndex(Index) and
+    if CanStoreDenseElementIndex(Index, FElements.Count) and
        (Index < FElements.Count) and
        (FElements[Integer(Index)] <> TGocciaHoleValue.HoleValue) then
     begin
@@ -3431,11 +3438,10 @@ begin
       Exit;
     end;
 
-    if CanStoreDenseElementIndex(Index) and
+    if CanStoreDenseElementIndex(Index, FElements.Count) and
        CanCreateDenseArrayElement(ADescriptor) then
     begin
-      while FElements.Count <= Index do
-        FElements.Add(TGocciaHoleValue.HoleValue);
+      ExtendElementsWithHoles(FElements, Int64(Index) + 1);
       FElements[Integer(Index)] := TGocciaPropertyDescriptorData(ADescriptor).Value;
       if Index + 1 > FLength then
         FLength := Index + 1;
@@ -3449,12 +3455,11 @@ begin
     Result := inherited TryDefineProperty(AName, ADescriptor);
     if Result then
     begin
-      if CanStoreDenseElementIndex(Index) then
-        while FElements.Count <= Index do
-          FElements.Add(TGocciaHoleValue.HoleValue);
+      if CanStoreDenseElementIndex(Index, FElements.Count) then
+        ExtendElementsWithHoles(FElements, Int64(Index) + 1);
       if Index + 1 > FLength then
         FLength := Index + 1;
-      if CanStoreDenseElementIndex(Index) and
+      if CanStoreDenseElementIndex(Index, FElements.Count) and
          not IsArrayHole(FElements[Integer(Index)]) then
         FElements[Integer(Index)] := TGocciaHoleValue.HoleValue;
     end;
@@ -3741,8 +3746,7 @@ begin
   end;
 
   // Ensure removed array has correct length (preserve trailing holes)
-  while Removed.Elements.Count < DeleteCount do
-    Removed.Elements.Add(TGocciaHoleValue.HoleValue);
+  ExtendElementsWithHoles(Removed.Elements, DeleteCount);
 
   // Step 17: Return A
   Result := Removed;

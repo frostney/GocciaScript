@@ -30,8 +30,7 @@ begin
     AArray.Elements[AIndex] := AValue
   else
   begin
-    while AArray.Elements.Count < AIndex do
-      AArray.Elements.Add(TGocciaHoleValue.HoleValue);
+    ExtendElementsWithHoles(AArray.Elements, AIndex);
     AArray.Elements.Add(AValue);
   end;
 end;

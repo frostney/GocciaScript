@@ -24,10 +24,40 @@ type
     function ToStringLiteral: TGocciaStringLiteralValue; override;
   end;
 
+// Dense hole-fill: extend AElements with holes until it holds ACount
+// entries.  A single huge index (e.g. `x[2 ** 24] = v`) fills millions of
+// slots in one native call, so the loop mask-polls the cooperative timeout
+// to keep the engine deadline reachable.  If the deadline (or any other
+// exception) fires mid-fill, the list is truncated back to its pre-fill
+// count before re-raising, so callers never observe a partially extended
+// list — extension stays atomic with respect to JS-visible state.
+procedure ExtendElementsWithHoles(const AElements: TGocciaValueList;
+  const ACount: Int64);
+
 implementation
 
 uses
-  Goccia.Constants.TypeNames;
+  Goccia.Constants.TypeNames,
+  Goccia.Timeout;
+
+procedure ExtendElementsWithHoles(const AElements: TGocciaValueList;
+  const ACount: Int64);
+var
+  StartCount: Integer;
+begin
+  StartCount := AElements.Count;
+  try
+    while AElements.Count < ACount do
+    begin
+      AElements.Add(TGocciaHoleValue.HoleValue);
+      if (AElements.Count and 1023) = 0 then
+        CheckExecutionTimeout;
+    end;
+  except
+    AElements.Count := StartCount;
+    raise;
+  end;
+end;
 
 class function TGocciaHoleValue.HoleValue: TGocciaHoleValue;
 begin

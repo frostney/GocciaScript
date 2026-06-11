@@ -169,6 +169,8 @@ uses
   Goccia.Error,
   Goccia.Evaluator,
   Goccia.GarbageCollector,
+  Goccia.InstructionLimit,
+  Goccia.Timeout,
   Goccia.Values.Await,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
@@ -345,6 +347,10 @@ begin
         Promise.Reject(CreateErrorObject(REFERENCE_ERROR_NAME, E.Message));
       on E: TGocciaSyntaxError do
         Promise.Reject(CreateErrorObject(SYNTAX_ERROR_NAME, E.Message));
+      on E: TGocciaTimeoutError do
+        raise;
+      on E: TGocciaInstructionLimitError do
+        raise;
       on E: Exception do
         Promise.Reject(CreateErrorObject(ERROR_NAME, E.Message));
     end;
@@ -401,6 +407,10 @@ begin
       Result := PromiseReject(CreateErrorObject(REFERENCE_ERROR_NAME, E.Message));
     on E: TGocciaSyntaxError do
       Result := PromiseReject(CreateErrorObject(SYNTAX_ERROR_NAME, E.Message));
+    on E: TGocciaTimeoutError do
+      raise;
+    on E: TGocciaInstructionLimitError do
+      raise;
     on E: Exception do
       Result := PromiseReject(CreateErrorObject(ERROR_NAME, E.Message));
   end;
@@ -437,6 +447,10 @@ begin
       Result := PromiseReject(CreateErrorObject(REFERENCE_ERROR_NAME, E.Message));
     on E: TGocciaSyntaxError do
       Result := PromiseReject(CreateErrorObject(SYNTAX_ERROR_NAME, E.Message));
+    on E: TGocciaTimeoutError do
+      raise;
+    on E: TGocciaInstructionLimitError do
+      raise;
     on E: Exception do
       Result := PromiseReject(CreateErrorObject(ERROR_NAME, E.Message));
   end;
@@ -473,6 +487,10 @@ begin
       Result := PromiseReject(CreateErrorObject(REFERENCE_ERROR_NAME, E.Message));
     on E: TGocciaSyntaxError do
       Result := PromiseReject(CreateErrorObject(SYNTAX_ERROR_NAME, E.Message));
+    on E: TGocciaTimeoutError do
+      raise;
+    on E: TGocciaInstructionLimitError do
+      raise;
     on E: Exception do
       Result := PromiseReject(CreateErrorObject(ERROR_NAME, E.Message));
   end;

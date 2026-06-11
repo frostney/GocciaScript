@@ -502,6 +502,74 @@ console.log("--timeout (bytecode)...");
   if (json.error?.type !== "TimeoutError") throw new Error(`Expected TimeoutError, got ${json.error?.type}`);
 }
 
+// -- --timeout inside long-running NATIVE operations ----------------------------
+//
+// A single JS statement can stall inside one native call (dense hole-fill for
+// a huge array index, or an unanchored regex scan over a long subject).  The
+// deadline must interrupt those loops too, not just the dispatch loop between
+// JS-level steps.
+
+console.log("--timeout (native sparse-array fill, interpreted)...");
+{
+  const fill = "const x = []; x[2 ** 31 - 2] = 1;\n";
+  const { exitCode, json } = runLoaderJson(fill, ["--timeout=50"], { timeout: 10_000 });
+  if (exitCode !== 1) throw new Error(`Array-fill timeout exit code should be 1, got ${exitCode}`);
+  if (json.error?.type !== "TimeoutError") throw new Error(`Expected TimeoutError, got ${json.error?.type}`);
+}
+
+console.log("--timeout (native sparse-array fill, bytecode)...");
+{
+  const fill = "const x = []; x[2 ** 31 - 2] = 1;\n";
+  const { exitCode, json } = runLoaderJson(fill, ["--timeout=50", "--mode=bytecode"], { timeout: 10_000 });
+  if (exitCode !== 1) throw new Error(`Bytecode array-fill timeout exit code should be 1, got ${exitCode}`);
+  if (json.error?.type !== "TimeoutError") throw new Error(`Expected TimeoutError, got ${json.error?.type}`);
+}
+
+console.log("--timeout (native regex scan, interpreted)...");
+{
+  const scan = 'const s = "a".repeat(20000000); /zz/.test(s);\n';
+  const { exitCode, json } = runLoaderJson(scan, ["--timeout=50"], { timeout: 10_000 });
+  if (exitCode !== 1) throw new Error(`Regex-scan timeout exit code should be 1, got ${exitCode}`);
+  if (json.error?.type !== "TimeoutError") throw new Error(`Expected TimeoutError, got ${json.error?.type}`);
+}
+
+console.log("--timeout (native regex scan, bytecode)...");
+{
+  const scan = 'const s = "a".repeat(20000000); /zz/.test(s);\n';
+  const { exitCode, json } = runLoaderJson(scan, ["--timeout=50", "--mode=bytecode"], { timeout: 10_000 });
+  if (exitCode !== 1) throw new Error(`Bytecode regex-scan timeout exit code should be 1, got ${exitCode}`);
+  if (json.error?.type !== "TimeoutError") throw new Error(`Expected TimeoutError, got ${json.error?.type}`);
+}
+
+// -- --timeout must escape promise boundaries (dynamic import) ------------------
+//
+// The deadline abort must not be convertible into a JS-catchable rejection:
+// a module that stalls inside import() previously surfaced as a caught
+// rejection and the script "succeeded" with exit 0, defeating --timeout.
+
+for (const modeArgs of [[], ["--mode=bytecode"]] as const) {
+  const label = modeArgs.length ? "bytecode" : "interpreted";
+  console.log(`--timeout (dynamic import stall, ${label})...`);
+  const tmp = mkdtemp("goccia-timeout-import-");
+  try {
+    const dep = join(tmp, "dep.js");
+    writeFileSync(dep, 'const s = "a".repeat(20000000); /zz/.test(s);\nexport const ready = true;\n');
+    const main = join(tmp, "main.js");
+    writeFileSync(main, 'import("./dep.js").then(() => console.log("LOADED")).catch((e) => console.log("CAUGHT: " + e));\n');
+    const proc = Bun.spawnSync(
+      [LOADER, main, "--output=json", "--timeout=100", ...modeArgs],
+      { stdout: "pipe", stderr: "pipe", timeout: 10_000 },
+    );
+    const json = JSON.parse(proc.stdout.toString());
+    if (proc.exitCode !== 1) throw new Error(`Dynamic-import timeout (${label}) exit code should be 1, got ${proc.exitCode}`);
+    if (json.error?.type !== "TimeoutError") throw new Error(`Expected TimeoutError (${label}), got ${json.error?.type}`);
+    const printed = (json.stdout ?? "") + proc.stdout.toString();
+    if (printed.includes("CAUGHT")) throw new Error(`Timeout was swallowed by JS .catch() (${label})`);
+  } finally {
+    clean(tmp);
+  }
+}
+
 // -- --max-instructions (Loader: infinite loop, both execution modes) -----------
 
 console.log("--max-instructions (interpreted)...");

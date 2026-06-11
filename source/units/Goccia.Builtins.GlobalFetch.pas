@@ -45,6 +45,8 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.FetchManager,
+  Goccia.InstructionLimit,
+  Goccia.Timeout,
   Goccia.Values.ErrorHelper,
   Goccia.Values.HeadersValue,
   Goccia.Values.NativeFunction,
@@ -222,6 +224,10 @@ begin
     TGocciaFetchManager.Instance.StartFetch(URLStr, Method, RequestHeaders,
       Promise);
   except
+    on E: TGocciaTimeoutError do
+      raise;
+    on E: TGocciaInstructionLimitError do
+      raise;
     on E: Exception do
       Promise.Reject(CreateErrorObject('TypeError', 'fetch failed: ' + E.Message));
   end;

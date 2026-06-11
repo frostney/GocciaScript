@@ -903,33 +903,214 @@ end;
 //   - Nested braces {…}
 //   - String literals '…' and "…" (with \ escapes)
 //   - Template literals `…` (with nested ${…} via mutual recursion)
+//   - Regex literals /…/ (with [\ ] classes and \ escapes), so quotes and
+//     braces inside a pattern cannot flip the string/brace tracking
 //   - Line comments //…
 //   - Block comments /*…*/
 //   - Line terminators (CR, CRLF, LF, LS, PS) with line/column tracking
+//
+// Regex-vs-division uses the same classification as UpdateRegexContext: a
+// slash after a completed primary expression (identifier, literal, `]`,
+// closing quote/backtick, postfix ++/--) divides; everywhere else it starts
+// a regex.  The scanner tracks the last significant character and the last
+// word so keyword boundaries (`return /re/`) classify like the main lexer.
 procedure TGocciaLexer.ScanInterpolationExpression(var ASB, ARawSB: TStringBuffer);
 var
   BraceCount: Integer;
   C, Quote: Char;
+  LastSignificant, PrevSignificant: Char;
+  LastWord: string;
+  WordActive: Boolean;
+  // Mirrors the main lexer's paren-regex context: each '(' records whether
+  // it opens an if/while/for head, so the matching ')' can re-allow a regex.
+  ParenAllowsRegex: array of Boolean;
+  ParenDepth: Integer;
+  LastParenAllowsRegex: Boolean;
+
+  procedure PushParenContext(const AAllowsRegexAfter: Boolean);
+  begin
+    if ParenDepth >= Length(ParenAllowsRegex) then
+      SetLength(ParenAllowsRegex, ParenDepth * 2 + 8);
+    ParenAllowsRegex[ParenDepth] := AAllowsRegexAfter;
+    Inc(ParenDepth);
+  end;
+
+  function PopParenContext: Boolean;
+  begin
+    if ParenDepth = 0 then
+      Exit(False);
+    Dec(ParenDepth);
+    Result := ParenAllowsRegex[ParenDepth];
+  end;
+
+  function WordIsStatementHeadKeyword: Boolean;
+  var
+    KeywordType: TGocciaTokenType;
+  begin
+    Result := (LastSignificant in ['a'..'z', 'A'..'Z']) and
+      TryKeywordToken(LastWord, KeywordType) and
+      (KeywordType in [gttIf, gttWhile, gttFor]);
+  end;
+
+  procedure NoteSignificant(const AChar: Char);
+  begin
+    PrevSignificant := LastSignificant;
+    LastSignificant := AChar;
+    if (AChar in ['a'..'z', 'A'..'Z', '0'..'9', '_', '$']) or
+       (AChar > #127) then
+    begin
+      if WordActive then
+        LastWord := LastWord + AChar
+      else
+        LastWord := AChar;
+      WordActive := True;
+    end
+    else
+      WordActive := False;
+  end;
+
+  function SlashStartsRegex: Boolean;
+  var
+    KeywordType: TGocciaTokenType;
+  begin
+    if LastSignificant = #0 then
+      Exit(True); // expression start
+    if (LastSignificant in ['a'..'z', 'A'..'Z', '0'..'9', '_', '$']) or
+       (LastSignificant > #127) then
+    begin
+      // Mirror UpdateRegexContext: keywords allow a regex except the
+      // identifier-like ones that end a primary expression.
+      if TryKeywordToken(LastWord, KeywordType) then
+        Exit(not (KeywordType in [gttTrue, gttFalse, gttNull, gttAs,
+          gttFrom, gttStatic, gttThis, gttSuper]));
+      Exit(False);
+    end;
+    // A trailing-dot numeric literal (`1.`) is one Number token in the real
+    // lexer, so a slash after it divides; a bare member-access dot keeps the
+    // regex-allowed default the main lexer uses for gttDot.
+    if (LastSignificant = '.') and (PrevSignificant in ['0'..'9']) then
+      Exit(False);
+    if (LastSignificant in ['+', '-']) and
+       (PrevSignificant = LastSignificant) then
+      Exit(False); // postfix ++/-- ends a primary expression
+    // Mirror PushParenRegexContext: the ')' closing an if/while/for head
+    // allows a regex statement to follow; any other ')' ends a primary
+    // expression and divides.
+    if LastSignificant = ')' then
+      Exit(LastParenAllowsRegex);
+    Result := not (LastSignificant in [']', '''', '"', '`']);
+  end;
+
+  // Pure lookahead from the character after the already-consumed '/': does a
+  // regex literal body (with \ escapes and [..] classes) close with '/' on
+  // this line?  Misclassified division would otherwise swallow state-bearing
+  // characters ('}', quotes) up to end of line; when no same-line closing
+  // slash exists we keep the slash as division and degrade gracefully.
+  function RegexBodyClosesOnLine: Boolean;
+  var
+    Idx: Integer;
+    InClass: Boolean;
+  begin
+    Result := False;
+    InClass := False;
+    Idx := FCurrent;
+    while Idx <= Length(FSource) do
+    begin
+      case FSource[Idx] of
+        #10, #13:
+          Exit(False);
+        UTF8_LINE_TERMINATOR_LEAD_BYTE:
+          if (Idx + 2 <= Length(FSource)) and
+             (FSource[Idx + 1] = UTF8_LINE_TERMINATOR_CONTINUATION_BYTE) and
+             ((FSource[Idx + 2] = UTF8_LINE_SEPARATOR_FINAL_BYTE) or
+              (FSource[Idx + 2] = UTF8_PARAGRAPH_SEPARATOR_FINAL_BYTE)) then
+            Exit(False);
+        '\':
+          Inc(Idx); // skip the escaped character
+        '[':
+          InClass := True;
+        ']':
+          InClass := False;
+        '/':
+          if not InClass then
+            Exit(True);
+      end;
+      Inc(Idx);
+    end;
+  end;
+
+  // Called with the opening / already appended.  Consumes the regex body
+  // verbatim.  Bails at a line terminator: regex literals cannot span
+  // lines, so a misclassified division degrades to ordinary character
+  // scanning instead of swallowing the rest of the source.
+  procedure ScanRegexBody;
+  var
+    R: Char;
+    InClass: Boolean;
+  begin
+    InClass := False;
+    while not IsAtEnd and not IsLineTerminator do
+    begin
+      R := Peek;
+      if R = '\' then
+      begin
+        AppendCurrent(ASB, ARawSB);
+        if not IsAtEnd and not IsLineTerminator then
+          AppendCurrent(ASB, ARawSB);
+        Continue;
+      end;
+      if InClass then
+      begin
+        if R = ']' then
+          InClass := False;
+        AppendCurrent(ASB, ARawSB);
+        Continue;
+      end;
+      if R = '[' then
+      begin
+        InClass := True;
+        AppendCurrent(ASB, ARawSB);
+        Continue;
+      end;
+      AppendCurrent(ASB, ARawSB);
+      if R = '/' then
+        Exit; // closing delimiter; flags are scanned by the main loop
+    end;
+  end;
+
 begin
   BraceCount := 1;
+  LastSignificant := #0;
+  PrevSignificant := #0;
+  LastWord := '';
+  WordActive := False;
+  ParenDepth := 0;
+  LastParenAllowsRegex := False;
   while (BraceCount > 0) and not IsAtEnd do
   begin
     C := Peek;
     if ((C = #13) or (C = #10) or (C = UTF8_LINE_TERMINATOR_LEAD_BYTE)) and
        AppendLineTerminator(ASB, ARawSB) then
+    begin
+      WordActive := False;
       Continue;
+    end;
 
     case C of
       '{':
       begin
         Inc(BraceCount);
         AppendCurrent(ASB, ARawSB);
+        NoteSignificant('{');
       end;
       '}':
       begin
         Dec(BraceCount);
         if BraceCount > 0 then
+        begin
           AppendCurrent(ASB, ARawSB);
+          NoteSignificant('}');
+        end;
         // When BraceCount = 0, leave the closing } unconsumed for the caller
       end;
       '''', '"':
@@ -959,12 +1140,14 @@ begin
           else
             AppendCurrent(ASB, ARawSB);
         end;
+        NoteSignificant(Quote);
       end;
       '`':
       begin
         // Nested template literal — delegate to mutual recursion
         AppendCurrent(ASB, ARawSB);
         ScanNestedTemplateInExpression(ASB, ARawSB);
+        NoteSignificant('`');
       end;
       '/':
       begin
@@ -1001,12 +1184,35 @@ begin
               else
                 AppendCurrent(ASB, ARawSB);
             end;
-          end;
-          // If neither // nor /*, the / was already appended — continue
-        end;
+          end
+          else if SlashStartsRegex and RegexBodyClosesOnLine then
+          begin
+            ScanRegexBody;
+            // A regex is a completed primary expression; ')' marks that, and
+            // clearing the paren flag keeps a following slash as division.
+            LastParenAllowsRegex := False;
+            NoteSignificant(')');
+          end
+          else
+            NoteSignificant('/');
+        end
+        else
+          NoteSignificant('/');
       end;
     else
-      AppendCurrent(ASB, ARawSB);
+      begin
+        AppendCurrent(ASB, ARawSB);
+        // Capture the paren-regex context before NoteSignificant resets the
+        // word state: '(' records whether it opens an if/while/for head.
+        if C = '(' then
+          PushParenContext(WordIsStatementHeadKeyword)
+        else if C = ')' then
+          LastParenAllowsRegex := PopParenContext;
+        if C > ' ' then
+          NoteSignificant(C)
+        else
+          WordActive := False;
+      end;
     end;
   end;
 end;

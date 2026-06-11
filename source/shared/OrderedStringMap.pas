@@ -58,6 +58,18 @@ type
     FDeletedCount: Integer;
     FEntryCount: Integer;
     FBucketCount: Integer;
+    // Monotonic stamp for entry-index inline caches.  Unique across all map
+    // instances of this instantiation (seeded from the shared class counter)
+    // and re-stamped by every operation that can invalidate a previously
+    // observed entry index (Remove, Compact, Clear).  Adds never invalidate:
+    // entries append.
+    FEntryVersion: Cardinal;
+    class var FEntryVersionCounter: LongInt;
+    // Interlocked so maps created on worker threads (parallel test runner)
+    // still receive unique stamps; a stamp recorded against one map instance
+    // can therefore never validate against a different instance that happens
+    // to reuse the same address.
+    class function NextEntryVersion: Cardinal; static; inline;
 
     class function HashKey(const AKey: string): Cardinal; static; inline;
     class function KeysEqual(const A, B: string): Boolean; static; inline;
@@ -90,8 +102,17 @@ type
     function GetEnumerator: TEnumerator; inline;
     function EntryAt(AIndex: Integer): TBaseMap<string, TValue>.TKeyValuePair;
 
+    // Entry-index access for version-validated inline caches: look up an
+    // entry index once, then re-read its value directly while EntryVersion
+    // is unchanged.
+    function TryGetEntryIndex(const AKey: string; out AIndex: Integer): Boolean;
+    function TryGetValueAtEntry(const AIndex: Integer;
+      out AValue: TValue): Boolean; inline;
+    function KeyAtEntry(const AIndex: Integer): string;
+
     property Capacity: Integer read FBucketCount;
     property DeletedCount: Integer read FDeletedCount;
+    property EntryVersion: Cardinal read FEntryVersion;
   end;
 
   TStringStringMap = TOrderedStringMap<string>;
@@ -101,6 +122,11 @@ implementation
 { Hash / Equality — static inline: DJB2 on string characters }
 
 {$PUSH}{$R-}{$Q-}
+class function TOrderedStringMap<TValue>.NextEntryVersion: Cardinal;
+begin
+  Result := Cardinal(InterLockedIncrement(FEntryVersionCounter));
+end;
+
 class function TOrderedStringMap<TValue>.HashKey(const AKey: string): Cardinal;
 var
   I: Integer;
@@ -211,6 +237,7 @@ begin
     end;
   FEntries := NewEntries;
   FEntryCount := FCount;
+  FEntryVersion := NextEntryVersion;
   Rehash(FBucketCount);
 end;
 
@@ -229,6 +256,7 @@ begin
   FCount := 0;
   FDeletedCount := 0;
   FEntryCount := 0;
+  FEntryVersion := NextEntryVersion;
 
   if AInitialCapacity <= 0 then
   begin
@@ -357,6 +385,7 @@ begin
   FBuckets[BucketIdx] := DELETED_SLOT;
   Inc(FDeletedCount);
   Dec(FCount);
+  FEntryVersion := NextEntryVersion;
 end;
 
 procedure TOrderedStringMap<TValue>.Clear;
@@ -369,6 +398,7 @@ begin
   FCount := 0;
   FDeletedCount := 0;
   FEntryCount := 0;
+  FEntryVersion := NextEntryVersion;
 end;
 
 { Accessors }
@@ -468,6 +498,42 @@ begin
       end;
       Inc(J);
     end;
+end;
+
+function TOrderedStringMap<TValue>.TryGetEntryIndex(const AKey: string;
+  out AIndex: Integer): Boolean;
+var
+  Hash: Cardinal;
+  BucketIdx: Integer;
+begin
+  AIndex := -1;
+  if FBucketCount = 0 then
+    Exit(False);
+  Hash := HashKey(AKey);
+  Result := FindBucket(AKey, Hash, BucketIdx);
+  if Result then
+    AIndex := FBuckets[BucketIdx];
+end;
+
+function TOrderedStringMap<TValue>.TryGetValueAtEntry(const AIndex: Integer;
+  out AValue: TValue): Boolean;
+begin
+  // Callers must pair this with an EntryVersion check; while the version is
+  // unchanged an index obtained from TryGetEntryIndex stays active and keeps
+  // its key (Remove/Compact/Clear re-stamp the version).
+  Result := (AIndex >= 0) and (AIndex < FEntryCount) and FEntries[AIndex].Active;
+  if Result then
+    AValue := FEntries[AIndex].Value
+  else
+    AValue := Default(TValue);
+end;
+
+function TOrderedStringMap<TValue>.KeyAtEntry(const AIndex: Integer): string;
+begin
+  if (AIndex >= 0) and (AIndex < FEntryCount) then
+    Result := FEntries[AIndex].Key
+  else
+    Result := '';
 end;
 
 end.

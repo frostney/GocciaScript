@@ -23,7 +23,9 @@ uses
   Goccia.Error.Suggestions,
   Goccia.FetchManager,
   Goccia.GarbageCollector,
+  Goccia.InstructionLimit,
   Goccia.MicrotaskQueue,
+  Goccia.Timeout,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
@@ -114,6 +116,10 @@ begin
             try
               TGocciaFunctionBase(ThenMethod).Call(ThenArgs, AValue);
             except
+              on E: TGocciaTimeoutError do
+                raise;
+              on E: TGocciaInstructionLimitError do
+                raise;
               on E: Exception do
                 RejectPromiseWithException(Promise, E);
             end;
@@ -130,6 +136,10 @@ begin
           Exit;
         end;
       except
+        on E: TGocciaTimeoutError do
+          raise;
+        on E: TGocciaInstructionLimitError do
+          raise;
         on E: Exception do
           RejectPromiseWithException(Promise, E);
       end;

@@ -892,8 +892,10 @@ uses
   Goccia.Evaluator.PatternMatching,
   Goccia.GarbageCollector,
   Goccia.ImportMeta,
+  Goccia.InstructionLimit,
   Goccia.RegExp.Runtime,
   Goccia.Scope,
+  Goccia.Timeout,
   Goccia.Values.BigIntValue,
   Goccia.Values.ClassHelper,
   Goccia.Values.ClassValue,
@@ -2339,6 +2341,10 @@ begin
         Promise.Reject(CreateErrorObject(TYPE_ERROR_NAME, E.Message));
       on E: TGocciaReferenceError do
         Promise.Reject(CreateErrorObject(REFERENCE_ERROR_NAME, E.Message));
+      on E: TGocciaTimeoutError do
+        raise;
+      on E: TGocciaInstructionLimitError do
+        raise;
       on E: Exception do
         Promise.Reject(CreateErrorObject(ERROR_NAME, E.Message));
     end;

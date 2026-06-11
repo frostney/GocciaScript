@@ -318,15 +318,15 @@ jobs:
 
       - name: Run test262 conformance suite
         continue-on-error: true
-        # --jobs=2 (not 4): GH-hosted runners share the host CPU with
-        # neighbour VMs, and at higher concurrency scheduler jitter trips
-        # per-test deadlines.  Two workers leaves enough CPU headroom
-        # while still halving wall time vs sequential execution.
+        # --jobs=4 matches the 4 vCPUs on GH-hosted ubuntu-latest runners
+        # for public repos.  Per-test subprocesses tolerate scheduler
+        # jitter (each test gets its own engine-side deadline), so the
+        # only remaining limit is core count.
         run: |
           bun scripts/run_test262_suite.ts \
             --suite-dir test262-suite \
             --mode=bytecode \
-            --jobs=2 \
+            --jobs=4 \
             --output=test262-results.json
 
       - name: Upload test262 results
