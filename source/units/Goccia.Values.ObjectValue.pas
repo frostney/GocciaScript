@@ -141,6 +141,7 @@ uses
   Goccia.Values.FunctionBase,
   Goccia.Values.FunctionValue,
   Goccia.Values.NativeFunction,
+  Goccia.Values.Shape,
   Goccia.Values.ToPrimitive;
 
 // Object.prototype lives in a per-realm slot.  See Goccia.Realm and the
@@ -222,7 +223,9 @@ end;
 constructor TGocciaObjectValue.Create(const APrototype: TGocciaObjectValue = nil;
   const APropertyCapacity: Integer = 0);
 begin
-  FProperties := TGocciaPropertyMap.Create(APropertyCapacity);
+  // Shaped map: layout tracking for the VM's shape-validated inline caches
+  // rides on the property map itself, so every mutation path stays in sync.
+  FProperties := TGocciaShapedPropertyMap.Create(APropertyCapacity);
   FSymbolDescriptors := TSymbolDescriptorMap.Create;
   FSymbolInsertionOrder := TList<TGocciaSymbolValue>.Create;
   FPrototype := APrototype;

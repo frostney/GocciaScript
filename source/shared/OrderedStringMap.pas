@@ -82,6 +82,11 @@ type
     procedure Compact;
 
   protected
+    // Called exactly once per appended entry (new key), never for value
+    // replacement on an existing key. Default is a no-op; descendants hook
+    // structural growth here (e.g. layout/shape tracking) without paying a
+    // second hash lookup.
+    procedure AfterNewEntryAdded(const AKey: string); virtual;
     function GetCount: Integer; override;
     function GetValue(const AKey: string): TValue; override;
     procedure SetValue(const AKey: string; const AValue: TValue); override;
@@ -282,6 +287,11 @@ end;
 
 { Core operations }
 
+procedure TOrderedStringMap<TValue>.AfterNewEntryAdded(const AKey: string);
+begin
+  // Default: no-op. Descendants hook structural growth here.
+end;
+
 procedure TOrderedStringMap<TValue>.Add(const AKey: string; const AValue: TValue);
 var
   Hash: Cardinal;
@@ -327,6 +337,7 @@ begin
     Dec(FDeletedCount);
   FBuckets[BucketIdx] := EntryIdx;
   Inc(FCount);
+  AfterNewEntryAdded(AKey);
 end;
 
 function TOrderedStringMap<TValue>.TryGetValue(const AKey: string;
