@@ -28,7 +28,7 @@
 | `with` statement | ES1 | Opt-in for script source (`--compat-non-strict-mode`) for compatibility with object-environment lookup, `Symbol.unscopables`, closure capture, method-call receivers, and non-strict write failures — prefer explicit property access |
 | `delete` non-strict return values | ES1 | Strict by default; script source `--compat-non-strict-mode` makes `delete identifier` handle declared bindings, configurable global object properties, and unresolvable names with legacy booleans; non-configurable property deletion returns `false` |
 | ASI (automatic semicolon insertion) | ES1 | Opt-in (`--compat-asi`) |
-| Global `parseInt`, `parseFloat`, `isNaN`, `isFinite` | ES1 | Excluded — use `Number.*` |
+| Global `parseInt`, `parseFloat`, `isNaN`, `isFinite` | ES1 | Supported as legacy global shims installed through Goccia.shims; `parseInt`/`parseFloat` delegate to `Number.parseInt`/`Number.parseFloat`, while `isNaN`/`isFinite` keep standard global coercion behavior. Prefer `Number.*` in new code |
 | `let` / `const` | ES2015 | Supported |
 | Arrow functions | ES2015 | Supported |
 | Classes (constructor, methods, static, getters/setters) | ES2015 | Supported |

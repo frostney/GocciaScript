@@ -61,7 +61,7 @@ export function MermaidBlock({ code }: { code: string }) {
           theme: theme === "dark" ? "dark" : "neutral",
           // `strict` disables click handlers and HTML interpolation in
           // diagram source. Our diagrams come from our own docs, but XSS
-          // posture is "deny by default" — we don't need either feature, so
+          // policy is "deny by default" — we don't need either feature, so
           // there's no reason to grant them.
           securityLevel: "strict",
           fontFamily: "ui-monospace, monospace",

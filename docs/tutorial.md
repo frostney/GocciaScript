@@ -4,14 +4,14 @@
 
 ## Executive Summary
 
-- **Familiar syntax** — GocciaScript is modern JavaScript minus the quirks; `.js` files, no transpilation needed
+- **Familiar syntax** — GocciaScript runs modern ECMAScript syntax with sandbox-first recommended defaults; `.js` files, no transpilation needed
 - **Key differences** — No `var`, `function`, traditional `for` loops, or `while` loops by default; use `let`/`const`, arrow functions, strict equality, `for...of`/array methods
 - **Full walkthrough** — Variables, arrow functions, arrays, objects, classes, modules, async/await
 - **Next steps** — Links to language restrictions, built-in API reference, and example programs
 
 ## What is GocciaScript?
 
-GocciaScript is a subset of JavaScript implemented in FreePascal. It strips away the quirks of early ECMAScript by default — `var`, `function`, loose equality, `eval`, traditional `for` loops, and `while` loops — and keeps the modern parts: arrow functions, classes with private fields, async/await, modules, and implicit strict mode. If you've written modern JavaScript, you already know most of GocciaScript.
+GocciaScript is a FreePascal implementation of ECMAScript with sandbox-first recommended defaults. It keeps modern JavaScript syntax front and center — arrow functions, classes with private fields, async/await, modules, and implicit strict mode — while legacy forms such as `var`, `function`, loose equality, traditional `for` loops, and `while` loops are available through compatibility flags when conformance or host requirements need them. If you've written modern JavaScript, you already know most of GocciaScript.
 
 ## Prerequisites
 
@@ -320,8 +320,8 @@ Here's a quick reference of GocciaScript's key restrictions:
 | sloppy assignment failures | Strict by default | script source `--compat-non-strict-mode` when porting code that expects failed property writes to be ignored |
 | sloppy function `this` | Strict by default | script source `--compat-non-strict-mode` when porting scripts that expect `globalThis` |
 | legacy `delete` returns | Strict by default | script source `--compat-non-strict-mode` when porting sloppy scripts |
-| `parseInt("10")` | Not available as global | `Number.parseInt("10")` |
-| `isNaN(x)` | Not available as global | `Number.isNaN(x)` |
+| `parseInt("10")` | Shimmed legacy global | Prefer `Number.parseInt("10")` in new code |
+| `isNaN(x)` | Shimmed legacy global with coercion | Prefer `Number.isNaN(x)` when you do not want coercion |
 
 These restrictions are intentional — they eliminate common sources of bugs and security issues. See [Language](language.md) for the full rationale.
 

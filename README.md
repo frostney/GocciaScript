@@ -2,13 +2,15 @@
 
 ![GocciaScript logo](./logo.png)
 
-A drop of JavaScript — A subset of ECMAScript 2027+ implemented in FreePascal
+A drop of JavaScript — A sandbox-first ECMAScript runtime implemented in FreePascal
 
-It's based on the thought "What if we implement ECMAScript today, but without the quirks of early ECMAScript implementations". Features that are error-prone, redundant, or security risks are intentionally excluded. See [Language](docs/language.md) for the full rationale.
+It's based on the thought "What if we implement ECMAScript today, but make the recommended defaults modern, explicit, and sandbox-first". Error-prone, redundant, or high-risk legacy forms are off by default, while the engine and runtime can opt into the compatibility behavior needed for ECMAScript conformance and legacy code. See [Language](docs/language.md) for the full rationale.
 
 ## Features
 
-GocciaScript implements a modern subset of ECMAScript: `let`/`const`, arrow functions, classes with private fields, `for...of`, async/await, ES modules, decorators, and TypeScript-style type annotations. Features that are error-prone, redundant, or security risks (`var`, `function` keyword, `==`/`!=`, `eval`, labels, traditional loops, `for...in`) are excluded by default; selected legacy forms are available through explicit compatibility flags.
+GocciaScript implements modern ECMAScript: `let`/`const`, arrow functions, classes with private fields, `for...of`, async/await, ES modules, decorators, and TypeScript-style type annotations. Features that are error-prone, redundant, or security risks (`var`, `function` keyword, `==`/`!=`, `eval`, labels, traditional loops, `for...in`) are excluded by default; selected legacy forms are available through explicit conformance-focused compatibility flags.
+
+Full ECMAScript compatibility is now a release-track objective. The default language remains curated and sandbox-first, but test262 runs on every PR and main commit so conformance work can be measured from generated reports instead of hand-maintained status claims.
 
 See [Language](docs/language.md) for the complete specification of supported features, TC39 proposals, and exclusions.
 
@@ -271,7 +273,7 @@ See [Core patterns](docs/core-patterns.md) and [Interpreter](docs/interpreter.md
 |----------|-------------|
 | [Project Goals](docs/goals.md) | Why GocciaScript exists: sandboxed AI agent runtime and embeddable desktop platform |
 | [Tutorial](docs/tutorial.md) | Your first GocciaScript program — a guided walkthrough for newcomers |
-| [Language](docs/language.md) | ECMAScript subset, excluded features, and rationale |
+| [Language](docs/language.md) | ECMAScript support, recommended defaults, compatibility flags, and rationale |
 | [Language Tables](docs/language-tables.md) | Quick-reference: ECMAScript feature matrix and TC39 proposal status |
 | [Built-in Objects](docs/built-ins.md) | Available built-ins and API reference |
 | [Temporal Built-ins](docs/built-ins-temporal.md) | Temporal API: dates, times, durations, time zones |

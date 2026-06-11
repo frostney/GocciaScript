@@ -1,23 +1,42 @@
 <!-- doc-length-limit: 1000 -->
 # Language
 
-*GocciaScript's ECMAScript subset: what we implement, TC39 proposals, and what we exclude.*
+*GocciaScript's ECMAScript support: recommended defaults, compatibility flags, TC39 proposals, and conformance shims.*
 
 ## Executive Summary
 
-- **Modern subset** — `let`/`const`, arrow functions, classes with private fields, `for...of`, async/await, ES modules
+- **Recommended defaults** — Modern, explicit ECMAScript: `let`/`const`, arrow functions, classes with private fields, `for...of`, async/await, ES modules
+- **Conformance objective** — Full ECMAScript compatibility is a release-track objective, measured by generated test262 reports
 - **TC39 proposals** — Decorators, decorator metadata, pattern matching, types as comments, enums, `Math.clamp`
 - **Excluded by design** — Runtime `eval`, wildcard re-exports
 - **Graceful handling** — Parser-recognized excluded or disabled syntax (`==`/`!=` when `--compat-loose-equality` is off, labels when `--compat-label` is off, `while`/`do...while` when `--compat-while-loops` is off, `with` when `--compat-non-strict-mode` is off, traditional `for(;;)` when `--compat-traditional-for-loop` is off, `for...in` when `--compat-for-in-loop` is off) parses successfully but executes as a no-op with a warning and suggestion
-- **Opt-in toggles** — ASI (`--compat-asi`), `var` declarations (`--compat-var`), `function` keyword (`--compat-function`), implicit `arguments` objects (`--compat-arguments-object`), non-strict Script compatibility (`--compat-non-strict-mode` for `with`, silent assignment failures, legacy `delete` returns, and sloppy `this`), loose equality (`--compat-loose-equality`), labels (`--compat-label`), traditional `for(init; test; update)` loops (`--compat-traditional-for-loop`), `for...in` loops (`--compat-for-in-loop`), `while`/`do...while` loops (`--compat-while-loops`), experimental JavaScript `ModuleSource` objects (`--experimental-js-module-source`), runtime type enforcement (`--strict-types`)
+- **Compatibility flags** — `--compat-*` flags primarily exist for ECMAScript conformance and legacy semantic requirements. Userland code should usually prefer default forms instead of enabling ASI (`--compat-asi`), `var` (`--compat-var`), `function` (`--compat-function`), implicit `arguments` (`--compat-arguments-object`), non-strict Script compatibility (`--compat-non-strict-mode`), loose equality (`--compat-loose-equality`), labels (`--compat-label`), traditional loops (`--compat-traditional-for-loop`), `for...in` (`--compat-for-in-loop`), or `while`/`do...while` (`--compat-while-loops`) preemptively.
 - **Conformance-only host hooks** — `GocciaScriptLoaderBare --test262-host` exposes private test262 hooks (`eval`, `evalScript`, `createRealm`) without making them part of the public runtime surface
 - **Default preprocessors** — JSX (enabled by default via `DefaultPreprocessors`)
 
-GocciaScript implements a curated subset of ECMAScript. This document details what's supported, what's excluded, and the rationale for each decision. For quick-reference tables of every feature and TC39 proposal, see [Language Tables](language-tables.md).
+GocciaScript implements ECMAScript with curated recommended defaults. This document details what's supported by default, what lives behind compatibility flags, what is shimmed for legacy conformance, and the rationale for each decision. For quick-reference tables of every feature and TC39 proposal, see [Language Tables](language-tables.md).
 
 ## Guiding Principle
 
-> **A drop of JavaScript** — GocciaScript includes the parts of JavaScript that lead to clear, predictable, and secure code. Features that are error-prone, redundant, or security risks are excluded.
+> **A drop of JavaScript** — GocciaScript recommends the parts of JavaScript that lead to clear, predictable, and secure code by default. Legacy features that are error-prone, redundant, or security risks are isolated behind compatibility flags or shims where conformance requires them.
+
+## Compatibility Flags
+
+Compatibility flags are parser and runtime policy switches for ECMAScript conformance work, test262 execution, and hosts that deliberately need legacy JavaScript behavior. They are not the recommended starting point for generated code or ordinary userland scripts. AI coding agents should usually emit the default forms first, then enable a flag only when the surrounding project, test, or host explicitly needs the legacy semantics.
+
+| Flag | Enables | Recommended userland default |
+|------|---------|--------------------------|
+| `--compat-asi` | Automatic semicolon insertion | Use explicit semicolons |
+| `--compat-var` | `var` declarations and ES script-global `var` binding behavior | Use `let` / `const` |
+| `--compat-function` | `function` declarations and expressions | Use arrows, methods, accessors, and class methods |
+| `--compat-non-strict-mode` | Script-source `arguments`, `with`, non-strict failed assignments, legacy `delete` return values, and sloppy ordinary-function `this` coercion | Use rest parameters, explicit property access, strict assignment/delete behavior, and explicit receivers |
+| `--compat-loose-equality` | `==` and `!=` | Use `===` and `!==` |
+| `--compat-label` | Labeled statements and labeled `break` / `continue` | Use helper functions or explicit state |
+| `--compat-traditional-for-loop` | `for(init; test; update)` | Use `for...of`, iterators, or array methods |
+| `--compat-for-in-loop` | `for...in` property enumeration | Use `Object.keys()` / `Object.entries()` with `for...of` |
+| `--compat-while-loops` | `while` and `do...while` | Use `for...of`, iterators, or array methods when possible |
+
+Runtime type enforcement (`--strict-types`) is separate from ECMAScript compatibility. It enforces GocciaScript's parsed type annotations at runtime and is opt-in for hosts that want that extra contract.
 
 ## Supported Features
 
@@ -420,7 +439,7 @@ Current gaps from full ECMAScript RegExp semantics:
 
 ## TC39 Proposal Details
 
-GocciaScript implements several active TC39 proposals alongside the core ECMAScript subset.
+GocciaScript implements several active TC39 proposals alongside core ECMAScript support.
 
 ### Decorators (Stage 3)
 
@@ -896,21 +915,21 @@ Generator method shorthand (`*method()` and `async *method()`) is supported by d
 
 These are deliberate differences from standard ECMAScript behavior, not missing features.
 
-### No Global `parseInt`, `parseFloat`, `isNaN`, `isFinite`
+### Legacy Global Number Helpers
 
-**Intentional.** Use `Number.parseInt`, `Number.parseFloat`, `Number.isNaN`, `Number.isFinite` instead.
+**Shimmed for ECMAScript compatibility.** Prefer `Number.parseInt`, `Number.parseFloat`, `Number.isNaN`, and `Number.isFinite` in new code.
 
 In ECMAScript, these exist as both global functions and as `Number` static methods. `parseInt` and `parseFloat` are identical to their `Number.*` counterparts. However, the global `isNaN` and `isFinite` have legacy coercion behavior (e.g., `isNaN("abc")` returns `true` because it coerces the string to a number first), while `Number.isNaN` and `Number.isFinite` are stricter — they return `false` for any non-number argument.
 
-GocciaScript only provides the `Number.*` versions, keeping these functions on the object they belong to rather than polluting the global scope. This avoids the confusing dual behavior of `isNaN`/`isFinite` and encourages explicit type handling.
-
-If needed, they can be polyfilled:
+GocciaScript installs the global names through Goccia.shims so legacy ECMAScript code and test262 cases see the standard surface. The default recommendation remains explicit `Number.*` calls in userland code:
 
 ```javascript
-const parseInt = Number.parseInt;
-const parseFloat = Number.parseFloat;
-const isNaN = Number.isNaN;
-const isFinite = Number.isFinite;
+Number.parseInt("10", 10);
+Number.isNaN(value);
+
+// Shimmed legacy globals still exist:
+parseInt("10", 10);
+isNaN("abc"); // true, because the global form coerces
 ```
 
 ## Strictness Guarantees

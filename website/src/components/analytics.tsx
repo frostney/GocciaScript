@@ -37,7 +37,7 @@ export function Analytics() {
       api_host: POSTHOG_HOST,
       // We dispatch `$pageview` manually below.
       capture_pageview: false,
-      // Privacy posture: no form / click autocapture by default; we
+      // Privacy policy: no form / click autocapture by default; we
       // identify users only when explicitly opted in via product
       // surfaces (we don't have any yet).
       autocapture: false,

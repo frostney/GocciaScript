@@ -149,8 +149,8 @@ export type FeatureIcon = "drop" | "shield" | "leaf" | "clock";
 export const FEATURES: { icon: FeatureIcon; title: string; body: string }[] = [
   {
     icon: "drop",
-    title: "A subset, not a superset",
-    body: "Modern ECMAScript 2027+ — let/const, arrow functions, classes, modules, async/await.",
+    title: "Modern by default",
+    body: "ECMAScript 2027+ forms first — let/const, arrow functions, classes, modules, async/await.",
   },
   {
     icon: "shield",
@@ -160,7 +160,7 @@ export const FEATURES: { icon: FeatureIcon; title: string; body: string }[] = [
   {
     icon: "leaf",
     title: "Explicit over clever",
-    body: "Named imports only. Strict equality only. Descriptive names over shortcuts — even at the cost of verbosity.",
+    body: "Strict equality and explicit imports by default; compatibility flags are reserved for conformance and legacy semantics.",
   },
   {
     icon: "clock",

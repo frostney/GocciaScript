@@ -10,9 +10,10 @@ errors.
 [test262](https://github.com/tc39/test262) is the TC39-maintained
 conformance suite for ECMAScript. ~50K tests cover every observable
 behavior in the language and built-ins, plus Intl, staging proposals,
-and the harness itself. We run it as an indicator metric — not a
-release gate — to track which spec corners GocciaScript implements,
-where the engine diverges, and how each PR moves those numbers.
+and the harness itself. We run it as an indicator metric and regression
+signal to track which spec corners GocciaScript implements, where the
+engine diverges, and how each PR moves those numbers. The generated
+reports are the source of truth for ECMAScript compatibility status.
 
 For the architectural rationale behind the current
 LoaderBare-plus-stock-harness setup, see the
@@ -20,9 +21,9 @@ LoaderBare-plus-stock-harness setup, see the
 
 ## Executive summary
 
-- Test262 runs via `GocciaScriptLoaderBare`, never via `GocciaTestRunner`.
-- Wrapper bodies execute inside a neutral engine — `expect`, `describe`,
-  `test`, lifecycle hooks, mocks, `runTests` are not registered.
+- Test262 runs via `GocciaScriptLoaderBare`, never via `GocciaTestRunner`, so
+  wrapper bodies execute inside a neutral engine without `expect`, `describe`,
+  `test`, lifecycle hooks, mocks, or `runTests`.
 - Stock tc39/test262 harness files are loaded from the pinned test262
   checkout's `harness/` directory. The only bundled harness file is
   `scripts/test262_harness/$262.js`, the host-provided hook object.
@@ -34,6 +35,52 @@ LoaderBare-plus-stock-harness setup, see the
   same convention `test262-harness`/`eshost`/test262.fyi use.
 - Wrapper-infrastructure failures are classified separately from
   conformance failures and gated to zero in CI.
+- CI uploads `test262-results.json` on every PR and main run. Main runs also
+  publish the report to Vercel Blob when `BLOB_READ_WRITE_TOKEN` is configured,
+  and the website compatibility dashboard reads those durable snapshots at
+  build time.
+
+## Website dashboard
+
+The public compatibility dashboard lives at `/compatibility`. It reads the
+latest available main-branch test262 report for each UTC day, renders pass-rate
+and runtime timelines, shows the top-level test262 category split, and ranks the
+five least-covered path groups from the latest report. The "JSON result" link
+on the dashboard points back to the exact report used for the latest view.
+
+Dashboard data is intentionally materialized at website build time rather than
+downloaded in the public route. Main CI publishes future dashboard points
+directly to Vercel Blob. To seed historical data, run the one-off backfill
+command: it first copies any still-retained main-branch GitHub artifact reports
+to Blob, then reruns historical main commits for days whose artifacts have
+expired.
+
+```bash
+cd website
+BLOB_READ_WRITE_TOKEN=<vercel-blob-token> \
+GITHUB_ARTIFACT_TOKEN="$(gh auth token)" \
+bun run backfill-test262
+```
+
+The backfill defaults to `--since=2026-05-01` and today's UTC date; pass
+`--since=YYYY-MM-DD` or `--until=YYYY-MM-DD` only when intentionally narrowing
+the range. It stores immutable run reports under `test262/runs/`, updates
+`test262/manifest.json`, and computes the daily timeline from the latest
+published main run for each UTC day. During `prebuild`,
+`website/scripts/sync-test262-results.ts` reads that Blob manifest through the
+attached Vercel Blob store (`BLOB_STORE_ID` with Vercel OIDC) or an explicit
+`BLOB_READ_WRITE_TOKEN`. It does not download GitHub Actions artifact ZIPs
+during website builds, and it does not bake every historical report into the
+deployment output. Historical report links point back to Vercel Blob; the site
+only materializes the dashboard snapshot and the latest full JSON report needed
+by `/api/test262/latest`.
+
+Configure the Vercel project so both Preview and Production deployments have
+access to the Blob store. CI and one-off backfills still need the GitHub
+repository secret `BLOB_READ_WRITE_TOKEN` because they publish new reports from
+GitHub Actions rather than from inside the Vercel project. Vercel builds fail
+when Blob credentials are missing so preview deployments cannot silently ship
+the empty dashboard fallback.
 
 ## Architecture
 

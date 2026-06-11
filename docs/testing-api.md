@@ -434,7 +434,7 @@ expect([...set.values()]).toEqual([1, 2, 3]);
 | `Math.clamp` | Supported (TC39 proposal) | Not available |
 | Emoji identifiers | Supported | Not supported by V8/Rollup |
 | Arrow methods `this` | Binds to owning object | Inherits from enclosing scope |
-| Global `parseInt`, `isNaN`, etc. | Not available (use `Number.*`) | Available as global functions |
+| Global `parseInt`, `isNaN`, etc. | Available as shims; prefer `Number.*` | Available as global functions |
 | `mock()` / `spyOn()` | Standalone globals | `vi.fn()` / `vi.spyOn()` (Vitest) or `jest.fn()` / `jest.spyOn()` (Jest) |
 
 ## Related documents

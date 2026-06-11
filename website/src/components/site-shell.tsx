@@ -31,7 +31,13 @@ type IndicatorRect = {
 };
 
 type Theme = "cream" | "espresso";
-type Tab = "home" | "install" | "docs" | "playground" | "sandbox";
+type Tab =
+  | "home"
+  | "install"
+  | "docs"
+  | "compatibility"
+  | "playground"
+  | "sandbox";
 
 const TABS: { id: Tab; label: string; href: string }[] = [
   { id: "home", label: "Home", href: "/" },
@@ -45,6 +51,7 @@ function activeTab(pathname: string): Tab {
   if (pathname === "/" || pathname === "") return "home";
   if (pathname.startsWith("/installation")) return "install";
   if (pathname.startsWith("/docs")) return "docs";
+  if (pathname.startsWith("/compatibility")) return "compatibility";
   if (pathname.startsWith("/playground")) return "playground";
   if (pathname.startsWith("/sandbox")) return "sandbox";
   return "home";
@@ -59,7 +66,6 @@ export function SiteShell({
 }) {
   const [theme, setTheme] = useState<Theme>("cream");
   const userOverrideRef = useRef(false);
-  const skipNextThemeWriteRef = useRef(true);
   const pathname = usePathname() ?? "/";
   const active = activeTab(pathname);
 
@@ -131,14 +137,17 @@ export function SiteShell({
     return () => window.removeEventListener("keydown", onKey);
   }, [menuOpen]);
 
-  // Mount once: sync state with the value the pre-paint script wrote, and
-  // listen for system-theme changes (until the user makes an explicit choice).
+  // Mount once: sync state with the user's system theme and listen for later
+  // changes until the user makes an explicit choice.
   useEffect(() => {
     const fromDom = document.documentElement.dataset.theme;
     if (fromDom === "espresso" || fromDom === "cream") setTheme(fromDom);
 
     if (!window.matchMedia) return;
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    if (fromDom !== "espresso" && fromDom !== "cream") {
+      setTheme(mq.matches ? "espresso" : "cream");
+    }
     const onChange = (e: MediaQueryListEvent) => {
       if (!userOverrideRef.current) setTheme(e.matches ? "espresso" : "cream");
     };
@@ -146,14 +155,7 @@ export function SiteShell({
     return () => mq.removeEventListener("change", onChange);
   }, []);
 
-  // Apply theme changes back to the DOM. Skipped on first commit because the
-  // pre-paint script already set the correct value and the initial render's
-  // state (cream) hasn't been reconciled yet.
   useEffect(() => {
-    if (skipNextThemeWriteRef.current) {
-      skipNextThemeWriteRef.current = false;
-      return;
-    }
     document.documentElement.dataset.theme = theme;
   }, [theme]);
 

@@ -525,7 +525,7 @@ build → test             → artifacts
 
 **`json5-compliance`** (all platforms) — Downloads the prebuilt `GocciaJSON5Check` harness and `GocciaTestRunner` binary from the matrix build artifacts, resolves `python3` or `python`, runs `scripts/run_json5_test_suite.py --harness=... --test-runner=... --output=json5-test-results-<target>.json`, checks that both the parser and stringify summaries report zero failures, and uploads the per-platform JSON5 conformance report as a workflow artifact.
 
-**`test262`** (needs build, ubuntu-latest x64 only, **non-blocking**) — Runs the official conformance suite in bytecode mode from the shared pin in `scripts/test262-suite-sha.txt`, uploads the JSON report, and saves a `main` baseline cache for PR deltas. The run step is `continue-on-error: true` because this lane is an indicator metric, not a release gate. **See [test262.md](test262.md) for the harness contract** and [Build System](build-system.md#ciyml--push-to-main--tags) for the workflow wiring.
+**`test262`** (needs build, ubuntu-latest x64 only, **non-blocking**) — Runs the official conformance suite in bytecode mode from the shared pin in `scripts/test262-suite-sha.txt`, uploads the JSON report, and saves a `main` baseline cache for PR deltas. The run step is `continue-on-error: true` so known steady-state conformance failures do not block unrelated work; the downstream PR comment still gates regressions against the cached main baseline. **See [test262.md](test262.md) for the harness contract** and [Build System](build-system.md#ciyml--push-to-main--tags) for the workflow wiring.
 
 **`benchmark`** (needs build, all platforms) — Downloads pre-built binaries, runs all benchmarks.
 
@@ -557,6 +557,8 @@ The **test262 conformance comment** posts a non-blocking summary using the [`act
 - An **Areas closest to 100%** table listing the three test262 directories (keyed by the first two path components, e.g. `built-ins/Math`, `language/expressions`) with the highest pass rate, filtered to areas with **at least 25 attempted tests** and **below 100%**.
 - When a `main` baseline is cached, **Δ vs main** columns show absolute count delta and percentage-point delta. Deltas below ±0.05pp render as `±0pp` to keep the table readable.
 - A collapsible **Per-test deltas** section listing newly-passing and newly-failing test IDs.
+
+The website compatibility dashboard at `/compatibility` reads build-time snapshots generated from main-branch test262 reports. Vercel Blob is the durable source for those snapshots; main CI publishes future dashboard points directly, and `cd website && bun run backfill-test262` can seed historical days from retained artifacts or fresh historical reruns. Website builds do not download artifact ZIPs. This keeps the public pass-rate timeline and group coverage tables tied to generated CI data rather than hand-maintained percentages.
 
 Weekly crons open (or update) a single PR every Monday with the latest upstream SHA so pins don't go stale:
 

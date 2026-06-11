@@ -133,10 +133,11 @@ export function buildGocciaApiSkillMd(origin: string) {
 
 Use this skill when you need to run GocciaScript code or test files through the public GocciaScript website APIs.
 
-GocciaScript is a sandbox-first, embeddable runtime for a curated subset of ECMAScript. It is designed for predictable generated code, embedding, and AI-agent workflows rather than full Node.js or browser compatibility.
+GocciaScript is a sandbox-first, embeddable ECMAScript runtime with modern recommended defaults and conformance-focused compatibility flags. It is designed for predictable generated code, embedding, and AI-agent workflows rather than Node.js or browser API compatibility.
 
 Homepage: ${absoluteUrl(origin, "/")}
 Language docs: ${absoluteUrl(origin, "/docs/language")}
+Compatibility dashboard: ${absoluteUrl(origin, "/compatibility")}
 
 ## Execute code
 
@@ -166,9 +167,9 @@ The response is JSON with execution status, output, value, timing, and any struc
 
 POST JSON to \`/api/test\` with the same fields. The code should contain GocciaScript tests using the built-in \`describe\`, \`test\`, and \`expect\` API. The response includes test counts, file results, stdout, timing, and any structured error.
 
-## Default language subset
+## Recommended defaults and compatibility flags
 
-Prefer modern JavaScript forms that GocciaScript supports by default:
+Prefer modern JavaScript forms that GocciaScript supports by default. Compatibility flags exist primarily for ECMAScript conformance and legacy host requirements, so userland examples should enable them only when those semantics are explicitly needed:
 
 - Use \`let\` and \`const\`, not \`var\` unless \`compatVar\` is enabled.
 - Use arrow functions, method shorthand, async methods, and class methods; the \`function\` keyword requires \`compatFunction\`.
