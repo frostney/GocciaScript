@@ -35,3 +35,13 @@ describe.runIf(isIntl)("Intl.DateTimeFormat constructor", () => {
     expect(typeof options.timeZone).toBe("string");
   });
 });
+
+describe("Intl.DateTimeFormat non-finite fractionalSecondDigits", () => {
+  test("Infinity throws RangeError", () => {
+    expect(() => new Intl.DateTimeFormat("en", { fractionalSecondDigits: Infinity })).toThrow(RangeError);
+  });
+
+  test("NaN throws RangeError", () => {
+    expect(() => new Intl.DateTimeFormat("en", { fractionalSecondDigits: NaN })).toThrow(RangeError);
+  });
+});

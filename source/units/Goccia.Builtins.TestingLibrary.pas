@@ -295,6 +295,7 @@ uses
   Goccia.MicrotaskQueue,
   Goccia.RegExp.Runtime,
   Goccia.Timeout,
+  Goccia.Utils,
   Goccia.Values.ClassHelper,
   Goccia.Values.ClassValue,
   Goccia.Values.Error,
@@ -1676,7 +1677,7 @@ begin
 
   // Default precision to 2 decimal places if not specified
   if AArgs.Length >= 2 then
-    Precision := Trunc(AArgs.GetElement(1).ToNumberLiteral.Value)
+    Precision := ToIntegerFromArgs(AArgs, 1)
   else
     Precision := 2;
 
@@ -2624,7 +2625,15 @@ var
 
     case AToken of
       'd', 'i':
-        Result := IntToStr(Trunc(AValue.ToNumberLiteral.Value));
+        // NaN/±∞ and doubles beyond Integer cannot be Trunc'd; render them
+        // like %f so test.each("%d") titles never crash on non-finite rows.
+        if AValue.ToNumberLiteral.IsNaN or
+           AValue.ToNumberLiteral.IsInfinity or
+           AValue.ToNumberLiteral.IsNegativeInfinity or
+           (Abs(AValue.ToNumberLiteral.Value) >= MaxInt) then
+          Result := FormatDouble(AValue.ToNumberLiteral.Value)
+        else
+          Result := IntToStr(Trunc(AValue.ToNumberLiteral.Value));
       'f':
         Result := FormatDouble(AValue.ToNumberLiteral.Value);
       'j', 'o', 's':

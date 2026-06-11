@@ -178,19 +178,9 @@ begin
     ThrowRangeError(SErrorToFixedArgRange, SSuggestNumberRange);
 
   // Step 5: If x is not finite, return Number::toString(x, 10)
-  if Prim.IsNaN then
+  if Prim.IsNaN or Prim.IsInfinity or Prim.IsNegativeInfinity then
   begin
-    Result := TGocciaStringLiteralValue.Create('NaN');
-    Exit;
-  end;
-  if Prim.IsInfinity then
-  begin
-    Result := TGocciaStringLiteralValue.Create('Infinity');
-    Exit;
-  end;
-  if Prim.IsNegativeInfinity then
-  begin
-    Result := TGocciaStringLiteralValue.Create('-Infinity');
+    Result := Prim.ToStringLiteral;
     Exit;
   end;
 

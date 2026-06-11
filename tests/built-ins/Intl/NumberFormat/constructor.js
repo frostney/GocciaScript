@@ -27,3 +27,17 @@ describe.runIf(isIntl)("Intl.NumberFormat constructor", () => {
     expect(typeof options.locale).toBe("string");
   });
 });
+
+describe("Intl.NumberFormat non-finite digit options", () => {
+  test("maximumFractionDigits Infinity throws RangeError", () => {
+    expect(() => new Intl.NumberFormat("en", { maximumFractionDigits: Infinity })).toThrow(RangeError);
+  });
+
+  test("maximumFractionDigits NaN throws RangeError", () => {
+    expect(() => new Intl.NumberFormat("en", { maximumFractionDigits: NaN })).toThrow(RangeError);
+  });
+
+  test("minimumIntegerDigits -Infinity throws RangeError", () => {
+    expect(() => new Intl.NumberFormat("en", { minimumIntegerDigits: -Infinity })).toThrow(RangeError);
+  });
+});

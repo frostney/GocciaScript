@@ -48,6 +48,7 @@ uses
   Goccia.Intl.CLDRData,
   Goccia.ObjectModel.Types,
   Goccia.Realm,
+  Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -158,19 +159,19 @@ begin
     end;
     V := AOptions.GetProperty('minimumIntegerDigits');
     if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-      FMinimumIntegerDigits := Trunc(V.ToNumberLiteral.Value);
+      FMinimumIntegerDigits := ToIntegerWithTruncationValue(V);
     V := AOptions.GetProperty('minimumFractionDigits');
     if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-      FMinimumFractionDigits := Trunc(V.ToNumberLiteral.Value);
+      FMinimumFractionDigits := ToIntegerWithTruncationValue(V);
     V := AOptions.GetProperty('maximumFractionDigits');
     if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-      FMaximumFractionDigits := Trunc(V.ToNumberLiteral.Value);
+      FMaximumFractionDigits := ToIntegerWithTruncationValue(V);
     V := AOptions.GetProperty('minimumSignificantDigits');
     if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-      FMinimumSignificantDigits := Trunc(V.ToNumberLiteral.Value);
+      FMinimumSignificantDigits := ToIntegerWithTruncationValue(V);
     V := AOptions.GetProperty('maximumSignificantDigits');
     if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-      FMaximumSignificantDigits := Trunc(V.ToNumberLiteral.Value);
+      FMaximumSignificantDigits := ToIntegerWithTruncationValue(V);
   end;
 
   if (FMinimumSignificantDigits >= 0) or (FMaximumSignificantDigits >= 0) then

@@ -25,7 +25,6 @@ type
 implementation
 
 uses
-  Math,
   SysUtils,
 
   StringBuffer,
@@ -122,7 +121,6 @@ function TGocciaGlobalString.StringRaw(const AArgs: TGocciaArgumentsCollection; 
 var
   TemplateObj, RawValue, RawElement: TGocciaValue;
   RawObj: TGocciaValue;
-  LengthValue: Double;
   LiteralSegments: Integer;
   SB: TStringBuffer;
   I: Integer;
@@ -145,21 +143,11 @@ begin
   RawObj := RawValue;
 
   // ES2026 §22.1.2.4 step 4: Let literalSegments be LengthOfArrayLike(raw)
-  // ES2026 §7.1.22 ToLength: NaN/negative → 0, spec caps at 2^53−1.
-  // Trunc raises a range-check error for NaN/±∞ in FPC, so guard first.
   RawElement := RawObj.GetProperty(PROP_LENGTH);
   if not Assigned(RawElement) or (RawElement is TGocciaUndefinedLiteralValue) then
     LiteralSegments := 0
   else
-  begin
-    LengthValue := RawElement.ToNumberLiteral.Value;
-    if IsNan(LengthValue) or (LengthValue <= 0) then
-      LiteralSegments := 0
-    else if LengthValue >= MaxInt then
-      LiteralSegments := MaxInt
-    else
-      LiteralSegments := Trunc(LengthValue);
-  end;
+    LiteralSegments := ToLengthValue(RawElement);
 
   // ES2026 §22.1.2.4 step 5: If literalSegments <= 0, return ""
   if LiteralSegments <= 0 then

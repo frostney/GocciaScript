@@ -54,6 +54,7 @@ uses
   Goccia.Realm,
   Goccia.Temporal.Options,
   Goccia.Temporal.Utils,
+  Goccia.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue,
@@ -121,19 +122,19 @@ begin
       // Validate month/monthCode consistency when both are provided
       V := Obj.GetProperty(PROP_MONTH);
       if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-        if Trunc(V.ToNumberLiteral.Value) <> MonthPart then
+        if ToIntegerWithTruncationValue(V) <> MonthPart then
           ThrowRangeError(Format(SErrorMonthCodeMismatchIn, [AMethod]), SSuggestTemporalMonthCode);
     end
     else
     begin
       V := Obj.GetProperty(PROP_MONTH);
       if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-        MonthPart := Trunc(V.ToNumberLiteral.Value)
+        MonthPart := ToIntegerWithTruncationValue(V)
       else
         ThrowTypeError(AMethod + ' requires monthCode or month property', SSuggestTemporalFromArg);
     end;
     Result := TGocciaTemporalPlainMonthDayValue.Create(
-      MonthPart, Trunc(VDay.ToNumberLiteral.Value));
+      MonthPart, ToIntegerWithTruncationValue(VDay));
   end
   else
   begin
@@ -259,7 +260,7 @@ var
     if (Val = nil) or (Val is TGocciaUndefinedLiteralValue) then
       Result := ADefault
     else
-      Result := Trunc(Val.ToNumberLiteral.Value);
+      Result := ToIntegerWithTruncationValue(Val);
   end;
 
 begin
@@ -284,14 +285,14 @@ begin
     // Validate month/monthCode consistency when both are provided
     V := Obj.GetProperty(PROP_MONTH);
     if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-      if Trunc(V.ToNumberLiteral.Value) <> NewMonth then
+      if ToIntegerWithTruncationValue(V) <> NewMonth then
         ThrowRangeError(Format(SErrorMonthCodeMismatchIn, ['PlainMonthDay.prototype.with']), SSuggestTemporalMonthCode);
   end
   else
   begin
     V := Obj.GetProperty(PROP_MONTH);
     if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-      NewMonth := Trunc(V.ToNumberLiteral.Value);
+      NewMonth := ToIntegerWithTruncationValue(V);
   end;
 
   NewDay := GetDayFieldOr(MD.FDay);
@@ -373,7 +374,7 @@ begin
   if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
     ThrowTypeError(SErrorPlainMonthDayToPlainDateRequiresYear, SSuggestTemporalToPlainDateYear);
 
-  YearValue := Trunc(V.ToNumberLiteral.Value);
+  YearValue := ToIntegerWithTruncationValue(V);
   Result := TGocciaTemporalPlainDateValue.Create(YearValue, MD.FMonth, MD.FDay);
 end;
 

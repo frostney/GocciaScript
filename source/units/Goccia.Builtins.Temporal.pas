@@ -98,6 +98,7 @@ uses
   Goccia.Temporal.Options,
   Goccia.Temporal.TimeZone,
   Goccia.Temporal.Utils,
+  Goccia.Utils,
   Goccia.Values.BigIntValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction,
@@ -180,7 +181,7 @@ var
       if (V is TGocciaUndefinedLiteralValue) then
         Result := ADefault
       else
-        Result := Trunc(V.ToNumberLiteral.Value);
+        Result := ToIntegerWithTruncation64Value(V);
     end
     else
       Result := ADefault;
@@ -216,7 +217,7 @@ var
     if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
       Result := ADefault
     else
-      Result := Trunc(V.ToNumberLiteral.Value);
+      Result := ToIntegerWithTruncation64Value(V);
   end;
 
 begin
@@ -272,7 +273,7 @@ var
       if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
         Result := ADefault
       else
-        Result := Trunc(V.ToNumberLiteral.Value);
+        Result := ToIntegerWithTruncation64Value(V);
     end;
 
   begin
@@ -422,7 +423,7 @@ begin
   if AArgs.Length < 1 then
     ThrowTypeError(SErrorTemporalInstantFromEpochMillis, SSuggestTemporalFromArg);
   Result := TGocciaTemporalInstantValue.Create(
-    Trunc(AArgs.GetElement(0).ToNumberLiteral.Value), 0);
+    ToIntegerWithTruncation64Value(AArgs.GetElement(0)), 0);
 end;
 
 function TGocciaTemporalBuiltin.InstantFromEpochNanoseconds(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -524,9 +525,9 @@ begin
     ThrowTypeError(SErrorTemporalPlainDateArgs, SSuggestTemporalDateRange);
 
   Result := TGocciaTemporalPlainDateValue.Create(
-    Trunc(AArgs.GetElement(0).ToNumberLiteral.Value),
-    Trunc(AArgs.GetElement(1).ToNumberLiteral.Value),
-    Trunc(AArgs.GetElement(2).ToNumberLiteral.Value));
+    ToIntegerWithTruncationValue(AArgs.GetElement(0)),
+    ToIntegerWithTruncationValue(AArgs.GetElement(1)),
+    ToIntegerWithTruncationValue(AArgs.GetElement(2)));
 end;
 
 function TGocciaTemporalBuiltin.PlainDateFrom(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -566,11 +567,11 @@ begin
     V := Obj.GetProperty(PROP_YEAR);
     if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
       ThrowTypeError(SErrorTemporalPlainDateFromProps, SSuggestTemporalFromArg);
-    Y := Trunc(V.ToNumberLiteral.Value);
+    Y := ToIntegerWithTruncationValue(V);
     V := Obj.GetProperty(PROP_MONTH);
     if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
       ThrowTypeError(SErrorTemporalPlainDateFromProps, SSuggestTemporalFromArg);
-    Mo := Trunc(V.ToNumberLiteral.Value);
+    Mo := ToIntegerWithTruncationValue(V);
     if (Mo < 1) or (Mo > 12) then
     begin
       if Overflow = toReject then
@@ -583,7 +584,7 @@ begin
     V := Obj.GetProperty(PROP_DAY);
     if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
       ThrowTypeError(SErrorTemporalPlainDateFromProps, SSuggestTemporalFromArg);
-    Dy := Trunc(V.ToNumberLiteral.Value);
+    Dy := ToIntegerWithTruncationValue(V);
     if Dy < 1 then
     begin
       if Overflow = toReject then
@@ -645,9 +646,9 @@ var
       end
       else
         Result := TGocciaTemporalPlainDateValue.Create(
-          Trunc(VY.ToNumberLiteral.Value),
-          Trunc(VM.ToNumberLiteral.Value),
-          Trunc(VD.ToNumberLiteral.Value));
+          ToIntegerWithTruncationValue(VY),
+          ToIntegerWithTruncationValue(VM),
+          ToIntegerWithTruncationValue(VD));
     end
     else
     begin
@@ -696,7 +697,7 @@ function TGocciaTemporalBuiltin.PlainTimeConstructorFn(const AArgs: TGocciaArgum
       if V is TGocciaUndefinedLiteralValue then
         Result := ADefault
       else
-        Result := Trunc(V.ToNumberLiteral.Value);
+        Result := ToIntegerWithTruncationValue(V);
     end
     else
       Result := ADefault;
@@ -738,17 +739,17 @@ begin
     Obj := TGocciaObjectValue(Arg);
     H := 0; Mi := 0; S := 0; Ms := 0; Us := 0; Ns := 0;
     V := Obj.GetProperty(PROP_HOUR);
-    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then H := Trunc(V.ToNumberLiteral.Value);
+    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then H := ToIntegerWithTruncationValue(V);
     V := Obj.GetProperty(PROP_MINUTE);
-    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Mi := Trunc(V.ToNumberLiteral.Value);
+    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Mi := ToIntegerWithTruncationValue(V);
     V := Obj.GetProperty(PROP_SECOND);
-    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then S := Trunc(V.ToNumberLiteral.Value);
+    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then S := ToIntegerWithTruncationValue(V);
     V := Obj.GetProperty(PROP_MILLISECOND);
-    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Ms := Trunc(V.ToNumberLiteral.Value);
+    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Ms := ToIntegerWithTruncationValue(V);
     V := Obj.GetProperty(PROP_MICROSECOND);
-    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Us := Trunc(V.ToNumberLiteral.Value);
+    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Us := ToIntegerWithTruncationValue(V);
     V := Obj.GetProperty(PROP_NANOSECOND);
-    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Ns := Trunc(V.ToNumberLiteral.Value);
+    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Ns := ToIntegerWithTruncationValue(V);
     Result := TGocciaTemporalPlainTimeValue.Create(H, Mi, S, Ms, Us, Ns);
   end
   else
@@ -788,17 +789,17 @@ var
       Obj := TGocciaObjectValue(AArg);
       H := 0; Mi := 0; S := 0; Ms := 0; Us := 0; Ns := 0;
       V := Obj.GetProperty(PROP_HOUR);
-      if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then H := Trunc(V.ToNumberLiteral.Value);
+      if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then H := ToIntegerWithTruncationValue(V);
       V := Obj.GetProperty(PROP_MINUTE);
-      if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Mi := Trunc(V.ToNumberLiteral.Value);
+      if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Mi := ToIntegerWithTruncationValue(V);
       V := Obj.GetProperty(PROP_SECOND);
-      if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then S := Trunc(V.ToNumberLiteral.Value);
+      if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then S := ToIntegerWithTruncationValue(V);
       V := Obj.GetProperty(PROP_MILLISECOND);
-      if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Ms := Trunc(V.ToNumberLiteral.Value);
+      if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Ms := ToIntegerWithTruncationValue(V);
       V := Obj.GetProperty(PROP_MICROSECOND);
-      if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Us := Trunc(V.ToNumberLiteral.Value);
+      if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Us := ToIntegerWithTruncationValue(V);
       V := Obj.GetProperty(PROP_NANOSECOND);
-      if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Ns := Trunc(V.ToNumberLiteral.Value);
+      if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Ns := ToIntegerWithTruncationValue(V);
       Result := TGocciaTemporalPlainTimeValue.Create(H, Mi, S, Ms, Us, Ns);
     end
     else
@@ -849,7 +850,7 @@ function TGocciaTemporalBuiltin.PlainDateTimeConstructorFn(const AArgs: TGocciaA
       if V is TGocciaUndefinedLiteralValue then
         Result := ADefault
       else
-        Result := Trunc(V.ToNumberLiteral.Value);
+        Result := ToIntegerWithTruncationValue(V);
     end
     else
       Result := ADefault;
@@ -896,15 +897,15 @@ begin
   begin
     Obj := TGocciaObjectValue(Arg);
     Y := 0; Mo := 0; D := 0; H := 0; Mi := 0; S := 0; Ms := 0; Us := 0; Ns := 0;
-    V := Obj.GetProperty(PROP_YEAR); if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Y := Trunc(V.ToNumberLiteral.Value);
-    V := Obj.GetProperty(PROP_MONTH); if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Mo := Trunc(V.ToNumberLiteral.Value);
-    V := Obj.GetProperty(PROP_DAY); if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then D := Trunc(V.ToNumberLiteral.Value);
-    V := Obj.GetProperty(PROP_HOUR); if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then H := Trunc(V.ToNumberLiteral.Value);
-    V := Obj.GetProperty(PROP_MINUTE); if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Mi := Trunc(V.ToNumberLiteral.Value);
-    V := Obj.GetProperty(PROP_SECOND); if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then S := Trunc(V.ToNumberLiteral.Value);
-    V := Obj.GetProperty(PROP_MILLISECOND); if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Ms := Trunc(V.ToNumberLiteral.Value);
-    V := Obj.GetProperty(PROP_MICROSECOND); if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Us := Trunc(V.ToNumberLiteral.Value);
-    V := Obj.GetProperty(PROP_NANOSECOND); if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Ns := Trunc(V.ToNumberLiteral.Value);
+    V := Obj.GetProperty(PROP_YEAR); if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Y := ToIntegerWithTruncationValue(V);
+    V := Obj.GetProperty(PROP_MONTH); if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Mo := ToIntegerWithTruncationValue(V);
+    V := Obj.GetProperty(PROP_DAY); if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then D := ToIntegerWithTruncationValue(V);
+    V := Obj.GetProperty(PROP_HOUR); if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then H := ToIntegerWithTruncationValue(V);
+    V := Obj.GetProperty(PROP_MINUTE); if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Mi := ToIntegerWithTruncationValue(V);
+    V := Obj.GetProperty(PROP_SECOND); if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then S := ToIntegerWithTruncationValue(V);
+    V := Obj.GetProperty(PROP_MILLISECOND); if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Ms := ToIntegerWithTruncationValue(V);
+    V := Obj.GetProperty(PROP_MICROSECOND); if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Us := ToIntegerWithTruncationValue(V);
+    V := Obj.GetProperty(PROP_NANOSECOND); if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Ns := ToIntegerWithTruncationValue(V);
     Result := TGocciaTemporalPlainDateTimeValue.Create(Y, Mo, D, H, Mi, S, Ms, Us, Ns);
   end
   else
@@ -952,7 +953,7 @@ var
         Result := nil;
         Exit;
       end;
-      Y := Trunc(V.ToNumberLiteral.Value);
+      Y := ToIntegerWithTruncationValue(V);
       V := Obj.GetProperty(PROP_MONTH);
       if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
       begin
@@ -960,7 +961,7 @@ var
         Result := nil;
         Exit;
       end;
-      Mo := Trunc(V.ToNumberLiteral.Value);
+      Mo := ToIntegerWithTruncationValue(V);
       V := Obj.GetProperty(PROP_DAY);
       if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
       begin
@@ -968,14 +969,14 @@ var
         Result := nil;
         Exit;
       end;
-      D := Trunc(V.ToNumberLiteral.Value);
+      D := ToIntegerWithTruncationValue(V);
       H := 0; Mi := 0; S := 0; Ms := 0; Us := 0; Ns := 0;
-      V := Obj.GetProperty(PROP_HOUR); if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then H := Trunc(V.ToNumberLiteral.Value);
-      V := Obj.GetProperty(PROP_MINUTE); if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Mi := Trunc(V.ToNumberLiteral.Value);
-      V := Obj.GetProperty(PROP_SECOND); if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then S := Trunc(V.ToNumberLiteral.Value);
-      V := Obj.GetProperty(PROP_MILLISECOND); if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Ms := Trunc(V.ToNumberLiteral.Value);
-      V := Obj.GetProperty(PROP_MICROSECOND); if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Us := Trunc(V.ToNumberLiteral.Value);
-      V := Obj.GetProperty(PROP_NANOSECOND); if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Ns := Trunc(V.ToNumberLiteral.Value);
+      V := Obj.GetProperty(PROP_HOUR); if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then H := ToIntegerWithTruncationValue(V);
+      V := Obj.GetProperty(PROP_MINUTE); if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Mi := ToIntegerWithTruncationValue(V);
+      V := Obj.GetProperty(PROP_SECOND); if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then S := ToIntegerWithTruncationValue(V);
+      V := Obj.GetProperty(PROP_MILLISECOND); if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Ms := ToIntegerWithTruncationValue(V);
+      V := Obj.GetProperty(PROP_MICROSECOND); if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Us := ToIntegerWithTruncationValue(V);
+      V := Obj.GetProperty(PROP_NANOSECOND); if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Ns := ToIntegerWithTruncationValue(V);
       Result := TGocciaTemporalPlainDateTimeValue.Create(Y, Mo, D, H, Mi, S, Ms, Us, Ns);
     end
     else
@@ -1025,13 +1026,15 @@ begin
   if AArgs.Length < 2 then
     ThrowTypeError(SErrorTemporalPlainYearMonthArgs, SSuggestTemporalDateRange);
 
+  // Temporal §9.1.1 PlainYearMonth(isoYear, isoMonth, calendarLike,
+  // referenceISODay) — argument 2 is the calendar, the reference day is 3.
   RefDay := 1;
-  if (AArgs.Length >= 3) and not (AArgs.GetElement(2) is TGocciaUndefinedLiteralValue) then
-    RefDay := Trunc(AArgs.GetElement(2).ToNumberLiteral.Value);
+  if (AArgs.Length >= 4) and not (AArgs.GetElement(3) is TGocciaUndefinedLiteralValue) then
+    RefDay := ToIntegerWithTruncationValue(AArgs.GetElement(3));
 
   Result := TGocciaTemporalPlainYearMonthValue.Create(
-    Trunc(AArgs.GetElement(0).ToNumberLiteral.Value),
-    Trunc(AArgs.GetElement(1).ToNumberLiteral.Value),
+    ToIntegerWithTruncationValue(AArgs.GetElement(0)),
+    ToIntegerWithTruncationValue(AArgs.GetElement(1)),
     RefDay);
 end;
 
@@ -1063,7 +1066,7 @@ begin
     V := Obj.GetProperty(PROP_YEAR);
     if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
       ThrowTypeError(SErrorTemporalPlainYearMonthFromYear, SSuggestTemporalFromArg);
-    Y := Trunc(V.ToNumberLiteral.Value);
+    Y := ToIntegerWithTruncationValue(V);
     // Support both monthCode and month, consistent with PlainMonthDay.from
     VMonthCode := Obj.GetProperty(PROP_MONTH_CODE);
     if Assigned(VMonthCode) and not (VMonthCode is TGocciaUndefinedLiteralValue) then
@@ -1079,7 +1082,7 @@ begin
       // Check consistency if both month and monthCode are provided
       V := Obj.GetProperty(PROP_MONTH);
       if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-        if Trunc(V.ToNumberLiteral.Value) <> MonthPart then
+        if ToIntegerWithTruncationValue(V) <> MonthPart then
           ThrowRangeError(SErrorMonthCodeMismatch, SSuggestTemporalMonthCode);
       M := MonthPart;
     end
@@ -1088,7 +1091,7 @@ begin
       V := Obj.GetProperty(PROP_MONTH);
       if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
         ThrowTypeError(SErrorTemporalPlainYearMonthFromMonth, SSuggestTemporalFromArg);
-      M := Trunc(V.ToNumberLiteral.Value);
+      M := ToIntegerWithTruncationValue(V);
     end;
     Result := TGocciaTemporalPlainYearMonthValue.Create(Y, M);
   end
@@ -1170,8 +1173,8 @@ begin
     ThrowTypeError(SErrorTemporalPlainMonthDayArgs, SSuggestTemporalDateRange);
 
   Result := TGocciaTemporalPlainMonthDayValue.Create(
-    Trunc(AArgs.GetElement(0).ToNumberLiteral.Value),
-    Trunc(AArgs.GetElement(1).ToNumberLiteral.Value));
+    ToIntegerWithTruncationValue(AArgs.GetElement(0)),
+    ToIntegerWithTruncationValue(AArgs.GetElement(1)));
 end;
 
 function TGocciaTemporalBuiltin.PlainMonthDayFrom(const AArgs: TGocciaArgumentsCollection;
@@ -1202,7 +1205,7 @@ begin
     V := Obj.GetProperty(PROP_DAY);
     if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
       ThrowTypeError(SErrorTemporalPlainMonthDayFromDay, SSuggestTemporalFromArg);
-    D := Trunc(V.ToNumberLiteral.Value);
+    D := ToIntegerWithTruncationValue(V);
     // Support both monthCode (e.g., "M07") and month (numeric)
     V := Obj.GetProperty(PROP_MONTH_CODE);
     if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
@@ -1219,7 +1222,7 @@ begin
     begin
       V := Obj.GetProperty(PROP_MONTH);
       if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-        M := Trunc(V.ToNumberLiteral.Value)
+        M := ToIntegerWithTruncationValue(V)
       else
         M := 0;
     end;

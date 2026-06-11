@@ -99,3 +99,13 @@ describe("Response constructor", () => {
     expect(text).toBe("ok");
   });
 });
+
+describe("Response init non-finite status", () => {
+  test("status Infinity throws RangeError", () => {
+    expect(() => new Response(null, { status: Infinity })).toThrow(RangeError);
+  });
+
+  test("status NaN throws RangeError", () => {
+    expect(() => new Response(null, { status: NaN })).toThrow(RangeError);
+  });
+});

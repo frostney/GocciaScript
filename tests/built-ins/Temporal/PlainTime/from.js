@@ -19,3 +19,13 @@ describe.runIf(isTemporal)("Temporal.PlainTime.from", () => {
     expect(t.minute).toBe(30);
   });
 });
+
+describe("Temporal.PlainTime.from non-finite fields", () => {
+  test("hour Infinity throws RangeError", () => {
+    expect(() => Temporal.PlainTime.from({ hour: Infinity })).toThrow(RangeError);
+  });
+
+  test("minute NaN throws RangeError", () => {
+    expect(() => Temporal.PlainTime.from({ hour: 1, minute: NaN })).toThrow(RangeError);
+  });
+});

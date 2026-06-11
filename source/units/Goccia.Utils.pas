@@ -16,6 +16,22 @@ function ToIntegerFromArgs(const AArgs: TGocciaArgumentsCollection; const AIndex
 // saturated to Integer.  NaN → 0, ±∞ and out-of-range doubles → ±MaxInt.
 function ToIntegerValue(const AValue: TGocciaValue): Integer; inline;
 
+// ES2026 §7.1.22 ToLength saturated to Integer: NaN and values ≤ 0 → 0,
+// values ≥ MaxInt (incl. +∞) → MaxInt, else truncate.
+function ToLengthValue(const AValue: TGocciaValue): Integer; inline;
+
+// Temporal §13.21 ToIntegerWithTruncation: throws RangeError for NaN/±∞
+// (also matches ECMA-402 §9.2.15 DefaultNumberOption's rejection of
+// non-finite option values), saturates out-of-range doubles to ±MaxInt.
+// Use only where the target is a range-validated Integer field.
+function ToIntegerWithTruncationValue(const AValue: TGocciaValue): Integer;
+
+// 64-bit ToIntegerWithTruncation for targets that carry the full JS integer
+// range (duration components, epoch milliseconds): throws RangeError for
+// NaN/±∞, saturates at the Int64 limits so out-of-range magnitudes stay
+// above downstream validation boundaries (e.g. Duration's 2^53 check).
+function ToIntegerWithTruncation64Value(const AValue: TGocciaValue): Int64;
+
 // 64-bit variant of ToIntegerFromArgs.  Used by Array prototype methods that
 // must reach indices above MaxInt when the receiver is a generic array-like
 // with a length up to 2^53 - 1 (e.g. test262
@@ -43,6 +59,10 @@ function ToInt32Value(const AValue: TGocciaValue): Int32; inline;
 // ES2026 §7.1.7 ToUint32(argument)
 function ToUint32Value(const AValue: TGocciaValue): Cardinal; inline;
 
+// JS Number → Int64 for host/FFI marshaling: NaN/±∞ → 0, saturates at the
+// Int64 limits, otherwise truncates toward zero.
+function ToInt64Value(const AValue: TGocciaValue): Int64; inline;
+
 // ES2026 §7.1.10 ToUint16(argument)
 // NaN, ±0, ±∞ → 0; otherwise truncate and reduce modulo 2^16.
 function ToUint16Value(const AValue: TGocciaValue): Word; inline;
@@ -63,19 +83,14 @@ uses
   SysUtils,
 
   Goccia.Constants.NumericLimits,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.Values.ClassValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase;
 
-function ToIntegerFromArgs(const AArgs: TGocciaArgumentsCollection; const AIndex: Integer; const ADefault: Integer): Integer;
-begin
-  if AArgs.Length > AIndex then
-    Result := ToIntegerValue(AArgs.GetElement(AIndex))
-  else
-    Result := ADefault;
-end;
-
+// ToIntegerValue precedes its callers below so FPC can inline-expand it.
 function ToIntegerValue(const AValue: TGocciaValue): Integer;
 var
   NumberValue: TGocciaNumberLiteralValue;
@@ -91,6 +106,76 @@ begin
     Exit(MaxInt);
   if NumberValue.Value <= -MaxInt then
     Exit(-MaxInt);
+  Result := Trunc(NumberValue.Value);
+end;
+
+function ToIntegerFromArgs(const AArgs: TGocciaArgumentsCollection; const AIndex: Integer; const ADefault: Integer): Integer;
+begin
+  if AArgs.Length > AIndex then
+    Result := ToIntegerValue(AArgs.GetElement(AIndex))
+  else
+    Result := ADefault;
+end;
+
+function ToLengthValue(const AValue: TGocciaValue): Integer;
+var
+  NumberValue: TGocciaNumberLiteralValue;
+begin
+  NumberValue := AValue.ToNumberLiteral;
+  if NumberValue.IsNaN or NumberValue.IsNegativeInfinity or
+     (NumberValue.Value <= 0) then
+    Exit(0);
+  if NumberValue.IsInfinity or (NumberValue.Value >= MaxInt) then
+    Exit(MaxInt);
+  Result := Trunc(NumberValue.Value);
+end;
+
+function ToIntegerWithTruncationValue(const AValue: TGocciaValue): Integer;
+var
+  NumberValue: TGocciaNumberLiteralValue;
+begin
+  NumberValue := AValue.ToNumberLiteral;
+  if NumberValue.IsNaN or NumberValue.IsInfinity or
+     NumberValue.IsNegativeInfinity then
+    ThrowRangeError(SErrorNumberNotFinite, SSuggestNumberRange);
+  if NumberValue.Value >= MaxInt then
+    Exit(MaxInt);
+  if NumberValue.Value <= -MaxInt then
+    Exit(-MaxInt);
+  Result := Trunc(NumberValue.Value);
+end;
+
+function ToInt64Value(const AValue: TGocciaValue): Int64;
+const
+  INT64_BOUND_F = 9.2233720368547758E18; // 2^63
+var
+  NumberValue: TGocciaNumberLiteralValue;
+begin
+  NumberValue := AValue.ToNumberLiteral;
+  if NumberValue.IsNaN or NumberValue.IsInfinity or
+     NumberValue.IsNegativeInfinity then
+    Exit(0);
+  if NumberValue.Value >= INT64_BOUND_F then
+    Exit(High(Int64));
+  if NumberValue.Value < -INT64_BOUND_F then
+    Exit(Low(Int64));
+  Result := Trunc(NumberValue.Value);
+end;
+
+function ToIntegerWithTruncation64Value(const AValue: TGocciaValue): Int64;
+const
+  INT64_BOUND_F = 9.2233720368547758E18; // 2^63
+var
+  NumberValue: TGocciaNumberLiteralValue;
+begin
+  NumberValue := AValue.ToNumberLiteral;
+  if NumberValue.IsNaN or NumberValue.IsInfinity or
+     NumberValue.IsNegativeInfinity then
+    ThrowRangeError(SErrorNumberNotFinite, SSuggestNumberRange);
+  if NumberValue.Value >= INT64_BOUND_F then
+    Exit(High(Int64));
+  if NumberValue.Value < -INT64_BOUND_F then
+    Exit(Low(Int64));
   Result := Trunc(NumberValue.Value);
 end;
 

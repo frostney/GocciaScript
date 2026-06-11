@@ -84,6 +84,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.JSON,
   Goccia.Realm,
+  Goccia.Utils,
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction,
@@ -430,7 +431,7 @@ begin
   PropVal := InitObj.GetProperty(PROP_STATUS);
   if Assigned(PropVal) and not (PropVal is TGocciaUndefinedLiteralValue) then
   begin
-    StatusVal := Trunc(PropVal.ToNumberLiteral.Value);
+    StatusVal := ToIntegerValue(PropVal);
     if (StatusVal < 200) or (StatusVal > 599) then
       ThrowRangeError('Response status must be in the range 200-599');
     FStatus := StatusVal;

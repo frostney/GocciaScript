@@ -27,3 +27,13 @@ describe.runIf(isIntl)("Intl.PluralRules constructor", () => {
     expect(typeof options.locale).toBe("string");
   });
 });
+
+describe("Intl.PluralRules non-finite digit options", () => {
+  test("minimumIntegerDigits Infinity throws RangeError", () => {
+    expect(() => new Intl.PluralRules("en", { minimumIntegerDigits: Infinity })).toThrow(RangeError);
+  });
+
+  test("maximumSignificantDigits NaN throws RangeError", () => {
+    expect(() => new Intl.PluralRules("en", { maximumSignificantDigits: NaN })).toThrow(RangeError);
+  });
+});

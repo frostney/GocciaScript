@@ -116,6 +116,7 @@ uses
   Goccia.Temporal.DurationMath,
   Goccia.Temporal.Options,
   Goccia.Temporal.Utils,
+  Goccia.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue,
@@ -1084,15 +1085,15 @@ begin
   V := AObj.GetProperty(PROP_YEAR);
   if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
     Exit;
-  ADate.Year := Trunc(V.ToNumberLiteral.Value);
+  ADate.Year := ToIntegerWithTruncationValue(V);
   V := AObj.GetProperty(PROP_MONTH);
   if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
     Exit;
-  ADate.Month := Trunc(V.ToNumberLiteral.Value);
+  ADate.Month := ToIntegerWithTruncationValue(V);
   V := AObj.GetProperty(PROP_DAY);
   if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
     Exit;
-  ADate.Day := Trunc(V.ToNumberLiteral.Value);
+  ADate.Day := ToIntegerWithTruncationValue(V);
   if not IsValidDate(ADate.Year, ADate.Month, ADate.Day) then
     Exit;
   Result := True;

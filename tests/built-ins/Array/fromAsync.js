@@ -288,3 +288,14 @@ describe("Array.fromAsync", () => {
     await expect(Array.fromAsync(bad)).rejects.toThrow(TypeError);
   });
 });
+
+describe("Array.fromAsync non-finite array-like lengths", () => {
+  test("length Infinity rejects with RangeError", async () => {
+    await expect(Array.fromAsync({ length: Infinity })).rejects.toThrow(RangeError);
+  });
+
+  test("length NaN resolves to empty array", async () => {
+    const result = await Array.fromAsync({ length: NaN });
+    expect(result.length).toBe(0);
+  });
+});

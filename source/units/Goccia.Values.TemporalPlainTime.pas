@@ -65,6 +65,7 @@ uses
   Goccia.Realm,
   Goccia.Temporal.Options,
   Goccia.Temporal.Utils,
+  Goccia.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue,
@@ -113,17 +114,17 @@ begin
     Obj := TGocciaObjectValue(AValue);
     H := 0; Mi := 0; S := 0; Ms := 0; Us := 0; Ns := 0;
     V := Obj.GetProperty('hour');
-    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then H := Trunc(V.ToNumberLiteral.Value);
+    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then H := ToIntegerWithTruncationValue(V);
     V := Obj.GetProperty('minute');
-    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Mi := Trunc(V.ToNumberLiteral.Value);
+    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Mi := ToIntegerWithTruncationValue(V);
     V := Obj.GetProperty('second');
-    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then S := Trunc(V.ToNumberLiteral.Value);
+    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then S := ToIntegerWithTruncationValue(V);
     V := Obj.GetProperty('millisecond');
-    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Ms := Trunc(V.ToNumberLiteral.Value);
+    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Ms := ToIntegerWithTruncationValue(V);
     V := Obj.GetProperty('microsecond');
-    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Us := Trunc(V.ToNumberLiteral.Value);
+    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Us := ToIntegerWithTruncationValue(V);
     V := Obj.GetProperty('nanosecond');
-    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Ns := Trunc(V.ToNumberLiteral.Value);
+    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Ns := ToIntegerWithTruncationValue(V);
     Result := TGocciaTemporalPlainTimeValue.Create(H, Mi, S, Ms, Us, Ns);
   end
   else
@@ -275,7 +276,7 @@ var
     if (Val = nil) or (Val is TGocciaUndefinedLiteralValue) then
       Result := ADefault
     else
-      Result := Trunc(Val.ToNumberLiteral.Value);
+      Result := ToIntegerWithTruncationValue(Val);
   end;
 
 begin
@@ -326,17 +327,17 @@ begin
     Obj := TGocciaObjectValue(Arg);
     H := 0; Mi := 0; S := 0; Ms := 0; Us := 0; Ns := 0;
     VH := Obj.GetProperty('hours');
-    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then H := Trunc(VH.ToNumberLiteral.Value);
+    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then H := ToIntegerWithTruncationValue(VH);
     VH := Obj.GetProperty('minutes');
-    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then Mi := Trunc(VH.ToNumberLiteral.Value);
+    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then Mi := ToIntegerWithTruncationValue(VH);
     VH := Obj.GetProperty('seconds');
-    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then S := Trunc(VH.ToNumberLiteral.Value);
+    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then S := ToIntegerWithTruncationValue(VH);
     VH := Obj.GetProperty('milliseconds');
-    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then Ms := Trunc(VH.ToNumberLiteral.Value);
+    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then Ms := ToIntegerWithTruncationValue(VH);
     VH := Obj.GetProperty('microseconds');
-    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then Us := Trunc(VH.ToNumberLiteral.Value);
+    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then Us := ToIntegerWithTruncationValue(VH);
     VH := Obj.GetProperty('nanoseconds');
-    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then Ns := Trunc(VH.ToNumberLiteral.Value);
+    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then Ns := ToIntegerWithTruncationValue(VH);
     Dur := TGocciaTemporalDurationValue.Create(0, 0, 0, 0, H, Mi, S, Ms, Us, Ns);
   end
   else
@@ -395,17 +396,17 @@ begin
     Obj := TGocciaObjectValue(Arg);
     H := 0; Mi := 0; S := 0; Ms := 0; Us := 0; Ns := 0;
     VH := Obj.GetProperty('hours');
-    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then H := Trunc(VH.ToNumberLiteral.Value);
+    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then H := ToIntegerWithTruncationValue(VH);
     VH := Obj.GetProperty('minutes');
-    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then Mi := Trunc(VH.ToNumberLiteral.Value);
+    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then Mi := ToIntegerWithTruncationValue(VH);
     VH := Obj.GetProperty('seconds');
-    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then S := Trunc(VH.ToNumberLiteral.Value);
+    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then S := ToIntegerWithTruncationValue(VH);
     VH := Obj.GetProperty('milliseconds');
-    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then Ms := Trunc(VH.ToNumberLiteral.Value);
+    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then Ms := ToIntegerWithTruncationValue(VH);
     VH := Obj.GetProperty('microseconds');
-    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then Us := Trunc(VH.ToNumberLiteral.Value);
+    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then Us := ToIntegerWithTruncationValue(VH);
     VH := Obj.GetProperty('nanoseconds');
-    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then Ns := Trunc(VH.ToNumberLiteral.Value);
+    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then Ns := ToIntegerWithTruncationValue(VH);
     Dur := TGocciaTemporalDurationValue.Create(0, 0, 0, 0, H, Mi, S, Ms, Us, Ns);
   end
   else

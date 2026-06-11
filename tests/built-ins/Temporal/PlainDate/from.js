@@ -49,3 +49,13 @@ describe.runIf(isTemporal)("Temporal.PlainDate.from", () => {
     expect(d.day).toBe(31);
   });
 });
+
+describe("Temporal.PlainDate.from non-finite fields", () => {
+  test("year Infinity throws RangeError", () => {
+    expect(() => Temporal.PlainDate.from({ year: Infinity, month: 1, day: 1 })).toThrow(RangeError);
+  });
+
+  test("year NaN throws RangeError", () => {
+    expect(() => Temporal.PlainDate.from({ year: NaN, month: 1, day: 1 })).toThrow(RangeError);
+  });
+});

@@ -153,3 +153,17 @@ describe("Array.from", () => {
     expect(Array.from.length).toBe(1);
   });
 });
+
+describe("Array.from non-finite array-like lengths", () => {
+  test("length Infinity throws RangeError", () => {
+    expect(() => Array.from({ length: Infinity })).toThrow(RangeError);
+  });
+
+  test("length NaN yields empty array", () => {
+    expect(Array.from({ length: NaN }).length).toBe(0);
+  });
+
+  test("length -Infinity yields empty array", () => {
+    expect(Array.from({ length: -Infinity }).length).toBe(0);
+  });
+});

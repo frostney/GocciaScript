@@ -104,3 +104,18 @@ describe("FFILibrary.prototype.bind", () => {
     expect(() => closed.bind("get_answer", { args: [], returns: "i32" })).toThrow(TypeError);
   });
 });
+
+describe("FFILibrary.prototype.bind non-finite integer arguments", () => {
+  const lib = FFI.open("./fixtures/ffi/libfixture" + FFI.suffix);
+  afterAll(() => lib.close());
+
+  test("Infinity i32 argument wraps to 0 per ToInt32", () => {
+    const add = lib.bind("add_i32", { args: ["i32", "i32"], returns: "i32" });
+    expect(add(Infinity, 5)).toBe(5);
+  });
+
+  test("NaN i32 argument wraps to 0 per ToInt32", () => {
+    const add = lib.bind("add_i32", { args: ["i32", "i32"], returns: "i32" });
+    expect(add(NaN, 5)).toBe(5);
+  });
+});
