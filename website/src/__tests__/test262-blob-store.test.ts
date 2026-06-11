@@ -139,6 +139,10 @@ function manifestPuts() {
   return putCalls.filter((call) => call.pathname === MANIFEST_PATH);
 }
 
+function dailyPuts() {
+  return putCalls.filter((call) => call.pathname.startsWith("test262/daily/"));
+}
+
 function publishEntry() {
   const report: Test262Report = {
     summary: summary(2),
@@ -206,6 +210,7 @@ describe("test262 Blob publishing", () => {
 
     expect(manifestGets()).toHaveLength(2);
     expect(manifestPuts()).toHaveLength(2);
+    expect(dailyPuts()).toHaveLength(1);
     expect(manifest.runs.map((run) => run.artifactId)).toEqual([1001, 1002]);
   });
 
@@ -219,5 +224,6 @@ describe("test262 Blob publishing", () => {
     );
     expect(manifestGets()).toHaveLength(3);
     expect(manifestPuts()).toHaveLength(3);
+    expect(dailyPuts()).toHaveLength(0);
   });
 });

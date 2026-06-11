@@ -282,16 +282,6 @@ async function publishManifestWithRetry(
     }
 
     const manifest = createManifest([...merged.values()], prefix);
-    for (const run of manifest.daily) {
-      if (!changedDays.has(run.createdAt.slice(0, 10))) continue;
-      await put(dailyPathForPoint(run, prefix), JSON.stringify(run, null, 2), {
-        access,
-        allowOverwrite: true,
-        cacheControlMaxAge: 60,
-        contentType: "application/json",
-      });
-    }
-
     try {
       await put(
         test262BlobManifestPath(prefix),
@@ -304,7 +294,6 @@ async function publishManifestWithRetry(
           ...(existing ? { ifMatch: existing.etag } : {}),
         },
       );
-      return manifest;
     } catch (err) {
       if (
         !isManifestWriteConflict(err) ||
@@ -312,7 +301,21 @@ async function publishManifestWithRetry(
       ) {
         throw err;
       }
+      continue;
     }
+
+    // Only materialize daily files for a manifest state that actually won
+    // the conditional write.
+    for (const run of manifest.daily) {
+      if (!changedDays.has(run.createdAt.slice(0, 10))) continue;
+      await put(dailyPathForPoint(run, prefix), JSON.stringify(run, null, 2), {
+        access,
+        allowOverwrite: true,
+        cacheControlMaxAge: 60,
+        contentType: "application/json",
+      });
+    }
+    return manifest;
   }
   throw new Error("failed to publish test262 Blob manifest");
 }
