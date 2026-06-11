@@ -11365,8 +11365,18 @@ begin
             SetRegister(A, TGocciaStringLiteralValue.Create(
               UTF16CodeUnitAt(TGocciaStringLiteralValue(
                 FRegisters[B].ObjectValue).Value, KeyIndex)))
+          else if TryResolveObjectKey(FRegisters[C], PropKeyValue) then
+          begin
+            if PropKeyValue is TGocciaSymbolValue then
+              SetRegister(A, FRegisters[B].ObjectValue.Box.GetSymbolProperty(
+                TGocciaSymbolValue(PropKeyValue)))
+            else
+              SetRegister(A, GetPropertyValue(FRegisters[B].ObjectValue,
+                TGocciaStringLiteralValue(PropKeyValue).Value));
+          end
           else
-            FRegisters[A] := RegisterUndefined;
+            SetRegister(A, GetPropertyValue(FRegisters[B].ObjectValue,
+              KeyToPropertyNameRegister(FRegisters[C])));
         end
         else if (FRegisters[B].Kind = grkObject) and
                 (FRegisters[B].ObjectValue is TGocciaSymbolValue) then
@@ -12011,8 +12021,18 @@ begin
             SetRegister(A, TGocciaStringLiteralValue.Create(
               UTF16CodeUnitAt(TGocciaStringLiteralValue(
                 FRegisters[B].ObjectValue).Value, KeyIndex)))
+          else if TryResolveObjectKey(FRegisters[C], PropKeyValue) then
+          begin
+            if PropKeyValue is TGocciaSymbolValue then
+              SetRegister(A, FRegisters[B].ObjectValue.Box.GetSymbolProperty(
+                TGocciaSymbolValue(PropKeyValue)))
+            else
+              SetRegister(A, GetPropertyValue(FRegisters[B].ObjectValue,
+                TGocciaStringLiteralValue(PropKeyValue).Value));
+          end
           else
-            SetRegister(A, TGocciaUndefinedLiteralValue.UndefinedValue);
+            SetRegister(A, GetPropertyValue(FRegisters[B].ObjectValue,
+              KeyToPropertyNameRegister(FRegisters[C])));
         end
         else
           FRegisters[A] := RegisterUndefined;
