@@ -27,7 +27,8 @@ implementation
 uses
   TextSemantics,
 
-  Goccia.RegExp.UnicodeData;
+  Goccia.RegExp.UnicodeData,
+  Goccia.Timeout;
 
 const
   MIN_STEP_LIMIT = 10000000;
@@ -410,6 +411,13 @@ begin
     Inc(StepCount);
     if StepCount > StepLimit then
       raise ERegExpRuntimeError.Create('Maximum regular expression backtrack stack size exceeded');
+    // Catastrophic backtracking can spin here for seconds inside a single
+    // exec/test call; poll the cooperative engine deadline periodically.
+    // The 255 mask composes with CheckExecutionTimeout's internal 1/1024
+    // throttle: the clock is read once per ~262K steps, bounding deadline
+    // overshoot to low milliseconds at typical step costs.
+    if (StepCount and 255) = 0 then
+      CheckExecutionTimeout;
 
     Instr := AProgram.Code[PC];
     Op := TRegExpOpCode(Instr and $FF);
@@ -862,6 +870,13 @@ begin
   end;
   while StartPos <= Input.Length do
   begin
+    // Unanchored scans re-run the VM at every input position; on a long
+    // non-matching subject this loop runs millions of times inside one
+    // exec/test call, so poll the cooperative engine deadline here too.
+    // Deliberately unmasked: CheckExecutionTimeout's internal 1/1024 counter
+    // throttles deadlines > 16ms, and the always-check mode for <= 16ms
+    // deadlines is self-limiting (the expensive window lasts at most 16ms).
+    CheckExecutionTimeout;
     FillChar(Slots[0], SlotCount * SizeOf(Integer), $FF);
     if RunVM(AProgram, Input, StartPos, Slots, SlotCount) then
     begin

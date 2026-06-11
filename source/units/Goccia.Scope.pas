@@ -41,6 +41,15 @@ type
     FNonStrictMode: Boolean;
     FArgumentsObjectEnabled: Boolean;
     FRejectArgumentsReferenceInDirectEval: Boolean;
+    // Shared tail of TryGetBinding / TryGetBindingValueFillCache:
+    // resolution after the own lexical map has already been consulted.
+    function TryGetBindingSkipLexical(const AName: string;
+      out ABinding: TLexicalBinding; const ALine: Integer = 0;
+      const AColumn: Integer = 0): Boolean;
+    procedure RaiseBindingNotInitialized(const AName: string;
+      const ALine, AColumn: Integer);
+    procedure RaiseUndefinedVariable(const AName: string;
+      const ALine, AColumn: Integer);
   protected
     function GetThisValue: TGocciaValue; virtual;
     function GetOwningClass: TGocciaValue; virtual;
@@ -84,9 +93,42 @@ type
     // Helper methods for token-based declarations
     procedure DefineFromToken(const AName: string; const AValue: TGocciaValue; const ATokenType: TGocciaTokenType);
 
-    // Core methods
+    // Core methods.  TryGetBinding is the single source of truth for read
+    // resolution (TDZ still raises; False when unbound); GetBinding wraps it
+    // with the unbound-name raise, and TryGetBindingValue extracts the value.
+    function TryGetBinding(const AName: string; out ABinding: TLexicalBinding;
+      const ALine: Integer = 0; const AColumn: Integer = 0): Boolean; virtual;
+    // Own-scope read (own lexical, then own var) with no virtual dispatch
+    // and no parent walk — for adapter scopes that must read their own
+    // storage even when their TryGetBinding override resolves elsewhere
+    // first (e.g. direct-eval scopes whose override consults with-object
+    // bindings before the scope's own var environment).
+    function TryGetOwnBinding(const AName: string;
+      out ABinding: TLexicalBinding): Boolean;
     function GetBinding(const AName: string; const ALine: Integer = 0; const AColumn: Integer = 0): TLexicalBinding; virtual;
     function GetValue(const AName: string): TGocciaValue; virtual;
+    function TryGetBindingValue(const AName: string;
+      out AValue: TGocciaValue): Boolean;
+    // Inline-cache fast path: re-read an own lexical binding by the entry
+    // index obtained from TryGetBindingValueFillCache, validated against the
+    // binding map's entry version.  TDZ still raises.  Returns False on any
+    // stale cache so the caller can fall back to the named lookup.
+    function TryGetLexicalValueAt(const AEntryIndex: Integer;
+      const AVersion: Cardinal; out AValue: TGocciaValue): Boolean; inline;
+    // Named lookup that reports the own-lexical entry index and map version
+    // for inline caching.  AEntryIndex is -1 when the value was resolved
+    // through the global this-object, var bindings, or the parent chain —
+    // those resolutions are not cacheable.
+    function TryGetBindingValueFillCache(const AName: string;
+      out AEntryIndex: Integer; out AVersion: Cardinal;
+      out AValue: TGocciaValue): Boolean;
+    // Single source of truth for assignment resolution (TDZ, const, and
+    // strict-type errors still raise); returns False when the name is
+    // unbound anywhere on the chain and never creates a binding.
+    // AssignBinding wraps it with the sloppy-global-create / raise outcome.
+    function TryAssignExistingBinding(const AName: string;
+      const AValue: TGocciaValue; const ANonStrictMode: Boolean = False;
+      const ALine: Integer = 0; const AColumn: Integer = 0): Boolean; virtual;
     function DeleteBinding(const AName: string): Boolean; virtual;
 
     function ResolveIdentifier(const AName: string): TGocciaValue; virtual;
@@ -211,9 +253,9 @@ type
     FCatchParameter: string;  // Track the catch parameter name for proper shadowing
   public
     constructor Create(const AParent: TGocciaScope; const ACatchParameter: string);
-    procedure AssignBinding(const AName: string; const AValue: TGocciaValue;
-      const ALine: Integer = 0; const AColumn: Integer = 0;
-      const ANonStrictMode: Boolean = False); override;
+    function TryAssignExistingBinding(const AName: string;
+      const AValue: TGocciaValue; const ANonStrictMode: Boolean = False;
+      const ALine: Integer = 0; const AColumn: Integer = 0): Boolean; override;
   end;
 
   TGocciaWithScope = class(TGocciaScope)
@@ -224,11 +266,11 @@ type
     constructor Create(const AParent: TGocciaScope;
       const ABindingObject: TGocciaObjectValue);
     procedure MarkReferences; override;
-    procedure AssignBinding(const AName: string; const AValue: TGocciaValue;
-      const ALine: Integer = 0; const AColumn: Integer = 0;
-      const ANonStrictMode: Boolean = False); override;
-    function GetBinding(const AName: string; const ALine: Integer = 0;
-      const AColumn: Integer = 0): TLexicalBinding; override;
+    function TryGetBinding(const AName: string; out ABinding: TLexicalBinding;
+      const ALine: Integer = 0; const AColumn: Integer = 0): Boolean; override;
+    function TryAssignExistingBinding(const AName: string;
+      const AValue: TGocciaValue; const ANonStrictMode: Boolean = False;
+      const ALine: Integer = 0; const AColumn: Integer = 0): Boolean; override;
     function DeleteBinding(const AName: string): Boolean; override;
     procedure ResolveIdentifierReference(const AName: string;
       out AValue, AThisValue: TGocciaValue; const ALine: Integer = 0;
@@ -769,10 +811,43 @@ end;
 
 procedure TGocciaScope.AssignBinding(const AName: string; const AValue: TGocciaValue; const ALine: Integer = 0; const AColumn: Integer = 0; const ANonStrictMode: Boolean = False);
 var
+  Root: TGocciaScope;
+  GlobalObject: TGocciaObjectValue;
+begin
+  // Single source of truth for assignment semantics is the virtual
+  // TryAssignExistingBinding; this wrapper only owns the unbound-name
+  // outcome: sloppy assignments create a property on the root global
+  // this-object, strict assignments raise.
+  if TryAssignExistingBinding(AName, AValue, ANonStrictMode, ALine, AColumn) then
+    Exit;
+
+  Root := Self;
+  while Assigned(Root.FParent) do
+    Root := Root.FParent;
+  if ANonStrictMode and (Root.FScopeKind = skGlobal) and
+     (Root.FThisValue is TGocciaObjectValue) then
+  begin
+    GlobalObject := TGocciaObjectValue(Root.FThisValue);
+    GlobalObject.AssignPropertyWithReceiver(AName, AValue, GlobalObject);
+    Exit;
+  end;
+
+  RaiseUndefinedVariable(AName, ALine, AColumn);
+end;
+
+function TGocciaScope.TryAssignExistingBinding(const AName: string;
+  const AValue: TGocciaValue; const ANonStrictMode: Boolean = False;
+  const ALine: Integer = 0; const AColumn: Integer = 0): Boolean;
+var
   LexicalBinding: TLexicalBinding;
   StrictActive: Boolean;
   GlobalObject: TGocciaObjectValue;
 begin
+  // Assignment resolution order: own lexical (TDZ, const, and strict-type
+  // errors still raise), global this-object property, own var binding, then
+  // parent chain.  Unbound names return False; the caller decides whether
+  // that is a ReferenceError or a sloppy global create (see AssignBinding).
+  //
   // Type hints recorded on bindings persist for the lifetime of the
   // binding; the live --strict-types flag (read from the root scope)
   // gates whether they enforce.  This mirrors the function-entry
@@ -781,34 +856,21 @@ begin
   // continuing to throw based on stale state.
   StrictActive := EffectiveStrictTypes;
 
-  // Try to find variable in current scope first
   if FLexicalBindings.TryGetValue(AName, LexicalBinding) then
   begin
-    // Check if variable is initialized (temporal dead zone for let/const)
     if not LexicalBinding.IsAccessible then
-      raise TGocciaReferenceError.Create(
-        Format(SErrorCannotAccessBeforeInit, [AName]),
-        ALine, AColumn, '', nil,
-        SSuggestTemporalDeadZone);
-
-    // Check if variable is writable
+      RaiseBindingNotInitialized(AName, ALine, AColumn);
     if not LexicalBinding.Writable then
       raise TGocciaTypeError.Create(
         Format(SErrorAssignToConstant, [AName]),
         ALine, AColumn, '', nil,
         SSuggestUseLetNotConst);
-
-    // Strict-types enforcement: when this binding has a recorded type
-    // hint and the live strict-types flag is on, throw a TypeError if
-    // the assigned value does not match.
     if StrictActive and (LexicalBinding.TypeHint <> sltUntyped) then
       EnforceStrictType(AValue, LexicalBinding.TypeHint);
-
-    // Update the value and mark as initialized
     LexicalBinding.Value := AValue;
     LexicalBinding.Initialized := True;
     FLexicalBindings.AddOrSetValue(AName, LexicalBinding);
-    Exit;
+    Exit(True);
   end;
 
   if (FScopeKind = skGlobal) and (FThisValue is TGocciaObjectValue) and
@@ -816,85 +878,163 @@ begin
   begin
     GlobalObject := TGocciaObjectValue(FThisValue);
     if ANonStrictMode then
-    begin
-      GlobalObject.AssignPropertyWithReceiver(AName, AValue, GlobalObject);
-      Exit;
-    end;
-    GlobalObject.AssignProperty(AName, AValue);
-    Exit;
+      GlobalObject.AssignPropertyWithReceiver(AName, AValue, GlobalObject)
+    else
+      GlobalObject.AssignProperty(AName, AValue);
+    Exit(True);
   end;
 
-  // Check var bindings on this scope
   if Assigned(FVarBindings) and FVarBindings.TryGetValue(AName, LexicalBinding) then
   begin
     if StrictActive and (LexicalBinding.TypeHint <> sltUntyped) then
       EnforceStrictType(AValue, LexicalBinding.TypeHint);
     LexicalBinding.Value := AValue;
     FVarBindings.AddOrSetValue(AName, LexicalBinding);
-    Exit;
+    Exit(True);
   end;
 
-  // Variable not found in current scope, try parent scope
   if Assigned(FParent) then
-  begin
-    FParent.AssignBinding(AName, AValue, ALine, AColumn, ANonStrictMode);
-    Exit;
-  end;
+    Exit(FParent.TryAssignExistingBinding(AName, AValue, ANonStrictMode,
+      ALine, AColumn));
 
-  if ANonStrictMode and (FScopeKind = skGlobal) and
-     (FThisValue is TGocciaObjectValue) then
-  begin
-    GlobalObject := TGocciaObjectValue(FThisValue);
-    GlobalObject.AssignPropertyWithReceiver(AName, AValue, GlobalObject);
-    Exit;
-  end;
+  Result := False;
+end;
 
+function TGocciaScope.GetBinding(const AName: string; const ALine: Integer = 0; const AColumn: Integer = 0): TLexicalBinding;
+begin
+  // Single source of truth for read resolution is the virtual
+  // TryGetBinding; this wrapper only owns the unbound-name raise.
+  if not TryGetBinding(AName, Result, ALine, AColumn) then
+    RaiseUndefinedVariable(AName, ALine, AColumn);
+end;
+
+procedure TGocciaScope.RaiseBindingNotInitialized(const AName: string;
+  const ALine, AColumn: Integer);
+begin
+  raise TGocciaReferenceError.Create(
+    Format(SErrorCannotAccessBeforeInit, [AName]),
+    ALine, AColumn, '', nil,
+    SSuggestTemporalDeadZone);
+end;
+
+procedure TGocciaScope.RaiseUndefinedVariable(const AName: string;
+  const ALine, AColumn: Integer);
+begin
   raise TGocciaReferenceError.Create(
     Format(SErrorUndefinedVariable, [AName]),
     ALine, AColumn, '', nil,
     SSuggestDeclareBeforeUse);
 end;
 
-function TGocciaScope.GetBinding(const AName: string; const ALine: Integer = 0; const AColumn: Integer = 0): TLexicalBinding;
-var
-  LexicalBinding: TLexicalBinding;
-begin
-  if FLexicalBindings.TryGetValue(AName, LexicalBinding) then
-  begin
-    if not LexicalBinding.IsAccessible then
-      raise TGocciaReferenceError.Create(
-        Format(SErrorCannotAccessBeforeInit, [AName]),
-        ALine, AColumn, '', nil,
-        SSuggestTemporalDeadZone);
-    Result := LexicalBinding;
-  end
-  else
-  begin
-    if (FScopeKind = skGlobal) and (FThisValue is TGocciaObjectValue) and
-       TGocciaObjectValue(FThisValue).HasProperty(AName) then
-    begin
-      Result.Value := TGocciaObjectValue(FThisValue).GetProperty(AName);
-      Result.DeclarationType := dtVar;
-      Result.Initialized := True;
-      Result.BuiltIn := False;
-      Result.CanDelete := False;
-      Result.TypeHint := sltUntyped;
-      Exit;
-    end;
-    if Assigned(FVarBindings) and FVarBindings.TryGetValue(AName, LexicalBinding) then
-      Exit(LexicalBinding);
-    if Assigned(FParent) then
-      Exit(FParent.GetBinding(AName, ALine, AColumn));
-    raise TGocciaReferenceError.Create(
-      Format(SErrorUndefinedVariable, [AName]),
-      ALine, AColumn, '', nil,
-      SSuggestDeclareBeforeUse);
-  end;
-end;
-
 function TGocciaScope.GetValue(const AName: string): TGocciaValue;
 begin
   Result := GetBinding(AName).Value;
+end;
+
+function TGocciaScope.TryGetBinding(const AName: string;
+  out ABinding: TLexicalBinding; const ALine: Integer = 0;
+  const AColumn: Integer = 0): Boolean;
+begin
+  // Resolution order: own lexical (with TDZ check), global this-object
+  // property, own var binding, then parent chain.
+  if FLexicalBindings.TryGetValue(AName, ABinding) then
+  begin
+    if not ABinding.IsAccessible then
+      RaiseBindingNotInitialized(AName, ALine, AColumn);
+    Exit(True);
+  end;
+  Result := TryGetBindingSkipLexical(AName, ABinding, ALine, AColumn);
+end;
+
+function TGocciaScope.TryGetOwnBinding(const AName: string;
+  out ABinding: TLexicalBinding): Boolean;
+begin
+  if FLexicalBindings.TryGetValue(AName, ABinding) then
+  begin
+    if not ABinding.IsAccessible then
+      RaiseBindingNotInitialized(AName, 0, 0);
+    Exit(True);
+  end;
+  if Assigned(FVarBindings) and FVarBindings.TryGetValue(AName, ABinding) then
+    Exit(True);
+  ABinding := Default(TLexicalBinding);
+  Result := False;
+end;
+
+function TGocciaScope.TryGetBindingValue(const AName: string;
+  out AValue: TGocciaValue): Boolean;
+var
+  LexicalBinding: TLexicalBinding;
+begin
+  Result := TryGetBinding(AName, LexicalBinding);
+  if Result then
+    AValue := LexicalBinding.Value
+  else
+    AValue := nil;
+end;
+
+function TGocciaScope.TryGetBindingSkipLexical(const AName: string;
+  out ABinding: TLexicalBinding; const ALine: Integer = 0;
+  const AColumn: Integer = 0): Boolean;
+begin
+  if (FScopeKind = skGlobal) and (FThisValue is TGocciaObjectValue) and
+     TGocciaObjectValue(FThisValue).HasProperty(AName) then
+  begin
+    ABinding.Value := TGocciaObjectValue(FThisValue).GetProperty(AName);
+    ABinding.DeclarationType := dtVar;
+    ABinding.Initialized := True;
+    ABinding.BuiltIn := False;
+    ABinding.CanDelete := False;
+    ABinding.TypeHint := sltUntyped;
+    Exit(True);
+  end;
+  if Assigned(FVarBindings) and FVarBindings.TryGetValue(AName, ABinding) then
+    Exit(True);
+  if Assigned(FParent) then
+    Exit(FParent.TryGetBinding(AName, ABinding, ALine, AColumn));
+  ABinding := Default(TLexicalBinding);
+  Result := False;
+end;
+
+function TGocciaScope.TryGetLexicalValueAt(const AEntryIndex: Integer;
+  const AVersion: Cardinal; out AValue: TGocciaValue): Boolean;
+var
+  LexicalBinding: TLexicalBinding;
+begin
+  if (AVersion <> FLexicalBindings.EntryVersion) or
+     not FLexicalBindings.TryGetValueAtEntry(AEntryIndex, LexicalBinding) then
+  begin
+    AValue := nil;
+    Exit(False);
+  end;
+  if not LexicalBinding.IsAccessible then
+    RaiseBindingNotInitialized(FLexicalBindings.KeyAtEntry(AEntryIndex), 0, 0);
+  AValue := LexicalBinding.Value;
+  Result := True;
+end;
+
+function TGocciaScope.TryGetBindingValueFillCache(const AName: string;
+  out AEntryIndex: Integer; out AVersion: Cardinal;
+  out AValue: TGocciaValue): Boolean;
+var
+  LexicalBinding: TLexicalBinding;
+begin
+  if FLexicalBindings.TryGetEntryIndex(AName, AEntryIndex) then
+  begin
+    AVersion := FLexicalBindings.EntryVersion;
+    FLexicalBindings.TryGetValueAtEntry(AEntryIndex, LexicalBinding);
+    if not LexicalBinding.IsAccessible then
+      RaiseBindingNotInitialized(AName, 0, 0);
+    AValue := LexicalBinding.Value;
+    Exit(True);
+  end;
+  AEntryIndex := -1;
+  AVersion := 0;
+  Result := TryGetBindingSkipLexical(AName, LexicalBinding);
+  if Result then
+    AValue := LexicalBinding.Value
+  else
+    AValue := nil;
 end;
 
 function TGocciaScope.DeleteBinding(const AName: string): Boolean;
@@ -1157,21 +1297,20 @@ begin
   FCatchParameter := ACatchParameter;
 end;
 
-procedure TGocciaCatchScope.AssignBinding(const AName: string; const AValue: TGocciaValue; const ALine: Integer = 0; const AColumn: Integer = 0; const ANonStrictMode: Boolean = False);
+function TGocciaCatchScope.TryAssignExistingBinding(const AName: string;
+  const AValue: TGocciaValue; const ANonStrictMode: Boolean = False;
+  const ALine: Integer = 0; const AColumn: Integer = 0): Boolean;
 begin
-  // Surgical fix for catch parameter scopes: assignments to non-parameter variables
-  // should propagate to parent scope, but catch parameters should stay for proper shadowing
-  if (AName <> FCatchParameter) and (not FLexicalBindings.ContainsKey(AName)) and Assigned(FParent) then
-  begin
-    // This is a catch parameter scope and the variable isn't the catch parameter.
-    // Delegate directly to parent to ensure assignment propagation
-    FParent.AssignBinding(AName, AValue, ALine, AColumn, ANonStrictMode);
-  end
+  // Catch parameter shadowing: assignments to non-parameter names not bound
+  // on this scope propagate straight to the parent; the catch parameter
+  // itself (and anything declared here) uses base behavior.
+  if (AName <> FCatchParameter) and
+     (not FLexicalBindings.ContainsKey(AName)) and Assigned(FParent) then
+    Result := FParent.TryAssignExistingBinding(AName, AValue, ANonStrictMode,
+      ALine, AColumn)
   else
-  begin
-    // Either it's the catch parameter or it exists in current scope - use base behavior
-    inherited AssignBinding(AName, AValue, ALine, AColumn, ANonStrictMode);
-  end;
+    Result := inherited TryAssignExistingBinding(AName, AValue, ANonStrictMode,
+      ALine, AColumn);
 end;
 
 { TGocciaWithScope }
@@ -1211,39 +1350,38 @@ begin
     FBindingObject.MarkReferences;
 end;
 
-procedure TGocciaWithScope.AssignBinding(const AName: string;
-  const AValue: TGocciaValue; const ALine: Integer = 0;
-  const AColumn: Integer = 0; const ANonStrictMode: Boolean = False);
+function TGocciaWithScope.TryGetBinding(const AName: string;
+  out ABinding: TLexicalBinding; const ALine: Integer = 0;
+  const AColumn: Integer = 0): Boolean;
+begin
+  // Object-environment lookups come first.
+  if HasObjectBinding(AName) then
+  begin
+    ABinding.Value := FBindingObject.GetProperty(AName);
+    ABinding.DeclarationType := dtVar;
+    ABinding.Initialized := True;
+    ABinding.BuiltIn := False;
+    ABinding.CanDelete := False;
+    ABinding.TypeHint := sltUntyped;
+    Exit(True);
+  end;
+  Result := inherited TryGetBinding(AName, ABinding, ALine, AColumn);
+end;
+
+function TGocciaWithScope.TryAssignExistingBinding(const AName: string;
+  const AValue: TGocciaValue; const ANonStrictMode: Boolean = False;
+  const ALine: Integer = 0; const AColumn: Integer = 0): Boolean;
 begin
   if HasObjectBinding(AName) then
   begin
     if ANonStrictMode then
-    begin
-      FBindingObject.AssignPropertyWithReceiver(AName, AValue, FBindingObject);
-      Exit;
-    end;
-    FBindingObject.AssignProperty(AName, AValue);
-    Exit;
+      FBindingObject.AssignPropertyWithReceiver(AName, AValue, FBindingObject)
+    else
+      FBindingObject.AssignProperty(AName, AValue);
+    Exit(True);
   end;
-
-  inherited AssignBinding(AName, AValue, ALine, AColumn, ANonStrictMode);
-end;
-
-function TGocciaWithScope.GetBinding(const AName: string; const ALine: Integer = 0;
-  const AColumn: Integer = 0): TLexicalBinding;
-begin
-  if HasObjectBinding(AName) then
-  begin
-    Result.Value := FBindingObject.GetProperty(AName);
-    Result.DeclarationType := dtVar;
-    Result.Initialized := True;
-    Result.BuiltIn := False;
-    Result.CanDelete := False;
-    Result.TypeHint := sltUntyped;
-    Exit;
-  end;
-
-  Result := inherited GetBinding(AName, ALine, AColumn);
+  Result := inherited TryAssignExistingBinding(AName, AValue, ANonStrictMode,
+    ALine, AColumn);
 end;
 
 function TGocciaWithScope.DeleteBinding(const AName: string): Boolean;

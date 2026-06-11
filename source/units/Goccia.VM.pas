@@ -472,11 +472,11 @@ type
       const ALexicalClosure: TGocciaBytecodeClosure;
       const ANewTarget: TGocciaValue);
     procedure MarkReferences; override;
-    procedure AssignBinding(const AName: string; const AValue: TGocciaValue;
-      const ALine: Integer = 0; const AColumn: Integer = 0;
-      const ANonStrictMode: Boolean = False); override;
-    function GetBinding(const AName: string; const ALine: Integer = 0;
-      const AColumn: Integer = 0): TLexicalBinding; override;
+    function TryGetBinding(const AName: string; out ABinding: TLexicalBinding;
+      const ALine: Integer = 0; const AColumn: Integer = 0): Boolean; override;
+    function TryAssignExistingBinding(const AName: string;
+      const AValue: TGocciaValue; const ANonStrictMode: Boolean = False;
+      const ALine: Integer = 0; const AColumn: Integer = 0): Boolean; override;
     function DeleteBinding(const AName: string): Boolean; override;
     procedure ResolveIdentifierReference(const AName: string;
       out AValue, AThisValue: TGocciaValue; const ALine: Integer = 0;
@@ -1009,9 +1009,51 @@ begin
   Result := False;
 end;
 
-procedure TGocciaVMDirectEvalScope.AssignBinding(const AName: string;
-  const AValue: TGocciaValue; const ALine: Integer; const AColumn: Integer;
-  const ANonStrictMode: Boolean);
+// Direct-eval environments resolve through their own binding table before
+// the ordinary scope walk, so the Try* core must consult the with-object
+// bindings and the captured binding table first and only then fall through
+// to the inherited resolution.  GetBinding/AssignBinding need no overrides:
+// the base wrappers over these Try* methods reproduce them exactly.
+function TGocciaVMDirectEvalScope.TryGetBinding(const AName: string;
+  out ABinding: TLexicalBinding; const ALine: Integer = 0;
+  const AColumn: Integer = 0): Boolean;
+var
+  Binding: TGocciaDirectEvalBindingInfo;
+  WithObject: TGocciaObjectValue;
+begin
+  if TryFindWithObjectBinding(AName, WithObject) then
+  begin
+    ABinding.Value := WithObject.GetProperty(AName);
+    ABinding.DeclarationType := dtVar;
+    ABinding.Initialized := True;
+    ABinding.BuiltIn := False;
+    ABinding.CanDelete := False;
+    ABinding.TypeHint := sltUntyped;
+    Exit(True);
+  end;
+
+  if TryFindBinding(AName, Binding) then
+  begin
+    if (not Binding.IsConst) and ContainsOwnVarBinding(AName) then
+      Exit(inherited TryGetBinding(AName, ABinding, ALine, AColumn));
+    ABinding.Value := BindingValue(Binding);
+    if Binding.IsConst then
+      ABinding.DeclarationType := dtConst
+    else
+      ABinding.DeclarationType := dtVar;
+    ABinding.Initialized := True;
+    ABinding.BuiltIn := False;
+    ABinding.CanDelete := False;
+    ABinding.TypeHint := sltUntyped;
+    Exit(True);
+  end;
+
+  Result := inherited TryGetBinding(AName, ABinding, ALine, AColumn);
+end;
+
+function TGocciaVMDirectEvalScope.TryAssignExistingBinding(const AName: string;
+  const AValue: TGocciaValue; const ANonStrictMode: Boolean = False;
+  const ALine: Integer = 0; const AColumn: Integer = 0): Boolean;
 var
   Binding: TGocciaDirectEvalBindingInfo;
   WithObject: TGocciaObjectValue;
@@ -1022,17 +1064,22 @@ begin
       WithObject.AssignPropertyWithReceiver(AName, AValue, WithObject)
     else
       WithObject.AssignProperty(AName, AValue);
-    Exit;
+    Exit(True);
   end;
 
   if ContainsOwnVarBinding(AName) then
-  begin
-    inherited AssignBinding(AName, AValue, ALine, AColumn, ANonStrictMode);
-    Exit;
-  end;
+    Exit(inherited TryAssignExistingBinding(AName, AValue, ANonStrictMode,
+      ALine, AColumn));
 
   if TryFindBinding(AName, Binding) then
   begin
+    // TDZ: a captured lexical binding still holding the hole sentinel has
+    // not been initialized yet; assignment through direct eval must raise
+    // the same ReferenceError the ordinary local/upvalue paths produce.
+    if BindingValue(Binding) = TGocciaHoleValue.HoleValue then
+      raise TGocciaReferenceError.Create(
+        Format(SErrorCannotAccessBeforeInit, [AName]),
+        ALine, AColumn, '', nil, SSuggestTemporalDeadZone);
     if Binding.IsConst then
       raise TGocciaTypeError.Create(
         Format(SErrorAssignToConstant, [AName]),
@@ -1043,44 +1090,11 @@ begin
     // environment, so assignments update the captured slot/upvalue directly
     // instead of creating a local var shadow in this adapter scope.
     SetBindingValue(Binding, AValue);
-    Exit;
-  end;
-  inherited AssignBinding(AName, AValue, ALine, AColumn, ANonStrictMode);
-end;
-
-function TGocciaVMDirectEvalScope.GetBinding(const AName: string;
-  const ALine: Integer; const AColumn: Integer): TLexicalBinding;
-var
-  Binding: TGocciaDirectEvalBindingInfo;
-  WithObject: TGocciaObjectValue;
-begin
-  if TryFindWithObjectBinding(AName, WithObject) then
-  begin
-    Result.Value := WithObject.GetProperty(AName);
-    Result.DeclarationType := dtVar;
-    Result.Initialized := True;
-    Result.BuiltIn := False;
-    Result.CanDelete := False;
-    Result.TypeHint := sltUntyped;
-    Exit;
+    Exit(True);
   end;
 
-  if TryFindBinding(AName, Binding) then
-  begin
-    if (not Binding.IsConst) and ContainsOwnVarBinding(AName) then
-      Exit(inherited GetBinding(AName, ALine, AColumn));
-    Result.Value := BindingValue(Binding);
-    if Binding.IsConst then
-      Result.DeclarationType := dtConst
-    else
-      Result.DeclarationType := dtVar;
-    Result.Initialized := True;
-    Result.BuiltIn := False;
-    Result.CanDelete := False;
-    Result.TypeHint := sltUntyped;
-    Exit;
-  end;
-  Result := inherited GetBinding(AName, ALine, AColumn);
+  Result := inherited TryAssignExistingBinding(AName, AValue, ANonStrictMode,
+    ALine, AColumn);
 end;
 
 function TGocciaVMDirectEvalScope.DeleteBinding(const AName: string): Boolean;
@@ -1168,8 +1182,12 @@ begin
       Continue;
     if ContainsOwnVarBinding(Binding.Name) and (Binding.Kind <> debUpvalue) then
     begin
-      LexicalBinding := inherited GetBinding(Binding.Name);
-      SetBindingValue(Binding, LexicalBinding.Value);
+      // Read this scope's own var environment directly: GetBinding would
+      // dispatch back through this scope's TryGetBinding override, whose
+      // with-object head shadows the var binding being copied back
+      // (Annex B function-in-block hoisting inside `with`).
+      if TryGetOwnBinding(Binding.Name, LexicalBinding) then
+        SetBindingValue(Binding, LexicalBinding.Value);
     end;
   end;
 end;
@@ -1188,7 +1206,8 @@ begin
   begin
     if not ContainsOwnVarBinding(Name) then
       Continue;
-    Binding := inherited GetBinding(Name);
+    if not TryGetOwnBinding(Name, Binding) then
+      Continue;
     Parent.DefineVariableBinding(Name, Binding.Value, True, True);
   end;
 end;
@@ -2786,6 +2805,10 @@ begin
       Result := PromiseReject(CreateErrorObject(SYNTAX_ERROR_NAME, E.Message));
     on E: TGocciaRuntimeError do
       Result := PromiseReject(CreateErrorObject(ERROR_NAME, E.Message));
+    on E: TGocciaTimeoutError do
+      raise;
+    on E: TGocciaInstructionLimitError do
+      raise;
     on E: Exception do
       Result := PromiseReject(CreateErrorObject(ERROR_NAME, E.Message));
   end;
@@ -2862,6 +2885,10 @@ begin
       Result := PromiseReject(CreateErrorObject(SYNTAX_ERROR_NAME, E.Message));
     on E: TGocciaRuntimeError do
       Result := PromiseReject(CreateErrorObject(ERROR_NAME, E.Message));
+    on E: TGocciaTimeoutError do
+      raise;
+    on E: TGocciaInstructionLimitError do
+      raise;
     on E: Exception do
       Result := PromiseReject(CreateErrorObject(ERROR_NAME, E.Message));
   end;
@@ -2955,6 +2982,10 @@ begin
       Result := PromiseReject(CreateErrorObject(SYNTAX_ERROR_NAME, E.Message));
     on E: TGocciaRuntimeError do
       Result := PromiseReject(CreateErrorObject(ERROR_NAME, E.Message));
+    on E: TGocciaTimeoutError do
+      raise;
+    on E: TGocciaInstructionLimitError do
+      raise;
     on E: Exception do
       Result := PromiseReject(CreateErrorObject(ERROR_NAME, E.Message));
   end;
@@ -3771,6 +3802,10 @@ begin
       FPromise.Reject(CreateErrorObject(TYPE_ERROR_NAME, E.Message));
     on E: TGocciaReferenceError do
       FPromise.Reject(CreateErrorObject(REFERENCE_ERROR_NAME, E.Message));
+    on E: TGocciaTimeoutError do
+      raise;
+    on E: TGocciaInstructionLimitError do
+      raise;
     on E: Exception do
       FPromise.Reject(CreateErrorObject(ERROR_NAME, E.Message));
   end;
@@ -10683,6 +10718,8 @@ var
   CallArgs: TGocciaArgumentsCollection;
   I: Integer;
   GlobalName: string;
+  GlobalBindingValue: TGocciaValue;
+  GlobalReadCache: PGocciaGlobalReadCacheEntry;
   AttributeType: string;
   SpecifierString: string;
   Upvalue: TGocciaBytecodeUpvalue;
@@ -13433,14 +13470,55 @@ begin
 
       OP_GET_GLOBAL:
       begin
-        GlobalName := Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue;
-        if HasDynamicVarBinding(FCurrentDynamicVarScope, GlobalName) then
-          FRegisters[A] := VMValueToRegisterFast(
-            FCurrentDynamicVarScope.GetValue(GlobalName))
-        else if Assigned(FGlobalScope) and FGlobalScope.Contains(GlobalName) then
-          FRegisters[A] := VMValueToRegisterFast(FGlobalScope.GetValue(GlobalName))
+        if Assigned(FCurrentDynamicVarScope) or not Assigned(FGlobalScope) then
+        begin
+          GlobalName := Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue;
+          if HasDynamicVarBinding(FCurrentDynamicVarScope, GlobalName) then
+            FRegisters[A] := VMValueToRegisterFast(
+              FCurrentDynamicVarScope.GetValue(GlobalName))
+          else if Assigned(FGlobalScope) and
+                  FGlobalScope.TryGetBindingValue(GlobalName, GlobalBindingValue) then
+            FRegisters[A] := VMValueToRegisterFast(GlobalBindingValue)
+          else
+            FRegisters[A] := RegisterUndefined;
+        end
         else
-          FRegisters[A] := RegisterUndefined;
+        begin
+          // Hot shape: per-site inline cache keyed by the name-constant
+          // index, validated against (scope identity, binding-map version).
+          // A nil slot (out-of-range constant index in corrupt bytecode)
+          // degrades to the uncached single-lookup read.  A miss leaves
+          // Scope untouched: EntryIndex = -1 alone guarantees the next
+          // validation fails.
+          GlobalReadCache := Template.GlobalReadCacheSlot(DecodeBx(Instruction));
+          if Assigned(GlobalReadCache) and
+             (GlobalReadCache^.Scope = Pointer(FGlobalScope)) and
+             FGlobalScope.TryGetLexicalValueAt(GlobalReadCache^.EntryIndex,
+               GlobalReadCache^.Version, GlobalBindingValue) then
+            FRegisters[A] := VMValueToRegisterFast(GlobalBindingValue)
+          else
+          begin
+            GlobalName := Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue;
+            if Assigned(GlobalReadCache) then
+            begin
+              if FGlobalScope.TryGetBindingValueFillCache(GlobalName,
+                GlobalReadCache^.EntryIndex, GlobalReadCache^.Version,
+                GlobalBindingValue) then
+              begin
+                if GlobalReadCache^.EntryIndex >= 0 then
+                  GlobalReadCache^.Scope := Pointer(FGlobalScope);
+                FRegisters[A] := VMValueToRegisterFast(GlobalBindingValue);
+              end
+              else
+                FRegisters[A] := RegisterUndefined;
+            end
+            else if FGlobalScope.TryGetBindingValue(GlobalName,
+              GlobalBindingValue) then
+              FRegisters[A] := VMValueToRegisterFast(GlobalBindingValue)
+            else
+              FRegisters[A] := RegisterUndefined;
+          end;
+        end;
       end;
 
       OP_SET_GLOBAL:
@@ -13451,9 +13529,8 @@ begin
             RegisterToValue(FRegisters[A]))
         else if Assigned(FGlobalScope) then
         begin
-          if FGlobalScope.Contains(GlobalName) then
-            FGlobalScope.AssignBinding(GlobalName, RegisterToValue(FRegisters[A]))
-          else
+          if not FGlobalScope.TryAssignExistingBinding(GlobalName,
+            RegisterToValue(FRegisters[A])) then
             ThrowReferenceError(GlobalName + ' is not defined');
         end;
       end;
@@ -13466,10 +13543,9 @@ begin
             RegisterToValue(FRegisters[A]), 0, 0, True)
         else if Assigned(FGlobalScope) then
         begin
-          if FGlobalScope.Contains(GlobalName) then
-            FGlobalScope.AssignBinding(GlobalName,
-              RegisterToValue(FRegisters[A]), 0, 0, True)
-          else if FGlobalScope.ThisValue is TGocciaObjectValue then
+          if (not FGlobalScope.TryAssignExistingBinding(GlobalName,
+            RegisterToValue(FRegisters[A]), True)) and
+             (FGlobalScope.ThisValue is TGocciaObjectValue) then
             TGocciaObjectValue(FGlobalScope.ThisValue).AssignPropertyWithReceiver(
               GlobalName, RegisterToValue(FRegisters[A]), FGlobalScope.ThisValue);
         end;
@@ -13614,6 +13690,10 @@ begin
             on E: TGocciaReferenceError do
               DynImportPromise.Reject(
                 CreateErrorObject(REFERENCE_ERROR_NAME, E.Message));
+            on E: TGocciaTimeoutError do
+              raise;
+            on E: TGocciaInstructionLimitError do
+              raise;
             on E: Exception do
               DynImportPromise.Reject(
                 CreateErrorObject(ERROR_NAME, E.Message));
@@ -13682,6 +13762,10 @@ begin
             on E: TGocciaReferenceError do
               DynImportPromise.Reject(
                 CreateErrorObject(REFERENCE_ERROR_NAME, E.Message));
+            on E: TGocciaTimeoutError do
+              raise;
+            on E: TGocciaInstructionLimitError do
+              raise;
             on E: Exception do
               DynImportPromise.Reject(
                 CreateErrorObject(ERROR_NAME, E.Message));
@@ -13801,6 +13885,10 @@ begin
               else
                 SetRegister(A, E.Value);
             end;
+            on E: TGocciaTimeoutError do
+              raise;
+            on E: TGocciaInstructionLimitError do
+              raise;
             on E: Exception do
             begin
               // Preserve typed error names for native Goccia exceptions

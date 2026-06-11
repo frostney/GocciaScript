@@ -95,6 +95,17 @@ type
     sltReference
   );
 
+  // Runtime-only inline cache for OP_GET_GLOBAL sites, indexed by the
+  // instruction's name-constant index.  Scope is a weak pointer compared for
+  // identity only (never dereferenced); Version/EntryIndex validate against
+  // the scope's lexical binding map.  Not serialised to .gbc.
+  TGocciaGlobalReadCacheEntry = record
+    Scope: Pointer;
+    Version: Cardinal;
+    EntryIndex: Integer;
+  end;
+  PGocciaGlobalReadCacheEntry = ^TGocciaGlobalReadCacheEntry;
+
   TGocciaFunctionTemplate = class
   private
     FName: string;
@@ -137,6 +148,7 @@ type
     FTemplateObjectCacheCount: Integer;
     FRegExpProgramCaches: array of TObject;
     FRegExpProgramCacheCount: Integer;
+    FGlobalReadCaches: array of TGocciaGlobalReadCacheEntry;
     function GetFunctionCount: Integer;
   public
     constructor Create(const AName: string);
@@ -160,6 +172,8 @@ type
     procedure SetTemplateObjectCache(const ASlot: Integer; const AValue: TObject);
     function GetRegExpProgramCache(const ASlot: Integer): TObject;
     procedure SetRegExpProgramCache(const ASlot: Integer; const AValue: TObject);
+    function GlobalReadCacheSlot(
+      const AConstIndex: Integer): PGocciaGlobalReadCacheEntry; inline;
     function AddFunction(const AFunction: TGocciaFunctionTemplate): UInt16;
     procedure AddUpvalueDescriptor(const AIsLocal: Boolean; const AIndex: UInt8;
       const AName: string = '');
@@ -521,6 +535,23 @@ procedure TGocciaFunctionTemplate.SetRegExpProgramCache(const ASlot: Integer;
 begin
   if (ASlot >= 0) and (ASlot < FRegExpProgramCacheCount) then
     FRegExpProgramCaches[ASlot] := AValue;
+end;
+
+function TGocciaFunctionTemplate.GlobalReadCacheSlot(
+  const AConstIndex: Integer): PGocciaGlobalReadCacheEntry;
+begin
+  // Out-of-range constant indices (possible only with corrupt or hostile
+  // .gbc input) must not yield a pointer past the array end — the VM writes
+  // through this pointer, so that would be a wild heap write in production
+  // builds.  nil tells the caller to run uncached.
+  if (AConstIndex < 0) or (AConstIndex >= FConstantCount) then
+    Exit(nil);
+  // Lazily sized to the constant pool on first use; constants are fixed by
+  // the time the VM executes, so the array never needs to grow again.
+  // SetLength zero-fills, so fresh slots have Scope = nil and always miss.
+  if AConstIndex >= Length(FGlobalReadCaches) then
+    SetLength(FGlobalReadCaches, FConstantCount);
+  Result := @FGlobalReadCaches[AConstIndex];
 end;
 
 function TGocciaFunctionTemplate.AddFunction(

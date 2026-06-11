@@ -49,7 +49,9 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
+  Goccia.InstructionLimit,
   Goccia.MicrotaskQueue,
+  Goccia.Timeout,
   Goccia.Utils,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
@@ -1058,6 +1060,10 @@ begin
     on E: TGocciaThrowValue do
       { Step 5: Abrupt completion — Call(reject, status.[[Value]]) }
       Promise.Reject(E.Value);
+    on E: TGocciaTimeoutError do
+      raise;
+    on E: TGocciaInstructionLimitError do
+      raise;
     on E: Exception do
       Promise.Reject(CreateErrorObject(ERROR_NAME, E.Message));
   end;

@@ -609,16 +609,21 @@ jobs:
 
       - name: Run test262 conformance suite
         continue-on-error: true
-        # --jobs=2 (not 4): higher concurrency tripped false-positive
-        # watchdog stalls on GH-hosted runners under the previous
-        # chunked-runner architecture.  Per-test subprocess is more
-        # forgiving but the 2-CPU GH runner doesn't actually benefit
-        # from more.
+        # --timeout-ms=20000: the per-test deadline is wall-clock, and at
+        # --jobs=4 the workers fully subscribe the runner, inflating each
+        # test's wall time ~30-40% vs the old --jobs=2 baseline; borderline
+        # 7-9s tests must not trip the deadline purely from contention.
+        # --jobs=4 matches the 4 vCPUs on GH-hosted ubuntu-latest runners
+        # for public repos.  The old --jobs=2 ceiling guarded against
+        # watchdog stalls in the retired chunked-runner architecture;
+        # per-test subprocesses tolerate scheduler jitter, so the only
+        # remaining limit is core count.
         run: |
           bun scripts/run_test262_suite.ts \
             --suite-dir test262-suite \
             --mode=bytecode \
-            --jobs=2 \
+            --jobs=4 \
+            --timeout-ms=20000 \
             --output=test262-results.json
 
       - name: Stage test262 baseline
