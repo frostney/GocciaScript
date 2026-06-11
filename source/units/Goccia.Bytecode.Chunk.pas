@@ -126,6 +126,26 @@ type
   end;
   PGocciaPropertyReadCacheEntry = ^TGocciaPropertyReadCacheEntry;
 
+  // Runtime-only inline cache for OP_GET_PROP_CONST sites that resolve on
+  // the receiver's prototype chain (methods on class prototype objects are
+  // the dominant case). Shapes[0] is the receiver's own shape — proving
+  // continued ABSENCE of the name on the receiver — and Shapes[1..Holder-
+  // Level] are the chain shapes, proving absence below the holder and
+  // presence at the holder. A shape is the key set, so an unchanged fresh
+  // shape proves absence/presence regardless of object identity, which
+  // keeps the cache valid across setPrototypeOf to a same-shaped
+  // prototype; the hit path walks the live chain, so link changes are
+  // followed inherently. The holder's descriptor is re-read by entry index
+  // on every hit. HolderLevel = 0 means the slot is empty. All pointers
+  // are weak and compared for identity only. Not serialised to .gbc.
+  TGocciaProtoReadCacheEntry = record
+    Shapes: array [0 .. 2] of Pointer;
+    EntryIndex: Integer;
+    HolderLevel: Byte;
+    MissStreak: Byte;
+  end;
+  PGocciaProtoReadCacheEntry = ^TGocciaProtoReadCacheEntry;
+
   TGocciaFunctionTemplate = class
   private
     FName: string;
@@ -170,6 +190,7 @@ type
     FRegExpProgramCacheCount: Integer;
     FGlobalReadCaches: array of TGocciaGlobalReadCacheEntry;
     FPropertyReadCaches: array of TGocciaPropertyReadCacheEntry;
+    FProtoReadCaches: array of TGocciaProtoReadCacheEntry;
     function GetFunctionCount: Integer;
   public
     constructor Create(const AName: string);
@@ -197,6 +218,8 @@ type
       const AConstIndex: Integer): PGocciaGlobalReadCacheEntry; inline;
     function PropertyReadCacheSlot(
       const AConstIndex: Integer): PGocciaPropertyReadCacheEntry; inline;
+    function ProtoReadCacheSlot(
+      const AConstIndex: Integer): PGocciaProtoReadCacheEntry; inline;
     function AddFunction(const AFunction: TGocciaFunctionTemplate): UInt16;
     procedure AddUpvalueDescriptor(const AIsLocal: Boolean; const AIndex: UInt8;
       const AName: string = '');
@@ -583,12 +606,24 @@ begin
   // Same contract as GlobalReadCacheSlot: nil for out-of-range constant
   // indices (corrupt or hostile .gbc input) so the VM runs uncached rather
   // than writing through a wild pointer.  SetLength zero-fills, so fresh
-  // slots have Map = nil and always miss.
+  // slots have Shape = nil and always miss.
   if (AConstIndex < 0) or (AConstIndex >= FConstantCount) then
     Exit(nil);
   if AConstIndex >= Length(FPropertyReadCaches) then
     SetLength(FPropertyReadCaches, FConstantCount);
   Result := @FPropertyReadCaches[AConstIndex];
+end;
+
+function TGocciaFunctionTemplate.ProtoReadCacheSlot(
+  const AConstIndex: Integer): PGocciaProtoReadCacheEntry;
+begin
+  // Same contract as PropertyReadCacheSlot; fresh slots have
+  // HolderLevel = 0 and always miss.
+  if (AConstIndex < 0) or (AConstIndex >= FConstantCount) then
+    Exit(nil);
+  if AConstIndex >= Length(FProtoReadCaches) then
+    SetLength(FProtoReadCaches, FConstantCount);
+  Result := @FProtoReadCaches[AConstIndex];
 end;
 
 function TGocciaFunctionTemplate.AddFunction(
