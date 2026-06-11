@@ -25,6 +25,7 @@ type
     PrevCovLine: UInt32;
     ProfileEntryTimestamp: Int64;
     NewTarget: Pointer;
+    GlobalScope: Pointer;
     DynamicVarScope: Pointer;
     ExecutionContextPushed: Boolean;
   end;

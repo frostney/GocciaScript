@@ -36,6 +36,17 @@ describe("Reflect.set", () => {
     expect(() => Reflect.set(null, "x", 1)).toThrow(TypeError);
   });
 
+  test("coerces missing property key and value instead of enforcing arity", () => {
+    const obj = {};
+    expect(Reflect.set(obj)).toBe(true);
+    expect(Object.prototype.hasOwnProperty.call(obj, "undefined")).toBe(true);
+    expect(obj.undefined).toBeUndefined();
+  });
+
+  test("still validates target before coercing missing property key", () => {
+    expect(() => Reflect.set()).toThrow(TypeError);
+  });
+
   test("receiver is passed as this to setter", () => {
     let setterThis = null;
     const target = {};

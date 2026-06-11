@@ -1,6 +1,10 @@
 import { localFunction, localValue } from "./local-module.js";
-import defer * as deferredMath from "./helpers/missing-defer-fixture.js";
-import defer * as attributedDeferredMath from "./helpers/missing-defer-fixture.js" with { };
+import defer * as deferredMath from "./helpers/math-utils.js";
+import defer * as attributedDeferredMath from "./helpers/math-utils.js" with { };
+import defer * as deferredConfig from "./helpers/config.json" with { type: "json" };
+import defer * as deferredTLA from "./helpers/deferred-tla.js";
+import defer * as deferredAwaitText from "./helpers/deferred-await-text.js";
+import "./helpers/side-effect-marker.js";
 
 describe("basic import", () => {
   test("import function from local module", () => {
@@ -11,9 +15,36 @@ describe("basic import", () => {
     expect(localValue).toBe("hello");
   });
 
-  test("unsupported import defer namespace syntax is accepted as a no-op", () => {
-    expect(typeof deferredMath).toBe("undefined");
-    expect(typeof attributedDeferredMath).toBe("undefined");
+  test("import defer namespace syntax binds deferred module namespaces", () => {
+    expect(deferredMath.add(2, 3)).toBe(5);
+    expect(attributedDeferredMath.multiply(3, 4)).toBe(12);
+  });
+
+  test("import defer preserves attributes for asset modules", () => {
+    expect(deferredConfig.name).toBe("goccia-test");
+    expect(deferredConfig.default.name).toBe("goccia-test");
+  });
+
+  test("import defer eagerly evaluates top-level await dependencies", () => {
+    expect(globalThis.__gocciaDeferredTLAOrder).toEqual([
+      "tla start",
+      "tla end",
+    ]);
+    expect(deferredTLA.value).toBe(23);
+    expect(globalThis.__gocciaDeferredTLAOrder).toEqual([
+      "tla start",
+      "tla end",
+    ]);
+  });
+
+  test("import defer ignores await text in comments and strings", () => {
+    expect(globalThis.__gocciaDeferredAwaitTextEvaluated).toBeUndefined();
+    expect(deferredAwaitText.value).toBe(31);
+    expect(globalThis.__gocciaDeferredAwaitTextEvaluated).toBe(true);
+  });
+
+  test("side-effect imports evaluate their dependency", () => {
+    expect(globalThis.moduleSideEffectImportCount).toBe(1);
   });
 });
 

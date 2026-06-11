@@ -2265,6 +2265,12 @@ end;
 // ES2026 §13.3.10.1 Runtime Semantics: Evaluation — ImportCall
 function TGocciaImportCallExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
 var
+  AttributeType: string;
+  DeferredLoader: TLoadDeferredModuleCallback;
+  HasAttributeType: Boolean;
+  SourceLoader: TLoadModuleSourceCallback;
+  OptionsValue: TGocciaValue;
+  SpecifierString: string;
   SpecifierValue: TGocciaValue;
   Module: TGocciaModule;
   Promise: TGocciaPromiseValue;
@@ -2278,29 +2284,48 @@ begin
     try
       // ES2026 §13.3.10.1 step 3: Evaluate specifier
       SpecifierValue := EvaluateExpression(FSpecifier, AContext);
-      // ES2026 §13.3.10.1: optional import attributes are evaluated for
-      // observable side effects. Goccia does not consume them semantically yet.
+      SpecifierString := ToPrimitive(SpecifierValue, tphString).ToStringLiteral.Value;
+      OptionsValue := TGocciaUndefinedLiteralValue.UndefinedValue;
       if Assigned(FOptions) then
-        EvaluateExpression(FOptions, AContext);
+        OptionsValue := EvaluateExpression(FOptions, AContext);
+      TryReadImportAttributeType(OptionsValue, AttributeType,
+        HasAttributeType);
+      if HasAttributeType and (AttributeType <> 'json') and
+         (AttributeType <> 'text') then
+        raise TGocciaTypeError.Create(
+          'Unsupported import attribute type "' + AttributeType + '"',
+          Line, Column, '', nil,
+          'Use type "json" or "text" for import attributes.');
 
       case FPhase of
         icpSource:
           begin
-            if not Assigned(AContext.LoadModuleSource) then
+            SourceLoader := AContext.LoadModuleSource;
+            if (not Assigned(SourceLoader)) and Assigned(AContext.Scope) then
+              SourceLoader := AContext.Scope.LoadModuleSource;
+            if not Assigned(SourceLoader) then
               raise Exception.Create('Module source loader is not available.');
-            Promise.Resolve(AContext.LoadModuleSource(
-              SpecifierValue.ToStringLiteral.Value, AContext.CurrentFilePath));
+            Promise.Resolve(SourceLoader(
+              EncodeImportSpecifierAttribute(
+              SpecifierString, AttributeType),
+              AContext.CurrentFilePath));
           end;
         icpDefer:
           begin
-            if not Assigned(AContext.Scope.LoadDeferredModule) then
+            DeferredLoader := AContext.LoadDeferredModule;
+            if (not Assigned(DeferredLoader)) and Assigned(AContext.Scope) then
+              DeferredLoader := AContext.Scope.LoadDeferredModule;
+            if not Assigned(DeferredLoader) then
               raise Exception.Create('Deferred module loader is not available.');
-            Promise.Resolve(AContext.Scope.LoadDeferredModule(
-              SpecifierValue.ToStringLiteral.Value, AContext.CurrentFilePath));
+            Promise.Resolve(DeferredLoader(
+              EncodeImportSpecifierAttribute(
+              SpecifierString, AttributeType),
+              AContext.CurrentFilePath));
           end;
       else
         // ES2026 §13.3.10.1 step 6-7: HostLoadImportedModule
-        Module := AContext.LoadModule(SpecifierValue.ToStringLiteral.Value,
+        Module := AContext.LoadModule(EncodeImportSpecifierAttribute(
+          SpecifierString, AttributeType),
           AContext.CurrentFilePath);
         // ES2026 §13.3.10.1 step 11: Resolve promise with namespace
         Promise.Resolve(Module.GetNamespaceObject);

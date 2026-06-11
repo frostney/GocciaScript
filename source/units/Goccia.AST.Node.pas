@@ -48,9 +48,11 @@ type
   TGocciaProgram = class(TGocciaASTNode)
   private
     FBody: TObjectList<TGocciaStatement>;
+    FHasTopLevelAwait: Boolean;
   public
     constructor Create(const ABody: TObjectList<TGocciaStatement>);
     property Body: TObjectList<TGocciaStatement> read FBody;
+    property HasTopLevelAwait: Boolean read FHasTopLevelAwait write FHasTopLevelAwait;
   end;
 
 implementation

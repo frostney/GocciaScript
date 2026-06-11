@@ -230,9 +230,9 @@ begin
           ThrowSyntaxError(E.Message, SSuggestJSONFormat);
       end;
 
-      // Step 3: Wrap in root object and apply InternalizeJSONProperty.
+      // Steps 5-7: Wrap in root object and create the empty-string root data property.
       Root := TGocciaObjectValue.Create;
-      Root.AssignProperty('', Result);
+      Root.CreateDataPropertyOrThrow('', Result);
 
       // Save/restore for reentrancy (reviver may call JSON.parse).
       PreviousSourceTexts := FReviverSourceTexts;
@@ -467,7 +467,7 @@ begin
   // Step 10: Let wrapper be OrdinaryObjectCreate(null).
   Root := TGocciaObjectValue.Create;
   // Step 11: Perform ! CreateDataPropertyOrThrow(wrapper, "", value).
-  Root.AssignProperty('', AValue);
+  Root.CreateDataPropertyOrThrow('', AValue);
   // Step 12: Return ? SerializeJSONProperty(state, "", wrapper).
   FReplacerTraversalStack.Clear;
   Transformed := TransformWithReplacer(Root, '', AValue, AReplacer);

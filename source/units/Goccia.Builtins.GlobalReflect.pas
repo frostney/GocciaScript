@@ -49,6 +49,7 @@ uses
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.ProxyValue,
   Goccia.Values.SymbolValue,
   Goccia.Values.ToPrimitive;
 
@@ -343,7 +344,7 @@ begin
     Exit;
   end;
 
-  DescriptorObj := TGocciaObjectValue.Create;
+  DescriptorObj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
   if Descriptor.HasEnumerableField then
   begin
     if Descriptor.Enumerable then
@@ -472,6 +473,7 @@ var
   Target: TGocciaValue;
   Obj: TGocciaObjectValue;
   Keys: TGocciaArrayValue;
+  KeyValues: TArray<TGocciaValue>;
   PropertyNames: TArray<string>;
   OwnSymbols: TArray<TGocciaSymbolValue>;
   I: Integer;
@@ -487,6 +489,15 @@ begin
   Keys := TGocciaArrayValue.Create;
 
   // Step 2: Let keys be ? target.[[OwnPropertyKeys]]()
+  if Obj is TGocciaProxyValue then
+  begin
+    KeyValues := TGocciaProxyValue(Obj).GetOwnPropertyKeyValues;
+    for I := 0 to High(KeyValues) do
+      Keys.Elements.Add(KeyValues[I]);
+    Result := Keys;
+    Exit;
+  end;
+
   // String keys first, then symbol keys (per spec ordering)
   PropertyNames := Obj.GetAllPropertyNames;
   for I := 0 to High(PropertyNames) do
@@ -524,14 +535,16 @@ var
   PropertyName: string;
   Success: Boolean;
 begin
-  TGocciaArgumentValidator.RequireAtLeast(AArgs, 3, 'Reflect.set', ThrowError);
-
   Target := AArgs.GetElement(0);
-  PropKey := ToPropertyKey(AArgs.GetElement(1));
-  Value := AArgs.GetElement(2);
-
   // Step 1: If target is not an Object, throw a TypeError exception
   RequireObjectTarget(Target, 'Reflect.set');
+
+  // Step 2: Let key be ? ToPropertyKey(propertyKey)
+  PropKey := ToPropertyKey(AArgs.GetElement(1));
+  if AArgs.Length >= 3 then
+    Value := AArgs.GetElement(2)
+  else
+    Value := TGocciaUndefinedLiteralValue.UndefinedValue;
 
   // Step 4: If receiver is not present, set receiver to target
   if AArgs.Length >= 4 then
@@ -539,7 +552,6 @@ begin
   else
     Receiver := Target;
 
-  // Step 2: Let key be ? ToPropertyKey(propertyKey)
   // Step 3, 5: Return ? target.[[Set]](key, V, receiver)
   if PropKey is TGocciaSymbolValue then
     Success := TGocciaObjectValue(Target).AssignSymbolPropertyWithReceiver(

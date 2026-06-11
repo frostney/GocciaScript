@@ -102,6 +102,9 @@ procedure HoistVarDeclarations(const ANodes: TObjectList<TGocciaASTNode>; const 
 procedure HoistFunctionDeclarations(const AStatements: TObjectList<TGocciaStatement>; const AContext: TGocciaEvaluationContext; const ABlockScoped: Boolean = False); overload;
 procedure HoistFunctionDeclarations(const ANodes: TObjectList<TGocciaASTNode>; const AContext: TGocciaEvaluationContext; const ABlockScoped: Boolean = False); overload;
 
+procedure PredeclareModuleLexicalDeclarations(const AProgram: TGocciaProgram;
+  const AScope: TGocciaScope);
+
 function EvaluateEvalProgram(const AProgram: TGocciaProgram;
   const AContext: TGocciaEvaluationContext; const AVarScope,
   ALexicalScope: TGocciaScope; const AStrictEval: Boolean;
@@ -314,6 +317,23 @@ begin
     Result := dtLet;
 end;
 
+function IsNamedDefaultFunctionDeclaration(
+  const ADecl: TGocciaExportDefaultDeclaration): Boolean;
+begin
+  Result := (ADecl.LocalName <> GOCCIA_DEFAULT_EXPORT_BINDING) and
+    (ADecl.Expression is TGocciaFunctionExpression) and
+    (TGocciaFunctionExpression(ADecl.Expression).Name = ADecl.LocalName);
+end;
+
+function IsNamedDefaultClassDeclaration(
+  const ADecl: TGocciaExportDefaultDeclaration): Boolean;
+begin
+  Result := (ADecl.LocalName <> GOCCIA_DEFAULT_EXPORT_BINDING) and
+    (ADecl.Expression is TGocciaClassExpression) and
+    (TGocciaClassExpression(ADecl.Expression).ClassDefinition.Name =
+    ADecl.LocalName);
+end;
+
 procedure PredeclareBlockLexicalName(const AScope: TGocciaScope; const AName: string;
   const ADeclarationType: TGocciaDeclarationType; const ALine, AColumn: Integer);
 begin
@@ -322,10 +342,13 @@ begin
 end;
 
 procedure PredeclareBlockLexicalBinding(const ANode: TGocciaASTNode;
-  const AScope: TGocciaScope);
+  const AScope: TGocciaScope; const AIncludeFunctionDeclarations: Boolean = True);
 var
+  ExportDefaultDecl: TGocciaExportDefaultDeclaration;
   VarDecl: TGocciaVariableDeclaration;
   DestructDecl: TGocciaDestructuringDeclaration;
+  ImportDecl: TGocciaImportDeclaration;
+  ImportPair: TStringStringMap.TKeyValuePair;
   UsingDecl: TGocciaUsingDeclaration;
   Names: TStringList;
   I: Integer;
@@ -350,17 +373,36 @@ begin
         BlockLexicalDeclarationType(VarDecl.IsConst), VarDecl.Line,
         VarDecl.Column);
   end
-  else if ANode is TGocciaFunctionDeclaration then
+  else if (ANode is TGocciaFunctionDeclaration) and
+          AIncludeFunctionDeclarations then
     PredeclareBlockLexicalName(AScope,
       TGocciaFunctionDeclaration(ANode).Name, dtLet, ANode.Line,
       ANode.Column)
-  else if ANode is TGocciaExportFunctionDeclaration then
+  else if (ANode is TGocciaExportFunctionDeclaration) and
+          AIncludeFunctionDeclarations then
     PredeclareBlockLexicalName(AScope,
       TGocciaExportFunctionDeclaration(ANode).Declaration.Name, dtLet,
       ANode.Line, ANode.Column)
   else if ANode is TGocciaDestructuringDeclaration then
   begin
     DestructDecl := TGocciaDestructuringDeclaration(ANode);
+    if DestructDecl.IsVar then
+      Exit;
+    Names := TStringList.Create;
+    Names.CaseSensitive := True;
+    try
+      CollectPatternBindingNames(DestructDecl.Pattern, Names, True);
+      for I := 0 to Names.Count - 1 do
+        PredeclareBlockLexicalName(AScope, Names[I],
+          BlockLexicalDeclarationType(DestructDecl.IsConst), DestructDecl.Line,
+          DestructDecl.Column);
+    finally
+      Names.Free;
+    end;
+  end
+  else if ANode is TGocciaExportDestructuringDeclaration then
+  begin
+    DestructDecl := TGocciaExportDestructuringDeclaration(ANode).Declaration;
     if DestructDecl.IsVar then
       Exit;
     Names := TStringList.Create;
@@ -382,10 +424,34 @@ begin
       PredeclareBlockLexicalName(AScope, UsingDecl.Variables[I].Name, dtConst,
         UsingDecl.Line, UsingDecl.Column);
   end
+  else if ANode is TGocciaImportDeclaration then
+  begin
+    ImportDecl := TGocciaImportDeclaration(ANode);
+    if ImportDecl.NamespaceName <> '' then
+      PredeclareBlockLexicalName(AScope, ImportDecl.NamespaceName, dtConst,
+        ImportDecl.Line, ImportDecl.Column);
+    for ImportPair in ImportDecl.Imports do
+      PredeclareBlockLexicalName(AScope, ImportPair.Key, dtConst,
+        ImportDecl.Line, ImportDecl.Column);
+  end
   else if ANode is TGocciaClassDeclaration then
     PredeclareBlockLexicalName(AScope,
       TGocciaClassDeclaration(ANode).ClassDefinition.Name, dtLet, ANode.Line,
       ANode.Column)
+  else if ANode is TGocciaExportClassDeclaration then
+    PredeclareBlockLexicalName(AScope,
+      TGocciaExportClassDeclaration(ANode).Declaration.ClassDefinition.Name,
+      dtLet, ANode.Line, ANode.Column)
+  else if ANode is TGocciaExportDefaultDeclaration then
+  begin
+    ExportDefaultDecl := TGocciaExportDefaultDeclaration(ANode);
+    PredeclareBlockLexicalName(AScope,
+      ExportDefaultDecl.LocalName,
+      BlockLexicalDeclarationType(
+        not (IsNamedDefaultFunctionDeclaration(ExportDefaultDecl) or
+        IsNamedDefaultClassDeclaration(ExportDefaultDecl))),
+      ANode.Line, ANode.Column);
+  end
   else if ANode is TGocciaEnumDeclaration then
     PredeclareBlockLexicalName(AScope, TGocciaEnumDeclaration(ANode).Name,
       dtLet, ANode.Line, ANode.Column)
@@ -404,22 +470,57 @@ begin
     PredeclareBlockLexicalBinding(ANodes[I], AContext.Scope);
 end;
 
+procedure PredeclareModuleLexicalDeclarations(const AProgram: TGocciaProgram;
+  const AScope: TGocciaScope);
+var
+  I: Integer;
+begin
+  for I := 0 to AProgram.Body.Count - 1 do
+    PredeclareBlockLexicalBinding(AProgram.Body[I], AScope, True);
+end;
+
 procedure HoistSingleFunctionDeclaration(const ANode: TGocciaASTNode;
   const AContext: TGocciaEvaluationContext; const ABlockScoped: Boolean);
 var
+  ExportDefaultDecl: TGocciaExportDefaultDeclaration;
   FuncDecl: TGocciaFunctionDeclaration;
+  FuncExpr: TGocciaFunctionExpression;
   Value: TGocciaValue;
   Name: string;
 begin
+  FuncDecl := nil;
+  FuncExpr := nil;
+  Name := '';
   if ANode is TGocciaFunctionDeclaration then
+  begin
     FuncDecl := TGocciaFunctionDeclaration(ANode)
+  end
   else if ANode is TGocciaExportFunctionDeclaration then
+  begin
     FuncDecl := TGocciaExportFunctionDeclaration(ANode).Declaration
+  end
+  else if ANode is TGocciaExportDefaultDeclaration then
+  begin
+    ExportDefaultDecl := TGocciaExportDefaultDeclaration(ANode);
+    if IsNamedDefaultFunctionDeclaration(ExportDefaultDecl) then
+    begin
+      FuncExpr := TGocciaFunctionExpression(ExportDefaultDecl.Expression);
+      Name := ExportDefaultDecl.LocalName;
+    end;
+  end
   else
     Exit;
 
-  Name := FuncDecl.Name;
-  Value := FuncDecl.FunctionExpression.Evaluate(AContext);
+  if Assigned(FuncDecl) then
+  begin
+    Name := FuncDecl.Name;
+    FuncExpr := FuncDecl.FunctionExpression;
+  end;
+
+  if not Assigned(FuncExpr) then
+    Exit;
+
+  Value := FuncExpr.Evaluate(AContext);
   if Assigned(TGarbageCollector.Instance) then
     TGarbageCollector.Instance.AddTempRoot(Value);
   try
@@ -2459,6 +2560,7 @@ var
   SourceValue: TGocciaValue;
   SourceText: string;
   EvalSource: TStringList;
+  EvalSourcePath: string;
   EvalOptions: TGocciaSourcePipelineOptions;
   PipelineResult: TGocciaSourcePipelineResult;
   EvalContext: TGocciaEvaluationContext;
@@ -2503,8 +2605,9 @@ begin
     if CallerStrict then
       Exclude(EvalOptions.Compatibility, cfNonStrictMode);
 
+    EvalSourcePath := Format('%s::<direct-eval>', [AContext.CurrentFilePath]);
     PipelineResult := TGocciaSourcePipeline.Parse(EvalSource,
-      '<interpreter-direct-eval>', EvalOptions);
+      EvalSourcePath, EvalOptions);
     try
       StrictEval := CallerStrict or HasUseStrictDirective(PipelineResult.ProgramNode);
       if StrictEval then
@@ -2519,7 +2622,7 @@ begin
       try
         EvalContext := AContext;
         EvalContext.Scope := EvalScope;
-        EvalContext.CurrentFilePath := '<interpreter-direct-eval>';
+        EvalContext.CurrentFilePath := EvalSourcePath;
         EvalContext.NonStrictMode := not StrictEval;
         if StrictEval then
           VarScope := EvalScope
@@ -9626,7 +9729,8 @@ begin
       if Prop.Pattern is TGocciaRestDestructuringPattern then
       begin
         // Rest pattern: collect remaining properties
-        RestObject := TGocciaObjectValue.Create;
+        RestObject := TGocciaObjectValue.Create(
+          TGocciaObjectValue.SharedObjectPrototype);
         for Key in ObjectValue.GetEnumerablePropertyNames do
         begin
           if UsedKeys.IndexOf(Key) = -1 then

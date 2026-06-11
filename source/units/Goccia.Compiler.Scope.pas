@@ -10,7 +10,8 @@ uses
   OrderedStringMap,
 
   Goccia.Bytecode.Chunk,
-  Goccia.Compiler.ConstantValue;
+  Goccia.Compiler.ConstantValue,
+  Goccia.Modules;
 
 type
   TGocciaCompilerVariableKind = (cvkLocal, cvkUpvalue, cvkGlobal);
@@ -32,6 +33,12 @@ type
     ElementTypeAnnotation: string;
     HasConstantValue: Boolean;
     ConstantValue: TGocciaCompileTimeValue;
+    IsImportBinding: Boolean;
+    ImportPhase: TGocciaImportCallPhase;
+    ImportModulePath: string;
+    ImportExportName: string;
+    ExportNames: array of string;
+    ExportNameCount: Integer;
   end;
 
   TGocciaCompilerUpvalue = record
@@ -45,6 +52,12 @@ type
     IsStrictlyTyped: Boolean;
     ReturnTypeHint: TGocciaLocalType;
     ParamTypeSignature: string;
+    IsImportBinding: Boolean;
+    ImportPhase: TGocciaImportCallPhase;
+    ImportModulePath: string;
+    ImportExportName: string;
+    ExportNames: array of string;
+    ExportNameCount: Integer;
   end;
 
   TGocciaCompilerScope = class
@@ -117,6 +130,11 @@ type
     procedure SetLocalConstantValue(const AIndex: Integer;
       const AValue: TGocciaCompileTimeValue);
     procedure ClearLocalConstantValue(const AIndex: Integer);
+    procedure MarkImportBinding(const AIndex: Integer;
+      const APhase: TGocciaImportCallPhase; const AModulePath,
+      AExportName: string);
+    procedure MarkExportBinding(const AIndex: Integer;
+      const AExportName: string);
     function TryGetVisibleConstantValue(const AName: string;
       out AValue: TGocciaCompileTimeValue): Boolean;
     function HasVisibleLocal(const AName: string): Boolean;
@@ -240,6 +258,12 @@ begin
   FLocals[FLocalCount].ElementTypeAnnotation := '';
   FLocals[FLocalCount].HasConstantValue := False;
   FLocals[FLocalCount].ConstantValue := UnknownCompileTimeValue;
+  FLocals[FLocalCount].IsImportBinding := False;
+  FLocals[FLocalCount].ImportPhase := icpEvaluation;
+  FLocals[FLocalCount].ImportModulePath := '';
+  FLocals[FLocalCount].ImportExportName := '';
+  FLocals[FLocalCount].ExportNameCount := 0;
+  SetLength(FLocals[FLocalCount].ExportNames, 0);
   Result := FNextSlot;
   EnsureLocalIndex;
   if Assigned(FLocalIndex) then
@@ -285,6 +309,12 @@ begin
   FLocals[FLocalCount].ElementTypeAnnotation := '';
   FLocals[FLocalCount].HasConstantValue := False;
   FLocals[FLocalCount].ConstantValue := UnknownCompileTimeValue;
+  FLocals[FLocalCount].IsImportBinding := False;
+  FLocals[FLocalCount].ImportPhase := icpEvaluation;
+  FLocals[FLocalCount].ImportModulePath := '';
+  FLocals[FLocalCount].ImportExportName := '';
+  FLocals[FLocalCount].ExportNameCount := 0;
+  SetLength(FLocals[FLocalCount].ExportNames, 0);
   Result := FNextSlot;
   EnsureLocalIndex;
   if Assigned(FLocalIndex) then
@@ -332,6 +362,12 @@ begin
     FUpvalues[Idx].IsStrictlyTyped := FParent.FLocals[LocalIdx].IsStrictlyTyped;
     FUpvalues[Idx].ReturnTypeHint := FParent.FLocals[LocalIdx].ReturnTypeHint;
     FUpvalues[Idx].ParamTypeSignature := FParent.FLocals[LocalIdx].ParamTypeSignature;
+    FUpvalues[Idx].IsImportBinding := FParent.FLocals[LocalIdx].IsImportBinding;
+    FUpvalues[Idx].ImportPhase := FParent.FLocals[LocalIdx].ImportPhase;
+    FUpvalues[Idx].ImportModulePath := FParent.FLocals[LocalIdx].ImportModulePath;
+    FUpvalues[Idx].ImportExportName := FParent.FLocals[LocalIdx].ImportExportName;
+    FUpvalues[Idx].ExportNames := Copy(FParent.FLocals[LocalIdx].ExportNames);
+    FUpvalues[Idx].ExportNameCount := FParent.FLocals[LocalIdx].ExportNameCount;
     Exit(Idx);
   end;
 
@@ -351,6 +387,12 @@ begin
     FUpvalues[Idx].IsStrictlyTyped := FParent.FUpvalues[UpvalueIdx].IsStrictlyTyped;
     FUpvalues[Idx].ReturnTypeHint := FParent.FUpvalues[UpvalueIdx].ReturnTypeHint;
     FUpvalues[Idx].ParamTypeSignature := FParent.FUpvalues[UpvalueIdx].ParamTypeSignature;
+    FUpvalues[Idx].IsImportBinding := FParent.FUpvalues[UpvalueIdx].IsImportBinding;
+    FUpvalues[Idx].ImportPhase := FParent.FUpvalues[UpvalueIdx].ImportPhase;
+    FUpvalues[Idx].ImportModulePath := FParent.FUpvalues[UpvalueIdx].ImportModulePath;
+    FUpvalues[Idx].ImportExportName := FParent.FUpvalues[UpvalueIdx].ImportExportName;
+    FUpvalues[Idx].ExportNames := Copy(FParent.FUpvalues[UpvalueIdx].ExportNames);
+    FUpvalues[Idx].ExportNameCount := FParent.FUpvalues[UpvalueIdx].ExportNameCount;
     Exit(Idx);
   end;
 
@@ -380,6 +422,13 @@ begin
   FUpvalues[FUpvalueCount].TypeHint := sltUntyped;
   FUpvalues[FUpvalueCount].IsStrictlyTyped := False;
   FUpvalues[FUpvalueCount].ReturnTypeHint := sltUntyped;
+  FUpvalues[FUpvalueCount].ParamTypeSignature := '';
+  FUpvalues[FUpvalueCount].IsImportBinding := False;
+  FUpvalues[FUpvalueCount].ImportPhase := icpEvaluation;
+  FUpvalues[FUpvalueCount].ImportModulePath := '';
+  FUpvalues[FUpvalueCount].ImportExportName := '';
+  FUpvalues[FUpvalueCount].ExportNameCount := 0;
+  SetLength(FUpvalues[FUpvalueCount].ExportNames, 0);
   Result := FUpvalueCount;
   Inc(FUpvalueCount);
 end;
@@ -503,6 +552,33 @@ procedure TGocciaCompilerScope.ClearLocalConstantValue(const AIndex: Integer);
 begin
   FLocals[AIndex].HasConstantValue := False;
   FLocals[AIndex].ConstantValue := UnknownCompileTimeValue;
+end;
+
+procedure TGocciaCompilerScope.MarkImportBinding(const AIndex: Integer;
+  const APhase: TGocciaImportCallPhase; const AModulePath,
+  AExportName: string);
+begin
+  FLocals[AIndex].IsImportBinding := True;
+  FLocals[AIndex].ImportPhase := APhase;
+  FLocals[AIndex].ImportModulePath := AModulePath;
+  FLocals[AIndex].ImportExportName := AExportName;
+end;
+
+procedure TGocciaCompilerScope.MarkExportBinding(const AIndex: Integer;
+  const AExportName: string);
+var
+  I: Integer;
+begin
+  for I := 0 to FLocals[AIndex].ExportNameCount - 1 do
+    if FLocals[AIndex].ExportNames[I] = AExportName then
+      Exit;
+
+  if FLocals[AIndex].ExportNameCount >= Length(FLocals[AIndex].ExportNames) then
+    SetLength(FLocals[AIndex].ExportNames,
+      FLocals[AIndex].ExportNameCount * 2 + 2);
+  FLocals[AIndex].ExportNames[FLocals[AIndex].ExportNameCount] :=
+    AExportName;
+  Inc(FLocals[AIndex].ExportNameCount);
 end;
 
 function TGocciaCompilerScope.TryGetVisibleConstantValue(const AName: string;

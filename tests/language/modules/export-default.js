@@ -13,6 +13,9 @@ import NamedDefaultClass, {
   localNamedDefaultClassName,
   localNamedDefaultClassType
 } from "./helpers/default-named-class.js";
+import ReassignedNamedDefaultClass, {
+  reassignedNamedDefaultClassName
+} from "./helpers/default-named-class-mutable.js";
 import DefaultClassBeforeStatement, {
   defaultClassFollowingStatementHit
 } from "./helpers/default-class-following-statement.js";
@@ -48,6 +51,11 @@ describe("default export", () => {
     expect(NamedDefaultClass.name).toBe("NamedDefaultClass");
     expect(localNamedDefaultClassType).toBe("function");
     expect(localNamedDefaultClassName).toBe("NamedDefaultClass");
+  });
+
+  test("named default class declarations create mutable local bindings", () => {
+    expect(ReassignedNamedDefaultClass.name).toBe("ReassignedNamedDefaultClass");
+    expect(reassignedNamedDefaultClassName).toBe("ReassignedNamedDefaultClass");
   });
 
   test("allows default class declarations before a following statement", () => {

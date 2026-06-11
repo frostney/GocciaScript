@@ -518,11 +518,13 @@ try
   Engine.Compatibility := [
     cfASI,
     cfNonStrictMode,
+    cfArgumentsObject,
     cfLabel,
     cfTraditionalFor,
     cfForIn,
-    cfWhileLoops
-  ];                                       // Enable selected compatibility semantics
+    cfWhileLoops,
+    cfExperimentalJSModuleSource
+  ];                                       // Enable selected source-pipeline flags
   Engine.SourceType := stModule;           // Run entry as module source (top-level this is undefined; import.meta resolves)
   Engine.StrictTypes := True;              // Enforce type annotations in both execution modes
 finally

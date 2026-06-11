@@ -1,6 +1,6 @@
 /*---
 description: >
-  Namespace imports expose a frozen module namespace object for JavaScript modules
+  Namespace imports expose a sealed module namespace object for JavaScript modules
   and structured-data modules.
 features: [modules, namespace-imports]
 ---*/
@@ -14,13 +14,14 @@ import * as configToml from "./helpers/config.toml";
 import * as configYaml from "./helpers/config.yaml";
 
 describe("namespace import", () => {
-  test("creates a frozen null-prototype namespace for JavaScript modules", () => {
+  test("creates a sealed null-prototype namespace for JavaScript modules", () => {
     expect(math.add(2, 3)).toBe(5);
     expect(math.multiply(4, 5)).toBe(20);
     expect(math.PI).toBe(3.14159);
-    expect(Object.keys(math)).toEqual(["add", "multiply", "PI"]);
+    expect(Object.keys(math)).toEqual(["PI", "add", "multiply"]);
     expect(Object.getPrototypeOf(math)).toBeNull();
-    expect(Object.isFrozen(math)).toBe(true);
+    expect(Object.isSealed(math)).toBe(true);
+    expect(Object.isFrozen(math)).toBe(false);
   });
 
   test("reuses the same namespace object for repeated imports", () => {
@@ -40,13 +41,16 @@ describe("namespace import", () => {
     expect(configJson.version).toBe("1.0.0");
     expect(configJson.database.host).toBe("localhost");
     expect(configJson.database.port).toBe(5432);
+    expect(configJson.default.name).toBe("goccia-test");
+    expect(configJson.default.database.host).toBe("localhost");
     expect(Object.keys(configJson)).toEqual([
-      "name",
-      "version",
-      "debug",
-      "maxRetries",
-      "tags",
       "database",
+      "debug",
+      "default",
+      "maxRetries",
+      "name",
+      "tags",
+      "version",
     ]);
   });
 
@@ -56,12 +60,12 @@ describe("namespace import", () => {
     expect(configYaml.database.host).toBe("localhost");
     expect(configYaml.database.port).toBe(5432);
     expect(Object.keys(configYaml)).toEqual([
-      "name",
-      "version",
+      "database",
       "debug",
       "maxRetries",
+      "name",
       "tags",
-      "database",
+      "version",
     ]);
   });
 
@@ -71,12 +75,12 @@ describe("namespace import", () => {
     expect(configJson5.database.host).toBe("localhost");
     expect(configJson5.database.port).toBe(5432);
     expect(Object.keys(configJson5)).toEqual([
-      "name",
-      "version",
+      "database",
       "debug",
       "maxRetries",
+      "name",
       "tags",
-      "database",
+      "version",
     ]);
   });
 
@@ -88,15 +92,15 @@ describe("namespace import", () => {
     expect(configToml.servers.length).toBe(2);
     expect(configToml.servers[1].name).toBe("beta");
     expect(Object.keys(configToml)).toEqual([
-      "name",
-      "version",
+      "alarm",
+      "database",
       "debug",
       "maxRetries",
+      "name",
       "release",
-      "alarm",
-      "tags",
-      "database",
       "servers",
+      "tags",
+      "version",
     ]);
   });
 });

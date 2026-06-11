@@ -5,6 +5,7 @@ program GocciaScriptLoaderBare;
 uses
   Classes,
   Generics.Collections,
+  StrUtils,
   SysUtils,
 
   TextSemantics,
@@ -25,6 +26,8 @@ uses
   Goccia.FileExtensions,
   Goccia.GarbageCollector,
   Goccia.InstructionLimit,
+  Goccia.Modules,
+  Goccia.Modules.ContentProvider,
   Goccia.Scope,
   Goccia.Scope.Redeclaration,
   Goccia.ScriptLoader.Input,
@@ -37,7 +40,8 @@ uses
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
-  Goccia.Values.Primitives;
+  Goccia.Values.Primitives,
+  Goccia.VM.Exception;
 
 type
   TBarePrintHost = class
@@ -58,6 +62,7 @@ type
     SourceType: TGocciaSourceType;
     SourceTypeExplicit: Boolean;
     FileName: string;
+    SourceName: string;
     TimeoutMs: Integer;
     MaxMemoryBytes: Int64;
     MaxInstructions: Int64;
@@ -104,6 +109,17 @@ type
       const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
+  TBareTest262ModuleContentProvider = class(TGocciaFileSystemModuleContentProvider)
+  private
+    function BuildHarnessPrelude(const APath: string;
+      const ASource: UTF8String): UTF8String;
+    function FindSuiteRoot(const APath: string): string;
+    function HarnessFilePath(const ASuiteRoot, AName: string): string;
+    function ShouldPrependHarness(const APath: string): Boolean;
+  public
+    function LoadContent(const APath: string): TGocciaModuleContent; override;
+  end;
+
 const
   BARE_PRINT_GLOBAL_NAME = 'print';
 
@@ -142,6 +158,8 @@ begin
   Test262Obj.AssignProperty('evalScript',
     TGocciaNativeFunctionValue.CreateWithoutPrototype(
       ATest262EvalHost.EvalScript, 'evalScript', 1));
+  Test262Obj.AssignProperty('abstractModuleSourcePrototype',
+    TGocciaModuleSourceValue.SharedPrototype);
   AEngine.GocciaGlobal.AssignProperty('test262', Test262Obj);
 end;
 
@@ -400,6 +418,250 @@ begin
   Result := RealmRecord;
 end;
 
+function NormalizeTest262ListItem(const AValue: string): string;
+begin
+  Result := Trim(AValue);
+  if (Result <> '') and (Result[Length(Result)] = ',') then
+    Delete(Result, Length(Result), 1);
+  Result := Trim(Result);
+  if (Length(Result) >= 2) and
+     (((Result[1] = '''') and (Result[Length(Result)] = '''')) or
+      ((Result[1] = '"') and (Result[Length(Result)] = '"'))) then
+    Result := Copy(Result, 2, Length(Result) - 2);
+end;
+
+procedure AddTest262ListItem(const AItems: TStrings; const AValue: string);
+var
+  Item: string;
+begin
+  Item := NormalizeTest262ListItem(AValue);
+  if (Item <> '') and (AItems.IndexOf(Item) < 0) then
+    AItems.Add(Item);
+end;
+
+procedure AddTest262InlineList(const AItems: TStrings; const AValue: string);
+var
+  I: Integer;
+  Item: string;
+  ListText: string;
+  Parts: TStringArray;
+begin
+  ListText := Trim(AValue);
+  if ListText = '' then
+    Exit;
+
+  if (ListText[1] = '[') then
+  begin
+    Delete(ListText, 1, 1);
+    I := Pos(']', ListText);
+    if I > 0 then
+      ListText := Copy(ListText, 1, I - 1);
+  end;
+
+  Parts := ListText.Split([',']);
+  for Item in Parts do
+    AddTest262ListItem(AItems, Item);
+end;
+
+procedure ReadTest262Frontmatter(const ASource: UTF8String;
+  const AIncludes: TStrings; out ARaw: Boolean);
+var
+  Block: string;
+  ClosePos: SizeInt;
+  ColonPos: SizeInt;
+  Key: string;
+  Line: string;
+  Lines: TStringList;
+  OpenPos: SizeInt;
+  Trimmed: string;
+  Value: string;
+  InFlags: Boolean;
+  InIncludes: Boolean;
+begin
+  ARaw := False;
+  OpenPos := Pos('/*---', string(ASource));
+  if OpenPos <= 0 then
+    Exit;
+  ClosePos := PosEx('---*/', string(ASource), OpenPos + Length('/*---'));
+  if ClosePos <= OpenPos then
+    Exit;
+
+  Block := Copy(string(ASource), OpenPos + Length('/*---'),
+    ClosePos - OpenPos - Length('/*---'));
+  Lines := TStringList.Create;
+  try
+    Lines.Text := Block;
+    InFlags := False;
+    InIncludes := False;
+    for Line in Lines do
+    begin
+      Trimmed := Trim(Line);
+      if Trimmed = '' then
+        Continue;
+
+      if (Line[1] <> ' ') and (Line[1] <> #9) then
+      begin
+        ColonPos := Pos(':', Line);
+        if ColonPos <= 0 then
+        begin
+          InFlags := False;
+          InIncludes := False;
+          Continue;
+        end;
+
+        Key := Trim(Copy(Line, 1, ColonPos - 1));
+        Value := Trim(Copy(Line, ColonPos + 1, MaxInt));
+        InFlags := Key = 'flags';
+        InIncludes := Key = 'includes';
+        if InFlags then
+        begin
+          AddTest262InlineList(AIncludes, '');
+          ARaw := Pos('raw', Value) > 0;
+        end
+        else if InIncludes then
+          AddTest262InlineList(AIncludes, Value);
+        Continue;
+      end;
+
+      if (InIncludes or InFlags) and StartsStr('-', Trimmed) then
+      begin
+        Value := Trim(Copy(Trimmed, 2, MaxInt));
+        if InFlags then
+          ARaw := ARaw or (NormalizeTest262ListItem(Value) = 'raw')
+        else
+          AddTest262ListItem(AIncludes, Value);
+      end;
+    end;
+  finally
+    Lines.Free;
+  end;
+end;
+
+function TBareTest262ModuleContentProvider.FindSuiteRoot(
+  const APath: string): string;
+var
+  Candidate: string;
+  Dir: string;
+  ParentDir: string;
+begin
+  Result := '';
+  Dir := ExcludeTrailingPathDelimiter(ExtractFilePath(ExpandFileName(APath)));
+  while Dir <> '' do
+  begin
+    Candidate := IncludeTrailingPathDelimiter(Dir) + 'harness' + PathDelim +
+      'assert.js';
+    if FileExists(Candidate) and
+       DirectoryExists(IncludeTrailingPathDelimiter(Dir) + 'test') then
+      Exit(Dir);
+
+    ParentDir := ExtractFileDir(Dir);
+    if (ParentDir = '') or (ParentDir = Dir) then
+      Break;
+    Dir := ParentDir;
+  end;
+end;
+
+function TBareTest262ModuleContentProvider.HarnessFilePath(
+  const ASuiteRoot, AName: string): string;
+var
+  BundledPath: string;
+begin
+  if (AName = '$262.js') or (AName = 'goccia-global-shim.js') then
+  begin
+    BundledPath := ExpandFileName('scripts' + PathDelim +
+      'test262_harness' + PathDelim + AName);
+    if FileExists(BundledPath) then
+      Exit(BundledPath);
+  end;
+
+  Result := IncludeTrailingPathDelimiter(ASuiteRoot) + 'harness' + PathDelim +
+    AName;
+end;
+
+function TBareTest262ModuleContentProvider.ShouldPrependHarness(
+  const APath: string): Boolean;
+var
+  AbsPath: string;
+  SuiteRoot: string;
+  TestRoot: string;
+begin
+  if LowerCase(ExtractFileExt(APath)) <> '.js' then
+    Exit(False);
+  if EndsStr('_FIXTURE.js', ExtractFileName(APath)) then
+    Exit(False);
+
+  SuiteRoot := FindSuiteRoot(APath);
+  if SuiteRoot = '' then
+    Exit(False);
+
+  AbsPath := ExpandFileName(APath);
+  TestRoot := IncludeTrailingPathDelimiter(SuiteRoot) + 'test' + PathDelim;
+  Result := StartsStr(TestRoot, AbsPath);
+end;
+
+function TBareTest262ModuleContentProvider.BuildHarnessPrelude(
+  const APath: string; const ASource: UTF8String): UTF8String;
+var
+  I: Integer;
+  IncludeName: string;
+  Includes: TStringList;
+  Raw: Boolean;
+  SuiteRoot: string;
+begin
+  Result := '';
+  SuiteRoot := FindSuiteRoot(APath);
+  if SuiteRoot = '' then
+    Exit;
+
+  Includes := TStringList.Create;
+  try
+    Includes.Add('$262.js');
+    Includes.Add('sta.js');
+    Includes.Add('assert.js');
+    ReadTest262Frontmatter(ASource, Includes, Raw);
+    if Raw then
+      Exit;
+
+    for I := 0 to Includes.Count - 1 do
+    begin
+      IncludeName := Includes[I];
+      if Result <> '' then
+        Result := Result + LineEnding;
+      Result := Result + ReadUTF8FileText(
+        HarnessFilePath(SuiteRoot, IncludeName));
+    end;
+    if Result <> '' then
+      Result := Result + LineEnding + ReadUTF8FileText(
+        HarnessFilePath(SuiteRoot, 'goccia-global-shim.js'));
+  finally
+    Includes.Free;
+  end;
+end;
+
+function TBareTest262ModuleContentProvider.LoadContent(
+  const APath: string): TGocciaModuleContent;
+var
+  HarnessPrelude: UTF8String;
+  OriginalContent: TGocciaModuleContent;
+begin
+  OriginalContent := inherited LoadContent(APath);
+  if not ShouldPrependHarness(APath) then
+    Exit(OriginalContent);
+
+  try
+    HarnessPrelude := BuildHarnessPrelude(APath, OriginalContent.Text);
+    if HarnessPrelude = '' then
+      Exit(OriginalContent);
+
+    Result := TGocciaModuleContent.Create(HarnessPrelude + LineEnding +
+      OriginalContent.Text, OriginalContent.LastModified);
+  except
+    OriginalContent.Free;
+    raise;
+  end;
+  OriginalContent.Free;
+end;
+
 procedure PrintUsage;
 var
   Flag: TGocciaCompatibility;
@@ -417,6 +679,7 @@ begin
   WriteLn('  --strict-types                Enforce type annotations at runtime');
   WriteLn('  --mode=interpreted|bytecode   Execution mode (default: interpreted)');
   WriteLn('  --source-type=script|module   Load entry as script source or module source (.mjs infers module)');
+  WriteLn('  --source-name=PATH            Name stdin source as PATH for diagnostics and module resolution');
   WriteLn('  --unsafe-function-constructor Enable dynamic Function constructor');
   WriteLn('  --test262-host                Expose Goccia.test262 host hooks for test262');
   WriteLn('  --print                       Print the script''s last value (incl. undefined)');
@@ -495,6 +758,7 @@ begin
   Result.SourceType := stScript;
   Result.SourceTypeExplicit := False;
   Result.FileName := STDIN_PATH_MARKER;
+  Result.SourceName := '';
   Result.TimeoutMs := 0;
   Result.MaxMemoryBytes := 0;
   Result.MaxInstructions := 0;
@@ -523,6 +787,8 @@ begin
       ParseMode(Copy(Arg, Length('--mode=') + 1, MaxInt), Result)
     else if Copy(Arg, 1, Length('--source-type=')) = '--source-type=' then
       ParseSourceType(Copy(Arg, Length('--source-type=') + 1, MaxInt), Result)
+    else if Copy(Arg, 1, Length('--source-name=')) = '--source-name=' then
+      Result.SourceName := Copy(Arg, Length('--source-name=') + 1, MaxInt)
     else if Copy(Arg, 1, Length('--timeout=')) = '--timeout=' then
       ParseTimeout(Copy(Arg, Length('--timeout=') + 1, MaxInt), Result)
     else if Copy(Arg, 1, Length('--max-memory=')) = '--max-memory=' then
@@ -558,6 +824,9 @@ begin
   AEngine.StrictTypes := AOptions.StrictTypes;
   AEngine.SourceType := AOptions.SourceType;
   AEngine.FunctionConstructor.Enabled := AOptions.UnsafeFunctionConstructor;
+  if AOptions.Test262Host then
+    AEngine.ModuleLoader.SetContentProvider(
+      TBareTest262ModuleContentProvider.Create, True);
   if AExecutor is TGocciaBytecodeExecutor then
     TGocciaBytecodeExecutor(AExecutor).GlobalBackedTopLevel :=
       AOptions.SourceType = stScript;
@@ -613,7 +882,9 @@ begin
   Result := 0;
   Source := ReadBareSource(AOptions.FileName);
   try
-    if IsStdinPath(AOptions.FileName) then
+    if AOptions.SourceName <> '' then
+      DisplayName := AOptions.SourceName
+    else if IsStdinPath(AOptions.FileName) then
       DisplayName := STDIN_FILE_NAME
     else
       DisplayName := AOptions.FileName;
@@ -649,6 +920,12 @@ begin
               ScriptResult := Engine.Execute;
               PrintResult(ScriptResult.Result, AOptions.Print);
             except
+              on E: EGocciaBytecodeThrow do
+              begin
+                WriteLn(StdErr, FormatThrowDetail(E.ThrownValue,
+                  DisplayName, Source, IsColorTerminal));
+                Result := 1;
+              end;
               on E: TGocciaThrowValue do
               begin
                 WriteLn(StdErr, FormatThrowDetail(E.Value, DisplayName, Source,

@@ -341,7 +341,9 @@ resourcestring
   SErrorProxyDefineNonObject = 'Cannot define property on non-object target';
   SErrorProxyOwnKeysArray = 'Proxy ownKeys must return an array';
   SErrorProxyOwnKeysTypes = 'Proxy ownKeys trap result must contain only strings and symbols';
+  SErrorProxyOwnKeysDuplicate = 'Proxy ownKeys trap result must not contain duplicate entries';
   SErrorProxyOwnKeysMissing = 'Proxy ownKeys trap result must include non-configurable property ''%s''';
+  SErrorProxyOwnKeysExtra = 'Proxy ownKeys trap result contains extra key on non-extensible target';
   SErrorProxyGetProtoReturnType = 'Proxy getPrototypeOf trap must return an object or null';
   SErrorProxyGetProtoMismatch = 'Proxy getPrototypeOf trap result does not match non-extensible target prototype';
   SErrorProxySetProtoNonExtensible = 'Proxy setPrototypeOf trap returned true but target is non-extensible';

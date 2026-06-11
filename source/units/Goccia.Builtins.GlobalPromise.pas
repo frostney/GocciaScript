@@ -275,9 +275,10 @@ begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   if FState.Settled then Exit;
 
-  Entry := TGocciaObjectValue.Create;
-  Entry.AssignProperty('status', TGocciaStringLiteralValue.Create('fulfilled'));
-  Entry.AssignProperty(PROP_VALUE, AArgs.GetElement(0));
+  Entry := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
+  Entry.CreateDataPropertyOrThrow('status',
+    TGocciaStringLiteralValue.Create('fulfilled'));
+  Entry.CreateDataPropertyOrThrow(PROP_VALUE, AArgs.GetElement(0));
   FState.Results.Elements[FIndex] := Entry;
   FState.Remaining := FState.Remaining - 1;
 
@@ -312,9 +313,10 @@ begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   if FState.Settled then Exit;
 
-  Entry := TGocciaObjectValue.Create;
-  Entry.AssignProperty('status', TGocciaStringLiteralValue.Create('rejected'));
-  Entry.AssignProperty('reason', AArgs.GetElement(0));
+  Entry := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
+  Entry.CreateDataPropertyOrThrow('status',
+    TGocciaStringLiteralValue.Create('rejected'));
+  Entry.CreateDataPropertyOrThrow('reason', AArgs.GetElement(0));
   FState.Results.Elements[FIndex] := Entry;
   FState.Remaining := FState.Remaining - 1;
 
@@ -1003,10 +1005,10 @@ begin
   RejectFn.CapturedRoot := Promise;
 
   { Steps 3-6: Create result object with promise, resolve, reject properties }
-  ResultObj := TGocciaObjectValue.Create;
-  ResultObj.AssignProperty('promise', Promise);
-  ResultObj.AssignProperty('resolve', ResolveFn);
-  ResultObj.AssignProperty('reject', RejectFn);
+  ResultObj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
+  ResultObj.CreateDataPropertyOrThrow('promise', Promise);
+  ResultObj.CreateDataPropertyOrThrow('resolve', ResolveFn);
+  ResultObj.CreateDataPropertyOrThrow('reject', RejectFn);
 
   { Step 7: Return obj }
   Result := ResultObj;

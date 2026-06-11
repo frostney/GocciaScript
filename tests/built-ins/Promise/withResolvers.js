@@ -1,6 +1,8 @@
 describe("Promise.withResolvers", () => {
   test("returns object with promise, resolve, and reject", () => {
-    const { promise, resolve, reject } = Promise.withResolvers();
+    const result = Promise.withResolvers();
+    const { promise, resolve, reject } = result;
+    expect(result instanceof Object).toBe(true);
     expect(typeof resolve).toBe("function");
     expect(typeof reject).toBe("function");
   });

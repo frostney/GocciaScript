@@ -26,8 +26,11 @@ type
     FSourcePath: string;
     FFormalParameterCounts: TFormalParameterCountMap;
     FGlobalBackedTopLevel: Boolean;
+    FAsyncTopLevel: Boolean;
+    FPreinitializedTopLevelFunctions: Boolean;
     FStrictTypes: Boolean;
     FNonStrictMode: Boolean;
+    FArgumentsObjectEnabled: Boolean;
     FLabelReentryStatement: TGocciaStatement;
     FOptimizationOptions: TGocciaCompilerOptimizationOptions;
     FDerivedConstructorThisGuard: Boolean;
@@ -49,8 +52,13 @@ type
       read FFormalParameterCounts;
     property GlobalBackedTopLevel: Boolean read FGlobalBackedTopLevel
       write FGlobalBackedTopLevel;
+    property AsyncTopLevel: Boolean read FAsyncTopLevel write FAsyncTopLevel;
+    property PreinitializedTopLevelFunctions: Boolean
+      read FPreinitializedTopLevelFunctions write FPreinitializedTopLevelFunctions;
     property StrictTypes: Boolean read FStrictTypes write FStrictTypes;
     property NonStrictMode: Boolean read FNonStrictMode write FNonStrictMode;
+    property ArgumentsObjectEnabled: Boolean
+      read FArgumentsObjectEnabled write FArgumentsObjectEnabled;
     property OptimizationOptions: TGocciaCompilerOptimizationOptions
       read FOptimizationOptions write FOptimizationOptions;
   end;
@@ -61,14 +69,19 @@ const
 implementation
 
 uses
+  Classes,
   SysUtils,
 
+  OrderedStringMap,
+
+  Goccia.AST.BindingPatterns,
   Goccia.Bytecode,
   Goccia.Bytecode.Debug,
   Goccia.Compiler.ConstantFolding,
   Goccia.Compiler.Expressions,
   Goccia.Compiler.PatternMatching,
-  Goccia.Compiler.Statements;
+  Goccia.Compiler.Statements,
+  Goccia.Keywords.Reserved;
 
 { TGocciaCompiler }
 
@@ -102,8 +115,11 @@ begin
   Result.FormalParameterCounts := FFormalParameterCounts;
   Result.GlobalBackedTopLevel := FGlobalBackedTopLevel and
     (FCurrentTemplate = FTopLevelTemplate);
+  Result.PreinitializedTopLevelFunctions := FPreinitializedTopLevelFunctions and
+    (FCurrentTemplate = FTopLevelTemplate);
   Result.StrictTypes := FStrictTypes;
   Result.CompatibilityNonStrictMode := FNonStrictMode;
+  Result.ArgumentsObjectEnabled := FArgumentsObjectEnabled;
   Result.NonStrictMode := FNonStrictMode and not FCurrentTemplate.StrictCode;
   Result.DerivedConstructorThisGuard := FDerivedConstructorThisGuard;
   Result.OptimizationOptions := FOptimizationOptions;
@@ -335,8 +351,14 @@ begin
     Goccia.Compiler.Statements.CompileImportDeclaration(Ctx, TGocciaImportDeclaration(AStmt))
   else if AStmt is TGocciaExportVariableDeclaration then
     Goccia.Compiler.Statements.CompileExportVariableDeclaration(Ctx, TGocciaExportVariableDeclaration(AStmt))
+  else if AStmt is TGocciaExportDestructuringDeclaration then
+    Goccia.Compiler.Statements.CompileExportDestructuringDeclaration(Ctx,
+      TGocciaExportDestructuringDeclaration(AStmt))
   else if AStmt is TGocciaExportFunctionDeclaration then
     Goccia.Compiler.Statements.CompileExportFunctionDeclaration(Ctx, TGocciaExportFunctionDeclaration(AStmt))
+  else if AStmt is TGocciaExportClassDeclaration then
+    Goccia.Compiler.Statements.CompileExportClassDeclaration(Ctx,
+      TGocciaExportClassDeclaration(AStmt))
   else if AStmt is TGocciaExportDeclaration then
     Goccia.Compiler.Statements.CompileExportDeclaration(Ctx, TGocciaExportDeclaration(AStmt))
   else if AStmt is TGocciaExportDefaultDeclaration then
@@ -411,7 +433,10 @@ end;
 procedure PredeclareLexicalLocals(const ANode: TGocciaASTNode;
   const AScope: TGocciaCompilerScope);
 var
+  ImportDecl: TGocciaImportDeclaration;
+  ImportPair: TStringStringMap.TKeyValuePair;
   VarDecl: TGocciaVariableDeclaration;
+  DestructDecl: TGocciaDestructuringDeclaration;
 begin
   if ANode is TGocciaVariableDeclaration then
   begin
@@ -430,16 +455,35 @@ begin
     PredeclareDestructuringLocals(
       TGocciaDestructuringDeclaration(ANode).Pattern, AScope,
       TGocciaDestructuringDeclaration(ANode).IsConst)
+  else if (ANode is TGocciaExportDestructuringDeclaration) and
+          not TGocciaExportDestructuringDeclaration(ANode).Declaration.IsVar then
+  begin
+    DestructDecl := TGocciaExportDestructuringDeclaration(ANode).Declaration;
+    PredeclareDestructuringLocals(DestructDecl.Pattern, AScope,
+      DestructDecl.IsConst);
+  end
   else if ANode is TGocciaClassDeclaration then
   begin
     if AScope.ResolveLocal(TGocciaClassDeclaration(ANode).ClassDefinition.Name) < 0 then
       AScope.DeclareLocal(TGocciaClassDeclaration(ANode).ClassDefinition.Name, False);
   end
+  else if ANode is TGocciaExportClassDeclaration then
+  begin
+    if AScope.ResolveLocal(TGocciaExportClassDeclaration(ANode).Declaration.ClassDefinition.Name) < 0 then
+      AScope.DeclareLocal(TGocciaExportClassDeclaration(ANode).Declaration.ClassDefinition.Name, False);
+  end
   else if (ANode is TGocciaExportDefaultDeclaration) and
           (TGocciaExportDefaultDeclaration(ANode).LocalName <> GOCCIA_DEFAULT_EXPORT_BINDING) then
   begin
     if AScope.ResolveLocal(TGocciaExportDefaultDeclaration(ANode).LocalName) < 0 then
-      AScope.DeclareLocal(TGocciaExportDefaultDeclaration(ANode).LocalName, True);
+      AScope.DeclareLocal(TGocciaExportDefaultDeclaration(ANode).LocalName,
+        not ((TGocciaExportDefaultDeclaration(ANode).Expression is
+          TGocciaFunctionExpression) or
+        ((TGocciaExportDefaultDeclaration(ANode).Expression is
+          TGocciaClassExpression) and
+        (TGocciaClassExpression(TGocciaExportDefaultDeclaration(ANode)
+          .Expression).ClassDefinition.Name =
+          TGocciaExportDefaultDeclaration(ANode).LocalName))));
   end
   else if ANode is TGocciaEnumDeclaration then
   begin
@@ -450,6 +494,103 @@ begin
   begin
     if AScope.ResolveLocal(TGocciaExportEnumDeclaration(ANode).Declaration.Name) < 0 then
       AScope.DeclareLocal(TGocciaExportEnumDeclaration(ANode).Declaration.Name, False);
+  end
+  else if ANode is TGocciaImportDeclaration then
+  begin
+    ImportDecl := TGocciaImportDeclaration(ANode);
+    if (ImportDecl.NamespaceName <> '') and
+       (AScope.ResolveLocal(ImportDecl.NamespaceName) < 0) then
+      AScope.DeclareLocal(ImportDecl.NamespaceName, True);
+    for ImportPair in ImportDecl.Imports do
+      if AScope.ResolveLocal(ImportPair.Key) < 0 then
+        AScope.DeclareLocal(ImportPair.Key, True);
+  end;
+end;
+
+procedure MarkLocalExport(const AScope: TGocciaCompilerScope;
+  const ALocalName, AExportName: string);
+var
+  LocalIdx: Integer;
+begin
+  LocalIdx := AScope.ResolveLocal(ALocalName);
+  if LocalIdx >= 0 then
+    AScope.MarkExportBinding(LocalIdx, AExportName);
+end;
+
+procedure MarkModuleExportLocals(const AStatements: TObjectList<TGocciaStatement>;
+  const AScope: TGocciaCompilerScope);
+var
+  ExportDecl: TGocciaExportDeclaration;
+  ExportDefaultDecl: TGocciaExportDefaultDeclaration;
+  ExportDestructuringDecl: TGocciaExportDestructuringDeclaration;
+  ExportPair: TStringStringMap.TKeyValuePair;
+  ExportVarDecl: TGocciaExportVariableDeclaration;
+  I: Integer;
+  Name: string;
+  Names: TStringList;
+  Stmt: TGocciaStatement;
+  VarInfo: TGocciaVariableInfo;
+begin
+  for I := 0 to AStatements.Count - 1 do
+  begin
+    Stmt := AStatements[I];
+    if Stmt is TGocciaExportDeclaration then
+    begin
+      ExportDecl := TGocciaExportDeclaration(Stmt);
+      for ExportPair in ExportDecl.ExportsTable do
+        MarkLocalExport(AScope, ExportPair.Value, ExportPair.Key);
+    end
+    else if Stmt is TGocciaExportDefaultDeclaration then
+    begin
+      ExportDefaultDecl := TGocciaExportDefaultDeclaration(Stmt);
+      MarkLocalExport(AScope, ExportDefaultDecl.LocalName, KEYWORD_DEFAULT);
+    end
+    else if Stmt is TGocciaExportVariableDeclaration then
+    begin
+      ExportVarDecl := TGocciaExportVariableDeclaration(Stmt);
+      for VarInfo in ExportVarDecl.Declaration.Variables do
+        MarkLocalExport(AScope, VarInfo.Name, VarInfo.Name);
+    end
+    else if Stmt is TGocciaExportDestructuringDeclaration then
+    begin
+      ExportDestructuringDecl := TGocciaExportDestructuringDeclaration(Stmt);
+      Names := TStringList.Create;
+      try
+        Names.CaseSensitive := True;
+        CollectPatternBindingNames(ExportDestructuringDecl.Declaration.Pattern,
+          Names, True);
+        for Name in Names do
+          MarkLocalExport(AScope, Name, Name);
+      finally
+        Names.Free;
+      end;
+    end
+    else if Stmt is TGocciaExportFunctionDeclaration then
+      MarkLocalExport(AScope,
+        TGocciaExportFunctionDeclaration(Stmt).Declaration.Name,
+        TGocciaExportFunctionDeclaration(Stmt).Declaration.Name)
+    else if Stmt is TGocciaExportClassDeclaration then
+      MarkLocalExport(AScope,
+        TGocciaExportClassDeclaration(Stmt).Declaration.ClassDefinition.Name,
+        TGocciaExportClassDeclaration(Stmt).Declaration.ClassDefinition.Name)
+    else if Stmt is TGocciaExportEnumDeclaration then
+      MarkLocalExport(AScope,
+        TGocciaExportEnumDeclaration(Stmt).Declaration.Name,
+        TGocciaExportEnumDeclaration(Stmt).Declaration.Name);
+  end;
+end;
+
+procedure MarkTopLevelGlobalBackedLocals(const AScope: TGocciaCompilerScope);
+var
+  I: Integer;
+  Local: TGocciaCompilerLocal;
+begin
+  for I := 0 to AScope.LocalCount - 1 do
+  begin
+    Local := AScope.GetLocal(I);
+    if (Local.Depth = 0) and (Local.Name <> '__receiver') and
+       not Local.IsImportBinding then
+      AScope.MarkGlobalBacked(I);
   end;
 end;
 
@@ -464,6 +605,28 @@ begin
     Result := TGocciaExportFunctionDeclaration(ANode).Declaration
   else
     Result := nil;
+end;
+
+function IsNamedDefaultFunctionDeclaration(
+  const ANode: TGocciaASTNode): Boolean;
+var
+  ExportDefault: TGocciaExportDefaultDeclaration;
+begin
+  Result := False;
+  if not (ANode is TGocciaExportDefaultDeclaration) then
+    Exit;
+
+  ExportDefault := TGocciaExportDefaultDeclaration(ANode);
+  Result := (ExportDefault.LocalName <> GOCCIA_DEFAULT_EXPORT_BINDING) and
+    (ExportDefault.Expression is TGocciaFunctionExpression) and
+    (TGocciaFunctionExpression(ExportDefault.Expression).Name =
+    ExportDefault.LocalName);
+end;
+
+function IsHoistedFunctionDeclaration(const ANode: TGocciaASTNode): Boolean;
+begin
+  Result := (GetFunctionDecl(ANode) <> nil) or
+    IsNamedDefaultFunctionDeclaration(ANode);
 end;
 
 procedure TGocciaCompiler.DoCompileFunctionBody(const ABody: TGocciaASTNode);
@@ -489,7 +652,7 @@ begin
       // Check if there are function declarations to hoist
       HasFunctionDecl := False;
       for I := 0 to Block.Nodes.Count - 1 do
-        if GetFunctionDecl(Block.Nodes[I]) <> nil then
+        if IsHoistedFunctionDeclaration(Block.Nodes[I]) then
         begin
           HasFunctionDecl := True;
           Break;
@@ -504,7 +667,7 @@ begin
 
         // Hoist function declarations: compile initializers before other statements
         for I := 0 to Block.Nodes.Count - 1 do
-          if GetFunctionDecl(Block.Nodes[I]) <> nil then
+          if IsHoistedFunctionDeclaration(Block.Nodes[I]) then
             DoCompileStatement(TGocciaStatement(Block.Nodes[I]));
       end;
 
@@ -528,7 +691,7 @@ begin
         begin
           Node := Block.Nodes[I];
           // Skip function declarations — already compiled during hoisting
-          if GetFunctionDecl(Node) <> nil then
+          if IsHoistedFunctionDeclaration(Node) then
             Continue;
           if Node is TGocciaStatement then
           begin
@@ -595,12 +758,25 @@ begin
   end
   else if ANode is TGocciaFunctionDeclaration then
     AScope.DeclareVarLocal(TGocciaFunctionDeclaration(ANode).Name)
+  else if ANode is TGocciaExportVariableDeclaration then
+  begin
+    VarDecl := TGocciaExportVariableDeclaration(ANode).Declaration;
+    if VarDecl.IsVar then
+      for I := 0 to High(VarDecl.Variables) do
+        AScope.DeclareVarLocal(VarDecl.Variables[I].Name);
+  end
   else if ANode is TGocciaExportFunctionDeclaration then
     AScope.DeclareVarLocal(
       TGocciaExportFunctionDeclaration(ANode).Declaration.Name)
   else if ANode is TGocciaDestructuringDeclaration then
   begin
     DestructDecl := TGocciaDestructuringDeclaration(ANode);
+    if DestructDecl.IsVar then
+      CollectDestructuringVarBindings(DestructDecl.Pattern, AScope);
+  end
+  else if ANode is TGocciaExportDestructuringDeclaration then
+  begin
+    DestructDecl := TGocciaExportDestructuringDeclaration(ANode).Declaration;
     if DestructDecl.IsVar then
       CollectDestructuringVarBindings(DestructDecl.Pattern, AScope);
   end
@@ -699,8 +875,6 @@ end;
 
 procedure EmitHoistedGlobalVarDeclarations(const ACtx: TGocciaCompilationContext;
   const AScope: TGocciaCompilerScope);
-const
-  GLOBAL_DEFINE_VAR_DECL = 3;
 var
   I: Integer;
   Local: TGocciaCompilerLocal;
@@ -721,6 +895,33 @@ begin
   end;
 end;
 
+procedure EmitGlobalLexicalPredeclarations(const ACtx: TGocciaCompilationContext;
+  const AScope: TGocciaCompilerScope; const AStartIndex: Integer);
+var
+  I: Integer;
+  DeclMode: UInt8;
+  Local: TGocciaCompilerLocal;
+  NameIdx: UInt16;
+begin
+  for I := AStartIndex to AScope.LocalCount - 1 do
+  begin
+    Local := AScope.GetLocal(I);
+    if (Local.Depth <> 0) or Local.IsVar or Local.IsImportBinding or
+       (Local.Name = '__receiver') then
+      Continue;
+
+    if Local.IsConst then
+      DeclMode := GLOBAL_DEFINE_CONST_PREDECLARE
+    else
+      DeclMode := GLOBAL_DEFINE_LET_PREDECLARE;
+    NameIdx := ACtx.Template.AddConstantString(Local.Name);
+    if NameIdx > High(UInt8) then
+      raise Exception.Create('Constant pool overflow: global name index exceeds 255');
+    EmitInstruction(ACtx, EncodeABC(OP_DEFINE_GLOBAL_CONST, Local.Slot,
+      DeclMode, UInt8(NameIdx)));
+  end;
+end;
+
 function TGocciaCompiler.Compile(
   const AProgram: TGocciaProgram): TGocciaBytecodeModule;
 var
@@ -735,6 +936,7 @@ begin
   FCurrentTemplate := TGocciaFunctionTemplate.Create('<module>');
   FTopLevelTemplate := FCurrentTemplate;
   FCurrentTemplate.DebugInfo := TGocciaDebugInfo.Create(FSourcePath);
+  FCurrentTemplate.IsAsync := FAsyncTopLevel;
   FCurrentTemplate.StrictCode := (not FNonStrictMode) or
     HasUseStrictDirective(AProgram);
   FCurrentScope := TGocciaCompilerScope.Create(nil, 0);
@@ -749,10 +951,29 @@ begin
       EmitHoistedGlobalVarDeclarations(BuildContext, FCurrentScope);
     end;
 
+    PredeclaredLexicalStart := FCurrentScope.LocalCount;
+    for I := 0 to AProgram.Body.Count - 1 do
+      PredeclareLexicalLocals(AProgram.Body[I], FCurrentScope);
+    MarkModuleExportLocals(AProgram.Body, FCurrentScope);
+    if FGlobalBackedTopLevel then
+      MarkTopLevelGlobalBackedLocals(FCurrentScope);
+    Ctx := BuildContext;
+    if FGlobalBackedTopLevel then
+      EmitGlobalLexicalPredeclarations(Ctx, FCurrentScope,
+        PredeclaredLexicalStart);
+    for PredeclaredLexicalIndex := PredeclaredLexicalStart to
+      FCurrentScope.LocalCount - 1 do
+    begin
+      PredeclaredLocal := FCurrentScope.GetLocal(PredeclaredLexicalIndex);
+      if not PredeclaredLocal.IsVar then
+        EmitInstruction(Ctx, EncodeABC(OP_LOAD_HOLE,
+          PredeclaredLocal.Slot, 0, 0));
+    end;
+
     // Check if there are function declarations to hoist
     HasFunctionDecl := False;
     for I := 0 to AProgram.Body.Count - 1 do
-      if GetFunctionDecl(AProgram.Body[I]) <> nil then
+      if IsHoistedFunctionDeclaration(AProgram.Body[I]) then
       begin
         HasFunctionDecl := True;
         Break;
@@ -760,24 +981,9 @@ begin
 
     if HasFunctionDecl then
     begin
-      // Pre-declare lexical locals so function declarations can resolve
-      // upvalue captures for let/const variables declared later in the body
-      PredeclaredLexicalStart := FCurrentScope.LocalCount;
-      for I := 0 to AProgram.Body.Count - 1 do
-        PredeclareLexicalLocals(AProgram.Body[I], FCurrentScope);
-      Ctx := BuildContext;
-      for PredeclaredLexicalIndex := PredeclaredLexicalStart to
-        FCurrentScope.LocalCount - 1 do
-      begin
-        PredeclaredLocal := FCurrentScope.GetLocal(PredeclaredLexicalIndex);
-        if not PredeclaredLocal.IsVar then
-          EmitInstruction(Ctx, EncodeABC(OP_LOAD_HOLE,
-            PredeclaredLocal.Slot, 0, 0));
-      end;
-
       // Hoist function declarations: compile initializers before other statements
       for I := 0 to AProgram.Body.Count - 1 do
-        if GetFunctionDecl(AProgram.Body[I]) <> nil then
+        if IsHoistedFunctionDeclaration(AProgram.Body[I]) then
           DoCompileStatement(AProgram.Body[I]);
     end;
 
@@ -787,9 +993,16 @@ begin
     BodyAbrupt := False;
 
     for I := 0 to AProgram.Body.Count - 1 do
+      if (AProgram.Body[I] is TGocciaImportDeclaration) or
+         (AProgram.Body[I] is TGocciaReExportDeclaration) then
+        DoCompileStatement(AProgram.Body[I]);
+
+    for I := 0 to AProgram.Body.Count - 1 do
     begin
       // Skip function declarations — already compiled during hoisting.
-      if GetFunctionDecl(AProgram.Body[I]) <> nil then
+      if IsHoistedFunctionDeclaration(AProgram.Body[I]) or
+         (AProgram.Body[I] is TGocciaImportDeclaration) or
+         (AProgram.Body[I] is TGocciaReExportDeclaration) then
         Continue;
 
       if AProgram.Body[I] is TGocciaExpressionStatement then
