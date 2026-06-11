@@ -106,6 +106,20 @@ type
   end;
   PGocciaGlobalReadCacheEntry = ^TGocciaGlobalReadCacheEntry;
 
+  // Runtime-only inline cache for OP_GET_PROP_CONST sites, indexed by the
+  // instruction's name-constant index.  Map is a weak pointer to the
+  // receiver's own property map, compared for identity only (never
+  // dereferenced); Version/EntryIndex validate against that map's entry
+  // version, whose global counter makes (Map, Version) pairs unique across
+  // map address reuse.  Filled only for own plain data properties on
+  // receivers with ordinary own-data lookup.  Not serialised to .gbc.
+  TGocciaPropertyReadCacheEntry = record
+    Map: Pointer;
+    Version: Cardinal;
+    EntryIndex: Integer;
+  end;
+  PGocciaPropertyReadCacheEntry = ^TGocciaPropertyReadCacheEntry;
+
   TGocciaFunctionTemplate = class
   private
     FName: string;
@@ -149,6 +163,7 @@ type
     FRegExpProgramCaches: array of TObject;
     FRegExpProgramCacheCount: Integer;
     FGlobalReadCaches: array of TGocciaGlobalReadCacheEntry;
+    FPropertyReadCaches: array of TGocciaPropertyReadCacheEntry;
     function GetFunctionCount: Integer;
   public
     constructor Create(const AName: string);
@@ -174,6 +189,8 @@ type
     procedure SetRegExpProgramCache(const ASlot: Integer; const AValue: TObject);
     function GlobalReadCacheSlot(
       const AConstIndex: Integer): PGocciaGlobalReadCacheEntry; inline;
+    function PropertyReadCacheSlot(
+      const AConstIndex: Integer): PGocciaPropertyReadCacheEntry; inline;
     function AddFunction(const AFunction: TGocciaFunctionTemplate): UInt16;
     procedure AddUpvalueDescriptor(const AIsLocal: Boolean; const AIndex: UInt8;
       const AName: string = '');
@@ -552,6 +569,20 @@ begin
   if AConstIndex >= Length(FGlobalReadCaches) then
     SetLength(FGlobalReadCaches, FConstantCount);
   Result := @FGlobalReadCaches[AConstIndex];
+end;
+
+function TGocciaFunctionTemplate.PropertyReadCacheSlot(
+  const AConstIndex: Integer): PGocciaPropertyReadCacheEntry;
+begin
+  // Same contract as GlobalReadCacheSlot: nil for out-of-range constant
+  // indices (corrupt or hostile .gbc input) so the VM runs uncached rather
+  // than writing through a wild pointer.  SetLength zero-fills, so fresh
+  // slots have Map = nil and always miss.
+  if (AConstIndex < 0) or (AConstIndex >= FConstantCount) then
+    Exit(nil);
+  if AConstIndex >= Length(FPropertyReadCaches) then
+    SetLength(FPropertyReadCaches, FConstantCount);
+  Result := @FPropertyReadCaches[AConstIndex];
 end;
 
 function TGocciaFunctionTemplate.AddFunction(

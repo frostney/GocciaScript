@@ -1371,6 +1371,64 @@ begin
   Result := RegisterObject(AValue);
 end;
 
+// Receivers whose own plain-data property reads are ordinary map lookups,
+// so the OP_GET_PROP_CONST inline cache may serve them without going
+// through their virtual GetProperty path. Exact-class checks exclude every
+// subclass with overridden lookup semantics (proxies, exotic objects).
+function VMPropertyReadCacheableReceiver(const AObject: TObject): Boolean; inline;
+begin
+  Result := (AObject.ClassType = TGocciaObjectValue) or
+    (AObject.ClassType = TGocciaVMLiteralObjectValue) or
+    (AObject.ClassType = TGocciaInstanceValue);
+end;
+
+// Validate a property-read inline cache entry against the receiver's own
+// property map and read the current value through it. The cached Map
+// pointer is compared for identity only; methods run on the receiver's
+// live map. The descriptor kind is re-checked on every hit because value
+// replacement and data->accessor redefinition keep the entry index and
+// version (TOrderedStringMap.Add on an existing key).
+function VMTryGetCachedOwnDataProperty(const AObject: TGocciaObjectValue;
+  const ACache: PGocciaPropertyReadCacheEntry;
+  out AValue: TGocciaValue): Boolean; inline;
+var
+  Descriptor: TGocciaPropertyDescriptor;
+begin
+  Result := (ACache^.Map = Pointer(AObject.Properties)) and
+    (ACache^.Version = AObject.Properties.EntryVersion) and
+    AObject.Properties.TryGetValueAtEntry(ACache^.EntryIndex, Descriptor) and
+    (Descriptor is TGocciaPropertyDescriptorData);
+  if Result then
+    AValue := TGocciaPropertyDescriptorData(Descriptor).Value
+  else
+    AValue := nil;
+end;
+
+// One uncached own-data lookup that also primes the inline cache for the
+// next read. Returns False (cache untouched) when the property is not an
+// own plain data property — accessor, prototype-resolved, and absent names
+// stay on the generic GetPropertyValue path.
+function VMFillPropertyReadCache(const AObject: TGocciaObjectValue;
+  const AName: string; const ACache: PGocciaPropertyReadCacheEntry;
+  out AValue: TGocciaValue): Boolean; inline;
+var
+  EntryIndex: Integer;
+  Descriptor: TGocciaPropertyDescriptor;
+begin
+  Result := AObject.Properties.TryGetEntryIndex(AName, EntryIndex) and
+    AObject.Properties.TryGetValueAtEntry(EntryIndex, Descriptor) and
+    (Descriptor is TGocciaPropertyDescriptorData);
+  if not Result then
+  begin
+    AValue := nil;
+    Exit;
+  end;
+  ACache^.Map := Pointer(AObject.Properties);
+  ACache^.Version := AObject.Properties.EntryVersion;
+  ACache^.EntryIndex := EntryIndex;
+  AValue := TGocciaPropertyDescriptorData(Descriptor).Value;
+end;
+
 function VMGetOwnDataDescriptorRegister(const AObject: TGocciaObjectValue;
   const AName: string; out AValue: TGocciaRegister): Boolean; inline;
 var
@@ -11126,6 +11184,7 @@ var
   GlobalName: string;
   GlobalBindingValue: TGocciaValue;
   GlobalReadCache: PGocciaGlobalReadCacheEntry;
+  PropertyReadCache: PGocciaPropertyReadCacheEntry;
   AttributeType: string;
   SpecifierString: string;
   Upvalue: TGocciaBytecodeUpvalue;
@@ -11868,17 +11927,40 @@ begin
       end;
 
       OP_GET_PROP_CONST:
-        if (FRegisters[B].Kind = grkObject) and Assigned(FRegisters[B].ObjectValue) then
+        if (FRegisters[B].Kind = grkObject) and Assigned(FRegisters[B].ObjectValue) and
+           (FRegisters[B].ObjectValue is TGocciaObjectValue) then
         begin
-          GlobalName := Template.GetConstantUnchecked(C).StringValue;
-          if (not IsBytecodePrivateKey(GlobalName)) and
-             (FRegisters[B].ObjectValue is TGocciaVMLiteralObjectValue) and
-             TGocciaVMLiteralObjectValue(FRegisters[B].ObjectValue).TryGetOwnDataPropertyFastRegister(
-               GlobalName, FRegisters[A]) then
-            { fast path already assigned }
+          // Hot shape: per-site inline cache keyed by the name-constant
+          // index, validated against (own-map identity, map entry version).
+          // Hits and fills serve only own plain data properties on
+          // ordinary-lookup receivers; everything else degrades to the
+          // generic GetPropertyValue path. A nil slot (out-of-range
+          // constant index in corrupt bytecode) runs uncached.
+          PropertyReadCache := Template.PropertyReadCacheSlot(C);
+          if Assigned(PropertyReadCache) and
+             VMTryGetCachedOwnDataProperty(
+               TGocciaObjectValue(FRegisters[B].ObjectValue),
+               PropertyReadCache, GlobalBindingValue) then
+            SetRegisterFast(A, GlobalBindingValue)
           else
-            SetRegister(A, GetPropertyValue(FRegisters[B].ObjectValue, GlobalName));
+          begin
+            GlobalName := Template.GetConstantUnchecked(C).StringValue;
+            if Assigned(PropertyReadCache) and
+               VMPropertyReadCacheableReceiver(FRegisters[B].ObjectValue) and
+               (not IsBytecodePrivateKey(GlobalName)) and
+               VMFillPropertyReadCache(
+                 TGocciaObjectValue(FRegisters[B].ObjectValue), GlobalName,
+                 PropertyReadCache, GlobalBindingValue) then
+              SetRegisterFast(A, GlobalBindingValue)
+            else
+              SetRegister(A, GetPropertyValue(FRegisters[B].ObjectValue,
+                GlobalName));
+          end;
         end
+        else if (FRegisters[B].Kind = grkObject) and
+                Assigned(FRegisters[B].ObjectValue) then
+          SetRegister(A, GetPropertyValue(FRegisters[B].ObjectValue,
+            Template.GetConstantUnchecked(C).StringValue))
         else
           SetRegister(A, GetPropertyValue(GetRegister(B),
             Template.GetConstantUnchecked(C).StringValue));
