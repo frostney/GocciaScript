@@ -1,5 +1,10 @@
 import { gunzipSync, gzipSync } from "node:zlib";
-import { BlobPreconditionFailedError, get, put } from "@vercel/blob";
+import {
+  BlobNotFoundError,
+  BlobPreconditionFailedError,
+  get,
+  put,
+} from "@vercel/blob";
 import {
   jsonUrlForArtifact,
   type Test262Report,
@@ -39,11 +44,6 @@ export type Test262BlobPublishEntry = {
 const DEFAULT_PREFIX = "test262";
 const DEFAULT_ACCESS: Test262BlobAccess = "public";
 const MANIFEST_WRITE_ATTEMPTS = 3;
-
-type ReadBlobTextOptions = {
-  access?: Test262BlobAccess;
-  useCache?: boolean;
-};
 
 function cleanPrefix(value: string | undefined): string {
   const trimmed = (value ?? DEFAULT_PREFIX).trim().replace(/^\/+|\/+$/g, "");
@@ -99,21 +99,17 @@ async function streamToBytes(stream: ReadableStream<Uint8Array>) {
 
 async function readBlobTextWithMeta(
   pathname: string,
-  options: ReadBlobTextOptions = {},
+  access = test262BlobAccess(),
 ): Promise<{ text: string; etag: string } | null> {
-  const access = options.access ?? test262BlobAccess();
   try {
-    const result = await get(pathname, {
-      access,
-      ...(options.useCache === undefined ? {} : { useCache: options.useCache }),
-    });
+    const result = await get(pathname, { access });
     if (!result || result.statusCode !== 200 || !result.stream) return null;
     return {
       text: new TextDecoder().decode(await streamToBytes(result.stream)),
       etag: result.blob.etag,
     };
   } catch (err) {
-    if (err instanceof Error && /not found/i.test(err.message)) return null;
+    if (err instanceof BlobNotFoundError) return null;
     throw err;
   }
 }
@@ -127,7 +123,7 @@ async function readBlobBytes(
     if (!result || result.statusCode !== 200 || !result.stream) return null;
     return await streamToBytes(result.stream);
   } catch (err) {
-    if (err instanceof Error && /not found/i.test(err.message)) return null;
+    if (err instanceof BlobNotFoundError) return null;
     throw err;
   }
 }
@@ -169,11 +165,11 @@ export async function loadTest262BlobManifest(
 
 async function loadTest262BlobManifestSnapshot(
   prefix = test262BlobPrefix(),
-  options: ReadBlobTextOptions = {},
+  access = test262BlobAccess(),
 ): Promise<{ manifest: Test262BlobManifest; etag: string } | null> {
   const result = await readBlobTextWithMeta(
     test262BlobManifestPath(prefix),
-    options,
+    access,
   );
   if (!result) return null;
   const manifest = normalizeManifest(JSON.parse(result.text), prefix);
@@ -273,10 +269,10 @@ async function publishManifestWithRetry(
     publishedRuns.map((run) => run.createdAt.slice(0, 10)),
   );
   for (let attempt = 1; attempt <= MANIFEST_WRITE_ATTEMPTS; attempt++) {
-    const existing = await loadTest262BlobManifestSnapshot(prefix, {
-      access,
-      useCache: false,
-    });
+    // The CDN may serve the manifest up to its cache TTL (~60s) stale; the
+    // ifMatch precondition below turns a stale read into a loud write
+    // conflict instead of a silently lost update.
+    const existing = await loadTest262BlobManifestSnapshot(prefix, access);
     const merged = new Map<number, Test262BlobRun>();
     for (const run of existing?.manifest.runs ?? []) {
       merged.set(run.artifactId, run);
