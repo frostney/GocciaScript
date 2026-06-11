@@ -1404,10 +1404,18 @@ begin
     AValue := nil;
 end;
 
+const
+  // Consecutive different-map refills after which an OP_GET_PROP_CONST site
+  // is treated as megamorphic: the cache stops being rewritten and reads use
+  // the uncached own-data fast path instead.
+  PROPERTY_READ_CACHE_POLYMORPHIC_LIMIT = 16;
+
 // One uncached own-data lookup that also primes the inline cache for the
 // next read. Returns False (cache untouched) when the property is not an
 // own plain data property — accessor, prototype-resolved, and absent names
-// stay on the generic GetPropertyValue path.
+// stay on the generic GetPropertyValue path. Refills that replace a
+// different live map advance MissStreak so polymorphic sites converge on
+// the megamorphic fast path.
 function VMFillPropertyReadCache(const AObject: TGocciaObjectValue;
   const AName: string; const ACache: PGocciaPropertyReadCacheEntry;
   out AValue: TGocciaValue): Boolean; inline;
@@ -1423,6 +1431,8 @@ begin
     AValue := nil;
     Exit;
   end;
+  if (ACache^.Map <> nil) and (ACache^.Map <> Pointer(AObject.Properties)) then
+    Inc(ACache^.MissStreak);
   ACache^.Map := Pointer(AObject.Properties);
   ACache^.Version := AObject.Properties.EntryVersion;
   ACache^.EntryIndex := EntryIndex;
@@ -11934,10 +11944,14 @@ begin
           // index, validated against (own-map identity, map entry version).
           // Hits and fills serve only own plain data properties on
           // ordinary-lookup receivers; everything else degrades to the
-          // generic GetPropertyValue path. A nil slot (out-of-range
-          // constant index in corrupt bytecode) runs uncached.
+          // generic GetPropertyValue path. Sites whose MissStreak saturated
+          // are megamorphic: they skip the cache and use the uncached
+          // own-data fast path. A nil slot (out-of-range constant index in
+          // corrupt bytecode) runs fully uncached.
           PropertyReadCache := Template.PropertyReadCacheSlot(C);
           if Assigned(PropertyReadCache) and
+             (PropertyReadCache^.MissStreak <
+              PROPERTY_READ_CACHE_POLYMORPHIC_LIMIT) and
              VMTryGetCachedOwnDataProperty(
                TGocciaObjectValue(FRegisters[B].ObjectValue),
                PropertyReadCache, GlobalBindingValue) then
@@ -11945,13 +11959,29 @@ begin
           else
           begin
             GlobalName := Template.GetConstantUnchecked(C).StringValue;
-            if Assigned(PropertyReadCache) and
-               VMPropertyReadCacheableReceiver(FRegisters[B].ObjectValue) and
-               (not IsBytecodePrivateKey(GlobalName)) and
-               VMFillPropertyReadCache(
-                 TGocciaObjectValue(FRegisters[B].ObjectValue), GlobalName,
-                 PropertyReadCache, GlobalBindingValue) then
-              SetRegisterFast(A, GlobalBindingValue)
+            if VMPropertyReadCacheableReceiver(FRegisters[B].ObjectValue) and
+               (not IsBytecodePrivateKey(GlobalName)) then
+            begin
+              if Assigned(PropertyReadCache) and
+                 (PropertyReadCache^.MissStreak <
+                  PROPERTY_READ_CACHE_POLYMORPHIC_LIMIT) then
+              begin
+                if VMFillPropertyReadCache(
+                  TGocciaObjectValue(FRegisters[B].ObjectValue), GlobalName,
+                  PropertyReadCache, GlobalBindingValue) then
+                  SetRegisterFast(A, GlobalBindingValue)
+                else
+                  SetRegister(A, GetPropertyValue(FRegisters[B].ObjectValue,
+                    GlobalName));
+              end
+              else if VMGetOwnDataDescriptorValue(
+                TGocciaObjectValue(FRegisters[B].ObjectValue), GlobalName,
+                GlobalBindingValue) then
+                SetRegisterFast(A, GlobalBindingValue)
+              else
+                SetRegister(A, GetPropertyValue(FRegisters[B].ObjectValue,
+                  GlobalName));
+            end
             else
               SetRegister(A, GetPropertyValue(FRegisters[B].ObjectValue,
                 GlobalName));

@@ -112,11 +112,15 @@ type
   // dereferenced); Version/EntryIndex validate against that map's entry
   // version, whose global counter makes (Map, Version) pairs unique across
   // map address reuse.  Filled only for own plain data properties on
-  // receivers with ordinary own-data lookup.  Not serialised to .gbc.
+  // receivers with ordinary own-data lookup.  MissStreak counts consecutive
+  // refills that replaced a different live map; once it saturates the site
+  // is treated as megamorphic and reads go through the uncached own-data
+  // fast path instead of thrashing the cache.  Not serialised to .gbc.
   TGocciaPropertyReadCacheEntry = record
     Map: Pointer;
     Version: Cardinal;
     EntryIndex: Integer;
+    MissStreak: Byte;
   end;
   PGocciaPropertyReadCacheEntry = ^TGocciaPropertyReadCacheEntry;
 
