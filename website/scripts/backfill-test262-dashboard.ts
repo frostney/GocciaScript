@@ -748,6 +748,13 @@ async function backfillRun(
   log(`${day}: creating detached worktree for ${run.head_sha}`);
   await runCommand(
     "git",
+    ["fetch", "--no-tags", "--depth=1", "origin", run.head_sha],
+    {
+      cwd: repoRoot,
+    },
+  );
+  await runCommand(
+    "git",
     ["worktree", "add", "--detach", worktree, run.head_sha],
     { cwd: repoRoot },
   );

@@ -111,6 +111,7 @@ type
     FFrameStackCount: Integer;
     FCurrentExecutionContextPushed: Boolean;
     FCurrentModuleSourcePath: string;
+    FCurrentRuntimeModule: TGocciaModule;
     FCurrentModuleExports: TGocciaValueMap;
     FPendingNewTarget: TGocciaValue;
     FCurrentNewTarget: TGocciaValue;
@@ -195,10 +196,14 @@ type
       const AArguments: TGocciaArgumentsCollection): TGocciaValue;
     function ImportModuleValue(const APath: string): TGocciaValue; overload;
     function ImportModuleValue(const APath, AReferrer: string): TGocciaValue; overload;
+    procedure ResolveDynamicImportPromise(const APromise: TGocciaPromiseValue;
+      const APath, AReferrer: string);
     function ImportModuleSourceValue(const APath, AReferrer: string): TGocciaValue;
     function ImportDeferredModuleNamespaceValue(const APath,
       AReferrer: string): TGocciaValue;
-    procedure ExportBindingValue(const AName: string; const AValue: TGocciaValue);
+    function DynamicImportAttributeType(const AOptions: TGocciaValue): string;
+    procedure ExportBindingValue(const AName: string; const AValue: TGocciaValue;
+      const ASourcePath: string = '');
     procedure DefineGetterProperty(const ATarget: TGocciaValue; const AName: string;
       const AGetter: TGocciaValue);
     procedure DefineSetterProperty(const ATarget: TGocciaValue; const AName: string;
@@ -233,7 +238,9 @@ type
       const APreserveExistingPrivateSlots: Boolean = False);
     function MaterializeArguments(
       const AArguments: TGocciaRegisterArray): TGocciaArgumentsCollection;
-    function CreateArgumentsObjectFromCurrentFrame: TGocciaObjectValue;
+    function CreateArgumentsObjectFromCurrentFrame(
+      const AUseMappedArguments: Boolean;
+      const AFormalParameterCount: Integer): TGocciaObjectValue;
     function InvokeImplicitSuperInitialization(const AClassValue: TGocciaClassValue;
       const AInstance: TGocciaValue; const AArguments: TGocciaArgumentsCollection): TGocciaValue;
     function InvokeImplicitSuperInitializationRegisters(
@@ -339,6 +346,8 @@ type
       read FLoadModuleSource write FLoadModuleSource;
     property LoadDeferredModule: TLoadDeferredModuleCallback
       read FLoadDeferredModule write FLoadDeferredModule;
+    property CurrentRuntimeModule: TGocciaModule
+      read FCurrentRuntimeModule write FCurrentRuntimeModule;
     property GlobalBackedTopLevel: Boolean read FGlobalBackedTopLevel
       write FGlobalBackedTopLevel;
     property CoverageEnabled: Boolean read FCoverageEnabled write FCoverageEnabled;
@@ -376,6 +385,7 @@ uses
   Goccia.Evaluator.Decorators,
   Goccia.ImportMeta,
   Goccia.InstructionLimit,
+  Goccia.MicrotaskQueue,
   Goccia.PatternMatching,
   Goccia.Profiler,
   Goccia.RegExp.Runtime,
@@ -1324,17 +1334,14 @@ begin
        .TrySetLiteralDataPropertyFast(AName, AValue) then
     Exit;
 
-  ATarget.DefineProperty(AName, TGocciaPropertyDescriptorData.Create(AValue,
-    [pfEnumerable, pfConfigurable, pfWritable]));
+  ATarget.CreateDataPropertyOrThrow(AName, AValue);
 end;
 
 // ES2026 §7.3.6 CreateDataPropertyOrThrow(O, P, V) — symbol variant
 procedure DefineSymbolDataPropertyOnObject(const ATarget: TGocciaObjectValue;
   const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue); inline;
 begin
-  ATarget.DefineSymbolProperty(ASymbol,
-    TGocciaPropertyDescriptorData.Create(AValue,
-      [pfEnumerable, pfConfigurable, pfWritable]));
+  ATarget.CreateDataPropertyOrThrow(ASymbol, AValue);
 end;
 
 function VMNumberValue(const AValue: Double): TGocciaNumberLiteralValue; inline;
@@ -1584,9 +1591,6 @@ begin
   if (ALeft is TGocciaArrayValue) and Assigned(AObjectConstructor) and
      (ARight = AObjectConstructor) then
     Exit(TGocciaBooleanLiteralValue.TrueValue);
-  if (ALeft is TGocciaObjectValue) and Assigned(AObjectConstructor) and
-     (ARight = AObjectConstructor) then
-    Exit(TGocciaBooleanLiteralValue.TrueValue);
   if (ALeft is TGocciaObjectValue) and
      VMIsObjectInstanceOfClass(TGocciaObjectValue(ALeft), TGocciaClassValue(ARight)) then
     Exit(TGocciaBooleanLiteralValue.TrueValue);
@@ -1691,6 +1695,51 @@ type
       const APromise: TGocciaPromiseValue;
       const AResumeKind: TGocciaBytecodeGeneratorResumeKind;
       const AAsyncGeneratorResult: Boolean = False);
+    function Call(const AArguments: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue; override;
+    procedure MarkReferences; override;
+  end;
+
+  TGocciaVMDynamicImportFulfillValue = class(TGocciaFunctionBase)
+  private
+    FPromise: TGocciaPromiseValue;
+    FNamespace: TGocciaValue;
+  protected
+    function GetFunctionLength: Integer; override;
+    function GetFunctionName: string; override;
+  public
+    constructor Create(const APromise: TGocciaPromiseValue;
+      const ANamespace: TGocciaValue);
+    function Call(const AArguments: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue; override;
+    procedure MarkReferences; override;
+  end;
+
+  TGocciaVMDynamicImportRejectValue = class(TGocciaFunctionBase)
+  private
+    FPromise: TGocciaPromiseValue;
+  protected
+    function GetFunctionLength: Integer; override;
+    function GetFunctionName: string; override;
+  public
+    constructor Create(const APromise: TGocciaPromiseValue);
+    function Call(const AArguments: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue; override;
+    procedure MarkReferences; override;
+  end;
+
+  TGocciaVMDynamicImportStartValue = class(TGocciaFunctionBase)
+  private
+    FVM: TGocciaVM;
+    FPromise: TGocciaPromiseValue;
+    FPath: string;
+    FReferrer: string;
+  protected
+    function GetFunctionLength: Integer; override;
+    function GetFunctionName: string; override;
+  public
+    constructor Create(const AVM: TGocciaVM; const APromise: TGocciaPromiseValue;
+      const APath, AReferrer: string);
     function Call(const AArguments: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue; override;
     procedure MarkReferences; override;
@@ -1862,6 +1911,8 @@ begin
     AClosure.HomeObject.MarkReferences;
   if Assigned(AClosure.HomeClass) then
     AClosure.HomeClass.MarkReferences;
+  if Assigned(AClosure.GlobalScope) then
+    AClosure.GlobalScope.MarkReferences;
   for I := 0 to AClosure.UpvalueCount - 1 do
   begin
     Upvalue := AClosure.GetUpvalue(I);
@@ -1957,6 +2008,8 @@ begin
       FVM.FFrameStack[I].LocalCellCount);
     if Assigned(FVM.FFrameStack[I].NewTarget) then
       TGocciaValue(FVM.FFrameStack[I].NewTarget).MarkReferences;
+    if Assigned(FVM.FFrameStack[I].GlobalScope) then
+      TGocciaScope(FVM.FFrameStack[I].GlobalScope).MarkReferences;
     if Assigned(FVM.FFrameStack[I].DynamicVarScope) then
       TGocciaScope(FVM.FFrameStack[I].DynamicVarScope).MarkReferences;
   end;
@@ -3600,6 +3653,137 @@ begin
     FPromise.MarkReferences;
 end;
 
+{ TGocciaVMDynamicImportFulfillValue }
+
+constructor TGocciaVMDynamicImportFulfillValue.Create(
+  const APromise: TGocciaPromiseValue; const ANamespace: TGocciaValue);
+begin
+  inherited Create;
+  FPromise := APromise;
+  FNamespace := ANamespace;
+end;
+
+function TGocciaVMDynamicImportFulfillValue.GetFunctionLength: Integer;
+begin
+  Result := 1;
+end;
+
+function TGocciaVMDynamicImportFulfillValue.GetFunctionName: string;
+begin
+  Result := 'dynamic-import-fulfill';
+end;
+
+function TGocciaVMDynamicImportFulfillValue.Call(
+  const AArguments: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  if Assigned(FPromise) then
+    FPromise.Resolve(FNamespace);
+end;
+
+procedure TGocciaVMDynamicImportFulfillValue.MarkReferences;
+begin
+  if GCMarked then Exit;
+  inherited;
+  if Assigned(FPromise) then
+    FPromise.MarkReferences;
+  if Assigned(FNamespace) then
+    FNamespace.MarkReferences;
+end;
+
+{ TGocciaVMDynamicImportRejectValue }
+
+constructor TGocciaVMDynamicImportRejectValue.Create(
+  const APromise: TGocciaPromiseValue);
+begin
+  inherited Create;
+  FPromise := APromise;
+end;
+
+function TGocciaVMDynamicImportRejectValue.GetFunctionLength: Integer;
+begin
+  Result := 1;
+end;
+
+function TGocciaVMDynamicImportRejectValue.GetFunctionName: string;
+begin
+  Result := 'dynamic-import-reject';
+end;
+
+function TGocciaVMDynamicImportRejectValue.Call(
+  const AArguments: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  if Assigned(FPromise) then
+    FPromise.Reject(VMArgumentOrUndefined(AArguments));
+end;
+
+procedure TGocciaVMDynamicImportRejectValue.MarkReferences;
+begin
+  if GCMarked then Exit;
+  inherited;
+  if Assigned(FPromise) then
+    FPromise.MarkReferences;
+end;
+
+{ TGocciaVMDynamicImportStartValue }
+
+constructor TGocciaVMDynamicImportStartValue.Create(const AVM: TGocciaVM;
+  const APromise: TGocciaPromiseValue; const APath, AReferrer: string);
+begin
+  inherited Create;
+  FVM := AVM;
+  FPromise := APromise;
+  FPath := APath;
+  FReferrer := AReferrer;
+end;
+
+function TGocciaVMDynamicImportStartValue.GetFunctionLength: Integer;
+begin
+  Result := 0;
+end;
+
+function TGocciaVMDynamicImportStartValue.GetFunctionName: string;
+begin
+  Result := 'dynamic-import-start';
+end;
+
+function TGocciaVMDynamicImportStartValue.Call(
+  const AArguments: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  if not Assigned(FVM) or not Assigned(FPromise) then
+    Exit;
+
+  try
+    FVM.ResolveDynamicImportPromise(FPromise, FPath, FReferrer);
+  except
+    on E: EGocciaBytecodeThrow do
+      FPromise.Reject(E.ThrownValue);
+    on E: TGocciaThrowValue do
+      FPromise.Reject(E.Value);
+    on E: TGocciaSyntaxError do
+      FPromise.Reject(CreateErrorObject(SYNTAX_ERROR_NAME, E.Message));
+    on E: TGocciaTypeError do
+      FPromise.Reject(CreateErrorObject(TYPE_ERROR_NAME, E.Message));
+    on E: TGocciaReferenceError do
+      FPromise.Reject(CreateErrorObject(REFERENCE_ERROR_NAME, E.Message));
+    on E: Exception do
+      FPromise.Reject(CreateErrorObject(ERROR_NAME, E.Message));
+  end;
+end;
+
+procedure TGocciaVMDynamicImportStartValue.MarkReferences;
+begin
+  if GCMarked then Exit;
+  inherited;
+  if Assigned(FPromise) then
+    FPromise.MarkReferences;
+end;
+
 function TGocciaBytecodeGeneratorObjectValue.GeneratorNext(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
@@ -3651,6 +3835,8 @@ begin
       FClosure.HomeObject.MarkReferences;
     if Assigned(FClosure.HomeClass) then
       FClosure.HomeClass.MarkReferences;
+    if Assigned(FClosure.GlobalScope) then
+      FClosure.GlobalScope.MarkReferences;
     for I := 0 to FClosure.UpvalueCount - 1 do
     begin
       Upvalue := FClosure.GetUpvalue(I);
@@ -5586,6 +5772,8 @@ begin
     FClosure.HomeObject.MarkReferences;
   if Assigned(FClosure.HomeClass) then
     FClosure.HomeClass.MarkReferences;
+  if Assigned(FClosure.GlobalScope) then
+    FClosure.GlobalScope.MarkReferences;
 
   for I := 0 to FClosure.UpvalueCount - 1 do
   begin
@@ -6670,7 +6858,7 @@ var
   J: Integer;
   Excluded: Boolean;
 begin
-  Result := TGocciaObjectValue.Create;
+  Result := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
   if ASource is TGocciaObjectValue then
     SourceObject := TGocciaObjectValue(ASource)
   else
@@ -7165,6 +7353,37 @@ begin
   Result := CreateModuleNamespaceObject(Module);
 end;
 
+procedure TGocciaVM.ResolveDynamicImportPromise(
+  const APromise: TGocciaPromiseValue; const APath, AReferrer: string);
+var
+  EvaluationPromise: TGocciaPromiseValue;
+  Module: TGocciaModule;
+  Namespace: TGocciaValue;
+begin
+  if not Assigned(FLoadModule) then
+    ThrowTypeError(SErrorModuleNotAvailableInVM);
+
+  Module := FLoadModule(APath, AReferrer);
+  Namespace := CreateModuleNamespaceObject(Module);
+  if Assigned(Module) and
+     (Module.EvaluationPromise is TGocciaPromiseValue) then
+  begin
+    EvaluationPromise := TGocciaPromiseValue(Module.EvaluationPromise);
+    case EvaluationPromise.State of
+      gpsFulfilled:
+        APromise.Resolve(Namespace);
+      gpsRejected:
+        APromise.Reject(EvaluationPromise.PromiseResult);
+      gpsPending:
+        EvaluationPromise.InvokeThen(
+          TGocciaVMDynamicImportFulfillValue.Create(APromise, Namespace),
+          TGocciaVMDynamicImportRejectValue.Create(APromise));
+    end;
+  end
+  else
+    APromise.Resolve(Namespace);
+end;
+
 function TGocciaVM.ImportModuleSourceValue(const APath, AReferrer: string): TGocciaValue;
 begin
   if not Assigned(FLoadModuleSource) then
@@ -7182,11 +7401,52 @@ begin
   Result := FLoadDeferredModule(APath, AReferrer);
 end;
 
-procedure TGocciaVM.ExportBindingValue(const AName: string; const AValue: TGocciaValue);
+function TGocciaVM.DynamicImportAttributeType(
+  const AOptions: TGocciaValue): string;
+var
+  AttributeType: string;
+  HasAttributeType: Boolean;
+begin
+  TryReadImportAttributeType(AOptions, AttributeType, HasAttributeType);
+  if HasAttributeType and (AttributeType <> 'json') and
+     (AttributeType <> 'text') then
+    ThrowTypeError('Unsupported import attribute type "' + AttributeType + '"');
+  if HasAttributeType then
+    Result := AttributeType
+  else
+    Result := '';
+end;
+
+procedure TGocciaVM.ExportBindingValue(const AName: string;
+  const AValue: TGocciaValue; const ASourcePath: string);
+var
+  RuntimeModule: TGocciaModule;
+
+  function SameSourcePath(const ALeft, ARight: string): Boolean;
+  begin
+    Result := (ALeft <> '') and (ARight <> '') and
+      SameFileName(ExpandFileName(ALeft), ExpandFileName(ARight));
+  end;
 begin
   if not Assigned(FCurrentModuleExports) then
     FCurrentModuleExports := TGocciaValueMap.Create;
   FCurrentModuleExports.AddOrSetValue(AName, AValue);
+  RuntimeModule := nil;
+
+  if Assigned(FCurrentRuntimeModule) and
+     ((ASourcePath = '') or SameSourcePath(ASourcePath,
+       FCurrentRuntimeModule.Path)) then
+    RuntimeModule := FCurrentRuntimeModule;
+
+  if (not Assigned(RuntimeModule)) and Assigned(FLoadModule) and
+     (ASourcePath <> '') and
+     (not SameSourcePath(ASourcePath, FCurrentModuleSourcePath)) then
+    RuntimeModule := FLoadModule(ASourcePath, ASourcePath);
+
+  if not Assigned(RuntimeModule) then
+    RuntimeModule := FCurrentRuntimeModule;
+  if Assigned(RuntimeModule) then
+    RuntimeModule.UpdateExportValue(AName, AValue);
 end;
 
 // ES2026 §13.2.5.6 Runtime Semantics: PropertyDefinitionEvaluation
@@ -7969,10 +8229,15 @@ begin
     Result.Add(RegisterToValue(AArguments[I]));
 end;
 
-function TGocciaVM.CreateArgumentsObjectFromCurrentFrame: TGocciaObjectValue;
+function TGocciaVM.CreateArgumentsObjectFromCurrentFrame(
+  const AUseMappedArguments: Boolean;
+  const AFormalParameterCount: Integer): TGocciaObjectValue;
 var
   Args: TGocciaArgumentsCollection;
+  Callee: TGocciaValue;
+  ParameterCells: array of TGocciaBytecodeCell;
   I: Integer;
+  MappedCount: Integer;
 begin
   Args := AcquireArguments(FArgCount);
   try
@@ -7981,7 +8246,23 @@ begin
         Args.Add(RegisterToValue(FCurrentArguments[I]))
       else
         Args.Add(TGocciaUndefinedLiteralValue.UndefinedValue);
-    Result := CreateUnmappedArgumentsObject(Args);
+    if AUseMappedArguments then
+    begin
+      MappedCount := AFormalParameterCount;
+      if MappedCount > FArgCount then
+        MappedCount := FArgCount;
+      SetLength(ParameterCells, FArgCount);
+      for I := 0 to MappedCount - 1 do
+        ParameterCells[I] := GetLocalCell(I + 1);
+      if Assigned(FCurrentClosure) then
+        Callee := FCurrentClosure.FunctionValue
+      else
+        Callee := nil;
+      Result := CreateMappedBytecodeArgumentsObject(Args, ParameterCells,
+        Callee);
+    end
+    else
+      Result := CreateUnmappedArgumentsObject(Args);
   finally
     ReleaseArguments(Args);
   end;
@@ -9597,6 +9878,17 @@ begin
 
   if AObject is TGocciaObjectValue then
   begin
+    if AKey is TGocciaStringLiteralValue then
+    begin
+      KeyStr := TGocciaStringLiteralValue(AKey).Value;
+      if IsBytecodePrivateKey(KeyStr) or IsBytecodePrivateBrandKey(KeyStr) then
+      begin
+        if TryGetRawPrivateValue(AObject, KeyStr, Prop) then
+          Exit(TGocciaBooleanLiteralValue.TrueValue);
+        Exit(TGocciaBooleanLiteralValue.FalseValue);
+      end;
+    end;
+
     if AKey is TGocciaObjectValue then
       ResolvedKey := ToPropertyKey(AKey)
     else
@@ -9924,7 +10216,10 @@ begin
     Exit(ASourceValue);
 
   SourceText := TGocciaStringLiteralValue(ASourceValue).Value;
-  SourceName := '<bytecode-direct-eval>';
+  if FCurrentModuleSourcePath <> '' then
+    SourceName := FCurrentModuleSourcePath
+  else
+    SourceName := '<bytecode-direct-eval>';
   EvalSource := TStringList.Create;
   try
     EvalSource.Text := SourceText;
@@ -10128,6 +10423,7 @@ begin
   FFrameStack[FFrameStackCount].PrevCovLine := APrevCovLine;
   FFrameStack[FFrameStackCount].ProfileEntryTimestamp := AProfileTimestamp;
   FFrameStack[FFrameStackCount].NewTarget := Pointer(FCurrentNewTarget);
+  FFrameStack[FFrameStackCount].GlobalScope := Pointer(FGlobalScope);
   FFrameStack[FFrameStackCount].DynamicVarScope :=
     Pointer(FCurrentDynamicVarScope);
   FFrameStack[FFrameStackCount].ExecutionContextPushed :=
@@ -10156,6 +10452,7 @@ begin
   APrevCovLine := FFrameStack[FFrameStackCount].PrevCovLine;
   AProfileTimestamp := FFrameStack[FFrameStackCount].ProfileEntryTimestamp;
   FCurrentNewTarget := TGocciaValue(FFrameStack[FFrameStackCount].NewTarget);
+  FGlobalScope := TGocciaScope(FFrameStack[FFrameStackCount].GlobalScope);
   FCurrentDynamicVarScope :=
     TGocciaScope(FFrameStack[FFrameStackCount].DynamicVarScope);
   FCurrentExecutionContextPushed :=
@@ -10238,6 +10535,8 @@ begin
       FCurrentArguments[I] := AArguments[I];
   FArgCount := AArgCount;
   FCurrentClosure := AClosure;
+  if Assigned(AClosure) and Assigned(AClosure.GlobalScope) then
+    FGlobalScope := AClosure.GlobalScope;
   FCurrentDynamicVarScope := nil;
   FCurrentExecutionContextPushed := False;
   Inc(FFrameDepth);
@@ -10367,6 +10666,7 @@ var
   SavedArgCount: Integer;
   SavedClosure: TGocciaBytecodeClosure;
   SavedNewTarget: TGocciaValue;
+  SavedGlobalScope: TGocciaScope;
   SavedDynamicVarScope: TGocciaScope;
   SavedExecutionContextPushed: Boolean;
   SavedHandlerCount: Integer;
@@ -10383,6 +10683,8 @@ var
   CallArgs: TGocciaArgumentsCollection;
   I: Integer;
   GlobalName: string;
+  AttributeType: string;
+  SpecifierString: string;
   Upvalue: TGocciaBytecodeUpvalue;
   ChildClosure: TGocciaBytecodeClosure;
   Desc: TGocciaUpvalueDescriptor;
@@ -10409,6 +10711,7 @@ var
   PrevCovLine, CovLine: UInt32;
   ProfileEntryTimestamp: Int64;
   DynImportPromise: TGocciaPromiseValue;
+  DynImportTask: TGocciaMicrotask;
   AwaitPromise: TGocciaPromiseValue;
   AwaitContinuation: TGocciaBytecodeGeneratorObjectValue;
   SpreadArray: TGocciaArrayValue;
@@ -10423,6 +10726,7 @@ begin
   SavedArgCount := FArgCount;
   SavedClosure := FCurrentClosure;
   SavedNewTarget := FCurrentNewTarget;
+  SavedGlobalScope := FGlobalScope;
   SavedDynamicVarScope := FCurrentDynamicVarScope;
   SavedExecutionContextPushed := FCurrentExecutionContextPushed;
   SavedHandlerCount := FHandlerStack.Count;
@@ -10433,6 +10737,8 @@ begin
     SetupNewFrame(AClosure, AThisValue, AArguments, AArgCount,
       AArg0, AArg1, AArg2, AUseFixedArgs, APushExecutionContext,
       Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+    if Assigned(AClosure) and Assigned(AClosure.GlobalScope) then
+      FGlobalScope := AClosure.GlobalScope;
     if Assigned(FPendingNewTarget) then
       FCurrentNewTarget := FPendingNewTarget;
     FPendingNewTarget := nil;
@@ -10666,7 +10972,7 @@ begin
             'Must call super constructor before accessing this');
 
       OP_CREATE_ARGUMENTS:
-        SetRegister(A, CreateArgumentsObjectFromCurrentFrame);
+        SetRegister(A, CreateArgumentsObjectFromCurrentFrame(B <> 0, C));
 
       OP_PACK_ARGS:
       begin
@@ -11888,9 +12194,9 @@ begin
 
       OP_INC:
         if FRegisters[B].Kind = grkInt then
-          FRegisters[A] := VMIntResult(FRegisters[B].IntValue + 1)
+          SetRegisterRaw(A, VMIntResult(FRegisters[B].IntValue + 1))
         else if FRegisters[B].Kind = grkFloat then
-          FRegisters[A] := VMNumberRegister(FRegisters[B].FloatValue + 1.0)
+          SetRegisterRaw(A, VMNumberRegister(FRegisters[B].FloatValue + 1.0))
         else if (FRegisters[B].Kind = grkObject) and
                 (FRegisters[B].ObjectValue is TGocciaBigIntValue) then
           SetRegister(A, TGocciaBigIntValue.Create(
@@ -11900,9 +12206,9 @@ begin
 
       OP_DEC:
         if FRegisters[B].Kind = grkInt then
-          FRegisters[A] := VMIntResult(FRegisters[B].IntValue - 1)
+          SetRegisterRaw(A, VMIntResult(FRegisters[B].IntValue - 1))
         else if FRegisters[B].Kind = grkFloat then
-          FRegisters[A] := VMNumberRegister(FRegisters[B].FloatValue - 1.0)
+          SetRegisterRaw(A, VMNumberRegister(FRegisters[B].FloatValue - 1.0))
         else if (FRegisters[B].Kind = grkObject) and
                 (FRegisters[B].ObjectValue is TGocciaBigIntValue) then
           SetRegister(A, TGocciaBigIntValue.Create(
@@ -12340,8 +12646,35 @@ begin
               KeyIndex, TGocciaHoleValue.HoleValue);
             FRegisters[A] := RegisterBoolean(True);
           end
+          else if TryResolveObjectKey(FRegisters[C], PropKeyValue) then
+          begin
+            if PropKeyValue is TGocciaSymbolValue then
+            begin
+              if TGocciaObjectValue(FRegisters[B].ObjectValue).DeleteSymbolProperty(
+                TGocciaSymbolValue(PropKeyValue)) then
+                FRegisters[A] := RegisterBoolean(True)
+              else
+                ThrowTypeError(Format(SErrorCannotDeletePropertyOf,
+                  [TGocciaSymbolValue(PropKeyValue).ToDisplayString.Value,
+                   '[object Object]']),
+                  SSuggestCannotDeleteNonConfigurable);
+            end
+            else if TGocciaObjectValue(FRegisters[B].ObjectValue).DeleteProperty(
+              TGocciaStringLiteralValue(PropKeyValue).Value) then
+              FRegisters[A] := RegisterBoolean(True)
+            else
+              ThrowTypeError(Format(SErrorCannotDeletePropertyOf,
+                [TGocciaStringLiteralValue(PropKeyValue).Value,
+                 '[object Object]']),
+                SSuggestCannotDeleteNonConfigurable);
+          end
+          else if TGocciaObjectValue(FRegisters[B].ObjectValue).DeleteProperty(
+            KeyToPropertyNameRegister(FRegisters[C])) then
+            FRegisters[A] := RegisterBoolean(True)
           else
-            FRegisters[A] := RegisterBoolean(True);
+            ThrowTypeError(Format(SErrorCannotDeletePropertyOf,
+              [KeyToPropertyNameRegister(FRegisters[C]), '[object Object]']),
+              SSuggestCannotDeleteNonConfigurable);
         end
         else if (FRegisters[B].Kind = grkObject) and
                 (FRegisters[B].ObjectValue is TGocciaObjectValue) then
@@ -12467,6 +12800,7 @@ begin
         ChildTemplate := Template.GetFunctionUnchecked(DecodeBx(Instruction));
         ChildClosure := TGocciaBytecodeClosure.Create(
           ChildTemplate, ChildTemplate.UpvalueCount);
+        ChildClosure.GlobalScope := FGlobalScope;
         if ChildTemplate.IsArrow and Assigned(FCurrentClosure) then
         begin
           ChildClosure.HomeObject := FCurrentClosure.HomeObject;
@@ -13165,13 +13499,52 @@ begin
       end;
 
       OP_IMPORT:
-        SetRegister(A, ImportModuleValue(
-          Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue));
+        begin
+          if Assigned(Template.DebugInfo) and
+             (Template.DebugInfo.SourceFile <> '') then
+            GlobalName := Template.DebugInfo.SourceFile
+          else
+            GlobalName := FCurrentModuleSourcePath;
+          SetRegister(A, ImportModuleValue(
+            Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue,
+            GlobalName));
+        end;
+
+      OP_IMPORT_DEFER:
+        begin
+          if Assigned(Template.DebugInfo) and
+             (Template.DebugInfo.SourceFile <> '') then
+            GlobalName := Template.DebugInfo.SourceFile
+          else
+            GlobalName := FCurrentModuleSourcePath;
+          SetRegister(A, ImportDeferredModuleNamespaceValue(
+            Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue,
+            GlobalName));
+        end;
+
+      OP_IMPORT_SOURCE:
+        begin
+          if Assigned(Template.DebugInfo) and
+             (Template.DebugInfo.SourceFile <> '') then
+            GlobalName := Template.DebugInfo.SourceFile
+          else
+            GlobalName := FCurrentModuleSourcePath;
+          SetRegister(A, ImportModuleSourceValue(
+            Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue,
+            GlobalName));
+        end;
 
       OP_EXPORT:
-        ExportBindingValue(
-          Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue,
-          GetRegister(A));
+        begin
+          if Assigned(Template.DebugInfo) and
+             (Template.DebugInfo.SourceFile <> '') then
+            GlobalName := Template.DebugInfo.SourceFile
+          else
+            GlobalName := FCurrentModuleSourcePath;
+          ExportBindingValue(
+            Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue,
+            GetRegister(A), GlobalName);
+        end;
 
       // ES2026 §13.3.12.1 — import.meta binds lexically to the defining module
       OP_IMPORT_META:
@@ -13200,19 +13573,100 @@ begin
             else
               GlobalName := FCurrentModuleSourcePath;
 
+            SpecifierString := ToPrimitive(RegisterToValue(FRegisters[B]),
+              tphString).ToStringLiteral.Value;
             case C of
               Ord(icpEvaluation):
-                DynImportPromise.Resolve(ImportModuleValue(
-                  VMRegisterToStringFast(FRegisters[B]).Value, GlobalName));
+                if Assigned(TGocciaMicrotaskQueue.Instance) then
+                begin
+                  DynImportTask.Handler := TGocciaVMDynamicImportStartValue.Create(
+                    Self, DynImportPromise, SpecifierString, GlobalName);
+                  DynImportTask.Value :=
+                    TGocciaUndefinedLiteralValue.UndefinedValue;
+                  DynImportTask.ResultPromise := nil;
+                  DynImportTask.ReactionType := prtFulfill;
+                  TGocciaMicrotaskQueue.Instance.Enqueue(DynImportTask);
+                end
+                else
+                  ResolveDynamicImportPromise(DynImportPromise,
+                    SpecifierString, GlobalName);
               Ord(icpSource):
                 DynImportPromise.Resolve(ImportModuleSourceValue(
-                  VMRegisterToStringFast(FRegisters[B]).Value, GlobalName));
+                  SpecifierString, GlobalName));
               Ord(icpDefer):
                 DynImportPromise.Resolve(ImportDeferredModuleNamespaceValue(
-                  VMRegisterToStringFast(FRegisters[B]).Value, GlobalName));
+                  SpecifierString, GlobalName));
             else
               raise Exception.CreateFmt(
                 'Unsupported dynamic import phase: %d', [C]);
+            end;
+          except
+            on E: EGocciaBytecodeThrow do
+              DynImportPromise.Reject(E.ThrownValue);
+            on E: TGocciaThrowValue do
+              DynImportPromise.Reject(E.Value);
+            on E: TGocciaSyntaxError do
+              DynImportPromise.Reject(
+                CreateErrorObject(SYNTAX_ERROR_NAME, E.Message));
+            on E: TGocciaTypeError do
+              DynImportPromise.Reject(
+                CreateErrorObject(TYPE_ERROR_NAME, E.Message));
+            on E: TGocciaReferenceError do
+              DynImportPromise.Reject(
+                CreateErrorObject(REFERENCE_ERROR_NAME, E.Message));
+            on E: Exception do
+              DynImportPromise.Reject(
+                CreateErrorObject(ERROR_NAME, E.Message));
+          end;
+          SetRegister(A, DynImportPromise);
+        finally
+          if Assigned(TGarbageCollector.Instance) then
+            TGarbageCollector.Instance.RemoveTempRoot(DynImportPromise);
+        end;
+      end;
+
+      // ES2026 §13.3.10.1 ImportCall — import(specifier, options)
+      OP_DYNAMIC_IMPORT_OPTIONS,
+      OP_DYNAMIC_IMPORT_SOURCE_OPTIONS,
+      OP_DYNAMIC_IMPORT_DEFER_OPTIONS:
+      begin
+        DynImportPromise := TGocciaPromiseValue.Create;
+        if Assigned(TGarbageCollector.Instance) then
+          TGarbageCollector.Instance.AddTempRoot(DynImportPromise);
+        try
+          try
+            if Assigned(Template.DebugInfo) and (Template.DebugInfo.SourceFile <> '') then
+              GlobalName := Template.DebugInfo.SourceFile
+            else
+              GlobalName := FCurrentModuleSourcePath;
+
+            SpecifierString := ToPrimitive(RegisterToValue(FRegisters[B]),
+              tphString).ToStringLiteral.Value;
+            AttributeType := DynamicImportAttributeType(
+              RegisterToValue(FRegisters[C]));
+            SpecifierString := EncodeImportSpecifierAttribute(
+              SpecifierString, AttributeType);
+            case TGocciaOpCode(Op) of
+              OP_DYNAMIC_IMPORT_OPTIONS:
+                if Assigned(TGocciaMicrotaskQueue.Instance) then
+                begin
+                  DynImportTask.Handler := TGocciaVMDynamicImportStartValue.Create(
+                    Self, DynImportPromise, SpecifierString, GlobalName);
+                  DynImportTask.Value :=
+                    TGocciaUndefinedLiteralValue.UndefinedValue;
+                  DynImportTask.ResultPromise := nil;
+                  DynImportTask.ReactionType := prtFulfill;
+                  TGocciaMicrotaskQueue.Instance.Enqueue(DynImportTask);
+                end
+                else
+                  ResolveDynamicImportPromise(DynImportPromise, SpecifierString,
+                    GlobalName);
+              OP_DYNAMIC_IMPORT_SOURCE_OPTIONS:
+                DynImportPromise.Resolve(ImportModuleSourceValue(
+                  SpecifierString, GlobalName));
+              OP_DYNAMIC_IMPORT_DEFER_OPTIONS:
+                DynImportPromise.Resolve(ImportDeferredModuleNamespaceValue(
+                  SpecifierString, GlobalName));
             end;
           except
             on E: EGocciaBytecodeThrow do
@@ -13512,16 +13966,26 @@ begin
       OP_DEFINE_GLOBAL_CONST:
       begin
         GlobalName := Template.GetConstantUnchecked(C).StringValue;
-        if B = 0 then
+        if B = GLOBAL_DEFINE_VAR then
           DefineGlobalBinding(GlobalName, GetRegister(A), dtVar)
-        else if B = 3 then
+        else if B = GLOBAL_DEFINE_VAR_DECL then
         begin
           if Assigned(FGlobalScope) then
             FGlobalScope.DefineVariableBinding(GlobalName,
               TGocciaUndefinedLiteralValue.UndefinedValue, False);
         end
-        else if B = 2 then
+        else if B = GLOBAL_DEFINE_CONST then
           DefineGlobalBinding(GlobalName, GetRegister(A), dtConst)
+        else if B = GLOBAL_DEFINE_LET_PREDECLARE then
+        begin
+          if Assigned(FGlobalScope) then
+            FGlobalScope.PredeclareLexicalBinding(GlobalName, dtLet);
+        end
+        else if B = GLOBAL_DEFINE_CONST_PREDECLARE then
+        begin
+          if Assigned(FGlobalScope) then
+            FGlobalScope.PredeclareLexicalBinding(GlobalName, dtConst);
+        end
         else
           DefineGlobalBinding(GlobalName, GetRegister(A), dtLet);
       end;
@@ -13618,6 +14082,7 @@ begin
       // Restore the caller's state
       FCurrentClosure := SavedClosure;
       FCurrentNewTarget := SavedNewTarget;
+      FGlobalScope := SavedGlobalScope;
       FCurrentDynamicVarScope := SavedDynamicVarScope;
       FCurrentExecutionContextPushed := SavedExecutionContextPushed;
       FCurrentArguments := SavedCurrentArguments;
@@ -13651,12 +14116,16 @@ end;
 function TGocciaVM.ExecuteModule(const AModule: TGocciaBytecodeModule): TGocciaValue;
 var
   EmptyArgs: TGocciaArgumentsCollection;
+  PreviousAsyncPromise: TGocciaPromiseValue;
+  Promise: TGocciaPromiseValue;
+  PromiseRoot: TGocciaTempRoot;
   TopClosure: TGocciaBytecodeClosure;
   SavedModuleSourcePath: string;
   SavedModuleExports: TGocciaValueMap;
 begin
   EmptyArgs := TGocciaArgumentsCollection.Create;
   TopClosure := TGocciaBytecodeClosure.Create(AModule.TopLevel);
+  TopClosure.GlobalScope := FGlobalScope;
   SavedModuleSourcePath := FCurrentModuleSourcePath;
   SavedModuleExports := FCurrentModuleExports;
   FCurrentModuleSourcePath := AModule.SourcePath;
@@ -13666,8 +14135,43 @@ begin
       CreateExecutionContext(FRealm, FGlobalScope, AModule.SourcePath, AModule));
   try
     try
-      Result := ExecuteClosure(TopClosure,
-        TGocciaUndefinedLiteralValue.UndefinedValue, EmptyArgs, False);
+      if Assigned(AModule.TopLevel) and AModule.TopLevel.IsAsync then
+      begin
+        Promise := TGocciaPromiseValue.Create;
+        InitializeTempRoot(PromiseRoot);
+        AddTempRootIfNeeded(PromiseRoot, Promise);
+        try
+          try
+            PreviousAsyncPromise := FCurrentAsyncPromise;
+            FCurrentAsyncPromise := Promise;
+            try
+              try
+                Promise.Resolve(ExecuteClosure(TopClosure,
+                  TGocciaUndefinedLiteralValue.UndefinedValue, EmptyArgs, False));
+              except
+                on E: EGocciaBytecodeAsyncSuspend do
+                begin
+                end;
+                on E: EGocciaBytecodeThrow do
+                  Promise.Reject(E.ThrownValue);
+                on E: TGocciaThrowValue do
+                  Promise.Reject(E.Value);
+              end;
+            finally
+              FCurrentAsyncPromise := PreviousAsyncPromise;
+            end;
+          except
+            Promise.Free;
+            raise;
+          end;
+        finally
+          RemoveTempRootIfNeeded(PromiseRoot);
+        end;
+        Result := Promise;
+      end
+      else
+        Result := ExecuteClosure(TopClosure,
+          TGocciaUndefinedLiteralValue.UndefinedValue, EmptyArgs, False);
     finally
       if Assigned(FRealm) then
         TGocciaExecutionContextStack.Pop;

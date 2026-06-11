@@ -38,7 +38,7 @@ Desktop applications built with FreePascal (Lazarus, command-line tools, game en
 
 - **Not a Node.js replacement** — No `require()`, no `node:` built-in modules, no event loop with I/O callbacks
 - **Not browser API compatible** — Web-platform APIs appear only when they are explicitly implemented or installed by a runtime profile
-- **Not a single fixed runtime surface** — The recommended defaults are sandbox-first and modern, but the engine and runtime are customizable. Compatibility flags exist primarily for ECMAScript conformance and legacy semantic requirements; userland code should usually prefer the default forms instead of enabling flags preemptively. Runtime enforcement of type annotations is also opt-in (`--strict-types`). See [Language](language.md) for the full list.
+- **Not a single fixed runtime surface** — The recommended defaults are sandbox-first and modern, but the engine and runtime are customizable. Compatibility flags exist primarily for ECMAScript conformance and legacy semantic requirements; userland code should usually prefer the default forms instead of enabling flags preemptively. `var`, the `function` keyword, `arguments`, `with`/`delete`/`this` non-strict semantics, loose equality, labels, traditional loops, `for...in`, and `while`/`do...while` loops remain opt-in via targeted `--compat-*` flags. Runtime enforcement of type annotations is also opt-in (`--strict-types`). See [Language](language.md) for the full list.
 - **Not a formally verified sandbox** — The sandbox reduces attack surface but has not been independently audited
 - **Not performance-competitive with V8/SpiderMonkey** — GocciaScript prioritizes correctness, embeddability, and reduced attack surface over raw throughput
 

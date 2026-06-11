@@ -54,9 +54,15 @@ procedure CompileExportDefaultDeclaration(const ACtx: TGocciaCompilationContext;
 procedure CompileExportVariableDeclaration(
   const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaExportVariableDeclaration);
+procedure CompileExportDestructuringDeclaration(
+  const ACtx: TGocciaCompilationContext;
+  const AStmt: TGocciaExportDestructuringDeclaration);
 procedure CompileExportFunctionDeclaration(
   const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaExportFunctionDeclaration);
+procedure CompileExportClassDeclaration(
+  const ACtx: TGocciaCompilationContext;
+  const AStmt: TGocciaExportClassDeclaration);
 procedure CompileReExportDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaReExportDeclaration);
 procedure CompileSwitchStatement(const ACtx: TGocciaCompilationContext;
@@ -117,6 +123,7 @@ uses
   Goccia.Constants.TypeNames,
   Goccia.Error,
   Goccia.Keywords.Reserved,
+  Goccia.Modules,
   Goccia.Token,
   Goccia.Types.Enforcement,
   Goccia.Values.Primitives;
@@ -602,17 +609,6 @@ begin
   end;
 end;
 
-{ B field encodes the declaration mode for OP_DEFINE_GLOBAL_CONST:
-  0 = var declaration
-  1 = let declaration (throws on re-declaration)
-  2 = const declaration (throws on re-declaration, non-writable)
-  3 = var declaration without syntactic initializer }
-const
-  GLOBAL_DEFINE_VAR = 0;
-  GLOBAL_DEFINE_LET = 1;
-  GLOBAL_DEFINE_CONST = 2;
-  GLOBAL_DEFINE_VAR_DECL = 3;
-
 function FindVarLocalIndex(const AScope: TGocciaCompilerScope;
   const AName: string): Integer; forward;
 function FindLocalBySlot(const AScope: TGocciaCompilerScope;
@@ -862,7 +858,9 @@ var
   Slot: UInt8;
   LocalIdx, FuncCount: Integer;
   InferredTemplate: TGocciaFunctionTemplate;
-  IsBlockScoped, IsTopLevelGlobalBacked: Boolean;
+  IsBlockScoped, IsTopLevelGlobalBacked, IsPreinitializedTopLevel,
+  UsePreinitializedBinding: Boolean;
+  NameIdx: UInt16;
 begin
   IsBlockScoped := ACtx.Scope.Depth > 0;
   if IsBlockScoped then
@@ -887,15 +885,39 @@ begin
       ACtx.Scope.MarkGlobalBacked(LocalIdx);
   end;
 
-  FuncCount := ACtx.Template.FunctionCount;
-  Goccia.Compiler.Expressions.CompileFunctionExpression(
-    ACtx, AStmt.FunctionExpression, Slot);
-  if ACtx.Template.FunctionCount > FuncCount then
+  UsePreinitializedBinding := False;
+  IsPreinitializedTopLevel := ACtx.PreinitializedTopLevelFunctions and
+    not IsBlockScoped;
+
+  if IsPreinitializedTopLevel and IsTopLevelGlobalBacked then
   begin
-    InferredTemplate := ACtx.Template.GetFunction(
-      ACtx.Template.FunctionCount - 1);
-    if InferredTemplate.Name = '<function>' then
-      InferredTemplate.Name := AStmt.Name;
+    LocalIdx := FindLocalBySlot(ACtx.Scope, AStmt.Name, Slot);
+    UsePreinitializedBinding := (LocalIdx >= 0) and
+      (ACtx.Scope.GetLocal(LocalIdx).ExportNameCount > 0);
+  end;
+
+  if UsePreinitializedBinding then
+  begin
+    NameIdx := ACtx.Template.AddConstantString(AStmt.Name);
+    EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, Slot, NameIdx));
+  end
+  else
+  begin
+    FuncCount := ACtx.Template.FunctionCount;
+    Goccia.Compiler.Expressions.CompileFunctionExpression(
+      ACtx, AStmt.FunctionExpression, Slot);
+    if ACtx.Template.FunctionCount > FuncCount then
+    begin
+      InferredTemplate := ACtx.Template.GetFunction(
+        ACtx.Template.FunctionCount - 1);
+      if InferredTemplate.Name = '<function>' then
+        InferredTemplate.Name := AStmt.Name;
+    end;
+    if IsPreinitializedTopLevel and IsTopLevelGlobalBacked then
+    begin
+      NameIdx := ACtx.Template.AddConstantString(AStmt.Name);
+      EmitInstruction(ACtx, EncodeABx(OP_SET_GLOBAL, Slot, NameIdx));
+    end;
   end;
 
   LocalIdx := ACtx.Scope.ResolveLocal(AStmt.Name);
@@ -1279,11 +1301,21 @@ begin
     if not VarDecl.IsVar then
       PredeclareBlockVariableLocals(ACtx, VarDecl, AEmitInitializers);
   end
+  else if (ANode is TGocciaExportDestructuringDeclaration) and
+          not TGocciaExportDestructuringDeclaration(ANode).Declaration.IsVar then
+    PredeclareBlockPatternLocals(ACtx,
+      TGocciaExportDestructuringDeclaration(ANode).Declaration.Pattern,
+      TGocciaExportDestructuringDeclaration(ANode).Declaration.IsConst,
+      AEmitInitializers)
   else if ANode is TGocciaFunctionDeclaration then
     PredeclareBlockFunctionLocal(TGocciaFunctionDeclaration(ANode), ACtx.Scope)
   else if ANode is TGocciaExportFunctionDeclaration then
     PredeclareBlockFunctionLocal(
       TGocciaExportFunctionDeclaration(ANode).Declaration, ACtx.Scope)
+  else if ANode is TGocciaExportClassDeclaration then
+    PredeclareBlockNamedLexicalLocal(ACtx,
+      TGocciaExportClassDeclaration(ANode).Declaration.ClassDefinition.Name,
+      False, AEmitInitializers)
   else if (ANode is TGocciaDestructuringDeclaration) and
           not TGocciaDestructuringDeclaration(ANode).IsVar then
     PredeclareBlockPatternLocals(ACtx,
@@ -1363,6 +1395,10 @@ begin
           not TGocciaDestructuringDeclaration(ANode).IsVar then
     EmitBlockPatternHoleInitializers(ACtx,
       TGocciaDestructuringDeclaration(ANode).Pattern)
+  else if (ANode is TGocciaExportDestructuringDeclaration) and
+          not TGocciaExportDestructuringDeclaration(ANode).Declaration.IsVar then
+    EmitBlockPatternHoleInitializers(ACtx,
+      TGocciaExportDestructuringDeclaration(ANode).Declaration.Pattern)
   else if ANode is TGocciaUsingDeclaration then
   begin
     UsingDecl := TGocciaUsingDeclaration(ANode);
@@ -1372,6 +1408,9 @@ begin
   else if ANode is TGocciaClassDeclaration then
     EmitBlockLexicalHoleInitializer(ACtx,
       TGocciaClassDeclaration(ANode).ClassDefinition.Name)
+  else if ANode is TGocciaExportClassDeclaration then
+    EmitBlockLexicalHoleInitializer(ACtx,
+      TGocciaExportClassDeclaration(ANode).Declaration.ClassDefinition.Name)
   else if ANode is TGocciaEnumDeclaration then
     EmitBlockLexicalHoleInitializer(ACtx, TGocciaEnumDeclaration(ANode).Name)
   else if ANode is TGocciaExportEnumDeclaration then
@@ -1398,8 +1437,11 @@ begin
     Exit(True)
   else if ANode is TGocciaDestructuringDeclaration then
     Exit(not TGocciaDestructuringDeclaration(ANode).IsVar)
+  else if ANode is TGocciaExportDestructuringDeclaration then
+    Exit(not TGocciaExportDestructuringDeclaration(ANode).Declaration.IsVar)
   else if (ANode is TGocciaUsingDeclaration) or
           (ANode is TGocciaClassDeclaration) or
+          (ANode is TGocciaExportClassDeclaration) or
           (ANode is TGocciaEnumDeclaration) or
           (ANode is TGocciaExportEnumDeclaration) then
     Exit(True);
@@ -2490,7 +2532,8 @@ begin
       else
         CollectDestructuringBindings(AStmt.BindingPattern, ACtx.Scope,
           AStmt.IsConst);
-      EmitDestructuring(ACtx, AStmt.BindingPattern, KeyReg);
+      EmitDestructuring(ACtx, AStmt.BindingPattern, KeyReg,
+        AStmt.IsVar and ACtx.GlobalBackedTopLevel);
     end
     else if AStmt.BindingName <> '' then
     begin
@@ -2499,7 +2542,7 @@ begin
       else
         Slot := ACtx.Scope.DeclareLocal(AStmt.BindingName, AStmt.IsConst);
       EmitBindingAssignmentFromRegister(ACtx, AStmt.BindingName, KeyReg,
-        False);
+        AStmt.IsVar and ACtx.GlobalBackedTopLevel);
     end;
 
     ACtx.CompileStatement(AStmt.Body);
@@ -3373,39 +3416,80 @@ var
   Pair: TStringStringMap.TKeyValuePair;
   Slots: array of UInt8;
   Names: array of string;
+  EncodedPath: string;
   HasNamespace: Boolean;
   I, Count: Integer;
+
+  function ImportSlot(const AName: string): UInt8;
+  var
+    LocalIdx: Integer;
+  begin
+    LocalIdx := ACtx.Scope.ResolveLocal(AName);
+    if (LocalIdx >= 0) and
+       (ACtx.Scope.GetLocal(LocalIdx).Depth = ACtx.Scope.Depth) then
+      Exit(ACtx.Scope.GetLocal(LocalIdx).Slot);
+    Result := ACtx.Scope.DeclareLocal(AName, True);
+  end;
+
+  procedure MarkImportSlot(const AName: string; const AExportName: string);
+  var
+    LocalIdx: Integer;
+  begin
+    LocalIdx := ACtx.Scope.ResolveLocal(AName);
+    if LocalIdx >= 0 then
+      ACtx.Scope.MarkImportBinding(LocalIdx, AStmt.Phase, EncodedPath,
+        AExportName);
+  end;
 begin
   HasNamespace := AStmt.NamespaceName <> '';
   Count := AStmt.Imports.Count;
   SetLength(Slots, Count);
   SetLength(Names, Count);
+  EncodedPath := EncodeImportSpecifierAttribute(AStmt.ModulePath,
+    AStmt.AttributeType);
 
   if HasNamespace then
-    NamespaceSlot := ACtx.Scope.DeclareLocal(AStmt.NamespaceName, True);
+  begin
+    NamespaceSlot := ImportSlot(AStmt.NamespaceName);
+    MarkImportSlot(AStmt.NamespaceName, '');
+  end;
 
   I := 0;
   for Pair in AStmt.Imports do
   begin
-    Slots[I] := ACtx.Scope.DeclareLocal(Pair.Key, True);
+    Slots[I] := ImportSlot(Pair.Key);
     Names[I] := Pair.Value;
+    if AStmt.Phase = icpEvaluation then
+      MarkImportSlot(Pair.Key, Pair.Value)
+    else
+      MarkImportSlot(Pair.Key, '');
     Inc(I);
   end;
 
   ModReg := ACtx.Scope.AllocateRegister;
-  PathIdx := ACtx.Template.AddConstantString(AStmt.ModulePath);
-  EmitInstruction(ACtx, EncodeABx(OP_IMPORT, ModReg, PathIdx));
+  PathIdx := ACtx.Template.AddConstantString(EncodedPath);
+  if AStmt.Phase = icpSource then
+    EmitInstruction(ACtx, EncodeABx(OP_IMPORT_SOURCE, ModReg, PathIdx))
+  else if AStmt.Phase = icpDefer then
+    EmitInstruction(ACtx, EncodeABx(OP_IMPORT_DEFER, ModReg, PathIdx))
+  else
+    EmitInstruction(ACtx, EncodeABx(OP_IMPORT, ModReg, PathIdx));
 
   if HasNamespace then
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, NamespaceSlot, ModReg, 0));
 
   for I := 0 to Count - 1 do
   begin
-    NameIdx := ACtx.Template.AddConstantString(Names[I]);
-    if NameIdx > High(UInt8) then
-      raise Exception.Create('Constant pool overflow: import name index exceeds 255');
-    EmitInstruction(ACtx, EncodeABC(OP_GET_PROP_CONST, Slots[I], ModReg,
-      UInt8(NameIdx)));
+    if AStmt.Phase = icpSource then
+      EmitInstruction(ACtx, EncodeABC(OP_MOVE, Slots[I], ModReg, 0))
+    else if AStmt.Phase <> icpEvaluation then
+    begin
+      NameIdx := ACtx.Template.AddConstantString(Names[I]);
+      if NameIdx > High(UInt8) then
+        raise Exception.Create('Constant pool overflow: import name index exceeds 255');
+      EmitInstruction(ACtx, EncodeABC(OP_GET_PROP_CONST, Slots[I], ModReg,
+        UInt8(NameIdx)));
+    end;
   end;
 
   ACtx.Scope.FreeRegister;
@@ -3426,6 +3510,8 @@ begin
     if LocalIdx >= 0 then
     begin
       Local := ACtx.Scope.GetLocal(LocalIdx);
+      if Local.IsImportBinding then
+        Continue;
       if Local.IsGlobalBacked then
       begin
         Reg := ACtx.Scope.AllocateRegister;
@@ -3450,14 +3536,24 @@ var
   InferredTemplate: TGocciaFunctionTemplate;
   NameIdx: UInt16;
   BindingName: string;
+  IsNamedDefaultFunction: Boolean;
+  IsNamedDefaultClass: Boolean;
 begin
   BindingName := AStmt.LocalName;
+  IsNamedDefaultFunction := (BindingName <> GOCCIA_DEFAULT_EXPORT_BINDING) and
+    (AStmt.Expression is TGocciaFunctionExpression) and
+    (TGocciaFunctionExpression(AStmt.Expression).Name = BindingName);
+  IsNamedDefaultClass := (BindingName <> GOCCIA_DEFAULT_EXPORT_BINDING) and
+    (AStmt.Expression is TGocciaClassExpression) and
+    (TGocciaClassExpression(AStmt.Expression).ClassDefinition.Name =
+    BindingName);
   LocalIdx := ACtx.Scope.ResolveLocal(BindingName);
   if (LocalIdx >= 0) and
      (ACtx.Scope.GetLocal(LocalIdx).Depth = ACtx.Scope.Depth) then
     Slot := ACtx.Scope.GetLocal(LocalIdx).Slot
   else
-    Slot := ACtx.Scope.DeclareLocal(BindingName, True);
+    Slot := ACtx.Scope.DeclareLocal(BindingName,
+      not (IsNamedDefaultFunction or IsNamedDefaultClass));
 
   if ACtx.GlobalBackedTopLevel and (ACtx.Scope.Depth = 0) then
   begin
@@ -3472,6 +3568,9 @@ begin
     CompileClassExpression(ACtx,
       TGocciaClassExpression(AStmt.Expression).ClassDefinition, Slot,
       KEYWORD_DEFAULT)
+  else if IsNamedDefaultFunction then
+    CompileFunctionExpression(ACtx, TGocciaFunctionExpression(AStmt.Expression),
+      Slot, BindingName, False)
   else
     ACtx.CompileExpression(AStmt.Expression, Slot);
 
@@ -3496,7 +3595,8 @@ begin
     EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, Slot, UInt16(Slot)));
 
   if ACtx.GlobalBackedTopLevel and (ACtx.Scope.Depth = 0) then
-    EmitGlobalDefine(ACtx, Slot, BindingName, True);
+    EmitGlobalDefine(ACtx, Slot, BindingName,
+      not (IsNamedDefaultFunction or IsNamedDefaultClass));
 
   NameIdx := ACtx.Template.AddConstantString(KEYWORD_DEFAULT);
   EmitInstruction(ACtx, EncodeABx(OP_EXPORT, Slot, NameIdx));
@@ -3527,6 +3627,37 @@ begin
   end;
 end;
 
+procedure CompileExportDestructuringDeclaration(
+  const ACtx: TGocciaCompilationContext;
+  const AStmt: TGocciaExportDestructuringDeclaration);
+var
+  LocalIdx: Integer;
+  Name: string;
+  NameIdx: UInt16;
+  Names: TStringList;
+  Reg: UInt8;
+begin
+  CompileDestructuringDeclaration(ACtx, AStmt.Declaration);
+
+  Names := TStringList.Create;
+  try
+    Names.CaseSensitive := True;
+    CollectPatternBindingNames(AStmt.Declaration.Pattern, Names, True);
+    for Name in Names do
+    begin
+      LocalIdx := ACtx.Scope.ResolveLocal(Name);
+      if LocalIdx >= 0 then
+      begin
+        Reg := ACtx.Scope.GetLocal(LocalIdx).Slot;
+        NameIdx := ACtx.Template.AddConstantString(Name);
+        EmitInstruction(ACtx, EncodeABx(OP_EXPORT, Reg, NameIdx));
+      end;
+    end;
+  finally
+    Names.Free;
+  end;
+end;
+
 procedure CompileExportFunctionDeclaration(
   const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaExportFunctionDeclaration);
@@ -3546,31 +3677,32 @@ begin
   end;
 end;
 
+procedure CompileExportClassDeclaration(
+  const ACtx: TGocciaCompilationContext;
+  const AStmt: TGocciaExportClassDeclaration);
+var
+  LocalIdx: Integer;
+  Reg: UInt8;
+  NameIdx: UInt16;
+begin
+  CompileClassDeclaration(ACtx, AStmt.Declaration);
+
+  LocalIdx := ACtx.Scope.ResolveLocal(AStmt.Declaration.ClassDefinition.Name);
+  if LocalIdx >= 0 then
+  begin
+    Reg := ACtx.Scope.GetLocal(LocalIdx).Slot;
+    NameIdx := ACtx.Template.AddConstantString(
+      AStmt.Declaration.ClassDefinition.Name);
+    EmitInstruction(ACtx, EncodeABx(OP_EXPORT, Reg, NameIdx));
+  end;
+end;
+
 procedure CompileReExportDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaReExportDeclaration);
-var
-  ModReg, ValReg: UInt8;
-  PathIdx, SrcNameIdx, ExportNameIdx: UInt16;
-  Pair: TStringStringMap.TKeyValuePair;
 begin
-  ModReg := ACtx.Scope.AllocateRegister;
-  ValReg := ACtx.Scope.AllocateRegister;
-  PathIdx := ACtx.Template.AddConstantString(AStmt.ModulePath);
-  EmitInstruction(ACtx, EncodeABx(OP_IMPORT, ModReg, PathIdx));
-
-  for Pair in AStmt.ExportsTable do
-  begin
-    SrcNameIdx := ACtx.Template.AddConstantString(Pair.Value);
-    if SrcNameIdx > High(UInt8) then
-      raise Exception.Create('Constant pool overflow: re-export source name index exceeds 255');
-    EmitInstruction(ACtx, EncodeABC(OP_GET_PROP_CONST, ValReg, ModReg,
-      UInt8(SrcNameIdx)));
-    ExportNameIdx := ACtx.Template.AddConstantString(Pair.Key);
-    EmitInstruction(ACtx, EncodeABx(OP_EXPORT, ValReg, ExportNameIdx));
-  end;
-
-  ACtx.Scope.FreeRegister;
-  ACtx.Scope.FreeRegister;
+  // Re-exports are link-time module graph declarations. The module loader
+  // registers their forwardings before evaluation, so bytecode must not
+  // snapshot them with OP_EXPORT during execution.
 end;
 
 procedure CompileSwitchStatement(const ACtx: TGocciaCompilationContext;
@@ -4087,7 +4219,9 @@ begin
     not ChildTemplate.StrictCode;
   ChildCtx.DerivedConstructorThisGuard := AGuardDerivedThis;
 
-  EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot);
+  EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot,
+    ChildCtx.NonStrictMode and ParameterListIsSimple(AMethod.Parameters),
+    Length(AMethod.Parameters));
 
   if (RestParamIndex >= 0) and
      not ParameterListHasDefaultValues(AMethod.Parameters) then
@@ -4167,7 +4301,9 @@ begin
     not ChildTemplate.StrictCode;
   ChildCtx.DerivedConstructorThisGuard := False;
   EmitLineMapping(ChildCtx, AGetter.Line, AGetter.Column);
-  EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot);
+  EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot,
+    ChildCtx.NonStrictMode and ParameterListIsSimple(EmptyParams),
+    Length(EmptyParams));
   ACtx.CompileFunctionBody(AGetter.Body);
   ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
 
@@ -4258,7 +4394,9 @@ begin
     not ChildTemplate.StrictCode;
   ChildCtx.DerivedConstructorThisGuard := False;
   EmitLineMapping(ChildCtx, ASetter.Line, ASetter.Column);
-  EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot);
+  EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot,
+    ChildCtx.NonStrictMode and ParameterListIsSimple(SetterParams),
+    Length(SetterParams));
   EmitDefaultParameters(ChildCtx, SetterParams);
   EmitDestructuringParameters(ChildCtx, SetterParams);
   if ChildTemplate.CodeCount > High(UInt16) then
@@ -4330,7 +4468,9 @@ begin
     not ChildTemplate.StrictCode;
   ChildCtx.DerivedConstructorThisGuard := False;
   EmitLineMapping(ChildCtx, AGetter.Line, AGetter.Column);
-  EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot);
+  EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot,
+    ChildCtx.NonStrictMode and ParameterListIsSimple(EmptyParams),
+    Length(EmptyParams));
   ACtx.CompileFunctionBody(AGetter.Body);
   ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
 
@@ -4416,7 +4556,9 @@ begin
     not ChildTemplate.StrictCode;
   ChildCtx.DerivedConstructorThisGuard := False;
   EmitLineMapping(ChildCtx, ASetter.Line, ASetter.Column);
-  EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot);
+  EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot,
+    ChildCtx.NonStrictMode and ParameterListIsSimple(SetterParams),
+    Length(SetterParams));
   EmitDefaultParameters(ChildCtx, SetterParams);
   EmitDestructuringParameters(ChildCtx, SetterParams);
   if ChildTemplate.CodeCount > High(UInt16) then
@@ -4517,7 +4659,9 @@ begin
     not ChildTemplate.StrictCode;
   ChildCtx.DerivedConstructorThisGuard := False;
 
-  EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot);
+  EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot,
+    ChildCtx.NonStrictMode and ParameterListIsSimple(AMethod.Parameters),
+    Length(AMethod.Parameters));
 
   if (RestParamIndex >= 0) and
      not ParameterListHasDefaultValues(AMethod.Parameters) then
@@ -5802,8 +5946,7 @@ begin
     LocalIdx := ACtx.Scope.ResolveLocal(TGocciaIdentifierDestructuringPattern(APattern).Name);
     if LocalIdx >= 0 then
     begin
-      if AIsVar then
-        ACtx.Scope.MarkGlobalBacked(LocalIdx);
+      ACtx.Scope.MarkGlobalBacked(LocalIdx);
       EmitGlobalDefine(ACtx, ACtx.Scope.GetLocal(LocalIdx).Slot,
         ACtx.Scope.GetLocal(LocalIdx).Name, AIsConst, AIsVar,
         AHasInitializer);
@@ -5841,12 +5984,9 @@ procedure CompileDestructuringDeclaration(const ACtx: TGocciaCompilationContext;
 var
   SrcReg: UInt8;
   IsTopLevelGlobalBacked: Boolean;
-  LocalCountBefore, I: Integer;
-  Local: TGocciaCompilerLocal;
 begin
   IsTopLevelGlobalBacked := ACtx.GlobalBackedTopLevel and
     (AStmt.IsVar or (ACtx.Scope.Depth = 0));
-  LocalCountBefore := ACtx.Scope.LocalCount;
 
   if AStmt.IsVar then
     CollectDestructuringVarBindings(AStmt.Pattern, ACtx.Scope)
@@ -5858,18 +5998,15 @@ begin
 
   SrcReg := ACtx.Scope.AllocateRegister;
   ACtx.CompileExpression(AStmt.Initializer, SrcReg);
-  EmitDestructuring(ACtx, AStmt.Pattern, SrcReg);
+  EmitDestructuring(ACtx, AStmt.Pattern, SrcReg,
+    IsTopLevelGlobalBacked and AStmt.IsVar);
   ACtx.Scope.FreeRegister;
 
   if IsTopLevelGlobalBacked then
   begin
     if not AStmt.IsVar then
-      for I := LocalCountBefore to ACtx.Scope.LocalCount - 1 do
-      begin
-        Local := ACtx.Scope.GetLocal(I);
-        EmitGlobalDefine(ACtx, Local.Slot, Local.Name, AStmt.IsConst);
-        ACtx.Scope.MarkGlobalBacked(I);
-      end;
+      EmitGlobalDefinesForPattern(ACtx, AStmt.Pattern, AStmt.IsConst,
+        False, True);
   end;
 end;
 

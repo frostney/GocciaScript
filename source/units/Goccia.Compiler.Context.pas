@@ -35,8 +35,10 @@ type
     SourcePath: string;
     FormalParameterCounts: TFormalParameterCountMap;
     GlobalBackedTopLevel: Boolean;
+    PreinitializedTopLevelFunctions: Boolean;
     StrictTypes: Boolean;
     CompatibilityNonStrictMode: Boolean;
+    ArgumentsObjectEnabled: Boolean;
     NonStrictMode: Boolean;
     DerivedConstructorThisGuard: Boolean;
     OptimizationOptions: TGocciaCompilerOptimizationOptions;

@@ -14,6 +14,11 @@ test("Object.getOwnPropertyDescriptor with value", () => {
   });
 });
 
+test("Object.getOwnPropertyDescriptor returns an ordinary object", () => {
+  const desc = Object.getOwnPropertyDescriptor({ property: 100 }, "property");
+  expect(desc instanceof Object).toBe(true);
+});
+
 test("Object.getOwnPropertyDescriptor with getter and setter", () => {
   const obj = {};
   let value = 42;

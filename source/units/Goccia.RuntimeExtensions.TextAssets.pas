@@ -27,6 +27,7 @@ uses
 
   Goccia.Constants.PropertyNames,
   Goccia.FileExtensions,
+  Goccia.Keywords.Reserved,
   Goccia.Modules.ContentProvider,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
@@ -48,6 +49,7 @@ var
   LoadSucceeded: Boolean;
   Metadata: TGocciaObjectValue;
   NormalizedText: UTF8String;
+  TextValue: TGocciaValue;
 begin
   AModule := nil;
   Result := IsTextAssetExtension(ExtractFileExt(AResolvedPath));
@@ -71,14 +73,15 @@ begin
     Metadata.SetProperty(PROP_BYTE_LENGTH,
       TGocciaNumberLiteralValue.Create(Length(Content.Text)));
     Metadata.Freeze;
+    TextValue := TGocciaStringLiteralValue.FromUTF8(NormalizedText);
 
     AModule := TGocciaModule.Create(AResolvedPath);
     AModule.LastModified := Content.LastModified;
     LoadSucceeded := False;
     try
-      AModule.ExportsTable.AddOrSetValue(PROP_METADATA, Metadata);
-      AModule.ExportsTable.AddOrSetValue(PROP_CONTENT,
-        TGocciaStringLiteralValue.FromUTF8(NormalizedText));
+      AModule.AddExportValue(PROP_METADATA, Metadata);
+      AModule.AddExportValue(PROP_CONTENT, TextValue);
+      AModule.AddExportValue(KEYWORD_DEFAULT, TextValue);
       LoadSucceeded := True;
     finally
       if not LoadSucceeded then

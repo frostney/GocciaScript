@@ -6,9 +6,35 @@ features: [compat-for-in-loop, compat-var]
 for (var __gocciaForInEmptyGlobal in {}) {}
 for (var [__gocciaForInEmptyDestructured] in {}) {}
 
+var __gocciaForInGlobalKeys = [];
+var __gocciaForInGlobalObject = {};
+Object.defineProperty(__gocciaForInGlobalObject, "property", {
+  enumerable: true,
+});
+for (var __gocciaForInGlobalKey in __gocciaForInGlobalObject) {
+  __gocciaForInGlobalKeys.push(__gocciaForInGlobalKey);
+}
+
+var __gocciaForInGlobalDestructuredKeys = [];
+for (var [__gocciaForInGlobalDestructuredKey] in { xy: 1 }) {
+  __gocciaForInGlobalDestructuredKeys.push(
+    __gocciaForInGlobalDestructuredKey
+  );
+}
+
 test("var in for-in is visible after the loop", () => {
   for (var key in { a: 1, b: 2 }) {}
   expect(key).toBe("b");
+});
+
+test("top-level var in non-empty for-in receives enumerable keys", () => {
+  expect(__gocciaForInGlobalKeys).toEqual(["property"]);
+  expect(__gocciaForInGlobalKey).toBe("property");
+});
+
+test("top-level var destructuring in non-empty for-in receives enumerable keys", () => {
+  expect(__gocciaForInGlobalDestructuredKeys).toEqual(["x"]);
+  expect(__gocciaForInGlobalDestructuredKey).toBe("x");
 });
 
 test("top-level var in empty for-in creates global property", () => {

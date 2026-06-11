@@ -1,5 +1,5 @@
 import { gunzipSync, gzipSync } from "node:zlib";
-import { get, put } from "@vercel/blob";
+import { BlobPreconditionFailedError, get, put } from "@vercel/blob";
 import {
   jsonUrlForArtifact,
   type Test262Report,
@@ -38,6 +38,7 @@ export type Test262BlobPublishEntry = {
 
 const DEFAULT_PREFIX = "test262";
 const DEFAULT_ACCESS: Test262BlobAccess = "public";
+const MANIFEST_WRITE_ATTEMPTS = 3;
 
 function cleanPrefix(value: string | undefined): string {
   const trimmed = (value ?? DEFAULT_PREFIX).trim().replace(/^\/+|\/+$/g, "");
@@ -91,14 +92,17 @@ async function streamToBytes(stream: ReadableStream<Uint8Array>) {
   return out;
 }
 
-async function readBlobText(
+async function readBlobTextWithMeta(
   pathname: string,
   access = test262BlobAccess(),
-): Promise<string | null> {
+): Promise<{ text: string; etag: string } | null> {
   try {
     const result = await get(pathname, { access });
     if (!result || result.statusCode !== 200 || !result.stream) return null;
-    return new TextDecoder().decode(await streamToBytes(result.stream));
+    return {
+      text: new TextDecoder().decode(await streamToBytes(result.stream)),
+      etag: result.blob.etag,
+    };
   } catch (err) {
     if (err instanceof Error && /not found/i.test(err.message)) return null;
     throw err;
@@ -150,9 +154,17 @@ function normalizeManifest(
 export async function loadTest262BlobManifest(
   prefix = test262BlobPrefix(),
 ): Promise<Test262BlobManifest | null> {
-  const text = await readBlobText(test262BlobManifestPath(prefix));
-  if (!text) return null;
-  return normalizeManifest(JSON.parse(text), prefix);
+  const snapshot = await loadTest262BlobManifestSnapshot(prefix);
+  return snapshot?.manifest ?? null;
+}
+
+async function loadTest262BlobManifestSnapshot(
+  prefix = test262BlobPrefix(),
+): Promise<{ manifest: Test262BlobManifest; etag: string } | null> {
+  const result = await readBlobTextWithMeta(test262BlobManifestPath(prefix));
+  if (!result) return null;
+  const manifest = normalizeManifest(JSON.parse(result.text), prefix);
+  return manifest ? { manifest, etag: result.etag } : null;
 }
 
 export async function readTest262BlobReportJson(
@@ -206,12 +218,7 @@ export async function publishTest262ReportsToBlob(
 ): Promise<Test262BlobManifest> {
   const prefix = test262BlobPrefix();
   const access = test262BlobAccess();
-  const existing = await loadTest262BlobManifest(prefix);
-  const merged = new Map<number, Test262BlobRun>();
-
-  for (const run of existing?.runs ?? []) {
-    merged.set(run.artifactId, run);
-  }
+  const publishedRuns: Test262BlobRun[] = [];
 
   for (const entry of entries) {
     const reportPath = reportPathForPoint(entry.point, prefix);
@@ -231,31 +238,69 @@ export async function publishTest262ReportsToBlob(
       reportCompressedSize: compressed.byteLength,
       publishedAt: new Date().toISOString(),
     };
-    merged.set(published.artifactId, published);
+    publishedRuns.push(published);
   }
 
-  const manifest = createManifest([...merged.values()], prefix);
+  return publishManifestWithRetry(publishedRuns, prefix, access);
+}
+
+function isManifestWriteConflict(err: unknown): boolean {
+  return (
+    err instanceof BlobPreconditionFailedError ||
+    (err instanceof Error && /precondition|already exists/i.test(err.message))
+  );
+}
+
+async function publishManifestWithRetry(
+  publishedRuns: Test262BlobRun[],
+  prefix: string,
+  access: Test262BlobAccess,
+): Promise<Test262BlobManifest> {
   const changedDays = new Set(
-    entries.map((entry) => entry.point.createdAt.slice(0, 10)),
+    publishedRuns.map((run) => run.createdAt.slice(0, 10)),
   );
-  for (const run of manifest.daily) {
-    if (!changedDays.has(run.createdAt.slice(0, 10))) continue;
-    await put(dailyPathForPoint(run, prefix), JSON.stringify(run, null, 2), {
-      access,
-      allowOverwrite: true,
-      cacheControlMaxAge: 60,
-      contentType: "application/json",
-    });
+  for (let attempt = 1; attempt <= MANIFEST_WRITE_ATTEMPTS; attempt++) {
+    const existing = await loadTest262BlobManifestSnapshot(prefix);
+    const merged = new Map<number, Test262BlobRun>();
+    for (const run of existing?.manifest.runs ?? []) {
+      merged.set(run.artifactId, run);
+    }
+    for (const run of publishedRuns) {
+      merged.set(run.artifactId, run);
+    }
+
+    const manifest = createManifest([...merged.values()], prefix);
+    for (const run of manifest.daily) {
+      if (!changedDays.has(run.createdAt.slice(0, 10))) continue;
+      await put(dailyPathForPoint(run, prefix), JSON.stringify(run, null, 2), {
+        access,
+        allowOverwrite: true,
+        cacheControlMaxAge: 60,
+        contentType: "application/json",
+      });
+    }
+
+    try {
+      await put(
+        test262BlobManifestPath(prefix),
+        JSON.stringify(manifest, null, 2),
+        {
+          access,
+          allowOverwrite: !!existing,
+          cacheControlMaxAge: 60,
+          contentType: "application/json",
+          ...(existing ? { ifMatch: existing.etag } : {}),
+        },
+      );
+      return manifest;
+    } catch (err) {
+      if (
+        !isManifestWriteConflict(err) ||
+        attempt === MANIFEST_WRITE_ATTEMPTS
+      ) {
+        throw err;
+      }
+    }
   }
-  await put(
-    test262BlobManifestPath(prefix),
-    JSON.stringify(manifest, null, 2),
-    {
-      access,
-      allowOverwrite: true,
-      cacheControlMaxAge: 60,
-      contentType: "application/json",
-    },
-  );
-  return manifest;
+  throw new Error("failed to publish test262 Blob manifest");
 }

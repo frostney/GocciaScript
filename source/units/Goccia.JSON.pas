@@ -72,6 +72,7 @@ uses
   Goccia.Values.BigIntValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.HoleValue,
+  Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.RawJSON,
   Goccia.Values.StringObjectValue,
   Goccia.Values.SymbolValue,
@@ -354,7 +355,9 @@ begin
     begin
       Key := FKeyStack[FKeyStack.Count - 1];
       FKeyStack.Delete(FKeyStack.Count - 1);
-      TGocciaObjectValue(Container).AssignProperty(Key, AValue);
+      TGocciaObjectValue(Container).DefineProperty(Key,
+        TGocciaPropertyDescriptorData.Create(AValue,
+          [pfWritable, pfEnumerable, pfConfigurable]));
     end;
   end;
 end;
@@ -394,7 +397,8 @@ end;
 
 procedure TGocciaJSONVisitor.OnBeginObject;
 begin
-  FStack.Add(TGocciaObjectValue.Create);
+  FStack.Add(TGocciaObjectValue.Create(
+    TGocciaObjectValue.SharedObjectPrototype));
 end;
 
 procedure TGocciaJSONVisitor.OnObjectKey(const AKey: string);

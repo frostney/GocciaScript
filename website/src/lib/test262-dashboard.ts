@@ -320,6 +320,25 @@ async function readJsonFile<T>(filePath: string): Promise<T | null> {
   }
 }
 
+function isDashboardData(value: unknown): value is Test262DashboardData {
+  if (!value || typeof value !== "object") return false;
+  const data = value as Record<string, unknown>;
+  return (
+    (data.status === "ready" ||
+      data.status === "needs-build-token" ||
+      data.status === "empty" ||
+      data.status === "error") &&
+    typeof data.generatedAt === "string" &&
+    !!data.source &&
+    typeof data.source === "object" &&
+    (data.latest === null ||
+      (!!data.latest && typeof data.latest === "object")) &&
+    Array.isArray(data.timeline) &&
+    Array.isArray(data.leastCovered) &&
+    Array.isArray(data.mostCovered)
+  );
+}
+
 export async function readTest262ReportJsonByArtifactId(
   artifactId: number,
 ): Promise<string | null> {
@@ -344,7 +363,7 @@ export async function readLatestTest262ReportJson(): Promise<string | null> {
 
 export async function loadTest262DashboardData(): Promise<Test262DashboardData> {
   const data = await readJsonFile<Test262DashboardData>(TEST262_DASHBOARD_PATH);
-  if (!data) {
+  if (!isDashboardData(data)) {
     return fallbackDashboard(
       "empty",
       "No build-time test262 snapshot is available yet.",

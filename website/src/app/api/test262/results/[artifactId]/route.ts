@@ -11,8 +11,12 @@ export async function GET(
   if (!/^\d+$/.test(artifactId)) {
     return Response.json({ error: "Invalid artifact id." }, { status: 400 });
   }
+  const artifactIdNumber = Number(artifactId);
+  if (!Number.isSafeInteger(artifactIdNumber) || artifactIdNumber <= 0) {
+    return Response.json({ error: "Invalid artifact id." }, { status: 400 });
+  }
 
-  const json = await readTest262ReportJsonByArtifactId(Number(artifactId));
+  const json = await readTest262ReportJsonByArtifactId(artifactIdNumber);
   if (json) {
     return new Response(json, {
       headers: {
@@ -25,11 +29,11 @@ export async function GET(
 
   const data = await loadTest262DashboardData();
   const point = data.timeline.find(
-    (entry) => entry.artifactId === Number(artifactId),
+    (entry) => entry.artifactId === artifactIdNumber,
   );
-  const localUrl = `/api/test262/results/${artifactId}`;
-  if (point?.jsonUrl && point.jsonUrl !== localUrl) {
-    return Response.redirect(point.jsonUrl, 302);
+  const blobUrl = point?.reportDownloadUrl || point?.reportUrl;
+  if (blobUrl) {
+    return Response.redirect(blobUrl, 302);
   }
 
   return Response.json(

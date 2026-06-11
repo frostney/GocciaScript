@@ -28,6 +28,12 @@ function numberFromEnv(name: string): number | null {
 function timestampFromEnv(name: string): string | null {
   const value = process.env[name]?.trim();
   if (!value) return null;
+  if (/^\d+$/.test(value)) {
+    const seconds = Number(value);
+    if (Number.isSafeInteger(seconds) && seconds > 0) {
+      return new Date(seconds * 1000).toISOString();
+    }
+  }
   const time = Date.parse(value);
   return Number.isNaN(time) ? null : new Date(time).toISOString();
 }

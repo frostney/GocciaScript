@@ -18,7 +18,8 @@ type
   TGocciaPreprocessors = set of TGocciaPreprocessor;
 
   TGocciaCompatibility = (cfASI, cfVar, cfFunction, cfTraditionalFor,
-    cfWhileLoops, cfLooseEquality, cfNonStrictMode, cfLabel, cfForIn);
+    cfWhileLoops, cfLooseEquality, cfNonStrictMode, cfArgumentsObject,
+    cfLabel, cfForIn, cfExperimentalJSModuleSource);
   TGocciaCompatibilityFlags = set of TGocciaCompatibility;
 
   TGocciaSourceType = (stScript, stModule);
@@ -237,6 +238,94 @@ begin
     ABodySource + #10 + '})';
 end;
 
+procedure AddNameOnce(const ANames: TStrings; const AName: string);
+begin
+  if (AName <> '') and (ANames.IndexOf(AName) < 0) then
+    ANames.Add(AName);
+end;
+
+procedure CollectTopLevelModuleDeclarationNames(const AStmt: TGocciaStatement;
+  const AVarNames, ALexicalNames: TStrings);
+var
+  I: Integer;
+  VarDecl: TGocciaVariableDeclaration;
+begin
+  if AStmt is TGocciaVariableDeclaration then
+  begin
+    VarDecl := TGocciaVariableDeclaration(AStmt);
+    for I := 0 to High(VarDecl.Variables) do
+      if VarDecl.IsVar then
+        AddNameOnce(AVarNames, VarDecl.Variables[I].Name)
+      else
+        AddNameOnce(ALexicalNames, VarDecl.Variables[I].Name);
+    Exit;
+  end;
+
+  if AStmt is TGocciaExportVariableDeclaration then
+  begin
+    CollectTopLevelModuleDeclarationNames(
+      TGocciaExportVariableDeclaration(AStmt).Declaration, AVarNames,
+      ALexicalNames);
+    Exit;
+  end;
+
+  if AStmt is TGocciaFunctionDeclaration then
+    AddNameOnce(ALexicalNames, TGocciaFunctionDeclaration(AStmt).Name)
+  else if AStmt is TGocciaExportFunctionDeclaration then
+    AddNameOnce(ALexicalNames,
+      TGocciaExportFunctionDeclaration(AStmt).Declaration.Name)
+  else if AStmt is TGocciaClassDeclaration then
+    AddNameOnce(ALexicalNames,
+      TGocciaClassDeclaration(AStmt).ClassDefinition.Name)
+  else if AStmt is TGocciaExportClassDeclaration then
+    AddNameOnce(ALexicalNames,
+      TGocciaExportClassDeclaration(AStmt).Declaration.ClassDefinition.Name)
+  else if AStmt is TGocciaEnumDeclaration then
+    AddNameOnce(ALexicalNames, TGocciaEnumDeclaration(AStmt).Name)
+  else if AStmt is TGocciaExportEnumDeclaration then
+    AddNameOnce(ALexicalNames,
+      TGocciaExportEnumDeclaration(AStmt).Declaration.Name)
+  else if AStmt is TGocciaExportDefaultDeclaration then
+    if TGocciaExportDefaultDeclaration(AStmt).LocalName <>
+       GOCCIA_DEFAULT_EXPORT_BINDING then
+      AddNameOnce(ALexicalNames,
+        TGocciaExportDefaultDeclaration(AStmt).LocalName);
+end;
+
+procedure ValidateModuleEarlyErrors(const AProgram: TGocciaProgram;
+  const AFileName: string; const ASourceLines: TStringList);
+var
+  I: Integer;
+  LexicalNames: TStringList;
+  Stmt: TGocciaStatement;
+  VarName: string;
+  VarNames: TStringList;
+begin
+  if not Assigned(AProgram) then
+    Exit;
+
+  VarNames := TStringList.Create;
+  LexicalNames := TStringList.Create;
+  try
+    VarNames.CaseSensitive := True;
+    LexicalNames.CaseSensitive := True;
+    for I := 0 to AProgram.Body.Count - 1 do
+    begin
+      Stmt := AProgram.Body[I];
+      CollectTopLevelModuleDeclarationNames(Stmt, VarNames, LexicalNames);
+    end;
+
+    for VarName in VarNames do
+      if LexicalNames.IndexOf(VarName) >= 0 then
+        raise TGocciaSyntaxError.Create(
+          Format('Identifier "%s" has already been declared', [VarName]),
+          0, 0, AFileName, ASourceLines);
+  finally
+    LexicalNames.Free;
+    VarNames.Free;
+  end;
+end;
+
 { TGocciaSourcePipelineOptionsScope }
 
 constructor TGocciaSourcePipelineOptionsScope.Create(
@@ -417,6 +506,9 @@ begin
               Parser.ParseWithPrivateNames(ADeclaredPrivateNames)
           else
             Result.FProgramNode := Parser.Parse;
+          if AOptions.SourceType = stModule then
+            ValidateModuleEarlyErrors(Result.FProgramNode, AFileName,
+              Lexer.SourceLines);
           ParseEnd := GetNanoseconds;
           Result.FParseTimeNanoseconds := ParseEnd - LexEnd;
 

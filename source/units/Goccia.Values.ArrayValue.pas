@@ -3245,6 +3245,9 @@ begin
     end;
 
     NumericKeys.Sort(TComparer<Int64>.Construct(CompareInt64));
+    if OtherKeys.IndexOf(PROP_LENGTH) < 0 then
+      OtherKeys.Insert(0, PROP_LENGTH);
+
     SetLength(Result, NumericKeys.Count + OtherKeys.Count);
     Count := 0;
     for I := 0 to NumericKeys.Count - 1 do

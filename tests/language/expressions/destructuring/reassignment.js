@@ -73,3 +73,20 @@ test("captured const binding throws on object destructuring reassignment", () =>
   expect(() => mutate()).toThrow(TypeError);
   expect(value).toBe(1);
 });
+
+test("object rest assignment creates ordinary objects for primitive sources", () => {
+  let rest;
+
+  ({ ...rest } = 51);
+  expect(rest instanceof Object).toBe(true);
+  expect(Object.keys(rest)).toEqual([]);
+
+  ({ ...rest } = "hi");
+  expect(rest instanceof Object).toBe(true);
+  expect(rest["0"]).toBe("h");
+  expect(rest["1"]).toBe("i");
+
+  ({ ...rest } = Symbol("value"));
+  expect(rest instanceof Object).toBe(true);
+  expect(Object.keys(rest)).toEqual([]);
+});

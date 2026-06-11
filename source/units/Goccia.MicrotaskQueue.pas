@@ -40,6 +40,7 @@ type
 
     procedure Enqueue(const AMicrotask: TGocciaMicrotask);
     procedure EnqueueFinalizationCleanup(const AMicrotask: TGocciaMicrotask);
+    function DrainOneJob: Boolean;
     procedure DrainQueue;
     procedure ClearQueue;
     function HasPending: Boolean;
@@ -202,6 +203,46 @@ begin
   begin
     FFinalizationQueue.Clear;
     FFinalizationHead := 0;
+  end;
+end;
+
+function TGocciaMicrotaskQueue.DrainOneJob: Boolean;
+var
+  Task: TGocciaMicrotask;
+begin
+  Result := False;
+  if FHead < FQueue.Count then
+  begin
+    CheckExecutionTimeout;
+    CheckInstructionLimit;
+    Task := FQueue[FHead];
+    Inc(FHead);
+    try
+      ExecuteTask(Task);
+    finally
+      RemoveQueuedRoots(Task);
+      if Assigned(TGarbageCollector.Instance) then
+        TGarbageCollector.Instance.ClearKeptObjects;
+    end;
+    CompactQueueIfEmpty;
+    Exit(True);
+  end;
+
+  if FFinalizationHead < FFinalizationQueue.Count then
+  begin
+    CheckExecutionTimeout;
+    CheckInstructionLimit;
+    Task := FFinalizationQueue[FFinalizationHead];
+    Inc(FFinalizationHead);
+    try
+      ExecuteTask(Task);
+    finally
+      RemoveQueuedRoots(Task);
+      if Assigned(TGarbageCollector.Instance) then
+        TGarbageCollector.Instance.ClearKeptObjects;
+    end;
+    CompactFinalizationQueueIfEmpty;
+    Exit(True);
   end;
 end;
 

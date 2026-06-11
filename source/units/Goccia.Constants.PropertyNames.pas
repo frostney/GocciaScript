@@ -106,6 +106,7 @@ const
   PROP_OMIT_PADDING           = 'omitPadding';
   PROP_LAST_CHUNK_HANDLING    = 'lastChunkHandling';
   PROP_WRITTEN                = 'written';
+  PROP_WITH                   = 'with';
   PROP_TO_BASE64              = 'toBase64';
   PROP_TO_HEX                 = 'toHex';
   PROP_FROM_BASE64            = 'fromBase64';

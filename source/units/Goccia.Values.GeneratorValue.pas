@@ -623,7 +623,9 @@ var
   Context: TGocciaEvaluationContext;
   ParamTypeHint: TGocciaLocalType;
   CompatibilityNonStrictMode: Boolean;
+  ArgumentsObjectEnabled: Boolean;
   EvalRejectNames, SavedEvalRejectNames: TGocciaEvalRejectNameArray;
+  ParameterNames: array of string;
   function EvaluateParameterDefault(
     const AExpression: TGocciaExpression): TGocciaValue;
   var
@@ -632,7 +634,8 @@ var
     SavedRejectArgumentsVarDeclaration :=
       Context.RejectArgumentsVarDeclarationInEval;
     SavedEvalRejectNames := Context.RejectVarDeclarationNamesInEval;
-    Context.RejectArgumentsVarDeclarationInEval := CreatesArgumentsObject;
+    Context.RejectArgumentsVarDeclarationInEval :=
+      ArgumentsObjectEnabled and CreatesArgumentsObject;
     Context.RejectVarDeclarationNamesInEval := EvalRejectNames;
     try
       Result := EvaluateExpression(AExpression, Context);
@@ -641,6 +644,20 @@ var
         SavedRejectArgumentsVarDeclaration;
       Context.RejectVarDeclarationNamesInEval := SavedEvalRejectNames;
     end;
+  end;
+  function CreateArgumentsObjectForCall: TGocciaObjectValue;
+  var
+    ParameterIndex: Integer;
+  begin
+    if Context.NonStrictMode and FIsSimpleParams then
+    begin
+      SetLength(ParameterNames, Length(FParameters));
+      for ParameterIndex := 0 to High(FParameters) do
+        ParameterNames[ParameterIndex] := FParameters[ParameterIndex].Name;
+      Exit(CreateMappedArgumentsObject(AArguments, ParameterNames,
+        CallScope, Self));
+    end;
+    Result := CreateUnmappedArgumentsObject(AArguments);
   end;
 begin
   CallScope := CreateCallScope;
@@ -659,17 +676,18 @@ begin
   // generator's closure scope was created.
   Context.StrictTypes := FClosure.EffectiveStrictTypes;
   CompatibilityNonStrictMode := FClosure.EffectiveNonStrictMode;
+  ArgumentsObjectEnabled := FClosure.EffectiveArgumentsObjectEnabled;
   Context.NonStrictMode := CompatibilityNonStrictMode and not FStrictCode;
   Context.DisposalTracker := nil;
   EvalRejectNames := BuildParameterEvalVarDeclarationRejectNames(
-    CompatibilityNonStrictMode and CreatesArgumentsObject and
+    ArgumentsObjectEnabled and CreatesArgumentsObject and
     not ParameterListBindsName(FParameters, IDENTIFIER_ARGUMENTS));
 
-  if CompatibilityNonStrictMode and CreatesArgumentsObject and
+  if ArgumentsObjectEnabled and CreatesArgumentsObject and
      not ParameterListBindsName(FParameters, IDENTIFIER_ARGUMENTS) and
      not CallScope.ContainsOwnLexicalBinding(IDENTIFIER_ARGUMENTS) then
     CallScope.DefineVariableBinding(IDENTIFIER_ARGUMENTS,
-      CreateUnmappedArgumentsObject(AArguments), True);
+      CreateArgumentsObjectForCall, True);
 
   for I := 0 to Length(FParameters) - 1 do
   begin
@@ -813,7 +831,9 @@ var
   Context: TGocciaEvaluationContext;
   ParamTypeHint: TGocciaLocalType;
   CompatibilityNonStrictMode: Boolean;
+  ArgumentsObjectEnabled: Boolean;
   EvalRejectNames, SavedEvalRejectNames: TGocciaEvalRejectNameArray;
+  ParameterNames: array of string;
   function EvaluateParameterDefault(
     const AExpression: TGocciaExpression): TGocciaValue;
   var
@@ -822,7 +842,8 @@ var
     SavedRejectArgumentsVarDeclaration :=
       Context.RejectArgumentsVarDeclarationInEval;
     SavedEvalRejectNames := Context.RejectVarDeclarationNamesInEval;
-    Context.RejectArgumentsVarDeclarationInEval := CreatesArgumentsObject;
+    Context.RejectArgumentsVarDeclarationInEval :=
+      ArgumentsObjectEnabled and CreatesArgumentsObject;
     Context.RejectVarDeclarationNamesInEval := EvalRejectNames;
     try
       Result := EvaluateExpression(AExpression, Context);
@@ -831,6 +852,20 @@ var
         SavedRejectArgumentsVarDeclaration;
       Context.RejectVarDeclarationNamesInEval := SavedEvalRejectNames;
     end;
+  end;
+  function CreateArgumentsObjectForCall: TGocciaObjectValue;
+  var
+    ParameterIndex: Integer;
+  begin
+    if Context.NonStrictMode and FIsSimpleParams then
+    begin
+      SetLength(ParameterNames, Length(FParameters));
+      for ParameterIndex := 0 to High(FParameters) do
+        ParameterNames[ParameterIndex] := FParameters[ParameterIndex].Name;
+      Exit(CreateMappedArgumentsObject(AArguments, ParameterNames,
+        CallScope, Self));
+    end;
+    Result := CreateUnmappedArgumentsObject(AArguments);
   end;
 begin
   CallScope := CreateCallScope;
@@ -847,17 +882,18 @@ begin
   // EffectiveStrictTypes — see CreateContinuation above.
   Context.StrictTypes := FClosure.EffectiveStrictTypes;
   CompatibilityNonStrictMode := FClosure.EffectiveNonStrictMode;
+  ArgumentsObjectEnabled := FClosure.EffectiveArgumentsObjectEnabled;
   Context.NonStrictMode := CompatibilityNonStrictMode and not FStrictCode;
   Context.DisposalTracker := nil;
   EvalRejectNames := BuildParameterEvalVarDeclarationRejectNames(
-    CompatibilityNonStrictMode and CreatesArgumentsObject and
+    ArgumentsObjectEnabled and CreatesArgumentsObject and
     not ParameterListBindsName(FParameters, IDENTIFIER_ARGUMENTS));
 
-  if CompatibilityNonStrictMode and CreatesArgumentsObject and
+  if ArgumentsObjectEnabled and CreatesArgumentsObject and
      not ParameterListBindsName(FParameters, IDENTIFIER_ARGUMENTS) and
      not CallScope.ContainsOwnLexicalBinding(IDENTIFIER_ARGUMENTS) then
     CallScope.DefineVariableBinding(IDENTIFIER_ARGUMENTS,
-      CreateUnmappedArgumentsObject(AArguments), True);
+      CreateArgumentsObjectForCall, True);
 
   for I := 0 to Length(FParameters) - 1 do
   begin

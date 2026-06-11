@@ -19,6 +19,7 @@ type
     OnError: TGocciaThrowErrorCallback;
     LoadModule: TLoadModuleCallback;
     LoadModuleSource: TLoadModuleSourceCallback;
+    LoadDeferredModule: TLoadDeferredModuleCallback;
     CurrentFilePath: string;
     CoverageEnabled: Boolean;
     StrictTypes: Boolean;
@@ -27,6 +28,7 @@ type
     RejectArgumentsVarDeclarationInEval: Boolean;
     RejectVarDeclarationNamesInEval: TGocciaEvalRejectNameArray;
     DisposalTracker: TObject; // TGocciaDisposalTracker or nil
+    CurrentModule: TGocciaModule;
   end;
 
 implementation

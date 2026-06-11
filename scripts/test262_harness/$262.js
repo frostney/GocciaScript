@@ -18,6 +18,7 @@ if (typeof Goccia === "undefined" || Goccia.test262Host !== true) {
 
 var $262 = {
   global: globalThis,
+  AbstractModuleSource: function AbstractModuleSource() {},
 
   detachArrayBuffer(buffer) {
     buffer.transfer();
@@ -35,3 +36,5 @@ var $262 = {
     return Goccia.test262.createRealm();
   },
 };
+
+$262.AbstractModuleSource.prototype = Goccia.test262.abstractModuleSourcePrototype;

@@ -47,4 +47,50 @@ describe("Proxy ownKeys trap", () => {
     const keys = Object.getOwnPropertyNames(proxy);
     expect(keys).toEqual(["virtual1", "virtual2"]);
   });
+
+  test("rejects duplicate symbol entries even when caller filters strings", () => {
+    const symbol = Symbol("duplicate");
+    const proxy = new Proxy({}, {
+      ownKeys: () => [symbol, symbol],
+    });
+
+    expect(() => Object.keys(proxy)).toThrow(TypeError);
+  });
+
+  test("Reflect.ownKeys preserves symbol entries and trap order", () => {
+    const symbol = Symbol("s");
+    const proxy = new Proxy({}, {
+      ownKeys: () => [symbol, "a"],
+      getOwnPropertyDescriptor() {
+        return {
+          configurable: true,
+          enumerable: true,
+          value: 1,
+          writable: true,
+        };
+      },
+    });
+
+    const keys = Reflect.ownKeys(proxy);
+    expect(keys.length).toBe(2);
+    expect(keys[0]).toBe(symbol);
+    expect(keys[1]).toBe("a");
+  });
+
+  test("Object.getOwnPropertySymbols observes proxy ownKeys symbols", () => {
+    const symbol = Symbol("visible");
+    const proxy = new Proxy({}, {
+      ownKeys: () => ["a", symbol],
+      getOwnPropertyDescriptor() {
+        return {
+          configurable: true,
+          enumerable: true,
+          value: 1,
+          writable: true,
+        };
+      },
+    });
+
+    expect(Object.getOwnPropertySymbols(proxy)).toEqual([symbol]);
+  });
 });

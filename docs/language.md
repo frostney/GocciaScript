@@ -10,7 +10,7 @@
 - **TC39 proposals** — Decorators, decorator metadata, pattern matching, types as comments, enums, `Math.clamp`
 - **Excluded by design** — Runtime `eval`, wildcard re-exports
 - **Graceful handling** — Parser-recognized excluded or disabled syntax (`==`/`!=` when `--compat-loose-equality` is off, labels when `--compat-label` is off, `while`/`do...while` when `--compat-while-loops` is off, `with` when `--compat-non-strict-mode` is off, traditional `for(;;)` when `--compat-traditional-for-loop` is off, `for...in` when `--compat-for-in-loop` is off) parses successfully but executes as a no-op with a warning and suggestion
-- **Compatibility flags** — `--compat-*` flags primarily exist for ECMAScript conformance and legacy semantic requirements. Userland code should usually prefer the default forms instead of enabling them preemptively.
+- **Compatibility flags** — `--compat-*` flags primarily exist for ECMAScript conformance and legacy semantic requirements. Userland code should usually prefer default forms instead of enabling ASI (`--compat-asi`), `var` (`--compat-var`), `function` (`--compat-function`), implicit `arguments` (`--compat-arguments-object`), non-strict Script compatibility (`--compat-non-strict-mode`), loose equality (`--compat-loose-equality`), labels (`--compat-label`), traditional loops (`--compat-traditional-for-loop`), `for...in` (`--compat-for-in-loop`), or `while`/`do...while` (`--compat-while-loops`) preemptively.
 - **Conformance-only host hooks** — `GocciaScriptLoaderBare --test262-host` exposes private test262 hooks (`eval`, `evalScript`, `createRealm`) without making them part of the public runtime surface
 - **Default preprocessors** — JSX (enabled by default via `DefaultPreprocessors`)
 
@@ -281,7 +281,7 @@ const helperUrl = import.meta.resolve("./helpers/math.js");
 
 Dynamic `import()` (ES2026 §13.3.10) is supported. It accepts an arbitrary expression as the module specifier, loads the module synchronously, and returns a Promise that resolves with the module namespace object. On failure, the returned Promise is rejected with the error. Dynamic imports work anywhere expressions are valid — including inside functions, conditionals, and async callbacks.
 
-The parser accepts import attributes syntax (`import(specifier, options)`) and trailing commas. The options expression is evaluated for side effects, but GocciaScript does not consume import attributes semantically yet. Proposal-phase `import.source(specifier)` resolves with a `ModuleSource` object without evaluating the module, and `import.defer(specifier)` resolves with a namespace object that evaluates the module when its exports are observed.
+The parser accepts import attributes syntax (`import(specifier, options)`) and trailing commas. The options expression is evaluated for side effects; enumerable import attribute keys other than `type` are rejected, and `type: "json"` / `type: "text"` route dynamic and static imports through the corresponding JSON or text module loaders. Proposal-phase `import.source(specifier)` follows TC39 Source Phase Imports syntax, but ordinary JavaScript module source objects are still part of the separate ESM Phase Imports proposal. By default, JavaScript source-phase requests resolve normally and then reject with `SyntaxError` because the host has no default source representation for source-text modules. With `--experimental-js-module-source` (or `"experimental-js-module-source": true` / `cfExperimentalJSModuleSource`), JavaScript requests produce cached `ModuleSource` objects without linking, instantiating, or evaluating the module body. Source-phase requests for JSON, text, and other non-JavaScript module kinds currently fail after normal resolution because those module kinds do not expose source objects. Proposal-phase `import.defer(specifier)` resolves with a namespace object that evaluates the module when its exports are observed, while async transitive dependencies with top-level `await` are still evaluated eagerly as part of module linking.
 
 ```javascript
 // Dynamic import with a computed specifier
@@ -294,11 +294,13 @@ import("./config.json").then((config) => {
   console.log(config.name);
 });
 
-// Import attributes syntax is accepted; attributes are not interpreted yet.
+// Import attributes route to the matching module kind.
 const json = await import("./config.json", { with: { type: "json" } });
 
-// Proposal-phase call forms are accepted.
-const sourcePromise = import.source("./helpers/math.js");
+// Proposal-phase call forms.
+const sourcePromise = import.source("./helpers/math.js"); // Promise rejects by default
+// With --experimental-js-module-source:
+// const sourcePromise = import.source("./helpers/math.js"); // Promise<ModuleSource>
 const deferredPromise = import.defer("./helpers/math.js");
 ```
 
@@ -715,7 +717,7 @@ GocciaScript provides two function definition styles that cover most use cases w
 - **Arrow functions** (`(x) => x + 1`) — Lexical `this`, no hoisting, no own `arguments`. Use for standalone functions, callbacks, and closures.
 - **Shorthand methods** (`method() {}`) — Call-site `this`. Use in object literals and class definitions where `this` binding is needed.
 
-When enabled (CLI: `--compat-function`, engine API: include `cfFunction` in `Engine.Compatibility`, config: `{"compat-function": true}`), `function` declarations and expressions are supported. Their implicit `arguments` object still requires `--compat-non-strict-mode`.
+When enabled (CLI: `--compat-function`, engine API: include `cfFunction` in `Engine.Compatibility`, config: `{"compat-function": true}`), `function` declarations and expressions are supported. Their implicit `arguments` object still requires `--compat-arguments-object`.
 
 - **Function declarations** (`function name(params) { body }`) parse as `TGocciaFunctionDeclaration` nodes whose body is backed by `TGocciaFunctionExpression`, which produces call-site `this` binding (not lexical). Declarations are hoisted: both the name and the function value are available before the declaration is reached, matching ES2026 §15.2.6 semantics. Uses the same var binding infrastructure (`DefineVariableBinding`) as `--compat-var`.
 - **Sloppy block-level function declarations** follow Annex B web-compatibility semantics only when both `--compat-function` and `--compat-non-strict-mode` are active for script source. In that mode, entering a block or switch case initializes the block lexical binding, and reaching an ordinary `function` declaration updates the nearest var binding. Strict code, module source, `async function`, `function*`, and `async function*` keep GocciaScript's block-scoped behavior.
@@ -759,7 +761,7 @@ Strict equality requires matching types, eliminating this entire class of bugs.
 
 ### `arguments` Object
 
-**Opt-in for script source.** Excluded by default; prefer rest parameters. Available via `--compat-non-strict-mode` (CLI flag, `cfNonStrictMode` in `Engine.Compatibility`, or `{"compat-non-strict-mode": true}` in config). Module source remains strict even when this flag is enabled. When enabled in script source, ordinary functions, shorthand methods, accessors, and generators create an unmapped, array-like `arguments` object whose indexed entries and `length` reflect the call's argument list without aliasing parameter variables. Arrow functions do not create their own `arguments`; they resolve it lexically from the nearest enclosing ordinary function or method that has one. `arguments` is an ordinary identifier, not a reserved keyword, so parameters or body-level lexical declarations named `arguments` shadow the implicit object.
+**Opt-in.** Excluded by default; prefer rest parameters. Available via `--compat-arguments-object` (CLI flag, `cfArgumentsObject` in `Engine.Compatibility`, or `{"compat-arguments-object": true}` in config). `--compat-non-strict-mode` does not enable `arguments` by itself; it only changes the semantics of an explicitly enabled `arguments` object in sloppy script functions. Strict functions, modules, and functions with non-simple parameter lists create unmapped array-like objects whose indexed entries and `length` reflect the call's argument list without aliasing parameter variables. Sloppy functions with simple parameter lists create mapped arguments exotic objects: indexed properties alias the corresponding parameter binding until the property is deleted, converted to an accessor, or made non-writable. Arrow functions do not create their own `arguments`; they resolve it lexically from the nearest enclosing ordinary function or method that has one. `arguments` is an ordinary identifier, not a reserved keyword, so parameters or body-level lexical declarations named `arguments` shadow the implicit object.
 
 ### Automatic Semicolon Insertion
 

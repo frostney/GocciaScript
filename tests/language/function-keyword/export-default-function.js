@@ -15,6 +15,11 @@ import namedDefaultFunctionBeforeStatement, {
   defaultNamedFunctionFollowingStatementHit,
   localFollowingNamedDefaultFunctionResult
 } from "./helpers/default-named-function-following-statement.js";
+import hoistedNamedDefault, {
+  afterCall as hoistedNamedDefaultAfterCall,
+  beforeCall as hoistedNamedDefaultBeforeCall,
+  beforeType as hoistedNamedDefaultBeforeType
+} from "./helpers/default-named-function-hoisted.js";
 import defaultGeneratorBeforeStatement, {
   defaultGeneratorFollowingStatementHit
 } from "./helpers/default-generator-following-statement.js";
@@ -49,6 +54,13 @@ test("named default exported function declaration can be followed by another sta
   expect(namedDefaultFunctionBeforeStatement.name).toBe("followingNamedDefaultFunction");
   expect(localFollowingNamedDefaultFunctionResult).toBe(10);
   expect(defaultNamedFunctionFollowingStatementHit).toBe(1);
+});
+
+test("named default exported function declaration is hoisted", () => {
+  expect(hoistedNamedDefault.name).toBe("hoistedNamedDefault");
+  expect(hoistedNamedDefaultBeforeType).toBe("function");
+  expect(hoistedNamedDefaultBeforeCall).toBe(7);
+  expect(hoistedNamedDefaultAfterCall).toBe(8);
 });
 
 test("default exported generator declaration can be followed by another statement", () => {

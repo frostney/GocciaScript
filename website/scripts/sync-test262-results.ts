@@ -15,7 +15,6 @@ import {
   createTest262DashboardData,
   createTest262DashboardFallback,
   normalizeTest262Report,
-  type Test262TimelinePoint,
   test262DataPaths,
 } from "../src/lib/test262-dashboard";
 import {
@@ -145,20 +144,11 @@ async function syncReportsFromBlob(): Promise<boolean> {
     return false;
   }
 
-  await resetOutputDir();
-
-  const timeline = manifest.daily
-    .map(
-      (point): Test262TimelinePoint => ({
-        ...point,
-        jsonUrl: point.reportDownloadUrl || point.reportUrl || point.jsonUrl,
-      }),
-    )
-    .sort(
-      (a, b) =>
-        Date.parse(a.createdAt) - Date.parse(b.createdAt) ||
-        a.runNumber - b.runNumber,
-    );
+  const timeline = [...manifest.daily].sort(
+    (a, b) =>
+      Date.parse(a.createdAt) - Date.parse(b.createdAt) ||
+      a.runNumber - b.runNumber,
+  );
   const latestPoint = timeline[timeline.length - 1];
   if (!latestPoint) return false;
   if (!latestPoint.reportPath) {
@@ -182,6 +172,7 @@ async function syncReportsFromBlob(): Promise<boolean> {
     return false;
   }
 
+  await resetOutputDir();
   await writeFile(dataPaths.latestPath, `${latestJson.trimEnd()}\n`);
   await writeJson(
     dataPaths.dashboardPath,

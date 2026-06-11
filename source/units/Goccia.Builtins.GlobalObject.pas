@@ -75,32 +75,33 @@ threadvar
 // ES2026 §6.2.6.4 FromPropertyDescriptor(Desc)
 function FromPropertyDescriptor(const ADescriptor: TGocciaPropertyDescriptor): TGocciaObjectValue;
 begin
-  Result := TGocciaObjectValue.Create;
+  Result := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
   if ADescriptor.HasEnumerableField then
   begin
     if ADescriptor.Enumerable then
-      Result.AssignProperty(PROP_ENUMERABLE, TGocciaBooleanLiteralValue.TrueValue)
+      Result.CreateDataPropertyOrThrow(PROP_ENUMERABLE, TGocciaBooleanLiteralValue.TrueValue)
     else
-      Result.AssignProperty(PROP_ENUMERABLE, TGocciaBooleanLiteralValue.FalseValue);
+      Result.CreateDataPropertyOrThrow(PROP_ENUMERABLE, TGocciaBooleanLiteralValue.FalseValue);
   end;
   if ADescriptor.HasConfigurableField then
   begin
     if ADescriptor.Configurable then
-      Result.AssignProperty(PROP_CONFIGURABLE, TGocciaBooleanLiteralValue.TrueValue)
+      Result.CreateDataPropertyOrThrow(PROP_CONFIGURABLE, TGocciaBooleanLiteralValue.TrueValue)
     else
-      Result.AssignProperty(PROP_CONFIGURABLE, TGocciaBooleanLiteralValue.FalseValue);
+      Result.CreateDataPropertyOrThrow(PROP_CONFIGURABLE, TGocciaBooleanLiteralValue.FalseValue);
   end;
 
   if ADescriptor is TGocciaPropertyDescriptorData then
   begin
     if ADescriptor.HasValue then
-      Result.AssignProperty(PROP_VALUE, TGocciaPropertyDescriptorData(ADescriptor).Value);
+      Result.CreateDataPropertyOrThrow(PROP_VALUE,
+        TGocciaPropertyDescriptorData(ADescriptor).Value);
     if ADescriptor.HasWritableField then
     begin
       if ADescriptor.Writable then
-        Result.AssignProperty(PROP_WRITABLE, TGocciaBooleanLiteralValue.TrueValue)
+        Result.CreateDataPropertyOrThrow(PROP_WRITABLE, TGocciaBooleanLiteralValue.TrueValue)
       else
-        Result.AssignProperty(PROP_WRITABLE, TGocciaBooleanLiteralValue.FalseValue);
+        Result.CreateDataPropertyOrThrow(PROP_WRITABLE, TGocciaBooleanLiteralValue.FalseValue);
     end;
   end
   else if ADescriptor is TGocciaPropertyDescriptorAccessor then
@@ -108,17 +109,21 @@ begin
     if ADescriptor.HasGet then
     begin
       if Assigned(TGocciaPropertyDescriptorAccessor(ADescriptor).Getter) then
-        Result.AssignProperty(PROP_GET, TGocciaPropertyDescriptorAccessor(ADescriptor).Getter)
+        Result.CreateDataPropertyOrThrow(PROP_GET,
+          TGocciaPropertyDescriptorAccessor(ADescriptor).Getter)
       else
-        Result.AssignProperty(PROP_GET, TGocciaUndefinedLiteralValue.UndefinedValue);
+        Result.CreateDataPropertyOrThrow(PROP_GET,
+          TGocciaUndefinedLiteralValue.UndefinedValue);
     end;
 
     if ADescriptor.HasSet then
     begin
       if Assigned(TGocciaPropertyDescriptorAccessor(ADescriptor).Setter) then
-        Result.AssignProperty(PROP_SET, TGocciaPropertyDescriptorAccessor(ADescriptor).Setter)
+        Result.CreateDataPropertyOrThrow(PROP_SET,
+          TGocciaPropertyDescriptorAccessor(ADescriptor).Setter)
       else
-        Result.AssignProperty(PROP_SET, TGocciaUndefinedLiteralValue.UndefinedValue);
+        Result.CreateDataPropertyOrThrow(PROP_SET,
+          TGocciaUndefinedLiteralValue.UndefinedValue);
     end;
   end;
 end;
@@ -505,6 +510,8 @@ function TGocciaGlobalObject.ObjectGetOwnPropertyDescriptors(const AArgs: TGocci
 var
   Obj, Descriptors: TGocciaObjectValue;
   PropertyNames: TArray<string>;
+  PropertyKeys: TArray<TGocciaValue>;
+  KeyValue: TGocciaValue;
   OwnSymbols: TArray<TGocciaSymbolValue>;
   Descriptor: TGocciaPropertyDescriptor;
   I: Integer;
@@ -519,7 +526,25 @@ begin
   try
     // Step 2: Let ownKeys be ? obj.[[OwnPropertyKeys]]()
     // Step 3: Let descriptors be OrdinaryObjectCreate(%Object.prototype%)
-    Descriptors := TGocciaObjectValue.Create;
+    Descriptors := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
+
+    if Obj is TGocciaProxyValue then
+    begin
+      PropertyKeys := TGocciaProxyValue(Obj).GetOwnPropertyKeyValues;
+      for KeyValue in PropertyKeys do
+      begin
+        if KeyValue is TGocciaSymbolValue then
+          Descriptor := Obj.GetOwnSymbolPropertyDescriptor(
+            TGocciaSymbolValue(KeyValue))
+        else
+          Descriptor := Obj.GetOwnPropertyDescriptor(
+            KeyValue.ToStringLiteral.Value);
+        if Descriptor <> nil then
+          Descriptors.CreateDataPropertyOrThrow(KeyValue,
+            FromPropertyDescriptor(Descriptor));
+      end;
+      Exit(Descriptors);
+    end;
 
     // Step 4: For each element key of ownKeys (string keys)
     PropertyNames := Obj.GetAllPropertyNames;
@@ -529,7 +554,8 @@ begin
       Descriptor := Obj.GetOwnPropertyDescriptor(PropertyNames[I]);
       // Step 4b-c: Let descriptor be FromPropertyDescriptor(desc) and add to result
       if Descriptor <> nil then
-        Descriptors.AssignProperty(PropertyNames[I], FromPropertyDescriptor(Descriptor));
+        Descriptors.CreateDataPropertyOrThrow(PropertyNames[I],
+          FromPropertyDescriptor(Descriptor));
     end;
 
     // Step 4 continued: For each element key of ownKeys (symbol keys)
@@ -538,7 +564,8 @@ begin
     begin
       Descriptor := Obj.GetOwnSymbolPropertyDescriptor(OwnSymbols[I]);
       if Descriptor <> nil then
-        Descriptors.AssignSymbolProperty(OwnSymbols[I], FromPropertyDescriptor(Descriptor));
+        Descriptors.CreateDataPropertyOrThrow(OwnSymbols[I],
+          FromPropertyDescriptor(Descriptor));
     end;
 
     // Step 5: Return descriptors
@@ -784,7 +811,7 @@ var
   Entries: TGocciaArrayValue;
   Entry: TGocciaArrayValue;
   I: Integer;
-  Key: string;
+  Key: TGocciaValue;
   Value: TGocciaValue;
 begin
   TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Object.fromEntries', ThrowError);
@@ -795,7 +822,7 @@ begin
 
   Entries := TGocciaArrayValue(AArgs.GetElement(0));
   // Step 2: Let obj be OrdinaryObjectCreate(%Object.prototype%)
-  Obj := TGocciaObjectValue.Create;
+  Obj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
 
   // Step 3: For each entry of iterable
   for I := 0 to Entries.Elements.Count - 1 do
@@ -808,10 +835,10 @@ begin
       ThrowTypeError(SErrorObjectFromEntriesRequiresPairs, SSuggestNotIterable);
 
     // Step 3a: Let key be entry[0], let value be entry[1]
-    Key := Entry.Elements[0].ToStringLiteral.Value;
+    Key := ToPropertyKey(Entry.Elements[0]);
     Value := Entry.Elements[1];
     // Step 3b: Perform ! CreateDataPropertyOrThrow(obj, key, value)
-    Obj.AssignProperty(Key, Value);
+    Obj.CreateDataPropertyOrThrow(Key, Value);
   end;
 
   // Step 4: Return obj
@@ -993,6 +1020,8 @@ var
   Callback: TGocciaValue;
   ResultObj: TGocciaObjectValue;
   GroupKey: string;
+  PropertyKey: TGocciaValue;
+  SymbolKey: TGocciaSymbolValue;
   GroupArray: TGocciaArrayValue;
   CallArgs: TGocciaArgumentsCollection;
   KeyValue: TGocciaValue;
@@ -1032,16 +1061,33 @@ begin
         CallArgs.Free;
       end;
 
-      GroupKey := KeyValue.ToStringLiteral.Value;
+      PropertyKey := ToPropertyKey(KeyValue);
 
-      if ResultObj.HasOwnProperty(GroupKey) then
-        GroupArray := TGocciaArrayValue(ResultObj.GetProperty(GroupKey))
+      if PropertyKey is TGocciaSymbolValue then
+      begin
+        SymbolKey := TGocciaSymbolValue(PropertyKey);
+        if ResultObj.HasSymbolProperty(SymbolKey) then
+          GroupArray := TGocciaArrayValue(ResultObj.GetSymbolProperty(SymbolKey))
+        else
+        begin
+          // Step 3a: Let elements be CreateArrayFromList(g.[[Elements]])
+          GroupArray := TGocciaArrayValue.Create;
+          // Step 3b: Perform ! CreateDataPropertyOrThrow(obj, g.[[Key]], elements)
+          ResultObj.CreateDataPropertyOrThrow(SymbolKey, GroupArray);
+        end;
+      end
       else
       begin
-        // Step 3a: Let elements be CreateArrayFromList(g.[[Elements]])
-        GroupArray := TGocciaArrayValue.Create;
-        // Step 3b: Perform ! CreateDataPropertyOrThrow(obj, g.[[Key]], elements)
-        ResultObj.AssignProperty(GroupKey, GroupArray);
+        GroupKey := TGocciaStringLiteralValue(PropertyKey).Value;
+        if ResultObj.HasOwnProperty(GroupKey) then
+          GroupArray := TGocciaArrayValue(ResultObj.GetProperty(GroupKey))
+        else
+        begin
+          // Step 3a: Let elements be CreateArrayFromList(g.[[Elements]])
+          GroupArray := TGocciaArrayValue.Create;
+          // Step 3b: Perform ! CreateDataPropertyOrThrow(obj, g.[[Key]], elements)
+          ResultObj.CreateDataPropertyOrThrow(GroupKey, GroupArray);
+        end;
       end;
 
       GroupArray.Elements.Add(Items.Elements[I]);

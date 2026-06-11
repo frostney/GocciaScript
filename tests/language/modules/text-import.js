@@ -1,5 +1,6 @@
 import {
   content as noteContent,
+  default as noteDefault,
   metadata as noteMetadata,
 } from "./helpers/note.txt";
 import {
@@ -12,6 +13,7 @@ import * as noteModule from "./helpers/note.txt";
 describe("text asset import", () => {
   test("exports text file content as a string", () => {
     expect(noteContent).toBe("Caf\u00e9 asset\nSecond line\n");
+    expect(noteDefault).toBe(noteContent);
     expect(markdownContent).toBe(
       "# Asset Import\n\n- named exports\n- namespace imports\n",
     );
@@ -34,9 +36,11 @@ describe("text asset import", () => {
 
   test("supports namespace imports for text assets", () => {
     expect(noteModule.content).toBe(noteContent);
+    expect(noteModule.default).toBe(noteContent);
     expect(noteModule.metadata).toBe(noteMetadata);
-    expect(Object.keys(noteModule)).toEqual(["metadata", "content"]);
+    expect(Object.keys(noteModule)).toEqual(["content", "default", "metadata"]);
     expect(Object.getPrototypeOf(noteModule)).toBeNull();
-    expect(Object.isFrozen(noteModule)).toBe(true);
+    expect(Object.isSealed(noteModule)).toBe(true);
+    expect(Object.isFrozen(noteModule)).toBe(false);
   });
 });

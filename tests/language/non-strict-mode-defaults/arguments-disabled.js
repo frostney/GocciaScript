@@ -1,5 +1,5 @@
 /*---
-description: The implicit arguments object requires --compat-non-strict-mode
+description: The implicit arguments object requires --compat-arguments-object
 features: [compat-function]
 ---*/
 

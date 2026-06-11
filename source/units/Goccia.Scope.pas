@@ -39,6 +39,7 @@ type
     FLoadDeferredModule: TLoadDeferredModuleCallback;
     FStrictTypes: Boolean;
     FNonStrictMode: Boolean;
+    FArgumentsObjectEnabled: Boolean;
     FRejectArgumentsReferenceInDirectEval: Boolean;
   protected
     function GetThisValue: TGocciaValue; virtual;
@@ -119,6 +120,7 @@ type
       keeps in sync. }
     function EffectiveStrictTypes: Boolean;
     function EffectiveNonStrictMode: Boolean;
+    function EffectiveArgumentsObjectEnabled: Boolean;
 
     property Parent: TGocciaScope read FParent;
     property ThisValue: TGocciaValue read FThisValue write FThisValue;
@@ -136,6 +138,8 @@ type
       EffectiveStrictTypes, which always reads the root scope. }
     property StrictTypes: Boolean read FStrictTypes write FStrictTypes;
     property NonStrictMode: Boolean read FNonStrictMode write FNonStrictMode;
+    property ArgumentsObjectEnabled: Boolean
+      read FArgumentsObjectEnabled write FArgumentsObjectEnabled;
     property RejectArgumentsReferenceInDirectEval: Boolean read FRejectArgumentsReferenceInDirectEval write FRejectArgumentsReferenceInDirectEval;
   end;
 
@@ -272,6 +276,7 @@ begin
     FLoadDeferredModule := AParent.FLoadDeferredModule;
     FStrictTypes := AParent.FStrictTypes;
     FNonStrictMode := AParent.FNonStrictMode;
+    FArgumentsObjectEnabled := AParent.FArgumentsObjectEnabled;
     FRejectArgumentsReferenceInDirectEval :=
       AParent.FRejectArgumentsReferenceInDirectEval;
   end;
@@ -362,6 +367,20 @@ begin
   begin
     if Current.FScopeKind in [skFunction, skModule, skGlobal] then
       Exit(Current.FNonStrictMode);
+    Current := Current.FParent;
+  end;
+  Result := False;
+end;
+
+function TGocciaScope.EffectiveArgumentsObjectEnabled: Boolean;
+var
+  Current: TGocciaScope;
+begin
+  Current := Self;
+  while Assigned(Current) do
+  begin
+    if Current.FScopeKind in [skFunction, skModule, skGlobal] then
+      Exit(Current.FArgumentsObjectEnabled);
     Current := Current.FParent;
   end;
   Result := False;
@@ -552,6 +571,15 @@ begin
     LexicalBinding.Value := AValue;
     LexicalBinding.Initialized := True;
     FLexicalBindings.AddOrSetValue(AName, LexicalBinding);
+    Exit;
+  end;
+
+  if Assigned(FVarBindings) and FVarBindings.TryGetValue(AName,
+     LexicalBinding) then
+  begin
+    LexicalBinding.Value := AValue;
+    LexicalBinding.Initialized := True;
+    FVarBindings.AddOrSetValue(AName, LexicalBinding);
   end;
 end;
 

@@ -38,7 +38,18 @@ var
 begin
   Queue := TGocciaMicrotaskQueue.Instance;
   if Assigned(Queue) and Queue.HasPending then
-    Queue.DrainQueue;
+    Queue.DrainOneJob;
+end;
+
+procedure DrainMicrotasksUntilPromiseSettled(
+  const APromise: TGocciaPromiseValue);
+var
+  Queue: TGocciaMicrotaskQueue;
+begin
+  Queue := TGocciaMicrotaskQueue.Instance;
+  while Assigned(APromise) and (APromise.State = gpsPending) and
+        Assigned(Queue) and Queue.HasPending do
+    Queue.DrainOneJob;
 end;
 
 procedure RejectPromiseWithException(const APromise: TGocciaPromiseValue;
@@ -144,9 +155,14 @@ begin
       Exit;
     end;
 
+    if Promise.State = gpsPending then
+      DrainMicrotasksUntilPromiseSettled(Promise);
+
     WaitForFetchPromise(Promise);
     if Promise.State = gpsPending then
       WaitForAtomicsPromise(Promise);
+    if Promise.State = gpsPending then
+      DrainMicrotasksUntilPromiseSettled(Promise);
 
     if Promise.State = gpsFulfilled then
       Result := Promise.PromiseResult

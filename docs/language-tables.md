@@ -19,7 +19,7 @@
 | `==` / `!=` (loose equality) | ES1 | Opt-in (`--compat-loose-equality`) — use `===` / `!==` by default |
 | `eval()` | ES1 | Excluded from normal runtimes; private `GocciaScriptLoaderBare --test262-host` hook only for conformance |
 | Non-strict function `this` binding | ES1 | Strict by default; script source `--compat-non-strict-mode` coerces nullish regular-function `this` to `globalThis`; modules remain strict and arrows remain lexical |
-| `arguments` object | ES1 | Opt-in for script source (`--compat-non-strict-mode`) as an unmapped object for ordinary functions, methods, accessors, and generators; modules remain strict; arrows resolve it lexically; prefer rest parameters for new code |
+| `arguments` object | ES1 | Opt-in (`--compat-arguments-object`) for ordinary functions, methods, accessors, and generators; `--compat-non-strict-mode` does not enable it by itself, but sloppy simple parameter lists use mapped semantics when it is enabled; strict functions, modules, and non-simple parameter lists stay unmapped; arrows resolve it lexically; prefer rest parameters for new code |
 | Non-strict assignment failures | ES1 | Strict by default; script source `--compat-non-strict-mode` silently ignores failed ordinary object/global writes while assignment expressions return the assigned value |
 | Labeled statements | ES1 | Opt-in for JavaScript compatibility (`--compat-label`); disabled by default |
 | Traditional `for(init; test; update)` loop | ES1 | Opt-in for JavaScript compatibility (`--compat-traditional-for-loop`); disabled by default |
@@ -28,7 +28,7 @@
 | `with` statement | ES1 | Opt-in for script source (`--compat-non-strict-mode`) for compatibility with object-environment lookup, `Symbol.unscopables`, closure capture, method-call receivers, and non-strict write failures — prefer explicit property access |
 | `delete` non-strict return values | ES1 | Strict by default; script source `--compat-non-strict-mode` makes `delete identifier` handle declared bindings, configurable global object properties, and unresolvable names with legacy booleans; non-configurable property deletion returns `false` |
 | ASI (automatic semicolon insertion) | ES1 | Opt-in (`--compat-asi`) |
-| Global `parseInt`, `parseFloat`, `isNaN`, `isFinite` | ES1 | Supported as shims; prefer `Number.*` in new code |
+| Global `parseInt`, `parseFloat`, `isNaN`, `isFinite` | ES1 | Supported as legacy global shims installed through Goccia.shims; `parseInt`/`parseFloat` delegate to `Number.parseInt`/`Number.parseFloat`, while `isNaN`/`isFinite` keep standard global coercion behavior. Prefer `Number.*` in new code |
 | `let` / `const` | ES2015 | Supported |
 | Arrow functions | ES2015 | Supported |
 | Classes (constructor, methods, static, getters/setters) | ES2015 | Supported |
@@ -42,7 +42,7 @@
 | `RegExp` (literals, flags `d`/`g`/`i`/`m`/`s`/`u`/`v`/`y`) | ES2015+ | Supported |
 | ES modules (`import` / `export`) | ES2015 | Supported |
 | Default exports / imports | ES2015 | Supported; project code convention prefers named exports for internal modules |
-| Generators (`function*`, `*method()`) | ES2015 | Supported; `function*` requires `--compat-function`; implicit `arguments` objects require `--compat-non-strict-mode`; generator methods are default syntax |
+| Generators (`function*`, `*method()`) | ES2015 | Supported; `function*` requires `--compat-function`; implicit `arguments` objects require `--compat-arguments-object`; generator methods are default syntax |
 | Nullish coalescing (`??`) | ES2020 | Supported |
 | Optional chaining (`?.`) | ES2020 | Supported |
 | `BigInt` | ES2020 | Supported |

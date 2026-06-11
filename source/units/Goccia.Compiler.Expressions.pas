@@ -64,7 +64,8 @@ procedure CompileComputedPropertyCompoundAssignment(
   const ADest: UInt8);
 procedure CompileFunctionExpression(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaFunctionExpression; const ADest: UInt8;
-  const ATemplateName: string = '<function>');
+  const ATemplateName: string = '<function>';
+  const ABindOwnName: Boolean = True);
 procedure CompileExpressionWithInferredName(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaExpression; const ADest: UInt8;
   const AInferredName: string);
@@ -95,11 +96,13 @@ procedure EmitDefaultParameters(const ACtx: TGocciaCompilationContext;
   const AParams: TGocciaParameterArray);
 function ParameterListHasDefaultValues(
   const AParams: TGocciaParameterArray): Boolean;
+function ParameterListIsSimple(const AParams: TGocciaParameterArray): Boolean;
 function SyntheticParamLocalName(const AIndex: Integer): string;
 function DeclareArgumentsObjectLocal(const ACtx: TGocciaCompilationContext;
   const AScope: TGocciaCompilerScope; const AParams: TGocciaParameterArray): Integer;
 procedure EmitCreateArgumentsObject(const ACtx: TGocciaCompilationContext;
-  const AArgumentsSlot: Integer);
+  const AArgumentsSlot: Integer; const AUseMappedArguments: Boolean;
+  const AFormalParameterCount: Integer);
 procedure CollectDestructuringBindings(const APattern: TGocciaDestructuringPattern;
   const AScope: TGocciaCompilerScope; const AIsConst: Boolean = False);
 procedure EmitBindingAssignmentFromRegister(const ACtx: TGocciaCompilationContext;
@@ -131,6 +134,7 @@ uses
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
   Goccia.Keywords.Reserved,
+  Goccia.Modules,
   Goccia.Token,
   Goccia.Types.Enforcement,
   Goccia.Values.BigIntValue,
@@ -559,6 +563,38 @@ begin
   EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, ADest, 0, 0));
 end;
 
+procedure EmitImportBindingAccess(const ACtx: TGocciaCompilationContext;
+  const APhase: TGocciaImportCallPhase; const AModulePath, AExportName: string;
+  const ADest: UInt8);
+var
+  PathIdx: UInt16;
+begin
+  PathIdx := ACtx.Template.AddConstantString(AModulePath);
+  if APhase = icpSource then
+    EmitInstruction(ACtx, EncodeABx(OP_IMPORT_SOURCE, ADest, PathIdx))
+  else if APhase = icpDefer then
+    EmitInstruction(ACtx, EncodeABx(OP_IMPORT_DEFER, ADest, PathIdx))
+  else
+    EmitInstruction(ACtx, EncodeABx(OP_IMPORT, ADest, PathIdx));
+
+  if (APhase = icpEvaluation) and (AExportName <> '') then
+    EmitLoadPropertyByName(ACtx, ADest, ADest, AExportName);
+end;
+
+procedure EmitExportBindingUpdates(const ACtx: TGocciaCompilationContext;
+  const AExportNames: array of string; const AExportNameCount: Integer;
+  const AValueReg: UInt8);
+var
+  I: Integer;
+  NameIdx: UInt16;
+begin
+  for I := 0 to AExportNameCount - 1 do
+  begin
+    NameIdx := ACtx.Template.AddConstantString(AExportNames[I]);
+    EmitInstruction(ACtx, EncodeABx(OP_EXPORT, AValueReg, NameIdx));
+  end;
+end;
+
 procedure CompileIdentifierAccessNoWith(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaIdentifierExpression; const ADest: UInt8;
   const ASafe: Boolean);
@@ -574,6 +610,12 @@ begin
   if LocalIdx >= 0 then
   begin
     Local := ACtx.Scope.GetLocal(LocalIdx);
+    if Local.IsImportBinding then
+    begin
+      EmitImportBindingAccess(ACtx, Local.ImportPhase, Local.ImportModulePath,
+        Local.ImportExportName, ADest);
+      Exit;
+    end;
     if Local.IsGlobalBacked then
     begin
       NameIdx := ACtx.Template.AddConstantString(AExpr.Name);
@@ -588,6 +630,13 @@ begin
   UpvalIdx := ACtx.Scope.ResolveUpvalue(AExpr.Name);
   if UpvalIdx >= 0 then
   begin
+    if ACtx.Scope.GetUpvalue(UpvalIdx).IsImportBinding then
+    begin
+      EmitImportBindingAccess(ACtx, ACtx.Scope.GetUpvalue(UpvalIdx).ImportPhase,
+        ACtx.Scope.GetUpvalue(UpvalIdx).ImportModulePath,
+        ACtx.Scope.GetUpvalue(UpvalIdx).ImportExportName, ADest);
+      Exit;
+    end;
     if ACtx.Scope.GetUpvalue(UpvalIdx).IsGlobalBacked then
     begin
       NameIdx := ACtx.Template.AddConstantString(AExpr.Name);
@@ -1373,6 +1422,7 @@ var
   Op, IntOp, FloatOp: TGocciaOpCode;
   JumpIdx, JumpIdx2: Integer;
   LeftType, RightType: TGocciaLocalType;
+  PrivateExpr: TGocciaPrivateMemberExpression;
 begin
   if TryFoldBinary(ACtx, AExpr, ADest) then
     Exit;
@@ -1401,6 +1451,22 @@ begin
     JumpIdx := EmitJumpInstruction(ACtx, OP_JUMP_IF_NOT_NULLISH, ADest);
     ACtx.CompileExpression(AExpr.Right, ADest);
     PatchJumpTarget(ACtx, JumpIdx);
+    Exit;
+  end;
+
+  if (AExpr.Operator = gttIn) and
+     (AExpr.Left is TGocciaPrivateMemberExpression) then
+  begin
+    PrivateExpr := TGocciaPrivateMemberExpression(AExpr.Left);
+    RegB := ACtx.Scope.AllocateRegister;
+    RegC := ACtx.Scope.AllocateRegister;
+    ACtx.CompileExpression(AExpr.Right, RegB);
+    EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, RegC,
+      ACtx.Template.AddConstantString(PrivateKey(
+      ACtx.Scope, PrivateExpr.PrivateName))));
+    EmitInstruction(ACtx, EncodeABC(OP_HAS_PROPERTY, ADest, RegB, RegC));
+    ACtx.Scope.FreeRegister;
+    ACtx.Scope.FreeRegister;
     Exit;
   end;
 
@@ -1744,6 +1810,8 @@ begin
       EmitStrictLocalTypeCheck(ACtx, LocalIdx, ADest,
         InferLocalType(AExpr.Value));
       EmitSetGlobalByName(ACtx, ADest, AExpr.Name);
+      EmitExportBindingUpdates(ACtx, Local.ExportNames,
+        Local.ExportNameCount, ADest);
       RefreshNonStrictLocalTypeHint(ACtx, LocalIdx, AExpr.Value);
       Exit;
     end;
@@ -1754,6 +1822,8 @@ begin
     begin
       EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, ADest, Slot));
     end;
+    EmitExportBindingUpdates(ACtx, Local.ExportNames,
+      Local.ExportNameCount, ADest);
     if not Local.IsStrictlyTyped then
     begin
       ValueType := InferredExpressionType(ACtx.Scope, AExpr.Value);
@@ -1772,6 +1842,8 @@ begin
     if ACtx.Scope.GetUpvalue(UpvalIdx).IsGlobalBacked then
     begin
       EmitSetGlobalByName(ACtx, ADest, AExpr.Name);
+      EmitExportBindingUpdates(ACtx, ACtx.Scope.GetUpvalue(UpvalIdx).ExportNames,
+        ACtx.Scope.GetUpvalue(UpvalIdx).ExportNameCount, ADest);
       Exit;
     end;
     if ACtx.Scope.GetUpvalue(UpvalIdx).IsStrictlyTyped then
@@ -1779,6 +1851,8 @@ begin
         EmitInstruction(ACtx, EncodeABC(OP_CHECK_TYPE, ADest,
           UInt8(Ord(ACtx.Scope.GetUpvalue(UpvalIdx).TypeHint)), 0));
     EmitInstruction(ACtx, EncodeABx(OP_SET_UPVALUE, ADest, UInt16(UpvalIdx)));
+    EmitExportBindingUpdates(ACtx, ACtx.Scope.GetUpvalue(UpvalIdx).ExportNames,
+      ACtx.Scope.GetUpvalue(UpvalIdx).ExportNameCount, ADest);
     Exit;
   end;
 
@@ -1853,7 +1927,7 @@ end;
 function DeclareArgumentsObjectLocal(const ACtx: TGocciaCompilationContext;
   const AScope: TGocciaCompilerScope; const AParams: TGocciaParameterArray): Integer;
 begin
-  if not ACtx.CompatibilityNonStrictMode then
+  if not ACtx.ArgumentsObjectEnabled then
     Exit(-1);
 
   if ParameterListBindsName(AParams, IDENTIFIER_ARGUMENTS) then
@@ -1862,17 +1936,37 @@ begin
   Result := AScope.DeclareLocal(IDENTIFIER_ARGUMENTS, False);
 end;
 
+function ParameterListIsSimple(const AParams: TGocciaParameterArray): Boolean;
+var
+  I: Integer;
+begin
+  for I := 0 to High(AParams) do
+    if AParams[I].IsRest or AParams[I].IsPattern or
+       Assigned(AParams[I].DefaultValue) then
+      Exit(False);
+  Result := True;
+end;
+
 function SyntheticParamLocalName(const AIndex: Integer): string;
 begin
   Result := '`#param`:' + IntToStr(AIndex);
 end;
 
 procedure EmitCreateArgumentsObject(const ACtx: TGocciaCompilationContext;
-  const AArgumentsSlot: Integer);
+  const AArgumentsSlot: Integer; const AUseMappedArguments: Boolean;
+  const AFormalParameterCount: Integer);
+var
+  MappedFlag: UInt8;
 begin
   if AArgumentsSlot >= 0 then
+  begin
+    if AUseMappedArguments then
+      MappedFlag := 1
+    else
+      MappedFlag := 0;
     EmitInstruction(ACtx, EncodeABC(OP_CREATE_ARGUMENTS,
-      UInt8(AArgumentsSlot), 0, 0));
+      UInt8(AArgumentsSlot), MappedFlag, UInt8(AFormalParameterCount)));
+  end;
 end;
 
 procedure EmitDefaultParameters(const ACtx: TGocciaCompilationContext;
@@ -1982,9 +2076,11 @@ begin
        (Local.TypeHint <> sltUntyped) then
       EmitInstruction(ACtx, EncodeABC(OP_CHECK_TYPE, AValueReg,
         UInt8(Ord(Local.TypeHint)), 0));
-    if Local.IsGlobalBacked then
+    if Local.IsGlobalBacked and AAssignmentMode then
     begin
       EmitSetGlobalByName(ACtx, AValueReg, AName);
+      EmitExportBindingUpdates(ACtx, Local.ExportNames,
+        Local.ExportNameCount, AValueReg);
       Exit;
     end;
     Slot := Local.Slot;
@@ -1994,12 +2090,16 @@ begin
         EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, AValueReg, UInt16(Slot)))
       else if Local.IsCaptured then
         EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, Slot, UInt16(Slot)));
+      EmitExportBindingUpdates(ACtx, Local.ExportNames,
+        Local.ExportNameCount, AValueReg);
       Exit;
     end;
     if Slot <> AValueReg then
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, Slot, AValueReg, 0));
     if Local.IsCaptured then
       EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, Slot, UInt16(Slot)));
+    EmitExportBindingUpdates(ACtx, Local.ExportNames,
+      Local.ExportNameCount, Slot);
     Exit;
   end;
 
@@ -2017,10 +2117,14 @@ begin
       EmitInstruction(ACtx, EncodeABC(OP_CHECK_TYPE, AValueReg,
         UInt8(Ord(Upvalue.TypeHint)), 0));
     if Upvalue.IsGlobalBacked then
+    begin
       EmitSetGlobalByName(ACtx, AValueReg, AName)
+    end
     else
       EmitInstruction(ACtx, EncodeABx(OP_SET_UPVALUE, AValueReg,
         UInt16(UpvalIdx)));
+    EmitExportBindingUpdates(ACtx, Upvalue.ExportNames,
+      Upvalue.ExportNameCount, AValueReg);
     Exit;
   end;
 
@@ -3362,7 +3466,9 @@ begin
       not ChildTemplate.StrictCode;
     ChildCtx.DerivedConstructorThisGuard := False;
     EmitLineMapping(ChildCtx, AGetter.Line, AGetter.Column);
-    EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot);
+    EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot,
+      ChildCtx.NonStrictMode and ParameterListIsSimple(EmptyParams),
+      Length(EmptyParams));
     ACtx.CompileFunctionBody(AGetter.Body);
     ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
 
@@ -3430,7 +3536,9 @@ begin
       not ChildTemplate.StrictCode;
     ChildCtx.DerivedConstructorThisGuard := False;
     EmitLineMapping(ChildCtx, ASetter.Line, ASetter.Column);
-    EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot);
+    EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot,
+      ChildCtx.NonStrictMode and ParameterListIsSimple(SetterParams),
+      Length(SetterParams));
     ACtx.CompileFunctionBody(ASetter.Body);
     ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
 
@@ -3495,7 +3603,9 @@ begin
       not ChildTemplate.StrictCode;
     ChildCtx.DerivedConstructorThisGuard := False;
     EmitLineMapping(ChildCtx, AGetter.Line, AGetter.Column);
-    EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot);
+    EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot,
+      ChildCtx.NonStrictMode and ParameterListIsSimple(EmptyParams),
+      Length(EmptyParams));
     ACtx.CompileFunctionBody(AGetter.Body);
     ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
 
@@ -3562,7 +3672,9 @@ begin
       not ChildTemplate.StrictCode;
     ChildCtx.DerivedConstructorThisGuard := False;
     EmitLineMapping(ChildCtx, ASetter.Line, ASetter.Column);
-    EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot);
+    EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot,
+      ChildCtx.NonStrictMode and ParameterListIsSimple(SetterParams),
+      Length(SetterParams));
     ACtx.CompileFunctionBody(ASetter.Body);
     ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
 
@@ -4056,7 +4168,7 @@ end;
 
 procedure CompileFunctionExpression(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaFunctionExpression; const ADest: UInt8;
-  const ATemplateName: string);
+  const ATemplateName: string; const ABindOwnName: Boolean);
 var
   OldTemplate: TGocciaFunctionTemplate;
   OldScope: TGocciaCompilerScope;
@@ -4079,7 +4191,7 @@ begin
 
   // ES2026 §15.2.5: Named function expressions bind the name in an inner
   // block scope visible inside the body via upvalue capture
-  HasNameBinding := AExpr.Name <> '';
+  HasNameBinding := ABindOwnName and (AExpr.Name <> '');
   if HasNameBinding then
   begin
     OldScope.BeginScope;
@@ -4141,7 +4253,9 @@ begin
       not ChildTemplate.StrictCode;
     ChildCtx.DerivedConstructorThisGuard := False;
 
-    EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot);
+    EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot,
+      ChildCtx.NonStrictMode and ParameterListIsSimple(AExpr.Parameters),
+      Length(AExpr.Parameters));
 
     if (RestParamIndex >= 0) and
        not ParameterListHasDefaultValues(AExpr.Parameters) then
@@ -4231,6 +4345,9 @@ begin
         else
         begin
           EmitSetGlobalByName(ACtx, ADest, AExpr.Name);
+          EmitExportBindingUpdates(ACtx,
+            ACtx.Scope.GetLocal(LocalIdx).ExportNames,
+            ACtx.Scope.GetLocal(LocalIdx).ExportNameCount, ADest);
           SetNonStrictLocalTypeHint(ACtx, LocalIdx, sltUntyped);
         end;
         PatchJumpTarget(ACtx, JumpIdx);
@@ -4261,6 +4378,9 @@ begin
           InferLocalType(AExpr.Value));
         if ADest <> Slot then
           EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, ADest, Slot));
+        EmitExportBindingUpdates(ACtx,
+          ACtx.Scope.GetLocal(LocalIdx).ExportNames,
+          ACtx.Scope.GetLocal(LocalIdx).ExportNameCount, ADest);
         SetNonStrictLocalTypeHint(ACtx, LocalIdx, sltUntyped);
       end;
       PatchJumpTarget(ACtx, JumpIdx);
@@ -4287,9 +4407,14 @@ begin
       else
       begin
         if ACtx.Scope.GetUpvalue(UpvalIdx).IsGlobalBacked then
+        begin
           EmitSetGlobalByName(ACtx, ADest, AExpr.Name)
+        end
         else
           EmitInstruction(ACtx, EncodeABx(OP_SET_UPVALUE, ADest, UInt16(UpvalIdx)));
+        EmitExportBindingUpdates(ACtx,
+          ACtx.Scope.GetUpvalue(UpvalIdx).ExportNames,
+          ACtx.Scope.GetUpvalue(UpvalIdx).ExportNameCount, ADest);
       end;
       PatchJumpTarget(ACtx, JumpIdx);
       Exit;
@@ -4403,6 +4528,9 @@ begin
         EmitInstruction(ACtx, EncodeABC(Op, ADest, RegResult, RegVal));
         EmitStrictLocalTypeCheck(ACtx, LocalIdx, ADest, ResultType);
         EmitSetGlobalByName(ACtx, ADest, AExpr.Name);
+        EmitExportBindingUpdates(ACtx,
+          ACtx.Scope.GetLocal(LocalIdx).ExportNames,
+          ACtx.Scope.GetLocal(LocalIdx).ExportNameCount, ADest);
         SetNonStrictLocalTypeHint(ACtx, LocalIdx, sltUntyped);
       end;
       ACtx.Scope.FreeRegister;
@@ -4437,6 +4565,9 @@ begin
       ResultType := sltFloat;
     EmitStrictLocalTypeCheck(ACtx, LocalIdx, RegTemp, ResultType);
     EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, RegTemp, Slot));
+    EmitExportBindingUpdates(ACtx,
+      ACtx.Scope.GetLocal(LocalIdx).ExportNames,
+      ACtx.Scope.GetLocal(LocalIdx).ExportNameCount, RegTemp);
     if not ACtx.Scope.GetLocal(LocalIdx).IsStrictlyTyped then
     begin
       SetNonStrictLocalTypeHint(ACtx, LocalIdx, ResultType);
@@ -4470,10 +4601,15 @@ begin
     begin
       EmitInstruction(ACtx, EncodeABC(Op, RegResult, RegResult, RegVal));
       if ACtx.Scope.GetUpvalue(UpvalIdx).IsGlobalBacked then
+      begin
         EmitSetGlobalByName(ACtx, RegResult, AExpr.Name)
+      end
       else
         EmitInstruction(ACtx, EncodeABx(OP_SET_UPVALUE, RegResult,
           UInt16(UpvalIdx)));
+      EmitExportBindingUpdates(ACtx,
+        ACtx.Scope.GetUpvalue(UpvalIdx).ExportNames,
+        ACtx.Scope.GetUpvalue(UpvalIdx).ExportNameCount, RegResult);
       if ADest <> RegResult then
         EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, RegResult, 0));
     end;
@@ -4851,6 +4987,9 @@ begin
         EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, RegResult, 0));
       EmitInstruction(ACtx, EncodeABC(Op, RegResult, RegResult, 0));
       EmitSetGlobalByName(ACtx, RegResult, Ident.Name);
+      EmitExportBindingUpdates(ACtx,
+        ACtx.Scope.GetLocal(LocalIdx).ExportNames,
+        ACtx.Scope.GetLocal(LocalIdx).ExportNameCount, RegResult);
       if AExpr.IsPrefix then
         EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, RegResult, 0));
       ACtx.Scope.FreeRegister;
@@ -4865,6 +5004,9 @@ begin
     EmitInstruction(ACtx, EncodeABC(Op, Slot, Slot, 0));
     if ACtx.Scope.GetLocal(LocalIdx).IsCaptured then
       EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, Slot, UInt16(Slot)));
+    EmitExportBindingUpdates(ACtx,
+      ACtx.Scope.GetLocal(LocalIdx).ExportNames,
+      ACtx.Scope.GetLocal(LocalIdx).ExportNameCount, Slot);
     if AExpr.IsPrefix then
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, Slot, 0));
     Exit;
@@ -4889,9 +5031,14 @@ begin
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, RegResult, 0));
     EmitInstruction(ACtx, EncodeABC(Op, RegResult, RegResult, 0));
     if ACtx.Scope.GetUpvalue(UpvalIdx).IsGlobalBacked then
+    begin
       EmitSetGlobalByName(ACtx, RegResult, Ident.Name)
+    end
     else
       EmitInstruction(ACtx, EncodeABx(OP_SET_UPVALUE, RegResult, UInt16(UpvalIdx)));
+    EmitExportBindingUpdates(ACtx,
+      ACtx.Scope.GetUpvalue(UpvalIdx).ExportNames,
+      ACtx.Scope.GetUpvalue(UpvalIdx).ExportNameCount, RegResult);
     if AExpr.IsPrefix then
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, RegResult, 0));
     ACtx.Scope.FreeRegister;
@@ -5150,10 +5297,22 @@ begin
   begin
     OptionsReg := ACtx.Scope.AllocateRegister;
     ACtx.CompileExpression(AExpr.Options, OptionsReg);
+    case AExpr.Phase of
+      icpEvaluation:
+        EmitInstruction(ACtx, EncodeABC(OP_DYNAMIC_IMPORT_OPTIONS, ADest,
+          SpecReg, OptionsReg));
+      icpSource:
+        EmitInstruction(ACtx, EncodeABC(OP_DYNAMIC_IMPORT_SOURCE_OPTIONS,
+          ADest, SpecReg, OptionsReg));
+      icpDefer:
+        EmitInstruction(ACtx, EncodeABC(OP_DYNAMIC_IMPORT_DEFER_OPTIONS,
+          ADest, SpecReg, OptionsReg));
+    end;
     ACtx.Scope.FreeRegister;
   end;
-  EmitInstruction(ACtx, EncodeABC(OP_DYNAMIC_IMPORT, ADest, SpecReg,
-    Ord(AExpr.Phase)));
+  if not Assigned(AExpr.Options) then
+    EmitInstruction(ACtx, EncodeABC(OP_DYNAMIC_IMPORT, ADest, SpecReg,
+      Ord(AExpr.Phase)));
   ACtx.Scope.FreeRegister;
 end;
 
