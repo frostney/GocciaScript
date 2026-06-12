@@ -393,3 +393,166 @@ describe("JSON.stringify non-finite space argument", () => {
     expect(JSON.stringify({ a: 1 }, null, NaN)).toBe(JSON.stringify({ a: 1 }));
   });
 });
+
+test("JSON.stringify array replacer ignores boolean, null, undefined, and plain object elements", () => {
+  expect(JSON.stringify({ true: 1, a: 2 }, [true])).toBe("{}");
+  expect(JSON.stringify({ false: 1, a: 2 }, [false])).toBe("{}");
+  expect(JSON.stringify({ null: 1, a: 2 }, [null])).toBe("{}");
+  expect(JSON.stringify({ undefined: 1, a: 2 }, [undefined])).toBe("{}");
+  expect(JSON.stringify({ "[object Object]": 1, a: 2 }, [{}])).toBe("{}");
+});
+
+test("JSON.stringify array replacer does not call toString on plain object elements", () => {
+  const element = {
+    toString() {
+      return "toString";
+    },
+  };
+  expect(JSON.stringify({ toString: 1, a: 2 }, [element])).toBe("{}");
+});
+
+test("JSON.stringify array replacer filters nested objects at every depth", () => {
+  expect(JSON.stringify({ a: { a: 1, b: 2 }, b: 3 }, ["a"])).toBe(
+    '{"a":{"a":1}}',
+  );
+  expect(JSON.stringify({ a: { b: { a: 1, c: 2 }, a: 3 }, c: 4 }, ["a", "b"])).toBe(
+    '{"a":{"a":3,"b":{"a":1}}}',
+  );
+});
+
+test("JSON.stringify array replacer filters objects inside arrays", () => {
+  expect(JSON.stringify([{ a: 1, b: 2 }, { b: 3 }], ["a"])).toBe(
+    '[{"a":1},{}]',
+  );
+});
+
+test("JSON.stringify array replacer determines key order at every depth", () => {
+  expect(JSON.stringify({ a: { b: 2, c: 3 } }, ["c", "b", "a"])).toBe(
+    '{"a":{"c":3,"b":2}}',
+  );
+});
+
+test("JSON.stringify array replacer de-duplicates keys and reads each property once", () => {
+  let getCalls = 0;
+  const value = {
+    get key() {
+      getCalls += 1;
+      return true;
+    },
+  };
+  expect(JSON.stringify(value, ["key", "key"])).toBe('{"key":true}');
+  expect(getCalls).toBe(1);
+});
+
+test("JSON.stringify array replacer converts number elements with number-to-string semantics", () => {
+  const obj = { 0: 0, 1: 1, "-4": 2, 0.3: 3, "-Infinity": 4, NaN: 5 };
+  expect(JSON.stringify(obj, [-0, 1, -4, 0.3, -Infinity, NaN])).toBe(
+    '{"0":0,"1":1,"-4":2,"0.3":3,"-Infinity":4,"NaN":5}',
+  );
+});
+
+test("JSON.stringify array replacer converts String and Number wrapper elements via toString", () => {
+  const num = new Number(10);
+  num.toString = () => "toString";
+  num.valueOf = () => {
+    throw new Error("valueOf should not be called");
+  };
+  expect(JSON.stringify({ 10: 1, toString: 2 }, [num])).toBe('{"toString":2}');
+
+  const str = new String("str");
+  str.toString = () => "toString";
+  str.valueOf = () => {
+    throw new Error("valueOf should not be called");
+  };
+  expect(JSON.stringify({ str: 1, toString: 2 }, [str])).toBe('{"toString":2}');
+});
+
+test("JSON.stringify array replacer treats keys case-sensitively", () => {
+  expect(JSON.stringify({ a: 1, A: 2 }, ["A"])).toBe('{"A":2}');
+  expect(JSON.stringify({ a: 1, A: 2 }, ["a", "A"])).toBe('{"a":1,"A":2}');
+});
+
+test("JSON.stringify empty array replacer serializes objects as empty", () => {
+  expect(JSON.stringify({ a: 1 }, [])).toBe("{}");
+  expect(JSON.stringify({ a: { b: 1 } }, [])).toBe("{}");
+});
+
+test("JSON.stringify array replacer composes with indentation", () => {
+  expect(JSON.stringify({ a: { a: 1, b: 2 }, b: 3 }, ["a"], 2)).toBe(
+    '{\n  "a": {\n    "a": 1\n  }\n}',
+  );
+});
+
+test("JSON.stringify value as boxed Number uses an overridden valueOf", () => {
+  const boxed = new Number(1);
+  boxed.valueOf = () => 4;
+
+  expect(JSON.stringify({ a: boxed })).toBe('{"a":4}');
+  expect(JSON.stringify(boxed)).toBe("4");
+});
+
+test("JSON.stringify value as boxed Number uses an overridden valueOf with a replacer function", () => {
+  const boxed = new Number(1);
+  boxed.valueOf = () => 4;
+
+  expect(JSON.stringify({ a: boxed }, (key, value) => value)).toBe('{"a":4}');
+});
+
+test("JSON.stringify value as boxed Number uses an overridden valueOf with an array replacer", () => {
+  const boxed = new Number(1);
+  boxed.valueOf = () => 4;
+
+  expect(JSON.stringify({ a: boxed, b: 2 }, ["a"])).toBe('{"a":4}');
+});
+
+test("JSON.stringify value as boxed String uses an overridden toString without calling valueOf", () => {
+  const boxed = new String("ab");
+  boxed.toString = () => "zz";
+  boxed.valueOf = () => {
+    throw new TypeError("valueOf must not be called");
+  };
+
+  expect(JSON.stringify([boxed])).toBe('["zz"]');
+});
+
+test("JSON.stringify value as boxed Boolean ignores valueOf and toString", () => {
+  const boxed = new Boolean(false);
+  boxed.valueOf = () => true;
+  boxed.toString = () => "true";
+
+  expect(JSON.stringify([boxed])).toBe("[false]");
+});
+
+test("JSON.stringify value as boxed Number propagates valueOf exceptions", () => {
+  const boxed = new Number(1);
+  boxed.valueOf = () => {
+    throw new RangeError("abrupt valueOf");
+  };
+
+  expect(() => JSON.stringify({ a: boxed })).toThrow(RangeError);
+});
+
+test("JSON.stringify value as boxed String propagates toString exceptions", () => {
+  const boxed = new String("ab");
+  boxed.toString = () => {
+    throw new RangeError("abrupt toString");
+  };
+
+  expect(() => JSON.stringify([boxed])).toThrow(RangeError);
+});
+
+test("JSON.stringify keeps a short multibyte string space intact", () => {
+  const obj = { a: 1 };
+
+  expect(JSON.stringify(obj, null, "ααααααα")).toBe(
+    '{\n' + "ααααααα" + '"a": 1\n}',
+  );
+});
+
+test("JSON.stringify truncates a long multibyte string space to 10 characters", () => {
+  const obj = { a: 1 };
+
+  expect(JSON.stringify(obj, null, "あ".repeat(12))).toBe(
+    JSON.stringify(obj, null, "あ".repeat(10)),
+  );
+});
