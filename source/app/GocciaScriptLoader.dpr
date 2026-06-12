@@ -1378,6 +1378,7 @@ begin
         PrintOpcodeProfile(TGocciaProfiler.Instance);
         PrintOpcodePairProfile(TGocciaProfiler.Instance);
         PrintScalarHitRate(TGocciaProfiler.Instance);
+        PrintShapeSaturation(TGocciaProfiler.Instance);
       end;
       if ProfileFunctions then
         PrintFunctionProfile(TGocciaProfiler.Instance);

@@ -30,14 +30,16 @@ uses
   Goccia.Values.ObjectPropertyDescriptor;
 
 const
-  // Objects appending more string keys than this stop being shape-tracked
-  // (dictionary-style usage); the transition chain would otherwise grow one
-  // interned shape per key.
+  // Objects appending more string keys than this keep a PREFIX shape: the
+  // first SHAPE_TRANSITION_DEPTH_LIMIT keys stay cacheable (entry indices
+  // below the shape's depth remain valid), only the suffix goes uncached.
   SHAPE_TRANSITION_DEPTH_LIMIT = 64;
-  // Hard ceiling on interned shapes per realm; programs whose dynamic keys
-  // explode the transition tree degrade to dictionary mode instead of
-  // growing realm memory without bound.
-  SHAPE_TABLE_CAPACITY_LIMIT = 4096;
+  // Ceiling on interned shapes per realm; programs whose dynamic keys
+  // explode the transition tree degrade gracefully — layouts keep their
+  // longest already-interned prefix instead of losing caching entirely.
+  // Both saturation kinds are counted by the profiler (--profile=opcodes,
+  // "Shape Saturation" section) because they otherwise degrade silently.
+  SHAPE_TABLE_CAPACITY_LIMIT = 32768;
 
 type
   TGocciaShapeTable = class;
@@ -99,6 +101,10 @@ type
     // stale prefix shape, so each appended key is transitioned exactly
     // once per map). Returns nil for an empty layout and the dictionary
     // sentinel for maps that left shaped mode; cache fills reject both.
+    // When a transition limit is hit the longest interned prefix is kept
+    // instead: the result's Depth is then smaller than Count, so callers
+    // proving PRESENCE must guard EntryIndex < Depth and callers proving
+    // ABSENCE must require Depth = Count.
     function EnsureShape: TGocciaShape;
     // Raw last-computed shape for the cache hit path: one field load, may
     // lag behind the live layout (benign — see unit header).
@@ -115,6 +121,9 @@ function DictionaryShapeSentinel: TGocciaShape; inline;
 function CurrentRealmShapeTable: TGocciaShapeTable;
 
 implementation
+
+uses
+  Goccia.Profiler;
 
 var
   GShapeTableSlot: TGocciaRealmOwnedSlotId;
@@ -216,12 +225,18 @@ end;
 function TGocciaShapedPropertyMap.EnsureShape: TGocciaShape;
 var
   Table: TGocciaShapeTable;
-  Walk: TGocciaShape;
+  Walk, Next: TGocciaShape;
+  Profiler: TGocciaProfiler;
   I: Integer;
 begin
   if FShape = GDictionaryShape then
     Exit(GDictionaryShape);
-  if FShapeEntryCount = Count then
+  // Depth-capped maps are permanently in prefix mode; skip the staleness
+  // walk (it could only fail at the cap again).
+  if Assigned(FShape) and
+     (FShape.Depth >= SHAPE_TRANSITION_DEPTH_LIMIT) then
+    Exit(FShape);
+  if FShapeEntryCount = CountFast then
     Exit(FShape);
 
   Walk := FShape;
@@ -239,18 +254,34 @@ begin
   // While shaped, the map is append-only: no tombstones, so entry indices
   // 0..Count-1 are exactly the appended keys in order, and the stale shape
   // covers the first FShapeEntryCount of them.
-  for I := FShapeEntryCount to Count - 1 do
+  for I := FShapeEntryCount to CountFast - 1 do
   begin
-    Walk := Walk.Transition(KeyAtEntry(I));
-    if not Assigned(Walk) then
+    Next := Walk.Transition(KeyAtEntry(I));
+    if not Assigned(Next) then
     begin
-      FShape := GDictionaryShape;
-      Exit(GDictionaryShape);
+      // Transition limit reached: keep the longest interned prefix. The
+      // prefix is a true description of entries 0..Walk.Depth-1, so
+      // Depth-guarded cache fills stay sound; entries beyond it (and
+      // absence proofs, which need full coverage) go uncached. Table-cap
+      // prefixes retry on later calls — already-interned transitions
+      // remain usable even when the table cannot grow.
+      Profiler := TGocciaProfiler.Instance;
+      if Assigned(Profiler) and Profiler.Enabled then
+      begin
+        if Walk.Depth >= SHAPE_TRANSITION_DEPTH_LIMIT then
+          Profiler.RecordShapeDepthLimit
+        else
+          Profiler.RecordShapeTableSaturation;
+      end;
+      FShape := Walk;
+      FShapeEntryCount := I;
+      Exit(Walk);
     end;
+    Walk := Next;
   end;
 
   FShape := Walk;
-  FShapeEntryCount := Count;
+  FShapeEntryCount := CountFast;
   Result := Walk;
 end;
 

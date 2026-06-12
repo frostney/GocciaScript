@@ -230,6 +230,13 @@ type
     procedure ExecDeleteComputedProperty(const ADest: Integer;
       AObjReg, AKeyReg: TGocciaRegister;
       const AThrowOnFailure: Boolean);
+    // Serve an own NON-data descriptor (accessor or exotic) exactly as the
+    // receiver's generic own-descriptor branch would, without a second map
+    // lookup: callable getter -> invoke with the receiver as this; anything
+    // else -> undefined.
+    procedure ServeOwnNonDataProperty(const ADest: Integer;
+      const AReceiver: TGocciaValue;
+      const ADescriptor: TGocciaPropertyDescriptor);
     procedure SetFunctionNameFromKey(const AFunction, AKey: TGocciaValue;
       const APrefixKind: UInt8);
     function EnsureCurrentDynamicVarScope: TGocciaScope;
@@ -1429,63 +1436,81 @@ const
   // the uncached own-data fast path instead.
   PROPERTY_READ_CACHE_POLYMORPHIC_LIMIT = 16;
 
-// One uncached own-data lookup that also primes the inline cache for the
-// next read. Returns False (cache untouched) when the property is not an
-// own plain data property — accessor, prototype-resolved, and absent names
-// stay on the generic GetPropertyValue path — or when the receiver is not
-// shape-tracked (empty layout or dictionary mode), so nil and the
-// dictionary sentinel are never stored in a cache entry. Refills that
-// replace a different shape advance MissStreak so polymorphic sites
-// converge on the megamorphic fast path.
-function VMFillPropertyReadCache(const AObject: TGocciaObjectValue;
-  const AName: string; const ACache: PGocciaPropertyReadCacheEntry;
-  out AValue: TGocciaValue): Boolean; inline;
+
+type
+  // Outcome of one own-map probe; lets the OP_GET_PROP_CONST miss path
+  // establish own-data / own-non-data / absent with a single hash lookup
+  // instead of re-hashing the same name per fallback tier.
+  TGocciaOwnPropertyProbe = (oppData, oppNonData, oppAbsent);
+
+function VMProbeOwnProperty(const AObject: TGocciaObjectValue;
+  const AName: string; out AEntryIndex: Integer;
+  out ADescriptor: TGocciaPropertyDescriptor): TGocciaOwnPropertyProbe;
+begin
+  ADescriptor := nil;
+  if AObject.Properties.TryGetEntryIndex(AName, AEntryIndex) and
+     AObject.Properties.TryGetValueAtEntry(AEntryIndex, ADescriptor) then
+  begin
+    if ADescriptor is TGocciaPropertyDescriptorData then
+      Result := oppData
+    else
+      Result := oppNonData;
+  end
+  else
+    Result := oppAbsent;
+end;
+
+// Prime the own-tier cache from an already-completed probe (no second
+// lookup). Declines silently for dictionary-mode maps (advancing the
+// streak so those sites converge) and for entries beyond a prefix shape's
+// covered depth.
+procedure VMPrimeOwnPropertyCache(const AObject: TGocciaObjectValue;
+  const AEntryIndex: Integer; const ACache: PGocciaPropertyReadCacheEntry);
 var
   ReceiverShape: TGocciaShape;
-  EntryIndex: Integer;
-  Descriptor: TGocciaPropertyDescriptor;
 begin
-  AValue := nil;
   ReceiverShape := TGocciaShapedPropertyMap(AObject.Properties).EnsureShape;
   if ReceiverShape = DictionaryShapeSentinel then
   begin
-    // Dictionary-mode receivers can never fill; advance the streak so the
-    // site converges on the dormant fast path instead of paying this probe
-    // forever. Empty layouts (nil shape) stay free of the bump: they cost
-    // no hash here and may legitimately precede cacheable receivers.
-    Inc(ACache^.MissStreak);
-    Exit(False);
-  end;
-  if not Assigned(ReceiverShape) then
-    Exit(False);
-  Result := AObject.Properties.TryGetEntryIndex(AName, EntryIndex) and
-    AObject.Properties.TryGetValueAtEntry(EntryIndex, Descriptor) and
-    (Descriptor is TGocciaPropertyDescriptorData);
-  if not Result then
-  begin
-    // Sites that can never cache (own accessors, prototype-resolved names)
-    // must converge on the megamorphic fast path instead of paying a fill
-    // probe on every read. The caller gates fills on MissStreak, so this
-    // cannot overflow.
     Inc(ACache^.MissStreak);
     Exit;
   end;
-  if (ACache^.Shape <> nil) and (ACache^.Shape <> Pointer(ReceiverShape)) then
+  // A found entry implies a non-empty map, so a real shape exists; the
+  // depth guard only blocks entries past a transition-capped prefix.
+  if (not Assigned(ReceiverShape)) or
+     (AEntryIndex >= ReceiverShape.Depth) then
+    Exit;
+  if (ACache^.Shape <> nil) and
+     (ACache^.Shape <> Pointer(ReceiverShape)) then
     Inc(ACache^.MissStreak);
   ACache^.Shape := Pointer(ReceiverShape);
-  ACache^.EntryIndex := EntryIndex;
-  AValue := TGocciaPropertyDescriptorData(Descriptor).Value;
+  ACache^.EntryIndex := AEntryIndex;
 end;
 
-// Fresh-shape probe for one prototype-chain level: recomputes the level's
-// shape if stale (cheap compare when current) and matches it against the
-// cached pointer. A cached pointer is never nil-ambiguous: nil matches only
-// a fresh empty layout, the dictionary sentinel is never cached.
-function VMShapeAtLevelMatches(const AObject: TGocciaObjectValue;
+// Presence probe for the holder level: pointer identity suffices — a
+// prefix shape's covered entries stay valid as the holder map grows, and
+// the descriptor is re-read by entry index on every hit.
+function VMHolderShapeMatches(const AObject: TGocciaObjectValue;
   const ACachedShape: Pointer): Boolean; inline;
 begin
   Result := Pointer(
     TGocciaShapedPropertyMap(AObject.Properties).EnsureShape) = ACachedShape;
+end;
+
+// Absence probe for receiver/intermediate levels: pointer identity PLUS
+// full coverage (Depth = Count). A transition-capped map can grow while
+// EnsureShape keeps returning the same prefix pointer, so pointer equality
+// alone cannot prove a name is still absent.
+function VMAbsenceShapeMatches(const AObject: TGocciaObjectValue;
+  const ACachedShape: Pointer): Boolean; inline;
+var
+  Map: TGocciaShapedPropertyMap;
+  LevelShape: TGocciaShape;
+begin
+  Map := TGocciaShapedPropertyMap(AObject.Properties);
+  LevelShape := Map.EnsureShape;
+  Result := (Pointer(LevelShape) = ACachedShape) and
+    ((not Assigned(LevelShape)) or (LevelShape.Depth = Map.CountFast));
 end;
 
 // Validate a prototype-holder cache entry: receiver gate, fresh-shape
@@ -1509,14 +1534,20 @@ begin
     Exit;
   if not VMPropertyReadCacheableReceiver(AReceiver) then
     Exit;
-  if not VMShapeAtLevelMatches(AReceiver, ACache^.Shapes[0]) then
+  if not VMAbsenceShapeMatches(AReceiver, ACache^.Shapes[0]) then
     Exit;
   Walk := AReceiver;
   for Level := 1 to ACache^.HolderLevel do
   begin
     Walk := Walk.Prototype;
-    if (not Assigned(Walk)) or (Walk.ClassType <> TGocciaObjectValue) or
-       (not VMShapeAtLevelMatches(Walk, ACache^.Shapes[Level])) then
+    if (not Assigned(Walk)) or (Walk.ClassType <> TGocciaObjectValue) then
+      Exit;
+    if Level = ACache^.HolderLevel then
+    begin
+      if not VMHolderShapeMatches(Walk, ACache^.Shapes[Level]) then
+        Exit;
+    end
+    else if not VMAbsenceShapeMatches(Walk, ACache^.Shapes[Level]) then
       Exit;
   end;
   if not Walk.Properties.TryGetValueAtEntry(ACache^.EntryIndex,
@@ -1554,10 +1585,15 @@ var
 begin
   AValue := nil;
   Result := False;
+  // Contract: the caller has already established (via VMProbeOwnProperty)
+  // that AName is not an own property of AReceiver — no own re-probe here.
   WalkShape := TGocciaShapedPropertyMap(AReceiver.Properties).EnsureShape;
   if WalkShape = DictionaryShapeSentinel then
     Exit;
-  if AReceiver.Properties.ContainsKey(AName) then
+  // Absence levels need full coverage: a transition-capped prefix shape
+  // cannot prove the name is absent from the uncovered suffix.
+  if Assigned(WalkShape) and
+     (WalkShape.Depth <> AReceiver.Properties.CountFast) then
     Exit;
   Shapes[0] := Pointer(WalkShape);
   Shapes[1] := nil;
@@ -1572,28 +1608,37 @@ begin
     if WalkShape = DictionaryShapeSentinel then
       Exit;
     Shapes[Level] := Pointer(WalkShape);
-    if Walk.Properties.TryGetEntryIndex(AName, EntryIndex) then
+    if not Walk.Properties.TryGetEntryIndex(AName, EntryIndex) then
     begin
-      if (not Walk.Properties.TryGetValueAtEntry(EntryIndex, Descriptor)) or
-         (not (Descriptor is TGocciaPropertyDescriptorData)) then
+      // Absent at this level: full coverage required for the absence proof.
+      if Assigned(WalkShape) and
+         (WalkShape.Depth <> Walk.Properties.CountFast) then
         Exit;
-      AValue := TGocciaPropertyDescriptorData(Descriptor).Value;
-      if AValue = TGocciaUndefinedLiteralValue.UndefinedValue then
-      begin
-        AValue := nil;
-        Exit;
-      end;
-      if (ACache^.HolderLevel > 0) and
-         (ACache^.Shapes[0] <> Shapes[0]) then
-        Inc(ACache^.MissStreak);
-      ACache^.Shapes[0] := Shapes[0];
-      ACache^.Shapes[1] := Shapes[1];
-      ACache^.Shapes[2] := Shapes[2];
-      ACache^.EntryIndex := EntryIndex;
-      ACache^.HolderLevel := Level;
-      Result := True;
+      Continue;
+    end;
+    if (not Walk.Properties.TryGetValueAtEntry(EntryIndex, Descriptor)) or
+       (not (Descriptor is TGocciaPropertyDescriptorData)) then
+      Exit;
+    // Presence at the holder: the entry must lie inside the shape's
+    // covered prefix for the cached (shape, index) pair to stay valid.
+    if (not Assigned(WalkShape)) or (EntryIndex >= WalkShape.Depth) then
+      Exit;
+    AValue := TGocciaPropertyDescriptorData(Descriptor).Value;
+    if AValue = TGocciaUndefinedLiteralValue.UndefinedValue then
+    begin
+      AValue := nil;
       Exit;
     end;
+    if (ACache^.HolderLevel > 0) and
+       (ACache^.Shapes[0] <> Shapes[0]) then
+      Inc(ACache^.MissStreak);
+    ACache^.Shapes[0] := Shapes[0];
+    ACache^.Shapes[1] := Shapes[1];
+    ACache^.Shapes[2] := Shapes[2];
+    ACache^.EntryIndex := EntryIndex;
+    ACache^.HolderLevel := Level;
+    Result := True;
+    Exit;
   end;
 end;
 
@@ -7010,6 +7055,35 @@ begin
     FRegisters[ADest] := RegisterBoolean(True);
 end;
 
+procedure TGocciaVM.ServeOwnNonDataProperty(const ADest: Integer;
+  const AReceiver: TGocciaValue;
+  const ADescriptor: TGocciaPropertyDescriptor);
+var
+  Accessor: TGocciaPropertyDescriptorAccessor;
+  CallArgs: TGocciaArgumentsCollection;
+begin
+  // Mirrors the own-descriptor branch of TGocciaObjectValue /
+  // TGocciaInstanceValue GetPropertyWithContext: callable getter invoked
+  // with the receiver as this; setter-only accessors and exotic
+  // descriptor kinds yield undefined.
+  if ADescriptor is TGocciaPropertyDescriptorAccessor then
+  begin
+    Accessor := TGocciaPropertyDescriptorAccessor(ADescriptor);
+    if Assigned(Accessor.Getter) and Accessor.Getter.IsCallable then
+    begin
+      CallArgs := AcquireArguments(0);
+      try
+        SetRegister(ADest, TGocciaFunctionBase(Accessor.Getter).Call(
+          CallArgs, AReceiver));
+      finally
+        ReleaseArguments(CallArgs);
+      end;
+      Exit;
+    end;
+  end;
+  SetRegister(ADest, TGocciaUndefinedLiteralValue.UndefinedValue);
+end;
+
 procedure TGocciaVM.SetFunctionNameFromKey(const AFunction, AKey: TGocciaValue;
   const APrefixKind: UInt8);
 var
@@ -12115,27 +12189,49 @@ begin
               if VMPropertyReadCacheableReceiver(FRegisters[B].ObjectValue) and
                  (not IsBytecodePrivateKey(GlobalName)) then
               begin
-                if Assigned(PropertyReadCache) and
-                   (PropertyReadCache^.MissStreak <
-                    PROPERTY_READ_CACHE_POLYMORPHIC_LIMIT) and
-                   VMFillPropertyReadCache(
-                     TGocciaObjectValue(FRegisters[B].ObjectValue), GlobalName,
-                     PropertyReadCache, GlobalBindingValue) then
-                  SetRegisterFast(A, GlobalBindingValue)
-                else if Assigned(ProtoReadCache) and
-                   (ProtoReadCache^.MissStreak <
-                    PROPERTY_READ_CACHE_POLYMORPHIC_LIMIT) and
-                   VMFillProtoReadCache(
-                     TGocciaObjectValue(FRegisters[B].ObjectValue), GlobalName,
-                     ProtoReadCache, GlobalBindingValue) then
-                  SetRegisterFast(A, GlobalBindingValue)
-                else if VMGetOwnDataDescriptorValue(
+                // One own-map probe establishes own-data / own-non-data /
+                // absent; no fallback tier re-hashes the same name on this
+                // receiver.
+                case VMProbeOwnProperty(
                   TGocciaObjectValue(FRegisters[B].ObjectValue), GlobalName,
-                  GlobalBindingValue) then
-                  SetRegisterFast(A, GlobalBindingValue)
+                  KeyIndex, PrivateDescriptor) of
+                  oppData:
+                  begin
+                    if Assigned(PropertyReadCache) and
+                       (PropertyReadCache^.MissStreak <
+                        PROPERTY_READ_CACHE_POLYMORPHIC_LIMIT) then
+                      VMPrimeOwnPropertyCache(
+                        TGocciaObjectValue(FRegisters[B].ObjectValue),
+                        KeyIndex, PropertyReadCache);
+                    SetRegisterFast(A,
+                      TGocciaPropertyDescriptorData(PrivateDescriptor).Value);
+                  end;
+                  oppNonData:
+                  begin
+                    // Accessor/exotic own descriptor: never cacheable here;
+                    // converge the own tier toward dormant.
+                    if Assigned(PropertyReadCache) and
+                       (PropertyReadCache^.MissStreak <
+                        PROPERTY_READ_CACHE_POLYMORPHIC_LIMIT) then
+                      Inc(PropertyReadCache^.MissStreak);
+                    ServeOwnNonDataProperty(A, FRegisters[B].ObjectValue,
+                      PrivateDescriptor);
+                  end;
                 else
-                  SetRegister(A, GetPropertyValue(FRegisters[B].ObjectValue,
-                    GlobalName));
+                  // oppAbsent: own absence is established, so the proto
+                  // fill may skip its own re-probe (see the core's
+                  // contract); deeper or exotic resolutions stay generic.
+                  if Assigned(ProtoReadCache) and
+                     (ProtoReadCache^.MissStreak <
+                      PROPERTY_READ_CACHE_POLYMORPHIC_LIMIT) and
+                     VMFillProtoReadCache(
+                       TGocciaObjectValue(FRegisters[B].ObjectValue),
+                       GlobalName, ProtoReadCache, GlobalBindingValue) then
+                    SetRegisterFast(A, GlobalBindingValue)
+                  else
+                    SetRegister(A, GetPropertyValue(FRegisters[B].ObjectValue,
+                      GlobalName));
+                end;
               end
               else
                 SetRegister(A, GetPropertyValue(FRegisters[B].ObjectValue,

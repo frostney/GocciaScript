@@ -102,6 +102,9 @@ type
     function GetEnumerator: TEnumerator; inline;
     function EntryAt(AIndex: Integer): TBaseMap<string, TValue>.TKeyValuePair;
 
+    // Non-virtual live-entry count for hot validation paths (the Count
+    // property dispatches through TBaseMap's virtual GetCount).
+    function CountFast: Integer; inline;
     // Entry-index access for version-validated inline caches: look up an
     // entry index once, then re-read its value directly while EntryVersion
     // is unchanged.
@@ -281,6 +284,11 @@ begin
 end;
 
 { Core operations }
+
+function TOrderedStringMap<TValue>.CountFast: Integer;
+begin
+  Result := FCount;
+end;
 
 procedure TOrderedStringMap<TValue>.Add(const AKey: string; const AValue: TValue);
 var

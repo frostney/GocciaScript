@@ -190,8 +190,18 @@ type
     FRegExpProgramCaches: array of TObject;
     FRegExpProgramCacheCount: Integer;
     FGlobalReadCaches: array of TGocciaGlobalReadCacheEntry;
+    // Property/proto read caches use DENSE slots: OP_GET_PROP_CONST name
+    // constants are a small subset of the constant pool, so a per-constant
+    // UInt16 map (0 = unassigned, else dense slot + 1) assigns slots on
+    // first use and the entry arrays grow only to the number of distinct
+    // property-name constants actually read. Both tiers share one slot id
+    // (they are keyed by the same instruction operand). The instruction's
+    // C operand is a UInt8, so the slot map never exceeds 256 entries.
+    FPropertyReadSlotMap: array of UInt16;
     FPropertyReadCaches: array of TGocciaPropertyReadCacheEntry;
     FProtoReadCaches: array of TGocciaProtoReadCacheEntry;
+    FPropertyReadSlotCount: Integer;
+    function PropertyReadSlot(const AConstIndex: Integer): Integer;
     function GetFunctionCount: Integer;
   public
     constructor Create(const AName: string);
@@ -601,30 +611,69 @@ begin
   Result := @FGlobalReadCaches[AConstIndex];
 end;
 
+function TGocciaFunctionTemplate.PropertyReadSlot(
+  const AConstIndex: Integer): Integer;
+const
+  // OP_GET_PROP_CONST carries the name-constant index in the 8-bit C
+  // operand, so at most 256 constants can ever be property-read names.
+  PROPERTY_READ_SLOT_MAP_LIMIT = 256;
+var
+  MapSize, NewCapacity: Integer;
+begin
+  // nil-slot contract as GlobalReadCacheSlot: out-of-range constant
+  // indices (corrupt or hostile .gbc input) run uncached rather than
+  // risking a wild write.
+  if (AConstIndex < 0) or (AConstIndex >= FConstantCount) or
+     (AConstIndex >= PROPERTY_READ_SLOT_MAP_LIMIT) then
+    Exit(-1);
+  if AConstIndex >= Length(FPropertyReadSlotMap) then
+  begin
+    MapSize := FConstantCount;
+    if MapSize > PROPERTY_READ_SLOT_MAP_LIMIT then
+      MapSize := PROPERTY_READ_SLOT_MAP_LIMIT;
+    SetLength(FPropertyReadSlotMap, MapSize);
+  end;
+  if FPropertyReadSlotMap[AConstIndex] = 0 then
+  begin
+    // Grow BOTH dense arrays together so a held own-tier pointer stays
+    // valid while the proto-tier slot for the same instruction is fetched.
+    // Re-entrant slot assignment (user code re-entering this template) can
+    // still reallocate them, so slot pointers must never be used after a
+    // call that may run user code.
+    if FPropertyReadSlotCount >= Length(FPropertyReadCaches) then
+    begin
+      NewCapacity := Length(FPropertyReadCaches) * 2;
+      if NewCapacity < 4 then
+        NewCapacity := 4;
+      SetLength(FPropertyReadCaches, NewCapacity);
+      SetLength(FProtoReadCaches, NewCapacity);
+    end;
+    Inc(FPropertyReadSlotCount);
+    FPropertyReadSlotMap[AConstIndex] := UInt16(FPropertyReadSlotCount);
+  end;
+  Result := Integer(FPropertyReadSlotMap[AConstIndex]) - 1;
+end;
+
 function TGocciaFunctionTemplate.PropertyReadCacheSlot(
   const AConstIndex: Integer): PGocciaPropertyReadCacheEntry;
+var
+  Slot: Integer;
 begin
-  // Same contract as GlobalReadCacheSlot: nil for out-of-range constant
-  // indices (corrupt or hostile .gbc input) so the VM runs uncached rather
-  // than writing through a wild pointer.  SetLength zero-fills, so fresh
-  // slots have Shape = nil and always miss.
-  if (AConstIndex < 0) or (AConstIndex >= FConstantCount) then
+  Slot := PropertyReadSlot(AConstIndex);
+  if Slot < 0 then
     Exit(nil);
-  if AConstIndex >= Length(FPropertyReadCaches) then
-    SetLength(FPropertyReadCaches, FConstantCount);
-  Result := @FPropertyReadCaches[AConstIndex];
+  Result := @FPropertyReadCaches[Slot];
 end;
 
 function TGocciaFunctionTemplate.ProtoReadCacheSlot(
   const AConstIndex: Integer): PGocciaProtoReadCacheEntry;
+var
+  Slot: Integer;
 begin
-  // Same contract as PropertyReadCacheSlot; fresh slots have
-  // HolderLevel = 0 and always miss.
-  if (AConstIndex < 0) or (AConstIndex >= FConstantCount) then
+  Slot := PropertyReadSlot(AConstIndex);
+  if Slot < 0 then
     Exit(nil);
-  if AConstIndex >= Length(FProtoReadCaches) then
-    SetLength(FProtoReadCaches, FConstantCount);
-  Result := @FProtoReadCaches[AConstIndex];
+  Result := @FProtoReadCaches[Slot];
 end;
 
 function TGocciaFunctionTemplate.AddFunction(
