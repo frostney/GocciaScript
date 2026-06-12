@@ -6859,6 +6859,7 @@ var
   KeyName: string;
   Value: TGocciaValue;
   TargetValue: TGocciaValue;
+  BoxedTarget: TGocciaObjectValue;
 begin
   Value := RegisterToValue(AValueReg);
   if (FRegisters[ATargetIndex].Kind = grkObject) and
@@ -6935,15 +6936,24 @@ begin
   else
   begin
     // Primitive receivers: full key classification, so object keys coerce
-    // through ToPropertyKey and keys resolving to a Symbol take the same
-    // throw path as direct symbol keys instead of being stringified.
+    // through ToPropertyKey and symbol keys (direct or resolved) take the
+    // receiver-aware boxed [[Set]] — a symbol-keyed setter on the
+    // primitive's prototype runs with the primitive as receiver, matching
+    // the interpreter; only unboxable receivers and failed assignments
+    // throw.
     Key := ClassifyPropertyKey(AKeyReg, False);
+    TargetValue := GetRegister(ATargetIndex);
     if Key.Kind = pkkSymbol then
-      ThrowTypeError(SErrorCannotSetPropertyOnNonObject,
-        SSuggestCheckNullBeforeAccess)
+    begin
+      BoxedTarget := TargetValue.Box;
+      if (not Assigned(BoxedTarget)) or
+         (not BoxedTarget.AssignSymbolPropertyWithReceiver(Key.Symbol, Value,
+           TargetValue)) then
+        ThrowTypeError(SErrorCannotSetPropertyOnNonObject,
+          SSuggestCheckNullBeforeAccess);
+    end
     else
     begin
-      TargetValue := GetRegister(ATargetIndex);
       if (caoHomeObjectAllReceivers in AOptions) and
          ((TargetValue is TGocciaClassValue) or
           (TargetValue is TGocciaObjectValue)) then
