@@ -34,8 +34,10 @@ type
   TGocciaJSONStringifier = class
   private
     FGap: string;
+    FHasPropertyList: Boolean;
     FMode: TJSONStringifyMode;
     FPreferredQuoteChar: Char;
+    FPropertyList: TArray<string>;
     FTraversalStack: TList<TGocciaObjectValue>;
     class function IsIdentifierContinueText(const AText: string): Boolean; static;
     class function IsIdentifierStartText(const AText: string): Boolean; static;
@@ -56,7 +58,8 @@ type
     constructor Create; overload;
     constructor Create(const AMode: TJSONStringifyMode); overload;
     function Stringify(const AValue: TGocciaValue; const AGap: string = '';
-      const APreferredQuoteChar: Char = #0): string;
+      const APreferredQuoteChar: Char = #0;
+      const APropertyList: TStringList = nil): string;
   end;
 
 implementation
@@ -443,18 +446,34 @@ begin
 end;
 
 function TGocciaJSONStringifier.Stringify(const AValue: TGocciaValue;
-  const AGap: string; const APreferredQuoteChar: Char): string;
+  const AGap: string; const APreferredQuoteChar: Char;
+  const APropertyList: TStringList): string;
 var
+  I: Integer;
   PreviousGap: string;
+  PreviousHasPropertyList: Boolean;
   PreviousPreferredQuoteChar: Char;
+  PreviousPropertyList: TArray<string>;
   PreviousTraversalStack: TList<TGocciaObjectValue>;
 begin
   PreviousGap := FGap;
+  PreviousHasPropertyList := FHasPropertyList;
   PreviousPreferredQuoteChar := FPreferredQuoteChar;
+  PreviousPropertyList := FPropertyList;
   PreviousTraversalStack := FTraversalStack;
 
   FGap := AGap;
   FPreferredQuoteChar := APreferredQuoteChar;
+  // ES2026 §25.5.4 step 12: PropertyList lives in the JSON Serialization
+  // Record, so it applies to every object at every depth.
+  FHasPropertyList := Assigned(APropertyList);
+  FPropertyList := nil;
+  if FHasPropertyList then
+  begin
+    SetLength(FPropertyList, APropertyList.Count);
+    for I := 0 to APropertyList.Count - 1 do
+      FPropertyList[I] := APropertyList[I];
+  end;
   FTraversalStack := TList<TGocciaObjectValue>.Create;
   try
     Result := StringifyValue(AValue);
@@ -462,6 +481,8 @@ begin
     FTraversalStack.Free;
     FTraversalStack := PreviousTraversalStack;
     FPreferredQuoteChar := PreviousPreferredQuoteChar;
+    FPropertyList := PreviousPropertyList;
+    FHasPropertyList := PreviousHasPropertyList;
     FGap := PreviousGap;
   end;
 end;
@@ -713,7 +734,8 @@ begin
   if AValue is TGocciaRawJSONValue then
     Exit(TGocciaRawJSONValue(AValue).RawText);
 
-  EffectiveValue := UnboxWrappedPrimitive(AValue);
+  // ES2026 §25.5.4.2 steps 4.b-4.d: unwrap boxed primitives.
+  EffectiveValue := CoerceWrappedPrimitive(AValue);
 
   if EffectiveValue is TGocciaNullLiteralValue then
     Result := 'null'
@@ -781,6 +803,8 @@ function TGocciaJSONStringifier.StringifyObject(const AObj: TGocciaObjectValue; 
 var
   SB: TStringBuffer;
   Key: string;
+  Keys: TArray<string>;
+  PropValue: TGocciaValue;
   Value: TGocciaValue;
   HasProperties: Boolean;
   Separator, ChildIndent, CloseIndent: string;
@@ -807,9 +831,20 @@ begin
         CloseIndent := '';
       end;
 
-      for Key in AObj.GetEnumerablePropertyNames do
+      // ES2026 §25.5.4.5 SerializeJSONObject step 5: PropertyList replaces
+      // own-key enumeration; keys absent from the object serialize as
+      // undefined and are omitted below.
+      if FHasPropertyList then
+        Keys := FPropertyList
+      else
+        Keys := AObj.GetEnumerablePropertyNames;
+
+      for Key in Keys do
       begin
-        Value := ApplyToJSON(AObj.GetProperty(Key), Key);
+        PropValue := AObj.GetProperty(Key);
+        if PropValue = nil then
+          Continue;
+        Value := ApplyToJSON(PropValue, Key);
         if ShouldOmitObjectProperty(Value) then
           Continue;
 

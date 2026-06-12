@@ -171,6 +171,64 @@ describe.runIf(hasJSON5)("JSON5.stringify", () => {
     expect(JSON5.stringify({ ["a" + nbsp + "b"]: 1 })).toBe(`{'a${nbsp}b':1}`);
   });
 
+  test("uses an overridden valueOf on boxed Number values", () => {
+    const boxed = new Number(1);
+    boxed.valueOf = () => 4;
+
+    expect(JSON5.stringify({ a: boxed })).toBe("{a:4}");
+    expect(JSON5.stringify(boxed)).toBe("4");
+  });
+
+  test("uses an overridden valueOf on boxed Number values with a replacer function", () => {
+    const boxed = new Number(1);
+    boxed.valueOf = () => 4;
+
+    expect(JSON5.stringify({ a: boxed }, (key, value) => value)).toBe("{a:4}");
+  });
+
+  test("uses an overridden valueOf on boxed Number values with an array replacer", () => {
+    const boxed = new Number(1);
+    boxed.valueOf = () => 4;
+
+    expect(JSON5.stringify({ a: boxed, b: 2 }, ["a"])).toBe("{a:4}");
+  });
+
+  test("uses an overridden toString on boxed String values without calling valueOf", () => {
+    const boxed = new String("ab");
+    boxed.toString = () => "zz";
+    boxed.valueOf = () => {
+      throw new TypeError("valueOf must not be called");
+    };
+
+    expect(JSON5.stringify([boxed])).toBe("['zz']");
+  });
+
+  test("reads boxed Boolean values directly, ignoring valueOf and toString", () => {
+    const boxed = new Boolean(false);
+    boxed.valueOf = () => true;
+    boxed.toString = () => "true";
+
+    expect(JSON5.stringify([boxed])).toBe("[false]");
+  });
+
+  test("propagates valueOf exceptions from boxed Number values", () => {
+    const boxed = new Number(1);
+    boxed.valueOf = () => {
+      throw new RangeError("abrupt valueOf");
+    };
+
+    expect(() => JSON5.stringify({ a: boxed })).toThrow(RangeError);
+  });
+
+  test("propagates toString exceptions from boxed String values", () => {
+    const boxed = new String("ab");
+    boxed.toString = () => {
+      throw new RangeError("abrupt toString");
+    };
+
+    expect(() => JSON5.stringify([boxed])).toThrow(RangeError);
+  });
+
   test("space as boxed Number indents like the primitive", () => {
     const obj = { a: 1, b: [1, 2] };
 
@@ -324,5 +382,50 @@ describe.runIf(hasJSON5)("JSON5.stringify", () => {
 
     expect(() => JSON5.stringify(objectValue)).toThrow(TypeError);
     expect(() => JSON5.stringify(arrayValue)).toThrow(TypeError);
+  });
+
+  test("array replacer converts String and Number wrapper elements via toString", () => {
+    const num = new Number(10);
+    num.toString = () => "toString";
+    num.valueOf = () => {
+      throw new Error("valueOf should not be called");
+    };
+    expect(JSON5.stringify({ 10: 1, toString: 2 }, [num])).toBe(
+      "{toString:2}",
+    );
+
+    const str = new String("str");
+    str.toString = () => "toString";
+    str.valueOf = () => {
+      throw new Error("valueOf should not be called");
+    };
+    expect(JSON5.stringify({ str: 1, toString: 2 }, [str])).toBe(
+      "{toString:2}",
+    );
+  });
+
+  test("array replacer extracts each element key once even for nested objects", () => {
+    let calls = 0;
+    const key = new String("a");
+    key.toString = () => {
+      calls += 1;
+      return "a";
+    };
+    expect(JSON5.stringify({ a: { a: 1, b: 2 }, b: 3 }, [key])).toBe(
+      "{a:{a:1}}",
+    );
+    expect(calls).toBe(1);
+  });
+
+  test("array replacer de-duplicates keys and reads each property once", () => {
+    let getCalls = 0;
+    const value = {
+      get key() {
+        getCalls += 1;
+        return true;
+      },
+    };
+    expect(JSON5.stringify(value, ["key", "key"])).toBe("{key:true}");
+    expect(getCalls).toBe(1);
   });
 });

@@ -53,6 +53,8 @@ uses
   Math,
   SysUtils,
 
+  TextSemantics,
+
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
@@ -64,6 +66,7 @@ uses
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.StringObjectValue,
   Goccia.Values.SymbolValue,
+  Goccia.Values.WrapperPrimitives,
   Goccia.VM.Exception;
 
 threadvar
@@ -175,7 +178,7 @@ begin
       Result := InvokeCallable(AReviver, Args, AHolder);
     except
       on E: EGocciaBytecodeThrow do
-        raise TGocciaThrowValue.Create(E.ThrownValue);
+        ReraiseBytecodeThrow(E);
     end;
   finally
     Args.Free;
@@ -324,15 +327,11 @@ var
   SpaceCount: Integer;
 begin
   Result := '';
-  Space := ASpaceArg;
   // Step 6: If space is an Object with a [[NumberData]] slot, set space to
   // ? ToNumber(space); with a [[StringData]] slot, to ? ToString(space).
-  // The object-level ToNumberLiteral/ToStringLiteral route through ToPrimitive,
-  // so user-defined valueOf/toString are honored.
-  if Space is TGocciaNumberObjectValue then
-    Space := Space.ToNumberLiteral
-  else if Space is TGocciaStringObjectValue then
-    Space := Space.ToStringLiteral;
+  // A boxed Boolean unwraps to a boolean primitive, which matches neither
+  // branch below — same empty gap as leaving it boxed.
+  Space := CoerceWrappedPrimitive(ASpaceArg);
   // Step 7: If space is a Number, let gap be min(10, ToIntegerOrInfinity(space))
   // spaces. Clamp before Trunc so NaN, ±Infinity, and doubles beyond Integer
   // range never reach Trunc.
@@ -347,12 +346,14 @@ begin
       SpaceCount := Trunc(SpaceNumber);
     Result := StringOfChar(' ', SpaceCount);
   end
-  // Step 8: Else if space is a String, let gap be the first 10 characters.
+  // Step 8: Else if space is a String, let gap be the first 10 code units.
+  // Length() counts bytes, so it can only overestimate the code-unit count;
+  // UTF16Substring then truncates without splitting a UTF-8 sequence.
   else if Space is TGocciaStringLiteralValue then
   begin
     Result := Space.ToStringLiteral.Value;
     if Length(Result) > 10 then
-      Result := Copy(Result, 1, 10);
+      Result := UTF16Substring(Result, 0, 10);
   end;
   // Step 9: Else let gap be the empty string (already default).
 end;
@@ -424,6 +425,9 @@ begin
     Result := Replaced;
     Exit;
   end;
+
+  // Steps 4.b-4.d: unwrap boxed primitives.
+  Replaced := CoerceWrappedPrimitive(Replaced);
 
   // Step 4: If result is an Array, recursively serialize each element (SerializeJSONArray).
   if Replaced is TGocciaArrayValue then
@@ -499,37 +503,47 @@ begin
 end;
 
 // §25.5.4 step 5: Stringify with an Array replacer (PropertyList filter).
-// When the replacer is an Array, only properties whose names appear in the
-// allow-list are included in the output (SerializeJSONObject step 6a).
+// PropertyList is part of the serializer state, so it filters every object
+// at every depth (SerializeJSONObject step 5), not just the root.
 function TGocciaJSONBuiltin.StringifyWithAllowList(const AValue: TGocciaValue; const AAllowList: TGocciaArrayValue; const AGap: string): string;
 var
-  Obj: TGocciaObjectValue;
-  Filtered: TGocciaObjectValue;
+  Element: TGocciaValue;
+  HasItem: Boolean;
   I: Integer;
-  Key: string;
-  PropValue: TGocciaValue;
+  Item: string;
+  PropertyList: TStringList;
+  Seen: TDictionary<string, Boolean>;
 begin
-  // Non-object or Array values are serialized directly (PropertyList is ignored).
-  if not (AValue is TGocciaObjectValue) or (AValue is TGocciaArrayValue) then
-  begin
-    Result := FStringifier.Stringify(AValue, AGap);
-    Exit;
+  PropertyList := TStringList.Create;
+  Seen := TDictionary<string, Boolean>.Create;
+  try
+    for I := 0 to AAllowList.Elements.Count - 1 do
+    begin
+      // Step 5.b.ii: item stays undefined unless the element is a String or
+      // Number primitive, or a String/Number wrapper object — converted via
+      // ? ToString(v), which may invoke a user-defined toString. Booleans,
+      // null, undefined, and plain objects are skipped.
+      Element := AAllowList.Elements[I];
+      Item := '';
+      HasItem := (Element is TGocciaStringLiteralValue) or
+        (Element is TGocciaNumberLiteralValue) or
+        (Element is TGocciaStringObjectValue) or
+        (Element is TGocciaNumberObjectValue);
+      if HasItem then
+        Item := Element.ToStringLiteral.Value;
+      // Step 5.b.ii: append only if PropertyList does not contain item.
+      if HasItem and not Seen.ContainsKey(Item) then
+      begin
+        Seen.Add(Item, True);
+        PropertyList.Add(Item);
+      end;
+    end;
+
+    Result := FStringifier.Stringify(AValue, AGap, #0, PropertyList);
+  finally
+    Seen.Free;
+    PropertyList.Free;
   end;
-
-  // Step 4b: Build PropertyList from the Array replacer elements.
-  Obj := TGocciaObjectValue(AValue);
-  Filtered := TGocciaObjectValue.Create;
-
-  // Step 5: For each element in PropertyList, include the property if it exists.
-  for I := 0 to AAllowList.Elements.Count - 1 do
-  begin
-    Key := AAllowList.Elements[I].ToStringLiteral.Value;
-    PropValue := Obj.GetProperty(Key);
-    if (PropValue <> nil) and not (PropValue is TGocciaUndefinedLiteralValue) then
-      Filtered.AssignProperty(Key, PropValue);
-  end;
-
-  Result := FStringifier.Stringify(Filtered, AGap);
 end;
 
 // §25.5.4 JSON.stringify ( value [ , replacer [ , space ] ] )
@@ -581,12 +595,13 @@ begin
     // Step 10-12: Create wrapper, set wrapper[""] = value, return SerializeJSONProperty(state, "", wrapper).
     Result := TGocciaStringLiteralValue.Create(FStringifier.Stringify(Value, Gap));
   except
-    on E: EGocciaBytecodeThrow do
-      raise TGocciaThrowValue.Create(E.ThrownValue);
     on E: TGocciaThrowValue do
       raise;
     on E: Exception do
+    begin
+      ReraiseBytecodeThrow(E);
       ThrowTypeError(Format(SErrorJSONStringifyError, [E.Message]), SSuggestJSONFormat);
+    end;
   end;
 end;
 
