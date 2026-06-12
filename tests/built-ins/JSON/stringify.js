@@ -379,3 +379,61 @@ test("JSON.stringify preserves enumerable property order", () => {
 
   expect(JSON.stringify(obj)).toBe('{"beta":2,"alpha":1,"gamma":3}');
 });
+
+test("JSON.stringify value as boxed Number uses an overridden valueOf", () => {
+  const boxed = new Number(1);
+  boxed.valueOf = () => 4;
+
+  expect(JSON.stringify({ a: boxed })).toBe('{"a":4}');
+  expect(JSON.stringify(boxed)).toBe("4");
+});
+
+test("JSON.stringify value as boxed Number uses an overridden valueOf with a replacer function", () => {
+  const boxed = new Number(1);
+  boxed.valueOf = () => 4;
+
+  expect(JSON.stringify({ a: boxed }, (key, value) => value)).toBe('{"a":4}');
+});
+
+test("JSON.stringify value as boxed Number uses an overridden valueOf with an array replacer", () => {
+  const boxed = new Number(1);
+  boxed.valueOf = () => 4;
+
+  expect(JSON.stringify({ a: boxed, b: 2 }, ["a"])).toBe('{"a":4}');
+});
+
+test("JSON.stringify value as boxed String uses an overridden toString without calling valueOf", () => {
+  const boxed = new String("ab");
+  boxed.toString = () => "zz";
+  boxed.valueOf = () => {
+    throw new TypeError("valueOf must not be called");
+  };
+
+  expect(JSON.stringify([boxed])).toBe('["zz"]');
+});
+
+test("JSON.stringify value as boxed Boolean ignores valueOf and toString", () => {
+  const boxed = new Boolean(false);
+  boxed.valueOf = () => true;
+  boxed.toString = () => "true";
+
+  expect(JSON.stringify([boxed])).toBe("[false]");
+});
+
+test("JSON.stringify value as boxed Number propagates valueOf exceptions", () => {
+  const boxed = new Number(1);
+  boxed.valueOf = () => {
+    throw new RangeError("abrupt valueOf");
+  };
+
+  expect(() => JSON.stringify({ a: boxed })).toThrow(RangeError);
+});
+
+test("JSON.stringify value as boxed String propagates toString exceptions", () => {
+  const boxed = new String("ab");
+  boxed.toString = () => {
+    throw new RangeError("abrupt toString");
+  };
+
+  expect(() => JSON.stringify([boxed])).toThrow(RangeError);
+});

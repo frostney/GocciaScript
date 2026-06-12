@@ -78,7 +78,8 @@ uses
   Goccia.Values.HoleValue,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue,
-  Goccia.Values.WrapperPrimitives;
+  Goccia.Values.WrapperPrimitives,
+  Goccia.VM.Exception;
 
 threadvar
   FStaticMembers: TArray<TGocciaMemberDefinition>;
@@ -268,7 +269,9 @@ var
 begin
   Replaced := ApplyToJSON(AValue, AKey);
   Replaced := ApplyReplacer(AHolder, AKey, Replaced, AReplacer);
-  Replaced := UnboxWrappedPrimitive(Replaced);
+  // ES2026 §25.5.4.2 steps 4.b-4.d: coerce Number/String wrappers via
+  // ToNumber/ToString; Boolean wrappers read [[BooleanData]].
+  Replaced := CoerceWrappedPrimitive(Replaced);
 
   if Replaced is TGocciaUndefinedLiteralValue then
   begin
@@ -469,7 +472,9 @@ var
   TransformedValue: TGocciaValue;
 begin
   TransformedValue := ApplyToJSON(AValue, AKey);
-  TransformedValue := UnboxWrappedPrimitive(TransformedValue);
+  // ES2026 §25.5.4.2 steps 4.b-4.d: coerce Number/String wrappers via
+  // ToNumber/ToString; Boolean wrappers read [[BooleanData]].
+  TransformedValue := CoerceWrappedPrimitive(TransformedValue);
 
   if TransformedValue is TGocciaUndefinedLiteralValue then
     Exit(TransformedValue);
@@ -663,6 +668,8 @@ begin
       Result := TGocciaStringLiteralValue.Create(
         FStringifier.Stringify(Value, Gap, QuoteChar));
   except
+    on E: EGocciaBytecodeThrow do
+      raise TGocciaThrowValue.Create(E.ThrownValue);
     on E: TGocciaThrowValue do
       raise;
     on E: Exception do

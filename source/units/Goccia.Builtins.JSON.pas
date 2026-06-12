@@ -64,6 +64,7 @@ uses
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.StringObjectValue,
   Goccia.Values.SymbolValue,
+  Goccia.Values.WrapperPrimitives,
   Goccia.VM.Exception;
 
 threadvar
@@ -424,6 +425,10 @@ begin
     Result := Replaced;
     Exit;
   end;
+
+  // Steps 4.b-4.d: coerce Number/String wrappers via ToNumber/ToString;
+  // Boolean wrappers read [[BooleanData]].
+  Replaced := CoerceWrappedPrimitive(Replaced);
 
   // Step 4: If result is an Array, recursively serialize each element (SerializeJSONArray).
   if Replaced is TGocciaArrayValue then

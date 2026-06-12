@@ -171,6 +171,64 @@ describe.runIf(hasJSON5)("JSON5.stringify", () => {
     expect(JSON5.stringify({ ["a" + nbsp + "b"]: 1 })).toBe(`{'a${nbsp}b':1}`);
   });
 
+  test("uses an overridden valueOf on boxed Number values", () => {
+    const boxed = new Number(1);
+    boxed.valueOf = () => 4;
+
+    expect(JSON5.stringify({ a: boxed })).toBe("{a:4}");
+    expect(JSON5.stringify(boxed)).toBe("4");
+  });
+
+  test("uses an overridden valueOf on boxed Number values with a replacer function", () => {
+    const boxed = new Number(1);
+    boxed.valueOf = () => 4;
+
+    expect(JSON5.stringify({ a: boxed }, (key, value) => value)).toBe("{a:4}");
+  });
+
+  test("uses an overridden valueOf on boxed Number values with an array replacer", () => {
+    const boxed = new Number(1);
+    boxed.valueOf = () => 4;
+
+    expect(JSON5.stringify({ a: boxed, b: 2 }, ["a"])).toBe("{a:4}");
+  });
+
+  test("uses an overridden toString on boxed String values without calling valueOf", () => {
+    const boxed = new String("ab");
+    boxed.toString = () => "zz";
+    boxed.valueOf = () => {
+      throw new TypeError("valueOf must not be called");
+    };
+
+    expect(JSON5.stringify([boxed])).toBe("['zz']");
+  });
+
+  test("reads boxed Boolean values directly, ignoring valueOf and toString", () => {
+    const boxed = new Boolean(false);
+    boxed.valueOf = () => true;
+    boxed.toString = () => "true";
+
+    expect(JSON5.stringify([boxed])).toBe("[false]");
+  });
+
+  test("propagates valueOf exceptions from boxed Number values", () => {
+    const boxed = new Number(1);
+    boxed.valueOf = () => {
+      throw new RangeError("abrupt valueOf");
+    };
+
+    expect(() => JSON5.stringify({ a: boxed })).toThrow(RangeError);
+  });
+
+  test("propagates toString exceptions from boxed String values", () => {
+    const boxed = new String("ab");
+    boxed.toString = () => {
+      throw new RangeError("abrupt toString");
+    };
+
+    expect(() => JSON5.stringify([boxed])).toThrow(RangeError);
+  });
+
   test("throws on circular structures", () => {
     const objectValue = {};
     objectValue.self = objectValue;
