@@ -126,6 +126,7 @@ constructor TGocciaIntlPluralRulesValue.Create(const ALocale: string; const AOpt
 var
   Canonical: string;
   V: TGocciaValue;
+  HasMinFrac, HasMaxFrac, HasMinSig, HasMaxSig: Boolean;
 begin
   inherited Create;
   Canonical := CanonicalizeUnicodeLocaleId(ALocale);
@@ -141,6 +142,10 @@ begin
   FMaximumFractionDigits := -1;
   FMinimumSignificantDigits := -1;
   FMaximumSignificantDigits := -1;
+  HasMinFrac := False;
+  HasMaxFrac := False;
+  HasMinSig := False;
+  HasMaxSig := False;
 
   if Assigned(AOptions) then
   begin
@@ -162,48 +167,68 @@ begin
       FMinimumIntegerDigits := ToIntegerWithTruncationValue(V);
     V := AOptions.GetProperty('minimumFractionDigits');
     if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
+    begin
       FMinimumFractionDigits := ToIntegerWithTruncationValue(V);
+      HasMinFrac := True;
+    end;
     V := AOptions.GetProperty('maximumFractionDigits');
     if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
+    begin
       FMaximumFractionDigits := ToIntegerWithTruncationValue(V);
+      HasMaxFrac := True;
+    end;
     V := AOptions.GetProperty('minimumSignificantDigits');
     if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
+    begin
       FMinimumSignificantDigits := ToIntegerWithTruncationValue(V);
+      HasMinSig := True;
+    end;
     V := AOptions.GetProperty('maximumSignificantDigits');
     if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
+    begin
       FMaximumSignificantDigits := ToIntegerWithTruncationValue(V);
+      HasMaxSig := True;
+    end;
   end;
 
-  // ECMA-402 §16.1.2 / §15.1.6 SetNumberFormatDigitOptions: validate digit
-  // ranges before defaulting, matching Intl.NumberFormat.
+  // ECMA-402 §15.1.6 SetNumberFormatDigitOptions: every explicitly provided
+  // value is range-validated (presence tracked separately so negative inputs
+  // are rejected rather than mistaken for the unset sentinel), and provided
+  // minimum/maximum pairs must be ordered.
   if (FMinimumIntegerDigits < 1) or (FMinimumIntegerDigits > 21) then
     ThrowRangeError(Format(SErrorIntlDigitsOutOfRange, ['minimumIntegerDigits', 1, 21]));
-  if (FMinimumFractionDigits >= 0) and (FMinimumFractionDigits > 100) then
+  if HasMinFrac and ((FMinimumFractionDigits < 0) or (FMinimumFractionDigits > 100)) then
     ThrowRangeError(Format(SErrorIntlDigitsOutOfRange, ['minimumFractionDigits', 0, 100]));
-  if (FMaximumFractionDigits >= 0) and (FMaximumFractionDigits > 100) then
+  if HasMaxFrac and ((FMaximumFractionDigits < 0) or (FMaximumFractionDigits > 100)) then
     ThrowRangeError(Format(SErrorIntlDigitsOutOfRange, ['maximumFractionDigits', 0, 100]));
-  if (FMinimumSignificantDigits >= 0) and
+  if HasMinSig and
      ((FMinimumSignificantDigits < 1) or (FMinimumSignificantDigits > 21)) then
     ThrowRangeError(Format(SErrorIntlDigitsOutOfRange, ['minimumSignificantDigits', 1, 21]));
-  if (FMaximumSignificantDigits >= 0) and
+  if HasMaxSig and
      ((FMaximumSignificantDigits < 1) or (FMaximumSignificantDigits > 21)) then
     ThrowRangeError(Format(SErrorIntlDigitsOutOfRange, ['maximumSignificantDigits', 1, 21]));
+  if HasMinFrac and HasMaxFrac and
+     (FMinimumFractionDigits > FMaximumFractionDigits) then
+    ThrowRangeError(Format(SErrorIntlDigitsOutOfRange, ['maximumFractionDigits', FMinimumFractionDigits, 100]));
+  if HasMinSig and HasMaxSig and
+     (FMinimumSignificantDigits > FMaximumSignificantDigits) then
+    ThrowRangeError(Format(SErrorIntlDigitsOutOfRange, ['maximumSignificantDigits', FMinimumSignificantDigits, 21]));
 
-  if (FMinimumSignificantDigits >= 0) or (FMaximumSignificantDigits >= 0) then
+  if HasMinSig or HasMaxSig then
   begin
-    if FMinimumSignificantDigits < 0 then
+    if not HasMinSig then
       FMinimumSignificantDigits := 1;
-    if FMaximumSignificantDigits < 0 then
+    if not HasMaxSig then
       FMaximumSignificantDigits := 21;
     FMinimumFractionDigits := -1;
     FMaximumFractionDigits := -1;
   end
   else
   begin
-    if FMinimumFractionDigits < 0 then
+    if not HasMinFrac then
       FMinimumFractionDigits := 0;
-    if FMaximumFractionDigits < 0 then
-      FMaximumFractionDigits := 3;
+    if not HasMaxFrac then
+      FMaximumFractionDigits := Max(3, FMinimumFractionDigits);
   end;
 
   InitializePrototype;

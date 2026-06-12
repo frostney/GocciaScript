@@ -47,3 +47,22 @@ describe.runIf(isIntl)("Intl.PluralRules finite digit range validation", () => {
     expect(() => new Intl.PluralRules("en", { maximumFractionDigits: 101 })).toThrow(RangeError);
   });
 });
+
+describe.runIf(isIntl)("Intl.PluralRules digit option edge validation", () => {
+  test("negative minimumFractionDigits throws RangeError", () => {
+    expect(() => new Intl.PluralRules("en", { minimumFractionDigits: -1 })).toThrow(RangeError);
+  });
+
+  test("minimumFractionDigits above maximumFractionDigits throws RangeError", () => {
+    expect(() => new Intl.PluralRules("en", { minimumFractionDigits: 5, maximumFractionDigits: 2 })).toThrow(RangeError);
+  });
+
+  test("minimumSignificantDigits above maximumSignificantDigits throws RangeError", () => {
+    expect(() => new Intl.PluralRules("en", { minimumSignificantDigits: 10, maximumSignificantDigits: 5 })).toThrow(RangeError);
+  });
+
+  test("minimumFractionDigits alone raises the maximum to match", () => {
+    const rules = new Intl.PluralRules("en", { minimumFractionDigits: 7 });
+    expect(typeof rules.select(1)).toBe("string");
+  });
+});

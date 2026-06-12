@@ -55,3 +55,15 @@ describe("Array.prototype.at without an argument", () => {
     expect([5, 6].at()).toBe(5);
   });
 });
+
+describe("Array.prototype.at on oversized array-likes", () => {
+  test("negative index resolves against a length beyond MaxInt", () => {
+    const arrayLike = { length: 2 ** 32 + 2, [2 ** 32 + 1]: "x" };
+    expect(Array.prototype.at.call(arrayLike, -1)).toBe("x");
+  });
+
+  test("positive index beyond MaxInt reads the indexed property", () => {
+    const arrayLike = { length: 2 ** 32 + 2, [2 ** 32 + 1]: "x" };
+    expect(Array.prototype.at.call(arrayLike, 2 ** 32 + 1)).toBe("x");
+  });
+});

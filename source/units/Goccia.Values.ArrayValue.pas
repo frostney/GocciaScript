@@ -3868,25 +3868,27 @@ end;
 function TGocciaArrayValue.ArrayAt(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   View: TArrayLikeView;
-  Index: Integer;
+  Index64, Len64Val: Int64;
 begin
   // Step 1: Let O be ToObject(this value)
   View.Init(AThisValue);
 
   // Step 3: Let relativeIndex be ToIntegerOrInfinity(index)
-  // A missing index coerces to 0, not undefined.
-  Index := ToIntegerFromArgs(AArgs, 0);
+  // A missing index coerces to 0, not undefined. 64-bit math so generic
+  // array-likes with length beyond MaxInt index correctly (Len64/Get64).
+  Index64 := ToInteger64FromArgs(AArgs, 0);
+  Len64Val := View.Len64;
 
   // Step 4: If relativeIndex >= 0, let k be relativeIndex; else len + relativeIndex
-  if Index < 0 then
-    Index := View.Len + Index;
+  if Index64 < 0 then
+    Index64 := Len64Val + Index64;
 
   // Step 5: If k < 0 or k >= len, return undefined
-  if (Index < 0) or (Index >= View.Len) then
+  if (Index64 < 0) or (Index64 >= Len64Val) then
     Result := TGocciaUndefinedLiteralValue.UndefinedValue
   else
     // Step 6: Return Get(O, ToString(k))
-    Result := View.Get(Index);
+    Result := View.Get64(Index64);
 end;
 
 // ES2026 §23.1.3.36 Array.prototype.values()
