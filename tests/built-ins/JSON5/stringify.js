@@ -383,4 +383,49 @@ describe.runIf(hasJSON5)("JSON5.stringify", () => {
     expect(() => JSON5.stringify(objectValue)).toThrow(TypeError);
     expect(() => JSON5.stringify(arrayValue)).toThrow(TypeError);
   });
+
+  test("array replacer converts String and Number wrapper elements via toString", () => {
+    const num = new Number(10);
+    num.toString = () => "toString";
+    num.valueOf = () => {
+      throw new Error("valueOf should not be called");
+    };
+    expect(JSON5.stringify({ 10: 1, toString: 2 }, [num])).toBe(
+      "{toString:2}",
+    );
+
+    const str = new String("str");
+    str.toString = () => "toString";
+    str.valueOf = () => {
+      throw new Error("valueOf should not be called");
+    };
+    expect(JSON5.stringify({ str: 1, toString: 2 }, [str])).toBe(
+      "{toString:2}",
+    );
+  });
+
+  test("array replacer extracts each element key once even for nested objects", () => {
+    let calls = 0;
+    const key = new String("a");
+    key.toString = () => {
+      calls += 1;
+      return "a";
+    };
+    expect(JSON5.stringify({ a: { a: 1, b: 2 }, b: 3 }, [key])).toBe(
+      "{a:{a:1}}",
+    );
+    expect(calls).toBe(1);
+  });
+
+  test("array replacer de-duplicates keys and reads each property once", () => {
+    let getCalls = 0;
+    const value = {
+      get key() {
+        getCalls += 1;
+        return true;
+      },
+    };
+    expect(JSON5.stringify(value, ["key", "key"])).toBe("{key:true}");
+    expect(getCalls).toBe(1);
+  });
 });

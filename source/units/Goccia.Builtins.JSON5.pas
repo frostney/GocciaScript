@@ -46,7 +46,7 @@ type
       const APreferredQuoteChar: Char): string;
     function TransformWithAllowList(const AHolder: TGocciaValue;
       const AKey: string; const AValue: TGocciaValue;
-      const AAllowList: TGocciaArrayValue): TGocciaValue;
+      const AKeys: TStringList): TGocciaValue;
     function TransformWithReplacer(const AHolder: TGocciaValue;
       const AKey: string; const AValue: TGocciaValue;
       const AReplacer: TGocciaValue): TGocciaValue;
@@ -401,17 +401,13 @@ end;
 // String(v) — so a user-defined toString is honored, never a raw slot read.
 function TGocciaJSON5Builtin.TryExtractAllowListKey(const AValue: TGocciaValue;
   out AKey: string): Boolean;
-var
-  KeyValue: TGocciaValue;
 begin
-  KeyValue := AValue;
-  if (KeyValue is TGocciaNumberObjectValue) or
-    (KeyValue is TGocciaStringObjectValue) then
-    KeyValue := KeyValue.ToStringLiteral;
-  Result := (KeyValue is TGocciaStringLiteralValue) or
-    (KeyValue is TGocciaNumberLiteralValue);
+  Result := (AValue is TGocciaStringLiteralValue) or
+    (AValue is TGocciaNumberLiteralValue) or
+    (AValue is TGocciaStringObjectValue) or
+    (AValue is TGocciaNumberObjectValue);
   if Result then
-    AKey := KeyValue.ToStringLiteral.Value
+    AKey := AValue.ToStringLiteral.Value
   else
     AKey := '';
 end;
@@ -448,33 +444,56 @@ function TGocciaJSON5Builtin.StringifyWithAllowList(const AValue: TGocciaValue;
   const AAllowList: TGocciaArrayValue; const AGap: string;
   const APreferredQuoteChar: Char): string;
 var
+  I: Integer;
+  Key: string;
+  Keys: TStringList;
   PreviousTraversalStack: TList<TGocciaObjectValue>;
   Root: TGocciaObjectValue;
+  Seen: TDictionary<string, Boolean>;
   Transformed: TGocciaValue;
 begin
-  Root := TGocciaObjectValue.Create;
-  Root.AssignProperty('', AValue);
-  PreviousTraversalStack := FReplacerTraversalStack;
-  FReplacerTraversalStack := TList<TGocciaObjectValue>.Create;
+  // Upstream json5 reference: the property list is extracted and de-duplicated
+  // once, before serialization, so a wrapper's toString runs once per element.
+  Keys := TStringList.Create;
+  Seen := TDictionary<string, Boolean>.Create;
   try
-    Transformed := TransformWithAllowList(Root, '', AValue, AAllowList);
-
-    if RootResultShouldBeUndefined(Transformed) then
+    for I := 0 to AAllowList.Elements.Count - 1 do
     begin
-      Result := '';
-      Exit;
+      if not TryExtractAllowListKey(AAllowList.Elements[I], Key) then
+        Continue;
+      if Seen.ContainsKey(Key) then
+        Continue;
+      Seen.Add(Key, True);
+      Keys.Add(Key);
     end;
 
-    Result := FStringifier.Stringify(Transformed, AGap, APreferredQuoteChar);
+    Root := TGocciaObjectValue.Create;
+    Root.AssignProperty('', AValue);
+    PreviousTraversalStack := FReplacerTraversalStack;
+    FReplacerTraversalStack := TList<TGocciaObjectValue>.Create;
+    try
+      Transformed := TransformWithAllowList(Root, '', AValue, Keys);
+
+      if RootResultShouldBeUndefined(Transformed) then
+      begin
+        Result := '';
+        Exit;
+      end;
+
+      Result := FStringifier.Stringify(Transformed, AGap, APreferredQuoteChar);
+    finally
+      FReplacerTraversalStack.Free;
+      FReplacerTraversalStack := PreviousTraversalStack;
+    end;
   finally
-    FReplacerTraversalStack.Free;
-    FReplacerTraversalStack := PreviousTraversalStack;
+    Seen.Free;
+    Keys.Free;
   end;
 end;
 
 function TGocciaJSON5Builtin.TransformWithAllowList(const AHolder: TGocciaValue;
   const AKey: string; const AValue: TGocciaValue;
-  const AAllowList: TGocciaArrayValue): TGocciaValue;
+  const AKeys: TStringList): TGocciaValue;
 var
   Arr: TGocciaArrayValue;
   I: Integer;
@@ -506,7 +525,7 @@ begin
       begin
         PropValue := Arr.Elements[I];
         TransformedProp := TransformWithAllowList(Arr, IntToStr(I), PropValue,
-          AAllowList);
+          AKeys);
         NewArr.Elements.Add(TransformedProp);
       end;
     finally
@@ -525,14 +544,13 @@ begin
     Obj := TGocciaObjectValue(TransformedValue);
     NewObj := TGocciaObjectValue.Create;
     try
-      for I := 0 to AAllowList.Elements.Count - 1 do
+      for I := 0 to AKeys.Count - 1 do
       begin
-        if not TryExtractAllowListKey(AAllowList.Elements[I], Key) then
-          Continue;
+        Key := AKeys[I];
         PropValue := Obj.GetProperty(Key);
         if PropValue = nil then
           Continue;
-        TransformedProp := TransformWithAllowList(Obj, Key, PropValue, AAllowList);
+        TransformedProp := TransformWithAllowList(Obj, Key, PropValue, AKeys);
         if not (TransformedProp is TGocciaUndefinedLiteralValue) then
           NewObj.AssignProperty(Key, TransformedProp);
       end;
