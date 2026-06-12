@@ -274,6 +274,15 @@ describe.runIf(hasJSON5)("JSON5.stringify", () => {
     );
   });
 
+  test("quote as boxed String propagates toString exceptions", () => {
+    const quote = new String('"');
+    quote.toString = () => {
+      throw new RangeError("abrupt quote toString");
+    };
+
+    expect(() => JSON5.stringify({ a: 1 }, { quote })).toThrow(RangeError);
+  });
+
   test("allow-list boxed Number uses an overridden toString", () => {
     const key = new Number(3);
     key.toString = () => "a";
@@ -286,6 +295,24 @@ describe.runIf(hasJSON5)("JSON5.stringify", () => {
     key.toString = () => "b";
 
     expect(JSON5.stringify({ a: 1, b: 2 }, [key])).toBe("{b:2}");
+  });
+
+  test("allow-list boxed Number propagates toString exceptions", () => {
+    const key = new Number(3);
+    key.toString = () => {
+      throw new RangeError("abrupt allow-list toString");
+    };
+
+    expect(() => JSON5.stringify({ a: 1, 3: 3 }, [key])).toThrow(RangeError);
+  });
+
+  test("allow-list boxed String propagates toString exceptions", () => {
+    const key = new String("a");
+    key.toString = () => {
+      throw new RangeError("abrupt allow-list toString");
+    };
+
+    expect(() => JSON5.stringify({ a: 1, b: 2 }, [key])).toThrow(RangeError);
   });
 
   test("throws on circular structures", () => {
