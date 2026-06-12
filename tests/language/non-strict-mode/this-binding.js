@@ -23,6 +23,50 @@ describe("non-strict function this binding", () => {
     expect(f.apply(null, [])).toBe(globalThis);
   });
 
+  test("call boxes a primitive this to its wrapper object", () => {
+    function f() {
+      return this;
+    }
+
+    const bound = f.call(5);
+    expect(typeof bound).toBe("object");
+    expect(bound.valueOf()).toBe(5);
+  });
+
+  test("apply boxes a primitive this to its wrapper object", () => {
+    function f() {
+      return this;
+    }
+
+    const bound = f.apply("abc", []);
+    expect(typeof bound).toBe("object");
+    expect(bound.valueOf()).toBe("abc");
+  });
+
+  test("prototype getter on a primitive receiver sees the boxed this", () => {
+    Object.defineProperty(Object.prototype, "boxedSelf", {
+      get() {
+        return this;
+      },
+      configurable: true,
+    });
+    try {
+      expect((5).boxedSelf === 5).toBe(false);
+      expect(typeof (5).boxedSelf).toBe("object");
+    } finally {
+      delete Object.prototype.boxedSelf;
+    }
+  });
+
+  test("use strict directive keeps a primitive this unboxed", () => {
+    function f() {
+      "use strict";
+      return this;
+    }
+
+    expect(f.call(5)).toBe(5);
+  });
+
   test("arrow functions keep lexical this", () => {
     function outer() {
       const arrow = () => this;
