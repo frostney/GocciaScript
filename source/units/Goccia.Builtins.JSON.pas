@@ -50,6 +50,7 @@ type
 implementation
 
 uses
+  Math,
   SysUtils,
 
   Goccia.Constants.PropertyNames,
@@ -59,7 +60,9 @@ uses
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
   Goccia.Values.HoleValue,
+  Goccia.Values.NumberObjectValue,
   Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.StringObjectValue,
   Goccia.Values.SymbolValue,
   Goccia.VM.Exception;
 
@@ -179,7 +182,7 @@ begin
   end;
 end;
 
-// ES2026 §25.5.2.3 JSON.isRawJSON ( O )
+// ES2026 §25.5.1 JSON.isRawJSON ( O )
 function TGocciaJSONBuiltin.JSONIsRawJSON(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Value: TGocciaValue;
@@ -261,7 +264,7 @@ begin
   end;
 end;
 
-// ES2026 §25.5.2.4 JSON.rawJSON ( text )
+// ES2026 §25.5.3 JSON.rawJSON ( text )
 function TGocciaJSONBuiltin.JSONRawJSON(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 const
   JSON_WHITESPACE_TAB = #9;
@@ -312,35 +315,49 @@ begin
   Result := TGocciaRawJSONValue.Create(JSONString);
 end;
 
-// §25.5.2 steps 7-8: Resolve the gap (indentation) string from the space argument.
+// ES2026 §25.5.4 (sec-json.stringify) steps 6-9: Resolve the gap (indentation)
+// string from the space argument.
 function TGocciaJSONBuiltin.ResolveGap(const ASpaceArg: TGocciaValue): string;
 var
+  Space: TGocciaValue;
+  SpaceNumber: Double;
   SpaceCount: Integer;
-  I: Integer;
 begin
   Result := '';
-  // Step 7: If space is a Number, let gap be min(10, ToInteger(space)) spaces.
-  if ASpaceArg is TGocciaNumberLiteralValue then
+  Space := ASpaceArg;
+  // Step 6: If space is an Object with a [[NumberData]] slot, set space to
+  // ? ToNumber(space); with a [[StringData]] slot, to ? ToString(space).
+  // The object-level ToNumberLiteral/ToStringLiteral route through ToPrimitive,
+  // so user-defined valueOf/toString are honored.
+  if Space is TGocciaNumberObjectValue then
+    Space := Space.ToNumberLiteral
+  else if Space is TGocciaStringObjectValue then
+    Space := Space.ToStringLiteral;
+  // Step 7: If space is a Number, let gap be min(10, ToIntegerOrInfinity(space))
+  // spaces. Clamp before Trunc so NaN, ±Infinity, and doubles beyond Integer
+  // range never reach Trunc.
+  if Space is TGocciaNumberLiteralValue then
   begin
-    SpaceCount := ToIntegerValue(ASpaceArg);
-    if SpaceCount > 10 then
-      SpaceCount := 10;
-    if SpaceCount < 1 then
+    SpaceNumber := Space.ToNumberLiteral.Value;
+    if Math.IsNaN(SpaceNumber) or (SpaceNumber < 1) then
       Exit;
-    for I := 1 to SpaceCount do
-      Result := Result + ' ';
+    if SpaceNumber > 10 then
+      SpaceCount := 10
+    else
+      SpaceCount := Trunc(SpaceNumber);
+    Result := StringOfChar(' ', SpaceCount);
   end
   // Step 8: Else if space is a String, let gap be the first 10 characters.
-  else if ASpaceArg is TGocciaStringLiteralValue then
+  else if Space is TGocciaStringLiteralValue then
   begin
-    Result := ASpaceArg.ToStringLiteral.Value;
+    Result := Space.ToStringLiteral.Value;
     if Length(Result) > 10 then
       Result := Copy(Result, 1, 10);
   end;
   // Step 9: Else let gap be the empty string (already default).
 end;
 
-// ES2026 §25.5.2.2 SerializeJSONProperty ( state, key, holder ) step 1: toJSON hook.
+// ES2026 §25.5.4.2 SerializeJSONProperty ( state, key, holder ) step 2: toJSON hook.
 function TGocciaJSONBuiltin.ApplyToJSON(const AValue: TGocciaValue; const AKey: string): TGocciaValue;
 var
   ToJSONMethod: TGocciaValue;
@@ -363,7 +380,7 @@ begin
   end;
 end;
 
-// §25.5.2.1 SerializeJSONProperty — Step 2: Call replacer function.
+// §25.5.4.2 SerializeJSONProperty — step 3: Call replacer function.
 // Invokes the replacer with (key, value) bound to the holder object.
 function TGocciaJSONBuiltin.ApplyReplacer(const AHolder: TGocciaValue; const AKey: string; const AValue: TGocciaValue; const AReplacer: TGocciaValue): TGocciaValue;
 var
@@ -376,7 +393,7 @@ begin
   Result := InvokeCallable(AReplacer, Args, AHolder);
 end;
 
-// §25.5.2.1 SerializeJSONProperty ( state, key, holder ) — recursive transformation.
+// §25.5.4.2 SerializeJSONProperty ( state, key, holder ) — recursive transformation.
 // Applies the replacer function then recursively transforms nested objects/arrays.
 function TGocciaJSONBuiltin.TransformWithReplacer(const AHolder: TGocciaValue; const AKey: string; const AValue: TGocciaValue; const AReplacer: TGocciaValue): TGocciaValue;
 var
@@ -401,7 +418,7 @@ begin
     Exit;
   end;
 
-  // ES2026 §25.5.2.2 step 4a: If result has [[IsRawJSON]], pass through directly.
+  // ES2026 §25.5.4.2 step 4.a: If result has [[IsRawJSON]], pass through directly.
   if Replaced is TGocciaRawJSONValue then
   begin
     Result := Replaced;
@@ -457,7 +474,7 @@ begin
     Result := Replaced;
 end;
 
-// §25.5.2 steps 10-11: Stringify with a replacer function.
+// §25.5.4 steps 10-13: Stringify with a replacer function.
 // Wraps the value in a root object, applies the replacer recursively, then serializes.
 function TGocciaJSONBuiltin.StringifyWithReplacer(const AValue: TGocciaValue; const AReplacer: TGocciaValue; const AGap: string): string;
 var
@@ -481,7 +498,7 @@ begin
   Result := FStringifier.Stringify(Transformed, AGap);
 end;
 
-// §25.5.2 steps 4-5: Stringify with an Array replacer (PropertyList filter).
+// §25.5.4 step 5: Stringify with an Array replacer (PropertyList filter).
 // When the replacer is an Array, only properties whose names appear in the
 // allow-list are included in the output (SerializeJSONObject step 6a).
 function TGocciaJSONBuiltin.StringifyWithAllowList(const AValue: TGocciaValue; const AAllowList: TGocciaArrayValue; const AGap: string): string;
@@ -515,7 +532,7 @@ begin
   Result := FStringifier.Stringify(Filtered, AGap);
 end;
 
-// §25.5.2 JSON.stringify ( value [ , replacer [ , space ] ] )
+// §25.5.4 JSON.stringify ( value [ , replacer [ , space ] ] )
 function TGocciaJSONBuiltin.JSONStringify(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Value, ReplacerArg, SpaceArg: TGocciaValue;
@@ -533,15 +550,17 @@ begin
     Exit;
   end;
 
-  // Steps 7-9: Resolve the gap/indent string from the space argument.
   Gap := '';
-  if AArgs.Length >= 3 then
-  begin
-    SpaceArg := AArgs.GetElement(2);
-    Gap := ResolveGap(SpaceArg);
-  end;
-
   try
+    // Steps 6-9: Resolve the gap/indent string from the space argument. Space
+    // coercion can run user valueOf/toString, so it must stay inside the
+    // error-normalization block.
+    if AArgs.Length >= 3 then
+    begin
+      SpaceArg := AArgs.GetElement(2);
+      Gap := ResolveGap(SpaceArg);
+    end;
+
     if AArgs.Length >= 2 then
     begin
       ReplacerArg := AArgs.GetElement(1);
