@@ -108,18 +108,12 @@ type
   TGocciaComputedAccessOption = (
     // Get: throw TypeError on null/undefined receiver (OP_ARRAY_GET).
     caoThrowOnNullUndefined,
-    // Get: dedicated symbol-receiver arm with Symbol.prototype lookup
-    // (OP_ARRAY_GET).
-    caoSymbolReceiverArm,
     // Get/Set: route bytecode-private keys through the brand-checked
     // GetPropertyValue/SetPropertyValue paths (OP_GET_INDEX, OP_SET_INDEX).
     caoHandlePrivateKeys,
     // Get: try the VM literal-object own-data fast path before the generic
     // GetProperty walk (OP_GET_INDEX).
     caoLiteralFastPath,
-    // Get: a missed string-receiver access writes undefined via SetRegister
-    // (cell-synced) rather than a raw register write (OP_GET_INDEX).
-    caoSyncCellOnStringMiss,
     // Set: class receivers install the value with DefineProperty
     // ([pfConfigurable, pfWritable]) instead of assignment (OP_SET_INDEX).
     caoClassDefineSemantics,
@@ -237,6 +231,10 @@ type
     procedure ServeOwnNonDataProperty(const ADest: Integer;
       const AReceiver: TGocciaValue;
       const ADescriptor: TGocciaPropertyDescriptor);
+    procedure ExecGetComputedPropertyFallback(const ADest: Integer;
+      const AReceiverReg, AKeyReg: TGocciaRegister);
+    function CoerceNonStrictThisRegister(
+      const AThisRegister: TGocciaRegister): TGocciaRegister;
     procedure SetFunctionNameFromKey(const AFunction, AKey: TGocciaValue;
       const APrefixKind: UInt8);
     function EnsureCurrentDynamicVarScope: TGocciaScope;
@@ -4722,13 +4720,10 @@ var
   EffectiveThis: TGocciaValue;
   PromiseRoot: TGocciaTempRoot;
 begin
-  if (not FStrictThis) and Assigned(FVM.FGlobalThisValue) and
-     (not Assigned(AThisValue) or
-      (AThisValue is TGocciaUndefinedLiteralValue) or
-      (AThisValue is TGocciaNullLiteralValue)) then
-    EffectiveThis := FVM.FGlobalThisValue
+  if FStrictThis then
+    EffectiveThis := AThisValue
   else
-    EffectiveThis := AThisValue;
+    EffectiveThis := CoerceNonStrictThis(AThisValue, FVM.FGlobalThisValue);
 
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsGenerator then
   begin
@@ -4802,13 +4797,10 @@ var
   EffectiveThis: TGocciaValue;
   PromiseRoot: TGocciaTempRoot;
 begin
-  if (not FStrictThis) and Assigned(FVM.FGlobalThisValue) and
-     (not Assigned(AThisValue) or
-      (AThisValue is TGocciaUndefinedLiteralValue) or
-      (AThisValue is TGocciaNullLiteralValue)) then
-    EffectiveThis := FVM.FGlobalThisValue
+  if FStrictThis then
+    EffectiveThis := AThisValue
   else
-    EffectiveThis := AThisValue;
+    EffectiveThis := CoerceNonStrictThis(AThisValue, FVM.FGlobalThisValue);
 
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsGenerator then
   begin
@@ -4868,13 +4860,10 @@ var
   EffectiveThis: TGocciaValue;
   PromiseRoot: TGocciaTempRoot;
 begin
-  if (not FStrictThis) and Assigned(FVM.FGlobalThisValue) and
-     (not Assigned(AThisValue) or
-      (AThisValue is TGocciaUndefinedLiteralValue) or
-      (AThisValue is TGocciaNullLiteralValue)) then
-    EffectiveThis := FVM.FGlobalThisValue
+  if FStrictThis then
+    EffectiveThis := AThisValue
   else
-    EffectiveThis := AThisValue;
+    EffectiveThis := CoerceNonStrictThis(AThisValue, FVM.FGlobalThisValue);
 
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsGenerator then
   begin
@@ -4936,13 +4925,10 @@ var
   EffectiveThis: TGocciaValue;
   PromiseRoot: TGocciaTempRoot;
 begin
-  if (not FStrictThis) and Assigned(FVM.FGlobalThisValue) and
-     (not Assigned(AThisValue) or
-      (AThisValue is TGocciaUndefinedLiteralValue) or
-      (AThisValue is TGocciaNullLiteralValue)) then
-    EffectiveThis := FVM.FGlobalThisValue
+  if FStrictThis then
+    EffectiveThis := AThisValue
   else
-    EffectiveThis := AThisValue;
+    EffectiveThis := CoerceNonStrictThis(AThisValue, FVM.FGlobalThisValue);
 
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsGenerator then
   begin
@@ -5008,13 +4994,10 @@ var
   EffectiveThis: TGocciaValue;
   PromiseRoot: TGocciaTempRoot;
 begin
-  if (not FStrictThis) and Assigned(FVM.FGlobalThisValue) and
-     (not Assigned(AThisValue) or
-      (AThisValue is TGocciaUndefinedLiteralValue) or
-      (AThisValue is TGocciaNullLiteralValue)) then
-    EffectiveThis := FVM.FGlobalThisValue
+  if FStrictThis then
+    EffectiveThis := AThisValue
   else
-    EffectiveThis := AThisValue;
+    EffectiveThis := CoerceNonStrictThis(AThisValue, FVM.FGlobalThisValue);
 
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsGenerator then
   begin
@@ -6709,10 +6692,12 @@ end;
 
 const
   // Per-opcode option sets for the shared computed property access cores.
+  // Primitive receivers share ExecGetComputedPropertyFallback across both
+  // get opcodes — no per-opcode differences remain there since #748.
   ELEMENT_GET_OPTIONS: TGocciaComputedAccessOptions =
-    [caoThrowOnNullUndefined, caoSymbolReceiverArm];                // OP_ARRAY_GET
+    [caoThrowOnNullUndefined];                                      // OP_ARRAY_GET
   MEMBER_GET_OPTIONS: TGocciaComputedAccessOptions =
-    [caoHandlePrivateKeys, caoLiteralFastPath, caoSyncCellOnStringMiss]; // OP_GET_INDEX
+    [caoHandlePrivateKeys, caoLiteralFastPath];                     // OP_GET_INDEX
   ELEMENT_SET_OPTIONS: TGocciaComputedAccessOptions = [];           // OP_ARRAY_SET
   MEMBER_SET_OPTIONS: TGocciaComputedAccessOptions =
     [caoClassDefineSemantics, caoHomeObjectAllReceivers,
@@ -6779,7 +6764,6 @@ var
   Key: TGocciaPropertyKey;
   KeyName: string;
   ReceiverArray: TGocciaArrayValue;
-  StringIndex: Integer;
 begin
   if (caoThrowOnNullUndefined in AOptions) and
      (AObjReg.Kind in [grkUndefined, grkNull]) then
@@ -6857,42 +6841,14 @@ begin
           .GetProperty(KeyName));
     end;
   end
-  else if (AObjReg.Kind = grkObject) and
-          (AObjReg.ObjectValue is TGocciaStringLiteralValue) then
-  begin
-    if (AKeyReg.Kind = grkObject) and
-       (AKeyReg.ObjectValue is TGocciaSymbolValue) then
-      SetRegister(ADest, AObjReg.ObjectValue.Box.GetSymbolProperty(
-        TGocciaSymbolValue(AKeyReg.ObjectValue)))
-    else if TryGetArrayIndexRegister(AKeyReg, StringIndex) and
-       (StringIndex >= 0) and
-       (StringIndex < UTF16CodeUnitLength(TGocciaStringLiteralValue(
-         AObjReg.ObjectValue).Value)) then
-      SetRegister(ADest, TGocciaStringLiteralValue.Create(
-        UTF16CodeUnitAt(TGocciaStringLiteralValue(
-          AObjReg.ObjectValue).Value, StringIndex)))
-    else if caoSyncCellOnStringMiss in AOptions then
-      SetRegister(ADest, TGocciaUndefinedLiteralValue.UndefinedValue)
-    else
-      FRegisters[ADest] := RegisterUndefined;
-  end
-  else if (caoSymbolReceiverArm in AOptions) and
-          (AObjReg.Kind = grkObject) and
-          (AObjReg.ObjectValue is TGocciaSymbolValue) then
-  begin
-    if (AKeyReg.Kind = grkObject) and
-       (AKeyReg.ObjectValue is TGocciaSymbolValue) and
-       Assigned(TGocciaSymbolValue.SharedPrototype) then
-      SetRegister(ADest, TGocciaObjectValue(TGocciaSymbolValue.SharedPrototype)
-        .GetSymbolPropertyWithReceiver(
-          TGocciaSymbolValue(AKeyReg.ObjectValue),
-          AObjReg.ObjectValue))
-    else
-      SetRegister(ADest, AObjReg.ObjectValue.GetProperty(
-        KeyToPropertyNameRegister(AKeyReg)));
-  end
   else
-    FRegisters[ADest] := RegisterUndefined;
+    // Primitive receivers (strings, numbers, booleans, bigints, symbols):
+    // one shared boxed-lookup fallback for both computed-get opcodes,
+    // keeping the unboxed string fast paths and receiver-aware accessor
+    // semantics from #748. Passing this core's by-value register copies
+    // keeps the fallback's const parameters safe from register-stack
+    // reallocation on every target.
+    ExecGetComputedPropertyFallback(ADest, AObjReg, AKeyReg);
 end;
 
 procedure TGocciaVM.ExecSetComputedProperty(const ATargetIndex: Integer;
@@ -10287,9 +10243,112 @@ begin
 
   Boxed := AObject.Box;
   if Assigned(Boxed) then
-    Result := Boxed.GetProperty(AKey)
+    Result := Boxed.GetPropertyWithContext(AKey, AObject)
   else
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+// Computed GET for receivers that are not arrays, classes, or objects:
+// string/number/boolean/bigint/symbol primitives resolve through their
+// boxed object per OrdinaryGet, mirroring the interpreter. Deliberately
+// bypasses GetPropertyValue so user string keys that collide with the
+// '#slot:' private-key mangling stay ordinary property names.
+procedure TGocciaVM.ExecGetComputedPropertyFallback(const ADest: Integer;
+  const AReceiverReg, AKeyReg: TGocciaRegister);
+var
+  ReceiverValue: TGocciaValue;
+  PropKeyValue: TGocciaValue;
+  PropertyValue: TGocciaValue;
+  Boxed: TGocciaObjectValue;
+  PropertyName: string;
+  StringValue: string;
+  KeyIndex: Integer;
+begin
+  if (AReceiverReg.Kind = grkObject) and
+     (AReceiverReg.ObjectValue is TGocciaStringLiteralValue) and
+     TryGetArrayIndexRegister(AKeyReg, KeyIndex) then
+  begin
+    StringValue := TGocciaStringLiteralValue(AReceiverReg.ObjectValue).Value;
+    if (KeyIndex >= 0) and (KeyIndex < UTF16CodeUnitLength(StringValue)) then
+    begin
+      SetRegister(ADest, TGocciaStringLiteralValue.Create(
+        UTF16CodeUnitAt(StringValue, KeyIndex)));
+      Exit;
+    end;
+  end;
+
+  ReceiverValue := RegisterToValue(AReceiverReg);
+
+  if (AKeyReg.Kind = grkObject) and
+     (AKeyReg.ObjectValue is TGocciaSymbolValue) then
+    PropKeyValue := AKeyReg.ObjectValue
+  else if not TryResolveObjectKey(AKeyReg, PropKeyValue) then
+    PropKeyValue := nil;
+
+  if PropKeyValue is TGocciaSymbolValue then
+  begin
+    if (ReceiverValue is TGocciaSymbolValue) and
+       Assigned(TGocciaSymbolValue.SharedPrototype) then
+      SetRegister(ADest, TGocciaObjectValue(TGocciaSymbolValue.SharedPrototype)
+        .GetSymbolPropertyWithReceiver(
+          TGocciaSymbolValue(PropKeyValue), ReceiverValue))
+    else
+    begin
+      Boxed := ReceiverValue.Box;
+      if Assigned(Boxed) then
+        SetRegister(ADest, Boxed.GetSymbolPropertyWithReceiver(
+          TGocciaSymbolValue(PropKeyValue), ReceiverValue))
+      else
+        FRegisters[ADest] := RegisterUndefined;
+    end;
+    Exit;
+  end;
+
+  if PropKeyValue is TGocciaStringLiteralValue then
+    PropertyName := TGocciaStringLiteralValue(PropKeyValue).Value
+  else
+    PropertyName := KeyToPropertyNameRegister(AKeyReg);
+
+  if (ReceiverValue is TGocciaStringLiteralValue) and
+     (PropertyName = PROP_LENGTH) then
+  begin
+    FRegisters[ADest] := VMNumberRegister(UTF16CodeUnitLength(
+      TGocciaStringLiteralValue(ReceiverValue).Value));
+    Exit;
+  end;
+
+  PropertyValue := ReceiverValue.GetProperty(PropertyName);
+  if not Assigned(PropertyValue) then
+  begin
+    Boxed := ReceiverValue.Box;
+    if Assigned(Boxed) then
+      PropertyValue := Boxed.GetPropertyWithContext(PropertyName,
+        ReceiverValue)
+    else
+      PropertyValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+  end;
+  SetRegister(ADest, PropertyValue);
+end;
+
+// ES2026 §10.2.1.2 OrdinaryCallBindThis steps 5–6 for non-strict callees,
+// operating on registers so the f.call/f.apply fast paths avoid a
+// register/value round trip for receivers that are already objects.
+function TGocciaVM.CoerceNonStrictThisRegister(
+  const AThisRegister: TGocciaRegister): TGocciaRegister;
+begin
+  if AThisRegister.Kind in [grkUndefined, grkNull] then
+  begin
+    if Assigned(FGlobalThisValue) then
+      Result := VMValueToRegisterFast(FGlobalThisValue)
+    else
+      Result := AThisRegister;
+  end
+  else if (AThisRegister.Kind = grkObject) and
+          (AThisRegister.ObjectValue is TGocciaObjectValue) then
+    Result := AThisRegister
+  else
+    Result := VMValueToRegisterFast(CoerceNonStrictThis(
+      RegisterToValue(AThisRegister), FGlobalThisValue));
 end;
 
 procedure TGocciaVM.SetPropertyValue(const AObject: TGocciaValue;
@@ -13186,9 +13245,9 @@ begin
                     CallThisRegister := RegisterUndefined
                   else
                     CallThisRegister := FRegisters[A + 1];
-                  if (not BytecodeFunction.FStrictThis) and Assigned(FGlobalThisValue) and
-                     (CallThisRegister.Kind in [grkUndefined, grkNull]) then
-                    CallThisRegister := VMValueToRegisterFast(FGlobalThisValue);
+                  if not BytecodeFunction.FStrictThis then
+                    CallThisRegister := CoerceNonStrictThisRegister(
+                      CallThisRegister);
                   PushFrame(A, Frame.IP, Template, PrevCovLine, ProfileEntryTimestamp);
                   case B of
                     0:
@@ -13235,9 +13294,9 @@ begin
                 begin
                   ArgsArray := TGocciaArrayValue(FRegisters[A + 2].ObjectValue);
                   CallThisRegister := FRegisters[A + 1];
-                  if (not BytecodeFunction.FStrictThis) and Assigned(FGlobalThisValue) and
-                     (CallThisRegister.Kind in [grkUndefined, grkNull]) then
-                    CallThisRegister := VMValueToRegisterFast(FGlobalThisValue);
+                  if not BytecodeFunction.FStrictThis then
+                    CallThisRegister := CoerceNonStrictThisRegister(
+                      CallThisRegister);
                   PushFrame(A, Frame.IP, Template, PrevCovLine, ProfileEntryTimestamp);
                   case ArgsArray.Elements.Count of
                     0:

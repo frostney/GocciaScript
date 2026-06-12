@@ -16,6 +16,12 @@ function ToObject(const AValue: TGocciaValue): TGocciaObjectValue;
 // Throws TypeError for undefined/null and otherwise returns the original value.
 function RequireObjectCoercible(const AValue: TGocciaValue): TGocciaValue;
 
+// ES2026 §10.2.1.2 OrdinaryCallBindThis steps 5–6 for non-strict callees:
+// nullish this becomes AGlobalThis (or stays as-is when AGlobalThis is nil),
+// primitives are boxed via ToObject, objects pass through unchanged.
+function CoerceNonStrictThis(const AThisValue: TGocciaValue;
+  const AGlobalThis: TGocciaValue): TGocciaValue;
+
 // ES2026 §7.3.3 LengthOfArrayLike(obj)
 // Returns ToLength(? Get(obj, "length")).
 function LengthOfArrayLike(const AObj: TGocciaObjectValue): Integer;
@@ -70,6 +76,36 @@ begin
   if (AValue is TGocciaUndefinedLiteralValue) or (AValue is TGocciaNullLiteralValue) then
     ThrowTypeError(SErrorCannotConvertNullOrUndefined, SSuggestCheckNullBeforeAccess);
   Result := AValue;
+end;
+
+// ES2026 §10.2.1.2 OrdinaryCallBindThis steps 5–6 (non-strict callee)
+function CoerceNonStrictThis(const AThisValue: TGocciaValue;
+  const AGlobalThis: TGocciaValue): TGocciaValue;
+var
+  Boxed: TGocciaObjectValue;
+begin
+  if not Assigned(AThisValue) or
+     (AThisValue is TGocciaUndefinedLiteralValue) or
+     (AThisValue is TGocciaNullLiteralValue) then
+  begin
+    if Assigned(AGlobalThis) then
+      Result := AGlobalThis
+    else
+      Result := AThisValue;
+    Exit;
+  end;
+
+  if AThisValue is TGocciaObjectValue then
+  begin
+    Result := AThisValue;
+    Exit;
+  end;
+
+  Boxed := AThisValue.Box;
+  if Assigned(Boxed) then
+    Result := Boxed
+  else
+    Result := AThisValue;
 end;
 
 // ES2026 §7.3.3 LengthOfArrayLike(obj)

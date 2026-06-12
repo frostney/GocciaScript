@@ -76,9 +76,12 @@ uses
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
   Goccia.Values.HoleValue,
+  Goccia.Values.NumberObjectValue,
   Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.StringObjectValue,
   Goccia.Values.SymbolValue,
-  Goccia.Values.WrapperPrimitives;
+  Goccia.Values.WrapperPrimitives,
+  Goccia.VM.Exception;
 
 threadvar
   FStaticMembers: TArray<TGocciaMemberDefinition>;
@@ -323,13 +326,20 @@ begin
     Result := Replaced;
 end;
 
+// The upstream json5 stringifier never coerces quote explicitly, but every
+// use site (string concatenation, property-key lookup) applies ToString, so a
+// quote with a [[StringData]] slot honors a user-defined toString. Other
+// objects stay ignored: Goccia validates quote strictly to a single ' or ",
+// and no non-String wrapper can satisfy that.
 function TGocciaJSON5Builtin.ResolveQuoteChar(const AQuoteArg: TGocciaValue): Char;
 var
   QuoteText: string;
   QuoteValue: TGocciaValue;
 begin
   Result := #0;
-  QuoteValue := UnboxWrappedPrimitive(AQuoteArg);
+  QuoteValue := AQuoteArg;
+  if QuoteValue is TGocciaStringObjectValue then
+    QuoteValue := QuoteValue.ToStringLiteral;
   if not (QuoteValue is TGocciaStringLiteralValue) then
     Exit;
 
@@ -338,6 +348,10 @@ begin
     Result := QuoteText[1];
 end;
 
+// The upstream json5 stringifier coerces a space with a [[NumberData]] slot
+// via Number(space) and one with a [[StringData]] slot via String(space). The
+// object-level ToNumberLiteral/ToStringLiteral route through ToPrimitive, so
+// user-defined valueOf/toString are honored, matching JSON.stringify.
 function TGocciaJSON5Builtin.ResolveGap(const ASpaceArg: TGocciaValue): string;
 var
   SpaceNumber: Double;
@@ -345,25 +359,22 @@ var
   SpaceValue: TGocciaValue;
 begin
   Result := '';
-  SpaceValue := UnboxWrappedPrimitive(ASpaceArg);
+  SpaceValue := ASpaceArg;
+  if SpaceValue is TGocciaNumberObjectValue then
+    SpaceValue := SpaceValue.ToNumberLiteral
+  else if SpaceValue is TGocciaStringObjectValue then
+    SpaceValue := SpaceValue.ToStringLiteral;
+  // Clamp before Trunc so NaN, ±Infinity, and doubles beyond Integer range
+  // never reach Trunc.
   if SpaceValue is TGocciaNumberLiteralValue then
   begin
     SpaceNumber := SpaceValue.ToNumberLiteral.Value;
-    if Math.IsNaN(SpaceNumber) then
+    if Math.IsNaN(SpaceNumber) or (SpaceNumber < 1) then
       Exit;
-    if Math.IsInfinite(SpaceNumber) then
-    begin
-      if SpaceNumber > 0 then
-        SpaceCount := 10
-      else
-        Exit;
-    end
+    if SpaceNumber > 10 then
+      SpaceCount := 10
     else
       SpaceCount := Trunc(SpaceNumber);
-    if SpaceCount < 1 then
-      Exit;
-    if SpaceCount > 10 then
-      SpaceCount := 10;
     Result := StringOfChar(' ', SpaceCount);
   end
   else if SpaceValue is TGocciaStringLiteralValue then
@@ -384,12 +395,18 @@ begin
     (RootValue is TGocciaSymbolValue);
 end;
 
+// The upstream json5 stringifier admits primitive strings and numbers plus
+// Number/String wrappers as allow-list entries, coercing wrappers with
+// String(v) — so a user-defined toString is honored, never a raw slot read.
 function TGocciaJSON5Builtin.TryExtractAllowListKey(const AValue: TGocciaValue;
   out AKey: string): Boolean;
 var
   KeyValue: TGocciaValue;
 begin
-  KeyValue := UnboxWrappedPrimitive(AValue);
+  KeyValue := AValue;
+  if (KeyValue is TGocciaNumberObjectValue) or
+    (KeyValue is TGocciaStringObjectValue) then
+    KeyValue := KeyValue.ToStringLiteral;
   Result := (KeyValue is TGocciaStringLiteralValue) or
     (KeyValue is TGocciaNumberLiteralValue);
   if Result then
@@ -609,30 +626,30 @@ begin
   ReplacerArg := TGocciaUndefinedLiteralValue.UndefinedValue;
   SpaceArg := TGocciaUndefinedLiteralValue.UndefinedValue;
   UseOptionsObject := False;
-  if AArgs.Length >= 2 then
-  begin
-    ReplacerArg := AArgs.GetElement(1);
-    UseOptionsObject := (ReplacerArg is TGocciaObjectValue) and
-      not (ReplacerArg is TGocciaArrayValue) and
-      not ReplacerArg.IsCallable;
-    if UseOptionsObject then
-    begin
-      Options := TGocciaObjectValue(ReplacerArg);
-      ReplacerArg := Options.GetProperty(PROP_REPLACER);
-      SpaceArg := Options.GetProperty(PROP_SPACE);
-      QuoteChar := ResolveQuoteChar(Options.GetProperty(PROP_QUOTE));
-    end;
-  end;
-
-  if not UseOptionsObject and (AArgs.Length >= 3) then
-  begin
-    SpaceArg := AArgs.GetElement(2);
-  end;
-  Gap := ResolveGap(SpaceArg);
 
   try
-    if not UseOptionsObject and (AArgs.Length >= 2) then
+    // Quote/space coercion can run user valueOf/toString, so it must stay
+    // inside the error-normalization block.
+    if AArgs.Length >= 2 then
+    begin
       ReplacerArg := AArgs.GetElement(1);
+      UseOptionsObject := (ReplacerArg is TGocciaObjectValue) and
+        not (ReplacerArg is TGocciaArrayValue) and
+        not ReplacerArg.IsCallable;
+      if UseOptionsObject then
+      begin
+        Options := TGocciaObjectValue(ReplacerArg);
+        ReplacerArg := Options.GetProperty(PROP_REPLACER);
+        SpaceArg := Options.GetProperty(PROP_SPACE);
+        QuoteChar := ResolveQuoteChar(Options.GetProperty(PROP_QUOTE));
+      end;
+    end;
+
+    if not UseOptionsObject and (AArgs.Length >= 3) then
+    begin
+      SpaceArg := AArgs.GetElement(2);
+    end;
+    Gap := ResolveGap(SpaceArg);
 
     if not (ReplacerArg is TGocciaUndefinedLiteralValue) then
     begin
@@ -663,6 +680,8 @@ begin
       Result := TGocciaStringLiteralValue.Create(
         FStringifier.Stringify(Value, Gap, QuoteChar));
   except
+    on E: EGocciaBytecodeThrow do
+      raise TGocciaThrowValue.Create(E.ThrownValue);
     on E: TGocciaThrowValue do
       raise;
     on E: Exception do
