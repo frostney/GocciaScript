@@ -3308,7 +3308,8 @@ begin
         BoxedValue := Obj.Box;
         if Assigned(BoxedValue) then
         begin
-          Result := BoxedValue.GetSymbolProperty(TGocciaSymbolValue(PropertyKey));
+          Result := BoxedValue.GetSymbolPropertyWithReceiver(
+            TGocciaSymbolValue(PropertyKey), Obj);
           Exit;
         end;
         Result := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -3331,7 +3332,7 @@ begin
     BoxedValue := Obj.Box;
     if Assigned(BoxedValue) then
     begin
-      Result := BoxedValue.GetProperty(PropertyName);
+      Result := BoxedValue.GetPropertyWithContext(PropertyName, Obj);
     end
     else if (Obj is TGocciaNullLiteralValue) or (Obj is TGocciaUndefinedLiteralValue) then
     begin
