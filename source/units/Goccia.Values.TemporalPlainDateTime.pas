@@ -94,6 +94,7 @@ uses
   Goccia.Temporal.Options,
   Goccia.Temporal.TimeZone,
   Goccia.Temporal.Utils,
+  Goccia.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue,
@@ -138,7 +139,7 @@ var
     V := Obj.GetProperty(AName);
     if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
       ThrowTypeError(AMethod + ' requires ' + AName + ' property', SSuggestTemporalFromArg);
-    Result := Trunc(V.ToNumberLiteral.Value);
+    Result := ToIntegerWithTruncationValue(V);
   end;
 
   function GetOptionalField(const AName: string; const ADefault: Integer): Integer;
@@ -147,7 +148,7 @@ var
     if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
       Result := ADefault
     else
-      Result := Trunc(V.ToNumberLiteral.Value);
+      Result := ToIntegerWithTruncationValue(V);
   end;
 
 begin
@@ -429,7 +430,7 @@ var
     if (Val = nil) or (Val is TGocciaUndefinedLiteralValue) then
       Result := ADefault
     else
-      Result := Trunc(Val.ToNumberLiteral.Value);
+      Result := ToIntegerWithTruncationValue(Val);
   end;
 
 begin
@@ -513,16 +514,16 @@ begin
   begin
     ObjArg := TGocciaObjectValue(Arg);
     Y := 0; Mo := 0; W := 0; Da := 0; H := 0; Mi := 0; S := 0; Ms := 0; Us := 0; Ns := 0;
-    VF := ObjArg.GetProperty('years'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then Y := Trunc(VF.ToNumberLiteral.Value);
-    VF := ObjArg.GetProperty('months'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then Mo := Trunc(VF.ToNumberLiteral.Value);
-    VF := ObjArg.GetProperty('weeks'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then W := Trunc(VF.ToNumberLiteral.Value);
-    VF := ObjArg.GetProperty('days'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then Da := Trunc(VF.ToNumberLiteral.Value);
-    VF := ObjArg.GetProperty('hours'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then H := Trunc(VF.ToNumberLiteral.Value);
-    VF := ObjArg.GetProperty('minutes'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then Mi := Trunc(VF.ToNumberLiteral.Value);
-    VF := ObjArg.GetProperty('seconds'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then S := Trunc(VF.ToNumberLiteral.Value);
-    VF := ObjArg.GetProperty('milliseconds'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then Ms := Trunc(VF.ToNumberLiteral.Value);
-    VF := ObjArg.GetProperty('microseconds'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then Us := Trunc(VF.ToNumberLiteral.Value);
-    VF := ObjArg.GetProperty('nanoseconds'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then Ns := Trunc(VF.ToNumberLiteral.Value);
+    VF := ObjArg.GetProperty('years'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then Y := ToIntegerWithTruncation64Value(VF);
+    VF := ObjArg.GetProperty('months'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then Mo := ToIntegerWithTruncation64Value(VF);
+    VF := ObjArg.GetProperty('weeks'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then W := ToIntegerWithTruncation64Value(VF);
+    VF := ObjArg.GetProperty('days'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then Da := ToIntegerWithTruncation64Value(VF);
+    VF := ObjArg.GetProperty('hours'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then H := ToIntegerWithTruncation64Value(VF);
+    VF := ObjArg.GetProperty('minutes'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then Mi := ToIntegerWithTruncation64Value(VF);
+    VF := ObjArg.GetProperty('seconds'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then S := ToIntegerWithTruncation64Value(VF);
+    VF := ObjArg.GetProperty('milliseconds'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then Ms := ToIntegerWithTruncation64Value(VF);
+    VF := ObjArg.GetProperty('microseconds'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then Us := ToIntegerWithTruncation64Value(VF);
+    VF := ObjArg.GetProperty('nanoseconds'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then Ns := ToIntegerWithTruncation64Value(VF);
     Dur := TGocciaTemporalDurationValue.Create(Y, Mo, W, Da, H, Mi, S, Ms, Us, Ns);
   end
   else
@@ -587,16 +588,16 @@ begin
   begin
     ObjArg := TGocciaObjectValue(Arg);
     Y := 0; Mo := 0; W := 0; Da := 0; H := 0; Mi := 0; S := 0; Ms := 0; Us := 0; Ns := 0;
-    VF := ObjArg.GetProperty('years'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then Y := Trunc(VF.ToNumberLiteral.Value);
-    VF := ObjArg.GetProperty('months'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then Mo := Trunc(VF.ToNumberLiteral.Value);
-    VF := ObjArg.GetProperty('weeks'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then W := Trunc(VF.ToNumberLiteral.Value);
-    VF := ObjArg.GetProperty('days'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then Da := Trunc(VF.ToNumberLiteral.Value);
-    VF := ObjArg.GetProperty('hours'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then H := Trunc(VF.ToNumberLiteral.Value);
-    VF := ObjArg.GetProperty('minutes'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then Mi := Trunc(VF.ToNumberLiteral.Value);
-    VF := ObjArg.GetProperty('seconds'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then S := Trunc(VF.ToNumberLiteral.Value);
-    VF := ObjArg.GetProperty('milliseconds'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then Ms := Trunc(VF.ToNumberLiteral.Value);
-    VF := ObjArg.GetProperty('microseconds'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then Us := Trunc(VF.ToNumberLiteral.Value);
-    VF := ObjArg.GetProperty('nanoseconds'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then Ns := Trunc(VF.ToNumberLiteral.Value);
+    VF := ObjArg.GetProperty('years'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then Y := ToIntegerWithTruncation64Value(VF);
+    VF := ObjArg.GetProperty('months'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then Mo := ToIntegerWithTruncation64Value(VF);
+    VF := ObjArg.GetProperty('weeks'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then W := ToIntegerWithTruncation64Value(VF);
+    VF := ObjArg.GetProperty('days'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then Da := ToIntegerWithTruncation64Value(VF);
+    VF := ObjArg.GetProperty('hours'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then H := ToIntegerWithTruncation64Value(VF);
+    VF := ObjArg.GetProperty('minutes'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then Mi := ToIntegerWithTruncation64Value(VF);
+    VF := ObjArg.GetProperty('seconds'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then S := ToIntegerWithTruncation64Value(VF);
+    VF := ObjArg.GetProperty('milliseconds'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then Ms := ToIntegerWithTruncation64Value(VF);
+    VF := ObjArg.GetProperty('microseconds'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then Us := ToIntegerWithTruncation64Value(VF);
+    VF := ObjArg.GetProperty('nanoseconds'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then Ns := ToIntegerWithTruncation64Value(VF);
     Dur := TGocciaTemporalDurationValue.Create(Y, Mo, W, Da, H, Mi, S, Ms, Us, Ns);
   end
   else

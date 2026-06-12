@@ -113,3 +113,13 @@ describe("Number.prototype.toString", () => {
     expect("" + 1e21).toBe("1e+21");
   });
 });
+
+describe("Number.prototype.toString non-finite radix", () => {
+  test("Infinity radix throws RangeError", () => {
+    expect(() => (5).toString(Infinity)).toThrow(RangeError);
+  });
+
+  test("NaN radix throws RangeError", () => {
+    expect(() => (5).toString(NaN)).toThrow(RangeError);
+  });
+});

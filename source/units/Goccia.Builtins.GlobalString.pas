@@ -32,6 +32,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction,
@@ -68,8 +69,8 @@ begin
   I := 0;
   while I < AArgs.Length do
   begin
-    CodeUnit := Trunc(AArgs.GetElement(I).ToNumberLiteral.Value);
-    CodeUnit := CodeUnit and $FFFF;
+    // ES2026 §7.1.10 ToUint16: NaN/±0/±∞ → 0, otherwise truncate mod 2^16.
+    CodeUnit := ToUint16Value(AArgs.GetElement(I));
     if CodeUnit < $80 then
       ResultStr := ResultStr + Chr(CodeUnit)
     else if CodeUnit < $800 then
@@ -146,7 +147,7 @@ begin
   if not Assigned(RawElement) or (RawElement is TGocciaUndefinedLiteralValue) then
     LiteralSegments := 0
   else
-    LiteralSegments := Trunc(RawElement.ToNumberLiteral.Value);
+    LiteralSegments := ToLengthValue(RawElement);
 
   // ES2026 §22.1.2.4 step 5: If literalSegments <= 0, return ""
   if LiteralSegments <= 0 then

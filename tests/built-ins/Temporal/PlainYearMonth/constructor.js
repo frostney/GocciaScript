@@ -47,3 +47,13 @@ describe.runIf(isTemporal)("Temporal.PlainYearMonth constructor", () => {
     expect(() => new Temporal.PlainYearMonth(2024, 13)).toThrow(RangeError);
   });
 });
+
+describe.runIf(isTemporal)("Temporal.PlainYearMonth constructor calendar argument position", () => {
+  test("third argument is the calendar, not the reference day", () => {
+    expect(new Temporal.PlainYearMonth(2000, 5, "iso8601").toString()).toBe("2000-05");
+  });
+
+  test("fourth argument is the reference ISO day", () => {
+    expect(new Temporal.PlainYearMonth(2000, 5, "iso8601", 7).toString()).toBe("2000-05");
+  });
+});

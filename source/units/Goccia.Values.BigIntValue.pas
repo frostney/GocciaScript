@@ -64,6 +64,7 @@ uses
   Goccia.ObjectModel,
   Goccia.Realm,
   Goccia.Threading,
+  Goccia.Utils,
   Goccia.Values.BigIntObjectValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.IntlNumberFormat,
@@ -287,7 +288,7 @@ begin
     RadixValue := AArgs.GetElement(0);
     if not (RadixValue is TGocciaUndefinedLiteralValue) then
     begin
-      Radix := Trunc(RadixValue.ToNumberLiteral.Value);
+      Radix := ToIntegerValue(RadixValue);
       if (Radix < 2) or (Radix > 36) then
         ThrowRangeError(SErrorBigIntInvalidRadix, SSuggestBigIntInvalidRadix);
     end;

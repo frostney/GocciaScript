@@ -32,3 +32,9 @@ describe.runIf(isTemporal)("Temporal.PlainDateTime.from", () => {
     expect(dt.minute).toBe(45);
   });
 });
+
+describe.runIf(isTemporal)("Temporal.PlainDateTime.from non-finite fields", () => {
+  test("hour Infinity throws RangeError", () => {
+    expect(() => Temporal.PlainDateTime.from({ year: 2026, month: 6, day: 11, hour: Infinity })).toThrow(RangeError);
+  });
+});

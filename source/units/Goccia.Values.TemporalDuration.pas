@@ -103,6 +103,17 @@ type
     function DurationToLocaleString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
+// Temporal §13.20 ToIntegerIfIntegral for a Duration field: throws RangeError
+// for non-finite or non-integral numbers, preserves the full float64 integer
+// range via TBigInteger (duration components may exceed Int64, e.g.
+// nanoseconds up to ~9e24 within the 2^53-second cap).
+function DurationFieldToBigInteger(const AValue: TGocciaValue): TBigInteger;
+
+// Builds a Duration from a property-bag object, reading every component with
+// DurationFieldToBigInteger. Shared by Duration.prototype.with/add/subtract
+// and the Temporal.Duration constructor/from/compare entry points.
+function DurationFromObject(const AObj: TGocciaObjectValue): TGocciaTemporalDurationValue;
+
 implementation
 
 uses
@@ -116,6 +127,7 @@ uses
   Goccia.Temporal.DurationMath,
   Goccia.Temporal.Options,
   Goccia.Temporal.Utils,
+  Goccia.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue,
@@ -144,7 +156,6 @@ begin
 end;
 
 function ParseRelativeTo(const AValue: TGocciaValue; const AMethod: string): TTemporalDateRecord; forward;
-function ValueToBigInteger(const AValue: TGocciaValue): TBigInteger; forward;
 
 function DurationFromObject(const AObj: TGocciaObjectValue): TGocciaTemporalDurationValue;
 
@@ -157,7 +168,7 @@ function DurationFromObject(const AObj: TGocciaObjectValue): TGocciaTemporalDura
     if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
       Result := ADefault
     else
-      Result := ValueToBigInteger(V);
+      Result := DurationFieldToBigInteger(V);
   end;
 
 begin
@@ -201,8 +212,6 @@ begin
 end;
 
 function NumberToBigInteger(const AValue: Double): TBigInteger;
-var
-  DecStr: string;
 begin
   if IsNaN(AValue) or IsInfinite(AValue) then
     ThrowRangeError('Temporal.Duration field must be a finite integer',
@@ -210,11 +219,12 @@ begin
   if Frac(AValue) <> 0 then
     ThrowRangeError('Temporal.Duration field must be an integer',
       SSuggestTemporalDurationRange);
-  Str(AValue:0:0, DecStr);
-  Result := TBigInteger.FromDecimalString(DecStr);
+  // FromDouble decomposes the IEEE 754 bits, so integers beyond ~17
+  // significant decimal digits convert exactly (Str/FormatFloat round).
+  Result := TBigInteger.FromDouble(AValue);
 end;
 
-function ValueToBigInteger(const AValue: TGocciaValue): TBigInteger;
+function DurationFieldToBigInteger(const AValue: TGocciaValue): TBigInteger;
 begin
   if AValue is TGocciaNumberLiteralValue then
     Result := NumberToBigInteger(TGocciaNumberLiteralValue(AValue).Value)
@@ -243,6 +253,66 @@ begin
   Result := DurationSubDayNanosecondsBig(D)
     .Add(D.FDaysBig.Multiply(BigIntUnit(NANOSECONDS_PER_DAY)))
     .Add(D.FWeeksBig.Multiply(BigIntUnit(7)).Multiply(BigIntUnit(NANOSECONDS_PER_DAY)));
+end;
+
+// TC39 Temporal §7.5.4 DefaultTemporalLargestUnit: the unit of the largest
+// non-zero component, defaulting to nanosecond for the zero duration.
+function DurationDefaultLargestUnit(const D: TGocciaTemporalDurationValue): TTemporalUnit;
+begin
+  if not D.FYearsBig.IsZero then Exit(tuYear);
+  if not D.FMonthsBig.IsZero then Exit(tuMonth);
+  if not D.FWeeksBig.IsZero then Exit(tuWeek);
+  if not D.FDaysBig.IsZero then Exit(tuDay);
+  if not D.FHoursBig.IsZero then Exit(tuHour);
+  if not D.FMinutesBig.IsZero then Exit(tuMinute);
+  if not D.FSecondsBig.IsZero then Exit(tuSecond);
+  if not D.FMillisecondsBig.IsZero then Exit(tuMillisecond);
+  if not D.FMicrosecondsBig.IsZero then Exit(tuMicrosecond);
+  Result := tuNanosecond;
+end;
+
+// TC39 Temporal §7.5.26 TemporalDurationFromInternal step 12: each balanced
+// component is converted to a float64 Number before CreateTemporalDuration,
+// so values that round up past a validation boundary must reject (test262
+// Duration/prototype/add/result-out-of-range-3.js).
+function RoundBigToFloat64(const AValue: TBigInteger): TBigInteger;
+begin
+  Result := TBigInteger.FromDouble(AValue.ToDouble);
+end;
+
+// TC39 Temporal §7.5.24 AddDurations: reject calendar units, sum the exact
+// time durations, then rebalance to the larger of both default largest units.
+// ASign is +1 for add and -1 for subtract (subtract adds the negation).
+function AddDurationsCommon(const D, AOther: TGocciaTemporalDurationValue;
+  const ASign: Integer): TGocciaTemporalDurationValue;
+var
+  LargestUnit, OtherLargest: TTemporalUnit;
+  TotalNs, H, Mi, S, Ms, Us, Ns: TBigInteger;
+  Days: Int64;
+begin
+  LargestUnit := DurationDefaultLargestUnit(D);
+  OtherLargest := DurationDefaultLargestUnit(AOther);
+  if Ord(OtherLargest) < Ord(LargestUnit) then
+    LargestUnit := OtherLargest;
+  if LargestUnit in [tuYear, tuMonth, tuWeek] then
+    ThrowRangeError(SErrorDurationCalendarUnitsArith, SSuggestTemporalDurationArg);
+
+  TotalNs := DurationTotalNanosecondsBig(D);
+  if ASign >= 0 then
+    TotalNs := TotalNs.Add(DurationTotalNanosecondsBig(AOther))
+  else
+    TotalNs := TotalNs.Subtract(DurationTotalNanosecondsBig(AOther));
+
+  // §7.5.23 AddTimeDuration step 3: combined time beyond ±(2^53 s − 1 ns)
+  if not IsValidTimeDuration(TotalNs) then
+    ThrowRangeError(SErrorDurationTimeOutOfRange, SSuggestTemporalDurationRange);
+
+  BalanceTimeDurationToFields(TotalNs, LargestUnit, H, Mi, S, Ms, Us, Ns, Days);
+  Result := TGocciaTemporalDurationValue.CreateFromBigIntegers(
+    TBigInteger.Zero, TBigInteger.Zero, TBigInteger.Zero,
+    TBigInteger.FromInt64(Days),
+    RoundBigToFloat64(H), RoundBigToFloat64(Mi), RoundBigToFloat64(S),
+    RoundBigToFloat64(Ms), RoundBigToFloat64(Us), RoundBigToFloat64(Ns));
 end;
 
 function RoundingDivisorBig(const ASmallestUnit: TTemporalUnit; const AIncrement: Integer): TBigInteger;
@@ -646,12 +716,7 @@ begin
     Other := nil;
   end;
 
-  Result := TGocciaTemporalDurationValue.CreateFromBigIntegers(
-    D.FYearsBig.Add(Other.FYearsBig), D.FMonthsBig.Add(Other.FMonthsBig),
-    D.FWeeksBig.Add(Other.FWeeksBig), D.FDaysBig.Add(Other.FDaysBig),
-    D.FHoursBig.Add(Other.FHoursBig), D.FMinutesBig.Add(Other.FMinutesBig),
-    D.FSecondsBig.Add(Other.FSecondsBig), D.FMillisecondsBig.Add(Other.FMillisecondsBig),
-    D.FMicrosecondsBig.Add(Other.FMicrosecondsBig), D.FNanosecondsBig.Add(Other.FNanosecondsBig));
+  Result := AddDurationsCommon(D, Other, 1);
 end;
 
 function TGocciaTemporalDurationValue.DurationSubtract(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -684,12 +749,7 @@ begin
     Other := nil;
   end;
 
-  Result := TGocciaTemporalDurationValue.CreateFromBigIntegers(
-    D.FYearsBig.Subtract(Other.FYearsBig), D.FMonthsBig.Subtract(Other.FMonthsBig),
-    D.FWeeksBig.Subtract(Other.FWeeksBig), D.FDaysBig.Subtract(Other.FDaysBig),
-    D.FHoursBig.Subtract(Other.FHoursBig), D.FMinutesBig.Subtract(Other.FMinutesBig),
-    D.FSecondsBig.Subtract(Other.FSecondsBig), D.FMillisecondsBig.Subtract(Other.FMillisecondsBig),
-    D.FMicrosecondsBig.Subtract(Other.FMicrosecondsBig), D.FNanosecondsBig.Subtract(Other.FNanosecondsBig));
+  Result := AddDurationsCommon(D, Other, -1);
 end;
 
 function TGocciaTemporalDurationValue.DurationWith(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -708,7 +768,7 @@ var
     if (Val = nil) or (Val is TGocciaUndefinedLiteralValue) then
       Result := ADefault
     else
-      Result := ValueToBigInteger(Val);
+      Result := DurationFieldToBigInteger(Val);
   end;
 
 begin
@@ -1084,15 +1144,15 @@ begin
   V := AObj.GetProperty(PROP_YEAR);
   if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
     Exit;
-  ADate.Year := Trunc(V.ToNumberLiteral.Value);
+  ADate.Year := ToIntegerWithTruncationValue(V);
   V := AObj.GetProperty(PROP_MONTH);
   if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
     Exit;
-  ADate.Month := Trunc(V.ToNumberLiteral.Value);
+  ADate.Month := ToIntegerWithTruncationValue(V);
   V := AObj.GetProperty(PROP_DAY);
   if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
     Exit;
-  ADate.Day := Trunc(V.ToNumberLiteral.Value);
+  ADate.Day := ToIntegerWithTruncationValue(V);
   if not IsValidDate(ADate.Year, ADate.Month, ADate.Day) then
     Exit;
   Result := True;

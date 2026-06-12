@@ -19,3 +19,20 @@ describe.runIf(isTemporal)("Temporal.PlainTime.from", () => {
     expect(t.minute).toBe(30);
   });
 });
+
+describe.runIf(isTemporal)("Temporal.PlainTime.from non-finite fields", () => {
+  test("hour Infinity throws RangeError", () => {
+    expect(() => Temporal.PlainTime.from({ hour: Infinity })).toThrow(RangeError);
+  });
+
+  test("minute NaN throws RangeError", () => {
+    expect(() => Temporal.PlainTime.from({ hour: 1, minute: NaN })).toThrow(RangeError);
+  });
+});
+
+describe.runIf(isTemporal)("Temporal.PlainTime.prototype.add large duration components", () => {
+  test("hours beyond Int32 wrap correctly into the clock", () => {
+    const t = Temporal.PlainTime.from({ hour: 0 }).add({ hours: 3000000001 });
+    expect(t.hour).toBe(1);
+  });
+});

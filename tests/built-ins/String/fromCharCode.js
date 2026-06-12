@@ -22,3 +22,27 @@ describe("String.fromCharCode", () => {
     expect(String.fromCharCode(-1)).toBe(String.fromCharCode(65535));
   });
 });
+
+describe("String.fromCharCode ToUint16 non-finite code units", () => {
+  test("Infinity maps to code unit 0", () => {
+    const s = String.fromCharCode(Infinity);
+    expect(s.length).toBe(1);
+    expect(s.charCodeAt(0)).toBe(0);
+  });
+
+  test("-Infinity maps to code unit 0", () => {
+    expect(String.fromCharCode(-Infinity).charCodeAt(0)).toBe(0);
+  });
+
+  test("NaN maps to code unit 0", () => {
+    expect(String.fromCharCode(NaN).charCodeAt(0)).toBe(0);
+  });
+
+  test("huge positive double reduces modulo 2^16", () => {
+    expect(String.fromCharCode(1e30).charCodeAt(0)).toBe(0);
+  });
+
+  test("huge negative double reduces modulo 2^16", () => {
+    expect(String.fromCharCode(-1e30).charCodeAt(0)).toBe(0);
+  });
+});

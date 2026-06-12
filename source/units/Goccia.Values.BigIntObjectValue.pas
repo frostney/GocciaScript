@@ -40,6 +40,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.Realm,
+  Goccia.Utils,
   Goccia.Values.BigIntValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction,
@@ -123,7 +124,7 @@ begin
     RadixValue := AArgs.GetElement(0);
     if not (RadixValue is TGocciaUndefinedLiteralValue) then
     begin
-      Radix := Trunc(RadixValue.ToNumberLiteral.Value);
+      Radix := ToIntegerValue(RadixValue);
       if (Radix < 2) or (Radix > 36) then
         ThrowRangeError(SErrorBigIntInvalidRadix, SSuggestBigIntInvalidRadix);
     end;

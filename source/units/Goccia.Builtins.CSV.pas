@@ -317,9 +317,9 @@ begin
   EndOffset := TextLength;
 
   if AArgs.Length >= 3 then
-    StartOffset := Trunc(AArgs.GetElement(2).ToNumberLiteral.Value);
+    StartOffset := ToIntegerFromArgs(AArgs, 2);
   if AArgs.Length >= 4 then
-    EndOffset := Trunc(AArgs.GetElement(3).ToNumberLiteral.Value);
+    EndOffset := ToIntegerFromArgs(AArgs, 3);
 
   try
     ChunkResult := FParser.ParseChunk(Text, Delimiter, Headers,

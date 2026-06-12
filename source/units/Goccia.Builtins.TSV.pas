@@ -313,10 +313,9 @@ begin
   EndOffset := TextLength;
 
   if AArgs.Length > BaseIndex then
-    StartOffset := Trunc(AArgs.GetElement(BaseIndex).ToNumberLiteral.Value);
+    StartOffset := ToIntegerFromArgs(AArgs, BaseIndex);
   if AArgs.Length > BaseIndex + 1 then
-    EndOffset := Trunc(
-      AArgs.GetElement(BaseIndex + 1).ToNumberLiteral.Value);
+    EndOffset := ToIntegerFromArgs(AArgs, BaseIndex + 1);
 
   try
     ChunkResult := FParser.ParseChunk(Text, Headers, SkipEmptyLines,

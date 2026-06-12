@@ -308,7 +308,11 @@ begin
         LengthVal := Source.GetProperty(PROP_LENGTH);
         if Assigned(LengthVal) and not (LengthVal is TGocciaUndefinedLiteralValue) then
         begin
-          Len := Trunc(LengthVal.ToNumberLiteral.Value);
+          Len := ToLengthValue(LengthVal);
+          // ArrayCreate rejects lengths beyond what Integer-indexed storage
+          // can hold (spec caps at 2^32-1; ToLengthValue saturates at MaxInt).
+          if Len = MaxInt then
+            ThrowRangeError(SErrorInvalidArrayLength, SSuggestArrayLengthRange);
           // Step 9-10: If IsConstructor(C), Construct(C, « len »); else ArrayCreate(len)
           ResultObj := ConstructOrCreate(0);
           AddTempRootIfNeeded(ResultRoot, ResultObj);
@@ -638,7 +642,9 @@ begin
             LengthValue := Source.GetProperty(PROP_LENGTH);
             if Assigned(LengthValue) and not (LengthValue is TGocciaUndefinedLiteralValue) then
             begin
-              Len := Trunc(LengthValue.ToNumberLiteral.Value);
+              Len := ToLengthValue(LengthValue);
+              if Len = MaxInt then
+                ThrowRangeError(SErrorInvalidArrayLength, SSuggestArrayLengthRange);
               K := 0;
               // TC39 Array.fromAsync §2.1.1.1 step 5.e: Repeat, while k < len
               while K < Len do

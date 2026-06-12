@@ -69,3 +69,17 @@ describe("String.raw", () => {
     expect(() => String.raw(null)).toThrow(TypeError);
   });
 });
+
+describe("String.raw non-finite raw lengths", () => {
+  test("length -Infinity yields empty string", () => {
+    expect(String.raw({ raw: { length: -Infinity } })).toBe("");
+  });
+
+  test("length NaN yields empty string", () => {
+    expect(String.raw({ raw: { length: NaN } })).toBe("");
+  });
+
+  test("negative length yields empty string", () => {
+    expect(String.raw({ raw: { length: -5 } })).toBe("");
+  });
+});

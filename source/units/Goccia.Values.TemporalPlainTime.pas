@@ -60,11 +60,15 @@ implementation
 uses
   SysUtils,
 
+  BigInteger,
+
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.Realm,
+  Goccia.Temporal.DurationMath,
   Goccia.Temporal.Options,
   Goccia.Temporal.Utils,
+  Goccia.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue,
@@ -113,17 +117,17 @@ begin
     Obj := TGocciaObjectValue(AValue);
     H := 0; Mi := 0; S := 0; Ms := 0; Us := 0; Ns := 0;
     V := Obj.GetProperty('hour');
-    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then H := Trunc(V.ToNumberLiteral.Value);
+    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then H := ToIntegerWithTruncationValue(V);
     V := Obj.GetProperty('minute');
-    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Mi := Trunc(V.ToNumberLiteral.Value);
+    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Mi := ToIntegerWithTruncationValue(V);
     V := Obj.GetProperty('second');
-    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then S := Trunc(V.ToNumberLiteral.Value);
+    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then S := ToIntegerWithTruncationValue(V);
     V := Obj.GetProperty('millisecond');
-    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Ms := Trunc(V.ToNumberLiteral.Value);
+    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Ms := ToIntegerWithTruncationValue(V);
     V := Obj.GetProperty('microsecond');
-    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Us := Trunc(V.ToNumberLiteral.Value);
+    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Us := ToIntegerWithTruncationValue(V);
     V := Obj.GetProperty('nanosecond');
-    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Ns := Trunc(V.ToNumberLiteral.Value);
+    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Ns := ToIntegerWithTruncationValue(V);
     Result := TGocciaTemporalPlainTimeValue.Create(H, Mi, S, Ms, Us, Ns);
   end
   else
@@ -275,7 +279,7 @@ var
     if (Val = nil) or (Val is TGocciaUndefinedLiteralValue) then
       Result := ADefault
     else
-      Result := Trunc(Val.ToNumberLiteral.Value);
+      Result := ToIntegerWithTruncationValue(Val);
   end;
 
 begin
@@ -302,6 +306,7 @@ var
   DurRec: TTemporalDurationRecord;
   ExtraDays: Int64;
   Balanced: TTemporalTimeRecord;
+  DurTimeNs: TBigInteger;
   Obj: TGocciaObjectValue;
   VH: TGocciaValue;
   H, Mi, S, Ms, Us, Ns: Int64;
@@ -326,17 +331,17 @@ begin
     Obj := TGocciaObjectValue(Arg);
     H := 0; Mi := 0; S := 0; Ms := 0; Us := 0; Ns := 0;
     VH := Obj.GetProperty('hours');
-    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then H := Trunc(VH.ToNumberLiteral.Value);
+    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then H := ToIntegerWithTruncation64Value(VH);
     VH := Obj.GetProperty('minutes');
-    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then Mi := Trunc(VH.ToNumberLiteral.Value);
+    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then Mi := ToIntegerWithTruncation64Value(VH);
     VH := Obj.GetProperty('seconds');
-    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then S := Trunc(VH.ToNumberLiteral.Value);
+    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then S := ToIntegerWithTruncation64Value(VH);
     VH := Obj.GetProperty('milliseconds');
-    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then Ms := Trunc(VH.ToNumberLiteral.Value);
+    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then Ms := ToIntegerWithTruncation64Value(VH);
     VH := Obj.GetProperty('microseconds');
-    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then Us := Trunc(VH.ToNumberLiteral.Value);
+    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then Us := ToIntegerWithTruncation64Value(VH);
     VH := Obj.GetProperty('nanoseconds');
-    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then Ns := Trunc(VH.ToNumberLiteral.Value);
+    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then Ns := ToIntegerWithTruncation64Value(VH);
     Dur := TGocciaTemporalDurationValue.Create(0, 0, 0, 0, H, Mi, S, Ms, Us, Ns);
   end
   else
@@ -345,13 +350,16 @@ begin
     Dur := nil;
   end;
 
+  // PlainTime arithmetic is modulo one day, so reduce the duration's exact
+  // sub-day time (BigInteger — components may exceed Int64) before balancing;
+  // summing per-component Int64 values would overflow for large durations.
+  DurTimeNs := TimeDurationFromComponents(Dur.HoursBig, Dur.MinutesBig,
+    Dur.SecondsBig, Dur.MillisecondsBig, Dur.MicrosecondsBig,
+    Dur.NanosecondsBig).Modulo(TBigInteger.FromInt64(NANOSECONDS_PER_DAY));
+
   Balanced := BalanceTime(
-    T.FHour + Dur.Hours,
-    T.FMinute + Dur.Minutes,
-    T.FSecond + Dur.Seconds,
-    T.FMillisecond + Dur.Milliseconds,
-    T.FMicrosecond + Dur.Microseconds,
-    T.FNanosecond + Dur.Nanoseconds,
+    T.FHour, T.FMinute, T.FSecond, T.FMillisecond, T.FMicrosecond,
+    T.FNanosecond + DurTimeNs.ToInt64,
     ExtraDays);
 
   Result := TGocciaTemporalPlainTimeValue.Create(
@@ -371,6 +379,7 @@ var
   DurRec: TTemporalDurationRecord;
   ExtraDays: Int64;
   Balanced: TTemporalTimeRecord;
+  DurTimeNs: TBigInteger;
   Obj: TGocciaObjectValue;
   VH: TGocciaValue;
   H, Mi, S, Ms, Us, Ns: Int64;
@@ -395,17 +404,17 @@ begin
     Obj := TGocciaObjectValue(Arg);
     H := 0; Mi := 0; S := 0; Ms := 0; Us := 0; Ns := 0;
     VH := Obj.GetProperty('hours');
-    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then H := Trunc(VH.ToNumberLiteral.Value);
+    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then H := ToIntegerWithTruncation64Value(VH);
     VH := Obj.GetProperty('minutes');
-    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then Mi := Trunc(VH.ToNumberLiteral.Value);
+    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then Mi := ToIntegerWithTruncation64Value(VH);
     VH := Obj.GetProperty('seconds');
-    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then S := Trunc(VH.ToNumberLiteral.Value);
+    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then S := ToIntegerWithTruncation64Value(VH);
     VH := Obj.GetProperty('milliseconds');
-    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then Ms := Trunc(VH.ToNumberLiteral.Value);
+    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then Ms := ToIntegerWithTruncation64Value(VH);
     VH := Obj.GetProperty('microseconds');
-    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then Us := Trunc(VH.ToNumberLiteral.Value);
+    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then Us := ToIntegerWithTruncation64Value(VH);
     VH := Obj.GetProperty('nanoseconds');
-    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then Ns := Trunc(VH.ToNumberLiteral.Value);
+    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then Ns := ToIntegerWithTruncation64Value(VH);
     Dur := TGocciaTemporalDurationValue.Create(0, 0, 0, 0, H, Mi, S, Ms, Us, Ns);
   end
   else
@@ -414,13 +423,14 @@ begin
     Dur := nil;
   end;
 
+  // See TimeAdd: reduce the exact sub-day time before balancing.
+  DurTimeNs := TimeDurationFromComponents(Dur.HoursBig, Dur.MinutesBig,
+    Dur.SecondsBig, Dur.MillisecondsBig, Dur.MicrosecondsBig,
+    Dur.NanosecondsBig).Modulo(TBigInteger.FromInt64(NANOSECONDS_PER_DAY));
+
   Balanced := BalanceTime(
-    T.FHour - Dur.Hours,
-    T.FMinute - Dur.Minutes,
-    T.FSecond - Dur.Seconds,
-    T.FMillisecond - Dur.Milliseconds,
-    T.FMicrosecond - Dur.Microseconds,
-    T.FNanosecond - Dur.Nanoseconds,
+    T.FHour, T.FMinute, T.FSecond, T.FMillisecond, T.FMicrosecond,
+    T.FNanosecond - DurTimeNs.ToInt64,
     ExtraDays);
 
   Result := TGocciaTemporalPlainTimeValue.Create(
@@ -541,6 +551,7 @@ var
   TotalNs, Divisor, Rounded: Int64;
   ExtraDays: Int64;
   Balanced: TTemporalTimeRecord;
+  DurTimeNs: TBigInteger;
   SmallestUnit: TTemporalUnit;
   Mode: TTemporalRoundingMode;
   Increment: Integer;

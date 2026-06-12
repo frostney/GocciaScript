@@ -71,6 +71,7 @@ uses
   Goccia.ObjectModel.Types,
   Goccia.Realm,
   Goccia.Temporal.Utils,
+  Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction,
@@ -982,7 +983,7 @@ begin
   ReadValidatedStringOption(AOptions, 'second', FSecond);
   V := AOptions.GetProperty('fractionalSecondDigits');
   if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-    FFractionalSecondDigits := Trunc(V.ToNumberLiteral.Value);
+    FFractionalSecondDigits := ToIntegerWithTruncationValue(V);
   TryReadStringOption(AOptions, 'timeZoneName', FTimeZoneName);
 end;
 

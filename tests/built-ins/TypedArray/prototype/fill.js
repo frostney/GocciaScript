@@ -74,3 +74,17 @@ describe("TypedArray.prototype.fill", () => {
     });
   });
 });
+
+describe("TypedArray.prototype.fill non-finite range arguments", () => {
+  test("Infinity start leaves the array unchanged", () => {
+    const ta = new Int8Array([1, 2]);
+    ta.fill(9, Infinity);
+    expect(Array.from(ta)).toEqual([1, 2]);
+  });
+
+  test("-Infinity end leaves the array unchanged", () => {
+    const ta = new Int8Array([1, 2]);
+    ta.fill(9, 0, -Infinity);
+    expect(Array.from(ta)).toEqual([1, 2]);
+  });
+});

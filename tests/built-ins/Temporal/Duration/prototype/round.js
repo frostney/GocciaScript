@@ -202,3 +202,14 @@ describe.runIf(isTemporal)("Temporal.Duration.prototype.round", () => {
     expect(() => d.round({ smallestUnit: "months", relativeTo: { year: 2024, month: 2, day: 30 } })).toThrow();
   });
 });
+
+describe.runIf(typeof Temporal !== "undefined")("Temporal.Duration.prototype.round at the duration maximum", () => {
+  test("largest valid single-component durations round to day with zoned relativeTo throws RangeError", () => {
+    const zdt = new Temporal.ZonedDateTime(0n, "UTC");
+    const options = { smallestUnit: "day", largestUnit: "day", relativeTo: zdt };
+    const maxUs = 9_007_199_254_740_991_475_711;
+    const d = Temporal.Duration.from({ microseconds: maxUs });
+    expect(d.microseconds).toBe(maxUs);
+    expect(() => d.round(options)).toThrow(RangeError);
+  });
+});

@@ -206,6 +206,7 @@ resourcestring
   SErrorTemporalInvalidISOStringFor = 'Invalid ISO %s string for %s';
 
   // Temporal prototype errors — Duration
+  SErrorDurationCalendarUnitsArith = 'Durations with years, months, or weeks cannot be added or subtracted';
   SErrorDurationMixedSigns = 'Duration fields must not have mixed signs';
   SErrorDurationCalendarOutOfRange = 'Duration calendar fields (years, months, weeks) must have absolute value less than 2^32';
   SErrorDurationTimeOutOfRange = 'Duration time fields out of range: normalized seconds must have absolute value less than 2^53';
@@ -645,7 +646,10 @@ resourcestring
   SErrorToPrimitiveNotCallable = 'Symbol.toPrimitive is not a function';
 
   // Number method errors
+  SErrorNumberNotFinite = 'Value must be finite';
   SErrorToExponentialArgRange = 'toExponential() argument must be between 0 and 100';
+  SErrorToFixedArgRange = 'toFixed() digits argument must be between 0 and 100';
+  SErrorToPrecisionArgRange = 'toPrecision() argument must be between 1 and 100';
 
   // Set brand-check errors
   SErrorSetHasNonSet = 'Set.prototype.has called on non-Set object';

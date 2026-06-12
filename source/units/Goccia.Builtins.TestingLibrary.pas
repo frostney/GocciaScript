@@ -295,6 +295,7 @@ uses
   Goccia.MicrotaskQueue,
   Goccia.RegExp.Runtime,
   Goccia.Timeout,
+  Goccia.Utils,
   Goccia.Values.ClassHelper,
   Goccia.Values.ClassValue,
   Goccia.Values.Error,
@@ -1676,7 +1677,7 @@ begin
 
   // Default precision to 2 decimal places if not specified
   if AArgs.Length >= 2 then
-    Precision := Trunc(AArgs.GetElement(1).ToNumberLiteral.Value)
+    Precision := ToIntegerFromArgs(AArgs, 1)
   else
     Precision := 2;
 
@@ -2618,13 +2619,24 @@ var
 
   function FormatPlaceholder(const AValue: TGocciaValue;
     const AToken: Char): string;
+  var
+    NumVal: TGocciaNumberLiteralValue;
   begin
     if not Assigned(AValue) then
       Exit('%' + AToken);
 
     case AToken of
       'd', 'i':
-        Result := IntToStr(Trunc(AValue.ToNumberLiteral.Value));
+      begin
+        // NaN/±∞ and doubles beyond Integer cannot be Trunc'd; render them
+        // like %f so test.each("%d") titles never crash on non-finite rows.
+        NumVal := AValue.ToNumberLiteral;
+        if NumVal.IsNaN or NumVal.IsInfinity or NumVal.IsNegativeInfinity or
+           (Abs(NumVal.Value) > MaxInt) then
+          Result := FormatDouble(NumVal.Value)
+        else
+          Result := IntToStr(Trunc(NumVal.Value));
+      end;
       'f':
         Result := FormatDouble(AValue.ToNumberLiteral.Value);
       'j', 'o', 's':

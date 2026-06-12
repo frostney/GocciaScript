@@ -49,6 +49,7 @@ uses
   Goccia.FFI.Types,
   Goccia.GarbageCollector,
   Goccia.Realm,
+  Goccia.Utils,
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
@@ -151,22 +152,22 @@ begin
           fftI8, fftI16, fftI32:
           begin
             NumValue := ArgValue.ToNumberLiteral;
-            IntArgs[I] := PtrInt(Trunc(NumValue.Value));
+            IntArgs[I] := PtrInt(ToInt32Value(NumValue));
           end;
           fftI64:
           begin
             NumValue := ArgValue.ToNumberLiteral;
-            IntArgs[I] := PtrInt(Int64(Trunc(NumValue.Value)));
+            IntArgs[I] := PtrInt(ToInt64Value(NumValue));
           end;
           fftU8, fftU16, fftU32:
           begin
             NumValue := ArgValue.ToNumberLiteral;
-            IntArgs[I] := PtrInt(PtrUInt(Trunc(NumValue.Value)));
+            IntArgs[I] := PtrInt(PtrUInt(ToUint32Value(NumValue)));
           end;
           fftU64:
           begin
             NumValue := ArgValue.ToNumberLiteral;
-            IntArgs[I] := PtrInt(QWord(Trunc(NumValue.Value)));
+            IntArgs[I] := PtrInt(QWord(ToInt64Value(NumValue)));
           end;
           fftPointer:
           begin
@@ -265,22 +266,22 @@ begin
             fftI8, fftI16, fftI32:
             begin
               NumValue := ArgValue.ToNumberLiteral;
-              {$IFDEF MSWINDOWS}State.Gpr[I]{$ELSE}State.Gpr[GprIdx]{$ENDIF} := PtrInt(Trunc(NumValue.Value));
+              {$IFDEF MSWINDOWS}State.Gpr[I]{$ELSE}State.Gpr[GprIdx]{$ENDIF} := PtrInt(ToInt32Value(NumValue));
             end;
             fftI64:
             begin
               NumValue := ArgValue.ToNumberLiteral;
-              {$IFDEF MSWINDOWS}State.Gpr[I]{$ELSE}State.Gpr[GprIdx]{$ENDIF} := PtrInt(Int64(Trunc(NumValue.Value)));
+              {$IFDEF MSWINDOWS}State.Gpr[I]{$ELSE}State.Gpr[GprIdx]{$ENDIF} := PtrInt(ToInt64Value(NumValue));
             end;
             fftU8, fftU16, fftU32:
             begin
               NumValue := ArgValue.ToNumberLiteral;
-              {$IFDEF MSWINDOWS}State.Gpr[I]{$ELSE}State.Gpr[GprIdx]{$ENDIF} := PtrInt(PtrUInt(Trunc(NumValue.Value)));
+              {$IFDEF MSWINDOWS}State.Gpr[I]{$ELSE}State.Gpr[GprIdx]{$ENDIF} := PtrInt(PtrUInt(ToUint32Value(NumValue)));
             end;
             fftU64:
             begin
               NumValue := ArgValue.ToNumberLiteral;
-              {$IFDEF MSWINDOWS}State.Gpr[I]{$ELSE}State.Gpr[GprIdx]{$ENDIF} := PtrInt(QWord(Trunc(NumValue.Value)));
+              {$IFDEF MSWINDOWS}State.Gpr[I]{$ELSE}State.Gpr[GprIdx]{$ENDIF} := PtrInt(QWord(ToInt64Value(NumValue)));
             end;
             fftPointer:
             begin
@@ -358,9 +359,9 @@ begin
               else
                 IntVal := 0;
             fftI8, fftI16, fftI32:
-              IntVal := LongInt(Trunc(ArgValue.ToNumberLiteral.Value));
+              IntVal := ToInt32Value(ArgValue);
             fftU8, fftU16, fftU32:
-              IntVal := LongInt(LongWord(Trunc(ArgValue.ToNumberLiteral.Value)));
+              IntVal := LongInt(ToUint32Value(ArgValue));
             fftPointer:
             begin
               if ArgValue is TGocciaFFIPointerValue then
@@ -400,7 +401,7 @@ begin
               Inc(TempCount);
             end;
           else
-            IntVal := LongInt(Trunc(ArgValue.ToNumberLiteral.Value));
+            IntVal := ToInt32Value(ArgValue);
           end;
           Move(IntVal, State.StackBuf[StackOffset], 4);
           Inc(StackOffset, 4);

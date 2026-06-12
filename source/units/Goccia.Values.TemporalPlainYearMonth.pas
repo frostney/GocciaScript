@@ -61,6 +61,7 @@ uses
   Goccia.Realm,
   Goccia.Temporal.Options,
   Goccia.Temporal.Utils,
+  Goccia.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue,
@@ -117,8 +118,8 @@ begin
     if (VMonth = nil) or (VMonth is TGocciaUndefinedLiteralValue) then
       ThrowTypeError(AMethod + ' requires year and month properties', SSuggestTemporalFromArg);
     Result := TGocciaTemporalPlainYearMonthValue.Create(
-      Trunc(V.ToNumberLiteral.Value),
-      Trunc(VMonth.ToNumberLiteral.Value));
+      ToIntegerWithTruncationValue(V),
+      ToIntegerWithTruncationValue(VMonth));
   end
   else
   begin
@@ -296,7 +297,7 @@ var
     if (Val = nil) or (Val is TGocciaUndefinedLiteralValue) then
       Result := ADefault
     else
-      Result := Trunc(Val.ToNumberLiteral.Value);
+      Result := ToIntegerWithTruncationValue(Val);
   end;
 
 begin
@@ -329,7 +330,7 @@ var
     if (Val = nil) or (Val is TGocciaUndefinedLiteralValue) then
       Result := ADefault
     else
-      Result := Trunc(Val.ToNumberLiteral.Value);
+      Result := ToIntegerWithTruncation64Value(Val);
   end;
 
 begin
@@ -403,7 +404,7 @@ var
     if (Val = nil) or (Val is TGocciaUndefinedLiteralValue) then
       Result := ADefault
     else
-      Result := Trunc(Val.ToNumberLiteral.Value);
+      Result := ToIntegerWithTruncation64Value(Val);
   end;
 
 begin
@@ -640,7 +641,7 @@ begin
   if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
     ThrowTypeError(SErrorPlainYearMonthToPlainDateRequiresDay, SSuggestTemporalFromArg);
 
-  Day := Trunc(V.ToNumberLiteral.Value);
+  Day := ToIntegerWithTruncationValue(V);
   Result := TGocciaTemporalPlainDateValue.Create(YM.FYear, YM.FMonth, Day);
 end;
 

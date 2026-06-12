@@ -67,3 +67,13 @@ test("Object() boxed BigInt in arithmetic", () => {
   expect(Object(1n) - 1n === 0n).toBe(true);
   expect(Object(2n) * 3n === 6n).toBe(true);
 });
+
+describe("BigInt from large integral doubles is exact", () => {
+  test("values beyond 17 significant decimal digits convert without rounding drift", () => {
+    expect(BigInt(9007199254740991475711)).toBe(9007199254740990951424n);
+  });
+
+  test("negative large integral doubles convert exactly", () => {
+    expect(BigInt(-9007199254740991475711)).toBe(-9007199254740990951424n);
+  });
+});

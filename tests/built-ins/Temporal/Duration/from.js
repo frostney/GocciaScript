@@ -30,3 +30,18 @@ describe.runIf(isTemporal)("Temporal.Duration.from", () => {
     expect(Temporal.Duration.from(d).toString()).toBe("PT17280000000000S");
   });
 });
+
+describe.runIf(typeof Temporal !== "undefined")("Temporal.Duration.from components beyond Int64", () => {
+  test("nanoseconds near the 2^53-second cap are preserved exactly", () => {
+    const d = Temporal.Duration.from({ nanoseconds: 9.007199254740991e24 });
+    expect(d.nanoseconds).toBe(9.007199254740991e24);
+  });
+
+  test("nanoseconds past the 2^53-second cap throw RangeError", () => {
+    expect(() => Temporal.Duration.from({ nanoseconds: 1e30 })).toThrow(RangeError);
+  });
+
+  test("non-integral fields throw RangeError", () => {
+    expect(() => Temporal.Duration.from({ seconds: 1.5 })).toThrow(RangeError);
+  });
+});

@@ -121,3 +121,13 @@ describe("TypedArray.prototype.slice", () => {
     expect(ta.slice(start).length).toBe(0);
   });
 });
+
+describe("TypedArray.prototype.slice non-finite range arguments", () => {
+  test("Infinity start yields an empty copy", () => {
+    expect(new Int8Array([1, 2]).slice(Infinity).length).toBe(0);
+  });
+
+  test("-Infinity start copies the whole array", () => {
+    expect(Array.from(new Int8Array([1, 2]).slice(-Infinity))).toEqual([1, 2]);
+  });
+});

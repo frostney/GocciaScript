@@ -39,3 +39,31 @@ describe("Array.prototype.at", () => {
     expect(Array.prototype.at.call(arrayLike, -1)).toBe('c');
   });
 });
+
+describe("Array.prototype.at non-finite index", () => {
+  test("Infinity returns undefined", () => {
+    expect([1, 2].at(Infinity)).toBeUndefined();
+  });
+
+  test("-Infinity returns undefined", () => {
+    expect([1, 2].at(-Infinity)).toBeUndefined();
+  });
+});
+
+describe("Array.prototype.at without an argument", () => {
+  test("missing index coerces to 0", () => {
+    expect([5, 6].at()).toBe(5);
+  });
+});
+
+describe("Array.prototype.at on oversized array-likes", () => {
+  test("negative index resolves against a length beyond MaxInt", () => {
+    const arrayLike = { length: 2 ** 32 + 2, [2 ** 32 + 1]: "x" };
+    expect(Array.prototype.at.call(arrayLike, -1)).toBe("x");
+  });
+
+  test("positive index beyond MaxInt reads the indexed property", () => {
+    const arrayLike = { length: 2 ** 32 + 2, [2 ** 32 + 1]: "x" };
+    expect(Array.prototype.at.call(arrayLike, 2 ** 32 + 1)).toBe("x");
+  });
+});

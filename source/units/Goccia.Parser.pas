@@ -7198,6 +7198,19 @@ begin
     end;
   end;
 
+  // Plain integer literals past ~15 digits: FPC's TryStrToFloat is not
+  // correctly rounded near the 53-bit boundary (e.g. 9007199254740991475711
+  // parses one ulp high), so convert exactly via BigInteger and round once.
+  if Length(NormalizedLexeme) > 15 then
+  begin
+    I := 1;
+    while (I <= Length(NormalizedLexeme)) and
+          (NormalizedLexeme[I] in ['0'..'9']) do
+      Inc(I);
+    if I > Length(NormalizedLexeme) then
+      Exit(TBigInteger.FromDecimalString(NormalizedLexeme).ToDouble);
+  end;
+
   // Regular decimal numbers (including scientific notation)
   if TryStrToFloat(NormalizedLexeme, Value) then
     Exit(Value);

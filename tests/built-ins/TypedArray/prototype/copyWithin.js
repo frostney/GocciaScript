@@ -56,3 +56,17 @@ describe("TypedArray.prototype.copyWithin", () => {
     expect(ta[4]).toBe(5n);
   });
 });
+
+describe("TypedArray.prototype.copyWithin non-finite arguments", () => {
+  test("Infinity target leaves the array unchanged", () => {
+    const ta = new Int8Array([1, 2, 3]);
+    ta.copyWithin(Infinity, 0);
+    expect(Array.from(ta)).toEqual([1, 2, 3]);
+  });
+
+  test("Infinity start leaves the array unchanged", () => {
+    const ta = new Int8Array([1, 2, 3]);
+    ta.copyWithin(0, Infinity);
+    expect(Array.from(ta)).toEqual([1, 2, 3]);
+  });
+});

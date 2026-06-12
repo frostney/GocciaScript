@@ -47,3 +47,21 @@ describe("Number.prototype.toFixed", () => {
     expect(`$${total.toFixed(2)}`).toBe("$6.50");
   });
 });
+
+describe("Number.prototype.toFixed digits range", () => {
+  test("Infinity digits throws RangeError", () => {
+    expect(() => (5).toFixed(Infinity)).toThrow(RangeError);
+  });
+
+  test("-Infinity digits throws RangeError", () => {
+    expect(() => (5).toFixed(-Infinity)).toThrow(RangeError);
+  });
+
+  test("out-of-range digits throw even when this value is NaN", () => {
+    expect(() => NaN.toFixed(101)).toThrow(RangeError);
+  });
+
+  test("NaN digits count as 0", () => {
+    expect((5).toFixed(NaN)).toBe("5");
+  });
+});

@@ -16,10 +16,10 @@ function CreateListFromArrayLike(const AValue: TGocciaValue; const AMethodName: 
 implementation
 
 uses
-  Math,
   SysUtils,
 
   Goccia.Constants.PropertyNames,
+  Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectValue;
@@ -36,7 +36,6 @@ var
   ArrVal: TGocciaArrayValue;
   ArrayObj: TGocciaObjectValue;
   LengthProp: TGocciaValue;
-  LengthValue: Double;
   Len, I: Integer;
   Element: TGocciaValue;
 begin
@@ -64,16 +63,7 @@ begin
      (LengthProp is TGocciaNullLiteralValue) then
     Len := 0
   else
-  begin
-    LengthValue := LengthProp.ToNumberLiteral.Value;
-    // Trunc raises EInvalidOp for NaN/Infinity in FPC 3.2.2
-    if IsNan(LengthValue) or (LengthValue <= 0) then
-      Len := 0
-    else if LengthValue >= MaxInt then
-      Len := MaxInt
-    else
-      Len := Trunc(LengthValue);
-  end;
+    Len := ToLengthValue(LengthProp);
 
   // Guard against pathological lengths before allocating
   if Len > MAX_ARGUMENTS_LIST_LENGTH then

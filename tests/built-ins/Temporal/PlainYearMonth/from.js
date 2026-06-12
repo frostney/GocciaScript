@@ -61,3 +61,9 @@ describe.runIf(isTemporal)("Temporal.PlainYearMonth.from", () => {
     expect(ym.month).toBe(3);
   });
 });
+
+describe.runIf(isTemporal)("Temporal.PlainYearMonth.from non-finite fields", () => {
+  test("year Infinity throws RangeError", () => {
+    expect(() => Temporal.PlainYearMonth.from({ year: Infinity, month: 1 })).toThrow(RangeError);
+  });
+});

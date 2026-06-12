@@ -58,3 +58,13 @@ describe("TypedArray.prototype.indexOf", () => {
     expect(ta.indexOf(2)).toBe(-1);
   });
 });
+
+describe("TypedArray.prototype.indexOf non-finite fromIndex", () => {
+  test("Infinity fromIndex finds nothing", () => {
+    expect(new Int8Array([1, 2]).indexOf(1, Infinity)).toBe(-1);
+  });
+
+  test("-Infinity fromIndex searches from the start", () => {
+    expect(new Int8Array([1, 2]).indexOf(2, -Infinity)).toBe(1);
+  });
+});
