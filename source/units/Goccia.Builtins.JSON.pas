@@ -53,6 +53,8 @@ uses
   Math,
   SysUtils,
 
+  TextSemantics,
+
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
@@ -342,12 +344,14 @@ begin
       SpaceCount := Trunc(SpaceNumber);
     Result := StringOfChar(' ', SpaceCount);
   end
-  // Step 8: Else if space is a String, let gap be the first 10 characters.
+  // Step 8: Else if space is a String, let gap be the first 10 code units.
+  // Length() counts bytes, so it can only overestimate the code-unit count;
+  // UTF16Substring then truncates without splitting a UTF-8 sequence.
   else if Space is TGocciaStringLiteralValue then
   begin
     Result := Space.ToStringLiteral.Value;
     if Length(Result) > 10 then
-      Result := Copy(Result, 1, 10);
+      Result := UTF16Substring(Result, 0, 10);
   end;
   // Step 9: Else let gap be the empty string (already default).
 end;

@@ -437,3 +437,19 @@ test("JSON.stringify value as boxed String propagates toString exceptions", () =
 
   expect(() => JSON.stringify([boxed])).toThrow(RangeError);
 });
+
+test("JSON.stringify keeps a short multibyte string space intact", () => {
+  const obj = { a: 1 };
+
+  expect(JSON.stringify(obj, null, "ααααααα")).toBe(
+    '{\n' + "ααααααα" + '"a": 1\n}',
+  );
+});
+
+test("JSON.stringify truncates a long multibyte string space to 10 characters", () => {
+  const obj = { a: 1 };
+
+  expect(JSON.stringify(obj, null, "あ".repeat(12))).toBe(
+    JSON.stringify(obj, null, "あ".repeat(10)),
+  );
+});
