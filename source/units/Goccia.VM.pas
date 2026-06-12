@@ -6932,18 +6932,24 @@ begin
           .SetProperty(KeyName, Value);
     end;
   end
-  else if (AKeyReg.Kind = grkObject) and
-          (AKeyReg.ObjectValue is TGocciaSymbolValue) then
-    ThrowTypeError(SErrorCannotSetPropertyOnNonObject,
-      SSuggestCheckNullBeforeAccess)
   else
   begin
-    TargetValue := GetRegister(ATargetIndex);
-    if (caoHomeObjectAllReceivers in AOptions) and
-       ((TargetValue is TGocciaClassValue) or
-        (TargetValue is TGocciaObjectValue)) then
-      SetBytecodeHomeObject(Value, TargetValue);
-    SetPropertyValue(TargetValue, KeyToPropertyNameRegister(AKeyReg), Value);
+    // Primitive receivers: full key classification, so object keys coerce
+    // through ToPropertyKey and keys resolving to a Symbol take the same
+    // throw path as direct symbol keys instead of being stringified.
+    Key := ClassifyPropertyKey(AKeyReg, False);
+    if Key.Kind = pkkSymbol then
+      ThrowTypeError(SErrorCannotSetPropertyOnNonObject,
+        SSuggestCheckNullBeforeAccess)
+    else
+    begin
+      TargetValue := GetRegister(ATargetIndex);
+      if (caoHomeObjectAllReceivers in AOptions) and
+         ((TargetValue is TGocciaClassValue) or
+          (TargetValue is TGocciaObjectValue)) then
+        SetBytecodeHomeObject(Value, TargetValue);
+      SetPropertyValue(TargetValue, PropertyKeyName(Key), Value);
+    end;
   end;
 end;
 
@@ -7008,7 +7014,13 @@ begin
       FRegisters[ADest] := RegisterBoolean(False);
   end
   else
+  begin
+    // Primitive receivers: the property key still coerces (ToPropertyKey
+    // side effects) before delete yields true, matching the interpreter
+    // and ES2026 property-reference evaluation.
+    Key := ClassifyPropertyKey(AKeyReg, False);
     FRegisters[ADest] := RegisterBoolean(True);
+  end;
 end;
 
 procedure TGocciaVM.ServeOwnNonDataProperty(const ADest: Integer;
@@ -7029,7 +7041,10 @@ begin
     begin
       CallArgs := AcquireArguments(0);
       try
-        SetRegister(ADest, TGocciaFunctionBase(Accessor.Getter).Call(
+        // Generic callable dispatch: IsCallable does not guarantee
+        // TGocciaFunctionBase (proxies, class values), so route through
+        // the VM's call path instead of a static cast.
+        SetRegister(ADest, InvokeFunctionValue(Accessor.Getter,
           CallArgs, AReceiver));
       finally
         ReleaseArguments(CallArgs);
