@@ -22,14 +22,17 @@ test("symbol-keyed setter on String.prototype runs for a string receiver", () =>
 test("symbol-keyed setter on Number.prototype runs for a number receiver", () => {
   const S = Symbol("numberSetter");
   let captured = null;
+  let receiverType = null;
   Object.defineProperty(Number.prototype, S, {
     set(v) {
       captured = v;
+      receiverType = typeof this;
     },
     configurable: true,
   });
   (5)[S] = "stored";
   expect(captured).toBe("stored");
+  expect(receiverType).toBe("number");
 });
 
 test("symbol-keyed data write to a primitive receiver throws TypeError", () => {
