@@ -116,6 +116,18 @@ _Avoid_: Generic VM bytecode.
 The virtual machine that executes Goccia bytecode for GocciaScript.
 _Avoid_: Generic VM layer.
 
+**Inline cache**:
+A per-site cache on a function template that lets the Goccia VM re-read a previously resolved global binding or property by entry index instead of by name. Global-read entries validate scope identity and binding-map version; property-read entries validate interned shapes. A site whose receivers keep changing becomes megamorphic and reads through the uncached fast path instead.
+_Avoid_: Hidden class, polymorphic inline cache — GocciaScript property caches are monomorphic per site.
+
+**Shape**:
+The interned, per-realm identity of an object's own-property layout: the sequence of property keys added to its property map. Two objects with the same shape store the same key at the same entry index. A shape records keys only — not the prototype, not attribute flags, not values.
+_Avoid_: Hidden class, map (overloaded with the property map and the Map built-in).
+
+**Dictionary mode**:
+The state a property map enters when its layout stops being shape-tracked (after a property delete or clear). Dictionary-mode objects stay fully functional but are invisible to shape-validated inline caches.
+_Avoid_: Slow mode, deoptimized object.
+
 ### Source And Tools
 
 **Source text**:

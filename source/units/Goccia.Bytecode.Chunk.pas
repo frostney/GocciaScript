@@ -106,6 +106,47 @@ type
   end;
   PGocciaGlobalReadCacheEntry = ^TGocciaGlobalReadCacheEntry;
 
+  // Runtime-only inline cache for OP_GET_PROP_CONST sites, indexed by the
+  // instruction's name-constant index.  Shape is a weak pointer to an
+  // interned per-realm shape (Goccia.Values.Shape), compared for identity
+  // only and never dereferenced.  No version stamp is needed: same shape
+  // implies same key at the same entry index (shaped maps are append-only;
+  // delete/clear leave shaped mode), shapes are never freed within an
+  // engine's lifetime, and function templates never outlive their engine —
+  // so a cached pointer can never validate against a recycled address.
+  // Fills never store nil or the dictionary sentinel.  MissStreak counts
+  // consecutive misses (different-shape refills and fill declines); every
+  // validated hit resets it, so transient warm-up polymorphism cannot
+  // permanently disable a site.  Once it saturates the site is treated as
+  // megamorphic and reads go through the uncached own-data fast path
+  // instead of thrashing the cache.  Not serialised to .gbc.
+  TGocciaPropertyReadCacheEntry = record
+    Shape: Pointer;
+    EntryIndex: Integer;
+    MissStreak: Byte;
+  end;
+  PGocciaPropertyReadCacheEntry = ^TGocciaPropertyReadCacheEntry;
+
+  // Runtime-only inline cache for OP_GET_PROP_CONST sites that resolve on
+  // the receiver's prototype chain (methods on class prototype objects are
+  // the dominant case). Shapes[0] is the receiver's own shape — proving
+  // continued ABSENCE of the name on the receiver — and Shapes[1..Holder-
+  // Level] are the chain shapes, proving absence below the holder and
+  // presence at the holder. A shape is the key set, so an unchanged fresh
+  // shape proves absence/presence regardless of object identity, which
+  // keeps the cache valid across setPrototypeOf to a same-shaped
+  // prototype; the hit path walks the live chain, so link changes are
+  // followed inherently. The holder's descriptor is re-read by entry index
+  // on every hit. HolderLevel = 0 means the slot is empty. All pointers
+  // are weak and compared for identity only. Not serialised to .gbc.
+  TGocciaProtoReadCacheEntry = record
+    Shapes: array [0 .. 2] of Pointer;
+    EntryIndex: Integer;
+    HolderLevel: Byte;
+    MissStreak: Byte;
+  end;
+  PGocciaProtoReadCacheEntry = ^TGocciaProtoReadCacheEntry;
+
   TGocciaFunctionTemplate = class
   private
     FName: string;
@@ -149,6 +190,18 @@ type
     FRegExpProgramCaches: array of TObject;
     FRegExpProgramCacheCount: Integer;
     FGlobalReadCaches: array of TGocciaGlobalReadCacheEntry;
+    // Property/proto read caches use DENSE slots: OP_GET_PROP_CONST name
+    // constants are a small subset of the constant pool, so a per-constant
+    // UInt16 map (0 = unassigned, else dense slot + 1) assigns slots on
+    // first use and the entry arrays grow only to the number of distinct
+    // property-name constants actually read. Both tiers share one slot id
+    // (they are keyed by the same instruction operand). The instruction's
+    // C operand is a UInt8, so the slot map never exceeds 256 entries.
+    FPropertyReadSlotMap: array of UInt16;
+    FPropertyReadCaches: array of TGocciaPropertyReadCacheEntry;
+    FProtoReadCaches: array of TGocciaProtoReadCacheEntry;
+    FPropertyReadSlotCount: Integer;
+    function PropertyReadSlot(const AConstIndex: Integer): Integer;
     function GetFunctionCount: Integer;
   public
     constructor Create(const AName: string);
@@ -174,6 +227,10 @@ type
     procedure SetRegExpProgramCache(const ASlot: Integer; const AValue: TObject);
     function GlobalReadCacheSlot(
       const AConstIndex: Integer): PGocciaGlobalReadCacheEntry; inline;
+    function PropertyReadCacheSlot(
+      const AConstIndex: Integer): PGocciaPropertyReadCacheEntry; inline;
+    function ProtoReadCacheSlot(
+      const AConstIndex: Integer): PGocciaProtoReadCacheEntry; inline;
     function AddFunction(const AFunction: TGocciaFunctionTemplate): UInt16;
     procedure AddUpvalueDescriptor(const AIsLocal: Boolean; const AIndex: UInt8;
       const AName: string = '');
@@ -552,6 +609,71 @@ begin
   if AConstIndex >= Length(FGlobalReadCaches) then
     SetLength(FGlobalReadCaches, FConstantCount);
   Result := @FGlobalReadCaches[AConstIndex];
+end;
+
+function TGocciaFunctionTemplate.PropertyReadSlot(
+  const AConstIndex: Integer): Integer;
+const
+  // OP_GET_PROP_CONST carries the name-constant index in the 8-bit C
+  // operand, so at most 256 constants can ever be property-read names.
+  PROPERTY_READ_SLOT_MAP_LIMIT = 256;
+var
+  MapSize, NewCapacity: Integer;
+begin
+  // nil-slot contract as GlobalReadCacheSlot: out-of-range constant
+  // indices (corrupt or hostile .gbc input) run uncached rather than
+  // risking a wild write.
+  if (AConstIndex < 0) or (AConstIndex >= FConstantCount) or
+     (AConstIndex >= PROPERTY_READ_SLOT_MAP_LIMIT) then
+    Exit(-1);
+  if AConstIndex >= Length(FPropertyReadSlotMap) then
+  begin
+    MapSize := FConstantCount;
+    if MapSize > PROPERTY_READ_SLOT_MAP_LIMIT then
+      MapSize := PROPERTY_READ_SLOT_MAP_LIMIT;
+    SetLength(FPropertyReadSlotMap, MapSize);
+  end;
+  if FPropertyReadSlotMap[AConstIndex] = 0 then
+  begin
+    // Grow BOTH dense arrays together so a held own-tier pointer stays
+    // valid while the proto-tier slot for the same instruction is fetched.
+    // Re-entrant slot assignment (user code re-entering this template) can
+    // still reallocate them, so slot pointers must never be used after a
+    // call that may run user code.
+    if FPropertyReadSlotCount >= Length(FPropertyReadCaches) then
+    begin
+      NewCapacity := Length(FPropertyReadCaches) * 2;
+      if NewCapacity < 4 then
+        NewCapacity := 4;
+      SetLength(FPropertyReadCaches, NewCapacity);
+      SetLength(FProtoReadCaches, NewCapacity);
+    end;
+    Inc(FPropertyReadSlotCount);
+    FPropertyReadSlotMap[AConstIndex] := UInt16(FPropertyReadSlotCount);
+  end;
+  Result := Integer(FPropertyReadSlotMap[AConstIndex]) - 1;
+end;
+
+function TGocciaFunctionTemplate.PropertyReadCacheSlot(
+  const AConstIndex: Integer): PGocciaPropertyReadCacheEntry;
+var
+  Slot: Integer;
+begin
+  Slot := PropertyReadSlot(AConstIndex);
+  if Slot < 0 then
+    Exit(nil);
+  Result := @FPropertyReadCaches[Slot];
+end;
+
+function TGocciaFunctionTemplate.ProtoReadCacheSlot(
+  const AConstIndex: Integer): PGocciaProtoReadCacheEntry;
+var
+  Slot: Integer;
+begin
+  Slot := PropertyReadSlot(AConstIndex);
+  if Slot < 0 then
+    Exit(nil);
+  Result := @FProtoReadCaches[Slot];
 end;
 
 function TGocciaFunctionTemplate.AddFunction(

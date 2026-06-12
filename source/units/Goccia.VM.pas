@@ -86,6 +86,43 @@ type
   end;
   TGocciaVMSavedStateRootArray = array of TGocciaVMSavedStateRoot;
 
+  // Classified computed property key — the single home of the key-resolution
+  // rule shared by the computed get/set/delete/define opcode arms:
+  // direct symbol -> (optional) array-index probe -> ToPropertyKey for
+  // object keys -> property-name string fallback.
+  TGocciaPropertyKeyKind = (pkkSymbol, pkkIndex, pkkName);
+  TGocciaPropertyKey = record
+    Kind: TGocciaPropertyKeyKind;
+    Index: Integer;               // valid when Kind = pkkIndex
+    Symbol: TGocciaSymbolValue;   // valid when Kind = pkkSymbol
+    Name: string;                 // valid when Kind = pkkName
+    // True when the key came from ToPropertyKey on an object key. The
+    // computed-get object arm historically applies private-key routing
+    // only to keys that did NOT pass through ToPropertyKey.
+    FromObjectKey: Boolean;
+  end;
+
+  // Per-opcode behaviour switches for the shared computed property access
+  // cores. Each computed access opcode maps to a fixed option set; the
+  // differences are load-bearing semantics, not drift.
+  TGocciaComputedAccessOption = (
+    // Get: throw TypeError on null/undefined receiver (OP_ARRAY_GET).
+    caoThrowOnNullUndefined,
+    // Get/Set: route bytecode-private keys through the brand-checked
+    // GetPropertyValue/SetPropertyValue paths (OP_GET_INDEX, OP_SET_INDEX).
+    caoHandlePrivateKeys,
+    // Get: try the VM literal-object own-data fast path before the generic
+    // GetProperty walk (OP_GET_INDEX).
+    caoLiteralFastPath,
+    // Set: class receivers install the value with DefineProperty
+    // ([pfConfigurable, pfWritable]) instead of assignment (OP_SET_INDEX).
+    caoClassDefineSemantics,
+    // Set: home object is wired on array/object/fallback receivers too,
+    // not only on class receivers (OP_SET_INDEX).
+    caoHomeObjectAllReceivers
+  );
+  TGocciaComputedAccessOptions = set of TGocciaComputedAccessOption;
+
   TGocciaVM = class
   private
     FRegisterStack: TGocciaRegisterArray;
@@ -166,6 +203,34 @@ type
     function KeyToPropertyName(const AKey: TGocciaValue): string;
     function KeyToPropertyNameRegister(const AKey: TGocciaRegister): string;
     function TryResolveObjectKey(const AKeyReg: TGocciaRegister; out AResolved: TGocciaValue): Boolean; inline;
+    // Shared computed-property-access cores. AProbeArrayIndex preserves the
+    // historical per-receiver cascades: array/string receivers probe for an
+    // array index, class/object receivers do not.
+    function ClassifyPropertyKey(const AKeyReg: TGocciaRegister;
+      const AProbeArrayIndex: Boolean): TGocciaPropertyKey;
+    function PropertyKeyName(const AKey: TGocciaPropertyKey): string; inline;
+    // Register parameters are passed BY VALUE deliberately: callers pass
+    // FRegisters[..] slots, and ClassifyPropertyKey can run user code
+    // (ToPropertyKey -> toString) that grows and reallocates the register
+    // stack. A `const` record parameter may be passed by reference on some
+    // targets (e.g. win64), which would leave the parameter dangling into
+    // the freed old block; a value copy taken at the call is immune.
+    procedure ExecGetComputedProperty(const ADest: Integer;
+      AObjReg, AKeyReg: TGocciaRegister;
+      const AOptions: TGocciaComputedAccessOptions);
+    procedure ExecSetComputedProperty(const ATargetIndex: Integer;
+      AKeyReg, AValueReg: TGocciaRegister;
+      const AOptions: TGocciaComputedAccessOptions);
+    procedure ExecDeleteComputedProperty(const ADest: Integer;
+      AObjReg, AKeyReg: TGocciaRegister;
+      const AThrowOnFailure: Boolean);
+    // Serve an own NON-data descriptor (accessor or exotic) exactly as the
+    // receiver's generic own-descriptor branch would, without a second map
+    // lookup: callable getter -> invoke with the receiver as this; anything
+    // else -> undefined.
+    procedure ServeOwnNonDataProperty(const ADest: Integer;
+      const AReceiver: TGocciaValue;
+      const ADescriptor: TGocciaPropertyDescriptor);
     procedure ExecGetComputedPropertyFallback(const ADest: Integer;
       const AReceiverReg, AKeyReg: TGocciaRegister);
     function CoerceNonStrictThisRegister(
@@ -415,6 +480,7 @@ uses
   Goccia.Values.IteratorValue,
   Goccia.Values.NativeFunction,
   Goccia.Values.ProxyValue,
+  Goccia.Values.Shape,
   Goccia.Values.ToObject,
   Goccia.Values.ToPrimitive;
 
@@ -1315,6 +1381,277 @@ begin
     Exit(RegisterFloat(NumberValue));
   end;
   Result := RegisterObject(AValue);
+end;
+
+// Receivers whose own plain-data property reads are ordinary map lookups,
+// so the OP_GET_PROP_CONST inline cache may serve them without going
+// through their virtual GetProperty path. Exact-class checks exclude every
+// subclass with overridden lookup semantics (proxies, exotic objects).
+function VMPropertyReadCacheableReceiver(const AObject: TObject): Boolean; inline;
+begin
+  Result := (AObject.ClassType = TGocciaObjectValue) or
+    (AObject.ClassType = TGocciaVMLiteralObjectValue) or
+    (AObject.ClassType = TGocciaInstanceValue);
+end;
+
+// Validate a property-read inline cache entry against the receiver's shape
+// and read the current value through the receiver's live map. The cached
+// Shape pointer is compared for identity only; same shape implies the same
+// key at the cached entry index. Every TGocciaObjectValue property map is
+// constructed as TGocciaShapedPropertyMap (single construction site in
+// TGocciaObjectValue.Create), so the static cast is structurally safe.
+// The descriptor kind is re-checked on every hit because data->accessor
+// redefinition replaces the descriptor without changing the layout
+// (TOrderedStringMap.Add on an existing key).
+function VMTryGetCachedOwnDataProperty(const AObject: TGocciaObjectValue;
+  const ACache: PGocciaPropertyReadCacheEntry;
+  out AValue: TGocciaValue): Boolean; inline;
+var
+  Descriptor: TGocciaPropertyDescriptor;
+begin
+  Result := (ACache^.Shape = Pointer(
+      TGocciaShapedPropertyMap(AObject.Properties).Shape)) and
+    (ACache^.Shape <> nil) and
+    AObject.Properties.TryGetValueAtEntry(ACache^.EntryIndex, Descriptor) and
+    (Descriptor is TGocciaPropertyDescriptorData);
+  if Result then
+  begin
+    AValue := TGocciaPropertyDescriptorData(Descriptor).Value;
+    // A validated hit proves the site is currently serving a stable shape:
+    // reset the streak so only CONSECUTIVE misses count toward megamorphic
+    // saturation (transient warm-up polymorphism must not permanently
+    // disable a site that settles down).
+    if ACache^.MissStreak <> 0 then
+      ACache^.MissStreak := 0;
+  end
+  else
+    AValue := nil;
+end;
+
+const
+  // Consecutive different-map refills after which an OP_GET_PROP_CONST site
+  // is treated as megamorphic: the cache stops being rewritten and reads use
+  // the uncached own-data fast path instead.
+  PROPERTY_READ_CACHE_POLYMORPHIC_LIMIT = 16;
+
+
+type
+  // Outcome of one own-map probe; lets the OP_GET_PROP_CONST miss path
+  // establish own-data / own-non-data / absent with a single hash lookup
+  // instead of re-hashing the same name per fallback tier.
+  TGocciaOwnPropertyProbe = (oppData, oppNonData, oppAbsent);
+
+function VMProbeOwnProperty(const AObject: TGocciaObjectValue;
+  const AName: string; out AEntryIndex: Integer;
+  out ADescriptor: TGocciaPropertyDescriptor): TGocciaOwnPropertyProbe;
+begin
+  ADescriptor := nil;
+  if AObject.Properties.TryGetEntryIndex(AName, AEntryIndex) and
+     AObject.Properties.TryGetValueAtEntry(AEntryIndex, ADescriptor) then
+  begin
+    if ADescriptor is TGocciaPropertyDescriptorData then
+      Result := oppData
+    else
+      Result := oppNonData;
+  end
+  else
+    Result := oppAbsent;
+end;
+
+// Prime the own-tier cache from an already-completed probe (no second
+// lookup). Declines silently for dictionary-mode maps (advancing the
+// streak so those sites converge) and for entries beyond a prefix shape's
+// covered depth.
+procedure VMPrimeOwnPropertyCache(const AObject: TGocciaObjectValue;
+  const AEntryIndex: Integer; const ACache: PGocciaPropertyReadCacheEntry);
+var
+  ReceiverShape: TGocciaShape;
+begin
+  ReceiverShape := TGocciaShapedPropertyMap(AObject.Properties).EnsureShape;
+  if ReceiverShape = DictionaryShapeSentinel then
+  begin
+    Inc(ACache^.MissStreak);
+    Exit;
+  end;
+  // A found entry implies a non-empty map, so a real shape exists; the
+  // depth guard only blocks entries past a transition-capped prefix.
+  if (not Assigned(ReceiverShape)) or
+     (AEntryIndex >= ReceiverShape.Depth) then
+    Exit;
+  if (ACache^.Shape <> nil) and
+     (ACache^.Shape <> Pointer(ReceiverShape)) then
+    Inc(ACache^.MissStreak);
+  ACache^.Shape := Pointer(ReceiverShape);
+  ACache^.EntryIndex := AEntryIndex;
+end;
+
+// Presence probe for the holder level: pointer identity suffices — a
+// prefix shape's covered entries stay valid as the holder map grows, and
+// the descriptor is re-read by entry index on every hit.
+function VMHolderShapeMatches(const AObject: TGocciaObjectValue;
+  const ACachedShape: Pointer): Boolean; inline;
+begin
+  Result := Pointer(
+    TGocciaShapedPropertyMap(AObject.Properties).EnsureShape) = ACachedShape;
+end;
+
+// Absence probe for receiver/intermediate levels: pointer identity PLUS
+// full coverage (Depth = Count). A transition-capped map can grow while
+// EnsureShape keeps returning the same prefix pointer, so pointer equality
+// alone cannot prove a name is still absent.
+function VMAbsenceShapeMatches(const AObject: TGocciaObjectValue;
+  const ACachedShape: Pointer): Boolean; inline;
+var
+  Map: TGocciaShapedPropertyMap;
+  LevelShape: TGocciaShape;
+begin
+  Map := TGocciaShapedPropertyMap(AObject.Properties);
+  LevelShape := Map.EnsureShape;
+  Result := (Pointer(LevelShape) = ACachedShape) and
+    ((not Assigned(LevelShape)) or (LevelShape.Depth = Map.CountFast));
+end;
+
+// Validate a prototype-holder cache entry: receiver gate, fresh-shape
+// absence below the holder, fresh-shape presence at the holder, exact
+// TGocciaObjectValue chain levels (exotic objects may share shapes but not
+// lookup semantics), then re-read the holder descriptor by entry index.
+// Undefined-valued holder properties are never served: instance lookup
+// treats them as not-found and falls through to class state, so the cache
+// declines and the generic path decides.
+function VMTryGetCachedProtoProperty(const AReceiver: TGocciaObjectValue;
+  const ACache: PGocciaProtoReadCacheEntry;
+  out AValue: TGocciaValue): Boolean;
+var
+  Level: Integer;
+  Walk: TGocciaObjectValue;
+  Descriptor: TGocciaPropertyDescriptor;
+begin
+  AValue := nil;
+  Result := False;
+  if ACache^.HolderLevel = 0 then
+    Exit;
+  if not VMPropertyReadCacheableReceiver(AReceiver) then
+    Exit;
+  if not VMAbsenceShapeMatches(AReceiver, ACache^.Shapes[0]) then
+    Exit;
+  Walk := AReceiver;
+  for Level := 1 to ACache^.HolderLevel do
+  begin
+    Walk := Walk.Prototype;
+    if (not Assigned(Walk)) or (Walk.ClassType <> TGocciaObjectValue) then
+      Exit;
+    if Level = ACache^.HolderLevel then
+    begin
+      if not VMHolderShapeMatches(Walk, ACache^.Shapes[Level]) then
+        Exit;
+    end
+    else if not VMAbsenceShapeMatches(Walk, ACache^.Shapes[Level]) then
+      Exit;
+  end;
+  if not Walk.Properties.TryGetValueAtEntry(ACache^.EntryIndex,
+    Descriptor) then
+    Exit;
+  if not (Descriptor is TGocciaPropertyDescriptorData) then
+    Exit;
+  AValue := TGocciaPropertyDescriptorData(Descriptor).Value;
+  if AValue = TGocciaUndefinedLiteralValue.UndefinedValue then
+  begin
+    AValue := nil;
+    Exit;
+  end;
+  // Validated hit: reset the streak so only consecutive misses count (see
+  // VMTryGetCachedOwnDataProperty).
+  if ACache^.MissStreak <> 0 then
+    ACache^.MissStreak := 0;
+  Result := True;
+end;
+
+// One uncached prototype-chain lookup (at most two levels) that also primes
+// the prototype-holder cache. Declines — leaving the cache untouched — for
+// dictionary-mode maps, exotic chain levels, own-present names, accessor
+// or undefined-valued holder properties, and chains deeper than two
+// levels; all of those stay on the generic GetPropertyValue path.
+function VMFillProtoReadCacheCore(const AReceiver: TGocciaObjectValue;
+  const AName: string; const ACache: PGocciaProtoReadCacheEntry;
+  out AValue: TGocciaValue): Boolean;
+var
+  Shapes: array [0 .. 2] of Pointer;
+  WalkShape: TGocciaShape;
+  Walk: TGocciaObjectValue;
+  Level, EntryIndex: Integer;
+  Descriptor: TGocciaPropertyDescriptor;
+begin
+  AValue := nil;
+  Result := False;
+  // Contract: the caller has already established (via VMProbeOwnProperty)
+  // that AName is not an own property of AReceiver — no own re-probe here.
+  WalkShape := TGocciaShapedPropertyMap(AReceiver.Properties).EnsureShape;
+  if WalkShape = DictionaryShapeSentinel then
+    Exit;
+  // Absence levels need full coverage: a transition-capped prefix shape
+  // cannot prove the name is absent from the uncovered suffix.
+  if Assigned(WalkShape) and
+     (WalkShape.Depth <> AReceiver.Properties.CountFast) then
+    Exit;
+  Shapes[0] := Pointer(WalkShape);
+  Shapes[1] := nil;
+  Shapes[2] := nil;
+  Walk := AReceiver;
+  for Level := 1 to 2 do
+  begin
+    Walk := Walk.Prototype;
+    if (not Assigned(Walk)) or (Walk.ClassType <> TGocciaObjectValue) then
+      Exit;
+    WalkShape := TGocciaShapedPropertyMap(Walk.Properties).EnsureShape;
+    if WalkShape = DictionaryShapeSentinel then
+      Exit;
+    Shapes[Level] := Pointer(WalkShape);
+    if not Walk.Properties.TryGetEntryIndex(AName, EntryIndex) then
+    begin
+      // Absent at this level: full coverage required for the absence proof.
+      if Assigned(WalkShape) and
+         (WalkShape.Depth <> Walk.Properties.CountFast) then
+        Exit;
+      Continue;
+    end;
+    if (not Walk.Properties.TryGetValueAtEntry(EntryIndex, Descriptor)) or
+       (not (Descriptor is TGocciaPropertyDescriptorData)) then
+      Exit;
+    // Presence at the holder: the entry must lie inside the shape's
+    // covered prefix for the cached (shape, index) pair to stay valid.
+    if (not Assigned(WalkShape)) or (EntryIndex >= WalkShape.Depth) then
+      Exit;
+    AValue := TGocciaPropertyDescriptorData(Descriptor).Value;
+    if AValue = TGocciaUndefinedLiteralValue.UndefinedValue then
+    begin
+      AValue := nil;
+      Exit;
+    end;
+    if (ACache^.HolderLevel > 0) and
+       (ACache^.Shapes[0] <> Shapes[0]) then
+      Inc(ACache^.MissStreak);
+    ACache^.Shapes[0] := Shapes[0];
+    ACache^.Shapes[1] := Shapes[1];
+    ACache^.Shapes[2] := Shapes[2];
+    ACache^.EntryIndex := EntryIndex;
+    ACache^.HolderLevel := Level;
+    Result := True;
+    Exit;
+  end;
+end;
+
+function VMFillProtoReadCache(const AReceiver: TGocciaObjectValue;
+  const AName: string; const ACache: PGocciaProtoReadCacheEntry;
+  out AValue: TGocciaValue): Boolean; inline;
+begin
+  Result := VMFillProtoReadCacheCore(AReceiver, AName, ACache, AValue);
+  // Every decline advances the streak so sites that can never use this
+  // tier (own-resolved names on megamorphic sites, accessor holders, deep
+  // or exotic chains) converge on the dormant state instead of paying the
+  // chain probe on every read. The caller gates fills on MissStreak, so
+  // this cannot overflow.
+  if not Result then
+    Inc(ACache^.MissStreak);
 end;
 
 function VMGetOwnDataDescriptorRegister(const AObject: TGocciaObjectValue;
@@ -6353,6 +6690,381 @@ begin
     AResolved := ToPropertyKey(AKeyReg.ObjectValue);
 end;
 
+const
+  // Per-opcode option sets for the shared computed property access cores.
+  // Primitive receivers share ExecGetComputedPropertyFallback across both
+  // get opcodes — no per-opcode differences remain there since #748.
+  ELEMENT_GET_OPTIONS: TGocciaComputedAccessOptions =
+    [caoThrowOnNullUndefined];                                      // OP_ARRAY_GET
+  MEMBER_GET_OPTIONS: TGocciaComputedAccessOptions =
+    [caoHandlePrivateKeys, caoLiteralFastPath];                     // OP_GET_INDEX
+  ELEMENT_SET_OPTIONS: TGocciaComputedAccessOptions = [];           // OP_ARRAY_SET
+  MEMBER_SET_OPTIONS: TGocciaComputedAccessOptions =
+    [caoClassDefineSemantics, caoHomeObjectAllReceivers,
+     caoHandlePrivateKeys];                                         // OP_SET_INDEX
+
+function TGocciaVM.ClassifyPropertyKey(const AKeyReg: TGocciaRegister;
+  const AProbeArrayIndex: Boolean): TGocciaPropertyKey;
+var
+  Resolved: TGocciaValue;
+begin
+  Result.Index := -1;
+  Result.Symbol := nil;
+  Result.Name := '';
+  Result.FromObjectKey := False;
+
+  if (AKeyReg.Kind = grkObject) and
+     (AKeyReg.ObjectValue is TGocciaSymbolValue) then
+  begin
+    Result.Kind := pkkSymbol;
+    Result.Symbol := TGocciaSymbolValue(AKeyReg.ObjectValue);
+    Exit;
+  end;
+
+  // Side-effect-free: TryGetArrayIndex only accepts number literals, so
+  // probing never invokes user toString/valueOf on object keys.
+  if AProbeArrayIndex and TryGetArrayIndexRegister(AKeyReg, Result.Index) then
+  begin
+    Result.Kind := pkkIndex;
+    Exit;
+  end;
+
+  if TryResolveObjectKey(AKeyReg, Resolved) then
+  begin
+    Result.FromObjectKey := True;
+    if Resolved is TGocciaSymbolValue then
+    begin
+      Result.Kind := pkkSymbol;
+      Result.Symbol := TGocciaSymbolValue(Resolved);
+    end
+    else
+    begin
+      Result.Kind := pkkName;
+      Result.Name := TGocciaStringLiteralValue(Resolved).Value;
+    end;
+    Exit;
+  end;
+
+  Result.Kind := pkkName;
+  Result.Name := KeyToPropertyNameRegister(AKeyReg);
+end;
+
+function TGocciaVM.PropertyKeyName(const AKey: TGocciaPropertyKey): string;
+begin
+  if AKey.Kind = pkkIndex then
+    Result := IntToStr(AKey.Index)
+  else
+    Result := AKey.Name;
+end;
+
+procedure TGocciaVM.ExecGetComputedProperty(const ADest: Integer;
+  AObjReg, AKeyReg: TGocciaRegister;
+  const AOptions: TGocciaComputedAccessOptions);
+var
+  Key: TGocciaPropertyKey;
+  KeyName: string;
+  ReceiverArray: TGocciaArrayValue;
+begin
+  if (caoThrowOnNullUndefined in AOptions) and
+     (AObjReg.Kind in [grkUndefined, grkNull]) then
+    ThrowTypeError(SErrorCannotConvertNullOrUndefined,
+      SSuggestCheckNullBeforeAccess)
+  else if (AObjReg.Kind = grkObject) and
+          (AObjReg.ObjectValue is TGocciaArrayValue) then
+  begin
+    ReceiverArray := TGocciaArrayValue(AObjReg.ObjectValue);
+    Key := ClassifyPropertyKey(AKeyReg, True);
+    case Key.Kind of
+      pkkSymbol:
+        SetRegister(ADest, ReceiverArray.GetSymbolProperty(Key.Symbol));
+      pkkIndex:
+        if (Key.Index >= 0) and
+           (Key.Index < ReceiverArray.Elements.Count) and
+           (ReceiverArray.Elements[Key.Index] <>
+            TGocciaHoleValue.HoleValue) then
+          FRegisters[ADest] := VMValueToRegisterFast(
+            ReceiverArray.Elements[Key.Index])
+        else
+          // Hole, out-of-range, or accessor-shadowed slot: take the slow
+          // path so accessor descriptors and prototype lookups run.
+          SetRegister(ADest, ReceiverArray.GetProperty(IntToStr(Key.Index)));
+    else
+      SetRegister(ADest, ReceiverArray.GetProperty(Key.Name));
+    end;
+  end
+  else if (AObjReg.Kind = grkObject) and
+          (AObjReg.ObjectValue is TGocciaClassValue) then
+  begin
+    // Classes must be matched before TGocciaObjectValue so that static
+    // symbol-keyed properties (FStaticSymbolDescriptors) and the
+    // superclass walk are reached. TGocciaClassValue.GetSymbolProperty
+    // is not virtual on the base, so a TGocciaObjectValue cast would
+    // bypass them.
+    Key := ClassifyPropertyKey(AKeyReg, False);
+    if Key.Kind = pkkSymbol then
+      SetRegister(ADest, TGocciaClassValue(AObjReg.ObjectValue)
+        .GetSymbolProperty(Key.Symbol))
+    else
+    begin
+      KeyName := PropertyKeyName(Key);
+      if (caoHandlePrivateKeys in AOptions) and
+         IsBytecodePrivateKey(KeyName) then
+        SetRegister(ADest, GetPropertyValue(AObjReg.ObjectValue, KeyName))
+      else
+        SetRegister(ADest, TGocciaClassValue(AObjReg.ObjectValue)
+          .GetProperty(KeyName));
+    end;
+  end
+  else if (AObjReg.Kind = grkObject) and
+          (AObjReg.ObjectValue is TGocciaObjectValue) then
+  begin
+    Key := ClassifyPropertyKey(AKeyReg, False);
+    if Key.Kind = pkkSymbol then
+      SetRegister(ADest, TGocciaObjectValue(AObjReg.ObjectValue)
+        .GetSymbolProperty(Key.Symbol))
+    else
+    begin
+      KeyName := PropertyKeyName(Key);
+      // Private-key routing historically applies only to keys that did
+      // not pass through ToPropertyKey on this arm.
+      if (caoHandlePrivateKeys in AOptions) and (not Key.FromObjectKey) and
+         IsBytecodePrivateKey(KeyName) then
+        SetRegister(ADest, GetPropertyValue(AObjReg.ObjectValue, KeyName))
+      else if (caoLiteralFastPath in AOptions) and
+              (AObjReg.ObjectValue is TGocciaVMLiteralObjectValue) and
+              TGocciaVMLiteralObjectValue(AObjReg.ObjectValue)
+                .TryGetOwnDataPropertyFastRegister(KeyName,
+                  FRegisters[ADest]) then
+        { fast path already assigned }
+      else
+        SetRegister(ADest, TGocciaObjectValue(AObjReg.ObjectValue)
+          .GetProperty(KeyName));
+    end;
+  end
+  else
+    // Primitive receivers (strings, numbers, booleans, bigints, symbols):
+    // one shared boxed-lookup fallback for both computed-get opcodes,
+    // keeping the unboxed string fast paths and receiver-aware accessor
+    // semantics from #748. Passing this core's by-value register copies
+    // keeps the fallback's const parameters safe from register-stack
+    // reallocation on every target.
+    ExecGetComputedPropertyFallback(ADest, AObjReg, AKeyReg);
+end;
+
+procedure TGocciaVM.ExecSetComputedProperty(const ATargetIndex: Integer;
+  AKeyReg, AValueReg: TGocciaRegister;
+  const AOptions: TGocciaComputedAccessOptions);
+var
+  Key: TGocciaPropertyKey;
+  KeyName: string;
+  Value: TGocciaValue;
+  TargetValue: TGocciaValue;
+  BoxedTarget: TGocciaObjectValue;
+begin
+  Value := RegisterToValue(AValueReg);
+  if (FRegisters[ATargetIndex].Kind = grkObject) and
+     (FRegisters[ATargetIndex].ObjectValue is TGocciaArrayValue) then
+  begin
+    if caoHomeObjectAllReceivers in AOptions then
+      SetBytecodeHomeObject(Value, FRegisters[ATargetIndex].ObjectValue);
+    Key := ClassifyPropertyKey(AKeyReg, True);
+    case Key.Kind of
+      pkkSymbol:
+        TGocciaArrayValue(FRegisters[ATargetIndex].ObjectValue)
+          .AssignSymbolProperty(Key.Symbol, Value);
+      pkkIndex:
+        TGocciaArrayValue(FRegisters[ATargetIndex].ObjectValue)
+          .SetProperty(IntToStr(Key.Index), Value);
+    else
+      TGocciaArrayValue(FRegisters[ATargetIndex].ObjectValue)
+        .SetProperty(Key.Name, Value);
+    end;
+  end
+  else if (FRegisters[ATargetIndex].Kind = grkObject) and
+          (FRegisters[ATargetIndex].ObjectValue is TGocciaClassValue) then
+  begin
+    SetBytecodeHomeObject(Value, FRegisters[ATargetIndex].ObjectValue);
+    Key := ClassifyPropertyKey(AKeyReg, False);
+    if caoClassDefineSemantics in AOptions then
+    begin
+      if Key.Kind = pkkSymbol then
+        TGocciaClassValue(FRegisters[ATargetIndex].ObjectValue)
+          .DefineSymbolProperty(Key.Symbol,
+            TGocciaPropertyDescriptorData.Create(
+              Value, [pfConfigurable, pfWritable]))
+      else
+      begin
+        KeyName := PropertyKeyName(Key);
+        if (caoHandlePrivateKeys in AOptions) and
+           IsBytecodePrivateKey(KeyName) then
+          SetPropertyValue(FRegisters[ATargetIndex].ObjectValue, KeyName,
+            Value)
+        else
+          TGocciaClassValue(FRegisters[ATargetIndex].ObjectValue)
+            .DefineProperty(KeyName,
+              TGocciaPropertyDescriptorData.Create(
+                Value, [pfConfigurable, pfWritable]));
+      end;
+    end
+    else if Key.Kind = pkkSymbol then
+      TGocciaClassValue(FRegisters[ATargetIndex].ObjectValue)
+        .AssignSymbolProperty(Key.Symbol, Value)
+    else
+      TGocciaClassValue(FRegisters[ATargetIndex].ObjectValue)
+        .SetProperty(PropertyKeyName(Key), Value);
+  end
+  else if (FRegisters[ATargetIndex].Kind = grkObject) and
+          (FRegisters[ATargetIndex].ObjectValue is TGocciaObjectValue) then
+  begin
+    if caoHomeObjectAllReceivers in AOptions then
+      SetBytecodeHomeObject(Value, FRegisters[ATargetIndex].ObjectValue);
+    Key := ClassifyPropertyKey(AKeyReg, False);
+    if Key.Kind = pkkSymbol then
+      TGocciaObjectValue(FRegisters[ATargetIndex].ObjectValue)
+        .AssignSymbolProperty(Key.Symbol, Value)
+    else
+    begin
+      KeyName := PropertyKeyName(Key);
+      if (caoHandlePrivateKeys in AOptions) and
+         IsBytecodePrivateKey(KeyName) then
+        SetPropertyValue(FRegisters[ATargetIndex].ObjectValue, KeyName, Value)
+      else
+        TGocciaObjectValue(FRegisters[ATargetIndex].ObjectValue)
+          .SetProperty(KeyName, Value);
+    end;
+  end
+  else
+  begin
+    // Primitive receivers: full key classification, so object keys coerce
+    // through ToPropertyKey and symbol keys (direct or resolved) take the
+    // receiver-aware boxed [[Set]] — a symbol-keyed setter on the
+    // primitive's prototype runs with the primitive as receiver, matching
+    // the interpreter; only unboxable receivers and failed assignments
+    // throw.
+    Key := ClassifyPropertyKey(AKeyReg, False);
+    TargetValue := GetRegister(ATargetIndex);
+    if Key.Kind = pkkSymbol then
+    begin
+      BoxedTarget := TargetValue.Box;
+      if (not Assigned(BoxedTarget)) or
+         (not BoxedTarget.AssignSymbolPropertyWithReceiver(Key.Symbol, Value,
+           TargetValue)) then
+        ThrowTypeError(SErrorCannotSetPropertyOnNonObject,
+          SSuggestCheckNullBeforeAccess);
+    end
+    else
+    begin
+      if (caoHomeObjectAllReceivers in AOptions) and
+         ((TargetValue is TGocciaClassValue) or
+          (TargetValue is TGocciaObjectValue)) then
+        SetBytecodeHomeObject(Value, TargetValue);
+      SetPropertyValue(TargetValue, PropertyKeyName(Key), Value);
+    end;
+  end;
+end;
+
+procedure TGocciaVM.ExecDeleteComputedProperty(const ADest: Integer;
+  AObjReg, AKeyReg: TGocciaRegister; const AThrowOnFailure: Boolean);
+var
+  Key: TGocciaPropertyKey;
+  Receiver: TGocciaObjectValue;
+  Deleted: Boolean;
+  KeyName: string;
+begin
+  if AObjReg.Kind = grkNull then
+    ThrowTypeError(Format(SErrorCannotReadPropertiesOfNull,
+      [KeyDisplaySafe(AKeyReg)]),
+      SSuggestCheckNullBeforeAccess)
+  else if AObjReg.Kind = grkUndefined then
+    ThrowTypeError(Format(SErrorCannotReadPropertiesOfUndefined,
+      [KeyDisplaySafe(AKeyReg)]),
+      SSuggestCheckNullBeforeAccess)
+  else if (AObjReg.Kind = grkObject) and
+          (AObjReg.ObjectValue is TGocciaObjectValue) then
+  begin
+    Receiver := TGocciaObjectValue(AObjReg.ObjectValue);
+    Key := ClassifyPropertyKey(AKeyReg,
+      AObjReg.ObjectValue is TGocciaArrayValue);
+    if (Key.Kind = pkkIndex) and
+       (Key.Index >= 0) and
+       (Key.Index < TGocciaArrayValue(Receiver).Elements.Count) then
+    begin
+      TGocciaArrayValue(Receiver).SetElement(
+        Key.Index, TGocciaHoleValue.HoleValue);
+      FRegisters[ADest] := RegisterBoolean(True);
+      Exit;
+    end;
+    if Key.Kind = pkkSymbol then
+    begin
+      // ES2026 §13.5.1.2 step 5.b: a non-configurable symbol property
+      // throws TypeError on delete (mirrors EvaluateDelete's symbol path
+      // in the interpreter). Pre-refactor the bytecode threw via the
+      // symbol-stringification side effect; the spec-correct path keeps
+      // that throw.
+      Deleted := Receiver.DeleteSymbolProperty(Key.Symbol);
+      if Deleted then
+        FRegisters[ADest] := RegisterBoolean(True)
+      else if AThrowOnFailure then
+        ThrowTypeError(Format(SErrorCannotDeletePropertyOf,
+          [Key.Symbol.ToDisplayString.Value, '[object Object]']),
+          SSuggestCannotDeleteNonConfigurable)
+      else
+        FRegisters[ADest] := RegisterBoolean(False);
+      Exit;
+    end;
+    KeyName := PropertyKeyName(Key);
+    Deleted := Receiver.DeleteProperty(KeyName);
+    if Deleted then
+      FRegisters[ADest] := RegisterBoolean(True)
+    else if AThrowOnFailure then
+      ThrowTypeError(Format(SErrorCannotDeletePropertyOf,
+        [KeyName, '[object Object]']),
+        SSuggestCannotDeleteNonConfigurable)
+    else
+      FRegisters[ADest] := RegisterBoolean(False);
+  end
+  else
+  begin
+    // Primitive receivers: the property key still coerces (ToPropertyKey
+    // side effects) before delete yields true, matching the interpreter
+    // and ES2026 property-reference evaluation.
+    Key := ClassifyPropertyKey(AKeyReg, False);
+    FRegisters[ADest] := RegisterBoolean(True);
+  end;
+end;
+
+procedure TGocciaVM.ServeOwnNonDataProperty(const ADest: Integer;
+  const AReceiver: TGocciaValue;
+  const ADescriptor: TGocciaPropertyDescriptor);
+var
+  Accessor: TGocciaPropertyDescriptorAccessor;
+  CallArgs: TGocciaArgumentsCollection;
+begin
+  // Mirrors the own-descriptor branch of TGocciaObjectValue /
+  // TGocciaInstanceValue GetPropertyWithContext: callable getter invoked
+  // with the receiver as this; setter-only accessors and exotic
+  // descriptor kinds yield undefined.
+  if ADescriptor is TGocciaPropertyDescriptorAccessor then
+  begin
+    Accessor := TGocciaPropertyDescriptorAccessor(ADescriptor);
+    if Assigned(Accessor.Getter) and Accessor.Getter.IsCallable then
+    begin
+      CallArgs := AcquireArguments(0);
+      try
+        // Generic callable dispatch: IsCallable does not guarantee
+        // TGocciaFunctionBase (proxies, class values), so route through
+        // the VM's call path instead of a static cast.
+        SetRegister(ADest, InvokeFunctionValue(Accessor.Getter,
+          CallArgs, AReceiver));
+      finally
+        ReleaseArguments(CallArgs);
+      end;
+      Exit;
+    end;
+  end;
+  SetRegister(ADest, TGocciaUndefinedLiteralValue.UndefinedValue);
+end;
+
 procedure TGocciaVM.SetFunctionNameFromKey(const AFunction, AKey: TGocciaValue;
   const APrefixKind: UInt8);
 var
@@ -7479,7 +8191,7 @@ procedure TGocciaVM.DefineDataPropertyByKeyInternal(const ATarget: TGocciaValue;
   const ASetHomeObject: Boolean);
 var
   TargetObject: TGocciaObjectValue;
-  ResolvedKey: TGocciaValue;
+  Key: TGocciaPropertyKey;
 begin
   if not (ATarget is TGocciaObjectValue) then
     Exit;
@@ -7488,27 +8200,11 @@ begin
   if ASetHomeObject then
     SetBytecodeHomeObject(AValue, TargetObject);
 
-  if (AKey.Kind = grkObject) and
-     (AKey.ObjectValue is TGocciaSymbolValue) then
-  begin
-    DefineSymbolDataPropertyOnObject(TargetObject,
-      TGocciaSymbolValue(AKey.ObjectValue), AValue);
-    Exit;
-  end;
-
-  if TryResolveObjectKey(AKey, ResolvedKey) then
-  begin
-    if ResolvedKey is TGocciaSymbolValue then
-      DefineSymbolDataPropertyOnObject(TargetObject,
-        TGocciaSymbolValue(ResolvedKey), AValue)
-    else
-      DefineDataPropertyOnObject(TargetObject,
-        TGocciaStringLiteralValue(ResolvedKey).Value, AValue);
-    Exit;
-  end;
-
-  DefineDataPropertyOnObject(TargetObject, KeyToPropertyNameRegister(AKey),
-    AValue);
+  Key := ClassifyPropertyKey(AKey, False);
+  if Key.Kind = pkkSymbol then
+    DefineSymbolDataPropertyOnObject(TargetObject, Key.Symbol, AValue)
+  else
+    DefineDataPropertyOnObject(TargetObject, PropertyKeyName(Key), AValue);
 end;
 
 procedure TGocciaVM.DefineDataPropertyByKey(const ATarget: TGocciaValue;
@@ -9877,28 +10573,13 @@ end;
 procedure TGocciaVM.SetIndexValueLoose(const AObject: TGocciaValue;
   const AKey: TGocciaRegister; const AValue: TGocciaValue);
 var
-  PropKeyValue: TGocciaValue;
+  Key: TGocciaPropertyKey;
 begin
-  if (AKey.Kind = grkObject) and
-     (AKey.ObjectValue is TGocciaSymbolValue) then
-  begin
-    SetSymbolPropertyValueLoose(AObject, TGocciaSymbolValue(AKey.ObjectValue),
-      AValue);
-    Exit;
-  end;
-
-  if TryResolveObjectKey(AKey, PropKeyValue) then
-  begin
-    if PropKeyValue is TGocciaSymbolValue then
-      SetSymbolPropertyValueLoose(AObject, TGocciaSymbolValue(PropKeyValue),
-        AValue)
-    else
-      SetPropertyValueLoose(AObject,
-        TGocciaStringLiteralValue(PropKeyValue).Value, AValue);
-    Exit;
-  end;
-
-  SetPropertyValueLoose(AObject, KeyToPropertyNameRegister(AKey), AValue);
+  Key := ClassifyPropertyKey(AKey, False);
+  if Key.Kind = pkkSymbol then
+    SetSymbolPropertyValueLoose(AObject, Key.Symbol, AValue)
+  else
+    SetPropertyValueLoose(AObject, PropertyKeyName(Key), AValue);
 end;
 
 function TGocciaVM.TryGetRawPrivateValue(const AObject: TGocciaValue;
@@ -10812,6 +11493,8 @@ var
   GlobalName: string;
   GlobalBindingValue: TGocciaValue;
   GlobalReadCache: PGocciaGlobalReadCacheEntry;
+  PropertyReadCache: PGocciaPropertyReadCacheEntry;
+  ProtoReadCache: PGocciaProtoReadCacheEntry;
   AttributeType: string;
   SpecifierString: string;
   Upvalue: TGocciaBytecodeUpvalue;
@@ -10827,6 +11510,7 @@ var
   Template: TGocciaFunctionTemplate;
   ChildTemplate: TGocciaFunctionTemplate;
   LeftValue, RightValue, TargetValue, PropKeyValue, EvalSourceValue: TGocciaValue;
+  PropKey: TGocciaPropertyKey;
   PrivateDescriptor: TGocciaPropertyDescriptor;
   FunctionConstructorValue, ObjectConstructorValue: TGocciaValue;
   CustomMatcherValue, MatchResultValue: TGocciaValue;
@@ -11365,170 +12049,12 @@ begin
             RegisterToValue(FRegisters[B]));
 
       OP_ARRAY_GET:
-      begin
-        if FRegisters[B].Kind in [grkUndefined, grkNull] then
-          ThrowTypeError(SErrorCannotConvertNullOrUndefined,
-            SSuggestCheckNullBeforeAccess)
-        else if (FRegisters[B].Kind = grkObject) and
-           (FRegisters[B].ObjectValue is TGocciaArrayValue) then
-        begin
-          if (FRegisters[C].Kind = grkObject) and
-             (FRegisters[C].ObjectValue is TGocciaSymbolValue) then
-            SetRegister(A, TGocciaArrayValue(FRegisters[B].ObjectValue).GetSymbolProperty(
-              TGocciaSymbolValue(FRegisters[C].ObjectValue)))
-          else if TryGetArrayIndexRegister(FRegisters[C], KeyIndex) then
-          begin
-            if (KeyIndex >= 0) and
-               (KeyIndex < TGocciaArrayValue(FRegisters[B].ObjectValue).Elements.Count) and
-               (TGocciaArrayValue(FRegisters[B].ObjectValue).Elements[KeyIndex] <>
-                TGocciaHoleValue.HoleValue) then
-              FRegisters[A] := VMValueToRegisterFast(
-                TGocciaArrayValue(FRegisters[B].ObjectValue).Elements[KeyIndex])
-            else
-              // Hole, out-of-range, or accessor-shadowed slot: take the slow
-              // path so accessor descriptors and prototype lookups run.
-              SetRegister(A, TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(
-                IntToStr(KeyIndex)));
-          end
-          else if TryResolveObjectKey(FRegisters[C], PropKeyValue) then
-          begin
-            if PropKeyValue is TGocciaSymbolValue then
-              SetRegister(A, TGocciaArrayValue(FRegisters[B].ObjectValue).GetSymbolProperty(
-                TGocciaSymbolValue(PropKeyValue)))
-            else
-              SetRegister(A, TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(
-                TGocciaStringLiteralValue(PropKeyValue).Value));
-          end
-          else
-            SetRegister(A, TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(
-              KeyToPropertyNameRegister(FRegisters[C])));
-        end
-        else if (FRegisters[B].Kind = grkObject) and
-                (FRegisters[B].ObjectValue is TGocciaClassValue) then
-        begin
-          if (FRegisters[C].Kind = grkObject) and
-             (FRegisters[C].ObjectValue is TGocciaSymbolValue) then
-            SetRegister(A, TGocciaClassValue(FRegisters[B].ObjectValue).GetSymbolProperty(
-              TGocciaSymbolValue(FRegisters[C].ObjectValue)))
-          else if TryResolveObjectKey(FRegisters[C], PropKeyValue) then
-          begin
-            if PropKeyValue is TGocciaSymbolValue then
-              SetRegister(A, TGocciaClassValue(FRegisters[B].ObjectValue).GetSymbolProperty(
-                TGocciaSymbolValue(PropKeyValue)))
-            else
-              SetRegister(A, TGocciaClassValue(FRegisters[B].ObjectValue).GetProperty(
-                TGocciaStringLiteralValue(PropKeyValue).Value));
-          end
-          else
-            SetRegister(A, TGocciaClassValue(FRegisters[B].ObjectValue).GetProperty(
-              KeyToPropertyNameRegister(FRegisters[C])));
-        end
-        else if (FRegisters[B].Kind = grkObject) and
-                (FRegisters[B].ObjectValue is TGocciaObjectValue) then
-        begin
-          if (FRegisters[C].Kind = grkObject) and
-             (FRegisters[C].ObjectValue is TGocciaSymbolValue) then
-            SetRegister(A, TGocciaObjectValue(FRegisters[B].ObjectValue).GetSymbolProperty(
-              TGocciaSymbolValue(FRegisters[C].ObjectValue)))
-          else if TryResolveObjectKey(FRegisters[C], PropKeyValue) then
-          begin
-            if PropKeyValue is TGocciaSymbolValue then
-              SetRegister(A, TGocciaObjectValue(FRegisters[B].ObjectValue).GetSymbolProperty(
-                TGocciaSymbolValue(PropKeyValue)))
-            else
-              SetRegister(A, TGocciaObjectValue(FRegisters[B].ObjectValue).GetProperty(
-                TGocciaStringLiteralValue(PropKeyValue).Value));
-          end
-          else
-            SetRegister(A, TGocciaObjectValue(FRegisters[B].ObjectValue).GetProperty(
-              KeyToPropertyNameRegister(FRegisters[C])));
-        end
-        else
-          ExecGetComputedPropertyFallback(A, FRegisters[B], FRegisters[C]);
-      end;
+        ExecGetComputedProperty(A, FRegisters[B], FRegisters[C],
+          ELEMENT_GET_OPTIONS);
 
       OP_ARRAY_SET:
-      begin
-        if (FRegisters[A].Kind = grkObject) and
-           (FRegisters[A].ObjectValue is TGocciaArrayValue) then
-        begin
-          if (FRegisters[B].Kind = grkObject) and
-             (FRegisters[B].ObjectValue is TGocciaSymbolValue) then
-            TGocciaArrayValue(FRegisters[A].ObjectValue).AssignSymbolProperty(
-              TGocciaSymbolValue(FRegisters[B].ObjectValue), RegisterToValue(FRegisters[C]))
-          else if TryGetArrayIndexRegister(FRegisters[B], KeyIndex) then
-            TGocciaArrayValue(FRegisters[A].ObjectValue).SetProperty(
-              IntToStr(KeyIndex), RegisterToValue(FRegisters[C]))
-          else if TryResolveObjectKey(FRegisters[B], PropKeyValue) then
-          begin
-            if PropKeyValue is TGocciaSymbolValue then
-              TGocciaArrayValue(FRegisters[A].ObjectValue).AssignSymbolProperty(
-                TGocciaSymbolValue(PropKeyValue), RegisterToValue(FRegisters[C]))
-            else
-              TGocciaArrayValue(FRegisters[A].ObjectValue).SetProperty(
-                TGocciaStringLiteralValue(PropKeyValue).Value,
-                RegisterToValue(FRegisters[C]));
-          end
-          else
-            TGocciaArrayValue(FRegisters[A].ObjectValue).SetProperty(
-              KeyToPropertyNameRegister(FRegisters[B]),
-              RegisterToValue(FRegisters[C]));
-        end
-        else if (FRegisters[A].Kind = grkObject) and
-                (FRegisters[A].ObjectValue is TGocciaClassValue) then
-        begin
-          SetBytecodeHomeObject(RegisterToValue(FRegisters[C]),
-            RegisterToValue(FRegisters[A]));
-          if (FRegisters[B].Kind = grkObject) and
-             (FRegisters[B].ObjectValue is TGocciaSymbolValue) then
-            TGocciaClassValue(FRegisters[A].ObjectValue).AssignSymbolProperty(
-              TGocciaSymbolValue(FRegisters[B].ObjectValue), RegisterToValue(FRegisters[C]))
-          else if TryResolveObjectKey(FRegisters[B], PropKeyValue) then
-          begin
-            if PropKeyValue is TGocciaSymbolValue then
-              TGocciaClassValue(FRegisters[A].ObjectValue).AssignSymbolProperty(
-                TGocciaSymbolValue(PropKeyValue), RegisterToValue(FRegisters[C]))
-            else
-              TGocciaClassValue(FRegisters[A].ObjectValue).SetProperty(
-                TGocciaStringLiteralValue(PropKeyValue).Value,
-                RegisterToValue(FRegisters[C]));
-          end
-          else
-            TGocciaClassValue(FRegisters[A].ObjectValue).SetProperty(
-              KeyToPropertyNameRegister(FRegisters[B]),
-              RegisterToValue(FRegisters[C]));
-        end
-        else if (FRegisters[A].Kind = grkObject) and
-                (FRegisters[A].ObjectValue is TGocciaObjectValue) then
-        begin
-          if (FRegisters[B].Kind = grkObject) and
-             (FRegisters[B].ObjectValue is TGocciaSymbolValue) then
-            TGocciaObjectValue(FRegisters[A].ObjectValue).AssignSymbolProperty(
-              TGocciaSymbolValue(FRegisters[B].ObjectValue), RegisterToValue(FRegisters[C]))
-          else if TryResolveObjectKey(FRegisters[B], PropKeyValue) then
-          begin
-            if PropKeyValue is TGocciaSymbolValue then
-              TGocciaObjectValue(FRegisters[A].ObjectValue).AssignSymbolProperty(
-                TGocciaSymbolValue(PropKeyValue), RegisterToValue(FRegisters[C]))
-            else
-              TGocciaObjectValue(FRegisters[A].ObjectValue).SetProperty(
-                TGocciaStringLiteralValue(PropKeyValue).Value,
-                RegisterToValue(FRegisters[C]));
-          end
-          else
-            TGocciaObjectValue(FRegisters[A].ObjectValue).SetProperty(
-              KeyToPropertyNameRegister(FRegisters[B]),
-              RegisterToValue(FRegisters[C]));
-        end
-        else if (FRegisters[B].Kind = grkObject) and
-                (FRegisters[B].ObjectValue is TGocciaSymbolValue) then
-          ThrowTypeError(SErrorCannotSetPropertyOnNonObject,
-            SSuggestCheckNullBeforeAccess)
-        else
-          SetPropertyValue(GetRegister(A),
-            KeyToPropertyNameRegister(FRegisters[B]),
-            RegisterToValue(FRegisters[C]));
-      end;
+        ExecSetComputedProperty(A, FRegisters[B], FRegisters[C],
+          ELEMENT_SET_OPTIONS);
 
       OP_GET_LENGTH:
       begin
@@ -11711,17 +12237,96 @@ begin
       end;
 
       OP_GET_PROP_CONST:
-        if (FRegisters[B].Kind = grkObject) and Assigned(FRegisters[B].ObjectValue) then
+        if (FRegisters[B].Kind = grkObject) and Assigned(FRegisters[B].ObjectValue) and
+           (FRegisters[B].ObjectValue is TGocciaObjectValue) then
         begin
-          GlobalName := Template.GetConstantUnchecked(C).StringValue;
-          if (not IsBytecodePrivateKey(GlobalName)) and
-             (FRegisters[B].ObjectValue is TGocciaVMLiteralObjectValue) and
-             TGocciaVMLiteralObjectValue(FRegisters[B].ObjectValue).TryGetOwnDataPropertyFastRegister(
-               GlobalName, FRegisters[A]) then
-            { fast path already assigned }
+          // Hot shape: per-site inline cache keyed by the name-constant
+          // index, validated against (own-map identity, map entry version).
+          // Hits and fills serve only own plain data properties on
+          // ordinary-lookup receivers; everything else degrades to the
+          // generic GetPropertyValue path. Sites whose MissStreak saturated
+          // are megamorphic: they skip the cache and use the uncached
+          // own-data fast path. A nil slot (out-of-range constant index in
+          // corrupt bytecode) runs fully uncached.
+          PropertyReadCache := Template.PropertyReadCacheSlot(C);
+          if Assigned(PropertyReadCache) and
+             (PropertyReadCache^.MissStreak <
+              PROPERTY_READ_CACHE_POLYMORPHIC_LIMIT) and
+             VMPropertyReadCacheableReceiver(FRegisters[B].ObjectValue) and
+             VMTryGetCachedOwnDataProperty(
+               TGocciaObjectValue(FRegisters[B].ObjectValue),
+               PropertyReadCache, GlobalBindingValue) then
+            SetRegisterFast(A, GlobalBindingValue)
           else
-            SetRegister(A, GetPropertyValue(FRegisters[B].ObjectValue, GlobalName));
+          begin
+            ProtoReadCache := Template.ProtoReadCacheSlot(C);
+            if Assigned(ProtoReadCache) and
+               (ProtoReadCache^.MissStreak <
+                PROPERTY_READ_CACHE_POLYMORPHIC_LIMIT) and
+               VMTryGetCachedProtoProperty(
+                 TGocciaObjectValue(FRegisters[B].ObjectValue),
+                 ProtoReadCache, GlobalBindingValue) then
+              SetRegisterFast(A, GlobalBindingValue)
+            else
+            begin
+              GlobalName := Template.GetConstantUnchecked(C).StringValue;
+              if VMPropertyReadCacheableReceiver(FRegisters[B].ObjectValue) and
+                 (not IsBytecodePrivateKey(GlobalName)) then
+              begin
+                // One own-map probe establishes own-data / own-non-data /
+                // absent; no fallback tier re-hashes the same name on this
+                // receiver.
+                case VMProbeOwnProperty(
+                  TGocciaObjectValue(FRegisters[B].ObjectValue), GlobalName,
+                  KeyIndex, PrivateDescriptor) of
+                  oppData:
+                  begin
+                    if Assigned(PropertyReadCache) and
+                       (PropertyReadCache^.MissStreak <
+                        PROPERTY_READ_CACHE_POLYMORPHIC_LIMIT) then
+                      VMPrimeOwnPropertyCache(
+                        TGocciaObjectValue(FRegisters[B].ObjectValue),
+                        KeyIndex, PropertyReadCache);
+                    SetRegisterFast(A,
+                      TGocciaPropertyDescriptorData(PrivateDescriptor).Value);
+                  end;
+                  oppNonData:
+                  begin
+                    // Accessor/exotic own descriptor: never cacheable here;
+                    // converge the own tier toward dormant.
+                    if Assigned(PropertyReadCache) and
+                       (PropertyReadCache^.MissStreak <
+                        PROPERTY_READ_CACHE_POLYMORPHIC_LIMIT) then
+                      Inc(PropertyReadCache^.MissStreak);
+                    ServeOwnNonDataProperty(A, FRegisters[B].ObjectValue,
+                      PrivateDescriptor);
+                  end;
+                else
+                  // oppAbsent: own absence is established, so the proto
+                  // fill may skip its own re-probe (see the core's
+                  // contract); deeper or exotic resolutions stay generic.
+                  if Assigned(ProtoReadCache) and
+                     (ProtoReadCache^.MissStreak <
+                      PROPERTY_READ_CACHE_POLYMORPHIC_LIMIT) and
+                     VMFillProtoReadCache(
+                       TGocciaObjectValue(FRegisters[B].ObjectValue),
+                       GlobalName, ProtoReadCache, GlobalBindingValue) then
+                    SetRegisterFast(A, GlobalBindingValue)
+                  else
+                    SetRegister(A, GetPropertyValue(FRegisters[B].ObjectValue,
+                      GlobalName));
+                end;
+              end
+              else
+                SetRegister(A, GetPropertyValue(FRegisters[B].ObjectValue,
+                  GlobalName));
+            end;
+          end;
         end
+        else if (FRegisters[B].Kind = grkObject) and
+                Assigned(FRegisters[B].ObjectValue) then
+          SetRegister(A, GetPropertyValue(FRegisters[B].ObjectValue,
+            Template.GetConstantUnchecked(C).StringValue))
         else
           SetRegister(A, GetPropertyValue(GetRegister(B),
             Template.GetConstantUnchecked(C).StringValue));
@@ -11809,38 +12414,23 @@ begin
       begin
         RightValue := RegisterToValue(FRegisters[C]);
         TargetValue := GetRegister(A);
-        if (TargetValue is TGocciaObjectValue) and
-           (FRegisters[B].Kind = grkObject) and
-           (FRegisters[B].ObjectValue is TGocciaSymbolValue) then
-          TGocciaObjectValue(TargetValue).DefineSymbolProperty(
-            TGocciaSymbolValue(FRegisters[B].ObjectValue),
-            TGocciaPropertyDescriptorData.Create(
-              RightValue, [pfEnumerable, pfConfigurable, pfWritable]))
-        else if (TargetValue is TGocciaObjectValue) and
-                TryResolveObjectKey(FRegisters[B], PropKeyValue) then
+        if TargetValue is TGocciaObjectValue then
         begin
-          if PropKeyValue is TGocciaSymbolValue then
+          PropKey := ClassifyPropertyKey(FRegisters[B], False);
+          if PropKey.Kind = pkkSymbol then
             TGocciaObjectValue(TargetValue).DefineSymbolProperty(
-              TGocciaSymbolValue(PropKeyValue),
+              PropKey.Symbol,
               TGocciaPropertyDescriptorData.Create(
                 RightValue, [pfEnumerable, pfConfigurable, pfWritable]))
           else
             TGocciaObjectValue(TargetValue).DefineProperty(
-              TGocciaStringLiteralValue(PropKeyValue).Value,
+              PropertyKeyName(PropKey),
               TGocciaPropertyDescriptorData.Create(
                 RightValue, [pfEnumerable, pfConfigurable, pfWritable]));
         end
         else
-        begin
-          GlobalName := KeyToPropertyNameRegister(FRegisters[B]);
-          if TargetValue is TGocciaObjectValue then
-            TGocciaObjectValue(TargetValue).DefineProperty(
-              GlobalName,
-              TGocciaPropertyDescriptorData.Create(
-                RightValue, [pfEnumerable, pfConfigurable, pfWritable]))
-          else
-            SetPropertyValue(TargetValue, GlobalName, RightValue);
-        end;
+          SetPropertyValue(TargetValue,
+            KeyToPropertyNameRegister(FRegisters[B]), RightValue);
       end;
 
       OP_DEFINE_STATIC_METHOD_CONST:
@@ -11945,243 +12535,12 @@ begin
       end;
 
       OP_GET_INDEX:
-      begin
-        if (FRegisters[B].Kind = grkObject) and
-           (FRegisters[B].ObjectValue is TGocciaArrayValue) then
-        begin
-          if (FRegisters[C].Kind = grkObject) and
-             (FRegisters[C].ObjectValue is TGocciaSymbolValue) then
-            SetRegister(A, TGocciaArrayValue(FRegisters[B].ObjectValue).GetSymbolProperty(
-              TGocciaSymbolValue(FRegisters[C].ObjectValue)))
-          else if TryGetArrayIndexRegister(FRegisters[C], KeyIndex) then
-          begin
-            if (KeyIndex >= 0) and
-               (KeyIndex < TGocciaArrayValue(FRegisters[B].ObjectValue).Elements.Count) and
-               (TGocciaArrayValue(FRegisters[B].ObjectValue).Elements[KeyIndex] <>
-                TGocciaHoleValue.HoleValue) then
-              FRegisters[A] := VMValueToRegisterFast(
-                TGocciaArrayValue(FRegisters[B].ObjectValue).Elements[KeyIndex])
-            else
-              // Hole, out-of-range, or accessor-shadowed slot: take the slow
-              // path so accessor descriptors and prototype lookups run.
-              SetRegister(A, TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(
-                IntToStr(KeyIndex)));
-          end
-          else if TryResolveObjectKey(FRegisters[C], PropKeyValue) then
-          begin
-            if PropKeyValue is TGocciaSymbolValue then
-              SetRegister(A, TGocciaArrayValue(FRegisters[B].ObjectValue).GetSymbolProperty(
-                TGocciaSymbolValue(PropKeyValue)))
-            else
-              SetRegister(A, TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(
-                TGocciaStringLiteralValue(PropKeyValue).Value));
-          end
-          else
-            SetRegister(A, TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(
-              KeyToPropertyNameRegister(FRegisters[C])));
-        end
-        else if (FRegisters[B].Kind = grkObject) and
-                (FRegisters[B].ObjectValue is TGocciaClassValue) then
-        begin
-          // Classes must be matched before TGocciaObjectValue so that static
-          // symbol-keyed properties (FStaticSymbolDescriptors) and the
-          // superclass walk are reached. TGocciaClassValue.GetSymbolProperty
-          // is not virtual on the base, so a TGocciaObjectValue cast would
-          // bypass them. Mirrors OP_ARRAY_GET ordering.
-          if (FRegisters[C].Kind = grkObject) and
-             (FRegisters[C].ObjectValue is TGocciaSymbolValue) then
-            SetRegister(A, TGocciaClassValue(FRegisters[B].ObjectValue).GetSymbolProperty(
-              TGocciaSymbolValue(FRegisters[C].ObjectValue)))
-          else if TryResolveObjectKey(FRegisters[C], PropKeyValue) then
-          begin
-            if PropKeyValue is TGocciaSymbolValue then
-              SetRegister(A, TGocciaClassValue(FRegisters[B].ObjectValue).GetSymbolProperty(
-                TGocciaSymbolValue(PropKeyValue)))
-            else
-            begin
-              GlobalName := TGocciaStringLiteralValue(PropKeyValue).Value;
-              if IsBytecodePrivateKey(GlobalName) then
-                SetRegister(A, GetPropertyValue(FRegisters[B].ObjectValue,
-                  GlobalName))
-              else
-                SetRegister(A, TGocciaClassValue(FRegisters[B].ObjectValue).GetProperty(
-                  GlobalName));
-            end;
-          end
-          else
-          begin
-            GlobalName := KeyToPropertyNameRegister(FRegisters[C]);
-            if IsBytecodePrivateKey(GlobalName) then
-              SetRegister(A, GetPropertyValue(FRegisters[B].ObjectValue,
-                GlobalName))
-            else
-              SetRegister(A, TGocciaClassValue(FRegisters[B].ObjectValue).GetProperty(
-                GlobalName));
-          end;
-        end
-        else if (FRegisters[B].Kind = grkObject) and
-                (FRegisters[B].ObjectValue is TGocciaObjectValue) then
-        begin
-          if (FRegisters[C].Kind = grkObject) and
-             (FRegisters[C].ObjectValue is TGocciaSymbolValue) then
-            SetRegister(A, TGocciaObjectValue(FRegisters[B].ObjectValue).GetSymbolProperty(
-              TGocciaSymbolValue(FRegisters[C].ObjectValue)))
-          else if TryResolveObjectKey(FRegisters[C], PropKeyValue) then
-          begin
-            if PropKeyValue is TGocciaSymbolValue then
-              SetRegister(A, TGocciaObjectValue(FRegisters[B].ObjectValue).GetSymbolProperty(
-                TGocciaSymbolValue(PropKeyValue)))
-            else
-            begin
-              GlobalName := TGocciaStringLiteralValue(PropKeyValue).Value;
-              if (FRegisters[B].ObjectValue is TGocciaVMLiteralObjectValue) and
-                  TGocciaVMLiteralObjectValue(FRegisters[B].ObjectValue).TryGetOwnDataPropertyFastRegister(
-                    GlobalName, FRegisters[A]) then
-                { fast path already assigned }
-              else
-                SetRegister(A, TGocciaObjectValue(FRegisters[B].ObjectValue).GetProperty(
-                  GlobalName));
-            end;
-          end
-          else
-          begin
-            GlobalName := KeyToPropertyNameRegister(FRegisters[C]);
-            if IsBytecodePrivateKey(GlobalName) then
-              SetRegister(A, GetPropertyValue(FRegisters[B].ObjectValue,
-                GlobalName))
-            else if (FRegisters[B].ObjectValue is TGocciaVMLiteralObjectValue) and
-                    TGocciaVMLiteralObjectValue(FRegisters[B].ObjectValue).TryGetOwnDataPropertyFastRegister(
-                      GlobalName, FRegisters[A]) then
-              { fast path already assigned }
-            else
-              SetRegister(A, TGocciaObjectValue(FRegisters[B].ObjectValue).GetProperty(
-                GlobalName));
-          end;
-        end
-        else
-          ExecGetComputedPropertyFallback(A, FRegisters[B], FRegisters[C]);
-      end;
+        ExecGetComputedProperty(A, FRegisters[B], FRegisters[C],
+          MEMBER_GET_OPTIONS);
 
       OP_SET_INDEX:
-      begin
-        RightValue := RegisterToValue(FRegisters[C]);
-        if (FRegisters[A].Kind = grkObject) and
-           (FRegisters[A].ObjectValue is TGocciaArrayValue) then
-        begin
-          SetBytecodeHomeObject(RightValue, FRegisters[A].ObjectValue);
-          if (FRegisters[B].Kind = grkObject) and
-             (FRegisters[B].ObjectValue is TGocciaSymbolValue) then
-            TGocciaArrayValue(FRegisters[A].ObjectValue).AssignSymbolProperty(
-              TGocciaSymbolValue(FRegisters[B].ObjectValue), RightValue)
-          else if TryGetArrayIndexRegister(FRegisters[B], KeyIndex) then
-            TGocciaArrayValue(FRegisters[A].ObjectValue).SetProperty(
-              IntToStr(KeyIndex), RightValue)
-          else if TryResolveObjectKey(FRegisters[B], PropKeyValue) then
-          begin
-            if PropKeyValue is TGocciaSymbolValue then
-              TGocciaArrayValue(FRegisters[A].ObjectValue).AssignSymbolProperty(
-                TGocciaSymbolValue(PropKeyValue), RightValue)
-            else
-              TGocciaArrayValue(FRegisters[A].ObjectValue).SetProperty(
-                TGocciaStringLiteralValue(PropKeyValue).Value, RightValue);
-          end
-          else
-            TGocciaArrayValue(FRegisters[A].ObjectValue).SetProperty(
-              KeyToPropertyNameRegister(FRegisters[B]),
-              RightValue);
-        end
-        else if (FRegisters[A].Kind = grkObject) and
-                (FRegisters[A].ObjectValue is TGocciaClassValue) then
-        begin
-          SetBytecodeHomeObject(RightValue, RegisterToValue(FRegisters[A]));
-          if (FRegisters[B].Kind = grkObject) and
-             (FRegisters[B].ObjectValue is TGocciaSymbolValue) then
-            TGocciaClassValue(FRegisters[A].ObjectValue).DefineSymbolProperty(
-              TGocciaSymbolValue(FRegisters[B].ObjectValue),
-              TGocciaPropertyDescriptorData.Create(
-                RightValue, [pfConfigurable, pfWritable]))
-          else if TryResolveObjectKey(FRegisters[B], PropKeyValue) then
-          begin
-            if PropKeyValue is TGocciaSymbolValue then
-              TGocciaClassValue(FRegisters[A].ObjectValue).DefineSymbolProperty(
-                TGocciaSymbolValue(PropKeyValue),
-                TGocciaPropertyDescriptorData.Create(
-                  RightValue, [pfConfigurable, pfWritable]))
-            else
-            begin
-              GlobalName := TGocciaStringLiteralValue(PropKeyValue).Value;
-              if IsBytecodePrivateKey(GlobalName) then
-                SetPropertyValue(FRegisters[A].ObjectValue, GlobalName,
-                  RightValue)
-              else
-                TGocciaClassValue(FRegisters[A].ObjectValue).DefineProperty(
-                  GlobalName,
-                  TGocciaPropertyDescriptorData.Create(
-                    RightValue, [pfConfigurable, pfWritable]));
-            end;
-          end
-          else
-          begin
-            GlobalName := KeyToPropertyNameRegister(FRegisters[B]);
-            if IsBytecodePrivateKey(GlobalName) then
-              SetPropertyValue(FRegisters[A].ObjectValue, GlobalName,
-                RightValue)
-            else
-              TGocciaClassValue(FRegisters[A].ObjectValue).DefineProperty(
-                GlobalName,
-                TGocciaPropertyDescriptorData.Create(
-                  RightValue, [pfConfigurable, pfWritable]));
-          end;
-        end
-        else if (FRegisters[A].Kind = grkObject) and
-                (FRegisters[A].ObjectValue is TGocciaObjectValue) then
-        begin
-          SetBytecodeHomeObject(RightValue, FRegisters[A].ObjectValue);
-          if (FRegisters[B].Kind = grkObject) and
-             (FRegisters[B].ObjectValue is TGocciaSymbolValue) then
-            TGocciaObjectValue(FRegisters[A].ObjectValue).AssignSymbolProperty(
-              TGocciaSymbolValue(FRegisters[B].ObjectValue), RightValue)
-          else if TryResolveObjectKey(FRegisters[B], PropKeyValue) then
-          begin
-            if PropKeyValue is TGocciaSymbolValue then
-              TGocciaObjectValue(FRegisters[A].ObjectValue).AssignSymbolProperty(
-                TGocciaSymbolValue(PropKeyValue), RightValue)
-            else
-            begin
-              GlobalName := TGocciaStringLiteralValue(PropKeyValue).Value;
-              if IsBytecodePrivateKey(GlobalName) then
-                SetPropertyValue(FRegisters[A].ObjectValue, GlobalName,
-                  RightValue)
-              else
-                TGocciaObjectValue(FRegisters[A].ObjectValue).SetProperty(
-                  GlobalName, RightValue);
-            end;
-          end
-          else
-          begin
-            GlobalName := KeyToPropertyNameRegister(FRegisters[B]);
-            if IsBytecodePrivateKey(GlobalName) then
-              SetPropertyValue(FRegisters[A].ObjectValue, GlobalName,
-                RightValue)
-            else
-              TGocciaObjectValue(FRegisters[A].ObjectValue).SetProperty(
-                GlobalName, RightValue);
-          end;
-        end
-        else if (FRegisters[B].Kind = grkObject) and
-                (FRegisters[B].ObjectValue is TGocciaSymbolValue) then
-          ThrowTypeError(SErrorCannotSetPropertyOnNonObject,
-            SSuggestCheckNullBeforeAccess)
-        else begin
-          TargetValue := GetRegister(A);
-          if (TargetValue is TGocciaClassValue) or
-             (TargetValue is TGocciaObjectValue) then
-            SetBytecodeHomeObject(RightValue, TargetValue);
-          SetPropertyValue(TargetValue,
-            KeyToPropertyNameRegister(FRegisters[B]),
-            RightValue);
-        end;
-      end;
+        ExecSetComputedProperty(A, FRegisters[B], FRegisters[C],
+          MEMBER_SET_OPTIONS);
 
       OP_SET_INDEX_LOOSE:
       begin
@@ -12688,193 +13047,10 @@ begin
         SetRegisterFast(A, VMRegisterToStringFast(FRegisters[B]));
 
       OP_DEL_INDEX:
-      begin
-        if FRegisters[B].Kind = grkNull then
-          ThrowTypeError(Format(SErrorCannotReadPropertiesOfNull,
-            [KeyDisplaySafe(FRegisters[C])]),
-            SSuggestCheckNullBeforeAccess)
-        else if FRegisters[B].Kind = grkUndefined then
-          ThrowTypeError(Format(SErrorCannotReadPropertiesOfUndefined,
-            [KeyDisplaySafe(FRegisters[C])]),
-            SSuggestCheckNullBeforeAccess)
-        else if (FRegisters[B].Kind = grkObject) and
-           (FRegisters[B].ObjectValue is TGocciaObjectValue) and
-           (FRegisters[C].Kind = grkObject) and
-           (FRegisters[C].ObjectValue is TGocciaSymbolValue) then
-        begin
-          // ES2026 §13.5.1.2 step 5.b: a non-configurable symbol property
-          // throws TypeError on delete (mirrors EvaluateDelete's symbol path
-          // in the interpreter). Pre-refactor the bytecode threw via the
-          // symbol-stringification side effect; the spec-correct path keeps
-          // that throw.
-          if TGocciaObjectValue(FRegisters[B].ObjectValue).DeleteSymbolProperty(
-            TGocciaSymbolValue(FRegisters[C].ObjectValue)) then
-            FRegisters[A] := RegisterBoolean(True)
-          else
-            ThrowTypeError(Format(SErrorCannotDeletePropertyOf,
-              [TGocciaSymbolValue(FRegisters[C].ObjectValue).ToDisplayString.Value,
-               '[object Object]']),
-              SSuggestCannotDeleteNonConfigurable);
-        end
-        else if (FRegisters[B].Kind = grkObject) and
-           (FRegisters[B].ObjectValue is TGocciaArrayValue) then
-        begin
-          if TryGetArrayIndexRegister(FRegisters[C], KeyIndex) and
-             (KeyIndex >= 0) and
-             (KeyIndex < TGocciaArrayValue(FRegisters[B].ObjectValue).Elements.Count) then
-          begin
-            TGocciaArrayValue(FRegisters[B].ObjectValue).SetElement(
-              KeyIndex, TGocciaHoleValue.HoleValue);
-            FRegisters[A] := RegisterBoolean(True);
-          end
-          else if TryResolveObjectKey(FRegisters[C], PropKeyValue) then
-          begin
-            if PropKeyValue is TGocciaSymbolValue then
-            begin
-              if TGocciaObjectValue(FRegisters[B].ObjectValue).DeleteSymbolProperty(
-                TGocciaSymbolValue(PropKeyValue)) then
-                FRegisters[A] := RegisterBoolean(True)
-              else
-                ThrowTypeError(Format(SErrorCannotDeletePropertyOf,
-                  [TGocciaSymbolValue(PropKeyValue).ToDisplayString.Value,
-                   '[object Object]']),
-                  SSuggestCannotDeleteNonConfigurable);
-            end
-            else if TGocciaObjectValue(FRegisters[B].ObjectValue).DeleteProperty(
-              TGocciaStringLiteralValue(PropKeyValue).Value) then
-              FRegisters[A] := RegisterBoolean(True)
-            else
-              ThrowTypeError(Format(SErrorCannotDeletePropertyOf,
-                [TGocciaStringLiteralValue(PropKeyValue).Value,
-                 '[object Object]']),
-                SSuggestCannotDeleteNonConfigurable);
-          end
-          else if TGocciaObjectValue(FRegisters[B].ObjectValue).DeleteProperty(
-            KeyToPropertyNameRegister(FRegisters[C])) then
-            FRegisters[A] := RegisterBoolean(True)
-          else
-            ThrowTypeError(Format(SErrorCannotDeletePropertyOf,
-              [KeyToPropertyNameRegister(FRegisters[C]), '[object Object]']),
-              SSuggestCannotDeleteNonConfigurable);
-        end
-        else if (FRegisters[B].Kind = grkObject) and
-                (FRegisters[B].ObjectValue is TGocciaObjectValue) then
-        begin
-          if TryResolveObjectKey(FRegisters[C], PropKeyValue) then
-          begin
-            if PropKeyValue is TGocciaSymbolValue then
-            begin
-              if TGocciaObjectValue(FRegisters[B].ObjectValue).DeleteSymbolProperty(
-                TGocciaSymbolValue(PropKeyValue)) then
-                FRegisters[A] := RegisterBoolean(True)
-              else
-                ThrowTypeError(Format(SErrorCannotDeletePropertyOf,
-                  [TGocciaSymbolValue(PropKeyValue).ToDisplayString.Value,
-                   '[object Object]']),
-                  SSuggestCannotDeleteNonConfigurable);
-            end
-            else if TGocciaObjectValue(FRegisters[B].ObjectValue).DeleteProperty(
-              TGocciaStringLiteralValue(PropKeyValue).Value) then
-              FRegisters[A] := RegisterBoolean(True)
-            else
-              ThrowTypeError(Format(SErrorCannotDeletePropertyOf,
-                [TGocciaStringLiteralValue(PropKeyValue).Value, '[object Object]']),
-                SSuggestCannotDeleteNonConfigurable);
-          end
-          else if TGocciaObjectValue(FRegisters[B].ObjectValue).DeleteProperty(
-            KeyToPropertyNameRegister(FRegisters[C])) then
-            FRegisters[A] := RegisterBoolean(True)
-          else
-            ThrowTypeError(Format(SErrorCannotDeletePropertyOf,
-              [KeyToPropertyNameRegister(FRegisters[C]), '[object Object]']),
-              SSuggestCannotDeleteNonConfigurable);
-        end
-        else
-          FRegisters[A] := RegisterBoolean(True);
-      end;
+        ExecDeleteComputedProperty(A, FRegisters[B], FRegisters[C], True);
 
       OP_DEL_INDEX_LOOSE:
-      begin
-        if FRegisters[B].Kind = grkNull then
-          ThrowTypeError(Format(SErrorCannotReadPropertiesOfNull,
-            [KeyDisplaySafe(FRegisters[C])]),
-            SSuggestCheckNullBeforeAccess)
-        else if FRegisters[B].Kind = grkUndefined then
-          ThrowTypeError(Format(SErrorCannotReadPropertiesOfUndefined,
-            [KeyDisplaySafe(FRegisters[C])]),
-            SSuggestCheckNullBeforeAccess)
-        else if (FRegisters[B].Kind = grkObject) and
-           (FRegisters[B].ObjectValue is TGocciaObjectValue) and
-           (FRegisters[C].Kind = grkObject) and
-           (FRegisters[C].ObjectValue is TGocciaSymbolValue) then
-        begin
-          if TGocciaObjectValue(FRegisters[B].ObjectValue).DeleteSymbolProperty(
-            TGocciaSymbolValue(FRegisters[C].ObjectValue)) then
-            FRegisters[A] := RegisterBoolean(True)
-          else
-            FRegisters[A] := RegisterBoolean(False);
-        end
-        else if (FRegisters[B].Kind = grkObject) and
-           (FRegisters[B].ObjectValue is TGocciaArrayValue) then
-        begin
-          if TryGetArrayIndexRegister(FRegisters[C], KeyIndex) and
-             (KeyIndex >= 0) and
-             (KeyIndex < TGocciaArrayValue(FRegisters[B].ObjectValue).Elements.Count) then
-          begin
-            TGocciaArrayValue(FRegisters[B].ObjectValue).SetElement(
-              KeyIndex, TGocciaHoleValue.HoleValue);
-            FRegisters[A] := RegisterBoolean(True);
-          end
-          else if TryResolveObjectKey(FRegisters[C], PropKeyValue) then
-          begin
-            if PropKeyValue is TGocciaSymbolValue then
-            begin
-              if TGocciaObjectValue(FRegisters[B].ObjectValue).DeleteSymbolProperty(
-                TGocciaSymbolValue(PropKeyValue)) then
-                FRegisters[A] := RegisterBoolean(True)
-              else
-                FRegisters[A] := RegisterBoolean(False);
-            end
-            else if TGocciaObjectValue(FRegisters[B].ObjectValue).DeleteProperty(
-              TGocciaStringLiteralValue(PropKeyValue).Value) then
-              FRegisters[A] := RegisterBoolean(True)
-            else
-              FRegisters[A] := RegisterBoolean(False);
-          end
-          else if TGocciaObjectValue(FRegisters[B].ObjectValue).DeleteProperty(
-            KeyToPropertyNameRegister(FRegisters[C])) then
-            FRegisters[A] := RegisterBoolean(True)
-          else
-            FRegisters[A] := RegisterBoolean(False);
-        end
-        else if (FRegisters[B].Kind = grkObject) and
-                (FRegisters[B].ObjectValue is TGocciaObjectValue) then
-        begin
-          if TryResolveObjectKey(FRegisters[C], PropKeyValue) then
-          begin
-            if PropKeyValue is TGocciaSymbolValue then
-            begin
-              if TGocciaObjectValue(FRegisters[B].ObjectValue).DeleteSymbolProperty(
-                TGocciaSymbolValue(PropKeyValue)) then
-                FRegisters[A] := RegisterBoolean(True)
-              else
-                FRegisters[A] := RegisterBoolean(False);
-            end
-            else if TGocciaObjectValue(FRegisters[B].ObjectValue).DeleteProperty(
-              TGocciaStringLiteralValue(PropKeyValue).Value) then
-              FRegisters[A] := RegisterBoolean(True)
-            else
-              FRegisters[A] := RegisterBoolean(False);
-          end
-          else if TGocciaObjectValue(FRegisters[B].ObjectValue).DeleteProperty(
-            KeyToPropertyNameRegister(FRegisters[C])) then
-            FRegisters[A] := RegisterBoolean(True)
-          else
-            FRegisters[A] := RegisterBoolean(False);
-        end
-        else
-          FRegisters[A] := RegisterBoolean(True);
-      end;
+        ExecDeleteComputedProperty(A, FRegisters[B], FRegisters[C], False);
 
       OP_CLOSURE:
       begin

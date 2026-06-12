@@ -51,6 +51,8 @@ type
     FOpcodePairs: PGocciaOpcodePairArray;
     FScalarHits: Int64;
     FScalarMisses: Int64;
+    FShapeDepthLimitEvents: Int64;
+    FShapeTableSaturationEvents: Int64;
     FFunctionProfiles: array of TGocciaFunctionProfile;
     FFunctionProfileCount: Integer;
     FTimingStack: array of TGocciaProfilingStackEntry;
@@ -70,6 +72,12 @@ type
     procedure RecordScalarHit; inline;
     procedure RecordScalarMiss; inline;
     procedure RecordAllocation; inline;
+    // Shape system saturation events (cold paths; see Goccia.Values.Shape):
+    // an object layout hitting the transition depth limit, and a realm
+    // shape table reaching capacity. Both degrade caching silently, so the
+    // profiler is the diagnostic surface for them.
+    procedure RecordShapeDepthLimit; inline;
+    procedure RecordShapeTableSaturation; inline;
 
     function RegisterTemplate(const AName, ASourceFile: string;
       const ALine: Integer): Integer;
@@ -87,6 +95,8 @@ type
     property FunctionProfileCount: Integer read FFunctionProfileCount;
     property ScalarHits: Int64 read FScalarHits;
     property ScalarMisses: Int64 read FScalarMisses;
+    property ShapeDepthLimitEvents: Int64 read FShapeDepthLimitEvents;
+    property ShapeTableSaturationEvents: Int64 read FShapeTableSaturationEvents;
     property CollapsedStacks: TOrderedStringMap<Int64> read FCollapsedStacks;
   end;
 
@@ -182,6 +192,16 @@ end;
 procedure TGocciaProfiler.RecordScalarHit;
 begin
   Inc(FScalarHits);
+end;
+
+procedure TGocciaProfiler.RecordShapeDepthLimit;
+begin
+  Inc(FShapeDepthLimitEvents);
+end;
+
+procedure TGocciaProfiler.RecordShapeTableSaturation;
+begin
+  Inc(FShapeTableSaturationEvents);
 end;
 
 procedure TGocciaProfiler.RecordScalarMiss;

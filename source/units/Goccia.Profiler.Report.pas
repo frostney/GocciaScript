@@ -10,6 +10,7 @@ uses
 procedure PrintOpcodeProfile(const AProfiler: TGocciaProfiler);
 procedure PrintOpcodePairProfile(const AProfiler: TGocciaProfiler);
 procedure PrintScalarHitRate(const AProfiler: TGocciaProfiler);
+procedure PrintShapeSaturation(const AProfiler: TGocciaProfiler);
 procedure PrintFunctionProfile(const AProfiler: TGocciaProfiler);
 procedure WriteProfileJSON(const AProfiler: TGocciaProfiler;
   const AOutputPath: string);
@@ -231,6 +232,22 @@ begin
   WriteLn(Format('  Total:  %12d', [Total]));
 end;
 
+{ Console: Shape Saturation }
+
+procedure PrintShapeSaturation(const AProfiler: TGocciaProfiler);
+begin
+  if (AProfiler.ShapeDepthLimitEvents = 0) and
+     (AProfiler.ShapeTableSaturationEvents = 0) then
+    Exit;
+
+  WriteLn;
+  WriteLn('Shape Saturation (degraded property-read caching):');
+  WriteLn(Format('  Depth-limit prefixes:   %12d',
+    [AProfiler.ShapeDepthLimitEvents]));
+  WriteLn(Format('  Table-capacity events:  %12d',
+    [AProfiler.ShapeTableSaturationEvents]));
+end;
+
 { Console: Function Profile }
 
 procedure PrintFunctionProfile(const AProfiler: TGocciaProfiler);
@@ -380,6 +397,11 @@ begin
     Buf.Append(Format(', "hitRate": %.1f', [Hits * 100.0 / ScalarTotal],
       InvariantFormat));
   Buf.Append('},');
+
+  // Shape saturation section
+  Buf.Append(Format(
+    #10'  "shapeSaturation": {"depthLimitPrefixes": %d, "tableCapacityEvents": %d},', [
+    AProfiler.ShapeDepthLimitEvents, AProfiler.ShapeTableSaturationEvents]));
 
   // Functions section
   Buf.Append(#10'  "functions": [');

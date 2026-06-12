@@ -117,6 +117,20 @@ Recent VM cleanup and optimization work has focused on reducing per-instruction 
 - use unchecked template access in the dispatch loop where bounds are already guaranteed
 - keep fast register access limited to proven hot/simple paths; local-slot and complex property paths should only move to fast access when they stay correct and measurably improve throughput
 
+### Inline Caches
+
+Three per-site inline caches live on `TGocciaFunctionTemplate`, all indexed by the instruction's name-constant index, all runtime-only (never serialised to `.gbc`):
+
+- **Global reads** (`OP_GET_GLOBAL`) — `TGocciaGlobalReadCacheEntry` validates `(scope identity, binding-map entry version)` and re-reads the binding by entry index, skipping the name hash.
+- **Own property reads** (`OP_GET_PROP_CONST`) — `TGocciaPropertyReadCacheEntry` validates the receiver's interned **shape** (`Goccia.Values.Shape`): same shape implies the same key at the cached entry index, so one site hits across many same-layout receivers. The descriptor kind is re-checked on every hit because data-to-accessor redefinition keeps the entry index.
+- **Prototype-resolved reads** (`OP_GET_PROP_CONST`, after an own miss) — `TGocciaProtoReadCacheEntry` proves continued *absence* of the name on the receiver and intermediate levels and *presence* at the holder, all by fresh shape identity per level, then re-reads the holder descriptor by entry index. The live chain is re-walked per hit, so `setPrototypeOf` is followed inherently; chain levels must be exact `TGocciaObjectValue`; chains deeper than two levels, accessor holders, and undefined-valued holder properties stay generic. Class instance methods (data properties on the class prototype object) are the dominant beneficiary.
+
+Hits and fills serve only exact-class `TGocciaObjectValue` / `TGocciaVMLiteralObjectValue` / `TGocciaInstanceValue` receivers, so overridden lookup semantics (proxies, exotic objects, private names) always take the generic path. Shapes are computed lazily at fill time (`EnsureShape`), not eagerly at property-append time: a stale shape is a true prefix description of an append-only layout, so the hit path may read it raw and at worst misses. Delete/clear flip a map to dictionary mode (a sentinel shape that never matches a cache entry). After `PROPERTY_READ_CACHE_POLYMORPHIC_LIMIT` consecutive misses-with-refill or fill declines a site is megamorphic: it stops probing and serves gated receivers through the uncached own-data fast path.
+
+Cached pointers (scope, shape) are compared for identity only and never dereferenced. Scope cache entries carry an entry-version stamp against allocator address reuse; shape entries need none, because shapes are never freed within an engine's lifetime and function templates never outlive their engine.
+
+Computed property access (`OP_ARRAY_GET`/`OP_ARRAY_SET`, `OP_GET_INDEX`/`OP_SET_INDEX`, `OP_DEL_INDEX`) shares one key-classification and receiver-dispatch implementation (`ClassifyPropertyKey` plus the `ExecGet/ExecSet/ExecDeleteComputedProperty` cores in `Goccia.VM.pas`); per-opcode semantic differences are explicit `TGocciaComputedAccessOptions`, not divergent copies.
+
 The current optimization target is reducing bytecode-mode suite time further without diverging interpreter and bytecode semantics.
 
 ## Profiling
