@@ -40,10 +40,8 @@ begin
     Result := AValue.ToNumberLiteral
   else if AValue is TGocciaStringObjectValue then
     Result := AValue.ToStringLiteral
-  else if AValue is TGocciaBooleanObjectValue then
-    Result := TGocciaBooleanObjectValue(AValue).Primitive
   else
-    Result := AValue;
+    Result := UnboxWrappedPrimitive(AValue);
 end;
 
 end.

@@ -713,8 +713,7 @@ begin
   if AValue is TGocciaRawJSONValue then
     Exit(TGocciaRawJSONValue(AValue).RawText);
 
-  // ES2026 §25.5.4.2 steps 4.b-4.d: coerce Number/String wrappers via
-  // ToNumber/ToString; Boolean wrappers read [[BooleanData]].
+  // ES2026 §25.5.4.2 steps 4.b-4.d: unwrap boxed primitives.
   EffectiveValue := CoerceWrappedPrimitive(AValue);
 
   if EffectiveValue is TGocciaNullLiteralValue then

@@ -269,8 +269,7 @@ var
 begin
   Replaced := ApplyToJSON(AValue, AKey);
   Replaced := ApplyReplacer(AHolder, AKey, Replaced, AReplacer);
-  // ES2026 §25.5.4.2 steps 4.b-4.d: coerce Number/String wrappers via
-  // ToNumber/ToString; Boolean wrappers read [[BooleanData]].
+  // ES2026 §25.5.4.2 steps 4.b-4.d: unwrap boxed primitives.
   Replaced := CoerceWrappedPrimitive(Replaced);
 
   if Replaced is TGocciaUndefinedLiteralValue then
@@ -472,8 +471,7 @@ var
   TransformedValue: TGocciaValue;
 begin
   TransformedValue := ApplyToJSON(AValue, AKey);
-  // ES2026 §25.5.4.2 steps 4.b-4.d: coerce Number/String wrappers via
-  // ToNumber/ToString; Boolean wrappers read [[BooleanData]].
+  // ES2026 §25.5.4.2 steps 4.b-4.d: unwrap boxed primitives.
   TransformedValue := CoerceWrappedPrimitive(TransformedValue);
 
   if TransformedValue is TGocciaUndefinedLiteralValue then
@@ -668,12 +666,13 @@ begin
       Result := TGocciaStringLiteralValue.Create(
         FStringifier.Stringify(Value, Gap, QuoteChar));
   except
-    on E: EGocciaBytecodeThrow do
-      raise TGocciaThrowValue.Create(E.ThrownValue);
     on E: TGocciaThrowValue do
       raise;
     on E: Exception do
+    begin
+      ReraiseBytecodeThrow(E);
       ThrowTypeError(Format(SErrorJSON5StringifyError, [E.Message]), SSuggestJSONFormat);
+    end;
   end;
 end;
 

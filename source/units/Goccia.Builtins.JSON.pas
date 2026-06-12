@@ -60,9 +60,7 @@ uses
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
   Goccia.Values.HoleValue,
-  Goccia.Values.NumberObjectValue,
   Goccia.Values.ObjectPropertyDescriptor,
-  Goccia.Values.StringObjectValue,
   Goccia.Values.SymbolValue,
   Goccia.Values.WrapperPrimitives,
   Goccia.VM.Exception;
@@ -176,7 +174,7 @@ begin
       Result := InvokeCallable(AReviver, Args, AHolder);
     except
       on E: EGocciaBytecodeThrow do
-        raise TGocciaThrowValue.Create(E.ThrownValue);
+        ReraiseBytecodeThrow(E);
     end;
   finally
     Args.Free;
@@ -325,15 +323,11 @@ var
   SpaceCount: Integer;
 begin
   Result := '';
-  Space := ASpaceArg;
   // Step 6: If space is an Object with a [[NumberData]] slot, set space to
   // ? ToNumber(space); with a [[StringData]] slot, to ? ToString(space).
-  // The object-level ToNumberLiteral/ToStringLiteral route through ToPrimitive,
-  // so user-defined valueOf/toString are honored.
-  if Space is TGocciaNumberObjectValue then
-    Space := Space.ToNumberLiteral
-  else if Space is TGocciaStringObjectValue then
-    Space := Space.ToStringLiteral;
+  // A boxed Boolean unwraps to a boolean primitive, which matches neither
+  // branch below — same empty gap as leaving it boxed.
+  Space := CoerceWrappedPrimitive(ASpaceArg);
   // Step 7: If space is a Number, let gap be min(10, ToIntegerOrInfinity(space))
   // spaces. Clamp before Trunc so NaN, ±Infinity, and doubles beyond Integer
   // range never reach Trunc.
@@ -426,8 +420,7 @@ begin
     Exit;
   end;
 
-  // Steps 4.b-4.d: coerce Number/String wrappers via ToNumber/ToString;
-  // Boolean wrappers read [[BooleanData]].
+  // Steps 4.b-4.d: unwrap boxed primitives.
   Replaced := CoerceWrappedPrimitive(Replaced);
 
   // Step 4: If result is an Array, recursively serialize each element (SerializeJSONArray).
@@ -586,12 +579,13 @@ begin
     // Step 10-12: Create wrapper, set wrapper[""] = value, return SerializeJSONProperty(state, "", wrapper).
     Result := TGocciaStringLiteralValue.Create(FStringifier.Stringify(Value, Gap));
   except
-    on E: EGocciaBytecodeThrow do
-      raise TGocciaThrowValue.Create(E.ThrownValue);
     on E: TGocciaThrowValue do
       raise;
     on E: Exception do
+    begin
+      ReraiseBytecodeThrow(E);
       ThrowTypeError(Format(SErrorJSONStringifyError, [E.Message]), SSuggestJSONFormat);
+    end;
   end;
 end;
 
