@@ -43,11 +43,25 @@ type
     property ThrownValue: TGocciaValue read FThrownValue;
   end;
 
+// A JS throw escaping the bytecode VM through a native builtin arrives as
+// EGocciaBytecodeThrow, which a builtin's generic Exception→TypeError
+// normalization would misclassify as an engine error. Call this first in
+// such handlers: it re-raises a bytecode throw as the catchable
+// TGocciaThrowValue and does nothing for any other exception.
+procedure ReraiseBytecodeThrow(const AException: Exception);
+
 implementation
 
 uses
   Goccia.Constants.PropertyNames,
+  Goccia.Values.Error,
   Goccia.Values.ObjectValue;
+
+procedure ReraiseBytecodeThrow(const AException: Exception);
+begin
+  if AException is EGocciaBytecodeThrow then
+    raise TGocciaThrowValue.Create(EGocciaBytecodeThrow(AException).ThrownValue);
+end;
 
 procedure TGocciaBytecodeHandlerStack.Push(const ACatchIP: Integer;
   const ACatchRegister: UInt8; const AFrameDepth: Integer);

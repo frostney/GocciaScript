@@ -734,7 +734,8 @@ begin
   if AValue is TGocciaRawJSONValue then
     Exit(TGocciaRawJSONValue(AValue).RawText);
 
-  EffectiveValue := UnboxWrappedPrimitive(AValue);
+  // ES2026 §25.5.4.2 steps 4.b-4.d: unwrap boxed primitives.
+  EffectiveValue := CoerceWrappedPrimitive(AValue);
 
   if EffectiveValue is TGocciaNullLiteralValue then
     Result := 'null'
