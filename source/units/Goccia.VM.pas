@@ -8136,7 +8136,7 @@ procedure TGocciaVM.DefineDataPropertyByKeyInternal(const ATarget: TGocciaValue;
   const ASetHomeObject: Boolean);
 var
   TargetObject: TGocciaObjectValue;
-  ResolvedKey: TGocciaValue;
+  Key: TGocciaPropertyKey;
 begin
   if not (ATarget is TGocciaObjectValue) then
     Exit;
@@ -8145,27 +8145,11 @@ begin
   if ASetHomeObject then
     SetBytecodeHomeObject(AValue, TargetObject);
 
-  if (AKey.Kind = grkObject) and
-     (AKey.ObjectValue is TGocciaSymbolValue) then
-  begin
-    DefineSymbolDataPropertyOnObject(TargetObject,
-      TGocciaSymbolValue(AKey.ObjectValue), AValue);
-    Exit;
-  end;
-
-  if TryResolveObjectKey(AKey, ResolvedKey) then
-  begin
-    if ResolvedKey is TGocciaSymbolValue then
-      DefineSymbolDataPropertyOnObject(TargetObject,
-        TGocciaSymbolValue(ResolvedKey), AValue)
-    else
-      DefineDataPropertyOnObject(TargetObject,
-        TGocciaStringLiteralValue(ResolvedKey).Value, AValue);
-    Exit;
-  end;
-
-  DefineDataPropertyOnObject(TargetObject, KeyToPropertyNameRegister(AKey),
-    AValue);
+  Key := ClassifyPropertyKey(AKey, False);
+  if Key.Kind = pkkSymbol then
+    DefineSymbolDataPropertyOnObject(TargetObject, Key.Symbol, AValue)
+  else
+    DefineDataPropertyOnObject(TargetObject, PropertyKeyName(Key), AValue);
 end;
 
 procedure TGocciaVM.DefineDataPropertyByKey(const ATarget: TGocciaValue;
@@ -10431,28 +10415,13 @@ end;
 procedure TGocciaVM.SetIndexValueLoose(const AObject: TGocciaValue;
   const AKey: TGocciaRegister; const AValue: TGocciaValue);
 var
-  PropKeyValue: TGocciaValue;
+  Key: TGocciaPropertyKey;
 begin
-  if (AKey.Kind = grkObject) and
-     (AKey.ObjectValue is TGocciaSymbolValue) then
-  begin
-    SetSymbolPropertyValueLoose(AObject, TGocciaSymbolValue(AKey.ObjectValue),
-      AValue);
-    Exit;
-  end;
-
-  if TryResolveObjectKey(AKey, PropKeyValue) then
-  begin
-    if PropKeyValue is TGocciaSymbolValue then
-      SetSymbolPropertyValueLoose(AObject, TGocciaSymbolValue(PropKeyValue),
-        AValue)
-    else
-      SetPropertyValueLoose(AObject,
-        TGocciaStringLiteralValue(PropKeyValue).Value, AValue);
-    Exit;
-  end;
-
-  SetPropertyValueLoose(AObject, KeyToPropertyNameRegister(AKey), AValue);
+  Key := ClassifyPropertyKey(AKey, False);
+  if Key.Kind = pkkSymbol then
+    SetSymbolPropertyValueLoose(AObject, Key.Symbol, AValue)
+  else
+    SetPropertyValueLoose(AObject, PropertyKeyName(Key), AValue);
 end;
 
 function TGocciaVM.TryGetRawPrivateValue(const AObject: TGocciaValue;
