@@ -168,6 +168,8 @@ type
     function TryResolveObjectKey(const AKeyReg: TGocciaRegister; out AResolved: TGocciaValue): Boolean; inline;
     procedure ExecGetComputedPropertyFallback(const ADest: Integer;
       const AReceiverReg, AKeyReg: TGocciaRegister);
+    function CoerceNonStrictThisRegister(
+      const AThisRegister: TGocciaRegister): TGocciaRegister;
     procedure SetFunctionNameFromKey(const AFunction, AKey: TGocciaValue;
       const APrefixKind: UInt8);
     function EnsureCurrentDynamicVarScope: TGocciaScope;
@@ -4381,13 +4383,10 @@ var
   EffectiveThis: TGocciaValue;
   PromiseRoot: TGocciaTempRoot;
 begin
-  if (not FStrictThis) and Assigned(FVM.FGlobalThisValue) and
-     (not Assigned(AThisValue) or
-      (AThisValue is TGocciaUndefinedLiteralValue) or
-      (AThisValue is TGocciaNullLiteralValue)) then
-    EffectiveThis := FVM.FGlobalThisValue
+  if FStrictThis then
+    EffectiveThis := AThisValue
   else
-    EffectiveThis := AThisValue;
+    EffectiveThis := CoerceNonStrictThis(AThisValue, FVM.FGlobalThisValue);
 
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsGenerator then
   begin
@@ -4461,13 +4460,10 @@ var
   EffectiveThis: TGocciaValue;
   PromiseRoot: TGocciaTempRoot;
 begin
-  if (not FStrictThis) and Assigned(FVM.FGlobalThisValue) and
-     (not Assigned(AThisValue) or
-      (AThisValue is TGocciaUndefinedLiteralValue) or
-      (AThisValue is TGocciaNullLiteralValue)) then
-    EffectiveThis := FVM.FGlobalThisValue
+  if FStrictThis then
+    EffectiveThis := AThisValue
   else
-    EffectiveThis := AThisValue;
+    EffectiveThis := CoerceNonStrictThis(AThisValue, FVM.FGlobalThisValue);
 
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsGenerator then
   begin
@@ -4527,13 +4523,10 @@ var
   EffectiveThis: TGocciaValue;
   PromiseRoot: TGocciaTempRoot;
 begin
-  if (not FStrictThis) and Assigned(FVM.FGlobalThisValue) and
-     (not Assigned(AThisValue) or
-      (AThisValue is TGocciaUndefinedLiteralValue) or
-      (AThisValue is TGocciaNullLiteralValue)) then
-    EffectiveThis := FVM.FGlobalThisValue
+  if FStrictThis then
+    EffectiveThis := AThisValue
   else
-    EffectiveThis := AThisValue;
+    EffectiveThis := CoerceNonStrictThis(AThisValue, FVM.FGlobalThisValue);
 
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsGenerator then
   begin
@@ -4595,13 +4588,10 @@ var
   EffectiveThis: TGocciaValue;
   PromiseRoot: TGocciaTempRoot;
 begin
-  if (not FStrictThis) and Assigned(FVM.FGlobalThisValue) and
-     (not Assigned(AThisValue) or
-      (AThisValue is TGocciaUndefinedLiteralValue) or
-      (AThisValue is TGocciaNullLiteralValue)) then
-    EffectiveThis := FVM.FGlobalThisValue
+  if FStrictThis then
+    EffectiveThis := AThisValue
   else
-    EffectiveThis := AThisValue;
+    EffectiveThis := CoerceNonStrictThis(AThisValue, FVM.FGlobalThisValue);
 
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsGenerator then
   begin
@@ -4667,13 +4657,10 @@ var
   EffectiveThis: TGocciaValue;
   PromiseRoot: TGocciaTempRoot;
 begin
-  if (not FStrictThis) and Assigned(FVM.FGlobalThisValue) and
-     (not Assigned(AThisValue) or
-      (AThisValue is TGocciaUndefinedLiteralValue) or
-      (AThisValue is TGocciaNullLiteralValue)) then
-    EffectiveThis := FVM.FGlobalThisValue
+  if FStrictThis then
+    EffectiveThis := AThisValue
   else
-    EffectiveThis := AThisValue;
+    EffectiveThis := CoerceNonStrictThis(AThisValue, FVM.FGlobalThisValue);
 
   if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsGenerator then
   begin
@@ -9672,6 +9659,27 @@ begin
   SetRegister(ADest, PropertyValue);
 end;
 
+// ES2026 §10.2.1.2 OrdinaryCallBindThis steps 5–6 for non-strict callees,
+// operating on registers so the f.call/f.apply fast paths avoid a
+// register/value round trip for receivers that are already objects.
+function TGocciaVM.CoerceNonStrictThisRegister(
+  const AThisRegister: TGocciaRegister): TGocciaRegister;
+begin
+  if AThisRegister.Kind in [grkUndefined, grkNull] then
+  begin
+    if Assigned(FGlobalThisValue) then
+      Result := VMValueToRegisterFast(FGlobalThisValue)
+    else
+      Result := AThisRegister;
+  end
+  else if (AThisRegister.Kind = grkObject) and
+          (AThisRegister.ObjectValue is TGocciaObjectValue) then
+    Result := AThisRegister
+  else
+    Result := VMValueToRegisterFast(CoerceNonStrictThis(
+      RegisterToValue(AThisRegister), FGlobalThisValue));
+end;
+
 procedure TGocciaVM.SetPropertyValue(const AObject: TGocciaValue;
   const AKey: string; const AValue: TGocciaValue);
 var
@@ -13086,9 +13094,9 @@ begin
                     CallThisRegister := RegisterUndefined
                   else
                     CallThisRegister := FRegisters[A + 1];
-                  if (not BytecodeFunction.FStrictThis) and Assigned(FGlobalThisValue) and
-                     (CallThisRegister.Kind in [grkUndefined, grkNull]) then
-                    CallThisRegister := VMValueToRegisterFast(FGlobalThisValue);
+                  if not BytecodeFunction.FStrictThis then
+                    CallThisRegister := CoerceNonStrictThisRegister(
+                      CallThisRegister);
                   PushFrame(A, Frame.IP, Template, PrevCovLine, ProfileEntryTimestamp);
                   case B of
                     0:
@@ -13135,9 +13143,9 @@ begin
                 begin
                   ArgsArray := TGocciaArrayValue(FRegisters[A + 2].ObjectValue);
                   CallThisRegister := FRegisters[A + 1];
-                  if (not BytecodeFunction.FStrictThis) and Assigned(FGlobalThisValue) and
-                     (CallThisRegister.Kind in [grkUndefined, grkNull]) then
-                    CallThisRegister := VMValueToRegisterFast(FGlobalThisValue);
+                  if not BytecodeFunction.FStrictThis then
+                    CallThisRegister := CoerceNonStrictThisRegister(
+                      CallThisRegister);
                   PushFrame(A, Frame.IP, Template, PrevCovLine, ProfileEntryTimestamp);
                   case ArgsArray.Elements.Count of
                     0:
