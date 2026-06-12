@@ -206,6 +206,7 @@ resourcestring
   SErrorTemporalInvalidISOStringFor = 'Invalid ISO %s string for %s';
 
   // Temporal prototype errors — Duration
+  SErrorDurationCalendarUnitsArith = 'Durations with years, months, or weeks cannot be added or subtracted';
   SErrorDurationMixedSigns = 'Duration fields must not have mixed signs';
   SErrorDurationCalendarOutOfRange = 'Duration calendar fields (years, months, weeks) must have absolute value less than 2^32';
   SErrorDurationTimeOutOfRange = 'Duration time fields out of range: normalized seconds must have absolute value less than 2^53';

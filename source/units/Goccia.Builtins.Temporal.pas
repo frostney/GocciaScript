@@ -168,10 +168,10 @@ begin
 end;
 
 function TGocciaTemporalBuiltin.DurationConstructorFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-var
-  Y, Mo, W, D, H, Mi, S, Ms, Us, Ns: Int64;
 
-  function GetArgOr(const AIndex: Integer; const ADefault: Int64): Int64;
+  // Components may exceed Int64 (the spec allows any float64 integer whose
+  // normalized total stays under 2^53 seconds), so read into TBigInteger.
+  function GetArgOr(const AIndex: Integer): TBigInteger;
   var
     V: TGocciaValue;
   begin
@@ -179,27 +179,18 @@ var
     begin
       V := AArgs.GetElement(AIndex);
       if (V is TGocciaUndefinedLiteralValue) then
-        Result := ADefault
+        Result := TBigInteger.Zero
       else
-        Result := ToIntegerWithTruncation64Value(V);
+        Result := DurationFieldToBigInteger(V);
     end
     else
-      Result := ADefault;
+      Result := TBigInteger.Zero;
   end;
 
 begin
-  Y := GetArgOr(0, 0);
-  Mo := GetArgOr(1, 0);
-  W := GetArgOr(2, 0);
-  D := GetArgOr(3, 0);
-  H := GetArgOr(4, 0);
-  Mi := GetArgOr(5, 0);
-  S := GetArgOr(6, 0);
-  Ms := GetArgOr(7, 0);
-  Us := GetArgOr(8, 0);
-  Ns := GetArgOr(9, 0);
-
-  Result := TGocciaTemporalDurationValue.Create(Y, Mo, W, D, H, Mi, S, Ms, Us, Ns);
+  Result := TGocciaTemporalDurationValue.CreateFromBigIntegers(
+    GetArgOr(0), GetArgOr(1), GetArgOr(2), GetArgOr(3), GetArgOr(4),
+    GetArgOr(5), GetArgOr(6), GetArgOr(7), GetArgOr(8), GetArgOr(9));
 end;
 
 function TGocciaTemporalBuiltin.DurationFrom(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -207,19 +198,6 @@ var
   Arg: TGocciaValue;
   D: TGocciaTemporalDurationValue;
   DurRec: TTemporalDurationRecord;
-  Obj: TGocciaObjectValue;
-
-  function GetFieldOr(const AName: string; const ADefault: Int64): Int64;
-  var
-    V: TGocciaValue;
-  begin
-    V := Obj.GetProperty(AName);
-    if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
-      Result := ADefault
-    else
-      Result := ToIntegerWithTruncation64Value(V);
-  end;
-
 begin
   Arg := AArgs.GetElement(0);
 
@@ -240,14 +218,7 @@ begin
       DurRec.Milliseconds, DurRec.Microseconds, DurRec.Nanoseconds);
   end
   else if Arg is TGocciaObjectValue then
-  begin
-    Obj := TGocciaObjectValue(Arg);
-    Result := TGocciaTemporalDurationValue.Create(
-      GetFieldOr('years', 0), GetFieldOr('months', 0), GetFieldOr('weeks', 0),
-      GetFieldOr('days', 0), GetFieldOr('hours', 0), GetFieldOr('minutes', 0),
-      GetFieldOr('seconds', 0), GetFieldOr('milliseconds', 0),
-      GetFieldOr('microseconds', 0), GetFieldOr('nanoseconds', 0));
-  end
+    Result := DurationFromObject(TGocciaObjectValue(Arg))
   else
   begin
     ThrowTypeError(SErrorTemporalDurationFromArg, SSuggestTemporalFromArg);
@@ -263,19 +234,6 @@ var
   function CoerceDuration(const AArg: TGocciaValue): TGocciaTemporalDurationValue;
   var
     DurRec: TTemporalDurationRecord;
-    Obj: TGocciaObjectValue;
-
-    function GetFieldOr(const AName: string; const ADefault: Int64): Int64;
-    var
-      V: TGocciaValue;
-    begin
-      V := Obj.GetProperty(AName);
-      if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
-        Result := ADefault
-      else
-        Result := ToIntegerWithTruncation64Value(V);
-    end;
-
   begin
     if AArg is TGocciaTemporalDurationValue then
       Result := TGocciaTemporalDurationValue(AArg)
@@ -289,14 +247,7 @@ var
         DurRec.Milliseconds, DurRec.Microseconds, DurRec.Nanoseconds);
     end
     else if AArg is TGocciaObjectValue then
-    begin
-      Obj := TGocciaObjectValue(AArg);
-      Result := TGocciaTemporalDurationValue.Create(
-        GetFieldOr('years', 0), GetFieldOr('months', 0), GetFieldOr('weeks', 0),
-        GetFieldOr('days', 0), GetFieldOr('hours', 0), GetFieldOr('minutes', 0),
-        GetFieldOr('seconds', 0), GetFieldOr('milliseconds', 0),
-        GetFieldOr('microseconds', 0), GetFieldOr('nanoseconds', 0));
-    end
+      Result := DurationFromObject(TGocciaObjectValue(AArg))
     else
     begin
       ThrowTypeError(SErrorTemporalDurationCompareArg, SSuggestTemporalCompareArg);

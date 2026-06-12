@@ -363,10 +363,8 @@ end;
 
 class function TBigInteger.FromDouble(const AValue: Double): TBigInteger;
 var
-  V: Double;
-  Limb: Cardinal;
-  DecStr: string;
-  FS: TFormatSettings;
+  Bits, Mantissa: QWord;
+  Exponent: Integer;
 begin
   if IsNaN(AValue) or IsInfinite(AValue) then
     raise Exception.Create('Cannot convert non-finite number to BigInt');
@@ -382,13 +380,17 @@ begin
   if (AValue >= -9007199254740992.0) and (AValue <= 9007199254740992.0) then
     Exit(FromInt64(Trunc(AValue)));
 
-  // For values above 2^53 (representable as aligned integers in IEEE 754),
-  // convert via decimal string to avoid FPC AArch64 FMod precision bugs.
-  // FormatFloat('0', v) renders the exact integer without scientific notation.
-  FS := DefaultFormatSettings;
-  FS.DecimalSeparator := '.';
-  DecStr := FormatFloat('0', AValue, FS);
-  Result := FromDecimalString(DecStr);
+  // Above 2^53 the double's exact integer value is mantissa × 2^exponent.
+  // Decompose the IEEE 754 bits directly: decimal-string round-trips (Str,
+  // FormatFloat) emit at most ~17 significant digits and silently round the
+  // rest, corrupting values like 9007199254740991475711 → ...992000000.
+  Bits := PQWord(@AValue)^;
+  Mantissa := (Bits and QWord($000FFFFFFFFFFFFF)) or QWord($0010000000000000);
+  Exponent := Integer((Bits shr 52) and $7FF) - 1075;
+  // |AValue| > 2^53 implies a normal double with Exponent > 0 here.
+  Result := FromInt64(Int64(Mantissa)).ShiftLeft(Exponent);
+  if AValue < 0 then
+    Result := Result.Negate;
 end;
 
 class function TBigInteger.FromDecimalString(const AValue: string): TBigInteger;
@@ -604,18 +606,49 @@ end;
 
 function TBigInteger.ToDouble: Double;
 var
-  I: Integer;
-  Base: Double;
+  BitLen, Shift: Integer;
+  TopLimb: Cardinal;
+  Mag64, Mantissa: QWord;
+  Shifted: TBigInteger;
+  RoundBit, Sticky: Boolean;
 begin
   if IsZero then
     Exit(0.0);
-  Result := 0.0;
-  Base := 1.0;
-  for I := 0 to High(FLimbs) do
+
+  // Bit length of the magnitude (limbs are little-endian, top limb non-zero).
+  TopLimb := FLimbs[High(FLimbs)];
+  BitLen := High(FLimbs) * LIMB_BITS;
+  while TopLimb > 0 do
   begin
-    Result := Result + FLimbs[I] * Base;
-    Base := Base * LIMB_BASE;
+    Inc(BitLen);
+    TopLimb := TopLimb shr 1;
   end;
+
+  if BitLen <= 63 then
+  begin
+    // Fits a QWord; the hardware QWord → Double conversion rounds correctly.
+    Mag64 := QWord(FLimbs[0]);
+    if Length(FLimbs) > 1 then
+      Mag64 := Mag64 or (QWord(FLimbs[1]) shl LIMB_BITS);
+    Result := Mag64;
+  end
+  else
+  begin
+    // Round to nearest, ties to even: keep the top 53 bits as the mantissa,
+    // the next bit as the round bit, and OR the rest into a sticky bit.
+    // Limb-by-limb floating accumulation (the previous implementation)
+    // rounds at every step and can drift several ulp.
+    Shift := BitLen - 54;
+    Shifted := AbsValue.ShiftRight(Shift);
+    Mag64 := QWord(Shifted.ToInt64);
+    RoundBit := (Mag64 and 1) = 1;
+    Mantissa := Mag64 shr 1;
+    Sticky := not AbsValue.Equal(Shifted.ShiftLeft(Shift));
+    if RoundBit and (Sticky or ((Mantissa and 1) = 1)) then
+      Inc(Mantissa);
+    Result := Ldexp(Mantissa, Shift + 1);
+  end;
+
   if FNegative then
     Result := -Result;
 end;

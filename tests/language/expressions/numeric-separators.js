@@ -90,3 +90,13 @@ describe("numeric separators", () => {
   // decimal point or exponent) is rejected at lex time. These are tested via
   // the "Check numeric separator rejection" CI step in ci.yml and pr.yml.
 });
+
+describe("long integer literals are correctly rounded", () => {
+  test("literal one below the rounding midpoint rounds down", () => {
+    expect(9_007_199_254_740_991_475_711 === 9_007_199_254_740_990_951_424).toBe(true);
+  });
+
+  test("literal at the next representable double stays put", () => {
+    expect(9_007_199_254_740_992_000_000 - 9_007_199_254_740_990_951_424).toBe(1048576);
+  });
+});
