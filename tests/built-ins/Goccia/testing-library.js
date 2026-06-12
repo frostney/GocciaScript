@@ -13,3 +13,9 @@ describe("test.each title formatting with non-finite numbers", () => {
     expect(typeof value).toBe("number");
   });
 });
+
+describe("toBeCloseTo -Infinity precision", () => {
+  test("-Infinity precision means infinite tolerance", () => {
+    expect(0.1).toBeCloseTo(99999, -Infinity);
+  });
+});

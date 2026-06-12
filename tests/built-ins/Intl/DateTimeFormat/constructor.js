@@ -36,7 +36,7 @@ describe.runIf(isIntl)("Intl.DateTimeFormat constructor", () => {
   });
 });
 
-describe("Intl.DateTimeFormat non-finite fractionalSecondDigits", () => {
+describe.runIf(isIntl)("Intl.DateTimeFormat non-finite fractionalSecondDigits", () => {
   test("Infinity throws RangeError", () => {
     expect(() => new Intl.DateTimeFormat("en", { fractionalSecondDigits: Infinity })).toThrow(RangeError);
   });

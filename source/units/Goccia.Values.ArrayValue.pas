@@ -3873,13 +3873,8 @@ begin
   // Step 1: Let O be ToObject(this value)
   View.Init(AThisValue);
 
-  if AArgs.Length < 1 then
-  begin
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-    Exit;
-  end;
-
   // Step 3: Let relativeIndex be ToIntegerOrInfinity(index)
+  // A missing index coerces to 0, not undefined.
   Index := ToIntegerFromArgs(AArgs, 0);
 
   // Step 4: If relativeIndex >= 0, let k be relativeIndex; else len + relativeIndex

@@ -49,3 +49,9 @@ describe("Array.prototype.at non-finite index", () => {
     expect([1, 2].at(-Infinity)).toBeUndefined();
   });
 });
+
+describe("Array.prototype.at without an argument", () => {
+  test("missing index coerces to 0", () => {
+    expect([5, 6].at()).toBe(5);
+  });
+});

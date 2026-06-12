@@ -48,7 +48,7 @@ describe.runIf(isTemporal)("Temporal.PlainYearMonth constructor", () => {
   });
 });
 
-describe("Temporal.PlainYearMonth constructor calendar argument position", () => {
+describe.runIf(isTemporal)("Temporal.PlainYearMonth constructor calendar argument position", () => {
   test("third argument is the calendar, not the reference day", () => {
     expect(new Temporal.PlainYearMonth(2000, 5, "iso8601").toString()).toBe("2000-05");
   });

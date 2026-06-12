@@ -28,12 +28,22 @@ describe.runIf(isIntl)("Intl.PluralRules constructor", () => {
   });
 });
 
-describe("Intl.PluralRules non-finite digit options", () => {
+describe.runIf(isIntl)("Intl.PluralRules non-finite digit options", () => {
   test("minimumIntegerDigits Infinity throws RangeError", () => {
     expect(() => new Intl.PluralRules("en", { minimumIntegerDigits: Infinity })).toThrow(RangeError);
   });
 
   test("maximumSignificantDigits NaN throws RangeError", () => {
     expect(() => new Intl.PluralRules("en", { maximumSignificantDigits: NaN })).toThrow(RangeError);
+  });
+});
+
+describe.runIf(isIntl)("Intl.PluralRules finite digit range validation", () => {
+  test("minimumIntegerDigits above 21 throws RangeError", () => {
+    expect(() => new Intl.PluralRules("en", { minimumIntegerDigits: 22 })).toThrow(RangeError);
+  });
+
+  test("maximumFractionDigits above 100 throws RangeError", () => {
+    expect(() => new Intl.PluralRules("en", { maximumFractionDigits: 101 })).toThrow(RangeError);
   });
 });

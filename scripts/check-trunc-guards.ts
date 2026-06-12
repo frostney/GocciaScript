@@ -63,7 +63,8 @@ for (const dir of SOURCE_DIRS) walkPas(dir, files);
 
 let failures = 0;
 for (const file of files) {
-  const rel = relative(ROOT, file);
+  // Normalize to forward slashes so allowlist keys match on Windows too.
+  const rel = relative(ROOT, file).split("\\").join("/");
   const text = readFileSync(file, "utf8");
   const matches = [...text.matchAll(PATTERN)];
   const allowed = ALLOWLIST[rel]?.count ?? 0;

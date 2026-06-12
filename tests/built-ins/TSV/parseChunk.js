@@ -47,7 +47,7 @@ describe.runIf(hasTSV)("TSV.parseChunk", () => {
   });
 });
 
-describe("TSV.parseChunk non-finite offsets", () => {
+describe.runIf(hasTSV)("TSV.parseChunk non-finite offsets", () => {
   test("Infinity start offset does not crash", () => {
     expect(typeof TSV.parseChunk("a\tb\n1\t2", Infinity)).toBe("object");
   });

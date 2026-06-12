@@ -2632,7 +2632,7 @@ var
         // like %f so test.each("%d") titles never crash on non-finite rows.
         NumVal := AValue.ToNumberLiteral;
         if NumVal.IsNaN or NumVal.IsInfinity or NumVal.IsNegativeInfinity or
-           (Abs(NumVal.Value) >= MaxInt) then
+           (Abs(NumVal.Value) > MaxInt) then
           Result := FormatDouble(NumVal.Value)
         else
           Result := IntToStr(Trunc(NumVal.Value));

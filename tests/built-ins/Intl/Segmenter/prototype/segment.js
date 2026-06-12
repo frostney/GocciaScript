@@ -33,7 +33,7 @@ describe.runIf(isIntl && typeof Intl.Segmenter !== "undefined")("Intl.Segmenter.
   });
 });
 
-describe("Segments.prototype.containing non-finite index", () => {
+describe.runIf(isIntl && typeof Intl.Segmenter !== "undefined")("Segments.prototype.containing non-finite index", () => {
   test("Infinity returns undefined", () => {
     expect(new Intl.Segmenter().segment("ab").containing(Infinity)).toBeUndefined();
   });

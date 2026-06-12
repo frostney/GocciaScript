@@ -53,7 +53,7 @@ describe.runIf(hasCSV)("CSV.parseChunk", () => {
   });
 });
 
-describe("CSV.parseChunk non-finite offsets", () => {
+describe.runIf(hasCSV)("CSV.parseChunk non-finite offsets", () => {
   test("Infinity start offset does not crash", () => {
     expect(typeof CSV.parseChunk("a,b\n1,2", ",", Infinity)).toBe("object");
   });

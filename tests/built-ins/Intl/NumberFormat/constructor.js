@@ -28,7 +28,7 @@ describe.runIf(isIntl)("Intl.NumberFormat constructor", () => {
   });
 });
 
-describe("Intl.NumberFormat non-finite digit options", () => {
+describe.runIf(isIntl)("Intl.NumberFormat non-finite digit options", () => {
   test("maximumFractionDigits Infinity throws RangeError", () => {
     expect(() => new Intl.NumberFormat("en", { maximumFractionDigits: Infinity })).toThrow(RangeError);
   });

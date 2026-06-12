@@ -50,7 +50,7 @@ describe.runIf(isTemporal)("Temporal.PlainDate.from", () => {
   });
 });
 
-describe("Temporal.PlainDate.from non-finite fields", () => {
+describe.runIf(isTemporal)("Temporal.PlainDate.from non-finite fields", () => {
   test("year Infinity throws RangeError", () => {
     expect(() => Temporal.PlainDate.from({ year: Infinity, month: 1, day: 1 })).toThrow(RangeError);
   });

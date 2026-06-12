@@ -1159,8 +1159,7 @@ var
   RelIndex, ActualIndex: Integer;
 begin
   TA := RequireAttachedTypedArray(AThisValue, 'TypedArray.prototype.at');
-  if AArgs.Length = 0 then
-    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  // ES2026 §23.2.3.1 step 4: a missing index coerces to 0, not undefined
   RelIndex := ToIntegerFromArgs(AArgs, 0);
   if RelIndex >= 0 then
     ActualIndex := RelIndex

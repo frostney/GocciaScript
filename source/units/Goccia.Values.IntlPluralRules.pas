@@ -174,6 +174,21 @@ begin
       FMaximumSignificantDigits := ToIntegerWithTruncationValue(V);
   end;
 
+  // ECMA-402 §16.1.2 / §15.1.6 SetNumberFormatDigitOptions: validate digit
+  // ranges before defaulting, matching Intl.NumberFormat.
+  if (FMinimumIntegerDigits < 1) or (FMinimumIntegerDigits > 21) then
+    ThrowRangeError(Format(SErrorIntlDigitsOutOfRange, ['minimumIntegerDigits', 1, 21]));
+  if (FMinimumFractionDigits >= 0) and (FMinimumFractionDigits > 100) then
+    ThrowRangeError(Format(SErrorIntlDigitsOutOfRange, ['minimumFractionDigits', 0, 100]));
+  if (FMaximumFractionDigits >= 0) and (FMaximumFractionDigits > 100) then
+    ThrowRangeError(Format(SErrorIntlDigitsOutOfRange, ['maximumFractionDigits', 0, 100]));
+  if (FMinimumSignificantDigits >= 0) and
+     ((FMinimumSignificantDigits < 1) or (FMinimumSignificantDigits > 21)) then
+    ThrowRangeError(Format(SErrorIntlDigitsOutOfRange, ['minimumSignificantDigits', 1, 21]));
+  if (FMaximumSignificantDigits >= 0) and
+     ((FMaximumSignificantDigits < 1) or (FMaximumSignificantDigits > 21)) then
+    ThrowRangeError(Format(SErrorIntlDigitsOutOfRange, ['maximumSignificantDigits', 1, 21]));
+
   if (FMinimumSignificantDigits >= 0) or (FMaximumSignificantDigits >= 0) then
   begin
     if FMinimumSignificantDigits < 0 then
