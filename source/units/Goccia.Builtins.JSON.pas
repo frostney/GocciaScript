@@ -493,10 +493,11 @@ var
   I: Integer;
   Item: string;
   PropertyList: TStringList;
+  Seen: TDictionary<string, Boolean>;
 begin
   PropertyList := TStringList.Create;
+  Seen := TDictionary<string, Boolean>.Create;
   try
-    PropertyList.CaseSensitive := True;
     for I := 0 to AAllowList.Elements.Count - 1 do
     begin
       // Step 5.b.ii: item stays undefined unless the element is a String or
@@ -512,12 +513,16 @@ begin
       if HasItem then
         Item := Element.ToStringLiteral.Value;
       // Step 5.b.ii: append only if PropertyList does not contain item.
-      if HasItem and (PropertyList.IndexOf(Item) = -1) then
+      if HasItem and not Seen.ContainsKey(Item) then
+      begin
+        Seen.Add(Item, True);
         PropertyList.Add(Item);
+      end;
     end;
 
     Result := FStringifier.Stringify(AValue, AGap, #0, PropertyList);
   finally
+    Seen.Free;
     PropertyList.Free;
   end;
 end;
