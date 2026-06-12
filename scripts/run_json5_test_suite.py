@@ -76,42 +76,36 @@ def find_node_executable(explicit: str | None) -> str:
   raise FileNotFoundError("Node.js executable not found. Install `node` or pass --node.")
 
 
-def compile_harness(repo_root: Path, build_dir: Path) -> Path:
-  build_dir.mkdir(parents=True, exist_ok=True)
-  harness_source = repo_root / HARNESS_SOURCE_PATH
+def compile_program(repo_root: Path, build_dir: Path, source_path: Path) -> Path:
+  # Each program gets its own unit-output directory, mirroring build.pas:
+  # FPC 3.2.2 aborts with internal error 200611011 when a second program is
+  # compiled against the .ppu files another program left in a shared -FU dir.
+  # FPC names the binary after the .dpr stem, so the stem also names the dir.
+  program_name = source_path.stem
+  target_dir = build_dir / program_name
+  target_dir.mkdir(parents=True, exist_ok=True)
 
   run(
     [
       "fpc",
       "@config.cfg",
-      f"-FU{build_dir}",
-      f"-FE{build_dir}",
-      str(harness_source),
+      f"-FU{target_dir}",
+      f"-FE{target_dir}",
+      str(repo_root / source_path),
     ],
     cwd=repo_root,
   )
 
-  harness_name = "GocciaJSON5Check.exe" if sys.platform.startswith("win") else "GocciaJSON5Check"
-  return build_dir / harness_name
+  binary_name = f"{program_name}.exe" if sys.platform.startswith("win") else program_name
+  return target_dir / binary_name
+
+
+def compile_harness(repo_root: Path, build_dir: Path) -> Path:
+  return compile_program(repo_root, build_dir, HARNESS_SOURCE_PATH)
 
 
 def compile_test_runner(repo_root: Path, build_dir: Path) -> Path:
-  build_dir.mkdir(parents=True, exist_ok=True)
-  runner_source = repo_root / TEST_RUNNER_SOURCE_PATH
-
-  run(
-    [
-      "fpc",
-      "@config.cfg",
-      f"-FU{build_dir}",
-      f"-FE{build_dir}",
-      str(runner_source),
-    ],
-    cwd=repo_root,
-  )
-
-  runner_name = "GocciaTestRunner.exe" if sys.platform.startswith("win") else "GocciaTestRunner"
-  return build_dir / runner_name
+  return compile_program(repo_root, build_dir, TEST_RUNNER_SOURCE_PATH)
 
 
 def load_cases(repo_root: Path, suite_dir: Path, node_executable: str) -> list[dict]:
