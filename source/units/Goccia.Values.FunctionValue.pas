@@ -104,7 +104,8 @@ uses
   Goccia.Types.Enforcement,
   Goccia.Values.ArgumentsObjectValue,
   Goccia.Values.ArrayValue,
-  Goccia.Values.ErrorHelper;
+  Goccia.Values.ErrorHelper,
+  Goccia.Values.ToObject;
 
 { TGocciaFunctionValue }
 
@@ -151,10 +152,11 @@ procedure TGocciaFunctionValue.BindThis(const ACallScope: TGocciaScope; const AT
 var
   Root: TGocciaScope;
 begin
-  if (not FStrictThis) and
-     (not Assigned(AThisValue) or
-      (AThisValue is TGocciaUndefinedLiteralValue) or
-      (AThisValue is TGocciaNullLiteralValue)) then
+  if FStrictThis then
+    ACallScope.ThisValue := AThisValue
+  else if not Assigned(AThisValue) or
+          (AThisValue is TGocciaUndefinedLiteralValue) or
+          (AThisValue is TGocciaNullLiteralValue) then
   begin
     Root := FClosure;
     while Assigned(Root.Parent) do
@@ -162,7 +164,7 @@ begin
     ACallScope.ThisValue := Root.ThisValue;
   end
   else
-    ACallScope.ThisValue := AThisValue;
+    ACallScope.ThisValue := CoerceNonStrictThis(AThisValue, nil);
 end;
 
 function TGocciaFunctionValue.CreateCallScope: TGocciaScope;

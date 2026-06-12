@@ -229,6 +229,150 @@ describe.runIf(hasJSON5)("JSON5.stringify", () => {
     expect(() => JSON5.stringify([boxed])).toThrow(RangeError);
   });
 
+  test("space as boxed Number indents like the primitive", () => {
+    const obj = { a: 1, b: [1, 2] };
+
+    expect(JSON5.stringify(obj, null, new Number(2))).toBe(
+      JSON5.stringify(obj, null, 2),
+    );
+  });
+
+  test("space as boxed Number uses an overridden valueOf", () => {
+    const space = new Number(1);
+    space.valueOf = () => 4;
+
+    expect(JSON5.stringify({ a: 1 }, null, space)).toBe(
+      JSON5.stringify({ a: 1 }, null, 4),
+    );
+  });
+
+  test("space as boxed Number propagates valueOf exceptions", () => {
+    const space = new Number(4);
+    space.valueOf = () => {
+      throw new RangeError("abrupt valueOf");
+    };
+
+    expect(() => JSON5.stringify({ a: 1 }, null, space)).toThrow(RangeError);
+  });
+
+  test("space as boxed String indents like the primitive", () => {
+    const obj = { a: 1, b: [1, 2] };
+
+    expect(JSON5.stringify(obj, null, new String("xx"))).toBe(
+      JSON5.stringify(obj, null, "xx"),
+    );
+  });
+
+  test("space as boxed String uses an overridden toString without calling valueOf", () => {
+    const space = new String("xx");
+    space.toString = () => "--";
+    space.valueOf = () => {
+      throw new RangeError("valueOf must not be called");
+    };
+
+    expect(JSON5.stringify({ a: 1 }, null, space)).toBe(
+      JSON5.stringify({ a: 1 }, null, "--"),
+    );
+  });
+
+  test("space as boxed String propagates toString exceptions", () => {
+    const space = new String("xx");
+    space.toString = () => {
+      throw new RangeError("abrupt toString");
+    };
+
+    expect(() => JSON5.stringify({ a: 1 }, null, space)).toThrow(RangeError);
+  });
+
+  test("truncates a fractional space", () => {
+    const obj = { a: 1, b: [1, 2] };
+
+    expect(JSON5.stringify(obj, null, 5.99999)).toBe(
+      JSON5.stringify(obj, null, 5),
+    );
+  });
+
+  test("treats non-positive space as no indentation", () => {
+    expect(JSON5.stringify({ a: 1 }, null, 0)).toBe("{a:1}");
+    expect(JSON5.stringify({ a: 1 }, null, -4)).toBe("{a:1}");
+    expect(JSON5.stringify({ a: 1 }, null, -Infinity)).toBe("{a:1}");
+  });
+
+  test("clamps huge finite space to 10 spaces", () => {
+    const obj = { a: 1, b: [1, 2] };
+
+    expect(JSON5.stringify(obj, null, 2147483648)).toBe(
+      JSON5.stringify(obj, null, 10),
+    );
+    expect(JSON5.stringify(obj, null, 1e15)).toBe(
+      JSON5.stringify(obj, null, 10),
+    );
+  });
+
+  test("clamps boxed Number Infinity space to 10 spaces", () => {
+    const obj = { a: 1, b: [1, 2] };
+
+    expect(JSON5.stringify(obj, null, new Number(Infinity))).toBe(
+      JSON5.stringify(obj, null, 10),
+    );
+  });
+
+  test("quote as boxed String behaves like the primitive", () => {
+    expect(JSON5.stringify({ "a'": "1'" }, { quote: new String('"') })).toBe(
+      JSON5.stringify({ "a'": "1'" }, { quote: '"' }),
+    );
+  });
+
+  test("quote as boxed String uses an overridden toString", () => {
+    const quote = new String('"');
+    quote.toString = () => "'";
+
+    expect(JSON5.stringify({ "a'": "1'" }, { quote })).toBe(
+      JSON5.stringify({ "a'": "1'" }, { quote: "'" }),
+    );
+  });
+
+  test("quote as boxed String propagates toString exceptions", () => {
+    const quote = new String('"');
+    quote.toString = () => {
+      throw new RangeError("abrupt quote toString");
+    };
+
+    expect(() => JSON5.stringify({ a: 1 }, { quote })).toThrow(RangeError);
+  });
+
+  test("allow-list boxed Number uses an overridden toString", () => {
+    const key = new Number(3);
+    key.toString = () => "a";
+
+    expect(JSON5.stringify({ a: 1, 3: 3 }, [key])).toBe("{a:1}");
+  });
+
+  test("allow-list boxed String uses an overridden toString", () => {
+    const key = new String("a");
+    key.toString = () => "b";
+
+    expect(JSON5.stringify({ a: 1, b: 2 }, [key])).toBe("{b:2}");
+  });
+
+  test("allow-list boxed Number propagates toString exceptions", () => {
+    const key = new Number(3);
+    key.toString = () => {
+      throw new RangeError("abrupt allow-list toString");
+    };
+
+    expect(() => JSON5.stringify({ a: 1, 3: 3 }, [key])).toThrow(RangeError);
+  });
+
+  test("allow-list boxed String propagates toString exceptions", () => {
+    const key = new String("a");
+    key.toString = () => {
+      throw new RangeError("abrupt allow-list toString");
+    };
+
+    expect(() => JSON5.stringify({ a: 1, b: 2 }, [key])).toThrow(RangeError);
+  });
+
   test("throws on circular structures", () => {
     const objectValue = {};
     objectValue.self = objectValue;
