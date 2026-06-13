@@ -115,7 +115,9 @@ const
   //   v57 -> v58: OP_DEFINE_GLOBAL_CONST operand B gained global lexical
   //               predeclaration modes so top-level bytecode scripts preserve
   //               TDZ for global-backed let/const/class/enum bindings.
-  GOCCIA_FORMAT_VERSION = 58;
+  //   v58 -> v59: added OP_INC_NUMERIC/OP_DEC_NUMERIC and postfix variants so
+  //               update expressions can fuse ToNumeric with unit arithmetic.
+  GOCCIA_FORMAT_VERSION = 59;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   // OP_DEFINE_GLOBAL_CONST operand B declaration modes.
   GLOBAL_DEFINE_VAR = 0;
@@ -339,7 +341,11 @@ type
     OP_IMPORT_SOURCE = 195,
     OP_DYNAMIC_IMPORT_OPTIONS = 196,
     OP_DYNAMIC_IMPORT_SOURCE_OPTIONS = 197,
-    OP_DYNAMIC_IMPORT_DEFER_OPTIONS = 198
+    OP_DYNAMIC_IMPORT_DEFER_OPTIONS = 198,
+    OP_INC_NUMERIC    = 199,
+    OP_DEC_NUMERIC    = 200,
+    OP_POST_INC_NUMERIC = 201,
+    OP_POST_DEC_NUMERIC = 202
   );
 
 function EncodeABC(const AOp: TGocciaOpCode; const A, B, C: UInt8): UInt32; inline;

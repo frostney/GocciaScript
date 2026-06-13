@@ -70,7 +70,8 @@ procedure CompileExpressionWithInferredName(const ACtx: TGocciaCompilationContex
   const AExpr: TGocciaExpression; const ADest: UInt8;
   const AInferredName: string);
 procedure CompileIncrement(const ACtx: TGocciaCompilationContext;
-  const AExpr: TGocciaIncrementExpression; const ADest: UInt8);
+  const AExpr: TGocciaIncrementExpression; const ADest: UInt8;
+  const AKeepResult: Boolean = True);
 procedure CompilePrivateMember(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaPrivateMemberExpression; const ADest: UInt8);
 procedure CompilePrivatePropertyAssignment(const ACtx: TGocciaCompilationContext;
@@ -91,6 +92,9 @@ procedure CompileDynamicImport(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaImportCallExpression; const ADest: UInt8);
 procedure CompileYield(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaYieldExpression; const ADest: UInt8);
+function ExpressionContainsDirectEval(const AExpr: TGocciaExpression): Boolean;
+function ExpressionContainsSuspension(const AExpr: TGocciaExpression): Boolean;
+function ExpressionCreatesClosureBoundary(const AExpr: TGocciaExpression): Boolean;
 
 procedure EmitDefaultParameters(const ACtx: TGocciaCompilationContext;
   const AParams: TGocciaParameterArray);
@@ -1183,6 +1187,183 @@ begin
     Exit(ExpressionContainsSuspension(
       TGocciaPrivatePropertyCompoundAssignmentExpression(AExpr).ObjectExpr) or
       ExpressionContainsSuspension(
+        TGocciaPrivatePropertyCompoundAssignmentExpression(AExpr).Value));
+
+  Result := False;
+end;
+
+function ExpressionCreatesClosureBoundary(const AExpr: TGocciaExpression): Boolean;
+var
+  CallExpr: TGocciaCallExpression;
+  MemberExpr: TGocciaMemberExpression;
+  ArrayExpr: TGocciaArrayExpression;
+  ObjectExpr: TGocciaObjectExpression;
+  NewExpr: TGocciaNewExpression;
+  ImportExpr: TGocciaImportCallExpression;
+  Pair: TPair<TGocciaExpression, TGocciaExpression>;
+  I: Integer;
+begin
+  if not Assigned(AExpr) then
+    Exit(False);
+
+  if (AExpr is TGocciaFunctionExpression) or
+     (AExpr is TGocciaArrowFunctionExpression) or
+     (AExpr is TGocciaObjectMethodDefinition) or
+     (AExpr is TGocciaClassExpression) or
+     (AExpr is TGocciaGetterExpression) or
+     (AExpr is TGocciaSetterExpression) or
+     (AExpr is TGocciaIsExpression) or
+     (AExpr is TGocciaMatchExpression) then
+    Exit(True);
+
+  if AExpr is TGocciaCallExpression then
+  begin
+    CallExpr := TGocciaCallExpression(AExpr);
+    if ExpressionCreatesClosureBoundary(CallExpr.Callee) then
+      Exit(True);
+    for I := 0 to CallExpr.Arguments.Count - 1 do
+      if ExpressionCreatesClosureBoundary(CallExpr.Arguments[I]) then
+        Exit(True);
+  end
+  else if AExpr is TGocciaMemberExpression then
+  begin
+    MemberExpr := TGocciaMemberExpression(AExpr);
+    if ExpressionCreatesClosureBoundary(MemberExpr.ObjectExpr) then
+      Exit(True);
+    if MemberExpr.Computed and
+       ExpressionCreatesClosureBoundary(MemberExpr.PropertyExpression) then
+      Exit(True);
+  end
+  else if AExpr is TGocciaBinaryExpression then
+    Exit(ExpressionCreatesClosureBoundary(TGocciaBinaryExpression(AExpr).Left) or
+      ExpressionCreatesClosureBoundary(TGocciaBinaryExpression(AExpr).Right))
+  else if AExpr is TGocciaSequenceExpression then
+  begin
+    for I := 0 to TGocciaSequenceExpression(AExpr).Expressions.Count - 1 do
+      if ExpressionCreatesClosureBoundary(
+        TGocciaSequenceExpression(AExpr).Expressions[I]) then
+        Exit(True);
+  end
+  else if AExpr is TGocciaUnaryExpression then
+    Exit(ExpressionCreatesClosureBoundary(TGocciaUnaryExpression(AExpr).Operand))
+  else if AExpr is TGocciaAssignmentExpression then
+    Exit(ExpressionCreatesClosureBoundary(TGocciaAssignmentExpression(AExpr).Value))
+  else if AExpr is TGocciaPropertyAssignmentExpression then
+    Exit(ExpressionCreatesClosureBoundary(
+      TGocciaPropertyAssignmentExpression(AExpr).ObjectExpr) or
+      ExpressionCreatesClosureBoundary(
+        TGocciaPropertyAssignmentExpression(AExpr).Value))
+  else if AExpr is TGocciaComputedPropertyAssignmentExpression then
+    Exit(ExpressionCreatesClosureBoundary(
+      TGocciaComputedPropertyAssignmentExpression(AExpr).ObjectExpr) or
+      ExpressionCreatesClosureBoundary(
+        TGocciaComputedPropertyAssignmentExpression(AExpr).PropertyExpression) or
+      ExpressionCreatesClosureBoundary(
+        TGocciaComputedPropertyAssignmentExpression(AExpr).Value))
+  else if AExpr is TGocciaCompoundAssignmentExpression then
+    Exit(ExpressionCreatesClosureBoundary(
+      TGocciaCompoundAssignmentExpression(AExpr).Value))
+  else if AExpr is TGocciaPropertyCompoundAssignmentExpression then
+    Exit(ExpressionCreatesClosureBoundary(
+      TGocciaPropertyCompoundAssignmentExpression(AExpr).ObjectExpr) or
+      ExpressionCreatesClosureBoundary(
+        TGocciaPropertyCompoundAssignmentExpression(AExpr).Value))
+  else if AExpr is TGocciaComputedPropertyCompoundAssignmentExpression then
+    Exit(ExpressionCreatesClosureBoundary(
+      TGocciaComputedPropertyCompoundAssignmentExpression(AExpr).ObjectExpr) or
+      ExpressionCreatesClosureBoundary(
+        TGocciaComputedPropertyCompoundAssignmentExpression(AExpr).PropertyExpression) or
+      ExpressionCreatesClosureBoundary(
+        TGocciaComputedPropertyCompoundAssignmentExpression(AExpr).Value))
+  else if AExpr is TGocciaIncrementExpression then
+    Exit(ExpressionCreatesClosureBoundary(TGocciaIncrementExpression(AExpr).Operand))
+  else if AExpr is TGocciaArrayExpression then
+  begin
+    ArrayExpr := TGocciaArrayExpression(AExpr);
+    for I := 0 to ArrayExpr.Elements.Count - 1 do
+      if ExpressionCreatesClosureBoundary(ArrayExpr.Elements[I]) then
+        Exit(True);
+  end
+  else if AExpr is TGocciaObjectExpression then
+  begin
+    ObjectExpr := TGocciaObjectExpression(AExpr);
+    for I := 0 to High(ObjectExpr.PropertySourceOrder) do
+      case ObjectExpr.PropertySourceOrder[I].PropertyType of
+        pstStatic:
+          if ExpressionCreatesClosureBoundary(
+            ObjectExpr.PropertySourceOrder[I].Expression) then
+            Exit(True);
+        pstComputed:
+          begin
+            Pair := ObjectExpr.ComputedPropertiesInOrder[
+              ObjectExpr.PropertySourceOrder[I].ComputedIndex];
+            if ExpressionCreatesClosureBoundary(Pair.Key) or
+               ExpressionCreatesClosureBoundary(Pair.Value) then
+              Exit(True);
+          end;
+        pstGetter,
+        pstSetter,
+        pstComputedGetter,
+        pstComputedSetter:
+          Exit(True);
+      end;
+  end
+  else if AExpr is TGocciaYieldExpression then
+    Exit(ExpressionCreatesClosureBoundary(TGocciaYieldExpression(AExpr).Operand))
+  else if AExpr is TGocciaAwaitExpression then
+    Exit(ExpressionCreatesClosureBoundary(TGocciaAwaitExpression(AExpr).Operand))
+  else if AExpr is TGocciaConditionalExpression then
+    Exit(ExpressionCreatesClosureBoundary(TGocciaConditionalExpression(AExpr).Condition) or
+      ExpressionCreatesClosureBoundary(TGocciaConditionalExpression(AExpr).Consequent) or
+      ExpressionCreatesClosureBoundary(TGocciaConditionalExpression(AExpr).Alternate))
+  else if AExpr is TGocciaNewExpression then
+  begin
+    NewExpr := TGocciaNewExpression(AExpr);
+    if ExpressionCreatesClosureBoundary(NewExpr.Callee) then
+      Exit(True);
+    for I := 0 to NewExpr.Arguments.Count - 1 do
+      if ExpressionCreatesClosureBoundary(NewExpr.Arguments[I]) then
+        Exit(True);
+  end
+  else if AExpr is TGocciaImportCallExpression then
+  begin
+    ImportExpr := TGocciaImportCallExpression(AExpr);
+    Exit(ExpressionCreatesClosureBoundary(ImportExpr.Specifier) or
+      ExpressionCreatesClosureBoundary(ImportExpr.Options));
+  end
+  else if AExpr is TGocciaSpreadExpression then
+    Exit(ExpressionCreatesClosureBoundary(TGocciaSpreadExpression(AExpr).Argument))
+  else if AExpr is TGocciaTemplateWithInterpolationExpression then
+  begin
+    for I := 0 to TGocciaTemplateWithInterpolationExpression(AExpr).Parts.Count - 1 do
+      if ExpressionCreatesClosureBoundary(
+        TGocciaTemplateWithInterpolationExpression(AExpr).Parts[I]) then
+        Exit(True);
+  end
+  else if AExpr is TGocciaTaggedTemplateExpression then
+  begin
+    if ExpressionCreatesClosureBoundary(TGocciaTaggedTemplateExpression(AExpr).Tag) then
+      Exit(True);
+    for I := 0 to TGocciaTaggedTemplateExpression(AExpr).Expressions.Count - 1 do
+      if ExpressionCreatesClosureBoundary(
+        TGocciaTaggedTemplateExpression(AExpr).Expressions[I]) then
+        Exit(True);
+  end
+  else if AExpr is TGocciaDestructuringAssignmentExpression then
+    Exit(ExpressionCreatesClosureBoundary(
+      TGocciaDestructuringAssignmentExpression(AExpr).Right))
+  else if AExpr is TGocciaPrivateMemberExpression then
+    Exit(ExpressionCreatesClosureBoundary(
+      TGocciaPrivateMemberExpression(AExpr).ObjectExpr))
+  else if AExpr is TGocciaPrivatePropertyAssignmentExpression then
+    Exit(ExpressionCreatesClosureBoundary(
+      TGocciaPrivatePropertyAssignmentExpression(AExpr).ObjectExpr) or
+      ExpressionCreatesClosureBoundary(
+        TGocciaPrivatePropertyAssignmentExpression(AExpr).Value))
+  else if AExpr is TGocciaPrivatePropertyCompoundAssignmentExpression then
+    Exit(ExpressionCreatesClosureBoundary(
+      TGocciaPrivatePropertyCompoundAssignmentExpression(AExpr).ObjectExpr) or
+      ExpressionCreatesClosureBoundary(
         TGocciaPrivatePropertyCompoundAssignmentExpression(AExpr).Value));
 
   Result := False;
@@ -4827,9 +5008,34 @@ begin
   ACtx.Scope.FreeRegister;
 end;
 
+procedure EmitIncrementStep(const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaIncrementExpression; const ADest, AValueReg: UInt8;
+  const AOp, ANumericOp, APostNumericOp: TGocciaOpCode;
+  const AKeepResult: Boolean);
+begin
+  if AKeepResult and not AExpr.IsPrefix and (ADest <> AValueReg) then
+  begin
+    EmitInstruction(ACtx, EncodeABC(APostNumericOp, ADest, AValueReg, 0));
+    Exit;
+  end;
+
+  if AKeepResult and not AExpr.IsPrefix then
+  begin
+    EmitInstruction(ACtx, EncodeABC(OP_TO_NUMERIC, AValueReg, AValueReg, 0));
+    EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, AValueReg, 0));
+    EmitInstruction(ACtx, EncodeABC(AOp, AValueReg, AValueReg, 0));
+    Exit;
+  end;
+
+  EmitInstruction(ACtx, EncodeABC(ANumericOp, AValueReg, AValueReg, 0));
+  if AKeepResult and AExpr.IsPrefix and (ADest <> AValueReg) then
+    EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, AValueReg, 0));
+end;
+
 procedure CompileIncrementMember(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaIncrementExpression; const AMember: TGocciaMemberExpression;
-  const ADest: UInt8; const AOp: TGocciaOpCode);
+  const ADest: UInt8; const AOp, ANumericOp, APostNumericOp: TGocciaOpCode;
+  const AKeepResult: Boolean);
 var
   ObjReg, CurReg, KeyReg, SuperReg, ThisReg: UInt8;
   PropIdx: UInt16;
@@ -4841,13 +5047,9 @@ begin
     PropIdx := ACtx.Template.AddConstantString(AMember.PropertyName);
     EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, KeyReg, PropIdx));
     EmitInstruction(ACtx, EncodeABC(OP_SUPER_GET, CurReg, 0, KeyReg));
-    EmitInstruction(ACtx, EncodeABC(OP_TO_NUMERIC, CurReg, CurReg, 0));
-    if not AExpr.IsPrefix then
-      EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, CurReg, 0));
-    EmitInstruction(ACtx, EncodeABC(AOp, CurReg, CurReg, 0));
+    EmitIncrementStep(ACtx, AExpr, ADest, CurReg, AOp, ANumericOp,
+      APostNumericOp, AKeepResult);
     EmitInstruction(ACtx, EncodeABC(OP_SUPER_SET, CurReg, KeyReg, CurReg));
-    if AExpr.IsPrefix then
-      EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, CurReg, 0));
 
     ACtx.Scope.FreeRegister;
     ACtx.Scope.FreeRegister;
@@ -4861,13 +5063,9 @@ begin
 
   ACtx.CompileExpression(AMember.ObjectExpr, ObjReg);
   EmitLoadPropertyByName(ACtx, CurReg, ObjReg, AMember.PropertyName);
-  EmitInstruction(ACtx, EncodeABC(OP_TO_NUMERIC, CurReg, CurReg, 0));
-  if not AExpr.IsPrefix then
-    EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, CurReg, 0));
-  EmitInstruction(ACtx, EncodeABC(AOp, CurReg, CurReg, 0));
+  EmitIncrementStep(ACtx, AExpr, ADest, CurReg, AOp, ANumericOp,
+    APostNumericOp, AKeepResult);
   EmitStorePropertyByName(ACtx, ObjReg, AMember.PropertyName, CurReg);
-  if AExpr.IsPrefix then
-    EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, CurReg, 0));
 
   ACtx.Scope.FreeRegister;
   ACtx.Scope.FreeRegister;
@@ -4875,7 +5073,8 @@ end;
 
 procedure CompileIncrementComputedMember(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaIncrementExpression; const AMember: TGocciaMemberExpression;
-  const ADest: UInt8; const AOp: TGocciaOpCode);
+  const ADest: UInt8; const AOp, ANumericOp, APostNumericOp: TGocciaOpCode;
+  const AKeepResult: Boolean);
 var
   ObjReg, KeyReg, CurReg, SuperReg, ThisReg: UInt8;
 begin
@@ -4886,13 +5085,9 @@ begin
     ACtx.CompileExpression(AMember.PropertyExpression, KeyReg);
     EmitInstruction(ACtx, EncodeABC(OP_TO_PROPERTY_KEY, KeyReg, KeyReg, 0));
     EmitInstruction(ACtx, EncodeABC(OP_SUPER_GET, CurReg, 0, KeyReg));
-    EmitInstruction(ACtx, EncodeABC(OP_TO_NUMERIC, CurReg, CurReg, 0));
-    if not AExpr.IsPrefix then
-      EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, CurReg, 0));
-    EmitInstruction(ACtx, EncodeABC(AOp, CurReg, CurReg, 0));
+    EmitIncrementStep(ACtx, AExpr, ADest, CurReg, AOp, ANumericOp,
+      APostNumericOp, AKeepResult);
     EmitInstruction(ACtx, EncodeABC(OP_SUPER_SET, CurReg, KeyReg, CurReg));
-    if AExpr.IsPrefix then
-      EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, CurReg, 0));
 
     ACtx.Scope.FreeRegister;
     ACtx.Scope.FreeRegister;
@@ -4908,14 +5103,10 @@ begin
   ACtx.CompileExpression(AMember.ObjectExpr, ObjReg);
   ACtx.CompileExpression(AMember.PropertyExpression, KeyReg);
   EmitInstruction(ACtx, EncodeABC(OP_ARRAY_GET, CurReg, ObjReg, KeyReg));
-  EmitInstruction(ACtx, EncodeABC(OP_TO_NUMERIC, CurReg, CurReg, 0));
-  if not AExpr.IsPrefix then
-    EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, CurReg, 0));
-  EmitInstruction(ACtx, EncodeABC(AOp, CurReg, CurReg, 0));
+  EmitIncrementStep(ACtx, AExpr, ADest, CurReg, AOp, ANumericOp,
+    APostNumericOp, AKeepResult);
   EmitInstruction(ACtx, EncodeABC(StoreByKeyOpcode(ACtx), ObjReg, KeyReg,
     CurReg));
-  if AExpr.IsPrefix then
-    EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, CurReg, 0));
 
   ACtx.Scope.FreeRegister;
   ACtx.Scope.FreeRegister;
@@ -4923,26 +5114,37 @@ begin
 end;
 
 procedure CompileIncrement(const ACtx: TGocciaCompilationContext;
-  const AExpr: TGocciaIncrementExpression; const ADest: UInt8);
+  const AExpr: TGocciaIncrementExpression; const ADest: UInt8;
+  const AKeepResult: Boolean = True);
 var
   LocalIdx, UpvalIdx: Integer;
   Slot, RegResult: UInt8;
-  Op: TGocciaOpCode;
+  Op, NumericOp, PostNumericOp: TGocciaOpCode;
   Ident: TGocciaIdentifierExpression;
   MemberExpr: TGocciaMemberExpression;
 begin
   if AExpr.Operator = gttIncrement then
-    Op := OP_INC
+  begin
+    Op := OP_INC;
+    NumericOp := OP_INC_NUMERIC;
+    PostNumericOp := OP_POST_INC_NUMERIC;
+  end
   else
+  begin
     Op := OP_DEC;
+    NumericOp := OP_DEC_NUMERIC;
+    PostNumericOp := OP_POST_DEC_NUMERIC;
+  end;
 
   if AExpr.Operand is TGocciaMemberExpression then
   begin
     MemberExpr := TGocciaMemberExpression(AExpr.Operand);
     if MemberExpr.Computed then
-      CompileIncrementComputedMember(ACtx, AExpr, MemberExpr, ADest, Op)
+      CompileIncrementComputedMember(ACtx, AExpr, MemberExpr, ADest, Op,
+        NumericOp, PostNumericOp, AKeepResult)
     else
-      CompileIncrementMember(ACtx, AExpr, MemberExpr, ADest, Op);
+      CompileIncrementMember(ACtx, AExpr, MemberExpr, ADest, Op,
+        NumericOp, PostNumericOp, AKeepResult);
     Exit;
   end;
 
@@ -4958,13 +5160,9 @@ begin
   begin
     RegResult := ACtx.Scope.AllocateRegister;
     EmitLoadBindingByName(ACtx, Ident.Name, RegResult, False);
-    EmitInstruction(ACtx, EncodeABC(OP_TO_NUMERIC, RegResult, RegResult, 0));
-    if not AExpr.IsPrefix then
-      EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, RegResult, 0));
-    EmitInstruction(ACtx, EncodeABC(Op, RegResult, RegResult, 0));
+    EmitIncrementStep(ACtx, AExpr, ADest, RegResult, Op, NumericOp,
+      PostNumericOp, AKeepResult);
     EmitWithAssignmentOrFallback(ACtx, Ident.Name, RegResult);
-    if AExpr.IsPrefix then
-      EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, RegResult, 0));
     ACtx.Scope.FreeRegister;
     Exit;
   end;
@@ -4982,33 +5180,25 @@ begin
       RegResult := ACtx.Scope.AllocateRegister;
       EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, RegResult,
         ACtx.Template.AddConstantString(Ident.Name)));
-      EmitInstruction(ACtx, EncodeABC(OP_TO_NUMERIC, RegResult, RegResult, 0));
-      if not AExpr.IsPrefix then
-        EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, RegResult, 0));
-      EmitInstruction(ACtx, EncodeABC(Op, RegResult, RegResult, 0));
+      EmitIncrementStep(ACtx, AExpr, ADest, RegResult, Op, NumericOp,
+        PostNumericOp, AKeepResult);
       EmitSetGlobalByName(ACtx, RegResult, Ident.Name);
       EmitExportBindingUpdates(ACtx,
         ACtx.Scope.GetLocal(LocalIdx).ExportNames,
         ACtx.Scope.GetLocal(LocalIdx).ExportNameCount, RegResult);
-      if AExpr.IsPrefix then
-        EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, RegResult, 0));
       ACtx.Scope.FreeRegister;
       Exit;
     end;
     Slot := ACtx.Scope.GetLocal(LocalIdx).Slot;
     if ACtx.Scope.GetLocal(LocalIdx).IsCaptured then
       EmitInstruction(ACtx, EncodeABx(OP_GET_LOCAL, Slot, UInt16(Slot)));
-    EmitInstruction(ACtx, EncodeABC(OP_TO_NUMERIC, Slot, Slot, 0));
-    if not AExpr.IsPrefix then
-      EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, Slot, 0));
-    EmitInstruction(ACtx, EncodeABC(Op, Slot, Slot, 0));
+    EmitIncrementStep(ACtx, AExpr, ADest, Slot, Op, NumericOp,
+      PostNumericOp, AKeepResult);
     if ACtx.Scope.GetLocal(LocalIdx).IsCaptured then
       EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, Slot, UInt16(Slot)));
     EmitExportBindingUpdates(ACtx,
       ACtx.Scope.GetLocal(LocalIdx).ExportNames,
       ACtx.Scope.GetLocal(LocalIdx).ExportNameCount, Slot);
-    if AExpr.IsPrefix then
-      EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, Slot, 0));
     Exit;
   end;
 
@@ -5026,10 +5216,8 @@ begin
         ACtx.Template.AddConstantString(Ident.Name)))
     else
       EmitInstruction(ACtx, EncodeABx(OP_GET_UPVALUE, RegResult, UInt16(UpvalIdx)));
-    EmitInstruction(ACtx, EncodeABC(OP_TO_NUMERIC, RegResult, RegResult, 0));
-    if not AExpr.IsPrefix then
-      EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, RegResult, 0));
-    EmitInstruction(ACtx, EncodeABC(Op, RegResult, RegResult, 0));
+    EmitIncrementStep(ACtx, AExpr, ADest, RegResult, Op, NumericOp,
+      PostNumericOp, AKeepResult);
     if ACtx.Scope.GetUpvalue(UpvalIdx).IsGlobalBacked then
     begin
       EmitSetGlobalByName(ACtx, RegResult, Ident.Name)
@@ -5039,8 +5227,6 @@ begin
     EmitExportBindingUpdates(ACtx,
       ACtx.Scope.GetUpvalue(UpvalIdx).ExportNames,
       ACtx.Scope.GetUpvalue(UpvalIdx).ExportNameCount, RegResult);
-    if AExpr.IsPrefix then
-      EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, RegResult, 0));
     ACtx.Scope.FreeRegister;
     Exit;
   end;
@@ -5048,13 +5234,9 @@ begin
   RegResult := ACtx.Scope.AllocateRegister;
   EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, RegResult,
     ACtx.Template.AddConstantString(Ident.Name)));
-  EmitInstruction(ACtx, EncodeABC(OP_TO_NUMERIC, RegResult, RegResult, 0));
-  if not AExpr.IsPrefix then
-    EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, RegResult, 0));
-  EmitInstruction(ACtx, EncodeABC(Op, RegResult, RegResult, 0));
+  EmitIncrementStep(ACtx, AExpr, ADest, RegResult, Op, NumericOp,
+    PostNumericOp, AKeepResult);
   EmitSetGlobalByName(ACtx, RegResult, Ident.Name);
-  if AExpr.IsPrefix then
-    EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, RegResult, 0));
   ACtx.Scope.FreeRegister;
 end;
 

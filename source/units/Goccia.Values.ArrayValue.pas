@@ -686,6 +686,15 @@ begin
     end;
 
     NewWritable := not (ADescriptor.HasWritableField and not ADescriptor.Writable);
+    if (AArray.FProperties.Count = 0) and
+       (NewLen <= AArray.FElements.Count) then
+    begin
+      AArray.FElements.Count := Integer(NewLen);
+      AArray.FLength := NewLen;
+      if not NewWritable then
+        AArray.FLengthWritable := False;
+      Exit(True);
+    end;
     if not DeleteArrayIndexesAtOrAbove(AArray, NewLen, FailedIndex) then
     begin
       if CanStoreDenseElementIndex(FailedIndex, AArray.FElements.Count) then
