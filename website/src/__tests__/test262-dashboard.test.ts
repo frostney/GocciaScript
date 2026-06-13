@@ -151,13 +151,15 @@ describe("test262 dashboard data helpers", () => {
 
     const result = await readNewestValidTest262Report(
       [older, newest],
-      async (run) =>
-        run.artifactId === 1002
-          ? "{"
-          : JSON.stringify({
-              summary: older.summary,
-              results: [{ id: "built-ins/Array/a.js", status: "PASS" }],
-            }),
+      async (run) => {
+        if (run.artifactId === 1002) {
+          throw new Error("simulated blob read error");
+        }
+        return JSON.stringify({
+          summary: older.summary,
+          results: [{ id: "built-ins/Array/a.js", status: "PASS" }],
+        });
+      },
     );
 
     expect(result.latestReport?.summary.totalRun).toBe(1);

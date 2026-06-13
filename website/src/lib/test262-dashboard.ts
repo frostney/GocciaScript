@@ -340,7 +340,12 @@ export async function readNewestValidTest262Report(
   for (let i = timeline.length - 1; i >= 0; i--) {
     const run = timeline[i];
     if (!run) continue;
-    const reportJson = await readReportJson(run);
+    let reportJson: string | null;
+    try {
+      reportJson = await readReportJson(run);
+    } catch {
+      continue;
+    }
     if (!reportJson) continue;
     let parsed: unknown;
     try {
