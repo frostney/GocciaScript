@@ -6861,7 +6861,7 @@ begin
           .AssignSymbolProperty(Key.Symbol, Value);
       pkkIndex:
         TGocciaArrayValue(FRegisters[ATargetIndex].ObjectValue)
-          .SetProperty(IntToStr(Key.Index), Value);
+          .SetIndexProperty(Key.Index, Value);
     else
       TGocciaArrayValue(FRegisters[ATargetIndex].ObjectValue)
         .SetProperty(Key.Name, Value);

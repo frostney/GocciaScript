@@ -370,7 +370,7 @@ begin
   end;
 
   AUpdatedProgramCache := Cached;
-  Result := CreateRegExpObjectFromProgram(APattern, Cached.Flags, Cached.Program_);
+  Result := CreateRegExpObjectFromProgram(APattern, Cached.FFlags, Cached.FProgram);
 end;
 
 function CloneRegExpObject(const AValue: TGocciaValue): TGocciaValue;
@@ -483,7 +483,7 @@ begin
     begin
       ProgramData := TGocciaRegExpProgramData(Obj.RegExpData);
       Result := ExecuteCompiledRegExp(
-        ProgramData.CompiledProgram,
+        ProgramData.FCompiledProgram,
         GetStringProperty(Obj, PROP_SOURCE),
         GetStringProperty(Obj, PROP_FLAGS),
         AInput,

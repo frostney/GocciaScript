@@ -154,6 +154,8 @@ uses
   Math,
   SysUtils,
 
+  StringBuffer,
+
   Goccia.Arguments.ArrayLike,
   Goccia.Constants.PropertyNames,
   Goccia.Constants.TypeNames,
@@ -169,6 +171,9 @@ uses
   Goccia.Values.HoleValue,
   Goccia.Values.NativeFunction,
   Goccia.Values.ProxyValue;
+
+const
+  MAX_FAST_APPLY_ARGUMENTS_LIST_LENGTH = 1048576;
 
 // Function.prototype lives in a per-realm slot.  JS-visible mutations
 // (Function.prototype.foo = ...) must not leak across engine recreation.
@@ -663,6 +668,78 @@ begin
     raise TGocciaError.Create('not callable', 0, 0, '', nil);
 end;
 
+function TryCallStringFromCodePointApplyFast(const ACallee, AArgArray: TGocciaValue;
+  out AResult: TGocciaValue): Boolean;
+var
+  ArrVal: TGocciaArrayValue;
+  CodePoint: Cardinal;
+  Element: TGocciaValue;
+  I: Integer;
+  NativeFunc: TGocciaNativeFunctionValue;
+  NumberValue: TGocciaNumberLiteralValue;
+  RawValue: Double;
+  SB: TStringBuffer;
+begin
+  Result := False;
+  if not (ACallee is TGocciaNativeFunctionValue) or
+     not (AArgArray is TGocciaArrayValue) then
+    Exit;
+
+  NativeFunc := TGocciaNativeFunctionValue(ACallee);
+  if (NativeFunc.Name <> 'fromCodePoint') or (NativeFunc.Arity <> 1) then
+    Exit;
+
+  ArrVal := TGocciaArrayValue(AArgArray);
+  if (ArrVal.Elements.Count > MAX_FAST_APPLY_ARGUMENTS_LIST_LENGTH) or
+     not ArrVal.HasDenseElementLength then
+    Exit;
+
+  SB := TStringBuffer.Create(ArrVal.Elements.Count * 4);
+  for I := 0 to ArrVal.Elements.Count - 1 do
+  begin
+    Element := ArrVal.Elements[I];
+    if (Element = TGocciaHoleValue.HoleValue) or
+       not (Element is TGocciaNumberLiteralValue) then
+      Exit;
+
+    NumberValue := TGocciaNumberLiteralValue(Element);
+    RawValue := NumberValue.Value;
+    if IsNan(RawValue) or IsInfinite(RawValue) then
+      ThrowRangeError(SErrorInvalidCodePoint, SSuggestCodePointRange);
+    if (RawValue < 0) or (RawValue > $10FFFF) then
+      ThrowRangeError(Format(SErrorNotValidCodePoint, [FormatDouble(RawValue)]),
+        SSuggestCodePointRange);
+    CodePoint := Trunc(RawValue);
+    if RawValue <> CodePoint then
+      ThrowRangeError(Format(SErrorNotValidCodePoint, [FormatDouble(RawValue)]),
+        SSuggestCodePointRange);
+
+    if CodePoint < $80 then
+      SB.AppendChar(AnsiChar(CodePoint))
+    else if CodePoint < $800 then
+    begin
+      SB.AppendChar(AnsiChar($C0 or (CodePoint shr 6)));
+      SB.AppendChar(AnsiChar($80 or (CodePoint and $3F)));
+    end
+    else if CodePoint < $10000 then
+    begin
+      SB.AppendChar(AnsiChar($E0 or (CodePoint shr 12)));
+      SB.AppendChar(AnsiChar($80 or ((CodePoint shr 6) and $3F)));
+      SB.AppendChar(AnsiChar($80 or (CodePoint and $3F)));
+    end
+    else
+    begin
+      SB.AppendChar(AnsiChar($F0 or (CodePoint shr 18)));
+      SB.AppendChar(AnsiChar($80 or ((CodePoint shr 12) and $3F)));
+      SB.AppendChar(AnsiChar($80 or ((CodePoint shr 6) and $3F)));
+      SB.AppendChar(AnsiChar($80 or (CodePoint and $3F)));
+    end;
+  end;
+
+  AResult := TGocciaStringLiteralValue.Create(SB.ToString);
+  Result := True;
+end;
+
 function TGocciaFunctionSharedPrototype.FunctionCall(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   NewThisValue: TGocciaValue;
@@ -749,6 +826,9 @@ begin
       CallArgs.Free;
     end;
   end;
+
+  if TryCallStringFromCodePointApplyFast(AThisValue, ArgArray, Result) then
+    Exit;
 
   // Fast path: small arrays use specialized call methods (FunctionBase only)
   if (AThisValue is TGocciaFunctionBase) and (ArgArray is TGocciaArrayValue) then

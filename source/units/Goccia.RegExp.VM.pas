@@ -36,6 +36,7 @@ const
   DEFAULT_BACKTRACK_CAP = 10000000;
   MEMO_CAPACITY = 65536;
   MEMO_LOAD_LIMIT = 49152;
+  SIMPLE_GREEDY_LOOP_MIN_REMAINING = 32;
   HIGH_SURROGATE_START = $D800;
   HIGH_SURROGATE_END = $DBFF;
   LOW_SURROGATE_START = $DC00;
@@ -52,6 +53,8 @@ type
     InputPos: Integer;
     Slots: array of Integer;
   end;
+
+  TBacktrackStack = array of TBacktrackEntry;
 
   TMemoEntry = record
     Occupied: Boolean;
@@ -127,15 +130,50 @@ begin
   end;
 end;
 
-function CharClassContainsLinear(const AClass: TRegExpCharClass;
+function CharClassContains(const AClass: TRegExpCharClass;
   ACodePoint: Cardinal): Boolean; inline;
 var
-  I: Integer;
+  Hi: Integer;
+  Index: Integer;
+  RangeCount: Integer;
+  Lo: Integer;
+  Mid: Integer;
 begin
-  for I := 0 to High(AClass.Ranges) do
-    if (ACodePoint >= AClass.Ranges[I].Lo) and
-       (ACodePoint <= AClass.Ranges[I].Hi) then
+  RangeCount := Length(AClass.Ranges);
+  if RangeCount <= 8 then
+  begin
+    for Index := 0 to RangeCount - 1 do
+      if (ACodePoint >= AClass.Ranges[Index].Lo) and
+         (ACodePoint <= AClass.Ranges[Index].Hi) then
+        Exit(True);
+    Exit(False);
+  end;
+
+  if Length(AClass.PageFirstRange) = REGEXP_CHAR_CLASS_PAGE_COUNT then
+  begin
+    Index := AClass.PageFirstRange[ACodePoint shr REGEXP_CHAR_CLASS_PAGE_BITS];
+    while (Index <= High(AClass.Ranges)) and
+          (AClass.Ranges[Index].Lo <= ACodePoint) do
+    begin
+      if ACodePoint <= AClass.Ranges[Index].Hi then
+        Exit(True);
+      Inc(Index);
+    end;
+    Exit(False);
+  end;
+
+  Lo := 0;
+  Hi := High(AClass.Ranges);
+  while Lo <= Hi do
+  begin
+    Mid := Lo + ((Hi - Lo) div 2);
+    if ACodePoint < AClass.Ranges[Mid].Lo then
+      Hi := Mid - 1
+    else if ACodePoint > AClass.Ranges[Mid].Hi then
+      Lo := Mid + 1
+    else
       Exit(True);
+  end;
   Result := False;
 end;
 
@@ -196,7 +234,13 @@ begin
   Index := 1;
   while Index <= Length(AText) do
   begin
-    if TryReadUTF8CodePointAllowSurrogates(AText, Index, CodePoint,
+    if Ord(AText[Index]) < $80 then
+    begin
+      AInput.Units[Count] := Ord(AText[Index]);
+      Inc(Count);
+      Inc(Index);
+    end
+    else if TryReadUTF8CodePointAllowSurrogates(AText, Index, CodePoint,
       ByteLength) then
     begin
       if CodePoint <= $FFFF then
@@ -330,9 +374,95 @@ begin
     Dec(Result);
 end;
 
+function StartCheckMatches(const ACheck: TRegExpStartCheck;
+  const AInput: TRegExpInput; const AIndex: Integer; const AUnicode: Boolean): Boolean;
+var
+  CodePoint: Cardinal;
+  Width: Integer;
+begin
+  if not ReadInputCodePoint(AInput, AIndex, AUnicode, CodePoint, Width) then
+    Exit(False);
+  if CodePoint > $FF then
+    Exit(ACheck.HasNonLatin1);
+  Result := (ACheck.Latin1Bits[CodePoint shr 5] and
+    (UInt32(1) shl (CodePoint and 31))) <> 0;
+end;
+
+function StartCheckMatchesLatin1Unit(const ACheck: TRegExpStartCheck;
+  ACodeUnit: Cardinal): Boolean; inline;
+begin
+  Result := (ACodeUnit <= $FF) and
+    ((ACheck.Latin1Bits[ACodeUnit shr 5] and
+    (UInt32(1) shl (ACodeUnit and 31))) <> 0);
+end;
+
+function StartCheckIsASCIIOnly(const ACheck: TRegExpStartCheck): Boolean;
+var
+  I: Integer;
+begin
+  if not ACheck.Enabled or ACheck.HasNonLatin1 then
+    Exit(False);
+  for I := 4 to High(ACheck.Latin1Bits) do
+    if ACheck.Latin1Bits[I] <> 0 then
+      Exit(False);
+  Result := True;
+end;
+
+function RawInputHasASCIIStartCandidate(const ACheck: TRegExpStartCheck;
+  const AText: string): Boolean;
+var
+  CodeUnit: Cardinal;
+  I: Integer;
+begin
+  for I := 1 to Length(AText) do
+  begin
+    CodeUnit := Ord(AText[I]);
+    if (CodeUnit <= $7F) and StartCheckMatchesLatin1Unit(ACheck, CodeUnit) then
+      Exit(True);
+  end;
+  Result := False;
+end;
+
+function FindNextStartCandidate(const ACheck: TRegExpStartCheck;
+  const AInput: TRegExpInput; AStartPos: Integer; const AUnicode: Boolean): Integer;
+var
+  Skipped: Integer;
+begin
+  Result := AStartPos;
+  Skipped := 0;
+  if not ACheck.HasNonLatin1 then
+  begin
+    while Result < AInput.Length do
+    begin
+      if StartCheckMatchesLatin1Unit(ACheck, AInput.Units[Result]) then
+        Exit;
+      if AUnicode and IsHighSurrogate(AInput.Units[Result]) and
+         (Result + 1 < AInput.Length) and IsLowSurrogate(AInput.Units[Result + 1]) then
+        Inc(Result, 2)
+      else
+        Inc(Result);
+      Inc(Skipped);
+      if (Skipped and 4095) = 0 then
+        CheckExecutionTimeout;
+    end;
+    Exit(AInput.Length + 1);
+  end;
+
+  while Result < AInput.Length do
+  begin
+    if StartCheckMatches(ACheck, AInput, Result, AUnicode) then
+      Exit;
+    Result := AdvanceInputIndex(AInput, Result, AUnicode);
+    Inc(Skipped);
+    if (Skipped and 4095) = 0 then
+      CheckExecutionTimeout;
+  end;
+  Result := AInput.Length + 1;
+end;
+
 function RunVM(const AProgram: TRegExpProgram; const AInput: TRegExpInput;
   AStartPos: Integer; var ASlots: array of Integer;
-  ASlotCount: Integer; AStartPC: Integer = 0;
+  ASlotCount: Integer; var AStack: TBacktrackStack; AStartPC: Integer = 0;
   AEndPos: PInteger = nil; ABackward: Boolean = False): Boolean;
 var
   PC, InputPos: Integer;
@@ -341,7 +471,6 @@ var
   Bx: Integer;
   CodePoint: Cardinal;
   ByteLen: Integer;
-  Stack: array of TBacktrackEntry;
   StackTop: Integer;
   StepCount: Integer;
   StepLimit: Integer;
@@ -356,6 +485,7 @@ var
   BackrefICase: Boolean;
   BackrefUnicode: Boolean;
   LookEnd: Integer;
+  LookStack: TBacktrackStack;
   LookSlots: array of Integer;
   LookMatched: Boolean;
   RefStart, RefEnd, RefPos: Integer;
@@ -368,29 +498,131 @@ var
     if StackTop >= DEFAULT_BACKTRACK_CAP then
       raise ERegExpRuntimeError.Create('Maximum regular expression backtrack stack size exceeded');
     Inc(StackTop);
-    if StackTop >= Length(Stack) then
-      SetLength(Stack, StackTop * 2 + 16);
-    Stack[StackTop].PC := APC;
-    Stack[StackTop].InputPos := AInputPos;
-    if Length(Stack[StackTop].Slots) <> SlotCount then
-      SetLength(Stack[StackTop].Slots, SlotCount);
+    if Length(AStack) = 0 then
+      SetLength(AStack, 256)
+    else if StackTop >= Length(AStack) then
+      SetLength(AStack, StackTop * 2 + 16);
+    AStack[StackTop].PC := APC;
+    AStack[StackTop].InputPos := AInputPos;
+    if Length(AStack[StackTop].Slots) <> SlotCount then
+      SetLength(AStack[StackTop].Slots, SlotCount);
     if SlotCount > 0 then
-      Move(ASlots[0], Stack[StackTop].Slots[0], SlotCount * SizeOf(Integer));
+      Move(ASlots[0], AStack[StackTop].Slots[0], SlotCount * SizeOf(Integer));
   end;
 
   function PopBacktrack: Boolean;
   begin
     while StackTop >= 0 do
     begin
-      PC := Stack[StackTop].PC;
-      InputPos := Stack[StackTop].InputPos;
+      PC := AStack[StackTop].PC;
+      InputPos := AStack[StackTop].InputPos;
       if SlotCount > 0 then
-        Move(Stack[StackTop].Slots[0], ASlots[0], SlotCount * SizeOf(Integer));
+        Move(AStack[StackTop].Slots[0], ASlots[0], SlotCount * SizeOf(Integer));
       Dec(StackTop);
       if not MemoContains(Memo, PC, InputPos) then
         Exit(True);
     end;
     Result := False;
+  end;
+
+  function BacktrackOrFail: Boolean;
+  begin
+    if StackTop >= 0 then
+      MemoAdd(Memo, PC, InputPos);
+    Result := PopBacktrack;
+  end;
+
+  function TailIsSimpleAccept(APC: Integer): Boolean;
+  var
+    TailBx: Integer;
+    TailInstr: UInt32;
+    TailOp: TRegExpOpCode;
+  begin
+    if (APC < 0) or (APC >= Length(AProgram.Code)) then
+      Exit(False);
+
+    TailInstr := AProgram.Code[APC];
+    TailOp := TRegExpOpCode(TailInstr and $FF);
+    TailBx := Integer(TailInstr shr 8);
+    if TailOp = RX_ASSERT_END then
+    begin
+      if TailBx <> 0 then
+        Exit(False);
+      Inc(APC);
+    end;
+
+    while APC < Length(AProgram.Code) do
+    begin
+      TailOp := TRegExpOpCode(AProgram.Code[APC] and $FF);
+      case TailOp of
+        RX_SAVE:
+          Inc(APC);
+        RX_MATCH:
+          Exit(True);
+      else
+        Exit(False);
+      end;
+    end;
+
+    Result := False;
+  end;
+
+  function TrySimpleGreedyLoop(ASplitPC, AExitPC: Integer): Boolean;
+  var
+    BodyBx: Integer;
+    BodyInstr: UInt32;
+    BodyOp: TRegExpOpCode;
+    JumpInstr: UInt32;
+    Matched: Boolean;
+    PollCount: Integer;
+  begin
+    Result := False;
+    if ABackward or (ASplitPC + 2 >= Length(AProgram.Code)) then
+      Exit;
+
+    BodyInstr := AProgram.Code[ASplitPC + 1];
+    BodyOp := TRegExpOpCode(BodyInstr and $FF);
+    BodyBx := Integer(BodyInstr shr 8);
+    case BodyOp of
+      RX_CHAR, RX_CHAR_CLASS, RX_CHAR_CLASS_NEG:
+        ;
+    else
+      Exit;
+    end;
+
+    JumpInstr := AProgram.Code[ASplitPC + 2];
+    if (TRegExpOpCode(JumpInstr and $FF) <> RX_JUMP) or
+       (Integer(JumpInstr shr 8) <> ASplitPC) then
+      Exit;
+
+    if not TailIsSimpleAccept(AExitPC) then
+      Exit;
+
+    PollCount := 0;
+    while ReadInputCodePoint(AInput, InputPos, AProgram.FullUnicode,
+      CodePoint, ByteLen) do
+    begin
+      case BodyOp of
+        RX_CHAR:
+          Matched := CodePoint = Cardinal(BodyBx);
+        RX_CHAR_CLASS:
+          Matched := CharClassContains(AProgram.CharClasses[BodyBx], CodePoint);
+        RX_CHAR_CLASS_NEG:
+          Matched := not CharClassContains(AProgram.CharClasses[BodyBx], CodePoint);
+      else
+        Matched := False;
+      end;
+      if not Matched then
+        Break;
+
+      Inc(InputPos, ByteLen);
+      Inc(PollCount);
+      if (PollCount and 4095) = 0 then
+        CheckExecutionTimeout;
+    end;
+
+    PC := AExitPC;
+    Result := True;
   end;
 
 begin
@@ -403,7 +635,6 @@ begin
   if StepLimit < MIN_STEP_LIMIT then
     StepLimit := MIN_STEP_LIMIT;
   StackTop := -1;
-  SetLength(Stack, 256);
   MemoInit(Memo);
 
   while PC < Length(AProgram.Code) do
@@ -431,23 +662,20 @@ begin
             if not ReadInputCodePointBefore(AInput, InputPos,
                AProgram.FullUnicode, CodePoint, ByteLen) then
             begin
-              MemoAdd(Memo, PC, InputPos);
-              if not PopBacktrack then Exit;
+              if not BacktrackOrFail then Exit;
               Continue;
             end;
           end
           else if not ReadInputCodePoint(AInput, InputPos,
              AProgram.FullUnicode, CodePoint, ByteLen) then
           begin
-            MemoAdd(Memo, PC, InputPos);
-            if not PopBacktrack then Exit;
+            if not BacktrackOrFail then Exit;
             Continue;
           end;
           MatchCP := Cardinal(Bx);
           if CodePoint <> MatchCP then
           begin
-            MemoAdd(Memo, PC, InputPos);
-            if not PopBacktrack then Exit;
+            if not BacktrackOrFail then Exit;
             Continue;
           end;
           if ABackward then
@@ -464,22 +692,19 @@ begin
             if not ReadInputCodePointBefore(AInput, InputPos,
                AProgram.FullUnicode, CodePoint, ByteLen) then
             begin
-              MemoAdd(Memo, PC, InputPos);
-              if not PopBacktrack then Exit;
+              if not BacktrackOrFail then Exit;
               Continue;
             end;
           end
           else if not ReadInputCodePoint(AInput, InputPos,
              AProgram.FullUnicode, CodePoint, ByteLen) then
           begin
-            MemoAdd(Memo, PC, InputPos);
-            if not PopBacktrack then Exit;
+            if not BacktrackOrFail then Exit;
             Continue;
           end;
-          if not CharClassContainsLinear(AProgram.CharClasses[Bx], CodePoint) then
+          if not CharClassContains(AProgram.CharClasses[Bx], CodePoint) then
           begin
-            MemoAdd(Memo, PC, InputPos);
-            if not PopBacktrack then Exit;
+            if not BacktrackOrFail then Exit;
             Continue;
           end;
           if ABackward then
@@ -496,22 +721,19 @@ begin
             if not ReadInputCodePointBefore(AInput, InputPos,
                AProgram.FullUnicode, CodePoint, ByteLen) then
             begin
-              MemoAdd(Memo, PC, InputPos);
-              if not PopBacktrack then Exit;
+              if not BacktrackOrFail then Exit;
               Continue;
             end;
           end
           else if not ReadInputCodePoint(AInput, InputPos,
              AProgram.FullUnicode, CodePoint, ByteLen) then
           begin
-            MemoAdd(Memo, PC, InputPos);
-            if not PopBacktrack then Exit;
+            if not BacktrackOrFail then Exit;
             Continue;
           end;
-          if CharClassContainsLinear(AProgram.CharClasses[Bx], CodePoint) then
+          if CharClassContains(AProgram.CharClasses[Bx], CodePoint) then
           begin
-            MemoAdd(Memo, PC, InputPos);
-            if not PopBacktrack then Exit;
+            if not BacktrackOrFail then Exit;
             Continue;
           end;
           if ABackward then
@@ -528,22 +750,19 @@ begin
             if not ReadInputCodePointBefore(AInput, InputPos,
                AProgram.FullUnicode, CodePoint, ByteLen) then
             begin
-              MemoAdd(Memo, PC, InputPos);
-              if not PopBacktrack then Exit;
+              if not BacktrackOrFail then Exit;
               Continue;
             end;
           end
           else if not ReadInputCodePoint(AInput, InputPos,
              AProgram.FullUnicode, CodePoint, ByteLen) then
           begin
-            MemoAdd(Memo, PC, InputPos);
-            if not PopBacktrack then Exit;
+            if not BacktrackOrFail then Exit;
             Continue;
           end;
           if (Bx = 0) and IsLineTerminator(CodePoint) then
           begin
-            MemoAdd(Memo, PC, InputPos);
-            if not PopBacktrack then Exit;
+            if not BacktrackOrFail then Exit;
             Continue;
           end;
           if ABackward then
@@ -555,6 +774,9 @@ begin
 
       RX_SPLIT:
         begin
+          if ((AInput.Length - InputPos) >= SIMPLE_GREEDY_LOOP_MIN_REMAINING) and
+             TrySimpleGreedyLoop(PC, Bx) then
+            Continue;
           if not MemoContains(Memo, Bx, InputPos) then
             PushBacktrack(Bx, InputPos);
           Inc(PC);
@@ -572,8 +794,9 @@ begin
           if (Bx >= 0) and (Bx < Length(AProgram.Code)) and
              (TRegExpOpCode(AProgram.Code[Bx] and $FF) = RX_SPLIT) then
           begin
-            if (StackTop >= 0) and (Stack[StackTop].PC = Integer(AProgram.Code[Bx] shr 8)) and
-               (Stack[StackTop].InputPos = InputPos) then
+            if (StackTop >= 0) and
+               (AStack[StackTop].PC = Integer(AProgram.Code[Bx] shr 8)) and
+               (AStack[StackTop].InputPos = InputPos) then
             begin
               PC := Integer(AProgram.Code[Bx] shr 8);
               Continue;
@@ -605,8 +828,7 @@ begin
           begin
             if Negated then
             begin
-              MemoAdd(Memo, PC, InputPos);
-              if not PopBacktrack then Exit;
+              if not BacktrackOrFail then Exit;
               Continue;
             end;
             Inc(PC);
@@ -619,8 +841,7 @@ begin
             ComparePos := InputPos - (RefEnd - RefStart);
             if ComparePos < 0 then
             begin
-              MemoAdd(Memo, PC, InputPos);
-              if not PopBacktrack then Exit;
+              if not BacktrackOrFail then Exit;
               Continue;
             end;
           end;
@@ -659,8 +880,7 @@ begin
           end;
           if not LookMatched then
           begin
-            MemoAdd(Memo, PC, InputPos);
-            if not PopBacktrack then Exit;
+            if not BacktrackOrFail then Exit;
             Continue;
           end;
           if ABackward then
@@ -680,8 +900,7 @@ begin
                  AProgram.FullUnicode, BeforeCP) or
                  not IsLineTerminator(BeforeCP) then
               begin
-                MemoAdd(Memo, PC, InputPos);
-                if not PopBacktrack then Exit;
+                if not BacktrackOrFail then Exit;
                 Continue;
               end;
             end;
@@ -690,8 +909,7 @@ begin
           begin
             if InputPos > 0 then
             begin
-              MemoAdd(Memo, PC, InputPos);
-              if not PopBacktrack then Exit;
+              if not BacktrackOrFail then Exit;
               Continue;
             end;
           end;
@@ -707,8 +925,7 @@ begin
             begin
               if not IsLineTerminator(CodePoint) then
               begin
-                MemoAdd(Memo, PC, InputPos);
-                if not PopBacktrack then Exit;
+                if not BacktrackOrFail then Exit;
                 Continue;
               end;
             end;
@@ -717,8 +934,7 @@ begin
           begin
             if InputPos < AInput.Length then
             begin
-              MemoAdd(Memo, PC, InputPos);
-              if not PopBacktrack then Exit;
+              if not BacktrackOrFail then Exit;
               Continue;
             end;
           end;
@@ -743,8 +959,7 @@ begin
           begin
             if BeforeIsWord <> AfterIsWord then
             begin
-              MemoAdd(Memo, PC, InputPos);
-              if not PopBacktrack then Exit;
+              if not BacktrackOrFail then Exit;
               Continue;
             end;
           end
@@ -752,8 +967,7 @@ begin
           begin
             if BeforeIsWord = AfterIsWord then
             begin
-              MemoAdd(Memo, PC, InputPos);
-              if not PopBacktrack then Exit;
+              if not BacktrackOrFail then Exit;
               Continue;
             end;
           end;
@@ -767,13 +981,12 @@ begin
           SetLength(LookSlots, SlotCount);
           Move(ASlots[0], LookSlots[0], SlotCount * SizeOf(Integer));
           LookMatched := RunVM(AProgram, AInput, InputPos, LookSlots,
-            SlotCount, PC + 1, nil, False);
+            SlotCount, LookStack, PC + 1, nil, False);
           if Negated then
           begin
             if LookMatched then
             begin
-              MemoAdd(Memo, PC, InputPos);
-              if not PopBacktrack then Exit;
+              if not BacktrackOrFail then Exit;
               Continue;
             end;
           end
@@ -781,8 +994,7 @@ begin
           begin
             if not LookMatched then
             begin
-              MemoAdd(Memo, PC, InputPos);
-              if not PopBacktrack then Exit;
+              if not BacktrackOrFail then Exit;
               Continue;
             end;
             Move(LookSlots[0], ASlots[0], SlotCount * SizeOf(Integer));
@@ -797,13 +1009,12 @@ begin
           SetLength(LookSlots, SlotCount);
           Move(ASlots[0], LookSlots[0], SlotCount * SizeOf(Integer));
           LookMatched := RunVM(AProgram, AInput, InputPos, LookSlots,
-            SlotCount, PC + 1, nil, True);
+            SlotCount, LookStack, PC + 1, nil, True);
           if Negated then
           begin
             if LookMatched then
             begin
-              MemoAdd(Memo, PC, InputPos);
-              if not PopBacktrack then Exit;
+              if not BacktrackOrFail then Exit;
               Continue;
             end;
           end
@@ -811,8 +1022,7 @@ begin
           begin
             if not LookMatched then
             begin
-              MemoAdd(Memo, PC, InputPos);
-              if not PopBacktrack then Exit;
+              if not BacktrackOrFail then Exit;
               Continue;
             end;
             Move(LookSlots[0], ASlots[0], SlotCount * SizeOf(Integer));
@@ -830,8 +1040,7 @@ begin
 
       RX_FAIL:
         begin
-          MemoAdd(Memo, PC, InputPos);
-          if not PopBacktrack then Exit;
+          if not BacktrackOrFail then Exit;
           Continue;
         end;
     else
@@ -849,9 +1058,13 @@ var
   Input: TRegExpInput;
   SlotCount, StartPos: Integer;
   Slots: array of Integer;
+  Stack: TBacktrackStack;
 begin
   Result := False;
   AResult.Matched := False;
+  if (not ARequireStart) and StartCheckIsASCIIOnly(AProgram.StartCheck) and
+     not RawInputHasASCIIStartCandidate(AProgram.StartCheck, AInput) then
+    Exit;
   BuildRegExpInput(AInput, Input);
   SlotCount := (AProgram.CaptureCount + 1) * 2;
   SetLength(Slots, SlotCount);
@@ -859,7 +1072,7 @@ begin
   if ARequireStart then
   begin
     FillChar(Slots[0], SlotCount * SizeOf(Integer), $FF);
-    if RunVM(AProgram, Input, StartPos, Slots, SlotCount) then
+    if RunVM(AProgram, Input, StartPos, Slots, SlotCount, Stack) then
     begin
       AResult.Matched := True;
       SetLength(AResult.CaptureSlots, SlotCount);
@@ -868,6 +1081,9 @@ begin
     end;
     Exit;
   end;
+  if AProgram.StartCheck.Enabled then
+    StartPos := FindNextStartCandidate(AProgram.StartCheck, Input, StartPos,
+      AProgram.FullUnicode);
   while StartPos <= Input.Length do
   begin
     // Unanchored scans re-run the VM at every input position; on a long
@@ -878,7 +1094,7 @@ begin
     // deadlines is self-limiting (the expensive window lasts at most 16ms).
     CheckExecutionTimeout;
     FillChar(Slots[0], SlotCount * SizeOf(Integer), $FF);
-    if RunVM(AProgram, Input, StartPos, Slots, SlotCount) then
+    if RunVM(AProgram, Input, StartPos, Slots, SlotCount, Stack) then
     begin
       AResult.Matched := True;
       SetLength(AResult.CaptureSlots, SlotCount);
@@ -889,6 +1105,9 @@ begin
     if StartPos >= Input.Length then
       Break;
     StartPos := AdvanceInputIndex(Input, StartPos, AProgram.FullUnicode);
+    if AProgram.StartCheck.Enabled then
+      StartPos := FindNextStartCandidate(AProgram.StartCheck, Input, StartPos,
+        AProgram.FullUnicode);
   end;
 end;
 

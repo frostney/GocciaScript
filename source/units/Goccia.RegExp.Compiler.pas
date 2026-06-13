@@ -158,6 +158,9 @@ type
 const
   MAX_CHAR_RANGES = 2048;
 
+procedure NormalizeRanges(var ARanges: array of TRegExpCharRange;
+  var ARangeCount: Integer); forward;
+
 function IsRegExpHexString(const AValue: string): Boolean;
 var
   I: Integer;
@@ -409,12 +412,38 @@ function TRegExpCompiler.AddCharClass(
   const ARanges: array of TRegExpCharRange): Integer;
 var
   I: Integer;
+  Page: Integer;
+  PageLo: Cardinal;
+  RangeCount: Integer;
+  RangeIndex: Integer;
+  Normalized: TRegExpCharRangeArray;
 begin
   Result := Length(FCharClasses);
   SetLength(FCharClasses, Result + 1);
-  SetLength(FCharClasses[Result].Ranges, Length(ARanges));
+  RangeCount := Length(ARanges);
+  SetLength(Normalized, RangeCount);
   for I := 0 to High(ARanges) do
-    FCharClasses[Result].Ranges[I] := ARanges[I];
+    Normalized[I] := ARanges[I];
+  NormalizeRanges(Normalized, RangeCount);
+  SetLength(FCharClasses[Result].Ranges, RangeCount);
+  for I := 0 to RangeCount - 1 do
+    FCharClasses[Result].Ranges[I] := Normalized[I];
+  if RangeCount > 8 then
+  begin
+    SetLength(FCharClasses[Result].PageFirstRange,
+      REGEXP_CHAR_CLASS_PAGE_COUNT);
+    RangeIndex := 0;
+    for Page := 0 to REGEXP_CHAR_CLASS_PAGE_COUNT - 1 do
+    begin
+      PageLo := Cardinal(Page) shl REGEXP_CHAR_CLASS_PAGE_BITS;
+      while (RangeIndex < RangeCount) and
+            (FCharClasses[Result].Ranges[RangeIndex].Hi < PageLo) do
+        Inc(RangeIndex);
+      FCharClasses[Result].PageFirstRange[Page] := RangeIndex;
+    end;
+  end
+  else
+    SetLength(FCharClasses[Result].PageFirstRange, 0);
 end;
 
 
@@ -648,6 +677,117 @@ begin
     end;
   end;
   ARangeCount := WriteIdx + 1;
+end;
+
+procedure ClearStartCheck(var ACheck: TRegExpStartCheck);
+var
+  I: Integer;
+begin
+  ACheck.Enabled := False;
+  ACheck.HasNonLatin1 := False;
+  for I := Low(ACheck.Latin1Bits) to High(ACheck.Latin1Bits) do
+    ACheck.Latin1Bits[I] := 0;
+end;
+
+procedure IncludeStartCheckLatin1(var ACheck: TRegExpStartCheck;
+  ACodePoint: Cardinal); inline;
+begin
+  ACheck.Latin1Bits[ACodePoint shr 5] :=
+    ACheck.Latin1Bits[ACodePoint shr 5] or (UInt32(1) shl (ACodePoint and 31));
+end;
+
+procedure IncludeStartCheckRange(var ACheck: TRegExpStartCheck;
+  const ARange: TRegExpCharRange);
+var
+  CodePoint: Cardinal;
+  Hi: Cardinal;
+begin
+  if ARange.Lo > $FF then
+  begin
+    ACheck.HasNonLatin1 := True;
+    Exit;
+  end;
+
+  Hi := ARange.Hi;
+  if Hi > $FF then
+  begin
+    Hi := $FF;
+    ACheck.HasNonLatin1 := True;
+  end;
+
+  for CodePoint := ARange.Lo to Hi do
+    IncludeStartCheckLatin1(ACheck, CodePoint);
+end;
+
+function StartCheckIsUseful(const ACheck: TRegExpStartCheck): Boolean;
+var
+  I: Integer;
+begin
+  if not ACheck.Enabled then
+    Exit(False);
+  if not ACheck.HasNonLatin1 then
+    Exit(True);
+  for I := Low(ACheck.Latin1Bits) to High(ACheck.Latin1Bits) do
+    if ACheck.Latin1Bits[I] <> High(UInt32) then
+      Exit(True);
+  Result := False;
+end;
+
+procedure BuildStartCheck(const ACode: array of UInt32; ACodeLen: Integer;
+  const ACharClasses: array of TRegExpCharClass; out ACheck: TRegExpStartCheck);
+const
+  MAX_ZERO_WIDTH_PREFIX = 64;
+var
+  Bx: Integer;
+  I: Integer;
+  Instr: UInt32;
+  Op: TRegExpOpCode;
+  PC: Integer;
+  Range: TRegExpCharRange;
+  Steps: Integer;
+begin
+  ClearStartCheck(ACheck);
+  PC := 0;
+  Steps := 0;
+  while (PC >= 0) and (PC < ACodeLen) and (Steps < MAX_ZERO_WIDTH_PREFIX) do
+  begin
+    Inc(Steps);
+    Instr := ACode[PC];
+    Op := TRegExpOpCode(Instr and $FF);
+    Bx := Integer(Instr shr 8);
+    case Op of
+      RX_SAVE,
+      RX_ASSERT_START,
+      RX_ASSERT_END,
+      RX_ASSERT_WORD:
+        Inc(PC);
+
+      RX_CHAR:
+        begin
+          ACheck.Enabled := True;
+          Range.Lo := Cardinal(Bx);
+          Range.Hi := Cardinal(Bx);
+          IncludeStartCheckRange(ACheck, Range);
+          if not StartCheckIsUseful(ACheck) then
+            ClearStartCheck(ACheck);
+          Exit;
+        end;
+
+      RX_CHAR_CLASS:
+        begin
+          if (Bx < 0) or (Bx > High(ACharClasses)) then
+            Exit;
+          ACheck.Enabled := True;
+          for I := 0 to High(ACharClasses[Bx].Ranges) do
+            IncludeStartCheckRange(ACheck, ACharClasses[Bx].Ranges[I]);
+          if not StartCheckIsUseful(ACheck) then
+            ClearStartCheck(ACheck);
+          Exit;
+        end;
+    else
+      Exit;
+    end;
+  end;
 end;
 
 procedure IntersectRanges(
@@ -2707,6 +2847,7 @@ begin
   Result.CharClasses := FCharClasses;
   Result.CaptureCount := FCaptureCount;
   Result.FullUnicode := FUnicode;
+  BuildStartCheck(FCode, FCodeLen, FCharClasses, Result.StartCheck);
   Result.NamedGroups := FNamedGroups;
 end;
 
