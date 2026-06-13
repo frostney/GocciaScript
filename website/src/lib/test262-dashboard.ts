@@ -84,7 +84,7 @@ export type Test262GroupCoverage = {
 };
 
 export type Test262DashboardData = {
-  status: "ready" | "needs-build-token" | "empty" | "error";
+  status: "ready" | "needs-blob-credentials" | "empty" | "error";
   message?: string;
   generatedAt: string;
   source: {
@@ -372,7 +372,7 @@ async function loadUncachedTest262DashboardData(): Promise<Test262DashboardData>
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const status = /No blob credentials|No read-write token/i.test(message)
-      ? "needs-build-token"
+      ? "needs-blob-credentials"
       : "error";
     return fallbackDashboard(
       status,
