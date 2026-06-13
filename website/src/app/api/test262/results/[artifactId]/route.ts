@@ -34,6 +34,9 @@ export async function GET(
       error:
         "test262 report unavailable. No Vercel Blob report exists for this artifact.",
     },
-    { status: 503 },
+    {
+      headers: { "cache-control": TEST262_DASHBOARD_CACHE_CONTROL },
+      status: 503,
+    },
   );
 }
