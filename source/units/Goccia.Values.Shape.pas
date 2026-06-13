@@ -15,12 +15,12 @@ unit Goccia.Values.Shape;
 //
 // Shapes are interned per realm (TGocciaShapeTable in a realm-owned slot):
 // no cross-thread locking, freed at engine tear-down with the realm.
-// Property maps remember the realm they were created under; if another
-// realm asks to materialize a shape for that map, the map leaves shaped
-// mode before any foreign shape table can receive its layout. Within an
-// engine's lifetime shapes are never freed, and function templates never
-// outlive their engine, so cache entries may validate by raw pointer
-// identity without a version stamp.
+// Property maps remember the realm pointer and non-reused identity token
+// they were created under; if another realm asks to materialize a shape for
+// that map, the map leaves shaped mode before any foreign shape table can
+// receive its layout. Within an engine's lifetime shapes are never freed,
+// and function templates never outlive their engine, so cache entries may
+// validate by raw pointer identity without a version stamp.
 
 interface
 
@@ -96,8 +96,10 @@ type
   TGocciaShapedPropertyMap = class(TGocciaPropertyMap)
   private
     FOwnerRealm: TGocciaRealm;
+    FOwnerRealmIdentity: TGocciaRealmIdentity;
     FShape: TGocciaShape;
     FShapeEntryCount: Integer;
+    function OwnerRealmIsCurrent: Boolean; inline;
   public
     constructor Create; overload;
     constructor Create(AInitialCapacity: Integer); overload;
@@ -239,8 +241,22 @@ constructor TGocciaShapedPropertyMap.Create(AInitialCapacity: Integer);
 begin
   inherited Create(AInitialCapacity);
   FOwnerRealm := CurrentRealm;
+  if Assigned(FOwnerRealm) then
+    FOwnerRealmIdentity := FOwnerRealm.Identity
+  else
+    FOwnerRealmIdentity := 0;
   FShape := nil;
   FShapeEntryCount := 0;
+end;
+
+function TGocciaShapedPropertyMap.OwnerRealmIsCurrent: Boolean;
+var
+  ActiveRealm: TGocciaRealm;
+begin
+  ActiveRealm := CurrentRealm;
+  Result := Assigned(ActiveRealm) and
+    (ActiveRealm = FOwnerRealm) and
+    (ActiveRealm.Identity = FOwnerRealmIdentity);
 end;
 
 function TGocciaShapedPropertyMap.EnsureShape: TGocciaShape;
@@ -252,7 +268,7 @@ var
 begin
   if FShape = GDictionaryShape then
     Exit(GDictionaryShape);
-  if CurrentRealm <> FOwnerRealm then
+  if not OwnerRealmIsCurrent then
   begin
     FShape := GDictionaryShape;
     Exit(GDictionaryShape);

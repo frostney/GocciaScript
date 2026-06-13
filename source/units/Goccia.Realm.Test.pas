@@ -67,6 +67,7 @@ type
     procedure TestDestructorUnpinsSlotObjects;
     procedure TestSlotIdGrowsArrayLazily;
     procedure TestRealmRecordFieldsRoundtrip;
+    procedure TestRealmIdentitiesAreNeverReused;
     procedure TestRealmTemplateMapRoundtrip;
     procedure TestExecutionContextStackSetsCurrentRealm;
     procedure TestShapeEnsureFromNonOwnerRealmUsesDictionary;
@@ -97,6 +98,7 @@ begin
   Test('SetSlot grows the slot array when the id was registered later',
     TestSlotIdGrowsArrayLazily);
   Test('Realm Record fields roundtrip', TestRealmRecordFieldsRoundtrip);
+  Test('Realm identities are never reused', TestRealmIdentitiesAreNeverReused);
   Test('Realm [[TemplateMap]] stores cached objects',
     TestRealmTemplateMapRoundtrip);
   Test('Execution context stack drives CurrentRealm',
@@ -359,6 +361,28 @@ begin
     GlobalObject.Free;
     LoadedModules.Free;
     HostDefined.Free;
+  end;
+end;
+
+procedure TTestRealm.TestRealmIdentitiesAreNeverReused;
+var
+  FirstRealm, SecondRealm: TGocciaRealm;
+  FirstIdentity: TGocciaRealmIdentity;
+begin
+  FirstRealm := TGocciaRealm.Create('identity:first');
+  try
+    FirstIdentity := FirstRealm.Identity;
+    Expect<Boolean>(FirstIdentity <> 0).ToBe(True);
+  finally
+    FirstRealm.Free;
+  end;
+
+  SecondRealm := TGocciaRealm.Create('identity:second');
+  try
+    Expect<Boolean>(SecondRealm.Identity <> 0).ToBe(True);
+    Expect<Boolean>(SecondRealm.Identity <> FirstIdentity).ToBe(True);
+  finally
+    SecondRealm.Free;
   end;
 end;
 
