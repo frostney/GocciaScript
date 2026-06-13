@@ -14,6 +14,14 @@ uses
   Goccia.Token;
 
 type
+  TGocciaLexicalGoal = (
+    glgInputElementDiv,
+    glgInputElementRegExp,
+    glgInputElementRegExpOrTemplateTail,
+    glgInputElementTemplateTail,
+    glgInputElementHashbangOrRegExp
+  );
+
   TGocciaLexer = class
   private
     FSource: string;
@@ -25,12 +33,8 @@ type
     FStartColumn: Integer;
     FFileName: string;
     FSourceLines: TStringList;
-    FCanStartRegex: Boolean;
-    FParenRegexContext: array of Boolean;
-    FParenRegexContextCount: Integer;
     FHashbangSkipped: Boolean;
     FEOFEmitted: Boolean;
-    FLegacyRegexContextEnabled: Boolean;
     FScanTimeNanoseconds: Int64;
     function GetSourceLines: TStringList;
 
@@ -49,13 +53,12 @@ type
     procedure AddToken(const ATokenType: TGocciaTokenType); overload;
     procedure AddToken(const ATokenType: TGocciaTokenType; const ALiteral: string;
       const AContainsEscape: Boolean = False); overload;
-    procedure ScanToken(const ACanStartRegex: Boolean);
+    procedure ScanToken(const ALexicalGoal: TGocciaLexicalGoal);
     procedure ScanString;
     procedure ScanTemplate;
     procedure ScanRegexLiteral;
     procedure ScanNumber;
     procedure ScanIdentifier;
-    function CanScanRegexAfterAwait: Boolean;
     function ScanUnicodeEscape: string;
     function ScanHexEscape: string;
     procedure ProcessEscapeSequence(var ASB: TStringBuffer);
@@ -74,9 +77,6 @@ type
     // Called after the opening backtick has been consumed and appended.
     // Handles \`, \$, and nested ${...} via mutual recursion.
     procedure ScanNestedTemplateInExpression(var ASB, ARawSB: TStringBuffer);
-    procedure UpdateRegexContext(const ATokenType: TGocciaTokenType);
-    procedure PushParenRegexContext(const AAllowsRegexAfter: Boolean);
-    function PopParenRegexContext: Boolean;
     procedure SkipWhitespace;
     procedure SkipHashbang;
     procedure SkipComment;
@@ -90,8 +90,7 @@ type
   public
     constructor Create(const ASource, AFileName: string);
     destructor Destroy; override;
-    function ScanNextToken(const ACanStartRegex: Boolean): TGocciaToken;
-    function ScanTokens: TObjectList<TGocciaToken>;
+    function ScanNextToken(const ALexicalGoal: TGocciaLexicalGoal): TGocciaToken;
     property ScanTimeNanoseconds: Int64 read FScanTimeNanoseconds;
     property Tokens: TObjectList<TGocciaToken> read FTokens;
     property SourceLines: TStringList read GetSourceLines;
@@ -255,11 +254,8 @@ begin
   FCurrent := 1;
   FLine := 1;
   FColumn := 1;
-  FCanStartRegex := True;
-  FParenRegexContextCount := 0;
   FHashbangSkipped := False;
   FEOFEmitted := False;
-  FLegacyRegexContextEnabled := False;
   FScanTimeNanoseconds := 0;
 end;
 
@@ -343,8 +339,6 @@ procedure TGocciaLexer.AddToken(const ATokenType: TGocciaTokenType; const ALiter
 begin
   FTokens.Add(TGocciaToken.Create(ATokenType, ALiteral, FLine, FStartColumn,
     FColumn - 1, AContainsEscape));
-  if FLegacyRegexContextEnabled then
-    UpdateRegexContext(ATokenType);
 end;
 
 // ES2026 §12.3 LineTerminator :: <LF> | <CR> | <LS> | <PS>
@@ -922,11 +916,11 @@ end;
 //   - Block comments /*…*/
 //   - Line terminators (CR, CRLF, LF, LS, PS) with line/column tracking
 //
-// Regex-vs-division uses the same classification as UpdateRegexContext: a
-// slash after a completed primary expression (identifier, literal, `]`,
-// closing quote/backtick, postfix ++/--) divides; everywhere else it starts
-// a regex.  The scanner tracks the last significant character and the last
-// word so keyword boundaries (`return /re/`) classify like the main lexer.
+// Slash classification uses lexical-goal inference for this raw template
+// boundary scanner: after a completed primary expression, the next goal is
+// InputElementDiv; otherwise it is InputElementRegExp.  The scanner tracks the
+// last significant character and word so keyword boundaries (`return /re/`)
+// do not let regex braces or quotes corrupt interpolation boundary tracking.
 procedure TGocciaLexer.ScanInterpolationExpression(var ASB, ARawSB: TStringBuffer);
 var
   BraceCount: Integer;
@@ -991,8 +985,8 @@ var
     if (LastSignificant in ['a'..'z', 'A'..'Z', '0'..'9', '_', '$']) or
        (LastSignificant > #127) then
     begin
-      // Mirror UpdateRegexContext: keywords allow a regex except the
-      // identifier-like ones that end a primary expression.
+      // Keywords allow a regex except the identifier-like ones that end a
+      // primary expression.
       if TryKeywordToken(LastWord, KeywordType) then
         Exit(not (KeywordType in [gttTrue, gttFalse, gttNull, gttAs,
           gttFrom, gttStatic, gttThis, gttSuper]));
@@ -1006,9 +1000,8 @@ var
     if (LastSignificant in ['+', '-']) and
        (PrevSignificant = LastSignificant) then
       Exit(False); // postfix ++/-- ends a primary expression
-    // Mirror PushParenRegexContext: the ')' closing an if/while/for head
-    // allows a regex statement to follow; any other ')' ends a primary
-    // expression and divides.
+    // The ')' closing an if/while/for head allows a regex statement to follow;
+    // any other ')' ends a primary expression and divides.
     if LastSignificant = ')' then
       Exit(LastParenAllowsRegex);
     Result := not (LastSignificant in [']', '''', '"', '`']);
@@ -1227,61 +1220,6 @@ begin
           WordActive := False;
       end;
     end;
-  end;
-end;
-
-procedure TGocciaLexer.PushParenRegexContext(const AAllowsRegexAfter: Boolean);
-begin
-  if FParenRegexContextCount >= Length(FParenRegexContext) then
-    SetLength(FParenRegexContext, FParenRegexContextCount * 2 + 8);
-  FParenRegexContext[FParenRegexContextCount] := AAllowsRegexAfter;
-  Inc(FParenRegexContextCount);
-end;
-
-function TGocciaLexer.PopParenRegexContext: Boolean;
-begin
-  if FParenRegexContextCount = 0 then
-    Exit(False);
-  Dec(FParenRegexContextCount);
-  Result := FParenRegexContext[FParenRegexContextCount];
-end;
-
-procedure TGocciaLexer.UpdateRegexContext(const ATokenType: TGocciaTokenType);
-var
-  PreviousTokenType: TGocciaTokenType;
-begin
-  case ATokenType of
-    gttLeftParen:
-      begin
-        if FTokens.Count >= 2 then
-          PreviousTokenType := FTokens[FTokens.Count - 2].TokenType
-        else
-          PreviousTokenType := gttEOF;
-        PushParenRegexContext(PreviousTokenType in [gttIf, gttWhile, gttFor]);
-        FCanStartRegex := True;
-      end;
-    gttRightParen:
-      FCanStartRegex := PopParenRegexContext();
-    gttNumber,
-    gttBigInt,
-    gttString,
-    gttTemplate,
-    gttRegex,
-    gttTrue,
-    gttFalse,
-    gttNull,
-    gttIdentifier,
-    gttAs,
-    gttFrom,
-    gttStatic,
-    gttThis,
-    gttSuper,
-    gttRightBracket,
-    gttIncrement,
-    gttDecrement:
-      FCanStartRegex := False;
-  else
-    FCanStartRegex := True;
   end;
 end;
 
@@ -1753,7 +1691,17 @@ begin
     AddToken(gttIdentifier, Text, HadEscape);
 end;
 
-procedure TGocciaLexer.ScanToken(const ACanStartRegex: Boolean);
+function LexicalGoalAllowsRegularExpression(
+  const ALexicalGoal: TGocciaLexicalGoal): Boolean; inline;
+begin
+  Result := ALexicalGoal in [
+    glgInputElementRegExp,
+    glgInputElementRegExpOrTemplateTail,
+    glgInputElementHashbangOrRegExp
+  ];
+end;
+
+procedure TGocciaLexer.ScanToken(const ALexicalGoal: TGocciaLexicalGoal);
 var
   ByteLength: Integer;
   C: Char;
@@ -1813,11 +1761,10 @@ begin
       else
         AddToken(gttStar);
     '/':
-      if Match('=') then
-        AddToken(gttSlashAssign)
-      else if ACanStartRegex or
-              (FLegacyRegexContextEnabled and CanScanRegexAfterAwait) then
+      if LexicalGoalAllowsRegularExpression(ALexicalGoal) then
         ScanRegexLiteral
+      else if Match('=') then
+        AddToken(gttSlashAssign)
       else
         AddToken(gttSlash);
     '%':
@@ -1958,64 +1905,8 @@ begin
   end;
 end;
 
-function TGocciaLexer.CanScanRegexAfterAwait: Boolean;
-var
-  I: Integer;
-  InClass, Escaped: Boolean;
-  Ch: Char;
-
-  function IsLineTerminatorAt(const AIndex: Integer): Boolean; inline;
-  begin
-    Result := (FSource[AIndex] = #10) or (FSource[AIndex] = #13) or
-              ((FSource[AIndex] = UTF8_LINE_TERMINATOR_LEAD_BYTE) and
-              (AIndex + 2 <= Length(FSource)) and
-              (FSource[AIndex + 1] = UTF8_LINE_TERMINATOR_CONTINUATION_BYTE) and
-              ((FSource[AIndex + 2] = UTF8_LINE_SEPARATOR_FINAL_BYTE) or
-              (FSource[AIndex + 2] = UTF8_PARAGRAPH_SEPARATOR_FINAL_BYTE)));
-  end;
-begin
-  Result := False;
-  if (FTokens.Count = 0) or
-     (FTokens[FTokens.Count - 1].TokenType <> gttIdentifier) or
-     (FTokens[FTokens.Count - 1].Lexeme <> KEYWORD_AWAIT) then
-    Exit;
-
-  if IsAtEnd or (Peek = '/') or (Peek = '*') then
-    Exit;
-
-  InClass := False;
-  Escaped := False;
-  I := FCurrent;
-  while I <= Length(FSource) do
-  begin
-    Ch := FSource[I];
-    if IsLineTerminatorAt(I) then
-      Exit;
-
-    if Escaped then
-    begin
-      Escaped := False;
-      Inc(I);
-      Continue;
-    end;
-
-    case Ch of
-      '\':
-        Escaped := True;
-      '[':
-        InClass := True;
-      ']':
-        InClass := False;
-      '/':
-        if not InClass then
-          Exit(True);
-    end;
-
-    Inc(I);
-  end;
-end;
-
-function TGocciaLexer.ScanNextToken(const ACanStartRegex: Boolean): TGocciaToken;
+function TGocciaLexer.ScanNextToken(
+  const ALexicalGoal: TGocciaLexicalGoal): TGocciaToken;
 var
   StartTime: Int64;
 begin
@@ -2038,26 +1929,11 @@ begin
       Exit(FTokens[FTokens.Count - 1]);
     end;
 
-    ScanToken(ACanStartRegex);
+    ScanToken(ALexicalGoal);
     Result := FTokens[FTokens.Count - 1];
   finally
     Inc(FScanTimeNanoseconds, GetNanoseconds - StartTime);
   end;
-end;
-
-function TGocciaLexer.ScanTokens: TObjectList<TGocciaToken>;
-var
-  Token: TGocciaToken;
-begin
-  FLegacyRegexContextEnabled := True;
-  try
-    repeat
-      Token := ScanNextToken(FCanStartRegex);
-    until Token.TokenType = gttEOF;
-  finally
-    FLegacyRegexContextEnabled := False;
-  end;
-  Result := FTokens;
 end;
 
 end.
