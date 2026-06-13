@@ -10,6 +10,8 @@ uses
   Goccia.GarbageCollector,
   Goccia.ExecutionContext,
   Goccia.Realm,
+  Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.Shape,
   TestingPascalLibrary,
 
   Goccia.TestSetup;
@@ -65,8 +67,10 @@ type
     procedure TestDestructorUnpinsSlotObjects;
     procedure TestSlotIdGrowsArrayLazily;
     procedure TestRealmRecordFieldsRoundtrip;
+    procedure TestRealmIdentitiesAreNeverReused;
     procedure TestRealmTemplateMapRoundtrip;
     procedure TestExecutionContextStackSetsCurrentRealm;
+    procedure TestShapeEnsureFromNonOwnerRealmUsesDictionary;
     procedure TestThreadLocalityOfCurrentRealm;
   end;
 
@@ -94,10 +98,13 @@ begin
   Test('SetSlot grows the slot array when the id was registered later',
     TestSlotIdGrowsArrayLazily);
   Test('Realm Record fields roundtrip', TestRealmRecordFieldsRoundtrip);
+  Test('Realm identities are never reused', TestRealmIdentitiesAreNeverReused);
   Test('Realm [[TemplateMap]] stores cached objects',
     TestRealmTemplateMapRoundtrip);
   Test('Execution context stack drives CurrentRealm',
     TestExecutionContextStackSetsCurrentRealm);
+  Test('Shape ensure from a non-owner realm uses dictionary mode',
+    TestShapeEnsureFromNonOwnerRealmUsesDictionary);
   Test('CurrentRealm is thread-local',
     TestThreadLocalityOfCurrentRealm);
 end;
@@ -357,6 +364,28 @@ begin
   end;
 end;
 
+procedure TTestRealm.TestRealmIdentitiesAreNeverReused;
+var
+  FirstRealm, SecondRealm: TGocciaRealm;
+  FirstIdentity: TGocciaRealmIdentity;
+begin
+  FirstRealm := TGocciaRealm.Create('identity:first');
+  try
+    FirstIdentity := FirstRealm.Identity;
+    Expect<Boolean>(FirstIdentity <> 0).ToBe(True);
+  finally
+    FirstRealm.Free;
+  end;
+
+  SecondRealm := TGocciaRealm.Create('identity:second');
+  try
+    Expect<Boolean>(SecondRealm.Identity <> 0).ToBe(True);
+    Expect<Boolean>(SecondRealm.Identity <> FirstIdentity).ToBe(True);
+  finally
+    SecondRealm.Free;
+  end;
+end;
+
 procedure TTestRealm.TestRealmTemplateMapRoundtrip;
 var
   Realm: TGocciaRealm;
@@ -405,6 +434,43 @@ begin
     SetCurrentRealm(PreviousRealm);
     InnerRealm.Free;
     OuterRealm.Free;
+  end;
+end;
+
+procedure TTestRealm.TestShapeEnsureFromNonOwnerRealmUsesDictionary;
+var
+  OwnerRealm, OtherRealm, PreviousRealm: TGocciaRealm;
+  Map: TGocciaShapedPropertyMap;
+  FirstDescriptor, SecondDescriptor: TGocciaPropertyDescriptor;
+begin
+  PreviousRealm := CurrentRealm;
+  OwnerRealm := TGocciaRealm.Create('shape-owner');
+  OtherRealm := TGocciaRealm.Create('shape-other');
+  Map := nil;
+  FirstDescriptor := nil;
+  SecondDescriptor := nil;
+  try
+    SetCurrentRealm(OwnerRealm);
+    Map := TGocciaShapedPropertyMap.Create;
+    FirstDescriptor := TGocciaPropertyDescriptor.Create([], []);
+    SecondDescriptor := TGocciaPropertyDescriptor.Create([], []);
+    Map.Add('alpha', FirstDescriptor);
+    Map.Add('beta', SecondDescriptor);
+
+    Expect<Boolean>(Map.EnsureShape <> DictionaryShapeSentinel).ToBe(True);
+
+    SetCurrentRealm(OtherRealm);
+    Expect<Boolean>(Map.EnsureShape = DictionaryShapeSentinel).ToBe(True);
+
+    SetCurrentRealm(OwnerRealm);
+    Expect<Boolean>(Map.EnsureShape = DictionaryShapeSentinel).ToBe(True);
+  finally
+    SetCurrentRealm(PreviousRealm);
+    Map.Free;
+    FirstDescriptor.Free;
+    SecondDescriptor.Free;
+    OtherRealm.Free;
+    OwnerRealm.Free;
   end;
 end;
 

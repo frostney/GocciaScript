@@ -41,6 +41,7 @@ uses
 
 type
   TGocciaRealmHostFinalize = procedure(const AHostDefined: TObject) of object;
+  TGocciaRealmIdentity = type QWord;
   TGocciaRealmSlotId = type Integer;
   TGocciaRealmOwnedSlotId = type Integer;
 
@@ -54,6 +55,7 @@ type
     FGlobalEnv: TGCManagedObject;
     FHostDefined: TObject;
     FHostFinalize: TGocciaRealmHostFinalize;
+    FIdentity: TGocciaRealmIdentity;
     FIntrinsics: TGocciaRealmIntrinsics;
     FLoadedModules: TObject;
     FSlots: array of TGCManagedObject;
@@ -93,6 +95,7 @@ type
     property LoadedModules: TObject read FLoadedModules write FLoadedModules;
     property HostDefined: TObject read FHostDefined write FHostDefined;
     property HostFinalize: TGocciaRealmHostFinalize read FHostFinalize write FHostFinalize;
+    property Identity: TGocciaRealmIdentity read FIdentity;
   end;
 
 // Allocates a new slot id.  Call from the initialization section of a unit
@@ -140,7 +143,19 @@ var
   GSlotNames: array of string;
   GOwnedSlotCount: Integer;
   GOwnedSlotNames: array of string;
+  GRealmIdentityCounter: TGocciaRealmIdentity;
   GSlotLock: TRTLCriticalSection;
+
+function NextRealmIdentity: TGocciaRealmIdentity;
+begin
+  EnterCriticalSection(GSlotLock);
+  try
+    Inc(GRealmIdentityCounter);
+    Result := GRealmIdentityCounter;
+  finally
+    LeaveCriticalSection(GSlotLock);
+  end;
+end;
 
 function RegisterRealmSlot(const AName: string): TGocciaRealmSlotId;
 begin
@@ -236,6 +251,7 @@ constructor TGocciaRealm.Create(const AAgentSignifier: string);
 begin
   inherited Create;
   FAgentSignifier := AAgentSignifier;
+  FIdentity := NextRealmIdentity;
   FIntrinsics := TGocciaRealmIntrinsics.Create;
   FTemplateMap := TStringList.Create;
   FTemplateMap.Sorted := True;
@@ -415,6 +431,7 @@ initialization
   InitCriticalSection(GSlotLock);
   GSlotCount := 0;
   GOwnedSlotCount := 0;
+  GRealmIdentityCounter := 0;
 
 finalization
   SetLength(GCurrentFunctionContextStack, 0);
