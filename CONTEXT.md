@@ -121,11 +121,11 @@ A per-site cache on a function template that lets the Goccia VM re-read a previo
 _Avoid_: Hidden class, polymorphic inline cache — GocciaScript property caches are monomorphic per site.
 
 **Shape**:
-The interned, per-realm identity of an object's own-property layout: the sequence of property keys added to its property map. Two objects with the same shape store the same key at the same entry index. A shape records keys only — not the prototype, not attribute flags, not values.
+The interned, per-realm identity of an object's own-property layout: the sequence of property keys added to its property map. Two objects with the same shape store the same key at the same entry index. A shape records keys only — not the prototype, not attribute flags, not values. If a property map is asked to materialize its shape from a non-owner realm, it leaves shape tracking instead of interning the owner's layout into the foreign realm's table.
 _Avoid_: Hidden class, map (overloaded with the property map and the Map built-in).
 
 **Dictionary mode**:
-The state a property map enters when its layout stops being shape-tracked (after a property delete or clear). Dictionary-mode objects stay fully functional but are invisible to shape-validated inline caches.
+The state a property map enters when its layout stops being shape-tracked (after a property delete or clear, or after a non-owner realm tries to ensure its shape). Dictionary-mode objects stay fully functional but are invisible to shape-validated inline caches.
 _Avoid_: Slow mode, deoptimized object.
 
 ### Source And Tools
