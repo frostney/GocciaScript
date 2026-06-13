@@ -13,7 +13,7 @@ test("JSON.stringify basic values", () => {
 });
 
 test("JSON.stringify omits root function and symbol values", () => {
-  expect(JSON.stringify(function noop() {})).toBeUndefined();
+  expect(JSON.stringify(() => {})).toBeUndefined();
   expect(JSON.stringify(Symbol("root"))).toBeUndefined();
 });
 
@@ -22,15 +22,15 @@ test("JSON.stringify replacer can transform otherwise omitted root values", () =
     key === "" ? replacement : value;
 
   expect(JSON.stringify(undefined, replaceRoot(1))).toBe("1");
-  expect(JSON.stringify(function noop() {}, replaceRoot("fn"))).toBe('"fn"');
+  expect(JSON.stringify(() => {}, replaceRoot("fn"))).toBe('"fn"');
   expect(JSON.stringify(Symbol("root"), replaceRoot(true))).toBe("true");
-  expect(JSON.stringify(1, replaceRoot(function noop() {}))).toBeUndefined();
+  expect(JSON.stringify(1, replaceRoot(() => {}))).toBeUndefined();
   expect(JSON.stringify(1, replaceRoot(Symbol("root")))).toBeUndefined();
 });
 
 test("JSON.stringify omits root values after toJSON", () => {
   expect(JSON.stringify({ toJSON() { return undefined; } })).toBeUndefined();
-  expect(JSON.stringify({ toJSON() { return function noop() {}; } })).toBeUndefined();
+  expect(JSON.stringify({ toJSON() { return () => {}; } })).toBeUndefined();
   expect(JSON.stringify({ toJSON() { return Symbol("root"); } })).toBeUndefined();
 });
 
@@ -136,14 +136,14 @@ test("JSON.stringify replacer function can exclude properties", () => {
 
 test("JSON.stringify replacer function omits function and symbol object properties", () => {
   expect(JSON.stringify({ a: 1, b: 2 }, (key, value) =>
-    key === "a" ? function noop() {} : value)).toBe('{"b":2}');
+    key === "a" ? () => {} : value)).toBe('{"b":2}');
   expect(JSON.stringify({ a: 1, b: 2 }, (key, value) =>
     key === "a" ? Symbol("a") : value)).toBe('{"b":2}');
 });
 
 test("JSON.stringify replacer function nullifies function and symbol array elements", () => {
   expect(JSON.stringify([1, 2], (key, value) =>
-    key === "0" ? function noop() {} : value)).toBe("[null,2]");
+    key === "0" ? () => {} : value)).toBe("[null,2]");
   expect(JSON.stringify([1, 2], (key, value) =>
     key === "0" ? Symbol("a") : value)).toBe("[null,2]");
 });
