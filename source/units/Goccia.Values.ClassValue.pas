@@ -44,7 +44,6 @@ type
   private
     FName: string;
     FSuperClass: TGocciaClassValue;
-    FMethods: TOrderedStringMap<TGocciaMethodValue>;
     FGetters: TOrderedStringMap<TGocciaFunctionBase>;
     FSetters: TOrderedStringMap<TGocciaFunctionBase>;
     FClassPrototype: TGocciaObjectValue;
@@ -86,7 +85,6 @@ type
     function ToStringLiteral: TGocciaStringLiteralValue; override;
     function ToBooleanLiteral: TGocciaBooleanLiteralValue; override;
     procedure AddMethod(const AName: string; const AMethod: TGocciaMethodValue);
-    function GetMethod(const AName: string): TGocciaMethodValue;
     procedure AddGetter(const AName: string; const AGetter: TGocciaFunctionBase);
     procedure AddSetter(const AName: string; const ASetter: TGocciaFunctionBase);
     procedure AddStaticGetter(const AName: string; const AGetter: TGocciaFunctionBase);
@@ -426,7 +424,6 @@ begin
     FPrototype := FSuperClass
   else if Assigned(TGocciaFunctionBase.GetSharedPrototype) then
     FPrototype := TGocciaFunctionBase.GetSharedPrototype;
-  FMethods := TOrderedStringMap<TGocciaMethodValue>.Create;
   FGetters := TOrderedStringMap<TGocciaFunctionBase>.Create;
   FSetters := TOrderedStringMap<TGocciaFunctionBase>.Create;
   FStaticMethods := TGocciaValueMap.Create;
@@ -460,7 +457,6 @@ end;
 
 destructor TGocciaClassValue.Destroy;
 begin
-  FMethods.Free;
   FGetters.Free;
   FSetters.Free;
   FStaticMethods.Free;
@@ -479,7 +475,7 @@ end;
 
 procedure TGocciaClassValue.MarkReferences;
 var
-  MethodPair: TOrderedStringMap<TGocciaMethodValue>.TKeyValuePair;
+  PrivateMethodPair: TOrderedStringMap<TGocciaMethodValue>.TKeyValuePair;
   FuncPair: TOrderedStringMap<TGocciaFunctionBase>.TKeyValuePair;
   ValPair: TGocciaValueMap.TKeyValuePair;
   I: Integer;
@@ -499,9 +495,6 @@ begin
   if Assigned(FConstructorMethod) then
     FConstructorMethod.MarkReferences;
 
-  for MethodPair in FMethods do
-    MethodPair.Value.MarkReferences;
-
   for FuncPair in FGetters do
     FuncPair.Value.MarkReferences;
   for FuncPair in FSetters do
@@ -519,8 +512,8 @@ begin
     if Assigned(ValPair.Value) then
       ValPair.Value.MarkReferences;
 
-  for MethodPair in FPrivateMethods do
-    MethodPair.Value.MarkReferences;
+  for PrivateMethodPair in FPrivateMethods do
+    PrivateMethodPair.Value.MarkReferences;
 
   for FuncPair in FPrivateGetters do
     FuncPair.Value.MarkReferences;
@@ -597,21 +590,9 @@ begin
     Exit;
   end;
 
-  FMethods.AddOrSetValue(AName, AMethod);
   // ES §14.3.7: class method definitions have enumerable: false
   FClassPrototype.DefineProperty(AName,
     TGocciaPropertyDescriptorData.Create(AMethod, [pfConfigurable, pfWritable]));
-end;
-
-function TGocciaClassValue.GetMethod(const AName: string): TGocciaMethodValue;
-begin
-  if not FMethods.TryGetValue(AName, Result) then
-  begin
-    if Assigned(FSuperClass) then
-      Result := FSuperClass.GetMethod(AName)
-    else
-      Result := nil;
-  end;
 end;
 
 procedure TGocciaClassValue.AddGetter(const AName: string; const AGetter: TGocciaFunctionBase);
@@ -2068,7 +2049,6 @@ function TGocciaInstanceValue.GetPropertyWithContext(const AName: string; const 
 var
   Descriptor: TGocciaPropertyDescriptor;
   Args: TGocciaArgumentsCollection;
-  Method: TGocciaFunctionValue;
 begin
   if FProperties.TryGetValue(AName, Descriptor) then
   begin
@@ -2095,22 +2075,12 @@ begin
     Exit;
   end;
 
-  // Check for getters/setters on the prototype with the receiver as context
+  // Check the prototype chain with the receiver as context.
   if Assigned(FPrototype) then
   begin
     Result := FPrototype.GetPropertyWithContext(AName, AThisContext);
     if not (Result is TGocciaUndefinedLiteralValue) then
       Exit;
-  end;
-
-  if Assigned(FClass) then
-  begin
-    Method := FClass.GetMethod(AName);
-    if Assigned(Method) then
-    begin
-      Result := Method;
-      Exit;
-    end;
   end;
 
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;

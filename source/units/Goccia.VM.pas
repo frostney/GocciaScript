@@ -1515,9 +1515,6 @@ end;
 // absence below the holder, fresh-shape presence at the holder, exact
 // TGocciaObjectValue chain levels (exotic objects may share shapes but not
 // lookup semantics), then re-read the holder descriptor by entry index.
-// Undefined-valued holder properties are never served: instance lookup
-// treats them as not-found and falls through to class state, so the cache
-// declines and the generic path decides.
 function VMTryGetCachedProtoProperty(const AReceiver: TGocciaObjectValue;
   const ACache: PGocciaProtoReadCacheEntry;
   out AValue: TGocciaValue): Boolean;
@@ -1554,11 +1551,6 @@ begin
   if not (Descriptor is TGocciaPropertyDescriptorData) then
     Exit;
   AValue := TGocciaPropertyDescriptorData(Descriptor).Value;
-  if AValue = TGocciaUndefinedLiteralValue.UndefinedValue then
-  begin
-    AValue := nil;
-    Exit;
-  end;
   // Validated hit: reset the streak so only consecutive misses count (see
   // VMTryGetCachedOwnDataProperty).
   if ACache^.MissStreak <> 0 then
@@ -1569,8 +1561,8 @@ end;
 // One uncached prototype-chain lookup (at most two levels) that also primes
 // the prototype-holder cache. Declines — leaving the cache untouched — for
 // dictionary-mode maps, exotic chain levels, own-present names, accessor
-// or undefined-valued holder properties, and chains deeper than two
-// levels; all of those stay on the generic GetPropertyValue path.
+// holder properties, and chains deeper than two levels; all of those stay on
+// the generic GetPropertyValue path.
 function VMFillProtoReadCacheCore(const AReceiver: TGocciaObjectValue;
   const AName: string; const ACache: PGocciaProtoReadCacheEntry;
   out AValue: TGocciaValue): Boolean;
@@ -1622,11 +1614,6 @@ begin
     if (not Assigned(WalkShape)) or (EntryIndex >= WalkShape.Depth) then
       Exit;
     AValue := TGocciaPropertyDescriptorData(Descriptor).Value;
-    if AValue = TGocciaUndefinedLiteralValue.UndefinedValue then
-    begin
-      AValue := nil;
-      Exit;
-    end;
     if (ACache^.HolderLevel > 0) and
        (ACache^.Shapes[0] <> Shapes[0]) then
       Inc(ACache^.MissStreak);
