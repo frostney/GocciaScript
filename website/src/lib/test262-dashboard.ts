@@ -328,13 +328,6 @@ export async function readLatestTest262ReportJson(): Promise<string | null> {
   return readTest262ReportJsonByArtifactId(data.latest.artifactId);
 }
 
-function hasBlobReadCredentials(): boolean {
-  return Boolean(
-    process.env.BLOB_READ_WRITE_TOKEN ||
-      (process.env.BLOB_STORE_ID && process.env.VERCEL_OIDC_TOKEN),
-  );
-}
-
 export async function readNewestValidTest262Report(
   timeline: Test262BlobRun[],
   readReportJson: (
@@ -367,13 +360,6 @@ export async function readNewestValidTest262Report(
 }
 
 async function loadUncachedTest262DashboardData(): Promise<Test262DashboardData> {
-  if (!hasBlobReadCredentials()) {
-    return fallbackDashboard(
-      "needs-build-token",
-      "No Vercel Blob credentials are available for request-time test262 data.",
-    );
-  }
-
   try {
     const timeline = await listTest262BlobDailyRuns();
     const { latestReport, usableTimeline } =
@@ -385,8 +371,11 @@ async function loadUncachedTest262DashboardData(): Promise<Test262DashboardData>
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    const status = /No blob credentials|No read-write token/i.test(message)
+      ? "needs-build-token"
+      : "error";
     return fallbackDashboard(
-      "error",
+      status,
       `Failed to read test262 reports from Vercel Blob: ${message}`,
     );
   }
