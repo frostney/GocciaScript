@@ -45,9 +45,11 @@ type
     procedure TestUnicodeLineTerminatorsBetweenTokens;
     procedure TestRegexLiteralPreservesRawPattern;
     procedure TestLexicalGoalSelectsSlashTokenization;
+    procedure TestRegExpOrTemplateTailGoalAllowsRegex;
     procedure TestRegexUnterminatedAtEOF;
     procedure TestAwaitSlashLookaheadStopsAtUnicodeLineTerminators;
     procedure TestNumericSeparatorsNormalize;
+    procedure TestTemplateLexicalGoalsEmitSpans;
     procedure TestTemplateInterpolationTracksLineTerminators;
     procedure TestUnicodeEscapeOverflowRaisesLexerError;
   public
@@ -68,10 +70,12 @@ begin
   Test('Unicode line terminators split tokens', TestUnicodeLineTerminatorsBetweenTokens);
   Test('Regex literal preserves raw pattern', TestRegexLiteralPreservesRawPattern);
   Test('Lexical goal selects slash tokenization', TestLexicalGoalSelectsSlashTokenization);
+  Test('RegExpOrTemplateTail goal allows regex', TestRegExpOrTemplateTailGoalAllowsRegex);
   Test('Unterminated regex at EOF raises lexer error', TestRegexUnterminatedAtEOF);
   Test('Await slash lookahead stops at Unicode line terminators',
     TestAwaitSlashLookaheadStopsAtUnicodeLineTerminators);
   Test('Numeric separators normalize', TestNumericSeparatorsNormalize);
+  Test('Template lexical goals emit spans', TestTemplateLexicalGoalsEmitSpans);
   Test('Template interpolation tracks line terminators', TestTemplateInterpolationTracksLineTerminators);
   Test('Unicode escape overflow raises lexer error', TestUnicodeEscapeOverflowRaisesLexerError);
 end;
@@ -445,6 +449,23 @@ begin
   end;
 end;
 
+procedure TLexerTests.TestRegExpOrTemplateTailGoalAllowsRegex;
+const
+  REGEX_SEPARATOR = #0;
+var
+  Lexer: TGocciaLexer;
+  Token: TGocciaToken;
+begin
+  Lexer := TGocciaLexer.Create('/brace}/', '<test>');
+  try
+    Token := Lexer.ScanNextToken(glgInputElementRegExpOrTemplateTail);
+    Expect<TGocciaTokenType>(Token.TokenType).ToBe(gttRegex);
+    Expect<string>(Token.Lexeme).ToBe('brace}' + REGEX_SEPARATOR);
+  finally
+    Lexer.Free;
+  end;
+end;
+
 procedure TLexerTests.TestRegexUnterminatedAtEOF;
 var
   Lexer: TGocciaLexer;
@@ -532,6 +553,40 @@ begin
   end;
 end;
 
+procedure TLexerTests.TestTemplateLexicalGoalsEmitSpans;
+const
+  TEMPLATE_RAW_SEPARATOR = #1;
+var
+  Lexer: TGocciaLexer;
+  Tokens: TObjectList<TGocciaToken>;
+begin
+  Lexer := TGocciaLexer.Create('`a${1}b${2}c`', '<test>');
+  try
+    ScanGoalSequence(Lexer, [
+      glgInputElementRegExp,
+      glgInputElementRegExp,
+      glgInputElementRegExp,
+      glgInputElementTemplateTail,
+      glgInputElementRegExp,
+      glgInputElementRegExp,
+      glgInputElementTemplateTail
+    ]);
+    Tokens := Lexer.Tokens;
+    Expect<TGocciaTokenType>(Tokens[0].TokenType).ToBe(gttTemplateHead);
+    Expect<string>(Tokens[0].Lexeme).ToBe('a' + TEMPLATE_RAW_SEPARATOR + 'a');
+    Expect<TGocciaTokenType>(Tokens[1].TokenType).ToBe(gttNumber);
+    Expect<TGocciaTokenType>(Tokens[2].TokenType).ToBe(gttRightBrace);
+    Expect<TGocciaTokenType>(Tokens[3].TokenType).ToBe(gttTemplateMiddle);
+    Expect<string>(Tokens[3].Lexeme).ToBe('b' + TEMPLATE_RAW_SEPARATOR + 'b');
+    Expect<TGocciaTokenType>(Tokens[4].TokenType).ToBe(gttNumber);
+    Expect<TGocciaTokenType>(Tokens[5].TokenType).ToBe(gttRightBrace);
+    Expect<TGocciaTokenType>(Tokens[6].TokenType).ToBe(gttTemplateTail);
+    Expect<string>(Tokens[6].Lexeme).ToBe('c' + TEMPLATE_RAW_SEPARATOR + 'c');
+  finally
+    Lexer.Free;
+  end;
+end;
+
 procedure TLexerTests.TestTemplateInterpolationTracksLineTerminators;
 var
   Lexer: TGocciaLexer;
@@ -539,12 +594,20 @@ var
 begin
   Lexer := TGocciaLexer.Create('`a${/* x' + #13#10 + '*/ 1}b`;const x = 1;', '<test>');
   try
-    ScanAllTokens(Lexer, glgInputElementRegExp);
+    ScanGoalSequence(Lexer, [
+      glgInputElementRegExp,
+      glgInputElementRegExp,
+      glgInputElementRegExp,
+      glgInputElementTemplateTail,
+      glgInputElementRegExp,
+      glgInputElementRegExp
+    ]);
     Tokens := Lexer.Tokens;
-    Expect<TGocciaTokenType>(Tokens[0].TokenType).ToBe(gttTemplate);
-    Expect<TGocciaTokenType>(Tokens[2].TokenType).ToBe(gttConst);
-    Expect<Integer>(Tokens[2].Line).ToBe(2);
-    Expect<Integer>(Tokens[2].Column).ToBe(9);
+    Expect<TGocciaTokenType>(Tokens[0].TokenType).ToBe(gttTemplateHead);
+    Expect<TGocciaTokenType>(Tokens[3].TokenType).ToBe(gttTemplateTail);
+    Expect<TGocciaTokenType>(Tokens[5].TokenType).ToBe(gttConst);
+    Expect<Integer>(Tokens[5].Line).ToBe(2);
+    Expect<Integer>(Tokens[5].Column).ToBe(9);
   finally
     Lexer.Free;
   end;

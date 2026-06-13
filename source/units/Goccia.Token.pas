@@ -7,7 +7,8 @@ interface
 type
   TGocciaTokenType = (
     // Literals
-    gttNumber, gttBigInt, gttString, gttTemplate, gttRegex,
+    gttNumber, gttBigInt, gttString, gttTemplate, gttTemplateHead,
+    gttTemplateMiddle, gttTemplateTail, gttRegex,
     gttTrue, gttFalse, gttNull,
     // Identifiers
     gttIdentifier,

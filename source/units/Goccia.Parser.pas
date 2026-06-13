@@ -116,6 +116,8 @@ type
       const ALexicalGoal: TGocciaLexicalGoal): TGocciaToken; inline;
     function Previous: TGocciaToken; inline;
     function Advance: TGocciaToken;
+    function AdvanceWithLexicalGoal(
+      const ALexicalGoal: TGocciaLexicalGoal): TGocciaToken;
     function Check(const ATokenType: TGocciaTokenType): Boolean; inline;
     function CheckWithLexicalGoal(const ATokenType: TGocciaTokenType;
       const ALexicalGoal: TGocciaLexicalGoal): Boolean; inline;
@@ -231,6 +233,7 @@ type
       const ATemplateToken: TGocciaToken;
       const ALine, AColumn: Integer): TGocciaTaggedTemplateExpression;
     function ParseTemplateLiteral(const AToken: TGocciaToken): TGocciaExpression;
+    function ConsumeTemplateContinuation: TGocciaToken;
     function ParseImportCallExpression(const AToken: TGocciaToken;
       const APhase: TGocciaImportCallPhase): TGocciaImportCallExpression;
     function Primary: TGocciaExpression;
@@ -713,8 +716,25 @@ function TGocciaParser.Advance: TGocciaToken;
 begin
   EnsureToken(FCurrent, DefaultLexicalGoal);
   if FTokens[FCurrent].TokenType <> gttEOF then
+  begin
     Inc(FCurrent);
-  Result := Previous;
+    Result := Previous;
+  end
+  else
+    Result := FTokens[FCurrent];
+end;
+
+function TGocciaParser.AdvanceWithLexicalGoal(
+  const ALexicalGoal: TGocciaLexicalGoal): TGocciaToken;
+begin
+  EnsureToken(FCurrent, ALexicalGoal);
+  if FTokens[FCurrent].TokenType <> gttEOF then
+  begin
+    Inc(FCurrent);
+    Result := Previous;
+  end
+  else
+    Result := FTokens[FCurrent];
 end;
 
 function TGocciaParser.Check(const ATokenType: TGocciaTokenType): Boolean;
@@ -773,11 +793,12 @@ begin
 
   NextType := FTokens[FCurrent + 1].TokenType;
   Result := NextType in [
-    gttIdentifier, gttNumber, gttBigInt, gttString, gttTemplate, gttRegex,
-    gttTrue, gttFalse, gttNull, gttThis, gttSuper, gttNew, gttFunction,
-    gttClass, gttImport, gttLeftParen, gttLeftBracket, gttLeftBrace,
-    gttNot, gttMinus, gttPlus, gttIncrement, gttDecrement, gttTypeof,
-    gttVoid, gttBitwiseNot, gttDelete, gttHash
+    gttIdentifier, gttNumber, gttBigInt, gttString, gttTemplate,
+    gttTemplateHead, gttRegex, gttTrue, gttFalse, gttNull, gttThis,
+    gttSuper, gttNew, gttFunction, gttClass, gttImport, gttLeftParen,
+    gttLeftBracket, gttLeftBrace, gttNot, gttMinus, gttPlus,
+    gttIncrement, gttDecrement, gttTypeof, gttVoid, gttBitwiseNot,
+    gttDelete, gttHash
   ];
 end;
 
@@ -1583,7 +1604,7 @@ begin
           Result := TGocciaIncrementExpression.Create(Result, Token.TokenType, False,
             Line, Column);
         end;
-      gttTemplate:
+      gttTemplate, gttTemplateHead:
         begin
           // ES2026 §13.3.11 Tagged Templates: tag`...`
           Token := Advance;
@@ -1608,85 +1629,6 @@ begin
     if not CharInSet(AValue[I], ['0'..'9', 'a'..'f', 'A'..'F']) then
       Exit(False);
   Result := True;
-end;
-
-
-// Split a string at #3 (TEMPLATE_EXPRESSION_BOUNDARY) markers embedded by the
-// lexer during ScanTemplate.  Returns all parts: even-indexed parts are static
-// template segments, odd-indexed parts are interpolation expression texts.
-procedure SplitOnBoundaryMarker(const AStr: string; out AParts: TGocciaTemplateStrings);
-const
-  TEMPLATE_EXPRESSION_BOUNDARY = #3;
-var
-  I, Start, PartCount: Integer;
-begin
-  SetLength(AParts, 0);
-  PartCount := 0;
-  Start := 1;
-  for I := 1 to Length(AStr) do
-  begin
-    if AStr[I] = TEMPLATE_EXPRESSION_BOUNDARY then
-    begin
-      SetLength(AParts, PartCount + 1);
-      AParts[PartCount] := Copy(AStr, Start, I - Start);
-      Inc(PartCount);
-      Start := I + 1;
-    end;
-  end;
-  // Final part (after last marker, or entire string if no markers)
-  SetLength(AParts, PartCount + 1);
-  AParts[PartCount] := Copy(AStr, Start, Length(AStr) - Start + 1);
-end;
-
-// Split a template token's cooked and raw strings at interpolation boundaries.
-// The lexer embeds #3 boundary markers around expression texts during
-// ScanTemplate with full lexical awareness (strings, comments, nested
-// templates), so this function simply splits on those markers.
-// Even-indexed parts are static segments; odd-indexed parts are expressions.
-procedure SplitTemplateAtBoundaries(const ACookedFull, ARawFull: string;
-  out ACookedSegments, ARawSegments: TGocciaTemplateStrings;
-  out AExpressionTexts: TGocciaTemplateStrings);
-var
-  CookedParts, RawParts: TGocciaTemplateStrings;
-  I, StaticCount, ExprCount: Integer;
-begin
-  SplitOnBoundaryMarker(ACookedFull, CookedParts);
-  SplitOnBoundaryMarker(ARawFull, RawParts);
-
-  // Even-indexed parts are static segments, odd-indexed are expressions
-  StaticCount := 0;
-  ExprCount := 0;
-  for I := 0 to Length(RawParts) - 1 do
-  begin
-    if I mod 2 = 0 then
-      Inc(StaticCount)
-    else
-      Inc(ExprCount);
-  end;
-
-  SetLength(ACookedSegments, StaticCount);
-  SetLength(ARawSegments, StaticCount);
-  SetLength(AExpressionTexts, ExprCount);
-
-  StaticCount := 0;
-  ExprCount := 0;
-  for I := 0 to Length(RawParts) - 1 do
-  begin
-    if I mod 2 = 0 then
-    begin
-      ARawSegments[StaticCount] := RawParts[I];
-      if I < Length(CookedParts) then
-        ACookedSegments[StaticCount] := CookedParts[I]
-      else
-        ACookedSegments[StaticCount] := '';
-      Inc(StaticCount);
-    end
-    else
-    begin
-      AExpressionTexts[ExprCount] := RawParts[I];
-      Inc(ExprCount);
-    end;
-  end;
 end;
 
 // Extract cooked and raw full strings from a template token lexeme.
@@ -1720,47 +1662,6 @@ begin
   begin
     ACookedFull := ALexeme;
     ARawFull := ALexeme;
-  end;
-end;
-
-// TC39 Template Literal Revision — split a raw template string at interpolation
-// boundaries.  The lexer embeds #3 boundary markers with full lexical awareness,
-// so this function simply splits on those markers.
-procedure SplitRawAtBoundaries(const ARawFull: string;
-  out ARawSegments, AExpressionTexts: TGocciaTemplateStrings);
-var
-  Parts: TGocciaTemplateStrings;
-  I, StaticCount, ExprCount: Integer;
-begin
-  SplitOnBoundaryMarker(ARawFull, Parts);
-
-  StaticCount := 0;
-  ExprCount := 0;
-  for I := 0 to Length(Parts) - 1 do
-  begin
-    if I mod 2 = 0 then
-      Inc(StaticCount)
-    else
-      Inc(ExprCount);
-  end;
-
-  SetLength(ARawSegments, StaticCount);
-  SetLength(AExpressionTexts, ExprCount);
-
-  StaticCount := 0;
-  ExprCount := 0;
-  for I := 0 to Length(Parts) - 1 do
-  begin
-    if I mod 2 = 0 then
-    begin
-      ARawSegments[StaticCount] := Parts[I];
-      Inc(StaticCount);
-    end
-    else
-    begin
-      AExpressionTexts[ExprCount] := Parts[I];
-      Inc(ExprCount);
-    end;
   end;
 end;
 
@@ -1929,159 +1830,140 @@ begin
     ACooked := '';
 end;
 
-// Parse a template interpolation expression text into an AST expression node.
-// Note: Tokens are owned by the Lexer (FTokens with OwnsObjects=True) and freed
-// when the Lexer is destroyed — they must not be freed separately.
-function ParseInterpolationExpression(const AExprText, AFileName: string;
-  const AOptions: TGocciaParserOptions): TGocciaExpression;
+procedure AppendTemplateString(var AStrings: TGocciaTemplateStrings;
+  const AValue: string);
 var
-  Lexer: TGocciaLexer;
-  Parser: TGocciaParser;
-  ProgramNode: TGocciaProgram;
-  SourceLines: TStringList;
+  Count: Integer;
 begin
-  Result := nil;
-  if AExprText = '' then
-    Exit;
+  Count := Length(AStrings);
+  SetLength(AStrings, Count + 1);
+  AStrings[Count] := AValue;
+end;
 
-  Lexer := TGocciaLexer.Create('(' + AExprText + ');', AFileName);
-  try
-    SourceLines := TStringList.Create;
-    SourceLines.Text := AExprText;
-    try
-      Parser := TGocciaParser.CreateFromLexer(Lexer, AFileName, SourceLines);
-      Parser.ApplyOptions(AOptions);
-      try
-        ProgramNode := Parser.ParseUnchecked;
-        try
-          if (ProgramNode.Body.Count > 0) and
-             (ProgramNode.Body[0] is TGocciaExpressionStatement) then
-            Result := TGocciaExpressionStatement(ProgramNode.Body[0]).Expression;
-        finally
-          ProgramNode.Free;
-        end;
-      finally
-        Parser.Free;
-      end;
-    finally
-      SourceLines.Free;
-    end;
-  finally
-    Lexer.Free;
-  end;
+procedure AppendTemplateCookedValid(var AValues: TGocciaTemplateCookedValid;
+  const AValue: Boolean);
+var
+  Count: Integer;
+begin
+  Count := Length(AValues);
+  SetLength(AValues, Count + 1);
+  AValues[Count] := AValue;
+end;
+
+procedure AppendTemplateSegment(const AToken: TGocciaToken;
+  const ATagged: Boolean; const AFileName: string; const ASourceLines: TStringList;
+  var ACookedStrings, ARawStrings: TGocciaTemplateStrings;
+  var ACookedValid: TGocciaTemplateCookedValid);
+var
+  Cooked, Raw: string;
+  HasInvalidEscapes, CookedIsValid: Boolean;
+begin
+  ExtractTemplateParts(AToken.Lexeme, Cooked, Raw, HasInvalidEscapes);
+
+  if HasInvalidEscapes then
+  begin
+    CookedIsValid := CookRawSegment(Raw, Cooked);
+    if (not ATagged) and (not CookedIsValid) then
+      raise TGocciaSyntaxError.Create('Invalid escape sequence in template literal',
+        AToken.Line, AToken.Column, AFileName, ASourceLines, '');
+  end
+  else
+    CookedIsValid := True;
+
+  AppendTemplateString(ACookedStrings, Cooked);
+  AppendTemplateString(ARawStrings, Raw);
+  AppendTemplateCookedValid(ACookedValid, CookedIsValid);
+end;
+
+function TGocciaParser.ConsumeTemplateContinuation: TGocciaToken;
+begin
+  Result := AdvanceWithLexicalGoal(glgInputElementTemplateTail);
+  if not (Result.TokenType in [gttTemplateMiddle, gttTemplateTail]) then
+    raise TGocciaSyntaxError.Create('Expected template continuation',
+      Result.Line, Result.Column, FFileName, FSourceLines,
+      SSuggestCloseTemplate);
 end;
 
 // ES2026 §13.3.11 Tagged Templates
-// TC39 Template Literal Revision: when the template contains malformed escapes,
-// split from the raw string and re-cook each segment individually, marking
-// invalid segments so the evaluator emits undefined for their cooked values.
+// TC39 Template Literal Revision: malformed escapes produce undefined cooked
+// values for tagged templates while preserving each raw segment.
 function TGocciaParser.ParseTaggedTemplate(const ATag: TGocciaExpression;
   const ATemplateToken: TGocciaToken;
   const ALine, AColumn: Integer): TGocciaTaggedTemplateExpression;
 var
-  CookedFull, RawFull: string;
-  CookedStrings, RawStrings, ExprTexts: TGocciaTemplateStrings;
+  CookedStrings, RawStrings: TGocciaTemplateStrings;
   CookedValid: TGocciaTemplateCookedValid;
   Expressions: TObjectList<TGocciaExpression>;
-  ParsedExpr: TGocciaExpression;
-  HasInvalidEscapes: Boolean;
-  I: Integer;
+  TemplateToken: TGocciaToken;
 begin
-  ExtractTemplateParts(ATemplateToken.Lexeme, CookedFull, RawFull, HasInvalidEscapes);
-
-  if HasInvalidEscapes then
-  begin
-    // TC39 Template Literal Revision: the cooked string from the lexer is
-    // unreliable because invalid escapes were skipped.  Split using the raw
-    // string only and re-cook each segment individually.
-    SplitRawAtBoundaries(RawFull, RawStrings, ExprTexts);
-    SetLength(CookedStrings, Length(RawStrings));
-    SetLength(CookedValid, Length(RawStrings));
-    for I := 0 to Length(RawStrings) - 1 do
-      CookedValid[I] := CookRawSegment(RawStrings[I], CookedStrings[I]);
-  end
-  else
-  begin
-    // No invalid escapes — use the existing dual-tracking split
-    SplitTemplateAtBoundaries(CookedFull, RawFull, CookedStrings, RawStrings, ExprTexts);
-    SetLength(CookedValid, Length(CookedStrings));
-    for I := 0 to Length(CookedStrings) - 1 do
-      CookedValid[I] := True;
-  end;
-
-  // Parse each interpolation expression into an AST node
+  SetLength(CookedStrings, 0);
+  SetLength(RawStrings, 0);
+  SetLength(CookedValid, 0);
   Expressions := TObjectList<TGocciaExpression>.Create(True);
-  for I := 0 to Length(ExprTexts) - 1 do
-  begin
-    ParsedExpr := ParseInterpolationExpression(ExprTexts[I], FFileName, Options);
-    if Assigned(ParsedExpr) then
-      Expressions.Add(ParsedExpr);
-  end;
+  TemplateToken := ATemplateToken;
+
+  repeat
+    AppendTemplateSegment(TemplateToken, True, FFileName, FSourceLines,
+      CookedStrings, RawStrings, CookedValid);
+    if TemplateToken.TokenType in [gttTemplate, gttTemplateTail] then
+      Break;
+
+    Expressions.Add(Expression);
+    Consume(gttRightBrace, 'Expected "}" after template expression',
+      SSuggestCloseTemplate);
+    TemplateToken := ConsumeTemplateContinuation;
+  until False;
 
   Result := TGocciaTaggedTemplateExpression.Create(ATag, CookedStrings, RawStrings,
     CookedValid, Expressions, ALine, AColumn);
 end;
 
-// ES2026 §13.2.8 Template Literals — pre-segment non-tagged templates at parse
-// time using raw-string boundary detection, so that escaped dollar signs (\$)
-// are never mistaken for interpolation boundaries at evaluation time.
+// ES2026 §13.2.8 Template Literals
 // TC39 Template Literal Revision: untagged templates with malformed escape
-// sequences raise SyntaxError at parse time (preserving existing behavior).
+// sequences raise SyntaxError at parse time.
 function TGocciaParser.ParseTemplateLiteral(const AToken: TGocciaToken): TGocciaExpression;
 var
-  CookedFull, RawFull: string;
-  HasInvalidEscapes: Boolean;
-  CookedSegments, RawSegments, ExprTexts: TGocciaTemplateStrings;
+  CookedSegments, RawSegments: TGocciaTemplateStrings;
+  CookedValid: TGocciaTemplateCookedValid;
   Parts: TObjectList<TGocciaExpression>;
-  ParsedExpr: TGocciaExpression;
-  I: Integer;
+  TemplateToken: TGocciaToken;
 begin
-  ExtractTemplateParts(AToken.Lexeme, CookedFull, RawFull, HasInvalidEscapes);
+  SetLength(CookedSegments, 0);
+  SetLength(RawSegments, 0);
+  SetLength(CookedValid, 0);
+  AppendTemplateSegment(AToken, False, FFileName, FSourceLines,
+    CookedSegments, RawSegments, CookedValid);
 
-  // TC39 Template Literal Revision: untagged templates must still reject
-  // malformed escape sequences at parse time.  HasInvalidEscapes is set for
-  // the whole flat token (including ${...} bodies), so we split into static
-  // segments first and only reject if a static segment has an invalid escape.
-  if HasInvalidEscapes then
-  begin
-    SplitRawAtBoundaries(RawFull, RawSegments, ExprTexts);
-    SetLength(CookedSegments, Length(RawSegments));
-    for I := 0 to Length(RawSegments) - 1 do
-      if not CookRawSegment(RawSegments[I], CookedSegments[I]) then
-        raise TGocciaSyntaxError.Create('Invalid escape sequence in template literal',
-          AToken.Line, AToken.Column, FFileName, FSourceLines, '');
-  end
-  else
-    SplitTemplateAtBoundaries(CookedFull, RawFull, CookedSegments, RawSegments, ExprTexts);
-
-  // No real interpolations — return a simple template literal
-  if Length(ExprTexts) = 0 then
+  if AToken.TokenType = gttTemplate then
   begin
     Result := TGocciaTemplateLiteralExpression.Create(CookedSegments[0], AToken.Line, AToken.Column);
     Exit;
   end;
 
-  // Has real interpolations — build a pre-segmented template expression.
-  // Parts alternate: string literal, expression, string literal, expression, ..., string literal
   Parts := TObjectList<TGocciaExpression>.Create(True);
+  TemplateToken := AToken;
 
-  for I := 0 to Length(ExprTexts) - 1 do
+  while True do
   begin
-    // Add the cooked static text segment before this interpolation
     Parts.Add(TGocciaLiteralExpression.Create(
-      TGocciaStringLiteralValue.Create(CookedSegments[I]),
-      AToken.Line, AToken.Column));
+      TGocciaStringLiteralValue.Create(CookedSegments[Length(CookedSegments) - 1]),
+      TemplateToken.Line, TemplateToken.Column));
 
-    // Parse and add the interpolation expression
-    ParsedExpr := ParseInterpolationExpression(ExprTexts[I], FFileName, Options);
-    if Assigned(ParsedExpr) then
-      Parts.Add(ParsedExpr);
+    Parts.Add(Expression);
+    Consume(gttRightBrace, 'Expected "}" after template expression',
+      SSuggestCloseTemplate);
+    TemplateToken := ConsumeTemplateContinuation;
+
+    AppendTemplateSegment(TemplateToken, False, FFileName, FSourceLines,
+      CookedSegments, RawSegments, CookedValid);
+    if TemplateToken.TokenType = gttTemplateTail then
+    begin
+      Parts.Add(TGocciaLiteralExpression.Create(
+        TGocciaStringLiteralValue.Create(CookedSegments[Length(CookedSegments) - 1]),
+        TemplateToken.Line, TemplateToken.Column));
+      Break;
+    end;
   end;
-
-  // Add the final cooked static text segment
-  Parts.Add(TGocciaLiteralExpression.Create(
-    TGocciaStringLiteralValue.Create(CookedSegments[Length(CookedSegments) - 1]),
-    AToken.Line, AToken.Column));
 
   Result := TGocciaTemplateWithInterpolationExpression.Create(Parts, AToken.Line, AToken.Column);
 end;
@@ -2167,7 +2049,7 @@ begin
           TGocciaStringLiteralValue.Create(Token.Lexeme), Token.Line,
           Token.Column, ExtractSourceRange(Token.Line, Token.Column));
       end;
-    gttTemplate:
+    gttTemplate, gttTemplateHead:
       begin
         Token := Advance;
         Result := ParseTemplateLiteral(Token);

@@ -41,4 +41,13 @@ test("template literal with expressions", () => {
   const b = 3;
   const complex = `Result: ${(a + b) * 2}`;
   expect(complex).toBe("Result: 10");
+
+  const dividedObject = `${({ valueOf: () => 100 } / 4 / 5)}`;
+  expect(dividedObject).toBe("5");
+
+  const regexWithBrace = `${/}/.source}`;
+  expect(regexWithBrace).toBe("}");
+
+  const nested = `${`half: ${1 / 2}`}`;
+  expect(nested).toBe("half: 0.5");
 });
