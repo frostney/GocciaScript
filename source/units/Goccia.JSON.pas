@@ -47,6 +47,7 @@ type
     function EscapeJSON5String(const AStr: string; const AQuote: Char): string;
     function IsJSON5IdentifierKey(const AKey: string): Boolean;
     function ShouldOmitObjectProperty(const AValue: TGocciaValue): Boolean;
+    function ShouldOmitRootValue(const AValue: TGocciaValue): Boolean;
     function QuoteJSON5String(const AStr: string): string;
     function SerializeObjectKey(const AKey: string): string;
     function StringifyPreparedValue(const AValue: TGocciaValue; const AIndent: Integer = 0): string;
@@ -79,6 +80,7 @@ uses
   Goccia.Values.RawJSON,
   Goccia.Values.StringObjectValue,
   Goccia.Values.SymbolValue,
+  Goccia.Values.ToObject,
   Goccia.Values.WrapperPrimitives;
 
 type
@@ -455,6 +457,7 @@ var
   PreviousPreferredQuoteChar: Char;
   PreviousPropertyList: TArray<string>;
   PreviousTraversalStack: TList<TGocciaObjectValue>;
+  RootValue: TGocciaValue;
 begin
   PreviousGap := FGap;
   PreviousHasPropertyList := FHasPropertyList;
@@ -476,7 +479,11 @@ begin
   end;
   FTraversalStack := TList<TGocciaObjectValue>.Create;
   try
-    Result := StringifyValue(AValue);
+    RootValue := ApplyToJSON(AValue, '');
+    if ShouldOmitRootValue(RootValue) then
+      Result := ''
+    else
+      Result := StringifyPreparedValue(RootValue);
   finally
     FTraversalStack.Free;
     FTraversalStack := PreviousTraversalStack;
@@ -550,6 +557,17 @@ begin
   Result := (AValue is TGocciaUndefinedLiteralValue) or
             AValue.IsCallable or
             (AValue is TGocciaSymbolValue);
+end;
+
+function TGocciaJSONStringifier.ShouldOmitRootValue(
+  const AValue: TGocciaValue): Boolean;
+var
+  EffectiveValue: TGocciaValue;
+begin
+  EffectiveValue := UnboxWrappedPrimitive(AValue);
+  Result := (EffectiveValue is TGocciaUndefinedLiteralValue) or
+            EffectiveValue.IsCallable or
+            (EffectiveValue is TGocciaSymbolValue);
 end;
 
 class function TGocciaJSONStringifier.IsIdentifierStartText(
@@ -881,6 +899,7 @@ function TGocciaJSONStringifier.StringifyArray(const AArr: TGocciaArrayValue; co
 var
   SB: TStringBuffer;
   I: Integer;
+  Len: Integer;
   Value: TGocciaValue;
   Separator, ChildIndent, CloseIndent: string;
 begin
@@ -888,7 +907,8 @@ begin
     ThrowTypeError(CircularErrorName);
 
   FTraversalStack.Add(AArr);
-  if AArr.Elements.Count = 0 then
+  Len := LengthOfArrayLike(AArr);
+  if Len = 0 then
   begin
     Result := '[]';
     FTraversalStack.Delete(FTraversalStack.Count - 1);
@@ -911,12 +931,12 @@ begin
 
     SB := TStringBuffer.Create;
     try
-      for I := 0 to AArr.Elements.Count - 1 do
+      for I := 0 to Len - 1 do
       begin
         if I > 0 then
           SB.Append(Separator);
         SB.Append(ChildIndent);
-        Value := ApplyToJSON(AArr.Elements[I], IntToStr(I));
+        Value := ApplyToJSON(AArr.GetProperty(IntToStr(I)), IntToStr(I));
         SB.Append(StringifyPreparedValue(Value, AIndent + 1));
       end;
       if FGap <> '' then

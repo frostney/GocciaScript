@@ -18,6 +18,7 @@ function CoerceWrappedPrimitive(const AValue: TGocciaValue): TGocciaValue;
 implementation
 
 uses
+  Goccia.Values.BigIntObjectValue,
   Goccia.Values.BooleanObjectValue,
   Goccia.Values.NumberObjectValue,
   Goccia.Values.StringObjectValue;
@@ -30,6 +31,8 @@ begin
     Result := TGocciaStringObjectValue(AValue).Primitive
   else if AValue is TGocciaBooleanObjectValue then
     Result := TGocciaBooleanObjectValue(AValue).Primitive
+  else if AValue is TGocciaBigIntObjectValue then
+    Result := TGocciaBigIntObjectValue(AValue).Primitive
   else
     Result := AValue;
 end;

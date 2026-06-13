@@ -80,6 +80,7 @@ uses
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.StringObjectValue,
   Goccia.Values.SymbolValue,
+  Goccia.Values.ToObject,
   Goccia.Values.WrapperPrimitives,
   Goccia.VM.Exception;
 
@@ -268,6 +269,7 @@ var
   PropValue: TGocciaValue;
   Replaced: TGocciaValue;
   TransformedProp: TGocciaValue;
+  Len: Integer;
 begin
   Replaced := ApplyToJSON(AValue, AKey);
   Replaced := ApplyReplacer(AHolder, AKey, Replaced, AReplacer);
@@ -275,6 +277,12 @@ begin
   Replaced := CoerceWrappedPrimitive(Replaced);
 
   if Replaced is TGocciaUndefinedLiteralValue then
+  begin
+    Result := Replaced;
+    Exit;
+  end;
+
+  if Replaced.IsCallable or (Replaced is TGocciaSymbolValue) then
   begin
     Result := Replaced;
     Exit;
@@ -289,9 +297,10 @@ begin
     Arr := TGocciaArrayValue(Replaced);
     NewArr := TGocciaArrayValue.Create;
     try
-      for I := 0 to Arr.Elements.Count - 1 do
+      Len := LengthOfArrayLike(Arr);
+      for I := 0 to Len - 1 do
       begin
-        PropValue := Arr.Elements[I];
+        PropValue := Arr.GetProperty(IntToStr(I));
         TransformedProp := TransformWithReplacer(Arr, IntToStr(I), PropValue,
           AReplacer);
         NewArr.Elements.Add(TransformedProp);
@@ -315,7 +324,9 @@ begin
       begin
         PropValue := Obj.GetProperty(Key);
         TransformedProp := TransformWithReplacer(Obj, Key, PropValue, AReplacer);
-        if not (TransformedProp is TGocciaUndefinedLiteralValue) then
+        if not ((TransformedProp is TGocciaUndefinedLiteralValue) or
+          TransformedProp.IsCallable or
+          (TransformedProp is TGocciaSymbolValue)) then
           NewObj.AssignProperty(Key, TransformedProp);
       end;
     finally
@@ -447,6 +458,7 @@ var
   I: Integer;
   Key: string;
   Keys: TStringList;
+  Len: Integer;
   PreviousTraversalStack: TList<TGocciaObjectValue>;
   Root: TGocciaObjectValue;
   Seen: TDictionary<string, Boolean>;
@@ -457,9 +469,10 @@ begin
   Keys := TStringList.Create;
   Seen := TDictionary<string, Boolean>.Create;
   try
-    for I := 0 to AAllowList.Elements.Count - 1 do
+    Len := LengthOfArrayLike(AAllowList);
+    for I := 0 to Len - 1 do
     begin
-      if not TryExtractAllowListKey(AAllowList.Elements[I], Key) then
+      if not TryExtractAllowListKey(AAllowList.GetProperty(IntToStr(I)), Key) then
         Continue;
       if Seen.ContainsKey(Key) then
         Continue;
@@ -504,12 +517,16 @@ var
   PropValue: TGocciaValue;
   TransformedProp: TGocciaValue;
   TransformedValue: TGocciaValue;
+  Len: Integer;
 begin
   TransformedValue := ApplyToJSON(AValue, AKey);
   // ES2026 §25.5.4.2 steps 4.b-4.d: unwrap boxed primitives.
   TransformedValue := CoerceWrappedPrimitive(TransformedValue);
 
   if TransformedValue is TGocciaUndefinedLiteralValue then
+    Exit(TransformedValue);
+
+  if TransformedValue.IsCallable or (TransformedValue is TGocciaSymbolValue) then
     Exit(TransformedValue);
 
   if TransformedValue is TGocciaArrayValue then
@@ -521,9 +538,10 @@ begin
     Arr := TGocciaArrayValue(TransformedValue);
     NewArr := TGocciaArrayValue.Create;
     try
-      for I := 0 to Arr.Elements.Count - 1 do
+      Len := LengthOfArrayLike(Arr);
+      for I := 0 to Len - 1 do
       begin
-        PropValue := Arr.Elements[I];
+        PropValue := Arr.GetProperty(IntToStr(I));
         TransformedProp := TransformWithAllowList(Arr, IntToStr(I), PropValue,
           AKeys);
         NewArr.Elements.Add(TransformedProp);
@@ -551,7 +569,9 @@ begin
         if PropValue = nil then
           Continue;
         TransformedProp := TransformWithAllowList(Obj, Key, PropValue, AKeys);
-        if not (TransformedProp is TGocciaUndefinedLiteralValue) then
+        if not ((TransformedProp is TGocciaUndefinedLiteralValue) or
+          TransformedProp.IsCallable or
+          (TransformedProp is TGocciaSymbolValue)) then
           NewObj.AssignProperty(Key, TransformedProp);
       end;
     finally
@@ -697,8 +717,13 @@ begin
     if RootResultShouldBeUndefined(Value) then
       Result := TGocciaUndefinedLiteralValue.UndefinedValue
     else
-      Result := TGocciaStringLiteralValue.Create(
-        FStringifier.Stringify(Value, Gap, QuoteChar));
+    begin
+      Stringified := FStringifier.Stringify(Value, Gap, QuoteChar);
+      if Stringified = '' then
+        Result := TGocciaUndefinedLiteralValue.UndefinedValue
+      else
+        Result := TGocciaStringLiteralValue.Create(Stringified);
+    end;
   except
     on E: TGocciaThrowValue do
       raise;
