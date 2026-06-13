@@ -12,6 +12,28 @@ test("JSON.stringify basic values", () => {
   expect(JSON.stringify(undefined)).toBeUndefined();
 });
 
+test("JSON.stringify omits root function and symbol values", () => {
+  expect(JSON.stringify(function noop() {})).toBeUndefined();
+  expect(JSON.stringify(Symbol("root"))).toBeUndefined();
+});
+
+test("JSON.stringify replacer can transform otherwise omitted root values", () => {
+  const replaceRoot = (replacement) => (key, value) =>
+    key === "" ? replacement : value;
+
+  expect(JSON.stringify(undefined, replaceRoot(1))).toBe("1");
+  expect(JSON.stringify(function noop() {}, replaceRoot("fn"))).toBe('"fn"');
+  expect(JSON.stringify(Symbol("root"), replaceRoot(true))).toBe("true");
+  expect(JSON.stringify(1, replaceRoot(function noop() {}))).toBeUndefined();
+  expect(JSON.stringify(1, replaceRoot(Symbol("root")))).toBeUndefined();
+});
+
+test("JSON.stringify omits root values after toJSON", () => {
+  expect(JSON.stringify({ toJSON() { return undefined; } })).toBeUndefined();
+  expect(JSON.stringify({ toJSON() { return function noop() {}; } })).toBeUndefined();
+  expect(JSON.stringify({ toJSON() { return Symbol("root"); } })).toBeUndefined();
+});
+
 test("JSON.stringify objects", () => {
   const obj = { name: "Alice", age: 30, active: true };
   const json = JSON.stringify(obj);
@@ -110,6 +132,20 @@ test("JSON.stringify replacer function can exclude properties", () => {
   expect(parsed.a).toBe(1);
   expect(parsed.c).toBe(3);
   expect(parsed.b).toBeUndefined();
+});
+
+test("JSON.stringify replacer function omits function and symbol object properties", () => {
+  expect(JSON.stringify({ a: 1, b: 2 }, (key, value) =>
+    key === "a" ? function noop() {} : value)).toBe('{"b":2}');
+  expect(JSON.stringify({ a: 1, b: 2 }, (key, value) =>
+    key === "a" ? Symbol("a") : value)).toBe('{"b":2}');
+});
+
+test("JSON.stringify replacer function nullifies function and symbol array elements", () => {
+  expect(JSON.stringify([1, 2], (key, value) =>
+    key === "0" ? function noop() {} : value)).toBe("[null,2]");
+  expect(JSON.stringify([1, 2], (key, value) =>
+    key === "0" ? Symbol("a") : value)).toBe("[null,2]");
 });
 
 test("JSON.stringify with array replacer", () => {
@@ -341,6 +377,29 @@ test("JSON.stringify clamps boxed Number Infinity space to 10 spaces", () => {
 
 test("JSON.stringify serializes sparse array holes as null", () => {
   expect(JSON.stringify([1, , 3])).toBe("[1,null,3]");
+  expect(JSON.stringify(new Array(3))).toBe("[null,null,null]");
+});
+
+test("JSON.stringify arrays read elements through property access", () => {
+  const arr = new Array(1);
+  Object.defineProperty(arr, "0", {
+    get() {
+      return 7;
+    },
+  });
+
+  expect(JSON.stringify(arr)).toBe("[7]");
+});
+
+test("JSON.stringify arrays propagate element accessor errors", () => {
+  const arr = new Array(1);
+  Object.defineProperty(arr, "0", {
+    get() {
+      throw new RangeError("abrupt element get");
+    },
+  });
+
+  expect(() => JSON.stringify(arr)).toThrow(RangeError);
 });
 
 test("JSON.stringify calls replacer with the holder as this", () => {
@@ -430,6 +489,28 @@ test("JSON.stringify array replacer de-duplicates keys and reads each property o
   expect(getCalls).toBe(1);
 });
 
+test("JSON.stringify array replacer reads elements through property access", () => {
+  const replacer = new Array(1);
+  Object.defineProperty(replacer, "0", {
+    get() {
+      return "a";
+    },
+  });
+
+  expect(JSON.stringify({ a: 1, b: 2 }, replacer)).toBe('{"a":1}');
+});
+
+test("JSON.stringify array replacer propagates element accessor errors", () => {
+  const replacer = new Array(1);
+  Object.defineProperty(replacer, "0", {
+    get() {
+      throw new RangeError("abrupt replacer get");
+    },
+  });
+
+  expect(() => JSON.stringify({ a: 1 }, replacer)).toThrow(RangeError);
+});
+
 test("JSON.stringify array replacer converts number elements with number-to-string semantics", () => {
   const obj = { 0: 0, 1: 1, "-4": 2, 0.3: 3, "-Infinity": 4, NaN: 5 };
   expect(JSON.stringify(obj, [-0, 1, -4, 0.3, -Infinity, NaN])).toBe(
@@ -477,6 +558,18 @@ test("JSON.stringify value as boxed Number uses an overridden valueOf", () => {
   expect(JSON.stringify(boxed)).toBe("4");
 });
 
+test("JSON.stringify root boxed Number calls valueOf once", () => {
+  let calls = 0;
+  const boxed = new Number(1);
+  boxed.valueOf = () => {
+    calls += 1;
+    return 4;
+  };
+
+  expect(JSON.stringify(boxed)).toBe("4");
+  expect(calls).toBe(1);
+});
+
 test("JSON.stringify value as boxed Number uses an overridden valueOf with a replacer function", () => {
   const boxed = new Number(1);
   boxed.valueOf = () => 4;
@@ -507,6 +600,14 @@ test("JSON.stringify value as boxed Boolean ignores valueOf and toString", () =>
   boxed.toString = () => "true";
 
   expect(JSON.stringify([boxed])).toBe("[false]");
+});
+
+test("JSON.stringify throws on BigInt and boxed BigInt values", () => {
+  expect(() => JSON.stringify(1n)).toThrow(TypeError);
+  expect(() => JSON.stringify(Object(1n))).toThrow(TypeError);
+  expect(() => JSON.stringify({ a: Object(1n) })).toThrow(TypeError);
+  expect(() => JSON.stringify([Object(1n)])).toThrow(TypeError);
+  expect(() => JSON.stringify({ a: 1 }, () => Object(1n))).toThrow(TypeError);
 });
 
 test("JSON.stringify value as boxed Number propagates valueOf exceptions", () => {
