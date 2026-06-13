@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import { Test262Dashboard } from "@/components/test262-dashboard";
 import { loadTest262DashboardData } from "@/lib/test262-dashboard";
 
+export const dynamic = "force-dynamic";
+
 export const metadata: Metadata = {
   title: "ECMAScript Compatibility",
   description:

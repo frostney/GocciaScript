@@ -5,6 +5,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { GITHUB_REPO_URL } from "../src/lib/github";
 import {
+  listTest262BlobDailyRuns,
+  publishTest262ReportsToBlob,
+  type Test262BlobPublishEntry,
+} from "../src/lib/test262-blob-store";
+import {
   extractJsonFromZip,
   jsonUrlForArtifact,
   normalizeTest262Report,
@@ -14,11 +19,6 @@ import {
   type Test262TimelinePoint,
   test262ReportFileName,
 } from "../src/lib/test262-dashboard";
-import {
-  loadTest262BlobManifest,
-  publishTest262ReportsToBlob,
-  type Test262BlobPublishEntry,
-} from "./test262-blob-store";
 
 const GITHUB_API_ROOT = "https://api.github.com/repos/frostney/GocciaScript";
 const TEST262_WORKFLOW = "ci.yml";
@@ -269,10 +269,8 @@ async function loadExistingDays(
   options: BackfillOptions,
 ): Promise<Set<string>> {
   if (options.force || !process.env.BLOB_READ_WRITE_TOKEN) return new Set();
-  const manifest = await loadTest262BlobManifest();
-  return new Set(
-    (manifest?.daily ?? []).map((run) => run.createdAt.slice(0, 10)),
-  );
+  const runs = await listTest262BlobDailyRuns();
+  return new Set(runs.map((run) => run.createdAt.slice(0, 10)));
 }
 
 async function findTest262Artifact(
@@ -556,10 +554,8 @@ function normalizeAnyTest262Report(
 }
 
 async function publishEntry(entry: Test262BlobPublishEntry, label: string) {
-  const manifest = await publishTest262ReportsToBlob([entry]);
-  log(
-    `${label}: published; manifest now has ${manifest.runs.length} run(s) and ${manifest.daily.length} daily point(s)`,
-  );
+  const runs = await publishTest262ReportsToBlob([entry]);
+  log(`${label}: published ${runs.length} report(s)`);
 }
 
 async function seedArtifactReports(
@@ -867,7 +863,7 @@ async function main() {
 
   const existingDays = await loadExistingDays(options);
   if (existingDays.size > 0) {
-    log(`${existingDays.size} day(s) already present in Blob manifest`);
+    log(`${existingDays.size} day(s) already present in Blob daily reports`);
   }
 
   const runs = await fetchWorkflowRuns(options);

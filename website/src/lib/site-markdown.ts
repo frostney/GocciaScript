@@ -258,7 +258,7 @@ function compatibilityMarkdown(): string {
       `[CI workflow](${GITHUB_REPO_URL}/actions/workflows/ci.yml)`,
     ]),
     "",
-    "The JSON endpoints serve the test262 snapshot generated during the website build; route requests do not download GitHub Actions artifacts or Blob objects.",
+    "The JSON endpoints build the test262 view from Vercel Blob daily reports at request time with CDN caching; route requests do not download GitHub Actions artifacts.",
   ].join("\n");
 }
 

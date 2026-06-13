@@ -37,8 +37,8 @@ LoaderBare-plus-stock-harness setup, see the
   conformance failures and gated to zero in CI.
 - CI uploads `test262-results.json` on every PR and main run. Main runs also
   publish the report to Vercel Blob when `BLOB_READ_WRITE_TOKEN` is configured,
-  and the website compatibility dashboard reads those durable snapshots at
-  build time.
+  and the website compatibility dashboard reads those durable reports at
+  request time with CDN caching.
 
 ## Website dashboard
 
@@ -48,12 +48,11 @@ and runtime timelines, shows the top-level test262 category split, and ranks the
 five least-covered path groups from the latest report. The "JSON result" link
 on the dashboard points back to the exact report used for the latest view.
 
-Dashboard data is intentionally materialized at website build time rather than
-downloaded in the public route. Main CI publishes future dashboard points
-directly to Vercel Blob. To seed historical data, run the one-off backfill
-command: it first copies any still-retained main-branch GitHub artifact reports
-to Blob, then reruns historical main commits for days whose artifacts have
-expired.
+Dashboard data is built from Vercel Blob at request time and served with CDN
+caching. Main CI publishes future dashboard points directly to Blob. To seed
+historical data, run the one-off backfill command: it first copies any
+still-retained main-branch GitHub artifact reports to Blob, then reruns
+historical main commits for days whose artifacts have expired.
 
 ```bash
 cd website
@@ -64,23 +63,18 @@ bun run backfill-test262
 
 The backfill defaults to `--since=2026-05-01` and today's UTC date; pass
 `--since=YYYY-MM-DD` or `--until=YYYY-MM-DD` only when intentionally narrowing
-the range. It stores immutable run reports under `test262/runs/`, updates
-`test262/manifest.json`, and computes the daily timeline from the latest
-published main run for each UTC day. During `prebuild`,
-`website/scripts/sync-test262-results.ts` reads that Blob manifest through the
-attached Vercel Blob store (`BLOB_STORE_ID` with Vercel OIDC) or an explicit
-`BLOB_READ_WRITE_TOKEN`. It does not download GitHub Actions artifact ZIPs
-during website builds, and it does not bake every historical report into the
-deployment output. Historical report links point back to Vercel Blob; the site
-only materializes the dashboard snapshot and the latest full JSON report needed
-by `/api/test262/latest`.
+the range. It stores immutable run reports under `test262/runs/` and writes one
+daily pointer under `test262/daily/YYYY-MM-DD.json` for the latest published main
+run on each UTC day. Website builds do not download GitHub Actions artifact
+ZIPs, read Blob, or bake test262 data into the deployment output. The
+`/compatibility` page and `/api/test262/*` routes read the daily pointers and
+per-run reports from Blob on request, using short CDN/server caching because
+new results arrive only a few times per day.
 
 Configure the Vercel project so both Preview and Production deployments have
-access to the Blob store. CI and one-off backfills still need the GitHub
-repository secret `BLOB_READ_WRITE_TOKEN` because they publish new reports from
-GitHub Actions rather than from inside the Vercel project. Vercel builds fail
-when Blob credentials are missing so preview deployments cannot silently ship
-the empty dashboard fallback.
+access to the Blob store at runtime. CI and one-off backfills still need the
+GitHub repository secret `BLOB_READ_WRITE_TOKEN` because they publish new
+reports from GitHub Actions rather than from inside the Vercel project.
 
 ## Architecture
 
