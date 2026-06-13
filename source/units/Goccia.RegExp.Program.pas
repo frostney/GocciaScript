@@ -22,6 +22,19 @@ type
 
   TRegExpCharClass = record
     Ranges: TRegExpCharRangeArray;
+    PageFirstRange: array of Integer;
+  end;
+
+const
+  REGEXP_CHAR_CLASS_PAGE_BITS = 8;
+  REGEXP_CHAR_CLASS_PAGE_COUNT =
+    ($10FFFF shr REGEXP_CHAR_CLASS_PAGE_BITS) + 1;
+
+type
+  TRegExpStartCheck = record
+    Enabled: Boolean;
+    HasNonLatin1: Boolean;
+    Latin1Bits: array[0..7] of UInt32;
   end;
 
   TRegExpProgram = record
@@ -29,6 +42,7 @@ type
     CharClasses: array of TRegExpCharClass;
     CaptureCount: Integer;
     FullUnicode: Boolean;
+    StartCheck: TRegExpStartCheck;
     NamedGroups: TGocciaRegExpNamedGroups;
   end;
 
