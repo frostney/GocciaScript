@@ -5,6 +5,7 @@ import {
   listTest262BlobDailyRuns,
   readTest262BlobReportJson,
   readTest262BlobReportJsonByArtifactId,
+  type Test262BlobRun,
 } from "@/lib/test262-blob-store";
 
 const TEST262_WORKFLOW = "ci.yml";
@@ -330,9 +331,39 @@ export async function readLatestTest262ReportJson(): Promise<string | null> {
 function hasBlobReadCredentials(): boolean {
   return Boolean(
     process.env.BLOB_READ_WRITE_TOKEN ||
-      process.env.BLOB_STORE_ID ||
-      process.env.VERCEL_OIDC_TOKEN,
+      (process.env.BLOB_STORE_ID && process.env.VERCEL_OIDC_TOKEN),
   );
+}
+
+export async function readNewestValidTest262Report(
+  timeline: Test262BlobRun[],
+  readReportJson: (
+    run: Test262BlobRun,
+  ) => Promise<string | null> = readTest262BlobReportJson,
+): Promise<{
+  latestReport: Test262Report | null;
+  usableTimeline: Test262BlobRun[];
+}> {
+  for (let i = timeline.length - 1; i >= 0; i--) {
+    const run = timeline[i];
+    if (!run) continue;
+    const reportJson = await readReportJson(run);
+    if (!reportJson) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(reportJson);
+    } catch {
+      continue;
+    }
+    const latestReport = normalizeTest262Report(parsed);
+    if (latestReport) {
+      return {
+        latestReport,
+        usableTimeline: timeline.slice(0, i + 1),
+      };
+    }
+  }
+  return { latestReport: null, usableTimeline: timeline };
 }
 
 async function loadUncachedTest262DashboardData(): Promise<Test262DashboardData> {
@@ -345,15 +376,11 @@ async function loadUncachedTest262DashboardData(): Promise<Test262DashboardData>
 
   try {
     const timeline = await listTest262BlobDailyRuns();
-    const latestRun = timeline[timeline.length - 1] ?? null;
-    const latestReport = latestRun
-      ? normalizeTest262Report(
-          JSON.parse((await readTest262BlobReportJson(latestRun)) ?? "null"),
-        )
-      : null;
+    const { latestReport, usableTimeline } =
+      await readNewestValidTest262Report(timeline);
     return createTest262DashboardData({
       generatedAt: new Date().toISOString(),
-      timeline,
+      timeline: usableTimeline,
       latestReport,
     });
   } catch (err) {

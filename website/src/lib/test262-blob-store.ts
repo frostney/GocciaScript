@@ -118,16 +118,22 @@ async function readBlobBytes(
 function isBlobRun(value: unknown): value is Test262BlobRun {
   if (!value || typeof value !== "object") return false;
   const run = value as Record<string, unknown>;
+  const isNonEmptyString = (entry: unknown): entry is string =>
+    typeof entry === "string" && entry.length > 0;
+  const isValidTimestamp = (entry: unknown): entry is string =>
+    isNonEmptyString(entry) && Number.isFinite(Date.parse(entry));
   return (
-    typeof run.runId === "number" &&
-    typeof run.runNumber === "number" &&
-    typeof run.artifactId === "number" &&
-    typeof run.createdAt === "string" &&
-    typeof run.reportPath === "string" &&
-    typeof run.reportUrl === "string" &&
-    typeof run.reportDownloadUrl === "string" &&
+    Number.isSafeInteger(run.runId) &&
+    Number.isSafeInteger(run.runNumber) &&
+    Number.isSafeInteger(run.artifactId) &&
+    isValidTimestamp(run.createdAt) &&
+    isNonEmptyString(run.reportPath) &&
+    isNonEmptyString(run.reportUrl) &&
+    isNonEmptyString(run.reportDownloadUrl) &&
     typeof run.reportCompressedSize === "number" &&
-    typeof run.publishedAt === "string"
+    Number.isSafeInteger(run.reportCompressedSize) &&
+    run.reportCompressedSize >= 0 &&
+    isValidTimestamp(run.publishedAt)
   );
 }
 

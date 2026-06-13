@@ -100,6 +100,24 @@ mock.module("@vercel/blob", () => ({
         blob: { etag: "bad-etag" },
       };
     }
+    if (pathname === "test262/daily/invalid-timestamp.json") {
+      return {
+        statusCode: 200,
+        stream: textStream(
+          JSON.stringify({ ...dailyRun, createdAt: "not-a-date" }),
+        ),
+        blob: { etag: "invalid-timestamp-etag" },
+      };
+    }
+    if (pathname === "test262/daily/invalid-size.json") {
+      return {
+        statusCode: 200,
+        stream: textStream(
+          JSON.stringify({ ...dailyRun, reportCompressedSize: -1 }),
+        ),
+        blob: { etag: "invalid-size-etag" },
+      };
+    }
     if (pathname === "test262/daily/corrupt.json") {
       return {
         statusCode: 200,
@@ -122,6 +140,8 @@ mock.module("@vercel/blob", () => ({
       return {
         blobs: [
           { pathname: "test262/daily/bad.json" },
+          { pathname: "test262/daily/invalid-timestamp.json" },
+          { pathname: "test262/daily/invalid-size.json" },
           { pathname: "test262/daily/corrupt.json" },
           { pathname: "test262/daily/2026-06-10.json" },
         ],
@@ -221,6 +241,8 @@ describe("test262 Blob store", () => {
     });
     expect(getCalls.map((call) => call.pathname)).toEqual([
       "test262/daily/bad.json",
+      "test262/daily/invalid-timestamp.json",
+      "test262/daily/invalid-size.json",
       "test262/daily/corrupt.json",
       "test262/daily/2026-06-10.json",
     ]);

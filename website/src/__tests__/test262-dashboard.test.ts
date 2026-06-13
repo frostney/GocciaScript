@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { deflateRawSync } from "node:zlib";
+import type { Test262BlobRun } from "@/lib/test262-blob-store";
 import {
   extractJsonFromZip,
   normalizeTest262Report,
   rankGroupCoverage,
+  readNewestValidTest262Report,
 } from "@/lib/test262-dashboard";
 
 function buildZip(name: string, text: string): Uint8Array {
@@ -96,5 +98,69 @@ describe("test262 dashboard data helpers", () => {
     const json = JSON.stringify({ summary: { totalRun: 1 }, results: [] });
     const zip = buildZip("test262-results.json", json);
     expect(extractJsonFromZip(zip, "test262-results.json")).toBe(json);
+  });
+
+  test("falls back to the newest readable report when the newest blob is bad", async () => {
+    const older: Test262BlobRun = {
+      runId: 1,
+      runNumber: 1,
+      title: "CI",
+      headSha: "older",
+      shortSha: "older",
+      runUrl: "https://example.test/runs/1",
+      createdAt: "2026-06-10T01:00:00.000Z",
+      updatedAt: "2026-06-10T01:05:00.000Z",
+      artifactId: 1001,
+      artifactCreatedAt: "2026-06-10T01:05:00.000Z",
+      jsonUrl: "/api/test262/results/1001",
+      reportPath: "test262/runs/1001.json.gz",
+      reportUrl: "https://blob.test/test262/runs/1001.json.gz",
+      reportDownloadUrl:
+        "https://blob.test/test262/runs/1001.json.gz?download=1",
+      reportCompressedSize: 128,
+      publishedAt: "2026-06-10T01:06:00.000Z",
+      summary: {
+        totalDiscovered: 1,
+        totalRun: 1,
+        passed: 1,
+        failed: 0,
+        wrapperInfraFailures: 0,
+        timeouts: 0,
+        durationSeconds: 1,
+        byCategory: [],
+      },
+    };
+    const newest: Test262BlobRun = {
+      ...older,
+      runId: 2,
+      runNumber: 2,
+      headSha: "newest",
+      shortSha: "newest",
+      runUrl: "https://example.test/runs/2",
+      createdAt: "2026-06-11T01:00:00.000Z",
+      updatedAt: "2026-06-11T01:05:00.000Z",
+      artifactId: 1002,
+      artifactCreatedAt: "2026-06-11T01:05:00.000Z",
+      jsonUrl: "/api/test262/results/1002",
+      reportPath: "test262/runs/1002.json.gz",
+      reportUrl: "https://blob.test/test262/runs/1002.json.gz",
+      reportDownloadUrl:
+        "https://blob.test/test262/runs/1002.json.gz?download=1",
+      publishedAt: "2026-06-11T01:06:00.000Z",
+    };
+
+    const result = await readNewestValidTest262Report(
+      [older, newest],
+      async (run) =>
+        run.artifactId === 1002
+          ? "{"
+          : JSON.stringify({
+              summary: older.summary,
+              results: [{ id: "built-ins/Array/a.js", status: "PASS" }],
+            }),
+    );
+
+    expect(result.latestReport?.summary.totalRun).toBe(1);
+    expect(result.usableTimeline.map((run) => run.artifactId)).toEqual([1001]);
   });
 });
