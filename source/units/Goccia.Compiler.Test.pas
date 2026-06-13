@@ -151,7 +151,6 @@ function TTestCompiler.CompileSource(
   const AEnableDeadBranchElimination: Boolean): TGocciaBytecodeModule;
 var
   Lexer: TGocciaLexer;
-  Tokens: TObjectList<TGocciaToken>;
   Parser: TGocciaParser;
   ProgramNode: TGocciaProgram;
   Compiler: TGocciaCompiler;
@@ -159,9 +158,8 @@ var
   Options: TGocciaCompilerOptimizationOptions;
 begin
   Lexer := TGocciaLexer.Create(ASource, '<test>');
-  Tokens := Lexer.ScanTokens;
   SourceLines := CreateUTF8StringList(ASource);
-  Parser := TGocciaParser.Create(Tokens, '<test>', SourceLines);
+  Parser := TGocciaParser.CreateFromLexer(Lexer, '<test>', SourceLines);
   ProgramNode := Parser.Parse;
 
   Compiler := TGocciaCompiler.Create('<test>');

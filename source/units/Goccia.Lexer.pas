@@ -14,6 +14,25 @@ uses
   Goccia.Token;
 
 type
+  TGocciaLexicalGoal = (
+    glgInputElementDiv,
+    glgInputElementRegExp,
+    glgInputElementRegExpOrTemplateTail,
+    glgInputElementTemplateTail,
+    glgInputElementHashbangOrRegExp
+  );
+
+  TGocciaLexerCheckpoint = record
+    Current: Integer;
+    Line: Integer;
+    Column: Integer;
+    Start: Integer;
+    StartColumn: Integer;
+    TokenCount: Integer;
+    HashbangSkipped: Boolean;
+    EOFEmitted: Boolean;
+  end;
+
   TGocciaLexer = class
   private
     FSource: string;
@@ -25,9 +44,9 @@ type
     FStartColumn: Integer;
     FFileName: string;
     FSourceLines: TStringList;
-    FCanStartRegex: Boolean;
-    FParenRegexContext: array of Boolean;
-    FParenRegexContextCount: Integer;
+    FHashbangSkipped: Boolean;
+    FEOFEmitted: Boolean;
+    FScanTimeNanoseconds: Int64;
     function GetSourceLines: TStringList;
 
     function IsAtEnd: Boolean; inline;
@@ -41,17 +60,18 @@ type
       const AAtStart: Boolean): Boolean;
     function TryReadIdentifierCodePoint(out ACodePoint: Cardinal;
       out AText: string; out AByteLength: Integer): Boolean;
-    procedure AppendCurrent(var ASB, ARawSB: TStringBuffer); inline;
     procedure AddToken(const ATokenType: TGocciaTokenType); overload;
     procedure AddToken(const ATokenType: TGocciaTokenType; const ALiteral: string;
       const AContainsEscape: Boolean = False); overload;
-    procedure ScanToken;
+    procedure ScanToken(const ALexicalGoal: TGocciaLexicalGoal);
     procedure ScanString;
-    procedure ScanTemplate;
+    procedure ScanTemplateStart;
+    procedure ScanTemplateContinuation;
+    procedure ScanTemplateSpan(const AContinuationTokenType,
+      AEndTokenType: TGocciaTokenType);
     procedure ScanRegexLiteral;
     procedure ScanNumber;
     procedure ScanIdentifier;
-    function CanScanRegexAfterAwait: Boolean;
     function ScanUnicodeEscape: string;
     function ScanHexEscape: string;
     procedure ProcessEscapeSequence(var ASB: TStringBuffer);
@@ -61,18 +81,6 @@ type
     function ScanUnicodeEscapeForTemplate(var ASB: TStringBuffer): Boolean;
     function ScanHexEscapeForTemplate(var ASB: TStringBuffer): Boolean;
     procedure ProcessTemplateEscapeSequence(var ASB: TStringBuffer; var ASegmentValid: Boolean);
-    // Lexically-aware ${...} boundary detection for template literals.
-    // ScanInterpolationExpression scans an expression body after ${ has been
-    // consumed, tracking braces, strings, comments, and nested templates.
-    // Stops without consuming the matching }.
-    procedure ScanInterpolationExpression(var ASB, ARawSB: TStringBuffer);
-    // Scans a nested template literal body within an interpolation expression.
-    // Called after the opening backtick has been consumed and appended.
-    // Handles \`, \$, and nested ${...} via mutual recursion.
-    procedure ScanNestedTemplateInExpression(var ASB, ARawSB: TStringBuffer);
-    procedure UpdateRegexContext(const ATokenType: TGocciaTokenType);
-    procedure PushParenRegexContext(const AAllowsRegexAfter: Boolean);
-    function PopParenRegexContext: Boolean;
     procedure SkipWhitespace;
     procedure SkipHashbang;
     procedure SkipComment;
@@ -86,7 +94,11 @@ type
   public
     constructor Create(const ASource, AFileName: string);
     destructor Destroy; override;
-    function ScanTokens: TObjectList<TGocciaToken>;
+    function CreateCheckpoint: TGocciaLexerCheckpoint;
+    procedure RestoreCheckpoint(const ACheckpoint: TGocciaLexerCheckpoint);
+    function ScanNextToken(const ALexicalGoal: TGocciaLexicalGoal): TGocciaToken;
+    property ScanTimeNanoseconds: Int64 read FScanTimeNanoseconds;
+    property Tokens: TObjectList<TGocciaToken> read FTokens;
     property SourceLines: TStringList read GetSourceLines;
   end;
 
@@ -94,6 +106,7 @@ implementation
 
 uses
   TextSemantics,
+  TimingUtils,
 
   Goccia.Error,
   Goccia.Error.Suggestions,
@@ -247,8 +260,9 @@ begin
   FCurrent := 1;
   FLine := 1;
   FColumn := 1;
-  FCanStartRegex := True;
-  FParenRegexContextCount := 0;
+  FHashbangSkipped := False;
+  FEOFEmitted := False;
+  FScanTimeNanoseconds := 0;
 end;
 
 destructor TGocciaLexer.Destroy;
@@ -256,6 +270,33 @@ begin
   FTokens.Free;
   FSourceLines.Free;
   inherited;
+end;
+
+function TGocciaLexer.CreateCheckpoint: TGocciaLexerCheckpoint;
+begin
+  Result.Current := FCurrent;
+  Result.Line := FLine;
+  Result.Column := FColumn;
+  Result.Start := FStart;
+  Result.StartColumn := FStartColumn;
+  Result.TokenCount := FTokens.Count;
+  Result.HashbangSkipped := FHashbangSkipped;
+  Result.EOFEmitted := FEOFEmitted;
+end;
+
+procedure TGocciaLexer.RestoreCheckpoint(
+  const ACheckpoint: TGocciaLexerCheckpoint);
+begin
+  FCurrent := ACheckpoint.Current;
+  FLine := ACheckpoint.Line;
+  FColumn := ACheckpoint.Column;
+  FStart := ACheckpoint.Start;
+  FStartColumn := ACheckpoint.StartColumn;
+  FHashbangSkipped := ACheckpoint.HashbangSkipped;
+  FEOFEmitted := ACheckpoint.EOFEmitted;
+
+  while FTokens.Count > ACheckpoint.TokenCount do
+    FTokens.Delete(FTokens.Count - 1);
 end;
 
 function TGocciaLexer.GetSourceLines: TStringList;
@@ -312,15 +353,6 @@ begin
   Result := True;
 end;
 
-procedure TGocciaLexer.AppendCurrent(var ASB, ARawSB: TStringBuffer); inline;
-var
-  C: Char;
-begin
-  C := Advance;
-  ASB.AppendChar(C);
-  ARawSB.AppendChar(C);
-end;
-
 procedure TGocciaLexer.AddToken(const ATokenType: TGocciaTokenType);
 begin
   AddToken(ATokenType, Copy(FSource, FStart, FCurrent - FStart));
@@ -331,7 +363,6 @@ procedure TGocciaLexer.AddToken(const ATokenType: TGocciaTokenType; const ALiter
 begin
   FTokens.Add(TGocciaToken.Create(ATokenType, ALiteral, FLine, FStartColumn,
     FColumn - 1, AContainsEscape));
-  UpdateRegexContext(ATokenType);
 end;
 
 // ES2026 §12.3 LineTerminator :: <LF> | <CR> | <LS> | <PS>
@@ -839,439 +870,6 @@ begin
   end;
 end;
 
-// Scans a nested template literal body within an interpolation expression.
-// Called after the opening backtick has been consumed and appended to the
-// buffers.  Consumes characters up to and including the closing backtick,
-// appending all content to both ASB and ARawSB verbatim.  Handles escaped
-// backticks (\`), escaped dollars (\$), and nested ${...} interpolations
-// via mutual recursion with ScanInterpolationExpression.
-procedure TGocciaLexer.ScanNestedTemplateInExpression(var ASB, ARawSB: TStringBuffer);
-var
-  C: Char;
-begin
-  while not IsAtEnd do
-  begin
-    C := Peek;
-    if ((C = #13) or (C = #10) or (C = UTF8_LINE_TERMINATOR_LEAD_BYTE)) and
-       AppendLineTerminator(ASB, ARawSB) then
-      Continue;
-
-    case C of
-      '`':
-      begin
-        // Closing backtick of nested template
-        AppendCurrent(ASB, ARawSB);
-        Exit;
-      end;
-      '\':
-      begin
-        // Escape sequence — consume \ and next char verbatim
-        AppendCurrent(ASB, ARawSB);
-        if not IsAtEnd then
-          AppendCurrent(ASB, ARawSB);
-      end;
-      '$':
-      begin
-        if PeekNext = '{' then
-        begin
-          // Nested interpolation within nested template
-          AppendCurrent(ASB, ARawSB); // consume $
-          AppendCurrent(ASB, ARawSB); // consume {
-          ScanInterpolationExpression(ASB, ARawSB);
-          // ScanInterpolationExpression leaves the closing } unconsumed
-          if not IsAtEnd then
-            AppendCurrent(ASB, ARawSB); // consume }
-        end
-        else
-          AppendCurrent(ASB, ARawSB);
-      end;
-    else
-      AppendCurrent(ASB, ARawSB);
-    end;
-  end;
-end;
-
-// ES2026 §12.9.4 Template Literal Lexical Components
-//
-// Scans a template interpolation expression with full lexical awareness.
-// Called after ${ has been consumed.  Tracks brace depth starting at 1 and
-// stops when the matching } is found WITHOUT consuming it — the caller is
-// responsible for consuming the closing }.  All characters within the
-// expression body are appended verbatim to both ASB and ARawSB.
-//
-// Lexical constructs handled:
-//   - Nested braces {…}
-//   - String literals '…' and "…" (with \ escapes)
-//   - Template literals `…` (with nested ${…} via mutual recursion)
-//   - Regex literals /…/ (with [\ ] classes and \ escapes), so quotes and
-//     braces inside a pattern cannot flip the string/brace tracking
-//   - Line comments //…
-//   - Block comments /*…*/
-//   - Line terminators (CR, CRLF, LF, LS, PS) with line/column tracking
-//
-// Regex-vs-division uses the same classification as UpdateRegexContext: a
-// slash after a completed primary expression (identifier, literal, `]`,
-// closing quote/backtick, postfix ++/--) divides; everywhere else it starts
-// a regex.  The scanner tracks the last significant character and the last
-// word so keyword boundaries (`return /re/`) classify like the main lexer.
-procedure TGocciaLexer.ScanInterpolationExpression(var ASB, ARawSB: TStringBuffer);
-var
-  BraceCount: Integer;
-  C, Quote: Char;
-  LastSignificant, PrevSignificant: Char;
-  LastWord: string;
-  WordActive: Boolean;
-  // Mirrors the main lexer's paren-regex context: each '(' records whether
-  // it opens an if/while/for head, so the matching ')' can re-allow a regex.
-  ParenAllowsRegex: array of Boolean;
-  ParenDepth: Integer;
-  LastParenAllowsRegex: Boolean;
-
-  procedure PushParenContext(const AAllowsRegexAfter: Boolean);
-  begin
-    if ParenDepth >= Length(ParenAllowsRegex) then
-      SetLength(ParenAllowsRegex, ParenDepth * 2 + 8);
-    ParenAllowsRegex[ParenDepth] := AAllowsRegexAfter;
-    Inc(ParenDepth);
-  end;
-
-  function PopParenContext: Boolean;
-  begin
-    if ParenDepth = 0 then
-      Exit(False);
-    Dec(ParenDepth);
-    Result := ParenAllowsRegex[ParenDepth];
-  end;
-
-  function WordIsStatementHeadKeyword: Boolean;
-  var
-    KeywordType: TGocciaTokenType;
-  begin
-    Result := (LastSignificant in ['a'..'z', 'A'..'Z']) and
-      TryKeywordToken(LastWord, KeywordType) and
-      (KeywordType in [gttIf, gttWhile, gttFor]);
-  end;
-
-  procedure NoteSignificant(const AChar: Char);
-  begin
-    PrevSignificant := LastSignificant;
-    LastSignificant := AChar;
-    if (AChar in ['a'..'z', 'A'..'Z', '0'..'9', '_', '$']) or
-       (AChar > #127) then
-    begin
-      if WordActive then
-        LastWord := LastWord + AChar
-      else
-        LastWord := AChar;
-      WordActive := True;
-    end
-    else
-      WordActive := False;
-  end;
-
-  function SlashStartsRegex: Boolean;
-  var
-    KeywordType: TGocciaTokenType;
-  begin
-    if LastSignificant = #0 then
-      Exit(True); // expression start
-    if (LastSignificant in ['a'..'z', 'A'..'Z', '0'..'9', '_', '$']) or
-       (LastSignificant > #127) then
-    begin
-      // Mirror UpdateRegexContext: keywords allow a regex except the
-      // identifier-like ones that end a primary expression.
-      if TryKeywordToken(LastWord, KeywordType) then
-        Exit(not (KeywordType in [gttTrue, gttFalse, gttNull, gttAs,
-          gttFrom, gttStatic, gttThis, gttSuper]));
-      Exit(False);
-    end;
-    // A trailing-dot numeric literal (`1.`) is one Number token in the real
-    // lexer, so a slash after it divides; a bare member-access dot keeps the
-    // regex-allowed default the main lexer uses for gttDot.
-    if (LastSignificant = '.') and (PrevSignificant in ['0'..'9']) then
-      Exit(False);
-    if (LastSignificant in ['+', '-']) and
-       (PrevSignificant = LastSignificant) then
-      Exit(False); // postfix ++/-- ends a primary expression
-    // Mirror PushParenRegexContext: the ')' closing an if/while/for head
-    // allows a regex statement to follow; any other ')' ends a primary
-    // expression and divides.
-    if LastSignificant = ')' then
-      Exit(LastParenAllowsRegex);
-    Result := not (LastSignificant in [']', '''', '"', '`']);
-  end;
-
-  // Pure lookahead from the character after the already-consumed '/': does a
-  // regex literal body (with \ escapes and [..] classes) close with '/' on
-  // this line?  Misclassified division would otherwise swallow state-bearing
-  // characters ('}', quotes) up to end of line; when no same-line closing
-  // slash exists we keep the slash as division and degrade gracefully.
-  function RegexBodyClosesOnLine: Boolean;
-  var
-    Idx: Integer;
-    InClass: Boolean;
-  begin
-    Result := False;
-    InClass := False;
-    Idx := FCurrent;
-    while Idx <= Length(FSource) do
-    begin
-      case FSource[Idx] of
-        #10, #13:
-          Exit(False);
-        UTF8_LINE_TERMINATOR_LEAD_BYTE:
-          if (Idx + 2 <= Length(FSource)) and
-             (FSource[Idx + 1] = UTF8_LINE_TERMINATOR_CONTINUATION_BYTE) and
-             ((FSource[Idx + 2] = UTF8_LINE_SEPARATOR_FINAL_BYTE) or
-              (FSource[Idx + 2] = UTF8_PARAGRAPH_SEPARATOR_FINAL_BYTE)) then
-            Exit(False);
-        '\':
-          Inc(Idx); // skip the escaped character
-        '[':
-          InClass := True;
-        ']':
-          InClass := False;
-        '/':
-          if not InClass then
-            Exit(True);
-      end;
-      Inc(Idx);
-    end;
-  end;
-
-  // Called with the opening / already appended.  Consumes the regex body
-  // verbatim.  Bails at a line terminator: regex literals cannot span
-  // lines, so a misclassified division degrades to ordinary character
-  // scanning instead of swallowing the rest of the source.
-  procedure ScanRegexBody;
-  var
-    R: Char;
-    InClass: Boolean;
-  begin
-    InClass := False;
-    while not IsAtEnd and not IsLineTerminator do
-    begin
-      R := Peek;
-      if R = '\' then
-      begin
-        AppendCurrent(ASB, ARawSB);
-        if not IsAtEnd and not IsLineTerminator then
-          AppendCurrent(ASB, ARawSB);
-        Continue;
-      end;
-      if InClass then
-      begin
-        if R = ']' then
-          InClass := False;
-        AppendCurrent(ASB, ARawSB);
-        Continue;
-      end;
-      if R = '[' then
-      begin
-        InClass := True;
-        AppendCurrent(ASB, ARawSB);
-        Continue;
-      end;
-      AppendCurrent(ASB, ARawSB);
-      if R = '/' then
-        Exit; // closing delimiter; flags are scanned by the main loop
-    end;
-  end;
-
-begin
-  BraceCount := 1;
-  LastSignificant := #0;
-  PrevSignificant := #0;
-  LastWord := '';
-  WordActive := False;
-  ParenDepth := 0;
-  LastParenAllowsRegex := False;
-  while (BraceCount > 0) and not IsAtEnd do
-  begin
-    C := Peek;
-    if ((C = #13) or (C = #10) or (C = UTF8_LINE_TERMINATOR_LEAD_BYTE)) and
-       AppendLineTerminator(ASB, ARawSB) then
-    begin
-      WordActive := False;
-      Continue;
-    end;
-
-    case C of
-      '{':
-      begin
-        Inc(BraceCount);
-        AppendCurrent(ASB, ARawSB);
-        NoteSignificant('{');
-      end;
-      '}':
-      begin
-        Dec(BraceCount);
-        if BraceCount > 0 then
-        begin
-          AppendCurrent(ASB, ARawSB);
-          NoteSignificant('}');
-        end;
-        // When BraceCount = 0, leave the closing } unconsumed for the caller
-      end;
-      '''', '"':
-      begin
-        // String literal — scan until matching unescaped quote
-        Quote := C;
-        AppendCurrent(ASB, ARawSB);
-        while not IsAtEnd do
-        begin
-          C := Peek;
-          if C = '\' then
-          begin
-            // Escape — consume \ and the next character verbatim
-            AppendCurrent(ASB, ARawSB);
-            if not IsAtEnd then
-              AppendCurrent(ASB, ARawSB);
-          end
-          else if C = Quote then
-          begin
-            AppendCurrent(ASB, ARawSB);
-            Break;
-          end
-          else if ((C = #13) or (C = #10) or
-                   (C = UTF8_LINE_TERMINATOR_LEAD_BYTE)) and
-                  AppendLineTerminator(ASB, ARawSB) then
-            Continue
-          else
-            AppendCurrent(ASB, ARawSB);
-        end;
-        NoteSignificant(Quote);
-      end;
-      '`':
-      begin
-        // Nested template literal — delegate to mutual recursion
-        AppendCurrent(ASB, ARawSB);
-        ScanNestedTemplateInExpression(ASB, ARawSB);
-        NoteSignificant('`');
-      end;
-      '/':
-      begin
-        AppendCurrent(ASB, ARawSB);
-        if not IsAtEnd then
-        begin
-          if Peek = '/' then
-          begin
-            // Line comment — consume until line terminator (LF, CR, LS, PS)
-            AppendCurrent(ASB, ARawSB);
-            while not IsAtEnd and not IsLineTerminator do
-              AppendCurrent(ASB, ARawSB);
-          end
-          else if Peek = '*' then
-          begin
-            // Block comment — consume until */
-            AppendCurrent(ASB, ARawSB); // consume *
-            while not IsAtEnd do
-            begin
-              C := Peek;
-              if C = '*' then
-              begin
-                AppendCurrent(ASB, ARawSB);
-                if not IsAtEnd and (Peek = '/') then
-                begin
-                  AppendCurrent(ASB, ARawSB);
-                  Break;
-                end;
-              end
-              else if ((C = #13) or (C = #10) or
-                       (C = UTF8_LINE_TERMINATOR_LEAD_BYTE)) and
-                      AppendLineTerminator(ASB, ARawSB) then
-                Continue
-              else
-                AppendCurrent(ASB, ARawSB);
-            end;
-          end
-          else if SlashStartsRegex and RegexBodyClosesOnLine then
-          begin
-            ScanRegexBody;
-            // A regex is a completed primary expression; ')' marks that, and
-            // clearing the paren flag keeps a following slash as division.
-            LastParenAllowsRegex := False;
-            NoteSignificant(')');
-          end
-          else
-            NoteSignificant('/');
-        end
-        else
-          NoteSignificant('/');
-      end;
-    else
-      begin
-        AppendCurrent(ASB, ARawSB);
-        // Capture the paren-regex context before NoteSignificant resets the
-        // word state: '(' records whether it opens an if/while/for head.
-        if C = '(' then
-          PushParenContext(WordIsStatementHeadKeyword)
-        else if C = ')' then
-          LastParenAllowsRegex := PopParenContext;
-        if C > ' ' then
-          NoteSignificant(C)
-        else
-          WordActive := False;
-      end;
-    end;
-  end;
-end;
-
-procedure TGocciaLexer.PushParenRegexContext(const AAllowsRegexAfter: Boolean);
-begin
-  if FParenRegexContextCount >= Length(FParenRegexContext) then
-    SetLength(FParenRegexContext, FParenRegexContextCount * 2 + 8);
-  FParenRegexContext[FParenRegexContextCount] := AAllowsRegexAfter;
-  Inc(FParenRegexContextCount);
-end;
-
-function TGocciaLexer.PopParenRegexContext: Boolean;
-begin
-  if FParenRegexContextCount = 0 then
-    Exit(False);
-  Dec(FParenRegexContextCount);
-  Result := FParenRegexContext[FParenRegexContextCount];
-end;
-
-procedure TGocciaLexer.UpdateRegexContext(const ATokenType: TGocciaTokenType);
-var
-  PreviousTokenType: TGocciaTokenType;
-begin
-  case ATokenType of
-    gttLeftParen:
-      begin
-        if FTokens.Count >= 2 then
-          PreviousTokenType := FTokens[FTokens.Count - 2].TokenType
-        else
-          PreviousTokenType := gttEOF;
-        PushParenRegexContext(PreviousTokenType in [gttIf, gttWhile, gttFor]);
-        FCanStartRegex := True;
-      end;
-    gttRightParen:
-      FCanStartRegex := PopParenRegexContext();
-    gttNumber,
-    gttBigInt,
-    gttString,
-    gttTemplate,
-    gttRegex,
-    gttTrue,
-    gttFalse,
-    gttNull,
-    gttIdentifier,
-    gttAs,
-    gttFrom,
-    gttStatic,
-    gttThis,
-    gttSuper,
-    gttRightBracket,
-    gttIncrement,
-    gttDecrement:
-      FCanStartRegex := False;
-  else
-    FCanStartRegex := True;
-  end;
-end;
-
 procedure TGocciaLexer.ScanString;
 var
   SB: TStringBuffer;
@@ -1310,15 +908,27 @@ begin
   AddToken(gttString, SB.ToString);
 end;
 
-// TC39 Template Literal Revision: template scanning tolerates malformed escape
-// sequences.  When an invalid \u or \x escape is encountered, the segment is
-// flagged and the token separator changes from #1 to #2 so the parser can
-// detect that cooked values must be re-derived per-segment from the raw string.
-procedure TGocciaLexer.ScanTemplate;
+procedure TGocciaLexer.ScanTemplateStart;
+begin
+  ScanTemplateSpan(gttTemplateHead, gttTemplate);
+end;
+
+procedure TGocciaLexer.ScanTemplateContinuation;
+begin
+  FStart := FCurrent;
+  FStartColumn := FColumn;
+  ScanTemplateSpan(gttTemplateMiddle, gttTemplateTail);
+end;
+
+// ES2026 §12.9.6 Template Literal Lexical Components.
+// Scans one template span only.  A span ends at `${` (continuation token) or
+// at the closing backtick (end token); `${...}` expressions are parsed by the
+// parser in the main token stream.
+procedure TGocciaLexer.ScanTemplateSpan(const AContinuationTokenType,
+  AEndTokenType: TGocciaTokenType);
 const
   TEMPLATE_RAW_SEPARATOR = #1;
   TEMPLATE_INVALID_ESCAPE_SEPARATOR = #2;
-  TEMPLATE_EXPRESSION_BOUNDARY = #3;
 var
   SB: TStringBuffer;
   RawSB: TStringBuffer;
@@ -1376,19 +986,14 @@ begin
     end
     else if (C = '$') and (PeekNext = '{') then
     begin
-      // Interpolation expression boundary — detect and record with lexical
-      // awareness so braces inside strings, comments, and nested templates
-      // do not confuse the boundary detection.
       Advance; // consume $
       Advance; // consume {
-      SB.AppendChar(TEMPLATE_EXPRESSION_BOUNDARY);
-      RawSB.AppendChar(TEMPLATE_EXPRESSION_BOUNDARY);
-      ScanInterpolationExpression(SB, RawSB);
-      // ScanInterpolationExpression leaves the closing } unconsumed
-      if not IsAtEnd then
-        Advance; // consume closing }
-      SB.AppendChar(TEMPLATE_EXPRESSION_BOUNDARY);
-      RawSB.AppendChar(TEMPLATE_EXPRESSION_BOUNDARY);
+      if HasInvalidEscape then
+        Separator := TEMPLATE_INVALID_ESCAPE_SEPARATOR
+      else
+        Separator := TEMPLATE_RAW_SEPARATOR;
+      AddToken(AContinuationTokenType, SB.ToString + Separator + RawSB.ToString);
+      Exit;
     end
     else
     begin
@@ -1409,7 +1014,7 @@ begin
     Separator := TEMPLATE_INVALID_ESCAPE_SEPARATOR
   else
     Separator := TEMPLATE_RAW_SEPARATOR;
-  AddToken(gttTemplate, SB.ToString + Separator + RawSB.ToString);
+  AddToken(AEndTokenType, SB.ToString + Separator + RawSB.ToString);
 end;
 
 procedure TGocciaLexer.ScanRegexLiteral;
@@ -1740,7 +1345,23 @@ begin
     AddToken(gttIdentifier, Text, HadEscape);
 end;
 
-procedure TGocciaLexer.ScanToken;
+function LexicalGoalAllowsRegularExpression(
+  const ALexicalGoal: TGocciaLexicalGoal): Boolean; inline;
+begin
+  Result := ALexicalGoal in [
+    glgInputElementRegExp,
+    glgInputElementRegExpOrTemplateTail,
+    glgInputElementHashbangOrRegExp
+  ];
+end;
+
+function LexicalGoalRequiresTemplateContinuation(
+  const ALexicalGoal: TGocciaLexicalGoal): Boolean; inline;
+begin
+  Result := ALexicalGoal = glgInputElementTemplateTail;
+end;
+
+procedure TGocciaLexer.ScanToken(const ALexicalGoal: TGocciaLexicalGoal);
 var
   ByteLength: Integer;
   C: Char;
@@ -1800,10 +1421,10 @@ begin
       else
         AddToken(gttStar);
     '/':
-      if Match('=') then
-        AddToken(gttSlashAssign)
-      else if FCanStartRegex or CanScanRegexAfterAwait then
+      if LexicalGoalAllowsRegularExpression(ALexicalGoal) then
         ScanRegexLiteral
+      else if Match('=') then
+        AddToken(gttSlashAssign)
       else
         AddToken(gttSlash);
     '%':
@@ -1913,7 +1534,7 @@ begin
     '#': AddToken(gttHash);
     '@': AddToken(gttAt);
     '`':
-      ScanTemplate;
+      ScanTemplateStart;
     '''', '"':
       ScanString;
   else
@@ -1944,75 +1565,42 @@ begin
   end;
 end;
 
-function TGocciaLexer.CanScanRegexAfterAwait: Boolean;
+function TGocciaLexer.ScanNextToken(
+  const ALexicalGoal: TGocciaLexicalGoal): TGocciaToken;
 var
-  I: Integer;
-  InClass, Escaped: Boolean;
-  Ch: Char;
-
-  function IsLineTerminatorAt(const AIndex: Integer): Boolean; inline;
-  begin
-    Result := (FSource[AIndex] = #10) or (FSource[AIndex] = #13) or
-              ((FSource[AIndex] = UTF8_LINE_TERMINATOR_LEAD_BYTE) and
-              (AIndex + 2 <= Length(FSource)) and
-              (FSource[AIndex + 1] = UTF8_LINE_TERMINATOR_CONTINUATION_BYTE) and
-              ((FSource[AIndex + 2] = UTF8_LINE_SEPARATOR_FINAL_BYTE) or
-              (FSource[AIndex + 2] = UTF8_PARAGRAPH_SEPARATOR_FINAL_BYTE)));
-  end;
+  StartTime: Int64;
 begin
-  Result := False;
-  if (FTokens.Count = 0) or
-     (FTokens[FTokens.Count - 1].TokenType <> gttIdentifier) or
-     (FTokens[FTokens.Count - 1].Lexeme <> KEYWORD_AWAIT) then
-    Exit;
+  StartTime := GetNanoseconds;
+  try
+    if FEOFEmitted then
+      Exit(FTokens[FTokens.Count - 1]);
 
-  if IsAtEnd or (Peek = '/') or (Peek = '*') then
-    Exit;
-
-  InClass := False;
-  Escaped := False;
-  I := FCurrent;
-  while I <= Length(FSource) do
-  begin
-    Ch := FSource[I];
-    if IsLineTerminatorAt(I) then
-      Exit;
-
-    if Escaped then
+    if not FHashbangSkipped then
     begin
-      Escaped := False;
-      Inc(I);
-      Continue;
+      SkipHashbang;
+      FHashbangSkipped := True;
     end;
 
-    case Ch of
-      '\':
-        Escaped := True;
-      '[':
-        InClass := True;
-      ']':
-        InClass := False;
-      '/':
-        if not InClass then
-          Exit(True);
+    if LexicalGoalRequiresTemplateContinuation(ALexicalGoal) then
+    begin
+      ScanTemplateContinuation;
+      Result := FTokens[FTokens.Count - 1];
+      Exit;
     end;
 
-    Inc(I);
-  end;
-end;
-
-function TGocciaLexer.ScanTokens: TObjectList<TGocciaToken>;
-begin
-  SkipHashbang;
-  while not IsAtEnd do
-  begin
     SkipWhitespace;
-    if not IsAtEnd then
-      ScanToken;
-  end;
+    if IsAtEnd then
+    begin
+      FEOFEmitted := True;
+      FTokens.Add(TGocciaToken.Create(gttEOF, '', FLine, FColumn, FColumn));
+      Exit(FTokens[FTokens.Count - 1]);
+    end;
 
-  FTokens.Add(TGocciaToken.Create(gttEOF, '', FLine, FColumn, FColumn));
-  Result := FTokens;
+    ScanToken(ALexicalGoal);
+    Result := FTokens[FTokens.Count - 1];
+  finally
+    Inc(FScanTimeNanoseconds, GetNanoseconds - StartTime);
+  end;
 end;
 
 end.

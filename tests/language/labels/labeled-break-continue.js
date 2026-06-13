@@ -94,6 +94,15 @@ describe("labeled statements", () => {
     expect(value).toBe(3);
   });
 
+  test("await can be a label in script code", () => {
+    await: {
+      break await;
+      throw new Error("unreachable");
+    }
+
+    expect(true).toBe(true);
+  });
+
   test("break to an outer label closes the active iterator", () => {
     let closed = false;
     const iterable = {

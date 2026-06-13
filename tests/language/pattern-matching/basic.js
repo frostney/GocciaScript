@@ -377,6 +377,15 @@ describe("pattern matching expressions", () => {
     expect(() => value).toThrow(ReferenceError);
   });
 
+  test("match subject supports division expressions", () => {
+    const result = match (4 / 2) {
+      2: "two";
+      default: "other";
+    };
+
+    expect(result).toBe("two");
+  });
+
   test("match throws TypeError when no clause matches", () => {
     expect(() => match (2) { 1: "one"; }).toThrow(TypeError);
   });

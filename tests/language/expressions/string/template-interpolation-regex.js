@@ -64,6 +64,17 @@ describe("template interpolation regex literal scanning", () => {
     expect(x).toBe("4");
   });
 
+  test("division after object literal closing brace is not a regex", () => {
+    const x = `${{} / 2}`;
+    expect(x).toBe("NaN");
+  });
+
+  test("division after keyword property access is not a regex", () => {
+    const obj = { if: 8 };
+    const x = `${obj.if / 2}`;
+    expect(x).toBe("4");
+  });
+
   test("division after identifier is not a regex", () => {
     const n = 8;
     const x = `${n / 2}`;

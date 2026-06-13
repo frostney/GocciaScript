@@ -32,3 +32,16 @@ test("zero-iteration loop", () => {
   for (let i = 0; i < 0; i++) result.push(i);
   expect(result).toEqual([]);
 });
+
+test("division in initializer remains division", () => {
+  const result = [];
+  for (let i = 4 / 2; i < 5; i++) result.push(i);
+  expect(result).toEqual([2, 3, 4]);
+});
+
+test("regex in initializer remains a regex literal", () => {
+  let matched = false;
+  for (let pattern = /\)/; !matched; matched = true) {
+    expect(pattern.test(")")).toBe(true);
+  }
+});

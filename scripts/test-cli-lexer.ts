@@ -2,7 +2,7 @@
 /**
  * test-cli-lexer.ts
  *
- * Lexer-level CLI tests: numeric separator rejection.
+ * Lexer-level CLI tests: lexical syntax errors and loader error envelopes.
  */
 
 import { assertSyntaxError, runLoaderJson } from "./test-cli/assertions";
@@ -93,6 +93,23 @@ console.log("Lexer errors are SyntaxError...");
 
   for (const [source, desc] of cases) {
     assertSyntaxError(source + "\n", `Lexer error "${desc}"`);
+  }
+}
+
+// -- Template literal lexer/parser errors surface as SyntaxError -----------------
+
+console.log("Template literal errors are SyntaxError...");
+{
+  const cases: [string, string][] = [
+    ["`head ${1", "missing close brace after interpolation expression"],
+    ["`head ${1} tail", "unterminated template continuation"],
+    ["`head ${} tail`", "empty interpolation expression"],
+    ["`head ${/unterminated} tail`", "unterminated regex inside interpolation"],
+    ["`head ${`inner ${1}`", "unterminated outer template after nested template"],
+  ];
+
+  for (const [source, desc] of cases) {
+    assertSyntaxError(source + "\n", `Template literal error "${desc}"`);
   }
 }
 
