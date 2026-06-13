@@ -10,6 +10,8 @@ uses
   Goccia.GarbageCollector,
   Goccia.ExecutionContext,
   Goccia.Realm,
+  Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.Shape,
   TestingPascalLibrary,
 
   Goccia.TestSetup;
@@ -67,6 +69,7 @@ type
     procedure TestRealmRecordFieldsRoundtrip;
     procedure TestRealmTemplateMapRoundtrip;
     procedure TestExecutionContextStackSetsCurrentRealm;
+    procedure TestShapeEnsureFromNonOwnerRealmUsesDictionary;
     procedure TestThreadLocalityOfCurrentRealm;
   end;
 
@@ -98,6 +101,8 @@ begin
     TestRealmTemplateMapRoundtrip);
   Test('Execution context stack drives CurrentRealm',
     TestExecutionContextStackSetsCurrentRealm);
+  Test('Shape ensure from a non-owner realm uses dictionary mode',
+    TestShapeEnsureFromNonOwnerRealmUsesDictionary);
   Test('CurrentRealm is thread-local',
     TestThreadLocalityOfCurrentRealm);
 end;
@@ -405,6 +410,43 @@ begin
     SetCurrentRealm(PreviousRealm);
     InnerRealm.Free;
     OuterRealm.Free;
+  end;
+end;
+
+procedure TTestRealm.TestShapeEnsureFromNonOwnerRealmUsesDictionary;
+var
+  OwnerRealm, OtherRealm, PreviousRealm: TGocciaRealm;
+  Map: TGocciaShapedPropertyMap;
+  FirstDescriptor, SecondDescriptor: TGocciaPropertyDescriptor;
+begin
+  PreviousRealm := CurrentRealm;
+  OwnerRealm := TGocciaRealm.Create('shape-owner');
+  OtherRealm := TGocciaRealm.Create('shape-other');
+  Map := nil;
+  FirstDescriptor := nil;
+  SecondDescriptor := nil;
+  try
+    SetCurrentRealm(OwnerRealm);
+    Map := TGocciaShapedPropertyMap.Create;
+    FirstDescriptor := TGocciaPropertyDescriptor.Create([], []);
+    SecondDescriptor := TGocciaPropertyDescriptor.Create([], []);
+    Map.Add('alpha', FirstDescriptor);
+    Map.Add('beta', SecondDescriptor);
+
+    Expect<Boolean>(Map.EnsureShape <> DictionaryShapeSentinel).ToBe(True);
+
+    SetCurrentRealm(OtherRealm);
+    Expect<Boolean>(Map.EnsureShape = DictionaryShapeSentinel).ToBe(True);
+
+    SetCurrentRealm(OwnerRealm);
+    Expect<Boolean>(Map.EnsureShape = DictionaryShapeSentinel).ToBe(True);
+  finally
+    SetCurrentRealm(PreviousRealm);
+    Map.Free;
+    FirstDescriptor.Free;
+    SecondDescriptor.Free;
+    OtherRealm.Free;
+    OwnerRealm.Free;
   end;
 end;
 

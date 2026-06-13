@@ -15,9 +15,12 @@ unit Goccia.Values.Shape;
 //
 // Shapes are interned per realm (TGocciaShapeTable in a realm-owned slot):
 // no cross-thread locking, freed at engine tear-down with the realm.
-// Within an engine's lifetime shapes are never freed, and function
-// templates never outlive their engine, so cache entries may validate by
-// raw pointer identity without a version stamp.
+// Property maps remember the realm they were created under; if another
+// realm asks to materialize a shape for that map, the map leaves shaped
+// mode before any foreign shape table can receive its layout. Within an
+// engine's lifetime shapes are never freed, and function templates never
+// outlive their engine, so cache entries may validate by raw pointer
+// identity without a version stamp.
 
 interface
 
@@ -92,9 +95,12 @@ type
   // and they live on the map itself so no mutation path can bypass them.
   TGocciaShapedPropertyMap = class(TGocciaPropertyMap)
   private
+    FOwnerRealm: TGocciaRealm;
     FShape: TGocciaShape;
     FShapeEntryCount: Integer;
   public
+    constructor Create; overload;
+    constructor Create(AInitialCapacity: Integer); overload;
     function Remove(const AKey: string): Boolean; override;
     procedure Clear; override;
     // Recompute the shape to cover all current entries (resuming from the
@@ -104,7 +110,9 @@ type
     // When a transition limit is hit the longest interned prefix is kept
     // instead: the result's Depth is then smaller than Count, so callers
     // proving PRESENCE must guard EntryIndex < Depth and callers proving
-    // ABSENCE must require Depth = Count.
+    // ABSENCE must require Depth = Count. Maps owned by another realm switch
+    // to dictionary mode here, keeping foreign realm shape tables and raw
+    // pointer cache identities separated without adding a cache-hit check.
     function EnsureShape: TGocciaShape;
     // Raw last-computed shape for the cache hit path: one field load, may
     // lag behind the live layout (benign — see unit header).
@@ -222,6 +230,19 @@ end;
 
 { TGocciaShapedPropertyMap }
 
+constructor TGocciaShapedPropertyMap.Create;
+begin
+  Create(0);
+end;
+
+constructor TGocciaShapedPropertyMap.Create(AInitialCapacity: Integer);
+begin
+  inherited Create(AInitialCapacity);
+  FOwnerRealm := CurrentRealm;
+  FShape := nil;
+  FShapeEntryCount := 0;
+end;
+
 function TGocciaShapedPropertyMap.EnsureShape: TGocciaShape;
 var
   Table: TGocciaShapeTable;
@@ -231,6 +252,11 @@ var
 begin
   if FShape = GDictionaryShape then
     Exit(GDictionaryShape);
+  if CurrentRealm <> FOwnerRealm then
+  begin
+    FShape := GDictionaryShape;
+    Exit(GDictionaryShape);
+  end;
   // Depth-capped maps are permanently in prefix mode; skip the staleness
   // walk (it could only fail at the cap again).
   if Assigned(FShape) and
