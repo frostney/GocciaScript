@@ -16,7 +16,7 @@ The lexer had several hot paths where simple scanning work went through helper c
 
 - hashbang and single-line comments called `IsLineTerminator` and `Advance` for each skipped character
 - block comments repeatedly called `Peek` and `Advance`
-- the older flat template interpolation scanner duplicated line-terminator and cooked/raw buffer logic
+- template interpolation scanning duplicated line-terminator and "append current char to cooked/raw buffers" logic
 - regex literal scanning appended each pattern byte into `TStringBuffer`
 - numeric separator scanning repeated nearly identical loops for decimal, radix, fraction, and exponent parts
 
@@ -60,9 +60,9 @@ Block comments now scan `FSource[FCurrent]` directly and only delegate to the sh
 
 This removed duplicated CR/LF/Unicode branches from whitespace and template interpolation code.
 
-### Template line-terminator handling
+### Template append helper
 
-This spike originally simplified the then-current flat template interpolation scanner. That scanner was later removed when template spans became parser-driven; current template scanning keeps the shared line-terminator handling but no longer carries a lexer-side interpolation expression scanner.
+`AppendCurrent` consumes the current source byte and appends it to both template buffers. This made nested template and interpolation scanning smaller without changing how raw and cooked content are collected.
 
 ### Regex pattern slicing
 
