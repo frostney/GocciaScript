@@ -558,7 +558,7 @@ The **test262 conformance comment** posts a non-blocking summary using the [`act
 - When a `main` baseline is cached, **Δ vs main** columns show absolute count delta and percentage-point delta. Deltas below ±0.05pp render as `±0pp` to keep the table readable.
 - A collapsible **Per-test deltas** section listing newly-passing and newly-failing test IDs.
 
-The website compatibility dashboard at `/compatibility` reads build-time snapshots generated from main-branch test262 reports. Vercel Blob is the durable source for those snapshots; main CI publishes future dashboard points directly, and `cd website && bun run backfill-test262` can seed historical days from retained artifacts or fresh historical reruns. Website builds do not download artifact ZIPs. This keeps the public pass-rate timeline and group coverage tables tied to generated CI data rather than hand-maintained percentages.
+The website compatibility dashboard at `/compatibility` reads main-branch test262 reports from Vercel Blob at request time with CDN caching. Main CI publishes future dashboard points directly, and `cd website && bun run backfill-test262` can seed historical days from retained artifacts or fresh historical reruns. Website builds do not download artifact ZIPs or bake test262 data into the deployment. This keeps the public pass-rate timeline and group coverage tables tied to generated CI data rather than hand-maintained percentages.
 
 Weekly crons open (or update) a single PR every Monday with the latest upstream SHA so pins don't go stale:
 

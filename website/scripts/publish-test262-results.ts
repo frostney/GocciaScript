@@ -2,17 +2,18 @@
 import { readFile } from "node:fs/promises";
 import { GITHUB_REPO_URL } from "../src/lib/github";
 import {
+  publishTest262ReportsToBlob,
+  type Test262BlobPublishEntry,
+  test262BlobDailyPathForDay,
+  test262BlobPrefix,
+  test262BlobReportPathForArtifactId,
+} from "../src/lib/test262-blob-store";
+import {
   jsonUrlForArtifact,
   normalizeTest262Report,
   type Test262Report,
   type Test262TimelinePoint,
 } from "../src/lib/test262-dashboard";
-import {
-  publishTest262ReportsToBlob,
-  type Test262BlobPublishEntry,
-  test262BlobManifestPath,
-  test262BlobPrefix,
-} from "./test262-blob-store";
 
 function log(message: string) {
   console.log(`[publish-test262] ${message}`);
@@ -102,14 +103,13 @@ async function main() {
 
   const filePath = args.find((arg) => !arg.startsWith("--")) ?? usage();
   const entry = await readEntryFromFile(filePath);
+  const prefix = test262BlobPrefix();
 
   log(
-    `publishing ${filePath} to ${test262BlobManifestPath(test262BlobPrefix())}`,
+    `publishing ${filePath} to ${test262BlobReportPathForArtifactId(entry.point.artifactId, prefix)} and ${test262BlobDailyPathForDay(entry.point.createdAt.slice(0, 10), prefix)}`,
   );
-  const manifest = await publishTest262ReportsToBlob([entry]);
-  log(
-    `published report; manifest now has ${manifest.runs.length} run(s) and ${manifest.daily.length} daily point(s)`,
-  );
+  const runs = await publishTest262ReportsToBlob([entry]);
+  log(`published ${runs.length} report(s)`);
 }
 
 main().catch((err) => {

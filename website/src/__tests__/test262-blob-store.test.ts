@@ -1,10 +1,11 @@
 import { describe, expect, mock, test } from "bun:test";
+import { gunzipSync, gzipSync } from "node:zlib";
+import type { Test262BlobRun } from "@/lib/test262-blob-store";
 import type {
   Test262Report,
   Test262SuiteSummary,
   Test262TimelinePoint,
 } from "@/lib/test262-dashboard";
-import type { Test262BlobRun } from "../../scripts/test262-blob-store";
 
 type BlobGetCall = {
   pathname: string;
@@ -17,15 +18,13 @@ type BlobPutCall = {
   options: Record<string, unknown>;
 };
 
-const MANIFEST_PATH = "test262/manifest.json";
-const MANIFEST_ETAG = '"origin-etag"';
+type BlobListCall = {
+  options: Record<string, unknown>;
+};
 
 const getCalls: BlobGetCall[] = [];
 const putCalls: BlobPutCall[] = [];
-const state = {
-  manifestExists: true,
-  failManifestPuts: 0,
-};
+const listCalls: BlobListCall[] = [];
 
 class BlobNotFoundError extends Error {
   constructor() {
@@ -33,14 +32,14 @@ class BlobNotFoundError extends Error {
   }
 }
 
-class BlobPreconditionFailedError extends Error {
-  constructor() {
-    super("Vercel Blob: Precondition failed: ETag mismatch.");
-  }
-}
-
 function textStream(text: string): ReadableStream<Uint8Array> {
   const stream = new Response(text).body;
+  if (!stream) throw new Error("expected response body stream");
+  return stream;
+}
+
+function byteStream(bytes: Uint8Array): ReadableStream<Uint8Array> {
+  const stream = new Response(Buffer.from(bytes)).body;
   if (!stream) throw new Error("expected response body stream");
   return stream;
 }
@@ -58,7 +57,7 @@ function summary(totalRun: number): Test262SuiteSummary {
   };
 }
 
-const existingRun: Test262BlobRun = {
+const dailyRun: Test262BlobRun = {
   runId: 101,
   runNumber: 1,
   title: "CI",
@@ -78,24 +77,59 @@ const existingRun: Test262BlobRun = {
   publishedAt: "2026-06-10T01:06:00.000Z",
 };
 
+const reportJson = JSON.stringify({
+  summary: summary(1),
+  results: [{ id: "built-ins/Array/a.js", status: "PASS" }],
+});
+
 mock.module("@vercel/blob", () => ({
   BlobNotFoundError,
-  BlobPreconditionFailedError,
   get: async (pathname: string, options: Record<string, unknown>) => {
     getCalls.push({ pathname, options });
-    if (options.access === "public" && options.useCache === false) {
-      // The real public CDN rejects the SDK's cache=0 parameter.
-      throw new Error("Vercel Blob: Failed to fetch blob: 400 Bad Request");
+    if (pathname === "test262/daily/2026-06-10.json") {
+      return {
+        statusCode: 200,
+        stream: textStream(JSON.stringify(dailyRun)),
+        blob: { etag: "daily-etag" },
+      };
     }
-    // The real SDK signals a missing blob by returning null, not throwing.
-    if (pathname === MANIFEST_PATH && !state.manifestExists) return null;
-    return {
-      statusCode: 200,
-      stream: textStream(JSON.stringify({ version: 1, runs: [existingRun] })),
-      blob: {
-        etag: MANIFEST_ETAG,
-      },
-    };
+    if (pathname === "test262/daily/bad.json") {
+      return {
+        statusCode: 200,
+        stream: textStream(JSON.stringify({ nope: true })),
+        blob: { etag: "bad-etag" },
+      };
+    }
+    if (pathname === "test262/daily/corrupt.json") {
+      return {
+        statusCode: 200,
+        stream: textStream("{"),
+        blob: { etag: "corrupt-etag" },
+      };
+    }
+    if (pathname === "test262/runs/1001.json.gz") {
+      return {
+        statusCode: 200,
+        stream: byteStream(gzipSync(reportJson)),
+        blob: { etag: "report-etag" },
+      };
+    }
+    return null;
+  },
+  list: async (options: Record<string, unknown>) => {
+    listCalls.push({ options });
+    if (!options.cursor) {
+      return {
+        blobs: [
+          { pathname: "test262/daily/bad.json" },
+          { pathname: "test262/daily/corrupt.json" },
+          { pathname: "test262/daily/2026-06-10.json" },
+        ],
+        cursor: "next",
+        hasMore: true,
+      };
+    }
+    return { blobs: [], hasMore: false };
   },
   put: async (
     pathname: string,
@@ -103,16 +137,6 @@ mock.module("@vercel/blob", () => ({
     options: Record<string, unknown>,
   ) => {
     putCalls.push({ pathname, body, options });
-    if (pathname === MANIFEST_PATH) {
-      if (state.failManifestPuts > 0) {
-        state.failManifestPuts -= 1;
-        throw new BlobPreconditionFailedError();
-      }
-      const expectedIfMatch = state.manifestExists ? MANIFEST_ETAG : undefined;
-      if (options.ifMatch !== expectedIfMatch) {
-        throw new BlobPreconditionFailedError();
-      }
-    }
     return {
       url: `https://blob.test/${pathname}`,
       downloadUrl: `https://blob.test/${pathname}?download=1`,
@@ -127,20 +151,7 @@ mock.module("@vercel/blob", () => ({
 function resetState() {
   getCalls.length = 0;
   putCalls.length = 0;
-  state.manifestExists = true;
-  state.failManifestPuts = 0;
-}
-
-function manifestGets() {
-  return getCalls.filter((call) => call.pathname === MANIFEST_PATH);
-}
-
-function manifestPuts() {
-  return putCalls.filter((call) => call.pathname === MANIFEST_PATH);
-}
-
-function dailyPuts() {
-  return putCalls.filter((call) => call.pathname.startsWith("test262/daily/"));
+  listCalls.length = 0;
 }
 
 function publishEntry() {
@@ -165,65 +176,69 @@ function publishEntry() {
   return { point, report, reportJson: JSON.stringify(report) };
 }
 
-async function importPublish() {
-  const { publishTest262ReportsToBlob } = await import(
-    "../../scripts/test262-blob-store"
-  );
-  return publishTest262ReportsToBlob;
+async function importBlobStore() {
+  return await import("@/lib/test262-blob-store");
 }
 
-describe("test262 Blob publishing", () => {
-  test("merges into the existing manifest with its ETag as ifMatch", async () => {
+describe("test262 Blob store", () => {
+  test("publishes report and daily blobs without reading or writing a manifest", async () => {
     resetState();
-    const publish = await importPublish();
+    const { publishTest262ReportsToBlob } = await importBlobStore();
 
-    const manifest = await publish([publishEntry()]);
+    const runs = await publishTest262ReportsToBlob([publishEntry()]);
 
-    const [manifestRead] = manifestGets();
-    expect(manifestRead?.options).toEqual({ access: "public" });
-    expect(manifestPuts().at(-1)?.options).toMatchObject({
+    expect(getCalls).toHaveLength(0);
+    expect(putCalls.map((call) => call.pathname)).toEqual([
+      "test262/runs/1002.json.gz",
+      "test262/daily/2026-06-11.json",
+    ]);
+    expect(putCalls[0]?.options).toMatchObject({
       allowOverwrite: true,
-      ifMatch: MANIFEST_ETAG,
+      cacheControlMaxAge: 31_536_000,
+      contentType: "application/gzip",
     });
-    expect(manifest.runs.map((run) => run.artifactId)).toEqual([1001, 1002]);
-  });
-
-  test("creates the manifest without ifMatch when none exists", async () => {
-    resetState();
-    state.manifestExists = false;
-    const publish = await importPublish();
-
-    const manifest = await publish([publishEntry()]);
-
-    const manifestWrite = manifestPuts().at(-1);
-    expect(manifestWrite?.options).toMatchObject({ allowOverwrite: false });
-    expect(manifestWrite?.options.ifMatch).toBeUndefined();
-    expect(manifest.runs.map((run) => run.artifactId)).toEqual([1002]);
-  });
-
-  test("re-reads the manifest and retries when the conditional write conflicts", async () => {
-    resetState();
-    state.failManifestPuts = 1;
-    const publish = await importPublish();
-
-    const manifest = await publish([publishEntry()]);
-
-    expect(manifestGets()).toHaveLength(2);
-    expect(manifestPuts()).toHaveLength(2);
-    expect(dailyPuts()).toHaveLength(1);
-    expect(manifest.runs.map((run) => run.artifactId)).toEqual([1001, 1002]);
-  });
-
-  test("gives up after repeated write conflicts", async () => {
-    resetState();
-    state.failManifestPuts = Number.POSITIVE_INFINITY;
-    const publish = await importPublish();
-
-    await expect(publish([publishEntry()])).rejects.toThrow(
-      /precondition failed/i,
+    expect(putCalls[1]?.options).toMatchObject({
+      allowOverwrite: true,
+      cacheControlMaxAge: 900,
+      contentType: "application/json",
+    });
+    expect(gunzipSync(putCalls[0]?.body as Uint8Array).toString("utf8")).toBe(
+      `${JSON.stringify(publishEntry().report)}\n`,
     );
-    expect(manifestGets()).toHaveLength(3);
-    expect(manifestPuts()).toHaveLength(3);
-    expect(dailyPuts()).toHaveLength(0);
+    expect(runs.map((run) => run.artifactId)).toEqual([1002]);
+  });
+
+  test("lists daily run blobs and ignores malformed daily JSON", async () => {
+    resetState();
+    const { listTest262BlobDailyRuns } = await importBlobStore();
+
+    const runs = await listTest262BlobDailyRuns();
+
+    expect(listCalls).toHaveLength(2);
+    expect(listCalls[0]?.options).toMatchObject({
+      limit: 1000,
+      prefix: "test262/daily/",
+    });
+    expect(getCalls.map((call) => call.pathname)).toEqual([
+      "test262/daily/bad.json",
+      "test262/daily/corrupt.json",
+      "test262/daily/2026-06-10.json",
+    ]);
+    expect(runs).toEqual([dailyRun]);
+  });
+
+  test("reads and decompresses a run report by artifact id", async () => {
+    resetState();
+    const { readTest262BlobReportJsonByArtifactId } = await importBlobStore();
+
+    const json = await readTest262BlobReportJsonByArtifactId(1001);
+
+    expect(json).toBe(reportJson);
+    expect(getCalls).toEqual([
+      {
+        pathname: "test262/runs/1001.json.gz",
+        options: { access: "public" },
+      },
+    ]);
   });
 });

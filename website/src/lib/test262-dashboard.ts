@@ -1,17 +1,20 @@
-import { readFile } from "node:fs/promises";
-import path from "node:path";
 import { inflateRawSync } from "node:zlib";
+import { unstable_cache } from "next/cache";
 import { GITHUB_REPO_URL } from "@/lib/github";
+import {
+  listTest262BlobDailyRuns,
+  readTest262BlobReportJson,
+  readTest262BlobReportJsonByArtifactId,
+} from "@/lib/test262-blob-store";
 
 const TEST262_WORKFLOW = "ci.yml";
 const TEST262_ARTIFACT_NAME = "test262-results";
 const TEST262_REPORT_NAME = "test262-results.json";
 const GROUP_SEGMENTS = 2;
 const MIN_GROUP_TESTS = 25;
-const TEST262_DATA_DIR = path.join(process.cwd(), "content", "test262");
-const TEST262_DASHBOARD_PATH = path.join(TEST262_DATA_DIR, "dashboard.json");
-const TEST262_LATEST_PATH = path.join(TEST262_DATA_DIR, "latest.json");
-const TEST262_REPORTS_DIR = path.join(TEST262_DATA_DIR, "reports");
+export const TEST262_DASHBOARD_CACHE_SECONDS = 900;
+export const TEST262_DASHBOARD_CACHE_CONTROL =
+  "public, max-age=0, s-maxage=900, stale-while-revalidate=3600";
 
 export type Test262Outcome = "PASS" | "FAIL" | "WRAPPER_INFRA" | "TIMEOUT";
 
@@ -312,65 +315,64 @@ function fallbackDashboard(
   };
 }
 
-async function readJsonFile<T>(filePath: string): Promise<T | null> {
-  try {
-    return JSON.parse(await readFile(filePath, "utf8")) as T;
-  } catch {
-    return null;
-  }
-}
-
-function isDashboardData(value: unknown): value is Test262DashboardData {
-  if (!value || typeof value !== "object") return false;
-  const data = value as Record<string, unknown>;
-  return (
-    (data.status === "ready" ||
-      data.status === "needs-build-token" ||
-      data.status === "empty" ||
-      data.status === "error") &&
-    typeof data.generatedAt === "string" &&
-    !!data.source &&
-    typeof data.source === "object" &&
-    (data.latest === null ||
-      (!!data.latest && typeof data.latest === "object")) &&
-    Array.isArray(data.timeline) &&
-    Array.isArray(data.leastCovered) &&
-    Array.isArray(data.mostCovered)
-  );
-}
-
 export async function readTest262ReportJsonByArtifactId(
   artifactId: number,
 ): Promise<string | null> {
-  if (!Number.isSafeInteger(artifactId) || artifactId <= 0) return null;
-  try {
-    return await readFile(
-      path.join(TEST262_REPORTS_DIR, `${artifactId}.json`),
-      "utf8",
-    );
-  } catch {
-    return null;
-  }
+  return readTest262BlobReportJsonByArtifactId(artifactId);
 }
 
 export async function readLatestTest262ReportJson(): Promise<string | null> {
+  const data = await loadTest262DashboardData();
+  if (!data.latest) return null;
+  return readTest262ReportJsonByArtifactId(data.latest.artifactId);
+}
+
+function hasBlobReadCredentials(): boolean {
+  return Boolean(
+    process.env.BLOB_READ_WRITE_TOKEN ||
+      process.env.BLOB_STORE_ID ||
+      process.env.VERCEL_OIDC_TOKEN,
+  );
+}
+
+async function loadUncachedTest262DashboardData(): Promise<Test262DashboardData> {
+  if (!hasBlobReadCredentials()) {
+    return fallbackDashboard(
+      "needs-build-token",
+      "No Vercel Blob credentials are available for request-time test262 data.",
+    );
+  }
+
   try {
-    return await readFile(TEST262_LATEST_PATH, "utf8");
-  } catch {
-    return null;
+    const timeline = await listTest262BlobDailyRuns();
+    const latestRun = timeline[timeline.length - 1] ?? null;
+    const latestReport = latestRun
+      ? normalizeTest262Report(
+          JSON.parse((await readTest262BlobReportJson(latestRun)) ?? "null"),
+        )
+      : null;
+    return createTest262DashboardData({
+      generatedAt: new Date().toISOString(),
+      timeline,
+      latestReport,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return fallbackDashboard(
+      "error",
+      `Failed to read test262 reports from Vercel Blob: ${message}`,
+    );
   }
 }
 
-export async function loadTest262DashboardData(): Promise<Test262DashboardData> {
-  const data = await readJsonFile<Test262DashboardData>(TEST262_DASHBOARD_PATH);
-  if (!isDashboardData(data)) {
-    return fallbackDashboard(
-      "empty",
-      "No build-time test262 snapshot is available yet.",
-    );
-  }
-  return data;
-}
+export const loadTest262DashboardData = unstable_cache(
+  loadUncachedTest262DashboardData,
+  ["test262-dashboard"],
+  {
+    revalidate: TEST262_DASHBOARD_CACHE_SECONDS,
+    tags: ["test262-dashboard"],
+  },
+);
 
 export function createTest262DashboardData({
   generatedAt,
@@ -384,7 +386,7 @@ export function createTest262DashboardData({
   if (timeline.length === 0 || !latestReport) {
     return fallbackDashboard(
       "empty",
-      "No test262 result reports were found during the website build.",
+      "No test262 result reports were found in Vercel Blob.",
     );
   }
 
@@ -414,13 +416,4 @@ export function createTest262DashboardFallback(
 
 export function test262ReportFileName(): string {
   return TEST262_REPORT_NAME;
-}
-
-export function test262DataPaths() {
-  return {
-    dataDir: TEST262_DATA_DIR,
-    dashboardPath: TEST262_DASHBOARD_PATH,
-    latestPath: TEST262_LATEST_PATH,
-    reportsDir: TEST262_REPORTS_DIR,
-  };
 }

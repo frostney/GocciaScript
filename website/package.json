@@ -7,7 +7,7 @@
     "publish-test262": "bun scripts/publish-test262-results.ts",
     "backfill-test262": "bun scripts/backfill-test262-dashboard.ts",
     "predev": "node scripts/sync-docs.mjs",
-    "prebuild": "node scripts/sync-docs.mjs && bun scripts/sync-test262-results.ts && bun scripts/fetch-binaries.ts",
+    "prebuild": "node scripts/sync-docs.mjs && bun scripts/fetch-binaries.ts",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",

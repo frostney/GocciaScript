@@ -744,7 +744,7 @@ function EmptyState({ data }: { data: Test262DashboardData }) {
           <p>Generated from main-branch test262 reports published by CI.</p>
         </div>
         <div className="compat-empty">
-          <strong>Build snapshot unavailable.</strong>
+          <strong>test262 data unavailable.</strong>
           <p>{data.message ?? "No test262 data is available right now."}</p>
           <a href={data.source.workflowUrl}>Open CI workflow</a>
         </div>

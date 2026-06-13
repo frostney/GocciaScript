@@ -1,4 +1,9 @@
-import { readLatestTest262ReportJson } from "@/lib/test262-dashboard";
+import {
+  readLatestTest262ReportJson,
+  TEST262_DASHBOARD_CACHE_CONTROL,
+} from "@/lib/test262-dashboard";
+
+export const dynamic = "force-dynamic";
 
 export async function GET() {
   const json = await readLatestTest262ReportJson();
@@ -6,7 +11,7 @@ export async function GET() {
     return Response.json(
       {
         error:
-          "Latest test262 report unavailable. No build-time test262 snapshot was generated.",
+          "Latest test262 report unavailable. No Vercel Blob report is available.",
       },
       { status: 503 },
     );
@@ -15,7 +20,7 @@ export async function GET() {
   return new Response(json, {
     headers: {
       "content-type": "application/json; charset=utf-8",
-      "cache-control": "public, max-age=0, s-maxage=900",
+      "cache-control": TEST262_DASHBOARD_CACHE_CONTROL,
     },
   });
 }

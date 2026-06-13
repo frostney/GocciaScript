@@ -1,7 +1,9 @@
 import {
-  loadTest262DashboardData,
   readTest262ReportJsonByArtifactId,
+  TEST262_DASHBOARD_CACHE_CONTROL,
 } from "@/lib/test262-dashboard";
+
+export const dynamic = "force-dynamic";
 
 export async function GET(
   _request: Request,
@@ -21,25 +23,16 @@ export async function GET(
     return new Response(json, {
       headers: {
         "content-type": "application/json; charset=utf-8",
-        "cache-control": "public, max-age=0, s-maxage=900",
+        "cache-control": TEST262_DASHBOARD_CACHE_CONTROL,
         "x-goccia-test262-report": artifactId,
       },
     });
   }
 
-  const data = await loadTest262DashboardData();
-  const point = data.timeline.find(
-    (entry) => entry.artifactId === artifactIdNumber,
-  );
-  const blobUrl = point?.reportDownloadUrl || point?.reportUrl;
-  if (blobUrl) {
-    return Response.redirect(blobUrl, 302);
-  }
-
   return Response.json(
     {
       error:
-        "test262 report unavailable. No build-time test262 snapshot exists for this report.",
+        "test262 report unavailable. No Vercel Blob report exists for this artifact.",
     },
     { status: 503 },
   );
