@@ -124,6 +124,14 @@ describe.runIf(hasJSON5)("JSON5.stringify", () => {
       }),
     ).toBe("{a:2,b:2}");
     expect(
+      JSON5.stringify({ a: 1, b: 2 }, (key, value) =>
+        key === "a" ? function noop() {} : value),
+    ).toBe("{b:2}");
+    expect(
+      JSON5.stringify([1, 2], (key, value) =>
+        key === "0" ? Symbol("a") : value),
+    ).toBe("[null,2]");
+    expect(
       JSON5.stringify(
         { a: 1 },
         (key, value) => {
@@ -165,8 +173,10 @@ describe.runIf(hasJSON5)("JSON5.stringify", () => {
     expect(JSON5.stringify(() => {})).toBeUndefined();
     expect(JSON5.stringify(new String("abc"))).toBe("'abc'");
     expect(JSON5.stringify(new Boolean(true))).toBe("true");
+    expect(JSON5.stringify({ toJSON5() { return undefined; } })).toBeUndefined();
     expect(JSON5.stringify({ keep: 1, fn() {} })).toBe("{keep:1}");
     expect(JSON5.stringify([() => {}])).toBe("[null]");
+    expect(JSON5.stringify(new Array(2))).toBe("[null,null]");
     expect(JSON5.stringify({ keep: 1, missing: undefined })).toBe("{keep:1}");
     expect(JSON5.stringify({ ["a" + nbsp + "b"]: 1 })).toBe(`{'a${nbsp}b':1}`);
   });
@@ -177,6 +187,18 @@ describe.runIf(hasJSON5)("JSON5.stringify", () => {
 
     expect(JSON5.stringify({ a: boxed })).toBe("{a:4}");
     expect(JSON5.stringify(boxed)).toBe("4");
+  });
+
+  test("root boxed Number calls valueOf once", () => {
+    let calls = 0;
+    const boxed = new Number(1);
+    boxed.valueOf = () => {
+      calls += 1;
+      return 4;
+    };
+
+    expect(JSON5.stringify(boxed)).toBe("4");
+    expect(calls).toBe(1);
   });
 
   test("uses an overridden valueOf on boxed Number values with a replacer function", () => {
@@ -209,6 +231,13 @@ describe.runIf(hasJSON5)("JSON5.stringify", () => {
     boxed.toString = () => "true";
 
     expect(JSON5.stringify([boxed])).toBe("[false]");
+  });
+
+  test("throws on BigInt and boxed BigInt values", () => {
+    expect(() => JSON5.stringify(1n)).toThrow(TypeError);
+    expect(() => JSON5.stringify(Object(1n))).toThrow(TypeError);
+    expect(() => JSON5.stringify({ a: Object(1n) })).toThrow(TypeError);
+    expect(() => JSON5.stringify([Object(1n)])).toThrow(TypeError);
   });
 
   test("propagates valueOf exceptions from boxed Number values", () => {
@@ -427,5 +456,27 @@ describe.runIf(hasJSON5)("JSON5.stringify", () => {
     };
     expect(JSON5.stringify(value, ["key", "key"])).toBe("{key:true}");
     expect(getCalls).toBe(1);
+  });
+
+  test("array replacer reads elements through property access", () => {
+    const replacer = new Array(1);
+    Object.defineProperty(replacer, "0", {
+      get() {
+        return "a";
+      },
+    });
+
+    expect(JSON5.stringify({ a: 1, b: 2 }, replacer)).toBe("{a:1}");
+  });
+
+  test("arrays read elements through property access", () => {
+    const arr = new Array(1);
+    Object.defineProperty(arr, "0", {
+      get() {
+        return 7;
+      },
+    });
+
+    expect(JSON5.stringify(arr)).toBe("[7]");
   });
 });

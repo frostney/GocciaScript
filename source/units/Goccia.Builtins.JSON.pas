@@ -66,6 +66,7 @@ uses
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.StringObjectValue,
   Goccia.Values.SymbolValue,
+  Goccia.Values.ToObject,
   Goccia.Values.WrapperPrimitives,
   Goccia.VM.Exception;
 
@@ -405,6 +406,7 @@ var
   NewArr: TGocciaArrayValue;
   Key: string;
   I: Integer;
+  Len: Integer;
 begin
   // Step 1: Apply a toJSON hook before the replacer sees the value.
   Replaced := ApplyToJSON(AValue, AKey);
@@ -429,6 +431,12 @@ begin
   // Steps 4.b-4.d: unwrap boxed primitives.
   Replaced := CoerceWrappedPrimitive(Replaced);
 
+  if Replaced.IsCallable or (Replaced is TGocciaSymbolValue) then
+  begin
+    Result := Replaced;
+    Exit;
+  end;
+
   // Step 4: If result is an Array, recursively serialize each element (SerializeJSONArray).
   if Replaced is TGocciaArrayValue then
   begin
@@ -439,9 +447,10 @@ begin
     Arr := TGocciaArrayValue(Replaced);
     NewArr := TGocciaArrayValue.Create;
     try
-      for I := 0 to Arr.Elements.Count - 1 do
+      Len := LengthOfArrayLike(Arr);
+      for I := 0 to Len - 1 do
       begin
-        PropValue := Arr.Elements[I];
+        PropValue := Arr.GetProperty(IntToStr(I));
         TransformedProp := TransformWithReplacer(Arr, IntToStr(I), PropValue, AReplacer);
         NewArr.Elements.Add(TransformedProp);
       end;
@@ -464,8 +473,10 @@ begin
       begin
         PropValue := Obj.GetProperty(Key);
         TransformedProp := TransformWithReplacer(Obj, Key, PropValue, AReplacer);
-        // Omit properties whose replacer result is undefined.
-        if not (TransformedProp is TGocciaUndefinedLiteralValue) then
+        // Omit properties whose replacer result cannot appear in JSON objects.
+        if not ((TransformedProp is TGocciaUndefinedLiteralValue) or
+          TransformedProp.IsCallable or
+          (TransformedProp is TGocciaSymbolValue)) then
           NewObj.AssignProperty(Key, TransformedProp);
       end;
     finally
@@ -511,19 +522,21 @@ var
   HasItem: Boolean;
   I: Integer;
   Item: string;
+  Len: Integer;
   PropertyList: TStringList;
   Seen: TDictionary<string, Boolean>;
 begin
   PropertyList := TStringList.Create;
   Seen := TDictionary<string, Boolean>.Create;
   try
-    for I := 0 to AAllowList.Elements.Count - 1 do
+    Len := LengthOfArrayLike(AAllowList);
+    for I := 0 to Len - 1 do
     begin
       // Step 5.b.ii: item stays undefined unless the element is a String or
       // Number primitive, or a String/Number wrapper object — converted via
       // ? ToString(v), which may invoke a user-defined toString. Booleans,
       // null, undefined, and plain objects are skipped.
-      Element := AAllowList.Elements[I];
+      Element := AAllowList.GetProperty(IntToStr(I));
       Item := '';
       HasItem := (Element is TGocciaStringLiteralValue) or
         (Element is TGocciaNumberLiteralValue) or
@@ -551,18 +564,12 @@ function TGocciaJSONBuiltin.JSONStringify(const AArgs: TGocciaArgumentsCollectio
 var
   Value, ReplacerArg, SpaceArg: TGocciaValue;
   Gap: string;
+  Stringified: string;
 begin
   TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'JSON.stringify', ThrowError);
 
   // Step 1: Let state be { ReplacerFunction: undefined, PropertyList: undefined, Indent: "", Gap: "" }.
   Value := AArgs.GetElement(0);
-
-  // Undefined values produce undefined (not "undefined").
-  if Value is TGocciaUndefinedLiteralValue then
-  begin
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-    Exit;
-  end;
 
   Gap := '';
   try
@@ -581,19 +588,31 @@ begin
       // Step 2: If replacer is callable, set state.ReplacerFunction.
       if ReplacerArg.IsCallable then
       begin
-        Result := TGocciaStringLiteralValue.Create(StringifyWithReplacer(Value, ReplacerArg, Gap));
+        Stringified := StringifyWithReplacer(Value, ReplacerArg, Gap);
+        if Stringified = '' then
+          Result := TGocciaUndefinedLiteralValue.UndefinedValue
+        else
+          Result := TGocciaStringLiteralValue.Create(Stringified);
         Exit;
       end
       // Steps 4-5: If replacer is an Array, build state.PropertyList.
       else if ReplacerArg is TGocciaArrayValue then
       begin
-        Result := TGocciaStringLiteralValue.Create(StringifyWithAllowList(Value, TGocciaArrayValue(ReplacerArg), Gap));
+        Stringified := StringifyWithAllowList(Value, TGocciaArrayValue(ReplacerArg), Gap);
+        if Stringified = '' then
+          Result := TGocciaUndefinedLiteralValue.UndefinedValue
+        else
+          Result := TGocciaStringLiteralValue.Create(Stringified);
         Exit;
       end;
     end;
 
     // Step 10-12: Create wrapper, set wrapper[""] = value, return SerializeJSONProperty(state, "", wrapper).
-    Result := TGocciaStringLiteralValue.Create(FStringifier.Stringify(Value, Gap));
+    Stringified := FStringifier.Stringify(Value, Gap);
+    if Stringified = '' then
+      Result := TGocciaUndefinedLiteralValue.UndefinedValue
+    else
+      Result := TGocciaStringLiteralValue.Create(Stringified);
   except
     on E: TGocciaThrowValue do
       raise;
