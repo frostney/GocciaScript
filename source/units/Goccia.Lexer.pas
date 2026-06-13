@@ -22,6 +22,17 @@ type
     glgInputElementHashbangOrRegExp
   );
 
+  TGocciaLexerCheckpoint = record
+    Current: Integer;
+    Line: Integer;
+    Column: Integer;
+    Start: Integer;
+    StartColumn: Integer;
+    TokenCount: Integer;
+    HashbangSkipped: Boolean;
+    EOFEmitted: Boolean;
+  end;
+
   TGocciaLexer = class
   private
     FSource: string;
@@ -83,6 +94,8 @@ type
   public
     constructor Create(const ASource, AFileName: string);
     destructor Destroy; override;
+    function CreateCheckpoint: TGocciaLexerCheckpoint;
+    procedure RestoreCheckpoint(const ACheckpoint: TGocciaLexerCheckpoint);
     function ScanNextToken(const ALexicalGoal: TGocciaLexicalGoal): TGocciaToken;
     property ScanTimeNanoseconds: Int64 read FScanTimeNanoseconds;
     property Tokens: TObjectList<TGocciaToken> read FTokens;
@@ -257,6 +270,33 @@ begin
   FTokens.Free;
   FSourceLines.Free;
   inherited;
+end;
+
+function TGocciaLexer.CreateCheckpoint: TGocciaLexerCheckpoint;
+begin
+  Result.Current := FCurrent;
+  Result.Line := FLine;
+  Result.Column := FColumn;
+  Result.Start := FStart;
+  Result.StartColumn := FStartColumn;
+  Result.TokenCount := FTokens.Count;
+  Result.HashbangSkipped := FHashbangSkipped;
+  Result.EOFEmitted := FEOFEmitted;
+end;
+
+procedure TGocciaLexer.RestoreCheckpoint(
+  const ACheckpoint: TGocciaLexerCheckpoint);
+begin
+  FCurrent := ACheckpoint.Current;
+  FLine := ACheckpoint.Line;
+  FColumn := ACheckpoint.Column;
+  FStart := ACheckpoint.Start;
+  FStartColumn := ACheckpoint.StartColumn;
+  FHashbangSkipped := ACheckpoint.HashbangSkipped;
+  FEOFEmitted := ACheckpoint.EOFEmitted;
+
+  while FTokens.Count > ACheckpoint.TokenCount do
+    FTokens.Delete(FTokens.Count - 1);
 end;
 
 function TGocciaLexer.GetSourceLines: TStringList;

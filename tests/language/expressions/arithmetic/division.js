@@ -22,6 +22,18 @@ describe("division basics", () => {
     expect(obj.if / 2).toBe(4);
     expect(obj?.while / 2).toBe(5);
   });
+
+  test("parenthesized expressions remain division left operands after arrow lookahead", () => {
+    let x = 0;
+
+    expect((x = 1) / x).toBe(1);
+    x = 0;
+    expect(x / (x = 1)).toBe(0);
+    x = 0;
+    expect(((x = 1) / x)).toBe(1);
+    x = 0;
+    expect("value: " + ((x = 1) / x)).toBe("value: 1");
+  });
 });
 
 describe("division by zero", () => {

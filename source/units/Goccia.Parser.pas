@@ -143,11 +143,15 @@ type
     function ConsumeModuleExportName(const AMessage, ASuggestion: string): TGocciaToken; overload;
     function IsReservedKeywordName(const AName: string): Boolean;
     function CheckUnescapedIdentifierKeyword(const AKeyword: string): Boolean;
+    function CheckUnescapedIdentifierKeywordWithLexicalGoal(
+      const AKeyword: string;
+      const ALexicalGoal: TGocciaLexicalGoal): Boolean;
     function CheckEscapedIdentifierKeyword(const AKeyword: string): Boolean;
     function EffectiveNonStrictModeEnabled: Boolean;
     function IsLexicalDeclarationStart: Boolean;
     function StatementIsDirective(const AStatement: TGocciaStatement;
       out AIsUseStrict: Boolean): Boolean;
+    function IsAwaitUsingDeclarationStart: Boolean;
     procedure ValidateIdentifierReference(const AToken: TGocciaToken);
     procedure ValidateIdentifierBinding(const AToken: TGocciaToken);
     function ConsumeIdentifierBinding(const AMessage: string): TGocciaToken; overload;
@@ -158,7 +162,11 @@ type
     function ConvertNumberLiteral(const ALexeme: string): Double;
     function ConvertBigIntLiteral(const ALexeme: string): TGocciaValue;
     function CheckContextualKeyword(const AKeyword: string): Boolean;
+    function CheckContextualKeywordWithLexicalGoal(const AKeyword: string;
+      const ALexicalGoal: TGocciaLexicalGoal): Boolean;
     function MatchContextualKeyword(const AKeyword: string): Boolean;
+    function MatchContextualKeywordWithLexicalGoal(const AKeyword: string;
+      const ALexicalGoal: TGocciaLexicalGoal): Boolean;
     function DefaultLexicalGoal: TGocciaLexicalGoal; inline;
 
     // Expression parsing (private)
@@ -1038,15 +1046,31 @@ end;
 function TGocciaParser.CheckUnescapedIdentifierKeyword(
   const AKeyword: string): Boolean;
 begin
-  Result := Check(gttIdentifier) and (Peek.Lexeme = AKeyword) and
-            not Peek.ContainsEscape;
+  Result := CheckUnescapedIdentifierKeywordWithLexicalGoal(
+    AKeyword, DefaultLexicalGoal);
+end;
+
+function TGocciaParser.CheckUnescapedIdentifierKeywordWithLexicalGoal(
+  const AKeyword: string;
+  const ALexicalGoal: TGocciaLexicalGoal): Boolean;
+var
+  Token: TGocciaToken;
+begin
+  EnsureToken(FCurrent, ALexicalGoal);
+  Token := FTokens[FCurrent];
+  Result := (Token.TokenType = gttIdentifier) and
+    (Token.Lexeme = AKeyword) and not Token.ContainsEscape;
 end;
 
 function TGocciaParser.CheckEscapedIdentifierKeyword(
   const AKeyword: string): Boolean;
+var
+  Token: TGocciaToken;
 begin
-  Result := Check(gttIdentifier) and (Peek.Lexeme = AKeyword) and
-            Peek.ContainsEscape;
+  EnsureToken(FCurrent, DefaultLexicalGoal);
+  Token := FTokens[FCurrent];
+  Result := (Token.TokenType = gttIdentifier) and
+    (Token.Lexeme = AKeyword) and Token.ContainsEscape;
 end;
 
 function TGocciaParser.EffectiveNonStrictModeEnabled: Boolean;
@@ -1107,6 +1131,29 @@ begin
   SourceText := TGocciaLiteralExpression(Expression).SourceText;
   AIsUseStrict := (SourceText = #34 + USE_STRICT_DIRECTIVE + #34) or
     (SourceText = #39 + USE_STRICT_DIRECTIVE + #39);
+end;
+
+function TGocciaParser.IsAwaitUsingDeclarationStart: Boolean;
+var
+  AwaitToken, UsingToken, BindingToken: TGocciaToken;
+begin
+  if not CheckUnescapedIdentifierKeyword(KEYWORD_AWAIT) then
+    Exit(False);
+
+  EnsureToken(FCurrent + 2, glgInputElementRegExp);
+  if FCurrent + 2 >= FTokens.Count then
+    Exit(False);
+
+  AwaitToken := FTokens[FCurrent];
+  UsingToken := FTokens[FCurrent + 1];
+  BindingToken := FTokens[FCurrent + 2];
+
+  Result := (UsingToken.TokenType = gttIdentifier) and
+    (UsingToken.Lexeme = KEYWORD_USING) and
+    not UsingToken.ContainsEscape and
+    (BindingToken.TokenType = gttIdentifier) and
+    (AwaitToken.Line = UsingToken.Line) and
+    (UsingToken.Line = BindingToken.Line);
 end;
 
 procedure TGocciaParser.ValidateIdentifierReference(const AToken: TGocciaToken);
@@ -1200,14 +1247,31 @@ end;
 
 function TGocciaParser.CheckContextualKeyword(const AKeyword: string): Boolean;
 begin
-  Result := CheckUnescapedIdentifierKeyword(AKeyword);
+  Result := CheckContextualKeywordWithLexicalGoal(AKeyword,
+    DefaultLexicalGoal);
+end;
+
+function TGocciaParser.CheckContextualKeywordWithLexicalGoal(
+  const AKeyword: string;
+  const ALexicalGoal: TGocciaLexicalGoal): Boolean;
+begin
+  Result := CheckUnescapedIdentifierKeywordWithLexicalGoal(AKeyword,
+    ALexicalGoal);
   if (not Result) and (AKeyword = KEYWORD_AS) then
-    Result := Check(gttAs);
+    Result := CheckWithLexicalGoal(gttAs, ALexicalGoal);
 end;
 
 function TGocciaParser.MatchContextualKeyword(const AKeyword: string): Boolean;
 begin
-  Result := CheckContextualKeyword(AKeyword);
+  Result := MatchContextualKeywordWithLexicalGoal(AKeyword,
+    DefaultLexicalGoal);
+end;
+
+function TGocciaParser.MatchContextualKeywordWithLexicalGoal(
+  const AKeyword: string;
+  const ALexicalGoal: TGocciaLexicalGoal): Boolean;
+begin
+  Result := CheckContextualKeywordWithLexicalGoal(AKeyword, ALexicalGoal);
   if Result then
     Advance;
 end;
@@ -1298,7 +1362,8 @@ var
 
   procedure ParseIsExpressions;
   begin
-    while MatchContextualKeyword(KEYWORD_IS) do
+    while MatchContextualKeywordWithLexicalGoal(KEYWORD_IS,
+      glgInputElementDiv) do
     begin
       Op := Previous;
       Pattern := ParseMatchPattern;
@@ -2443,40 +2508,73 @@ begin
 end;
 
 function TGocciaParser.IsMatchExpressionAhead: Boolean;
-var
-  ScanIndex, Depth: Integer;
-begin
-  Result := False;
-  if not (CheckContextualKeyword(KEYWORD_MATCH) and CheckNext(gttLeftParen)) then
-    Exit;
-
-  ScanIndex := FCurrent + 1;
-  Depth := 0;
-  EnsureToken(ScanIndex, glgInputElementRegExp);
-  while ScanIndex < FTokens.Count do
+  function TryScanWithGoal(const ALexicalGoal: TGocciaLexicalGoal;
+    out ALexError: Boolean): Boolean;
+  var
+    SavedCurrent: Integer;
+    SavedLexer: TGocciaLexerCheckpoint;
+    ScanIndex, Depth: Integer;
   begin
-    case FTokens[ScanIndex].TokenType of
-      gttLeftParen:
-        Inc(Depth);
-      gttRightParen:
+    Result := False;
+    ALexError := False;
+    SavedCurrent := FCurrent;
+    if Assigned(FLexer) then
+      SavedLexer := FLexer.CreateCheckpoint;
+
+    try
+      try
+        if not (CheckContextualKeywordWithLexicalGoal(KEYWORD_MATCH,
+          ALexicalGoal) and
+          CheckNextWithLexicalGoal(gttLeftParen, ALexicalGoal)) then
+          Exit;
+
+        ScanIndex := FCurrent + 1;
+        Depth := 0;
+        EnsureToken(ScanIndex, ALexicalGoal);
+        while ScanIndex < FTokens.Count do
         begin
-          Dec(Depth);
-          if Depth = 0 then
-          begin
-            EnsureToken(ScanIndex + 1, glgInputElementRegExp);
-            Result := (ScanIndex + 1 < FTokens.Count) and
-              (FTokens[ScanIndex + 1].TokenType = gttLeftBrace);
-            Exit;
+          case FTokens[ScanIndex].TokenType of
+            gttLeftParen:
+              Inc(Depth);
+            gttRightParen:
+              begin
+                Dec(Depth);
+                if Depth = 0 then
+                begin
+                  EnsureToken(ScanIndex + 1, ALexicalGoal);
+                  Result := (ScanIndex + 1 < FTokens.Count) and
+                    (FTokens[ScanIndex + 1].TokenType = gttLeftBrace);
+                  Exit;
+                end;
+                if Depth < 0 then
+                  Exit;
+              end;
+            gttEOF:
+              Exit;
           end;
-          if Depth < 0 then
-            Exit;
+          Inc(ScanIndex);
+          EnsureToken(ScanIndex, ALexicalGoal);
         end;
-      gttEOF:
-        Exit;
+      except
+        on E: TGocciaLexerError do
+        begin
+          ALexError := True;
+          Result := False;
+        end;
+      end;
+    finally
+      FCurrent := SavedCurrent;
+      if Assigned(FLexer) then
+        FLexer.RestoreCheckpoint(SavedLexer);
     end;
-    Inc(ScanIndex);
-    EnsureToken(ScanIndex, glgInputElementRegExp);
   end;
+
+var
+  LexError: Boolean;
+begin
+  Result := TryScanWithGoal(glgInputElementRegExp, LexError);
+  if (not Result) and LexError then
+    Result := TryScanWithGoal(glgInputElementDiv, LexError);
 end;
 
 function TGocciaParser.ParseMatchPattern: TGocciaMatchPattern;
@@ -3635,34 +3733,37 @@ begin
   Left := Conditional;
 
   // Single-parameter unparenthesized arrow: ident [no LineTerminator here] => body
-  if (Left is TGocciaIdentifierExpression) and Check(gttArrow)
-    and (Previous.Line = Peek.Line) then
+  if Left is TGocciaIdentifierExpression then
   begin
-    Line := TGocciaIdentifierExpression(Left).Line;
-    Column := TGocciaIdentifierExpression(Left).Column;
-    SetLength(Parameters, 1);
-    Parameters[0].Name := TGocciaIdentifierExpression(Left).Name;
-    Parameters[0].IsPattern := False;
-    Parameters[0].IsRest := False;
-    Parameters[0].IsOptional := False;
-    Advance; // consume =>
-    Inc(FFunctionDepth);
-    EnterFunctionLabelScope(SavedActiveLabels, SavedActiveIterationLabels,
-      SavedDirectLabelStart);
-    try
-      if Match(gttLeftBrace) then
-        ArrowBody := BlockStatement
-      else
-        ArrowBody := Assignment;
-    finally
-      LeaveFunctionLabelScope(SavedActiveLabels, SavedActiveIterationLabels,
+    if CheckWithLexicalGoal(gttArrow, glgInputElementDiv) and
+       (Previous.Line = FTokens[FCurrent].Line) then
+    begin
+      Line := TGocciaIdentifierExpression(Left).Line;
+      Column := TGocciaIdentifierExpression(Left).Column;
+      SetLength(Parameters, 1);
+      Parameters[0].Name := TGocciaIdentifierExpression(Left).Name;
+      Parameters[0].IsPattern := False;
+      Parameters[0].IsRest := False;
+      Parameters[0].IsOptional := False;
+      Advance; // consume =>
+      Inc(FFunctionDepth);
+      EnterFunctionLabelScope(SavedActiveLabels, SavedActiveIterationLabels,
         SavedDirectLabelStart);
-      Dec(FFunctionDepth);
+      try
+        if Match(gttLeftBrace) then
+          ArrowBody := BlockStatement
+        else
+          ArrowBody := Assignment;
+      finally
+        LeaveFunctionLabelScope(SavedActiveLabels, SavedActiveIterationLabels,
+          SavedDirectLabelStart);
+        Dec(FFunctionDepth);
+      end;
+      ArrowFn := TGocciaArrowFunctionExpression.Create(Parameters, ArrowBody, Line, Column);
+      ArrowFn.SourceText := ExtractSourceRange(Line, Column);
+      Result := ArrowFn;
+      Exit;
     end;
-    ArrowFn := TGocciaArrowFunctionExpression.Create(Parameters, ArrowBody, Line, Column);
-    ArrowFn.SourceText := ExtractSourceRange(Line, Column);
-    Result := ArrowFn;
-    Exit;
   end;
 
   if PeekWithLexicalGoal(glgInputElementDiv).TokenType in [gttAssign, gttPlusAssign, gttMinusAssign,
@@ -3898,28 +3999,17 @@ begin
           (Peek.Line = FTokens[FCurrent + 1].Line) then
     Result := UsingStatement
   // TC39 Explicit Resource Management: await using x = expr;
-  // Detect 'await using identifier' regardless of context, then validate.
-  else if CheckUnescapedIdentifierKeyword(KEYWORD_AWAIT) then
+  // Detect only the declaration form here so script labels like `await:`
+  // still reach LabelledStatement parsing.
+  else if IsAwaitUsingDeclarationStart then
   begin
-    EnsureToken(FCurrent + 2, glgInputElementRegExp);
-    if (FCurrent + 2 < FTokens.Count) and
-       (FTokens[FCurrent + 1].TokenType = gttIdentifier) and
-       (FTokens[FCurrent + 1].Lexeme = KEYWORD_USING) and
-       not FTokens[FCurrent + 1].ContainsEscape and
-       (FTokens[FCurrent + 2].TokenType = gttIdentifier) and
-       (Peek.Line = FTokens[FCurrent + 1].Line) and
-       (FTokens[FCurrent + 1].Line = FTokens[FCurrent + 2].Line) then
-    begin
-      // Reject await using in synchronous function bodies
-      if (FInAsyncFunction = 0) and (FFunctionDepth > 0) then
-        raise TGocciaSyntaxError.Create(
-          '''await using'' is only valid in async functions or at the top level',
-          Peek.Line, Peek.Column, FFileName, FSourceLines,
-          'Wrap in an async function or use ''using'' for synchronous disposal');
-      Result := UsingStatement;
-    end
-    else
-      Result := ExpressionStatement;
+    // Reject await using in synchronous function bodies
+    if (FInAsyncFunction = 0) and (FFunctionDepth > 0) then
+      raise TGocciaSyntaxError.Create(
+        '''await using'' is only valid in async functions or at the top level',
+        Peek.Line, Peek.Column, FFileName, FSourceLines,
+        'Wrap in an async function or use ''using'' for synchronous disposal');
+    Result := UsingStatement;
   end
   else if Check(gttIdentifier) and CheckNextWithLexicalGoal(gttColon, glgInputElementDiv) then
   begin
@@ -4897,37 +4987,68 @@ end;
 // to warn-and-skip rather than getting (mis)parsed by ParseTraditionalForBody.
 // Pure peek, doesn't advance.
 function TGocciaParser.LooksLikeTraditionalForHeader: Boolean;
-var
-  Idx, Depth: Integer;
-  Tok: TGocciaToken;
-begin
-  Idx := FCurrent;
-  EnsureToken(Idx, glgInputElementRegExp);
-  if (Idx >= FTokens.Count) or (FTokens[Idx].TokenType <> gttLeftParen) then
-    Exit(False);
-  Inc(Idx); // step past '('
-  Depth := 1;
-  EnsureToken(Idx, glgInputElementRegExp);
-  while (Idx < FTokens.Count) and (Depth > 0) do
+  function TryScanWithGoal(const ALexicalGoal: TGocciaLexicalGoal;
+    out ALexError: Boolean): Boolean;
+  var
+    SavedCurrent: Integer;
+    SavedLexer: TGocciaLexerCheckpoint;
+    Idx, Depth: Integer;
+    Tok: TGocciaToken;
   begin
-    Tok := FTokens[Idx];
-    case Tok.TokenType of
-      gttLeftParen, gttLeftBracket, gttLeftBrace:
-        Inc(Depth);
-      gttRightParen, gttRightBracket, gttRightBrace:
-      begin
-        Dec(Depth);
-        if Depth = 0 then
-          Break;
+    Result := False;
+    ALexError := False;
+    SavedCurrent := FCurrent;
+    if Assigned(FLexer) then
+      SavedLexer := FLexer.CreateCheckpoint;
+
+    try
+      try
+        Idx := FCurrent;
+        EnsureToken(Idx, ALexicalGoal);
+        if (Idx >= FTokens.Count) or (FTokens[Idx].TokenType <> gttLeftParen) then
+          Exit;
+        Inc(Idx); // step past '('
+        Depth := 1;
+        EnsureToken(Idx, ALexicalGoal);
+        while (Idx < FTokens.Count) and (Depth > 0) do
+        begin
+          Tok := FTokens[Idx];
+          case Tok.TokenType of
+            gttLeftParen, gttLeftBracket, gttLeftBrace:
+              Inc(Depth);
+            gttRightParen, gttRightBracket, gttRightBrace:
+            begin
+              Dec(Depth);
+              if Depth = 0 then
+                Break;
+            end;
+            gttSemicolon:
+              if Depth = 1 then
+                Exit(True);
+          end;
+          Inc(Idx);
+          EnsureToken(Idx, ALexicalGoal);
+        end;
+      except
+        on E: TGocciaLexerError do
+        begin
+          ALexError := True;
+          Result := False;
+        end;
       end;
-      gttSemicolon:
-        if Depth = 1 then
-          Exit(True);
+    finally
+      FCurrent := SavedCurrent;
+      if Assigned(FLexer) then
+        FLexer.RestoreCheckpoint(SavedLexer);
     end;
-    Inc(Idx);
-    EnsureToken(Idx, glgInputElementRegExp);
   end;
-  Result := False;
+
+var
+  LexError: Boolean;
+begin
+  Result := TryScanWithGoal(glgInputElementRegExp, LexError);
+  if (not Result) and LexError then
+    Result := TryScanWithGoal(glgInputElementDiv, LexError);
 end;
 
 function TGocciaParser.ParseTraditionalForBody(
@@ -6867,10 +6988,14 @@ end;
 function TGocciaParser.IsArrowFunction: Boolean;
 var
   SavedCurrent: Integer;
+  SavedLexer: TGocciaLexerCheckpoint;
   ParenCount: Integer;
+  CurrentType: TGocciaTokenType;
 begin
   // Save current position for rollback
   SavedCurrent := FCurrent;
+  if Assigned(FLexer) then
+    SavedLexer := FLexer.CreateCheckpoint;
   Result := False;
 
   try
@@ -6881,19 +7006,24 @@ begin
     if Check(gttRightParen) then
     begin
       Advance;
-      if Check(gttColon) then
+      if CheckWithLexicalGoal(gttColon, glgInputElementDiv) then
       begin
         Advance;
         CollectTypeAnnotation([gttArrow]);
       end;
-      Result := Check(gttArrow);
+      Result := CheckWithLexicalGoal(gttArrow, glgInputElementDiv);
       Exit;
     end;
 
-    // Look for parameter list patterns
-    while not IsAtEnd and (ParenCount > 0) do
+    // Look for parameter list patterns. Check the depth before peeking so a
+    // failed arrow probe does not lex the following expression token.
+    while ParenCount > 0 do
     begin
-      case Peek.TokenType of
+      CurrentType := PeekWithLexicalGoal(glgInputElementDiv).TokenType;
+      if CurrentType = gttEOF then
+        Break;
+
+      case CurrentType of
         gttLeftParen:
           begin
             Inc(ParenCount);
@@ -6958,15 +7088,17 @@ begin
       end;
     end;
 
-    if Check(gttColon) then
+    if CheckWithLexicalGoal(gttColon, glgInputElementDiv) then
     begin
       Advance;
       CollectTypeAnnotation([gttArrow]);
     end;
 
-    Result := Check(gttArrow);
+    Result := CheckWithLexicalGoal(gttArrow, glgInputElementDiv);
   finally
     FCurrent := SavedCurrent;
+    if Assigned(FLexer) then
+      FLexer.RestoreCheckpoint(SavedLexer);
   end;
 end;
 
