@@ -17,6 +17,8 @@ GocciaScript has two execution modes: interpreter mode (tree-walk over the AST) 
 
 The source pipeline public API is `TGocciaSourcePipeline` in `Goccia.SourcePipeline`. `Parse` accepts source text plus `TGocciaSourcePipelineOptions` (preprocessors, compatibility flag set, and source type) and returns an owning `TGocciaSourcePipelineResult` containing the AST, generated-source lines, source map, timings, and warnings as data. Narrow source-pipeline entry points cover module source, dynamic `Function` validation/wrapper parsing, and expression fragments so hosts do not construct or configure `TGocciaParser` directly. Embedders that want to run source should continue using `TGocciaEngine.Execute` or the `RunScript*` helpers; direct source-pipeline use is for hosts that need parse artifacts, such as bytecode compilation paths.
 
+The parser owns ECMAScript lexical-goal choices during source-pipeline parsing. `TGocciaLexer.ScanNextToken` scans one token at a time with a parser-supplied "can start RegExp literal" flag, so expression-continuation positions request the division lexical goal before `/` is classified. This follows the ES2026 lexical grammar split between `InputElementDiv` and `InputElementRegExp` and keeps ambiguous slash handling in parser context rather than in lexer heuristics. Standalone `TGocciaLexer.ScanTokens` remains available for direct lexer callers and preserves the legacy self-tracking behaviour.
+
 ## Pipelines
 
 ### Interpreter

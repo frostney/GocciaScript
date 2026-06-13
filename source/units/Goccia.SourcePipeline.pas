@@ -462,11 +462,10 @@ class function TGocciaSourcePipeline.Parse(const ASource: TStringList;
 var
   SourceText, OriginalSourceText: string;
   Lexer: TGocciaLexer;
-  Tokens: TObjectList<TGocciaToken>;
   Parser: TGocciaParser;
   ParserWarning: TGocciaParserWarning;
   PreprocessorSourceMap: TGocciaSourceMap;
-  StartTime, LexEnd, ParseEnd: Int64;
+  StartTime, ParseEnd, FrontEndTime: Int64;
   OrigLine, OrigCol, I: Integer;
 begin
   Result := TGocciaSourcePipelineResult.Create;
@@ -493,12 +492,8 @@ begin
     try
       Lexer := TGocciaLexer.Create(SourceText, AFileName);
       try
-        Tokens := Lexer.ScanTokens;
-        LexEnd := GetNanoseconds;
-        Result.FLexTimeNanoseconds := LexEnd - StartTime;
-        Result.FGeneratedSourceLines := CloneStringList(Lexer.SourceLines);
-
-        Parser := TGocciaParser.Create(Tokens, AFileName, Lexer.SourceLines);
+        Parser := TGocciaParser.CreateFromLexer(Lexer, AFileName,
+          Lexer.SourceLines);
         ConfigureParser(Parser, AOptions);
         try
           if Assigned(ADeclaredPrivateNames) then
@@ -510,7 +505,14 @@ begin
             ValidateModuleEarlyErrors(Result.FProgramNode, AFileName,
               Lexer.SourceLines);
           ParseEnd := GetNanoseconds;
-          Result.FParseTimeNanoseconds := ParseEnd - LexEnd;
+          Result.FLexTimeNanoseconds := Lexer.ScanTimeNanoseconds;
+          FrontEndTime := ParseEnd - StartTime;
+          if FrontEndTime > Result.FLexTimeNanoseconds then
+            Result.FParseTimeNanoseconds :=
+              FrontEndTime - Result.FLexTimeNanoseconds
+          else
+            Result.FParseTimeNanoseconds := 0;
+          Result.FGeneratedSourceLines := CloneStringList(Lexer.SourceLines);
 
           for I := 0 to Parser.WarningCount - 1 do
           begin
@@ -591,7 +593,6 @@ var
   Lexer: TGocciaLexer;
   Parser: TGocciaParser;
   SourceLines: TStringList;
-  Tokens: TObjectList<TGocciaToken>;
 begin
   Result := nil;
   if AExpressionText = '' then
@@ -601,10 +602,7 @@ begin
   try
     Lexer := TGocciaLexer.Create(AExpressionText, AFileName);
     try
-      Tokens := Lexer.ScanTokens;
-      if not Assigned(Tokens) then
-        Exit;
-      Parser := TGocciaParser.Create(Tokens, AFileName, SourceLines);
+      Parser := TGocciaParser.CreateFromLexer(Lexer, AFileName, SourceLines);
       ConfigureParser(Parser, AOptions);
       try
         if Assigned(ADeclaredPrivateNames) then
@@ -714,7 +712,7 @@ begin
     try
       Lexer := TGocciaLexer.Create(Source, AFileName);
       try
-        Parser := TGocciaParser.Create(Lexer.ScanTokens, AFileName,
+        Parser := TGocciaParser.CreateFromLexer(Lexer, AFileName,
           Lexer.SourceLines);
         ConfigureParser(Parser, AOptions);
         try

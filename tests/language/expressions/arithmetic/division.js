@@ -10,6 +10,18 @@ describe("division basics", () => {
     expect(-10 / 2).toBe(-5);
     expect(0 / 5).toBe(0);
   });
+
+  test("object and class expression closing braces are division left operands", () => {
+    expect(Number.isNaN(({} / 2))).toBe(true);
+    expect(Number.isNaN((class {} / 2))).toBe(true);
+  });
+
+  test("keyword property names are division left operands after member access", () => {
+    const obj = { if: 8, while: 10 };
+
+    expect(obj.if / 2).toBe(4);
+    expect(obj?.while / 2).toBe(5);
+  });
 });
 
 describe("division by zero", () => {

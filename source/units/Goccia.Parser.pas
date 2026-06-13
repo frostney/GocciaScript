@@ -14,6 +14,7 @@ uses
   Goccia.AST.Expressions,
   Goccia.AST.Node,
   Goccia.AST.Statements,
+  Goccia.Lexer,
   Goccia.Modules,
   Goccia.Token,
   Goccia.Values.Primitives;
@@ -70,6 +71,7 @@ type
       );
   private
     FTokens: TObjectList<TGocciaToken>;
+    FLexer: TGocciaLexer;
     FCurrent: Integer;
     FFileName: string;
     FSourceLines: TStringList;
@@ -105,16 +107,22 @@ type
     function HasVisiblePrivateNameDeclaration(const AName: string): Boolean;
     procedure EnterFunctionLabelScope(out ASavedActiveLabels, ASavedActiveIterationLabels: TStringList; out ASavedDirectLabelStart: Integer);
     procedure LeaveFunctionLabelScope(const ASavedActiveLabels, ASavedActiveIterationLabels: TStringList; const ASavedDirectLabelStart: Integer);
+    procedure EnsureToken(const AIndex: Integer;
+      const ACanStartRegex: Boolean);
 
     function IsAtEnd: Boolean; inline;
     function Peek: TGocciaToken; inline;
+    function PeekAfterExpression: TGocciaToken; inline;
     function Previous: TGocciaToken; inline;
     function Advance: TGocciaToken;
     function Check(const ATokenType: TGocciaTokenType): Boolean; inline;
+    function CheckAfterExpression(const ATokenType: TGocciaTokenType): Boolean; inline;
     function CheckNext(const ATokenType: TGocciaTokenType): Boolean; inline;
+    function CheckNextAfterExpression(const ATokenType: TGocciaTokenType): Boolean; inline;
     function IsAwaitOperandStart: Boolean;
     function Match(const ATokenTypes: array of TGocciaTokenType): Boolean; overload;
     function Match(const ATokenType: TGocciaTokenType): Boolean; overload; inline;
+    function MatchAfterExpression(const ATokenType: TGocciaTokenType): Boolean; inline;
     function Consume(const ATokenType: TGocciaTokenType; const AMessage: string): TGocciaToken; overload;
     function Consume(const ATokenType: TGocciaTokenType; const AMessage, ASuggestion: string): TGocciaToken; overload;
     procedure ConsumeSemicolonOrASI(const AMessage, ASuggestion: string);
@@ -269,6 +277,8 @@ type
   public
     constructor Create(const ATokens: TObjectList<TGocciaToken>;
       const AFileName: string; const ASourceLines: TStringList);
+    constructor CreateFromLexer(const ALexer: TGocciaLexer;
+      const AFileName: string; const ASourceLines: TStringList);
     destructor Destroy; override;
     function Parse: TGocciaProgram;
     function ParseUnchecked: TGocciaProgram;
@@ -297,7 +307,6 @@ uses
   Goccia.Error.Suggestions,
   Goccia.Keywords.Contextual,
   Goccia.Keywords.Reserved,
-  Goccia.Lexer,
   Goccia.Scope.BindingMap,
   Goccia.Values.BigIntValue;
 
@@ -353,6 +362,27 @@ constructor TGocciaParser.Create(const ATokens: TObjectList<TGocciaToken>;
   const AFileName: string; const ASourceLines: TStringList);
 begin
   FTokens := ATokens;
+  FLexer := nil;
+  FFileName := AFileName;
+  FSourceLines := ASourceLines;
+  FCurrent := 0;
+  FWarningCount := 0;
+  FInAsyncFunction := 0;
+  FFunctionDepth := 0;
+  FHasTopLevelAwait := False;
+  FPrivateClassContexts := TObjectList<TGocciaPrivateClassContext>.Create(True);
+  FActiveLabels := TStringList.Create;
+  FActiveLabels.CaseSensitive := True;
+  FActiveIterationLabels := TStringList.Create;
+  FActiveIterationLabels.CaseSensitive := True;
+  FDirectLabelStart := -1;
+end;
+
+constructor TGocciaParser.CreateFromLexer(const ALexer: TGocciaLexer;
+  const AFileName: string; const ASourceLines: TStringList);
+begin
+  FTokens := ALexer.Tokens;
+  FLexer := ALexer;
   FFileName := AFileName;
   FSourceLines := ASourceLines;
   FCurrent := 0;
@@ -624,6 +654,14 @@ begin
   end;
 end;
 
+procedure TGocciaParser.EnsureToken(const AIndex: Integer;
+  const ACanStartRegex: Boolean);
+begin
+  if Assigned(FLexer) then
+    while FTokens.Count <= AIndex do
+      FLexer.ScanNextToken(ACanStartRegex);
+end;
+
 function TGocciaParser.IsAtEnd: Boolean;
 begin
   Result := Peek.TokenType = gttEOF;
@@ -636,6 +674,13 @@ end;
 
 function TGocciaParser.Peek: TGocciaToken;
 begin
+  EnsureToken(FCurrent, True);
+  Result := FTokens[FCurrent];
+end;
+
+function TGocciaParser.PeekAfterExpression: TGocciaToken;
+begin
+  EnsureToken(FCurrent, False);
   Result := FTokens[FCurrent];
 end;
 
@@ -646,6 +691,7 @@ end;
 
 function TGocciaParser.Advance: TGocciaToken;
 begin
+  EnsureToken(FCurrent, True);
   if FTokens[FCurrent].TokenType <> gttEOF then
     Inc(FCurrent);
   Result := Previous;
@@ -655,6 +701,19 @@ function TGocciaParser.Check(const ATokenType: TGocciaTokenType): Boolean;
 var
   CurrentType: TGocciaTokenType;
 begin
+  EnsureToken(FCurrent, True);
+  CurrentType := FTokens[FCurrent].TokenType;
+  if ATokenType = gttEOF then
+    Result := CurrentType = gttEOF
+  else
+    Result := (CurrentType <> gttEOF) and (CurrentType = ATokenType);
+end;
+
+function TGocciaParser.CheckAfterExpression(const ATokenType: TGocciaTokenType): Boolean;
+var
+  CurrentType: TGocciaTokenType;
+begin
+  EnsureToken(FCurrent, False);
   CurrentType := FTokens[FCurrent].TokenType;
   if ATokenType = gttEOF then
     Result := CurrentType = gttEOF
@@ -664,6 +723,16 @@ end;
 
 function TGocciaParser.CheckNext(const ATokenType: TGocciaTokenType): Boolean;
 begin
+  EnsureToken(FCurrent + 1, True);
+  if FCurrent + 1 >= FTokens.Count then
+    Exit(False);
+  Result := FTokens[FCurrent + 1].TokenType = ATokenType;
+end;
+
+function TGocciaParser.CheckNextAfterExpression(
+  const ATokenType: TGocciaTokenType): Boolean;
+begin
+  EnsureToken(FCurrent + 1, False);
   if FCurrent + 1 >= FTokens.Count then
     Exit(False);
   Result := FTokens[FCurrent + 1].TokenType = ATokenType;
@@ -673,6 +742,7 @@ function TGocciaParser.IsAwaitOperandStart: Boolean;
 var
   NextType: TGocciaTokenType;
 begin
+  EnsureToken(FCurrent + 1, True);
   if FCurrent + 1 >= FTokens.Count then
     Exit(False);
 
@@ -691,6 +761,7 @@ var
   TokenType: TGocciaTokenType;
   CurrentType: TGocciaTokenType;
 begin
+  EnsureToken(FCurrent, True);
   CurrentType := FTokens[FCurrent].TokenType;
   if CurrentType = gttEOF then
     Exit(False);
@@ -710,6 +781,21 @@ function TGocciaParser.Match(const ATokenType: TGocciaTokenType): Boolean;
 var
   CurrentType: TGocciaTokenType;
 begin
+  EnsureToken(FCurrent, True);
+  CurrentType := FTokens[FCurrent].TokenType;
+  if (CurrentType <> gttEOF) and (CurrentType = ATokenType) then
+  begin
+    Inc(FCurrent);
+    Exit(True);
+  end;
+  Result := False;
+end;
+
+function TGocciaParser.MatchAfterExpression(const ATokenType: TGocciaTokenType): Boolean;
+var
+  CurrentType: TGocciaTokenType;
+begin
+  EnsureToken(FCurrent, False);
   CurrentType := FTokens[FCurrent].TokenType;
   if (CurrentType <> gttEOF) and (CurrentType = ATokenType) then
   begin
@@ -933,6 +1019,7 @@ begin
   if not EffectiveNonStrictModeEnabled then
     Exit(True);
 
+  EnsureToken(FCurrent + 1, True);
   if FCurrent + 1 >= FTokens.Count then
     Exit(False);
 
@@ -1024,7 +1111,7 @@ var
   Line, Column: Integer;
 begin
   Result := Assignment;
-  if not Match(gttComma) then
+  if not MatchAfterExpression(gttComma) then
     Exit;
 
   Line := Result.Line;
@@ -1034,7 +1121,7 @@ begin
     Expressions.Add(Result);
     repeat
       Expressions.Add(Assignment);
-    until not Match(gttComma);
+    until not MatchAfterExpression(gttComma);
     Result := TGocciaSequenceExpression.Create(Expressions, Line, Column);
   except
     Expressions.Free;
@@ -1049,7 +1136,7 @@ var
 begin
   Result := LogicalOr;
 
-  if Match(gttQuestion) then
+  if MatchAfterExpression(gttQuestion) then
   begin
     Line := Previous.Line;
     Column := Previous.Column;
@@ -1082,7 +1169,7 @@ var
   Op: TGocciaToken;
 begin
   Result := NullishCoalescing;
-  while Peek.TokenType = gttOr do
+  while PeekAfterExpression.TokenType = gttOr do
   begin
     Op := Advance;
     Result := TGocciaBinaryExpression.Create(Result, Op.TokenType,
@@ -1095,7 +1182,7 @@ var
   Op: TGocciaToken;
 begin
   Result := LogicalAnd;
-  while Peek.TokenType = gttNullishCoalescing do
+  while PeekAfterExpression.TokenType = gttNullishCoalescing do
   begin
     Op := Advance;
     Result := TGocciaBinaryExpression.Create(Result, Op.TokenType,
@@ -1108,7 +1195,7 @@ var
   Op: TGocciaToken;
 begin
   Result := BitwiseOr;
-  while Peek.TokenType = gttAnd do
+  while PeekAfterExpression.TokenType = gttAnd do
   begin
     Op := Advance;
     Result := TGocciaBinaryExpression.Create(Result, Op.TokenType,
@@ -1123,7 +1210,7 @@ var
   Right: TGocciaExpression;
 begin
   Result := Comparison;
-  while Peek.TokenType in [gttEqual, gttNotEqual, gttLooseEqual, gttLooseNotEqual] do
+  while PeekAfterExpression.TokenType in [gttEqual, gttNotEqual, gttLooseEqual, gttLooseNotEqual] do
   begin
     Op := Advance;
     Right := Comparison;
@@ -1172,7 +1259,7 @@ var
   end;
 begin
   Result := Shift;
-  while Peek.TokenType in [gttGreater, gttGreaterEqual, gttLess, gttLessEqual, gttInstanceof, gttIn] do
+  while PeekAfterExpression.TokenType in [gttGreater, gttGreaterEqual, gttLess, gttLessEqual, gttInstanceof, gttIn] do
   begin
     Op := Advance;
     Result := TGocciaBinaryExpression.Create(Result, Op.TokenType, Shift,
@@ -1181,7 +1268,7 @@ begin
 
   ParseIsExpressions;
 
-  while Check(gttAs) do
+  while CheckAfterExpression(gttAs) do
   begin
     Advance;
     if Check(gttConst) then
@@ -1209,7 +1296,7 @@ var
   Op: TGocciaToken;
 begin
   Result := Multiplication;
-  while Peek.TokenType in [gttPlus, gttMinus] do
+  while PeekAfterExpression.TokenType in [gttPlus, gttMinus] do
   begin
     Op := Advance;
     Result := TGocciaBinaryExpression.Create(Result, Op.TokenType,
@@ -1222,7 +1309,7 @@ var
   Op: TGocciaToken;
 begin
   Result := Exponentiation;
-  while Peek.TokenType in [gttStar, gttSlash, gttPercent] do
+  while PeekAfterExpression.TokenType in [gttStar, gttSlash, gttPercent] do
   begin
     Op := Advance;
     Result := TGocciaBinaryExpression.Create(Result, Op.TokenType,
@@ -1237,7 +1324,7 @@ var
 begin
   Result := Unary;
 
-  if Match(gttPower) then
+  if MatchAfterExpression(gttPower) then
   begin
     Operator := Previous;
     Right := Exponentiation; // Right associative
@@ -1326,7 +1413,7 @@ begin
 
   while True do
   begin
-    CurrentType := Peek.TokenType;
+    CurrentType := PeekAfterExpression.TokenType;
     case CurrentType of
       gttLeftParen:
         begin
@@ -1343,7 +1430,7 @@ begin
                 else
                   Arg := Assignment;
                 Arguments.Add(Arg);
-              until not Match(gttComma) or Check(gttRightParen);
+              until not MatchAfterExpression(gttComma) or Check(gttRightParen);
             end;
 
             Consume(gttRightParen, 'Expected ")" after arguments',
@@ -1395,7 +1482,7 @@ begin
                   else
                     Arg := Assignment;
                   Arguments.Add(Arg);
-                until not Match(gttComma) or Check(gttRightParen);
+                until not MatchAfterExpression(gttComma) or Check(gttRightParen);
               end;
               Consume(gttRightParen, 'Expected ")" after arguments',
                 SSuggestCloseParenArguments);
@@ -1824,7 +1911,6 @@ var
   Lexer: TGocciaLexer;
   Parser: TGocciaParser;
   ProgramNode: TGocciaProgram;
-  Tokens: TObjectList<TGocciaToken>;
   SourceLines: TStringList;
 begin
   Result := nil;
@@ -1833,11 +1919,10 @@ begin
 
   Lexer := TGocciaLexer.Create('(' + AExprText + ');', AFileName);
   try
-    Tokens := Lexer.ScanTokens;
     SourceLines := TStringList.Create;
     SourceLines.Text := AExprText;
     try
-      Parser := TGocciaParser.Create(Tokens, AFileName, SourceLines);
+      Parser := TGocciaParser.CreateFromLexer(Lexer, AFileName, SourceLines);
       Parser.ApplyOptions(AOptions);
       try
         ProgramNode := Parser.ParseUnchecked;
@@ -1986,12 +2071,12 @@ begin
   Specifier := Assignment;
   Options := nil;
 
-  if Match(gttComma) then
+  if MatchAfterExpression(gttComma) then
   begin
     if not Check(gttRightParen) then
     begin
       Options := Assignment;
-      Match(gttComma);
+      MatchAfterExpression(gttComma);
     end;
   end;
 
@@ -2172,7 +2257,7 @@ begin
                 Args.Add(TGocciaSpreadExpression.Create(Assignment, Previous.Line, Previous.Column))
               else
                 Args.Add(Assignment);
-            until not Match(gttComma) or Check(gttRightParen);
+            until not MatchAfterExpression(gttComma) or Check(gttRightParen);
           end;
           Consume(gttRightParen, 'Expected ")" after constructor arguments',
             SSuggestCloseParenConstructorArguments);
@@ -2218,7 +2303,7 @@ begin
         end
         // async single-param arrow: async x => body
         else if (Name = KEYWORD_ASYNC) and not Token.ContainsEscape and
-                Check(gttIdentifier) and CheckNext(gttArrow) then
+                Check(gttIdentifier) and CheckNextAfterExpression(gttArrow) then
         begin
           Line := Token.Line;
           Column := Token.Column;
@@ -2458,6 +2543,7 @@ begin
 
   ScanIndex := FCurrent + 1;
   Depth := 0;
+  EnsureToken(ScanIndex, True);
   while ScanIndex < FTokens.Count do
   begin
     case FTokens[ScanIndex].TokenType of
@@ -2468,6 +2554,7 @@ begin
           Dec(Depth);
           if Depth = 0 then
           begin
+            EnsureToken(ScanIndex + 1, True);
             Result := (ScanIndex + 1 < FTokens.Count) and
               (FTokens[ScanIndex + 1].TokenType = gttLeftBrace);
             Exit;
@@ -2479,6 +2566,7 @@ begin
         Exit;
     end;
     Inc(ScanIndex);
+    EnsureToken(ScanIndex, True);
   end;
 end;
 
@@ -3668,7 +3756,7 @@ begin
     Exit;
   end;
 
-  if Peek.TokenType in [gttAssign, gttPlusAssign, gttMinusAssign,
+  if PeekAfterExpression.TokenType in [gttAssign, gttPlusAssign, gttMinusAssign,
     gttStarAssign, gttSlashAssign, gttPercentAssign, gttPowerAssign,
     gttNullishCoalescingAssign, gttLogicalAndAssign, gttLogicalOrAssign,
     gttBitwiseAndAssign, gttBitwiseOrAssign, gttBitwiseXorAssign,
@@ -3843,10 +3931,16 @@ begin
     Result := WithStatement
   else if Match(gttFunction) then
     Result := FunctionStatement(False, Check(gttStar))
-  else if CheckUnescapedIdentifierKeyword(KEYWORD_ASYNC) and
-          (FCurrent + 1 < FTokens.Count) and
-          (FTokens[FCurrent + 1].TokenType = gttFunction) then
+  else if CheckUnescapedIdentifierKeyword(KEYWORD_ASYNC) then
   begin
+    EnsureToken(FCurrent + 1, True);
+    if (FCurrent + 1 >= FTokens.Count) or
+       (FTokens[FCurrent + 1].TokenType <> gttFunction) then
+    begin
+      Result := ExpressionStatement;
+      Exit;
+    end;
+
     Line := Peek.Line;
     Column := Peek.Column;
     Advance; // consume 'async'
@@ -3891,29 +3985,34 @@ begin
   // Disambiguate: 'using' followed by identifier is a declaration,
   // 'using(' or 'using.x' is an expression (function call / member access).
   else if CheckUnescapedIdentifierKeyword(KEYWORD_USING) and
-          CheckNext(gttIdentifier) and
+          CheckNextAfterExpression(gttIdentifier) and
           (Peek.Line = FTokens[FCurrent + 1].Line) then
     Result := UsingStatement
   // TC39 Explicit Resource Management: await using x = expr;
   // Detect 'await using identifier' regardless of context, then validate.
-  else if CheckUnescapedIdentifierKeyword(KEYWORD_AWAIT) and
-          (FCurrent + 2 < FTokens.Count) and
-          (FTokens[FCurrent + 1].TokenType = gttIdentifier) and
-          (FTokens[FCurrent + 1].Lexeme = KEYWORD_USING) and
-          not FTokens[FCurrent + 1].ContainsEscape and
-          (FTokens[FCurrent + 2].TokenType = gttIdentifier) and
-          (Peek.Line = FTokens[FCurrent + 1].Line) and
-          (FTokens[FCurrent + 1].Line = FTokens[FCurrent + 2].Line) then
+  else if CheckUnescapedIdentifierKeyword(KEYWORD_AWAIT) then
   begin
-    // Reject await using in synchronous function bodies
-    if (FInAsyncFunction = 0) and (FFunctionDepth > 0) then
-      raise TGocciaSyntaxError.Create(
-        '''await using'' is only valid in async functions or at the top level',
-        Peek.Line, Peek.Column, FFileName, FSourceLines,
-        'Wrap in an async function or use ''using'' for synchronous disposal');
-    Result := UsingStatement;
+    EnsureToken(FCurrent + 2, True);
+    if (FCurrent + 2 < FTokens.Count) and
+       (FTokens[FCurrent + 1].TokenType = gttIdentifier) and
+       (FTokens[FCurrent + 1].Lexeme = KEYWORD_USING) and
+       not FTokens[FCurrent + 1].ContainsEscape and
+       (FTokens[FCurrent + 2].TokenType = gttIdentifier) and
+       (Peek.Line = FTokens[FCurrent + 1].Line) and
+       (FTokens[FCurrent + 1].Line = FTokens[FCurrent + 2].Line) then
+    begin
+      // Reject await using in synchronous function bodies
+      if (FInAsyncFunction = 0) and (FFunctionDepth > 0) then
+        raise TGocciaSyntaxError.Create(
+          '''await using'' is only valid in async functions or at the top level',
+          Peek.Line, Peek.Column, FFileName, FSourceLines,
+          'Wrap in an async function or use ''using'' for synchronous disposal');
+      Result := UsingStatement;
+    end
+    else
+      Result := ExpressionStatement;
   end
-  else if Check(gttIdentifier) and CheckNext(gttColon) then
+  else if Check(gttIdentifier) and CheckNextAfterExpression(gttColon) then
   begin
     if FLabelStatementsEnabled then
       Result := LabeledStatement
@@ -4296,6 +4395,7 @@ procedure TGocciaParser.SkipUnsupportedFunctionSignature;
     ScanIndex := FCurrent;
     Depth := 0;
 
+    EnsureToken(ScanIndex, True);
     while ScanIndex < FTokens.Count do
     begin
       case FTokens[ScanIndex].TokenType of
@@ -4312,8 +4412,10 @@ procedure TGocciaParser.SkipUnsupportedFunctionSignature;
           end;
       end;
       Inc(ScanIndex);
+      EnsureToken(ScanIndex, True);
     end;
 
+    EnsureToken(ScanIndex, True);
     if ScanIndex < FTokens.Count then
       Result := FTokens[ScanIndex]
     else
@@ -4434,6 +4536,7 @@ end;
 
 function TGocciaParser.IsTypeOnlySpecifierModifier: Boolean;
 begin
+  EnsureToken(FCurrent + 1, True);
   Result := CheckUnescapedIdentifierKeyword(KEYWORD_TYPE) and
     (FCurrent + 1 < FTokens.Count) and
     (FTokens[FCurrent + 1].TokenType in [gttIdentifier, gttString]);
@@ -4574,6 +4677,8 @@ begin
     // `for (await using x of iterable)` is a synchronous for-of loop whose
     // per-iteration binding uses the async-dispose hint. This is distinct from
     // `for await (...)`, where `await` appears before the opening paren.
+    if CheckUnescapedIdentifierKeyword(KEYWORD_AWAIT) then
+      EnsureToken(FCurrent + 2, True);
     if CheckUnescapedIdentifierKeyword(KEYWORD_AWAIT) and
        (FCurrent + 2 < FTokens.Count) and
        (FTokens[FCurrent + 1].TokenType = gttIdentifier) and
@@ -4630,7 +4735,7 @@ begin
     // `for (using x of iterable)` is a loop-head using declaration, but
     // `for (using of iterable)` keeps `using` as the assignment target.
     if CheckUnescapedIdentifierKeyword(KEYWORD_USING) and
-       CheckNext(gttIdentifier) and
+       CheckNextAfterExpression(gttIdentifier) and
        (Peek.Line = FTokens[FCurrent + 1].Line) and
        (FTokens[FCurrent + 1].Lexeme <> KEYWORD_OF) then
     begin
@@ -4888,10 +4993,12 @@ var
   Tok: TGocciaToken;
 begin
   Idx := FCurrent;
+  EnsureToken(Idx, True);
   if (Idx >= FTokens.Count) or (FTokens[Idx].TokenType <> gttLeftParen) then
     Exit(False);
   Inc(Idx); // step past '('
   Depth := 1;
+  EnsureToken(Idx, True);
   while (Idx < FTokens.Count) and (Depth > 0) do
   begin
     Tok := FTokens[Idx];
@@ -4909,6 +5016,7 @@ begin
           Exit(True);
     end;
     Inc(Idx);
+    EnsureToken(Idx, True);
   end;
   Result := False;
 end;
@@ -5015,24 +5123,36 @@ begin
     SkipUntilSemicolon;
     InitStmt := nil;
   end
-  else if CheckUnescapedIdentifierKeyword(KEYWORD_AWAIT) and
-          (FCurrent + 2 < FTokens.Count) and
-          (FTokens[FCurrent + 1].TokenType = gttIdentifier) and
-          (FTokens[FCurrent + 1].Lexeme = KEYWORD_USING) and
-          not FTokens[FCurrent + 1].ContainsEscape and
-          (FTokens[FCurrent + 2].TokenType = gttIdentifier) and
-          (Peek.Line = FTokens[FCurrent + 1].Line) and
-          (FTokens[FCurrent + 1].Line = FTokens[FCurrent + 2].Line) then
+  else if CheckUnescapedIdentifierKeyword(KEYWORD_AWAIT) then
   begin
-    if (FInAsyncFunction = 0) and (FFunctionDepth > 0) then
-      raise TGocciaSyntaxError.Create(
-        '''await using'' is only valid in async functions or at the top level',
-        Peek.Line, Peek.Column, FFileName, FSourceLines,
-        'Wrap in an async function or use ''using'' for synchronous disposal');
-    InitStmt := UsingStatement;
+    EnsureToken(FCurrent + 2, True);
+    if (FCurrent + 2 < FTokens.Count) and
+       (FTokens[FCurrent + 1].TokenType = gttIdentifier) and
+       (FTokens[FCurrent + 1].Lexeme = KEYWORD_USING) and
+       not FTokens[FCurrent + 1].ContainsEscape and
+       (FTokens[FCurrent + 2].TokenType = gttIdentifier) and
+       (Peek.Line = FTokens[FCurrent + 1].Line) and
+       (FTokens[FCurrent + 1].Line = FTokens[FCurrent + 2].Line) then
+    begin
+      if (FInAsyncFunction = 0) and (FFunctionDepth > 0) then
+        raise TGocciaSyntaxError.Create(
+          '''await using'' is only valid in async functions or at the top level',
+          Peek.Line, Peek.Column, FFileName, FSourceLines,
+          'Wrap in an async function or use ''using'' for synchronous disposal');
+      InitStmt := UsingStatement;
+    end
+    else
+    begin
+      DeclLine := Peek.Line;
+      DeclColumn := Peek.Column;
+      InitExpr := Expression;
+      Consume(gttSemicolon, 'Expected '';'' after for-init expression',
+        SSuggestAddSemicolon);
+      InitStmt := TGocciaExpressionStatement.Create(InitExpr, DeclLine, DeclColumn);
+    end;
   end
   else if CheckUnescapedIdentifierKeyword(KEYWORD_USING) and
-          CheckNext(gttIdentifier) and
+          CheckNextAfterExpression(gttIdentifier) and
           (Peek.Line = FTokens[FCurrent + 1].Line) then
   begin
     InitStmt := UsingStatement;
@@ -5645,6 +5765,7 @@ var
 
   function IsSourcePhaseImportStart: Boolean;
   begin
+    EnsureToken(FCurrent + 2, True);
     Result := CheckUnescapedIdentifierKeyword(KEYWORD_SOURCE) and
       (FCurrent + 2 < FTokens.Count) and
       IsIdentifierBindingToken(FTokens[FCurrent + 1].TokenType) and
@@ -5889,9 +6010,14 @@ var
     ScanIndex: Integer;
   begin
     ScanIndex := FCurrent;
+    EnsureToken(ScanIndex, True);
     while (ScanIndex < FTokens.Count) and
       (FTokens[ScanIndex].TokenType <> gttRightBrace) do
+    begin
       Inc(ScanIndex);
+      EnsureToken(ScanIndex, True);
+    end;
+    EnsureToken(ScanIndex + 1, True);
     Result := (ScanIndex + 1 < FTokens.Count) and
       (FTokens[ScanIndex + 1].TokenType = gttFrom);
   end;
@@ -5956,6 +6082,7 @@ begin
   if Check(gttDefault) then
   begin
     Advance;
+    EnsureToken(FCurrent + 1, True);
     DirectDefaultDeclaration := Check(gttClass) or Check(gttFunction) or
       (Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_ASYNC) and
       (FCurrent + 1 < FTokens.Count) and
@@ -6046,6 +6173,8 @@ begin
   end;
 
   // export async function name() { ... }
+  if CheckUnescapedIdentifierKeyword(KEYWORD_ASYNC) then
+    EnsureToken(FCurrent + 1, True);
   if CheckUnescapedIdentifierKeyword(KEYWORD_ASYNC) and
      (FCurrent + 1 < FTokens.Count) and
      (FTokens[FCurrent + 1].TokenType = gttFunction) then
@@ -6358,6 +6487,8 @@ begin
       if not IsStatic and Check(gttStatic) then
         IsStatic := Match(gttStatic);
 
+      if CheckUnescapedIdentifierKeyword(KEYWORD_ACCESSOR) then
+        EnsureToken(FCurrent + 1, True);
       if CheckUnescapedIdentifierKeyword(KEYWORD_ACCESSOR) and
          (FCurrent + 1 < FTokens.Count) and
          (FTokens[FCurrent + 1].Line = Peek.Line) and
@@ -6868,17 +6999,17 @@ begin
           begin
             Advance;
             SkipDestructuringPattern;
-            if Check(gttColon) then
+            if CheckAfterExpression(gttColon) then
             begin
               Advance;
               CollectTypeAnnotation([gttAssign, gttRightParen, gttComma]);
             end;
-            if Check(gttAssign) then
+            if CheckAfterExpression(gttAssign) then
             begin
               Advance;
               SkipExpression;
             end;
-            if Check(gttComma) then
+            if CheckAfterExpression(gttComma) then
               Advance;
           end;
         gttSpread:
@@ -6895,19 +7026,19 @@ begin
         gttIdentifier:
           begin
             Advance;
-            if Check(gttQuestion) then
+            if CheckAfterExpression(gttQuestion) then
               Advance;
-            if Check(gttColon) then
+            if CheckAfterExpression(gttColon) then
             begin
               Advance;
               CollectTypeAnnotation([gttAssign, gttRightParen, gttComma]);
             end;
-            if Check(gttAssign) then
+            if CheckAfterExpression(gttAssign) then
             begin
               Advance;
               SkipExpression;
             end;
-            if Check(gttComma) then
+            if CheckAfterExpression(gttComma) then
               Advance;
           end;
         gttComma:
@@ -7092,7 +7223,7 @@ var
   Op: TGocciaToken;
 begin
   Result := BitwiseXor;
-  while Peek.TokenType = gttBitwiseOr do
+  while PeekAfterExpression.TokenType = gttBitwiseOr do
   begin
     Op := Advance;
     Result := TGocciaBinaryExpression.Create(Result, Op.TokenType,
@@ -7105,7 +7236,7 @@ var
   Op: TGocciaToken;
 begin
   Result := BitwiseAnd;
-  while Peek.TokenType = gttBitwiseXor do
+  while PeekAfterExpression.TokenType = gttBitwiseXor do
   begin
     Op := Advance;
     Result := TGocciaBinaryExpression.Create(Result, Op.TokenType,
@@ -7118,7 +7249,7 @@ var
   Op: TGocciaToken;
 begin
   Result := Equality;
-  while Peek.TokenType = gttBitwiseAnd do
+  while PeekAfterExpression.TokenType = gttBitwiseAnd do
   begin
     Op := Advance;
     Result := TGocciaBinaryExpression.Create(Result, Op.TokenType,
@@ -7131,7 +7262,7 @@ var
   Op: TGocciaToken;
 begin
   Result := Addition;
-  while Peek.TokenType in [gttLeftShift, gttRightShift, gttUnsignedRightShift] do
+  while PeekAfterExpression.TokenType in [gttLeftShift, gttRightShift, gttUnsignedRightShift] do
   begin
     Op := Advance;
     Result := TGocciaBinaryExpression.Create(Result, Op.TokenType,
@@ -7690,9 +7821,14 @@ begin
   else if Previous.TokenType = gttLeftBrace then
     BraceCount := 1;
 
-  // Skip tokens until we've closed all brackets/braces
-  while not IsAtEnd and ((BracketCount > 0) or (BraceCount > 0)) do
+  // Skip tokens until we've closed all brackets/braces.  Check balance before
+  // peeking so speculative arrow-parameter lookahead does not scan the next
+  // expression-continuation token with the wrong lexical goal.
+  while (BracketCount > 0) or (BraceCount > 0) do
   begin
+    if IsAtEnd then
+      Break;
+
     case Peek.TokenType of
       gttLeftBracket:
         begin

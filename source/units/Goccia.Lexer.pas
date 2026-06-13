@@ -28,6 +28,10 @@ type
     FCanStartRegex: Boolean;
     FParenRegexContext: array of Boolean;
     FParenRegexContextCount: Integer;
+    FHashbangSkipped: Boolean;
+    FEOFEmitted: Boolean;
+    FLegacyRegexContextEnabled: Boolean;
+    FScanTimeNanoseconds: Int64;
     function GetSourceLines: TStringList;
 
     function IsAtEnd: Boolean; inline;
@@ -45,7 +49,7 @@ type
     procedure AddToken(const ATokenType: TGocciaTokenType); overload;
     procedure AddToken(const ATokenType: TGocciaTokenType; const ALiteral: string;
       const AContainsEscape: Boolean = False); overload;
-    procedure ScanToken;
+    procedure ScanToken(const ACanStartRegex: Boolean);
     procedure ScanString;
     procedure ScanTemplate;
     procedure ScanRegexLiteral;
@@ -86,7 +90,10 @@ type
   public
     constructor Create(const ASource, AFileName: string);
     destructor Destroy; override;
+    function ScanNextToken(const ACanStartRegex: Boolean): TGocciaToken;
     function ScanTokens: TObjectList<TGocciaToken>;
+    property ScanTimeNanoseconds: Int64 read FScanTimeNanoseconds;
+    property Tokens: TObjectList<TGocciaToken> read FTokens;
     property SourceLines: TStringList read GetSourceLines;
   end;
 
@@ -94,6 +101,7 @@ implementation
 
 uses
   TextSemantics,
+  TimingUtils,
 
   Goccia.Error,
   Goccia.Error.Suggestions,
@@ -249,6 +257,10 @@ begin
   FColumn := 1;
   FCanStartRegex := True;
   FParenRegexContextCount := 0;
+  FHashbangSkipped := False;
+  FEOFEmitted := False;
+  FLegacyRegexContextEnabled := False;
+  FScanTimeNanoseconds := 0;
 end;
 
 destructor TGocciaLexer.Destroy;
@@ -331,7 +343,8 @@ procedure TGocciaLexer.AddToken(const ATokenType: TGocciaTokenType; const ALiter
 begin
   FTokens.Add(TGocciaToken.Create(ATokenType, ALiteral, FLine, FStartColumn,
     FColumn - 1, AContainsEscape));
-  UpdateRegexContext(ATokenType);
+  if FLegacyRegexContextEnabled then
+    UpdateRegexContext(ATokenType);
 end;
 
 // ES2026 §12.3 LineTerminator :: <LF> | <CR> | <LS> | <PS>
@@ -1740,7 +1753,7 @@ begin
     AddToken(gttIdentifier, Text, HadEscape);
 end;
 
-procedure TGocciaLexer.ScanToken;
+procedure TGocciaLexer.ScanToken(const ACanStartRegex: Boolean);
 var
   ByteLength: Integer;
   C: Char;
@@ -1802,7 +1815,8 @@ begin
     '/':
       if Match('=') then
         AddToken(gttSlashAssign)
-      else if FCanStartRegex or CanScanRegexAfterAwait then
+      else if ACanStartRegex or
+              (FLegacyRegexContextEnabled and CanScanRegexAfterAwait) then
         ScanRegexLiteral
       else
         AddToken(gttSlash);
@@ -2001,17 +2015,48 @@ begin
   end;
 end;
 
-function TGocciaLexer.ScanTokens: TObjectList<TGocciaToken>;
+function TGocciaLexer.ScanNextToken(const ACanStartRegex: Boolean): TGocciaToken;
+var
+  StartTime: Int64;
 begin
-  SkipHashbang;
-  while not IsAtEnd do
-  begin
-    SkipWhitespace;
-    if not IsAtEnd then
-      ScanToken;
-  end;
+  StartTime := GetNanoseconds;
+  try
+    if FEOFEmitted then
+      Exit(FTokens[FTokens.Count - 1]);
 
-  FTokens.Add(TGocciaToken.Create(gttEOF, '', FLine, FColumn, FColumn));
+    if not FHashbangSkipped then
+    begin
+      SkipHashbang;
+      FHashbangSkipped := True;
+    end;
+
+    SkipWhitespace;
+    if IsAtEnd then
+    begin
+      FEOFEmitted := True;
+      FTokens.Add(TGocciaToken.Create(gttEOF, '', FLine, FColumn, FColumn));
+      Exit(FTokens[FTokens.Count - 1]);
+    end;
+
+    ScanToken(ACanStartRegex);
+    Result := FTokens[FTokens.Count - 1];
+  finally
+    Inc(FScanTimeNanoseconds, GetNanoseconds - StartTime);
+  end;
+end;
+
+function TGocciaLexer.ScanTokens: TObjectList<TGocciaToken>;
+var
+  Token: TGocciaToken;
+begin
+  FLegacyRegexContextEnabled := True;
+  try
+    repeat
+      Token := ScanNextToken(FCanStartRegex);
+    until Token.TokenType = gttEOF;
+  finally
+    FLegacyRegexContextEnabled := False;
+  end;
   Result := FTokens;
 end;
 
