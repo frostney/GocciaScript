@@ -40,6 +40,43 @@ describe("using declaration", () => {
     expect(value).toBe(42);
   });
 
+  test("accepts contextual binding names", () => {
+    const disposed = [];
+    {
+      using as = {
+        name: "as",
+        [Symbol.dispose]() { disposed.push(as.name); }
+      };
+      using from = {
+        name: "from",
+        [Symbol.dispose]() { disposed.push(from.name); }
+      };
+      using static = {
+        name: "static",
+        [Symbol.dispose]() { disposed.push(static.name); }
+      };
+
+      expect(as.name).toBe("as");
+      expect(from.name).toBe("from");
+      expect(static.name).toBe("static");
+    }
+    expect(disposed).toEqual(["static", "from", "as"]);
+  });
+
+  test("for-of using accepts contextual binding names", () => {
+    const resources = [
+      { name: "first" },
+      { name: "second" }
+    ];
+    const seen = [];
+
+    for (using as of resources) {
+      seen.push(as.name);
+    }
+
+    expect(seen).toEqual(["first", "second"]);
+  });
+
   test("later lexical binding is in TDZ inside using block", () => {
     let value = "outer";
     {

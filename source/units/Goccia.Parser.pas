@@ -124,6 +124,8 @@ type
     function CheckNext(const ATokenType: TGocciaTokenType): Boolean; inline;
     function CheckNextWithLexicalGoal(const ATokenType: TGocciaTokenType;
       const ALexicalGoal: TGocciaLexicalGoal): Boolean; inline;
+    function CheckNextIdentifierBindingWithLexicalGoal(
+      const ALexicalGoal: TGocciaLexicalGoal): Boolean; inline;
     function IsAwaitOperandStart: Boolean;
     function Match(const ATokenTypes: array of TGocciaTokenType): Boolean; overload;
     function Match(const ATokenType: TGocciaTokenType): Boolean; overload; inline;
@@ -194,6 +196,8 @@ type
     function ConvertToPattern(const AExpr: TGocciaExpression): TGocciaDestructuringPattern;
     procedure SkipDestructuringPattern;
     procedure SkipExpression;
+    procedure SkipExpressionWithLexicalGoal(
+      const ALexicalGoal: TGocciaLexicalGoal);
     // TC39 Pattern Matching
     function ParseMatchExpression: TGocciaMatchExpression;
     function ParseMatchPattern: TGocciaMatchPattern;
@@ -791,6 +795,15 @@ begin
   Result := FTokens[FCurrent + 1].TokenType = ATokenType;
 end;
 
+function TGocciaParser.CheckNextIdentifierBindingWithLexicalGoal(
+  const ALexicalGoal: TGocciaLexicalGoal): Boolean;
+begin
+  EnsureToken(FCurrent, DefaultLexicalGoal);
+  EnsureToken(FCurrent + 1, ALexicalGoal);
+  Result := (FCurrent + 1 < FTokens.Count) and
+    IsIdentifierBindingToken(FTokens[FCurrent + 1].TokenType);
+end;
+
 function TGocciaParser.IsAwaitOperandStart: Boolean;
 var
   NextType: TGocciaTokenType;
@@ -1151,7 +1164,7 @@ begin
   Result := (UsingToken.TokenType = gttIdentifier) and
     (UsingToken.Lexeme = KEYWORD_USING) and
     not UsingToken.ContainsEscape and
-    (BindingToken.TokenType = gttIdentifier) and
+    IsIdentifierBindingToken(BindingToken.TokenType) and
     (AwaitToken.Line = UsingToken.Line) and
     (UsingToken.Line = BindingToken.Line);
 end;
@@ -2277,7 +2290,9 @@ begin
         end
         // async single-param arrow: async x => body
         else if (Name = KEYWORD_ASYNC) and not Token.ContainsEscape and
-                Check(gttIdentifier) and CheckNextWithLexicalGoal(gttArrow, glgInputElementDiv) then
+                IsIdentifierBindingToken(
+                  PeekWithLexicalGoal(glgInputElementDiv).TokenType) and
+                CheckNextWithLexicalGoal(gttArrow, glgInputElementDiv) then
         begin
           Line := Token.Line;
           Column := Token.Column;
@@ -3995,7 +4010,7 @@ begin
   // Disambiguate: 'using' followed by identifier is a declaration,
   // 'using(' or 'using.x' is an expression (function call / member access).
   else if CheckUnescapedIdentifierKeyword(KEYWORD_USING) and
-          CheckNextWithLexicalGoal(gttIdentifier, glgInputElementDiv) and
+          CheckNextIdentifierBindingWithLexicalGoal(glgInputElementDiv) and
           (Peek.Line = FTokens[FCurrent + 1].Line) then
     Result := UsingStatement
   // TC39 Explicit Resource Management: await using x = expr;
@@ -4676,16 +4691,7 @@ begin
     // `for (await using x of iterable)` is a synchronous for-of loop whose
     // per-iteration binding uses the async-dispose hint. This is distinct from
     // `for await (...)`, where `await` appears before the opening paren.
-    if CheckUnescapedIdentifierKeyword(KEYWORD_AWAIT) then
-      EnsureToken(FCurrent + 2, glgInputElementRegExp);
-    if CheckUnescapedIdentifierKeyword(KEYWORD_AWAIT) and
-       (FCurrent + 2 < FTokens.Count) and
-       (FTokens[FCurrent + 1].TokenType = gttIdentifier) and
-       (FTokens[FCurrent + 1].Lexeme = KEYWORD_USING) and
-       not FTokens[FCurrent + 1].ContainsEscape and
-       (FTokens[FCurrent + 2].TokenType = gttIdentifier) and
-       (Peek.Line = FTokens[FCurrent + 1].Line) and
-       (FTokens[FCurrent + 1].Line = FTokens[FCurrent + 2].Line) then
+    if IsAwaitUsingDeclarationStart then
     begin
       if (FInAsyncFunction = 0) and (FFunctionDepth > 0) then
         raise TGocciaSyntaxError.Create(
@@ -4734,7 +4740,7 @@ begin
     // `for (using x of iterable)` is a loop-head using declaration, but
     // `for (using of iterable)` keeps `using` as the assignment target.
     if CheckUnescapedIdentifierKeyword(KEYWORD_USING) and
-       CheckNextWithLexicalGoal(gttIdentifier, glgInputElementDiv) and
+       CheckNextIdentifierBindingWithLexicalGoal(glgInputElementDiv) and
        (Peek.Line = FTokens[FCurrent + 1].Line) and
        (FTokens[FCurrent + 1].Lexeme <> KEYWORD_OF) then
     begin
@@ -5153,36 +5159,26 @@ begin
     SkipUntilSemicolon;
     InitStmt := nil;
   end
+  else if IsAwaitUsingDeclarationStart then
+  begin
+    if (FInAsyncFunction = 0) and (FFunctionDepth > 0) then
+      raise TGocciaSyntaxError.Create(
+        '''await using'' is only valid in async functions or at the top level',
+        Peek.Line, Peek.Column, FFileName, FSourceLines,
+        'Wrap in an async function or use ''using'' for synchronous disposal');
+    InitStmt := UsingStatement;
+  end
   else if CheckUnescapedIdentifierKeyword(KEYWORD_AWAIT) then
   begin
-    EnsureToken(FCurrent + 2, glgInputElementRegExp);
-    if (FCurrent + 2 < FTokens.Count) and
-       (FTokens[FCurrent + 1].TokenType = gttIdentifier) and
-       (FTokens[FCurrent + 1].Lexeme = KEYWORD_USING) and
-       not FTokens[FCurrent + 1].ContainsEscape and
-       (FTokens[FCurrent + 2].TokenType = gttIdentifier) and
-       (Peek.Line = FTokens[FCurrent + 1].Line) and
-       (FTokens[FCurrent + 1].Line = FTokens[FCurrent + 2].Line) then
-    begin
-      if (FInAsyncFunction = 0) and (FFunctionDepth > 0) then
-        raise TGocciaSyntaxError.Create(
-          '''await using'' is only valid in async functions or at the top level',
-          Peek.Line, Peek.Column, FFileName, FSourceLines,
-          'Wrap in an async function or use ''using'' for synchronous disposal');
-      InitStmt := UsingStatement;
-    end
-    else
-    begin
-      DeclLine := Peek.Line;
-      DeclColumn := Peek.Column;
-      InitExpr := Expression;
-      Consume(gttSemicolon, 'Expected '';'' after for-init expression',
-        SSuggestAddSemicolon);
-      InitStmt := TGocciaExpressionStatement.Create(InitExpr, DeclLine, DeclColumn);
-    end;
+    DeclLine := Peek.Line;
+    DeclColumn := Peek.Column;
+    InitExpr := Expression;
+    Consume(gttSemicolon, 'Expected '';'' after for-init expression',
+      SSuggestAddSemicolon);
+    InitStmt := TGocciaExpressionStatement.Create(InitExpr, DeclLine, DeclColumn);
   end
   else if CheckUnescapedIdentifierKeyword(KEYWORD_USING) and
-          CheckNextWithLexicalGoal(gttIdentifier, glgInputElementDiv) and
+          CheckNextIdentifierBindingWithLexicalGoal(glgInputElementDiv) and
           (Peek.Line = FTokens[FCurrent + 1].Line) then
   begin
     InitStmt := UsingStatement;
@@ -7046,7 +7042,7 @@ begin
             if CheckWithLexicalGoal(gttAssign, glgInputElementDiv) then
             begin
               Advance;
-              SkipExpression;
+              SkipExpressionWithLexicalGoal(glgInputElementDiv);
             end;
             if CheckWithLexicalGoal(gttComma, glgInputElementDiv) then
               Advance;
@@ -7054,15 +7050,16 @@ begin
         gttSpread:
           begin
             Advance;
-            if Check(gttIdentifier) then
+            if IsIdentifierBindingToken(
+              PeekWithLexicalGoal(glgInputElementDiv).TokenType) then
               Advance;
-            if Check(gttColon) then
+            if CheckWithLexicalGoal(gttColon, glgInputElementDiv) then
             begin
               Advance;
               CollectTypeAnnotation([gttRightParen, gttComma]);
             end;
           end;
-        gttIdentifier:
+        gttIdentifier, gttAs, gttFrom, gttStatic:
           begin
             Advance;
             if CheckWithLexicalGoal(gttQuestion, glgInputElementDiv) then
@@ -7075,7 +7072,7 @@ begin
             if CheckWithLexicalGoal(gttAssign, glgInputElementDiv) then
             begin
               Advance;
-              SkipExpression;
+              SkipExpressionWithLexicalGoal(glgInputElementDiv);
             end;
             if CheckWithLexicalGoal(gttComma, glgInputElementDiv) then
               Advance;
@@ -7852,9 +7849,42 @@ end;
 procedure TGocciaParser.SkipDestructuringPattern;
 var
   BracketCount, BraceCount: Integer;
+  CurrentType: TGocciaTokenType;
+  NeedsOperand: Boolean;
+
+  function NextGoal: TGocciaLexicalGoal;
+  begin
+    if NeedsOperand then
+      Exit(glgInputElementRegExp);
+    Result := glgInputElementDiv;
+  end;
+
+  function TokenRequiresFollowingOperand(
+    const ATokenType: TGocciaTokenType): Boolean;
+  begin
+    case ATokenType of
+      gttAssign, gttPlusAssign, gttMinusAssign, gttStarAssign,
+      gttSlashAssign, gttPercentAssign, gttPowerAssign,
+      gttNullishCoalescingAssign, gttLogicalAndAssign,
+      gttLogicalOrAssign,
+      gttQuestion, gttColon, gttComma,
+      gttOr, gttAnd, gttNullishCoalescing,
+      gttBitwiseOr, gttBitwiseXor, gttBitwiseAnd,
+      gttEqual, gttNotEqual, gttLooseEqual, gttLooseNotEqual,
+      gttGreater, gttGreaterEqual, gttLess, gttLessEqual,
+      gttInstanceof, gttIn,
+      gttLeftShift, gttRightShift, gttUnsignedRightShift,
+      gttPlus, gttMinus, gttStar, gttSlash, gttPercent, gttPower,
+      gttNot, gttBitwiseNot, gttTypeof, gttVoid, gttDelete,
+      gttNew, gttArrow:
+        Exit(True);
+    end;
+    Result := False;
+  end;
 begin
   BracketCount := 0;
   BraceCount := 0;
+  NeedsOperand := True;
 
   // The opening bracket/brace was already consumed by the caller, count it
   if Previous.TokenType = gttLeftBracket then
@@ -7867,85 +7897,141 @@ begin
   // expression-continuation token with the wrong lexical goal.
   while (BracketCount > 0) or (BraceCount > 0) do
   begin
-    if IsAtEnd then
+    CurrentType := PeekWithLexicalGoal(NextGoal).TokenType;
+    if CurrentType = gttEOF then
       Break;
 
-    case Peek.TokenType of
+    case CurrentType of
       gttLeftBracket:
         begin
           Inc(BracketCount);
           Advance;
+          NeedsOperand := True;
         end;
       gttRightBracket:
         begin
           Dec(BracketCount);
           Advance;
+          NeedsOperand := False;
         end;
       gttLeftBrace:
         begin
           Inc(BraceCount);
           Advance;
+          NeedsOperand := True;
         end;
       gttRightBrace:
         begin
           Dec(BraceCount);
           Advance;
+          NeedsOperand := False;
         end;
     else
       Advance;
+      NeedsOperand := TokenRequiresFollowingOperand(CurrentType);
     end;
   end;
 end;
 
 procedure TGocciaParser.SkipExpression;
+begin
+  SkipExpressionWithLexicalGoal(glgInputElementDiv);
+end;
+
+procedure TGocciaParser.SkipExpressionWithLexicalGoal(
+  const ALexicalGoal: TGocciaLexicalGoal);
 var
   ParenCount, BracketCount, BraceCount: Integer;
+  CurrentType: TGocciaTokenType;
+  NeedsOperand: Boolean;
+
+  function NextGoal: TGocciaLexicalGoal;
+  begin
+    if NeedsOperand then
+      Exit(glgInputElementRegExp);
+    Result := ALexicalGoal;
+  end;
+
+  function TokenRequiresFollowingOperand(
+    const ATokenType: TGocciaTokenType): Boolean;
+  begin
+    case ATokenType of
+      gttAssign, gttPlusAssign, gttMinusAssign, gttStarAssign,
+      gttSlashAssign, gttPercentAssign, gttPowerAssign,
+      gttNullishCoalescingAssign, gttLogicalAndAssign,
+      gttLogicalOrAssign,
+      gttQuestion, gttColon, gttComma,
+      gttOr, gttAnd, gttNullishCoalescing,
+      gttBitwiseOr, gttBitwiseXor, gttBitwiseAnd,
+      gttEqual, gttNotEqual, gttLooseEqual, gttLooseNotEqual,
+      gttGreater, gttGreaterEqual, gttLess, gttLessEqual,
+      gttInstanceof, gttIn,
+      gttLeftShift, gttRightShift, gttUnsignedRightShift,
+      gttPlus, gttMinus, gttStar, gttSlash, gttPercent, gttPower,
+      gttNot, gttBitwiseNot, gttTypeof, gttVoid, gttDelete,
+      gttNew, gttArrow:
+        Exit(True);
+    end;
+    Result := False;
+  end;
 begin
   ParenCount := 0;
   BracketCount := 0;
   BraceCount := 0;
+  NeedsOperand := True;
 
   // Skip tokens until we reach a comma or right parenthesis at the same nesting level
-  while not IsAtEnd do
+  while True do
   begin
-    // Check if we've reached the end of the parameter at the top level
-    if (ParenCount = 0) and (BracketCount = 0) and (BraceCount = 0) and
-       (Check(gttComma) or Check(gttRightParen)) then
+    CurrentType := PeekWithLexicalGoal(NextGoal).TokenType;
+    if CurrentType = gttEOF then
       Break;
 
-    case Peek.TokenType of
+    // Check if we've reached the end of the parameter at the top level
+    if (ParenCount = 0) and (BracketCount = 0) and (BraceCount = 0) and
+       (CurrentType in [gttComma, gttRightParen]) then
+      Break;
+
+    case CurrentType of
       gttLeftParen:
         begin
           Inc(ParenCount);
           Advance;
+          NeedsOperand := True;
         end;
       gttRightParen:
         begin
           Dec(ParenCount);
           Advance;
+          NeedsOperand := False;
         end;
       gttLeftBracket:
         begin
           Inc(BracketCount);
           Advance;
+          NeedsOperand := True;
         end;
       gttRightBracket:
         begin
           Dec(BracketCount);
           Advance;
+          NeedsOperand := False;
         end;
       gttLeftBrace:
         begin
           Inc(BraceCount);
           Advance;
+          NeedsOperand := True;
         end;
       gttRightBrace:
         begin
           Dec(BraceCount);
           Advance;
+          NeedsOperand := False;
         end;
     else
       Advance;
+      NeedsOperand := TokenRequiresFollowingOperand(CurrentType);
     end;
   end;
 end;

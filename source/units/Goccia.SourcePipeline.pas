@@ -465,7 +465,7 @@ var
   Parser: TGocciaParser;
   ParserWarning: TGocciaParserWarning;
   PreprocessorSourceMap: TGocciaSourceMap;
-  StartTime, ParseEnd, FrontEndTime: Int64;
+  StartTime, ParseStart, ParseEnd, ParsePhaseTime: Int64;
   OrigLine, OrigCol, I: Integer;
 begin
   Result := TGocciaSourcePipelineResult.Create;
@@ -496,6 +496,7 @@ begin
           Lexer.SourceLines);
         ConfigureParser(Parser, AOptions);
         try
+          ParseStart := GetNanoseconds;
           if Assigned(ADeclaredPrivateNames) then
             Result.FProgramNode :=
               Parser.ParseWithPrivateNames(ADeclaredPrivateNames)
@@ -505,11 +506,12 @@ begin
             ValidateModuleEarlyErrors(Result.FProgramNode, AFileName,
               Lexer.SourceLines);
           ParseEnd := GetNanoseconds;
-          Result.FLexTimeNanoseconds := Lexer.ScanTimeNanoseconds;
-          FrontEndTime := ParseEnd - StartTime;
-          if FrontEndTime > Result.FLexTimeNanoseconds then
+          Result.FLexTimeNanoseconds :=
+            (ParseStart - StartTime) + Lexer.ScanTimeNanoseconds;
+          ParsePhaseTime := ParseEnd - ParseStart;
+          if ParsePhaseTime > Lexer.ScanTimeNanoseconds then
             Result.FParseTimeNanoseconds :=
-              FrontEndTime - Result.FLexTimeNanoseconds
+              ParsePhaseTime - Lexer.ScanTimeNanoseconds
           else
             Result.FParseTimeNanoseconds := 0;
           Result.FGeneratedSourceLines := CloneStringList(Lexer.SourceLines);

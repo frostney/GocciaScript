@@ -36,6 +36,7 @@ type
       const ATokenType: TGocciaTokenType);
     procedure TestIgnoresLeadingHashbang;
     procedure TestPreservesLineNumbersAfterHashbang;
+    procedure TestHashbangRequiresHashbangLexicalGoal;
     procedure TestCommentTerminatedByUnicodeLineTerminators;
     procedure TestTokenizesKeywordTokens;
     procedure TestContextualKeywordTokensUseDivGoal;
@@ -58,6 +59,8 @@ procedure TLexerTests.SetupTests;
 begin
   Test('Ignores leading hashbang', TestIgnoresLeadingHashbang);
   Test('Preserves line numbers after hashbang', TestPreservesLineNumbersAfterHashbang);
+  Test('Hashbang requires hashbang lexical goal',
+    TestHashbangRequiresHashbangLexicalGoal);
   Test('Terminates comment on Unicode line terminators', TestCommentTerminatedByUnicodeLineTerminators);
   Test('Tokenizes keyword tokens', TestTokenizesKeywordTokens);
   Test('Contextual keyword tokens use explicit division lexical goal',
@@ -102,6 +105,7 @@ var
 begin
   Lexer := TGocciaLexer.Create('#!/usr/bin/env goccia' + ALineBreak + 'const value = 1 / 2;', '<test>');
   try
+    Lexer.ScanNextToken(glgInputElementHashbangOrRegExp);
     ScanAllTokens(Lexer, glgInputElementDiv);
     Tokens := Lexer.Tokens;
     Expect<Integer>(Tokens.Count).ToBe(8);
@@ -121,11 +125,26 @@ var
 begin
   Lexer := TGocciaLexer.Create('#!/usr/bin/env goccia' + ALineBreak + 'const value = 1;', '<test>');
   try
-    ScanAllTokens(Lexer, glgInputElementRegExp);
+    ScanAllTokens(Lexer, glgInputElementHashbangOrRegExp);
     Tokens := Lexer.Tokens;
     Expect<Integer>(Tokens[0].Line).ToBe(2);
     Expect<Integer>(Tokens[0].Column).ToBe(1);
     Expect<Integer>(Tokens[1].Line).ToBe(2);
+  finally
+    Lexer.Free;
+  end;
+end;
+
+procedure TLexerTests.TestHashbangRequiresHashbangLexicalGoal;
+var
+  Lexer: TGocciaLexer;
+  Token: TGocciaToken;
+begin
+  Lexer := TGocciaLexer.Create('#!/usr/bin/env goccia' + LineEnding +
+    'const value = 1;', '<test>');
+  try
+    Token := Lexer.ScanNextToken(glgInputElementDiv);
+    Expect<TGocciaTokenType>(Token.TokenType).ToBe(gttHash);
   finally
     Lexer.Free;
   end;

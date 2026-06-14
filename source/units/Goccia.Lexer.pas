@@ -1577,7 +1577,8 @@ begin
 
     if not FHashbangSkipped then
     begin
-      SkipHashbang;
+      if ALexicalGoal = glgInputElementHashbangOrRegExp then
+        SkipHashbang;
       FHashbangSkipped := True;
     end;
 
