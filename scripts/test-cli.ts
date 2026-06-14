@@ -505,9 +505,12 @@ console.log("--timeout (bytecode)...");
 // -- --timeout inside long-running NATIVE operations ----------------------------
 //
 // A single JS statement can stall inside one native call (dense hole-fill for
-// a huge array index, or an unanchored regex scan over a long subject).  The
+// a huge array index, or a backtracking regex scan over a long subject).  The
 // deadline must interrupt those loops too, not just the dispatch loop between
-// JS-level steps.
+// JS-level steps.  Keep the regex fixture away from raw negative-scan
+// prefilters: those are supposed to complete quickly.
+
+const regexTimeoutScan = 'const s = "a".repeat(2000000); /a*b/.test(s);\n';
 
 console.log("--timeout (native sparse-array fill, interpreted)...");
 {
@@ -531,16 +534,14 @@ console.log("--timeout (native sparse-array fill, bytecode)...");
 
 console.log("--timeout (native regex scan, interpreted)...");
 {
-  const scan = 'const s = "a".repeat(20000000); /zz/.test(s);\n';
-  const { exitCode, json } = runLoaderJson(scan, ["--timeout=50"], { timeout: 10_000 });
+  const { exitCode, json } = runLoaderJson(regexTimeoutScan, ["--timeout=50"], { timeout: 10_000 });
   if (exitCode !== 1) throw new Error(`Regex-scan timeout exit code should be 1, got ${exitCode}`);
   if (json.error?.type !== "TimeoutError") throw new Error(`Expected TimeoutError, got ${json.error?.type}`);
 }
 
 console.log("--timeout (native regex scan, bytecode)...");
 {
-  const scan = 'const s = "a".repeat(20000000); /zz/.test(s);\n';
-  const { exitCode, json } = runLoaderJson(scan, ["--timeout=50", "--mode=bytecode"], { timeout: 10_000 });
+  const { exitCode, json } = runLoaderJson(regexTimeoutScan, ["--timeout=50", "--mode=bytecode"], { timeout: 10_000 });
   if (exitCode !== 1) throw new Error(`Bytecode regex-scan timeout exit code should be 1, got ${exitCode}`);
   if (json.error?.type !== "TimeoutError") throw new Error(`Expected TimeoutError, got ${json.error?.type}`);
 }
@@ -557,7 +558,7 @@ for (const modeArgs of [[], ["--mode=bytecode"]] as const) {
   const tmp = mkdtemp("goccia-timeout-import-");
   try {
     const dep = join(tmp, "dep.js");
-    writeFileSync(dep, 'const s = "a".repeat(20000000); /zz/.test(s);\nexport const ready = true;\n');
+    writeFileSync(dep, `${regexTimeoutScan}export const ready = true;\n`);
     const main = join(tmp, "main.js");
     writeFileSync(main, 'import("./dep.js").then(() => console.log("LOADED")).catch((e) => console.log("CAUGHT: " + e));\n');
     const proc = Bun.spawnSync(
