@@ -25,6 +25,7 @@ type
 implementation
 
 uses
+  Math,
   SysUtils,
 
   StringBuffer,
@@ -85,35 +86,54 @@ end;
 // ES2026 §22.1.2.2 String.fromCodePoint(...codePoints)
 function TGocciaGlobalString.StringFromCodePoint(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
-  ResultStr: string;
   I: Integer;
+  ArgValue: TGocciaValue;
   NumArg: TGocciaNumberLiteralValue;
   RawValue: Double;
   CodePoint: Cardinal;
+  SB: TStringBuffer;
 begin
-  ResultStr := '';
+  SB := TStringBuffer.Create(AArgs.Length * 4);
   I := 0;
   while I < AArgs.Length do
   begin
-    NumArg := AArgs.GetElement(I).ToNumberLiteral;
-    if NumArg.IsNaN or NumArg.IsInfinity or NumArg.IsNegativeInfinity then
-      ThrowRangeError(SErrorInvalidCodePoint, SSuggestCodePointRange);
+    ArgValue := AArgs.Items[I];
+    if ArgValue is TGocciaNumberLiteralValue then
+      NumArg := TGocciaNumberLiteralValue(ArgValue)
+    else
+      NumArg := ArgValue.ToNumberLiteral;
     RawValue := NumArg.Value;
-    if (RawValue < 0) or (RawValue > $10FFFF) or (RawValue <> Trunc(RawValue)) then
+    if IsNan(RawValue) or IsInfinite(RawValue) then
+      ThrowRangeError(SErrorInvalidCodePoint, SSuggestCodePointRange);
+    if (RawValue < 0) or (RawValue > $10FFFF) then
       ThrowRangeError(Format(SErrorNotValidCodePoint, [FormatDouble(RawValue)]), SSuggestCodePointRange);
     CodePoint := Trunc(RawValue);
+    if RawValue <> CodePoint then
+      ThrowRangeError(Format(SErrorNotValidCodePoint, [FormatDouble(RawValue)]), SSuggestCodePointRange);
 
     if CodePoint < $80 then
-      ResultStr := ResultStr + Chr(CodePoint)
+      SB.AppendChar(AnsiChar(CodePoint))
     else if CodePoint < $800 then
-      ResultStr := ResultStr + Chr($C0 or (CodePoint shr 6)) + Chr($80 or (CodePoint and $3F))
+    begin
+      SB.AppendChar(AnsiChar($C0 or (CodePoint shr 6)));
+      SB.AppendChar(AnsiChar($80 or (CodePoint and $3F)));
+    end
     else if CodePoint < $10000 then
-      ResultStr := ResultStr + Chr($E0 or (CodePoint shr 12)) + Chr($80 or ((CodePoint shr 6) and $3F)) + Chr($80 or (CodePoint and $3F))
+    begin
+      SB.AppendChar(AnsiChar($E0 or (CodePoint shr 12)));
+      SB.AppendChar(AnsiChar($80 or ((CodePoint shr 6) and $3F)));
+      SB.AppendChar(AnsiChar($80 or (CodePoint and $3F)));
+    end
     else
-      ResultStr := ResultStr + Chr($F0 or (CodePoint shr 18)) + Chr($80 or ((CodePoint shr 12) and $3F)) + Chr($80 or ((CodePoint shr 6) and $3F)) + Chr($80 or (CodePoint and $3F));
+    begin
+      SB.AppendChar(AnsiChar($F0 or (CodePoint shr 18)));
+      SB.AppendChar(AnsiChar($80 or ((CodePoint shr 12) and $3F)));
+      SB.AppendChar(AnsiChar($80 or ((CodePoint shr 6) and $3F)));
+      SB.AppendChar(AnsiChar($80 or (CodePoint and $3F)));
+    end;
     Inc(I);
   end;
-  Result := TGocciaStringLiteralValue.Create(ResultStr);
+  Result := TGocciaStringLiteralValue.Create(SB.ToString);
 end;
 
 // ES2026 §22.1.2.4 String.raw(template, ...substitutions)

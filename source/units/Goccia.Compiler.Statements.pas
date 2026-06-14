@@ -326,6 +326,22 @@ begin
   ACtx.Scope.FreeRegister;
 end;
 
+procedure CompileDiscardedExpression(const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaExpression);
+var
+  Reg: UInt8;
+begin
+  Reg := ACtx.Scope.AllocateRegister;
+  try
+    if AExpr is TGocciaIncrementExpression then
+      CompileIncrement(ACtx, TGocciaIncrementExpression(AExpr), Reg, False)
+    else
+      ACtx.CompileExpression(AExpr, Reg);
+  finally
+    ACtx.Scope.FreeRegister;
+  end;
+end;
+
 function IsArrayTypeAnnotation(const AAnnotation: string): Boolean;
 var
   Trimmed: string;
@@ -2689,6 +2705,16 @@ end;
 
 function ForBodyAssignsIdentifier(const ANode: TGocciaASTNode;
   const AName: string): Boolean; forward;
+function StatementNeedsPerIterationEnvironment(
+  const ANode: TGocciaASTNode): Boolean; forward;
+
+function ExpressionNeedsPerIterationEnvironment(
+  const AExpr: TGocciaExpression): Boolean;
+begin
+  Result := ExpressionContainsDirectEval(AExpr) or
+    ExpressionContainsSuspension(AExpr) or
+    ExpressionCreatesClosureBoundary(AExpr);
+end;
 
 function TryCompileCountedFor(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaForStatement): Boolean;
@@ -3029,10 +3055,189 @@ begin
   // are absent; deeper analysis would be unsound.
 end;
 
+function StatementNeedsPerIterationEnvironment(
+  const ANode: TGocciaASTNode): Boolean;
+var
+  Block: TGocciaBlockStatement;
+  ExprStmt: TGocciaExpressionStatement;
+  VarDecl: TGocciaVariableDeclaration;
+  IfStmt: TGocciaIfStatement;
+  ForStmt: TGocciaForStatement;
+  ForOf: TGocciaForOfStatement;
+  ForIn: TGocciaForInStatement;
+  WhileStmt: TGocciaWhileStatement;
+  DoWhileStmt: TGocciaDoWhileStatement;
+  TryStmt: TGocciaTryStatement;
+  ReturnStmt: TGocciaReturnStatement;
+  ThrowStmt: TGocciaThrowStatement;
+  SwitchStmt: TGocciaSwitchStatement;
+  EnumStmt: TGocciaEnumDeclaration;
+  ExportDefault: TGocciaExportDefaultDeclaration;
+  ExportVar: TGocciaExportVariableDeclaration;
+  ExportDestruct: TGocciaExportDestructuringDeclaration;
+  ExportEnum: TGocciaExportEnumDeclaration;
+  I, J: Integer;
+begin
+  Result := False;
+  if not Assigned(ANode) then
+    Exit;
+
+  if ANode is TGocciaExpression then
+    Exit(ExpressionNeedsPerIterationEnvironment(TGocciaExpression(ANode)));
+
+  if (ANode is TGocciaFunctionDeclaration) or
+     (ANode is TGocciaClassDeclaration) or
+     (ANode is TGocciaExportFunctionDeclaration) or
+     (ANode is TGocciaExportClassDeclaration) or
+     (ANode is TGocciaUsingDeclaration) or
+     (ANode is TGocciaWithStatement) or
+     (ANode is TGocciaForAwaitOfStatement) then
+    Exit(True);
+
+  if ANode is TGocciaExpressionStatement then
+  begin
+    ExprStmt := TGocciaExpressionStatement(ANode);
+    Result := ExpressionNeedsPerIterationEnvironment(ExprStmt.Expression);
+  end
+  else if ANode is TGocciaVariableDeclaration then
+  begin
+    VarDecl := TGocciaVariableDeclaration(ANode);
+    for I := 0 to High(VarDecl.Variables) do
+      if VarDecl.Variables[I].HasInitializer and
+         ExpressionNeedsPerIterationEnvironment(VarDecl.Variables[I].Initializer) then
+        Exit(True);
+  end
+  else if ANode is TGocciaDestructuringDeclaration then
+    Exit(True)
+  else if ANode is TGocciaBlockStatement then
+  begin
+    Block := TGocciaBlockStatement(ANode);
+    for I := 0 to Block.Nodes.Count - 1 do
+      if StatementNeedsPerIterationEnvironment(Block.Nodes[I]) then
+        Exit(True);
+  end
+  else if ANode is TGocciaIfStatement then
+  begin
+    IfStmt := TGocciaIfStatement(ANode);
+    Result := ExpressionNeedsPerIterationEnvironment(IfStmt.Condition) or
+      StatementNeedsPerIterationEnvironment(IfStmt.Consequent) or
+      StatementNeedsPerIterationEnvironment(IfStmt.Alternate);
+  end
+  else if ANode is TGocciaForStatement then
+  begin
+    ForStmt := TGocciaForStatement(ANode);
+    Result := StatementNeedsPerIterationEnvironment(ForStmt.Init) or
+      ExpressionNeedsPerIterationEnvironment(ForStmt.Condition) or
+      ExpressionNeedsPerIterationEnvironment(ForStmt.Update) or
+      StatementNeedsPerIterationEnvironment(ForStmt.Body);
+  end
+  else if ANode is TGocciaForOfStatement then
+  begin
+    ForOf := TGocciaForOfStatement(ANode);
+    Result := Assigned(ForOf.AssignmentTarget) or
+      Assigned(ForOf.BindingPattern) or Assigned(ForOf.MatchPattern) or
+      ExpressionNeedsPerIterationEnvironment(ForOf.Iterable) or
+      StatementNeedsPerIterationEnvironment(ForOf.Body);
+  end
+  else if ANode is TGocciaForInStatement then
+  begin
+    ForIn := TGocciaForInStatement(ANode);
+    Result := Assigned(ForIn.AssignmentTarget) or
+      Assigned(ForIn.BindingPattern) or
+      ExpressionNeedsPerIterationEnvironment(ForIn.ObjectExpression) or
+      StatementNeedsPerIterationEnvironment(ForIn.Body);
+  end
+  else if ANode is TGocciaWhileStatement then
+  begin
+    WhileStmt := TGocciaWhileStatement(ANode);
+    Result := ExpressionNeedsPerIterationEnvironment(WhileStmt.Condition) or
+      StatementNeedsPerIterationEnvironment(WhileStmt.Body);
+  end
+  else if ANode is TGocciaDoWhileStatement then
+  begin
+    DoWhileStmt := TGocciaDoWhileStatement(ANode);
+    Result := StatementNeedsPerIterationEnvironment(DoWhileStmt.Body) or
+      ExpressionNeedsPerIterationEnvironment(DoWhileStmt.Condition);
+  end
+  else if ANode is TGocciaTryStatement then
+  begin
+    TryStmt := TGocciaTryStatement(ANode);
+    Result := Assigned(TryStmt.CatchBindingPattern) or
+      Assigned(TryStmt.CatchPattern) or
+      StatementNeedsPerIterationEnvironment(TryStmt.Block) or
+      StatementNeedsPerIterationEnvironment(TryStmt.CatchBlock) or
+      StatementNeedsPerIterationEnvironment(TryStmt.FinallyBlock);
+  end
+  else if ANode is TGocciaReturnStatement then
+  begin
+    ReturnStmt := TGocciaReturnStatement(ANode);
+    Result := ExpressionNeedsPerIterationEnvironment(ReturnStmt.Value);
+  end
+  else if ANode is TGocciaThrowStatement then
+  begin
+    ThrowStmt := TGocciaThrowStatement(ANode);
+    Result := ExpressionNeedsPerIterationEnvironment(ThrowStmt.Value);
+  end
+  else if ANode is TGocciaSwitchStatement then
+  begin
+    SwitchStmt := TGocciaSwitchStatement(ANode);
+    if ExpressionNeedsPerIterationEnvironment(SwitchStmt.Discriminant) then
+      Exit(True);
+    for I := 0 to SwitchStmt.Cases.Count - 1 do
+    begin
+      if ExpressionNeedsPerIterationEnvironment(SwitchStmt.Cases[I].Test) then
+        Exit(True);
+      for J := 0 to SwitchStmt.Cases[I].Consequent.Count - 1 do
+        if StatementNeedsPerIterationEnvironment(
+          SwitchStmt.Cases[I].Consequent[J]) then
+          Exit(True);
+    end;
+  end
+  else if ANode is TGocciaEnumDeclaration then
+  begin
+    EnumStmt := TGocciaEnumDeclaration(ANode);
+    for I := 0 to High(EnumStmt.Members) do
+      if ExpressionNeedsPerIterationEnvironment(EnumStmt.Members[I].Initializer) then
+        Exit(True);
+  end
+  else if ANode is TGocciaExportDefaultDeclaration then
+  begin
+    ExportDefault := TGocciaExportDefaultDeclaration(ANode);
+    Result := ExpressionNeedsPerIterationEnvironment(ExportDefault.Expression);
+  end
+  else if ANode is TGocciaExportVariableDeclaration then
+  begin
+    ExportVar := TGocciaExportVariableDeclaration(ANode);
+    Result := StatementNeedsPerIterationEnvironment(ExportVar.Declaration);
+  end
+  else if ANode is TGocciaExportDestructuringDeclaration then
+  begin
+    ExportDestruct := TGocciaExportDestructuringDeclaration(ANode);
+    Result := StatementNeedsPerIterationEnvironment(ExportDestruct.Declaration);
+  end
+  else if ANode is TGocciaExportEnumDeclaration then
+  begin
+    ExportEnum := TGocciaExportEnumDeclaration(ANode);
+    Result := StatementNeedsPerIterationEnvironment(ExportEnum.Declaration);
+  end;
+end;
+
+function ForStatementCanShareLexicalEnvironment(
+  const AStmt: TGocciaForStatement): Boolean;
+begin
+  Result := Assigned(AStmt.Init) and
+    (AStmt.Init is TGocciaVariableDeclaration) and
+    not TGocciaVariableDeclaration(AStmt.Init).IsVar and
+    not StatementNeedsPerIterationEnvironment(AStmt.Init) and
+    not ExpressionNeedsPerIterationEnvironment(AStmt.Condition) and
+    not ExpressionNeedsPerIterationEnvironment(AStmt.Update) and
+    not StatementNeedsPerIterationEnvironment(AStmt.Body);
+end;
+
 procedure CompileForStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaForStatement);
 var
-  CondReg, TempReg: UInt8;
+  CondReg: UInt8;
   LoopStart, ExitJump, I: Integer;
   ClosedLocals: array[0..255] of UInt8;
   ClosedCount: Integer;
@@ -3042,6 +3247,7 @@ var
   UpdateClosedCount: Integer;
   LoopControl: TLoopControlState;
   HasLexicalInit: Boolean;
+  UseSharedLexicalFor: Boolean;
   PerIterNames: TStringList;
   PerIterIsConst: Boolean;
   OuterSlots, BodySlots, UpdateSlots: array of UInt8;
@@ -3063,6 +3269,7 @@ begin
 
   HasLexicalInit := False;
   HasUsingInit := AStmt.Init is TGocciaUsingDeclaration;
+  UseSharedLexicalFor := False;
   PerIterIsConst := False;
   PerIterNames := nil;
 
@@ -3098,6 +3305,9 @@ begin
     end;
   end;
 
+  if HasLexicalInit then
+    UseSharedLexicalFor := ForStatementCanShareLexicalEnvironment(AStmt);
+
   try
     if HasLexicalInit then
       ACtx.Scope.BeginScope;
@@ -3131,7 +3341,7 @@ begin
       BeginLoopControl(ACtx, LoopControl);
 
       try
-        if HasLexicalInit then
+        if HasLexicalInit and not UseSharedLexicalFor then
       begin
         SetLength(OuterSlots, PerIterNames.Count);
         SetLength(BodySlots, PerIterNames.Count);
@@ -3201,14 +3411,7 @@ begin
         end;
 
         if Assigned(AStmt.Update) then
-        begin
-          TempReg := ACtx.Scope.AllocateRegister;
-          try
-            ACtx.CompileExpression(AStmt.Update, TempReg);
-          finally
-            ACtx.Scope.FreeRegister;
-          end;
-        end;
+          CompileDiscardedExpression(ACtx, AStmt.Update);
 
         for I := 0 to PerIterNames.Count - 1 do
           EmitInstruction(ACtx,
@@ -3263,14 +3466,7 @@ begin
             EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
 
         if Assigned(AStmt.Update) then
-        begin
-          TempReg := ACtx.Scope.AllocateRegister;
-          try
-            ACtx.CompileExpression(AStmt.Update, TempReg);
-          finally
-            ACtx.Scope.FreeRegister;
-          end;
-        end;
+          CompileDiscardedExpression(ACtx, AStmt.Update);
 
         EmitInstruction(ACtx,
           EncodeAx(OP_JUMP, LoopStart - CurrentCodePosition(ACtx) - 1));

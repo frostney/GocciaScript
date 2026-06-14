@@ -190,6 +190,10 @@ begin
     OP_INC:                            Result := 'OP_INC';
     OP_DEC:                            Result := 'OP_DEC';
     OP_TO_NUMERIC:                     Result := 'OP_TO_NUMERIC';
+    OP_INC_NUMERIC:                    Result := 'OP_INC_NUMERIC';
+    OP_DEC_NUMERIC:                    Result := 'OP_DEC_NUMERIC';
+    OP_POST_INC_NUMERIC:               Result := 'OP_POST_INC_NUMERIC';
+    OP_POST_DEC_NUMERIC:               Result := 'OP_POST_DEC_NUMERIC';
   else
     Result := Format('OP_UNKNOWN_%d', [AOp]);
   end;

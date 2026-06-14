@@ -41,8 +41,10 @@ type
 
     // Index-based element access
     function GetLength: Integer;
+    function HasDenseElementLength: Boolean;
     function GetElement(const AIndex: Integer): TGocciaValue;
     function SetElement(const AIndex: Integer; const AValue: TGocciaValue): Boolean;
+    procedure SetIndexProperty(const AIndex: Integer; const AValue: TGocciaValue);
     function TypeName: string; override;
     function GetProperty(const AName: string): TGocciaValue; override;
     function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; override;
@@ -611,6 +613,20 @@ begin
   end;
 end;
 
+function HasPropertyMapArrayIndexAtOrAbove(const AArray: TGocciaArrayValue;
+  const ANewLength: Int64): Boolean;
+var
+  Keys: TArray<string>;
+  Key: string;
+  Index: Int64;
+begin
+  Keys := AArray.FProperties.Keys;
+  for Key in Keys do
+    if TryParseArrayElementIndex(Key, Index) and (Index >= ANewLength) then
+      Exit(True);
+  Result := False;
+end;
+
 function IsArrayLengthDescriptorCompatible(
   const AArray: TGocciaArrayValue;
   const ADescriptor: TGocciaPropertyDescriptor): Boolean;
@@ -684,6 +700,15 @@ begin
     end;
 
     NewWritable := not (ADescriptor.HasWritableField and not ADescriptor.Writable);
+    if not HasPropertyMapArrayIndexAtOrAbove(AArray, NewLen) and
+       (NewLen <= AArray.FElements.Count) then
+    begin
+      AArray.FElements.Count := Integer(NewLen);
+      AArray.FLength := NewLen;
+      if not NewWritable then
+        AArray.FLengthWritable := False;
+      Exit(True);
+    end;
     if not DeleteArrayIndexesAtOrAbove(AArray, NewLen, FailedIndex) then
     begin
       if CanStoreDenseElementIndex(FailedIndex, AArray.FElements.Count) then
@@ -1222,6 +1247,13 @@ begin
   Result := FElements.Count;
 end;
 
+function TGocciaArrayValue.HasDenseElementLength: Boolean;
+begin
+  if FLength < FElements.Count then
+    FLength := FElements.Count;
+  Result := FLength = FElements.Count;
+end;
+
 function TGocciaArrayValue.GetElement(const AIndex: Integer): TGocciaValue;
 begin
   if (AIndex >= 0) and (AIndex < FElements.Count) then
@@ -1238,13 +1270,61 @@ begin
     Exit;
   end;
 
-  // Extend array if necessary
-  ExtendElementsWithHoles(FElements, Int64(AIndex) + 1);
-
-  FElements[AIndex] := AValue;
+  if AIndex = FElements.Count then
+    FElements.Add(AValue)
+  else
+  begin
+    ExtendElementsWithHoles(FElements, Int64(AIndex) + 1);
+    FElements[AIndex] := AValue;
+  end;
   if AIndex + 1 > FLength then
     FLength := AIndex + 1;
   Result := True;
+end;
+
+procedure TGocciaArrayValue.SetIndexProperty(const AIndex: Integer; const AValue: TGocciaValue);
+var
+  IndexName: string;
+begin
+  if AIndex < 0 then
+  begin
+    SetProperty(IntToStr(AIndex), AValue);
+    Exit;
+  end;
+
+  if FProperties.Count > 0 then
+  begin
+    IndexName := IntToStr(AIndex);
+    if FProperties.ContainsKey(IndexName) then
+    begin
+      inherited AssignProperty(IndexName, AValue);
+      if Int64(AIndex) + 1 > FLength then
+        FLength := Int64(AIndex) + 1;
+      Exit;
+    end;
+  end;
+
+  if (AIndex >= FLength) and not FLengthWritable then
+    ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [IntToStr(AIndex)]),
+      SSuggestCannotDeleteNonConfigurable);
+
+  if CanStoreDenseElementIndex(AIndex, FElements.Count) then
+  begin
+    if AIndex = FElements.Count then
+      FElements.Add(AValue)
+    else
+    begin
+      ExtendElementsWithHoles(FElements, Int64(AIndex) + 1);
+      FElements[AIndex] := AValue;
+    end;
+  end
+  else
+    inherited DefineProperty(IntToStr(AIndex),
+      TGocciaPropertyDescriptorData.Create(AValue,
+        [pfEnumerable, pfConfigurable, pfWritable]));
+
+  if Int64(AIndex) + 1 > FLength then
+    FLength := Int64(AIndex) + 1;
 end;
 
 function TGocciaArrayValue.ValidateArrayMethodCall(const AMethodName: string; const AArgs: TGocciaArgumentsCollection;

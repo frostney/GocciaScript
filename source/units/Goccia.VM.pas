@@ -6861,7 +6861,7 @@ begin
           .AssignSymbolProperty(Key.Symbol, Value);
       pkkIndex:
         TGocciaArrayValue(FRegisters[ATargetIndex].ObjectValue)
-          .SetProperty(IntToStr(Key.Index), Value);
+          .SetIndexProperty(Key.Index, Value);
     else
       TGocciaArrayValue(FRegisters[ATargetIndex].ObjectValue)
         .SetProperty(Key.Name, Value);
@@ -11497,6 +11497,7 @@ var
   Template: TGocciaFunctionTemplate;
   ChildTemplate: TGocciaFunctionTemplate;
   LeftValue, RightValue, TargetValue, PropKeyValue, EvalSourceValue: TGocciaValue;
+  NumericValue: Double;
   PropKey: TGocciaPropertyKey;
   PrivateDescriptor: TGocciaPropertyDescriptor;
   FunctionConstructorValue, ObjectConstructorValue: TGocciaValue;
@@ -12642,6 +12643,196 @@ begin
             TGocciaBigIntValue(FRegisters[B].ObjectValue).Value.Subtract(TBigInteger.One)))
         else
           SetRegister(A, VMNumberValue(GetRegisterFast(B).ToNumberLiteral.Value - 1));
+
+      OP_INC_NUMERIC:
+        case FRegisters[B].Kind of
+          grkInt:
+            SetRegisterRaw(A, VMIntResult(FRegisters[B].IntValue + 1));
+          grkFloat:
+            SetRegisterRaw(A, VMNumberRegister(FRegisters[B].FloatValue + 1.0));
+          grkBoolean:
+            if FRegisters[B].BoolValue then
+              SetRegisterRaw(A, RegisterInt(2))
+            else
+              SetRegisterRaw(A, RegisterInt(1));
+          grkNull:
+            SetRegisterRaw(A, RegisterInt(1));
+          grkUndefined, grkHole:
+            SetRegister(A, TGocciaNumberLiteralValue.NaNValue);
+        else
+          LeftValue := ToPrimitive(GetRegisterFast(B));
+          if LeftValue is TGocciaBigIntValue then
+            SetRegister(A, TGocciaBigIntValue.Create(
+              TGocciaBigIntValue(LeftValue).Value.Add(TBigInteger.One)))
+          else
+            SetRegister(A, VMNumberValue(LeftValue.ToNumberLiteral.Value + 1));
+        end;
+
+      OP_DEC_NUMERIC:
+        case FRegisters[B].Kind of
+          grkInt:
+            SetRegisterRaw(A, VMIntResult(FRegisters[B].IntValue - 1));
+          grkFloat:
+            SetRegisterRaw(A, VMNumberRegister(FRegisters[B].FloatValue - 1.0));
+          grkBoolean:
+            if FRegisters[B].BoolValue then
+              SetRegisterRaw(A, RegisterInt(0))
+            else
+              SetRegisterRaw(A, RegisterInt(-1));
+          grkNull:
+            SetRegisterRaw(A, RegisterInt(-1));
+          grkUndefined, grkHole:
+            SetRegister(A, TGocciaNumberLiteralValue.NaNValue);
+        else
+          LeftValue := ToPrimitive(GetRegisterFast(B));
+          if LeftValue is TGocciaBigIntValue then
+            SetRegister(A, TGocciaBigIntValue.Create(
+              TGocciaBigIntValue(LeftValue).Value.Subtract(TBigInteger.One)))
+          else
+            SetRegister(A, VMNumberValue(LeftValue.ToNumberLiteral.Value - 1));
+        end;
+
+      OP_POST_INC_NUMERIC:
+        case FRegisters[B].Kind of
+          grkInt:
+          begin
+            FRegisters[A] := FRegisters[B];
+            if (A < FLocalCellCount) and Assigned(FLocalCells[A]) then
+              FLocalCells[A].Value := FRegisters[A];
+            FRegisters[B] := VMIntResult(FRegisters[B].IntValue + 1);
+            if (B < FLocalCellCount) and Assigned(FLocalCells[B]) then
+              FLocalCells[B].Value := FRegisters[B];
+          end;
+          grkFloat:
+          begin
+            FRegisters[A] := FRegisters[B];
+            if (A < FLocalCellCount) and Assigned(FLocalCells[A]) then
+              FLocalCells[A].Value := FRegisters[A];
+            FRegisters[B] := VMNumberRegister(FRegisters[B].FloatValue + 1.0);
+            if (B < FLocalCellCount) and Assigned(FLocalCells[B]) then
+              FLocalCells[B].Value := FRegisters[B];
+          end;
+          grkBoolean:
+          begin
+            if FRegisters[B].BoolValue then
+            begin
+              FRegisters[A] := RegisterInt(1);
+              if (A < FLocalCellCount) and Assigned(FLocalCells[A]) then
+                FLocalCells[A].Value := FRegisters[A];
+              FRegisters[B] := RegisterInt(2);
+              if (B < FLocalCellCount) and Assigned(FLocalCells[B]) then
+                FLocalCells[B].Value := FRegisters[B];
+            end
+            else
+            begin
+              FRegisters[A] := RegisterInt(0);
+              if (A < FLocalCellCount) and Assigned(FLocalCells[A]) then
+                FLocalCells[A].Value := FRegisters[A];
+              FRegisters[B] := RegisterInt(1);
+              if (B < FLocalCellCount) and Assigned(FLocalCells[B]) then
+                FLocalCells[B].Value := FRegisters[B];
+            end;
+          end;
+          grkNull:
+          begin
+            FRegisters[A] := RegisterInt(0);
+            if (A < FLocalCellCount) and Assigned(FLocalCells[A]) then
+              FLocalCells[A].Value := FRegisters[A];
+            FRegisters[B] := RegisterInt(1);
+            if (B < FLocalCellCount) and Assigned(FLocalCells[B]) then
+              FLocalCells[B].Value := FRegisters[B];
+          end;
+          grkUndefined, grkHole:
+          begin
+            SetRegister(A, TGocciaNumberLiteralValue.NaNValue);
+            SetRegister(B, TGocciaNumberLiteralValue.NaNValue);
+          end;
+        else
+          LeftValue := ToPrimitive(GetRegisterFast(B));
+          if LeftValue is TGocciaBigIntValue then
+          begin
+            SetRegisterFast(A, LeftValue);
+            SetRegister(B, TGocciaBigIntValue.Create(
+              TGocciaBigIntValue(LeftValue).Value.Add(TBigInteger.One)));
+          end
+          else
+          begin
+            NumericValue := LeftValue.ToNumberLiteral.Value;
+            SetRegister(A, VMNumberValue(NumericValue));
+            SetRegister(B, VMNumberValue(NumericValue + 1));
+          end;
+        end;
+
+      OP_POST_DEC_NUMERIC:
+        case FRegisters[B].Kind of
+          grkInt:
+          begin
+            FRegisters[A] := FRegisters[B];
+            if (A < FLocalCellCount) and Assigned(FLocalCells[A]) then
+              FLocalCells[A].Value := FRegisters[A];
+            FRegisters[B] := VMIntResult(FRegisters[B].IntValue - 1);
+            if (B < FLocalCellCount) and Assigned(FLocalCells[B]) then
+              FLocalCells[B].Value := FRegisters[B];
+          end;
+          grkFloat:
+          begin
+            FRegisters[A] := FRegisters[B];
+            if (A < FLocalCellCount) and Assigned(FLocalCells[A]) then
+              FLocalCells[A].Value := FRegisters[A];
+            FRegisters[B] := VMNumberRegister(FRegisters[B].FloatValue - 1.0);
+            if (B < FLocalCellCount) and Assigned(FLocalCells[B]) then
+              FLocalCells[B].Value := FRegisters[B];
+          end;
+          grkBoolean:
+          begin
+            if FRegisters[B].BoolValue then
+            begin
+              FRegisters[A] := RegisterInt(1);
+              if (A < FLocalCellCount) and Assigned(FLocalCells[A]) then
+                FLocalCells[A].Value := FRegisters[A];
+              FRegisters[B] := RegisterInt(0);
+              if (B < FLocalCellCount) and Assigned(FLocalCells[B]) then
+                FLocalCells[B].Value := FRegisters[B];
+            end
+            else
+            begin
+              FRegisters[A] := RegisterInt(0);
+              if (A < FLocalCellCount) and Assigned(FLocalCells[A]) then
+                FLocalCells[A].Value := FRegisters[A];
+              FRegisters[B] := RegisterInt(-1);
+              if (B < FLocalCellCount) and Assigned(FLocalCells[B]) then
+                FLocalCells[B].Value := FRegisters[B];
+            end;
+          end;
+          grkNull:
+          begin
+            FRegisters[A] := RegisterInt(0);
+            if (A < FLocalCellCount) and Assigned(FLocalCells[A]) then
+              FLocalCells[A].Value := FRegisters[A];
+            FRegisters[B] := RegisterInt(-1);
+            if (B < FLocalCellCount) and Assigned(FLocalCells[B]) then
+              FLocalCells[B].Value := FRegisters[B];
+          end;
+          grkUndefined, grkHole:
+          begin
+            SetRegister(A, TGocciaNumberLiteralValue.NaNValue);
+            SetRegister(B, TGocciaNumberLiteralValue.NaNValue);
+          end;
+        else
+          LeftValue := ToPrimitive(GetRegisterFast(B));
+          if LeftValue is TGocciaBigIntValue then
+          begin
+            SetRegisterFast(A, LeftValue);
+            SetRegister(B, TGocciaBigIntValue.Create(
+              TGocciaBigIntValue(LeftValue).Value.Subtract(TBigInteger.One)));
+          end
+          else
+          begin
+            NumericValue := LeftValue.ToNumberLiteral.Value;
+            SetRegister(A, VMNumberValue(NumericValue));
+            SetRegister(B, VMNumberValue(NumericValue - 1));
+          end;
+        end;
 
       OP_MUL:
       begin
