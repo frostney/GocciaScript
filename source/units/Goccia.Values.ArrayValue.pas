@@ -613,6 +613,20 @@ begin
   end;
 end;
 
+function HasPropertyMapArrayIndexAtOrAbove(const AArray: TGocciaArrayValue;
+  const ANewLength: Int64): Boolean;
+var
+  Keys: TArray<string>;
+  Key: string;
+  Index: Int64;
+begin
+  Keys := AArray.FProperties.Keys;
+  for Key in Keys do
+    if TryParseArrayElementIndex(Key, Index) and (Index >= ANewLength) then
+      Exit(True);
+  Result := False;
+end;
+
 function IsArrayLengthDescriptorCompatible(
   const AArray: TGocciaArrayValue;
   const ADescriptor: TGocciaPropertyDescriptor): Boolean;
@@ -686,7 +700,7 @@ begin
     end;
 
     NewWritable := not (ADescriptor.HasWritableField and not ADescriptor.Writable);
-    if (AArray.FProperties.Count = 0) and
+    if not HasPropertyMapArrayIndexAtOrAbove(AArray, NewLen) and
        (NewLen <= AArray.FElements.Count) then
     begin
       AArray.FElements.Count := Integer(NewLen);

@@ -3134,13 +3134,17 @@ begin
   else if ANode is TGocciaForOfStatement then
   begin
     ForOf := TGocciaForOfStatement(ANode);
-    Result := ExpressionNeedsPerIterationEnvironment(ForOf.Iterable) or
+    Result := Assigned(ForOf.AssignmentTarget) or
+      Assigned(ForOf.BindingPattern) or Assigned(ForOf.MatchPattern) or
+      ExpressionNeedsPerIterationEnvironment(ForOf.Iterable) or
       StatementNeedsPerIterationEnvironment(ForOf.Body);
   end
   else if ANode is TGocciaForInStatement then
   begin
     ForIn := TGocciaForInStatement(ANode);
-    Result := ExpressionNeedsPerIterationEnvironment(ForIn.ObjectExpression) or
+    Result := Assigned(ForIn.AssignmentTarget) or
+      Assigned(ForIn.BindingPattern) or
+      ExpressionNeedsPerIterationEnvironment(ForIn.ObjectExpression) or
       StatementNeedsPerIterationEnvironment(ForIn.Body);
   end
   else if ANode is TGocciaWhileStatement then
@@ -3158,7 +3162,9 @@ begin
   else if ANode is TGocciaTryStatement then
   begin
     TryStmt := TGocciaTryStatement(ANode);
-    Result := StatementNeedsPerIterationEnvironment(TryStmt.Block) or
+    Result := Assigned(TryStmt.CatchBindingPattern) or
+      Assigned(TryStmt.CatchPattern) or
+      StatementNeedsPerIterationEnvironment(TryStmt.Block) or
       StatementNeedsPerIterationEnvironment(TryStmt.CatchBlock) or
       StatementNeedsPerIterationEnvironment(TryStmt.FinallyBlock);
   end

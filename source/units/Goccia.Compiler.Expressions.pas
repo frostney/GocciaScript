@@ -5020,12 +5020,8 @@ begin
   end;
 
   if AKeepResult and not AExpr.IsPrefix then
-  begin
-    EmitInstruction(ACtx, EncodeABC(OP_TO_NUMERIC, AValueReg, AValueReg, 0));
-    EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, AValueReg, 0));
-    EmitInstruction(ACtx, EncodeABC(AOp, AValueReg, AValueReg, 0));
-    Exit;
-  end;
+    raise Exception.Create(
+      'Compiler error: postfix increment requires a distinct result register');
 
   EmitInstruction(ACtx, EncodeABC(ANumericOp, AValueReg, AValueReg, 0));
   if AKeepResult and AExpr.IsPrefix and (ADest <> AValueReg) then
@@ -5122,122 +5118,136 @@ var
   Op, NumericOp, PostNumericOp: TGocciaOpCode;
   Ident: TGocciaIdentifierExpression;
   MemberExpr: TGocciaMemberExpression;
+  ReservedDestRegister: Boolean;
 begin
-  if AExpr.Operator = gttIncrement then
+  ReservedDestRegister := False;
+  if AKeepResult and not AExpr.IsPrefix and
+     (ADest = ACtx.Scope.NextSlot) and not IsLocalSlot(ACtx.Scope, ADest) then
   begin
-    Op := OP_INC;
-    NumericOp := OP_INC_NUMERIC;
-    PostNumericOp := OP_POST_INC_NUMERIC;
-  end
-  else
-  begin
-    Op := OP_DEC;
-    NumericOp := OP_DEC_NUMERIC;
-    PostNumericOp := OP_POST_DEC_NUMERIC;
+    ACtx.Scope.AllocateRegister;
+    ReservedDestRegister := True;
   end;
 
-  if AExpr.Operand is TGocciaMemberExpression then
-  begin
-    MemberExpr := TGocciaMemberExpression(AExpr.Operand);
-    if MemberExpr.Computed then
-      CompileIncrementComputedMember(ACtx, AExpr, MemberExpr, ADest, Op,
-        NumericOp, PostNumericOp, AKeepResult)
-    else
-      CompileIncrementMember(ACtx, AExpr, MemberExpr, ADest, Op,
-        NumericOp, PostNumericOp, AKeepResult);
-    Exit;
-  end;
-
-  if not (AExpr.Operand is TGocciaIdentifierExpression) then
-  begin
-    EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, ADest, 0, 0));
-    Exit;
-  end;
-
-  Ident := TGocciaIdentifierExpression(AExpr.Operand);
-
-  if ShouldTryWithBinding(ACtx.Scope, Ident.Name) then
-  begin
-    RegResult := ACtx.Scope.AllocateRegister;
-    EmitLoadBindingByName(ACtx, Ident.Name, RegResult, False);
-    EmitIncrementStep(ACtx, AExpr, ADest, RegResult, Op, NumericOp,
-      PostNumericOp, AKeepResult);
-    EmitWithAssignmentOrFallback(ACtx, Ident.Name, RegResult);
-    ACtx.Scope.FreeRegister;
-    Exit;
-  end;
-
-  LocalIdx := ACtx.Scope.ResolveLocal(Ident.Name);
-  if LocalIdx >= 0 then
-  begin
-    if ACtx.Scope.GetLocal(LocalIdx).IsConst then
+  try
+    if AExpr.Operator = gttIncrement then
     begin
-      EmitConstAssignmentError(ACtx);
+      Op := OP_INC;
+      NumericOp := OP_INC_NUMERIC;
+      PostNumericOp := OP_POST_INC_NUMERIC;
+    end
+    else
+    begin
+      Op := OP_DEC;
+      NumericOp := OP_DEC_NUMERIC;
+      PostNumericOp := OP_POST_DEC_NUMERIC;
+    end;
+
+    if AExpr.Operand is TGocciaMemberExpression then
+    begin
+      MemberExpr := TGocciaMemberExpression(AExpr.Operand);
+      if MemberExpr.Computed then
+        CompileIncrementComputedMember(ACtx, AExpr, MemberExpr, ADest, Op,
+          NumericOp, PostNumericOp, AKeepResult)
+      else
+        CompileIncrementMember(ACtx, AExpr, MemberExpr, ADest, Op,
+          NumericOp, PostNumericOp, AKeepResult);
       Exit;
     end;
-    if ACtx.Scope.GetLocal(LocalIdx).IsGlobalBacked then
+
+    if not (AExpr.Operand is TGocciaIdentifierExpression) then
+    begin
+      EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, ADest, 0, 0));
+      Exit;
+    end;
+
+    Ident := TGocciaIdentifierExpression(AExpr.Operand);
+
+    if ShouldTryWithBinding(ACtx.Scope, Ident.Name) then
     begin
       RegResult := ACtx.Scope.AllocateRegister;
-      EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, RegResult,
-        ACtx.Template.AddConstantString(Ident.Name)));
+      EmitLoadBindingByName(ACtx, Ident.Name, RegResult, False);
       EmitIncrementStep(ACtx, AExpr, ADest, RegResult, Op, NumericOp,
         PostNumericOp, AKeepResult);
-      EmitSetGlobalByName(ACtx, RegResult, Ident.Name);
-      EmitExportBindingUpdates(ACtx,
-        ACtx.Scope.GetLocal(LocalIdx).ExportNames,
-        ACtx.Scope.GetLocal(LocalIdx).ExportNameCount, RegResult);
+      EmitWithAssignmentOrFallback(ACtx, Ident.Name, RegResult);
       ACtx.Scope.FreeRegister;
       Exit;
     end;
-    Slot := ACtx.Scope.GetLocal(LocalIdx).Slot;
-    if ACtx.Scope.GetLocal(LocalIdx).IsCaptured then
-      EmitInstruction(ACtx, EncodeABx(OP_GET_LOCAL, Slot, UInt16(Slot)));
-    EmitIncrementStep(ACtx, AExpr, ADest, Slot, Op, NumericOp,
-      PostNumericOp, AKeepResult);
-    if ACtx.Scope.GetLocal(LocalIdx).IsCaptured then
-      EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, Slot, UInt16(Slot)));
-    EmitExportBindingUpdates(ACtx,
-      ACtx.Scope.GetLocal(LocalIdx).ExportNames,
-      ACtx.Scope.GetLocal(LocalIdx).ExportNameCount, Slot);
-    Exit;
-  end;
 
-  UpvalIdx := ACtx.Scope.ResolveUpvalue(Ident.Name);
-  if UpvalIdx >= 0 then
-  begin
-    if ACtx.Scope.GetUpvalue(UpvalIdx).IsConst then
+    LocalIdx := ACtx.Scope.ResolveLocal(Ident.Name);
+    if LocalIdx >= 0 then
     begin
-      EmitConstAssignmentError(ACtx);
+      if ACtx.Scope.GetLocal(LocalIdx).IsConst then
+      begin
+        EmitConstAssignmentError(ACtx);
+        Exit;
+      end;
+      if ACtx.Scope.GetLocal(LocalIdx).IsGlobalBacked then
+      begin
+        RegResult := ACtx.Scope.AllocateRegister;
+        EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, RegResult,
+          ACtx.Template.AddConstantString(Ident.Name)));
+        EmitIncrementStep(ACtx, AExpr, ADest, RegResult, Op, NumericOp,
+          PostNumericOp, AKeepResult);
+        EmitSetGlobalByName(ACtx, RegResult, Ident.Name);
+        EmitExportBindingUpdates(ACtx,
+          ACtx.Scope.GetLocal(LocalIdx).ExportNames,
+          ACtx.Scope.GetLocal(LocalIdx).ExportNameCount, RegResult);
+        ACtx.Scope.FreeRegister;
+        Exit;
+      end;
+      Slot := ACtx.Scope.GetLocal(LocalIdx).Slot;
+      if ACtx.Scope.GetLocal(LocalIdx).IsCaptured then
+        EmitInstruction(ACtx, EncodeABx(OP_GET_LOCAL, Slot, UInt16(Slot)));
+      EmitIncrementStep(ACtx, AExpr, ADest, Slot, Op, NumericOp,
+        PostNumericOp, AKeepResult);
+      if ACtx.Scope.GetLocal(LocalIdx).IsCaptured then
+        EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, Slot, UInt16(Slot)));
+      EmitExportBindingUpdates(ACtx,
+        ACtx.Scope.GetLocal(LocalIdx).ExportNames,
+        ACtx.Scope.GetLocal(LocalIdx).ExportNameCount, Slot);
       Exit;
     end;
+
+    UpvalIdx := ACtx.Scope.ResolveUpvalue(Ident.Name);
+    if UpvalIdx >= 0 then
+    begin
+      if ACtx.Scope.GetUpvalue(UpvalIdx).IsConst then
+      begin
+        EmitConstAssignmentError(ACtx);
+        Exit;
+      end;
+      RegResult := ACtx.Scope.AllocateRegister;
+      if ACtx.Scope.GetUpvalue(UpvalIdx).IsGlobalBacked then
+        EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, RegResult,
+          ACtx.Template.AddConstantString(Ident.Name)))
+      else
+        EmitInstruction(ACtx, EncodeABx(OP_GET_UPVALUE, RegResult, UInt16(UpvalIdx)));
+      EmitIncrementStep(ACtx, AExpr, ADest, RegResult, Op, NumericOp,
+        PostNumericOp, AKeepResult);
+      if ACtx.Scope.GetUpvalue(UpvalIdx).IsGlobalBacked then
+      begin
+        EmitSetGlobalByName(ACtx, RegResult, Ident.Name)
+      end
+      else
+        EmitInstruction(ACtx, EncodeABx(OP_SET_UPVALUE, RegResult, UInt16(UpvalIdx)));
+      EmitExportBindingUpdates(ACtx,
+        ACtx.Scope.GetUpvalue(UpvalIdx).ExportNames,
+        ACtx.Scope.GetUpvalue(UpvalIdx).ExportNameCount, RegResult);
+      ACtx.Scope.FreeRegister;
+      Exit;
+    end;
+
     RegResult := ACtx.Scope.AllocateRegister;
-    if ACtx.Scope.GetUpvalue(UpvalIdx).IsGlobalBacked then
-      EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, RegResult,
-        ACtx.Template.AddConstantString(Ident.Name)))
-    else
-      EmitInstruction(ACtx, EncodeABx(OP_GET_UPVALUE, RegResult, UInt16(UpvalIdx)));
+    EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, RegResult,
+      ACtx.Template.AddConstantString(Ident.Name)));
     EmitIncrementStep(ACtx, AExpr, ADest, RegResult, Op, NumericOp,
       PostNumericOp, AKeepResult);
-    if ACtx.Scope.GetUpvalue(UpvalIdx).IsGlobalBacked then
-    begin
-      EmitSetGlobalByName(ACtx, RegResult, Ident.Name)
-    end
-    else
-      EmitInstruction(ACtx, EncodeABx(OP_SET_UPVALUE, RegResult, UInt16(UpvalIdx)));
-    EmitExportBindingUpdates(ACtx,
-      ACtx.Scope.GetUpvalue(UpvalIdx).ExportNames,
-      ACtx.Scope.GetUpvalue(UpvalIdx).ExportNameCount, RegResult);
+    EmitSetGlobalByName(ACtx, RegResult, Ident.Name);
     ACtx.Scope.FreeRegister;
-    Exit;
+  finally
+    if ReservedDestRegister then
+      ACtx.Scope.FreeRegister;
   end;
-
-  RegResult := ACtx.Scope.AllocateRegister;
-  EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, RegResult,
-    ACtx.Template.AddConstantString(Ident.Name)));
-  EmitIncrementStep(ACtx, AExpr, ADest, RegResult, Op, NumericOp,
-    PostNumericOp, AKeepResult);
-  EmitSetGlobalByName(ACtx, RegResult, Ident.Name);
-  ACtx.Scope.FreeRegister;
 end;
 
 procedure AddOptionalChainJump(const ACtx: TGocciaCompilationContext;
