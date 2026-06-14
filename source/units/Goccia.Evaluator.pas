@@ -175,6 +175,11 @@ procedure RunClassInstanceInitializers(const AClassValue: TGocciaClassValue;
   const AInstance: TGocciaObjectValue;
   const AContext: TGocciaEvaluationContext;
   const AInitializationMode: TGocciaInstanceInitializationMode); forward;
+function DisposeTrackedResources(const ATracker: TGocciaDisposalTracker;
+  const AExistingError: TGocciaValue): TGocciaValue; forward;
+function DisposeTrackedResourcesAsync(const ATracker: TGocciaDisposalTracker;
+  const AExistingError: TGocciaValue): TGocciaValue; forward;
+function HasAsyncDisposals(const ATracker: TGocciaDisposalTracker): Boolean; forward;
 
 const
   FOR_IN_ENTRY_OWNER = '__gocciaForInOwner';
@@ -3729,8 +3734,67 @@ var
   HeadCompleted, HeadYielding: Boolean;
   BodyYielding: Boolean;
   ShouldCloseIterator: Boolean;
+  IterationTracker: TGocciaDisposalTracker;
+  DisposalError: TGocciaValue;
+
+  procedure RegisterForOfUsingResource;
+  var
+    DisposeMethod: TGocciaValue;
+    Hint: TGocciaDisposalHint;
+  begin
+    if not AForOfStatement.IsUsing then
+      Exit;
+
+    if AForOfStatement.IsAwaitUsing then
+      Hint := dhAsyncDispose
+    else
+      Hint := dhSyncDispose;
+
+    IterationTracker := TGocciaDisposalTracker.Create;
+    try
+      if (CurrentValue is TGocciaUndefinedLiteralValue) or
+         (CurrentValue is TGocciaNullLiteralValue) then
+      begin
+        if Hint = dhAsyncDispose then
+          IterationTracker.AddResource(nil, nil, dhAsyncDispose);
+        Exit;
+      end;
+
+      DisposeMethod := GetDisposeMethod(CurrentValue, Hint);
+      if not Assigned(DisposeMethod) then
+      begin
+        if Hint = dhAsyncDispose then
+          ThrowTypeError(SErrorNotAsyncDisposable, SSuggestDisposable)
+        else
+          ThrowTypeError(SErrorNotDisposable, SSuggestDisposable);
+      end;
+      IterationTracker.AddResource(CurrentValue, DisposeMethod, Hint);
+    except
+      IterationTracker.Free;
+      IterationTracker := nil;
+      raise;
+    end;
+  end;
+
+  function DisposeForOfUsingResource(const AExistingError: TGocciaValue): TGocciaValue;
+  begin
+    Result := nil;
+    if not Assigned(IterationTracker) then
+      Exit;
+
+    try
+      if HasAsyncDisposals(IterationTracker) then
+        Result := DisposeTrackedResourcesAsync(IterationTracker, AExistingError)
+      else
+        Result := DisposeTrackedResources(IterationTracker, AExistingError);
+    finally
+      IterationTracker.Free;
+      IterationTracker := nil;
+    end;
+  end;
 begin
   Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
+  IterationTracker := nil;
 
   Continuation := CurrentGeneratorContinuation;
   HasSavedLoopState := Assigned(Continuation) and
@@ -3770,6 +3834,7 @@ begin
       IterResult := Iterator.AdvanceNext;
     while True do
     begin
+      IterationTracker := nil;
       IterScope := nil;
       if HasSavedLoopState then
       begin
@@ -3825,6 +3890,8 @@ begin
             else
               IterScope.DefineLexicalBinding(AForOfStatement.BindingName, CurrentValue, DeclarationType);
 
+            RegisterForOfUsingResource;
+
             if Assigned(AForOfStatement.MatchPattern) then
             begin
               MatchBaseContext := IterContext;
@@ -3833,6 +3900,9 @@ begin
               begin
                 if Assigned(Continuation) then
                   Continuation.ClearLoopState(AForOfStatement);
+                DisposalError := DisposeForOfUsingResource(nil);
+                if Assigned(DisposalError) then
+                  raise TGocciaThrowValue.Create(DisposalError);
                 ShouldCloseIterator := False;
                 IterResult := Iterator.AdvanceNext;
                 Continue;
@@ -3849,8 +3919,18 @@ begin
               HeadYielding := True;
               raise;
             end;
+            on E: TGocciaThrowValue do
+            begin
+              DisposalError := DisposeForOfUsingResource(E.Value);
+              if ShouldCloseIterator then
+                Goccia.Values.IteratorSupport.CloseIteratorPreservingError(Iterator);
+              if Assigned(DisposalError) then
+                raise TGocciaThrowValue.Create(DisposalError);
+              raise;
+            end;
             on E: Exception do
             begin
+              DisposeForOfUsingResource(nil);
               if ShouldCloseIterator then
                 Goccia.Values.IteratorSupport.CloseIteratorPreservingError(Iterator);
               raise;
@@ -3878,10 +3958,21 @@ begin
             BodyYielding := True;
             raise;
           end;
+          on E: TGocciaThrowValue do
+          begin
+            if Assigned(Continuation) then
+              Continuation.ClearLoopState(AForOfStatement);
+            DisposalError := DisposeForOfUsingResource(E.Value);
+            Goccia.Values.IteratorSupport.CloseIteratorPreservingError(Iterator);
+            if Assigned(DisposalError) then
+              raise TGocciaThrowValue.Create(DisposalError);
+            raise;
+          end;
           else
           begin
             if Assigned(Continuation) then
               Continuation.ClearLoopState(AForOfStatement);
+            DisposeForOfUsingResource(nil);
             Goccia.Values.IteratorSupport.CloseIteratorPreservingError(Iterator);
             raise;
           end;
@@ -3890,6 +3981,12 @@ begin
         if (not BodyYielding) and Assigned(AForOfStatement.MatchPattern) and
            (IterContext.Scope <> IterScope) then
           ReleaseMatchContext(IterContext, MatchBaseContext);
+      end;
+      DisposalError := DisposeForOfUsingResource(nil);
+      if Assigned(DisposalError) then
+      begin
+        Goccia.Values.IteratorSupport.CloseIteratorPreservingError(Iterator);
+        raise TGocciaThrowValue.Create(DisposalError);
       end;
       if CF.Kind = cfkBreak then
       begin

@@ -64,9 +64,16 @@ describe("using declaration", () => {
   });
 
   test("for-of using accepts contextual binding names", () => {
+    const disposed = [];
     const resources = [
-      { name: "first" },
-      { name: "second" }
+      {
+        name: "first",
+        [Symbol.dispose]() { disposed.push(this.name); }
+      },
+      {
+        name: "second",
+        [Symbol.dispose]() { disposed.push(this.name); }
+      }
     ];
     const seen = [];
 
@@ -75,6 +82,15 @@ describe("using declaration", () => {
     }
 
     expect(seen).toEqual(["first", "second"]);
+    expect(disposed).toEqual(["first", "second"]);
+  });
+
+  test("for-of using rejects non-disposable contextual binding values", () => {
+    expect(() => {
+      for (using as of [{ name: "plain" }]) {
+        as.name;
+      }
+    }).toThrow(TypeError);
   });
 
   test("later lexical binding is in TDZ inside using block", () => {
