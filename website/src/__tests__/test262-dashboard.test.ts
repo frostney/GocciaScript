@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { deflateRawSync } from "node:zlib";
+import {
+  formatTest262CategoryLabel,
+  formatTest262DurationTooltip,
+  formatTest262TimelineTooltip,
+} from "@/components/test262-dashboard";
 import type { Test262BlobRun } from "@/lib/test262-blob-store";
 import {
   extractJsonFromZip,
@@ -164,5 +169,97 @@ describe("test262 dashboard data helpers", () => {
 
     expect(result.latestReport?.summary.totalRun).toBe(1);
     expect(result.usableTimeline.map((run) => run.artifactId)).toEqual([1001]);
+  });
+});
+
+describe("test262 dashboard component helpers", () => {
+  test("formats timeline tooltips from generated category summaries", () => {
+    const point = {
+      runId: 622,
+      runNumber: 622,
+      title: "CI",
+      headSha: "1699f7b7abcdef",
+      shortSha: "1699f7b7",
+      runUrl: "https://example.test/runs/622",
+      createdAt: "2026-06-09T12:00:00.000Z",
+      updatedAt: "2026-06-09T12:21:00.000Z",
+      artifactId: 262622,
+      artifactCreatedAt: "2026-06-09T12:21:00.000Z",
+      jsonUrl: "/api/test262/results/262622",
+      summary: {
+        totalDiscovered: 52_233,
+        totalRun: 52_233,
+        passed: 41_765,
+        failed: 10_460,
+        wrapperInfraFailures: 0,
+        timeouts: 8,
+        durationSeconds: 1_242,
+        byCategory: [
+          {
+            category: "built-ins",
+            run: 20_000,
+            passed: 15_000,
+            failed: 4_997,
+            wrapperInfra: 0,
+            timeouts: 3,
+          },
+          {
+            category: "future-category",
+            run: 25,
+            passed: 5,
+            failed: 20,
+            wrapperInfra: 0,
+            timeouts: 0,
+          },
+        ],
+      },
+    };
+    const tooltip = formatTest262TimelineTooltip(point);
+
+    expect(tooltip).toBe(
+      [
+        "Jun 9, 2026 - run #622 - 1699f7b7",
+        "Total: 80.0% (41,765 passed / 52,233 run)",
+        "Built-ins: 75.0% (15,000 passed / 20,000 run)",
+        "Future-Category: 20.0% (5 passed / 25 run)",
+      ].join("\n"),
+    );
+  });
+
+  test("keeps runtime chart tooltip focused on duration", () => {
+    const tooltip = formatTest262DurationTooltip({
+      runId: 622,
+      runNumber: 622,
+      title: "CI",
+      headSha: "1699f7b7abcdef",
+      shortSha: "1699f7b7",
+      runUrl: "https://example.test/runs/622",
+      createdAt: "2026-06-09T12:00:00.000Z",
+      updatedAt: "2026-06-09T12:21:00.000Z",
+      artifactId: 262622,
+      artifactCreatedAt: "2026-06-09T12:21:00.000Z",
+      jsonUrl: "/api/test262/results/262622",
+      summary: {
+        totalDiscovered: 52_233,
+        totalRun: 52_233,
+        passed: 41_765,
+        failed: 10_460,
+        wrapperInfraFailures: 0,
+        timeouts: 8,
+        durationSeconds: 1_242,
+        byCategory: [],
+      },
+    });
+
+    expect(tooltip).toContain("Duration 20.7 min");
+    expect(tooltip).toContain("10,460 failed, 8 timeouts");
+  });
+
+  test("humanizes generated top-level test262 category names", () => {
+    expect(formatTest262CategoryLabel("built-ins")).toBe("Built-ins");
+    expect(formatTest262CategoryLabel("intl402")).toBe("Intl402");
+    expect(formatTest262CategoryLabel("future-category")).toBe(
+      "Future-Category",
+    );
   });
 });
