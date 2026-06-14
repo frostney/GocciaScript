@@ -261,7 +261,6 @@ Spread-based calls use the flags byte on `OP_CALL` and `OP_CALL_METHOD`. Spread 
 During code review, the following findings were investigated and determined to be non-issues:
 
 - **`SBIAS_24` (`Goccia.Bytecode.pas`)** — The 24-bit signed bias constant 8388607 is correct. The 24-bit unsigned range 0..16777215 centered at 8388607 gives a signed range of −8388607..+8388608. This is standard Lua-style bias encoding.
-- **Token list leak in `Goccia.Compiler.Test.pas`** — `Lexer.ScanTokens` returns the lexer's own `FTokens` list (freed in the lexer's destructor). Adding manual `Tokens.Free` causes a double-free crash.
 
 ## Related documents
 

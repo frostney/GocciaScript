@@ -45,6 +45,21 @@ describe("await using declaration", () => {
     expect(order).toEqual(["b", "a"]);
   });
 
+  test("accepts contextual binding names", async () => {
+    let disposed = "";
+    {
+      await using from = {
+        name: "from",
+        [Symbol.dispose]() {
+          disposed = from.name;
+        }
+      };
+
+      expect(from.name).toBe("from");
+    }
+    expect(disposed).toBe("from");
+  });
+
   test("await using null is silently skipped", async () => {
     const order = [];
     // Schedule a microtask before the block to observe the async boundary

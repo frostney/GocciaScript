@@ -208,14 +208,12 @@ var
   Lexer: TGocciaLexer;
   Parser: TGocciaParser;
   SourceLines: TStringList;
-  Tokens: TObjectList<TGocciaToken>;
 begin
   Lexer := TGocciaLexer.Create(ASource, AFileName);
   try
-    Tokens := Lexer.ScanTokens;
     SourceLines := CreateUTF8StringList(ASource);
     try
-      Parser := TGocciaParser.Create(Tokens, AFileName, SourceLines);
+      Parser := TGocciaParser.CreateFromLexer(Lexer, AFileName, SourceLines);
       try
         Result := Parser.Parse;
       finally

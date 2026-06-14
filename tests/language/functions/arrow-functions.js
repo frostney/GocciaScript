@@ -33,6 +33,23 @@ describe("arrow functions", () => {
     expect(greetName("Alice")).toBe("hello Alice");
   });
 
+  test("support contextual binding names as parameters", async () => {
+    const read = (as, from, static = 3) => as + from + static;
+    const readAsync = async from => from + 1;
+
+    expect(read(1, 2)).toBe(6);
+    expect(await readAsync(4)).toBe(5);
+  });
+
+  test("default parameters preserve slash lexical context", () => {
+    const source = { if: 8 };
+    const divideAfterObject = ({ value = source.if / 2 } = {}) => value;
+    const regexDefault = (pattern = /a/) => pattern.test("a");
+
+    expect(divideAfterObject()).toBe(4);
+    expect(regexDefault()).toBe(true);
+  });
+
   test("support immediate invocation, object returns, and currying", () => {
     const makeObj = (x) => ({ value: x });
     const curriedAdd = (a) => (b) => a + b;

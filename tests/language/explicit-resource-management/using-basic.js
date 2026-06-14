@@ -40,6 +40,81 @@ describe("using declaration", () => {
     expect(value).toBe(42);
   });
 
+  test("accepts contextual binding names", () => {
+    const disposed = [];
+    {
+      using as = {
+        name: "as",
+        [Symbol.dispose]() { disposed.push(as.name); }
+      };
+      using from = {
+        name: "from",
+        [Symbol.dispose]() { disposed.push(from.name); }
+      };
+      using static = {
+        name: "static",
+        [Symbol.dispose]() { disposed.push(static.name); }
+      };
+
+      expect(as.name).toBe("as");
+      expect(from.name).toBe("from");
+      expect(static.name).toBe("static");
+    }
+    expect(disposed).toEqual(["static", "from", "as"]);
+  });
+
+  test("for-of using accepts contextual binding names", () => {
+    const disposed = [];
+    const resources = [
+      {
+        name: "first",
+        [Symbol.dispose]() { disposed.push(this.name); }
+      },
+      {
+        name: "second",
+        [Symbol.dispose]() { disposed.push(this.name); }
+      }
+    ];
+    const seen = [];
+
+    for (using as of resources) {
+      seen.push(as.name);
+    }
+
+    expect(seen).toEqual(["first", "second"]);
+    expect(disposed).toEqual(["first", "second"]);
+  });
+
+  test("for-of using disposers can close over the iteration binding", () => {
+    const disposed = [];
+    const resources = [
+      {
+        name: "first",
+        [Symbol.dispose]() {
+          if (typeof Goccia !== "undefined") {
+            Goccia.gc();
+          }
+          disposed.push(this.readName());
+        }
+      }
+    ];
+
+    for (using as of resources) {
+      expect(as.name).toBe("first");
+      as.readName = () => as.name;
+    }
+
+    expect(disposed).toEqual(["first"]);
+  });
+
+  test("for-of using rejects non-disposable contextual binding values", () => {
+    expect(() => {
+      for (using as of [{ name: "plain" }]) {
+        as.name;
+      }
+    }).toThrow(TypeError);
+  });
+
   test("later lexical binding is in TDZ inside using block", () => {
     let value = "outer";
     {
