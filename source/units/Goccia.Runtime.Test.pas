@@ -17,7 +17,6 @@ uses
   Goccia.Runtime,
   Goccia.RuntimeExtensions.Console,
   Goccia.RuntimeExtensions.JSON5,
-  Goccia.RuntimeExtensions.SemVer,
   Goccia.TestSetup,
   Goccia.Values.Primitives;
 
@@ -149,7 +148,7 @@ begin
       Expect<Boolean>(Assigned(ConsoleExtension)).ToBe(True);
       Expect<Boolean>(Assigned(ConsoleExtension.BuiltinConsole)).ToBe(True);
       Expect<Boolean>(Assigned(
-        Runtime.FindRuntimeExtension(TGocciaSemVerRuntimeExtension))).ToBe(False);
+        Runtime.FindRuntimeExtension(TGocciaJSON5RuntimeExtension))).ToBe(False);
     finally
       Runtime.Free;
       Engine.Free;

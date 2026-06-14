@@ -482,7 +482,6 @@ GocciaScript/
 │   │   ├── GocciaBundler.dpr     # Bundler
 │   │   ├── Goccia.CLI.Application.pas  # CLI application base class
 │   │   ├── Goccia.CLI.Help.pas         # CLI help generation
-│   │   └── Goccia.CLI.EngineSetup.pas  # Engine setup utilities
 │   ├── shared/           # Shared infrastructure
 │   │   ├── Shared.inc    # Common compiler settings
 │   │   ├── TestingPascalLibrary.pas  # Pascal test framework (TTestSuite)

@@ -460,7 +460,7 @@ var
   Runtime: TGocciaRuntimeCore;
 begin
   Runtime := AttachRuntime(AEngine);
-  TGocciaTestRunnerRuntimeProfile.Apply(Runtime);
+  ApplyTestRunnerRuntimeProfile(Runtime);
 end;
 
 procedure TTestRunnerApp.InitializeRuntimeWithUnsafeFFI(

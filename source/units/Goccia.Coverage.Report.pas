@@ -34,6 +34,7 @@ uses
   StringBuffer,
   TextSemantics,
 
+  Goccia.JSON.Utils,
   Goccia.SourceMap,
   Goccia.TextFiles;
 
@@ -337,15 +338,6 @@ end;
 
 { JSON Format (Istanbul-compatible) }
 
-function EscapeJSONStr(const S: string): string;
-begin
-  Result := StringReplace(S, '\', '\\', [rfReplaceAll]);
-  Result := StringReplace(Result, '"', '\"', [rfReplaceAll]);
-  Result := StringReplace(Result, #10, '\n', [rfReplaceAll]);
-  Result := StringReplace(Result, #13, '\r', [rfReplaceAll]);
-  Result := StringReplace(Result, #9, '\t', [rfReplaceAll]);
-end;
-
 procedure WriteCoverageJSON(const ATracker: TGocciaCoverageTracker;
   const AOutputPath: string);
 var
@@ -378,12 +370,12 @@ begin
     SrcMap := ATracker.GetSourceMap(FileCov.FileName);
 
     Buf.Append(#10'  "');
-    Buf.Append(EscapeJSONStr(FileCov.FileName));
+    Buf.Append(EscapeJSONString(FileCov.FileName));
     Buf.Append('": {');
 
     // path
     Buf.Append(#10'    "path": "');
-    Buf.Append(EscapeJSONStr(FileCov.FileName));
+    Buf.Append(EscapeJSONString(FileCov.FileName));
     Buf.Append('",');
 
     // Load source to identify executable lines for zero-hit entries

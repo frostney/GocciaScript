@@ -10,7 +10,7 @@
 - **Module resolution** — Pluggable resolver with extensionless imports, import maps, custom content providers, and global modules
 - **Transparent GC** — Mark-and-sweep GC initializes automatically; FPU exceptions are masked for IEEE 754 semantics
 
-GocciaScript is designed to be embedded in FreePascal applications. `TGocciaRuntime` is the embedding entry point for the runtime layer: filesystem module content loading, runtime module dispatch, and extension installation. Runtime globals such as `console`, `fetch`, `URL`, JSON5, TOML, YAML, CSV/TSV, and SemVer come from runtime extension classes, usually through `TGocciaLoaderRuntimeProfile`. `TGocciaEngine` remains available through `Runtime.Engine` and as a core-language-only API for embedders that intentionally do not want runtime globals.
+GocciaScript is designed to be embedded in FreePascal applications. `TGocciaRuntime` is the embedding entry point for the runtime layer: filesystem module content loading, runtime module dispatch, and extension installation. Runtime globals such as `console`, `fetch`, `URL`, JSON5, TOML, YAML, CSV/TSV, and SemVer usually come from `ApplyLoaderRuntimeProfile`. `TGocciaEngine` remains available through `Runtime.Engine` and as a core-language-only API for embedders that intentionally do not want runtime globals.
 
 ## Quick Start
 
@@ -21,7 +21,7 @@ Source := TStringList.Create;
 Source.Text := 'console.log("hello from GocciaScript");';
 Runtime := TGocciaRuntime.Create('<inline>', Source);
 try
-  TGocciaLoaderRuntimeProfile.Apply(Runtime.Core);
+  ApplyLoaderRuntimeProfile(Runtime.Core);
   Runtime.Execute;
 finally
   Runtime.Free;
@@ -408,7 +408,7 @@ begin
   Source.Text := 'console.log("hello"); console.warn("careful");';
   Runtime := TGocciaRuntime.Create('app.js', Source);
   try
-    TGocciaLoaderRuntimeProfile.Apply(Runtime.Core);
+    ApplyLoaderRuntimeProfile(Runtime.Core);
     ConsoleExtension := TGocciaConsoleRuntimeExtension(
       Runtime.FindRuntimeExtension(TGocciaConsoleRuntimeExtension));
     ConsoleExtension.BuiltinConsole.OutputCallback := Logger.OnConsoleOutput;
@@ -445,7 +445,7 @@ The CLI hosts based on `TGocciaCLIApplication` (ScriptLoader, TestRunner, Benchm
 
 ## Built-in Registration
 
-Core language built-ins (Math, Object, Array, JSON, Promise, Temporal, typed arrays, etc.) are registered by `TGocciaEngine`. Runtime globals that are not part of the language core (Console, CSV, JSON5, JSONL, TOML, TSV, YAML, TextEncoder/TextDecoder, URL, fetch, performance, SemVer) are provided by concrete units under `Goccia.RuntimeExtensions.*`. Hosts can apply `TGocciaLoaderRuntimeProfile` for the ordinary CLI runtime surface or install only the extension classes they need for a smaller runtime surface.
+Core language built-ins (Math, Object, Array, JSON, Promise, Temporal, typed arrays, etc.) are registered by `TGocciaEngine`. Runtime globals that are not part of the language core (Console, CSV, JSON5, JSONL, TOML, TSV, YAML, TextEncoder/TextDecoder, URL, fetch, performance, SemVer) are provided by concrete runtime units. Hosts can call `ApplyLoaderRuntimeProfile` for the ordinary CLI runtime surface or install only the extension classes they need for a smaller runtime surface.
 
 When you already have an engine, pass it to the runtime constructor:
 
@@ -455,7 +455,7 @@ try
   Engine := TGocciaEngine.Create('app.js', Source, Executor);
   Runtime := TGocciaRuntime.Create(Engine);
   try
-    TGocciaLoaderRuntimeProfile.Apply(Runtime.Core);
+    ApplyLoaderRuntimeProfile(Runtime.Core);
     Runtime.Execute;
   finally
     Runtime.Free;
@@ -474,9 +474,9 @@ Runtime extensions are ordinary Pascal classes installed on `TGocciaRuntimeCore`
 
 | Extension/profile | Provides | Notes |
 |------|----------|-------|
-| `TGocciaLoaderRuntimeProfile` | ordinary CLI runtime surface: console, data modules, text assets, performance, text encoding, URL/fetch, SemVer, and related runtime globals | Used by ScriptLoader and REPL |
-| `TGocciaTestingLibraryRuntimeExtension` | `describe`, `test`, `expect` | Testing framework; TestRunner installs this through `TGocciaTestRunnerRuntimeProfile` |
-| `TGocciaBenchmarkRuntimeExtension` | `suite`, `bench` | Benchmark framework; BenchmarkRunner installs this through `TGocciaBenchmarkRunnerRuntimeProfile` |
+| `ApplyLoaderRuntimeProfile` | ordinary CLI runtime surface: console, data modules, text assets, performance, text encoding, URL/fetch, SemVer, and related runtime globals | Used by ScriptLoader and REPL |
+| `TGocciaTestingLibraryRuntimeExtension` | `describe`, `test`, `expect` | Testing framework; TestRunner installs this through `ApplyTestRunnerRuntimeProfile` |
+| `TGocciaBenchmarkRuntimeExtension` | `suite`, `bench` | Benchmark framework; BenchmarkRunner installs this through `ApplyBenchmarkRunnerRuntimeProfile` |
 | `TGocciaFFIRuntimeExtension` | `FFI.open`, `FFILibrary`, `FFIPointer` | Native shared-library FFI; CLI tools install this for `--unsafe-ffi` or `"unsafe-ffi": true` in config |
 
 When embedding, install `TGocciaFFIRuntimeExtension` to enable the FFI global. CLI tools (ScriptLoader, REPL, TestRunner, BenchmarkRunner, Bundler) expose this as the `--unsafe-ffi` flag and matching `"unsafe-ffi"` config key.
@@ -489,7 +489,7 @@ try
   Engine := TGocciaEngine.Create('tests/my-test.js', Source, Executor);
   Runtime := TGocciaRuntime.Create(Engine, True);
   try
-    TGocciaTestRunnerRuntimeProfile.Apply(Runtime.Core);
+    ApplyTestRunnerRuntimeProfile(Runtime.Core);
     Runtime.Execute;
   finally
     Runtime.Free;

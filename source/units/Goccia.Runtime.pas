@@ -41,12 +41,6 @@ type
     procedure DiscardPending; virtual;
   end;
 
-  TGocciaRuntimeProfile = class
-  public
-    class procedure Apply(const ARuntime: TGocciaRuntimeCore); virtual; abstract;
-  end;
-  TGocciaRuntimeProfileClass = class of TGocciaRuntimeProfile;
-
   TGocciaRuntimeCore = class(TGocciaEngineExtension)
   private
     FEngine: TGocciaEngine;

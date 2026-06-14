@@ -7,11 +7,7 @@ interface
 uses
   Goccia.Runtime;
 
-type
-  TGocciaBenchmarkRunnerRuntimeProfile = class(TGocciaRuntimeProfile)
-  public
-    class procedure Apply(const ARuntime: TGocciaRuntimeCore); override;
-  end;
+procedure ApplyBenchmarkRunnerRuntimeProfile(const ARuntime: TGocciaRuntimeCore);
 
 implementation
 
@@ -19,10 +15,9 @@ uses
   Goccia.RuntimeExtensions.Benchmark,
   Goccia.RuntimeProfiles.Loader;
 
-class procedure TGocciaBenchmarkRunnerRuntimeProfile.Apply(
-  const ARuntime: TGocciaRuntimeCore);
+procedure ApplyBenchmarkRunnerRuntimeProfile(const ARuntime: TGocciaRuntimeCore);
 begin
-  TGocciaLoaderRuntimeProfile.Apply(ARuntime);
+  ApplyLoaderRuntimeProfile(ARuntime);
   ARuntime.Install(TGocciaBenchmarkRuntimeExtension.Create);
 end;
 
