@@ -85,6 +85,28 @@ describe("using declaration", () => {
     expect(disposed).toEqual(["first", "second"]);
   });
 
+  test("for-of using disposers can close over the iteration binding", () => {
+    const disposed = [];
+    const resources = [
+      {
+        name: "first",
+        [Symbol.dispose]() {
+          if (typeof Goccia !== "undefined") {
+            Goccia.gc();
+          }
+          disposed.push(this.readName());
+        }
+      }
+    ];
+
+    for (using as of resources) {
+      expect(as.name).toBe("first");
+      as.readName = () => as.name;
+    }
+
+    expect(disposed).toEqual(["first"]);
+  });
+
   test("for-of using rejects non-disposable contextual binding values", () => {
     expect(() => {
       for (using as of [{ name: "plain" }]) {

@@ -12,6 +12,7 @@ uses
   Goccia.AST.Expressions,
   Goccia.AST.Node,
   Goccia.ControlFlow,
+  Goccia.DisposalTracker,
   Goccia.Evaluator.Context,
   Goccia.Scope,
   Goccia.Values.IteratorValue,
@@ -41,12 +42,16 @@ type
     NextMethod: TGocciaValue;
     IterScope: TGocciaScope;
     ActiveScope: TGocciaScope;
+    DisposalTracker: TGocciaDisposalTracker;
     constructor Create(const AIteratorValue, ACurrentValue,
       ANextMethod: TGocciaValue; const AIterScope: TGocciaScope = nil;
-      const AActiveScope: TGocciaScope = nil);
+      const AActiveScope: TGocciaScope = nil;
+      const ADisposalTracker: TGocciaDisposalTracker = nil);
+    destructor Destroy; override;
     procedure Assign(const AIteratorValue, ACurrentValue,
       ANextMethod: TGocciaValue; const AIterScope: TGocciaScope = nil;
-      const AActiveScope: TGocciaScope = nil);
+      const AActiveScope: TGocciaScope = nil;
+      const ADisposalTracker: TGocciaDisposalTracker = nil);
     procedure MarkReferences;
   end;
 
@@ -139,10 +144,15 @@ type
       const AIteratorValue, ACurrentValue: TGocciaValue;
       const ANextMethod: TGocciaValue = nil;
       const AIterScope: TGocciaScope = nil;
-      const AActiveScope: TGocciaScope = nil);
+      const AActiveScope: TGocciaScope = nil;
+      const ADisposalTracker: TGocciaDisposalTracker = nil);
     function GetLoopState(const ALoopStatement: TObject;
       out AIteratorValue, ACurrentValue, ANextMethod: TGocciaValue;
       out AIterScope, AActiveScope: TGocciaScope): Boolean;
+    function GetLoopDisposalTracker(
+      const ALoopStatement: TObject): TGocciaDisposalTracker;
+    function TakeLoopDisposalTracker(
+      const ALoopStatement: TObject): TGocciaDisposalTracker;
     procedure ClearLoopState(const ALoopStatement: TObject);
     procedure ClearLoopStates;
     function EnsureForLoopState(const ALoopStatement: TObject;
@@ -220,21 +230,34 @@ end;
 
 constructor TGocciaGeneratorLoopState.Create(const AIteratorValue,
   ACurrentValue, ANextMethod: TGocciaValue; const AIterScope: TGocciaScope;
-  const AActiveScope: TGocciaScope);
+  const AActiveScope: TGocciaScope;
+  const ADisposalTracker: TGocciaDisposalTracker);
 begin
   inherited Create;
-  Assign(AIteratorValue, ACurrentValue, ANextMethod, AIterScope, AActiveScope);
+  DisposalTracker := nil;
+  Assign(AIteratorValue, ACurrentValue, ANextMethod, AIterScope, AActiveScope,
+    ADisposalTracker);
+end;
+
+destructor TGocciaGeneratorLoopState.Destroy;
+begin
+  DisposalTracker.Free;
+  inherited;
 end;
 
 procedure TGocciaGeneratorLoopState.Assign(const AIteratorValue,
   ACurrentValue, ANextMethod: TGocciaValue; const AIterScope: TGocciaScope;
-  const AActiveScope: TGocciaScope);
+  const AActiveScope: TGocciaScope;
+  const ADisposalTracker: TGocciaDisposalTracker);
 begin
+  if Assigned(DisposalTracker) and (DisposalTracker <> ADisposalTracker) then
+    DisposalTracker.Free;
   IteratorValue := AIteratorValue;
   CurrentValue := ACurrentValue;
   NextMethod := ANextMethod;
   IterScope := AIterScope;
   ActiveScope := AActiveScope;
+  DisposalTracker := ADisposalTracker;
 end;
 
 procedure TGocciaGeneratorLoopState.MarkReferences;
@@ -1084,17 +1107,18 @@ end;
 procedure TGocciaGeneratorContinuation.SaveLoopState(
   const ALoopStatement: TObject; const AIteratorValue,
   ACurrentValue: TGocciaValue; const ANextMethod: TGocciaValue;
-  const AIterScope: TGocciaScope; const AActiveScope: TGocciaScope);
+  const AIterScope: TGocciaScope; const AActiveScope: TGocciaScope;
+  const ADisposalTracker: TGocciaDisposalTracker);
 var
   LoopState: TGocciaGeneratorLoopState;
 begin
   if FLoopStates.TryGetValue(ALoopStatement, LoopState) then
     LoopState.Assign(AIteratorValue, ACurrentValue, ANextMethod,
-      AIterScope, AActiveScope)
+      AIterScope, AActiveScope, ADisposalTracker)
   else
     FLoopStates.Add(ALoopStatement,
       TGocciaGeneratorLoopState.Create(AIteratorValue, ACurrentValue,
-        ANextMethod, AIterScope, AActiveScope));
+        ANextMethod, AIterScope, AActiveScope, ADisposalTracker));
 end;
 
 function TGocciaGeneratorContinuation.GetLoopState(
@@ -1120,6 +1144,31 @@ begin
     AIterScope := nil;
     AActiveScope := nil;
   end;
+end;
+
+function TGocciaGeneratorContinuation.GetLoopDisposalTracker(
+  const ALoopStatement: TObject): TGocciaDisposalTracker;
+var
+  LoopState: TGocciaGeneratorLoopState;
+begin
+  if FLoopStates.TryGetValue(ALoopStatement, LoopState) then
+    Result := LoopState.DisposalTracker
+  else
+    Result := nil;
+end;
+
+function TGocciaGeneratorContinuation.TakeLoopDisposalTracker(
+  const ALoopStatement: TObject): TGocciaDisposalTracker;
+var
+  LoopState: TGocciaGeneratorLoopState;
+begin
+  if FLoopStates.TryGetValue(ALoopStatement, LoopState) then
+  begin
+    Result := LoopState.DisposalTracker;
+    LoopState.DisposalTracker := nil;
+  end
+  else
+    Result := nil;
 end;
 
 procedure TGocciaGeneratorContinuation.ClearLoopState(

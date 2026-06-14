@@ -3777,20 +3777,50 @@ var
   end;
 
   function DisposeForOfUsingResource(const AExistingError: TGocciaValue): TGocciaValue;
+  var
+    GC: TGarbageCollector;
+    ScopeRooted: Boolean;
   begin
     Result := nil;
     if not Assigned(IterationTracker) then
       Exit;
 
+    GC := TGarbageCollector.Instance;
+    ScopeRooted := Assigned(GC) and Assigned(IterScope);
+    if ScopeRooted then
+      GC.AddTempRoot(IterScope);
     try
       if HasAsyncDisposals(IterationTracker) then
         Result := DisposeTrackedResourcesAsync(IterationTracker, AExistingError)
       else
         Result := DisposeTrackedResources(IterationTracker, AExistingError);
     finally
+      if ScopeRooted then
+        GC.RemoveTempRoot(IterScope);
       IterationTracker.Free;
       IterationTracker := nil;
     end;
+  end;
+
+  procedure ClearSavedLoopState;
+  var
+    SavedTracker: TGocciaDisposalTracker;
+  begin
+    if not Assigned(Continuation) then
+      Exit;
+
+    SavedTracker := Continuation.TakeLoopDisposalTracker(AForOfStatement);
+    if Assigned(SavedTracker) and (SavedTracker <> IterationTracker) then
+    begin
+      if Assigned(IterationTracker) then
+      begin
+        IterationTracker.MoveResourcesFrom(SavedTracker);
+        SavedTracker.Free;
+      end
+      else
+        IterationTracker := SavedTracker;
+    end;
+    Continuation.ClearLoopState(AForOfStatement);
   end;
 begin
   Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
@@ -3801,7 +3831,11 @@ begin
     Continuation.GetLoopState(AForOfStatement, SavedIteratorValue,
       SavedCurrentValue, SavedNextMethod, SavedIterScope, SavedActiveScope);
   if HasSavedLoopState then
-    Iterator := TGocciaIteratorValue(SavedIteratorValue)
+  begin
+    Iterator := TGocciaIteratorValue(SavedIteratorValue);
+    IterationTracker :=
+      Continuation.GetLoopDisposalTracker(AForOfStatement);
+  end
   else
   begin
     IterableValue := EvaluateExpression(AForOfStatement.Iterable, AContext);
@@ -3834,7 +3868,8 @@ begin
       IterResult := Iterator.AdvanceNext;
     while True do
     begin
-      IterationTracker := nil;
+      if not HasSavedLoopState then
+        IterationTracker := nil;
       IterScope := nil;
       if HasSavedLoopState then
       begin
@@ -3898,8 +3933,7 @@ begin
               if not TryEvaluateMatchPatternInContext(CurrentValue,
                  AForOfStatement.MatchPattern, IterContext, MatchContext) then
               begin
-                if Assigned(Continuation) then
-                  Continuation.ClearLoopState(AForOfStatement);
+                ClearSavedLoopState;
                 DisposalError := DisposeForOfUsingResource(nil);
                 if Assigned(DisposalError) then
                   raise TGocciaThrowValue.Create(DisposalError);
@@ -3912,7 +3946,7 @@ begin
             HeadCompleted := True;
             if Assigned(Continuation) then
               Continuation.SaveLoopState(AForOfStatement, Iterator, CurrentValue,
-                nil, IterScope, IterContext.Scope);
+                nil, IterScope, IterContext.Scope, IterationTracker);
           except
             on E: EGocciaGeneratorYield do
             begin
@@ -3940,7 +3974,7 @@ begin
           if (not HeadCompleted) and (not HeadYielding) and
              Assigned(Continuation) then
           begin
-            Continuation.ClearLoopState(AForOfStatement);
+            ClearSavedLoopState;
             Continuation.ClearExpressionValues;
           end;
         end;
@@ -3950,8 +3984,7 @@ begin
         BodyYielding := False;
         try
           CF := EvaluateLoopBodyStatement(AForOfStatement.Body, IterContext);
-          if Assigned(Continuation) then
-            Continuation.ClearLoopState(AForOfStatement);
+          ClearSavedLoopState;
         except
           on E: EGocciaGeneratorYield do
           begin
@@ -3960,8 +3993,7 @@ begin
           end;
           on E: TGocciaThrowValue do
           begin
-            if Assigned(Continuation) then
-              Continuation.ClearLoopState(AForOfStatement);
+            ClearSavedLoopState;
             DisposalError := DisposeForOfUsingResource(E.Value);
             Goccia.Values.IteratorSupport.CloseIteratorPreservingError(Iterator);
             if Assigned(DisposalError) then
@@ -3970,8 +4002,7 @@ begin
           end;
           else
           begin
-            if Assigned(Continuation) then
-              Continuation.ClearLoopState(AForOfStatement);
+            ClearSavedLoopState;
             DisposeForOfUsingResource(nil);
             Goccia.Values.IteratorSupport.CloseIteratorPreservingError(Iterator);
             raise;
@@ -3992,21 +4023,18 @@ begin
       begin
         if not TargetsStatementOrUnlabeled(CF, AForOfStatement) then
         begin
-          if Assigned(Continuation) then
-            Continuation.ClearLoopState(AForOfStatement);
+          ClearSavedLoopState;
           Goccia.Values.IteratorSupport.CloseIteratorPreservingError(Iterator);
           Result := CF;
           Exit;
         end;
-        if Assigned(Continuation) then
-          Continuation.ClearLoopState(AForOfStatement);
+        ClearSavedLoopState;
         Goccia.Values.IteratorSupport.CloseIteratorPreservingError(Iterator);
         Break;
       end;
       if CF.Kind = cfkReturn then
       begin
-        if Assigned(Continuation) then
-          Continuation.ClearLoopState(AForOfStatement);
+        ClearSavedLoopState;
         Goccia.Values.IteratorSupport.CloseIteratorPreservingError(Iterator);
         Result := CF;
         Exit;
@@ -4014,8 +4042,7 @@ begin
       if (CF.Kind = cfkContinue) and
          not TargetsStatementOrUnlabeled(CF, AForOfStatement) then
       begin
-        if Assigned(Continuation) then
-          Continuation.ClearLoopState(AForOfStatement);
+        ClearSavedLoopState;
         Goccia.Values.IteratorSupport.CloseIteratorPreservingError(Iterator);
         Result := CF;
         Exit;
@@ -4024,8 +4051,7 @@ begin
 
       IterResult := Iterator.AdvanceNext;
     end;
-    if Assigned(Continuation) then
-      Continuation.ClearLoopState(AForOfStatement);
+    ClearSavedLoopState;
   finally
     if Assigned(TGarbageCollector.Instance) then
       TGarbageCollector.Instance.RemoveTempRoot(Iterator);
