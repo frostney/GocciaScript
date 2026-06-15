@@ -7,35 +7,30 @@ interface
 uses
   Goccia.Runtime;
 
-type
-  TGocciaLoaderRuntimeProfile = class(TGocciaRuntimeProfile)
-  public
-    class procedure Apply(const ARuntime: TGocciaRuntimeCore); override;
-  end;
+procedure ApplyLoaderRuntimeProfile(const ARuntime: TGocciaRuntimeCore);
 
 implementation
 
 uses
+  Goccia.Builtins.Semver,
+  Goccia.Constants.PropertyNames,
   Goccia.RuntimeExtensions.Console,
   Goccia.RuntimeExtensions.CSV,
   Goccia.RuntimeExtensions.Fetch,
   Goccia.RuntimeExtensions.JSON5,
   Goccia.RuntimeExtensions.JSONL,
   Goccia.RuntimeExtensions.Performance,
-  Goccia.RuntimeExtensions.SemVer,
   Goccia.RuntimeExtensions.TextAssets,
   Goccia.RuntimeExtensions.TextEncoding,
   Goccia.RuntimeExtensions.TOML,
   Goccia.RuntimeExtensions.TSV,
   Goccia.RuntimeExtensions.URL,
-  Goccia.RuntimeExtensions.UtilityGlobals,
   Goccia.RuntimeExtensions.YAML;
 
-class procedure TGocciaLoaderRuntimeProfile.Apply(
-  const ARuntime: TGocciaRuntimeCore);
+procedure ApplyLoaderRuntimeProfile(const ARuntime: TGocciaRuntimeCore);
 begin
   ARuntime.Install(TGocciaConsoleRuntimeExtension.Create);
-  ARuntime.Install(TGocciaUtilityGlobalsRuntimeExtension.Create);
+  ARuntime.Engine.BuiltinGlobals.RegisterUtilityRuntimeGlobals;
   ARuntime.Install(TGocciaCSVRuntimeExtension.Create);
   ARuntime.Install(TGocciaJSON5RuntimeExtension.Create);
   ARuntime.Install(TGocciaJSONLRuntimeExtension.Create);
@@ -47,7 +42,9 @@ begin
   ARuntime.Install(TGocciaTextEncodingRuntimeExtension.Create);
   ARuntime.Install(TGocciaURLRuntimeExtension.Create);
   ARuntime.Install(TGocciaFetchRuntimeExtension.Create);
-  ARuntime.Install(TGocciaSemVerRuntimeExtension.Create);
+  if Assigned(ARuntime.Engine.GocciaGlobal) then
+    ARuntime.Engine.GocciaGlobal.AssignProperty(
+      SEMVER_NAMESPACE_PROPERTY, CreateSemverNamespace);
 end;
 
 end.

@@ -18,7 +18,7 @@ GocciaScript provides a set of built-in global objects that mirror JavaScript's 
 
 Core language built-ins (Math, Object, Array, Number, JSON, Symbol, Set, Map, WeakSet, WeakMap, Promise, Temporal, Intl, ArrayBuffer, SharedArrayBuffer, Atomics, Proxy, Reflect, etc.) are always registered unconditionally by the engine.
 
-Runtime globals (Console, JSON5, JSONL, TOML, YAML, CSV, TSV, Performance, TextEncoder/TextDecoder, URL, fetch, Headers, Response, SemVer) are registered by runtime extension classes under `source/units/Goccia.RuntimeExtensions.*.pas`. CLI hosts such as `GocciaScriptLoader` and `GocciaREPL` apply `TGocciaLoaderRuntimeProfile`; `GocciaTestRunner` applies the loader runtime profile plus `TGocciaTestingLibraryRuntimeExtension`; `GocciaBenchmarkRunner` applies the loader runtime profile plus `TGocciaBenchmarkRuntimeExtension`. `GocciaScriptLoaderBare` does not attach a runtime and exposes only a CLI-local `print(...args)` helper by default; the test262 conformance runner may opt into private test262 host capabilities with `--test262-host`.
+Runtime globals (Console, JSON5, JSONL, TOML, YAML, CSV, TSV, Performance, TextEncoder/TextDecoder, URL, fetch, Headers, Response, SemVer) are registered by the loader runtime profile and runtime extension classes under `source/units/Goccia.RuntimeExtensions.*.pas`. CLI hosts such as `GocciaScriptLoader` and `GocciaREPL` call `ApplyLoaderRuntimeProfile`; `GocciaTestRunner` applies the loader runtime profile plus `TGocciaTestingLibraryRuntimeExtension`; `GocciaBenchmarkRunner` applies the loader runtime profile plus `TGocciaBenchmarkRuntimeExtension`. `GocciaScriptLoaderBare` does not attach a runtime and exposes only a CLI-local `print(...args)` helper by default; the test262 conformance runner may opt into private test262 host capabilities with `--test262-host`.
 
 FFI is not part of the loader runtime profile. CLI tools install `TGocciaFFIRuntimeExtension` when `--unsafe-ffi` is passed or `"unsafe-ffi": true` is set in config.
 
@@ -454,7 +454,7 @@ obj[sym]; // "value"
 
 **Coercion semantics:** Implicit conversion of a symbol to string or number throws `TypeError`. Use `String(symbol)` or `symbol.toString()` for explicit string conversion. See [value-system.md](value-system.md#symbols) for details.
 
-### Set (`Goccia.Builtins.GlobalSet.pas`)
+### Set (`Goccia.Values.SetValue.pas`)
 
 Implements the [ECMAScript Set](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Set) including Set methods (`union`, `intersection`, `difference`, `symmetricDifference`, `isSubsetOf`, `isSupersetOf`, `isDisjointFrom`).
 
@@ -483,7 +483,7 @@ A collection of unique values with insertion-order iteration. Set operation meth
 
 Sets are iterable: `[...mySet]` spreads the set's values into an array.
 
-### WeakSet (`Goccia.Builtins.GlobalWeakSet.pas`)
+### WeakSet (`Goccia.Values.WeakSetValue.pas`)
 
 Implements the [ECMAScript WeakSet](https://tc39.es/ecma262/#sec-weakset-objects).
 
@@ -529,7 +529,7 @@ A collection of key-value pairs with insertion-order iteration. Any value (inclu
 
 Maps are iterable: `[...myMap]` spreads the map into an array of `[key, value]` pairs.
 
-### WeakMap (`Goccia.Builtins.GlobalWeakMap.pas`)
+### WeakMap (`Goccia.Values.WeakMapValue.pas`)
 
 Implements the [ECMAScript WeakMap](https://tc39.es/ecma262/#sec-weakmap-objects) including ES2026 `WeakMap.prototype.getOrInsert` and `WeakMap.prototype.getOrInsertComputed`.
 
@@ -788,13 +788,13 @@ Implements the [ECMAScript Reflect](https://developer.mozilla.org/en-US/docs/Web
 
 **GocciaScript differences:** None -- all 13 Reflect methods are supported with both string and symbol property keys.
 
-### TextEncoder (`Goccia.Builtins.GlobalTextEncoder.pas`)
+### TextEncoder (`Goccia.RuntimeExtensions.TextEncoding.pas`, `Goccia.Values.TextEncoderValue.pas`)
 
 Implements the [Encoding Standard TextEncoder](https://developer.mozilla.org/en-US/docs/Web/API/TextEncoder). See [MDN TextEncoder reference](https://developer.mozilla.org/en-US/docs/Web/API/TextEncoder) for the full API.
 
 **GocciaScript differences:** None -- full standard compliance (UTF-8 only, with `encode` and `encodeInto`).
 
-### TextDecoder (`Goccia.Builtins.GlobalTextDecoder.pas`)
+### TextDecoder (`Goccia.RuntimeExtensions.TextEncoding.pas`, `Goccia.Values.TextDecoderValue.pas`)
 
 Implements the [Encoding Standard TextDecoder](https://developer.mozilla.org/en-US/docs/Web/API/TextDecoder). See [MDN TextDecoder reference](https://developer.mozilla.org/en-US/docs/Web/API/TextDecoder) for the full API.
 

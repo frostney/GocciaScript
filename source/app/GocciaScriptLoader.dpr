@@ -255,7 +255,7 @@ var
   Runtime: TGocciaRuntimeCore;
 begin
   Runtime := AttachRuntime(AEngine);
-  TGocciaLoaderRuntimeProfile.Apply(Runtime);
+  ApplyLoaderRuntimeProfile(Runtime);
 end;
 
 procedure TScriptLoaderApp.InitializeRuntimeWithUnsafeFFI(

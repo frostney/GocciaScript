@@ -57,7 +57,6 @@ type
     function GetFileResult(AIndex: Integer): TBenchmarkFileResult;
     function FormatOpsPerSec(const AOps: Double): string;
     function EscapeCSVField(const S: string): string;
-    function EscapeJSON(const S: string): string;
   public
     constructor Create;
     destructor Destroy; override;
@@ -86,7 +85,8 @@ uses
 
   TimingUtils,
 
-  Goccia.CSV;
+  Goccia.CSV,
+  Goccia.JSON.Utils;
 
 function IsPositiveFinite(const AValue: Double): Boolean;
 begin
@@ -193,15 +193,6 @@ end;
 function TBenchmarkReporter.EscapeCSVField(const S: string): string;
 begin
   Result := TGocciaCSVStringifier.EscapeField(S, ',');
-end;
-
-function TBenchmarkReporter.EscapeJSON(const S: string): string;
-begin
-  Result := StringReplace(S, '\', '\\', [rfReplaceAll]);
-  Result := StringReplace(Result, '"', '\"', [rfReplaceAll]);
-  Result := StringReplace(Result, #10, '\n', [rfReplaceAll]);
-  Result := StringReplace(Result, #13, '\r', [rfReplaceAll]);
-  Result := StringReplace(Result, #9, '\t', [rfReplaceAll]);
 end;
 
 procedure TBenchmarkReporter.Render(const AFormat: TBenchmarkReportFormat);
@@ -438,8 +429,8 @@ begin
       begin
         BenchmarkJSON := SysUtils.Format(
           '{"suite":"%s","name":"%s","error":"%s"}',
-          [EscapeJSON(Entry.Suite), EscapeJSON(Entry.Name),
-           EscapeJSON(Entry.Error)])
+          [EscapeJSONString(Entry.Suite), EscapeJSONString(Entry.Name),
+           EscapeJSONString(Entry.Error)])
       end
       else
         BenchmarkJSON := SysUtils.Format(
@@ -447,7 +438,7 @@ begin
           '"variancePercentage":%s,"meanMs":%s,"iterations":%d,' +
           '"setupMs":%s,"teardownMs":%s,"minOpsPerSec":%s,' +
           '"maxOpsPerSec":%s}',
-          [EscapeJSON(Entry.Suite), EscapeJSON(Entry.Name),
+          [EscapeJSONString(Entry.Suite), EscapeJSONString(Entry.Name),
            FormatJSONNumber(Entry.OpsPerSec, JSONFormatSettings),
            FormatJSONPercentage(Entry.VariancePercentage, JSONFormatSettings),
            FormatJSONNumber(Entry.MeanMs, JSONFormatSettings), Entry.Iterations,

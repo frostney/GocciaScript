@@ -59,6 +59,76 @@ function runCwd(
   return { stdout, stderr, exitCode, combined };
 }
 
+type CompatAcrossAppsCase = {
+  name: string;
+  config: string;
+  loaderSource: string;
+  loaderExpectedLine: string;
+  testRunnerSource: string;
+  benchSource: string;
+  benchNeedle: string;
+};
+
+async function runCompatAcrossAppsCase(testCase: CompatAcrossAppsCase): Promise<void> {
+  const tmp = makeTmp();
+  try {
+    writeFileSync(join(tmp, "goccia.json"), testCase.config);
+    writeFileSync(join(tmp, "test.js"), testCase.loaderSource);
+    writeFileSync(join(tmp, "test-runner.js"), testCase.testRunnerSource);
+    writeFileSync(join(tmp, "bench.js"), testCase.benchSource);
+
+    const loaderOut = await $`${LOADER} --print ${join(tmp, "test.js")} 2>&1`.text();
+    if (!containsLine(loaderOut, testCase.loaderExpectedLine))
+      throw new Error(`Loader interp ${testCase.name} should produce ${testCase.loaderExpectedLine} on its own line, got: ${loaderOut}`);
+
+    const loaderBc = await $`${LOADER} --print ${join(tmp, "test.js")} --mode=bytecode 2>&1`.text();
+    if (!containsLine(loaderBc, testCase.loaderExpectedLine))
+      throw new Error(`Loader bytecode ${testCase.name} should produce ${testCase.loaderExpectedLine} on its own line, got: ${loaderBc}`);
+
+    const trInterp = await $`${TESTRUNNER} ${join(tmp, "test-runner.js")} --no-progress 2>&1`.text();
+    if (!trInterp.includes("Passed: 1"))
+      throw new Error(`TestRunner interp ${testCase.name} should pass, got: ${trInterp}`);
+
+    const trBc = await $`${TESTRUNNER} ${join(tmp, "test-runner.js")} --mode=bytecode --no-progress 2>&1`.text();
+    if (!trBc.includes("Passed: 1"))
+      throw new Error(`TestRunner bytecode ${testCase.name} should pass, got: ${trBc}`);
+
+    await $`${BUNDLER} ${join(tmp, "test.js")}`.quiet();
+    if (!existsSync(join(tmp, "test.gbc")))
+      throw new Error(`Bundler ${testCase.name} should compile`);
+
+    const benchInterp = Bun.spawnSync(
+      [resolve(BENCHRUNNER), join(tmp, "bench.js"), "--no-progress"],
+      {
+        stdout: "pipe",
+        stderr: "pipe",
+        env: { ...process.env, GOCCIA_BENCH_CALIBRATION_MS: "50", GOCCIA_BENCH_ROUNDS: "3" } as Record<string, string>,
+        timeout: 60_000,
+      },
+    );
+    if (benchInterp.exitCode !== 0)
+      throw new Error(`BenchmarkRunner interp ${testCase.name} exited ${benchInterp.exitCode}: ${benchInterp.stderr.toString()}`);
+    if (!benchInterp.stdout.toString().includes(testCase.benchNeedle))
+      throw new Error(`BenchmarkRunner interp ${testCase.name} should mention '${testCase.benchNeedle}'`);
+
+    const benchBc = Bun.spawnSync(
+      [resolve(BENCHRUNNER), join(tmp, "bench.js"), "--mode=bytecode", "--no-progress"],
+      {
+        stdout: "pipe",
+        stderr: "pipe",
+        env: { ...process.env, GOCCIA_BENCH_CALIBRATION_MS: "50", GOCCIA_BENCH_ROUNDS: "3" } as Record<string, string>,
+        timeout: 60_000,
+      },
+    );
+    if (benchBc.exitCode !== 0)
+      throw new Error(`BenchmarkRunner bytecode ${testCase.name} exited ${benchBc.exitCode}: ${benchBc.stderr.toString()}`);
+    if (!benchBc.stdout.toString().includes(testCase.benchNeedle))
+      throw new Error(`BenchmarkRunner bytecode ${testCase.name} should mention '${testCase.benchNeedle}'`);
+  } finally {
+    clean(tmp);
+  }
+}
+
 // -- goccia.json loading --------------------------------------------------------
 
 console.log("goccia.json loading...");
@@ -563,438 +633,136 @@ console.log("Per-file unsafe-ffi config across runtime apps...");
 
 // -- Per-file compat-var config across all apps --------------------------------
 
-console.log("Per-file compat-var config across all apps...");
-{
-  const tmp = makeTmp();
-  try {
-    writeFileSync(join(tmp, "goccia.json"), '{"compat-var": true}\n');
-    writeFileSync(join(tmp, "test.js"), "var x = 10;\nx;\n");
-    writeFileSync(
-      join(tmp, "test-runner.js"),
-      [
-        "var y = 20;",
-        'describe("var", () => {',
-        '  test("works", () => {',
-        "    expect(y).toBe(20);",
-        "  });",
-        "});",
-      ].join("\n") + "\n",
-    );
-    writeFileSync(
-      join(tmp, "bench.js"),
-      [
-        "var z = 1;",
-        'suite("var", () => {',
-        '  bench("add", {',
-        "    run: () => z + 1,",
-        "  });",
-        "});",
-      ].join("\n") + "\n",
-    );
+const nonStrictSource = [
+  "function f(a) {",
+  "  if (this !== globalThis) return -1;",
+  "  with ({ extra: 5 }) {",
+  "    return arguments.length + extra;",
+  "  }",
+  "}",
+  "f(1, 2);",
+].join("\n") + "\n";
 
-    // Loader (interpreted)
-    const loaderOut = await $`${LOADER} --print ${join(tmp, "test.js")} 2>&1`.text();
-    if (!containsLine(loaderOut, "10")) throw new Error(`Loader interp compat-var should produce 10 on its own line, got: ${loaderOut}`);
-
-    // Loader (bytecode)
-    const loaderBc = await $`${LOADER} --print ${join(tmp, "test.js")} --mode=bytecode 2>&1`.text();
-    if (!containsLine(loaderBc, "10")) throw new Error(`Loader bytecode compat-var should produce 10 on its own line, got: ${loaderBc}`);
-
-    // TestRunner (interpreted)
-    const trInterp = await $`${TESTRUNNER} ${join(tmp, "test-runner.js")} --no-progress 2>&1`.text();
-    if (!trInterp.includes("Passed: 1")) throw new Error(`TestRunner interp compat-var should pass, got: ${trInterp}`);
-
-    // TestRunner (bytecode)
-    const trBc = await $`${TESTRUNNER} ${join(tmp, "test-runner.js")} --mode=bytecode --no-progress 2>&1`.text();
-    if (!trBc.includes("Passed: 1")) throw new Error(`TestRunner bytecode compat-var should pass, got: ${trBc}`);
-
-    // Bundler
-    await $`${BUNDLER} ${join(tmp, "test.js")}`.quiet();
-    if (!existsSync(join(tmp, "test.gbc"))) throw new Error("Bundler compat-var should compile");
-
-    // BenchmarkRunner (interpreted)
-    const benchInterp = Bun.spawnSync(
-      [resolve(BENCHRUNNER), join(tmp, "bench.js"), "--no-progress"],
-      {
-        stdout: "pipe",
-        stderr: "pipe",
-        env: { ...process.env, GOCCIA_BENCH_CALIBRATION_MS: "50", GOCCIA_BENCH_ROUNDS: "3" } as Record<string, string>,
-        timeout: 60_000,
-      },
-    );
-    if (benchInterp.exitCode !== 0) throw new Error(`BenchmarkRunner interp compat-var exited ${benchInterp.exitCode}: ${benchInterp.stderr.toString()}`);
-    if (!benchInterp.stdout.toString().includes("var")) throw new Error("BenchmarkRunner interp compat-var should mention 'var'");
-
-    // BenchmarkRunner (bytecode)
-    const benchBc = Bun.spawnSync(
-      [resolve(BENCHRUNNER), join(tmp, "bench.js"), "--mode=bytecode", "--no-progress"],
-      {
-        stdout: "pipe",
-        stderr: "pipe",
-        env: { ...process.env, GOCCIA_BENCH_CALIBRATION_MS: "50", GOCCIA_BENCH_ROUNDS: "3" } as Record<string, string>,
-        timeout: 60_000,
-      },
-    );
-    if (benchBc.exitCode !== 0) throw new Error(`BenchmarkRunner bytecode compat-var exited ${benchBc.exitCode}: ${benchBc.stderr.toString()}`);
-    if (!benchBc.stdout.toString().includes("var")) throw new Error("BenchmarkRunner bytecode compat-var should mention 'var'");
-  } finally {
-    clean(tmp);
-  }
-}
-
-// -- Per-file compat-traditional-for-loop config across all apps ---------------
-
-console.log("Per-file compat-traditional-for-loop config across all apps...");
-{
-  const tmp = makeTmp();
-  try {
-    writeFileSync(
-      join(tmp, "goccia.json"),
-      '{"compat-traditional-for-loop": true}\n',
-    );
-    writeFileSync(
-      join(tmp, "test.js"),
-      "let s = 0;\nfor (let i = 0; i < 5; i++) { s += i; }\ns;\n",
-    );
-    writeFileSync(
-      join(tmp, "test-runner.js"),
-      [
-        'describe("for", () => {',
-        '  test("counts", () => {',
-        "    let s = 0;",
-        "    for (let i = 0; i < 5; i++) s += i;",
-        "    expect(s).toBe(10);",
-        "  });",
-        "});",
-      ].join("\n") + "\n",
-    );
-    writeFileSync(
-      join(tmp, "bench.js"),
-      [
-        'suite("for", () => {',
-        '  bench("count", {',
-        "    run: () => {",
-        "      let s = 0;",
-        "      for (let i = 0; i < 10; i++) s += i;",
-        "      return s;",
-        "    },",
-        "  });",
-        "});",
-      ].join("\n") + "\n",
-    );
-
-    // Loader (interpreted)
-    const loaderOut = await $`${LOADER} --print ${join(tmp, "test.js")} 2>&1`.text();
-    if (!containsLine(loaderOut, "10")) throw new Error(`Loader interp compat-traditional-for-loop should produce 10 on its own line, got: ${loaderOut}`);
-
-    // Loader (bytecode)
-    const loaderBc = await $`${LOADER} --print ${join(tmp, "test.js")} --mode=bytecode 2>&1`.text();
-    if (!containsLine(loaderBc, "10")) throw new Error(`Loader bytecode compat-traditional-for-loop should produce 10 on its own line, got: ${loaderBc}`);
-
-    // TestRunner (interpreted)
-    const trInterp = await $`${TESTRUNNER} ${join(tmp, "test-runner.js")} --no-progress 2>&1`.text();
-    if (!trInterp.includes("Passed: 1")) throw new Error(`TestRunner interp compat-traditional-for-loop should pass, got: ${trInterp}`);
-
-    // TestRunner (bytecode)
-    const trBc = await $`${TESTRUNNER} ${join(tmp, "test-runner.js")} --mode=bytecode --no-progress 2>&1`.text();
-    if (!trBc.includes("Passed: 1")) throw new Error(`TestRunner bytecode compat-traditional-for-loop should pass, got: ${trBc}`);
-
-    // Bundler
-    await $`${BUNDLER} ${join(tmp, "test.js")}`.quiet();
-    if (!existsSync(join(tmp, "test.gbc"))) throw new Error("Bundler compat-traditional-for-loop should compile");
-
-    // BenchmarkRunner (interpreted)
-    const benchInterp = Bun.spawnSync(
-      [resolve(BENCHRUNNER), join(tmp, "bench.js"), "--no-progress"],
-      {
-        stdout: "pipe",
-        stderr: "pipe",
-        env: { ...process.env, GOCCIA_BENCH_CALIBRATION_MS: "50", GOCCIA_BENCH_ROUNDS: "3" } as Record<string, string>,
-        timeout: 60_000,
-      },
-    );
-    if (benchInterp.exitCode !== 0) throw new Error(`BenchmarkRunner interp compat-traditional-for-loop exited ${benchInterp.exitCode}: ${benchInterp.stderr.toString()}`);
-    if (!benchInterp.stdout.toString().includes("for")) throw new Error("BenchmarkRunner interp compat-traditional-for-loop should mention 'for'");
-
-    // BenchmarkRunner (bytecode)
-    const benchBc = Bun.spawnSync(
-      [resolve(BENCHRUNNER), join(tmp, "bench.js"), "--mode=bytecode", "--no-progress"],
-      {
-        stdout: "pipe",
-        stderr: "pipe",
-        env: { ...process.env, GOCCIA_BENCH_CALIBRATION_MS: "50", GOCCIA_BENCH_ROUNDS: "3" } as Record<string, string>,
-        timeout: 60_000,
-      },
-    );
-    if (benchBc.exitCode !== 0) throw new Error(`BenchmarkRunner bytecode compat-traditional-for-loop exited ${benchBc.exitCode}: ${benchBc.stderr.toString()}`);
-    if (!benchBc.stdout.toString().includes("for")) throw new Error("BenchmarkRunner bytecode compat-traditional-for-loop should mention 'for'");
-  } finally {
-    clean(tmp);
-  }
-}
-
-// -- Per-file compat-while-loops config across all apps ------------------------
-
-console.log("Per-file compat-while-loops config across all apps...");
-{
-  const tmp = makeTmp();
-  try {
-    writeFileSync(
-      join(tmp, "goccia.json"),
-      '{"compat-while-loops": true}\n',
-    );
-    writeFileSync(
-      join(tmp, "test.js"),
-      "let s = 0;\nlet i = 0;\nwhile (i < 5) { s += i; i++; }\ns;\n",
-    );
-    writeFileSync(
-      join(tmp, "test-runner.js"),
-      [
-        'describe("while", () => {',
-        '  test("counts", () => {',
-        "    let s = 0;",
-        "    let i = 0;",
-        "    do {",
-        "      s += i;",
-        "      i++;",
-        "    } while (i < 5);",
-        "    expect(s).toBe(10);",
-        "  });",
-        "});",
-      ].join("\n") + "\n",
-    );
-    writeFileSync(
-      join(tmp, "bench.js"),
-      [
-        'suite("while", () => {',
-        '  bench("count", {',
-        "    run: () => {",
-        "      let s = 0;",
-        "      let i = 0;",
-        "      while (i < 10) {",
-        "        s += i;",
-        "        i++;",
-        "      }",
-        "      return s;",
-        "    },",
-        "  });",
-        "});",
-      ].join("\n") + "\n",
-    );
-
-    // Loader (interpreted)
-    const loaderOut = await $`${LOADER} --print ${join(tmp, "test.js")} 2>&1`.text();
-    if (!containsLine(loaderOut, "10")) throw new Error(`Loader interp compat-while-loops should produce 10 on its own line, got: ${loaderOut}`);
-
-    // Loader (bytecode)
-    const loaderBc = await $`${LOADER} --print ${join(tmp, "test.js")} --mode=bytecode 2>&1`.text();
-    if (!containsLine(loaderBc, "10")) throw new Error(`Loader bytecode compat-while-loops should produce 10 on its own line, got: ${loaderBc}`);
-
-    // TestRunner (interpreted)
-    const trInterp = await $`${TESTRUNNER} ${join(tmp, "test-runner.js")} --no-progress 2>&1`.text();
-    if (!trInterp.includes("Passed: 1")) throw new Error(`TestRunner interp compat-while-loops should pass, got: ${trInterp}`);
-
-    // TestRunner (bytecode)
-    const trBc = await $`${TESTRUNNER} ${join(tmp, "test-runner.js")} --mode=bytecode --no-progress 2>&1`.text();
-    if (!trBc.includes("Passed: 1")) throw new Error(`TestRunner bytecode compat-while-loops should pass, got: ${trBc}`);
-
-    // Bundler
-    await $`${BUNDLER} ${join(tmp, "test.js")}`.quiet();
-    if (!existsSync(join(tmp, "test.gbc"))) throw new Error("Bundler compat-while-loops should compile");
-
-    // BenchmarkRunner (interpreted)
-    const benchInterp = Bun.spawnSync(
-      [resolve(BENCHRUNNER), join(tmp, "bench.js"), "--no-progress"],
-      {
-        stdout: "pipe",
-        stderr: "pipe",
-        env: { ...process.env, GOCCIA_BENCH_CALIBRATION_MS: "50", GOCCIA_BENCH_ROUNDS: "3" } as Record<string, string>,
-        timeout: 60_000,
-      },
-    );
-    if (benchInterp.exitCode !== 0) throw new Error(`BenchmarkRunner interp compat-while-loops exited ${benchInterp.exitCode}: ${benchInterp.stderr.toString()}`);
-    if (!benchInterp.stdout.toString().includes("while")) throw new Error("BenchmarkRunner interp compat-while-loops should mention 'while'");
-
-    // BenchmarkRunner (bytecode)
-    const benchBc = Bun.spawnSync(
-      [resolve(BENCHRUNNER), join(tmp, "bench.js"), "--mode=bytecode", "--no-progress"],
-      {
-        stdout: "pipe",
-        stderr: "pipe",
-        env: { ...process.env, GOCCIA_BENCH_CALIBRATION_MS: "50", GOCCIA_BENCH_ROUNDS: "3" } as Record<string, string>,
-        timeout: 60_000,
-      },
-    );
-    if (benchBc.exitCode !== 0) throw new Error(`BenchmarkRunner bytecode compat-while-loops exited ${benchBc.exitCode}: ${benchBc.stderr.toString()}`);
-    if (!benchBc.stdout.toString().includes("while")) throw new Error("BenchmarkRunner bytecode compat-while-loops should mention 'while'");
-  } finally {
-    clean(tmp);
-  }
-}
-
-// -- Per-file compat-loose-equality config across all apps ---------------------
-
-console.log("Per-file compat-loose-equality config across all apps...");
-{
-  const tmp = makeTmp();
-  try {
-    writeFileSync(
-      join(tmp, "goccia.json"),
-      '{"compat-loose-equality": true}\n',
-    );
-    writeFileSync(
-      join(tmp, "test.js"),
-      '"1" == 1;\n',
-    );
-    writeFileSync(
-      join(tmp, "test-runner.js"),
-      'test("loose equality", () => { expect("1" == 1).toBe(true); });\n',
-    );
-    writeFileSync(
-      join(tmp, "bench.js"),
-      [
-        'suite("loose", () => {',
-        '  bench("eq", {',
-        '    run: () => "1" == 1,',
-        "  });",
-        "});",
-      ].join("\n") + "\n",
-    );
-
-    // Loader (interpreted)
-    const loaderOut = await $`${LOADER} --print ${join(tmp, "test.js")} 2>&1`.text();
-    if (!containsLine(loaderOut, "true")) throw new Error(`Loader interp compat-loose-equality should produce true on its own line, got: ${loaderOut}`);
-
-    // Loader (bytecode)
-    const loaderBc = await $`${LOADER} --print ${join(tmp, "test.js")} --mode=bytecode 2>&1`.text();
-    if (!containsLine(loaderBc, "true")) throw new Error(`Loader bytecode compat-loose-equality should produce true on its own line, got: ${loaderBc}`);
-
-    // TestRunner (interpreted)
-    const trInterp = await $`${TESTRUNNER} ${join(tmp, "test-runner.js")} --no-progress 2>&1`.text();
-    if (!trInterp.includes("Passed: 1")) throw new Error(`TestRunner interp compat-loose-equality should pass, got: ${trInterp}`);
-
-    // TestRunner (bytecode)
-    const trBc = await $`${TESTRUNNER} ${join(tmp, "test-runner.js")} --mode=bytecode --no-progress 2>&1`.text();
-    if (!trBc.includes("Passed: 1")) throw new Error(`TestRunner bytecode compat-loose-equality should pass, got: ${trBc}`);
-
-    // Bundler
-    await $`${BUNDLER} ${join(tmp, "test.js")}`.quiet();
-    if (!existsSync(join(tmp, "test.gbc"))) throw new Error("Bundler compat-loose-equality should compile");
-
-    // BenchmarkRunner (interpreted)
-    const benchInterp = Bun.spawnSync(
-      [resolve(BENCHRUNNER), join(tmp, "bench.js"), "--no-progress"],
-      {
-        stdout: "pipe",
-        stderr: "pipe",
-        env: { ...process.env, GOCCIA_BENCH_CALIBRATION_MS: "50", GOCCIA_BENCH_ROUNDS: "3" } as Record<string, string>,
-        timeout: 60_000,
-      },
-    );
-    if (benchInterp.exitCode !== 0) throw new Error(`BenchmarkRunner interp compat-loose-equality exited ${benchInterp.exitCode}: ${benchInterp.stderr.toString()}`);
-    if (!benchInterp.stdout.toString().includes("loose")) throw new Error("BenchmarkRunner interp compat-loose-equality should mention 'loose'");
-
-    // BenchmarkRunner (bytecode)
-    const benchBc = Bun.spawnSync(
-      [resolve(BENCHRUNNER), join(tmp, "bench.js"), "--mode=bytecode", "--no-progress"],
-      {
-        stdout: "pipe",
-        stderr: "pipe",
-        env: { ...process.env, GOCCIA_BENCH_CALIBRATION_MS: "50", GOCCIA_BENCH_ROUNDS: "3" } as Record<string, string>,
-        timeout: 60_000,
-      },
-    );
-    if (benchBc.exitCode !== 0) throw new Error(`BenchmarkRunner bytecode compat-loose-equality exited ${benchBc.exitCode}: ${benchBc.stderr.toString()}`);
-    if (!benchBc.stdout.toString().includes("loose")) throw new Error("BenchmarkRunner bytecode compat-loose-equality should mention 'loose'");
-  } finally {
-    clean(tmp);
-  }
-}
-
-// -- Per-file compat-non-strict-mode config across all apps --------------------
-
-console.log("Per-file compat-non-strict-mode config across all apps...");
-{
-  const tmp = makeTmp();
-  try {
-    writeFileSync(
-      join(tmp, "goccia.json"),
-      '{"compat-function": true, "compat-non-strict-mode": true, "compat-arguments-object": true}\n',
-    );
-    const nonStrictSource = [
-      "function f(a) {",
-      "  if (this !== globalThis) return -1;",
-      "  with ({ extra: 5 }) {",
-      "    return arguments.length + extra;",
-      "  }",
-      "}",
-      "f(1, 2);",
-    ].join("\n") + "\n";
-    writeFileSync(join(tmp, "test.js"), nonStrictSource);
-    writeFileSync(
-      join(tmp, "test-runner.js"),
-      nonStrictSource + 'test("nonstrict", () => { expect(f(1, 2)).toBe(7); });\n',
-    );
-    writeFileSync(
-      join(tmp, "bench.js"),
-      [
-        nonStrictSource,
-        'suite("nonstrict", () => {',
-        '  bench("call", {',
-        "    run: () => f(1, 2),",
-        "  });",
-        "});",
-      ].join("\n") + "\n",
-    );
-
-    // Loader (interpreted)
-    const loaderOut = await $`${LOADER} --print ${join(tmp, "test.js")} 2>&1`.text();
-    if (!containsLine(loaderOut, "7")) throw new Error(`Loader interp compat-non-strict-mode should produce 7 on its own line, got: ${loaderOut}`);
-
-    // Loader (bytecode)
-    const loaderBc = await $`${LOADER} --print ${join(tmp, "test.js")} --mode=bytecode 2>&1`.text();
-    if (!containsLine(loaderBc, "7")) throw new Error(`Loader bytecode compat-non-strict-mode should produce 7 on its own line, got: ${loaderBc}`);
-
-    // TestRunner (interpreted)
-    const trInterp = await $`${TESTRUNNER} ${join(tmp, "test-runner.js")} --no-progress 2>&1`.text();
-    if (!trInterp.includes("Passed: 1")) throw new Error(`TestRunner interp compat-non-strict-mode should pass, got: ${trInterp}`);
-
-    // TestRunner (bytecode)
-    const trBc = await $`${TESTRUNNER} ${join(tmp, "test-runner.js")} --mode=bytecode --no-progress 2>&1`.text();
-    if (!trBc.includes("Passed: 1")) throw new Error(`TestRunner bytecode compat-non-strict-mode should pass, got: ${trBc}`);
-
-    // Bundler
-    await $`${BUNDLER} ${join(tmp, "test.js")}`.quiet();
-    if (!existsSync(join(tmp, "test.gbc"))) throw new Error("Bundler compat-non-strict-mode should compile");
-
-    // BenchmarkRunner (interpreted)
-    const benchInterp = Bun.spawnSync(
-      [resolve(BENCHRUNNER), join(tmp, "bench.js"), "--no-progress"],
-      {
-        stdout: "pipe",
-        stderr: "pipe",
-        env: { ...process.env, GOCCIA_BENCH_CALIBRATION_MS: "50", GOCCIA_BENCH_ROUNDS: "3" } as Record<string, string>,
-        timeout: 60_000,
-      },
-    );
-    if (benchInterp.exitCode !== 0) throw new Error(`BenchmarkRunner interp compat-non-strict-mode exited ${benchInterp.exitCode}: ${benchInterp.stderr.toString()}`);
-    if (!benchInterp.stdout.toString().includes("nonstrict")) throw new Error("BenchmarkRunner interp compat-non-strict-mode should mention 'nonstrict'");
-
-    // BenchmarkRunner (bytecode)
-    const benchBc = Bun.spawnSync(
-      [resolve(BENCHRUNNER), join(tmp, "bench.js"), "--mode=bytecode", "--no-progress"],
-      {
-        stdout: "pipe",
-        stderr: "pipe",
-        env: { ...process.env, GOCCIA_BENCH_CALIBRATION_MS: "50", GOCCIA_BENCH_ROUNDS: "3" } as Record<string, string>,
-        timeout: 60_000,
-      },
-    );
-    if (benchBc.exitCode !== 0) throw new Error(`BenchmarkRunner bytecode compat-non-strict-mode exited ${benchBc.exitCode}: ${benchBc.stderr.toString()}`);
-    if (!benchBc.stdout.toString().includes("nonstrict")) throw new Error("BenchmarkRunner bytecode compat-non-strict-mode should mention 'nonstrict'");
-  } finally {
-    clean(tmp);
-  }
+for (const testCase of [
+  {
+    name: "compat-var",
+    config: '{"compat-var": true}\n',
+    loaderSource: "var x = 10;\nx;\n",
+    loaderExpectedLine: "10",
+    testRunnerSource: [
+      "var y = 20;",
+      'describe("var", () => {',
+      '  test("works", () => {',
+      "    expect(y).toBe(20);",
+      "  });",
+      "});",
+    ].join("\n") + "\n",
+    benchSource: [
+      "var z = 1;",
+      'suite("var", () => {',
+      '  bench("add", {',
+      "    run: () => z + 1,",
+      "  });",
+      "});",
+    ].join("\n") + "\n",
+    benchNeedle: "var",
+  },
+  {
+    name: "compat-traditional-for-loop",
+    config: '{"compat-traditional-for-loop": true}\n',
+    loaderSource: "let s = 0;\nfor (let i = 0; i < 5; i++) { s += i; }\ns;\n",
+    loaderExpectedLine: "10",
+    testRunnerSource: [
+      'describe("for", () => {',
+      '  test("counts", () => {',
+      "    let s = 0;",
+      "    for (let i = 0; i < 5; i++) s += i;",
+      "    expect(s).toBe(10);",
+      "  });",
+      "});",
+    ].join("\n") + "\n",
+    benchSource: [
+      'suite("for", () => {',
+      '  bench("count", {',
+      "    run: () => {",
+      "      let s = 0;",
+      "      for (let i = 0; i < 10; i++) s += i;",
+      "      return s;",
+      "    },",
+      "  });",
+      "});",
+    ].join("\n") + "\n",
+    benchNeedle: "for",
+  },
+  {
+    name: "compat-while-loops",
+    config: '{"compat-while-loops": true}\n',
+    loaderSource: "let s = 0;\nlet i = 0;\nwhile (i < 5) { s += i; i++; }\ns;\n",
+    loaderExpectedLine: "10",
+    testRunnerSource: [
+      'describe("while", () => {',
+      '  test("counts", () => {',
+      "    let s = 0;",
+      "    let i = 0;",
+      "    do {",
+      "      s += i;",
+      "      i++;",
+      "    } while (i < 5);",
+      "    expect(s).toBe(10);",
+      "  });",
+      "});",
+    ].join("\n") + "\n",
+    benchSource: [
+      'suite("while", () => {',
+      '  bench("count", {',
+      "    run: () => {",
+      "      let s = 0;",
+      "      let i = 0;",
+      "      while (i < 10) {",
+      "        s += i;",
+      "        i++;",
+      "      }",
+      "      return s;",
+      "    },",
+      "  });",
+      "});",
+    ].join("\n") + "\n",
+    benchNeedle: "while",
+  },
+  {
+    name: "compat-loose-equality",
+    config: '{"compat-loose-equality": true}\n',
+    loaderSource: '"1" == 1;\n',
+    loaderExpectedLine: "true",
+    testRunnerSource: 'test("loose equality", () => { expect("1" == 1).toBe(true); });\n',
+    benchSource: [
+      'suite("loose", () => {',
+      '  bench("eq", {',
+      '    run: () => "1" == 1,',
+      "  });",
+      "});",
+    ].join("\n") + "\n",
+    benchNeedle: "loose",
+  },
+  {
+    name: "compat-non-strict-mode",
+    config: '{"compat-function": true, "compat-non-strict-mode": true, "compat-arguments-object": true}\n',
+    loaderSource: nonStrictSource,
+    loaderExpectedLine: "7",
+    testRunnerSource: nonStrictSource + 'test("nonstrict", () => { expect(f(1, 2)).toBe(7); });\n',
+    benchSource: [
+      nonStrictSource,
+      'suite("nonstrict", () => {',
+      '  bench("call", {',
+      "    run: () => f(1, 2),",
+      "  });",
+      "});",
+    ].join("\n") + "\n",
+    benchNeedle: "nonstrict",
+  },
+]) {
+  console.log(`Per-file ${testCase.name} config across all apps...`);
+  await runCompatAcrossAppsCase(testCase);
 }
 
 // -- compat-traditional-for-loop off -> warning, no crash -----------------------
