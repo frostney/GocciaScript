@@ -557,6 +557,9 @@ export function Playground({
     if (runningRef.current) return;
     runningRef.current = true;
     setRunning(true);
+    // Keep the displayed ASI flag legacy-shaped while the playground can target
+    // released binaries that only advertise `--asi`. A version-aware
+    // `--compat-asi` label is release-coordinated future work.
     const flagText = [
       asi ? "--asi" : "",
       compatVar ? "--compat-var" : "",

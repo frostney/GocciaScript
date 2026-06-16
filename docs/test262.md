@@ -16,8 +16,8 @@ engine diverges, and how each PR moves those numbers. The generated
 reports are the source of truth for ECMAScript compatibility status.
 
 For the architectural rationale behind the current
-LoaderBare-plus-stock-harness setup, see the
-[Decision log entry](decision-log.md) dated 2026-05-04.
+LoaderBare-plus-stock-harness setup, see
+[ADR 0042](adr/0042-test262-loaderbare-harness.md).
 
 ## Executive summary
 

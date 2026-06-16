@@ -41,6 +41,9 @@ const ALLOWED_HOSTS = ["icanhazdadjoke.com"];
 type GocciaRequestBody = {
   code: string;
   mode?: "interpreted" | "bytecode";
+  // Keep this public request field as `asi` while the playground targets
+  // released GocciaScript versions whose website API used the short name.
+  // Do not rename it to `compatAsi` until version support no longer needs it.
   asi?: boolean;
   compatVar?: boolean;
   compatFunction?: boolean;
@@ -282,6 +285,9 @@ function buildEngineArgs(
       args.push("--allowed-host", host);
     }
   }
+  // Keep sending `--asi` while selected playground versions may only advertise
+  // that legacy flag. Version-aware `--compat-asi` dispatch belongs with the
+  // release that drops support for those older binaries.
   if (asi && isFlagSupported(features, "--asi", kind)) {
     args.unshift("--asi");
   }

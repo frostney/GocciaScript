@@ -133,7 +133,7 @@ export function buildGocciaApiSkillMd(origin: string) {
 
 Use this skill when you need to run GocciaScript code or test files through the public GocciaScript website APIs.
 
-GocciaScript is a sandbox-first, embeddable ECMAScript runtime with modern recommended defaults and conformance-focused compatibility flags. It is designed for predictable generated code, embedding, and AI-agent workflows rather than Node.js or browser API compatibility.
+GocciaScript is a sandbox-first, embeddable ECMAScript runtime with modern recommended defaults and conformance-focused compatibility flags. It is designed for predictable generated code, embedding, and AI-agent workflows rather than Node.js host compatibility or a full browser host environment.
 
 Homepage: ${absoluteUrl(origin, "/")}
 Language docs: ${absoluteUrl(origin, "/docs/language")}
@@ -157,7 +157,7 @@ Options:
 
 - \`code\` — GocciaScript source code, capped at ${MAX_GOCCIA_CODE_BYTES} bytes (8 KiB).
 - \`mode\` — \`interpreted\` or \`bytecode\`, matching \`--mode=bytecode\`.
-- \`asi\` — enables automatic semicolon insertion, matching \`--asi\`. The website API defaults this to \`true\`.
+- \`asi\` — enables automatic semicolon insertion. The website API keeps this short field name for version compatibility; selected binaries may map it to \`--asi\` or \`--compat-asi\` depending on their supported flags. The website API defaults this to \`true\`.
 - \`compatVar\` — enables legacy \`var\` declarations, matching \`--compat-var\`.
 - \`compatFunction\` — enables the \`function\` keyword, matching \`--compat-function\`.
 

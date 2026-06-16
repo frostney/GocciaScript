@@ -34,6 +34,14 @@ _Avoid_: Mode, preset.
 The aggregate JavaScript-visible capability set installed by a runtime profile or by individual runtime extensions. Use it when discussing what a host exposes overall; use runtime global, runtime extension, or runtime profile when naming the concrete mechanism.
 _Avoid_: Runtime, built-in surface, host surface.
 
+**WinterTC compatibility**:
+The open product direction of aligning selected runtime globals and host behavior with web-interoperable server runtime standards, especially WinterTC's Minimum Common Web API. It is distinct from Node.js host compatibility, CommonJS support, and `node:` built-ins.
+_Avoid_: WHATWG API compatibility, browser host environment, Node.js host compatibility.
+
+**WHATWG API compatibility**:
+The open product direction of implementing selected WHATWG browser and web-platform APIs when they fit GocciaScript's sandboxed runtime and embeddable platform goals. It does not imply a full browser host environment.
+_Avoid_: WinterTC compatibility, browser host environment, DOM compatibility.
+
 **Built-in**:
 An API supplied by GocciaScript rather than by user source or a host application. Built-ins include both core language built-ins and runtime globals.
 _Avoid_: Native function when the implementation mechanism is the point.

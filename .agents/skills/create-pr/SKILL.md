@@ -39,8 +39,9 @@ Explicit permission to commit relevant changes, push the branch, and open a draf
    - Use imperative mood, lowercase the summary after the type/scope, and do not end the subject with a period.
 7. Push with upstream tracking when needed: `git push -u origin HEAD`.
 8. Resolve the PR template:
-   - Read `.github/pull_request_template.md`, or pick the matching template under `.github/PULL_REQUEST_TEMPLATE/` if the repo uses multiple.
-   - If none exists, use a minimal structure: Summary, Testing, Linked issues.
+   - Search `.github/pull_request_template.md` and `.github/PULL_REQUEST_TEMPLATE/`.
+   - Read `.github/pull_request_template.md`, or pick the matching template under `.github/PULL_REQUEST_TEMPLATE/` when multiple templates are discovered.
+   - Absence protocol: after the template search finds no PR template, state that no project PR template was found and use a minimal structure: Summary, Testing, Linked issues.
    - Fill the template faithfully and preserve its structure.
 9. Open as a **draft** via GraphQL first:
 

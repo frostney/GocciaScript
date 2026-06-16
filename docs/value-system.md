@@ -701,7 +701,7 @@ Self-references in initializers are supported via a child scope that binds each 
 
 Numbers are represented by a single `Double` payload (`FValue`) using standard IEEE 754 bit patterns. Special values (`NaN`, `Infinity`, `-Infinity`, `-0`) are detected via property accessors (`IsNaN`, `IsInfinity`, `IsNegativeZero`) that delegate to `Math.IsNaN`, `Math.IsInfinite`, and an endian-neutral sign-bit check — the same helpers described in the [Numbers](#numbers) section above.
 
-This replaced an earlier enum-based design. See [decision-log.md](decision-log.md) for the history of this change.
+This replaced an earlier enum-based design. See [ADR 0001](adr/0001-number-dual-representation.md) and [ADR 0016](adr/0016-ieee-754-number-representation.md) for the history of this change.
 
 **Why property accessors matter:**
 

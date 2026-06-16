@@ -142,7 +142,7 @@ The realm exposes two slot kinds:
 
 Value units register a slot id at unit `initialization` time via `RegisterRealmSlot` / `RegisterRealmOwnedSlot` (process-wide monotonic counters), and read/write through `CurrentRealm.GetSlot(SlotId)` / `.SetSlot(SlotId, Value)` at runtime. `CurrentRealm` is maintained by `TGocciaExecutionContextStack` (`Goccia.ExecutionContext.pas`): interpreter and bytecode entry points push a `TGocciaExecutionContext` whose `Realm` is the active realm. The old thread-local pointer remains as a compatibility facade for value units, but execution contexts are the source of truth.
 
-This replaces a previous `threadvar`-cache approach where intrinsic prototypes survived engine destruction and contaminated subsequent engines on the same thread, and a JS-level harness (`prototypeIsolation.js`) that tried to undo mutations from script (and could not reverse non-configurable property additions). See [Decision Log](decision-log.md) for the rationale, [Core patterns § Realm Ownership & Slot Registration](core-patterns.md#realm-ownership--slot-registration) for the registration recipe, and [Embedding § Engine Lifecycle & Realm Isolation](embedding.md#engine-lifecycle--realm-isolation) for embedder-facing implications.
+This replaces a previous `threadvar`-cache approach where intrinsic prototypes survived engine destruction and contaminated subsequent engines on the same thread, and a JS-level harness (`prototypeIsolation.js`) that tried to undo mutations from script (and could not reverse non-configurable property additions). See [ADR 0032](adr/0032-per-engine-realm-isolation.md) for the rationale, [Core patterns § Realm Ownership & Slot Registration](core-patterns.md#realm-ownership--slot-registration) for the registration recipe, and [Embedding § Engine Lifecycle & Realm Isolation](embedding.md#engine-lifecycle--realm-isolation) for embedder-facing implications.
 
 ## Duplication Boundaries (beneficial vs harmful)
 
@@ -161,5 +161,5 @@ When in doubt: preserve pipeline separation; consolidate **policy and mechanical
 - [Core patterns](core-patterns.md) — Recurring implementation patterns
 - [GocciaScript Context](../CONTEXT.md) — Canonical project terminology
 - [Build System](build-system.md)
-- [Decision Log](decision-log.md)
+- [Architecture Decision Records](adr/)
 - [Contributing](../CONTRIBUTING.md) — Single contribution standard (workflow, mandatory rules, testing, Pascal style, quick reference)

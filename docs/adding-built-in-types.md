@@ -377,7 +377,7 @@ FBuiltinYour := TGocciaGlobalYour.Create(
   CONSTRUCTOR_YOUR, Scope, ThrowError);
 ```
 
-For runtime globals installed by an extension, guard with a runtime-global selector check: `if ggYourType in FGlobals then ...`
+Runtime globals do not use a selector check in the engine. Create and register them from the concrete runtime extension's `Attach` method, using `ARuntime.Engine.Interpreter.GlobalScope` and `ARuntime.Engine.ThrowError`; free extension-owned built-ins from `Detach`. If the extension exposes a JS-visible runtime global name, also call `Runtime.RegisterRuntimeGlobalName('YourType')` from `Attach` so the runtime-globals list on the `Goccia` namespace stays accurate.
 
 ### 4e. RegisterBuiltinConstructors
 
@@ -421,9 +421,35 @@ For a runtime global, use the same built-in/value unit patterns but wire it thro
 
 1. Add a dedicated runtime-extension unit in `source/units/`, following the `Goccia.RuntimeExtensions.<Feature>` naming pattern.
 2. Add a private built-in field to the concrete extension class.
-3. Instantiate it from `Attach` and free it from `Detach`, mirroring the engine's `RegisterBuiltIns` / constructor-registration pattern.
+3. Instantiate it from `Attach` and free it from `Detach`, mirroring the engine's built-in / constructor-registration pattern but using `Runtime.Engine`.
 4. If the feature adds importable file types, override `AddModuleExtensions` and `TryLoadModule` so the extension participates only when installed.
 5. If the feature should be part of a CLI surface, add it to the relevant profile in `Goccia.RuntimeProfiles.*.pas`; otherwise embedders can install the concrete extension directly.
+
+```pascal
+procedure TGocciaYourRuntimeExtension.Attach(const ARuntime: TGocciaRuntimeCore);
+begin
+  inherited Attach(ARuntime);
+  FBuiltinYour := TGocciaGlobalYour.Create(CONSTRUCTOR_YOUR,
+    Runtime.Engine.Interpreter.GlobalScope, Runtime.Engine.ThrowError);
+  Runtime.RegisterRuntimeGlobalName(CONSTRUCTOR_YOUR);
+end;
+
+procedure TGocciaYourRuntimeExtension.Detach;
+begin
+  FBuiltinYour.Free;
+  FBuiltinYour := nil;
+  inherited;
+end;
+```
+
+Profiles install extensions by class:
+
+```pascal
+procedure ApplyLoaderRuntimeProfile(const ARuntime: TGocciaRuntimeCore);
+begin
+  ARuntime.Install(TGocciaYourRuntimeExtension.Create);
+end;
+```
 
 ## Step 5: Constructor Name Constant
 

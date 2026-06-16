@@ -44,7 +44,7 @@ Do not declare the active context at invocation time. First confirm the PR, read
 Active context before review fixes: AGENTS.md, project-area/AGENTS.md, project-area/CONTEXT.md, docs/adr/0003-..., react-stack, convex, resolve-reviews. No matching <domain> skill found.
 ```
 
-This is a gate: if a relevant context file or skill exists but is missing from the declaration, load it before continuing.
+This is a gate: actively search for relevant context files and skills before the declaration. If the declaration is missing any discovered context or skill, load it before continuing.
 
 ### Steps
 

@@ -26,13 +26,6 @@ export const DOC_PAGES: DocPage[] = [
     file: "tutorial.md",
   },
   {
-    id: "goals",
-    title: "Project Goals",
-    group: "Start here",
-    desc: "Sandboxed AI agent runtime and embeddable desktop platform.",
-    file: "goals.md",
-  },
-  {
     id: "language",
     title: "Language",
     group: "Language",
@@ -124,11 +117,11 @@ export const DOC_PAGES: DocPage[] = [
     file: "garbage-collector.md",
   },
   {
-    id: "decision-log",
-    title: "Decision Log",
+    id: "adr",
+    title: "Architecture Decision Records",
     group: "Internals",
-    desc: "Architectural decisions and the trade-offs behind them.",
-    file: "decision-log.md",
+    desc: "Durable architectural decisions and trade-offs.",
+    file: "adr/README.md",
   },
   {
     id: "adding-built-in-types",
