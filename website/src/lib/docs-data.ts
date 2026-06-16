@@ -26,13 +26,6 @@ export const DOC_PAGES: DocPage[] = [
     file: "tutorial.md",
   },
   {
-    id: "goals",
-    title: "Project Goals",
-    group: "Start here",
-    desc: "Sandboxed AI agent runtime and embeddable desktop platform.",
-    file: "goals.md",
-  },
-  {
     id: "language",
     title: "Language",
     group: "Language",
@@ -124,11 +117,11 @@ export const DOC_PAGES: DocPage[] = [
     file: "garbage-collector.md",
   },
   {
-    id: "decision-log",
-    title: "Decision Log",
+    id: "adr",
+    title: "Architecture Decision Records",
     group: "Internals",
-    desc: "Architectural decisions and the trade-offs behind them.",
-    file: "decision-log.md",
+    desc: "Durable architectural decisions and trade-offs.",
+    file: "adr/README.md",
   },
   {
     id: "adding-built-in-types",
@@ -218,6 +211,7 @@ export const DOC_PAGES: DocPage[] = [
 // alias keys (`CONTRIBUTING`, `AGENTS`, `LICENSE`) are merged in
 // explicitly so cross-links from synced repo-root files keep resolving.
 const LEGACY_ALIASES: Record<string, string> = {
+  README: "readme",
   CONTRIBUTING: "contributing-workflow",
   AGENTS: "contributing-workflow",
   LICENSE: "contributing-workflow",
@@ -231,8 +225,12 @@ function buildDocHrefMap(): Record<string, string> {
     const lastSlash = stripped.lastIndexOf("/");
     if (lastSlash >= 0) {
       // Also accept the basename alone, so links like `tooling.md` from a
-      // sibling file resolve to the right page.
-      map[stripped.slice(lastSlash + 1)] = page.id;
+      // sibling file resolve to the right page. Nested README files are only
+      // addressable by their full path so they cannot shadow the root README.
+      const basename = stripped.slice(lastSlash + 1);
+      if (basename.toLowerCase() !== "readme") {
+        map[basename] = page.id;
+      }
     }
   }
   return { ...map, ...LEGACY_ALIASES };

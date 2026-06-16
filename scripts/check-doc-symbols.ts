@@ -50,8 +50,8 @@ const listPasFiles = (): { name: string; path: string }[] => {
   return results;
 };
 
-// Note: docs/spikes/ excluded — spike docs are snapshots per CONTRIBUTING.md
-// and may reference historical type names that no longer exist.
+// Note: docs/spikes/ and docs/adr/ are excluded — both are historical records
+// and may reference type names that no longer exist.
 const MD_DIRS = ["docs", "docs/contributing"];
 const MD_ROOT_FILES = ["README.md", "CONTRIBUTING.md", "AGENTS.md"];
 
@@ -68,11 +68,6 @@ const SKIP_UNIT_PATTERNS = [
 // Pattern for method-path references: `Goccia.Unit.Name.MethodName`
 // These reference a method/function inside a unit, e.g. `Goccia.Arithmetic.pas`'s `IsActualZero`
 const METHOD_PATH_PATTERN = /^(Goccia(?:\.\w+)+)\.([A-Z]\w+)$/;
-
-// Files to skip entirely (snapshots / historical records)
-const SKIP_FILES = new Set([
-  "docs/decision-log.md",           // chronological record — may reference historical type names
-]);
 
 // --- Collect known symbols from the codebase ---
 
@@ -298,14 +293,6 @@ const main = () => {
   const errorMessages: string[] = [];
 
   for (const mdFile of mdFiles) {
-    const relFile = relative(ROOT, mdFile);
-    if (SKIP_FILES.has(relFile)) {
-      if (VERBOSE) {
-        console.log(`  SKIP  ${relFile} (snapshot/historical file)`);
-      }
-      continue;
-    }
-
     const refs = extractSymbolRefs(mdFile);
 
     for (const ref of refs) {

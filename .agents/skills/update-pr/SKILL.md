@@ -54,7 +54,8 @@ This workflow is explicit permission to commit relevant changes and push to the 
    ```
 
 9. Reconcile PR title and body with the latest implementation:
-   - Read `.github/pull_request_template.md` or `.github/PULL_REQUEST_TEMPLATE/` if present.
+   - Search `.github/pull_request_template.md` and `.github/PULL_REQUEST_TEMPLATE/`; read every matching PR template relevant to the current PR.
+   - Absence protocol: after the template search finds no PR template, state that no project PR template was found and reconcile against the existing PR body structure.
    - `gh pr view --json body,url,title`
    - Align title, Summary, Testing, linked issues, and scope with commits and verification.
    - Update title: `gh pr edit --title "$PR_TITLE"` when stale.

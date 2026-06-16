@@ -91,7 +91,9 @@ Leading Unix shebang lines such as `#!/usr/bin/env goccia` are treated as commen
 ### Compile and Test
 
 ```bash
-./build.pas testrunner && ./build/GocciaTestRunner tests
+./build.pas testrunner
+./build/GocciaTestRunner tests
+./build/GocciaTestRunner tests --mode=bytecode
 ```
 
 ### Bytecode Mode

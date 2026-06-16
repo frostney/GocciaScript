@@ -14,11 +14,6 @@ Assistants should treat CONTRIBUTING as authoritative for contribution requireme
 ## Expectations for assistants
 
 - **Read [CONTRIBUTING.md](CONTRIBUTING.md)** before substantive edits—especially [Critical rules](CONTRIBUTING.md#critical-rules) and [Code style](docs/contributing/code-style.md).
-- **Before creating or restructuring units**, you **must** complete these steps before writing any code:
-  1. Read [Source Directory Layout](docs/contributing/code-style.md#source-directory-layout-and-namespacing) — determine whether the unit belongs in `source/shared/` or `source/units/` and why.
-  2. Read [Test Principles](docs/testing.md#test-principles) — understand what to test (public API only) and what not to test (private helpers, implementation details).
-  3. State the public API of the new unit and which directory it belongs in. Do not proceed until this is confirmed.
-  4. Keep implementation details private; test only public APIs.
 - **Run verification yourself** when the environment allows (tests, format check); do not only tell the human what to run unless execution is impossible.
 - **Match the project's workflow**: branch from `main`, focused diffs, tests and docs updated per CONTRIBUTING.
 - **Treat project-local skills as external playbooks**: files under `.agents/skills/` are not normal repo documentation. Do not edit them unless the user explicitly asks to change that skill. Put repo-specific assistant expectations in this file, or create/update a separate skill only when explicitly requested.
@@ -49,7 +44,7 @@ Use `spec.search` when you do not know the clause id, `clause.get` when you do, 
 ## Quick checks
 
 ```bash
-./build.pas testrunner && ./build/GocciaTestRunner tests  # after substantive changes
+./build.pas testrunner && ./build/GocciaTestRunner tests && ./build/GocciaTestRunner tests --mode=bytecode  # after substantive changes
 ./build.pas bundler && ./build/GocciaBundler example.js  # build and run the bundler
 ./format.pas --check # before push / PR
 ```
@@ -173,7 +168,7 @@ printf "const x = 2 + 2; x;" | ./build/GocciaBundler --output=out.gbc # Compile 
 ./build.pas loader && ./build/GocciaScriptLoader ./example.js
 
 # Compile and run all tests
-./build.pas testrunner && ./build/GocciaTestRunner tests
+./build.pas testrunner && ./build/GocciaTestRunner tests && ./build/GocciaTestRunner tests --mode=bytecode
 
 # Compile and run a specific test
 ./build.pas testrunner && ./build/GocciaTestRunner tests/language/expressions/addition/basic-addition.js

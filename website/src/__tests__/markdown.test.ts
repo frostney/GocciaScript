@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { parseMarkdown, safeHref } from "@/components/markdown";
+import { DOC_HREF_MAP } from "@/lib/docs-data";
 
 describe("safeHref — link scheme allowlist", () => {
   test("allows http(s) URLs", () => {
@@ -60,6 +61,14 @@ describe("safeHref — link scheme allowlist", () => {
   test("rejects whitespace-only input", () => {
     expect(safeHref("   ")).toBeNull();
     expect(safeHref("\t\n")).toBeNull();
+  });
+});
+
+describe("DOC_HREF_MAP — README links", () => {
+  test("keeps nested README docs from shadowing the root overview", () => {
+    expect(DOC_HREF_MAP.README).toBe("readme");
+    expect(DOC_HREF_MAP.readme).toBe("readme");
+    expect(DOC_HREF_MAP["adr/README"]).toBe("adr");
   });
 });
 

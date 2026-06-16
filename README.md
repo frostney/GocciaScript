@@ -163,14 +163,18 @@ See [Bytecode VM](docs/bytecode-vm.md) for the current bytecode executor archite
 GocciaScript has 8000+ JavaScript unit tests covering language features, built-in objects, and edge cases.
 
 ```bash
-# Run all tests (GocciaScript TestRunner)
-./build.pas testrunner && ./build/GocciaTestRunner tests
+# Run all tests (GocciaScript TestRunner, all executors)
+./build.pas testrunner
+./build/GocciaTestRunner tests
+./build/GocciaTestRunner tests --mode=bytecode
 
 # Run a specific test
 ./build.pas testrunner && ./build/GocciaTestRunner tests/language/expressions/addition/basic-addition.js
 
 # Run tests with 4 parallel workers
-./build.pas testrunner && ./build/GocciaTestRunner tests --jobs=4
+./build.pas testrunner
+./build/GocciaTestRunner tests --jobs=4
+./build/GocciaTestRunner tests --mode=bytecode --jobs=4
 
 # Run tests in standard JavaScript (Vitest) for cross-compatibility
 npx vitest run
@@ -221,7 +225,7 @@ import { content, metadata } from "./README.md";
 
 Runtime parsers are available for JSON5, TOML, YAML, JSONL, CSV, and TSV. See [Built-in Objects](docs/built-ins.md) and [Language](docs/language.md) for the full data format reference.
 
-`TOML.parse(sourceText)` parses TOML 1.1.0 configuration data. `YAML.parse(sourceText)` handles common configuration files including block scalars, anchors/aliases, merge keys, and YAML 1.2 tag resolution. See [Language](docs/language.md#modules) and [Decision Log](docs/decision-log.md) for the full conformance details.
+`TOML.parse(sourceText)` parses TOML 1.1.0 configuration data. `YAML.parse(sourceText)` handles common configuration files including block scalars, anchors/aliases, merge keys, and YAML 1.2 tag resolution. See [Language](docs/language.md#modules) and [Architecture Decision Records](docs/adr/) for the full conformance details.
 
 JSONL parsing is also available via `JSONL.parse(text)` and `JSONL.parseChunk(text)`, and `.jsonl` files can be imported as structured-data modules.
 
@@ -271,7 +275,7 @@ See [Core patterns](docs/core-patterns.md) and [Interpreter](docs/interpreter.md
 
 | Document | Description |
 |----------|-------------|
-| [Project Goals](docs/goals.md) | Why GocciaScript exists: sandboxed AI agent runtime and embeddable desktop platform |
+| [Vision](VISION.md) | Why GocciaScript exists: sandboxed AI agent runtime and embeddable desktop platform |
 | [Tutorial](docs/tutorial.md) | Your first GocciaScript program — a guided walkthrough for newcomers |
 | [Language](docs/language.md) | ECMAScript support, recommended defaults, compatibility flags, and rationale |
 | [Language Tables](docs/language-tables.md) | Quick-reference: ECMAScript feature matrix and TC39 proposal status |
@@ -292,7 +296,7 @@ See [Core patterns](docs/core-patterns.md) and [Interpreter](docs/interpreter.md
 | [Benchmarks](docs/benchmarks.md) | Benchmark runner, output formats, writing benchmarks |
 | [Build System](docs/build-system.md) | Build commands, compiler configuration, CI/CD |
 | [Profiling](docs/profiling.md) | Bytecode VM profiling: opcodes, functions, output formats |
-| [Decision Log](docs/decision-log.md) | Chronological record of key architectural decisions |
+| [Architecture Decision Records](docs/adr/) | Durable architectural decisions and trade-offs |
 | [Contributing](CONTRIBUTING.md) | Single contribution standard: workflow, mandatory rules, testing, FreePascal style |
 | [AGENTS.md](AGENTS.md) | Agent operating manual for coding assistants; [CONTRIBUTING.md](CONTRIBUTING.md) is the contributing guide for everyone |
 

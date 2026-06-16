@@ -121,7 +121,11 @@ export function gocciaRunInputSchema() {
       },
       asi: {
         type: "boolean",
-        description: "Enable automatic semicolon insertion, matching --asi.",
+        // Keep this schema description legacy-shaped while the website API
+        // targets released binaries that only advertise `--asi`. A version-aware
+        // `--compat-asi` alias/description is release-coordinated future work.
+        description:
+          "Enable automatic semicolon insertion. The website API keeps this short field for version compatibility; selected binaries may map it to --asi or --compat-asi.",
         default: true,
       },
       compatVar: {

@@ -978,11 +978,12 @@ export function Landing({
               </p>
               <div className="mt-10">
                 <p className="text-ink-2 mb-0 text-[0.92rem]">
-                  The runtime is also intentionally{" "}
-                  <strong>not Node.js-compatible</strong> — no{" "}
-                  <code className={inlineCodeClass}>process</code>, no{" "}
-                  <code className={inlineCodeClass}>Buffer</code>, no CommonJS,
-                  no ambient filesystem globals.
+                  The runtime is intentionally{" "}
+                  <strong>not Node.js host compatible</strong>: no CommonJS, no{" "}
+                  <code className={inlineCodeClass}>node:</code> built-ins, no
+                  npm-style package resolution, and no Node host globals such as{" "}
+                  <code className={inlineCodeClass}>process</code> or{" "}
+                  <code className={inlineCodeClass}>Buffer</code>.
                 </p>
               </div>
             </div>

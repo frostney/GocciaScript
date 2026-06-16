@@ -5,13 +5,13 @@
       "source": "frostney/known-good-route",
       "sourceType": "github",
       "skillPath": "create-issue/SKILL.md",
-      "computedHash": "61c52b8bdb31d7169450f7f4294f68c9810f05ff3c498fda20e2e668e49e7fec"
+      "computedHash": "866c27acda7f5d24f6ec797ec42f14e45065ee3a30c30fd87db9cddc53616fbf"
     },
     "create-pr": {
       "source": "frostney/known-good-route",
       "sourceType": "github",
       "skillPath": "create-pr/SKILL.md",
-      "computedHash": "b0a1a2a7514f850b92f87905fc3b524f48e377ae09ec56b987863d9f95a737e2"
+      "computedHash": "8f52222c92c1ea78df50d117c616634f16408cf624bb4b483c923a6b7cec8785"
     },
     "documentation-writer": {
       "source": "github/awesome-copilot",
@@ -47,13 +47,13 @@
       "source": "frostney/known-good-route",
       "sourceType": "github",
       "skillPath": "implement-idea/SKILL.md",
-      "computedHash": "30f8c38cf8fbe03e410c8e089f0ad60e9609ee22272d191fbb81307e05a03a2b"
+      "computedHash": "e7a6f93e1bacee986ff742f952830ed275ec50d0aabb2fff23d832f375bddb6a"
     },
     "implement-issue": {
       "source": "frostney/known-good-route",
       "sourceType": "github",
       "skillPath": "implement-issue/SKILL.md",
-      "computedHash": "138a6ee1d33b4bb67063d2faad97d295fc6fbf4f8536600ba20c2407f336296e"
+      "computedHash": "402f509533355f9e063735977b707e273e29b5ca7579649e83bdd5d52d2261ce"
     },
     "improve-codebase-architecture": {
       "source": "mattpocock/skills",
@@ -83,13 +83,19 @@
       "source": "frostney/known-good-route",
       "sourceType": "github",
       "skillPath": "review-pr/SKILL.md",
-      "computedHash": "03645eaa7cfc288062aee93f28c10b3607ed68d153c00e54c722376524125c79"
+      "computedHash": "b8da6111930a0b5e4623995ded930a88237638526d22a8e3b84b221b2e48a90a"
+    },
+    "software-engineering-excellence": {
+      "source": "frostney/known-good-route",
+      "sourceType": "github",
+      "skillPath": "software-engineering-excellence/SKILL.md",
+      "computedHash": "48b3d232be42902b6185337dc5bec75c7b79fc184ab3ba831aed25b02b32e80a"
     },
     "update-pr": {
       "source": "frostney/known-good-route",
       "sourceType": "github",
       "skillPath": "update-pr/SKILL.md",
-      "computedHash": "069e0bdd114fea6d1dd07fd0c8a7ce867c050b008cd7dc1a89f9049190f6130e"
+      "computedHash": "1cffd7e9def2f4609b4d7b42faa5c98da9d7631bf7f45f62eb182139a941daba"
     }
   }
 }
