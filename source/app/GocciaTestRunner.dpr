@@ -132,6 +132,8 @@ type
     procedure Configure; override;
     procedure ConfigureCreatedEngine(const AEngine: TGocciaEngine;
       const AFileConfig: TConfigEntryArray); override;
+    function ShouldApplyRootConfig(const APaths: TStringList;
+      const AConfigPath: string; const AExplicitConfig: Boolean): Boolean; override;
     function UsageLine: string; override;
     procedure Validate; override;
     procedure ExecuteWithPaths(const APaths: TStringList); override;
@@ -265,6 +267,14 @@ begin
   if LogFileOpen and Assigned(ConsoleExtension) and
      Assigned(ConsoleExtension.BuiltinConsole) then
     ConsoleExtension.BuiltinConsole.LogCallback := HandleConsoleLog;
+end;
+
+function TTestRunnerApp.ShouldApplyRootConfig(const APaths: TStringList;
+  const AConfigPath: string; const AExplicitConfig: Boolean): Boolean;
+begin
+  Result := inherited ShouldApplyRootConfig(APaths, AConfigPath, AExplicitConfig);
+  if Result and (not AExplicitConfig) and (APaths.Count > 1) then
+    Result := False;
 end;
 
 procedure TTestRunnerApp.Validate;
@@ -655,6 +665,7 @@ begin
           end;
 
             LexStart := GetNanoseconds;
+            PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
             PipelineOptions.Preprocessors := Engine.Preprocessors;
             PipelineOptions.Compatibility := Engine.Compatibility;
             PipelineOptions.SourceType := Engine.SourceType;

@@ -1829,6 +1829,7 @@ begin
   PipelineResult := nil;
 
   try
+    PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
     PipelineOptions.Preprocessors := FPreprocessors;
     PipelineOptions.Compatibility := FCompatibility;
     PipelineOptions.SourceType := FSourceType;
@@ -2447,6 +2448,7 @@ begin
 
   // Validate params: must parse as a valid parameter list.
   // If params contain tokens that escape the signature, this will throw.
+  PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
   PipelineOptions.Preprocessors := [];
   PipelineOptions.Compatibility := FCompatibility + [cfFunction];
   PipelineOptions.SourceType := stScript;

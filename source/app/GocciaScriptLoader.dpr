@@ -582,6 +582,7 @@ begin
       ConfigureConsole(RuntimeConsole(Engine), ACapture);
       ApplyDataGlobalsToEngine(Engine);
 
+      PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
       PipelineOptions.Preprocessors := Engine.Preprocessors;
       PipelineOptions.Compatibility := Engine.Compatibility;
       PipelineOptions.SourceType := Engine.SourceType;

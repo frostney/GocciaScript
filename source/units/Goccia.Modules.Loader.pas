@@ -1236,6 +1236,7 @@ begin
 
   Content := FContentProvider.LoadContent(ResolvedPath);
   try
+    PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
     PipelineOptions.Preprocessors := FPreprocessors;
     PipelineOptions.Compatibility := FCompatibility;
     PipelineOptions.SourceType := stModule;
@@ -1431,6 +1432,7 @@ begin
 
   Content := FContentProvider.LoadContent(ResolvedPath);
   try
+    PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
     PipelineOptions.Preprocessors := FPreprocessors;
     PipelineOptions.Compatibility := FCompatibility;
     PipelineOptions.SourceType := stModule;
@@ -1506,6 +1508,7 @@ begin
 
   Content := FContentProvider.LoadContent(PhysicalPath);
   try
+    PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
     PipelineOptions.Preprocessors := FPreprocessors;
     PipelineOptions.Compatibility := FCompatibility;
     PipelineOptions.SourceType := stModule;
@@ -1582,6 +1585,7 @@ begin
 
   Content := FContentProvider.LoadContent(PhysicalPath);
   try
+    PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
     PipelineOptions.Preprocessors := FPreprocessors;
     PipelineOptions.Compatibility := FCompatibility;
     PipelineOptions.SourceType := stModule;
@@ -1670,6 +1674,7 @@ begin
 
   Content := FContentProvider.LoadContent(PhysicalPath);
   try
+    PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
     PipelineOptions.Preprocessors := FPreprocessors;
     PipelineOptions.Compatibility := FCompatibility;
     PipelineOptions.SourceType := stModule;

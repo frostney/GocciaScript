@@ -590,6 +590,7 @@ var
   Context: TGocciaEvaluationContext;
   I: Integer;
 begin
+  PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
   PipelineOptions.Preprocessors := [];
   PipelineOptions.Compatibility := [];
   PipelineOptions.SourceType := stModule;

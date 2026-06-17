@@ -57,6 +57,8 @@ type
     function Add(const AOption: TOptionBase): TOptionBase;
     procedure ConfigureCreatedEngine(const AEngine: TGocciaEngine;
       const AFileConfig: TConfigEntryArray); virtual;
+    function ShouldApplyRootConfig(const APaths: TStringList;
+      const AConfigPath: string; const AExplicitConfig: Boolean): Boolean; virtual;
     procedure HandleConsoleLog(const AMethod, ALine: string);
     { Discover the nearest goccia.json/json5/toml for a file and
       return its parsed entries.  Returns an empty array when no
@@ -634,6 +636,13 @@ procedure TGocciaCLIApplication.ConfigureCreatedEngine(
 begin
 end;
 
+function TGocciaCLIApplication.ShouldApplyRootConfig(
+  const APaths: TStringList; const AConfigPath: string;
+  const AExplicitConfig: Boolean): Boolean;
+begin
+  Result := True;
+end;
+
 function TGocciaCLIApplication.CreateEngine(const AFileName: string;
   const ASource: TStringList; const AExecutor: TGocciaExecutor): TGocciaEngine;
 var
@@ -1054,7 +1063,8 @@ begin
       ConfigPath := DiscoverConfigFile(ConfigStartDir,
         [CONFIG_BASE_NAME], CONFIG_EXTENSIONS);
     end;
-    if ConfigPath <> '' then
+    if (ConfigPath <> '') and
+       ShouldApplyRootConfig(Paths, ConfigPath, FConfig.Present) then
       ApplyConfigFile(ConfigPath, FAllOptions);
 
     Validate;

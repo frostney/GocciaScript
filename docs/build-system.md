@@ -227,6 +227,8 @@ The first file found is loaded and applied as the **root config**. When running 
 4. **File extension default** (`.mjs` infers module source)
 5. **System default** (engine defaults)
 
+`GocciaTestRunner` keeps explicit multi-file test invocations isolated: when you pass more than one input path and do not pass `--config`, the first file's auto-discovered config is not promoted to a root config for the rest of the list. Each file still gets its nearest per-file config. Pass `--config=<path>` when you intentionally want one shared root config across an explicit test file list.
+
 **`--config=<path>`** — Override auto-discovery and load the root config from an explicit location. Available on every CLI tool.
 
 The path may be either a **file** (any registered extension — `.json`, `.json5`, `.toml`; the parser is selected by extension), or a **directory**, in which case the CLI looks for `goccia.toml` → `goccia.json5` → `goccia.json` in that directory only (same priority as auto-discovery). The directory form does **not** walk upward — that's the point of the explicit override.
