@@ -191,8 +191,8 @@ function CoverageTooltipContent({ point }: { point: Test262TimelinePoint }) {
   return (
     <>
       <strong>{title}</strong>
-      {coverageLines.map((line) => (
-        <span key={line}>{line}</span>
+      {coverageLines.map((line, index) => (
+        <span key={index}>{line}</span>
       ))}
     </>
   );
