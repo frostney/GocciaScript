@@ -15,8 +15,9 @@
  *   - Negative runtime: tiny try/catch wrapper prints
  *     "Test262:NegativeTestError:<name>" / "Test262:NegativeTestNoError";
  *     orchestrator matches the captured name against the expected type.
- *     Top-level global declaration-instantiation runtime negatives run raw
- *     because wrapping them in a block changes the semantics under test.
+ *     Top-level global declaration-instantiation runtime negatives run
+ *     unwrapped because wrapping them in a block changes the semantics
+ *     under test.
  *   - Negative parse: body alone; non-zero exit = pass (parse failed),
  *     zero exit = fail.
  *
@@ -238,7 +239,7 @@ type WrapperKind =
   | "positive_sync"
   | "positive_async"
   | "negative_runtime"
-  | "negative_runtime_raw"
+  | "negative_runtime_unwrapped"
   | "negative_parse";
 
 interface BuildOptions {
@@ -256,8 +257,8 @@ function joinPreludeAndBody(prelude: string, body: string): string {
  * script-scope tests are all `harness + body` (no special wrapping). The
  * negative-runtime wrapper is a tiny marker-emitting try/catch. Top-level
  * negative runtime tests that rely on Script global declaration instantiation
- * run raw so the wrapper does not introduce a block scope. Negative-parse is
- * body-only.
+ * run unwrapped so the wrapper does not introduce a block scope.
+ * Negative-parse is body-only.
  *
  * `onlyStrict` tests get a directive prefix so they exercise strict runtime
  * semantics while still receiving compatibility-gated parser support.
@@ -269,7 +270,7 @@ function buildTestSource(
 ): string {
   const strictPrefix = opts.strictMode ? '"use strict";\n' : "";
   if (opts.kind === "negative_parse") return `${strictPrefix}${body}`;
-  if (opts.kind === "negative_runtime_raw") {
+  if (opts.kind === "negative_runtime_unwrapped") {
     return joinPreludeAndBody(`${strictPrefix}${harnessSource}`, body);
   }
   if (opts.kind === "negative_runtime") {
@@ -431,7 +432,7 @@ function classifyRunResult(args: ClassifyArgs): {
     };
   }
 
-  if (kind === "negative_runtime_raw") {
+  if (kind === "negative_runtime_unwrapped") {
     if (exitCode === 0) {
       return {
         outcome: "FAIL",
@@ -617,7 +618,7 @@ function needsNonStrictCompat(isModule: boolean): boolean {
   return !isModule;
 }
 
-function needsTopLevelNegativeRuntime(
+function needsUnwrappedNegativeRuntime(
   testId: string,
   negative: Frontmatter["negative"],
 ): boolean {
@@ -677,8 +678,8 @@ async function runOneTest(
       isModule
     ) {
       kind = "negative_parse";
-    } else if (needsTopLevelNegativeRuntime(test.id, negative)) {
-      kind = "negative_runtime_raw";
+    } else if (needsUnwrappedNegativeRuntime(test.id, negative)) {
+      kind = "negative_runtime_unwrapped";
     } else {
       kind = "negative_runtime";
     }

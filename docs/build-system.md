@@ -49,7 +49,7 @@ Builds all components in order: tests, loader, loaderbare, testrunner, benchmark
 ./build.pas repl             # Interactive REPL
 ./build.pas loader           # Script Loader
 ./build.pas loaderbare       # Bare Script Loader (core engine only)
-./build.pas testrunner       # JavaScript test runner
+./build.pas testrunner       # JavaScript test runner + native FFI fixture
 ./build.pas benchmarkrunner  # Performance benchmark runner
 ./build.pas bundler          # Bundler (compile to .gbc)
 ./build.pas tests            # Pascal unit tests
@@ -95,6 +95,9 @@ Leading Unix shebang lines such as `#!/usr/bin/env goccia` are treated as commen
 ./build/GocciaTestRunner tests
 ./build/GocciaTestRunner tests --mode=bytecode
 ```
+
+`./build.pas testrunner` also builds `fixtures/ffi/libfixture.*` for the
+current platform, which the folder-configured FFI JavaScript tests need.
 
 ### Bytecode Mode
 

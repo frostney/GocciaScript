@@ -43,7 +43,7 @@ type
       const AScope: TGocciaCompilerScope);
     procedure DoSetDerivedConstructorThisGuard(const AGuard: Boolean);
     function BuildContext: TGocciaCompilationContext;
-    function NonStrictScriptBlockFunctionBindingsEnabled: Boolean;
+    function NonStrictBlockFunctionVarBindingsEnabled: Boolean;
   public
     constructor Create(const ASourcePath: string);
     destructor Destroy; override;
@@ -131,7 +131,7 @@ begin
   Result.SetDerivedConstructorThisGuard := DoSetDerivedConstructorThisGuard;
 end;
 
-function TGocciaCompiler.NonStrictScriptBlockFunctionBindingsEnabled: Boolean;
+function TGocciaCompiler.NonStrictBlockFunctionVarBindingsEnabled: Boolean;
 begin
   Result := FNonStrictMode and Assigned(FCurrentTemplate) and
     not FCurrentTemplate.StrictCode;
@@ -390,7 +390,7 @@ end;
 
 procedure HoistVarLocals(const ANode: TGocciaASTNode;
   const AScope: TGocciaCompilerScope;
-  const AIncludeNonStrictScriptBlockFunctionBindings: Boolean;
+  const AIncludeNonStrictBlockFunctionVarBindings: Boolean;
   const AAtVarScopedLevel: Boolean;
   const ASkipUninitializedVars: Boolean = False); forward;
 
@@ -661,7 +661,7 @@ begin
       // Hoist var declarations to function scope
       for I := 0 to Block.Nodes.Count - 1 do
         HoistVarLocals(Block.Nodes[I], FCurrentScope,
-          NonStrictScriptBlockFunctionBindingsEnabled, True);
+          NonStrictBlockFunctionVarBindingsEnabled, True);
 
       // Check if there are function declarations to hoist
       HasFunctionDecl := False;
@@ -758,7 +758,7 @@ end;
 
 procedure HoistVarLocals(const ANode: TGocciaASTNode;
   const AScope: TGocciaCompilerScope;
-  const AIncludeNonStrictScriptBlockFunctionBindings: Boolean;
+  const AIncludeNonStrictBlockFunctionVarBindings: Boolean;
   const AAtVarScopedLevel: Boolean;
   const ASkipUninitializedVars: Boolean = False);
 var
@@ -787,7 +787,7 @@ begin
   end
   else if (ANode is TGocciaFunctionDeclaration) and
           (AAtVarScopedLevel or
-          (AIncludeNonStrictScriptBlockFunctionBindings and
+          (AIncludeNonStrictBlockFunctionVarBindings and
           not TGocciaFunctionDeclaration(ANode).FunctionExpression.IsAsync and
           not TGocciaFunctionDeclaration(ANode).FunctionExpression.IsGenerator)) then
     AScope.DeclareVarLocal(TGocciaFunctionDeclaration(ANode).Name)
@@ -802,7 +802,7 @@ begin
   end
   else if (ANode is TGocciaExportFunctionDeclaration) and
           (AAtVarScopedLevel or
-          (AIncludeNonStrictScriptBlockFunctionBindings and
+          (AIncludeNonStrictBlockFunctionVarBindings and
           not TGocciaExportFunctionDeclaration(ANode).Declaration.FunctionExpression.IsAsync and
           not TGocciaExportFunctionDeclaration(ANode).Declaration.FunctionExpression.IsGenerator)) then
     AScope.DeclareVarLocal(
@@ -824,22 +824,22 @@ begin
     Block := TGocciaBlockStatement(ANode);
     for I := 0 to Block.Nodes.Count - 1 do
       HoistVarLocals(Block.Nodes[I], AScope,
-        AIncludeNonStrictScriptBlockFunctionBindings, False, ASkipUninitializedVars);
+        AIncludeNonStrictBlockFunctionVarBindings, False, ASkipUninitializedVars);
   end
   else if ANode is TGocciaIfStatement then
   begin
     IfStmt := TGocciaIfStatement(ANode);
     HoistVarLocals(IfStmt.Consequent, AScope,
-      AIncludeNonStrictScriptBlockFunctionBindings, False, ASkipUninitializedVars);
+      AIncludeNonStrictBlockFunctionVarBindings, False, ASkipUninitializedVars);
     if Assigned(IfStmt.Alternate) then
       HoistVarLocals(IfStmt.Alternate, AScope,
-        AIncludeNonStrictScriptBlockFunctionBindings, False, ASkipUninitializedVars);
+        AIncludeNonStrictBlockFunctionVarBindings, False, ASkipUninitializedVars);
   end
   else if ANode is TGocciaForOfStatement then
   begin
     ForOf := TGocciaForOfStatement(ANode);
     HoistVarLocals(ForOf.Body, AScope,
-      AIncludeNonStrictScriptBlockFunctionBindings, False, ASkipUninitializedVars);
+      AIncludeNonStrictBlockFunctionVarBindings, False, ASkipUninitializedVars);
   end
   else if ANode is TGocciaForInStatement then
   begin
@@ -852,48 +852,48 @@ begin
         AScope.DeclareVarLocal(ForIn.BindingName);
     end;
     HoistVarLocals(ForIn.Body, AScope,
-      AIncludeNonStrictScriptBlockFunctionBindings, False, ASkipUninitializedVars);
+      AIncludeNonStrictBlockFunctionVarBindings, False, ASkipUninitializedVars);
   end
   else if ANode is TGocciaForStatement then
   begin
     ForStmt := TGocciaForStatement(ANode);
     if Assigned(ForStmt.Init) then
       HoistVarLocals(ForStmt.Init, AScope,
-        AIncludeNonStrictScriptBlockFunctionBindings, AAtVarScopedLevel,
+        AIncludeNonStrictBlockFunctionVarBindings, AAtVarScopedLevel,
         ASkipUninitializedVars);
     HoistVarLocals(ForStmt.Body, AScope,
-      AIncludeNonStrictScriptBlockFunctionBindings, False, ASkipUninitializedVars);
+      AIncludeNonStrictBlockFunctionVarBindings, False, ASkipUninitializedVars);
   end
   else if ANode is TGocciaWhileStatement then
   begin
     WhileStmt := TGocciaWhileStatement(ANode);
     HoistVarLocals(WhileStmt.Body, AScope,
-      AIncludeNonStrictScriptBlockFunctionBindings, False, ASkipUninitializedVars);
+      AIncludeNonStrictBlockFunctionVarBindings, False, ASkipUninitializedVars);
   end
   else if ANode is TGocciaDoWhileStatement then
   begin
     DoWhileStmt := TGocciaDoWhileStatement(ANode);
     HoistVarLocals(DoWhileStmt.Body, AScope,
-      AIncludeNonStrictScriptBlockFunctionBindings, False, ASkipUninitializedVars);
+      AIncludeNonStrictBlockFunctionVarBindings, False, ASkipUninitializedVars);
   end
   else if ANode is TGocciaWithStatement then
   begin
     WithStmt := TGocciaWithStatement(ANode);
     HoistVarLocals(WithStmt.Body, AScope,
-      AIncludeNonStrictScriptBlockFunctionBindings, False, ASkipUninitializedVars);
+      AIncludeNonStrictBlockFunctionVarBindings, False, ASkipUninitializedVars);
   end
   else if ANode is TGocciaTryStatement then
   begin
     TryStmt := TGocciaTryStatement(ANode);
     if Assigned(TryStmt.Block) then
       HoistVarLocals(TryStmt.Block, AScope,
-        AIncludeNonStrictScriptBlockFunctionBindings, False, ASkipUninitializedVars);
+        AIncludeNonStrictBlockFunctionVarBindings, False, ASkipUninitializedVars);
     if Assigned(TryStmt.CatchBlock) then
       HoistVarLocals(TryStmt.CatchBlock, AScope,
-        AIncludeNonStrictScriptBlockFunctionBindings, False, ASkipUninitializedVars);
+        AIncludeNonStrictBlockFunctionVarBindings, False, ASkipUninitializedVars);
     if Assigned(TryStmt.FinallyBlock) then
       HoistVarLocals(TryStmt.FinallyBlock, AScope,
-        AIncludeNonStrictScriptBlockFunctionBindings, False, ASkipUninitializedVars);
+        AIncludeNonStrictBlockFunctionVarBindings, False, ASkipUninitializedVars);
   end
   else if ANode is TGocciaSwitchStatement then
   begin
@@ -901,20 +901,20 @@ begin
     for I := 0 to SwitchStmt.Cases.Count - 1 do
       for J := 0 to SwitchStmt.Cases[I].Consequent.Count - 1 do
         HoistVarLocals(SwitchStmt.Cases[I].Consequent[J], AScope,
-          AIncludeNonStrictScriptBlockFunctionBindings, False, ASkipUninitializedVars);
+          AIncludeNonStrictBlockFunctionVarBindings, False, ASkipUninitializedVars);
   end;
 end;
 
 procedure HoistVarLocalsFromStatements(const AStatements: TObjectList<TGocciaStatement>;
   const AScope: TGocciaCompilerScope;
-  const AIncludeNonStrictScriptBlockFunctionBindings: Boolean;
+  const AIncludeNonStrictBlockFunctionVarBindings: Boolean;
   const ASkipUninitializedVars: Boolean = False);
 var
   I: Integer;
 begin
   for I := 0 to AStatements.Count - 1 do
     HoistVarLocals(AStatements[I], AScope,
-      AIncludeNonStrictScriptBlockFunctionBindings, True, ASkipUninitializedVars);
+      AIncludeNonStrictBlockFunctionVarBindings, True, ASkipUninitializedVars);
 end;
 
 procedure AddUniqueVarName(const ANames: TStringList; const AName: string);
@@ -1144,7 +1144,7 @@ begin
   try
     // Hoist var declarations to module scope.
     HoistVarLocalsFromStatements(AProgram.Body, FCurrentScope,
-      NonStrictScriptBlockFunctionBindingsEnabled,
+      NonStrictBlockFunctionVarBindingsEnabled,
       FGlobalBackedTopLevel);
     if FGlobalBackedTopLevel then
     begin

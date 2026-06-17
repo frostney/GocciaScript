@@ -230,6 +230,9 @@ features: [addition, arithmetic]
 ./build.pas testrunner
 ```
 
+This also builds the native FFI fixture library from `fixtures/ffi/fixture.c`,
+so the full JavaScript suite can run the folder-configured FFI tests locally.
+
 ### Run All Tests
 
 ```bash

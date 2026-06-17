@@ -111,7 +111,7 @@ var
   SavedRuntimeModule: TGocciaModule;
   Options: TGocciaCompilerOptimizationOptions;
 begin
-    Compiler := TGocciaCompiler.Create(AContext.CurrentFilePath);
+  Compiler := TGocciaCompiler.Create(AContext.CurrentFilePath);
   try
     Compiler.GlobalBackedTopLevel := False;
     Compiler.AsyncTopLevel := AProgram.HasTopLevelAwait;
