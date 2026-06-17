@@ -15,14 +15,23 @@ function statMtime(filePath: string): Date | null {
 }
 
 function docSourceCandidates(page: DocPage): string[] {
-  const websiteRoot = process.cwd();
-  const repoRoot = path.resolve(websiteRoot, "..");
-  const syncedPath = path.join(websiteRoot, "content", "docs", page.file);
-  const sourcePath =
+  const cwd = process.cwd();
+  const parent = path.resolve(cwd, "..");
+  const sourceFromWebsiteRoot =
     page.file === "readme.md"
-      ? path.join(repoRoot, "README.md")
-      : path.join(repoRoot, "docs", page.file);
-  return [sourcePath, syncedPath];
+      ? path.join(parent, "README.md")
+      : path.join(parent, "docs", page.file);
+  const sourceFromRepoRoot =
+    page.file === "readme.md"
+      ? path.join(cwd, "README.md")
+      : path.join(cwd, "docs", page.file);
+
+  return [
+    sourceFromWebsiteRoot,
+    sourceFromRepoRoot,
+    path.join(cwd, "content", "docs", page.file),
+    path.join(cwd, "website", "content", "docs", page.file),
+  ];
 }
 
 export function getDocLastModified(page: DocPage): Date {

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
-import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { buildSitemap, getDocLastModified } from "@/app/sitemap";
 import { DOC_PAGES } from "@/lib/docs-data";
 
@@ -15,19 +15,13 @@ describe("sitemap", () => {
     const languageEntry = entries.find(
       (entry) => entry.url === "https://example.test/docs/language",
     );
-    const languageSource = path.resolve(
-      process.cwd(),
-      "..",
-      "docs",
-      languagePage.file,
+    const languageSource = fileURLToPath(
+      new URL(`../../../docs/${languagePage.file}`, import.meta.url),
     );
+    const languageMtime = fs.statSync(languageSource).mtime;
 
     expect(home?.lastModified).toEqual(appLastModified);
-    expect(languageEntry?.lastModified).toEqual(
-      fs.statSync(languageSource).mtime,
-    );
-    expect(getDocLastModified(languagePage)).toEqual(
-      fs.statSync(languageSource).mtime,
-    );
+    expect(languageEntry?.lastModified).toEqual(languageMtime);
+    expect(getDocLastModified(languagePage)).toEqual(languageMtime);
   });
 });
