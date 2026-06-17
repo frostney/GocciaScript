@@ -512,8 +512,7 @@ begin
   end;
 
   // Hoist var declarations to function scope
-  HoistVarDeclarations(FBodyStatements, BodyScope,
-    Context.CompatibilityNonStrictMode and Context.NonStrictMode);
+  HoistVarDeclarations(FBodyStatements, BodyScope, Context);
 
   // Function-body lexical declarations are in TDZ before hoisted function
   // declarations are created, so closures capture the uninitialized binding.

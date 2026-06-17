@@ -1,3 +1,4 @@
 {
-  "compat-non-strict-mode": true
+  "compat-non-strict-mode": true,
+  "unsafe-function-constructor": true
 }

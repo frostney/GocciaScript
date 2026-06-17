@@ -1430,7 +1430,7 @@ end;
     end
     else
       ReturnValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-    Result := TGocciaControlFlow.Return(ReturnValue);
+    Result := TGocciaControlFlow.Return(ReturnValue, Self.HasExpression);
   end;
 
   function TGocciaThrowStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
@@ -1485,6 +1485,14 @@ end;
     NamespaceObject: TGocciaValue;
     SourceLoader: TLoadModuleSourceCallback;
     Value: TGocciaValue;
+
+    procedure BindImportValue(const AName: string; const AValue: TGocciaValue);
+    begin
+      if AContext.Scope.ContainsOwnLexicalBinding(AName) then
+        AContext.Scope.ForceUpdateBinding(AName, AValue)
+      else
+        AContext.Scope.DefineLexicalBinding(AName, AValue, dtConst);
+    end;
   begin
     Result := TGocciaControlFlow.Empty;
 
@@ -1511,8 +1519,7 @@ end;
       if Assigned(TGarbageCollector.Instance) then
         TGarbageCollector.Instance.AddTempRoot(NamespaceObject);
       try
-        AContext.Scope.DefineLexicalBinding(NamespaceName, NamespaceObject,
-          dtConst);
+        BindImportValue(NamespaceName, NamespaceObject);
       finally
         if Assigned(TGarbageCollector.Instance) then
           TGarbageCollector.Instance.RemoveTempRoot(NamespaceObject);
@@ -1538,7 +1545,7 @@ end;
         TGarbageCollector.Instance.AddTempRoot(Value);
       try
         for ImportPair in Imports do
-          AContext.Scope.DefineLexicalBinding(ImportPair.Key, Value, dtConst);
+          BindImportValue(ImportPair.Key, Value);
       finally
         if Assigned(TGarbageCollector.Instance) then
           TGarbageCollector.Instance.RemoveTempRoot(Value);
@@ -1551,9 +1558,7 @@ end;
     for ImportPair in Imports do
     begin
       if Module.TryGetExportValue(ImportPair.Value, Value) then
-      begin
-        AContext.Scope.DefineLexicalBinding(ImportPair.Key, Value, dtConst);
-      end
+        BindImportValue(ImportPair.Key, Value)
       else
       begin
         AContext.OnError(Format('Module "%s" has no export named "%s"',
@@ -1567,8 +1572,7 @@ end;
       if Assigned(TGarbageCollector.Instance) then
         TGarbageCollector.Instance.AddTempRoot(NamespaceObject);
       try
-        AContext.Scope.DefineLexicalBinding(NamespaceName, NamespaceObject,
-          dtConst);
+        BindImportValue(NamespaceName, NamespaceObject);
       finally
         if Assigned(TGarbageCollector.Instance) then
           TGarbageCollector.Instance.RemoveTempRoot(NamespaceObject);
@@ -1594,6 +1598,7 @@ end;
     Value: TGocciaValue;
   begin
     if IsDirectDeclaration and (Expression is TGocciaFunctionExpression) and
+       (LocalName <> GOCCIA_DEFAULT_EXPORT_BINDING) and
        AContext.Scope.ContainsOwnLexicalBinding(LocalName) then
       Exit(TGocciaControlFlow.Empty);
 

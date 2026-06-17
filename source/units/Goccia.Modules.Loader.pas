@@ -1290,7 +1290,8 @@ begin
           PredeclareModuleLexicalDeclarations(ProgramNode, ModuleScope);
           HoistFunctionDeclarations(ProgramNode.Body, Context, True);
           if GetVarEnabled then
-            HoistVarDeclarations(ProgramNode.Body, ModuleScope, False);
+            HoistVarDeclarations(ProgramNode.Body, ModuleScope, Context);
+          Context.ModuleEnvironmentInitialized := True;
           RegisterStaticModuleExports(False);
           EvaluateRequestedModulesInSourceOrder;
           RegisterStaticModuleExports(True);

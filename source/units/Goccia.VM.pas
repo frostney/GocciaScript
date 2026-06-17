@@ -1384,7 +1384,7 @@ begin
       // Read this scope's own var environment directly: GetBinding would
       // dispatch back through this scope's TryGetBinding override, whose
       // with-object head shadows the var binding being copied back
-      // (Annex B function-in-block hoisting inside `with`).
+      // (compat block function hoisting inside `with`).
       if TryGetOwnBinding(Binding.Name, LexicalBinding) then
         SetBindingValue(Binding, LexicalBinding.Value);
     end;
@@ -10724,6 +10724,21 @@ var
   SuperObject: TGocciaObjectValue;
   HomeObject: TGocciaObjectValue;
   SuperPrototype: TGocciaValue;
+  function ResolveCurrentCtorClass: TGocciaClassValue;
+  begin
+    Result := nil;
+    if Assigned(FCurrentClosure) and
+       (FCurrentClosure.HomeClass is TGocciaClassValue) then
+      Exit(TGocciaClassValue(FCurrentClosure.HomeClass));
+    if AThisValue is TGocciaInstanceValue then
+      Result := TGocciaInstanceValue(AThisValue).ClassValue;
+  end;
+  function IsSuperConstructorKey: Boolean;
+  begin
+    Result := AUseSuperConstructor and
+      not (AKey is TGocciaSymbolValue) and
+      (KeyToPropertyName(AKey) = PROP_CONSTRUCTOR);
+  end;
   function ReadSuperProperty(const AObject: TGocciaObjectValue): TGocciaValue;
   begin
     if AKey is TGocciaSymbolValue then
@@ -10744,6 +10759,10 @@ begin
      ASuperValue.IsConstructable then
   begin
     SuperObject := TGocciaObjectValue(ASuperValue);
+    if IsSuperConstructorKey then
+      Exit(TGocciaVMSuperConstructorValue.Create(SuperObject,
+        FCurrentNewTarget, ResolveCurrentCtorClass));
+
     if AThisValue is TGocciaClassValue then
       Exit(ReadSuperProperty(SuperObject));
 
@@ -10779,6 +10798,10 @@ begin
   end;
 
   SuperClass := TGocciaClassValue(ASuperValue);
+  if IsSuperConstructorKey then
+    Exit(TGocciaVMSuperConstructorValue.Create(SuperClass,
+      FCurrentNewTarget, ResolveCurrentCtorClass));
+
   if AThisValue is TGocciaClassValue then
     Exit(ReadSuperProperty(SuperClass));
 

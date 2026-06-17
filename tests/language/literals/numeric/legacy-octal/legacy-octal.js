@@ -1,6 +1,6 @@
 /*---
 description: Legacy octal integer literals in non-strict and strict code
-features: [compat-non-strict-mode, numeric-literals]
+features: [compat-non-strict-mode, numeric-literals, unsafe-function-constructor]
 ---*/
 
 test("legacy octal integer literals use octal mathematical values in non-strict code", () => {
@@ -11,6 +11,6 @@ test("legacy octal integer literals use octal mathematical values in non-strict 
   expect(077).toBe(63);
 });
 
-test("legacy octal integer literals are rejected in strict eval code", () => {
-  expect(() => eval("\"use strict\"; 01;")).toThrow(SyntaxError);
+test("legacy octal integer literals are rejected in strict dynamic code", () => {
+  expect(() => Function("\"use strict\"; 01;")).toThrow(SyntaxError);
 });

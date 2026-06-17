@@ -30,6 +30,7 @@ type
     RejectVarDeclarationNamesInEval: TGocciaEvalRejectNameArray;
     DisposalTracker: TObject; // TGocciaDisposalTracker or nil
     CurrentModule: TGocciaModule;
+    ModuleEnvironmentInitialized: Boolean;
   end;
 
 implementation

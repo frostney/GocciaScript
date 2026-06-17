@@ -560,7 +560,17 @@ begin
         else
           FState := gsSuspendedYield;
       end;
-      UnwrappedValue := AwaitValue(Value);
+      if Done then
+      begin
+        if FContinuation.ReturnRequiresAwait then
+          UnwrappedValue := AwaitValue(Value)
+        else
+          UnwrappedValue := Value;
+      end
+      else if FContinuation.LastYieldWasDelegate then
+        UnwrappedValue := Value
+      else
+        UnwrappedValue := AwaitValue(Value);
       Promise.Resolve(CreateIteratorResult(UnwrappedValue, Done));
     except
       on E: TGocciaThrowValue do
@@ -804,8 +814,7 @@ begin
 
   Context.Scope := BodyScope;
 
-  HoistVarDeclarations(FBodyStatements, BodyScope,
-    Context.CompatibilityNonStrictMode and Context.NonStrictMode);
+  HoistVarDeclarations(FBodyStatements, BodyScope, Context);
   PredeclareFunctionBodyLexicalDeclarations(FBodyStatements, BodyScope);
   HoistFunctionDeclarations(FBodyStatements, Context);
   Result := TGocciaGeneratorContinuation.Create(FBodyStatements, BodyScope,
@@ -1023,8 +1032,7 @@ begin
 
   Context.Scope := BodyScope;
 
-  HoistVarDeclarations(FBodyStatements, BodyScope,
-    Context.CompatibilityNonStrictMode and Context.NonStrictMode);
+  HoistVarDeclarations(FBodyStatements, BodyScope, Context);
   PredeclareFunctionBodyLexicalDeclarations(FBodyStatements, BodyScope);
   HoistFunctionDeclarations(FBodyStatements, Context);
   Result := TGocciaGeneratorContinuation.Create(FBodyStatements, BodyScope,

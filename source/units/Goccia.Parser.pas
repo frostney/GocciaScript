@@ -1254,11 +1254,6 @@ begin
     raise TGocciaSyntaxError.Create(
       'Keyword must not contain escaped characters',
       AToken.Line, AToken.Column, FFileName, FSourceLines);
-  if (not EffectiveNonStrictModeEnabled) and
-     IsStrictModeReservedKeyword(AToken.Lexeme) then
-    raise TGocciaSyntaxError.Create(
-      'Strict mode code must not reference reserved word ''' + AToken.Lexeme +
-      '''', AToken.Line, AToken.Column, FFileName, FSourceLines);
 end;
 
 procedure TGocciaParser.ValidateIdentifierBinding(const AToken: TGocciaToken);

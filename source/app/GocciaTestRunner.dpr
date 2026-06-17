@@ -516,6 +516,8 @@ begin
       try
         Engine := CreateEngine(AFileName, Source, Executor);
         try
+          Engine.RegisterGlobal('__gocciaTestRunnerMode',
+            TGocciaStringLiteralValue.Create('interpreted'));
           if FSilent.Present or GIsWorkerThread or IsJsonOutput then
           begin
             DisableRuntimeConsole(Engine);
@@ -644,6 +646,8 @@ begin
       try
         Engine := CreateEngine(AFileName, Source, Executor);
         try
+          Engine.RegisterGlobal('__gocciaTestRunnerMode',
+            TGocciaStringLiteralValue.Create('bytecode'));
           if FSilent.Present or GIsWorkerThread or IsJsonOutput then
           begin
             DisableRuntimeConsole(Engine);

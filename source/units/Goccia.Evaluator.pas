@@ -110,10 +110,10 @@ procedure AssignVariablePattern(const APattern: TGocciaDestructuringPattern; con
 
 procedure HoistVarDeclarations(const AStatements: TObjectList<TGocciaStatement>;
   const AScope: TGocciaScope;
-  const AIncludeAnnexBBlockFunctions: Boolean = True); overload;
+  const AContext: TGocciaEvaluationContext); overload;
 procedure HoistVarDeclarations(const ANodes: TObjectList<TGocciaASTNode>;
   const AScope: TGocciaScope;
-  const AIncludeAnnexBBlockFunctions: Boolean = True); overload;
+  const AContext: TGocciaEvaluationContext); overload;
 
 procedure HoistFunctionDeclarations(const AStatements: TObjectList<TGocciaStatement>; const AContext: TGocciaEvaluationContext; const ABlockScoped: Boolean = False); overload;
 procedure HoistFunctionDeclarations(const ANodes: TObjectList<TGocciaASTNode>; const AContext: TGocciaEvaluationContext; const ABlockScoped: Boolean = False); overload;
@@ -727,6 +727,16 @@ begin
     GC.CollectForMemoryPressure(AProtect);
 end;
 
+function VarBindingNameCollectionMode(
+  const ANonStrictMode, ACompatibilityNonStrictMode: Boolean):
+  TGocciaVarBindingNameCollectionMode;
+begin
+  if ANonStrictMode and ACompatibilityNonStrictMode then
+    Result := vbnNonStrictScriptCompatibility
+  else
+    Result := vbnStandard;
+end;
+
 // Helper: create a non-owning copy of a statement list (AST owns the nodes)
 function CopyStatementList(const ASource: TObjectList<TGocciaASTNode>): TObjectList<TGocciaASTNode>;
 var
@@ -739,7 +749,7 @@ end;
 
 procedure HoistVarDeclarations(const AStatements: TObjectList<TGocciaStatement>;
   const AScope: TGocciaScope;
-  const AIncludeAnnexBBlockFunctions: Boolean);
+  const AContext: TGocciaEvaluationContext);
 var
   Names: TStringList;
   I: Integer;
@@ -748,7 +758,8 @@ begin
   Names.CaseSensitive := True;
   try
     CollectVarBindingNamesFromStatements(AStatements, Names,
-      AIncludeAnnexBBlockFunctions);
+      VarBindingNameCollectionMode(AContext.NonStrictMode,
+        AContext.CompatibilityNonStrictMode));
     for I := 0 to Names.Count - 1 do
       AScope.DefineVariableBinding(Names[I], TGocciaUndefinedLiteralValue.UndefinedValue, False);
   finally
@@ -758,7 +769,7 @@ end;
 
 procedure HoistVarDeclarations(const ANodes: TObjectList<TGocciaASTNode>;
   const AScope: TGocciaScope;
-  const AIncludeAnnexBBlockFunctions: Boolean);
+  const AContext: TGocciaEvaluationContext);
 var
   Names: TStringList;
   I: Integer;
@@ -767,7 +778,8 @@ begin
   Names.CaseSensitive := True;
   try
     CollectVarBindingNamesFromNodes(ANodes, Names,
-      AIncludeAnnexBBlockFunctions);
+      VarBindingNameCollectionMode(AContext.NonStrictMode,
+        AContext.CompatibilityNonStrictMode));
     for I := 0 to Names.Count - 1 do
       AScope.DefineVariableBinding(Names[I], TGocciaUndefinedLiteralValue.UndefinedValue, False);
   finally
@@ -1011,12 +1023,11 @@ begin
   try
     if (Value is TGocciaFunctionValue) and (TGocciaFunctionValue(Value).Name = '') then
       TGocciaFunctionValue(Value).Name := Name;
-    if ABlockScoped then
+    if AContext.Scope.ContainsOwnLexicalBinding(Name) then
+      AContext.Scope.ForceUpdateBinding(Name, Value)
+    else if ABlockScoped then
     begin
-      if AContext.Scope.ContainsOwnLexicalBinding(Name) then
-        AContext.Scope.ForceUpdateBinding(Name, Value)
-      else
-        AContext.Scope.DefineLexicalBinding(Name, Value, dtLet);
+      AContext.Scope.DefineLexicalBinding(Name, Value, dtLet);
     end
     else
     begin
@@ -1055,7 +1066,7 @@ begin
     HoistSingleFunctionDeclaration(ANodes[I], AContext, ABlockScoped);
 end;
 
-procedure ActivateAnnexBBlockFunctionDeclaration(
+procedure ActivateCompatBlockFunctionDeclaration(
   const AStatement: TGocciaStatement; const AContext: TGocciaEvaluationContext);
 var
   FuncDecl: TGocciaFunctionDeclaration;
@@ -2699,7 +2710,8 @@ begin
     DeclaredVarNames.CaseSensitive := True;
 
     CollectVarBindingNamesFromStatements(AProgram.Body, VarNames,
-      (not AStrictEval) and AContext.CompatibilityNonStrictMode);
+      VarBindingNameCollectionMode(not AStrictEval,
+        AContext.CompatibilityNonStrictMode));
     CollectTopLevelEvalLexicalNames(AProgram.Body, LexNames);
     for I := 0 to LexNames.Count - 1 do
       if VarNames.IndexOf(LexNames[I]) >= 0 then
@@ -3020,7 +3032,7 @@ begin
   if AContext.CoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) then
     TGocciaCoverageTracker.Instance.RecordLineHit(
       AContext.CurrentFilePath, AStatement.Line);
-  ActivateAnnexBBlockFunctionDeclaration(AStatement, AContext);
+  ActivateCompatBlockFunctionDeclaration(AStatement, AContext);
   Result := AStatement.Execute(AContext);
   if (Result.Kind = cfkBreak) and (Result.TargetLabel <> '') and
      AStatement.HasLabel(Result.TargetLabel) then
@@ -6848,7 +6860,7 @@ var
   ConditionResult: Boolean;
   BodyContext: TGocciaEvaluationContext;
   PatternHandled: Boolean;
-  procedure ActivateAnnexBFunctionDeclaration(
+  procedure ActivateCompatFunctionDeclaration(
     const AStatement: TGocciaStatement;
     const ABodyContext: TGocciaEvaluationContext);
   var
@@ -6883,7 +6895,7 @@ begin
   if ConditionResult then
   begin
     try
-      ActivateAnnexBFunctionDeclaration(AIfStatement.Consequent, BodyContext);
+      ActivateCompatFunctionDeclaration(AIfStatement.Consequent, BodyContext);
       Result := EvaluateStatement(AIfStatement.Consequent, BodyContext);
       Result := Result.UpdateEmpty(UndefinedCompletionValue);
     finally
@@ -6893,7 +6905,7 @@ begin
   end
   else if Assigned(AIfStatement.Alternate) then
   begin
-    ActivateAnnexBFunctionDeclaration(AIfStatement.Alternate, AContext);
+    ActivateCompatFunctionDeclaration(AIfStatement.Alternate, AContext);
     Result := EvaluateStatement(AIfStatement.Alternate, AContext);
     Result := Result.UpdateEmpty(UndefinedCompletionValue);
   end
@@ -7330,7 +7342,7 @@ end;
 procedure InitializeRawPrivateInstanceProperty(
   const AReceiver: TGocciaObjectValue; const APrivateName: string;
   const AValue: TGocciaValue; const AAccessClass: TGocciaClassValue;
-  const APreserveExisting: Boolean); forward;
+  const AInitializationMode: TGocciaInstanceInitializationMode); forward;
 
 procedure InitializeObjectInstanceProperties(const AInstance: TGocciaObjectValue; const AClassValue: TGocciaClassValue; const AContext: TGocciaEvaluationContext; const AInitializationMode: TGocciaInstanceInitializationMode);
 var
@@ -7388,7 +7400,7 @@ begin
           else
             PropertyValue := TGocciaUndefinedLiteralValue.UndefinedValue;
           InitializeRawPrivateInstanceProperty(AInstance, FOEntry.Name,
-            PropertyValue, AClassValue, AInitializationMode = iimReplay);
+            PropertyValue, AClassValue, AInitializationMode);
         end;
       end
       else
@@ -9486,21 +9498,32 @@ end;
 procedure InitializeRawPrivateInstanceProperty(
   const AReceiver: TGocciaObjectValue; const APrivateName: string;
   const AValue: TGocciaValue; const AAccessClass: TGocciaClassValue;
-  const APreserveExisting: Boolean);
+  const AInitializationMode: TGocciaInstanceInitializationMode);
+var
+  PrivateSlotKey: string;
 begin
   if not Assigned(AAccessClass) then
     ThrowPrivateBrandError(APrivateName);
   StampRawPrivateInstanceBrand(AReceiver, AAccessClass);
-  if Assigned(AReceiver.GetOwnPropertyDescriptor(
-    RawPrivateInstanceKey(AAccessClass, APrivateName))) then
+  PrivateSlotKey := RawPrivateInstanceKey(AAccessClass, APrivateName);
+  if Assigned(AReceiver.GetOwnPropertyDescriptor(PrivateSlotKey)) then
   begin
-    if APreserveExisting then
+    if AInitializationMode = iimReplay then
       Exit;
-    ThrowTypeError('Cannot initialize private elements twice',
-      SSuggestPrivateFieldAccess);
+    if (AInitializationMode = iimEagerReplacement) and
+       not HasRawPrivateInstanceInitializersApplied(AReceiver,
+         AAccessClass) then
+    begin
+      if not AReceiver.Extensible then
+        ThrowTypeError('Cannot add private elements to a non-extensible object',
+          SSuggestObjectNotExtensible);
+    end
+    else
+      ThrowTypeError('Cannot initialize private elements twice',
+        SSuggestPrivateFieldAccess);
   end;
   AReceiver.DefineProperty(
-    RawPrivateInstanceKey(AAccessClass, APrivateName),
+    PrivateSlotKey,
     TGocciaPropertyDescriptorData.Create(AValue, [pfWritable, pfConfigurable]));
 end;
 
@@ -10145,7 +10168,7 @@ begin
     else
       InitializeRawPrivateInstanceProperty(
         AInstance, Entry.Key, PropertyValue, AClassValue,
-        AInitializationMode = iimReplay);
+        AInitializationMode);
   end;
 end;
 

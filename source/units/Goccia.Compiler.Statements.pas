@@ -1076,13 +1076,15 @@ begin
     EmitGlobalDefine(ACtx, Slot, AStmt.Name, False, True, True, True);
 end;
 
-procedure CompileAnnexBBlockFunctionActivation(
+procedure CompileCompatBlockFunctionActivation(
   const ACtx: TGocciaCompilationContext; const AStmt: TGocciaFunctionDeclaration);
 var
   LocalIdx, VarLocalIdx: Integer;
   Slot: UInt8;
 begin
-  if (not ACtx.NonStrictMode) or (ACtx.Scope.Depth = 0) then
+  if (not ACtx.NonStrictMode) or
+     (not ACtx.CompatibilityNonStrictMode) or
+     (ACtx.Scope.Depth = 0) then
     Exit;
   if AStmt.FunctionExpression.IsAsync or AStmt.FunctionExpression.IsGenerator then
     Exit;
@@ -1838,7 +1840,7 @@ begin
       Node := AStmt.Nodes[I];
       if GetBlockFunctionDeclaration(Node) <> nil then
       begin
-        CompileAnnexBBlockFunctionActivation(ACtx,
+        CompileCompatBlockFunctionActivation(ACtx,
           GetBlockFunctionDeclaration(Node));
         Continue;
       end;
@@ -1905,7 +1907,7 @@ begin
     Node := AStmt.Nodes[I];
     if GetBlockFunctionDeclaration(Node) <> nil then
     begin
-      CompileAnnexBBlockFunctionActivation(ACtx,
+      CompileCompatBlockFunctionActivation(ACtx,
         GetBlockFunctionDeclaration(Node));
       Continue;
     end;
@@ -2657,7 +2659,7 @@ begin
     begin
       EmitInstruction(ACtx, EncodeABC(OP_LOAD_HOLE, UsingErrorReg, 0, 0));
       EmitInstruction(ACtx, EncodeABC(OP_LOAD_NULL, DisposeReg, 0, 0));
-      UsingHandlerJump := EmitJumpInstruction(ACtx, OP_PUSH_HANDLER,
+      UsingHandlerJump := EmitJumpInstruction(ACtx, OP_PUSH_FINALLY_HANDLER,
         UsingCatchReg);
     end;
 
@@ -4421,7 +4423,7 @@ begin
         Node := CaseClause.Consequent[J];
         if GetBlockFunctionDeclaration(Node) <> nil then
         begin
-          CompileAnnexBBlockFunctionActivation(ACtx,
+          CompileCompatBlockFunctionActivation(ACtx,
             GetBlockFunctionDeclaration(Node));
           Continue;
         end;

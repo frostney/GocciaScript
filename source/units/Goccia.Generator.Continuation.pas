@@ -115,6 +115,8 @@ type
     FLoopStates: TDictionary<TObject, TGocciaGeneratorLoopState>;
     FForLoopStates: TDictionary<TObject, TGocciaGeneratorForLoopState>;
     FIsAsyncGenerator: Boolean;
+    FLastYieldWasDelegate: Boolean;
+    FReturnRequiresAwait: Boolean;
     procedure ClearDelegateState;
   public
     constructor Create(const ABodyStatements: TObjectList<TGocciaASTNode>;
@@ -162,6 +164,8 @@ type
     procedure ClearForLoopStates;
     procedure MarkReferences;
     property Completed: Boolean read FCompleted;
+    property LastYieldWasDelegate: Boolean read FLastYieldWasDelegate;
+    property ReturnRequiresAwait: Boolean read FReturnRequiresAwait;
   end;
 
 function CurrentGeneratorContinuation: TGocciaGeneratorContinuation;
@@ -561,6 +565,8 @@ begin
   FTryStates := TDictionary<TObject, TGocciaGeneratorTryState>.Create;
   FLoopStates := TDictionary<TObject, TGocciaGeneratorLoopState>.Create;
   FForLoopStates := TDictionary<TObject, TGocciaGeneratorForLoopState>.Create;
+  FLastYieldWasDelegate := False;
+  FReturnRequiresAwait := False;
 end;
 
 destructor TGocciaGeneratorContinuation.Destroy;
@@ -609,6 +615,7 @@ begin
     if not FStarted then
     begin
       FCompleted := True;
+      FReturnRequiresAwait := FIsAsyncGenerator;
       ADone := True;
       Result := AValue;
       Exit;
@@ -625,6 +632,8 @@ begin
   FPendingKind := AKind;
   FPendingValue := AValue;
   FStarted := True;
+  FLastYieldWasDelegate := False;
+  FReturnRequiresAwait := False;
 
   PreviousContinuation := GCurrentContinuation;
   GCurrentContinuation := Self;
@@ -642,6 +651,8 @@ begin
         if ControlFlow.Kind = cfkReturn then
         begin
           FCompleted := True;
+          FReturnRequiresAwait := FIsAsyncGenerator and
+            ControlFlow.ReturnHasExpression;
           ClearDelegateState;
           ClearExpressionValues;
           ClearStatementIndexes;
@@ -668,6 +679,8 @@ begin
         on E: EGocciaGeneratorReturn do
         begin
           FCompleted := True;
+          FReturnRequiresAwait := FIsAsyncGenerator and
+            (FPendingKind = grkReturn);
           ClearDelegateState;
           ClearExpressionValues;
           ClearStatementIndexes;
@@ -685,6 +698,7 @@ begin
   end;
 
   FCompleted := True;
+  FReturnRequiresAwait := False;
   ClearDelegateState;
   ClearExpressionValues;
   ClearStatementIndexes;
@@ -798,6 +812,7 @@ begin
         YieldedValue := IteratorResult.GetProperty(PROP_VALUE);
         if not Assigned(YieldedValue) then
           YieldedValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+        FLastYieldWasDelegate := True;
         FSuspendedYield := AYieldExpression;
         raise EGocciaGeneratorYield.Create(YieldedValue);
       end;
@@ -839,6 +854,7 @@ begin
           YieldedValue := IteratorResult.GetProperty(PROP_VALUE);
           if not Assigned(YieldedValue) then
             YieldedValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+          FLastYieldWasDelegate := True;
           FSuspendedYield := AYieldExpression;
           raise EGocciaGeneratorYield.Create(YieldedValue);
         end;
@@ -948,6 +964,7 @@ begin
         YieldedValue := IteratorResult.GetProperty(PROP_VALUE);
         if not Assigned(YieldedValue) then
           YieldedValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+        FLastYieldWasDelegate := True;
         FSuspendedYield := AYieldExpression;
         raise EGocciaGeneratorYield.Create(YieldedValue);
       end;
@@ -971,6 +988,7 @@ begin
       YieldedValue := IteratorResult.GetProperty(PROP_VALUE);
       if not Assigned(YieldedValue) then
         YieldedValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+      FLastYieldWasDelegate := True;
       FSuspendedYield := AYieldExpression;
       raise EGocciaGeneratorYield.Create(YieldedValue);
     end;
@@ -983,6 +1001,7 @@ begin
     YieldedValue := EvaluateExpression(AYieldExpression.Operand, AContext)
   else
     YieldedValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+  FLastYieldWasDelegate := False;
   FSuspendedYield := AYieldExpression;
   raise EGocciaGeneratorYield.Create(YieldedValue);
   except

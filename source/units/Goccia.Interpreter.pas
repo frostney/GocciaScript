@@ -191,8 +191,7 @@ begin
 
   PredeclareScriptLexicalDeclarations(AProgram, FGlobalScope);
   if FVarEnabled then
-    HoistVarDeclarations(AProgram.Body, FGlobalScope,
-      Context.CompatibilityNonStrictMode and Context.NonStrictMode);
+    HoistVarDeclarations(AProgram.Body, FGlobalScope, Context);
   if FFunctionEnabled then
     HoistFunctionDeclarations(AProgram.Body, Context);
 
@@ -330,11 +329,14 @@ var
   ExecutionContext: TGocciaExecutionContextScope;
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-  PredeclareModuleLexicalDeclarations(AProgram, AContext.Scope);
-  if FVarEnabled then
-    HoistVarDeclarations(AProgram.Body, AContext.Scope, False);
-  if FFunctionEnabled then
-    HoistFunctionDeclarations(AProgram.Body, AContext);
+  if not AContext.ModuleEnvironmentInitialized then
+  begin
+    PredeclareModuleLexicalDeclarations(AProgram, AContext.Scope);
+    if FVarEnabled then
+      HoistVarDeclarations(AProgram.Body, AContext.Scope, AContext);
+    if FFunctionEnabled then
+      HoistFunctionDeclarations(AProgram.Body, AContext);
+  end;
   ExecutionContext := nil;
   if Assigned(AContext.Realm) then
     ExecutionContext := TGocciaExecutionContextScope.Create(

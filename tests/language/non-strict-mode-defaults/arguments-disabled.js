@@ -1,6 +1,6 @@
 /*---
 description: The implicit arguments object requires --compat-arguments-object
-features: [compat-function]
+features: [compat-function, unsafe-function-constructor]
 ---*/
 
 test("ordinary functions do not create arguments by default", () => {
@@ -11,12 +11,10 @@ test("ordinary functions do not create arguments by default", () => {
   expect(count(1, 2)).toBe("undefined");
 });
 
-test("arguments remains an ordinary identifier", () => {
-  function echo(arguments) {
-    return arguments;
-  }
-
-  expect(echo("param")).toBe("param");
+test("arguments remains restricted as a strict binding name", () => {
+  expect(() => {
+    Function("\"use strict\"; function echo(arguments) { return arguments; }");
+  }).toThrow(SyntaxError);
 });
 
 test("delete non-configurable properties throws by default", () => {

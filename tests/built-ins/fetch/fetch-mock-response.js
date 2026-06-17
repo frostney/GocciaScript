@@ -6,14 +6,14 @@ features: [fetch]
 describe("fetch response handling via mock callbacks", () => {
   test("rejected promise calls catch handler with TypeError", async () => {
     const onReject = mock();
-    await fetch("http://0.0.0.0:1/").catch(onReject);
+    await fetch("http://127.0.0.1:1/").catch(onReject);
     expect(onReject).toHaveBeenCalledTimes(1);
     expect(onReject.mock.calls[0][0].name).toBe("TypeError");
   });
 
   test("rejected promise error has a message", async () => {
     const onReject = mock();
-    await fetch("http://0.0.0.0:1/").catch(onReject);
+    await fetch("http://127.0.0.1:1/").catch(onReject);
     const err = onReject.mock.calls[0][0];
     expect(typeof err.message).toBe("string");
     expect(err.message.length).toBeGreaterThan(0);
@@ -22,14 +22,14 @@ describe("fetch response handling via mock callbacks", () => {
   test("then handler is not called on network error", async () => {
     const onFulfill = mock();
     const onReject = mock();
-    await fetch("http://0.0.0.0:1/").then(onFulfill, onReject);
+    await fetch("http://127.0.0.1:1/").then(onFulfill, onReject);
     expect(onFulfill).toHaveBeenCalledTimes(0);
     expect(onReject).toHaveBeenCalledTimes(1);
   });
 
   test("catch handler receives single argument", async () => {
     const onReject = mock();
-    await fetch("http://0.0.0.0:1/").catch(onReject);
+    await fetch("http://127.0.0.1:1/").catch(onReject);
     expect(onReject.mock.calls[0].length).toBe(1);
   });
 });

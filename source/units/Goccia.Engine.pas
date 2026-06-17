@@ -1890,7 +1890,8 @@ begin
               ModuleContext, True);
             if FModuleLoader.VarEnabled then
               HoistVarDeclarations(PipelineResult.ProgramNode.Body,
-                ModuleScope, False);
+                ModuleScope, ModuleContext);
+            ModuleContext.ModuleEnvironmentInitialized := True;
             RegisterEntryModuleExports(EntryModule, PipelineResult.ProgramNode,
               ModuleScope, FModuleLoader, ModuleContext, False);
             EvaluateEntryRequestedModulesInSourceOrder(
@@ -1925,6 +1926,7 @@ begin
             ModuleScope);
           HoistFunctionDeclarations(PipelineResult.ProgramNode.Body,
             ModuleContext, True);
+          ModuleContext.ModuleEnvironmentInitialized := True;
         end;
         ExecStart := GetNanoseconds;
         ModuleResult := nil;

@@ -100,11 +100,14 @@ var
   ExecutionContext: TGocciaExecutionContextScope;
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-  PredeclareModuleLexicalDeclarations(AProgram, AContext.Scope);
-  if FInterpreter.VarEnabled then
-    HoistVarDeclarations(AProgram.Body, AContext.Scope, False);
-  if FInterpreter.FunctionEnabled then
-    HoistFunctionDeclarations(AProgram.Body, AContext);
+  if not AContext.ModuleEnvironmentInitialized then
+  begin
+    PredeclareModuleLexicalDeclarations(AProgram, AContext.Scope);
+    if FInterpreter.VarEnabled then
+      HoistVarDeclarations(AProgram.Body, AContext.Scope, AContext);
+    if FInterpreter.FunctionEnabled then
+      HoistFunctionDeclarations(AProgram.Body, AContext);
+  end;
   ExecutionContext := nil;
   if Assigned(AContext.Realm) then
     ExecutionContext := TGocciaExecutionContextScope.Create(

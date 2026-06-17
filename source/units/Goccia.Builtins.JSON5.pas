@@ -12,6 +12,7 @@ uses
   Goccia.Arguments.Validator,
   Goccia.Builtins.Base,
   Goccia.Error.ThrowErrorCallback,
+  Goccia.JSON,
   Goccia.JSON5,
   Goccia.ObjectModel,
   Goccia.Scope,
@@ -26,7 +27,7 @@ type
     FReplacerTraversalStack: TList<TGocciaObjectValue>;
     FReviverSourceIndex: Integer;
     FReviverSourceTexts: TStringList;
-    FStringifier: TGocciaJSON5Stringifier;
+    FStringifier: TGocciaJSONStringifier;
 
     function ApplyReviver(const AHolder: TGocciaValue; const AKey: string;
       const AReviver: TGocciaValue): TGocciaValue;
@@ -44,9 +45,6 @@ type
     function StringifyWithReplacer(const AValue: TGocciaValue;
       const AReplacer: TGocciaValue; const AGap: string;
       const APreferredQuoteChar: Char): string;
-    function TransformWithAllowList(const AHolder: TGocciaValue;
-      const AKey: string; const AValue: TGocciaValue;
-      const AKeys: TStringList): TGocciaValue;
     function TransformWithReplacer(const AHolder: TGocciaValue;
       const AKey: string; const AValue: TGocciaValue;
       const AReplacer: TGocciaValue): TGocciaValue;
@@ -117,7 +115,7 @@ begin
   inherited Create(AName, AScope, AThrowError);
 
   FParser := TGocciaJSON5Parser.Create;
-  FStringifier := TGocciaJSON5Stringifier.Create;
+  FStringifier := TGocciaJSONStringifier.Create(jsmJSON5);
   FReplacerTraversalStack := TList<TGocciaObjectValue>.Create;
 
   Members := TGocciaMemberCollection.Create;
@@ -459,10 +457,7 @@ var
   Key: string;
   Keys: TStringList;
   Len: Integer;
-  PreviousTraversalStack: TList<TGocciaObjectValue>;
-  Root: TGocciaObjectValue;
   Seen: TDictionary<string, Boolean>;
-  Transformed: TGocciaValue;
 begin
   // Upstream json5 reference: the property list is extracted and de-duplicated
   // once, before serialization, so a wrapper's toString runs once per element.
@@ -480,107 +475,11 @@ begin
       Keys.Add(Key);
     end;
 
-    Root := TGocciaObjectValue.Create;
-    Root.AssignProperty('', AValue);
-    PreviousTraversalStack := FReplacerTraversalStack;
-    FReplacerTraversalStack := TList<TGocciaObjectValue>.Create;
-    try
-      Transformed := TransformWithAllowList(Root, '', AValue, Keys);
-
-      if RootResultShouldBeUndefined(Transformed) then
-      begin
-        Result := '';
-        Exit;
-      end;
-
-      Result := FStringifier.Stringify(Transformed, AGap, APreferredQuoteChar);
-    finally
-      FReplacerTraversalStack.Free;
-      FReplacerTraversalStack := PreviousTraversalStack;
-    end;
+    Result := FStringifier.Stringify(AValue, AGap, APreferredQuoteChar, Keys);
   finally
     Seen.Free;
     Keys.Free;
   end;
-end;
-
-function TGocciaJSON5Builtin.TransformWithAllowList(const AHolder: TGocciaValue;
-  const AKey: string; const AValue: TGocciaValue;
-  const AKeys: TStringList): TGocciaValue;
-var
-  Arr: TGocciaArrayValue;
-  I: Integer;
-  Key: string;
-  NewArr: TGocciaArrayValue;
-  NewObj: TGocciaObjectValue;
-  Obj: TGocciaObjectValue;
-  PropValue: TGocciaValue;
-  TransformedProp: TGocciaValue;
-  TransformedValue: TGocciaValue;
-  Len: Integer;
-begin
-  TransformedValue := ApplyToJSON(AValue, AKey);
-  // ES2026 §25.5.4.2 steps 4.b-4.d: unwrap boxed primitives.
-  TransformedValue := CoerceWrappedPrimitive(TransformedValue);
-
-  if TransformedValue is TGocciaUndefinedLiteralValue then
-    Exit(TransformedValue);
-
-  if TransformedValue.IsCallable or (TransformedValue is TGocciaSymbolValue) then
-    Exit(TransformedValue);
-
-  if TransformedValue is TGocciaArrayValue then
-  begin
-    if FReplacerTraversalStack.IndexOf(TGocciaArrayValue(TransformedValue)) <> -1 then
-      ThrowTypeError(SErrorCircularStructureToJSON5, SSuggestJSONFormat);
-
-    FReplacerTraversalStack.Add(TGocciaArrayValue(TransformedValue));
-    Arr := TGocciaArrayValue(TransformedValue);
-    NewArr := TGocciaArrayValue.Create;
-    try
-      Len := LengthOfArrayLike(Arr);
-      for I := 0 to Len - 1 do
-      begin
-        PropValue := Arr.GetProperty(IntToStr(I));
-        TransformedProp := TransformWithAllowList(Arr, IntToStr(I), PropValue,
-          AKeys);
-        NewArr.Elements.Add(TransformedProp);
-      end;
-    finally
-      FReplacerTraversalStack.Delete(FReplacerTraversalStack.Count - 1);
-    end;
-    Exit(NewArr);
-  end;
-
-  if (TransformedValue is TGocciaObjectValue) and
-    not (TransformedValue is TGocciaArrayValue) then
-  begin
-    if FReplacerTraversalStack.IndexOf(TGocciaObjectValue(TransformedValue)) <> -1 then
-      ThrowTypeError(SErrorCircularStructureToJSON5, SSuggestJSONFormat);
-
-    FReplacerTraversalStack.Add(TGocciaObjectValue(TransformedValue));
-    Obj := TGocciaObjectValue(TransformedValue);
-    NewObj := TGocciaObjectValue.Create;
-    try
-      for I := 0 to AKeys.Count - 1 do
-      begin
-        Key := AKeys[I];
-        PropValue := Obj.GetProperty(Key);
-        if PropValue = nil then
-          Continue;
-        TransformedProp := TransformWithAllowList(Obj, Key, PropValue, AKeys);
-        if not ((TransformedProp is TGocciaUndefinedLiteralValue) or
-          TransformedProp.IsCallable or
-          (TransformedProp is TGocciaSymbolValue)) then
-          NewObj.AssignProperty(Key, TransformedProp);
-      end;
-    finally
-      FReplacerTraversalStack.Delete(FReplacerTraversalStack.Count - 1);
-    end;
-    Exit(NewObj);
-  end;
-
-  Result := TransformedValue;
 end;
 
 function TGocciaJSON5Builtin.JSON5Parse(
