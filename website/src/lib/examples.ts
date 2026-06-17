@@ -383,7 +383,7 @@ console.log("Time to ship:", span.toString());`,
     code: `// Runtime parsing
 const tomlSource = \`
 [server]
-host = "gocciascript.dev"
+host = "www.gocciascript.dev"
 port = 8443
 
 [features]
