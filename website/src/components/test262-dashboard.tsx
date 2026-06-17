@@ -2,12 +2,13 @@
 
 import { type CSSProperties, useMemo, useRef, useState } from "react";
 import type {
+  Test262CategorySummary,
   Test262DashboardData,
   Test262GroupCoverage,
   Test262TimelinePoint,
 } from "@/lib/test262-dashboard";
 
-const CATEGORY_COLORS: Record<string, string> = {
+const CATEGORY_COLORS: Record<string, string | undefined> = {
   total: "#2d4a2b",
   "built-ins": "#b8651b",
   language: "#4d7fb8",
@@ -15,6 +16,17 @@ const CATEGORY_COLORS: Record<string, string> = {
   staging: "#b45f67",
   harness: "#6f7d42",
 };
+
+const GENERATED_CATEGORY_COLORS = [
+  "#2f6f73",
+  "#8a6f2a",
+  "#9a5d7a",
+  "#5f6ea6",
+  "#7d6b4f",
+  "#627a33",
+  "#9b5c40",
+  "#4f7b5d",
+];
 
 type TimelineRange = "14d" | "30d" | "all";
 
@@ -39,6 +51,29 @@ function minutes(seconds: number): string {
 
 function passRate(passed: number, run: number): number {
   return run > 0 ? passed / run : 0;
+}
+
+export function formatTest262CategoryLabel(category: string): string {
+  return category
+    .split("-")
+    .filter(Boolean)
+    .map((part, index) =>
+      index > 0 && part.length <= 3
+        ? part
+        : `${part.charAt(0).toUpperCase()}${part.slice(1)}`,
+    )
+    .join("-");
+}
+
+function categoryColor(category: string): string {
+  const known = CATEGORY_COLORS[category];
+  if (known) return known;
+
+  let hash = 0;
+  for (let i = 0; i < category.length; i++) {
+    hash = (hash * 31 + category.charCodeAt(i)) >>> 0;
+  }
+  return GENERATED_CATEGORY_COLORS[hash % GENERATED_CATEGORY_COLORS.length];
 }
 
 function dateLabel(value: string): string {
@@ -111,7 +146,35 @@ function xForPoint(
     : padX + (usableW * index) / (points.length - 1);
 }
 
-function dayTooltip(point: Test262TimelinePoint): string {
+function coverageLine(label: string, passed: number, run: number): string {
+  return `${label}: ${percent(passRate(passed, run))} (${fmt(passed)} passed / ${fmt(run)} run)`;
+}
+
+function categoryCoverageLine(category: Test262CategorySummary): string {
+  return coverageLine(
+    formatTest262CategoryLabel(category.category),
+    category.passed,
+    category.run,
+  );
+}
+
+function coverageTooltipLines(point: Test262TimelinePoint): string[] {
+  return [
+    `${dateLabel(point.createdAt)} - run #${point.runNumber} - ${point.shortSha}`,
+    coverageLine("Total", point.summary.passed, point.summary.totalRun),
+    ...point.summary.byCategory.map(categoryCoverageLine),
+  ];
+}
+
+export function formatTest262TimelineTooltip(
+  point: Test262TimelinePoint,
+): string {
+  return coverageTooltipLines(point).join("\n");
+}
+
+export function formatTest262DurationTooltip(
+  point: Test262TimelinePoint,
+): string {
   return [
     `${dateLabel(point.createdAt)} - run #${point.runNumber}`,
     `Commit ${point.shortSha}`,
@@ -122,7 +185,20 @@ function dayTooltip(point: Test262TimelinePoint): string {
   ].join("\n");
 }
 
-function DayTooltipContent({ point }: { point: Test262TimelinePoint }) {
+function CoverageTooltipContent({ point }: { point: Test262TimelinePoint }) {
+  const lines = coverageTooltipLines(point);
+  const [title, ...coverageLines] = lines;
+  return (
+    <>
+      <strong>{title}</strong>
+      {coverageLines.map((line, index) => (
+        <span key={index}>{line}</span>
+      ))}
+    </>
+  );
+}
+
+function DurationTooltipContent({ point }: { point: Test262TimelinePoint }) {
   return (
     <>
       <strong>
@@ -171,6 +247,7 @@ function ChartHoverTargets({
   padX,
   padY,
   tooltipId,
+  labelForPoint,
   onActivate,
   onDeactivate,
 }: {
@@ -180,6 +257,7 @@ function ChartHoverTargets({
   padX: number;
   padY: number;
   tooltipId: string;
+  labelForPoint: (point: Test262TimelinePoint) => string;
   onActivate: (index: number, target: HTMLElement) => void;
   onDeactivate: () => void;
 }) {
@@ -208,7 +286,7 @@ function ChartHoverTargets({
               } as CSSProperties
             }
             aria-describedby={tooltipId}
-            aria-label={dayTooltip(point)}
+            aria-label={labelForPoint(point)}
             onPointerEnter={(event) => onActivate(index, event.currentTarget)}
             onPointerLeave={onDeactivate}
             onFocus={(event) => onActivate(index, event.currentTarget)}
@@ -226,11 +304,13 @@ function ChartTooltip({
   point,
   left,
   top,
+  variant,
 }: {
   id: string;
   point: Test262TimelinePoint | null;
   left: number;
   top: number;
+  variant: "coverage" | "duration";
 }) {
   if (!point) return null;
   return (
@@ -246,7 +326,11 @@ function ChartTooltip({
         } as CSSProperties
       }
     >
-      <DayTooltipContent point={point} />
+      {variant === "coverage" ? (
+        <CoverageTooltipContent point={point} />
+      ) : (
+        <DurationTooltipContent point={point} />
+      )}
     </div>
   );
 }
@@ -375,8 +459,7 @@ function CoverageTimeline({ points }: { points: Test262TimelinePoint[] }) {
                   className="compat-chart-line"
                   style={
                     {
-                      "--series-color":
-                        CATEGORY_COLORS[category] ?? CATEGORY_COLORS.total,
+                      "--series-color": categoryColor(category),
                     } as CSSProperties
                   }
                 />
@@ -396,8 +479,7 @@ function CoverageTimeline({ points }: { points: Test262TimelinePoint[] }) {
                       className="compat-chart-point"
                       style={
                         {
-                          "--series-color":
-                            CATEGORY_COLORS[category] ?? CATEGORY_COLORS.total,
+                          "--series-color": categoryColor(category),
                         } as CSSProperties
                       }
                     />
@@ -412,6 +494,7 @@ function CoverageTimeline({ points }: { points: Test262TimelinePoint[] }) {
               padX={padX}
               padY={padY}
               tooltipId={tooltipId}
+              labelForPoint={formatTest262TimelineTooltip}
               onActivate={activatePoint}
               onDeactivate={() => setActiveIndex(null)}
             />
@@ -422,6 +505,7 @@ function CoverageTimeline({ points }: { points: Test262TimelinePoint[] }) {
           point={activePoint}
           left={activeLeft}
           top={activeY}
+          variant="coverage"
         />
       </div>
       <ul className="compat-legend" aria-label="Chart series">
@@ -430,13 +514,12 @@ function CoverageTimeline({ points }: { points: Test262TimelinePoint[] }) {
             key={category}
             style={
               {
-                "--series-color":
-                  CATEGORY_COLORS[category] ?? CATEGORY_COLORS.total,
+                "--series-color": categoryColor(category),
               } as CSSProperties
             }
           >
             <span aria-hidden="true" />
-            {category}
+            {formatTest262CategoryLabel(category)}
           </li>
         ))}
       </ul>
@@ -580,6 +663,7 @@ function DurationTimeline({ points }: { points: Test262TimelinePoint[] }) {
               padX={padX}
               padY={padY}
               tooltipId={tooltipId}
+              labelForPoint={formatTest262DurationTooltip}
               onActivate={activatePoint}
               onDeactivate={() => setActiveIndex(null)}
             />
@@ -590,6 +674,7 @@ function DurationTimeline({ points }: { points: Test262TimelinePoint[] }) {
           point={activePoint}
           left={activeLeft}
           top={activeY}
+          variant="duration"
         />
       </div>
     </section>
@@ -664,7 +749,7 @@ function CategorySplit({ point }: { point: Test262TimelinePoint }) {
           return (
             <div className="compat-category" key={category.category}>
               <div className="compat-category-head">
-                <h3>{category.category}</h3>
+                <h3>{formatTest262CategoryLabel(category.category)}</h3>
                 <strong>{percent(rate)}</strong>
               </div>
               <div
