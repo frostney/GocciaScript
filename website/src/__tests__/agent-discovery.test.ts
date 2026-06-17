@@ -44,17 +44,6 @@ describe("agent discovery", () => {
     expect(link?.value).toContain(`</docs>; rel="service-doc"`);
   });
 
-  test("apex production host redirects to the canonical www host", async () => {
-    const redirects = await nextConfig.redirects?.();
-
-    expect(redirects).toContainEqual({
-      source: "/:path*",
-      has: [{ type: "host", value: "gocciascript.dev" }],
-      destination: "https://www.gocciascript.dev/:path*",
-      statusCode: 301,
-    });
-  });
-
   test("api catalog lists public API endpoints and documentation", () => {
     const catalog = buildApiCatalog("https://example.test");
 

@@ -1,7 +1,7 @@
 export const CANONICAL_SITE_URL = "https://www.gocciascript.dev";
 export const SITE_TITLE = "GocciaScript — A drop of JavaScript";
 export const SITE_DESCRIPTION =
-  "Sandbox-first ECMAScript runtime for embedding and AI agents, implemented in FreePascal, intentionally not Node-compatible, with test262-tracked compatibility.";
+  "Sandbox-first ECMAScript runtime for embedding and AI agents, implemented in Object Pascal, intentionally not Node-compatible, with test262-tracked compatibility.";
 
 export function getSiteUrl(): string {
   const siteUrl = (

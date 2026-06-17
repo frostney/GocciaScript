@@ -781,12 +781,12 @@ const FAQ_ITEMS: { question: string; answer: ReactNode }[] = [
   {
     question: "What is GocciaScript?",
     answer:
-      "GocciaScript is a sandbox-first ECMAScript runtime and toolchain implemented from scratch in FreePascal. It runs JavaScript-family source through an interpreter or bytecode VM with host-controlled runtime capabilities.",
+      "GocciaScript is a sandbox-first ECMAScript runtime and toolchain implemented from scratch in Object Pascal. It runs JavaScript-family source through an interpreter or bytecode VM with host-controlled runtime capabilities.",
   },
   {
     question: "What is GocciaScript for?",
     answer:
-      "It is built for embedding scripts in desktop applications and for running generated code from AI agents with less ambient authority than a general-purpose host runtime.",
+      "It is built for embedding scripts in desktop applications and for running generated code from AI agents with less ambient authority than a general-purpose host runtime. Embedding currently targets FreePascal hosts, with more host paths intended to grow over time.",
   },
   {
     question: "Is GocciaScript Node-compatible?",
@@ -808,12 +808,12 @@ const FAQ_ITEMS: { question: string; answer: ReactNode }[] = [
   {
     question: "What is GocciaScript written in?",
     answer:
-      "The engine and command-line tools are written in FreePascal, so the runtime can be embedded into native applications and distributed as self-contained binaries.",
+      "The engine and command-line tools are written in Object Pascal. FreePascal is the supported toolchain today; Delphi support should be possible, but is untested at the moment.",
   },
   {
     question: "Is GocciaScript production-ready?",
     answer:
-      "GocciaScript is still pre-1.0, so APIs and compatibility behavior can change between releases. It is suitable for experimentation, embedding work, and bounded runtime use where those constraints are acceptable.",
+      "GocciaScript is still pre-1.0, so APIs and compatibility behavior can change between releases. With more than 80% of test262 passing, it is ready for serious experiments and bounded production embedding where the supported surface matches your needs.",
   },
   {
     question: "How does the sandbox model work?",
