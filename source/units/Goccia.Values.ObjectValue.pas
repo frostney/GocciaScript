@@ -11,6 +11,7 @@ uses
 
   Goccia.Arguments.Collection,
   Goccia.ObjectModel.Types,
+  Goccia.Realm,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.Primitives,
   Goccia.Values.SymbolValue;
@@ -35,6 +36,8 @@ type
   public
     class procedure InitializeSharedPrototype;
     class function GetSharedObjectPrototype: TGocciaObjectValue; static;
+    class function GetSharedObjectPrototypeForRealm(
+      const ARealm: TGocciaRealm): TGocciaObjectValue; static;
     class procedure SetSharedObjectPrototype(const AValue: TGocciaObjectValue); static;
     class property SharedObjectPrototype: TGocciaObjectValue read GetSharedObjectPrototype write SetSharedObjectPrototype;
     constructor Create(const APrototype: TGocciaObjectValue = nil;
@@ -135,7 +138,6 @@ uses
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.ObjectModel,
-  Goccia.Realm,
   Goccia.Values.ClassHelper,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
@@ -163,6 +165,77 @@ function IsBytecodePrivateInitializerMarker(const AName: string): Boolean;
 begin
   Result := Copy(AName, 1, Length(BYTECODE_PRIVATE_INITIALIZED_PREFIX)) =
     BYTECODE_PRIVATE_INITIALIZED_PREFIX;
+end;
+
+function TryParseArrayIndexKey(const AKey: string; out AIndex: UInt64): Boolean;
+var
+  Digit: UInt64;
+  I: Integer;
+begin
+  AIndex := 0;
+  Result := False;
+  if AKey = '' then
+    Exit;
+  if (Length(AKey) > 1) and (AKey[1] = '0') then
+    Exit;
+
+  for I := 1 to Length(AKey) do
+  begin
+    if (AKey[I] < '0') or (AKey[I] > '9') then
+      Exit;
+    Digit := Ord(AKey[I]) - Ord('0');
+    if AIndex > (High(UInt32) - Digit) div 10 then
+      Exit;
+    AIndex := AIndex * 10 + Digit;
+  end;
+
+  Result := AIndex < High(UInt32);
+end;
+
+function OrderOwnStringPropertyKeys(const AKeys: TArray<string>):
+  TArray<string>;
+var
+  Count, I, J, K: Integer;
+  NumericKeys: TArray<UInt64>;
+  OtherKeys: TArray<string>;
+  ParsedIndex, TempIndex: UInt64;
+begin
+  SetLength(NumericKeys, Length(AKeys));
+  SetLength(OtherKeys, Length(AKeys));
+  Count := 0;
+  J := 0;
+
+  for I := 0 to High(AKeys) do
+  begin
+    if TryParseArrayIndexKey(AKeys[I], ParsedIndex) then
+    begin
+      NumericKeys[Count] := ParsedIndex;
+      Inc(Count);
+    end
+    else
+    begin
+      OtherKeys[J] := AKeys[I];
+      Inc(J);
+    end;
+  end;
+
+  for I := 1 to Count - 1 do
+  begin
+    TempIndex := NumericKeys[I];
+    K := I - 1;
+    while (K >= 0) and (NumericKeys[K] > TempIndex) do
+    begin
+      NumericKeys[K + 1] := NumericKeys[K];
+      Dec(K);
+    end;
+    NumericKeys[K + 1] := TempIndex;
+  end;
+
+  SetLength(Result, Count + J);
+  for I := 0 to Count - 1 do
+    Result[I] := UIntToStr(NumericKeys[I]);
+  for I := 0 to J - 1 do
+    Result[Count + I] := OtherKeys[I];
 end;
 
 // Local ToObject variant for Object.prototype methods.  Keeping this here
@@ -208,8 +281,14 @@ end;
 
 class function TGocciaObjectValue.GetSharedObjectPrototype: TGocciaObjectValue;
 begin
-  if Assigned(CurrentRealm) then
-    Result := TGocciaObjectValue(CurrentRealm.GetSlot(GObjectPrototypeSlot))
+  Result := GetSharedObjectPrototypeForRealm(CurrentRealm);
+end;
+
+class function TGocciaObjectValue.GetSharedObjectPrototypeForRealm(
+  const ARealm: TGocciaRealm): TGocciaObjectValue;
+begin
+  if Assigned(ARealm) then
+    Result := TGocciaObjectValue(ARealm.GetSlot(GObjectPrototypeSlot))
   else
     Result := nil;
 end;
@@ -990,18 +1069,20 @@ end;
 function TGocciaObjectValue.GetOwnPropertyKeys: TArray<string>;
 var
   Key: string;
+  Keys: TArray<string>;
   Count: Integer;
 begin
-  SetLength(Result, FProperties.Count);
+  SetLength(Keys, FProperties.Count);
   Count := 0;
   for Key in FProperties.Keys do
   begin
     if IsBytecodePrivateInitializerMarker(Key) then
       Continue;
-    Result[Count] := Key;
+    Keys[Count] := Key;
     Inc(Count);
   end;
-  SetLength(Result, Count);
+  SetLength(Keys, Count);
+  Result := OrderOwnStringPropertyKeys(Keys);
 end;
 
 
@@ -1153,29 +1234,33 @@ begin
   Count := 0;
 
   for Pair in FProperties do
-    if Pair.Value.Enumerable then
+    if Pair.Value.Enumerable and
+       not IsBytecodePrivateInitializerMarker(Pair.Key) then
     begin
       Names[Count] := Pair.Key;
       Inc(Count);
     end;
 
   SetLength(Names, Count);
-  Result := Names;
+  Result := OrderOwnStringPropertyKeys(Names);
 end;
 
 function TGocciaObjectValue.GetEnumerablePropertyValues: TArray<TGocciaValue>;
 var
-  Pair: TGocciaPropertyMap.TKeyValuePair;
+  Descriptor: TGocciaPropertyDescriptor;
+  Names: TArray<string>;
   Values: TArray<TGocciaValue>;
-  Count: Integer;
+  I, Count: Integer;
 begin
+  Names := GetEnumerablePropertyNames;
   SetLength(Values, FProperties.Count);
   Count := 0;
 
-  for Pair in FProperties do
-    if Pair.Value.Enumerable and (Pair.Value is TGocciaPropertyDescriptorData) then
+  for I := 0 to High(Names) do
+    if FProperties.TryGetValue(Names[I], Descriptor) and
+       Descriptor.Enumerable and (Descriptor is TGocciaPropertyDescriptorData) then
     begin
-      Values[Count] := TGocciaPropertyDescriptorData(Pair.Value).Value;
+      Values[Count] := TGocciaPropertyDescriptorData(Descriptor).Value;
       Inc(Count);
     end;
 
@@ -1185,19 +1270,22 @@ end;
 
 function TGocciaObjectValue.GetEnumerablePropertyEntries: TArray<TPair<string, TGocciaValue>>;
 var
-  Pair: TGocciaPropertyMap.TKeyValuePair;
+  Descriptor: TGocciaPropertyDescriptor;
   Entries: TArray<TPair<string, TGocciaValue>>;
-  Count: Integer;
+  Names: TArray<string>;
+  I, Count: Integer;
   Entry: TPair<string, TGocciaValue>;
 begin
+  Names := GetEnumerablePropertyNames;
   SetLength(Entries, FProperties.Count);
   Count := 0;
 
-  for Pair in FProperties do
-    if Pair.Value.Enumerable and (Pair.Value is TGocciaPropertyDescriptorData) then
+  for I := 0 to High(Names) do
+    if FProperties.TryGetValue(Names[I], Descriptor) and
+       Descriptor.Enumerable and (Descriptor is TGocciaPropertyDescriptorData) then
     begin
-      Entry.Key := Pair.Key;
-      Entry.Value := TGocciaPropertyDescriptorData(Pair.Value).Value;
+      Entry.Key := Names[I];
+      Entry.Value := TGocciaPropertyDescriptorData(Descriptor).Value;
       Entries[Count] := Entry;
       Inc(Count);
     end;
@@ -1209,18 +1297,20 @@ end;
 function TGocciaObjectValue.GetAllPropertyNames: TArray<string>;
 var
   Key: string;
+  Names: TArray<string>;
   Count: Integer;
 begin
-  SetLength(Result, FProperties.Count);
+  SetLength(Names, FProperties.Count);
   Count := 0;
   for Key in FProperties.Keys do
   begin
     if IsBytecodePrivateInitializerMarker(Key) then
       Continue;
-    Result[Count] := Key;
+    Names[Count] := Key;
     Inc(Count);
   end;
-  SetLength(Result, Count);
+  SetLength(Names, Count);
+  Result := OrderOwnStringPropertyKeys(Names);
 end;
 
 { Symbol property methods }

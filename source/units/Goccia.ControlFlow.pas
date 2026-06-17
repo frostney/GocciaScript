@@ -24,8 +24,10 @@ type
   public
     class function Normal(const AValue: TGocciaValue): TGocciaControlFlow; static; inline;
     class function Return(const AValue: TGocciaValue): TGocciaControlFlow; static; inline;
-    class function Break(const ATargetLabel: string = ''): TGocciaControlFlow; static; inline;
-    class function Continue(const ATargetLabel: string = ''): TGocciaControlFlow; static; inline;
+    class function Empty: TGocciaControlFlow; static; inline;
+    class function Break(const ATargetLabel: string = ''; const AValue: TGocciaValue = nil): TGocciaControlFlow; static; inline;
+    class function Continue(const ATargetLabel: string = ''; const AValue: TGocciaValue = nil): TGocciaControlFlow; static; inline;
+    function UpdateEmpty(const AValue: TGocciaValue): TGocciaControlFlow; inline;
     property Kind: TGocciaControlFlowKind read GetKind;
     property Value: TGocciaValue read GetValue;
     property TargetLabel: string read FTargetLabel;
@@ -55,18 +57,37 @@ begin
   Result.FTargetLabel := '';
 end;
 
-class function TGocciaControlFlow.Break(
-  const ATargetLabel: string): TGocciaControlFlow;
+class function TGocciaControlFlow.Empty: TGocciaControlFlow;
 begin
-  Result.FBits := 2;
+  Result.FBits := 0;
+  Result.FTargetLabel := '';
+end;
+
+class function TGocciaControlFlow.Break(
+  const ATargetLabel: string; const AValue: TGocciaValue): TGocciaControlFlow;
+begin
+  Result.FBits := PtrUInt(AValue) or 2;
   Result.FTargetLabel := ATargetLabel;
 end;
 
 class function TGocciaControlFlow.Continue(
-  const ATargetLabel: string): TGocciaControlFlow;
+  const ATargetLabel: string; const AValue: TGocciaValue): TGocciaControlFlow;
 begin
-  Result.FBits := 3;
+  Result.FBits := PtrUInt(AValue) or 3;
   Result.FTargetLabel := ATargetLabel;
+end;
+
+function TGocciaControlFlow.UpdateEmpty(
+  const AValue: TGocciaValue): TGocciaControlFlow;
+begin
+  if Assigned(Value) then
+  begin
+    Result := Self;
+    Exit;
+  end;
+
+  Result.FBits := PtrUInt(AValue) or (FBits and 3);
+  Result.FTargetLabel := FTargetLabel;
 end;
 
 end.

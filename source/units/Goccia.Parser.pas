@@ -35,6 +35,8 @@ type
     WhileLoopsEnabled: Boolean;
     LooseEqualityEnabled: Boolean;
     NonStrictModeEnabled: Boolean;
+    InheritedStrictMode: Boolean;
+    ImportMetaAllowed: Boolean;
     LabelStatementsEnabled: Boolean;
     ForInLoopsEnabled: Boolean;
   end;
@@ -93,9 +95,12 @@ type
     FWhileLoopsEnabled: Boolean;
     FLooseEqualityEnabled: Boolean;
     FNonStrictModeEnabled: Boolean;
+    FInheritedStrictMode: Boolean;
+    FImportMetaAllowed: Boolean;
     FLabelStatementsEnabled: Boolean;
     FForInLoopsEnabled: Boolean;
     FStrictModeActive: Boolean;
+    FStrictModeSourceActive: Boolean;
 
     procedure AddWarning(const AMessage, ASuggestion: string; const ALine, AColumn: Integer);
     procedure PushPrivateClassContext;
@@ -134,6 +139,8 @@ type
     function Consume(const ATokenType: TGocciaTokenType; const AMessage: string): TGocciaToken; overload;
     function Consume(const ATokenType: TGocciaTokenType; const AMessage, ASuggestion: string): TGocciaToken; overload;
     procedure ConsumeSemicolonOrASI(const AMessage, ASuggestion: string);
+    procedure ConsumeDoWhileSemicolonOrASI(
+      const AMessage, ASuggestion: string);
     function CheckSemicolonOrASI: Boolean;
     function IsIdentifierNameToken(
       const ATokenType: TGocciaTokenType): Boolean;
@@ -151,6 +158,7 @@ type
     function CheckEscapedIdentifierKeyword(const AKeyword: string): Boolean;
     function EffectiveNonStrictModeEnabled: Boolean;
     function IsLexicalDeclarationStart: Boolean;
+    function IsForHeadLexicalDeclarationStart: Boolean;
     function StatementIsDirective(const AStatement: TGocciaStatement;
       out AIsUseStrict: Boolean): Boolean;
     function IsAwaitUsingDeclarationStart: Boolean;
@@ -159,9 +167,12 @@ type
     function ConsumeIdentifierBinding(const AMessage: string): TGocciaToken; overload;
     function ConsumeIdentifierBinding(const AMessage,
       ASuggestion: string): TGocciaToken; overload;
+    function ConsumeVarBindingName(const AMessage,
+      ASuggestion: string): TGocciaToken;
     function IsArrowFunction: Boolean;
     function ExtractSourceRange(const AStartLine, AStartColumn: Integer): string;
     function ConvertNumberLiteral(const ALexeme: string): Double;
+    function ConvertBigIntLiteralName(const ALexeme: string): string;
     function ConvertBigIntLiteral(const ALexeme: string): TGocciaValue;
     function CheckContextualKeyword(const AKeyword: string): Boolean;
     function CheckContextualKeywordWithLexicalGoal(const AKeyword: string;
@@ -336,7 +347,8 @@ constructor TGocciaPrivateClassContext.Create;
 begin
   inherited Create;
   FDeclaredNames := TStringList.Create;
-  FDeclaredNames.Sorted := False;
+  FDeclaredNames.CaseSensitive := True;
+  FDeclaredNames.Sorted := True;
   FDeclaredNames.Duplicates := dupIgnore;
 end;
 
@@ -427,6 +439,8 @@ begin
   FWhileLoopsEnabled := AOptions.WhileLoopsEnabled;
   FLooseEqualityEnabled := AOptions.LooseEqualityEnabled;
   FNonStrictModeEnabled := AOptions.NonStrictModeEnabled;
+  FInheritedStrictMode := AOptions.InheritedStrictMode;
+  FImportMetaAllowed := AOptions.ImportMetaAllowed;
   FLabelStatementsEnabled := AOptions.LabelStatementsEnabled;
   FForInLoopsEnabled := AOptions.ForInLoopsEnabled;
 end;
@@ -440,6 +454,8 @@ begin
   Result.WhileLoopsEnabled := FWhileLoopsEnabled;
   Result.LooseEqualityEnabled := FLooseEqualityEnabled;
   Result.NonStrictModeEnabled := FNonStrictModeEnabled;
+  Result.InheritedStrictMode := FInheritedStrictMode;
+  Result.ImportMetaAllowed := FImportMetaAllowed;
   Result.LabelStatementsEnabled := FLabelStatementsEnabled;
   Result.ForInLoopsEnabled := FForInLoopsEnabled;
 end;
@@ -678,11 +694,15 @@ procedure TGocciaParser.EnsureToken(const AIndex: Integer;
   const ALexicalGoal: TGocciaLexicalGoal);
 var
   Token: TGocciaToken;
+  TokenGoal: TGocciaLexicalGoal;
 begin
   if Assigned(FLexer) then
     while FTokens.Count <= AIndex do
     begin
-      Token := FLexer.ScanNextToken(ALexicalGoal);
+      TokenGoal := ALexicalGoal;
+      if FTokens.Count = 0 then
+        TokenGoal := glgInputElementHashbangOrRegExp;
+      Token := FLexer.ScanNextToken(TokenGoal);
       if Token.TokenType = gttEOF then
         Break;
     end;
@@ -926,6 +946,33 @@ begin
   Consume(gttSemicolon, AMessage, ASuggestion);
 end;
 
+// ES2026 §12.10.1 rule 1: do-while's trailing semicolon may be inserted
+// after the condition's closing ")" even without a line terminator.
+procedure TGocciaParser.ConsumeDoWhileSemicolonOrASI(
+  const AMessage, ASuggestion: string);
+begin
+  if Check(gttSemicolon) then
+  begin
+    Advance;
+    Exit;
+  end;
+
+  if Check(gttRightBrace) or Check(gttEOF) then
+    Exit;
+
+  if not FAutomaticSemicolonInsertion then
+  begin
+    Consume(gttSemicolon, AMessage, ASuggestion);
+    Exit;
+  end;
+
+  if (Previous.Line < Peek.Line) or
+     (Previous.TokenType = gttRightParen) then
+    Exit;
+
+  Consume(gttSemicolon, AMessage, ASuggestion);
+end;
+
 // ES2026 §12.10 Check whether ASI would apply at current position
 function TGocciaParser.CheckSemicolonOrASI: Boolean;
 begin
@@ -998,6 +1045,9 @@ begin
   if Check(gttNumber) then
     Exit(FormatDouble(ConvertNumberLiteral(Advance.Lexeme)));
 
+  if Check(gttBigInt) then
+    Exit(ConvertBigIntLiteralName(Advance.Lexeme));
+
   if IsIdentifierNameToken(Peek.TokenType) then
     Exit(Advance.Lexeme);
 
@@ -1053,7 +1103,7 @@ end;
 
 function TGocciaParser.IsReservedKeywordName(const AName: string): Boolean;
 begin
-  Result := IsReservedKeyword(AName);
+  Result := IsReservedKeyword(AName) and (AName <> KEYWORD_LET);
 end;
 
 function TGocciaParser.CheckUnescapedIdentifierKeyword(
@@ -1119,6 +1169,35 @@ begin
     (NextToken.TokenType = gttLeftBrace);
 end;
 
+function TGocciaParser.IsForHeadLexicalDeclarationStart: Boolean;
+var
+  NextToken: TGocciaToken;
+begin
+  if Check(gttConst) then
+    Exit(True);
+
+  if not Check(gttLet) then
+    Exit(False);
+
+  if not EffectiveNonStrictModeEnabled then
+    Exit(True);
+
+  EnsureToken(FCurrent + 1, glgInputElementRegExp);
+  if FCurrent + 1 >= FTokens.Count then
+    Exit(False);
+
+  NextToken := FTokens[FCurrent + 1];
+  if NextToken.TokenType in [gttLeftBracket, gttLeftBrace] then
+    Exit(True);
+
+  if FAutomaticSemicolonInsertion and (Peek.Line < NextToken.Line) then
+    Exit(False);
+
+  Result := IsIdentifierBindingToken(NextToken.TokenType) and
+    not ((NextToken.TokenType = gttIdentifier) and
+    (NextToken.Lexeme = KEYWORD_OF) and not NextToken.ContainsEscape);
+end;
+
 function TGocciaParser.StatementIsDirective(const AStatement: TGocciaStatement;
   out AIsUseStrict: Boolean): Boolean;
 var
@@ -1175,6 +1254,11 @@ begin
     raise TGocciaSyntaxError.Create(
       'Keyword must not contain escaped characters',
       AToken.Line, AToken.Column, FFileName, FSourceLines);
+  if (not EffectiveNonStrictModeEnabled) and
+     IsStrictModeReservedKeyword(AToken.Lexeme) then
+    raise TGocciaSyntaxError.Create(
+      'Strict mode code must not reference reserved word ''' + AToken.Lexeme +
+      '''', AToken.Line, AToken.Column, FFileName, FSourceLines);
 end;
 
 procedure TGocciaParser.ValidateIdentifierBinding(const AToken: TGocciaToken);
@@ -1213,6 +1297,14 @@ begin
   ValidateIdentifierBinding(Result);
 end;
 
+function TGocciaParser.ConsumeVarBindingName(const AMessage,
+  ASuggestion: string): TGocciaToken;
+begin
+  if Check(gttLet) and EffectiveNonStrictModeEnabled then
+    Exit(Advance);
+  Result := ConsumeIdentifierBinding(AMessage, ASuggestion);
+end;
+
 function TGocciaParser.Expression: TGocciaExpression;
 var
   Expressions: TObjectList<TGocciaExpression>;
@@ -1240,16 +1332,38 @@ end;
 function TGocciaParser.Conditional: TGocciaExpression;
 var
   Condition, Consequent, Alternate: TGocciaExpression;
+  NumberToken, QuestionToken: TGocciaToken;
   Line, Column: Integer;
+  MatchedQuestion: Boolean;
 begin
   Result := LogicalOr;
 
-  if MatchWithLexicalGoal(gttQuestion, glgInputElementDiv) then
+  MatchedQuestion := MatchWithLexicalGoal(gttQuestion, glgInputElementDiv);
+  if MatchedQuestion or
+     (Check(gttOptionalChaining) and CheckNext(gttNumber)) then
   begin
-    Line := Previous.Line;
-    Column := Previous.Column;
-    Condition := Result;
-    Consequent := Assignment;  // ECMAScript spec: AssignmentExpression, not Expression
+    if MatchedQuestion then
+    begin
+      Line := Previous.Line;
+      Column := Previous.Column;
+      Condition := Result;
+      Consequent := Assignment;  // ECMAScript spec: AssignmentExpression, not Expression
+    end
+    else
+    begin
+      // OptionalChainingPunctuator is ?. only when the lookahead is not a
+      // DecimalDigit. If the lexer already formed ?. before a decimal literal,
+      // recover the intended ternary tokenization: ? .DecimalDigits.
+      QuestionToken := Advance;
+      Line := QuestionToken.Line;
+      Column := QuestionToken.Column;
+      NumberToken := Advance;
+      Condition := Result;
+      Consequent := TGocciaLiteralExpression.Create(
+        TGocciaNumberLiteralValue.Create(
+          ConvertNumberLiteral('.' + NumberToken.Lexeme)),
+        NumberToken.Line, NumberToken.Column);
+    end;
     Consume(gttColon, 'Expected ":" in conditional expression',
       SSuggestTernaryColon);
     Alternate := Assignment;   // ECMAScript spec: AssignmentExpression
@@ -1709,6 +1823,80 @@ begin
   Result := True;
 end;
 
+function StringLiteralSourceHasStrictForbiddenEscape(const ASource: string): Boolean;
+var
+  I: Integer;
+begin
+  I := 2; // Skip opening quote.
+  while I < Length(ASource) do
+  begin
+    if ASource[I] <> '\' then
+    begin
+      Inc(I);
+      Continue;
+    end;
+
+    Inc(I);
+    if I >= Length(ASource) then
+      Exit(False);
+
+    case ASource[I] of
+      #10:
+        Inc(I);
+      #13:
+        begin
+          Inc(I);
+          if (I < Length(ASource)) and (ASource[I] = #10) then
+            Inc(I);
+        end;
+      '0':
+        begin
+          if (I < Length(ASource)) and
+             CharInSet(ASource[I + 1], ['0'..'9']) then
+            Exit(True);
+          Inc(I);
+        end;
+      '1'..'9':
+        Exit(True);
+    else
+      Inc(I);
+    end;
+  end;
+
+  Result := False;
+end;
+
+function TryExtractRegexTokenParts(const ALexeme: string; out APattern,
+  AFlags: string): Boolean;
+const
+  REGEX_SEPARATOR = #0;
+var
+  PatternLength: Integer;
+  PatternStart: Integer;
+  SeparatorPos: Integer;
+begin
+  Result := False;
+  SeparatorPos := Pos(REGEX_SEPARATOR, ALexeme);
+  if SeparatorPos <= 0 then
+    Exit;
+
+  if not TryStrToInt(Copy(ALexeme, 1, SeparatorPos - 1), PatternLength) then
+  begin
+    APattern := Copy(ALexeme, 1, SeparatorPos - 1);
+    AFlags := Copy(ALexeme, SeparatorPos + 1, MaxInt);
+    Exit(True);
+  end;
+
+  if (PatternLength < 0) or
+     (SeparatorPos + PatternLength > Length(ALexeme)) then
+    Exit;
+
+  PatternStart := SeparatorPos + 1;
+  APattern := Copy(ALexeme, PatternStart, PatternLength);
+  AFlags := Copy(ALexeme, PatternStart + PatternLength, MaxInt);
+  Result := True;
+end;
+
 // Extract cooked and raw full strings from a template token lexeme.
 // AHasInvalidEscapes is True when the lexer used the #2 separator to signal
 // that the template contains at least one malformed escape sequence.
@@ -1865,11 +2053,49 @@ begin
         Break;
       end;
       case ARawSegment[I] of
+        #10: Inc(I);
+        #13:
+        begin
+          Inc(I);
+          if (I <= Length(ARawSegment)) and (ARawSegment[I] = #10) then
+            Inc(I);
+        end;
+        #$E2:
+        begin
+          if (I + 2 <= Length(ARawSegment)) and
+             (ARawSegment[I + 1] = #$80) and
+             ((ARawSegment[I + 2] = #$A8) or
+              (ARawSegment[I + 2] = #$A9)) then
+            Inc(I, 3)
+          else
+          begin
+            SB.AppendChar(ARawSegment[I]);
+            Inc(I);
+          end;
+        end;
+        'b': begin SB.AppendChar(#8); Inc(I); end;
+        'f': begin SB.AppendChar(#12); Inc(I); end;
         'n': begin SB.AppendChar(#10); Inc(I); end;
         'r': begin SB.AppendChar(#13); Inc(I); end;
         't': begin SB.AppendChar(#9); Inc(I); end;
+        'v': begin SB.AppendChar(#11); Inc(I); end;
         '\': begin SB.AppendChar('\'); Inc(I); end;
-        '0': begin SB.AppendChar(#0); Inc(I); end;
+        '0':
+        begin
+          Inc(I);
+          if (I <= Length(ARawSegment)) and
+             (ARawSegment[I] in ['0'..'9']) then
+          begin
+            Result := False;
+            Break;
+          end;
+          SB.AppendChar(#0);
+        end;
+        '1'..'9':
+        begin
+          Result := False;
+          Break;
+        end;
         '`': begin SB.AppendChar('`'); Inc(I); end;
         '$': begin SB.AppendChar('$'); Inc(I); end;
         'u':
@@ -1938,15 +2164,10 @@ var
 begin
   ExtractTemplateParts(AToken.Lexeme, Cooked, Raw, HasInvalidEscapes);
 
-  if HasInvalidEscapes then
-  begin
-    CookedIsValid := CookRawSegment(Raw, Cooked);
-    if (not ATagged) and (not CookedIsValid) then
-      raise TGocciaSyntaxError.Create('Invalid escape sequence in template literal',
-        AToken.Line, AToken.Column, AFileName, ASourceLines, '');
-  end
-  else
-    CookedIsValid := True;
+  CookedIsValid := CookRawSegment(Raw, Cooked);
+  if (not ATagged) and (HasInvalidEscapes or not CookedIsValid) then
+    raise TGocciaSyntaxError.Create('Invalid escape sequence in template literal',
+      AToken.Line, AToken.Column, AFileName, ASourceLines, '');
 
   AppendTemplateString(ACookedStrings, Cooked);
   AppendTemplateString(ARawStrings, Raw);
@@ -2073,18 +2294,81 @@ begin
     AToken.Line, AToken.Column);
 end;
 
+function ExpressionContainsOptionalChain(const AExpr: TGocciaExpression): Boolean;
+var
+  CallExpr: TGocciaCallExpression;
+  MemberExpr: TGocciaMemberExpression;
+  PrivateExpr: TGocciaPrivateMemberExpression;
+  I: Integer;
+begin
+  if not Assigned(AExpr) then
+    Exit(False);
+
+  if AExpr is TGocciaMemberExpression then
+  begin
+    MemberExpr := TGocciaMemberExpression(AExpr);
+    if MemberExpr.Optional or
+       ExpressionContainsOptionalChain(MemberExpr.ObjectExpr) or
+       (MemberExpr.Computed and
+        ExpressionContainsOptionalChain(MemberExpr.PropertyExpression)) then
+      Exit(True);
+  end
+  else if AExpr is TGocciaPrivateMemberExpression then
+  begin
+    PrivateExpr := TGocciaPrivateMemberExpression(AExpr);
+    if PrivateExpr.Optional or
+       ExpressionContainsOptionalChain(PrivateExpr.ObjectExpr) then
+      Exit(True);
+  end
+  else if AExpr is TGocciaCallExpression then
+  begin
+    CallExpr := TGocciaCallExpression(AExpr);
+    if CallExpr.Optional or ExpressionContainsOptionalChain(CallExpr.Callee) then
+      Exit(True);
+    for I := 0 to CallExpr.Arguments.Count - 1 do
+      if ExpressionContainsOptionalChain(CallExpr.Arguments[I]) then
+        Exit(True);
+  end
+  else if AExpr is TGocciaSequenceExpression then
+  begin
+    for I := 0 to TGocciaSequenceExpression(AExpr).Expressions.Count - 1 do
+      if ExpressionContainsOptionalChain(
+        TGocciaSequenceExpression(AExpr).Expressions[I]) then
+        Exit(True);
+  end;
+
+  Result := False;
+end;
+
+function WrapOptionalChainParentheses(
+  const AExpr: TGocciaExpression): TGocciaExpression;
+var
+  Expressions: TObjectList<TGocciaExpression>;
+begin
+  Expressions := TObjectList<TGocciaExpression>.Create(True);
+  try
+    Expressions.Add(AExpr);
+    Result := TGocciaSequenceExpression.Create(Expressions, AExpr.Line,
+      AExpr.Column);
+  except
+    Expressions.Free;
+    raise;
+  end;
+end;
+
 function TGocciaParser.Primary: TGocciaExpression;
-const
-  REGEX_SEPARATOR = #0;
 var
   Token: TGocciaToken;
   Expr: TGocciaExpression;
   Name: string;
   Args: TObjectList<TGocciaExpression>;
+  Decorators: TGocciaDecoratorList;
   Parameters: TGocciaParameterArray;
   ArrowFn: TGocciaArrowFunctionExpression;
   ArrowBody: TGocciaASTNode;
-  SeparatorPos: Integer;
+  RegexFlags: string;
+  RegexPattern: string;
+  SourceText: string;
   Line, Column: Integer;
   AsyncStartLine, AsyncStartColumn: Integer;
   IsGenerator: Boolean;
@@ -2123,9 +2407,15 @@ begin
     gttString:
       begin
         Token := Advance;
+        SourceText := ExtractSourceRange(Token.Line, Token.Column);
+        if FStrictModeActive and
+           StringLiteralSourceHasStrictForbiddenEscape(SourceText) then
+          raise TGocciaSyntaxError.Create(
+            'Strict mode string literals must not contain decimal escapes',
+            Token.Line, Token.Column, FFileName, FSourceLines);
         Result := TGocciaLiteralExpression.Create(
           TGocciaStringLiteralValue.Create(Token.Lexeme), Token.Line,
-          Token.Column, ExtractSourceRange(Token.Line, Token.Column));
+          Token.Column, SourceText);
       end;
     gttTemplate, gttTemplateHead:
       begin
@@ -2135,12 +2425,9 @@ begin
     gttRegex:
       begin
         Token := Advance;
-        SeparatorPos := Pos(REGEX_SEPARATOR, Token.Lexeme);
-        if SeparatorPos > 0 then
+        if TryExtractRegexTokenParts(Token.Lexeme, RegexPattern, RegexFlags) then
           Result := TGocciaRegexLiteralExpression.Create(
-            Copy(Token.Lexeme, 1, SeparatorPos - 1),
-            Copy(Token.Lexeme, SeparatorPos + 1, MaxInt),
-            Token.Line, Token.Column)
+            RegexPattern, RegexFlags, Token.Line, Token.Column)
         else
           Result := TGocciaRegexLiteralExpression.Create(Token.Lexeme, '', Token.Line, Token.Column);
       end;
@@ -2166,6 +2453,11 @@ begin
           if CheckUnescapedIdentifierKeyword(KEYWORD_META) then
           begin
             // ES2026 §13.3.12 MetaProperty — import.meta
+            if not FImportMetaAllowed then
+              raise TGocciaSyntaxError.Create(
+                'import.meta is only allowed in module code',
+                Token.Line, Token.Column, FFileName, FSourceLines,
+                SSuggestImportMetaSyntax);
             Advance;
             Result := TGocciaImportMetaExpression.Create(Token.Line, Token.Column);
           end
@@ -2193,9 +2485,20 @@ begin
         Advance;
         Result := ClassExpression;
       end;
+    gttAt:
+      begin
+        Decorators := ParseDecorators;
+        Consume(gttClass, 'Decorators can only be applied to class expressions',
+          SSuggestDecoratorsOnlyClasses);
+        Result := ClassExpression;
+        TGocciaClassExpression(Result).ClassDefinition.FDecorators :=
+          Decorators;
+      end;
     gttNew:
       begin
         Token := Advance;
+        Line := Token.Line;
+        Column := Token.Column;
         // ES2026 §13.3.12 MetaProperty — new.target
         if Check(gttDot) and CheckNext(gttIdentifier) and
            (FTokens[FCurrent + 1].Lexeme = KEYWORD_TARGET) then
@@ -2233,6 +2536,11 @@ begin
             raise TGocciaSyntaxError.Create('Expected property name after "."', Peek.Line, Peek.Column, FFileName, FSourceLines,
               SSuggestPropertyNameIdentifier);
         end;
+        while Check(gttTemplate) or Check(gttTemplateHead) do
+        begin
+          Token := Advance;
+          Expr := ParseTaggedTemplate(Expr, Token, Token.Line, Token.Column);
+        end;
         // Parse constructor arguments if present
         if Match(gttLeftParen) then
         begin
@@ -2248,12 +2556,12 @@ begin
           end;
           Consume(gttRightParen, 'Expected ")" after constructor arguments',
             SSuggestCloseParenConstructorArguments);
-          Result := TGocciaNewExpression.Create(Expr, Args, Token.Line, Token.Column);
+          Result := TGocciaNewExpression.Create(Expr, Args, Line, Column);
         end
         else
         begin
           Args := TObjectList<TGocciaExpression>.Create(True);
-          Result := TGocciaNewExpression.Create(Expr, Args, Token.Line, Token.Column);
+          Result := TGocciaNewExpression.Create(Expr, Args, Line, Column);
         end;
       end;
     gttIdentifier, gttAs, gttFrom, gttStatic:
@@ -2270,7 +2578,7 @@ begin
 
         // async arrow function: async (params) => body
         if (Name = KEYWORD_ASYNC) and not Token.ContainsEscape and
-           Check(gttLeftParen) then
+           (Token.Line = Peek.Line) and Check(gttLeftParen) then
         begin
           Advance; // consume '('
           if IsArrowFunction() then
@@ -2290,6 +2598,7 @@ begin
         end
         // async single-param arrow: async x => body
         else if (Name = KEYWORD_ASYNC) and not Token.ContainsEscape and
+                (Token.Line = PeekWithLexicalGoal(glgInputElementDiv).Line) and
                 IsIdentifierBindingToken(
                   PeekWithLexicalGoal(glgInputElementDiv).TokenType) and
                 CheckNextWithLexicalGoal(gttArrow, glgInputElementDiv) then
@@ -2403,7 +2712,12 @@ begin
           Expr := Expression;
           Consume(gttRightParen, 'Expected ")" after expression',
             SSuggestCloseParenExpression);
-          Result := Expr;
+          if Expr is TGocciaIdentifierExpression then
+            TGocciaIdentifierExpression(Expr).Parenthesized := True;
+          if ExpressionContainsOptionalChain(Expr) then
+            Result := WrapOptionalChainParentheses(Expr)
+          else
+            Result := Expr;
         end;
       end;
     gttFunction:
@@ -2853,6 +3167,8 @@ begin
       NumericValue := ConvertNumberLiteral(Advance.Lexeme);
       Key := FormatDouble(NumericValue);
     end
+    else if Check(gttBigInt) then
+      Key := ConvertBigIntLiteralName(Advance.Lexeme)
     else if IsIdentifierNameToken(Peek.TokenType) then
     begin
       CanUseShorthand := Check(gttIdentifier);
@@ -3151,6 +3467,7 @@ var
   NumericValue: Double;
   IsComputed: Boolean;
   IsGetter, IsSetter: Boolean;
+  IsColonProperty: Boolean;
   IsAsync: Boolean;
   IsGenerator: Boolean;
   MethodFunction: TGocciaFunctionExpression;
@@ -3179,6 +3496,7 @@ begin
     IsComputed := False;
     IsGetter := False;
     IsSetter := False;
+    IsColonProperty := False;
     IsAsync := False;
     IsGenerator := False;
     MemberStartLine := Peek.Line;
@@ -3256,6 +3574,8 @@ begin
       NumericValue := ConvertNumberLiteral(Advance.Lexeme);
       Key := FormatDouble(NumericValue);
     end
+    else if Check(gttBigInt) then
+      Key := ConvertBigIntLiteralName(Advance.Lexeme)
     else if Match([gttIf, gttElse, gttConst, gttLet, gttClass, gttEnum, gttExtends, gttNew, gttThis, gttSuper, gttStatic,
                    gttReturn, gttFor, gttWhile, gttDo, gttSwitch, gttCase, gttDefault, gttBreak, gttContinue,
                    gttThrow, gttTry, gttCatch, gttFinally, gttImport, gttExport, gttFrom, gttAs,
@@ -3347,6 +3667,7 @@ begin
       if IsAsync then
         MethodFunction.IsAsync := True;
       MethodFunction.IsGenerator := IsGenerator;
+      MethodFunction.HasOwnPrototype := IsGenerator;
       Value := TGocciaObjectMethodDefinition.Create(
         MethodFunction, MemberStartLine, MemberStartColumn);
     end
@@ -3358,6 +3679,7 @@ begin
         // Regular property: key: value
         Consume(gttColon, 'Expected ":" after property key',
           SSuggestAddColonPropertyValue);
+        IsColonProperty := True;
         Value := Assignment;
       end
             else
@@ -3419,6 +3741,8 @@ begin
         PropertySourceOrder[SourceOrderCount - 1].StaticKey := Key;
         PropertySourceOrder[SourceOrderCount - 1].ComputedIndex := -1;
         PropertySourceOrder[SourceOrderCount - 1].Expression := Value;
+        PropertySourceOrder[SourceOrderCount - 1].UsesColonSyntax :=
+          IsColonProperty;
       end;
     end;
 
@@ -3450,11 +3774,21 @@ begin
 
       if Match(gttSpread) then
       begin
-        ParamName := ConsumeIdentifierBinding('Expected parameter name after "..."',
-          SSuggestProvideRestParameterName).Lexeme;
-        Result[ParamCount].Name := ParamName;
-        Result[ParamCount].IsPattern := False;
-        Result[ParamCount].Pattern := nil;
+        if Check(gttLeftBracket) or Check(gttLeftBrace) then
+        begin
+          Pattern := ParsePattern;
+          Result[ParamCount].Name := '';
+          Result[ParamCount].IsPattern := True;
+          Result[ParamCount].Pattern := Pattern;
+        end
+        else
+        begin
+          ParamName := ConsumeIdentifierBinding('Expected parameter name after "..."',
+            SSuggestProvideRestParameterName).Lexeme;
+          Result[ParamCount].Name := ParamName;
+          Result[ParamCount].IsPattern := False;
+          Result[ParamCount].Pattern := nil;
+        end;
         Result[ParamCount].DefaultValue := nil;
         Result[ParamCount].IsRest := True;
         if Check(gttColon) then
@@ -3521,6 +3855,7 @@ var
   Line, Column: Integer;
   SavedActiveLabels, SavedActiveIterationLabels: TStringList;
   SavedDirectLabelStart: Integer;
+  SavedInAsyncFunction, SavedInGeneratorFunction: Integer;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
@@ -3535,7 +3870,11 @@ begin
   end;
   Consume(gttLeftBrace, 'Expected "{" before getter body',
     SSuggestOpenBraceGetterBody);
+  SavedInAsyncFunction := FInAsyncFunction;
+  SavedInGeneratorFunction := FInGeneratorFunction;
   Inc(FFunctionDepth);
+  FInAsyncFunction := 0;
+  FInGeneratorFunction := 0;
   EnterFunctionLabelScope(SavedActiveLabels, SavedActiveIterationLabels,
     SavedDirectLabelStart);
   try
@@ -3543,6 +3882,8 @@ begin
   finally
     LeaveFunctionLabelScope(SavedActiveLabels, SavedActiveIterationLabels,
       SavedDirectLabelStart);
+    FInGeneratorFunction := SavedInGeneratorFunction;
+    FInAsyncFunction := SavedInAsyncFunction;
     Dec(FFunctionDepth);
   end;
 end;
@@ -3553,6 +3894,7 @@ var
   Line, Column: Integer;
   SavedActiveLabels, SavedActiveIterationLabels: TStringList;
   SavedDirectLabelStart: Integer;
+  SavedInAsyncFunction, SavedInGeneratorFunction: Integer;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
@@ -3580,7 +3922,11 @@ begin
   end;
   Consume(gttLeftBrace, 'Expected "{" before setter body',
     SSuggestOpenBraceSetterBody);
+  SavedInAsyncFunction := FInAsyncFunction;
+  SavedInGeneratorFunction := FInGeneratorFunction;
   Inc(FFunctionDepth);
+  FInAsyncFunction := 0;
+  FInGeneratorFunction := 0;
   EnterFunctionLabelScope(SavedActiveLabels, SavedActiveIterationLabels,
     SavedDirectLabelStart);
   try
@@ -3589,6 +3935,8 @@ begin
   finally
     LeaveFunctionLabelScope(SavedActiveLabels, SavedActiveIterationLabels,
       SavedDirectLabelStart);
+    FInGeneratorFunction := SavedInGeneratorFunction;
+    FInAsyncFunction := SavedInAsyncFunction;
     Dec(FFunctionDepth);
   end;
 end;
@@ -3599,11 +3947,16 @@ var
   Body: TGocciaASTNode;
   SavedActiveLabels, SavedActiveIterationLabels: TStringList;
   SavedDirectLabelStart: Integer;
+  SavedInAsyncFunction, SavedInGeneratorFunction: Integer;
 begin
   Consume(gttLeftParen, 'Expected "(" before function parameters',
     SSuggestOpenParenMethodParameterList);
 
+  SavedInAsyncFunction := FInAsyncFunction;
+  SavedInGeneratorFunction := FInGeneratorFunction;
   Inc(FFunctionDepth);
+  FInAsyncFunction := Ord(AIsAsync);
+  FInGeneratorFunction := Ord(AIsGenerator);
   try
     Parameters := ParseParameterList;
     Consume(gttRightParen, 'Expected ")" after parameters',
@@ -3618,8 +3971,6 @@ begin
     Consume(gttLeftBrace, 'Expected "{" before function body',
       SSuggestOpenBraceMethodBody);
 
-    if AIsAsync then Inc(FInAsyncFunction);
-    if AIsGenerator then Inc(FInGeneratorFunction);
     EnterFunctionLabelScope(SavedActiveLabels, SavedActiveIterationLabels,
       SavedDirectLabelStart);
     try
@@ -3627,13 +3978,14 @@ begin
       Result := TGocciaFunctionExpression.Create(Parameters, Body, ALine, AColumn);
       TGocciaFunctionExpression(Result).IsAsync := AIsAsync;
       TGocciaFunctionExpression(Result).IsGenerator := AIsGenerator;
+      TGocciaFunctionExpression(Result).ParsedInStrictMode := FStrictModeActive;
     finally
       LeaveFunctionLabelScope(SavedActiveLabels, SavedActiveIterationLabels,
         SavedDirectLabelStart);
-      if AIsGenerator then Dec(FInGeneratorFunction);
-      if AIsAsync then Dec(FInAsyncFunction);
     end;
   finally
+    FInGeneratorFunction := SavedInGeneratorFunction;
+    FInAsyncFunction := SavedInAsyncFunction;
     Dec(FFunctionDepth);
   end;
 end;
@@ -3644,10 +3996,12 @@ var
   Statements: TObjectList<TGocciaASTNode>;
   Stmt: TGocciaStatement;
   SavedStrictModeActive: Boolean;
+  SavedStrictModeSourceActive: Boolean;
   InDirectivePrologue: Boolean;
   IsUseStrict: Boolean;
 begin
   SavedStrictModeActive := FStrictModeActive;
+  SavedStrictModeSourceActive := FStrictModeSourceActive;
   InDirectivePrologue := True;
   Statements := TObjectList<TGocciaASTNode>.Create(True);
   try
@@ -3661,7 +4015,10 @@ begin
           if StatementIsDirective(Stmt, IsUseStrict) then
           begin
             if IsUseStrict then
+            begin
               FStrictModeActive := True;
+              FStrictModeSourceActive := True;
+            end;
           end
           else
             InDirectivePrologue := False;
@@ -3677,6 +4034,7 @@ begin
     end;
   finally
     FStrictModeActive := SavedStrictModeActive;
+    FStrictModeSourceActive := SavedStrictModeSourceActive;
   end;
 end;
 
@@ -3804,9 +4162,13 @@ begin
     else if Left is TGocciaIdentifierExpression then
     begin
       if Operator = gttAssign then
-        Result := TGocciaAssignmentExpression.Create(TGocciaIdentifierExpression(Left).Name, Right, Line, Column)
+        Result := TGocciaAssignmentExpression.Create(
+          TGocciaIdentifierExpression(Left).Name, Right, Line, Column,
+          not TGocciaIdentifierExpression(Left).Parenthesized)
       else
-        Result := TGocciaCompoundAssignmentExpression.Create(TGocciaIdentifierExpression(Left).Name, Operator, Right, Line, Column);
+        Result := TGocciaCompoundAssignmentExpression.Create(
+          TGocciaIdentifierExpression(Left).Name, Operator, Right, Line,
+          Column, not TGocciaIdentifierExpression(Left).Parenthesized);
     end
     else if Left is TGocciaMemberExpression then
     begin
@@ -4780,7 +5142,8 @@ begin
     end;
 
     // Check for const/let/var binding
-    if Check(gttConst) or Check(gttLet) or (FVarDeclarationsEnabled and Check(gttVar)) then
+    if IsForHeadLexicalDeclarationStart or
+       (FVarDeclarationsEnabled and Check(gttVar)) then
     begin
       IsConst := Check(gttConst);
       IsVar := FVarDeclarationsEnabled and Check(gttVar);
@@ -4792,10 +5155,15 @@ begin
         BindingPattern := ParsePattern;
         BindingName := '';
       end
-      else if Check(gttIdentifier) then
+      else if Check(gttIdentifier) or
+              (IsVar and Check(gttLet) and EffectiveNonStrictModeEnabled) then
       begin
-        Token := Advance;
-        ValidateIdentifierBinding(Token);
+        if IsVar then
+          Token := ConsumeVarBindingName('Expected variable name',
+            SSuggestProvideVariableName)
+        else
+          Token := ConsumeIdentifierBinding('Expected variable name',
+            SSuggestProvideVariableName);
         BindingName := Token.Lexeme;
       end
       else
@@ -5084,7 +5452,7 @@ begin
   begin
     InitStmt := nil;
   end
-  else if Check(gttLet) or Check(gttConst) or
+  else if IsForHeadLexicalDeclarationStart or
           (FVarDeclarationsEnabled and Check(gttVar)) then
   begin
     DeclLine := Peek.Line;
@@ -5118,9 +5486,14 @@ begin
       VarCount := 0;
       repeat
         SetLength(Variables, VarCount + 1);
-        Variables[VarCount].Name :=
-          ConsumeIdentifierBinding('Expected variable name in for-init',
-            SSuggestProvideVariableName).Lexeme;
+        if IsVarKeyword then
+          Variables[VarCount].Name :=
+            ConsumeVarBindingName('Expected variable name in for-init',
+              SSuggestProvideVariableName).Lexeme
+        else
+          Variables[VarCount].Name :=
+            ConsumeIdentifierBinding('Expected variable name in for-init',
+              SSuggestProvideVariableName).Lexeme;
         if Check(gttColon) then
         begin
           Advance;
@@ -5274,7 +5647,7 @@ begin
       Consume(gttWhile, 'Expected "while" after do body',
         SSuggestAddWhileAfterDo);
       SkipBalancedParens;
-      ConsumeSemicolonOrASI('Expected ";" after do-while statement',
+      ConsumeDoWhileSemicolonOrASI('Expected ";" after do-while statement',
         SSuggestAddSemicolon);
     finally
       BodyStmt.Free;
@@ -5294,7 +5667,7 @@ begin
   Condition := Expression;
   Consume(gttRightParen, 'Expected ")" after do-while condition',
     SSuggestCloseParenCondition);
-  ConsumeSemicolonOrASI('Expected ";" after do-while statement',
+  ConsumeDoWhileSemicolonOrASI('Expected ";" after do-while statement',
     SSuggestAddSemicolon);
 
   Result := TGocciaDoWhileStatement.Create(BodyStmt, Condition, Line, Column);
@@ -5308,6 +5681,11 @@ var
 begin
   Line := Previous.Line;
   Column := Previous.Column;
+
+  if FStrictModeSourceActive then
+    raise TGocciaSyntaxError.Create(
+      'Strict mode code must not include a with statement',
+      Line, Column, FFileName, FSourceLines);
 
   if not FNonStrictModeEnabled then
   begin
@@ -5502,6 +5880,7 @@ var
   MethodGenericParams, MethodReturnType: string;
   SavedActiveLabels, SavedActiveIterationLabels: TStringList;
   SavedDirectLabelStart: Integer;
+  SavedInAsyncFunction, SavedInGeneratorFunction: Integer;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
@@ -5511,7 +5890,11 @@ begin
   Consume(gttLeftParen, 'Expected "(" after method name',
     SSuggestOpenParenMethodParameterList);
 
+  SavedInAsyncFunction := FInAsyncFunction;
+  SavedInGeneratorFunction := FInGeneratorFunction;
   Inc(FFunctionDepth);
+  FInAsyncFunction := Ord(AIsAsync);
+  FInGeneratorFunction := Ord(AIsGenerator);
   try
     Parameters := ParseParameterList;
     Consume(gttRightParen, 'Expected ")" after parameters',
@@ -5527,8 +5910,6 @@ begin
     Consume(gttLeftBrace, 'Expected "{" before method body',
       SSuggestOpenBraceMethodBody);
 
-    if AIsAsync then Inc(FInAsyncFunction);
-    if AIsGenerator then Inc(FInGeneratorFunction);
     EnterFunctionLabelScope(SavedActiveLabels, SavedActiveIterationLabels,
       SavedDirectLabelStart);
     try
@@ -5567,10 +5948,10 @@ begin
     finally
       LeaveFunctionLabelScope(SavedActiveLabels, SavedActiveIterationLabels,
         SavedDirectLabelStart);
-      if AIsGenerator then Dec(FInGeneratorFunction);
-      if AIsAsync then Dec(FInAsyncFunction);
     end;
   finally
+    FInGeneratorFunction := SavedInGeneratorFunction;
+    FInAsyncFunction := SavedInAsyncFunction;
     Dec(FFunctionDepth);
   end;
 end;
@@ -6404,33 +6785,42 @@ var
   MemberStartLine, MemberStartColumn: Integer;
   TypePair: TStringStringMap.TKeyValuePair;
   SavedStrictModeActive: Boolean;
+  SavedStrictModeSourceActive: Boolean;
 begin
   SetLength(Elements, 0);
   SetLength(FieldOrder, 0);
   ClassGenericParams := CollectGenericParameters;
   SuperClassExpression := nil;
-
-  if Match(gttExtends) then
-  begin
-    SuperClassExpression := Call;
-    if not Assigned(SuperClassExpression) then
-      raise TGocciaSyntaxError.Create('Expected superclass expression',
-        Previous.Line, Previous.Column, FFileName, FSourceLines,
-        SSuggestProvideSuperclassName);
-    if SuperClassExpression is TGocciaIdentifierExpression then
-      SuperClass := TGocciaIdentifierExpression(SuperClassExpression).Name
+  SavedStrictModeActive := FStrictModeActive;
+  SavedStrictModeSourceActive := FStrictModeSourceActive;
+  FStrictModeActive := True;
+  FStrictModeSourceActive := True;
+  try
+    if Match(gttExtends) then
+    begin
+      SuperClassExpression := Call;
+      if not Assigned(SuperClassExpression) then
+        raise TGocciaSyntaxError.Create('Expected superclass expression',
+          Previous.Line, Previous.Column, FFileName, FSourceLines,
+          SSuggestProvideSuperclassName);
+      if SuperClassExpression is TGocciaIdentifierExpression then
+        SuperClass := TGocciaIdentifierExpression(SuperClassExpression).Name
+      else
+        SuperClass := '';
+      CollectGenericParameters;
+    end
     else
       SuperClass := '';
-    CollectGenericParameters;
-  end
-  else
-    SuperClass := '';
 
-  ClassImplementsClause := '';
-  if CheckUnescapedIdentifierKeyword(KEYWORD_IMPLEMENTS) then
-  begin
-    Advance;
-    ClassImplementsClause := CollectTypeAnnotation([gttLeftBrace]);
+    ClassImplementsClause := '';
+    if CheckUnescapedIdentifierKeyword(KEYWORD_IMPLEMENTS) then
+    begin
+      Advance;
+      ClassImplementsClause := CollectTypeAnnotation([gttLeftBrace]);
+    end;
+  finally
+    FStrictModeActive := SavedStrictModeActive;
+    FStrictModeSourceActive := SavedStrictModeSourceActive;
   end;
 
   Consume(gttLeftBrace, 'Expected "{" before class body',
@@ -6455,7 +6845,9 @@ begin
   SetLength(ComputedInstanceSetters, 0);
 
   SavedStrictModeActive := FStrictModeActive;
+  SavedStrictModeSourceActive := FStrictModeSourceActive;
   FStrictModeActive := True;
+  FStrictModeSourceActive := True;
   try
     while not Check(gttRightBrace) and not IsAtEnd do
     begin
@@ -6921,6 +7313,7 @@ begin
     ValidateCurrentPrivateClassContext;
   finally
     FStrictModeActive := SavedStrictModeActive;
+    FStrictModeSourceActive := SavedStrictModeSourceActive;
     PopPrivateClassContext;
   end;
 
@@ -6949,11 +7342,14 @@ var
   Statements: TObjectList<TGocciaStatement>;
   Stmt: TGocciaStatement;
   SavedStrictModeActive: Boolean;
+  SavedStrictModeSourceActive: Boolean;
   InDirectivePrologue: Boolean;
   IsUseStrict: Boolean;
 begin
   SavedStrictModeActive := FStrictModeActive;
-  FStrictModeActive := not FNonStrictModeEnabled;
+  SavedStrictModeSourceActive := FStrictModeSourceActive;
+  FStrictModeActive := FInheritedStrictMode or not FNonStrictModeEnabled;
+  FStrictModeSourceActive := FInheritedStrictMode;
   FHasTopLevelAwait := False;
   InDirectivePrologue := True;
   Statements := TObjectList<TGocciaStatement>.Create(True);
@@ -6967,7 +7363,10 @@ begin
         if StatementIsDirective(Stmt, IsUseStrict) then
         begin
           if IsUseStrict then
+          begin
             FStrictModeActive := True;
+            FStrictModeSourceActive := True;
+          end;
         end
         else
           InDirectivePrologue := False;
@@ -6978,6 +7377,7 @@ begin
     Result.HasTopLevelAwait := FHasTopLevelAwait;
   finally
     FStrictModeActive := SavedStrictModeActive;
+    FStrictModeSourceActive := SavedStrictModeSourceActive;
   end;
 end;
 
@@ -7314,6 +7714,7 @@ var
   IntValue: Int64;
   NormalizedLexeme, HexStr, BinStr, OctStr: string;
   I: Integer;
+  IsLegacyOctal: Boolean;
 begin
   NormalizedLexeme := ALexeme;
   if (Length(NormalizedLexeme) > 0) and (NormalizedLexeme[1] = '.') then
@@ -7367,6 +7768,37 @@ begin
     end;
   end;
 
+  // ES2026 §12.9.3 LegacyOctalIntegerLiteral
+  if (Length(NormalizedLexeme) >= 2) and
+     (NormalizedLexeme[1] = '0') and
+     (NormalizedLexeme[2] in ['0'..'7']) then
+  begin
+    IsLegacyOctal := True;
+    for I := 2 to Length(NormalizedLexeme) do
+      if not (NormalizedLexeme[I] in ['0'..'7']) then
+      begin
+        IsLegacyOctal := False;
+        Break;
+      end;
+
+    if IsLegacyOctal then
+    begin
+      if FStrictModeActive then
+        raise TGocciaSyntaxError.Create(
+          'Legacy octal integer literals are not allowed in strict mode',
+          Peek.Line, Peek.Column, FFileName, FSourceLines,
+          SSuggestNumberFormatValid);
+
+      IntValue := 0;
+      for I := 1 to Length(NormalizedLexeme) do
+      begin
+        IntValue := IntValue * 8;
+        IntValue := IntValue + Ord(NormalizedLexeme[I]) - Ord('0');
+      end;
+      Exit(IntValue);
+    end;
+  end;
+
   // Plain integer literals past ~15 digits: FPC's TryStrToFloat is not
   // correctly rounded near the 53-bit boundary (e.g. 9007199254740991475711
   // parses one ulp high), so convert exactly via BigInteger and round once.
@@ -7390,6 +7822,32 @@ begin
 end;
 
 // ES2026 §12.9.3 BigIntLiteral
+function TGocciaParser.ConvertBigIntLiteralName(const ALexeme: string): string;
+var
+  DigitStr: string;
+begin
+  if Length(ALexeme) >= 3 then
+  begin
+    if (ALexeme[1] = '0') and ((ALexeme[2] = 'x') or (ALexeme[2] = 'X')) then
+    begin
+      DigitStr := Copy(ALexeme, 3, Length(ALexeme) - 2);
+      Exit(TBigInteger.FromHexString(DigitStr).ToString);
+    end
+    else if (ALexeme[1] = '0') and ((ALexeme[2] = 'b') or (ALexeme[2] = 'B')) then
+    begin
+      DigitStr := Copy(ALexeme, 3, Length(ALexeme) - 2);
+      Exit(TBigInteger.FromBinaryString(DigitStr).ToString);
+    end
+    else if (ALexeme[1] = '0') and ((ALexeme[2] = 'o') or (ALexeme[2] = 'O')) then
+    begin
+      DigitStr := Copy(ALexeme, 3, Length(ALexeme) - 2);
+      Exit(TBigInteger.FromOctalString(DigitStr).ToString);
+    end;
+  end;
+
+  Result := TBigInteger.FromDecimalString(ALexeme).ToString;
+end;
+
 function TGocciaParser.ConvertBigIntLiteral(const ALexeme: string): TGocciaValue;
 var
   DigitStr: string;
@@ -7545,6 +8003,10 @@ begin
         NumericValue := ConvertNumberLiteral(Advance.Lexeme);
         Key := FormatDouble(NumericValue);
       end
+      else if Check(gttBigInt) then
+      begin
+        Key := ConvertBigIntLiteralName(Advance.Lexeme);
+      end
       else
         raise TGocciaSyntaxError.Create('Expected property name in object pattern', Peek.Line, Peek.Column, FFileName, FSourceLines,
           SSuggestObjectPatternPropertyName);
@@ -7602,9 +8064,11 @@ var
   Elements: TObjectList<TGocciaDestructuringPattern>;
   Properties: TObjectList<TGocciaDestructuringProperty>;
   I: Integer;
-  PropPair: TGocciaExpressionMap.TKeyValuePair;
   ComputedPair: TPair<TGocciaExpression, TGocciaExpression>;
+  PropPair: TGocciaExpressionMap.TKeyValuePair;
   Prop: TGocciaDestructuringProperty;
+  SourceEntry: TGocciaPropertySourceOrder;
+  ValueExpr: TGocciaExpression;
 begin
   if AExpr is TGocciaIdentifierExpression then
   begin
@@ -7657,31 +8121,71 @@ begin
     ObjectExpr := TGocciaObjectExpression(AExpr);
     Properties := TObjectList<TGocciaDestructuringProperty>.Create(True);
 
-    for PropPair in ObjectExpr.Properties do
+    if Length(ObjectExpr.PropertySourceOrder) > 0 then
     begin
-      Prop := TGocciaDestructuringProperty.Create(PropPair.Key, ConvertToPattern(PropPair.Value));
-      Properties.Add(Prop);
-    end;
-
-    // Handle computed properties (including spread) in source order
-    if Assigned(ObjectExpr.ComputedPropertiesInOrder) then
-    begin
-      for I := 0 to Length(ObjectExpr.ComputedPropertiesInOrder) - 1 do
+      for I := 0 to High(ObjectExpr.PropertySourceOrder) do
       begin
-        ComputedPair := ObjectExpr.ComputedPropertiesInOrder[I];
-        if ComputedPair.Key is TGocciaSpreadExpression then
+        SourceEntry := ObjectExpr.PropertySourceOrder[I];
+        case SourceEntry.PropertyType of
+          pstStatic:
+          begin
+            ValueExpr := SourceEntry.Expression;
+            if not Assigned(ValueExpr) then
+              ObjectExpr.Properties.TryGetValue(SourceEntry.StaticKey, ValueExpr);
+            if Assigned(ValueExpr) then
+            begin
+              Prop := TGocciaDestructuringProperty.Create(
+                SourceEntry.StaticKey, ConvertToPattern(ValueExpr));
+              Properties.Add(Prop);
+            end;
+          end;
+          pstComputed:
+          begin
+            ComputedPair := ObjectExpr.ComputedPropertiesInOrder[
+              SourceEntry.ComputedIndex];
+            if ComputedPair.Key is TGocciaSpreadExpression then
+            begin
+              Prop := TGocciaDestructuringProperty.Create('',
+                TGocciaRestDestructuringPattern.Create(
+                  ConvertToPattern(
+                    TGocciaSpreadExpression(ComputedPair.Key).Argument),
+                  ComputedPair.Key.Line, ComputedPair.Key.Column));
+              Properties.Add(Prop);
+            end
+            else
+            begin
+              Prop := TGocciaDestructuringProperty.Create('',
+                ConvertToPattern(ComputedPair.Value), True,
+                ComputedPair.Key);
+              Properties.Add(Prop);
+            end;
+          end;
+        end;
+      end;
+    end
+    else
+    begin
+      for PropPair in ObjectExpr.Properties do
+      begin
+        Prop := TGocciaDestructuringProperty.Create(
+          PropPair.Key, ConvertToPattern(PropPair.Value));
+        Properties.Add(Prop);
+      end;
+
+      if Assigned(ObjectExpr.ComputedPropertiesInOrder) then
+      begin
+        for I := 0 to Length(ObjectExpr.ComputedPropertiesInOrder) - 1 do
         begin
-          // Rest pattern
-          Prop := TGocciaDestructuringProperty.Create('', TGocciaRestDestructuringPattern.Create(
-            ConvertToPattern(TGocciaSpreadExpression(ComputedPair.Key).Argument),
-            ComputedPair.Key.Line, ComputedPair.Key.Column));
-          Properties.Add(Prop);
-        end
-        else
-        begin
-          // Regular computed property
-          Prop := TGocciaDestructuringProperty.Create('', ConvertToPattern(ComputedPair.Value), True, ComputedPair.Key);
-          Properties.Add(Prop);
+          ComputedPair := ObjectExpr.ComputedPropertiesInOrder[I];
+          if ComputedPair.Key is TGocciaSpreadExpression then
+          begin
+            Prop := TGocciaDestructuringProperty.Create('',
+              TGocciaRestDestructuringPattern.Create(
+                ConvertToPattern(
+                  TGocciaSpreadExpression(ComputedPair.Key).Argument),
+                ComputedPair.Key.Line, ComputedPair.Key.Column));
+            Properties.Add(Prop);
+          end;
         end;
       end;
     end;

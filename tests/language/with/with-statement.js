@@ -112,6 +112,23 @@ describe("with statement", () => {
     expect(read()).toBe(6);
   });
 
+  test("closures created inside with retain the object environment after throw", () => {
+    const obj = { x: 2 };
+    let x = 1;
+    let read;
+
+    try {
+      with (obj) {
+        read = () => x;
+        throw "stop";
+      }
+    } catch (e) {
+    }
+
+    expect(read()).toBe(2);
+    expect(x).toBe(1);
+  });
+
   test("closures prefer lexical declarations created inside the with body", () => {
     const obj = { x: 1 };
     let read;

@@ -26,6 +26,14 @@ test("function* expression yields values", () => {
   expect(iter.next()).toEqual({ value: undefined, done: true });
 });
 
+test("anonymous function* expression infers name from assignment target", () => {
+  let gen;
+
+  gen = function* () {};
+
+  expect(gen.name).toBe("gen");
+});
+
 test("named function* expression exposes its name internally", () => {
   const make = function* named() {
     yield named.name;

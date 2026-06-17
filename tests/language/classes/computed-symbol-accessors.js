@@ -182,3 +182,24 @@ describe("computed symbol accessors on static members", () => {
     expect(() => { Foo[sym] = "x"; }).toThrow(TypeError);
   });
 });
+
+describe("computed accessor names", () => {
+  test("class computed accessors infer prefixed names from property keys", () => {
+    const named = Symbol("namedAccessor");
+    const anonymous = Symbol();
+    class Foo {
+      get [named]() { return 1; }
+      set [named](value) {}
+      static get [anonymous]() { return 2; }
+      static set ["plain"](value) {}
+    }
+    const namedDesc = Object.getOwnPropertyDescriptor(Foo.prototype, named);
+    const anonymousDesc = Object.getOwnPropertyDescriptor(Foo, anonymous);
+    const plainDesc = Object.getOwnPropertyDescriptor(Foo, "plain");
+
+    expect(namedDesc.get.name).toBe("get [namedAccessor]");
+    expect(namedDesc.set.name).toBe("set [namedAccessor]");
+    expect(anonymousDesc.get.name).toBe("get ");
+    expect(plainDesc.set.name).toBe("set plain");
+  });
+});

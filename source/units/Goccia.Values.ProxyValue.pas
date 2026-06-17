@@ -48,6 +48,8 @@ type
     // ES2026 §28.1.1 [[GetOwnProperty]](P)
     function GetOwnPropertyDescriptor(
       const AName: string): TGocciaPropertyDescriptor; override;
+    function GetOwnSymbolPropertyDescriptor(
+      const ASymbol: TGocciaSymbolValue): TGocciaPropertyDescriptor; override;
 
     // ES2026 §28.1.1 [[DefineOwnProperty]](P, Desc)
     procedure DefineProperty(const AName: string;
@@ -956,6 +958,91 @@ begin
   begin
     if FTarget is TGocciaObjectValue then
       Result := TGocciaObjectValue(FTarget).GetOwnPropertyDescriptor(AName)
+    else
+      Result := nil;
+  end;
+end;
+
+// ES2026 §10.5.5 [[GetOwnProperty]](P) — symbol key
+function TGocciaProxyValue.GetOwnSymbolPropertyDescriptor(
+  const ASymbol: TGocciaSymbolValue): TGocciaPropertyDescriptor;
+var
+  Trap: TGocciaValue;
+  Args: TGocciaArgumentsCollection;
+  TrapResult: TGocciaValue;
+  ResultObj: TGocciaObjectValue;
+  ValueProp, WritableProp, EnumProp, ConfigProp: TGocciaValue;
+  GetterProp, SetterProp: TGocciaValue;
+  HasGetter, HasSetter: Boolean;
+  Flags: TPropertyFlags;
+  TargetDesc: TGocciaPropertyDescriptor;
+begin
+  CheckRevoked;
+  Trap := GetTrap(PROP_GET_OWN_PROPERTY_DESCRIPTOR);
+  if Assigned(Trap) then
+  begin
+    Args := TGocciaArgumentsCollection.Create;
+    try
+      Args.Add(FTarget);
+      Args.Add(ASymbol);
+      TrapResult := InvokeTrap(Trap, Args);
+    finally
+      Args.Free;
+    end;
+
+    if TrapResult is TGocciaUndefinedLiteralValue then
+    begin
+      if FTarget is TGocciaObjectValue then
+      begin
+        TargetDesc := TGocciaObjectValue(FTarget).GetOwnSymbolPropertyDescriptor(ASymbol);
+        if Assigned(TargetDesc) and not TargetDesc.Configurable then
+          ThrowTypeError(Format(SErrorProxyGetOwnNonConfigurable,
+            [ASymbol.ToDisplayString.Value]), SSuggestProxyTrapInvariant);
+        if Assigned(TargetDesc) and not TGocciaObjectValue(FTarget).Extensible then
+          ThrowTypeError(SErrorProxyGetOwnNonExtensible,
+            SSuggestProxyTrapInvariant);
+      end;
+      Exit(nil);
+    end;
+
+    if not (TrapResult is TGocciaObjectValue) then
+      ThrowTypeError(SErrorProxyGetOwnReturnType, SSuggestProxyTrapReturnType);
+
+    ResultObj := TGocciaObjectValue(TrapResult);
+    Flags := [];
+
+    EnumProp := ResultObj.GetProperty(PROP_ENUMERABLE);
+    if Assigned(EnumProp) and EnumProp.ToBooleanLiteral.Value then
+      Include(Flags, pfEnumerable);
+
+    ConfigProp := ResultObj.GetProperty(PROP_CONFIGURABLE);
+    if Assigned(ConfigProp) and ConfigProp.ToBooleanLiteral.Value then
+      Include(Flags, pfConfigurable);
+
+    HasGetter := ResultObj.HasOwnProperty(PROP_GET);
+    HasSetter := ResultObj.HasOwnProperty(PROP_SET);
+
+    if HasGetter or HasSetter then
+    begin
+      GetterProp := ResultObj.GetProperty(PROP_GET);
+      SetterProp := ResultObj.GetProperty(PROP_SET);
+      Result := TGocciaPropertyDescriptorAccessor.Create(
+        GetterProp, SetterProp, Flags);
+    end
+    else
+    begin
+      WritableProp := ResultObj.GetProperty(PROP_WRITABLE);
+      if Assigned(WritableProp) and WritableProp.ToBooleanLiteral.Value then
+        Include(Flags, pfWritable);
+
+      ValueProp := ResultObj.GetProperty(PROP_VALUE);
+      Result := TGocciaPropertyDescriptorData.Create(ValueProp, Flags);
+    end;
+  end
+  else
+  begin
+    if FTarget is TGocciaObjectValue then
+      Result := TGocciaObjectValue(FTarget).GetOwnSymbolPropertyDescriptor(ASymbol)
     else
       Result := nil;
   end;

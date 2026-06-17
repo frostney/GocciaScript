@@ -348,8 +348,10 @@ test("object generator yield delegation does not await sync iterator results", (
       yield* source;
     },
   };
+  const result = obj.numbers().next();
 
-  expect(obj.numbers().next()).toEqual({ value: 5, done: false });
+  expect(result.value).toBe(5);
+  expect(result.done).toBe(false);
   expect(thenCalled).toBe(false);
 });
 

@@ -95,3 +95,40 @@ test("in operator with getter and setter properties", () => {
   expect("data" in obj).toBe(true);
   expect("missing" in obj).toBe(false);
 });
+
+test("private method presence checks the receiver brand without invoking method", () => {
+  let count = 0;
+
+  class Class {
+    #method() {
+      count++;
+    }
+
+    static hasMethod(value) {
+      return #method in value;
+    }
+  }
+
+  expect(Class.hasMethod({})).toBe(false);
+  expect(Class.hasMethod(new Class())).toBe(true);
+  expect(count).toBe(0);
+});
+
+test("private accessor presence checks the receiver brand without invoking getter", () => {
+  let count = 0;
+
+  class Class {
+    get #accessor() {
+      count++;
+      return count;
+    }
+
+    static hasAccessor(value) {
+      return #accessor in value;
+    }
+  }
+
+  expect(Class.hasAccessor({})).toBe(false);
+  expect(Class.hasAccessor(new Class())).toBe(true);
+  expect(count).toBe(0);
+});

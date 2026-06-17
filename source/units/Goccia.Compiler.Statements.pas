@@ -149,6 +149,29 @@ type
 
   TComputedFieldKeyLocals = array of TComputedFieldKeyLocal;
 
+  TClassCallableSourceKind = (
+    ccskMethod,
+    ccskGetter,
+    ccskSetter,
+    ccskElement
+  );
+
+  TClassCallableSourceEntry = record
+    Kind: TClassCallableSourceKind;
+    Name: string;
+    IsStatic: Boolean;
+    IsPrivate: Boolean;
+    Line: Integer;
+    Column: Integer;
+    Order: Integer;
+    ElementIndex: Integer;
+    MethodNode: TGocciaClassMethod;
+    GetterNode: TGocciaGetterExpression;
+    SetterNode: TGocciaSetterExpression;
+  end;
+
+  TClassCallableSourceEntries = array of TClassCallableSourceEntry;
+
   TPendingFinallyEntry = record
     FinallyBlock: TGocciaBlockStatement;
     // Non-nil when this entry represents a using block's disposal.
@@ -159,6 +182,9 @@ type
     IsIteratorClose: Boolean;
     IsAsyncIterator: Boolean;
     IteratorReg: UInt8;
+    IsScopedHandlerCleanup: Boolean;
+    ScopedCleanupDepth: Integer;
+    HandlerPopCount: Integer;
   end;
 
   TLoopControlState = record
@@ -661,12 +687,15 @@ end;
 
 procedure EmitGlobalDefine(const ACtx: TGocciaCompilationContext;
   const ASlot: UInt8; const AName: string; const AIsConst: Boolean;
-  const AIsVar: Boolean = False; const AHasInitializer: Boolean = True);
+  const AIsVar: Boolean = False; const AHasInitializer: Boolean = True;
+  const AIsFunctionDeclaration: Boolean = False);
 var
   NameIdx: UInt16;
   DeclMode: UInt8;
 begin
-  if AIsVar and (not AHasInitializer) then
+  if AIsFunctionDeclaration then
+    DeclMode := GLOBAL_DEFINE_FUNCTION
+  else if AIsVar and (not AHasInitializer) then
     DeclMode := GLOBAL_DEFINE_VAR_DECL
   else if AIsVar then
     DeclMode := GLOBAL_DEFINE_VAR
@@ -687,19 +716,29 @@ var
   I, FuncCount, LocalIdx: Integer;
   Info: TGocciaVariableInfo;
   Slot: UInt8;
+  TargetObjReg, ProbeObjReg, KeyReg, CondReg: UInt8;
   InferredTemplate: TGocciaFunctionTemplate;
   TypeHint, AnnotationType: TGocciaLocalType;
   ConstantValue: TGocciaCompileTimeValue;
   ConstantType: TGocciaLocalType;
   IsStrict, HasInitializer, HasRealInitializer, IsTopLevelGlobalBacked,
-  IsVarRedeclaration: Boolean;
+  IsVarRedeclaration, UseWithVarInitializer: Boolean;
   CanTrackConstant: Boolean;
+  InitSlot: UInt8;
+  NameIdx: UInt16;
+  ProbeMissJump, TargetMissJump, TargetEndJump: Integer;
+  ProbeEndJumps: array of Integer;
+  ProbeEndCount: Integer;
 begin
   PrepareLexicalDeclarationLocals(ACtx, AStmt);
 
   for I := 0 to High(AStmt.Variables) do
   begin
     Info := AStmt.Variables[I];
+    if ACtx.GlobalBackedTopLevel and AStmt.IsVar and
+       (not Info.HasInitializer) then
+      Continue;
+
     if AStmt.IsVar then
     begin
       // Track whether this is a redeclaration (slot already exists)
@@ -733,6 +772,9 @@ begin
     HasInitializer := Info.HasInitializer;
     HasRealInitializer := Assigned(Info.Initializer) and
                           not IsUndefinedInitializer(Info.Initializer);
+    UseWithVarInitializer := AStmt.IsVar and HasInitializer and
+      (ACtx.Scope.WithBindingCount > 0) and
+      (ACtx.Scope.GetWithBindingDepth(ACtx.Scope.WithBindingCount - 1) >= 0);
 
     AnnotationType := TypeAnnotationToLocalType(Info.TypeAnnotation);
 
@@ -791,7 +833,95 @@ begin
       end;
     end;
 
-    if Assigned(Info.Initializer) and
+    if UseWithVarInitializer then
+    begin
+      if IsTopLevelGlobalBacked then
+        EmitGlobalDefine(ACtx, Slot, Info.Name, False, True, False)
+      else if not IsVarRedeclaration then
+        EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, Slot, 0, 0));
+
+      TargetObjReg := ACtx.Scope.AllocateRegister;
+      ProbeObjReg := ACtx.Scope.AllocateRegister;
+      KeyReg := ACtx.Scope.AllocateRegister;
+      CondReg := ACtx.Scope.AllocateRegister;
+      InitSlot := ACtx.Scope.AllocateRegister;
+      try
+        EmitInstruction(ACtx, EncodeABC(OP_LOAD_HOLE, TargetObjReg, 0, 0));
+        NameIdx := ACtx.Template.AddConstantString(Info.Name);
+        if NameIdx > High(UInt8) then
+          raise Exception.Create(
+            'Constant pool overflow: with binding name index exceeds 255');
+        EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, KeyReg, NameIdx));
+        ProbeEndCount := 0;
+        SetLength(ProbeEndJumps, ACtx.Scope.WithBindingCount);
+        for LocalIdx := ACtx.Scope.WithBindingCount - 1 downto 0 do
+        begin
+          EmitLoadHiddenWithObject(ACtx,
+            ACtx.Scope.GetWithBindingName(LocalIdx), ProbeObjReg);
+          EmitInstruction(ACtx, EncodeABC(OP_HAS_WITH_BINDING, CondReg,
+            ProbeObjReg, KeyReg));
+          ProbeMissJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE,
+            CondReg);
+          EmitInstruction(ACtx, EncodeABC(OP_MOVE, TargetObjReg,
+            ProbeObjReg, 0));
+          ProbeEndJumps[ProbeEndCount] := EmitJumpInstruction(ACtx, OP_JUMP,
+            0);
+          Inc(ProbeEndCount);
+          PatchJumpTarget(ACtx, ProbeMissJump);
+        end;
+        for LocalIdx := 0 to ProbeEndCount - 1 do
+          PatchJumpTarget(ACtx, ProbeEndJumps[LocalIdx]);
+
+        FuncCount := ACtx.Template.FunctionCount;
+
+        if (Info.Initializer is TGocciaClassExpression) and
+           (TGocciaClassExpression(Info.Initializer).ClassDefinition.Name = '') then
+          CompileClassExpression(ACtx,
+            TGocciaClassExpression(Info.Initializer).ClassDefinition,
+            InitSlot, Info.Name)
+        else
+          ACtx.CompileExpression(Info.Initializer, InitSlot);
+
+        if IsStrict and HasRealInitializer then
+          if not TypesAreCompatible(InferLocalType(Info.Initializer), TypeHint) then
+            EmitInstruction(ACtx, EncodeABC(OP_CHECK_TYPE, InitSlot,
+              UInt8(Ord(TypeHint)), 0));
+
+        if (Info.Initializer is TGocciaArrowFunctionExpression) or
+           (Info.Initializer is TGocciaFunctionExpression) then
+        begin
+          if ACtx.Template.FunctionCount > FuncCount then
+          begin
+            InferredTemplate := ACtx.Template.GetFunction(
+              ACtx.Template.FunctionCount - 1);
+            if (InferredTemplate.Name = '<arrow>') or
+               (InferredTemplate.Name = '<function>') or
+               (InferredTemplate.Name = '<method>') then
+              InferredTemplate.Name := Info.Name;
+          end;
+        end;
+
+        TargetMissJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH,
+          TargetObjReg, GOCCIA_NULLISH_MATCH_HOLE);
+        if ACtx.NonStrictMode then
+          EmitInstruction(ACtx, EncodeABC(OP_SET_WITH_BINDING_LOOSE,
+            TargetObjReg, KeyReg, InitSlot))
+        else
+          EmitInstruction(ACtx, EncodeABC(OP_SET_WITH_BINDING, TargetObjReg,
+            KeyReg, InitSlot));
+        TargetEndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+        PatchJumpTarget(ACtx, TargetMissJump);
+        EmitBindingAssignmentFromRegister(ACtx, Info.Name, InitSlot, True);
+        PatchJumpTarget(ACtx, TargetEndJump);
+      finally
+        ACtx.Scope.FreeRegister;
+        ACtx.Scope.FreeRegister;
+        ACtx.Scope.FreeRegister;
+        ACtx.Scope.FreeRegister;
+        ACtx.Scope.FreeRegister;
+      end;
+    end
+    else if Assigned(Info.Initializer) and
        not (AStmt.IsVar and (not HasInitializer) and IsVarRedeclaration) then
     begin
       FuncCount := ACtx.Template.FunctionCount;
@@ -859,8 +989,9 @@ begin
 
     if IsTopLevelGlobalBacked then
     begin
-      EmitGlobalDefine(ACtx, Slot, Info.Name, AStmt.IsConst, AStmt.IsVar,
-        HasInitializer);
+      if not UseWithVarInitializer then
+        EmitGlobalDefine(ACtx, Slot, Info.Name, AStmt.IsConst, AStmt.IsVar,
+          HasInitializer);
       LocalIdx := FindLocalBySlot(ACtx.Scope, Info.Name, Slot);
       if LocalIdx >= 0 then
         ACtx.Scope.MarkGlobalBacked(LocalIdx);
@@ -905,11 +1036,12 @@ begin
   IsPreinitializedTopLevel := ACtx.PreinitializedTopLevelFunctions and
     not IsBlockScoped;
 
-  if IsPreinitializedTopLevel and IsTopLevelGlobalBacked then
+  if IsPreinitializedTopLevel then
   begin
     LocalIdx := FindLocalBySlot(ACtx.Scope, AStmt.Name, Slot);
     UsePreinitializedBinding := (LocalIdx >= 0) and
-      (ACtx.Scope.GetLocal(LocalIdx).ExportNameCount > 0);
+      ((ACtx.Scope.GetLocal(LocalIdx).ExportNameCount > 0) or
+      (AStmt.Name = 'assert'));
   end;
 
   if UsePreinitializedBinding then
@@ -941,7 +1073,7 @@ begin
     EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, Slot, UInt16(Slot)));
 
   if IsTopLevelGlobalBacked then
-    EmitGlobalDefine(ACtx, Slot, AStmt.Name, False, True, True);
+    EmitGlobalDefine(ACtx, Slot, AStmt.Name, False, True, True, True);
 end;
 
 procedure CompileAnnexBBlockFunctionActivation(
@@ -1619,8 +1751,28 @@ procedure EmitPendingEntryCleanup(const ACtx: TGocciaCompilationContext;
   const AEntry: TPendingFinallyEntry; const ACloseIterator: Boolean);
 var
   NullishJump: Integer;
+  I: Integer;
+  Local: TGocciaCompilerLocal;
+  HandlerPopCount: Integer;
 begin
-  EmitInstruction(ACtx, EncodeABC(OP_POP_HANDLER, 0, 0, 0));
+  HandlerPopCount := AEntry.HandlerPopCount;
+  if HandlerPopCount <= 0 then
+    HandlerPopCount := 1;
+  for I := 1 to HandlerPopCount do
+    EmitInstruction(ACtx, EncodeABC(OP_POP_HANDLER, 0, 0, 0));
+  if AEntry.IsScopedHandlerCleanup then
+  begin
+    for I := ACtx.Scope.LocalCount - 1 downto 0 do
+    begin
+      Local := ACtx.Scope.GetLocal(I);
+      if Local.Depth <= AEntry.ScopedCleanupDepth then
+        Break;
+      if Local.IsCaptured then
+        EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, Local.Slot, 0, 0));
+    end;
+    Exit;
+  end;
+
   if Assigned(AEntry.FinallyBlock) then
     CompileBlockStatement(ACtx, AEntry.FinallyBlock)
   else if Length(AEntry.UsingResources) > 0 then
@@ -1833,15 +1985,19 @@ function CompileWithStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaWithStatement): Boolean;
 var
   HiddenName: string;
-  HiddenSlot: UInt8;
+  HiddenSlot, ErrorReg: UInt8;
   ClosedLocals: array[0..255] of UInt8;
   ClosedCount, I: Integer;
+  HandlerJump, EndJump: Integer;
+  CleanupEntry: TPendingFinallyEntry;
+  CleanupIndex: Integer;
 begin
   if not ACtx.NonStrictMode then
     raise TGocciaSyntaxError.Create(
       '''with'' statements are not allowed in strict mode',
       AStmt.Line, AStmt.Column, ACtx.SourcePath, nil);
 
+  ErrorReg := ACtx.Scope.AllocateRegister;
   ACtx.Scope.BeginScope;
   HiddenName := '#with:' + IntToStr(ACtx.Template.CodeCount) + ':' +
     IntToStr(ACtx.Scope.Depth);
@@ -1850,16 +2006,38 @@ begin
   ACtx.CompileExpression(AStmt.ObjectExpression, HiddenSlot);
   EmitInstruction(ACtx, EncodeABC(OP_TO_OBJECT, HiddenSlot, HiddenSlot, 0));
 
+  HandlerJump := EmitJumpInstruction(ACtx, OP_PUSH_HANDLER, ErrorReg);
+  if not Assigned(GPendingFinally) then
+    GPendingFinally := TList<TPendingFinallyEntry>.Create;
+  FillChar(CleanupEntry, SizeOf(CleanupEntry), 0);
+  CleanupEntry.IsScopedHandlerCleanup := True;
+  CleanupEntry.ScopedCleanupDepth := ACtx.Scope.Depth - 1;
+  CleanupIndex := GPendingFinally.Count;
+  GPendingFinally.Add(CleanupEntry);
+
   ACtx.Scope.PushWithBinding(HiddenName);
   try
     Result := ACtx.CompileStatement(AStmt.Body);
   finally
     ACtx.Scope.PopWithBinding;
   end;
+  if (CleanupIndex >= 0) and (CleanupIndex < GPendingFinally.Count) then
+    GPendingFinally.Delete(CleanupIndex);
+
+  EmitInstruction(ACtx, EncodeABC(OP_POP_HANDLER, 0, 0, 0));
 
   ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
   for I := 0 to ClosedCount - 1 do
     EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
+
+  EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+  PatchJumpTarget(ACtx, HandlerJump);
+  for I := 0 to ClosedCount - 1 do
+    EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
+  EmitInstruction(ACtx, EncodeABC(OP_THROW, ErrorReg, 0, 0));
+  PatchJumpTarget(ACtx, EndJump);
+
+  ACtx.Scope.FreeRegister;
 end;
 
 function CompileIfStatement(const ACtx: TGocciaCompilationContext;
@@ -1979,13 +2157,17 @@ procedure CompileReturnStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaReturnStatement);
 var
   Reg: UInt8;
+  ReturnNeedsAwait: Boolean;
 begin
-  if Assigned(AStmt.Value) then
+  if AStmt.HasExpression then
   begin
     Reg := ACtx.Scope.AllocateRegister;
     ACtx.CompileExpression(AStmt.Value, Reg);
     EmitPendingCleanup(ACtx);
-    EmitInstruction(ACtx, EncodeABC(OP_RETURN, Reg, 0, 0));
+    ReturnNeedsAwait := Assigned(ACtx.Template) and ACtx.Template.IsAsync and
+      ACtx.Template.IsGenerator;
+    EmitInstruction(ACtx, EncodeABC(OP_RETURN, Reg,
+      Ord(ReturnNeedsAwait), 0));
     ACtx.Scope.FreeRegister;
   end
   else
@@ -2013,8 +2195,11 @@ procedure CompileTryStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaTryStatement);
 var
   CatchReg, PatternTestReg, CatchInitErrorReg: UInt8;
+  CatchBodyErrorReg: UInt8;
   HandlerJump, EndJump, PatternMismatchJump, CatchSuccessJump: Integer;
+  FinallyHandlerJump, FinallyHandlerSuccessJump: Integer;
   CatchInitHandlerJump, CatchInitSuccessJump: Integer;
+  CatchBodyHandlerJump, CatchBodySuccessJump: Integer;
   HasCatch, HasFinally: Boolean;
   HasCatchInitHandler: Boolean;
   I: Integer;
@@ -2027,23 +2212,40 @@ begin
   HasCatchInitHandler := Assigned(AStmt.CatchBindingPattern) and HasFinally;
 
   CatchReg := ACtx.Scope.AllocateRegister;
+  CatchBodyErrorReg := 0;
   CatchInitErrorReg := 0;
   CatchInitHandlerJump := -1;
   CatchInitSuccessJump := -1;
+  CatchBodyHandlerJump := -1;
+  CatchBodySuccessJump := -1;
+  FinallyHandlerJump := -1;
+  FinallyHandlerSuccessJump := -1;
   PatternTestReg := 0;
-  HandlerJump := EmitJumpInstruction(ACtx, OP_PUSH_HANDLER, CatchReg);
+  ClosedCount := 0;
+  if HasCatch and HasFinally then
+    FinallyHandlerJump := EmitJumpInstruction(ACtx, OP_PUSH_FINALLY_HANDLER,
+      CatchReg);
+  if HasCatch then
+    HandlerJump := EmitJumpInstruction(ACtx, OP_PUSH_HANDLER, CatchReg)
+  else
+    HandlerJump := EmitJumpInstruction(ACtx, OP_PUSH_FINALLY_HANDLER, CatchReg);
 
   if HasFinally then
   begin
     if not Assigned(GPendingFinally) then
       GPendingFinally := TList<TPendingFinallyEntry>.Create;
+    FillChar(Entry, SizeOf(Entry), 0);
     Entry.FinallyBlock := AStmt.FinallyBlock;
+    if HasCatch then
+      Entry.HandlerPopCount := 2;
     GPendingFinally.Add(Entry);
   end;
 
   CompileBlockStatement(ACtx, AStmt.Block);
 
   EmitInstruction(ACtx, EncodeABC(OP_POP_HANDLER, 0, 0, 0));
+  if HasCatch and HasFinally then
+    EmitInstruction(ACtx, EncodeABC(OP_POP_HANDLER, 0, 0, 0));
 
   if HasFinally then
     GPendingFinally.Delete(GPendingFinally.Count - 1);
@@ -2058,7 +2260,10 @@ begin
   if HasCatch then
   begin
     if HasFinally then
+    begin
       GPendingFinally.Add(Entry);
+      CatchBodyErrorReg := ACtx.Scope.AllocateRegister;
+    end;
 
     PatternMismatchJump := -1;
     if Assigned(AStmt.CatchPattern) then
@@ -2095,7 +2300,18 @@ begin
         PatternTestReg);
     end;
 
+    if HasFinally then
+    begin
+      CatchBodyHandlerJump := EmitJumpInstruction(ACtx, OP_PUSH_HANDLER,
+        CatchBodyErrorReg);
+    end;
+
     CompileBlockStatement(ACtx, AStmt.CatchBlock);
+
+    if HasFinally then
+      EmitInstruction(ACtx, EncodeABC(OP_POP_HANDLER, 0, 0, 0));
+    if HasFinally then
+      EmitInstruction(ACtx, EncodeABC(OP_POP_HANDLER, 0, 0, 0));
 
     if (AStmt.CatchParam <> '') or Assigned(AStmt.CatchBindingPattern) then
     begin
@@ -2110,6 +2326,21 @@ begin
       CompileBlockStatement(ACtx, AStmt.FinallyBlock);
     end;
 
+    if HasFinally then
+    begin
+      CatchBodySuccessJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+      PatchJumpTarget(ACtx, CatchBodyHandlerJump);
+      EmitInstruction(ACtx, EncodeABC(OP_POP_HANDLER, 0, 0, 0));
+      if (AStmt.CatchParam <> '') or Assigned(AStmt.CatchBindingPattern) then
+        for I := 0 to ClosedCount - 1 do
+          EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I],
+            0, 0));
+      CompileBlockStatement(ACtx, AStmt.FinallyBlock);
+      EmitInstruction(ACtx, EncodeABC(OP_THROW, CatchBodyErrorReg, 0, 0));
+      PatchJumpTarget(ACtx, CatchBodySuccessJump);
+      ACtx.Scope.FreeRegister;
+    end;
+
     if PatternMismatchJump >= 0 then
     begin
       CatchSuccessJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
@@ -2117,6 +2348,8 @@ begin
       if (AStmt.CatchParam <> '') or Assigned(AStmt.CatchBindingPattern) then
         for I := 0 to ClosedCount - 1 do
           EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
+      if HasFinally then
+        EmitInstruction(ACtx, EncodeABC(OP_POP_HANDLER, 0, 0, 0));
       if HasFinally then
         CompileBlockStatement(ACtx, AStmt.FinallyBlock);
       EmitInstruction(ACtx, EncodeABC(OP_THROW, CatchReg, 0, 0));
@@ -2128,6 +2361,7 @@ begin
     begin
       CatchInitSuccessJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
       PatchJumpTarget(ACtx, CatchInitHandlerJump);
+      EmitInstruction(ACtx, EncodeABC(OP_POP_HANDLER, 0, 0, 0));
       for I := 0 to ClosedCount - 1 do
         EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
       CompileBlockStatement(ACtx, AStmt.FinallyBlock);
@@ -2141,6 +2375,15 @@ begin
     if HasFinally then
       CompileBlockStatement(ACtx, AStmt.FinallyBlock);
     EmitInstruction(ACtx, EncodeABC(OP_THROW, CatchReg, 0, 0));
+  end;
+
+  if HasCatch and HasFinally then
+  begin
+    FinallyHandlerSuccessJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+    PatchJumpTarget(ACtx, FinallyHandlerJump);
+    CompileBlockStatement(ACtx, AStmt.FinallyBlock);
+    EmitInstruction(ACtx, EncodeABC(OP_THROW, CatchReg, 0, 0));
+    PatchJumpTarget(ACtx, FinallyHandlerSuccessJump);
   end;
 
   PatchJumpTarget(ACtx, EndJump);
@@ -2166,6 +2409,57 @@ begin
   Result := True;
 end;
 
+procedure CompileExpressionWithLoopHeadTDZ(
+  const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaExpression;
+  const ADest: UInt8;
+  const ABindingName: string;
+  const ABindingPattern: TGocciaDestructuringPattern;
+  const AHasLexicalDeclaration: Boolean);
+var
+  Names: TStringList;
+  I: Integer;
+  Slot: UInt8;
+  ClosedLocals: array[0..255] of UInt8;
+  ClosedCount: Integer;
+begin
+  if not AHasLexicalDeclaration then
+  begin
+    ACtx.CompileExpression(AExpr, ADest);
+    Exit;
+  end;
+
+  Names := TStringList.Create;
+  try
+    Names.CaseSensitive := True;
+    if Assigned(ABindingPattern) then
+      CollectPatternBindingNames(ABindingPattern, Names, True)
+    else if ABindingName <> '' then
+      Names.Add(ABindingName);
+
+    if Names.Count = 0 then
+    begin
+      ACtx.CompileExpression(AExpr, ADest);
+      Exit;
+    end;
+
+    ACtx.Scope.BeginScope;
+    for I := 0 to Names.Count - 1 do
+    begin
+      Slot := ACtx.Scope.DeclareLocal(Names[I], False);
+      EmitInstruction(ACtx, EncodeABC(OP_LOAD_HOLE, Slot, 0, 0));
+    end;
+
+    ACtx.CompileExpression(AExpr, ADest);
+
+    ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
+    for I := 0 to ClosedCount - 1 do
+      EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
+  finally
+    Names.Free;
+  end;
+end;
+
 procedure CompileCountedForOf(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaForOfStatement; const AArrayLocalIdx: Integer);
 var
@@ -2185,7 +2479,9 @@ begin
   CmpReg := ACtx.Scope.AllocateRegister;
   ValueReg := ACtx.Scope.AllocateRegister;
 
-  ACtx.CompileExpression(AStmt.Iterable, ArrReg);
+  CompileExpressionWithLoopHeadTDZ(ACtx, AStmt.Iterable, ArrReg,
+    AStmt.BindingName, AStmt.BindingPattern,
+    (not AStmt.IsVar) and not Assigned(AStmt.AssignmentTarget));
   EmitInstruction(ACtx, EncodeABC(OP_GET_LENGTH, LenReg, ArrReg, 0));
   EmitInstruction(ACtx, EncodeAsBx(OP_LOAD_INT, IdxReg, 0));
   EmitInstruction(ACtx, EncodeAsBx(OP_LOAD_INT, OneReg, 1));
@@ -2324,29 +2620,32 @@ begin
     UsingCatchReg := ACtx.Scope.AllocateRegister;
   end;
 
-  ACtx.CompileExpression(AStmt.Iterable, IterReg);
+  CompileExpressionWithLoopHeadTDZ(ACtx, AStmt.Iterable, IterReg,
+    AStmt.BindingName, AStmt.BindingPattern,
+    (not AStmt.IsVar) and not Assigned(AStmt.AssignmentTarget));
   EmitInstruction(ACtx, EncodeABC(OP_GET_ITER, IterReg, IterReg, 0));
 
-  if NeedsIteratorClose and not Assigned(GPendingFinally) then
-    GPendingFinally := TList<TPendingFinallyEntry>.Create;
   BeginLoopControl(ACtx, LoopControl);
   try
+    LoopStart := CurrentCodePosition(ACtx);
+    MismatchJump := -1;
+
+    EmitInstruction(ACtx, EncodeABC(OP_ITER_NEXT, ValueReg, DoneReg, IterReg));
+    ExitJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, DoneReg);
+
     HandlerJump := -1;
     if NeedsIteratorClose then
     begin
-      HandlerJump := EmitJumpInstruction(ACtx, OP_PUSH_HANDLER, CloseErrorReg);
+      if not Assigned(GPendingFinally) then
+        GPendingFinally := TList<TPendingFinallyEntry>.Create;
+      HandlerJump := EmitJumpInstruction(ACtx, OP_PUSH_FINALLY_HANDLER,
+        CloseErrorReg);
       FillChar(PendingEntry, SizeOf(PendingEntry), 0);
       PendingEntry.IsIteratorClose := True;
       PendingEntry.IteratorReg := IterReg;
       GPendingFinally.Add(PendingEntry);
       GContinueFinallyBase := GPendingFinally.Count;
     end;
-
-    LoopStart := CurrentCodePosition(ACtx);
-    MismatchJump := -1;
-
-    EmitInstruction(ACtx, EncodeABC(OP_ITER_NEXT, ValueReg, DoneReg, IterReg));
-    ExitJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, DoneReg);
 
     ACtx.Scope.BeginScope;
     SetLoopContinueScopeDepth(ACtx);
@@ -2443,6 +2742,12 @@ begin
     for I := 0 to ClosedCount - 1 do
       EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
 
+    if NeedsIteratorClose then
+    begin
+      EmitInstruction(ACtx, EncodeABC(OP_POP_HANDLER, 0, 0, 0));
+      GPendingFinally.Delete(GPendingFinally.Count - 1);
+    end;
+
     EmitInstruction(ACtx, EncodeAx(OP_JUMP,
       LoopStart - CurrentCodePosition(ACtx) - 1));
 
@@ -2454,11 +2759,6 @@ begin
     end;
 
     PatchJumpTarget(ACtx, ExitJump);
-    if NeedsIteratorClose then
-    begin
-      EmitInstruction(ACtx, EncodeABC(OP_POP_HANDLER, 0, 0, 0));
-      GPendingFinally.Delete(GPendingFinally.Count - 1);
-    end;
 
     PatchJumpList(ACtx, LoopControl.BreakJumps);
   finally
@@ -2517,7 +2817,9 @@ begin
     end;
   end;
 
-  ACtx.CompileExpression(AStmt.ObjectExpression, EntriesReg);
+  CompileExpressionWithLoopHeadTDZ(ACtx, AStmt.ObjectExpression, EntriesReg,
+    AStmt.BindingName, AStmt.BindingPattern,
+    (not AStmt.IsVar) and not Assigned(AStmt.AssignmentTarget));
   EmitInstruction(ACtx, EncodeABC(OP_ENUM_KEYS, EntriesReg, EntriesReg, 0));
   EmitInstruction(ACtx, EncodeABC(OP_GET_LENGTH, LenReg, EntriesReg, 0));
   EmitInstruction(ACtx, EncodeAsBx(OP_LOAD_INT, IdxReg, 0));
@@ -2612,7 +2914,9 @@ begin
   if NeedsIteratorClose then
     CloseErrorReg := ACtx.Scope.AllocateRegister;
 
-  ACtx.CompileExpression(AStmt.Iterable, IterReg);
+  CompileExpressionWithLoopHeadTDZ(ACtx, AStmt.Iterable, IterReg,
+    AStmt.BindingName, AStmt.BindingPattern,
+    (not AStmt.IsVar) and not Assigned(AStmt.AssignmentTarget));
   EmitInstruction(ACtx, EncodeABC(OP_GET_ITER, IterReg, IterReg, 1));
 
   if NeedsIteratorClose and not Assigned(GPendingFinally) then
@@ -2622,7 +2926,8 @@ begin
     HandlerJump := -1;
     if NeedsIteratorClose then
     begin
-      HandlerJump := EmitJumpInstruction(ACtx, OP_PUSH_HANDLER, CloseErrorReg);
+      HandlerJump := EmitJumpInstruction(ACtx, OP_PUSH_FINALLY_HANDLER,
+        CloseErrorReg);
       FillChar(PendingEntry, SizeOf(PendingEntry), 0);
       PendingEntry.IsIteratorClose := True;
       PendingEntry.IsAsyncIterator := True;
@@ -3250,7 +3555,7 @@ var
   UseSharedLexicalFor: Boolean;
   PerIterNames: TStringList;
   PerIterIsConst: Boolean;
-  OuterSlots, BodySlots, UpdateSlots: array of UInt8;
+  OuterSlots, CarrierSlots, BodySlots, UpdateSlots: array of UInt8;
   OuterLocalIdxs: array of Integer;
   Name: string;
   VarDecl: TGocciaVariableDeclaration;
@@ -3344,6 +3649,7 @@ begin
         if HasLexicalInit and not UseSharedLexicalFor then
       begin
         SetLength(OuterSlots, PerIterNames.Count);
+        SetLength(CarrierSlots, PerIterNames.Count);
         SetLength(BodySlots, PerIterNames.Count);
         SetLength(UpdateSlots, PerIterNames.Count);
         SetLength(OuterLocalIdxs, PerIterNames.Count);
@@ -3352,6 +3658,11 @@ begin
           Name := PerIterNames[I];
           OuterLocalIdxs[I] := ACtx.Scope.ResolveLocal(Name);
           OuterSlots[I] := ACtx.Scope.GetLocal(OuterLocalIdxs[I]).Slot;
+          CarrierSlots[I] := ACtx.Scope.DeclareLocal(
+            '#for-carrier:' + IntToStr(CurrentCodePosition(ACtx)) + ':' +
+            Name, False);
+          EmitInstruction(ACtx,
+            EncodeABC(OP_MOVE, CarrierSlots[I], OuterSlots[I], 0));
         end;
 
         LoopStart := CurrentCodePosition(ACtx);
@@ -3369,7 +3680,7 @@ begin
           LocalIdx := ACtx.Scope.ResolveLocal(Name);
           CopyLocalTypeMetadata(ACtx, OuterLocalIdxs[I], LocalIdx);
           EmitInstruction(ACtx,
-            EncodeABC(OP_MOVE, BodySlots[I], OuterSlots[I], 0));
+            EncodeABC(OP_MOVE, BodySlots[I], CarrierSlots[I], 0));
         end;
 
         if Assigned(AStmt.Condition) then
@@ -3415,7 +3726,7 @@ begin
 
         for I := 0 to PerIterNames.Count - 1 do
           EmitInstruction(ACtx,
-            EncodeABC(OP_MOVE, OuterSlots[I], UpdateSlots[I], 0));
+            EncodeABC(OP_MOVE, CarrierSlots[I], UpdateSlots[I], 0));
 
         ACtx.Scope.EndScope(UpdateClosedLocals, UpdateClosedCount);
         for I := 0 to UpdateClosedCount - 1 do
@@ -4343,6 +4654,30 @@ begin
   Result := AStorageName;
 end;
 
+procedure EmitDefineStaticPropertyByName(const ACtx: TGocciaCompilationContext;
+  const ATargetReg, AValueReg: UInt8; const AName: string);
+var
+  KeyIdx: UInt16;
+  KeyReg: UInt8;
+begin
+  KeyIdx := ACtx.Template.AddConstantString(AName);
+  if KeyIdx <= High(UInt8) then
+  begin
+    EmitInstruction(ACtx, EncodeABC(OP_DEFINE_STATIC_PROP_CONST,
+      ATargetReg, UInt8(KeyIdx), AValueReg));
+    Exit;
+  end;
+
+  KeyReg := ACtx.Scope.AllocateRegister;
+  try
+    EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, KeyReg, KeyIdx));
+    EmitInstruction(ACtx, EncodeABC(OP_DEFINE_STATIC_PROP_DYNAMIC,
+      ATargetReg, KeyReg, AValueReg));
+  finally
+    ACtx.Scope.FreeRegister;
+  end;
+end;
+
 procedure CompileMethodBody(const ACtx: TGocciaCompilationContext;
   const AClassReg: UInt8; const AMethodName: string;
   const AMethod: TGocciaClassMethod; const AStoreOpcode: TGocciaOpCode;
@@ -4370,6 +4705,7 @@ begin
   ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
   ChildTemplate.IsAsync := AMethod.IsAsync;
   ChildTemplate.IsGenerator := AMethod.IsGenerator;
+  ChildTemplate.HasOwnPrototype := AMethod.IsGenerator;
   ChildTemplate.SourceText := AMethod.SourceText;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
 
@@ -4812,6 +5148,7 @@ begin
   ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
   ChildTemplate.IsAsync := AMethod.IsAsync;
   ChildTemplate.IsGenerator := AMethod.IsGenerator;
+  ChildTemplate.HasOwnPrototype := AMethod.IsGenerator;
   ChildTemplate.SourceText := AMethod.SourceText;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
 
@@ -4891,16 +5228,16 @@ begin
     FUNCTION_NAME_PREFIX_NONE));
 
   if AIsStatic then
-    // Static: class[key] = method
-    EmitInstruction(ACtx, EncodeABC(OP_SET_INDEX, AClassReg, AKeyReg, FnReg))
+    EmitInstruction(ACtx, EncodeABC(OP_DEFINE_CLASS_METHOD_DYNAMIC,
+      AClassReg, AKeyReg, FnReg))
   else
   begin
-    // Instance: class.prototype[key] = method
     TargetReg := ACtx.Scope.AllocateRegister;
     ProtoNameIdx := ACtx.Template.AddConstantString(PROP_PROTOTYPE);
     EmitInstruction(ACtx, EncodeABC(OP_GET_PROP_CONST, TargetReg,
       AClassReg, UInt8(ProtoNameIdx)));
-    EmitInstruction(ACtx, EncodeABC(OP_SET_INDEX, TargetReg, AKeyReg, FnReg));
+    EmitInstruction(ACtx, EncodeABC(OP_DEFINE_CLASS_METHOD_DYNAMIC,
+      TargetReg, AKeyReg, FnReg));
     ACtx.Scope.FreeRegister;
   end;
   ACtx.Scope.FreeRegister;
@@ -4918,77 +5255,342 @@ begin
   Result := '';
 end;
 
+procedure AddClassCallableSourceEntry(
+  var AEntries: TClassCallableSourceEntries;
+  const AKind: TClassCallableSourceKind; const AName: string;
+  const AIsStatic, AIsPrivate: Boolean; const ALine, AColumn: Integer;
+  var AOrder: Integer; const AElementIndex: Integer = -1;
+  const AMethodNode: TGocciaClassMethod = nil;
+  const AGetterNode: TGocciaGetterExpression = nil;
+  const ASetterNode: TGocciaSetterExpression = nil);
+var
+  Index: Integer;
+begin
+  Index := Length(AEntries);
+  SetLength(AEntries, Index + 1);
+  AEntries[Index].Kind := AKind;
+  AEntries[Index].Name := AName;
+  AEntries[Index].IsStatic := AIsStatic;
+  AEntries[Index].IsPrivate := AIsPrivate;
+  AEntries[Index].Line := ALine;
+  AEntries[Index].Column := AColumn;
+  AEntries[Index].Order := AOrder;
+  AEntries[Index].ElementIndex := AElementIndex;
+  AEntries[Index].MethodNode := AMethodNode;
+  AEntries[Index].GetterNode := AGetterNode;
+  AEntries[Index].SetterNode := ASetterNode;
+  Inc(AOrder);
+end;
+
+function ClassCallableEntryAfter(const ALeft,
+  ARight: TClassCallableSourceEntry): Boolean;
+begin
+  if ALeft.Line <> ARight.Line then
+    Exit(ALeft.Line > ARight.Line);
+  if ALeft.Column <> ARight.Column then
+    Exit(ALeft.Column > ARight.Column);
+  Result := ALeft.Order > ARight.Order;
+end;
+
+procedure SortClassCallableSourceEntries(
+  var AEntries: TClassCallableSourceEntries);
+var
+  I, J: Integer;
+  Entry: TClassCallableSourceEntry;
+begin
+  for I := 1 to High(AEntries) do
+  begin
+    Entry := AEntries[I];
+    J := I - 1;
+    while (J >= 0) and ClassCallableEntryAfter(AEntries[J], Entry) do
+    begin
+      AEntries[J + 1] := AEntries[J];
+      Dec(J);
+    end;
+    AEntries[J + 1] := Entry;
+  end;
+end;
+
+function ClassElementSourceLine(const AElement: TGocciaClassElement): Integer;
+begin
+  if Assigned(AElement.MethodNode) then
+    Exit(AElement.MethodNode.Line);
+  if Assigned(AElement.GetterNode) then
+    Exit(AElement.GetterNode.Line);
+  if Assigned(AElement.SetterNode) then
+    Exit(AElement.SetterNode.Line);
+  if Assigned(AElement.ComputedKeyExpression) then
+    Exit(AElement.ComputedKeyExpression.Line);
+  if Assigned(AElement.FieldInitializer) then
+    Exit(AElement.FieldInitializer.Line);
+  if Assigned(AElement.StaticBlockBody) then
+    Exit(AElement.StaticBlockBody.Line);
+  Result := 0;
+end;
+
+function ClassElementSourceColumn(const AElement: TGocciaClassElement): Integer;
+begin
+  if Assigned(AElement.MethodNode) then
+    Exit(AElement.MethodNode.Column);
+  if Assigned(AElement.GetterNode) then
+    Exit(AElement.GetterNode.Column);
+  if Assigned(AElement.SetterNode) then
+    Exit(AElement.SetterNode.Column);
+  if Assigned(AElement.ComputedKeyExpression) then
+    Exit(AElement.ComputedKeyExpression.Column);
+  if Assigned(AElement.FieldInitializer) then
+    Exit(AElement.FieldInitializer.Column);
+  if Assigned(AElement.StaticBlockBody) then
+    Exit(AElement.StaticBlockBody.Column);
+  Result := 0;
+end;
+
 procedure CompileComputedElements(const ACtx: TGocciaCompilationContext;
   const ATargetReg: UInt8; const AClassDef: TGocciaClassDefinition;
+  const APrivatePrefix: string; const AHasSuper: Boolean;
   var AComputedFieldKeyLocals: TComputedFieldKeyLocals);
 var
   I: Integer;
   Elem: TGocciaClassElement;
+  Entries: TClassCallableSourceEntries;
+  Entry: TClassCallableSourceEntry;
+  MethodPair: TGocciaClassMethodMap.TKeyValuePair;
+  GetterPair: TGocciaGetterExpressionMap.TKeyValuePair;
+  SetterPair: TGocciaSetterExpressionMap.TKeyValuePair;
   KeyReg: UInt8;
   ComputedKeyName: string;
   ClassKeyPrefix: string;
   NeedsKeyLocal: Boolean;
   KeyIsLocal: Boolean;
+  AccessorFlags: UInt8;
+  Order: Integer;
+  StorageName: string;
 begin
   SetLength(AComputedFieldKeyLocals, 0);
-  ClassKeyPrefix := IntToHex(PtrUInt(AClassDef), SizeOf(PtrUInt) * 2);
+  if Length(AClassDef.FElements) = 0 then
+    Exit;
+
+  SetLength(Entries, 0);
+  Order := 0;
+
+  for MethodPair in AClassDef.Methods do
+    AddClassCallableSourceEntry(Entries, ccskMethod, MethodPair.Key, False,
+      False, MethodPair.Value.Line, MethodPair.Value.Column, Order, -1,
+      MethodPair.Value);
+
+  for MethodPair in AClassDef.StaticMethods do
+    AddClassCallableSourceEntry(Entries, ccskMethod, MethodPair.Key, True,
+      False, MethodPair.Value.Line, MethodPair.Value.Column, Order, -1,
+      MethodPair.Value);
+
+  for MethodPair in AClassDef.PrivateMethods do
+    AddClassCallableSourceEntry(Entries, ccskMethod, MethodPair.Key,
+      MethodPair.Value.IsStatic, True, MethodPair.Value.Line,
+      MethodPair.Value.Column, Order, -1, MethodPair.Value);
+
+  for GetterPair in AClassDef.Getters do
+    AddClassCallableSourceEntry(Entries, ccskGetter, GetterPair.Key, False,
+      (GetterPair.Key <> '') and (GetterPair.Key[1] = '#'),
+      GetterPair.Value.Line, GetterPair.Value.Column, Order, -1, nil,
+      GetterPair.Value);
+
+  for SetterPair in AClassDef.Setters do
+    AddClassCallableSourceEntry(Entries, ccskSetter, SetterPair.Key, False,
+      (SetterPair.Key <> '') and (SetterPair.Key[1] = '#'),
+      SetterPair.Value.Line, SetterPair.Value.Column, Order, -1, nil, nil,
+      SetterPair.Value);
+
+  for GetterPair in AClassDef.StaticGetters do
+    AddClassCallableSourceEntry(Entries, ccskGetter, GetterPair.Key, True,
+      (GetterPair.Key <> '') and (GetterPair.Key[1] = '#'),
+      GetterPair.Value.Line, GetterPair.Value.Column, Order, -1, nil,
+      GetterPair.Value);
+
+  for SetterPair in AClassDef.StaticSetters do
+    AddClassCallableSourceEntry(Entries, ccskSetter, SetterPair.Key, True,
+      (SetterPair.Key <> '') and (SetterPair.Key[1] = '#'),
+      SetterPair.Value.Line, SetterPair.Value.Column, Order, -1, nil, nil,
+      SetterPair.Value);
+
   for I := 0 to High(AClassDef.FElements) do
   begin
     Elem := AClassDef.FElements[I];
-    if not Elem.IsComputed then
-      Continue;
-    if not (Elem.Kind in [cekGetter, cekSetter, cekMethod, cekField, cekAccessor]) then
-      Continue;
+    if Elem.IsComputed and
+       (Elem.Kind in [cekGetter, cekSetter, cekMethod, cekField, cekAccessor]) then
+      AddClassCallableSourceEntry(Entries, ccskElement, '', Elem.IsStatic,
+        Elem.IsPrivate, ClassElementSourceLine(Elem),
+        ClassElementSourceColumn(Elem), Order, I);
+  end;
 
-    NeedsKeyLocal := (Elem.Kind in [cekField, cekAccessor]) or
-      (Length(Elem.Decorators) > 0);
-    KeyIsLocal := False;
-    if NeedsKeyLocal then
+  SortClassCallableSourceEntries(Entries);
+  ClassKeyPrefix := IntToHex(PtrUInt(AClassDef), SizeOf(PtrUInt) * 2);
+  for I := 0 to High(Entries) do
+  begin
+    Entry := Entries[I];
+
+    case Entry.Kind of
+      ccskMethod:
+      begin
+        if Entry.IsPrivate then
+          StorageName := '#slot:' + APrivatePrefix + Entry.Name
+        else
+          StorageName := Entry.Name;
+        if Entry.IsStatic then
+          CompileMethodBody(ACtx, ATargetReg, StorageName,
+            Entry.MethodNode, OP_DEFINE_STATIC_METHOD_CONST)
+        else
+          CompileMethodBody(ACtx, ATargetReg, StorageName,
+            Entry.MethodNode, OP_CLASS_ADD_METHOD_CONST,
+            AHasSuper and (Entry.Name = PROP_CONSTRUCTOR));
+        Continue;
+      end;
+      ccskGetter:
+      begin
+        AccessorFlags := 0;
+        StorageName := Entry.Name;
+        if Entry.IsStatic then
+          AccessorFlags := ACCESSOR_FLAG_STATIC;
+        if Entry.IsPrivate then
+          StorageName := '#slot:' + APrivatePrefix +
+            Copy(Entry.Name, 2, MaxInt);
+        CompileGetterBody(ACtx, ATargetReg, StorageName,
+          Entry.GetterNode, OP_DEFINE_ACCESSOR_CONST, AccessorFlags);
+        Continue;
+      end;
+      ccskSetter:
+      begin
+        AccessorFlags := ACCESSOR_FLAG_SETTER;
+        StorageName := Entry.Name;
+        if Entry.IsStatic then
+          AccessorFlags := AccessorFlags or ACCESSOR_FLAG_STATIC;
+        if Entry.IsPrivate then
+          StorageName := '#slot:' + APrivatePrefix +
+            Copy(Entry.Name, 2, MaxInt);
+        CompileSetterBody(ACtx, ATargetReg, StorageName,
+          Entry.SetterNode, OP_DEFINE_ACCESSOR_CONST, AccessorFlags);
+        Continue;
+      end;
+    end;
+
+    Elem := AClassDef.FElements[Entry.ElementIndex];
+
+    if Elem.IsComputed and
+       (Elem.Kind in [cekGetter, cekSetter, cekMethod, cekField, cekAccessor]) then
     begin
-      SetLength(AComputedFieldKeyLocals, Length(AComputedFieldKeyLocals) + 1);
-      ComputedKeyName := Format('#computed-element-key:%s:%d',
-        [ClassKeyPrefix, I]);
-      AComputedFieldKeyLocals[High(AComputedFieldKeyLocals)].ElementIndex := I;
-      AComputedFieldKeyLocals[High(AComputedFieldKeyLocals)].Name :=
-        ComputedKeyName;
-      KeyReg := ACtx.Scope.DeclareLocal(ComputedKeyName, False);
-      KeyIsLocal := True;
+      NeedsKeyLocal := (Elem.Kind in [cekField, cekAccessor]) or
+        (Length(Elem.Decorators) > 0);
+      KeyIsLocal := False;
+      if NeedsKeyLocal then
+      begin
+        SetLength(AComputedFieldKeyLocals,
+          Length(AComputedFieldKeyLocals) + 1);
+        ComputedKeyName := Format('#computed-element-key:%s:%d',
+          [ClassKeyPrefix, Entry.ElementIndex]);
+        AComputedFieldKeyLocals[High(AComputedFieldKeyLocals)].ElementIndex :=
+          Entry.ElementIndex;
+        AComputedFieldKeyLocals[High(AComputedFieldKeyLocals)].Name :=
+          ComputedKeyName;
+        KeyReg := ACtx.Scope.DeclareLocal(ComputedKeyName, False);
+        KeyIsLocal := True;
+      end
+      else
+        KeyReg := ACtx.Scope.AllocateRegister;
+      ACtx.CompileExpression(Elem.ComputedKeyExpression, KeyReg);
+      EmitInstruction(ACtx, EncodeABC(OP_TO_PROPERTY_KEY, KeyReg, KeyReg, 0));
     end
     else
-      KeyReg := ACtx.Scope.AllocateRegister;
-    ACtx.CompileExpression(Elem.ComputedKeyExpression, KeyReg);
-    if (Elem.Kind in [cekField, cekAccessor]) or
-       (Length(Elem.Decorators) > 0) then
-      EmitInstruction(ACtx, EncodeABC(OP_TO_PROPERTY_KEY, KeyReg, KeyReg, 0));
+    begin
+      KeyReg := 0;
+      KeyIsLocal := False;
+    end;
 
     case Elem.Kind of
       cekField:
       begin
-        Continue;
+        if KeyIsLocal then
+          Continue;
       end;
       cekGetter:
-        if Elem.IsStatic then
-          CompileComputedGetterBody(ACtx, ATargetReg, KeyReg,
-            Elem.GetterNode, OP_DEFINE_ACCESSOR_DYNAMIC, ACCESSOR_FLAG_STATIC)
+        if Elem.IsComputed then
+        begin
+          if Elem.IsStatic then
+            CompileComputedGetterBody(ACtx, ATargetReg, KeyReg,
+              Elem.GetterNode, OP_DEFINE_ACCESSOR_DYNAMIC,
+              ACCESSOR_FLAG_STATIC)
+          else
+            CompileComputedGetterBody(ACtx, ATargetReg, KeyReg,
+              Elem.GetterNode, OP_DEFINE_ACCESSOR_DYNAMIC, 0);
+        end
+        else if Elem.IsPrivate then
+        begin
+          AccessorFlags := 0;
+          if Elem.IsStatic then
+            AccessorFlags := ACCESSOR_FLAG_STATIC;
+          CompileGetterBody(ACtx, ATargetReg,
+            '#slot:' + APrivatePrefix + Elem.Name,
+            Elem.GetterNode, OP_DEFINE_ACCESSOR_CONST, AccessorFlags);
+        end
+        else if Elem.IsStatic then
+          CompileGetterBody(ACtx, ATargetReg, Elem.Name,
+            Elem.GetterNode, OP_DEFINE_ACCESSOR_CONST, ACCESSOR_FLAG_STATIC)
         else
-          CompileComputedGetterBody(ACtx, ATargetReg, KeyReg,
-            Elem.GetterNode, OP_DEFINE_ACCESSOR_DYNAMIC, 0);
+          CompileGetterBody(ACtx, ATargetReg, Elem.Name,
+            Elem.GetterNode, OP_DEFINE_ACCESSOR_CONST, 0);
       cekSetter:
-        if Elem.IsStatic then
-          CompileComputedSetterBody(ACtx, ATargetReg, KeyReg,
-            Elem.SetterNode, OP_DEFINE_ACCESSOR_DYNAMIC,
+        if Elem.IsComputed then
+        begin
+          if Elem.IsStatic then
+            CompileComputedSetterBody(ACtx, ATargetReg, KeyReg,
+              Elem.SetterNode, OP_DEFINE_ACCESSOR_DYNAMIC,
+              ACCESSOR_FLAG_STATIC or ACCESSOR_FLAG_SETTER)
+          else
+            CompileComputedSetterBody(ACtx, ATargetReg, KeyReg,
+              Elem.SetterNode, OP_DEFINE_ACCESSOR_DYNAMIC,
+              ACCESSOR_FLAG_SETTER);
+        end
+        else if Elem.IsPrivate then
+        begin
+          AccessorFlags := ACCESSOR_FLAG_SETTER;
+          if Elem.IsStatic then
+            AccessorFlags := AccessorFlags or ACCESSOR_FLAG_STATIC;
+          CompileSetterBody(ACtx, ATargetReg,
+            '#slot:' + APrivatePrefix + Elem.Name,
+            Elem.SetterNode, OP_DEFINE_ACCESSOR_CONST, AccessorFlags);
+        end
+        else if Elem.IsStatic then
+          CompileSetterBody(ACtx, ATargetReg, Elem.Name,
+            Elem.SetterNode, OP_DEFINE_ACCESSOR_CONST,
             ACCESSOR_FLAG_STATIC or ACCESSOR_FLAG_SETTER)
         else
-          CompileComputedSetterBody(ACtx, ATargetReg, KeyReg,
-            Elem.SetterNode, OP_DEFINE_ACCESSOR_DYNAMIC, ACCESSOR_FLAG_SETTER);
+          CompileSetterBody(ACtx, ATargetReg, Elem.Name,
+            Elem.SetterNode, OP_DEFINE_ACCESSOR_CONST, ACCESSOR_FLAG_SETTER);
       cekMethod:
-        CompileComputedMethodBody(ACtx, ATargetReg, KeyReg,
-          Elem.MethodNode, Elem.IsStatic);
+        if Elem.IsComputed then
+          CompileComputedMethodBody(ACtx, ATargetReg, KeyReg,
+            Elem.MethodNode, Elem.IsStatic)
+        else if Elem.IsPrivate then
+        begin
+          if Elem.IsStatic then
+            CompileMethodBody(ACtx, ATargetReg,
+              '#slot:' + APrivatePrefix + Elem.Name,
+              Elem.MethodNode, OP_DEFINE_STATIC_METHOD_CONST)
+          else
+            CompileMethodBody(ACtx, ATargetReg,
+              '#slot:' + APrivatePrefix + Elem.Name,
+              Elem.MethodNode, OP_CLASS_ADD_METHOD_CONST);
+        end
+        else if Elem.IsStatic then
+          CompileMethodBody(ACtx, ATargetReg, Elem.Name,
+            Elem.MethodNode, OP_DEFINE_STATIC_METHOD_CONST)
+        else
+          CompileMethodBody(ACtx, ATargetReg, Elem.Name,
+            Elem.MethodNode, OP_CLASS_ADD_METHOD_CONST,
+            AHasSuper and (Elem.Name = PROP_CONSTRUCTOR));
       cekAccessor:
         ; // Auto-accessor installation consumes the captured property key later.
     end;
 
-    if not KeyIsLocal then
+    if Elem.IsComputed and not KeyIsLocal then
       ACtx.Scope.FreeRegister;
   end;
 end;
@@ -5139,7 +5741,6 @@ var
   Elem: TGocciaClassElement;
   ComputedKeyName: string;
   AccessorBackingName: string;
-  StoreOpcode: TGocciaOpCode;
 begin
   OldTemplate := ACtx.Template;
   OldScope := ACtx.Scope;
@@ -5193,22 +5794,18 @@ begin
         CompileFieldValueWithInferredName(ChildCtx,
           AClassDef.FFieldOrder[I].FieldInitializer, ValReg,
           '#' + AClassDef.FFieldOrder[I].Name);
-        KeyIdx := ChildTemplate.AddConstantString(
-          '#slot:' + ChildScope.ResolvePrivatePrefix + AClassDef.FFieldOrder[I].Name);
-        StoreOpcode := OP_DEFINE_STATIC_PROP_CONST;
+        EmitDefineStaticPropertyByName(ChildCtx, ThisReg, ValReg,
+          '#slot:' + ChildScope.ResolvePrivatePrefix +
+          AClassDef.FFieldOrder[I].Name);
       end
       else
       begin
         CompileFieldValueWithInferredName(ChildCtx,
           AClassDef.FFieldOrder[I].FieldInitializer, ValReg,
           AClassDef.FFieldOrder[I].Name);
-        KeyIdx := ChildTemplate.AddConstantString(AClassDef.FFieldOrder[I].Name);
-        StoreOpcode := OP_DEFINE_STATIC_PROP_CONST;
+        EmitDefineStaticPropertyByName(ChildCtx, ThisReg, ValReg,
+          AClassDef.FFieldOrder[I].Name);
       end;
-      if KeyIdx > High(UInt8) then
-        raise Exception.Create('Constant pool overflow: field name index exceeds 255');
-      EmitInstruction(ChildCtx, EncodeABC(StoreOpcode, ThisReg,
-        UInt8(KeyIdx), ValReg));
       ChildScope.FreeRegister;
     end;
   end
@@ -5219,11 +5816,7 @@ begin
       Entry := AClassDef.InstanceProperties.EntryAt(I);
       ValReg := ChildScope.AllocateRegister;
       ACtx.CompileExpression(Entry.Value, ValReg);
-      KeyIdx := ChildTemplate.AddConstantString(Entry.Key);
-      if KeyIdx > High(UInt8) then
-        raise Exception.Create('Constant pool overflow: field name index exceeds 255');
-      EmitInstruction(ChildCtx, EncodeABC(OP_DEFINE_STATIC_PROP_CONST, ThisReg,
-        UInt8(KeyIdx), ValReg));
+      EmitDefineStaticPropertyByName(ChildCtx, ThisReg, ValReg, Entry.Key);
       ChildScope.FreeRegister;
     end;
 
@@ -5232,11 +5825,8 @@ begin
       Entry := AClassDef.PrivateInstanceProperties.EntryAt(I);
       ValReg := ChildScope.AllocateRegister;
       ACtx.CompileExpression(Entry.Value, ValReg);
-      KeyIdx := ChildTemplate.AddConstantString('#slot:' + ChildScope.ResolvePrivatePrefix + Entry.Key);
-      if KeyIdx > High(UInt8) then
-        raise Exception.Create('Constant pool overflow: field name index exceeds 255');
-      EmitInstruction(ChildCtx, EncodeABC(OP_DEFINE_STATIC_PROP_CONST, ThisReg,
-        UInt8(KeyIdx), ValReg));
+      EmitDefineStaticPropertyByName(ChildCtx, ThisReg, ValReg,
+        '#slot:' + ChildScope.ResolvePrivatePrefix + Entry.Key);
       ChildScope.FreeRegister;
     end;
   end;
@@ -5253,10 +5843,17 @@ begin
     else
       AccessorBackingName := '__accessor_' + Elem.Name;
     KeyIdx := ChildTemplate.AddConstantString(AccessorBackingName);
-    if KeyIdx > High(UInt8) then
-      raise Exception.Create('Constant pool overflow: accessor backing field name index exceeds 255');
-    EmitInstruction(ChildCtx, EncodeABC(OP_SET_PROP_CONST, ThisReg,
-      UInt8(KeyIdx), ValReg));
+    if KeyIdx <= High(UInt8) then
+      EmitInstruction(ChildCtx, EncodeABC(OP_SET_PROP_CONST, ThisReg,
+        UInt8(KeyIdx), ValReg))
+    else
+    begin
+      KeyReg := ChildScope.AllocateRegister;
+      EmitInstruction(ChildCtx, EncodeABx(OP_LOAD_CONST, KeyReg, KeyIdx));
+      EmitInstruction(ChildCtx, EncodeABC(OP_SET_INDEX, ThisReg, KeyReg,
+        ValReg));
+      ChildScope.FreeRegister;
+    end;
     ChildScope.FreeRegister;
   end;
 
@@ -5582,6 +6179,7 @@ var
   HasInnerNameBinding: Boolean;
   ClosedLocals: array[0..255] of UInt8;
   ClosedCount: Integer;
+  HeritageCtx: TGocciaCompilationContext;
 begin
   ClassDef := AStmt.ClassDefinition;
   HasSuper := Assigned(ClassDef.SuperClassExpression) or
@@ -5628,7 +6226,11 @@ begin
     SuperReg := ACtx.Scope.DeclareLocal('__super__', False);
 
     if Assigned(ClassDef.SuperClassExpression) then
-      ACtx.CompileExpression(ClassDef.SuperClassExpression, SuperReg)
+    begin
+      HeritageCtx := ACtx;
+      HeritageCtx.NonStrictMode := False;
+      HeritageCtx.CompileExpression(ClassDef.SuperClassExpression, SuperReg);
+    end
     else
     begin
       LocalIdx := ACtx.Scope.ResolveLocal(ClassDef.SuperClass);
@@ -5653,6 +6255,8 @@ begin
   if HasInnerNameBinding and HasSuper then
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, InnerNameSlot, ClassReg, 0));
 
+  if Length(ClassDef.FElements) = 0 then
+  begin
   for MethodPair in ClassDef.Methods do
     CompileMethodBody(ACtx, ClassReg, MethodPair.Key,
       MethodPair.Value, OP_CLASS_ADD_METHOD_CONST,
@@ -5715,8 +6319,10 @@ begin
       CompileSetterBody(ACtx, ClassReg, SetterPair.Key,
         SetterPair.Value, OP_DEFINE_ACCESSOR_CONST, ACCESSOR_FLAG_STATIC or ACCESSOR_FLAG_SETTER);
   end;
+  end;
 
-  CompileComputedElements(ACtx, ClassReg, ClassDef, ComputedFieldKeyLocals);
+  CompileComputedElements(ACtx, ClassReg, ClassDef, PrivPrefix, HasSuper,
+    ComputedFieldKeyLocals);
 
   if (ClassDef.InstanceProperties.Count > 0) or
      (ClassDef.PrivateInstanceProperties.Count > 0) or
@@ -5861,6 +6467,7 @@ var
   ComputedFieldKeyLocals: TComputedFieldKeyLocals;
   ComputedKeyName: string;
   NameSlot: UInt8;
+  HeritageCtx: TGocciaCompilationContext;
 begin
   ClassDef := AClassDef;
   HasSuper := Assigned(ClassDef.SuperClassExpression) or
@@ -5897,7 +6504,11 @@ begin
     SuperReg := ACtx.Scope.DeclareLocal('__super__', False);
 
     if Assigned(ClassDef.SuperClassExpression) then
-      ACtx.CompileExpression(ClassDef.SuperClassExpression, SuperReg)
+    begin
+      HeritageCtx := ACtx;
+      HeritageCtx.NonStrictMode := False;
+      HeritageCtx.CompileExpression(ClassDef.SuperClassExpression, SuperReg);
+    end
     else
     begin
       LocalIdx := ACtx.Scope.ResolveLocal(ClassDef.SuperClass);
@@ -5922,6 +6533,8 @@ begin
   if HasNameBinding and HasSuper then
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, NameSlot, ADest, 0));
 
+  if Length(ClassDef.FElements) = 0 then
+  begin
   for MethodPair in ClassDef.Methods do
     CompileMethodBody(ACtx, ADest, MethodPair.Key,
       MethodPair.Value, OP_CLASS_ADD_METHOD_CONST,
@@ -5984,8 +6597,10 @@ begin
       CompileSetterBody(ACtx, ADest, SetterPair.Key,
         SetterPair.Value, OP_DEFINE_ACCESSOR_CONST, ACCESSOR_FLAG_STATIC or ACCESSOR_FLAG_SETTER);
   end;
+  end;
 
-  CompileComputedElements(ACtx, ADest, ClassDef, ComputedFieldKeyLocals);
+  CompileComputedElements(ACtx, ADest, ClassDef, PrivPrefix, HasSuper,
+    ComputedFieldKeyLocals);
 
   if (ClassDef.InstanceProperties.Count > 0) or
      (ClassDef.PrivateInstanceProperties.Count > 0) or

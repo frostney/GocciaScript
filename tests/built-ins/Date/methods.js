@@ -93,6 +93,17 @@ describe("Date methods", () => {
     expect(value.getDate()).toBe(2);
   });
 
+  test("UTC setters update fields and return epoch ms", () => {
+    const value = new Date(0);
+    expect(value.setTime(epoch)).toBe(epoch);
+    expect(value.setUTCMilliseconds(456)).toBe(value.getTime());
+    expect(value.getUTCMilliseconds()).toBe(456);
+    expect(value.setUTCFullYear(2025, 0, 2)).toBe(value.getTime());
+    expect(value.getUTCFullYear()).toBe(2025);
+    expect(value.getUTCMonth()).toBe(0);
+    expect(value.getUTCDate()).toBe(2);
+  });
+
   test("prototype methods reject nullish receivers", () => {
     const methods = [
       "getTime",
@@ -113,11 +124,27 @@ describe("Date methods", () => {
       "getUTCMinutes",
       "getUTCSeconds",
       "getUTCMilliseconds",
+      "setTime",
+      "setMilliseconds",
+      "setUTCMilliseconds",
+      "setSeconds",
+      "setUTCSeconds",
+      "setMinutes",
+      "setUTCMinutes",
+      "setHours",
+      "setUTCHours",
       "setDate",
+      "setUTCDate",
+      "setMonth",
+      "setUTCMonth",
+      "setFullYear",
+      "setUTCFullYear",
       "getTimezoneOffset",
       "toISOString",
       "toJSON",
       "toString",
+      "toUTCString",
+      "toGMTString",
       "toLocaleString",
       "toLocaleDateString",
       "toLocaleTimeString",

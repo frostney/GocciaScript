@@ -172,6 +172,7 @@ begin
     and TGocciaCoverageTracker.Instance.Enabled;
   Result.StrictTypes := FStrictTypesEnabled;
   Result.NonStrictMode := FNonStrictModeEnabled;
+  Result.CompatibilityNonStrictMode := FNonStrictModeEnabled;
   if Assigned(FGlobalScope) then
     FGlobalScope.ArgumentsObjectEnabled := FArgumentsObjectEnabled;
 end;
@@ -188,8 +189,10 @@ begin
   Context.NonStrictMode := Context.NonStrictMode and
     not HasUseStrictDirective(AProgram);
 
+  PredeclareScriptLexicalDeclarations(AProgram, FGlobalScope);
   if FVarEnabled then
-    HoistVarDeclarations(AProgram.Body, FGlobalScope);
+    HoistVarDeclarations(AProgram.Body, FGlobalScope,
+      Context.CompatibilityNonStrictMode and Context.NonStrictMode);
   if FFunctionEnabled then
     HoistFunctionDeclarations(AProgram.Body, Context);
 
@@ -202,6 +205,7 @@ begin
     for I := 0 to AProgram.Body.Count - 1 do
     begin
       CF := EvaluateStatement(AProgram.Body[I], Context);
+      CF := CF.UpdateEmpty(Result);
       Result := CF.Value;
       if CF.Kind = cfkReturn then Exit;
     end;
@@ -328,7 +332,7 @@ begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   PredeclareModuleLexicalDeclarations(AProgram, AContext.Scope);
   if FVarEnabled then
-    HoistVarDeclarations(AProgram.Body, AContext.Scope);
+    HoistVarDeclarations(AProgram.Body, AContext.Scope, False);
   if FFunctionEnabled then
     HoistFunctionDeclarations(AProgram.Body, AContext);
   ExecutionContext := nil;
@@ -342,6 +346,7 @@ begin
          (AProgram.Body[I] is TGocciaReExportDeclaration) then
       begin
         CF := EvaluateStatement(AProgram.Body[I], AContext);
+        CF := CF.UpdateEmpty(Result);
         if CF.Kind = cfkReturn then Exit(CF.Value);
       end;
 
@@ -351,6 +356,7 @@ begin
          (AProgram.Body[I] is TGocciaReExportDeclaration) then
         Continue;
       CF := EvaluateStatement(AProgram.Body[I], AContext);
+      CF := CF.UpdateEmpty(Result);
       Result := CF.Value;
       if CF.Kind = cfkReturn then Exit;
     end;

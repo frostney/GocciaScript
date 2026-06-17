@@ -84,7 +84,7 @@ scripts/run_test262_suite.ts
   → for each test (parallel pool, --jobs=N):
       → read frontmatter, classify by phase (parse / runtime / positive)
       → build source = (stock harness includes) + body, with a tiny
-        marker-emitting wrapper for negative-runtime
+        marker-emitting wrapper for most negative-runtime tests
       → spawn ./build/GocciaScriptLoaderBare --test262-host with stdin = source
       → capture (exitCode, stdout, stderr)
       → classify into PASS / FAIL / WRAPPER_INFRA / TIMEOUT
@@ -99,6 +99,7 @@ scripts/run_test262_suite.ts
 | Sync positive     | exit 0                                                                | exit non-zero (stderr is the diagnostic)                                 |
 | Async positive    | stdout contains `Test262:AsyncTestComplete`                           | stdout contains `Test262:AsyncTestFailure:<name>: <msg>`, OR no marker before timeout, OR engine exits before $DONE |
 | Negative runtime  | stdout contains `Test262:NegativeTestError:<expected-type>`           | `Test262:NegativeTestNoError`, OR `Test262:NegativeTestError:<other>`    |
+| Top-level negative runtime | exit non-zero and stderr starts with the expected error type | exit 0, OR stderr starts with another error type                         |
 | Negative parse    | exit non-zero (parse failed as expected)                              | exit 0 (parse succeeded)                                                 |
 
 Async markers are emitted by stock test262 `doneprintHandle.js` via
@@ -106,7 +107,10 @@ Async markers are emitted by stock test262 `doneprintHandle.js` via
 negative-runtime markers
 (`Test262:NegativeTestError:...` / `Test262:NegativeTestNoError`) are
 the only Goccia-specific marker addition; see "Wrapper templates"
-below.
+below. Runtime-negative Script tests that depend on global declaration
+instantiation run as top-level source instead, because wrapping them in
+`try { ... }` would introduce a block scope and change the declaration
+semantics under test.
 
 ## Wrapper templates
 
@@ -142,6 +146,16 @@ try {
   print("Test262:NegativeTestError:" + __gocciaT262_n);
 }
 ```
+
+Top-level global-code runtime negatives that expect `SyntaxError` use the
+positive template shape instead:
+
+```text
+{harness_source}
+{body}
+```
+
+The runner then checks the subprocess exit and stderr error type directly.
 
 The error-class identification uses `e.constructor.name`, matching the
 spec-visible constructor/prototype path. If this cannot identify the

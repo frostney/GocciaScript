@@ -52,16 +52,92 @@ uses
   SysUtils,
 
   Goccia.Arguments.Collection,
+  Goccia.Constants.ErrorNames,
+  Goccia.Error,
   Goccia.GarbageCollector,
   Goccia.InstructionLimit,
   Goccia.Timeout,
   Goccia.Values.Error,
+  Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
+  Goccia.Values.NativeFunction,
   Goccia.Values.PromiseValue,
   Goccia.VM.Exception;
 
 threadvar
   MicrotaskQueueThreadInstance: TGocciaMicrotaskQueue;
+
+procedure RejectPromiseWithException(const APromise: TGocciaPromiseValue;
+  const AException: Exception);
+begin
+  if not Assigned(APromise) then
+    raise AException;
+
+  if AException is EGocciaBytecodeThrow then
+    APromise.Reject(EGocciaBytecodeThrow(AException).ThrownValue)
+  else if AException is TGocciaThrowValue then
+    APromise.Reject(TGocciaThrowValue(AException).Value)
+  else if AException is TGocciaTypeError then
+    APromise.Reject(CreateErrorObject(TYPE_ERROR_NAME, AException.Message))
+  else if AException is TGocciaReferenceError then
+    APromise.Reject(CreateErrorObject(REFERENCE_ERROR_NAME, AException.Message))
+  else if AException is TGocciaSyntaxError then
+    APromise.Reject(CreateErrorObject(SYNTAX_ERROR_NAME, AException.Message))
+  else
+    APromise.Reject(CreateErrorObject(ERROR_NAME, AException.Message));
+end;
+
+procedure ExecutePromiseResolveThenableJob(const APromise: TGocciaPromiseValue;
+  const AThenable, AThenMethod: TGocciaValue);
+var
+  ThenArgs: TGocciaArgumentsCollection;
+  ResolveFn: TGocciaNativeFunctionValue;
+  RejectFn: TGocciaNativeFunctionValue;
+  GC: TGarbageCollector;
+begin
+  if not Assigned(APromise) then
+    Exit;
+
+  ResolveFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+    APromise.DoResolve, '', 1);
+  RejectFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+    APromise.DoReject, '', 1);
+  ResolveFn.CapturedRoot := APromise;
+  RejectFn.CapturedRoot := APromise;
+  ThenArgs := TGocciaArgumentsCollection.Create([ResolveFn, RejectFn]);
+  GC := TGarbageCollector.Instance;
+  try
+    if Assigned(GC) then
+    begin
+      GC.AddTempRoot(AThenable);
+      GC.AddTempRoot(AThenMethod);
+      GC.AddTempRoot(ResolveFn);
+      GC.AddTempRoot(RejectFn);
+    end;
+    try
+      try
+        DispatchCall(AThenMethod, ThenArgs, AThenable);
+      except
+        on E: TGocciaTimeoutError do
+          raise;
+        on E: TGocciaInstructionLimitError do
+          raise;
+        on E: Exception do
+          RejectPromiseWithException(APromise, E);
+      end;
+    finally
+      if Assigned(GC) then
+      begin
+        GC.RemoveTempRoot(RejectFn);
+        GC.RemoveTempRoot(ResolveFn);
+        GC.RemoveTempRoot(AThenMethod);
+        GC.RemoveTempRoot(AThenable);
+      end;
+    end;
+  finally
+    ThenArgs.Free;
+  end;
+end;
 
 class function TGocciaMicrotaskQueue.Instance: TGocciaMicrotaskQueue;
 begin
@@ -148,6 +224,18 @@ var
 begin
   Promise := TGocciaPromiseValue(ATask.ResultPromise);
 
+  if ATask.ReactionType = prtThenableResolve then
+  begin
+    if Assigned(Promise) then
+    begin
+      if Assigned(ATask.Handler) then
+        ExecutePromiseResolveThenableJob(Promise, ATask.Value, ATask.Handler)
+      else if ATask.Value is TGocciaPromiseValue then
+        Promise.SubscribeTo(TGocciaPromiseValue(ATask.Value));
+    end;
+    Exit;
+  end;
+
   if Assigned(ATask.Handler) and ATask.Handler.IsCallable then
   begin
     CallArgs := TGocciaArgumentsCollection.Create([ATask.Value]);
@@ -180,9 +268,7 @@ begin
       case ATask.ReactionType of
         prtFulfill: Promise.Resolve(ATask.Value);
         prtReject: Promise.Reject(ATask.Value);
-        prtThenableResolve:
-          if ATask.Value is TGocciaPromiseValue then
-            Promise.SubscribeTo(TGocciaPromiseValue(ATask.Value));
+        prtThenableResolve:;
       end;
     end;
   end;

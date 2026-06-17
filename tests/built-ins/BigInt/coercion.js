@@ -50,8 +50,10 @@ test("String() explicit conversion", () => {
   expect(String(-1n)).toBe("-1");
 });
 
-test("Number() throws TypeError for BigInt", () => {
-  expect(() => { Number(1n); }).toThrow();
+test("Number() explicitly converts BigInt", () => {
+  expect(Number(1n)).toBe(1);
+  expect(Number(-1n)).toBe(-1);
+  expect(() => 1n * 1).toThrow();
 });
 
 test("Object() boxing", () => {

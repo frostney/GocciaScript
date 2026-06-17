@@ -80,10 +80,8 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
-  Goccia.GarbageCollector,
   Goccia.MicrotaskQueue,
   Goccia.Realm,
-  Goccia.Values.ClassValue,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
@@ -311,11 +309,6 @@ var
   Task: TGocciaMicrotask;
   Queue: TGocciaMicrotaskQueue;
   ThenMethod: TGocciaValue;
-  ThenArgs: TGocciaArgumentsCollection;
-  RejectArgs: TGocciaArgumentsCollection;
-  ResolveFn: TGocciaNativeFunctionValue;
-  RejectFn: TGocciaNativeFunctionValue;
-  GC: TGarbageCollector;
 begin
   if FState <> gpsPending then Exit;
 
@@ -364,59 +357,14 @@ begin
     if Assigned(ThenMethod) and ThenMethod.IsCallable then
     begin
       FAlreadyResolved := False;
-      ResolveFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(DoResolve, 'resolve', 1);
-      RejectFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(DoReject, 'reject', 1);
-      ResolveFn.CapturedRoot := Self;
-      RejectFn.CapturedRoot := Self;
-      ThenArgs := TGocciaArgumentsCollection.Create([ResolveFn, RejectFn]);
-      GC := TGarbageCollector.Instance;
-      try
-        if Assigned(GC) then
-        begin
-          GC.AddTempRoot(AValue);
-          GC.AddTempRoot(ThenMethod);
-          GC.AddTempRoot(ResolveFn);
-          GC.AddTempRoot(RejectFn);
-        end;
-        try
-          try
-            if ThenMethod is TGocciaFunctionBase then
-              TGocciaFunctionBase(ThenMethod).Call(ThenArgs, AValue)
-            else if ThenMethod is TGocciaClassValue then
-              TGocciaClassValue(ThenMethod).Call(ThenArgs, AValue)
-            else
-              Goccia.Values.ErrorHelper.ThrowTypeError(SErrorThenNotFunction, SSuggestPromiseThisType);
-          except
-            on E: EGocciaBytecodeThrow do
-            begin
-              RejectArgs := TGocciaArgumentsCollection.Create([E.ThrownValue]);
-              try
-                DoReject(RejectArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
-              finally
-                RejectArgs.Free;
-              end;
-            end;
-            on E: TGocciaThrowValue do
-            begin
-              RejectArgs := TGocciaArgumentsCollection.Create([E.Value]);
-              try
-                DoReject(RejectArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
-              finally
-                RejectArgs.Free;
-              end;
-            end;
-        end;
-        finally
-          if Assigned(GC) then
-          begin
-            GC.RemoveTempRoot(RejectFn);
-            GC.RemoveTempRoot(ResolveFn);
-            GC.RemoveTempRoot(ThenMethod);
-            GC.RemoveTempRoot(AValue);
-          end;
-        end;
-      finally
-        ThenArgs.Free;
+      Queue := TGocciaMicrotaskQueue.Instance;
+      if Assigned(Queue) then
+      begin
+        Task.Handler := ThenMethod;
+        Task.Value := AValue;
+        Task.ResultPromise := Self;
+        Task.ReactionType := prtThenableResolve;
+        Queue.Enqueue(Task);
       end;
       Exit;
     end;

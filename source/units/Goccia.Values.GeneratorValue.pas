@@ -132,21 +132,33 @@ var
   GGeneratorPrototypeMethodHostSlot: TGocciaRealmOwnedSlotId;
 
 function GeneratorObjectIntrinsicParent(
-  const AKind: TGocciaFunctionObjectIntrinsicKind): TGocciaObjectValue;
+  const AKind: TGocciaFunctionObjectIntrinsicKind;
+  const ARealm: TGocciaRealm = nil): TGocciaObjectValue;
 var
   IteratorPrototype: TGocciaObjectValue;
+  PreviousRealm: TGocciaRealm;
+  ShouldSwitchRealm: Boolean;
 begin
-  if not Assigned(TGocciaObjectValue.SharedObjectPrototype) then
-    TGocciaObjectValue.InitializeSharedPrototype;
-  IteratorPrototype := nil;
-  if AKind = foikGenerator then
-    IteratorPrototype := TGocciaIteratorValue.SharedPrototype;
-  Result := GeneratorObjectIntrinsicPrototype(AKind,
-    TGocciaFunctionBase.GetSharedPrototype,
-    TGocciaObjectValue.SharedObjectPrototype,
-    IteratorPrototype);
-  if AKind = foikGenerator then
-    EnsureGeneratorPrototypeMethods(Result);
+  PreviousRealm := CurrentRealm;
+  ShouldSwitchRealm := Assigned(ARealm) and (ARealm <> PreviousRealm);
+  if ShouldSwitchRealm then
+    SetCurrentRealm(ARealm);
+  try
+    if not Assigned(TGocciaObjectValue.SharedObjectPrototype) then
+      TGocciaObjectValue.InitializeSharedPrototype;
+    IteratorPrototype := nil;
+    if AKind = foikGenerator then
+      IteratorPrototype := TGocciaIteratorValue.SharedPrototype;
+    Result := GeneratorObjectIntrinsicPrototype(AKind,
+      TGocciaFunctionBase.GetSharedPrototype,
+      TGocciaObjectValue.SharedObjectPrototype,
+      IteratorPrototype);
+    if AKind = foikGenerator then
+      EnsureGeneratorPrototypeMethods(Result);
+  finally
+    if ShouldSwitchRealm then
+      SetCurrentRealm(PreviousRealm);
+  end;
 end;
 
 function ArgumentOrUndefined(const AArguments: TGocciaArgumentsCollection): TGocciaValue;
@@ -626,6 +638,8 @@ var
   ArgumentsObjectEnabled: Boolean;
   EvalRejectNames, SavedEvalRejectNames: TGocciaEvalRejectNameArray;
   ParameterNames: array of string;
+  BodyScope: TGocciaScope;
+  HasParamExpressions: Boolean;
   function EvaluateParameterDefault(
     const AExpression: TGocciaExpression): TGocciaValue;
   var
@@ -678,16 +692,21 @@ begin
   CompatibilityNonStrictMode := FClosure.EffectiveNonStrictMode;
   ArgumentsObjectEnabled := FClosure.EffectiveArgumentsObjectEnabled;
   Context.NonStrictMode := CompatibilityNonStrictMode and not FStrictCode;
+  Context.CompatibilityNonStrictMode := CompatibilityNonStrictMode;
   Context.DisposalTracker := nil;
   EvalRejectNames := BuildParameterEvalVarDeclarationRejectNames(
     ArgumentsObjectEnabled and CreatesArgumentsObject and
     not ParameterListBindsName(FParameters, IDENTIFIER_ARGUMENTS));
+  HasParamExpressions := HasParameterExpressions;
 
   if ArgumentsObjectEnabled and CreatesArgumentsObject and
      not ParameterListBindsName(FParameters, IDENTIFIER_ARGUMENTS) and
      not CallScope.ContainsOwnLexicalBinding(IDENTIFIER_ARGUMENTS) then
     CallScope.DefineVariableBinding(IDENTIFIER_ARGUMENTS,
       CreateArgumentsObjectForCall, True);
+
+  if HasParamExpressions then
+    PredeclareParameterBindings(CallScope);
 
   for I := 0 to Length(FParameters) - 1 do
   begin
@@ -779,9 +798,17 @@ begin
     end;
   end;
 
-  HoistVarDeclarations(FBodyStatements, CallScope);
+  BodyScope := CallScope;
+  if HasParamExpressions then
+    BodyScope := CallScope.CreateChild(skFunction, FName + ':body');
+
+  Context.Scope := BodyScope;
+
+  HoistVarDeclarations(FBodyStatements, BodyScope,
+    Context.CompatibilityNonStrictMode and Context.NonStrictMode);
+  PredeclareFunctionBodyLexicalDeclarations(FBodyStatements, BodyScope);
   HoistFunctionDeclarations(FBodyStatements, Context);
-  Result := TGocciaGeneratorContinuation.Create(FBodyStatements, CallScope,
+  Result := TGocciaGeneratorContinuation.Create(FBodyStatements, BodyScope,
     Context, AIsAsyncGenerator);
 end;
 
@@ -795,7 +822,10 @@ begin
     CreateContinuation(AArguments, AThisValue));
   PrototypeValue := GetProperty(PROP_PROTOTYPE);
   if PrototypeValue is TGocciaObjectValue then
-    GeneratorObject.Prototype := TGocciaObjectValue(PrototypeValue);
+    GeneratorObject.Prototype := TGocciaObjectValue(PrototypeValue)
+  else
+    GeneratorObject.Prototype := GeneratorObjectIntrinsicParent(foikGenerator,
+      CreationRealm);
   Result := GeneratorObject;
 end;
 
@@ -814,7 +844,10 @@ begin
     CreateContinuation(AArguments, AThisValue, True));
   PrototypeValue := GetProperty(PROP_PROTOTYPE);
   if PrototypeValue is TGocciaObjectValue then
-    AsyncGeneratorObject.Prototype := TGocciaObjectValue(PrototypeValue);
+    AsyncGeneratorObject.Prototype := TGocciaObjectValue(PrototypeValue)
+  else
+    AsyncGeneratorObject.Prototype := GeneratorObjectIntrinsicParent(
+      foikAsyncGenerator, CreationRealm);
   Result := AsyncGeneratorObject;
 end;
 
@@ -834,6 +867,8 @@ var
   ArgumentsObjectEnabled: Boolean;
   EvalRejectNames, SavedEvalRejectNames: TGocciaEvalRejectNameArray;
   ParameterNames: array of string;
+  BodyScope: TGocciaScope;
+  HasParamExpressions: Boolean;
   function EvaluateParameterDefault(
     const AExpression: TGocciaExpression): TGocciaValue;
   var
@@ -884,16 +919,21 @@ begin
   CompatibilityNonStrictMode := FClosure.EffectiveNonStrictMode;
   ArgumentsObjectEnabled := FClosure.EffectiveArgumentsObjectEnabled;
   Context.NonStrictMode := CompatibilityNonStrictMode and not FStrictCode;
+  Context.CompatibilityNonStrictMode := CompatibilityNonStrictMode;
   Context.DisposalTracker := nil;
   EvalRejectNames := BuildParameterEvalVarDeclarationRejectNames(
     ArgumentsObjectEnabled and CreatesArgumentsObject and
     not ParameterListBindsName(FParameters, IDENTIFIER_ARGUMENTS));
+  HasParamExpressions := HasParameterExpressions;
 
   if ArgumentsObjectEnabled and CreatesArgumentsObject and
      not ParameterListBindsName(FParameters, IDENTIFIER_ARGUMENTS) and
      not CallScope.ContainsOwnLexicalBinding(IDENTIFIER_ARGUMENTS) then
     CallScope.DefineVariableBinding(IDENTIFIER_ARGUMENTS,
       CreateArgumentsObjectForCall, True);
+
+  if HasParamExpressions then
+    PredeclareParameterBindings(CallScope);
 
   for I := 0 to Length(FParameters) - 1 do
   begin
@@ -977,9 +1017,17 @@ begin
     end;
   end;
 
-  HoistVarDeclarations(FBodyStatements, CallScope);
+  BodyScope := CallScope;
+  if HasParamExpressions then
+    BodyScope := CallScope.CreateChild(skFunction, FName + ':body');
+
+  Context.Scope := BodyScope;
+
+  HoistVarDeclarations(FBodyStatements, BodyScope,
+    Context.CompatibilityNonStrictMode and Context.NonStrictMode);
+  PredeclareFunctionBodyLexicalDeclarations(FBodyStatements, BodyScope);
   HoistFunctionDeclarations(FBodyStatements, Context);
-  Result := TGocciaGeneratorContinuation.Create(FBodyStatements, CallScope,
+  Result := TGocciaGeneratorContinuation.Create(FBodyStatements, BodyScope,
     Context, AIsAsyncGenerator);
 end;
 

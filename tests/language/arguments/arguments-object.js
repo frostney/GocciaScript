@@ -18,6 +18,19 @@ describe("arguments object", () => {
     expect(capture(11)).toEqual([1, 11, 11, true]);
   });
 
+  test("arguments object iterator matches Array prototype iterator", () => {
+    function mapped(first) {
+      return Object.getOwnPropertyDescriptor(arguments, Symbol.iterator).value;
+    }
+
+    function unmapped(first = "default") {
+      return Object.getOwnPropertyDescriptor(arguments, Symbol.iterator).value;
+    }
+
+    expect(mapped("value")).toBe([][Symbol.iterator]);
+    expect(unmapped("value")).toBe([][Symbol.iterator]);
+  });
+
   test("simple parameter arguments alias parameter bindings", () => {
     function capture(first, second) {
       const before = [arguments[0], first, arguments[1], second];

@@ -10,10 +10,13 @@ uses
   Goccia.Values.Primitives;
 
 type
+  TGocciaBytecodeHandlerKind = (bhkCatch, bhkFinally);
+
   TGocciaBytecodeHandlerEntry = record
     CatchIP: Integer;
     CatchRegister: UInt8;
     FrameDepth: Integer;
+    Kind: TGocciaBytecodeHandlerKind;
   end;
 
   TGocciaBytecodeHandlerEntryArray = array of TGocciaBytecodeHandlerEntry;
@@ -24,7 +27,8 @@ type
     FCount: Integer;
   public
     procedure Push(const ACatchIP: Integer; const ACatchRegister: UInt8;
-      const AFrameDepth: Integer);
+      const AFrameDepth: Integer;
+      const AKind: TGocciaBytecodeHandlerKind = bhkCatch);
     procedure Pop;
     procedure CopyFrom(const AStartIndex: Integer;
       out AEntries: TGocciaBytecodeHandlerEntryArray);
@@ -64,13 +68,15 @@ begin
 end;
 
 procedure TGocciaBytecodeHandlerStack.Push(const ACatchIP: Integer;
-  const ACatchRegister: UInt8; const AFrameDepth: Integer);
+  const ACatchRegister: UInt8; const AFrameDepth: Integer;
+  const AKind: TGocciaBytecodeHandlerKind);
 begin
   if FCount >= Length(FEntries) then
     SetLength(FEntries, FCount * 2 + 8);
   FEntries[FCount].CatchIP := ACatchIP;
   FEntries[FCount].CatchRegister := ACatchRegister;
   FEntries[FCount].FrameDepth := AFrameDepth;
+  FEntries[FCount].Kind := AKind;
   Inc(FCount);
 end;
 

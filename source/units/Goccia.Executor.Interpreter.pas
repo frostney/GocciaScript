@@ -102,7 +102,7 @@ begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   PredeclareModuleLexicalDeclarations(AProgram, AContext.Scope);
   if FInterpreter.VarEnabled then
-    HoistVarDeclarations(AProgram.Body, AContext.Scope);
+    HoistVarDeclarations(AProgram.Body, AContext.Scope, False);
   if FInterpreter.FunctionEnabled then
     HoistFunctionDeclarations(AProgram.Body, AContext);
   ExecutionContext := nil;
@@ -116,6 +116,7 @@ begin
          (AProgram.Body[I] is TGocciaReExportDeclaration) then
       begin
         CF := EvaluateStatement(AProgram.Body[I], AContext);
+        CF := CF.UpdateEmpty(Result);
         if CF.Kind = cfkReturn then Exit(CF.Value);
       end;
 
@@ -125,6 +126,7 @@ begin
          (AProgram.Body[I] is TGocciaReExportDeclaration) then
         Continue;
       CF := EvaluateStatement(AProgram.Body[I], AContext);
+      CF := CF.UpdateEmpty(Result);
       Result := CF.Value;
       if CF.Kind = cfkReturn then Exit;
     end;
@@ -164,6 +166,7 @@ begin
   Context.Realm := FRealm;
   Context.CurrentFilePath := FSourcePath;
   Context.NonStrictMode := AScope.NonStrictMode;
+  Context.CompatibilityNonStrictMode := AScope.EffectiveNonStrictMode;
   Result := EvaluateModuleBody(
     TGocciaInterpreterModule(AModule).Prog, Context);
   TGocciaInterpreterModule(AModule).FProgram := nil;

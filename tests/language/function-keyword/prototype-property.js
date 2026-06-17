@@ -418,11 +418,9 @@ test("async arrow function does NOT have own prototype property", () => {
   expect(Object.prototype.hasOwnProperty.call(f, "prototype")).toBe(false);
 });
 
-// ES2026 §15.4.4 MethodDefinition uses DefineMethod, which calls
-// OrdinaryFunctionCreate without MakeConstructor.  None of the method-definition
-// shorthand forms receive an own `prototype` property.  Generator methods still
-// inherit %GeneratorFunction.prototype%.prototype / %AsyncGeneratorFunction%
-// .prototype.prototype through their function object's [[Prototype]].
+// ES2026 method definitions are not constructable, but generator and async
+// generator methods still receive the generator function `prototype` data
+// property used by yielded generator objects.
 
 test("object method shorthand: concise method does NOT have prototype", () => {
   const obj = {
@@ -434,14 +432,14 @@ test("object method shorthand: concise method does NOT have prototype", () => {
   expect(Object.prototype.hasOwnProperty.call(obj.method, "prototype")).toBe(false);
 });
 
-test("object method shorthand: generator method does NOT have prototype", () => {
+test("object method shorthand: generator method has generator prototype", () => {
   const obj = {
     *gen() {
       yield 1;
     },
   };
-  expect(obj.gen.prototype).toBe(Object.getPrototypeOf(obj.gen).prototype);
-  expect(Object.prototype.hasOwnProperty.call(obj.gen, "prototype")).toBe(false);
+  expect(Object.prototype.hasOwnProperty.call(obj.gen, "prototype")).toBe(true);
+  expect(Object.getPrototypeOf(obj.gen.prototype)).toBe(Object.getPrototypeOf(function* () {}).prototype);
 });
 
 test("object method shorthand: async method does NOT have prototype", () => {
@@ -454,14 +452,14 @@ test("object method shorthand: async method does NOT have prototype", () => {
   expect(Object.prototype.hasOwnProperty.call(obj.method, "prototype")).toBe(false);
 });
 
-test("object method shorthand: async generator method does NOT have prototype", () => {
+test("object method shorthand: async generator method has async generator prototype", () => {
   const obj = {
     async *gen() {
       yield 1;
     },
   };
-  expect(obj.gen.prototype).toBe(Object.getPrototypeOf(obj.gen).prototype);
-  expect(Object.prototype.hasOwnProperty.call(obj.gen, "prototype")).toBe(false);
+  expect(Object.prototype.hasOwnProperty.call(obj.gen, "prototype")).toBe(true);
+  expect(Object.getPrototypeOf(obj.gen.prototype)).toBe(Object.getPrototypeOf(async function* () {}).prototype);
 });
 
 test("object method shorthand: getter does NOT have prototype", () => {
@@ -489,14 +487,14 @@ test("class instance method: concise method does NOT have prototype", () => {
   expect(C.prototype.method.prototype).toBeUndefined();
 });
 
-test("class instance method: generator method does NOT have prototype", () => {
+test("class instance method: generator method has generator prototype", () => {
   class C {
     *gen() {
       yield 1;
     }
   }
-  expect(C.prototype.gen.prototype).toBe(Object.getPrototypeOf(C.prototype.gen).prototype);
-  expect(Object.prototype.hasOwnProperty.call(C.prototype.gen, "prototype")).toBe(false);
+  expect(Object.prototype.hasOwnProperty.call(C.prototype.gen, "prototype")).toBe(true);
+  expect(Object.getPrototypeOf(C.prototype.gen.prototype)).toBe(Object.getPrototypeOf(function* () {}).prototype);
 });
 
 test("class instance method: async method does NOT have prototype", () => {
@@ -506,14 +504,14 @@ test("class instance method: async method does NOT have prototype", () => {
   expect(C.prototype.method.prototype).toBeUndefined();
 });
 
-test("class instance method: async generator method does NOT have prototype", () => {
+test("class instance method: async generator method has async generator prototype", () => {
   class C {
     async *gen() {
       yield 1;
     }
   }
-  expect(C.prototype.gen.prototype).toBe(Object.getPrototypeOf(C.prototype.gen).prototype);
-  expect(Object.prototype.hasOwnProperty.call(C.prototype.gen, "prototype")).toBe(false);
+  expect(Object.prototype.hasOwnProperty.call(C.prototype.gen, "prototype")).toBe(true);
+  expect(Object.getPrototypeOf(C.prototype.gen.prototype)).toBe(Object.getPrototypeOf(async function* () {}).prototype);
 });
 
 test("class static method: concise method does NOT have prototype", () => {
@@ -523,14 +521,14 @@ test("class static method: concise method does NOT have prototype", () => {
   expect(C.method.prototype).toBeUndefined();
 });
 
-test("class static method: generator method does NOT have prototype", () => {
+test("class static method: generator method has generator prototype", () => {
   class C {
     static *gen() {
       yield 1;
     }
   }
-  expect(C.gen.prototype).toBe(Object.getPrototypeOf(C.gen).prototype);
-  expect(Object.prototype.hasOwnProperty.call(C.gen, "prototype")).toBe(false);
+  expect(Object.prototype.hasOwnProperty.call(C.gen, "prototype")).toBe(true);
+  expect(Object.getPrototypeOf(C.gen.prototype)).toBe(Object.getPrototypeOf(function* () {}).prototype);
 });
 
 test("class static method: async method does NOT have prototype", () => {
@@ -540,12 +538,12 @@ test("class static method: async method does NOT have prototype", () => {
   expect(C.method.prototype).toBeUndefined();
 });
 
-test("class static method: async generator method does NOT have prototype", () => {
+test("class static method: async generator method has async generator prototype", () => {
   class C {
     static async *gen() {
       yield 1;
     }
   }
-  expect(C.gen.prototype).toBe(Object.getPrototypeOf(C.gen).prototype);
-  expect(Object.prototype.hasOwnProperty.call(C.gen, "prototype")).toBe(false);
+  expect(Object.prototype.hasOwnProperty.call(C.gen, "prototype")).toBe(true);
+  expect(Object.getPrototypeOf(C.gen.prototype)).toBe(Object.getPrototypeOf(async function* () {}).prototype);
 });

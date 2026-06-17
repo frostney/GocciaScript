@@ -50,6 +50,7 @@ type
     function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; override;
     procedure SetProperty(const AName: string; const AValue: TGocciaValue); override;
     function HasOwnProperty(const AName: string): Boolean; override;
+    function DeleteProperty(const AName: string): Boolean; override;
     function GetOwnPropertyKeys: TArray<string>; override;
     function GetAllPropertyNames: TArray<string>; override;
     function GetOwnPropertyDescriptor(const AName: string): TGocciaPropertyDescriptor; override;
@@ -59,6 +60,7 @@ type
 
     procedure InitializeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); override;
     procedure MarkReferences; override;
+    procedure Freeze; override;
 
     class procedure ExposePrototype(const AConstructor: TGocciaValue);
 
@@ -1212,6 +1214,12 @@ begin
   end;
 end;
 
+procedure TGocciaArrayValue.Freeze;
+begin
+  FLengthWritable := False;
+  inherited Freeze;
+end;
+
 function TGocciaArrayValue.ToStringTag: string;
 begin
   Result := 'Array';
@@ -1303,6 +1311,11 @@ begin
       Exit;
     end;
   end;
+
+  if FFrozen and (AIndex < FElements.Count) and
+     not IsArrayHole(FElements[AIndex]) then
+    ThrowTypeError(Format(SErrorCannotAssignReadOnly, [IntToStr(AIndex)]),
+      SSuggestCannotDeleteNonConfigurable);
 
   if (AIndex >= FLength) and not FLengthWritable then
     ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [IntToStr(AIndex)]),
@@ -3244,6 +3257,12 @@ begin
       Exit;
     end;
 
+    if FFrozen and CanStoreDenseElementIndex(Index, FElements.Count) and
+       (Index < FElements.Count) and
+       not IsArrayHole(FElements[Integer(Index)]) then
+      ThrowTypeError(Format(SErrorCannotAssignReadOnly, [AName]),
+        SSuggestCannotDeleteNonConfigurable);
+
     if (Index >= FLength) and not FLengthWritable then
       ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [AName]),
         SSuggestCannotDeleteNonConfigurable);
@@ -3295,6 +3314,27 @@ begin
     Result := True
   else
     Result := inherited HasOwnProperty(AName);
+end;
+
+function TGocciaArrayValue.DeleteProperty(const AName: string): Boolean;
+var
+  Index: Int64;
+begin
+  if AName = PROP_LENGTH then
+    Exit(False);
+
+  if TryParseArrayElementIndex(AName, Index) and
+     CanStoreDenseElementIndex(Index, FElements.Count) and
+     (Index < FElements.Count) and
+     not IsArrayHole(FElements[Integer(Index)]) then
+  begin
+    if FSealed or FFrozen then
+      Exit(False);
+    FElements[Integer(Index)] := TGocciaHoleValue.HoleValue;
+    Exit(True);
+  end;
+
+  Result := inherited DeleteProperty(AName);
 end;
 
 function TGocciaArrayValue.GetOwnPropertyKeys: TArray<string>;
@@ -3369,7 +3409,17 @@ begin
      CanStoreDenseElementIndex(Index, FElements.Count) and
      (Index < FElements.Count) and
      not IsArrayHole(FElements[Integer(Index)]) then
-    Result := TGocciaPropertyDescriptorData.Create(FElements[Integer(Index)], [pfEnumerable, pfConfigurable, pfWritable])
+  begin
+    if FFrozen then
+      Result := TGocciaPropertyDescriptorData.Create(
+        FElements[Integer(Index)], [pfEnumerable])
+    else if FSealed then
+      Result := TGocciaPropertyDescriptorData.Create(
+        FElements[Integer(Index)], [pfEnumerable, pfWritable])
+    else
+      Result := TGocciaPropertyDescriptorData.Create(
+        FElements[Integer(Index)], [pfEnumerable, pfConfigurable, pfWritable]);
+  end
   else if AName = PROP_LENGTH then
   begin
     if FLength < FElements.Count then

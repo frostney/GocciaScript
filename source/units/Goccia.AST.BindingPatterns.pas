@@ -17,11 +17,14 @@ procedure CollectPatternBindingNames(const APattern: TGocciaDestructuringPattern
 function ParameterListBindsName(const AParameters: TGocciaParameterArray;
   const AName: string): Boolean;
 procedure CollectVarBindingNamesFromNode(const ANode: TGocciaASTNode;
-  const ANames: TStrings);
+  const ANames: TStrings;
+  const AIncludeAnnexBBlockFunctions: Boolean = True);
 procedure CollectVarBindingNamesFromStatements(
-  const AStatements: TObjectList<TGocciaStatement>; const ANames: TStrings);
+  const AStatements: TObjectList<TGocciaStatement>; const ANames: TStrings;
+  const AIncludeAnnexBBlockFunctions: Boolean = True);
 procedure CollectVarBindingNamesFromNodes(
-  const ANodes: TObjectList<TGocciaASTNode>; const ANames: TStrings);
+  const ANodes: TObjectList<TGocciaASTNode>; const ANames: TStrings;
+  const AIncludeAnnexBBlockFunctions: Boolean = True);
 
 implementation
 
@@ -94,8 +97,9 @@ begin
   Result := False;
 end;
 
-procedure CollectVarBindingNamesFromNode(const ANode: TGocciaASTNode;
-  const ANames: TStrings);
+procedure CollectVarBindingNamesFromNodeInternal(const ANode: TGocciaASTNode;
+  const ANames: TStrings; const AIncludeAnnexBBlockFunctions: Boolean;
+  const AAtVarScopedLevel: Boolean);
 var
   Block: TGocciaBlockStatement;
   IfStmt: TGocciaIfStatement;
@@ -119,12 +123,14 @@ begin
   if ANode is TGocciaExportVariableDeclaration then
   begin
     ExportVarDecl := TGocciaExportVariableDeclaration(ANode);
-    CollectVarBindingNamesFromNode(ExportVarDecl.Declaration, ANames);
+    CollectVarBindingNamesFromNodeInternal(ExportVarDecl.Declaration, ANames,
+      AIncludeAnnexBBlockFunctions, AAtVarScopedLevel);
   end
   else if ANode is TGocciaExportDestructuringDeclaration then
   begin
     ExportDestructDecl := TGocciaExportDestructuringDeclaration(ANode);
-    CollectVarBindingNamesFromNode(ExportDestructDecl.Declaration, ANames);
+    CollectVarBindingNamesFromNodeInternal(ExportDestructDecl.Declaration,
+      ANames, AIncludeAnnexBBlockFunctions, AAtVarScopedLevel);
   end
   else if ANode is TGocciaVariableDeclaration then
   begin
@@ -133,9 +139,17 @@ begin
       for I := 0 to Length(VarDecl.Variables) - 1 do
         AddBindingName(ANames, VarDecl.Variables[I].Name, True);
   end
-  else if ANode is TGocciaFunctionDeclaration then
+  else if (ANode is TGocciaFunctionDeclaration) and
+          (AAtVarScopedLevel or
+          (AIncludeAnnexBBlockFunctions and
+          not TGocciaFunctionDeclaration(ANode).FunctionExpression.IsAsync and
+          not TGocciaFunctionDeclaration(ANode).FunctionExpression.IsGenerator)) then
     AddBindingName(ANames, TGocciaFunctionDeclaration(ANode).Name, True)
-  else if ANode is TGocciaExportFunctionDeclaration then
+  else if (ANode is TGocciaExportFunctionDeclaration) and
+          (AAtVarScopedLevel or
+          (AIncludeAnnexBBlockFunctions and
+          not TGocciaExportFunctionDeclaration(ANode).Declaration.FunctionExpression.IsAsync and
+          not TGocciaExportFunctionDeclaration(ANode).Declaration.FunctionExpression.IsGenerator)) then
     AddBindingName(ANames,
       TGocciaExportFunctionDeclaration(ANode).Declaration.Name, True)
   else if ANode is TGocciaDestructuringDeclaration then
@@ -148,13 +162,16 @@ begin
   begin
     Block := TGocciaBlockStatement(ANode);
     for I := 0 to Block.Nodes.Count - 1 do
-      CollectVarBindingNamesFromNode(Block.Nodes[I], ANames);
+      CollectVarBindingNamesFromNodeInternal(Block.Nodes[I], ANames,
+        AIncludeAnnexBBlockFunctions, False);
   end
   else if ANode is TGocciaIfStatement then
   begin
     IfStmt := TGocciaIfStatement(ANode);
-    CollectVarBindingNamesFromNode(IfStmt.Consequent, ANames);
-    CollectVarBindingNamesFromNode(IfStmt.Alternate, ANames);
+    CollectVarBindingNamesFromNodeInternal(IfStmt.Consequent, ANames,
+      AIncludeAnnexBBlockFunctions, False);
+    CollectVarBindingNamesFromNodeInternal(IfStmt.Alternate, ANames,
+      AIncludeAnnexBBlockFunctions, False);
   end
   else if ANode is TGocciaForOfStatement then
   begin
@@ -166,7 +183,8 @@ begin
       else
         AddBindingName(ANames, ForOf.BindingName, True);
     end;
-    CollectVarBindingNamesFromNode(ForOf.Body, ANames);
+    CollectVarBindingNamesFromNodeInternal(ForOf.Body, ANames,
+      AIncludeAnnexBBlockFunctions, False);
   end
   else if ANode is TGocciaForInStatement then
   begin
@@ -178,67 +196,89 @@ begin
       else
         AddBindingName(ANames, ForIn.BindingName, True);
     end;
-    CollectVarBindingNamesFromNode(ForIn.Body, ANames);
+    CollectVarBindingNamesFromNodeInternal(ForIn.Body, ANames,
+      AIncludeAnnexBBlockFunctions, False);
   end
   else if ANode is TGocciaForStatement then
   begin
     ForStmt := TGocciaForStatement(ANode);
     if Assigned(ForStmt.Init) then
-      CollectVarBindingNamesFromNode(ForStmt.Init, ANames);
-    CollectVarBindingNamesFromNode(ForStmt.Body, ANames);
+      CollectVarBindingNamesFromNodeInternal(ForStmt.Init, ANames,
+        AIncludeAnnexBBlockFunctions, AAtVarScopedLevel);
+    CollectVarBindingNamesFromNodeInternal(ForStmt.Body, ANames,
+      AIncludeAnnexBBlockFunctions, False);
   end
   else if ANode is TGocciaWhileStatement then
   begin
     WhileStmt := TGocciaWhileStatement(ANode);
-    CollectVarBindingNamesFromNode(WhileStmt.Body, ANames);
+    CollectVarBindingNamesFromNodeInternal(WhileStmt.Body, ANames,
+      AIncludeAnnexBBlockFunctions, False);
   end
   else if ANode is TGocciaDoWhileStatement then
   begin
     DoWhileStmt := TGocciaDoWhileStatement(ANode);
-    CollectVarBindingNamesFromNode(DoWhileStmt.Body, ANames);
+    CollectVarBindingNamesFromNodeInternal(DoWhileStmt.Body, ANames,
+      AIncludeAnnexBBlockFunctions, False);
   end
   else if ANode is TGocciaWithStatement then
   begin
     WithStmt := TGocciaWithStatement(ANode);
-    CollectVarBindingNamesFromNode(WithStmt.Body, ANames);
+    CollectVarBindingNamesFromNodeInternal(WithStmt.Body, ANames,
+      AIncludeAnnexBBlockFunctions, False);
   end
   else if ANode is TGocciaTryStatement then
   begin
     TryStmt := TGocciaTryStatement(ANode);
-    CollectVarBindingNamesFromNode(TryStmt.Block, ANames);
-    CollectVarBindingNamesFromNode(TryStmt.CatchBlock, ANames);
-    CollectVarBindingNamesFromNode(TryStmt.FinallyBlock, ANames);
+    CollectVarBindingNamesFromNodeInternal(TryStmt.Block, ANames,
+      AIncludeAnnexBBlockFunctions, False);
+    CollectVarBindingNamesFromNodeInternal(TryStmt.CatchBlock, ANames,
+      AIncludeAnnexBBlockFunctions, False);
+    CollectVarBindingNamesFromNodeInternal(TryStmt.FinallyBlock, ANames,
+      AIncludeAnnexBBlockFunctions, False);
   end
   else if ANode is TGocciaSwitchStatement then
   begin
     SwitchStmt := TGocciaSwitchStatement(ANode);
     for I := 0 to SwitchStmt.Cases.Count - 1 do
       for J := 0 to SwitchStmt.Cases[I].Consequent.Count - 1 do
-        CollectVarBindingNamesFromNode(
-          SwitchStmt.Cases[I].Consequent[J], ANames);
+        CollectVarBindingNamesFromNodeInternal(
+          SwitchStmt.Cases[I].Consequent[J], ANames,
+          AIncludeAnnexBBlockFunctions, False);
   end;
 end;
 
+procedure CollectVarBindingNamesFromNode(const ANode: TGocciaASTNode;
+  const ANames: TStrings;
+  const AIncludeAnnexBBlockFunctions: Boolean);
+begin
+  CollectVarBindingNamesFromNodeInternal(ANode, ANames,
+    AIncludeAnnexBBlockFunctions, True);
+end;
+
 procedure CollectVarBindingNamesFromStatements(
-  const AStatements: TObjectList<TGocciaStatement>; const ANames: TStrings);
+  const AStatements: TObjectList<TGocciaStatement>; const ANames: TStrings;
+  const AIncludeAnnexBBlockFunctions: Boolean);
 var
   I: Integer;
 begin
   if not Assigned(AStatements) then
     Exit;
   for I := 0 to AStatements.Count - 1 do
-    CollectVarBindingNamesFromNode(AStatements[I], ANames);
+    CollectVarBindingNamesFromNodeInternal(AStatements[I], ANames,
+      AIncludeAnnexBBlockFunctions, True);
 end;
 
 procedure CollectVarBindingNamesFromNodes(
-  const ANodes: TObjectList<TGocciaASTNode>; const ANames: TStrings);
+  const ANodes: TObjectList<TGocciaASTNode>; const ANames: TStrings;
+  const AIncludeAnnexBBlockFunctions: Boolean);
 var
   I: Integer;
 begin
   if not Assigned(ANodes) then
     Exit;
   for I := 0 to ANodes.Count - 1 do
-    CollectVarBindingNamesFromNode(ANodes[I], ANames);
+    CollectVarBindingNamesFromNodeInternal(ANodes[I], ANames,
+      AIncludeAnnexBBlockFunctions, True);
 end;
 
 end.

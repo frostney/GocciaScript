@@ -46,7 +46,7 @@ end;
 
 function TLexicalBinding.CanAccess: Boolean;
 begin
-  Result := Initialized or (DeclarationType in [dtParameter, dtVar]);
+  Result := Initialized or (DeclarationType = dtVar);
 end;
 
 end.

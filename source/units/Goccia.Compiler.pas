@@ -381,7 +381,11 @@ begin
     Result := Goccia.Compiler.Statements.StatementAlwaysAbrupt(Ctx, AStmt);
 end;
 
-procedure HoistVarLocals(const ANode: TGocciaASTNode; const AScope: TGocciaCompilerScope); forward;
+procedure HoistVarLocals(const ANode: TGocciaASTNode;
+  const AScope: TGocciaCompilerScope;
+  const AIncludeAnnexBBlockFunctions: Boolean;
+  const AAtVarScopedLevel: Boolean;
+  const ASkipUninitializedVars: Boolean = False); forward;
 
 // Pre-declare all identifier bindings from a destructuring pattern so that
 // hoisted function declarations can resolve upvalue captures.
@@ -638,6 +642,8 @@ var
   HasUsing, HasFunctionDecl: Boolean;
   StatementAbrupt: Boolean;
   SavedFinally: TObject;
+  PredeclaredLexicalStart, PredeclaredLexicalIndex: Integer;
+  PredeclaredLocal: TGocciaCompilerLocal;
 begin
   SavedFinally := Goccia.Compiler.Statements.SavePendingFinally;
   try
@@ -647,7 +653,8 @@ begin
 
       // Hoist var declarations to function scope
       for I := 0 to Block.Nodes.Count - 1 do
-        HoistVarLocals(Block.Nodes[I], FCurrentScope);
+        HoistVarLocals(Block.Nodes[I], FCurrentScope,
+          FNonStrictMode and not FCurrentTemplate.StrictCode, True);
 
       // Check if there are function declarations to hoist
       HasFunctionDecl := False;
@@ -662,8 +669,17 @@ begin
       begin
         // Pre-declare lexical locals so function declarations can resolve
         // upvalue captures for let/const variables declared later in the block
+        PredeclaredLexicalStart := FCurrentScope.LocalCount;
         for I := 0 to Block.Nodes.Count - 1 do
           PredeclareLexicalLocals(Block.Nodes[I], FCurrentScope);
+        for PredeclaredLexicalIndex := PredeclaredLexicalStart to
+          FCurrentScope.LocalCount - 1 do
+        begin
+          PredeclaredLocal := FCurrentScope.GetLocal(PredeclaredLexicalIndex);
+          if not PredeclaredLocal.IsVar then
+            EmitInstruction(BuildContext, EncodeABC(OP_LOAD_HOLE,
+              PredeclaredLocal.Slot, 0, 0));
+        end;
 
         // Hoist function declarations: compile initializers before other statements
         for I := 0 to Block.Nodes.Count - 1 do
@@ -733,7 +749,11 @@ begin
   end;
 end;
 
-procedure HoistVarLocals(const ANode: TGocciaASTNode; const AScope: TGocciaCompilerScope);
+procedure HoistVarLocals(const ANode: TGocciaASTNode;
+  const AScope: TGocciaCompilerScope;
+  const AIncludeAnnexBBlockFunctions: Boolean;
+  const AAtVarScopedLevel: Boolean;
+  const ASkipUninitializedVars: Boolean = False);
 var
   Block: TGocciaBlockStatement;
   IfStmt: TGocciaIfStatement;
@@ -754,18 +774,30 @@ begin
     VarDecl := TGocciaVariableDeclaration(ANode);
     if VarDecl.IsVar then
       for I := 0 to High(VarDecl.Variables) do
-        AScope.DeclareVarLocal(VarDecl.Variables[I].Name);
+        if not (ASkipUninitializedVars and
+           (not VarDecl.Variables[I].HasInitializer)) then
+          AScope.DeclareVarLocal(VarDecl.Variables[I].Name);
   end
-  else if ANode is TGocciaFunctionDeclaration then
+  else if (ANode is TGocciaFunctionDeclaration) and
+          (AAtVarScopedLevel or
+          (AIncludeAnnexBBlockFunctions and
+          not TGocciaFunctionDeclaration(ANode).FunctionExpression.IsAsync and
+          not TGocciaFunctionDeclaration(ANode).FunctionExpression.IsGenerator)) then
     AScope.DeclareVarLocal(TGocciaFunctionDeclaration(ANode).Name)
   else if ANode is TGocciaExportVariableDeclaration then
   begin
     VarDecl := TGocciaExportVariableDeclaration(ANode).Declaration;
     if VarDecl.IsVar then
       for I := 0 to High(VarDecl.Variables) do
-        AScope.DeclareVarLocal(VarDecl.Variables[I].Name);
+        if not (ASkipUninitializedVars and
+           (not VarDecl.Variables[I].HasInitializer)) then
+          AScope.DeclareVarLocal(VarDecl.Variables[I].Name);
   end
-  else if ANode is TGocciaExportFunctionDeclaration then
+  else if (ANode is TGocciaExportFunctionDeclaration) and
+          (AAtVarScopedLevel or
+          (AIncludeAnnexBBlockFunctions and
+          not TGocciaExportFunctionDeclaration(ANode).Declaration.FunctionExpression.IsAsync and
+          not TGocciaExportFunctionDeclaration(ANode).Declaration.FunctionExpression.IsGenerator)) then
     AScope.DeclareVarLocal(
       TGocciaExportFunctionDeclaration(ANode).Declaration.Name)
   else if ANode is TGocciaDestructuringDeclaration then
@@ -784,19 +816,23 @@ begin
   begin
     Block := TGocciaBlockStatement(ANode);
     for I := 0 to Block.Nodes.Count - 1 do
-      HoistVarLocals(Block.Nodes[I], AScope);
+      HoistVarLocals(Block.Nodes[I], AScope,
+        AIncludeAnnexBBlockFunctions, False, ASkipUninitializedVars);
   end
   else if ANode is TGocciaIfStatement then
   begin
     IfStmt := TGocciaIfStatement(ANode);
-    HoistVarLocals(IfStmt.Consequent, AScope);
+    HoistVarLocals(IfStmt.Consequent, AScope,
+      AIncludeAnnexBBlockFunctions, False, ASkipUninitializedVars);
     if Assigned(IfStmt.Alternate) then
-      HoistVarLocals(IfStmt.Alternate, AScope);
+      HoistVarLocals(IfStmt.Alternate, AScope,
+        AIncludeAnnexBBlockFunctions, False, ASkipUninitializedVars);
   end
   else if ANode is TGocciaForOfStatement then
   begin
     ForOf := TGocciaForOfStatement(ANode);
-    HoistVarLocals(ForOf.Body, AScope);
+    HoistVarLocals(ForOf.Body, AScope,
+      AIncludeAnnexBBlockFunctions, False, ASkipUninitializedVars);
   end
   else if ANode is TGocciaForInStatement then
   begin
@@ -808,56 +844,212 @@ begin
       else if ForIn.BindingName <> '' then
         AScope.DeclareVarLocal(ForIn.BindingName);
     end;
-    HoistVarLocals(ForIn.Body, AScope);
+    HoistVarLocals(ForIn.Body, AScope,
+      AIncludeAnnexBBlockFunctions, False, ASkipUninitializedVars);
   end
   else if ANode is TGocciaForStatement then
   begin
     ForStmt := TGocciaForStatement(ANode);
     if Assigned(ForStmt.Init) then
-      HoistVarLocals(ForStmt.Init, AScope);
-    HoistVarLocals(ForStmt.Body, AScope);
+      HoistVarLocals(ForStmt.Init, AScope,
+        AIncludeAnnexBBlockFunctions, AAtVarScopedLevel,
+        ASkipUninitializedVars);
+    HoistVarLocals(ForStmt.Body, AScope,
+      AIncludeAnnexBBlockFunctions, False, ASkipUninitializedVars);
   end
   else if ANode is TGocciaWhileStatement then
   begin
     WhileStmt := TGocciaWhileStatement(ANode);
-    HoistVarLocals(WhileStmt.Body, AScope);
+    HoistVarLocals(WhileStmt.Body, AScope,
+      AIncludeAnnexBBlockFunctions, False, ASkipUninitializedVars);
   end
   else if ANode is TGocciaDoWhileStatement then
   begin
     DoWhileStmt := TGocciaDoWhileStatement(ANode);
-    HoistVarLocals(DoWhileStmt.Body, AScope);
+    HoistVarLocals(DoWhileStmt.Body, AScope,
+      AIncludeAnnexBBlockFunctions, False, ASkipUninitializedVars);
   end
   else if ANode is TGocciaWithStatement then
   begin
     WithStmt := TGocciaWithStatement(ANode);
-    HoistVarLocals(WithStmt.Body, AScope);
+    HoistVarLocals(WithStmt.Body, AScope,
+      AIncludeAnnexBBlockFunctions, False, ASkipUninitializedVars);
   end
   else if ANode is TGocciaTryStatement then
   begin
     TryStmt := TGocciaTryStatement(ANode);
     if Assigned(TryStmt.Block) then
-      HoistVarLocals(TryStmt.Block, AScope);
+      HoistVarLocals(TryStmt.Block, AScope,
+        AIncludeAnnexBBlockFunctions, False, ASkipUninitializedVars);
     if Assigned(TryStmt.CatchBlock) then
-      HoistVarLocals(TryStmt.CatchBlock, AScope);
+      HoistVarLocals(TryStmt.CatchBlock, AScope,
+        AIncludeAnnexBBlockFunctions, False, ASkipUninitializedVars);
     if Assigned(TryStmt.FinallyBlock) then
-      HoistVarLocals(TryStmt.FinallyBlock, AScope);
+      HoistVarLocals(TryStmt.FinallyBlock, AScope,
+        AIncludeAnnexBBlockFunctions, False, ASkipUninitializedVars);
   end
   else if ANode is TGocciaSwitchStatement then
   begin
     SwitchStmt := TGocciaSwitchStatement(ANode);
     for I := 0 to SwitchStmt.Cases.Count - 1 do
       for J := 0 to SwitchStmt.Cases[I].Consequent.Count - 1 do
-        HoistVarLocals(SwitchStmt.Cases[I].Consequent[J], AScope);
+        HoistVarLocals(SwitchStmt.Cases[I].Consequent[J], AScope,
+          AIncludeAnnexBBlockFunctions, False, ASkipUninitializedVars);
   end;
 end;
 
 procedure HoistVarLocalsFromStatements(const AStatements: TObjectList<TGocciaStatement>;
-  const AScope: TGocciaCompilerScope);
+  const AScope: TGocciaCompilerScope;
+  const AIncludeAnnexBBlockFunctions: Boolean;
+  const ASkipUninitializedVars: Boolean = False);
 var
   I: Integer;
 begin
   for I := 0 to AStatements.Count - 1 do
-    HoistVarLocals(AStatements[I], AScope);
+    HoistVarLocals(AStatements[I], AScope,
+      AIncludeAnnexBBlockFunctions, True, ASkipUninitializedVars);
+end;
+
+procedure AddUniqueVarName(const ANames: TStringList; const AName: string);
+begin
+  if (AName <> '') and (ANames.IndexOf(AName) < 0) then
+    ANames.Add(AName);
+end;
+
+procedure CollectUninitializedVarDeclarations(const ANode: TGocciaASTNode;
+  const ANames: TStringList);
+var
+  Block: TGocciaBlockStatement;
+  DoWhileStmt: TGocciaDoWhileStatement;
+  ForOf: TGocciaForOfStatement;
+  ForIn: TGocciaForInStatement;
+  ForStmt: TGocciaForStatement;
+  IfStmt: TGocciaIfStatement;
+  I, J: Integer;
+  SwitchStmt: TGocciaSwitchStatement;
+  TryStmt: TGocciaTryStatement;
+  VarDecl: TGocciaVariableDeclaration;
+  WhileStmt: TGocciaWhileStatement;
+  WithStmt: TGocciaWithStatement;
+begin
+  if ANode is TGocciaVariableDeclaration then
+  begin
+    VarDecl := TGocciaVariableDeclaration(ANode);
+    if VarDecl.IsVar then
+      for I := 0 to High(VarDecl.Variables) do
+        if not VarDecl.Variables[I].HasInitializer then
+          AddUniqueVarName(ANames, VarDecl.Variables[I].Name);
+  end
+  else if ANode is TGocciaExportVariableDeclaration then
+  begin
+    VarDecl := TGocciaExportVariableDeclaration(ANode).Declaration;
+    if VarDecl.IsVar then
+      for I := 0 to High(VarDecl.Variables) do
+        if not VarDecl.Variables[I].HasInitializer then
+          AddUniqueVarName(ANames, VarDecl.Variables[I].Name);
+  end
+  else if ANode is TGocciaBlockStatement then
+  begin
+    Block := TGocciaBlockStatement(ANode);
+    for I := 0 to Block.Nodes.Count - 1 do
+      CollectUninitializedVarDeclarations(Block.Nodes[I], ANames);
+  end
+  else if ANode is TGocciaIfStatement then
+  begin
+    IfStmt := TGocciaIfStatement(ANode);
+    CollectUninitializedVarDeclarations(IfStmt.Consequent, ANames);
+    if Assigned(IfStmt.Alternate) then
+      CollectUninitializedVarDeclarations(IfStmt.Alternate, ANames);
+  end
+  else if ANode is TGocciaForOfStatement then
+  begin
+    ForOf := TGocciaForOfStatement(ANode);
+    CollectUninitializedVarDeclarations(ForOf.Body, ANames);
+  end
+  else if ANode is TGocciaForInStatement then
+  begin
+    ForIn := TGocciaForInStatement(ANode);
+    CollectUninitializedVarDeclarations(ForIn.Body, ANames);
+  end
+  else if ANode is TGocciaForStatement then
+  begin
+    ForStmt := TGocciaForStatement(ANode);
+    if Assigned(ForStmt.Init) then
+      CollectUninitializedVarDeclarations(ForStmt.Init, ANames);
+    CollectUninitializedVarDeclarations(ForStmt.Body, ANames);
+  end
+  else if ANode is TGocciaWhileStatement then
+  begin
+    WhileStmt := TGocciaWhileStatement(ANode);
+    CollectUninitializedVarDeclarations(WhileStmt.Body, ANames);
+  end
+  else if ANode is TGocciaDoWhileStatement then
+  begin
+    DoWhileStmt := TGocciaDoWhileStatement(ANode);
+    CollectUninitializedVarDeclarations(DoWhileStmt.Body, ANames);
+  end
+  else if ANode is TGocciaWithStatement then
+  begin
+    WithStmt := TGocciaWithStatement(ANode);
+    CollectUninitializedVarDeclarations(WithStmt.Body, ANames);
+  end
+  else if ANode is TGocciaTryStatement then
+  begin
+    TryStmt := TGocciaTryStatement(ANode);
+    if Assigned(TryStmt.Block) then
+      CollectUninitializedVarDeclarations(TryStmt.Block, ANames);
+    if Assigned(TryStmt.CatchBlock) then
+      CollectUninitializedVarDeclarations(TryStmt.CatchBlock, ANames);
+    if Assigned(TryStmt.FinallyBlock) then
+      CollectUninitializedVarDeclarations(TryStmt.FinallyBlock, ANames);
+  end
+  else if ANode is TGocciaSwitchStatement then
+  begin
+    SwitchStmt := TGocciaSwitchStatement(ANode);
+    for I := 0 to SwitchStmt.Cases.Count - 1 do
+      for J := 0 to SwitchStmt.Cases[I].Consequent.Count - 1 do
+        CollectUninitializedVarDeclarations(
+          SwitchStmt.Cases[I].Consequent[J], ANames);
+  end;
+end;
+
+procedure EmitHoistedGlobalVarDeclarationsForNames(
+  const ACtx: TGocciaCompilationContext;
+  const ANames: TStringList);
+var
+  I: Integer;
+  NameIdx: UInt16;
+begin
+  for I := 0 to ANames.Count - 1 do
+  begin
+    NameIdx := ACtx.Template.AddConstantString(ANames[I]);
+    if NameIdx <= High(UInt8) then
+    begin
+      EmitInstruction(ACtx, EncodeABC(OP_DEFINE_GLOBAL_CONST, 0,
+        GLOBAL_DEFINE_VAR_DECL, UInt8(NameIdx)));
+      Continue;
+    end;
+    EmitInstruction(ACtx, EncodeABx(OP_DEFINE_GLOBAL_VAR_DECL_LONG, 0,
+      NameIdx));
+  end;
+end;
+
+procedure EmitUninitializedTopLevelGlobalVarDeclarations(
+  const ACtx: TGocciaCompilationContext;
+  const AStatements: TObjectList<TGocciaStatement>);
+var
+  I: Integer;
+  Names: TStringList;
+begin
+  Names := TStringList.Create;
+  try
+    Names.CaseSensitive := True;
+    for I := 0 to AStatements.Count - 1 do
+      CollectUninitializedVarDeclarations(AStatements[I], Names);
+    EmitHoistedGlobalVarDeclarationsForNames(ACtx, Names);
+  finally
+    Names.Free;
+  end;
 end;
 
 procedure MarkHoistedVarsGlobalBacked(const AScope: TGocciaCompilerScope);
@@ -943,12 +1135,16 @@ begin
   FCurrentScope.DeclareLocal('__receiver', False);
 
   try
-    // Hoist var declarations to module scope
-    HoistVarLocalsFromStatements(AProgram.Body, FCurrentScope);
+    // Hoist var declarations to module scope.
+    HoistVarLocalsFromStatements(AProgram.Body, FCurrentScope,
+      FNonStrictMode and not FCurrentTemplate.StrictCode,
+      FGlobalBackedTopLevel);
     if FGlobalBackedTopLevel then
     begin
       MarkHoistedVarsGlobalBacked(FCurrentScope);
       EmitHoistedGlobalVarDeclarations(BuildContext, FCurrentScope);
+      EmitUninitializedTopLevelGlobalVarDeclarations(BuildContext,
+        AProgram.Body);
     end;
 
     PredeclaredLexicalStart := FCurrentScope.LocalCount;

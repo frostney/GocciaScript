@@ -81,6 +81,52 @@ test("increment on computed member with string key", () => {
   expect(obj.b).toBe(11);
 });
 
+test("increment on computed member evaluates object key once", () => {
+  let keyEvaluated = false;
+  const obj = {};
+  const key = {
+    toString() {
+      if (keyEvaluated) {
+        throw new Error("key evaluated twice");
+      }
+      keyEvaluated = true;
+      return "count";
+    },
+  };
+
+  obj[key]++;
+  expect(keyEvaluated).toBe(true);
+  expect(Number.isNaN(obj.count)).toBe(true);
+});
+
+test("increment on nullish computed member checks base before property key coercion", () => {
+  const key = {
+    toString() {
+      throw new Error("key coerced");
+    },
+  };
+
+  expect(() => {
+    const base = null;
+    base[key]++;
+  }).toThrow(TypeError);
+
+  expect(() => {
+    const base = undefined;
+    ++base[key];
+  }).toThrow(TypeError);
+});
+
+test("increment on nullish computed member still evaluates property expression", () => {
+  expect(() => {
+    const base = null;
+    const key = () => {
+      throw new RangeError("property expression evaluated");
+    };
+    base[key()]++;
+  }).toThrow(RangeError);
+});
+
 test("increment on computed member with symbol key", () => {
   const sym = Symbol("counter");
   const obj = { [sym]: 5 };
@@ -201,4 +247,9 @@ test("increment on captured local coerces null and syncs", () => {
     return [get(), i];
   };
   expect(f()).toEqual([1, 1]);
+});
+
+test("increment on unresolved identifier throws ReferenceError", () => {
+  expect(() => missingPostIncrement++).toThrow(ReferenceError);
+  expect(() => ++missingPreIncrement).toThrow(ReferenceError);
 });

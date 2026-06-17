@@ -235,38 +235,132 @@ const
         '      this.#ms = makeDateEpochMilliseconds(args, Temporal.Now.timeZoneId());'#10 +
         '    }'#10 +
         '  }'#10 +
-        '  #valid() { return Number.isFinite(this.#ms); }'#10 +
-        '  #local() { return this.#valid() ? new Temporal.ZonedDateTime(BigInt(this.#ms) * 1000000n, Temporal.Now.timeZoneId()) : null; }'#10 +
-        '  #utc() { return this.#valid() ? new Temporal.ZonedDateTime(BigInt(this.#ms) * 1000000n, "UTC") : null; }'#10 +
+        '  static #valid(date: any): boolean { return Number.isFinite(date.#ms); }'#10 +
+        '  static #local(date: any): any { return Date.#valid(date) ? new Temporal.ZonedDateTime(BigInt(date.#ms) * 1000000n, Temporal.Now.timeZoneId()) : null; }'#10 +
+        '  static #utc(date: any): any { return Date.#valid(date) ? new Temporal.ZonedDateTime(BigInt(date.#ms) * 1000000n, "UTC") : null; }'#10 +
         '  getTime(): number { if (!(this instanceof Date)) throw new TypeError("Date.prototype.getTime called on non-Date"); return this.#ms; }'#10 +
         '  valueOf(): number { if (!(this instanceof Date)) throw new TypeError("Date.prototype.valueOf called on non-Date"); return this.#ms; }'#10 +
-        '  getFullYear(): number { if (!(this instanceof Date)) throw new TypeError("Date.prototype.getFullYear called on non-Date"); const z = this.#local(); return z ? z.year : NaN; }'#10 +
-        '  getMonth(): number { if (!(this instanceof Date)) throw new TypeError("Date.prototype.getMonth called on non-Date"); const z = this.#local(); return z ? z.month - 1 : NaN; }'#10 +
-        '  getDate(): number { if (!(this instanceof Date)) throw new TypeError("Date.prototype.getDate called on non-Date"); const z = this.#local(); return z ? z.day : NaN; }'#10 +
-        '  getDay(): number { if (!(this instanceof Date)) throw new TypeError("Date.prototype.getDay called on non-Date"); const z = this.#local(); return z ? z.dayOfWeek % 7 : NaN; }'#10 +
-        '  getHours(): number { if (!(this instanceof Date)) throw new TypeError("Date.prototype.getHours called on non-Date"); const z = this.#local(); return z ? z.hour : NaN; }'#10 +
-        '  getMinutes(): number { if (!(this instanceof Date)) throw new TypeError("Date.prototype.getMinutes called on non-Date"); const z = this.#local(); return z ? z.minute : NaN; }'#10 +
-        '  getSeconds(): number { if (!(this instanceof Date)) throw new TypeError("Date.prototype.getSeconds called on non-Date"); const z = this.#local(); return z ? z.second : NaN; }'#10 +
-        '  getMilliseconds(): number { if (!(this instanceof Date)) throw new TypeError("Date.prototype.getMilliseconds called on non-Date"); const z = this.#local(); return z ? z.millisecond : NaN; }'#10 +
-        '  getUTCFullYear(): number { if (!(this instanceof Date)) throw new TypeError("Date.prototype.getUTCFullYear called on non-Date"); const z = this.#utc(); return z ? z.year : NaN; }'#10 +
-        '  getUTCMonth(): number { if (!(this instanceof Date)) throw new TypeError("Date.prototype.getUTCMonth called on non-Date"); const z = this.#utc(); return z ? z.month - 1 : NaN; }'#10 +
-        '  getUTCDate(): number { if (!(this instanceof Date)) throw new TypeError("Date.prototype.getUTCDate called on non-Date"); const z = this.#utc(); return z ? z.day : NaN; }'#10 +
-        '  getUTCDay(): number { if (!(this instanceof Date)) throw new TypeError("Date.prototype.getUTCDay called on non-Date"); const z = this.#utc(); return z ? z.dayOfWeek % 7 : NaN; }'#10 +
-        '  getUTCHours(): number { if (!(this instanceof Date)) throw new TypeError("Date.prototype.getUTCHours called on non-Date"); const z = this.#utc(); return z ? z.hour : NaN; }'#10 +
-        '  getUTCMinutes(): number { if (!(this instanceof Date)) throw new TypeError("Date.prototype.getUTCMinutes called on non-Date"); const z = this.#utc(); return z ? z.minute : NaN; }'#10 +
-        '  getUTCSeconds(): number { if (!(this instanceof Date)) throw new TypeError("Date.prototype.getUTCSeconds called on non-Date"); const z = this.#utc(); return z ? z.second : NaN; }'#10 +
-        '  getUTCMilliseconds(): number { if (!(this instanceof Date)) throw new TypeError("Date.prototype.getUTCMilliseconds called on non-Date"); const z = this.#utc(); return z ? z.millisecond : NaN; }'#10 +
-        '  setDate(day: number): number {'#10 +
-        '    if (!(this instanceof Date)) throw new TypeError("Date.prototype.setDate called on non-Date");'#10 +
-        '    const z = this.#local();'#10 +
-        '    const n = Number(day);'#10 +
-        '    if (!z || !Number.isFinite(n)) { this.#ms = NaN; return NaN; }'#10 +
-        '    const next = z.add({ days: Math.trunc(n) - z.day });'#10 +
-        '    this.#ms = next.epochMilliseconds;'#10 +
+        '  [Symbol.toPrimitive](hint: string): any {'#10 +
+        '    if (!(this instanceof Date)) throw new TypeError("Date.prototype[Symbol.toPrimitive] called on non-Date");'#10 +
+        '    if (hint === "string" || hint === "default") return this.toString();'#10 +
+        '    if (hint === "number") return this.valueOf();'#10 +
+        '    throw new TypeError("Date.prototype[Symbol.toPrimitive] invalid hint");'#10 +
+        '  }'#10 +
+        '  getFullYear(): number { if (!(this instanceof Date)) throw new TypeError("Date.prototype.getFullYear called on non-Date"); const z = Date.#local(this); return z ? z.year : NaN; }'#10 +
+        '  getMonth(): number { if (!(this instanceof Date)) throw new TypeError("Date.prototype.getMonth called on non-Date"); const z = Date.#local(this); return z ? z.month - 1 : NaN; }'#10 +
+        '  getDate(): number { if (!(this instanceof Date)) throw new TypeError("Date.prototype.getDate called on non-Date"); const z = Date.#local(this); return z ? z.day : NaN; }'#10 +
+        '  getDay(): number { if (!(this instanceof Date)) throw new TypeError("Date.prototype.getDay called on non-Date"); const z = Date.#local(this); return z ? z.dayOfWeek % 7 : NaN; }'#10 +
+        '  getHours(): number { if (!(this instanceof Date)) throw new TypeError("Date.prototype.getHours called on non-Date"); const z = Date.#local(this); return z ? z.hour : NaN; }'#10 +
+        '  getMinutes(): number { if (!(this instanceof Date)) throw new TypeError("Date.prototype.getMinutes called on non-Date"); const z = Date.#local(this); return z ? z.minute : NaN; }'#10 +
+        '  getSeconds(): number { if (!(this instanceof Date)) throw new TypeError("Date.prototype.getSeconds called on non-Date"); const z = Date.#local(this); return z ? z.second : NaN; }'#10 +
+        '  getMilliseconds(): number { if (!(this instanceof Date)) throw new TypeError("Date.prototype.getMilliseconds called on non-Date"); const z = Date.#local(this); return z ? z.millisecond : NaN; }'#10 +
+        '  getUTCFullYear(): number { if (!(this instanceof Date)) throw new TypeError("Date.prototype.getUTCFullYear called on non-Date"); const z = Date.#utc(this); return z ? z.year : NaN; }'#10 +
+        '  getUTCMonth(): number { if (!(this instanceof Date)) throw new TypeError("Date.prototype.getUTCMonth called on non-Date"); const z = Date.#utc(this); return z ? z.month - 1 : NaN; }'#10 +
+        '  getUTCDate(): number { if (!(this instanceof Date)) throw new TypeError("Date.prototype.getUTCDate called on non-Date"); const z = Date.#utc(this); return z ? z.day : NaN; }'#10 +
+        '  getUTCDay(): number { if (!(this instanceof Date)) throw new TypeError("Date.prototype.getUTCDay called on non-Date"); const z = Date.#utc(this); return z ? z.dayOfWeek % 7 : NaN; }'#10 +
+        '  getUTCHours(): number { if (!(this instanceof Date)) throw new TypeError("Date.prototype.getUTCHours called on non-Date"); const z = Date.#utc(this); return z ? z.hour : NaN; }'#10 +
+        '  getUTCMinutes(): number { if (!(this instanceof Date)) throw new TypeError("Date.prototype.getUTCMinutes called on non-Date"); const z = Date.#utc(this); return z ? z.minute : NaN; }'#10 +
+        '  getUTCSeconds(): number { if (!(this instanceof Date)) throw new TypeError("Date.prototype.getUTCSeconds called on non-Date"); const z = Date.#utc(this); return z ? z.second : NaN; }'#10 +
+        '  getUTCMilliseconds(): number { if (!(this instanceof Date)) throw new TypeError("Date.prototype.getUTCMilliseconds called on non-Date"); const z = Date.#utc(this); return z ? z.millisecond : NaN; }'#10 +
+        '  static #clip(epochMilliseconds: number): number {'#10 +
+        '    const t = Math.trunc(epochMilliseconds);'#10 +
+        '    return Number.isFinite(t) && Math.abs(t) <= dateTimeClipLimit ? t : NaN;'#10 +
+        '  }'#10 +
+        '  static #epochFromParts(year: number, month: number, day: number, hour: number, minute: number, second: number, millisecond: number, timeZone: string): number {'#10 +
+        '    if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day) ||'#10 +
+        '        !Number.isFinite(hour) || !Number.isFinite(minute) || !Number.isFinite(second) ||'#10 +
+        '        !Number.isFinite(millisecond)) return NaN;'#10 +
+        '    try {'#10 +
+        '      const dt = new Temporal.PlainDateTime(Math.trunc(year), 1, 1, 0, 0, 0, 0).add({'#10 +
+        '        months: Math.trunc(month), days: Math.trunc(day) - 1,'#10 +
+        '        hours: Math.trunc(hour), minutes: Math.trunc(minute),'#10 +
+        '        seconds: Math.trunc(second), milliseconds: Math.trunc(millisecond)'#10 +
+        '      });'#10 +
+        '      return Date.#clip(dt.toZonedDateTime(timeZone).epochMilliseconds);'#10 +
+        '    } catch (e) { return NaN; }'#10 +
+        '  }'#10 +
+        '  static #setFromParts(date: any, timeZone: string, z: any, year: number, month: number, day: number, hour: number, minute: number, second: number, millisecond: number): number {'#10 +
+        '    if (!z) { date.#ms = NaN; return NaN; }'#10 +
+        '    date.#ms = Date.#epochFromParts(year, month, day, hour, minute, second, millisecond, timeZone);'#10 +
+        '    return date.#ms;'#10 +
+        '  }'#10 +
+        '  setTime(time: number): number {'#10 +
+        '    if (!(this instanceof Date)) throw new TypeError("Date.prototype.setTime called on non-Date");'#10 +
+        '    this.#ms = Date.#clip(toDateInteger(time));'#10 +
         '    return this.#ms;'#10 +
         '  }'#10 +
-        '  getTimezoneOffset(): number { if (!(this instanceof Date)) throw new TypeError("Date.prototype.getTimezoneOffset called on non-Date"); const z = this.#local(); return z ? -(z.offsetNanoseconds / 60000000000) : NaN; }'#10 +
-        '  toISOString(): string { if (!(this instanceof Date)) throw new TypeError("Date.prototype.toISOString called on non-Date"); if (!this.#valid()) throw new RangeError("Invalid time value"); return Temporal.Instant.fromEpochMilliseconds(this.#ms).toString(); }'#10 +
+        '  setMilliseconds(ms: number): number {'#10 +
+        '    if (!(this instanceof Date)) throw new TypeError("Date.prototype.setMilliseconds called on non-Date");'#10 +
+        '    const z = Date.#local(this); const n = toDateInteger(ms);'#10 +
+        '    return Date.#setFromParts(this, Temporal.Now.timeZoneId(), z, z ? z.year : NaN, z ? z.month - 1 : NaN, z ? z.day : NaN, z ? z.hour : NaN, z ? z.minute : NaN, z ? z.second : NaN, n);'#10 +
+        '  }'#10 +
+        '  setUTCMilliseconds(ms: number): number {'#10 +
+        '    if (!(this instanceof Date)) throw new TypeError("Date.prototype.setUTCMilliseconds called on non-Date");'#10 +
+        '    const z = Date.#utc(this); const n = toDateInteger(ms);'#10 +
+        '    return Date.#setFromParts(this, "UTC", z, z ? z.year : NaN, z ? z.month - 1 : NaN, z ? z.day : NaN, z ? z.hour : NaN, z ? z.minute : NaN, z ? z.second : NaN, n);'#10 +
+        '  }'#10 +
+        '  setSeconds(sec: number, ms: number = NaN): number {'#10 +
+        '    if (!(this instanceof Date)) throw new TypeError("Date.prototype.setSeconds called on non-Date");'#10 +
+        '    const z = Date.#local(this); const s = toDateInteger(sec); const milli = ms === ms ? toDateInteger(ms) : (z ? z.millisecond : NaN);'#10 +
+        '    return Date.#setFromParts(this, Temporal.Now.timeZoneId(), z, z ? z.year : NaN, z ? z.month - 1 : NaN, z ? z.day : NaN, z ? z.hour : NaN, z ? z.minute : NaN, s, milli);'#10 +
+        '  }'#10 +
+        '  setUTCSeconds(sec: number, ms: number = NaN): number {'#10 +
+        '    if (!(this instanceof Date)) throw new TypeError("Date.prototype.setUTCSeconds called on non-Date");'#10 +
+        '    const z = Date.#utc(this); const s = toDateInteger(sec); const milli = ms === ms ? toDateInteger(ms) : (z ? z.millisecond : NaN);'#10 +
+        '    return Date.#setFromParts(this, "UTC", z, z ? z.year : NaN, z ? z.month - 1 : NaN, z ? z.day : NaN, z ? z.hour : NaN, z ? z.minute : NaN, s, milli);'#10 +
+        '  }'#10 +
+        '  setMinutes(min: number, sec: number = NaN, ms: number = NaN): number {'#10 +
+        '    if (!(this instanceof Date)) throw new TypeError("Date.prototype.setMinutes called on non-Date");'#10 +
+        '    const z = Date.#local(this); const m = toDateInteger(min); const s = sec === sec ? toDateInteger(sec) : (z ? z.second : NaN); const milli = ms === ms ? toDateInteger(ms) : (z ? z.millisecond : NaN);'#10 +
+        '    return Date.#setFromParts(this, Temporal.Now.timeZoneId(), z, z ? z.year : NaN, z ? z.month - 1 : NaN, z ? z.day : NaN, z ? z.hour : NaN, m, s, milli);'#10 +
+        '  }'#10 +
+        '  setUTCMinutes(min: number, sec: number = NaN, ms: number = NaN): number {'#10 +
+        '    if (!(this instanceof Date)) throw new TypeError("Date.prototype.setUTCMinutes called on non-Date");'#10 +
+        '    const z = Date.#utc(this); const m = toDateInteger(min); const s = sec === sec ? toDateInteger(sec) : (z ? z.second : NaN); const milli = ms === ms ? toDateInteger(ms) : (z ? z.millisecond : NaN);'#10 +
+        '    return Date.#setFromParts(this, "UTC", z, z ? z.year : NaN, z ? z.month - 1 : NaN, z ? z.day : NaN, z ? z.hour : NaN, m, s, milli);'#10 +
+        '  }'#10 +
+        '  setHours(hour: number, min: number = NaN, sec: number = NaN, ms: number = NaN): number {'#10 +
+        '    if (!(this instanceof Date)) throw new TypeError("Date.prototype.setHours called on non-Date");'#10 +
+        '    const z = Date.#local(this); const h = toDateInteger(hour); const m = min === min ? toDateInteger(min) : (z ? z.minute : NaN); const s = sec === sec ? toDateInteger(sec) : (z ? z.second : NaN); const milli = ms === ms ? toDateInteger(ms) : (z ? z.millisecond : NaN);'#10 +
+        '    return Date.#setFromParts(this, Temporal.Now.timeZoneId(), z, z ? z.year : NaN, z ? z.month - 1 : NaN, z ? z.day : NaN, h, m, s, milli);'#10 +
+        '  }'#10 +
+        '  setUTCHours(hour: number, min: number = NaN, sec: number = NaN, ms: number = NaN): number {'#10 +
+        '    if (!(this instanceof Date)) throw new TypeError("Date.prototype.setUTCHours called on non-Date");'#10 +
+        '    const z = Date.#utc(this); const h = toDateInteger(hour); const m = min === min ? toDateInteger(min) : (z ? z.minute : NaN); const s = sec === sec ? toDateInteger(sec) : (z ? z.second : NaN); const milli = ms === ms ? toDateInteger(ms) : (z ? z.millisecond : NaN);'#10 +
+        '    return Date.#setFromParts(this, "UTC", z, z ? z.year : NaN, z ? z.month - 1 : NaN, z ? z.day : NaN, h, m, s, milli);'#10 +
+        '  }'#10 +
+        '  setDate(day: number): number {'#10 +
+        '    if (!(this instanceof Date)) throw new TypeError("Date.prototype.setDate called on non-Date");'#10 +
+        '    const z = Date.#local(this); const d = toDateInteger(day);'#10 +
+        '    return Date.#setFromParts(this, Temporal.Now.timeZoneId(), z, z ? z.year : NaN, z ? z.month - 1 : NaN, d, z ? z.hour : NaN, z ? z.minute : NaN, z ? z.second : NaN, z ? z.millisecond : NaN);'#10 +
+        '  }'#10 +
+        '  setUTCDate(day: number): number {'#10 +
+        '    if (!(this instanceof Date)) throw new TypeError("Date.prototype.setUTCDate called on non-Date");'#10 +
+        '    const z = Date.#utc(this); const d = toDateInteger(day);'#10 +
+        '    return Date.#setFromParts(this, "UTC", z, z ? z.year : NaN, z ? z.month - 1 : NaN, d, z ? z.hour : NaN, z ? z.minute : NaN, z ? z.second : NaN, z ? z.millisecond : NaN);'#10 +
+        '  }'#10 +
+        '  setMonth(month: number, day: number = NaN): number {'#10 +
+        '    if (!(this instanceof Date)) throw new TypeError("Date.prototype.setMonth called on non-Date");'#10 +
+        '    const z = Date.#local(this); const m = toDateInteger(month); const d = day === day ? toDateInteger(day) : (z ? z.day : NaN);'#10 +
+        '    return Date.#setFromParts(this, Temporal.Now.timeZoneId(), z, z ? z.year : NaN, m, d, z ? z.hour : NaN, z ? z.minute : NaN, z ? z.second : NaN, z ? z.millisecond : NaN);'#10 +
+        '  }'#10 +
+        '  setUTCMonth(month: number, day: number = NaN): number {'#10 +
+        '    if (!(this instanceof Date)) throw new TypeError("Date.prototype.setUTCMonth called on non-Date");'#10 +
+        '    const z = Date.#utc(this); const m = toDateInteger(month); const d = day === day ? toDateInteger(day) : (z ? z.day : NaN);'#10 +
+        '    return Date.#setFromParts(this, "UTC", z, z ? z.year : NaN, m, d, z ? z.hour : NaN, z ? z.minute : NaN, z ? z.second : NaN, z ? z.millisecond : NaN);'#10 +
+        '  }'#10 +
+        '  setFullYear(year: number, month: number = NaN, day: number = NaN): number {'#10 +
+        '    if (!(this instanceof Date)) throw new TypeError("Date.prototype.setFullYear called on non-Date");'#10 +
+        '    const z = Date.#local(this); const y = toDateInteger(year); const m = month === month ? toDateInteger(month) : (z ? z.month - 1 : 0); const d = day === day ? toDateInteger(day) : (z ? z.day : 1);'#10 +
+        '    return Date.#setFromParts(this, Temporal.Now.timeZoneId(), z || true, y, m, d, z ? z.hour : 0, z ? z.minute : 0, z ? z.second : 0, z ? z.millisecond : 0);'#10 +
+        '  }'#10 +
+        '  setUTCFullYear(year: number, month: number = NaN, day: number = NaN): number {'#10 +
+        '    if (!(this instanceof Date)) throw new TypeError("Date.prototype.setUTCFullYear called on non-Date");'#10 +
+        '    const z = Date.#utc(this); const y = toDateInteger(year); const m = month === month ? toDateInteger(month) : (z ? z.month - 1 : 0); const d = day === day ? toDateInteger(day) : (z ? z.day : 1);'#10 +
+        '    return Date.#setFromParts(this, "UTC", z || true, y, m, d, z ? z.hour : 0, z ? z.minute : 0, z ? z.second : 0, z ? z.millisecond : 0);'#10 +
+        '  }'#10 +
+        '  getTimezoneOffset(): number { if (!(this instanceof Date)) throw new TypeError("Date.prototype.getTimezoneOffset called on non-Date"); const z = Date.#local(this); return z ? -(z.offsetNanoseconds / 60000000000) : NaN; }'#10 +
+        '  toISOString(): string { if (!(this instanceof Date)) throw new TypeError("Date.prototype.toISOString called on non-Date"); if (!Date.#valid(this)) throw new RangeError("Invalid time value"); return Temporal.Instant.fromEpochMilliseconds(this.#ms).toString(); }'#10 +
         '  toJSON(): string | null {'#10 +
         '    if (this === null || this === undefined) throw new TypeError("Date.prototype.toJSON called on null or undefined");'#10 +
         '    const object: any = Object(this);'#10 +
@@ -295,7 +389,7 @@ const
         '  }'#10 +
         '  toString(): string {'#10 +
         '    if (!(this instanceof Date)) throw new TypeError("Date.prototype.toString called on non-Date");'#10 +
-        '    const z = this.#local();'#10 +
+        '    const z = Date.#local(this);'#10 +
         '    if (!z) return "Invalid Date";'#10 +
         '    const pad = (n: number): string => n < 10 ? "0" + String(n) : String(n);'#10 +
         '    const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];'#10 +
@@ -303,7 +397,18 @@ const
         '    return days[z.dayOfWeek % 7] + " " + months[z.month - 1] + " " + pad(z.day) + " " +'#10 +
         '      String(z.year) + " " + pad(z.hour) + ":" + pad(z.minute) + ":" + pad(z.second) + " GMT" + z.offset;'#10 +
         '  }'#10 +
-        '  #localeOptions(options: any, needDate: boolean, needTime: boolean): any {'#10 +
+        '  toUTCString(): string {'#10 +
+        '    if (!(this instanceof Date)) throw new TypeError("Date.prototype.toUTCString called on non-Date");'#10 +
+        '    const z = Date.#utc(this);'#10 +
+        '    if (!z) return "Invalid Date";'#10 +
+        '    const pad = (n: number): string => n < 10 ? "0" + String(n) : String(n);'#10 +
+        '    const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];'#10 +
+        '    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];'#10 +
+        '    return days[z.dayOfWeek % 7] + ", " + pad(z.day) + " " + months[z.month - 1] + " " +'#10 +
+        '      String(z.year) + " " + pad(z.hour) + ":" + pad(z.minute) + ":" + pad(z.second) + " GMT";'#10 +
+        '  }'#10 +
+        '  toGMTString(): string { return this.toUTCString(); }'#10 +
+        '  static #localeOptions(options: any, needDate: boolean, needTime: boolean): any {'#10 +
         '    const out: any = {};'#10 +
         '    if (options !== undefined) {'#10 +
         '      ["localeMatcher", "calendar", "numberingSystem", "timeZone", "hour12", "hourCycle", "formatMatcher",'#10 +
@@ -322,18 +427,18 @@ const
         '  }'#10 +
         '  toLocaleString(...args: any[]): string {'#10 +
         '    if (!(this instanceof Date)) throw new TypeError("Date.prototype.toLocaleString called on non-Date");'#10 +
-        '    if (!this.#valid()) return "Invalid Date";'#10 +
-        '    return new __GocciaShimDateTimeFormat(args[0], this.#localeOptions(args[1], true, true)).format(this.#ms);'#10 +
+        '    if (!Date.#valid(this)) return "Invalid Date";'#10 +
+        '    return new __GocciaShimDateTimeFormat(args[0], Date.#localeOptions(args[1], true, true)).format(this.#ms);'#10 +
         '  }'#10 +
         '  toLocaleDateString(...args: any[]): string {'#10 +
         '    if (!(this instanceof Date)) throw new TypeError("Date.prototype.toLocaleDateString called on non-Date");'#10 +
-        '    if (!this.#valid()) return "Invalid Date";'#10 +
-        '    return new __GocciaShimDateTimeFormat(args[0], this.#localeOptions(args[1], true, false)).format(this.#ms);'#10 +
+        '    if (!Date.#valid(this)) return "Invalid Date";'#10 +
+        '    return new __GocciaShimDateTimeFormat(args[0], Date.#localeOptions(args[1], true, false)).format(this.#ms);'#10 +
         '  }'#10 +
         '  toLocaleTimeString(...args: any[]): string {'#10 +
         '    if (!(this instanceof Date)) throw new TypeError("Date.prototype.toLocaleTimeString called on non-Date");'#10 +
-        '    if (!this.#valid()) return "Invalid Date";'#10 +
-        '    return new __GocciaShimDateTimeFormat(args[0], this.#localeOptions(args[1], false, true)).format(this.#ms);'#10 +
+        '    if (!Date.#valid(this)) return "Invalid Date";'#10 +
+        '    return new __GocciaShimDateTimeFormat(args[0], Date.#localeOptions(args[1], false, true)).format(this.#ms);'#10 +
         '  }'#10 +
         '};'
     ),

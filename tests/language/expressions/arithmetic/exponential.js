@@ -84,6 +84,28 @@ describe("exponentiation with Infinity exponent", () => {
   });
 });
 
+describe("exponentiation with signed zero base", () => {
+  test("-0 ** positive odd integer is -0", () => {
+    expect(Object.is((-0) ** 1, -0)).toBe(true);
+    expect(Object.is((-0) ** 111, -0)).toBe(true);
+  });
+
+  test("-0 ** positive non-odd exponent is +0", () => {
+    expect(Object.is((-0) ** 2, 0)).toBe(true);
+    expect(Object.is((-0) ** Infinity, 0)).toBe(true);
+  });
+
+  test("-0 ** negative odd integer is -Infinity", () => {
+    expect((-0) ** -1).toBe(-Infinity);
+    expect((-0) ** -3).toBe(-Infinity);
+  });
+
+  test("-0 ** negative non-odd exponent is +Infinity", () => {
+    expect((-0) ** -2).toBe(Infinity);
+    expect((-0) ** (-Infinity)).toBe(Infinity);
+  });
+});
+
 describe("exponentiation with NaN", () => {
   test("NaN ** non-zero is NaN", () => {
     expect(Number.isNaN(NaN ** 1)).toBe(true);

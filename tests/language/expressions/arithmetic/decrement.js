@@ -79,6 +79,52 @@ test("decrement on computed member with string key", () => {
   expect(obj.y).toBe(199);
 });
 
+test("decrement on computed member evaluates object key once", () => {
+  let keyEvaluated = false;
+  const obj = {};
+  const key = {
+    toString() {
+      if (keyEvaluated) {
+        throw new Error("key evaluated twice");
+      }
+      keyEvaluated = true;
+      return "count";
+    },
+  };
+
+  obj[key]--;
+  expect(keyEvaluated).toBe(true);
+  expect(Number.isNaN(obj.count)).toBe(true);
+});
+
+test("decrement on nullish computed member checks base before property key coercion", () => {
+  const key = {
+    toString() {
+      throw new Error("key coerced");
+    },
+  };
+
+  expect(() => {
+    const base = null;
+    base[key]--;
+  }).toThrow(TypeError);
+
+  expect(() => {
+    const base = undefined;
+    --base[key];
+  }).toThrow(TypeError);
+});
+
+test("decrement on nullish computed member still evaluates property expression", () => {
+  expect(() => {
+    const base = null;
+    const key = () => {
+      throw new RangeError("property expression evaluated");
+    };
+    base[key()]--;
+  }).toThrow(RangeError);
+});
+
 test("decrement on computed member with symbol key", () => {
   const sym = Symbol("counter");
   const obj = { [sym]: 10 };
@@ -93,4 +139,9 @@ test("post-decrement on non-writable property throws", () => {
   Object.defineProperty(obj, "x", { value: 5, writable: false });
   expect(() => obj.x--).toThrow(TypeError);
   expect(obj.x).toBe(5);
+});
+
+test("decrement on unresolved identifier throws ReferenceError", () => {
+  expect(() => missingPostDecrement--).toThrow(ReferenceError);
+  expect(() => --missingPreDecrement).toThrow(ReferenceError);
 });

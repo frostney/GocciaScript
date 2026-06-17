@@ -24,6 +24,7 @@ type
     CoverageEnabled: Boolean;
     StrictTypes: Boolean;
     NonStrictMode: Boolean;
+    CompatibilityNonStrictMode: Boolean;
     InEvalCode: Boolean;
     RejectArgumentsVarDeclarationInEval: Boolean;
     RejectVarDeclarationNamesInEval: TGocciaEvalRejectNameArray;

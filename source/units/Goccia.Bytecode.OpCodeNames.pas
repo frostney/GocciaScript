@@ -35,6 +35,7 @@ begin
     OP_JUMP_IF_NOT_NULLISH:            Result := 'OP_JUMP_IF_NOT_NULLISH';
     OP_CLOSURE:                        Result := 'OP_CLOSURE';
     OP_PUSH_HANDLER:                   Result := 'OP_PUSH_HANDLER';
+    OP_PUSH_FINALLY_HANDLER:           Result := 'OP_PUSH_FINALLY_HANDLER';
     OP_POP_HANDLER:                    Result := 'OP_POP_HANDLER';
     OP_THROW:                          Result := 'OP_THROW';
     OP_RETURN:                         Result := 'OP_RETURN';
@@ -144,7 +145,9 @@ begin
     OP_DEFINE_STATIC_METHOD_CONST:     Result := 'OP_DEFINE_STATIC_METHOD_CONST';
     OP_DEFINE_DATA_PROP:               Result := 'OP_DEFINE_DATA_PROP';
     OP_DEFINE_METHOD_PROP:             Result := 'OP_DEFINE_METHOD_PROP';
+    OP_SET_OBJECT_PROTO:               Result := 'OP_SET_OBJECT_PROTO';
     OP_DEFINE_PROP_DYNAMIC:            Result := 'OP_DEFINE_PROP_DYNAMIC';
+    OP_DEFINE_CLASS_METHOD_DYNAMIC:    Result := 'OP_DEFINE_CLASS_METHOD_DYNAMIC';
     OP_ADD:                            Result := 'OP_ADD';
     OP_SUB:                            Result := 'OP_SUB';
     OP_MUL:                            Result := 'OP_MUL';
@@ -194,6 +197,15 @@ begin
     OP_DEC_NUMERIC:                    Result := 'OP_DEC_NUMERIC';
     OP_POST_INC_NUMERIC:               Result := 'OP_POST_INC_NUMERIC';
     OP_POST_DEC_NUMERIC:               Result := 'OP_POST_DEC_NUMERIC';
+    OP_GET_WITH_BINDING:               Result := 'OP_GET_WITH_BINDING';
+    OP_GET_WITH_BINDING_STRICT:        Result := 'OP_GET_WITH_BINDING_STRICT';
+    OP_SET_WITH_BINDING:               Result := 'OP_SET_WITH_BINDING';
+    OP_SET_WITH_BINDING_LOOSE:         Result := 'OP_SET_WITH_BINDING_LOOSE';
+    OP_SUPER_BASE:                     Result := 'OP_SUPER_BASE';
+    OP_SUPER_GET_BASE:                 Result := 'OP_SUPER_GET_BASE';
+    OP_SUPER_SET_BASE:                 Result := 'OP_SUPER_SET_BASE';
+    OP_DEFINE_GLOBAL_VAR_DECL_LONG:    Result := 'OP_DEFINE_GLOBAL_VAR_DECL_LONG';
+    OP_DEFINE_STATIC_PROP_DYNAMIC:     Result := 'OP_DEFINE_STATIC_PROP_DYNAMIC';
   else
     Result := Format('OP_UNKNOWN_%d', [AOp]);
   end;

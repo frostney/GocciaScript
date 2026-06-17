@@ -24,6 +24,14 @@ test("identifier unicode escapes reject escaped reserved words", () => {
   expect(() => new Function("class \\u0069f {}")).toThrow(SyntaxError);
 });
 
+test("escaped let is an identifier reference in non-strict code", () => {
+  const fn = new Function("this.let = 4; l\\u0065t\nconst a = 7; return [l\\u0065t, a];");
+  const result = fn();
+
+  expect(result[0]).toBe(4);
+  expect(result[1]).toBe(7);
+});
+
 test("identifier unicode escapes reject escaped contextual grammar keywords", () => {
   expect(() => new Function("return n\\u0065w.target;")).toThrow(SyntaxError);
   expect(() => new Function("return new.\\u0074arget;")).toThrow(SyntaxError);

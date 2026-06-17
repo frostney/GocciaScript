@@ -36,14 +36,20 @@ type
     procedure BindThis(const ACallScope: TGocciaScope; const AThisValue: TGocciaValue); virtual;
     function CreateCallScope: TGocciaScope; virtual;
     function CreatesArgumentsObject: Boolean; virtual;
+    function HasParameterExpressions: Boolean;
+    procedure PredeclareParameterBindings(const ACallScope: TGocciaScope);
     function BuildParameterEvalVarDeclarationRejectNames(
       const AIncludeArgumentsObject: Boolean): TGocciaEvalRejectNameArray;
     function ExecuteBody(const ACallScope: TGocciaScope; const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function CallWithNewTarget(const AArguments: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue; const ANewTarget: TGocciaValue): TGocciaValue;
   public
     constructor Create(const AParameters: TGocciaParameterArray; const ABodyStatements: TObjectList<TGocciaASTNode>; const AClosure: TGocciaScope; const AName: string = '');
     destructor Destroy; override;
 
     function Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; override;
+    function ConstructWithReceiver(const AArguments: TGocciaArgumentsCollection;
+      const AReceiver: TGocciaValue; const ANewTarget: TGocciaValue): TGocciaValue; override;
     procedure MarkReferences; override;
     procedure SetInferredName(const AName: string);
 
@@ -177,6 +183,82 @@ begin
   Result := True;
 end;
 
+function DestructuringPatternHasParameterExpression(
+  const APattern: TGocciaDestructuringPattern): Boolean;
+var
+  I: Integer;
+  ArrayPattern: TGocciaArrayDestructuringPattern;
+  ObjectPattern: TGocciaObjectDestructuringPattern;
+begin
+  if not Assigned(APattern) then
+    Exit(False);
+
+  if APattern is TGocciaAssignmentDestructuringPattern then
+    Exit(True);
+
+  if APattern is TGocciaRestDestructuringPattern then
+    Exit(DestructuringPatternHasParameterExpression(
+      TGocciaRestDestructuringPattern(APattern).Argument));
+
+  if APattern is TGocciaArrayDestructuringPattern then
+  begin
+    ArrayPattern := TGocciaArrayDestructuringPattern(APattern);
+    for I := 0 to ArrayPattern.Elements.Count - 1 do
+      if DestructuringPatternHasParameterExpression(ArrayPattern.Elements[I]) then
+        Exit(True);
+    Exit(False);
+  end;
+
+  if APattern is TGocciaObjectDestructuringPattern then
+  begin
+    ObjectPattern := TGocciaObjectDestructuringPattern(APattern);
+    for I := 0 to ObjectPattern.Properties.Count - 1 do
+      if DestructuringPatternHasParameterExpression(
+        ObjectPattern.Properties[I].Pattern) then
+        Exit(True);
+  end;
+
+  Result := False;
+end;
+
+function TGocciaFunctionValue.HasParameterExpressions: Boolean;
+var
+  I: Integer;
+begin
+  for I := 0 to High(FParameters) do
+    if Assigned(FParameters[I].DefaultValue) or
+       (FParameters[I].IsPattern and
+        DestructuringPatternHasParameterExpression(FParameters[I].Pattern)) then
+      Exit(True);
+  Result := False;
+end;
+
+procedure TGocciaFunctionValue.PredeclareParameterBindings(
+  const ACallScope: TGocciaScope);
+var
+  I, J: Integer;
+  Names: TStringList;
+begin
+  Names := TStringList.Create;
+  try
+    Names.CaseSensitive := True;
+    for I := 0 to High(FParameters) do
+    begin
+      Names.Clear;
+      if FParameters[I].IsPattern then
+        CollectPatternBindingNames(FParameters[I].Pattern, Names, True)
+      else if FParameters[I].Name <> '' then
+        Names.Add(FParameters[I].Name);
+
+      for J := 0 to Names.Count - 1 do
+        if not ACallScope.ContainsOwnLexicalBinding(Names[J]) then
+          ACallScope.PredeclareLexicalBinding(Names[J], dtParameter);
+    end;
+  finally
+    Names.Free;
+  end;
+end;
+
 function TGocciaFunctionValue.BuildParameterEvalVarDeclarationRejectNames(
   const AIncludeArgumentsObject: Boolean): TGocciaEvalRejectNameArray;
 var
@@ -220,6 +302,10 @@ var
   Context: TGocciaEvaluationContext;
   ParamTypeHint: TGocciaLocalType;
   ParameterNames: array of string;
+  BodyScope: TGocciaScope;
+  HasParamExpressions: Boolean;
+  PreviousRealm: TGocciaRealm;
+  RealmSwitched: Boolean;
   function EvaluateParameterDefault(
     const AExpression: TGocciaExpression): TGocciaValue;
   var
@@ -254,6 +340,11 @@ var
     Result := CreateUnmappedArgumentsObject(AArguments);
   end;
 begin
+  PreviousRealm := CurrentRealm;
+  RealmSwitched := Assigned(CreationRealm) and (CreationRealm <> PreviousRealm);
+  if RealmSwitched then
+    SetCurrentRealm(CreationRealm);
+  try
   // Set up evaluation context — inherit OnError, LoadModule and the
   // strict-types flag from the closure scope so the body sees the
   // same enforcement setting as the surrounding lexical scope.
@@ -273,10 +364,12 @@ begin
   CompatibilityNonStrictMode := FClosure.EffectiveNonStrictMode;
   ArgumentsObjectEnabled := FClosure.EffectiveArgumentsObjectEnabled;
   Context.NonStrictMode := CompatibilityNonStrictMode and not FStrictCode;
+  Context.CompatibilityNonStrictMode := CompatibilityNonStrictMode;
   Context.DisposalTracker := nil;
   EvalRejectNames := BuildParameterEvalVarDeclarationRejectNames(
     ArgumentsObjectEnabled and CreatesArgumentsObject and
     not ParameterListBindsName(FParameters, IDENTIFIER_ARGUMENTS));
+  HasParamExpressions := HasParameterExpressions;
 
   // Record coverage hit on the declaration line (get/set/constructor/method)
   if Context.CoverageEnabled and (FSourceLine > 0) and (FSourceFilePath <> '') then
@@ -291,6 +384,9 @@ begin
      not ACallScope.ContainsOwnLexicalBinding(IDENTIFIER_ARGUMENTS) then
     ACallScope.DefineVariableBinding(IDENTIFIER_ARGUMENTS,
       CreateArgumentsObjectForCall, True);
+
+  if HasParamExpressions then
+    PredeclareParameterBindings(ACallScope);
 
   // Bind parameters - fast path for simple named params (no rest/destructuring/defaults)
   if FIsSimpleParams then
@@ -314,7 +410,14 @@ begin
         if I < AArguments.Length then
           for J := I to AArguments.Length - 1 do
             TGocciaArrayValue(ReturnValue).Elements.Add(AArguments.GetElement(J));
-        ACallScope.DefineLexicalBinding(FParameters[I].Name, ReturnValue, dtParameter);
+        if FParameters[I].IsPattern then
+        begin
+          Context.Scope := ACallScope;
+          AssignPattern(FParameters[I].Pattern, ReturnValue, Context, True);
+        end
+        else
+          ACallScope.DefineLexicalBinding(FParameters[I].Name, ReturnValue,
+            dtParameter);
 
         // Strict-types: the rest parameter annotation describes the rest
         // array's type (e.g. (...nums: number[])).  Record the type hint on
@@ -325,7 +428,7 @@ begin
         if Context.StrictTypes and (FParameters[I].TypeAnnotation <> '') then
         begin
           ParamTypeHint := TypeAnnotationToLocalType(FParameters[I].TypeAnnotation);
-          if ParamTypeHint <> sltUntyped then
+          if (ParamTypeHint <> sltUntyped) and not FParameters[I].IsPattern then
             ACallScope.SetOwnBindingTypeHint(FParameters[I].Name, ParamTypeHint);
         end;
 
@@ -372,9 +475,13 @@ begin
     end;
   end;
 
-  Context.Scope := ACallScope;
-  if Assigned(Context.OnError) and not Assigned(ACallScope.OnError) then
-    ACallScope.OnError := Context.OnError;
+  BodyScope := ACallScope;
+  if HasParamExpressions then
+    BodyScope := ACallScope.CreateChild(skFunction, FName + ':body');
+
+  Context.Scope := BodyScope;
+  if Assigned(Context.OnError) and not Assigned(BodyScope.OnError) then
+    BodyScope.OnError := Context.OnError;
 
   // Strict-types enforcement on parameters: when --strict-types is on,
   // type-annotated parameters reject incompatible argument values, and
@@ -405,7 +512,12 @@ begin
   end;
 
   // Hoist var declarations to function scope
-  HoistVarDeclarations(FBodyStatements, ACallScope);
+  HoistVarDeclarations(FBodyStatements, BodyScope,
+    Context.CompatibilityNonStrictMode and Context.NonStrictMode);
+
+  // Function-body lexical declarations are in TDZ before hoisted function
+  // declarations are created, so closures capture the uninitialized binding.
+  PredeclareFunctionBodyLexicalDeclarations(FBodyStatements, BodyScope);
 
   // Hoist function declarations (both name and value) to function scope
   HoistFunctionDeclarations(FBodyStatements, Context);
@@ -449,9 +561,15 @@ begin
     if CF.Kind = cfkContinue then
       ThrowSyntaxError(SErrorIllegalContinueStatement, SSuggestExpressionExpected);
   end;
+  finally
+    if RealmSwitched then
+      SetCurrentRealm(PreviousRealm);
+  end;
 end;
 
-function TGocciaFunctionValue.Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+function TGocciaFunctionValue.CallWithNewTarget(
+  const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue;
+  const ANewTarget: TGocciaValue): TGocciaValue;
 var
   CallScope: TGocciaScope;
   GC: TGarbageCollector;
@@ -471,6 +589,8 @@ begin
   end;
   try
     CallScope := CreateCallScope;
+    if Assigned(ANewTarget) and (CallScope is TGocciaCallScope) then
+      TGocciaCallScope(CallScope).NewTarget := ANewTarget;
     if Assigned(GC) then
     begin
       GC.PushActiveRoot(CallScope);
@@ -490,6 +610,18 @@ begin
         GC.PopActiveRoot;
     end;
   end;
+end;
+
+function TGocciaFunctionValue.Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := CallWithNewTarget(AArguments, AThisValue, nil);
+end;
+
+function TGocciaFunctionValue.ConstructWithReceiver(
+  const AArguments: TGocciaArgumentsCollection; const AReceiver: TGocciaValue;
+  const ANewTarget: TGocciaValue): TGocciaValue;
+begin
+  Result := CallWithNewTarget(AArguments, AReceiver, ANewTarget);
 end;
 
 function TGocciaFunctionValue.GetFunctionLength: Integer;

@@ -1284,14 +1284,14 @@ begin
           Context.CoverageEnabled := False;
           Context.StrictTypes := FStrictTypesEnabled;
           Context.NonStrictMode := False;
+          Context.CompatibilityNonStrictMode := False;
           Context.DisposalTracker := nil;
 
           PredeclareModuleLexicalDeclarations(ProgramNode, ModuleScope);
           HoistFunctionDeclarations(ProgramNode.Body, Context, True);
           if GetVarEnabled then
-            HoistVarDeclarations(ProgramNode.Body, ModuleScope);
+            HoistVarDeclarations(ProgramNode.Body, ModuleScope, False);
           RegisterStaticModuleExports(False);
-          RegisterStaticModuleExports(True);
           EvaluateRequestedModulesInSourceOrder;
           RegisterStaticModuleExports(True);
           DrainRequestedModuleEvaluationPromises;

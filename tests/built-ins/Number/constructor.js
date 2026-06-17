@@ -70,6 +70,12 @@ describe("Number constructor", () => {
     expect(() => Number(Symbol("x"))).toThrow(TypeError);
   });
 
+  test("Number(BigInt) explicitly converts while implicit coercion throws", () => {
+    expect(Number(42n)).toBe(42);
+    expect(new Number(42n).valueOf()).toBe(42);
+    expect(() => 42n * 1).toThrow(TypeError);
+  });
+
   test("Number(array) coerces via ToPrimitive, not element-wise", () => {
     expect(Number([])).toBe(0);
     expect(Number([42])).toBe(42);

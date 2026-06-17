@@ -66,4 +66,21 @@ describe("computed method names in classes", () => {
     const c = new C();
     expect(c[sym]()).toBe("symbol-value");
   });
+
+  test("computed methods infer names from string and symbol keys", () => {
+    const named = Symbol("named");
+    const anonymous = Symbol();
+    class C {
+      ["instance"]() {}
+      static ["staticMethod"]() {}
+      [named]() {}
+      static [anonymous]() {}
+    }
+    const c = new C();
+
+    expect(c.instance.name).toBe("instance");
+    expect(C.staticMethod.name).toBe("staticMethod");
+    expect(c[named].name).toBe("[named]");
+    expect(C[anonymous].name).toBe("");
+  });
 });

@@ -91,7 +91,7 @@ function EmitJumpInstruction(const ACtx: TGocciaCompilationContext;
 begin
   if AOp = OP_JUMP then
     Result := EmitInstruction(ACtx, EncodeAx(AOp, 0))
-  else if AOp = OP_PUSH_HANDLER then
+  else if (AOp = OP_PUSH_HANDLER) or (AOp = OP_PUSH_FINALLY_HANDLER) then
     Result := EmitInstruction(ACtx, EncodeABx(AOp, AReg, 0))
   else if (AOp = OP_JUMP_IF_NULLISH) or (AOp = OP_JUMP_IF_NOT_NULLISH) then
     Result := EmitInstruction(ACtx, EncodeABC(AOp, AReg, GOCCIA_NULLISH_MATCH_ANY, 0))
@@ -118,11 +118,12 @@ begin
 
   if TGocciaOpCode(Op) = OP_JUMP then
     ACtx.Template.PatchInstruction(AIndex, EncodeAx(OP_JUMP, Offset))
-  else if TGocciaOpCode(Op) = OP_PUSH_HANDLER then
+  else if (TGocciaOpCode(Op) = OP_PUSH_HANDLER) or
+          (TGocciaOpCode(Op) = OP_PUSH_FINALLY_HANDLER) then
   begin
     A := DecodeA(Instruction);
     ACtx.Template.PatchInstruction(AIndex,
-      EncodeABx(OP_PUSH_HANDLER, A, UInt16(Offset)));
+      EncodeABx(TGocciaOpCode(Op), A, UInt16(Offset)));
   end
   else if (TGocciaOpCode(Op) = OP_JUMP_IF_NULLISH) or
           (TGocciaOpCode(Op) = OP_JUMP_IF_NOT_NULLISH) then

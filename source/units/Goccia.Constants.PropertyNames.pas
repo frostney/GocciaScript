@@ -21,6 +21,7 @@ const
   PROP_CALLEE       = 'callee';
   PROP_CONSTRUCTOR  = 'constructor';
   PROP_PROTOTYPE    = 'prototype';
+  PROP_PROTO        = '__proto__';
   PROP_TO_STRING    = 'toString';
   PROP_VALUE_OF     = 'valueOf';
   PROP_FREEZE       = 'freeze';

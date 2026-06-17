@@ -124,10 +124,12 @@ type
   TGocciaIdentifierExpression = class(TGocciaExpression)
   private
     FName: string;
+    FParenthesized: Boolean;
   public
     constructor Create(const AName: string; const ALine, AColumn: Integer);
     function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Name: string read FName;
+    property Parenthesized: Boolean read FParenthesized write FParenthesized;
   end;
 
   TGocciaBinaryExpression = class(TGocciaExpression)
@@ -171,11 +173,14 @@ type
   private
     FName: string;
     FValue: TGocciaExpression;
+    FInferName: Boolean;
   public
-    constructor Create(const AName: string; const AValue: TGocciaExpression; const ALine, AColumn: Integer);
+    constructor Create(const AName: string; const AValue: TGocciaExpression; const ALine, AColumn: Integer;
+      const AInferName: Boolean = True);
     function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Name: string read FName;
     property Value: TGocciaExpression read FValue;
+    property InferName: Boolean read FInferName;
   end;
 
   TGocciaPropertyAssignmentExpression = class(TGocciaExpression)
@@ -209,12 +214,15 @@ type
     FName: string;
     FOperator: TGocciaTokenType;
     FValue: TGocciaExpression;
+    FInferName: Boolean;
   public
-    constructor Create(const AName: string; const AOperator: TGocciaTokenType; const AValue: TGocciaExpression; const ALine, AColumn: Integer);
+    constructor Create(const AName: string; const AOperator: TGocciaTokenType; const AValue: TGocciaExpression;
+      const ALine, AColumn: Integer; const AInferName: Boolean = True);
     function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Name: string read FName;
     property Operator: TGocciaTokenType read FOperator;
     property Value: TGocciaExpression read FValue;
+    property InferName: Boolean read FInferName;
   end;
 
   TGocciaPropertyCompoundAssignmentExpression = class(TGocciaExpression)
@@ -320,6 +328,7 @@ type
     StaticKey: string;           // For static properties, getters, setters
     ComputedIndex: Integer;      // Index into ComputedProperties list
     Expression: TGocciaExpression; // Source-order static value expression
+    UsesColonSyntax: Boolean;    // True for PropertyName : AssignmentExpression
   end;
 
   TGocciaObjectExpression = class(TGocciaExpression)
@@ -394,6 +403,7 @@ type
     FIsAsync: Boolean;
     FIsGenerator: Boolean;
     FHasOwnPrototype: Boolean;
+    FParsedInStrictMode: Boolean;
     FSourceText: string;
     FName: string;
   public
@@ -410,6 +420,7 @@ type
     // `constructor` back-references the function. False for concise methods,
     // arrow functions, getters/setters, and plain async functions.
     property HasOwnPrototype: Boolean read FHasOwnPrototype write FHasOwnPrototype;
+    property ParsedInStrictMode: Boolean read FParsedInStrictMode write FParsedInStrictMode;
     property SourceText: string read FSourceText write FSourceText;
     property Name: string read FName write FName;
   end;
@@ -882,6 +893,7 @@ uses
   SysUtils,
 
   Goccia.Arithmetic,
+  Goccia.AST.Statements,
   Goccia.Constants.ErrorNames,
   Goccia.Coverage,
   Goccia.Error,
@@ -901,6 +913,8 @@ uses
   Goccia.Values.ClassValue,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
+  Goccia.Values.FunctionBase,
+  Goccia.Values.FunctionValue,
   Goccia.Values.ObjectValue,
   Goccia.Values.PromiseValue,
   Goccia.Values.SymbolValue,
@@ -926,6 +940,29 @@ begin
   Result := not Assigned(AValue) or
             (AValue is TGocciaUndefinedLiteralValue) or
             (AValue is TGocciaNullLiteralValue);
+end;
+
+function IsAnonymousFunctionNameExpression(
+  const AExpression: TGocciaExpression): Boolean;
+begin
+  Result := (AExpression is TGocciaArrowFunctionExpression) or
+    ((AExpression is TGocciaFunctionExpression) and
+     (TGocciaFunctionExpression(AExpression).Name = '')) or
+    ((AExpression is TGocciaClassExpression) and
+     (TGocciaClassExpression(AExpression).ClassDefinition.Name = ''));
+end;
+
+function EvaluateWithInferredName(const AExpression: TGocciaExpression;
+  const AContext: TGocciaEvaluationContext; const AName: string): TGocciaValue;
+begin
+  Result := AExpression.Evaluate(AContext);
+  if not IsAnonymousFunctionNameExpression(AExpression) then
+    Exit;
+
+  if Result is TGocciaFunctionValue then
+    TGocciaFunctionValue(Result).SetInferredName(AName)
+  else if Result is TGocciaClassValue then
+    TGocciaClassValue(Result).SetInferredName(AName);
 end;
 
 function NormalizeAssignmentValue(const AValue: TGocciaValue): TGocciaValue; inline;
@@ -1037,6 +1074,7 @@ constructor TGocciaIdentifierExpression.Create(const AName: string;
 begin
   inherited Create(ALine, AColumn);
   FName := AName;
+  FParenthesized := False;
 end;
 
 { TGocciaBinaryExpression }
@@ -1077,11 +1115,14 @@ end;
 
 { TGocciaAssignmentExpression }
 
-constructor TGocciaAssignmentExpression.Create(const AName: string; const AValue: TGocciaExpression; const ALine, AColumn: Integer);
+constructor TGocciaAssignmentExpression.Create(const AName: string;
+  const AValue: TGocciaExpression; const ALine, AColumn: Integer;
+  const AInferName: Boolean);
 begin
   inherited Create(ALine, AColumn);
   FName := AName;
   FValue := AValue;
+  FInferName := AInferName;
 end;
 
 { TGocciaPropertyAssignmentExpression }
@@ -1106,12 +1147,15 @@ end;
 
 { TGocciaCompoundAssignmentExpression }
 
-constructor TGocciaCompoundAssignmentExpression.Create(const AName: string; const AOperator: TGocciaTokenType; const AValue: TGocciaExpression; const ALine, AColumn: Integer);
+constructor TGocciaCompoundAssignmentExpression.Create(const AName: string;
+  const AOperator: TGocciaTokenType; const AValue: TGocciaExpression;
+  const ALine, AColumn: Integer; const AInferName: Boolean);
 begin
   inherited Create(ALine, AColumn);
   FName := AName;
   FOperator := AOperator;
   FValue := AValue;
+  FInferName := AInferName;
 end;
 
 { TGocciaPropertyCompoundAssignmentExpression }
@@ -1318,6 +1362,7 @@ begin
   FParameters := AParameters;
   FBody := ABody;
   FHasOwnPrototype := False;
+  FParsedInStrictMode := False;
 end;
 
 { TGocciaObjectMethodDefinition }
@@ -1745,7 +1790,10 @@ var
   ScopeBinding: TGocciaScope;
 begin
   AContext.Scope.ResolveAssignmentTarget(Name, ObjectBinding, ScopeBinding);
-  Result := Value.Evaluate(AContext);
+  if InferName then
+    Result := EvaluateWithInferredName(Value, AContext, Name)
+  else
+    Result := Value.Evaluate(AContext);
 
   if Assigned(ObjectBinding) then
   begin
@@ -1785,7 +1833,7 @@ var
 begin
   if ObjectExpr is TGocciaSuperExpression then
   begin
-    PropertyValue := ToPropertyKey(PropertyExpression.Evaluate(AContext));
+    PropertyValue := PropertyExpression.Evaluate(AContext);
     Result := Value.Evaluate(AContext);
     AssignSuperProperty(AContext, PropertyValue, Result);
     Exit;
@@ -1817,7 +1865,10 @@ begin
     if not IsNullishAssignmentValue(CurrentValue) then
       Exit(CurrentValue);
 
-    Result := Value.Evaluate(AContext);
+    if InferName then
+      Result := EvaluateWithInferredName(Value, AContext, Name)
+    else
+      Result := Value.Evaluate(AContext);
     AContext.Scope.AssignBinding(Name, Result, Line, Column,
       AContext.NonStrictMode);
     Exit;
@@ -1829,7 +1880,10 @@ begin
     if not CurrentValue.ToBooleanLiteral.Value then
       Exit(CurrentValue);
 
-    Result := Value.Evaluate(AContext);
+    if InferName then
+      Result := EvaluateWithInferredName(Value, AContext, Name)
+    else
+      Result := Value.Evaluate(AContext);
     AContext.Scope.AssignBinding(Name, Result, Line, Column,
       AContext.NonStrictMode);
     Exit;
@@ -1841,7 +1895,10 @@ begin
     if CurrentValue.ToBooleanLiteral.Value then
       Exit(CurrentValue);
 
-    Result := Value.Evaluate(AContext);
+    if InferName then
+      Result := EvaluateWithInferredName(Value, AContext, Name)
+    else
+      Result := Value.Evaluate(AContext);
     AContext.Scope.AssignBinding(Name, Result, Line, Column,
       AContext.NonStrictMode);
     Exit;

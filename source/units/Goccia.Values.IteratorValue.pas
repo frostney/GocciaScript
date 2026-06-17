@@ -46,6 +46,7 @@ type
     constructor Create;
     function AdvanceNext: TGocciaObjectValue; virtual;
     function AdvanceNextValue(const AValue: TGocciaValue): TGocciaObjectValue; virtual;
+    function AdvanceNextResultValue(const AValue: TGocciaValue): TGocciaObjectValue; virtual;
     function DirectNext(out ADone: Boolean): TGocciaValue; virtual;
     function DirectNextValue(const AValue: TGocciaValue; out ADone: Boolean): TGocciaValue; virtual;
     function ReturnValue(const AValue: TGocciaValue): TGocciaObjectValue; virtual;
@@ -170,6 +171,12 @@ function TGocciaIteratorValue.AdvanceNextValue(
   const AValue: TGocciaValue): TGocciaObjectValue;
 begin
   Result := AdvanceNext;
+end;
+
+function TGocciaIteratorValue.AdvanceNextResultValue(
+  const AValue: TGocciaValue): TGocciaObjectValue;
+begin
+  Result := AdvanceNextValue(AValue);
 end;
 
 function TGocciaIteratorValue.DirectNext(out ADone: Boolean): TGocciaValue;

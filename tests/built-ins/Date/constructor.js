@@ -3,6 +3,10 @@ describe("Date constructor", () => {
     expect(typeof Date).toBe("function");
   });
 
+  test("Date called without new returns a string", () => {
+    expect(typeof Date()).toBe("string");
+  });
+
   test("new Date() returns current time", () => {
     const before = Date.now();
     const d = new Date();
@@ -39,5 +43,20 @@ describe("Date constructor", () => {
   test("year 0-99 maps to 1900-1999", () => {
     const d = new Date(95, 0, 1, 0, 0, 0, 0);
     expect(d.getFullYear()).toBe(1995);
+  });
+
+  test("Date default primitive hint prefers string", () => {
+    const d = new Date(0);
+    expect(d + 0).toBe(d.toString() + "0");
+    expect(d + d).toBe(d.toString() + d.toString());
+    expect(Number(d)).toBe(0);
+  });
+
+  test("Date UTC string methods are present", () => {
+    const d = new Date(0);
+    expect(typeof Date.prototype.toUTCString).toBe("function");
+    expect(typeof Date.prototype.toGMTString).toBe("function");
+    expect(d.toUTCString()).toBe("Thu, 01 Jan 1970 00:00:00 GMT");
+    expect(d.toGMTString()).toBe(d.toUTCString());
   });
 });
