@@ -292,7 +292,7 @@ end;
 
 procedure TModuleContentProviderTests.TestEngineLoadsInMemoryModuleWithCustomProvider;
 const
-  ENTRY_PATH = 'memory:/app.js';
+  ENTRY_PATH = 'memory:/app.mjs';
   MODULE_PATH = 'memory:/dep.js';
 var
   Engine: TGocciaEngine;
@@ -391,7 +391,7 @@ end;
 
 procedure TModuleContentProviderTests.TestEngineRetriesModuleAfterFailedLoad;
 const
-  ENTRY_PATH = 'memory:/app.js';
+  ENTRY_PATH = 'memory:/app.mjs';
   MODULE_PATH = 'memory:/dep.js';
 var
   Engine: TGocciaEngine;
@@ -447,7 +447,7 @@ end;
 
 procedure TModuleContentProviderTests.TestEngineReportsJSONLModuleLineNumbers;
 const
-  ENTRY_PATH = 'memory:/app.js';
+  ENTRY_PATH = 'memory:/app.mjs';
   MODULE_PATH = 'memory:/events.jsonl';
 var
   Engine: TGocciaEngine;
@@ -516,7 +516,7 @@ end;
 
 procedure TModuleContentProviderTests.TestEngineReportsTOMLModuleSyntaxErrors;
 const
-  ENTRY_PATH = 'memory:/app.js';
+  ENTRY_PATH = 'memory:/app.mjs';
   MODULE_PATH = 'memory:/config.toml';
 var
   Engine: TGocciaEngine;

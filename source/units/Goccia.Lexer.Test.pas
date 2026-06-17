@@ -543,6 +543,8 @@ end;
 procedure TLexerTests.TestRegexLiteralPreservesRawPattern;
 const
   REGEX_SEPARATOR = #0;
+  PATTERN = 'a\/b[\/]';
+  FLAGS = 'gi';
 var
   Lexer: TGocciaLexer;
   Tokens: TObjectList<TGocciaToken>;
@@ -552,7 +554,8 @@ begin
     ScanAllTokens(Lexer, glgInputElementRegExp);
     Tokens := Lexer.Tokens;
     Expect<TGocciaTokenType>(Tokens[3].TokenType).ToBe(gttRegex);
-    Expect<string>(Tokens[3].Lexeme).ToBe('a\/b[\/]' + REGEX_SEPARATOR + 'gi');
+    Expect<string>(Tokens[3].Lexeme).ToBe(
+      IntToStr(Length(PATTERN)) + REGEX_SEPARATOR + PATTERN + FLAGS);
   finally
     Lexer.Free;
   end;
@@ -577,7 +580,7 @@ begin
   try
     Token := Lexer.ScanNextToken(glgInputElementRegExp);
     Expect<TGocciaTokenType>(Token.TokenType).ToBe(gttRegex);
-    Expect<string>(Token.Lexeme).ToBe('=' + REGEX_SEPARATOR);
+    Expect<string>(Token.Lexeme).ToBe('1' + REGEX_SEPARATOR + '=');
   finally
     Lexer.Free;
   end;
