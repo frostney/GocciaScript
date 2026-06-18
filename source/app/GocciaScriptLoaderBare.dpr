@@ -28,6 +28,8 @@ uses
   Goccia.InstructionLimit,
   Goccia.Modules,
   Goccia.Modules.ContentProvider,
+  Goccia.Profiler,
+  Goccia.Profiler.Report,
   Goccia.Scope,
   Goccia.Scope.Redeclaration,
   Goccia.ScriptLoader.Input,
@@ -66,6 +68,9 @@ type
     TimeoutMs: Integer;
     MaxMemoryBytes: Int64;
     MaxInstructions: Int64;
+    ProfileModePresent: Boolean;
+    ProfileMode: Goccia.CLI.Options.TGocciaProfileMode;
+    ProfileOutputPath: string;
   end;
 
   TBareTest262Realm = class;
@@ -686,6 +691,9 @@ begin
   WriteLn('  --timeout=MS                  Per-file cooperative timeout in milliseconds');
   WriteLn('  --max-memory=BYTES            GC heap byte limit (RangeError on exceed)');
   WriteLn('  --max-instructions=N          Maximum bytecode steps before aborting');
+  WriteLn('  --profile=opcodes|functions|all');
+  WriteLn('                                Enable bytecode VM profiling (forces bytecode mode)');
+  WriteLn('  --profile-output=PATH         Write profiler JSON to PATH');
   WriteLn('  --help                        Show this help');
 end;
 
@@ -744,6 +752,48 @@ begin
   AOptions.MaxInstructions := Parsed;
 end;
 
+procedure ParseProfileMode(const AValue: string; var AOptions: TBareOptions);
+begin
+  if AValue = 'opcodes' then
+    AOptions.ProfileMode := Goccia.CLI.Options.pmOpcodes
+  else if AValue = 'functions' then
+    AOptions.ProfileMode := Goccia.CLI.Options.pmFunctions
+  else if AValue = 'all' then
+    AOptions.ProfileMode := Goccia.CLI.Options.pmAll
+  else
+    raise Exception.Create('Invalid --profile value: ' + AValue);
+  AOptions.ProfileModePresent := True;
+  AOptions.Mode := bemBytecode;
+end;
+
+procedure InitializeProfiler(const AOptions: TBareOptions);
+begin
+  if not AOptions.ProfileModePresent then
+    Exit;
+
+  TGocciaProfiler.Initialize;
+  TGocciaProfiler.Instance.Enabled := True;
+  case AOptions.ProfileMode of
+    Goccia.CLI.Options.pmOpcodes:
+      TGocciaProfiler.Instance.Mode := [Goccia.Profiler.pmOpcodes];
+    Goccia.CLI.Options.pmFunctions:
+      TGocciaProfiler.Instance.Mode := [Goccia.Profiler.pmFunctions];
+    Goccia.CLI.Options.pmAll:
+      TGocciaProfiler.Instance.Mode := [Goccia.Profiler.pmOpcodes,
+        Goccia.Profiler.pmFunctions];
+  end;
+end;
+
+procedure WriteProfilerReport(const AOptions: TBareOptions);
+begin
+  if (not AOptions.ProfileModePresent) or
+     (AOptions.ProfileOutputPath = '') or
+     (not Assigned(TGocciaProfiler.Instance)) then
+    Exit;
+
+  WriteProfileJSON(TGocciaProfiler.Instance, AOptions.ProfileOutputPath);
+end;
+
 function ParseOptions: TBareOptions;
 var
   I: Integer;
@@ -762,6 +812,9 @@ begin
   Result.TimeoutMs := 0;
   Result.MaxMemoryBytes := 0;
   Result.MaxInstructions := 0;
+  Result.ProfileModePresent := False;
+  Result.ProfileMode := Goccia.CLI.Options.pmAll;
+  Result.ProfileOutputPath := '';
 
   for I := 1 to ParamCount do
   begin
@@ -796,6 +849,11 @@ begin
     else if Copy(Arg, 1, Length('--max-instructions=')) = '--max-instructions=' then
       ParseMaxInstructions(Copy(Arg, Length('--max-instructions=') + 1, MaxInt),
         Result)
+    else if Copy(Arg, 1, Length('--profile=')) = '--profile=' then
+      ParseProfileMode(Copy(Arg, Length('--profile=') + 1, MaxInt), Result)
+    else if Copy(Arg, 1, Length('--profile-output=')) = '--profile-output=' then
+      Result.ProfileOutputPath := Copy(Arg, Length('--profile-output=') + 1,
+        MaxInt)
     else if Copy(Arg, 1, 2) = '--' then
       raise Exception.Create('Unknown option: ' + Arg)
     else if Result.FileName = STDIN_PATH_MARKER then
@@ -807,6 +865,13 @@ begin
   if (not Result.SourceTypeExplicit) and
      IsModuleSourceFileName(Result.FileName) then
     Result.SourceType := stModule;
+
+  if Result.ProfileModePresent then
+    Result.Mode := bemBytecode;
+
+  if (Result.ProfileOutputPath <> '') and not Result.ProfileModePresent then
+    raise Exception.Create(
+      '--profile-output requires --profile=opcodes|functions|all');
 end;
 
 function ReadBareSource(const AFileName: string): TStringList;
@@ -882,6 +947,7 @@ begin
   Result := 0;
   Source := ReadBareSource(AOptions.FileName);
   try
+    InitializeProfiler(AOptions);
     if AOptions.SourceName <> '' then
       DisplayName := AOptions.SourceName
     else if IsStdinPath(AOptions.FileName) then
@@ -902,46 +968,46 @@ begin
     try
       Test262Host := TBareTest262Host.Create(AOptions);
       try
-      Executor := CreateExecutorForMode(AOptions.Mode);
-      try
-        Engine := TGocciaEngine.Create(DisplayName, Source, Executor);
+        Executor := CreateExecutorForMode(AOptions.Mode);
         try
-          ConfigureEngine(Engine, Executor, AOptions);
-          Test262EvalHost := TBareTest262EvalHost.Create(Engine);
+          Engine := TGocciaEngine.Create(DisplayName, Source, Executor);
           try
-
-            GC := TGarbageCollector.Instance;
-            if Assigned(GC) and (AOptions.MaxMemoryBytes > 0) then
-              GC.MaxBytes := AOptions.MaxMemoryBytes;
-
-            RegisterBareGlobals(Engine, PrintHost, Test262Host,
-              Test262EvalHost, AOptions);
+            ConfigureEngine(Engine, Executor, AOptions);
+            Test262EvalHost := TBareTest262EvalHost.Create(Engine);
             try
-              ScriptResult := Engine.Execute;
-              PrintResult(ScriptResult.Result, AOptions.Print);
-            except
-              on E: EGocciaBytecodeThrow do
-              begin
-                WriteLn(StdErr, FormatThrowDetail(E.ThrownValue,
-                  DisplayName, Source, IsColorTerminal));
-                Result := 1;
+
+              GC := TGarbageCollector.Instance;
+              if Assigned(GC) and (AOptions.MaxMemoryBytes > 0) then
+                GC.MaxBytes := AOptions.MaxMemoryBytes;
+
+              RegisterBareGlobals(Engine, PrintHost, Test262Host,
+                Test262EvalHost, AOptions);
+              try
+                ScriptResult := Engine.Execute;
+                PrintResult(ScriptResult.Result, AOptions.Print);
+              except
+                on E: EGocciaBytecodeThrow do
+                begin
+                  WriteLn(StdErr, FormatThrowDetail(E.ThrownValue,
+                    DisplayName, Source, IsColorTerminal));
+                  Result := 1;
+                end;
+                on E: TGocciaThrowValue do
+                begin
+                  WriteLn(StdErr, FormatThrowDetail(E.Value, DisplayName,
+                    Source, IsColorTerminal, E.Suggestion));
+                  Result := 1;
+                end;
               end;
-              on E: TGocciaThrowValue do
-              begin
-                WriteLn(StdErr, FormatThrowDetail(E.Value, DisplayName, Source,
-                  IsColorTerminal, E.Suggestion));
-                Result := 1;
-              end;
+            finally
+              Test262EvalHost.Free;
             end;
           finally
-            Test262EvalHost.Free;
+            Engine.Free;
           end;
         finally
-          Engine.Free;
+          Executor.Free;
         end;
-      finally
-        Executor.Free;
-      end;
       finally
         Test262Host.Free;
       end;
@@ -949,7 +1015,13 @@ begin
       PrintHost.Free;
     end;
   finally
-    Source.Free;
+    try
+      WriteProfilerReport(AOptions);
+    finally
+      if Assigned(TGocciaProfiler.Instance) then
+        TGocciaProfiler.Shutdown;
+      Source.Free;
+    end;
   end;
 end;
 
