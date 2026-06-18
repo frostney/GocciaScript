@@ -3,6 +3,16 @@ describe("Date constructor", () => {
     expect(typeof Date).toBe("function");
   });
 
+  test("Date has the standard constructor name descriptor", () => {
+    const descriptor = Object.getOwnPropertyDescriptor(Date, "name");
+
+    expect(Date.name).toBe("Date");
+    expect(descriptor.value).toBe("Date");
+    expect(descriptor.writable).toBe(false);
+    expect(descriptor.enumerable).toBe(false);
+    expect(descriptor.configurable).toBe(true);
+  });
+
   test("Date called without new returns a string", () => {
     expect(typeof Date()).toBe("string");
   });

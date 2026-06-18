@@ -6,15 +6,15 @@ description: |
   iterator returned just doesn't satisfy the protocol.
 
   Also covers the abrupt-completion IteratorStepValue path: when user
-  next() throws during destructuring, the iterator is closed while the
-  original error is preserved.
+  next() throws during destructuring, the iterator is marked done and
+  IteratorClose is skipped while the original error is preserved.
 
   Guards against:
     - GetIteratorValue (Goccia.VM.pas) previously falling through to
       SErrorNotIterable when the inner next was non-callable.
-    - Destructuring materialization must invoke iter.return() when
+    - Destructuring materialization must not invoke iter.return() when
       DirectNext or NextMethod.Call throws before producing a usable
-      IteratorResult, without replacing the original error.
+      IteratorResult.
 features: [iterators]
 ---*/
 
@@ -45,7 +45,7 @@ test("[@@iterator]() returning null throws TypeError", () => {
   expect(() => [...iter]).toThrow(TypeError);
 });
 
-test("destructuring with user next() that throws closes the iterator", () => {
+test("destructuring with user next() that throws skips IteratorClose", () => {
   let returnCalled = 0;
   const iter = {
     [Symbol.iterator]() {
@@ -72,10 +72,10 @@ test("destructuring with user next() that throws closes the iterator", () => {
   }
   expect(caught instanceof Error).toBe(true);
   expect(caught.message).toBe("user-next-threw");
-  expect(returnCalled).toBe(1);
+  expect(returnCalled).toBe(0);
 });
 
-test("destructuring with primitive IteratorResult throws TypeError and closes", () => {
+test("destructuring with primitive IteratorResult throws TypeError and skips IteratorClose", () => {
   let returnCalled = 0;
   const iter = {
     [Symbol.iterator]() {
@@ -95,7 +95,7 @@ test("destructuring with primitive IteratorResult throws TypeError and closes", 
     caught = e;
   }
   expect(caught instanceof TypeError).toBe(true);
-  expect(returnCalled).toBe(1);
+  expect(returnCalled).toBe(0);
 });
 
 test("missing IteratorResult.value normalizes to undefined in rest pattern", () => {

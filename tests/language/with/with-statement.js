@@ -218,6 +218,18 @@ describe("with statement", () => {
     expect(obj.x).toBe(4);
   });
 
+  test("compound assignments keep the with target resolved before the RHS", () => {
+    let x = 1;
+    const obj = {};
+
+    with (obj) {
+      x += (obj.x = 100, 2);
+    }
+
+    expect(x).toBe(3);
+    expect(obj.x).toBe(100);
+  });
+
   test("assignments resolve the object-environment target before evaluating the value", () => {
     let log = "";
     const obj = {

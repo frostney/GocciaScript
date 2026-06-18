@@ -249,8 +249,7 @@ type
     // arguments.
     function IterableToArray(const AIterable: TGocciaValue;
       const ATryAsync: Boolean = False;
-      const ALimit: Integer = -1;
-      const ACloseOnAbruptStep: Boolean = False): TGocciaArrayValue;
+      const ALimit: Integer = -1): TGocciaArrayValue;
     function TryIterableToArray(const AIterable: TGocciaValue;
       out AArray: TGocciaArrayValue): Boolean;
     procedure SpreadObjectIntoValue(const ATarget: TGocciaObjectValue;
@@ -7936,8 +7935,7 @@ begin
 end;
 
 function TGocciaVM.IterableToArray(const AIterable: TGocciaValue;
-  const ATryAsync: Boolean; const ALimit: Integer;
-  const ACloseOnAbruptStep: Boolean): TGocciaArrayValue;
+  const ATryAsync: Boolean; const ALimit: Integer): TGocciaArrayValue;
 var
   IteratorValue: TGocciaValue;
   DoneFlag: Boolean;
@@ -7948,17 +7946,6 @@ var
   CallArgs: TGocciaArgumentsCollection;
   GC: TGarbageCollector;
   ArrayRooted, IteratorRooted: Boolean;
-
-  procedure CloseIteratorAfterAbruptStep;
-  begin
-    if not ACloseOnAbruptStep then
-      Exit;
-    if IteratorValue is TGocciaIteratorValue then
-      Goccia.Values.IteratorSupport.CloseIteratorPreservingError(
-        TGocciaIteratorValue(IteratorValue))
-    else if IteratorValue is TGocciaObjectValue then
-      CloseRawIteratorPreservingError(IteratorValue, ATryAsync);
-  end;
 begin
   Result := TGocciaArrayValue.Create;
   // The materialised array and any newly-synthesised iterator wrapper
@@ -8029,8 +8016,10 @@ begin
           end;
         until DoneFlag;
       except
+        // IteratorNext/IteratorStepValue mark the iterator record done before
+        // propagating these failures, so the outer binding/destructuring
+        // algorithm must not call IteratorClose for this path.
         AcquireExceptionObject;
-        CloseIteratorAfterAbruptStep;
         raise;
       end;
       Exit;
@@ -8051,8 +8040,7 @@ begin
       // `iterator.next` are ignored — §7.4.5 IteratorStep calls the
       // captured iteratorRecord.[[NextMethod]]) and avoids a redundant
       // hash lookup per iteration.  A missing/non-callable next is a
-      // TypeError, not silent termination — see the try/except arm
-      // below for the abrupt-completion close.
+      // TypeError, not silent termination.
       NextMethod := IteratorValue.GetProperty(PROP_NEXT);
       if not Assigned(NextMethod) or
          (NextMethod is TGocciaUndefinedLiteralValue) or
@@ -8106,8 +8094,10 @@ begin
           end;
         until DoneFlag;
       except
+        // IteratorNext/IteratorStepValue mark the iterator record done before
+        // propagating these failures, so the outer binding/destructuring
+        // algorithm must not call IteratorClose for this path.
         AcquireExceptionObject;
-        CloseIteratorAfterAbruptStep;
         raise;
       end;
       Exit;
@@ -15521,10 +15511,10 @@ begin
             // count, so translate the sentinel here.
             if C = ITERABLE_LIMIT_UNBOUNDED then
               SetRegister(A, IterableToArray(RegisterToValue(FRegisters[A]),
-                False, -1, True))
+                False, -1))
             else
               SetRegister(A, IterableToArray(RegisterToValue(FRegisters[A]),
-                False, C, True));
+                False, C));
         else
           raise Exception.CreateFmt('Unsupported validation mode: %d', [B]);
         end;

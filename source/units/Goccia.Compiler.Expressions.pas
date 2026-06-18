@@ -2822,7 +2822,7 @@ var
 
   procedure EmitProtectedIterNext;
   var
-    NextHandlerJump, AfterNextHandlerJump, SkipCloseOnThrowJump: Integer;
+    NextHandlerJump, AfterNextHandlerJump: Integer;
   begin
     NextHandlerJump := EmitJumpInstruction(ACtx, OP_PUSH_FINALLY_HANDLER,
       ErrorReg);
@@ -2832,11 +2832,6 @@ var
     AfterNextHandlerJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
 
     PatchJumpTarget(ACtx, NextHandlerJump);
-    SkipCloseOnThrowJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE,
-      DoneReg);
-    EmitInstruction(ACtx, EncodeABC(OP_ITER_CLOSE, IterReg, ErrorReg,
-      ITER_CLOSE_PRESERVE_UNLESS_GENERATOR_RETURN));
-    PatchJumpTarget(ACtx, SkipCloseOnThrowJump);
     EmitInstruction(ACtx, EncodeABC(OP_THROW, ErrorReg, 0, 0));
 
     PatchJumpTarget(ACtx, AfterNextHandlerJump);
@@ -5531,45 +5526,17 @@ begin
 
   if ShouldTryWithBinding(ACtx.Scope, AExpr.Name) then
   begin
-    ObjReg := ACtx.Scope.AllocateRegister;
-    KeyReg := ACtx.Scope.AllocateRegister;
-    CondReg := ACtx.Scope.AllocateRegister;
+    InitPreparedDestructuringTarget(PreparedTarget);
     RegVal := ACtx.Scope.AllocateRegister;
     RegResult := ACtx.Scope.AllocateRegister;
-    EndCount := 0;
-    SetLength(EndJumps, ACtx.Scope.WithBindingCount);
     try
-      NameIdx := ACtx.Template.AddConstantString(AExpr.Name);
-      EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, KeyReg, NameIdx));
-
-      for I := ACtx.Scope.WithBindingCount - 1 downto 0 do
-      begin
-        EmitLoadHiddenWithObject(ACtx, ACtx.Scope.GetWithBindingName(I), ObjReg);
-        EmitInstruction(ACtx, EncodeABC(OP_HAS_WITH_BINDING, CondReg, ObjReg,
-          KeyReg));
-        MissJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, CondReg);
-        EmitInstruction(ACtx, EncodeABC(GetWithBindingOpcode(ACtx), RegResult,
-          ObjReg, KeyReg));
-        ACtx.CompileExpression(AExpr.Value, RegVal);
-        EmitInstruction(ACtx, EncodeABC(Op, ADest, RegResult, RegVal));
-        EmitInstruction(ACtx, EncodeABC(SetWithBindingOpcode(ACtx), ObjReg,
-          KeyReg, ADest));
-        EndJumps[EndCount] := EmitJumpInstruction(ACtx, OP_JUMP, 0);
-        Inc(EndCount);
-        PatchJumpTarget(ACtx, MissJump);
-      end;
-
-      EmitLoadBindingByName(ACtx, AExpr.Name, RegResult, False);
+      PrepareIdentifierWithBindingTarget(ACtx, AExpr.Name, PreparedTarget);
+      EmitPreparedIdentifierWithBindingLoad(ACtx, PreparedTarget, RegResult);
       ACtx.CompileExpression(AExpr.Value, RegVal);
       EmitInstruction(ACtx, EncodeABC(Op, ADest, RegResult, RegVal));
-      EmitWithAssignmentOrFallback(ACtx, AExpr.Name, ADest);
-
-      for I := 0 to EndCount - 1 do
-        PatchJumpTarget(ACtx, EndJumps[I]);
+      EmitPreparedDestructuringTargetStore(ACtx, PreparedTarget, ADest);
     finally
-      ACtx.Scope.FreeRegister;
-      ACtx.Scope.FreeRegister;
-      ACtx.Scope.FreeRegister;
+      ReleasePreparedDestructuringTarget(ACtx, PreparedTarget);
       ACtx.Scope.FreeRegister;
       ACtx.Scope.FreeRegister;
     end;

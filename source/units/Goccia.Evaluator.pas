@@ -11203,20 +11203,12 @@ var
       end;
       on E: TGocciaThrowValue do
       begin
-        if not Exhausted then
-        begin
-          AcquireExceptionObject;
-          CloseIteratorPreservingError(Iterator);
-        end;
+        Exhausted := True;
         raise;
       end;
       on E: Exception do
       begin
-        if not Exhausted then
-        begin
-          AcquireExceptionObject;
-          CloseIteratorPreservingError(Iterator);
-        end;
+        Exhausted := True;
         raise;
       end;
     end;
@@ -11520,20 +11512,12 @@ var
       end;
       on E: TGocciaThrowValue do
       begin
-        if not Exhausted then
-        begin
-          AcquireExceptionObject;
-          CloseIteratorPreservingError(Iterator);
-        end;
+        Exhausted := True;
         raise;
       end;
       on E: Exception do
       begin
-        if not Exhausted then
-        begin
-          AcquireExceptionObject;
-          CloseIteratorPreservingError(Iterator);
-        end;
+        Exhausted := True;
         raise;
       end;
     end;

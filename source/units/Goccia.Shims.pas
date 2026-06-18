@@ -568,6 +568,7 @@ const
         '  }'#10 +
         '  __GocciaDateSetSlot(this, ms);'#10 +
         '};'#10 +
+        'Object.defineProperty(__GocciaDateConstructor, "name", { value: "Date", configurable: true });'#10 +
         'Object.defineProperty(__GocciaDateConstructor, "now", { value: __GocciaDateClass.now, writable: true, configurable: true });'#10 +
         'Object.defineProperty(__GocciaDateConstructor, "parse", { value: __GocciaDateClass.parse, writable: true, configurable: true });'#10 +
         'Object.defineProperty(__GocciaDateConstructor, "UTC", { value: __GocciaDateClass.UTC, writable: true, configurable: true });'#10 +
