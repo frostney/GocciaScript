@@ -27,6 +27,7 @@ uses
   Goccia.InstructionLimit,
   Goccia.JSON,
   Goccia.Modules.Loader,
+  Goccia.Realm,
   Goccia.Runtime,
   Goccia.RuntimeExtensions.Console,
   Goccia.RuntimeExtensions.FFI,
@@ -87,6 +88,8 @@ type
     procedure SeedNestedContext(const AParentContext,
       AChildContext: TGocciaSandboxContext;
       const AOptions: TGocciaSandboxRunOptions);
+    procedure ConfigureSandboxResolver(
+      const AResolver: TGocciaSandboxModuleResolver);
     procedure ConfigureEngineForSandbox(const AEngine: TGocciaEngine;
       const AContext: TGocciaSandboxContext; const AFileName: string);
     procedure CaptureConsoleLine(const AMethod, ALine: string);
@@ -95,7 +98,9 @@ type
     function ExecuteSandboxPath(const AContext: TGocciaSandboxContext;
       const AEntryPath: string; const AOptions: TGocciaSandboxRunOptions):
       TGocciaSandboxRunResult;
-    function ClonePrimitiveResult(const AValue: TGocciaValue): TGocciaValue;
+    function CloneResultValue(const AValue: TGocciaValue): TGocciaValue;
+    function CloneResultValueRecursive(const AValue: TGocciaValue;
+      const ASeen: TList): TGocciaValue;
     procedure WriteDiffIfRequested;
   protected
     procedure Configure; override;
@@ -590,8 +595,54 @@ begin
     FCurrentOutputLines.Add(ALine);
 end;
 
-function TSandboxRunnerApp.ClonePrimitiveResult(
+procedure TSandboxRunnerApp.ConfigureSandboxResolver(
+  const AResolver: TGocciaSandboxModuleResolver);
+var
+  AliasSpec, AliasKey, AliasValue: string;
+  I, SeparatorIndex: Integer;
+begin
+  if not Assigned(AResolver) then
+    Exit;
+
+  if EngineOptions.ImportMap.Present then
+    AResolver.LoadImportMap(EngineOptions.ImportMap.Value);
+
+  for I := 0 to EngineOptions.Aliases.Values.Count - 1 do
+  begin
+    AliasSpec := EngineOptions.Aliases.Values[I];
+    SeparatorIndex := Pos('=', AliasSpec);
+    if SeparatorIndex <= 1 then
+      raise Exception.Create('Invalid --alias argument. Use --alias key=value.');
+
+    AliasKey := Copy(AliasSpec, 1, SeparatorIndex - 1);
+    AliasValue := Copy(AliasSpec, SeparatorIndex + 1, MaxInt);
+    if AliasValue = '' then
+      raise Exception.Create('Invalid --alias argument. Use --alias key=value.');
+
+    AResolver.AddAlias(AliasKey, AliasValue);
+  end;
+end;
+
+function TSandboxRunnerApp.CloneResultValue(
   const AValue: TGocciaValue): TGocciaValue;
+var
+  Seen: TList;
+begin
+  Seen := TList.Create;
+  try
+    Result := CloneResultValueRecursive(AValue, Seen);
+  finally
+    Seen.Free;
+  end;
+end;
+
+function TSandboxRunnerApp.CloneResultValueRecursive(
+  const AValue: TGocciaValue; const ASeen: TList): TGocciaValue;
+var
+  ArrayValue, ClonedArray: TGocciaArrayValue;
+  ObjectValue, ClonedObject: TGocciaObjectValue;
+  Key: string;
+  I: Integer;
 begin
   if not Assigned(AValue) or (AValue is TGocciaUndefinedLiteralValue) then
     Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
@@ -606,6 +657,41 @@ begin
   if AValue is TGocciaStringLiteralValue then
     Exit(TGocciaStringLiteralValue.Create(
       TGocciaStringLiteralValue(AValue).Value));
+
+  if ASeen.IndexOf(AValue) >= 0 then
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+
+  if AValue is TGocciaArrayValue then
+  begin
+    ASeen.Add(AValue);
+    try
+      ArrayValue := TGocciaArrayValue(AValue);
+      ClonedArray := TGocciaArrayValue.Create(nil, ArrayValue.GetLength);
+      for I := 0 to ArrayValue.GetLength - 1 do
+        ClonedArray.SetElement(I,
+          CloneResultValueRecursive(ArrayValue.GetElement(I), ASeen));
+      Exit(ClonedArray);
+    finally
+      ASeen.Remove(AValue);
+    end;
+  end;
+
+  if AValue is TGocciaObjectValue then
+  begin
+    ASeen.Add(AValue);
+    try
+      ObjectValue := TGocciaObjectValue(AValue);
+      ClonedObject := TGocciaObjectValue.Create(
+        TGocciaObjectValue.SharedObjectPrototype, 8);
+      for Key in ObjectValue.GetOwnPropertyKeys do
+        ClonedObject.SetProperty(Key,
+          CloneResultValueRecursive(ObjectValue.GetProperty(Key), ASeen));
+      Exit(ClonedObject);
+    finally
+      ASeen.Remove(AValue);
+    end;
+  end;
+
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
@@ -622,6 +708,7 @@ var
   Provider: TGocciaSandboxModuleContentProvider;
   Engine: TGocciaEngine;
   ScriptResult: TGocciaScriptResult;
+  CloneRealm, ExecutionRealm: TGocciaRealm;
   PreviousOutputLines: TStrings;
 begin
   FillChar(Result, SizeOf(Result), 0);
@@ -641,9 +728,12 @@ begin
   Provider := TGocciaSandboxModuleContentProvider.Create(AContext.Fs);
   Engine := nil;
   Executor := nil;
+  CloneRealm := CurrentRealm;
   PreviousOutputLines := FCurrentOutputLines;
   FCurrentOutputLines := OutputLines;
   try
+    ConfigureSandboxResolver(Resolver);
+
     if EngineOptions.Mode.Matches(emBytecode) then
     begin
       BytecodeExecutor := TGocciaBytecodeExecutor.Create;
@@ -665,7 +755,13 @@ begin
       StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
       StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
       ScriptResult := Engine.Execute;
-      Result.ResultValue := ClonePrimitiveResult(ScriptResult.Result);
+      ExecutionRealm := CurrentRealm;
+      try
+        SetCurrentRealm(CloneRealm);
+        Result.ResultValue := CloneResultValue(ScriptResult.Result);
+      finally
+        SetCurrentRealm(ExecutionRealm);
+      end;
       Result.Ok := True;
       Result.ExitCode := 0;
     finally

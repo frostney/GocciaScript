@@ -2246,10 +2246,14 @@ console.log("SandboxRunner: inline seeds, fs, $, runScript, and diffs...");
             'const spaced = "hello world";',
             'const interpolated = await $`echo ${spaced}`.text();',
             'const child = runScript("/child.js");',
+            'const objectChild = runScript("/object-child.js");',
             'const shellChild = await $`goccia /child.js`.text();',
             'console.log(shellOut.trim());',
             'console.log(interpolated.trim());',
             'console.log(child.stdout.trim());',
+            'console.log(objectChild.result.value);',
+            'console.log(objectChild.result.items[1]);',
+            'console.log(objectChild.result.nested.ok);',
             'console.log(shellChild.trim());',
             'console.log(fs.readFileSync("/child.out", "utf8"));',
             '"sandbox-ok";',
@@ -2264,6 +2268,10 @@ console.log("SandboxRunner: inline seeds, fs, $, runScript, and diffs...");
             '"child-result";',
           ].join("\n"),
         },
+        {
+          path: "/object-child.js",
+          text: '({ value: 42, items: ["zero", "one"], nested: { ok: true } });',
+        },
       ],
     }));
 
@@ -2275,7 +2283,7 @@ console.log("SandboxRunner: inline seeds, fs, $, runScript, and diffs...");
     const stderr = proc.stderr.toString();
     if (proc.exitCode !== 0)
       throw new Error(`SandboxRunner interpreter should exit 0, got ${proc.exitCode}: ${stderr}`);
-    for (const expected of ["hello", "hello world", "child", "child\nchild", "child-write"]) {
+    for (const expected of ["hello", "hello world", "child", "42", "one", "true", "child\nchild", "child-write"]) {
       if (!stdout.includes(expected))
         throw new Error(`SandboxRunner interpreter stdout should include ${JSON.stringify(expected)}, got: ${stdout}`);
     }
@@ -2284,6 +2292,58 @@ console.log("SandboxRunner: inline seeds, fs, $, runScript, and diffs...");
       throw new Error(`SandboxRunner diff should include /hello.txt create, got ${JSON.stringify(changes)}`);
     if (!changes.some((c: any) => c.kind === "create" && c.path === "/child.out"))
       throw new Error(`SandboxRunner diff should include /child.out create, got ${JSON.stringify(changes)}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("SandboxRunner: aliases and import maps resolve sandbox module paths...");
+{
+  const tmp = makeTmp();
+  try {
+    const seed = join(tmp, "seed.json");
+    const importMap = join(tmp, "import-map.json");
+    writeFileSync(importMap, JSON.stringify({ imports: { "#lib/": "/lib/" } }));
+    writeFileSync(seed, JSON.stringify({
+      files: [
+        {
+          path: "/alias-main.js",
+          text: [
+            'import { label } from "@lib/alias.js";',
+            'console.log(label);',
+          ].join("\n"),
+        },
+        {
+          path: "/map-main.js",
+          text: [
+            'import { label } from "#lib/map.js";',
+            'console.log(label);',
+          ].join("\n"),
+        },
+        { path: "/lib/alias.js", text: 'export const label = "alias-ok";' },
+        { path: "/lib/map.js", text: 'export const label = "map-ok";' },
+      ],
+    }));
+
+    const aliasProc = Bun.spawnSync(
+      [SANDBOXRUNNER, "/alias-main.js", `--seed-config=${seed}`, "--source-type=module", "--alias", "@lib/=/lib/"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const aliasStdout = normalizeLineEndings(aliasProc.stdout.toString());
+    if (aliasProc.exitCode !== 0)
+      throw new Error(`SandboxRunner alias import should exit 0, got ${aliasProc.exitCode}: ${aliasProc.stderr.toString()}`);
+    if (!containsLine(`\n${aliasStdout}`, "alias-ok"))
+      throw new Error(`SandboxRunner alias import should print alias-ok, got: ${aliasStdout}`);
+
+    const importMapProc = Bun.spawnSync(
+      [SANDBOXRUNNER, "/map-main.js", `--seed-config=${seed}`, "--source-type=module", `--import-map=${importMap}`],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const importMapStdout = normalizeLineEndings(importMapProc.stdout.toString());
+    if (importMapProc.exitCode !== 0)
+      throw new Error(`SandboxRunner import map should exit 0, got ${importMapProc.exitCode}: ${importMapProc.stderr.toString()}`);
+    if (!containsLine(`\n${importMapStdout}`, "map-ok"))
+      throw new Error(`SandboxRunner import map should print map-ok, got: ${importMapStdout}`);
   } finally {
     clean(tmp);
   }
