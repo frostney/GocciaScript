@@ -7,7 +7,7 @@
 - **`suite`/`bench` API** — `bench(name, { setup?, run, teardown? })` with auto-calibration, warmup, and IQR outlier filtering
 - **Five output formats** — `console` (default), `text`, `csv`, `json`, `compact-json`; configurable via `--format` and `--output`
 - **Profiler-backed runs** — Bytecode benchmark runs can emit opcode/function profiles with `--profile`, including deterministic single-run capture
-- **CI integration** — PR workflow posts benchmark comparison comments with range-overlap classification
+- **CI integration** — PR workflow posts benchmark comparison comments with range-overlap classification; main CI retains deterministic profile reports
 - **Environment tuning** — Calibration time, warmup iterations, and measurement rounds configurable via environment variables
 
 GocciaScript includes a benchmark runner for measuring execution performance. Benchmarks live in the `benchmarks/` directory and use a `suite`/`bench` API.
@@ -254,7 +254,30 @@ When a benchmark has a `setup` or `teardown` function, a second line displays th
 
 ## CI Integration
 
-Benchmarks run as part of the CI pipeline in both **interpreter mode** and **bytecode mode**. CI uses `GOCCIA_BENCH_CALIBRATION_MS=100` and `GOCCIA_BENCH_ROUNDS=7` for stable measurements with IQR outlier filtering. On pushes to `main`, the ubuntu-latest x64 runner saves JSON baselines for each mode (`benchmark-interpreted-results.json` and `benchmark-bytecode-results.json`) to the GitHub Actions cache. See [testing.md](testing.md#ci-integration) for the full pipeline overview.
+Benchmarks run as part of the CI pipeline in both **interpreter mode** and
+**bytecode mode**. CI uses `GOCCIA_BENCH_CALIBRATION_MS=100` and
+`GOCCIA_BENCH_ROUNDS=7` for stable measurements with IQR outlier filtering. On
+pushes to `main`, the ubuntu-latest x64 runner saves JSON baselines for each
+mode (`benchmark-interpreted-results.json` and `benchmark-bytecode-results.json`)
+to the GitHub Actions cache. See [testing.md](testing.md#ci-integration) for the
+full pipeline overview.
+
+Main bytecode benchmark runs also retain deterministic VM profile reports. The
+GitHub Actions artifact is named `benchmark-profile` and contains:
+
+- `benchmark-profile-aggregate.json`: aggregate opcode, opcode-pair, scalar
+  fast-path, function, allocation, and benchmark-file hotspot data.
+- `benchmark-profile-aggregate.md`: a human-readable summary with the same
+  provenance and ranked tables.
+- `profile-baseline/`: the detailed per-benchmark-file profile JSON directory
+  used by PR profile diffs and deeper investigation.
+
+When `BLOB_READ_WRITE_TOKEN` is configured, main CI publishes the same payloads
+to Vercel Blob under the separate `benchmark-profiles/` namespace. The default
+paths are `benchmark-profiles/runs/<artifactId>/aggregate.json.gz`,
+`benchmark-profiles/runs/<artifactId>/summary.md`,
+`benchmark-profiles/runs/<artifactId>/details.tar.gz`, and
+`benchmark-profiles/daily/<YYYY-MM-DD>.json`.
 
 ### PR Benchmark Comparison
 

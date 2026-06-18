@@ -200,6 +200,10 @@ async function importBlobStore() {
   return await import("@/lib/test262-blob-store");
 }
 
+async function importBenchmarkProfileBlobStore() {
+  return await import("@/lib/benchmark-profile-blob-store");
+}
+
 describe("test262 Blob store", () => {
   test("publishes report and daily blobs without reading or writing a manifest", async () => {
     resetState();
@@ -296,6 +300,77 @@ describe("test262 Blob store", () => {
       "test262-profiles/runs/3003/details.tar.gz",
     );
     expect(runs.map((run) => run.artifactId)).toEqual([3003]);
+  });
+
+  test("publishes benchmark profile reports under a separate namespace", async () => {
+    resetState();
+    const { publishBenchmarkProfileReportsToBlob } =
+      await importBenchmarkProfileBlobStore();
+    const markdown = Buffer.from("# benchmark profile\n");
+    const detailsArchive = Buffer.from([4, 5, 6]);
+
+    const runs = await publishBenchmarkProfileReportsToBlob([
+      {
+        runId: 404,
+        runNumber: 4,
+        title: "CI",
+        headSha: "benchmark-sha",
+        shortSha: "benchmar",
+        runUrl: "https://example.test/runs/404",
+        createdAt: "2026-06-13T01:00:00.000Z",
+        updatedAt: "2026-06-13T01:05:00.000Z",
+        artifactId: 4004,
+        artifactCreatedAt: "2026-06-13T01:05:00.000Z",
+        aggregateJson: JSON.stringify({ kind: "benchmark", total: 3 }),
+        markdown,
+        detailsArchive,
+      },
+    ]);
+
+    expect(getCalls).toHaveLength(0);
+    expect(putCalls.map((call) => call.pathname)).toEqual([
+      "benchmark-profiles/runs/4004/aggregate.json.gz",
+      "benchmark-profiles/runs/4004/summary.md",
+      "benchmark-profiles/runs/4004/details.tar.gz",
+      "benchmark-profiles/daily/2026-06-13.json",
+    ]);
+    expect(putCalls[0]?.options).toMatchObject({
+      allowOverwrite: true,
+      cacheControlMaxAge: 31_536_000,
+      contentType: "application/gzip",
+    });
+    expect(putCalls[1]?.options).toMatchObject({
+      allowOverwrite: true,
+      cacheControlMaxAge: 31_536_000,
+      contentType: "text/markdown; charset=utf-8",
+    });
+    expect(putCalls[2]?.options).toMatchObject({
+      allowOverwrite: true,
+      cacheControlMaxAge: 31_536_000,
+      contentType: "application/gzip",
+    });
+    expect(putCalls[3]?.options).toMatchObject({
+      allowOverwrite: true,
+      cacheControlMaxAge: 900,
+      contentType: "application/json",
+    });
+    expect(gunzipSync(putCalls[0]?.body as Uint8Array).toString("utf8")).toBe(
+      `${JSON.stringify({ kind: "benchmark", total: 3 })}\n`,
+    );
+    expect(putCalls[1]?.body).toEqual(markdown);
+    expect(putCalls[2]?.body).toEqual(detailsArchive);
+
+    const pointer = JSON.parse(String(putCalls[3]?.body));
+    expect(pointer.profileReports.aggregate.path).toBe(
+      "benchmark-profiles/runs/4004/aggregate.json.gz",
+    );
+    expect(pointer.profileReports.markdown.path).toBe(
+      "benchmark-profiles/runs/4004/summary.md",
+    );
+    expect(pointer.profileReports.detailsArchive.path).toBe(
+      "benchmark-profiles/runs/4004/details.tar.gz",
+    );
+    expect(runs.map((run) => run.artifactId)).toEqual([4004]);
   });
 
   test("lists daily run blobs and ignores malformed daily JSON", async () => {
