@@ -1,10 +1,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { ImageResponse } from "next/og";
+import {
+  CANONICAL_SITE_URL,
+  SITE_DESCRIPTION,
+  SITE_TITLE,
+} from "@/lib/site-url";
 
-export const alt = "GocciaScript — A drop of JavaScript";
+export const alt = SITE_TITLE;
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
+const CANONICAL_HOST = new URL(CANONICAL_SITE_URL).hostname;
 
 const FONT_URLS = {
   ibmPlexSans600:
@@ -126,8 +132,7 @@ export default async function OpenGraphImage() {
             maxWidth: 980,
           }}
         >
-          A sandbox-first ECMAScript runtime — built for tinkerers, embedding
-          and AI agents.
+          {SITE_DESCRIPTION}
         </div>
       </div>
 
@@ -144,7 +149,7 @@ export default async function OpenGraphImage() {
           paddingTop: 24,
         }}
       >
-        <span style={{ display: "flex" }}>gocciascript.dev</span>
+        <span style={{ display: "flex" }}>{CANONICAL_HOST}</span>
       </div>
     </div>,
     {

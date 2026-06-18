@@ -9,6 +9,7 @@ import {
   type ReleaseInfo,
 } from "@/lib/github";
 import { BUILTINS, EXCLUDED, FEATURES } from "@/lib/landing-data";
+import { CANONICAL_SITE_URL, SITE_DESCRIPTION } from "@/lib/site-url";
 import { TOOL_CALL_FLOWS, TOOL_CALL_TASK } from "@/lib/tool-call-comparison";
 
 export type MarkdownRoute =
@@ -128,14 +129,11 @@ async function homeMarkdown(): Promise<string> {
   const heroExample = pickExample("coffee-typed");
 
   return [
-    frontmatter(
-      "GocciaScript",
-      "A sandbox-first ECMAScript runtime for embedding and AI agents.",
-    ),
+    frontmatter("GocciaScript", SITE_DESCRIPTION),
     "",
     "# GocciaScript",
     "",
-    "A sandbox-first ECMAScript runtime implemented from scratch for tinkerers, embedding, and AI agents.",
+    SITE_DESCRIPTION,
     "",
     releaseSummary(release),
     "",
@@ -143,11 +141,11 @@ async function homeMarkdown(): Promise<string> {
     "",
     "macOS / Linux:",
     "",
-    fence("curl -fsSL https://gocciascript.dev/install | sh", "sh"),
+    fence(`curl -fsSL ${CANONICAL_SITE_URL}/install | sh`, "sh"),
     "",
     "Windows PowerShell:",
     "",
-    fence("irm https://gocciascript.dev/install.ps1 | iex", "powershell"),
+    fence(`irm ${CANONICAL_SITE_URL}/install.ps1 | iex`, "powershell"),
     "",
     "## Start here",
     "",
@@ -202,11 +200,11 @@ async function installationMarkdown(): Promise<string> {
     "",
     "macOS / Linux:",
     "",
-    fence("curl -fsSL https://gocciascript.dev/install | sh", "sh"),
+    fence(`curl -fsSL ${CANONICAL_SITE_URL}/install | sh`, "sh"),
     "",
     "Windows PowerShell:",
     "",
-    fence("irm https://gocciascript.dev/install.ps1 | iex", "powershell"),
+    fence(`irm ${CANONICAL_SITE_URL}/install.ps1 | iex`, "powershell"),
     "",
     "You can inspect the install scripts directly at `/install` and `/install.ps1`.",
     "",

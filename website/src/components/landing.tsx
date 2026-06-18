@@ -777,6 +777,85 @@ console.log(\`Your total: \${total}\`);`;
 
 const inlineCodeClass = "font-mono bg-paper-2 px-[0.3em] py-[0.05em] rounded";
 
+const FAQ_ITEMS: { question: string; answer: ReactNode }[] = [
+  {
+    question: "What is GocciaScript?",
+    answer:
+      "GocciaScript is a sandbox-first ECMAScript runtime and toolchain implemented from scratch in Object Pascal. It runs JavaScript-family source through an interpreter or bytecode VM with host-controlled runtime capabilities.",
+  },
+  {
+    question: "What is GocciaScript for?",
+    answer:
+      "It is built for embedding scripts in desktop applications and for running generated code from AI agents with less ambient authority than a general-purpose host runtime. Embedding currently targets FreePascal hosts, with more host paths intended to grow over time.",
+  },
+  {
+    question: "Is GocciaScript Node-compatible?",
+    answer: (
+      <>
+        No. GocciaScript is intentionally not a Node.js host environment: no
+        CommonJS, no <code className={inlineCodeClass}>node:</code> built-ins,
+        no npm-style package resolution, and no Node globals such as{" "}
+        <code className={inlineCodeClass}>process</code> or{" "}
+        <code className={inlineCodeClass}>Buffer</code>.
+      </>
+    ),
+  },
+  {
+    question: "Is GocciaScript a browser runtime?",
+    answer:
+      "No. It implements selected web-standard APIs where they fit the sandboxed runtime and embeddable-platform goals, but it does not provide a DOM, Web Workers, storage APIs, or a full browser event loop.",
+  },
+  {
+    question: "What is GocciaScript written in?",
+    answer:
+      "The engine and command-line tools are written in Object Pascal. FreePascal is the supported toolchain today; Delphi support should be possible, but is untested at the moment.",
+  },
+  {
+    question: "Is GocciaScript production-ready?",
+    answer:
+      "GocciaScript is still pre-1.0, so APIs and compatibility behavior can change between releases. With more than 80% of test262 passing, it is ready for serious experiments and bounded production embedding where the supported surface matches your needs.",
+  },
+  {
+    question: "How does the sandbox model work?",
+    answer:
+      "Scripts have no ambient file-system, process, native FFI, or network access by default. Hosts opt into capabilities explicitly, including a GET/HEAD-only fetch surface gated by an allowlist.",
+  },
+  {
+    question: "How compatible is it with ECMAScript?",
+    answer: (
+      <>
+        GocciaScript tracks ECMAScript compatibility through generated test262
+        reports. The{" "}
+        <Link href="/compatibility" className="link-button">
+          compatibility dashboard
+        </Link>{" "}
+        shows the current main-branch result set.
+      </>
+    ),
+  },
+  {
+    question: "Can GocciaScript run TypeScript or JSX source?",
+    answer:
+      "Yes, the source pipeline accepts TS/TSX annotations and JSX as input forms: type annotations are parsed and discarded, and JSX is rewritten before lexing and parsing continue.",
+  },
+  {
+    question: "How do I try GocciaScript?",
+    answer: (
+      <>
+        Use the{" "}
+        <Link href="/playground?example=coffee-typed" className="link-button">
+          playground
+        </Link>{" "}
+        in the browser, or install the command-line tools from the{" "}
+        <Link href="/installation" className="link-button">
+          installation guide
+        </Link>
+        .
+      </>
+    ),
+  },
+];
+
 export function Landing({
   release,
   locale,
@@ -1039,6 +1118,27 @@ export function Landing({
                 })}
               </div>
             </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="section pt-0">
+        <div className="container">
+          <div className="section-head">
+            <div className="section-kicker">FAQ</div>
+            <AnchorH2 id="faq">GocciaScript questions, answered.</AnchorH2>
+            <p>
+              Short answers to the questions people usually ask before trying or
+              embedding the runtime.
+            </p>
+          </div>
+          <div className="faq-grid">
+            {FAQ_ITEMS.map((item) => (
+              <details key={item.question} className="faq-item">
+                <summary>{item.question}</summary>
+                <p>{item.answer}</p>
+              </details>
+            ))}
           </div>
         </div>
       </section>

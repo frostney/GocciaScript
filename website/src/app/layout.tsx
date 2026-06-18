@@ -9,6 +9,7 @@ import { Analytics } from "@/components/analytics";
 import { SiteShell } from "@/components/site-shell";
 import { WebMcpTools } from "@/components/webmcp-tools";
 import { fetchStars } from "@/lib/github";
+import { getSiteUrlObject, SITE_DESCRIPTION, SITE_TITLE } from "@/lib/site-url";
 import "./globals.css";
 
 const instrumentSerif = Instrument_Serif({
@@ -33,29 +34,15 @@ const jetbrainsMono = JetBrains_Mono({
   display: "swap",
 });
 
-const DEFAULT_SITE_URL = "https://gocciascript.dev";
-
-// Parse `NEXT_PUBLIC_SITE_URL` defensively — if someone misconfigures it on
-// Vercel (typo, missing scheme, leading whitespace), `new URL()` throws at
-// module-init time and the entire app fails to boot. Fall back to the
-// canonical origin so a bad env var degrades to "metadata points at the
-// wrong host" instead of "the site is down".
-const SITE_URL = (() => {
-  try {
-    return new URL(process.env.NEXT_PUBLIC_SITE_URL ?? DEFAULT_SITE_URL);
-  } catch {
-    return new URL(DEFAULT_SITE_URL);
-  }
-})();
+const SITE_URL = getSiteUrlObject();
 
 export const metadata: Metadata = {
   metadataBase: SITE_URL,
   title: {
-    default: "GocciaScript — A drop of JavaScript",
+    default: SITE_TITLE,
     template: "%s · GocciaScript",
   },
-  description:
-    "A sandbox-first ECMAScript runtime implemented from scratch for tinkerers, embedding and AI agents, with compatibility tracked through generated test262 reports.",
+  description: SITE_DESCRIPTION,
   applicationName: "GocciaScript",
   keywords: [
     "GocciaScript",
@@ -81,17 +68,15 @@ export const metadata: Metadata = {
   openGraph: {
     type: "website",
     siteName: "GocciaScript",
-    title: "GocciaScript — A drop of JavaScript",
-    description:
-      "A sandbox-first ECMAScript runtime implemented from scratch for tinkerers, embedding and AI agents.",
+    title: SITE_TITLE,
+    description: SITE_DESCRIPTION,
     url: SITE_URL,
     locale: "en_US",
   },
   twitter: {
     card: "summary_large_image",
-    title: "GocciaScript — A drop of JavaScript",
-    description:
-      "A sandbox-first ECMAScript runtime implemented from scratch for tinkerers, embedding and AI agents.",
+    title: SITE_TITLE,
+    description: SITE_DESCRIPTION,
   },
   robots: {
     index: true,
