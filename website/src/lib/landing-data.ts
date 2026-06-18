@@ -155,7 +155,7 @@ export const FEATURES: { icon: FeatureIcon; title: string; body: string }[] = [
   {
     icon: "shield",
     title: "Sandbox-first",
-    body: "No eval, no global mutable state, GET/HEAD-only fetch, timeouts, and explicit global injection via JSON/TOML/YAML.",
+    body: "No eval, no global mutable state, capability-gated fetch, timeouts, explicit globals, and seeded virtual filesystems.",
   },
   {
     icon: "leaf",

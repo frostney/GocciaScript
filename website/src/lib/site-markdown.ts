@@ -292,24 +292,67 @@ function playgroundMarkdown(searchParams: URLSearchParams): string {
 
 function sandboxMarkdown(): string {
   const gocciaFlow = TOOL_CALL_FLOWS.goccia;
+  const runnerCommand = `./build/GocciaSandboxRunner /main.js \\
+  --seed-config=./sandbox.seed.json \\
+  --mode=bytecode \\
+  --allowed-host=api.example.com \\
+  --diff`;
+  const seedConfig = `{
+  "files": [
+    { "from": "./project", "to": "/" },
+    { "from": "./tools", "to": "/tools" },
+    { "path": "/main.js", "text": "import fs from \\"fs\\";\\nconsole.log(fs.readdirSync('/'));" },
+    { "path": "/data.bin", "base64": "AQID" }
+  ]
+}`;
+  const vfsScript = `import fs from "fs";
+import { $, runScript } from "goccia";
+
+fs.mkdirSync("/out", { recursive: true });
+fs.writeFileSync("/out/summary.txt", "ready\\n");
+
+const audit = runScript("/tools/audit.js", {
+  sandbox: true,
+  seed: ["/tools/audit.js", { from: "/out", to: "/input" }],
+  diff: true,
+});
+
+console.log(await $\`cat /out/summary.txt\`.text());
+console.log(audit.diff);`;
 
   return [
     frontmatter(
       "Sandbox - GocciaScript",
-      "A runtime designed for untrusted code, host-provided globals, and AI agent tool calls.",
+      "A runtime designed for untrusted code, host-provided globals, AI agent tool calls, and seeded virtual filesystems.",
     ),
     "",
     "# Sandbox",
     "",
     "GocciaScript is meant for running untrusted or user-provided code in a host-controlled environment. Scripts receive only the data and capabilities the host provides, run with explicit limits, and return structured results that the host can inspect.",
     "",
+    "Filesystem workflows use GocciaSandboxRunner. Host paths are copied into a virtual filesystem as seed baselines, sandbox writes stay in that filesystem, and changes are surfaced as explicit diffs.",
+    "",
     "## Agent flow",
     "",
     list([
       "AI agent emits GocciaScript via a tool call.",
-      "Goccia sandbox runs the script with explicit globals, capability gates, timeout, and memory cap.",
+      "Goccia sandbox runs the script with explicit globals, seed baselines, capability gates, timeout, and memory cap.",
       "The host receives a structured JSON result.",
     ]),
+    "",
+    "## Virtual filesystem runner",
+    "",
+    'GocciaSandboxRunner executes an entry path inside an isolated virtual filesystem. Seed paths and JSON seed config copy files into the sandbox before execution; they are import baselines, not live mounts. Source can import `"fs"` for sandbox filesystem operations and `"goccia"` for shell commands or nested execution.',
+    "",
+    fence(runnerCommand, "bash"),
+    "",
+    "Seed config:",
+    "",
+    fence(seedConfig, "json"),
+    "",
+    "Inside the sandbox:",
+    "",
+    fence(vfsScript, "javascript"),
     "",
     "## Tool-call comparison",
     "",

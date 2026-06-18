@@ -818,7 +818,7 @@ const FAQ_ITEMS: { question: string; answer: ReactNode }[] = [
   {
     question: "How does the sandbox model work?",
     answer:
-      "Scripts have no ambient file-system, process, native FFI, or network access by default. Hosts opt into capabilities explicitly, including a GET/HEAD-only fetch surface gated by an allowlist.",
+      "Scripts have no ambient file-system, process, native FFI, or network access by default. GocciaSandboxRunner populates a virtual filesystem from explicit seed baselines, not host mounts; sandbox writes stay in the VFS unless the caller asks for a diff. Fetch uses the same explicit allowlist model as the loader runtime.",
   },
   {
     question: "How compatible is it with ECMAScript?",

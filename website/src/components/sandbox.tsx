@@ -231,6 +231,36 @@ const DEFAULT_GLOBALS = `{
   }]
 }`;
 
+const RUNNER_COMMAND = `./build/GocciaSandboxRunner /main.js \\
+  --seed-config=./sandbox.seed.json \\
+  --mode=bytecode \\
+  --allowed-host=api.example.com \\
+  --diff`;
+
+const SEED_CONFIG = `{
+  "files": [
+    { "from": "./project", "to": "/" },
+    { "from": "./tools", "to": "/tools" },
+    { "path": "/main.js", "text": "import fs from \\"fs\\";\\nconsole.log(fs.readdirSync('/'));" },
+    { "path": "/data.bin", "base64": "AQID" }
+  ]
+}`;
+
+const VFS_SCRIPT = `import fs from "fs";
+import { $, runScript } from "goccia";
+
+fs.mkdirSync("/out", { recursive: true });
+fs.writeFileSync("/out/summary.txt", "ready\\n");
+
+const audit = runScript("/tools/audit.js", {
+  sandbox: true,
+  seed: ["/tools/audit.js", { from: "/out", to: "/input" }],
+  diff: true,
+});
+
+console.log(await $\`cat /out/summary.txt\`.text());
+console.log(audit.diff);`;
+
 const MIN_PANE_SIZE = 0.65;
 const KEYBOARD_RESIZE_STEP = 0.12;
 
@@ -653,7 +683,10 @@ export function Sandbox() {
             GocciaScript is meant for running untrusted or user-provided code in
             a host-controlled environment. Scripts receive only the data and
             capabilities the host provides, run with explicit limits, and return
-            structured results that the host can inspect.
+            structured results that the host can inspect. Filesystem workflows
+            use GocciaSandboxRunner: host paths are copied into a virtual
+            filesystem as seed baselines, sandbox writes stay in that
+            filesystem, and changes are surfaced as explicit diffs.
           </p>
         </div>
 
@@ -674,7 +707,9 @@ export function Sandbox() {
                 <ShieldIcon size={20} />
               </div>
               <h4>Goccia sandbox</h4>
-              <p>explicit globals · capability gates · timeout · memory cap</p>
+              <p>
+                explicit globals · seed baselines · capability gates · limits
+              </p>
             </div>
             <div className="sb-arrow">
               <ArrowIcon size={22} />
@@ -685,6 +720,79 @@ export function Sandbox() {
               </div>
               <h4>Structured result</h4>
               <p>JSON</p>
+            </div>
+          </div>
+          <div className="sb-caplist">
+            <span className="sb-cap on">
+              <span className="sb-cap-dot" />
+              import baselines
+            </span>
+            <span className="sb-cap on">
+              <span className="sb-cap-dot" />
+              sandbox-only fs
+            </span>
+            <span className="sb-cap on">
+              <span className="sb-cap-dot" />
+              nested runScript
+            </span>
+            <span className="sb-cap on">
+              <span className="sb-cap-dot" />
+              explicit diffs
+            </span>
+          </div>
+        </div>
+
+        <div className="mt-12">
+          <div className="section-head">
+            <div className="section-kicker">Virtual filesystem runner</div>
+            <AnchorH2 id="virtual-filesystem">
+              Seeded files, not host mounts.
+            </AnchorH2>
+            <p>
+              GocciaSandboxRunner executes an entry path inside an isolated
+              virtual filesystem. Seed paths and JSON seed config copy files
+              into the sandbox before execution; they are import baselines, not
+              live mounts. Source can import <code>&quot;fs&quot;</code> for
+              sandbox filesystem operations and <code>&quot;goccia&quot;</code>{" "}
+              for shell commands or nested execution.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-[repeat(auto-fit,minmax(280px,1fr))] gap-6">
+            <div className="code-card">
+              <div className="code-card-head">
+                <TerminalIcon size={14} />
+                <span>run sandbox</span>
+              </div>
+              <pre className="code-card-body">
+                <code>
+                  <HighlightedShell code={RUNNER_COMMAND} />
+                </code>
+              </pre>
+            </div>
+
+            <div className="code-card">
+              <div className="code-card-head">
+                <TerminalIcon size={14} />
+                <span>sandbox.seed.json</span>
+              </div>
+              <pre className="code-card-body">
+                <code>
+                  <HighlightedJson code={SEED_CONFIG} />
+                </code>
+              </pre>
+            </div>
+
+            <div className="code-card">
+              <div className="code-card-head">
+                <TerminalIcon size={14} />
+                <span>main.js</span>
+              </div>
+              <pre className="code-card-body">
+                <code>
+                  <HighlightedCode code={VFS_SCRIPT} />
+                </code>
+              </pre>
             </div>
           </div>
         </div>

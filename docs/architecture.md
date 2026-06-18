@@ -102,9 +102,9 @@ CLI bytecode paths that need parse artifacts use `TGocciaCLISourcePipelineResult
 | GocciaBenchmarkRunner | `TGocciaCLIApplication` | `Configure`, `ConfigureCreatedEngine`, `ExecuteWithPaths` |
 | GocciaBundler | `TGocciaCLIApplication` | `Configure`, `Validate`, `ExecuteWithPaths` |
 
-`GocciaSandboxRunner` is a separate CLI host for virtual-filesystem execution. It seeds a `TSandboxVirtualFileSystem` from explicit import baselines before creating an engine, then installs `TGocciaSandboxRuntimeExtension` so source can import `"fs"` and `"goccia"` inside that sandbox. The sandbox runner still uses the same executor abstraction as the script loader: `--mode=interpreted` uses `TGocciaInterpreterExecutor`, while `--mode=bytecode` uses `TGocciaBytecodeExecutor`.
+`GocciaSandboxRunner` is a separate CLI host for virtual-filesystem execution. It seeds a `TSandboxVirtualFileSystem` from explicit import baselines before creating an engine, then installs `TGocciaSandboxRuntimeExtension` so source can import `"fs"` and `"goccia"` inside that sandbox. The sandbox runner uses the same executor abstraction as the script loader: `--mode=interpreted` uses `TGocciaInterpreterExecutor`, while `--mode=bytecode` uses `TGocciaBytecodeExecutor`.
 
-Nested sandbox execution is still hosted by `GocciaSandboxRunner`: `runScript` and shell `goccia` dispatch through `TGocciaSandboxContext.RunScriptCallback`. Shared-VFS execution remains the default, while `{ sandbox: true }` / `goccia --sandbox` creates a child `TGocciaSandboxContext` seeded from parent-VFS paths and runs it through the same interpreter or bytecode executor mode.
+Nested execution uses `GocciaSandboxRunner` as its sandbox host: `runScript` and shell `goccia` dispatch through `TGocciaSandboxContext.RunScriptCallback`. Shared-VFS execution remains the default, while `{ sandbox: true }` / `goccia --sandbox` creates a child `TGocciaSandboxContext` seeded from parent-VFS paths and runs it through the same interpreter or bytecode executor mode.
 
 ## Executor Architecture
 
