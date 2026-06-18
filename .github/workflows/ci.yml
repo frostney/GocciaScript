@@ -609,6 +609,8 @@ jobs:
 
       - name: Run test262 conformance suite
         continue-on-error: true
+        env:
+          TEST262_SUITE_SHA: ${{ steps.test262-pin.outputs.sha }}
         # --timeout-ms=20000: the per-test deadline is wall-clock, and at
         # --jobs=4 the workers fully subscribe the runner, inflating each
         # test's wall time ~30-40% vs the old --jobs=2 baseline; borderline
@@ -619,12 +621,22 @@ jobs:
         # per-test subprocesses tolerate scheduler jitter, so the only
         # remaining limit is core count.
         run: |
+          profile_args=()
+          if [ "${GITHUB_REF}" = "refs/heads/main" ]; then
+            profile_args=(
+              --profile-dir=test262-profile-details
+              --profile-summary-output=test262-profile-aggregate.json
+              --profile-markdown-output=test262-profile-aggregate.md
+            )
+          fi
+
           bun scripts/run_test262_suite.ts \
             --suite-dir test262-suite \
             --mode=bytecode \
             --jobs=4 \
             --timeout-ms=20000 \
-            --output=test262-results.json
+            --output=test262-results.json \
+            "${profile_args[@]}"
 
       - name: Stage test262 baseline
         if: github.ref == 'refs/heads/main'
@@ -648,6 +660,17 @@ jobs:
           retention-days: 30
           path: test262-results.json
 
+      - name: Upload test262 profile
+        if: github.ref == 'refs/heads/main' && hashFiles('test262-profile-aggregate.json') != '' && hashFiles('test262-profile-details/**') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: test262-profile
+          retention-days: 30
+          path: |
+            test262-profile-aggregate.json
+            test262-profile-aggregate.md
+            test262-profile-details/
+
       - name: Publish test262 dashboard point
         if: github.ref == 'refs/heads/main' && hashFiles('test262-results.json') != ''
         env:
@@ -661,6 +684,26 @@ jobs:
           cd website
           bun install --frozen-lockfile
           bun run publish-test262 ../test262-results.json
+
+      - name: Publish test262 profile reports
+        if: github.ref == 'refs/heads/main' && hashFiles('test262-profile-aggregate.json') != '' && hashFiles('test262-profile-details/**') != ''
+        env:
+          BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
+          TEST262_PROFILE_RUN_CREATED_AT: ${{ github.event.repository.pushed_at }}
+        run: |
+          if [ -z "${BLOB_READ_WRITE_TOKEN:-}" ]; then
+            echo "BLOB_READ_WRITE_TOKEN is not configured; skipping profile publish."
+            exit 0
+          fi
+          if [ -d test262-profile-details ]; then
+            tar -czf test262-profile-details.tar.gz test262-profile-details
+          fi
+          cd website
+          bun install --frozen-lockfile
+          bun scripts/publish-test262-profile-reports.ts \
+            --aggregate ../test262-profile-aggregate.json \
+            --markdown ../test262-profile-aggregate.md \
+            --details-archive ../test262-profile-details.tar.gz
 
   benchmark:
     needs: build
