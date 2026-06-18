@@ -17,6 +17,7 @@ build/main
 build/GocciaREPL
 build/GocciaScriptLoader
 build/GocciaScriptLoaderBare
+build/GocciaSandboxRunner
 build/GocciaTestRunner
 build/GocciaBenchmarkRunner
 build/GocciaBundler

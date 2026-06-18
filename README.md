@@ -70,6 +70,7 @@ console.log(`Your order total: $${total.toFixed(2)}`);
 # Build specific components
 ./build.pas loader           # Dev build of Script Loader
 ./build.pas loaderbare       # Dev build of Bare Script Loader
+./build.pas sandboxrunner    # Dev build of Sandbox Runner
 ./build.pas --prod loader    # Production build of Script Loader
 ./build.pas repl             # Interactive REPL
 ./build.pas testrunner       # Test runner
@@ -106,6 +107,39 @@ printf "print('hello from bare');" | ./build/GocciaScriptLoaderBare
 Script files may start with a Unix shebang line like `#!/usr/bin/env goccia`; GocciaScript ignores that first line during lexing.
 
 Files ending in `.mjs` are loaded as module source by default, matching JavaScript runtime convention. Use `--source-type=script` to override that inference, or `--source-type=module` / `"source-type": "module"` to force module source for other extensions.
+
+### Run in a Sandbox
+
+`GocciaSandboxRunner` executes an entry path inside an isolated virtual filesystem. Host files are imported only through explicit seed baselines; they are snapshots, not live mounts.
+
+```bash
+./build.pas sandboxrunner
+./build/GocciaSandboxRunner /main.js --seed=./sandbox-root=/ --source-type=module
+./build/GocciaSandboxRunner /main.js --seed-config=seed.json --diff --diff-output=changes.json
+./build/GocciaSandboxRunner /main.js --seed-config=seed.json --mode=bytecode
+```
+
+Seed JSON uses a top-level `files` array. `{ "from": "./host", "to": "/" }` imports a host file or directory relative to the seed config file, `{ "path": "/main.js", "text": "..." }` defines UTF-8 text inline, and `{ "path": "/data.bin", "base64": "AQID" }` defines binary content. Scripts import sandbox capabilities explicitly:
+
+```javascript
+import fs from "fs";
+import { $, runScript } from "goccia";
+
+await fs.promises.writeFile("/hello.txt", "hello");
+console.log(await $`cat /hello.txt`.text());
+runScript("/other.js");
+```
+
+Nested execution shares the current virtual filesystem by default. To run a child script inside its own virtual filesystem, seed it from parent sandbox paths:
+
+```javascript
+const child = runScript("/worker.js", {
+  sandbox: true,
+  seed: ["/worker.js", { from: "/input", to: "/input" }],
+  diff: true,
+});
+console.log(child.diff);
+```
 
 ### Run via Bytecode
 

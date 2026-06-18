@@ -77,3 +77,5 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0065 — Shape-lite inline cache design](0065-shape-lite-inline-cache-design.md)
 - [0066 — Lazy shape computation](0066-lazy-shape-computation.md)
 - [0067 — Cross-realm shape dictionary mode](0067-cross-realm-shape-dictionary-mode.md)
+- [0068 — GocciaSandboxRunner with explicit seed baselines](0068-goccia-sandbox-runner.md)
+- [0069 — Nested sandbox virtual filesystems](0069-nested-sandbox-virtual-filesystems.md)

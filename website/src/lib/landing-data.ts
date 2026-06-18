@@ -50,6 +50,18 @@ console.log(readme.length);`,
 });  // GET / HEAD only, opt-in hosts`,
   },
   {
+    name: "fs (sandbox)",
+    snippet: `import fs from "fs";
+fs.mkdirSync("/out", { recursive: true });
+fs.writeFileSync("/out/summary.txt", "ready\\n");`,
+  },
+  {
+    name: "goccia",
+    snippet: `import { $, runScript } from "goccia";
+await $\`cat /out/summary.txt\`.text();
+runScript("/child.js", { sandbox: true });`,
+  },
+  {
     name: "console",
     snippet: `console.log("total:", 6.5);
 console.warn("deprecated");
@@ -155,7 +167,7 @@ export const FEATURES: { icon: FeatureIcon; title: string; body: string }[] = [
   {
     icon: "shield",
     title: "Sandbox-first",
-    body: "No eval, no global mutable state, GET/HEAD-only fetch, timeouts, and explicit global injection via JSON/TOML/YAML.",
+    body: "Seeded VFS snapshots, import-only fs/goccia modules, nested execution, explicit diffs, and host-owned limits.",
   },
   {
     icon: "leaf",

@@ -375,6 +375,22 @@ begin
   WriteLn('');
 end;
 
+procedure BuildSandboxRunner;
+var
+  Output: string;
+begin
+  WriteLn('');
+  WriteLn('Building GocciaSandboxRunner...');
+  if not RunCommand('fpc', FPCArgs('source/app/GocciaSandboxRunner.dpr',
+      EnsureUnitOutputDirectory(TargetUnitOutputDirectory('sandboxrunner'))),
+      Output) then
+    PrintBuildFailureAndExit(Output, 'GocciaSandboxRunner build failed',
+      'sandboxrunner');
+  WriteLn(Output);
+  WriteLn('GocciaSandboxRunner built successfully');
+  WriteLn('');
+end;
+
 procedure BuildTests;
 var
   AllUnitFiles: TStringList;
@@ -502,6 +518,8 @@ begin
     BuildScriptLoader
   else if ATrigger = 'loaderbare' then
     BuildScriptLoaderBare
+  else if ATrigger = 'sandboxrunner' then
+    BuildSandboxRunner
   else if ATrigger = 'tests' then
     BuildTests
   else if ATrigger = 'testrunner' then
@@ -563,6 +581,7 @@ begin
     BuildTriggers.Add('tests');
     BuildTriggers.Add('loader');
     BuildTriggers.Add('loaderbare');
+    BuildTriggers.Add('sandboxrunner');
     BuildTriggers.Add('testrunner');
     BuildTriggers.Add('benchmarkrunner');
     BuildTriggers.Add('bundler');
