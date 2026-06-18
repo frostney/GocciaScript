@@ -44,6 +44,7 @@ implementation
 uses
   SysUtils,
 
+  Goccia.Arithmetic,
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
@@ -226,6 +227,13 @@ begin
   finally
     Args.Free;
   end;
+end;
+
+function RejectPromiseCapabilityWithReason(const ACapability: TPromiseCapability;
+  const AReason: TGocciaValue): TGocciaValue;
+begin
+  CallPromiseCapability(ACapability.Reject, AReason);
+  Result := ACapability.Promise;
 end;
 
 function NewPromiseCapability(const AConstructor: TGocciaValue;
@@ -803,22 +811,34 @@ function TGocciaGlobalPromise.PromiseResolve(const AArgs: TGocciaArgumentsCollec
   const AThisValue: TGocciaValue): TGocciaValue;
 var
   Value: TGocciaValue;
-  P: TGocciaPromiseValue;
+  ValueConstructor: TGocciaValue;
+  Capability: TPromiseCapability;
+  ResolveArgs: TGocciaArgumentsCollection;
 begin
   Value := AArgs.GetElement(0);
 
-  { Step 2: If x is already a Promise, return it directly }
+  { Step 2: If x is already a Promise created by C, return it directly. }
   if Value is TGocciaPromiseValue then
   begin
-    Result := Value;
-    Exit;
+    ValueConstructor := TGocciaPromiseValue(Value).GetProperty(PROP_CONSTRUCTOR);
+    if IsSameValue(ValueConstructor, AThisValue) then
+    begin
+      Result := Value;
+      Exit;
+    end;
   end;
 
   { Steps 3-4: Let promiseCapability = NewPromiseCapability; Call(resolve, x) }
-  P := TGocciaPromiseValue.Create;
-  P.Resolve(Value);
+  Capability := NewPromiseCapability(AThisValue, FPromiseConstructor);
+  ResolveArgs := TGocciaArgumentsCollection.Create([Value]);
+  try
+    DispatchCall(Capability.Resolve, ResolveArgs,
+      TGocciaUndefinedLiteralValue.UndefinedValue);
+  finally
+    ResolveArgs.Free;
+  end;
   { Step 5: Return promiseCapability.[[Promise]] }
-  Result := P;
+  Result := Capability.Promise;
 end;
 
 { Promise.reject ( r ) — §27.2.4.6
@@ -829,14 +849,21 @@ end;
 function TGocciaGlobalPromise.PromiseReject(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
-  P: TGocciaPromiseValue;
+  Capability: TPromiseCapability;
+  RejectArgs: TGocciaArgumentsCollection;
 begin
   { Step 2: Let promiseCapability = NewPromiseCapability(C) }
-  P := TGocciaPromiseValue.Create;
+  Capability := NewPromiseCapability(AThisValue, FPromiseConstructor);
   { Step 3: Call(reject, undefined, « r ») }
-  P.Reject(AArgs.GetElement(0));
+  RejectArgs := TGocciaArgumentsCollection.Create([AArgs.GetElement(0)]);
+  try
+    DispatchCall(Capability.Reject, RejectArgs,
+      TGocciaUndefinedLiteralValue.UndefinedValue);
+  finally
+    RejectArgs.Free;
+  end;
   { Step 4: Return promiseCapability.[[Promise]] }
-  Result := P;
+  Result := Capability.Promise;
 end;
 
 function TGocciaGlobalPromise.ExtractPromiseArray(const AArgs: TGocciaArgumentsCollection): TGocciaArrayValue;
@@ -897,40 +924,43 @@ var
 begin
   { Step 2: Let promiseCapability = NewPromiseCapability(C) }
   Capability := NewPromiseCapability(AThisValue, FPromiseConstructor);
-  { Step 4: Let iteratorRecord = GetIterator(iterable) }
   try
+    { Step 4: Let iteratorRecord = GetIterator(iterable) }
     InputArray := ExtractPromiseArray(AArgs);
-  except
-    on E: TGocciaThrowValue do
+
+    { Empty iterable: resolve immediately with empty array }
+    if InputArray.Elements.Count = 0 then
     begin
-      { Step 6: If abrupt, Call(reject, reason) }
-      CallPromiseCapability(Capability.Reject, E.Value);
+      CallPromiseCapability(Capability.Resolve, TGocciaArrayValue.Create);
       Result := Capability.Promise;
       Exit;
     end;
-  end;
 
-  { Empty iterable: resolve immediately with empty array }
-  if InputArray.Elements.Count = 0 then
-  begin
-    CallPromiseCapability(Capability.Resolve, TGocciaArrayValue.Create);
-    Result := Capability.Promise;
-    Exit;
-  end;
+    { Step 5: PerformPromiseAll — set up per-element handlers }
+    State := TPromiseAllState.Create(Capability.Promise, Capability.Resolve,
+      Capability.Reject, InputArray.Elements.Count);
 
-  { Step 5: PerformPromiseAll — set up per-element handlers }
-  State := TPromiseAllState.Create(Capability.Promise, Capability.Resolve,
-    Capability.Reject, InputArray.Elements.Count);
-
-  for I := 0 to InputArray.Elements.Count - 1 do
-  begin
-    { Wrap each element as a Promise via PromiseResolve(C, nextValue) }
-    PromiseLike := PromiseResolveForConstructor(AThisValue, InputArray.Elements[I]);
-    FulfillHandler := TPromiseAllHandler.Create(State, I);
-    FulfillFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(
-      FulfillHandler.Invoke, 'all-resolve', 1);
-    FulfillFn.CapturedRoot := FulfillHandler;
-    InvokePromiseLikeThen(PromiseLike, FulfillFn, Capability.Reject);
+    for I := 0 to InputArray.Elements.Count - 1 do
+    begin
+      { Wrap each element as a Promise via PromiseResolve(C, nextValue) }
+      PromiseLike := PromiseResolveForConstructor(AThisValue, InputArray.Elements[I]);
+      FulfillHandler := TPromiseAllHandler.Create(State, I);
+      FulfillFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+        FulfillHandler.Invoke, 'all-resolve', 1);
+      FulfillFn.CapturedRoot := FulfillHandler;
+      InvokePromiseLikeThen(PromiseLike, FulfillFn, Capability.Reject);
+    end;
+  except
+    on E: EGocciaBytecodeThrow do
+    begin
+      Result := RejectPromiseCapabilityWithReason(Capability, E.ThrownValue);
+      Exit;
+    end;
+    on E: TGocciaThrowValue do
+    begin
+      Result := RejectPromiseCapabilityWithReason(Capability, E.Value);
+      Exit;
+    end;
   end;
 
   { Step 7: Return promiseCapability.[[Promise]] }
@@ -964,46 +994,49 @@ var
 begin
   { Step 2: Let promiseCapability = NewPromiseCapability(C) }
   Capability := NewPromiseCapability(AThisValue, FPromiseConstructor);
-  { Step 4: Let iteratorRecord = GetIterator(iterable) }
   try
+    { Step 4: Let iteratorRecord = GetIterator(iterable) }
     InputArray := ExtractPromiseArray(AArgs);
-  except
-    on E: TGocciaThrowValue do
+
+    { Empty iterable: resolve immediately with empty array }
+    if InputArray.Elements.Count = 0 then
     begin
-      { Step 6: If abrupt, Call(reject, reason) }
-      CallPromiseCapability(Capability.Reject, E.Value);
+      CallPromiseCapability(Capability.Resolve, TGocciaArrayValue.Create);
       Result := Capability.Promise;
       Exit;
     end;
-  end;
 
-  { Empty iterable: resolve immediately with empty array }
-  if InputArray.Elements.Count = 0 then
-  begin
-    CallPromiseCapability(Capability.Resolve, TGocciaArrayValue.Create);
-    Result := Capability.Promise;
-    Exit;
-  end;
+    { Step 5: PerformPromiseAllSettled — set up per-element handlers }
+    State := TPromiseAllState.Create(Capability.Promise, Capability.Resolve,
+      Capability.Reject, InputArray.Elements.Count);
 
-  { Step 5: PerformPromiseAllSettled — set up per-element handlers }
-  State := TPromiseAllState.Create(Capability.Promise, Capability.Resolve,
-    Capability.Reject, InputArray.Elements.Count);
+    for I := 0 to InputArray.Elements.Count - 1 do
+    begin
+      { Wrap each element as a Promise via PromiseResolve(C, nextValue) }
+      PromiseLike := PromiseResolveForConstructor(AThisValue, InputArray.Elements[I]);
+      FulfillHandler := TPromiseAllSettledFulfillHandler.Create(State, I);
+      RejectHandler := TPromiseAllSettledRejectHandler.Create(State, I);
 
-  for I := 0 to InputArray.Elements.Count - 1 do
-  begin
-    { Wrap each element as a Promise via PromiseResolve(C, nextValue) }
-    PromiseLike := PromiseResolveForConstructor(AThisValue, InputArray.Elements[I]);
-    FulfillHandler := TPromiseAllSettledFulfillHandler.Create(State, I);
-    RejectHandler := TPromiseAllSettledRejectHandler.Create(State, I);
-
-    { Invoke then(onFulfilled, onRejected) — both handlers record status }
-    FulfillFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(
-      FulfillHandler.Invoke, 'allSettled-fulfill', 1);
-    RejectFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(
-      RejectHandler.Invoke, 'allSettled-reject', 1);
-    FulfillFn.CapturedRoot := FulfillHandler;
-    RejectFn.CapturedRoot := RejectHandler;
-    InvokePromiseLikeThen(PromiseLike, FulfillFn, RejectFn);
+      { Invoke then(onFulfilled, onRejected) — both handlers record status }
+      FulfillFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+        FulfillHandler.Invoke, 'allSettled-fulfill', 1);
+      RejectFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+        RejectHandler.Invoke, 'allSettled-reject', 1);
+      FulfillFn.CapturedRoot := FulfillHandler;
+      RejectFn.CapturedRoot := RejectHandler;
+      InvokePromiseLikeThen(PromiseLike, FulfillFn, RejectFn);
+    end;
+  except
+    on E: EGocciaBytecodeThrow do
+    begin
+      Result := RejectPromiseCapabilityWithReason(Capability, E.ThrownValue);
+      Exit;
+    end;
+    on E: TGocciaThrowValue do
+    begin
+      Result := RejectPromiseCapabilityWithReason(Capability, E.Value);
+      Exit;
+    end;
   end;
 
   { Step 7: Return promiseCapability.[[Promise]] }
@@ -1032,25 +1065,28 @@ var
 begin
   { Step 2: Let promiseCapability = NewPromiseCapability(C) }
   Capability := NewPromiseCapability(AThisValue, FPromiseConstructor);
-  { Step 4: Let iteratorRecord = GetIterator(iterable) }
   try
+    { Step 4: Let iteratorRecord = GetIterator(iterable) }
     InputArray := ExtractPromiseArray(AArgs);
-  except
-    on E: TGocciaThrowValue do
+
+    { Step 5: PerformPromiseRace — first to settle wins }
+    for I := 0 to InputArray.Elements.Count - 1 do
     begin
-      { Step 6: If abrupt, Call(reject, reason) }
-      CallPromiseCapability(Capability.Reject, E.Value);
-      Result := Capability.Promise;
+      { Wrap each element as a Promise via PromiseResolve(C, nextValue) }
+      PromiseLike := PromiseResolveForConstructor(AThisValue, InputArray.Elements[I]);
+      InvokePromiseLikeThen(PromiseLike, Capability.Resolve, Capability.Reject);
+    end;
+  except
+    on E: EGocciaBytecodeThrow do
+    begin
+      Result := RejectPromiseCapabilityWithReason(Capability, E.ThrownValue);
       Exit;
     end;
-  end;
-
-  { Step 5: PerformPromiseRace — first to settle wins }
-  for I := 0 to InputArray.Elements.Count - 1 do
-  begin
-    { Wrap each element as a Promise via PromiseResolve(C, nextValue) }
-    PromiseLike := PromiseResolveForConstructor(AThisValue, InputArray.Elements[I]);
-    InvokePromiseLikeThen(PromiseLike, Capability.Resolve, Capability.Reject);
+    on E: TGocciaThrowValue do
+    begin
+      Result := RejectPromiseCapabilityWithReason(Capability, E.Value);
+      Exit;
+    end;
   end;
 
   { Step 7: Return promiseCapability.[[Promise]] }
@@ -1083,45 +1119,48 @@ var
 begin
   { Step 2: Let promiseCapability = NewPromiseCapability(C) }
   Capability := NewPromiseCapability(AThisValue, FPromiseConstructor);
-  { Step 4: Let iteratorRecord = GetIterator(iterable) }
   try
+    { Step 4: Let iteratorRecord = GetIterator(iterable) }
     InputArray := ExtractPromiseArray(AArgs);
-  except
-    on E: TGocciaThrowValue do
+
+    { Empty iterable: reject with AggregateError (all zero promises rejected) }
+    if InputArray.Elements.Count = 0 then
     begin
-      { Step 6: If abrupt, Call(reject, reason) }
-      CallPromiseCapability(Capability.Reject, E.Value);
+      ErrorObj := Goccia.Values.ErrorHelper.CreateErrorObject(AGGREGATE_ERROR_NAME,
+        SErrorAllPromisesRejected);
+      ErrorObj.AssignProperty(PROP_ERRORS, TGocciaArrayValue.Create);
+      CallPromiseCapability(Capability.Reject, ErrorObj);
       Result := Capability.Promise;
       Exit;
     end;
-  end;
 
-  { Empty iterable: reject with AggregateError (all zero promises rejected) }
-  if InputArray.Elements.Count = 0 then
-  begin
-    ErrorObj := Goccia.Values.ErrorHelper.CreateErrorObject(AGGREGATE_ERROR_NAME,
-      SErrorAllPromisesRejected);
-    ErrorObj.AssignProperty(PROP_ERRORS, TGocciaArrayValue.Create);
-    CallPromiseCapability(Capability.Reject, ErrorObj);
-    Result := Capability.Promise;
-    Exit;
-  end;
+    { Step 5: PerformPromiseAny — first fulfillment wins }
+    State := TPromiseAnyState.Create(Capability.Promise, Capability.Resolve,
+      Capability.Reject, InputArray.Elements.Count);
 
-  { Step 5: PerformPromiseAny — first fulfillment wins }
-  State := TPromiseAnyState.Create(Capability.Promise, Capability.Resolve,
-    Capability.Reject, InputArray.Elements.Count);
+    for I := 0 to InputArray.Elements.Count - 1 do
+    begin
+      { Wrap each element as a Promise via PromiseResolve(C, nextValue) }
+      PromiseLike := PromiseResolveForConstructor(AThisValue, InputArray.Elements[I]);
+      RejectHandler := TPromiseAnyRejectHandler.Create(State, I);
 
-  for I := 0 to InputArray.Elements.Count - 1 do
-  begin
-    { Wrap each element as a Promise via PromiseResolve(C, nextValue) }
-    PromiseLike := PromiseResolveForConstructor(AThisValue, InputArray.Elements[I]);
-    RejectHandler := TPromiseAnyRejectHandler.Create(State, I);
-
-    { Invoke then(onFulfilled, onRejected) — fulfill resolves, reject collects }
-    RejectFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(
-      RejectHandler.Invoke, 'any-reject', 1);
-    RejectFn.CapturedRoot := RejectHandler;
-    InvokePromiseLikeThen(PromiseLike, Capability.Resolve, RejectFn);
+      { Invoke then(onFulfilled, onRejected) — fulfill resolves, reject collects }
+      RejectFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+        RejectHandler.Invoke, 'any-reject', 1);
+      RejectFn.CapturedRoot := RejectHandler;
+      InvokePromiseLikeThen(PromiseLike, Capability.Resolve, RejectFn);
+    end;
+  except
+    on E: EGocciaBytecodeThrow do
+    begin
+      Result := RejectPromiseCapabilityWithReason(Capability, E.ThrownValue);
+      Exit;
+    end;
+    on E: TGocciaThrowValue do
+    begin
+      Result := RejectPromiseCapabilityWithReason(Capability, E.Value);
+      Exit;
+    end;
   end;
 
   { Step 7: Return promiseCapability.[[Promise]] }

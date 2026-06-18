@@ -100,6 +100,8 @@ type
     procedure MarkReferences; override;
   end;
 
+function EnsureArrayIteratorPrototype: TGocciaObjectValue;
+
 implementation
 
 uses
@@ -123,13 +125,18 @@ var
 
 { TGocciaArrayIteratorValue }
 
+function EnsureArrayIteratorPrototype: TGocciaObjectValue;
+begin
+  Result := TGocciaArrayIteratorValue.EnsureConcreteIteratorPrototype(
+    GArrayIteratorPrototypeSlot, 'Array Iterator');
+end;
+
 constructor TGocciaArrayIteratorValue.Create(const ASource: TGocciaValue; const AKind: TGocciaArrayIteratorKind);
 var
   SharedPrototype: TGocciaObjectValue;
 begin
   inherited Create;
-  SharedPrototype := EnsureConcreteIteratorPrototype(
-    GArrayIteratorPrototypeSlot, 'Array Iterator');
+  SharedPrototype := EnsureArrayIteratorPrototype;
   if Assigned(SharedPrototype) then
     FPrototype := SharedPrototype;
   FSource := ASource;

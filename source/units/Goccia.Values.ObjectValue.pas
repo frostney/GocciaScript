@@ -143,6 +143,7 @@ uses
   Goccia.Values.FunctionBase,
   Goccia.Values.FunctionValue,
   Goccia.Values.NativeFunction,
+  Goccia.Values.ProxyValue,
   Goccia.Values.Shape,
   Goccia.Values.ToPrimitive;
 
@@ -264,6 +265,17 @@ begin
   Result := nil;
 end;
 
+function ObjectPrototypeOf(const AObject: TGocciaObjectValue): TGocciaValue;
+begin
+  if AObject is TGocciaProxyValue then
+    Exit(TGocciaProxyValue(AObject).GetPrototypeTrap);
+
+  if Assigned(AObject.Prototype) then
+    Result := AObject.Prototype
+  else
+    Result := TGocciaNullLiteralValue.NullValue;
+end;
+
 procedure MarkPropertyDescriptor(const ADescriptor: TGocciaPropertyDescriptor);
 begin
   ADescriptor.MarkValues;
@@ -353,7 +365,8 @@ end;
 // ES2026 §20.1.3.3 Object.prototype.isPrototypeOf(V)
 function TGocciaObjectValue.ObjectPrototypeIsPrototypeOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
-  V, Current: TGocciaObjectValue;
+  V: TGocciaObjectValue;
+  Current: TGocciaValue;
 begin
   // Step 1: If V is not an Object, return false
   if (AArgs.Length = 0) or not (AArgs.GetElement(0) is TGocciaObjectValue) then
@@ -367,13 +380,13 @@ begin
 
   V := TGocciaObjectValue(AArgs.GetElement(0));
   // Step 3: Repeat — walk V's prototype chain
-  Current := V.FPrototype;
-  while Assigned(Current) do
+  Current := ObjectPrototypeOf(V);
+  while Current is TGocciaObjectValue do
   begin
     // Step 3a: If SameValue(O, V.[[Prototype]]) is true, return true
     if Current = AThisValue then
       Exit(TGocciaBooleanLiteralValue.TrueValue);
-    Current := Current.FPrototype;
+    Current := ObjectPrototypeOf(TGocciaObjectValue(Current));
   end;
 
   Result := TGocciaBooleanLiteralValue.FalseValue;

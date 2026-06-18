@@ -1137,8 +1137,13 @@ end;
 constructor TGocciaTypedArrayIteratorValue.Create(
   const ASource: TGocciaTypedArrayValue;
   const AKind: TGocciaTypedArrayIteratorKind);
+var
+  SharedPrototype: TGocciaObjectValue;
 begin
   inherited Create;
+  SharedPrototype := EnsureArrayIteratorPrototype;
+  if Assigned(SharedPrototype) then
+    FPrototype := SharedPrototype;
   FSource := ASource;
   FIndex := 0;
   FKind := AKind;
@@ -2398,7 +2403,7 @@ var
   TA: TGocciaTypedArrayValue;
 begin
   TA := RequireAttachedTypedArray(AThisValue, 'TypedArray.prototype.values');
-  Result := TGocciaArrayIteratorValue.Create(TA, akValues);
+  Result := TGocciaTypedArrayIteratorValue.Create(TA, taikValues);
 end;
 
 // ES2026 §23.2.3.18 %TypedArray%.prototype.keys()
@@ -2407,7 +2412,7 @@ var
   TA: TGocciaTypedArrayValue;
 begin
   TA := RequireAttachedTypedArray(AThisValue, 'TypedArray.prototype.keys');
-  Result := TGocciaArrayIteratorValue.Create(TA, akKeys);
+  Result := TGocciaTypedArrayIteratorValue.Create(TA, taikKeys);
 end;
 
 // ES2026 §23.2.3.6 %TypedArray%.prototype.entries()
@@ -2416,7 +2421,7 @@ var
   TA: TGocciaTypedArrayValue;
 begin
   TA := RequireAttachedTypedArray(AThisValue, 'TypedArray.prototype.entries');
-  Result := TGocciaArrayIteratorValue.Create(TA, akEntries);
+  Result := TGocciaTypedArrayIteratorValue.Create(TA, taikEntries);
 end;
 
 { TGocciaTypedArrayClassValue }
