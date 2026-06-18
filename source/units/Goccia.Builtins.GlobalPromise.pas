@@ -200,6 +200,10 @@ function TPromiseCapabilityExecutor.Invoke(
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+
+  if Assigned(FResolve) or Assigned(FReject) then
+    ThrowTypeError(SErrorPromiseResolverNotFunction, SSuggestPromiseResolver);
+
   FResolve := AArgs.GetElement(0);
   FReject := AArgs.GetElement(1);
 end;
