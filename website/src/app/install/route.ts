@@ -5,7 +5,7 @@ import path from "node:path";
  * Serve `install.sh` at the bare `/install` path. The Quick install
  * one-liner pipes this URL into `sh`:
  *
- *   curl -fsSL https://gocciascript.dev/install | sh
+ *   curl -fsSL https://www.gocciascript.dev/install | sh
  *
  * Browsers fetching `/install` see the script as plain text — the
  * "View install script" link on the install/landing pages points
