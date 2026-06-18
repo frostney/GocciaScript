@@ -13,6 +13,11 @@ uses
 
 type
   TGocciaModuleResolver = class(TModuleResolver)
+  protected
+    function IsAbsoluteImportMapPath(const APath: string): Boolean; virtual;
+    function IsRelativeImportMapPath(const APath: string): Boolean; virtual;
+    function NormalizeImportMapPath(const APath, ABaseDirectory: string): string;
+      virtual;
   public
     constructor Create(const ABaseDirectory: string = '');
     class function DiscoverProjectConfig(const AStartDirectory: string): string; static;
@@ -39,7 +44,8 @@ const
   CURRENT_DIRECTORY_PREFIX = './';
   PARENT_DIRECTORY_PREFIX = '../';
 
-function IsAbsoluteImportMapPath(const APath: string): Boolean;
+function TGocciaModuleResolver.IsAbsoluteImportMapPath(
+  const APath: string): Boolean;
 begin
   if Length(APath) = 0 then
     Exit(False);
@@ -50,7 +56,8 @@ begin
   Result := Copy(APath, 1, 2) = '\\';
 end;
 
-function IsRelativeImportMapPath(const APath: string): Boolean;
+function TGocciaModuleResolver.IsRelativeImportMapPath(
+  const APath: string): Boolean;
 begin
   Result := (Copy(APath, 1, Length(CURRENT_DIRECTORY_PREFIX)) =
       CURRENT_DIRECTORY_PREFIX) or
@@ -63,7 +70,8 @@ begin
   Result := (APath <> '') and (APath[Length(APath)] = '/');
 end;
 
-function NormalizeImportMapPath(const APath, ABaseDirectory: string): string;
+function TGocciaModuleResolver.NormalizeImportMapPath(const APath,
+  ABaseDirectory: string): string;
 begin
   if IsAbsoluteImportMapPath(APath) then
     Result := ExpandUTF8FileName(APath)

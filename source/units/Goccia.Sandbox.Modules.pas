@@ -33,6 +33,11 @@ type
     function TryResolveWithSandboxExtensions(const ABasePath: string;
       out AResolvedPath: string): Boolean;
     function NormalizeImportBase(const AImportingFilePath: string): string;
+  protected
+    function IsAbsoluteImportMapPath(const APath: string): Boolean; override;
+    function IsRelativeImportMapPath(const APath: string): Boolean; override;
+    function NormalizeImportMapPath(const APath, ABaseDirectory: string): string;
+      override;
   public
     constructor Create(const AFs: TSandboxVirtualFileSystem;
       const ABaseDirectory: string = '/');
@@ -76,6 +81,22 @@ begin
     Result := '/' + Path
   else
     Result := Base + '/' + Path;
+end;
+
+function HasSandboxTrailingSeparator(const APath: string): Boolean;
+var
+  Path: string;
+begin
+  Path := NormalizeSandboxPathSeparators(APath);
+  Result := (Path <> '') and (Path[Length(Path)] = '/');
+end;
+
+function EnsureSandboxTrailingSeparatorIfNeeded(const APath: string;
+  const ANeedsTrailingSeparator: Boolean): string;
+begin
+  Result := APath;
+  if ANeedsTrailingSeparator and not HasSandboxTrailingSeparator(Result) then
+    Result := Result + '/';
 end;
 
 { TGocciaSandboxModuleContentProvider }
@@ -127,6 +148,35 @@ begin
   inherited Create(ABaseDirectory);
   FFs := AFs;
   BaseDirectory := ABaseDirectory;
+end;
+
+function TGocciaSandboxModuleResolver.IsAbsoluteImportMapPath(
+  const APath: string): Boolean;
+begin
+  Result := IsAbsoluteSandboxPath(APath);
+end;
+
+function TGocciaSandboxModuleResolver.IsRelativeImportMapPath(
+  const APath: string): Boolean;
+begin
+  Result := IsRelativeModuleSpecifier(APath);
+end;
+
+function TGocciaSandboxModuleResolver.NormalizeImportMapPath(const APath,
+  ABaseDirectory: string): string;
+var
+  Path: string;
+begin
+  Path := NormalizeSandboxPathSeparators(APath);
+  if IsAbsoluteSandboxPath(Path) then
+    Result := FFs.Normalize(Path)
+  else if IsRelativeModuleSpecifier(Path) then
+    Result := FFs.Normalize(Path, BaseDirectory)
+  else
+    Result := Path;
+
+  Result := EnsureSandboxTrailingSeparatorIfNeeded(Result,
+    HasSandboxTrailingSeparator(Path));
 end;
 
 function TGocciaSandboxModuleResolver.NormalizeImportBase(

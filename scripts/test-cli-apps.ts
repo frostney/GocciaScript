@@ -2321,7 +2321,7 @@ console.log("SandboxRunner: aliases and import maps resolve sandbox module paths
   try {
     const seed = join(tmp, "seed.json");
     const importMap = join(tmp, "import-map.json");
-    writeFileSync(importMap, JSON.stringify({ imports: { "#lib/": "/lib/" } }));
+    writeFileSync(importMap, JSON.stringify({ imports: { "#lib/": "/lib/", "#rel/": "./lib/" } }));
     writeFileSync(seed, JSON.stringify({
       files: [
         {
@@ -2335,11 +2335,14 @@ console.log("SandboxRunner: aliases and import maps resolve sandbox module paths
           path: "/map-main.js",
           text: [
             'import { label } from "#lib/map.js";',
+            'import { relativeLabel } from "#rel/relative.js";',
             'console.log(label);',
+            'console.log(relativeLabel);',
           ].join("\n"),
         },
         { path: "/lib/alias.js", text: 'export const label = "alias-ok";' },
         { path: "/lib/map.js", text: 'export const label = "map-ok";' },
+        { path: "/lib/relative.js", text: 'export const relativeLabel = "relative-ok";' },
       ],
     }));
 
@@ -2362,6 +2365,8 @@ console.log("SandboxRunner: aliases and import maps resolve sandbox module paths
       throw new Error(`SandboxRunner import map should exit 0, got ${importMapProc.exitCode}: ${importMapProc.stderr.toString()}`);
     if (!containsLine(`\n${importMapStdout}`, "map-ok"))
       throw new Error(`SandboxRunner import map should print map-ok, got: ${importMapStdout}`);
+    if (!containsLine(`\n${importMapStdout}`, "relative-ok"))
+      throw new Error(`SandboxRunner import map should print relative-ok, got: ${importMapStdout}`);
   } finally {
     clean(tmp);
   }
