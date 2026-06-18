@@ -36,6 +36,8 @@ type
   protected
     function IsAbsoluteImportMapPath(const APath: string): Boolean; override;
     function IsRelativeImportMapPath(const APath: string): Boolean; override;
+    function NormalizeImportMapBaseDirectory(
+      const AImportMapDirectory: string): string; override;
     function NormalizeImportMapPath(const APath, ABaseDirectory: string): string;
       override;
   public
@@ -162,6 +164,12 @@ begin
   Result := IsRelativeModuleSpecifier(APath);
 end;
 
+function TGocciaSandboxModuleResolver.NormalizeImportMapBaseDirectory(
+  const AImportMapDirectory: string): string;
+begin
+  Result := FFs.Normalize(BaseDirectory);
+end;
+
 function TGocciaSandboxModuleResolver.NormalizeImportMapPath(const APath,
   ABaseDirectory: string): string;
 var
@@ -171,7 +179,7 @@ begin
   if IsAbsoluteSandboxPath(Path) then
     Result := FFs.Normalize(Path)
   else if IsRelativeModuleSpecifier(Path) then
-    Result := FFs.Normalize(Path, BaseDirectory)
+    Result := FFs.Normalize(Path, NormalizeSandboxPathSeparators(ABaseDirectory))
   else
     Result := Path;
 

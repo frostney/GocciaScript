@@ -16,6 +16,8 @@ type
   protected
     function IsAbsoluteImportMapPath(const APath: string): Boolean; virtual;
     function IsRelativeImportMapPath(const APath: string): Boolean; virtual;
+    function NormalizeImportMapBaseDirectory(
+      const AImportMapDirectory: string): string; virtual;
     function NormalizeImportMapPath(const APath, ABaseDirectory: string): string;
       virtual;
   public
@@ -68,6 +70,12 @@ end;
 function HasImportMapTrailingSlash(const APath: string): Boolean;
 begin
   Result := (APath <> '') and (APath[Length(APath)] = '/');
+end;
+
+function TGocciaModuleResolver.NormalizeImportMapBaseDirectory(
+  const AImportMapDirectory: string): string;
+begin
+  Result := AImportMapDirectory;
 end;
 
 function TGocciaModuleResolver.NormalizeImportMapPath(const APath,
@@ -131,7 +139,8 @@ end;
 
 procedure TGocciaModuleResolver.LoadImportMap(const APath: string);
 var
-  ImportMapDirectory, ImportMapPath, Key, NormalizedKey, NormalizedValue: string;
+  ImportMapBaseDirectory, ImportMapDirectory, ImportMapPath, Key: string;
+  NormalizedKey, NormalizedValue: string;
   Parser: TGocciaJSONParser;
   ParsedValue, ImportsValue, Value: TGocciaValue;
   ImportsObject, ImportMapObject: TGocciaObjectValue;
@@ -164,6 +173,8 @@ begin
     ImportsObject := TGocciaObjectValue(ImportsValue);
     ImportMapDirectory := IncludeTrailingPathDelimiter(
       ExtractFilePath(ImportMapPath));
+    ImportMapBaseDirectory := NormalizeImportMapBaseDirectory(
+      ImportMapDirectory);
 
     for Key in ImportsObject.GetOwnPropertyKeys do
     begin
@@ -184,9 +195,9 @@ begin
           'Import map entry "%s" must use an absolute or relative file path address.',
           [Key]);
 
-      NormalizedKey := NormalizeImportMapPath(Key, ImportMapDirectory);
+      NormalizedKey := NormalizeImportMapPath(Key, ImportMapBaseDirectory);
       NormalizedValue := NormalizeImportMapPath(
-        TGocciaStringLiteralValue(Value).Value, ImportMapDirectory);
+        TGocciaStringLiteralValue(Value).Value, ImportMapBaseDirectory);
       AddAlias(NormalizedKey, NormalizedValue);
     end;
   finally
