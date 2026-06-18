@@ -6,6 +6,10 @@ import type {
 } from "@/lib/test262-dashboard";
 
 export type Test262BlobAccess = "public" | "private";
+export type Test262ProfileBlobReportKind =
+  | "aggregate"
+  | "markdown"
+  | "detailsArchive";
 
 export type Test262BlobRun = Test262TimelinePoint & {
   reportPath: string;
@@ -21,16 +25,59 @@ export type Test262BlobPublishEntry = {
   reportJson: string;
 };
 
+export type Test262ProfileBlobReport = {
+  path: string;
+  url: string;
+  downloadUrl: string;
+  size: number;
+};
+
+export type Test262ProfileBlobRun = {
+  runId: number;
+  runNumber: number;
+  artifactId: number;
+  title: string;
+  headSha: string;
+  shortSha: string;
+  runUrl: string;
+  createdAt: string;
+  updatedAt: string;
+  artifactCreatedAt: string;
+  profileReports: {
+    aggregate: Test262ProfileBlobReport;
+    markdown?: Test262ProfileBlobReport;
+    detailsArchive?: Test262ProfileBlobReport;
+  };
+  publishedAt: string;
+};
+
+export type Test262ProfileBlobPublishEntry = Omit<
+  Test262ProfileBlobRun,
+  "profileReports" | "publishedAt"
+> & {
+  aggregateJson: string;
+  markdown?: Buffer;
+  detailsArchive?: Buffer;
+};
+
 const DEFAULT_PREFIX = "test262";
+const DEFAULT_PROFILE_PREFIX = "test262-profiles";
 const DEFAULT_ACCESS: Test262BlobAccess = "public";
 
-function cleanPrefix(value: string | undefined): string {
-  const trimmed = (value ?? DEFAULT_PREFIX).trim().replace(/^\/+|\/+$/g, "");
-  return trimmed || DEFAULT_PREFIX;
+function cleanPrefix(value: string | undefined, fallback: string): string {
+  const trimmed = (value ?? fallback).trim().replace(/^\/+|\/+$/g, "");
+  return trimmed || fallback;
 }
 
 export function test262BlobPrefix(): string {
-  return cleanPrefix(process.env.TEST262_BLOB_PREFIX);
+  return cleanPrefix(process.env.TEST262_BLOB_PREFIX, DEFAULT_PREFIX);
+}
+
+export function test262ProfileBlobPrefix(): string {
+  return cleanPrefix(
+    process.env.TEST262_PROFILE_BLOB_PREFIX,
+    DEFAULT_PROFILE_PREFIX,
+  );
 }
 
 export function test262BlobAccess(): Test262BlobAccess {
@@ -44,6 +91,18 @@ export function test262BlobRunsPrefix(prefix = test262BlobPrefix()): string {
 }
 
 export function test262BlobDailyPrefix(prefix = test262BlobPrefix()): string {
+  return `${prefix}/daily`;
+}
+
+export function test262ProfileBlobRunsPrefix(
+  prefix = test262ProfileBlobPrefix(),
+): string {
+  return `${prefix}/runs`;
+}
+
+export function test262ProfileBlobDailyPrefix(
+  prefix = test262ProfileBlobPrefix(),
+): string {
   return `${prefix}/daily`;
 }
 
@@ -61,11 +120,36 @@ export function test262BlobDailyPathForDay(
   return `${test262BlobDailyPrefix(prefix)}/${day}.json`;
 }
 
+export function test262ProfileBlobReportPathForArtifactId(
+  artifactId: number,
+  kind: Test262ProfileBlobReportKind,
+  prefix = test262ProfileBlobPrefix(),
+): string {
+  const base = `${test262ProfileBlobRunsPrefix(prefix)}/${artifactId}`;
+  if (kind === "aggregate") return `${base}/aggregate.json.gz`;
+  if (kind === "markdown") return `${base}/summary.md`;
+  return `${base}/details.tar.gz`;
+}
+
+export function test262ProfileBlobDailyPathForDay(
+  day: string,
+  prefix = test262ProfileBlobPrefix(),
+): string {
+  return `${test262ProfileBlobDailyPrefix(prefix)}/${day}.json`;
+}
+
 function dailyPathForPoint(
   point: Test262TimelinePoint,
   prefix = test262BlobPrefix(),
 ): string {
   return test262BlobDailyPathForDay(point.createdAt.slice(0, 10), prefix);
+}
+
+function profileDailyPathForRun(
+  run: Pick<Test262ProfileBlobRun, "createdAt">,
+  prefix = test262ProfileBlobPrefix(),
+): string {
+  return test262ProfileBlobDailyPathForDay(run.createdAt.slice(0, 10), prefix);
 }
 
 async function streamToBytes(stream: ReadableStream<Uint8Array>) {
@@ -224,6 +308,105 @@ export async function publishTest262ReportsToBlob(
     };
     await put(
       dailyPathForPoint(published, prefix),
+      JSON.stringify(published, null, 2),
+      {
+        access,
+        allowOverwrite: true,
+        cacheControlMaxAge: 900,
+        contentType: "application/json",
+      },
+    );
+    publishedRuns.push(published);
+  }
+
+  return publishedRuns.sort(byCreatedAtThenRunNumber);
+}
+
+export async function publishTest262ProfileReportsToBlob(
+  entries: Test262ProfileBlobPublishEntry[],
+): Promise<Test262ProfileBlobRun[]> {
+  const prefix = test262ProfileBlobPrefix();
+  const access = test262BlobAccess();
+  const publishedRuns: Test262ProfileBlobRun[] = [];
+
+  for (const entry of entries) {
+    const aggregatePath = test262ProfileBlobReportPathForArtifactId(
+      entry.artifactId,
+      "aggregate",
+      prefix,
+    );
+    const aggregateCompressed = gzipSync(`${entry.aggregateJson.trimEnd()}\n`);
+    const aggregateBlob = await put(aggregatePath, aggregateCompressed, {
+      access,
+      allowOverwrite: true,
+      cacheControlMaxAge: 31_536_000,
+      contentType: "application/gzip",
+    });
+    const profileReports: Test262ProfileBlobRun["profileReports"] = {
+      aggregate: {
+        path: aggregatePath,
+        url: aggregateBlob.url,
+        downloadUrl: aggregateBlob.downloadUrl,
+        size: aggregateCompressed.byteLength,
+      },
+    };
+
+    if (entry.markdown) {
+      const markdownPath = test262ProfileBlobReportPathForArtifactId(
+        entry.artifactId,
+        "markdown",
+        prefix,
+      );
+      const markdownBlob = await put(markdownPath, entry.markdown, {
+        access,
+        allowOverwrite: true,
+        cacheControlMaxAge: 31_536_000,
+        contentType: "text/markdown; charset=utf-8",
+      });
+      profileReports.markdown = {
+        path: markdownPath,
+        url: markdownBlob.url,
+        downloadUrl: markdownBlob.downloadUrl,
+        size: entry.markdown.byteLength,
+      };
+    }
+
+    if (entry.detailsArchive) {
+      const archivePath = test262ProfileBlobReportPathForArtifactId(
+        entry.artifactId,
+        "detailsArchive",
+        prefix,
+      );
+      const archiveBlob = await put(archivePath, entry.detailsArchive, {
+        access,
+        allowOverwrite: true,
+        cacheControlMaxAge: 31_536_000,
+        contentType: "application/gzip",
+      });
+      profileReports.detailsArchive = {
+        path: archivePath,
+        url: archiveBlob.url,
+        downloadUrl: archiveBlob.downloadUrl,
+        size: entry.detailsArchive.byteLength,
+      };
+    }
+
+    const published: Test262ProfileBlobRun = {
+      runId: entry.runId,
+      runNumber: entry.runNumber,
+      artifactId: entry.artifactId,
+      title: entry.title,
+      headSha: entry.headSha,
+      shortSha: entry.shortSha,
+      runUrl: entry.runUrl,
+      createdAt: entry.createdAt,
+      updatedAt: entry.updatedAt,
+      artifactCreatedAt: entry.artifactCreatedAt,
+      profileReports,
+      publishedAt: new Date().toISOString(),
+    };
+    await put(
+      profileDailyPathForRun(published, prefix),
       JSON.stringify(published, null, 2),
       {
         access,

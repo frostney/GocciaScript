@@ -8,6 +8,8 @@
 - **Three modes** — `--profile=opcodes` (histogram + pair frequency + scalar hit rate), `--profile=functions` (per-function timing + allocations), `--profile=all` (both)
 - **Export formats** — JSON (`--profile-output=path.json`) and collapsed flame graph (`--profile-format=flamegraph`)
 - **Near-zero overhead** — Boolean guard on dispatch loop; ~1% for opcode counting, ~3% for function timing
+- **Corpus profile review** — Main CI publishes aggregate and detailed test262
+  profile reports for trend review; see [test262 profile report contract](test262.md#profile-report-contract)
 
 ## Overview
 
@@ -119,6 +121,14 @@ Function Profile:
   ]
 }
 ```
+
+## test262 corpus profiles
+
+Full-corpus test262 profile reports reuse the bytecode profiler data described
+above, but the report contract lives in [test262 Harness Contract](test262.md#profile-report-contract).
+Review the aggregate report before opening detailed profiles, and use the
+trend to propose compiler, bytecode, AST, parser, allocation, property-access,
+or call-frame improvements.
 
 ## Flame Graph Export
 

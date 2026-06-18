@@ -39,6 +39,10 @@ LoaderBare-plus-stock-harness setup, see
   publish the report to Vercel Blob when `BLOB_READ_WRITE_TOKEN` is configured,
   and the website compatibility dashboard reads those durable reports at
   request time with CDN caching.
+- Main CI also publishes full-corpus test262 profile reports for performance
+  review. These profiles are retained separately from compatibility JSON and are
+  reviewed from the aggregate first, with detailed profiles reserved for
+  investigation.
 
 ## Website dashboard
 
@@ -75,6 +79,43 @@ Configure the Vercel project so both Preview and Production deployments have
 access to the Blob store at runtime. CI and one-off backfills still need the
 GitHub repository secret `BLOB_READ_WRITE_TOKEN` because they publish new
 reports from GitHub Actions rather than from inside the Vercel project.
+
+## Profile report contract
+
+Main CI publishes a full-corpus bytecode profile for the existing `test262` job
+without changing PR CI. The profile is a performance-review artifact, not the
+compatibility dashboard input and not a conformance gate.
+
+The GitHub Actions artifact is named `test262-profile`. It contains:
+
+- `test262-profile-aggregate.json`: the review entry point, with run
+  provenance, corpus settings, summary counts, runtime totals, path-group
+  rollups, top opcode histograms, hot opcode pairs, scalar fast-path rates,
+  function self-time/allocation summaries, and links or identifiers for the
+  detailed profiles that explain each aggregate row.
+- `test262-profile-aggregate.md`: a human-readable review summary with the
+  same provenance header and ranked tables.
+- `test262-profile-details/`: detailed profile JSON files used only after the
+  aggregate points to a hotspot or regression worth investigating.
+
+Main runs also publish the same profile data to Vercel Blob under the separate
+`test262-profiles/` namespace. That namespace is intentionally distinct from the
+compatibility dashboard's `test262/` namespace: `test262/` stores conformance
+reports and daily pointers, while `test262-profiles/` stores profile aggregate,
+Markdown summaries, compressed detail archives, and profile-specific daily
+pointers for retained main-run review. The default paths are
+`test262-profiles/runs/<artifactId>/aggregate.json.gz`,
+`test262-profiles/runs/<artifactId>/summary.md`,
+`test262-profiles/runs/<artifactId>/details.tar.gz`, and
+`test262-profiles/daily/<YYYY-MM-DD>.json`.
+
+Reviewers should compare the latest aggregate with the previous weekly profile
+and nearby main-run profiles before opening detail files. Detailed profiles are
+for explaining a ranked finding, such as a newly hot opcode pair, unexpectedly
+low scalar fast-path hit rate, high allocation path group, or call-frame-heavy
+feature area. Findings should turn the observed corpus behavior into concrete
+compiler, bytecode, AST, parser, value-boxing, property-access, or call-frame
+recommendations.
 
 ## Architecture
 
