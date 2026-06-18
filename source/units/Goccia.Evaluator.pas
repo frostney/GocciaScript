@@ -3706,7 +3706,10 @@ begin
   end;
 end;
 
-function EvaluateCall(const ACallExpression: TGocciaCallExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
+function EvaluateCallWithOptionalShortCircuit(
+  const ACallExpression: TGocciaCallExpression;
+  const AContext: TGocciaEvaluationContext;
+  out AShortCircuited: Boolean): TGocciaValue;
 var
   Callee: TGocciaValue;
   Arguments: TGocciaArgumentsCollection;
@@ -3784,6 +3787,7 @@ var
     end;
   end;
 begin
+  AShortCircuited := False;
   Roots.Initialize;
   CheckExecutionTimeout;
   IncrementInstructionCounter;
@@ -3971,6 +3975,7 @@ begin
   if ACallExpression.Optional and
      ((Callee is TGocciaNullLiteralValue) or (Callee is TGocciaUndefinedLiteralValue)) then
   begin
+    AShortCircuited := True;
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
     Roots.Clear;
     Exit;
@@ -4067,6 +4072,14 @@ begin
     Arguments.Free;
     Roots.Clear;
   end;
+end;
+
+function EvaluateCall(const ACallExpression: TGocciaCallExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
+var
+  ShortCircuited: Boolean;
+begin
+  Result := EvaluateCallWithOptionalShortCircuit(ACallExpression, AContext,
+    ShortCircuited);
 end;
 
 function EvaluateMemberCore(const AMemberExpression: TGocciaMemberExpression; const AContext: TGocciaEvaluationContext; const AOutObjectValue: PGocciaValue): TGocciaValue; forward;
@@ -4217,21 +4230,41 @@ function EvaluateMemberCore(const AMemberExpression: TGocciaMemberExpression; co
 var
   Obj: TGocciaValue;
   ThisValue: TGocciaValue;
+  CallExpr: TGocciaCallExpression;
   PropertyName: string;
   PropertyValue: TGocciaValue;
   PropertyKey: TGocciaValue;
   BoxedValue: TGocciaObjectValue;
   ObjectEvaluated: Boolean;
+  ShortCircuited: Boolean;
 begin
   ObjectEvaluated := False;
+
+  if AMemberExpression.ObjectExpr is TGocciaCallExpression then
+  begin
+    CallExpr := TGocciaCallExpression(AMemberExpression.ObjectExpr);
+    Obj := EvaluateCallWithOptionalShortCircuit(CallExpr, AContext,
+      ShortCircuited);
+    ObjectEvaluated := True;
+    if Assigned(AOutObjectValue) then
+      AOutObjectValue^ := Obj;
+    if ShortCircuited then
+    begin
+      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+      Exit;
+    end;
+  end;
 
   // Handle optional chaining: obj?.prop returns undefined if obj is null/undefined
   if AMemberExpression.Optional then
   begin
-    Obj := EvaluateExpression(AMemberExpression.ObjectExpr, AContext);
-    ObjectEvaluated := True;
-    if Assigned(AOutObjectValue) then
-      AOutObjectValue^ := Obj;
+    if not ObjectEvaluated then
+    begin
+      Obj := EvaluateExpression(AMemberExpression.ObjectExpr, AContext);
+      ObjectEvaluated := True;
+      if Assigned(AOutObjectValue) then
+        AOutObjectValue^ := Obj;
+    end;
     if (Obj is TGocciaNullLiteralValue) or (Obj is TGocciaUndefinedLiteralValue) then
     begin
       Result := TGocciaUndefinedLiteralValue.UndefinedValue;

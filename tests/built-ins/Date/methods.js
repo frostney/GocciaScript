@@ -41,6 +41,15 @@ describe("Date methods", () => {
     expect(Date.parse("2024-06-15T11:30:45.123Z")).toBe(epoch);
   });
 
+  test("Date.parse() handles legacy slash and month-name dates", () => {
+    expect(new Date("5/1/49").getFullYear()).toBe(2049);
+    expect(new Date("5/1/50").getFullYear()).toBe(1950);
+    expect(new Date("49/5/1").getMonth()).toBe(4);
+    expect(new Date("may 1 49").getTime()).toBe(new Date("5/1/49").getTime());
+    expect(new Date("1 49 may").getTime()).toBe(new Date("5/1/49").getTime());
+    expect(Number.isNaN(new Date("13/13/13").getTime())).toBe(true);
+  });
+
   test("Date.UTC() returns an epoch millisecond timestamp", () => {
     expect(Date.UTC(2024, 5, 15, 11, 30, 45, 123)).toBe(epoch);
   });

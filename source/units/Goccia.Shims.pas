@@ -149,6 +149,30 @@ const
         '  const numberValue: number = Number(value);'#10 +
         '  return Number.isFinite(numberValue) ? Math.trunc(numberValue) : NaN;'#10 +
         '};'#10 +
+        'const legacyDateFullYear = (year: number): number =>'#10 +
+        '  year >= 0 && year <= 99 ? (year >= 50 ? 1900 + year : 2000 + year) : year;'#10 +
+        'const parseLegacyInteger = (text: any): number => {'#10 +
+        '  const trimmed: string = String(text).trim();'#10 +
+        '  if (trimmed === "") return NaN;'#10 +
+        '  const value: number = Number(trimmed);'#10 +
+        '  return Number.isFinite(value) && Math.trunc(value) === value ? value : NaN;'#10 +
+        '};'#10 +
+        'const legacyDateMonthNumber = (token: any): number => {'#10 +
+        '  const lower: string = String(token).toLowerCase();'#10 +
+        '  if (lower === "jan" || lower === "january") return 1;'#10 +
+        '  if (lower === "feb" || lower === "february") return 2;'#10 +
+        '  if (lower === "mar" || lower === "march") return 3;'#10 +
+        '  if (lower === "apr" || lower === "april") return 4;'#10 +
+        '  if (lower === "may") return 5;'#10 +
+        '  if (lower === "jun" || lower === "june") return 6;'#10 +
+        '  if (lower === "jul" || lower === "july") return 7;'#10 +
+        '  if (lower === "aug" || lower === "august") return 8;'#10 +
+        '  if (lower === "sep" || lower === "sept" || lower === "september") return 9;'#10 +
+        '  if (lower === "oct" || lower === "october") return 10;'#10 +
+        '  if (lower === "nov" || lower === "november") return 11;'#10 +
+        '  if (lower === "dec" || lower === "december") return 12;'#10 +
+        '  return NaN;'#10 +
+        '};'#10 +
         'const makeDateEpochMilliseconds = (args: any[], timeZone: string): number => {'#10 +
         '  if (args.length === 0) return NaN;'#10 +
         '  const yearValue: number = toDateInteger(args[0]);'#10 +
@@ -180,12 +204,89 @@ const
         '    return Math.trunc(epochMilliseconds);'#10 +
         '  } catch (e) { return NaN; }'#10 +
         '};'#10 +
+        'const legacyDateMonthStarts: any[] = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];'#10 +
+        'const legacyDateLeapMonthStarts: any[] = [0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335];'#10 +
+        'const legacyDateIsLeapYear = (year: number): boolean =>'#10 +
+        '  year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);'#10 +
+        'const legacyDateDayFromYear = (year: number): number =>'#10 +
+        '  365 * (year - 1970) + Math.floor((year - 1969) / 4) -'#10 +
+        '  Math.floor((year - 1901) / 100) + Math.floor((year - 1601) / 400);'#10 +
+        'const makeLegacyDateEpochMilliseconds = (year: number, month: number, day: number): number => {'#10 +
+        '  if (month < 1 || month > 12 || day < 1 || day > 31) return NaN;'#10 +
+        '  const fullYear: number = legacyDateFullYear(year);'#10 +
+        '  const starts: any[] = legacyDateIsLeapYear(fullYear) ? legacyDateLeapMonthStarts : legacyDateMonthStarts;'#10 +
+        '  const value: number = (legacyDateDayFromYear(fullYear) + starts[month - 1] + day - 1) * 86400000;'#10 +
+        '  if (!Number.isFinite(value) || Math.abs(value) > dateTimeClipLimit) return NaN;'#10 +
+        '  return value;'#10 +
+        '};'#10 +
+        'const parseLegacyDateString = (text: string): any => {'#10 +
+        '  const slashIndex: number = text.indexOf("/");'#10 +
+        '  if (slashIndex >= 0) {'#10 +
+        '    const parts: any[] = text.split("/");'#10 +
+        '    if (parts.length !== 3) return undefined;'#10 +
+        '    const firstNumber: number = Number(parts[0]);'#10 +
+        '    const secondNumber: number = Number(parts[1]);'#10 +
+        '    const thirdNumber: number = Number(parts[2]);'#10 +
+        '    const first: number = Math.trunc(firstNumber);'#10 +
+        '    const second: number = Math.trunc(secondNumber);'#10 +
+        '    const third: number = Math.trunc(thirdNumber);'#10 +
+        '    if (first !== firstNumber || second !== secondNumber || third !== thirdNumber) return NaN;'#10 +
+        '    if (first >= 1 && first <= 12)'#10 +
+        '      return makeLegacyDateEpochMilliseconds(third, first, second);'#10 +
+        '    if (first > 31)'#10 +
+        '      return makeLegacyDateEpochMilliseconds(first, second, third);'#10 +
+        '    return NaN;'#10 +
+        '  }'#10 +
+        '  const words: any[] = text.split(" ");'#10 +
+        '  if (words.length !== 3) return undefined;'#10 +
+        '  const firstMonth: number = legacyDateMonthNumber(words[0]);'#10 +
+        '  const secondMonth: number = legacyDateMonthNumber(words[1]);'#10 +
+        '  const thirdMonth: number = legacyDateMonthNumber(words[2]);'#10 +
+        '  if (Number.isFinite(firstMonth)) {'#10 +
+        '    const second: number = parseLegacyInteger(words[1]);'#10 +
+        '    const third: number = parseLegacyInteger(words[2]);'#10 +
+        '    if (second > 31)'#10 +
+        '      return makeLegacyDateEpochMilliseconds(second, firstMonth, third);'#10 +
+        '    return makeLegacyDateEpochMilliseconds(third, firstMonth, second);'#10 +
+        '  }'#10 +
+        '  if (Number.isFinite(secondMonth)) {'#10 +
+        '    const first: number = parseLegacyInteger(words[0]);'#10 +
+        '    const third: number = parseLegacyInteger(words[2]);'#10 +
+        '    if (first > 31)'#10 +
+        '      return makeLegacyDateEpochMilliseconds(first, secondMonth, third);'#10 +
+        '    return makeLegacyDateEpochMilliseconds(third, secondMonth, first);'#10 +
+        '  }'#10 +
+        '  if (Number.isFinite(thirdMonth)) {'#10 +
+        '    const first: number = parseLegacyInteger(words[0]);'#10 +
+        '    const second: number = parseLegacyInteger(words[1]);'#10 +
+        '    if (first > 31)'#10 +
+        '      return makeLegacyDateEpochMilliseconds(first, thirdMonth, second);'#10 +
+        '    return makeLegacyDateEpochMilliseconds(second, thirdMonth, first);'#10 +
+        '  }'#10 +
+        '  return undefined;'#10 +
+        '};'#10 +
+        'const parseDateStringToEpoch = (str: any): number => {'#10 +
+        '  const text: string = String(str).trim();'#10 +
+        '  const legacy: any = parseLegacyDateString(text);'#10 +
+        '  if (legacy !== undefined) return legacy;'#10 +
+        '  try { return Temporal.Instant.from(text).epochMilliseconds; }'#10 +
+        '  catch (e) { return NaN; }'#10 +
+        '};'#10 +
         'const __GocciaShimNumberFormat: any = Intl.NumberFormat;'#10 +
         'const __GocciaShimDateTimeFormat: any = Intl.DateTimeFormat;'#10 +
         'const __GocciaDateSlots = new WeakMap();'#10 +
         'const __GocciaDateHasSlot = (date: any): boolean => __GocciaDateSlots.has(date);'#10 +
-        'const __GocciaDateGetSlot = (date: any): number => __GocciaDateSlots.get(date);'#10 +
-        'const __GocciaDateSetSlot = (date: any, value: number): number => { __GocciaDateSlots.set(date, value); return value; };'#10 +
+        'const __GocciaDateRequire = (date: any): void => {'#10 +
+        '  if (!__GocciaDateHasSlot(date)) throw new TypeError("Date object expected");'#10 +
+        '};'#10 +
+        'const __GocciaDateGetSlot = (date: any): number => {'#10 +
+        '  __GocciaDateRequire(date);'#10 +
+        '  return __GocciaDateSlots.get(date);'#10 +
+        '};'#10 +
+        'const __GocciaDateSetSlot = (date: any, value: number): number => {'#10 +
+        '  __GocciaDateSlots.set(date, value);'#10 +
+        '  return value;'#10 +
+        '};'#10 +
         'const __GocciaDateClass = class Date {'#10 +
         '  static {'#10 +
         '    const numberLocale = {'#10 +
@@ -218,10 +319,7 @@ const
         '    Object.defineProperty(Array.prototype, "toLocaleString", { value: arrayLocale, writable: true, configurable: true });'#10 +
         '  }'#10 +
         '  static now(): number { return Temporal.Now.instant().epochMilliseconds; }'#10 +
-        '  static parse(str: string): number {'#10 +
-        '    try { return Temporal.Instant.from(String(str)).epochMilliseconds; }'#10 +
-        '    catch (e) { return NaN; }'#10 +
-        '  }'#10 +
+        '  static parse(str: string): number { return parseDateStringToEpoch(str); }'#10 +
         '  static UTC(...args: any[]): number {'#10 +
         '    return makeDateEpochMilliseconds(args, "UTC");'#10 +
         '  }'#10 +
@@ -240,12 +338,14 @@ const
         '    }'#10 +
         '    __GocciaDateSetSlot(this, ms);'#10 +
         '  }'#10 +
-        '  static #require(date: any): void { if (!__GocciaDateHasSlot(date)) throw new TypeError("Date object expected"); }'#10 +
-        '  static #valid(date: any): boolean { Date.#require(date); return Number.isFinite(__GocciaDateGetSlot(date)); }'#10 +
-        '  static #local(date: any): any { return Date.#valid(date) ? new Temporal.ZonedDateTime(BigInt(__GocciaDateGetSlot(date)) * 1000000n, Temporal.Now.timeZoneId()) : null; }'#10 +
-        '  static #utc(date: any): any { return Date.#valid(date) ? new Temporal.ZonedDateTime(BigInt(__GocciaDateGetSlot(date)) * 1000000n, "UTC") : null; }'#10 +
-        '  getTime(): number { Date.#require(this); return __GocciaDateGetSlot(this); }'#10 +
-        '  valueOf(): number { Date.#require(this); return __GocciaDateGetSlot(this); }'#10 +
+        '  static #require(date: any): void { __GocciaDateRequire(date); }'#10 +
+        '  static #get(date: any): number { return __GocciaDateGetSlot(date); }'#10 +
+        '  static #set(date: any, value: number): number { return __GocciaDateSetSlot(date, value); }'#10 +
+        '  static #valid(date: any): boolean { return Number.isFinite(Date.#get(date)); }'#10 +
+        '  static #local(date: any): any { return Date.#valid(date) ? new Temporal.ZonedDateTime(BigInt(Date.#get(date)) * 1000000n, Temporal.Now.timeZoneId()) : null; }'#10 +
+        '  static #utc(date: any): any { return Date.#valid(date) ? new Temporal.ZonedDateTime(BigInt(Date.#get(date)) * 1000000n, "UTC") : null; }'#10 +
+        '  getTime(): number { return __GocciaDateGetSlot(this); }'#10 +
+        '  valueOf(): number { return __GocciaDateGetSlot(this); }'#10 +
         '  [Symbol.toPrimitive](hint: string): any {'#10 +
         '    Date.#require(this);'#10 +
         '    if (hint === "string" || hint === "default") return this.toString();'#10 +
@@ -287,12 +387,12 @@ const
         '  }'#10 +
         '  static #setFromParts(date: any, timeZone: string, z: any, year: number, month: number, day: number, hour: number, minute: number, second: number, millisecond: number): number {'#10 +
         '    Date.#require(date);'#10 +
-        '    if (!z) return __GocciaDateSetSlot(date, NaN);'#10 +
-        '    return __GocciaDateSetSlot(date, Date.#epochFromParts(year, month, day, hour, minute, second, millisecond, timeZone));'#10 +
+        '    if (!z) return Date.#set(date, NaN);'#10 +
+        '    return Date.#set(date, Date.#epochFromParts(year, month, day, hour, minute, second, millisecond, timeZone));'#10 +
         '  }'#10 +
         '  setTime(time: number): number {'#10 +
         '    Date.#require(this);'#10 +
-        '    return __GocciaDateSetSlot(this, Date.#clip(toDateInteger(time)));'#10 +
+        '    return Date.#set(this, Date.#clip(toDateInteger(time)));'#10 +
         '  }'#10 +
         '  setMilliseconds(ms: number): number {'#10 +
         '    Date.#require(this);'#10 +
@@ -338,17 +438,17 @@ const
         '    Date.#require(this);'#10 +
         '    const z = Date.#local(this); const d = toDateInteger(day);'#10 +
         '    if (!z) return NaN;'#10 +
-        '    if (!Number.isFinite(d)) return __GocciaDateSetSlot(this, NaN);'#10 +
-        '    try { return __GocciaDateSetSlot(this, Date.#clip(z.add({ days: Math.trunc(d) - z.day }).epochMilliseconds)); }'#10 +
-        '    catch (e) { return __GocciaDateSetSlot(this, NaN); }'#10 +
+        '    if (!Number.isFinite(d)) return Date.#set(this, NaN);'#10 +
+        '    try { return Date.#set(this, Date.#clip(z.add({ days: Math.trunc(d) - z.day }).epochMilliseconds)); }'#10 +
+        '    catch (e) { return Date.#set(this, NaN); }'#10 +
         '  }'#10 +
         '  setUTCDate(day: number): number {'#10 +
         '    Date.#require(this);'#10 +
         '    const z = Date.#utc(this); const d = toDateInteger(day);'#10 +
         '    if (!z) return NaN;'#10 +
-        '    if (!Number.isFinite(d)) return __GocciaDateSetSlot(this, NaN);'#10 +
-        '    try { return __GocciaDateSetSlot(this, Date.#clip(z.add({ days: Math.trunc(d) - z.day }).epochMilliseconds)); }'#10 +
-        '    catch (e) { return __GocciaDateSetSlot(this, NaN); }'#10 +
+        '    if (!Number.isFinite(d)) return Date.#set(this, NaN);'#10 +
+        '    try { return Date.#set(this, Date.#clip(z.add({ days: Math.trunc(d) - z.day }).epochMilliseconds)); }'#10 +
+        '    catch (e) { return Date.#set(this, NaN); }'#10 +
         '  }'#10 +
         '  setMonth(month: number, day: number): number {'#10 +
         '    Date.#require(this);'#10 +
@@ -371,7 +471,7 @@ const
         '    return Date.#setFromParts(this, "UTC", z || true, y, m, d, z ? z.hour : 0, z ? z.minute : 0, z ? z.second : 0, z ? z.millisecond : 0);'#10 +
         '  }'#10 +
         '  getTimezoneOffset(): number { const z = Date.#local(this); return z ? -(z.offsetNanoseconds / 60000000000) : NaN; }'#10 +
-        '  toISOString(): string { if (!Date.#valid(this)) throw new RangeError("Invalid time value"); return Temporal.Instant.fromEpochMilliseconds(__GocciaDateGetSlot(this)).toString(); }'#10 +
+        '  toISOString(): string { if (!Date.#valid(this)) throw new RangeError("Invalid time value"); return Temporal.Instant.fromEpochMilliseconds(Date.#get(this)).toString(); }'#10 +
         '  toJSON(): string | null {'#10 +
         '    if (this === null || this === undefined) throw new TypeError("Date.prototype.toJSON called on null or undefined");'#10 +
         '    const object: any = Object(this);'#10 +
@@ -439,25 +539,41 @@ const
         '  toLocaleString(...args: any[]): string {'#10 +
         '    Date.#require(this);'#10 +
         '    if (!Date.#valid(this)) return "Invalid Date";'#10 +
-        '    return new __GocciaShimDateTimeFormat(args[0], Date.#localeOptions(args[1], true, true)).format(__GocciaDateGetSlot(this));'#10 +
+        '    return new __GocciaShimDateTimeFormat(args[0], Date.#localeOptions(args[1], true, true)).format(Date.#get(this));'#10 +
         '  }'#10 +
         '  toLocaleDateString(...args: any[]): string {'#10 +
         '    Date.#require(this);'#10 +
         '    if (!Date.#valid(this)) return "Invalid Date";'#10 +
-        '    return new __GocciaShimDateTimeFormat(args[0], Date.#localeOptions(args[1], true, false)).format(__GocciaDateGetSlot(this));'#10 +
+        '    return new __GocciaShimDateTimeFormat(args[0], Date.#localeOptions(args[1], true, false)).format(Date.#get(this));'#10 +
         '  }'#10 +
         '  toLocaleTimeString(...args: any[]): string {'#10 +
         '    Date.#require(this);'#10 +
         '    if (!Date.#valid(this)) return "Invalid Date";'#10 +
-        '    return new __GocciaShimDateTimeFormat(args[0], Date.#localeOptions(args[1], false, true)).format(__GocciaDateGetSlot(this));'#10 +
+        '    return new __GocciaShimDateTimeFormat(args[0], Date.#localeOptions(args[1], false, true)).format(Date.#get(this));'#10 +
         '  }'#10 +
         '};'#10 +
-        'const __GocciaDateProxy = new Proxy(__GocciaDateClass, {'#10 +
-        '  apply(target, thisArg, args) { return new target().toString(); },'#10 +
-        '  construct(target, args, newTarget) { return Reflect.construct(target, args, newTarget); }'#10 +
-        '});'#10 +
-        'Object.defineProperty(__GocciaDateClass.prototype, "constructor", { value: __GocciaDateProxy, writable: true, configurable: true });'#10 +
-        'export const Date = __GocciaDateProxy;'
+        'const __GocciaDateConstructor = function(...args: any[]): any {'#10 +
+        '  if (new.target === undefined) return new __GocciaDateConstructor().toString();'#10 +
+        '  let ms: number;'#10 +
+        '  if (args.length === 0) {'#10 +
+        '    ms = Temporal.Now.instant().epochMilliseconds;'#10 +
+        '  } else if (args.length === 1) {'#10 +
+        '    const v = args[0];'#10 +
+        '    if (typeof v === "number") {'#10 +
+        '      const t = Math.trunc(v);'#10 +
+        '      ms = Number.isFinite(t) && Math.abs(t) <= 8.64e15 ? t : NaN;'#10 +
+        '    } else { ms = parseDateStringToEpoch(v); }'#10 +
+        '  } else {'#10 +
+        '    ms = makeDateEpochMilliseconds(args, Temporal.Now.timeZoneId());'#10 +
+        '  }'#10 +
+        '  __GocciaDateSetSlot(this, ms);'#10 +
+        '};'#10 +
+        'Object.defineProperty(__GocciaDateConstructor, "now", { value: __GocciaDateClass.now, writable: true, configurable: true });'#10 +
+        'Object.defineProperty(__GocciaDateConstructor, "parse", { value: __GocciaDateClass.parse, writable: true, configurable: true });'#10 +
+        'Object.defineProperty(__GocciaDateConstructor, "UTC", { value: __GocciaDateClass.UTC, writable: true, configurable: true });'#10 +
+        'Object.defineProperty(__GocciaDateConstructor, "prototype", { value: __GocciaDateClass.prototype, writable: false, configurable: false });'#10 +
+        'Object.defineProperty(__GocciaDateClass.prototype, "constructor", { value: __GocciaDateConstructor, writable: true, configurable: true });'#10 +
+        'export const Date = __GocciaDateConstructor;'
     ),
     ( // ES2026 §20.1.3.2 — legacy hasOwnProperty via Object.hasOwn
       Name: 'hasOwnProperty';
@@ -609,7 +725,7 @@ var
 begin
   PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
   PipelineOptions.Preprocessors := [];
-  PipelineOptions.Compatibility := [];
+  PipelineOptions.Compatibility := [cfFunction];
   PipelineOptions.SourceType := stModule;
   ModuleParseResult := TGocciaSourcePipeline.ParseModuleSource(
     UTF8String(AShim.Source), AShim.FileName, PipelineOptions);

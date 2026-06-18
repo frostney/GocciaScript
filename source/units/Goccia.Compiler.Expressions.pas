@@ -3414,13 +3414,14 @@ end;
 
 function TryCompileWithIdentifierCall(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaCallExpression; const ADest: UInt8;
-  const AArgCount: Integer; const AUseSpread: Boolean): Boolean;
+  const AArgCount: Integer; const AUseSpread: Boolean;
+  var AJumps: TGocciaCompilerJumpArray; var AJumpCount: Integer): Boolean;
 var
   Ident: TGocciaIdentifierExpression;
   ObjReg, BaseReg, ArgsReg, KeyReg, CondReg: UInt8;
   NameIdx: UInt16;
   I, EndCount: Integer;
-  MissJump, CallNilJump, BranchEndJump: Integer;
+  MissJump: Integer;
   EndJumps: array of Integer;
 
   procedure EmitBranchCall(const AIsMethodCall, AJumpAfter: Boolean);
@@ -3428,9 +3429,7 @@ var
     ArgIndex: Integer;
   begin
     if AExpr.Optional then
-      CallNilJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH, BaseReg)
-    else
-      CallNilJump := -1;
+      AddOptionalChainJump(ACtx, AJumps, AJumpCount, BaseReg);
 
     if AUseSpread then
     begin
@@ -3453,17 +3452,9 @@ var
           UInt8(AArgCount), 0))
       else
         EmitInstruction(ACtx, EncodeABC(OP_CALL, BaseReg, UInt8(AArgCount),
-          CallFlags(ACtx, AExpr, CurrentCodePosition(ACtx))));
+        CallFlags(ACtx, AExpr, CurrentCodePosition(ACtx))));
       for ArgIndex := 0 to AArgCount - 1 do
         ACtx.Scope.FreeRegister;
-    end;
-
-    if AExpr.Optional then
-    begin
-      BranchEndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
-      PatchJumpTarget(ACtx, CallNilJump);
-      EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, BaseReg, 0, 0));
-      PatchJumpTarget(ACtx, BranchEndJump);
     end;
 
     if ADest <> BaseReg then
@@ -3584,7 +3575,7 @@ begin
     Ident := TGocciaIdentifierExpression(AExpr.Callee);
     if ShouldTryWithBinding(ACtx.Scope, Ident.Name) then
       Exit(TryCompileWithIdentifierCall(ACtx, AExpr, ADest, ArgCount,
-        UseSpread));
+        UseSpread, AJumps, AJumpCount));
   end;
 
   if AExpr.Callee is TGocciaMemberExpression then
@@ -3826,6 +3817,8 @@ var
   PropIdx: UInt16;
   UseSpread: Boolean;
   NilJump, CallNilJump, EndJump: Integer;
+  IgnoredJumps: TGocciaCompilerJumpArray;
+  IgnoredJumpCount: Integer;
 begin
   if TryCompileOptionalChainCall(ACtx, AExpr, ADest) then
     Exit;
@@ -3835,6 +3828,7 @@ begin
     raise Exception.Create('Compiler error: too many arguments (>255)');
   UseSpread := HasSpreadArgument(AExpr);
   CallNilJump := -1;
+  IgnoredJumpCount := 0;
 
   if AExpr.Callee is TGocciaSuperExpression then
   begin
@@ -4111,7 +4105,7 @@ begin
   else
   begin
     if TryCompileWithIdentifierCall(ACtx, AExpr, ADest, ArgCount,
-       UseSpread) then
+       UseSpread, IgnoredJumps, IgnoredJumpCount) then
       Exit;
 
     if (ADest + 1 = ACtx.Scope.NextSlot) and

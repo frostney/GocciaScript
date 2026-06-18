@@ -196,6 +196,17 @@ describe("with statement", () => {
     expect(result).toBe(7);
   });
 
+  test("nullish optional calls to object-environment methods short-circuit the chain", () => {
+    const obj = { get: null };
+    let result = "unset";
+
+    with (obj) {
+      result = get?.().x;
+    }
+
+    expect(result).toBe(undefined);
+  });
+
   test("compound assignments and updates target the object binding", () => {
     const obj = { x: 1 };
 
