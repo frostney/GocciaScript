@@ -296,8 +296,11 @@ begin
 end;
 
 function IsDirectoryTargetPath(const APath: string): Boolean;
+var
+  Path: string;
 begin
-  Result := (APath = '/') or ((APath <> '') and (APath[Length(APath)] = '/'));
+  Path := NormalizeSandboxPathSeparators(APath);
+  Result := (Path = '/') or ((Path <> '') and (Path[Length(Path)] = '/'));
 end;
 
 function ObjectStringProperty(const AObject: TGocciaObjectValue;

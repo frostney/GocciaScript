@@ -172,11 +172,19 @@ type
 
 function SandboxFsKindName(const AKind: TSandboxFsNodeKind): string;
 function SandboxHumanBytes(const ABytes: Int64): string;
+function NormalizeSandboxPathSeparators(const APath: string): string;
 
 implementation
 
 const
   PathSeparator = '/';
+  AlternatePathSeparator = '\';
+
+function NormalizeSandboxPathSeparators(const APath: string): string;
+begin
+  Result := StringReplace(APath, AlternatePathSeparator, PathSeparator,
+    [rfReplaceAll]);
+end;
 
 function SandboxFsKindName(const AKind: TSandboxFsNodeKind): string;
 begin
@@ -317,6 +325,8 @@ end;
 function TSandboxVirtualFileSystem.Normalize(const APath: string;
   const ABase: string): string;
 var
+  Path: string;
+  Base: string;
   Combined: string;
   Segments: TStringList;
   Segment: string;
@@ -338,14 +348,16 @@ var
   end;
 
 begin
-  if Pos(#0, APath) > 0 then
+  Path := NormalizeSandboxPathSeparators(APath);
+  Base := NormalizeSandboxPathSeparators(ABase);
+  if (Pos(#0, Path) > 0) or (Pos(#0, Base) > 0) then
     raise ESandboxFsInvalidPath.Create('path contains a NUL byte');
-  if (Length(APath) > 0) and (APath[1] = PathSeparator) then
-    Combined := APath
-  else if APath = '' then
-    Combined := ABase
+  if (Length(Path) > 0) and (Path[1] = PathSeparator) then
+    Combined := Path
+  else if Path = '' then
+    Combined := Base
   else
-    Combined := ABase + PathSeparator + APath;
+    Combined := Base + PathSeparator + Path;
 
   Segments := TStringList.Create;
   try
