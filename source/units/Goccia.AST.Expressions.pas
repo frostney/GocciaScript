@@ -1857,8 +1857,30 @@ end;
 function TGocciaCompoundAssignmentExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
 var
   CurrentValue, RhsValue: TGocciaValue;
+  ObjectBinding: TGocciaObjectValue;
+  ScopeBinding: TGocciaScope;
+
+  procedure AssignResolvedTarget(const AValue: TGocciaValue);
+  begin
+    if Assigned(ObjectBinding) then
+    begin
+      if AContext.NonStrictMode then
+        ObjectBinding.AssignPropertyWithReceiver(Name, AValue, ObjectBinding)
+      else
+        ObjectBinding.AssignProperty(Name, AValue);
+      Exit;
+    end;
+
+    ScopeBinding.AssignBinding(Name, AValue, Line, Column,
+      AContext.NonStrictMode);
+  end;
 begin
-  CurrentValue := AContext.Scope.GetValue(Name);
+  AContext.Scope.ResolveAssignmentTarget(Name, ObjectBinding, ScopeBinding);
+  if Assigned(ObjectBinding) then
+    CurrentValue := NormalizeAssignmentValue(ObjectBinding.GetProperty(Name))
+  else
+    CurrentValue := ScopeBinding.GetValue(Name);
+
   // ES2026 §13.15.2 step 3: ??=
   if Operator = gttNullishCoalescingAssign then
   begin
@@ -1869,8 +1891,7 @@ begin
       Result := EvaluateWithInferredName(Value, AContext, Name)
     else
       Result := Value.Evaluate(AContext);
-    AContext.Scope.AssignBinding(Name, Result, Line, Column,
-      AContext.NonStrictMode);
+    AssignResolvedTarget(Result);
     Exit;
   end;
 
@@ -1884,8 +1905,7 @@ begin
       Result := EvaluateWithInferredName(Value, AContext, Name)
     else
       Result := Value.Evaluate(AContext);
-    AContext.Scope.AssignBinding(Name, Result, Line, Column,
-      AContext.NonStrictMode);
+    AssignResolvedTarget(Result);
     Exit;
   end;
 
@@ -1899,8 +1919,7 @@ begin
       Result := EvaluateWithInferredName(Value, AContext, Name)
     else
       Result := Value.Evaluate(AContext);
-    AContext.Scope.AssignBinding(Name, Result, Line, Column,
-      AContext.NonStrictMode);
+    AssignResolvedTarget(Result);
     Exit;
   end;
 
@@ -1908,8 +1927,7 @@ begin
   RhsValue := Value.Evaluate(AContext);
   Result := Goccia.Arithmetic.CompoundOperations(
       Result, RhsValue, Operator);
-  AContext.Scope.AssignBinding(Name, Result, Line, Column,
-    AContext.NonStrictMode);
+  AssignResolvedTarget(Result);
 end;
 
 // ES2026 §13.15.2 AssignmentExpression : LeftHandSideExpression AssignmentOperator AssignmentExpression

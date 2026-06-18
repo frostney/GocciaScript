@@ -238,6 +238,18 @@ describe("with statement", () => {
     expect(obj.x).toBe(2);
   });
 
+  test("logical assignments keep the with target resolved before the RHS", () => {
+    let x = undefined;
+    const obj = {};
+
+    with (obj) {
+      x ??= (obj.x = "object", "outer");
+    }
+
+    expect(x).toBe("outer");
+    expect(obj.x).toBe("object");
+  });
+
   test("unscopables-hidden assignments keep the resolved outer target", () => {
     let log = "";
     let x = 1;

@@ -11187,6 +11187,40 @@ var
   DoneFlag: Boolean;
   ShouldCloseIterator: Boolean;
   Key: string;
+
+  function DirectNextClosingOnThrow(out ADone: Boolean): TGocciaValue;
+  begin
+    try
+      Result := Iterator.DirectNext(ADone);
+    except
+      on E: EGocciaGeneratorYield do
+        raise;
+      on E: EGocciaGeneratorReturn do
+      begin
+        if not Exhausted then
+          CloseIterator(Iterator);
+        raise;
+      end;
+      on E: TGocciaThrowValue do
+      begin
+        if not Exhausted then
+        begin
+          AcquireExceptionObject;
+          CloseIteratorPreservingError(Iterator);
+        end;
+        raise;
+      end;
+      on E: Exception do
+      begin
+        if not Exhausted then
+        begin
+          AcquireExceptionObject;
+          CloseIteratorPreservingError(Iterator);
+        end;
+        raise;
+      end;
+    end;
+  end;
 begin
   if APattern is TGocciaIdentifierDestructuringPattern then
     AContext.Scope.DefineVariableBinding(
@@ -11292,7 +11326,7 @@ begin
         begin
           if not Exhausted then
           begin
-            Iterator.DirectNext(DoneFlag);
+            DirectNextClosingOnThrow(DoneFlag);
             if DoneFlag then
               Exhausted := True;
           end;
@@ -11306,7 +11340,7 @@ begin
             if not Exhausted then
             begin
               repeat
-                ElementValue := Iterator.DirectNext(DoneFlag);
+                ElementValue := DirectNextClosingOnThrow(DoneFlag);
                 if DoneFlag then
                   Break;
                 if not Assigned(ElementValue) then
@@ -11329,7 +11363,7 @@ begin
             ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue
           else
           begin
-            ElementValue := Iterator.DirectNext(DoneFlag);
+            ElementValue := DirectNextClosingOnThrow(DoneFlag);
             if DoneFlag then
             begin
               Exhausted := True;
@@ -11470,6 +11504,40 @@ var
   DoneFlag: Boolean;
   ShouldCloseIterator: Boolean;
   PreparedReference: TPreparedDestructuringReference;
+
+  function DirectNextClosingOnThrow(out ADone: Boolean): TGocciaValue;
+  begin
+    try
+      Result := Iterator.DirectNext(ADone);
+    except
+      on E: EGocciaGeneratorYield do
+        raise;
+      on E: EGocciaGeneratorReturn do
+      begin
+        if not Exhausted then
+          CloseIterator(Iterator);
+        raise;
+      end;
+      on E: TGocciaThrowValue do
+      begin
+        if not Exhausted then
+        begin
+          AcquireExceptionObject;
+          CloseIteratorPreservingError(Iterator);
+        end;
+        raise;
+      end;
+      on E: Exception do
+      begin
+        if not Exhausted then
+        begin
+          AcquireExceptionObject;
+          CloseIteratorPreservingError(Iterator);
+        end;
+        raise;
+      end;
+    end;
+  end;
 begin
   if (AValue is TGocciaNullLiteralValue) or (AValue is TGocciaUndefinedLiteralValue) then
     ThrowTypeError(
@@ -11496,7 +11564,7 @@ begin
       begin
         if not Exhausted then
         begin
-          Iterator.DirectNext(DoneFlag);
+          DirectNextClosingOnThrow(DoneFlag);
           if DoneFlag then
             Exhausted := True;
         end;
@@ -11546,7 +11614,7 @@ begin
             if not Exhausted then
             begin
               repeat
-                ElementValue := Iterator.DirectNext(DoneFlag);
+                ElementValue := DirectNextClosingOnThrow(DoneFlag);
                 if DoneFlag then
                   Break;
                 if not Assigned(ElementValue) then
@@ -11568,7 +11636,7 @@ begin
           ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue
         else
         begin
-          ElementValue := Iterator.DirectNext(DoneFlag);
+          ElementValue := DirectNextClosingOnThrow(DoneFlag);
           if DoneFlag then
           begin
             Exhausted := True;

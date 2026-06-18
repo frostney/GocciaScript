@@ -249,7 +249,8 @@ type
     // arguments.
     function IterableToArray(const AIterable: TGocciaValue;
       const ATryAsync: Boolean = False;
-      const ALimit: Integer = -1): TGocciaArrayValue;
+      const ALimit: Integer = -1;
+      const ACloseOnAbruptStep: Boolean = False): TGocciaArrayValue;
     function TryIterableToArray(const AIterable: TGocciaValue;
       out AArray: TGocciaArrayValue): Boolean;
     procedure SpreadObjectIntoValue(const ATarget: TGocciaObjectValue;
@@ -7935,7 +7936,8 @@ begin
 end;
 
 function TGocciaVM.IterableToArray(const AIterable: TGocciaValue;
-  const ATryAsync: Boolean; const ALimit: Integer): TGocciaArrayValue;
+  const ATryAsync: Boolean; const ALimit: Integer;
+  const ACloseOnAbruptStep: Boolean): TGocciaArrayValue;
 var
   IteratorValue: TGocciaValue;
   DoneFlag: Boolean;
@@ -7946,6 +7948,17 @@ var
   CallArgs: TGocciaArgumentsCollection;
   GC: TGarbageCollector;
   ArrayRooted, IteratorRooted: Boolean;
+
+  procedure CloseIteratorAfterAbruptStep;
+  begin
+    if not ACloseOnAbruptStep then
+      Exit;
+    if IteratorValue is TGocciaIteratorValue then
+      Goccia.Values.IteratorSupport.CloseIteratorPreservingError(
+        TGocciaIteratorValue(IteratorValue))
+    else if IteratorValue is TGocciaObjectValue then
+      CloseRawIteratorPreservingError(IteratorValue, ATryAsync);
+  end;
 begin
   Result := TGocciaArrayValue.Create;
   // The materialised array and any newly-synthesised iterator wrapper
@@ -8016,11 +8029,8 @@ begin
           end;
         until DoneFlag;
       except
-        // If IteratorStep/IteratorNext itself throws, array destructuring
-        // propagates that abrupt completion without calling return().
-        // IteratorClose is only for abrupt completions after a step has
-        // successfully produced a non-done value.
         AcquireExceptionObject;
+        CloseIteratorAfterAbruptStep;
         raise;
       end;
       Exit;
@@ -8096,11 +8106,8 @@ begin
           end;
         until DoneFlag;
       except
-        // If IteratorStep/IteratorNext itself throws, array destructuring
-        // propagates that abrupt completion without calling return().
-        // IteratorClose is only for abrupt completions after a step has
-        // successfully produced a non-done value.
         AcquireExceptionObject;
+        CloseIteratorAfterAbruptStep;
         raise;
       end;
       Exit;
@@ -15514,10 +15521,10 @@ begin
             // count, so translate the sentinel here.
             if C = ITERABLE_LIMIT_UNBOUNDED then
               SetRegister(A, IterableToArray(RegisterToValue(FRegisters[A]),
-                False, -1))
+                False, -1, True))
             else
               SetRegister(A, IterableToArray(RegisterToValue(FRegisters[A]),
-                False, C));
+                False, C, True));
         else
           raise Exception.CreateFmt('Unsupported validation mode: %d', [B]);
         end;

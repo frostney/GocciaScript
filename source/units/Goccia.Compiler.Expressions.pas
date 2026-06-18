@@ -828,6 +828,74 @@ begin
   end;
 end;
 
+procedure PrepareIdentifierWithBindingTarget(
+  const ACtx: TGocciaCompilationContext; const AName: string;
+  var ATarget: TPreparedDestructuringTarget);
+var
+  ObjReg, CondReg: UInt8;
+  NameIdx: UInt16;
+  I, EndCount: Integer;
+  MissJump: Integer;
+  EndJumps: array of Integer;
+begin
+  ATarget.Kind := pdtIdentifierWithBinding;
+  ATarget.PropertyName := AName;
+  ATarget.ObjectReg := ACtx.Scope.AllocateRegister;
+  ATarget.KeyReg := ACtx.Scope.AllocateRegister;
+  ObjReg := ACtx.Scope.AllocateRegister;
+  CondReg := ACtx.Scope.AllocateRegister;
+  EndCount := 0;
+  SetLength(EndJumps, ACtx.Scope.WithBindingCount);
+  try
+    NameIdx := ACtx.Template.AddConstantString(AName);
+    EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, UInt8(ATarget.KeyReg),
+      NameIdx));
+    EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED,
+      UInt8(ATarget.ObjectReg), 0, 0));
+
+    for I := ACtx.Scope.WithBindingCount - 1 downto 0 do
+    begin
+      EmitLoadHiddenWithObject(ACtx, ACtx.Scope.GetWithBindingName(I), ObjReg);
+      EmitInstruction(ACtx, EncodeABC(OP_HAS_WITH_BINDING, CondReg, ObjReg,
+        UInt8(ATarget.KeyReg)));
+      MissJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, CondReg);
+      EmitInstruction(ACtx, EncodeABC(OP_MOVE, UInt8(ATarget.ObjectReg),
+        ObjReg, 0));
+      EndJumps[EndCount] := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+      Inc(EndCount);
+      PatchJumpTarget(ACtx, MissJump);
+    end;
+
+    for I := 0 to EndCount - 1 do
+      PatchJumpTarget(ACtx, EndJumps[I]);
+  finally
+    ACtx.Scope.FreeRegister;
+    ACtx.Scope.FreeRegister;
+  end;
+end;
+
+procedure EmitPreparedIdentifierWithBindingLoad(
+  const ACtx: TGocciaCompilationContext;
+  const ATarget: TPreparedDestructuringTarget; const ADest: UInt8);
+var
+  Ident: TGocciaIdentifierExpression;
+  MissJump, EndJump: Integer;
+begin
+  MissJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH,
+    UInt8(ATarget.ObjectReg), GOCCIA_NULLISH_MATCH_UNDEFINED);
+  EmitInstruction(ACtx, EncodeABC(GetWithBindingOpcode(ACtx), ADest,
+    UInt8(ATarget.ObjectReg), UInt8(ATarget.KeyReg)));
+  EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+  PatchJumpTarget(ACtx, MissJump);
+  Ident := TGocciaIdentifierExpression.Create(ATarget.PropertyName, 0, 0);
+  try
+    CompileIdentifierAccessNoWith(ACtx, Ident, ADest, False);
+  finally
+    Ident.Free;
+  end;
+  PatchJumpTarget(ACtx, EndJump);
+end;
+
 procedure EmitLoadBindingByName(const ACtx: TGocciaCompilationContext;
   const AName: string; const ADest: UInt8; const ASafe: Boolean);
 var
@@ -2748,9 +2816,31 @@ var
   IterReg, ValueReg, DoneReg, ErrorReg: UInt8;
   I: Integer;
   HandlerJump, AfterHandlerJump, SkipCloseJump, SkipNextJump, AfterNextJump,
-    RestLoop, RestDoneJump: Integer;
+  RestLoop, RestDoneJump: Integer;
   RestReg: UInt8;
   PreparedTarget: TPreparedDestructuringTarget;
+
+  procedure EmitProtectedIterNext;
+  var
+    NextHandlerJump, AfterNextHandlerJump, SkipCloseOnThrowJump: Integer;
+  begin
+    NextHandlerJump := EmitJumpInstruction(ACtx, OP_PUSH_FINALLY_HANDLER,
+      ErrorReg);
+    EmitInstruction(ACtx, EncodeABC(OP_ITER_NEXT, ValueReg, DoneReg,
+      IterReg));
+    EmitInstruction(ACtx, EncodeABC(OP_POP_HANDLER, 0, 0, 0));
+    AfterNextHandlerJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+
+    PatchJumpTarget(ACtx, NextHandlerJump);
+    SkipCloseOnThrowJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE,
+      DoneReg);
+    EmitInstruction(ACtx, EncodeABC(OP_ITER_CLOSE, IterReg, ErrorReg,
+      ITER_CLOSE_PRESERVE_UNLESS_GENERATOR_RETURN));
+    PatchJumpTarget(ACtx, SkipCloseOnThrowJump);
+    EmitInstruction(ACtx, EncodeABC(OP_THROW, ErrorReg, 0, 0));
+
+    PatchJumpTarget(ACtx, AfterNextHandlerJump);
+  end;
 begin
   IterReg := ACtx.Scope.AllocateRegister;
   ValueReg := ACtx.Scope.AllocateRegister;
@@ -2765,8 +2855,7 @@ begin
       if not Assigned(APattern.Elements[I]) then
       begin
         SkipNextJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, DoneReg);
-        EmitInstruction(ACtx, EncodeABC(OP_ITER_NEXT, ValueReg, DoneReg,
-          IterReg));
+        EmitProtectedIterNext;
         PatchJumpTarget(ACtx, SkipNextJump);
         Continue;
       end;
@@ -2801,8 +2890,7 @@ begin
             RestLoop := CurrentCodePosition(ACtx);
             RestDoneJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE,
               DoneReg);
-            EmitInstruction(ACtx, EncodeABC(OP_ITER_NEXT, ValueReg, DoneReg,
-              IterReg));
+            EmitProtectedIterNext;
             SkipNextJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE,
               DoneReg);
             EmitInstruction(ACtx, EncodeABC(OP_ARRAY_PUSH, RestReg, ValueReg,
@@ -2820,8 +2908,7 @@ begin
         end;
 
         SkipNextJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, DoneReg);
-        EmitInstruction(ACtx, EncodeABC(OP_ITER_NEXT, ValueReg, DoneReg,
-          IterReg));
+        EmitProtectedIterNext;
         AfterNextJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
         PatchJumpTarget(ACtx, SkipNextJump);
         EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, ValueReg, 0, 0));
@@ -5278,19 +5365,26 @@ var
   ArithOp: TGocciaTokenType;
   I, EndCount, JumpIdx, MissJump, OkJump: Integer;
   EndJumps: array of Integer;
+  PreparedTarget: TPreparedDestructuringTarget;
 begin
   // ES2026 §13.15.2 AssignmentExpression : LeftHandSideExpression ??=/&&=/||= AssignmentExpression
   if IsShortCircuitAssignment(AExpr.Operator) then
   begin
     if ShouldTryWithBinding(ACtx.Scope, AExpr.Name) then
     begin
-      Op := ShortCircuitJumpOp(AExpr.Operator);
-      EmitLoadBindingByName(ACtx, AExpr.Name, ADest, False);
-      JumpIdx := EmitJumpInstruction(ACtx, Op, ADest);
-      CompileAssignmentValue(ACtx, AExpr.Value, ADest, AExpr.Name,
-        AExpr.InferName);
-      EmitWithAssignmentOrFallback(ACtx, AExpr.Name, ADest);
-      PatchJumpTarget(ACtx, JumpIdx);
+      InitPreparedDestructuringTarget(PreparedTarget);
+      try
+        Op := ShortCircuitJumpOp(AExpr.Operator);
+        PrepareIdentifierWithBindingTarget(ACtx, AExpr.Name, PreparedTarget);
+        EmitPreparedIdentifierWithBindingLoad(ACtx, PreparedTarget, ADest);
+        JumpIdx := EmitJumpInstruction(ACtx, Op, ADest);
+        CompileAssignmentValue(ACtx, AExpr.Value, ADest, AExpr.Name,
+          AExpr.InferName);
+        EmitPreparedDestructuringTargetStore(ACtx, PreparedTarget, ADest);
+        PatchJumpTarget(ACtx, JumpIdx);
+      finally
+        ReleasePreparedDestructuringTarget(ACtx, PreparedTarget);
+      end;
       Exit;
     end;
 
