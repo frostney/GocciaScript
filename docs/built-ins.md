@@ -1,6 +1,6 @@
 # Built-in Objects
 
-<!-- doc-length-limit: 900 -->
+<!-- doc-length-limit: 1000 -->
 
 *For contributors adding or modifying built-in objects, and for script authors looking up available APIs.*
 
@@ -8,6 +8,7 @@
 
 - **Core vs runtime registration** — `TGocciaEngine` always registers core language built-ins (Math, Object, Array, String, Number, RegExp, JSON, Symbol, Set, Map, Promise, Temporal, Intl, ArrayBuffer, SharedArrayBuffer, Atomics, TypedArrays, Proxy, Reflect, Iterator, DisposableStack, etc.); `Goccia.Runtime` provides optional runtime globals (Console, JSON5, JSONL, TOML, YAML, CSV, TSV, Performance, TextEncoder/TextDecoder, URL, fetch, Headers, Response, SemVer)
 - **Runtime opt-ins** — Testing, benchmarking, FFI, and data-format APIs extend the runtime surface through concrete runtime extension classes
+- **Sandbox modules** — `GocciaSandboxRunner` installs import-only `"fs"` and `"goccia"` modules for sandbox filesystem and shell/nested-execution access; they are not globals
 - **ECMAScript shims** — Legacy standard names such as global `parseInt`, `parseFloat`, `isNaN`, `isFinite`, `Date`, `__proto__`, and legacy getter/setter helpers are installed through Goccia.shims
 - **Adding new built-ins** — See [Adding Built-in Types](adding-built-in-types.md) for the step-by-step recipe
 - **Always-present globals** — `globalThis` and `Goccia` namespace are registered after all built-ins
@@ -19,6 +20,8 @@ GocciaScript provides a set of built-in global objects that mirror JavaScript's 
 Core language built-ins (Math, Object, Array, Number, JSON, Symbol, Set, Map, WeakSet, WeakMap, Promise, Temporal, Intl, ArrayBuffer, SharedArrayBuffer, Atomics, Proxy, Reflect, etc.) are always registered unconditionally by the engine.
 
 Runtime globals (Console, JSON5, JSONL, TOML, YAML, CSV, TSV, Performance, TextEncoder/TextDecoder, URL, fetch, Headers, Response, SemVer) are registered by the loader runtime profile and runtime extension classes under `source/units/Goccia.RuntimeExtensions.*.pas`. CLI hosts such as `GocciaScriptLoader` and `GocciaREPL` call `ApplyLoaderRuntimeProfile`; `GocciaTestRunner` applies the loader runtime profile plus `TGocciaTestingLibraryRuntimeExtension`; `GocciaBenchmarkRunner` applies the loader runtime profile plus `TGocciaBenchmarkRuntimeExtension`. `GocciaScriptLoaderBare` does not attach a runtime and exposes only a CLI-local `print(...args)` helper by default; the test262 conformance runner may opt into private test262 host capabilities with `--test262-host`.
+
+`GocciaSandboxRunner` applies the loader runtime profile and then installs `TGocciaSandboxRuntimeExtension`. That extension registers sandbox capabilities as import-only global modules named `"fs"` and `"goccia"`; it does not create global `fs`, `$`, or `runScript` bindings.
 
 FFI is not part of the loader runtime profile. CLI tools install `TGocciaFFIRuntimeExtension` when `--unsafe-ffi` is passed or `"unsafe-ffi": true` is set in config.
 
@@ -663,6 +666,83 @@ See [Temporal Built-ins](built-ins-temporal.md) for the complete Temporal API re
 ### Binary Data (ArrayBuffer, SharedArrayBuffer, Atomics, DataView, TypedArrays)
 
 See [Binary Data Built-ins](built-ins-binary-data.md) for the complete ArrayBuffer, SharedArrayBuffer, Atomics, DataView, and TypedArray API reference.
+
+### Sandbox Modules (`Goccia.RuntimeExtensions.Sandbox.pas`)
+
+Only available in `GocciaSandboxRunner`. The sandbox runner installs capabilities as import-only modules; it does not create global `fs`, `$`, or `runScript` bindings.
+
+```javascript
+import fs from "fs";
+import { $, runScript } from "goccia";
+```
+
+The `"fs"` module operates on the sandbox virtual filesystem. It follows a Node.js-shaped subset while keeping every path inside the sandbox namespace; it never reads from or writes to the host filesystem.
+
+| Method / Property | Description |
+|-------------------|-------------|
+| `fs.readFileSync(path, options?)` | Read text when `options` is `"utf8"` / `"utf-8"` or `{ encoding: "utf8" }`; otherwise returns `Uint8Array` |
+| `fs.writeFileSync(path, data)` | Write UTF-8 string data or bytes from `Uint8Array` |
+| `fs.appendFileSync(path, data)` | Append UTF-8 string data or bytes from `Uint8Array` |
+| `fs.mkdirSync(path, options?)` | Create a directory; `{ recursive: true }` creates parents |
+| `fs.readdirSync(path)` | Return child names |
+| `fs.statSync(path)` | Return `{ path, name, type, size, mtimeMs, isFile(), isDirectory() }` |
+| `fs.existsSync(path)` | Return whether a sandbox path exists |
+| `fs.rmSync(path, options?)` | Delete a file or directory; `{ recursive: true }` removes non-empty directories |
+| `fs.renameSync(from, to)` | Move or rename a sandbox path |
+| `fs.copyFileSync(from, to)` | Copy a file |
+| `fs.promises` | Promise-returning versions of the same operations |
+
+`readFileSync` returns a `Uint8Array` by default so binary seed entries can round-trip without text coercion.
+
+The `"goccia"` module exposes sandbox runner orchestration helpers.
+
+| Export | Description |
+|--------|-------------|
+| `$` | Bun-like shell tagged template / command factory. Commands run against the sandbox filesystem and return a lazy command object with `.run()`, `.text()`, `.json()`, `.quiet()`, and `.nothrow()` |
+| `runScript(path, options?)` | Execute another sandbox entry path with the same execution mode. Shared VFS is the default; `{ sandbox: true }` creates a child VFS. Returns `{ ok, exitCode, stdout, stderr, result, error, diff }` |
+
+`$` accepts tagged templates or command strings. Tagged-template substitutions are shell-quoted before command parsing.
+
+```javascript
+const name = "hello world";
+console.log(await $`echo ${name}`.text());
+```
+
+By default, nested execution shares the current virtual filesystem:
+
+```javascript
+const child = runScript("/child.js");
+const viaShell = await $`goccia /child.js`.text();
+```
+
+Pass `{ sandbox: true }` to run the child in a fresh virtual filesystem. Seed entries are sourced from the current sandbox VFS, not from the host:
+
+```javascript
+const child = runScript("/child.js", {
+  sandbox: true,
+  seed: [
+    "/child.js",
+    { from: "/lib", to: "/lib" },
+    { path: "/input.txt", text: "inline text" },
+    { path: "/data.bin", base64: "AQID" },
+  ],
+  diff: true,
+  diffFormat: "json",
+});
+
+console.log(child.stdout);
+console.log(child.diff);
+```
+
+`seed` accepts one entry or an array. A string entry copies that parent-VFS path to the same child path. `{ from, to }` copies a parent file or directory into a child target path. When a file seed target ends in `/`, the file is copied under that directory with its source name. Inline `{ path, text }` and `{ path, base64 }` entries create child-only files.
+
+The sandbox shell exposes the same child mode:
+
+```javascript
+const out = await $`goccia --sandbox --seed /child.js --seed /lib=/lib --diff /child.js`.text();
+```
+
+Shell `goccia` supports `--sandbox`, repeatable `--seed <from[=to]>` / `--seed=<from[=to]>`, `--diff`, and `--diff-format json|unified`. Child diffs are appended to command stdout only when `--diff` is present.
 
 ### FFI (`Goccia.Builtins.GlobalFFI.pas`)
 

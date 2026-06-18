@@ -7,7 +7,8 @@
  * execution, CLI print, and runtime-global absence), GocciaBundler (compile,
  * roundtrip, stdin, directory, .gbc rejection, source maps),
  * GocciaBenchmarkRunner (file, stdin, bytecode), GocciaREPL (banner,
- * evaluation, ASI, error recovery, bytecode).
+ * evaluation, ASI, error recovery, bytecode), GocciaSandboxRunner
+ * (seed baselines, sandbox fs, shell, nested execution, diffs).
  */
 
 import { $ } from "bun";
@@ -22,6 +23,7 @@ import { join, resolve } from "path";
 import {
   LOADER,
   BARE,
+  SANDBOXRUNNER,
   REPL,
   TESTRUNNER,
   BUNDLER,
@@ -2219,6 +2221,384 @@ console.log("REPL: repeated tagged template execution (interpreted + bytecode)..
     if (!out.includes("'first'") || !out.includes("'second'") ||
         out.includes("'stale'"))
       throw new Error(`REPL ${label} should keep repeated parse template sites distinct, got: ${out}`);
+  }
+}
+
+// ============================================================================
+// GocciaSandboxRunner
+// ============================================================================
+
+console.log("SandboxRunner: inline seeds, fs, $, runScript, and diffs...");
+{
+  const tmp = makeTmp();
+  try {
+    const seed = join(tmp, "seed.json");
+    const diff = join(tmp, "diff.json");
+    writeFileSync(seed, JSON.stringify({
+      files: [
+        {
+          path: "/main.js",
+          text: [
+            'import fs from "fs";',
+            'import { $, runScript } from "goccia";',
+            'await fs.promises.writeFile("/hello.txt", "hello");',
+            'const shellOut = await $`cat /hello.txt`.text();',
+            'const spaced = "hello world";',
+            'const interpolated = await $`echo ${spaced}`.text();',
+            'const quietText = await $`echo hidden`.quiet().text();',
+            'const quietRun = await $`echo hidden`.quiet().run();',
+            'const child = runScript("/child.js");',
+            'const objectChild = runScript("/object-child.js");',
+            'const shellChild = await $`goccia /child.js`.text();',
+            'const stat = fs.statSync("/hello.txt");',
+            'console.log(shellOut.trim());',
+            'console.log(interpolated.trim());',
+            'console.log("quiet-text:" + (quietText === ""));',
+            'console.log("quiet-run:" + (quietRun.stdout === "" && quietRun.stderr === "" && quietRun.ok));',
+            'console.log(child.stdout.trim());',
+            'console.log(objectChild.result.value);',
+            'console.log(objectChild.result.items[1]);',
+            'console.log(objectChild.result.nested.ok);',
+            'console.log("mtime-ms:" + (stat.mtimeMs > 1000000000000));',
+            'console.log(shellChild.trim());',
+            'console.log(fs.readFileSync("/child.out", "utf8"));',
+            '"sandbox-ok";',
+          ].join("\n"),
+        },
+        {
+          path: "/child.js",
+          text: [
+            'import fs from "fs";',
+            'fs.writeFileSync("/child.out", "child-write");',
+            'console.log("child");',
+            '"child-result";',
+          ].join("\n"),
+        },
+        {
+          path: "/object-child.js",
+          text: '({ value: 42, items: ["zero", "one"], nested: { ok: true } });',
+        },
+      ],
+    }));
+
+    const proc = Bun.spawnSync(
+      [SANDBOXRUNNER, "/main.js", `--seed-config=${seed}`, "--source-type=module", "--diff", `--diff-output=${diff}`],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const stdout = normalizeLineEndings(proc.stdout.toString());
+    const stderr = proc.stderr.toString();
+    if (proc.exitCode !== 0)
+      throw new Error(`SandboxRunner interpreter should exit 0, got ${proc.exitCode}: ${stderr}`);
+    for (const expected of [
+      "hello",
+      "hello world",
+      "quiet-text:true",
+      "quiet-run:true",
+      "child",
+      "42",
+      "one",
+      "true",
+      "mtime-ms:true",
+      "child\nchild",
+      "child-write",
+    ]) {
+      if (!stdout.includes(expected))
+        throw new Error(`SandboxRunner interpreter stdout should include ${JSON.stringify(expected)}, got: ${stdout}`);
+    }
+    const changes = JSON.parse(readFileSync(diff, "utf-8")).changes;
+    if (!changes.some((c: any) => c.kind === "create" && c.path === "/hello.txt"))
+      throw new Error(`SandboxRunner diff should include /hello.txt create, got ${JSON.stringify(changes)}`);
+    if (!changes.some((c: any) => c.kind === "create" && c.path === "/child.out"))
+      throw new Error(`SandboxRunner diff should include /child.out create, got ${JSON.stringify(changes)}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("SandboxRunner: aliases and import maps resolve sandbox module paths...");
+{
+  const tmp = makeTmp();
+  try {
+    const seed = join(tmp, "seed.json");
+    const importMap = join(tmp, "import-map.json");
+    writeFileSync(importMap, JSON.stringify({ imports: { "#lib/": "/lib/" } }));
+    writeFileSync(seed, JSON.stringify({
+      files: [
+        {
+          path: "/alias-main.js",
+          text: [
+            'import { label } from "@lib/alias.js";',
+            'console.log(label);',
+          ].join("\n"),
+        },
+        {
+          path: "/map-main.js",
+          text: [
+            'import { label } from "#lib/map.js";',
+            'console.log(label);',
+          ].join("\n"),
+        },
+        { path: "/lib/alias.js", text: 'export const label = "alias-ok";' },
+        { path: "/lib/map.js", text: 'export const label = "map-ok";' },
+      ],
+    }));
+
+    const aliasProc = Bun.spawnSync(
+      [SANDBOXRUNNER, "/alias-main.js", `--seed-config=${seed}`, "--source-type=module", "--alias", "@lib/=/lib/"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const aliasStdout = normalizeLineEndings(aliasProc.stdout.toString());
+    if (aliasProc.exitCode !== 0)
+      throw new Error(`SandboxRunner alias import should exit 0, got ${aliasProc.exitCode}: ${aliasProc.stderr.toString()}`);
+    if (!containsLine(`\n${aliasStdout}`, "alias-ok"))
+      throw new Error(`SandboxRunner alias import should print alias-ok, got: ${aliasStdout}`);
+
+    const importMapProc = Bun.spawnSync(
+      [SANDBOXRUNNER, "/map-main.js", `--seed-config=${seed}`, "--source-type=module", `--import-map=${importMap}`],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const importMapStdout = normalizeLineEndings(importMapProc.stdout.toString());
+    if (importMapProc.exitCode !== 0)
+      throw new Error(`SandboxRunner import map should exit 0, got ${importMapProc.exitCode}: ${importMapProc.stderr.toString()}`);
+    if (!containsLine(`\n${importMapStdout}`, "map-ok"))
+      throw new Error(`SandboxRunner import map should print map-ok, got: ${importMapStdout}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("SandboxRunner: seed config rejects null source values...");
+{
+  const tmp = makeTmp();
+  try {
+    const seed = join(tmp, "seed.json");
+    writeFileSync(seed, JSON.stringify({
+      files: [
+        { path: "/bad.txt", text: null },
+        { path: "/main.js", text: "1;" },
+      ],
+    }));
+
+    const proc = Bun.spawnSync(
+      [SANDBOXRUNNER, "/main.js", `--seed-config=${seed}`],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const output = proc.stdout.toString() + proc.stderr.toString();
+    if (proc.exitCode === 0)
+      throw new Error("SandboxRunner null seed text should fail");
+    if (!output.includes('seed config entry requires "text"'))
+      throw new Error(`SandboxRunner null seed text should report the required text field, got: ${output}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("SandboxRunner: unified diff includes deleted seeded files...");
+{
+  const tmp = makeTmp();
+  try {
+    const seed = join(tmp, "seed.json");
+    const diff = join(tmp, "diff.patch");
+    writeFileSync(seed, JSON.stringify({
+      files: [
+        {
+          path: "/main.js",
+          text: [
+            'import fs from "fs";',
+            'fs.rmSync("/remove.txt");',
+          ].join("\n"),
+        },
+        { path: "/remove.txt", text: "gone" },
+      ],
+    }));
+
+    const proc = Bun.spawnSync(
+      [SANDBOXRUNNER, "/main.js", `--seed-config=${seed}`, "--source-type=module", "--diff-format=unified", `--diff-output=${diff}`],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    if (proc.exitCode !== 0)
+      throw new Error(`SandboxRunner unified delete diff should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
+    const diffText = readFileSync(diff, "utf-8");
+    if (!diffText.includes("--- /remove.txt") || !diffText.includes("@@ sandbox file deleted @@") || !diffText.includes("-gone"))
+      throw new Error(`SandboxRunner unified delete diff should include deleted file content, got: ${diffText}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("SandboxRunner: bytecode uses the same sandbox runtime modules...");
+{
+  const tmp = makeTmp();
+  try {
+    const seed = join(tmp, "seed.json");
+    const diff = join(tmp, "diff.json");
+    writeFileSync(seed, JSON.stringify({
+      files: [
+        {
+          path: "/main.js",
+          text: [
+            'import fs from "fs";',
+            'import { $, runScript } from "goccia";',
+            'await fs.promises.writeFile("/byte.txt", "bytecode");',
+            'console.log((await $`cat /byte.txt`.text()).trim());',
+            'const child = runScript("/byte-child.js", { sandbox: true, seed: ["/byte-child.js"], diff: true });',
+            'console.log(child.stdout.trim());',
+            'console.log(child.diff.includes(\'"path": "/byte-child.txt"\'));',
+            'console.log(fs.existsSync("/byte-child.txt"));',
+          ].join("\n"),
+        },
+        {
+          path: "/byte-child.js",
+          text: [
+            'import fs from "fs";',
+            'fs.writeFileSync("/byte-child.txt", "child-bytecode");',
+            'console.log("byte-child");',
+          ].join("\n"),
+        },
+      ],
+    }));
+
+    const proc = Bun.spawnSync(
+      [SANDBOXRUNNER, "/main.js", `--seed-config=${seed}`, "--source-type=module", "--mode=bytecode", `--diff-output=${diff}`],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const stdout = normalizeLineEndings(proc.stdout.toString());
+    if (proc.exitCode !== 0)
+      throw new Error(`SandboxRunner bytecode should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
+    if (!containsLine(`\n${stdout}`, "bytecode"))
+      throw new Error(`SandboxRunner bytecode stdout should include bytecode, got: ${stdout}`);
+    if (!containsLine(`\n${stdout}`, "byte-child"))
+      throw new Error(`SandboxRunner bytecode nested stdout should include byte-child, got: ${stdout}`);
+    if (!containsLine(`\n${stdout}`, "true") || !containsLine(`\n${stdout}`, "false"))
+      throw new Error(`SandboxRunner bytecode nested diff/isolation booleans missing, got: ${stdout}`);
+    const changes = JSON.parse(readFileSync(diff, "utf-8")).changes;
+    if (!changes.some((c: any) => c.kind === "create" && c.path === "/byte.txt"))
+      throw new Error(`SandboxRunner bytecode diff should include /byte.txt create, got ${JSON.stringify(changes)}`);
+    if (changes.some((c: any) => c.path === "/byte-child.txt"))
+      throw new Error(`SandboxRunner bytecode parent diff should not include nested child writes, got ${JSON.stringify(changes)}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("SandboxRunner: nested sandbox execution seeds from parent VFS without leaking writes...");
+{
+  const tmp = makeTmp();
+  try {
+    const seed = join(tmp, "seed.json");
+    writeFileSync(seed, JSON.stringify({
+      files: [
+        {
+          path: "/main.js",
+          text: [
+            'import fs from "fs";',
+            'import { $, runScript } from "goccia";',
+            'const child = runScript("/child.js", {',
+            '  sandbox: true,',
+            '  seed: [',
+            '    "/child.js",',
+            '    "/parent.txt",',
+            '    { from: "/parent.txt", to: "/out/" },',
+            '    { path: "/inline.txt", text: "inline-child" },',
+            '    { path: "/bin.dat", base64: "BAUG" },',
+            '  ],',
+            '  diff: true,',
+            '});',
+            'const noWrite = runScript("/readonly.js", { sandbox: true, seed: ["/readonly.js"], diff: true, diffFormat: "unified" });',
+            'console.log(child.stdout.trim());',
+            'console.log(child.diff.includes(\'"path": "/child-only.txt"\'));',
+            'console.log(noWrite.diff === "");',
+            'console.log(fs.existsSync("/child-only.txt"));',
+            'console.log(fs.readFileSync("/parent.txt", "utf8"));',
+            'const shellChild = await $`goccia --sandbox --seed /child.js --seed /parent.txt --seed /parent.txt=/shell-out/ --diff /child.js`.text();',
+            'console.log(shellChild.includes("parent-seed"));',
+            'console.log(shellChild.includes("shell-out:parent-seed"));',
+            'console.log(shellChild.includes(\'"path": "/child-only.txt"\'));',
+            'console.log(fs.existsSync("/child-only.txt"));',
+          ].join("\n"),
+        },
+        {
+          path: "/child.js",
+          text: [
+            'import fs from "fs";',
+            'console.log(fs.readFileSync("/parent.txt", "utf8"));',
+            'if (fs.existsSync("/inline.txt")) console.log(fs.readFileSync("/inline.txt", "utf8"));',
+            'if (fs.existsSync("/bin.dat")) console.log(fs.readFileSync("/bin.dat").length);',
+            'if (fs.existsSync("/out/parent.txt")) console.log("out:" + fs.readFileSync("/out/parent.txt", "utf8"));',
+            'if (fs.existsSync("/shell-out/parent.txt")) console.log("shell-out:" + fs.readFileSync("/shell-out/parent.txt", "utf8"));',
+            'fs.writeFileSync("/parent.txt", "child-mutated");',
+            'fs.writeFileSync("/child-only.txt", "secret");',
+          ].join("\n"),
+        },
+        { path: "/readonly.js", text: "1;" },
+        { path: "/parent.txt", text: "parent-seed" },
+      ],
+    }));
+
+    const proc = Bun.spawnSync(
+      [SANDBOXRUNNER, "/main.js", `--seed-config=${seed}`, "--source-type=module"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const stdout = normalizeLineEndings(proc.stdout.toString());
+    if (proc.exitCode !== 0)
+      throw new Error(`SandboxRunner nested sandbox should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
+    for (const expected of [
+      "parent-seed",
+      "inline-child",
+      "out:parent-seed",
+      "3",
+      "true",
+      "false",
+    ]) {
+      if (!containsLine(`\n${stdout}`, expected))
+        throw new Error(`SandboxRunner nested sandbox stdout should include line ${JSON.stringify(expected)}, got: ${stdout}`);
+    }
+    if (!stdout.includes("parent-seed\ninline-child\n3\nout:parent-seed"))
+      throw new Error(`runScript child stdout should include inline seeded files, got: ${stdout}`);
+    const falseCount = stdout.split("\n").filter((line) => line === "false").length;
+    if (falseCount !== 2)
+      throw new Error(`child writes should stay out of parent VFS twice, got ${falseCount} false lines in: ${stdout}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("SandboxRunner: seed config imports host paths relative to the config file...");
+{
+  const tmp = makeTmp();
+  try {
+    const project = join(tmp, "project");
+    mkdirSync(project, { recursive: true });
+    writeFileSync(join(project, "data.txt"), "from-host");
+    const seed = join(tmp, "seed.json");
+    writeFileSync(seed, JSON.stringify({
+      files: [
+        { from: "./project", to: "/" },
+        { path: "/bin.dat", base64: "AQID" },
+        {
+          path: "/main.js",
+          text: [
+            'import fs from "fs";',
+            'console.log(fs.readFileSync("/data.txt", "utf8"));',
+            'console.log(fs.readFileSync("/bin.dat").length);',
+          ].join("\n"),
+        },
+      ],
+    }));
+
+    const proc = Bun.spawnSync(
+      [resolve(SANDBOXRUNNER), "/main.js", `--seed-config=${seed}`, "--source-type=module"],
+      { stdout: "pipe", stderr: "pipe", cwd: "/" },
+    );
+    const stdout = normalizeLineEndings(proc.stdout.toString());
+    if (proc.exitCode !== 0)
+      throw new Error(`SandboxRunner host seed should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
+    if (!containsLine(`\n${stdout}`, "from-host"))
+      throw new Error(`SandboxRunner host seed stdout should include imported host text, got: ${stdout}`);
+    if (!containsLine(`\n${stdout}`, "3"))
+      throw new Error(`SandboxRunner host seed stdout should include base64 byte length, got: ${stdout}`);
+  } finally {
+    clean(tmp);
   }
 }
 

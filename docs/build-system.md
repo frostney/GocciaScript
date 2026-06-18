@@ -27,6 +27,7 @@ The build script supports two modes via `--dev` (default) and `--prod` flags:
 ```bash
 ./build.pas loader              # Dev build (default)
 ./build.pas loaderbare          # Dev build of Bare Script Loader
+./build.pas sandboxrunner       # Dev build of Sandbox Runner
 ./build.pas --dev loader        # Explicit dev build
 ./build.pas --prod loader       # Production build
 ./build.pas --prod              # Production build of all components
@@ -41,7 +42,7 @@ The build script supports two modes via `--dev` (default) and `--prod` flags:
 ./build.pas --prod    # Production build of all components
 ```
 
-Builds all components in order: tests, loader, loaderbare, testrunner, benchmarkrunner, bundler, repl. The default full build does not clean first; pass `--clean` explicitly when you need to remove stale build artifacts.
+Builds all components in order: tests, loader, loaderbare, sandboxrunner, testrunner, benchmarkrunner, bundler, repl. The default full build does not clean first; pass `--clean` explicitly when you need to remove stale build artifacts.
 
 ### Build Specific Components
 
@@ -49,6 +50,7 @@ Builds all components in order: tests, loader, loaderbare, testrunner, benchmark
 ./build.pas repl             # Interactive REPL
 ./build.pas loader           # Script Loader
 ./build.pas loaderbare       # Bare Script Loader (core engine only)
+./build.pas sandboxrunner    # Sandbox Runner with virtual filesystem
 ./build.pas testrunner       # JavaScript test runner
 ./build.pas benchmarkrunner  # Performance benchmark runner
 ./build.pas bundler          # Bundler (compile to .gbc)
@@ -374,6 +376,64 @@ printf "const x = 2 + 2; x;" | ./build/GocciaBundler --output=out.gbc
 
 See [bytecode-vm.md](bytecode-vm.md) for the bytecode VM architecture and binary format.
 
+### GocciaSandboxRunner (Virtual Filesystem Sandbox)
+
+GocciaSandboxRunner executes a sandbox entry path after populating an isolated virtual filesystem. Seed paths are import baselines: the runner copies data into the sandbox before execution, captures that filesystem as the baseline, and never treats the host path as a live mount.
+
+```bash
+./build.pas sandboxrunner
+
+# Import a host directory into the sandbox root and run /main.js.
+./build/GocciaSandboxRunner /main.js --seed=./sandbox-root=/
+
+# Seed from JSON, execute as a module, and write a diff to the host.
+./build/GocciaSandboxRunner /main.js --seed-config=seed.json --source-type=module --diff-output=changes.json
+
+# Use the same sandbox runtime modules through the bytecode executor.
+./build/GocciaSandboxRunner /main.js --seed-config=seed.json --mode=bytecode
+```
+
+`--seed=<host>[=<sandbox>]` resolves the host path relative to the invocation current working directory. When the sandbox target is omitted, directories import their contents to `/` and files import as `/<filename>`.
+
+`--seed-config=<file.json>` resolves each `from` path relative to the seed config file. The JSON shape is:
+
+```json
+{
+  "files": [
+    { "from": "./project", "to": "/" },
+    { "path": "/main.js", "text": "import fs from \"fs\";\nconsole.log(fs.readdirSync('/'));" },
+    { "path": "/data.bin", "base64": "AQID" }
+  ]
+}
+```
+
+The sandbox runtime installs import-only modules, not globals:
+
+```javascript
+import fs from "fs";
+import { $, runScript } from "goccia";
+
+fs.writeFileSync("/hello.txt", "hello");
+console.log(await $`cat /hello.txt`.text());
+runScript("/child.js");
+```
+
+Nested scripts share the current sandbox filesystem unless child isolation is requested:
+
+```javascript
+const child = runScript("/child.js", {
+  sandbox: true,
+  seed: ["/child.js", { from: "/fixtures", to: "/fixtures" }],
+  diff: true
+});
+
+const shellChild = await $`goccia --sandbox --seed /child.js --diff /child.js`.text();
+```
+
+Child seed entries are copied from the parent virtual filesystem, not the host filesystem. Child writes are discarded with the child VFS; request `diff: true` or shell `--diff` to inspect them.
+
+Diff output is explicit. `--diff` prints the diff after execution, `--diff-output=<host-path>` writes it to a host file, and `--diff-format=json|unified` selects the format. JSON is the default.
+
 ## Build Output
 
 All compiled binaries go to the `build/` directory:
@@ -383,6 +443,7 @@ All compiled binaries go to the `build/` directory:
 | `build/GocciaREPL` | `source/app/GocciaREPL.dpr` | Interactive read-eval-print loop |
 | `build/GocciaScriptLoader` | `source/app/GocciaScriptLoader.dpr` | Execute `.js` files or stdin input, with optional JSON output |
 | `build/GocciaScriptLoaderBare` | `source/app/GocciaScriptLoaderBare.dpr` | Execute file or stdin source with the core engine and CLI-local `print`; no loader runtime profile. `--test262-host` exposes private conformance hooks for the test262 runner |
+| `build/GocciaSandboxRunner` | `source/app/GocciaSandboxRunner.dpr` | Execute sandbox entry paths inside a seeded virtual filesystem |
 | `build/GocciaTestRunner` | `source/app/GocciaTestRunner.dpr` | JavaScript test runner |
 | `build/GocciaBenchmarkRunner` | `source/app/GocciaBenchmarkRunner.dpr` | Performance benchmark runner for files or stdin input |
 | `build/GocciaBundler` | `source/app/GocciaBundler.dpr` | Bundler (source to `.gbc`) |
@@ -575,7 +636,7 @@ Runs on the full platform matrix:
 
 **`benchmark`** (needs build) — Runs all benchmarks on all platforms. On main (ubuntu-latest x64), saves benchmark results as JSON to `actions/cache` for PR comparison.
 
-**`cli`** (needs build) — Downloads pre-built binaries and runs CLI behavior smoke tests on all platforms via Bun: options across all apps, lexer numeric-separator rejection, parser error display, config-file loading, and app-specific features. Windows runs additionally assert that the loader binary does not link OpenSSL DLLs (HTTPS must use the platform TLS stack statically).
+**`cli`** (needs build) — Downloads pre-built binaries and runs CLI behavior smoke tests on all platforms via Bun: options across all apps, lexer numeric-separator rejection, parser error display, config-file loading, and app-specific features including Sandbox Runner seed baselines. Windows runs additionally assert that the loader binary does not link OpenSSL DLLs (HTTPS must use the platform TLS stack statically).
 
 **`artifacts`** (needs test + toml-compliance + json5-compliance + benchmark + cli, main only) — Uploads production binaries after all checks pass, deriving the executable names from the `source/app/*.dpr` entrypoints.
 
@@ -600,7 +661,7 @@ Runs on **ubuntu-latest x64 only** (single runner, no matrix).
 
 **`test262`** (needs build, **non-blocking**) — Checks out `tc39/test262` at the pinned SHA, runs `bun scripts/run_test262_suite.ts --suite-dir test262-suite --mode=bytecode --jobs=2 --output=test262-results.json`, and uploads the JSON report. Failing tests do not fail the job. The downstream `test262-comment` job (`if: always()`) restores the most recent `test262-baseline-` cache entry from main, then `bun scripts/run_test262_suite.ts --comment test262-results.json <baseline>` builds the markdown body and the workflow posts/updates a comment using marker `<!-- test262-results -->`. The comment shows a per-category breakdown (built-ins, harness, intl402, language, staging) with Δ-vs-main columns when a baseline is cached, an "Areas closest to 100%" sub-table, and a collapsible per-test delta list.
 
-**`cli`** (needs build) — Runs CLI behavior smoke tests via Bun (`scripts/test-cli.ts`, `scripts/test-cli-lexer.ts`, `scripts/test-cli-parser.ts`, `scripts/test-cli-config.ts`, `scripts/test-cli-apps.ts`). `test-cli-apps.ts` includes `GocciaScriptLoaderBare` coverage for stdin, `-`, input files, CLI-local `print`, module source type, absence of the loader runtime profile, and `--mode=interpreted|bytecode` (both values plus invalid-value rejection).
+**`cli`** (needs build) — Runs CLI behavior smoke tests via Bun (`scripts/test-cli.ts`, `scripts/test-cli-lexer.ts`, `scripts/test-cli-parser.ts`, `scripts/test-cli-config.ts`, `scripts/test-cli-apps.ts`). `test-cli-apps.ts` includes `GocciaScriptLoaderBare` coverage for stdin, `-`, input files, CLI-local `print`, module source type, absence of the loader runtime profile, and `--mode=interpreted|bytecode` (both values plus invalid-value rejection), plus `GocciaSandboxRunner` coverage for seed config imports, inline text/base64 files, virtual `fs`, `$`, shared and child-sandbox `runScript` / shell `goccia`, bytecode mode, and diff output.
 
 FPC is only installed once per platform in the `build` job. In `ci.yml`, the test, benchmark, cli, TOML, JSON5, and test262 conformance jobs reuse the pre-built binaries and artifacts from that job; in `pr.yml`, the test, benchmark, test262, and cli jobs do the same.
 
