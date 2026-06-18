@@ -2367,6 +2367,61 @@ console.log("SandboxRunner: aliases and import maps resolve sandbox module paths
   }
 }
 
+console.log("SandboxRunner: Windows-style sandbox paths normalize to virtual paths...");
+{
+  const tmp = makeTmp();
+  try {
+    const seed = join(tmp, "seed.json");
+    writeFileSync(seed, JSON.stringify({
+      files: [
+        {
+          path: String.raw`\main.js`,
+          text: [
+            'import fs from "fs";',
+            'import { $, runScript } from "goccia";',
+            'fs.writeFileSync("\\\\hello.txt", "hello");',
+            'console.log(fs.readFileSync("/hello.txt", "utf8"));',
+            'console.log((await $("cat \'\\\\hello.txt\'").text()).trim());',
+            'const child = runScript("\\\\child.js", {',
+            '  sandbox: true,',
+            '  seed: ["\\\\child.js", { from: "\\\\hello.txt", to: "\\\\copied\\\\" }],',
+            '  diff: true,',
+            '});',
+            'console.log(child.stdout.trim());',
+            'const shellChild = await $("goccia \'\\\\child.js\'").text();',
+            'console.log(shellChild.trim());',
+          ].join("\n"),
+        },
+        {
+          path: String.raw`\child.js`,
+          text: [
+            'import fs from "fs";',
+            'if (fs.existsSync("\\\\copied\\\\hello.txt")) console.log(fs.readFileSync("\\\\copied\\\\hello.txt", "utf8"));',
+            'else console.log("child-shared");',
+          ].join("\n"),
+        },
+      ],
+    }));
+
+    const proc = Bun.spawnSync(
+      [SANDBOXRUNNER, String.raw`\main.js`, `--seed-config=${seed}`, "--source-type=module"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const stdout = normalizeLineEndings(proc.stdout.toString());
+    if (proc.exitCode !== 0)
+      throw new Error(`SandboxRunner Windows-style paths should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
+    for (const expected of ["hello", "child-shared"]) {
+      if (!containsLine(`\n${stdout}`, expected))
+        throw new Error(`SandboxRunner Windows-style paths should include ${JSON.stringify(expected)}, got: ${stdout}`);
+    }
+    const helloCount = stdout.split("\n").filter((line) => line === "hello").length;
+    if (helloCount !== 3)
+      throw new Error(`SandboxRunner Windows-style paths should print hello three times, got ${helloCount} in: ${stdout}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
 console.log("SandboxRunner: seed config rejects null source values...");
 {
   const tmp = makeTmp();
@@ -2570,16 +2625,23 @@ console.log("SandboxRunner: seed config imports host paths relative to the confi
     const project = join(tmp, "project");
     mkdirSync(project, { recursive: true });
     writeFileSync(join(project, "data.txt"), "from-host");
+    writeFileSync(join(tmp, "target-file.txt"), "from-file-target");
+    writeFileSync(join(tmp, "existing-dir-file.txt"), "from-existing-dir");
     const seed = join(tmp, "seed.json");
     writeFileSync(seed, JSON.stringify({
       files: [
         { from: "./project", to: "/" },
+        { path: "/existing-dir/.keep", text: "" },
+        { from: "./target-file.txt", to: "/target-dir/" },
+        { from: "./existing-dir-file.txt", to: "/existing-dir" },
         { path: "/bin.dat", base64: "AQID" },
         {
           path: "/main.js",
           text: [
             'import fs from "fs";',
             'console.log(fs.readFileSync("/data.txt", "utf8"));',
+            'console.log(fs.readFileSync("/target-dir/target-file.txt", "utf8"));',
+            'console.log(fs.readFileSync("/existing-dir/existing-dir-file.txt", "utf8"));',
             'console.log(fs.readFileSync("/bin.dat").length);',
           ].join("\n"),
         },
@@ -2595,6 +2657,10 @@ console.log("SandboxRunner: seed config imports host paths relative to the confi
       throw new Error(`SandboxRunner host seed should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
     if (!containsLine(`\n${stdout}`, "from-host"))
       throw new Error(`SandboxRunner host seed stdout should include imported host text, got: ${stdout}`);
+    if (!containsLine(`\n${stdout}`, "from-file-target"))
+      throw new Error(`SandboxRunner host seed stdout should include file copied under trailing slash target, got: ${stdout}`);
+    if (!containsLine(`\n${stdout}`, "from-existing-dir"))
+      throw new Error(`SandboxRunner host seed stdout should include file copied under existing target directory, got: ${stdout}`);
     if (!containsLine(`\n${stdout}`, "3"))
       throw new Error(`SandboxRunner host seed stdout should include base64 byte length, got: ${stdout}`);
   } finally {

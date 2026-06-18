@@ -47,24 +47,35 @@ const
   PARENT_DIRECTORY_PREFIX = '../';
 
 function IsAbsoluteSandboxPath(const APath: string): Boolean;
+var
+  Path: string;
 begin
-  Result := (APath <> '') and (APath[1] = '/');
+  Path := NormalizeSandboxPathSeparators(APath);
+  Result := (Path <> '') and (Path[1] = '/');
 end;
 
 function IsRelativeModuleSpecifier(const AModulePath: string): Boolean;
+var
+  ModulePath: string;
 begin
-  Result := (Copy(AModulePath, 1, Length(CURRENT_DIRECTORY_PREFIX)) =
+  ModulePath := NormalizeSandboxPathSeparators(AModulePath);
+  Result := (Copy(ModulePath, 1, Length(CURRENT_DIRECTORY_PREFIX)) =
       CURRENT_DIRECTORY_PREFIX) or
-    (Copy(AModulePath, 1, Length(PARENT_DIRECTORY_PREFIX)) =
+    (Copy(ModulePath, 1, Length(PARENT_DIRECTORY_PREFIX)) =
       PARENT_DIRECTORY_PREFIX);
 end;
 
 function JoinSandboxPath(const ABase, APath: string): string;
+var
+  Base: string;
+  Path: string;
 begin
-  if ABase = '/' then
-    Result := '/' + APath
+  Base := NormalizeSandboxPathSeparators(ABase);
+  Path := NormalizeSandboxPathSeparators(APath);
+  if Base = '/' then
+    Result := '/' + Path
   else
-    Result := ABase + '/' + APath;
+    Result := Base + '/' + Path;
 end;
 
 { TGocciaSandboxModuleContentProvider }
@@ -203,7 +214,7 @@ begin
 
   if IsAbsoluteSandboxPath(AModulePath) then
   begin
-    Candidate := FFs.Normalize(AModulePath);
+    Candidate := FFs.Normalize(NormalizeSandboxPathSeparators(AModulePath));
     if TryResolveWithSandboxExtensions(Candidate, Result) then
       Exit;
     raise EModuleNotFound.CreateFmt('Module not found: "%s"', [AModulePath]);
@@ -212,7 +223,8 @@ begin
   if IsRelativeModuleSpecifier(AModulePath) then
   begin
     BaseDirectoryPath := NormalizeImportBase(AImportingFilePath);
-    Candidate := FFs.Normalize(AModulePath, BaseDirectoryPath);
+    Candidate := FFs.Normalize(NormalizeSandboxPathSeparators(AModulePath),
+      BaseDirectoryPath);
     if TryResolveWithSandboxExtensions(Candidate, Result) then
       Exit;
     raise EModuleNotFound.CreateFmt(
