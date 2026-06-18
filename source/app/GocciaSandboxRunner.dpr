@@ -342,8 +342,6 @@ begin
     raise Exception.Create('Seed path does not exist: ' + HostPath);
 
   TargetPath := EnsureSandboxAbsolute(ASandboxPath);
-  if TargetPath = '' then
-    TargetPath := '/';
 
   if IsDirectoryPath(HostPath) then
     ImportDirectoryContents(HostPath, TargetPath)
