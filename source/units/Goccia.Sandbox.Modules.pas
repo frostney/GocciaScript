@@ -33,6 +33,13 @@ type
     function TryResolveWithSandboxExtensions(const ABasePath: string;
       out AResolvedPath: string): Boolean;
     function NormalizeImportBase(const AImportingFilePath: string): string;
+  protected
+    function IsAbsoluteImportMapPath(const APath: string): Boolean; override;
+    function IsRelativeImportMapPath(const APath: string): Boolean; override;
+    function NormalizeImportMapBaseDirectory(
+      const AImportMapDirectory: string): string; override;
+    function NormalizeImportMapPath(const APath, ABaseDirectory: string): string;
+      override;
   public
     constructor Create(const AFs: TSandboxVirtualFileSystem;
       const ABaseDirectory: string = '/');
@@ -47,24 +54,51 @@ const
   PARENT_DIRECTORY_PREFIX = '../';
 
 function IsAbsoluteSandboxPath(const APath: string): Boolean;
+var
+  Path: string;
 begin
-  Result := (APath <> '') and (APath[1] = '/');
+  Path := NormalizeSandboxPathSeparators(APath);
+  Result := (Path <> '') and (Path[1] = '/');
 end;
 
 function IsRelativeModuleSpecifier(const AModulePath: string): Boolean;
+var
+  ModulePath: string;
 begin
-  Result := (Copy(AModulePath, 1, Length(CURRENT_DIRECTORY_PREFIX)) =
+  ModulePath := NormalizeSandboxPathSeparators(AModulePath);
+  Result := (Copy(ModulePath, 1, Length(CURRENT_DIRECTORY_PREFIX)) =
       CURRENT_DIRECTORY_PREFIX) or
-    (Copy(AModulePath, 1, Length(PARENT_DIRECTORY_PREFIX)) =
+    (Copy(ModulePath, 1, Length(PARENT_DIRECTORY_PREFIX)) =
       PARENT_DIRECTORY_PREFIX);
 end;
 
 function JoinSandboxPath(const ABase, APath: string): string;
+var
+  Base: string;
+  Path: string;
 begin
-  if ABase = '/' then
-    Result := '/' + APath
+  Base := NormalizeSandboxPathSeparators(ABase);
+  Path := NormalizeSandboxPathSeparators(APath);
+  if Base = '/' then
+    Result := '/' + Path
   else
-    Result := ABase + '/' + APath;
+    Result := Base + '/' + Path;
+end;
+
+function HasSandboxTrailingSeparator(const APath: string): Boolean;
+var
+  Path: string;
+begin
+  Path := NormalizeSandboxPathSeparators(APath);
+  Result := (Path <> '') and (Path[Length(Path)] = '/');
+end;
+
+function EnsureSandboxTrailingSeparatorIfNeeded(const APath: string;
+  const ANeedsTrailingSeparator: Boolean): string;
+begin
+  Result := APath;
+  if ANeedsTrailingSeparator and not HasSandboxTrailingSeparator(Result) then
+    Result := Result + '/';
 end;
 
 { TGocciaSandboxModuleContentProvider }
@@ -116,6 +150,41 @@ begin
   inherited Create(ABaseDirectory);
   FFs := AFs;
   BaseDirectory := ABaseDirectory;
+end;
+
+function TGocciaSandboxModuleResolver.IsAbsoluteImportMapPath(
+  const APath: string): Boolean;
+begin
+  Result := IsAbsoluteSandboxPath(APath);
+end;
+
+function TGocciaSandboxModuleResolver.IsRelativeImportMapPath(
+  const APath: string): Boolean;
+begin
+  Result := IsRelativeModuleSpecifier(APath);
+end;
+
+function TGocciaSandboxModuleResolver.NormalizeImportMapBaseDirectory(
+  const AImportMapDirectory: string): string;
+begin
+  Result := FFs.Normalize(BaseDirectory);
+end;
+
+function TGocciaSandboxModuleResolver.NormalizeImportMapPath(const APath,
+  ABaseDirectory: string): string;
+var
+  Path: string;
+begin
+  Path := NormalizeSandboxPathSeparators(APath);
+  if IsAbsoluteSandboxPath(Path) then
+    Result := FFs.Normalize(Path)
+  else if IsRelativeModuleSpecifier(Path) then
+    Result := FFs.Normalize(Path, NormalizeSandboxPathSeparators(ABaseDirectory))
+  else
+    Result := Path;
+
+  Result := EnsureSandboxTrailingSeparatorIfNeeded(Result,
+    HasSandboxTrailingSeparator(Path));
 end;
 
 function TGocciaSandboxModuleResolver.NormalizeImportBase(
@@ -203,7 +272,7 @@ begin
 
   if IsAbsoluteSandboxPath(AModulePath) then
   begin
-    Candidate := FFs.Normalize(AModulePath);
+    Candidate := FFs.Normalize(NormalizeSandboxPathSeparators(AModulePath));
     if TryResolveWithSandboxExtensions(Candidate, Result) then
       Exit;
     raise EModuleNotFound.CreateFmt('Module not found: "%s"', [AModulePath]);
@@ -212,7 +281,8 @@ begin
   if IsRelativeModuleSpecifier(AModulePath) then
   begin
     BaseDirectoryPath := NormalizeImportBase(AImportingFilePath);
-    Candidate := FFs.Normalize(AModulePath, BaseDirectoryPath);
+    Candidate := FFs.Normalize(NormalizeSandboxPathSeparators(AModulePath),
+      BaseDirectoryPath);
     if TryResolveWithSandboxExtensions(Candidate, Result) then
       Exit;
     raise EModuleNotFound.CreateFmt(

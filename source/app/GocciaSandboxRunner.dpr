@@ -122,13 +122,16 @@ begin
 end;
 
 function EnsureSandboxAbsolute(const APath: string): string;
+var
+  Path: string;
 begin
-  if APath = '' then
+  Path := NormalizeSandboxPathSeparators(APath);
+  if Path = '' then
     Exit('/');
-  if APath[1] = '/' then
-    Result := APath
+  if Path[1] = '/' then
+    Result := Path
   else
-    Result := '/' + APath;
+    Result := '/' + Path;
 end;
 
 function HostPathFromConfig(const ABaseDirectory, APath: string): string;
@@ -142,37 +145,47 @@ end;
 
 function SandboxPathParent(const APath: string): string;
 var
+  Path: string;
   SlashIndex: Integer;
 begin
+  Path := NormalizeSandboxPathSeparators(APath);
   Result := '/';
-  SlashIndex := Length(APath);
-  while (SlashIndex > 1) and (APath[SlashIndex] <> '/') do
+  SlashIndex := Length(Path);
+  while (SlashIndex > 1) and (Path[SlashIndex] <> '/') do
     Dec(SlashIndex);
   if SlashIndex > 1 then
-    Result := Copy(APath, 1, SlashIndex - 1);
+    Result := Copy(Path, 1, SlashIndex - 1);
 end;
 
 function SandboxPathName(const APath: string): string;
 var
+  Path: string;
   SlashIndex: Integer;
 begin
-  SlashIndex := Length(APath);
-  while (SlashIndex > 0) and (APath[SlashIndex] <> '/') do
+  Path := NormalizeSandboxPathSeparators(APath);
+  SlashIndex := Length(Path);
+  while (SlashIndex > 0) and (Path[SlashIndex] <> '/') do
     Dec(SlashIndex);
-  Result := Copy(APath, SlashIndex + 1, MaxInt);
+  Result := Copy(Path, SlashIndex + 1, MaxInt);
 end;
 
 function SandboxPathHasTrailingSeparator(const APath: string): Boolean;
+var
+  Path: string;
 begin
-  Result := (APath <> '') and (APath[Length(APath)] = '/');
+  Path := NormalizeSandboxPathSeparators(APath);
+  Result := (Path <> '') and (Path[Length(Path)] = '/');
 end;
 
 function SandboxJoinPath(const ABase, AName: string): string;
+var
+  Base: string;
 begin
-  if ABase = '/' then
+  Base := NormalizeSandboxPathSeparators(ABase);
+  if Base = '/' then
     Result := '/' + AName
   else
-    Result := ABase + '/' + AName;
+    Result := Base + '/' + AName;
 end;
 
 destructor TSandboxRunnerApp.Destroy;
@@ -304,9 +317,12 @@ procedure TSandboxRunnerApp.ImportDirectoryContents(const AHostDirectory,
 var
   SearchRec: TSearchRec;
   HostChild: string;
+  SandboxDirectory: string;
   SandboxChild: string;
 begin
-  FContext.Fs.MakeDirectory(EnsureSandboxAbsolute(ASandboxDirectory), True);
+  SandboxDirectory := FContext.Fs.Normalize(EnsureSandboxAbsolute(
+    ASandboxDirectory));
+  FContext.Fs.MakeDirectory(SandboxDirectory, True);
   if FindFirst(IncludeTrailingPathDelimiter(AHostDirectory) + '*',
      faAnyFile, SearchRec) <> 0 then
     Exit;
@@ -315,12 +331,7 @@ begin
       if (SearchRec.Name = '.') or (SearchRec.Name = '..') then
         Continue;
       HostChild := IncludeTrailingPathDelimiter(AHostDirectory) + SearchRec.Name;
-      if ASandboxDirectory = '/' then
-        SandboxChild := '/' + SearchRec.Name
-      else
-        SandboxChild := IncludeTrailingPathDelimiter(ASandboxDirectory) +
-          SearchRec.Name;
-      SandboxChild := StringReplace(SandboxChild, PathDelim, '/', [rfReplaceAll]);
+      SandboxChild := SandboxJoinPath(SandboxDirectory, SearchRec.Name);
       if (SearchRec.Attr and faDirectory) <> 0 then
         ImportDirectoryContents(HostChild, SandboxChild)
       else
@@ -347,8 +358,10 @@ begin
     ImportDirectoryContents(HostPath, TargetPath)
   else
   begin
-    if (ASandboxPath = '') or (ASandboxPath = '/') then
-      TargetPath := '/' + ExtractFileName(HostPath);
+    if (TargetPath = '/') or SandboxPathHasTrailingSeparator(ASandboxPath) or
+       FContext.Fs.IsDirectory(TargetPath) then
+      TargetPath := FContext.Fs.Normalize(SandboxJoinPath(TargetPath,
+        ExtractFileName(HostPath)));
     ImportFile(HostPath, TargetPath);
   end;
 end;
