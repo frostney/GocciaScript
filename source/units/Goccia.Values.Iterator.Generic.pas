@@ -23,7 +23,7 @@ type
     function AdvanceNextInternal(const AValue: TGocciaValue;
       const AHasValue: Boolean): TGocciaObjectValue;
     function AdvanceNextResultInternal(const AValue: TGocciaValue;
-      const AHasValue: Boolean): TGocciaObjectValue;
+      const AHasValue: Boolean; out ADone: Boolean): TGocciaObjectValue;
     function ReturnInternal(const AValue: TGocciaValue;
       const AHasValue: Boolean): TGocciaObjectValue;
   public
@@ -91,29 +91,35 @@ function TGocciaGenericIteratorValue.AdvanceNextInternal(
   const AValue: TGocciaValue; const AHasValue: Boolean): TGocciaObjectValue;
 var
   Done: Boolean;
-  DoneVal, ValueVal: TGocciaValue;
+  NextResult: TGocciaObjectValue;
+  ValueVal: TGocciaValue;
 begin
   if FDone then
     Exit(CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue,
       True));
 
-  Result := AdvanceNextResultInternal(AValue, AHasValue);
-  ValueVal := Result.GetProperty(PROP_VALUE);
-  if not Assigned(ValueVal) then
-    ValueVal := TGocciaUndefinedLiteralValue.UndefinedValue;
-  DoneVal := Result.GetProperty(PROP_DONE);
-  Done := Assigned(DoneVal) and DoneVal.ToBooleanLiteral.Value;
+  NextResult := AdvanceNextResultInternal(AValue, AHasValue, Done);
+  if Done then
+    ValueVal := TGocciaUndefinedLiteralValue.UndefinedValue
+  else
+  begin
+    ValueVal := NextResult.GetProperty(PROP_VALUE);
+    if not Assigned(ValueVal) then
+      ValueVal := TGocciaUndefinedLiteralValue.UndefinedValue;
+  end;
   Result := CreateIteratorResult(ValueVal, Done);
 end;
 
 function TGocciaGenericIteratorValue.AdvanceNextResultInternal(
-  const AValue: TGocciaValue; const AHasValue: Boolean): TGocciaObjectValue;
+  const AValue: TGocciaValue; const AHasValue: Boolean;
+  out ADone: Boolean): TGocciaObjectValue;
 var
   NextResult, DoneVal: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
 begin
   if FDone then
   begin
+    ADone := True;
     Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
     Exit;
   end;
@@ -144,7 +150,8 @@ begin
     ThrowTypeError(Format(SErrorIteratorResultNotObject, [NextResult.TypeName]), SSuggestIteratorResultObject);
 
   DoneVal := TGocciaObjectValue(NextResult).GetProperty(PROP_DONE);
-  if Assigned(DoneVal) and DoneVal.ToBooleanLiteral.Value then
+  ADone := Assigned(DoneVal) and DoneVal.ToBooleanLiteral.Value;
+  if ADone then
     FDone := True;
   Result := TGocciaObjectValue(NextResult);
 end;
@@ -162,17 +169,22 @@ end;
 
 function TGocciaGenericIteratorValue.AdvanceNextResultValue(
   const AValue: TGocciaValue): TGocciaObjectValue;
+var
+  Done: Boolean;
 begin
-  Result := AdvanceNextResultInternal(AValue, True);
+  Result := AdvanceNextResultInternal(AValue, True, Done);
 end;
 
 function TGocciaGenericIteratorValue.DirectNext(out ADone: Boolean): TGocciaValue;
 var
   IteratorResult: TGocciaObjectValue;
 begin
-  IteratorResult := AdvanceNext;
-  ADone := IteratorResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value;
+  IteratorResult := AdvanceNextResultInternal(nil, False, ADone);
+  if ADone then
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
   Result := IteratorResult.GetProperty(PROP_VALUE);
+  if not Assigned(Result) then
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 function TGocciaGenericIteratorValue.DirectNextValue(
@@ -180,9 +192,10 @@ function TGocciaGenericIteratorValue.DirectNextValue(
 var
   IteratorResult: TGocciaObjectValue;
 begin
-  IteratorResult := AdvanceNextValue(AValue);
-  ADone := IteratorResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value;
+  IteratorResult := AdvanceNextResultInternal(AValue, True, ADone);
   Result := IteratorResult.GetProperty(PROP_VALUE);
+  if not Assigned(Result) then
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 function TGocciaGenericIteratorValue.ReturnInternal(

@@ -34,7 +34,7 @@ describe("arrow functions", () => {
   });
 
   test("support contextual binding names as parameters", async () => {
-    const read = (as, from, static = 3) => as + from + static;
+    const read = (as, from, value = 3) => as + from + value;
     const readAsync = async from => from + 1;
 
     expect(read(1, 2)).toBe(6);

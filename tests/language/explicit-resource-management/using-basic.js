@@ -51,14 +51,14 @@ describe("using declaration", () => {
         name: "from",
         [Symbol.dispose]() { disposed.push(from.name); }
       };
-      using static = {
+      using resource = {
         name: "static",
-        [Symbol.dispose]() { disposed.push(static.name); }
+        [Symbol.dispose]() { disposed.push(resource.name); }
       };
 
       expect(as.name).toBe("as");
       expect(from.name).toBe("from");
-      expect(static.name).toBe("static");
+      expect(resource.name).toBe("static");
     }
     expect(disposed).toEqual(["static", "from", "as"]);
   });

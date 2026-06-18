@@ -2678,6 +2678,7 @@ var
   BodyParseResult: TGocciaFunctionBodyParseResult;
   FunctionExpression: TGocciaFunctionExpression;
   PipelineOptions: TGocciaSourcePipelineOptions;
+  WrapperOptions: TGocciaSourcePipelineOptions;
   ProgramNode: TGocciaProgram;
   ResultValue: TGocciaValue;
 begin
@@ -2714,8 +2715,11 @@ begin
     ThrowSyntaxError('Invalid body for Function constructor');
 
   // Both pieces validated — safe to assemble the wrapper
+  WrapperOptions := PipelineOptions;
+  if BodyParseResult.HasUseStrictDirective then
+    WrapperOptions.InheritedStrictMode := True;
   ProgramNode := TGocciaSourcePipeline.ParseDynamicFunctionWrapper(ParamStr,
-    ABodySource, '<Function>', PipelineOptions, AKind);
+    ABodySource, '<Function>', WrapperOptions, AKind);
   try
     FunctionExpression := nil;
     if (ProgramNode.Body.Count = 1) and

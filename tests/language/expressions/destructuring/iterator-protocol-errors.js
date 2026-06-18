@@ -119,6 +119,45 @@ test("missing IteratorResult.value normalizes to undefined in rest pattern", () 
   expect(rest[1]).toBeUndefined();
 });
 
+test("array assignment destructuring skips value getter after done", () => {
+  const log = [];
+  const iter = {
+    [Symbol.iterator]() {
+      log.push("iterator");
+      return {
+        next() {
+          log.push("next");
+          return {
+            get done() {
+              log.push("done");
+              return true;
+            },
+            get value() {
+              log.push("value");
+              return 1;
+            }
+          };
+        }
+      };
+    }
+  };
+  const target = {
+    set q(value) {
+      log.push("set");
+    }
+  };
+  const key = {
+    toString() {
+      log.push("key");
+      return "q";
+    }
+  };
+
+  [target[key]] = iter;
+
+  expect(log).toEqual(["iterator", "next", "done", "key", "set"]);
+});
+
 test("missing IteratorResult.value normalizes to undefined for fixed-position binding", () => {
   let i = 0;
   const iter = {

@@ -11161,7 +11161,6 @@ var
   ObjectValue: TGocciaObjectValue;
   RestObject: TGocciaObjectValue;
   Iterator: TGocciaIteratorValue;
-  IterResult: TGocciaObjectValue;
   PropValue, ElementValue, DefaultValue: TGocciaValue;
   PropertyKey: TGocciaValue;
   SymbolKey: TGocciaSymbolValue;
@@ -11170,6 +11169,7 @@ var
   RestElements: TGocciaArrayValue;
   I: Integer;
   Exhausted: Boolean;
+  DoneFlag: Boolean;
   ShouldCloseIterator: Boolean;
   Key: string;
 begin
@@ -11277,8 +11277,8 @@ begin
         begin
           if not Exhausted then
           begin
-            IterResult := Iterator.AdvanceNext;
-            if IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value then
+            Iterator.DirectNext(DoneFlag);
+            if DoneFlag then
               Exhausted := True;
           end;
           Continue;
@@ -11290,15 +11290,14 @@ begin
           try
             if not Exhausted then
             begin
-              IterResult := Iterator.AdvanceNext;
-              while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
-              begin
-                ElementValue := IterResult.GetProperty(PROP_VALUE);
+              repeat
+                ElementValue := Iterator.DirectNext(DoneFlag);
+                if DoneFlag then
+                  Break;
                 if not Assigned(ElementValue) then
                   ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue;
                 RestElements.Elements.Add(ElementValue);
-                IterResult := Iterator.AdvanceNext;
-              end;
+              until False;
               Exhausted := True;
             end;
             AssignVariablePattern(
@@ -11315,18 +11314,14 @@ begin
             ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue
           else
           begin
-            IterResult := Iterator.AdvanceNext;
-            if IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value then
+            ElementValue := Iterator.DirectNext(DoneFlag);
+            if DoneFlag then
             begin
               Exhausted := True;
               ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue;
             end
-            else
-            begin
-              ElementValue := IterResult.GetProperty(PROP_VALUE);
-              if not Assigned(ElementValue) then
-                ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-            end;
+            else if not Assigned(ElementValue) then
+              ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue;
           end;
           ShouldCloseIterator := not Exhausted;
           try
@@ -11453,11 +11448,11 @@ end;
 procedure AssignArrayPattern(const APattern: TGocciaArrayDestructuringPattern; const AValue: TGocciaValue; const AContext: TGocciaEvaluationContext; const AIsDeclaration: Boolean = False; const ADeclarationType: TGocciaDeclarationType = dtLet);
 var
   Iterator: TGocciaIteratorValue;
-  IterResult: TGocciaObjectValue;
   I: Integer;
   ElementValue: TGocciaValue;
   RestElements: TGocciaArrayValue;
   Exhausted: Boolean;
+  DoneFlag: Boolean;
   ShouldCloseIterator: Boolean;
   PreparedReference: TPreparedDestructuringReference;
 begin
@@ -11486,8 +11481,8 @@ begin
       begin
         if not Exhausted then
         begin
-          IterResult := Iterator.AdvanceNext;
-          if IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value then
+          Iterator.DirectNext(DoneFlag);
+          if DoneFlag then
             Exhausted := True;
         end;
         Continue;
@@ -11535,15 +11530,14 @@ begin
           try
             if not Exhausted then
             begin
-              IterResult := Iterator.AdvanceNext;
-              while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
-              begin
-                ElementValue := IterResult.GetProperty(PROP_VALUE);
+              repeat
+                ElementValue := Iterator.DirectNext(DoneFlag);
+                if DoneFlag then
+                  Break;
                 if not Assigned(ElementValue) then
                   ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue;
                 RestElements.Elements.Add(ElementValue);
-                IterResult := Iterator.AdvanceNext;
-              end;
+              until False;
               Exhausted := True;
             end;
             AssignPatternWithPreparedReference(APattern.Elements[I],
@@ -11559,18 +11553,14 @@ begin
           ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue
         else
         begin
-          IterResult := Iterator.AdvanceNext;
-          if IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value then
+          ElementValue := Iterator.DirectNext(DoneFlag);
+          if DoneFlag then
           begin
             Exhausted := True;
             ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue;
           end
-          else
-          begin
-            ElementValue := IterResult.GetProperty(PROP_VALUE);
-            if not Assigned(ElementValue) then
-              ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-          end;
+          else if not Assigned(ElementValue) then
+            ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue;
         end;
 
         ShouldCloseIterator := not Exhausted;
