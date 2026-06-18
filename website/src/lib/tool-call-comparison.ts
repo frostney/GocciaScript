@@ -38,7 +38,7 @@ export const GOCCIA_TOOL_PROMPT = `${SYSTEM_PROMPT}
 The host injects a global named transactions before running your GocciaScript code.
 transactions is Array<{ id: number, amount: number }>.
 
-GocciaScript is sandbox-first and uses modern recommended ECMAScript defaults. Do not use var, function declarations, loose equality (== / !=), eval, dynamic import, filesystem APIs, environment variables, or ambient host globals. Use const/let, arrow functions, strict equality, and the provided transactions global.`;
+GocciaScript is sandbox-first and uses modern recommended ECMAScript defaults. Do not use var, function declarations, loose equality (== / !=), eval, dynamic import, ambient filesystem APIs, environment variables, or ambient host globals. Use const/let, arrow functions, strict equality, and the provided transactions global.`;
 export const USER_TASK = TOOL_CALL_TASK;
 
 export const BASH_TOOL: ToolDef = {

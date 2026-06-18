@@ -818,7 +818,7 @@ const FAQ_ITEMS: { question: string; answer: ReactNode }[] = [
   {
     question: "How does the sandbox model work?",
     answer:
-      "Scripts have no ambient file-system, process, native FFI, or network access by default. GocciaSandboxRunner populates a virtual filesystem from explicit seed baselines, not host mounts; sandbox writes stay in the VFS unless the caller asks for a diff. Fetch uses the same explicit allowlist model as the loader runtime.",
+      "Scripts have no ambient host filesystem, process, native FFI, or network authority by default. GocciaSandboxRunner imports explicit seed baselines into a virtual filesystem, exposes fs/goccia as import-only modules, and reports sandbox writes as diffs instead of writing back to host paths.",
   },
   {
     question: "How compatible is it with ECMAScript?",
@@ -1067,9 +1067,9 @@ export function Landing({
               </div>
             </div>
             <div>
-              <div className="section-kicker mb-3">Runtime globals</div>
+              <div className="section-kicker mb-3">Runtime surface</div>
               <AnchorH3 id="runtime-globals" className="mb-3">
-                Beyond the language: the runtime itself
+                Beyond the language: runtime and sandbox APIs
               </AnchorH3>
               <p className="text-ink-2 mb-4">
                 Everything ECMAScript gives you, plus first-class
@@ -1082,16 +1082,20 @@ export function Landing({
                 <code className={inlineCodeClass}>.tsv</code>,{" "}
                 <code className={inlineCodeClass}>.jsonl</code>, and{" "}
                 <code className={inlineCodeClass}>.md</code>; runtime parsers
-                for each (markdown imports return the raw text); a
-                capability-gated <code className={inlineCodeClass}>fetch</code>{" "}
-                (GET/HEAD only, explicit allow-listed hosts); and a built-in{" "}
+                for each (markdown imports return the raw text); import maps;
+                console output; SemVer helpers; and a built-in{" "}
                 <Link href="/docs/testing" className="link-button">
                   test runner
                 </Link>{" "}
                 with a Vitest/Jest-compatible{" "}
                 <code className={inlineCodeClass}>test</code>/
                 <code className={inlineCodeClass}>describe</code>/
-                <code className={inlineCodeClass}>expect</code> API.
+                <code className={inlineCodeClass}>expect</code> API. In
+                GocciaSandboxRunner, the sandbox surface adds import-only{" "}
+                <code className={inlineCodeClass}>fs</code> and{" "}
+                <code className={inlineCodeClass}>goccia</code> modules backed
+                by a seeded virtual filesystem, sandbox shell commands, nested
+                execution, and explicit diffs.
               </p>
               <div className="builtins-grid">
                 {BUILTINS.map((b) => {

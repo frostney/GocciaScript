@@ -234,7 +234,6 @@ const DEFAULT_GLOBALS = `{
 const RUNNER_COMMAND = `./build/GocciaSandboxRunner /main.js \\
   --seed-config=./sandbox.seed.json \\
   --mode=bytecode \\
-  --allowed-host=api.example.com \\
   --diff`;
 
 const SEED_CONFIG = `{
@@ -333,7 +332,7 @@ const RESERVED_BINDING_WORDS = new Set([
 const GOCCIA_SYSTEM_PROMPT = `\
 // ─── system ───
 // GocciaScript is sandbox-first with modern recommended ECMAScript defaults.
-// No eval, no dynamic import, no fs, no env, no ambient globals.
+// No eval, no dynamic import, no ambient fs/env, no ambient globals.
 // No var, no function declarations, no loose equality (== / !=).
 // Only the injected globals below are available to the script.`;
 

@@ -167,9 +167,9 @@ async function homeMarkdown(): Promise<string> {
     "",
     list(EXCLUDED.map((item) => `\`${item.name}\` - ${item.why}`)),
     "",
-    "## Runtime globals",
+    "## Runtime surface",
     "",
-    "GocciaScript includes structured-data imports and parsers, capability-gated `fetch` for GET/HEAD requests to explicit hosts, console output, SemVer helpers, import maps, and a built-in test runner with `test`, `describe`, and `expect`.",
+    "GocciaScript includes structured-data imports and parsers, console output, SemVer helpers, import maps, and a built-in test runner with `test`, `describe`, and `expect`. GocciaSandboxRunner adds import-only `fs` and `goccia` modules backed by a seeded virtual filesystem, sandbox shell commands, nested execution, and explicit diffs.",
     "",
     list(BUILTINS.map((item) => `\`${item.name}\``)),
     "",
@@ -295,7 +295,6 @@ function sandboxMarkdown(): string {
   const runnerCommand = `./build/GocciaSandboxRunner /main.js \\
   --seed-config=./sandbox.seed.json \\
   --mode=bytecode \\
-  --allowed-host=api.example.com \\
   --diff`;
   const seedConfig = `{
   "files": [
