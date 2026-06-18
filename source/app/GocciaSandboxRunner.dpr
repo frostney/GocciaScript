@@ -73,10 +73,27 @@ type
       const ABaseDirectory: string);
     procedure LoadSeeds;
 
+    procedure EnsureSandboxParentDirectory(const AContext:
+      TGocciaSandboxContext; const APath: string);
+    procedure ImportVirtualFile(const ASourceFs,
+      ADestinationFs: TSandboxVirtualFileSystem; const ASourcePath,
+      ADestinationPath: string; const ADestinationIsDirectory: Boolean);
+    procedure ImportVirtualDirectoryContents(const ASourceFs,
+      ADestinationFs: TSandboxVirtualFileSystem; const ASourceDirectory,
+      ADestinationDirectory: string);
+    procedure ImportVirtualPath(const ASourceFs,
+      ADestinationFs: TSandboxVirtualFileSystem; const ASourcePath,
+      ADestinationPath: string; const ADestinationIsDirectory: Boolean);
+    procedure SeedNestedContext(const AParentContext,
+      AChildContext: TGocciaSandboxContext;
+      const AOptions: TGocciaSandboxRunOptions);
     procedure ConfigureEngineForSandbox(const AEngine: TGocciaEngine;
-      const AFileName: string);
+      const AContext: TGocciaSandboxContext; const AFileName: string);
     procedure CaptureConsoleLine(const AMethod, ALine: string);
-    function ExecuteSandboxPath(const AEntryPath: string):
+    function ExecuteSandboxPathInContext(const AContext: TGocciaSandboxContext;
+      const AEntryPath: string): TGocciaSandboxRunResult;
+    function ExecuteSandboxPath(const AContext: TGocciaSandboxContext;
+      const AEntryPath: string; const AOptions: TGocciaSandboxRunOptions):
       TGocciaSandboxRunResult;
     function ClonePrimitiveResult(const AValue: TGocciaValue): TGocciaValue;
     procedure WriteDiffIfRequested;
@@ -116,6 +133,41 @@ begin
   if (APath <> '') and (APath[1] = PathDelim) then
     Exit(ExpandFileName(APath));
   Result := ExpandFileName(IncludeTrailingPathDelimiter(ABaseDirectory) + APath);
+end;
+
+function SandboxPathParent(const APath: string): string;
+var
+  SlashIndex: Integer;
+begin
+  Result := '/';
+  SlashIndex := Length(APath);
+  while (SlashIndex > 1) and (APath[SlashIndex] <> '/') do
+    Dec(SlashIndex);
+  if SlashIndex > 1 then
+    Result := Copy(APath, 1, SlashIndex - 1);
+end;
+
+function SandboxPathName(const APath: string): string;
+var
+  SlashIndex: Integer;
+begin
+  SlashIndex := Length(APath);
+  while (SlashIndex > 0) and (APath[SlashIndex] <> '/') do
+    Dec(SlashIndex);
+  Result := Copy(APath, SlashIndex + 1, MaxInt);
+end;
+
+function SandboxPathHasTrailingSeparator(const APath: string): Boolean;
+begin
+  Result := (APath <> '') and (APath[Length(APath)] = '/');
+end;
+
+function SandboxJoinPath(const ABase, AName: string): string;
+begin
+  if ABase = '/' then
+    Result := '/' + AName
+  else
+    Result := ABase + '/' + AName;
 end;
 
 destructor TSandboxRunnerApp.Destroy;
@@ -405,8 +457,104 @@ begin
     SeedConfigFile(FSeedConfigFiles.Values[I]);
 end;
 
+procedure TSandboxRunnerApp.EnsureSandboxParentDirectory(
+  const AContext: TGocciaSandboxContext; const APath: string);
+begin
+  AContext.Fs.MakeDirectory(SandboxPathParent(APath), True);
+end;
+
+procedure TSandboxRunnerApp.ImportVirtualFile(const ASourceFs,
+  ADestinationFs: TSandboxVirtualFileSystem; const ASourcePath,
+  ADestinationPath: string; const ADestinationIsDirectory: Boolean);
+var
+  SourceStat: TSandboxFsStat;
+  TargetPath: string;
+begin
+  SourceStat := ASourceFs.Stat(ASourcePath);
+  TargetPath := ADestinationFs.Normalize(EnsureSandboxAbsolute(
+    ADestinationPath));
+  if ADestinationIsDirectory or (TargetPath = '/') or
+     SandboxPathHasTrailingSeparator(ADestinationPath) or
+     ADestinationFs.IsDirectory(TargetPath) then
+    TargetPath := ADestinationFs.Normalize(SandboxJoinPath(TargetPath,
+      SourceStat.Name));
+  ADestinationFs.MakeDirectory(SandboxPathParent(TargetPath), True);
+  ADestinationFs.WriteAllBytes(TargetPath, ASourceFs.ReadAllBytes(
+    ASourcePath));
+end;
+
+procedure TSandboxRunnerApp.ImportVirtualDirectoryContents(const ASourceFs,
+  ADestinationFs: TSandboxVirtualFileSystem; const ASourceDirectory,
+  ADestinationDirectory: string);
+var
+  Entries: TSandboxFsStatArray;
+  TargetDirectory: string;
+  TargetChild: string;
+  I: Integer;
+begin
+  TargetDirectory := ADestinationFs.Normalize(EnsureSandboxAbsolute(
+    ADestinationDirectory));
+  ADestinationFs.MakeDirectory(TargetDirectory, True);
+  Entries := ASourceFs.List(ASourceDirectory);
+  for I := 0 to High(Entries) do
+  begin
+    TargetChild := SandboxJoinPath(TargetDirectory, Entries[I].Name);
+    if Entries[I].Kind = nkDirectory then
+      ImportVirtualDirectoryContents(ASourceFs, ADestinationFs,
+        Entries[I].Path, TargetChild)
+    else
+      ImportVirtualFile(ASourceFs, ADestinationFs, Entries[I].Path,
+        TargetChild, False);
+  end;
+end;
+
+procedure TSandboxRunnerApp.ImportVirtualPath(const ASourceFs,
+  ADestinationFs: TSandboxVirtualFileSystem; const ASourcePath,
+  ADestinationPath: string; const ADestinationIsDirectory: Boolean);
+var
+  SourceStat: TSandboxFsStat;
+  TargetPath: string;
+begin
+  SourceStat := ASourceFs.Stat(ASourcePath);
+  TargetPath := ADestinationFs.Normalize(EnsureSandboxAbsolute(
+    ADestinationPath));
+  if SourceStat.Kind = nkDirectory then
+    ImportVirtualDirectoryContents(ASourceFs, ADestinationFs, ASourcePath,
+      TargetPath)
+  else
+    ImportVirtualFile(ASourceFs, ADestinationFs, ASourcePath, TargetPath,
+      ADestinationIsDirectory);
+end;
+
+procedure TSandboxRunnerApp.SeedNestedContext(const AParentContext,
+  AChildContext: TGocciaSandboxContext;
+  const AOptions: TGocciaSandboxRunOptions);
+var
+  Seed: TGocciaSandboxSeedSpec;
+begin
+  for Seed in AOptions.Seeds do
+  begin
+    case Seed.Kind of
+      sskParentPath:
+        ImportVirtualPath(AParentContext.Fs, AChildContext.Fs, Seed.FromPath,
+          Seed.ToPath, Seed.ToDirectory);
+      sskText:
+      begin
+        EnsureSandboxParentDirectory(AChildContext, Seed.Path);
+        AChildContext.Fs.WriteAllText(Seed.Path, Seed.Text);
+      end;
+      sskBytes:
+      begin
+        EnsureSandboxParentDirectory(AChildContext, Seed.Path);
+        AChildContext.Fs.WriteAllBytes(Seed.Path, Seed.Bytes);
+      end;
+    end;
+  end;
+end;
+
 procedure TSandboxRunnerApp.ConfigureEngineForSandbox(
-  const AEngine: TGocciaEngine; const AFileName: string);
+  const AEngine: TGocciaEngine; const AContext: TGocciaSandboxContext;
+  const AFileName: string);
 var
   Runtime: TGocciaRuntimeCore;
   ConsoleExtension: TGocciaConsoleRuntimeExtension;
@@ -424,7 +572,7 @@ begin
 
   Runtime := AttachRuntime(AEngine);
   ApplyLoaderRuntimeProfile(Runtime);
-  Runtime.Install(TGocciaSandboxRuntimeExtension.Create(FContext));
+  Runtime.Install(TGocciaSandboxRuntimeExtension.Create(AContext));
   if ResolveFlagOption(EngineOptions.UnsafeFFI, EmptyConfig) then
     Runtime.Install(TGocciaFFIRuntimeExtension.Create);
   if EngineOptions.AllowedHosts.Present then
@@ -461,7 +609,8 @@ begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
-function TSandboxRunnerApp.ExecuteSandboxPath(const AEntryPath: string):
+function TSandboxRunnerApp.ExecuteSandboxPathInContext(
+  const AContext: TGocciaSandboxContext; const AEntryPath: string):
   TGocciaSandboxRunResult;
 var
   Source: TStringList;
@@ -479,17 +628,17 @@ begin
   Result.Ok := False;
   Result.ExitCode := 1;
 
-  if not FContext.Fs.IsFile(AEntryPath) then
+  if not AContext.Fs.IsFile(AEntryPath) then
   begin
     Result.ErrorMessage := 'sandbox entry file not found: ' + AEntryPath;
     Exit;
   end;
 
   Source := CreateUTF8FileTextLines(
-    UTF8String(FContext.Fs.ReadAllText(AEntryPath)));
+    UTF8String(AContext.Fs.ReadAllText(AEntryPath)));
   OutputLines := TStringList.Create;
-  Resolver := TGocciaSandboxModuleResolver.Create(FContext.Fs, '/');
-  Provider := TGocciaSandboxModuleContentProvider.Create(FContext.Fs);
+  Resolver := TGocciaSandboxModuleResolver.Create(AContext.Fs, '/');
+  Provider := TGocciaSandboxModuleContentProvider.Create(AContext.Fs);
   Engine := nil;
   Executor := nil;
   PreviousOutputLines := FCurrentOutputLines;
@@ -510,7 +659,7 @@ begin
     Engine := TGocciaEngine.Create(AEntryPath, Source, Resolver, Executor);
     Engine.ModuleLoader.SetContentProvider(Provider, True);
     Provider := nil;
-    ConfigureEngineForSandbox(Engine, AEntryPath);
+    ConfigureEngineForSandbox(Engine, AContext, AEntryPath);
 
     try
       StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
@@ -543,6 +692,45 @@ begin
   FCurrentOutputLines := PreviousOutputLines;
   OutputLines.Free;
   Source.Free;
+end;
+
+function TSandboxRunnerApp.ExecuteSandboxPath(
+  const AContext: TGocciaSandboxContext; const AEntryPath: string;
+  const AOptions: TGocciaSandboxRunOptions): TGocciaSandboxRunResult;
+var
+  ChildContext: TGocciaSandboxContext;
+begin
+  if not AOptions.Isolated then
+    Exit(ExecuteSandboxPathInContext(AContext, AEntryPath));
+
+  FillChar(Result, SizeOf(Result), 0);
+  Result.Ok := False;
+  Result.ExitCode := 1;
+  ChildContext := TGocciaSandboxContext.Create;
+  try
+    ChildContext.RunScriptCallback := ExecuteSandboxPath;
+    SeedNestedContext(AContext, ChildContext, AOptions);
+    ChildContext.CaptureBaseline;
+    Result := ExecuteSandboxPathInContext(ChildContext,
+      ChildContext.Fs.Normalize(AEntryPath));
+    if AOptions.IncludeDiff then
+    begin
+      Result.DiffRequested := True;
+      if AOptions.DiffFormat = 'unified' then
+        Result.Diff := ChildContext.DiffUnified
+      else
+        Result.Diff := ChildContext.DiffJson;
+    end;
+  except
+    on E: Exception do
+    begin
+      Result.Ok := False;
+      Result.ExitCode := 1;
+      Result.ErrorMessage := E.Message;
+      Result.ErrorOutput := E.Message + LineEnding;
+    end;
+  end;
+  ChildContext.Free;
 end;
 
 procedure TSandboxRunnerApp.WriteDiffIfRequested;
@@ -590,7 +778,7 @@ begin
   FContext.CaptureBaseline;
 
   EntryPath := FContext.Fs.Normalize(APaths[0]);
-  RunResult := ExecuteSandboxPath(EntryPath);
+  RunResult := ExecuteSandboxPathInContext(FContext, EntryPath);
   if RunResult.Output <> '' then
     Write(RunResult.Output);
   if RunResult.ErrorOutput <> '' then

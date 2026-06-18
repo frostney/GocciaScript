@@ -14,17 +14,47 @@ uses
   Goccia.Values.Primitives;
 
 type
+  TGocciaSandboxContext = class;
+
+  TGocciaSandboxSeedKind = (
+    sskParentPath,
+    sskText,
+    sskBytes
+  );
+
+  TGocciaSandboxSeedSpec = record
+    Kind: TGocciaSandboxSeedKind;
+    FromPath: string;
+    ToPath: string;
+    ToDirectory: Boolean;
+    Path: string;
+    Text: string;
+    Bytes: TBytes;
+  end;
+
+  TGocciaSandboxSeedSpecArray = array of TGocciaSandboxSeedSpec;
+
+  TGocciaSandboxRunOptions = record
+    Isolated: Boolean;
+    Seeds: TGocciaSandboxSeedSpecArray;
+    IncludeDiff: Boolean;
+    DiffFormat: string;
+  end;
+
   TGocciaSandboxRunResult = record
     Ok: Boolean;
     ExitCode: Integer;
     Output: string;
     ErrorOutput: string;
     ErrorMessage: string;
+    Diff: string;
+    DiffRequested: Boolean;
     ResultValue: TGocciaValue;
   end;
 
-  TGocciaSandboxRunScriptCallback = function(const AEntryPath: string):
-    TGocciaSandboxRunResult of object;
+  TGocciaSandboxRunScriptCallback = function(
+    const AContext: TGocciaSandboxContext; const AEntryPath: string;
+    const AOptions: TGocciaSandboxRunOptions): TGocciaSandboxRunResult of object;
 
   TGocciaSandboxContext = class
   private
@@ -35,6 +65,11 @@ type
 
     function HandleShellCommand(const ACommand: string;
       const AArgs: TStringArray; var AResult: TExecResult): Boolean;
+    procedure AddParentPathSeed(var AOptions: TGocciaSandboxRunOptions;
+      const ASpec: string);
+    function ParseShellRunOptions(const AArgs: TStringArray;
+      out AEntryPath: string; out AOptions: TGocciaSandboxRunOptions;
+      out AError: string): Boolean;
     procedure CollectPaths(const AFs: TSandboxVirtualFileSystem;
       const APath: string; const APaths: TStrings);
     function BytesEqual(const ALeft, ARight: TBytes): Boolean;
@@ -56,11 +91,41 @@ type
       read FRunScriptCallback write FRunScriptCallback;
   end;
 
+function DefaultSandboxRunOptions: TGocciaSandboxRunOptions;
+
 implementation
 
 function BytesLength(const ABytes: TBytes): Int64;
 begin
   Result := Length(ABytes);
+end;
+
+function DefaultSandboxRunOptions: TGocciaSandboxRunOptions;
+begin
+  Result.Isolated := False;
+  Result.Seeds := nil;
+  Result.IncludeDiff := False;
+  Result.DiffFormat := 'json';
+end;
+
+procedure AppendSeedSpec(var AOptions: TGocciaSandboxRunOptions;
+  const ASeed: TGocciaSandboxSeedSpec);
+var
+  Index: Integer;
+begin
+  Index := Length(AOptions.Seeds);
+  SetLength(AOptions.Seeds, Index + 1);
+  AOptions.Seeds[Index] := ASeed;
+end;
+
+function HasPrefix(const AValue, APrefix: string): Boolean;
+begin
+  Result := Copy(AValue, 1, Length(APrefix)) = APrefix;
+end;
+
+function IsDirectoryTargetPath(const APath: string): Boolean;
+begin
+  Result := (APath = '/') or ((APath <> '') and (APath[Length(APath)] = '/'));
 end;
 
 { TGocciaSandboxContext }
@@ -87,19 +152,130 @@ begin
   FBaseline := FFs.Fork;
 end;
 
+procedure TGocciaSandboxContext.AddParentPathSeed(
+  var AOptions: TGocciaSandboxRunOptions; const ASpec: string);
+var
+  SeparatorIndex: Integer;
+  SourcePath: string;
+  TargetPath: string;
+  Seed: TGocciaSandboxSeedSpec;
+begin
+  SeparatorIndex := Pos('=', ASpec);
+  if SeparatorIndex > 0 then
+  begin
+    SourcePath := Copy(ASpec, 1, SeparatorIndex - 1);
+    TargetPath := Copy(ASpec, SeparatorIndex + 1, MaxInt);
+  end
+  else
+  begin
+    SourcePath := ASpec;
+    TargetPath := '';
+  end;
+
+  Seed.Kind := sskParentPath;
+  Seed.FromPath := FFs.Normalize(SourcePath, FShell.WorkingDirectory);
+  if TargetPath = '' then
+    Seed.ToPath := Seed.FromPath
+  else
+    Seed.ToPath := FFs.Normalize(TargetPath, '/');
+  Seed.ToDirectory := IsDirectoryTargetPath(TargetPath);
+  Seed.Path := '';
+  Seed.Text := '';
+  Seed.Bytes := nil;
+  AppendSeedSpec(AOptions, Seed);
+  AOptions.Isolated := True;
+end;
+
+function TGocciaSandboxContext.ParseShellRunOptions(
+  const AArgs: TStringArray; out AEntryPath: string;
+  out AOptions: TGocciaSandboxRunOptions; out AError: string): Boolean;
+var
+  Index: Integer;
+  Arg: string;
+begin
+  Result := False;
+  AEntryPath := '';
+  AError := '';
+  AOptions := DefaultSandboxRunOptions;
+
+  Index := 0;
+  while Index <= High(AArgs) do
+  begin
+    Arg := AArgs[Index];
+    if Arg = '--sandbox' then
+      AOptions.Isolated := True
+    else if Arg = '--diff' then
+    begin
+      AOptions.IncludeDiff := True;
+      AOptions.Isolated := True;
+    end
+    else if Arg = '--seed' then
+    begin
+      Inc(Index);
+      if Index > High(AArgs) then
+      begin
+        AError := '--seed requires a value';
+        Exit;
+      end;
+      AddParentPathSeed(AOptions, AArgs[Index]);
+    end
+    else if HasPrefix(Arg, '--seed=') then
+      AddParentPathSeed(AOptions, Copy(Arg, Length('--seed=') + 1, MaxInt))
+    else if Arg = '--diff-format' then
+    begin
+      Inc(Index);
+      if Index > High(AArgs) then
+      begin
+        AError := '--diff-format requires json or unified';
+        Exit;
+      end;
+      AOptions.DiffFormat := AArgs[Index];
+    end
+    else if HasPrefix(Arg, '--diff-format=') then
+      AOptions.DiffFormat := Copy(Arg, Length('--diff-format=') + 1, MaxInt)
+    else if AEntryPath = '' then
+      AEntryPath := Arg
+    else
+    begin
+      AError := 'unexpected argument: ' + Arg;
+      Exit;
+    end;
+    Inc(Index);
+  end;
+
+  if AEntryPath = '' then
+  begin
+    AError :=
+      'expected: goccia [--sandbox] [--seed <from[=to]>] <sandbox-entry.js>';
+    Exit;
+  end;
+
+  if (AOptions.DiffFormat <> 'json') and (AOptions.DiffFormat <> 'unified') then
+  begin
+    AError := '--diff-format must be json or unified';
+    Exit;
+  end;
+
+  AEntryPath := FFs.Normalize(AEntryPath, FShell.WorkingDirectory);
+  Result := True;
+end;
+
 function TGocciaSandboxContext.HandleShellCommand(const ACommand: string;
   const AArgs: TStringArray; var AResult: TExecResult): Boolean;
 var
+  EntryPath: string;
+  Options: TGocciaSandboxRunOptions;
   RunResult: TGocciaSandboxRunResult;
+  Error: string;
 begin
   Result := ACommand = 'goccia';
   if not Result then
     Exit;
 
-  if Length(AArgs) <> 1 then
+  if not ParseShellRunOptions(AArgs, EntryPath, Options, Error) then
   begin
     AResult.ErrorOutput := AResult.ErrorOutput +
-      'goccia: expected: goccia <sandbox-entry.js>' + LineEnding;
+      'goccia: ' + Error + LineEnding;
     AResult.ExitCode := 2;
     Exit;
   end;
@@ -112,9 +288,10 @@ begin
     Exit;
   end;
 
-  RunResult := FRunScriptCallback(FFs.Normalize(AArgs[0],
-    FShell.WorkingDirectory));
+  RunResult := FRunScriptCallback(Self, EntryPath, Options);
   AResult.Output := AResult.Output + RunResult.Output;
+  if RunResult.Diff <> '' then
+    AResult.Output := AResult.Output + RunResult.Diff;
   AResult.ErrorOutput := AResult.ErrorOutput + RunResult.ErrorOutput;
   if not RunResult.Ok then
   begin

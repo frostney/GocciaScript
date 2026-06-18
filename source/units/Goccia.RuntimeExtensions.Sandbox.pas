@@ -77,6 +77,7 @@ implementation
 uses
   SysUtils,
 
+  base64,
   SandboxShell,
   SandboxVirtualFileSystem,
 
@@ -253,6 +254,231 @@ begin
     on E: Exception do
       Result := RejectedPromise(TGocciaStringLiteralValue.Create(E.Message));
   end;
+end;
+
+procedure AppendRunSeed(var AOptions: TGocciaSandboxRunOptions;
+  const ASeed: TGocciaSandboxSeedSpec);
+var
+  Index: Integer;
+begin
+  Index := Length(AOptions.Seeds);
+  SetLength(AOptions.Seeds, Index + 1);
+  AOptions.Seeds[Index] := ASeed;
+  AOptions.Isolated := True;
+end;
+
+function DecodeBase64Bytes(const AText: string): TBytes;
+var
+  Decoded: string;
+begin
+  Decoded := DecodeStringBase64(AText);
+  SetLength(Result, Length(Decoded));
+  if Length(Decoded) > 0 then
+    Move(Decoded[1], Result[0], Length(Decoded));
+end;
+
+function HasDefinedProperty(const AObject: TGocciaObjectValue;
+  const AName: string): Boolean;
+var
+  Value: TGocciaValue;
+begin
+  Value := AObject.GetProperty(AName);
+  Result := Assigned(Value) and not (Value is TGocciaUndefinedLiteralValue) and
+    not (Value is TGocciaNullLiteralValue);
+end;
+
+function IsDirectoryTargetPath(const APath: string): Boolean;
+begin
+  Result := (APath = '/') or ((APath <> '') and (APath[Length(APath)] = '/'));
+end;
+
+function ObjectStringProperty(const AObject: TGocciaObjectValue;
+  const AName, AMethod: string; const ARequired: Boolean): string;
+var
+  Value: TGocciaValue;
+begin
+  Value := AObject.GetProperty(AName);
+  if (not Assigned(Value)) or (Value is TGocciaUndefinedLiteralValue) or
+     (Value is TGocciaNullLiteralValue) then
+  begin
+    if ARequired then
+      ThrowTypeError(AMethod + ' requires option "' + AName + '"');
+    Exit('');
+  end;
+  if not (Value is TGocciaStringLiteralValue) then
+    ThrowTypeError(AMethod + ' option "' + AName + '" must be a string');
+  Result := TGocciaStringLiteralValue(Value).Value;
+end;
+
+function ObjectBooleanProperty(const AObject: TGocciaObjectValue;
+  const AName, AMethod: string): Boolean;
+var
+  Value: TGocciaValue;
+begin
+  Value := AObject.GetProperty(AName);
+  if (not Assigned(Value)) or (Value is TGocciaUndefinedLiteralValue) or
+     (Value is TGocciaNullLiteralValue) then
+    Exit(False);
+  if not (Value is TGocciaBooleanLiteralValue) then
+    ThrowTypeError(AMethod + ' option "' + AName + '" must be a boolean');
+  Result := TGocciaBooleanLiteralValue(Value).Value;
+end;
+
+procedure AddParentPathSeedFromString(const AContext: TGocciaSandboxContext;
+  var AOptions: TGocciaSandboxRunOptions; const ASpec: string);
+var
+  SeparatorIndex: Integer;
+  SourcePath: string;
+  TargetPath: string;
+  Seed: TGocciaSandboxSeedSpec;
+begin
+  SeparatorIndex := Pos('=', ASpec);
+  if SeparatorIndex > 0 then
+  begin
+    SourcePath := Copy(ASpec, 1, SeparatorIndex - 1);
+    TargetPath := Copy(ASpec, SeparatorIndex + 1, MaxInt);
+  end
+  else
+  begin
+    SourcePath := ASpec;
+    TargetPath := '';
+  end;
+
+  Seed.Kind := sskParentPath;
+  Seed.FromPath := AContext.Fs.Normalize(SourcePath,
+    AContext.Shell.WorkingDirectory);
+  if TargetPath = '' then
+    Seed.ToPath := Seed.FromPath
+  else
+    Seed.ToPath := AContext.Fs.Normalize(TargetPath, '/');
+  Seed.ToDirectory := IsDirectoryTargetPath(TargetPath);
+  Seed.Path := '';
+  Seed.Text := '';
+  Seed.Bytes := nil;
+  AppendRunSeed(AOptions, Seed);
+end;
+
+procedure AddRunSeedFromObject(const AContext: TGocciaSandboxContext;
+  var AOptions: TGocciaSandboxRunOptions; const AObject: TGocciaObjectValue;
+  const AMethod: string);
+var
+  Seed: TGocciaSandboxSeedSpec;
+  SourceCount: Integer;
+begin
+  SourceCount := 0;
+  if HasDefinedProperty(AObject, 'from') then Inc(SourceCount);
+  if HasDefinedProperty(AObject, 'text') then Inc(SourceCount);
+  if HasDefinedProperty(AObject, 'base64') then Inc(SourceCount);
+  if SourceCount <> 1 then
+    ThrowTypeError(AMethod +
+      ' seed entries require exactly one of "from", "text", or "base64"');
+
+  Seed.FromPath := '';
+  Seed.ToPath := '';
+  Seed.ToDirectory := False;
+  Seed.Path := '';
+  Seed.Text := '';
+  Seed.Bytes := nil;
+
+  if HasDefinedProperty(AObject, 'from') then
+  begin
+    Seed.Kind := sskParentPath;
+    Seed.FromPath := AContext.Fs.Normalize(ObjectStringProperty(AObject,
+      'from', AMethod, True), AContext.Shell.WorkingDirectory);
+    Seed.ToPath := ObjectStringProperty(AObject, 'to', AMethod, False);
+    Seed.ToDirectory := IsDirectoryTargetPath(Seed.ToPath);
+    if Seed.ToPath = '' then
+      Seed.ToPath := Seed.FromPath
+    else
+      Seed.ToPath := AContext.Fs.Normalize(Seed.ToPath, '/');
+    AppendRunSeed(AOptions, Seed);
+    Exit;
+  end;
+
+  Seed.Path := AContext.Fs.Normalize(ObjectStringProperty(AObject, 'path',
+    AMethod, True), '/');
+  if HasDefinedProperty(AObject, 'base64') then
+  begin
+    Seed.Kind := sskBytes;
+    Seed.Bytes := DecodeBase64Bytes(ObjectStringProperty(AObject, 'base64',
+      AMethod, True));
+  end
+  else
+  begin
+    Seed.Kind := sskText;
+    Seed.Text := ObjectStringProperty(AObject, 'text', AMethod, True);
+  end;
+  AppendRunSeed(AOptions, Seed);
+end;
+
+procedure AddRunSeedFromValue(const AContext: TGocciaSandboxContext;
+  var AOptions: TGocciaSandboxRunOptions; const AValue: TGocciaValue;
+  const AMethod: string);
+begin
+  if AValue is TGocciaStringLiteralValue then
+    AddParentPathSeedFromString(AContext, AOptions,
+      TGocciaStringLiteralValue(AValue).Value)
+  else if AValue is TGocciaObjectValue then
+    AddRunSeedFromObject(AContext, AOptions, TGocciaObjectValue(AValue),
+      AMethod)
+  else
+    ThrowTypeError(AMethod + ' seed entries must be strings or objects');
+end;
+
+procedure AddRunSeedsFromValue(const AContext: TGocciaSandboxContext;
+  var AOptions: TGocciaSandboxRunOptions; const AValue: TGocciaValue;
+  const AMethod: string);
+var
+  Arr: TGocciaArrayValue;
+  I: Integer;
+begin
+  if (not Assigned(AValue)) or (AValue is TGocciaUndefinedLiteralValue) or
+     (AValue is TGocciaNullLiteralValue) then
+    Exit;
+  if AValue is TGocciaArrayValue then
+  begin
+    Arr := TGocciaArrayValue(AValue);
+    for I := 0 to Arr.GetLength - 1 do
+      AddRunSeedFromValue(AContext, AOptions, Arr.GetElement(I), AMethod);
+    Exit;
+  end;
+  AddRunSeedFromValue(AContext, AOptions, AValue, AMethod);
+end;
+
+function ParseRunScriptOptions(const AContext: TGocciaSandboxContext;
+  const AValue: TGocciaValue; const AMethod: string):
+  TGocciaSandboxRunOptions;
+var
+  OptionsObject: TGocciaObjectValue;
+  DiffFormat: string;
+begin
+  Result := DefaultSandboxRunOptions;
+  if (not Assigned(AValue)) or (AValue is TGocciaUndefinedLiteralValue) or
+     (AValue is TGocciaNullLiteralValue) then
+    Exit;
+  if not (AValue is TGocciaObjectValue) then
+    ThrowTypeError(AMethod + ' options must be an object');
+
+  OptionsObject := TGocciaObjectValue(AValue);
+  if ObjectBooleanProperty(OptionsObject, 'sandbox', AMethod) then
+    Result.Isolated := True;
+  if ObjectBooleanProperty(OptionsObject, 'diff', AMethod) then
+  begin
+    Result.IncludeDiff := True;
+    Result.Isolated := True;
+  end;
+
+  DiffFormat := ObjectStringProperty(OptionsObject, 'diffFormat', AMethod,
+    False);
+  if DiffFormat <> '' then
+    Result.DiffFormat := DiffFormat;
+  if (Result.DiffFormat <> 'json') and (Result.DiffFormat <> 'unified') then
+    ThrowTypeError(AMethod + ' option "diffFormat" must be "json" or "unified"');
+
+  AddRunSeedsFromValue(AContext, Result, OptionsObject.GetProperty('seed'),
+    AMethod);
+  AddRunSeedsFromValue(AContext, Result, OptionsObject.GetProperty('seeds'),
+    AMethod);
 end;
 
 function ShellQuoteValue(const AValue: TGocciaValue): string;
@@ -541,7 +767,7 @@ begin
   Result := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype,
     4);
   AddNativeFunction(Result, '$', SandboxDollar, -1);
-  AddNativeFunction(Result, 'runScript', RunScript, 1);
+  AddNativeFunction(Result, 'runScript', RunScript, 2);
 end;
 
 function TGocciaSandboxRuntimeExtension.SandboxDollar(
@@ -557,6 +783,7 @@ function TGocciaSandboxRuntimeExtension.RunScript(
   const AThisValue: TGocciaValue): TGocciaValue;
 var
   EntryPath: string;
+  Options: TGocciaSandboxRunOptions;
   RunResult: TGocciaSandboxRunResult;
   Obj: TGocciaObjectValue;
 begin
@@ -564,9 +791,10 @@ begin
   if not Assigned(FContext.RunScriptCallback) then
     ThrowTypeError('runScript is not configured');
 
-  RunResult := FContext.RunScriptCallback(FContext.Fs.Normalize(EntryPath,
-    FContext.Shell.WorkingDirectory));
-  Obj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype, 6);
+  Options := ParseRunScriptOptions(FContext, AArgs.GetElement(1), 'runScript');
+  RunResult := FContext.RunScriptCallback(FContext, FContext.Fs.Normalize(
+    EntryPath, FContext.Shell.WorkingDirectory), Options);
+  Obj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype, 8);
   Obj.SetProperty('ok', TGocciaBooleanLiteralValue.Create(RunResult.Ok));
   Obj.SetProperty('exitCode',
     TGocciaNumberLiteralValue.Create(RunResult.ExitCode));
@@ -582,6 +810,10 @@ begin
       TGocciaStringLiteralValue.Create(RunResult.ErrorMessage))
   else
     Obj.SetProperty('error', TGocciaNullLiteralValue.NullValue);
+  if RunResult.DiffRequested then
+    Obj.SetProperty('diff', TGocciaStringLiteralValue.Create(RunResult.Diff))
+  else
+    Obj.SetProperty('diff', TGocciaNullLiteralValue.NullValue);
   Result := Obj;
 end;
 

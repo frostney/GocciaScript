@@ -130,6 +130,17 @@ console.log(await $`cat /hello.txt`.text());
 runScript("/other.js");
 ```
 
+Nested execution shares the current virtual filesystem by default. To run a child script inside its own virtual filesystem, seed it from parent sandbox paths:
+
+```javascript
+const child = runScript("/worker.js", {
+  sandbox: true,
+  seed: ["/worker.js", { from: "/input", to: "/input" }],
+  diff: true,
+});
+console.log(child.diff);
+```
+
 ### Run via Bytecode
 
 GocciaScript includes bytecode execution. The public bytecode artifact is `.gbc`.

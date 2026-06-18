@@ -2301,9 +2301,21 @@ console.log("SandboxRunner: bytecode uses the same sandbox runtime modules...");
           path: "/main.js",
           text: [
             'import fs from "fs";',
-            'import { $ } from "goccia";',
+            'import { $, runScript } from "goccia";',
             'await fs.promises.writeFile("/byte.txt", "bytecode");',
             'console.log((await $`cat /byte.txt`.text()).trim());',
+            'const child = runScript("/byte-child.js", { sandbox: true, seed: ["/byte-child.js"], diff: true });',
+            'console.log(child.stdout.trim());',
+            'console.log(child.diff.includes(\'"path": "/byte-child.txt"\'));',
+            'console.log(fs.existsSync("/byte-child.txt"));',
+          ].join("\n"),
+        },
+        {
+          path: "/byte-child.js",
+          text: [
+            'import fs from "fs";',
+            'fs.writeFileSync("/byte-child.txt", "child-bytecode");',
+            'console.log("byte-child");',
           ].join("\n"),
         },
       ],
@@ -2318,9 +2330,97 @@ console.log("SandboxRunner: bytecode uses the same sandbox runtime modules...");
       throw new Error(`SandboxRunner bytecode should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
     if (!containsLine(`\n${stdout}`, "bytecode"))
       throw new Error(`SandboxRunner bytecode stdout should include bytecode, got: ${stdout}`);
+    if (!containsLine(`\n${stdout}`, "byte-child"))
+      throw new Error(`SandboxRunner bytecode nested stdout should include byte-child, got: ${stdout}`);
+    if (!containsLine(`\n${stdout}`, "true") || !containsLine(`\n${stdout}`, "false"))
+      throw new Error(`SandboxRunner bytecode nested diff/isolation booleans missing, got: ${stdout}`);
     const changes = JSON.parse(readFileSync(diff, "utf-8")).changes;
     if (!changes.some((c: any) => c.kind === "create" && c.path === "/byte.txt"))
       throw new Error(`SandboxRunner bytecode diff should include /byte.txt create, got ${JSON.stringify(changes)}`);
+    if (changes.some((c: any) => c.path === "/byte-child.txt"))
+      throw new Error(`SandboxRunner bytecode parent diff should not include nested child writes, got ${JSON.stringify(changes)}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("SandboxRunner: nested sandbox execution seeds from parent VFS without leaking writes...");
+{
+  const tmp = makeTmp();
+  try {
+    const seed = join(tmp, "seed.json");
+    writeFileSync(seed, JSON.stringify({
+      files: [
+        {
+          path: "/main.js",
+          text: [
+            'import fs from "fs";',
+            'import { $, runScript } from "goccia";',
+            'const child = runScript("/child.js", {',
+            '  sandbox: true,',
+            '  seed: [',
+            '    "/child.js",',
+            '    "/parent.txt",',
+            '    { from: "/parent.txt", to: "/out/" },',
+            '    { path: "/inline.txt", text: "inline-child" },',
+            '    { path: "/bin.dat", base64: "BAUG" },',
+            '  ],',
+            '  diff: true,',
+            '});',
+            'const noWrite = runScript("/readonly.js", { sandbox: true, seed: ["/readonly.js"], diff: true, diffFormat: "unified" });',
+            'console.log(child.stdout.trim());',
+            'console.log(child.diff.includes(\'"path": "/child-only.txt"\'));',
+            'console.log(noWrite.diff === "");',
+            'console.log(fs.existsSync("/child-only.txt"));',
+            'console.log(fs.readFileSync("/parent.txt", "utf8"));',
+            'const shellChild = await $`goccia --sandbox --seed /child.js --seed /parent.txt --seed /parent.txt=/shell-out/ --diff /child.js`.text();',
+            'console.log(shellChild.includes("parent-seed"));',
+            'console.log(shellChild.includes("shell-out:parent-seed"));',
+            'console.log(shellChild.includes(\'"path": "/child-only.txt"\'));',
+            'console.log(fs.existsSync("/child-only.txt"));',
+          ].join("\n"),
+        },
+        {
+          path: "/child.js",
+          text: [
+            'import fs from "fs";',
+            'console.log(fs.readFileSync("/parent.txt", "utf8"));',
+            'if (fs.existsSync("/inline.txt")) console.log(fs.readFileSync("/inline.txt", "utf8"));',
+            'if (fs.existsSync("/bin.dat")) console.log(fs.readFileSync("/bin.dat").length);',
+            'if (fs.existsSync("/out/parent.txt")) console.log("out:" + fs.readFileSync("/out/parent.txt", "utf8"));',
+            'if (fs.existsSync("/shell-out/parent.txt")) console.log("shell-out:" + fs.readFileSync("/shell-out/parent.txt", "utf8"));',
+            'fs.writeFileSync("/parent.txt", "child-mutated");',
+            'fs.writeFileSync("/child-only.txt", "secret");',
+          ].join("\n"),
+        },
+        { path: "/readonly.js", text: "1;" },
+        { path: "/parent.txt", text: "parent-seed" },
+      ],
+    }));
+
+    const proc = Bun.spawnSync(
+      [SANDBOXRUNNER, "/main.js", `--seed-config=${seed}`, "--source-type=module"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const stdout = normalizeLineEndings(proc.stdout.toString());
+    if (proc.exitCode !== 0)
+      throw new Error(`SandboxRunner nested sandbox should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
+    for (const expected of [
+      "parent-seed",
+      "inline-child",
+      "out:parent-seed",
+      "3",
+      "true",
+      "false",
+    ]) {
+      if (!containsLine(`\n${stdout}`, expected))
+        throw new Error(`SandboxRunner nested sandbox stdout should include line ${JSON.stringify(expected)}, got: ${stdout}`);
+    }
+    if (!stdout.includes("parent-seed\ninline-child\n3\nout:parent-seed"))
+      throw new Error(`runScript child stdout should include inline seeded files, got: ${stdout}`);
+    const falseCount = stdout.split("\n").filter((line) => line === "false").length;
+    if (falseCount !== 2)
+      throw new Error(`child writes should stay out of parent VFS twice, got ${falseCount} false lines in: ${stdout}`);
   } finally {
     clean(tmp);
   }
