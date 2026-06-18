@@ -97,9 +97,12 @@ CLI bytecode paths that need parse artifacts use `TGocciaCLISourcePipelineResult
 |------|-----------|-----------|
 | GocciaREPL | `TGocciaCLIApplication` | `Configure`, `ConfigureCreatedEngine`, `ExecuteWithPaths` |
 | GocciaScriptLoader | `TGocciaCLIApplication` | `Configure`, `ConfigureCreatedEngine`, `Validate`, `ExecuteWithPaths`, `HandleError`, `AfterExecute` |
+| GocciaSandboxRunner | `TGocciaCLIApplication` | `Configure`, `Validate`, `ExecuteWithPaths` |
 | GocciaTestRunner | `TGocciaCLIApplication` | `Configure`, `ConfigureCreatedEngine`, `ExecuteWithPaths` |
 | GocciaBenchmarkRunner | `TGocciaCLIApplication` | `Configure`, `ConfigureCreatedEngine`, `ExecuteWithPaths` |
 | GocciaBundler | `TGocciaCLIApplication` | `Configure`, `Validate`, `ExecuteWithPaths` |
+
+`GocciaSandboxRunner` is a separate CLI host for virtual-filesystem execution. It seeds a `TSandboxVirtualFileSystem` from explicit import baselines before creating an engine, then installs `TGocciaSandboxRuntimeExtension` so source can import `"fs"` and `"goccia"` inside that sandbox. The sandbox runner still uses the same executor abstraction as the script loader: `--mode=interpreted` uses `TGocciaInterpreterExecutor`, while `--mode=bytecode` uses `TGocciaBytecodeExecutor`.
 
 ## Executor Architecture
 

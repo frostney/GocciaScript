@@ -7,7 +7,8 @@
  * execution, CLI print, and runtime-global absence), GocciaBundler (compile,
  * roundtrip, stdin, directory, .gbc rejection, source maps),
  * GocciaBenchmarkRunner (file, stdin, bytecode), GocciaREPL (banner,
- * evaluation, ASI, error recovery, bytecode).
+ * evaluation, ASI, error recovery, bytecode), GocciaSandboxRunner
+ * (seed baselines, sandbox fs, shell, nested execution, diffs).
  */
 
 import { $ } from "bun";
@@ -22,6 +23,7 @@ import { join, resolve } from "path";
 import {
   LOADER,
   BARE,
+  SANDBOXRUNNER,
   REPL,
   TESTRUNNER,
   BUNDLER,
@@ -2219,6 +2221,147 @@ console.log("REPL: repeated tagged template execution (interpreted + bytecode)..
     if (!out.includes("'first'") || !out.includes("'second'") ||
         out.includes("'stale'"))
       throw new Error(`REPL ${label} should keep repeated parse template sites distinct, got: ${out}`);
+  }
+}
+
+// ============================================================================
+// GocciaSandboxRunner
+// ============================================================================
+
+console.log("SandboxRunner: inline seeds, fs, $, runScript, and diffs...");
+{
+  const tmp = makeTmp();
+  try {
+    const seed = join(tmp, "seed.json");
+    const diff = join(tmp, "diff.json");
+    writeFileSync(seed, JSON.stringify({
+      files: [
+        {
+          path: "/main.js",
+          text: [
+            'import fs from "fs";',
+            'import { $, runScript } from "goccia";',
+            'await fs.promises.writeFile("/hello.txt", "hello");',
+            'const shellOut = await $`cat /hello.txt`.text();',
+            'const spaced = "hello world";',
+            'const interpolated = await $`echo ${spaced}`.text();',
+            'const child = runScript("/child.js");',
+            'const shellChild = await $`goccia /child.js`.text();',
+            'console.log(shellOut.trim());',
+            'console.log(interpolated.trim());',
+            'console.log(child.stdout.trim());',
+            'console.log(shellChild.trim());',
+            'console.log(fs.readFileSync("/child.out", "utf8"));',
+            '"sandbox-ok";',
+          ].join("\n"),
+        },
+        {
+          path: "/child.js",
+          text: [
+            'import fs from "fs";',
+            'fs.writeFileSync("/child.out", "child-write");',
+            'console.log("child");',
+            '"child-result";',
+          ].join("\n"),
+        },
+      ],
+    }));
+
+    const proc = Bun.spawnSync(
+      [SANDBOXRUNNER, "/main.js", `--seed-config=${seed}`, "--source-type=module", "--diff", `--diff-output=${diff}`],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const stdout = normalizeLineEndings(proc.stdout.toString());
+    const stderr = proc.stderr.toString();
+    if (proc.exitCode !== 0)
+      throw new Error(`SandboxRunner interpreter should exit 0, got ${proc.exitCode}: ${stderr}`);
+    for (const expected of ["hello", "hello world", "child", "child\nchild", "child-write"]) {
+      if (!stdout.includes(expected))
+        throw new Error(`SandboxRunner interpreter stdout should include ${JSON.stringify(expected)}, got: ${stdout}`);
+    }
+    const changes = JSON.parse(readFileSync(diff, "utf-8")).changes;
+    if (!changes.some((c: any) => c.kind === "create" && c.path === "/hello.txt"))
+      throw new Error(`SandboxRunner diff should include /hello.txt create, got ${JSON.stringify(changes)}`);
+    if (!changes.some((c: any) => c.kind === "create" && c.path === "/child.out"))
+      throw new Error(`SandboxRunner diff should include /child.out create, got ${JSON.stringify(changes)}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("SandboxRunner: bytecode uses the same sandbox runtime modules...");
+{
+  const tmp = makeTmp();
+  try {
+    const seed = join(tmp, "seed.json");
+    const diff = join(tmp, "diff.json");
+    writeFileSync(seed, JSON.stringify({
+      files: [
+        {
+          path: "/main.js",
+          text: [
+            'import fs from "fs";',
+            'import { $ } from "goccia";',
+            'await fs.promises.writeFile("/byte.txt", "bytecode");',
+            'console.log((await $`cat /byte.txt`.text()).trim());',
+          ].join("\n"),
+        },
+      ],
+    }));
+
+    const proc = Bun.spawnSync(
+      [SANDBOXRUNNER, "/main.js", `--seed-config=${seed}`, "--source-type=module", "--mode=bytecode", `--diff-output=${diff}`],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const stdout = normalizeLineEndings(proc.stdout.toString());
+    if (proc.exitCode !== 0)
+      throw new Error(`SandboxRunner bytecode should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
+    if (!containsLine(`\n${stdout}`, "bytecode"))
+      throw new Error(`SandboxRunner bytecode stdout should include bytecode, got: ${stdout}`);
+    const changes = JSON.parse(readFileSync(diff, "utf-8")).changes;
+    if (!changes.some((c: any) => c.kind === "create" && c.path === "/byte.txt"))
+      throw new Error(`SandboxRunner bytecode diff should include /byte.txt create, got ${JSON.stringify(changes)}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("SandboxRunner: seed config imports host paths relative to the config file...");
+{
+  const tmp = makeTmp();
+  try {
+    const project = join(tmp, "project");
+    mkdirSync(project, { recursive: true });
+    writeFileSync(join(project, "data.txt"), "from-host");
+    const seed = join(tmp, "seed.json");
+    writeFileSync(seed, JSON.stringify({
+      files: [
+        { from: "./project", to: "/" },
+        { path: "/bin.dat", base64: "AQID" },
+        {
+          path: "/main.js",
+          text: [
+            'import fs from "fs";',
+            'console.log(fs.readFileSync("/data.txt", "utf8"));',
+            'console.log(fs.readFileSync("/bin.dat").length);',
+          ].join("\n"),
+        },
+      ],
+    }));
+
+    const proc = Bun.spawnSync(
+      [resolve(SANDBOXRUNNER), "/main.js", `--seed-config=${seed}`, "--source-type=module"],
+      { stdout: "pipe", stderr: "pipe", cwd: "/" },
+    );
+    const stdout = normalizeLineEndings(proc.stdout.toString());
+    if (proc.exitCode !== 0)
+      throw new Error(`SandboxRunner host seed should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
+    if (!containsLine(`\n${stdout}`, "from-host"))
+      throw new Error(`SandboxRunner host seed stdout should include imported host text, got: ${stdout}`);
+    if (!containsLine(`\n${stdout}`, "3"))
+      throw new Error(`SandboxRunner host seed stdout should include base64 byte length, got: ${stdout}`);
+  } finally {
+    clean(tmp);
   }
 }
 

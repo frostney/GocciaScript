@@ -34,6 +34,10 @@ _Avoid_: Mode, preset.
 The aggregate JavaScript-visible capability set installed by a runtime profile or by individual runtime extensions. Use it when discussing what a host exposes overall; use runtime global, runtime extension, or runtime profile when naming the concrete mechanism.
 _Avoid_: Runtime, built-in surface, host surface.
 
+**Seed baseline**:
+An explicitly imported host path snapshot used to initialise a sandbox-visible filesystem. It is not a live mount and does not make the host path ambiently available to running source.
+_Avoid_: Mount, host filesystem access.
+
 **WinterTC compatibility**:
 The open product direction of aligning selected runtime globals and host behavior with web-interoperable server runtime standards, especially WinterTC's Minimum Common Web API. It is distinct from Node.js host compatibility, CommonJS support, and `node:` built-ins.
 _Avoid_: WHATWG API compatibility, browser host environment, Node.js host compatibility.
