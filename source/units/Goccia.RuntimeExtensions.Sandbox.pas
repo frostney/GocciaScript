@@ -92,6 +92,9 @@ uses
   Goccia.Values.PromiseValue,
   Goccia.Values.TypedArrayValue;
 
+const
+  MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000;
+
 type
   TGocciaSandboxStatValue = class(TGocciaObjectValue)
   private
@@ -137,6 +140,11 @@ begin
   Result := TGocciaNativeFunctionValue.CreateWithoutPrototype(ACallback,
     AName, AArity);
   AObject.SetProperty(AName, Result);
+end;
+
+function DateTimeToUnixMilliseconds(const AValue: TDateTime): Double;
+begin
+  Result := (AValue - EncodeDate(1970, 1, 1)) * MILLISECONDS_PER_DAY;
 end;
 
 function FulfilledPromise(const AValue: TGocciaValue): TGocciaPromiseValue;
@@ -532,7 +540,9 @@ begin
   SetProperty('type', TGocciaStringLiteralValue.Create(
     SandboxFsKindName(AStat.Kind)));
   SetProperty('size', TGocciaNumberLiteralValue.Create(AStat.Size));
-  SetProperty('mtimeMs', TGocciaNumberLiteralValue.Create(AStat.ModifiedAt));
+  SetProperty('mtimeMs',
+    TGocciaNumberLiteralValue.Create(DateTimeToUnixMilliseconds(
+      AStat.ModifiedAt)));
   AddNativeFunction(Self, 'isFile', IsFile, 0);
   AddNativeFunction(Self, 'isDirectory', IsDirectory, 0);
 end;
@@ -583,10 +593,18 @@ begin
     4);
   Result.SetProperty('exitCode',
     TGocciaNumberLiteralValue.Create(FResult.ExitCode));
-  Result.SetProperty('stdout',
-    TGocciaStringLiteralValue.Create(FResult.Output));
-  Result.SetProperty('stderr',
-    TGocciaStringLiteralValue.Create(FResult.ErrorOutput));
+  if FQuiet then
+  begin
+    Result.SetProperty('stdout', TGocciaStringLiteralValue.Create(''));
+    Result.SetProperty('stderr', TGocciaStringLiteralValue.Create(''));
+  end
+  else
+  begin
+    Result.SetProperty('stdout',
+      TGocciaStringLiteralValue.Create(FResult.Output));
+    Result.SetProperty('stderr',
+      TGocciaStringLiteralValue.Create(FResult.ErrorOutput));
+  end;
   Result.SetProperty('ok',
     TGocciaBooleanLiteralValue.Create(FResult.ExitCode = 0));
 end;
@@ -618,7 +636,10 @@ function TGocciaSandboxShellCommandValue.Text(
 begin
   try
     EnsureExecuted;
-    Result := Fulfilled(TGocciaStringLiteralValue.Create(FResult.Output));
+    if FQuiet then
+      Result := Fulfilled(TGocciaStringLiteralValue.Create(''))
+    else
+      Result := Fulfilled(TGocciaStringLiteralValue.Create(FResult.Output));
   except
     on E: TGocciaThrowValue do
       Result := RejectedPromise(E.Value);

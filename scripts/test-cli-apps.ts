@@ -2245,15 +2245,21 @@ console.log("SandboxRunner: inline seeds, fs, $, runScript, and diffs...");
             'const shellOut = await $`cat /hello.txt`.text();',
             'const spaced = "hello world";',
             'const interpolated = await $`echo ${spaced}`.text();',
+            'const quietText = await $`echo hidden`.quiet().text();',
+            'const quietRun = await $`echo hidden`.quiet().run();',
             'const child = runScript("/child.js");',
             'const objectChild = runScript("/object-child.js");',
             'const shellChild = await $`goccia /child.js`.text();',
+            'const stat = fs.statSync("/hello.txt");',
             'console.log(shellOut.trim());',
             'console.log(interpolated.trim());',
+            'console.log("quiet-text:" + (quietText === ""));',
+            'console.log("quiet-run:" + (quietRun.stdout === "" && quietRun.stderr === "" && quietRun.ok));',
             'console.log(child.stdout.trim());',
             'console.log(objectChild.result.value);',
             'console.log(objectChild.result.items[1]);',
             'console.log(objectChild.result.nested.ok);',
+            'console.log("mtime-ms:" + (stat.mtimeMs > 1000000000000));',
             'console.log(shellChild.trim());',
             'console.log(fs.readFileSync("/child.out", "utf8"));',
             '"sandbox-ok";',
@@ -2283,7 +2289,19 @@ console.log("SandboxRunner: inline seeds, fs, $, runScript, and diffs...");
     const stderr = proc.stderr.toString();
     if (proc.exitCode !== 0)
       throw new Error(`SandboxRunner interpreter should exit 0, got ${proc.exitCode}: ${stderr}`);
-    for (const expected of ["hello", "hello world", "child", "42", "one", "true", "child\nchild", "child-write"]) {
+    for (const expected of [
+      "hello",
+      "hello world",
+      "quiet-text:true",
+      "quiet-run:true",
+      "child",
+      "42",
+      "one",
+      "true",
+      "mtime-ms:true",
+      "child\nchild",
+      "child-write",
+    ]) {
       if (!stdout.includes(expected))
         throw new Error(`SandboxRunner interpreter stdout should include ${JSON.stringify(expected)}, got: ${stdout}`);
     }
@@ -2344,6 +2362,65 @@ console.log("SandboxRunner: aliases and import maps resolve sandbox module paths
       throw new Error(`SandboxRunner import map should exit 0, got ${importMapProc.exitCode}: ${importMapProc.stderr.toString()}`);
     if (!containsLine(`\n${importMapStdout}`, "map-ok"))
       throw new Error(`SandboxRunner import map should print map-ok, got: ${importMapStdout}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("SandboxRunner: seed config rejects null source values...");
+{
+  const tmp = makeTmp();
+  try {
+    const seed = join(tmp, "seed.json");
+    writeFileSync(seed, JSON.stringify({
+      files: [
+        { path: "/bad.txt", text: null },
+        { path: "/main.js", text: "1;" },
+      ],
+    }));
+
+    const proc = Bun.spawnSync(
+      [SANDBOXRUNNER, "/main.js", `--seed-config=${seed}`],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const output = proc.stdout.toString() + proc.stderr.toString();
+    if (proc.exitCode === 0)
+      throw new Error("SandboxRunner null seed text should fail");
+    if (!output.includes('seed config entry requires "text"'))
+      throw new Error(`SandboxRunner null seed text should report the required text field, got: ${output}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("SandboxRunner: unified diff includes deleted seeded files...");
+{
+  const tmp = makeTmp();
+  try {
+    const seed = join(tmp, "seed.json");
+    const diff = join(tmp, "diff.patch");
+    writeFileSync(seed, JSON.stringify({
+      files: [
+        {
+          path: "/main.js",
+          text: [
+            'import fs from "fs";',
+            'fs.rmSync("/remove.txt");',
+          ].join("\n"),
+        },
+        { path: "/remove.txt", text: "gone" },
+      ],
+    }));
+
+    const proc = Bun.spawnSync(
+      [SANDBOXRUNNER, "/main.js", `--seed-config=${seed}`, "--source-type=module", "--diff-format=unified", `--diff-output=${diff}`],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    if (proc.exitCode !== 0)
+      throw new Error(`SandboxRunner unified delete diff should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
+    const diffText = readFileSync(diff, "utf-8");
+    if (!diffText.includes("--- /remove.txt") || !diffText.includes("@@ sandbox file deleted @@") || !diffText.includes("-gone"))
+      throw new Error(`SandboxRunner unified delete diff should include deleted file content, got: ${diffText}`);
   } finally {
     clean(tmp);
   }

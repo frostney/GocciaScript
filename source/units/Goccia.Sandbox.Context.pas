@@ -454,13 +454,18 @@ end;
 function TGocciaSandboxContext.DiffUnified: string;
 var
   CurrentPaths: TStringList;
+  BaselinePaths: TStringList;
   I: Integer;
   Path: string;
 begin
   CurrentPaths := TStringList.Create;
+  BaselinePaths := TStringList.Create;
   try
     CurrentPaths.Sorted := True;
+    BaselinePaths.Sorted := True;
     CollectPaths(FFs, '/', CurrentPaths);
+    if Assigned(FBaseline) then
+      CollectPaths(FBaseline, '/', BaselinePaths);
     Result := '';
     for I := 0 to CurrentPaths.Count - 1 do
     begin
@@ -477,7 +482,19 @@ begin
         Result := Result + '-' + FBaseline.ReadAllText(Path) + LineEnding;
       Result := Result + '+' + FFs.ReadAllText(Path) + LineEnding;
     end;
+
+    for I := 0 to BaselinePaths.Count - 1 do
+    begin
+      Path := BaselinePaths[I];
+      if (Path = '/') or (not FBaseline.IsFile(Path)) or FFs.Exists(Path) then
+        Continue;
+      Result := Result + '--- ' + Path + LineEnding;
+      Result := Result + '+++ ' + Path + LineEnding;
+      Result := Result + '@@ sandbox file deleted @@' + LineEnding;
+      Result := Result + '-' + FBaseline.ReadAllText(Path) + LineEnding;
+    end;
   finally
+    BaselinePaths.Free;
     CurrentPaths.Free;
   end;
 end;

@@ -386,18 +386,17 @@ var
   Bytes: TBytes;
   SourceCount: Integer;
 begin
-  FromPath := JsonStringProperty(AEntry, 'from');
-  Text := JsonStringProperty(AEntry, 'text');
   SourceCount := 0;
-  if FromPath <> '' then Inc(SourceCount);
+  if JsonHasProperty(AEntry, 'from') then Inc(SourceCount);
   if JsonHasProperty(AEntry, 'text') then Inc(SourceCount);
   if JsonHasProperty(AEntry, 'base64') then Inc(SourceCount);
   if SourceCount <> 1 then
     raise Exception.Create(
       'seed file entries must specify exactly one of from, text, or base64');
 
-  if FromPath <> '' then
+  if JsonHasProperty(AEntry, 'from') then
   begin
+    FromPath := JsonStringProperty(AEntry, 'from', True);
     ToPath := JsonStringProperty(AEntry, 'to');
     if ToPath = '' then
       ToPath := '/';
@@ -412,7 +411,10 @@ begin
     SeedInlineFile(InlinePath, '', Bytes, True);
   end
   else
+  begin
+    Text := JsonStringProperty(AEntry, 'text', True);
     SeedInlineFile(InlinePath, Text, nil, False);
+  end;
 end;
 
 procedure TSandboxRunnerApp.SeedConfigFile(const APath: string);
