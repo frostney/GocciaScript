@@ -356,7 +356,6 @@ begin
     // ES2026 §27.2.1.3.2 steps 11-15: If then is callable, resolve via the thenable.
     if Assigned(ThenMethod) and ThenMethod.IsCallable then
     begin
-      FAlreadyResolved := False;
       Queue := TGocciaMicrotaskQueue.Instance;
       if Assigned(Queue) then
       begin

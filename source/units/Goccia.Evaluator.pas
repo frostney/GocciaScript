@@ -1091,6 +1091,12 @@ begin
     Exit;
 
   Value := AContext.Scope.GetBinding(Name, AStatement.Line, AStatement.Column).Value;
+  if AContext.InEvalCode and Assigned(AContext.EvalVarScope) then
+  begin
+    AContext.EvalVarScope.DefineVariableBinding(Name, Value, True, True);
+    Exit;
+  end;
+
   AContext.Scope.DefineVariableBinding(Name, Value, True);
 end;
 
@@ -2856,6 +2862,7 @@ begin
   EvalContext.NonStrictMode := not AStrictEval;
   EvalContext.CompatibilityNonStrictMode := AContext.CompatibilityNonStrictMode;
   EvalContext.InEvalCode := True;
+  EvalContext.EvalVarScope := AVarScope;
   ALexicalScope.NonStrictMode := not AStrictEval;
   AVarScope.NonStrictMode := not AStrictEval;
 
@@ -4778,6 +4785,9 @@ end;
 // ES2026 §27.7.5.3 Await(value)
 function EvaluateAwait(const AAwaitExpression: TGocciaAwaitExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
 begin
+  if AsyncAwaitSuspensionEnabled and Assigned(CurrentGeneratorContinuation) then
+    Exit(EvaluateGeneratorAwait(AAwaitExpression, AContext));
+
   Result := AwaitValue(EvaluateExpression(AAwaitExpression.Operand, AContext));
 end;
 
@@ -9345,6 +9355,7 @@ procedure EnsureBytecodePrivateBrand(const AReceiver: TGocciaObjectValue;
 var
   BrandKey: string;
   BrandValue: TGocciaValue;
+  Descriptor: TGocciaPropertyDescriptor;
 begin
   BrandKey := BytecodePrivateBrandKeyForLookup(APrivateLookupName,
     AAccessClass);
@@ -9359,7 +9370,8 @@ begin
     Exit;
   end;
 
-  if not (AReceiver.GetOwnPropertyDescriptor(BrandKey) is TGocciaPropertyDescriptorData) then
+  if not (AReceiver.Properties.TryGetValue(BrandKey, Descriptor) and
+     (Descriptor is TGocciaPropertyDescriptorData)) then
     ThrowPrivateBrandError(APrivateName, AAccessClass);
 end;
 
@@ -9386,6 +9398,32 @@ begin
   Result := '#initialized:' + AAccessClass.PrivateBrandToken;
 end;
 
+function TryGetRawObjectPrivateDescriptor(const AReceiver: TGocciaObjectValue;
+  const AKey: string; out ADescriptor: TGocciaPropertyDescriptor): Boolean;
+begin
+  ADescriptor := nil;
+  Result := Assigned(AReceiver) and
+    AReceiver.Properties.TryGetValue(AKey, ADescriptor);
+end;
+
+procedure DefineRawObjectPrivateDataProperty(
+  const AReceiver: TGocciaObjectValue; const AKey: string;
+  const AValue: TGocciaValue; const AFlags: TPropertyFlags);
+var
+  ExistingDescriptor: TGocciaPropertyDescriptor;
+begin
+  if not Assigned(AReceiver) then
+    Exit;
+  if (not AReceiver.Properties.TryGetValue(AKey, ExistingDescriptor)) and
+     (not AReceiver.Extensible) then
+    ThrowTypeError('Cannot add private elements to a non-extensible object',
+      SSuggestObjectNotExtensible);
+  if Assigned(ExistingDescriptor) then
+    ExistingDescriptor.Free;
+  AReceiver.Properties.Add(AKey,
+    TGocciaPropertyDescriptorData.Create(AValue, AFlags));
+end;
+
 function HasRawPrivateInstanceInitializersApplied(
   const AReceiver: TGocciaObjectValue;
   const AAccessClass: TGocciaClassValue): Boolean;
@@ -9395,8 +9433,8 @@ begin
   Result := False;
   if not Assigned(AAccessClass) then
     Exit;
-  Descriptor := AReceiver.GetOwnPropertyDescriptor(
-    RawPrivateInitializedKey(AAccessClass));
+  TryGetRawObjectPrivateDescriptor(AReceiver,
+    RawPrivateInitializedKey(AAccessClass), Descriptor);
   Result := Descriptor is TGocciaPropertyDescriptorData;
 end;
 
@@ -9410,10 +9448,9 @@ begin
     Exit;
   if HasRawPrivateInstanceInitializersApplied(AReceiver, AAccessClass) then
     Exit;
-  AReceiver.DefineProperty(
+  DefineRawObjectPrivateDataProperty(AReceiver,
     RawPrivateInitializedKey(AAccessClass),
-    TGocciaPropertyDescriptorData.Create(
-      TGocciaBooleanLiteralValue.TrueValue, []));
+    TGocciaBooleanLiteralValue.TrueValue, []);
 end;
 
 function HasRawPrivateInstanceBrand(const AReceiver: TGocciaObjectValue;
@@ -9424,8 +9461,8 @@ begin
   Result := False;
   if not Assigned(AAccessClass) then
     Exit;
-  Descriptor := AReceiver.GetOwnPropertyDescriptor(
-    RawPrivateBrandKey(AAccessClass));
+  TryGetRawObjectPrivateDescriptor(AReceiver,
+    RawPrivateBrandKey(AAccessClass), Descriptor);
   Result := Descriptor is TGocciaPropertyDescriptorData;
 end;
 
@@ -9471,10 +9508,9 @@ begin
     Exit;
   if HasRawPrivateInstanceBrand(AReceiver, AAccessClass) then
     Exit;
-  AReceiver.DefineProperty(
+  DefineRawObjectPrivateDataProperty(AReceiver,
     RawPrivateBrandKey(AAccessClass),
-    TGocciaPropertyDescriptorData.Create(
-      TGocciaBooleanLiteralValue.TrueValue, []));
+    TGocciaBooleanLiteralValue.TrueValue, []);
 end;
 
 function TryGetRawPrivateInstanceProperty(const AReceiver: TGocciaObjectValue;
@@ -9486,8 +9522,8 @@ begin
   Result := False;
   AValue := nil;
   EnsureRawPrivateInstanceBrand(AReceiver, APrivateName, AAccessClass);
-  Descriptor := AReceiver.GetOwnPropertyDescriptor(
-    RawPrivateInstanceKey(AAccessClass, APrivateName));
+  TryGetRawObjectPrivateDescriptor(AReceiver,
+    RawPrivateInstanceKey(AAccessClass, APrivateName), Descriptor);
   if Descriptor is TGocciaPropertyDescriptorData then
   begin
     AValue := TGocciaPropertyDescriptorData(Descriptor).Value;
@@ -9501,12 +9537,14 @@ procedure InitializeRawPrivateInstanceProperty(
   const AInitializationMode: TGocciaInstanceInitializationMode);
 var
   PrivateSlotKey: string;
+  Descriptor: TGocciaPropertyDescriptor;
 begin
   if not Assigned(AAccessClass) then
     ThrowPrivateBrandError(APrivateName);
   StampRawPrivateInstanceBrand(AReceiver, AAccessClass);
   PrivateSlotKey := RawPrivateInstanceKey(AAccessClass, APrivateName);
-  if Assigned(AReceiver.GetOwnPropertyDescriptor(PrivateSlotKey)) then
+  if TryGetRawObjectPrivateDescriptor(AReceiver, PrivateSlotKey,
+     Descriptor) then
   begin
     if AInitializationMode = iimReplay then
       Exit;
@@ -9522,9 +9560,8 @@ begin
       ThrowTypeError('Cannot initialize private elements twice',
         SSuggestPrivateFieldAccess);
   end;
-  AReceiver.DefineProperty(
-    PrivateSlotKey,
-    TGocciaPropertyDescriptorData.Create(AValue, [pfWritable, pfConfigurable]));
+  DefineRawObjectPrivateDataProperty(AReceiver, PrivateSlotKey, AValue,
+    [pfWritable, pfConfigurable]);
 end;
 
 procedure SetRawPrivateInstanceProperty(const AReceiver: TGocciaObjectValue;
@@ -9532,9 +9569,9 @@ procedure SetRawPrivateInstanceProperty(const AReceiver: TGocciaObjectValue;
   const AAccessClass: TGocciaClassValue);
 begin
   EnsureRawPrivateInstanceBrand(AReceiver, APrivateName, AAccessClass);
-  AReceiver.DefineProperty(
-    RawPrivateInstanceKey(AAccessClass, APrivateName),
-    TGocciaPropertyDescriptorData.Create(AValue, [pfWritable, pfConfigurable]));
+  DefineRawObjectPrivateDataProperty(AReceiver,
+    RawPrivateInstanceKey(AAccessClass, APrivateName), AValue,
+    [pfWritable, pfConfigurable]);
 end;
 
 // ES2026 §7.3.30 PrivateGet ( O, P )
@@ -9681,7 +9718,7 @@ begin
        TGocciaInstanceValue(AReceiver).TryGetRawPrivateProperty(
          PrivateName, Result) then
       Exit;
-    Descriptor := AReceiver.GetOwnPropertyDescriptor(PrivateName);
+    TryGetRawObjectPrivateDescriptor(AReceiver, PrivateName, Descriptor);
     if Descriptor is TGocciaPropertyDescriptorData then
     begin
       Result := TGocciaPropertyDescriptorData(Descriptor).Value;
@@ -9916,8 +9953,8 @@ begin
     if AReceiver is TGocciaInstanceValue then
       TGocciaInstanceValue(AReceiver).SetRawPrivateProperty(PrivateName, AValue)
     else
-      AReceiver.DefineProperty(PrivateName,
-        TGocciaPropertyDescriptorData.Create(AValue, [pfWritable, pfConfigurable]));
+      DefineRawObjectPrivateDataProperty(AReceiver, PrivateName, AValue,
+        [pfWritable, pfConfigurable]);
     Exit;
   end;
 

@@ -67,18 +67,41 @@ threadvar
   FStaticMembers: TArray<TGocciaMemberDefinition>;
 
 type
+  TPromiseCapability = record
+    Promise: TGocciaValue;
+    Resolve: TGocciaValue;
+    Reject: TGocciaValue;
+  end;
+
+  TPromiseCapabilityExecutor = class(TGocciaObjectValue)
+  private
+    FResolve: TGocciaValue;
+    FReject: TGocciaValue;
+  public
+    function Invoke(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    procedure MarkReferences; override;
+    property Resolve: TGocciaValue read FResolve;
+    property Reject: TGocciaValue read FReject;
+  end;
+
   TPromiseAllState = class(TGocciaObjectValue)
   private
     FResults: TGocciaArrayValue;
     FRemaining: Integer;
-    FResultPromise: TGocciaPromiseValue;
+    FResultPromise: TGocciaValue;
+    FResolve: TGocciaValue;
+    FReject: TGocciaValue;
     FSettled: Boolean;
   public
-    constructor Create(const AResultPromise: TGocciaPromiseValue; const ACount: Integer);
+    constructor Create(const AResultPromise, AResolve, AReject: TGocciaValue;
+      const ACount: Integer);
     procedure MarkReferences; override;
     property Results: TGocciaArrayValue read FResults;
     property Remaining: Integer read FRemaining write FRemaining;
-    property ResultPromise: TGocciaPromiseValue read FResultPromise;
+    property ResultPromise: TGocciaValue read FResultPromise;
+    property Resolve: TGocciaValue read FResolve;
+    property Reject: TGocciaValue read FReject;
     property Settled: Boolean read FSettled write FSettled;
   end;
 
@@ -135,14 +158,19 @@ type
   private
     FErrors: TGocciaArrayValue;
     FRemaining: Integer;
-    FResultPromise: TGocciaPromiseValue;
+    FResultPromise: TGocciaValue;
+    FResolve: TGocciaValue;
+    FReject: TGocciaValue;
     FSettled: Boolean;
   public
-    constructor Create(const AResultPromise: TGocciaPromiseValue; const ACount: Integer);
+    constructor Create(const AResultPromise, AResolve, AReject: TGocciaValue;
+      const ACount: Integer);
     procedure MarkReferences; override;
     property Errors: TGocciaArrayValue read FErrors;
     property Remaining: Integer read FRemaining write FRemaining;
-    property ResultPromise: TGocciaPromiseValue read FResultPromise;
+    property ResultPromise: TGocciaValue read FResultPromise;
+    property Resolve: TGocciaValue read FResolve;
+    property Reject: TGocciaValue read FReject;
     property Settled: Boolean read FSettled write FSettled;
   end;
 
@@ -166,6 +194,140 @@ type
   end;
 
 { Helper: wrap value as Promise if not already one }
+function TPromiseCapabilityExecutor.Invoke(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  FResolve := AArgs.GetElement(0);
+  FReject := AArgs.GetElement(1);
+end;
+
+procedure TPromiseCapabilityExecutor.MarkReferences;
+begin
+  if GCMarked then Exit;
+  inherited;
+  if Assigned(FResolve) then
+    FResolve.MarkReferences;
+  if Assigned(FReject) then
+    FReject.MarkReferences;
+end;
+
+procedure CallPromiseCapability(const AFunction, AValue: TGocciaValue);
+var
+  Args: TGocciaArgumentsCollection;
+begin
+  if not Assigned(AFunction) or not AFunction.IsCallable then
+    Exit;
+
+  Args := TGocciaArgumentsCollection.Create([AValue]);
+  try
+    DispatchCall(AFunction, Args, TGocciaUndefinedLiteralValue.UndefinedValue);
+  finally
+    Args.Free;
+  end;
+end;
+
+function NewPromiseCapability(const AConstructor: TGocciaValue;
+  const ANativeConstructor: TGocciaNativeFunctionValue): TPromiseCapability;
+var
+  Promise: TGocciaPromiseValue;
+  ResolveFn, RejectFn: TGocciaNativeFunctionValue;
+  ExecutorHost: TPromiseCapabilityExecutor;
+  ExecutorFn: TGocciaNativeFunctionValue;
+  ConstructArgs: TGocciaArgumentsCollection;
+  GC: TGarbageCollector;
+begin
+  if AConstructor = ANativeConstructor then
+  begin
+    Promise := TGocciaPromiseValue.Create;
+    ResolveFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+      Promise.DoResolve, 'resolve', 1);
+    RejectFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+      Promise.DoReject, 'reject', 1);
+    ResolveFn.CapturedRoot := Promise;
+    RejectFn.CapturedRoot := Promise;
+    Result.Promise := Promise;
+    Result.Resolve := ResolveFn;
+    Result.Reject := RejectFn;
+    Exit;
+  end;
+
+  if not Assigned(AConstructor) or not AConstructor.IsConstructable then
+    ThrowTypeError(SErrorValueNotConstructor, SSuggestNotConstructorType);
+
+  ExecutorHost := TPromiseCapabilityExecutor.Create;
+  ExecutorFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+    ExecutorHost.Invoke, '', 2);
+  ExecutorFn.CapturedRoot := ExecutorHost;
+  ConstructArgs := TGocciaArgumentsCollection.Create([ExecutorFn]);
+  GC := TGarbageCollector.Instance;
+  try
+    if Assigned(GC) then
+    begin
+      GC.AddTempRoot(ExecutorHost);
+      GC.AddTempRoot(ExecutorFn);
+    end;
+
+    Result.Promise := ConstructValue(AConstructor, ConstructArgs, AConstructor);
+    Result.Resolve := ExecutorHost.Resolve;
+    Result.Reject := ExecutorHost.Reject;
+
+    if not Assigned(Result.Resolve) or not Result.Resolve.IsCallable or
+       not Assigned(Result.Reject) or not Result.Reject.IsCallable then
+      ThrowTypeError(SErrorPromiseResolverNotFunction, SSuggestPromiseResolver);
+  finally
+    if Assigned(GC) then
+    begin
+      GC.RemoveTempRoot(ExecutorFn);
+      GC.RemoveTempRoot(ExecutorHost);
+    end;
+    ConstructArgs.Free;
+  end;
+end;
+
+function PromiseResolveForConstructor(const AConstructor,
+  AValue: TGocciaValue): TGocciaValue;
+var
+  ResolveMethod: TGocciaValue;
+  Args: TGocciaArgumentsCollection;
+begin
+  if not (AConstructor is TGocciaObjectValue) then
+    ThrowTypeError(SErrorValueNotConstructor, SSuggestNotConstructorType);
+
+  ResolveMethod := TGocciaObjectValue(AConstructor).GetProperty(PROP_RESOLVE);
+  if not Assigned(ResolveMethod) or not ResolveMethod.IsCallable then
+    ThrowTypeError(SErrorPromiseResolverNotFunction, SSuggestPromiseResolver);
+
+  Args := TGocciaArgumentsCollection.Create([AValue]);
+  try
+    Result := DispatchCall(ResolveMethod, Args, AConstructor);
+  finally
+    Args.Free;
+  end;
+end;
+
+procedure InvokePromiseLikeThen(const APromiseLike, AOnFulfilled,
+  AOnRejected: TGocciaValue);
+var
+  ThenMethod: TGocciaValue;
+  ThenArgs: TGocciaArgumentsCollection;
+begin
+  if not (APromiseLike is TGocciaObjectValue) then
+    ThrowTypeError(SErrorPromiseResolverNotFunction, SSuggestPromiseResolver);
+
+  ThenMethod := TGocciaObjectValue(APromiseLike).GetProperty(PROP_THEN);
+  if not Assigned(ThenMethod) or not ThenMethod.IsCallable then
+    ThrowTypeError(SErrorThenNotFunction, SSuggestPromiseThisType);
+
+  ThenArgs := TGocciaArgumentsCollection.Create([AOnFulfilled, AOnRejected]);
+  try
+    DispatchCall(ThenMethod, ThenArgs, APromiseLike);
+  finally
+    ThenArgs.Free;
+  end;
+end;
+
 function WrapAsPromise(const AValue: TGocciaValue): TGocciaPromiseValue;
 var
   P: TGocciaPromiseValue;
@@ -182,12 +344,15 @@ end;
 
 { TPromiseAllState }
 
-constructor TPromiseAllState.Create(const AResultPromise: TGocciaPromiseValue; const ACount: Integer);
+constructor TPromiseAllState.Create(const AResultPromise, AResolve,
+  AReject: TGocciaValue; const ACount: Integer);
 var
   I: Integer;
 begin
   inherited Create(nil);
   FResultPromise := AResultPromise;
+  FResolve := AResolve;
+  FReject := AReject;
   FRemaining := ACount;
   FSettled := False;
   FResults := TGocciaArrayValue.Create;
@@ -201,6 +366,8 @@ begin
   inherited;
   if Assigned(FResults) then FResults.MarkReferences;
   if Assigned(FResultPromise) then FResultPromise.MarkReferences;
+  if Assigned(FResolve) then FResolve.MarkReferences;
+  if Assigned(FReject) then FReject.MarkReferences;
 end;
 
 { TPromiseAllHandler }
@@ -224,7 +391,7 @@ begin
   if FState.Remaining = 0 then
   begin
     FState.Settled := True;
-    FState.ResultPromise.Resolve(FState.Results);
+    CallPromiseCapability(FState.Resolve, FState.Results);
   end;
 end;
 
@@ -250,7 +417,7 @@ begin
   if FState.Settled then Exit;
 
   FState.Settled := True;
-  FState.ResultPromise.Reject(AArgs.GetElement(0));
+  CallPromiseCapability(FState.Reject, AArgs.GetElement(0));
 end;
 
 procedure TPromiseAllRejectHandler.MarkReferences;
@@ -287,7 +454,7 @@ begin
   if FState.Remaining = 0 then
   begin
     FState.Settled := True;
-    FState.ResultPromise.Resolve(FState.Results);
+    CallPromiseCapability(FState.Resolve, FState.Results);
   end;
 end;
 
@@ -325,7 +492,7 @@ begin
   if FState.Remaining = 0 then
   begin
     FState.Settled := True;
-    FState.ResultPromise.Resolve(FState.Results);
+    CallPromiseCapability(FState.Resolve, FState.Results);
   end;
 end;
 
@@ -364,12 +531,15 @@ end;
 
 { TPromiseAnyState }
 
-constructor TPromiseAnyState.Create(const AResultPromise: TGocciaPromiseValue; const ACount: Integer);
+constructor TPromiseAnyState.Create(const AResultPromise, AResolve,
+  AReject: TGocciaValue; const ACount: Integer);
 var
   I: Integer;
 begin
   inherited Create(nil);
   FResultPromise := AResultPromise;
+  FResolve := AResolve;
+  FReject := AReject;
   FRemaining := ACount;
   FSettled := False;
   FErrors := TGocciaArrayValue.Create;
@@ -383,6 +553,8 @@ begin
   inherited;
   if Assigned(FErrors) then FErrors.MarkReferences;
   if Assigned(FResultPromise) then FResultPromise.MarkReferences;
+  if Assigned(FResolve) then FResolve.MarkReferences;
+  if Assigned(FReject) then FReject.MarkReferences;
 end;
 
 { TPromiseAnyFulfillHandler }
@@ -400,7 +572,7 @@ begin
   if FState.Settled then Exit;
 
   FState.Settled := True;
-  FState.ResultPromise.Resolve(AArgs.GetElement(0));
+  CallPromiseCapability(FState.Resolve, AArgs.GetElement(0));
 end;
 
 procedure TPromiseAnyFulfillHandler.MarkReferences;
@@ -436,7 +608,7 @@ begin
     ErrorObj := Goccia.Values.ErrorHelper.CreateErrorObject(AGGREGATE_ERROR_NAME,
       SErrorAllPromisesRejected);
     ErrorObj.AssignProperty(PROP_ERRORS, FState.Errors);
-    FState.ResultPromise.Reject(ErrorObj);
+    CallPromiseCapability(FState.Reject, ErrorObj);
   end;
 end;
 
@@ -716,16 +888,15 @@ function TGocciaGlobalPromise.PromiseAll(const AArgs: TGocciaArgumentsCollection
   const AThisValue: TGocciaValue): TGocciaValue;
 var
   InputArray: TGocciaArrayValue;
-  ResultPromise: TGocciaPromiseValue;
+  Capability: TPromiseCapability;
   State: TPromiseAllState;
   I: Integer;
-  Wrapped: TGocciaPromiseValue;
+  PromiseLike: TGocciaValue;
   FulfillHandler: TPromiseAllHandler;
-  RejectHandler: TPromiseAllRejectHandler;
-  ThenArgs: TGocciaArgumentsCollection;
+  FulfillFn: TGocciaNativeFunctionValue;
 begin
   { Step 2: Let promiseCapability = NewPromiseCapability(C) }
-  ResultPromise := TGocciaPromiseValue.Create;
+  Capability := NewPromiseCapability(AThisValue, FPromiseConstructor);
   { Step 4: Let iteratorRecord = GetIterator(iterable) }
   try
     InputArray := ExtractPromiseArray(AArgs);
@@ -733,8 +904,8 @@ begin
     on E: TGocciaThrowValue do
     begin
       { Step 6: If abrupt, Call(reject, reason) }
-      ResultPromise.Reject(E.Value);
-      Result := ResultPromise;
+      CallPromiseCapability(Capability.Reject, E.Value);
+      Result := Capability.Promise;
       Exit;
     end;
   end;
@@ -742,35 +913,28 @@ begin
   { Empty iterable: resolve immediately with empty array }
   if InputArray.Elements.Count = 0 then
   begin
-    ResultPromise.Resolve(TGocciaArrayValue.Create);
-    Result := ResultPromise;
+    CallPromiseCapability(Capability.Resolve, TGocciaArrayValue.Create);
+    Result := Capability.Promise;
     Exit;
   end;
 
   { Step 5: PerformPromiseAll — set up per-element handlers }
-  State := TPromiseAllState.Create(ResultPromise, InputArray.Elements.Count);
+  State := TPromiseAllState.Create(Capability.Promise, Capability.Resolve,
+    Capability.Reject, InputArray.Elements.Count);
 
   for I := 0 to InputArray.Elements.Count - 1 do
   begin
     { Wrap each element as a Promise via PromiseResolve(C, nextValue) }
-    Wrapped := WrapAsPromise(InputArray.Elements[I]);
+    PromiseLike := PromiseResolveForConstructor(AThisValue, InputArray.Elements[I]);
     FulfillHandler := TPromiseAllHandler.Create(State, I);
-    RejectHandler := TPromiseAllRejectHandler.Create(State);
-
-    { Invoke then(onFulfilled, onRejected) on wrapped promise }
-    ThenArgs := TGocciaArgumentsCollection.Create([
-      TGocciaNativeFunctionValue.CreateWithoutPrototype(FulfillHandler.Invoke, 'all-resolve', 1),
-      TGocciaNativeFunctionValue.CreateWithoutPrototype(RejectHandler.Invoke, 'all-reject', 1)
-    ]);
-    try
-      TGocciaFunctionBase(Wrapped.GetProperty('then')).Call(ThenArgs, Wrapped);
-    finally
-      ThenArgs.Free;
-    end;
+    FulfillFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+      FulfillHandler.Invoke, 'all-resolve', 1);
+    FulfillFn.CapturedRoot := FulfillHandler;
+    InvokePromiseLikeThen(PromiseLike, FulfillFn, Capability.Reject);
   end;
 
   { Step 7: Return promiseCapability.[[Promise]] }
-  Result := ResultPromise;
+  Result := Capability.Promise;
 end;
 
 { Promise.allSettled ( iterable ) — §27.2.4.2
@@ -790,16 +954,16 @@ function TGocciaGlobalPromise.PromiseAllSettled(const AArgs: TGocciaArgumentsCol
   const AThisValue: TGocciaValue): TGocciaValue;
 var
   InputArray: TGocciaArrayValue;
-  ResultPromise: TGocciaPromiseValue;
+  Capability: TPromiseCapability;
   State: TPromiseAllState;
   I: Integer;
-  Wrapped: TGocciaPromiseValue;
+  PromiseLike: TGocciaValue;
   FulfillHandler: TPromiseAllSettledFulfillHandler;
   RejectHandler: TPromiseAllSettledRejectHandler;
-  ThenArgs: TGocciaArgumentsCollection;
+  FulfillFn, RejectFn: TGocciaNativeFunctionValue;
 begin
   { Step 2: Let promiseCapability = NewPromiseCapability(C) }
-  ResultPromise := TGocciaPromiseValue.Create;
+  Capability := NewPromiseCapability(AThisValue, FPromiseConstructor);
   { Step 4: Let iteratorRecord = GetIterator(iterable) }
   try
     InputArray := ExtractPromiseArray(AArgs);
@@ -807,8 +971,8 @@ begin
     on E: TGocciaThrowValue do
     begin
       { Step 6: If abrupt, Call(reject, reason) }
-      ResultPromise.Reject(E.Value);
-      Result := ResultPromise;
+      CallPromiseCapability(Capability.Reject, E.Value);
+      Result := Capability.Promise;
       Exit;
     end;
   end;
@@ -816,35 +980,34 @@ begin
   { Empty iterable: resolve immediately with empty array }
   if InputArray.Elements.Count = 0 then
   begin
-    ResultPromise.Resolve(TGocciaArrayValue.Create);
-    Result := ResultPromise;
+    CallPromiseCapability(Capability.Resolve, TGocciaArrayValue.Create);
+    Result := Capability.Promise;
     Exit;
   end;
 
   { Step 5: PerformPromiseAllSettled — set up per-element handlers }
-  State := TPromiseAllState.Create(ResultPromise, InputArray.Elements.Count);
+  State := TPromiseAllState.Create(Capability.Promise, Capability.Resolve,
+    Capability.Reject, InputArray.Elements.Count);
 
   for I := 0 to InputArray.Elements.Count - 1 do
   begin
     { Wrap each element as a Promise via PromiseResolve(C, nextValue) }
-    Wrapped := WrapAsPromise(InputArray.Elements[I]);
+    PromiseLike := PromiseResolveForConstructor(AThisValue, InputArray.Elements[I]);
     FulfillHandler := TPromiseAllSettledFulfillHandler.Create(State, I);
     RejectHandler := TPromiseAllSettledRejectHandler.Create(State, I);
 
     { Invoke then(onFulfilled, onRejected) — both handlers record status }
-    ThenArgs := TGocciaArgumentsCollection.Create([
-      TGocciaNativeFunctionValue.CreateWithoutPrototype(FulfillHandler.Invoke, 'allSettled-fulfill', 1),
-      TGocciaNativeFunctionValue.CreateWithoutPrototype(RejectHandler.Invoke, 'allSettled-reject', 1)
-    ]);
-    try
-      TGocciaFunctionBase(Wrapped.GetProperty('then')).Call(ThenArgs, Wrapped);
-    finally
-      ThenArgs.Free;
-    end;
+    FulfillFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+      FulfillHandler.Invoke, 'allSettled-fulfill', 1);
+    RejectFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+      RejectHandler.Invoke, 'allSettled-reject', 1);
+    FulfillFn.CapturedRoot := FulfillHandler;
+    RejectFn.CapturedRoot := RejectHandler;
+    InvokePromiseLikeThen(PromiseLike, FulfillFn, RejectFn);
   end;
 
   { Step 7: Return promiseCapability.[[Promise]] }
-  Result := ResultPromise;
+  Result := Capability.Promise;
 end;
 
 { Promise.race ( iterable ) — §27.2.4.5
@@ -863,14 +1026,12 @@ function TGocciaGlobalPromise.PromiseRace(const AArgs: TGocciaArgumentsCollectio
   const AThisValue: TGocciaValue): TGocciaValue;
 var
   InputArray: TGocciaArrayValue;
-  ResultPromise: TGocciaPromiseValue;
+  Capability: TPromiseCapability;
   I: Integer;
-  Wrapped: TGocciaPromiseValue;
-  ResolveHandler, RejectHandler: TPromiseRaceHandler;
-  ThenArgs: TGocciaArgumentsCollection;
+  PromiseLike: TGocciaValue;
 begin
   { Step 2: Let promiseCapability = NewPromiseCapability(C) }
-  ResultPromise := TGocciaPromiseValue.Create;
+  Capability := NewPromiseCapability(AThisValue, FPromiseConstructor);
   { Step 4: Let iteratorRecord = GetIterator(iterable) }
   try
     InputArray := ExtractPromiseArray(AArgs);
@@ -878,8 +1039,8 @@ begin
     on E: TGocciaThrowValue do
     begin
       { Step 6: If abrupt, Call(reject, reason) }
-      ResultPromise.Reject(E.Value);
-      Result := ResultPromise;
+      CallPromiseCapability(Capability.Reject, E.Value);
+      Result := Capability.Promise;
       Exit;
     end;
   end;
@@ -888,24 +1049,12 @@ begin
   for I := 0 to InputArray.Elements.Count - 1 do
   begin
     { Wrap each element as a Promise via PromiseResolve(C, nextValue) }
-    Wrapped := WrapAsPromise(InputArray.Elements[I]);
-    ResolveHandler := TPromiseRaceHandler.Create(ResultPromise, True);
-    RejectHandler := TPromiseRaceHandler.Create(ResultPromise, False);
-
-    { Invoke then(resolve, reject) — first settlement propagates }
-    ThenArgs := TGocciaArgumentsCollection.Create([
-      TGocciaNativeFunctionValue.CreateWithoutPrototype(ResolveHandler.Invoke, 'race-resolve', 1),
-      TGocciaNativeFunctionValue.CreateWithoutPrototype(RejectHandler.Invoke, 'race-reject', 1)
-    ]);
-    try
-      TGocciaFunctionBase(Wrapped.GetProperty('then')).Call(ThenArgs, Wrapped);
-    finally
-      ThenArgs.Free;
-    end;
+    PromiseLike := PromiseResolveForConstructor(AThisValue, InputArray.Elements[I]);
+    InvokePromiseLikeThen(PromiseLike, Capability.Resolve, Capability.Reject);
   end;
 
   { Step 7: Return promiseCapability.[[Promise]] }
-  Result := ResultPromise;
+  Result := Capability.Promise;
 end;
 
 { Promise.any ( iterable ) — §27.2.4.3
@@ -924,17 +1073,16 @@ function TGocciaGlobalPromise.PromiseAny(const AArgs: TGocciaArgumentsCollection
   const AThisValue: TGocciaValue): TGocciaValue;
 var
   InputArray: TGocciaArrayValue;
-  ResultPromise: TGocciaPromiseValue;
+  Capability: TPromiseCapability;
   State: TPromiseAnyState;
   I: Integer;
-  Wrapped: TGocciaPromiseValue;
-  FulfillHandler: TPromiseAnyFulfillHandler;
+  PromiseLike: TGocciaValue;
   RejectHandler: TPromiseAnyRejectHandler;
-  ThenArgs: TGocciaArgumentsCollection;
+  RejectFn: TGocciaNativeFunctionValue;
   ErrorObj: TGocciaObjectValue;
 begin
   { Step 2: Let promiseCapability = NewPromiseCapability(C) }
-  ResultPromise := TGocciaPromiseValue.Create;
+  Capability := NewPromiseCapability(AThisValue, FPromiseConstructor);
   { Step 4: Let iteratorRecord = GetIterator(iterable) }
   try
     InputArray := ExtractPromiseArray(AArgs);
@@ -942,8 +1090,8 @@ begin
     on E: TGocciaThrowValue do
     begin
       { Step 6: If abrupt, Call(reject, reason) }
-      ResultPromise.Reject(E.Value);
-      Result := ResultPromise;
+      CallPromiseCapability(Capability.Reject, E.Value);
+      Result := Capability.Promise;
       Exit;
     end;
   end;
@@ -954,35 +1102,30 @@ begin
     ErrorObj := Goccia.Values.ErrorHelper.CreateErrorObject(AGGREGATE_ERROR_NAME,
       SErrorAllPromisesRejected);
     ErrorObj.AssignProperty(PROP_ERRORS, TGocciaArrayValue.Create);
-    ResultPromise.Reject(ErrorObj);
-    Result := ResultPromise;
+    CallPromiseCapability(Capability.Reject, ErrorObj);
+    Result := Capability.Promise;
     Exit;
   end;
 
   { Step 5: PerformPromiseAny — first fulfillment wins }
-  State := TPromiseAnyState.Create(ResultPromise, InputArray.Elements.Count);
+  State := TPromiseAnyState.Create(Capability.Promise, Capability.Resolve,
+    Capability.Reject, InputArray.Elements.Count);
 
   for I := 0 to InputArray.Elements.Count - 1 do
   begin
     { Wrap each element as a Promise via PromiseResolve(C, nextValue) }
-    Wrapped := WrapAsPromise(InputArray.Elements[I]);
-    FulfillHandler := TPromiseAnyFulfillHandler.Create(State);
+    PromiseLike := PromiseResolveForConstructor(AThisValue, InputArray.Elements[I]);
     RejectHandler := TPromiseAnyRejectHandler.Create(State, I);
 
     { Invoke then(onFulfilled, onRejected) — fulfill resolves, reject collects }
-    ThenArgs := TGocciaArgumentsCollection.Create([
-      TGocciaNativeFunctionValue.CreateWithoutPrototype(FulfillHandler.Invoke, 'any-fulfill', 1),
-      TGocciaNativeFunctionValue.CreateWithoutPrototype(RejectHandler.Invoke, 'any-reject', 1)
-    ]);
-    try
-      TGocciaFunctionBase(Wrapped.GetProperty('then')).Call(ThenArgs, Wrapped);
-    finally
-      ThenArgs.Free;
-    end;
+    RejectFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+      RejectHandler.Invoke, 'any-reject', 1);
+    RejectFn.CapturedRoot := RejectHandler;
+    InvokePromiseLikeThen(PromiseLike, Capability.Resolve, RejectFn);
   end;
 
   { Step 7: Return promiseCapability.[[Promise]] }
-  Result := ResultPromise;
+  Result := Capability.Promise;
 end;
 
 { Promise.withResolvers ( ) — §27.2.4.8

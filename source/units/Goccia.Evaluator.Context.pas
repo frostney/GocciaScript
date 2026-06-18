@@ -26,6 +26,7 @@ type
     NonStrictMode: Boolean;
     CompatibilityNonStrictMode: Boolean;
     InEvalCode: Boolean;
+    EvalVarScope: TGocciaScope;
     RejectArgumentsVarDeclarationInEval: Boolean;
     RejectVarDeclarationNamesInEval: TGocciaEvalRejectNameArray;
     DisposalTracker: TObject; // TGocciaDisposalTracker or nil

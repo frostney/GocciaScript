@@ -23,6 +23,16 @@ describe("Date constructor", () => {
     expect(d.getUTCDate()).toBe(1);
   });
 
+  test("Reflect.construct initializes Date internal slot with custom newTarget", () => {
+    class NewTarget {}
+
+    const d = Reflect.construct(Date, [0], NewTarget);
+    expect(Object.getPrototypeOf(d)).toBe(NewTarget.prototype);
+    expect(d instanceof NewTarget).toBe(true);
+    expect(d instanceof Date).toBe(false);
+    expect(Date.prototype.getTime.call(d)).toBe(0);
+  });
+
   test("new Date(string) parses ISO string", () => {
     const d = new Date("2024-06-15T12:30:00Z");
     expect(d.getUTCFullYear()).toBe(2024);

@@ -46,8 +46,6 @@ type
     FOwnsModuleLoader: Boolean;
     FRealm: TGocciaRealm;
 
-    function EvaluateModuleBody(const AProgram: TGocciaProgram;
-      const AContext: TGocciaEvaluationContext): TGocciaValue;
     procedure ThrowError(const AMessage: string; const ALine, AColumn: Integer);
     function GetContentProvider: TGocciaModuleContentProvider;
     function GetGlobalModules: TOrderedStringMap<TGocciaModule>;
@@ -65,6 +63,9 @@ type
     procedure SetResolver(const AValue: TGocciaModuleResolver);
   public
     function CreateEvaluationContext: TGocciaEvaluationContext;
+    function EvaluateModuleBody(const AProgram: TGocciaProgram;
+      const AContext: TGocciaEvaluationContext;
+      out AProgramConsumed: Boolean): TGocciaValue;
     constructor Create(const AFileName: string; const ASourceLines: TStringList); overload;
     constructor Create(const AFileName: string; const ASourceLines: TStringList;
       const AModuleLoader: TGocciaModuleLoader); overload;
@@ -104,9 +105,182 @@ type
 implementation
 
 uses
+  Generics.Collections,
+
+  Goccia.Arguments.Collection,
   Goccia.AST.Statements,
+  Goccia.Constants.ErrorNames,
   Goccia.Coverage,
-  Goccia.GarbageCollector;
+  Goccia.GarbageCollector,
+  Goccia.Generator.Continuation,
+  Goccia.Values.Error,
+  Goccia.Values.ErrorHelper,
+  Goccia.Values.NativeFunction,
+  Goccia.Values.PromiseValue,
+  Goccia.VM.Exception;
+
+type
+  TGocciaInterpreterAsyncModuleEvaluation = class(TGocciaObjectValue)
+  private
+    FBodyStatements: TObjectList<TGocciaASTNode>;
+    FContext: TGocciaEvaluationContext;
+    FContinuation: TGocciaGeneratorContinuation;
+    FProgram: TGocciaProgram;
+    FPromise: TGocciaPromiseValue;
+    FSettled: Boolean;
+    procedure AttachAwait(const ASuspension: EGocciaAsyncAwaitSuspend);
+    procedure RejectWithException(const AException: Exception);
+    procedure Resume(const AKind: TGocciaGeneratorResumeKind;
+      const AValue: TGocciaValue);
+  public
+    constructor Create(const AProgram: TGocciaProgram;
+      const AContext: TGocciaEvaluationContext);
+    destructor Destroy; override;
+    function Start: TGocciaPromiseValue;
+    function FulfillAwait(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function RejectAwait(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    procedure MarkReferences; override;
+  end;
+
+procedure RejectPromiseWithException(const APromise: TGocciaPromiseValue;
+  const AException: Exception);
+begin
+  if AException is EGocciaBytecodeThrow then
+    APromise.Reject(EGocciaBytecodeThrow(AException).ThrownValue)
+  else if AException is TGocciaThrowValue then
+    APromise.Reject(TGocciaThrowValue(AException).Value)
+  else if AException is TGocciaTypeError then
+    APromise.Reject(CreateErrorObject(TYPE_ERROR_NAME, AException.Message))
+  else if AException is TGocciaReferenceError then
+    APromise.Reject(CreateErrorObject(REFERENCE_ERROR_NAME, AException.Message))
+  else if AException is TGocciaSyntaxError then
+    APromise.Reject(CreateErrorObject(SYNTAX_ERROR_NAME, AException.Message))
+  else
+    APromise.Reject(CreateErrorObject(ERROR_NAME, AException.Message));
+end;
+
+{ TGocciaInterpreterAsyncModuleEvaluation }
+
+constructor TGocciaInterpreterAsyncModuleEvaluation.Create(
+  const AProgram: TGocciaProgram; const AContext: TGocciaEvaluationContext);
+var
+  I: Integer;
+begin
+  inherited Create(nil);
+  FProgram := AProgram;
+  FContext := AContext;
+  FPromise := TGocciaPromiseValue.Create;
+  FBodyStatements := TObjectList<TGocciaASTNode>.Create(False);
+  for I := 0 to FProgram.Body.Count - 1 do
+    if not ((FProgram.Body[I] is TGocciaImportDeclaration) or
+            (FProgram.Body[I] is TGocciaReExportDeclaration)) then
+      FBodyStatements.Add(FProgram.Body[I]);
+  FContinuation := TGocciaGeneratorContinuation.Create(
+    FBodyStatements, FContext.Scope, FContext);
+end;
+
+destructor TGocciaInterpreterAsyncModuleEvaluation.Destroy;
+begin
+  FContinuation.Free;
+  FBodyStatements.Free;
+  FProgram.Free;
+  inherited;
+end;
+
+procedure TGocciaInterpreterAsyncModuleEvaluation.AttachAwait(
+  const ASuspension: EGocciaAsyncAwaitSuspend);
+var
+  FulfillHandler: TGocciaNativeFunctionValue;
+  RejectHandler: TGocciaNativeFunctionValue;
+begin
+  FulfillHandler := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+    FulfillAwait, '<module-await-fulfill>', 1);
+  FulfillHandler.CapturedRoot := Self;
+  RejectHandler := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+    RejectAwait, '<module-await-reject>', 1);
+  RejectHandler.CapturedRoot := Self;
+  ASuspension.Promise.InvokeThen(FulfillHandler, RejectHandler);
+end;
+
+procedure TGocciaInterpreterAsyncModuleEvaluation.RejectWithException(
+  const AException: Exception);
+begin
+  if FSettled then
+    Exit;
+  FSettled := True;
+  RejectPromiseWithException(FPromise, AException);
+end;
+
+procedure TGocciaInterpreterAsyncModuleEvaluation.Resume(
+  const AKind: TGocciaGeneratorResumeKind; const AValue: TGocciaValue);
+var
+  Done: Boolean;
+  ExecutionContext: TGocciaExecutionContextScope;
+begin
+  if FSettled then
+    Exit;
+
+  ExecutionContext := nil;
+  if Assigned(FContext.Realm) then
+    ExecutionContext := TGocciaExecutionContextScope.Create(
+      CreateExecutionContext(FContext.Realm, FContext.Scope,
+        FContext.CurrentFilePath, FProgram));
+  PushAsyncAwaitSuspension;
+  try
+    try
+      FContinuation.Resume(AKind, AValue, Done);
+      if Done then
+      begin
+        FSettled := True;
+        FPromise.Resolve(TGocciaUndefinedLiteralValue.UndefinedValue);
+      end;
+    except
+      on E: EGocciaAsyncAwaitSuspend do
+        AttachAwait(E);
+      on E: Exception do
+        RejectWithException(E);
+    end;
+  finally
+    PopAsyncAwaitSuspension;
+    if Assigned(ExecutionContext) then
+      ExecutionContext.Free;
+  end;
+end;
+
+function TGocciaInterpreterAsyncModuleEvaluation.Start: TGocciaPromiseValue;
+begin
+  Resume(grkNext, TGocciaUndefinedLiteralValue.UndefinedValue);
+  Result := FPromise;
+end;
+
+function TGocciaInterpreterAsyncModuleEvaluation.FulfillAwait(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Resume(grkNext, AArgs.GetElement(0));
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TGocciaInterpreterAsyncModuleEvaluation.RejectAwait(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Resume(grkThrow, AArgs.GetElement(0));
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+procedure TGocciaInterpreterAsyncModuleEvaluation.MarkReferences;
+begin
+  if GCMarked then
+    Exit;
+  inherited;
+  if Assigned(FPromise) then
+    FPromise.MarkReferences;
+  if Assigned(FContinuation) then
+    FContinuation.MarkReferences;
+end;
 
 { TGocciaInterpreter }
 
@@ -322,12 +496,15 @@ end;
 
 function TGocciaInterpreter.EvaluateModuleBody(
   const AProgram: TGocciaProgram;
-  const AContext: TGocciaEvaluationContext): TGocciaValue;
+  const AContext: TGocciaEvaluationContext;
+  out AProgramConsumed: Boolean): TGocciaValue;
 var
+  AsyncEvaluation: TGocciaInterpreterAsyncModuleEvaluation;
   I: Integer;
   CF: TGocciaControlFlow;
   ExecutionContext: TGocciaExecutionContextScope;
 begin
+  AProgramConsumed := False;
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   if not AContext.ModuleEnvironmentInitialized then
   begin
@@ -351,6 +528,18 @@ begin
         CF := CF.UpdateEmpty(Result);
         if CF.Kind = cfkReturn then Exit(CF.Value);
       end;
+
+    if AProgram.HasTopLevelAwait then
+    begin
+      AsyncEvaluation := TGocciaInterpreterAsyncModuleEvaluation.Create(
+        AProgram, AContext);
+      AProgramConsumed := True;
+      Result := AsyncEvaluation.Start;
+      if Assigned(AContext.CurrentModule) and
+         (Result is TGocciaPromiseValue) then
+        AContext.CurrentModule.EvaluationPromise := Result;
+      Exit;
+    end;
 
     for I := 0 to AProgram.Body.Count - 1 do
     begin

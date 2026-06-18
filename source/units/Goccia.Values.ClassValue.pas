@@ -361,9 +361,6 @@ uses
   Goccia.Values.WeakRefValue,
   Goccia.Values.WeakSetValue;
 
-const
-  CONSTRUCTOR_DATE = 'Date';
-
 function ToNumberConstructorValue(
   const AValue: TGocciaValue): TGocciaNumberLiteralValue;
 begin
@@ -1762,11 +1759,6 @@ begin
   end
   else if FName = CONSTRUCTOR_ARRAY then
     Result := Instantiate(AArguments)
-  // ES2026 §21.4.2.1 Date(...values): callable Date returns a String.
-  // Goccia's Date implementation is a shim class, so preserve the generic
-  // class-constructor path while special-casing the legacy callable form.
-  else if FName = CONSTRUCTOR_DATE then
-    Result := TGocciaStringLiteralValue.Create(DateTimeToStr(Now))
   // ES2026 §20.1.1.1 Object(value): ToObject for primitives, new empty object otherwise
   else if FName = CONSTRUCTOR_OBJECT then
   begin

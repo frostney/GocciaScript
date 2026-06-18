@@ -979,6 +979,12 @@ begin
     Exit;
   end;
 
+  // ES2026 §10.4.7: Object.prototype is an immutable-prototype exotic
+  // object.  Its [[SetPrototypeOf]] returns false for every non-current
+  // prototype value; Object.setPrototypeOf converts that false into TypeError.
+  if Target = TGocciaObjectValue.SharedObjectPrototype then
+    ThrowTypeError(SErrorSetPrototypeOfNonExtensible, SSuggestObjectNotExtensible);
+
   // Step 3: If Type(O) is not Object, return O (handled above via throw)
   if not Target.Extensible then
     ThrowTypeError(SErrorSetPrototypeOfNonExtensible, SSuggestObjectNotExtensible);

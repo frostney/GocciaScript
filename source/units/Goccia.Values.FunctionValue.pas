@@ -106,6 +106,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.Evaluator,
   Goccia.GarbageCollector,
+  Goccia.Generator.Continuation,
   Goccia.Realm,
   Goccia.Types.Enforcement,
   Goccia.Values.ArgumentsObjectValue,
@@ -304,6 +305,7 @@ var
   ParameterNames: array of string;
   BodyScope: TGocciaScope;
   HasParamExpressions: Boolean;
+  PreviousContinuation: TGocciaGeneratorContinuation;
   PreviousRealm: TGocciaRealm;
   RealmSwitched: Boolean;
   function EvaluateParameterDefault(
@@ -344,6 +346,7 @@ begin
   RealmSwitched := Assigned(CreationRealm) and (CreationRealm <> PreviousRealm);
   if RealmSwitched then
     SetCurrentRealm(CreationRealm);
+  PreviousContinuation := SuspendCurrentGeneratorContinuation;
   try
   // Set up evaluation context — inherit OnError, LoadModule and the
   // strict-types flag from the closure scope so the body sees the
@@ -561,6 +564,7 @@ begin
       ThrowSyntaxError(SErrorIllegalContinueStatement, SSuggestExpressionExpected);
   end;
   finally
+    RestoreCurrentGeneratorContinuation(PreviousContinuation);
     if RealmSwitched then
       SetCurrentRealm(PreviousRealm);
   end;

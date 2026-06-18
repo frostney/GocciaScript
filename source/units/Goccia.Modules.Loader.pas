@@ -31,7 +31,8 @@ type
     entry file using module source uses it so the test runner can
     read the runTests(...) results object. }
   TGocciaModuleBodyEvaluator = function(const AProgram: TGocciaProgram;
-    const AContext: TGocciaEvaluationContext): TGocciaValue of object;
+    const AContext: TGocciaEvaluationContext;
+    out AProgramConsumed: Boolean): TGocciaValue of object;
   TGocciaRuntimeModuleLoader = function(const AResolvedPath: string;
     out AModule: TGocciaModule): Boolean of object;
 
@@ -173,7 +174,6 @@ uses
   Goccia.Keywords.Reserved,
   Goccia.Realm,
   Goccia.Values.Error,
-  Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionValue,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectValue,
@@ -301,12 +301,16 @@ function TGocciaDeferredModuleBody.Invoke(
 var
   ActiveOptionsScope: TGocciaSourcePipelineOptionsScope;
   BodyResult: TGocciaValue;
+  ProgramConsumed: Boolean;
 begin
   ActiveOptionsScope := TGocciaSourcePipeline.ActivateOptions(
     FPipelineOptions);
   try
     try
-      BodyResult := FLoader.FEvaluateModuleBody(FProgramNode, FContext);
+      BodyResult := FLoader.FEvaluateModuleBody(FProgramNode, FContext,
+        ProgramConsumed);
+      if ProgramConsumed then
+        FProgramNode := nil;
       if FHasTopLevelAwait then
         Result := BodyResult
       else
@@ -681,6 +685,7 @@ var
   RequestedModules: TGocciaModuleList;
   ActiveOptionsScope: TGocciaSourcePipelineOptionsScope;
   ProgramNode: TGocciaProgram;
+  ProgramConsumed: Boolean;
   ReExportDecl: TGocciaReExportDeclaration;
   RequestedModulePath: string;
   ResolvedPath: string;
@@ -1179,7 +1184,8 @@ begin
     Seen := TOrderedStringMap<Boolean>.Create;
     try
       if DeferredGraphTouchesEvaluating(CacheKey, Seen) then
-        ThrowTypeError('Deferred module cannot be synchronously evaluated while it or one of its dependencies is evaluating');
+        raise EGocciaDeferredModuleNotReady.Create(
+          DEFERRED_MODULE_NOT_READY_MESSAGE);
     finally
       Seen.Free;
     end;
@@ -1318,7 +1324,9 @@ begin
             PipelineOptions);
           try
             try
-              FEvaluateModuleBody(ProgramNode, Context);
+              FEvaluateModuleBody(ProgramNode, Context, ProgramConsumed);
+              if ProgramConsumed then
+                ProgramNode := nil;
             except
               on E: EGocciaBytecodeThrow do
               begin

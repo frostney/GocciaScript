@@ -169,6 +169,7 @@ uses
   Goccia.Values.BigIntValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
+  Goccia.Values.Iterator.Concrete,
   Goccia.Values.IteratorSupport,
   Goccia.Values.IteratorValue,
   Goccia.Values.NativeFunction,
@@ -2397,7 +2398,7 @@ var
   TA: TGocciaTypedArrayValue;
 begin
   TA := RequireAttachedTypedArray(AThisValue, 'TypedArray.prototype.values');
-  Result := TGocciaTypedArrayIteratorValue.Create(TA, taikValues);
+  Result := TGocciaArrayIteratorValue.Create(TA, akValues);
 end;
 
 // ES2026 §23.2.3.18 %TypedArray%.prototype.keys()
@@ -2406,7 +2407,7 @@ var
   TA: TGocciaTypedArrayValue;
 begin
   TA := RequireAttachedTypedArray(AThisValue, 'TypedArray.prototype.keys');
-  Result := TGocciaTypedArrayIteratorValue.Create(TA, taikKeys);
+  Result := TGocciaArrayIteratorValue.Create(TA, akKeys);
 end;
 
 // ES2026 §23.2.3.6 %TypedArray%.prototype.entries()
@@ -2415,7 +2416,7 @@ var
   TA: TGocciaTypedArrayValue;
 begin
   TA := RequireAttachedTypedArray(AThisValue, 'TypedArray.prototype.entries');
-  Result := TGocciaTypedArrayIteratorValue.Create(TA, taikEntries);
+  Result := TGocciaArrayIteratorValue.Create(TA, akEntries);
 end;
 
 { TGocciaTypedArrayClassValue }

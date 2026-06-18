@@ -61,11 +61,98 @@ uses
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.NativeFunction,
+  Goccia.Values.ObjectValue,
   Goccia.Values.PromiseValue,
   Goccia.VM.Exception;
 
 threadvar
   MicrotaskQueueThreadInstance: TGocciaMicrotaskQueue;
+
+type
+  TThenableResolvingFunctions = class(TGocciaObjectValue)
+  private
+    FPromise: TGocciaPromiseValue;
+    FAlreadyResolved: Boolean;
+  public
+    constructor Create(const APromise: TGocciaPromiseValue);
+    function Resolve(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function Reject(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    procedure RejectException(const AException: Exception);
+    procedure MarkReferences; override;
+  end;
+
+constructor TThenableResolvingFunctions.Create(
+  const APromise: TGocciaPromiseValue);
+begin
+  inherited Create(nil);
+  FPromise := APromise;
+  FAlreadyResolved := False;
+end;
+
+function TThenableResolvingFunctions.Resolve(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  if FAlreadyResolved then
+    Exit;
+  FAlreadyResolved := True;
+  if AArgs.Length > 0 then
+    FPromise.Resolve(AArgs.GetElement(0))
+  else
+    FPromise.Resolve(TGocciaUndefinedLiteralValue.UndefinedValue);
+end;
+
+function TThenableResolvingFunctions.Reject(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  if FAlreadyResolved then
+    Exit;
+  FAlreadyResolved := True;
+  if AArgs.Length > 0 then
+    FPromise.Reject(AArgs.GetElement(0))
+  else
+    FPromise.Reject(TGocciaUndefinedLiteralValue.UndefinedValue);
+end;
+
+procedure TThenableResolvingFunctions.RejectException(
+  const AException: Exception);
+var
+  RejectArgs: TGocciaArgumentsCollection;
+  Reason: TGocciaValue;
+begin
+  if AException is EGocciaBytecodeThrow then
+    Reason := EGocciaBytecodeThrow(AException).ThrownValue
+  else if AException is TGocciaThrowValue then
+    Reason := TGocciaThrowValue(AException).Value
+  else if AException is TGocciaTypeError then
+    Reason := CreateErrorObject(TYPE_ERROR_NAME, AException.Message)
+  else if AException is TGocciaReferenceError then
+    Reason := CreateErrorObject(REFERENCE_ERROR_NAME, AException.Message)
+  else if AException is TGocciaSyntaxError then
+    Reason := CreateErrorObject(SYNTAX_ERROR_NAME, AException.Message)
+  else
+    Reason := CreateErrorObject(ERROR_NAME, AException.Message);
+
+  RejectArgs := TGocciaArgumentsCollection.Create([Reason]);
+  try
+    Reject(RejectArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+  finally
+    RejectArgs.Free;
+  end;
+end;
+
+procedure TThenableResolvingFunctions.MarkReferences;
+begin
+  if GCMarked then Exit;
+  inherited;
+  if Assigned(FPromise) then
+    FPromise.MarkReferences;
+end;
 
 procedure RejectPromiseWithException(const APromise: TGocciaPromiseValue;
   const AException: Exception);
@@ -91,6 +178,7 @@ procedure ExecutePromiseResolveThenableJob(const APromise: TGocciaPromiseValue;
   const AThenable, AThenMethod: TGocciaValue);
 var
   ThenArgs: TGocciaArgumentsCollection;
+  ResolvingFunctions: TThenableResolvingFunctions;
   ResolveFn: TGocciaNativeFunctionValue;
   RejectFn: TGocciaNativeFunctionValue;
   GC: TGarbageCollector;
@@ -98,17 +186,19 @@ begin
   if not Assigned(APromise) then
     Exit;
 
+  ResolvingFunctions := TThenableResolvingFunctions.Create(APromise);
   ResolveFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(
-    APromise.DoResolve, '', 1);
+    ResolvingFunctions.Resolve, '', 1);
   RejectFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(
-    APromise.DoReject, '', 1);
-  ResolveFn.CapturedRoot := APromise;
-  RejectFn.CapturedRoot := APromise;
+    ResolvingFunctions.Reject, '', 1);
+  ResolveFn.CapturedRoot := ResolvingFunctions;
+  RejectFn.CapturedRoot := ResolvingFunctions;
   ThenArgs := TGocciaArgumentsCollection.Create([ResolveFn, RejectFn]);
   GC := TGarbageCollector.Instance;
   try
     if Assigned(GC) then
     begin
+      GC.AddTempRoot(ResolvingFunctions);
       GC.AddTempRoot(AThenable);
       GC.AddTempRoot(AThenMethod);
       GC.AddTempRoot(ResolveFn);
@@ -123,7 +213,7 @@ begin
         on E: TGocciaInstructionLimitError do
           raise;
         on E: Exception do
-          RejectPromiseWithException(APromise, E);
+          ResolvingFunctions.RejectException(E);
       end;
     finally
       if Assigned(GC) then
@@ -132,6 +222,7 @@ begin
         GC.RemoveTempRoot(ResolveFn);
         GC.RemoveTempRoot(AThenMethod);
         GC.RemoveTempRoot(AThenable);
+        GC.RemoveTempRoot(ResolvingFunctions);
       end;
     end;
   finally

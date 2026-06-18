@@ -36,7 +36,8 @@ type
     function ExecuteDynamicFunction(
       const AProgram: TGocciaProgram): TGocciaValue; override;
     function EvaluateModuleBody(const AProgram: TGocciaProgram;
-      const AContext: TGocciaEvaluationContext): TGocciaValue; override;
+      const AContext: TGocciaEvaluationContext;
+      out AProgramConsumed: Boolean): TGocciaValue; override;
     function CompileModule(
       const AProgram: TGocciaProgram): TGocciaCompiledModule; override;
     function RunCompiledModule(
@@ -93,50 +94,11 @@ end;
 
 function TGocciaInterpreterExecutor.EvaluateModuleBody(
   const AProgram: TGocciaProgram;
-  const AContext: TGocciaEvaluationContext): TGocciaValue;
-var
-  I: Integer;
-  CF: TGocciaControlFlow;
-  ExecutionContext: TGocciaExecutionContextScope;
+  const AContext: TGocciaEvaluationContext;
+  out AProgramConsumed: Boolean): TGocciaValue;
 begin
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-  if not AContext.ModuleEnvironmentInitialized then
-  begin
-    PredeclareModuleLexicalDeclarations(AProgram, AContext.Scope);
-    if FInterpreter.VarEnabled then
-      HoistVarDeclarations(AProgram.Body, AContext.Scope, AContext);
-    if FInterpreter.FunctionEnabled then
-      HoistFunctionDeclarations(AProgram.Body, AContext);
-  end;
-  ExecutionContext := nil;
-  if Assigned(AContext.Realm) then
-    ExecutionContext := TGocciaExecutionContextScope.Create(
-      CreateExecutionContext(AContext.Realm, AContext.Scope,
-        AContext.CurrentFilePath, AProgram));
-  try
-    for I := 0 to AProgram.Body.Count - 1 do
-      if (AProgram.Body[I] is TGocciaImportDeclaration) or
-         (AProgram.Body[I] is TGocciaReExportDeclaration) then
-      begin
-        CF := EvaluateStatement(AProgram.Body[I], AContext);
-        CF := CF.UpdateEmpty(Result);
-        if CF.Kind = cfkReturn then Exit(CF.Value);
-      end;
-
-    for I := 0 to AProgram.Body.Count - 1 do
-    begin
-      if (AProgram.Body[I] is TGocciaImportDeclaration) or
-         (AProgram.Body[I] is TGocciaReExportDeclaration) then
-        Continue;
-      CF := EvaluateStatement(AProgram.Body[I], AContext);
-      CF := CF.UpdateEmpty(Result);
-      Result := CF.Value;
-      if CF.Kind = cfkReturn then Exit;
-    end;
-  finally
-    if Assigned(ExecutionContext) then
-      ExecutionContext.Free;
-  end;
+  Result := FInterpreter.EvaluateModuleBody(
+    AProgram, AContext, AProgramConsumed);
 end;
 
 constructor TGocciaInterpreterModule.Create(const AProgram: TGocciaProgram);
@@ -163,6 +125,7 @@ function TGocciaInterpreterExecutor.RunCompiledModuleInScope(
   const AScope: TGocciaScope): TGocciaValue;
 var
   Context: TGocciaEvaluationContext;
+  ProgramConsumed: Boolean;
 begin
   Context := FInterpreter.CreateEvaluationContext;
   Context.Scope := AScope;
@@ -171,7 +134,7 @@ begin
   Context.NonStrictMode := AScope.NonStrictMode;
   Context.CompatibilityNonStrictMode := AScope.EffectiveNonStrictMode;
   Result := EvaluateModuleBody(
-    TGocciaInterpreterModule(AModule).Prog, Context);
+    TGocciaInterpreterModule(AModule).Prog, Context, ProgramConsumed);
   TGocciaInterpreterModule(AModule).FProgram := nil;
 end;
 

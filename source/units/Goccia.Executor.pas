@@ -37,7 +37,8 @@ type
     { Evaluate the module body in AContext and return the completion
       value (last expression value, or undefined). }
     function EvaluateModuleBody(const AProgram: TGocciaProgram;
-      const AContext: TGocciaEvaluationContext): TGocciaValue;
+      const AContext: TGocciaEvaluationContext;
+      out AProgramConsumed: Boolean): TGocciaValue;
       virtual; abstract;
     function ExecuteDynamicFunction(
       const AProgram: TGocciaProgram): TGocciaValue; virtual; abstract;

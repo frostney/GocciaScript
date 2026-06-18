@@ -783,7 +783,8 @@ function TGocciaVMDirectEvalScope.IsDeletedVarBinding(
   const AName: string): Boolean;
 begin
   Result := Assigned(FDeletedVarBindings) and
-    (FDeletedVarBindings.IndexOf(AName) >= 0);
+    (FDeletedVarBindings.IndexOf(AName) >= 0) and
+    not ContainsOwnVarBinding(AName);
 end;
 
 procedure TGocciaVMDirectEvalScope.MarkDeletedVarBinding(
@@ -1124,11 +1125,8 @@ begin
     Exit;
 
   HomeClass := TGocciaClassValue(FHomeClass);
-  if Assigned(HomeClass.SuperClass) then
-    SuperConstructor := HomeClass.SuperClass
-  else if Assigned(HomeClass.NativeSuperConstructor) then
-    SuperConstructor := HomeClass.NativeSuperConstructor
-  else
+  SuperConstructor := TGocciaObjectValue(HomeClass).Prototype;
+  if not Assigned(SuperConstructor) then
     Exit;
 
   Result := TGocciaVMSuperConstructorValue.Create(SuperConstructor,
@@ -5825,8 +5823,6 @@ begin
     TGocciaVMClassValue(FCurrentCtorClass).FVM.FCurrentConstructorSuperCalled;
 
   EffectiveSuper := FSuperClass;
-  if FCurrentCtorClass is TGocciaObjectValue then
-    EffectiveSuper := TGocciaObjectValue(FCurrentCtorClass).Prototype;
 
   if (EffectiveSuper is TGocciaObjectValue) and
      (not (EffectiveSuper is TGocciaClassValue)) and
@@ -10641,10 +10637,23 @@ var
     if AThisValue is TGocciaInstanceValue then
       Result := TGocciaInstanceValue(AThisValue).ClassValue;
   end;
+  function ResolveSuperConstructor: TGocciaValue;
+  var
+    CurrentCtorClass: TGocciaClassValue;
+  begin
+    CurrentCtorClass := ResolveCurrentCtorClass;
+    if Assigned(CurrentCtorClass) then
+      Exit(TGocciaObjectValue(CurrentCtorClass).Prototype);
+    Result := ASuperValue;
+  end;
 begin
   HomeObject := nil;
   if Assigned(FCurrentClosure) then
     HomeObject := FCurrentClosure.HomeObject;
+
+  if AUseSuperConstructor and (AName = PROP_CONSTRUCTOR) then
+    Exit(TGocciaVMSuperConstructorValue.Create(ResolveSuperConstructor,
+      FCurrentNewTarget, ResolveCurrentCtorClass));
 
   if (ASuperValue is TGocciaObjectValue) and
      (not (ASuperValue is TGocciaClassValue)) and
@@ -10733,6 +10742,15 @@ var
     if AThisValue is TGocciaInstanceValue then
       Result := TGocciaInstanceValue(AThisValue).ClassValue;
   end;
+  function ResolveSuperConstructor: TGocciaValue;
+  var
+    CurrentCtorClass: TGocciaClassValue;
+  begin
+    CurrentCtorClass := ResolveCurrentCtorClass;
+    if Assigned(CurrentCtorClass) then
+      Exit(TGocciaObjectValue(CurrentCtorClass).Prototype);
+    Result := ASuperValue;
+  end;
   function IsSuperConstructorKey: Boolean;
   begin
     Result := AUseSuperConstructor and
@@ -10753,6 +10771,10 @@ begin
   HomeObject := nil;
   if Assigned(FCurrentClosure) then
     HomeObject := FCurrentClosure.HomeObject;
+
+  if IsSuperConstructorKey then
+    Exit(TGocciaVMSuperConstructorValue.Create(ResolveSuperConstructor,
+      FCurrentNewTarget, ResolveCurrentCtorClass));
 
   if (ASuperValue is TGocciaObjectValue) and
      (not (ASuperValue is TGocciaClassValue)) and
