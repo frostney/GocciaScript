@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 
 import { dirname, join, relative, resolve } from "path";
 
 const REPORT_LIMIT = 50;
+const MARKDOWN_REPORT_LIMIT = 20;
 
 type ProfileJson = {
   opcodes?: Array<{ opcode?: string; count?: number }>;
@@ -209,7 +210,41 @@ function walkJsonFiles(dir: string, out: string[] = []): string[] {
 }
 
 function readProfile(path: string): ProfileJson {
-  return JSON.parse(readFileSync(path, "utf8")) as ProfileJson;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+  } catch (err) {
+    throw new Error(`Failed to parse benchmark profile JSON ${path}: ${(err as Error).message}`);
+  }
+  if (!isProfileJson(parsed)) {
+    throw new Error(`Invalid benchmark profile JSON ${path}: expected Goccia profiler report object`);
+  }
+  return parsed;
+}
+
+function isProfileJson(value: unknown): value is ProfileJson {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const profile = value as Record<string, unknown>;
+  const hasRecognizedProfileField =
+    "opcodes" in profile ||
+    "opcodePairs" in profile ||
+    "scalarFastPath" in profile ||
+    "shapeSaturation" in profile ||
+    "functions" in profile;
+  if (!hasRecognizedProfileField) return false;
+  return (
+    (profile.opcodes === undefined || Array.isArray(profile.opcodes)) &&
+    (profile.opcodePairs === undefined || Array.isArray(profile.opcodePairs)) &&
+    (profile.functions === undefined || Array.isArray(profile.functions)) &&
+    (profile.scalarFastPath === undefined ||
+      (typeof profile.scalarFastPath === "object" &&
+        profile.scalarFastPath !== null &&
+        !Array.isArray(profile.scalarFastPath))) &&
+    (profile.shapeSaturation === undefined ||
+      (typeof profile.shapeSaturation === "object" &&
+        profile.shapeSaturation !== null &&
+        !Array.isArray(profile.shapeSaturation)))
+  );
 }
 
 function buildSummary(profileDir: string): BenchmarkProfileSummary {
@@ -321,7 +356,7 @@ function writeMarkdown(summary: BenchmarkProfileSummary, outputPath: string): vo
 
   const addCountTable = (title: string, rows: CountEntry[]) => {
     lines.push(`## ${title}`, "", "| Rank | Name | Count | Share |", "|---:|---|---:|---:|");
-    rows.slice(0, 20).forEach((row, index) => {
+    rows.slice(0, MARKDOWN_REPORT_LIMIT).forEach((row, index) => {
       lines.push(
         `| ${index + 1} | \`${row.name}\` | ${formatInteger(row.count)} | ` +
           `${row.percentage === undefined ? "" : row.percentage.toFixed(1) + "%"} |`,
@@ -337,7 +372,7 @@ function writeMarkdown(summary: BenchmarkProfileSummary, outputPath: string): vo
       "| Rank | Function | Calls | Self time | Total time | Allocations |",
       "|---:|---|---:|---:|---:|---:|",
     );
-    rows.slice(0, 20).forEach((row, index) => {
+    rows.slice(0, MARKDOWN_REPORT_LIMIT).forEach((row, index) => {
       const location = row.sourceFile ? ` @ ${row.sourceFile}:${row.line}` : "";
       lines.push(
         `| ${index + 1} | \`${row.name}${location}\` | ${formatInteger(row.calls)} | ` +
@@ -355,7 +390,7 @@ function writeMarkdown(summary: BenchmarkProfileSummary, outputPath: string): vo
       "| Rank | File | Opcodes | Self time | Allocations |",
       "|---:|---|---:|---:|---:|",
     );
-    rows.slice(0, 20).forEach((row, index) => {
+    rows.slice(0, MARKDOWN_REPORT_LIMIT).forEach((row, index) => {
       lines.push(
         `| ${index + 1} | \`${row.file}\` | ${formatInteger(row.totalOpcodes)} | ` +
           `${formatMs(row.functionSelfTimeNs)} | ${formatInteger(row.allocations)} |`,

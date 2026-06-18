@@ -1225,7 +1225,7 @@ function formatProfileInteger(value: number): string {
   return Math.round(value).toLocaleString("en-US");
 }
 
-function formatProfileMs(ns: number): string {
+function formatNanoseconds(ns: number): string {
   const ms = ns / 1e6;
   if (ms >= 1000) return `${(ms / 1000).toFixed(2)}s`;
   return `${ms.toFixed(1)}ms`;
@@ -1285,7 +1285,7 @@ function writeProfileMarkdown(summary: Test262ProfileSummary, outputPath: string
       const location = row.sourceFile ? ` @ ${row.sourceFile}:${row.line}` : "";
       lines.push(
         `| ${index + 1} | \`${row.name}${location}\` | ${formatProfileInteger(row.calls)} | ` +
-          `${formatProfileMs(row.selfTimeNs)} | ${formatProfileMs(row.totalTimeNs)} | ` +
+          `${formatNanoseconds(row.selfTimeNs)} | ${formatNanoseconds(row.totalTimeNs)} | ` +
           `${formatProfileInteger(row.allocations)} |`,
       );
     });
@@ -1318,7 +1318,7 @@ function writeProfileMarkdown(summary: Test262ProfileSummary, outputPath: string
     rows.slice(0, 20).forEach((row, index) => {
       lines.push(
         `| ${index + 1} | \`${row.key}\` | ${formatProfileInteger(row.profiles)} | ` +
-          `${formatProfileInteger(row.totalOpcodes)} | ${formatProfileMs(row.functionSelfTimeNs)} | ` +
+          `${formatProfileInteger(row.totalOpcodes)} | ${formatNanoseconds(row.functionSelfTimeNs)} | ` +
           `${formatProfileInteger(row.allocations)} |`,
       );
     });
