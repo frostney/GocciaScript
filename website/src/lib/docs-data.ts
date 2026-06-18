@@ -68,13 +68,6 @@ export const DOC_PAGES: DocPage[] = [
     file: "built-ins-data-formats.md",
   },
   {
-    id: "built-ins-sandbox",
-    title: "Sandbox Built-ins",
-    group: "Language",
-    desc: "Import-only fs and goccia modules for GocciaSandboxRunner.",
-    file: "built-ins-sandbox.md",
-  },
-  {
     id: "errors",
     title: "Errors",
     group: "Language",
