@@ -27,6 +27,14 @@ describe("Function.prototype.call", () => {
     expect(typeof Function.prototype.call).toBe("function");
   });
 
+  test("Function.prototype is a callable no-op", () => {
+    expect(typeof Function.prototype).toBe("function");
+    expect(Function.prototype()).toBe(undefined);
+    expect(Function.prototype.call({ ignored: true }, 1, 2)).toBe(undefined);
+    expect(Function.prototype.apply({ ignored: true }, [1, 2])).toBe(undefined);
+    expect(Function.prototype.bind({ ignored: true }, 1)()).toBe(undefined);
+  });
+
   test("has correct name and length", () => {
     expect(Function.prototype.call.name).toBe("call");
     expect(Function.prototype.call.length).toBe(1);

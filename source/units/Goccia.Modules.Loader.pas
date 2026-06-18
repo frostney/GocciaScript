@@ -307,10 +307,14 @@ begin
     FPipelineOptions);
   try
     try
-      BodyResult := FLoader.FEvaluateModuleBody(FProgramNode, FContext,
-        ProgramConsumed);
-      if ProgramConsumed then
-        FProgramNode := nil;
+      ProgramConsumed := False;
+      try
+        BodyResult := FLoader.FEvaluateModuleBody(FProgramNode, FContext,
+          ProgramConsumed);
+      finally
+        if ProgramConsumed then
+          FProgramNode := nil;
+      end;
       if FHasTopLevelAwait then
         Result := BodyResult
       else
@@ -1324,9 +1328,13 @@ begin
             PipelineOptions);
           try
             try
-              FEvaluateModuleBody(ProgramNode, Context, ProgramConsumed);
-              if ProgramConsumed then
-                ProgramNode := nil;
+              ProgramConsumed := False;
+              try
+                FEvaluateModuleBody(ProgramNode, Context, ProgramConsumed);
+              finally
+                if ProgramConsumed then
+                  ProgramNode := nil;
+              end;
             except
               on E: EGocciaBytecodeThrow do
               begin

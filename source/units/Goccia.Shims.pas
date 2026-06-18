@@ -304,34 +304,34 @@ const
         '    const z = Date.#utc(this); const n = toDateInteger(ms);'#10 +
         '    return Date.#setFromParts(this, "UTC", z, z ? z.year : NaN, z ? z.month - 1 : NaN, z ? z.day : NaN, z ? z.hour : NaN, z ? z.minute : NaN, z ? z.second : NaN, n);'#10 +
         '  }'#10 +
-        '  setSeconds(sec: number, ms: number = NaN): number {'#10 +
+        '  setSeconds(sec: number, ms: number): number {'#10 +
         '    Date.#require(this);'#10 +
-        '    const z = Date.#local(this); const s = toDateInteger(sec); const milli = ms === ms ? toDateInteger(ms) : (z ? z.millisecond : NaN);'#10 +
+        '    const z = Date.#local(this); const s = toDateInteger(sec); const milli = arguments.length > 1 ? toDateInteger(ms) : (z ? z.millisecond : NaN);'#10 +
         '    return Date.#setFromParts(this, Temporal.Now.timeZoneId(), z, z ? z.year : NaN, z ? z.month - 1 : NaN, z ? z.day : NaN, z ? z.hour : NaN, z ? z.minute : NaN, s, milli);'#10 +
         '  }'#10 +
-        '  setUTCSeconds(sec: number, ms: number = NaN): number {'#10 +
+        '  setUTCSeconds(sec: number, ms: number): number {'#10 +
         '    Date.#require(this);'#10 +
-        '    const z = Date.#utc(this); const s = toDateInteger(sec); const milli = ms === ms ? toDateInteger(ms) : (z ? z.millisecond : NaN);'#10 +
+        '    const z = Date.#utc(this); const s = toDateInteger(sec); const milli = arguments.length > 1 ? toDateInteger(ms) : (z ? z.millisecond : NaN);'#10 +
         '    return Date.#setFromParts(this, "UTC", z, z ? z.year : NaN, z ? z.month - 1 : NaN, z ? z.day : NaN, z ? z.hour : NaN, z ? z.minute : NaN, s, milli);'#10 +
         '  }'#10 +
-        '  setMinutes(min: number, sec: number = NaN, ms: number = NaN): number {'#10 +
+        '  setMinutes(min: number, sec: number, ms: number): number {'#10 +
         '    Date.#require(this);'#10 +
-        '    const z = Date.#local(this); const m = toDateInteger(min); const s = sec === sec ? toDateInteger(sec) : (z ? z.second : NaN); const milli = ms === ms ? toDateInteger(ms) : (z ? z.millisecond : NaN);'#10 +
+        '    const z = Date.#local(this); const m = toDateInteger(min); const s = arguments.length > 1 ? toDateInteger(sec) : (z ? z.second : NaN); const milli = arguments.length > 2 ? toDateInteger(ms) : (z ? z.millisecond : NaN);'#10 +
         '    return Date.#setFromParts(this, Temporal.Now.timeZoneId(), z, z ? z.year : NaN, z ? z.month - 1 : NaN, z ? z.day : NaN, z ? z.hour : NaN, m, s, milli);'#10 +
         '  }'#10 +
-        '  setUTCMinutes(min: number, sec: number = NaN, ms: number = NaN): number {'#10 +
+        '  setUTCMinutes(min: number, sec: number, ms: number): number {'#10 +
         '    Date.#require(this);'#10 +
-        '    const z = Date.#utc(this); const m = toDateInteger(min); const s = sec === sec ? toDateInteger(sec) : (z ? z.second : NaN); const milli = ms === ms ? toDateInteger(ms) : (z ? z.millisecond : NaN);'#10 +
+        '    const z = Date.#utc(this); const m = toDateInteger(min); const s = arguments.length > 1 ? toDateInteger(sec) : (z ? z.second : NaN); const milli = arguments.length > 2 ? toDateInteger(ms) : (z ? z.millisecond : NaN);'#10 +
         '    return Date.#setFromParts(this, "UTC", z, z ? z.year : NaN, z ? z.month - 1 : NaN, z ? z.day : NaN, z ? z.hour : NaN, m, s, milli);'#10 +
         '  }'#10 +
-        '  setHours(hour: number, min: number = NaN, sec: number = NaN, ms: number = NaN): number {'#10 +
+        '  setHours(hour: number, min: number, sec: number, ms: number): number {'#10 +
         '    Date.#require(this);'#10 +
-        '    const z = Date.#local(this); const h = toDateInteger(hour); const m = min === min ? toDateInteger(min) : (z ? z.minute : NaN); const s = sec === sec ? toDateInteger(sec) : (z ? z.second : NaN); const milli = ms === ms ? toDateInteger(ms) : (z ? z.millisecond : NaN);'#10 +
+        '    const z = Date.#local(this); const h = toDateInteger(hour); const m = arguments.length > 1 ? toDateInteger(min) : (z ? z.minute : NaN); const s = arguments.length > 2 ? toDateInteger(sec) : (z ? z.second : NaN); const milli = arguments.length > 3 ? toDateInteger(ms) : (z ? z.millisecond : NaN);'#10 +
         '    return Date.#setFromParts(this, Temporal.Now.timeZoneId(), z, z ? z.year : NaN, z ? z.month - 1 : NaN, z ? z.day : NaN, h, m, s, milli);'#10 +
         '  }'#10 +
-        '  setUTCHours(hour: number, min: number = NaN, sec: number = NaN, ms: number = NaN): number {'#10 +
+        '  setUTCHours(hour: number, min: number, sec: number, ms: number): number {'#10 +
         '    Date.#require(this);'#10 +
-        '    const z = Date.#utc(this); const h = toDateInteger(hour); const m = min === min ? toDateInteger(min) : (z ? z.minute : NaN); const s = sec === sec ? toDateInteger(sec) : (z ? z.second : NaN); const milli = ms === ms ? toDateInteger(ms) : (z ? z.millisecond : NaN);'#10 +
+        '    const z = Date.#utc(this); const h = toDateInteger(hour); const m = arguments.length > 1 ? toDateInteger(min) : (z ? z.minute : NaN); const s = arguments.length > 2 ? toDateInteger(sec) : (z ? z.second : NaN); const milli = arguments.length > 3 ? toDateInteger(ms) : (z ? z.millisecond : NaN);'#10 +
         '    return Date.#setFromParts(this, "UTC", z, z ? z.year : NaN, z ? z.month - 1 : NaN, z ? z.day : NaN, h, m, s, milli);'#10 +
         '  }'#10 +
         '  setDate(day: number): number {'#10 +
@@ -350,24 +350,24 @@ const
         '    try { return __GocciaDateSetSlot(this, Date.#clip(z.add({ days: Math.trunc(d) - z.day }).epochMilliseconds)); }'#10 +
         '    catch (e) { return __GocciaDateSetSlot(this, NaN); }'#10 +
         '  }'#10 +
-        '  setMonth(month: number, day: number = NaN): number {'#10 +
+        '  setMonth(month: number, day: number): number {'#10 +
         '    Date.#require(this);'#10 +
-        '    const z = Date.#local(this); const m = toDateInteger(month); const d = day === day ? toDateInteger(day) : (z ? z.day : NaN);'#10 +
+        '    const z = Date.#local(this); const m = toDateInteger(month); const d = arguments.length > 1 ? toDateInteger(day) : (z ? z.day : NaN);'#10 +
         '    return Date.#setFromParts(this, Temporal.Now.timeZoneId(), z, z ? z.year : NaN, m, d, z ? z.hour : NaN, z ? z.minute : NaN, z ? z.second : NaN, z ? z.millisecond : NaN);'#10 +
         '  }'#10 +
-        '  setUTCMonth(month: number, day: number = NaN): number {'#10 +
+        '  setUTCMonth(month: number, day: number): number {'#10 +
         '    Date.#require(this);'#10 +
-        '    const z = Date.#utc(this); const m = toDateInteger(month); const d = day === day ? toDateInteger(day) : (z ? z.day : NaN);'#10 +
+        '    const z = Date.#utc(this); const m = toDateInteger(month); const d = arguments.length > 1 ? toDateInteger(day) : (z ? z.day : NaN);'#10 +
         '    return Date.#setFromParts(this, "UTC", z, z ? z.year : NaN, m, d, z ? z.hour : NaN, z ? z.minute : NaN, z ? z.second : NaN, z ? z.millisecond : NaN);'#10 +
         '  }'#10 +
-        '  setFullYear(year: number, month: number = NaN, day: number = NaN): number {'#10 +
+        '  setFullYear(year: number, month: number, day: number): number {'#10 +
         '    Date.#require(this);'#10 +
-        '    const z = Date.#local(this); const y = toDateInteger(year); const m = month === month ? toDateInteger(month) : (z ? z.month - 1 : 0); const d = day === day ? toDateInteger(day) : (z ? z.day : 1);'#10 +
+        '    const z = Date.#local(this); const y = toDateInteger(year); const m = arguments.length > 1 ? toDateInteger(month) : (z ? z.month - 1 : 0); const d = arguments.length > 2 ? toDateInteger(day) : (z ? z.day : 1);'#10 +
         '    return Date.#setFromParts(this, Temporal.Now.timeZoneId(), z || true, y, m, d, z ? z.hour : 0, z ? z.minute : 0, z ? z.second : 0, z ? z.millisecond : 0);'#10 +
         '  }'#10 +
-        '  setUTCFullYear(year: number, month: number = NaN, day: number = NaN): number {'#10 +
+        '  setUTCFullYear(year: number, month: number, day: number): number {'#10 +
         '    Date.#require(this);'#10 +
-        '    const z = Date.#utc(this); const y = toDateInteger(year); const m = month === month ? toDateInteger(month) : (z ? z.month - 1 : 0); const d = day === day ? toDateInteger(day) : (z ? z.day : 1);'#10 +
+        '    const z = Date.#utc(this); const y = toDateInteger(year); const m = arguments.length > 1 ? toDateInteger(month) : (z ? z.month - 1 : 0); const d = arguments.length > 2 ? toDateInteger(day) : (z ? z.day : 1);'#10 +
         '    return Date.#setFromParts(this, "UTC", z || true, y, m, d, z ? z.hour : 0, z ? z.minute : 0, z ? z.second : 0, z ? z.millisecond : 0);'#10 +
         '  }'#10 +
         '  getTimezoneOffset(): number { const z = Date.#local(this); return z ? -(z.offsetNanoseconds / 60000000000) : NaN; }'#10 +
@@ -621,6 +621,9 @@ begin
       // ES2026 §16.2.1.6.4 InitializeEnvironment: a Module
       // Environment Record's [[ThisValue]] is undefined.
       ModuleScope.ThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+      // Built-in shims may need argument-count presence checks without
+      // enabling the legacy arguments object for user code.
+      ModuleScope.ArgumentsObjectEnabled := True;
       Context := AInterpreter.CreateEvaluationContext;
       Context.Scope := ModuleScope;
       for I := 0 to ProgramNode.Body.Count - 1 do

@@ -50,4 +50,100 @@ describe("Proxy getOwnPropertyDescriptor trap", () => {
     expect(receivedTarget).toBe(target);
     expect(receivedProp).toBe("foo");
   });
+
+  test("rejects a descriptor for a missing property on a non-extensible target", () => {
+    const target = {};
+    Object.preventExtensions(target);
+
+    const proxy = new Proxy(target, {
+      getOwnPropertyDescriptor: () => ({
+        value: 1,
+        writable: true,
+        enumerable: true,
+        configurable: true,
+      }),
+    });
+
+    expect(() => Object.getOwnPropertyDescriptor(proxy, "x")).toThrow(TypeError);
+  });
+
+  test("rejects incompatible descriptors for non-configurable target properties", () => {
+    const target = {};
+    Object.defineProperty(target, "x", {
+      value: 1,
+      writable: false,
+      enumerable: false,
+      configurable: false,
+    });
+
+    const proxy = new Proxy(target, {
+      getOwnPropertyDescriptor: () => ({
+        value: 2,
+        writable: false,
+        enumerable: false,
+        configurable: false,
+      }),
+    });
+
+    expect(() => Object.getOwnPropertyDescriptor(proxy, "x")).toThrow(TypeError);
+  });
+
+  test("rejects non-configurable results for configurable target properties", () => {
+    const target = {};
+    Object.defineProperty(target, "x", {
+      value: 1,
+      writable: true,
+      enumerable: false,
+      configurable: true,
+    });
+
+    const proxy = new Proxy(target, {
+      getOwnPropertyDescriptor: () => ({
+        value: 1,
+        writable: true,
+        enumerable: false,
+        configurable: false,
+      }),
+    });
+
+    expect(() => Object.getOwnPropertyDescriptor(proxy, "x")).toThrow(TypeError);
+  });
+
+  test("rejects non-configurable non-writable results for writable target properties", () => {
+    const target = {};
+    Object.defineProperty(target, "x", {
+      value: 1,
+      writable: true,
+      enumerable: false,
+      configurable: false,
+    });
+
+    const proxy = new Proxy(target, {
+      getOwnPropertyDescriptor: () => ({
+        value: 1,
+        writable: false,
+        enumerable: false,
+        configurable: false,
+      }),
+    });
+
+    expect(() => Object.getOwnPropertyDescriptor(proxy, "x")).toThrow(TypeError);
+  });
+
+  test("applies descriptor invariants to symbol properties", () => {
+    const key = Symbol("x");
+    const target = {};
+    Object.preventExtensions(target);
+
+    const proxy = new Proxy(target, {
+      getOwnPropertyDescriptor: () => ({
+        value: 1,
+        writable: true,
+        enumerable: true,
+        configurable: true,
+      }),
+    });
+
+    expect(() => Object.getOwnPropertyDescriptor(proxy, key)).toThrow(TypeError);
+  });
 });

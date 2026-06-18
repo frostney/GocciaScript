@@ -74,6 +74,21 @@ console.log("Malformed literal class accessors...");
   }
 }
 
+// -- Accessor properties are invalid destructuring assignment targets -----------
+
+console.log("Accessor properties are invalid destructuring assignment targets...");
+{
+  for (const [source, desc] of [
+    ["let obj = {}; ({ get x() { return 1; } } = obj);\n", "getter destructuring target"],
+    ["let obj = {}; ({ set x(value) {} } = obj);\n", "setter destructuring target"],
+    ["let obj = {}; ({ get ['x']() { return 1; } } = obj);\n", "computed getter destructuring target"],
+    ["let obj = {}; ({ set ['x'](value) {} } = obj);\n", "computed setter destructuring target"],
+  ] as const) {
+    assertSyntaxError(source, desc);
+    assertSyntaxError(source, `${desc} (bytecode)`, ["--mode=bytecode"]);
+  }
+}
+
 // -- Strict-mode legacy octal literal rejection ---------------------------------
 
 console.log("Strict-mode legacy octal literal rejection...");

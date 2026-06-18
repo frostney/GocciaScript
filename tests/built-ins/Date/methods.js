@@ -104,6 +104,64 @@ describe("Date methods", () => {
     expect(value.getUTCDate()).toBe(2);
   });
 
+  test("multi-argument setters distinguish omitted fields from explicit undefined", () => {
+    const base = Date.UTC(2024, 0, 2, 3, 4, 5, 6);
+
+    const localSeconds = new Date(base);
+    const localMilliseconds = localSeconds.getMilliseconds();
+    expect(localSeconds.setSeconds(10)).toBe(localSeconds.getTime());
+    expect(localSeconds.getSeconds()).toBe(10);
+    expect(localSeconds.getMilliseconds()).toBe(localMilliseconds);
+
+    const explicitLocalSeconds = new Date(base);
+    expect(Number.isNaN(explicitLocalSeconds.setSeconds(10, undefined))).toBe(true);
+    expect(Number.isNaN(explicitLocalSeconds.getTime())).toBe(true);
+
+    const utcSeconds = new Date(base);
+    expect(utcSeconds.setUTCSeconds(10)).toBe(utcSeconds.getTime());
+    expect(utcSeconds.getUTCSeconds()).toBe(10);
+    expect(utcSeconds.getUTCMilliseconds()).toBe(6);
+
+    const explicitUTCSeconds = new Date(base);
+    expect(Number.isNaN(explicitUTCSeconds.setUTCSeconds(10, undefined))).toBe(true);
+
+    const utcMinutes = new Date(base);
+    expect(utcMinutes.setUTCMinutes(20)).toBe(utcMinutes.getTime());
+    expect(utcMinutes.getUTCMinutes()).toBe(20);
+    expect(utcMinutes.getUTCSeconds()).toBe(5);
+    expect(utcMinutes.getUTCMilliseconds()).toBe(6);
+
+    const explicitUTCMinutes = new Date(base);
+    expect(Number.isNaN(explicitUTCMinutes.setUTCMinutes(20, undefined))).toBe(true);
+
+    const utcHours = new Date(base);
+    expect(utcHours.setUTCHours(9)).toBe(utcHours.getTime());
+    expect(utcHours.getUTCHours()).toBe(9);
+    expect(utcHours.getUTCMinutes()).toBe(4);
+    expect(utcHours.getUTCSeconds()).toBe(5);
+    expect(utcHours.getUTCMilliseconds()).toBe(6);
+
+    const explicitUTCHours = new Date(base);
+    expect(Number.isNaN(explicitUTCHours.setUTCHours(9, undefined))).toBe(true);
+
+    const utcMonth = new Date(base);
+    expect(utcMonth.setUTCMonth(6)).toBe(utcMonth.getTime());
+    expect(utcMonth.getUTCMonth()).toBe(6);
+    expect(utcMonth.getUTCDate()).toBe(2);
+
+    const explicitUTCMonth = new Date(base);
+    expect(Number.isNaN(explicitUTCMonth.setUTCMonth(6, undefined))).toBe(true);
+
+    const utcYear = new Date(base);
+    expect(utcYear.setUTCFullYear(2025)).toBe(utcYear.getTime());
+    expect(utcYear.getUTCFullYear()).toBe(2025);
+    expect(utcYear.getUTCMonth()).toBe(0);
+    expect(utcYear.getUTCDate()).toBe(2);
+
+    const explicitUTCYear = new Date(base);
+    expect(Number.isNaN(explicitUTCYear.setUTCFullYear(2025, undefined))).toBe(true);
+  });
+
   test("prototype methods reject nullish receivers", () => {
     const methods = [
       "getTime",

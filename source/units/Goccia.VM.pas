@@ -11785,10 +11785,8 @@ begin
     Exit(TGocciaProxyValue(ACallee).ApplyTrap(AArguments, AThisValue));
   if ACallee is TGocciaBytecodeFunctionValue then
     Exit(TGocciaBytecodeFunctionValue(ACallee).Call(AArguments, AThisValue));
-  if ACallee is TGocciaFunctionBase then
-    Exit(TGocciaFunctionBase(ACallee).Call(AArguments, AThisValue));
-  if ACallee is TGocciaClassValue then
-    Exit(TGocciaClassValue(ACallee).Call(AArguments, AThisValue));
+  if Assigned(ACallee) and ACallee.IsCallable then
+    Exit(DispatchCall(ACallee, AArguments, AThisValue));
   if Assigned(ACallee) then
     CalleeDesc := ACallee.TypeName
   else

@@ -308,6 +308,8 @@ var
   PreviousContinuation: TGocciaGeneratorContinuation;
   PreviousRealm: TGocciaRealm;
   RealmSwitched: Boolean;
+  GC: TGarbageCollector;
+  BodyScopeRooted: Boolean;
   function EvaluateParameterDefault(
     const AExpression: TGocciaExpression): TGocciaValue;
   var
@@ -342,6 +344,8 @@ var
     Result := CreateUnmappedArgumentsObject(AArguments);
   end;
 begin
+  GC := TGarbageCollector.Instance;
+  BodyScopeRooted := False;
   PreviousRealm := CurrentRealm;
   RealmSwitched := Assigned(CreationRealm) and (CreationRealm <> PreviousRealm);
   if RealmSwitched then
@@ -480,7 +484,14 @@ begin
 
   BodyScope := ACallScope;
   if HasParamExpressions then
+  begin
     BodyScope := ACallScope.CreateChild(skFunction, FName + ':body');
+    if Assigned(GC) then
+    begin
+      GC.PushActiveRoot(BodyScope);
+      BodyScopeRooted := True;
+    end;
+  end;
 
   Context.Scope := BodyScope;
   if Assigned(Context.OnError) and not Assigned(BodyScope.OnError) then
@@ -564,6 +575,8 @@ begin
       ThrowSyntaxError(SErrorIllegalContinueStatement, SSuggestExpressionExpected);
   end;
   finally
+    if BodyScopeRooted and Assigned(GC) then
+      GC.PopActiveRoot;
     RestoreCurrentGeneratorContinuation(PreviousContinuation);
     if RealmSwitched then
       SetCurrentRealm(PreviousRealm);

@@ -4022,18 +4022,8 @@ begin
     try
       if Assigned(TGocciaCallStack.Instance) then
         CheckStackDepth(TGocciaCallStack.Instance.Count);
-      if Callee is TGocciaProxyValue then
-        Result := TGocciaProxyValue(Callee).ApplyTrap(Arguments, ThisValue)
-      else if Callee is TGocciaNativeFunctionValue then
-        Result := TGocciaNativeFunctionValue(Callee).Call(Arguments, ThisValue)
-      else if Callee is TGocciaFunctionValue then
-        Result := TGocciaFunctionValue(Callee).Call(Arguments, ThisValue)
-      else if Callee is TGocciaBoundFunctionValue then
-        Result := TGocciaBoundFunctionValue(Callee).Call(Arguments, ThisValue)
-      else if Callee is TGocciaClassValue then
-        Result := TGocciaClassValue(Callee).Call(Arguments, ThisValue)
-      else if Callee is TGocciaFunctionBase then
-        Result := TGocciaFunctionBase(Callee).Call(Arguments, ThisValue)
+      if Assigned(Callee) and Callee.IsCallable then
+        Result := DispatchCall(Callee, Arguments, ThisValue)
       else
       begin
         MemberExpr := nil;
@@ -10597,16 +10587,8 @@ begin
     try
       if Assigned(TGocciaCallStack.Instance) then
         CheckStackDepth(TGocciaCallStack.Instance.Count);
-      if Callee is TGocciaProxyValue then
-        Result := TGocciaProxyValue(Callee).ApplyTrap(Arguments, ThisValue)
-      else if Callee is TGocciaNativeFunctionValue then
-        Result := TGocciaNativeFunctionValue(Callee).Call(Arguments, ThisValue)
-      else if Callee is TGocciaFunctionValue then
-        Result := TGocciaFunctionValue(Callee).Call(Arguments, ThisValue)
-      else if Callee is TGocciaBoundFunctionValue then
-        Result := TGocciaBoundFunctionValue(Callee).Call(Arguments, ThisValue)
-      else if Callee is TGocciaFunctionBase then
-        Result := TGocciaFunctionBase(Callee).Call(Arguments, ThisValue)
+      if Assigned(Callee) and Callee.IsCallable then
+        Result := DispatchCall(Callee, Arguments, ThisValue)
       else
         ThrowTypeError(
           Format(SErrorValueNotFunction, [Callee.TypeName]),

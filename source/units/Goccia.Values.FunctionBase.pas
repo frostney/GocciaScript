@@ -18,6 +18,8 @@ type
   TGocciaFunctionSharedPrototype = class(TGocciaObjectValue)
   public
     constructor Create;
+    function Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function IsCallable: Boolean; override;
     function TypeOf: string; override;
 
     // Function prototype methods that are available on all functions
@@ -334,7 +336,7 @@ end;
 
 function IsCallableForHasInstance(const AValue: TGocciaValue): Boolean; inline;
 begin
-  Result := AValue.IsCallable or (AValue is TGocciaFunctionSharedPrototype);
+  Result := AValue.IsCallable;
 end;
 
 function GetPrototypeOfObject(const AObject: TGocciaObjectValue): TGocciaValue;
@@ -836,6 +838,19 @@ begin
   Result := FUNCTION_TYPE_NAME;
 end;
 
+function TGocciaFunctionSharedPrototype.IsCallable: Boolean;
+begin
+  Result := True;
+end;
+
+// ES2026 §20.2.2.1 Function.prototype
+function TGocciaFunctionSharedPrototype.Call(
+  const AArguments: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
 function TGocciaFunctionSharedPrototype.RestrictedFunctionPropertyThrow(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
@@ -844,13 +859,15 @@ begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
-// Dispatch a call to a TGocciaFunctionBase, TGocciaClassValue, or callable Proxy.
+// Dispatch a call to a function object, class constructor, or callable Proxy.
 function DispatchCall(const ACallee: TGocciaValue;
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
   if ACallee is TGocciaFunctionBase then
     Result := TGocciaFunctionBase(ACallee).Call(AArgs, AThisValue)
+  else if ACallee is TGocciaFunctionSharedPrototype then
+    Result := TGocciaFunctionSharedPrototype(ACallee).Call(AArgs, AThisValue)
   else if ACallee is TGocciaClassValue then
     Result := TGocciaClassValue(ACallee).Call(AArgs, AThisValue)
   else if (ACallee is TGocciaProxyValue) and ACallee.IsCallable then
@@ -1240,13 +1257,8 @@ begin
     for I := 0 to AArguments.Length - 1 do
       CombinedArgs.Add(AArguments.GetElement(I));
 
-    // Call the original function with the bound 'this' and combined arguments
-    if FOriginalFunction is TGocciaFunctionBase then
-      Result := TGocciaFunctionBase(FOriginalFunction).Call(CombinedArgs, FBoundThis)
-    else if FOriginalFunction is TGocciaClassValue then
-      Result := TGocciaClassValue(FOriginalFunction).Call(CombinedArgs, FBoundThis)
-    else if (FOriginalFunction is TGocciaProxyValue) and FOriginalFunction.IsCallable then
-      Result := TGocciaProxyValue(FOriginalFunction).ApplyTrap(CombinedArgs, FBoundThis)
+    if Assigned(FOriginalFunction) and FOriginalFunction.IsCallable then
+      Result := DispatchCall(FOriginalFunction, CombinedArgs, FBoundThis)
     else
       raise TGocciaError.Create('BoundFunction.Call: Original function is not callable', 0, 0, '', nil);
   finally
@@ -1256,13 +1268,22 @@ end;
 
 function TGocciaBoundFunctionValue.CallNoArgs(
   const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Args: TGocciaArgumentsCollection;
 begin
   if not FOriginalFunction.IsCallable then
     raise TGocciaError.Create('BoundFunction.Call: Original function is not callable', 0, 0, '', nil);
 
   // Fast path for TGocciaFunctionBase targets only
   if not (FOriginalFunction is TGocciaFunctionBase) then
-    Exit(Call(TGocciaArgumentsCollection.Create, AThisValue));
+  begin
+    Args := TGocciaArgumentsCollection.Create;
+    try
+      Exit(Call(Args, AThisValue));
+    finally
+      Args.Free;
+    end;
+  end;
 
   case FBoundArgCount of
     0:

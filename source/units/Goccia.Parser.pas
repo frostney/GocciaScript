@@ -8163,6 +8163,10 @@ begin
               Properties.Add(Prop);
             end;
           end;
+          pstGetter, pstSetter, pstComputedGetter, pstComputedSetter:
+            raise TGocciaSyntaxError.Create('Invalid destructuring target',
+              AExpr.Line, AExpr.Column, FFileName, FSourceLines,
+              SSuggestDestructuringInvalidTarget);
         end;
       end;
     end

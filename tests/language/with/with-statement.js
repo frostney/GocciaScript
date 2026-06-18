@@ -180,6 +180,22 @@ describe("with statement", () => {
     expect(result).toBe(43);
   });
 
+  test("optional calls to object-environment methods keep the object as this", () => {
+    const obj = {
+      x: 7,
+      get() {
+        return this.x;
+      }
+    };
+    let result = 0;
+
+    with (obj) {
+      result = get?.();
+    }
+
+    expect(result).toBe(7);
+  });
+
   test("compound assignments and updates target the object binding", () => {
     const obj = { x: 1 };
 

@@ -3528,6 +3528,7 @@ var
   ObjReg, BaseReg, ArgsReg, KeyReg: UInt8;
   MemberExpr: TGocciaMemberExpression;
   PrivateExpr: TGocciaPrivateMemberExpression;
+  Ident: TGocciaIdentifierExpression;
   SequenceExpr: TGocciaSequenceExpression;
   PropIdx: UInt16;
   UseSpread: Boolean;
@@ -3577,6 +3578,14 @@ begin
   if ArgCount > High(UInt8) then
     raise Exception.Create('Compiler error: too many arguments (>255)');
   UseSpread := HasSpreadArgument(AExpr);
+
+  if AExpr.Callee is TGocciaIdentifierExpression then
+  begin
+    Ident := TGocciaIdentifierExpression(AExpr.Callee);
+    if ShouldTryWithBinding(ACtx.Scope, Ident.Name) then
+      Exit(TryCompileWithIdentifierCall(ACtx, AExpr, ADest, ArgCount,
+        UseSpread));
+  end;
 
   if AExpr.Callee is TGocciaMemberExpression then
   begin
