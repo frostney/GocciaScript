@@ -200,16 +200,32 @@ end;
 procedure TGocciaAsyncFunctionEvaluation.AttachAwait(
   const ASuspension: EGocciaAsyncAwaitSuspend);
 var
+  GC: TGarbageCollector;
   FulfillHandler: TGocciaNativeFunctionValue;
   RejectHandler: TGocciaNativeFunctionValue;
 begin
+  GC := TGarbageCollector.Instance;
   FulfillHandler := TGocciaNativeFunctionValue.CreateWithoutPrototype(
     FulfillAwait, '<async-await-fulfill>', 1);
-  FulfillHandler.CapturedRoot := Self;
-  RejectHandler := TGocciaNativeFunctionValue.CreateWithoutPrototype(
-    RejectAwait, '<async-await-reject>', 1);
-  RejectHandler.CapturedRoot := Self;
-  ASuspension.Promise.InvokeThen(FulfillHandler, RejectHandler);
+  if Assigned(GC) then
+    GC.AddTempRoot(FulfillHandler);
+  try
+    FulfillHandler.CapturedRoot := Self;
+    RejectHandler := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+      RejectAwait, '<async-await-reject>', 1);
+    if Assigned(GC) then
+      GC.AddTempRoot(RejectHandler);
+    try
+      RejectHandler.CapturedRoot := Self;
+      ASuspension.Promise.InvokeThen(FulfillHandler, RejectHandler);
+    finally
+      if Assigned(GC) then
+        GC.RemoveTempRoot(RejectHandler);
+    end;
+  finally
+    if Assigned(GC) then
+      GC.RemoveTempRoot(FulfillHandler);
+  end;
 end;
 
 procedure TGocciaAsyncFunctionEvaluation.RejectWithException(
@@ -1061,8 +1077,15 @@ begin
     on E: Exception do
     begin
       RejectedPromise := TGocciaPromiseValue.Create;
-      RejectAsyncPromiseWithException(RejectedPromise, E);
-      Result := RejectedPromise;
+      if Assigned(GC) then
+        GC.AddTempRoot(RejectedPromise);
+      try
+        RejectAsyncPromiseWithException(RejectedPromise, E);
+        Result := RejectedPromise;
+      finally
+        if Assigned(GC) then
+          GC.RemoveTempRoot(RejectedPromise);
+      end;
     end;
   end;
 
