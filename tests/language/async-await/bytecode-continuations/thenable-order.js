@@ -1,13 +1,9 @@
 /*---
-description: Bytecode async-await continuation scheduling regression tests
+description: Async-await continuation scheduling regression tests
 features: [async-await]
 ---*/
 
-const __bytecodeMode =
-  typeof __gocciaTestRunnerMode !== "undefined" &&
-  __gocciaTestRunnerMode === "bytecode";
-
-test.runIf(__bytecodeMode)(
+test(
   "await on thenables resumes after already queued promise reactions",
   async () => {
     const actual = [];

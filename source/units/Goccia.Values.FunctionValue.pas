@@ -41,6 +41,8 @@ type
     function BuildParameterEvalVarDeclarationRejectNames(
       const AIncludeArgumentsObject: Boolean): TGocciaEvalRejectNameArray;
     function ExecuteBody(const ACallScope: TGocciaScope; const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function CallAsync(const AArguments: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
     function CallWithNewTarget(const AArguments: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue; const ANewTarget: TGocciaValue): TGocciaValue;
   public
@@ -100,8 +102,10 @@ uses
   Goccia.AST.Statements,
   Goccia.Bytecode.Chunk,
   Goccia.Constants,
+  Goccia.Constants.ErrorNames,
   Goccia.ControlFlow,
   Goccia.Coverage,
+  Goccia.Error,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.Evaluator,
@@ -111,8 +115,185 @@ uses
   Goccia.Types.Enforcement,
   Goccia.Values.ArgumentsObjectValue,
   Goccia.Values.ArrayValue,
+  Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
+  Goccia.Values.NativeFunction,
+  Goccia.Values.ObjectValue,
+  Goccia.Values.PromiseValue,
   Goccia.Values.ToObject;
+
+type
+  TGocciaAsyncFunctionEvaluation = class(TGocciaObjectValue)
+  private
+    FFunction: TGocciaFunctionValue;
+    FPromise: TGocciaPromiseValue;
+    FContinuation: TGocciaGeneratorContinuation;
+    FBodyStatements: TObjectList<TGocciaASTNode>;
+    FSyntheticReturn: TGocciaReturnStatement;
+    FCallScope: TGocciaScope;
+    FRealm: TGocciaRealm;
+    FSettled: Boolean;
+    procedure AttachAwait(const ASuspension: EGocciaAsyncAwaitSuspend);
+    procedure RejectWithException(const AException: Exception);
+    procedure Resume(const AKind: TGocciaGeneratorResumeKind;
+      const AValue: TGocciaValue);
+  public
+    constructor Create(const AFunction: TGocciaFunctionValue;
+      const ABodyStatements: TObjectList<TGocciaASTNode>;
+      const ASyntheticReturn: TGocciaReturnStatement;
+      const ACallScope: TGocciaScope;
+      const AContext: TGocciaEvaluationContext);
+    destructor Destroy; override;
+    function Start: TGocciaPromiseValue;
+    function FulfillAwait(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function RejectAwait(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    procedure MarkReferences; override;
+  end;
+
+procedure RejectAsyncPromiseWithException(const APromise: TGocciaPromiseValue;
+  const AException: Exception);
+begin
+  if AException is TGocciaThrowValue then
+    APromise.Reject(TGocciaThrowValue(AException).Value)
+  else if AException is TGocciaTypeError then
+    APromise.Reject(CreateErrorObject(TYPE_ERROR_NAME, AException.Message))
+  else if AException is TGocciaReferenceError then
+    APromise.Reject(CreateErrorObject(REFERENCE_ERROR_NAME, AException.Message))
+  else if AException is TGocciaSyntaxError then
+    APromise.Reject(CreateErrorObject(SYNTAX_ERROR_NAME, AException.Message))
+  else if AException is TGocciaRuntimeError then
+    APromise.Reject(CreateErrorObject(ERROR_NAME, AException.Message))
+  else
+    raise AException;
+end;
+
+{ TGocciaAsyncFunctionEvaluation }
+
+constructor TGocciaAsyncFunctionEvaluation.Create(
+  const AFunction: TGocciaFunctionValue;
+  const ABodyStatements: TObjectList<TGocciaASTNode>;
+  const ASyntheticReturn: TGocciaReturnStatement;
+  const ACallScope: TGocciaScope;
+  const AContext: TGocciaEvaluationContext);
+begin
+  inherited Create(nil);
+  FFunction := AFunction;
+  FPromise := TGocciaPromiseValue.Create;
+  FBodyStatements := ABodyStatements;
+  FSyntheticReturn := ASyntheticReturn;
+  FCallScope := ACallScope;
+  FRealm := AContext.Realm;
+  FContinuation := TGocciaGeneratorContinuation.Create(
+    FBodyStatements, ACallScope, AContext);
+end;
+
+destructor TGocciaAsyncFunctionEvaluation.Destroy;
+begin
+  FContinuation.Free;
+  FSyntheticReturn.Free;
+  FBodyStatements.Free;
+  inherited;
+end;
+
+procedure TGocciaAsyncFunctionEvaluation.AttachAwait(
+  const ASuspension: EGocciaAsyncAwaitSuspend);
+var
+  FulfillHandler: TGocciaNativeFunctionValue;
+  RejectHandler: TGocciaNativeFunctionValue;
+begin
+  FulfillHandler := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+    FulfillAwait, '<async-await-fulfill>', 1);
+  FulfillHandler.CapturedRoot := Self;
+  RejectHandler := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+    RejectAwait, '<async-await-reject>', 1);
+  RejectHandler.CapturedRoot := Self;
+  ASuspension.Promise.InvokeThen(FulfillHandler, RejectHandler);
+end;
+
+procedure TGocciaAsyncFunctionEvaluation.RejectWithException(
+  const AException: Exception);
+begin
+  if FSettled then
+    Exit;
+  FSettled := True;
+  RejectAsyncPromiseWithException(FPromise, AException);
+end;
+
+procedure TGocciaAsyncFunctionEvaluation.Resume(
+  const AKind: TGocciaGeneratorResumeKind; const AValue: TGocciaValue);
+var
+  Done: Boolean;
+  ResumeValue: TGocciaValue;
+  PreviousRealm: TGocciaRealm;
+  RealmSwitched: Boolean;
+begin
+  if FSettled then
+    Exit;
+
+  PreviousRealm := CurrentRealm;
+  RealmSwitched := Assigned(FRealm) and (FRealm <> PreviousRealm);
+  if RealmSwitched then
+    SetCurrentRealm(FRealm);
+  PushCurrentFunctionExecutionContext(FCallScope, FFunction);
+  PushAsyncAwaitSuspension;
+  try
+    try
+      ResumeValue := FContinuation.Resume(AKind, AValue, Done);
+      if Done then
+      begin
+        FSettled := True;
+        FPromise.Resolve(ResumeValue);
+      end;
+    except
+      on E: EGocciaAsyncAwaitSuspend do
+        AttachAwait(E);
+      on E: Exception do
+        RejectWithException(E);
+    end;
+  finally
+    PopAsyncAwaitSuspension;
+    PopCurrentFunctionExecutionContext;
+    if RealmSwitched then
+      SetCurrentRealm(PreviousRealm);
+  end;
+end;
+
+function TGocciaAsyncFunctionEvaluation.Start: TGocciaPromiseValue;
+begin
+  Resume(grkNext, TGocciaUndefinedLiteralValue.UndefinedValue);
+  Result := FPromise;
+end;
+
+function TGocciaAsyncFunctionEvaluation.FulfillAwait(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Resume(grkNext, AArgs.GetElement(0));
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TGocciaAsyncFunctionEvaluation.RejectAwait(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Resume(grkThrow, AArgs.GetElement(0));
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+procedure TGocciaAsyncFunctionEvaluation.MarkReferences;
+begin
+  if GCMarked then
+    Exit;
+  inherited;
+  if Assigned(FFunction) then
+    FFunction.MarkReferences;
+  if Assigned(FPromise) then
+    FPromise.MarkReferences;
+  if Assigned(FContinuation) then
+    FContinuation.MarkReferences;
+end;
 
 { TGocciaFunctionValue }
 
@@ -580,6 +761,330 @@ begin
     RestoreCurrentGeneratorContinuation(PreviousContinuation);
     if RealmSwitched then
       SetCurrentRealm(PreviousRealm);
+  end;
+end;
+
+function TGocciaFunctionValue.CallAsync(
+  const AArguments: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  I, J: Integer;
+  CompatibilityNonStrictMode: Boolean;
+  ArgumentsObjectEnabled: Boolean;
+  EvalRejectNames, SavedEvalRejectNames: TGocciaEvalRejectNameArray;
+  ReturnValue: TGocciaValue;
+  Context: TGocciaEvaluationContext;
+  ParamTypeHint: TGocciaLocalType;
+  ParameterNames: array of string;
+  CallScope: TGocciaScope;
+  BodyScope: TGocciaScope;
+  HasParamExpressions: Boolean;
+  PreviousContinuation: TGocciaGeneratorContinuation;
+  PreviousRealm: TGocciaRealm;
+  RealmSwitched: Boolean;
+  GC: TGarbageCollector;
+  BodyScopeRooted: Boolean;
+  SelfRooted: Boolean;
+  CallScopeRooted: Boolean;
+  FunctionContextPushed: Boolean;
+  AsyncEvaluationRooted: Boolean;
+  AsyncEvaluation: TGocciaAsyncFunctionEvaluation;
+  AsyncBodyStatements: TObjectList<TGocciaASTNode>;
+  SyntheticReturn: TGocciaReturnStatement;
+  RejectedPromise: TGocciaPromiseValue;
+  function EvaluateParameterDefault(
+    const AExpression: TGocciaExpression): TGocciaValue;
+  var
+    SavedRejectArgumentsVarDeclaration: Boolean;
+  begin
+    SavedRejectArgumentsVarDeclaration :=
+      Context.RejectArgumentsVarDeclarationInEval;
+    SavedEvalRejectNames := Context.RejectVarDeclarationNamesInEval;
+    Context.RejectArgumentsVarDeclarationInEval :=
+      ArgumentsObjectEnabled and CreatesArgumentsObject;
+    Context.RejectVarDeclarationNamesInEval := EvalRejectNames;
+    try
+      Result := EvaluateExpression(AExpression, Context);
+    finally
+      Context.RejectArgumentsVarDeclarationInEval :=
+        SavedRejectArgumentsVarDeclaration;
+      Context.RejectVarDeclarationNamesInEval := SavedEvalRejectNames;
+    end;
+  end;
+  function CreateArgumentsObjectForCall: TGocciaValue;
+  var
+    ParameterIndex: Integer;
+  begin
+    if Context.NonStrictMode and FIsSimpleParams then
+    begin
+      SetLength(ParameterNames, Length(FParameters));
+      for ParameterIndex := 0 to High(FParameters) do
+        ParameterNames[ParameterIndex] := FParameters[ParameterIndex].Name;
+      Exit(CreateMappedArgumentsObject(AArguments, ParameterNames,
+        CallScope, Self));
+    end;
+    Result := CreateUnmappedArgumentsObject(AArguments);
+  end;
+begin
+  GC := TGarbageCollector.Instance;
+  BodyScopeRooted := False;
+  SelfRooted := False;
+  CallScopeRooted := False;
+  FunctionContextPushed := False;
+  AsyncEvaluationRooted := False;
+  AsyncEvaluation := nil;
+  AsyncBodyStatements := nil;
+  SyntheticReturn := nil;
+  CallScope := nil;
+  PreviousContinuation := nil;
+  PreviousRealm := CurrentRealm;
+  RealmSwitched := False;
+
+  try
+  try
+    if Assigned(GC) then
+    begin
+      GC.PushActiveRoot(Self);
+      SelfRooted := True;
+    end;
+
+    CallScope := CreateCallScope;
+    if Assigned(GC) then
+    begin
+      GC.PushActiveRoot(CallScope);
+      CallScopeRooted := True;
+    end;
+
+    PushCurrentFunctionExecutionContext(CallScope, Self);
+    FunctionContextPushed := True;
+
+    RealmSwitched := Assigned(CreationRealm) and
+      (CreationRealm <> PreviousRealm);
+    if RealmSwitched then
+      SetCurrentRealm(CreationRealm);
+    PreviousContinuation := SuspendCurrentGeneratorContinuation;
+
+    FillChar(Context, SizeOf(Context), 0);
+    Context.Realm := CurrentRealm;
+    Context.Scope := FClosure;
+    Context.OnError := FClosure.OnError;
+    Context.LoadModule := FClosure.LoadModule;
+    Context.LoadModuleSource := FClosure.LoadModuleSource;
+    Context.CurrentFilePath := FSourceFilePath;
+    Context.CoverageEnabled := Assigned(TGocciaCoverageTracker.Instance)
+      and TGocciaCoverageTracker.Instance.Enabled;
+    Context.StrictTypes := FClosure.EffectiveStrictTypes;
+    CompatibilityNonStrictMode := FClosure.EffectiveNonStrictMode;
+    ArgumentsObjectEnabled := FClosure.EffectiveArgumentsObjectEnabled;
+    Context.NonStrictMode := CompatibilityNonStrictMode and not FStrictCode;
+    Context.CompatibilityNonStrictMode := CompatibilityNonStrictMode;
+    Context.DisposalTracker := nil;
+    EvalRejectNames := BuildParameterEvalVarDeclarationRejectNames(
+      ArgumentsObjectEnabled and CreatesArgumentsObject and
+      not ParameterListBindsName(FParameters, IDENTIFIER_ARGUMENTS));
+    HasParamExpressions := HasParameterExpressions;
+
+    if Context.CoverageEnabled and (FSourceLine > 0) and
+       (FSourceFilePath <> '') then
+      TGocciaCoverageTracker.Instance.RecordLineHit(FSourceFilePath,
+        FSourceLine);
+
+    BindThis(CallScope, AThisValue);
+    Context.Scope := CallScope;
+
+    if ArgumentsObjectEnabled and CreatesArgumentsObject and
+       not ParameterListBindsName(FParameters, IDENTIFIER_ARGUMENTS) and
+       not CallScope.ContainsOwnLexicalBinding(IDENTIFIER_ARGUMENTS) then
+      CallScope.DefineVariableBinding(IDENTIFIER_ARGUMENTS,
+        CreateArgumentsObjectForCall, True);
+
+    if HasParamExpressions then
+      PredeclareParameterBindings(CallScope);
+
+    if FIsSimpleParams then
+    begin
+      for I := 0 to Length(FParameters) - 1 do
+      begin
+        if I < AArguments.Length then
+          CallScope.DefineLexicalBinding(FParameters[I].Name,
+            AArguments.GetElement(I), dtParameter)
+        else
+          CallScope.DefineLexicalBinding(FParameters[I].Name,
+            TGocciaUndefinedLiteralValue.UndefinedValue, dtParameter);
+      end;
+    end
+    else
+    begin
+      for I := 0 to Length(FParameters) - 1 do
+      begin
+        if FParameters[I].IsRest then
+        begin
+          ReturnValue := TGocciaArrayValue.Create;
+          if I < AArguments.Length then
+            for J := I to AArguments.Length - 1 do
+              TGocciaArrayValue(ReturnValue).Elements.Add(
+                AArguments.GetElement(J));
+          if FParameters[I].IsPattern then
+          begin
+            Context.Scope := CallScope;
+            AssignPattern(FParameters[I].Pattern, ReturnValue, Context, True);
+          end
+          else
+            CallScope.DefineLexicalBinding(FParameters[I].Name, ReturnValue,
+              dtParameter);
+
+          if Context.StrictTypes and
+             (FParameters[I].TypeAnnotation <> '') then
+          begin
+            ParamTypeHint :=
+              TypeAnnotationToLocalType(FParameters[I].TypeAnnotation);
+            if (ParamTypeHint <> sltUntyped) and
+               not FParameters[I].IsPattern then
+              CallScope.SetOwnBindingTypeHint(FParameters[I].Name,
+                ParamTypeHint);
+          end;
+
+          Break;
+        end
+        else if FParameters[I].IsPattern then
+        begin
+          if I < AArguments.Length then
+            ReturnValue := AArguments.GetElement(I)
+          else
+            ReturnValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+          if Assigned(FParameters[I].DefaultValue) and
+             (ReturnValue is TGocciaUndefinedLiteralValue) then
+            ReturnValue :=
+              EvaluateParameterDefault(FParameters[I].DefaultValue);
+
+          if Context.StrictTypes
+            and (FParameters[I].TypeAnnotation <> '')
+            and not FParameters[I].IsOptional
+            and not Assigned(FParameters[I].DefaultValue) then
+          begin
+            ParamTypeHint :=
+              TypeAnnotationToLocalType(FParameters[I].TypeAnnotation);
+            if ParamTypeHint <> sltUntyped then
+              EnforceStrictType(ReturnValue, ParamTypeHint);
+          end;
+
+          Context.Scope := CallScope;
+          AssignPattern(FParameters[I].Pattern, ReturnValue, Context, True);
+        end
+        else
+        begin
+          if I < AArguments.Length then
+            ReturnValue := AArguments.GetElement(I)
+          else
+            ReturnValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+          if Assigned(FParameters[I].DefaultValue) and
+             (ReturnValue is TGocciaUndefinedLiteralValue) then
+            ReturnValue :=
+              EvaluateParameterDefault(FParameters[I].DefaultValue);
+          CallScope.DefineLexicalBinding(FParameters[I].Name, ReturnValue,
+            dtParameter);
+        end;
+      end;
+    end;
+
+    BodyScope := CallScope;
+    if HasParamExpressions then
+    begin
+      BodyScope := CallScope.CreateChild(skFunction, FName + ':body');
+      if Assigned(GC) then
+      begin
+        GC.PushActiveRoot(BodyScope);
+        BodyScopeRooted := True;
+      end;
+    end;
+
+    Context.Scope := BodyScope;
+    if Assigned(Context.OnError) and not Assigned(BodyScope.OnError) then
+      BodyScope.OnError := Context.OnError;
+
+    if Context.StrictTypes then
+    begin
+      for I := 0 to Length(FParameters) - 1 do
+      begin
+        if FParameters[I].TypeAnnotation = '' then
+          Continue;
+        if FParameters[I].IsRest then
+          Continue;
+        if FParameters[I].IsOptional then
+          Continue;
+        if Assigned(FParameters[I].DefaultValue) then
+          Continue;
+        if FParameters[I].IsPattern then
+          Continue;
+        ParamTypeHint :=
+          TypeAnnotationToLocalType(FParameters[I].TypeAnnotation);
+        if ParamTypeHint = sltUntyped then
+          Continue;
+        EnforceStrictType(CallScope.GetValue(FParameters[I].Name),
+          ParamTypeHint);
+        CallScope.SetOwnBindingTypeHint(FParameters[I].Name, ParamTypeHint);
+      end;
+    end;
+
+    HoistVarDeclarations(FBodyStatements, BodyScope, Context);
+    PredeclareFunctionBodyLexicalDeclarations(FBodyStatements, BodyScope);
+    HoistFunctionDeclarations(FBodyStatements, Context);
+
+    AsyncBodyStatements := TObjectList<TGocciaASTNode>.Create(False);
+    if FIsExpressionBody and (FBodyStatements.Count = 1) then
+    begin
+      SyntheticReturn := TGocciaReturnStatement.Create(
+        TGocciaExpression(FBodyStatements[0]), FBodyStatements[0].Line,
+        FBodyStatements[0].Column);
+      AsyncBodyStatements.Add(SyntheticReturn);
+    end
+    else
+      for I := 0 to FBodyStatements.Count - 1 do
+        AsyncBodyStatements.Add(FBodyStatements[I]);
+
+    AsyncEvaluation := TGocciaAsyncFunctionEvaluation.Create(Self,
+      AsyncBodyStatements, SyntheticReturn, BodyScope, Context);
+    AsyncBodyStatements := nil;
+    SyntheticReturn := nil;
+    if Assigned(GC) then
+    begin
+      GC.AddTempRoot(AsyncEvaluation);
+      AsyncEvaluationRooted := True;
+    end;
+    try
+      Result := AsyncEvaluation.Start;
+    finally
+      if AsyncEvaluationRooted and Assigned(GC) then
+        GC.RemoveTempRoot(AsyncEvaluation);
+    end;
+  except
+    on E: Exception do
+    begin
+      RejectedPromise := TGocciaPromiseValue.Create;
+      RejectAsyncPromiseWithException(RejectedPromise, E);
+      Result := RejectedPromise;
+    end;
+  end;
+
+  finally
+    if Assigned(AsyncBodyStatements) then
+      AsyncBodyStatements.Free;
+    if Assigned(SyntheticReturn) then
+      SyntheticReturn.Free;
+    if BodyScopeRooted and Assigned(GC) then
+      GC.PopActiveRoot;
+    RestoreCurrentGeneratorContinuation(PreviousContinuation);
+    if RealmSwitched then
+      SetCurrentRealm(PreviousRealm);
+    if FunctionContextPushed then
+      PopCurrentFunctionExecutionContext;
+    if Assigned(GC) then
+    begin
+      if CallScopeRooted then
+        GC.PopActiveRoot;
+      if SelfRooted then
+        GC.PopActiveRoot;
+    end;
   end;
 end;
 

@@ -179,6 +179,7 @@ type
     procedure ClearForLoopStates;
     procedure MarkReferences;
     property Completed: Boolean read FCompleted;
+    property IsAsyncGenerator: Boolean read FIsAsyncGenerator;
     property LastYieldWasDelegate: Boolean read FLastYieldWasDelegate;
     property ReturnRequiresAwait: Boolean read FReturnRequiresAwait;
   end;
@@ -1386,7 +1387,7 @@ end;
 function EvaluateGeneratorAwait(const AAwaitExpression: TGocciaAwaitExpression;
   const AContext: TGocciaEvaluationContext): TGocciaValue;
 begin
-  if not Assigned(GCurrentContinuation) then
+  if not Assigned(GCurrentContinuation) or GCurrentContinuation.IsAsyncGenerator then
     Result := AwaitValue(EvaluateExpression(AAwaitExpression.Operand, AContext))
   else
     Result := GCurrentContinuation.AwaitExpressionValue(
