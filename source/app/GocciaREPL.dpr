@@ -162,6 +162,7 @@ begin
           ParseTimeNanoseconds := 0;
           SourcePipelineResult := nil;
           try
+            PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
             PipelineOptions.Preprocessors := Eng.Preprocessors;
             PipelineOptions.Compatibility := Eng.Compatibility;
             PipelineOptions.SourceType := Eng.SourceType;

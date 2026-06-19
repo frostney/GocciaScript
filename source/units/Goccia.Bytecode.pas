@@ -117,7 +117,25 @@ const
   //               TDZ for global-backed let/const/class/enum bindings.
   //   v58 -> v59: added OP_INC_NUMERIC/OP_DEC_NUMERIC and postfix variants so
   //               update expressions can fuse ToNumeric with unit arithmetic.
-  GOCCIA_FORMAT_VERSION = 59;
+  //   v59 -> v60: OP_DEFINE_GLOBAL_CONST operand B gained a global function
+  //               declaration mode to preserve CreateGlobalFunctionBinding.
+  //   v60 -> v61: added OP_SET_OBJECT_PROTO for object-literal
+  //               non-computed __proto__ data properties.
+  //   v61 -> v62: OP_ITER_CLOSE operand C gained a conditional mode for
+  //               destructuring iterator-close handlers: preserve thrown
+  //               completions, but let generator-return close errors replace
+  //               the return completion.
+  //   v62 -> v63: added OP_DEFINE_CLASS_METHOD_DYNAMIC so computed class
+  //               methods define non-enumerable method properties.
+  //   v63 -> v64: added OP_GET_WITH_BINDING(_STRICT) and
+  //               OP_SET_WITH_BINDING(_LOOSE) so bytecode object environment
+  //               records re-check binding-object properties at get/set time.
+  //   v64 -> v65: added explicit super-base capture opcodes for computed
+  //               super property references.
+  //   v65 -> v66: added long-name global var declaration and dynamic
+  //               static/private field definition opcodes for oversized
+  //               test262 identifier/class-field generated sources.
+  GOCCIA_FORMAT_VERSION = 66;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   // OP_DEFINE_GLOBAL_CONST operand B declaration modes.
   GLOBAL_DEFINE_VAR = 0;
@@ -126,6 +144,7 @@ const
   GLOBAL_DEFINE_VAR_DECL = 3;
   GLOBAL_DEFINE_LET_PREDECLARE = 4;
   GLOBAL_DEFINE_CONST_PREDECLARE = 5;
+  GLOBAL_DEFINE_FUNCTION = 6;
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
   GOCCIA_NULLISH_MATCH_HOLE = 2;
@@ -141,6 +160,9 @@ const
   COLLECTION_OP_TRY_ITERABLE_TO_ARRAY = 3;
   VALIDATE_OP_REQUIRE_OBJECT = 0;
   VALIDATE_OP_REQUIRE_ITERABLE = 1;
+  ITER_CLOSE_NORMAL = 0;
+  ITER_CLOSE_PRESERVE_ERROR = 1;
+  ITER_CLOSE_PRESERVE_UNLESS_GENERATOR_RETURN = 2;
   CALL_FLAG_SPREAD = 1;
   CALL_FLAG_TRUSTED = 2;
   CALL_FLAG_DIRECT_EVAL = 4;
@@ -296,20 +318,22 @@ type
     OP_DEFINE_STATIC_METHOD_CONST = 124,
     OP_DEFINE_DATA_PROP = 125,
     OP_DEFINE_METHOD_PROP = 126,
-    OP_DEFINE_PROP_DYNAMIC = 127,
-    OP_ADD           = 128,
-    OP_SUB           = 129,
-    OP_MUL           = 130,
-    OP_DIV           = 131,
-    OP_MOD           = 132,
-    OP_POW           = 133,
-    OP_SETUP_AUTO_ACCESSOR_DYNAMIC = 134,
-    OP_BAND          = 135,
-    OP_BOR           = 136,
-    OP_BXOR          = 137,
-    OP_SHL           = 138,
-    OP_SHR           = 139,
-    OP_USHR          = 140,
+    OP_SET_OBJECT_PROTO = 127,
+    OP_DEFINE_PROP_DYNAMIC = 128,
+    OP_ADD           = 129,
+    OP_SUB           = 130,
+    OP_MUL           = 131,
+    OP_DIV           = 132,
+    OP_MOD           = 133,
+    OP_POW           = 134,
+    OP_SETUP_AUTO_ACCESSOR_DYNAMIC = 135,
+    OP_BAND          = 136,
+    OP_BOR           = 137,
+    OP_BXOR          = 138,
+    OP_SHL           = 139,
+    OP_SHR           = 140,
+    OP_USHR          = 141,
+    OP_DEFINE_CLASS_METHOD_DYNAMIC = 142,
     OP_IMPORT        = 167,
     OP_EXPORT        = 168,
     OP_AWAIT         = 169,
@@ -345,7 +369,17 @@ type
     OP_INC_NUMERIC    = 199,
     OP_DEC_NUMERIC    = 200,
     OP_POST_INC_NUMERIC = 201,
-    OP_POST_DEC_NUMERIC = 202
+    OP_POST_DEC_NUMERIC = 202,
+    OP_GET_WITH_BINDING = 203,
+    OP_GET_WITH_BINDING_STRICT = 204,
+    OP_SET_WITH_BINDING = 205,
+    OP_SET_WITH_BINDING_LOOSE = 206,
+    OP_SUPER_BASE    = 207,
+    OP_SUPER_GET_BASE = 208,
+    OP_SUPER_SET_BASE = 209,
+    OP_DEFINE_GLOBAL_VAR_DECL_LONG = 210,
+    OP_DEFINE_STATIC_PROP_DYNAMIC = 211,
+    OP_PUSH_FINALLY_HANDLER = 212
   );
 
 function EncodeABC(const AOp: TGocciaOpCode; const A, B, C: UInt8): UInt32; inline;

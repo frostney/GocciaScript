@@ -50,9 +50,9 @@ end;
 function TryLoadIdentifierRanges(const APropertyName: string;
   out ARanges: TUnicodePropertyRangeArray): Boolean;
 begin
-  Result := TryICUGetUnicodePropertyRanges(APropertyName, '', ARanges);
+  Result := TryGetUnicodePropertyRanges(APropertyName, ARanges);
   if not Result then
-    Result := TryGetUnicodePropertyRanges(APropertyName, ARanges);
+    Result := TryICUGetUnicodePropertyRanges(APropertyName, '', ARanges);
 end;
 
 function TryGetCachedIdentifierRanges(const APropertyName: string;

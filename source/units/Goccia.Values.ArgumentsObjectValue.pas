@@ -110,12 +110,12 @@ begin
     GArgumentsThrowerHost.ThrowTypeError, 'ThrowTypeError', 0);
 end;
 
-function ArrayPrototypeValuesFunction: TGocciaValue;
+function ArrayPrototypeIteratorFunction: TGocciaValue;
 var
   ArrayValue: TGocciaArrayValue;
 begin
   ArrayValue := TGocciaArrayValue.Create;
-  Result := ArrayValue.GetProperty(PROP_VALUES);
+  Result := ArrayValue.GetSymbolProperty(TGocciaSymbolValue.WellKnownIterator);
 end;
 
 procedure DefineArgumentsIndexedProperties(
@@ -142,7 +142,7 @@ begin
       TGocciaNumberLiteralValue.Create(AArguments.Length),
       [pfWritable, pfConfigurable]));
 
-  IteratorValue := ArrayPrototypeValuesFunction;
+  IteratorValue := ArrayPrototypeIteratorFunction;
   if Assigned(IteratorValue) and not (IteratorValue is TGocciaUndefinedLiteralValue) then
     ATarget.DefineSymbolProperty(TGocciaSymbolValue.WellKnownIterator,
       TGocciaPropertyDescriptorData.Create(IteratorValue,

@@ -53,6 +53,36 @@ test("block-scoped function declaration does not overwrite outer var binding", (
   expect(f()).toBe("outer");
 });
 
+test("strict block function declaration does not create a var binding", () => {
+  let before;
+  let after;
+
+  (function() {
+    "use strict";
+
+    try {
+      f;
+    } catch (error) {
+      before = error.constructor;
+    }
+
+    {
+      function f() {
+        return "block";
+      }
+    }
+
+    try {
+      f;
+    } catch (error) {
+      after = error.constructor;
+    }
+  })();
+
+  expect(before).toBe(ReferenceError);
+  expect(after).toBe(ReferenceError);
+});
+
 test("block-scoped function declaration captures same-block lexical bindings", () => {
   {
     let z = 4;

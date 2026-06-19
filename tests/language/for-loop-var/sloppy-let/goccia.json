@@ -1,0 +1,5 @@
+{
+  "compat-traditional-for-loop": true,
+  "compat-var": true,
+  "compat-non-strict-mode": true
+}

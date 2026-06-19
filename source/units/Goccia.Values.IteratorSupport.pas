@@ -108,11 +108,9 @@ begin
         WasIteratorRooted := AddRootIfNeeded(IteratorObj);
         try
           NextMethod := TGocciaObjectValue(IteratorObj).GetProperty(PROP_NEXT);
-          if not Assigned(NextMethod) or (NextMethod is TGocciaUndefinedLiteralValue) or
-             not NextMethod.IsCallable then
-            ThrowTypeError(SErrorIteratorInvalid, SSuggestIteratorProtocol);
-
-          // Capture-once per ES2024 §7.4.2 GetIteratorDirect.
+          // ES2026 §7.4.2 GetIteratorDirect captures "next" without
+          // validating callability; IteratorStep/IteratorNext reports that
+          // error later, after destructuring assignment targets run.
           Result := TGocciaGenericIteratorValue.Create(IteratorObj, NextMethod);
         finally
           RemoveRootIfNeeded(IteratorObj, WasIteratorRooted);

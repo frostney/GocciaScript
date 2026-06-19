@@ -20,6 +20,7 @@ type
     FHomeClass: TGocciaObjectValue;
     FFunctionValue: TGocciaValue;
     FGlobalScope: TGocciaScope;
+    FNewTarget: TGocciaValue;
   public
     constructor Create(const ATemplate: TGocciaFunctionTemplate;
       const AUpvalueCount: Integer = 0);
@@ -34,6 +35,7 @@ type
     property HomeClass: TGocciaObjectValue read FHomeClass write FHomeClass;
     property FunctionValue: TGocciaValue read FFunctionValue write FFunctionValue;
     property GlobalScope: TGocciaScope read FGlobalScope write FGlobalScope;
+    property NewTarget: TGocciaValue read FNewTarget write FNewTarget;
   end;
 
 implementation
@@ -47,6 +49,7 @@ begin
   FHomeClass := nil;
   FFunctionValue := nil;
   FGlobalScope := nil;
+  FNewTarget := nil;
   SetLength(FUpvalues, AUpvalueCount);
 end;
 
@@ -65,6 +68,7 @@ begin
   Result.FHomeClass := FHomeClass;
   Result.FFunctionValue := FFunctionValue;
   Result.FGlobalScope := FGlobalScope;
+  Result.FNewTarget := FNewTarget;
   for I := 0 to High(FUpvalues) do
     Result.FUpvalues[I] := FUpvalues[I];
 end;

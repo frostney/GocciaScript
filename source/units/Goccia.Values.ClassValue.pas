@@ -13,6 +13,7 @@ uses
   Goccia.AST.Expressions,
   Goccia.AST.Node,
   Goccia.Constants,
+  Goccia.Realm,
   Goccia.Values.FunctionBase,
   Goccia.Values.FunctionValue,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -57,6 +58,7 @@ type
     FPrivateMethods: TOrderedStringMap<TGocciaMethodValue>;
     FPrivateGetters: TOrderedStringMap<TGocciaFunctionBase>;
     FPrivateSetters: TOrderedStringMap<TGocciaFunctionBase>;
+    FCreationRealm: TGocciaRealm;
     FDeclaredPrivateNames: TStringList;
     FDeclaredPrivateKeys: TStringList;
     FNativeSuperConstructor: TGocciaObjectValue;
@@ -142,6 +144,7 @@ type
     function GetOwnStaticSymbolDescriptor(const ASymbol: TGocciaSymbolValue): TGocciaPropertyDescriptor;
 
     property Name: string read FName;
+    property CreationRealm: TGocciaRealm read FCreationRealm;
     property PrivateBrandToken: string read FPrivateBrandToken;
     property SuperClass: TGocciaClassValue read FSuperClass write FSuperClass;
     property NativeSuperConstructor: TGocciaObjectValue read FNativeSuperConstructor write FNativeSuperConstructor;
@@ -310,7 +313,7 @@ type
     procedure AssignProperty(const AName: string; const AValue: TGocciaValue; const ACanCreate: Boolean = True); override;
     procedure SetProperty(const AName: string; const AValue: TGocciaValue); override;
     function GetPrivateProperty(const AName: string; const AAccessClass: TGocciaClassValue): TGocciaValue;
-    procedure SetPrivateProperty(const AName: string; const AValue: TGocciaValue; const AAccessClass: TGocciaClassValue);
+    procedure SetPrivateProperty(const AName: string; const AValue: TGocciaValue; const AAccessClass: TGocciaClassValue; const AThrowIfExists: Boolean = False);
     function TryGetRawPrivateProperty(const AKey: string; out AValue: TGocciaValue): Boolean;
     procedure SetRawPrivateProperty(const AKey: string; const AValue: TGocciaValue);
     function IsInstanceOf(const AClass: TGocciaClassValue): Boolean; inline;
@@ -338,6 +341,7 @@ uses
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ArrayValue,
   Goccia.Values.AutoAccessor,
+  Goccia.Values.BigIntValue,
   Goccia.Values.ClassHelper,
   Goccia.Values.DataViewValue,
   Goccia.Values.ErrorHelper,
@@ -356,6 +360,17 @@ uses
   Goccia.Values.WeakMapValue,
   Goccia.Values.WeakRefValue,
   Goccia.Values.WeakSetValue;
+
+function ToNumberConstructorValue(
+  const AValue: TGocciaValue): TGocciaNumberLiteralValue;
+begin
+  // ES2026 §21.1.1.1 Number(value): explicit Number() conversion accepts
+  // BigInt. Keep generic ToNumber paths throwing for implicit coercion.
+  if AValue is TGocciaBigIntValue then
+    Exit(TGocciaNumberLiteralValue.Create(
+      TGocciaBigIntValue(AValue).Value.ToDouble));
+  Result := AValue.ToNumberLiteral;
+end;
 
 // SetDefaultPrototype / PatchDefaultPrototype previously cached the
 // "default constructor [[Prototype]]" (Function.prototype) in a threadvar.
@@ -417,6 +432,7 @@ constructor TGocciaClassValue.Create(const AName: string; const ASuperClass: TGo
 begin
   inherited Create;
   FName := AName;
+  FCreationRealm := CurrentRealm;
   FPrivateBrandToken := IntToHex(PtrUInt(Self), SizeOf(Pointer) * 2);
   FSuperClass := ASuperClass;
   // Set [[Prototype]]: superclass for derived, Function.prototype for base classes
@@ -1602,6 +1618,29 @@ var
   Count: Integer;
   I: Integer;
 
+  function IsArrayIndexKey(const AName: string): Boolean;
+  var
+    Digit, Index: UInt64;
+    K: Integer;
+  begin
+    Index := 0;
+    Result := False;
+    if AName = '' then
+      Exit;
+    if (Length(AName) > 1) and (AName[1] = '0') then
+      Exit;
+    for K := 1 to Length(AName) do
+    begin
+      if (AName[K] < '0') or (AName[K] > '9') then
+        Exit;
+      Digit := Ord(AName[K]) - Ord('0');
+      if Index > (High(UInt32) - Digit) div 10 then
+        Exit;
+      Index := Index * 10 + Digit;
+    end;
+    Result := Index < High(UInt32);
+  end;
+
   procedure AppendName(const AName: string);
   var
     J: Integer;
@@ -1620,6 +1659,10 @@ begin
   SetLength(Result, Length(OwnNames) + 3);
   Count := 0;
 
+  for I := 0 to High(OwnNames) do
+    if IsArrayIndexKey(OwnNames[I]) then
+      AppendName(OwnNames[I]);
+
   if not FLengthDeleted then
     AppendName(PROP_LENGTH);
   if not FNameDeleted then
@@ -1627,7 +1670,8 @@ begin
   AppendName(PROP_PROTOTYPE);
 
   for I := 0 to High(OwnNames) do
-    AppendName(OwnNames[I]);
+    if not IsArrayIndexKey(OwnNames[I]) then
+      AppendName(OwnNames[I]);
 
   SetLength(Result, Count);
 end;
@@ -1704,7 +1748,7 @@ begin
     if AArguments.Length = 0 then
       Result := TGocciaNumberLiteralValue.ZeroValue
     else
-      Result := AArguments.GetElement(0).ToNumberLiteral;
+      Result := ToNumberConstructorValue(AArguments.GetElement(0));
   end
   else if FName = CONSTRUCTOR_BOOLEAN then
   begin
@@ -1915,7 +1959,7 @@ begin
   if AArguments.Length = 0 then
     Prim := TGocciaNumberLiteralValue.ZeroValue
   else
-    Prim := AArguments.GetElement(0).ToNumberLiteral;
+    Prim := ToNumberConstructorValue(AArguments.GetElement(0));
   Result := Prim.Box;
 end;
 
@@ -2218,7 +2262,8 @@ begin
   end;
 
   if not CanAccess then
-    raise TGocciaError.Create(Format('Private field "%s" is not accessible', [AName]), 0, 0, '', nil);
+    ThrowTypeError(Format(SErrorPrivateFieldInaccessible, [AName]),
+      SSuggestPrivateFieldAccess);
 
   // Use composite key (ClassName:FieldName) to support per-class private field scoping
   CompositeKey := AAccessClass.Name + ':' + AName;
@@ -2228,7 +2273,9 @@ begin
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
-procedure TGocciaInstanceValue.SetPrivateProperty(const AName: string; const AValue: TGocciaValue; const AAccessClass: TGocciaClassValue);
+procedure TGocciaInstanceValue.SetPrivateProperty(const AName: string;
+  const AValue: TGocciaValue; const AAccessClass: TGocciaClassValue;
+  const AThrowIfExists: Boolean);
 var
   CurrentClass: TGocciaClassValue;
   CanAccess: Boolean;
@@ -2261,12 +2308,16 @@ begin
   end;
 
   if not CanAccess then
-    raise TGocciaError.Create(Format('Private field "%s" is not accessible', [AName]), 0, 0, '', nil);
+    ThrowTypeError(Format(SErrorPrivateFieldInaccessible, [AName]),
+      SSuggestPrivateFieldAccess);
 
   // Use composite key (ClassName:FieldName) to support per-class private field scoping
   CompositeKey := AAccessClass.Name + ':' + AName;
   if not Assigned(FPrivateProperties) then
     FPrivateProperties := TGocciaValueMap.Create;
+  if AThrowIfExists and FPrivateProperties.ContainsKey(CompositeKey) then
+    ThrowTypeError('Cannot initialize private elements twice',
+      SSuggestPrivateFieldAccess);
   FPrivateProperties.AddOrSetValue(CompositeKey, AValue);
 end;
 

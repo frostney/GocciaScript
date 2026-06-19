@@ -139,3 +139,25 @@ test("computed property names evaluation order", () => {
   expect(obj.key2).toBe("value2");
   expect(obj.key3).toBe("value3");
 });
+
+test("computed property names infer anonymous function names", () => {
+  const methodSym = Symbol("method");
+  const getterSym = Symbol("getter");
+  const classSym = Symbol("class");
+  const setterSym = Symbol();
+  const obj = {
+    ["fn"]: () => {},
+    [methodSym]() {},
+    [classSym]: class {},
+    get [getterSym]() { return 1; },
+    set [setterSym](value) {},
+  };
+  const getterDesc = Object.getOwnPropertyDescriptor(obj, getterSym);
+  const setterDesc = Object.getOwnPropertyDescriptor(obj, setterSym);
+
+  expect(obj.fn.name).toBe("fn");
+  expect(obj[methodSym].name).toBe("[method]");
+  expect(obj[classSym].name).toBe("[class]");
+  expect(getterDesc.get.name).toBe("get [getter]");
+  expect(setterDesc.set.name).toBe("set ");
+});

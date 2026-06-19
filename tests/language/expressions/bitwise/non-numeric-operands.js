@@ -83,3 +83,40 @@ test("finite numeric operands are unaffected by the helper", () => {
   expect(8 >> 2).toBe(2);
   expect((-1) >>> 0).toBe(4294967295);
 });
+
+const assertLeftNumericErrorPrecedesRightCoercion = (label, evaluate) => {
+  let trace = "";
+  const left = () => {
+    trace += "1";
+    return {
+      valueOf() {
+        trace += "3";
+        return Symbol(label);
+      },
+    };
+  };
+  const right = () => {
+    trace += "2";
+    return {
+      valueOf() {
+        trace += "4";
+        throw new Error("right operand must not be coerced");
+      },
+    };
+  };
+
+  expect(() => evaluate(left(), right())).toThrow(TypeError);
+  expect(trace).toBe("123");
+};
+
+test("binary bitwise operators coerce lhs numerically before rhs", () => {
+  assertLeftNumericErrorPrecedesRightCoercion("&", (left, right) => left & right);
+  assertLeftNumericErrorPrecedesRightCoercion("|", (left, right) => left | right);
+  assertLeftNumericErrorPrecedesRightCoercion("^", (left, right) => left ^ right);
+});
+
+test("shift operators coerce lhs numerically before rhs", () => {
+  assertLeftNumericErrorPrecedesRightCoercion("<<", (left, right) => left << right);
+  assertLeftNumericErrorPrecedesRightCoercion(">>", (left, right) => left >> right);
+  assertLeftNumericErrorPrecedesRightCoercion(">>>", (left, right) => left >>> right);
+});

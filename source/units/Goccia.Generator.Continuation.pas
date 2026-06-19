@@ -16,7 +16,8 @@ uses
   Goccia.Evaluator.Context,
   Goccia.Scope,
   Goccia.Values.IteratorValue,
-  Goccia.Values.Primitives;
+  Goccia.Values.Primitives,
+  Goccia.Values.PromiseValue;
 
 type
   TGocciaGeneratorResumeKind = (grkNext, grkReturn, grkThrow);
@@ -84,6 +85,17 @@ type
     property Value: TGocciaValue read FValue;
   end;
 
+  EGocciaAsyncAwaitSuspend = class(EGocciaGeneratorYield)
+  private
+    FAwaitExpression: TGocciaAwaitExpression;
+    FPromise: TGocciaPromiseValue;
+  public
+    constructor Create(const AAwaitExpression: TGocciaAwaitExpression;
+      const APromise: TGocciaPromiseValue);
+    property AwaitExpression: TGocciaAwaitExpression read FAwaitExpression;
+    property Promise: TGocciaPromiseValue read FPromise;
+  end;
+
   EGocciaGeneratorReturn = class(Exception)
   private
     FValue: TGocciaValue;
@@ -101,6 +113,7 @@ type
     FStarted: Boolean;
     FCompleted: Boolean;
     FSuspendedYield: TGocciaYieldExpression;
+    FSuspendedAwait: TGocciaAwaitExpression;
     FPendingKind: TGocciaGeneratorResumeKind;
     FPendingValue: TGocciaValue;
     FHasPendingValue: Boolean;
@@ -115,6 +128,8 @@ type
     FLoopStates: TDictionary<TObject, TGocciaGeneratorLoopState>;
     FForLoopStates: TDictionary<TObject, TGocciaGeneratorForLoopState>;
     FIsAsyncGenerator: Boolean;
+    FLastYieldWasDelegate: Boolean;
+    FReturnRequiresAwait: Boolean;
     procedure ClearDelegateState;
   public
     constructor Create(const ABodyStatements: TObjectList<TGocciaASTNode>;
@@ -124,6 +139,8 @@ type
     function Resume(const AKind: TGocciaGeneratorResumeKind;
       const AValue: TGocciaValue; out ADone: Boolean): TGocciaValue;
     function YieldValue(const AYieldExpression: TGocciaYieldExpression;
+      const AContext: TGocciaEvaluationContext): TGocciaValue;
+    function AwaitExpressionValue(const AAwaitExpression: TGocciaAwaitExpression;
       const AContext: TGocciaEvaluationContext): TGocciaValue;
     procedure SaveCompletedExpressionValue(const AExpression: TObject; const AValue: TGocciaValue);
     function TakeCompletedExpressionValue(const AExpression: TObject; out AValue: TGocciaValue): Boolean;
@@ -162,13 +179,21 @@ type
     procedure ClearForLoopStates;
     procedure MarkReferences;
     property Completed: Boolean read FCompleted;
+    property IsAsyncGenerator: Boolean read FIsAsyncGenerator;
+    property LastYieldWasDelegate: Boolean read FLastYieldWasDelegate;
+    property ReturnRequiresAwait: Boolean read FReturnRequiresAwait;
   end;
 
 function CurrentGeneratorContinuation: TGocciaGeneratorContinuation;
 function SuspendCurrentGeneratorContinuation: TGocciaGeneratorContinuation;
 procedure RestoreCurrentGeneratorContinuation(
   const AContinuation: TGocciaGeneratorContinuation);
+function AsyncAwaitSuspensionEnabled: Boolean;
+procedure PushAsyncAwaitSuspension;
+procedure PopAsyncAwaitSuspension;
 function EvaluateGeneratorYield(const AYieldExpression: TGocciaYieldExpression;
+  const AContext: TGocciaEvaluationContext): TGocciaValue;
+function EvaluateGeneratorAwait(const AAwaitExpression: TGocciaAwaitExpression;
   const AContext: TGocciaEvaluationContext): TGocciaValue;
 
 implementation
@@ -188,11 +213,11 @@ uses
   Goccia.Values.IteratorSupport,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectValue,
-  Goccia.Values.PromiseValue,
   Goccia.Values.SymbolValue;
 
 threadvar
   GCurrentContinuation: TGocciaGeneratorContinuation;
+  GAsyncAwaitSuspensionDepth: Integer;
 
 type
   TGocciaAsyncFromSyncIteratorValue = class(TGocciaObjectValue)
@@ -533,6 +558,15 @@ begin
   FValue := AValue;
 end;
 
+constructor EGocciaAsyncAwaitSuspend.Create(
+  const AAwaitExpression: TGocciaAwaitExpression;
+  const APromise: TGocciaPromiseValue);
+begin
+  inherited Create(APromise);
+  FAwaitExpression := AAwaitExpression;
+  FPromise := APromise;
+end;
+
 constructor EGocciaGeneratorReturn.Create(const AValue: TGocciaValue);
 begin
   inherited Create('');
@@ -554,6 +588,7 @@ begin
   FCompleted := False;
   FIsAsyncGenerator := AIsAsyncGenerator;
   FSuspendedYield := nil;
+  FSuspendedAwait := nil;
   FPendingValue := TGocciaUndefinedLiteralValue.UndefinedValue;
   FCompletedExpressionValues := TDictionary<TObject, TGocciaValue>.Create;
   FExpressionValues := TDictionary<TObject, TGocciaValue>.Create;
@@ -561,6 +596,8 @@ begin
   FTryStates := TDictionary<TObject, TGocciaGeneratorTryState>.Create;
   FLoopStates := TDictionary<TObject, TGocciaGeneratorLoopState>.Create;
   FForLoopStates := TDictionary<TObject, TGocciaGeneratorForLoopState>.Create;
+  FLastYieldWasDelegate := False;
+  FReturnRequiresAwait := False;
 end;
 
 destructor TGocciaGeneratorContinuation.Destroy;
@@ -609,6 +646,7 @@ begin
     if not FStarted then
     begin
       FCompleted := True;
+      FReturnRequiresAwait := FIsAsyncGenerator;
       ADone := True;
       Result := AValue;
       Exit;
@@ -621,10 +659,13 @@ begin
     raise TGocciaThrowValue.Create(AValue);
   end;
 
-  FHasPendingValue := FStarted and Assigned(FSuspendedYield);
+  FHasPendingValue := FStarted and
+    (Assigned(FSuspendedYield) or Assigned(FSuspendedAwait));
   FPendingKind := AKind;
   FPendingValue := AValue;
   FStarted := True;
+  FLastYieldWasDelegate := False;
+  FReturnRequiresAwait := False;
 
   PreviousContinuation := GCurrentContinuation;
   GCurrentContinuation := Self;
@@ -642,6 +683,8 @@ begin
         if ControlFlow.Kind = cfkReturn then
         begin
           FCompleted := True;
+          FReturnRequiresAwait := FIsAsyncGenerator and
+            ControlFlow.ReturnHasExpression;
           ClearDelegateState;
           ClearExpressionValues;
           ClearStatementIndexes;
@@ -659,6 +702,8 @@ begin
         Inc(FStatementIndex);
         ClearExpressionValues;
       except
+        on E: EGocciaAsyncAwaitSuspend do
+          raise;
         on E: EGocciaGeneratorYield do
         begin
           ADone := False;
@@ -668,6 +713,8 @@ begin
         on E: EGocciaGeneratorReturn do
         begin
           FCompleted := True;
+          FReturnRequiresAwait := FIsAsyncGenerator and
+            (FPendingKind = grkReturn);
           ClearDelegateState;
           ClearExpressionValues;
           ClearStatementIndexes;
@@ -685,6 +732,7 @@ begin
   end;
 
   FCompleted := True;
+  FReturnRequiresAwait := False;
   ClearDelegateState;
   ClearExpressionValues;
   ClearStatementIndexes;
@@ -693,6 +741,38 @@ begin
   ClearForLoopStates;
   ADone := True;
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TGocciaGeneratorContinuation.AwaitExpressionValue(
+  const AAwaitExpression: TGocciaAwaitExpression;
+  const AContext: TGocciaEvaluationContext): TGocciaValue;
+var
+  AwaitedValue: TGocciaValue;
+  Promise: TGocciaPromiseValue;
+begin
+  if FHasPendingValue and (FSuspendedAwait = AAwaitExpression) then
+  begin
+    FHasPendingValue := False;
+    FSuspendedAwait := nil;
+    if FPendingKind = grkThrow then
+      raise TGocciaThrowValue.Create(FPendingValue);
+    if FPendingKind = grkReturn then
+      raise EGocciaGeneratorReturn.Create(FPendingValue);
+    Result := FPendingValue;
+    Exit;
+  end;
+
+  AwaitedValue := EvaluateExpression(AAwaitExpression.Operand, AContext);
+  if AwaitedValue is TGocciaPromiseValue then
+    Promise := TGocciaPromiseValue(AwaitedValue)
+  else
+  begin
+    Promise := TGocciaPromiseValue.Create;
+    Promise.Resolve(AwaitedValue);
+  end;
+
+  FSuspendedAwait := AAwaitExpression;
+  raise EGocciaAsyncAwaitSuspend.Create(AAwaitExpression, Promise);
 end;
 
 function TGocciaGeneratorContinuation.YieldValue(
@@ -798,6 +878,7 @@ begin
         YieldedValue := IteratorResult.GetProperty(PROP_VALUE);
         if not Assigned(YieldedValue) then
           YieldedValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+        FLastYieldWasDelegate := True;
         FSuspendedYield := AYieldExpression;
         raise EGocciaGeneratorYield.Create(YieldedValue);
       end;
@@ -839,6 +920,7 @@ begin
           YieldedValue := IteratorResult.GetProperty(PROP_VALUE);
           if not Assigned(YieldedValue) then
             YieldedValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+          FLastYieldWasDelegate := True;
           FSuspendedYield := AYieldExpression;
           raise EGocciaGeneratorYield.Create(YieldedValue);
         end;
@@ -948,6 +1030,7 @@ begin
         YieldedValue := IteratorResult.GetProperty(PROP_VALUE);
         if not Assigned(YieldedValue) then
           YieldedValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+        FLastYieldWasDelegate := True;
         FSuspendedYield := AYieldExpression;
         raise EGocciaGeneratorYield.Create(YieldedValue);
       end;
@@ -971,6 +1054,7 @@ begin
       YieldedValue := IteratorResult.GetProperty(PROP_VALUE);
       if not Assigned(YieldedValue) then
         YieldedValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+      FLastYieldWasDelegate := True;
       FSuspendedYield := AYieldExpression;
       raise EGocciaGeneratorYield.Create(YieldedValue);
     end;
@@ -983,6 +1067,7 @@ begin
     YieldedValue := EvaluateExpression(AYieldExpression.Operand, AContext)
   else
     YieldedValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+  FLastYieldWasDelegate := False;
   FSuspendedYield := AYieldExpression;
   raise EGocciaGeneratorYield.Create(YieldedValue);
   except
@@ -1007,9 +1092,6 @@ function TGocciaGeneratorContinuation.TakeCompletedExpressionValue(
   const AExpression: TObject; out AValue: TGocciaValue): Boolean;
 begin
   Result := FCompletedExpressionValues.TryGetValue(AExpression, AValue);
-  if Result then
-    // Consume replayed completed values; statement completion clears the rest.
-    FCompletedExpressionValues.Remove(AExpression);
 end;
 
 procedure TGocciaGeneratorContinuation.ClearCompletedExpressionValue(
@@ -1277,6 +1359,22 @@ begin
   GCurrentContinuation := AContinuation;
 end;
 
+function AsyncAwaitSuspensionEnabled: Boolean;
+begin
+  Result := GAsyncAwaitSuspensionDepth > 0;
+end;
+
+procedure PushAsyncAwaitSuspension;
+begin
+  Inc(GAsyncAwaitSuspensionDepth);
+end;
+
+procedure PopAsyncAwaitSuspension;
+begin
+  if GAsyncAwaitSuspensionDepth > 0 then
+    Dec(GAsyncAwaitSuspensionDepth);
+end;
+
 function EvaluateGeneratorYield(const AYieldExpression: TGocciaYieldExpression;
   const AContext: TGocciaEvaluationContext): TGocciaValue;
 begin
@@ -1284,6 +1382,16 @@ begin
     Result := TGocciaUndefinedLiteralValue.UndefinedValue
   else
     Result := GCurrentContinuation.YieldValue(AYieldExpression, AContext);
+end;
+
+function EvaluateGeneratorAwait(const AAwaitExpression: TGocciaAwaitExpression;
+  const AContext: TGocciaEvaluationContext): TGocciaValue;
+begin
+  if not Assigned(GCurrentContinuation) or GCurrentContinuation.IsAsyncGenerator then
+    Result := AwaitValue(EvaluateExpression(AAwaitExpression.Operand, AContext))
+  else
+    Result := GCurrentContinuation.AwaitExpressionValue(
+      AAwaitExpression, AContext);
 end;
 
 end.

@@ -43,6 +43,7 @@ describe("Function.prototype.constructor", () => {
   });
 
   test("Function.prototype has call, apply, bind, toString", () => {
+    expect(typeof Function.prototype).toBe("function");
     expect(typeof Function.prototype.call).toBe("function");
     expect(typeof Function.prototype.apply).toBe("function");
     expect(typeof Function.prototype.bind).toBe("function");

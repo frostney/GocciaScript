@@ -437,6 +437,7 @@ begin
         Engine := CreateEngine(AFileName, Source, Executor);
         try
           LexStart := GetNanoseconds;
+          PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
           PipelineOptions.Preprocessors := Engine.Preprocessors;
           PipelineOptions.Compatibility := Engine.Compatibility;
           PipelineOptions.SourceType := Engine.SourceType;
@@ -637,6 +638,7 @@ begin
       Engine := CreateEngine(AFileName, ASource, Executor);
       try
         LexStart := GetNanoseconds;
+        PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
         PipelineOptions.Preprocessors := Engine.Preprocessors;
         PipelineOptions.Compatibility := Engine.Compatibility;
         PipelineOptions.SourceType := Engine.SourceType;

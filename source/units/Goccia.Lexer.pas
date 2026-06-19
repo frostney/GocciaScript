@@ -86,6 +86,7 @@ type
     procedure SkipComment;
     procedure SkipBlockComment;
     procedure SkipUntilLineTerminator;
+    function ConsumeWhitespaceCodePoint: Boolean; inline;
     function IsLineTerminator: Boolean; inline;
     function IsUnicodeLineTerminator: Boolean; inline;
     function ConsumeLineTerminator: Boolean; inline;
@@ -121,10 +122,10 @@ const
   UTF8_LINE_SEPARATOR_FINAL_BYTE = #$A8;
   UTF8_PARAGRAPH_SEPARATOR_FINAL_BYTE = #$A9;
   UTF8_LINE_TERMINATOR_BYTE_LENGTH = 3;
-  UTF8_NO_BREAK_SPACE_LEAD_BYTE = #$C2;
-  UTF8_NO_BREAK_SPACE_FINAL_BYTE = #$A0;
-  NO_BREAK_SPACE_CODE_POINT = $00A0;
-  ZERO_WIDTH_NO_BREAK_SPACE_CODE_POINT = $FEFF;
+  LINE_FEED_CODE_POINT = $000A;
+  CARRIAGE_RETURN_CODE_POINT = $000D;
+  LINE_SEPARATOR_CODE_POINT = $2028;
+  PARAGRAPH_SEPARATOR_CODE_POINT = $2029;
 
 type
   TKeywordTokenEntry = record
@@ -476,30 +477,45 @@ begin
   end;
 end;
 
+// ES2026 §12.2 WhiteSpace :: <TAB> | <VT> | <FF> | <ZWNBSP> | <USP>
+function TGocciaLexer.ConsumeWhitespaceCodePoint: Boolean; inline;
+var
+  ByteLength: Integer;
+  CodePoint: Cardinal;
+begin
+  Result := False;
+  if IsAtEnd then
+    Exit;
+  if not TryReadUTF8CodePoint(FSource, FCurrent, CodePoint, ByteLength) then
+    Exit;
+  if not IsECMAScriptWhitespaceCodePoint(CodePoint) then
+    Exit;
+
+  // Line terminators must go through ConsumeLineTerminator so line/column
+  // state stays correct.
+  case CodePoint of
+    LINE_FEED_CODE_POINT,
+    CARRIAGE_RETURN_CODE_POINT,
+    LINE_SEPARATOR_CODE_POINT,
+    PARAGRAPH_SEPARATOR_CODE_POINT:
+      Exit;
+  end;
+
+  Inc(FCurrent, ByteLength);
+  Inc(FColumn, ByteLength);
+  Result := True;
+end;
+
 procedure TGocciaLexer.SkipWhitespace;
 begin
   while not IsAtEnd do
   begin
+    if ConsumeLineTerminator then
+      Continue;
+
     case Peek of
       ' ', #9, #11, #12:
         Advance;
-      // ES2026 §12.2 White Space — NBSP (U+00A0)
-      UTF8_NO_BREAK_SPACE_LEAD_BYTE:
-        if (FCurrent < Length(FSource)) and
-           (FSource[FCurrent + 1] = UTF8_NO_BREAK_SPACE_FINAL_BYTE) then
-        begin
-          Inc(FCurrent, 2);
-          Inc(FColumn, 2);
-        end
-        else
-          Break;
-      // ES2026 §12.3 LineTerminator — CR and CRLF
-      #13, #10:
-        ConsumeLineTerminator;
-      // ES2026 §12.3 Line Terminators — LS (U+2028) and PS (U+2029)
-      UTF8_LINE_TERMINATOR_LEAD_BYTE:
-        if not ConsumeLineTerminator then
-          Break;
       '/':
         if PeekNext = '/' then
           SkipComment
@@ -508,7 +524,8 @@ begin
         else
           Break;
     else
-      Break;
+      if not ConsumeWhitespaceCodePoint then
+        Break;
     end;
   end;
 end;
@@ -693,6 +710,9 @@ begin
 end;
 
 procedure TGocciaLexer.ProcessEscapeSequence(var ASB: TStringBuffer);
+var
+  FirstDigit: Char;
+  OctalValue: Integer;
 begin
   if IsLineTerminator then
   begin
@@ -708,7 +728,30 @@ begin
     't': begin ASB.AppendChar(#9); Advance; end;
     'v': begin ASB.AppendChar(#11); Advance; end;
     '\': begin ASB.AppendChar('\'); Advance; end;
-    '0': begin ASB.AppendChar(#0); Advance; end;
+    '0'..'7':
+      begin
+        FirstDigit := Peek;
+        OctalValue := Ord(FirstDigit) - Ord('0');
+        Advance;
+        if CharInSet(FirstDigit, ['0'..'3']) and
+           CharInSet(Peek, ['0'..'7']) then
+        begin
+          OctalValue := OctalValue * 8 + Ord(Peek) - Ord('0');
+          Advance;
+          if CharInSet(Peek, ['0'..'7']) then
+          begin
+            OctalValue := OctalValue * 8 + Ord(Peek) - Ord('0');
+            Advance;
+          end;
+        end
+        else if CharInSet(FirstDigit, ['4'..'7']) and
+                CharInSet(Peek, ['0'..'7']) then
+        begin
+          OctalValue := OctalValue * 8 + Ord(Peek) - Ord('0');
+          Advance;
+        end;
+        ASB.AppendChar(Chr(OctalValue));
+      end;
     'u': begin Advance; ASB.Append(ScanUnicodeEscape); end;
     'x': begin Advance; ASB.Append(ScanHexEscape); end;
   else
@@ -1094,7 +1137,7 @@ begin
       FLine, FColumn, FFileName, GetSourceLines,
       SSuggestRegexSuffixFlags);
 
-  AddToken(gttRegex, Pattern + REGEX_SEPARATOR + Flags);
+  AddToken(gttRegex, IntToStr(Length(Pattern)) + REGEX_SEPARATOR + Pattern + Flags);
 end;
 
 // ES2026 §12.9.3 NumericLiteral
@@ -1237,8 +1280,10 @@ end;
 function TGocciaLexer.IsSourceIdentifierStartCodePoint(
   ACodePoint: Cardinal): Boolean;
 begin
-  if (ACodePoint = NO_BREAK_SPACE_CODE_POINT) or
-     (ACodePoint = ZERO_WIDTH_NO_BREAK_SPACE_CODE_POINT) then
+  if ACodePoint = $180E then
+    Exit(False);
+
+  if IsECMAScriptWhitespaceCodePoint(ACodePoint) then
     Exit(False);
 
   // GocciaScript intentionally keeps its historical non-ASCII identifier
@@ -1250,8 +1295,10 @@ end;
 function TGocciaLexer.IsSourceIdentifierPartCodePoint(
   ACodePoint: Cardinal): Boolean;
 begin
-  if (ACodePoint = NO_BREAK_SPACE_CODE_POINT) or
-     (ACodePoint = ZERO_WIDTH_NO_BREAK_SPACE_CODE_POINT) then
+  if ACodePoint = $180E then
+    Exit(False);
+
+  if IsECMAScriptWhitespaceCodePoint(ACodePoint) then
     Exit(False);
 
   Result := IsIdentifierPartCodePoint(ACodePoint) or (ACodePoint > $7F);
@@ -1294,10 +1341,13 @@ begin
      (ByteLength <> Length(AText)) then
     Exit(False);
 
+  // ES2026 §12.7.1.1 keeps escaped IdentifierStart/IdentifierPart on the
+  // standard Unicode ID_Start/ID_Continue path, even though raw source text
+  // also accepts GocciaScript's historical non-ASCII identifier extension.
   if AAtStart then
-    Result := IsSourceIdentifierStartCodePoint(CodePoint)
+    Result := IsIdentifierStartCodePoint(CodePoint)
   else
-    Result := IsSourceIdentifierPartCodePoint(CodePoint);
+    Result := IsIdentifierPartCodePoint(CodePoint);
 end;
 
 procedure TGocciaLexer.ScanIdentifier;
@@ -1389,8 +1439,11 @@ begin
         else
           AddToken(gttNullishCoalescing);
       end
-      else if Match('.') then
+      else if (Peek = '.') and not CharInSet(PeekNext, ['0'..'9']) then
+      begin
+        Advance;
         AddToken(gttOptionalChaining)
+      end
       else
         AddToken(gttQuestion);
     ':': AddToken(gttColon);

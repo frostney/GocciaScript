@@ -22,19 +22,20 @@ type
     FNextMethod: TGocciaValue;
     function AdvanceNextInternal(const AValue: TGocciaValue;
       const AHasValue: Boolean): TGocciaObjectValue;
+    function AdvanceNextResultInternal(const AValue: TGocciaValue;
+      const AHasValue: Boolean; out ADone: Boolean): TGocciaObjectValue;
     function ReturnInternal(const AValue: TGocciaValue;
       const AHasValue: Boolean): TGocciaObjectValue;
   public
     constructor Create(const AIteratorObject: TGocciaValue); overload;
-    // Overload for callers that have already resolved & validated
-    // `next` (e.g. GetIteratorValue / GetIteratorFromValue) — passes
-    // the captured callable straight in instead of forcing the
-    // constructor to re-run GetProperty(PROP_NEXT).  Keeps the
-    // capture-once contract end-to-end through the iterator
-    // acquisition pipeline.
+    // Overload for callers that have already resolved `next` (e.g.
+    // GetIteratorValue / GetIteratorFromValue).  ES2026 captures this
+    // value without validating callability; AdvanceNextInternal reports
+    // a non-callable `next` at the first step.
     constructor Create(const AIteratorObject, ANextMethod: TGocciaValue); overload;
     function AdvanceNext: TGocciaObjectValue; override;
     function AdvanceNextValue(const AValue: TGocciaValue): TGocciaObjectValue; override;
+    function AdvanceNextResultValue(const AValue: TGocciaValue): TGocciaObjectValue; override;
     function DirectNext(out ADone: Boolean): TGocciaValue; override;
     function DirectNextValue(const AValue: TGocciaValue; out ADone: Boolean): TGocciaValue; override;
     function ReturnValue(const AValue: TGocciaValue): TGocciaObjectValue; override;
@@ -79,23 +80,46 @@ constructor TGocciaGenericIteratorValue.Create(
 begin
   inherited Create;
   FSource := AIteratorObject;
-  // ANextMethod was resolved + validated by the caller (typically
-  // GetIteratorValue at the iteratorRecord-creation site).  Trusting
-  // it directly avoids a redundant GetProperty(PROP_NEXT) and keeps
-  // the capture-once contract from the caller through to
-  // AdvanceNextInternal — no opportunity for an interleaved
-  // user-side mutation to swap `next` between validation and use.
+  // ANextMethod was resolved by the caller (typically GetIteratorValue at
+  // the iteratorRecord-creation site).  Trusting it directly avoids a
+  // redundant GetProperty(PROP_NEXT) and keeps the capture-once contract
+  // from the caller through to AdvanceNextInternal.
   FNextMethod := ANextMethod;
 end;
 
 function TGocciaGenericIteratorValue.AdvanceNextInternal(
   const AValue: TGocciaValue; const AHasValue: Boolean): TGocciaObjectValue;
 var
-  NextResult, DoneVal, ValueVal: TGocciaValue;
+  Done: Boolean;
+  NextResult: TGocciaObjectValue;
+  ValueVal: TGocciaValue;
+begin
+  if FDone then
+    Exit(CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue,
+      True));
+
+  NextResult := AdvanceNextResultInternal(AValue, AHasValue, Done);
+  if Done then
+    ValueVal := TGocciaUndefinedLiteralValue.UndefinedValue
+  else
+  begin
+    ValueVal := NextResult.GetProperty(PROP_VALUE);
+    if not Assigned(ValueVal) then
+      ValueVal := TGocciaUndefinedLiteralValue.UndefinedValue;
+  end;
+  Result := CreateIteratorResult(ValueVal, Done);
+end;
+
+function TGocciaGenericIteratorValue.AdvanceNextResultInternal(
+  const AValue: TGocciaValue; const AHasValue: Boolean;
+  out ADone: Boolean): TGocciaObjectValue;
+var
+  NextResult, DoneVal: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
 begin
   if FDone then
   begin
+    ADone := True;
     Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
     Exit;
   end;
@@ -126,17 +150,10 @@ begin
     ThrowTypeError(Format(SErrorIteratorResultNotObject, [NextResult.TypeName]), SSuggestIteratorResultObject);
 
   DoneVal := TGocciaObjectValue(NextResult).GetProperty(PROP_DONE);
-  ValueVal := TGocciaObjectValue(NextResult).GetProperty(PROP_VALUE);
-  if not Assigned(ValueVal) then
-    ValueVal := TGocciaUndefinedLiteralValue.UndefinedValue;
-
-  if Assigned(DoneVal) and DoneVal.ToBooleanLiteral.Value then
-  begin
+  ADone := Assigned(DoneVal) and DoneVal.ToBooleanLiteral.Value;
+  if ADone then
     FDone := True;
-    Result := CreateIteratorResult(ValueVal, True);
-  end
-  else
-    Result := CreateIteratorResult(ValueVal, False);
+  Result := TGocciaObjectValue(NextResult);
 end;
 
 function TGocciaGenericIteratorValue.AdvanceNext: TGocciaObjectValue;
@@ -150,13 +167,24 @@ begin
   Result := AdvanceNextInternal(AValue, True);
 end;
 
+function TGocciaGenericIteratorValue.AdvanceNextResultValue(
+  const AValue: TGocciaValue): TGocciaObjectValue;
+var
+  Done: Boolean;
+begin
+  Result := AdvanceNextResultInternal(AValue, True, Done);
+end;
+
 function TGocciaGenericIteratorValue.DirectNext(out ADone: Boolean): TGocciaValue;
 var
   IteratorResult: TGocciaObjectValue;
 begin
-  IteratorResult := AdvanceNext;
-  ADone := IteratorResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value;
+  IteratorResult := AdvanceNextResultInternal(nil, False, ADone);
+  if ADone then
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
   Result := IteratorResult.GetProperty(PROP_VALUE);
+  if not Assigned(Result) then
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 function TGocciaGenericIteratorValue.DirectNextValue(
@@ -164,9 +192,10 @@ function TGocciaGenericIteratorValue.DirectNextValue(
 var
   IteratorResult: TGocciaObjectValue;
 begin
-  IteratorResult := AdvanceNextValue(AValue);
-  ADone := IteratorResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value;
+  IteratorResult := AdvanceNextResultInternal(AValue, True, ADone);
   Result := IteratorResult.GetProperty(PROP_VALUE);
+  if not Assigned(Result) then
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 function TGocciaGenericIteratorValue.ReturnInternal(

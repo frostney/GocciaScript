@@ -18,7 +18,7 @@ const DEFAULT_OUTPUT = path.join(
   "generated",
   "Generated.UnicodeData.pas",
 );
-const DEFAULT_UNICODE_VERSION = "16.0.0";
+const DEFAULT_UNICODE_VERSION = "17.0.0";
 const UCD_BASE_URL = "https://www.unicode.org/Public";
 
 const UCD_FILES = [

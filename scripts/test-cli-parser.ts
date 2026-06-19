@@ -74,6 +74,33 @@ console.log("Malformed literal class accessors...");
   }
 }
 
+// -- Accessor properties are invalid destructuring assignment targets -----------
+
+console.log("Accessor properties are invalid destructuring assignment targets...");
+{
+  for (const [source, desc] of [
+    ["let obj = {}; ({ get x() { return 1; } } = obj);\n", "getter destructuring target"],
+    ["let obj = {}; ({ set x(value) {} } = obj);\n", "setter destructuring target"],
+    ["let obj = {}; ({ get ['x']() { return 1; } } = obj);\n", "computed getter destructuring target"],
+    ["let obj = {}; ({ set ['x'](value) {} } = obj);\n", "computed setter destructuring target"],
+  ] as const) {
+    assertSyntaxError(source, desc);
+    assertSyntaxError(source, `${desc} (bytecode)`, ["--mode=bytecode"]);
+  }
+}
+
+// -- Strict-mode legacy octal literal rejection ---------------------------------
+
+console.log("Strict-mode legacy octal literal rejection...");
+{
+  const source = '"use strict";\n01;\n';
+  assertSyntaxError(source, "legacy octal literal in strict code", ["--compat-non-strict-mode"]);
+  assertSyntaxError(source, "legacy octal literal in strict bytecode", [
+    "--compat-non-strict-mode",
+    "--mode=bytecode",
+  ]);
+}
+
 // -- ASI at EOF -----------------------------------------------------------------
 
 console.log("ASI at EOF...");
@@ -98,12 +125,10 @@ console.log("ASI after do...while...");
     "do {} while (false) console.log('bad');\n",
     ["--compat-asi", "--compat-while-loops"],
   );
-  if (sameLine.exitCode === 0)
-    throw new Error(`do...while without semicolon or newline should fail under ASI`);
-  if (sameLine.json.ok !== false)
-    throw new Error(`do...while missing semicolon should report JSON failure, got: ${JSON.stringify(sameLine.json)}`);
-  if (sameLine.json.error?.type !== "SyntaxError")
-    throw new Error(`Expected SyntaxError for do...while missing semicolon, got: ${sameLine.json.error?.type}`);
+  if (sameLine.exitCode !== 0)
+    throw new Error(`do...while same-line continuation should apply ASI, got: ${JSON.stringify(sameLine.json)}`);
+  if (normalizeLineEndings(sameLine.json.output) !== "bad\n")
+    throw new Error(`Expected do...while same-line ASI output bad, got: ${sameLine.json.output}`);
 
   const newline = runLoaderJson(
     "do {} while (false)\nconsole.log('after');\n",

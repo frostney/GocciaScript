@@ -31,3 +31,30 @@ test("top-level var destructuring creates global-backed bindings", () => {
   expect(__gocciaGlobalObjectDestructuringVar).toBe(92);
   expect(globalThis.__gocciaGlobalObjectDestructuringVar).toBe(92);
 });
+
+test("object rest var binding copies enumerable data through getters", () => {
+  var count = 0;
+  var { ...rest } = {
+    get value() {
+      count++;
+      return 2;
+    },
+  };
+
+  expect(count).toBe(1);
+  expect(rest.value).toBe(2);
+  expect(Object.getOwnPropertyDescriptor(rest, "value").enumerable).toBe(true);
+});
+
+test("object rest var binding excludes extracted and non-enumerable properties", () => {
+  var source = { x: 1, y: 2, a: 3 };
+  Object.defineProperty(source, "hidden", { value: 4, enumerable: false });
+
+  var { a, ...rest } = source;
+
+  expect(a).toBe(3);
+  expect(rest.a).toBeUndefined();
+  expect(rest.hidden).toBeUndefined();
+  expect(rest.x).toBe(1);
+  expect(rest.y).toBe(2);
+});

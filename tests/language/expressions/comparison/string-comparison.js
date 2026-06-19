@@ -80,6 +80,17 @@ describe("string relational operators with varying lengths", () => {
     expect("apple" < "banana").toBe(true);
     expect("banana" > "apple").toBe(true);
   });
+
+  test("relational operators compare UTF-16 code units", () => {
+    expect("\uD7FF" < "\u{10000}").toBe(true);
+    expect("\uD800" < "\uDC00").toBe(true);
+    expect("\u{10000}" < "\uFFFF").toBe(true);
+    expect("\uDC00" > "\uD800").toBe(true);
+    expect("\u{10000}" > "\uFFFF").toBe(false);
+    expect("\u{12345}" > "\u{10000}").toBe(true);
+    expect("\u{10000}" <= "\uFFFF").toBe(true);
+    expect("\u{10000}" >= "\uFFFF").toBe(false);
+  });
 });
 
 describe("short strings (1-5 chars)", () => {

@@ -21,7 +21,6 @@ implementation
 uses
   SysUtils,
 
-  Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
@@ -59,93 +58,12 @@ begin
 end;
 
 function EvaluateInstanceof(const ALeft, ARight: TGocciaValue; const AIsObjectInstanceOfClass: TIsObjectInstanceOfClassFunction): TGocciaValue;
-var
-  ConstructorProto: TGocciaValue;
 begin
-  // ARight operand must be callable (a constructor)
-  if not (ARight is TGocciaClassValue) then
-  begin
-    // Check for native function constructors (e.g. Error, TypeError)
-    // ECMAScript: get ARight.prototype and walk ALeft's prototype chain
-    if (ARight is TGocciaFunctionBase) and (ALeft is TGocciaObjectValue) then
-    begin
-      ConstructorProto := TGocciaFunctionBase(ARight).GetProperty(PROP_PROTOTYPE);
-      if (ConstructorProto is TGocciaObjectValue) then
-      begin
-        if IsPrototypeInChain(TGocciaObjectValue(ALeft), TGocciaObjectValue(ConstructorProto)) then
-          Result := TGocciaBooleanLiteralValue.TrueValue
-        else
-          Result := TGocciaBooleanLiteralValue.FalseValue;
-        Exit;
-      end;
-    end;
-    Result := TGocciaBooleanLiteralValue.FalseValue;
-  end
+  // ES2026 §13.10.2 InstanceofOperator(value, target)
+  if InstanceofOperatorResult(ALeft, ARight) then
+    Result := TGocciaBooleanLiteralValue.TrueValue
   else
-  begin
-    // Check if ALeft is an instance of the ARight class
-    if ALeft is TGocciaInstanceValue then
-    begin
-      if TGocciaClassValue(ARight).Name = CONSTRUCTOR_OBJECT then
-      begin
-        Result := TGocciaBooleanLiteralValue.TrueValue;
-      end
-      else if TGocciaInstanceValue(ALeft).IsInstanceOf(TGocciaClassValue(ARight)) then
-      begin
-        Result := TGocciaBooleanLiteralValue.TrueValue;
-      end
-      else if AIsObjectInstanceOfClass(TGocciaObjectValue(ALeft), TGocciaClassValue(ARight)) then
-      begin
-        Result := TGocciaBooleanLiteralValue.TrueValue;
-      end
-      else
-      begin
-        Result := TGocciaBooleanLiteralValue.FalseValue;
-      end;
-    end
-    else if (ALeft is TGocciaFunctionValue) and (TGocciaClassValue(ARight).Name = 'Function') then
-    begin
-      // Functions are instances of Function
-      Result := TGocciaBooleanLiteralValue.TrueValue;
-    end
-    else if (ALeft is TGocciaNativeFunctionValue) and (TGocciaClassValue(ARight).Name = 'Function') then
-    begin
-      // Native functions are also instances of Function
-      Result := TGocciaBooleanLiteralValue.TrueValue;
-    end
-    else if (ALeft is TGocciaClassValue) and (TGocciaClassValue(ARight).Name = 'Function') then
-    begin
-      // Classes are also instances of Function (since classes are constructor functions)
-      Result := TGocciaBooleanLiteralValue.TrueValue;
-    end
-    else if (ALeft is TGocciaArrayValue) and (TGocciaClassValue(ARight).Name = CONSTRUCTOR_ARRAY) then
-    begin
-      // Arrays are instances of Array
-      Result := TGocciaBooleanLiteralValue.TrueValue;
-    end
-    else if (ALeft is TGocciaArrayValue) and (TGocciaClassValue(ARight).Name = CONSTRUCTOR_OBJECT) then
-    begin
-      // Arrays are also instances of Object (inheritance)
-      Result := TGocciaBooleanLiteralValue.TrueValue;
-    end
-    else if (ALeft is TGocciaObjectValue) and (TGocciaClassValue(ARight).Name = CONSTRUCTOR_OBJECT) then
-    begin
-      if AIsObjectInstanceOfClass(TGocciaObjectValue(ALeft), TGocciaClassValue(ARight)) then
-        Result := TGocciaBooleanLiteralValue.TrueValue
-      else
-        Result := TGocciaBooleanLiteralValue.FalseValue;
-    end
-    else if ALeft is TGocciaObjectValue then
-    begin
-      // General object instanceof check - walk the prototype chain
-      if AIsObjectInstanceOfClass(TGocciaObjectValue(ALeft), TGocciaClassValue(ARight)) then
-        Result := TGocciaBooleanLiteralValue.TrueValue
-      else
-        Result := TGocciaBooleanLiteralValue.FalseValue;
-    end
-    else
-      Result := TGocciaBooleanLiteralValue.FalseValue;
-  end;
+    Result := TGocciaBooleanLiteralValue.FalseValue;
 end;
 
 function EvaluateInOperator(const ALeft, ARight: TGocciaValue): TGocciaValue;

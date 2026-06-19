@@ -886,7 +886,7 @@ begin
     'for (const x of [1, 2, 3]) { }',
     False, False, False, False, False, False);
   try
-    Expect<Integer>(CountOp(Module.TopLevel, OP_PUSH_HANDLER)).ToBe(0);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_PUSH_FINALLY_HANDLER)).ToBe(0);
     Expect<Integer>(CountOp(Module.TopLevel, OP_POP_HANDLER)).ToBe(0);
   finally
     Module.Free;
@@ -901,7 +901,7 @@ begin
     'let sum = 0; for (const x of [1, 2, 3]) { sum = sum + x; } sum;',
     False, False, False, False, False, False);
   try
-    Expect<Integer>(CountOp(Module.TopLevel, OP_PUSH_HANDLER)).ToBe(1);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_PUSH_FINALLY_HANDLER)).ToBe(1);
     Expect<Integer>(CountOp(Module.TopLevel, OP_POP_HANDLER)).ToBe(1);
   finally
     Module.Free;
@@ -916,7 +916,7 @@ begin
     'for (const x of [1, 2, 3]) { throw x; }',
     False, False, False, False, False, False);
   try
-    Expect<Integer>(CountOp(Module.TopLevel, OP_PUSH_HANDLER)).ToBe(1);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_PUSH_FINALLY_HANDLER)).ToBe(1);
     Expect<Integer>(CountOp(Module.TopLevel, OP_POP_HANDLER)).ToBe(1);
   finally
     Module.Free;

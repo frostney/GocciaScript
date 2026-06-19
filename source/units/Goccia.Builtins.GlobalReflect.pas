@@ -604,6 +604,13 @@ begin
     Exit;
   end;
 
+  // ES2026 §10.4.7: Object.prototype has an immutable [[Prototype]].
+  if TGocciaObjectValue(Target) = TGocciaObjectValue.SharedObjectPrototype then
+  begin
+    Result := TGocciaBooleanLiteralValue.FalseValue;
+    Exit;
+  end;
+
   // ES2026 §10.1.2 OrdinarySetPrototypeOf step 3: If extensible is false, return false
   if not TGocciaObjectValue(Target).Extensible then
   begin

@@ -28,6 +28,7 @@ type
     Preprocessors: TGocciaPreprocessors;
     Compatibility: TGocciaCompatibilityFlags;
     SourceType: TGocciaSourceType;
+    InheritedStrictMode: Boolean;
   end;
 
   TGocciaFunctionBodyParseResult = record
@@ -191,6 +192,8 @@ begin
   Result.LooseEqualityEnabled := cfLooseEquality in AOptions.Compatibility;
   Result.NonStrictModeEnabled := (cfNonStrictMode in AOptions.Compatibility) and
     (AOptions.SourceType <> stModule);
+  Result.InheritedStrictMode := AOptions.InheritedStrictMode;
+  Result.ImportMetaAllowed := AOptions.SourceType = stModule;
   Result.LabelStatementsEnabled := cfLabel in AOptions.Compatibility;
   Result.ForInLoopsEnabled := cfForIn in AOptions.Compatibility;
 end;
@@ -439,6 +442,7 @@ begin
   Result.Preprocessors := [];
   Result.Compatibility := [];
   Result.SourceType := stScript;
+  Result.InheritedStrictMode := False;
 end;
 
 class function TGocciaSourcePipeline.CurrentOptionsOrDefault: TGocciaSourcePipelineOptions;

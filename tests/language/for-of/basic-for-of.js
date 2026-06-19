@@ -55,6 +55,14 @@ describe("basic for...of", () => {
     expect(result).toEqual(["a", " ", "b"]);
   });
 
+  test("iterates lone surrogate code units as single values", () => {
+    const result = [];
+    for (const ch of "a\ud801b\ud801") {
+      result.push(ch);
+    }
+    expect(result).toEqual(["a", "\ud801", "b", "\ud801"]);
+  });
+
   test("iterates arrays containing special values", () => {
     const result = [];
     for (const item of [undefined, null, NaN, "value"]) {

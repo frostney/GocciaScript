@@ -6,6 +6,7 @@ interface
 
 uses
   Goccia.Arguments.Collection,
+  Goccia.Realm,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
@@ -17,13 +18,18 @@ type
   TGocciaFunctionSharedPrototype = class(TGocciaObjectValue)
   public
     constructor Create;
+    function Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function IsCallable: Boolean; override;
+    function TypeOf: string; override;
 
     // Function prototype methods that are available on all functions
   public
+    function RestrictedFunctionPropertyThrow(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function FunctionCall(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function FunctionApply(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function FunctionBind(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function FunctionToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function FunctionHasInstance(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
   // Base class for all callable functions
@@ -33,6 +39,7 @@ type
     FStrictCode: Boolean;
     FHasOwnLengthProperty: Boolean;
     FHasOwnNameProperty: Boolean;
+    FCreationRealm: TGocciaRealm;
     // Subclasses should override these to provide name/length
     function GetFunctionLength: Integer; virtual;
     function GetFunctionName: string; virtual;
@@ -49,6 +56,8 @@ type
 
     // Abstract method that subclasses must implement
     function Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; virtual;
+    function ConstructWithReceiver(const AArguments: TGocciaArgumentsCollection;
+      const AReceiver: TGocciaValue; const ANewTarget: TGocciaValue): TGocciaValue; virtual;
     function CallPreparedArgs(const AArguments: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue; virtual;
     function CallNoArgs(const AThisValue: TGocciaValue): TGocciaValue; virtual;
@@ -62,6 +71,7 @@ type
     function DeleteProperty(const AName: string): Boolean; override;
     procedure DefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor); override;
     function TryDefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor): Boolean; override;
+    procedure InstallSloppyFunctionCallerArgumentsProperties;
 
     // VMT-based type discrimination
     function IsCallable: Boolean; override;
@@ -76,6 +86,7 @@ type
     // behavior; non-strict compatibility and Function constructor calls clear it.
     property StrictThis: Boolean read FStrictThis write FStrictThis;
     property StrictCode: Boolean read FStrictCode write FStrictCode;
+    property CreationRealm: TGocciaRealm read FCreationRealm;
   end;
 
   // Helper class for bound functions
@@ -114,6 +125,10 @@ type
 function DispatchCall(const ACallee: TGocciaValue;
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
+// ES2026 §13.10.2 InstanceofOperator(value, target)
+function InstanceofOperatorResult(const AInstance, ATarget: TGocciaValue): Boolean;
+// ES2026 §7.3.21 OrdinaryHasInstance(constructor, instance)
+function OrdinaryHasInstance(const AConstructor, AInstance: TGocciaValue): Boolean;
 
 // ES2026 §10.1.14 GetPrototypeFromConstructor: Get(constructor, "prototype")
 // directly — no bound-function unwrap. If the property is not an Object,
@@ -133,7 +148,8 @@ function GetProtoFromConstructorWithIntrinsic(const ANewTarget: TGocciaValue;
 // call so a GC during the body cannot collect a reachable instance.
 function ConstructOrdinaryWithReceiver(const ATarget: TGocciaFunctionBase;
   const AArguments: TGocciaArgumentsCollection;
-  const AReceiver: TGocciaObjectValue): TGocciaValue;
+  const AReceiver: TGocciaObjectValue;
+  const ANewTarget: TGocciaValue): TGocciaValue;
 
 // ES2026 §7.3.14 Construct(F, argumentsList, newTarget): single dispatch
 // across all callable forms — proxies, classes, native constructors,
@@ -147,6 +163,11 @@ function ConstructOrdinaryWithReceiver(const ATarget: TGocciaFunctionBase;
 function ConstructValue(const ATarget: TGocciaValue;
   const AArguments: TGocciaArgumentsCollection;
   const ANewTarget: TGocciaValue): TGocciaValue;
+
+// ES2026 §10.2.9 SetFunctionName property-key formatting shared by
+// interpreter and bytecode named-evaluation paths.
+function FunctionNameFromPropertyKey(const AKey: TGocciaValue;
+  const APrefix: string = ''): string;
 
 implementation
 
@@ -164,13 +185,13 @@ uses
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.ObjectModel,
-  Goccia.Realm,
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.HoleValue,
   Goccia.Values.NativeFunction,
-  Goccia.Values.ProxyValue;
+  Goccia.Values.ProxyValue,
+  Goccia.Values.SymbolValue;
 
 const
   MAX_FAST_APPLY_ARGUMENTS_LIST_LENGTH = 1048576;
@@ -190,6 +211,7 @@ end;
 
 function GetProtoFromConstructor(const ANewTarget: TGocciaValue): TGocciaObjectValue;
 var
+  FallbackRealm: TGocciaRealm;
   ProtoValue: TGocciaValue;
 begin
   if ANewTarget is TGocciaObjectValue then
@@ -201,6 +223,14 @@ begin
     Result := TGocciaObjectValue(ProtoValue)
   else
   begin
+    FallbackRealm := nil;
+    if ANewTarget is TGocciaFunctionBase then
+      FallbackRealm := TGocciaFunctionBase(ANewTarget).CreationRealm;
+    Result := TGocciaObjectValue.GetSharedObjectPrototypeForRealm(
+      FallbackRealm);
+    if Assigned(Result) then
+      Exit;
+
     if not Assigned(TGocciaObjectValue.SharedObjectPrototype) then
       TGocciaObjectValue.InitializeSharedPrototype;
     Result := TGocciaObjectValue.SharedObjectPrototype;
@@ -225,13 +255,15 @@ end;
 
 function ConstructOrdinaryWithReceiver(const ATarget: TGocciaFunctionBase;
   const AArguments: TGocciaArgumentsCollection;
-  const AReceiver: TGocciaObjectValue): TGocciaValue;
+  const AReceiver: TGocciaObjectValue;
+  const ANewTarget: TGocciaValue): TGocciaValue;
 var
   ReturnValue: TGocciaValue;
 begin
   TGarbageCollector.Instance.AddTempRoot(AReceiver);
   try
-    ReturnValue := ATarget.Call(AArguments, AReceiver);
+    ReturnValue := ATarget.ConstructWithReceiver(AArguments, AReceiver,
+      ANewTarget);
     if ReturnValue is TGocciaObjectValue then
       Result := ReturnValue
     else
@@ -292,13 +324,108 @@ begin
     else if EffectiveTarget is TGocciaFunctionBase then
       Result := ConstructOrdinaryWithReceiver(TGocciaFunctionBase(EffectiveTarget),
         WorkingArgs,
-        TGocciaObjectValue.Create(GetProtoFromConstructor(EffectiveNewTarget)))
+        TGocciaObjectValue.Create(GetProtoFromConstructor(EffectiveNewTarget)),
+        EffectiveNewTarget)
     else
       ThrowTypeError(SErrorReflectConstructTargetMustBeConstructor,
         SSuggestNotConstructorType);
   finally
     WorkingArgs.Free;
   end;
+end;
+
+function IsCallableForHasInstance(const AValue: TGocciaValue): Boolean; inline;
+begin
+  Result := AValue.IsCallable;
+end;
+
+function GetPrototypeOfObject(const AObject: TGocciaObjectValue): TGocciaValue;
+begin
+  if AObject is TGocciaProxyValue then
+    Result := TGocciaProxyValue(AObject).GetPrototypeTrap
+  else if Assigned(AObject.Prototype) then
+    Result := AObject.Prototype
+  else
+    Result := TGocciaNullLiteralValue.NullValue;
+end;
+
+// ES2026 §7.3.21 OrdinaryHasInstance(constructor, instance)
+function OrdinaryHasInstance(const AConstructor, AInstance: TGocciaValue): Boolean;
+var
+  ConstructorPrototype: TGocciaValue;
+  CurrentObject: TGocciaObjectValue;
+  CurrentPrototype: TGocciaValue;
+begin
+  if not IsCallableForHasInstance(AConstructor) then
+    Exit(False);
+
+  if AConstructor is TGocciaBoundFunctionValue then
+    Exit(InstanceofOperatorResult(AInstance,
+      TGocciaBoundFunctionValue(AConstructor).OriginalFunction));
+
+  if not (AInstance is TGocciaObjectValue) then
+    Exit(False);
+
+  if AConstructor is TGocciaObjectValue then
+    ConstructorPrototype := TGocciaObjectValue(AConstructor).GetProperty(PROP_PROTOTYPE)
+  else
+    ConstructorPrototype := nil;
+
+  if not (ConstructorPrototype is TGocciaObjectValue) then
+    ThrowTypeError('Function has non-object prototype',
+      'set the constructor prototype property to an object');
+
+  CurrentObject := TGocciaObjectValue(AInstance);
+  while True do
+  begin
+    CurrentPrototype := GetPrototypeOfObject(CurrentObject);
+    if (CurrentPrototype = nil) or
+       (CurrentPrototype is TGocciaNullLiteralValue) then
+      Exit(False);
+    if CurrentPrototype = ConstructorPrototype then
+      Exit(True);
+    if not (CurrentPrototype is TGocciaObjectValue) then
+      Exit(False);
+    CurrentObject := TGocciaObjectValue(CurrentPrototype);
+  end;
+end;
+
+// ES2026 §13.10.2 InstanceofOperator(value, target)
+function InstanceofOperatorResult(const AInstance, ATarget: TGocciaValue): Boolean;
+var
+  Args: TGocciaArgumentsCollection;
+  Handler: TGocciaValue;
+  HandlerResult: TGocciaValue;
+begin
+  if not (ATarget is TGocciaObjectValue) then
+    ThrowTypeError('Right-hand side of instanceof is not an object',
+      'use a constructor function or an object with Symbol.hasInstance');
+
+  Handler := TGocciaObjectValue(ATarget).GetSymbolProperty(
+    TGocciaSymbolValue.WellKnownHasInstance);
+  if Assigned(Handler) and
+     not (Handler is TGocciaUndefinedLiteralValue) and
+     not (Handler is TGocciaNullLiteralValue) then
+  begin
+    if not Handler.IsCallable then
+      ThrowTypeError('Symbol.hasInstance must be callable',
+        'set Symbol.hasInstance to a function or remove it');
+
+    Args := TGocciaArgumentsCollection.CreateWithCapacity(1);
+    try
+      Args.Add(AInstance);
+      HandlerResult := DispatchCall(Handler, Args, ATarget);
+      Exit(HandlerResult.ToBooleanLiteral.Value);
+    finally
+      Args.Free;
+    end;
+  end;
+
+  if not IsCallableForHasInstance(ATarget) then
+    ThrowTypeError('Right-hand side of instanceof is not callable',
+      'use a constructor function or define Symbol.hasInstance');
+
+  Result := OrdinaryHasInstance(ATarget, AInstance);
 end;
 
 { TGocciaFunctionBase }
@@ -355,11 +482,34 @@ begin
   Result := 'bound ' + Result;
 end;
 
+function FunctionNameFromPropertyKey(const AKey: TGocciaValue;
+  const APrefix: string = ''): string;
+var
+  Symbol: TGocciaSymbolValue;
+begin
+  if AKey is TGocciaSymbolValue then
+  begin
+    Symbol := TGocciaSymbolValue(AKey);
+    if Symbol.HasDescription then
+      Result := '[' + Symbol.Description + ']'
+    else
+      Result := '';
+  end
+  else if AKey is TGocciaStringLiteralValue then
+    Result := TGocciaStringLiteralValue(AKey).Value
+  else
+    Result := AKey.ToStringLiteral.Value;
+
+  if APrefix <> '' then
+    Result := APrefix + ' ' + Result;
+end;
+
 constructor TGocciaFunctionBase.Create;
 var
   Shared: TGocciaFunctionSharedPrototype;
 begin
   inherited Create;
+  FCreationRealm := CurrentRealm;
   FStrictThis := True;
   FStrictCode := True;
   FHasOwnLengthProperty := True;
@@ -374,6 +524,16 @@ begin
 
   if Assigned(Shared) then
     Self.Prototype := Shared;
+end;
+
+procedure TGocciaFunctionBase.InstallSloppyFunctionCallerArgumentsProperties;
+begin
+  if not HasOwnProperty(PROP_CALLER) then
+    DefineProperty(PROP_CALLER, TGocciaPropertyDescriptorData.Create(
+      TGocciaUndefinedLiteralValue.UndefinedValue, [pfConfigurable]));
+  if not HasOwnProperty(PROP_ARGUMENTS) then
+    DefineProperty(PROP_ARGUMENTS, TGocciaPropertyDescriptorData.Create(
+      TGocciaUndefinedLiteralValue.UndefinedValue, [pfConfigurable]));
 end;
 
 function TGocciaFunctionBase.GetProperty(const AName: string): TGocciaValue;
@@ -542,6 +702,13 @@ begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
+function TGocciaFunctionBase.ConstructWithReceiver(
+  const AArguments: TGocciaArgumentsCollection; const AReceiver: TGocciaValue;
+  const ANewTarget: TGocciaValue): TGocciaValue;
+begin
+  Result := Call(AArguments, AReceiver);
+end;
+
 function TGocciaFunctionBase.CallPreparedArgs(
   const AArguments: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
@@ -625,7 +792,8 @@ end;
 
 constructor TGocciaFunctionSharedPrototype.Create;
 var
-  Members: array[0..3] of TGocciaMemberDefinition;
+  Members: array[0..4] of TGocciaMemberDefinition;
+  Thrower: TGocciaNativeFunctionValue;
 begin
   inherited Create;
 
@@ -641,10 +809,22 @@ begin
       TGocciaNumberLiteralValue.ZeroValue, [pfConfigurable]));
     DefineProperty(PROP_NAME, TGocciaPropertyDescriptorData.Create(
       TGocciaStringLiteralValue.Create(''), [pfConfigurable]));
+    Thrower := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+      RestrictedFunctionPropertyThrow, '', 0);
+    DefineProperty(PROP_CALLER, TGocciaPropertyDescriptorAccessor.Create(
+      Thrower, Thrower, [pfConfigurable]));
+    DefineProperty(PROP_ARGUMENTS, TGocciaPropertyDescriptorAccessor.Create(
+      Thrower, Thrower, [pfConfigurable]));
     Members[0] := DefineNamedMethod('call', FunctionCall, 1);
     Members[1] := DefineNamedMethod('apply', FunctionApply, 2);
     Members[2] := DefineNamedMethod('bind', FunctionBind, 1);
     Members[3] := DefineNamedMethod(PROP_TO_STRING, FunctionToString, 0);
+    Members[4] := DefineSymbolMethod(
+      TGocciaSymbolValue.WellKnownHasInstance,
+      '[Symbol.hasInstance]',
+      FunctionHasInstance,
+      1,
+      []);
     RegisterMemberDefinitions(Self, Members);
   except
     if Assigned(CurrentRealm) and (CurrentRealm.GetSlot(GFunctionPrototypeSlot) = Self) then
@@ -653,13 +833,41 @@ begin
   end;
 end;
 
-// Dispatch a call to a TGocciaFunctionBase, TGocciaClassValue, or callable Proxy.
+function TGocciaFunctionSharedPrototype.TypeOf: string;
+begin
+  Result := FUNCTION_TYPE_NAME;
+end;
+
+function TGocciaFunctionSharedPrototype.IsCallable: Boolean;
+begin
+  Result := True;
+end;
+
+// ES2026 §20.2.2.1 Function.prototype
+function TGocciaFunctionSharedPrototype.Call(
+  const AArguments: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TGocciaFunctionSharedPrototype.RestrictedFunctionPropertyThrow(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  ThrowTypeError('caller and arguments are restricted function properties');
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+// Dispatch a call to a function object, class constructor, or callable Proxy.
 function DispatchCall(const ACallee: TGocciaValue;
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
   if ACallee is TGocciaFunctionBase then
     Result := TGocciaFunctionBase(ACallee).Call(AArgs, AThisValue)
+  else if ACallee is TGocciaFunctionSharedPrototype then
+    Result := TGocciaFunctionSharedPrototype(ACallee).Call(AArgs, AThisValue)
   else if ACallee is TGocciaClassValue then
     Result := TGocciaClassValue(ACallee).Call(AArgs, AThisValue)
   else if (ACallee is TGocciaProxyValue) and ACallee.IsCallable then
@@ -927,6 +1135,24 @@ begin
   Result := TGocciaStringLiteralValue.Create('function ' + FuncName + '() { [native code] }');
 end;
 
+// ES2026 §20.2.3.6 Function.prototype [ @@hasInstance ] ( value )
+function TGocciaFunctionSharedPrototype.FunctionHasInstance(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Value: TGocciaValue;
+begin
+  if AArgs.Length > 0 then
+    Value := AArgs.GetElement(0)
+  else
+    Value := TGocciaUndefinedLiteralValue.UndefinedValue;
+
+  if OrdinaryHasInstance(AThisValue, Value) then
+    Result := TGocciaBooleanLiteralValue.TrueValue
+  else
+    Result := TGocciaBooleanLiteralValue.FalseValue;
+end;
+
 { TGocciaBoundFunctionValue }
 
 constructor TGocciaBoundFunctionValue.CreateWithoutArgs(
@@ -1031,13 +1257,8 @@ begin
     for I := 0 to AArguments.Length - 1 do
       CombinedArgs.Add(AArguments.GetElement(I));
 
-    // Call the original function with the bound 'this' and combined arguments
-    if FOriginalFunction is TGocciaFunctionBase then
-      Result := TGocciaFunctionBase(FOriginalFunction).Call(CombinedArgs, FBoundThis)
-    else if FOriginalFunction is TGocciaClassValue then
-      Result := TGocciaClassValue(FOriginalFunction).Call(CombinedArgs, FBoundThis)
-    else if (FOriginalFunction is TGocciaProxyValue) and FOriginalFunction.IsCallable then
-      Result := TGocciaProxyValue(FOriginalFunction).ApplyTrap(CombinedArgs, FBoundThis)
+    if Assigned(FOriginalFunction) and FOriginalFunction.IsCallable then
+      Result := DispatchCall(FOriginalFunction, CombinedArgs, FBoundThis)
     else
       raise TGocciaError.Create('BoundFunction.Call: Original function is not callable', 0, 0, '', nil);
   finally
@@ -1047,13 +1268,22 @@ end;
 
 function TGocciaBoundFunctionValue.CallNoArgs(
   const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Args: TGocciaArgumentsCollection;
 begin
   if not FOriginalFunction.IsCallable then
     raise TGocciaError.Create('BoundFunction.Call: Original function is not callable', 0, 0, '', nil);
 
   // Fast path for TGocciaFunctionBase targets only
   if not (FOriginalFunction is TGocciaFunctionBase) then
-    Exit(Call(TGocciaArgumentsCollection.Create, AThisValue));
+  begin
+    Args := TGocciaArgumentsCollection.Create;
+    try
+      Exit(Call(Args, AThisValue));
+    finally
+      Args.Free;
+    end;
+  end;
 
   case FBoundArgCount of
     0:

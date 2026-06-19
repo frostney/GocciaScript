@@ -440,6 +440,20 @@ begin
   WriteLn('GocciaTestRunner built successfully');
 end;
 
+procedure BuildFFIFixture;
+var
+  Output: string;
+begin
+  WriteLn('Building FFI fixture library...');
+  if not RunCommand('./fixtures/ffi/build.sh', [], Output) then
+  begin
+    WriteLn(Output);
+    WriteLn('FFI fixture build failed');
+    Halt(1);
+  end;
+  WriteLn(Output);
+end;
+
 procedure BuildBenchmarkRunner;
 var
   Output: string;
@@ -509,7 +523,10 @@ begin
   else if ATrigger = 'tests' then
     BuildTests
   else if ATrigger = 'testrunner' then
-    BuildTestRunner
+  begin
+    BuildTestRunner;
+    BuildFFIFixture;
+  end
   else if ATrigger = 'benchmarkrunner' then
     BuildBenchmarkRunner
   else if ATrigger = 'bundler' then

@@ -31,7 +31,8 @@ type
     entry file using module source uses it so the test runner can
     read the runTests(...) results object. }
   TGocciaModuleBodyEvaluator = function(const AProgram: TGocciaProgram;
-    const AContext: TGocciaEvaluationContext): TGocciaValue of object;
+    const AContext: TGocciaEvaluationContext;
+    out AProgramConsumed: Boolean): TGocciaValue of object;
   TGocciaRuntimeModuleLoader = function(const AResolvedPath: string;
     out AModule: TGocciaModule): Boolean of object;
 
@@ -173,7 +174,6 @@ uses
   Goccia.Keywords.Reserved,
   Goccia.Realm,
   Goccia.Values.Error,
-  Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionValue,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectValue,
@@ -301,12 +301,20 @@ function TGocciaDeferredModuleBody.Invoke(
 var
   ActiveOptionsScope: TGocciaSourcePipelineOptionsScope;
   BodyResult: TGocciaValue;
+  ProgramConsumed: Boolean;
 begin
   ActiveOptionsScope := TGocciaSourcePipeline.ActivateOptions(
     FPipelineOptions);
   try
     try
-      BodyResult := FLoader.FEvaluateModuleBody(FProgramNode, FContext);
+      ProgramConsumed := False;
+      try
+        BodyResult := FLoader.FEvaluateModuleBody(FProgramNode, FContext,
+          ProgramConsumed);
+      finally
+        if ProgramConsumed then
+          FProgramNode := nil;
+      end;
       if FHasTopLevelAwait then
         Result := BodyResult
       else
@@ -681,6 +689,7 @@ var
   RequestedModules: TGocciaModuleList;
   ActiveOptionsScope: TGocciaSourcePipelineOptionsScope;
   ProgramNode: TGocciaProgram;
+  ProgramConsumed: Boolean;
   ReExportDecl: TGocciaReExportDeclaration;
   RequestedModulePath: string;
   ResolvedPath: string;
@@ -1179,7 +1188,8 @@ begin
     Seen := TOrderedStringMap<Boolean>.Create;
     try
       if DeferredGraphTouchesEvaluating(CacheKey, Seen) then
-        ThrowTypeError('Deferred module cannot be synchronously evaluated while it or one of its dependencies is evaluating');
+        raise EGocciaDeferredModuleNotReady.Create(
+          DEFERRED_MODULE_NOT_READY_MESSAGE);
     finally
       Seen.Free;
     end;
@@ -1236,6 +1246,7 @@ begin
 
   Content := FContentProvider.LoadContent(ResolvedPath);
   try
+    PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
     PipelineOptions.Preprocessors := FPreprocessors;
     PipelineOptions.Compatibility := FCompatibility;
     PipelineOptions.SourceType := stModule;
@@ -1284,14 +1295,15 @@ begin
           Context.CoverageEnabled := False;
           Context.StrictTypes := FStrictTypesEnabled;
           Context.NonStrictMode := False;
+          Context.CompatibilityNonStrictMode := False;
           Context.DisposalTracker := nil;
 
           PredeclareModuleLexicalDeclarations(ProgramNode, ModuleScope);
           HoistFunctionDeclarations(ProgramNode.Body, Context, True);
           if GetVarEnabled then
-            HoistVarDeclarations(ProgramNode.Body, ModuleScope);
+            HoistVarDeclarations(ProgramNode.Body, ModuleScope, Context);
+          Context.ModuleEnvironmentInitialized := True;
           RegisterStaticModuleExports(False);
-          RegisterStaticModuleExports(True);
           EvaluateRequestedModulesInSourceOrder;
           RegisterStaticModuleExports(True);
           DrainRequestedModuleEvaluationPromises;
@@ -1316,7 +1328,13 @@ begin
             PipelineOptions);
           try
             try
-              FEvaluateModuleBody(ProgramNode, Context);
+              ProgramConsumed := False;
+              try
+                FEvaluateModuleBody(ProgramNode, Context, ProgramConsumed);
+              finally
+                if ProgramConsumed then
+                  ProgramNode := nil;
+              end;
             except
               on E: EGocciaBytecodeThrow do
               begin
@@ -1430,6 +1448,7 @@ begin
 
   Content := FContentProvider.LoadContent(ResolvedPath);
   try
+    PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
     PipelineOptions.Preprocessors := FPreprocessors;
     PipelineOptions.Compatibility := FCompatibility;
     PipelineOptions.SourceType := stModule;
@@ -1505,6 +1524,7 @@ begin
 
   Content := FContentProvider.LoadContent(PhysicalPath);
   try
+    PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
     PipelineOptions.Preprocessors := FPreprocessors;
     PipelineOptions.Compatibility := FCompatibility;
     PipelineOptions.SourceType := stModule;
@@ -1581,6 +1601,7 @@ begin
 
   Content := FContentProvider.LoadContent(PhysicalPath);
   try
+    PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
     PipelineOptions.Preprocessors := FPreprocessors;
     PipelineOptions.Compatibility := FCompatibility;
     PipelineOptions.SourceType := stModule;
@@ -1669,6 +1690,7 @@ begin
 
   Content := FContentProvider.LoadContent(PhysicalPath);
   try
+    PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
     PipelineOptions.Preprocessors := FPreprocessors;
     PipelineOptions.Compatibility := FCompatibility;
     PipelineOptions.SourceType := stModule;

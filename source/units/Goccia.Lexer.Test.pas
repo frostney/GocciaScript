@@ -34,13 +34,20 @@ type
     procedure AssertTokenizesKeywordToken(const AKeyword: string; const ATokenType: TGocciaTokenType);
     procedure AssertContextualKeywordUsesDivGoal(const AKeyword: string;
       const ATokenType: TGocciaTokenType);
+    procedure AssertTokenizesIdentifier(const ASource: string;
+      const AExpectedLexeme: string);
+    procedure AssertIdentifierRaisesLexerError(const ASource: string;
+      const AExpectedMessage: string);
     procedure TestIgnoresLeadingHashbang;
     procedure TestPreservesLineNumbersAfterHashbang;
     procedure TestHashbangRequiresHashbangLexicalGoal;
     procedure TestCommentTerminatedByUnicodeLineTerminators;
     procedure TestTokenizesKeywordTokens;
     procedure TestContextualKeywordTokensUseDivGoal;
+    procedure TestUnicodeIdentifierStartAndPartCodePoints;
+    procedure TestEscapedIdentifiersUseECMAScriptIdentifierRules;
     procedure TestCRIncrementsLineInWhitespace;
+    procedure TestECMAScriptUnicodeWhitespaceCodePoints;
     procedure TestCRIncrementsLineInBlockComment;
     procedure TestUnicodeLineTerminatorsInBlockComment;
     procedure TestUnicodeLineTerminatorsBetweenTokens;
@@ -65,7 +72,13 @@ begin
   Test('Tokenizes keyword tokens', TestTokenizesKeywordTokens);
   Test('Contextual keyword tokens use explicit division lexical goal',
     TestContextualKeywordTokensUseDivGoal);
+  Test('Unicode identifier start and part code points',
+    TestUnicodeIdentifierStartAndPartCodePoints);
+  Test('Escaped identifiers use ECMAScript identifier rules',
+    TestEscapedIdentifiersUseECMAScriptIdentifierRules);
   Test('CR increments line counter in whitespace', TestCRIncrementsLineInWhitespace);
+  Test('ECMAScript Unicode whitespace separates tokens',
+    TestECMAScriptUnicodeWhitespaceCodePoints);
   Test('CR increments line counter in block comments', TestCRIncrementsLineInBlockComment);
   Test('Unicode line terminators increment line counter in block comments', TestUnicodeLineTerminatorsInBlockComment);
   Test('Unicode line terminators split tokens', TestUnicodeLineTerminatorsBetweenTokens);
@@ -203,6 +216,51 @@ begin
   end;
 end;
 
+procedure TLexerTests.AssertTokenizesIdentifier(const ASource: string;
+  const AExpectedLexeme: string);
+var
+  Lexer: TGocciaLexer;
+  Tokens: TObjectList<TGocciaToken>;
+begin
+  Lexer := TGocciaLexer.Create(ASource, '<test>');
+  try
+    ScanAllTokens(Lexer, glgInputElementRegExp);
+    Tokens := Lexer.Tokens;
+    Expect<Integer>(Tokens.Count).ToBe(2);
+    Expect<TGocciaTokenType>(Tokens[0].TokenType).ToBe(gttIdentifier);
+    Expect<string>(Tokens[0].Lexeme).ToBe(AExpectedLexeme);
+  finally
+    Lexer.Free;
+  end;
+end;
+
+procedure TLexerTests.AssertIdentifierRaisesLexerError(const ASource: string;
+  const AExpectedMessage: string);
+var
+  Lexer: TGocciaLexer;
+  MessageMatches: Boolean;
+  Raised: Boolean;
+begin
+  Lexer := TGocciaLexer.Create(ASource, '<test>');
+  try
+    MessageMatches := False;
+    Raised := False;
+    try
+      ScanAllTokens(Lexer, glgInputElementRegExp);
+    except
+      on E: TGocciaLexerError do
+      begin
+        MessageMatches := Pos(AExpectedMessage, E.Message) > 0;
+        Raised := True;
+      end;
+    end;
+    Expect<Boolean>(Raised).ToBe(True);
+    Expect<Boolean>(MessageMatches).ToBe(True);
+  finally
+    Lexer.Free;
+  end;
+end;
+
 procedure TLexerTests.TestIgnoresLeadingHashbang;
 const
   CRLF = #13#10;
@@ -307,6 +365,26 @@ begin
       ExpectedContextualKeywordTokens[I].TokenType);
 end;
 
+procedure TLexerTests.TestUnicodeIdentifierStartAndPartCodePoints;
+const
+  UTF8_GREEK_SMALL_LETTER_PI = #$CF#$80;
+  UTF8_ROCKET = #$F0#$9F#$9A#$80;
+  UTF8_ZERO_WIDTH_NON_JOINER = #$E2#$80#$8C;
+begin
+  AssertTokenizesIdentifier(UTF8_GREEK_SMALL_LETTER_PI,
+    UTF8_GREEK_SMALL_LETTER_PI);
+  AssertTokenizesIdentifier('\u03C0', UTF8_GREEK_SMALL_LETTER_PI);
+  AssertTokenizesIdentifier('a\u200C', 'a' + UTF8_ZERO_WIDTH_NON_JOINER);
+  AssertTokenizesIdentifier(UTF8_ROCKET, UTF8_ROCKET);
+end;
+
+procedure TLexerTests.TestEscapedIdentifiersUseECMAScriptIdentifierRules;
+begin
+  AssertIdentifierRaisesLexerError('\u200C', 'Invalid identifier escape');
+  AssertIdentifierRaisesLexerError('\u200D', 'Invalid identifier escape');
+  AssertIdentifierRaisesLexerError('\u{1F680}', 'Invalid identifier escape');
+end;
+
 procedure TLexerTests.TestCRIncrementsLineInWhitespace;
 var
   Lexer: TGocciaLexer;
@@ -335,6 +413,47 @@ begin
     Expect<Integer>(Tokens[5].Column).ToBe(1);
   finally
     Lexer.Free;
+  end;
+end;
+
+procedure TLexerTests.TestECMAScriptUnicodeWhitespaceCodePoints;
+const
+  UTF8_OGHAM_SPACE = #$E1#$9A#$80;
+  UTF8_EM_SPACE = #$E2#$80#$83;
+  UTF8_NARROW_NO_BREAK_SPACE = #$E2#$80#$AF;
+  UTF8_MEDIUM_MATHEMATICAL_SPACE = #$E2#$81#$9F;
+  UTF8_IDEOGRAPHIC_SPACE = #$E3#$80#$80;
+  UTF8_ZERO_WIDTH_NO_BREAK_SPACE = #$EF#$BB#$BF;
+  WhitespaceSamples: array[0..5] of string = (
+    UTF8_OGHAM_SPACE,
+    UTF8_EM_SPACE,
+    UTF8_NARROW_NO_BREAK_SPACE,
+    UTF8_MEDIUM_MATHEMATICAL_SPACE,
+    UTF8_IDEOGRAPHIC_SPACE,
+    UTF8_ZERO_WIDTH_NO_BREAK_SPACE
+  );
+var
+  I: Integer;
+  Lexer: TGocciaLexer;
+  Tokens: TObjectList<TGocciaToken>;
+begin
+  for I := Low(WhitespaceSamples) to High(WhitespaceSamples) do
+  begin
+    Lexer := TGocciaLexer.Create('/x/g' + WhitespaceSamples[I] +
+      '; var' + WhitespaceSamples[I] + 'name;', '<test>');
+    try
+      ScanAllTokens(Lexer, glgInputElementRegExp);
+      Tokens := Lexer.Tokens;
+      Expect<Integer>(Tokens.Count).ToBe(6);
+      Expect<TGocciaTokenType>(Tokens[0].TokenType).ToBe(gttRegex);
+      Expect<TGocciaTokenType>(Tokens[1].TokenType).ToBe(gttSemicolon);
+      Expect<TGocciaTokenType>(Tokens[2].TokenType).ToBe(gttVar);
+      Expect<TGocciaTokenType>(Tokens[3].TokenType).ToBe(gttIdentifier);
+      Expect<string>(Tokens[3].Lexeme).ToBe('name');
+      Expect<TGocciaTokenType>(Tokens[4].TokenType).ToBe(gttSemicolon);
+    finally
+      Lexer.Free;
+    end;
   end;
 end;
 
@@ -424,6 +543,8 @@ end;
 procedure TLexerTests.TestRegexLiteralPreservesRawPattern;
 const
   REGEX_SEPARATOR = #0;
+  PATTERN = 'a\/b[\/]';
+  FLAGS = 'gi';
 var
   Lexer: TGocciaLexer;
   Tokens: TObjectList<TGocciaToken>;
@@ -433,7 +554,8 @@ begin
     ScanAllTokens(Lexer, glgInputElementRegExp);
     Tokens := Lexer.Tokens;
     Expect<TGocciaTokenType>(Tokens[3].TokenType).ToBe(gttRegex);
-    Expect<string>(Tokens[3].Lexeme).ToBe('a\/b[\/]' + REGEX_SEPARATOR + 'gi');
+    Expect<string>(Tokens[3].Lexeme).ToBe(
+      IntToStr(Length(PATTERN)) + REGEX_SEPARATOR + PATTERN + FLAGS);
   finally
     Lexer.Free;
   end;
@@ -458,7 +580,7 @@ begin
   try
     Token := Lexer.ScanNextToken(glgInputElementRegExp);
     Expect<TGocciaTokenType>(Token.TokenType).ToBe(gttRegex);
-    Expect<string>(Token.Lexeme).ToBe('=' + REGEX_SEPARATOR);
+    Expect<string>(Token.Lexeme).ToBe('1' + REGEX_SEPARATOR + '=');
   finally
     Lexer.Free;
   end;

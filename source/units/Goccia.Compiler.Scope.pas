@@ -22,6 +22,7 @@ type
     Depth: Integer;
     IsCaptured: Boolean;
     IsConst: Boolean;
+    IsNonStrictImmutable: Boolean;
     IsVar: Boolean;
     IsGlobalBacked: Boolean;
     IsArrayTyped: Boolean;
@@ -46,6 +47,7 @@ type
     Index: UInt8;
     IsLocal: Boolean;
     IsConst: Boolean;
+    IsNonStrictImmutable: Boolean;
     IsVar: Boolean;
     IsGlobalBacked: Boolean;
     TypeHint: TGocciaLocalType;
@@ -112,6 +114,7 @@ type
     function GetLocal(const AIndex: Integer): TGocciaCompilerLocal;
     function GetUpvalue(const AIndex: Integer): TGocciaCompilerUpvalue;
     procedure MarkCaptured(const AIndex: Integer);
+    procedure MarkNonStrictImmutable(const AIndex: Integer);
     procedure MarkGlobalBacked(const AIndex: Integer);
     procedure SetLocalTypeHint(const AIndex: Integer;
       const ATypeHint: TGocciaLocalType);
@@ -247,6 +250,7 @@ begin
   FLocals[FLocalCount].Depth := FDepth;
   FLocals[FLocalCount].IsCaptured := False;
   FLocals[FLocalCount].IsConst := AIsConst;
+  FLocals[FLocalCount].IsNonStrictImmutable := False;
   FLocals[FLocalCount].IsVar := False;
   FLocals[FLocalCount].IsGlobalBacked := False;
   FLocals[FLocalCount].IsArrayTyped := False;
@@ -298,6 +302,7 @@ begin
   FLocals[FLocalCount].Depth := 0;
   FLocals[FLocalCount].IsCaptured := False;
   FLocals[FLocalCount].IsConst := False;
+  FLocals[FLocalCount].IsNonStrictImmutable := False;
   FLocals[FLocalCount].IsVar := True;
   FLocals[FLocalCount].IsGlobalBacked := False;
   FLocals[FLocalCount].IsArrayTyped := False;
@@ -357,6 +362,8 @@ begin
     FParent.MarkCaptured(LocalIdx);
     Idx := AddUpvalue(AName, FParent.FLocals[LocalIdx].Slot, True,
       FParent.FLocals[LocalIdx].IsConst, FParent.FLocals[LocalIdx].IsVar);
+    FUpvalues[Idx].IsNonStrictImmutable :=
+      FParent.FLocals[LocalIdx].IsNonStrictImmutable;
     FUpvalues[Idx].IsGlobalBacked := FParent.FLocals[LocalIdx].IsGlobalBacked;
     FUpvalues[Idx].TypeHint := FParent.FLocals[LocalIdx].TypeHint;
     FUpvalues[Idx].IsStrictlyTyped := FParent.FLocals[LocalIdx].IsStrictlyTyped;
@@ -382,6 +389,8 @@ begin
     Idx := AddUpvalue(AName, UInt8(UpvalueIdx), False,
       FParent.FUpvalues[UpvalueIdx].IsConst,
       FParent.FUpvalues[UpvalueIdx].IsVar);
+    FUpvalues[Idx].IsNonStrictImmutable :=
+      FParent.FUpvalues[UpvalueIdx].IsNonStrictImmutable;
     FUpvalues[Idx].IsGlobalBacked := FParent.FUpvalues[UpvalueIdx].IsGlobalBacked;
     FUpvalues[Idx].TypeHint := FParent.FUpvalues[UpvalueIdx].TypeHint;
     FUpvalues[Idx].IsStrictlyTyped := FParent.FUpvalues[UpvalueIdx].IsStrictlyTyped;
@@ -417,6 +426,7 @@ begin
   FUpvalues[FUpvalueCount].Index := AIndex;
   FUpvalues[FUpvalueCount].IsLocal := AIsLocal;
   FUpvalues[FUpvalueCount].IsConst := AIsConst;
+  FUpvalues[FUpvalueCount].IsNonStrictImmutable := False;
   FUpvalues[FUpvalueCount].IsVar := AIsVar;
   FUpvalues[FUpvalueCount].IsGlobalBacked := False;
   FUpvalues[FUpvalueCount].TypeHint := sltUntyped;
@@ -492,6 +502,11 @@ end;
 procedure TGocciaCompilerScope.MarkCaptured(const AIndex: Integer);
 begin
   FLocals[AIndex].IsCaptured := True;
+end;
+
+procedure TGocciaCompilerScope.MarkNonStrictImmutable(const AIndex: Integer);
+begin
+  FLocals[AIndex].IsNonStrictImmutable := True;
 end;
 
 procedure TGocciaCompilerScope.MarkGlobalBacked(const AIndex: Integer);

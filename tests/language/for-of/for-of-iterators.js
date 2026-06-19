@@ -255,6 +255,30 @@ describe("for...of with iterators", () => {
     expect(returnCalled).toBe(1);
   });
 
+  test("break propagates iterator return errors", () => {
+    let returnCalled = 0;
+    const iterable = {
+      [Symbol.iterator]() {
+        return {
+          next() {
+            return { value: 1, done: false };
+          },
+          return() {
+            returnCalled++;
+            return 0;
+          }
+        };
+      }
+    };
+
+    expect(() => {
+      for (const value of iterable) {
+        break;
+      }
+    }).toThrow(TypeError);
+    expect(returnCalled).toBe(1);
+  });
+
   test("calls iterator return before returning from a function", () => {
     let returnCalled = 0;
     const iterable = {
@@ -345,5 +369,25 @@ describe("for...of with iterators", () => {
       for (const item of { a: 1 }) {
       }
     }).toThrow(TypeError);
+  });
+
+  test("lexical loop head names are in TDZ while evaluating the iterable", () => {
+    let value = "outer";
+    expect(() => {
+      for (let value of [value]) {
+      }
+    }).toThrow(ReferenceError);
+    expect(value).toBe("outer");
+  });
+
+  test("async functions reject when await-using loop head hits TDZ", async () => {
+    await expect((async () => {
+      let resource = {
+        async [Symbol.asyncDispose]() {
+        }
+      };
+      for (await using resource of [resource]) {
+      }
+    })()).rejects.toThrow(ReferenceError);
   });
 });

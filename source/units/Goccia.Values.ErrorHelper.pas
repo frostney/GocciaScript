@@ -5,6 +5,7 @@ unit Goccia.Values.ErrorHelper;
 interface
 
 uses
+  Goccia.Realm,
   Goccia.Values.ObjectValue;
 
 { Creates a JavaScript error object with the given name and message.
@@ -14,6 +15,8 @@ function CreateErrorObject(const AName, AMessage: string; const ASkipTop: Intege
 { Raises a TGocciaThrowValue with a TypeError }
 procedure ThrowTypeError(const AMessage: string); overload;
 procedure ThrowTypeError(const AMessage, ASuggestion: string); overload;
+procedure ThrowTypeErrorInRealm(const AMessage, ASuggestion: string;
+  const ARealm: TGocciaRealm); overload;
 
 { Raises a TGocciaThrowValue with a RangeError }
 procedure ThrowRangeError(const AMessage: string); overload;
@@ -96,6 +99,23 @@ begin
         TGocciaCallStack.Instance.CaptureStackTrace(AName, AMessage, ASkipTop)));
 end;
 
+function CreateErrorObjectInRealm(const AName, AMessage: string;
+  const ASkipTop: Integer; const ARealm: TGocciaRealm): TGocciaObjectValue;
+var
+  PreviousRealm: TGocciaRealm;
+begin
+  if (not Assigned(ARealm)) or (ARealm = CurrentRealm) then
+    Exit(CreateErrorObject(AName, AMessage, ASkipTop));
+
+  PreviousRealm := CurrentRealm;
+  SetCurrentRealm(ARealm);
+  try
+    Result := CreateErrorObject(AName, AMessage, ASkipTop);
+  finally
+    SetCurrentRealm(PreviousRealm);
+  end;
+end;
+
 { Shared raise helper — creates the error object and raises with optional suggestion }
 procedure RaiseNativeError(const AErrorName, AMessage, ASuggestion: string);
 begin
@@ -111,6 +131,14 @@ end;
 procedure ThrowTypeError(const AMessage, ASuggestion: string);
 begin
   RaiseNativeError(TYPE_ERROR_NAME, AMessage, ASuggestion);
+end;
+
+procedure ThrowTypeErrorInRealm(const AMessage, ASuggestion: string;
+  const ARealm: TGocciaRealm);
+begin
+  raise TGocciaThrowValue.Create(
+    CreateErrorObjectInRealm(TYPE_ERROR_NAME, AMessage, 0, ARealm),
+    ASuggestion);
 end;
 
 procedure ThrowRangeError(const AMessage: string);

@@ -112,6 +112,10 @@ procedure CollectDestructuringBindings(const APattern: TGocciaDestructuringPatte
 procedure EmitBindingAssignmentFromRegister(const ACtx: TGocciaCompilationContext;
   const AName: string; const AValueReg: UInt8;
   const AAssignmentMode: Boolean);
+procedure EmitLoadHiddenWithObject(const ACtx: TGocciaCompilationContext;
+  const AHiddenName: string; const ADest: UInt8);
+procedure EmitWithAssignmentOrFallback(const ACtx: TGocciaCompilationContext;
+  const AName: string; const AValueReg: UInt8);
 procedure EmitDestructuring(const ACtx: TGocciaCompilationContext;
   const APattern: TGocciaDestructuringPattern; const ASrcReg: UInt8;
   const AAssignmentMode: Boolean = False);
@@ -146,6 +150,28 @@ uses
 
 type
   TGocciaCompilerJumpArray = array of Integer;
+  TPreparedDestructuringTargetKind = (
+    pdtNone,
+    pdtIdentifierWithBinding,
+    pdtStringProperty,
+    pdtComputedProperty,
+    pdtPrivateProperty
+  );
+  TPreparedDestructuringTarget = record
+    Kind: TPreparedDestructuringTargetKind;
+    ObjectReg: Integer;
+    KeyReg: Integer;
+    PropertyName: string;
+  end;
+
+function ExpressionContainsOptionalChain(const AExpr: TGocciaExpression): Boolean; forward;
+procedure AddOptionalChainJump(const ACtx: TGocciaCompilationContext;
+  var AJumps: TGocciaCompilerJumpArray; var AJumpCount: Integer;
+  const AReg: UInt8); forward;
+procedure CompileExpressionWithOptionalChainJumps(
+  const ACtx: TGocciaCompilationContext; const AExpr: TGocciaExpression;
+  const ADest: UInt8; var AJumps: TGocciaCompilerJumpArray;
+  var AJumpCount: Integer); forward;
 
 function PrivateKey(const AScope: TGocciaCompilerScope;
   const AName: string): string;
@@ -162,6 +188,17 @@ begin
   Result := ExpressionType(AScope, AExpr);
   if Result = sltUntyped then
     Result := InferLocalType(AExpr);
+end;
+
+function IsAnonymousFunctionNameExpression(
+  const AExpr: TGocciaExpression): Boolean;
+begin
+  Result := (AExpr is TGocciaObjectMethodDefinition) or
+    (AExpr is TGocciaArrowFunctionExpression) or
+    ((AExpr is TGocciaFunctionExpression) and
+     (TGocciaFunctionExpression(AExpr).Name = '')) or
+    ((AExpr is TGocciaClassExpression) and
+     (TGocciaClassExpression(AExpr).ClassDefinition.Name = ''));
 end;
 
 procedure CompileExpressionWithInferredName(const ACtx: TGocciaCompilationContext;
@@ -198,6 +235,16 @@ begin
        (InferredTemplate.Name = '<method>') then
       InferredTemplate.Name := AInferredName;
   end;
+end;
+
+procedure CompileAssignmentValue(const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaExpression; const ADest: UInt8;
+  const AInferredName: string; const AInferName: Boolean);
+begin
+  if AInferName then
+    CompileExpressionWithInferredName(ACtx, AExpr, ADest, AInferredName)
+  else
+    ACtx.CompileExpression(AExpr, ADest);
 end;
 
 function SingleIdentifierPatternName(
@@ -329,6 +376,22 @@ begin
     Result := OP_ARRAY_SET;
 end;
 
+function GetWithBindingOpcode(const ACtx: TGocciaCompilationContext): TGocciaOpCode;
+begin
+  if ACtx.NonStrictMode then
+    Result := OP_GET_WITH_BINDING
+  else
+    Result := OP_GET_WITH_BINDING_STRICT;
+end;
+
+function SetWithBindingOpcode(const ACtx: TGocciaCompilationContext): TGocciaOpCode;
+begin
+  if ACtx.NonStrictMode then
+    Result := OP_SET_WITH_BINDING_LOOSE
+  else
+    Result := OP_SET_WITH_BINDING;
+end;
+
 function ChildBodyIsStrictCode(const ACtx: TGocciaCompilationContext;
   const ABody: TGocciaASTNode): Boolean; inline;
 begin
@@ -403,6 +466,42 @@ begin
       UInt8(MsgIdx)))
   else
     EmitInstruction(ACtx, EncodeABx(OP_THROW_TYPE_ERROR_CONST_LONG, 0, MsgIdx));
+end;
+
+function ShouldIgnoreNonStrictImmutableLocalAssignment(
+  const ACtx: TGocciaCompilationContext;
+  const ALocal: TGocciaCompilerLocal): Boolean; inline;
+begin
+  Result := ACtx.NonStrictMode and ALocal.IsConst and
+    ALocal.IsNonStrictImmutable;
+end;
+
+function ShouldIgnoreNonStrictImmutableUpvalueAssignment(
+  const ACtx: TGocciaCompilationContext;
+  const AUpvalue: TGocciaCompilerUpvalue): Boolean; inline;
+begin
+  Result := ACtx.NonStrictMode and AUpvalue.IsConst and
+    AUpvalue.IsNonStrictImmutable;
+end;
+
+procedure EmitReferenceError(const ACtx: TGocciaCompilationContext;
+  const AMessage: string);
+var
+  ErrorReg, MessageReg: UInt8;
+begin
+  ErrorReg := ACtx.Scope.AllocateRegister;
+  MessageReg := ACtx.Scope.AllocateRegister;
+  try
+    EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, ErrorReg,
+      ACtx.Template.AddConstantString(REFERENCE_ERROR_NAME)));
+    EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, MessageReg,
+      ACtx.Template.AddConstantString(AMessage)));
+    EmitInstruction(ACtx, EncodeABC(OP_CONSTRUCT, ErrorReg, ErrorReg, 1));
+    EmitInstruction(ACtx, EncodeABC(OP_THROW, ErrorReg, 0, 0));
+  finally
+    ACtx.Scope.FreeRegister;
+    ACtx.Scope.FreeRegister;
+  end;
 end;
 
 procedure CompileYield(const ACtx: TGocciaCompilationContext;
@@ -711,7 +810,8 @@ begin
       EmitInstruction(ACtx, EncodeABC(OP_HAS_WITH_BINDING, CondReg, ObjReg,
         KeyReg));
       MissJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, CondReg);
-      EmitInstruction(ACtx, EncodeABC(OP_GET_INDEX, ADest, ObjReg, KeyReg));
+      EmitInstruction(ACtx, EncodeABC(GetWithBindingOpcode(ACtx), ADest,
+        ObjReg, KeyReg));
       EndJumps[EndCount] := EmitJumpInstruction(ACtx, OP_JUMP, 0);
       Inc(EndCount);
       PatchJumpTarget(ACtx, MissJump);
@@ -726,6 +826,74 @@ begin
     ACtx.Scope.FreeRegister;
     ACtx.Scope.FreeRegister;
   end;
+end;
+
+procedure PrepareIdentifierWithBindingTarget(
+  const ACtx: TGocciaCompilationContext; const AName: string;
+  var ATarget: TPreparedDestructuringTarget);
+var
+  ObjReg, CondReg: UInt8;
+  NameIdx: UInt16;
+  I, EndCount: Integer;
+  MissJump: Integer;
+  EndJumps: array of Integer;
+begin
+  ATarget.Kind := pdtIdentifierWithBinding;
+  ATarget.PropertyName := AName;
+  ATarget.ObjectReg := ACtx.Scope.AllocateRegister;
+  ATarget.KeyReg := ACtx.Scope.AllocateRegister;
+  ObjReg := ACtx.Scope.AllocateRegister;
+  CondReg := ACtx.Scope.AllocateRegister;
+  EndCount := 0;
+  SetLength(EndJumps, ACtx.Scope.WithBindingCount);
+  try
+    NameIdx := ACtx.Template.AddConstantString(AName);
+    EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, UInt8(ATarget.KeyReg),
+      NameIdx));
+    EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED,
+      UInt8(ATarget.ObjectReg), 0, 0));
+
+    for I := ACtx.Scope.WithBindingCount - 1 downto 0 do
+    begin
+      EmitLoadHiddenWithObject(ACtx, ACtx.Scope.GetWithBindingName(I), ObjReg);
+      EmitInstruction(ACtx, EncodeABC(OP_HAS_WITH_BINDING, CondReg, ObjReg,
+        UInt8(ATarget.KeyReg)));
+      MissJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, CondReg);
+      EmitInstruction(ACtx, EncodeABC(OP_MOVE, UInt8(ATarget.ObjectReg),
+        ObjReg, 0));
+      EndJumps[EndCount] := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+      Inc(EndCount);
+      PatchJumpTarget(ACtx, MissJump);
+    end;
+
+    for I := 0 to EndCount - 1 do
+      PatchJumpTarget(ACtx, EndJumps[I]);
+  finally
+    ACtx.Scope.FreeRegister;
+    ACtx.Scope.FreeRegister;
+  end;
+end;
+
+procedure EmitPreparedIdentifierWithBindingLoad(
+  const ACtx: TGocciaCompilationContext;
+  const ATarget: TPreparedDestructuringTarget; const ADest: UInt8);
+var
+  Ident: TGocciaIdentifierExpression;
+  MissJump, EndJump: Integer;
+begin
+  MissJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH,
+    UInt8(ATarget.ObjectReg), GOCCIA_NULLISH_MATCH_UNDEFINED);
+  EmitInstruction(ACtx, EncodeABC(GetWithBindingOpcode(ACtx), ADest,
+    UInt8(ATarget.ObjectReg), UInt8(ATarget.KeyReg)));
+  EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+  PatchJumpTarget(ACtx, MissJump);
+  Ident := TGocciaIdentifierExpression.Create(ATarget.PropertyName, 0, 0);
+  try
+    CompileIdentifierAccessNoWith(ACtx, Ident, ADest, False);
+  finally
+    Ident.Free;
+  end;
+  PatchJumpTarget(ACtx, EndJump);
 end;
 
 procedure EmitLoadBindingByName(const ACtx: TGocciaCompilationContext;
@@ -765,8 +933,8 @@ begin
       EmitInstruction(ACtx, EncodeABC(OP_HAS_WITH_BINDING, CondReg, ObjReg,
         KeyReg));
       MissJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, CondReg);
-      EmitInstruction(ACtx, EncodeABC(StoreByKeyOpcode(ACtx), ObjReg, KeyReg,
-        AValueReg));
+      EmitInstruction(ACtx, EncodeABC(SetWithBindingOpcode(ACtx), ObjReg,
+        KeyReg, AValueReg));
       EndJumps[EndCount] := EmitJumpInstruction(ACtx, OP_JUMP, 0);
       Inc(EndCount);
       PatchJumpTarget(ACtx, MissJump);
@@ -781,6 +949,63 @@ begin
     ACtx.Scope.FreeRegister;
     ACtx.Scope.FreeRegister;
   end;
+end;
+
+procedure EmitWithBindingProbe(const ACtx: TGocciaCompilationContext;
+  const AName: string);
+var
+  ObjReg, KeyReg, CondReg: UInt8;
+  NameIdx: UInt16;
+  I, EndCount: Integer;
+  MissJump: Integer;
+  EndJumps: array of Integer;
+begin
+  if (ACtx.Scope.WithBindingCount = 0) or HiddenWithBindingName(AName) then
+    Exit;
+
+  ObjReg := ACtx.Scope.AllocateRegister;
+  KeyReg := ACtx.Scope.AllocateRegister;
+  CondReg := ACtx.Scope.AllocateRegister;
+  EndCount := 0;
+  SetLength(EndJumps, ACtx.Scope.WithBindingCount);
+  try
+    NameIdx := ACtx.Template.AddConstantString(AName);
+    EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, KeyReg, NameIdx));
+
+    for I := ACtx.Scope.WithBindingCount - 1 downto 0 do
+    begin
+      EmitLoadHiddenWithObject(ACtx, ACtx.Scope.GetWithBindingName(I), ObjReg);
+      EmitInstruction(ACtx, EncodeABC(OP_HAS_WITH_BINDING, CondReg, ObjReg,
+        KeyReg));
+      MissJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, CondReg);
+      EndJumps[EndCount] := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+      Inc(EndCount);
+      PatchJumpTarget(ACtx, MissJump);
+    end;
+
+    for I := 0 to EndCount - 1 do
+      PatchJumpTarget(ACtx, EndJumps[I]);
+  finally
+    ACtx.Scope.FreeRegister;
+    ACtx.Scope.FreeRegister;
+    ACtx.Scope.FreeRegister;
+  end;
+end;
+
+procedure EmitDestructuringBindingResolutionProbe(
+  const ACtx: TGocciaCompilationContext;
+  const APattern: TGocciaDestructuringPattern);
+var
+  AssignPat: TGocciaAssignmentDestructuringPattern;
+begin
+  if APattern is TGocciaAssignmentDestructuringPattern then
+  begin
+    AssignPat := TGocciaAssignmentDestructuringPattern(APattern);
+    EmitDestructuringBindingResolutionProbe(ACtx, AssignPat.Left);
+  end
+  else if APattern is TGocciaIdentifierDestructuringPattern then
+    EmitWithBindingProbe(ACtx,
+      TGocciaIdentifierDestructuringPattern(APattern).Name);
 end;
 
 function CallTrustedFlag(const ACtx: TGocciaCompilationContext;
@@ -1446,7 +1671,7 @@ var
   Local: TGocciaCompilerLocal;
   UV: TGocciaCompilerUpvalue;
   LocalIdx, UpvalueIdx: Integer;
-  IsSyntheticArguments: Boolean;
+  IsEvalSensitiveArguments: Boolean;
 begin
   Names := TStringList.Create;
   try
@@ -1462,11 +1687,13 @@ begin
           Local.IsConst, Local.IsVar)
       else
       begin
-        IsSyntheticArguments := (Local.Name = IDENTIFIER_ARGUMENTS) and
-          (ACtx.Template.DirectEvalSyntheticArgumentsSlot = Local.Slot);
+        IsEvalSensitiveArguments := (Local.Name = IDENTIFIER_ARGUMENTS) and
+          ((ACtx.Template.DirectEvalSyntheticArgumentsSlot = Local.Slot) or
+           (not ACtx.Template.IsArrow));
         AddDirectEvalBinding(Bindings, Names, Local.Name, debLocal,
-          Local.Slot, Local.IsConst, Local.IsVar or IsSyntheticArguments,
-          IsSyntheticArguments);
+          Local.Slot, Local.IsConst, Local.IsVar or IsEvalSensitiveArguments,
+          IsEvalSensitiveArguments or (Local.IsConst and
+          Local.IsNonStrictImmutable));
       end;
     end;
 
@@ -1499,7 +1726,8 @@ begin
           begin
             UV := ACtx.Scope.GetUpvalue(UpvalueIdx);
             AddDirectEvalBinding(Bindings, Names, Local.Name, debUpvalue,
-              UInt8(UpvalueIdx), UV.IsConst, UV.IsVar);
+              UInt8(UpvalueIdx), UV.IsConst, UV.IsVar,
+              UV.IsNonStrictImmutable);
           end;
         end;
       end;
@@ -1779,6 +2007,19 @@ begin
   if AExpr.Operand is TGocciaMemberExpression then
   begin
     MemberExpr := TGocciaMemberExpression(AExpr.Operand);
+    if MemberExpr.ObjectExpr is TGocciaSuperExpression then
+    begin
+      ObjReg := ACtx.Scope.AllocateRegister;
+      try
+        CompileThis(ACtx, ObjReg);
+        EmitReferenceError(ACtx, 'Cannot delete super property');
+        EmitInstruction(ACtx, EncodeABC(OP_LOAD_TRUE, ADest, 0, 0));
+      finally
+        ACtx.Scope.FreeRegister;
+      end;
+      Exit;
+    end;
+
     ObjReg := ACtx.Scope.AllocateRegister;
     ACtx.CompileExpression(MemberExpr.ObjectExpr, ObjReg);
 
@@ -1826,7 +2067,15 @@ begin
     CompileDeleteIdentifier(IdentExpr.Name);
   end
   else
-    EmitInstruction(ACtx, EncodeABC(OP_LOAD_TRUE, ADest, 0, 0));
+  begin
+    ObjReg := ACtx.Scope.AllocateRegister;
+    try
+      ACtx.CompileExpression(AExpr.Operand, ObjReg);
+      EmitInstruction(ACtx, EncodeABC(OP_LOAD_TRUE, ADest, 0, 0));
+    finally
+      ACtx.Scope.FreeRegister;
+    end;
+  end;
 end;
 
 procedure CompileUnary(const ACtx: TGocciaCompilationContext;
@@ -1899,6 +2148,7 @@ procedure CompileAssignment(const ACtx: TGocciaCompilationContext;
 var
   LocalIdx, UpvalIdx: Integer;
   Local: TGocciaCompilerLocal;
+  Upvalue: TGocciaCompilerUpvalue;
   Slot, GlobalExistsReg, ErrorReg, MessageReg: UInt8;
   ObjReg, KeyReg, CondReg, TargetReg: UInt8;
   NameIdx: UInt16;
@@ -1936,10 +2186,11 @@ begin
       for I := 0 to EndCount - 1 do
         PatchJumpTarget(ACtx, EndJumps[I]);
 
-      ACtx.CompileExpression(AExpr.Value, ADest);
+      CompileAssignmentValue(ACtx, AExpr.Value, ADest, AExpr.Name,
+        AExpr.InferName);
       MissJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH, TargetReg,
         GOCCIA_NULLISH_MATCH_UNDEFINED);
-      EmitInstruction(ACtx, EncodeABC(StoreByKeyOpcode(ACtx), TargetReg,
+      EmitInstruction(ACtx, EncodeABC(SetWithBindingOpcode(ACtx), TargetReg,
         KeyReg, ADest));
       EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
       PatchJumpTarget(ACtx, MissJump);
@@ -1967,7 +2218,8 @@ begin
       NameIdx := ACtx.Template.AddConstantString(AExpr.Name);
       if ACtx.NonStrictMode then
       begin
-        ACtx.CompileExpression(AExpr.Value, ADest);
+        CompileAssignmentValue(ACtx, AExpr.Value, ADest, AExpr.Name,
+          AExpr.InferName);
         EmitSetGlobalByIndex(ACtx, ADest, NameIdx);
         Exit;
       end;
@@ -1976,13 +2228,16 @@ begin
     end;
   end;
 
-  ACtx.CompileExpression(AExpr.Value, ADest);
+  CompileAssignmentValue(ACtx, AExpr.Value, ADest, AExpr.Name,
+    AExpr.InferName);
 
   if LocalIdx >= 0 then
   begin
     Local := ACtx.Scope.GetLocal(LocalIdx);
     if Local.IsConst then
     begin
+      if ShouldIgnoreNonStrictImmutableLocalAssignment(ACtx, Local) then
+        Exit;
       EmitConstAssignmentError(ACtx);
       Exit;
     end;
@@ -2015,22 +2270,25 @@ begin
 
   if UpvalIdx >= 0 then
   begin
-    if ACtx.Scope.GetUpvalue(UpvalIdx).IsConst then
+    Upvalue := ACtx.Scope.GetUpvalue(UpvalIdx);
+    if Upvalue.IsConst then
     begin
+      if ShouldIgnoreNonStrictImmutableUpvalueAssignment(ACtx, Upvalue) then
+        Exit;
       EmitConstAssignmentError(ACtx);
       Exit;
     end;
-    if ACtx.Scope.GetUpvalue(UpvalIdx).IsGlobalBacked then
+    if Upvalue.IsGlobalBacked then
     begin
       EmitSetGlobalByName(ACtx, ADest, AExpr.Name);
-      EmitExportBindingUpdates(ACtx, ACtx.Scope.GetUpvalue(UpvalIdx).ExportNames,
-        ACtx.Scope.GetUpvalue(UpvalIdx).ExportNameCount, ADest);
+      EmitExportBindingUpdates(ACtx, Upvalue.ExportNames,
+        Upvalue.ExportNameCount, ADest);
       Exit;
     end;
-    if ACtx.Scope.GetUpvalue(UpvalIdx).IsStrictlyTyped then
-      if not TypesAreCompatible(InferLocalType(AExpr.Value), ACtx.Scope.GetUpvalue(UpvalIdx).TypeHint) then
+    if Upvalue.IsStrictlyTyped then
+      if not TypesAreCompatible(InferLocalType(AExpr.Value), Upvalue.TypeHint) then
         EmitInstruction(ACtx, EncodeABC(OP_CHECK_TYPE, ADest,
-          UInt8(Ord(ACtx.Scope.GetUpvalue(UpvalIdx).TypeHint)), 0));
+          UInt8(Ord(Upvalue.TypeHint)), 0));
     EmitInstruction(ACtx, EncodeABx(OP_SET_UPVALUE, ADest, UInt16(UpvalIdx)));
     EmitExportBindingUpdates(ACtx, ACtx.Scope.GetUpvalue(UpvalIdx).ExportNames,
       ACtx.Scope.GetUpvalue(UpvalIdx).ExportNameCount, ADest);
@@ -2114,7 +2372,7 @@ begin
   if ParameterListBindsName(AParams, IDENTIFIER_ARGUMENTS) then
     Exit(-1);
 
-  Result := AScope.DeclareLocal(IDENTIFIER_ARGUMENTS, False);
+  Result := AScope.DeclareVarLocal(IDENTIFIER_ARGUMENTS);
 end;
 
 function ParameterListIsSimple(const AParams: TGocciaParameterArray): Boolean;
@@ -2250,6 +2508,8 @@ begin
     Local := ACtx.Scope.GetLocal(LocalIdx);
     if AAssignmentMode and Local.IsConst then
     begin
+      if ShouldIgnoreNonStrictImmutableLocalAssignment(ACtx, Local) then
+        Exit;
       EmitConstAssignmentError(ACtx);
       Exit;
     end;
@@ -2290,6 +2550,8 @@ begin
     Upvalue := ACtx.Scope.GetUpvalue(UpvalIdx);
     if AAssignmentMode and Upvalue.IsConst then
     begin
+      if ShouldIgnoreNonStrictImmutableUpvalueAssignment(ACtx, Upvalue) then
+        Exit;
       EmitConstAssignmentError(ACtx);
       Exit;
     end;
@@ -2350,13 +2612,230 @@ begin
   end;
 end;
 
+procedure InitPreparedDestructuringTarget(
+  var ATarget: TPreparedDestructuringTarget);
+begin
+  ATarget.Kind := pdtNone;
+  ATarget.ObjectReg := -1;
+  ATarget.KeyReg := -1;
+  ATarget.PropertyName := '';
+end;
+
+procedure ReleasePreparedDestructuringTarget(
+  const ACtx: TGocciaCompilationContext;
+  var ATarget: TPreparedDestructuringTarget);
+begin
+  if ATarget.KeyReg >= 0 then
+    ACtx.Scope.FreeRegister;
+  if ATarget.ObjectReg >= 0 then
+    ACtx.Scope.FreeRegister;
+  InitPreparedDestructuringTarget(ATarget);
+end;
+
+procedure PrepareDestructuringAssignmentTarget(
+  const ACtx: TGocciaCompilationContext;
+  const APattern: TGocciaDestructuringPattern;
+  var ATarget: TPreparedDestructuringTarget);
+var
+  AssignPat: TGocciaAssignmentDestructuringPattern;
+  RestPat: TGocciaRestDestructuringPattern;
+  IdentPat: TGocciaIdentifierDestructuringPattern;
+  MemberPat: TGocciaMemberExpressionDestructuringPattern;
+  PrivatePat: TGocciaPrivateMemberExpressionDestructuringPattern;
+  ObjReg, CondReg: UInt8;
+  NameIdx: UInt16;
+  I, EndCount: Integer;
+  MissJump: Integer;
+  EndJumps: array of Integer;
+begin
+  if APattern is TGocciaAssignmentDestructuringPattern then
+  begin
+    AssignPat := TGocciaAssignmentDestructuringPattern(APattern);
+    PrepareDestructuringAssignmentTarget(ACtx, AssignPat.Left, ATarget);
+    Exit;
+  end;
+
+  if APattern is TGocciaRestDestructuringPattern then
+  begin
+    RestPat := TGocciaRestDestructuringPattern(APattern);
+    PrepareDestructuringAssignmentTarget(ACtx, RestPat.Argument, ATarget);
+    Exit;
+  end;
+
+  if APattern is TGocciaIdentifierDestructuringPattern then
+  begin
+    IdentPat := TGocciaIdentifierDestructuringPattern(APattern);
+    if ShouldTryWithBinding(ACtx.Scope, IdentPat.Name) then
+    begin
+      ATarget.Kind := pdtIdentifierWithBinding;
+      ATarget.PropertyName := IdentPat.Name;
+      ATarget.ObjectReg := ACtx.Scope.AllocateRegister;
+      ATarget.KeyReg := ACtx.Scope.AllocateRegister;
+      ObjReg := ACtx.Scope.AllocateRegister;
+      CondReg := ACtx.Scope.AllocateRegister;
+      EndCount := 0;
+      SetLength(EndJumps, ACtx.Scope.WithBindingCount);
+      try
+        NameIdx := ACtx.Template.AddConstantString(IdentPat.Name);
+        EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST,
+          UInt8(ATarget.KeyReg), NameIdx));
+        EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED,
+          UInt8(ATarget.ObjectReg), 0, 0));
+
+        for I := ACtx.Scope.WithBindingCount - 1 downto 0 do
+        begin
+          EmitLoadHiddenWithObject(ACtx, ACtx.Scope.GetWithBindingName(I),
+            ObjReg);
+          EmitInstruction(ACtx, EncodeABC(OP_HAS_WITH_BINDING, CondReg,
+            ObjReg, UInt8(ATarget.KeyReg)));
+          MissJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, CondReg);
+          EmitInstruction(ACtx, EncodeABC(OP_MOVE, UInt8(ATarget.ObjectReg),
+            ObjReg, 0));
+          EndJumps[EndCount] := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+          Inc(EndCount);
+          PatchJumpTarget(ACtx, MissJump);
+        end;
+
+        for I := 0 to EndCount - 1 do
+          PatchJumpTarget(ACtx, EndJumps[I]);
+      finally
+        ACtx.Scope.FreeRegister;
+        ACtx.Scope.FreeRegister;
+      end;
+    end;
+    Exit;
+  end;
+
+  if APattern is TGocciaMemberExpressionDestructuringPattern then
+  begin
+    MemberPat := TGocciaMemberExpressionDestructuringPattern(APattern);
+    ATarget.ObjectReg := ACtx.Scope.AllocateRegister;
+    ACtx.CompileExpression(MemberPat.Expression.ObjectExpr,
+      UInt8(ATarget.ObjectReg));
+    if MemberPat.Expression.Computed then
+    begin
+      ATarget.Kind := pdtComputedProperty;
+      ATarget.KeyReg := ACtx.Scope.AllocateRegister;
+      ACtx.CompileExpression(MemberPat.Expression.PropertyExpression,
+        UInt8(ATarget.KeyReg));
+    end
+    else
+    begin
+      ATarget.Kind := pdtStringProperty;
+      ATarget.PropertyName := MemberPat.Expression.PropertyName;
+    end;
+    Exit;
+  end;
+
+  if APattern is TGocciaPrivateMemberExpressionDestructuringPattern then
+  begin
+    PrivatePat := TGocciaPrivateMemberExpressionDestructuringPattern(APattern);
+    ATarget.Kind := pdtPrivateProperty;
+    ATarget.ObjectReg := ACtx.Scope.AllocateRegister;
+    ACtx.CompileExpression(PrivatePat.Expression.ObjectExpr,
+      UInt8(ATarget.ObjectReg));
+    ATarget.PropertyName := PrivateKey(ACtx.Scope,
+      PrivatePat.Expression.PrivateName);
+  end;
+end;
+
+procedure EmitPreparedDestructuringTargetStore(
+  const ACtx: TGocciaCompilationContext;
+  const ATarget: TPreparedDestructuringTarget; const AValueReg: UInt8);
+var
+  MissJump, EndJump: Integer;
+begin
+  case ATarget.Kind of
+    pdtIdentifierWithBinding:
+      begin
+        MissJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH,
+          UInt8(ATarget.ObjectReg), GOCCIA_NULLISH_MATCH_UNDEFINED);
+        EmitInstruction(ACtx, EncodeABC(SetWithBindingOpcode(ACtx),
+          UInt8(ATarget.ObjectReg), UInt8(ATarget.KeyReg), AValueReg));
+        EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+        PatchJumpTarget(ACtx, MissJump);
+        EmitBindingAssignmentFromRegister(ACtx, ATarget.PropertyName,
+          AValueReg, True);
+        PatchJumpTarget(ACtx, EndJump);
+      end;
+    pdtStringProperty, pdtPrivateProperty:
+      EmitStorePropertyByName(ACtx, UInt8(ATarget.ObjectReg),
+        ATarget.PropertyName, AValueReg);
+    pdtComputedProperty:
+      EmitInstruction(ACtx, EncodeABC(StoreByKeyOpcode(ACtx),
+        UInt8(ATarget.ObjectReg), UInt8(ATarget.KeyReg), AValueReg));
+  end;
+end;
+
+procedure EmitDestructuringWithPreparedTarget(
+  const ACtx: TGocciaCompilationContext;
+  const APattern: TGocciaDestructuringPattern; const ASrcReg: UInt8;
+  const AAssignmentMode: Boolean;
+  const ATarget: TPreparedDestructuringTarget);
+var
+  AssignPat: TGocciaAssignmentDestructuringPattern;
+  RestPat: TGocciaRestDestructuringPattern;
+  JumpIdx: Integer;
+begin
+  if APattern is TGocciaAssignmentDestructuringPattern then
+  begin
+    AssignPat := TGocciaAssignmentDestructuringPattern(APattern);
+    EmitUndefinedCheck(ACtx, ASrcReg, JumpIdx);
+    CompileExpressionWithInferredName(ACtx, AssignPat.Right, ASrcReg,
+      SingleIdentifierPatternName(AssignPat.Left));
+    PatchJumpTarget(ACtx, JumpIdx);
+    EmitDestructuringWithPreparedTarget(ACtx, AssignPat.Left, ASrcReg,
+      AAssignmentMode, ATarget);
+    Exit;
+  end;
+
+  if APattern is TGocciaRestDestructuringPattern then
+  begin
+    RestPat := TGocciaRestDestructuringPattern(APattern);
+    EmitDestructuringWithPreparedTarget(ACtx, RestPat.Argument, ASrcReg,
+      AAssignmentMode, ATarget);
+    Exit;
+  end;
+
+  if (ATarget.Kind <> pdtNone) and
+     ((APattern is TGocciaIdentifierDestructuringPattern) or
+      (APattern is TGocciaMemberExpressionDestructuringPattern) or
+      (APattern is TGocciaPrivateMemberExpressionDestructuringPattern)) then
+  begin
+    EmitPreparedDestructuringTargetStore(ACtx, ATarget, ASrcReg);
+    Exit;
+  end;
+
+  EmitDestructuring(ACtx, APattern, ASrcReg, AAssignmentMode);
+end;
+
 procedure EmitStreamingArrayDestructuring(const ACtx: TGocciaCompilationContext;
   const APattern: TGocciaArrayDestructuringPattern; const ASrcReg: UInt8;
   const AAssignmentMode: Boolean);
 var
   IterReg, ValueReg, DoneReg, ErrorReg: UInt8;
   I: Integer;
-  HandlerJump, AfterHandlerJump, SkipCloseJump: Integer;
+  HandlerJump, AfterHandlerJump, SkipCloseJump, SkipNextJump, AfterNextJump,
+  RestLoop, RestDoneJump: Integer;
+  RestReg: UInt8;
+  PreparedTarget: TPreparedDestructuringTarget;
+
+  procedure EmitProtectedIterNext;
+  var
+    NextHandlerJump, AfterNextHandlerJump: Integer;
+  begin
+    NextHandlerJump := EmitJumpInstruction(ACtx, OP_PUSH_FINALLY_HANDLER,
+      ErrorReg);
+    EmitInstruction(ACtx, EncodeABC(OP_ITER_NEXT, ValueReg, DoneReg,
+      IterReg));
+    EmitInstruction(ACtx, EncodeABC(OP_POP_HANDLER, 0, 0, 0));
+    AfterNextHandlerJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+
+    PatchJumpTarget(ACtx, NextHandlerJump);
+    EmitInstruction(ACtx, EncodeABC(OP_THROW, ErrorReg, 0, 0));
+
+    PatchJumpTarget(ACtx, AfterNextHandlerJump);
+  end;
 begin
   IterReg := ACtx.Scope.AllocateRegister;
   ValueReg := ACtx.Scope.AllocateRegister;
@@ -2364,27 +2843,90 @@ begin
   ErrorReg := ACtx.Scope.AllocateRegister;
   try
     EmitInstruction(ACtx, EncodeABC(OP_GET_ITER, IterReg, ASrcReg, 0));
+    EmitInstruction(ACtx, EncodeABC(OP_LOAD_FALSE, DoneReg, 0, 0));
 
     for I := 0 to APattern.Elements.Count - 1 do
     begin
-      EmitInstruction(ACtx, EncodeABC(OP_ITER_NEXT, ValueReg, DoneReg,
-        IterReg));
       if not Assigned(APattern.Elements[I]) then
+      begin
+        SkipNextJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, DoneReg);
+        EmitProtectedIterNext;
+        PatchJumpTarget(ACtx, SkipNextJump);
         Continue;
+      end;
 
-      HandlerJump := EmitJumpInstruction(ACtx, OP_PUSH_HANDLER, ErrorReg);
-      EmitDestructuring(ACtx, APattern.Elements[I], ValueReg,
-        AAssignmentMode);
-      EmitInstruction(ACtx, EncodeABC(OP_POP_HANDLER, 0, 0, 0));
-      AfterHandlerJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+      InitPreparedDestructuringTarget(PreparedTarget);
+      try
+        HandlerJump := -1;
+        if AAssignmentMode then
+        begin
+          HandlerJump := EmitJumpInstruction(ACtx, OP_PUSH_FINALLY_HANDLER,
+            ErrorReg);
+          PrepareDestructuringAssignmentTarget(ACtx, APattern.Elements[I],
+            PreparedTarget);
+          EmitInstruction(ACtx, EncodeABC(OP_POP_HANDLER, 0, 0, 0));
+          AfterHandlerJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
 
-      PatchJumpTarget(ACtx, HandlerJump);
-      SkipCloseJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, DoneReg);
-      EmitInstruction(ACtx, EncodeABC(OP_ITER_CLOSE, IterReg, 0, 1));
-      PatchJumpTarget(ACtx, SkipCloseJump);
-      EmitInstruction(ACtx, EncodeABC(OP_THROW, ErrorReg, 0, 0));
+          PatchJumpTarget(ACtx, HandlerJump);
+          SkipCloseJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, DoneReg);
+          EmitInstruction(ACtx, EncodeABC(OP_ITER_CLOSE, IterReg, ErrorReg,
+            ITER_CLOSE_PRESERVE_UNLESS_GENERATOR_RETURN));
+          PatchJumpTarget(ACtx, SkipCloseJump);
+          EmitInstruction(ACtx, EncodeABC(OP_THROW, ErrorReg, 0, 0));
 
-      PatchJumpTarget(ACtx, AfterHandlerJump);
+          PatchJumpTarget(ACtx, AfterHandlerJump);
+        end;
+
+        if APattern.Elements[I] is TGocciaRestDestructuringPattern then
+        begin
+          RestReg := ACtx.Scope.AllocateRegister;
+          try
+            EmitInstruction(ACtx, EncodeABC(OP_NEW_ARRAY, RestReg, 0, 0));
+            RestLoop := CurrentCodePosition(ACtx);
+            RestDoneJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE,
+              DoneReg);
+            EmitProtectedIterNext;
+            SkipNextJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE,
+              DoneReg);
+            EmitInstruction(ACtx, EncodeABC(OP_ARRAY_PUSH, RestReg, ValueReg,
+              0));
+            EmitInstruction(ACtx, EncodeAx(OP_JUMP,
+              RestLoop - CurrentCodePosition(ACtx) - 1));
+            PatchJumpTarget(ACtx, SkipNextJump);
+            PatchJumpTarget(ACtx, RestDoneJump);
+            EmitDestructuringWithPreparedTarget(ACtx, APattern.Elements[I],
+              UInt8(RestReg), AAssignmentMode, PreparedTarget);
+          finally
+            ACtx.Scope.FreeRegister;
+          end;
+          Break;
+        end;
+
+        SkipNextJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, DoneReg);
+        EmitProtectedIterNext;
+        AfterNextJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+        PatchJumpTarget(ACtx, SkipNextJump);
+        EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, ValueReg, 0, 0));
+        PatchJumpTarget(ACtx, AfterNextJump);
+
+        HandlerJump := EmitJumpInstruction(ACtx, OP_PUSH_FINALLY_HANDLER,
+          ErrorReg);
+        EmitDestructuringWithPreparedTarget(ACtx, APattern.Elements[I],
+          ValueReg, AAssignmentMode, PreparedTarget);
+        EmitInstruction(ACtx, EncodeABC(OP_POP_HANDLER, 0, 0, 0));
+        AfterHandlerJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+
+        PatchJumpTarget(ACtx, HandlerJump);
+        SkipCloseJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, DoneReg);
+        EmitInstruction(ACtx, EncodeABC(OP_ITER_CLOSE, IterReg, ErrorReg,
+          ITER_CLOSE_PRESERVE_UNLESS_GENERATOR_RETURN));
+        PatchJumpTarget(ACtx, SkipCloseJump);
+        EmitInstruction(ACtx, EncodeABC(OP_THROW, ErrorReg, 0, 0));
+
+        PatchJumpTarget(ACtx, AfterHandlerJump);
+      finally
+        ReleasePreparedDestructuringTarget(ACtx, PreparedTarget);
+      end;
     end;
 
     SkipCloseJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, DoneReg);
@@ -2406,9 +2948,8 @@ var
   ArrPat: TGocciaArrayDestructuringPattern;
   AssignPat: TGocciaAssignmentDestructuringPattern;
   IdentPat: TGocciaIdentifierDestructuringPattern;
-  PrivatePat: TGocciaPrivateMemberExpressionDestructuringPattern;
   Prop: TGocciaDestructuringProperty;
-  DestSlot, IdxReg, TargetSlot, ValueSlot: UInt8;
+  DestSlot, IdxReg: UInt8;
   PropIdx: UInt16;
   JumpIdx, I: Integer;
   HasRest: Boolean;
@@ -2416,6 +2957,7 @@ var
   RestIndex: Integer;
   ComputedKeySlot: Integer;
   ComputedKeySlots: array of Integer;
+  PreparedTarget: TPreparedDestructuringTarget;
 begin
   if APattern is TGocciaIdentifierDestructuringPattern then
   begin
@@ -2479,52 +3021,8 @@ begin
         Break;
       end;
 
-      if AAssignmentMode and
-         (Prop.Pattern is TGocciaPrivateMemberExpressionDestructuringPattern) then
-      begin
-        PrivatePat := TGocciaPrivateMemberExpressionDestructuringPattern(
-          Prop.Pattern);
-        TargetSlot := ACtx.Scope.AllocateRegister;
-        ACtx.CompileExpression(PrivatePat.Expression.ObjectExpr, TargetSlot);
-
-        if Prop.Computed and Assigned(Prop.KeyExpression) then
-        begin
-          if (RestIndex >= 0) and (I < RestIndex) then
-          begin
-            ComputedKeySlot := ACtx.Scope.DeclareLocal(
-              '#object-rest-key:' + IntToStr(ACtx.Template.CodeCount) + ':' +
-              IntToStr(ACtx.Scope.NextSlot) + ':' + IntToStr(I), False);
-            ACtx.CompileExpression(Prop.KeyExpression, UInt8(ComputedKeySlot));
-            EmitInstruction(ACtx, EncodeABC(OP_TO_PROPERTY_KEY,
-              UInt8(ComputedKeySlot), UInt8(ComputedKeySlot), 0));
-            ComputedKeySlots[I] := ComputedKeySlot;
-            ValueSlot := ACtx.Scope.AllocateRegister;
-            EmitInstruction(ACtx, EncodeABC(OP_GET_INDEX, ValueSlot, ASrcReg,
-              UInt8(ComputedKeySlot)));
-          end
-          else
-          begin
-            ValueSlot := ACtx.Scope.AllocateRegister;
-            IdxReg := ACtx.Scope.AllocateRegister;
-            ACtx.CompileExpression(Prop.KeyExpression, IdxReg);
-            EmitInstruction(ACtx, EncodeABC(OP_GET_INDEX, ValueSlot, ASrcReg,
-              IdxReg));
-            ACtx.Scope.FreeRegister;
-          end;
-        end
-        else
-        begin
-          ValueSlot := ACtx.Scope.AllocateRegister;
-          EmitLoadPropertyByName(ACtx, ValueSlot, ASrcReg, Prop.Key);
-        end;
-
-        EmitStorePropertyByName(ACtx, TargetSlot,
-          PrivateKey(ACtx.Scope, PrivatePat.Expression.PrivateName), ValueSlot);
-        ACtx.Scope.FreeRegister;
-        ACtx.Scope.FreeRegister;
-        Continue;
-      end;
-
+      InitPreparedDestructuringTarget(PreparedTarget);
+      IdxReg := 0;
       if Prop.Computed and Assigned(Prop.KeyExpression) then
       begin
         if (RestIndex >= 0) and (I < RestIndex) then
@@ -2537,28 +3035,39 @@ begin
             UInt8(ComputedKeySlot), UInt8(ComputedKeySlot), 0));
           ComputedKeySlots[I] := ComputedKeySlot;
           IdxReg := UInt8(ComputedKeySlot);
-          DestSlot := ACtx.Scope.AllocateRegister;
-          EmitInstruction(ACtx, EncodeABC(OP_GET_INDEX, DestSlot, ASrcReg,
-            IdxReg));
         end
         else
         begin
-          DestSlot := ACtx.Scope.AllocateRegister;
           IdxReg := ACtx.Scope.AllocateRegister;
           ACtx.CompileExpression(Prop.KeyExpression, IdxReg);
-          EmitInstruction(ACtx, EncodeABC(OP_GET_INDEX, DestSlot, ASrcReg,
-            IdxReg));
-          ACtx.Scope.FreeRegister;
+          EmitInstruction(ACtx, EncodeABC(OP_TO_PROPERTY_KEY, IdxReg, IdxReg,
+            0));
         end;
-      end
-      else
-      begin
-        DestSlot := ACtx.Scope.AllocateRegister;
-        EmitLoadPropertyByName(ACtx, DestSlot, ASrcReg, Prop.Key);
       end;
 
-      EmitDestructuring(ACtx, Prop.Pattern, DestSlot, AAssignmentMode);
-      ACtx.Scope.FreeRegister;
+      try
+        if AAssignmentMode then
+          PrepareDestructuringAssignmentTarget(ACtx, Prop.Pattern,
+            PreparedTarget)
+        else
+          EmitDestructuringBindingResolutionProbe(ACtx, Prop.Pattern);
+
+        DestSlot := ACtx.Scope.AllocateRegister;
+        if Prop.Computed and Assigned(Prop.KeyExpression) then
+          EmitInstruction(ACtx, EncodeABC(OP_GET_INDEX, DestSlot, ASrcReg,
+            IdxReg))
+        else
+          EmitLoadPropertyByName(ACtx, DestSlot, ASrcReg, Prop.Key);
+
+        EmitDestructuringWithPreparedTarget(ACtx, Prop.Pattern, DestSlot,
+          AAssignmentMode, PreparedTarget);
+        ACtx.Scope.FreeRegister;
+      finally
+        ReleasePreparedDestructuringTarget(ACtx, PreparedTarget);
+        if Prop.Computed and Assigned(Prop.KeyExpression) and
+           not ((RestIndex >= 0) and (I < RestIndex)) then
+          ACtx.Scope.FreeRegister;
+      end;
     end;
   end
   else if APattern is TGocciaArrayDestructuringPattern then
@@ -2591,7 +3100,8 @@ begin
         RestIndex := I;
         Break;
       end;
-    if (not HasRest) and DestructuringPatternHasSuspendingDefault(ArrPat) then
+    if AAssignmentMode or
+       ((not HasRest) and DestructuringPatternHasSuspendingDefault(ArrPat)) then
     begin
       EmitStreamingArrayDestructuring(ACtx, ArrPat, ASrcReg, AAssignmentMode);
       Exit;
@@ -2898,7 +3408,10 @@ begin
     if (RestParamIndex >= 0) and
        not ParameterListHasDefaultValues(AExpr.Parameters) then
     begin
-      RestReg := ChildScope.ResolveLocal(AExpr.Parameters[RestParamIndex].Name);
+      if AExpr.Parameters[RestParamIndex].IsPattern then
+        RestReg := ChildScope.ResolveLocal(SyntheticParamLocalName(RestParamIndex))
+      else
+        RestReg := ChildScope.ResolveLocal(AExpr.Parameters[RestParamIndex].Name);
       EmitInstruction(ChildCtx,
         EncodeABC(OP_PACK_ARGS, UInt8(RestReg), UInt8(RestParamIndex), 0));
     end;
@@ -2983,13 +3496,14 @@ end;
 
 function TryCompileWithIdentifierCall(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaCallExpression; const ADest: UInt8;
-  const AArgCount: Integer; const AUseSpread: Boolean): Boolean;
+  const AArgCount: Integer; const AUseSpread: Boolean;
+  var AJumps: TGocciaCompilerJumpArray; var AJumpCount: Integer): Boolean;
 var
   Ident: TGocciaIdentifierExpression;
   ObjReg, BaseReg, ArgsReg, KeyReg, CondReg: UInt8;
   NameIdx: UInt16;
   I, EndCount: Integer;
-  MissJump, CallNilJump, BranchEndJump: Integer;
+  MissJump: Integer;
   EndJumps: array of Integer;
 
   procedure EmitBranchCall(const AIsMethodCall, AJumpAfter: Boolean);
@@ -2997,9 +3511,7 @@ var
     ArgIndex: Integer;
   begin
     if AExpr.Optional then
-      CallNilJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH, BaseReg)
-    else
-      CallNilJump := -1;
+      AddOptionalChainJump(ACtx, AJumps, AJumpCount, BaseReg);
 
     if AUseSpread then
     begin
@@ -3022,17 +3534,9 @@ var
           UInt8(AArgCount), 0))
       else
         EmitInstruction(ACtx, EncodeABC(OP_CALL, BaseReg, UInt8(AArgCount),
-          CallFlags(ACtx, AExpr, CurrentCodePosition(ACtx))));
+        CallFlags(ACtx, AExpr, CurrentCodePosition(ACtx))));
       for ArgIndex := 0 to AArgCount - 1 do
         ACtx.Scope.FreeRegister;
-    end;
-
-    if AExpr.Optional then
-    begin
-      BranchEndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
-      PatchJumpTarget(ACtx, CallNilJump);
-      EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, BaseReg, 0, 0));
-      PatchJumpTarget(ACtx, BranchEndJump);
     end;
 
     if ADest <> BaseReg then
@@ -3068,7 +3572,8 @@ begin
       EmitInstruction(ACtx, EncodeABC(OP_HAS_WITH_BINDING, CondReg, ObjReg,
         KeyReg));
       MissJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, CondReg);
-      EmitInstruction(ACtx, EncodeABC(OP_GET_INDEX, BaseReg, ObjReg, KeyReg));
+      EmitInstruction(ACtx, EncodeABC(GetWithBindingOpcode(ACtx), BaseReg,
+        ObjReg, KeyReg));
       ACtx.Scope.FreeRegister;
       ACtx.Scope.FreeRegister;
       EmitBranchCall(True, True);
@@ -3088,6 +3593,299 @@ begin
   Result := True;
 end;
 
+function CompileCallWithOptionalChainJumps(const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaCallExpression; const ADest: UInt8;
+  var AJumps: TGocciaCompilerJumpArray; var AJumpCount: Integer): Boolean;
+var
+  ArgCount: Integer;
+  ObjReg, BaseReg, ArgsReg, KeyReg: UInt8;
+  MemberExpr: TGocciaMemberExpression;
+  PrivateExpr: TGocciaPrivateMemberExpression;
+  Ident: TGocciaIdentifierExpression;
+  SequenceExpr: TGocciaSequenceExpression;
+  PropIdx: UInt16;
+  UseSpread: Boolean;
+  EndJump, JumpIndex: Integer;
+  LocalJumps: TGocciaCompilerJumpArray;
+  LocalJumpCount: Integer;
+
+  procedure EmitArgumentsAndCall(const AIsMethodCall: Boolean);
+  var
+    ArgIndex: Integer;
+  begin
+    if AExpr.Optional then
+      AddOptionalChainJump(ACtx, AJumps, AJumpCount, BaseReg);
+
+    if UseSpread then
+    begin
+      ArgsReg := ACtx.Scope.AllocateRegister;
+      CompileSpreadArgsArray(ACtx, AExpr, ArgsReg);
+      if AIsMethodCall then
+        EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, BaseReg, ArgsReg, 1))
+      else
+        EmitInstruction(ACtx, EncodeABC(OP_CALL, BaseReg, ArgsReg,
+          SpreadCallFlags(ACtx, AExpr, CurrentCodePosition(ACtx))));
+      ACtx.Scope.FreeRegister;
+    end
+    else
+    begin
+      for ArgIndex := 0 to ArgCount - 1 do
+        ACtx.CompileExpression(AExpr.Arguments[ArgIndex],
+          ACtx.Scope.AllocateRegister);
+      if AIsMethodCall then
+        EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, BaseReg,
+          UInt8(ArgCount), 0))
+      else
+        EmitInstruction(ACtx, EncodeABC(OP_CALL, BaseReg, UInt8(ArgCount),
+          CallFlags(ACtx, AExpr, CurrentCodePosition(ACtx))));
+      for ArgIndex := 0 to ArgCount - 1 do
+        ACtx.Scope.FreeRegister;
+    end;
+  end;
+
+begin
+  if not (AExpr.Optional or ExpressionContainsOptionalChain(AExpr.Callee)) then
+    Exit(False);
+
+  ArgCount := AExpr.Arguments.Count;
+  if ArgCount > High(UInt8) then
+    raise Exception.Create('Compiler error: too many arguments (>255)');
+  UseSpread := HasSpreadArgument(AExpr);
+
+  if AExpr.Callee is TGocciaIdentifierExpression then
+  begin
+    Ident := TGocciaIdentifierExpression(AExpr.Callee);
+    if ShouldTryWithBinding(ACtx.Scope, Ident.Name) then
+      Exit(TryCompileWithIdentifierCall(ACtx, AExpr, ADest, ArgCount,
+        UseSpread, AJumps, AJumpCount));
+  end;
+
+  if AExpr.Callee is TGocciaMemberExpression then
+  begin
+    MemberExpr := TGocciaMemberExpression(AExpr.Callee);
+    if MemberExpr.ObjectExpr is TGocciaSuperExpression then
+      Exit(False);
+
+    ObjReg := ACtx.Scope.AllocateRegister;
+    BaseReg := ACtx.Scope.AllocateRegister;
+    try
+      CompileExpressionWithOptionalChainJumps(ACtx, MemberExpr.ObjectExpr,
+        ObjReg, AJumps, AJumpCount);
+      if MemberExpr.Optional then
+        AddOptionalChainJump(ACtx, AJumps, AJumpCount, ObjReg);
+
+      if MemberExpr.Computed then
+      begin
+        KeyReg := ACtx.Scope.AllocateRegister;
+        try
+          ACtx.CompileExpression(MemberExpr.PropertyExpression, KeyReg);
+          EmitInstruction(ACtx, EncodeABC(OP_ARRAY_GET, BaseReg, ObjReg,
+            KeyReg));
+        finally
+          ACtx.Scope.FreeRegister;
+        end;
+      end
+      else
+        EmitLoadPropertyByName(ACtx, BaseReg, ObjReg, MemberExpr.PropertyName);
+
+      EmitArgumentsAndCall(True);
+
+      if ADest <> BaseReg then
+        EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, BaseReg, 0));
+    finally
+      ACtx.Scope.FreeRegister;
+      ACtx.Scope.FreeRegister;
+    end;
+    Exit(True);
+  end;
+
+  if AExpr.Callee is TGocciaPrivateMemberExpression then
+  begin
+    PrivateExpr := TGocciaPrivateMemberExpression(AExpr.Callee);
+    ObjReg := ACtx.Scope.AllocateRegister;
+    BaseReg := ACtx.Scope.AllocateRegister;
+    try
+      CompileExpressionWithOptionalChainJumps(ACtx, PrivateExpr.ObjectExpr,
+        ObjReg, AJumps, AJumpCount);
+      if PrivateExpr.Optional then
+        AddOptionalChainJump(ACtx, AJumps, AJumpCount, ObjReg);
+      PropIdx := ACtx.Template.AddConstantString(
+        PrivateKey(ACtx.Scope, PrivateExpr.PrivateName));
+      if PropIdx <= High(UInt8) then
+        EmitInstruction(ACtx, EncodeABC(OP_GET_PROP_CONST, BaseReg, ObjReg,
+          UInt8(PropIdx)))
+      else
+      begin
+        KeyReg := ACtx.Scope.AllocateRegister;
+        try
+          EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, KeyReg, PropIdx));
+          EmitInstruction(ACtx, EncodeABC(OP_GET_INDEX, BaseReg, ObjReg,
+            KeyReg));
+        finally
+          ACtx.Scope.FreeRegister;
+        end;
+      end;
+
+      EmitArgumentsAndCall(True);
+
+      if ADest <> BaseReg then
+        EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, BaseReg, 0));
+    finally
+      ACtx.Scope.FreeRegister;
+      ACtx.Scope.FreeRegister;
+    end;
+    Exit(True);
+  end;
+
+  if (AExpr.Callee is TGocciaSequenceExpression) then
+  begin
+    SequenceExpr := TGocciaSequenceExpression(AExpr.Callee);
+    if (SequenceExpr.Expressions.Count = 1) and
+       (SequenceExpr.Expressions[0] is TGocciaMemberExpression) then
+    begin
+      MemberExpr := TGocciaMemberExpression(SequenceExpr.Expressions[0]);
+      if MemberExpr.ObjectExpr is TGocciaSuperExpression then
+        Exit(False);
+
+      ObjReg := ACtx.Scope.AllocateRegister;
+      BaseReg := ACtx.Scope.AllocateRegister;
+      LocalJumpCount := 0;
+      try
+        CompileExpressionWithOptionalChainJumps(ACtx, MemberExpr.ObjectExpr,
+          ObjReg, LocalJumps, LocalJumpCount);
+        if MemberExpr.Optional then
+          AddOptionalChainJump(ACtx, LocalJumps, LocalJumpCount, ObjReg);
+
+        if MemberExpr.Computed then
+        begin
+          KeyReg := ACtx.Scope.AllocateRegister;
+          try
+            ACtx.CompileExpression(MemberExpr.PropertyExpression, KeyReg);
+            EmitInstruction(ACtx, EncodeABC(OP_ARRAY_GET, BaseReg, ObjReg,
+              KeyReg));
+          finally
+            ACtx.Scope.FreeRegister;
+          end;
+        end
+        else
+          EmitLoadPropertyByName(ACtx, BaseReg, ObjReg,
+            MemberExpr.PropertyName);
+
+        if LocalJumpCount > 0 then
+        begin
+          EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+          for JumpIndex := 0 to LocalJumpCount - 1 do
+            PatchJumpTarget(ACtx, LocalJumps[JumpIndex]);
+          EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, BaseReg, 0, 0));
+          PatchJumpTarget(ACtx, EndJump);
+        end;
+
+        EmitArgumentsAndCall(True);
+
+        if ADest <> BaseReg then
+          EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, BaseReg, 0));
+      finally
+        ACtx.Scope.FreeRegister;
+        ACtx.Scope.FreeRegister;
+      end;
+      Exit(True);
+    end;
+
+    if (SequenceExpr.Expressions.Count = 1) and
+       (SequenceExpr.Expressions[0] is TGocciaPrivateMemberExpression) then
+    begin
+      PrivateExpr := TGocciaPrivateMemberExpression(
+        SequenceExpr.Expressions[0]);
+      ObjReg := ACtx.Scope.AllocateRegister;
+      BaseReg := ACtx.Scope.AllocateRegister;
+      LocalJumpCount := 0;
+      try
+        CompileExpressionWithOptionalChainJumps(ACtx, PrivateExpr.ObjectExpr,
+          ObjReg, LocalJumps, LocalJumpCount);
+        if PrivateExpr.Optional then
+          AddOptionalChainJump(ACtx, LocalJumps, LocalJumpCount, ObjReg);
+        PropIdx := ACtx.Template.AddConstantString(
+          PrivateKey(ACtx.Scope, PrivateExpr.PrivateName));
+        if PropIdx <= High(UInt8) then
+          EmitInstruction(ACtx, EncodeABC(OP_GET_PROP_CONST, BaseReg, ObjReg,
+            UInt8(PropIdx)))
+        else
+        begin
+          KeyReg := ACtx.Scope.AllocateRegister;
+          try
+            EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, KeyReg, PropIdx));
+            EmitInstruction(ACtx, EncodeABC(OP_GET_INDEX, BaseReg, ObjReg,
+              KeyReg));
+          finally
+            ACtx.Scope.FreeRegister;
+          end;
+        end;
+
+        if LocalJumpCount > 0 then
+        begin
+          EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+          for JumpIndex := 0 to LocalJumpCount - 1 do
+            PatchJumpTarget(ACtx, LocalJumps[JumpIndex]);
+          EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, BaseReg, 0, 0));
+          PatchJumpTarget(ACtx, EndJump);
+        end;
+
+        EmitArgumentsAndCall(True);
+
+        if ADest <> BaseReg then
+          EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, BaseReg, 0));
+      finally
+        ACtx.Scope.FreeRegister;
+        ACtx.Scope.FreeRegister;
+      end;
+      Exit(True);
+    end;
+  end;
+
+  if (ADest + 1 = ACtx.Scope.NextSlot) and
+     not IsLocalSlot(ACtx.Scope, ADest) then
+    BaseReg := ADest
+  else
+    BaseReg := ACtx.Scope.AllocateRegister;
+  try
+    CompileExpressionWithOptionalChainJumps(ACtx, AExpr.Callee, BaseReg,
+      AJumps, AJumpCount);
+    EmitArgumentsAndCall(False);
+
+    if BaseReg <> ADest then
+      EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, BaseReg, 0));
+  finally
+    if BaseReg <> ADest then
+      ACtx.Scope.FreeRegister;
+  end;
+
+  Result := True;
+end;
+
+function TryCompileOptionalChainCall(const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaCallExpression; const ADest: UInt8): Boolean;
+var
+  EndJump, JumpIndex: Integer;
+  NullishJumps: TGocciaCompilerJumpArray;
+  NullishJumpCount: Integer;
+begin
+  NullishJumpCount := 0;
+  if not CompileCallWithOptionalChainJumps(ACtx, AExpr, ADest, NullishJumps,
+     NullishJumpCount) then
+    Exit(False);
+
+  if NullishJumpCount > 0 then
+  begin
+    EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+    for JumpIndex := 0 to NullishJumpCount - 1 do
+      PatchJumpTarget(ACtx, NullishJumps[JumpIndex]);
+    EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, ADest, 0, 0));
+    PatchJumpTarget(ACtx, EndJump);
+  end;
+
+  Result := True;
+end;
+
 procedure CompileCall(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaCallExpression; const ADest: UInt8);
 var
@@ -3101,12 +3899,18 @@ var
   PropIdx: UInt16;
   UseSpread: Boolean;
   NilJump, CallNilJump, EndJump: Integer;
+  IgnoredJumps: TGocciaCompilerJumpArray;
+  IgnoredJumpCount: Integer;
 begin
+  if TryCompileOptionalChainCall(ACtx, AExpr, ADest) then
+    Exit;
+
   ArgCount := AExpr.Arguments.Count;
   if ArgCount > High(UInt8) then
     raise Exception.Create('Compiler error: too many arguments (>255)');
   UseSpread := HasSpreadArgument(AExpr);
   CallNilJump := -1;
+  IgnoredJumpCount := 0;
 
   if AExpr.Callee is TGocciaSuperExpression then
   begin
@@ -3383,7 +4187,7 @@ begin
   else
   begin
     if TryCompileWithIdentifierCall(ACtx, AExpr, ADest, ArgCount,
-       UseSpread) then
+       UseSpread, IgnoredJumps, IgnoredJumpCount) then
       Exit;
 
     if (ADest + 1 = ACtx.Scope.NextSlot) and
@@ -3436,7 +4240,9 @@ procedure CompileMember(const ACtx: TGocciaCompilationContext;
 var
   ObjReg, IdxReg, BaseReg, SuperReg, KeyReg: UInt8;
   PropIdx: UInt16;
-  NilJump, EndJump: Integer;
+  EndJump, JumpIndex: Integer;
+  NullishJumps: TGocciaCompilerJumpArray;
+  NullishJumpCount: Integer;
 begin
   if AExpr.ObjectExpr is TGocciaSuperExpression then
   begin
@@ -3483,38 +4289,30 @@ begin
   end;
 
   ObjReg := ACtx.Scope.AllocateRegister;
-  ACtx.CompileExpression(AExpr.ObjectExpr, ObjReg);
+  NullishJumpCount := 0;
+  CompileExpressionWithOptionalChainJumps(ACtx, AExpr.ObjectExpr, ObjReg,
+    NullishJumps, NullishJumpCount);
 
   if AExpr.Optional then
+    AddOptionalChainJump(ACtx, NullishJumps, NullishJumpCount, ObjReg);
+
+  if AExpr.Computed then
   begin
-    NilJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH, ObjReg);
-
-    if AExpr.Computed then
-    begin
-      IdxReg := ACtx.Scope.AllocateRegister;
-      ACtx.CompileExpression(AExpr.PropertyExpression, IdxReg);
-      EmitInstruction(ACtx, EncodeABC(OP_ARRAY_GET, ADest, ObjReg, IdxReg));
-      ACtx.Scope.FreeRegister;
-    end
-    else
-      EmitLoadPropertyByName(ACtx, ADest, ObjReg, AExpr.PropertyName);
-
-    EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
-    PatchJumpTarget(ACtx, NilJump);
-    EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, ADest, 0, 0));
-    PatchJumpTarget(ACtx, EndJump);
+    IdxReg := ACtx.Scope.AllocateRegister;
+    ACtx.CompileExpression(AExpr.PropertyExpression, IdxReg);
+    EmitInstruction(ACtx, EncodeABC(OP_ARRAY_GET, ADest, ObjReg, IdxReg));
+    ACtx.Scope.FreeRegister;
   end
   else
+    EmitLoadPropertyByName(ACtx, ADest, ObjReg, AExpr.PropertyName);
+
+  if NullishJumpCount > 0 then
   begin
-    if AExpr.Computed then
-    begin
-      IdxReg := ACtx.Scope.AllocateRegister;
-      ACtx.CompileExpression(AExpr.PropertyExpression, IdxReg);
-      EmitInstruction(ACtx, EncodeABC(OP_ARRAY_GET, ADest, ObjReg, IdxReg));
-      ACtx.Scope.FreeRegister;
-    end
-    else
-      EmitLoadPropertyByName(ACtx, ADest, ObjReg, AExpr.PropertyName);
+    EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+    for JumpIndex := 0 to NullishJumpCount - 1 do
+      PatchJumpTarget(ACtx, NullishJumps[JumpIndex]);
+    EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, ADest, 0, 0));
+    PatchJumpTarget(ACtx, EndJump);
   end;
 
   ACtx.Scope.FreeRegister;
@@ -3562,18 +4360,21 @@ begin
 end;
 
 procedure CompileObjectProperty(const ACtx: TGocciaCompilationContext;
-  const ADest: UInt8; const AKey: string; const AValExpr: TGocciaExpression);
+  const ADest: UInt8; const AKey: string; const AValExpr: TGocciaExpression;
+  const AUsesColonSyntax: Boolean = True);
 var
   ValReg: UInt8;
   DefineOp: TGocciaOpCode;
   FuncCount: Integer;
   InferredTemplate: TGocciaFunctionTemplate;
   ValueExpr: TGocciaExpression;
+  IsProtoSetter: Boolean;
 begin
   ValReg := ACtx.Scope.AllocateRegister;
   FuncCount := ACtx.Template.FunctionCount;
   ValueExpr := AValExpr;
   DefineOp := OP_DEFINE_DATA_PROP;
+  IsProtoSetter := False;
 
   if AValExpr is TGocciaObjectMethodDefinition then
   begin
@@ -3583,15 +4384,21 @@ begin
       TGocciaObjectMethodDefinition(AValExpr).FunctionExpression,
       ValReg, '<method>');
   end
-  else if (ValueExpr is TGocciaClassExpression) and
-     (TGocciaClassExpression(ValueExpr).ClassDefinition.Name = '') then
-    Goccia.Compiler.Statements.CompileClassExpression(ACtx,
-      TGocciaClassExpression(ValueExpr).ClassDefinition, ValReg, AKey)
   else
-    ACtx.CompileExpression(ValueExpr, ValReg);
+  begin
+    IsProtoSetter := AUsesColonSyntax and (AKey = PROP_PROTO);
+    if (not IsProtoSetter) and
+       (ValueExpr is TGocciaClassExpression) and
+       (TGocciaClassExpression(ValueExpr).ClassDefinition.Name = '') then
+      Goccia.Compiler.Statements.CompileClassExpression(ACtx,
+        TGocciaClassExpression(ValueExpr).ClassDefinition, ValReg, AKey)
+    else
+      ACtx.CompileExpression(ValueExpr, ValReg);
+  end;
 
-  if (ValueExpr is TGocciaArrowFunctionExpression) or
-     (ValueExpr is TGocciaFunctionExpression) then
+  if (not IsProtoSetter) and
+     ((ValueExpr is TGocciaArrowFunctionExpression) or
+      (ValueExpr is TGocciaFunctionExpression)) then
   begin
     if ACtx.Template.FunctionCount > FuncCount then
     begin
@@ -3604,7 +4411,10 @@ begin
     end;
   end;
 
-  EmitDefineDataPropertyByName(ACtx, ADest, AKey, ValReg, DefineOp);
+  if IsProtoSetter then
+    EmitInstruction(ACtx, EncodeABC(OP_SET_OBJECT_PROTO, ADest, ValReg, 0))
+  else
+    EmitDefineDataPropertyByName(ACtx, ADest, AKey, ValReg, DefineOp);
   ACtx.Scope.FreeRegister;
 end;
 
@@ -3702,11 +4512,26 @@ begin
   ChildTemplate.SourceText := ASetter.SourceText;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
-  ChildScope.DeclareLocal(ASetter.Parameter, False);
-  ChildTemplate.ParameterCount := 1;
-  SetLength(SetterParams, 1);
-  SetterParams[0].Name := ASetter.Parameter;
+  SetterParams := ASetter.Parameters;
+  ChildTemplate.ParameterCount := Length(SetterParams);
+  if (Length(SetterParams) > 0) and
+     (SetterParams[0].IsRest or Assigned(SetterParams[0].DefaultValue)) then
+    ChildTemplate.FormalParameterCount := 0
+  else
+    ChildTemplate.FormalParameterCount := 1;
+  for I := 0 to High(SetterParams) do
+  begin
+    if SetterParams[I].IsPattern then
+      ChildScope.DeclareLocal(SyntheticParamLocalName(I), False)
+    else
+      ChildScope.DeclareLocal(SetterParams[I].Name, False);
+  end;
+  for I := 0 to High(SetterParams) do
+    if SetterParams[I].IsPattern and Assigned(SetterParams[I].Pattern) then
+      CollectDestructuringBindings(SetterParams[I].Pattern, ChildScope);
   ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, SetterParams);
+  ApplyParameterTypeAnnotations(ChildScope, ChildTemplate, SetterParams,
+    ACtx.StrictTypes);
 
   ACtx.SwapState(ChildTemplate, ChildScope);
   try
@@ -3720,6 +4545,12 @@ begin
     EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot,
       ChildCtx.NonStrictMode and ParameterListIsSimple(SetterParams),
       Length(SetterParams));
+    EmitDefaultParameters(ChildCtx, SetterParams);
+    EmitDestructuringParameters(ChildCtx, SetterParams);
+    EmitParameterTypeChecks(ChildCtx, SetterParams);
+    if ChildTemplate.CodeCount > High(UInt16) then
+      raise Exception.Create('Parameter preamble is too large to encode');
+    ChildTemplate.ParameterPreambleSize := UInt16(ChildTemplate.CodeCount);
     ACtx.CompileFunctionBody(ASetter.Body);
     ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
 
@@ -3807,6 +4638,8 @@ begin
     'OP_DEFINE_ACCESSOR_* expects accessor register at target + 1');
   EmitInstruction(ACtx, EncodeABC(OP_MOVE, TargetReg, ADest, 0));
   EmitInstruction(ACtx, EncodeABx(OP_CLOSURE, AccessorReg, FuncIdx));
+  EmitInstruction(ACtx, EncodeABC(OP_SET_FUNCTION_NAME, AccessorReg,
+    AKeyReg, FUNCTION_NAME_PREFIX_GET));
   EmitInstruction(ACtx, EncodeABC(OP_DEFINE_ACCESSOR_DYNAMIC, TargetReg, 0,
     AKeyReg));
   ACtx.Scope.FreeRegister;
@@ -3838,11 +4671,26 @@ begin
   ChildTemplate.SourceText := ASetter.SourceText;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
-  ChildScope.DeclareLocal(ASetter.Parameter, False);
-  ChildTemplate.ParameterCount := 1;
-  SetLength(SetterParams, 1);
-  SetterParams[0].Name := ASetter.Parameter;
+  SetterParams := ASetter.Parameters;
+  ChildTemplate.ParameterCount := Length(SetterParams);
+  if (Length(SetterParams) > 0) and
+     (SetterParams[0].IsRest or Assigned(SetterParams[0].DefaultValue)) then
+    ChildTemplate.FormalParameterCount := 0
+  else
+    ChildTemplate.FormalParameterCount := 1;
+  for I := 0 to High(SetterParams) do
+  begin
+    if SetterParams[I].IsPattern then
+      ChildScope.DeclareLocal(SyntheticParamLocalName(I), False)
+    else
+      ChildScope.DeclareLocal(SetterParams[I].Name, False);
+  end;
+  for I := 0 to High(SetterParams) do
+    if SetterParams[I].IsPattern and Assigned(SetterParams[I].Pattern) then
+      CollectDestructuringBindings(SetterParams[I].Pattern, ChildScope);
   ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, SetterParams);
+  ApplyParameterTypeAnnotations(ChildScope, ChildTemplate, SetterParams,
+    ACtx.StrictTypes);
 
   ACtx.SwapState(ChildTemplate, ChildScope);
   try
@@ -3856,6 +4704,12 @@ begin
     EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot,
       ChildCtx.NonStrictMode and ParameterListIsSimple(SetterParams),
       Length(SetterParams));
+    EmitDefaultParameters(ChildCtx, SetterParams);
+    EmitDestructuringParameters(ChildCtx, SetterParams);
+    EmitParameterTypeChecks(ChildCtx, SetterParams);
+    if ChildTemplate.CodeCount > High(UInt16) then
+      raise Exception.Create('Parameter preamble is too large to encode');
+    ChildTemplate.ParameterPreambleSize := UInt16(ChildTemplate.CodeCount);
     ACtx.CompileFunctionBody(ASetter.Body);
     ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
 
@@ -3876,6 +4730,8 @@ begin
     'OP_DEFINE_ACCESSOR_* expects accessor register at target + 1');
   EmitInstruction(ACtx, EncodeABC(OP_MOVE, TargetReg, ADest, 0));
   EmitInstruction(ACtx, EncodeABx(OP_CLOSURE, AccessorReg, FuncIdx));
+  EmitInstruction(ACtx, EncodeABC(OP_SET_FUNCTION_NAME, AccessorReg,
+    AKeyReg, FUNCTION_NAME_PREFIX_SET));
   EmitInstruction(ACtx, EncodeABC(OP_DEFINE_ACCESSOR_DYNAMIC, TargetReg,
     ACCESSOR_FLAG_SETTER, AKeyReg));
   ACtx.Scope.FreeRegister;
@@ -3917,7 +4773,8 @@ begin
           begin
             if AExpr.Properties.TryGetValue(Key, FinalExpr) and
                (FinalExpr = ValExpr) then
-              CompileObjectProperty(ACtx, ADest, Key, ValExpr)
+              CompileObjectProperty(ACtx, ADest, Key, ValExpr,
+                Order[I].UsesColonSyntax)
             else
             begin
               ValReg := ACtx.Scope.AllocateRegister;
@@ -3945,6 +4802,8 @@ begin
               KeyReg := ACtx.Scope.AllocateRegister;
               ValReg := ACtx.Scope.AllocateRegister;
               ACtx.CompileExpression(Pair.Key, KeyReg);
+              EmitInstruction(ACtx, EncodeABC(OP_TO_PROPERTY_KEY, KeyReg,
+                KeyReg, 0));
               if Pair.Value is TGocciaObjectMethodDefinition then
               begin
                 DefineOp := OP_DEFINE_METHOD_PROP;
@@ -3957,6 +4816,9 @@ begin
                 DefineOp := OP_DEFINE_DATA_PROP;
                 ACtx.CompileExpression(Pair.Value, ValReg);
               end;
+              if IsAnonymousFunctionNameExpression(Pair.Value) then
+                EmitInstruction(ACtx, EncodeABC(OP_SET_FUNCTION_NAME, ValReg,
+                  KeyReg, FUNCTION_NAME_PREFIX_NONE));
               EmitInstruction(ACtx, EncodeABC(DefineOp, ADest, KeyReg, ValReg));
               ACtx.Scope.FreeRegister;
               ACtx.Scope.FreeRegister;
@@ -4191,8 +5053,8 @@ begin
           ABaseReg, KeyReg));
         MissJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, CondReg);
         EmitInstruction(ACtx, EncodeABC(OP_MOVE, AObjReg, ABaseReg, 0));
-        EmitInstruction(ACtx, EncodeABC(OP_GET_INDEX, ABaseReg, AObjReg,
-          KeyReg));
+        EmitInstruction(ACtx, EncodeABC(GetWithBindingOpcode(ACtx), ABaseReg,
+          AObjReg, KeyReg));
         EndJumps[EndCount] := EmitJumpInstruction(ACtx, OP_JUMP, 0);
         Inc(EndCount);
         PatchJumpTarget(ACtx, MissJump);
@@ -4313,9 +5175,12 @@ begin
     KeyReg := ACtx.Scope.AllocateRegister;
     ValReg := ACtx.Scope.AllocateRegister;
     ACtx.CompileExpression(AExpr.PropertyExpression, KeyReg);
-    EmitInstruction(ACtx, EncodeABC(OP_TO_PROPERTY_KEY, KeyReg, KeyReg, 0));
+    EmitInstruction(ACtx, EncodeABC(OP_SUPER_BASE, SuperReg, SuperReg,
+      ThisReg));
     ACtx.CompileExpression(AExpr.Value, ValReg);
-    EmitInstruction(ACtx, EncodeABC(OP_SUPER_SET, BaseReg, KeyReg, ValReg));
+    EmitInstruction(ACtx, EncodeABC(OP_TO_PROPERTY_KEY, KeyReg, KeyReg, 0));
+    EmitInstruction(ACtx, EncodeABC(OP_SUPER_SET_BASE, BaseReg, KeyReg,
+      ValReg));
 
     if ADest <> ValReg then
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, ValReg, 0));
@@ -4377,6 +5242,7 @@ begin
   begin
     OldScope.BeginScope;
     NameSlot := OldScope.DeclareLocal(AExpr.Name, True);
+    OldScope.MarkNonStrictImmutable(OldScope.ResolveLocal(AExpr.Name));
   end;
 
   ChildTemplate := TGocciaFunctionTemplate.Create(ATemplateName);
@@ -4384,7 +5250,8 @@ begin
   ChildTemplate.IsAsync := AExpr.IsAsync;
   ChildTemplate.IsGenerator := AExpr.IsGenerator;
   ChildTemplate.HasOwnPrototype := AExpr.HasOwnPrototype;
-  ChildTemplate.StrictCode := ChildBodyIsStrictCode(ACtx, AExpr.Body);
+  ChildTemplate.StrictCode := AExpr.ParsedInStrictMode or
+    ChildBodyIsStrictCode(ACtx, AExpr.Body);
   ChildTemplate.StrictThis := ChildTemplate.StrictCode;
   ChildTemplate.SourceText := AExpr.SourceText;
   if HasNameBinding then
@@ -4441,7 +5308,10 @@ begin
     if (RestParamIndex >= 0) and
        not ParameterListHasDefaultValues(AExpr.Parameters) then
     begin
-      RestReg := ChildScope.ResolveLocal(AExpr.Parameters[RestParamIndex].Name);
+      if AExpr.Parameters[RestParamIndex].IsPattern then
+        RestReg := ChildScope.ResolveLocal(SyntheticParamLocalName(RestParamIndex))
+      else
+        RestReg := ChildScope.ResolveLocal(AExpr.Parameters[RestParamIndex].Name);
       EmitInstruction(ChildCtx,
         EncodeABC(OP_PACK_ARGS, UInt8(RestReg), UInt8(RestParamIndex), 0));
     end;
@@ -4490,18 +5360,26 @@ var
   ArithOp: TGocciaTokenType;
   I, EndCount, JumpIdx, MissJump, OkJump: Integer;
   EndJumps: array of Integer;
+  PreparedTarget: TPreparedDestructuringTarget;
 begin
   // ES2026 §13.15.2 AssignmentExpression : LeftHandSideExpression ??=/&&=/||= AssignmentExpression
   if IsShortCircuitAssignment(AExpr.Operator) then
   begin
     if ShouldTryWithBinding(ACtx.Scope, AExpr.Name) then
     begin
-      Op := ShortCircuitJumpOp(AExpr.Operator);
-      EmitLoadBindingByName(ACtx, AExpr.Name, ADest, False);
-      JumpIdx := EmitJumpInstruction(ACtx, Op, ADest);
-      ACtx.CompileExpression(AExpr.Value, ADest);
-      EmitWithAssignmentOrFallback(ACtx, AExpr.Name, ADest);
-      PatchJumpTarget(ACtx, JumpIdx);
+      InitPreparedDestructuringTarget(PreparedTarget);
+      try
+        Op := ShortCircuitJumpOp(AExpr.Operator);
+        PrepareIdentifierWithBindingTarget(ACtx, AExpr.Name, PreparedTarget);
+        EmitPreparedIdentifierWithBindingLoad(ACtx, PreparedTarget, ADest);
+        JumpIdx := EmitJumpInstruction(ACtx, Op, ADest);
+        CompileAssignmentValue(ACtx, AExpr.Value, ADest, AExpr.Name,
+          AExpr.InferName);
+        EmitPreparedDestructuringTargetStore(ACtx, PreparedTarget, ADest);
+        PatchJumpTarget(ACtx, JumpIdx);
+      finally
+        ReleasePreparedDestructuringTarget(ACtx, PreparedTarget);
+      end;
       Exit;
     end;
 
@@ -4514,7 +5392,8 @@ begin
         EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, ADest,
           ACtx.Template.AddConstantString(AExpr.Name)));
         JumpIdx := EmitJumpInstruction(ACtx, Op, ADest);
-        ACtx.CompileExpression(AExpr.Value, ADest);
+        CompileAssignmentValue(ACtx, AExpr.Value, ADest, AExpr.Name,
+          AExpr.InferName);
         LocalType := ACtx.Scope.GetLocal(LocalIdx).TypeHint;
         if ACtx.Scope.GetLocal(LocalIdx).IsStrictlyTyped and
            (LocalType <> sltUntyped) and
@@ -4522,7 +5401,11 @@ begin
           EmitInstruction(ACtx, EncodeABC(OP_CHECK_TYPE, ADest,
             UInt8(Ord(LocalType)), 0));
         if ACtx.Scope.GetLocal(LocalIdx).IsConst then
-          EmitConstAssignmentError(ACtx)
+        begin
+          if not ShouldIgnoreNonStrictImmutableLocalAssignment(ACtx,
+             ACtx.Scope.GetLocal(LocalIdx)) then
+            EmitConstAssignmentError(ACtx);
+        end
         else
         begin
           EmitSetGlobalByName(ACtx, ADest, AExpr.Name);
@@ -4543,18 +5426,27 @@ begin
       if ACtx.Scope.GetLocal(LocalIdx).IsConst then
       begin
         RegVal := ACtx.Scope.AllocateRegister;
-        ACtx.CompileExpression(AExpr.Value, RegVal);
+        CompileAssignmentValue(ACtx, AExpr.Value, RegVal, AExpr.Name,
+          AExpr.InferName);
         if ACtx.Scope.GetLocal(LocalIdx).IsStrictlyTyped and
            (LocalType <> sltUntyped) and
            not TypesAreCompatible(InferLocalType(AExpr.Value), LocalType) then
           EmitInstruction(ACtx, EncodeABC(OP_CHECK_TYPE, RegVal,
             UInt8(Ord(LocalType)), 0));
-        EmitConstAssignmentError(ACtx);
+        if ShouldIgnoreNonStrictImmutableLocalAssignment(ACtx,
+           ACtx.Scope.GetLocal(LocalIdx)) then
+        begin
+          if ADest <> RegVal then
+            EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, RegVal, 0));
+        end
+        else
+          EmitConstAssignmentError(ACtx);
         ACtx.Scope.FreeRegister;
       end
       else
       begin
-        ACtx.CompileExpression(AExpr.Value, ADest);
+        CompileAssignmentValue(ACtx, AExpr.Value, ADest, AExpr.Name,
+          AExpr.InferName);
         EmitStrictLocalTypeCheck(ACtx, LocalIdx, ADest,
           InferLocalType(AExpr.Value));
         if ADest <> Slot then
@@ -4577,14 +5469,19 @@ begin
       else
         EmitInstruction(ACtx, EncodeABx(OP_GET_UPVALUE, ADest, UInt16(UpvalIdx)));
       JumpIdx := EmitJumpInstruction(ACtx, Op, ADest);
-      ACtx.CompileExpression(AExpr.Value, ADest);
+      CompileAssignmentValue(ACtx, AExpr.Value, ADest, AExpr.Name,
+        AExpr.InferName);
       if ACtx.Scope.GetUpvalue(UpvalIdx).IsStrictlyTyped and
          not TypesAreCompatible(InferLocalType(AExpr.Value),
            ACtx.Scope.GetUpvalue(UpvalIdx).TypeHint) then
         EmitInstruction(ACtx, EncodeABC(OP_CHECK_TYPE, ADest,
           UInt8(Ord(ACtx.Scope.GetUpvalue(UpvalIdx).TypeHint)), 0));
       if ACtx.Scope.GetUpvalue(UpvalIdx).IsConst then
-        EmitConstAssignmentError(ACtx)
+      begin
+        if not ShouldIgnoreNonStrictImmutableUpvalueAssignment(ACtx,
+           ACtx.Scope.GetUpvalue(UpvalIdx)) then
+          EmitConstAssignmentError(ACtx);
+      end
       else
       begin
         if ACtx.Scope.GetUpvalue(UpvalIdx).IsGlobalBacked then
@@ -4618,7 +5515,8 @@ begin
 
     EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, ADest, NameIdx));
     JumpIdx := EmitJumpInstruction(ACtx, Op, ADest);
-    ACtx.CompileExpression(AExpr.Value, ADest);
+    CompileAssignmentValue(ACtx, AExpr.Value, ADest, AExpr.Name,
+      AExpr.InferName);
     EmitSetGlobalByIndex(ACtx, ADest, NameIdx);
     PatchJumpTarget(ACtx, JumpIdx);
     Exit;
@@ -4628,58 +5526,17 @@ begin
 
   if ShouldTryWithBinding(ACtx.Scope, AExpr.Name) then
   begin
-    ObjReg := ACtx.Scope.AllocateRegister;
-    KeyReg := ACtx.Scope.AllocateRegister;
-    CondReg := ACtx.Scope.AllocateRegister;
+    InitPreparedDestructuringTarget(PreparedTarget);
     RegVal := ACtx.Scope.AllocateRegister;
     RegResult := ACtx.Scope.AllocateRegister;
-    EndCount := 0;
-    SetLength(EndJumps, ACtx.Scope.WithBindingCount);
     try
-      NameIdx := ACtx.Template.AddConstantString(AExpr.Name);
-      EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, KeyReg, NameIdx));
-
-      for I := ACtx.Scope.WithBindingCount - 1 downto 0 do
-      begin
-        EmitLoadHiddenWithObject(ACtx, ACtx.Scope.GetWithBindingName(I), ObjReg);
-        EmitInstruction(ACtx, EncodeABC(OP_HAS_WITH_BINDING, CondReg, ObjReg,
-          KeyReg));
-        MissJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, CondReg);
-        EmitInstruction(ACtx, EncodeABC(OP_GET_INDEX, RegResult, ObjReg,
-          KeyReg));
-        ACtx.CompileExpression(AExpr.Value, RegVal);
-        EmitInstruction(ACtx, EncodeABC(Op, ADest, RegResult, RegVal));
-        if not ACtx.NonStrictMode then
-        begin
-          EmitInstruction(ACtx, EncodeABC(OP_HAS_WITH_BINDING, CondReg,
-            ObjReg, KeyReg));
-          OkJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, CondReg);
-          EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, CondReg,
-            ACtx.Template.AddConstantString(REFERENCE_ERROR_NAME)));
-          EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, RegVal,
-            ACtx.Template.AddConstantString(AExpr.Name + ' is not defined')));
-          EmitInstruction(ACtx, EncodeABC(OP_CONSTRUCT, CondReg, CondReg, 1));
-          EmitInstruction(ACtx, EncodeABC(OP_THROW, CondReg, 0, 0));
-          PatchJumpTarget(ACtx, OkJump);
-        end;
-        EmitInstruction(ACtx, EncodeABC(StoreByKeyOpcode(ACtx), ObjReg, KeyReg,
-          ADest));
-        EndJumps[EndCount] := EmitJumpInstruction(ACtx, OP_JUMP, 0);
-        Inc(EndCount);
-        PatchJumpTarget(ACtx, MissJump);
-      end;
-
-      EmitLoadBindingByName(ACtx, AExpr.Name, RegResult, False);
+      PrepareIdentifierWithBindingTarget(ACtx, AExpr.Name, PreparedTarget);
+      EmitPreparedIdentifierWithBindingLoad(ACtx, PreparedTarget, RegResult);
       ACtx.CompileExpression(AExpr.Value, RegVal);
       EmitInstruction(ACtx, EncodeABC(Op, ADest, RegResult, RegVal));
-      EmitWithAssignmentOrFallback(ACtx, AExpr.Name, ADest);
-
-      for I := 0 to EndCount - 1 do
-        PatchJumpTarget(ACtx, EndJumps[I]);
+      EmitPreparedDestructuringTargetStore(ACtx, PreparedTarget, ADest);
     finally
-      ACtx.Scope.FreeRegister;
-      ACtx.Scope.FreeRegister;
-      ACtx.Scope.FreeRegister;
+      ReleasePreparedDestructuringTarget(ACtx, PreparedTarget);
       ACtx.Scope.FreeRegister;
       ACtx.Scope.FreeRegister;
     end;
@@ -4703,7 +5560,13 @@ begin
          IsKnownNumeric(LocalType) and IsKnownNumeric(ValType) then
         ResultType := sltFloat;
       if ACtx.Scope.GetLocal(LocalIdx).IsConst then
-        EmitConstAssignmentError(ACtx)
+      begin
+        if ShouldIgnoreNonStrictImmutableLocalAssignment(ACtx,
+           ACtx.Scope.GetLocal(LocalIdx)) then
+          EmitInstruction(ACtx, EncodeABC(Op, ADest, RegResult, RegVal))
+        else
+          EmitConstAssignmentError(ACtx);
+      end
       else
       begin
         EmitInstruction(ACtx, EncodeABC(Op, ADest, RegResult, RegVal));
@@ -4725,7 +5588,11 @@ begin
     LocalType := ACtx.Scope.GetLocal(LocalIdx).TypeHint;
     if ACtx.Scope.GetLocal(LocalIdx).IsConst then
     begin
-      EmitConstAssignmentError(ACtx);
+      if ShouldIgnoreNonStrictImmutableLocalAssignment(ACtx,
+         ACtx.Scope.GetLocal(LocalIdx)) then
+        EmitInstruction(ACtx, EncodeABC(Op, ADest, Slot, RegVal))
+      else
+        EmitConstAssignmentError(ACtx);
       ACtx.Scope.FreeRegister;
       Exit;
     end;
@@ -4777,7 +5644,13 @@ begin
       EmitInstruction(ACtx, EncodeABC(OP_CHECK_TYPE, RegVal,
         UInt8(Ord(ACtx.Scope.GetUpvalue(UpvalIdx).TypeHint)), 0));
     if ACtx.Scope.GetUpvalue(UpvalIdx).IsConst then
-      EmitConstAssignmentError(ACtx)
+    begin
+      if ShouldIgnoreNonStrictImmutableUpvalueAssignment(ACtx,
+         ACtx.Scope.GetUpvalue(UpvalIdx)) then
+        EmitInstruction(ACtx, EncodeABC(Op, ADest, RegResult, RegVal))
+      else
+        EmitConstAssignmentError(ACtx);
+    end
     else
     begin
       EmitInstruction(ACtx, EncodeABC(Op, RegResult, RegResult, RegVal));
@@ -4915,15 +5788,17 @@ begin
     PrepareSuperPropertyBase(ACtx, ThisReg, BaseReg, SuperReg);
     KeyReg := ACtx.Scope.AllocateRegister;
     ACtx.CompileExpression(AExpr.PropertyExpression, KeyReg);
+    EmitInstruction(ACtx, EncodeABC(OP_SUPER_BASE, SuperReg, SuperReg,
+      ThisReg));
     EmitInstruction(ACtx, EncodeABC(OP_TO_PROPERTY_KEY, KeyReg, KeyReg, 0));
-    EmitInstruction(ACtx, EncodeABC(OP_SUPER_GET, BaseReg, 0, KeyReg));
+    EmitInstruction(ACtx, EncodeABC(OP_SUPER_GET_BASE, BaseReg, 0, KeyReg));
 
     if IsShortCircuitAssignment(AExpr.Operator) then
     begin
       JumpIdx := EmitJumpInstruction(ACtx,
         ShortCircuitJumpOp(AExpr.Operator), BaseReg);
       ACtx.CompileExpression(AExpr.Value, BaseReg);
-      EmitInstruction(ACtx, EncodeABC(OP_SUPER_SET, BaseReg, KeyReg,
+      EmitInstruction(ACtx, EncodeABC(OP_SUPER_SET_BASE, BaseReg, KeyReg,
         BaseReg));
       PatchJumpTarget(ACtx, JumpIdx);
 
@@ -4941,7 +5816,8 @@ begin
     ValReg := ACtx.Scope.AllocateRegister;
     ACtx.CompileExpression(AExpr.Value, ValReg);
     EmitInstruction(ACtx, EncodeABC(Op, BaseReg, BaseReg, ValReg));
-    EmitInstruction(ACtx, EncodeABC(OP_SUPER_SET, BaseReg, KeyReg, BaseReg));
+    EmitInstruction(ACtx, EncodeABC(OP_SUPER_SET_BASE, BaseReg, KeyReg,
+      BaseReg));
 
     if ADest <> BaseReg then
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, BaseReg, 0));
@@ -5079,11 +5955,14 @@ begin
     PrepareSuperPropertyBase(ACtx, ThisReg, CurReg, SuperReg);
     KeyReg := ACtx.Scope.AllocateRegister;
     ACtx.CompileExpression(AMember.PropertyExpression, KeyReg);
+    EmitInstruction(ACtx, EncodeABC(OP_SUPER_BASE, SuperReg, SuperReg,
+      ThisReg));
     EmitInstruction(ACtx, EncodeABC(OP_TO_PROPERTY_KEY, KeyReg, KeyReg, 0));
-    EmitInstruction(ACtx, EncodeABC(OP_SUPER_GET, CurReg, 0, KeyReg));
+    EmitInstruction(ACtx, EncodeABC(OP_SUPER_GET_BASE, CurReg, 0, KeyReg));
     EmitIncrementStep(ACtx, AExpr, ADest, CurReg, AOp, ANumericOp,
       APostNumericOp, AKeepResult);
-    EmitInstruction(ACtx, EncodeABC(OP_SUPER_SET, CurReg, KeyReg, CurReg));
+    EmitInstruction(ACtx, EncodeABC(OP_SUPER_SET_BASE, CurReg, KeyReg,
+      CurReg));
 
     ACtx.Scope.FreeRegister;
     ACtx.Scope.FreeRegister;
@@ -5098,6 +5977,9 @@ begin
 
   ACtx.CompileExpression(AMember.ObjectExpr, ObjReg);
   ACtx.CompileExpression(AMember.PropertyExpression, KeyReg);
+  EmitInstruction(ACtx, EncodeABC(OP_VALIDATE_VALUE, ObjReg,
+    VALIDATE_OP_REQUIRE_OBJECT, 0));
+  EmitInstruction(ACtx, EncodeABC(OP_TO_PROPERTY_KEY, KeyReg, KeyReg, 0));
   EmitInstruction(ACtx, EncodeABC(OP_ARRAY_GET, CurReg, ObjReg, KeyReg));
   EmitIncrementStep(ACtx, AExpr, ADest, CurReg, AOp, ANumericOp,
     APostNumericOp, AKeepResult);
@@ -5114,11 +5996,15 @@ procedure CompileIncrement(const ACtx: TGocciaCompilationContext;
   const AKeepResult: Boolean = True);
 var
   LocalIdx, UpvalIdx: Integer;
-  Slot, RegResult: UInt8;
+  Slot, RegResult, ObjReg, KeyReg, CondReg: UInt8;
   Op, NumericOp, PostNumericOp: TGocciaOpCode;
   Ident: TGocciaIdentifierExpression;
   MemberExpr: TGocciaMemberExpression;
   ReservedDestRegister: Boolean;
+  NameIdx: UInt16;
+  I, EndCount: Integer;
+  MissJump: Integer;
+  EndJumps: array of Integer;
 begin
   ReservedDestRegister := False;
   if AKeepResult and not AExpr.IsPrefix and
@@ -5164,12 +6050,47 @@ begin
 
     if ShouldTryWithBinding(ACtx.Scope, Ident.Name) then
     begin
+      ObjReg := ACtx.Scope.AllocateRegister;
+      KeyReg := ACtx.Scope.AllocateRegister;
+      CondReg := ACtx.Scope.AllocateRegister;
       RegResult := ACtx.Scope.AllocateRegister;
-      EmitLoadBindingByName(ACtx, Ident.Name, RegResult, False);
-      EmitIncrementStep(ACtx, AExpr, ADest, RegResult, Op, NumericOp,
-        PostNumericOp, AKeepResult);
-      EmitWithAssignmentOrFallback(ACtx, Ident.Name, RegResult);
-      ACtx.Scope.FreeRegister;
+      EndCount := 0;
+      SetLength(EndJumps, ACtx.Scope.WithBindingCount);
+      try
+        NameIdx := ACtx.Template.AddConstantString(Ident.Name);
+        EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, KeyReg, NameIdx));
+
+        for I := ACtx.Scope.WithBindingCount - 1 downto 0 do
+        begin
+          EmitLoadHiddenWithObject(ACtx, ACtx.Scope.GetWithBindingName(I),
+            ObjReg);
+          EmitInstruction(ACtx, EncodeABC(OP_HAS_WITH_BINDING, CondReg,
+            ObjReg, KeyReg));
+          MissJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, CondReg);
+          EmitInstruction(ACtx, EncodeABC(GetWithBindingOpcode(ACtx),
+            RegResult, ObjReg, KeyReg));
+          EmitIncrementStep(ACtx, AExpr, ADest, RegResult, Op, NumericOp,
+            PostNumericOp, AKeepResult);
+          EmitInstruction(ACtx, EncodeABC(SetWithBindingOpcode(ACtx),
+            ObjReg, KeyReg, RegResult));
+          EndJumps[EndCount] := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+          Inc(EndCount);
+          PatchJumpTarget(ACtx, MissJump);
+        end;
+
+        CompileIdentifierAccessNoWith(ACtx, Ident, RegResult, False);
+        EmitIncrementStep(ACtx, AExpr, ADest, RegResult, Op, NumericOp,
+          PostNumericOp, AKeepResult);
+        EmitBindingAssignmentFromRegister(ACtx, Ident.Name, RegResult, True);
+
+        for I := 0 to EndCount - 1 do
+          PatchJumpTarget(ACtx, EndJumps[I]);
+      finally
+        ACtx.Scope.FreeRegister;
+        ACtx.Scope.FreeRegister;
+        ACtx.Scope.FreeRegister;
+        ACtx.Scope.FreeRegister;
+      end;
       Exit;
     end;
 
@@ -5178,6 +6099,16 @@ begin
     begin
       if ACtx.Scope.GetLocal(LocalIdx).IsConst then
       begin
+        if ShouldIgnoreNonStrictImmutableLocalAssignment(ACtx,
+           ACtx.Scope.GetLocal(LocalIdx)) then
+        begin
+          Slot := ACtx.Scope.GetLocal(LocalIdx).Slot;
+          if ACtx.Scope.GetLocal(LocalIdx).IsCaptured then
+            EmitInstruction(ACtx, EncodeABx(OP_GET_LOCAL, Slot, UInt16(Slot)));
+          EmitIncrementStep(ACtx, AExpr, ADest, Slot, Op, NumericOp,
+            PostNumericOp, AKeepResult);
+          Exit;
+        end;
         EmitConstAssignmentError(ACtx);
         Exit;
       end;
@@ -5213,6 +6144,21 @@ begin
     begin
       if ACtx.Scope.GetUpvalue(UpvalIdx).IsConst then
       begin
+        if ShouldIgnoreNonStrictImmutableUpvalueAssignment(ACtx,
+           ACtx.Scope.GetUpvalue(UpvalIdx)) then
+        begin
+          RegResult := ACtx.Scope.AllocateRegister;
+          if ACtx.Scope.GetUpvalue(UpvalIdx).IsGlobalBacked then
+            EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, RegResult,
+              ACtx.Template.AddConstantString(Ident.Name)))
+          else
+            EmitInstruction(ACtx, EncodeABx(OP_GET_UPVALUE, RegResult,
+              UInt16(UpvalIdx)));
+          EmitIncrementStep(ACtx, AExpr, ADest, RegResult, Op, NumericOp,
+            PostNumericOp, AKeepResult);
+          ACtx.Scope.FreeRegister;
+          Exit;
+        end;
         EmitConstAssignmentError(ACtx);
         Exit;
       end;
@@ -5238,8 +6184,7 @@ begin
     end;
 
     RegResult := ACtx.Scope.AllocateRegister;
-    EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, RegResult,
-      ACtx.Template.AddConstantString(Ident.Name)));
+    CompileIdentifierAccessNoWith(ACtx, Ident, RegResult, False);
     EmitIncrementStep(ACtx, AExpr, ADest, RegResult, Op, NumericOp,
       PostNumericOp, AKeepResult);
     EmitSetGlobalByName(ACtx, RegResult, Ident.Name);
@@ -5260,18 +6205,81 @@ begin
   Inc(AJumpCount);
 end;
 
+function ExpressionContainsOptionalChain(const AExpr: TGocciaExpression): Boolean;
+var
+  CallExpr: TGocciaCallExpression;
+  MemberExpr: TGocciaMemberExpression;
+  PrivateExpr: TGocciaPrivateMemberExpression;
+  I: Integer;
+begin
+  if not Assigned(AExpr) then
+    Exit(False);
+
+  if AExpr is TGocciaMemberExpression then
+  begin
+    MemberExpr := TGocciaMemberExpression(AExpr);
+    if MemberExpr.Optional or
+       ExpressionContainsOptionalChain(MemberExpr.ObjectExpr) or
+       (MemberExpr.Computed and
+        ExpressionContainsOptionalChain(MemberExpr.PropertyExpression)) then
+      Exit(True);
+  end
+  else if AExpr is TGocciaPrivateMemberExpression then
+  begin
+    PrivateExpr := TGocciaPrivateMemberExpression(AExpr);
+    if PrivateExpr.Optional or
+       ExpressionContainsOptionalChain(PrivateExpr.ObjectExpr) then
+      Exit(True);
+  end
+  else if AExpr is TGocciaCallExpression then
+  begin
+    CallExpr := TGocciaCallExpression(AExpr);
+    if CallExpr.Optional or ExpressionContainsOptionalChain(CallExpr.Callee) then
+      Exit(True);
+    for I := 0 to CallExpr.Arguments.Count - 1 do
+      if ExpressionContainsOptionalChain(CallExpr.Arguments[I]) then
+        Exit(True);
+  end
+  else if AExpr is TGocciaSequenceExpression then
+  begin
+    for I := 0 to TGocciaSequenceExpression(AExpr).Expressions.Count - 1 do
+      if ExpressionContainsOptionalChain(
+        TGocciaSequenceExpression(AExpr).Expressions[I]) then
+        Exit(True);
+  end;
+
+  Result := False;
+end;
+
 procedure CompileExpressionWithOptionalChainJumps(
   const ACtx: TGocciaCompilationContext; const AExpr: TGocciaExpression;
   const ADest: UInt8; var AJumps: TGocciaCompilerJumpArray;
   var AJumpCount: Integer);
 var
+  CallExpr: TGocciaCallExpression;
   MemberExpr: TGocciaMemberExpression;
   PrivateExpr: TGocciaPrivateMemberExpression;
   ObjReg, IdxReg: UInt8;
 begin
+  if AExpr is TGocciaCallExpression then
+  begin
+    CallExpr := TGocciaCallExpression(AExpr);
+    if CompileCallWithOptionalChainJumps(ACtx, CallExpr, ADest, AJumps,
+       AJumpCount) then
+      Exit;
+  end;
+
   if AExpr is TGocciaMemberExpression then
   begin
     MemberExpr := TGocciaMemberExpression(AExpr);
+    if MemberExpr.ObjectExpr is TGocciaSuperExpression then
+    begin
+      CompileMember(ACtx, MemberExpr, ADest);
+      if MemberExpr.Optional then
+        AddOptionalChainJump(ACtx, AJumps, AJumpCount, ADest);
+      Exit;
+    end;
+
     ObjReg := ACtx.Scope.AllocateRegister;
     CompileExpressionWithOptionalChainJumps(ACtx, MemberExpr.ObjectExpr,
       ObjReg, AJumps, AJumpCount);

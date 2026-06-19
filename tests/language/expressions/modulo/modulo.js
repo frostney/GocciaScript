@@ -28,6 +28,13 @@ describe("modulo operator", () => {
     expect(Object.is(4 % 2, 0)).toBe(true);
   });
 
+  test("finite dividend modulo infinity returns the dividend", () => {
+    expect(1 % Infinity).toBe(1);
+    expect(-1 % Infinity).toBe(-1);
+    expect(Object.is(0 % Infinity, 0)).toBe(true);
+    expect(Object.is(-0 % Infinity, -0)).toBe(true);
+  });
+
   test("modulo by zero returns NaN", () => {
     expect(Number.isNaN(5 % 0)).toBe(true);
     expect(Number.isNaN(0 % 0)).toBe(true);

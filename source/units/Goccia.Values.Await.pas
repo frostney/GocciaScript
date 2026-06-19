@@ -14,10 +14,8 @@ implementation
 uses
   SysUtils,
 
-  Goccia.Arguments.Collection,
   Goccia.Builtins.Atomics,
   Goccia.Constants.ErrorNames,
-  Goccia.Constants.PropertyNames,
   Goccia.Error,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
@@ -28,9 +26,6 @@ uses
   Goccia.Timeout,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
-  Goccia.Values.FunctionBase,
-  Goccia.Values.NativeFunction,
-  Goccia.Values.ObjectValue,
   Goccia.Values.PromiseValue,
   Goccia.VM.Exception;
 
@@ -74,10 +69,8 @@ end;
 // ES2026 §27.7.5.3 Await(value)
 function AwaitValue(const AValue: TGocciaValue): TGocciaValue;
 var
-  ThenMethod: TGocciaValue;
   Promise: TGocciaPromiseValue;
   PromiseRooted: Boolean;
-  ThenArgs: TGocciaArgumentsCollection;
 begin
   Promise := nil;
   PromiseRooted := False;
@@ -92,9 +85,7 @@ begin
         PromiseRooted := True;
       end;
     end
-    // ES2026 §25.6.4.6.1 PromiseResolve: If value is a thenable (object with
-    // callable .then), wrap it in a Promise via resolve
-    else if AValue is TGocciaObjectValue then
+    else
     begin
       Promise := TGocciaPromiseValue.Create;
       if Assigned(TGarbageCollector.Instance) then
@@ -102,39 +93,8 @@ begin
         TGarbageCollector.Instance.AddTempRoot(Promise);
         PromiseRooted := True;
       end;
-
       try
-        ThenMethod := AValue.GetProperty(PROP_THEN);
-        if Assigned(ThenMethod) and not (ThenMethod is TGocciaUndefinedLiteralValue) and ThenMethod.IsCallable then
-        begin
-          ThenArgs := TGocciaArgumentsCollection.Create([
-            TGocciaNativeFunctionValue.Create(Promise.DoResolve, 'resolve', 1),
-            TGocciaNativeFunctionValue.Create(Promise.DoReject, 'reject', 1)
-          ]);
-          try
-            // ES2026 §25.6.4.6.1 step 9: If Call(then, ...) throws, reject promise
-            try
-              TGocciaFunctionBase(ThenMethod).Call(ThenArgs, AValue);
-            except
-              on E: TGocciaTimeoutError do
-                raise;
-              on E: TGocciaInstructionLimitError do
-                raise;
-              on E: Exception do
-                RejectPromiseWithException(Promise, E);
-            end;
-          finally
-            ThenArgs.Free;
-          end;
-        end
-        else
-        begin
-          // ES2026 §27.7.5.3 step 2: Await wraps the value in Promise.resolve(),
-          // introducing a microtask boundary even for non-thenable objects
-          DrainAwaitMicrotasks;
-          Result := AValue;
-          Exit;
-        end;
+        Promise.Resolve(AValue);
       except
         on E: TGocciaTimeoutError do
           raise;
@@ -143,14 +103,6 @@ begin
         on E: Exception do
           RejectPromiseWithException(Promise, E);
       end;
-    end
-    else
-    begin
-      // ES2026 §27.7.5.3 step 2: Await wraps the value in Promise.resolve(),
-      // introducing a microtask boundary even for primitive values
-      DrainAwaitMicrotasks;
-      Result := AValue;
-      Exit;
     end;
 
     if Promise.State <> gpsPending then

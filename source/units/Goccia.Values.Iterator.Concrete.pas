@@ -100,6 +100,8 @@ type
     procedure MarkReferences; override;
   end;
 
+function EnsureArrayIteratorPrototype: TGocciaObjectValue;
+
 implementation
 
 uses
@@ -110,7 +112,6 @@ uses
   Goccia.Realm,
   Goccia.Values.ArrayValue,
   Goccia.Values.HeadersValue,
-  Goccia.Values.HoleValue,
   Goccia.Values.MapValue,
   Goccia.Values.SetValue,
   Goccia.Values.ToObject,
@@ -124,13 +125,18 @@ var
 
 { TGocciaArrayIteratorValue }
 
+function EnsureArrayIteratorPrototype: TGocciaObjectValue;
+begin
+  Result := TGocciaArrayIteratorValue.EnsureConcreteIteratorPrototype(
+    GArrayIteratorPrototypeSlot, 'Array Iterator');
+end;
+
 constructor TGocciaArrayIteratorValue.Create(const ASource: TGocciaValue; const AKind: TGocciaArrayIteratorKind);
 var
   SharedPrototype: TGocciaObjectValue;
 begin
   inherited Create;
-  SharedPrototype := EnsureConcreteIteratorPrototype(
-    GArrayIteratorPrototypeSlot, 'Array Iterator');
+  SharedPrototype := EnsureArrayIteratorPrototype;
   if Assigned(SharedPrototype) then
     FPrototype := SharedPrototype;
   FSource := ASource;
@@ -148,18 +154,10 @@ end;
 
 function GetArrayIteratorElement(const ASource: TGocciaValue; const AIndex: Integer): TGocciaValue;
 begin
-  if ASource is TGocciaArrayValue then
-  begin
-    Result := TGocciaArrayValue(ASource).Elements[AIndex];
-    if Result = TGocciaHoleValue.HoleValue then
-      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-  end
-  else
-  begin
-    Result := TGocciaObjectValue(ASource).GetProperty(IntToStr(AIndex));
-    if not Assigned(Result) then
-      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-  end;
+  // ES2026 §23.1.5.2.1 step 15.b: Let elementValue be ? Get(array, elementKey).
+  Result := TGocciaObjectValue(ASource).GetProperty(IntToStr(AIndex));
+  if not Assigned(Result) then
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 function TGocciaArrayIteratorValue.AdvanceNext: TGocciaObjectValue;
@@ -270,6 +268,7 @@ function TGocciaStringIteratorValue.TryReadAndAdvance(
   out AText: string): Boolean;
 var
   ByteLength: Integer;
+  CodePoint: Cardinal;
   StrVal: string;
 begin
   Result := False;
@@ -284,7 +283,9 @@ begin
     Exit;
   end;
 
-  ByteLength := TextSemantics.UTF8SequenceLengthAt(StrVal, FIndex + 1);
+  if not TextSemantics.TryReadUTF8CodePointAllowSurrogates(StrVal,
+     FIndex + 1, CodePoint, ByteLength) then
+    ByteLength := 1;
   AText := Copy(StrVal, FIndex + 1, ByteLength);
   Inc(FIndex, ByteLength);
   Result := True;

@@ -112,6 +112,23 @@ describe("with statement", () => {
     expect(read()).toBe(6);
   });
 
+  test("closures created inside with retain the object environment after throw", () => {
+    const obj = { x: 2 };
+    let x = 1;
+    let read;
+
+    try {
+      with (obj) {
+        read = () => x;
+        throw "stop";
+      }
+    } catch (e) {
+    }
+
+    expect(read()).toBe(2);
+    expect(x).toBe(1);
+  });
+
   test("closures prefer lexical declarations created inside the with body", () => {
     const obj = { x: 1 };
     let read;
@@ -163,6 +180,33 @@ describe("with statement", () => {
     expect(result).toBe(43);
   });
 
+  test("optional calls to object-environment methods keep the object as this", () => {
+    const obj = {
+      x: 7,
+      get() {
+        return this.x;
+      }
+    };
+    let result = 0;
+
+    with (obj) {
+      result = get?.();
+    }
+
+    expect(result).toBe(7);
+  });
+
+  test("nullish optional calls to object-environment methods short-circuit the chain", () => {
+    const obj = { get: null };
+    let result = "unset";
+
+    with (obj) {
+      result = get?.().x;
+    }
+
+    expect(result).toBe(undefined);
+  });
+
   test("compound assignments and updates target the object binding", () => {
     const obj = { x: 1 };
 
@@ -172,6 +216,18 @@ describe("with statement", () => {
     }
 
     expect(obj.x).toBe(4);
+  });
+
+  test("compound assignments keep the with target resolved before the RHS", () => {
+    let x = 1;
+    const obj = {};
+
+    with (obj) {
+      x += (obj.x = 100, 2);
+    }
+
+    expect(x).toBe(3);
+    expect(obj.x).toBe(100);
   });
 
   test("assignments resolve the object-environment target before evaluating the value", () => {
@@ -192,6 +248,18 @@ describe("with statement", () => {
 
     expect(log).toBe("ur");
     expect(obj.x).toBe(2);
+  });
+
+  test("logical assignments keep the with target resolved before the RHS", () => {
+    let x = undefined;
+    const obj = {};
+
+    with (obj) {
+      x ??= (obj.x = "object", "outer");
+    }
+
+    expect(x).toBe("outer");
+    expect(obj.x).toBe("object");
   });
 
   test("unscopables-hidden assignments keep the resolved outer target", () => {

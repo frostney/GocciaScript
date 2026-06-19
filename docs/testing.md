@@ -5,6 +5,7 @@
 ## Executive Summary
 
 - **Three testing layers** — JavaScript end-to-end tests (primary), CLI behavior tests (secondary), Pascal unit tests (tertiary)
+- **Syntax failures live at the CLI layer** — Parse and early-error checks belong in CLI tests, not in runtime JS tests via dynamic code execution
 - **Built-in test framework** — `describe`/`test`/`expect` with async support, mock functions, lifecycle hooks, and Vitest-compatible matchers
 - **One method per file** — Each test file focuses on a single method; edge cases are co-located with happy-path tests
 - **Run with**: `./build.pas testrunner`, `./build/GocciaTestRunner tests`, and `./build/GocciaTestRunner tests --mode=bytecode`
@@ -18,8 +19,11 @@ GocciaScript uses three testing layers in priority order:
 When choosing where to add coverage, prefer the most public entry point available:
 
 - JavaScript feature behavior: add or extend tests under `tests/`
+- Parse failures and early errors: add CLI parser/lexer coverage under `scripts/test-cli-*.ts` so CI validates the failing source as a whole program, including JSON error envelopes and bytecode-mode parsing where relevant
 - CLI behavior (`GocciaScriptLoader`, `GocciaTestRunner`, `GocciaBenchmarkRunner`): add command-level smoke tests in `pr.yml` that assert on visible output
 - Pascal unit tests: add native `*.Test.pas` coverage only when the behavior is genuinely internal or not reachable through a documented user-facing entry point
+
+Do not use dynamic source execution (`Function(...)`, `eval(...)`, or equivalent runtime compilation) inside the JavaScript suite merely to smuggle parser failures into a runtime test. Keep dynamic-code assertions in `tests/` only when the dynamic-code API itself is the feature under test, such as `Function` constructor behavior or direct `eval` semantics.
 
 Avoid tests that lock onto private helper functions or transient implementation structure when the same behavior can be validated through a documented user-facing command or script entry point. Where native Pascal tests are still appropriate, keep them as stateless and repeatable as possible so they behave like pure input/output checks rather than process-sensitive probes.
 
@@ -226,6 +230,9 @@ features: [addition, arithmetic]
 ./build.pas testrunner
 ```
 
+This also builds the native FFI fixture library from `fixtures/ffi/fixture.c`,
+so the full JavaScript suite can run the folder-configured FFI tests locally.
+
 ### Run All Tests
 
 ```bash
@@ -328,7 +335,7 @@ See [Test Framework API](testing-api.md) for the complete test authoring referen
 
 1. **JavaScript tests are the source of truth** — The JavaScript test suite is the primary mechanism for verifying correctness and ECMAScript compatibility. If a behavior isn't covered by a JavaScript test, it isn't guaranteed.
 
-2. **Isolation** — Each test file is independent. No shared state between files. The GocciaTestRunner executes each file in a fresh `TGocciaEngine`, and each engine owns its own [realm](core-patterns.md#realm-ownership--slot-registration). Engine tear-down between files unpins the per-engine intrinsic prototypes (`Array.prototype`, `Object.prototype`, every error and Temporal prototype, …), so userland mutations in one file — including non-configurable property additions — cannot leak into the next file even when the same worker thread runs both.
+2. **Isolation** — Each test file is independent. No shared state between files. The GocciaTestRunner executes each file in a fresh `TGocciaEngine`, and each engine owns its own [realm](core-patterns.md#realm-ownership--slot-registration). Engine tear-down between files unpins the per-engine intrinsic prototypes (`Array.prototype`, `Object.prototype`, every error and Temporal prototype, …), so userland mutations in one file — including non-configurable property additions — cannot leak into the next file even when the same worker thread runs both. When multiple explicit input paths are passed, the runner also keeps folder configs per-file; use `--config` for a deliberately shared root config.
 
 3. **Grouped by feature** — Tests are organized by the feature they validate, mirroring the structure of the language specification. Prototype methods live in `prototype/` subfolders; static methods live in the built-in's root folder.
 

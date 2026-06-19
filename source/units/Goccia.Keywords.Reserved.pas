@@ -30,6 +30,7 @@ const
   KEYWORD_NEW        = 'new';
   KEYWORD_NULL       = 'null';
   KEYWORD_RETURN     = 'return';
+  KEYWORD_STATIC     = 'static';
   KEYWORD_SUPER      = 'super';
   KEYWORD_SWITCH     = 'switch';
   KEYWORD_THIS       = 'this';
@@ -87,13 +88,14 @@ const
     KEYWORD_WITH
   );
 
-  StrictModeReservedKeywords: array[0..5] of string = (
+  StrictModeReservedKeywords: array[0..6] of string = (
     KEYWORD_IMPLEMENTS,
     KEYWORD_INTERFACE,
     KEYWORD_PACKAGE,
     KEYWORD_PRIVATE,
     KEYWORD_PROTECTED,
-    KEYWORD_PUBLIC
+    KEYWORD_PUBLIC,
+    KEYWORD_STATIC
   );
 
 function IsReservedKeyword(const AName: string): Boolean; inline;

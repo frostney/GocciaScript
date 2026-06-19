@@ -6,14 +6,14 @@ description: |
   iterator returned just doesn't satisfy the protocol.
 
   Also covers the abrupt-completion IteratorStepValue path: when user
-  next() throws, the original error propagates without calling
-  iter.return() (ES2026 §7.4.10).
+  next() throws during destructuring, the iterator is marked done and
+  IteratorClose is skipped while the original error is preserved.
 
   Guards against:
     - GetIteratorValue (Goccia.VM.pas) previously falling through to
       SErrorNotIterable when the inner next was non-callable.
-    - TryIterableToArray (Goccia.VM.pas) must not invoke iter.return()
-      when DirectNext or NextMethod.Call throws before producing an
+    - Destructuring materialization must not invoke iter.return() when
+      DirectNext or NextMethod.Call throws before producing a usable
       IteratorResult.
 features: [iterators]
 ---*/
@@ -45,7 +45,7 @@ test("[@@iterator]() returning null throws TypeError", () => {
   expect(() => [...iter]).toThrow(TypeError);
 });
 
-test("destructuring with user next() that throws does not close the iterator", () => {
+test("destructuring with user next() that throws skips IteratorClose", () => {
   let returnCalled = 0;
   const iter = {
     [Symbol.iterator]() {
@@ -75,7 +75,7 @@ test("destructuring with user next() that throws does not close the iterator", (
   expect(returnCalled).toBe(0);
 });
 
-test("destructuring with primitive IteratorResult throws TypeError without closing", () => {
+test("destructuring with primitive IteratorResult throws TypeError and skips IteratorClose", () => {
   let returnCalled = 0;
   const iter = {
     [Symbol.iterator]() {
@@ -117,6 +117,45 @@ test("missing IteratorResult.value normalizes to undefined in rest pattern", () 
   expect(rest.length).toBe(2);
   expect(rest[0]).toBeUndefined();
   expect(rest[1]).toBeUndefined();
+});
+
+test("array assignment destructuring skips value getter after done", () => {
+  const log = [];
+  const iter = {
+    [Symbol.iterator]() {
+      log.push("iterator");
+      return {
+        next() {
+          log.push("next");
+          return {
+            get done() {
+              log.push("done");
+              return true;
+            },
+            get value() {
+              log.push("value");
+              return 1;
+            }
+          };
+        }
+      };
+    }
+  };
+  const target = {
+    set q(value) {
+      log.push("set");
+    }
+  };
+  const key = {
+    toString() {
+      log.push("key");
+      return "q";
+    }
+  };
+
+  [target[key]] = iter;
+
+  expect(log).toEqual(["iterator", "next", "done", "key", "set"]);
 });
 
 test("missing IteratorResult.value normalizes to undefined for fixed-position binding", () => {

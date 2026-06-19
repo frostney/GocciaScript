@@ -30,125 +30,28 @@ type
 
 implementation
 
-uses
-  SysUtils,
-
-  Goccia.GarbageCollector,
-  Goccia.Values.Error,
-  Goccia.Values.PromiseValue;
-
 { TGocciaAsyncFunctionValue }
 
 // ES2026 §27.7.5.1 AsyncFunctionStart(promiseCapability, asyncFunctionBody)
 function TGocciaAsyncFunctionValue.Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-var
-  Promise: TGocciaPromiseValue;
-  CallScope: TGocciaScope;
-  BodyResult: TGocciaValue;
 begin
-  Promise := TGocciaPromiseValue.Create;
-
-  if Assigned(TGarbageCollector.Instance) then
-    TGarbageCollector.Instance.AddTempRoot(Promise);
-  try
-    CallScope := CreateCallScope;
-
-    if Assigned(TGarbageCollector.Instance) then
-      TGarbageCollector.Instance.PushActiveRoot(CallScope);
-    try
-      try
-        BodyResult := ExecuteBody(CallScope, AArguments, AThisValue);
-        Promise.Resolve(BodyResult);
-      except
-        on E: TGocciaThrowValue do
-          Promise.Reject(E.Value);
-      end;
-    finally
-      if Assigned(TGarbageCollector.Instance) then
-        TGarbageCollector.Instance.PopActiveRoot;
-    end;
-  finally
-    if Assigned(TGarbageCollector.Instance) then
-      TGarbageCollector.Instance.RemoveTempRoot(Promise);
-  end;
-
-  Result := Promise;
+  Result := CallAsync(AArguments, AThisValue);
 end;
 
 { TGocciaAsyncArrowFunctionValue }
 
 // ES2026 §27.7.5.1 AsyncFunctionStart(promiseCapability, asyncFunctionBody)
 function TGocciaAsyncArrowFunctionValue.Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-var
-  Promise: TGocciaPromiseValue;
-  CallScope: TGocciaScope;
-  BodyResult: TGocciaValue;
 begin
-  Promise := TGocciaPromiseValue.Create;
-
-  if Assigned(TGarbageCollector.Instance) then
-    TGarbageCollector.Instance.AddTempRoot(Promise);
-  try
-    CallScope := CreateCallScope;
-
-    if Assigned(TGarbageCollector.Instance) then
-      TGarbageCollector.Instance.PushActiveRoot(CallScope);
-    try
-      try
-        BodyResult := ExecuteBody(CallScope, AArguments, AThisValue);
-        Promise.Resolve(BodyResult);
-      except
-        on E: TGocciaThrowValue do
-          Promise.Reject(E.Value);
-      end;
-    finally
-      if Assigned(TGarbageCollector.Instance) then
-        TGarbageCollector.Instance.PopActiveRoot;
-    end;
-  finally
-    if Assigned(TGarbageCollector.Instance) then
-      TGarbageCollector.Instance.RemoveTempRoot(Promise);
-  end;
-
-  Result := Promise;
+  Result := CallAsync(AArguments, AThisValue);
 end;
 
 { TGocciaAsyncMethodValue }
 
 // ES2026 §27.7.5.1 AsyncFunctionStart(promiseCapability, asyncFunctionBody)
 function TGocciaAsyncMethodValue.Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-var
-  Promise: TGocciaPromiseValue;
-  CallScope: TGocciaScope;
-  BodyResult: TGocciaValue;
 begin
-  Promise := TGocciaPromiseValue.Create;
-
-  if Assigned(TGarbageCollector.Instance) then
-    TGarbageCollector.Instance.AddTempRoot(Promise);
-  try
-    CallScope := CreateCallScope;
-
-    if Assigned(TGarbageCollector.Instance) then
-      TGarbageCollector.Instance.PushActiveRoot(CallScope);
-    try
-      try
-        BodyResult := ExecuteBody(CallScope, AArguments, AThisValue);
-        Promise.Resolve(BodyResult);
-      except
-        on E: TGocciaThrowValue do
-          Promise.Reject(E.Value);
-      end;
-    finally
-      if Assigned(TGarbageCollector.Instance) then
-        TGarbageCollector.Instance.PopActiveRoot;
-    end;
-  finally
-    if Assigned(TGarbageCollector.Instance) then
-      TGarbageCollector.Instance.RemoveTempRoot(Promise);
-  end;
-
-  Result := Promise;
+  Result := CallAsync(AArguments, AThisValue);
 end;
 
 end.

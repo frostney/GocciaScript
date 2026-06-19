@@ -113,4 +113,25 @@ describe("Object.freeze", () => {
       expect(desc.configurable).toBe(false);
     });
   });
+
+  test("freezing arrays locks dense elements and length while preserving reads", () => {
+    const arr = ["a", "b"];
+    Object.freeze(arr);
+
+    const first = Object.getOwnPropertyDescriptor(arr, "0");
+    const length = Object.getOwnPropertyDescriptor(arr, "length");
+    expect(first.enumerable).toBe(true);
+    expect(first.writable).toBe(false);
+    expect(first.configurable).toBe(false);
+    expect(length.writable).toBe(false);
+    expect([...arr]).toEqual(["a", "b"]);
+
+    try {
+      arr[0] = "changed";
+    } catch (error) {}
+    try {
+      delete arr[0];
+    } catch (error) {}
+    expect(arr[0]).toBe("a");
+  });
 });

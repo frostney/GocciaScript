@@ -19,16 +19,21 @@ type
   private
     FBits: PtrUInt;
     FTargetLabel: string;
+    FReturnHasExpression: Boolean;
     function GetKind: TGocciaControlFlowKind; inline;
     function GetValue: TGocciaValue; inline;
   public
     class function Normal(const AValue: TGocciaValue): TGocciaControlFlow; static; inline;
-    class function Return(const AValue: TGocciaValue): TGocciaControlFlow; static; inline;
-    class function Break(const ATargetLabel: string = ''): TGocciaControlFlow; static; inline;
-    class function Continue(const ATargetLabel: string = ''): TGocciaControlFlow; static; inline;
+    class function Return(const AValue: TGocciaValue;
+      const AHasExpression: Boolean): TGocciaControlFlow; static; inline;
+    class function Empty: TGocciaControlFlow; static; inline;
+    class function Break(const ATargetLabel: string = ''; const AValue: TGocciaValue = nil): TGocciaControlFlow; static; inline;
+    class function Continue(const ATargetLabel: string = ''; const AValue: TGocciaValue = nil): TGocciaControlFlow; static; inline;
+    function UpdateEmpty(const AValue: TGocciaValue): TGocciaControlFlow; inline;
     property Kind: TGocciaControlFlowKind read GetKind;
     property Value: TGocciaValue read GetValue;
     property TargetLabel: string read FTargetLabel;
+    property ReturnHasExpression: Boolean read FReturnHasExpression;
   end;
 
 implementation
@@ -47,26 +52,51 @@ class function TGocciaControlFlow.Normal(const AValue: TGocciaValue): TGocciaCon
 begin
   Result.FBits := PtrUInt(AValue);
   Result.FTargetLabel := '';
+  Result.FReturnHasExpression := False;
 end;
 
-class function TGocciaControlFlow.Return(const AValue: TGocciaValue): TGocciaControlFlow;
+class function TGocciaControlFlow.Return(const AValue: TGocciaValue;
+  const AHasExpression: Boolean): TGocciaControlFlow;
 begin
   Result.FBits := PtrUInt(AValue) or 1;
   Result.FTargetLabel := '';
+  Result.FReturnHasExpression := AHasExpression;
+end;
+
+class function TGocciaControlFlow.Empty: TGocciaControlFlow;
+begin
+  Result.FBits := 0;
+  Result.FTargetLabel := '';
+  Result.FReturnHasExpression := False;
 end;
 
 class function TGocciaControlFlow.Break(
-  const ATargetLabel: string): TGocciaControlFlow;
+  const ATargetLabel: string; const AValue: TGocciaValue): TGocciaControlFlow;
 begin
-  Result.FBits := 2;
+  Result.FBits := PtrUInt(AValue) or 2;
   Result.FTargetLabel := ATargetLabel;
+  Result.FReturnHasExpression := False;
 end;
 
 class function TGocciaControlFlow.Continue(
-  const ATargetLabel: string): TGocciaControlFlow;
+  const ATargetLabel: string; const AValue: TGocciaValue): TGocciaControlFlow;
 begin
-  Result.FBits := 3;
+  Result.FBits := PtrUInt(AValue) or 3;
   Result.FTargetLabel := ATargetLabel;
+  Result.FReturnHasExpression := False;
+end;
+
+function TGocciaControlFlow.UpdateEmpty(
+  const AValue: TGocciaValue): TGocciaControlFlow;
+begin
+  if Assigned(Value) then
+  begin
+    Result := Self;
+    Exit;
+  end;
+
+  Result.FBits := PtrUInt(AValue) or (FBits and 3);
+  Result.FTargetLabel := FTargetLabel;
 end;
 
 end.

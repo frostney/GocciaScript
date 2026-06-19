@@ -41,6 +41,15 @@ describe("Date methods", () => {
     expect(Date.parse("2024-06-15T11:30:45.123Z")).toBe(epoch);
   });
 
+  test("Date.parse() handles legacy slash and month-name dates", () => {
+    expect(new Date("5/1/49").getFullYear()).toBe(2049);
+    expect(new Date("5/1/50").getFullYear()).toBe(1950);
+    expect(new Date("49/5/1").getMonth()).toBe(4);
+    expect(new Date("may 1 49").getTime()).toBe(new Date("5/1/49").getTime());
+    expect(new Date("1 49 may").getTime()).toBe(new Date("5/1/49").getTime());
+    expect(Number.isNaN(new Date("13/13/13").getTime())).toBe(true);
+  });
+
   test("Date.UTC() returns an epoch millisecond timestamp", () => {
     expect(Date.UTC(2024, 5, 15, 11, 30, 45, 123)).toBe(epoch);
   });
@@ -93,6 +102,75 @@ describe("Date methods", () => {
     expect(value.getDate()).toBe(2);
   });
 
+  test("UTC setters update fields and return epoch ms", () => {
+    const value = new Date(0);
+    expect(value.setTime(epoch)).toBe(epoch);
+    expect(value.setUTCMilliseconds(456)).toBe(value.getTime());
+    expect(value.getUTCMilliseconds()).toBe(456);
+    expect(value.setUTCFullYear(2025, 0, 2)).toBe(value.getTime());
+    expect(value.getUTCFullYear()).toBe(2025);
+    expect(value.getUTCMonth()).toBe(0);
+    expect(value.getUTCDate()).toBe(2);
+  });
+
+  test("multi-argument setters distinguish omitted fields from explicit undefined", () => {
+    const base = Date.UTC(2024, 0, 2, 3, 4, 5, 6);
+
+    const localSeconds = new Date(base);
+    const localMilliseconds = localSeconds.getMilliseconds();
+    expect(localSeconds.setSeconds(10)).toBe(localSeconds.getTime());
+    expect(localSeconds.getSeconds()).toBe(10);
+    expect(localSeconds.getMilliseconds()).toBe(localMilliseconds);
+
+    const explicitLocalSeconds = new Date(base);
+    expect(Number.isNaN(explicitLocalSeconds.setSeconds(10, undefined))).toBe(true);
+    expect(Number.isNaN(explicitLocalSeconds.getTime())).toBe(true);
+
+    const utcSeconds = new Date(base);
+    expect(utcSeconds.setUTCSeconds(10)).toBe(utcSeconds.getTime());
+    expect(utcSeconds.getUTCSeconds()).toBe(10);
+    expect(utcSeconds.getUTCMilliseconds()).toBe(6);
+
+    const explicitUTCSeconds = new Date(base);
+    expect(Number.isNaN(explicitUTCSeconds.setUTCSeconds(10, undefined))).toBe(true);
+
+    const utcMinutes = new Date(base);
+    expect(utcMinutes.setUTCMinutes(20)).toBe(utcMinutes.getTime());
+    expect(utcMinutes.getUTCMinutes()).toBe(20);
+    expect(utcMinutes.getUTCSeconds()).toBe(5);
+    expect(utcMinutes.getUTCMilliseconds()).toBe(6);
+
+    const explicitUTCMinutes = new Date(base);
+    expect(Number.isNaN(explicitUTCMinutes.setUTCMinutes(20, undefined))).toBe(true);
+
+    const utcHours = new Date(base);
+    expect(utcHours.setUTCHours(9)).toBe(utcHours.getTime());
+    expect(utcHours.getUTCHours()).toBe(9);
+    expect(utcHours.getUTCMinutes()).toBe(4);
+    expect(utcHours.getUTCSeconds()).toBe(5);
+    expect(utcHours.getUTCMilliseconds()).toBe(6);
+
+    const explicitUTCHours = new Date(base);
+    expect(Number.isNaN(explicitUTCHours.setUTCHours(9, undefined))).toBe(true);
+
+    const utcMonth = new Date(base);
+    expect(utcMonth.setUTCMonth(6)).toBe(utcMonth.getTime());
+    expect(utcMonth.getUTCMonth()).toBe(6);
+    expect(utcMonth.getUTCDate()).toBe(2);
+
+    const explicitUTCMonth = new Date(base);
+    expect(Number.isNaN(explicitUTCMonth.setUTCMonth(6, undefined))).toBe(true);
+
+    const utcYear = new Date(base);
+    expect(utcYear.setUTCFullYear(2025)).toBe(utcYear.getTime());
+    expect(utcYear.getUTCFullYear()).toBe(2025);
+    expect(utcYear.getUTCMonth()).toBe(0);
+    expect(utcYear.getUTCDate()).toBe(2);
+
+    const explicitUTCYear = new Date(base);
+    expect(Number.isNaN(explicitUTCYear.setUTCFullYear(2025, undefined))).toBe(true);
+  });
+
   test("prototype methods reject nullish receivers", () => {
     const methods = [
       "getTime",
@@ -113,11 +191,27 @@ describe("Date methods", () => {
       "getUTCMinutes",
       "getUTCSeconds",
       "getUTCMilliseconds",
+      "setTime",
+      "setMilliseconds",
+      "setUTCMilliseconds",
+      "setSeconds",
+      "setUTCSeconds",
+      "setMinutes",
+      "setUTCMinutes",
+      "setHours",
+      "setUTCHours",
       "setDate",
+      "setUTCDate",
+      "setMonth",
+      "setUTCMonth",
+      "setFullYear",
+      "setUTCFullYear",
       "getTimezoneOffset",
       "toISOString",
       "toJSON",
       "toString",
+      "toUTCString",
+      "toGMTString",
       "toLocaleString",
       "toLocaleDateString",
       "toLocaleTimeString",

@@ -75,6 +75,8 @@ type
     function GetOwnPropertyDescriptor(const AName: string): TGocciaPropertyDescriptor; override;
     function HasProperty(const AName: string): Boolean; override;
     function HasOwnProperty(const AName: string): Boolean; override;
+    function GetOwnPropertyKeys: TArray<string>; override;
+    function GetAllPropertyNames: TArray<string>; override;
     function ToStringTag: string; override;
 
     procedure MarkReferences; override;
@@ -184,6 +186,24 @@ threadvar
 
 const
   TYPED_ARRAY_LITTLE_ENDIAN = True;
+
+type
+  TGocciaTypedArrayIteratorKind = (taikValues, taikKeys, taikEntries);
+
+  TGocciaTypedArrayIteratorValue = class(TGocciaIteratorValue)
+  private
+    FSource: TGocciaTypedArrayValue;
+    FIndex: Integer;
+    FKind: TGocciaTypedArrayIteratorKind;
+    function CurrentLengthOrThrow: Integer;
+  public
+    constructor Create(const ASource: TGocciaTypedArrayValue;
+      const AKind: TGocciaTypedArrayIteratorKind);
+    function AdvanceNext: TGocciaObjectValue; override;
+    function DirectNext(out ADone: Boolean): TGocciaValue; override;
+    function ToStringTag: string; override;
+    procedure MarkReferences; override;
+  end;
 
 function GetTypedArrayShared: TGocciaSharedPrototype; inline;
 begin
@@ -1016,6 +1036,43 @@ begin
     Result := inherited HasOwnProperty(AName);
 end;
 
+function TGocciaTypedArrayValue.GetOwnPropertyKeys: TArray<string>;
+var
+  Count, I, Len: Integer;
+  IsNegativeZero: Boolean;
+  Key: string;
+  NumericIndex: Double;
+  OwnKeys: TArray<string>;
+begin
+  Len := GetLength;
+  OwnKeys := inherited GetOwnPropertyKeys;
+  SetLength(Result, Len + System.Length(OwnKeys));
+  Count := 0;
+
+  for I := 0 to Len - 1 do
+  begin
+    Result[Count] := IntToStr(I);
+    Inc(Count);
+  end;
+
+  for Key in OwnKeys do
+  begin
+    if TryCanonicalNumericIndexString(Key, NumericIndex, IsNegativeZero) and
+       (not IsNegativeZero) and (NumericIndex >= 0) and
+       (NumericIndex < Len) and (Frac(NumericIndex) = 0.0) then
+      Continue;
+    Result[Count] := Key;
+    Inc(Count);
+  end;
+
+  SetLength(Result, Count);
+end;
+
+function TGocciaTypedArrayValue.GetAllPropertyNames: TArray<string>;
+begin
+  Result := GetOwnPropertyKeys;
+end;
+
 function TGocciaTypedArrayValue.ToStringTag: string;
 begin
   Result := KindName(FKind);
@@ -1073,6 +1130,127 @@ begin
     Result := -MaxInt
   else
     Result := Trunc(Num.Value);
+end;
+
+{ TGocciaTypedArrayIteratorValue }
+
+constructor TGocciaTypedArrayIteratorValue.Create(
+  const ASource: TGocciaTypedArrayValue;
+  const AKind: TGocciaTypedArrayIteratorKind);
+var
+  SharedPrototype: TGocciaObjectValue;
+begin
+  inherited Create;
+  SharedPrototype := EnsureArrayIteratorPrototype;
+  if Assigned(SharedPrototype) then
+    FPrototype := SharedPrototype;
+  FSource := ASource;
+  FIndex := 0;
+  FKind := AKind;
+end;
+
+function TGocciaTypedArrayIteratorValue.CurrentLengthOrThrow: Integer;
+begin
+  if IsDetachedTypedArray(FSource) then
+    ThrowTypeError(
+      Format(SErrorCannotUseDetachedTypedArray, ['TypedArray Iterator']),
+      SSuggestArrayBufferDetached);
+
+  if FSource.FAutoLength then
+  begin
+    if not FSource.HasValidBackingRange(0) then
+      ThrowTypeError(
+        Format(SErrorCannotUseDetachedTypedArray, ['TypedArray Iterator']),
+        SSuggestArrayBufferDetached);
+    Exit(FSource.GetLength);
+  end;
+
+  if not FSource.HasValidBackingRange(FSource.FLength) then
+    ThrowTypeError(
+      Format(SErrorCannotUseDetachedTypedArray, ['TypedArray Iterator']),
+      SSuggestArrayBufferDetached);
+  Result := FSource.FLength;
+end;
+
+function TGocciaTypedArrayIteratorValue.AdvanceNext: TGocciaObjectValue;
+var
+  EntryArray: TGocciaArrayValue;
+  Len: Integer;
+  Value: TGocciaValue;
+begin
+  if FDone then
+    Exit(CreateIteratorResult(
+      TGocciaUndefinedLiteralValue.UndefinedValue, True));
+
+  Len := CurrentLengthOrThrow;
+  if FIndex >= Len then
+  begin
+    FDone := True;
+    Exit(CreateIteratorResult(
+      TGocciaUndefinedLiteralValue.UndefinedValue, True));
+  end;
+
+  case FKind of
+    taikKeys:
+      Value := TGocciaNumberLiteralValue.Create(FIndex);
+    taikEntries:
+    begin
+      EntryArray := TGocciaArrayValue.Create;
+      EntryArray.Elements.Add(TGocciaNumberLiteralValue.Create(FIndex));
+      EntryArray.Elements.Add(FSource.GetElementAsValue(FIndex));
+      Value := EntryArray;
+    end;
+  else
+    Value := FSource.GetElementAsValue(FIndex);
+  end;
+
+  Inc(FIndex);
+  Result := CreateIteratorResult(Value, False);
+end;
+
+function TGocciaTypedArrayIteratorValue.DirectNext(
+  out ADone: Boolean): TGocciaValue;
+var
+  EntryArray: TGocciaArrayValue;
+  Len: Integer;
+begin
+  Len := CurrentLengthOrThrow;
+  if FDone or (FIndex >= Len) then
+  begin
+    FDone := True;
+    ADone := True;
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  end;
+
+  ADone := False;
+  case FKind of
+    taikKeys:
+      Result := TGocciaNumberLiteralValue.Create(FIndex);
+    taikEntries:
+    begin
+      EntryArray := TGocciaArrayValue.Create;
+      EntryArray.Elements.Add(TGocciaNumberLiteralValue.Create(FIndex));
+      EntryArray.Elements.Add(FSource.GetElementAsValue(FIndex));
+      Result := EntryArray;
+    end;
+  else
+    Result := FSource.GetElementAsValue(FIndex);
+  end;
+  Inc(FIndex);
+end;
+
+function TGocciaTypedArrayIteratorValue.ToStringTag: string;
+begin
+  Result := 'Array Iterator';
+end;
+
+procedure TGocciaTypedArrayIteratorValue.MarkReferences;
+begin
+  if GCMarked then
+    Exit;
+  inherited;
+  if Assigned(FSource) and not FSource.GCMarked then
+    FSource.MarkReferences;
 end;
 
 function InvokeCallback(const ACallback: TGocciaValue; const AElement, AIndex, AArray, AThisArg: TGocciaValue): TGocciaValue;
@@ -2223,48 +2401,27 @@ end;
 function TGocciaTypedArrayValue.TypedArrayValues(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   TA: TGocciaTypedArrayValue;
-  Arr: TGocciaArrayValue;
-  I: Integer;
 begin
   TA := RequireAttachedTypedArray(AThisValue, 'TypedArray.prototype.values');
-  Arr := TGocciaArrayValue.Create;
-  for I := 0 to TA.FLength - 1 do
-    Arr.Elements.Add(TA.GetElementAsValue(I));
-  Result := TGocciaArrayIteratorValue.Create(Arr, akValues);
+  Result := TGocciaTypedArrayIteratorValue.Create(TA, taikValues);
 end;
 
 // ES2026 §23.2.3.18 %TypedArray%.prototype.keys()
 function TGocciaTypedArrayValue.TypedArrayKeys(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   TA: TGocciaTypedArrayValue;
-  Arr: TGocciaArrayValue;
-  I: Integer;
 begin
   TA := RequireAttachedTypedArray(AThisValue, 'TypedArray.prototype.keys');
-  Arr := TGocciaArrayValue.Create;
-  for I := 0 to TA.FLength - 1 do
-    Arr.Elements.Add(TGocciaNumberLiteralValue.Create(I));
-  Result := TGocciaArrayIteratorValue.Create(Arr, akValues);
+  Result := TGocciaTypedArrayIteratorValue.Create(TA, taikKeys);
 end;
 
 // ES2026 §23.2.3.6 %TypedArray%.prototype.entries()
 function TGocciaTypedArrayValue.TypedArrayEntries(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   TA: TGocciaTypedArrayValue;
-  Arr: TGocciaArrayValue;
-  I: Integer;
-  Entry: TGocciaArrayValue;
 begin
   TA := RequireAttachedTypedArray(AThisValue, 'TypedArray.prototype.entries');
-  Arr := TGocciaArrayValue.Create;
-  for I := 0 to TA.FLength - 1 do
-  begin
-    Entry := TGocciaArrayValue.Create;
-    Entry.Elements.Add(TGocciaNumberLiteralValue.Create(I));
-    Entry.Elements.Add(TA.GetElementAsValue(I));
-    Arr.Elements.Add(Entry);
-  end;
-  Result := TGocciaArrayIteratorValue.Create(Arr, akValues);
+  Result := TGocciaTypedArrayIteratorValue.Create(TA, taikEntries);
 end;
 
 { TGocciaTypedArrayClassValue }

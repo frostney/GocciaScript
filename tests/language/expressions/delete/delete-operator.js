@@ -131,3 +131,18 @@ test("delete configurable property with computed key succeeds", () => {
   expect(delete obj[key]).toBe(true);
   expect(obj.removable).toBeUndefined();
 });
+
+test("delete call expression evaluates operand and returns true", () => {
+  let called = false;
+  const fn = () => { called = true; };
+
+  expect(delete fn()).toBe(true);
+  expect(called).toBe(true);
+});
+
+test("delete array length fails because length is non-configurable", () => {
+  const arr = [1, 2, 3];
+
+  expect(() => { delete arr.length; }).toThrow(TypeError);
+  expect(arr.length).toBe(3);
+});

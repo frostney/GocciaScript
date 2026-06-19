@@ -130,3 +130,21 @@ test("Promise.any with no arguments rejects with TypeError", () => {
     expect(e.name).toBe("TypeError");
   });
 });
+
+test("Promise capability executor throws when called twice by constructor", () => {
+  class CallsExecutorTwice {
+    constructor(executor) {
+      const resolve = () => {};
+      const reject = () => {};
+      executor(resolve, reject);
+      executor(resolve, reject);
+    }
+  }
+
+  try {
+    Promise.resolve.call(CallsExecutorTwice, 1);
+    throw new Error("Expected TypeError");
+  } catch (e) {
+    expect(e.name).toBe("TypeError");
+  }
+});

@@ -859,6 +859,61 @@ console.log("Multi-directory TestRunner...");
   }
 }
 
+console.log("Explicit multi-file TestRunner config isolation...");
+{
+  const tmp = makeTmp();
+  try {
+    const argsDir = join(tmp, "arguments");
+    const nonStrictDir = join(tmp, "non-strict");
+    mkdirSync(argsDir);
+    mkdirSync(nonStrictDir);
+
+    writeFileSync(
+      join(argsDir, "goccia.json"),
+      '{"compat-function": true, "compat-non-strict-mode": true, "compat-arguments-object": true}\n',
+    );
+    writeFileSync(
+      join(argsDir, "test.js"),
+      [
+        "function count() { return arguments.length; }",
+        'test("arguments object enabled", () => {',
+        "  expect(count(1, 2)).toBe(2);",
+        "});",
+      ].join("\n") + "\n",
+    );
+
+    writeFileSync(
+      join(nonStrictDir, "goccia.json"),
+      '{"compat-function": true, "compat-non-strict-mode": true}\n',
+    );
+    writeFileSync(
+      join(nonStrictDir, "test.js"),
+      [
+        "function probe() { return [typeof arguments, this === globalThis]; }",
+        'test("non-strict without implicit arguments", () => {',
+        '  expect(probe()).toEqual(["undefined", true]);',
+        "});",
+      ].join("\n") + "\n",
+    );
+
+    const first = join(argsDir, "test.js");
+    const second = join(nonStrictDir, "test.js");
+    const trInterp = runCwd(TESTRUNNER, [first, second, "--jobs=1", "--no-progress"], tmp);
+    if (!trInterp.combined.includes("Passed: 2"))
+      throw new Error(`TestRunner interp explicit multi-file config isolation should pass 2, got: ${trInterp.combined}`);
+    if (!trInterp.combined.includes("Failed: 0"))
+      throw new Error(`TestRunner interp explicit multi-file config isolation should fail 0, got: ${trInterp.combined}`);
+
+    const trBc = runCwd(TESTRUNNER, [first, second, "--jobs=1", "--mode=bytecode", "--no-progress"], tmp);
+    if (!trBc.combined.includes("Passed: 2"))
+      throw new Error(`TestRunner bytecode explicit multi-file config isolation should pass 2, got: ${trBc.combined}`);
+    if (!trBc.combined.includes("Failed: 0"))
+      throw new Error(`TestRunner bytecode explicit multi-file config isolation should fail 0, got: ${trBc.combined}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
 // -- CLI options override file config -------------------------------------------
 
 console.log("CLI options override file config...");

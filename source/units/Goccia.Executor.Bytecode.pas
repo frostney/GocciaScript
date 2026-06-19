@@ -34,7 +34,8 @@ type
     function ExecuteProgram(
       const AProgram: TGocciaProgram): TGocciaValue; override;
     function EvaluateModuleBody(const AProgram: TGocciaProgram;
-      const AContext: TGocciaEvaluationContext): TGocciaValue; override;
+      const AContext: TGocciaEvaluationContext;
+      out AProgramConsumed: Boolean): TGocciaValue; override;
     function ExecuteDynamicFunction(
       const AProgram: TGocciaProgram): TGocciaValue; override;
     procedure ClearTransientCaches; override;
@@ -101,7 +102,8 @@ end;
 
 function TGocciaBytecodeExecutor.EvaluateModuleBody(
   const AProgram: TGocciaProgram;
-  const AContext: TGocciaEvaluationContext): TGocciaValue;
+  const AContext: TGocciaEvaluationContext;
+  out AProgramConsumed: Boolean): TGocciaValue;
 var
   Compiler: TGocciaCompiler;
   BytecodeModule: TGocciaBytecodeModule;
@@ -111,7 +113,8 @@ var
   SavedRuntimeModule: TGocciaModule;
   Options: TGocciaCompilerOptimizationOptions;
 begin
-    Compiler := TGocciaCompiler.Create(AContext.CurrentFilePath);
+  AProgramConsumed := False;
+  Compiler := TGocciaCompiler.Create(AContext.CurrentFilePath);
   try
     Compiler.GlobalBackedTopLevel := False;
     Compiler.AsyncTopLevel := AProgram.HasTopLevelAwait;

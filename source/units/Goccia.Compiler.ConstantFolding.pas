@@ -34,6 +34,7 @@ uses
   SysUtils,
 
   BigInteger,
+  TextSemantics,
 
   Goccia.Bytecode,
   Goccia.Bytecode.Chunk,
@@ -66,6 +67,12 @@ function NegativeZeroFloat: Double; inline;
 begin
   Result := 0.0;
   Result := Result * -1.0;
+end;
+
+function IsOddIntegralNumber(const AValue: Double): Boolean; inline;
+begin
+  Result := not IsNaN(AValue) and not IsInfinite(AValue) and
+    (Frac(AValue) = 0.0) and (Frac(AValue / 2.0) <> 0.0);
 end;
 
 function NumberWithFloatingPointMask(const AValue: Double): Double; inline;
@@ -167,15 +174,56 @@ function FoldedPowerValue(const ALeft, ARight: Double): Double;
 var
   OldMask: TFPUExceptionMask;
 begin
-  if (ARight = 0.0) and not IsNaN(ARight) then
-    Exit(1.0);
-
-  if IsNaN(ALeft) or IsNaN(ARight) then
+  if IsNaN(ARight) then
     Exit(NaN);
+  if ARight = 0.0 then
+    Exit(1.0);
+  if IsNaN(ALeft) then
+    Exit(NaN);
+
+  if IsInfinite(ALeft) and (ALeft > 0.0) then
+  begin
+    if ARight > 0.0 then
+      Exit(Infinity);
+    Exit(0.0);
+  end;
+
+  if IsInfinite(ALeft) and (ALeft < 0.0) then
+  begin
+    if ARight > 0.0 then
+    begin
+      if IsOddIntegralNumber(ARight) then
+        Exit(NegInfinity);
+      Exit(Infinity);
+    end;
+    if IsOddIntegralNumber(ARight) then
+      Exit(NegativeZeroFloat);
+    Exit(0.0);
+  end;
+
+  if ALeft = 0.0 then
+  begin
+    if not IsNegativeZeroFloat(ALeft) then
+    begin
+      if ARight > 0.0 then
+        Exit(0.0);
+      Exit(Infinity);
+    end;
+
+    if ARight > 0.0 then
+    begin
+      if IsOddIntegralNumber(ARight) then
+        Exit(NegativeZeroFloat);
+      Exit(0.0);
+    end;
+    if IsOddIntegralNumber(ARight) then
+      Exit(NegInfinity);
+    Exit(Infinity);
+  end;
 
   if IsInfinite(ARight) then
   begin
-    if IsInfinite(ALeft) or (Abs(ALeft) > 1.0) then
+    if Abs(ALeft) > 1.0 then
     begin
       if ARight > 0.0 then
         Exit(Infinity);
@@ -188,24 +236,8 @@ begin
     Exit(Infinity);
   end;
 
-  if IsInfinite(ALeft) then
-  begin
-    if ARight > 0.0 then
-    begin
-      if ALeft > 0.0 then
-        Exit(Infinity);
-      if Frac(ARight) <> 0.0 then
-        Exit(Infinity);
-      if Frac(ARight / 2.0) = 0.0 then
-        Exit(Infinity);
-      Exit(NegInfinity);
-    end;
-
-    if (ALeft < 0.0) and (Frac(ARight) = 0.0) and
-       (Frac(ARight / 2.0) <> 0.0) then
-      Exit(NegativeZeroFloat);
-    Exit(0.0);
-  end;
+  if (ALeft < 0.0) and (Frac(ARight) <> 0.0) then
+    Exit(NaN);
 
   OldMask := GetExceptionMask;
   SetExceptionMask([exInvalidOp, exDenormalized, exZeroDivide, exOverflow,
@@ -348,6 +380,76 @@ begin
   end;
 end;
 
+function ReadNextConstantUTF16CodeUnit(const AText: string;
+  var AByteIndex: Integer; var APendingLowSurrogate: Integer;
+  out ACodeUnit: Cardinal): Boolean;
+var
+  ByteLength: Integer;
+  CodePoint: Cardinal;
+  Supplementary: Cardinal;
+begin
+  if APendingLowSurrogate >= 0 then
+  begin
+    ACodeUnit := Cardinal(APendingLowSurrogate);
+    APendingLowSurrogate := -1;
+    Exit(True);
+  end;
+
+  if AByteIndex > Length(AText) then
+    Exit(False);
+
+  if TryReadUTF8CodePointAllowSurrogates(AText, AByteIndex, CodePoint,
+     ByteLength) then
+  begin
+    Inc(AByteIndex, ByteLength);
+    if CodePoint <= $FFFF then
+    begin
+      ACodeUnit := CodePoint;
+      Exit(True);
+    end;
+
+    Supplementary := CodePoint - $10000;
+    ACodeUnit := $D800 + (Supplementary shr 10);
+    APendingLowSurrogate := Integer($DC00 + (Supplementary and $3FF));
+    Exit(True);
+  end;
+
+  ACodeUnit := Ord(AText[AByteIndex]);
+  Inc(AByteIndex);
+  Result := True;
+end;
+
+function CompareConstantStringsAsUTF16(const ALeft, ARight: string): Integer;
+var
+  LeftByteIndex, RightByteIndex: Integer;
+  LeftPendingLow, RightPendingLow: Integer;
+  LeftUnit, RightUnit: Cardinal;
+  HasLeft, HasRight: Boolean;
+begin
+  LeftByteIndex := 1;
+  RightByteIndex := 1;
+  LeftPendingLow := -1;
+  RightPendingLow := -1;
+
+  while True do
+  begin
+    HasLeft := ReadNextConstantUTF16CodeUnit(ALeft, LeftByteIndex,
+      LeftPendingLow, LeftUnit);
+    HasRight := ReadNextConstantUTF16CodeUnit(ARight, RightByteIndex,
+      RightPendingLow, RightUnit);
+    if not HasLeft and not HasRight then
+      Exit(0);
+    if not HasLeft then
+      Exit(-1);
+    if not HasRight then
+      Exit(1);
+    if LeftUnit < RightUnit then
+      Exit(-1);
+    if LeftUnit > RightUnit then
+      Exit(1);
+  end;
+end;
+
 function TryCompareConstants(const ALeft, ARight: TGocciaCompileTimeValue;
   out ACompare: Integer): Boolean;
 var
@@ -358,7 +460,8 @@ begin
 
   if (ALeft.Kind = ctvkString) and (ARight.Kind = ctvkString) then
   begin
-    ACompare := CompareStr(ALeft.StringValue, ARight.StringValue);
+    ACompare := CompareConstantStringsAsUTF16(ALeft.StringValue,
+      ARight.StringValue);
     Exit;
   end;
 

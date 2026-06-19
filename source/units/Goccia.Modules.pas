@@ -18,6 +18,7 @@ uses
 
 type
   TGocciaImportCallPhase = (icpEvaluation, icpSource, icpDefer);
+  EGocciaDeferredModuleNotReady = class(Exception);
   TGocciaModule = class;
   TGocciaModuleList = TList<TGocciaModule>;
   TGocciaModuleExportBinding = class;
@@ -186,6 +187,17 @@ type
     function ToStringTag: string; override;
     function TryDefineProperty(const AName: string;
       const ADescriptor: TGocciaPropertyDescriptor): Boolean; override;
+    procedure DefineSymbolProperty(const ASymbol: TGocciaSymbolValue;
+      const ADescriptor: TGocciaPropertyDescriptor); override;
+    function TryDefineSymbolProperty(const ASymbol: TGocciaSymbolValue;
+      const ADescriptor: TGocciaPropertyDescriptor): Boolean; override;
+    function GetSymbolProperty(const ASymbol: TGocciaSymbolValue):
+      TGocciaValue; override;
+    function GetSymbolPropertyWithReceiver(const ASymbol: TGocciaSymbolValue;
+      const AReceiver: TGocciaValue): TGocciaValue; override;
+    function GetOwnSymbolPropertyDescriptor(
+      const ASymbol: TGocciaSymbolValue): TGocciaPropertyDescriptor; override;
+    function HasSymbolProperty(const ASymbol: TGocciaSymbolValue): Boolean; override;
     procedure MarkReferences; override;
   end;
 
@@ -198,6 +210,8 @@ function DecodeImportSpecifierAttribute(const AEncodedModulePath: string;
 
 const
   DEFERRED_EVALUATION_REFERRER_PREFIX = #1'goccia-defer:';
+  DEFERRED_MODULE_NOT_READY_MESSAGE =
+    'Deferred module cannot be synchronously evaluated while it or one of its dependencies is evaluating';
 
 implementation
 
@@ -1019,6 +1033,9 @@ begin
         FHasEvaluationError := True;
         raise;
       end;
+      on E: EGocciaDeferredModuleNotReady do
+        raise TGocciaThrowValue.Create(
+          CreateErrorObject(TYPE_ERROR_NAME, E.Message));
       on E: TGocciaTypeError do
       begin
         FEvaluationError := CreateErrorObject(TYPE_ERROR_NAME, E.Message);
@@ -1038,7 +1055,7 @@ end;
 function TGocciaDeferredModuleNamespaceObject.GetProperty(
   const AName: string): TGocciaValue;
 begin
-  if (AName = PROP_THEN) and not Assigned(FNamespaceObject) then
+  if AName = PROP_THEN then
     Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
   Result := EnsureNamespaceObject.GetProperty(AName);
 end;
@@ -1051,7 +1068,7 @@ end;
 function TGocciaDeferredModuleNamespaceObject.GetPropertyWithContext(
   const AName: string; const AThisContext: TGocciaValue): TGocciaValue;
 begin
-  if (AName = PROP_THEN) and not Assigned(FNamespaceObject) then
+  if AName = PROP_THEN then
     Exit(inherited GetPropertyWithContext(AName, AThisContext));
   Result := EnsureNamespaceObject.GetPropertyWithContext(AName, AThisContext);
 end;
@@ -1059,7 +1076,7 @@ end;
 function TGocciaDeferredModuleNamespaceObject.GetOwnPropertyDescriptor(
   const AName: string): TGocciaPropertyDescriptor;
 begin
-  if (AName = PROP_THEN) and not Assigned(FNamespaceObject) then
+  if AName = PROP_THEN then
     Exit(inherited GetOwnPropertyDescriptor(AName));
   Result := EnsureNamespaceObject.GetOwnPropertyDescriptor(AName);
 end;
@@ -1067,7 +1084,7 @@ end;
 function TGocciaDeferredModuleNamespaceObject.HasProperty(
   const AName: string): Boolean;
 begin
-  if (AName = PROP_THEN) and not Assigned(FNamespaceObject) then
+  if AName = PROP_THEN then
     Exit(inherited HasProperty(AName));
   Result := EnsureNamespaceObject.HasProperty(AName);
 end;
@@ -1075,7 +1092,7 @@ end;
 function TGocciaDeferredModuleNamespaceObject.HasOwnProperty(
   const AName: string): Boolean;
 begin
-  if (AName = PROP_THEN) and not Assigned(FNamespaceObject) then
+  if AName = PROP_THEN then
     Exit(inherited HasOwnProperty(AName));
   Result := EnsureNamespaceObject.HasOwnProperty(AName);
 end;
@@ -1083,7 +1100,7 @@ end;
 procedure TGocciaDeferredModuleNamespaceObject.DefineProperty(
   const AName: string; const ADescriptor: TGocciaPropertyDescriptor);
 begin
-  if (AName = PROP_THEN) and not Assigned(FNamespaceObject) then
+  if AName = PROP_THEN then
   begin
     inherited DefineProperty(AName, ADescriptor);
     Exit;
@@ -1094,7 +1111,7 @@ end;
 function TGocciaDeferredModuleNamespaceObject.TryDefineProperty(
   const AName: string; const ADescriptor: TGocciaPropertyDescriptor): Boolean;
 begin
-  if (AName = PROP_THEN) and not Assigned(FNamespaceObject) then
+  if AName = PROP_THEN then
     Exit(inherited TryDefineProperty(AName, ADescriptor));
   Result := EnsureNamespaceObject.TryDefineProperty(AName, ADescriptor);
 end;
@@ -1102,7 +1119,7 @@ end;
 function TGocciaDeferredModuleNamespaceObject.DeleteProperty(
   const AName: string): Boolean;
 begin
-  if (AName = PROP_THEN) and not Assigned(FNamespaceObject) then
+  if AName = PROP_THEN then
     Exit(inherited DeleteProperty(AName));
   Result := EnsureNamespaceObject.DeleteProperty(AName);
 end;
@@ -1147,6 +1164,45 @@ function TGocciaDeferredModuleNamespaceObject.GetOwnSymbols:
   TArray<TGocciaSymbolValue>;
 begin
   Result := EnsureNamespaceObject.GetOwnSymbols;
+end;
+
+procedure TGocciaDeferredModuleNamespaceObject.DefineSymbolProperty(
+  const ASymbol: TGocciaSymbolValue;
+  const ADescriptor: TGocciaPropertyDescriptor);
+begin
+  inherited DefineSymbolProperty(ASymbol, ADescriptor);
+end;
+
+function TGocciaDeferredModuleNamespaceObject.TryDefineSymbolProperty(
+  const ASymbol: TGocciaSymbolValue;
+  const ADescriptor: TGocciaPropertyDescriptor): Boolean;
+begin
+  Result := inherited TryDefineSymbolProperty(ASymbol, ADescriptor);
+end;
+
+function TGocciaDeferredModuleNamespaceObject.GetSymbolProperty(
+  const ASymbol: TGocciaSymbolValue): TGocciaValue;
+begin
+  Result := inherited GetSymbolProperty(ASymbol);
+end;
+
+function TGocciaDeferredModuleNamespaceObject.GetSymbolPropertyWithReceiver(
+  const ASymbol: TGocciaSymbolValue; const AReceiver: TGocciaValue):
+  TGocciaValue;
+begin
+  Result := inherited GetSymbolPropertyWithReceiver(ASymbol, AReceiver);
+end;
+
+function TGocciaDeferredModuleNamespaceObject.GetOwnSymbolPropertyDescriptor(
+  const ASymbol: TGocciaSymbolValue): TGocciaPropertyDescriptor;
+begin
+  Result := inherited GetOwnSymbolPropertyDescriptor(ASymbol);
+end;
+
+function TGocciaDeferredModuleNamespaceObject.HasSymbolProperty(
+  const ASymbol: TGocciaSymbolValue): Boolean;
+begin
+  Result := inherited HasSymbolProperty(ASymbol);
 end;
 
 procedure TGocciaDeferredModuleNamespaceObject.MarkReferences;

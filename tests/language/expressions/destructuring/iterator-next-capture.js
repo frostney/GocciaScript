@@ -71,6 +71,65 @@ test("array destructuring captures next once", () => {
   expect(secondCalls).toBe(0);
 });
 
+test("array destructuring skips IteratorClose when elision next throws", () => {
+  const thrown = new Error("next failed");
+  let closed = false;
+  const iter = {
+    [Symbol.iterator]() {
+      return {
+        next: () => {
+          throw thrown;
+        },
+        return: () => {
+          closed = true;
+          return {};
+        }
+      };
+    }
+  };
+  let caught;
+
+  try {
+    const [, value] = iter;
+  } catch (error) {
+    caught = error;
+  }
+
+  expect(caught).toBe(thrown);
+  expect(closed).toBe(false);
+});
+
+test("array rest destructuring skips IteratorClose when next throws", () => {
+  const thrown = new Error("rest next failed");
+  let calls = 0;
+  let closed = false;
+  const iter = {
+    [Symbol.iterator]() {
+      return {
+        next: () => {
+          calls += 1;
+          if (calls === 1) return { done: false, value: 1 };
+          throw thrown;
+        },
+        return: () => {
+          closed = true;
+          return {};
+        }
+      };
+    }
+  };
+  let caught;
+
+  try {
+    const [...values] = iter;
+  } catch (error) {
+    caught = error;
+  }
+
+  expect(caught).toBe(thrown);
+  expect(closed).toBe(false);
+});
+
 test("for-of captures next once", () => {
   let firstCalls = 0;
   let secondCalls = 0;

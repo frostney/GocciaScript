@@ -20,6 +20,19 @@ uses
   Goccia.AST.Statements,
   Goccia.Error;
 
+procedure CheckLexicalRedeclarationName(
+  const AName: string;
+  const AScope: TGocciaScope; const ASourcePath: string;
+  const ALine, AColumn: Integer);
+begin
+  if AScope.ContainsOwnVarBinding(AName) or
+     AScope.HasLexicalDeclaration(AName) or
+     AScope.HasRestrictedGlobalProperty(AName) then
+    raise TGocciaSyntaxError.Create(
+      SysUtils.Format('Identifier ''%s'' has already been declared',
+        [AName]), ALine, AColumn, ASourcePath, nil);
+end;
+
 procedure CheckPatternRedeclarations(
   const APattern: TGocciaDestructuringPattern;
   const AScope: TGocciaScope; const ASourcePath: string;
@@ -33,19 +46,24 @@ begin
   if APattern is TGocciaIdentifierDestructuringPattern then
   begin
     DeclName := TGocciaIdentifierDestructuringPattern(APattern).Name;
-    if AScope.ContainsOwnLexicalBinding(DeclName) then
+    if AIsVar and AScope.ContainsOwnLexicalBinding(DeclName) then
     begin
-      if AIsVar and AScope.IsBuiltInBinding(DeclName) then
+      if AScope.IsBuiltInBinding(DeclName) then
         Exit;
       raise TGocciaSyntaxError.Create(
         SysUtils.Format('Identifier ''%s'' has already been declared',
           [DeclName]), 0, 0, ASourcePath, nil);
     end;
-    if AIsVar and (AScope.ScopeKind = skGlobal) and
-       not AScope.CanDeclareGlobalVar(DeclName) then
-      raise TGocciaTypeError.Create(
-        SysUtils.Format('Cannot declare global var ''%s''', [DeclName]),
-        0, 0, ASourcePath, nil);
+    if AIsVar then
+    begin
+      if (AScope.ScopeKind = skGlobal) and
+         not AScope.CanDeclareGlobalVar(DeclName) then
+        raise TGocciaTypeError.Create(
+          SysUtils.Format('Cannot declare global var ''%s''', [DeclName]),
+          0, 0, ASourcePath, nil);
+    end
+    else
+      CheckLexicalRedeclarationName(DeclName, AScope, ASourcePath, 0, 0);
   end
   else if APattern is TGocciaObjectDestructuringPattern then
   begin
@@ -108,21 +126,27 @@ begin
       for J := 0 to High(VarDecl.Variables) do
       begin
         DeclName := VarDecl.Variables[J].Name;
-        if AScope.ContainsOwnLexicalBinding(DeclName) then
+        if VarDecl.IsVar then
         begin
-          // §16.1.7: var declarations may shadow built-in globals in
-          // script source, but not user-declared bindings.
-          if VarDecl.IsVar and AScope.IsBuiltInBinding(DeclName) then
-            Continue;
-          raise TGocciaSyntaxError.Create(
-            SysUtils.Format('Identifier ''%s'' has already been declared',
-              [DeclName]), Stmt.Line, Stmt.Column, ASourcePath, nil);
+          if AScope.ContainsOwnLexicalBinding(DeclName) then
+          begin
+            // §16.1.7: var declarations may shadow built-in globals in
+            // script source, but not user-declared lexical bindings.
+            if AScope.IsBuiltInBinding(DeclName) then
+              Continue;
+            raise TGocciaSyntaxError.Create(
+              SysUtils.Format('Identifier ''%s'' has already been declared',
+                [DeclName]), Stmt.Line, Stmt.Column, ASourcePath, nil);
+          end;
+          if (AScope.ScopeKind = skGlobal) and
+             not AScope.CanDeclareGlobalVar(DeclName) then
+            raise TGocciaTypeError.Create(
+              SysUtils.Format('Cannot declare global var ''%s''', [DeclName]),
+              Stmt.Line, Stmt.Column, ASourcePath, nil);
         end;
-        if VarDecl.IsVar and (AScope.ScopeKind = skGlobal) and
-           not AScope.CanDeclareGlobalVar(DeclName) then
-          raise TGocciaTypeError.Create(
-            SysUtils.Format('Cannot declare global var ''%s''', [DeclName]),
-            Stmt.Line, Stmt.Column, ASourcePath, nil);
+        if not VarDecl.IsVar then
+          CheckLexicalRedeclarationName(DeclName, AScope, ASourcePath,
+            Stmt.Line, Stmt.Column);
       end;
     end
     else if Stmt is TGocciaFunctionDeclaration then
@@ -135,10 +159,8 @@ begin
     else if Stmt is TGocciaClassDeclaration then
     begin
       DeclName := TGocciaClassDeclaration(Stmt).ClassDefinition.Name;
-      if AScope.ContainsOwnLexicalBinding(DeclName) then
-        raise TGocciaSyntaxError.Create(
-          SysUtils.Format('Identifier ''%s'' has already been declared',
-            [DeclName]), Stmt.Line, Stmt.Column, ASourcePath, nil);
+      CheckLexicalRedeclarationName(DeclName, AScope, ASourcePath,
+        Stmt.Line, Stmt.Column);
     end
     else if Stmt is TGocciaDestructuringDeclaration then
       CheckPatternRedeclarations(
@@ -147,10 +169,8 @@ begin
     else if Stmt is TGocciaEnumDeclaration then
     begin
       DeclName := TGocciaEnumDeclaration(Stmt).Name;
-      if AScope.ContainsOwnLexicalBinding(DeclName) then
-        raise TGocciaSyntaxError.Create(
-          SysUtils.Format('Identifier ''%s'' has already been declared',
-            [DeclName]), Stmt.Line, Stmt.Column, ASourcePath, nil);
+      CheckLexicalRedeclarationName(DeclName, AScope, ASourcePath,
+        Stmt.Line, Stmt.Column);
     end;
   end;
 end;

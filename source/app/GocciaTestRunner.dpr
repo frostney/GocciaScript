@@ -10,6 +10,7 @@ uses
 
   TimingUtils,
 
+  Goccia.Arguments.Collection,
   Goccia.Application,
   Goccia.Bytecode.Module,
   Goccia.CLI.Application,
@@ -43,6 +44,7 @@ uses
   Goccia.Timeout,
   Goccia.Values.ArrayValue,
   Goccia.Values.Error,
+  Goccia.Values.FunctionBase,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
 
@@ -128,10 +130,13 @@ type
     FDescribeTimeout: TIntegerOption;
     procedure InitializeRuntime(const AEngine: TGocciaEngine);
     procedure InitializeRuntimeWithUnsafeFFI(const AEngine: TGocciaEngine);
+    function RunRegisteredTests(const AEngine: TGocciaEngine): TGocciaObjectValue;
   protected
     procedure Configure; override;
     procedure ConfigureCreatedEngine(const AEngine: TGocciaEngine;
       const AFileConfig: TConfigEntryArray); override;
+    function ShouldApplyRootConfig(const APaths: TStringList;
+      const AConfigPath: string; const AExplicitConfig: Boolean): Boolean; override;
     function UsageLine: string; override;
     procedure Validate; override;
     procedure ExecuteWithPaths(const APaths: TStringList); override;
@@ -265,6 +270,14 @@ begin
   if LogFileOpen and Assigned(ConsoleExtension) and
      Assigned(ConsoleExtension.BuiltinConsole) then
     ConsoleExtension.BuiltinConsole.LogCallback := HandleConsoleLog;
+end;
+
+function TTestRunnerApp.ShouldApplyRootConfig(const APaths: TStringList;
+  const AConfigPath: string; const AExplicitConfig: Boolean): Boolean;
+begin
+  Result := inherited ShouldApplyRootConfig(APaths, AConfigPath, AExplicitConfig);
+  if Result and (not AExplicitConfig) and (APaths.Count > 1) then
+    Result := False;
 end;
 
 procedure TTestRunnerApp.Validate;
@@ -470,6 +483,46 @@ begin
   GetRuntime(AEngine).Install(TGocciaFFIRuntimeExtension.Create);
 end;
 
+function TTestRunnerApp.RunRegisteredTests(
+  const AEngine: TGocciaEngine): TGocciaObjectValue;
+var
+  GC: TGarbageCollector;
+  RunTestsValue: TGocciaValue;
+  Options: TGocciaObjectValue;
+  Args: TGocciaArgumentsCollection;
+  ResultValue: TGocciaValue;
+begin
+  GC := TGarbageCollector.Instance;
+  RunTestsValue := AEngine.Interpreter.GlobalScope.GetBinding('runTests').Value;
+  if not (RunTestsValue is TGocciaFunctionBase) then
+    raise Exception.Create('runTests global is not callable');
+
+  Options := TGocciaObjectValue.Create;
+  Options.AssignProperty('exitOnFirstFailure',
+    TGocciaBooleanLiteralValue.FromBoolean(FExitOnFirst.Present));
+  Options.AssignProperty('showTestResults',
+    TGocciaBooleanLiteralValue.FalseValue);
+
+  Args := TGocciaArgumentsCollection.Create([Options]);
+  try
+    if Assigned(GC) then
+      GC.AddTempRoot(Options);
+    try
+      ResultValue := TGocciaFunctionBase(RunTestsValue).Call(
+        Args, TGocciaUndefinedLiteralValue.UndefinedValue);
+    finally
+      if Assigned(GC) then
+        GC.RemoveTempRoot(Options);
+    end;
+  finally
+    Args.Free;
+  end;
+
+  if not (ResultValue is TGocciaObjectValue) then
+    raise Exception.Create('runTests did not return a result object');
+  Result := TGocciaObjectValue(ResultValue);
+end;
+
 function TTestRunnerApp.RunGocciaScriptInterpreted(const AFileName: string;
   APreloadedSource: TStringList): TTestFileResult;
 var
@@ -508,14 +561,13 @@ begin
       end;
     end;
 
-    Source.Add(Format('runTests({ exitOnFirstFailure: %s, showTestResults: false });',
-      [BoolToStr(FExitOnFirst.Present, 'true', 'false')]));
-
     try
       Executor := TGocciaInterpreterExecutor.Create;
       try
         Engine := CreateEngine(AFileName, Source, Executor);
         try
+          Engine.RegisterGlobal('__gocciaTestRunnerMode',
+            TGocciaStringLiteralValue.Create('interpreted'));
           if FSilent.Present or GIsWorkerThread or IsJsonOutput then
           begin
             DisableRuntimeConsole(Engine);
@@ -526,6 +578,7 @@ begin
           StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
           try
             EngineResult := Engine.Execute;
+            EngineResult.Result := RunRegisteredTests(Engine);
             if Assigned(GC) and Assigned(EngineResult.Result) then
             begin
               GC.AddTempRoot(EngineResult.Result);
@@ -644,6 +697,8 @@ begin
       try
         Engine := CreateEngine(AFileName, Source, Executor);
         try
+          Engine.RegisterGlobal('__gocciaTestRunnerMode',
+            TGocciaStringLiteralValue.Create('bytecode'));
           if FSilent.Present or GIsWorkerThread or IsJsonOutput then
           begin
             DisableRuntimeConsole(Engine);
@@ -651,6 +706,7 @@ begin
           end;
 
             LexStart := GetNanoseconds;
+            PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
             PipelineOptions.Preprocessors := Engine.Preprocessors;
             PipelineOptions.Compatibility := Engine.Compatibility;
             PipelineOptions.SourceType := Engine.SourceType;

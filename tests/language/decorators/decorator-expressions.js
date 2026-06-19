@@ -79,4 +79,33 @@ describe("decorator expressions", () => {
 
     expect(receivedArg).toBe("test");
   });
+
+  test("class expression decorators", () => {
+    const calls = [];
+    const dec = (value, context) => {
+      calls.push(context.kind);
+      value.decorated = true;
+    };
+    const decorators = {
+      log: dec,
+    };
+    const withTag = (tag) => {
+      return (value, context) => {
+        value.tag = tag;
+      };
+    };
+
+    const A = @dec class {};
+    const B = @decorators.log class Named {};
+    const C = @withTag("class-expression") class {};
+    const D = @(dec) class {};
+
+    expect(A.decorated).toBe(true);
+    expect(B.decorated).toBe(true);
+    expect(C.tag).toBe("class-expression");
+    expect(D.decorated).toBe(true);
+    expect(calls[0]).toBe("class");
+    expect(calls[1]).toBe("class");
+    expect(calls[2]).toBe("class");
+  });
 });

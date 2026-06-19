@@ -3,6 +3,20 @@ describe("Date constructor", () => {
     expect(typeof Date).toBe("function");
   });
 
+  test("Date has the standard constructor name descriptor", () => {
+    const descriptor = Object.getOwnPropertyDescriptor(Date, "name");
+
+    expect(Date.name).toBe("Date");
+    expect(descriptor.value).toBe("Date");
+    expect(descriptor.writable).toBe(false);
+    expect(descriptor.enumerable).toBe(false);
+    expect(descriptor.configurable).toBe(true);
+  });
+
+  test("Date called without new returns a string", () => {
+    expect(typeof Date()).toBe("string");
+  });
+
   test("new Date() returns current time", () => {
     const before = Date.now();
     const d = new Date();
@@ -17,6 +31,16 @@ describe("Date constructor", () => {
     expect(d.getUTCFullYear()).toBe(1970);
     expect(d.getUTCMonth()).toBe(0);
     expect(d.getUTCDate()).toBe(1);
+  });
+
+  test("Reflect.construct initializes Date internal slot with custom newTarget", () => {
+    class NewTarget {}
+
+    const d = Reflect.construct(Date, [0], NewTarget);
+    expect(Object.getPrototypeOf(d)).toBe(NewTarget.prototype);
+    expect(d instanceof NewTarget).toBe(true);
+    expect(d instanceof Date).toBe(false);
+    expect(Date.prototype.getTime.call(d)).toBe(0);
   });
 
   test("new Date(string) parses ISO string", () => {
@@ -39,5 +63,20 @@ describe("Date constructor", () => {
   test("year 0-99 maps to 1900-1999", () => {
     const d = new Date(95, 0, 1, 0, 0, 0, 0);
     expect(d.getFullYear()).toBe(1995);
+  });
+
+  test("Date default primitive hint prefers string", () => {
+    const d = new Date(0);
+    expect(d + 0).toBe(d.toString() + "0");
+    expect(d + d).toBe(d.toString() + d.toString());
+    expect(Number(d)).toBe(0);
+  });
+
+  test("Date UTC string methods are present", () => {
+    const d = new Date(0);
+    expect(typeof Date.prototype.toUTCString).toBe("function");
+    expect(typeof Date.prototype.toGMTString).toBe("function");
+    expect(d.toUTCString()).toBe("Thu, 01 Jan 1970 00:00:00 GMT");
+    expect(d.toGMTString()).toBe(d.toUTCString());
   });
 });

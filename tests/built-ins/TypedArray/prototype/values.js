@@ -23,6 +23,16 @@ describe("TypedArray.prototype.values", () => {
       expect(second.value).toBe(2);
       expect(iter.next().done).toBe(true);
     });
+
+    test("iterator reads mutated elements live", () => {
+      const ta = new TA([1, 2, 3]);
+      const iter = ta.values();
+      expect(iter.next().value).toBe(1);
+      ta[1] = 9;
+      expect(iter.next().value).toBe(9);
+      expect(iter.next().value).toBe(3);
+      expect(iter.next().done).toBe(true);
+    });
   });
 
   test.each([BigInt64Array, BigUint64Array])("%s values iterator", (TA) => {

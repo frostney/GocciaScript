@@ -64,3 +64,38 @@ test("object destructuring with defaults and rest", () => {
   expect(c).toBe(6);
   expect(rest).toEqual({ d: 7, e: 8 });
 });
+
+test("destructuring defaults infer names for anonymous arrows and classes", () => {
+  let { missing = () => {}, cls = class {} } = {};
+  let [arrow = () => {}, otherCls = class {}] = [];
+
+  expect(missing.name).toBe("missing");
+  expect(cls.name).toBe("cls");
+  expect(arrow.name).toBe("arrow");
+  expect(otherCls.name).toBe("otherCls");
+});
+
+test("assignment destructuring preserves duplicate source keys for default names", () => {
+  let first;
+  let second;
+
+  ({ x: first = () => {}, x: second = class {} } = {});
+
+  expect(first.name).toBe("first");
+  expect(second.name).toBe("second");
+});
+
+test("for-of assignment destructuring defaults infer names", () => {
+  let objectArrow;
+  let objectClass;
+  let arrayArrow;
+  let arrayClass;
+
+  for ({ missing: objectArrow = () => {}, cls: objectClass = class {} } of [{}]) {}
+  for ([arrayArrow = () => {}, arrayClass = class {}] of [[]]) {}
+
+  expect(objectArrow.name).toBe("objectArrow");
+  expect(objectClass.name).toBe("objectClass");
+  expect(arrayArrow.name).toBe("arrayArrow");
+  expect(arrayClass.name).toBe("arrayClass");
+});

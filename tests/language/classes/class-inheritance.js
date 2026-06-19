@@ -74,6 +74,28 @@ test("super() in constructor arrow initializes derived this", () => {
   expect(derived instanceof Base).toBeTruthy();
 });
 
+test("super() in constructor arrow rejects second this binding", () => {
+  let count = 0;
+
+  class Base {
+    constructor() {
+      count++;
+    }
+  }
+
+  class Derived extends Base {
+    constructor() {
+      super();
+      this.callSuperAgain = () => super();
+    }
+  }
+
+  const derived = new Derived();
+
+  expect(() => derived.callSuperAgain()).toThrow(ReferenceError);
+  expect(count).toBe(2);
+});
+
 test("super() in constructor arrow initializes replacement receiver fields", () => {
   let replacementPrototype;
 

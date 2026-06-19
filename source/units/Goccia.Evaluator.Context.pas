@@ -24,11 +24,14 @@ type
     CoverageEnabled: Boolean;
     StrictTypes: Boolean;
     NonStrictMode: Boolean;
+    CompatibilityNonStrictMode: Boolean;
     InEvalCode: Boolean;
+    EvalVarScope: TGocciaScope;
     RejectArgumentsVarDeclarationInEval: Boolean;
     RejectVarDeclarationNamesInEval: TGocciaEvalRejectNameArray;
     DisposalTracker: TObject; // TGocciaDisposalTracker or nil
     CurrentModule: TGocciaModule;
+    ModuleEnvironmentInitialized: Boolean;
   end;
 
 implementation

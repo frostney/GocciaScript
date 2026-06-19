@@ -43,6 +43,7 @@ uses
   Math,
 
   BigInteger,
+  TextSemantics,
 
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
@@ -110,20 +111,34 @@ begin
   APrimitiveRight := ToPrimitive(ARight);
 end;
 
-function ToNumericPair(const ALeft, ARight: TGocciaValue;
+function ToNumericOperand(const AValue: TGocciaValue): TGocciaValue; inline;
+begin
+  Result := ToPrimitive(AValue);
+  if Result is TGocciaSymbolValue then
+    ThrowTypeError(SErrorSymbolToNumber, SSuggestSymbolNoImplicitConversion);
+  if Result is TGocciaBigIntValue then
+    Exit;
+  Result := Result.ToNumberLiteral;
+end;
+
+function ToNumberPair(const ALeft, ARight: TGocciaValue;
   out ALeftNum, ARightNum: TGocciaNumberLiteralValue): Boolean; inline;
 begin
-  if (ALeft is TGocciaSymbolValue) or (ARight is TGocciaSymbolValue) then
-    ThrowTypeError(SErrorSymbolToNumber, SSuggestSymbolNoImplicitConversion);
   CheckBigIntMixedTypes(ALeft, ARight);
-  ALeftNum := ALeft.ToNumberLiteral;
-  ARightNum := ARight.ToNumberLiteral;
+  ALeftNum := TGocciaNumberLiteralValue(ALeft);
+  ARightNum := TGocciaNumberLiteralValue(ARight);
   Result := not (ALeftNum.IsNaN or ARightNum.IsNaN);
 end;
 
 function IsActualZero(const ANum: TGocciaNumberLiteralValue): Boolean; inline;
 begin
   Result := (ANum.Value = 0) and not ANum.IsNaN and not ANum.IsInfinite;
+end;
+
+function IsOddIntegralNumber(const ANum: TGocciaNumberLiteralValue): Boolean; inline;
+begin
+  Result := not ANum.IsNaN and not ANum.IsInfinite and
+    (Frac(ANum.Value) = 0.0) and (Frac(ANum.Value / 2.0) <> 0.0);
 end;
 
 // ES2026 §13.15.3 ApplyStringOrNumericBinaryOperator(lval, opText, rval)
@@ -173,18 +188,19 @@ end;
 
 function EvaluateSubtraction(const ALeft, ARight: TGocciaValue): TGocciaValue;
 var
-  PrimLeft, PrimRight: TGocciaValue;
+  NumericLeft, NumericRight: TGocciaValue;
   LeftNum, RightNum: TGocciaNumberLiteralValue;
 begin
-  ToPrimitiveOperands(ALeft, ARight, PrimLeft, PrimRight);
+  NumericLeft := ToNumericOperand(ALeft);
+  NumericRight := ToNumericOperand(ARight);
 
   // ES2026 §6.1.6.2.2 BigInt::subtract
-  if (PrimLeft is TGocciaBigIntValue) and (PrimRight is TGocciaBigIntValue) then
+  if (NumericLeft is TGocciaBigIntValue) and (NumericRight is TGocciaBigIntValue) then
     Exit(TGocciaBigIntValue.Create(
-      TGocciaBigIntValue(PrimLeft).Value.Subtract(
-        TGocciaBigIntValue(PrimRight).Value)));
+      TGocciaBigIntValue(NumericLeft).Value.Subtract(
+        TGocciaBigIntValue(NumericRight).Value)));
 
-  if not ToNumericPair(PrimLeft, PrimRight, LeftNum, RightNum) then
+  if not ToNumberPair(NumericLeft, NumericRight, LeftNum, RightNum) then
     Exit(TGocciaNumberLiteralValue.NaNValue);
 
   if LeftNum.IsInfinite or RightNum.IsInfinite then
@@ -205,20 +221,21 @@ end;
 
 function EvaluateMultiplication(const ALeft, ARight: TGocciaValue): TGocciaValue;
 var
-  PrimLeft, PrimRight: TGocciaValue;
+  NumericLeft, NumericRight: TGocciaValue;
   LeftNum, RightNum: TGocciaNumberLiteralValue;
   LeftZero, RightZero: Boolean;
   SameSign: Boolean;
 begin
-  ToPrimitiveOperands(ALeft, ARight, PrimLeft, PrimRight);
+  NumericLeft := ToNumericOperand(ALeft);
+  NumericRight := ToNumericOperand(ARight);
 
   // ES2026 §6.1.6.2.3 BigInt::multiply
-  if (PrimLeft is TGocciaBigIntValue) and (PrimRight is TGocciaBigIntValue) then
+  if (NumericLeft is TGocciaBigIntValue) and (NumericRight is TGocciaBigIntValue) then
     Exit(TGocciaBigIntValue.Create(
-      TGocciaBigIntValue(PrimLeft).Value.Multiply(
-        TGocciaBigIntValue(PrimRight).Value)));
+      TGocciaBigIntValue(NumericLeft).Value.Multiply(
+        TGocciaBigIntValue(NumericRight).Value)));
 
-  if not ToNumericPair(PrimLeft, PrimRight, LeftNum, RightNum) then
+  if not ToNumberPair(NumericLeft, NumericRight, LeftNum, RightNum) then
     Exit(TGocciaNumberLiteralValue.NaNValue);
 
   if LeftNum.IsInfinite or RightNum.IsInfinite then
@@ -240,23 +257,24 @@ end;
 
 function EvaluateDivision(const ALeft, ARight: TGocciaValue): TGocciaValue;
 var
-  PrimLeft, PrimRight: TGocciaValue;
+  NumericLeft, NumericRight: TGocciaValue;
   LeftNum, RightNum: TGocciaNumberLiteralValue;
   SameSign: Boolean;
 begin
-  ToPrimitiveOperands(ALeft, ARight, PrimLeft, PrimRight);
+  NumericLeft := ToNumericOperand(ALeft);
+  NumericRight := ToNumericOperand(ARight);
 
   // ES2026 §6.1.6.2.6 BigInt::divide
-  if (PrimLeft is TGocciaBigIntValue) and (PrimRight is TGocciaBigIntValue) then
+  if (NumericLeft is TGocciaBigIntValue) and (NumericRight is TGocciaBigIntValue) then
   begin
-    if TGocciaBigIntValue(PrimRight).Value.IsZero then
+    if TGocciaBigIntValue(NumericRight).Value.IsZero then
       ThrowRangeError(SErrorBigIntDivisionByZero);
     Exit(TGocciaBigIntValue.Create(
-      TGocciaBigIntValue(PrimLeft).Value.Divide(
-        TGocciaBigIntValue(PrimRight).Value)));
+      TGocciaBigIntValue(NumericLeft).Value.Divide(
+        TGocciaBigIntValue(NumericRight).Value)));
   end;
 
-  if not ToNumericPair(PrimLeft, PrimRight, LeftNum, RightNum) then
+  if not ToNumberPair(NumericLeft, NumericRight, LeftNum, RightNum) then
     Exit(TGocciaNumberLiteralValue.NaNValue);
 
   if LeftNum.IsInfinite then
@@ -298,29 +316,34 @@ end;
 
 function EvaluateModulo(const ALeft, ARight: TGocciaValue): TGocciaValue;
 var
-  PrimLeft, PrimRight: TGocciaValue;
+  NumericLeft, NumericRight: TGocciaValue;
   LeftNum, RightNum: TGocciaNumberLiteralValue;
   RemainderValue: Double;
 begin
-  ToPrimitiveOperands(ALeft, ARight, PrimLeft, PrimRight);
+  NumericLeft := ToNumericOperand(ALeft);
+  NumericRight := ToNumericOperand(ARight);
 
   // ES2026 §6.1.6.2.7 BigInt::remainder
-  if (PrimLeft is TGocciaBigIntValue) and (PrimRight is TGocciaBigIntValue) then
+  if (NumericLeft is TGocciaBigIntValue) and (NumericRight is TGocciaBigIntValue) then
   begin
-    if TGocciaBigIntValue(PrimRight).Value.IsZero then
+    if TGocciaBigIntValue(NumericRight).Value.IsZero then
       ThrowRangeError(SErrorBigIntDivisionByZero);
     Exit(TGocciaBigIntValue.Create(
-      TGocciaBigIntValue(PrimLeft).Value.Modulo(
-        TGocciaBigIntValue(PrimRight).Value)));
+      TGocciaBigIntValue(NumericLeft).Value.Modulo(
+        TGocciaBigIntValue(NumericRight).Value)));
   end;
 
-  if not ToNumericPair(PrimLeft, PrimRight, LeftNum, RightNum) then
+  if not ToNumberPair(NumericLeft, NumericRight, LeftNum, RightNum) then
     Exit(TGocciaNumberLiteralValue.NaNValue);
 
   if LeftNum.IsInfinite then
     Exit(TGocciaNumberLiteralValue.NaNValue);
   if RightNum.IsInfinite then
+  begin
+    if LeftNum.IsNegativeZero then
+      Exit(TGocciaNumberLiteralValue.NegativeZeroValue);
     Exit(NumberValue(LeftNum.Value));
+  end;
   if RightNum.Value = 0 then
     Exit(TGocciaNumberLiteralValue.NaNValue);
 
@@ -334,34 +357,76 @@ end;
 
 function EvaluateExponentiation(const ALeft, ARight: TGocciaValue): TGocciaValue;
 var
-  PrimLeft, PrimRight: TGocciaValue;
+  NumericLeft, NumericRight: TGocciaValue;
   LeftNum, RightNum: TGocciaNumberLiteralValue;
 begin
-  ToPrimitiveOperands(ALeft, ARight, PrimLeft, PrimRight);
+  NumericLeft := ToNumericOperand(ALeft);
+  NumericRight := ToNumericOperand(ARight);
 
   // ES2026 §6.1.6.2.8 BigInt::exponentiate
-  if (PrimLeft is TGocciaBigIntValue) and (PrimRight is TGocciaBigIntValue) then
+  if (NumericLeft is TGocciaBigIntValue) and (NumericRight is TGocciaBigIntValue) then
   begin
-    if TGocciaBigIntValue(PrimRight).Value.IsNegative then
+    if TGocciaBigIntValue(NumericRight).Value.IsNegative then
       ThrowRangeError(SErrorBigIntNegativeExponent);
     Exit(TGocciaBigIntValue.Create(
-      TGocciaBigIntValue(PrimLeft).Value.Power(
-        TGocciaBigIntValue(PrimRight).Value)));
+      TGocciaBigIntValue(NumericLeft).Value.Power(
+        TGocciaBigIntValue(NumericRight).Value)));
   end;
 
-  if not ToNumericPair(PrimLeft, PrimRight, LeftNum, RightNum) then
-  begin
-    if IsActualZero(RightNum) then
-      Exit(TGocciaNumberLiteralValue.OneValue);
+  ToNumberPair(NumericLeft, NumericRight, LeftNum, RightNum);
+
+  if RightNum.IsNaN then
     Exit(TGocciaNumberLiteralValue.NaNValue);
-  end;
-
   if IsActualZero(RightNum) then
     Exit(TGocciaNumberLiteralValue.OneValue);
+  if LeftNum.IsNaN then
+    Exit(TGocciaNumberLiteralValue.NaNValue);
+
+  // ES2026 §6.1.6.1.3 Number::exponentiate(base, exponent)
+  // steps 4-7: infinities and signed zero have observable signs.
+  if LeftNum.IsInfinity then
+  begin
+    if RightNum.Value > 0 then
+      Exit(TGocciaNumberLiteralValue.InfinityValue);
+    Exit(TGocciaNumberLiteralValue.ZeroValue);
+  end;
+
+  if LeftNum.IsNegativeInfinity then
+  begin
+    if RightNum.Value > 0 then
+    begin
+      if IsOddIntegralNumber(RightNum) then
+        Exit(TGocciaNumberLiteralValue.NegativeInfinityValue);
+      Exit(TGocciaNumberLiteralValue.InfinityValue);
+    end;
+    if IsOddIntegralNumber(RightNum) then
+      Exit(TGocciaNumberLiteralValue.NegativeZeroValue);
+    Exit(TGocciaNumberLiteralValue.ZeroValue);
+  end;
+
+  if IsActualZero(LeftNum) then
+  begin
+    if not LeftNum.IsNegativeZero then
+    begin
+      if RightNum.Value > 0 then
+        Exit(TGocciaNumberLiteralValue.ZeroValue);
+      Exit(TGocciaNumberLiteralValue.InfinityValue);
+    end;
+
+    if RightNum.Value > 0 then
+    begin
+      if IsOddIntegralNumber(RightNum) then
+        Exit(TGocciaNumberLiteralValue.NegativeZeroValue);
+      Exit(TGocciaNumberLiteralValue.ZeroValue);
+    end;
+    if IsOddIntegralNumber(RightNum) then
+      Exit(TGocciaNumberLiteralValue.NegativeInfinityValue);
+    Exit(TGocciaNumberLiteralValue.InfinityValue);
+  end;
 
   if RightNum.IsInfinite then
   begin
-    if LeftNum.IsInfinite or (Abs(LeftNum.Value) > 1) then
+    if Abs(LeftNum.Value) > 1 then
     begin
       if RightNum.IsInfinity then
         Exit(TGocciaNumberLiteralValue.InfinityValue);
@@ -374,107 +439,98 @@ begin
     Exit(TGocciaNumberLiteralValue.InfinityValue);
   end;
 
-  if LeftNum.IsInfinite then
-  begin
-    if RightNum.Value > 0 then
-    begin
-      if LeftNum.IsInfinity then
-        Exit(TGocciaNumberLiteralValue.InfinityValue);
-      if Frac(RightNum.Value) <> 0 then
-        Exit(TGocciaNumberLiteralValue.InfinityValue);
-      if Frac(RightNum.Value / 2) = 0 then
-        Exit(TGocciaNumberLiteralValue.InfinityValue);
-      Exit(TGocciaNumberLiteralValue.NegativeInfinityValue);
-    end;
-    if LeftNum.IsNegativeInfinity and (Frac(RightNum.Value) = 0) and
-       (Frac(RightNum.Value / 2) <> 0) then
-      Exit(TGocciaNumberLiteralValue.NegativeZeroValue);
-    Exit(TGocciaNumberLiteralValue.ZeroValue);
-  end;
+  if (LeftNum.Value < 0) and (Frac(RightNum.Value) <> 0.0) then
+    Exit(TGocciaNumberLiteralValue.NaNValue);
 
   Result := NumberValue(Power(LeftNum.Value, RightNum.Value));
 end;
 
 function EvaluateBitwiseAnd(const ALeft, ARight: TGocciaValue): TGocciaValue;
 var
-  PrimLeft, PrimRight: TGocciaValue;
+  NumericLeft, NumericRight: TGocciaValue;
 begin
-  ToPrimitiveOperands(ALeft, ARight, PrimLeft, PrimRight);
-  if (PrimLeft is TGocciaBigIntValue) and (PrimRight is TGocciaBigIntValue) then
+  NumericLeft := ToNumericOperand(ALeft);
+  NumericRight := ToNumericOperand(ARight);
+  if (NumericLeft is TGocciaBigIntValue) and (NumericRight is TGocciaBigIntValue) then
     Exit(TGocciaBigIntValue.Create(
-      TGocciaBigIntValue(PrimLeft).Value.BitwiseAnd(
-        TGocciaBigIntValue(PrimRight).Value)));
-  CheckBigIntMixedTypes(PrimLeft, PrimRight);
-  Result := NumberValue(ToInt32Value(PrimLeft) and ToInt32Value(PrimRight));
+      TGocciaBigIntValue(NumericLeft).Value.BitwiseAnd(
+        TGocciaBigIntValue(NumericRight).Value)));
+  CheckBigIntMixedTypes(NumericLeft, NumericRight);
+  Result := NumberValue(ToInt32Value(NumericLeft) and ToInt32Value(NumericRight));
 end;
 
 function EvaluateBitwiseOr(const ALeft, ARight: TGocciaValue): TGocciaValue;
 var
-  PrimLeft, PrimRight: TGocciaValue;
+  NumericLeft, NumericRight: TGocciaValue;
 begin
-  ToPrimitiveOperands(ALeft, ARight, PrimLeft, PrimRight);
-  if (PrimLeft is TGocciaBigIntValue) and (PrimRight is TGocciaBigIntValue) then
+  NumericLeft := ToNumericOperand(ALeft);
+  NumericRight := ToNumericOperand(ARight);
+  if (NumericLeft is TGocciaBigIntValue) and (NumericRight is TGocciaBigIntValue) then
     Exit(TGocciaBigIntValue.Create(
-      TGocciaBigIntValue(PrimLeft).Value.BitwiseOr(
-        TGocciaBigIntValue(PrimRight).Value)));
-  CheckBigIntMixedTypes(PrimLeft, PrimRight);
-  Result := NumberValue(ToInt32Value(PrimLeft) or ToInt32Value(PrimRight));
+      TGocciaBigIntValue(NumericLeft).Value.BitwiseOr(
+        TGocciaBigIntValue(NumericRight).Value)));
+  CheckBigIntMixedTypes(NumericLeft, NumericRight);
+  Result := NumberValue(ToInt32Value(NumericLeft) or ToInt32Value(NumericRight));
 end;
 
 function EvaluateBitwiseXor(const ALeft, ARight: TGocciaValue): TGocciaValue;
 var
-  PrimLeft, PrimRight: TGocciaValue;
+  NumericLeft, NumericRight: TGocciaValue;
 begin
-  ToPrimitiveOperands(ALeft, ARight, PrimLeft, PrimRight);
-  if (PrimLeft is TGocciaBigIntValue) and (PrimRight is TGocciaBigIntValue) then
+  NumericLeft := ToNumericOperand(ALeft);
+  NumericRight := ToNumericOperand(ARight);
+  if (NumericLeft is TGocciaBigIntValue) and (NumericRight is TGocciaBigIntValue) then
     Exit(TGocciaBigIntValue.Create(
-      TGocciaBigIntValue(PrimLeft).Value.BitwiseXor(
-        TGocciaBigIntValue(PrimRight).Value)));
-  CheckBigIntMixedTypes(PrimLeft, PrimRight);
-  Result := NumberValue(ToInt32Value(PrimLeft) xor ToInt32Value(PrimRight));
+      TGocciaBigIntValue(NumericLeft).Value.BitwiseXor(
+        TGocciaBigIntValue(NumericRight).Value)));
+  CheckBigIntMixedTypes(NumericLeft, NumericRight);
+  Result := NumberValue(ToInt32Value(NumericLeft) xor ToInt32Value(NumericRight));
 end;
 
 // ES2026 §6.1.6.2.9 BigInt::leftShift
 function EvaluateLeftShift(const ALeft, ARight: TGocciaValue): TGocciaValue;
 var
-  PrimLeft, PrimRight: TGocciaValue;
+  NumericLeft, NumericRight: TGocciaValue;
 begin
-  ToPrimitiveOperands(ALeft, ARight, PrimLeft, PrimRight);
-  if (PrimLeft is TGocciaBigIntValue) and (PrimRight is TGocciaBigIntValue) then
+  NumericLeft := ToNumericOperand(ALeft);
+  NumericRight := ToNumericOperand(ARight);
+  if (NumericLeft is TGocciaBigIntValue) and (NumericRight is TGocciaBigIntValue) then
     Exit(TGocciaBigIntValue.Create(
-      TGocciaBigIntValue(PrimLeft).Value.ShiftLeft(
-        TGocciaBigIntValue(PrimRight).Value.ToInt64)));
-  CheckBigIntMixedTypes(PrimLeft, PrimRight);
+      TGocciaBigIntValue(NumericLeft).Value.ShiftLeft(
+        TGocciaBigIntValue(NumericRight).Value.ToInt64)));
+  CheckBigIntMixedTypes(NumericLeft, NumericRight);
   Result := NumberValue(
-    ToInt32Value(PrimLeft) shl (ToUint32Value(PrimRight) and 31));
+    ToInt32Value(NumericLeft) shl (ToUint32Value(NumericRight) and 31));
 end;
 
 // ES2026 §6.1.6.2.10 BigInt::signedRightShift
 function EvaluateRightShift(const ALeft, ARight: TGocciaValue): TGocciaValue;
 var
-  PrimLeft, PrimRight: TGocciaValue;
+  NumericLeft, NumericRight: TGocciaValue;
 begin
-  ToPrimitiveOperands(ALeft, ARight, PrimLeft, PrimRight);
-  if (PrimLeft is TGocciaBigIntValue) and (PrimRight is TGocciaBigIntValue) then
+  NumericLeft := ToNumericOperand(ALeft);
+  NumericRight := ToNumericOperand(ARight);
+  if (NumericLeft is TGocciaBigIntValue) and (NumericRight is TGocciaBigIntValue) then
     Exit(TGocciaBigIntValue.Create(
-      TGocciaBigIntValue(PrimLeft).Value.ShiftRight(
-        TGocciaBigIntValue(PrimRight).Value.ToInt64)));
-  CheckBigIntMixedTypes(PrimLeft, PrimRight);
+      TGocciaBigIntValue(NumericLeft).Value.ShiftRight(
+        TGocciaBigIntValue(NumericRight).Value.ToInt64)));
+  CheckBigIntMixedTypes(NumericLeft, NumericRight);
   Result := NumberValue(
-    SarLongint(ToInt32Value(PrimLeft), ToUint32Value(PrimRight) and 31));
+    SarLongint(ToInt32Value(NumericLeft), ToUint32Value(NumericRight) and 31));
 end;
 
 // ES2026 §6.1.6.2.11 BigInt::unsignedRightShift
 function EvaluateUnsignedRightShift(const ALeft, ARight: TGocciaValue): TGocciaValue;
 var
-  PrimLeft, PrimRight: TGocciaValue;
+  NumericLeft, NumericRight: TGocciaValue;
 begin
-  ToPrimitiveOperands(ALeft, ARight, PrimLeft, PrimRight);
-  if (PrimLeft is TGocciaBigIntValue) or (PrimRight is TGocciaBigIntValue) then
+  NumericLeft := ToNumericOperand(ALeft);
+  NumericRight := ToNumericOperand(ARight);
+  if (NumericLeft is TGocciaBigIntValue) or (NumericRight is TGocciaBigIntValue) then
     ThrowTypeError(SErrorBigIntUnsignedRightShift,
       SSuggestBigIntNoMixedArithmetic);
   Result := NumberValue(
-    ToUint32Value(PrimLeft) shr (ToUint32Value(PrimRight) and 31));
+    ToUint32Value(NumericLeft) shr (ToUint32Value(NumericRight) and 31));
 end;
 
 // ES2026 §6.1.6.2.11 BigInt::bitwiseNOT
@@ -771,13 +827,73 @@ begin
   Result := NormalizeRelation(ABigInt.Value.Compare(NumAsBigInt));
 end;
 
-function CompareStringValues(const ALeft, ARight: string): Integer; inline;
+function ReadNextUTF16CodeUnit(const AText: string; var AByteIndex: Integer;
+  var APendingLowSurrogate: Integer; out ACodeUnit: Cardinal): Boolean;
+var
+  ByteLength: Integer;
+  CodePoint: Cardinal;
+  Supplementary: Cardinal;
 begin
-  if ALeft < ARight then
-    Exit(RELATION_LESS);
-  if ALeft > ARight then
-    Exit(RELATION_GREATER);
-  Result := RELATION_EQUAL;
+  if APendingLowSurrogate >= 0 then
+  begin
+    ACodeUnit := Cardinal(APendingLowSurrogate);
+    APendingLowSurrogate := -1;
+    Exit(True);
+  end;
+
+  if AByteIndex > Length(AText) then
+    Exit(False);
+
+  if TryReadUTF8CodePointAllowSurrogates(AText, AByteIndex, CodePoint,
+     ByteLength) then
+  begin
+    Inc(AByteIndex, ByteLength);
+    if CodePoint <= $FFFF then
+    begin
+      ACodeUnit := CodePoint;
+      Exit(True);
+    end;
+
+    Supplementary := CodePoint - $10000;
+    ACodeUnit := $D800 + (Supplementary shr 10);
+    APendingLowSurrogate := Integer($DC00 + (Supplementary and $3FF));
+    Exit(True);
+  end;
+
+  ACodeUnit := Ord(AText[AByteIndex]);
+  Inc(AByteIndex);
+  Result := True;
+end;
+
+function CompareStringValues(const ALeft, ARight: string): Integer; inline;
+var
+  LeftByteIndex, RightByteIndex: Integer;
+  LeftPendingLow, RightPendingLow: Integer;
+  LeftUnit, RightUnit: Cardinal;
+  HasLeft, HasRight: Boolean;
+begin
+  LeftByteIndex := 1;
+  RightByteIndex := 1;
+  LeftPendingLow := -1;
+  RightPendingLow := -1;
+
+  while True do
+  begin
+    HasLeft := ReadNextUTF16CodeUnit(ALeft, LeftByteIndex, LeftPendingLow,
+      LeftUnit);
+    HasRight := ReadNextUTF16CodeUnit(ARight, RightByteIndex,
+      RightPendingLow, RightUnit);
+    if not HasLeft and not HasRight then
+      Exit(RELATION_EQUAL);
+    if not HasLeft then
+      Exit(RELATION_LESS);
+    if not HasRight then
+      Exit(RELATION_GREATER);
+    if LeftUnit < RightUnit then
+      Exit(RELATION_LESS);
+    if LeftUnit > RightUnit then
+      Exit(RELATION_GREATER);
+  end;
 end;
 
 function CompareBigIntAndString(const ABigInt: TGocciaBigIntValue;

@@ -96,6 +96,27 @@ test("string primitives enumerate character indices", () => {
   expect(keys).toEqual(["0", "1", "2"]);
 });
 
+test("array-index property names are ordered before other string keys", () => {
+  const obj = { p2: 0, p4: 0, p1: 0 };
+  obj[2] = 0;
+  obj[0] = 0;
+  obj[1] = 0;
+
+  const keys = [];
+  for (const key in obj) keys.push(key);
+
+  expect(keys).toEqual(["0", "1", "2", "p2", "p4", "p1"]);
+});
+
+test("lexical loop head names are in TDZ while evaluating the source", () => {
+  let key = "outer";
+  expect(() => {
+    for (let key in { [key]: 1 }) {
+    }
+  }).toThrow(ReferenceError);
+  expect(key).toBe("outer");
+});
+
 test("deleted properties are not yielded when reached", () => {
   const obj = { a: 1, b: 2 };
   const keys = [];

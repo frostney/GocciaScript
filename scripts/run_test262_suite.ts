@@ -15,6 +15,9 @@
  *   - Negative runtime: tiny try/catch wrapper prints
  *     "Test262:NegativeTestError:<name>" / "Test262:NegativeTestNoError";
  *     orchestrator matches the captured name against the expected type.
+ *     Top-level global declaration-instantiation runtime negatives run
+ *     unwrapped because wrapping them in a block changes the semantics
+ *     under test.
  *   - Negative parse: body alone; non-zero exit = pass (parse failed),
  *     zero exit = fail.
  *
@@ -238,6 +241,7 @@ type WrapperKind =
   | "positive_sync"
   | "positive_async"
   | "negative_runtime"
+  | "negative_runtime_unwrapped"
   | "negative_parse";
 
 interface BuildOptions {
@@ -245,12 +249,18 @@ interface BuildOptions {
   strictMode: boolean;
 }
 
+function joinPreludeAndBody(prelude: string, body: string): string {
+  if (prelude.length === 0) return body;
+  return `${prelude}${prelude.endsWith("\n") ? "" : "\n"}${body}`;
+}
+
 /**
  * Compose the source the engine actually executes. Sync, async, empty, and
  * script-scope tests are all `harness + body` (no special wrapping). The
- * negative-runtime wrapper is a tiny marker-emitting try/catch — the only
- * Goccia-specific addition to the stock convention. Negative-parse is
- * body-only.
+ * negative-runtime wrapper is a tiny marker-emitting try/catch. Top-level
+ * negative runtime tests that rely on Script global declaration instantiation
+ * run unwrapped so the wrapper does not introduce a block scope.
+ * Negative-parse is body-only.
  *
  * `onlyStrict` tests get a directive prefix so they exercise strict runtime
  * semantics while still receiving compatibility-gated parser support.
@@ -262,6 +272,9 @@ function buildTestSource(
 ): string {
   const strictPrefix = opts.strictMode ? '"use strict";\n' : "";
   if (opts.kind === "negative_parse") return `${strictPrefix}${body}`;
+  if (opts.kind === "negative_runtime_unwrapped") {
+    return joinPreludeAndBody(`${strictPrefix}${harnessSource}`, body);
+  }
   if (opts.kind === "negative_runtime") {
     return `${strictPrefix}${harnessSource}
 try {
@@ -278,11 +291,12 @@ ${body}
 }
 `;
   }
+  const prelude = `${strictPrefix}${harnessSource}`;
   if (opts.kind === "positive_async") {
-    return `${strictPrefix}${harnessSource}\n${body}`;
+    return joinPreludeAndBody(prelude, body);
   }
   // positive_sync
-  return `${strictPrefix}${harnessSource}\n${body}`;
+  return joinPreludeAndBody(prelude, body);
 }
 
 // ---------------------------------------------------------------------------
@@ -418,6 +432,25 @@ function classifyRunResult(args: ClassifyArgs): {
       reason: "negative-runtime wrapper produced no marker",
       diagnostic: result.stderr.slice(0, 800),
     };
+  }
+
+  if (kind === "negative_runtime_unwrapped") {
+    if (exitCode === 0) {
+      return {
+        outcome: "FAIL",
+        reason: `expected ${expectedErrorType ?? "error"}, none thrown`,
+        diagnostic: result.stdout.slice(0, 300),
+      };
+    }
+    const actual = firstLine(result.stderr).split(":", 1)[0].trim();
+    if (expectedErrorType !== undefined && actual !== expectedErrorType) {
+      return {
+        outcome: "FAIL",
+        reason: `expected ${expectedErrorType}, got ${actual || "unknown"}`,
+        diagnostic: result.stderr.slice(0, 300),
+      };
+    }
+    return { outcome: "PASS", reason: "", diagnostic: "" };
   }
 
   // positive_sync / positive_async
@@ -593,6 +626,15 @@ function needsNonStrictCompat(isModule: boolean): boolean {
   return !isModule;
 }
 
+function needsUnwrappedNegativeRuntime(
+  testId: string,
+  negative: Frontmatter["negative"],
+): boolean {
+  return negative?.phase === "runtime" &&
+    negative?.type === "SyntaxError" &&
+    testId.startsWith("language/global-code/");
+}
+
 function test262FeatureFlags(features: readonly string[]): string[] {
   const flags: string[] = [];
   if (features.includes("source-phase-imports-module-source")) {
@@ -644,6 +686,8 @@ async function runOneTest(
       isModule
     ) {
       kind = "negative_parse";
+    } else if (needsUnwrappedNegativeRuntime(test.id, negative)) {
+      kind = "negative_runtime_unwrapped";
     } else {
       kind = "negative_runtime";
     }

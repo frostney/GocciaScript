@@ -1,4 +1,10 @@
 describe('Optional Chaining', () => {
+  test('question-dot before a decimal literal remains a conditional expression', () => {
+    const value = true ?.30 : false;
+
+    expect(value).toBe(0.3);
+  });
+
   test('returns property value when object exists', () => {
     const obj = { a: { b: 42 } };
     expect(obj?.a?.b).toBe(42);
@@ -93,6 +99,25 @@ describe('Optional Chaining', () => {
     };
 
     expect(obj?.getValue()).toBe(42);
+  });
+
+  test('preserves call-site this for parenthesized optional method references', () => {
+    const obj = {
+      value: 42,
+      getValue() {
+        return this.value;
+      },
+    };
+
+    expect((obj?.getValue)()).toBe(42);
+    expect((obj?.getValue)?.()).toBe(42);
+  });
+
+  test('parenthesized optional method references do not extend the chain', () => {
+    const obj = null;
+
+    expect(() => (obj?.getValue)()).toThrow(TypeError);
+    expect((obj?.getValue)?.()).toBe(undefined);
   });
 
   test('returns undefined for optional direct calls on nullish callees', () => {

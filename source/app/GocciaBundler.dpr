@@ -126,6 +126,7 @@ begin
     EngineOptions.StrictTypes, FileConfig);
 
   CompiledModule := nil;
+  PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
   PipelineOptions.Preprocessors := TGocciaEngine.DefaultPreprocessors;
   PipelineOptions.Compatibility := EffectiveCompatibility;
   PipelineOptions.SourceType := EffectiveSourceType;

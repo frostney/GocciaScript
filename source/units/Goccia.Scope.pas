@@ -29,6 +29,7 @@ type
   private
     FLexicalBindings: TGocciaScopeBindingMap;
     FVarBindings: TGocciaScopeBindingMap;
+    FGlobalVarNames: TDictionary<string, Boolean>;
     FParent: TGocciaScope;
     FThisValue: TGocciaValue;
     FScopeKind: TGocciaScopeKind;
@@ -46,6 +47,7 @@ type
     function TryGetBindingSkipLexical(const AName: string;
       out ABinding: TLexicalBinding; const ALine: Integer = 0;
       const AColumn: Integer = 0): Boolean;
+    procedure RegisterGlobalVarDeclaration(const AName: string);
     procedure RaiseBindingNotInitialized(const AName: string;
       const ALine, AColumn: Integer);
     procedure RaiseUndefinedVariable(const AName: string;
@@ -77,6 +79,7 @@ type
       const AHasInitializer: Boolean; const ACanDelete: Boolean = False);
     function ContainsOwnVarBinding(const AName: string): Boolean;
     function HasLexicalDeclaration(const AName: string): Boolean;
+    function HasRestrictedGlobalProperty(const AName: string): Boolean;
     function CanDeclareGlobalVar(const AName: string): Boolean;
     function CanDeclareGlobalFunction(const AName: string): Boolean;
     procedure CreateGlobalVarBinding(const AName: string;
@@ -195,11 +198,31 @@ type
 
   // Marker class for function call scopes
   TGocciaCallScope = class(TGocciaScope)
+  private
+    FNewTarget: TGocciaValue;
   protected
     function GetThisValue: TGocciaValue; override;
+    function GetNewTarget: TGocciaValue; override;
     function IsFunctionBoundary: Boolean; override;
   public
     constructor Create(const AParent: TGocciaScope; const AFunctionName: string; const ACapacity: Integer = 0);
+    procedure MarkReferences; override;
+    property NewTarget: TGocciaValue read FNewTarget write FNewTarget;
+  end;
+
+  // ES2026 named function-expression environment. The function name is an
+  // immutable binding, but not a strict binding, so sloppy assignment is a
+  // no-op while strict assignment still throws.
+  TGocciaFunctionNameScope = class(TGocciaScope)
+  private
+    FFunctionName: string;
+  public
+    constructor Create(const AParent: TGocciaScope;
+      const AFunctionName: string);
+    procedure DefineFunctionNameBinding(const AValue: TGocciaValue);
+    function TryAssignExistingBinding(const AName: string;
+      const AValue: TGocciaValue; const ANonStrictMode: Boolean = False;
+      const ALine: Integer = 0; const AColumn: Integer = 0): Boolean; override;
   end;
 
   // Arrow function call scope -- transparent to Find* scope walks
@@ -333,6 +356,8 @@ begin
     FLexicalBindings.Free;
   if Assigned(FVarBindings) then
     FVarBindings.Free;
+  if Assigned(FGlobalVarNames) then
+    FGlobalVarNames.Free;
 
   if Assigned(FThisValue) then
     FThisValue := nil;
@@ -345,6 +370,15 @@ begin
   Result := TGocciaScope.Create(Self, AScopeKind, ACustomLabel, ACapacity);
   // Inherit ThisValue so that block scopes can resolve `this` correctly
   Result.FThisValue := FThisValue;
+end;
+
+procedure TGocciaScope.RegisterGlobalVarDeclaration(const AName: string);
+begin
+  if FScopeKind <> skGlobal then
+    Exit;
+  if not Assigned(FGlobalVarNames) then
+    FGlobalVarNames := TDictionary<string, Boolean>.Create;
+  FGlobalVarNames.AddOrSetValue(AName, True);
 end;
 
 function TGocciaScope.GetThisValue: TGocciaValue;
@@ -525,14 +559,55 @@ procedure TGocciaScope.PredeclareLexicalBinding(const AName: string;
   const AColumn: Integer = 0);
 var
   LexicalBinding: TLexicalBinding;
+  ExistingBinding: TLexicalBinding;
+  GlobalObject: TGocciaObjectValue;
+  Descriptor: TGocciaPropertyDescriptor;
   Error: TGocciaSyntaxError;
 begin
-  if FLexicalBindings.ContainsKey(AName) then
+  if (FScopeKind = skGlobal) and ContainsOwnVarBinding(AName) then
   begin
     Error := TGocciaSyntaxError.Create(
-      Format(SErrorIdentifierAlreadyDeclared, [AName]), ALine, AColumn, '', nil);
+      Format(SErrorIdentifierAlreadyDeclared, [AName]), ALine, AColumn, '',
+      nil);
     Error.Suggestion := SSuggestAlreadyDeclared;
     raise Error;
+  end;
+
+  if HasRestrictedGlobalProperty(AName) then
+  begin
+    Error := TGocciaSyntaxError.Create(
+      Format(SErrorIdentifierAlreadyDeclared, [AName]), ALine, AColumn, '',
+      nil);
+    Error.Suggestion := SSuggestAlreadyDeclared;
+    raise Error;
+  end;
+
+  if FLexicalBindings.TryGetValue(AName, ExistingBinding) then
+  begin
+    if ExistingBinding.BuiltIn and (FScopeKind = skGlobal) and
+       (FThisValue is TGocciaObjectValue) then
+    begin
+      GlobalObject := TGocciaObjectValue(FThisValue);
+      Descriptor := GlobalObject.GetOwnPropertyDescriptor(AName);
+      if (not Assigned(Descriptor)) or Descriptor.Configurable then
+        FLexicalBindings.Remove(AName)
+      else
+      begin
+        Error := TGocciaSyntaxError.Create(
+          Format(SErrorIdentifierAlreadyDeclared, [AName]), ALine, AColumn,
+          '', nil);
+        Error.Suggestion := SSuggestAlreadyDeclared;
+        raise Error;
+      end;
+    end
+    else
+    begin
+      Error := TGocciaSyntaxError.Create(
+        Format(SErrorIdentifierAlreadyDeclared, [AName]), ALine, AColumn, '',
+        nil);
+      Error.Suggestion := SSuggestAlreadyDeclared;
+      raise Error;
+    end;
   end;
 
   LexicalBinding.Value := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -572,6 +647,15 @@ begin
           raise Error;
         end;
     end;
+  end;
+
+  if (not ABuiltIn) and HasRestrictedGlobalProperty(AName) then
+  begin
+    Error := TGocciaSyntaxError.Create(
+      Format(SErrorIdentifierAlreadyDeclared, [AName]), ALine, AColumn, '',
+      nil);
+    Error.Suggestion := SSuggestAlreadyDeclared;
+    raise Error;
   end;
 
   // Set up descriptor based on declaration type
@@ -653,6 +737,8 @@ begin
   if (TargetScope.FScopeKind = skGlobal) and
      (TargetScope.FThisValue is TGocciaObjectValue) then
   begin
+    if not ACanDelete then
+      TargetScope.RegisterGlobalVarDeclaration(AName);
     GlobalObject := TGocciaObjectValue(TargetScope.FThisValue);
     if GlobalObject.HasOwnProperty(AName) then
     begin
@@ -697,13 +783,28 @@ end;
 
 function TGocciaScope.ContainsOwnVarBinding(const AName: string): Boolean;
 begin
-  Result := Assigned(FVarBindings) and FVarBindings.ContainsKey(AName);
+  Result := (Assigned(FVarBindings) and FVarBindings.ContainsKey(AName)) or
+    (Assigned(FGlobalVarNames) and FGlobalVarNames.ContainsKey(AName));
 end;
 
 // ES2026 §9.1.1.4.15 HasLexicalDeclaration(N) — global-scope approximation.
 function TGocciaScope.HasLexicalDeclaration(const AName: string): Boolean;
 begin
   Result := ContainsOwnLexicalBinding(AName) and not IsBuiltInBinding(AName);
+end;
+
+// ES2026 §9.1.1.4.14 HasRestrictedGlobalProperty(N)
+function TGocciaScope.HasRestrictedGlobalProperty(const AName: string): Boolean;
+var
+  Descriptor: TGocciaPropertyDescriptor;
+  GlobalObject: TGocciaObjectValue;
+begin
+  if (FScopeKind <> skGlobal) or not (FThisValue is TGocciaObjectValue) then
+    Exit(False);
+
+  GlobalObject := TGocciaObjectValue(FThisValue);
+  Descriptor := GlobalObject.GetOwnPropertyDescriptor(AName);
+  Result := Assigned(Descriptor) and not Descriptor.Configurable;
 end;
 
 // ES2026 §9.1.1.4.17 CanDeclareGlobalVar(N)
@@ -751,6 +852,8 @@ begin
     Exit;
   end;
 
+  if not ACanDelete then
+    RegisterGlobalVarDeclaration(AName);
   GlobalObject := TGocciaObjectValue(FThisValue);
   if GlobalObject.HasOwnProperty(AName) then
     Exit;
@@ -776,6 +879,8 @@ begin
     Exit;
   end;
 
+  if not ACanDelete then
+    RegisterGlobalVarDeclaration(AName);
   GlobalObject := TGocciaObjectValue(FThisValue);
   Descriptor := GlobalObject.GetOwnPropertyDescriptor(AName);
   if Assigned(Descriptor) and not Descriptor.Configurable then
@@ -1040,9 +1145,24 @@ end;
 function TGocciaScope.DeleteBinding(const AName: string): Boolean;
 var
   Binding: TLexicalBinding;
+  GlobalObject: TGocciaObjectValue;
 begin
-  if ContainsOwnLexicalBinding(AName) then
+  if FLexicalBindings.TryGetValue(AName, Binding) then
+  begin
+    if (FScopeKind = skGlobal) and Binding.BuiltIn and
+       (FThisValue is TGocciaObjectValue) then
+    begin
+      GlobalObject := TGocciaObjectValue(FThisValue);
+      if GlobalObject.HasOwnProperty(AName) then
+      begin
+        Result := GlobalObject.DeleteProperty(AName);
+        if Result then
+          FLexicalBindings.Remove(AName);
+        Exit;
+      end;
+    end;
     Exit(False);
+  end;
 
   if Assigned(FVarBindings) and FVarBindings.TryGetValue(AName, Binding) then
   begin
@@ -1189,9 +1309,62 @@ begin
   Result := FThisValue;
 end;
 
+function TGocciaCallScope.GetNewTarget: TGocciaValue;
+begin
+  Result := FNewTarget;
+end;
+
 function TGocciaCallScope.IsFunctionBoundary: Boolean;
 begin
   Result := True;
+end;
+
+procedure TGocciaCallScope.MarkReferences;
+begin
+  inherited;
+  if Assigned(FNewTarget) then
+    FNewTarget.MarkReferences;
+end;
+
+{ TGocciaFunctionNameScope }
+
+constructor TGocciaFunctionNameScope.Create(const AParent: TGocciaScope;
+  const AFunctionName: string);
+begin
+  inherited Create(AParent, skBlock, 'FunctionName');
+  FFunctionName := AFunctionName;
+end;
+
+procedure TGocciaFunctionNameScope.DefineFunctionNameBinding(
+  const AValue: TGocciaValue);
+begin
+  DefineLexicalBinding(FFunctionName, AValue, dtConst);
+end;
+
+function TGocciaFunctionNameScope.TryAssignExistingBinding(const AName: string;
+  const AValue: TGocciaValue; const ANonStrictMode: Boolean = False;
+  const ALine: Integer = 0; const AColumn: Integer = 0): Boolean;
+var
+  LexicalBinding: TLexicalBinding;
+begin
+  if (AName = FFunctionName) and
+     FLexicalBindings.TryGetValue(AName, LexicalBinding) then
+  begin
+    if not LexicalBinding.IsAccessible then
+      RaiseBindingNotInitialized(AName, ALine, AColumn);
+    if not LexicalBinding.Writable then
+    begin
+      if ANonStrictMode then
+        Exit(True);
+      raise TGocciaTypeError.Create(
+        Format(SErrorAssignToConstant, [AName]),
+        ALine, AColumn, '', nil,
+        SSuggestUseLetNotConst);
+    end;
+  end;
+
+  Result := inherited TryAssignExistingBinding(AName, AValue,
+    ANonStrictMode, ALine, AColumn);
 end;
 
 { TGocciaArrowCallScope }
@@ -1233,6 +1406,10 @@ end;
 
 function TGocciaMethodCallScope.MarkSuperConstructorCalled: Boolean;
 begin
+  if FSuperConstructorCalled then
+    raise TGocciaReferenceError.Create(
+      'Super constructor may only be called once',
+      0, 0, '', nil);
   FSuperConstructorCalled := True;
   Result := True;
 end;

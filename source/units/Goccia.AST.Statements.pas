@@ -222,9 +222,11 @@ type
   TGocciaReturnStatement = class(TGocciaStatement)
   private
     FValue: TGocciaExpression;
+    FHasExpression: Boolean;
   public
     constructor Create(const AValue: TGocciaExpression; const ALine, AColumn: Integer);
     function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
+    property HasExpression: Boolean read FHasExpression;
     property Value: TGocciaExpression read FValue;
   end;
 
@@ -678,6 +680,30 @@ begin
     (SourceText = #39 + USE_STRICT_DIRECTIVE + #39);
 end;
 
+function IsAnonymousFunctionNameInitializer(
+  const AExpression: TGocciaExpression): Boolean;
+begin
+  Result := Assigned(AExpression) and
+    ((AExpression is TGocciaArrowFunctionExpression) or
+     ((AExpression is TGocciaFunctionExpression) and
+      (TGocciaFunctionExpression(AExpression).Name = '')) or
+     ((AExpression is TGocciaClassExpression) and
+      (TGocciaClassExpression(AExpression).ClassDefinition.Name = '')));
+end;
+
+procedure ApplyInferredNameForVariableInitializer(
+  const AInitializer: TGocciaExpression; const AValue: TGocciaValue;
+  const AName: string);
+begin
+  if not IsAnonymousFunctionNameInitializer(AInitializer) then
+    Exit;
+
+  if AValue is TGocciaFunctionValue then
+    TGocciaFunctionValue(AValue).SetInferredName(AName)
+  else if AValue is TGocciaClassValue then
+    TGocciaClassValue(AValue).SetInferredName(AName);
+end;
+
 // ES2026 §11.2.2 Directive Prologues and the Use Strict Directive
 function HasUseStrictDirective(const ABody: TGocciaASTNode): Boolean;
 var
@@ -909,6 +935,7 @@ end;
     const ALine, AColumn: Integer);
   begin
     inherited Create(ALine, AColumn);
+    FHasExpression := AValue <> nil;
     if AValue = nil then
       FValue := TGocciaLiteralExpression.Create(TGocciaUndefinedLiteralValue.UndefinedValue, ALine, AColumn)
     else
@@ -1198,11 +1225,13 @@ end;
   var
     I: Integer;
     Value: TGocciaValue;
+    ResolvedObjectBinding: TGocciaObjectValue;
+    ResolvedScopeBinding: TGocciaScope;
     HasRealStrictInit: Boolean;
     AnnotationType, TypeHint: TGocciaLocalType;
     Continuation: TGocciaGeneratorContinuation;
   begin
-    Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
+    Result := TGocciaControlFlow.Empty;
     Continuation := CurrentGeneratorContinuation;
     if Assigned(Continuation) then
       I := Continuation.GetStatementIndex(Self)
@@ -1210,6 +1239,16 @@ end;
       I := 0;
     while I < Length(Variables) do
     begin
+      ResolvedObjectBinding := nil;
+      ResolvedScopeBinding := nil;
+      if IsVar and Variables[I].HasInitializer then
+      begin
+        if not AContext.InEvalCode then
+          AContext.Scope.DefineVariableBinding(Variables[I].Name,
+            TGocciaUndefinedLiteralValue.UndefinedValue, False);
+        AContext.Scope.ResolveAssignmentTarget(Variables[I].Name,
+          ResolvedObjectBinding, ResolvedScopeBinding);
+      end;
       try
         Value := EvaluateExpression(Variables[I].Initializer, AContext);
       except
@@ -1226,10 +1265,8 @@ end;
           raise;
         end;
       end;
-      if (Value is TGocciaFunctionValue) and (TGocciaFunctionValue(Value).Name = '') then
-        TGocciaFunctionValue(Value).Name := Variables[I].Name
-      else if Value is TGocciaClassValue then
-        TGocciaClassValue(Value).SetInferredName(Variables[I].Name);
+      ApplyInferredNameForVariableInitializer(Variables[I].Initializer,
+        Value, Variables[I].Name);
 
       { Strict-types enforcement: when --strict-types is enabled, an
         explicit type annotation (e.g. `let x: number = ...`) is
@@ -1258,15 +1295,29 @@ end;
 
       if IsVar then
       begin
-        if AContext.InEvalCode then
+        if Variables[I].HasInitializer then
         begin
-          if Variables[I].HasInitializer then
+          if Assigned(ResolvedObjectBinding) then
+          begin
+            if AContext.NonStrictMode then
+              ResolvedObjectBinding.AssignPropertyWithReceiver(
+                Variables[I].Name, Value, ResolvedObjectBinding)
+            else
+              ResolvedObjectBinding.AssignProperty(Variables[I].Name, Value);
+          end
+          else if Assigned(ResolvedScopeBinding) then
+            ResolvedScopeBinding.AssignBinding(Variables[I].Name, Value, Line,
+              Column, AContext.NonStrictMode)
+          else
             AContext.Scope.AssignBinding(Variables[I].Name, Value, Line,
               Column, AContext.NonStrictMode);
         end
         else
-          AContext.Scope.DefineVariableBinding(Variables[I].Name, Value,
-            Variables[I].HasInitializer);
+        begin
+          if not AContext.InEvalCode then
+            AContext.Scope.DefineVariableBinding(Variables[I].Name, Value,
+              Variables[I].HasInitializer);
+        end;
       end
       else if IsConst then
         AContext.Scope.DefineFromToken(Variables[I].Name, Value, gttConst)
@@ -1295,7 +1346,8 @@ end;
 
   function TGocciaDestructuringDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
   begin
-    Result := TGocciaControlFlow.Normal(EvaluateDestructuringDeclaration(Self, AContext));
+    EvaluateDestructuringDeclaration(Self, AContext);
+    Result := TGocciaControlFlow.Empty;
   end;
 
   function TGocciaBlockStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
@@ -1343,7 +1395,8 @@ end;
     try
       WithContext := AContext;
       WithContext.Scope := WithScope;
-      Result := EvaluateStatement(Body, WithContext);
+      Result := EvaluateStatement(Body, WithContext).UpdateEmpty(
+        TGocciaUndefinedLiteralValue.UndefinedValue);
     finally
       if Assigned(GC) then
         GC.RemoveTempRoot(WithScope);
@@ -1369,7 +1422,7 @@ end;
   var
     ReturnValue: TGocciaValue;
   begin
-    if Assigned(Self.Value) then
+    if Self.HasExpression and Assigned(Self.Value) then
     begin
       ReturnValue := EvaluateExpression(Self.Value, AContext);
       if ReturnValue = nil then
@@ -1377,7 +1430,7 @@ end;
     end
     else
       ReturnValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-    Result := TGocciaControlFlow.Return(ReturnValue);
+    Result := TGocciaControlFlow.Return(ReturnValue, Self.HasExpression);
   end;
 
   function TGocciaThrowStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
@@ -1411,7 +1464,7 @@ end;
   function TGocciaClassDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
   begin
     EvaluateClass(Self, AContext);
-    Result := TGocciaControlFlow.Normal(nil);
+    Result := TGocciaControlFlow.Empty;
   end;
 
   function TGocciaEnumDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
@@ -1432,8 +1485,16 @@ end;
     NamespaceObject: TGocciaValue;
     SourceLoader: TLoadModuleSourceCallback;
     Value: TGocciaValue;
+
+    procedure BindImportValue(const AName: string; const AValue: TGocciaValue);
+    begin
+      if AContext.Scope.ContainsOwnLexicalBinding(AName) then
+        AContext.Scope.ForceUpdateBinding(AName, AValue)
+      else
+        AContext.Scope.DefineLexicalBinding(AName, AValue, dtConst);
+    end;
   begin
-    Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
+    Result := TGocciaControlFlow.Empty;
 
     if Phase = icpDefer then
     begin
@@ -1458,8 +1519,7 @@ end;
       if Assigned(TGarbageCollector.Instance) then
         TGarbageCollector.Instance.AddTempRoot(NamespaceObject);
       try
-        AContext.Scope.DefineLexicalBinding(NamespaceName, NamespaceObject,
-          dtConst);
+        BindImportValue(NamespaceName, NamespaceObject);
       finally
         if Assigned(TGarbageCollector.Instance) then
           TGarbageCollector.Instance.RemoveTempRoot(NamespaceObject);
@@ -1485,7 +1545,7 @@ end;
         TGarbageCollector.Instance.AddTempRoot(Value);
       try
         for ImportPair in Imports do
-          AContext.Scope.DefineLexicalBinding(ImportPair.Key, Value, dtConst);
+          BindImportValue(ImportPair.Key, Value);
       finally
         if Assigned(TGarbageCollector.Instance) then
           TGarbageCollector.Instance.RemoveTempRoot(Value);
@@ -1498,9 +1558,7 @@ end;
     for ImportPair in Imports do
     begin
       if Module.TryGetExportValue(ImportPair.Value, Value) then
-      begin
-        AContext.Scope.DefineLexicalBinding(ImportPair.Key, Value, dtConst);
-      end
+        BindImportValue(ImportPair.Key, Value)
       else
       begin
         AContext.OnError(Format('Module "%s" has no export named "%s"',
@@ -1514,8 +1572,7 @@ end;
       if Assigned(TGarbageCollector.Instance) then
         TGarbageCollector.Instance.AddTempRoot(NamespaceObject);
       try
-        AContext.Scope.DefineLexicalBinding(NamespaceName, NamespaceObject,
-          dtConst);
+        BindImportValue(NamespaceName, NamespaceObject);
       finally
         if Assigned(TGarbageCollector.Instance) then
           TGarbageCollector.Instance.RemoveTempRoot(NamespaceObject);
@@ -1525,14 +1582,14 @@ end;
 
   function TGocciaExportDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
   begin
-    Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
+    Result := TGocciaControlFlow.Empty;
   end;
 
   function TGocciaFunctionDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
   begin
     // Function declarations are no-ops at runtime: their bindings and function
     // values are installed by HoistFunctionDeclarations before statement execution.
-    Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
+    Result := TGocciaControlFlow.Empty;
   end;
 
   function TGocciaExportDefaultDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
@@ -1541,9 +1598,9 @@ end;
     Value: TGocciaValue;
   begin
     if IsDirectDeclaration and (Expression is TGocciaFunctionExpression) and
+       (LocalName <> GOCCIA_DEFAULT_EXPORT_BINDING) and
        AContext.Scope.ContainsOwnLexicalBinding(LocalName) then
-      Exit(TGocciaControlFlow.Normal(
-        TGocciaUndefinedLiteralValue.UndefinedValue));
+      Exit(TGocciaControlFlow.Empty);
 
     Value := EvaluateExpression(Expression, AContext);
     if ((Expression is TGocciaArrowFunctionExpression) or
@@ -1572,7 +1629,7 @@ end;
       AContext.Scope.DefineLexicalBinding(LocalName, Value, DeclarationType,
         False, Line, Column);
     end;
-    Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
+    Result := TGocciaControlFlow.Empty;
   end;
 
   function TGocciaExportVariableDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
@@ -1600,12 +1657,12 @@ end;
     if Assigned(AContext.LoadModule) then
       AContext.LoadModule(EncodeImportSpecifierAttribute(ModulePath,
         AttributeType), AContext.CurrentFilePath);
-    Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
+    Result := TGocciaControlFlow.Empty;
   end;
 
   function TGocciaEmptyStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
   begin
-    Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
+    Result := TGocciaControlFlow.Empty;
   end;
 
   function TGocciaClassMethod.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;

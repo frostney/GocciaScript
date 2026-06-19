@@ -337,6 +337,9 @@ resourcestring
   SErrorProxyDeleteNonExtensible = 'Proxy deleteProperty trap returned true for property on non-extensible target';
   SErrorProxyGetOwnNonConfigurable = 'Proxy getOwnPropertyDescriptor returned undefined for non-configurable property ''%s''';
   SErrorProxyGetOwnNonExtensible = 'Proxy getOwnPropertyDescriptor returned undefined for property on non-extensible target';
+  SErrorProxyGetOwnIncompatible = 'Proxy getOwnPropertyDescriptor returned an incompatible descriptor for property ''%s''';
+  SErrorProxyGetOwnInvalidNonConfigurable = 'Proxy getOwnPropertyDescriptor returned a non-configurable descriptor for configurable or missing property ''%s''';
+  SErrorProxyGetOwnInvalidNonWritable = 'Proxy getOwnPropertyDescriptor returned a non-configurable, non-writable descriptor for writable or missing property ''%s''';
   SErrorProxyGetOwnReturnType = 'Proxy getOwnPropertyDescriptor must return an object or undefined';
   SErrorProxyDefineReturnedFalse = 'Proxy defineProperty handler returned false for property ''%s''';
   SErrorProxyDefineNonObject = 'Cannot define property on non-object target';
