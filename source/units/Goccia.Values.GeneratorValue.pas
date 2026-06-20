@@ -456,6 +456,9 @@ begin
         raise;
       end;
     end;
+    if (not Done) and FContinuation.LastYieldWasIteratorResult and
+       (Value is TGocciaObjectValue) then
+      Exit(Value);
     Result := CreateIteratorResult(Value, Done);
   end;
 end;

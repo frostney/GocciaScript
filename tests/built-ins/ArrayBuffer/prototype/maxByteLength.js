@@ -48,4 +48,11 @@ describe("get ArrayBuffer.prototype.maxByteLength", () => {
     const getter = Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, "maxByteLength").get;
     expect(() => getter.call({})).toThrow(TypeError);
   });
+
+  test("throws TypeError when copied as own accessor on SharedArrayBuffer", () => {
+    const sab = new SharedArrayBuffer(4);
+    const descriptor = Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, "maxByteLength");
+    Object.defineProperties(sab, { maxByteLength: descriptor });
+    expect(() => sab.maxByteLength).toThrow(TypeError);
+  });
 });

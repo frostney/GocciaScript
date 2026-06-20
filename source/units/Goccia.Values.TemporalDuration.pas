@@ -1637,6 +1637,37 @@ begin
     ThrowTypeError(Format(SErrorTemporalInvalidRelativeTo, [AMethod]), SSuggestTemporalRelativeTo);
 end;
 
+function DurationExactTimeZonedEndOutOfRange(const D: TGocciaTemporalDurationValue;
+  const ARelativeTo: TGocciaValue; const AMethod: string): Boolean;
+var
+  EndEpochNanoseconds: TBigInteger;
+  StartEpochNanoseconds: TBigInteger;
+  TotalNanoseconds: TBigInteger;
+  ZonedDateTime: TGocciaTemporalZonedDateTimeValue;
+begin
+  Result := False;
+  if not D.FYearsBig.IsZero or not D.FMonthsBig.IsZero or
+     not D.FWeeksBig.IsZero or not D.FDaysBig.IsZero then
+    Exit;
+
+  TotalNanoseconds := DurationTotalNanosecondsBig(D);
+  if TotalNanoseconds.IsZero then
+    Exit;
+
+  if ARelativeTo is TGocciaTemporalZonedDateTimeValue then
+    ZonedDateTime := TGocciaTemporalZonedDateTimeValue(ARelativeTo)
+  else if (ARelativeTo is TGocciaStringLiteralValue) and
+          (System.Pos('[', TGocciaStringLiteralValue(ARelativeTo).Value) > 0) then
+    ZonedDateTime := CoerceTemporalZonedDateTime(ARelativeTo, AMethod)
+  else
+    Exit;
+
+  StartEpochNanoseconds := EpochNanosecondsFromParts(
+    ZonedDateTime.EpochMilliseconds, ZonedDateTime.SubMillisecondNanoseconds);
+  EndEpochNanoseconds := StartEpochNanoseconds.Add(TotalNanoseconds);
+  Result := not IsValidEpochNanoseconds(EndEpochNanoseconds);
+end;
+
 // Add AMonths calendar months to a date, clamping the day if needed.
 function AddMonthsToDate(const ADate: TTemporalDateRecord; const AMonths: Int64): TTemporalDateRecord;
 var
@@ -1660,6 +1691,36 @@ begin
   Result.Year := Integer(Y);
   Result.Month := M;
   Result.Day := D;
+end;
+
+// TC39 Temporal §7.5.33 ComputeNudgeWindow(sign, duration, originEpochNs, isoDateTime, timeZone, calendar, increment, unit, additionalShift)
+procedure ValidateZonedRelativeToTotalCalendarWindow(
+  const ADuration: TGocciaTemporalDurationValue;
+  const ARelDate: TTemporalDateRecord; const ATargetUnit: TTemporalUnit);
+const
+  MONTHS_PER_YEAR = 12;
+var
+  Sign: Integer;
+  CalendarStepMonths: Int64;
+  WindowDate: TTemporalDateRecord;
+begin
+  Sign := ADuration.ComputeSign;
+  if Sign = 0 then
+    Exit;
+
+  case ATargetUnit of
+    tuYear:
+      CalendarStepMonths := MONTHS_PER_YEAR;
+    tuMonth:
+      CalendarStepMonths := 1;
+  else
+    Exit;
+  end;
+
+  WindowDate := AddMonthsToDate(ARelDate, CalendarStepMonths * Sign);
+  if not DurationDateInTemporalRange(WindowDate) then
+    ThrowRangeError(Format(SErrorTemporalInvalidRelativeTo, ['Duration.prototype.total']),
+      SSuggestTemporalRelativeTo);
 end;
 
 // Compute the end date of a duration applied from a reference date using
@@ -1793,6 +1854,7 @@ var
   Arg, RelToArg: TGocciaValue;
   OptionsObj: TGocciaObjectValue;
   HasRelativeTo: Boolean;
+  HasZonedRelativeTo: Boolean;
   RelDate: TTemporalDateRecord;
   ResolvedDays: Int64;
   TotalNsBig: TBigInteger;
@@ -1801,6 +1863,7 @@ begin
   D := AsDuration(AThisValue, 'Duration.prototype.total');
   Arg := AArgs.GetElement(0);
   HasRelativeTo := False;
+  HasZonedRelativeTo := False;
 
   if Arg is TGocciaStringLiteralValue then
     UnitStr := TGocciaStringLiteralValue(Arg).Value
@@ -1815,6 +1878,8 @@ begin
 
     RelToArg := OptionsObj.GetProperty('relativeTo');
     HasRelativeTo := (RelToArg <> nil) and not (RelToArg is TGocciaUndefinedLiteralValue);
+    if HasRelativeTo then
+      HasZonedRelativeTo := IsDurationZonedRelativeToValue(RelToArg);
   end
   else
   begin
@@ -1835,7 +1900,13 @@ begin
   begin
     if not HasRelativeTo then
       ThrowRangeError(SErrorDurationTotalRequiresRelativeTo, SSuggestTemporalRelativeTo);
+    if DurationExactTimeZonedEndOutOfRange(D, RelToArg,
+      'Duration.prototype.total') then
+      ThrowRangeError(Format(SErrorTemporalInvalidRelativeTo,
+        ['Duration.prototype.total']), SSuggestTemporalRelativeTo);
     RelDate := ParseRelativeTo(RelToArg, 'Duration.prototype.total');
+    if HasZonedRelativeTo then
+      ValidateZonedRelativeToTotalCalendarWindow(D, RelDate, TargetUnit);
     if TargetUnit = tuMonth then
       Result := TotalInMonths(D, RelDate)
     else

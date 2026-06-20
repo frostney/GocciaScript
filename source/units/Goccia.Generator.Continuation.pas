@@ -129,6 +129,7 @@ type
     FForLoopStates: TDictionary<TObject, TGocciaGeneratorForLoopState>;
     FIsAsyncGenerator: Boolean;
     FLastYieldWasDelegate: Boolean;
+    FLastYieldWasIteratorResult: Boolean;
     FReturnRequiresAwait: Boolean;
     procedure ClearDelegateState;
   public
@@ -181,6 +182,7 @@ type
     property Completed: Boolean read FCompleted;
     property IsAsyncGenerator: Boolean read FIsAsyncGenerator;
     property LastYieldWasDelegate: Boolean read FLastYieldWasDelegate;
+    property LastYieldWasIteratorResult: Boolean read FLastYieldWasIteratorResult;
     property ReturnRequiresAwait: Boolean read FReturnRequiresAwait;
   end;
 
@@ -597,6 +599,7 @@ begin
   FLoopStates := TDictionary<TObject, TGocciaGeneratorLoopState>.Create;
   FForLoopStates := TDictionary<TObject, TGocciaGeneratorForLoopState>.Create;
   FLastYieldWasDelegate := False;
+  FLastYieldWasIteratorResult := False;
   FReturnRequiresAwait := False;
 end;
 
@@ -665,6 +668,7 @@ begin
   FPendingValue := AValue;
   FStarted := True;
   FLastYieldWasDelegate := False;
+  FLastYieldWasIteratorResult := False;
   FReturnRequiresAwait := False;
 
   PreviousContinuation := GCurrentContinuation;
@@ -917,9 +921,19 @@ begin
         IteratorResult := TGocciaObjectValue(RawIteratorResult);
         if not IteratorResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value then
         begin
-          YieldedValue := IteratorResult.GetProperty(PROP_VALUE);
-          if not Assigned(YieldedValue) then
-            YieldedValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+          if FIsAsyncGenerator then
+          begin
+            YieldedValue := IteratorResult.GetProperty(PROP_VALUE);
+            if not Assigned(YieldedValue) then
+              YieldedValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+          end
+          else
+          begin
+            // ES2026 §15.5.5 YieldExpression : yield * AssignmentExpression:
+            // sync return() with done:false yields innerReturnResult itself.
+            YieldedValue := IteratorResult;
+            FLastYieldWasIteratorResult := True;
+          end;
           FLastYieldWasDelegate := True;
           FSuspendedYield := AYieldExpression;
           raise EGocciaGeneratorYield.Create(YieldedValue);

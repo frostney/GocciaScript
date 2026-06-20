@@ -202,6 +202,7 @@ function TGocciaGenericIteratorValue.ReturnInternal(
   const AValue: TGocciaValue; const AHasValue: Boolean): TGocciaObjectValue;
 var
   ReturnMethod: TGocciaValue;
+  DoneValue: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
   ReturnResult: TGocciaValue;
 begin
@@ -236,7 +237,11 @@ begin
     ReturnResult := TGocciaFunctionBase(ReturnMethod).Call(CallArgs, FSource);
     if not (ReturnResult is TGocciaObjectValue) then
       ThrowTypeError(SErrorIteratorReturnObject, SSuggestIteratorResultObject);
-    FDone := True;
+    // ES2026 §15.5.5 YieldExpression : yield * AssignmentExpression:
+    // return() results with done:false are yielded and may resume delegation.
+    DoneValue := TGocciaObjectValue(ReturnResult).GetProperty(PROP_DONE);
+    if Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value then
+      FDone := True;
     Result := TGocciaObjectValue(ReturnResult);
   finally
     CallArgs.Free;

@@ -260,6 +260,9 @@ end;
 
 function TGocciaSharedArrayBufferValue.GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue;
 begin
+  if (AName = PROP_MAX_BYTE_LENGTH) and HasOwnProperty(AName) then
+    Exit(inherited GetPropertyWithContext(AName, AThisContext));
+
   if AName = PROP_BYTE_LENGTH then
     Result := TGocciaNumberLiteralValue.Create(Length(FData))
   else if AName = PROP_MAX_BYTE_LENGTH then

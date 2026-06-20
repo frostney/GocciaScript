@@ -440,6 +440,45 @@ test("object generator yield delegation preserves delegated finally yields on re
   expect(iter.next()).toEqual({ value: undefined, done: true });
 });
 
+test("object generator yield delegation continues when iterator return result is not done", () => {
+  let callCount = 0;
+  const returnResult = Object.defineProperty({ done: false }, "value", {
+    get() {
+      callCount += 1;
+      return "done";
+    },
+  });
+  const iterable = {
+    [Symbol.iterator]() {
+      return {
+        next() {
+          return { value: "next", done: false };
+        },
+        return() {
+          return returnResult;
+        },
+      };
+    },
+  };
+
+  const delegate = {
+    *values() {
+      yield* iterable;
+    },
+  };
+
+  const iterator = delegate.values();
+  expect(iterator.next()).toEqual({ value: "next", done: false });
+
+  const pendingReturn = iterator.return("stop");
+  expect(pendingReturn.done).toBe(false);
+  expect(callCount).toBe(0);
+
+  returnResult.done = true;
+  expect(iterator.return("stop")).toEqual({ value: "done", done: true });
+  expect(callCount).toBe(1);
+});
+
 test("object generator yield delegation rejects non-callable return and throw", () => {
   const nonCallableReturn = {
     [Symbol.iterator]() {
