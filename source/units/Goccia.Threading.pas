@@ -230,7 +230,7 @@ begin
   // Coverage tracker is NOT shut down here — the main thread reads it
   // after workers complete, then merges into the main tracker.
   ClearImportMetaCache;
-  ShutdownAtomicsWaiters;
+  ShutdownAtomicsWaitersForCurrentThread;
   ClearDisposableStackSlotMap;
   ClearSemverHosts;
   ClearTimeZoneCache;

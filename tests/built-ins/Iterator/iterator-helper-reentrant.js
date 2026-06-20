@@ -88,6 +88,33 @@ describe("Iterator helper re-entrancy guard", () => {
     const helper = factory();
     expect(() => helper.next()).toThrow(TypeError);
   });
+
+  test("Iterator.concat throws TypeError on re-entrant .return()", () => {
+    let enterCount = 0;
+    let helper;
+    const inner = {
+      next() {
+        return { done: false };
+      },
+      return() {
+        enterCount++;
+        helper.return();
+        return { done: false };
+      }
+    };
+
+    helper = Iterator.concat({
+      [Symbol.iterator]() {
+        return inner;
+      }
+    });
+
+    helper.next();
+
+    expect(enterCount).toBe(0);
+    expect(() => helper.return()).toThrow(TypeError);
+    expect(enterCount).toBe(1);
+  });
 });
 
 const makeChainedReentrant = (build) => {

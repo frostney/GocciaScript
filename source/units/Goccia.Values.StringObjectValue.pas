@@ -469,22 +469,59 @@ begin
 end;
 
 // ES2026 §10.4.3.6 StringExoticObject [[OwnPropertyKeys]] (all own string keys)
-// Indices first, then 'length', then any expando own properties.
+// String indices first, then other numeric own keys, then 'length', then other
+// expando own properties.
 function TGocciaStringObjectValue.GetAllPropertyNames: TArray<string>;
 var
   StringValue: string;
   InheritedNames: TArray<string>;
-  I: Integer;
+  NumericNames, OtherNames: TArray<string>;
+  I, Index, LengthValue, NumericCount, OtherCount, ResultIndex: Integer;
 begin
   StringValue := FPrimitive.ToStringLiteral.Value;
+  LengthValue := UTF16CodeUnitLength(StringValue);
   InheritedNames := inherited GetAllPropertyNames;
-  SetLength(Result, UTF16CodeUnitLength(StringValue) + 1 +
-    Length(InheritedNames));
-  for I := 0 to UTF16CodeUnitLength(StringValue) - 1 do
-    Result[I] := IntToStr(I);
-  Result[UTF16CodeUnitLength(StringValue)] := PROP_LENGTH;
+
+  SetLength(NumericNames, Length(InheritedNames));
+  SetLength(OtherNames, Length(InheritedNames));
+  NumericCount := 0;
+  OtherCount := 0;
   for I := 0 to High(InheritedNames) do
-    Result[UTF16CodeUnitLength(StringValue) + 1 + I] := InheritedNames[I];
+  begin
+    if InheritedNames[I] = PROP_LENGTH then
+      Continue;
+    if TryStrToInt(InheritedNames[I], Index) and
+       (InheritedNames[I] = IntToStr(Index)) and (Index >= LengthValue) then
+    begin
+      NumericNames[NumericCount] := InheritedNames[I];
+      Inc(NumericCount);
+    end
+    else
+    begin
+      OtherNames[OtherCount] := InheritedNames[I];
+      Inc(OtherCount);
+    end;
+  end;
+
+  SetLength(Result, LengthValue + NumericCount + 1 + OtherCount);
+  ResultIndex := 0;
+  for I := 0 to LengthValue - 1 do
+  begin
+    Result[ResultIndex] := IntToStr(I);
+    Inc(ResultIndex);
+  end;
+  for I := 0 to NumericCount - 1 do
+  begin
+    Result[ResultIndex] := NumericNames[I];
+    Inc(ResultIndex);
+  end;
+  Result[ResultIndex] := PROP_LENGTH;
+  Inc(ResultIndex);
+  for I := 0 to OtherCount - 1 do
+  begin
+    Result[ResultIndex] := OtherNames[I];
+    Inc(ResultIndex);
+  end;
 end;
 
 // ES2026 §10.4.3.1 StringExoticObject [[GetOwnProperty]](P)
@@ -531,8 +568,8 @@ begin
   if TryStrToInt(AName, Index) and (AName = IntToStr(Index)) then
   begin
     StringValue := FPrimitive.ToStringLiteral.Value;
-    Result := (Index >= 0) and (Index < UTF16CodeUnitLength(StringValue));
-    Exit;
+    if (Index >= 0) and (Index < UTF16CodeUnitLength(StringValue)) then
+      Exit(True);
   end;
   if AName = PROP_LENGTH then
   begin

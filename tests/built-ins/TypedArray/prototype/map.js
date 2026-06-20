@@ -74,6 +74,19 @@ describe("TypedArray.prototype.map", () => {
     expect(mapped[2]).toBe(6n);
   });
 
+  test("uses constructor Symbol.species override", () => {
+    const ta = new Uint8Array([1, 2]);
+    ta.constructor = { [Symbol.species]: Float32Array };
+
+    const mapped = ta.map(x => x + 0.5);
+
+    expect(Object.prototype.toString.call(mapped)).toBe("[object Float32Array]");
+    expect(mapped.length).toBe(2);
+    expect(mapped.byteLength).toBe(8);
+    expect(mapped[0]).toBe(1.5);
+    expect(mapped[1]).toBe(2.5);
+  });
+
   test.each([BigInt64Array, BigUint64Array])("%s continues after callback detaches buffer", (TA) => {
     const ta = new TA(2);
     const buffer = ta.buffer;

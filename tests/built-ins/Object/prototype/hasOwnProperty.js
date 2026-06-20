@@ -1,4 +1,12 @@
 describe('Object.prototype.hasOwnProperty', () => {
+  test('built-in function has the standard name', () => {
+    const descriptor = Object.getOwnPropertyDescriptor(Object.prototype.hasOwnProperty, 'name');
+    expect(descriptor.value).toBe('hasOwnProperty');
+    expect(descriptor.writable).toBe(false);
+    expect(descriptor.enumerable).toBe(false);
+    expect(descriptor.configurable).toBe(true);
+  });
+
   test('returns true for own property', () => {
     const obj = { x: 1, y: 2 };
     expect(obj.hasOwnProperty('x')).toBe(true);
@@ -52,6 +60,19 @@ describe('Object.prototype.hasOwnProperty', () => {
     expect(obj.hasOwnProperty(1)).toBe(true);
     expect(obj.hasOwnProperty(true)).toBe(true);
     expect(obj.hasOwnProperty(null)).toBe(true);
+  });
+
+  test('coerces property key before rejecting null receiver', () => {
+    let called = false;
+    const key = {
+      [Symbol.toPrimitive]() {
+        called = true;
+        throw new Error('key conversion first');
+      },
+    };
+
+    expect(() => Object.prototype.hasOwnProperty.call(null, key)).toThrow('key conversion first');
+    expect(called).toBe(true);
   });
 
   test('works on arrays', () => {

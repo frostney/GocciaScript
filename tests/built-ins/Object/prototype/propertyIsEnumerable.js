@@ -1,4 +1,17 @@
 describe('Object.prototype.propertyIsEnumerable', () => {
+  test('coerces property key before rejecting null receiver', () => {
+    let called = false;
+    const key = {
+      [Symbol.toPrimitive]() {
+        called = true;
+        throw new Error('key conversion first');
+      },
+    };
+
+    expect(() => Object.prototype.propertyIsEnumerable.call(null, key)).toThrow('key conversion first');
+    expect(called).toBe(true);
+  });
+
   test('returns true for own enumerable properties', () => {
     const obj = { x: 1, y: 2 };
     expect(obj.propertyIsEnumerable('x')).toBe(true);
@@ -59,6 +72,26 @@ describe('Object.prototype.propertyIsEnumerable', () => {
     const obj = { 1: 'one', true: 'yes' };
     expect(obj.propertyIsEnumerable(1)).toBe(true);
     expect(obj.propertyIsEnumerable(true)).toBe(true);
+  });
+
+  test('accepts property keys that coerce to symbols', () => {
+    let calls = 0;
+    const sym = Symbol('visible');
+    const obj = { [sym]: 1 };
+    const key = {
+      [Symbol.toPrimitive]() {
+        calls++;
+        return sym;
+      },
+    };
+
+    expect(obj.propertyIsEnumerable(key)).toBe(true);
+    expect(calls).toBe(1);
+  });
+
+  test('boxes string receivers before reading own descriptors', () => {
+    expect(Object.prototype.propertyIsEnumerable.call('hi', '0')).toBe(true);
+    expect(Object.prototype.propertyIsEnumerable.call('hi', 'length')).toBe(false);
   });
 
   test('class instance own properties are enumerable', () => {

@@ -35,6 +35,40 @@ var $262 = {
   createRealm() {
     return Goccia.test262.createRealm();
   },
+
+  agent: {
+    broadcast(value) {
+      return Goccia.test262.agent.broadcast(value);
+    },
+
+    getReport() {
+      return Goccia.test262.agent.getReport();
+    },
+
+    leaving() {
+      return Goccia.test262.agent.leaving();
+    },
+
+    monotonicNow() {
+      return Goccia.test262.agent.monotonicNow();
+    },
+
+    receiveBroadcast(callback) {
+      return Goccia.test262.agent.receiveBroadcast(callback);
+    },
+
+    report(value) {
+      return Goccia.test262.agent.report(value);
+    },
+
+    sleep(ms) {
+      return Goccia.test262.agent.sleep(ms);
+    },
+
+    start(sourceText) {
+      return Goccia.test262.agent.start(sourceText);
+    },
+  },
 };
 
 $262.AbstractModuleSource.prototype = Goccia.test262.abstractModuleSourcePrototype;

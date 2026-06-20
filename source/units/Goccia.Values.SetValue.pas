@@ -237,6 +237,10 @@ begin
         SetSymbolIterator,
         0,
         [pfConfigurable, pfWritable]);
+      Members.AddSymbolDataProperty(
+        TGocciaSymbolValue.WellKnownToStringTag,
+        TGocciaStringLiteralValue.Create(CONSTRUCTOR_SET),
+        [pfConfigurable]);
       FPrototypeMembers := Members.ToDefinitions;
     finally
       Members.Free;

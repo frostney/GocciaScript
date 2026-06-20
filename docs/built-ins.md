@@ -87,7 +87,7 @@ Implements the [ECMAScript Object](https://developer.mozilla.org/en-US/docs/Web/
 
 ### Array (`Goccia.Builtins.GlobalArray.pas`)
 
-Implements the [ECMAScript Array](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array). **Not implemented:** `Array.prototype.reduceRight`.
+Implements the [ECMAScript Array](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array).
 
 **Static methods:**
 
@@ -105,6 +105,7 @@ Implements the [ECMAScript Array](https://developer.mozilla.org/en-US/docs/Web/J
 | `map(callback)` | Transform each element |
 | `filter(callback)` | Filter elements by predicate |
 | `reduce(callback, initial?)` | Reduce to single value |
+| `reduceRight(callback, initial?)` | Reduce to single value from right to left |
 | `forEach(callback)` | Execute callback for each element |
 | `some(callback)` | Test if any element passes |
 | `every(callback)` | Test if all elements pass |

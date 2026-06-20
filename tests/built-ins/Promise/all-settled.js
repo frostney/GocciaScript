@@ -107,3 +107,80 @@ test("Promise.allSettled creates data properties for result records", () => {
     delete Object.prototype.reason;
   });
 });
+
+test("Promise.allSettled element functions are anonymous built-ins", () => {
+  let resolveElement;
+  let rejectElement;
+
+  class NotPromise {
+    constructor(executor) {
+      executor(() => {}, () => {});
+    }
+
+    static resolve(value) {
+      return value;
+    }
+  }
+
+  Promise.allSettled.call(NotPromise, [{
+    then(resolve, reject) {
+      resolveElement = resolve;
+      rejectElement = reject;
+    }
+  }]);
+
+  const resolveName = Object.getOwnPropertyDescriptor(resolveElement, "name");
+  const rejectName = Object.getOwnPropertyDescriptor(rejectElement, "name");
+  const resolveProperties = Object.getOwnPropertyNames(resolveElement);
+  const rejectProperties = Object.getOwnPropertyNames(rejectElement);
+
+  expect(resolveName.value).toBe("");
+  expect(resolveName.writable).toBe(false);
+  expect(resolveName.enumerable).toBe(false);
+  expect(resolveName.configurable).toBe(true);
+  expect(rejectName.value).toBe("");
+  expect(rejectName.writable).toBe(false);
+  expect(rejectName.enumerable).toBe(false);
+  expect(rejectName.configurable).toBe(true);
+  expect(resolveProperties.indexOf("name")).toBe(resolveProperties.indexOf("length") + 1);
+  expect(rejectProperties.indexOf("name")).toBe(rejectProperties.indexOf("length") + 1);
+});
+
+test("Promise.allSettled element functions ignore repeated calls", () => {
+  let callCount = 0;
+
+  class NotPromise {
+    constructor(executor) {
+      executor((values) => {
+        callCount += 1;
+        expect(values[0].status).toBe("fulfilled");
+        expect(values[0].value).toBe("first");
+        expect(values[1].status).toBe("fulfilled");
+        expect(values[1].value).toBe("second");
+      }, () => {
+        throw new Error("unexpected rejection");
+      });
+    }
+
+    static resolve(value) {
+      return value;
+    }
+  }
+
+  Promise.allSettled.call(NotPromise, [
+    {
+      then(resolve) {
+        resolve("first");
+        resolve("bad");
+      }
+    },
+    {
+      then(resolve) {
+        resolve("second");
+        resolve("worse");
+      }
+    }
+  ]);
+
+  expect(callCount).toBe(1);
+});

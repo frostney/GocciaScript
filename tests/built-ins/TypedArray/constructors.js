@@ -144,10 +144,45 @@ describe("TypedArray constructors", () => {
       const buf = new ArrayBuffer(8);
       expect(() => new Int32Array(buf, 0, 3)).toThrow(RangeError);
     });
+    test("undefined length behaves like omitted length", () => {
+      const buf = new ArrayBuffer(8);
+      const view = new Int32Array(buf, 0, undefined);
+      expect(view.length).toBe(2);
+      expect(view.byteLength).toBe(8);
+    });
+    test("resizable buffer with non-multiple byteLength creates length-tracking view", () => {
+      const buf = new ArrayBuffer(3, { maxByteLength: 16 });
+      const view = new Float64Array(buf);
+      expect(view.length).toBe(0);
+      expect(view.byteLength).toBe(0);
+      buf.resize(8);
+      expect(view.length).toBe(1);
+      expect(view.byteLength).toBe(8);
+    });
+    test("detached buffer throws TypeError after offset and length coercion", () => {
+      const buf = new ArrayBuffer(8);
+      const events = [];
+      const offset = {
+        valueOf() {
+          events.push("offset");
+          return 0;
+        },
+      };
+      const length = {
+        valueOf() {
+          events.push("length");
+          buf.transfer();
+          return 1;
+        },
+      };
+
+      expect(() => new Int32Array(buf, offset, length)).toThrow(TypeError);
+      expect(events).toEqual(["offset", "length"]);
+    });
   });
 
   describe("new TypedArray(iterable)", () => {
-    test("Reflect.construct resolves newTarget prototype before reading iterable source", () => {
+    test("Reflect.construct reads iterable source before resolving newTarget prototype", () => {
       const events = [];
       class NewTargetBase {}
       const NewTarget = new Proxy(NewTargetBase, {
@@ -167,7 +202,7 @@ describe("TypedArray constructors", () => {
       };
 
       expect(() => Reflect.construct(Int8Array, [iterable], NewTarget)).toThrow(Error);
-      expect(events).toEqual(["prototype"]);
+      expect(events).toEqual(["iterator", "prototype"]);
     });
 
     test("Reflect.construct falls back to typed array prototype for non-object newTarget prototype", () => {

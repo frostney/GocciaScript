@@ -961,9 +961,14 @@ begin
     // a cell that copied the register's initial (undefined) value.  The
     // initializer wrote directly to the register (e.g. OP_LOAD_INT) bypassing
     // the cell.  Emit OP_SET_LOCAL to sync the cell with the register.
-    if (not AStmt.IsVar) or HasInitializer then
+    if AStmt.IsVar and HasInitializer and not UseWithVarInitializer then
+      EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, Slot, UInt16(Slot)))
+    else if (not AStmt.IsVar) or HasInitializer then
     begin
-      LocalIdx := ACtx.Scope.ResolveLocal(Info.Name);
+      if AStmt.IsVar then
+        LocalIdx := FindVarLocalIndex(ACtx.Scope, Info.Name)
+      else
+        LocalIdx := ACtx.Scope.ResolveLocal(Info.Name);
       if (LocalIdx >= 0) and ACtx.Scope.GetLocal(LocalIdx).IsCaptured then
         EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, Slot, UInt16(Slot)));
     end;

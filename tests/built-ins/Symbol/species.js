@@ -115,7 +115,6 @@ describe("Symbol.species", () => {
   });
 
   test("RegExp subclass instance super uses captured native prototype", () => {
-    const originalDescriptor = Object.getOwnPropertyDescriptor(RegExp, "prototype");
     const computedKey = "test";
 
     class MyRegExp extends RegExp {
@@ -132,23 +131,11 @@ describe("Symbol.species", () => {
       }
     }
 
-    try {
-      Object.defineProperty(RegExp, "prototype", {
-        value: {
-          test() {
-            return false;
-          }
-        },
-        configurable: true
-      });
-
-      const regex = new MyRegExp("a+");
-      expect(regex.matchesDirect("aa")).toBe(true);
-      expect(regex.matchesComputed("aa")).toBe(true);
-      expect(regex.matchFirst("aa")).toBe("aa");
-    } finally {
-      Object.defineProperty(RegExp, "prototype", originalDescriptor);
-    }
+    const regex = new MyRegExp("a+");
+    expect(regex.matchesDirect("aa")).toBe(true);
+    expect(regex.matchesComputed("aa")).toBe(true);
+    expect(regex.matchFirst("aa")).toBe("aa");
+    expect(Object.getOwnPropertyDescriptor(RegExp, "prototype").configurable).toBe(false);
   });
 
   test("Promise subclass inherits Symbol.species through constructor prototype chain", () => {
@@ -156,17 +143,15 @@ describe("Symbol.species", () => {
     expect(MyPromise[Symbol.species]).toBe(MyPromise);
   });
 
-  test("native constructor superclass prototype must be an object or null", () => {
-    const originalDescriptor = Object.getOwnPropertyDescriptor(RegExp, "prototype");
-    try {
+  test("native constructor prototype property is not reconfigurable", () => {
+    expect(Object.getOwnPropertyDescriptor(RegExp, "prototype")).toEqual({
+      value: RegExp.prototype,
+      writable: false,
+      enumerable: false,
+      configurable: false,
+    });
+    expect(() => {
       Object.defineProperty(RegExp, "prototype", { value: null, configurable: true });
-      class NullPrototypeRegExp extends RegExp {}
-      expect(Object.getPrototypeOf(NullPrototypeRegExp.prototype)).toBe(null);
-
-      Object.defineProperty(RegExp, "prototype", { value: 1, configurable: true });
-      expect(() => { class InvalidPrototypeRegExp extends RegExp {} }).toThrow(TypeError);
-    } finally {
-      Object.defineProperty(RegExp, "prototype", originalDescriptor);
-    }
+    }).toThrow(TypeError);
   });
 });

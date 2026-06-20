@@ -34,9 +34,18 @@ describe.runIf(isTemporal)("Temporal.Duration.prototype.round", () => {
     expect(rounded.hours).toBe(1);
   });
 
-  test("round with smallestUnit week", () => {
+  test("round with smallestUnit week requires relativeTo", () => {
     const d = Temporal.Duration.from({ days: 10 });
-    const rounded = d.round({ smallestUnit: "week", roundingMode: "trunc" });
+    expect(() => d.round({ smallestUnit: "week", roundingMode: "trunc" })).toThrow(RangeError);
+  });
+
+  test("round with smallestUnit week and relativeTo", () => {
+    const d = Temporal.Duration.from({ days: 10 });
+    const rounded = d.round({
+      smallestUnit: "week",
+      roundingMode: "trunc",
+      relativeTo: "2024-01-01"
+    });
     expect(rounded.weeks).toBe(1);
     expect(rounded.days).toBe(0);
   });
@@ -120,6 +129,16 @@ describe.runIf(isTemporal)("Temporal.Duration.prototype.round", () => {
     expect(() => d.round({ smallestUnit: "month", largestUnit: "day", relativeTo: "2024-01-01" })).toThrow();
   });
 
+  test("round rejects date-unit roundingIncrement with a larger largestUnit", () => {
+    const d = Temporal.Duration.from({ days: 10 });
+    expect(() => d.round({
+      largestUnit: "week",
+      smallestUnit: "day",
+      roundingIncrement: 2,
+      relativeTo: "2024-01-01"
+    })).toThrow(RangeError);
+  });
+
   test("round applies years and months as separate calendar steps", () => {
     // 2020-02-29 + 1Y = 2021-02-28 (day clamps), + 1M = 2021-03-28 = 393 days.
     // Collapsing to +13M gives 2021-03-29 = 394 days (wrong).
@@ -165,16 +184,27 @@ describe.runIf(isTemporal)("Temporal.Duration.prototype.round", () => {
     expect(rounded.months).toBe(18);
   });
 
-  test("round rejects relativeTo as ZonedDateTime", () => {
-    const d = Temporal.Duration.from({ years: 1, months: 6 });
-    const zdt = Temporal.ZonedDateTime.from("2024-01-01T00:00:00+00:00[UTC]");
-    expect(() => d.round({ smallestUnit: "months", relativeTo: zdt })).toThrow(RangeError);
+  test("round with largestUnit auto resolves to the default largest unit", () => {
+    const d = Temporal.Duration.from({ hours: 25, minutes: 30 });
+    const rounded = d.round({ largestUnit: "auto", smallestUnit: "hours" });
+    expect(rounded.days).toBe(0);
+    expect(rounded.hours).toBe(26);
+    expect(rounded.minutes).toBe(0);
   });
 
-  test("round rejects relativeTo as ZonedDateTime to days", () => {
+  test("round accepts relativeTo as ZonedDateTime", () => {
+    const d = Temporal.Duration.from({ years: 1, months: 6 });
+    const zdt = Temporal.ZonedDateTime.from("2024-01-01T00:00:00+00:00[UTC]");
+    const rounded = d.round({ smallestUnit: "months", relativeTo: zdt });
+    expect(rounded.years).toBe(1);
+    expect(rounded.months).toBe(6);
+  });
+
+  test("round accepts relativeTo as ZonedDateTime to days", () => {
     const d = Temporal.Duration.from({ years: 1, months: 1 });
     const zdt = Temporal.ZonedDateTime.from("2020-02-29T10:30:00+00:00[UTC]");
-    expect(() => d.round({ smallestUnit: "days", largestUnit: "days", relativeTo: zdt })).toThrow(RangeError);
+    const rounded = d.round({ smallestUnit: "days", largestUnit: "days", relativeTo: zdt });
+    expect(rounded.days).toBe(393);
   });
 
   test("round with relativeTo as property bag", () => {

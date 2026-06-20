@@ -53,6 +53,66 @@ test("Promise.all with no arguments rejects with TypeError", () => {
   });
 });
 
+for (const method of ["all", "allSettled", "any", "race"]) {
+  test("Promise." + method + " skips IteratorClose when done getter throws", () => {
+    let returnCalled = 0;
+    const iterable = {
+      [Symbol.iterator]() {
+        return {
+          next() {
+            return {
+              get done() {
+                throw new Error("done-boom");
+              },
+              value: 1
+            };
+          },
+          return() {
+            returnCalled++;
+            return { done: true };
+          }
+        };
+      }
+    };
+
+    return Promise[method](iterable).then(() => {
+      throw new Error("Expected rejection");
+    }, (e) => {
+      expect(e.message).toBe("done-boom");
+      expect(returnCalled).toBe(0);
+    });
+  });
+
+  test("Promise." + method + " skips IteratorClose when value getter throws", () => {
+    let returnCalled = 0;
+    const iterable = {
+      [Symbol.iterator]() {
+        return {
+          next() {
+            return {
+              done: false,
+              get value() {
+                throw new Error("value-boom");
+              }
+            };
+          },
+          return() {
+            returnCalled++;
+            return { done: true };
+          }
+        };
+      }
+    };
+
+    return Promise[method](iterable).then(() => {
+      throw new Error("Expected rejection");
+    }, (e) => {
+      expect(e.message).toBe("value-boom");
+      expect(returnCalled).toBe(0);
+    });
+  });
+}
+
 // Promise.allSettled
 
 test("Promise.allSettled with number rejects with TypeError", () => {

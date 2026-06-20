@@ -82,7 +82,7 @@ describe("Iterator.prototype.reduce()", () => {
     expect(closed).toBe(1);
   });
 
-  test("reduce throws when iterator return is present but not callable", () => {
+  test("reduce preserves the original error when return is not callable", () => {
     const source = Iterator.from({
       next() {
         return { value: 1, done: false };
@@ -92,7 +92,7 @@ describe("Iterator.prototype.reduce()", () => {
 
     expect(() => source.reduce(() => {
       throw new Error("boom");
-    }, 0)).toThrow(TypeError);
+    }, 0)).toThrow("boom");
   });
 
   test("reduce can consume nested iterators", () => {

@@ -52,6 +52,7 @@ uses
   SysUtils,
 
   Goccia.Arguments.Collection,
+  Goccia.Builtins.Atomics,
   Goccia.Constants.ErrorNames,
   Goccia.Error,
   Goccia.GarbageCollector,
@@ -310,10 +311,43 @@ procedure TGocciaMicrotaskQueue.ExecuteTask(
   const ATask: TGocciaMicrotask);
 var
   Promise: TGocciaPromiseValue;
+  Capability: TGocciaPromiseReactionCapability;
   HandlerResult: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
+  procedure ResolveResult(const AValue: TGocciaValue);
+  begin
+    if Assigned(Capability) then
+      Capability.Resolve(AValue)
+    else if Assigned(Promise) then
+      Promise.Resolve(AValue);
+  end;
+
+  procedure RejectResult(const AValue: TGocciaValue);
+  begin
+    if Assigned(Capability) then
+      Capability.Reject(AValue)
+    else if Assigned(Promise) then
+      Promise.Reject(AValue);
+  end;
+
+  procedure RejectExceptionResult(const AException: Exception);
+  begin
+    if AException is TGocciaTypeError then
+      RejectResult(CreateErrorObject(TYPE_ERROR_NAME, AException.Message))
+    else if AException is TGocciaReferenceError then
+      RejectResult(CreateErrorObject(REFERENCE_ERROR_NAME, AException.Message))
+    else if AException is TGocciaSyntaxError then
+      RejectResult(CreateErrorObject(SYNTAX_ERROR_NAME, AException.Message))
+    else
+      RejectResult(CreateErrorObject(ERROR_NAME, AException.Message));
+  end;
 begin
-  Promise := TGocciaPromiseValue(ATask.ResultPromise);
+  Promise := nil;
+  Capability := nil;
+  if ATask.ResultPromise is TGocciaPromiseValue then
+    Promise := TGocciaPromiseValue(ATask.ResultPromise)
+  else if ATask.ResultPromise is TGocciaPromiseReactionCapability then
+    Capability := TGocciaPromiseReactionCapability(ATask.ResultPromise);
 
   if ATask.ReactionType = prtThenableResolve then
   begin
@@ -332,19 +366,42 @@ begin
     CallArgs := TGocciaArgumentsCollection.Create([ATask.Value]);
     try
       try
-        HandlerResult := TGocciaFunctionBase(ATask.Handler).Call(
-          CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
-        if Assigned(Promise) then
-          Promise.Resolve(HandlerResult);
+        HandlerResult := DispatchCall(ATask.Handler, CallArgs,
+          TGocciaUndefinedLiteralValue.UndefinedValue);
+        ResolveResult(HandlerResult);
       except
         on E: EGocciaBytecodeThrow do
-          if Assigned(Promise) then
-            Promise.Reject(E.ThrownValue)
+          if Assigned(Promise) or Assigned(Capability) then
+            RejectResult(E.ThrownValue)
           else
             raise;
         on E: TGocciaThrowValue do
-          if Assigned(Promise) then
-            Promise.Reject(E.Value)
+          if Assigned(Promise) or Assigned(Capability) then
+            RejectResult(E.Value)
+          else
+            raise;
+        on E: TGocciaTimeoutError do
+          raise;
+        on E: TGocciaInstructionLimitError do
+          raise;
+        on E: TGocciaTypeError do
+          if Assigned(Promise) or Assigned(Capability) then
+            RejectExceptionResult(E)
+          else
+            raise;
+        on E: TGocciaReferenceError do
+          if Assigned(Promise) or Assigned(Capability) then
+            RejectExceptionResult(E)
+          else
+            raise;
+        on E: TGocciaSyntaxError do
+          if Assigned(Promise) or Assigned(Capability) then
+            RejectExceptionResult(E)
+          else
+            raise;
+        on E: Exception do
+          if Assigned(Promise) or Assigned(Capability) then
+            RejectExceptionResult(E)
           else
             raise;
       end;
@@ -354,11 +411,11 @@ begin
   end
   else
   begin
-    if Assigned(Promise) then
+    if Assigned(Promise) or Assigned(Capability) then
     begin
       case ATask.ReactionType of
-        prtFulfill: Promise.Resolve(ATask.Value);
-        prtReject: Promise.Reject(ATask.Value);
+        prtFulfill: ResolveResult(ATask.Value);
+        prtReject: RejectResult(ATask.Value);
         prtThenableResolve:;
       end;
     end;
@@ -398,6 +455,7 @@ begin
       ExecuteTask(Task);
     finally
       RemoveQueuedRoots(Task);
+      PumpAtomicsWaitAsyncCompletions;
       if Assigned(TGarbageCollector.Instance) then
         TGarbageCollector.Instance.ClearKeptObjects;
     end;
@@ -415,6 +473,7 @@ begin
       ExecuteTask(Task);
     finally
       RemoveQueuedRoots(Task);
+      PumpAtomicsWaitAsyncCompletions;
       if Assigned(TGarbageCollector.Instance) then
         TGarbageCollector.Instance.ClearKeptObjects;
     end;
@@ -455,6 +514,7 @@ begin
         ExecuteTask(Task);
       finally
         RemoveQueuedRoots(Task);
+        PumpAtomicsWaitAsyncCompletions;
         if Assigned(TGarbageCollector.Instance) then
           TGarbageCollector.Instance.ClearKeptObjects;
       end;
@@ -471,6 +531,7 @@ begin
         ExecuteTask(Task);
       finally
         RemoveQueuedRoots(Task);
+        PumpAtomicsWaitAsyncCompletions;
         if Assigned(TGarbageCollector.Instance) then
           TGarbageCollector.Instance.ClearKeptObjects;
       end;

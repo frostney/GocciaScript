@@ -68,6 +68,7 @@ const
   PROP_BUFFER           = 'buffer';
   PROP_MAX_BYTE_LENGTH  = 'maxByteLength';
   PROP_RESIZABLE        = 'resizable';
+  PROP_GROWABLE         = 'growable';
   PROP_DETACHED         = 'detached';
   PROP_BYTES_PER_ELEMENT = 'BYTES_PER_ELEMENT';
   PROP_FROM             = 'from';

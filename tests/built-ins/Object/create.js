@@ -77,3 +77,30 @@ test("Object.create with symbol-keyed property descriptor", () => {
   });
   expect(obj[sym]).toBe(42);
 });
+
+test("Object.create coerces primitive Properties values to objects", () => {
+  const obj = Object.create(null, false);
+
+  expect(Object.getPrototypeOf(obj)).toBe(null);
+  expect(Object.keys(obj)).toEqual([]);
+});
+
+test("Object.create reads accessor descriptor properties from Properties", () => {
+  const properties = {};
+
+  Object.defineProperty(properties, "answer", {
+    get() {
+      return { value: 42, enumerable: true };
+    },
+    enumerable: true,
+  });
+
+  const obj = Object.create(null, properties);
+
+  expect(obj.answer).toBe(42);
+  expect(Object.keys(obj)).toEqual(["answer"]);
+});
+
+test("Object.create throws for non-empty string Properties", () => {
+  expect(() => Object.create({}, "hello")).toThrow(TypeError);
+});

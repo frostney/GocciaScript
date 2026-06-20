@@ -319,6 +319,15 @@ begin
   DOMExceptionConstructorFunc := TGocciaNativeFunctionValue.Create(DOMExceptionConstructor, DOM_EXCEPTION_NAME, 2);
   DOMExceptionConstructorFunc.ConstructCallback := DOMExceptionConstruct;
 
+  EvalErrorConstructorFunc.Prototype := ErrorConstructorFunc;
+  TypeErrorConstructorFunc.Prototype := ErrorConstructorFunc;
+  ReferenceErrorConstructorFunc.Prototype := ErrorConstructorFunc;
+  RangeErrorConstructorFunc.Prototype := ErrorConstructorFunc;
+  SyntaxErrorConstructorFunc.Prototype := ErrorConstructorFunc;
+  URIErrorConstructorFunc.Prototype := ErrorConstructorFunc;
+  AggregateErrorConstructorFunc.Prototype := ErrorConstructorFunc;
+  SuppressedErrorConstructorFunc.Prototype := ErrorConstructorFunc;
+
   ErrorConstructorFunc.DefineProperty(PROP_PROTOTYPE, TGocciaPropertyDescriptorData.Create(FErrorProto, []));
   with TGocciaMemberCollection.Create do
   try

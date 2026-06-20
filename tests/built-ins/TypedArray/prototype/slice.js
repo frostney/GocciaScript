@@ -79,6 +79,26 @@ describe("TypedArray.prototype.slice", () => {
     expect(sliced[1]).toBe(3n);
   });
 
+  test("uses constructor Symbol.species override", () => {
+    const ta = new Uint8Array([1, 2, 3]);
+    ta.constructor = { [Symbol.species]: Float32Array };
+
+    const sliced = ta.slice(0, 2);
+
+    expect(Object.prototype.toString.call(sliced)).toBe("[object Float32Array]");
+    expect(sliced.length).toBe(2);
+    expect(sliced.byteLength).toBe(8);
+    expect(sliced[0]).toBe(1);
+    expect(sliced[1]).toBe(2);
+  });
+
+  test("throws when species changes BigInt content type", () => {
+    const ta = new BigInt64Array([1n]);
+    ta.constructor = { [Symbol.species]: Float64Array };
+
+    expect(() => ta.slice()).toThrow(TypeError);
+  });
+
   test("throws on detached buffer", () => {
     const ta = new Int32Array([1, 2, 3]);
     ta.buffer.transfer();

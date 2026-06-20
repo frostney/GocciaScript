@@ -20,14 +20,14 @@ describe("Iterator.prototype.take()", () => {
     expect(() => [1].values().take(-1)).toThrow(RangeError);
   });
 
-  test("take closes the source when the limit is reached", () => {
+  test("take does not exhaust a source with no return when the limit is reached", () => {
     const source = [10, 20, 30, 40, 50].values();
     const taken = source.take(2);
 
     expect(taken.next().value).toBe(10);
     expect(taken.next().value).toBe(20);
     expect(taken.next().done).toBe(true);
-    expect(source.next().done).toBe(true);
+    expect(source.next().value).toBe(30);
   });
 
   test("take composes after drop", () => {

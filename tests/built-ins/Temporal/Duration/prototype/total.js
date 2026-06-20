@@ -143,15 +143,22 @@ describe.runIf(isTemporal)("Temporal.Duration.prototype.total", () => {
     expect(days).toBe(393);
   });
 
-  test("total() rejects relativeTo as ZonedDateTime", () => {
+  test("total() accepts relativeTo as ZonedDateTime", () => {
     const d = Temporal.Duration.from({ months: 6 });
     const zdt = Temporal.ZonedDateTime.from("2024-01-01T00:00:00+00:00[UTC]");
-    expect(() => d.total({ unit: "days", relativeTo: zdt })).toThrow(RangeError);
+    expect(d.total({ unit: "days", relativeTo: zdt })).toBe(182);
   });
 
-  test("total() rejects relativeTo as ZonedDateTime for years", () => {
+  test("total() accepts relativeTo as ZonedDateTime for years", () => {
     const d = Temporal.Duration.from({ years: 2 });
     const zdt = Temporal.ZonedDateTime.from("2024-01-01T12:00:00+00:00[UTC]");
+    expect(d.total({ unit: "years", relativeTo: zdt })).toBe(2);
+  });
+
+  test("total() rejects ZonedDateTime relativeTo when exact-time nudge exceeds range", () => {
+    const d = new Temporal.Duration(0, 0, 0, 0, 0, 0, 0, 0, 0, 1);
+    const zdt = new Temporal.ZonedDateTime(864n * 10n ** 19n - 1n, "UTC");
+
     expect(() => d.total({ unit: "years", relativeTo: zdt })).toThrow(RangeError);
   });
 

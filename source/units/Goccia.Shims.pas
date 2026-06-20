@@ -317,6 +317,7 @@ const
         '    }.toLocaleString;'#10 +
         '    Object.defineProperty(Number.prototype, "toLocaleString", { value: numberLocale, writable: true, configurable: true });'#10 +
         '    Object.defineProperty(Array.prototype, "toLocaleString", { value: arrayLocale, writable: true, configurable: true });'#10 +
+        '    Object.defineProperty(this.prototype, Symbol.toStringTag, { value: "Date", writable: true, configurable: true });'#10 +
         '  }'#10 +
         '  static now(): number { return Temporal.Now.instant().epochMilliseconds; }'#10 +
         '  static parse(str: string): number { return parseDateStringToEpoch(str); }'#10 +
@@ -508,6 +509,22 @@ const
         '    return days[z.dayOfWeek % 7] + " " + months[z.month - 1] + " " + pad(z.day) + " " +'#10 +
         '      String(z.year) + " " + pad(z.hour) + ":" + pad(z.minute) + ":" + pad(z.second) + " GMT" + z.offset;'#10 +
         '  }'#10 +
+        '  toDateString(): string {'#10 +
+        '    Date.#require(this);'#10 +
+        '    const z = Date.#local(this);'#10 +
+        '    if (!z) return "Invalid Date";'#10 +
+        '    const pad = (n: number): string => n < 10 ? "0" + String(n) : String(n);'#10 +
+        '    const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];'#10 +
+        '    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];'#10 +
+        '    return days[z.dayOfWeek % 7] + " " + months[z.month - 1] + " " + pad(z.day) + " " + String(z.year);'#10 +
+        '  }'#10 +
+        '  toTimeString(): string {'#10 +
+        '    Date.#require(this);'#10 +
+        '    const z = Date.#local(this);'#10 +
+        '    if (!z) return "Invalid Date";'#10 +
+        '    const pad = (n: number): string => n < 10 ? "0" + String(n) : String(n);'#10 +
+        '    return pad(z.hour) + ":" + pad(z.minute) + ":" + pad(z.second) + " GMT" + z.offset;'#10 +
+        '  }'#10 +
         '  toUTCString(): string {'#10 +
         '    Date.#require(this);'#10 +
         '    const z = Date.#utc(this);'#10 +
@@ -581,10 +598,12 @@ const
       FileName: '<shim:hasOwnProperty>';
       Source:
         'export const hasOwnProperty = ((proto) => {'#10 +
-        '  Object.defineProperty(proto, "hasOwnProperty", {'#10 +
-        '    value(prop) { return Object.hasOwn(this, prop); },'#10 +
-        '    writable: true, enumerable: false, configurable: true'#10 +
-        '  });'#10 +
+        '  if (!proto.hasOwnProperty) {'#10 +
+        '    Object.defineProperty(proto, "hasOwnProperty", {'#10 +
+        '      value(prop) { return Object.hasOwn(this, prop); },'#10 +
+        '      writable: true, enumerable: false, configurable: true'#10 +
+        '    });'#10 +
+        '  }'#10 +
         '  return proto.hasOwnProperty;'#10 +
         '})(Object.getPrototypeOf({}));'
     ),

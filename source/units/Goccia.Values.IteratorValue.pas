@@ -20,6 +20,8 @@ type
   public
     function IteratorNext(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function IteratorSelf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function IteratorDispose(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function IteratorHelperReturn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
     function IteratorMap(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function IteratorFilter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -36,6 +38,12 @@ type
     function IteratorConcat(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function IteratorZip(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function IteratorZipKeyed(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function IteratorConstructorCall(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function IteratorConstruct(const AArgs: TGocciaArgumentsCollection; const ANewTarget: TGocciaValue): TGocciaValue;
+    function IteratorGetConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function IteratorSetConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function IteratorGetToStringTag(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function IteratorSetToStringTag(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
     class procedure EnsurePrototypeInitialized;
     class function SharedPrototype: TGocciaObjectValue; static;
@@ -64,8 +72,11 @@ type
     function DoAdvanceNext: TGocciaObjectValue; virtual; abstract;
     function DoDirectNext(out ADone: Boolean): TGocciaValue; virtual; abstract;
   public
+    constructor Create;
     function AdvanceNext: TGocciaObjectValue; override;
     function DirectNext(out ADone: Boolean): TGocciaValue; override;
+    function ReturnValue(const AValue: TGocciaValue): TGocciaObjectValue; override;
+    procedure Close; override;
   end;
 
 function CreateIteratorResult(const AValue: TGocciaValue; const ADone: Boolean): TGocciaObjectValue;
@@ -100,10 +111,13 @@ uses
 // (immutable across realms) — same pattern as Number.prototype.
 var
   GIteratorPrototypeSlot: TGocciaRealmSlotId;
+  GIteratorHelperPrototypeSlot: TGocciaRealmSlotId;
+  GIteratorConstructorSlot: TGocciaRealmSlotId;
 
 threadvar
   FPrototypeMethodHost: TGocciaIteratorValue;
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+  FHelperPrototypeMembers: TArray<TGocciaMemberDefinition>;
   FStaticMembers: TArray<TGocciaMemberDefinition>;
 
 function GetSharedIteratorPrototype: TGocciaObjectValue; inline;
@@ -112,6 +126,149 @@ begin
     Result := TGocciaObjectValue(CurrentRealm.GetSlot(GIteratorPrototypeSlot))
   else
     Result := nil;
+end;
+
+function GetSharedIteratorConstructor: TGocciaObjectValue; inline;
+begin
+  if Assigned(CurrentRealm) then
+    Result := TGocciaObjectValue(CurrentRealm.GetSlot(GIteratorConstructorSlot))
+  else
+    Result := nil;
+end;
+
+function GetSharedIteratorHelperPrototype: TGocciaObjectValue; inline;
+begin
+  if Assigned(CurrentRealm) then
+    Result := TGocciaObjectValue(CurrentRealm.GetSlot(GIteratorHelperPrototypeSlot))
+  else
+    Result := nil;
+end;
+
+function IteratorThisToDirectIterator(
+  const AThisValue: TGocciaValue; const AMethodName: string): TGocciaIteratorValue;
+var
+  NextMethod: TGocciaValue;
+begin
+  if not (AThisValue is TGocciaObjectValue) then
+    ThrowTypeError(Format('Iterator.prototype.%s called on non-object', [AMethodName]));
+
+  // ES2026 §7.4.2 GetIteratorDirect(obj): capture "next" once.  The
+  // generic iterator reports a missing/non-callable next on first use.
+  NextMethod := TGocciaObjectValue(AThisValue).GetProperty(PROP_NEXT);
+  Result := TGocciaGenericIteratorValue.Create(AThisValue, NextMethod);
+end;
+
+function IteratorThisHasCallableReturn(const AThisValue: TGocciaValue): Boolean;
+var
+  ReturnMethod: TGocciaValue;
+begin
+  Result := False;
+  if not (AThisValue is TGocciaObjectValue) then
+    Exit;
+  ReturnMethod := TGocciaObjectValue(AThisValue).GetProperty(PROP_RETURN);
+  Result := Assigned(ReturnMethod) and
+    not (ReturnMethod is TGocciaUndefinedLiteralValue) and
+    not (ReturnMethod is TGocciaNullLiteralValue) and
+    ReturnMethod.IsCallable;
+end;
+
+procedure CloseIteratorThisPreservingError(const AThisValue: TGocciaValue);
+var
+  Iterator: TGocciaIteratorValue;
+begin
+  if AThisValue is TGocciaIteratorValue then
+  begin
+    CloseIteratorPreservingError(TGocciaIteratorValue(AThisValue));
+    Exit;
+  end;
+
+  if not IteratorThisHasCallableReturn(AThisValue) then
+    Exit;
+
+  Iterator := TGocciaGenericIteratorValue.Create(AThisValue,
+    TGocciaUndefinedLiteralValue.UndefinedValue);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AddTempRoot(Iterator);
+  try
+    CloseIteratorPreservingError(Iterator);
+  finally
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.RemoveTempRoot(Iterator);
+  end;
+end;
+
+function IteratorCallbackArgOrClose(
+  const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue;
+  const AErrorMessage, ASuggestion: string): TGocciaValue;
+begin
+  if (AArgs.Length < 1) or not AArgs.GetElement(0).IsCallable then
+  begin
+    CloseIteratorThisPreservingError(AThisValue);
+    ThrowTypeError(AErrorMessage, ASuggestion);
+  end;
+  Result := AArgs.GetElement(0);
+end;
+
+function IteratorLimitArgOrClose(
+  const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue;
+  const AMissingMessage, ANegativeMessage: string): Integer;
+var
+  NumArg: TGocciaNumberLiteralValue;
+begin
+  if AArgs.Length < 1 then
+  begin
+    CloseIteratorThisPreservingError(AThisValue);
+    ThrowRangeError(AMissingMessage, SSuggestIteratorNonNegative);
+  end;
+
+  try
+    NumArg := AArgs.GetElement(0).ToNumberLiteral;
+  except
+    CloseIteratorThisPreservingError(AThisValue);
+    raise;
+  end;
+  if NumArg.IsNaN then
+  begin
+    CloseIteratorThisPreservingError(AThisValue);
+    ThrowRangeError(ANegativeMessage, SSuggestIteratorNonNegative);
+  end;
+
+  Result := ToIntegerValue(NumArg);
+  if Result < 0 then
+  begin
+    CloseIteratorThisPreservingError(AThisValue);
+    ThrowRangeError(ANegativeMessage, SSuggestIteratorNonNegative);
+  end;
+end;
+
+procedure SetterThatIgnoresPrototypeStringProperty(
+  const AThisValue: TGocciaValue; const AHome: TGocciaObjectValue;
+  const APropertyKey: string; const AValue: TGocciaValue);
+begin
+  // ES2026 §7.3.37 SetterThatIgnoresPrototypeProperties(thisValue, home, propertyKey, value)
+  if not (AThisValue is TGocciaObjectValue) then
+    ThrowTypeError('Iterator accessor setter requires an object receiver');
+  if AThisValue = AHome then
+    ThrowTypeError('Cannot assign Iterator intrinsic accessor on its home object');
+  if not Assigned(TGocciaObjectValue(AThisValue).GetOwnPropertyDescriptor(APropertyKey)) then
+    TGocciaObjectValue(AThisValue).CreateDataPropertyOrThrow(APropertyKey, AValue)
+  else
+    TGocciaObjectValue(AThisValue).AssignProperty(APropertyKey, AValue);
+end;
+
+procedure SetterThatIgnoresPrototypeSymbolProperty(
+  const AThisValue: TGocciaValue; const AHome: TGocciaObjectValue;
+  const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue);
+begin
+  // ES2026 §7.3.37 SetterThatIgnoresPrototypeProperties(thisValue, home, propertyKey, value)
+  if not (AThisValue is TGocciaObjectValue) then
+    ThrowTypeError('Iterator accessor setter requires an object receiver');
+  if AThisValue = AHome then
+    ThrowTypeError('Cannot assign Iterator intrinsic accessor on its home object');
+  if not Assigned(TGocciaObjectValue(AThisValue).GetOwnSymbolPropertyDescriptor(ASymbol)) then
+    TGocciaObjectValue(AThisValue).CreateDataPropertyOrThrow(ASymbol, AValue)
+  else
+    TGocciaObjectValue(AThisValue).AssignSymbolProperty(ASymbol, AValue);
 end;
 
 procedure CloseIteratorPreservingError(const AIterator: TGocciaIteratorValue);
@@ -123,6 +280,40 @@ begin
   except
     // Preserve the original abrupt-completion error when cleanup also throws.
   end;
+end;
+
+procedure EnsureIteratorHelperPrototypeInitialized;
+var
+  Members: TGocciaMemberCollection;
+  HelperPrototype: TGocciaObjectValue;
+begin
+  if not Assigned(CurrentRealm) then
+    Exit;
+  if Assigned(GetSharedIteratorHelperPrototype) then
+    Exit;
+
+  TGocciaIteratorValue.EnsurePrototypeInitialized;
+  HelperPrototype := TGocciaObjectValue.Create(GetSharedIteratorPrototype);
+  CurrentRealm.SetSlot(GIteratorHelperPrototypeSlot, HelperPrototype);
+
+  if Length(FHelperPrototypeMembers) = 0 then
+  begin
+    Members := TGocciaMemberCollection.Create;
+    try
+      Members.AddNamedMethod('next', FPrototypeMethodHost.IteratorNext, 0,
+        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddNamedMethod(PROP_RETURN, FPrototypeMethodHost.IteratorHelperReturn, 0,
+        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddSymbolDataProperty(
+        TGocciaSymbolValue.WellKnownToStringTag,
+        TGocciaStringLiteralValue.Create('Iterator Helper'), [pfConfigurable]);
+      FHelperPrototypeMembers := Members.ToDefinitions;
+    finally
+      Members.Free;
+    end;
+  end;
+
+  RegisterMemberDefinitions(HelperPrototype, FHelperPrototypeMembers);
 end;
 
 function CreateIteratorResult(const AValue: TGocciaValue; const ADone: Boolean): TGocciaObjectValue;
@@ -221,7 +412,6 @@ end;
 
 procedure TGocciaIteratorValue.Close;
 begin
-  FDone := True;
 end;
 
 function TGocciaIteratorValue.ToStringTag: string;
@@ -293,9 +483,19 @@ begin
     Members := TGocciaMemberCollection.Create;
     try
       Members.AddNamedMethod('next', IteratorNext, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddAccessor(PROP_CONSTRUCTOR, IteratorGetConstructor,
+        IteratorSetConstructor, [pfConfigurable], gmkPrototypeGetter);
       Members.AddSymbolMethod(
         TGocciaSymbolValue.WellKnownIterator, '[Symbol.iterator]',
         IteratorSelf, 0, [pfConfigurable, pfWritable]);
+      Members.AddSymbolMethod(
+        TGocciaSymbolValue.WellKnownDispose, '[Symbol.dispose]',
+        IteratorDispose, 0, [pfConfigurable, pfWritable],
+        [gmfNoFunctionPrototype]);
+      Members.AddSymbolAccessor(
+        TGocciaSymbolValue.WellKnownToStringTag, '[Symbol.toStringTag]',
+        IteratorGetToStringTag, IteratorSetToStringTag,
+        [pfConfigurable]);
       Members.AddNamedMethod('map', IteratorMap, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddNamedMethod('filter', IteratorFilter, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddNamedMethod('take', IteratorTake, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
@@ -318,11 +518,21 @@ end;
 class function TGocciaIteratorValue.CreateGlobalObject: TGocciaObjectValue;
 var
   Members: TGocciaMemberCollection;
+  IteratorConstructor: TGocciaNativeFunctionValue;
   SharedPrototype: TGocciaObjectValue;
 begin
   EnsurePrototypeInitialized;
 
-  Result := TGocciaObjectValue.Create;
+  if Assigned(GetSharedIteratorConstructor) then
+    Exit(GetSharedIteratorConstructor);
+
+  IteratorConstructor := TGocciaNativeFunctionValue.Create(
+    FPrototypeMethodHost.IteratorConstructorCall, CONSTRUCTOR_ITERATOR, 0);
+  IteratorConstructor.ConstructCallback := FPrototypeMethodHost.IteratorConstruct;
+  if Assigned(CurrentRealm) then
+    CurrentRealm.SetSlot(GIteratorConstructorSlot, IteratorConstructor);
+
+  Result := IteratorConstructor;
   if Length(FStaticMembers) = 0 then
   begin
     Members := TGocciaMemberCollection.Create;
@@ -339,7 +549,87 @@ begin
   RegisterMemberDefinitions(Result, FStaticMembers);
   SharedPrototype := GetSharedIteratorPrototype;
   if Assigned(SharedPrototype) then
-    Result.AssignProperty(PROP_PROTOTYPE, SharedPrototype);
+    Result.DefineProperty(PROP_PROTOTYPE,
+      TGocciaPropertyDescriptorData.Create(SharedPrototype, []));
+end;
+
+// ES2026 §27.1.3.1.1 Iterator()
+function TGocciaIteratorValue.IteratorConstructorCall(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  ThrowTypeError(SErrorIllegalConstructor);
+  Result := nil;
+end;
+
+// ES2026 §27.1.3.1.1 Iterator()
+function TGocciaIteratorValue.IteratorConstruct(
+  const AArgs: TGocciaArgumentsCollection;
+  const ANewTarget: TGocciaValue): TGocciaValue;
+var
+  IteratorConstructor: TGocciaObjectValue;
+  SharedPrototype: TGocciaObjectValue;
+begin
+  IteratorConstructor := GetSharedIteratorConstructor;
+  if (not Assigned(ANewTarget)) or (ANewTarget = IteratorConstructor) then
+    ThrowTypeError(SErrorIllegalConstructor);
+
+  SharedPrototype := GetSharedIteratorPrototype;
+  Result := TGocciaObjectValue.Create(
+    GetProtoFromConstructorWithIntrinsic(ANewTarget, SharedPrototype));
+end;
+
+// ES2026 §27.1.3.3.1.1 get Iterator.prototype.constructor
+function TGocciaIteratorValue.IteratorGetConstructor(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := GetSharedIteratorConstructor;
+  if not Assigned(Result) then
+    Result := TGocciaIteratorValue.CreateGlobalObject;
+end;
+
+// ES2026 §27.1.3.3.1.2 set Iterator.prototype.constructor
+function TGocciaIteratorValue.IteratorSetConstructor(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Value: TGocciaValue;
+begin
+  if AArgs.Length > 0 then
+    Value := AArgs.GetElement(0)
+  else
+    Value := TGocciaUndefinedLiteralValue.UndefinedValue;
+
+  SetterThatIgnoresPrototypeStringProperty(AThisValue,
+    GetSharedIteratorPrototype, PROP_CONSTRUCTOR, Value);
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+// ES2026 §27.1.3.3.14.1 get Iterator.prototype [ %Symbol.toStringTag% ]
+function TGocciaIteratorValue.IteratorGetToStringTag(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaStringLiteralValue.Create(CONSTRUCTOR_ITERATOR);
+end;
+
+// ES2026 §27.1.3.3.14.2 set Iterator.prototype [ %Symbol.toStringTag% ]
+function TGocciaIteratorValue.IteratorSetToStringTag(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Value: TGocciaValue;
+begin
+  if AArgs.Length > 0 then
+    Value := AArgs.GetElement(0)
+  else
+    Value := TGocciaUndefinedLiteralValue.UndefinedValue;
+
+  SetterThatIgnoresPrototypeSymbolProperty(AThisValue,
+    GetSharedIteratorPrototype, TGocciaSymbolValue.WellKnownToStringTag,
+    Value);
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 { Protocol methods }
@@ -356,97 +646,161 @@ begin
   Result := AThisValue;
 end;
 
+// ES2026 §27.1.3.3.2 Iterator.prototype [ %Symbol.dispose% ] ()
+function TGocciaIteratorValue.IteratorDispose(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  CallArgs: TGocciaArgumentsCollection;
+  ReturnMethod: TGocciaValue;
+  ReturnResult: TGocciaValue;
+begin
+  if not (AThisValue is TGocciaObjectValue) then
+    ThrowTypeError('Iterator.prototype[Symbol.dispose] called on non-object');
+
+  ReturnMethod := TGocciaObjectValue(AThisValue).GetProperty(PROP_RETURN);
+  if Assigned(ReturnMethod) and
+     not (ReturnMethod is TGocciaUndefinedLiteralValue) and
+     not (ReturnMethod is TGocciaNullLiteralValue) then
+  begin
+    if not ReturnMethod.IsCallable then
+      ThrowTypeError(SErrorIteratorReturnMustBeCallable,
+        SSuggestIteratorProtocol);
+    CallArgs := TGocciaArgumentsCollection.Create;
+    try
+      ReturnResult := InvokeCallable(ReturnMethod, CallArgs, AThisValue);
+      if not (ReturnResult is TGocciaObjectValue) then
+        ThrowTypeError(SErrorIteratorReturnObject, SSuggestIteratorResultObject);
+    finally
+      CallArgs.Free;
+    end;
+  end;
+
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+// ES2026 §27.1.5.2.2 %IteratorHelperPrototype%.return()
+function TGocciaIteratorValue.IteratorHelperReturn(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  if not (AThisValue is TGocciaIteratorHelperValue) then
+    ThrowTypeError('Iterator helper return called on non-helper');
+  Result := TGocciaIteratorHelperValue(AThisValue).ReturnValue(
+    TGocciaUndefinedLiteralValue.UndefinedValue);
+end;
+
 { Lazy helper methods — return new lazy iterators }
 
 function TGocciaIteratorValue.IteratorMap(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Callback: TGocciaValue;
+  Iterator: TGocciaIteratorValue;
 begin
-  if not (AThisValue is TGocciaIteratorValue) then
+  if not (AThisValue is TGocciaObjectValue) then
     ThrowTypeError(SErrorIteratorMapNonIterator, SSuggestIteratorThisType);
-  if (AArgs.Length < 1) or not AArgs.GetElement(0).IsCallable then
-    ThrowTypeError(SErrorIteratorMapCallable,
-      SSuggestIteratorCallable);
+  Callback := IteratorCallbackArgOrClose(AArgs, AThisValue,
+    SErrorIteratorMapCallable, SSuggestIteratorCallable);
+  Iterator := IteratorThisToDirectIterator(AThisValue, 'map');
 
-  Result := TGocciaLazyMapIteratorValue.Create(
-    TGocciaIteratorValue(AThisValue), AArgs.GetElement(0)
-  );
+  TGarbageCollector.Instance.AddTempRoot(Iterator);
+  try
+    Result := TGocciaLazyMapIteratorValue.Create(
+      Iterator, Callback
+    );
+  finally
+    TGarbageCollector.Instance.RemoveTempRoot(Iterator);
+  end;
 end;
 
 function TGocciaIteratorValue.IteratorFilter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Callback: TGocciaValue;
+  Iterator: TGocciaIteratorValue;
 begin
-  if not (AThisValue is TGocciaIteratorValue) then
+  if not (AThisValue is TGocciaObjectValue) then
     ThrowTypeError(SErrorIteratorFilterNonIterator, SSuggestIteratorThisType);
-  if (AArgs.Length < 1) or not AArgs.GetElement(0).IsCallable then
-    ThrowTypeError(SErrorIteratorFilterCallable,
-      SSuggestIteratorCallable);
+  Callback := IteratorCallbackArgOrClose(AArgs, AThisValue,
+    SErrorIteratorFilterCallable, SSuggestIteratorCallable);
+  Iterator := IteratorThisToDirectIterator(AThisValue, 'filter');
 
-  Result := TGocciaLazyFilterIteratorValue.Create(
-    TGocciaIteratorValue(AThisValue), AArgs.GetElement(0)
-  );
+  TGarbageCollector.Instance.AddTempRoot(Iterator);
+  try
+    Result := TGocciaLazyFilterIteratorValue.Create(
+      Iterator, Callback
+    );
+  finally
+    TGarbageCollector.Instance.RemoveTempRoot(Iterator);
+  end;
 end;
 
 function TGocciaIteratorValue.IteratorTake(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
-  NumArg: TGocciaNumberLiteralValue;
+  Iterator: TGocciaIteratorValue;
   Limit: Integer;
 begin
-  if not (AThisValue is TGocciaIteratorValue) then
+  if not (AThisValue is TGocciaObjectValue) then
     ThrowTypeError(SErrorIteratorTakeNonIterator, SSuggestIteratorThisType);
-  if AArgs.Length < 1 then
-    ThrowRangeError(SErrorIteratorTakeRequiresArg, SSuggestIteratorNonNegative);
 
-  // ES2026 §27.1.4.2 steps 4-7: NaN and negative (incl. -∞) limits throw
+  // ES2026 §27.1.3.3.11 steps 4-7: NaN and negative (incl. -∞) limits throw
   // RangeError; +∞ takes everything (saturated to MaxInt here).
-  NumArg := AArgs.GetElement(0).ToNumberLiteral;
-  if NumArg.IsNaN then
-    ThrowRangeError(SErrorIteratorTakeNonNegative,
-      SSuggestIteratorNonNegative);
-  Limit := ToIntegerValue(NumArg);
-  if Limit < 0 then
-    ThrowRangeError(SErrorIteratorTakeNonNegative,
-      SSuggestIteratorNonNegative);
+  Limit := IteratorLimitArgOrClose(AArgs, AThisValue,
+    SErrorIteratorTakeRequiresArg, SErrorIteratorTakeNonNegative);
+  Iterator := IteratorThisToDirectIterator(AThisValue, 'take');
 
-  Result := TGocciaLazyTakeIteratorValue.Create(
-    TGocciaIteratorValue(AThisValue), Limit
-  );
+  TGarbageCollector.Instance.AddTempRoot(Iterator);
+  try
+    Result := TGocciaLazyTakeIteratorValue.Create(
+      Iterator, Limit
+    );
+  finally
+    TGarbageCollector.Instance.RemoveTempRoot(Iterator);
+  end;
 end;
 
 function TGocciaIteratorValue.IteratorDrop(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
-  NumArg: TGocciaNumberLiteralValue;
+  Iterator: TGocciaIteratorValue;
   DropCount: Integer;
 begin
-  if not (AThisValue is TGocciaIteratorValue) then
+  if not (AThisValue is TGocciaObjectValue) then
     ThrowTypeError(SErrorIteratorDropNonIterator, SSuggestIteratorThisType);
-  if AArgs.Length < 1 then
-    ThrowRangeError(SErrorIteratorDropRequiresArg, SSuggestIteratorNonNegative);
 
-  // ES2026 §27.1.4.1 steps 4-7: NaN and negative (incl. -∞) counts throw
+  // ES2026 §27.1.3.3.3 steps 4-7: NaN and negative (incl. -∞) counts throw
   // RangeError; +∞ drops everything (saturated to MaxInt here).
-  NumArg := AArgs.GetElement(0).ToNumberLiteral;
-  if NumArg.IsNaN then
-    ThrowRangeError(SErrorIteratorDropNonNegative,
-      SSuggestIteratorNonNegative);
-  DropCount := ToIntegerValue(NumArg);
-  if DropCount < 0 then
-    ThrowRangeError(SErrorIteratorDropNonNegative,
-      SSuggestIteratorNonNegative);
+  DropCount := IteratorLimitArgOrClose(AArgs, AThisValue,
+    SErrorIteratorDropRequiresArg, SErrorIteratorDropNonNegative);
+  Iterator := IteratorThisToDirectIterator(AThisValue, 'drop');
 
-  Result := TGocciaLazyDropIteratorValue.Create(
-    TGocciaIteratorValue(AThisValue), DropCount
-  );
+  TGarbageCollector.Instance.AddTempRoot(Iterator);
+  try
+    Result := TGocciaLazyDropIteratorValue.Create(
+      Iterator, DropCount
+    );
+  finally
+    TGarbageCollector.Instance.RemoveTempRoot(Iterator);
+  end;
 end;
 
 function TGocciaIteratorValue.IteratorFlatMap(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Callback: TGocciaValue;
+  Iterator: TGocciaIteratorValue;
 begin
-  if not (AThisValue is TGocciaIteratorValue) then
+  if not (AThisValue is TGocciaObjectValue) then
     ThrowTypeError(SErrorIteratorFlatMapNonIterator, SSuggestIteratorThisType);
-  if (AArgs.Length < 1) or not AArgs.GetElement(0).IsCallable then
-    ThrowTypeError(SErrorIteratorFlatMapCallable,
-      SSuggestIteratorFlatMapCallable);
+  Callback := IteratorCallbackArgOrClose(AArgs, AThisValue,
+    SErrorIteratorFlatMapCallable, SSuggestIteratorFlatMapCallable);
+  Iterator := IteratorThisToDirectIterator(AThisValue, 'flatMap');
 
-  Result := TGocciaLazyFlatMapIteratorValue.Create(
-    TGocciaIteratorValue(AThisValue), AArgs.GetElement(0)
-  );
+  TGarbageCollector.Instance.AddTempRoot(Iterator);
+  try
+    Result := TGocciaLazyFlatMapIteratorValue.Create(
+      Iterator, Callback
+    );
+  finally
+    TGarbageCollector.Instance.RemoveTempRoot(Iterator);
+  end;
 end;
 
 { Consuming helper methods — eagerly drain the iterator }
@@ -458,14 +812,12 @@ var
   Done: Boolean;
   Index: Integer;
 begin
-  if not (AThisValue is TGocciaIteratorValue) then
+  if not (AThisValue is TGocciaObjectValue) then
     ThrowTypeError(SErrorIteratorForEachNonIterator, SSuggestIteratorThisType);
-  if (AArgs.Length < 1) or not AArgs.GetElement(0).IsCallable then
-    ThrowTypeError(SErrorIteratorForEachCallable,
-      SSuggestIteratorCallable);
+  Callback := IteratorCallbackArgOrClose(AArgs, AThisValue,
+    SErrorIteratorForEachCallable, SSuggestIteratorCallable);
 
-  Iterator := TGocciaIteratorValue(AThisValue);
-  Callback := AArgs.GetElement(0);
+  Iterator := IteratorThisToDirectIterator(AThisValue, 'forEach');
   Index := 0;
 
   TGarbageCollector.Instance.AddTempRoot(Iterator);
@@ -479,7 +831,7 @@ begin
         Value := Iterator.DirectNext(Done);
       end;
     except
-      Iterator.Close;
+      CloseIteratorPreservingError(Iterator);
       raise;
     end;
   finally
@@ -498,14 +850,12 @@ var
   CallArgs: TGocciaArgumentsCollection;
   Index: Integer;
 begin
-  if not (AThisValue is TGocciaIteratorValue) then
+  if not (AThisValue is TGocciaObjectValue) then
     ThrowTypeError(SErrorIteratorReduceNonIterator, SSuggestIteratorThisType);
-  if (AArgs.Length < 1) or not AArgs.GetElement(0).IsCallable then
-    ThrowTypeError(SErrorIteratorReduceCallable,
-      SSuggestIteratorCallable);
+  Callback := IteratorCallbackArgOrClose(AArgs, AThisValue,
+    SErrorIteratorReduceCallable, SSuggestIteratorCallable);
 
-  Iterator := TGocciaIteratorValue(AThisValue);
-  Callback := AArgs.GetElement(0);
+  Iterator := IteratorThisToDirectIterator(AThisValue, 'reduce');
   HasInitial := AArgs.Length >= 2;
   Index := 0;
   Done := False;
@@ -548,7 +898,7 @@ begin
         TGarbageCollector.Instance.RemoveTempRoot(Accumulator);
       end;
     except
-      Iterator.Close;
+      CloseIteratorPreservingError(Iterator);
       raise;
     end;
   finally
@@ -563,20 +913,25 @@ var
   Value: TGocciaValue;
   Done: Boolean;
 begin
-  if not (AThisValue is TGocciaIteratorValue) then
+  if not (AThisValue is TGocciaObjectValue) then
     ThrowTypeError(SErrorIteratorToArrayNonIterator, SSuggestIteratorThisType);
 
-  Iterator := TGocciaIteratorValue(AThisValue);
+  Iterator := IteratorThisToDirectIterator(AThisValue, 'toArray');
   ResultArray := TGocciaArrayValue.Create;
 
   TGarbageCollector.Instance.AddTempRoot(Iterator);
   TGarbageCollector.Instance.AddTempRoot(ResultArray);
   try
-    Value := Iterator.DirectNext(Done);
-    while not Done do
-    begin
-      ResultArray.Elements.Add(Value);
+    try
       Value := Iterator.DirectNext(Done);
+      while not Done do
+      begin
+        ResultArray.Elements.Add(Value);
+        Value := Iterator.DirectNext(Done);
+      end;
+    except
+      CloseIteratorPreservingError(Iterator);
+      raise;
     end;
 
     Result := ResultArray;
@@ -593,14 +948,12 @@ var
   Done: Boolean;
   Index: Integer;
 begin
-  if not (AThisValue is TGocciaIteratorValue) then
+  if not (AThisValue is TGocciaObjectValue) then
     ThrowTypeError(SErrorIteratorSomeNonIterator, SSuggestIteratorThisType);
-  if (AArgs.Length < 1) or not AArgs.GetElement(0).IsCallable then
-    ThrowTypeError(SErrorIteratorSomeCallable,
-      SSuggestIteratorCallable);
+  Callback := IteratorCallbackArgOrClose(AArgs, AThisValue,
+    SErrorIteratorSomeCallable, SSuggestIteratorCallable);
 
-  Iterator := TGocciaIteratorValue(AThisValue);
-  Callback := AArgs.GetElement(0);
+  Iterator := IteratorThisToDirectIterator(AThisValue, 'some');
   Index := 0;
 
   TGarbageCollector.Instance.AddTempRoot(Iterator);
@@ -621,7 +974,7 @@ begin
 
       Result := TGocciaBooleanLiteralValue.FalseValue;
     except
-      Iterator.Close;
+      CloseIteratorPreservingError(Iterator);
       raise;
     end;
   finally
@@ -636,14 +989,12 @@ var
   Done: Boolean;
   Index: Integer;
 begin
-  if not (AThisValue is TGocciaIteratorValue) then
+  if not (AThisValue is TGocciaObjectValue) then
     ThrowTypeError(SErrorIteratorEveryNonIterator, SSuggestIteratorThisType);
-  if (AArgs.Length < 1) or not AArgs.GetElement(0).IsCallable then
-    ThrowTypeError(SErrorIteratorEveryCallable,
-      SSuggestIteratorCallable);
+  Callback := IteratorCallbackArgOrClose(AArgs, AThisValue,
+    SErrorIteratorEveryCallable, SSuggestIteratorCallable);
 
-  Iterator := TGocciaIteratorValue(AThisValue);
-  Callback := AArgs.GetElement(0);
+  Iterator := IteratorThisToDirectIterator(AThisValue, 'every');
   Index := 0;
 
   TGarbageCollector.Instance.AddTempRoot(Iterator);
@@ -664,7 +1015,7 @@ begin
 
       Result := TGocciaBooleanLiteralValue.TrueValue;
     except
-      Iterator.Close;
+      CloseIteratorPreservingError(Iterator);
       raise;
     end;
   finally
@@ -679,14 +1030,12 @@ var
   Done: Boolean;
   Index: Integer;
 begin
-  if not (AThisValue is TGocciaIteratorValue) then
+  if not (AThisValue is TGocciaObjectValue) then
     ThrowTypeError(SErrorIteratorFindNonIterator, SSuggestIteratorThisType);
-  if (AArgs.Length < 1) or not AArgs.GetElement(0).IsCallable then
-    ThrowTypeError(SErrorIteratorFindCallable,
-      SSuggestIteratorCallable);
+  Callback := IteratorCallbackArgOrClose(AArgs, AThisValue,
+    SErrorIteratorFindCallable, SSuggestIteratorCallable);
 
-  Iterator := TGocciaIteratorValue(AThisValue);
-  Callback := AArgs.GetElement(0);
+  Iterator := IteratorThisToDirectIterator(AThisValue, 'find');
   Index := 0;
 
   TGarbageCollector.Instance.AddTempRoot(Iterator);
@@ -707,7 +1056,7 @@ begin
 
       Result := TGocciaUndefinedLiteralValue.UndefinedValue;
     except
-      Iterator.Close;
+      CloseIteratorPreservingError(Iterator);
       raise;
     end;
   finally
@@ -1129,6 +1478,17 @@ end;
 
 { TGocciaIteratorHelperValue }
 
+constructor TGocciaIteratorHelperValue.Create;
+var
+  HelperPrototype: TGocciaObjectValue;
+begin
+  inherited Create;
+  EnsureIteratorHelperPrototypeInitialized;
+  HelperPrototype := GetSharedIteratorHelperPrototype;
+  if Assigned(HelperPrototype) then
+    FPrototype := HelperPrototype;
+end;
+
 function TGocciaIteratorHelperValue.AdvanceNext: TGocciaObjectValue;
 begin
   if FDone then
@@ -1164,7 +1524,30 @@ begin
   end;
 end;
 
+function TGocciaIteratorHelperValue.ReturnValue(
+  const AValue: TGocciaValue): TGocciaObjectValue;
+begin
+  if FExecuting then
+    ThrowTypeError(SErrorIteratorHelperExecuting, SSuggestIteratorProtocol);
+  if FDone then
+    Exit(CreateIteratorResult(AValue, True));
+  FExecuting := True;
+  try
+    Close;
+  finally
+    FExecuting := False;
+  end;
+  Result := CreateIteratorResult(AValue, True);
+end;
+
+procedure TGocciaIteratorHelperValue.Close;
+begin
+  FDone := True;
+end;
+
 initialization
   GIteratorPrototypeSlot := RegisterRealmSlot('Iterator.prototype');
+  GIteratorHelperPrototypeSlot := RegisterRealmSlot('IteratorHelper.prototype');
+  GIteratorConstructorSlot := RegisterRealmSlot('Iterator');
 
 end.

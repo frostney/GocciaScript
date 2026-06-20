@@ -17,13 +17,17 @@ uses
 type
   TGocciaSharedArrayBufferValue = class(TGocciaInstanceValue)
   private
+    const NO_MAX_BYTE_LENGTH = -1;
+  private
     FData: TBytes;
+    FMaxByteLength: Integer;
 
     function GetByteLength: Integer;
 
     procedure InitializePrototype;
   public
     constructor Create(const AByteLength: Integer = 0); overload;
+    constructor Create(const AByteLength: Integer; const AMaxByteLength: Integer); overload;
     constructor Create(const AClass: TGocciaClassValue); overload;
 
     function GetProperty(const AName: string): TGocciaValue; override;
@@ -36,10 +40,14 @@ type
     class procedure ExposePrototype(const AConstructor: TGocciaValue);
 
     property Data: TBytes read FData write FData;
+    property MaxByteLength: Integer read FMaxByteLength;
   published
     property ByteLength: Integer read GetByteLength;
     function SharedArrayBufferSlice(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function SharedArrayBufferGrow(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function SharedArrayBufferByteLengthGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function SharedArrayBufferMaxByteLengthGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function SharedArrayBufferGrowableGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
 implementation
@@ -71,6 +79,32 @@ begin
     Result := nil;
 end;
 
+function ToSharedArrayBufferIndex(const AValue: TGocciaValue): Integer;
+var
+  IntegerIndex: Double;
+  Num: TGocciaNumberLiteralValue;
+begin
+  if (AValue = nil) or (AValue is TGocciaUndefinedLiteralValue) then
+    Exit(0);
+
+  Num := AValue.ToNumberLiteral;
+  if Num.IsNaN then
+    IntegerIndex := 0
+  else if Num.IsInfinite then
+  begin
+    ThrowRangeError(SErrorInvalidSharedArrayBufferLength, SSuggestArrayLengthRange);
+    Exit(0);
+  end
+  else
+    IntegerIndex := Trunc(Num.Value);
+
+  if (IntegerIndex < 0) or (IntegerIndex > MAX_SAFE_INTEGER_F) or
+     (IntegerIndex > High(Integer)) then
+    ThrowRangeError(SErrorInvalidSharedArrayBufferLength, SSuggestArrayLengthRange);
+
+  Result := Trunc(IntegerIndex);
+end;
+
 function TGocciaSharedArrayBufferValue.GetByteLength: Integer;
 begin
   Result := Length(FData);
@@ -81,6 +115,29 @@ var
   Shared: TGocciaSharedPrototype;
 begin
   inherited Create(nil);
+  FMaxByteLength := NO_MAX_BYTE_LENGTH;
+  SetLength(FData, AByteLength);
+  if AByteLength > 0 then
+    FillChar(FData[0], AByteLength, 0);
+  InitializePrototype;
+  Shared := GetSharedArrayBufferShared;
+  if Assigned(Shared) then
+    FPrototype := Shared.Prototype;
+end;
+
+constructor TGocciaSharedArrayBufferValue.Create(const AByteLength: Integer; const AMaxByteLength: Integer);
+var
+  Shared: TGocciaSharedPrototype;
+begin
+  inherited Create(nil);
+  if AMaxByteLength >= 0 then
+  begin
+    if AByteLength > AMaxByteLength then
+      ThrowRangeError(SErrorInvalidSharedArrayBufferLength, SSuggestArrayLengthRange);
+    FMaxByteLength := AMaxByteLength;
+  end
+  else
+    FMaxByteLength := NO_MAX_BYTE_LENGTH;
   SetLength(FData, AByteLength);
   if AByteLength > 0 then
     FillChar(FData[0], AByteLength, 0);
@@ -95,6 +152,7 @@ var
   Shared: TGocciaSharedPrototype;
 begin
   inherited Create(AClass);
+  FMaxByteLength := NO_MAX_BYTE_LENGTH;
   SetLength(FData, 0);
   InitializePrototype;
   Shared := GetSharedArrayBufferShared;
@@ -117,8 +175,11 @@ begin
     Members := TGocciaMemberCollection.Create;
     try
       Members.AddMethod(SharedArrayBufferSlice, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(SharedArrayBufferGrow, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddPublishedGetter(
         TGocciaSharedArrayBufferValue, 'ByteLength', PROP_BYTE_LENGTH, [pfConfigurable]);
+      Members.AddAccessor(PROP_MAX_BYTE_LENGTH, SharedArrayBufferMaxByteLengthGetter, nil, [pfConfigurable]);
+      Members.AddAccessor(PROP_GROWABLE, SharedArrayBufferGrowableGetter, nil, [pfConfigurable]);
       Members.AddSymbolDataProperty(
         TGocciaSymbolValue.WellKnownToStringTag,
         TGocciaStringLiteralValue.Create(CONSTRUCTOR_SHARED_ARRAY_BUFFER),
@@ -148,47 +209,39 @@ end;
 // ES2026 §25.2.3.1 SharedArrayBuffer(length [, options])
 procedure TGocciaSharedArrayBufferValue.InitializeNativeFromArguments(const AArguments: TGocciaArgumentsCollection);
 var
-  LengthArg: TGocciaValue;
-  Num: TGocciaNumberLiteralValue;
-  IntegerIndex: Double;
   Len: Integer;
+  MaxByteLengthValue: TGocciaValue;
+  OptionsArg: TGocciaValue;
+  RequestedMaxByteLength: Integer;
 begin
-  // ES2026 §6.2.4.2 ToIndex(value)
-  // Step 1: If value is undefined, let integerIndex be 0
   if AArguments.Length = 0 then
+    Len := 0
+  else
+    Len := ToSharedArrayBufferIndex(AArguments.GetElement(0));
+
+  RequestedMaxByteLength := NO_MAX_BYTE_LENGTH;
+  if AArguments.Length > 1 then
   begin
-    SetLength(FData, 0);
-    Exit;
+    OptionsArg := AArguments.GetElement(1);
+    if not (OptionsArg is TGocciaUndefinedLiteralValue) and
+       not OptionsArg.IsPrimitive then
+    begin
+      MaxByteLengthValue := OptionsArg.GetProperty(PROP_MAX_BYTE_LENGTH);
+      if Assigned(MaxByteLengthValue) and
+         not (MaxByteLengthValue is TGocciaUndefinedLiteralValue) then
+        RequestedMaxByteLength := ToSharedArrayBufferIndex(MaxByteLengthValue);
+    end;
   end;
 
-  LengthArg := AArguments.GetElement(0);
-  if LengthArg is TGocciaUndefinedLiteralValue then
+  if RequestedMaxByteLength >= 0 then
   begin
-    SetLength(FData, 0);
-    Exit;
-  end;
-
-  // Step 2: Let integerIndex be ToIntegerOrInfinity(value) (ES2026 §7.1.5)
-  Num := LengthArg.ToNumberLiteral;
-  if Num.IsNaN then
-    IntegerIndex := 0
-  else if Num.IsInfinite then
-  begin
-    ThrowRangeError(SErrorInvalidSharedArrayBufferLength, SSuggestArrayLengthRange);
-    Exit;
+    if Len > RequestedMaxByteLength then
+      ThrowRangeError(SErrorInvalidSharedArrayBufferLength, SSuggestArrayLengthRange);
+    FMaxByteLength := RequestedMaxByteLength;
   end
   else
-    IntegerIndex := Trunc(Num.Value);
+    FMaxByteLength := NO_MAX_BYTE_LENGTH;
 
-  // Step 3: If integerIndex is not in [0, 2^53-1], throw RangeError.  Also
-  // reject anything above High(Integer): FData is a 32-bit-indexed dynamic
-  // array, so values in (High(Integer), 2^53-1] would silently overflow on
-  // truncation.  Mirrors the extra check in TGocciaArrayBufferValue.ToIndex.
-  if (IntegerIndex < 0) or (IntegerIndex > MAX_SAFE_INTEGER_F) or
-     (IntegerIndex > High(Integer)) then
-    ThrowRangeError(SErrorInvalidSharedArrayBufferLength, SSuggestArrayLengthRange);
-
-  Len := Trunc(IntegerIndex);
   SetLength(FData, Len);
   if Len > 0 then
     FillChar(FData[0], Len, 0);
@@ -207,8 +260,25 @@ end;
 
 function TGocciaSharedArrayBufferValue.GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue;
 begin
+  if (AName = PROP_MAX_BYTE_LENGTH) and HasOwnProperty(AName) then
+    Exit(inherited GetPropertyWithContext(AName, AThisContext));
+
   if AName = PROP_BYTE_LENGTH then
     Result := TGocciaNumberLiteralValue.Create(Length(FData))
+  else if AName = PROP_MAX_BYTE_LENGTH then
+  begin
+    if FMaxByteLength >= 0 then
+      Result := TGocciaNumberLiteralValue.Create(FMaxByteLength)
+    else
+      Result := TGocciaNumberLiteralValue.Create(Length(FData));
+  end
+  else if AName = PROP_GROWABLE then
+  begin
+    if FMaxByteLength >= 0 then
+      Result := TGocciaBooleanLiteralValue.TrueValue
+    else
+      Result := TGocciaBooleanLiteralValue.FalseValue;
+  end
   else
     Result := inherited GetPropertyWithContext(AName, AThisContext);
 end;
@@ -226,6 +296,72 @@ begin
       ['SharedArrayBuffer.prototype.byteLength']),
       SSuggestSharedArrayBufferThisType);
   Result := TGocciaNumberLiteralValue.Create(Length(TGocciaSharedArrayBufferValue(AThisValue).FData));
+end;
+
+function TGocciaSharedArrayBufferValue.SharedArrayBufferMaxByteLengthGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Buf: TGocciaSharedArrayBufferValue;
+begin
+  if not (AThisValue is TGocciaSharedArrayBufferValue) then
+    ThrowTypeError(Format(SErrorRequiresSharedArrayBuffer,
+      ['SharedArrayBuffer.prototype.maxByteLength']),
+      SSuggestSharedArrayBufferThisType);
+  Buf := TGocciaSharedArrayBufferValue(AThisValue);
+  if Buf.FMaxByteLength >= 0 then
+    Result := TGocciaNumberLiteralValue.Create(Buf.FMaxByteLength)
+  else
+    Result := TGocciaNumberLiteralValue.Create(Length(Buf.FData));
+end;
+
+function TGocciaSharedArrayBufferValue.SharedArrayBufferGrowableGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  if not (AThisValue is TGocciaSharedArrayBufferValue) then
+    ThrowTypeError(Format(SErrorRequiresSharedArrayBuffer,
+      ['SharedArrayBuffer.prototype.growable']),
+      SSuggestSharedArrayBufferThisType);
+  if TGocciaSharedArrayBufferValue(AThisValue).FMaxByteLength >= 0 then
+    Result := TGocciaBooleanLiteralValue.TrueValue
+  else
+    Result := TGocciaBooleanLiteralValue.FalseValue;
+end;
+
+function TGocciaSharedArrayBufferValue.SharedArrayBufferGrow(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Buf: TGocciaSharedArrayBufferValue;
+  CopyLength: Integer;
+  NewByteLength: Integer;
+  NewData: TBytes;
+  OldByteLength: Integer;
+begin
+  if not (AThisValue is TGocciaSharedArrayBufferValue) then
+    ThrowTypeError(Format(SErrorRequiresSharedArrayBuffer,
+      ['SharedArrayBuffer.prototype.grow']),
+      SSuggestSharedArrayBufferThisType);
+
+  Buf := TGocciaSharedArrayBufferValue(AThisValue);
+  if AArgs.Length = 0 then
+    NewByteLength := 0
+  else
+    NewByteLength := ToSharedArrayBufferIndex(AArgs.GetElement(0));
+
+  if Buf.FMaxByteLength < 0 then
+    ThrowTypeError('Cannot grow a fixed-length SharedArrayBuffer',
+      SSuggestArrayLengthRange);
+
+  OldByteLength := Length(Buf.FData);
+  if NewByteLength < OldByteLength then
+    ThrowRangeError(SErrorInvalidSharedArrayBufferLength, SSuggestArrayLengthRange);
+  if NewByteLength > Buf.FMaxByteLength then
+    ThrowRangeError(SErrorInvalidSharedArrayBufferLength, SSuggestArrayLengthRange);
+
+  CopyLength := Min(OldByteLength, NewByteLength);
+  SetLength(NewData, NewByteLength);
+  if NewByteLength > 0 then
+    FillChar(NewData[0], NewByteLength, 0);
+  if CopyLength > 0 then
+    Move(Buf.FData[0], NewData[0], CopyLength);
+  Buf.FData := NewData;
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 // ES2026 §25.2.5.6 SharedArrayBuffer.prototype.slice(start, end)

@@ -72,6 +72,19 @@ describe("TypedArray.prototype.filter", () => {
     expect(filtered[1]).toBe(4n);
   });
 
+  test("uses constructor Symbol.species override", () => {
+    const ta = new Uint8Array([1, 2, 3]);
+    ta.constructor = { [Symbol.species]: Float32Array };
+
+    const filtered = ta.filter(x => x >= 2);
+
+    expect(Object.prototype.toString.call(filtered)).toBe("[object Float32Array]");
+    expect(filtered.length).toBe(2);
+    expect(filtered.byteLength).toBe(8);
+    expect(filtered[0]).toBe(2);
+    expect(filtered[1]).toBe(3);
+  });
+
   test.each([BigInt64Array, BigUint64Array])("%s continues after callback detaches buffer", (TA) => {
     const ta = new TA(2);
     const buffer = ta.buffer;

@@ -250,6 +250,9 @@ Bodies see only the identifiers stock test262 expects:
 - `print` (Goccia engine global; stock `doneprintHandle.js` uses it for async markers)
 - `$262` helpers implemented by Goccia's bundled host object:
   `detachArrayBuffer`, `evalScript`, `gc`, `global`, and `createRealm`
+- `$262.agent` helpers used by Atomics tests: `start`, `broadcast`,
+  `receiveBroadcast`, `report`, `getReport`, `sleep`, `monotonicNow`, and
+  `leaving`
 - `test262Host`, a private marker on the `Goccia` namespace exposed only by
   `GocciaScriptLoaderBare --test262-host` so `$262.js` can reject accidental
   use outside the conformance host.
@@ -291,6 +294,12 @@ the official test262 host eval only for conformance runs; default Bare
 execution does not expose it. Bytecode direct calls to that host eval preserve
 the caller realm and caller lexical bindings, while shadowed or indirect eval
 calls use ordinary function-call semantics.
+
+`$262.agent` is host-gated in the same way. Agent `start` runs the supplied
+source in a test262-host-enabled bare-loader thread with the bundled `$262`
+object installed; `broadcast`/`receiveBroadcast` share the provided value with
+agent threads, and `report`/`getReport` provide the report queue used by
+Atomics wait/notify tests.
 
 ## Strict mode
 
