@@ -329,7 +329,6 @@ var
   Found: Boolean;
   I, J: Integer;
   OrderedCount: Integer;
-  ResultArray: TGocciaArrayValue;
   ResultObject: TGocciaObjectValue;
   ResultLength: Integer;
   SymbolCount: Integer;
@@ -383,16 +382,7 @@ begin
     ThrowTypeError(SErrorProxyOwnKeysArray, SSuggestProxyTrapReturnType);
 
   ResultObject := TGocciaObjectValue(TrapResult);
-  if TrapResult is TGocciaArrayValue then
-  begin
-    ResultArray := TGocciaArrayValue(TrapResult);
-    ResultLength := ResultArray.Elements.Count;
-  end
-  else
-  begin
-    ResultArray := nil;
-    ResultLength := LengthOfArrayLike(ResultObject);
-  end;
+  ResultLength := LengthOfArrayLike(ResultObject);
 
   SetLength(AStringKeys, ResultLength);
   SetLength(ASymbolKeys, ResultLength);
@@ -402,10 +392,7 @@ begin
   OrderedCount := 0;
   for I := 0 to ResultLength - 1 do
   begin
-    if Assigned(ResultArray) then
-      Element := ResultArray.Elements[I]
-    else
-      Element := ResultObject.GetProperty(IntToStr(I));
+    Element := ResultObject.GetProperty(IntToStr(I));
     if not (Element is TGocciaStringLiteralValue) and
        not (Element is TGocciaSymbolValue) then
       ThrowTypeError(SErrorProxyOwnKeysTypes, SSuggestProxyTrapReturnType);

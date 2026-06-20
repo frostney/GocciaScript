@@ -329,6 +329,18 @@ var
     else if Assigned(Promise) then
       Promise.Reject(AValue);
   end;
+
+  procedure RejectExceptionResult(const AException: Exception);
+  begin
+    if AException is TGocciaTypeError then
+      RejectResult(CreateErrorObject(TYPE_ERROR_NAME, AException.Message))
+    else if AException is TGocciaReferenceError then
+      RejectResult(CreateErrorObject(REFERENCE_ERROR_NAME, AException.Message))
+    else if AException is TGocciaSyntaxError then
+      RejectResult(CreateErrorObject(SYNTAX_ERROR_NAME, AException.Message))
+    else
+      RejectResult(CreateErrorObject(ERROR_NAME, AException.Message));
+  end;
 begin
   Promise := nil;
   Capability := nil;
@@ -366,6 +378,30 @@ begin
         on E: TGocciaThrowValue do
           if Assigned(Promise) or Assigned(Capability) then
             RejectResult(E.Value)
+          else
+            raise;
+        on E: TGocciaTimeoutError do
+          raise;
+        on E: TGocciaInstructionLimitError do
+          raise;
+        on E: TGocciaTypeError do
+          if Assigned(Promise) or Assigned(Capability) then
+            RejectExceptionResult(E)
+          else
+            raise;
+        on E: TGocciaReferenceError do
+          if Assigned(Promise) or Assigned(Capability) then
+            RejectExceptionResult(E)
+          else
+            raise;
+        on E: TGocciaSyntaxError do
+          if Assigned(Promise) or Assigned(Capability) then
+            RejectExceptionResult(E)
+          else
+            raise;
+        on E: Exception do
+          if Assigned(Promise) or Assigned(Capability) then
+            RejectExceptionResult(E)
           else
             raise;
       end;

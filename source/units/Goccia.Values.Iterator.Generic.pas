@@ -220,6 +220,16 @@ begin
      (ReturnMethod is TGocciaUndefinedLiteralValue) or
      (ReturnMethod is TGocciaNullLiteralValue) then
   begin
+    FDone := True;
+    if FSource is TGocciaIteratorValue then
+    begin
+      if AHasValue then
+        Result := TGocciaIteratorValue(FSource).ReturnValue(AValue)
+      else
+        Result := TGocciaIteratorValue(FSource).ReturnValue(
+          TGocciaUndefinedLiteralValue.UndefinedValue);
+      Exit;
+    end;
     if AHasValue then
       Result := CreateIteratorResult(AValue, True)
     else

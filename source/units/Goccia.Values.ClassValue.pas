@@ -1318,6 +1318,7 @@ var
   ConstructResult: TGocciaValue;
   EffectiveNewTarget: TGocciaValue;
   DelayNativePrototypeLookup: Boolean;
+  NativeInstanceConstructedByNativeSuper: Boolean;
   function IsUndefinedConstructResult(const AValue: TGocciaValue): Boolean;
   begin
     Result := (not Assigned(AValue)) or
@@ -1351,6 +1352,7 @@ begin
   NativeSuperConstructor := nil;
   NativeIntrinsicPrototype := nil;
   DelayNativePrototypeLookup := False;
+  NativeInstanceConstructedByNativeSuper := False;
   WalkClass := Self;
   while Assigned(WalkClass) do
   begin
@@ -1460,6 +1462,7 @@ begin
     if (not Assigned(NativeInstance)) and Assigned(NativeSuperConstructor) then
     begin
       NativeInstance := ConstructNativeSuperInstance(NativeSuperConstructor);
+      NativeInstanceConstructedByNativeSuper := Assigned(NativeInstance);
       if Assigned(NativeInstance) then
       begin
         Instance := NativeInstance;
@@ -1470,7 +1473,8 @@ begin
     end;
 
     if Assigned(NativeInstance) and (NativeInstance is TGocciaInstanceValue) then
-      TGocciaInstanceValue(NativeInstance).InitializeNativeFromArguments(AArguments);
+      if not NativeInstanceConstructedByNativeSuper then
+        TGocciaInstanceValue(NativeInstance).InitializeNativeFromArguments(AArguments);
   end;
 
   Result := Instance;

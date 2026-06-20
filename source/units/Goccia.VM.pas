@@ -1179,6 +1179,7 @@ begin
     ABinding.DeclarationType := dtVar;
     ABinding.Initialized := True;
     ABinding.BuiltIn := False;
+    ABinding.GlobalObjectBacked := False;
     ABinding.CanDelete := False;
     ABinding.TypeHint := sltUntyped;
     Exit(True);
@@ -1203,6 +1204,7 @@ begin
       ABinding.DeclarationType := dtVar;
     ABinding.Initialized := True;
     ABinding.BuiltIn := False;
+    ABinding.GlobalObjectBacked := False;
     ABinding.CanDelete := False;
     ABinding.TypeHint := sltUntyped;
     Exit(True);
@@ -2617,6 +2619,10 @@ type
   private
     FVM: TGocciaVM;
     FConstructorValue: TGocciaValue;
+    FNativeInstanceNewTarget: TGocciaValue;
+    function CreateNativeInstanceWithNewTarget(
+      const AArguments: TGocciaArgumentsCollection;
+      const ANewTarget: TGocciaValue): TGocciaObjectValue;
   public
     constructor Create(const AVM: TGocciaVM; const AName: string;
       const ASuperClass: TGocciaClassValue);
@@ -2994,6 +3000,7 @@ begin
   inherited Create(AName, ASuperClass);
   FVM := AVM;
   FConstructorValue := nil;
+  FNativeInstanceNewTarget := nil;
 end;
 
 function TGocciaVMClassValue.GetClassLength: Integer;
@@ -3017,6 +3024,7 @@ function TGocciaVMClassValue.CreateNativeInstance(
   const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue;
 var
   ConstructedValue: TGocciaValue;
+  EffectiveNewTarget: TGocciaValue;
 begin
   Result := inherited CreateNativeInstance(AArguments);
   if Assigned(Result) or not Assigned(NativeSuperConstructor) then
@@ -3025,8 +3033,12 @@ begin
   if NativeSuperConstructor = TGocciaFunctionBase.GetSharedPrototype then
     Exit(nil);
 
+  if Assigned(FNativeInstanceNewTarget) then
+    EffectiveNewTarget := FNativeInstanceNewTarget
+  else
+    EffectiveNewTarget := Self;
   ConstructedValue := FVM.ConstructValue(NativeSuperConstructor, AArguments,
-    Self);
+    EffectiveNewTarget);
   if ConstructedValue is TGocciaObjectValue then
     Result := TGocciaObjectValue(ConstructedValue)
   else
@@ -3034,6 +3046,21 @@ begin
     ThrowTypeError('Superclass constructor did not return an object',
       SSuggestNotConstructorType);
     Result := nil;
+  end;
+end;
+
+function TGocciaVMClassValue.CreateNativeInstanceWithNewTarget(
+  const AArguments: TGocciaArgumentsCollection;
+  const ANewTarget: TGocciaValue): TGocciaObjectValue;
+var
+  PreviousNewTarget: TGocciaValue;
+begin
+  PreviousNewTarget := FNativeInstanceNewTarget;
+  FNativeInstanceNewTarget := ANewTarget;
+  try
+    Result := CreateNativeInstance(AArguments);
+  finally
+    FNativeInstanceNewTarget := PreviousNewTarget;
   end;
 end;
 
@@ -6070,6 +6097,7 @@ var
   InitializerReplayReceiver: TGocciaObjectValue;
   PreviousConstructorSuperCalled: Boolean;
   ConstructorSuperCalled: Boolean;
+  NativeInstanceConstructedByNativeSuper: Boolean;
   function IsUndefinedConstructedValue(const AValue: TGocciaValue): Boolean;
   begin
     Result := (not Assigned(AValue)) or (AValue is TGocciaUndefinedLiteralValue);
@@ -6077,6 +6105,12 @@ var
   function HasDerivedConstructorReturnRestriction: Boolean;
   begin
     Result := Assigned(SuperClass) or Assigned(NativeSuperConstructor);
+  end;
+  function EffectiveNewTarget: TGocciaValue;
+  begin
+    if Assigned(ANewTarget) then
+      Exit(ANewTarget);
+    Result := Self;
   end;
   function ClassRequiresObjectConstructorReturn(
     const AClassValue: TGocciaClassValue): Boolean;
@@ -6161,12 +6195,24 @@ begin
     InstancePrototype := Prototype;
 
   NativeInstance := nil;
+  NativeInstanceConstructedByNativeSuper := False;
   if not (Assigned(FConstructorValue) and HasDerivedConstructorReturnRestriction) then
   begin
     WalkClass := Self;
     while Assigned(WalkClass) do
     begin
-      NativeInstance := WalkClass.CreateNativeInstance(AArguments);
+      if WalkClass is TGocciaVMClassValue then
+      begin
+        NativeInstance := TGocciaVMClassValue(WalkClass)
+          .CreateNativeInstanceWithNewTarget(AArguments, EffectiveNewTarget);
+        NativeInstanceConstructedByNativeSuper := Assigned(NativeInstance) and
+          Assigned(TGocciaVMClassValue(WalkClass).NativeSuperConstructor);
+      end
+      else
+      begin
+        NativeInstance := WalkClass.CreateNativeInstance(AArguments);
+        NativeInstanceConstructedByNativeSuper := False;
+      end;
       if Assigned(NativeInstance) then
         Break;
       WalkClass := WalkClass.SuperClass;
@@ -6242,7 +6288,8 @@ begin
           // selected the correct exotic receiver above. Re-entering implicit
           // super here would allocate a second receiver using the superclass
           // as newTarget and replace the derived instance.
-          if Instance is TGocciaInstanceValue then
+          if (Instance is TGocciaInstanceValue) and
+             not NativeInstanceConstructedByNativeSuper then
             TGocciaInstanceValue(Instance).InitializeNativeFromArguments(AArguments);
         end
         else if (SuperClass is TGocciaVMClassValue) and
@@ -6310,7 +6357,8 @@ begin
 
       if not Assigned(InitializerReplayReceiver) or
          (Instance <> InitializerReplayReceiver) then
-        if not HasDerivedConstructorReturnRestriction then
+        if (not HasDerivedConstructorReturnRestriction) or
+           Assigned(NativeInstance) then
           FVM.RunClassInitializers(Self, Instance);
 
       if Assigned(InitializerReplayReceiver) and
@@ -6354,6 +6402,7 @@ var
   InitializerReplayReceiver: TGocciaObjectValue;
   PreviousConstructorSuperCalled: Boolean;
   ConstructorSuperCalled: Boolean;
+  NativeInstanceConstructedByNativeSuper: Boolean;
   procedure EnsureBoxedArgs;
   begin
     if not Assigned(BoxedArgs) then
@@ -6507,6 +6556,7 @@ begin
   BoxedArgs := nil;
   try
     NativeInstance := nil;
+    NativeInstanceConstructedByNativeSuper := False;
     if not (Assigned(FConstructorValue) and HasDerivedConstructorReturnRestriction) then
     begin
       WalkClass := Self;
@@ -6516,11 +6566,14 @@ begin
         begin
           EnsureBoxedArgs;
           NativeInstance := WalkClass.CreateNativeInstance(BoxedArgs);
+          NativeInstanceConstructedByNativeSuper := False;
         end
         else if Assigned(TGocciaVMClassValue(WalkClass).NativeSuperConstructor) then
         begin
           EnsureBoxedArgs;
-          NativeInstance := WalkClass.CreateNativeInstance(BoxedArgs);
+          NativeInstance := TGocciaVMClassValue(WalkClass)
+            .CreateNativeInstanceWithNewTarget(BoxedArgs, Self);
+          NativeInstanceConstructedByNativeSuper := Assigned(NativeInstance);
         end;
         if Assigned(NativeInstance) then
           Break;
@@ -6616,7 +6669,8 @@ begin
             // super here would allocate a second receiver using the superclass
             // as newTarget and replace the derived instance.
             EnsureBoxedArgs;
-            if Instance is TGocciaInstanceValue then
+            if (Instance is TGocciaInstanceValue) and
+               not NativeInstanceConstructedByNativeSuper then
               TGocciaInstanceValue(Instance).InitializeNativeFromArguments(BoxedArgs);
           end
           else if (SuperClass is TGocciaVMClassValue) and
@@ -6832,6 +6886,8 @@ begin
   inherited;
   if Assigned(FConstructorValue) then
     FConstructorValue.MarkReferences;
+  if Assigned(FNativeInstanceNewTarget) then
+    FNativeInstanceNewTarget.MarkReferences;
 end;
 
 procedure TGocciaVMSuperConstructorValue.MarkReferences;
@@ -9716,6 +9772,15 @@ begin
         SSuggestNotConstructorType);
     ReceiverPrototype := GetProtoFromConstructor(EffectiveNewTarget);
     TGocciaObjectValue(TargetInstance).Prototype := ReceiverPrototype;
+    if TargetInstance is TGocciaInstanceValue then
+    begin
+      if AInstance is TGocciaInstanceValue then
+        TGocciaInstanceValue(TargetInstance).ClassValue :=
+          TGocciaInstanceValue(AInstance).ClassValue
+      else
+        TGocciaInstanceValue(TargetInstance).ClassValue := AClassValue;
+      TGocciaInstanceValue(TargetInstance).InitializeNativeFromArguments(AArguments);
+    end;
     Exit(TargetInstance);
   end;
 
@@ -9856,16 +9921,25 @@ begin
     BoxedArgs := MaterializeArguments(AArguments);
     try
       TargetInstance := AClassValue.CreateNativeInstance(BoxedArgs);
+      if not (TargetInstance is TGocciaObjectValue) then
+        ThrowTypeError(
+          'Superclass constructor did not return an object',
+          SSuggestNotConstructorType);
+      ReceiverPrototype := GetProtoFromConstructor(EffectiveNewTarget);
+      TGocciaObjectValue(TargetInstance).Prototype := ReceiverPrototype;
+      if TargetInstance is TGocciaInstanceValue then
+      begin
+        if AInstance is TGocciaInstanceValue then
+          TGocciaInstanceValue(TargetInstance).ClassValue :=
+            TGocciaInstanceValue(AInstance).ClassValue
+        else
+          TGocciaInstanceValue(TargetInstance).ClassValue := AClassValue;
+        TGocciaInstanceValue(TargetInstance).InitializeNativeFromArguments(BoxedArgs);
+      end;
+      Exit(TargetInstance);
     finally
       ReleaseArguments(BoxedArgs);
     end;
-    if not (TargetInstance is TGocciaObjectValue) then
-      ThrowTypeError(
-        'Superclass constructor did not return an object',
-        SSuggestNotConstructorType);
-    ReceiverPrototype := GetProtoFromConstructor(EffectiveNewTarget);
-    TGocciaObjectValue(TargetInstance).Prototype := ReceiverPrototype;
-    Exit(TargetInstance);
   end;
 
   if (AClassValue is TGocciaVMClassValue) and
@@ -14713,7 +14787,7 @@ begin
           begin
             if GetRegister(B) is TGocciaArrayValue then
               for I := 0 to TGocciaArrayValue(GetRegister(B)).Elements.Count - 1 do
-                CallArgs.Add(TGocciaArrayValue(GetRegister(B)).GetElement(I));
+                CallArgs.Add(TGocciaArrayValue(GetRegister(B)).GetProperty(IntToStr(I)));
           end
           else
             for I := 0 to B - 1 do

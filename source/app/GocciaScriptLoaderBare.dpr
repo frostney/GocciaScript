@@ -655,6 +655,8 @@ begin
     end;
 
     PumpCurrentThreadWork;
+    CheckInstructionLimit;
+    CheckExecutionTimeout;
     Sleep(1);
   until False;
 
@@ -707,6 +709,8 @@ begin
   Deadline := GetTickCount64 + QWord(Milliseconds);
   repeat
     PumpCurrentThreadWork;
+    CheckInstructionLimit;
+    CheckExecutionTimeout;
     NowMilliseconds := GetTickCount64;
     if NowMilliseconds >= Deadline then
       Break;
@@ -788,6 +792,8 @@ var
   Source: TStringList;
 begin
   InitThreadRuntime(False, FOptions.MaxMemoryBytes);
+  StartExecutionTimeout(FOptions.TimeoutMs);
+  StartInstructionLimit(FOptions.MaxInstructions);
   Source := TStringList.Create;
   try
     Source.Text := ReadUTF8FileText(ExpandFileName('scripts' + PathDelim +
@@ -1272,6 +1278,7 @@ function ParseOptions: TBareOptions;
 var
   I: Integer;
   Arg: string;
+  SourceMetadataPath: string;
 begin
   Result.Compatibility := [];
   Result.StrictTypes := False;
@@ -1348,9 +1355,15 @@ begin
     raise Exception.Create(
       '--profile-output requires --profile=opcodes|functions|all');
 
-  if Result.Test262Host and (Result.SourceName <> '') then
+  if Result.Test262Host then
+  begin
+    if Result.SourceName <> '' then
+      SourceMetadataPath := Result.SourceName
+    else
+      SourceMetadataPath := Result.FileName;
     Result.Test262AgentCanSuspend :=
-      Test262SourceCanSuspendAgent(Result.SourceName);
+      Test262SourceCanSuspendAgent(SourceMetadataPath);
+  end;
 end;
 
 function ReadBareSource(const AFileName: string): TStringList;

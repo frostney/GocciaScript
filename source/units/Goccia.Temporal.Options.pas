@@ -277,7 +277,7 @@ begin
     Exit; // year/month/week/day — no fixed maximum
   end;
 
-  if (AIncrement >= MaxVal) or (MaxVal mod AIncrement <> 0) then
+  if (AIncrement > MaxVal) or (MaxVal mod AIncrement <> 0) then
     ThrowRangeError(Format(SErrorRoundingIncrementDivisor, [AIncrement, MaxVal]),
       SSuggestTemporalRoundArg);
 end;

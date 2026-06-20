@@ -1136,6 +1136,7 @@ begin
       Flags := [pfWritable, pfConfigurable];
     GlobalThisObj.DefineProperty(Name,
       TGocciaPropertyDescriptorData.Create(Scope.GetValue(Name), Flags));
+    Scope.MarkGlobalObjectBackedBinding(Name);
   end;
 
   GlobalThisObj.DefineProperty('globalThis',
@@ -1144,6 +1145,7 @@ begin
     Scope.ForceUpdateBinding('globalThis', GlobalThisObj)
   else
     Scope.DefineLexicalBinding('globalThis', GlobalThisObj, dtConst, True);
+  Scope.MarkGlobalObjectBackedBinding('globalThis');
 
   // ES2026 §9.1.2.5 NewGlobalEnvironment: a global Environment Record's
   // [[GlobalThisValue]] is the global object. Top-level `this` resolves

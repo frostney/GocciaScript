@@ -408,7 +408,7 @@ var
       PropValue := Source.GetProperty(AName);
       if IsReadonlyStringExoticKey(InitialObj, AName) then
         ThrowTypeError(Format(SErrorCannotAssignReadOnly, [AName]),
-          SSuggestCannotDeleteNonConfigurable);
+          SSuggestReadOnlyProperty);
       InitialObj.SetProperty(AName, PropValue);
     end;
   end;
@@ -1042,6 +1042,7 @@ var
   Key: TGocciaValue;
   PropertyKey: TGocciaValue;
   Value: TGocciaValue;
+  IteratorRoot, ResultRoot: TGocciaTempRoot;
 begin
   if AArgs.Length > 0 then
     Iterable := AArgs.GetElement(0)
@@ -1055,35 +1056,47 @@ begin
   if not Assigned(Iterator) then
     ThrowTypeError(SErrorObjectFromEntriesRequiresIterable, SSuggestNotIterable);
 
-  // Step 2: Let obj be OrdinaryObjectCreate(%Object.prototype%).
-  Obj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
-
-  while True do
-  begin
-    Entry := Iterator.DirectNext(Done);
-    if Done then
-      Exit(Obj);
+  InitializeTempRoot(IteratorRoot);
+  InitializeTempRoot(ResultRoot);
+  AddTempRootIfNeeded(IteratorRoot, Iterator);
+  try
+    // Step 2: Let obj be OrdinaryObjectCreate(%Object.prototype%).
+    Obj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
+    AddTempRootIfNeeded(ResultRoot, Obj);
 
     try
-      if not (Entry is TGocciaObjectValue) then
-        ThrowTypeError(SErrorObjectFromEntriesRequiresPairs, SSuggestNotIterable);
-      EntryObject := TGocciaObjectValue(Entry);
+      while True do
+      begin
+        Entry := Iterator.DirectNext(Done);
+        if Done then
+          Exit(Obj);
 
-      // ES2026 §24.1.1.2 steps 2.d-f: Get(entry, "0") and Get(entry, "1").
-      Key := EntryObject.GetProperty('0');
-      if not Assigned(Key) then
-        Key := TGocciaUndefinedLiteralValue.UndefinedValue;
-      Value := EntryObject.GetProperty('1');
-      if not Assigned(Value) then
-        Value := TGocciaUndefinedLiteralValue.UndefinedValue;
+        try
+          if not (Entry is TGocciaObjectValue) then
+            ThrowTypeError(SErrorObjectFromEntriesRequiresPairs, SSuggestNotIterable);
+          EntryObject := TGocciaObjectValue(Entry);
 
-      // ES2026 §20.1.2.7 steps 4.a-b: ToPropertyKey and CreateDataProperty.
-      PropertyKey := ToPropertyKey(Key);
-      Obj.CreateDataPropertyOrThrow(PropertyKey, Value);
-    except
-      CloseIteratorPreservingError(Iterator);
-      raise;
+          // ES2026 §24.1.1.2 steps 2.d-f: Get(entry, "0") and Get(entry, "1").
+          Key := EntryObject.GetProperty('0');
+          if not Assigned(Key) then
+            Key := TGocciaUndefinedLiteralValue.UndefinedValue;
+          Value := EntryObject.GetProperty('1');
+          if not Assigned(Value) then
+            Value := TGocciaUndefinedLiteralValue.UndefinedValue;
+
+          // ES2026 §20.1.2.7 steps 4.a-b: ToPropertyKey and CreateDataProperty.
+          PropertyKey := ToPropertyKey(Key);
+          Obj.CreateDataPropertyOrThrow(PropertyKey, Value);
+        except
+          CloseIteratorPreservingError(Iterator);
+          raise;
+        end;
+      end;
+    finally
+      RemoveTempRootIfNeeded(ResultRoot);
     end;
+  finally
+    RemoveTempRootIfNeeded(IteratorRoot);
   end;
 end;
 

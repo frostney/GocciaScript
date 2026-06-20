@@ -95,6 +95,7 @@ type
   private
     FResolve: TGocciaValue;
     FReject: TGocciaValue;
+    FInvoked: Boolean;
   public
     function Invoke(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
@@ -143,13 +144,21 @@ type
     procedure MarkReferences; override;
   end;
 
+  TPromiseAlreadyCalledCell = class(TGocciaObjectValue)
+  private
+    FCalled: Boolean;
+  public
+    property Called: Boolean read FCalled write FCalled;
+  end;
+
   TPromiseAllSettledFulfillHandler = class(TGocciaObjectValue)
   private
     FState: TPromiseAllState;
     FIndex: Integer;
-    FAlreadyCalled: Boolean;
+    FAlreadyCalled: TPromiseAlreadyCalledCell;
   public
-    constructor Create(const AState: TPromiseAllState; const AIndex: Integer);
+    constructor Create(const AState: TPromiseAllState; const AIndex: Integer;
+      const AAlreadyCalled: TPromiseAlreadyCalledCell);
     function Invoke(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     procedure MarkReferences; override;
   end;
@@ -158,9 +167,10 @@ type
   private
     FState: TPromiseAllState;
     FIndex: Integer;
-    FAlreadyCalled: Boolean;
+    FAlreadyCalled: TPromiseAlreadyCalledCell;
   public
-    constructor Create(const AState: TPromiseAllState; const AIndex: Integer);
+    constructor Create(const AState: TPromiseAllState; const AIndex: Integer;
+      const AAlreadyCalled: TPromiseAlreadyCalledCell);
     function Invoke(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     procedure MarkReferences; override;
   end;
@@ -267,16 +277,13 @@ type
 function TPromiseCapabilityExecutor.Invoke(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
-  function HasNonUndefinedValue(const AValue: TGocciaValue): Boolean;
-  begin
-    Result := Assigned(AValue) and not (AValue is TGocciaUndefinedLiteralValue);
-  end;
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 
-  if HasNonUndefinedValue(FResolve) or HasNonUndefinedValue(FReject) then
+  if FInvoked then
     ThrowTypeError(SErrorPromiseResolverNotFunction, SSuggestPromiseResolver);
 
+  FInvoked := True;
   FResolve := AArgs.GetElement(0);
   FReject := AArgs.GetElement(1);
 end;
@@ -471,9 +478,9 @@ end;
 function PromiseDefaultPrototypeForNewTarget(const ANewTarget: TGocciaValue;
   const AIntrinsicDefault: TGocciaObjectValue): TGocciaObjectValue;
 var
-  ConstructorPrototype, ConstructorValue, ProtoValue: TGocciaValue;
+  ProtoValue: TGocciaValue;
   FallbackRealm: TGocciaRealm;
-  GlobalScope: TGocciaScope;
+  FallbackPrototype: TGocciaObjectValue;
 begin
   if ANewTarget is TGocciaObjectValue then
     ProtoValue := TGocciaObjectValue(ANewTarget).GetProperty(PROP_PROTOTYPE)
@@ -487,18 +494,11 @@ begin
   if ANewTarget is TGocciaFunctionBase then
     FallbackRealm := TGocciaFunctionBase(ANewTarget).CreationRealm;
 
-  if Assigned(FallbackRealm) and
-     (FallbackRealm.GlobalEnv is TGocciaScope) then
+  if Assigned(FallbackRealm) then
   begin
-    GlobalScope := TGocciaScope(FallbackRealm.GlobalEnv);
-    if GlobalScope.TryGetBindingValue('Promise', ConstructorValue) and
-       (ConstructorValue is TGocciaObjectValue) then
-    begin
-      ConstructorPrototype :=
-        TGocciaObjectValue(ConstructorValue).GetProperty(PROP_PROTOTYPE);
-      if ConstructorPrototype is TGocciaObjectValue then
-        Exit(TGocciaObjectValue(ConstructorPrototype));
-    end;
+    FallbackPrototype := GetPromiseIntrinsicPrototypeForRealm(FallbackRealm);
+    if Assigned(FallbackPrototype) then
+      Exit(FallbackPrototype);
   end;
 
   Result := AIntrinsicDefault;
@@ -629,12 +629,14 @@ end;
 
 { TPromiseAllSettledFulfillHandler }
 
-constructor TPromiseAllSettledFulfillHandler.Create(const AState: TPromiseAllState; const AIndex: Integer);
+constructor TPromiseAllSettledFulfillHandler.Create(
+  const AState: TPromiseAllState; const AIndex: Integer;
+  const AAlreadyCalled: TPromiseAlreadyCalledCell);
 begin
   inherited Create(nil);
   FState := AState;
   FIndex := AIndex;
-  FAlreadyCalled := False;
+  FAlreadyCalled := AAlreadyCalled;
 end;
 
 function TPromiseAllSettledFulfillHandler.Invoke(const AArgs: TGocciaArgumentsCollection;
@@ -643,8 +645,9 @@ var
   Entry: TGocciaObjectValue;
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-  if FAlreadyCalled then Exit;
-  FAlreadyCalled := True;
+  if Assigned(FAlreadyCalled) and FAlreadyCalled.Called then Exit;
+  if Assigned(FAlreadyCalled) then
+    FAlreadyCalled.Called := True;
   if FState.Settled then Exit;
 
   Entry := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
@@ -666,16 +669,19 @@ begin
   if GCMarked then Exit;
   inherited;
   if Assigned(FState) then FState.MarkReferences;
+  if Assigned(FAlreadyCalled) then FAlreadyCalled.MarkReferences;
 end;
 
 { TPromiseAllSettledRejectHandler }
 
-constructor TPromiseAllSettledRejectHandler.Create(const AState: TPromiseAllState; const AIndex: Integer);
+constructor TPromiseAllSettledRejectHandler.Create(
+  const AState: TPromiseAllState; const AIndex: Integer;
+  const AAlreadyCalled: TPromiseAlreadyCalledCell);
 begin
   inherited Create(nil);
   FState := AState;
   FIndex := AIndex;
-  FAlreadyCalled := False;
+  FAlreadyCalled := AAlreadyCalled;
 end;
 
 function TPromiseAllSettledRejectHandler.Invoke(const AArgs: TGocciaArgumentsCollection;
@@ -684,8 +690,9 @@ var
   Entry: TGocciaObjectValue;
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-  if FAlreadyCalled then Exit;
-  FAlreadyCalled := True;
+  if Assigned(FAlreadyCalled) and FAlreadyCalled.Called then Exit;
+  if Assigned(FAlreadyCalled) then
+    FAlreadyCalled.Called := True;
   if FState.Settled then Exit;
 
   Entry := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
@@ -707,6 +714,7 @@ begin
   if GCMarked then Exit;
   inherited;
   if Assigned(FState) then FState.MarkReferences;
+  if Assigned(FAlreadyCalled) then FAlreadyCalled.MarkReferences;
 end;
 
 { TPromiseRaceHandler }
@@ -1467,6 +1475,7 @@ begin
       except
         on E: Exception do
         begin
+          CloseIteratorPreservingError(Iterator);
           Result := RejectPromiseCapabilityWithException(Capability, E);
           Exit;
         end;
@@ -1548,6 +1557,7 @@ var
   FulfillHandler: TPromiseAllSettledFulfillHandler;
   RejectHandler: TPromiseAllSettledRejectHandler;
   FulfillFn, RejectFn: TGocciaNativeFunctionValue;
+  AlreadyCalled: TPromiseAlreadyCalledCell;
   Done: Boolean;
   Index: Integer;
 begin
@@ -1567,15 +1577,10 @@ begin
       try
         NextValue := Iterator.DirectNext(Done);
       except
-        on E: EGocciaBytecodeThrow do
+        on E: Exception do
         begin
-          Result := RejectPromiseCapabilityWithReason(Capability,
-            E.ThrownValue);
-          Exit;
-        end;
-        on E: TGocciaThrowValue do
-        begin
-          Result := RejectPromiseCapabilityWithReason(Capability, E.Value);
+          CloseIteratorPreservingError(Iterator);
+          Result := RejectPromiseCapabilityWithException(Capability, E);
           Exit;
         end;
       end;
@@ -1593,9 +1598,11 @@ begin
         State.Results.Elements.Add(TGocciaUndefinedLiteralValue.UndefinedValue);
         PromiseLike := CallPromiseResolveMethod(PromiseResolve, AThisValue,
           NextValue);
+        AlreadyCalled := TPromiseAlreadyCalledCell.Create(nil);
         FulfillHandler := TPromiseAllSettledFulfillHandler.Create(State,
-          Index);
-        RejectHandler := TPromiseAllSettledRejectHandler.Create(State, Index);
+          Index, AlreadyCalled);
+        RejectHandler := TPromiseAllSettledRejectHandler.Create(State, Index,
+          AlreadyCalled);
 
         FulfillFn := CreatePromiseElementFunction(FulfillHandler.Invoke,
           FulfillHandler);
@@ -1670,15 +1677,10 @@ begin
       try
         NextValue := Iterator.DirectNext(Done);
       except
-        on E: EGocciaBytecodeThrow do
+        on E: Exception do
         begin
-          Result := RejectPromiseCapabilityWithReason(Capability,
-            E.ThrownValue);
-          Exit;
-        end;
-        on E: TGocciaThrowValue do
-        begin
-          Result := RejectPromiseCapabilityWithReason(Capability, E.Value);
+          CloseIteratorPreservingError(Iterator);
+          Result := RejectPromiseCapabilityWithException(Capability, E);
           Exit;
         end;
       end;
@@ -1756,15 +1758,10 @@ begin
       try
         NextValue := Iterator.DirectNext(Done);
       except
-        on E: EGocciaBytecodeThrow do
+        on E: Exception do
         begin
-          Result := RejectPromiseCapabilityWithReason(Capability,
-            E.ThrownValue);
-          Exit;
-        end;
-        on E: TGocciaThrowValue do
-        begin
-          Result := RejectPromiseCapabilityWithReason(Capability, E.Value);
+          CloseIteratorPreservingError(Iterator);
+          Result := RejectPromiseCapabilityWithException(Capability, E);
           Exit;
         end;
       end;
@@ -1920,8 +1917,8 @@ begin
     on E: TGocciaInstructionLimitError do
       raise;
     on E: Exception do
-      CallPromiseCapability(Capability.Reject, CreateErrorObject(ERROR_NAME,
-        E.Message));
+      CallPromiseCapability(Capability.Reject,
+        PromiseRejectionReasonFromException(E));
   end;
 
   { Step 7: Return promiseCapability.[[Promise]] }

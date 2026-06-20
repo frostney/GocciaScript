@@ -44,6 +44,8 @@ type
     FRejectArgumentsReferenceInDirectEval: Boolean;
     // Shared tail of TryGetBinding / TryGetBindingValueFillCache:
     // resolution after the own lexical map has already been consulted.
+    function IsGlobalBuiltInObjectBinding(
+      const ALexicalBinding: TLexicalBinding): Boolean;
     function TryGetGlobalBuiltInObjectBinding(const AName: string;
       const ALexicalBinding: TLexicalBinding;
       out ABinding: TLexicalBinding): Boolean;
@@ -76,6 +78,7 @@ type
       const ALine: Integer = 0; const AColumn: Integer = 0;
       const ANonStrictMode: Boolean = False); virtual;
     procedure ForceUpdateBinding(const AName: string; const AValue: TGocciaValue);
+    procedure MarkGlobalObjectBackedBinding(const AName: string);
 
     // Var binding support (separate map on function/module/global scopes)
     procedure DefineVariableBinding(const AName: string; const AValue: TGocciaValue;
@@ -617,6 +620,7 @@ begin
   LexicalBinding.DeclarationType := ADeclarationType;
   LexicalBinding.Initialized := False;
   LexicalBinding.BuiltIn := False;
+  LexicalBinding.GlobalObjectBacked := False;
   LexicalBinding.CanDelete := False;
   LexicalBinding.TypeHint := sltUntyped;
   FLexicalBindings.Add(AName, LexicalBinding);
@@ -637,6 +641,7 @@ begin
       ExistingLexicalBinding.DeclarationType := ADeclarationType;
       ExistingLexicalBinding.Initialized := True;
       ExistingLexicalBinding.BuiltIn := ABuiltIn;
+      ExistingLexicalBinding.GlobalObjectBacked := False;
       FLexicalBindings.AddOrSetValue(AName, ExistingLexicalBinding);
       Exit;
     end;
@@ -671,6 +676,7 @@ begin
   // - dtParameter: parameters have no TDZ
   LexicalBinding.Initialized := True;
   LexicalBinding.BuiltIn := ABuiltIn;
+  LexicalBinding.GlobalObjectBacked := False;
   LexicalBinding.CanDelete := False;
   LexicalBinding.TypeHint := sltUntyped;
 
@@ -708,6 +714,25 @@ begin
   begin
     LexicalBinding.Value := AValue;
     LexicalBinding.Initialized := True;
+    FVarBindings.AddOrSetValue(AName, LexicalBinding);
+  end;
+end;
+
+procedure TGocciaScope.MarkGlobalObjectBackedBinding(const AName: string);
+var
+  LexicalBinding: TLexicalBinding;
+begin
+  if FLexicalBindings.TryGetValue(AName, LexicalBinding) then
+  begin
+    LexicalBinding.GlobalObjectBacked := True;
+    FLexicalBindings.AddOrSetValue(AName, LexicalBinding);
+    Exit;
+  end;
+
+  if Assigned(FVarBindings) and FVarBindings.TryGetValue(AName,
+     LexicalBinding) then
+  begin
+    LexicalBinding.GlobalObjectBacked := True;
     FVarBindings.AddOrSetValue(AName, LexicalBinding);
   end;
 end;
@@ -777,6 +802,7 @@ begin
     Binding.DeclarationType := dtVar;
     Binding.Initialized := True;
     Binding.BuiltIn := False;
+    Binding.GlobalObjectBacked := False;
     Binding.CanDelete := ACanDelete;
     Binding.TypeHint := sltUntyped;
     TargetScope.FVarBindings.AddOrSetValue(AName, Binding);
@@ -968,19 +994,22 @@ begin
   begin
     if not LexicalBinding.IsAccessible then
       RaiseBindingNotInitialized(AName, ALine, AColumn);
-    if LexicalBinding.BuiltIn and LexicalBinding.Writable and
-       (FScopeKind = skGlobal) and (FThisValue is TGocciaObjectValue) and
-       TGocciaObjectValue(FThisValue).HasProperty(AName) then
+    if IsGlobalBuiltInObjectBinding(LexicalBinding) then
     begin
       GlobalObject := TGocciaObjectValue(FThisValue);
-      if ANonStrictMode then
-        GlobalObject.AssignPropertyWithReceiver(AName, AValue, GlobalObject)
-      else
-        GlobalObject.AssignProperty(AName, AValue);
-      LexicalBinding.Value := GlobalObject.GetProperty(AName);
-      LexicalBinding.Initialized := True;
-      FLexicalBindings.AddOrSetValue(AName, LexicalBinding);
-      Exit(True);
+      if not GlobalObject.HasProperty(AName) then
+        Exit(False);
+      if LexicalBinding.Writable then
+      begin
+        if ANonStrictMode then
+          GlobalObject.AssignPropertyWithReceiver(AName, AValue, GlobalObject)
+        else
+          GlobalObject.AssignProperty(AName, AValue);
+        LexicalBinding.Value := GlobalObject.GetProperty(AName);
+        LexicalBinding.Initialized := True;
+        FLexicalBindings.AddOrSetValue(AName, LexicalBinding);
+        Exit(True);
+      end;
     end;
     if not LexicalBinding.Writable then
       raise TGocciaTypeError.Create(
@@ -1063,8 +1092,13 @@ begin
   begin
     if not ABinding.IsAccessible then
       RaiseBindingNotInitialized(AName, ALine, AColumn);
-    if TryGetGlobalBuiltInObjectBinding(AName, ABinding, ABinding) then
-      Exit(True);
+    if IsGlobalBuiltInObjectBinding(ABinding) then
+    begin
+      if TryGetGlobalBuiltInObjectBinding(AName, ABinding, ABinding) then
+        Exit(True);
+      ABinding := Default(TLexicalBinding);
+      Exit(False);
+    end;
     Exit(True);
   end;
   Result := TryGetBindingSkipLexical(AName, ABinding, ALine, AColumn);
@@ -1097,14 +1131,20 @@ begin
     AValue := nil;
 end;
 
+function TGocciaScope.IsGlobalBuiltInObjectBinding(
+  const ALexicalBinding: TLexicalBinding): Boolean;
+begin
+  Result := ALexicalBinding.BuiltIn and ALexicalBinding.GlobalObjectBacked and
+    (FScopeKind = skGlobal) and (FThisValue is TGocciaObjectValue);
+end;
+
 function TGocciaScope.TryGetGlobalBuiltInObjectBinding(const AName: string;
   const ALexicalBinding: TLexicalBinding;
   out ABinding: TLexicalBinding): Boolean;
 var
   GlobalObject: TGocciaObjectValue;
 begin
-  if (not ALexicalBinding.BuiltIn) or (FScopeKind <> skGlobal) or
-     not (FThisValue is TGocciaObjectValue) then
+  if not IsGlobalBuiltInObjectBinding(ALexicalBinding) then
     Exit(False);
 
   GlobalObject := TGocciaObjectValue(FThisValue);
@@ -1127,6 +1167,7 @@ begin
     ABinding.DeclarationType := dtVar;
     ABinding.Initialized := True;
     ABinding.BuiltIn := False;
+    ABinding.GlobalObjectBacked := False;
     ABinding.CanDelete := False;
     ABinding.TypeHint := sltUntyped;
     Exit(True);
@@ -1152,11 +1193,16 @@ begin
   end;
   if not LexicalBinding.IsAccessible then
     RaiseBindingNotInitialized(FLexicalBindings.KeyAtEntry(AEntryIndex), 0, 0);
-  if TryGetGlobalBuiltInObjectBinding(FLexicalBindings.KeyAtEntry(AEntryIndex),
-     LexicalBinding, LexicalBinding) then
+  if IsGlobalBuiltInObjectBinding(LexicalBinding) then
   begin
-    AValue := LexicalBinding.Value;
-    Exit(True);
+    if TryGetGlobalBuiltInObjectBinding(FLexicalBindings.KeyAtEntry(AEntryIndex),
+       LexicalBinding, LexicalBinding) then
+    begin
+      AValue := LexicalBinding.Value;
+      Exit(True);
+    end;
+    AValue := nil;
+    Exit(False);
   end;
   AValue := LexicalBinding.Value;
   Result := True;
@@ -1174,11 +1220,18 @@ begin
     FLexicalBindings.TryGetValueAtEntry(AEntryIndex, LexicalBinding);
     if not LexicalBinding.IsAccessible then
       RaiseBindingNotInitialized(AName, 0, 0);
-    if TryGetGlobalBuiltInObjectBinding(AName, LexicalBinding,
-       LexicalBinding) then
+    if IsGlobalBuiltInObjectBinding(LexicalBinding) then
     begin
-      AValue := LexicalBinding.Value;
-      Exit(True);
+      if TryGetGlobalBuiltInObjectBinding(AName, LexicalBinding,
+         LexicalBinding) then
+      begin
+        AValue := LexicalBinding.Value;
+        Exit(True);
+      end;
+      AEntryIndex := -1;
+      AVersion := 0;
+      AValue := nil;
+      Exit(False);
     end;
     AValue := LexicalBinding.Value;
     Exit(True);
@@ -1588,6 +1641,7 @@ begin
     ABinding.DeclarationType := dtVar;
     ABinding.Initialized := True;
     ABinding.BuiltIn := False;
+    ABinding.GlobalObjectBacked := False;
     ABinding.CanDelete := False;
     ABinding.TypeHint := sltUntyped;
     Exit(True);

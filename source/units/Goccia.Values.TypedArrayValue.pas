@@ -2563,7 +2563,7 @@ end;
 function TGocciaTypedArrayValue.TypedArrayToSorted(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   TA, NewTA: TGocciaTypedArrayValue;
-  I: Integer;
+  I, Len: Integer;
   SortArgs: TGocciaArgumentsCollection;
   ResultRoot: TGocciaTempRoot;
 begin
@@ -2572,18 +2572,19 @@ begin
      not (AArgs.GetElement(0) is TGocciaUndefinedLiteralValue) and
      not AArgs.GetElement(0).IsCallable then
     ThrowTypeError(SErrorCustomSortMustBeFunction, SSuggestCallbackRequired);
-  NewTA := CreateSameKindArray(TA, TA.FLength);
+  Len := TA.Length;
+  NewTA := CreateSameKindArray(TA, Len);
   InitializeTempRoot(ResultRoot);
   AddTempRootIfNeeded(ResultRoot, NewTA);
   try
     if IsBigIntKind(TA.FKind) then
     begin
-      for I := 0 to TA.FLength - 1 do
+      for I := 0 to Len - 1 do
         NewTA.WriteBigIntElement(I, TA.ReadBigIntElement(I));
     end
     else
     begin
-      for I := 0 to TA.FLength - 1 do
+      for I := 0 to Len - 1 do
         NewTA.WriteElement(I, TA.ReadElement(I));
     end;
     SortArgs := TGocciaArgumentsCollection.Create;
@@ -2758,6 +2759,10 @@ var
   BufferByteLength: Integer;
   HasLength: Boolean;
   RawLen: Double;
+  Val: TGocciaValue;
+  ResultRoot: TGocciaTempRoot;
+  ValueRoots: array of TGocciaTempRoot;
+  ValueRootCount: Integer;
 begin
   BPE := TGocciaTypedArrayValue.BytesPerElement(FKind);
 
@@ -2896,6 +2901,8 @@ begin
         Iterator := TGocciaGenericIteratorValue.Create(Iterator,
           Iterator.GetProperty(PROP_NEXT));
       Values := TGocciaValueList.Create(False);
+      ValueRootCount := 0;
+      InitializeTempRoot(ResultRoot);
       try
         TGarbageCollector.Instance.AddTempRoot(Iterator);
         try
@@ -2903,7 +2910,13 @@ begin
             IterResult := Iterator.AdvanceNext;
             while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
             begin
-              Values.Add(IterResult.GetProperty(PROP_VALUE));
+              Val := IterResult.GetProperty(PROP_VALUE);
+              Values.Add(Val);
+              if ValueRootCount >= Length(ValueRoots) then
+                SetLength(ValueRoots, ValueRootCount * 2 + 4);
+              InitializeTempRoot(ValueRoots[ValueRootCount]);
+              AddTempRootIfNeeded(ValueRoots[ValueRootCount], Val);
+              Inc(ValueRootCount);
               IterResult := Iterator.AdvanceNext;
             end;
           except
@@ -2915,9 +2928,17 @@ begin
           TGarbageCollector.Instance.RemoveTempRoot(Iterator);
         end;
         NewTA := TGocciaTypedArrayValue.Create(FKind, Values.Count);
-        for I := 0 to Values.Count - 1 do
-          NewTA.WriteValueToElement(I, Values[I]);
+        AddTempRootIfNeeded(ResultRoot, NewTA);
+        try
+          for I := 0 to Values.Count - 1 do
+            NewTA.WriteValueToElement(I, Values[I]);
+        finally
+          RemoveTempRootIfNeeded(ResultRoot);
+        end;
       finally
+        for I := ValueRootCount - 1 downto 0 do
+          RemoveTempRootIfNeeded(ValueRoots[I]);
+        SetLength(ValueRoots, 0);
         Values.Free;
       end;
       Exit(NewTA);
@@ -3182,6 +3203,7 @@ var
   NewTA: TGocciaTypedArrayValue;
   ConstructorValue: TGocciaValue;
   I: Integer;
+  ResultRoot: TGocciaTempRoot;
 begin
   ConstructorValue := AThisValue;
   if (not Assigned(ConstructorValue)) or (not ConstructorValue.IsConstructable) then
@@ -3189,9 +3211,15 @@ begin
       SSuggestTypedArrayConstructorReceiver);
   NewTA := CreateTypedArrayFromConstructor(ConstructorValue,
     'TypedArray.of', AArgs.Length);
-  for I := 0 to AArgs.Length - 1 do
-    NewTA.WriteValueToElement(I, AArgs.GetElement(I));
-  Result := NewTA;
+  InitializeTempRoot(ResultRoot);
+  AddTempRootIfNeeded(ResultRoot, NewTA);
+  try
+    for I := 0 to AArgs.Length - 1 do
+      NewTA.WriteValueToElement(I, AArgs.GetElement(I));
+    Result := NewTA;
+  finally
+    RemoveTempRootIfNeeded(ResultRoot);
+  end;
 end;
 
 initialization

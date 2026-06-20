@@ -172,9 +172,19 @@ end;
 
 function IsHiddenRegExpDataProperty(const AObject: TGocciaObjectValue;
   const AName: string): Boolean;
+var
+  Descriptor: TGocciaPropertyDescriptor;
 begin
-  Result := AObject.HasRegExpData and
-    ((AName = PROP_SOURCE) or (AName = PROP_FLAGS));
+  Result := False;
+  if (not AObject.HasRegExpData) or
+     ((AName <> PROP_SOURCE) and (AName <> PROP_FLAGS)) then
+    Exit;
+
+  Descriptor := AObject.GetOwnPropertyDescriptor(AName);
+  Result := (Descriptor is TGocciaPropertyDescriptorData) and
+    (not Descriptor.Enumerable) and
+    (not Descriptor.Configurable) and
+    (not TGocciaPropertyDescriptorData(Descriptor).Writable);
 end;
 
 function TryParseArrayIndexKey(const AKey: string; out AIndex: UInt64): Boolean;

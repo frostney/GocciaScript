@@ -248,70 +248,78 @@ begin
               not (Source is TGocciaUndefinedLiteralValue) then
         Iterator := GetIteratorFromValue(Source);
 
+      if Assigned(IteratorMethod) and
+         not (IteratorMethod is TGocciaUndefinedLiteralValue) and
+         not (IteratorMethod is TGocciaNullLiteralValue) and
+         not IteratorMethod.IsCallable then
+        ThrowTypeError(Format(SErrorValueNotFunction, ['[Symbol.iterator]']),
+          SSuggestIteratorProtocol);
+
       // Step 5: If usingIterator is not undefined
       if Assigned(Iterator) or
          (Assigned(IteratorMethod) and
           not (IteratorMethod is TGocciaUndefinedLiteralValue) and
           IteratorMethod.IsCallable) then
       begin
-        if not Assigned(Iterator) then
-        begin
-          // Step 5c: Let iteratorRecord = GetIteratorFromMethod(items, usingIterator)
-          CallArgs := TGocciaArgumentsCollection.Create;
-          try
-            IteratorObj := TGocciaFunctionBase(IteratorMethod).Call(CallArgs, Source);
-          finally
-            CallArgs.Free;
-          end;
-
-          if IteratorObj is TGocciaIteratorValue then
-            Iterator := TGocciaIteratorValue(IteratorObj)
-          else if IteratorObj is TGocciaObjectValue then
-          begin
-            NextMethod := IteratorObj.GetProperty(PROP_NEXT);
-            if Assigned(NextMethod) and not (NextMethod is TGocciaUndefinedLiteralValue) and NextMethod.IsCallable then
-              // Capture-once per ES2024 §7.4.2 GetIteratorDirect.
-              Iterator := TGocciaGenericIteratorValue.Create(IteratorObj, NextMethod)
-            else
-              Iterator := nil;
-          end
-          else
-            Iterator := nil;
-        end;
-
-        if not Assigned(Iterator) then
-          ThrowTypeError(SErrorIteratorInvalid, SSuggestIteratorProtocol);
-
         // Step 5a-b: If IsConstructor(C), Construct(C, « »); else ArrayCreate(0)
         ResultObj := ConstructOrCreate(0);
-        TGarbageCollector.Instance.AddTempRoot(Iterator);
         AddTempRootIfNeeded(ResultRoot, ResultObj);
         try
-          // Step 5d-e: Iterate
-          K := 0;
-          IterResult := Iterator.AdvanceNext;
-          while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
+          if not Assigned(Iterator) then
           begin
-            KValue := IterResult.GetProperty(PROP_VALUE);
-            if Mapping then
-            begin
-              MapArgs.SetElement(0, KValue);
-              MapArgs.SetElement(1, TGocciaNumberLiteralValue.Create(K));
-              KValue := InvokeCallable(MapCallback, MapArgs, ThisArg);
+            // Step 5c: Let iteratorRecord = GetIteratorFromMethod(items, usingIterator)
+            CallArgs := TGocciaArgumentsCollection.Create;
+            try
+              IteratorObj := TGocciaFunctionBase(IteratorMethod).Call(CallArgs, Source);
+            finally
+              CallArgs.Free;
             end;
-            // Step 5e-v: CreateDataPropertyOrThrow(A, ToString(k), mappedValue)
-            CreateDataProperty(K, KValue);
-            Inc(K);
-            IterResult := Iterator.AdvanceNext;
+
+            if IteratorObj is TGocciaIteratorValue then
+              Iterator := TGocciaIteratorValue(IteratorObj)
+            else if IteratorObj is TGocciaObjectValue then
+            begin
+              NextMethod := IteratorObj.GetProperty(PROP_NEXT);
+              if Assigned(NextMethod) and not (NextMethod is TGocciaUndefinedLiteralValue) and NextMethod.IsCallable then
+                // Capture-once per ES2024 §7.4.2 GetIteratorDirect.
+                Iterator := TGocciaGenericIteratorValue.Create(IteratorObj, NextMethod)
+              else
+                Iterator := nil;
+            end;
           end;
+
+          if not Assigned(Iterator) then
+            ThrowTypeError(SErrorIteratorInvalid, SSuggestIteratorProtocol);
+
+          TGarbageCollector.Instance.AddTempRoot(Iterator);
+          try
+            // Step 5d-e: Iterate
+            K := 0;
+            IterResult := Iterator.AdvanceNext;
+            while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
+            begin
+              KValue := IterResult.GetProperty(PROP_VALUE);
+              if Mapping then
+              begin
+                MapArgs.SetElement(0, KValue);
+                MapArgs.SetElement(1, TGocciaNumberLiteralValue.Create(K));
+                KValue := InvokeCallable(MapCallback, MapArgs, ThisArg);
+              end;
+              // Step 5e-v: CreateDataPropertyOrThrow(A, ToString(k), mappedValue)
+              CreateDataProperty(K, KValue);
+              Inc(K);
+              IterResult := Iterator.AdvanceNext;
+            end;
+          finally
+            TGarbageCollector.Instance.RemoveTempRoot(Iterator);
+          end;
+          // Step 5e-iii: Set A.[[length]] to k
+          if UseConstructor and not (ResultObj is TGocciaArrayValue) then
+            ResultObj.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.Create(K));
+          Result := ResultObj;
         finally
           RemoveTempRootIfNeeded(ResultRoot);
-          TGarbageCollector.Instance.RemoveTempRoot(Iterator);
         end;
-        // Step 5e-iii: Set A.[[length]] to k
-        if UseConstructor and not (ResultObj is TGocciaArrayValue) then
-          ResultObj.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.Create(K));
-        Result := ResultObj;
       end
       else
       begin

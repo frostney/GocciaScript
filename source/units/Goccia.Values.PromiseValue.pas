@@ -9,6 +9,7 @@ uses
 
   Goccia.Arguments.Collection,
   Goccia.ObjectModel,
+  Goccia.Realm,
   Goccia.SharedPrototype,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
@@ -90,6 +91,9 @@ type
     function PromiseFinally(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
+function GetPromiseIntrinsicPrototypeForRealm(
+  const ARealm: TGocciaRealm): TGocciaObjectValue;
+
 implementation
 
 uses
@@ -100,7 +104,6 @@ uses
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.MicrotaskQueue,
-  Goccia.Realm,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
@@ -113,15 +116,49 @@ uses
 
 var
   GPromiseSharedSlot: TGocciaRealmOwnedSlotId;
+  GPromiseDefaultConstructorSlot: TGocciaRealmSlotId;
 
 threadvar
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
-  FPromiseDefaultConstructor: TGocciaValue;
+
+function GetPromiseSharedForRealm(
+  const ARealm: TGocciaRealm): TGocciaSharedPrototype; inline;
+begin
+  if Assigned(ARealm) then
+    Result := TGocciaSharedPrototype(ARealm.GetOwnedSlot(GPromiseSharedSlot))
+  else
+    Result := nil;
+end;
 
 function GetPromiseShared: TGocciaSharedPrototype; inline;
 begin
-  if Assigned(CurrentRealm) then
-    Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GPromiseSharedSlot))
+  Result := GetPromiseSharedForRealm(CurrentRealm);
+end;
+
+function GetPromiseDefaultConstructorForRealm(
+  const ARealm: TGocciaRealm): TGocciaValue; inline;
+begin
+  if Assigned(ARealm) then
+    Result := TGocciaValue(ARealm.GetSlot(GPromiseDefaultConstructorSlot))
+  else
+    Result := nil;
+end;
+
+procedure SetPromiseDefaultConstructorForRealm(const ARealm: TGocciaRealm;
+  const AConstructor: TGocciaValue); inline;
+begin
+  if Assigned(ARealm) then
+    ARealm.SetSlot(GPromiseDefaultConstructorSlot, AConstructor);
+end;
+
+function GetPromiseIntrinsicPrototypeForRealm(
+  const ARealm: TGocciaRealm): TGocciaObjectValue;
+var
+  Shared: TGocciaSharedPrototype;
+begin
+  Shared := GetPromiseSharedForRealm(ARealm);
+  if Assigned(Shared) then
+    Result := Shared.Prototype
   else
     Result := nil;
 end;
@@ -137,6 +174,7 @@ type
   private
     FResolve: TGocciaValue;
     FReject: TGocciaValue;
+    FInvoked: Boolean;
   public
     function Invoke(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
@@ -158,15 +196,12 @@ type
 function TPromiseCapabilityExecutor.Invoke(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
-  function HasNonUndefinedValue(const AValue: TGocciaValue): Boolean;
-  begin
-    Result := Assigned(AValue) and not (AValue is TGocciaUndefinedLiteralValue);
-  end;
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-  if HasNonUndefinedValue(FResolve) or HasNonUndefinedValue(FReject) then
+  if FInvoked then
     ThrowTypeError(SErrorPromiseResolverNotFunction, SSuggestPromiseResolver);
 
+  FInvoked := True;
   FResolve := AArgs.GetElement(0);
   FReject := AArgs.GetElement(1);
 end;
@@ -237,7 +272,7 @@ end;
 
 function GetPromiseDefaultConstructor: TGocciaValue;
 begin
-  Result := FPromiseDefaultConstructor;
+  Result := GetPromiseDefaultConstructorForRealm(CurrentRealm);
   if not Assigned(Result) and Assigned(GetPromiseShared) then
     Result := GetPromiseShared.Prototype.GetProperty(PROP_CONSTRUCTOR);
 end;
@@ -515,7 +550,7 @@ begin
   end;
   if Assigned(Shared) then
   begin
-    FPromiseDefaultConstructor := AConstructor;
+    SetPromiseDefaultConstructorForRealm(CurrentRealm, AConstructor);
     ExposeSharedPrototypeOnConstructor(Shared, AConstructor);
     AConstructor.DefineProperty(PROP_PROTOTYPE,
       TGocciaPropertyDescriptorData.Create(Shared.Prototype, []));
@@ -898,5 +933,6 @@ end;
 
 initialization
   GPromiseSharedSlot := RegisterRealmOwnedSlot('Promise.shared');
+  GPromiseDefaultConstructorSlot := RegisterRealmSlot('Promise.defaultConstructor');
 
 end.

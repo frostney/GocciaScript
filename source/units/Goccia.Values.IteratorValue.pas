@@ -151,12 +151,6 @@ begin
   if not (AThisValue is TGocciaObjectValue) then
     ThrowTypeError(Format('Iterator.prototype.%s called on non-object', [AMethodName]));
 
-  if AThisValue is TGocciaIteratorValue then
-  begin
-    Result := TGocciaIteratorValue(AThisValue);
-    Exit;
-  end;
-
   // ES2026 §7.4.2 GetIteratorDirect(obj): capture "next" once.  The
   // generic iterator reports a missing/non-callable next on first use.
   NextMethod := TGocciaObjectValue(AThisValue).GetProperty(PROP_NEXT);
@@ -658,6 +652,7 @@ function TGocciaIteratorValue.IteratorDispose(
 var
   CallArgs: TGocciaArgumentsCollection;
   ReturnMethod: TGocciaValue;
+  ReturnResult: TGocciaValue;
 begin
   if not (AThisValue is TGocciaObjectValue) then
     ThrowTypeError('Iterator.prototype[Symbol.dispose] called on non-object');
@@ -672,7 +667,9 @@ begin
         SSuggestIteratorProtocol);
     CallArgs := TGocciaArgumentsCollection.Create;
     try
-      InvokeCallable(ReturnMethod, CallArgs, AThisValue);
+      ReturnResult := InvokeCallable(ReturnMethod, CallArgs, AThisValue);
+      if not (ReturnResult is TGocciaObjectValue) then
+        ThrowTypeError(SErrorIteratorReturnObject, SSuggestIteratorResultObject);
     finally
       CallArgs.Free;
     end;
@@ -705,9 +702,14 @@ begin
     SErrorIteratorMapCallable, SSuggestIteratorCallable);
   Iterator := IteratorThisToDirectIterator(AThisValue, 'map');
 
-  Result := TGocciaLazyMapIteratorValue.Create(
-    Iterator, Callback
-  );
+  TGarbageCollector.Instance.AddTempRoot(Iterator);
+  try
+    Result := TGocciaLazyMapIteratorValue.Create(
+      Iterator, Callback
+    );
+  finally
+    TGarbageCollector.Instance.RemoveTempRoot(Iterator);
+  end;
 end;
 
 function TGocciaIteratorValue.IteratorFilter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -721,9 +723,14 @@ begin
     SErrorIteratorFilterCallable, SSuggestIteratorCallable);
   Iterator := IteratorThisToDirectIterator(AThisValue, 'filter');
 
-  Result := TGocciaLazyFilterIteratorValue.Create(
-    Iterator, Callback
-  );
+  TGarbageCollector.Instance.AddTempRoot(Iterator);
+  try
+    Result := TGocciaLazyFilterIteratorValue.Create(
+      Iterator, Callback
+    );
+  finally
+    TGarbageCollector.Instance.RemoveTempRoot(Iterator);
+  end;
 end;
 
 function TGocciaIteratorValue.IteratorTake(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -740,9 +747,14 @@ begin
     SErrorIteratorTakeRequiresArg, SErrorIteratorTakeNonNegative);
   Iterator := IteratorThisToDirectIterator(AThisValue, 'take');
 
-  Result := TGocciaLazyTakeIteratorValue.Create(
-    Iterator, Limit
-  );
+  TGarbageCollector.Instance.AddTempRoot(Iterator);
+  try
+    Result := TGocciaLazyTakeIteratorValue.Create(
+      Iterator, Limit
+    );
+  finally
+    TGarbageCollector.Instance.RemoveTempRoot(Iterator);
+  end;
 end;
 
 function TGocciaIteratorValue.IteratorDrop(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -759,9 +771,14 @@ begin
     SErrorIteratorDropRequiresArg, SErrorIteratorDropNonNegative);
   Iterator := IteratorThisToDirectIterator(AThisValue, 'drop');
 
-  Result := TGocciaLazyDropIteratorValue.Create(
-    Iterator, DropCount
-  );
+  TGarbageCollector.Instance.AddTempRoot(Iterator);
+  try
+    Result := TGocciaLazyDropIteratorValue.Create(
+      Iterator, DropCount
+    );
+  finally
+    TGarbageCollector.Instance.RemoveTempRoot(Iterator);
+  end;
 end;
 
 function TGocciaIteratorValue.IteratorFlatMap(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -775,9 +792,14 @@ begin
     SErrorIteratorFlatMapCallable, SSuggestIteratorFlatMapCallable);
   Iterator := IteratorThisToDirectIterator(AThisValue, 'flatMap');
 
-  Result := TGocciaLazyFlatMapIteratorValue.Create(
-    Iterator, Callback
-  );
+  TGarbageCollector.Instance.AddTempRoot(Iterator);
+  try
+    Result := TGocciaLazyFlatMapIteratorValue.Create(
+      Iterator, Callback
+    );
+  finally
+    TGarbageCollector.Instance.RemoveTempRoot(Iterator);
+  end;
 end;
 
 { Consuming helper methods — eagerly drain the iterator }
@@ -899,11 +921,16 @@ begin
   TGarbageCollector.Instance.AddTempRoot(Iterator);
   TGarbageCollector.Instance.AddTempRoot(ResultArray);
   try
-    Value := Iterator.DirectNext(Done);
-    while not Done do
-    begin
-      ResultArray.Elements.Add(Value);
+    try
       Value := Iterator.DirectNext(Done);
+      while not Done do
+      begin
+        ResultArray.Elements.Add(Value);
+        Value := Iterator.DirectNext(Done);
+      end;
+    except
+      CloseIteratorPreservingError(Iterator);
+      raise;
     end;
 
     Result := ResultArray;

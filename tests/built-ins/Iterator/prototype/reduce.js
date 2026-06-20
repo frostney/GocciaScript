@@ -92,7 +92,7 @@ describe("Iterator.prototype.reduce()", () => {
 
     expect(() => source.reduce(() => {
       throw new Error("boom");
-    }, 0)).toThrow(Error);
+    }, 0)).toThrow("boom");
   });
 
   test("reduce can consume nested iterators", () => {

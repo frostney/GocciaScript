@@ -134,8 +134,19 @@ const
   HOURS_PER_DAY = 24;
   MONTHS_PER_YEAR = 12;
   DAYS_PER_WEEK = 7;
+  PROPERTY_CALENDAR = 'calendar';
+  PROPERTY_DAY = 'day';
+  PROPERTY_HOUR = 'hour';
+  PROPERTY_MICROSECOND = 'microsecond';
+  PROPERTY_MILLISECOND = 'millisecond';
+  PROPERTY_MINUTE = 'minute';
+  PROPERTY_MONTH = 'month';
+  PROPERTY_MONTH_CODE = 'monthCode';
+  PROPERTY_NANOSECOND = 'nanosecond';
   PROPERTY_TIME_ZONE = 'timeZone';
   PROPERTY_OFFSET = 'offset';
+  PROPERTY_SECOND = 'second';
+  PROPERTY_YEAR = 'year';
 
 type
   TTemporalDisambiguationOption = (tdoCompatible, tdoEarlier, tdoLater, tdoReject);
@@ -268,8 +279,27 @@ begin
 end;
 
 function NormalizeLeapSecondForTemporalDateTime(const AValue: string): string;
+var
+  SecondsSeparator: Integer;
+  TimeSeparator: Integer;
 begin
-  Result := StringReplace(AValue, ':60', ':59', []);
+  Result := AValue;
+  TimeSeparator := Pos('T', Result);
+  if TimeSeparator = 0 then
+    TimeSeparator := Pos('t', Result);
+  if TimeSeparator = 0 then
+    Exit;
+
+  SecondsSeparator := TimeSeparator + 6;
+  if (Length(Result) >= SecondsSeparator + 2) and
+     (Result[TimeSeparator + 3] = ':') and
+     (Result[SecondsSeparator] = ':') and
+     (Result[SecondsSeparator + 1] = '6') and
+     (Result[SecondsSeparator + 2] = '0') then
+  begin
+    Result[SecondsSeparator + 1] := '5';
+    Result[SecondsSeparator + 2] := '9';
+  end;
 end;
 
 function IsASCIIDigit(const AChar: Char): Boolean; inline;
@@ -1090,27 +1120,27 @@ begin
   begin
     Obj := TGocciaObjectValue(AValue);
 
-    VCalendar := Obj.GetProperty('calendar');
+    VCalendar := Obj.GetProperty(PROPERTY_CALENDAR);
     CalendarFromProperty(VCalendar);
 
-    VDay := Obj.GetProperty('day');
-    Day := RequiredIntegerField(VDay, 'day');
-    VHour := Obj.GetProperty('hour');
+    VDay := Obj.GetProperty(PROPERTY_DAY);
+    Day := RequiredIntegerField(VDay, PROPERTY_DAY);
+    VHour := Obj.GetProperty(PROPERTY_HOUR);
     TimeRec.Hour := OptionalIntegerField(VHour, 0);
-    VMicrosecond := Obj.GetProperty('microsecond');
+    VMicrosecond := Obj.GetProperty(PROPERTY_MICROSECOND);
     TimeRec.Microsecond := OptionalIntegerField(VMicrosecond, 0);
-    VMillisecond := Obj.GetProperty('millisecond');
+    VMillisecond := Obj.GetProperty(PROPERTY_MILLISECOND);
     TimeRec.Millisecond := OptionalIntegerField(VMillisecond, 0);
-    VMinute := Obj.GetProperty('minute');
+    VMinute := Obj.GetProperty(PROPERTY_MINUTE);
     TimeRec.Minute := OptionalIntegerField(VMinute, 0);
-    VMonth := Obj.GetProperty('month');
+    VMonth := Obj.GetProperty(PROPERTY_MONTH);
     HasMonth := not IsUndefinedValue(VMonth);
     if HasMonth then
       Month := ToIntegerWithTruncationValue(VMonth)
     else
       Month := 0;
 
-    VMonthCode := Obj.GetProperty('monthCode');
+    VMonthCode := Obj.GetProperty(PROPERTY_MONTH_CODE);
     HasMonthCode := not IsUndefinedValue(VMonthCode);
     MonthCodeStr := '';
     if HasMonthCode then
@@ -1120,7 +1150,7 @@ begin
         ThrowRangeError(SErrorInvalidMonthCodeYearMonth, SSuggestTemporalMonthCode);
     end;
 
-    VNanosecond := Obj.GetProperty('nanosecond');
+    VNanosecond := Obj.GetProperty(PROPERTY_NANOSECOND);
     TimeRec.Nanosecond := OptionalIntegerField(VNanosecond, 0);
     VOffset := Obj.GetProperty(PROPERTY_OFFSET);
     HasOffset := not IsUndefinedValue(VOffset);
@@ -1134,12 +1164,12 @@ begin
     end
     else
       OffsetSeconds := 0;
-    VSecond := Obj.GetProperty('second');
+    VSecond := Obj.GetProperty(PROPERTY_SECOND);
     TimeRec.Second := OptionalIntegerField(VSecond, 0);
     VTimeZone := Obj.GetProperty(PROPERTY_TIME_ZONE);
     TimeZoneStr := TimeZoneFromProperty(VTimeZone, AMethod);
-    VYear := Obj.GetProperty('year');
-    Year := RequiredIntegerField(VYear, 'year');
+    VYear := Obj.GetProperty(PROPERTY_YEAR);
+    Year := RequiredIntegerField(VYear, PROPERTY_YEAR);
 
     ReadZonedDateTimeOptions(AOptions, AMethod, Overflow, OffsetOption);
 
