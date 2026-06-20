@@ -108,3 +108,56 @@ test("Object.defineProperties preserves array index descriptor attributes", () =
   expect(desc.configurable).toBe(false);
   expect(Object.keys(array)).not.toContain("2");
 });
+
+test("Object.defineProperties coerces primitive Properties values to objects", () => {
+  const target = { existing: 1 };
+
+  expect(Object.defineProperties(target, false)).toBe(target);
+  expect(Object.defineProperties(target, 12)).toBe(target);
+  expect(Object.defineProperties(target, "")).toBe(target);
+  expect(target.existing).toBe(1);
+});
+
+test("Object.defineProperties reads enumerable accessor properties from Properties", () => {
+  const target = {};
+  const properties = {};
+  let getterThis;
+
+  Object.defineProperty(properties, "value", {
+    get() {
+      getterThis = this;
+      return { value: 42, enumerable: true };
+    },
+    enumerable: true,
+  });
+
+  Object.defineProperties(target, properties);
+
+  expect(getterThis).toBe(properties);
+  expect(target.value).toBe(42);
+  expect(Object.keys(target)).toEqual(["value"]);
+});
+
+test("Object.defineProperties validates all descriptors before defining any property", () => {
+  const target = {};
+  const properties = {};
+
+  Object.defineProperty(properties, "valid", {
+    value: { value: 1 },
+    enumerable: true,
+  });
+  Object.defineProperty(properties, "invalid", {
+    value: { get: 1 },
+    enumerable: true,
+  });
+
+  expect(() => Object.defineProperties(target, properties)).toThrow(TypeError);
+  expect(Object.hasOwn(target, "valid")).toBe(false);
+});
+
+test("Object.defineProperties throws for non-empty string Properties", () => {
+  const target = {};
+
+  expect(() => Object.defineProperties(target, "hello")).toThrow(TypeError);
+  expect(Object.keys(target)).toEqual([]);
+});

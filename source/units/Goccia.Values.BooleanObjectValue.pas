@@ -20,6 +20,7 @@ type
   public
     constructor Create(const APrimitive: TGocciaBooleanLiteralValue; const AClass: TGocciaClassValue = nil);
     procedure InitializePrototype;
+    function ToStringTag: string; override;
     function GetProperty(const AName: string): TGocciaValue; override;
     function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; override;
     procedure MarkReferences; override;
@@ -115,6 +116,11 @@ end;
 function TGocciaBooleanObjectValue.GetProperty(const AName: string): TGocciaValue;
 begin
   Result := GetPropertyWithContext(AName, Self);
+end;
+
+function TGocciaBooleanObjectValue.ToStringTag: string;
+begin
+  Result := 'Boolean';
 end;
 
 function TGocciaBooleanObjectValue.GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue;

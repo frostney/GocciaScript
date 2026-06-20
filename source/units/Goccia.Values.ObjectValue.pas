@@ -118,6 +118,7 @@ type
     property RegExpData: TObject read FRegExpData write SetRegExpData;
   published
     function ObjectPrototypeToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ObjectPrototypeHasOwnProperty(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ObjectPrototypeIsPrototypeOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ObjectPrototypePropertyIsEnumerable(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ObjectPrototypeToLocaleString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -138,6 +139,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.ObjectModel,
+  Goccia.Values.ArrayValue,
   Goccia.Values.ClassHelper,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
@@ -166,6 +168,13 @@ function IsBytecodePrivateInitializerMarker(const AName: string): Boolean;
 begin
   Result := Copy(AName, 1, Length(BYTECODE_PRIVATE_INITIALIZED_PREFIX)) =
     BYTECODE_PRIVATE_INITIALIZED_PREFIX;
+end;
+
+function IsHiddenRegExpDataProperty(const AObject: TGocciaObjectValue;
+  const AName: string): Boolean;
+begin
+  Result := AObject.HasRegExpData and
+    ((AName = PROP_SOURCE) or (AName = PROP_FLAGS));
 end;
 
 function TryParseArrayIndexKey(const AKey: string; out AIndex: UInt64): Boolean;
@@ -276,6 +285,58 @@ begin
     Result := TGocciaNullLiteralValue.NullValue;
 end;
 
+function OwnPropertyKeyValues(const AObject: TGocciaObjectValue): TArray<TGocciaValue>;
+var
+  Count: Integer;
+  I: Integer;
+  StringKeys: TArray<string>;
+  SymbolKeys: TArray<TGocciaSymbolValue>;
+begin
+  if AObject is TGocciaProxyValue then
+    Exit(TGocciaProxyValue(AObject).GetOwnPropertyKeyValues);
+
+  StringKeys := AObject.GetOwnPropertyKeys;
+  SymbolKeys := AObject.GetOwnSymbols;
+  SetLength(Result, Length(StringKeys) + Length(SymbolKeys));
+  Count := 0;
+  for I := 0 to High(StringKeys) do
+  begin
+    Result[Count] := TGocciaStringLiteralValue.Create(StringKeys[I]);
+    Inc(Count);
+  end;
+  for I := 0 to High(SymbolKeys) do
+  begin
+    Result[Count] := SymbolKeys[I];
+    Inc(Count);
+  end;
+end;
+
+function OwnPropertyDescriptorForKey(
+  const AObject: TGocciaObjectValue;
+  const AKey: TGocciaValue): TGocciaPropertyDescriptor;
+begin
+  if AKey is TGocciaSymbolValue then
+    Result := AObject.GetOwnSymbolPropertyDescriptor(TGocciaSymbolValue(AKey))
+  else
+    Result := AObject.GetOwnPropertyDescriptor(AKey.ToStringLiteral.Value);
+end;
+
+procedure DefineOwnPropertyOrThrowForKey(
+  const AObject: TGocciaObjectValue;
+  const AKey: TGocciaValue;
+  const ADescriptor: TGocciaPropertyDescriptor);
+begin
+  try
+    if AKey is TGocciaSymbolValue then
+      AObject.DefineSymbolProperty(TGocciaSymbolValue(AKey), ADescriptor)
+    else
+      AObject.DefineProperty(AKey.ToStringLiteral.Value, ADescriptor);
+  except
+    ADescriptor.Free;
+    raise;
+  end;
+end;
+
 procedure MarkPropertyDescriptor(const ADescriptor: TGocciaPropertyDescriptor);
 begin
   ADescriptor.MarkValues;
@@ -331,35 +392,98 @@ var
   Tag: string;
   SymbolTag: TGocciaValue;
   Obj: TGocciaObjectValue;
+
+  function IsArrayObject(const AObject: TGocciaObjectValue): Boolean;
+  var
+    Proxy: TGocciaProxyValue;
+  begin
+    if AObject is TGocciaArrayValue then
+      Exit(True);
+    if AObject is TGocciaProxyValue then
+    begin
+      Proxy := TGocciaProxyValue(AObject);
+      if Proxy.Revoked then
+        ThrowTypeError(SErrorProxyRevoked, SSuggestProxyRevoked);
+      if Proxy.Target is TGocciaObjectValue then
+        Exit(IsArrayObject(TGocciaObjectValue(Proxy.Target)));
+    end;
+    Result := False;
+  end;
+
+  function LegacyBuiltinTagForObject(const AObject: TGocciaObjectValue): string;
+  begin
+    Result := AObject.ToStringTag;
+  end;
+
 begin
   if AThisValue is TGocciaUndefinedLiteralValue then
     Exit(TGocciaStringLiteralValue.Create('[object Undefined]'));
   if AThisValue is TGocciaNullLiteralValue then
     Exit(TGocciaStringLiteralValue.Create('[object Null]'));
 
-  if AThisValue is TGocciaObjectValue then
-  begin
-    Obj := TGocciaObjectValue(AThisValue);
-    SymbolTag := Obj.GetSymbolProperty(TGocciaSymbolValue.WellKnownToStringTag);
-    if Assigned(SymbolTag) and (SymbolTag is TGocciaStringLiteralValue) then
-      Tag := TGocciaStringLiteralValue(SymbolTag).Value
-    else if AThisValue.IsCallable then
+  Obj := ObjectPrototypeToObject(AThisValue);
+  if Assigned(TGarbageCollector.Instance) and not (AThisValue is TGocciaObjectValue) then
+    TGarbageCollector.Instance.AddTempRoot(Obj);
+  try
+    if IsArrayObject(Obj) then
+      Tag := CONSTRUCTOR_ARRAY
+    else if Obj.IsCallable then
       Tag := 'Function'
+    else if Obj.HasErrorData then
+      Tag := 'Error'
+    else if Obj.HasRegExpData then
+      Tag := 'RegExp'
+    else if (Obj is TGocciaProxyValue) then
+      Tag := CONSTRUCTOR_OBJECT
     else
-      Tag := Obj.ToStringTag;
-  end
-  else if AThisValue is TGocciaBooleanLiteralValue then
-    Tag := CONSTRUCTOR_BOOLEAN
-  else if AThisValue is TGocciaNumberLiteralValue then
-    Tag := CONSTRUCTOR_NUMBER
-  else if AThisValue is TGocciaStringLiteralValue then
-    Tag := CONSTRUCTOR_STRING
-  else if AThisValue is TGocciaSymbolValue then
-    Tag := CONSTRUCTOR_SYMBOL
-  else
-    Tag := CONSTRUCTOR_OBJECT;
+      Tag := LegacyBuiltinTagForObject(Obj);
+
+    SymbolTag := Obj.GetSymbolPropertyWithReceiver(
+      TGocciaSymbolValue.WellKnownToStringTag, AThisValue);
+    if Assigned(SymbolTag) and (SymbolTag is TGocciaStringLiteralValue) then
+      Tag := TGocciaStringLiteralValue(SymbolTag).Value;
+  finally
+    if Assigned(TGarbageCollector.Instance) and not (AThisValue is TGocciaObjectValue) then
+      TGarbageCollector.Instance.RemoveTempRoot(Obj);
+  end;
 
   Result := TGocciaStringLiteralValue.Create('[object ' + Tag + ']');
+end;
+
+// ES2026 §20.1.3.2 Object.prototype.hasOwnProperty(V)
+function TGocciaObjectValue.ObjectPrototypeHasOwnProperty(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  KeyValue: TGocciaValue;
+  Obj: TGocciaObjectValue;
+  Own: Boolean;
+  PropertyArg: TGocciaValue;
+begin
+  // Step 1: Let P be ? ToPropertyKey(V)
+  if AArgs.Length = 0 then
+    PropertyArg := TGocciaUndefinedLiteralValue.UndefinedValue
+  else
+    PropertyArg := AArgs.GetElement(0);
+  KeyValue := ToPropertyKey(PropertyArg);
+
+  // Step 2: Let O be ? ToObject(this value)
+  Obj := ObjectPrototypeToObject(AThisValue);
+  if Assigned(TGarbageCollector.Instance) and not (AThisValue is TGocciaObjectValue) then
+    TGarbageCollector.Instance.AddTempRoot(Obj);
+  try
+    // Step 3: Return ? HasOwnProperty(O, P)
+    if KeyValue is TGocciaSymbolValue then
+      Own := Obj.HasSymbolProperty(TGocciaSymbolValue(KeyValue))
+    else
+      Own := Obj.HasOwnProperty(KeyValue.ToStringLiteral.Value);
+
+    if Own then
+      Result := TGocciaBooleanLiteralValue.TrueValue
+    else
+      Result := TGocciaBooleanLiteralValue.FalseValue;
+  finally
+    if Assigned(TGarbageCollector.Instance) and not (AThisValue is TGocciaObjectValue) then
+      TGarbageCollector.Instance.RemoveTempRoot(Obj);
+  end;
 end;
 
 // ES2026 §20.1.3.3 Object.prototype.isPrototypeOf(V)
@@ -395,41 +519,28 @@ end;
 // ES2026 §20.1.3.4 Object.prototype.propertyIsEnumerable(V)
 function TGocciaObjectValue.ObjectPrototypePropertyIsEnumerable(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
-  Key: string;
+  KeyValue: TGocciaValue;
   Obj: TGocciaObjectValue;
   Descriptor: TGocciaPropertyDescriptor;
   PropertyArg: TGocciaValue;
 begin
-  // Step 2: Let O be ? ToObject(this value)
-  if (AThisValue is TGocciaUndefinedLiteralValue) or (AThisValue is TGocciaNullLiteralValue) then
-    ThrowTypeError(SErrorCannotConvertNullOrUndefined, SSuggestCheckNullBeforeAccess);
-
-  if not (AThisValue is TGocciaObjectValue) then
-    Exit(TGocciaBooleanLiteralValue.FalseValue);
-
-  Obj := TGocciaObjectValue(AThisValue);
-
   // Step 1: Let P be ? ToPropertyKey(V)
   if AArgs.Length = 0 then
     PropertyArg := TGocciaUndefinedLiteralValue.UndefinedValue
   else
     PropertyArg := AArgs.GetElement(0);
+  KeyValue := ToPropertyKey(PropertyArg);
 
-  if PropertyArg is TGocciaSymbolValue then
-  begin
-    Descriptor := Obj.GetOwnSymbolPropertyDescriptor(TGocciaSymbolValue(PropertyArg));
-    if not Assigned(Descriptor) then
-      Exit(TGocciaBooleanLiteralValue.FalseValue);
-    if Descriptor.Enumerable then
-      Result := TGocciaBooleanLiteralValue.TrueValue
+  // Step 2: Let O be ? ToObject(this value)
+  Obj := ObjectPrototypeToObject(AThisValue);
+  if Assigned(TGarbageCollector.Instance) and not (AThisValue is TGocciaObjectValue) then
+    TGarbageCollector.Instance.AddTempRoot(Obj);
+  try
+    if KeyValue is TGocciaSymbolValue then
+      Descriptor := Obj.GetOwnSymbolPropertyDescriptor(TGocciaSymbolValue(KeyValue))
     else
-      Result := TGocciaBooleanLiteralValue.FalseValue;
-  end
-  else
-  begin
-    Key := PropertyArg.ToStringLiteral.Value;
-    // Step 3: Let desc be ? O.[[GetOwnProperty]](P)
-    Descriptor := Obj.GetOwnPropertyDescriptor(Key);
+      Descriptor := Obj.GetOwnPropertyDescriptor(KeyValue.ToStringLiteral.Value);
+
     // Step 4: If desc is undefined, return false
     if not Assigned(Descriptor) then
       Exit(TGocciaBooleanLiteralValue.FalseValue);
@@ -438,6 +549,9 @@ begin
       Result := TGocciaBooleanLiteralValue.TrueValue
     else
       Result := TGocciaBooleanLiteralValue.FalseValue;
+  finally
+    if Assigned(TGarbageCollector.Instance) and not (AThisValue is TGocciaObjectValue) then
+      TGarbageCollector.Instance.RemoveTempRoot(Obj);
   end;
 end;
 
@@ -454,7 +568,7 @@ begin
   if Assigned(TGarbageCollector.Instance) and not (AThisValue is TGocciaObjectValue) then
     TGarbageCollector.Instance.AddTempRoot(Obj);
   try
-    ToStringMethod := Obj.GetProperty(PROP_TO_STRING);
+    ToStringMethod := Obj.GetPropertyWithContext(PROP_TO_STRING, AThisValue);
     if not Assigned(ToStringMethod) or not ToStringMethod.IsCallable then
       ThrowTypeError(Format(SErrorValueNotFunction, [PROP_TO_STRING]), SSuggestNotFunctionType);
 
@@ -496,6 +610,7 @@ begin
     Members := TGocciaMemberCollection.Create;
     try
       Members.AddMethod(FPrototypeMethodHost.ObjectPrototypeToString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(FPrototypeMethodHost.ObjectPrototypeHasOwnProperty, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(FPrototypeMethodHost.ObjectPrototypeIsPrototypeOf, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(FPrototypeMethodHost.ObjectPrototypePropertyIsEnumerable, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(FPrototypeMethodHost.ObjectPrototypeToLocaleString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
@@ -505,10 +620,11 @@ begin
       Members.Free;
     end;
     FPrototypeMembers[0].ExposedName := PROP_TO_STRING;
-    FPrototypeMembers[1].ExposedName := PROP_IS_PROTOTYPE_OF;
-    FPrototypeMembers[2].ExposedName := PROP_PROPERTY_IS_ENUMERABLE;
-    FPrototypeMembers[3].ExposedName := PROP_TO_LOCALE_STRING;
-    FPrototypeMembers[4].ExposedName := PROP_VALUE_OF;
+    FPrototypeMembers[1].ExposedName := 'hasOwnProperty';
+    FPrototypeMembers[2].ExposedName := PROP_IS_PROTOTYPE_OF;
+    FPrototypeMembers[3].ExposedName := PROP_PROPERTY_IS_ENUMERABLE;
+    FPrototypeMembers[4].ExposedName := PROP_TO_LOCALE_STRING;
+    FPrototypeMembers[5].ExposedName := PROP_VALUE_OF;
   end;
   RegisterMemberDefinitions(SharedPrototype, FPrototypeMembers);
 
@@ -617,9 +733,6 @@ var
   Proto: TGocciaObjectValue;
   ChainDepth: Integer;
 begin
-  if FFrozen then
-    ThrowTypeError(Format(SErrorReadOnlyPropertyFrozen, [AName]), SSuggestCannotDeleteNonConfigurable);
-
   if FProperties.TryGetValue(AName, Descriptor) then
   begin
     if Descriptor is TGocciaPropertyDescriptorAccessor then
@@ -1089,7 +1202,8 @@ begin
   Count := 0;
   for Key in FProperties.Keys do
   begin
-    if IsBytecodePrivateInitializerMarker(Key) then
+    if IsBytecodePrivateInitializerMarker(Key) or
+       IsHiddenRegExpDataProperty(Self, Key) then
       Continue;
     Keys[Count] := Key;
     Inc(Count);
@@ -1266,16 +1380,18 @@ var
   I, Count: Integer;
 begin
   Names := GetEnumerablePropertyNames;
-  SetLength(Values, FProperties.Count);
+  SetLength(Values, Length(Names));
   Count := 0;
 
   for I := 0 to High(Names) do
-    if FProperties.TryGetValue(Names[I], Descriptor) and
-       Descriptor.Enumerable and (Descriptor is TGocciaPropertyDescriptorData) then
+  begin
+    Descriptor := GetOwnPropertyDescriptor(Names[I]);
+    if Assigned(Descriptor) and Descriptor.Enumerable then
     begin
-      Values[Count] := TGocciaPropertyDescriptorData(Descriptor).Value;
+      Values[Count] := GetProperty(Names[I]);
       Inc(Count);
     end;
+  end;
 
   SetLength(Values, Count);
   Result := Values;
@@ -1290,18 +1406,20 @@ var
   Entry: TPair<string, TGocciaValue>;
 begin
   Names := GetEnumerablePropertyNames;
-  SetLength(Entries, FProperties.Count);
+  SetLength(Entries, Length(Names));
   Count := 0;
 
   for I := 0 to High(Names) do
-    if FProperties.TryGetValue(Names[I], Descriptor) and
-       Descriptor.Enumerable and (Descriptor is TGocciaPropertyDescriptorData) then
+  begin
+    Descriptor := GetOwnPropertyDescriptor(Names[I]);
+    if Assigned(Descriptor) and Descriptor.Enumerable then
     begin
       Entry.Key := Names[I];
-      Entry.Value := TGocciaPropertyDescriptorData(Descriptor).Value;
+      Entry.Value := GetProperty(Names[I]);
       Entries[Count] := Entry;
       Inc(Count);
     end;
+  end;
 
   SetLength(Entries, Count);
   Result := Entries;
@@ -1317,7 +1435,8 @@ begin
   Count := 0;
   for Key in FProperties.Keys do
   begin
-    if IsBytecodePrivateInitializerMarker(Key) then
+    if IsBytecodePrivateInitializerMarker(Key) or
+       IsHiddenRegExpDataProperty(Self, Key) then
       Continue;
     Names[Count] := Key;
     Inc(Count);
@@ -1386,9 +1505,6 @@ var
   Args: TGocciaArgumentsCollection;
   Current: TGocciaObjectValue;
 begin
-  if FFrozen then
-    ThrowTypeError(SErrorCannotAssignFrozenObject, SSuggestCannotDeleteNonConfigurable);
-
   if FSymbolDescriptors.TryGetValue(ASymbol, Descriptor) then
   begin
     if Descriptor is TGocciaPropertyDescriptorAccessor then
@@ -1677,68 +1793,29 @@ end;
 
 procedure TGocciaObjectValue.Freeze;
 var
-  Pair: TGocciaPropertyMap.TKeyValuePair;
-  SymPair: TSymbolDescriptorMap.TKeyValuePair;
   Descriptor: TGocciaPropertyDescriptor;
   NewDescriptor: TGocciaPropertyDescriptor;
+  I: Integer;
+  Keys: TArray<TGocciaValue>;
 begin
-  for Pair in FProperties do
+  PreventExtensions;
+  Keys := OwnPropertyKeyValues(Self);
+  for I := 0 to High(Keys) do
   begin
-    Descriptor := Pair.Value;
-    if Descriptor is TGocciaPropertyDescriptorData then
-    begin
-      if Descriptor.Enumerable then
-        NewDescriptor := TGocciaPropertyDescriptorData.Create(TGocciaPropertyDescriptorData(Descriptor).Value, [pfEnumerable])
-      else
-        NewDescriptor := TGocciaPropertyDescriptorData.Create(TGocciaPropertyDescriptorData(Descriptor).Value, []);
-      FProperties.Add(Pair.Key, NewDescriptor);
-      Descriptor.Free;
-    end
-    else if Descriptor is TGocciaPropertyDescriptorAccessor then
-    begin
-      if Descriptor.Enumerable then
-        NewDescriptor := TGocciaPropertyDescriptorAccessor.Create(
-          TGocciaPropertyDescriptorAccessor(Descriptor).Getter,
-          TGocciaPropertyDescriptorAccessor(Descriptor).Setter,
-          [pfEnumerable])
-      else
-        NewDescriptor := TGocciaPropertyDescriptorAccessor.Create(
-          TGocciaPropertyDescriptorAccessor(Descriptor).Getter,
-          TGocciaPropertyDescriptorAccessor(Descriptor).Setter,
-          []);
-      FProperties.Add(Pair.Key, NewDescriptor);
-      Descriptor.Free;
-    end;
-  end;
-  // ES2026 §7.3.15 SetIntegrityLevel must apply to symbol-keyed properties
-  // too — same pattern as Seal above.
-  for SymPair in FSymbolDescriptors do
-  begin
-    Descriptor := SymPair.Value;
-    if Descriptor is TGocciaPropertyDescriptorData then
-    begin
-      if Descriptor.Enumerable then
-        NewDescriptor := TGocciaPropertyDescriptorData.Create(TGocciaPropertyDescriptorData(Descriptor).Value, [pfEnumerable])
-      else
-        NewDescriptor := TGocciaPropertyDescriptorData.Create(TGocciaPropertyDescriptorData(Descriptor).Value, []);
-      FSymbolDescriptors.AddOrSetValue(SymPair.Key, NewDescriptor);
-      Descriptor.Free;
-    end
-    else if Descriptor is TGocciaPropertyDescriptorAccessor then
-    begin
-      if Descriptor.Enumerable then
-        NewDescriptor := TGocciaPropertyDescriptorAccessor.Create(
-          TGocciaPropertyDescriptorAccessor(Descriptor).Getter,
-          TGocciaPropertyDescriptorAccessor(Descriptor).Setter,
-          [pfEnumerable])
-      else
-        NewDescriptor := TGocciaPropertyDescriptorAccessor.Create(
-          TGocciaPropertyDescriptorAccessor(Descriptor).Getter,
-          TGocciaPropertyDescriptorAccessor(Descriptor).Setter,
-          []);
-      FSymbolDescriptors.AddOrSetValue(SymPair.Key, NewDescriptor);
-      Descriptor.Free;
-    end;
+    Descriptor := OwnPropertyDescriptorForKey(Self, Keys[I]);
+    if not Assigned(Descriptor) then
+      Continue;
+    if IsAccessorDescriptor(Descriptor) then
+      NewDescriptor := TGocciaPropertyDescriptor.Create([],
+        [pdfConfigurable])
+    else if IsDataDescriptor(Descriptor) then
+      NewDescriptor := TGocciaPropertyDescriptorData.CreatePartial(
+        TGocciaPropertyDescriptorData(Descriptor).Value, [],
+        [pdfValue, pdfConfigurable, pdfWritable])
+    else
+      NewDescriptor := TGocciaPropertyDescriptor.Create([],
+        [pdfConfigurable]);
+    DefineOwnPropertyOrThrowForKey(Self, Keys[I], NewDescriptor);
   end;
   FFrozen := True;
   FSealed := True;
@@ -1747,63 +1824,14 @@ end;
 
 procedure TGocciaObjectValue.Seal;
 var
-  Pair: TGocciaPropertyMap.TKeyValuePair;
-  SymPair: TSymbolDescriptorMap.TKeyValuePair;
-  Descriptor: TGocciaPropertyDescriptor;
-  NewDescriptor: TGocciaPropertyDescriptor;
-  Flags: TPropertyFlags;
+  I: Integer;
+  Keys: TArray<TGocciaValue>;
 begin
-  for Pair in FProperties do
-  begin
-    Descriptor := Pair.Value;
-    Flags := [];
-    if Descriptor.Enumerable then
-      Include(Flags, pfEnumerable);
-    if Descriptor is TGocciaPropertyDescriptorData then
-    begin
-      if Descriptor.Writable then
-        Include(Flags, pfWritable);
-      NewDescriptor := TGocciaPropertyDescriptorData.Create(TGocciaPropertyDescriptorData(Descriptor).Value, Flags);
-      FProperties.Add(Pair.Key, NewDescriptor);
-      Descriptor.Free;
-    end
-    else if Descriptor is TGocciaPropertyDescriptorAccessor then
-    begin
-      NewDescriptor := TGocciaPropertyDescriptorAccessor.Create(
-        TGocciaPropertyDescriptorAccessor(Descriptor).Getter,
-        TGocciaPropertyDescriptorAccessor(Descriptor).Setter,
-        Flags);
-      FProperties.Add(Pair.Key, NewDescriptor);
-      Descriptor.Free;
-    end;
-  end;
-  // ES2026 §7.3.15 SetIntegrityLevel must apply to symbol-keyed properties
-  // too — they live in a separate descriptor table in Goccia but are still
-  // own properties of O, so seal/freeze must clear pfConfigurable here.
-  for SymPair in FSymbolDescriptors do
-  begin
-    Descriptor := SymPair.Value;
-    Flags := [];
-    if Descriptor.Enumerable then
-      Include(Flags, pfEnumerable);
-    if Descriptor is TGocciaPropertyDescriptorData then
-    begin
-      if Descriptor.Writable then
-        Include(Flags, pfWritable);
-      NewDescriptor := TGocciaPropertyDescriptorData.Create(TGocciaPropertyDescriptorData(Descriptor).Value, Flags);
-      FSymbolDescriptors.AddOrSetValue(SymPair.Key, NewDescriptor);
-      Descriptor.Free;
-    end
-    else if Descriptor is TGocciaPropertyDescriptorAccessor then
-    begin
-      NewDescriptor := TGocciaPropertyDescriptorAccessor.Create(
-        TGocciaPropertyDescriptorAccessor(Descriptor).Getter,
-        TGocciaPropertyDescriptorAccessor(Descriptor).Setter,
-        Flags);
-      FSymbolDescriptors.AddOrSetValue(SymPair.Key, NewDescriptor);
-      Descriptor.Free;
-    end;
-  end;
+  PreventExtensions;
+  Keys := OwnPropertyKeyValues(Self);
+  for I := 0 to High(Keys) do
+    DefineOwnPropertyOrThrowForKey(Self, Keys[I],
+      TGocciaPropertyDescriptor.Create([], [pdfConfigurable]));
   FSealed := True;
   FExtensible := False;
 end;
@@ -1816,27 +1844,30 @@ end;
 // ES2026 §7.3.16 TestIntegrityLevel(O, frozen)
 function TGocciaObjectValue.TestIntegrityFrozen: Boolean;
 var
-  Pair: TGocciaPropertyMap.TKeyValuePair;
-  SymPair: TSymbolDescriptorMap.TKeyValuePair;
+  Descriptor: TGocciaPropertyDescriptor;
+  ExtensibleCheck: Boolean;
+  I: Integer;
+  Keys: TArray<TGocciaValue>;
 begin
+  if Self is TGocciaProxyValue then
+    ExtensibleCheck := TGocciaProxyValue(Self).IsExtensibleTrap
+  else
+    ExtensibleCheck := FExtensible;
+
   // Step 3: If extensible is true, return false
-  if FExtensible then
+  if ExtensibleCheck then
     Exit(False);
 
   // Step 5: For each element key of keys
-  for Pair in FProperties do
+  Keys := OwnPropertyKeyValues(Self);
+  for I := 0 to High(Keys) do
   begin
-    if Pair.Value.Configurable then
+    Descriptor := OwnPropertyDescriptorForKey(Self, Keys[I]);
+    if not Assigned(Descriptor) then
+      Continue;
+    if Descriptor.Configurable then
       Exit(False);
-    if (Pair.Value is TGocciaPropertyDescriptorData) and Pair.Value.Writable then
-      Exit(False);
-  end;
-
-  for SymPair in FSymbolDescriptors do
-  begin
-    if SymPair.Value.Configurable then
-      Exit(False);
-    if (SymPair.Value is TGocciaPropertyDescriptorData) and SymPair.Value.Writable then
+    if IsDataDescriptor(Descriptor) and Descriptor.Writable then
       Exit(False);
   end;
 
@@ -1847,23 +1878,26 @@ end;
 // ES2026 §7.3.16 TestIntegrityLevel(O, sealed)
 function TGocciaObjectValue.TestIntegritySealed: Boolean;
 var
-  Pair: TGocciaPropertyMap.TKeyValuePair;
-  SymPair: TSymbolDescriptorMap.TKeyValuePair;
+  Descriptor: TGocciaPropertyDescriptor;
+  ExtensibleCheck: Boolean;
+  I: Integer;
+  Keys: TArray<TGocciaValue>;
 begin
+  if Self is TGocciaProxyValue then
+    ExtensibleCheck := TGocciaProxyValue(Self).IsExtensibleTrap
+  else
+    ExtensibleCheck := FExtensible;
+
   // Step 3: If extensible is true, return false
-  if FExtensible then
+  if ExtensibleCheck then
     Exit(False);
 
   // Step 5: For each element key of keys
-  for Pair in FProperties do
+  Keys := OwnPropertyKeyValues(Self);
+  for I := 0 to High(Keys) do
   begin
-    if Pair.Value.Configurable then
-      Exit(False);
-  end;
-
-  for SymPair in FSymbolDescriptors do
-  begin
-    if SymPair.Value.Configurable then
+    Descriptor := OwnPropertyDescriptorForKey(Self, Keys[I]);
+    if Assigned(Descriptor) and Descriptor.Configurable then
       Exit(False);
   end;
 

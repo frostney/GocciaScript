@@ -44,6 +44,9 @@ type
     FRejectArgumentsReferenceInDirectEval: Boolean;
     // Shared tail of TryGetBinding / TryGetBindingValueFillCache:
     // resolution after the own lexical map has already been consulted.
+    function TryGetGlobalBuiltInObjectBinding(const AName: string;
+      const ALexicalBinding: TLexicalBinding;
+      out ABinding: TLexicalBinding): Boolean;
     function TryGetBindingSkipLexical(const AName: string;
       out ABinding: TLexicalBinding; const ALine: Integer = 0;
       const AColumn: Integer = 0): Boolean;
@@ -965,6 +968,20 @@ begin
   begin
     if not LexicalBinding.IsAccessible then
       RaiseBindingNotInitialized(AName, ALine, AColumn);
+    if LexicalBinding.BuiltIn and LexicalBinding.Writable and
+       (FScopeKind = skGlobal) and (FThisValue is TGocciaObjectValue) and
+       TGocciaObjectValue(FThisValue).HasProperty(AName) then
+    begin
+      GlobalObject := TGocciaObjectValue(FThisValue);
+      if ANonStrictMode then
+        GlobalObject.AssignPropertyWithReceiver(AName, AValue, GlobalObject)
+      else
+        GlobalObject.AssignProperty(AName, AValue);
+      LexicalBinding.Value := GlobalObject.GetProperty(AName);
+      LexicalBinding.Initialized := True;
+      FLexicalBindings.AddOrSetValue(AName, LexicalBinding);
+      Exit(True);
+    end;
     if not LexicalBinding.Writable then
       raise TGocciaTypeError.Create(
         Format(SErrorAssignToConstant, [AName]),
@@ -1046,6 +1063,8 @@ begin
   begin
     if not ABinding.IsAccessible then
       RaiseBindingNotInitialized(AName, ALine, AColumn);
+    if TryGetGlobalBuiltInObjectBinding(AName, ABinding, ABinding) then
+      Exit(True);
     Exit(True);
   end;
   Result := TryGetBindingSkipLexical(AName, ABinding, ALine, AColumn);
@@ -1076,6 +1095,25 @@ begin
     AValue := LexicalBinding.Value
   else
     AValue := nil;
+end;
+
+function TGocciaScope.TryGetGlobalBuiltInObjectBinding(const AName: string;
+  const ALexicalBinding: TLexicalBinding;
+  out ABinding: TLexicalBinding): Boolean;
+var
+  GlobalObject: TGocciaObjectValue;
+begin
+  if (not ALexicalBinding.BuiltIn) or (FScopeKind <> skGlobal) or
+     not (FThisValue is TGocciaObjectValue) then
+    Exit(False);
+
+  GlobalObject := TGocciaObjectValue(FThisValue);
+  if not GlobalObject.HasProperty(AName) then
+    Exit(False);
+
+  ABinding := ALexicalBinding;
+  ABinding.Value := GlobalObject.GetProperty(AName);
+  Result := True;
 end;
 
 function TGocciaScope.TryGetBindingSkipLexical(const AName: string;
@@ -1114,6 +1152,12 @@ begin
   end;
   if not LexicalBinding.IsAccessible then
     RaiseBindingNotInitialized(FLexicalBindings.KeyAtEntry(AEntryIndex), 0, 0);
+  if TryGetGlobalBuiltInObjectBinding(FLexicalBindings.KeyAtEntry(AEntryIndex),
+     LexicalBinding, LexicalBinding) then
+  begin
+    AValue := LexicalBinding.Value;
+    Exit(True);
+  end;
   AValue := LexicalBinding.Value;
   Result := True;
 end;
@@ -1130,6 +1174,12 @@ begin
     FLexicalBindings.TryGetValueAtEntry(AEntryIndex, LexicalBinding);
     if not LexicalBinding.IsAccessible then
       RaiseBindingNotInitialized(AName, 0, 0);
+    if TryGetGlobalBuiltInObjectBinding(AName, LexicalBinding,
+       LexicalBinding) then
+    begin
+      AValue := LexicalBinding.Value;
+      Exit(True);
+    end;
     AValue := LexicalBinding.Value;
     Exit(True);
   end;

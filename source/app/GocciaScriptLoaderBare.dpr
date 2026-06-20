@@ -3,9 +3,11 @@ program GocciaScriptLoaderBare;
 {$I Goccia.inc}
 
 uses
+  {$IFDEF UNIX}cthreads,{$ENDIF}
   Classes,
   Generics.Collections,
   StrUtils,
+  SyncObjs,
   SysUtils,
 
   TextSemantics,
@@ -13,6 +15,7 @@ uses
   Goccia.Arguments.Collection,
   Goccia.AST.Node,
   Goccia.AST.Statements,
+  Goccia.Builtins.Atomics,
   Goccia.CLI.Options,
   Goccia.Engine,
   Goccia.Error,
@@ -26,6 +29,7 @@ uses
   Goccia.FileExtensions,
   Goccia.GarbageCollector,
   Goccia.InstructionLimit,
+  Goccia.MicrotaskQueue,
   Goccia.Modules,
   Goccia.Modules.ContentProvider,
   Goccia.Profiler,
@@ -36,9 +40,12 @@ uses
   Goccia.SourcePipeline,
   Goccia.Terminal.Colors,
   Goccia.TextFiles,
+  Goccia.Threading,
   Goccia.Timeout,
+  Goccia.Utils,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
+  Goccia.Values.FunctionBase,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
@@ -59,6 +66,7 @@ type
     StrictTypes: Boolean;
     UnsafeFunctionConstructor: Boolean;
     Test262Host: Boolean;
+    Test262AgentCanSuspend: Boolean;
     Print: Boolean;
     Mode: TBareExecutionMode;
     SourceType: TGocciaSourceType;
@@ -74,6 +82,8 @@ type
   end;
 
   TBareTest262Realm = class;
+  TBareTest262AgentHost = class;
+  TBareTest262AgentThread = class;
   TBareTest262Host = class;
 
   TBareTest262EvalHost = class
@@ -105,13 +115,62 @@ type
 
   TBareTest262Host = class
   private
+    FAgentHost: TBareTest262AgentHost;
     FOptions: TBareOptions;
     FRealms: TObjectList<TBareTest262Realm>;
   public
     constructor Create(const AOptions: TBareOptions);
     destructor Destroy; override;
+    function CreateAgentObject: TGocciaObjectValue;
     function CreateRealm(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
+    property AgentHost: TBareTest262AgentHost read FAgentHost;
+  end;
+
+  TBareTest262AgentHost = class
+  private
+    FBroadcastGeneration: Integer;
+    FBroadcastValue: TGocciaValue;
+    FLock: TRTLCriticalSection;
+    FOptions: TBareOptions;
+    FReports: TStringList;
+    FShuttingDown: Boolean;
+    FTest262Host: TBareTest262Host;
+    procedure PumpCurrentThreadWork;
+  public
+    constructor Create(const AOptions: TBareOptions;
+      const ATest262Host: TBareTest262Host);
+    destructor Destroy; override;
+
+    function Broadcast(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function GetReport(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function Leaving(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function MonotonicNow(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function ReceiveBroadcast(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function Report(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function SleepAgent(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function Start(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+  end;
+
+  TBareTest262AgentThread = class(TThread)
+  private
+    FHost: TBareTest262Host;
+    FOptions: TBareOptions;
+    FSourceText: string;
+    procedure WaitForAsyncAgentWork;
+  protected
+    procedure Execute; override;
+  public
+    constructor Create(const AHost: TBareTest262Host;
+      const AOptions: TBareOptions; const ASourceText: string);
   end;
 
   TBareTest262ModuleContentProvider = class(TGocciaFileSystemModuleContentProvider)
@@ -165,6 +224,7 @@ begin
       ATest262EvalHost.EvalScript, 'evalScript', 1));
   Test262Obj.AssignProperty('abstractModuleSourcePrototype',
     TGocciaModuleSourceValue.SharedPrototype);
+  Test262Obj.AssignProperty('agent', ATest262Host.CreateAgentObject);
   AEngine.GocciaGlobal.AssignProperty('test262', Test262Obj);
 end;
 
@@ -393,13 +453,44 @@ constructor TBareTest262Host.Create(const AOptions: TBareOptions);
 begin
   inherited Create;
   FOptions := AOptions;
+  FAgentHost := TBareTest262AgentHost.Create(AOptions, Self);
   FRealms := TObjectList<TBareTest262Realm>.Create(True);
 end;
 
 destructor TBareTest262Host.Destroy;
 begin
   FRealms.Free;
+  FAgentHost.Free;
   inherited;
+end;
+
+function TBareTest262Host.CreateAgentObject: TGocciaObjectValue;
+begin
+  Result := TGocciaObjectValue.Create;
+  Result.AssignProperty('broadcast',
+    TGocciaNativeFunctionValue.CreateWithoutPrototype(
+      FAgentHost.Broadcast, 'broadcast', 1));
+  Result.AssignProperty('getReport',
+    TGocciaNativeFunctionValue.CreateWithoutPrototype(
+      FAgentHost.GetReport, 'getReport', 0));
+  Result.AssignProperty('leaving',
+    TGocciaNativeFunctionValue.CreateWithoutPrototype(
+      FAgentHost.Leaving, 'leaving', 0));
+  Result.AssignProperty('monotonicNow',
+    TGocciaNativeFunctionValue.CreateWithoutPrototype(
+      FAgentHost.MonotonicNow, 'monotonicNow', 0));
+  Result.AssignProperty('receiveBroadcast',
+    TGocciaNativeFunctionValue.CreateWithoutPrototype(
+      FAgentHost.ReceiveBroadcast, 'receiveBroadcast', 1));
+  Result.AssignProperty('report',
+    TGocciaNativeFunctionValue.CreateWithoutPrototype(
+      FAgentHost.Report, 'report', 1));
+  Result.AssignProperty('sleep',
+    TGocciaNativeFunctionValue.CreateWithoutPrototype(
+      FAgentHost.SleepAgent, 'sleep', 1));
+  Result.AssignProperty('start',
+    TGocciaNativeFunctionValue.CreateWithoutPrototype(
+      FAgentHost.Start, 'start', 1));
 end;
 
 function TBareTest262Host.CreateRealm(
@@ -421,6 +512,293 @@ begin
     TGocciaNativeFunctionValue.CreateWithoutPrototype(
       CreateRealm, 'createRealm', 0));
   Result := RealmRecord;
+end;
+
+constructor TBareTest262AgentHost.Create(const AOptions: TBareOptions;
+  const ATest262Host: TBareTest262Host);
+begin
+  inherited Create;
+  FOptions := AOptions;
+  FTest262Host := ATest262Host;
+  FReports := TStringList.Create;
+  FBroadcastGeneration := 0;
+  FBroadcastValue := nil;
+  FShuttingDown := False;
+  InitCriticalSection(FLock);
+end;
+
+destructor TBareTest262AgentHost.Destroy;
+begin
+  EnterCriticalSection(FLock);
+  try
+    FShuttingDown := True;
+    if Assigned(FBroadcastValue) and Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.RemoveQueuedRoot(FBroadcastValue);
+    FBroadcastValue := nil;
+  finally
+    LeaveCriticalSection(FLock);
+  end;
+  DoneCriticalSection(FLock);
+  FReports.Free;
+  inherited;
+end;
+
+procedure TBareTest262AgentHost.PumpCurrentThreadWork;
+var
+  Queue: TGocciaMicrotaskQueue;
+begin
+  PumpAtomicsWaitAsyncCompletions;
+  Queue := TGocciaMicrotaskQueue.Instance;
+  if Assigned(Queue) and Queue.HasPending then
+    Queue.DrainOneJob;
+end;
+
+function TBareTest262AgentHost.Broadcast(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Value: TGocciaValue;
+begin
+  if AArgs.Length > 0 then
+    Value := AArgs.GetElement(0)
+  else
+    Value := TGocciaUndefinedLiteralValue.UndefinedValue;
+
+  EnterCriticalSection(FLock);
+  try
+    if Assigned(FBroadcastValue) and Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.RemoveQueuedRoot(FBroadcastValue);
+    FBroadcastValue := Value;
+    if Assigned(FBroadcastValue) and Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.AddQueuedRoot(FBroadcastValue);
+    Inc(FBroadcastGeneration);
+  finally
+    LeaveCriticalSection(FLock);
+  end;
+
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TBareTest262AgentHost.GetReport(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  ReportText: string;
+begin
+  PumpCurrentThreadWork;
+  EnterCriticalSection(FLock);
+  try
+    if FReports.Count = 0 then
+      Exit(TGocciaNullLiteralValue.NullValue);
+    ReportText := FReports[0];
+    FReports.Delete(0);
+  finally
+    LeaveCriticalSection(FLock);
+  end;
+  Result := TGocciaStringLiteralValue.Create(ReportText);
+end;
+
+function TBareTest262AgentHost.Leaving(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  PumpCurrentThreadWork;
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TBareTest262AgentHost.MonotonicNow(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaNumberLiteralValue.Create(GetTickCount64);
+end;
+
+function TBareTest262AgentHost.ReceiveBroadcast(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  BroadcastValue: TGocciaValue;
+  Callback: TGocciaValue;
+  CallbackArgs: TGocciaArgumentsCollection;
+begin
+  if (AArgs.Length = 0) or (not AArgs.GetElement(0).IsCallable) then
+    ThrowTypeError('$262.agent.receiveBroadcast callback must be callable');
+
+  Callback := AArgs.GetElement(0);
+  BroadcastValue := nil;
+  repeat
+    EnterCriticalSection(FLock);
+    try
+      if FShuttingDown then
+        Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+      if FBroadcastGeneration > 0 then
+      begin
+        BroadcastValue := FBroadcastValue;
+        Break;
+      end;
+    finally
+      LeaveCriticalSection(FLock);
+    end;
+
+    PumpCurrentThreadWork;
+    Sleep(1);
+  until False;
+
+  CallbackArgs := TGocciaArgumentsCollection.Create([BroadcastValue]);
+  try
+    Result := TGocciaFunctionBase(Callback).Call(CallbackArgs,
+      TGocciaUndefinedLiteralValue.UndefinedValue);
+  finally
+    CallbackArgs.Free;
+  end;
+end;
+
+function TBareTest262AgentHost.Report(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  ReportText: string;
+begin
+  if AArgs.Length > 0 then
+    ReportText := AArgs.GetElement(0).ToStringLiteral.Value
+  else
+    ReportText := TGocciaUndefinedLiteralValue.UndefinedValue.ToStringLiteral.Value;
+
+  EnterCriticalSection(FLock);
+  try
+    FReports.Add(ReportText);
+  finally
+    LeaveCriticalSection(FLock);
+  end;
+
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TBareTest262AgentHost.SleepAgent(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Deadline: QWord;
+  Milliseconds: Int64;
+  NowMilliseconds: QWord;
+  Remaining: Int64;
+begin
+  if AArgs.Length = 0 then
+    Milliseconds := 0
+  else
+    Milliseconds := ToInt64Value(AArgs.GetElement(0));
+  if Milliseconds < 0 then
+    Milliseconds := 0;
+
+  Deadline := GetTickCount64 + QWord(Milliseconds);
+  repeat
+    PumpCurrentThreadWork;
+    NowMilliseconds := GetTickCount64;
+    if NowMilliseconds >= Deadline then
+      Break;
+    Remaining := Int64(Deadline - NowMilliseconds);
+    if Remaining > 5 then
+      Sleep(5)
+    else
+      Sleep(LongWord(Remaining));
+  until False;
+
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TBareTest262AgentHost.Start(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  SourceText: string;
+  Worker: TBareTest262AgentThread;
+begin
+  if (AArgs.Length = 0) or
+     (not (AArgs.GetElement(0) is TGocciaStringLiteralValue)) then
+    ThrowTypeError('$262.agent.start source must be a string');
+
+  SourceText := TGocciaStringLiteralValue(AArgs.GetElement(0)).Value;
+  Worker := TBareTest262AgentThread.Create(FTest262Host, FOptions, SourceText);
+  Worker.Start;
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+constructor TBareTest262AgentThread.Create(const AHost: TBareTest262Host;
+  const AOptions: TBareOptions; const ASourceText: string);
+const
+  AGENT_STACK_SIZE = 8 * 1024 * 1024;
+begin
+  inherited Create(True, AGENT_STACK_SIZE);
+  FreeOnTerminate := True;
+  FHost := AHost;
+  FOptions := AOptions;
+  FSourceText := ASourceText;
+end;
+
+procedure TBareTest262AgentThread.WaitForAsyncAgentWork;
+var
+  Queue: TGocciaMicrotaskQueue;
+begin
+  Queue := TGocciaMicrotaskQueue.Instance;
+  repeat
+    PumpAtomicsWaitAsyncCompletions;
+    if Assigned(Queue) and Queue.HasPending then
+    begin
+      Queue.DrainQueue;
+      Continue;
+    end;
+
+    if not HasPendingAtomicsWaitAsyncCompletions then
+      Break;
+
+    CheckInstructionLimit;
+    CheckExecutionTimeout;
+    Sleep(1);
+  until False;
+end;
+
+procedure TBareTest262AgentThread.Execute;
+var
+  AgentOptions: TBareOptions;
+  Engine: TGocciaEngine;
+  EvalHost: TBareTest262EvalHost;
+  Executor: TGocciaExecutor;
+  Source: TStringList;
+begin
+  InitThreadRuntime(False, FOptions.MaxMemoryBytes);
+  Source := TStringList.Create;
+  try
+    Source.Text := ReadUTF8FileText(ExpandFileName('scripts' + PathDelim +
+      'test262_harness' + PathDelim + '$262.js')) + LineEnding + FSourceText;
+    Executor := CreateExecutorForMode(FOptions.Mode);
+    try
+      Engine := TGocciaEngine.Create('<test262-agent>', Source, Executor);
+      try
+        AgentOptions := FOptions;
+        AgentOptions.SourceType := stScript;
+        AgentOptions.Test262Host := True;
+        ConfigureEngine(Engine, Executor, AgentOptions);
+        EvalHost := TBareTest262EvalHost.Create(Engine);
+        try
+          InstallTest262HostGlobals(Engine, FHost, EvalHost);
+          Engine.RefreshGlobalThis;
+          InstallTest262EvalGlobal(Engine, EvalHost);
+          Engine.SuspendRealmExecutionContext;
+          Engine.Execute;
+          WaitForAsyncAgentWork;
+        finally
+          EvalHost.Free;
+        end;
+      finally
+        Engine.Free;
+      end;
+    finally
+      Executor.Free;
+    end;
+  finally
+    Source.Free;
+    ShutdownThreadRuntime;
+  end;
 end;
 
 function NormalizeTest262ListItem(const AValue: string): string;
@@ -535,6 +913,80 @@ begin
           ARaw := ARaw or (NormalizeTest262ListItem(Value) = 'raw')
         else
           AddTest262ListItem(AIncludes, Value);
+      end;
+    end;
+  finally
+    Lines.Free;
+  end;
+end;
+
+function Test262SourceCanSuspendAgent(const APath: string): Boolean;
+var
+  Block: string;
+  ClosePos: SizeInt;
+  ColonPos: SizeInt;
+  InFlags: Boolean;
+  Key: string;
+  Line: string;
+  Lines: TStringList;
+  OpenPos: SizeInt;
+  Source: UTF8String;
+  Trimmed: string;
+  Value: string;
+begin
+  Result := True;
+  if (APath = '') or (not FileExists(APath)) then
+    Exit;
+
+  Source := ReadUTF8FileText(APath);
+  OpenPos := Pos('/*---', string(Source));
+  if OpenPos <= 0 then
+    Exit;
+  ClosePos := PosEx('---*/', string(Source), OpenPos + Length('/*---'));
+  if ClosePos <= OpenPos then
+    Exit;
+
+  Block := Copy(string(Source), OpenPos + Length('/*---'),
+    ClosePos - OpenPos - Length('/*---'));
+  Lines := TStringList.Create;
+  try
+    Lines.Text := Block;
+    InFlags := False;
+    for Line in Lines do
+    begin
+      Trimmed := Trim(Line);
+      if Trimmed = '' then
+        Continue;
+
+      if (Line[1] <> ' ') and (Line[1] <> #9) then
+      begin
+        ColonPos := Pos(':', Line);
+        if ColonPos <= 0 then
+        begin
+          InFlags := False;
+          Continue;
+        end;
+
+        Key := Trim(Copy(Line, 1, ColonPos - 1));
+        Value := Trim(Copy(Line, ColonPos + 1, MaxInt));
+        InFlags := Key = 'flags';
+        if InFlags then
+        begin
+          if Pos('CanBlockIsFalse', Value) > 0 then
+            Exit(False);
+          if Pos('CanBlockIsTrue', Value) > 0 then
+            Exit(True);
+        end;
+        Continue;
+      end;
+
+      if InFlags and StartsStr('-', Trimmed) then
+      begin
+        Value := NormalizeTest262ListItem(Trim(Copy(Trimmed, 2, MaxInt)));
+        if Value = 'CanBlockIsFalse' then
+          Exit(False);
+        if Value = 'CanBlockIsTrue' then
+          Exit(True);
       end;
     end;
   finally
@@ -803,6 +1255,7 @@ begin
   Result.StrictTypes := False;
   Result.UnsafeFunctionConstructor := False;
   Result.Test262Host := False;
+  Result.Test262AgentCanSuspend := True;
   Result.Print := False;
   Result.Mode := bemInterpreted;
   Result.SourceType := stScript;
@@ -872,6 +1325,10 @@ begin
   if (Result.ProfileOutputPath <> '') and not Result.ProfileModePresent then
     raise Exception.Create(
       '--profile-output requires --profile=opcodes|functions|all');
+
+  if Result.Test262Host and (Result.SourceName <> '') then
+    Result.Test262AgentCanSuspend :=
+      Test262SourceCanSuspendAgent(Result.SourceName);
 end;
 
 function ReadBareSource(const AFileName: string): TStringList;
@@ -889,6 +1346,7 @@ begin
   AEngine.StrictTypes := AOptions.StrictTypes;
   AEngine.SourceType := AOptions.SourceType;
   AEngine.FunctionConstructor.Enabled := AOptions.UnsafeFunctionConstructor;
+  SetAtomicsAgentCanSuspend(AOptions.Test262AgentCanSuspend);
   if AOptions.Test262Host then
     AEngine.ModuleLoader.SetContentProvider(
       TBareTest262ModuleContentProvider.Create, True);

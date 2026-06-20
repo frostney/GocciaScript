@@ -21,6 +21,7 @@ type
   private
     FData: TBytes;
     FDetached: Boolean;
+    FImmutable: Boolean;
     FMaxByteLength: Integer;
 
     function GetByteLength: Integer;
@@ -43,6 +44,7 @@ type
 
     property Data: TBytes read FData write FData;
     property Detached: Boolean read FDetached;
+    property Immutable: Boolean read FImmutable;
     property MaxByteLength: Integer read FMaxByteLength;
   published
     property ByteLength: Integer read GetByteLength;
@@ -50,6 +52,7 @@ type
     function ArrayBufferResize(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ArrayBufferTransfer(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ArrayBufferTransferToFixedLength(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ArrayBufferTransferToImmutable(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ArrayBufferByteLengthGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ArrayBufferMaxByteLengthGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ArrayBufferResizableGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -189,6 +192,7 @@ var
 begin
   inherited Create(nil);
   FDetached := False;
+  FImmutable := False;
   FMaxByteLength := NO_MAX_BYTE_LENGTH;
   SetLength(FData, AByteLength);
   if AByteLength > 0 then
@@ -205,6 +209,7 @@ var
 begin
   inherited Create(nil);
   FDetached := False;
+  FImmutable := False;
   if AMaxByteLength >= 0 then
   begin
     if AByteLength > AMaxByteLength then
@@ -228,6 +233,7 @@ var
 begin
   inherited Create(AClass);
   FDetached := False;
+  FImmutable := False;
   FMaxByteLength := NO_MAX_BYTE_LENGTH;
   SetLength(FData, 0);
   InitializePrototype;
@@ -254,6 +260,7 @@ begin
       Members.AddMethod(ArrayBufferResize, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(ArrayBufferTransfer, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(ArrayBufferTransferToFixedLength, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(ArrayBufferTransferToImmutable, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddAccessor(PROP_BYTE_LENGTH, ArrayBufferByteLengthGetter, nil, [pfConfigurable]);
       Members.AddAccessor(PROP_MAX_BYTE_LENGTH, ArrayBufferMaxByteLengthGetter, nil, [pfConfigurable]);
       Members.AddAccessor(PROP_RESIZABLE, ArrayBufferResizableGetter, nil, [pfConfigurable]);
@@ -484,7 +491,8 @@ end;
 
 // ES2026 §25.1.2.4 ArrayBufferCopyAndDetach(O, newLength, preserveResizability)
 function ArrayBufferCopyAndDetach(const ABuf: TGocciaArrayBufferValue;
-  const ANewLength: Integer; const APreserveResizability: Boolean): TGocciaArrayBufferValue;
+  const ANewLength: Integer; const APreserveResizability: Boolean;
+  const AMakeImmutable: Boolean = False): TGocciaArrayBufferValue;
 var
   NewMaxByteLength, CopyLength: Integer;
 begin
@@ -510,6 +518,7 @@ begin
   // ES2026 §25.1.2.4 step 12: CopyDataBlockBytes
   if CopyLength > 0 then
     Move(ABuf.FData[0], Result.FData[0], CopyLength);
+  Result.FImmutable := AMakeImmutable;
 
   // ES2026 §25.1.2.4 step 14: DetachArrayBuffer(O)
   ABuf.Detach;
@@ -549,6 +558,22 @@ begin
 
   // ES2026 §25.1.6.7 step 3: ArrayBufferCopyAndDetach(O, newLength, FIXED-LENGTH)
   Result := ArrayBufferCopyAndDetach(Buf, NewByteLength, False);
+end;
+
+// Immutable ArrayBuffers proposal: ArrayBuffer.prototype.transferToImmutable([newLength])
+function TGocciaArrayBufferValue.ArrayBufferTransferToImmutable(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Buf: TGocciaArrayBufferValue;
+  NewByteLength: Integer;
+begin
+  Buf := RequireArrayBuffer(AThisValue, 'ArrayBuffer.prototype.transferToImmutable');
+
+  if (AArgs.Length = 0) or (AArgs.GetElement(0) is TGocciaUndefinedLiteralValue) then
+    NewByteLength := Length(Buf.FData)
+  else
+    NewByteLength := ToIndex(AArgs.GetElement(0));
+
+  Result := ArrayBufferCopyAndDetach(Buf, NewByteLength, False, True);
 end;
 
 // ES2026 §25.1.6.8 ArrayBuffer.prototype.slice(start, end)

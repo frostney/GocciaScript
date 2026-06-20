@@ -47,6 +47,7 @@ uses
   Goccia.Values.FunctionValue,
   Goccia.Values.Iterator.Concrete,
   Goccia.Values.Iterator.Generic,
+  Goccia.Values.IteratorSupport,
   Goccia.Values.IteratorValue,
   Goccia.Values.PromiseValue,
   Goccia.Values.SymbolValue,
@@ -239,34 +240,44 @@ begin
     else
     begin
       // Step 4: Let usingIterator = GetMethod(items, @@iterator)
+      Iterator := nil;
       IteratorMethod := nil;
       if Source is TGocciaObjectValue then
-        IteratorMethod := TGocciaObjectValue(Source).GetSymbolProperty(TGocciaSymbolValue.WellKnownIterator);
+        IteratorMethod := TGocciaObjectValue(Source).GetSymbolProperty(TGocciaSymbolValue.WellKnownIterator)
+      else if not (Source is TGocciaNullLiteralValue) and
+              not (Source is TGocciaUndefinedLiteralValue) then
+        Iterator := GetIteratorFromValue(Source);
 
       // Step 5: If usingIterator is not undefined
-      if Assigned(IteratorMethod) and not (IteratorMethod is TGocciaUndefinedLiteralValue) and IteratorMethod.IsCallable then
+      if Assigned(Iterator) or
+         (Assigned(IteratorMethod) and
+          not (IteratorMethod is TGocciaUndefinedLiteralValue) and
+          IteratorMethod.IsCallable) then
       begin
-        // Step 5c: Let iteratorRecord = GetIteratorFromMethod(items, usingIterator)
-        CallArgs := TGocciaArgumentsCollection.Create;
-        try
-          IteratorObj := TGocciaFunctionBase(IteratorMethod).Call(CallArgs, Source);
-        finally
-          CallArgs.Free;
-        end;
-
-        if IteratorObj is TGocciaIteratorValue then
-          Iterator := TGocciaIteratorValue(IteratorObj)
-        else if IteratorObj is TGocciaObjectValue then
+        if not Assigned(Iterator) then
         begin
-          NextMethod := IteratorObj.GetProperty(PROP_NEXT);
-          if Assigned(NextMethod) and not (NextMethod is TGocciaUndefinedLiteralValue) and NextMethod.IsCallable then
-            // Capture-once per ES2024 §7.4.2 GetIteratorDirect.
-            Iterator := TGocciaGenericIteratorValue.Create(IteratorObj, NextMethod)
+          // Step 5c: Let iteratorRecord = GetIteratorFromMethod(items, usingIterator)
+          CallArgs := TGocciaArgumentsCollection.Create;
+          try
+            IteratorObj := TGocciaFunctionBase(IteratorMethod).Call(CallArgs, Source);
+          finally
+            CallArgs.Free;
+          end;
+
+          if IteratorObj is TGocciaIteratorValue then
+            Iterator := TGocciaIteratorValue(IteratorObj)
+          else if IteratorObj is TGocciaObjectValue then
+          begin
+            NextMethod := IteratorObj.GetProperty(PROP_NEXT);
+            if Assigned(NextMethod) and not (NextMethod is TGocciaUndefinedLiteralValue) and NextMethod.IsCallable then
+              // Capture-once per ES2024 §7.4.2 GetIteratorDirect.
+              Iterator := TGocciaGenericIteratorValue.Create(IteratorObj, NextMethod)
+            else
+              Iterator := nil;
+          end
           else
             Iterator := nil;
-        end
-        else
-          Iterator := nil;
+        end;
 
         if not Assigned(Iterator) then
           ThrowTypeError(SErrorIteratorInvalid, SSuggestIteratorProtocol);

@@ -101,7 +101,7 @@ procedure StampRawPrivateInstanceBrand(const AReceiver: TGocciaObjectValue;
 
 procedure InitializeInstanceProperties(const AInstance: TGocciaInstanceValue; const AClassValue: TGocciaClassValue; const AContext: TGocciaEvaluationContext);
 procedure InitializePrivateInstanceProperties(const AInstance: TGocciaObjectValue; const AClassValue: TGocciaClassValue; const AContext: TGocciaEvaluationContext; const AInitializationMode: TGocciaInstanceInitializationMode = iimFirstPass);
-function InstantiateClass(const AClassValue: TGocciaClassValue; const AArguments: TGocciaArgumentsCollection; const AContext: TGocciaEvaluationContext): TGocciaValue;
+function InstantiateClass(const AClassValue: TGocciaClassValue; const AArguments: TGocciaArgumentsCollection; const AContext: TGocciaEvaluationContext; const ANewTarget: TGocciaValue = nil): TGocciaValue;
 procedure ValidateClassConstructorReturn(const AClassValue: TGocciaClassValue; const AValue: TGocciaValue);
 
 function IsObjectInstanceOfClass(const AObj: TGocciaObjectValue; const AClassValue: TGocciaClassValue): Boolean;
@@ -149,6 +149,7 @@ uses
   Goccia.Bytecode.Chunk,
   Goccia.CallStack,
   Goccia.Constants,
+  Goccia.Constants.ConstructorNames,
   Goccia.Constants.ErrorNames,
   Goccia.Constants.NumericLimits,
   Goccia.Constants.PropertyNames,
@@ -2959,6 +2960,7 @@ var
   SpreadArray: TGocciaArrayValue;
   Iterator: TGocciaIteratorValue;
   IterResult: TGocciaObjectValue;
+  Value: TGocciaValue;
   J: Integer;
 begin
   if ASpreadValue is TGocciaArrayValue then
@@ -2966,10 +2968,11 @@ begin
     SpreadArray := TGocciaArrayValue(ASpreadValue);
     for J := 0 to SpreadArray.Elements.Count - 1 do
     begin
-      if SpreadArray.Elements[J] = TGocciaHoleValue.HoleValue then
+      Value := SpreadArray.GetProperty(IntToStr(J));
+      if not Assigned(Value) then
         ATarget.Add(TGocciaUndefinedLiteralValue.UndefinedValue)
       else
-        ATarget.Add(SpreadArray.Elements[J]);
+        ATarget.Add(Value);
     end;
   end
   else
@@ -10285,7 +10288,8 @@ end;
 
 function InstantiateClass(const AClassValue: TGocciaClassValue;
   const AArguments: TGocciaArgumentsCollection;
-  const AContext: TGocciaEvaluationContext): TGocciaValue;
+  const AContext: TGocciaEvaluationContext;
+  const ANewTarget: TGocciaValue = nil): TGocciaValue;
 var
   Instance: TGocciaObjectValue;
   RootedInstance: TGocciaObjectValue;
@@ -10293,6 +10297,7 @@ var
   NativeInstance: TGocciaObjectValue;
   ConstructedValue: TGocciaValue;
   ConstructorThisValue: TGocciaValue;
+  EffectiveNewTarget: TGocciaValue;
   InitializerReplayReceiver: TGocciaObjectValue;
   function ConstructNativeSuperInstance(
     const AConstructor: TGocciaObjectValue): TGocciaObjectValue;
@@ -10310,7 +10315,7 @@ var
           Format('''%s'' is not a constructor',
             [TGocciaNativeFunctionValue(AConstructor).Name]));
       ConstructedValue := TGocciaNativeFunctionValue(AConstructor).Construct(
-        AArguments, AConstructor);
+        AArguments, EffectiveNewTarget);
     end
     else if AConstructor is TGocciaFunctionBase then
     begin
@@ -10394,6 +10399,25 @@ begin
   CheckExecutionTimeout;
   IncrementInstructionCounter;
   CheckInstructionLimit;
+  if Assigned(ANewTarget) then
+    EffectiveNewTarget := ANewTarget
+  else
+    EffectiveNewTarget := AClassValue;
+
+  // ES2026 §20.1.1.1 Object(value): direct Object construction with a
+  // non-nullish argument returns that object or ToObject(value).
+  if (AClassValue.Name = CONSTRUCTOR_OBJECT) and
+     (EffectiveNewTarget = AClassValue) and
+     (AArguments.Length > 0) and
+     not (AArguments.GetElement(0) is TGocciaUndefinedLiteralValue) and
+     not (AArguments.GetElement(0) is TGocciaNullLiteralValue) then
+  begin
+    if AArguments.GetElement(0) is TGocciaObjectValue then
+      Exit(AArguments.GetElement(0));
+    if AArguments.GetElement(0).IsPrimitive then
+      Exit(AArguments.GetElement(0).Box);
+  end;
+
   NativeInstance := nil;
   WalkClass := AClassValue;
   while Assigned(WalkClass) do
@@ -10434,7 +10458,7 @@ begin
     if Assigned(AClassValue.ConstructorMethod) then
     begin
       ConstructedValue := AClassValue.ConstructorMethod.CallWithThisValue(
-        AArguments, Instance, ConstructorThisValue, AClassValue);
+        AArguments, Instance, ConstructorThisValue, EffectiveNewTarget);
       ApplyOwnConstructorResult(ConstructedValue, ConstructorThisValue);
       if HasDerivedConstructorReturnRestriction and
          IsUndefinedConstructedValue(ConstructedValue) and
@@ -10445,7 +10469,7 @@ begin
     else if Assigned(AClassValue.SuperClass) and Assigned(AClassValue.SuperClass.ConstructorMethod) then
     begin
       ConstructedValue := AClassValue.SuperClass.ConstructorMethod.CallWithThisValue(
-        AArguments, Instance, ConstructorThisValue, AClassValue);
+        AArguments, Instance, ConstructorThisValue, EffectiveNewTarget);
       ValidateClassConstructorReturn(AClassValue.SuperClass, ConstructedValue);
       if IsUndefinedConstructedValue(ConstructedValue) then
         ApplyReplacementResult(ConstructorThisValue)
@@ -10457,7 +10481,8 @@ begin
             not (AClassValue.NativeSuperConstructor is TGocciaNativeFunctionValue) then
     begin
       ConstructedValue := InvokeConstructableWithReceiver(
-        AClassValue.NativeSuperConstructor, AArguments, Instance, AContext);
+        AClassValue.NativeSuperConstructor, AArguments, Instance, AContext,
+        EffectiveNewTarget);
       ApplyReplacementResult(ConstructedValue);
     end
     else if Assigned(NativeInstance) and (NativeInstance is TGocciaInstanceValue) then

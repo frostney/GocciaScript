@@ -45,7 +45,12 @@ type
     ParameterCell: TGocciaBytecodeCell;
   end;
 
-  TGocciaMappedArgumentsObjectValue = class(TGocciaObjectValue)
+  TGocciaArgumentsObjectValue = class(TGocciaObjectValue)
+  public
+    function ToStringTag: string; override;
+  end;
+
+  TGocciaMappedArgumentsObjectValue = class(TGocciaArgumentsObjectValue)
   private
     FEnvironment: TGocciaScope;
     FMappings: array of TGocciaArgumentMapping;
@@ -100,6 +105,11 @@ begin
   Goccia.Values.ErrorHelper.ThrowTypeError(
     '''caller'', ''callee'', and ''arguments'' properties may not be accessed');
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TGocciaArgumentsObjectValue.ToStringTag: string;
+begin
+  Result := 'Arguments';
 end;
 
 function CreateThrowTypeErrorFunction: TGocciaNativeFunctionValue;
@@ -437,7 +447,7 @@ function CreateUnmappedArgumentsObject(
 var
   Thrower: TGocciaNativeFunctionValue;
 begin
-  Result := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype,
+  Result := TGocciaArgumentsObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype,
     AArguments.Length + 2);
 
   DefineArgumentsLengthAndIterator(Result, AArguments);

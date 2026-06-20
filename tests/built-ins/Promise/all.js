@@ -123,3 +123,67 @@ test("Promise.all ignores late thenable rejection after resolve", () => {
     expect(result).toEqual([9]);
   });
 });
+
+test("Promise.all resolve element functions are anonymous built-ins", () => {
+  let resolveElement;
+
+  class NotPromise {
+    constructor(executor) {
+      executor(() => {}, () => {});
+    }
+
+    static resolve(value) {
+      return value;
+    }
+  }
+
+  Promise.all.call(NotPromise, [{
+    then(resolve) {
+      resolveElement = resolve;
+    }
+  }]);
+
+  const nameDescriptor = Object.getOwnPropertyDescriptor(resolveElement, "name");
+  const propertyNames = Object.getOwnPropertyNames(resolveElement);
+  expect(nameDescriptor.value).toBe("");
+  expect(nameDescriptor.writable).toBe(false);
+  expect(nameDescriptor.enumerable).toBe(false);
+  expect(nameDescriptor.configurable).toBe(true);
+  expect(propertyNames.indexOf("name")).toBe(propertyNames.indexOf("length") + 1);
+});
+
+test("Promise.all resolve element functions ignore repeated calls", () => {
+  let callCount = 0;
+
+  class NotPromise {
+    constructor(executor) {
+      executor((values) => {
+        callCount += 1;
+        expect(values).toEqual(["first", "second"]);
+      }, () => {
+        throw new Error("unexpected rejection");
+      });
+    }
+
+    static resolve(value) {
+      return value;
+    }
+  }
+
+  Promise.all.call(NotPromise, [
+    {
+      then(resolve) {
+        resolve("first");
+        resolve("bad");
+      }
+    },
+    {
+      then(resolve) {
+        resolve("second");
+        resolve("worse");
+      }
+    }
+  ]);
+
+  expect(callCount).toBe(1);
+});

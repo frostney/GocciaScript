@@ -160,7 +160,8 @@ uses
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassValue,
   Goccia.Values.ErrorHelper,
-  Goccia.Values.FunctionBase;
+  Goccia.Values.FunctionBase,
+  Goccia.Values.ToObject;
 
 { TGocciaProxyValue }
 
@@ -329,6 +330,8 @@ var
   I, J: Integer;
   OrderedCount: Integer;
   ResultArray: TGocciaArrayValue;
+  ResultObject: TGocciaObjectValue;
+  ResultLength: Integer;
   SymbolCount: Integer;
   SymbolElement: TGocciaSymbolValue;
   TargetDesc: TGocciaPropertyDescriptor;
@@ -376,19 +379,33 @@ begin
     Args.Free;
   end;
 
-  if not (TrapResult is TGocciaArrayValue) then
+  if not (TrapResult is TGocciaObjectValue) then
     ThrowTypeError(SErrorProxyOwnKeysArray, SSuggestProxyTrapReturnType);
 
-  ResultArray := TGocciaArrayValue(TrapResult);
-  SetLength(AStringKeys, ResultArray.Elements.Count);
-  SetLength(ASymbolKeys, ResultArray.Elements.Count);
-  SetLength(AOrderedKeys, ResultArray.Elements.Count);
+  ResultObject := TGocciaObjectValue(TrapResult);
+  if TrapResult is TGocciaArrayValue then
+  begin
+    ResultArray := TGocciaArrayValue(TrapResult);
+    ResultLength := ResultArray.Elements.Count;
+  end
+  else
+  begin
+    ResultArray := nil;
+    ResultLength := LengthOfArrayLike(ResultObject);
+  end;
+
+  SetLength(AStringKeys, ResultLength);
+  SetLength(ASymbolKeys, ResultLength);
+  SetLength(AOrderedKeys, ResultLength);
   Count := 0;
   SymbolCount := 0;
   OrderedCount := 0;
-  for I := 0 to ResultArray.Elements.Count - 1 do
+  for I := 0 to ResultLength - 1 do
   begin
-    Element := ResultArray.Elements[I];
+    if Assigned(ResultArray) then
+      Element := ResultArray.Elements[I]
+    else
+      Element := ResultObject.GetProperty(IntToStr(I));
     if not (Element is TGocciaStringLiteralValue) and
        not (Element is TGocciaSymbolValue) then
       ThrowTypeError(SErrorProxyOwnKeysTypes, SSuggestProxyTrapReturnType);
@@ -1888,5 +1905,33 @@ begin
   if Assigned(FRevoker) then
     FRevoker.MarkReferences;
 end;
+
+function IsProxyDispatchValue(const AValue: TGocciaValue): Boolean;
+begin
+  Result := AValue is TGocciaProxyValue;
+end;
+
+function DispatchProxyApply(const AProxy: TGocciaValue;
+  const AArguments: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaProxyValue(AProxy).ApplyTrap(AArguments, AThisValue);
+end;
+
+function DispatchProxyConstruct(const AProxy: TGocciaValue;
+  const AArguments: TGocciaArgumentsCollection;
+  const ANewTarget: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaProxyValue(AProxy).ConstructTrap(AArguments, ANewTarget);
+end;
+
+function DispatchProxyGetPrototype(const AProxy: TGocciaObjectValue): TGocciaValue;
+begin
+  Result := TGocciaProxyValue(AProxy).GetPrototypeTrap;
+end;
+
+initialization
+  RegisterProxyDispatchHooks(IsProxyDispatchValue, DispatchProxyApply,
+    DispatchProxyConstruct, DispatchProxyGetPrototype);
 
 end.

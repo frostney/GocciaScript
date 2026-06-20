@@ -355,6 +355,7 @@ uses
   Goccia.Values.TextDecoderValue,
   Goccia.Values.TextEncoderValue,
   Goccia.Values.ToPrimitive,
+  Goccia.Values.TypedArrayValue,
   Goccia.Values.URLSearchParamsValue,
   Goccia.Values.URLValue,
   Goccia.Values.WeakMapValue,
@@ -370,6 +371,15 @@ begin
     Exit(TGocciaNumberLiteralValue.Create(
       TGocciaBigIntValue(AValue).Value.ToDouble));
   Result := AValue.ToNumberLiteral;
+end;
+
+function GetTypedArrayPrototypeFromConstructor(
+  const ATypedArrayClass: TGocciaTypedArrayClassValue;
+  const ANewTarget: TGocciaValue;
+  const ACurrentRealmDefault: TGocciaObjectValue): TGocciaObjectValue;
+begin
+  Result := ATypedArrayClass.DefaultPrototypeForNewTarget(ANewTarget,
+    ACurrentRealmDefault);
 end;
 
 // SetDefaultPrototype / PatchDefaultPrototype previously cached the
@@ -1300,20 +1310,47 @@ var
   WalkClass: TGocciaClassValue;
   NativeClass: TGocciaClassValue;
   NativeInstance: TGocciaObjectValue;
+  NativeSuperConstructor: TGocciaObjectValue;
   NativeIntrinsicPrototype: TGocciaObjectValue;
   ConstructorToCall: TGocciaMethodValue;
   InstancePrototype: TGocciaObjectValue;
   FinalThis: TGocciaValue;
   ConstructResult: TGocciaValue;
+  EffectiveNewTarget: TGocciaValue;
+  DelayNativePrototypeLookup: Boolean;
   function IsUndefinedConstructResult(const AValue: TGocciaValue): Boolean;
   begin
     Result := (not Assigned(AValue)) or
       (AValue is TGocciaUndefinedLiteralValue);
   end;
+  function ConstructNativeSuperInstance(
+    const AConstructor: TGocciaObjectValue): TGocciaObjectValue;
+  var
+    SuperResult: TGocciaValue;
+  begin
+    if AConstructor = TGocciaFunctionBase.GetSharedPrototype then
+      Exit(nil);
+
+    SuperResult := ConstructValue(AConstructor, AArguments,
+      EffectiveNewTarget);
+    if SuperResult is TGocciaObjectValue then
+      Exit(TGocciaObjectValue(SuperResult));
+
+    ThrowTypeError('Superclass constructor did not return an object',
+      SSuggestNotConstructorType);
+    Result := nil;
+  end;
 begin
+  if Assigned(ANewTarget) then
+    EffectiveNewTarget := ANewTarget
+  else
+    EffectiveNewTarget := Self;
+
   NativeClass := nil;
   NativeInstance := nil;
+  NativeSuperConstructor := nil;
   NativeIntrinsicPrototype := nil;
+  DelayNativePrototypeLookup := False;
   WalkClass := Self;
   while Assigned(WalkClass) do
   begin
@@ -1323,15 +1360,32 @@ begin
       NativeClass := WalkClass;
       Break;
     end;
+    if Assigned(WalkClass.NativeSuperConstructor) then
+    begin
+      NativeSuperConstructor := WalkClass.NativeSuperConstructor;
+      Break;
+    end;
     WalkClass := WalkClass.SuperClass;
   end;
 
+  // TypedArray constructors perform observable argument coercion before
+  // AllocateTypedArray reaches GetPrototypeFromConstructor.
+  DelayNativePrototypeLookup := Assigned(NativeClass) and
+    (NativeClass is TGocciaTypedArrayClassValue);
+
   // ES2026 §10.2.2 step 5: Let proto be ? GetPrototypeFromConstructor(newTarget)
-  if Assigned(ANewTarget) then
+  if Assigned(ANewTarget) and not DelayNativePrototypeLookup then
   begin
     if Assigned(NativeClass) then
-      InstancePrototype := GetProtoFromConstructorWithIntrinsic(ANewTarget,
-        NativeIntrinsicPrototype)
+    begin
+      if NativeClass is TGocciaTypedArrayClassValue then
+        InstancePrototype := GetTypedArrayPrototypeFromConstructor(
+          TGocciaTypedArrayClassValue(NativeClass), ANewTarget,
+          NativeIntrinsicPrototype)
+      else
+        InstancePrototype := GetProtoFromConstructorWithIntrinsic(ANewTarget,
+          NativeIntrinsicPrototype);
+    end
     else
       InstancePrototype := GetProtoFromConstructor(ANewTarget);
   end
@@ -1340,6 +1394,11 @@ begin
 
   if Assigned(NativeClass) then
     NativeInstance := NativeClass.CreateNativeInstance(AArguments);
+
+  if Assigned(ANewTarget) and DelayNativePrototypeLookup then
+    InstancePrototype := GetTypedArrayPrototypeFromConstructor(
+      TGocciaTypedArrayClassValue(NativeClass), ANewTarget,
+      NativeIntrinsicPrototype);
 
   // ES2026 §10.2.2 step 6: Set proto on the instance before constructor runs
   if Assigned(NativeInstance) then
@@ -1396,8 +1455,23 @@ begin
           'Must call super constructor before returning from derived constructor');
     end;
   end
-  else if Assigned(NativeInstance) and (NativeInstance is TGocciaInstanceValue) then
-    TGocciaInstanceValue(NativeInstance).InitializeNativeFromArguments(AArguments);
+  else
+  begin
+    if (not Assigned(NativeInstance)) and Assigned(NativeSuperConstructor) then
+    begin
+      NativeInstance := ConstructNativeSuperInstance(NativeSuperConstructor);
+      if Assigned(NativeInstance) then
+      begin
+        Instance := NativeInstance;
+        Instance.Prototype := InstancePrototype;
+        if NativeInstance is TGocciaInstanceValue then
+          TGocciaInstanceValue(NativeInstance).ClassValue := Self;
+      end;
+    end;
+
+    if Assigned(NativeInstance) and (NativeInstance is TGocciaInstanceValue) then
+      TGocciaInstanceValue(NativeInstance).InitializeNativeFromArguments(AArguments);
+  end;
 
   Result := Instance;
 end;

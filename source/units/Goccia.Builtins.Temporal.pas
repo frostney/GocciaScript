@@ -1286,90 +1286,20 @@ function TGocciaTemporalBuiltin.ZonedDateTimeFrom(const AArgs: TGocciaArgumentsC
 var
   Arg: TGocciaValue;
   ZDT: TGocciaTemporalZonedDateTimeValue;
-  DateRec: TTemporalDateRecord;
-  TimeRec: TTemporalTimeRecord;
-  TZ: string;
-  EpochMs: Int64;
-  SubMs, OffsetSeconds: Integer;
 begin
   Arg := AArgs.GetElement(0);
-
-  if Arg is TGocciaTemporalZonedDateTimeValue then
-  begin
-    ZDT := TGocciaTemporalZonedDateTimeValue(Arg);
-    Result := TGocciaTemporalZonedDateTimeValue.Create(
-      ZDT.EpochMilliseconds, ZDT.SubMillisecondNanoseconds, ZDT.TimeZone);
-  end
-  else if Arg is TGocciaStringLiteralValue then
-  begin
-    if not TryParseISODateTimeWithOffset(TGocciaStringLiteralValue(Arg).Value,
-        DateRec, TimeRec, OffsetSeconds, TZ) then
-      ThrowRangeError(SErrorInvalidISOZonedDateTime, SSuggestTemporalISOFormat);
-
-    // Compute UTC epoch from wall-clock time
-    EpochMs := DateToEpochDays(DateRec.Year, DateRec.Month, DateRec.Day) * Int64(86400000) +
-               Int64(TimeRec.Hour) * 3600000 + Int64(TimeRec.Minute) * 60000 +
-               Int64(TimeRec.Second) * 1000 + TimeRec.Millisecond;
-    SubMs := TimeRec.Microsecond * 1000 + TimeRec.Nanosecond;
-
-    // Apply offset to convert wall-clock to UTC
-    EpochMs := EpochMs - Int64(OffsetSeconds) * 1000;
-
-    if TZ = '' then
-      ThrowRangeError(SErrorTemporalZonedDateTimeRequiresTZ, SSuggestTemporalTimezone);
-
-    Result := TGocciaTemporalZonedDateTimeValue.Create(EpochMs, SubMs, TZ);
-  end
-  else
-  begin
-    ThrowTypeError(SErrorTemporalZonedDateTimeFromArg, SSuggestTemporalFromArg);
-    Result := nil;
-  end;
+  ZDT := CoerceTemporalZonedDateTime(Arg, 'Temporal.ZonedDateTime.from', AArgs.GetElement(1));
+  Result := TGocciaTemporalZonedDateTimeValue.Create(
+    ZDT.EpochMilliseconds, ZDT.SubMillisecondNanoseconds, ZDT.TimeZone);
 end;
 
 function TGocciaTemporalBuiltin.ZonedDateTimeCompare(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
   Z1, Z2: TGocciaTemporalZonedDateTimeValue;
-
-  function CoerceZDT(const AArg: TGocciaValue): TGocciaTemporalZonedDateTimeValue;
-  var
-    CoerceDateRec: TTemporalDateRecord;
-    CoerceTimeRec: TTemporalTimeRecord;
-    CoerceOffsetSeconds: Integer;
-    CoerceTZ: string;
-    CoerceEpochMs: Int64;
-    CoerceSubMs: Integer;
-  begin
-    if AArg is TGocciaTemporalZonedDateTimeValue then
-      Result := TGocciaTemporalZonedDateTimeValue(AArg)
-    else if AArg is TGocciaStringLiteralValue then
-    begin
-      if not TryParseISODateTimeWithOffset(TGocciaStringLiteralValue(AArg).Value,
-          CoerceDateRec, CoerceTimeRec, CoerceOffsetSeconds, CoerceTZ) then
-        ThrowRangeError(SErrorInvalidISOZonedDateTime, SSuggestTemporalISOFormat);
-
-      CoerceEpochMs := DateToEpochDays(CoerceDateRec.Year, CoerceDateRec.Month, CoerceDateRec.Day) * Int64(86400000) +
-                       Int64(CoerceTimeRec.Hour) * 3600000 + Int64(CoerceTimeRec.Minute) * 60000 +
-                       Int64(CoerceTimeRec.Second) * 1000 + CoerceTimeRec.Millisecond;
-      CoerceSubMs := CoerceTimeRec.Microsecond * 1000 + CoerceTimeRec.Nanosecond;
-      CoerceEpochMs := CoerceEpochMs - Int64(CoerceOffsetSeconds) * 1000;
-
-      if CoerceTZ = '' then
-        ThrowRangeError(SErrorTemporalZonedDateTimeCompareTZ, SSuggestTemporalTimezone);
-
-      Result := TGocciaTemporalZonedDateTimeValue.Create(CoerceEpochMs, CoerceSubMs, CoerceTZ);
-    end
-    else
-    begin
-      ThrowTypeError(SErrorTemporalZonedDateTimeCompareArg, SSuggestTemporalCompareArg);
-      Result := nil;
-    end;
-  end;
-
 begin
-  Z1 := CoerceZDT(AArgs.GetElement(0));
-  Z2 := CoerceZDT(AArgs.GetElement(1));
+  Z1 := CoerceTemporalZonedDateTime(AArgs.GetElement(0), 'Temporal.ZonedDateTime.compare');
+  Z2 := CoerceTemporalZonedDateTime(AArgs.GetElement(1), 'Temporal.ZonedDateTime.compare');
 
   if Z1.EpochMilliseconds < Z2.EpochMilliseconds then
     Result := TGocciaNumberLiteralValue.Create(-1)

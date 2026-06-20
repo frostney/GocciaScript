@@ -934,6 +934,12 @@ begin
       TGocciaNativeFunctionValue.CreateWithoutPrototype(
         TypedArrayStatic.TypedArrayOf, PROP_OF, 0),
       [pfConfigurable, pfWritable]));
+  FTypedArrayIntrinsic.DefineSymbolProperty(
+    TGocciaSymbolValue.WellKnownSpecies,
+    TGocciaPropertyDescriptorAccessor.Create(
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(
+        SpeciesGetter, 'get [Symbol.species]', 0),
+      nil, [pfConfigurable]));
 
   RegisterTypedArrayConstructor(CONSTRUCTOR_INT8_ARRAY, takInt8, ObjectConstructor);
   RegisterTypedArrayConstructor(CONSTRUCTOR_UINT8_ARRAY, takUint8, ObjectConstructor);
@@ -955,6 +961,12 @@ begin
     // §23.2.3: %TypedArray%.prototype.constructor = %TypedArray%
     TGocciaTypedArrayValue.GetSharedPrototypeObject.DefineProperty(PROP_CONSTRUCTOR,
       TGocciaPropertyDescriptorData.Create(FTypedArrayIntrinsic, [pfConfigurable, pfWritable]));
+    // §23.2.3.33: %TypedArray%.prototype.toString is the same function object
+    // as Array.prototype.toString.
+    TGocciaTypedArrayValue.GetSharedPrototypeObject.DefineProperty(PROP_TO_STRING,
+      TGocciaPropertyDescriptorData.Create(
+        ArrayConstructor.Prototype.GetProperty(PROP_TO_STRING),
+        [pfConfigurable, pfWritable]));
   end;
 
   TypeDef.ConstructorName := CONSTRUCTOR_STRING;
@@ -1245,8 +1257,17 @@ begin
     if Assigned(GC) then
       GC.ClearKeptObjects;
     Queue := TGocciaMicrotaskQueue.Instance;
-    if Assigned(Queue) and Queue.HasPending then
-      Queue.DrainQueue;
+    repeat
+      if PumpAtomicsWaitAsyncCompletions = 0 then
+      begin
+        if Assigned(Queue) and Queue.HasPending then
+          Queue.DrainQueue
+        else
+          Break;
+      end
+      else if Assigned(Queue) and Queue.HasPending then
+        Queue.DrainQueue;
+    until False;
   finally
     GC := TGarbageCollector.Instance;
     if Assigned(GC) then

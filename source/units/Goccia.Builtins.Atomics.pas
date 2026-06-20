@@ -17,7 +17,9 @@ uses
 function PumpAtomicsWaitAsyncCompletions: Integer;
 function HasPendingAtomicsWaitAsyncCompletions: Boolean;
 function WaitForAtomicsPromise(const APromise: TGocciaPromiseValue): Boolean;
+procedure SetAtomicsAgentCanSuspend(AValue: Boolean);
 procedure ShutdownAtomicsWaiters;
+procedure ShutdownAtomicsWaitersForCurrentThread;
 
 type
   TGocciaAtomics = class(TGocciaBuiltin)
@@ -59,6 +61,7 @@ type
 implementation
 
 uses
+  Classes,
   Generics.Collections,
   Math,
   SyncObjs,
@@ -73,6 +76,7 @@ uses
   Goccia.GarbageCollector,
   Goccia.InstructionLimit,
   Goccia.Timeout,
+  Goccia.Values.ArrayBufferValue,
   Goccia.Values.BigIntValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -100,7 +104,10 @@ type
     FHasDeadline: Boolean;
     FInList: Boolean;
     FOwner: TGocciaAtomics;
+    FOwnerThreadId: TThreadID;
     FPromise: TGocciaPromiseValue;
+    FReady: Boolean;
+    FResult: string;
   public
     constructor Create(AOwner: TGocciaAtomics;
       ABuffer: TGocciaSharedArrayBufferValue; AByteOffset: Integer;
@@ -116,14 +123,32 @@ type
     property HasDeadline: Boolean read FHasDeadline;
     property InList: Boolean read FInList write FInList;
     property Owner: TGocciaAtomics read FOwner;
+    property OwnerThreadId: TThreadID read FOwnerThreadId;
     property Promise: TGocciaPromiseValue read FPromise;
+    property Ready: Boolean read FReady write FReady;
+    property ResultText: string read FResult write FResult;
   end;
 
 var
   GAtomicsLock: TRTLCriticalSection;
+  GAtomicsWaiters: TObjectList<TAtomicsWaiter>;
 
 threadvar
-  GAtomicsWaiters: TObjectList<TAtomicsWaiter>;
+  GAtomicsAgentCanSuspend: Boolean;
+  GAtomicsAgentCanSuspendConfigured: Boolean;
+
+function AtomicsAgentCanSuspend: Boolean;
+begin
+  if not GAtomicsAgentCanSuspendConfigured then
+    Exit(True);
+  Result := GAtomicsAgentCanSuspend;
+end;
+
+procedure SetAtomicsAgentCanSuspend(AValue: Boolean);
+begin
+  GAtomicsAgentCanSuspend := AValue;
+  GAtomicsAgentCanSuspendConfigured := True;
+end;
 
 function GetAtomicsWaiters: TObjectList<TAtomicsWaiter>;
 begin
@@ -139,11 +164,14 @@ constructor TAtomicsWaiter.Create(AOwner: TGocciaAtomics;
 begin
   inherited Create;
   FOwner := AOwner;
+  FOwnerThreadId := GetCurrentThreadId;
   FAsync := AAsync;
   FBuffer := ABuffer;
   FByteOffset := AByteOffset;
   FDeadlineMilliseconds := ADeadlineMilliseconds;
   FPromise := APromise;
+  FReady := False;
+  FResult := ATOMICS_WAIT_OK;
   FHasDeadline := AHasDeadline;
   FEvent := TEvent.Create(nil, True, False, '');
   FInList := False;
@@ -169,6 +197,11 @@ end;
 function AtomicsErrorMessage(const AMethodName, AMessage: string): string;
 begin
   Result := Format('Atomics.%s: %s', [AMethodName, AMessage]);
+end;
+
+function AtomicsSharedArrayBufferErrorMessage(const AMethodName: string): string;
+begin
+  Result := Format(SErrorRequiresSharedArrayBuffer, ['Atomics.' + AMethodName]);
 end;
 
 function GetArgumentOrUndefined(const AArgs: TGocciaArgumentsCollection;
@@ -289,10 +322,24 @@ begin
   Result := Trunc(CountNumber);
 end;
 
+procedure EnsureAtomicTypedArrayUsable(const ATypedArray: TGocciaTypedArrayValue;
+  const AMethodName: string; AWriteAccess: Boolean);
+begin
+  if (ATypedArray.BufferValue is TGocciaArrayBufferValue) and
+     TGocciaArrayBufferValue(ATypedArray.BufferValue).Detached then
+    ThrowTypeError(Format(SErrorCannotUseDetachedTypedArray,
+      ['Atomics.' + AMethodName]));
+  if AWriteAccess and (ATypedArray.BufferValue is TGocciaArrayBufferValue) and
+     TGocciaArrayBufferValue(ATypedArray.BufferValue).Immutable then
+    ThrowTypeError(AtomicsErrorMessage(AMethodName,
+      'cannot write to an immutable ArrayBuffer'));
+end;
+
 procedure ValidateAtomicTypedArrayAccess(const AArgs: TGocciaArgumentsCollection;
-  const AMethodName: string; ARequireWaitable: Boolean;
+  const AMethodName: string; ARequireWaitable, AWriteAccess: Boolean;
   out ATypedArray: TGocciaTypedArrayValue; out AIndex, AByteOffset: Integer);
 var
+  ArrayLength: Integer;
   Bpe: Integer;
   IndexValue: TGocciaValue;
   TypedArrayValue: TGocciaValue;
@@ -312,9 +359,11 @@ begin
     ThrowTypeError(AtomicsErrorMessage(AMethodName,
       'typedArray must be an Int32Array or BigInt64Array'));
 
+  EnsureAtomicTypedArrayUsable(ATypedArray, AMethodName, AWriteAccess);
+  ArrayLength := ATypedArray.Length;
   IndexValue := GetArgumentOrUndefined(AArgs, 1);
   AIndex := ToIndexForAtomics(IndexValue, AMethodName);
-  if AIndex >= ATypedArray.Length then
+  if AIndex >= ArrayLength then
     ThrowRangeError(AtomicsErrorMessage(AMethodName,
       SErrorInvalidTypedArrayIndex));
 
@@ -323,18 +372,53 @@ begin
 end;
 
 procedure ValidateAtomicAccess(const AArgs: TGocciaArgumentsCollection;
-  const AMethodName: string; ARequireWaitable: Boolean;
+  const AMethodName: string; ARequireWaitable, AWriteAccess: Boolean;
   out ATypedArray: TGocciaTypedArrayValue;
-  out ABuffer: TGocciaSharedArrayBufferValue; out AIndex, AByteOffset: Integer);
+  out ABuffer: TGocciaValue; out AIndex, AByteOffset: Integer);
 begin
-  ValidateAtomicTypedArrayAccess(AArgs, AMethodName, ARequireWaitable,
+  ValidateAtomicTypedArrayAccess(AArgs, AMethodName, ARequireWaitable, AWriteAccess,
     ATypedArray, AIndex, AByteOffset);
+  ABuffer := ATypedArray.BufferValue;
+end;
+
+procedure ValidateAtomicsWaitAccess(const AArgs: TGocciaArgumentsCollection;
+  const AMethodName: string; out ATypedArray: TGocciaTypedArrayValue;
+  out ABuffer: TGocciaSharedArrayBufferValue; out AIndex,
+  AByteOffset: Integer);
+var
+  ArrayLength: Integer;
+  Bpe: Integer;
+  IndexValue: TGocciaValue;
+  TypedArrayValue: TGocciaValue;
+begin
+  TypedArrayValue := GetArgumentOrUndefined(AArgs, 0);
+  if not (TypedArrayValue is TGocciaTypedArrayValue) then
+    ThrowTypeError(AtomicsErrorMessage(AMethodName,
+      'typedArray must be an integer TypedArray'));
+
+  ATypedArray := TGocciaTypedArrayValue(TypedArrayValue);
+
+  if not IsAtomicIntegerKind(ATypedArray.Kind) then
+    ThrowTypeError(AtomicsErrorMessage(AMethodName,
+      'typedArray must be an integer TypedArray'));
+
+  if not IsWaitableKind(ATypedArray.Kind) then
+    ThrowTypeError(AtomicsErrorMessage(AMethodName,
+      'typedArray must be an Int32Array or BigInt64Array'));
 
   if not (ATypedArray.BufferValue is TGocciaSharedArrayBufferValue) then
-    ThrowTypeError(AtomicsErrorMessage(AMethodName,
-      SErrorRequiresSharedArrayBuffer));
+    ThrowTypeError(AtomicsSharedArrayBufferErrorMessage(AMethodName));
 
   ABuffer := TGocciaSharedArrayBufferValue(ATypedArray.BufferValue);
+  ArrayLength := ATypedArray.Length;
+  IndexValue := GetArgumentOrUndefined(AArgs, 1);
+  AIndex := ToIndexForAtomics(IndexValue, AMethodName);
+  if AIndex >= ArrayLength then
+    ThrowRangeError(AtomicsErrorMessage(AMethodName,
+      SErrorInvalidTypedArrayIndex));
+
+  Bpe := TGocciaTypedArrayValue.BytesPerElement(ATypedArray.Kind);
+  AByteOffset := ATypedArray.ByteOffset + AIndex * Bpe;
 end;
 
 function ReadNumberElement(ATypedArray: TGocciaTypedArrayValue;
@@ -538,7 +622,7 @@ end;
 function AtomicReadModifyWrite(const AArgs: TGocciaArgumentsCollection;
   const AMethodName: string; AOperation: TGocciaAtomicsOperation): TGocciaValue;
 var
-  Buffer: TGocciaSharedArrayBufferValue;
+  Buffer: TGocciaValue;
   ByteOffset: Integer;
   Index: Integer;
   NewBigIntRaw: Int64;
@@ -549,7 +633,7 @@ var
   OperandNumber: Double;
   TypedArray: TGocciaTypedArrayValue;
 begin
-  ValidateAtomicAccess(AArgs, AMethodName, False, TypedArray, Buffer, Index,
+  ValidateAtomicAccess(AArgs, AMethodName, False, True, TypedArray, Buffer, Index,
     ByteOffset);
 
   EnterCriticalSection(GAtomicsLock);
@@ -629,6 +713,7 @@ var
   DueWaiters: TList<TAtomicsWaiter>;
   I: Integer;
   NowMilliseconds: QWord;
+  OwnerThreadId: TThreadID;
   Waiter: TAtomicsWaiter;
   Waiters: TObjectList<TAtomicsWaiter>;
 begin
@@ -636,6 +721,7 @@ begin
   DueWaiters := TList<TAtomicsWaiter>.Create;
   try
     NowMilliseconds := GetTickCount64;
+    OwnerThreadId := GetCurrentThreadId;
     EnterCriticalSection(GAtomicsLock);
     try
       Waiters := GetAtomicsWaiters;
@@ -643,9 +729,12 @@ begin
       while I < Waiters.Count do
       begin
         Waiter := Waiters[I];
-        if Waiter.Async and Waiter.HasDeadline and
-          (NowMilliseconds >= Waiter.DeadlineMilliseconds) then
+        if Waiter.Async and (Waiter.OwnerThreadId = OwnerThreadId) and
+          (Waiter.Ready or (Waiter.HasDeadline and
+          (NowMilliseconds >= Waiter.DeadlineMilliseconds))) then
         begin
+          if not Waiter.Ready then
+            Waiter.ResultText := ATOMICS_WAIT_TIMED_OUT;
           Waiter.InList := False;
           Waiters.Delete(I);
           DueWaiters.Add(Waiter);
@@ -660,7 +749,7 @@ begin
     for Waiter in DueWaiters do
     begin
       Waiter.Promise.Resolve(TGocciaStringLiteralValue.Create(
-        ATOMICS_WAIT_TIMED_OUT));
+        Waiter.ResultText));
       Waiter.Free;
       Inc(Result);
     end;
@@ -679,7 +768,7 @@ begin
   try
     Waiters := GetAtomicsWaiters;
     for I := 0 to Waiters.Count - 1 do
-      if Waiters[I].Async then
+      if Waiters[I].Async and (Waiters[I].OwnerThreadId = GetCurrentThreadId) then
         Exit(True);
   finally
     LeaveCriticalSection(GAtomicsLock);
@@ -708,28 +797,11 @@ begin
   Result := True;
 end;
 
-function CurrentWaitValueMatches(ATypedArray: TGocciaTypedArrayValue;
-  AByteOffset: Integer; const AExpected: TGocciaValue): Boolean;
-var
-  ExpectedBigIntRaw: Int64;
-  ExpectedNumber: Double;
-begin
-  if ATypedArray.Kind = takBigInt64 then
-  begin
-    ExpectedBigIntRaw := ConvertBigIntRawForKind(ATypedArray.Kind, AExpected);
-    Result := ReadBigIntRawElement(ATypedArray, AByteOffset) = ExpectedBigIntRaw;
-  end
-  else
-  begin
-    ExpectedNumber := ConvertNumberForKind(ATypedArray.Kind, AExpected);
-    Result := ReadNumberElement(ATypedArray, AByteOffset) = ExpectedNumber;
-  end;
-end;
-
 function WaitForSynchronousWaiter(AWaiter: TAtomicsWaiter;
   ATimeoutMilliseconds: Int64): string;
 var
   Deadline: QWord;
+  NowMilliseconds: QWord;
   Remaining: Int64;
   Slice: LongWord;
   WaitResult: TWaitResult;
@@ -747,9 +819,10 @@ begin
       Slice := 50
     else
     begin
-      Remaining := Int64(Deadline - GetTickCount64);
-      if Remaining <= 0 then
+      NowMilliseconds := GetTickCount64;
+      if NowMilliseconds >= Deadline then
         Break;
+      Remaining := Int64(Deadline - NowMilliseconds);
       if Remaining > 50 then
         Slice := 50
       else
@@ -804,18 +877,68 @@ end;
 procedure ShutdownAtomicsWaiters;
 var
   Waiter: TAtomicsWaiter;
+  Waiters: TObjectList<TAtomicsWaiter>;
 begin
-  if not Assigned(GAtomicsWaiters) then
-    Exit;
+  Waiters := nil;
+  EnterCriticalSection(GAtomicsLock);
+  try
+    if not Assigned(GAtomicsWaiters) then
+      Exit;
+    Waiters := GAtomicsWaiters;
+    GAtomicsWaiters := nil;
+  finally
+    LeaveCriticalSection(GAtomicsLock);
+  end;
 
-  while GAtomicsWaiters.Count > 0 do
+  while Assigned(Waiters) and (Waiters.Count > 0) do
   begin
-    Waiter := GAtomicsWaiters[GAtomicsWaiters.Count - 1];
+    Waiter := Waiters[Waiters.Count - 1];
     Waiter.InList := False;
-    GAtomicsWaiters.Delete(GAtomicsWaiters.Count - 1);
+    Waiters.Delete(Waiters.Count - 1);
     Waiter.Free;
   end;
-  FreeAndNil(GAtomicsWaiters);
+  Waiters.Free;
+end;
+
+procedure ShutdownAtomicsWaitersForCurrentThread;
+var
+  CurrentThreadId: TThreadID;
+  I: Integer;
+  RemovedWaiters: TList<TAtomicsWaiter>;
+  Waiter: TAtomicsWaiter;
+  Waiters: TObjectList<TAtomicsWaiter>;
+begin
+  RemovedWaiters := TList<TAtomicsWaiter>.Create;
+  try
+    CurrentThreadId := GetCurrentThreadId;
+    EnterCriticalSection(GAtomicsLock);
+    try
+      if not Assigned(GAtomicsWaiters) then
+        Exit;
+
+      Waiters := GAtomicsWaiters;
+      I := 0;
+      while I < Waiters.Count do
+      begin
+        Waiter := Waiters[I];
+        if Waiter.OwnerThreadId = CurrentThreadId then
+        begin
+          Waiter.InList := False;
+          Waiters.Delete(I);
+          RemovedWaiters.Add(Waiter);
+        end
+        else
+          Inc(I);
+      end;
+    finally
+      LeaveCriticalSection(GAtomicsLock);
+    end;
+
+    for Waiter in RemovedWaiters do
+      Waiter.Free;
+  finally
+    RemovedWaiters.Free;
+  end;
 end;
 
 constructor TGocciaAtomics.Create(const AName: string; AScope: TGocciaScope;
@@ -890,7 +1013,7 @@ end;
 function TGocciaAtomics.AtomicsCompareExchange(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
-  Buffer: TGocciaSharedArrayBufferValue;
+  Buffer: TGocciaValue;
   ByteOffset: Integer;
   ExpectedBigIntRaw: Int64;
   ExpectedNumber: Double;
@@ -901,7 +1024,7 @@ var
   ReplacementNumber: Double;
   TypedArray: TGocciaTypedArrayValue;
 begin
-  ValidateAtomicAccess(AArgs, 'compareExchange', False, TypedArray, Buffer,
+  ValidateAtomicAccess(AArgs, 'compareExchange', False, True, TypedArray, Buffer,
     Index, ByteOffset);
 
   EnterCriticalSection(GAtomicsLock);
@@ -952,12 +1075,12 @@ end;
 function TGocciaAtomics.AtomicsLoad(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
-  Buffer: TGocciaSharedArrayBufferValue;
+  Buffer: TGocciaValue;
   ByteOffset: Integer;
   Index: Integer;
   TypedArray: TGocciaTypedArrayValue;
 begin
-  ValidateAtomicAccess(AArgs, 'load', False, TypedArray, Buffer, Index,
+  ValidateAtomicAccess(AArgs, 'load', False, False, TypedArray, Buffer, Index,
     ByteOffset);
 
   EnterCriticalSection(GAtomicsLock);
@@ -976,7 +1099,7 @@ end;
 function TGocciaAtomics.AtomicsNotify(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
-  Buffer: TGocciaSharedArrayBufferValue;
+  Buffer: TGocciaValue;
   ByteOffset: Integer;
   Count: Integer;
   Index: Integer;
@@ -987,7 +1110,7 @@ var
   WaiterIndex: Integer;
   Waiters: TObjectList<TAtomicsWaiter>;
 begin
-  ValidateAtomicTypedArrayAccess(AArgs, 'notify', True, TypedArray, Index,
+  ValidateAtomicTypedArrayAccess(AArgs, 'notify', True, False, TypedArray, Index,
     ByteOffset);
   Count := ToWaiterCount(GetArgumentOrUndefined(AArgs, 2));
   if not (TypedArray.BufferValue is TGocciaSharedArrayBufferValue) then
@@ -1004,16 +1127,30 @@ begin
       while WaiterIndex < Waiters.Count do
       begin
         Waiter := Waiters[WaiterIndex];
-        if (Waiter.Buffer = Buffer) and (Waiter.ByteOffset = ByteOffset) and
+        if (not Waiter.Ready) and (Waiter.Buffer = Buffer) and
+          (Waiter.ByteOffset = ByteOffset) and
           ((Count < 0) or (NotifiedCount < Count)) then
         begin
-          Waiter.InList := False;
-          Waiters.Delete(WaiterIndex);
           Inc(NotifiedCount);
           if Waiter.Async then
-            ResolveWaiters.Add(Waiter)
+          begin
+            Waiter.Ready := True;
+            Waiter.ResultText := ATOMICS_WAIT_OK;
+            if Waiter.OwnerThreadId = GetCurrentThreadId then
+            begin
+              Waiter.InList := False;
+              Waiters.Delete(WaiterIndex);
+              ResolveWaiters.Add(Waiter);
+            end
+            else
+              Inc(WaiterIndex);
+          end
           else
+          begin
+            Waiter.InList := False;
+            Waiters.Delete(WaiterIndex);
             Waiter.Event.SetEvent;
+          end;
         end
         else
           Inc(WaiterIndex);
@@ -1066,7 +1203,7 @@ end;
 function TGocciaAtomics.AtomicsStore(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
-  Buffer: TGocciaSharedArrayBufferValue;
+  Buffer: TGocciaValue;
   ByteOffset: Integer;
   Index: Integer;
   NewBigIntValue: TBigInteger;
@@ -1074,7 +1211,7 @@ var
   NewNumber: Double;
   TypedArray: TGocciaTypedArrayValue;
 begin
-  ValidateAtomicAccess(AArgs, 'store', False, TypedArray, Buffer, Index,
+  ValidateAtomicAccess(AArgs, 'store', False, True, TypedArray, Buffer, Index,
     ByteOffset);
 
   EnterCriticalSection(GAtomicsLock);
@@ -1090,6 +1227,8 @@ begin
     else
     begin
       NewNumber := ToIntegerOrInfinityNumber(GetArgumentOrUndefined(AArgs, 2));
+      if NewNumber = 0 then
+        NewNumber := 0.0;
       WriteNumberElement(TypedArray, ByteOffset, NewNumber);
       Result := TGocciaNumberLiteralValue.Create(NewNumber);
     end;
@@ -1109,21 +1248,39 @@ function TGocciaAtomics.AtomicsWait(const AArgs: TGocciaArgumentsCollection;
 var
   Buffer: TGocciaSharedArrayBufferValue;
   ByteOffset: Integer;
+  ExpectedBigIntRaw: Int64;
+  ExpectedNumber: Double;
   Index: Integer;
   TimeoutMilliseconds: Int64;
   TypedArray: TGocciaTypedArrayValue;
   Waiter: TAtomicsWaiter;
+  WaitValueMatches: Boolean;
   WaitResult: string;
 begin
-  ValidateAtomicAccess(AArgs, 'wait', True, TypedArray, Buffer, Index,
+  ValidateAtomicsWaitAccess(AArgs, 'wait', TypedArray, Buffer, Index,
     ByteOffset);
+  if TypedArray.Kind = takBigInt64 then
+    ExpectedBigIntRaw := ConvertBigIntRawForKind(TypedArray.Kind,
+      GetArgumentOrUndefined(AArgs, 2))
+  else
+    ExpectedNumber := ConvertNumberForKind(TypedArray.Kind,
+      GetArgumentOrUndefined(AArgs, 2));
   TimeoutMilliseconds := ToTimeoutMilliseconds(GetArgumentOrUndefined(AArgs, 3));
 
   EnterCriticalSection(GAtomicsLock);
   try
-    if not CurrentWaitValueMatches(TypedArray, ByteOffset,
-      GetArgumentOrUndefined(AArgs, 2)) then
+    if TypedArray.Kind = takBigInt64 then
+      WaitValueMatches := ReadBigIntRawElement(TypedArray, ByteOffset) =
+        ExpectedBigIntRaw
+    else
+      WaitValueMatches := ReadNumberElement(TypedArray, ByteOffset) =
+        ExpectedNumber;
+
+    if not WaitValueMatches then
       Exit(TGocciaStringLiteralValue.Create(ATOMICS_WAIT_NOT_EQUAL));
+
+    if not AtomicsAgentCanSuspend then
+      ThrowTypeError('Atomics.wait cannot suspend in this host context');
 
     if TimeoutMilliseconds = 0 then
       Exit(TGocciaStringLiteralValue.Create(ATOMICS_WAIT_TIMED_OUT));
@@ -1154,21 +1311,36 @@ var
   Buffer: TGocciaSharedArrayBufferValue;
   ByteOffset: Integer;
   DeadlineMilliseconds: QWord;
+  ExpectedBigIntRaw: Int64;
+  ExpectedNumber: Double;
   HasDeadline: Boolean;
   Index: Integer;
   Promise: TGocciaPromiseValue;
   TimeoutMilliseconds: Int64;
   TypedArray: TGocciaTypedArrayValue;
   Waiter: TAtomicsWaiter;
+  WaitValueMatches: Boolean;
 begin
-  ValidateAtomicAccess(AArgs, 'waitAsync', True, TypedArray, Buffer, Index,
+  ValidateAtomicsWaitAccess(AArgs, 'waitAsync', TypedArray, Buffer, Index,
     ByteOffset);
+  if TypedArray.Kind = takBigInt64 then
+    ExpectedBigIntRaw := ConvertBigIntRawForKind(TypedArray.Kind,
+      GetArgumentOrUndefined(AArgs, 2))
+  else
+    ExpectedNumber := ConvertNumberForKind(TypedArray.Kind,
+      GetArgumentOrUndefined(AArgs, 2));
   TimeoutMilliseconds := ToTimeoutMilliseconds(GetArgumentOrUndefined(AArgs, 3));
 
   EnterCriticalSection(GAtomicsLock);
   try
-    if not CurrentWaitValueMatches(TypedArray, ByteOffset,
-      GetArgumentOrUndefined(AArgs, 2)) then
+    if TypedArray.Kind = takBigInt64 then
+      WaitValueMatches := ReadBigIntRawElement(TypedArray, ByteOffset) =
+        ExpectedBigIntRaw
+    else
+      WaitValueMatches := ReadNumberElement(TypedArray, ByteOffset) =
+        ExpectedNumber;
+
+    if not WaitValueMatches then
       Exit(CreateWaitAsyncResult(False,
         TGocciaStringLiteralValue.Create(ATOMICS_WAIT_NOT_EQUAL)));
 

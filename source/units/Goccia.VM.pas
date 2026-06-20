@@ -263,7 +263,8 @@ type
     function GetIteratorValue(const AIterable: TGocciaValue;
       const ATryAsync: Boolean): TGocciaValue;
     function ConstructValue(const AConstructor: TGocciaValue;
-      const AArguments: TGocciaArgumentsCollection): TGocciaValue;
+      const AArguments: TGocciaArgumentsCollection;
+      const ANewTarget: TGocciaValue = nil): TGocciaValue;
     function ImportModuleValue(const APath: string): TGocciaValue; overload;
     function ImportModuleValue(const APath, AReferrer: string): TGocciaValue; overload;
     procedure ResolveDynamicImportPromise(const APromise: TGocciaPromiseValue;
@@ -3024,14 +3025,8 @@ begin
   if NativeSuperConstructor = TGocciaFunctionBase.GetSharedPrototype then
     Exit(nil);
 
-  if (NativeSuperConstructor is TGocciaFunctionBase) and
-     not (NativeSuperConstructor is TGocciaNativeFunctionValue) then
-  begin
-    Result := TGocciaInstanceValue.Create(Self);
-    Exit;
-  end;
-
-  ConstructedValue := FVM.ConstructValue(NativeSuperConstructor, AArguments);
+  ConstructedValue := FVM.ConstructValue(NativeSuperConstructor, AArguments,
+    Self);
   if ConstructedValue is TGocciaObjectValue then
     Result := TGocciaObjectValue(ConstructedValue)
   else
@@ -6241,8 +6236,17 @@ begin
       FVM.FCurrentConstructorSuperCalled := False;
       try
         ConstructorToCall := nil;
-        if (SuperClass is TGocciaVMClassValue) and
-           Assigned(TGocciaVMClassValue(SuperClass).FConstructorValue) then
+        if Assigned(NativeInstance) then
+        begin
+          // The native superclass constructor has already allocated and
+          // selected the correct exotic receiver above. Re-entering implicit
+          // super here would allocate a second receiver using the superclass
+          // as newTarget and replace the derived instance.
+          if Instance is TGocciaInstanceValue then
+            TGocciaInstanceValue(Instance).InitializeNativeFromArguments(AArguments);
+        end
+        else if (SuperClass is TGocciaVMClassValue) and
+                Assigned(TGocciaVMClassValue(SuperClass).FConstructorValue) then
         begin
           FVM.RunClassInitializers(SuperClass, Instance);
           if Assigned(ANewTarget) then
@@ -6605,8 +6609,18 @@ begin
         try
           ConstructorToCall := nil;
 
-          if (SuperClass is TGocciaVMClassValue) and
-             Assigned(TGocciaVMClassValue(SuperClass).FConstructorValue) then
+          if Assigned(NativeInstance) then
+          begin
+            // The native superclass constructor has already allocated and
+            // selected the correct exotic receiver above. Re-entering implicit
+            // super here would allocate a second receiver using the superclass
+            // as newTarget and replace the derived instance.
+            EnsureBoxedArgs;
+            if Instance is TGocciaInstanceValue then
+              TGocciaInstanceValue(Instance).InitializeNativeFromArguments(BoxedArgs);
+          end
+          else if (SuperClass is TGocciaVMClassValue) and
+                  Assigned(TGocciaVMClassValue(SuperClass).FConstructorValue) then
           begin
             TGocciaVMClassValue(SuperClass).FVM.RunClassInitializers(
               SuperClass, Instance);
@@ -8507,28 +8521,35 @@ begin
 end;
 
 function TGocciaVM.ConstructValue(const AConstructor: TGocciaValue;
-  const AArguments: TGocciaArgumentsCollection): TGocciaValue;
+  const AArguments: TGocciaArgumentsCollection;
+  const ANewTarget: TGocciaValue): TGocciaValue;
 var
   BytecodeFunction: TGocciaBytecodeFunctionValue;
   BoundArgs: TGocciaArgumentsCollection;
   BoundFunction: TGocciaBoundFunctionValue;
   Context: TGocciaEvaluationContext;
   ConstructorName: string;
+  EffectiveNewTarget: TGocciaValue;
   I: Integer;
-  PrototypeTarget: TGocciaValue;
-  PrototypeValue: TGocciaValue;
   ReceiverPrototype, ReceiverInstance: TGocciaObjectValue;
 begin
   // ES2026 §28.1.1 [[Construct]](argumentsList, newTarget)
+  if Assigned(ANewTarget) then
+    EffectiveNewTarget := ANewTarget
+  else
+    EffectiveNewTarget := AConstructor;
+
   if AConstructor is TGocciaProxyValue then
   begin
-    Result := TGocciaProxyValue(AConstructor).ConstructTrap(AArguments);
+    Result := TGocciaProxyValue(AConstructor).ConstructTrap(AArguments,
+      EffectiveNewTarget);
     Exit;
   end;
 
   if AConstructor is TGocciaVMClassValue then
   begin
-    Result := TGocciaVMClassValue(AConstructor).Instantiate(AArguments);
+    Result := TGocciaVMClassValue(AConstructor).Instantiate(AArguments,
+      EffectiveNewTarget);
     Exit;
   end;
 
@@ -8537,13 +8558,16 @@ begin
     FillChar(Context, SizeOf(Context), 0);
     Context.Realm := FRealm;
     Context.Scope := FGlobalScope;
-    Result := InstantiateClass(TGocciaClassValue(AConstructor), AArguments, Context);
+    Result := InstantiateClass(TGocciaClassValue(AConstructor), AArguments,
+      Context);
     Exit;
   end;
 
   if AConstructor is TGocciaBoundFunctionValue then
   begin
     BoundFunction := TGocciaBoundFunctionValue(AConstructor);
+    if IsSameValue(BoundFunction, EffectiveNewTarget) then
+      EffectiveNewTarget := BoundFunction.OriginalFunction;
     BoundArgs := TGocciaArgumentsCollection.CreateWithCapacity(
       BoundFunction.BoundArgCount + AArguments.Length);
     try
@@ -8551,7 +8575,8 @@ begin
         BoundArgs.Add(BoundFunction.GetBoundArg(I));
       for I := 0 to AArguments.Length - 1 do
         BoundArgs.Add(AArguments.GetElement(I));
-      Result := ConstructValue(BoundFunction.OriginalFunction, BoundArgs);
+      Result := ConstructValue(BoundFunction.OriginalFunction, BoundArgs,
+        EffectiveNewTarget);
     finally
       BoundArgs.Free;
     end;
@@ -8571,7 +8596,7 @@ begin
       TGocciaCallStack.Instance.Push(ConstructorName, '', 0, 0);
     try
       Result := TGocciaNativeFunctionValue(AConstructor).Construct(
-        AArguments, AConstructor);
+        AArguments, EffectiveNewTarget);
     finally
       if Assigned(TGocciaCallStack.Instance) then
         TGocciaCallStack.Instance.Pop;
@@ -8610,24 +8635,7 @@ begin
     // that property is not an Object — §10.1.14 GetPrototypeFromConstructor),
     // then calls the body with the new object bound as `this`.  Iff the body
     // explicitly returns an Object, that becomes the call result.
-    // For bound function exotic objects (§10.4.1.2) the receiver's
-    // [[Prototype]] comes from the underlying [[BoundTargetFunction]] —
-    // the bound wrapper itself has no own `prototype` data property.
-    PrototypeTarget := AConstructor;
-    while PrototypeTarget is TGocciaBoundFunctionValue do
-      PrototypeTarget := TGocciaBoundFunctionValue(PrototypeTarget).OriginalFunction;
-    if PrototypeTarget is TGocciaObjectValue then
-      PrototypeValue := TGocciaObjectValue(PrototypeTarget).GetProperty(PROP_PROTOTYPE)
-    else
-      PrototypeValue := nil;
-    if PrototypeValue is TGocciaObjectValue then
-      ReceiverPrototype := TGocciaObjectValue(PrototypeValue)
-    else
-    begin
-      if not Assigned(TGocciaObjectValue.SharedObjectPrototype) then
-        TGocciaObjectValue.InitializeSharedPrototype;
-      ReceiverPrototype := TGocciaObjectValue.SharedObjectPrototype;
-    end;
+    ReceiverPrototype := GetProtoFromConstructor(EffectiveNewTarget);
     ReceiverInstance := TGocciaObjectValue.Create(ReceiverPrototype);
     TGarbageCollector.Instance.AddTempRoot(ReceiverInstance);
     try
@@ -8638,7 +8646,7 @@ begin
         // the underlying target, and applies the spec return rules
         // (explicit Object return wins; otherwise the receiver).
         Result := InvokeConstructableWithReceiver(AConstructor, AArguments,
-          ReceiverInstance);
+          ReceiverInstance, EffectiveNewTarget);
       finally
         if Assigned(TGocciaCallStack.Instance) then
           TGocciaCallStack.Instance.Pop;
@@ -9655,8 +9663,17 @@ function TGocciaVM.InvokeImplicitSuperInitialization(
   const AArguments: TGocciaArgumentsCollection): TGocciaValue;
 var
   ConstructorThisValue: TGocciaValue;
+  ReceiverPrototype: TGocciaObjectValue;
   SuperResult: TGocciaValue;
   TargetInstance: TGocciaValue;
+  function EffectiveNewTarget: TGocciaValue;
+  begin
+    if Assigned(FPendingNewTarget) then
+      Exit(FPendingNewTarget);
+    if Assigned(FCurrentNewTarget) then
+      Exit(FCurrentNewTarget);
+    Result := AClassValue;
+  end;
   function IsUndefinedConstructedValue(const AValue: TGocciaValue): Boolean;
   begin
     Result := (not Assigned(AValue)) or (AValue is TGocciaUndefinedLiteralValue);
@@ -9689,6 +9706,18 @@ begin
   Result := AInstance;
   if not Assigned(AClassValue) then
     Exit;
+
+  if Assigned(AClassValue.NativeInstanceDefaultPrototype) then
+  begin
+    TargetInstance := AClassValue.CreateNativeInstance(AArguments);
+    if not (TargetInstance is TGocciaObjectValue) then
+      ThrowTypeError(
+        'Superclass constructor did not return an object',
+        SSuggestNotConstructorType);
+    ReceiverPrototype := GetProtoFromConstructor(EffectiveNewTarget);
+    TGocciaObjectValue(TargetInstance).Prototype := ReceiverPrototype;
+    Exit(TargetInstance);
+  end;
 
   if (AClassValue is TGocciaVMClassValue) and
      Assigned(TGocciaVMClassValue(AClassValue).FConstructorValue) then
@@ -9762,9 +9791,18 @@ var
   BoxedArgs: TGocciaArgumentsCollection;
   BytecodeConstructor: TGocciaBytecodeFunctionValue;
   ConstructorThisValue: TGocciaValue;
+  ReceiverPrototype: TGocciaObjectValue;
   SuperResult: TGocciaValue;
   SuperResultRegister: TGocciaRegister;
   TargetInstance: TGocciaValue;
+  function EffectiveNewTarget: TGocciaValue;
+  begin
+    if Assigned(FPendingNewTarget) then
+      Exit(FPendingNewTarget);
+    if Assigned(FCurrentNewTarget) then
+      Exit(FCurrentNewTarget);
+    Result := AClassValue;
+  end;
   function IsUndefinedConstructedValue(const AValue: TGocciaValue): Boolean;
   begin
     Result := (not Assigned(AValue)) or (AValue is TGocciaUndefinedLiteralValue);
@@ -9812,6 +9850,23 @@ begin
   Result := AInstance;
   if not Assigned(AClassValue) then
     Exit;
+
+  if Assigned(AClassValue.NativeInstanceDefaultPrototype) then
+  begin
+    BoxedArgs := MaterializeArguments(AArguments);
+    try
+      TargetInstance := AClassValue.CreateNativeInstance(BoxedArgs);
+    finally
+      ReleaseArguments(BoxedArgs);
+    end;
+    if not (TargetInstance is TGocciaObjectValue) then
+      ThrowTypeError(
+        'Superclass constructor did not return an object',
+        SSuggestNotConstructorType);
+    ReceiverPrototype := GetProtoFromConstructor(EffectiveNewTarget);
+    TGocciaObjectValue(TargetInstance).Prototype := ReceiverPrototype;
+    Exit(TargetInstance);
+  end;
 
   if (AClassValue is TGocciaVMClassValue) and
      Assigned(TGocciaVMClassValue(AClassValue).FConstructorValue) then
@@ -14328,10 +14383,10 @@ begin
           EvalSourceValue := TGocciaUndefinedLiteralValue.UndefinedValue;
           if (C and CALL_FLAG_SPREAD) <> 0 then
           begin
-            if (FRegisters[B].Kind = grkObject) and
-               (FRegisters[B].ObjectValue is TGocciaArrayValue) and
-               (TGocciaArrayValue(FRegisters[B].ObjectValue).Elements.Count > 0) then
-              EvalSourceValue := TGocciaArrayValue(FRegisters[B].ObjectValue).GetElement(0);
+	            if (FRegisters[B].Kind = grkObject) and
+	               (FRegisters[B].ObjectValue is TGocciaArrayValue) and
+	               (TGocciaArrayValue(FRegisters[B].ObjectValue).Elements.Count > 0) then
+	              EvalSourceValue := TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty('0');
           end
           else if B > 0 then
             EvalSourceValue := GetRegister(A + 1);
@@ -14378,9 +14433,9 @@ begin
                   TGocciaArrayValue(FRegisters[B].ObjectValue).Elements.Count);
                 for I := 0 to BoundFunction.BoundArgCount - 1 do
                   RegisterArgs[I] := VMValueToRegisterFast(BoundFunction.GetBoundArg(I));
-                for I := 0 to TGocciaArrayValue(FRegisters[B].ObjectValue).Elements.Count - 1 do
-                  RegisterArgs[BoundFunction.BoundArgCount + I] := VMValueToRegisterFast(
-                    TGocciaArrayValue(FRegisters[B].ObjectValue).Elements[I]);
+	                for I := 0 to TGocciaArrayValue(FRegisters[B].ObjectValue).Elements.Count - 1 do
+	                  RegisterArgs[BoundFunction.BoundArgCount + I] := VMValueToRegisterFast(
+	                    TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(IntToStr(I)));
                 CallThisRegister := ValueToRegister(BoundFunction.BoundThis);
                 if not BytecodeFunction.FStrictThis then
                   CallThisRegister := CoerceNonStrictThisRegister(
@@ -14427,9 +14482,9 @@ begin
             begin
               SetLength(RegisterArgs,
                 TGocciaArrayValue(FRegisters[B].ObjectValue).Elements.Count);
-              for I := 0 to High(RegisterArgs) do
-                RegisterArgs[I] := ValueToRegister(
-                  TGocciaArrayValue(FRegisters[B].ObjectValue).Elements[I]);
+	              for I := 0 to High(RegisterArgs) do
+	                RegisterArgs[I] := ValueToRegister(
+	                  TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(IntToStr(I)));
               PushFrame(A, Frame.IP, Template, PrevCovLine, ProfileEntryTimestamp);
               SetupNewFrame(BytecodeFunction.FClosure,
                 CallThisRegister, RegisterArgs, Length(RegisterArgs),
@@ -14447,9 +14502,9 @@ begin
         try
           if (C and 1) = 1 then
           begin
-            if GetRegister(B) is TGocciaArrayValue then
-              for I := 0 to TGocciaArrayValue(GetRegister(B)).Elements.Count - 1 do
-                CallArgs.Add(TGocciaArrayValue(GetRegister(B)).GetElement(I));
+	            if GetRegister(B) is TGocciaArrayValue then
+	              for I := 0 to TGocciaArrayValue(GetRegister(B)).Elements.Count - 1 do
+	                CallArgs.Add(TGocciaArrayValue(GetRegister(B)).GetProperty(IntToStr(I)));
           end
           else
             for I := 0 to B - 1 do
@@ -14573,29 +14628,30 @@ begin
                         True, True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
                     1:
                       SetupNewFrame(BytecodeFunction.FClosure,
-                        CallThisRegister, TGocciaRegisterArray(nil), 1,
-                        VMValueToRegisterFast(ArgsArray.Elements[0]),
-                        RegisterUndefined, RegisterUndefined,
+	                        CallThisRegister, TGocciaRegisterArray(nil), 1,
+	                        VMValueToRegisterFast(ArgsArray.GetProperty('0')),
+	                        RegisterUndefined, RegisterUndefined,
                         True, True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
                     2:
                       SetupNewFrame(BytecodeFunction.FClosure,
-                        CallThisRegister, TGocciaRegisterArray(nil), 2,
-                        VMValueToRegisterFast(ArgsArray.Elements[0]),
-                        VMValueToRegisterFast(ArgsArray.Elements[1]),
-                        RegisterUndefined,
+	                        CallThisRegister, TGocciaRegisterArray(nil), 2,
+	                        VMValueToRegisterFast(ArgsArray.GetProperty('0')),
+	                        VMValueToRegisterFast(ArgsArray.GetProperty('1')),
+	                        RegisterUndefined,
                         True, True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
                     3:
                       SetupNewFrame(BytecodeFunction.FClosure,
-                        CallThisRegister, TGocciaRegisterArray(nil), 3,
-                        VMValueToRegisterFast(ArgsArray.Elements[0]),
-                        VMValueToRegisterFast(ArgsArray.Elements[1]),
-                        VMValueToRegisterFast(ArgsArray.Elements[2]),
+	                        CallThisRegister, TGocciaRegisterArray(nil), 3,
+	                        VMValueToRegisterFast(ArgsArray.GetProperty('0')),
+	                        VMValueToRegisterFast(ArgsArray.GetProperty('1')),
+	                        VMValueToRegisterFast(ArgsArray.GetProperty('2')),
                         True, True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
                   else
                     begin
-                      SetLength(RegisterArgs, ArgsArray.Elements.Count);
-                      for I := 0 to High(RegisterArgs) do
-                        RegisterArgs[I] := VMValueToRegisterFast(ArgsArray.Elements[I]);
+	                      SetLength(RegisterArgs, ArgsArray.Elements.Count);
+	                      for I := 0 to High(RegisterArgs) do
+	                        RegisterArgs[I] := VMValueToRegisterFast(
+	                          ArgsArray.GetProperty(IntToStr(I)));
                       SetupNewFrame(BytecodeFunction.FClosure,
                         CallThisRegister, RegisterArgs, Length(RegisterArgs),
                         RegisterUndefined, RegisterUndefined, RegisterUndefined,
@@ -14635,9 +14691,9 @@ begin
             begin
               SetLength(RegisterArgs,
                 TGocciaArrayValue(FRegisters[B].ObjectValue).Elements.Count);
-              for I := 0 to High(RegisterArgs) do
-                RegisterArgs[I] := VMValueToRegisterFast(
-                  TGocciaArrayValue(FRegisters[B].ObjectValue).Elements[I]);
+	              for I := 0 to High(RegisterArgs) do
+	                RegisterArgs[I] := VMValueToRegisterFast(
+	                  TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(IntToStr(I)));
               PushFrame(A, Frame.IP, Template, PrevCovLine, ProfileEntryTimestamp);
               SetupNewFrame(BytecodeFunction.FClosure,
                 FRegisters[A - 1], RegisterArgs, Length(RegisterArgs),
@@ -14702,9 +14758,10 @@ begin
           if (FRegisters[B].Kind = grkObject) and
              (FRegisters[B].ObjectValue is TGocciaVMClassValue) then
           begin
-            SetLength(RegisterArgs, SpreadArray.Elements.Count);
-            for I := 0 to SpreadArray.Elements.Count - 1 do
-              RegisterArgs[I] := VMValueToRegisterFast(SpreadArray.GetElement(I));
+	            SetLength(RegisterArgs, SpreadArray.Elements.Count);
+	            for I := 0 to SpreadArray.Elements.Count - 1 do
+	              RegisterArgs[I] := VMValueToRegisterFast(
+	                SpreadArray.GetProperty(IntToStr(I)));
             FRegisters[A] := TGocciaVMClassValue(FRegisters[B].ObjectValue)
               .InstantiateRegisters(RegisterArgs);
           end
@@ -14712,8 +14769,8 @@ begin
           begin
             CallArgs := AcquireArguments(SpreadArray.Elements.Count);
             try
-              for I := 0 to SpreadArray.Elements.Count - 1 do
-                CallArgs.Add(SpreadArray.GetElement(I));
+	              for I := 0 to SpreadArray.Elements.Count - 1 do
+	                CallArgs.Add(SpreadArray.GetProperty(IntToStr(I)));
               SetRegister(A, ConstructValue(GetRegister(B), CallArgs));
             finally
               ReleaseArguments(CallArgs);
@@ -15470,9 +15527,9 @@ begin
               if (FRegisters[A].Kind = grkObject) and
                  (FRegisters[A].ObjectValue is TGocciaArrayValue) and
                  (DoneValue is TGocciaArrayValue) then
-                for I := 0 to TGocciaArrayValue(DoneValue).Elements.Count - 1 do
-                  TGocciaArrayValue(FRegisters[A].ObjectValue).Elements.Add(
-                    TGocciaArrayValue(DoneValue).GetElement(I));
+	                for I := 0 to TGocciaArrayValue(DoneValue).Elements.Count - 1 do
+	                  TGocciaArrayValue(FRegisters[A].ObjectValue).Elements.Add(
+	                    TGocciaArrayValue(DoneValue).GetProperty(IntToStr(I)));
             end;
 
           COLLECTION_OP_TRY_ITERABLE_TO_ARRAY:

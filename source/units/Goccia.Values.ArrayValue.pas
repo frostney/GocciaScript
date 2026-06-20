@@ -69,6 +69,7 @@ type
     function ArrayMap(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ArrayFilter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ArrayReduce(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ArrayReduceRight(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ArrayForEach(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ArraySome(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ArrayEvery(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -1089,6 +1090,7 @@ begin
       Members.AddMethod(ArrayMap, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(ArrayFilter, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(ArrayReduce, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(ArrayReduceRight, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(ArrayForEach, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(ArraySome, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(ArrayEvery, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
@@ -1216,8 +1218,8 @@ end;
 
 procedure TGocciaArrayValue.Freeze;
 begin
-  FLengthWritable := False;
   inherited Freeze;
+  FLengthWritable := False;
 end;
 
 function TGocciaArrayValue.ToStringTag: string;
@@ -1271,8 +1273,50 @@ begin
 end;
 
 function TGocciaArrayValue.SetElement(const AIndex: Integer; const AValue: TGocciaValue): Boolean;
+var
+  Accessor: TGocciaPropertyDescriptorAccessor;
+  Args: TGocciaArgumentsCollection;
+  Descriptor: TGocciaPropertyDescriptor;
+  IndexName: string;
 begin
   if AIndex < 0 then
+  begin
+    Result := False;
+    Exit;
+  end;
+
+  IndexName := IntToStr(AIndex);
+  Descriptor := GetOwnPropertyDescriptor(IndexName);
+  if Descriptor is TGocciaPropertyDescriptorAccessor then
+  begin
+    Accessor := TGocciaPropertyDescriptorAccessor(Descriptor);
+    if Assigned(Accessor.Setter) and Accessor.Setter.IsCallable then
+    begin
+      Args := TGocciaArgumentsCollection.Create([AValue]);
+      try
+        InvokeCallable(Accessor.Setter, Args, Self);
+      finally
+        Args.Free;
+      end;
+      Result := True;
+      Exit;
+    end;
+    ThrowTypeError(Format(SErrorSetPropertyOnlyGetter, [IndexName, ToStringTag]),
+      SSuggestPropertyHasOnlyGetter);
+  end;
+
+  Descriptor := inherited GetOwnPropertyDescriptor(IndexName);
+  if Assigned(Descriptor) then
+  begin
+    inherited AssignProperty(IndexName, AValue);
+    if AIndex + 1 > FLength then
+      FLength := AIndex + 1;
+    Result := True;
+    Exit;
+  end;
+
+  if (not Extensible) and
+     not ((AIndex < FElements.Count) and not IsArrayHole(FElements[AIndex])) then
   begin
     Result := False;
     Exit;
@@ -1292,6 +1336,9 @@ end;
 
 procedure TGocciaArrayValue.SetIndexProperty(const AIndex: Integer; const AValue: TGocciaValue);
 var
+  Accessor: TGocciaPropertyDescriptorAccessor;
+  Args: TGocciaArgumentsCollection;
+  Descriptor: TGocciaPropertyDescriptor;
   IndexName: string;
 begin
   if AIndex < 0 then
@@ -1300,16 +1347,32 @@ begin
     Exit;
   end;
 
-  if FProperties.Count > 0 then
+  IndexName := IntToStr(AIndex);
+  Descriptor := GetOwnPropertyDescriptor(IndexName);
+  if Descriptor is TGocciaPropertyDescriptorAccessor then
   begin
-    IndexName := IntToStr(AIndex);
-    if FProperties.ContainsKey(IndexName) then
+    Accessor := TGocciaPropertyDescriptorAccessor(Descriptor);
+    if Assigned(Accessor.Setter) and Accessor.Setter.IsCallable then
     begin
-      inherited AssignProperty(IndexName, AValue);
-      if Int64(AIndex) + 1 > FLength then
-        FLength := Int64(AIndex) + 1;
+      Args := TGocciaArgumentsCollection.Create([AValue]);
+      try
+        InvokeCallable(Accessor.Setter, Args, Self);
+      finally
+        Args.Free;
+      end;
       Exit;
     end;
+    ThrowTypeError(Format(SErrorSetPropertyOnlyGetter, [IndexName, ToStringTag]),
+      SSuggestPropertyHasOnlyGetter);
+  end;
+
+  Descriptor := inherited GetOwnPropertyDescriptor(IndexName);
+  if Assigned(Descriptor) then
+  begin
+    inherited AssignProperty(IndexName, AValue);
+    if Int64(AIndex) + 1 > FLength then
+      FLength := Int64(AIndex) + 1;
+    Exit;
   end;
 
   if FFrozen and (AIndex < FElements.Count) and
@@ -1320,6 +1383,13 @@ begin
   if (AIndex >= FLength) and not FLengthWritable then
     ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [IntToStr(AIndex)]),
       SSuggestCannotDeleteNonConfigurable);
+
+  if (not Extensible) and
+     not (CanStoreDenseElementIndex(AIndex, FElements.Count) and
+          (AIndex < FElements.Count) and
+          not IsArrayHole(FElements[AIndex])) then
+    ThrowTypeError(Format(SErrorCannotAddPropertyNotExtensible,
+      [IntToStr(AIndex)]), SSuggestObjectNotExtensible);
 
   if CanStoreDenseElementIndex(AIndex, FElements.Count) then
   begin
@@ -1347,19 +1417,19 @@ begin
   // type guard here so that generic receivers are accepted per ES spec.
 
   if AArgs.Length < 1 then
-    ThrowError(SErrorArrayMethodExpectsCallback, [AMethodName], SSuggestIteratorCallable);
+    ThrowTypeError(Format(SErrorArrayMethodExpectsCallback, [AMethodName]), SSuggestIteratorCallable);
 
   Result := AArgs.GetElement(0);
 
   if ARequiresCallback then
   begin
     if not Result.IsCallable then
-      ThrowError(SErrorCallbackMustBeFunction, [], SSuggestIteratorCallable);
+      ThrowTypeError(SErrorCallbackMustBeFunction, SSuggestIteratorCallable);
   end
   else
   begin
     if Result is TGocciaUndefinedLiteralValue then
-      ThrowError(SErrorCallbackMustNotBeUndefined, [], SSuggestIteratorCallable);
+      ThrowTypeError(SErrorCallbackMustNotBeUndefined, SSuggestIteratorCallable);
   end;
 end;
 
@@ -1594,6 +1664,104 @@ begin
   Result := Accumulator;
 end;
 
+// ES2026 §23.1.3.25 Array.prototype.reduceRight(callbackfn [, initialValue])
+function TGocciaArrayValue.ArrayReduceRight(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  View: TArrayLikeView;
+  Callback: TGocciaValue;
+  TypedCallback: TGocciaFunctionBase;
+  Accumulator: TGocciaValue;
+  CallArgs: TGocciaReduceCallbackArgs;
+  I, StartIndex: Integer;
+  Sparse: TArray<Int64>;
+  SparseEnd: Integer;
+  J: Integer;
+begin
+  View.Init(AThisValue);
+  Callback := ValidateArrayMethodCall('reduceRight', AArgs, AThisValue, True);
+
+  TypedCallback := nil;
+  if Callback is TGocciaFunctionBase then
+    TypedCallback := TGocciaFunctionBase(Callback);
+
+  if View.NeedsSparsePath then
+  begin
+    Sparse := CollectSparseIndicesInRange(View.Obj, 0, View.Len64);
+    if AArgs.Length >= 2 then
+    begin
+      Accumulator := AArgs.GetElement(1);
+      SparseEnd := High(Sparse);
+    end
+    else
+    begin
+      if Length(Sparse) = 0 then
+        ThrowTypeError(SErrorReduceEmptyArray,
+          SSuggestReduceInitialValue);
+      Accumulator := View.Get64(Sparse[High(Sparse)]);
+      SparseEnd := High(Sparse) - 1;
+    end;
+
+    CallArgs := TGocciaReduceCallbackArgs.Create(View.Obj);
+    try
+      for J := SparseEnd downto 0 do
+      begin
+        CallArgs.Accumulator := Accumulator;
+        CallArgs.Element := View.Get64(Sparse[J]);
+        CallArgs.Index := TGocciaNumberLiteralValue.Create(Int64ToDouble(Sparse[J]));
+        Accumulator := InvokeArrayCallback(Callback, TypedCallback, CallArgs,
+          TGocciaUndefinedLiteralValue.UndefinedValue);
+      end;
+    finally
+      CallArgs.Free;
+    end;
+
+    Result := Accumulator;
+    Exit;
+  end;
+
+  if AArgs.Length >= 2 then
+  begin
+    Accumulator := AArgs.GetElement(1);
+    StartIndex := View.Len - 1;
+  end
+  else
+  begin
+    // ES2026 §23.1.3.25 steps 6-8: scan for last present element
+    StartIndex := -2;
+    for I := View.Len - 1 downto 0 do
+    begin
+      if View.HasIndex(I) then
+      begin
+        Accumulator := View.Get(I);
+        StartIndex := I - 1;
+        Break;
+      end;
+    end;
+    if StartIndex = -2 then
+      ThrowTypeError(SErrorReduceEmptyArray,
+        SSuggestReduceInitialValue);
+  end;
+
+  CallArgs := TGocciaReduceCallbackArgs.Create(View.Obj);
+  try
+    for I := StartIndex downto 0 do
+    begin
+      if not View.HasIndex(I) then
+        Continue;
+
+      CallArgs.Accumulator := Accumulator;
+      CallArgs.Element := View.Get(I);
+      CallArgs.Index := TGocciaNumberLiteralValue.Create(I);
+      Accumulator := InvokeArrayCallback(Callback, TypedCallback, CallArgs,
+        TGocciaUndefinedLiteralValue.UndefinedValue);
+    end;
+  finally
+    CallArgs.Free;
+  end;
+
+  Result := Accumulator;
+end;
+
 // ES2026 §23.1.3.12 Array.prototype.forEach(callbackfn [, thisArg])
 function TGocciaArrayValue.ArrayForEach(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
@@ -1688,10 +1856,17 @@ end;
 function TGocciaArrayValue.ArrayToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   EmptyArgs: TGocciaArgumentsCollection;
+  Obj: TGocciaObjectValue;
+  JoinMethod: TGocciaValue;
 begin
+  Obj := ToObject(AThisValue);
   EmptyArgs := TGocciaArgumentsCollection.Create([]);
   try
-    Result := ArrayJoin(EmptyArgs, AThisValue);
+    JoinMethod := Obj.GetPropertyWithContext('join', AThisValue);
+    if Assigned(JoinMethod) and JoinMethod.IsCallable then
+      Result := InvokeCallable(JoinMethod, EmptyArgs, AThisValue)
+    else
+      Result := ArrayJoin(EmptyArgs, AThisValue);
   finally
     EmptyArgs.Free;
   end;
@@ -3243,13 +3418,35 @@ end;
 
 procedure TGocciaArrayValue.SetProperty(const AName: string; const AValue: TGocciaValue);
 var
+  Accessor: TGocciaPropertyDescriptorAccessor;
+  Args: TGocciaArgumentsCollection;
+  Descriptor: TGocciaPropertyDescriptor;
   Index: Int64;
   Desc: TGocciaPropertyDescriptorData;
 begin
   // Check if property name is a numeric index
   if TryParseArrayElementIndex(AName, Index) then
   begin
-    if FProperties.ContainsKey(AName) then
+    Descriptor := GetOwnPropertyDescriptor(AName);
+    if Descriptor is TGocciaPropertyDescriptorAccessor then
+    begin
+      Accessor := TGocciaPropertyDescriptorAccessor(Descriptor);
+      if Assigned(Accessor.Setter) and Accessor.Setter.IsCallable then
+      begin
+        Args := TGocciaArgumentsCollection.Create([AValue]);
+        try
+          InvokeCallable(Accessor.Setter, Args, Self);
+        finally
+          Args.Free;
+        end;
+        Exit;
+      end;
+      ThrowTypeError(Format(SErrorSetPropertyOnlyGetter, [AName, ToStringTag]),
+        SSuggestPropertyHasOnlyGetter);
+    end;
+
+    Descriptor := inherited GetOwnPropertyDescriptor(AName);
+    if Assigned(Descriptor) then
     begin
       inherited AssignProperty(AName, AValue);
       if Index + 1 > FLength then
@@ -3266,6 +3463,13 @@ begin
     if (Index >= FLength) and not FLengthWritable then
       ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [AName]),
         SSuggestCannotDeleteNonConfigurable);
+
+    if (not Extensible) and
+       not (CanStoreDenseElementIndex(Index, FElements.Count) and
+            (Index < FElements.Count) and
+            not IsArrayHole(FElements[Integer(Index)])) then
+      ThrowTypeError(Format(SErrorCannotAddPropertyNotExtensible, [AName]),
+        SSuggestObjectNotExtensible);
 
     if CanStoreDenseElementIndex(Index, FElements.Count) then
     begin
@@ -3404,7 +3608,15 @@ end;
 function TGocciaArrayValue.GetOwnPropertyDescriptor(const AName: string): TGocciaPropertyDescriptor;
 var
   Index: Int64;
+  Descriptor: TGocciaPropertyDescriptor;
 begin
+  if TryParseArrayElementIndex(AName, Index) then
+  begin
+    Descriptor := inherited GetOwnPropertyDescriptor(AName);
+    if Assigned(Descriptor) then
+      Exit(Descriptor);
+  end;
+
   if TryParseArrayElementIndex(AName, Index) and
      CanStoreDenseElementIndex(Index, FElements.Count) and
      (Index < FElements.Count) and
@@ -3489,6 +3701,10 @@ begin
       Exit;
     end;
 
+    if not Extensible then
+      ThrowTypeError(Format(SErrorCannotAddPropertyNotExtensible, [AName]),
+        SSuggestObjectNotExtensible);
+
     if CanStoreDenseElementIndex(Index, FElements.Count) and
        CanCreateDenseArrayElement(ADescriptor) then
     begin
@@ -3566,6 +3782,12 @@ begin
       if Result and (Index + 1 > FLength) then
         FLength := Index + 1;
       Exit;
+    end;
+
+    if not Extensible then
+    begin
+      ADescriptor.Free;
+      Exit(False);
     end;
 
     if CanStoreDenseElementIndex(Index, FElements.Count) and

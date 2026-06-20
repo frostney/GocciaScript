@@ -15,6 +15,16 @@ type
   // Forward declarations
   TGocciaBoundFunctionValue = class;
 
+  TGocciaProxyPredicate = function(const AValue: TGocciaValue): Boolean;
+  TGocciaProxyApplyHook = function(const AProxy: TGocciaValue;
+    const AArguments: TGocciaArgumentsCollection;
+    const AThisValue: TGocciaValue): TGocciaValue;
+  TGocciaProxyConstructHook = function(const AProxy: TGocciaValue;
+    const AArguments: TGocciaArgumentsCollection;
+    const ANewTarget: TGocciaValue): TGocciaValue;
+  TGocciaProxyGetPrototypeHook = function(
+    const AProxy: TGocciaObjectValue): TGocciaValue;
+
   TGocciaFunctionSharedPrototype = class(TGocciaObjectValue)
   public
     constructor Create;
@@ -68,6 +78,8 @@ type
     // name/length as own properties per ECMAScript spec
     function HasOwnProperty(const AName: string): Boolean; override;
     function GetOwnPropertyDescriptor(const AName: string): TGocciaPropertyDescriptor; override;
+    function GetOwnPropertyKeys: TArray<string>; override;
+    function GetAllPropertyNames: TArray<string>; override;
     function DeleteProperty(const AName: string): Boolean; override;
     procedure DefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor); override;
     function TryDefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor): Boolean; override;
@@ -163,6 +175,11 @@ function ConstructOrdinaryWithReceiver(const ATarget: TGocciaFunctionBase;
 function ConstructValue(const ATarget: TGocciaValue;
   const AArguments: TGocciaArgumentsCollection;
   const ANewTarget: TGocciaValue): TGocciaValue;
+procedure RegisterProxyDispatchHooks(
+  const APredicate: TGocciaProxyPredicate;
+  const AApply: TGocciaProxyApplyHook;
+  const AConstruct: TGocciaProxyConstructHook;
+  const AGetPrototype: TGocciaProxyGetPrototypeHook);
 
 // ES2026 §10.2.9 SetFunctionName property-key formatting shared by
 // interpreter and bytecode named-evaluation paths.
@@ -190,7 +207,6 @@ uses
   Goccia.Values.ErrorHelper,
   Goccia.Values.HoleValue,
   Goccia.Values.NativeFunction,
-  Goccia.Values.ProxyValue,
   Goccia.Values.SymbolValue;
 
 const
@@ -200,6 +216,27 @@ const
 // (Function.prototype.foo = ...) must not leak across engine recreation.
 var
   GFunctionPrototypeSlot: TGocciaRealmSlotId;
+  GProxyPredicate: TGocciaProxyPredicate;
+  GProxyApplyHook: TGocciaProxyApplyHook;
+  GProxyConstructHook: TGocciaProxyConstructHook;
+  GProxyGetPrototypeHook: TGocciaProxyGetPrototypeHook;
+
+procedure RegisterProxyDispatchHooks(
+  const APredicate: TGocciaProxyPredicate;
+  const AApply: TGocciaProxyApplyHook;
+  const AConstruct: TGocciaProxyConstructHook;
+  const AGetPrototype: TGocciaProxyGetPrototypeHook);
+begin
+  GProxyPredicate := APredicate;
+  GProxyApplyHook := AApply;
+  GProxyConstructHook := AConstruct;
+  GProxyGetPrototypeHook := AGetPrototype;
+end;
+
+function IsRegisteredProxyValue(const AValue: TGocciaValue): Boolean; inline;
+begin
+  Result := Assigned(GProxyPredicate) and GProxyPredicate(AValue);
+end;
 
 function GetSharedFunctionPrototype: TGocciaFunctionSharedPrototype; inline;
 begin
@@ -312,8 +349,8 @@ begin
       EffectiveTarget := BoundFn.OriginalFunction;
     end;
 
-    if EffectiveTarget is TGocciaProxyValue then
-      Result := TGocciaProxyValue(EffectiveTarget).ConstructTrap(WorkingArgs,
+    if IsRegisteredProxyValue(EffectiveTarget) then
+      Result := GProxyConstructHook(EffectiveTarget, WorkingArgs,
         EffectiveNewTarget)
     else if EffectiveTarget is TGocciaClassValue then
       Result := TGocciaClassValue(EffectiveTarget).Instantiate(WorkingArgs,
@@ -341,8 +378,8 @@ end;
 
 function GetPrototypeOfObject(const AObject: TGocciaObjectValue): TGocciaValue;
 begin
-  if AObject is TGocciaProxyValue then
-    Result := TGocciaProxyValue(AObject).GetPrototypeTrap
+  if IsRegisteredProxyValue(AObject) then
+    Result := GProxyGetPrototypeHook(AObject)
   else if Assigned(AObject.Prototype) then
     Result := AObject.Prototype
   else
@@ -608,6 +645,73 @@ begin
     Result := nil;
 end;
 
+function TGocciaFunctionBase.GetAllPropertyNames: TArray<string>;
+var
+  OwnNames: TArray<string>;
+  Count, I: Integer;
+
+  function IsArrayIndexKey(const AName: string): Boolean;
+  var
+    Digit, Index: UInt64;
+    K: Integer;
+  begin
+    Index := 0;
+    Result := False;
+    if AName = '' then
+      Exit;
+    if (Length(AName) > 1) and (AName[1] = '0') then
+      Exit;
+    for K := 1 to Length(AName) do
+    begin
+      if (AName[K] < '0') or (AName[K] > '9') then
+        Exit;
+      Digit := Ord(AName[K]) - Ord('0');
+      if Index > (High(UInt32) - Digit) div 10 then
+        Exit;
+      Index := Index * 10 + Digit;
+    end;
+    Result := Index < High(UInt32);
+  end;
+
+  procedure AppendName(const AName: string);
+  var
+    J: Integer;
+  begin
+    for J := 0 to Count - 1 do
+      if Result[J] = AName then
+        Exit;
+    if Count >= Length(Result) then
+      SetLength(Result, Count + 8);
+    Result[Count] := AName;
+    Inc(Count);
+  end;
+
+begin
+  OwnNames := inherited GetAllPropertyNames;
+  SetLength(Result, Length(OwnNames) + 2);
+  Count := 0;
+
+  for I := 0 to High(OwnNames) do
+    if IsArrayIndexKey(OwnNames[I]) then
+      AppendName(OwnNames[I]);
+
+  if FHasOwnLengthProperty then
+    AppendName(PROP_LENGTH);
+  if FHasOwnNameProperty then
+    AppendName(PROP_NAME);
+
+  for I := 0 to High(OwnNames) do
+    if not IsArrayIndexKey(OwnNames[I]) then
+      AppendName(OwnNames[I]);
+
+  SetLength(Result, Count);
+end;
+
+function TGocciaFunctionBase.GetOwnPropertyKeys: TArray<string>;
+begin
+  Result := GetAllPropertyNames;
+end;
+
 procedure TGocciaFunctionBase.MaterializeIntrinsicProperty(
   const AName: string);
 begin
@@ -870,8 +974,8 @@ begin
     Result := TGocciaFunctionSharedPrototype(ACallee).Call(AArgs, AThisValue)
   else if ACallee is TGocciaClassValue then
     Result := TGocciaClassValue(ACallee).Call(AArgs, AThisValue)
-  else if (ACallee is TGocciaProxyValue) and ACallee.IsCallable then
-    Result := TGocciaProxyValue(ACallee).ApplyTrap(AArgs, AThisValue)
+  else if IsRegisteredProxyValue(ACallee) and ACallee.IsCallable then
+    Result := GProxyApplyHook(ACallee, AArgs, AThisValue)
   else
     raise TGocciaError.Create('not callable', 0, 0, '', nil);
 end;

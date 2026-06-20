@@ -30,11 +30,12 @@ describe("Atomics.add", () => {
     expect(() => Atomics.add(i32, 1, 1)).toThrow(RangeError);
   });
 
-  test("throws TypeError for non-shared ArrayBuffer views", () => {
+  test("works for non-shared ArrayBuffer views", () => {
     const buffer = new ArrayBuffer(4);
     const i32 = new Int32Array(buffer);
 
-    expect(() => Atomics.add(i32, 0, 1)).toThrow(TypeError);
+    expect(Atomics.add(i32, 0, 1)).toBe(0);
+    expect(Atomics.load(i32, 0)).toBe(1);
   });
 
   test("throws TypeError for non-integer typed arrays", () => {

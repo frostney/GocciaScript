@@ -78,6 +78,12 @@ type
     property TimeZone: string read FTimeZone;
   end;
 
+function CoerceTemporalZonedDateTime(const AValue: TGocciaValue;
+  const AMethod: string; const AOptions: TGocciaValue = nil): TGocciaTemporalZonedDateTimeValue;
+function CanonicalizeTemporalTimeZoneIdentifier(const AValue: string): string;
+function TryParseTemporalOffsetString(const AValue: string; out AOffsetSeconds: Integer;
+  out AHasUTCDesignator, AHasSubMinuteSyntax: Boolean): Boolean;
+
 implementation
 
 uses
@@ -101,7 +107,9 @@ uses
   Goccia.Values.TemporalInstant,
   Goccia.Values.TemporalPlainDate,
   Goccia.Values.TemporalPlainDateTime,
-  Goccia.Values.TemporalPlainTime;
+  Goccia.Values.TemporalPlainMonthDay,
+  Goccia.Values.TemporalPlainTime,
+  Goccia.Values.TemporalPlainYearMonth;
 
 var
   GTemporalZonedDateTimeSharedSlot: TGocciaRealmOwnedSlotId;
@@ -126,6 +134,22 @@ const
   HOURS_PER_DAY = 24;
   MONTHS_PER_YEAR = 12;
   DAYS_PER_WEEK = 7;
+  PROPERTY_TIME_ZONE = 'timeZone';
+  PROPERTY_OFFSET = 'offset';
+
+type
+  TTemporalDisambiguationOption = (tdoCompatible, tdoEarlier, tdoLater, tdoReject);
+  TTemporalOffsetOption = (tooPrefer, tooUse, tooIgnore, tooReject);
+  TZonedDateTimeParseResult = record
+    Date: TTemporalDateRecord;
+    Time: TTemporalTimeRecord;
+    TimeZone: string;
+    OffsetSeconds: Integer;
+    HasOffset: Boolean;
+    HasUTCDesignator: Boolean;
+    OffsetHasSubMinuteSyntax: Boolean;
+    TimeZoneFromOffset: Boolean;
+  end;
 
 function AsZonedDateTime(const AValue: TGocciaValue; const AMethod: string): TGocciaTemporalZonedDateTimeValue;
 begin
@@ -134,40 +158,1046 @@ begin
   Result := TGocciaTemporalZonedDateTimeValue(AValue);
 end;
 
-function CoerceZonedDateTime(const AValue: TGocciaValue; const AMethod: string): TGocciaTemporalZonedDateTimeValue;
+function LocalToEpochMs(const AYear, AMonth, ADay, AHour, AMinute, ASecond, AMs: Integer;
+  const ATimeZone: string): Int64; forward;
+function FormatOffsetString(const AOffsetSeconds: Integer): string; forward;
+
+function IsUndefinedValue(const AValue: TGocciaValue): Boolean; inline;
+begin
+  Result := (AValue = nil) or (AValue is TGocciaUndefinedLiteralValue);
+end;
+
+function ASCIIEqualsIgnoreCase(const ALeft, ARight: string): Boolean;
+var
+  I: Integer;
+  LeftChar, RightChar: Char;
+
+  function UpperASCII(const AChar: Char): Char; inline;
+  begin
+    if (AChar >= 'a') and (AChar <= 'z') then
+      Result := Chr(Ord(AChar) - Ord('a') + Ord('A'))
+    else
+      Result := AChar;
+  end;
+begin
+  if Length(ALeft) <> Length(ARight) then
+    Exit(False);
+
+  for I := 1 to Length(ALeft) do
+  begin
+    LeftChar := UpperASCII(ALeft[I]);
+    RightChar := UpperASCII(ARight[I]);
+    if LeftChar <> RightChar then
+      Exit(False);
+  end;
+
+  Result := True;
+end;
+
+function ASCIIIsLowercaseKey(const AValue: string): Boolean;
+var
+  I: Integer;
+  C: Char;
+begin
+  Result := AValue <> '';
+  for I := 1 to Length(AValue) do
+  begin
+    C := AValue[I];
+    if (C >= 'A') and (C <= 'Z') then
+      Exit(False);
+  end;
+end;
+
+function RequireOptionsObject(const AOptions: TGocciaValue; const AMethod: string): TGocciaObjectValue;
+begin
+  if IsUndefinedValue(AOptions) then
+    Exit(nil);
+  if not (AOptions is TGocciaObjectValue) then
+    ThrowTypeError(AMethod + ' options must be an object', SSuggestTemporalFromArg);
+  Result := TGocciaObjectValue(AOptions);
+end;
+
+function GetDisambiguationOption(const AOptions: TGocciaObjectValue;
+  const AMethod: string): TTemporalDisambiguationOption;
+var
+  Value: string;
+begin
+  Value := GetOptionString(AOptions, 'disambiguation', 'compatible');
+  if Value = 'compatible' then
+    Result := tdoCompatible
+  else if Value = 'earlier' then
+    Result := tdoEarlier
+  else if Value = 'later' then
+    Result := tdoLater
+  else if Value = 'reject' then
+    Result := tdoReject
+  else
+    ThrowRangeError(AMethod + ' invalid disambiguation option: ' + Value,
+      SSuggestTemporalRoundArg);
+end;
+
+function GetOffsetOption(const AOptions: TGocciaObjectValue;
+  const AMethod: string): TTemporalOffsetOption;
+var
+  Value: string;
+begin
+  Value := GetOptionString(AOptions, 'offset', 'reject');
+  if Value = 'prefer' then
+    Result := tooPrefer
+  else if Value = 'use' then
+    Result := tooUse
+  else if Value = 'ignore' then
+    Result := tooIgnore
+  else if Value = 'reject' then
+    Result := tooReject
+  else
+    ThrowRangeError(AMethod + ' invalid offset option: ' + Value,
+      SSuggestTemporalRoundArg);
+end;
+
+procedure ReadZonedDateTimeOptions(const AOptions: TGocciaValue; const AMethod: string;
+  out AOverflow: TTemporalOverflow; out AOffsetOption: TTemporalOffsetOption);
+var
+  OptionsObj: TGocciaObjectValue;
+  IgnoredDisambiguation: TTemporalDisambiguationOption;
+begin
+  OptionsObj := RequireOptionsObject(AOptions, AMethod);
+  IgnoredDisambiguation := GetDisambiguationOption(OptionsObj, AMethod);
+  AOffsetOption := GetOffsetOption(OptionsObj, AMethod);
+  AOverflow := GetOverflowOption(OptionsObj);
+end;
+
+function NormalizeLeapSecondForTemporalDateTime(const AValue: string): string;
+begin
+  Result := StringReplace(AValue, ':60', ':59', []);
+end;
+
+function IsASCIIDigit(const AChar: Char): Boolean; inline;
+begin
+  Result := (AChar >= '0') and (AChar <= '9');
+end;
+
+function ReadFixedDigits(const AValue: string; var APos: Integer;
+  const ACount: Integer; out ANumber: Integer): Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  ANumber := 0;
+  if APos + ACount - 1 > Length(AValue) then
+    Exit;
+
+  for I := 0 to ACount - 1 do
+  begin
+    if not IsASCIIDigit(AValue[APos + I]) then
+      Exit;
+    ANumber := ANumber * 10 + Ord(AValue[APos + I]) - Ord('0');
+  end;
+  Inc(APos, ACount);
+  Result := True;
+end;
+
+function ReadFractionalNanoseconds(const AValue: string; var APos: Integer;
+  out AMillisecond, AMicrosecond, ANanosecond: Integer): Boolean;
+var
+  Digits: Integer;
+  Fraction: Int64;
+begin
+  Result := False;
+  AMillisecond := 0;
+  AMicrosecond := 0;
+  ANanosecond := 0;
+
+  if (APos > Length(AValue)) or ((AValue[APos] <> '.') and (AValue[APos] <> ',')) then
+  begin
+    Result := True;
+    Exit;
+  end;
+
+  Inc(APos);
+  Digits := 0;
+  Fraction := 0;
+  while (APos <= Length(AValue)) and IsASCIIDigit(AValue[APos]) do
+  begin
+    if Digits >= 9 then
+      Exit;
+    Fraction := Fraction * 10 + Ord(AValue[APos]) - Ord('0');
+    Inc(Digits);
+    Inc(APos);
+  end;
+
+  if Digits = 0 then
+    Exit;
+  while Digits < 9 do
+  begin
+    Fraction := Fraction * 10;
+    Inc(Digits);
+  end;
+
+  AMillisecond := Integer(Fraction div 1000000);
+  AMicrosecond := Integer((Fraction div 1000) mod 1000);
+  ANanosecond := Integer(Fraction mod 1000);
+  Result := True;
+end;
+
+function ParseZonedDateTimeDatePart(const AValue: string; out ADate: TTemporalDateRecord): Boolean;
+var
+  Pos, Sign, Year, Month, Day: Integer;
+  Extended: Boolean;
+begin
+  Result := False;
+  Pos := 1;
+  Sign := 1;
+
+  if Pos > Length(AValue) then
+    Exit;
+
+  if AValue[Pos] = '+' then
+  begin
+    Inc(Pos);
+    if not ReadFixedDigits(AValue, Pos, 6, Year) then
+      Exit;
+  end
+  else if AValue[Pos] = '-' then
+  begin
+    Inc(Pos);
+    Sign := -1;
+    if not ReadFixedDigits(AValue, Pos, 6, Year) then
+      Exit;
+    if Year = 0 then
+      Exit;
+  end
+  else if not ReadFixedDigits(AValue, Pos, 4, Year) then
+    Exit;
+
+  Year := Year * Sign;
+  Extended := (Pos <= Length(AValue)) and (AValue[Pos] = '-');
+  if Extended then
+    Inc(Pos);
+  if not ReadFixedDigits(AValue, Pos, 2, Month) then
+    Exit;
+  if Extended then
+  begin
+    if (Pos > Length(AValue)) or (AValue[Pos] <> '-') then
+      Exit;
+    Inc(Pos);
+  end;
+  if not ReadFixedDigits(AValue, Pos, 2, Day) then
+    Exit;
+  if Pos <= Length(AValue) then
+    Exit;
+  if not IsValidDate(Year, Month, Day) then
+    Exit;
+
+  ADate.Year := Year;
+  ADate.Month := Month;
+  ADate.Day := Day;
+  Result := True;
+end;
+
+function ParseZonedDateTimeTimePart(const AValue: string; out ATime: TTemporalTimeRecord): Boolean;
+var
+  Pos, Hour, Minute, Second: Integer;
+  Extended: Boolean;
+begin
+  Result := False;
+  FillChar(ATime, SizeOf(ATime), 0);
+  Pos := 1;
+
+  if not ReadFixedDigits(AValue, Pos, 2, Hour) then
+    Exit;
+  Minute := 0;
+  Second := 0;
+
+  if Pos <= Length(AValue) then
+  begin
+    Extended := AValue[Pos] = ':';
+    if Extended then
+      Inc(Pos);
+
+    if not ReadFixedDigits(AValue, Pos, 2, Minute) then
+      Exit;
+
+    if Pos <= Length(AValue) then
+    begin
+      if Extended then
+      begin
+        if AValue[Pos] = ':' then
+          Inc(Pos)
+        else if (AValue[Pos] = '.') or (AValue[Pos] = ',') then
+        begin
+          if not ReadFractionalNanoseconds(AValue, Pos,
+            ATime.Millisecond, ATime.Microsecond, ATime.Nanosecond) then
+            Exit;
+          if Pos <= Length(AValue) then
+            Exit;
+          if not IsValidTime(Hour, Minute, Second, ATime.Millisecond,
+            ATime.Microsecond, ATime.Nanosecond) then
+            Exit;
+          ATime.Hour := Hour;
+          ATime.Minute := Minute;
+          ATime.Second := Second;
+          Result := True;
+          Exit;
+        end
+        else
+          Exit;
+      end
+      else if (AValue[Pos] = '.') or (AValue[Pos] = ',') then
+      begin
+        if not ReadFractionalNanoseconds(AValue, Pos,
+          ATime.Millisecond, ATime.Microsecond, ATime.Nanosecond) then
+          Exit;
+        if Pos <= Length(AValue) then
+          Exit;
+        if not IsValidTime(Hour, Minute, Second, ATime.Millisecond,
+          ATime.Microsecond, ATime.Nanosecond) then
+          Exit;
+        ATime.Hour := Hour;
+        ATime.Minute := Minute;
+        ATime.Second := Second;
+        Result := True;
+        Exit;
+      end;
+
+      if not ReadFixedDigits(AValue, Pos, 2, Second) then
+        Exit;
+      if not ReadFractionalNanoseconds(AValue, Pos,
+        ATime.Millisecond, ATime.Microsecond, ATime.Nanosecond) then
+        Exit;
+    end;
+  end;
+
+  if Pos <= Length(AValue) then
+    Exit;
+  if Second = 60 then
+    Second := 59;
+  if not IsValidTime(Hour, Minute, Second, ATime.Millisecond,
+    ATime.Microsecond, ATime.Nanosecond) then
+    Exit;
+
+  ATime.Hour := Hour;
+  ATime.Minute := Minute;
+  ATime.Second := Second;
+  Result := True;
+end;
+
+function ParseZonedDateTimeOffsetPart(const AValue: string; out AOffsetSeconds: Integer;
+  out AHasUTCDesignator, AHasSubMinuteSyntax: Boolean): Boolean;
+var
+  Pos, Sign, Hour, Minute, Second, Ms, Us, Ns: Integer;
+  Extended: Boolean;
+begin
+  Result := False;
+  AOffsetSeconds := 0;
+  AHasUTCDesignator := False;
+  AHasSubMinuteSyntax := False;
+
+  if (AValue = 'Z') or (AValue = 'z') then
+  begin
+    AHasUTCDesignator := True;
+    Result := True;
+    Exit;
+  end;
+
+  if Length(AValue) = 0 then
+    Exit;
+  case AValue[1] of
+    '+': Sign := 1;
+    '-': Sign := -1;
+  else
+    Exit;
+  end;
+
+  Pos := 2;
+  if not ReadFixedDigits(AValue, Pos, 2, Hour) then
+    Exit;
+  Minute := 0;
+  Second := 0;
+  Extended := (Pos <= Length(AValue)) and (AValue[Pos] = ':');
+  if Extended then
+    Inc(Pos);
+
+  if Pos <= Length(AValue) then
+  begin
+    if not ReadFixedDigits(AValue, Pos, 2, Minute) then
+      Exit;
+    if Pos <= Length(AValue) then
+    begin
+      if Extended then
+      begin
+        if AValue[Pos] <> ':' then
+          Exit;
+        Inc(Pos);
+      end;
+      if not ReadFixedDigits(AValue, Pos, 2, Second) then
+        Exit;
+      AHasSubMinuteSyntax := True;
+      Ms := 0;
+      Us := 0;
+      Ns := 0;
+      if not ReadFractionalNanoseconds(AValue, Pos, Ms, Us, Ns) then
+        Exit;
+      if (Ms <> 0) or (Us <> 0) or (Ns <> 0) then
+        Exit;
+    end;
+  end;
+
+  if Pos <= Length(AValue) then
+    Exit;
+  if (Hour > 23) or (Minute > 59) or (Second > 59) then
+    Exit;
+
+  AOffsetSeconds := Sign * (Hour * 3600 + Minute * 60 + Second);
+  Result := True;
+end;
+
+function SplitZonedDateTimeOffset(const AValue: string; out ATimePart, AOffsetPart: string): Boolean;
+var
+  I: Integer;
+begin
+  ATimePart := AValue;
+  AOffsetPart := '';
+  Result := True;
+
+  if Length(AValue) = 0 then
+    Exit(False);
+
+  if (AValue[Length(AValue)] = 'Z') or (AValue[Length(AValue)] = 'z') then
+  begin
+    ATimePart := Copy(AValue, 1, Length(AValue) - 1);
+    AOffsetPart := Copy(AValue, Length(AValue), 1);
+    Exit;
+  end;
+
+  for I := 1 to Length(AValue) do
+  begin
+    if (AValue[I] = '+') or (AValue[I] = '-') then
+    begin
+      ATimePart := Copy(AValue, 1, I - 1);
+      AOffsetPart := Copy(AValue, I, Length(AValue) - I + 1);
+      Exit;
+    end;
+  end;
+end;
+
+function ExtractZonedDateTimeAnnotations(var AValue: string; out ATimeZone: string): Boolean;
+var
+  BracketStart, BracketEnd: Integer;
+  Annotation, Key, Value, Calendar: string;
+  EqualsPos: Integer;
+  Critical, CalendarCriticalSeen: Boolean;
+  CalendarCount: Integer;
+begin
+  Result := False;
+  ATimeZone := '';
+  CalendarCount := 0;
+  CalendarCriticalSeen := False;
+
+  while (Length(AValue) > 0) and (AValue[Length(AValue)] = ']') do
+  begin
+    BracketEnd := Length(AValue);
+    BracketStart := BracketEnd - 1;
+    while (BracketStart > 0) and (AValue[BracketStart] <> '[') do
+      Dec(BracketStart);
+    if BracketStart = 0 then
+      Exit;
+
+    Annotation := Copy(AValue, BracketStart + 1, BracketEnd - BracketStart - 1);
+    Critical := (Length(Annotation) > 0) and (Annotation[1] = '!');
+    if Critical then
+      Annotation := Copy(Annotation, 2, Length(Annotation) - 1);
+    if Annotation = '' then
+      Exit;
+
+    EqualsPos := System.Pos('=', Annotation);
+    if EqualsPos > 0 then
+    begin
+      Key := Copy(Annotation, 1, EqualsPos - 1);
+      Value := Copy(Annotation, EqualsPos + 1, Length(Annotation) - EqualsPos);
+      if not ASCIIIsLowercaseKey(Key) then
+        Exit;
+
+      if Key = 'u-ca' then
+      begin
+        Inc(CalendarCount);
+        if Critical then
+          CalendarCriticalSeen := True;
+        if (CalendarCount > 1) and (CalendarCriticalSeen or Critical) then
+          Exit;
+        Calendar := Value;
+      end
+      else if Critical then
+        Exit;
+    end
+    else
+    begin
+      if ATimeZone <> '' then
+        Exit;
+      ATimeZone := Annotation;
+    end;
+
+    AValue := Copy(AValue, 1, BracketStart - 1);
+  end;
+
+  if (Calendar <> '') and not ASCIIEqualsIgnoreCase(Calendar, 'iso8601') then
+    Exit;
+
+  Result := True;
+end;
+
+function TryParseZonedDateTimeString(const AValue: string; out AParsed: TZonedDateTimeParseResult): Boolean;
+var
+  Base, DatePart, TimeAndOffset, TimePart, OffsetPart: string;
+  SepPos, I: Integer;
+begin
+  Result := False;
+  AParsed.Date.Year := 0;
+  AParsed.Date.Month := 0;
+  AParsed.Date.Day := 0;
+  AParsed.Time.Hour := 0;
+  AParsed.Time.Minute := 0;
+  AParsed.Time.Second := 0;
+  AParsed.Time.Millisecond := 0;
+  AParsed.Time.Microsecond := 0;
+  AParsed.Time.Nanosecond := 0;
+  AParsed.TimeZone := '';
+  AParsed.OffsetSeconds := 0;
+  AParsed.HasOffset := False;
+  AParsed.HasUTCDesignator := False;
+  AParsed.OffsetHasSubMinuteSyntax := False;
+  AParsed.TimeZoneFromOffset := False;
+  Base := AValue;
+  if Base = '' then
+    Exit;
+  if not ExtractZonedDateTimeAnnotations(Base, AParsed.TimeZone) then
+    Exit;
+
+  SepPos := 0;
+  for I := 1 to Length(Base) do
+  begin
+    if (Base[I] = 'T') or (Base[I] = 't') or (Base[I] = ' ') then
+    begin
+      SepPos := I;
+      Break;
+    end;
+  end;
+
+  if SepPos = 0 then
+  begin
+    if not ParseZonedDateTimeDatePart(Base, AParsed.Date) then
+      Exit;
+    AParsed.Time.Hour := 0;
+    AParsed.Time.Minute := 0;
+    AParsed.Time.Second := 0;
+    AParsed.Time.Millisecond := 0;
+    AParsed.Time.Microsecond := 0;
+    AParsed.Time.Nanosecond := 0;
+  end
+  else
+  begin
+    DatePart := Copy(Base, 1, SepPos - 1);
+    TimeAndOffset := Copy(Base, SepPos + 1, Length(Base) - SepPos);
+    if not ParseZonedDateTimeDatePart(DatePart, AParsed.Date) then
+      Exit;
+    if not SplitZonedDateTimeOffset(TimeAndOffset, TimePart, OffsetPart) then
+      Exit;
+    if TimePart = '' then
+      Exit;
+    if OffsetPart <> '' then
+    begin
+      if not ParseZonedDateTimeOffsetPart(OffsetPart, AParsed.OffsetSeconds,
+        AParsed.HasUTCDesignator, AParsed.OffsetHasSubMinuteSyntax) then
+        Exit;
+      AParsed.HasOffset := True;
+      if (AParsed.TimeZone = '') and AParsed.HasUTCDesignator then
+      begin
+        AParsed.TimeZone := 'UTC';
+        AParsed.TimeZoneFromOffset := True;
+      end
+      else if AParsed.TimeZone = '' then
+      begin
+        AParsed.TimeZone := FormatOffsetString(AParsed.OffsetSeconds);
+        AParsed.TimeZoneFromOffset := True;
+      end;
+    end;
+    if not ParseZonedDateTimeTimePart(TimePart, AParsed.Time) then
+      Exit;
+  end;
+
+  if AParsed.TimeZone = '' then
+    Exit;
+  Result := True;
+end;
+
+procedure ValidateZonedDateTimeEpoch(const AEpochMilliseconds: Int64;
+  const ASubMillisecondNanoseconds: Integer; const AMethod: string);
+var
+  EpochNs: TBigInteger;
+begin
+  EpochNs := EpochNanosecondsFromParts(AEpochMilliseconds, ASubMillisecondNanoseconds);
+  if not IsValidEpochNanoseconds(EpochNs) then
+    ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['ZonedDateTime', AMethod]),
+      SSuggestTemporalDateRange);
+end;
+
+procedure ValidateZonedDateTimeLocalRange(const AYear, AMonth, ADay: Integer;
+  const ATime: TTemporalTimeRecord; const ASubMillisecondNanoseconds: Integer;
+  const AMethod: string);
+
+  function DateBefore(const AY, AM, AD, ABY, ABM, ABD: Integer): Boolean;
+  begin
+    Result := (AY < ABY) or ((AY = ABY) and
+      ((AM < ABM) or ((AM = ABM) and (AD < ABD))));
+  end;
+
+begin
+  if DateBefore(AYear, AMonth, ADay, -271821, 4, 20) or
+     DateBefore(275760, 9, 13, AYear, AMonth, ADay) then
+    ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['ZonedDateTime', AMethod]),
+      SSuggestTemporalDateRange);
+end;
+
+function CalendarStringHasNonISOAnnotation(const AValue: string): Boolean;
+var
+  BracketStart, BracketEnd: Integer;
+  Annotation: string;
+begin
+  Result := False;
+  BracketEnd := Length(AValue);
+  while BracketEnd > 0 do
+  begin
+    while (BracketEnd > 0) and (AValue[BracketEnd] <> ']') do
+      Dec(BracketEnd);
+    if BracketEnd = 0 then
+      Exit;
+
+    BracketStart := BracketEnd - 1;
+    while (BracketStart > 0) and (AValue[BracketStart] <> '[') do
+      Dec(BracketStart);
+    if BracketStart = 0 then
+      Exit;
+
+    Annotation := Copy(AValue, BracketStart + 1, BracketEnd - BracketStart - 1);
+    if (Length(Annotation) > 0) and (Annotation[1] = '!') then
+      Annotation := Copy(Annotation, 2, Length(Annotation) - 1);
+    if Copy(Annotation, 1, 5) = 'u-ca=' then
+    begin
+      if not ASCIIEqualsIgnoreCase(Copy(Annotation, 6, Length(Annotation) - 5), 'iso8601') then
+        Exit(True);
+    end;
+    BracketEnd := BracketStart - 1;
+  end;
+end;
+
+function CalendarStringIsISO(const AValue: string): Boolean;
 var
   DateRec: TTemporalDateRecord;
+  TimeRec: TTemporalTimeRecord;
+  Year, Month, Day: Integer;
+  OffsetSeconds: Integer;
+  TimeZone: string;
+  Normalized: string;
+begin
+  if AValue = '' then
+    Exit(False);
+  if Copy(AValue, 1, 7) = '-000000' then
+    Exit(False);
+  if ASCIIEqualsIgnoreCase(AValue, 'iso8601') then
+    Exit(True);
+  if CalendarStringHasNonISOAnnotation(AValue) then
+    Exit(False);
+
+  Normalized := NormalizeLeapSecondForTemporalDateTime(AValue);
+  Result := CoerceToISODate(Normalized, DateRec) or
+    CoerceToISODateTime(Normalized, DateRec, TimeRec) or
+    CoerceToISOYearMonth(Normalized, Year, Month) or
+    CoerceToISOMonthDay(Normalized, Month, Day) or
+    TryParseISODateTimeWithOffset(Normalized, DateRec, TimeRec, OffsetSeconds, TimeZone);
+end;
+
+function CalendarFromProperty(const AValue: TGocciaValue): string;
+var
+  CalendarString: string;
+begin
+  if IsUndefinedValue(AValue) then
+    Exit('iso8601');
+
+  if (AValue is TGocciaTemporalPlainDateValue) or
+     (AValue is TGocciaTemporalPlainDateTimeValue) or
+     (AValue is TGocciaTemporalPlainMonthDayValue) or
+     (AValue is TGocciaTemporalPlainYearMonthValue) or
+     (AValue is TGocciaTemporalZonedDateTimeValue) then
+    Exit('iso8601');
+
+  if not (AValue is TGocciaStringLiteralValue) then
+    ThrowTypeError('Temporal.ZonedDateTime calendar must be a string or Temporal calendar-carrying object',
+      SSuggestTemporalFromArg);
+
+  CalendarString := TGocciaStringLiteralValue(AValue).Value;
+  if not CalendarStringIsISO(CalendarString) then
+    ThrowRangeError('Temporal.ZonedDateTime calendar must identify the iso8601 calendar',
+      SSuggestTemporalDateRange);
+  Result := 'iso8601';
+end;
+
+function CanonicalizeTimeZoneIdentifier(const AValue: string): string; forward;
+
+function TryDateTimeStringTimeZoneIdentifier(const AValue: string; out ATimeZone: string): Boolean;
+var
+  Parsed: TZonedDateTimeParseResult;
+begin
+  ATimeZone := '';
+  if (System.Pos('T', AValue) = 0) and (System.Pos('t', AValue) = 0) and
+     (System.Pos(' ', AValue) = 0) then
+    Exit(False);
+
+  if not TryParseZonedDateTimeString(AValue, Parsed) then
+    Exit(False);
+  if Parsed.TimeZone = '' then
+    Exit(False);
+  if Parsed.TimeZoneFromOffset and Parsed.OffsetHasSubMinuteSyntax then
+    Exit(False);
+
+  ATimeZone := CanonicalizeTimeZoneIdentifier(Parsed.TimeZone);
+  Result := True;
+end;
+
+function CanonicalizeTimeZoneIdentifier(const AValue: string): string;
+var
+  OffsetSeconds: Integer;
+begin
+  if AValue = '' then
+    ThrowRangeError(Format(SErrorUnknownTimezone, [AValue]), SSuggestTemporalTimezone);
+
+  if TryDateTimeStringTimeZoneIdentifier(AValue, Result) then
+    Exit;
+
+  if ASCIIEqualsIgnoreCase(AValue, 'UTC') then
+    Exit('UTC');
+
+  if ParseOffsetString(AValue, OffsetSeconds) then
+    Exit(FormatOffsetString(OffsetSeconds));
+
+  if IsValidTimeZone(AValue) then
+    Exit(AValue);
+
+  ThrowRangeError(Format(SErrorUnknownTimezone, [AValue]), SSuggestTemporalTimezone);
+end;
+
+function TimeZoneFromProperty(const AValue: TGocciaValue; const AMethod: string): string;
+begin
+  if IsUndefinedValue(AValue) then
+    ThrowTypeError(AMethod + ' requires timeZone property', SSuggestTemporalTimezone);
+
+  if AValue is TGocciaTemporalZonedDateTimeValue then
+    Exit(TGocciaTemporalZonedDateTimeValue(AValue).TimeZone);
+
+  if not (AValue is TGocciaStringLiteralValue) then
+    ThrowTypeError(AMethod + ' timeZone must be a string or ZonedDateTime',
+      SSuggestTemporalTimezone);
+
+  Result := CanonicalizeTimeZoneIdentifier(TGocciaStringLiteralValue(AValue).Value);
+end;
+
+function CanonicalizeTemporalTimeZoneIdentifier(const AValue: string): string;
+begin
+  Result := CanonicalizeTimeZoneIdentifier(AValue);
+end;
+
+function TryParseTemporalOffsetString(const AValue: string; out AOffsetSeconds: Integer;
+  out AHasUTCDesignator, AHasSubMinuteSyntax: Boolean): Boolean;
+begin
+  Result := ParseZonedDateTimeOffsetPart(AValue, AOffsetSeconds,
+    AHasUTCDesignator, AHasSubMinuteSyntax);
+end;
+
+function IsMonthCodeSyntaxValid(const AMonthCode: string): Boolean; forward;
+
+function OffsetStringFromProperty(const AValue: TGocciaValue; const AMethod: string): string;
+begin
+  if AValue is TGocciaStringLiteralValue then
+    Exit(TGocciaStringLiteralValue(AValue).Value);
+  if AValue is TGocciaObjectValue then
+    Exit(AValue.ToStringLiteral.Value);
+
+  ThrowTypeError(AMethod + ' offset must be a string', SSuggestTemporalTimezone);
+end;
+
+function MonthCodeStringFromProperty(const AValue: TGocciaValue;
+  const AMethod: string): string;
+begin
+  Result := AValue.ToStringLiteral.Value;
+  if not (AValue is TGocciaStringLiteralValue) and not IsMonthCodeSyntaxValid(Result) then
+    ThrowTypeError(AMethod + ' monthCode must be a string', SSuggestTemporalMonthCode);
+end;
+
+function IsMonthCodeSyntaxValid(const AMonthCode: string): Boolean;
+begin
+  Result := ((Length(AMonthCode) = 3) or (Length(AMonthCode) = 4)) and
+    (AMonthCode[1] = 'M') and
+    (AMonthCode[2] in ['0'..'9']) and
+    (AMonthCode[3] in ['0'..'9']) and
+    ((Length(AMonthCode) = 3) or (AMonthCode[4] = 'L'));
+end;
+
+function MonthFromMonthCode(const AMonthCode: string; out AMonth: Integer): Boolean;
+var
+  MonthPart: Integer;
+begin
+  Result := False;
+  AMonth := 0;
+  if (Length(AMonthCode) <> 3) or not TryStrToInt(Copy(AMonthCode, 2, 2), MonthPart) then
+    Exit;
+  if (MonthPart < 1) or (MonthPart > 12) then
+    Exit;
+  AMonth := MonthPart;
+  Result := True;
+end;
+
+function EpochFromLocalAndOffset(const AYear, AMonth, ADay: Integer;
+  const ATime: TTemporalTimeRecord; const AOffsetSeconds: Integer): Int64;
+begin
+  Result := DateToEpochDays(AYear, AMonth, ADay) * MILLISECONDS_PER_DAY +
+            Int64(ATime.Hour) * MILLISECONDS_PER_HOUR +
+            Int64(ATime.Minute) * MILLISECONDS_PER_MINUTE +
+            Int64(ATime.Second) * MILLISECONDS_PER_SECOND +
+            ATime.Millisecond -
+            Int64(AOffsetSeconds) * MILLISECONDS_PER_SECOND;
+end;
+
+function ApplyOffsetOption(const AYear, AMonth, ADay: Integer;
+  const ATime: TTemporalTimeRecord; const ATimeZone: string;
+  const AHasOffset: Boolean; const AOffsetSeconds: Integer;
+  const AHasUTCDesignator: Boolean;
+  const AOffsetOption: TTemporalOffsetOption; const AMethod: string): Int64;
+var
+  OffsetEpochMs: Int64;
+  ActualOffsetSeconds: Integer;
+begin
+  if AHasOffset then
+  begin
+    OffsetEpochMs := EpochFromLocalAndOffset(AYear, AMonth, ADay, ATime, AOffsetSeconds);
+    if AHasUTCDesignator then
+      Exit(OffsetEpochMs);
+  end
+  else
+    OffsetEpochMs := 0;
+
+  if not AHasOffset or (AOffsetOption = tooIgnore) then
+    Exit(LocalToEpochMs(AYear, AMonth, ADay, ATime.Hour, ATime.Minute,
+      ATime.Second, ATime.Millisecond, ATimeZone));
+
+  if AOffsetOption = tooUse then
+    Exit(OffsetEpochMs);
+
+  ActualOffsetSeconds := GetUtcOffsetSeconds(ATimeZone, OffsetEpochMs div MILLISECONDS_PER_SECOND);
+  if ActualOffsetSeconds = AOffsetSeconds then
+    Exit(OffsetEpochMs);
+
+  if AOffsetOption = tooReject then
+    ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['ZonedDateTime', AMethod]),
+      SSuggestTemporalTimezone);
+
+  Result := LocalToEpochMs(AYear, AMonth, ADay, ATime.Hour, ATime.Minute,
+    ATime.Second, ATime.Millisecond, ATimeZone);
+end;
+
+function HasDateTimeOffsetDesignator(const AValue: string): Boolean;
+var
+  TPos, I: Integer;
+  Rest: string;
+begin
+  TPos := System.Pos('T', AValue);
+  if TPos = 0 then
+    TPos := System.Pos('t', AValue);
+  if TPos = 0 then
+    Exit(False);
+
+  Rest := Copy(AValue, TPos + 1, Length(AValue) - TPos);
+  for I := 1 to Length(Rest) do
+  begin
+    if Rest[I] = '[' then
+      Break;
+    if (Rest[I] = 'Z') or (Rest[I] = 'z') or (Rest[I] = '+') or (Rest[I] = '-') then
+      Exit(True);
+  end;
+  Result := False;
+end;
+
+function CoerceTemporalZonedDateTime(const AValue: TGocciaValue;
+  const AMethod: string; const AOptions: TGocciaValue): TGocciaTemporalZonedDateTimeValue;
+var
   TimeRec: TTemporalTimeRecord;
   OffsetSeconds: Integer;
   TimeZoneStr: string;
   EpochMs: Int64;
   SubMs: Integer;
+  Obj: TGocciaObjectValue;
+  VCalendar, VDay, VHour, VMicrosecond, VMillisecond, VMinute, VMonth,
+  VMonthCode, VNanosecond, VOffset, VSecond, VTimeZone, VYear: TGocciaValue;
+  Overflow: TTemporalOverflow;
+  Year, Month, Day, MaxDay: Integer;
+  MonthPart: Integer;
+  MonthCodeStr, OffsetStr: string;
+  HasMonth, HasMonthCode, HasOffset: Boolean;
+  OffsetOption: TTemporalOffsetOption;
+  OffsetHasUTCDesignator, OffsetHasSubMinuteSyntax: Boolean;
+  Parsed: TZonedDateTimeParseResult;
+
+  function RequiredIntegerField(const AValue: TGocciaValue; const AName: string): Integer;
+  begin
+    if IsUndefinedValue(AValue) then
+      ThrowTypeError(AMethod + ' requires ' + AName + ' property', SSuggestTemporalFromArg);
+    Result := ToIntegerWithTruncationValue(AValue);
+  end;
+
+  function OptionalIntegerField(const AValue: TGocciaValue; const ADefault: Integer): Integer;
+  begin
+    if IsUndefinedValue(AValue) then
+      Result := ADefault
+    else
+      Result := ToIntegerWithTruncationValue(AValue);
+  end;
 begin
   if AValue is TGocciaTemporalZonedDateTimeValue then
-    Result := TGocciaTemporalZonedDateTimeValue(AValue)
+  begin
+    ReadZonedDateTimeOptions(AOptions, AMethod, Overflow, OffsetOption);
+    Result := TGocciaTemporalZonedDateTimeValue(AValue);
+  end
   else if AValue is TGocciaStringLiteralValue then
   begin
-    // Parse ISO with timezone annotation: 2024-03-15T13:45:30+05:30[Asia/Kolkata]
-    if not TryParseISODateTimeWithOffset(TGocciaStringLiteralValue(AValue).Value,
-      DateRec, TimeRec, OffsetSeconds, TimeZoneStr) then
+    if not TryParseZonedDateTimeString(
+      NormalizeLeapSecondForTemporalDateTime(TGocciaStringLiteralValue(AValue).Value), Parsed) then
       ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['ZonedDateTime', AMethod]), SSuggestTemporalISOFormat);
-    if TimeZoneStr = '' then
-      ThrowRangeError(SErrorZonedDateTimeRequiresTZAnnotation, SSuggestTemporalTimezone);
+    if Parsed.TimeZoneFromOffset then
+      ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['ZonedDateTime', AMethod]), SSuggestTemporalISOFormat);
+    TimeZoneStr := CanonicalizeTimeZoneIdentifier(Parsed.TimeZone);
 
-    // Convert parsed local time to epoch ms using the parsed offset
-    EpochMs := DateToEpochDays(DateRec.Year, DateRec.Month, DateRec.Day) * MILLISECONDS_PER_DAY +
-               Int64(TimeRec.Hour) * MILLISECONDS_PER_HOUR +
-               Int64(TimeRec.Minute) * MILLISECONDS_PER_MINUTE +
-               Int64(TimeRec.Second) * MILLISECONDS_PER_SECOND +
-               TimeRec.Millisecond;
-    // Subtract offset to get UTC epoch ms
-    EpochMs := EpochMs - Int64(OffsetSeconds) * MILLISECONDS_PER_SECOND;
+    ReadZonedDateTimeOptions(AOptions, AMethod, Overflow, OffsetOption);
+    if Parsed.HasOffset and not (OffsetOption in [tooUse, tooIgnore]) then
+      ValidateZonedDateTimeLocalRange(Parsed.Date.Year, Parsed.Date.Month,
+        Parsed.Date.Day, Parsed.Time,
+        Parsed.Time.Microsecond * 1000 + Parsed.Time.Nanosecond, AMethod);
+    EpochMs := ApplyOffsetOption(Parsed.Date.Year, Parsed.Date.Month, Parsed.Date.Day,
+      Parsed.Time, TimeZoneStr, Parsed.HasOffset, Parsed.OffsetSeconds,
+      Parsed.HasUTCDesignator, OffsetOption, AMethod);
+    SubMs := Parsed.Time.Microsecond * 1000 + Parsed.Time.Nanosecond;
+    ValidateZonedDateTimeEpoch(EpochMs, SubMs, AMethod);
+    Result := TGocciaTemporalZonedDateTimeValue.Create(EpochMs, SubMs, TimeZoneStr);
+  end
+  else if AValue is TGocciaObjectValue then
+  begin
+    Obj := TGocciaObjectValue(AValue);
+
+    VCalendar := Obj.GetProperty('calendar');
+    CalendarFromProperty(VCalendar);
+
+    VDay := Obj.GetProperty('day');
+    Day := RequiredIntegerField(VDay, 'day');
+    VHour := Obj.GetProperty('hour');
+    TimeRec.Hour := OptionalIntegerField(VHour, 0);
+    VMicrosecond := Obj.GetProperty('microsecond');
+    TimeRec.Microsecond := OptionalIntegerField(VMicrosecond, 0);
+    VMillisecond := Obj.GetProperty('millisecond');
+    TimeRec.Millisecond := OptionalIntegerField(VMillisecond, 0);
+    VMinute := Obj.GetProperty('minute');
+    TimeRec.Minute := OptionalIntegerField(VMinute, 0);
+    VMonth := Obj.GetProperty('month');
+    HasMonth := not IsUndefinedValue(VMonth);
+    if HasMonth then
+      Month := ToIntegerWithTruncationValue(VMonth)
+    else
+      Month := 0;
+
+    VMonthCode := Obj.GetProperty('monthCode');
+    HasMonthCode := not IsUndefinedValue(VMonthCode);
+    MonthCodeStr := '';
+    if HasMonthCode then
+    begin
+      MonthCodeStr := MonthCodeStringFromProperty(VMonthCode, AMethod);
+      if not IsMonthCodeSyntaxValid(MonthCodeStr) then
+        ThrowRangeError(SErrorInvalidMonthCodeYearMonth, SSuggestTemporalMonthCode);
+    end;
+
+    VNanosecond := Obj.GetProperty('nanosecond');
+    TimeRec.Nanosecond := OptionalIntegerField(VNanosecond, 0);
+    VOffset := Obj.GetProperty(PROPERTY_OFFSET);
+    HasOffset := not IsUndefinedValue(VOffset);
+    OffsetStr := '';
+    if HasOffset then
+    begin
+      OffsetStr := OffsetStringFromProperty(VOffset, AMethod);
+      if (not ParseZonedDateTimeOffsetPart(OffsetStr, OffsetSeconds,
+        OffsetHasUTCDesignator, OffsetHasSubMinuteSyntax)) or OffsetHasUTCDesignator then
+        ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['ZonedDateTime', AMethod]), SSuggestTemporalISOFormat);
+    end
+    else
+      OffsetSeconds := 0;
+    VSecond := Obj.GetProperty('second');
+    TimeRec.Second := OptionalIntegerField(VSecond, 0);
+    VTimeZone := Obj.GetProperty(PROPERTY_TIME_ZONE);
+    TimeZoneStr := TimeZoneFromProperty(VTimeZone, AMethod);
+    VYear := Obj.GetProperty('year');
+    Year := RequiredIntegerField(VYear, 'year');
+
+    ReadZonedDateTimeOptions(AOptions, AMethod, Overflow, OffsetOption);
+
+    if HasMonthCode then
+    begin
+      if not MonthFromMonthCode(MonthCodeStr, MonthPart) then
+        ThrowRangeError(SErrorMonthCodeOutOfRange, SSuggestTemporalMonthCode);
+      if HasMonth and (Month <> MonthPart) then
+        ThrowRangeError(SErrorMonthCodeMismatch, SSuggestTemporalMonthCode);
+      Month := MonthPart;
+    end
+    else if not HasMonth then
+      ThrowTypeError(AMethod + ' requires month property', SSuggestTemporalFromArg);
+
+    if Month < 0 then
+      ThrowRangeError(Format(SErrorTemporalMonthOutOfRange, [Month]), SSuggestTemporalDateRange);
+    if (Month < 1) or (Month > 12) then
+    begin
+      if Overflow = toReject then
+        ThrowRangeError(Format(SErrorTemporalMonthOutOfRange, [Month]), SSuggestTemporalDateRange);
+      if Month < 1 then
+        Month := 1
+      else
+        Month := 12;
+    end;
+
+    if Day < 0 then
+      ThrowRangeError(Format(SErrorTemporalDayOutOfRange, [Day]), SSuggestTemporalDateRange);
+    if Day < 1 then
+    begin
+      if Overflow = toReject then
+        ThrowRangeError(Format(SErrorTemporalDayOutOfRange, [Day]), SSuggestTemporalDateRange);
+      Day := 1;
+    end;
+    MaxDay := DaysInMonth(Year, Month);
+    if Day > MaxDay then
+    begin
+      if Overflow = toReject then
+        ThrowRangeError(Format(SErrorTemporalDayOutOfRangeForMonth, [Day, Month]), SSuggestTemporalDateRange);
+      Day := MaxDay;
+    end;
+
+    if not IsValidTime(TimeRec.Hour, TimeRec.Minute, TimeRec.Second,
+      TimeRec.Millisecond, TimeRec.Microsecond, TimeRec.Nanosecond) then
+      ThrowRangeError(SErrorInvalidISOTime, SSuggestTemporalDateRange);
+
+    EpochMs := ApplyOffsetOption(Year, Month, Day, TimeRec, TimeZoneStr,
+      HasOffset, OffsetSeconds, False, OffsetOption, AMethod);
+
     SubMs := TimeRec.Microsecond * 1000 + TimeRec.Nanosecond;
+    if HasOffset and not (OffsetOption in [tooUse, tooIgnore]) then
+      ValidateZonedDateTimeLocalRange(Year, Month, Day, TimeRec, SubMs, AMethod);
+    ValidateZonedDateTimeEpoch(EpochMs, SubMs, AMethod);
     Result := TGocciaTemporalZonedDateTimeValue.Create(EpochMs, SubMs, TimeZoneStr);
   end
   else
   begin
-    ThrowTypeError(AMethod + ' requires a ZonedDateTime or string', SSuggestTemporalFromArg);
+    ThrowTypeError(AMethod + ' requires a ZonedDateTime, string, or object', SSuggestTemporalFromArg);
     Result := nil;
   end;
 end;
@@ -1331,7 +2361,7 @@ var
   RH, RM, RS, RMs, RUs, RNs: Int64;
 begin
   Zdt := AsZonedDateTime(AThisValue, 'ZonedDateTime.prototype.until');
-  Other := CoerceZonedDateTime(AArgs.GetElement(0), 'ZonedDateTime.prototype.until');
+  Other := CoerceTemporalZonedDateTime(AArgs.GetElement(0), 'ZonedDateTime.prototype.until');
 
   OptionsObj := GetDiffOptions(AArgs, 1);
   LargestUnit := GetLargestUnit(OptionsObj, tuHour);
@@ -1390,7 +2420,7 @@ var
   RH, RM, RS, RMs, RUs, RNs: Int64;
 begin
   Zdt := AsZonedDateTime(AThisValue, 'ZonedDateTime.prototype.since');
-  Other := CoerceZonedDateTime(AArgs.GetElement(0), 'ZonedDateTime.prototype.since');
+  Other := CoerceTemporalZonedDateTime(AArgs.GetElement(0), 'ZonedDateTime.prototype.since');
 
   OptionsObj := GetDiffOptions(AArgs, 1);
   LargestUnit := GetLargestUnit(OptionsObj, tuHour);
@@ -1562,7 +2592,7 @@ var
   Zdt, Other: TGocciaTemporalZonedDateTimeValue;
 begin
   Zdt := AsZonedDateTime(AThisValue, 'ZonedDateTime.prototype.equals');
-  Other := CoerceZonedDateTime(AArgs.GetElement(0), 'ZonedDateTime.prototype.equals');
+  Other := CoerceTemporalZonedDateTime(AArgs.GetElement(0), 'ZonedDateTime.prototype.equals');
 
   if (Zdt.FEpochMilliseconds = Other.FEpochMilliseconds) and
      (Zdt.FSubMillisecondNanoseconds = Other.FSubMillisecondNanoseconds) and

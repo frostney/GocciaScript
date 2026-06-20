@@ -135,6 +135,10 @@ begin
         MapSymbolIterator,
         0,
         [pfConfigurable, pfWritable]);
+      Members.AddSymbolDataProperty(
+        TGocciaSymbolValue.WellKnownToStringTag,
+        TGocciaStringLiteralValue.Create(CONSTRUCTOR_MAP),
+        [pfConfigurable]);
       FPrototypeMembers := Members.ToDefinitions;
     finally
       Members.Free;

@@ -1003,7 +1003,9 @@ begin
   DefineSymbolProperty(TGocciaSymbolValue.WellKnownToStringTag,
     TGocciaPropertyDescriptorData.Create(
       TGocciaStringLiteralValue.Create('Deferred Module'), []));
-  Freeze;
+  FExtensible := False;
+  FSealed := True;
+  FFrozen := True;
 end;
 
 function TGocciaDeferredModuleNamespaceObject.EnsureNamespaceObject: TGocciaObjectValue;

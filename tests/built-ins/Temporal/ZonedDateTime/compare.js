@@ -21,4 +21,12 @@ describe.runIf(isTemporal)("Temporal.ZonedDateTime.compare", () => {
     );
     expect(result).toBe(-1);
   });
+
+  test("compare accepts property bags", () => {
+    const result = Temporal.ZonedDateTime.compare(
+      { year: 2024, month: 3, day: 15, hour: 12, timeZone: "UTC" },
+      { year: 2024, month: 3, day: 15, hour: 13, timeZone: "UTC" }
+    );
+    expect(result).toBe(-1);
+  });
 });

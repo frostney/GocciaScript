@@ -19,6 +19,7 @@ type
     function ExtractPrimitive(const AValue: TGocciaValue): TGocciaNumberLiteralValue;
   public
     constructor Create(const APrimitive: TGocciaNumberLiteralValue; const AClass: TGocciaClassValue = nil);
+    function ToStringTag: string; override;
     function GetProperty(const AName: string): TGocciaValue; override;
     function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; override;
     procedure InitializePrototype;
@@ -90,6 +91,11 @@ begin
   SharedPrototype := GetSharedNumberPrototype;
   if not Assigned(AClass) and Assigned(SharedPrototype) then
     FPrototype := SharedPrototype;
+end;
+
+function TGocciaNumberObjectValue.ToStringTag: string;
+begin
+  Result := 'Number';
 end;
 
 function TGocciaNumberObjectValue.GetProperty(const AName: string): TGocciaValue;

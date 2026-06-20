@@ -611,8 +611,6 @@ begin
         [pfConfigurable]);
       Members.AddAccessor(PROP_HAS_INDICES, RegExpHasIndicesGetter, nil,
         [pfConfigurable]);
-      Members.AddSymbolDataProperty(TGocciaSymbolValue.WellKnownToStringTag,
-        TGocciaStringLiteralValue.Create(CONSTRUCTOR_REGEXP), [pfConfigurable]);
       FPrototypeMembers := Members.ToDefinitions;
     finally
       Members.Free;
@@ -625,7 +623,8 @@ begin
   FRegExpConstructor := TGocciaNativeFunctionValue.Create(RegExpConstructorFn,
     CONSTRUCTOR_REGEXP, 2);
   FRegExpConstructor.ConstructCallback := RegExpConstruct;
-  FRegExpConstructor.AssignProperty(PROP_PROTOTYPE, FRegExpPrototype);
+  FRegExpConstructor.DefineProperty(PROP_PROTOTYPE,
+    TGocciaPropertyDescriptorData.Create(FRegExpPrototype, []));
   FRegExpConstructor.DefineSymbolProperty(TGocciaSymbolValue.WellKnownSpecies,
     TGocciaPropertyDescriptorAccessor.Create(
       TGocciaNativeFunctionValue.CreateWithoutPrototype(

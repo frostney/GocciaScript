@@ -17,21 +17,38 @@ type
   TGocciaPromiseState = (gpsPending, gpsFulfilled, gpsRejected);
 
   TGocciaPromiseValue = class;
+  TGocciaPromiseReactionCapability = class;
 
   TGocciaPromiseReaction = record
     OnFulfilled: TGocciaValue;
     OnRejected: TGocciaValue;
-    ResultPromise: TGocciaPromiseValue;
+    ResultPromise: TGocciaValue;
   end;
 
   TGocciaPromiseFinallyWrapper = class(TGocciaObjectValue)
   private
     FOnFinally: TGocciaValue;
+    FConstructor: TGocciaValue;
     FIsFulfill: Boolean;
   public
-    constructor Create(const AOnFinally: TGocciaValue; const AIsFulfill: Boolean);
+    constructor Create(const AOnFinally, AConstructor: TGocciaValue;
+      const AIsFulfill: Boolean);
     function Invoke(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     procedure MarkReferences; override;
+  end;
+
+  TGocciaPromiseReactionCapability = class(TGocciaObjectValue)
+  private
+    FPromise: TGocciaValue;
+    FResolve: TGocciaValue;
+    FReject: TGocciaValue;
+    procedure CallCapability(const AFunction, AValue: TGocciaValue);
+  public
+    constructor Create(const APromise, AResolve, AReject: TGocciaValue);
+    procedure Resolve(const AValue: TGocciaValue);
+    procedure Reject(const AValue: TGocciaValue);
+    procedure MarkReferences; override;
+    property Promise: TGocciaValue read FPromise;
   end;
 
   TGocciaPromiseValue = class(TGocciaObjectValue)
@@ -76,16 +93,22 @@ type
 implementation
 
 uses
+  Goccia.Arithmetic,
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.GarbageCollector,
   Goccia.MicrotaskQueue,
   Goccia.Realm,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.NativeFunction,
+  Goccia.Values.NativeFunctionCallback,
+  Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.SymbolValue,
+  Goccia.Values.ToObject,
   Goccia.VM.Exception;
 
 var
@@ -93,6 +116,7 @@ var
 
 threadvar
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+  FPromiseDefaultConstructor: TGocciaValue;
 
 function GetPromiseShared: TGocciaSharedPrototype; inline;
 begin
@@ -103,6 +127,24 @@ begin
 end;
 
 type
+  TPromiseCapability = record
+    Promise: TGocciaValue;
+    Resolve: TGocciaValue;
+    Reject: TGocciaValue;
+  end;
+
+  TPromiseCapabilityExecutor = class(TGocciaObjectValue)
+  private
+    FResolve: TGocciaValue;
+    FReject: TGocciaValue;
+  public
+    function Invoke(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    procedure MarkReferences; override;
+    property Resolve: TGocciaValue read FResolve;
+    property Reject: TGocciaValue read FReject;
+  end;
+
   TGocciaFinallyPassthrough = class(TGocciaObjectValue)
   private
     FOriginalValue: TGocciaValue;
@@ -112,6 +154,232 @@ type
     function Invoke(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     procedure MarkReferences; override;
   end;
+
+function TPromiseCapabilityExecutor.Invoke(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+  function HasNonUndefinedValue(const AValue: TGocciaValue): Boolean;
+  begin
+    Result := Assigned(AValue) and not (AValue is TGocciaUndefinedLiteralValue);
+  end;
+begin
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  if HasNonUndefinedValue(FResolve) or HasNonUndefinedValue(FReject) then
+    ThrowTypeError(SErrorPromiseResolverNotFunction, SSuggestPromiseResolver);
+
+  FResolve := AArgs.GetElement(0);
+  FReject := AArgs.GetElement(1);
+end;
+
+procedure TPromiseCapabilityExecutor.MarkReferences;
+begin
+  if GCMarked then Exit;
+  inherited;
+  if Assigned(FResolve) then
+    FResolve.MarkReferences;
+  if Assigned(FReject) then
+    FReject.MarkReferences;
+end;
+
+function CreateAnonymousPromiseBuiltinFunction(
+  const AFunction: TGocciaNativeFunctionCallback;
+  const ACapturedRoot: TGocciaValue; const AArity: Integer): TGocciaNativeFunctionValue;
+begin
+  Result := TGocciaNativeFunctionValue.CreateWithoutPrototype(AFunction, '',
+    AArity);
+  Result.CapturedRoot := ACapturedRoot;
+  Result.DefineProperty(PROP_LENGTH, TGocciaPropertyDescriptorData.Create(
+    TGocciaNumberLiteralValue.Create(AArity), [pfConfigurable]));
+  Result.DefineProperty(PROP_NAME, TGocciaPropertyDescriptorData.Create(
+    TGocciaStringLiteralValue.Create(''), [pfConfigurable]));
+end;
+
+function NewPromiseCapability(
+  const AConstructor: TGocciaValue): TPromiseCapability;
+var
+  ExecutorHost: TPromiseCapabilityExecutor;
+  ExecutorFn: TGocciaNativeFunctionValue;
+  ConstructArgs: TGocciaArgumentsCollection;
+  GC: TGarbageCollector;
+begin
+  if not Assigned(AConstructor) or not AConstructor.IsConstructable then
+    ThrowTypeError(SErrorValueNotConstructor, SSuggestNotConstructorType);
+
+  ExecutorHost := TPromiseCapabilityExecutor.Create;
+  ExecutorFn := CreateAnonymousPromiseBuiltinFunction(ExecutorHost.Invoke,
+    ExecutorHost, 2);
+  ConstructArgs := TGocciaArgumentsCollection.Create([ExecutorFn]);
+  GC := TGarbageCollector.Instance;
+  try
+    if Assigned(GC) then
+    begin
+      GC.AddTempRoot(ExecutorHost);
+      GC.AddTempRoot(ExecutorFn);
+    end;
+
+    Result.Promise := ConstructValue(AConstructor, ConstructArgs,
+      AConstructor);
+    Result.Resolve := ExecutorHost.Resolve;
+    Result.Reject := ExecutorHost.Reject;
+
+    if not Assigned(Result.Resolve) or not Result.Resolve.IsCallable or
+       not Assigned(Result.Reject) or not Result.Reject.IsCallable then
+      ThrowTypeError(SErrorPromiseResolverNotFunction, SSuggestPromiseResolver);
+  finally
+    if Assigned(GC) then
+    begin
+      GC.RemoveTempRoot(ExecutorFn);
+      GC.RemoveTempRoot(ExecutorHost);
+    end;
+    ConstructArgs.Free;
+  end;
+end;
+
+function GetPromiseDefaultConstructor: TGocciaValue;
+begin
+  Result := FPromiseDefaultConstructor;
+  if not Assigned(Result) and Assigned(GetPromiseShared) then
+    Result := GetPromiseShared.Prototype.GetProperty(PROP_CONSTRUCTOR);
+end;
+
+function PromiseSpeciesConstructor(
+  const APromise: TGocciaObjectValue): TGocciaValue;
+var
+  ConstructorValue, SpeciesValue: TGocciaValue;
+begin
+  Result := GetPromiseDefaultConstructor;
+  ConstructorValue := APromise.GetProperty(PROP_CONSTRUCTOR);
+  if ConstructorValue is TGocciaUndefinedLiteralValue then
+    Exit;
+  if not (ConstructorValue is TGocciaObjectValue) then
+    ThrowTypeError(SErrorSpeciesNotConstructor, SSuggestSpeciesConstructor);
+
+  SpeciesValue := TGocciaObjectValue(ConstructorValue).GetSymbolProperty(
+    TGocciaSymbolValue.WellKnownSpecies);
+  if (SpeciesValue is TGocciaUndefinedLiteralValue) or
+     (SpeciesValue is TGocciaNullLiteralValue) then
+    Exit;
+  if SpeciesValue.IsConstructable then
+    Exit(SpeciesValue);
+
+  ThrowTypeError(SErrorSpeciesNotConstructor, SSuggestSpeciesConstructor);
+end;
+
+function PromiseResolveForConstructor(const AConstructor,
+  AValue: TGocciaValue): TGocciaValue;
+var
+  ValueConstructor: TGocciaValue;
+  Capability: TPromiseCapability;
+  ResolveArgs: TGocciaArgumentsCollection;
+begin
+  if not (AConstructor is TGocciaObjectValue) then
+    ThrowTypeError(SErrorValueNotConstructor, SSuggestNotConstructorType);
+
+  if AValue is TGocciaPromiseValue then
+  begin
+    ValueConstructor := TGocciaPromiseValue(AValue).GetProperty(
+      PROP_CONSTRUCTOR);
+    if IsSameValue(ValueConstructor, AConstructor) then
+      Exit(AValue);
+  end;
+
+  Capability := NewPromiseCapability(AConstructor);
+  ResolveArgs := TGocciaArgumentsCollection.Create([AValue]);
+  try
+    DispatchCall(Capability.Resolve, ResolveArgs,
+      TGocciaUndefinedLiteralValue.UndefinedValue);
+  finally
+    ResolveArgs.Free;
+  end;
+  Result := Capability.Promise;
+end;
+
+function InvokeThenMethod(const AReceiver, AOnFulfilled,
+  AOnRejected: TGocciaValue): TGocciaValue;
+var
+  ReceiverObject: TGocciaObjectValue;
+  ThenMethod: TGocciaValue;
+  ThenArgs: TGocciaArgumentsCollection;
+begin
+  ReceiverObject := ToObject(AReceiver);
+  ThenMethod := ReceiverObject.GetPropertyWithContext(PROP_THEN, AReceiver);
+  if not Assigned(ThenMethod) or not ThenMethod.IsCallable then
+    ThrowTypeError(SErrorThenNotFunction, SSuggestPromiseThisType);
+
+  ThenArgs := TGocciaArgumentsCollection.Create([AOnFulfilled, AOnRejected]);
+  try
+    Result := DispatchCall(ThenMethod, ThenArgs, AReceiver);
+  finally
+    ThenArgs.Free;
+  end;
+end;
+
+function InvokeThenMethodOneArg(const AReceiver,
+  AOnFulfilled: TGocciaValue): TGocciaValue;
+var
+  ReceiverObject: TGocciaObjectValue;
+  ThenMethod: TGocciaValue;
+  ThenArgs: TGocciaArgumentsCollection;
+begin
+  ReceiverObject := ToObject(AReceiver);
+  ThenMethod := ReceiverObject.GetPropertyWithContext(PROP_THEN, AReceiver);
+  if not Assigned(ThenMethod) or not ThenMethod.IsCallable then
+    ThrowTypeError(SErrorThenNotFunction, SSuggestPromiseThisType);
+
+  ThenArgs := TGocciaArgumentsCollection.Create([AOnFulfilled]);
+  try
+    Result := DispatchCall(ThenMethod, ThenArgs, AReceiver);
+  finally
+    ThenArgs.Free;
+  end;
+end;
+
+{ TGocciaPromiseReactionCapability }
+
+constructor TGocciaPromiseReactionCapability.Create(
+  const APromise, AResolve, AReject: TGocciaValue);
+begin
+  inherited Create(nil);
+  FPromise := APromise;
+  FResolve := AResolve;
+  FReject := AReject;
+end;
+
+procedure TGocciaPromiseReactionCapability.CallCapability(
+  const AFunction, AValue: TGocciaValue);
+var
+  Args: TGocciaArgumentsCollection;
+begin
+  if not Assigned(AFunction) or not AFunction.IsCallable then Exit;
+  Args := TGocciaArgumentsCollection.Create([AValue]);
+  try
+    DispatchCall(AFunction, Args, TGocciaUndefinedLiteralValue.UndefinedValue);
+  finally
+    Args.Free;
+  end;
+end;
+
+procedure TGocciaPromiseReactionCapability.Resolve(const AValue: TGocciaValue);
+begin
+  CallCapability(FResolve, AValue);
+end;
+
+procedure TGocciaPromiseReactionCapability.Reject(const AValue: TGocciaValue);
+begin
+  CallCapability(FReject, AValue);
+end;
+
+procedure TGocciaPromiseReactionCapability.MarkReferences;
+begin
+  if GCMarked then Exit;
+  inherited;
+  if Assigned(FPromise) then
+    FPromise.MarkReferences;
+  if Assigned(FResolve) then
+    FResolve.MarkReferences;
+  if Assigned(FReject) then
+    FReject.MarkReferences;
+end;
 
 { TGocciaFinallyPassthrough }
 
@@ -141,10 +409,12 @@ end;
 
 { TGocciaPromiseFinallyWrapper }
 
-constructor TGocciaPromiseFinallyWrapper.Create(const AOnFinally: TGocciaValue; const AIsFulfill: Boolean);
+constructor TGocciaPromiseFinallyWrapper.Create(const AOnFinally,
+  AConstructor: TGocciaValue; const AIsFulfill: Boolean);
 begin
   inherited Create(nil);
   FOnFinally := AOnFinally;
+  FConstructor := AConstructor;
   FIsFulfill := AIsFulfill;
 end;
 
@@ -153,61 +423,26 @@ function TGocciaPromiseFinallyWrapper.Invoke(const AArgs: TGocciaArgumentsCollec
 var
   OriginalValue, CallbackResult: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
-  CallbackPromise, IntermediatePromise: TGocciaPromiseValue;
+  CallbackPromise: TGocciaValue;
   Passthrough: TGocciaFinallyPassthrough;
   PassthroughFn: TGocciaNativeFunctionValue;
-  Reaction: TGocciaPromiseReaction;
 begin
   OriginalValue := AArgs.GetElement(0);
 
   CallArgs := TGocciaArgumentsCollection.Create;
   try
-    CallbackResult := TGocciaFunctionBase(FOnFinally).Call(
-      CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+    CallbackResult := DispatchCall(FOnFinally, CallArgs,
+      TGocciaUndefinedLiteralValue.UndefinedValue);
   finally
     CallArgs.Free;
   end;
 
-  if CallbackResult is TGocciaPromiseValue then
-  begin
-    CallbackPromise := TGocciaPromiseValue(CallbackResult);
-
-    case CallbackPromise.State of
-      gpsFulfilled:
-      begin
-        if FIsFulfill then
-          Result := OriginalValue
-        else
-          raise TGocciaThrowValue.Create(OriginalValue);
-      end;
-      gpsRejected:
-        raise TGocciaThrowValue.Create(CallbackPromise.PromiseResult);
-      gpsPending:
-      begin
-        IntermediatePromise := TGocciaPromiseValue.Create;
-
-        Passthrough := TGocciaFinallyPassthrough.Create(OriginalValue, FIsFulfill);
-        PassthroughFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(
-          Passthrough.Invoke, 'finally-passthrough', 1);
-
-        Reaction.OnFulfilled := PassthroughFn;
-        Reaction.OnRejected := nil;
-        Reaction.ResultPromise := IntermediatePromise;
-        if not Assigned(CallbackPromise.FReactions) then
-          CallbackPromise.FReactions := TList<TGocciaPromiseReaction>.Create;
-        CallbackPromise.FReactions.Add(Reaction);
-
-        Result := IntermediatePromise;
-      end;
-    end;
-  end
-  else
-  begin
-    if FIsFulfill then
-      Result := OriginalValue
-    else
-      raise TGocciaThrowValue.Create(OriginalValue);
-  end;
+  CallbackPromise := PromiseResolveForConstructor(FConstructor,
+    CallbackResult);
+  Passthrough := TGocciaFinallyPassthrough.Create(OriginalValue, FIsFulfill);
+  PassthroughFn := CreateAnonymousPromiseBuiltinFunction(Passthrough.Invoke,
+    Passthrough, 0);
+  Result := InvokeThenMethodOneArg(CallbackPromise, PassthroughFn);
 end;
 
 procedure TGocciaPromiseFinallyWrapper.MarkReferences;
@@ -216,6 +451,8 @@ begin
   inherited;
   if Assigned(FOnFinally) then
     FOnFinally.MarkReferences;
+  if Assigned(FConstructor) then
+    FConstructor.MarkReferences;
 end;
 
 { TGocciaPromiseValue }
@@ -244,6 +481,9 @@ begin
 
   Shared := TGocciaSharedPrototype.Create(Self);
   CurrentRealm.SetOwnedSlot(GPromiseSharedSlot, Shared);
+  if not Assigned(TGocciaObjectValue.SharedObjectPrototype) then
+    TGocciaObjectValue.InitializeSharedPrototype;
+  Shared.Prototype.Prototype := TGocciaObjectValue.SharedObjectPrototype;
   if Length(FPrototypeMembers) = 0 then
   begin
     Members := TGocciaMemberCollection.Create;
@@ -251,6 +491,10 @@ begin
       Members.AddMethod(PromiseThen, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(PromiseCatch, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(PromiseFinally, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddSymbolDataProperty(
+        TGocciaSymbolValue.WellKnownToStringTag,
+        TGocciaStringLiteralValue.Create('Promise'),
+        [pfConfigurable]);
       FPrototypeMembers := Members.ToDefinitions;
     finally
       Members.Free;
@@ -270,7 +514,12 @@ begin
     Shared := GetPromiseShared;
   end;
   if Assigned(Shared) then
+  begin
+    FPromiseDefaultConstructor := AConstructor;
     ExposeSharedPrototypeOnConstructor(Shared, AConstructor);
+    AConstructor.DefineProperty(PROP_PROTOTYPE,
+      TGocciaPropertyDescriptorData.Create(Shared.Prototype, []));
+  end;
 end;
 
 destructor TGocciaPromiseValue.Destroy;
@@ -318,20 +567,6 @@ begin
     FResult := Goccia.Values.ErrorHelper.CreateErrorObject(TYPE_ERROR_NAME,
       SErrorPromiseChainingCycle);
     TriggerReactions;
-    Exit;
-  end;
-
-  if AValue is TGocciaPromiseValue then
-  begin
-    Queue := TGocciaMicrotaskQueue.Instance;
-    if Assigned(Queue) then
-    begin
-      Task.Handler := nil;
-      Task.Value := AValue;
-      Task.ResultPromise := Self;
-      Task.ReactionType := prtThenableResolve;
-      Queue.Enqueue(Task);
-    end;
     Exit;
   end;
 
@@ -483,32 +718,34 @@ end;
 
 { Public helper — core then logic without TGocciaArgumentsCollection overhead }
 
-function TGocciaPromiseValue.InvokeThen(
-  const AOnFulfilled, AOnRejected: TGocciaValue): TGocciaPromiseValue;
+function PerformPromiseThen(const APromise: TGocciaPromiseValue;
+  const AOnFulfilled, AOnRejected: TGocciaValue;
+  const ACapability: TPromiseCapability): TGocciaValue;
 var
-  ChildPromise: TGocciaPromiseValue;
+  CapabilityHost: TGocciaPromiseReactionCapability;
   Reaction: TGocciaPromiseReaction;
   Task: TGocciaMicrotask;
   Queue: TGocciaMicrotaskQueue;
 begin
-  ChildPromise := TGocciaPromiseValue.Create;
+  CapabilityHost := TGocciaPromiseReactionCapability.Create(
+    ACapability.Promise, ACapability.Resolve, ACapability.Reject);
   Queue := TGocciaMicrotaskQueue.Instance;
 
-  case FState of
+  case APromise.FState of
     gpsPending:
     begin
       Reaction.OnFulfilled := AOnFulfilled;
       Reaction.OnRejected := AOnRejected;
-      Reaction.ResultPromise := ChildPromise;
-      if not Assigned(FReactions) then
-        FReactions := TList<TGocciaPromiseReaction>.Create;
-      FReactions.Add(Reaction);
+      Reaction.ResultPromise := CapabilityHost;
+      if not Assigned(APromise.FReactions) then
+        APromise.FReactions := TList<TGocciaPromiseReaction>.Create;
+      APromise.FReactions.Add(Reaction);
     end;
     gpsFulfilled:
     begin
       Task.Handler := AOnFulfilled;
-      Task.Value := FResult;
-      Task.ResultPromise := ChildPromise;
+      Task.Value := APromise.FResult;
+      Task.ResultPromise := CapabilityHost;
       Task.ReactionType := prtFulfill;
       if Assigned(Queue) then
         Queue.Enqueue(Task);
@@ -516,15 +753,31 @@ begin
     gpsRejected:
     begin
       Task.Handler := AOnRejected;
-      Task.Value := FResult;
-      Task.ResultPromise := ChildPromise;
+      Task.Value := APromise.FResult;
+      Task.ResultPromise := CapabilityHost;
       Task.ReactionType := prtReject;
       if Assigned(Queue) then
         Queue.Enqueue(Task);
     end;
   end;
 
-  Result := ChildPromise;
+  Result := ACapability.Promise;
+end;
+
+function TGocciaPromiseValue.InvokeThen(
+  const AOnFulfilled, AOnRejected: TGocciaValue): TGocciaPromiseValue;
+var
+  Capability: TPromiseCapability;
+  ChildPromise: TGocciaPromiseValue;
+begin
+  ChildPromise := TGocciaPromiseValue.Create;
+  Capability.Promise := ChildPromise;
+  Capability.Resolve := CreateAnonymousPromiseBuiltinFunction(
+    ChildPromise.DoResolve, ChildPromise, 1);
+  Capability.Reject := CreateAnonymousPromiseBuiltinFunction(
+    ChildPromise.DoReject, ChildPromise, 1);
+  Result := TGocciaPromiseValue(PerformPromiseThen(Self, AOnFulfilled,
+    AOnRejected, Capability));
 end;
 
 { Public helper — core finally logic without TGocciaArgumentsCollection overhead }
@@ -532,18 +785,22 @@ end;
 function TGocciaPromiseValue.InvokeFinally(
   const AOnFinally: TGocciaValue): TGocciaPromiseValue;
 var
+  ConstructorValue: TGocciaValue;
   WrapFulfilled, WrapRejected: TGocciaPromiseFinallyWrapper;
   WrapFulfilledFn, WrapRejectedFn: TGocciaNativeFunctionValue;
 begin
   if not Assigned(AOnFinally) or not AOnFinally.IsCallable then
     Exit(InvokeThen(nil, nil));
 
-  WrapFulfilled := TGocciaPromiseFinallyWrapper.Create(AOnFinally, True);
-  WrapRejected := TGocciaPromiseFinallyWrapper.Create(AOnFinally, False);
-  WrapFulfilledFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(
-    WrapFulfilled.Invoke, 'finally-fulfill', 1);
-  WrapRejectedFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(
-    WrapRejected.Invoke, 'finally-reject', 1);
+  ConstructorValue := PromiseSpeciesConstructor(Self);
+  WrapFulfilled := TGocciaPromiseFinallyWrapper.Create(AOnFinally,
+    ConstructorValue, True);
+  WrapRejected := TGocciaPromiseFinallyWrapper.Create(AOnFinally,
+    ConstructorValue, False);
+  WrapFulfilledFn := CreateAnonymousPromiseBuiltinFunction(
+    WrapFulfilled.Invoke, WrapFulfilled, 1);
+  WrapRejectedFn := CreateAnonymousPromiseBuiltinFunction(
+    WrapRejected.Invoke, WrapRejected, 1);
   Result := InvokeThen(WrapFulfilledFn, WrapRejectedFn);
 end;
 
@@ -554,11 +811,15 @@ function TGocciaPromiseValue.PromiseThen(const AArgs: TGocciaArgumentsCollection
 var
   P: TGocciaPromiseValue;
   OnFulfilled, OnRejected: TGocciaValue;
+  ConstructorValue: TGocciaValue;
+  Capability: TPromiseCapability;
 begin
   if not (AThisValue is TGocciaPromiseValue) then
     Goccia.Values.ErrorHelper.ThrowTypeError(SErrorPromiseThenNonPromise, SSuggestPromiseThisType);
 
   P := TGocciaPromiseValue(AThisValue);
+  ConstructorValue := PromiseSpeciesConstructor(P);
+  Capability := NewPromiseCapability(ConstructorValue);
 
   OnFulfilled := nil;
   OnRejected := nil;
@@ -567,7 +828,7 @@ begin
   if (AArgs.Length > 1) and AArgs.GetElement(1).IsCallable then
     OnRejected := AArgs.GetElement(1);
 
-  Result := P.InvokeThen(OnFulfilled, OnRejected);
+  Result := PerformPromiseThen(P, OnFulfilled, OnRejected, Capability);
 end;
 
 function TGocciaPromiseValue.PromiseCatch(const AArgs: TGocciaArgumentsCollection;
@@ -580,7 +841,8 @@ begin
     AArgs.GetElement(0)
   ]);
   try
-    Result := PromiseThen(ThenArgs, AThisValue);
+    Result := InvokeThenMethod(AThisValue, ThenArgs.GetElement(0),
+      ThenArgs.GetElement(1));
   finally
     ThenArgs.Free;
   end;
@@ -590,15 +852,33 @@ function TGocciaPromiseValue.PromiseFinally(const AArgs: TGocciaArgumentsCollect
   const AThisValue: TGocciaValue): TGocciaValue;
 var
   OnFinally: TGocciaValue;
+  ConstructorValue: TGocciaValue;
+  ThenFinally, CatchFinally: TGocciaValue;
+  WrapFulfilled, WrapRejected: TGocciaPromiseFinallyWrapper;
 begin
-  if not (AThisValue is TGocciaPromiseValue) then
+  if not (AThisValue is TGocciaObjectValue) then
     Goccia.Values.ErrorHelper.ThrowTypeError(SErrorPromiseFinallyNonPromise, SSuggestPromiseThisType);
 
-  OnFinally := nil;
-  if (AArgs.Length > 0) and AArgs.GetElement(0).IsCallable then
-    OnFinally := AArgs.GetElement(0);
+  ConstructorValue := PromiseSpeciesConstructor(TGocciaObjectValue(AThisValue));
+  OnFinally := AArgs.GetElement(0);
+  if Assigned(OnFinally) and OnFinally.IsCallable then
+  begin
+    WrapFulfilled := TGocciaPromiseFinallyWrapper.Create(OnFinally,
+      ConstructorValue, True);
+    WrapRejected := TGocciaPromiseFinallyWrapper.Create(OnFinally,
+      ConstructorValue, False);
+    ThenFinally := CreateAnonymousPromiseBuiltinFunction(
+      WrapFulfilled.Invoke, WrapFulfilled, 1);
+    CatchFinally := CreateAnonymousPromiseBuiltinFunction(
+      WrapRejected.Invoke, WrapRejected, 1);
+  end
+  else
+  begin
+    ThenFinally := OnFinally;
+    CatchFinally := OnFinally;
+  end;
 
-  Result := TGocciaPromiseValue(AThisValue).InvokeFinally(OnFinally);
+  Result := InvokeThenMethod(AThisValue, ThenFinally, CatchFinally);
 end;
 
 function TGocciaPromiseValue.GetProperty(const AName: string): TGocciaValue;

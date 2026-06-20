@@ -202,7 +202,6 @@ function TGocciaGenericIteratorValue.ReturnInternal(
   const AValue: TGocciaValue; const AHasValue: Boolean): TGocciaObjectValue;
 var
   ReturnMethod: TGocciaValue;
-  DoneVal: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
   ReturnResult: TGocciaValue;
 begin
@@ -220,7 +219,6 @@ begin
      (ReturnMethod is TGocciaUndefinedLiteralValue) or
      (ReturnMethod is TGocciaNullLiteralValue) then
   begin
-    FDone := True;
     if AHasValue then
       Result := CreateIteratorResult(AValue, True)
     else
@@ -238,9 +236,7 @@ begin
     ReturnResult := TGocciaFunctionBase(ReturnMethod).Call(CallArgs, FSource);
     if not (ReturnResult is TGocciaObjectValue) then
       ThrowTypeError(SErrorIteratorReturnObject, SSuggestIteratorResultObject);
-    DoneVal := TGocciaObjectValue(ReturnResult).GetProperty(PROP_DONE);
-    if Assigned(DoneVal) and DoneVal.ToBooleanLiteral.Value then
-      FDone := True;
+    FDone := True;
     Result := TGocciaObjectValue(ReturnResult);
   finally
     CallArgs.Free;
@@ -295,11 +291,9 @@ end;
 
 procedure TGocciaGenericIteratorValue.Close;
 begin
-  try
-    ReturnInternal(nil, False);
-  finally
-    FDone := True;
-  end;
+  if FDone then
+    Exit;
+  ReturnInternal(nil, False);
 end;
 
 procedure TGocciaGenericIteratorValue.MarkReferences;
