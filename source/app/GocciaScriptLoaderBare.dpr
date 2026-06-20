@@ -136,6 +136,7 @@ type
     FReports: TStringList;
     FShuttingDown: Boolean;
     FTest262Host: TBareTest262Host;
+    FWorkers: TObjectList<TBareTest262AgentThread>;
     procedure PumpCurrentThreadWork;
   public
     constructor Create(const AOptions: TBareOptions;
@@ -459,8 +460,8 @@ end;
 
 destructor TBareTest262Host.Destroy;
 begin
-  FRealms.Free;
   FAgentHost.Free;
+  FRealms.Free;
   inherited;
 end;
 
@@ -521,6 +522,7 @@ begin
   FOptions := AOptions;
   FTest262Host := ATest262Host;
   FReports := TStringList.Create;
+  FWorkers := TObjectList<TBareTest262AgentThread>.Create(True);
   FBroadcastGeneration := 0;
   FBroadcastValue := nil;
   FShuttingDown := False;
@@ -528,16 +530,28 @@ begin
 end;
 
 destructor TBareTest262AgentHost.Destroy;
+var
+  Worker: TBareTest262AgentThread;
 begin
   EnterCriticalSection(FLock);
   try
     FShuttingDown := True;
+  finally
+    LeaveCriticalSection(FLock);
+  end;
+
+  for Worker in FWorkers do
+    Worker.WaitFor;
+
+  EnterCriticalSection(FLock);
+  try
     if Assigned(FBroadcastValue) and Assigned(TGarbageCollector.Instance) then
       TGarbageCollector.Instance.RemoveQueuedRoot(FBroadcastValue);
     FBroadcastValue := nil;
   finally
     LeaveCriticalSection(FLock);
   end;
+  FWorkers.Free;
   DoneCriticalSection(FLock);
   FReports.Free;
   inherited;
@@ -718,8 +732,16 @@ begin
     ThrowTypeError('$262.agent.start source must be a string');
 
   SourceText := TGocciaStringLiteralValue(AArgs.GetElement(0)).Value;
-  Worker := TBareTest262AgentThread.Create(FTest262Host, FOptions, SourceText);
-  Worker.Start;
+  EnterCriticalSection(FLock);
+  try
+    if FShuttingDown then
+      Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+    Worker := TBareTest262AgentThread.Create(FTest262Host, FOptions, SourceText);
+    FWorkers.Add(Worker);
+    Worker.Start;
+  finally
+    LeaveCriticalSection(FLock);
+  end;
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
@@ -729,7 +751,7 @@ const
   AGENT_STACK_SIZE = 8 * 1024 * 1024;
 begin
   inherited Create(True, AGENT_STACK_SIZE);
-  FreeOnTerminate := True;
+  FreeOnTerminate := False;
   FHost := AHost;
   FOptions := AOptions;
   FSourceText := ASourceText;
