@@ -75,6 +75,7 @@ type
     constructor Create;
     function AdvanceNext: TGocciaObjectValue; override;
     function DirectNext(out ADone: Boolean): TGocciaValue; override;
+    function ReturnValue(const AValue: TGocciaValue): TGocciaObjectValue; override;
     procedure Close; override;
   end;
 
@@ -1521,6 +1522,22 @@ begin
   finally
     FExecuting := False;
   end;
+end;
+
+function TGocciaIteratorHelperValue.ReturnValue(
+  const AValue: TGocciaValue): TGocciaObjectValue;
+begin
+  if FExecuting then
+    ThrowTypeError(SErrorIteratorHelperExecuting, SSuggestIteratorProtocol);
+  if FDone then
+    Exit(CreateIteratorResult(AValue, True));
+  FExecuting := True;
+  try
+    Close;
+  finally
+    FExecuting := False;
+  end;
+  Result := CreateIteratorResult(AValue, True);
 end;
 
 procedure TGocciaIteratorHelperValue.Close;
