@@ -103,7 +103,12 @@ begin
     ValueVal := TGocciaUndefinedLiteralValue.UndefinedValue
   else
   begin
-    ValueVal := NextResult.GetProperty(PROP_VALUE);
+    try
+      ValueVal := NextResult.GetProperty(PROP_VALUE);
+    except
+      FDone := True;
+      raise;
+    end;
     if not Assigned(ValueVal) then
       ValueVal := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
@@ -149,8 +154,13 @@ begin
   if not (NextResult is TGocciaObjectValue) then
     ThrowTypeError(Format(SErrorIteratorResultNotObject, [NextResult.TypeName]), SSuggestIteratorResultObject);
 
-  DoneVal := TGocciaObjectValue(NextResult).GetProperty(PROP_DONE);
-  ADone := Assigned(DoneVal) and DoneVal.ToBooleanLiteral.Value;
+  try
+    DoneVal := TGocciaObjectValue(NextResult).GetProperty(PROP_DONE);
+    ADone := Assigned(DoneVal) and DoneVal.ToBooleanLiteral.Value;
+  except
+    FDone := True;
+    raise;
+  end;
   if ADone then
     FDone := True;
   Result := TGocciaObjectValue(NextResult);
@@ -182,7 +192,12 @@ begin
   IteratorResult := AdvanceNextResultInternal(nil, False, ADone);
   if ADone then
     Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
-  Result := IteratorResult.GetProperty(PROP_VALUE);
+  try
+    Result := IteratorResult.GetProperty(PROP_VALUE);
+  except
+    FDone := True;
+    raise;
+  end;
   if not Assigned(Result) then
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
@@ -193,7 +208,12 @@ var
   IteratorResult: TGocciaObjectValue;
 begin
   IteratorResult := AdvanceNextResultInternal(AValue, True, ADone);
-  Result := IteratorResult.GetProperty(PROP_VALUE);
+  try
+    Result := IteratorResult.GetProperty(PROP_VALUE);
+  except
+    FDone := True;
+    raise;
+  end;
   if not Assigned(Result) then
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
