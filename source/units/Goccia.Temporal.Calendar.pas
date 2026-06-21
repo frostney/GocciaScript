@@ -1628,6 +1628,46 @@ begin
   end;
 end;
 
+function TryFindLunisolarYearStart(const ACalendarId: string;
+  const AYear: Integer; out AISODate: TTemporalDateRecord): Boolean;
+var
+  StartDays, EndDays, Days: Int64;
+  DateRec: TTemporalDateRecord;
+  Parts: TLunisolarDateParts;
+begin
+  Result := False;
+  AISODate.Year := 0;
+  AISODate.Month := 0;
+  AISODate.Day := 0;
+
+  StartDays := DateToEpochDays(AYear, 1, 1);
+  EndDays := DateToEpochDays(AYear, 3, 31);
+  for Days := StartDays to EndDays do
+  begin
+    DateRec := EpochDaysToDate(Days);
+    if not TryFormatLunisolarDateParts(ACalendarId, DateRec.Year,
+      DateRec.Month, DateRec.Day, Parts) then
+      Exit;
+    if (Parts.Year = AYear) and (Parts.MonthCodeMonth = 1) and
+       (Parts.Day = 1) then
+    begin
+      AISODate := DateRec;
+      Exit(True);
+    end;
+  end;
+end;
+
+function IsLunisolarYearStart(const ACalendarId: string; const AYear: Integer;
+  const AISODate: TTemporalDateRecord): Boolean;
+var
+  Parts: TLunisolarDateParts;
+begin
+  Result := TryFormatLunisolarDateParts(ACalendarId, AISODate.Year,
+    AISODate.Month, AISODate.Day, Parts) and
+    (Parts.Year = AYear) and (Parts.MonthCodeMonth = 1) and
+    (Parts.Day = 1);
+end;
+
 function TryLunisolarDateToISO(const ACalendarId: string; const AYear, AMonth,
   ADay: Integer; const AMatchMonthCode, AIsLeapMonth: Boolean;
   out AISODate: TTemporalDateRecord): Boolean;
@@ -1664,8 +1704,10 @@ begin
     Exit(True);
   end;
 
-  if not TryRawICUCalendarDateToISO(ACalendarId, AYear, 1, 1, False, True,
-    FirstDate) then
+  if (not TryRawICUCalendarDateToISO(ACalendarId, AYear, 1, 1, False,
+      True, FirstDate) or
+      not IsLunisolarYearStart(ACalendarId, AYear, FirstDate)) and
+     not TryFindLunisolarYearStart(ACalendarId, AYear, FirstDate) then
     Exit;
 
   CurrentDays := DateToEpochDays(FirstDate.Year, FirstDate.Month, FirstDate.Day);
@@ -2571,8 +2613,10 @@ begin
       Exit(True);
     end;
 
-    if not TryRawICUCalendarDateToISO(ACalendarId, AYear, 1, 1, False,
-      True, DateRec) then
+    if (not TryRawICUCalendarDateToISO(ACalendarId, AYear, 1, 1, False,
+        True, DateRec) or
+        not IsLunisolarYearStart(ACalendarId, AYear, DateRec)) and
+       not TryFindLunisolarYearStart(ACalendarId, AYear, DateRec) then
       Exit(False);
     CurrentDays := DateToEpochDays(DateRec.Year, DateRec.Month, DateRec.Day);
 
