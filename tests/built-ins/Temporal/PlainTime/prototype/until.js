@@ -71,10 +71,11 @@ describe.runIf(isTemporal)("Temporal.PlainTime.prototype.until", () => {
     expect(t1.until(t2, { smallestUnit: "minute", roundingIncrement: 10 }).toString()).toBe("PT50M");
   });
 
-  test("until() allows any roundingIncrement when smallestUnit equals largestUnit", () => {
+  test("until() rejects roundingIncrement that does not divide the unit maximum even when smallestUnit equals largestUnit", () => {
     const t1 = new Temporal.PlainTime(10, 0, 0);
     const t2 = new Temporal.PlainTime(10, 50, 0);
-    const dur = t1.until(t2, { largestUnit: "minute", smallestUnit: "minute", roundingIncrement: 7 });
-    expect(dur.minutes).toBe(49);
+    expect(() => {
+      t1.until(t2, { largestUnit: "minute", smallestUnit: "minute", roundingIncrement: 7 });
+    }).toThrow(RangeError);
   });
 });

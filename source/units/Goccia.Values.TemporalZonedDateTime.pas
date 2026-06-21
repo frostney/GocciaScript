@@ -17,11 +17,14 @@ type
     FEpochMilliseconds: Int64;
     FSubMillisecondNanoseconds: Integer;
     FTimeZone: string;
+    FCalendarId: string;
 
     procedure InitializePrototype;
   published
     function GetCalendarId(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function GetTimeZoneId(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function GetEra(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function GetEraYear(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function GetYear(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function GetMonth(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function GetMonthCode(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -51,12 +54,14 @@ type
     function ZonedDateTimeWithPlainDate(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ZonedDateTimeWithPlainTime(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ZonedDateTimeWithTimeZone(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ZonedDateTimeWithCalendar(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ZonedDateTimeAdd(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ZonedDateTimeSubtract(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ZonedDateTimeUntil(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ZonedDateTimeSince(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ZonedDateTimeRound(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ZonedDateTimeEquals(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ZonedDateTimeGetTimeZoneTransition(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ZonedDateTimeStartOfDay(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ZonedDateTimeToInstant(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ZonedDateTimeToPlainDate(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -68,7 +73,7 @@ type
     function ZonedDateTimeToLocaleString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const AEpochMilliseconds: Int64; const ASubMillisecondNanoseconds: Integer;
-      const ATimeZone: string); overload;
+      const ATimeZone: string; const ACalendarId: string = 'iso8601'); overload;
 
     function ToStringTag: string; override;
     class procedure ExposePrototype(const AConstructor: TGocciaObjectValue);
@@ -76,6 +81,7 @@ type
     property EpochMilliseconds: Int64 read FEpochMilliseconds;
     property SubMillisecondNanoseconds: Integer read FSubMillisecondNanoseconds;
     property TimeZone: string read FTimeZone;
+    property CalendarId: string read FCalendarId;
   end;
 
 function CoerceTemporalZonedDateTime(const AValue: TGocciaValue;
@@ -94,6 +100,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.Realm,
+  Goccia.Temporal.Calendar,
   Goccia.Temporal.DurationMath,
   Goccia.Temporal.Options,
   Goccia.Temporal.TimeZone,
@@ -101,6 +108,7 @@ uses
   Goccia.Utils,
   Goccia.Values.BigIntValue,
   Goccia.Values.ErrorHelper,
+  Goccia.Values.IntlDateTimeFormat,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue,
   Goccia.Values.TemporalDuration,
@@ -157,9 +165,11 @@ type
     TimeZone: string;
     OffsetSeconds: Integer;
     HasOffset: Boolean;
+    HasExplicitTime: Boolean;
     HasUTCDesignator: Boolean;
     OffsetHasSubMinuteSyntax: Boolean;
     TimeZoneFromOffset: Boolean;
+    CalendarId: string;
   end;
 
 function AsZonedDateTime(const AValue: TGocciaValue; const AMethod: string): TGocciaTemporalZonedDateTimeValue;
@@ -172,6 +182,16 @@ end;
 function LocalToEpochMs(const AYear, AMonth, ADay, AHour, AMinute, ASecond, AMs: Integer;
   const ATimeZone: string): Int64; forward;
 function FormatOffsetString(const AOffsetSeconds: Integer): string; forward;
+procedure SplitEpochNanoseconds(const AEpochNanoseconds: TBigInteger;
+  out AEpochMilliseconds: Int64; out ASubMillisecondNanoseconds: Integer); forward;
+
+function EpochMillisecondsToSeconds(const AEpochMilliseconds: Int64): Int64; inline;
+begin
+  Result := AEpochMilliseconds div MILLISECONDS_PER_SECOND;
+  if (AEpochMilliseconds < 0) and
+     (AEpochMilliseconds mod MILLISECONDS_PER_SECOND <> 0) then
+    Dec(Result);
+end;
 
 function IsUndefinedValue(const AValue: TGocciaValue): Boolean; inline;
 begin
@@ -267,15 +287,27 @@ begin
 end;
 
 procedure ReadZonedDateTimeOptions(const AOptions: TGocciaValue; const AMethod: string;
-  out AOverflow: TTemporalOverflow; out AOffsetOption: TTemporalOffsetOption);
+  out AOverflow: TTemporalOverflow; out AOffsetOption: TTemporalOffsetOption;
+  out ADisambiguation: TTemporalDisambiguationOption);
 var
   OptionsObj: TGocciaObjectValue;
-  IgnoredDisambiguation: TTemporalDisambiguationOption;
 begin
   OptionsObj := RequireOptionsObject(AOptions, AMethod);
-  IgnoredDisambiguation := GetDisambiguationOption(OptionsObj, AMethod);
+  ADisambiguation := GetDisambiguationOption(OptionsObj, AMethod);
   AOffsetOption := GetOffsetOption(OptionsObj, AMethod);
   AOverflow := GetOverflowOption(OptionsObj);
+end;
+
+function ToTimeZoneDisambiguation(
+  const ADisambiguation: TTemporalDisambiguationOption): TTemporalTimeZoneDisambiguation;
+begin
+  case ADisambiguation of
+    tdoEarlier: Result := ttzdEarlier;
+    tdoLater: Result := ttzdLater;
+    tdoReject: Result := ttzdReject;
+  else
+    Result := ttzdCompatible;
+  end;
 end;
 
 function NormalizeLeapSecondForTemporalDateTime(const AValue: string): string;
@@ -611,35 +643,53 @@ begin
   end;
 end;
 
-function ExtractZonedDateTimeAnnotations(var AValue: string; out ATimeZone: string): Boolean;
+function ExtractZonedDateTimeAnnotations(var AValue: string; out ATimeZone, ACalendarId: string): Boolean;
 var
   BracketStart, BracketEnd: Integer;
-  Annotation, Key, Value, Calendar: string;
-  EqualsPos: Integer;
+  Annotation, Key, Value, Calendar, Base: string;
+  EqualsPos, Count, I: Integer;
   Critical, CalendarCriticalSeen: Boolean;
   CalendarCount: Integer;
+  Annotations: array of string;
+  CriticalAnnotations: array of Boolean;
 begin
   Result := False;
   ATimeZone := '';
-  CalendarCount := 0;
-  CalendarCriticalSeen := False;
+  ACalendarId := 'iso8601';
+  Base := AValue;
+  Count := 0;
 
-  while (Length(AValue) > 0) and (AValue[Length(AValue)] = ']') do
+  while (Length(Base) > 0) and (Base[Length(Base)] = ']') do
   begin
-    BracketEnd := Length(AValue);
+    BracketEnd := Length(Base);
     BracketStart := BracketEnd - 1;
-    while (BracketStart > 0) and (AValue[BracketStart] <> '[') do
+    while (BracketStart > 0) and (Base[BracketStart] <> '[') do
       Dec(BracketStart);
     if BracketStart = 0 then
       Exit;
 
-    Annotation := Copy(AValue, BracketStart + 1, BracketEnd - BracketStart - 1);
+    Annotation := Copy(Base, BracketStart + 1, BracketEnd - BracketStart - 1);
     Critical := (Length(Annotation) > 0) and (Annotation[1] = '!');
     if Critical then
       Annotation := Copy(Annotation, 2, Length(Annotation) - 1);
     if Annotation = '' then
       Exit;
 
+    SetLength(Annotations, Count + 1);
+    SetLength(CriticalAnnotations, Count + 1);
+    Annotations[Count] := Annotation;
+    CriticalAnnotations[Count] := Critical;
+    Inc(Count);
+    Base := Copy(Base, 1, BracketStart - 1);
+  end;
+
+  CalendarCount := 0;
+  CalendarCriticalSeen := False;
+
+  for I := Count - 1 downto 0 do
+  begin
+    Annotation := Annotations[I];
+    Critical := CriticalAnnotations[I];
     EqualsPos := System.Pos('=', Annotation);
     if EqualsPos > 0 then
     begin
@@ -655,7 +705,13 @@ begin
           CalendarCriticalSeen := True;
         if (CalendarCount > 1) and (CalendarCriticalSeen or Critical) then
           Exit;
-        Calendar := Value;
+        if CalendarCount = 1 then
+        begin
+          Calendar := CanonicalizeTemporalCalendarIdentifier(Value);
+          if Calendar = '' then
+            Exit;
+          ACalendarId := Calendar;
+        end;
       end
       else if Critical then
         Exit;
@@ -666,13 +722,9 @@ begin
         Exit;
       ATimeZone := Annotation;
     end;
-
-    AValue := Copy(AValue, 1, BracketStart - 1);
   end;
 
-  if (Calendar <> '') and not ASCIIEqualsIgnoreCase(Calendar, 'iso8601') then
-    Exit;
-
+  AValue := Base;
   Result := True;
 end;
 
@@ -694,13 +746,15 @@ begin
   AParsed.TimeZone := '';
   AParsed.OffsetSeconds := 0;
   AParsed.HasOffset := False;
+  AParsed.HasExplicitTime := False;
   AParsed.HasUTCDesignator := False;
   AParsed.OffsetHasSubMinuteSyntax := False;
   AParsed.TimeZoneFromOffset := False;
+  AParsed.CalendarId := 'iso8601';
   Base := AValue;
   if Base = '' then
     Exit;
-  if not ExtractZonedDateTimeAnnotations(Base, AParsed.TimeZone) then
+  if not ExtractZonedDateTimeAnnotations(Base, AParsed.TimeZone, AParsed.CalendarId) then
     Exit;
 
   SepPos := 0;
@@ -726,6 +780,7 @@ begin
   end
   else
   begin
+    AParsed.HasExplicitTime := True;
     DatePart := Copy(Base, 1, SepPos - 1);
     TimeAndOffset := Copy(Base, SepPos + 1, Length(Base) - SepPos);
     if not ParseZonedDateTimeDatePart(DatePart, AParsed.Date) then
@@ -758,6 +813,175 @@ begin
   if AParsed.TimeZone = '' then
     Exit;
   Result := True;
+end;
+
+function StripPlainTimeAnnotations(var AValue: string): Boolean;
+var
+  BracketStart, BracketEnd, EqualsPos: Integer;
+  Annotation, Key: string;
+  Critical, CalendarCriticalSeen: Boolean;
+  CalendarCount, TimeZoneCount: Integer;
+begin
+  Result := False;
+  CalendarCriticalSeen := False;
+  CalendarCount := 0;
+  TimeZoneCount := 0;
+
+  while (Length(AValue) > 0) and (AValue[Length(AValue)] = ']') do
+  begin
+    BracketEnd := Length(AValue);
+    BracketStart := BracketEnd - 1;
+    while (BracketStart > 0) and (AValue[BracketStart] <> '[') do
+      Dec(BracketStart);
+    if BracketStart = 0 then
+      Exit;
+
+    Annotation := Copy(AValue, BracketStart + 1, BracketEnd - BracketStart - 1);
+    Critical := (Length(Annotation) > 0) and (Annotation[1] = '!');
+    if Critical then
+      Annotation := Copy(Annotation, 2, Length(Annotation) - 1);
+    if Annotation = '' then
+      Exit;
+
+    EqualsPos := System.Pos('=', Annotation);
+    if EqualsPos > 0 then
+    begin
+      Key := Copy(Annotation, 1, EqualsPos - 1);
+      if not ASCIIIsLowercaseKey(Key) then
+        Exit;
+      if Key = 'u-ca' then
+      begin
+        Inc(CalendarCount);
+        if Critical then
+          CalendarCriticalSeen := True;
+        if (CalendarCount > 1) and (CalendarCriticalSeen or Critical) then
+          Exit;
+      end
+      else if Critical then
+        Exit;
+    end
+    else
+    begin
+      Inc(TimeZoneCount);
+      if TimeZoneCount > 1 then
+        Exit;
+    end;
+
+    AValue := Copy(AValue, 1, BracketStart - 1);
+  end;
+
+  Result := True;
+end;
+
+function TryParsePlainTimeLikeString(const AValue: string; out ATime: TTemporalTimeRecord): Boolean;
+var
+  Base, DatePart, TimeAndOffset, TimePart, OffsetPart: string;
+  SepPos, I, OffsetSeconds: Integer;
+  DateRec: TTemporalDateRecord;
+  HasUTCDesignator, HasSubMinuteSyntax: Boolean;
+
+  function AllDigits(const S: string): Boolean;
+  var
+    J: Integer;
+  begin
+    Result := S <> '';
+    for J := 1 to Length(S) do
+    begin
+      if (S[J] < '0') or (S[J] > '9') then
+        Exit(False);
+    end;
+  end;
+
+  function TwoDigitValue(const S: string; const AStart: Integer): Integer;
+  begin
+    Result := (Ord(S[AStart]) - Ord('0')) * 10 + Ord(S[AStart + 1]) - Ord('0');
+  end;
+
+  function IsAmbiguousBarePlainTime(const S: string): Boolean;
+  var
+    Month, Day: Integer;
+  begin
+    Result := False;
+    if (Length(S) = 7) and AllDigits(Copy(S, 1, 4)) and
+       (S[5] = '-') and AllDigits(Copy(S, 6, 2)) then
+    begin
+      Month := TwoDigitValue(S, 6);
+      Exit((Month >= 1) and (Month <= 12));
+    end;
+    if (Length(S) = 6) and AllDigits(S) then
+    begin
+      Month := TwoDigitValue(S, 5);
+      Exit((Month >= 1) and (Month <= 12));
+    end;
+    if (Length(S) = 5) and AllDigits(Copy(S, 1, 2)) and
+       (S[3] = '-') and AllDigits(Copy(S, 4, 2)) then
+    begin
+      Month := TwoDigitValue(S, 1);
+      Day := TwoDigitValue(S, 4);
+      Exit((Month >= 1) and (Month <= 12) and
+        (Day >= 1) and (Day <= DaysInMonth(2020, Month)));
+    end;
+    if (Length(S) = 4) and AllDigits(S) then
+    begin
+      Month := TwoDigitValue(S, 1);
+      Day := TwoDigitValue(S, 3);
+      Exit((Month >= 1) and (Month <= 12) and
+        (Day >= 1) and (Day <= DaysInMonth(2020, Month)));
+    end;
+  end;
+
+begin
+  Result := False;
+  Base := AValue;
+  if Base = '' then
+    Exit;
+  if not StripPlainTimeAnnotations(Base) then
+    Exit;
+
+  SepPos := 0;
+  for I := 1 to Length(Base) do
+  begin
+    if (Base[I] = 'T') or (Base[I] = 't') or (Base[I] = ' ') then
+    begin
+      SepPos := I;
+      Break;
+    end;
+  end;
+
+  if SepPos = 1 then
+  begin
+    if Base[1] = ' ' then
+      Exit;
+    TimeAndOffset := Copy(Base, 2, Length(Base) - 1)
+  end
+  else if SepPos > 1 then
+  begin
+    DatePart := Copy(Base, 1, SepPos - 1);
+    if not ParseZonedDateTimeDatePart(DatePart, DateRec) then
+      Exit;
+    TimeAndOffset := Copy(Base, SepPos + 1, Length(Base) - SepPos);
+  end
+  else
+  begin
+    if IsAmbiguousBarePlainTime(Base) then
+      Exit;
+    TimeAndOffset := Base;
+  end;
+
+  if not SplitZonedDateTimeOffset(TimeAndOffset, TimePart, OffsetPart) then
+    Exit;
+  if TimePart = '' then
+    Exit;
+  if OffsetPart <> '' then
+  begin
+    if not ParseZonedDateTimeOffsetPart(OffsetPart, OffsetSeconds,
+      HasUTCDesignator, HasSubMinuteSyntax) then
+      Exit;
+    if HasUTCDesignator then
+      Exit;
+  end;
+
+  Result := ParseZonedDateTimeTimePart(TimePart, ATime);
 end;
 
 procedure ValidateZonedDateTimeEpoch(const AEpochMilliseconds: Int64;
@@ -841,37 +1065,71 @@ begin
   Normalized := NormalizeLeapSecondForTemporalDateTime(AValue);
   Result := CoerceToISODate(Normalized, DateRec) or
     CoerceToISODateTime(Normalized, DateRec, TimeRec) or
+    TryParsePlainTimeLikeString(Normalized, TimeRec) or
     CoerceToISOYearMonth(Normalized, Year, Month) or
     CoerceToISOMonthDay(Normalized, Month, Day) or
     TryParseISODateTimeWithOffset(Normalized, DateRec, TimeRec, OffsetSeconds, TimeZone);
 end;
 
+function ClampTemporalInteger(const AValue, AMin, AMax: Integer): Integer; inline;
+begin
+  if AValue < AMin then
+    Result := AMin
+  else if AValue > AMax then
+    Result := AMax
+  else
+    Result := AValue;
+end;
+
+procedure ConstrainTemporalTimeFields(var AHour, AMinute, ASecond,
+  AMillisecond, AMicrosecond, ANanosecond: Integer); inline;
+begin
+  AHour := ClampTemporalInteger(AHour, 0, 23);
+  AMinute := ClampTemporalInteger(AMinute, 0, 59);
+  ASecond := ClampTemporalInteger(ASecond, 0, 59);
+  AMillisecond := ClampTemporalInteger(AMillisecond, 0, 999);
+  AMicrosecond := ClampTemporalInteger(AMicrosecond, 0, 999);
+  ANanosecond := ClampTemporalInteger(ANanosecond, 0, 999);
+end;
+
 function CalendarFromProperty(const AValue: TGocciaValue): string;
 var
   CalendarString: string;
+  CalendarId: string;
 begin
   if IsUndefinedValue(AValue) then
     Exit('iso8601');
 
-  if (AValue is TGocciaTemporalPlainDateValue) or
-     (AValue is TGocciaTemporalPlainDateTimeValue) or
-     (AValue is TGocciaTemporalPlainMonthDayValue) or
-     (AValue is TGocciaTemporalPlainYearMonthValue) or
-     (AValue is TGocciaTemporalZonedDateTimeValue) then
-    Exit('iso8601');
+  if AValue is TGocciaTemporalPlainDateValue then
+    Exit(TGocciaTemporalPlainDateValue(AValue).CalendarId);
+  if AValue is TGocciaTemporalPlainDateTimeValue then
+    Exit(TGocciaTemporalPlainDateTimeValue(AValue).CalendarId);
+  if AValue is TGocciaTemporalPlainMonthDayValue then
+    Exit(TGocciaTemporalPlainMonthDayValue(AValue).CalendarId);
+  if AValue is TGocciaTemporalPlainYearMonthValue then
+    Exit(TGocciaTemporalPlainYearMonthValue(AValue).CalendarId);
+  if AValue is TGocciaTemporalZonedDateTimeValue then
+    Exit(TGocciaTemporalZonedDateTimeValue(AValue).CalendarId);
 
   if not (AValue is TGocciaStringLiteralValue) then
     ThrowTypeError('Temporal.ZonedDateTime calendar must be a string or Temporal calendar-carrying object',
       SSuggestTemporalFromArg);
 
   CalendarString := TGocciaStringLiteralValue(AValue).Value;
-  if not CalendarStringIsISO(CalendarString) then
-    ThrowRangeError('Temporal.ZonedDateTime calendar must identify the iso8601 calendar',
-      SSuggestTemporalDateRange);
+  CalendarId := CanonicalizeTemporalCalendarIdentifier(CalendarString);
+  if CalendarId <> '' then
+    Exit(CalendarId);
+  if TryExtractTemporalCalendarAnnotation(CalendarString, CalendarId) and (CalendarId <> 'iso8601') then
+    Exit(CalendarId);
+  if CalendarStringIsISO(CalendarString) then
+    Exit('iso8601');
+  ThrowRangeError('Temporal.ZonedDateTime calendar must identify a supported calendar',
+    SSuggestTemporalDateRange);
   Result := 'iso8601';
 end;
 
 function CanonicalizeTimeZoneIdentifier(const AValue: string): string; forward;
+function IsOffsetTimeZoneIdentifier(const AValue: string): Boolean; forward;
 
 function TryDateTimeStringTimeZoneIdentifier(const AValue: string; out ATimeZone: string): Boolean;
 var
@@ -893,9 +1151,17 @@ begin
   Result := True;
 end;
 
+function IsOffsetTimeZoneIdentifier(const AValue: string): Boolean;
+var
+  OffsetSeconds: Integer;
+begin
+  Result := ParseOffsetString(AValue, OffsetSeconds);
+end;
+
 function CanonicalizeTimeZoneIdentifier(const AValue: string): string;
 var
   OffsetSeconds: Integer;
+  CaseNormalized: string;
 begin
   if AValue = '' then
     ThrowRangeError(Format(SErrorUnknownTimezone, [AValue]), SSuggestTemporalTimezone);
@@ -908,6 +1174,13 @@ begin
 
   if ParseOffsetString(AValue, OffsetSeconds) then
     Exit(FormatOffsetString(OffsetSeconds));
+
+  if IsSupportedCanonicalTimeZoneIdentifier(AValue) and IsValidTimeZone(AValue) then
+    Exit(AValue);
+
+  if TryCanonicalizeTimeZoneIdentifierCase(AValue, CaseNormalized) and
+     IsValidTimeZone(CaseNormalized) then
+    Exit(CaseNormalized);
 
   if IsValidTimeZone(AValue) then
     Exit(AValue);
@@ -996,13 +1269,41 @@ begin
             Int64(AOffsetSeconds) * MILLISECONDS_PER_SECOND;
 end;
 
+function RoundOffsetSecondsToMinute(const AOffsetSeconds: Integer): Integer;
+var
+  Sign, AbsOffset, RoundedMinutes: Integer;
+begin
+  if AOffsetSeconds < 0 then
+    Sign := -1
+  else
+    Sign := 1;
+  AbsOffset := Abs(AOffsetSeconds);
+  RoundedMinutes := (AbsOffset + 30) div 60;
+  Result := Sign * RoundedMinutes * 60;
+end;
+
+function TruncateOffsetSecondsToMinute(const AOffsetSeconds: Integer): Integer;
+var
+  Sign, AbsOffset: Integer;
+begin
+  if AOffsetSeconds < 0 then
+    Sign := -1
+  else
+    Sign := 1;
+  AbsOffset := Abs(AOffsetSeconds);
+  Result := Sign * ((AbsOffset div 60) * 60);
+end;
+
 function ApplyOffsetOption(const AYear, AMonth, ADay: Integer;
   const ATime: TTemporalTimeRecord; const ATimeZone: string;
   const AHasOffset: Boolean; const AOffsetSeconds: Integer;
-  const AHasUTCDesignator: Boolean;
-  const AOffsetOption: TTemporalOffsetOption; const AMethod: string): Int64;
+  const AHasUTCDesignator, AOffsetHasSubMinuteSyntax,
+  AAllowOffsetMinuteFuzzyMatch: Boolean;
+  const AOffsetOption: TTemporalOffsetOption;
+  const ADisambiguation: TTemporalDisambiguationOption;
+  const AMethod: string): Int64;
 var
-  OffsetEpochMs: Int64;
+  OffsetEpochMs, LocalEpochMs: Int64;
   ActualOffsetSeconds: Integer;
 begin
   if AHasOffset then
@@ -1015,13 +1316,28 @@ begin
     OffsetEpochMs := 0;
 
   if not AHasOffset or (AOffsetOption = tooIgnore) then
-    Exit(LocalToEpochMs(AYear, AMonth, ADay, ATime.Hour, ATime.Minute,
-      ATime.Second, ATime.Millisecond, ATimeZone));
+    Exit(LocalDateTimeToEpochMillisecondsWithDisambiguation(AYear, AMonth,
+      ADay, ATime.Hour, ATime.Minute, ATime.Second, ATime.Millisecond,
+      ATimeZone, ToTimeZoneDisambiguation(ADisambiguation)));
 
   if AOffsetOption = tooUse then
     Exit(OffsetEpochMs);
 
-  ActualOffsetSeconds := GetUtcOffsetSeconds(ATimeZone, OffsetEpochMs div MILLISECONDS_PER_SECOND);
+  if AAllowOffsetMinuteFuzzyMatch and (not AOffsetHasSubMinuteSyntax) and
+     (not IsOffsetTimeZoneIdentifier(ATimeZone)) then
+  begin
+    LocalEpochMs := LocalDateTimeToEpochMillisecondsWithDisambiguation(AYear,
+      AMonth, ADay, ATime.Hour, ATime.Minute, ATime.Second,
+      ATime.Millisecond, ATimeZone, ToTimeZoneDisambiguation(ADisambiguation));
+    ActualOffsetSeconds := GetUtcOffsetSeconds(ATimeZone,
+      EpochMillisecondsToSeconds(LocalEpochMs));
+    if (ActualOffsetSeconds mod 60 <> 0) and
+       (RoundOffsetSecondsToMinute(ActualOffsetSeconds) = AOffsetSeconds) then
+      Exit(LocalEpochMs);
+  end;
+
+  ActualOffsetSeconds := GetUtcOffsetSeconds(ATimeZone,
+    EpochMillisecondsToSeconds(OffsetEpochMs));
   if ActualOffsetSeconds = AOffsetSeconds then
     Exit(OffsetEpochMs);
 
@@ -1029,8 +1345,9 @@ begin
     ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['ZonedDateTime', AMethod]),
       SSuggestTemporalTimezone);
 
-  Result := LocalToEpochMs(AYear, AMonth, ADay, ATime.Hour, ATime.Minute,
-    ATime.Second, ATime.Millisecond, ATimeZone);
+  Result := LocalDateTimeToEpochMillisecondsWithDisambiguation(AYear, AMonth,
+    ADay, ATime.Hour, ATime.Minute, ATime.Second, ATime.Millisecond,
+    ATimeZone, ToTimeZoneDisambiguation(ADisambiguation));
 end;
 
 function HasDateTimeOffsetDesignator(const AValue: string): Boolean;
@@ -1064,14 +1381,19 @@ var
   EpochMs: Int64;
   SubMs: Integer;
   Obj: TGocciaObjectValue;
-  VCalendar, VDay, VHour, VMicrosecond, VMillisecond, VMinute, VMonth,
+  VCalendar, VDay, VEra, VEraYear, VHour, VMicrosecond, VMillisecond, VMinute, VMonth,
   VMonthCode, VNanosecond, VOffset, VSecond, VTimeZone, VYear: TGocciaValue;
   Overflow: TTemporalOverflow;
-  Year, Month, Day, MaxDay: Integer;
+  Year, Month, Day, MaxDay, SuppliedMonth: Integer;
   MonthPart: Integer;
-  MonthCodeStr, OffsetStr: string;
-  HasMonth, HasMonthCode, HasOffset: Boolean;
+  ISODate: TTemporalDateRecord;
+  Info: TTemporalCalendarDateInfo;
+  CalendarId, MonthCodeStr, OffsetStr: string;
+  CalendarHasEra, HasEra, HasEraYear, HasMonth, HasMonthCode, HasOffset: Boolean;
+  IsLeapMonth: Boolean;
+  EraResolvedYear: Integer;
   OffsetOption: TTemporalOffsetOption;
+  Disambiguation: TTemporalDisambiguationOption;
   OffsetHasUTCDesignator, OffsetHasSubMinuteSyntax: Boolean;
   Parsed: TZonedDateTimeParseResult;
 
@@ -1092,7 +1414,8 @@ var
 begin
   if AValue is TGocciaTemporalZonedDateTimeValue then
   begin
-    ReadZonedDateTimeOptions(AOptions, AMethod, Overflow, OffsetOption);
+    ReadZonedDateTimeOptions(AOptions, AMethod, Overflow, OffsetOption,
+      Disambiguation);
     Result := TGocciaTemporalZonedDateTimeValue(AValue);
   end
   else if AValue is TGocciaStringLiteralValue then
@@ -1104,24 +1427,53 @@ begin
       ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['ZonedDateTime', AMethod]), SSuggestTemporalISOFormat);
     TimeZoneStr := CanonicalizeTimeZoneIdentifier(Parsed.TimeZone);
 
-    ReadZonedDateTimeOptions(AOptions, AMethod, Overflow, OffsetOption);
+    ReadZonedDateTimeOptions(AOptions, AMethod, Overflow, OffsetOption,
+      Disambiguation);
     if Parsed.HasOffset and not (OffsetOption in [tooUse, tooIgnore]) then
       ValidateZonedDateTimeLocalRange(Parsed.Date.Year, Parsed.Date.Month,
         Parsed.Date.Day, Parsed.Time,
         Parsed.Time.Microsecond * 1000 + Parsed.Time.Nanosecond, AMethod);
-    EpochMs := ApplyOffsetOption(Parsed.Date.Year, Parsed.Date.Month, Parsed.Date.Day,
-      Parsed.Time, TimeZoneStr, Parsed.HasOffset, Parsed.OffsetSeconds,
-      Parsed.HasUTCDesignator, OffsetOption, AMethod);
+    if (not Parsed.HasExplicitTime) and (not Parsed.HasOffset) then
+      EpochMs := StartOfDayToEpochMilliseconds(Parsed.Date.Year,
+        Parsed.Date.Month, Parsed.Date.Day, TimeZoneStr)
+    else
+      EpochMs := ApplyOffsetOption(Parsed.Date.Year, Parsed.Date.Month, Parsed.Date.Day,
+        Parsed.Time, TimeZoneStr, Parsed.HasOffset, Parsed.OffsetSeconds,
+        Parsed.HasUTCDesignator, Parsed.OffsetHasSubMinuteSyntax, True,
+        OffsetOption, Disambiguation, AMethod);
     SubMs := Parsed.Time.Microsecond * 1000 + Parsed.Time.Nanosecond;
     ValidateZonedDateTimeEpoch(EpochMs, SubMs, AMethod);
-    Result := TGocciaTemporalZonedDateTimeValue.Create(EpochMs, SubMs, TimeZoneStr);
+    Result := TGocciaTemporalZonedDateTimeValue.Create(EpochMs, SubMs, TimeZoneStr, Parsed.CalendarId);
   end
   else if AValue is TGocciaObjectValue then
   begin
     Obj := TGocciaObjectValue(AValue);
 
     VCalendar := Obj.GetProperty(PROPERTY_CALENDAR);
-    CalendarFromProperty(VCalendar);
+    CalendarId := CalendarFromProperty(VCalendar);
+    if (CalendarId = 'islamic') or (CalendarId = 'islamic-rgsa') then
+      ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['ZonedDateTime', AMethod]),
+        SSuggestTemporalDateRange);
+    IsLeapMonth := False;
+    HasEra := False;
+    HasEraYear := False;
+    CalendarHasEra := TemporalCalendarUsesEra(CalendarId);
+    EraResolvedYear := 0;
+    if CalendarHasEra then
+    begin
+      VEra := Obj.GetProperty('era');
+      VEraYear := Obj.GetProperty('eraYear');
+      HasEra := not IsUndefinedValue(VEra);
+      HasEraYear := not IsUndefinedValue(VEraYear);
+      if HasEra <> HasEraYear then
+        ThrowTypeError(AMethod + ' requires era and eraYear together',
+          SSuggestTemporalFromArg);
+      if HasEra and not TryCalendarYearFromEra(CalendarId,
+        VEra.ToStringLiteral.Value, ToIntegerWithTruncationValue(VEraYear),
+        EraResolvedYear) then
+        ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['ZonedDateTime', AMethod]),
+          SSuggestTemporalDateRange);
+    end;
 
     VDay := Obj.GetProperty(PROPERTY_DAY);
     Day := RequiredIntegerField(VDay, PROPERTY_DAY);
@@ -1135,8 +1487,12 @@ begin
     TimeRec.Minute := OptionalIntegerField(VMinute, 0);
     VMonth := Obj.GetProperty(PROPERTY_MONTH);
     HasMonth := not IsUndefinedValue(VMonth);
+    SuppliedMonth := 0;
     if HasMonth then
-      Month := ToIntegerWithTruncationValue(VMonth)
+    begin
+      Month := ToIntegerWithTruncationValue(VMonth);
+      SuppliedMonth := Month;
+    end
     else
       Month := 0;
 
@@ -1169,15 +1525,24 @@ begin
     VTimeZone := Obj.GetProperty(PROPERTY_TIME_ZONE);
     TimeZoneStr := TimeZoneFromProperty(VTimeZone, AMethod);
     VYear := Obj.GetProperty(PROPERTY_YEAR);
-    Year := RequiredIntegerField(VYear, PROPERTY_YEAR);
+    if not IsUndefinedValue(VYear) then
+      Year := ToIntegerWithTruncationValue(VYear)
+    else if CalendarHasEra and HasEra then
+      Year := EraResolvedYear
+    else
+      ThrowTypeError(AMethod + ' requires year property', SSuggestTemporalFromArg);
 
-    ReadZonedDateTimeOptions(AOptions, AMethod, Overflow, OffsetOption);
+    ReadZonedDateTimeOptions(AOptions, AMethod, Overflow, OffsetOption,
+      Disambiguation);
 
     if HasMonthCode then
     begin
-      if not MonthFromMonthCode(MonthCodeStr, MonthPart) then
+      if not TryParseTemporalMonthCode(MonthCodeStr, MonthPart, IsLeapMonth) then
         ThrowRangeError(SErrorMonthCodeOutOfRange, SSuggestTemporalMonthCode);
-      if HasMonth and (Month <> MonthPart) then
+      if (CalendarId = 'iso8601') and (IsLeapMonth or (MonthPart < 1) or
+         (MonthPart > 12)) then
+        ThrowRangeError(SErrorMonthCodeOutOfRange, SSuggestTemporalMonthCode);
+      if (CalendarId = 'iso8601') and HasMonth and (Month <> MonthPart) then
         ThrowRangeError(SErrorMonthCodeMismatch, SSuggestTemporalMonthCode);
       Month := MonthPart;
     end
@@ -1186,7 +1551,7 @@ begin
 
     if Month < 0 then
       ThrowRangeError(Format(SErrorTemporalMonthOutOfRange, [Month]), SSuggestTemporalDateRange);
-    if (Month < 1) or (Month > 12) then
+    if (CalendarId = 'iso8601') and ((Month < 1) or (Month > 12)) then
     begin
       if Overflow = toReject then
         ThrowRangeError(Format(SErrorTemporalMonthOutOfRange, [Month]), SSuggestTemporalDateRange);
@@ -1204,12 +1569,31 @@ begin
         ThrowRangeError(Format(SErrorTemporalDayOutOfRange, [Day]), SSuggestTemporalDateRange);
       Day := 1;
     end;
-    MaxDay := DaysInMonth(Year, Month);
-    if Day > MaxDay then
+    if CalendarId = 'iso8601' then
     begin
-      if Overflow = toReject then
-        ThrowRangeError(Format(SErrorTemporalDayOutOfRangeForMonth, [Day, Month]), SSuggestTemporalDateRange);
-      Day := MaxDay;
+      MaxDay := DaysInMonth(Year, Month);
+      if Day > MaxDay then
+      begin
+        if Overflow = toReject then
+          ThrowRangeError(Format(SErrorTemporalDayOutOfRangeForMonth, [Day, Month]), SSuggestTemporalDateRange);
+        Day := MaxDay;
+      end;
+    end;
+
+    if CalendarId <> 'iso8601' then
+    begin
+      if not TryResolveCalendarDateToISO(CalendarId, Year, Month, Day,
+        HasMonthCode, IsLeapMonth, Overflow = toConstrain, ISODate) then
+        ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['ZonedDateTime', AMethod]),
+          SSuggestTemporalDateRange);
+      if HasMonth and HasMonthCode and
+         ((not TryGetCalendarDateInfo(CalendarId, ISODate.Year,
+           ISODate.Month, ISODate.Day, Info)) or
+          (Info.Date.Month <> SuppliedMonth)) then
+        ThrowRangeError(SErrorMonthCodeMismatch, SSuggestTemporalMonthCode);
+      Year := ISODate.Year;
+      Month := ISODate.Month;
+      Day := ISODate.Day;
     end;
 
     if not IsValidTime(TimeRec.Hour, TimeRec.Minute, TimeRec.Second,
@@ -1217,13 +1601,14 @@ begin
       ThrowRangeError(SErrorInvalidISOTime, SSuggestTemporalDateRange);
 
     EpochMs := ApplyOffsetOption(Year, Month, Day, TimeRec, TimeZoneStr,
-      HasOffset, OffsetSeconds, False, OffsetOption, AMethod);
+      HasOffset, OffsetSeconds, False, OffsetHasSubMinuteSyntax, False,
+      OffsetOption, Disambiguation, AMethod);
 
     SubMs := TimeRec.Microsecond * 1000 + TimeRec.Nanosecond;
     if HasOffset and not (OffsetOption in [tooUse, tooIgnore]) then
       ValidateZonedDateTimeLocalRange(Year, Month, Day, TimeRec, SubMs, AMethod);
     ValidateZonedDateTimeEpoch(EpochMs, SubMs, AMethod);
-    Result := TGocciaTemporalZonedDateTimeValue.Create(EpochMs, SubMs, TimeZoneStr);
+    Result := TGocciaTemporalZonedDateTimeValue.Create(EpochMs, SubMs, TimeZoneStr, CalendarId);
   end
   else
   begin
@@ -1240,7 +1625,8 @@ var
   LocalEpochMs, EpochDays, RemainingMs: Int64;
   DateRec: TTemporalDateRecord;
 begin
-  OffsetSeconds := GetUtcOffsetSeconds(ATimeZone, AEpochMilliseconds div MILLISECONDS_PER_SECOND);
+  OffsetSeconds := GetUtcOffsetSeconds(ATimeZone,
+    EpochMillisecondsToSeconds(AEpochMilliseconds));
   LocalEpochMs := AEpochMilliseconds + Int64(OffsetSeconds) * MILLISECONDS_PER_SECOND;
 
   EpochDays := LocalEpochMs div MILLISECONDS_PER_DAY;
@@ -1275,30 +1661,55 @@ begin
     AYear, AMonth, ADay, AHour, AMinute, ASecond, AMs, AUs, ANs);
 end;
 
+function RoundingStartOfDayEpochMilliseconds(const AYear, AMonth, ADay: Integer;
+  const ATimeZone: string; const APreferRepeatedMidnightLater: Boolean): Int64;
+var
+  LaterEpochMs: Int64;
+  LocalYear, LocalMonth, LocalDay, LocalHour, LocalMinute, LocalSecond,
+    LocalMs, LocalUs, LocalNs: Integer;
+begin
+  Result := StartOfDayToEpochMilliseconds(AYear, AMonth, ADay, ATimeZone);
+  ValidateZonedDateTimeEpoch(Result, 0, 'ZonedDateTime.prototype.round');
+  if not APreferRepeatedMidnightLater then
+    Exit;
+
+  LaterEpochMs := LocalDateTimeToEpochMillisecondsWithDisambiguation(AYear,
+    AMonth, ADay, 0, 0, 0, 0, ATimeZone, ttzdLater);
+  ComputeLocalComponentsFromEpoch(LaterEpochMs, 0, ATimeZone, LocalYear,
+    LocalMonth, LocalDay, LocalHour, LocalMinute, LocalSecond, LocalMs,
+    LocalUs, LocalNs);
+  if (LocalYear = AYear) and (LocalMonth = AMonth) and (LocalDay = ADay) and
+     (LocalHour = 0) and (LocalMinute = 0) and (LocalSecond = 0) and
+     (LocalMs = 0) and (LocalUs = 0) and (LocalNs = 0) then
+  begin
+    ValidateZonedDateTimeEpoch(LaterEpochMs, 0,
+      'ZonedDateTime.prototype.round');
+    Result := LaterEpochMs;
+  end;
+end;
+
+function CalendarInfoForZonedDateTime(const AZdt: TGocciaTemporalZonedDateTimeValue;
+  const AMethod: string): TTemporalCalendarDateInfo;
+var
+  LYear, LMonth, LDay, LHour, LMinute, LSecond, LMs, LUs, LNs: Integer;
+begin
+  ComputeLocalComponents(AZdt, LYear, LMonth, LDay, LHour, LMinute, LSecond,
+    LMs, LUs, LNs);
+  if not TryGetCalendarDateInfo(AZdt.FCalendarId, LYear, LMonth, LDay, Result) then
+    ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['ZonedDateTime', AMethod]),
+      SSuggestTemporalDateRange);
+end;
+
 function LocalToEpochMs(const AYear, AMonth, ADay, AHour, AMinute, ASecond, AMs: Integer;
   const ATimeZone: string): Int64;
-var
-  UtcGuess: Int64;
-  OffsetSeconds: Integer;
 begin
-  // Compute epoch ms as if the local time were UTC
-  UtcGuess := DateToEpochDays(AYear, AMonth, ADay) * MILLISECONDS_PER_DAY +
-              Int64(AHour) * MILLISECONDS_PER_HOUR +
-              Int64(AMinute) * MILLISECONDS_PER_MINUTE +
-              Int64(ASecond) * MILLISECONDS_PER_SECOND +
-              AMs;
-
-  // Get offset at that estimated UTC epoch
-  OffsetSeconds := GetUtcOffsetSeconds(ATimeZone, UtcGuess div MILLISECONDS_PER_SECOND);
-
-  // Subtract offset to get actual UTC epoch ms
-  // (compatible disambiguation: use the first guess)
-  Result := UtcGuess - Int64(OffsetSeconds) * MILLISECONDS_PER_SECOND;
+  Result := LocalDateTimeToEpochMilliseconds(AYear, AMonth, ADay, AHour,
+    AMinute, ASecond, AMs, ATimeZone);
 end;
 
 function FormatOffsetString(const AOffsetSeconds: Integer): string;
 var
-  AbsOffset, OffsetH, OffsetM: Integer;
+  AbsOffset, OffsetH, OffsetM, OffsetS: Integer;
   Sign: Char;
 begin
   if AOffsetSeconds >= 0 then
@@ -1308,7 +1719,169 @@ begin
   AbsOffset := Abs(AOffsetSeconds);
   OffsetH := AbsOffset div 3600;
   OffsetM := (AbsOffset mod 3600) div 60;
-  Result := Sign + Format('%.2d:%.2d', [OffsetH, OffsetM]);
+  OffsetS := AbsOffset mod 60;
+  if OffsetS = 0 then
+    Result := Sign + Format('%.2d:%.2d', [OffsetH, OffsetM])
+  else
+    Result := Sign + Format('%.2d:%.2d:%.2d', [OffsetH, OffsetM, OffsetS]);
+end;
+
+function DurationPow10(const ACount: Integer): TBigInteger;
+var
+  I: Integer;
+begin
+  Result := TBigInteger.One;
+  for I := 1 to ACount do
+    Result := Result.Multiply(TBigInteger.FromInt64(10));
+end;
+
+function FractionalDurationNanoseconds(const AFractionDigits: string;
+  const AUnitNanoseconds: Int64): TBigInteger;
+var
+  Numerator, Scale, Product, Quotient, Remainder: TBigInteger;
+begin
+  if AFractionDigits = '' then
+    Exit(TBigInteger.Zero);
+  Numerator := TBigInteger.FromDecimalString(AFractionDigits);
+  Scale := DurationPow10(Length(AFractionDigits));
+  Product := Numerator.Multiply(TBigInteger.FromInt64(AUnitNanoseconds));
+  Quotient := Product.Divide(Scale);
+  Remainder := Product.Modulo(Scale);
+  if Remainder.Multiply(TBigInteger.FromInt64(2)).Compare(Scale) >= 0 then
+    Quotient := Quotient.Add(TBigInteger.One);
+  Result := Quotient;
+end;
+
+function TryParseDurationStringAsBig(const AValue: string;
+  out ADuration: TGocciaTemporalDurationValue): Boolean;
+var
+  Pos, NumberStart, FractionStart, Sign: Integer;
+  InTimePart, HasAny: Boolean;
+  C: Char;
+  NumberText, FractionText: string;
+  Whole, FractionNs: TBigInteger;
+  Y, Mo, W, Da, H, Mi, S, Ms, Us, Ns: TBigInteger;
+
+  function IsDigit(const AChar: Char): Boolean; inline;
+  begin
+    Result := (AChar >= '0') and (AChar <= '9');
+  end;
+
+  procedure ApplySign(var AField: TBigInteger);
+  begin
+    if Sign < 0 then
+      AField := AField.Negate;
+  end;
+
+begin
+  Result := False;
+  ADuration := nil;
+  if Length(AValue) < 2 then
+    Exit;
+  Pos := 1;
+  Sign := 1;
+  if AValue[Pos] = '-' then
+  begin
+    Sign := -1;
+    Inc(Pos);
+  end
+  else if AValue[Pos] = '+' then
+    Inc(Pos);
+  if (Pos > Length(AValue)) or (UpCase(AValue[Pos]) <> 'P') then
+    Exit;
+  Inc(Pos);
+
+  InTimePart := False;
+  HasAny := False;
+  Y := TBigInteger.Zero; Mo := TBigInteger.Zero; W := TBigInteger.Zero;
+  Da := TBigInteger.Zero; H := TBigInteger.Zero; Mi := TBigInteger.Zero;
+  S := TBigInteger.Zero; Ms := TBigInteger.Zero; Us := TBigInteger.Zero;
+  Ns := TBigInteger.Zero;
+
+  while Pos <= Length(AValue) do
+  begin
+    C := UpCase(AValue[Pos]);
+    if C = 'T' then
+    begin
+      if InTimePart then
+        Exit;
+      InTimePart := True;
+      Inc(Pos);
+      Continue;
+    end;
+
+    NumberStart := Pos;
+    while (Pos <= Length(AValue)) and IsDigit(AValue[Pos]) do
+      Inc(Pos);
+    if NumberStart = Pos then
+      Exit;
+    NumberText := Copy(AValue, NumberStart, Pos - NumberStart);
+    FractionText := '';
+    if (Pos <= Length(AValue)) and ((AValue[Pos] = '.') or (AValue[Pos] = ',')) then
+    begin
+      Inc(Pos);
+      FractionStart := Pos;
+      while (Pos <= Length(AValue)) and IsDigit(AValue[Pos]) do
+        Inc(Pos);
+      if FractionStart = Pos then
+        Exit;
+      FractionText := Copy(AValue, FractionStart, Pos - FractionStart);
+    end;
+    if Pos > Length(AValue) then
+      Exit;
+
+    Whole := TBigInteger.FromDecimalString(NumberText);
+    C := UpCase(AValue[Pos]);
+    Inc(Pos);
+    HasAny := True;
+
+    if not InTimePart then
+    begin
+      if FractionText <> '' then
+        Exit;
+      case C of
+        'Y': Y := Whole;
+        'M': Mo := Whole;
+        'W': W := Whole;
+        'D': Da := Whole;
+      else
+        Exit;
+      end;
+    end
+    else
+    begin
+      case C of
+        'H':
+        begin
+          H := Whole;
+          Ns := Ns.Add(FractionalDurationNanoseconds(FractionText,
+            NANOSECONDS_PER_HOUR));
+        end;
+        'M':
+        begin
+          Mi := Whole;
+          Ns := Ns.Add(FractionalDurationNanoseconds(FractionText,
+            NANOSECONDS_PER_MINUTE));
+        end;
+        'S':
+        begin
+          S := Whole;
+          Ns := Ns.Add(FractionalDurationNanoseconds(FractionText,
+            NANOSECONDS_PER_SECOND));
+        end;
+      else
+        Exit;
+      end;
+    end;
+  end;
+
+  if not HasAny then
+    Exit;
+  ApplySign(Y); ApplySign(Mo); ApplySign(W); ApplySign(Da); ApplySign(H);
+  ApplySign(Mi); ApplySign(S); ApplySign(Ms); ApplySign(Us); ApplySign(Ns);
+  ADuration := TGocciaTemporalDurationValue.CreateFromBigIntegers(Y, Mo, W,
+    Da, H, Mi, S, Ms, Us, Ns);
+  Result := True;
 end;
 
 function CoerceDuration(const AArg: TGocciaValue; const AMethod: string): TGocciaTemporalDurationValue;
@@ -1316,12 +1889,26 @@ var
   DurRec: TTemporalDurationRecord;
   Obj: TGocciaObjectValue;
   VF: TGocciaValue;
-  Y, Mo, W, Da, H, Mi, S, Ms, Us, Ns: Int64;
+  Seen: Boolean;
+  Y, Mo, W, Da, H, Mi, S, Ms, Us, Ns: TBigInteger;
+
+  procedure ReadField(const AName: string; var ATarget: TBigInteger);
+  begin
+    VF := Obj.GetProperty(AName);
+    if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then
+    begin
+      ATarget := DurationFieldToBigInteger(VF);
+      Seen := True;
+    end;
+  end;
+
 begin
   if AArg is TGocciaTemporalDurationValue then
     Result := TGocciaTemporalDurationValue(AArg)
   else if AArg is TGocciaStringLiteralValue then
   begin
+    if TryParseDurationStringAsBig(TGocciaStringLiteralValue(AArg).Value, Result) then
+      Exit;
     if not TryParseISODuration(TGocciaStringLiteralValue(AArg).Value, DurRec) then
       ThrowRangeError(SErrorInvalidDurationString, SSuggestTemporalDurationArg);
     Result := TGocciaTemporalDurationValue.Create(
@@ -1332,18 +1919,34 @@ begin
   else if AArg is TGocciaObjectValue then
   begin
     Obj := TGocciaObjectValue(AArg);
-    Y := 0; Mo := 0; W := 0; Da := 0; H := 0; Mi := 0; S := 0; Ms := 0; Us := 0; Ns := 0;
-    VF := Obj.GetProperty('years'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then Y := ToIntegerWithTruncation64Value(VF);
-    VF := Obj.GetProperty('months'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then Mo := ToIntegerWithTruncation64Value(VF);
-    VF := Obj.GetProperty('weeks'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then W := ToIntegerWithTruncation64Value(VF);
-    VF := Obj.GetProperty('days'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then Da := ToIntegerWithTruncation64Value(VF);
-    VF := Obj.GetProperty('hours'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then H := ToIntegerWithTruncation64Value(VF);
-    VF := Obj.GetProperty('minutes'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then Mi := ToIntegerWithTruncation64Value(VF);
-    VF := Obj.GetProperty('seconds'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then S := ToIntegerWithTruncation64Value(VF);
-    VF := Obj.GetProperty('milliseconds'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then Ms := ToIntegerWithTruncation64Value(VF);
-    VF := Obj.GetProperty('microseconds'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then Us := ToIntegerWithTruncation64Value(VF);
-    VF := Obj.GetProperty('nanoseconds'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then Ns := ToIntegerWithTruncation64Value(VF);
-    Result := TGocciaTemporalDurationValue.Create(Y, Mo, W, Da, H, Mi, S, Ms, Us, Ns);
+    Seen := False;
+    Y := TBigInteger.Zero;
+    Mo := TBigInteger.Zero;
+    W := TBigInteger.Zero;
+    Da := TBigInteger.Zero;
+    H := TBigInteger.Zero;
+    Mi := TBigInteger.Zero;
+    S := TBigInteger.Zero;
+    Ms := TBigInteger.Zero;
+    Us := TBigInteger.Zero;
+    Ns := TBigInteger.Zero;
+
+    ReadField('days', Da);
+    ReadField('hours', H);
+    ReadField('microseconds', Us);
+    ReadField('milliseconds', Ms);
+    ReadField('minutes', Mi);
+    ReadField('months', Mo);
+    ReadField('nanoseconds', Ns);
+    ReadField('seconds', S);
+    ReadField('weeks', W);
+    ReadField('years', Y);
+
+    if not Seen then
+      ThrowTypeError(AMethod + ' requires at least one duration field',
+        SSuggestTemporalDurationArg);
+    Result := TGocciaTemporalDurationValue.CreateFromBigIntegers(Y, Mo, W, Da,
+      H, Mi, S, Ms, Us, Ns);
   end
   else
   begin
@@ -1352,22 +1955,45 @@ begin
   end;
 end;
 
+function DurationHasDateUnits(const ADuration: TGocciaTemporalDurationValue): Boolean;
+begin
+  Result := (not ADuration.YearsBig.IsZero) or
+    (not ADuration.MonthsBig.IsZero) or
+    (not ADuration.WeeksBig.IsZero) or
+    (not ADuration.DaysBig.IsZero);
+end;
+
+function DurationSubDayNanosecondsForZonedDateTime(
+  const ADuration: TGocciaTemporalDurationValue): TBigInteger;
+begin
+  Result := ADuration.HoursBig.Multiply(TBigInteger.FromInt64(NANOSECONDS_PER_HOUR))
+    .Add(ADuration.MinutesBig.Multiply(TBigInteger.FromInt64(NANOSECONDS_PER_MINUTE)))
+    .Add(ADuration.SecondsBig.Multiply(TBigInteger.FromInt64(NANOSECONDS_PER_SECOND)))
+    .Add(ADuration.MillisecondsBig.Multiply(TBigInteger.FromInt64(NANOSECONDS_PER_MILLISECOND)))
+    .Add(ADuration.MicrosecondsBig.Multiply(TBigInteger.FromInt64(NANOSECONDS_PER_MICROSECOND)))
+    .Add(ADuration.NanosecondsBig);
+end;
+
 { TGocciaTemporalZonedDateTimeValue }
 
 constructor TGocciaTemporalZonedDateTimeValue.Create(const AEpochMilliseconds: Int64;
-  const ASubMillisecondNanoseconds: Integer; const ATimeZone: string);
+  const ASubMillisecondNanoseconds: Integer; const ATimeZone: string;
+  const ACalendarId: string = 'iso8601');
 var
   Shared: TGocciaSharedPrototype;
+  TimeZoneId: string;
 begin
   inherited Create(nil);
   if ATimeZone = '' then
     ThrowRangeError(SErrorZonedDateTimeRequiresTZ, SSuggestTemporalTimezone);
-  if not IsValidTimeZone(ATimeZone) then
-    ThrowRangeError(Format(SErrorUnknownTimezone, [ATimeZone]), SSuggestTemporalTimezone);
+  TimeZoneId := CanonicalizeTimeZoneIdentifier(ATimeZone);
 
   FEpochMilliseconds := AEpochMilliseconds;
   FSubMillisecondNanoseconds := ASubMillisecondNanoseconds;
-  FTimeZone := ATimeZone;
+  FTimeZone := TimeZoneId;
+  FCalendarId := CanonicalizeTemporalCalendarIdentifier(ACalendarId);
+  if FCalendarId = '' then
+    ThrowRangeError('Unknown calendar: ' + ACalendarId, SSuggestTemporalDateRange);
 
   // Normalize sub-ms nanoseconds into 0..999999 range
   if (FSubMillisecondNanoseconds >= SUB_MS_NANOSECOND_LIMIT) or (FSubMillisecondNanoseconds < 0) then
@@ -1384,6 +2010,10 @@ begin
         ((FSubMillisecondNanoseconds - (SUB_MS_NANOSECOND_LIMIT - 1)) div SUB_MS_NANOSECOND_LIMIT) * SUB_MS_NANOSECOND_LIMIT;
     end;
   end;
+
+  if not IsValidEpochNanoseconds(EpochNanosecondsFromParts(FEpochMilliseconds,
+    FSubMillisecondNanoseconds)) then
+    ThrowRangeError(SErrorTemporalInstantOutOfRange, SSuggestTemporalInstantRange);
 
   InitializePrototype;
   Shared := GetTemporalZonedDateTimeShared;
@@ -1406,6 +2036,8 @@ begin
     try
       Members.AddAccessor('calendarId', GetCalendarId, nil, [pfConfigurable]);
       Members.AddAccessor('timeZoneId', GetTimeZoneId, nil, [pfConfigurable]);
+      Members.AddAccessor('era', GetEra, nil, [pfConfigurable]);
+      Members.AddAccessor('eraYear', GetEraYear, nil, [pfConfigurable]);
       Members.AddAccessor('year', GetYear, nil, [pfConfigurable]);
       Members.AddAccessor('month', GetMonth, nil, [pfConfigurable]);
       Members.AddAccessor('monthCode', GetMonthCode, nil, [pfConfigurable]);
@@ -1434,12 +2066,14 @@ begin
       Members.AddMethod(ZonedDateTimeWithPlainDate, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(ZonedDateTimeWithPlainTime, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(ZonedDateTimeWithTimeZone, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(ZonedDateTimeWithCalendar, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(ZonedDateTimeAdd, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(ZonedDateTimeSubtract, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(ZonedDateTimeUntil, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(ZonedDateTimeSince, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(ZonedDateTimeRound, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(ZonedDateTimeEquals, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(ZonedDateTimeGetTimeZoneTransition, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(ZonedDateTimeStartOfDay, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(ZonedDateTimeToInstant, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(ZonedDateTimeToPlainDate, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
@@ -1482,9 +2116,11 @@ end;
 { Getters }
 
 function TGocciaTemporalZonedDateTimeValue.GetCalendarId(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Zdt: TGocciaTemporalZonedDateTimeValue;
 begin
-  AsZonedDateTime(AThisValue, 'get ZonedDateTime.calendarId');
-  Result := TGocciaStringLiteralValue.Create('iso8601');
+  Zdt := AsZonedDateTime(AThisValue, 'get ZonedDateTime.calendarId');
+  Result := TGocciaStringLiteralValue.Create(Zdt.FCalendarId);
 end;
 
 function TGocciaTemporalZonedDateTimeValue.GetTimeZoneId(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -1492,64 +2128,88 @@ begin
   Result := TGocciaStringLiteralValue.Create(AsZonedDateTime(AThisValue, 'get ZonedDateTime.timeZoneId').FTimeZone);
 end;
 
+function TGocciaTemporalZonedDateTimeValue.GetEra(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Zdt: TGocciaTemporalZonedDateTimeValue;
+  Info: TTemporalCalendarDateInfo;
+begin
+  Zdt := AsZonedDateTime(AThisValue, 'get ZonedDateTime.era');
+  Info := CalendarInfoForZonedDateTime(Zdt, 'get ZonedDateTime.era');
+  if not Info.HasEra then
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  Result := TGocciaStringLiteralValue.Create(Info.Era);
+end;
+
+function TGocciaTemporalZonedDateTimeValue.GetEraYear(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Zdt: TGocciaTemporalZonedDateTimeValue;
+  Info: TTemporalCalendarDateInfo;
+begin
+  Zdt := AsZonedDateTime(AThisValue, 'get ZonedDateTime.eraYear');
+  Info := CalendarInfoForZonedDateTime(Zdt, 'get ZonedDateTime.eraYear');
+  if not Info.HasEra then
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  Result := TGocciaNumberLiteralValue.Create(Info.EraYear);
+end;
+
 function TGocciaTemporalZonedDateTimeValue.GetYear(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Zdt: TGocciaTemporalZonedDateTimeValue;
-  LYear, LMonth, LDay, LHour, LMinute, LSecond, LMs, LUs, LNs: Integer;
 begin
   Zdt := AsZonedDateTime(AThisValue, 'get ZonedDateTime.year');
-  ComputeLocalComponents(Zdt, LYear, LMonth, LDay, LHour, LMinute, LSecond, LMs, LUs, LNs);
-  Result := TGocciaNumberLiteralValue.Create(LYear);
+  Result := TGocciaNumberLiteralValue.Create(
+    CalendarInfoForZonedDateTime(Zdt, 'get ZonedDateTime.year').Date.Year);
 end;
 
 function TGocciaTemporalZonedDateTimeValue.GetMonth(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Zdt: TGocciaTemporalZonedDateTimeValue;
-  LYear, LMonth, LDay, LHour, LMinute, LSecond, LMs, LUs, LNs: Integer;
 begin
   Zdt := AsZonedDateTime(AThisValue, 'get ZonedDateTime.month');
-  ComputeLocalComponents(Zdt, LYear, LMonth, LDay, LHour, LMinute, LSecond, LMs, LUs, LNs);
-  Result := TGocciaNumberLiteralValue.Create(LMonth);
+  Result := TGocciaNumberLiteralValue.Create(
+    CalendarInfoForZonedDateTime(Zdt, 'get ZonedDateTime.month').Date.Month);
 end;
 
 function TGocciaTemporalZonedDateTimeValue.GetMonthCode(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Zdt: TGocciaTemporalZonedDateTimeValue;
-  LYear, LMonth, LDay, LHour, LMinute, LSecond, LMs, LUs, LNs: Integer;
 begin
   Zdt := AsZonedDateTime(AThisValue, 'get ZonedDateTime.monthCode');
-  ComputeLocalComponents(Zdt, LYear, LMonth, LDay, LHour, LMinute, LSecond, LMs, LUs, LNs);
-  Result := TGocciaStringLiteralValue.Create('M' + PadTwo(LMonth));
+  Result := TGocciaStringLiteralValue.Create(
+    CalendarInfoForZonedDateTime(Zdt, 'get ZonedDateTime.monthCode').MonthCode);
 end;
 
 function TGocciaTemporalZonedDateTimeValue.GetDay(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Zdt: TGocciaTemporalZonedDateTimeValue;
   LYear, LMonth, LDay, LHour, LMinute, LSecond, LMs, LUs, LNs: Integer;
+  Day: Integer;
 begin
   Zdt := AsZonedDateTime(AThisValue, 'get ZonedDateTime.day');
-  ComputeLocalComponents(Zdt, LYear, LMonth, LDay, LHour, LMinute, LSecond, LMs, LUs, LNs);
-  Result := TGocciaNumberLiteralValue.Create(LDay);
+  ComputeLocalComponents(Zdt, LYear, LMonth, LDay, LHour, LMinute, LSecond,
+    LMs, LUs, LNs);
+  if not TryGetCalendarDateDay(Zdt.FCalendarId, LYear, LMonth, LDay, Day) then
+    ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['date-time',
+      'get ZonedDateTime.day']), SSuggestTemporalDateRange);
+  Result := TGocciaNumberLiteralValue.Create(Day);
 end;
 
 function TGocciaTemporalZonedDateTimeValue.GetDayOfWeek(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Zdt: TGocciaTemporalZonedDateTimeValue;
-  LYear, LMonth, LDay, LHour, LMinute, LSecond, LMs, LUs, LNs: Integer;
 begin
   Zdt := AsZonedDateTime(AThisValue, 'get ZonedDateTime.dayOfWeek');
-  ComputeLocalComponents(Zdt, LYear, LMonth, LDay, LHour, LMinute, LSecond, LMs, LUs, LNs);
-  Result := TGocciaNumberLiteralValue.Create(Goccia.Temporal.Utils.DayOfWeek(LYear, LMonth, LDay));
+  Result := TGocciaNumberLiteralValue.Create(
+    CalendarInfoForZonedDateTime(Zdt, 'get ZonedDateTime.dayOfWeek').DayOfWeek);
 end;
 
 function TGocciaTemporalZonedDateTimeValue.GetDayOfYear(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Zdt: TGocciaTemporalZonedDateTimeValue;
-  LYear, LMonth, LDay, LHour, LMinute, LSecond, LMs, LUs, LNs: Integer;
 begin
   Zdt := AsZonedDateTime(AThisValue, 'get ZonedDateTime.dayOfYear');
-  ComputeLocalComponents(Zdt, LYear, LMonth, LDay, LHour, LMinute, LSecond, LMs, LUs, LNs);
-  Result := TGocciaNumberLiteralValue.Create(Goccia.Temporal.Utils.DayOfYear(LYear, LMonth, LDay));
+  Result := TGocciaNumberLiteralValue.Create(
+    CalendarInfoForZonedDateTime(Zdt, 'get ZonedDateTime.dayOfYear').DayOfYear);
 end;
 
 function TGocciaTemporalZonedDateTimeValue.GetWeekOfYear(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -1558,6 +2218,8 @@ var
   LYear, LMonth, LDay, LHour, LMinute, LSecond, LMs, LUs, LNs: Integer;
 begin
   Zdt := AsZonedDateTime(AThisValue, 'get ZonedDateTime.weekOfYear');
+  if Zdt.FCalendarId <> 'iso8601' then
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
   ComputeLocalComponents(Zdt, LYear, LMonth, LDay, LHour, LMinute, LSecond, LMs, LUs, LNs);
   Result := TGocciaNumberLiteralValue.Create(Goccia.Temporal.Utils.WeekOfYear(LYear, LMonth, LDay));
 end;
@@ -1568,6 +2230,8 @@ var
   LYear, LMonth, LDay, LHour, LMinute, LSecond, LMs, LUs, LNs: Integer;
 begin
   Zdt := AsZonedDateTime(AThisValue, 'get ZonedDateTime.yearOfWeek');
+  if Zdt.FCalendarId <> 'iso8601' then
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
   ComputeLocalComponents(Zdt, LYear, LMonth, LDay, LHour, LMinute, LSecond, LMs, LUs, LNs);
   Result := TGocciaNumberLiteralValue.Create(Goccia.Temporal.Utils.YearOfWeek(LYear, LMonth, LDay));
 end;
@@ -1582,36 +2246,42 @@ function TGocciaTemporalZonedDateTimeValue.GetDaysInMonth(const AArgs: TGocciaAr
 var
   Zdt: TGocciaTemporalZonedDateTimeValue;
   LYear, LMonth, LDay, LHour, LMinute, LSecond, LMs, LUs, LNs: Integer;
+  DaysInMonth: Integer;
 begin
   Zdt := AsZonedDateTime(AThisValue, 'get ZonedDateTime.daysInMonth');
-  ComputeLocalComponents(Zdt, LYear, LMonth, LDay, LHour, LMinute, LSecond, LMs, LUs, LNs);
-  Result := TGocciaNumberLiteralValue.Create(Goccia.Temporal.Utils.DaysInMonth(LYear, LMonth));
+  ComputeLocalComponents(Zdt, LYear, LMonth, LDay, LHour, LMinute, LSecond,
+    LMs, LUs, LNs);
+  if not TryGetCalendarDateDaysInMonth(Zdt.FCalendarId, LYear, LMonth, LDay,
+    DaysInMonth) then
+    ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['date-time',
+      'get ZonedDateTime.daysInMonth']), SSuggestTemporalDateRange);
+  Result := TGocciaNumberLiteralValue.Create(DaysInMonth);
 end;
 
 function TGocciaTemporalZonedDateTimeValue.GetDaysInYear(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Zdt: TGocciaTemporalZonedDateTimeValue;
-  LYear, LMonth, LDay, LHour, LMinute, LSecond, LMs, LUs, LNs: Integer;
 begin
   Zdt := AsZonedDateTime(AThisValue, 'get ZonedDateTime.daysInYear');
-  ComputeLocalComponents(Zdt, LYear, LMonth, LDay, LHour, LMinute, LSecond, LMs, LUs, LNs);
-  Result := TGocciaNumberLiteralValue.Create(Goccia.Temporal.Utils.DaysInYear(LYear));
+  Result := TGocciaNumberLiteralValue.Create(
+    CalendarInfoForZonedDateTime(Zdt, 'get ZonedDateTime.daysInYear').DaysInYear);
 end;
 
 function TGocciaTemporalZonedDateTimeValue.GetMonthsInYear(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Zdt: TGocciaTemporalZonedDateTimeValue;
 begin
-  AsZonedDateTime(AThisValue, 'get ZonedDateTime.monthsInYear');
-  Result := TGocciaNumberLiteralValue.Create(MONTHS_PER_YEAR);
+  Zdt := AsZonedDateTime(AThisValue, 'get ZonedDateTime.monthsInYear');
+  Result := TGocciaNumberLiteralValue.Create(
+    CalendarInfoForZonedDateTime(Zdt, 'get ZonedDateTime.monthsInYear').MonthsInYear);
 end;
 
 function TGocciaTemporalZonedDateTimeValue.GetInLeapYear(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Zdt: TGocciaTemporalZonedDateTimeValue;
-  LYear, LMonth, LDay, LHour, LMinute, LSecond, LMs, LUs, LNs: Integer;
 begin
   Zdt := AsZonedDateTime(AThisValue, 'get ZonedDateTime.inLeapYear');
-  ComputeLocalComponents(Zdt, LYear, LMonth, LDay, LHour, LMinute, LSecond, LMs, LUs, LNs);
-  if Goccia.Temporal.Utils.IsLeapYear(LYear) then
+  if CalendarInfoForZonedDateTime(Zdt, 'get ZonedDateTime.inLeapYear').InLeapYear then
     Result := TGocciaBooleanLiteralValue.TrueValue
   else
     Result := TGocciaBooleanLiteralValue.FalseValue;
@@ -1626,9 +2296,14 @@ var
 begin
   Zdt := AsZonedDateTime(AThisValue, 'get ZonedDateTime.hoursInDay');
   ComputeLocalComponents(Zdt, LYear, LMonth, LDay, LHour, LMinute, LSecond, LMs, LUs, LNs);
-  StartOfDayMs := LocalToEpochMs(LYear, LMonth, LDay, 0, 0, 0, 0, Zdt.FTimeZone);
+  StartOfDayMs := StartOfDayToEpochMilliseconds(LYear, LMonth, LDay,
+    Zdt.FTimeZone);
+  ValidateZonedDateTimeEpoch(StartOfDayMs, 0, 'get ZonedDateTime.hoursInDay');
   NextDayRec := AddDaysToDate(LYear, LMonth, LDay, 1);
-  StartOfNextDayMs := LocalToEpochMs(NextDayRec.Year, NextDayRec.Month, NextDayRec.Day, 0, 0, 0, 0, Zdt.FTimeZone);
+  StartOfNextDayMs := StartOfDayToEpochMilliseconds(NextDayRec.Year,
+    NextDayRec.Month, NextDayRec.Day, Zdt.FTimeZone);
+  ValidateZonedDateTimeEpoch(StartOfNextDayMs, 0,
+    'get ZonedDateTime.hoursInDay');
   Result := TGocciaNumberLiteralValue.Create((StartOfNextDayMs - StartOfDayMs) / 3600000);
 end;
 
@@ -1698,7 +2373,8 @@ var
   OffsetSeconds: Integer;
 begin
   Zdt := AsZonedDateTime(AThisValue, 'get ZonedDateTime.offset');
-  OffsetSeconds := GetUtcOffsetSeconds(Zdt.FTimeZone, Zdt.FEpochMilliseconds div MILLISECONDS_PER_SECOND);
+  OffsetSeconds := GetUtcOffsetSeconds(Zdt.FTimeZone,
+    EpochMillisecondsToSeconds(Zdt.FEpochMilliseconds));
   Result := TGocciaStringLiteralValue.Create(FormatOffsetString(OffsetSeconds));
 end;
 
@@ -1708,7 +2384,8 @@ var
   OffsetSeconds: Integer;
 begin
   Zdt := AsZonedDateTime(AThisValue, 'get ZonedDateTime.offsetNanoseconds');
-  OffsetSeconds := GetUtcOffsetSeconds(Zdt.FTimeZone, Zdt.FEpochMilliseconds div MILLISECONDS_PER_SECOND);
+  OffsetSeconds := GetUtcOffsetSeconds(Zdt.FTimeZone,
+    EpochMillisecondsToSeconds(Zdt.FEpochMilliseconds));
   Result := TGocciaNumberLiteralValue.Create(Int64(OffsetSeconds) * NANOSECONDS_PER_SECOND);
 end;
 
@@ -1736,20 +2413,42 @@ function TGocciaTemporalZonedDateTimeValue.ZonedDateTimeWith(const AArgs: TGocci
 var
   Zdt: TGocciaTemporalZonedDateTimeValue;
   Obj: TGocciaObjectValue;
-  V: TGocciaValue;
+  V, VCalendar, VTimeZone, VYear, VMonth, VMonthCode, VDay, VEra,
+  VEraYear, VHour, VMicrosecond, VMillisecond, VMinute, VNanosecond,
+  VOffset, VSecond: TGocciaValue;
+  DateRec: TTemporalDateRecord;
+  NewTime: TTemporalTimeRecord;
+  Info: TTemporalCalendarDateInfo;
   LYear, LMonth, LDay, LHour, LMinute, LSecond, LMs, LUs, LNs: Integer;
-  NewYear, NewMonth, NewDay, NewHour, NewMinute, NewSecond, NewMs, NewUs, NewNs: Integer;
+  NewYear, NewMonth, NewDay, NewHour, NewMinute, NewSecond, NewMs, NewUs,
+  NewNs, SuppliedMonth: Integer;
+  MonthCodeStr, OffsetStr: string;
+  HasMonth, HasMonthCode, HasOffset, HasRecognizedField, IsLeapMonth,
+  UseMonthCode: Boolean;
+  OffsetHasUTCDesignator, OffsetHasSubMinuteSyntax: Boolean;
+  OffsetSeconds: Integer;
   NewEpochMs: Int64;
+  Overflow: TTemporalOverflow;
+  OffsetOption: TTemporalOffsetOption;
+  Disambiguation: TTemporalDisambiguationOption;
+  OptionsObj: TGocciaObjectValue;
 
-  function GetFieldOr(const AName: string; const ADefault: Integer): Integer;
+  function GetWithOffsetOption(const AOptions: TGocciaObjectValue): TTemporalOffsetOption;
   var
-    Val: TGocciaValue;
+    Value: string;
   begin
-    Val := Obj.GetProperty(AName);
-    if (Val = nil) or (Val is TGocciaUndefinedLiteralValue) then
-      Result := ADefault
+    Value := GetOptionString(AOptions, 'offset', 'prefer');
+    if Value = 'prefer' then
+      Result := tooPrefer
+    else if Value = 'use' then
+      Result := tooUse
+    else if Value = 'ignore' then
+      Result := tooIgnore
+    else if Value = 'reject' then
+      Result := tooReject
     else
-      Result := ToIntegerWithTruncationValue(Val);
+      ThrowRangeError('ZonedDateTime.prototype.with invalid offset option: ' + Value,
+        SSuggestTemporalRoundArg);
   end;
 
 begin
@@ -1757,22 +2456,204 @@ begin
   V := AArgs.GetElement(0);
   if not (V is TGocciaObjectValue) then
     ThrowTypeError(Format(SErrorTemporalWithRequiresObject, ['ZonedDateTime']), SSuggestTemporalWithObject);
+  if (V is TGocciaTemporalPlainDateValue) or
+     (V is TGocciaTemporalPlainDateTimeValue) or
+     (V is TGocciaTemporalPlainMonthDayValue) or
+     (V is TGocciaTemporalPlainTimeValue) or
+     (V is TGocciaTemporalPlainYearMonthValue) or
+     (V is TGocciaTemporalZonedDateTimeValue) then
+    ThrowTypeError(Format(SErrorTemporalWithRequiresObject, ['ZonedDateTime']),
+      SSuggestTemporalWithObject);
   Obj := TGocciaObjectValue(V);
 
   ComputeLocalComponents(Zdt, LYear, LMonth, LDay, LHour, LMinute, LSecond, LMs, LUs, LNs);
+  Info := CalendarInfoForZonedDateTime(Zdt, 'ZonedDateTime.prototype.with');
 
-  NewYear := GetFieldOr('year', LYear);
-  NewMonth := GetFieldOr('month', LMonth);
-  NewDay := GetFieldOr('day', LDay);
-  NewHour := GetFieldOr('hour', LHour);
-  NewMinute := GetFieldOr('minute', LMinute);
-  NewSecond := GetFieldOr('second', LSecond);
-  NewMs := GetFieldOr('millisecond', LMs);
-  NewUs := GetFieldOr('microsecond', LUs);
-  NewNs := GetFieldOr('nanosecond', LNs);
+  VCalendar := Obj.GetProperty(PROPERTY_CALENDAR);
+  if not IsUndefinedValue(VCalendar) then
+    ThrowTypeError('ZonedDateTime.prototype.with does not accept calendar',
+      SSuggestTemporalWithObject);
+  VTimeZone := Obj.GetProperty(PROPERTY_TIME_ZONE);
+  if not IsUndefinedValue(VTimeZone) then
+    ThrowTypeError('ZonedDateTime.prototype.with does not accept timeZone',
+      SSuggestTemporalWithObject);
 
-  NewEpochMs := LocalToEpochMs(NewYear, NewMonth, NewDay, NewHour, NewMinute, NewSecond, NewMs, Zdt.FTimeZone);
-  Result := TGocciaTemporalZonedDateTimeValue.Create(NewEpochMs, NewUs * 1000 + NewNs, Zdt.FTimeZone);
+  VDay := Obj.GetProperty(PROPERTY_DAY);
+  if not IsUndefinedValue(VDay) then
+    NewDay := ToIntegerWithTruncationValue(VDay)
+  else
+    NewDay := Info.Date.Day;
+  HasRecognizedField := not IsUndefinedValue(VDay);
+
+  VHour := Obj.GetProperty('hour');
+  if not IsUndefinedValue(VHour) then
+    NewHour := ToIntegerWithTruncationValue(VHour)
+  else
+    NewHour := LHour;
+  HasRecognizedField := HasRecognizedField or not IsUndefinedValue(VHour);
+
+  VMicrosecond := Obj.GetProperty('microsecond');
+  if not IsUndefinedValue(VMicrosecond) then
+    NewUs := ToIntegerWithTruncationValue(VMicrosecond)
+  else
+    NewUs := LUs;
+  HasRecognizedField := HasRecognizedField or not IsUndefinedValue(VMicrosecond);
+
+  VMillisecond := Obj.GetProperty('millisecond');
+  if not IsUndefinedValue(VMillisecond) then
+    NewMs := ToIntegerWithTruncationValue(VMillisecond)
+  else
+    NewMs := LMs;
+  HasRecognizedField := HasRecognizedField or not IsUndefinedValue(VMillisecond);
+
+  VMinute := Obj.GetProperty('minute');
+  if not IsUndefinedValue(VMinute) then
+    NewMinute := ToIntegerWithTruncationValue(VMinute)
+  else
+    NewMinute := LMinute;
+  HasRecognizedField := HasRecognizedField or not IsUndefinedValue(VMinute);
+
+  VMonth := Obj.GetProperty(PROPERTY_MONTH);
+  HasMonth := not IsUndefinedValue(VMonth);
+  if HasMonth then
+  begin
+    NewMonth := ToIntegerWithTruncationValue(VMonth);
+    SuppliedMonth := NewMonth;
+  end
+  else
+  begin
+    NewMonth := Info.Date.Month;
+    SuppliedMonth := 0;
+  end;
+  HasRecognizedField := HasRecognizedField or HasMonth;
+
+  VMonthCode := Obj.GetProperty(PROPERTY_MONTH_CODE);
+  HasMonthCode := not IsUndefinedValue(VMonthCode);
+  MonthCodeStr := '';
+  if HasMonthCode then
+    MonthCodeStr := MonthCodeStringFromProperty(VMonthCode,
+      'ZonedDateTime.prototype.with');
+  HasRecognizedField := HasRecognizedField or HasMonthCode;
+
+  VNanosecond := Obj.GetProperty('nanosecond');
+  if not IsUndefinedValue(VNanosecond) then
+    NewNs := ToIntegerWithTruncationValue(VNanosecond)
+  else
+    NewNs := LNs;
+  HasRecognizedField := HasRecognizedField or not IsUndefinedValue(VNanosecond);
+
+  VOffset := Obj.GetProperty(PROPERTY_OFFSET);
+  HasOffset := not IsUndefinedValue(VOffset);
+  OffsetHasSubMinuteSyntax := False;
+  if HasOffset then
+    OffsetStr := OffsetStringFromProperty(VOffset, 'ZonedDateTime.prototype.with')
+  else
+    OffsetSeconds := 0;
+  HasRecognizedField := HasRecognizedField or HasOffset;
+
+  VSecond := Obj.GetProperty('second');
+  if not IsUndefinedValue(VSecond) then
+    NewSecond := ToIntegerWithTruncationValue(VSecond)
+  else
+    NewSecond := LSecond;
+  HasRecognizedField := HasRecognizedField or not IsUndefinedValue(VSecond);
+
+  VYear := Obj.GetProperty(PROPERTY_YEAR);
+  if not IsUndefinedValue(VYear) then
+    NewYear := ToIntegerWithTruncationValue(VYear)
+  else
+    NewYear := Info.Date.Year;
+  HasRecognizedField := HasRecognizedField or not IsUndefinedValue(VYear);
+
+  if (Zdt.FCalendarId <> 'iso8601') and IsUndefinedValue(VYear) then
+  begin
+    VEra := Obj.GetProperty('era');
+    VEraYear := Obj.GetProperty('eraYear');
+    HasRecognizedField := HasRecognizedField or not IsUndefinedValue(VEra) or
+      not IsUndefinedValue(VEraYear);
+    if (not IsUndefinedValue(VEra)) or (not IsUndefinedValue(VEraYear)) then
+    begin
+      if IsUndefinedValue(VEra) or IsUndefinedValue(VEraYear) or
+         not TryCalendarYearFromEra(Zdt.FCalendarId, VEra.ToStringLiteral.Value,
+           ToIntegerWithTruncationValue(VEraYear), NewYear) then
+        ThrowTypeError('ZonedDateTime.prototype.with requires era and eraYear together',
+          SSuggestTemporalFromArg);
+    end;
+  end;
+
+  if not HasRecognizedField then
+    ThrowTypeError(Format(SErrorTemporalWithRequiresObject, ['ZonedDateTime']),
+      SSuggestTemporalWithObject);
+  if (HasMonth and (SuppliedMonth < 0)) or (NewDay < 0) then
+    ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['ZonedDateTime',
+      'ZonedDateTime.prototype.with']), SSuggestTemporalDateRange);
+
+  OptionsObj := RequireOptionsObject(AArgs.GetElement(1),
+    'ZonedDateTime.prototype.with');
+  Disambiguation := GetDisambiguationOption(OptionsObj,
+    'ZonedDateTime.prototype.with');
+  OffsetOption := GetWithOffsetOption(OptionsObj);
+  Overflow := GetOverflowOption(OptionsObj);
+
+  if HasOffset and
+     ((not ParseZonedDateTimeOffsetPart(OffsetStr, OffsetSeconds,
+       OffsetHasUTCDesignator, OffsetHasSubMinuteSyntax)) or
+      OffsetHasUTCDesignator) then
+    ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['ZonedDateTime',
+      'ZonedDateTime.prototype.with']), SSuggestTemporalISOFormat);
+
+  IsLeapMonth := False;
+  UseMonthCode := False;
+  if HasMonthCode then
+  begin
+    if not TryParseTemporalMonthCode(MonthCodeStr, NewMonth, IsLeapMonth) then
+      ThrowRangeError(SErrorMonthCodeOutOfRange, SSuggestTemporalMonthCode);
+    if (Zdt.FCalendarId = 'iso8601') and (IsLeapMonth or (NewMonth < 1) or
+       (NewMonth > 12)) then
+      ThrowRangeError(SErrorMonthCodeOutOfRange, SSuggestTemporalMonthCode);
+    if HasMonth and (NewMonth <> SuppliedMonth) then
+      ThrowRangeError(SErrorMonthCodeMismatch, SSuggestTemporalMonthCode);
+    UseMonthCode := not HasMonth;
+  end
+  else if (not HasMonth) and (Zdt.FCalendarId <> 'iso8601') then
+  begin
+    MonthCodeStr := Info.MonthCode;
+    if not TryParseTemporalMonthCode(MonthCodeStr, NewMonth, IsLeapMonth) then
+      ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['ZonedDateTime',
+        'ZonedDateTime.prototype.with']), SSuggestTemporalDateRange);
+    UseMonthCode := True;
+  end;
+
+  if not TryResolveCalendarDateToISO(Zdt.FCalendarId, NewYear, NewMonth, NewDay,
+    UseMonthCode, IsLeapMonth, Overflow = toConstrain, DateRec) then
+    ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['ZonedDateTime',
+      'ZonedDateTime.prototype.with']), SSuggestTemporalDateRange);
+
+  if (not HasOffset) and (OffsetOption <> tooIgnore) then
+  begin
+    HasOffset := True;
+    OffsetSeconds := GetUtcOffsetSeconds(Zdt.FTimeZone,
+      EpochMillisecondsToSeconds(Zdt.FEpochMilliseconds));
+  end;
+
+  if Overflow = toConstrain then
+    ConstrainTemporalTimeFields(NewHour, NewMinute, NewSecond, NewMs, NewUs,
+      NewNs)
+  else if not IsValidTime(NewHour, NewMinute, NewSecond, NewMs, NewUs, NewNs) then
+    ThrowRangeError(SErrorInvalidISOTime, SSuggestTemporalDateRange);
+
+  NewTime.Hour := NewHour;
+  NewTime.Minute := NewMinute;
+  NewTime.Second := NewSecond;
+  NewTime.Millisecond := NewMs;
+  NewTime.Microsecond := NewUs;
+  NewTime.Nanosecond := NewNs;
+  NewEpochMs := ApplyOffsetOption(DateRec.Year, DateRec.Month, DateRec.Day,
+    NewTime, Zdt.FTimeZone, HasOffset, OffsetSeconds, False,
+    OffsetHasSubMinuteSyntax, False, OffsetOption, Disambiguation,
+    'ZonedDateTime.prototype.with');
+  Result := TGocciaTemporalZonedDateTimeValue.Create(NewEpochMs, NewUs * 1000 + NewNs, Zdt.FTimeZone,
+    Zdt.FCalendarId);
 end;
 
 // TC39 Temporal §6.3.23 Temporal.ZonedDateTime.prototype.withPlainDate(plainDateLike)
@@ -1794,7 +2675,7 @@ begin
   begin
     if not CoerceToISODate(TGocciaStringLiteralValue(Arg).Value, DateRec) then
       ThrowRangeError(SErrorInvalidDateStringForZDT, SSuggestTemporalISOFormat);
-    PlainDate := TGocciaTemporalPlainDateValue.Create(DateRec.Year, DateRec.Month, DateRec.Day);
+    PlainDate := TGocciaTemporalPlainDateValue.Create(DateRec.Year, DateRec.Month, DateRec.Day, Zdt.FCalendarId);
   end
   else
   begin
@@ -1806,7 +2687,8 @@ begin
 
   NewEpochMs := LocalToEpochMs(PlainDate.Year, PlainDate.Month, PlainDate.Day,
     LHour, LMinute, LSecond, LMs, Zdt.FTimeZone);
-  Result := TGocciaTemporalZonedDateTimeValue.Create(NewEpochMs, LUs * 1000 + LNs, Zdt.FTimeZone);
+  Result := TGocciaTemporalZonedDateTimeValue.Create(NewEpochMs, LUs * 1000 + LNs, Zdt.FTimeZone,
+    Zdt.FCalendarId);
 end;
 
 // TC39 Temporal §6.3.24 Temporal.ZonedDateTime.prototype.withPlainTime([plainTimeLike])
@@ -1814,11 +2696,25 @@ function TGocciaTemporalZonedDateTimeValue.ZonedDateTimeWithPlainTime(const AArg
 var
   Zdt: TGocciaTemporalZonedDateTimeValue;
   Arg: TGocciaValue;
+  Obj: TGocciaObjectValue;
+  V: TGocciaValue;
   PlainTime: TGocciaTemporalPlainTimeValue;
   TimeRec: TTemporalTimeRecord;
   LYear, LMonth, LDay, LHour, LMinute, LSecond, LMs, LUs, LNs: Integer;
   NewHour, NewMinute, NewSecond, NewMs, NewUs, NewNs: Integer;
   NewEpochMs: Int64;
+  Seen: Boolean;
+
+  procedure ReadTimeField(const AName: string; var ATarget: Integer);
+  begin
+    V := Obj.GetProperty(AName);
+    if not IsUndefinedValue(V) then
+    begin
+      ATarget := ToIntegerWithTruncationValue(V);
+      Seen := True;
+    end;
+  end;
+
 begin
   Zdt := AsZonedDateTime(AThisValue, 'ZonedDateTime.prototype.withPlainTime');
   Arg := AArgs.GetElement(0);
@@ -1837,17 +2733,43 @@ begin
     end
     else if Arg is TGocciaStringLiteralValue then
     begin
-      if not CoerceToISOTime(TGocciaStringLiteralValue(Arg).Value, TimeRec) then
+      if not TryParsePlainTimeLikeString(TGocciaStringLiteralValue(Arg).Value, TimeRec) then
         ThrowRangeError(SErrorInvalidTimeStringForZDT, SSuggestTemporalISOFormat);
       NewHour := TimeRec.Hour; NewMinute := TimeRec.Minute; NewSecond := TimeRec.Second;
       NewMs := TimeRec.Millisecond; NewUs := TimeRec.Microsecond; NewNs := TimeRec.Nanosecond;
     end
+    else if Arg is TGocciaObjectValue then
+    begin
+      Obj := TGocciaObjectValue(Arg);
+      Seen := False;
+      ReadTimeField('hour', NewHour);
+      ReadTimeField('microsecond', NewUs);
+      ReadTimeField('millisecond', NewMs);
+      ReadTimeField('minute', NewMinute);
+      ReadTimeField('nanosecond', NewNs);
+      ReadTimeField('second', NewSecond);
+      if not Seen then
+        ThrowTypeError(SErrorZDTWithPlainTimeArg, SSuggestTemporalFromArg);
+      if NewSecond = 60 then
+        NewSecond := 59;
+      if not IsValidTime(NewHour, NewMinute, NewSecond, NewMs, NewUs, NewNs) then
+        ThrowRangeError(SErrorInvalidISOTime, SSuggestTemporalDateRange);
+    end
     else
       ThrowTypeError(SErrorZDTWithPlainTimeArg, SSuggestTemporalFromArg);
+  end
+  else
+  begin
+    NewEpochMs := StartOfDayToEpochMilliseconds(LYear, LMonth, LDay,
+      Zdt.FTimeZone);
+    Result := TGocciaTemporalZonedDateTimeValue.Create(NewEpochMs, 0,
+      Zdt.FTimeZone, Zdt.FCalendarId);
+    Exit;
   end;
 
   NewEpochMs := LocalToEpochMs(LYear, LMonth, LDay, NewHour, NewMinute, NewSecond, NewMs, Zdt.FTimeZone);
-  Result := TGocciaTemporalZonedDateTimeValue.Create(NewEpochMs, NewUs * 1000 + NewNs, Zdt.FTimeZone);
+  Result := TGocciaTemporalZonedDateTimeValue.Create(NewEpochMs, NewUs * 1000 + NewNs, Zdt.FTimeZone,
+    Zdt.FCalendarId);
 end;
 
 // TC39 Temporal §6.3.25 Temporal.ZonedDateTime.prototype.withTimeZone(timeZoneLike)
@@ -1862,14 +2784,34 @@ begin
 
   if (Arg = nil) or (Arg is TGocciaUndefinedLiteralValue) then
     ThrowTypeError(SErrorZDTWithTimeZoneArg, SSuggestTemporalTimezone);
+  if not (Arg is TGocciaStringLiteralValue) then
+    ThrowTypeError(SErrorZDTWithTimeZoneArg, SSuggestTemporalTimezone);
 
-  NewTimeZone := Arg.ToStringLiteral.Value;
+  NewTimeZone := TGocciaStringLiteralValue(Arg).Value;
   if NewTimeZone = '' then
-    ThrowTypeError(SErrorZDTWithTimeZoneNonEmpty, SSuggestTemporalTimezone);
+    ThrowRangeError(SErrorZDTWithTimeZoneNonEmpty, SSuggestTemporalTimezone);
+  NewTimeZone := CanonicalizeTimeZoneIdentifier(NewTimeZone);
 
   // Keep the same epoch instant, just change the timezone
   Result := TGocciaTemporalZonedDateTimeValue.Create(
-    Zdt.FEpochMilliseconds, Zdt.FSubMillisecondNanoseconds, NewTimeZone);
+    Zdt.FEpochMilliseconds, Zdt.FSubMillisecondNanoseconds, NewTimeZone, Zdt.FCalendarId);
+end;
+
+// TC39 Temporal §6.3.26 Temporal.ZonedDateTime.prototype.withCalendar(calendarLike)
+function TGocciaTemporalZonedDateTimeValue.ZonedDateTimeWithCalendar(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Zdt: TGocciaTemporalZonedDateTimeValue;
+  Arg: TGocciaValue;
+  CalendarId: string;
+begin
+  Zdt := AsZonedDateTime(AThisValue, 'ZonedDateTime.prototype.withCalendar');
+  Arg := AArgs.GetElement(0);
+  if (Arg = nil) or (Arg is TGocciaUndefinedLiteralValue) then
+    ThrowTypeError('ZonedDateTime.prototype.withCalendar requires a calendar argument', SSuggestTemporalFromArg);
+
+  CalendarId := CalendarFromProperty(Arg);
+  Result := TGocciaTemporalZonedDateTimeValue.Create(
+    Zdt.FEpochMilliseconds, Zdt.FSubMillisecondNanoseconds, Zdt.FTimeZone, CalendarId);
 end;
 
 // TC39 Temporal §6.3.26 Temporal.ZonedDateTime.prototype.add(temporalDurationLike [, options])
@@ -1878,43 +2820,51 @@ var
   Zdt: TGocciaTemporalZonedDateTimeValue;
   Dur: TGocciaTemporalDurationValue;
   LYear, LMonth, LDay, LHour, LMinute, LSecond, LMs, LUs, LNs: Integer;
-  NewYear, NewMonth, NewDay: Integer;
   DateRec: TTemporalDateRecord;
-  ExtraDays: Int64;
-  Balanced: TTemporalTimeRecord;
   NewEpochMs: Int64;
   NewSubMs: Integer;
+  NewEpochNs: TBigInteger;
+  Arg: TGocciaValue;
+  OptionsObj: TGocciaObjectValue;
+  Overflow: TTemporalOverflow;
 begin
   try
   Zdt := AsZonedDateTime(AThisValue, 'ZonedDateTime.prototype.add');
   Dur := CoerceDuration(AArgs.GetElement(0), 'ZonedDateTime.prototype.add');
+  Arg := AArgs.GetElement(1);
+  OptionsObj := RequireOptionsObject(Arg, 'ZonedDateTime.prototype.add');
+  Overflow := GetOverflowOption(OptionsObj);
+
+  if not DurationHasDateUnits(Dur) then
+  begin
+    NewEpochNs := EpochNanosecondsFromParts(Zdt.FEpochMilliseconds,
+      Zdt.FSubMillisecondNanoseconds)
+      .Add(DurationSubDayNanosecondsForZonedDateTime(Dur));
+    SplitEpochNanoseconds(NewEpochNs, NewEpochMs, NewSubMs);
+    Result := TGocciaTemporalZonedDateTimeValue.Create(NewEpochMs, NewSubMs,
+      Zdt.FTimeZone, Zdt.FCalendarId);
+    Exit;
+  end;
 
   // Compute local wall-clock time
   ComputeLocalComponents(Zdt, LYear, LMonth, LDay, LHour, LMinute, LSecond, LMs, LUs, LNs);
 
-  // Balance time with added duration
-  Balanced := BalanceTime(
-    LHour + Dur.Hours, LMinute + Dur.Minutes, LSecond + Dur.Seconds,
-    LMs + Dur.Milliseconds, LUs + Dur.Microseconds,
-    LNs + Dur.Nanoseconds, ExtraDays);
+  if not TryAddCalendarDate(Zdt.FCalendarId, LYear, LMonth, LDay,
+    Dur.Years, Dur.Months, Dur.Weeks, Dur.Days,
+    Overflow = toConstrain, DateRec) then
+    ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['date-time',
+      'ZonedDateTime.prototype.add']), SSuggestTemporalDateRange);
 
-  // Add date components
-  NewYear := LYear + Integer(Dur.Years);
-  NewMonth := LMonth + Integer(Dur.Months);
-  while NewMonth > MONTHS_PER_YEAR do begin Inc(NewYear); Dec(NewMonth, MONTHS_PER_YEAR); end;
-  while NewMonth < 1 do begin Dec(NewYear); Inc(NewMonth, MONTHS_PER_YEAR); end;
-  NewDay := LDay;
-  if NewDay > Goccia.Temporal.Utils.DaysInMonth(NewYear, NewMonth) then
-    NewDay := Goccia.Temporal.Utils.DaysInMonth(NewYear, NewMonth);
-
-  DateRec := AddDaysToDate(NewYear, NewMonth, NewDay, Dur.Weeks * DAYS_PER_WEEK + Dur.Days + ExtraDays);
-
-  // Convert local wall-clock back to epoch
+  // Calendar units are resolved in local time; sub-day units are then exact.
   NewEpochMs := LocalToEpochMs(DateRec.Year, DateRec.Month, DateRec.Day,
-    Balanced.Hour, Balanced.Minute, Balanced.Second, Balanced.Millisecond, Zdt.FTimeZone);
-  NewSubMs := Balanced.Microsecond * 1000 + Balanced.Nanosecond;
+    LHour, LMinute, LSecond, LMs, Zdt.FTimeZone);
+  NewSubMs := LUs * 1000 + LNs;
+  NewEpochNs := EpochNanosecondsFromParts(NewEpochMs, NewSubMs)
+    .Add(DurationSubDayNanosecondsForZonedDateTime(Dur));
+  SplitEpochNanoseconds(NewEpochNs, NewEpochMs, NewSubMs);
 
-  Result := TGocciaTemporalZonedDateTimeValue.Create(NewEpochMs, NewSubMs, Zdt.FTimeZone);
+  Result := TGocciaTemporalZonedDateTimeValue.Create(NewEpochMs, NewSubMs,
+    Zdt.FTimeZone, Zdt.FCalendarId);
   except
     on E: ETemporalDurationInt64Overflow do
       ThrowRangeError(E.Message, SSuggestTemporalDurationRange);
@@ -1931,12 +2881,13 @@ begin
   try
   Dur := CoerceDuration(AArgs.GetElement(0), 'ZonedDateTime.prototype.subtract');
 
-  NegDur := TGocciaTemporalDurationValue.Create(
-    -Dur.Years, -Dur.Months, -Dur.Weeks, -Dur.Days,
-    -Dur.Hours, -Dur.Minutes, -Dur.Seconds,
-    -Dur.Milliseconds, -Dur.Microseconds, -Dur.Nanoseconds);
+  NegDur := TGocciaTemporalDurationValue.CreateFromBigIntegers(
+    Dur.YearsBig.Negate, Dur.MonthsBig.Negate, Dur.WeeksBig.Negate,
+    Dur.DaysBig.Negate, Dur.HoursBig.Negate, Dur.MinutesBig.Negate,
+    Dur.SecondsBig.Negate, Dur.MillisecondsBig.Negate,
+    Dur.MicrosecondsBig.Negate, Dur.NanosecondsBig.Negate);
 
-  NewArgs := TGocciaArgumentsCollection.Create([NegDur]);
+  NewArgs := TGocciaArgumentsCollection.Create([NegDur, AArgs.GetElement(1)]);
   try
     Result := ZonedDateTimeAdd(NewArgs, AThisValue);
   finally
@@ -1953,12 +2904,20 @@ function ZonedDiffToUnits(const ADiffNs: TBigInteger;
 var
   Hours, Minutes, Seconds, Milliseconds, Microseconds, Nanoseconds: TBigInteger;
   Days: Int64;
+
+  function ToFloat64Representable(const AValue: TBigInteger): TBigInteger;
+  begin
+    Result := TBigInteger.FromDouble(AValue.ToDouble);
+  end;
+
 begin
   BalanceTimeDurationToFields(ADiffNs, ALargestUnit,
     Hours, Minutes, Seconds, Milliseconds, Microseconds, Nanoseconds, Days);
   Result := TGocciaTemporalDurationValue.CreateFromBigIntegers(
     TBigInteger.Zero, TBigInteger.Zero, TBigInteger.Zero, TBigInteger.FromInt64(Days),
-    Hours, Minutes, Seconds, Milliseconds, Microseconds, Nanoseconds);
+    ToFloat64Representable(Hours), ToFloat64Representable(Minutes),
+    ToFloat64Representable(Seconds), ToFloat64Representable(Milliseconds),
+    ToFloat64Representable(Microseconds), ToFloat64Representable(Nanoseconds));
 end;
 
 procedure ZeroZonedDateTimeDiffFields(
@@ -1998,18 +2957,35 @@ end;
 
 function GetZonedBoundaryEpochNanoseconds(const AStartYear, AStartMonth,
   AStartDay, AStartHour, AStartMinute, AStartSecond, AStartMillisecond: Integer;
-  const AStartSubMillisecondNanoseconds: Integer; const ATimeZone: string;
-  const AUnit: TTemporalUnit; const AUnitCount: Int64): TBigInteger;
+  const AStartSubMillisecondNanoseconds: Integer; const ACalendarId,
+  ATimeZone: string; const AUnit: TTemporalUnit; const AUnitCount: Int64): TBigInteger;
 var
   BoundaryDate: TTemporalDateRecord;
   BoundaryEpochMs: Int64;
 begin
   case AUnit of
     tuYear:
-      BoundaryDate := AddMonthsToDate(AStartYear, AStartMonth, AStartDay,
-        AUnitCount * MONTHS_PER_YEAR);
+      begin
+        if (ACalendarId <> 'iso8601') and
+           not TryAddCalendarDate(ACalendarId, AStartYear, AStartMonth,
+             AStartDay, AUnitCount, 0, 0, 0, True, BoundaryDate) then
+          ThrowRangeError('Unable to resolve calendar date for ' + ACalendarId,
+            SSuggestTemporalDateRange);
+        if ACalendarId = 'iso8601' then
+          BoundaryDate := AddMonthsToDate(AStartYear, AStartMonth, AStartDay,
+            AUnitCount * MONTHS_PER_YEAR);
+      end;
     tuMonth:
-      BoundaryDate := AddMonthsToDate(AStartYear, AStartMonth, AStartDay, AUnitCount);
+      begin
+        if (ACalendarId <> 'iso8601') and
+           not TryAddCalendarDate(ACalendarId, AStartYear, AStartMonth,
+             AStartDay, 0, AUnitCount, 0, 0, True, BoundaryDate) then
+          ThrowRangeError('Unable to resolve calendar date for ' + ACalendarId,
+            SSuggestTemporalDateRange);
+        if ACalendarId = 'iso8601' then
+          BoundaryDate := AddMonthsToDate(AStartYear, AStartMonth, AStartDay,
+            AUnitCount);
+      end;
     tuWeek:
       BoundaryDate := AddDaysToDate(AStartYear, AStartMonth, AStartDay,
         AUnitCount * DAYS_PER_WEEK);
@@ -2024,6 +3000,8 @@ begin
   BoundaryEpochMs := LocalToEpochMs(BoundaryDate.Year, BoundaryDate.Month,
     BoundaryDate.Day, AStartHour, AStartMinute, AStartSecond,
     AStartMillisecond, ATimeZone);
+  ValidateZonedDateTimeEpoch(BoundaryEpochMs, AStartSubMillisecondNanoseconds,
+    'ZonedDateTime.prototype.until');
   Result := EpochNanosecondsFromParts(BoundaryEpochMs, AStartSubMillisecondNanoseconds);
 end;
 
@@ -2050,6 +3028,7 @@ begin
 end;
 
 function GetWholeCalendarUnitsBetween(
+  const ACalendarId: string;
   const AStartYear, AStartMonth, AStartDay, AStartHour, AStartMinute,
   AStartSecond, AStartMillisecond, AStartMicrosecond, AStartNanosecond: Integer;
   const AEndYear, AEndMonth, AEndDay, AEndHour, AEndMinute, AEndSecond,
@@ -2069,14 +3048,14 @@ begin
   case AUnit of
     tuYear:
     begin
-      CalendarDateUntil(AStartYear, AStartMonth, AStartDay,
+      CalendarDateUntil(ACalendarId, AStartYear, AStartMonth, AStartDay,
         AdjustedEndDate.Year, AdjustedEndDate.Month, AdjustedEndDate.Day,
         tuYear, Years, Months, Weeks, Days);
       Result := Years;
     end;
     tuMonth:
     begin
-      CalendarDateUntil(AStartYear, AStartMonth, AStartDay,
+      CalendarDateUntil(ACalendarId, AStartYear, AStartMonth, AStartDay,
         AdjustedEndDate.Year, AdjustedEndDate.Month, AdjustedEndDate.Day,
         tuMonth, Years, Months, Weeks, Days);
       Result := Months;
@@ -2106,6 +3085,8 @@ var
 begin
   AwayFromZero := AScaledValue + Int64(ASign) * AIncrement;
   Result := AScaledValue;
+  if APosition.IsZero then
+    Exit(AScaledValue);
 
   case AMode of
     rmTrunc:
@@ -2162,10 +3143,31 @@ begin
   end;
 end;
 
+function ZonedDateTimeDiffIsExactAtLargestUnit(const ALargestUnit: TTemporalUnit;
+  const AYears, AMonths, AWeeks, ADays, AHours, AMinutes, ASeconds,
+  AMilliseconds, AMicroseconds, ANanoseconds: Int64): Boolean;
+begin
+  Result := False;
+  case ALargestUnit of
+    tuYear:
+      Result := (AMonths = 0) and (AWeeks = 0) and (ADays = 0);
+    tuMonth:
+      Result := (AWeeks = 0) and (ADays = 0);
+    tuWeek:
+      Result := ADays = 0;
+    tuDay:
+      Result := True;
+  else
+    Exit;
+  end;
+  Result := Result and (AHours = 0) and (AMinutes = 0) and (ASeconds = 0) and
+    (AMilliseconds = 0) and (AMicroseconds = 0) and (ANanoseconds = 0);
+end;
+
 procedure ComputeZonedDateTimeDiffFields(
   const AStartEpochMilliseconds: Int64; const AStartSubMillisecondNanoseconds: Integer;
   const AEndEpochMilliseconds: Int64; const AEndSubMillisecondNanoseconds: Integer;
-  const ATimeZone: string; const ALargestUnit: TTemporalUnit;
+  const ATimeZone, ACalendarId: string; const ALargestUnit: TTemporalUnit;
   out AYears, AMonths, AWeeks, ADays,
       AHours, AMinutes, ASeconds,
       AMilliseconds, AMicroseconds, ANanoseconds: Int64);
@@ -2268,7 +3270,7 @@ begin
     Inc(DayCorrection);
   end;
 
-  CalendarDateUntil(StartYear, StartMonth, StartDay,
+  CalendarDateUntil(ACalendarId, StartYear, StartMonth, StartDay,
     IntermediateDate.Year, IntermediateDate.Month, IntermediateDate.Day,
     ALargestUnit, AYears, AMonths, AWeeks, ADays);
   if RemainderBig.IsZero then Exit;
@@ -2294,7 +3296,7 @@ end;
 procedure RoundZonedDateTimeDiffFields(
   const AStartEpochMilliseconds: Int64; const AStartSubMillisecondNanoseconds: Integer;
   const AEndEpochMilliseconds: Int64; const AEndSubMillisecondNanoseconds: Integer;
-  const ATimeZone: string; const ALargestUnit, ASmallestUnit: TTemporalUnit;
+  const ATimeZone, ACalendarId: string; const ALargestUnit, ASmallestUnit: TTemporalUnit;
   const AMode: TTemporalRoundingMode; const AIncrement: Integer;
   out AYears, AMonths, AWeeks, ADays,
       AHours, AMinutes, ASeconds,
@@ -2309,7 +3311,7 @@ var
   RoundedEpochMs: Int64;
   RoundedSubMillisecondNs: Integer;
   Sign: Integer;
-  WholeUnits, ScaledUnits, RoundedUnits: Int64;
+  WholeUnits, ScaledUnits, RoundedUnits, LargestUnits: Int64;
 begin
   StartNs := EpochNanosecondsFromParts(AStartEpochMilliseconds,
     AStartSubMillisecondNanoseconds);
@@ -2326,6 +3328,16 @@ begin
     Sign := 1
   else
     Sign := -1;
+
+  ComputeZonedDateTimeDiffFields(AStartEpochMilliseconds,
+    AStartSubMillisecondNanoseconds, AEndEpochMilliseconds,
+    AEndSubMillisecondNanoseconds, ATimeZone, ACalendarId, ALargestUnit,
+    AYears, AMonths, AWeeks, ADays, AHours, AMinutes, ASeconds,
+    AMilliseconds, AMicroseconds, ANanoseconds);
+  if ZonedDateTimeDiffIsExactAtLargestUnit(ALargestUnit, AYears, AMonths,
+    AWeeks, ADays, AHours, AMinutes, ASeconds, AMilliseconds, AMicroseconds,
+    ANanoseconds) then
+    Exit;
 
   if Ord(ASmallestUnit) >= Ord(tuHour) then
   begin
@@ -2345,7 +3357,31 @@ begin
       EndYear, EndMonth, EndDay, EndHour, EndMinute, EndSecond,
       EndMillisecond, EndMicrosecond, EndNanosecond);
 
-    WholeUnits := GetWholeCalendarUnitsBetween(
+    LargestUnits := GetWholeCalendarUnitsBetween(ACalendarId,
+      StartYear, StartMonth, StartDay, StartHour, StartMinute, StartSecond,
+      StartMillisecond, StartMicrosecond, StartNanosecond,
+      EndYear, EndMonth, EndDay, EndHour, EndMinute, EndSecond,
+      EndMillisecond, EndMicrosecond, EndNanosecond, Sign, ALargestUnit);
+    if GetZonedBoundaryEpochNanoseconds(StartYear, StartMonth, StartDay,
+      StartHour, StartMinute, StartSecond, StartMillisecond,
+      AStartSubMillisecondNanoseconds, ACalendarId, ATimeZone, ALargestUnit,
+      LargestUnits).Compare(EndNs) = 0 then
+    begin
+      ZeroZonedDateTimeDiffFields(AYears, AMonths, AWeeks, ADays,
+        AHours, AMinutes, ASeconds, AMilliseconds, AMicroseconds,
+        ANanoseconds);
+      case ALargestUnit of
+        tuYear:  AYears := LargestUnits;
+        tuMonth: AMonths := LargestUnits;
+        tuWeek:  AWeeks := LargestUnits;
+        tuDay:   ADays := LargestUnits;
+      else
+        ;
+      end;
+      Exit;
+    end;
+
+    WholeUnits := GetWholeCalendarUnitsBetween(ACalendarId,
       StartYear, StartMonth, StartDay, StartHour, StartMinute, StartSecond,
       StartMillisecond, StartMicrosecond, StartNanosecond,
       EndYear, EndMonth, EndDay, EndHour, EndMinute, EndSecond,
@@ -2357,26 +3393,46 @@ begin
 
     WalkNs := GetZonedBoundaryEpochNanoseconds(StartYear, StartMonth, StartDay,
       StartHour, StartMinute, StartSecond, StartMillisecond,
-      AStartSubMillisecondNanoseconds, ATimeZone, ASmallestUnit, ScaledUnits);
+      AStartSubMillisecondNanoseconds, ACalendarId, ATimeZone, ASmallestUnit,
+      ScaledUnits);
     NextNs := GetZonedBoundaryEpochNanoseconds(StartYear, StartMonth, StartDay,
       StartHour, StartMinute, StartSecond, StartMillisecond,
-      AStartSubMillisecondNanoseconds, ATimeZone, ASmallestUnit,
+      AStartSubMillisecondNanoseconds, ACalendarId, ATimeZone, ASmallestUnit,
       ScaledUnits + Int64(Sign) * AIncrement);
     PositionNs := EndNs.Subtract(WalkNs).AbsValue;
     PeriodNs := NextNs.Subtract(WalkNs).AbsValue;
     RoundedUnits := SelectRoundedCalendarUnits(ScaledUnits, AIncrement, Sign,
       PositionNs, PeriodNs, AMode);
+    if ALargestUnit = ASmallestUnit then
+    begin
+      ZeroZonedDateTimeDiffFields(AYears, AMonths, AWeeks, ADays,
+        AHours, AMinutes, ASeconds, AMilliseconds, AMicroseconds,
+        ANanoseconds);
+      case ASmallestUnit of
+        tuYear:  AYears := RoundedUnits;
+        tuMonth: AMonths := RoundedUnits;
+        tuWeek:  AWeeks := RoundedUnits;
+        tuDay:   ADays := RoundedUnits;
+      else
+        ;
+      end;
+      Exit;
+    end;
     RoundedEndNs := GetZonedBoundaryEpochNanoseconds(StartYear, StartMonth,
       StartDay, StartHour, StartMinute, StartSecond, StartMillisecond,
-      AStartSubMillisecondNanoseconds, ATimeZone, ASmallestUnit, RoundedUnits);
+      AStartSubMillisecondNanoseconds, ACalendarId, ATimeZone, ASmallestUnit,
+      RoundedUnits);
   end;
 
   SplitEpochNanoseconds(RoundedEndNs, RoundedEpochMs, RoundedSubMillisecondNs);
   ComputeZonedDateTimeDiffFields(AStartEpochMilliseconds,
     AStartSubMillisecondNanoseconds, RoundedEpochMs, RoundedSubMillisecondNs,
-    ATimeZone, ALargestUnit, AYears, AMonths, AWeeks, ADays,
+    ATimeZone, ACalendarId, ALargestUnit, AYears, AMonths, AWeeks, ADays,
     AHours, AMinutes, ASeconds, AMilliseconds, AMicroseconds, ANanoseconds);
 end;
+
+procedure ValidateZonedDateTimeDiffRoundingIncrement(const AIncrement: Integer;
+  const ASmallestUnit, ALargestUnit: TTemporalUnit); forward;
 
 // TC39 Temporal §6.3.28 Temporal.ZonedDateTime.prototype.until(other [, options])
 function TGocciaTemporalZonedDateTimeValue.ZonedDateTimeUntil(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -2394,28 +3450,41 @@ begin
   Other := CoerceTemporalZonedDateTime(AArgs.GetElement(0), 'ZonedDateTime.prototype.until');
 
   OptionsObj := GetDiffOptions(AArgs, 1);
-  LargestUnit := GetLargestUnit(OptionsObj, tuHour);
-  if LargestUnit = tuAuto then LargestUnit := tuHour;
-
+  LargestUnit := GetLargestUnit(OptionsObj, tuAuto);
+  RIncrement := GetRoundingIncrement(OptionsObj, 1);
+  RMode := GetRoundingMode(OptionsObj, rmTrunc);
   SmallestUnit := GetSmallestUnit(OptionsObj, tuNanosecond);
+  if LargestUnit = tuAuto then
+  begin
+    if Ord(tuHour) > Ord(SmallestUnit) then
+      LargestUnit := SmallestUnit
+    else
+      LargestUnit := tuHour;
+  end;
   if Ord(LargestUnit) > Ord(SmallestUnit) then
     ThrowRangeError(SErrorDurationRoundLargestSmallerThanSmallest, SSuggestTemporalRoundArg);
-  RMode := GetRoundingMode(OptionsObj, rmTrunc);
-  RIncrement := GetRoundingIncrement(OptionsObj, 1);
-  ValidateRoundingIncrement(RIncrement, SmallestUnit, LargestUnit);
+  ValidateZonedDateTimeDiffRoundingIncrement(RIncrement, SmallestUnit,
+    LargestUnit);
+
+  if Zdt.FCalendarId <> Other.FCalendarId then
+    ThrowRangeError('Temporal.ZonedDateTime calendars must match',
+      SSuggestTemporalDateRange);
 
   if LargestUnit in [tuYear, tuMonth, tuWeek, tuDay] then
   begin
+    if not TimeZoneIdentifiersEqual(Zdt.FTimeZone, Other.FTimeZone) then
+      ThrowRangeError('Temporal.ZonedDateTime time zones must match',
+        SSuggestTemporalTimezone);
     if (SmallestUnit <> tuNanosecond) or (RIncrement <> 1) then
       RoundZonedDateTimeDiffFields(Zdt.FEpochMilliseconds,
         Zdt.FSubMillisecondNanoseconds, Other.FEpochMilliseconds,
-        Other.FSubMillisecondNanoseconds, Zdt.FTimeZone, LargestUnit,
+        Other.FSubMillisecondNanoseconds, Zdt.FTimeZone, Zdt.FCalendarId, LargestUnit,
         SmallestUnit, RMode, RIncrement, Years, Months, Weeks, Days,
         RH, RM, RS, RMs, RUs, RNs)
     else
       ComputeZonedDateTimeDiffFields(Zdt.FEpochMilliseconds,
         Zdt.FSubMillisecondNanoseconds, Other.FEpochMilliseconds,
-        Other.FSubMillisecondNanoseconds, Zdt.FTimeZone, LargestUnit,
+        Other.FSubMillisecondNanoseconds, Zdt.FTimeZone, Zdt.FCalendarId, LargestUnit,
         Years, Months, Weeks, Days, RH, RM, RS, RMs, RUs, RNs);
 
     Result := TGocciaTemporalDurationValue.Create(Years, Months, Weeks, Days,
@@ -2438,6 +3507,18 @@ begin
 end;
 
 // TC39 Temporal §6.3.29 Temporal.ZonedDateTime.prototype.since(other [, options])
+function InvertSinceRoundingMode(const AMode: TTemporalRoundingMode): TTemporalRoundingMode;
+begin
+  case AMode of
+    rmCeil: Result := rmFloor;
+    rmFloor: Result := rmCeil;
+    rmHalfCeil: Result := rmHalfFloor;
+    rmHalfFloor: Result := rmHalfCeil;
+  else
+    Result := AMode;
+  end;
+end;
+
 function TGocciaTemporalZonedDateTimeValue.ZonedDateTimeSince(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Zdt, Other: TGocciaTemporalZonedDateTimeValue;
@@ -2453,38 +3534,53 @@ begin
   Other := CoerceTemporalZonedDateTime(AArgs.GetElement(0), 'ZonedDateTime.prototype.since');
 
   OptionsObj := GetDiffOptions(AArgs, 1);
-  LargestUnit := GetLargestUnit(OptionsObj, tuHour);
-  if LargestUnit = tuAuto then LargestUnit := tuHour;
-
+  LargestUnit := GetLargestUnit(OptionsObj, tuAuto);
+  RIncrement := GetRoundingIncrement(OptionsObj, 1);
+  RMode := GetRoundingMode(OptionsObj, rmTrunc);
+  RMode := InvertSinceRoundingMode(RMode);
   SmallestUnit := GetSmallestUnit(OptionsObj, tuNanosecond);
+  if LargestUnit = tuAuto then
+  begin
+    if Ord(tuHour) > Ord(SmallestUnit) then
+      LargestUnit := SmallestUnit
+    else
+      LargestUnit := tuHour;
+  end;
   if Ord(LargestUnit) > Ord(SmallestUnit) then
     ThrowRangeError(SErrorDurationRoundLargestSmallerThanSmallest, SSuggestTemporalRoundArg);
-  RMode := GetRoundingMode(OptionsObj, rmTrunc);
-  RIncrement := GetRoundingIncrement(OptionsObj, 1);
-  ValidateRoundingIncrement(RIncrement, SmallestUnit, LargestUnit);
+  ValidateZonedDateTimeDiffRoundingIncrement(RIncrement, SmallestUnit,
+    LargestUnit);
+
+  if Zdt.FCalendarId <> Other.FCalendarId then
+    ThrowRangeError('Temporal.ZonedDateTime calendars must match',
+      SSuggestTemporalDateRange);
 
   if LargestUnit in [tuYear, tuMonth, tuWeek, tuDay] then
   begin
+    if not TimeZoneIdentifiersEqual(Zdt.FTimeZone, Other.FTimeZone) then
+      ThrowRangeError('Temporal.ZonedDateTime time zones must match',
+        SSuggestTemporalTimezone);
     if (SmallestUnit <> tuNanosecond) or (RIncrement <> 1) then
-      RoundZonedDateTimeDiffFields(Other.FEpochMilliseconds,
-        Other.FSubMillisecondNanoseconds, Zdt.FEpochMilliseconds,
-        Zdt.FSubMillisecondNanoseconds, Other.FTimeZone, LargestUnit,
+      RoundZonedDateTimeDiffFields(Zdt.FEpochMilliseconds,
+        Zdt.FSubMillisecondNanoseconds, Other.FEpochMilliseconds,
+        Other.FSubMillisecondNanoseconds, Zdt.FTimeZone, Zdt.FCalendarId, LargestUnit,
         SmallestUnit, RMode, RIncrement, Years, Months, Weeks, Days,
         RH, RM, RS, RMs, RUs, RNs)
     else
-      ComputeZonedDateTimeDiffFields(Other.FEpochMilliseconds,
-        Other.FSubMillisecondNanoseconds, Zdt.FEpochMilliseconds,
-        Zdt.FSubMillisecondNanoseconds, Other.FTimeZone, LargestUnit,
+      ComputeZonedDateTimeDiffFields(Zdt.FEpochMilliseconds,
+        Zdt.FSubMillisecondNanoseconds, Other.FEpochMilliseconds,
+        Other.FSubMillisecondNanoseconds, Zdt.FTimeZone, Zdt.FCalendarId, LargestUnit,
         Years, Months, Weeks, Days, RH, RM, RS, RMs, RUs, RNs);
 
-    Result := TGocciaTemporalDurationValue.Create(Years, Months, Weeks, Days,
-      RH, RM, RS, RMs, RUs, RNs);
+    Result := TGocciaTemporalDurationValue.Create(-Years, -Months, -Weeks,
+      -Days, -RH, -RM, -RS, -RMs, -RUs, -RNs);
   end
   else
   begin
-    // Sub-day: use exact epoch nanosecond difference (this - other).
-    StartNs := EpochNanosecondsFromParts(Other.FEpochMilliseconds, Other.FSubMillisecondNanoseconds);
-    EndNs := EpochNanosecondsFromParts(Zdt.FEpochMilliseconds, Zdt.FSubMillisecondNanoseconds);
+    StartNs := EpochNanosecondsFromParts(Zdt.FEpochMilliseconds,
+      Zdt.FSubMillisecondNanoseconds);
+    EndNs := EpochNanosecondsFromParts(Other.FEpochMilliseconds,
+      Other.FSubMillisecondNanoseconds);
     DiffNs := TimeDurationFromEpochNanosecondsDifference(EndNs, StartNs);
     if (SmallestUnit <> tuNanosecond) or (RIncrement <> 1) then
     begin
@@ -2492,8 +3588,60 @@ begin
         .Multiply(TBigInteger.FromInt64(RIncrement));
       DiffNs := RoundTimeDurationToIncrement(DiffNs, IncrementNs, RMode);
     end;
-    Result := ZonedDiffToUnits(DiffNs, LargestUnit);
+    Result := ZonedDiffToUnits(DiffNs.Negate, LargestUnit);
   end;
+end;
+
+procedure ValidateZonedDateTimeRoundIncrement(const AIncrement: Integer;
+  const ASmallestUnit: TTemporalUnit);
+var
+  MaxVal: Integer;
+begin
+  if AIncrement <= 1 then
+    Exit;
+
+  case ASmallestUnit of
+    tuDay: MaxVal := 1;
+    tuHour: MaxVal := 24;
+    tuMinute,
+    tuSecond: MaxVal := 60;
+    tuMillisecond,
+    tuMicrosecond,
+    tuNanosecond: MaxVal := 1000;
+  else
+    Exit;
+  end;
+
+  if (AIncrement >= MaxVal) or (MaxVal mod AIncrement <> 0) then
+    ThrowRangeError(Format(SErrorRoundingIncrementDivisor, [AIncrement, MaxVal]),
+      SSuggestTemporalRoundArg);
+end;
+
+procedure ValidateZonedDateTimeDiffRoundingIncrement(const AIncrement: Integer;
+  const ASmallestUnit, ALargestUnit: TTemporalUnit);
+var
+  MaxVal: Integer;
+begin
+  if AIncrement <= 1 then
+    Exit;
+
+  case ASmallestUnit of
+    tuHour: MaxVal := 24;
+    tuMinute,
+    tuSecond: MaxVal := 60;
+    tuMillisecond,
+    tuMicrosecond,
+    tuNanosecond: MaxVal := 1000;
+  else
+    begin
+      ValidateRoundingIncrement(AIncrement, ASmallestUnit, ALargestUnit);
+      Exit;
+    end;
+  end;
+
+  if (AIncrement >= MaxVal) or (MaxVal mod AIncrement <> 0) then
+    ThrowRangeError(Format(SErrorRoundingIncrementDivisor, [AIncrement, MaxVal]),
+      SSuggestTemporalRoundArg);
 end;
 
 // TC39 Temporal §6.3.30 Temporal.ZonedDateTime.prototype.round(roundTo)
@@ -2523,15 +3671,17 @@ begin
   if Arg is TGocciaStringLiteralValue then
   begin
     UnitStr := TGocciaStringLiteralValue(Arg).Value;
+    if not GetTemporalUnitFromString(UnitStr, SmallestUnit) then
+      ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, ['ZonedDateTime.prototype.round', UnitStr]), SSuggestTemporalValidUnits);
   end
   else if Arg is TGocciaObjectValue then
   begin
     OptionsObj := TGocciaObjectValue(Arg);
+    Increment := GetRoundingIncrement(OptionsObj, 1);
+    Mode := GetRoundingMode(OptionsObj, rmHalfExpand);
     SmallestUnit := GetSmallestUnit(OptionsObj, tuNone);
     if SmallestUnit = tuNone then
       ThrowRangeError(SErrorTemporalRoundRequiresSmallestUnit, SSuggestTemporalRoundArg);
-    Mode := GetRoundingMode(OptionsObj, rmHalfExpand);
-    Increment := GetRoundingIncrement(OptionsObj, 1);
     // Convert unit enum to string for the existing unit dispatch
     case SmallestUnit of
       tuDay: UnitStr := 'day';
@@ -2549,27 +3699,40 @@ begin
   else
   begin
     ThrowTypeError(Format(SErrorTemporalRoundRequiresStringOrOptions, ['ZonedDateTime']), SSuggestTemporalRoundArg);
+    SmallestUnit := tuNone;
+  end;
+
+  case SmallestUnit of
+    tuDay: UnitStr := 'day';
+    tuHour: UnitStr := 'hour';
+    tuMinute: UnitStr := 'minute';
+    tuSecond: UnitStr := 'second';
+    tuMillisecond: UnitStr := 'millisecond';
+    tuMicrosecond: UnitStr := 'microsecond';
+    tuNanosecond: UnitStr := 'nanosecond';
+  else
+    ThrowRangeError(SErrorInvalidZDTRoundUnit, SSuggestTemporalValidUnits);
     UnitStr := '';
   end;
+
+  ValidateZonedDateTimeRoundIncrement(Increment, SmallestUnit);
 
   ComputeLocalComponents(Zdt, LYear, LMonth, LDay, LHour, LMinute, LSecond, LMs, LUs, LNs);
 
   if UnitStr = 'day' then
   begin
     // Compute actual day length in nanoseconds (DST-aware)
-    StartEpochMs := LocalToEpochMs(LYear, LMonth, LDay, 0, 0, 0, 0, Zdt.FTimeZone);
+    StartEpochMs := RoundingStartOfDayEpochMilliseconds(LYear, LMonth, LDay,
+      Zdt.FTimeZone, False);
     DateRec := AddDaysToDate(LYear, LMonth, LDay, 1);
-    NextEpochMs := LocalToEpochMs(DateRec.Year, DateRec.Month, DateRec.Day, 0, 0, 0, 0, Zdt.FTimeZone);
+    NextEpochMs := RoundingStartOfDayEpochMilliseconds(DateRec.Year,
+      DateRec.Month, DateRec.Day, Zdt.FTimeZone, True);
     DayNs := (NextEpochMs - StartEpochMs) * NANOSECONDS_PER_MILLISECOND;
     if DayNs <= 0 then
       DayNs := NANOSECONDS_PER_DAY;  // Fallback for edge cases
 
-    TotalNs := Int64(LHour) * NANOSECONDS_PER_HOUR +
-               Int64(LMinute) * NANOSECONDS_PER_MINUTE +
-               Int64(LSecond) * NANOSECONDS_PER_SECOND +
-               Int64(LMs) * NANOSECONDS_PER_MILLISECOND +
-               Int64(LUs) * NANOSECONDS_PER_MICROSECOND +
-               LNs;
+    TotalNs := (Zdt.FEpochMilliseconds - StartEpochMs) *
+      NANOSECONDS_PER_MILLISECOND + Zdt.FSubMillisecondNanoseconds;
     Divisor := DayNs * Increment;
     Rounded := RoundWithMode(TotalNs, Divisor, Mode);
     ExtraDays := Rounded div DayNs;
@@ -2581,8 +3744,10 @@ begin
       DateRec.Month := LMonth;
       DateRec.Day := LDay;
     end;
-    NewEpochMs := LocalToEpochMs(DateRec.Year, DateRec.Month, DateRec.Day, 0, 0, 0, 0, Zdt.FTimeZone);
-    Result := TGocciaTemporalZonedDateTimeValue.Create(NewEpochMs, 0, Zdt.FTimeZone);
+    NewEpochMs := StartOfDayToEpochMilliseconds(DateRec.Year, DateRec.Month,
+      DateRec.Day, Zdt.FTimeZone);
+    Result := TGocciaTemporalZonedDateTimeValue.Create(NewEpochMs, 0,
+      Zdt.FTimeZone, Zdt.FCalendarId);
     Exit;
   end;
 
@@ -2613,7 +3778,7 @@ begin
     Balanced.Hour, Balanced.Minute, Balanced.Second, Balanced.Millisecond, Zdt.FTimeZone);
   NewSubMs := Balanced.Microsecond * 1000 + Balanced.Nanosecond;
 
-  Result := TGocciaTemporalZonedDateTimeValue.Create(NewEpochMs, NewSubMs, Zdt.FTimeZone);
+  Result := TGocciaTemporalZonedDateTimeValue.Create(NewEpochMs, NewSubMs, Zdt.FTimeZone, Zdt.FCalendarId);
 end;
 
 // TC39 Temporal §6.3.31 Temporal.ZonedDateTime.prototype.equals(other)
@@ -2626,10 +3791,57 @@ begin
 
   if (Zdt.FEpochMilliseconds = Other.FEpochMilliseconds) and
      (Zdt.FSubMillisecondNanoseconds = Other.FSubMillisecondNanoseconds) and
-     (Zdt.FTimeZone = Other.FTimeZone) then
+     TimeZoneIdentifiersEqual(Zdt.FTimeZone, Other.FTimeZone) and
+     (Zdt.FCalendarId = Other.FCalendarId) then
     Result := TGocciaBooleanLiteralValue.TrueValue
   else
     Result := TGocciaBooleanLiteralValue.FalseValue;
+end;
+
+// TC39 Temporal §6.3.32 Temporal.ZonedDateTime.prototype.getTimeZoneTransition(directionParam)
+function TGocciaTemporalZonedDateTimeValue.ZonedDateTimeGetTimeZoneTransition(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Zdt: TGocciaTemporalZonedDateTimeValue;
+  DirectionParam, DirectionValue: TGocciaValue;
+  Direction: string;
+  Next: Boolean;
+  TransitionEpochMs: Int64;
+begin
+  Zdt := AsZonedDateTime(AThisValue, 'ZonedDateTime.prototype.getTimeZoneTransition');
+  DirectionParam := AArgs.GetElement(0);
+  if IsUndefinedValue(DirectionParam) then
+    ThrowTypeError('ZonedDateTime.prototype.getTimeZoneTransition requires a direction argument',
+      SSuggestTemporalFromArg);
+
+  if DirectionParam is TGocciaStringLiteralValue then
+    Direction := TGocciaStringLiteralValue(DirectionParam).Value
+  else if DirectionParam is TGocciaObjectValue then
+  begin
+    DirectionValue := TGocciaObjectValue(DirectionParam).GetProperty('direction');
+    if IsUndefinedValue(DirectionValue) then
+      Direction := ''
+    else
+      Direction := DirectionValue.ToStringLiteral.Value;
+  end
+  else
+    ThrowTypeError('ZonedDateTime.prototype.getTimeZoneTransition direction must be a string or object',
+      SSuggestTemporalFromArg);
+
+  if Direction = 'next' then
+    Next := True
+  else if Direction = 'previous' then
+    Next := False
+  else
+    ThrowRangeError('ZonedDateTime.prototype.getTimeZoneTransition direction must be next or previous',
+      SSuggestTemporalRoundArg);
+
+  if not TryGetTimeZoneTransitionMilliseconds(Zdt.FTimeZone,
+    Zdt.FEpochMilliseconds, Zdt.FSubMillisecondNanoseconds, Next,
+    TransitionEpochMs) then
+    Exit(TGocciaNullLiteralValue.NullValue);
+
+  Result := TGocciaTemporalZonedDateTimeValue.Create(TransitionEpochMs, 0,
+    Zdt.FTimeZone, Zdt.FCalendarId);
 end;
 
 // TC39 Temporal §6.3.32 Temporal.ZonedDateTime.prototype.startOfDay()
@@ -2642,9 +3854,9 @@ begin
   Zdt := AsZonedDateTime(AThisValue, 'ZonedDateTime.prototype.startOfDay');
   ComputeLocalComponents(Zdt, LYear, LMonth, LDay, LHour, LMinute, LSecond, LMs, LUs, LNs);
 
-  // Midnight of the local date
-  NewEpochMs := LocalToEpochMs(LYear, LMonth, LDay, 0, 0, 0, 0, Zdt.FTimeZone);
-  Result := TGocciaTemporalZonedDateTimeValue.Create(NewEpochMs, 0, Zdt.FTimeZone);
+  NewEpochMs := StartOfDayToEpochMilliseconds(LYear, LMonth, LDay,
+    Zdt.FTimeZone);
+  Result := TGocciaTemporalZonedDateTimeValue.Create(NewEpochMs, 0, Zdt.FTimeZone, Zdt.FCalendarId);
 end;
 
 // TC39 Temporal §6.3.33 Temporal.ZonedDateTime.prototype.toInstant()
@@ -2664,7 +3876,7 @@ var
 begin
   Zdt := AsZonedDateTime(AThisValue, 'ZonedDateTime.prototype.toPlainDate');
   ComputeLocalComponents(Zdt, LYear, LMonth, LDay, LHour, LMinute, LSecond, LMs, LUs, LNs);
-  Result := TGocciaTemporalPlainDateValue.Create(LYear, LMonth, LDay);
+  Result := TGocciaTemporalPlainDateValue.Create(LYear, LMonth, LDay, Zdt.FCalendarId);
 end;
 
 // TC39 Temporal §6.3.35 Temporal.ZonedDateTime.prototype.toPlainTime()
@@ -2687,7 +3899,162 @@ begin
   Zdt := AsZonedDateTime(AThisValue, 'ZonedDateTime.prototype.toPlainDateTime');
   ComputeLocalComponents(Zdt, LYear, LMonth, LDay, LHour, LMinute, LSecond, LMs, LUs, LNs);
   Result := TGocciaTemporalPlainDateTimeValue.Create(LYear, LMonth, LDay,
-    LHour, LMinute, LSecond, LMs, LUs, LNs);
+    LHour, LMinute, LSecond, LMs, LUs, LNs, Zdt.FCalendarId);
+end;
+
+function TrimAutoFractionalSecondZeros(const ATime: string): string;
+var
+  DotPos: Integer;
+begin
+  Result := ATime;
+  DotPos := Pos('.', Result);
+  if DotPos = 0 then
+    Exit;
+
+  while (Length(Result) > DotPos) and (Result[Length(Result)] = '0') do
+    Delete(Result, Length(Result), 1);
+  if Length(Result) = DotPos then
+    Delete(Result, DotPos, 1);
+end;
+
+function FractionalSecondDigitDivisor(const AFractionalDigits: Integer): Int64;
+begin
+  case AFractionalDigits of
+    0: Result := NANOSECONDS_PER_SECOND;
+    1: Result := 100000000;
+    2: Result := 10000000;
+    3: Result := NANOSECONDS_PER_MILLISECOND;
+    4: Result := 100000;
+    5: Result := 10000;
+    6: Result := NANOSECONDS_PER_MICROSECOND;
+    7: Result := 100;
+    8: Result := 10;
+  else
+    Result := 1;
+  end;
+end;
+
+procedure RoundZonedDateTimeForToString(
+  var AHour, AMinute, ASecond, AMs, AUs, ANs: Integer;
+  var AExtraDays: Integer;
+  const AFractionalDigits: Integer;
+  const ARoundingMode: TTemporalRoundingMode);
+var
+  TotalNs, Divisor, Rounded: Int64;
+  ExDays: Int64;
+  BalancedTime: TTemporalTimeRecord;
+begin
+  AExtraDays := 0;
+  if (AFractionalDigits < 0) and (AFractionalDigits <> -2) then
+    Exit;
+  if AFractionalDigits = 9 then
+    Exit;
+
+  TotalNs := Int64(AHour) * NANOSECONDS_PER_HOUR +
+             Int64(AMinute) * NANOSECONDS_PER_MINUTE +
+             Int64(ASecond) * NANOSECONDS_PER_SECOND +
+             Int64(AMs) * NANOSECONDS_PER_MILLISECOND +
+             Int64(AUs) * NANOSECONDS_PER_MICROSECOND +
+             Int64(ANs);
+
+  if AFractionalDigits = -2 then
+    Divisor := NANOSECONDS_PER_MINUTE
+  else
+    Divisor := FractionalSecondDigitDivisor(AFractionalDigits);
+
+  Rounded := RoundWithMode(TotalNs, Divisor, ARoundingMode);
+  BalancedTime := BalanceTime(0, 0, 0, 0, 0, Rounded, ExDays);
+
+  AHour := BalancedTime.Hour;
+  AMinute := BalancedTime.Minute;
+  ASecond := BalancedTime.Second;
+  AMs := BalancedTime.Millisecond;
+  AUs := BalancedTime.Microsecond;
+  ANs := BalancedTime.Nanosecond;
+  AExtraDays := Integer(ExDays);
+end;
+
+function FormatRoundedOffsetString(const AOffsetSeconds: Integer): string;
+begin
+  Result := FormatOffsetString(TruncateOffsetSecondsToMinute(AOffsetSeconds));
+end;
+
+function GetZonedDateTimeFractionalSecondDigits(const AOptions: TGocciaObjectValue): Integer;
+var
+  V: TGocciaValue;
+  Num: TGocciaNumberLiteralValue;
+  S: string;
+begin
+  Result := -1;
+  if AOptions = nil then
+    Exit;
+  V := AOptions.GetProperty('fractionalSecondDigits');
+  if IsUndefinedValue(V) then
+    Exit;
+  if V is TGocciaNumberLiteralValue then
+  begin
+    Num := TGocciaNumberLiteralValue(V);
+    if Num.IsNaN or Num.IsInfinity or (Num.Value < 0) or (Num.Value >= 10) then
+      ThrowRangeError(SErrorFractionalDigitsRange, SSuggestTemporalRoundArg);
+    Result := Trunc(Num.Value);
+  end
+  else
+  begin
+    S := V.ToStringLiteral.Value;
+    if S = 'auto' then
+      Result := -1
+    else
+      ThrowRangeError(Format(SErrorInvalidFractionalDigits, [S]),
+        SSuggestTemporalRoundArg);
+  end;
+end;
+
+procedure ReadZonedDateTimeToStringOptions(const AOptions: TGocciaObjectValue;
+  out ACalendarDisplay: TTemporalCalendarDisplay; out AFractionalDigits: Integer;
+  out AOffsetOption: string; out ARoundingMode: TTemporalRoundingMode;
+  out ASmallestUnit: string; out AHasSmallestUnit: Boolean;
+  out ATimeZoneNameOption: string);
+var
+  V: TGocciaValue;
+begin
+  ACalendarDisplay := GetCalendarDisplay(AOptions);
+  AFractionalDigits := GetZonedDateTimeFractionalSecondDigits(AOptions);
+  AOffsetOption := GetOptionString(AOptions, 'offset', 'auto');
+  ARoundingMode := GetRoundingMode(AOptions, rmTrunc);
+  ASmallestUnit := '';
+  AHasSmallestUnit := False;
+  if AOptions <> nil then
+  begin
+    V := AOptions.GetProperty('smallestUnit');
+    if not IsUndefinedValue(V) then
+    begin
+      ASmallestUnit := V.ToStringLiteral.Value;
+      AHasSmallestUnit := True;
+    end;
+  end;
+  ATimeZoneNameOption := GetOptionString(AOptions, 'timeZoneName', 'auto');
+end;
+
+procedure ApplyZonedDateTimeToStringSmallestUnit(const ASmallestUnit: string;
+  const AHasSmallestUnit: Boolean; var AFractionalDigits: Integer);
+var
+  SmallestUnit: TTemporalUnit;
+begin
+  if not AHasSmallestUnit then
+    Exit;
+  if not GetTemporalUnitFromString(ASmallestUnit, SmallestUnit) then
+    ThrowRangeError(Format(SErrorInvalidSmallestUnit, [ASmallestUnit]),
+      SSuggestTemporalValidUnits);
+  case SmallestUnit of
+    tuMinute: AFractionalDigits := -2;
+    tuSecond: AFractionalDigits := 0;
+    tuMillisecond: AFractionalDigits := 3;
+    tuMicrosecond: AFractionalDigits := 6;
+    tuNanosecond: AFractionalDigits := 9;
+  else
+    ThrowRangeError(Format(SErrorInvalidSmallestUnit, [ASmallestUnit]),
+      SSuggestTemporalValidUnits);
+  end;
 end;
 
 // TC39 Temporal §6.3.37 Temporal.ZonedDateTime.prototype.toString([options])
@@ -2695,7 +4062,7 @@ function TGocciaTemporalZonedDateTimeValue.ZonedDateTimeToString(const AArgs: TG
 var
   Zdt: TGocciaTemporalZonedDateTimeValue;
   LYear, LMonth, LDay, LHour, LMinute, LSecond, LMs, LUs, LNs: Integer;
-  SavedHour, SavedMinute, SavedSecond, SavedMs: Integer;
+  SavedHour, SavedMinute, SavedSecond, SavedMs, SavedUs, SavedNs: Integer;
   OffsetSeconds: Integer;
   Arg: TGocciaValue;
   OptionsObj: TGocciaObjectValue;
@@ -2704,7 +4071,10 @@ var
   CalDisp: TTemporalCalendarDisplay;
   DateRec: TTemporalDateRecord;
   RoundedEpochMs: Int64;
-  TimeStr, S: string;
+  RoundedSubMs: Integer;
+  OffsetOption, TimeZoneNameOption, TimeStr, S: string;
+  SmallestUnitStr: string;
+  HasSmallestUnit: Boolean;
 begin
   Zdt := AsZonedDateTime(AThisValue, 'ZonedDateTime.prototype.toString');
   ComputeLocalComponents(Zdt, LYear, LMonth, LDay, LHour, LMinute, LSecond, LMs, LUs, LNs);
@@ -2717,14 +4087,24 @@ begin
       ThrowTypeError('options must be an object or undefined', SSuggestTemporalFromArg);
     OptionsObj := TGocciaObjectValue(Arg);
   end;
-  ResolveTemporalToStringOptions(OptionsObj, FracDigits, Mode);
-  CalDisp := GetCalendarDisplay(OptionsObj);
+  ReadZonedDateTimeToStringOptions(OptionsObj, CalDisp, FracDigits,
+    OffsetOption, Mode, SmallestUnitStr, HasSmallestUnit, TimeZoneNameOption);
+  if (OffsetOption <> 'auto') and (OffsetOption <> 'never') then
+    ThrowRangeError('Invalid offset option: ' + OffsetOption, SSuggestTemporalRoundArg);
+  ApplyZonedDateTimeToStringSmallestUnit(SmallestUnitStr, HasSmallestUnit,
+    FracDigits);
+  if (TimeZoneNameOption <> 'auto') and (TimeZoneNameOption <> 'never') and
+     (TimeZoneNameOption <> 'critical') then
+    ThrowRangeError('Invalid timeZoneName option: ' + TimeZoneNameOption, SSuggestTemporalRoundArg);
   SavedHour := LHour;
   SavedMinute := LMinute;
   SavedSecond := LSecond;
   SavedMs := LMs;
+  SavedUs := LUs;
+  SavedNs := LNs;
   ExtraDays := 0;
-  RoundTimeForToString(LHour, LMinute, LSecond, LMs, LUs, LNs, ExtraDays, FracDigits, Mode);
+  RoundZonedDateTimeForToString(LHour, LMinute, LSecond, LMs, LUs, LNs,
+    ExtraDays, FracDigits, Mode);
   if ExtraDays <> 0 then
     DateRec := AddDaysToDate(LYear, LMonth, LDay, ExtraDays)
   else
@@ -2734,27 +4114,45 @@ begin
     DateRec.Day := LDay;
   end;
 
-  // Recompute UTC offset only when rounding actually changed the local time.
-  // Unconditional recomputation via LocalToEpochMs would lose fold information
-  // for ambiguous wall-clock times during DST fall-back (first-match disambiguation).
+  // Recompute local fields and UTC offset only when rounding changed the exact time.
+  // Unconditional recomputation would lose fold information during DST fall-back.
   if (ExtraDays <> 0) or (LHour <> SavedHour) or (LMinute <> SavedMinute) or
-     (LSecond <> SavedSecond) or (LMs <> SavedMs) then
+     (LSecond <> SavedSecond) or (LMs <> SavedMs) or (LUs <> SavedUs) or
+     (LNs <> SavedNs) then
   begin
     RoundedEpochMs := LocalToEpochMs(DateRec.Year, DateRec.Month, DateRec.Day,
       LHour, LMinute, LSecond, LMs, Zdt.FTimeZone);
-    OffsetSeconds := GetUtcOffsetSeconds(Zdt.FTimeZone, RoundedEpochMs div MILLISECONDS_PER_SECOND);
+    RoundedSubMs := LUs * 1000 + LNs;
+    ComputeLocalComponentsFromEpoch(RoundedEpochMs, RoundedSubMs, Zdt.FTimeZone,
+      LYear, LMonth, LDay, LHour, LMinute, LSecond, LMs, LUs, LNs);
+    DateRec.Year := LYear;
+    DateRec.Month := LMonth;
+    DateRec.Day := LDay;
+    OffsetSeconds := GetUtcOffsetSeconds(Zdt.FTimeZone,
+      EpochMillisecondsToSeconds(RoundedEpochMs));
   end
   else
-    OffsetSeconds := GetUtcOffsetSeconds(Zdt.FTimeZone, Zdt.FEpochMilliseconds div MILLISECONDS_PER_SECOND);
+    OffsetSeconds := GetUtcOffsetSeconds(Zdt.FTimeZone,
+      EpochMillisecondsToSeconds(Zdt.FEpochMilliseconds));
 
   if FracDigits = -2 then // smallestUnit: minute
     TimeStr := PadTwo(LHour) + ':' + PadTwo(LMinute)
   else
-    TimeStr := FormatTimeWithPrecision(LHour, LMinute, LSecond, LMs, LUs, LNs, FracDigits);
+  begin
+    TimeStr := FormatTimeWithPrecision(LHour, LMinute, LSecond, LMs, LUs, LNs,
+      FracDigits);
+    if FracDigits < 0 then
+      TimeStr := TrimAutoFractionalSecondZeros(TimeStr);
+  end;
 
-  S := FormatDateString(DateRec.Year, DateRec.Month, DateRec.Day) + 'T' +
-       TimeStr + FormatOffsetString(OffsetSeconds) +
-       '[' + Zdt.FTimeZone + ']' + FormatCalendarAnnotation(CalDisp);
+  S := FormatDateString(DateRec.Year, DateRec.Month, DateRec.Day) + 'T' + TimeStr;
+  if OffsetOption <> 'never' then
+    S := S + FormatRoundedOffsetString(OffsetSeconds);
+  if TimeZoneNameOption = 'critical' then
+    S := S + '[!' + Zdt.FTimeZone + ']'
+  else if TimeZoneNameOption <> 'never' then
+    S := S + '[' + Zdt.FTimeZone + ']';
+  S := S + FormatCalendarAnnotation(CalDisp, Zdt.FCalendarId);
 
   Result := TGocciaStringLiteralValue.Create(S);
 end;
@@ -2768,7 +4166,8 @@ var
 begin
   Zdt := AsZonedDateTime(AThisValue, 'ZonedDateTime.prototype.toJSON');
   ComputeLocalComponents(Zdt, LYear, LMonth, LDay, LHour, LMinute, LSecond, LMs, LUs, LNs);
-  OffsetSeconds := GetUtcOffsetSeconds(Zdt.FTimeZone, Zdt.FEpochMilliseconds div MILLISECONDS_PER_SECOND);
+  OffsetSeconds := GetUtcOffsetSeconds(Zdt.FTimeZone,
+    EpochMillisecondsToSeconds(Zdt.FEpochMilliseconds));
   Result := TGocciaStringLiteralValue.Create(
     FormatDateString(LYear, LMonth, LDay) + 'T' +
     FormatTimeString(LHour, LMinute, LSecond, LMs, LUs, LNs) +
@@ -2784,15 +4183,10 @@ begin
 end;
 
 function TGocciaTemporalZonedDateTimeValue.ZonedDateTimeToLocaleString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-var
-  EmptyArgs: TGocciaArgumentsCollection;
 begin
-  EmptyArgs := TGocciaArgumentsCollection.Create([]);
-  try
-    Result := ZonedDateTimeToString(EmptyArgs, AThisValue);
-  finally
-    EmptyArgs.Free;
-  end;
+  AsZonedDateTime(AThisValue, 'ZonedDateTime.prototype.toLocaleString');
+  Result := FormatTemporalValueToLocaleString(AThisValue, AArgs.GetElement(0),
+    AArgs.GetElement(1));
 end;
 
 initialization

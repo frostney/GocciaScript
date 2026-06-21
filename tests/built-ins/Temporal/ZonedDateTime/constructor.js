@@ -24,6 +24,16 @@ describe.runIf(isTemporal)("Temporal.ZonedDateTime constructor", () => {
     expect(zdt.calendarId).toBe("iso8601");
   });
 
+  test("constructor stores non-ISO calendarId", () => {
+    const zdt = new Temporal.ZonedDateTime(0n, "Europe/Madrid", "gregory");
+    expect(zdt.calendarId).toBe("gregory");
+  });
+
+  test("constructor canonicalizes calendar aliases", () => {
+    expect(new Temporal.ZonedDateTime(0n, "UTC", "islamicc").calendarId).toBe("islamic-civil");
+    expect(new Temporal.ZonedDateTime(0n, "UTC", "ethiopic-amete-alem").calendarId).toBe("ethioaa");
+  });
+
   test("epochMilliseconds", () => {
     const zdt = new Temporal.ZonedDateTime(1710510330000000000n, "UTC");
     expect(zdt.epochMilliseconds).toBe(1710510330000);

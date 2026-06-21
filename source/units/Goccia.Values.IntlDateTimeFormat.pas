@@ -56,6 +56,9 @@ type
     function IntlDateTimeFormatResolvedOptions(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
+function FormatTemporalValueToLocaleString(const AValue, ALocales,
+  AOptions: TGocciaValue): TGocciaValue;
+
 implementation
 
 uses
@@ -66,10 +69,12 @@ uses
   IntlLocaleResolver,
   TimingUtils,
 
+  Goccia.Builtins.Intl,
   Goccia.Error.Messages,
   Goccia.Intl.Helpers,
   Goccia.ObjectModel.Types,
   Goccia.Realm,
+  Goccia.Temporal.TimeZone,
   Goccia.Temporal.Utils,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
@@ -83,7 +88,8 @@ uses
   Goccia.Values.TemporalPlainMonthDay,
   Goccia.Values.TemporalPlainTime,
   Goccia.Values.TemporalPlainYearMonth,
-  Goccia.Values.TemporalZonedDateTime;
+  Goccia.Values.TemporalZonedDateTime,
+  Goccia.Values.ToObject;
 
 var
   GIntlDateTimeFormatSharedSlot: TGocciaRealmOwnedSlotId;
@@ -97,6 +103,13 @@ const
   TEMPORAL_SURROGATE_YEAR_BASE = 2000;
   TEMPORAL_DIRECT_ICU_YEAR_LIMIT = 9999;
   TWO_DIGIT_YEAR_MODULUS = 100;
+  MIN_UNICODE_LOCALE_TYPE_SUBTAG_LENGTH = 3;
+  MAX_UNICODE_LOCALE_TYPE_SUBTAG_LENGTH = 8;
+  DEFAULT_CALENDAR = 'gregory';
+  DEFAULT_NUMBERING_SYSTEM = 'latn';
+  DEFAULT_HOUR_CYCLE_12 = 'h12';
+  DEFAULT_HOUR_CYCLE_24 = 'h23';
+  JAPANESE_HOUR_CYCLE_12 = 'h11';
 
 type
   TGocciaIntlDateTimeFormatBoundFormatValue = class(TGocciaNativeFunctionValue)
@@ -199,6 +212,337 @@ begin
   Result := True;
 end;
 
+function IsAsciiTimeZoneIdentifier(const AValue: string): Boolean;
+var
+  I: Integer;
+  Ch: Char;
+begin
+  Result := False;
+  if AValue = '' then
+    Exit;
+
+  for I := 1 to Length(AValue) do
+  begin
+    Ch := AValue[I];
+    if not (((Ch >= 'A') and (Ch <= 'Z')) or
+            ((Ch >= 'a') and (Ch <= 'z')) or
+            ((Ch >= '0') and (Ch <= '9')) or
+            (Ch = '/') or (Ch = '_') or (Ch = '-') or (Ch = '+')) then
+      Exit;
+  end;
+
+  Result := True;
+end;
+
+function DateTimeAsciiLower(const AValue: string): string;
+var
+  I: Integer;
+  Ch: Char;
+begin
+  SetLength(Result, Length(AValue));
+  for I := 1 to Length(AValue) do
+  begin
+    Ch := AValue[I];
+    if (Ch >= 'A') and (Ch <= 'Z') then
+      Result[I] := Char(Ord(Ch) + Ord('a') - Ord('A'))
+    else
+      Result[I] := Ch;
+  end;
+end;
+
+function IsAsciiAlphaNumeric(const AChar: Char): Boolean;
+begin
+  Result := ((AChar >= '0') and (AChar <= '9')) or
+    ((AChar >= 'A') and (AChar <= 'Z')) or
+    ((AChar >= 'a') and (AChar <= 'z'));
+end;
+
+function IsUnicodeLocaleTypeIdentifier(const AValue: string): Boolean;
+var
+  I, SubtagLength: Integer;
+begin
+  Result := False;
+  if AValue = '' then
+    Exit;
+
+  SubtagLength := 0;
+  for I := 1 to Length(AValue) + 1 do
+  begin
+    if (I > Length(AValue)) or (AValue[I] = '-') then
+    begin
+      if (SubtagLength < MIN_UNICODE_LOCALE_TYPE_SUBTAG_LENGTH) or
+         (SubtagLength > MAX_UNICODE_LOCALE_TYPE_SUBTAG_LENGTH) then
+        Exit;
+      SubtagLength := 0;
+      Continue;
+    end;
+
+    if not IsAsciiAlphaNumeric(AValue[I]) then
+      Exit;
+    Inc(SubtagLength);
+  end;
+
+  Result := True;
+end;
+
+function TryGetDateTimeUnicodeExtensionKeyword(const ALocale, AKey: string;
+  out AValue: string): Boolean;
+var
+  Index, NextDash: Integer;
+  InUnicodeExtension, ReadingValue: Boolean;
+  Subtag, KeyLower: string;
+begin
+  Result := False;
+  AValue := '';
+  InUnicodeExtension := False;
+  ReadingValue := False;
+  KeyLower := DateTimeAsciiLower(AKey);
+  Index := 1;
+
+  while Index <= Length(ALocale) do
+  begin
+    NextDash := Pos('-', Copy(ALocale, Index, MaxInt));
+    if NextDash = 0 then
+      NextDash := Length(ALocale) + 1
+    else
+      NextDash := Index + NextDash - 1;
+    Subtag := DateTimeAsciiLower(Copy(ALocale, Index, NextDash - Index));
+    Index := NextDash + 1;
+
+    if Length(Subtag) = 1 then
+    begin
+      if Subtag = 'u' then
+      begin
+        InUnicodeExtension := True;
+        ReadingValue := False;
+        Continue;
+      end;
+      if InUnicodeExtension then
+        Exit;
+    end;
+
+    if not InUnicodeExtension then
+      Continue;
+
+    if Length(Subtag) = 2 then
+    begin
+      if ReadingValue then
+        Exit;
+      ReadingValue := Subtag = KeyLower;
+      if ReadingValue then
+        Result := True;
+      Continue;
+    end;
+
+    if ReadingValue then
+    begin
+      if AValue <> '' then
+        AValue := AValue + '-';
+      AValue := AValue + Subtag;
+    end;
+  end;
+end;
+
+function IsAvailableDateTimeCalendar(const ACalendar: string): Boolean;
+begin
+  Result := (ACalendar = 'buddhist') or
+    (ACalendar = 'chinese') or
+    (ACalendar = 'coptic') or
+    (ACalendar = 'dangi') or
+    (ACalendar = 'ethioaa') or
+    (ACalendar = 'ethiopic') or
+    (ACalendar = DEFAULT_CALENDAR) or
+    (ACalendar = 'hebrew') or
+    (ACalendar = 'indian') or
+    (ACalendar = 'islamic-civil') or
+    (ACalendar = 'islamic-tbla') or
+    (ACalendar = 'islamic-umalqura') or
+    (ACalendar = 'iso8601') or
+    (ACalendar = 'japanese') or
+    (ACalendar = 'persian') or
+    (ACalendar = 'roc');
+end;
+
+function TryResolveDateTimeCalendarIdentifier(const AValue: string;
+  out ACalendar: string): Boolean;
+var
+  Canonical: string;
+begin
+  ACalendar := '';
+  Canonical := CanonicalizeTemporalCalendarIdentifier(DateTimeAsciiLower(AValue));
+  if (Canonical = 'islamic') or (Canonical = 'islamic-rgsa') then
+    Canonical := 'islamic-civil';
+  if not IsAvailableDateTimeCalendar(Canonical) then
+    Exit(False);
+
+  ACalendar := Canonical;
+  Result := True;
+end;
+
+function TryResolveDateTimeCalendarOption(const AValue, AOptionName: string;
+  out ACalendar: string): Boolean;
+begin
+  if not IsUnicodeLocaleTypeIdentifier(AValue) then
+    ThrowRangeError(Format(SErrorIntlInvalidOption, [AValue, AOptionName]));
+
+  Result := TryResolveDateTimeCalendarIdentifier(AValue, ACalendar);
+end;
+
+function TryResolveDateTimeNumberingSystemOption(const AValue,
+  AOptionName: string; out ANumberingSystem: string): Boolean;
+var
+  LowerValue: string;
+begin
+  if not IsUnicodeLocaleTypeIdentifier(AValue) then
+    ThrowRangeError(Format(SErrorIntlInvalidOption, [AValue, AOptionName]));
+
+  LowerValue := DateTimeAsciiLower(AValue);
+  Result := IsSupportedNumberingSystem(LowerValue);
+  if Result then
+    ANumberingSystem := LowerValue
+  else
+    ANumberingSystem := '';
+end;
+
+function TryResolveDateTimeNumberingSystemIdentifier(const AValue: string;
+  out ANumberingSystem: string): Boolean;
+var
+  LowerValue: string;
+begin
+  ANumberingSystem := '';
+  if AValue = '' then
+    Exit(False);
+
+  LowerValue := DateTimeAsciiLower(AValue);
+  Result := IsSupportedNumberingSystem(LowerValue);
+  if Result then
+    ANumberingSystem := LowerValue;
+end;
+
+function IsDateTimeHourCycle(const AValue: string): Boolean;
+begin
+  Result := (AValue = 'h11') or (AValue = 'h12') or
+    (AValue = 'h23') or (AValue = 'h24');
+end;
+
+function TryResolveDateTimeHourCycleUnicodeExtension(const ALocale: string;
+  out AHourCycle: string): Boolean;
+var
+  Value: string;
+begin
+  Result := False;
+  AHourCycle := '';
+  if not TryGetUnicodeLocaleExtensionKeyword(ALocale, 'hc', Value) then
+    Exit;
+  Value := DateTimeAsciiLower(Value);
+  if not IsDateTimeHourCycle(Value) then
+    Exit;
+  AHourCycle := Value;
+  Result := True;
+end;
+
+function IsDateTimeLocaleJapanese(const ALocale: string): Boolean;
+var
+  LowerLocale: string;
+begin
+  LowerLocale := DateTimeAsciiLower(LocaleWithoutUnicodeExtension(ALocale));
+  Result := (LowerLocale = 'ja') or (Copy(LowerLocale, 1, 3) = 'ja-');
+end;
+
+function DateTimeHourCycle12(const ALocale: string): string;
+begin
+  if IsDateTimeLocaleJapanese(ALocale) then
+    Result := JAPANESE_HOUR_CYCLE_12
+  else
+    Result := DEFAULT_HOUR_CYCLE_12;
+end;
+
+function DateTimeHourCycle24: string;
+begin
+  Result := DEFAULT_HOUR_CYCLE_24;
+end;
+
+function DateTimeDefaultHourCycle(const ALocale: string): string;
+var
+  LowerLocale: string;
+begin
+  LowerLocale := DateTimeAsciiLower(LocaleWithoutUnicodeExtension(ALocale));
+  if (Copy(LowerLocale, 1, 2) = 'en') or
+     (Copy(LowerLocale, 1, 2) = 'ar') or
+     (Copy(LowerLocale, 1, 2) = 'hi') then
+    Result := DateTimeHourCycle12(ALocale)
+  else
+    Result := DateTimeHourCycle24;
+end;
+
+function DateTimeDefaultNumberingSystem(const ALocale: string): string;
+var
+  LowerLocale: string;
+begin
+  LowerLocale := DateTimeAsciiLower(LocaleWithoutUnicodeExtension(ALocale));
+  if (LowerLocale = 'ar') or (Copy(LowerLocale, 1, 3) = 'ar-') then
+    Result := 'arab'
+  else
+    Result := DEFAULT_NUMBERING_SYSTEM;
+end;
+
+function TryReadDateTimeStringOption(const AOptions: TGocciaObjectValue;
+  const AName: string; out AValue: string): Boolean;
+var
+  V: TGocciaValue;
+begin
+  Result := False;
+  AValue := '';
+  if not Assigned(AOptions) then
+    Exit;
+  V := AOptions.GetProperty(AName);
+  if (not Assigned(V)) or (V is TGocciaUndefinedLiteralValue) then
+    Exit;
+
+  AValue := V.ToStringLiteral.Value;
+  if ContainsNulCharacter(AValue) then
+    ThrowRangeError(Format(SErrorIntlInvalidOption, [AValue, AName]));
+  Result := True;
+end;
+
+function ReadDateTimeStringOption(const AOptions: TGocciaObjectValue;
+  const AName, AAllowedValues: string; const ADefault: string): string;
+var
+  Value: string;
+begin
+  if not TryReadDateTimeStringOption(AOptions, AName, Value) then
+    Exit(ADefault);
+
+  if (AAllowedValues <> '') and
+     (Pos('|' + Value + '|', '|' + AAllowedValues + '|') = 0) then
+    ThrowRangeError(Format(SErrorIntlInvalidOption, [Value, AName]));
+  Result := Value;
+end;
+
+function TryReadDateTimeIntegerOption(const AOptions: TGocciaObjectValue;
+  const AName: string; const AMinimum, AMaximum: Integer;
+  out AValue: Integer): Boolean;
+var
+  NumberValue: Double;
+  V: TGocciaValue;
+begin
+  Result := False;
+  if not Assigned(AOptions) then
+    Exit;
+  V := AOptions.GetProperty(AName);
+  if (not Assigned(V)) or (V is TGocciaUndefinedLiteralValue) then
+    Exit;
+
+  NumberValue := V.ToNumberLiteral.Value;
+  if IsNan(NumberValue) or Math.IsInfinite(NumberValue) or
+     (NumberValue < AMinimum) or (NumberValue > AMaximum) then
+    ThrowRangeError(Format(SErrorIntlDigitsOutOfRange,
+      [AName, AMinimum, AMaximum]));
+
+  AValue := Trunc(Floor(NumberValue));
+  Result := True;
+end;
+
 // ECMA-402 §11.1.3 FormatOffsetTimeZoneIdentifier(offsetMinutes).
 function FormatOffsetTimeZoneIdentifier(const AOffsetMinutes: Integer): string;
 var
@@ -232,6 +576,115 @@ begin
     ThrowRangeError(Format(SErrorIntlInvalidOption, [ATimeZone, 'timeZone']));
 
   Result := FormatOffsetTimeZoneIdentifier(OffsetMinutes);
+  Exit;
+end;
+
+function CanonicalizeDateTimeFormatTimeZone(const ATimeZone: string): string;
+var
+  CanonicalTimeZone: string;
+begin
+  Result := NormalizeDateTimeFormatTimeZone(ATimeZone);
+  if Result = '' then
+    Exit;
+  if (Result[1] = '+') or (Result[1] = '-') then
+    Exit;
+
+  if SameText(Result, 'UTC') then
+    Exit('UTC');
+
+  if not IsAsciiTimeZoneIdentifier(Result) then
+    ThrowRangeError(Format(SErrorUnknownTimezone, [ATimeZone]));
+
+  if TryCanonicalizeTimeZoneIdentifierCase(Result, CanonicalTimeZone) and
+     IsValidTimeZone(CanonicalTimeZone) then
+    Exit(CanonicalTimeZone);
+
+  if IsValidTimeZone(Result) then
+    Exit(Result);
+
+  ThrowRangeError(Format(SErrorUnknownTimezone, [ATimeZone]));
+end;
+
+procedure AddResolvedLocaleKeyword(var ALocale: string; const AKey,
+  AValue: string);
+begin
+  ALocale := AddUnicodeLocaleExtensionKeyword(ALocale, AKey, AValue);
+end;
+
+procedure ResolveDateTimeFormatLocaleOptions(
+  var ALocale, ACalendar, ANumberingSystem, AHourCycle: string;
+  const AHour12: Integer);
+var
+  BaseLocale, LocaleCalendar, LocaleNumberingSystem, LocaleHourCycle, RawKeywordValue: string;
+  ResolvedLocale: string;
+  HasLocaleCalendar, HasLocaleNumberingSystem, HasLocaleHourCycle: Boolean;
+begin
+  BaseLocale := LocaleWithoutUnicodeExtension(ALocale);
+  if BaseLocale = '' then
+    BaseLocale := ALocale;
+  ResolvedLocale := BaseLocale;
+
+  HasLocaleCalendar := False;
+  if TryGetDateTimeUnicodeExtensionKeyword(ALocale, 'ca', LocaleCalendar) then
+  begin
+    RawKeywordValue := LocaleCalendar;
+    HasLocaleCalendar := TryResolveDateTimeCalendarIdentifier(RawKeywordValue,
+      LocaleCalendar);
+  end;
+  if ACalendar <> '' then
+  begin
+    if HasLocaleCalendar and (LocaleCalendar = ACalendar) then
+      AddResolvedLocaleKeyword(ResolvedLocale, 'ca', ACalendar);
+  end
+  else if HasLocaleCalendar then
+  begin
+    ACalendar := LocaleCalendar;
+    AddResolvedLocaleKeyword(ResolvedLocale, 'ca', ACalendar);
+  end
+  else
+    ACalendar := DEFAULT_CALENDAR;
+
+  HasLocaleNumberingSystem := False;
+  if TryGetDateTimeUnicodeExtensionKeyword(ALocale, 'nu', LocaleNumberingSystem) then
+  begin
+    RawKeywordValue := LocaleNumberingSystem;
+    HasLocaleNumberingSystem := TryResolveDateTimeNumberingSystemIdentifier(
+      RawKeywordValue, LocaleNumberingSystem);
+  end;
+  if ANumberingSystem <> '' then
+  begin
+    if HasLocaleNumberingSystem and
+       (LocaleNumberingSystem = ANumberingSystem) then
+      AddResolvedLocaleKeyword(ResolvedLocale, 'nu', ANumberingSystem);
+  end
+  else if HasLocaleNumberingSystem then
+  begin
+    ANumberingSystem := LocaleNumberingSystem;
+    AddResolvedLocaleKeyword(ResolvedLocale, 'nu', ANumberingSystem);
+  end
+  else
+    ANumberingSystem := DateTimeDefaultNumberingSystem(ALocale);
+
+  HasLocaleHourCycle := TryResolveDateTimeHourCycleUnicodeExtension(ALocale,
+    LocaleHourCycle);
+  if AHour12 = 1 then
+    AHourCycle := DateTimeHourCycle12(ALocale)
+  else if AHour12 = 0 then
+    AHourCycle := DateTimeHourCycle24
+  else if AHourCycle <> '' then
+  begin
+    if HasLocaleHourCycle and (LocaleHourCycle = AHourCycle) then
+      AddResolvedLocaleKeyword(ResolvedLocale, 'hc', AHourCycle);
+  end
+  else if HasLocaleHourCycle then
+  begin
+    AHourCycle := LocaleHourCycle;
+    AddResolvedLocaleKeyword(ResolvedLocale, 'hc', AHourCycle);
+  end
+  else
+    AHourCycle := DateTimeDefaultHourCycle(ALocale);
+
+  ALocale := ResolvedLocale;
 end;
 
 function ICUDateTimeFormatTimeZone(const ATimeZone: string): string;
@@ -242,10 +695,22 @@ begin
 end;
 
 function AsDateTimeFormat(const AValue: TGocciaValue; const AMethod: string): TGocciaIntlDateTimeFormatValue;
+var
+  FallbackValue: TGocciaValue;
 begin
-  if not (AValue is TGocciaIntlDateTimeFormatValue) then
-    ThrowTypeError(AMethod + ' called on non-DateTimeFormat');
-  Result := TGocciaIntlDateTimeFormatValue(AValue);
+  if AValue is TGocciaIntlDateTimeFormatValue then
+    Exit(TGocciaIntlDateTimeFormatValue(AValue));
+
+  if AValue is TGocciaObjectValue then
+  begin
+    FallbackValue := TGocciaObjectValue(AValue).GetSymbolProperty(
+      IntlFallbackSymbol);
+    if FallbackValue is TGocciaIntlDateTimeFormatValue then
+      Exit(TGocciaIntlDateTimeFormatValue(FallbackValue));
+  end;
+
+  ThrowTypeError(AMethod + ' called on non-DateTimeFormat');
+  Result := nil;
 end;
 
 { TGocciaIntlDateTimeFormatBoundFormatValue }
@@ -442,9 +907,10 @@ end;
 procedure ApplyTemporalDefaultFields(var AOptions: TIntlDateTimeFormatOptions;
   const AKind: TDateTimeFormattableKind);
 var
-  Era: string;
+  Era, TimeZoneName: string;
 begin
   Era := AOptions.Era;
+  TimeZoneName := AOptions.TimeZoneName;
   ClearDateFields(AOptions);
   ClearTimeFields(AOptions);
 
@@ -466,6 +932,22 @@ begin
         AOptions.Hour := 'numeric';
         AOptions.Minute := 'numeric';
         AOptions.Second := 'numeric';
+        if (AKind = dtfkInstant) and (TimeZoneName <> '') then
+          AOptions.TimeZoneName := TimeZoneName;
+      end;
+    dtfkZonedDateTime:
+      begin
+        AOptions.Era := Era;
+        AOptions.Year := 'numeric';
+        AOptions.Month := 'numeric';
+        AOptions.Day := 'numeric';
+        AOptions.Hour := 'numeric';
+        AOptions.Minute := 'numeric';
+        AOptions.Second := 'numeric';
+        if TimeZoneName <> '' then
+          AOptions.TimeZoneName := TimeZoneName
+        else
+          AOptions.TimeZoneName := 'short';
       end;
     dtfkPlainTime:
       begin
@@ -496,9 +978,26 @@ begin
   AEffectiveOptions := AOptions;
   HadExplicitCore := AHasExplicitCoreOptions;
 
-  if AEffectiveOptions.DateStyle <> idtsNone then
+  case AKind of
+    dtfkPlainDate,
+    dtfkPlainYearMonth,
+    dtfkPlainMonthDay:
+      if (AEffectiveOptions.DateStyle = idtsNone) and
+         (AEffectiveOptions.TimeStyle <> idtsNone) then
+        Exit(False);
+    dtfkPlainTime:
+      if (AEffectiveOptions.TimeStyle = idtsNone) and
+         (AEffectiveOptions.DateStyle <> idtsNone) then
+        Exit(False);
+  end;
+
+  if (AEffectiveOptions.DateStyle <> idtsNone) and
+     not ((AKind = dtfkInstant) or (AKind = dtfkPlainDate) or
+       (AKind = dtfkPlainDateTime) or (AKind = dtfkZonedDateTime)) then
     ExpandDateStyle(AEffectiveOptions);
-  if AEffectiveOptions.TimeStyle <> idtsNone then
+  if (AEffectiveOptions.TimeStyle <> idtsNone) and
+     not ((AKind = dtfkInstant) or (AKind = dtfkPlainTime) or
+       (AKind = dtfkPlainDateTime) or (AKind = dtfkZonedDateTime)) then
     ExpandTimeStyle(AEffectiveOptions);
 
   if not HadExplicitCore then
@@ -825,6 +1324,20 @@ begin
   Result := True;
 end;
 
+function TryICUTemporalSurrogateToParts(const ALocale: string;
+  const AInput: TDateTimeFormattable; const AOptions: TIntlDateTimeFormatOptions;
+  out AParts: TIntlFormatPartArray): Boolean;
+begin
+  Result := False;
+  SetLength(AParts, 0);
+  if not (IsTemporalPlainKind(AInput.Kind) and
+          (Abs(AInput.Year) > TEMPORAL_DIRECT_ICU_YEAR_LIMIT)) then
+    Exit;
+
+  Result := TryICUTemporalSurrogateSingleToParts(ALocale, AInput, AOptions,
+    '', AParts);
+end;
+
 function FormatPartArrayValue(const AParts: TIntlFormatPartArray): string;
 var
   I: Integer;
@@ -946,23 +1459,389 @@ begin
   SetDatePartsSource(AParts, ASource);
 end;
 
+function IsUndefinedDateTimeFormatValue(const AValue: TGocciaValue): Boolean;
+begin
+  Result := (not Assigned(AValue)) or (AValue is TGocciaUndefinedLiteralValue);
+end;
+
+function DateTimeFormatHasOnlyYearEra(const AOptions: TIntlDateTimeFormatOptions): Boolean;
+begin
+  Result := (AOptions.Calendar = DEFAULT_CALENDAR) and
+    (AOptions.Era <> '') and (AOptions.Year <> '') and
+    (AOptions.Weekday = '') and (AOptions.Month = '') and
+    (AOptions.Day = '') and (AOptions.DayPeriod = '') and
+    (AOptions.Hour = '') and (AOptions.Minute = '') and
+    (AOptions.Second = '') and (AOptions.FractionalSecondDigits < 0) and
+    (AOptions.TimeZoneName = '') and (AOptions.DateStyle = idtsNone) and
+    (AOptions.TimeStyle = idtsNone);
+end;
+
+function ReplaceFirstAsciiDigitRun(const AValue, AReplacement: string): string;
+var
+  StartIndex, EndIndex: Integer;
+begin
+  StartIndex := 1;
+  while (StartIndex <= Length(AValue)) and
+        not (AValue[StartIndex] in ['0'..'9']) do
+    Inc(StartIndex);
+  if StartIndex > Length(AValue) then
+    Exit(AValue);
+
+  EndIndex := StartIndex;
+  while (EndIndex <= Length(AValue)) and (AValue[EndIndex] in ['0'..'9']) do
+    Inc(EndIndex);
+
+  Result := Copy(AValue, 1, StartIndex - 1) + AReplacement +
+    Copy(AValue, EndIndex, MaxInt);
+end;
+
+function AdjustProlepticGregorianYearEra(const AFormatted: string;
+  const AMillis: Double; const AOptions: TIntlDateTimeFormatOptions): string;
+const
+  MS_PER_DAY_DOUBLE = 86400000.0;
+var
+  DateRec: TTemporalDateRecord;
+  EpochDays: Int64;
+  ExpectedYear: Int64;
+begin
+  Result := AFormatted;
+  if not DateTimeFormatHasOnlyYearEra(AOptions) then
+    Exit;
+
+  EpochDays := Trunc(Floor(AMillis / MS_PER_DAY_DOUBLE));
+  DateRec := EpochDaysToDate(EpochDays);
+  if DateRec.Year <= 0 then
+    ExpectedYear := 1 - Int64(DateRec.Year)
+  else
+    ExpectedYear := DateRec.Year;
+
+  Result := ReplaceFirstAsciiDigitRun(AFormatted, IntToStr(ExpectedYear));
+end;
+
+function CopticEraFallbackValue(const AOptions: TIntlDateTimeFormatOptions): string;
+begin
+  if AOptions.Era = 'long' then
+    Result := 'Anno Martyrum'
+  else
+    Result := 'AM';
+end;
+
+function NeedsCopticEraFallback(const AOptions: TIntlDateTimeFormatOptions): Boolean;
+begin
+  Result := (AOptions.Calendar = 'coptic') and (AOptions.Era <> '') and
+    (AOptions.Year <> '');
+end;
+
+function FormatPartsHaveType(const AParts: TIntlFormatPartArray;
+  const APartType: string): Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  for I := 0 to Length(AParts) - 1 do
+    if AParts[I].PartType = APartType then
+      Exit(True);
+end;
+
+function AdjustCopticEraFormatted(const AFormatted: string;
+  const AOptions: TIntlDateTimeFormatOptions): string;
+begin
+  Result := AFormatted;
+  if not NeedsCopticEraFallback(AOptions) then
+    Exit;
+  if Pos(CopticEraFallbackValue(AOptions), AFormatted) = 0 then
+    Result := AFormatted + CopticEraFallbackValue(AOptions);
+end;
+
+procedure EnsureCopticEraPart(var AParts: TIntlFormatPartArray;
+  const AOptions: TIntlDateTimeFormatOptions);
+var
+  Index: Integer;
+begin
+  if not NeedsCopticEraFallback(AOptions) or
+     FormatPartsHaveType(AParts, 'era') then
+    Exit;
+
+  Index := Length(AParts);
+  SetLength(AParts, Index + 1);
+  AParts[Index].PartType := 'era';
+  AParts[Index].Value := CopticEraFallbackValue(AOptions);
+  AParts[Index].Source := '';
+end;
+
+function NeedsIslamicEraFallback(const AOptions: TIntlDateTimeFormatOptions): Boolean;
+begin
+  Result := ((AOptions.Calendar = 'islamic-civil') or
+    (AOptions.Calendar = 'islamic-tbla') or
+    (AOptions.Calendar = 'islamic-umalqura')) and
+    (AOptions.Era <> '') and (AOptions.Year <> '');
+end;
+
+function AdjustIslamicEraFormatted(const AFormatted: string;
+  const AOptions: TIntlDateTimeFormatOptions): string;
+begin
+  Result := AFormatted;
+  if not NeedsIslamicEraFallback(AOptions) then
+    Exit;
+  if (Pos('-', AFormatted) > 0) and
+     (Pos('Anno Hegirae', AFormatted) > 0) then
+    Result := StringReplace(AFormatted, 'Anno Hegirae',
+      'Before Anno Hegirae', [rfReplaceAll]);
+end;
+
+procedure AdjustIslamicEraParts(var AParts: TIntlFormatPartArray;
+  const AOptions: TIntlDateTimeFormatOptions);
+var
+  I: Integer;
+  HasNegativeYear: Boolean;
+begin
+  if not NeedsIslamicEraFallback(AOptions) then
+    Exit;
+
+  HasNegativeYear := False;
+  for I := 0 to Length(AParts) - 1 do
+    if (AParts[I].PartType = 'year') and
+       (Length(AParts[I].Value) > 0) and (AParts[I].Value[1] = '-') then
+    begin
+      HasNegativeYear := True;
+      Break;
+    end;
+
+  if not HasNegativeYear then
+    Exit;
+
+  for I := 0 to Length(AParts) - 1 do
+    if (AParts[I].PartType = 'era') and
+       (AParts[I].Value = 'Anno Hegirae') then
+      AParts[I].Value := 'Before Anno Hegirae';
+end;
+
+function DateTimeFormatLocaleArgumentToLocale(const AArg: TGocciaValue): string;
+var
+  RequestedLocales: TStringArray;
+begin
+  RequestedLocales := CanonicalizeLocaleListFromValue(AArg);
+  Result := ResolveRequestedLocale(RequestedLocales);
+  if Result = '' then
+    Exit;
+end;
+
+function DateTimeFormatOptionsArgumentToObject(
+  const AArg: TGocciaValue): TGocciaObjectValue;
+begin
+  if IsUndefinedDateTimeFormatValue(AArg) then
+    Result := nil
+  else
+    Result := ToObject(AArg);
+end;
+
+function HasDateTimeStyleConflict(const ADateTimeFormat: TGocciaIntlDateTimeFormatValue): Boolean;
+begin
+  Result := (ADateTimeFormat.FWeekday <> '') or
+    (ADateTimeFormat.FEra <> '') or
+    (ADateTimeFormat.FYear <> '') or
+    (ADateTimeFormat.FMonth <> '') or
+    (ADateTimeFormat.FDay <> '') or
+    (ADateTimeFormat.FDayPeriod <> '') or
+    (ADateTimeFormat.FHour <> '') or
+    (ADateTimeFormat.FMinute <> '') or
+    (ADateTimeFormat.FSecond <> '') or
+    (ADateTimeFormat.FFractionalSecondDigits >= 0) or
+    (ADateTimeFormat.FTimeZoneName <> '');
+end;
+
+function TemporalLocaleCalendarMatches(const AValueCalendar,
+  ALocaleCalendar: string; const AAllowISOCalendar: Boolean): Boolean;
+begin
+  Result := (AValueCalendar = '') or (AValueCalendar = ALocaleCalendar) or
+    (AAllowISOCalendar and (AValueCalendar = 'iso8601'));
+end;
+
+function TemporalDateTimeValueCalendar(const AValue: TGocciaValue): string;
+begin
+  if AValue is TGocciaTemporalPlainDateValue then
+    Result := TGocciaTemporalPlainDateValue(AValue).CalendarId
+  else if AValue is TGocciaTemporalPlainDateTimeValue then
+    Result := TGocciaTemporalPlainDateTimeValue(AValue).CalendarId
+  else if AValue is TGocciaTemporalPlainYearMonthValue then
+    Result := TGocciaTemporalPlainYearMonthValue(AValue).CalendarId
+  else if AValue is TGocciaTemporalPlainMonthDayValue then
+    Result := TGocciaTemporalPlainMonthDayValue(AValue).CalendarId
+  else if AValue is TGocciaTemporalZonedDateTimeValue then
+    Result := TGocciaTemporalZonedDateTimeValue(AValue).CalendarId
+  else
+    Result := '';
+end;
+
+procedure ValidateTemporalLocaleCalendar(
+  const ADateTimeFormat: TGocciaIntlDateTimeFormatValue;
+  const AValue: TGocciaValue);
+var
+  ValueCalendar: string;
+  AllowISOCalendar: Boolean;
+begin
+  ValueCalendar := '';
+  AllowISOCalendar := False;
+
+  if AValue is TGocciaTemporalPlainDateValue then
+  begin
+    ValueCalendar := TGocciaTemporalPlainDateValue(AValue).CalendarId;
+    AllowISOCalendar := True;
+  end
+  else if AValue is TGocciaTemporalPlainDateTimeValue then
+  begin
+    ValueCalendar := TGocciaTemporalPlainDateTimeValue(AValue).CalendarId;
+    AllowISOCalendar := True;
+  end
+  else if AValue is TGocciaTemporalPlainYearMonthValue then
+    ValueCalendar := TGocciaTemporalPlainYearMonthValue(AValue).CalendarId
+  else if AValue is TGocciaTemporalPlainMonthDayValue then
+    ValueCalendar := TGocciaTemporalPlainMonthDayValue(AValue).CalendarId
+  else if AValue is TGocciaTemporalZonedDateTimeValue then
+  begin
+    ValueCalendar := TGocciaTemporalZonedDateTimeValue(AValue).CalendarId;
+    AllowISOCalendar := True;
+  end;
+
+  if not TemporalLocaleCalendarMatches(ValueCalendar, ADateTimeFormat.FCalendar,
+    AllowISOCalendar) then
+    ThrowRangeError('Temporal value calendar does not match the locale calendar');
+end;
+
+function FormatTemporalValueWithDateTimeFormat(
+  const ADTF: TGocciaIntlDateTimeFormatValue; const AValue: TGocciaValue;
+  const AAllowZonedDateTime: Boolean): TGocciaValue;
+var
+  Millis: Double;
+  Formatted: string;
+  EffectiveOptions: TIntlDateTimeFormatOptions;
+  Input: TDateTimeFormattable;
+  Parts: TIntlFormatPartArray;
+begin
+  EffectiveOptions := ADTF.FResolvedOptions;
+  Input := ToDateTimeFormattable(AValue);
+  if IsTemporalDateTimeKind(Input.Kind) then
+  begin
+    if (Input.Kind = dtfkZonedDateTime) and not AAllowZonedDateTime then
+      ThrowTypeError('Intl.DateTimeFormat.prototype.format does not support Temporal.ZonedDateTime');
+    if not FilterTemporalDateTimeOptions(ADTF.FResolvedOptions, Input.Kind,
+      ADTF.FHasExplicitCoreOptions, EffectiveOptions) then
+      ThrowTypeError('Intl.DateTimeFormat.prototype.format has no fields compatible with the Temporal value');
+  if TryICUTemporalSurrogateToParts(ADTF.FLocale, Input, EffectiveOptions,
+      Parts) then
+    begin
+      EnsureCopticEraPart(Parts, EffectiveOptions);
+      AdjustIslamicEraParts(Parts, EffectiveOptions);
+      Exit(TGocciaStringLiteralValue.Create(FormatPartArrayValue(Parts)));
+    end;
+    Millis := Input.Millis;
+    if not IsTemporalPlainKind(Input.Kind) then
+      Millis := TimeClipMillis(Millis);
+  end
+  else
+    Millis := TimeClipMillis(Input.Millis);
+
+  if IsNan(Millis) then
+    ThrowRangeError('Invalid time value');
+
+  if TryICUFormatDateTime(ADTF.FLocale, Millis, EffectiveOptions, Formatted) then
+  begin
+    Formatted := AdjustProlepticGregorianYearEra(Formatted, Millis,
+      EffectiveOptions);
+    Formatted := AdjustCopticEraFormatted(Formatted, EffectiveOptions);
+    Formatted := AdjustIslamicEraFormatted(Formatted, EffectiveOptions);
+    Result := TGocciaStringLiteralValue.Create(Formatted)
+  end
+  else
+    Result := TGocciaStringLiteralValue.Create(FloatToStr(Millis));
+end;
+
+function FormatTemporalValueToLocaleString(const AValue, ALocales,
+  AOptions: TGocciaValue): TGocciaValue;
+var
+  Locale: string;
+  OptionsObj: TGocciaObjectValue;
+  DTF: TGocciaIntlDateTimeFormatValue;
+  ZDT: TGocciaTemporalZonedDateTimeValue;
+  DateStyleOption, TimeStyleOption, TimeZoneOption: TGocciaValue;
+  TimeZoneId: string;
+begin
+  Locale := DateTimeFormatLocaleArgumentToLocale(ALocales);
+  OptionsObj := DateTimeFormatOptionsArgumentToObject(AOptions);
+
+  if Assigned(OptionsObj) then
+  begin
+    if (AValue is TGocciaTemporalPlainDateValue) or
+       (AValue is TGocciaTemporalPlainYearMonthValue) or
+       (AValue is TGocciaTemporalPlainMonthDayValue) then
+    begin
+      TimeStyleOption := OptionsObj.GetProperty('timeStyle');
+      if Assigned(TimeStyleOption) and
+         not (TimeStyleOption is TGocciaUndefinedLiteralValue) then
+        ThrowTypeError('Temporal date toLocaleString does not accept a timeStyle option');
+    end
+    else if AValue is TGocciaTemporalPlainTimeValue then
+    begin
+      DateStyleOption := OptionsObj.GetProperty('dateStyle');
+      if Assigned(DateStyleOption) and
+         not (DateStyleOption is TGocciaUndefinedLiteralValue) then
+        ThrowTypeError('Temporal.PlainTime.prototype.toLocaleString does not accept a dateStyle option');
+    end
+    else if AValue is TGocciaTemporalZonedDateTimeValue then
+    begin
+      TimeZoneOption := OptionsObj.GetProperty('timeZone');
+      if Assigned(TimeZoneOption) and
+         not (TimeZoneOption is TGocciaUndefinedLiteralValue) then
+        ThrowTypeError('Temporal.ZonedDateTime.prototype.toLocaleString does not accept a timeZone option');
+    end;
+  end;
+
+  DTF := TGocciaIntlDateTimeFormatValue.Create(Locale, OptionsObj);
+  ValidateTemporalLocaleCalendar(DTF, AValue);
+  if AValue is TGocciaTemporalZonedDateTimeValue then
+  begin
+    ZDT := TGocciaTemporalZonedDateTimeValue(AValue);
+    TimeZoneId := NormalizeDateTimeFormatTimeZone(ZDT.TimeZone);
+    DTF.FTimeZone := TimeZoneId;
+    DTF.FResolvedOptions.TimeZone := ICUDateTimeFormatTimeZone(TimeZoneId);
+  end;
+
+  Result := FormatTemporalValueWithDateTimeFormat(DTF, AValue, True);
+end;
+
+function DateTimeFormatHasResolvedHour(
+  const ADateTimeFormat: TGocciaIntlDateTimeFormatValue): Boolean;
+begin
+  Result := (ADateTimeFormat.FHour <> '') or
+    (ADateTimeFormat.FTimeStyle <> '');
+end;
+
+function DateTimeFormatResolvedHour12(
+  const ADateTimeFormat: TGocciaIntlDateTimeFormatValue): Boolean;
+begin
+  Result := (ADateTimeFormat.FHourCycle = 'h11') or
+    (ADateTimeFormat.FHourCycle = 'h12');
+end;
+
 { TGocciaIntlDateTimeFormatValue }
 
 procedure TGocciaIntlDateTimeFormatValue.ReadOptions(const AOptions: TGocciaObjectValue);
 var
   V: TGocciaValue;
+  CalendarOption, NumberingSystemOption: string;
   Ignored: string;
+  TimeZoneOption: string;
 begin
   if not Assigned(AOptions) then Exit;
 
-  ReadValidatedStringOption(AOptions, 'localeMatcher', Ignored);
-  ReadValidatedStringOption(AOptions, 'formatMatcher', Ignored);
-  TryReadStringOption(AOptions, 'dateStyle', FDateStyle);
-  TryReadStringOption(AOptions, 'timeStyle', FTimeStyle);
-  TryReadStringOption(AOptions, 'calendar', FCalendar);
-  TryReadStringOption(AOptions, 'numberingSystem', FNumberingSystem);
-  ReadValidatedStringOption(AOptions, 'timeZone', FTimeZone);
-  FTimeZone := NormalizeDateTimeFormatTimeZone(FTimeZone);
+  Ignored := ReadDateTimeStringOption(AOptions, 'localeMatcher',
+    'lookup|best fit', '');
+  if TryReadDateTimeStringOption(AOptions, 'calendar', CalendarOption) then
+    TryResolveDateTimeCalendarOption(CalendarOption, 'calendar', FCalendar);
+  if TryReadDateTimeStringOption(AOptions, 'numberingSystem',
+    NumberingSystemOption) then
+    TryResolveDateTimeNumberingSystemOption(NumberingSystemOption,
+      'numberingSystem', FNumberingSystem);
   V := AOptions.GetProperty('hour12');
   if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
   begin
@@ -971,20 +1850,39 @@ begin
     else
       FHour12 := 0;
   end;
-  ReadValidatedStringOption(AOptions, 'hourCycle', FHourCycle);
-  ReadValidatedStringOption(AOptions, 'weekday', FWeekday);
-  ReadValidatedStringOption(AOptions, 'era', FEra);
-  ReadValidatedStringOption(AOptions, 'year', FYear);
-  ReadValidatedStringOption(AOptions, 'month', FMonth);
-  ReadValidatedStringOption(AOptions, 'day', FDay);
-  TryReadStringOption(AOptions, 'dayPeriod', FDayPeriod);
-  ReadValidatedStringOption(AOptions, 'hour', FHour);
-  ReadValidatedStringOption(AOptions, 'minute', FMinute);
-  ReadValidatedStringOption(AOptions, 'second', FSecond);
-  V := AOptions.GetProperty('fractionalSecondDigits');
-  if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-    FFractionalSecondDigits := ToIntegerWithTruncationValue(V);
-  TryReadStringOption(AOptions, 'timeZoneName', FTimeZoneName);
+  FHourCycle := ReadDateTimeStringOption(AOptions, 'hourCycle',
+    'h11|h12|h23|h24', FHourCycle);
+  if TryReadDateTimeStringOption(AOptions, 'timeZone', TimeZoneOption) then
+  begin
+    if TimeZoneOption = '' then
+      ThrowRangeError(Format(SErrorUnknownTimezone, [TimeZoneOption]));
+    FTimeZone := CanonicalizeDateTimeFormatTimeZone(TimeZoneOption);
+  end;
+  FWeekday := ReadDateTimeStringOption(AOptions, 'weekday',
+    'narrow|short|long', FWeekday);
+  FEra := ReadDateTimeStringOption(AOptions, 'era', 'narrow|short|long', FEra);
+  FYear := ReadDateTimeStringOption(AOptions, 'year', '2-digit|numeric', FYear);
+  FMonth := ReadDateTimeStringOption(AOptions, 'month',
+    '2-digit|numeric|narrow|short|long', FMonth);
+  FDay := ReadDateTimeStringOption(AOptions, 'day', '2-digit|numeric', FDay);
+  FDayPeriod := ReadDateTimeStringOption(AOptions, 'dayPeriod',
+    'narrow|short|long', FDayPeriod);
+  FHour := ReadDateTimeStringOption(AOptions, 'hour', '2-digit|numeric', FHour);
+  FMinute := ReadDateTimeStringOption(AOptions, 'minute',
+    '2-digit|numeric', FMinute);
+  FSecond := ReadDateTimeStringOption(AOptions, 'second',
+    '2-digit|numeric', FSecond);
+  TryReadDateTimeIntegerOption(AOptions, 'fractionalSecondDigits', 1, 3,
+    FFractionalSecondDigits);
+  FTimeZoneName := ReadDateTimeStringOption(AOptions, 'timeZoneName',
+    'short|long|shortOffset|longOffset|shortGeneric|longGeneric',
+    FTimeZoneName);
+  Ignored := ReadDateTimeStringOption(AOptions, 'formatMatcher',
+    'basic|best fit', '');
+  FDateStyle := ReadDateTimeStringOption(AOptions, 'dateStyle',
+    'full|long|medium|short', FDateStyle);
+  FTimeStyle := ReadDateTimeStringOption(AOptions, 'timeStyle',
+    'full|long|medium|short', FTimeStyle);
 end;
 
 constructor TGocciaIntlDateTimeFormatValue.Create(const ALocale: string; const AOptions: TGocciaObjectValue);
@@ -993,10 +1891,16 @@ var
 begin
   inherited Create;
   Canonical := CanonicalizeUnicodeLocaleId(ALocale);
+  if (Canonical <> '') and (Pos('-u-', LowerCase(ALocale)) > 0) and
+     (Pos('-u-', LowerCase(Canonical)) = 0) then
+    Canonical := ALocale;
   if Canonical = '' then
-    FLocale := DefaultLocale
-  else
-    FLocale := Canonical;
+  begin
+    Canonical := CanonicalizeUnicodeLocaleId(DefaultLocale);
+    if Canonical = '' then
+      Canonical := 'en';
+  end;
+  FLocale := Canonical;
 
   // Defaults
   FHour12 := -1;
@@ -1004,16 +1908,16 @@ begin
   FTimeZone := DefaultTimeZone;
 
   ReadOptions(AOptions);
+  ResolveDateTimeFormatLocaleOptions(FLocale, FCalendar, FNumberingSystem,
+    FHourCycle, FHour12);
+  if ((FDateStyle <> '') or (FTimeStyle <> '')) and
+     HasDateTimeStyleConflict(Self) then
+    ThrowTypeError('dateStyle/timeStyle may not be used with component options');
   FHasExplicitCoreOptions := (FDateStyle <> '') or (FTimeStyle <> '') or
     (FWeekday <> '') or (FYear <> '') or (FMonth <> '') or (FDay <> '') or
     (FDayPeriod <> '') or (FHour <> '') or (FMinute <> '') or
     (FSecond <> '') or (FFractionalSecondDigits >= 0);
 
-  // Default calendar and numberingSystem
-  if FCalendar = '' then
-    FCalendar := 'gregory';
-  if FNumberingSystem = '' then
-    FNumberingSystem := 'latn';
   if (FFractionalSecondDigits >= 0) and
      ((FFractionalSecondDigits < 1) or (FFractionalSecondDigits > 3)) then
     ThrowRangeError(Format(SErrorIntlDigitsOutOfRange,
@@ -1056,7 +1960,7 @@ end;
 
 function TGocciaIntlDateTimeFormatValue.ToStringTag: string;
 begin
-  Result := 'Intl.DateTimeFormat';
+  Result := 'Object';
 end;
 
 procedure TGocciaIntlDateTimeFormatValue.MarkReferences;
@@ -1136,14 +2040,23 @@ var
   Formatted: string;
 begin
   DTF := AsDateTimeFormat(AThisValue, 'Intl.DateTimeFormat.prototype.format');
-  Millis := DateTimeFormatArgumentMilliseconds(AArgs);
-  if IsNan(Millis) then
-    ThrowRangeError('Invalid time value');
+  if AArgs.GetElement(0) is TGocciaUndefinedLiteralValue then
+  begin
+    Millis := CurrentEpochMilliseconds;
+    if TryICUFormatDateTime(DTF.FLocale, Millis, DTF.FResolvedOptions, Formatted) then
+    begin
+      Formatted := AdjustProlepticGregorianYearEra(Formatted, Millis,
+        DTF.FResolvedOptions);
+      Formatted := AdjustCopticEraFormatted(Formatted, DTF.FResolvedOptions);
+      Formatted := AdjustIslamicEraFormatted(Formatted, DTF.FResolvedOptions);
+      Result := TGocciaStringLiteralValue.Create(Formatted)
+    end
+    else
+      Result := TGocciaStringLiteralValue.Create(FloatToStr(Millis));
+    Exit;
+  end;
 
-  if TryICUFormatDateTime(DTF.FLocale, Millis, DTF.FResolvedOptions, Formatted) then
-    Result := TGocciaStringLiteralValue.Create(Formatted)
-  else
-    Result := TGocciaStringLiteralValue.Create(FloatToStr(Millis));
+  Result := FormatTemporalValueWithDateTimeFormat(DTF, AArgs.GetElement(0), False);
 end;
 
 function TGocciaIntlDateTimeFormatValue.IntlDateTimeFormatFormatToParts(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -1151,14 +2064,47 @@ var
   DTF: TGocciaIntlDateTimeFormatValue;
   Millis: Double;
   Parts: TIntlFormatPartArray;
+  EffectiveOptions: TIntlDateTimeFormatOptions;
+  Input: TDateTimeFormattable;
 begin
   DTF := AsDateTimeFormat(AThisValue, 'Intl.DateTimeFormat.prototype.formatToParts');
-  Millis := DateTimeFormatArgumentMilliseconds(AArgs);
-  if IsNan(Millis) then
-    ThrowRangeError('Invalid time value');
+  EffectiveOptions := DTF.FResolvedOptions;
+  if AArgs.GetElement(0) is TGocciaUndefinedLiteralValue then
+    Millis := CurrentEpochMilliseconds
+  else
+  begin
+    Input := ToDateTimeFormattable(AArgs.GetElement(0));
+    if IsTemporalDateTimeKind(Input.Kind) then
+    begin
+      if Input.Kind = dtfkZonedDateTime then
+        ThrowTypeError('Intl.DateTimeFormat.prototype.formatToParts does not support Temporal.ZonedDateTime');
+      if not FilterTemporalDateTimeOptions(DTF.FResolvedOptions, Input.Kind,
+        DTF.FHasExplicitCoreOptions, EffectiveOptions) then
+        ThrowTypeError('Intl.DateTimeFormat.prototype.formatToParts has no fields compatible with the Temporal value');
+      if TryICUTemporalSurrogateToParts(DTF.FLocale, Input, EffectiveOptions,
+        Parts) then
+      begin
+        EnsureCopticEraPart(Parts, EffectiveOptions);
+        AdjustIslamicEraParts(Parts, EffectiveOptions);
+        Exit(FormatPartsToArray(Parts));
+      end;
+      Millis := Input.Millis;
+      if not IsTemporalPlainKind(Input.Kind) then
+        Millis := TimeClipMillis(Millis);
+    end
+    else
+      Millis := TimeClipMillis(Input.Millis);
 
-  if TryICUFormatDateTimeToParts(DTF.FLocale, Millis, DTF.FResolvedOptions, Parts) then
+    if IsNan(Millis) then
+      ThrowRangeError('Invalid time value');
+  end;
+
+  if TryICUFormatDateTimeToParts(DTF.FLocale, Millis, EffectiveOptions, Parts) then
+  begin
+    EnsureCopticEraPart(Parts, EffectiveOptions);
+    AdjustIslamicEraParts(Parts, EffectiveOptions);
     Result := FormatPartsToArray(Parts)
+  end
   else
     Result := TGocciaArrayValue.Create;
 end;
@@ -1182,6 +2128,10 @@ begin
   EndInput := ToDateTimeFormattable(AArgs.GetElement(1));
   if StartInput.Kind <> EndInput.Kind then
     ThrowTypeError('Intl.DateTimeFormat.prototype.formatRange requires matching date-time value kinds');
+  if IsTemporalDateTimeKind(StartInput.Kind) and
+     (TemporalDateTimeValueCalendar(AArgs.GetElement(0)) <>
+      TemporalDateTimeValueCalendar(AArgs.GetElement(1))) then
+    ThrowRangeError('Temporal values must use the same calendar');
   if StartInput.Kind = dtfkZonedDateTime then
     ThrowTypeError('Intl.DateTimeFormat.prototype.formatRange does not support Temporal.ZonedDateTime');
 
@@ -1248,6 +2198,10 @@ begin
   EndInput := ToDateTimeFormattable(AArgs.GetElement(1));
   if StartInput.Kind <> EndInput.Kind then
     ThrowTypeError('Intl.DateTimeFormat.prototype.formatRangeToParts requires matching date-time value kinds');
+  if IsTemporalDateTimeKind(StartInput.Kind) and
+     (TemporalDateTimeValueCalendar(AArgs.GetElement(0)) <>
+      TemporalDateTimeValueCalendar(AArgs.GetElement(1))) then
+    ThrowRangeError('Temporal values must use the same calendar');
   if StartInput.Kind = dtfkZonedDateTime then
     ThrowTypeError('Intl.DateTimeFormat.prototype.formatRangeToParts does not support Temporal.ZonedDateTime');
 
@@ -1316,47 +2270,55 @@ function TGocciaIntlDateTimeFormatValue.IntlDateTimeFormatResolvedOptions(const 
 var
   DTF: TGocciaIntlDateTimeFormatValue;
   Obj: TGocciaObjectValue;
+
+  procedure AddStringOption(const AName, AValue: string);
+  begin
+    Obj.CreateDataPropertyOrThrow(AName, TGocciaStringLiteralValue.Create(AValue));
+  end;
+
 begin
   DTF := AsDateTimeFormat(AThisValue, 'Intl.DateTimeFormat.prototype.resolvedOptions');
   Obj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
-  Obj.AssignProperty('locale', TGocciaStringLiteralValue.Create(DTF.FLocale));
-  Obj.AssignProperty('calendar', TGocciaStringLiteralValue.Create(DTF.FCalendar));
-  Obj.AssignProperty('numberingSystem', TGocciaStringLiteralValue.Create(DTF.FNumberingSystem));
-  Obj.AssignProperty('timeZone', TGocciaStringLiteralValue.Create(DTF.FTimeZone));
-  if DTF.FHour12 >= 0 then
-    Obj.AssignProperty('hour12', TGocciaBooleanLiteralValue.Create(DTF.FHour12 = 1));
-  if DTF.FHourCycle <> '' then
-    Obj.AssignProperty('hourCycle', TGocciaStringLiteralValue.Create(DTF.FHourCycle));
-  if DTF.FDateStyle <> '' then
-    Obj.AssignProperty('dateStyle', TGocciaStringLiteralValue.Create(DTF.FDateStyle));
-  if DTF.FTimeStyle <> '' then
-    Obj.AssignProperty('timeStyle', TGocciaStringLiteralValue.Create(DTF.FTimeStyle));
+  AddStringOption('locale', DTF.FLocale);
+  AddStringOption('calendar', DTF.FCalendar);
+  AddStringOption('numberingSystem', DTF.FNumberingSystem);
+  AddStringOption('timeZone', DTF.FTimeZone);
+  if DateTimeFormatHasResolvedHour(DTF) and (DTF.FHourCycle <> '') then
+  begin
+    AddStringOption('hourCycle', DTF.FHourCycle);
+    Obj.CreateDataPropertyOrThrow('hour12',
+      TGocciaBooleanLiteralValue.Create(DateTimeFormatResolvedHour12(DTF)));
+  end;
   if (DTF.FDateStyle = '') and (DTF.FTimeStyle = '') then
   begin
     if DTF.FWeekday <> '' then
-      Obj.AssignProperty('weekday', TGocciaStringLiteralValue.Create(DTF.FWeekday));
+      AddStringOption('weekday', DTF.FWeekday);
     if DTF.FEra <> '' then
-      Obj.AssignProperty('era', TGocciaStringLiteralValue.Create(DTF.FEra));
+      AddStringOption('era', DTF.FEra);
     if DTF.FYear <> '' then
-      Obj.AssignProperty('year', TGocciaStringLiteralValue.Create(DTF.FYear));
+      AddStringOption('year', DTF.FYear);
     if DTF.FMonth <> '' then
-      Obj.AssignProperty('month', TGocciaStringLiteralValue.Create(DTF.FMonth));
+      AddStringOption('month', DTF.FMonth);
     if DTF.FDay <> '' then
-      Obj.AssignProperty('day', TGocciaStringLiteralValue.Create(DTF.FDay));
+      AddStringOption('day', DTF.FDay);
     if DTF.FDayPeriod <> '' then
-      Obj.AssignProperty('dayPeriod', TGocciaStringLiteralValue.Create(DTF.FDayPeriod));
+      AddStringOption('dayPeriod', DTF.FDayPeriod);
     if DTF.FHour <> '' then
-      Obj.AssignProperty('hour', TGocciaStringLiteralValue.Create(DTF.FHour));
+      AddStringOption('hour', DTF.FHour);
     if DTF.FMinute <> '' then
-      Obj.AssignProperty('minute', TGocciaStringLiteralValue.Create(DTF.FMinute));
+      AddStringOption('minute', DTF.FMinute);
     if DTF.FSecond <> '' then
-      Obj.AssignProperty('second', TGocciaStringLiteralValue.Create(DTF.FSecond));
+      AddStringOption('second', DTF.FSecond);
     if DTF.FFractionalSecondDigits >= 0 then
-      Obj.AssignProperty('fractionalSecondDigits',
+      Obj.CreateDataPropertyOrThrow('fractionalSecondDigits',
         TGocciaNumberLiteralValue.Create(DTF.FFractionalSecondDigits));
     if DTF.FTimeZoneName <> '' then
-      Obj.AssignProperty('timeZoneName', TGocciaStringLiteralValue.Create(DTF.FTimeZoneName));
+      AddStringOption('timeZoneName', DTF.FTimeZoneName);
   end;
+  if DTF.FDateStyle <> '' then
+    AddStringOption('dateStyle', DTF.FDateStyle);
+  if DTF.FTimeStyle <> '' then
+    AddStringOption('timeStyle', DTF.FTimeStyle);
   Result := Obj;
 end;
 

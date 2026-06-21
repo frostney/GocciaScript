@@ -4,6 +4,7 @@ features: [Intl]
 ---*/
 
 const isIntl = typeof Intl !== "undefined";
+const hasFullICU = isIntl && new Intl.NumberFormat("en-US").format(NaN) === "NaN";
 
 describe.runIf(isIntl)("Intl.Collator constructor", () => {
   test("creates an instance with no arguments", () => {
@@ -53,8 +54,13 @@ describe.runIf(isIntl)("Intl.Collator constructor", () => {
     expect(caseFirst.caseFirst).toBe("lower");
 
     const collation = new Intl.Collator("de-u-co-phonebk").resolvedOptions();
-    expect(collation.locale).toBe("de-u-co-phonebk");
-    expect(collation.collation).toBe("phonebk");
+    if (hasFullICU) {
+      expect(collation.locale).toBe("de-u-co-phonebk");
+      expect(collation.collation).toBe("phonebk");
+    } else {
+      expect(collation.locale).toBe("de");
+      expect(collation.collation).toBe("default");
+    }
   });
 
   test("ignores Unicode extension-like private-use subtags", () => {

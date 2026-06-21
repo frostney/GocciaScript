@@ -192,6 +192,7 @@ const
   UCOL_TERTIARY = 2;
   UCOL_QUATERNARY = 3;
   UCOL_IDENTICAL = 15;
+  UCOL_NORMALIZATION_MODE = 4;
   UCOL_STRENGTH = 5;
   UCOL_CASE_FIRST = 2;
   UCOL_CASE_LEVEL = 3;
@@ -199,6 +200,7 @@ const
   UCOL_NUMERIC_COLLATION = 7;
   UCOL_OFF = 16;
   UCOL_SHIFTED = 20;
+  UCOL_NON_IGNORABLE = 21;
   UCOL_ON = 17;
   UCOL_LOWER_FIRST = 24;
   UCOL_UPPER_FIRST = 25;
@@ -1596,6 +1598,11 @@ begin
     if not ICUSucceeded(Status) then
       Exit;
 
+    Status := ICU_SUCCESS;
+    IntlFunctions.UcolSetAttribute(Collator, UCOL_NORMALIZATION_MODE, UCOL_ON, Status);
+    if not ICUSucceeded(Status) then
+      Exit;
+
     if ANumeric then
     begin
       Status := ICU_SUCCESS;
@@ -1634,14 +1641,15 @@ begin
         Exit;
     end;
 
+    Status := ICU_SUCCESS;
     if AIgnorePunctuation then
-    begin
-      Status := ICU_SUCCESS;
       IntlFunctions.UcolSetAttribute(Collator, UCOL_ALTERNATE_HANDLING,
-        UCOL_SHIFTED, Status);
-      if not ICUSucceeded(Status) then
-        Exit;
-    end;
+        UCOL_SHIFTED, Status)
+    else
+      IntlFunctions.UcolSetAttribute(Collator, UCOL_ALTERNATE_HANDLING,
+        UCOL_NON_IGNORABLE, Status);
+    if not ICUSucceeded(Status) then
+      Exit;
 
     CollResult := IntlFunctions.UcolStrcoll(Collator,
       PWideChar(AStr1), Length(AStr1),
@@ -2607,7 +2615,11 @@ begin
   AppendDateSkeletonField(Result, AOptions.Second, 's', 'ss', 's', 's', 's');
   if AOptions.FractionalSecondDigits > 0 then
     Result := Result + StringOfChar('S', AOptions.FractionalSecondDigits);
-  if AOptions.DayPeriod <> '' then
+  if AOptions.DayPeriod = 'narrow' then
+    Result := Result + 'BBBBB'
+  else if AOptions.DayPeriod = 'long' then
+    Result := Result + 'BBBB'
+  else if AOptions.DayPeriod <> '' then
     Result := Result + 'B';
 
   if AOptions.TimeZoneName = 'long' then
@@ -2625,6 +2637,58 @@ begin
 
   if Result = '' then
     Result := 'yMd';
+end;
+
+function UTF8FromCodePoint(const ACodePoint: Cardinal): string;
+begin
+  if ACodePoint <= $7F then
+    Result := Chr(ACodePoint)
+  else if ACodePoint <= $7FF then
+    Result := Chr($C0 or (ACodePoint shr 6)) +
+      Chr($80 or (ACodePoint and $3F))
+  else if ACodePoint <= $FFFF then
+    Result := Chr($E0 or (ACodePoint shr 12)) +
+      Chr($80 or ((ACodePoint shr 6) and $3F)) +
+      Chr($80 or (ACodePoint and $3F))
+  else
+    Result := Chr($F0 or (ACodePoint shr 18)) +
+      Chr($80 or ((ACodePoint shr 12) and $3F)) +
+      Chr($80 or ((ACodePoint shr 6) and $3F)) +
+      Chr($80 or (ACodePoint and $3F));
+end;
+
+function DateTimeZeroDigit(const ANumberingSystem: string): string;
+begin
+  if ANumberingSystem = 'arab' then
+    Result := UTF8FromCodePoint($0660)
+  else if ANumberingSystem = 'deva' then
+    Result := UTF8FromCodePoint($0966)
+  else if ANumberingSystem = 'hanidec' then
+    Result := UTF8FromCodePoint($3007)
+  else
+    Result := '0';
+end;
+
+function PadTwoDigitHourFormatted(const AFormatted: string;
+  const AOptions: TIntlDateTimeFormatOptions): string;
+var
+  ColonPos: Integer;
+  ZeroDigit: string;
+begin
+  Result := AFormatted;
+  if AOptions.Hour <> '2-digit' then
+    Exit;
+
+  ColonPos := Pos(':', AFormatted);
+  if ColonPos <= 1 then
+    Exit;
+
+  ZeroDigit := DateTimeZeroDigit(AOptions.NumberingSystem);
+  if ColonPos = Length(ZeroDigit) + 1 then
+    Result := ZeroDigit + AFormatted;
+  if AOptions.NumberingSystem = 'hanidec' then
+    Result := StringReplace(Result, UTF8FromCodePoint($202F), ' ',
+      [rfReplaceAll]);
 end;
 
 function FindUnicodeExtensionEnd(const ALocaleLower: string; const AUnicodePos: Integer): Integer;
@@ -2645,9 +2709,9 @@ begin
   end;
 end;
 
-function RemoveUnicodeHourCycleKeyword(const ALocale: string): string;
+function RemoveUnicodeLocaleKeyword(const ALocale, AKey: string): string;
 var
-  LocaleLower, Extension, NewExtension, Token, TokenLower, Suffix: string;
+  LocaleLower, Extension, NewExtension, Token, TokenLower, Suffix, KeyLower: string;
   UnicodePos, ExtensionStart, ExtensionEnd, I, TokenStart: Integer;
   Tokens: IntlTypes.TStringArray;
 
@@ -2661,6 +2725,7 @@ var
 
 begin
   LocaleLower := LowerCase(ALocale);
+  KeyLower := LowerCase(AKey);
   UnicodePos := Pos('-u-', LocaleLower);
   if UnicodePos = 0 then
     Exit(ALocale);
@@ -2686,7 +2751,7 @@ begin
   begin
     Token := Tokens[I];
     TokenLower := LowerCase(Token);
-    if TokenLower = 'hc' then
+    if TokenLower = KeyLower then
     begin
       Inc(I);
       while (I < Length(Tokens)) and (Length(Tokens[I]) > 2) do
@@ -2707,32 +2772,40 @@ begin
     Result := Copy(ALocale, 1, UnicodePos + 2) + NewExtension + Suffix;
 end;
 
-function ApplyDateTimeHourCycleLocaleOption(const ALocale: string;
-  const AOptions: TIntlDateTimeFormatOptions): string;
+function ApplyUnicodeLocaleKeyword(const ALocale, AKey, AValue: string): string;
 var
   LocaleLower: string;
   UnicodePos, ExtensionEnd, PrivateUsePos: Integer;
 begin
-  if AOptions.HourCycle = '' then
+  if AValue = '' then
     Exit(ALocale);
 
-  Result := RemoveUnicodeHourCycleKeyword(ALocale);
+  Result := RemoveUnicodeLocaleKeyword(ALocale, AKey);
   LocaleLower := LowerCase(Result);
   UnicodePos := Pos('-u-', LocaleLower);
   if UnicodePos > 0 then
   begin
     ExtensionEnd := FindUnicodeExtensionEnd(LocaleLower, UnicodePos);
-    Result := Copy(Result, 1, ExtensionEnd - 1) + '-hc-' +
-      AOptions.HourCycle + Copy(Result, ExtensionEnd, Length(Result) - ExtensionEnd + 1);
+    Result := Copy(Result, 1, ExtensionEnd - 1) + '-' + AKey + '-' +
+      AValue + Copy(Result, ExtensionEnd, Length(Result) - ExtensionEnd + 1);
     Exit;
   end;
 
   PrivateUsePos := Pos('-x-', LocaleLower);
   if PrivateUsePos > 0 then
-    Result := Copy(Result, 1, PrivateUsePos - 1) + '-u-hc-' +
-      AOptions.HourCycle + Copy(Result, PrivateUsePos, Length(Result) - PrivateUsePos + 1)
+    Result := Copy(Result, 1, PrivateUsePos - 1) + '-u-' + AKey + '-' +
+      AValue + Copy(Result, PrivateUsePos, Length(Result) - PrivateUsePos + 1)
   else
-    Result := Result + '-u-hc-' + AOptions.HourCycle;
+    Result := Result + '-u-' + AKey + '-' + AValue;
+end;
+
+function ApplyDateTimeLocaleOptions(const ALocale: string;
+  const AOptions: TIntlDateTimeFormatOptions): string;
+begin
+  Result := ALocale;
+  Result := ApplyUnicodeLocaleKeyword(Result, 'ca', AOptions.Calendar);
+  Result := ApplyUnicodeLocaleKeyword(Result, 'nu', AOptions.NumberingSystem);
+  Result := ApplyUnicodeLocaleKeyword(Result, 'hc', AOptions.HourCycle);
 end;
 
 function TryICUGetBestDateTimePattern(const ALocale, ASkeleton: string;
@@ -2790,7 +2863,7 @@ begin
   Result := False;
   AFormatter := nil;
 
-  EffectiveLocale := ApplyDateTimeHourCycleLocaleOption(ALocale, AOptions);
+  EffectiveLocale := ApplyDateTimeLocaleOptions(ALocale, AOptions);
   LocaleAnsi := AnsiString(EffectiveLocale);
 
   if AOptions.TimeZone <> '' then
@@ -2853,6 +2926,7 @@ begin
       Exit;
 
     AFormatted := UnicodeToString(Buffer, ResultLen);
+    AFormatted := PadTwoDigitHourFormatted(AFormatted, AOptions);
     Result := True;
   finally
     IntlFunctions.UdatClose(Formatter);
@@ -2935,7 +3009,7 @@ begin
     TzLen := -1;
   end;
 
-  EffectiveLocale := ApplyDateTimeHourCycleLocaleOption(ALocale, AOptions);
+  EffectiveLocale := ApplyDateTimeLocaleOptions(ALocale, AOptions);
   LocaleAnsi := AnsiString(EffectiveLocale);
   SkeletonUnicode := UnicodeString(BuildDateTimeSkeleton(AOptions));
   Status := ICU_SUCCESS;

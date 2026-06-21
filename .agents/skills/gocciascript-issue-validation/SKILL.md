@@ -9,12 +9,15 @@ Project-specific validation rules for GocciaScript issues. Use this skill with t
 
 ## Spec Lookup
 
-For ECMA-262 or ECMA-402 semantics, use the pinned `tc39-mcp@0.4.0` server from the project MCP config under `.agents/mcp/` when it is available:
+For ECMA-262 or ECMA-402 semantics, use the pinned `tc39-mcp@0.4.0` server from the project MCP config under `.agents/mcp/` when it is available. `tc39-mcp` spec-reading tools default to ECMA-262, so pass the spec explicitly for the standard you are checking:
 
-1. Use `spec.search` when the exact clause id is unknown.
-2. Use `clause.get` for the relevant clause before deciding expected behavior.
-3. Use `spec.crossrefs` when behavior depends on abstract operations or cross-spec references.
-4. Use `spec.diff` or `spec.history` when the issue may involve recent prose drift.
+- ECMA-262 language/core built-ins: `spec: "262"`
+- ECMA-402 Intl behavior: `spec: "402"`
+
+1. Use `spec.search` when the exact clause id is unknown, for example `spec.search({ spec: "402", query: "Intl.DateTimeFormat" })` for Intl work.
+2. Use `clause.get` for the relevant clause before deciding expected behavior, for example `clause.get({ spec: "402", id: "sec-intl.datetimeformat" })`.
+3. Use `spec.crossrefs` when behavior depends on abstract operations or cross-spec references. For ECMA-402 algorithms that call ECMA-262 operations, start from `spec: "402"` and set `include_cross_spec: true`.
+4. Use `spec.diff` or `spec.history` with the same explicit `spec` when the issue may involve recent prose drift.
 5. Use `test262.search` to map a clause id or feature area to conformance tests.
 6. Use `test262.get` to inspect a specific conformance test when the MCP server returns one.
 7. Use `proposal.list` or `proposal.get` for proposal-stage features.

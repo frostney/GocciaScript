@@ -33,9 +33,10 @@ describe.runIf(isTemporal)("Temporal.Instant.prototype.round", () => {
     expect(rounded.epochMilliseconds).toBe(8640000000000000);
   });
 
-  test("round with large day increment does not overflow divisor", () => {
+  test("round rejects day as smallestUnit", () => {
     const inst = Temporal.Instant.fromEpochMilliseconds(0);
-    const rounded = inst.round({ smallestUnit: "day", roundingIncrement: 200000 });
-    expect(rounded.epochNanoseconds).toBe(0n);
+    expect(() => {
+      inst.round({ smallestUnit: "day", roundingIncrement: 200000 });
+    }).toThrow(RangeError);
   });
 });

@@ -795,10 +795,83 @@ begin
     Result := TGocciaBooleanLiteralValue.FalseValue;
 end;
 
+function TryClassifyDecimalNumericString(const AValue: string; out ANegative: Boolean;
+  out AHasNonZeroDigit: Boolean): Boolean;
+var
+  Index: Integer;
+  HasDigit: Boolean;
+  HasIntegerOrFractionDigit: Boolean;
+  HasExponentDigit: Boolean;
+begin
+  ANegative := False;
+  AHasNonZeroDigit := False;
+  HasIntegerOrFractionDigit := False;
+  Index := 1;
+
+  if Index <= Length(AValue) then
+  begin
+    if AValue[Index] = '-' then
+    begin
+      ANegative := True;
+      Inc(Index);
+    end
+    else if AValue[Index] = '+' then
+      Inc(Index);
+  end;
+
+  HasDigit := False;
+  while (Index <= Length(AValue)) and CharInSet(AValue[Index], ['0'..'9']) do
+  begin
+    HasDigit := True;
+    if AValue[Index] <> '0' then
+      AHasNonZeroDigit := True;
+    Inc(Index);
+  end;
+  HasIntegerOrFractionDigit := HasIntegerOrFractionDigit or HasDigit;
+
+  if (Index <= Length(AValue)) and (AValue[Index] = '.') then
+  begin
+    Inc(Index);
+    HasDigit := False;
+    while (Index <= Length(AValue)) and CharInSet(AValue[Index], ['0'..'9']) do
+    begin
+      HasDigit := True;
+      if AValue[Index] <> '0' then
+        AHasNonZeroDigit := True;
+      Inc(Index);
+    end;
+    HasIntegerOrFractionDigit := HasIntegerOrFractionDigit or HasDigit;
+  end;
+
+  if not HasIntegerOrFractionDigit then
+    Exit(False);
+
+  if (Index <= Length(AValue)) and ((AValue[Index] = 'e') or (AValue[Index] = 'E')) then
+  begin
+    Inc(Index);
+    if (Index <= Length(AValue)) and ((AValue[Index] = '+') or (AValue[Index] = '-')) then
+      Inc(Index);
+
+    HasExponentDigit := False;
+    while (Index <= Length(AValue)) and CharInSet(AValue[Index], ['0'..'9']) do
+    begin
+      HasExponentDigit := True;
+      Inc(Index);
+    end;
+
+    if not HasExponentDigit then
+      Exit(False);
+  end;
+
+  Result := Index > Length(AValue);
+end;
+
 function TGocciaStringLiteralValue.ToNumberLiteral: TGocciaNumberLiteralValue;
 var
   TempValue: Double;
   Trimmed: string;
+  HasNonZeroDigit: Boolean;
+  IsNegativeDecimal: Boolean;
 begin
   Trimmed := Trim(FValue);
 
@@ -820,6 +893,11 @@ begin
     Result := TGocciaNumberLiteralValue.Create(NegInfinity);
     Exit;
   end;
+  if Trimmed = '+Infinity' then
+  begin
+    Result := TGocciaNumberLiteralValue.Create(Infinity);
+    Exit;
+  end;
 
   // Handle hex strings 0x / 0X
   if (Length(Trimmed) > 2) and (Trimmed[1] = '0') and ((Trimmed[2] = 'x') or (Trimmed[2] = 'X')) then
@@ -835,6 +913,20 @@ begin
 
   if TryStrToFloat(Trimmed, TempValue) then
     Result := TGocciaNumberLiteralValue.Create(TempValue)
+  else if TryClassifyDecimalNumericString(Trimmed, IsNegativeDecimal, HasNonZeroDigit) then
+  begin
+    if HasNonZeroDigit then
+    begin
+      if IsNegativeDecimal then
+        Result := TGocciaNumberLiteralValue.Create(NegInfinity)
+      else
+        Result := TGocciaNumberLiteralValue.Create(Infinity);
+    end
+    else if IsNegativeDecimal then
+      Result := TGocciaNumberLiteralValue.NegativeZeroValue
+    else
+      Result := TGocciaNumberLiteralValue.ZeroValue;
+  end
   else
     Result := TGocciaNumberLiteralValue.NaNValue;
 end;

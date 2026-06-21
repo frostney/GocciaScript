@@ -9,7 +9,7 @@ describe.runIf(isTemporal)("Temporal.PlainTime.prototype.toString", () => {
   test("toString()", () => {
     expect(new Temporal.PlainTime(13, 45, 30).toString()).toBe("13:45:30");
     expect(new Temporal.PlainTime(9, 5, 0).toString()).toBe("09:05:00");
-    expect(new Temporal.PlainTime(0, 0, 0, 500).toString()).toBe("00:00:00.500");
+    expect(new Temporal.PlainTime(0, 0, 0, 500).toString()).toBe("00:00:00.5");
   });
 
   test("fractionalSecondDigits 0", () => {

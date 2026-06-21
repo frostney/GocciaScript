@@ -55,6 +55,8 @@ type
     property Nanosecond: Integer read FNanosecond;
   end;
 
+function CoercePlainTime(const AValue: TGocciaValue; const AMethod: string): TGocciaTemporalPlainTimeValue;
+
 implementation
 
 uses
@@ -70,9 +72,12 @@ uses
   Goccia.Temporal.Utils,
   Goccia.Utils,
   Goccia.Values.ErrorHelper,
+  Goccia.Values.IntlDateTimeFormat,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue,
-  Goccia.Values.TemporalDuration;
+  Goccia.Values.TemporalDuration,
+  Goccia.Values.TemporalPlainDateTime,
+  Goccia.Values.TemporalZonedDateTime;
 
 var
   GTemporalPlainTimeSharedSlot: TGocciaRealmOwnedSlotId;
@@ -95,15 +100,40 @@ begin
   Result := TGocciaTemporalPlainTimeValue(AValue);
 end;
 
+procedure ConstrainTemporalTimeFields(var AHour, AMinute, ASecond,
+  AMillisecond, AMicrosecond, ANanosecond: Integer); forward;
+
 function CoercePlainTime(const AValue: TGocciaValue; const AMethod: string): TGocciaTemporalPlainTimeValue;
 var
   TimeRec: TTemporalTimeRecord;
   Obj: TGocciaObjectValue;
-  V: TGocciaValue;
+  EmptyArgs: TGocciaArgumentsCollection;
+  Converted, V: TGocciaValue;
   H, Mi, S, Ms, Us, Ns: Integer;
+  SawTimeField: Boolean;
 begin
   if AValue is TGocciaTemporalPlainTimeValue then
     Result := TGocciaTemporalPlainTimeValue(AValue)
+  else if AValue is TGocciaTemporalPlainDateTimeValue then
+  begin
+    Result := TGocciaTemporalPlainTimeValue.Create(
+      TGocciaTemporalPlainDateTimeValue(AValue).Hour,
+      TGocciaTemporalPlainDateTimeValue(AValue).Minute,
+      TGocciaTemporalPlainDateTimeValue(AValue).Second,
+      TGocciaTemporalPlainDateTimeValue(AValue).Millisecond,
+      TGocciaTemporalPlainDateTimeValue(AValue).Microsecond,
+      TGocciaTemporalPlainDateTimeValue(AValue).Nanosecond);
+  end
+  else if AValue is TGocciaTemporalZonedDateTimeValue then
+  begin
+    EmptyArgs := TGocciaArgumentsCollection.Create([]);
+    try
+      Converted := TGocciaTemporalZonedDateTimeValue(AValue).ZonedDateTimeToPlainTime(EmptyArgs, AValue);
+      Result := TGocciaTemporalPlainTimeValue(Converted);
+    finally
+      EmptyArgs.Free;
+    end;
+  end
   else if AValue is TGocciaStringLiteralValue then
   begin
     if not CoerceToISOTime(TGocciaStringLiteralValue(AValue).Value, TimeRec) then
@@ -116,18 +146,47 @@ begin
   begin
     Obj := TGocciaObjectValue(AValue);
     H := 0; Mi := 0; S := 0; Ms := 0; Us := 0; Ns := 0;
+    SawTimeField := False;
     V := Obj.GetProperty('hour');
-    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then H := ToIntegerWithTruncationValue(V);
-    V := Obj.GetProperty('minute');
-    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Mi := ToIntegerWithTruncationValue(V);
-    V := Obj.GetProperty('second');
-    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then S := ToIntegerWithTruncationValue(V);
-    V := Obj.GetProperty('millisecond');
-    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Ms := ToIntegerWithTruncationValue(V);
+    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
+    begin
+      SawTimeField := True;
+      H := ToIntegerWithTruncationValue(V);
+    end;
     V := Obj.GetProperty('microsecond');
-    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Us := ToIntegerWithTruncationValue(V);
+    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
+    begin
+      SawTimeField := True;
+      Us := ToIntegerWithTruncationValue(V);
+    end;
+    V := Obj.GetProperty('millisecond');
+    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
+    begin
+      SawTimeField := True;
+      Ms := ToIntegerWithTruncationValue(V);
+    end;
+    V := Obj.GetProperty('minute');
+    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
+    begin
+      SawTimeField := True;
+      Mi := ToIntegerWithTruncationValue(V);
+    end;
     V := Obj.GetProperty('nanosecond');
-    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Ns := ToIntegerWithTruncationValue(V);
+    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
+    begin
+      SawTimeField := True;
+      Ns := ToIntegerWithTruncationValue(V);
+    end;
+    V := Obj.GetProperty('second');
+    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
+    begin
+      SawTimeField := True;
+      S := ToIntegerWithTruncationValue(V);
+    end;
+    if not SawTimeField then
+      ThrowTypeError(AMethod + ' requires at least one time property',
+        SSuggestTemporalFromArg);
+    ConstrainTemporalTimeFields(H, Mi, S, Ms, Us, Ns);
     Result := TGocciaTemporalPlainTimeValue.Create(H, Mi, S, Ms, Us, Ns);
   end
   else
@@ -145,6 +204,38 @@ begin
             Int64(T.FSecond) * Int64(1000000000) +
             Int64(T.FMinute) * Int64(60000000000) +
             Int64(T.FHour) * Int64(3600000000000);
+end;
+
+function ClampTemporalInteger(const AValue, AMin, AMax: Integer): Integer;
+begin
+  if AValue < AMin then
+    Result := AMin
+  else if AValue > AMax then
+    Result := AMax
+  else
+    Result := AValue;
+end;
+
+procedure ConstrainTemporalTimeFields(var AHour, AMinute, ASecond,
+  AMillisecond, AMicrosecond, ANanosecond: Integer);
+begin
+  AHour := ClampTemporalInteger(AHour, 0, 23);
+  AMinute := ClampTemporalInteger(AMinute, 0, 59);
+  ASecond := ClampTemporalInteger(ASecond, 0, 59);
+  AMillisecond := ClampTemporalInteger(AMillisecond, 0, 999);
+  AMicrosecond := ClampTemporalInteger(AMicrosecond, 0, 999);
+  ANanosecond := ClampTemporalInteger(ANanosecond, 0, 999);
+end;
+
+procedure ValidatePlainTimeDurationTimeRange(const ADuration: TGocciaTemporalDurationValue);
+var
+  TimeNs: TBigInteger;
+begin
+  TimeNs := TimeDurationFromComponents(ADuration.HoursBig,
+    ADuration.MinutesBig, ADuration.SecondsBig, ADuration.MillisecondsBig,
+    ADuration.MicrosecondsBig, ADuration.NanosecondsBig);
+  if not IsValidTimeDuration(TimeNs) then
+    ThrowRangeError(SErrorInvalidDurationString, SSuggestTemporalDurationRange);
 end;
 
 { TGocciaTemporalPlainTimeValue }
@@ -270,16 +361,20 @@ var
   T: TGocciaTemporalPlainTimeValue;
   Obj: TGocciaObjectValue;
   V: TGocciaValue;
+  Overflow: TTemporalOverflow;
+  H, Mi, S, Ms, Us, Ns: Integer;
+  SawTimeField: Boolean;
 
-  function GetFieldOr(const AName: string; const ADefault: Integer): Integer;
+  procedure ReadField(const AName: string; var ATarget: Integer);
   var
     Val: TGocciaValue;
   begin
     Val := Obj.GetProperty(AName);
-    if (Val = nil) or (Val is TGocciaUndefinedLiteralValue) then
-      Result := ADefault
-    else
-      Result := ToIntegerWithTruncationValue(Val);
+    if Assigned(Val) and not (Val is TGocciaUndefinedLiteralValue) then
+    begin
+      SawTimeField := True;
+      ATarget := ToIntegerWithTruncationValue(Val);
+    end;
   end;
 
 begin
@@ -288,14 +383,33 @@ begin
   if not (V is TGocciaObjectValue) then
     ThrowTypeError(Format(SErrorTemporalWithRequiresObject, ['PlainTime']), SSuggestTemporalWithObject);
   Obj := TGocciaObjectValue(V);
+  if Copy(Obj.ToStringTag, 1, 9) = 'Temporal.' then
+    ThrowTypeError(Format(SErrorTemporalWithRequiresObject, ['PlainTime']), SSuggestTemporalWithObject);
 
-  Result := TGocciaTemporalPlainTimeValue.Create(
-    GetFieldOr('hour', T.FHour),
-    GetFieldOr('minute', T.FMinute),
-    GetFieldOr('second', T.FSecond),
-    GetFieldOr('millisecond', T.FMillisecond),
-    GetFieldOr('microsecond', T.FMicrosecond),
-    GetFieldOr('nanosecond', T.FNanosecond));
+  V := Obj.GetProperty('calendar');
+  if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
+    ThrowTypeError('PlainTime.prototype.with does not accept calendar', SSuggestTemporalWithObject);
+  V := Obj.GetProperty('timeZone');
+  if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
+    ThrowTypeError('PlainTime.prototype.with does not accept timeZone', SSuggestTemporalWithObject);
+
+  H := T.FHour; Mi := T.FMinute; S := T.FSecond;
+  Ms := T.FMillisecond; Us := T.FMicrosecond; Ns := T.FNanosecond;
+  SawTimeField := False;
+  ReadField('hour', H);
+  ReadField('microsecond', Us);
+  ReadField('millisecond', Ms);
+  ReadField('minute', Mi);
+  ReadField('nanosecond', Ns);
+  ReadField('second', S);
+  if not SawTimeField then
+    ThrowTypeError(Format(SErrorTemporalWithRequiresObject, ['PlainTime']), SSuggestTemporalWithObject);
+
+  Overflow := GetOverflowOptionFromValue(AArgs.GetElement(1), 'PlainTime.prototype.with');
+  if Overflow = toConstrain then
+    ConstrainTemporalTimeFields(H, Mi, S, Ms, Us, Ns);
+
+  Result := TGocciaTemporalPlainTimeValue.Create(H, Mi, S, Ms, Us, Ns);
 end;
 
 function TGocciaTemporalPlainTimeValue.TimeAdd(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -303,13 +417,9 @@ var
   T: TGocciaTemporalPlainTimeValue;
   Dur: TGocciaTemporalDurationValue;
   Arg: TGocciaValue;
-  DurRec: TTemporalDurationRecord;
   ExtraDays: Int64;
   Balanced: TTemporalTimeRecord;
   DurTimeNs: TBigInteger;
-  Obj: TGocciaObjectValue;
-  VH: TGocciaValue;
-  H, Mi, S, Ms, Us, Ns: Int64;
 begin
   try
   T := AsPlainTime(AThisValue, 'PlainTime.prototype.add');
@@ -319,31 +429,12 @@ begin
     Dur := TGocciaTemporalDurationValue(Arg)
   else if Arg is TGocciaStringLiteralValue then
   begin
-    if not TryParseISODuration(TGocciaStringLiteralValue(Arg).Value, DurRec) then
-      ThrowRangeError(SErrorInvalidDurationString, SSuggestTemporalDurationArg);
-    Dur := TGocciaTemporalDurationValue.Create(
-      DurRec.Years, DurRec.Months, DurRec.Weeks, DurRec.Days,
-      DurRec.Hours, DurRec.Minutes, DurRec.Seconds,
-      DurRec.Milliseconds, DurRec.Microseconds, DurRec.Nanoseconds);
+    Dur := DurationFromString(TGocciaStringLiteralValue(Arg).Value,
+      SErrorInvalidDurationString);
+    ValidatePlainTimeDurationTimeRange(Dur);
   end
   else if Arg is TGocciaObjectValue then
-  begin
-    Obj := TGocciaObjectValue(Arg);
-    H := 0; Mi := 0; S := 0; Ms := 0; Us := 0; Ns := 0;
-    VH := Obj.GetProperty('hours');
-    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then H := ToIntegerWithTruncation64Value(VH);
-    VH := Obj.GetProperty('minutes');
-    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then Mi := ToIntegerWithTruncation64Value(VH);
-    VH := Obj.GetProperty('seconds');
-    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then S := ToIntegerWithTruncation64Value(VH);
-    VH := Obj.GetProperty('milliseconds');
-    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then Ms := ToIntegerWithTruncation64Value(VH);
-    VH := Obj.GetProperty('microseconds');
-    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then Us := ToIntegerWithTruncation64Value(VH);
-    VH := Obj.GetProperty('nanoseconds');
-    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then Ns := ToIntegerWithTruncation64Value(VH);
-    Dur := TGocciaTemporalDurationValue.Create(0, 0, 0, 0, H, Mi, S, Ms, Us, Ns);
-  end
+    Dur := DurationFromObject(TGocciaObjectValue(Arg))
   else
   begin
     ThrowTypeError(Format(SErrorTemporalAddRequiresDuration, ['PlainTime']), SSuggestTemporalDurationArg);
@@ -376,13 +467,9 @@ var
   T: TGocciaTemporalPlainTimeValue;
   Dur: TGocciaTemporalDurationValue;
   Arg: TGocciaValue;
-  DurRec: TTemporalDurationRecord;
   ExtraDays: Int64;
   Balanced: TTemporalTimeRecord;
   DurTimeNs: TBigInteger;
-  Obj: TGocciaObjectValue;
-  VH: TGocciaValue;
-  H, Mi, S, Ms, Us, Ns: Int64;
 begin
   try
   T := AsPlainTime(AThisValue, 'PlainTime.prototype.subtract');
@@ -392,31 +479,12 @@ begin
     Dur := TGocciaTemporalDurationValue(Arg)
   else if Arg is TGocciaStringLiteralValue then
   begin
-    if not TryParseISODuration(TGocciaStringLiteralValue(Arg).Value, DurRec) then
-      ThrowRangeError(SErrorInvalidDurationString, SSuggestTemporalDurationArg);
-    Dur := TGocciaTemporalDurationValue.Create(
-      DurRec.Years, DurRec.Months, DurRec.Weeks, DurRec.Days,
-      DurRec.Hours, DurRec.Minutes, DurRec.Seconds,
-      DurRec.Milliseconds, DurRec.Microseconds, DurRec.Nanoseconds);
+    Dur := DurationFromString(TGocciaStringLiteralValue(Arg).Value,
+      SErrorInvalidDurationString);
+    ValidatePlainTimeDurationTimeRange(Dur);
   end
   else if Arg is TGocciaObjectValue then
-  begin
-    Obj := TGocciaObjectValue(Arg);
-    H := 0; Mi := 0; S := 0; Ms := 0; Us := 0; Ns := 0;
-    VH := Obj.GetProperty('hours');
-    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then H := ToIntegerWithTruncation64Value(VH);
-    VH := Obj.GetProperty('minutes');
-    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then Mi := ToIntegerWithTruncation64Value(VH);
-    VH := Obj.GetProperty('seconds');
-    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then S := ToIntegerWithTruncation64Value(VH);
-    VH := Obj.GetProperty('milliseconds');
-    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then Ms := ToIntegerWithTruncation64Value(VH);
-    VH := Obj.GetProperty('microseconds');
-    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then Us := ToIntegerWithTruncation64Value(VH);
-    VH := Obj.GetProperty('nanoseconds');
-    if Assigned(VH) and not (VH is TGocciaUndefinedLiteralValue) then Ns := ToIntegerWithTruncation64Value(VH);
-    Dur := TGocciaTemporalDurationValue.Create(0, 0, 0, 0, H, Mi, S, Ms, Us, Ns);
-  end
+    Dur := DurationFromObject(TGocciaObjectValue(Arg))
   else
   begin
     ThrowTypeError(Format(SErrorTemporalSubtractRequiresDuration, ['PlainTime']), SSuggestTemporalDurationArg);
@@ -457,18 +525,19 @@ var
 begin
   OptionsObj := GetDiffOptions(AArgs, 1);
   LargestUnit := GetLargestUnit(OptionsObj, tuHour);
+  RIncrement := GetRoundingIncrement(OptionsObj, 1);
+  RMode := GetRoundingMode(OptionsObj, rmTrunc);
+  SmallestUnit := GetSmallestUnit(OptionsObj, tuNanosecond);
+
   if LargestUnit = tuAuto then LargestUnit := tuHour;
   if not (LargestUnit in [tuHour, tuMinute, tuSecond, tuMillisecond, tuMicrosecond, tuNanosecond]) then
     ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, [AMethodName, 'largestUnit']), SSuggestTemporalValidUnits);
 
-  SmallestUnit := GetSmallestUnit(OptionsObj, tuNanosecond);
   if not (SmallestUnit in [tuHour, tuMinute, tuSecond, tuMillisecond, tuMicrosecond, tuNanosecond]) then
     ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, [AMethodName, 'smallestUnit']), SSuggestTemporalValidUnits);
   if Ord(LargestUnit) > Ord(SmallestUnit) then
     ThrowRangeError(SErrorDurationRoundLargestSmallerThanSmallest, SSuggestTemporalRoundArg);
-  RMode := GetRoundingMode(OptionsObj, rmTrunc);
-  RIncrement := GetRoundingIncrement(OptionsObj, 1);
-  ValidateRoundingIncrement(RIncrement, SmallestUnit, LargestUnit);
+  ValidateRoundingIncrement(RIncrement, SmallestUnit, tuDay);
 
   // Decompose ADiffNs based on largestUnit
   Y := 0; Mo := 0; W := 0; D := 0;
@@ -567,21 +636,27 @@ begin
     UnitStr := TGocciaStringLiteralValue(Arg).Value;
     if not GetTemporalUnitFromString(UnitStr, SmallestUnit) then
       ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, ['PlainTime.prototype.round', UnitStr]), SSuggestTemporalValidUnits);
+    if not (SmallestUnit in [tuHour, tuMinute, tuSecond, tuMillisecond, tuMicrosecond, tuNanosecond]) then
+      ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, ['PlainTime.prototype.round', 'smallestUnit']), SSuggestTemporalValidUnits);
   end
   else if Arg is TGocciaObjectValue then
   begin
     OptionsObj := TGocciaObjectValue(Arg);
+    Increment := GetRoundingIncrement(OptionsObj, 1);
+    Mode := GetRoundingMode(OptionsObj, rmHalfExpand);
     SmallestUnit := GetSmallestUnit(OptionsObj, tuNone);
     if SmallestUnit = tuNone then
       ThrowRangeError(SErrorTemporalRoundRequiresSmallestUnit, SSuggestTemporalRoundArg);
-    Mode := GetRoundingMode(OptionsObj, rmHalfExpand);
-    Increment := GetRoundingIncrement(OptionsObj, 1);
+    if not (SmallestUnit in [tuHour, tuMinute, tuSecond, tuMillisecond, tuMicrosecond, tuNanosecond]) then
+      ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, ['PlainTime.prototype.round', UnitStr]), SSuggestTemporalValidUnits);
   end
   else
   begin
     ThrowTypeError(Format(SErrorTemporalRoundRequiresStringOrOptions, ['PlainTime']), SSuggestTemporalRoundArg);
     SmallestUnit := tuNanosecond;
   end;
+
+  ValidateRoundingIncrement(Increment, SmallestUnit, tuDay);
 
   TotalNs := TimeToTotalNanoseconds(T);
   Divisor := UnitToNanoseconds(SmallestUnit) * Increment;
@@ -654,15 +729,10 @@ begin
 end;
 
 function TGocciaTemporalPlainTimeValue.PlainTimeToLocaleString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-var
-  EmptyArgs: TGocciaArgumentsCollection;
 begin
-  EmptyArgs := TGocciaArgumentsCollection.Create([]);
-  try
-    Result := TimeToString(EmptyArgs, AThisValue);
-  finally
-    EmptyArgs.Free;
-  end;
+  AsPlainTime(AThisValue, 'PlainTime.prototype.toLocaleString');
+  Result := FormatTemporalValueToLocaleString(AThisValue, AArgs.GetElement(0),
+    AArgs.GetElement(1));
 end;
 
 initialization

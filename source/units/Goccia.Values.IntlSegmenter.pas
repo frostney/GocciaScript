@@ -53,6 +53,7 @@ type
   private
     FLocale: string;
     FGranularity: string;
+    FOriginalText: string;
     FText: UnicodeString;
     FSegments: array of TIntlSegment;
     FIndex: Integer;
@@ -61,7 +62,7 @@ type
     procedure BuildSegments;
     procedure BuildSegmentsFallback;
   public
-    constructor Create(const ALocale, AGranularity: string; const AText: UnicodeString);
+    constructor Create(const ALocale, AGranularity, AText: string);
 
     function ToStringTag: string; override;
   published
@@ -149,11 +150,40 @@ function CreateSegmentObject(const ASeg: TIntlSegment; const AIsWordGranularity:
   const AInput: string): TGocciaObjectValue;
 begin
   Result := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
-  Result.AssignProperty('segment', TGocciaStringLiteralValue.Create(ASeg.Segment));
-  Result.AssignProperty('index', TGocciaNumberLiteralValue.Create(ASeg.Index));
-  Result.AssignProperty('input', TGocciaStringLiteralValue.Create(AInput));
+  Result.DefineProperty('segment', TGocciaPropertyDescriptorData.Create(
+    TGocciaStringLiteralValue.Create(ASeg.Segment),
+    [pfEnumerable, pfConfigurable, pfWritable]));
+  Result.DefineProperty('index', TGocciaPropertyDescriptorData.Create(
+    TGocciaNumberLiteralValue.Create(ASeg.Index),
+    [pfEnumerable, pfConfigurable, pfWritable]));
+  Result.DefineProperty('input', TGocciaPropertyDescriptorData.Create(
+    TGocciaStringLiteralValue.Create(AInput),
+    [pfEnumerable, pfConfigurable, pfWritable]));
   if AIsWordGranularity then
-    Result.AssignProperty('isWordLike', TGocciaBooleanLiteralValue.Create(ASeg.IsWordLike));
+    Result.DefineProperty('isWordLike', TGocciaPropertyDescriptorData.Create(
+      TGocciaBooleanLiteralValue.Create(ASeg.IsWordLike),
+      [pfEnumerable, pfConfigurable, pfWritable]));
+end;
+
+function ReadSegmenterStringOption(const AOptions: TGocciaObjectValue;
+  const AName, ADefault: string; const AAllowed: array of string): string;
+var
+  V: TGocciaValue;
+  I: Integer;
+begin
+  Result := ADefault;
+  V := AOptions.GetProperty(AName);
+  if not Assigned(V) or (V is TGocciaUndefinedLiteralValue) then
+    Exit;
+
+  Result := V.ToStringLiteral.Value;
+  for I := Low(AAllowed) to High(AAllowed) do
+  begin
+    if Result = AAllowed[I] then
+      Exit;
+  end;
+
+  ThrowRangeError(Format(SErrorIntlInvalidOption, [Result, AName]));
 end;
 
 { TGocciaIntlSegmenterValue }
@@ -161,7 +191,7 @@ end;
 constructor TGocciaIntlSegmenterValue.Create(const ALocale: string; const AOptions: TGocciaObjectValue);
 var
   Canonical: string;
-  V: TGocciaValue;
+  Ignored: string;
 begin
   inherited Create;
   Canonical := CanonicalizeUnicodeLocaleId(ALocale);
@@ -175,13 +205,10 @@ begin
 
   if Assigned(AOptions) then
   begin
-    V := AOptions.GetProperty('granularity');
-    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-    begin
-      FGranularity := V.ToStringLiteral.Value;
-      if ContainsNulCharacter(FGranularity) then
-        ThrowRangeError(Format(SErrorIntlInvalidOption, [FGranularity, 'granularity']));
-    end;
+    Ignored := ReadSegmenterStringOption(AOptions, 'localeMatcher',
+      'best fit', ['lookup', 'best fit']);
+    FGranularity := ReadSegmenterStringOption(AOptions, 'granularity',
+      FGranularity, ['grapheme', 'word', 'sentence']);
   end;
 
   InitializePrototype;
@@ -191,7 +218,7 @@ end;
 
 function TGocciaIntlSegmenterValue.ToStringTag: string;
 begin
-  Result := 'Intl.Segmenter';
+  Result := 'Object';
 end;
 
 procedure TGocciaIntlSegmenterValue.InitializePrototype;
@@ -244,8 +271,6 @@ var
   InputStr: string;
 begin
   S := AsSegmenter(AThisValue, 'Intl.Segmenter.prototype.segment');
-  if AArgs.Length < 1 then
-    ThrowTypeError('Intl.Segmenter.prototype.segment requires a string argument');
   InputStr := AArgs.GetElement(0).ToStringLiteral.Value;
   Result := TGocciaIntlSegmentsValue.Create(S.FLocale, S.FGranularity, InputStr);
 end;
@@ -257,8 +282,12 @@ var
 begin
   S := AsSegmenter(AThisValue, 'Intl.Segmenter.prototype.resolvedOptions');
   Obj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
-  Obj.AssignProperty('locale', TGocciaStringLiteralValue.Create(S.FLocale));
-  Obj.AssignProperty('granularity', TGocciaStringLiteralValue.Create(S.FGranularity));
+  Obj.DefineProperty('locale', TGocciaPropertyDescriptorData.Create(
+    TGocciaStringLiteralValue.Create(S.FLocale),
+    [pfEnumerable, pfConfigurable, pfWritable]));
+  Obj.DefineProperty('granularity', TGocciaPropertyDescriptorData.Create(
+    TGocciaStringLiteralValue.Create(S.FGranularity),
+    [pfEnumerable, pfConfigurable, pfWritable]));
   Result := Obj;
 end;
 
@@ -326,12 +355,13 @@ begin
 
   // Build all segments and find the one containing the index
   Iter := TGocciaIntlSegmentIteratorValue.Create(Segs.FLocale, Segs.FGranularity,
-    UnicodeString(Segs.FText));
+    Segs.FText);
   try
     for I := 0 to Length(Iter.FSegments) - 1 do
     begin
       Seg := Iter.FSegments[I];
-      if (Idx >= Seg.Index) and (Idx < Seg.Index + Length(Seg.Segment)) then
+      if (Idx >= Seg.Index) and
+         (Idx < Seg.Index + UTF16CodeUnitLength(Seg.Segment)) then
       begin
         Result := CreateSegmentObject(Seg, Segs.FGranularity = 'word', Segs.FText);
         Exit;
@@ -349,18 +379,19 @@ var
 begin
   Segs := AsSegments(AThisValue, 'Segments.prototype[Symbol.iterator]');
   Result := TGocciaIntlSegmentIteratorValue.Create(Segs.FLocale, Segs.FGranularity,
-    UnicodeString(Segs.FText));
+    Segs.FText);
 end;
 
 { TGocciaIntlSegmentIteratorValue }
 
-constructor TGocciaIntlSegmentIteratorValue.Create(const ALocale, AGranularity: string;
-  const AText: UnicodeString);
+constructor TGocciaIntlSegmentIteratorValue.Create(const ALocale, AGranularity,
+  AText: string);
 begin
   inherited Create;
   FLocale := ALocale;
   FGranularity := AGranularity;
-  FText := AText;
+  FOriginalText := AText;
+  FText := UnicodeString(AText);
   FIndex := 0;
   BuildSegments;
   InitializePrototype;
@@ -389,7 +420,7 @@ begin
     begin
       if CurrPos > PrevPos then
       begin
-        Seg.Segment := string(Copy(FText, PrevPos + 1, CurrPos - PrevPos));
+        Seg.Segment := UTF16Substring(FOriginalText, PrevPos, CurrPos - PrevPos);
         Seg.Index := PrevPos;
         if FGranularity = 'word' then
         begin
@@ -431,7 +462,7 @@ var
   SegStart: Integer;
   C: Char;
 begin
-  Utf8Text := string(FText);
+  Utf8Text := FOriginalText;
 
   if FGranularity = 'grapheme' then
   begin
@@ -587,7 +618,7 @@ begin
     Obj.AssignProperty('value', CreateSegmentObject(
       TGocciaIntlSegmentIteratorValue(AThisValue).FSegments[TGocciaIntlSegmentIteratorValue(AThisValue).FIndex],
       TGocciaIntlSegmentIteratorValue(AThisValue).FGranularity = 'word',
-      string(TGocciaIntlSegmentIteratorValue(AThisValue).FText)));
+      TGocciaIntlSegmentIteratorValue(AThisValue).FOriginalText));
     Obj.AssignProperty('done', TGocciaBooleanLiteralValue.FalseValue);
     Inc(TGocciaIntlSegmentIteratorValue(AThisValue).FIndex);
   end;

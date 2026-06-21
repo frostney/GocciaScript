@@ -4,6 +4,18 @@ features: [Temporal]
 ---*/
 
 const isTemporal = typeof Temporal !== "undefined";
+const hasCalendarICU = isTemporal && (() => {
+  try {
+    return Temporal.PlainDate.from({
+      year: 1420,
+      month: 9,
+      day: 24,
+      calendar: "islamic-civil"
+    }).toString() === "2000-01-01[u-ca=islamic-civil]";
+  } catch (_) {
+    return false;
+  }
+})();
 
 describe.runIf(isTemporal)("Temporal.PlainDate.from", () => {
   test("from() with string", () => {
@@ -37,9 +49,10 @@ describe.runIf(isTemporal)("Temporal.PlainDate.from", () => {
     expect(d.day).toBe(15);
   });
 
-  test("from with overflow constrain clamps day to 1", () => {
-    const d = Temporal.PlainDate.from({ year: 2024, month: 3, day: 0 }, { overflow: "constrain" });
-    expect(d.day).toBe(1);
+  test("from with overflow constrain rejects day below 1", () => {
+    expect(() => {
+      Temporal.PlainDate.from({ year: 2024, month: 3, day: 0 }, { overflow: "constrain" });
+    }).toThrow(RangeError);
   });
 
   test("from() accepts +000000 as year zero", () => {
@@ -47,6 +60,30 @@ describe.runIf(isTemporal)("Temporal.PlainDate.from", () => {
     expect(d.year).toBe(0);
     expect(d.month).toBe(3);
     expect(d.day).toBe(31);
+  });
+
+  test("from() converts supported non-ISO calendar fields", () => {
+    if (!hasCalendarICU) {
+      expect(() => Temporal.PlainDate.from({
+        year: 1420,
+        month: 9,
+        day: 24,
+        calendar: "islamic-civil"
+      })).toThrow(RangeError);
+      return;
+    }
+    const d = Temporal.PlainDate.from({
+      year: 1420,
+      month: 9,
+      day: 24,
+      calendar: "islamic-civil"
+    });
+    expect(d.year).toBe(1420);
+    expect(d.month).toBe(9);
+    expect(d.monthCode).toBe("M09");
+    expect(d.day).toBe(24);
+    expect(d.calendarId).toBe("islamic-civil");
+    expect(d.toString()).toBe("2000-01-01[u-ca=islamic-civil]");
   });
 });
 

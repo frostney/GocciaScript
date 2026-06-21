@@ -55,11 +55,15 @@ function GetOptionString(const AOptions: TGocciaObjectValue; const AName: string
   const ADefault: string): string;
 function GetOptionInteger(const AOptions: TGocciaObjectValue; const AName: string;
   const ADefault: Integer): Integer;
+function GetTemporalOptionsObject(const AOptions: TGocciaValue;
+  const AMethod: string): TGocciaObjectValue;
 function GetSmallestUnit(const AOptions: TGocciaObjectValue; const ADefault: TTemporalUnit): TTemporalUnit;
 function GetLargestUnit(const AOptions: TGocciaObjectValue; const ADefault: TTemporalUnit): TTemporalUnit;
 function GetRoundingMode(const AOptions: TGocciaObjectValue; const ADefault: TTemporalRoundingMode): TTemporalRoundingMode;
 function GetRoundingIncrement(const AOptions: TGocciaObjectValue; const ADefault: Integer): Integer;
 function GetOverflowOption(const AOptions: TGocciaObjectValue): TTemporalOverflow;
+function GetOverflowOptionFromValue(const AOptions: TGocciaValue;
+  const AMethod: string): TTemporalOverflow;
 function GetFractionalSecondDigits(const AOptions: TGocciaObjectValue): Integer;
 procedure ValidateRoundingIncrement(const AIncrement: Integer;
   const ASmallestUnit, ALargestUnit: TTemporalUnit);
@@ -83,12 +87,14 @@ procedure RoundTimeForToString(
   var AExtraDays: Integer;
   const AFractionalDigits: Integer;
   const ARoundingMode: TTemporalRoundingMode);
-function FormatCalendarAnnotation(const ACalendarDisplay: TTemporalCalendarDisplay): string;
+function FormatCalendarAnnotation(const ACalendarDisplay: TTemporalCalendarDisplay;
+  const ACalendarId: string = 'iso8601'): string;
 
 { Calendar-aware date differencing — implements CalendarDateUntil from TC39.
   Computes the difference (Y2,M2,D2) - (Y1,M1,D1) broken into years, months,
   weeks, and days based on ALargestUnit (tuYear, tuMonth, tuWeek, or tuDay). }
 procedure CalendarDateUntil(
+  const ACalendarId: string;
   const AY1, AM1, AD1, AY2, AM2, AD2: Integer;
   const ALargestUnit: TTemporalUnit;
   out AYears, AMonths, AWeeks, ADays: Int64);
@@ -116,10 +122,12 @@ function GetDiffOptions(const AArgs: TGocciaArgumentsCollection;
 implementation
 
 uses
+  Math,
   SysUtils,
 
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.Temporal.Calendar,
   Goccia.Temporal.Utils,
   Goccia.Values.ErrorHelper;
 
@@ -204,6 +212,16 @@ begin
   end;
 end;
 
+function GetTemporalOptionsObject(const AOptions: TGocciaValue;
+  const AMethod: string): TGocciaObjectValue;
+begin
+  if (AOptions = nil) or (AOptions is TGocciaUndefinedLiteralValue) then
+    Exit(nil);
+  if not (AOptions is TGocciaObjectValue) then
+    ThrowTypeError(AMethod + ': options must be an object', SSuggestTemporalFromArg);
+  Result := TGocciaObjectValue(AOptions);
+end;
+
 function GetSmallestUnit(const AOptions: TGocciaObjectValue; const ADefault: TTemporalUnit): TTemporalUnit;
 var
   S: string;
@@ -277,7 +295,7 @@ begin
     Exit; // year/month/week/day — no fixed maximum
   end;
 
-  if (AIncrement > MaxVal) or (MaxVal mod AIncrement <> 0) then
+  if (AIncrement >= MaxVal) or (MaxVal mod AIncrement <> 0) then
     ThrowRangeError(Format(SErrorRoundingIncrementDivisor, [AIncrement, MaxVal]),
       SSuggestTemporalRoundArg);
 end;
@@ -293,6 +311,12 @@ begin
     Result := toReject
   else
     ThrowRangeError(Format(SErrorInvalidOverflow, [S]), SSuggestTemporalOverflow);
+end;
+
+function GetOverflowOptionFromValue(const AOptions: TGocciaValue;
+  const AMethod: string): TTemporalOverflow;
+begin
+  Result := GetOverflowOption(GetTemporalOptionsObject(AOptions, AMethod));
 end;
 
 function GetFractionalSecondDigits(const AOptions: TGocciaObjectValue): Integer;
@@ -312,19 +336,11 @@ begin
     Result := -1; // auto
     Exit;
   end;
-  if V is TGocciaStringLiteralValue then
+  if V is TGocciaNumberLiteralValue then
   begin
-    S := TGocciaStringLiteralValue(V).Value;
-    if S = 'auto' then
-      Result := -1
-    else
-      ThrowRangeError(Format(SErrorInvalidFractionalDigits, [S]), SSuggestTemporalRoundArg);
-  end
-  else
-  begin
-    Num := V.ToNumberLiteral;
+    Num := TGocciaNumberLiteralValue(V);
     if Num.IsNaN then
-      Result := 0
+      ThrowRangeError(SErrorFractionalDigitsRange, SSuggestTemporalRoundArg)
     else if Num.IsInfinity then
       Result := MaxInt
     else if Num.IsNegativeInfinity then
@@ -334,9 +350,17 @@ begin
     else if Num.Value <= -MaxInt then
       Result := -MaxInt
     else
-      Result := Trunc(Num.Value);
+      Result := Floor(Num.Value);
     if (Result < 0) or (Result > 9) then
       ThrowRangeError(SErrorFractionalDigitsRange, SSuggestTemporalRoundArg);
+  end
+  else
+  begin
+    S := V.ToStringLiteral.Value;
+    if S = 'auto' then
+      Result := -1
+    else
+      ThrowRangeError(Format(SErrorInvalidFractionalDigits, [S]), SSuggestTemporalRoundArg);
   end;
 end;
 
@@ -623,13 +647,13 @@ begin
 
   if AFractionalDigits < 0 then
   begin
-    // auto - same as existing FormatTimeString behavior
-    if ANanosecond <> 0 then
-      Result := Result + '.' + Format('%.3d%.3d%.3d', [AMillisecond, AMicrosecond, ANanosecond])
-    else if AMicrosecond <> 0 then
-      Result := Result + '.' + Format('%.3d%.3d', [AMillisecond, AMicrosecond])
-    else if AMillisecond <> 0 then
-      Result := Result + '.' + Format('%.3d', [AMillisecond]);
+    if (AMillisecond <> 0) or (AMicrosecond <> 0) or (ANanosecond <> 0) then
+    begin
+      Frac := Format('%.3d%.3d%.3d', [AMillisecond, AMicrosecond, ANanosecond]);
+      while (Length(Frac) > 0) and (Frac[Length(Frac)] = '0') do
+        Delete(Frac, Length(Frac), 1);
+      Result := Result + '.' + Frac;
+    end;
   end
   else if AFractionalDigits = 0 then
     // no fractional seconds
@@ -657,7 +681,9 @@ begin
 
   if AOptions = nil then Exit;
 
-  // Check smallestUnit first — overrides fractionalSecondDigits
+  AFractionalDigits := GetFractionalSecondDigits(AOptions);
+  ARoundingMode := GetRoundingMode(AOptions, rmTrunc);
+
   SmallestStr := GetOptionString(AOptions, 'smallestUnit', '');
   if SmallestStr <> '' then
   begin
@@ -674,11 +700,7 @@ begin
     else
       ThrowRangeError(Format(SErrorInvalidSmallestUnit, [SmallestStr]), SSuggestTemporalValidUnits);
     end;
-  end
-  else
-    AFractionalDigits := GetFractionalSecondDigits(AOptions);
-
-  ARoundingMode := GetRoundingMode(AOptions, rmTrunc);
+  end;
 end;
 
 function GetCalendarDisplay(const AOptions: TGocciaObjectValue): TTemporalCalendarDisplay;
@@ -709,6 +731,7 @@ var
   TotalNs, Divisor, Rounded: Int64;
   ExDays: Int64;
   BalancedTime: TTemporalTimeRecord;
+  I: Integer;
 begin
   AExtraDays := 0;
 
@@ -729,12 +752,12 @@ begin
     Divisor := NANOSECONDS_PER_MINUTE  // smallestUnit: 'minute'
   else if AFractionalDigits = 0 then
     Divisor := NANOSECONDS_PER_SECOND
-  else if AFractionalDigits <= 3 then
-    Divisor := NANOSECONDS_PER_MILLISECOND
-  else if AFractionalDigits <= 6 then
-    Divisor := NANOSECONDS_PER_MICROSECOND
   else
+  begin
     Divisor := 1;
+    for I := 1 to 9 - AFractionalDigits do
+      Divisor := Divisor * 10;
+  end;
 
   Rounded := RoundWithMode(TotalNs, Divisor, ARoundingMode);
 
@@ -756,13 +779,19 @@ begin
   AExtraDays := Integer(ExDays);
 end;
 
-function FormatCalendarAnnotation(const ACalendarDisplay: TTemporalCalendarDisplay): string;
+function FormatCalendarAnnotation(const ACalendarDisplay: TTemporalCalendarDisplay;
+  const ACalendarId: string = 'iso8601'): string;
 begin
   case ACalendarDisplay of
-    tcdAlways:   Result := '[u-ca=iso8601]';
-    tcdCritical: Result := '[!u-ca=iso8601]';
+    tcdAuto:
+      if ACalendarId = 'iso8601' then
+        Result := ''
+      else
+        Result := '[u-ca=' + ACalendarId + ']';
+    tcdAlways:   Result := '[u-ca=' + ACalendarId + ']';
+    tcdCritical: Result := '[!u-ca=' + ACalendarId + ']';
   else
-    Result := ''; // auto and never: omit for iso8601
+    Result := '';
   end;
 end;
 
@@ -770,7 +799,310 @@ end;
 { CalendarDateUntil                                                            }
 { --------------------------------------------------------------------------- }
 
+function CompareDateRecord(const ALeft, ARight: TTemporalDateRecord): Integer;
+begin
+  Result := CompareDates(ALeft.Year, ALeft.Month, ALeft.Day,
+    ARight.Year, ARight.Month, ARight.Day);
+end;
+
+function DateRecordToEpochDays(const ADate: TTemporalDateRecord): Int64;
+begin
+  Result := DateToEpochDays(ADate.Year, ADate.Month, ADate.Day);
+end;
+
+procedure RaiseCalendarDateUntilError(const ACalendarId: string);
+begin
+  ThrowRangeError('Unable to resolve calendar date for ' + ACalendarId,
+    SSuggestTemporalDateRange);
+end;
+
+procedure GetCalendarDateInfoOrThrow(const ACalendarId: string;
+  const ADate: TTemporalDateRecord; out AInfo: TTemporalCalendarDateInfo);
+begin
+  if not TryGetCalendarDateInfo(ACalendarId, ADate.Year, ADate.Month,
+    ADate.Day, AInfo) then
+    RaiseCalendarDateUntilError(ACalendarId);
+end;
+
+function GetCalendarMonthsInYearOrThrow(const ACalendarId: string;
+  const AYear: Integer): Integer;
+begin
+  if not TryCalendarMonthsInYear(ACalendarId, AYear, Result) then
+    RaiseCalendarDateUntilError(ACalendarId);
+end;
+
+procedure AddCalendarDateOrThrow(const ACalendarId: string;
+  const AStartDate: TTemporalDateRecord; const AYears, AMonths: Int64;
+  out ADate: TTemporalDateRecord);
+begin
+  if not TryAddCalendarDate(ACalendarId, AStartDate.Year, AStartDate.Month,
+    AStartDate.Day, AYears, AMonths, 0, 0, True, ADate) then
+    RaiseCalendarDateUntilError(ACalendarId);
+end;
+
+function CalendarMonthDistancePositive(const ACalendarId: string;
+  const AFromInfo, AToInfo: TTemporalCalendarDateInfo): Int64;
+var
+  Year: Integer;
+  MonthsInYear: Integer;
+begin
+  if AFromInfo.Date.Year = AToInfo.Date.Year then
+    Exit(Int64(AToInfo.Date.Month) - AFromInfo.Date.Month);
+
+  MonthsInYear := GetCalendarMonthsInYearOrThrow(ACalendarId,
+    AFromInfo.Date.Year);
+  Result := Int64(MonthsInYear) - AFromInfo.Date.Month;
+
+  Year := AFromInfo.Date.Year + 1;
+  while Year < AToInfo.Date.Year do
+  begin
+    Inc(Result, GetCalendarMonthsInYearOrThrow(ACalendarId, Year));
+    Inc(Year);
+  end;
+
+  Inc(Result, AToInfo.Date.Month);
+end;
+
+function InitialCalendarMonthDifference(const ACalendarId: string;
+  const AStartInfo, AEndInfo: TTemporalCalendarDateInfo;
+  const ASign: Integer): Int64;
+begin
+  if ASign > 0 then
+    Result := CalendarMonthDistancePositive(ACalendarId, AStartInfo, AEndInfo)
+  else
+    Result := -CalendarMonthDistancePositive(ACalendarId, AEndInfo, AStartInfo);
+end;
+
+function CalendarExactYearCandidateRejectedForMonthCode(const ACalendarId: string;
+  const AStartDate, ACandidateDate: TTemporalDateRecord;
+  const ASign: Integer): Boolean;
+var
+  StartInfo, CandidateInfo: TTemporalCalendarDateInfo;
+  StartMonth, CandidateMonth: Integer;
+  StartLeap, CandidateLeap: Boolean;
+begin
+  if ACalendarId = 'iso8601' then
+    Exit(False);
+
+  GetCalendarDateInfoOrThrow(ACalendarId, AStartDate, StartInfo);
+  GetCalendarDateInfoOrThrow(ACalendarId, ACandidateDate, CandidateInfo);
+  if StartInfo.MonthCode = CandidateInfo.MonthCode then
+    Exit(False);
+  if not TryParseTemporalMonthCode(StartInfo.MonthCode, StartMonth,
+     StartLeap) then
+    Exit(False);
+  if not TryParseTemporalMonthCode(CandidateInfo.MonthCode, CandidateMonth,
+     CandidateLeap) then
+    Exit(False);
+  if (not StartLeap) or CandidateLeap then
+    Exit(False);
+
+  if ASign > 0 then
+    Result := StartMonth = CandidateMonth
+  else
+    Result := StartMonth <> CandidateMonth;
+end;
+
+function CalendarCandidatePreservesDay(const ACalendarId: string;
+  const AStartDate, ACandidateDate: TTemporalDateRecord): Boolean;
+var
+  StartInfo, CandidateInfo: TTemporalCalendarDateInfo;
+begin
+  GetCalendarDateInfoOrThrow(ACalendarId, AStartDate, StartInfo);
+  GetCalendarDateInfoOrThrow(ACalendarId, ACandidateDate, CandidateInfo);
+  Result := StartInfo.Date.Day = CandidateInfo.Date.Day;
+end;
+
+function AdjustCalendarMonthsUntil(const ACalendarId: string;
+  const AStartDate, AEndDate: TTemporalDateRecord): Int64;
+var
+  Sign: Integer;
+  StartInfo, EndInfo: TTemporalCalendarDateInfo;
+  MidDate, ProbeDate: TTemporalDateRecord;
+begin
+  Sign := CompareDateRecord(AEndDate, AStartDate);
+  if Sign = 0 then
+    Exit(0);
+
+  GetCalendarDateInfoOrThrow(ACalendarId, AStartDate, StartInfo);
+  GetCalendarDateInfoOrThrow(ACalendarId, AEndDate, EndInfo);
+  Result := InitialCalendarMonthDifference(ACalendarId, StartInfo, EndInfo,
+    Sign);
+
+  AddCalendarDateOrThrow(ACalendarId, AStartDate, 0, Result, MidDate);
+  if Sign > 0 then
+  begin
+    while (CompareDateRecord(MidDate, AEndDate) > 0) or
+          ((CompareDateRecord(MidDate, AEndDate) = 0) and
+           not CalendarCandidatePreservesDay(ACalendarId, AStartDate,
+             MidDate)) do
+    begin
+      Dec(Result);
+      AddCalendarDateOrThrow(ACalendarId, AStartDate, 0, Result, MidDate);
+    end;
+    while Result < High(Int64) do
+    begin
+      AddCalendarDateOrThrow(ACalendarId, AStartDate, 0, Result + 1,
+        ProbeDate);
+      if (CompareDateRecord(ProbeDate, AEndDate) > 0) or
+         ((CompareDateRecord(ProbeDate, AEndDate) = 0) and
+          not CalendarCandidatePreservesDay(ACalendarId, AStartDate,
+            ProbeDate)) then
+        Break;
+      Inc(Result);
+      MidDate := ProbeDate;
+    end;
+  end
+  else
+  begin
+    while CompareDateRecord(MidDate, AEndDate) < 0 do
+    begin
+      Inc(Result);
+      AddCalendarDateOrThrow(ACalendarId, AStartDate, 0, Result, MidDate);
+    end;
+    while Result > Low(Int64) do
+    begin
+      AddCalendarDateOrThrow(ACalendarId, AStartDate, 0, Result - 1,
+        ProbeDate);
+      if CompareDateRecord(ProbeDate, AEndDate) < 0 then
+        Break;
+      Dec(Result);
+      MidDate := ProbeDate;
+    end;
+  end;
+end;
+
+function AdjustCalendarYearsUntil(const ACalendarId: string;
+  const AStartDate, AEndDate: TTemporalDateRecord): Int64;
+var
+  Sign: Integer;
+  StartInfo, EndInfo: TTemporalCalendarDateInfo;
+  MidDate, ProbeDate: TTemporalDateRecord;
+begin
+  Sign := CompareDateRecord(AEndDate, AStartDate);
+  if Sign = 0 then
+    Exit(0);
+
+  GetCalendarDateInfoOrThrow(ACalendarId, AStartDate, StartInfo);
+  GetCalendarDateInfoOrThrow(ACalendarId, AEndDate, EndInfo);
+  Result := Int64(EndInfo.Date.Year) - StartInfo.Date.Year;
+
+  AddCalendarDateOrThrow(ACalendarId, AStartDate, Result, 0, MidDate);
+  if Sign > 0 then
+  begin
+    while (CompareDateRecord(MidDate, AEndDate) > 0) or
+          ((CompareDateRecord(MidDate, AEndDate) = 0) and
+           ((not CalendarCandidatePreservesDay(ACalendarId, AStartDate,
+              MidDate)) or
+            CalendarExactYearCandidateRejectedForMonthCode(ACalendarId,
+              AStartDate, MidDate, Sign))) do
+    begin
+      Dec(Result);
+      AddCalendarDateOrThrow(ACalendarId, AStartDate, Result, 0, MidDate);
+    end;
+    while Result < High(Int64) do
+    begin
+      AddCalendarDateOrThrow(ACalendarId, AStartDate, Result + 1, 0,
+        ProbeDate);
+      if (CompareDateRecord(ProbeDate, AEndDate) > 0) or
+         ((CompareDateRecord(ProbeDate, AEndDate) = 0) and
+          ((not CalendarCandidatePreservesDay(ACalendarId, AStartDate,
+             ProbeDate)) or
+           CalendarExactYearCandidateRejectedForMonthCode(ACalendarId,
+             AStartDate, ProbeDate, Sign))) then
+        Break;
+      Inc(Result);
+      MidDate := ProbeDate;
+    end;
+  end
+  else
+  begin
+    while (CompareDateRecord(MidDate, AEndDate) < 0) or
+          ((CompareDateRecord(MidDate, AEndDate) = 0) and
+           CalendarExactYearCandidateRejectedForMonthCode(ACalendarId,
+             AStartDate, MidDate, Sign)) do
+    begin
+      Inc(Result);
+      AddCalendarDateOrThrow(ACalendarId, AStartDate, Result, 0, MidDate);
+    end;
+    while Result > Low(Int64) do
+    begin
+      AddCalendarDateOrThrow(ACalendarId, AStartDate, Result - 1, 0,
+        ProbeDate);
+      if (CompareDateRecord(ProbeDate, AEndDate) < 0) or
+         ((CompareDateRecord(ProbeDate, AEndDate) = 0) and
+          CalendarExactYearCandidateRejectedForMonthCode(ACalendarId,
+            AStartDate, ProbeDate, Sign)) then
+        Break;
+      Dec(Result);
+      MidDate := ProbeDate;
+    end;
+  end;
+end;
+
+function AdjustCalendarMonthsUntilAfterYears(const ACalendarId: string;
+  const AStartDate: TTemporalDateRecord; const AYears: Int64;
+  const AEndDate: TTemporalDateRecord): Int64;
+var
+  Sign: Integer;
+  YearDate, MidDate, ProbeDate: TTemporalDateRecord;
+  TotalMonths, YearMonths: Int64;
+begin
+  AddCalendarDateOrThrow(ACalendarId, AStartDate, AYears, 0, YearDate);
+  TotalMonths := AdjustCalendarMonthsUntil(ACalendarId, AStartDate,
+    AEndDate);
+  YearMonths := AdjustCalendarMonthsUntil(ACalendarId, AStartDate,
+    YearDate);
+  Result := TotalMonths - YearMonths;
+  AddCalendarDateOrThrow(ACalendarId, AStartDate, AYears, Result, MidDate);
+
+  Sign := CompareDateRecord(AEndDate, AStartDate);
+  if Sign > 0 then
+  begin
+    while (CompareDateRecord(MidDate, AEndDate) > 0) or
+          ((CompareDateRecord(MidDate, AEndDate) = 0) and
+           not CalendarCandidatePreservesDay(ACalendarId, AStartDate,
+             MidDate)) do
+    begin
+      Dec(Result);
+      AddCalendarDateOrThrow(ACalendarId, AStartDate, AYears, Result,
+        MidDate);
+    end;
+    while Result < High(Int64) do
+    begin
+      AddCalendarDateOrThrow(ACalendarId, AStartDate, AYears, Result + 1,
+        ProbeDate);
+      if (CompareDateRecord(ProbeDate, AEndDate) > 0) or
+         ((CompareDateRecord(ProbeDate, AEndDate) = 0) and
+          not CalendarCandidatePreservesDay(ACalendarId, AStartDate,
+            ProbeDate)) then
+        Break;
+      Inc(Result);
+      MidDate := ProbeDate;
+    end;
+  end
+  else if Sign < 0 then
+  begin
+    while CompareDateRecord(MidDate, AEndDate) < 0 do
+    begin
+      Inc(Result);
+      AddCalendarDateOrThrow(ACalendarId, AStartDate, AYears, Result,
+        MidDate);
+    end;
+    while Result > Low(Int64) do
+    begin
+      AddCalendarDateOrThrow(ACalendarId, AStartDate, AYears, Result - 1,
+        ProbeDate);
+      if CompareDateRecord(ProbeDate, AEndDate) < 0 then
+        Break;
+      Dec(Result);
+      MidDate := ProbeDate;
+    end;
+  end;
+end;
+
 procedure CalendarDateUntil(
+  const ACalendarId: string;
   const AY1, AM1, AD1, AY2, AM2, AD2: Integer;
   const ALargestUnit: TTemporalUnit;
   out AYears, AMonths, AWeeks, ADays: Int64);
@@ -780,6 +1112,7 @@ var
   TotalMonths: Int64;
   Mid: TTemporalDateRecord;
   TotalDays: Int64;
+  StartDate, EndDate, MonthDate: TTemporalDateRecord;
 begin
   AYears := 0;
   AMonths := 0;
@@ -801,6 +1134,40 @@ begin
 
     tuMonth, tuYear:
     begin
+      begin
+        StartDate.Year := AY1;
+        StartDate.Month := AM1;
+        StartDate.Day := AD1;
+        EndDate.Year := AY2;
+        EndDate.Month := AM2;
+        EndDate.Day := AD2;
+
+        Sign := CompareDateRecord(EndDate, StartDate);
+        if Sign = 0 then
+          Exit;
+
+        if ALargestUnit = tuYear then
+        begin
+          AYears := AdjustCalendarYearsUntil(ACalendarId, StartDate,
+            EndDate);
+          AMonths := AdjustCalendarMonthsUntilAfterYears(ACalendarId,
+            StartDate, AYears, EndDate);
+          AddCalendarDateOrThrow(ACalendarId, StartDate, AYears, AMonths,
+            MonthDate);
+        end
+        else
+        begin
+          AMonths := AdjustCalendarMonthsUntil(ACalendarId, StartDate,
+            EndDate);
+          AddCalendarDateOrThrow(ACalendarId, StartDate, 0, AMonths,
+            MonthDate);
+        end;
+
+        ADays := DateRecordToEpochDays(EndDate) -
+          DateRecordToEpochDays(MonthDate);
+        Exit;
+      end;
+
       Sign := CompareDates(AY2, AM2, AD2, AY1, AM1, AD1);
       if Sign = 0 then Exit;
 
@@ -868,10 +1235,72 @@ var
   Sign: Integer;
   WholeUnits, ScaledValue, PeriodNs, RoundedValue: Int64;
   WalkDate, NextDate, EndDate: TTemporalDateRecord;
-  StartEpoch, EndEpoch, WalkEpoch, NextEpoch: Int64;
+  StartEpoch, EndEpoch, WalkEpoch, NextEpoch, DistanceNs: Int64;
   ResultYears, ResultMonths, ResultDays: Int64;
   ResultHours, ResultMinutes, ResultSeconds: Int64;
   ResultMs, ResultUs, ResultNs: Int64;
+
+  procedure ValidateRoundedCalendarOffset(const AOffsetMonths: Int64);
+  var
+    CandidateYear: Int64;
+  begin
+    CandidateYear := Int64(AStartY) + (AOffsetMonths div 12);
+    if (CandidateYear < -271821) or (CandidateYear > 275760) then
+      ThrowRangeError('Rounded Temporal duration is outside the supported date range',
+        SSuggestTemporalDateRange);
+  end;
+
+  function RoundWholeDays(const ATotalDays: Int64): Int64;
+  begin
+    Result := RoundWithMode(ATotalDays, AIncrement, AMode);
+  end;
+
+  function ShouldRoundCalendarUnitAway(const AScaledValue, ADistanceNs,
+    APeriodNs: Int64): Boolean;
+  var
+    TwiceDistance: Int64;
+    Comparison: Integer;
+  begin
+    if ADistanceNs = 0 then
+      Exit(False);
+
+    case AMode of
+      rmTrunc:
+        Exit(False);
+      rmExpand:
+        Exit(True);
+      rmCeil:
+        Exit(Sign > 0);
+      rmFloor:
+        Exit(Sign < 0);
+    else
+      ;
+    end;
+
+    TwiceDistance := Abs(ADistanceNs) * 2;
+    if TwiceDistance > APeriodNs then
+      Comparison := 1
+    else if TwiceDistance < APeriodNs then
+      Comparison := -1
+    else
+      Comparison := 0;
+
+    case AMode of
+      rmHalfExpand:
+        Result := Comparison >= 0;
+      rmHalfTrunc:
+        Result := Comparison > 0;
+      rmHalfCeil:
+        Result := (Comparison > 0) or ((Comparison = 0) and (Sign > 0));
+      rmHalfFloor:
+        Result := (Comparison > 0) or ((Comparison = 0) and (Sign < 0));
+      rmHalfEven:
+        Result := (Comparison > 0) or
+          ((Comparison = 0) and Odd(Abs(AScaledValue div AIncrement)));
+    else
+      Result := False;
+    end;
+  end;
 begin
   // Nothing to do when smallestUnit equals the finest granularity and increment is 1
   if (ASmallestUnit = tuNanosecond) and (AIncrement = 1) then Exit;
@@ -907,6 +1336,49 @@ begin
             ASeconds * NANOSECONDS_PER_SECOND +
             AMinutes * NANOSECONDS_PER_MINUTE +
             AHours * NANOSECONDS_PER_HOUR;
+
+  if TimeNs = 0 then
+  begin
+    case ASmallestUnit of
+      tuYear:
+        if (AMonths = 0) and (AWeeks = 0) and (ADays = 0) and
+           (AYears mod AIncrement = 0) then
+          Exit;
+      tuMonth:
+        if (AWeeks = 0) and (ADays = 0) and (AMonths mod AIncrement = 0) then
+          Exit;
+      tuWeek:
+        if (ADays = 0) and (AWeeks mod AIncrement = 0) then
+          Exit;
+      tuDay:
+        if ADays mod AIncrement = 0 then
+          Exit;
+      tuHour:
+        if (AMinutes = 0) and (ASeconds = 0) and (AMilliseconds = 0) and
+           (AMicroseconds = 0) and (ANanoseconds = 0) and
+           (AHours mod AIncrement = 0) then
+          Exit;
+      tuMinute:
+        if (ASeconds = 0) and (AMilliseconds = 0) and
+           (AMicroseconds = 0) and (ANanoseconds = 0) and
+           (AMinutes mod AIncrement = 0) then
+          Exit;
+      tuSecond:
+        if (AMilliseconds = 0) and (AMicroseconds = 0) and
+           (ANanoseconds = 0) and (ASeconds mod AIncrement = 0) then
+          Exit;
+      tuMillisecond:
+        if (AMicroseconds = 0) and (ANanoseconds = 0) and
+           (AMilliseconds mod AIncrement = 0) then
+          Exit;
+      tuMicrosecond:
+        if (ANanoseconds = 0) and (AMicroseconds mod AIncrement = 0) then
+          Exit;
+      tuNanosecond:
+        if ANanoseconds mod AIncrement = 0 then
+          Exit;
+    end;
+  end;
 
   // --- Calendar-unit rounding (year / month) ---
   if (ASmallestUnit = tuYear) or (ASmallestUnit = tuMonth) then
@@ -957,12 +1429,12 @@ begin
 
       WalkDate := AddMonthsToDate(AStartY, AStartM, AStartD, ScaledValue * 12);
       WalkEpoch := DateToEpochDays(WalkDate.Year, WalkDate.Month, WalkDate.Day);
+      ValidateRoundedCalendarOffset((ScaledValue + Sign * AIncrement) * 12);
       NextDate := AddMonthsToDate(AStartY, AStartM, AStartD, (ScaledValue + Sign * AIncrement) * 12);
       NextEpoch := DateToEpochDays(NextDate.Year, NextDate.Month, NextDate.Day);
       PeriodNs := Abs(NextEpoch - WalkEpoch) * NANOSECONDS_PER_DAY;
-      RoundedValue := RoundWithMode(
-        Abs((EndEpoch - WalkEpoch) * NANOSECONDS_PER_DAY + TimeNs), PeriodNs, AMode);
-      if RoundedValue >= PeriodNs then
+      DistanceNs := (EndEpoch - WalkEpoch) * NANOSECONDS_PER_DAY + TimeNs;
+      if ShouldRoundCalendarUnitAway(ScaledValue, DistanceNs, PeriodNs) then
         WholeUnits := ScaledValue + Sign * AIncrement
       else
         WholeUnits := ScaledValue;
@@ -1000,12 +1472,12 @@ begin
 
       WalkDate := AddMonthsToDate(AStartY, AStartM, AStartD, ScaledValue);
       WalkEpoch := DateToEpochDays(WalkDate.Year, WalkDate.Month, WalkDate.Day);
+      ValidateRoundedCalendarOffset(ScaledValue + Sign * AIncrement);
       NextDate := AddMonthsToDate(AStartY, AStartM, AStartD, ScaledValue + Sign * AIncrement);
       NextEpoch := DateToEpochDays(NextDate.Year, NextDate.Month, NextDate.Day);
       PeriodNs := Abs(NextEpoch - WalkEpoch) * NANOSECONDS_PER_DAY;
-      RoundedValue := RoundWithMode(
-        Abs((EndEpoch - WalkEpoch) * NANOSECONDS_PER_DAY + TimeNs), PeriodNs, AMode);
-      if RoundedValue >= PeriodNs then
+      DistanceNs := (EndEpoch - WalkEpoch) * NANOSECONDS_PER_DAY + TimeNs;
+      if ShouldRoundCalendarUnitAway(ScaledValue, DistanceNs, PeriodNs) then
         WholeUnits := ScaledValue + Sign * AIncrement
       else
         WholeUnits := ScaledValue;
@@ -1032,6 +1504,30 @@ begin
   if (ASmallestUnit = tuWeek) or (ASmallestUnit = tuDay) or
      (Ord(ASmallestUnit) >= Ord(tuHour)) then
   begin
+    if ((AYears <> 0) or (AMonths <> 0)) and (AWeeks = 0) and (ADays = 0) and
+       (TimeNs = 0) then
+      Exit;
+
+    if (AYears = 0) and (AMonths = 0) and (TimeNs = 0) and
+       (ASmallestUnit = tuDay) then
+    begin
+      ResultDays := RoundWholeDays(AWeeks * 7 + ADays);
+      AYears := 0; AMonths := 0;
+      if Ord(ALargestUnit) <= Ord(tuWeek) then
+      begin
+        AWeeks := ResultDays div 7;
+        ADays := ResultDays mod 7;
+      end
+      else
+      begin
+        AWeeks := 0;
+        ADays := ResultDays;
+      end;
+      AHours := 0; AMinutes := 0; ASeconds := 0;
+      AMilliseconds := 0; AMicroseconds := 0; ANanoseconds := 0;
+      Exit;
+    end;
+
     // For calendar types that have year/month, resolve to epoch days first
     if (AYears <> 0) or (AMonths <> 0) then
     begin
@@ -1049,7 +1545,41 @@ begin
       TotalNs := (AWeeks * 7 + ADays) * NANOSECONDS_PER_DAY + TimeNs;
 
     // Round
-    if ASmallestUnit = tuWeek then
+    if (ASmallestUnit = tuDay) and
+       (AIncrement > High(Int64) div NANOSECONDS_PER_DAY) then
+    begin
+      if TotalNs = 0 then
+        ResultDays := 0
+      else
+      begin
+        ResultDays := 0;
+        case AMode of
+          rmCeil:
+            if TotalNs > 0 then
+              ResultDays := AIncrement;
+          rmFloor:
+            if TotalNs < 0 then
+              ResultDays := -AIncrement;
+          rmExpand:
+            if TotalNs > 0 then
+              ResultDays := AIncrement
+            else
+              ResultDays := -AIncrement;
+        end;
+      end;
+      AYears := 0;
+      AMonths := 0;
+      AWeeks := 0;
+      ADays := ResultDays;
+      AHours := 0;
+      AMinutes := 0;
+      ASeconds := 0;
+      AMilliseconds := 0;
+      AMicroseconds := 0;
+      ANanoseconds := 0;
+      Exit;
+    end
+    else if ASmallestUnit = tuWeek then
       Divisor := NANOSECONDS_PER_DAY * 7 * AIncrement
     else
       Divisor := UnitToNanoseconds(ASmallestUnit) * AIncrement;

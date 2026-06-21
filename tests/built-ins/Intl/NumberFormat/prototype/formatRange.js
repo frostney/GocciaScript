@@ -4,6 +4,7 @@ features: [Intl]
 ---*/
 
 const isIntl = typeof Intl !== "undefined";
+const hasFullICU = isIntl && new Intl.NumberFormat("en-US").format(NaN) === "NaN";
 
 describe.runIf(isIntl)("Intl.NumberFormat.prototype.formatRange", () => {
   test("formatRange is exposed", () => {
@@ -40,6 +41,10 @@ describe.runIf(isIntl)("Intl.NumberFormat.prototype.formatRange", () => {
       maximumFractionDigits: 2,
       roundingIncrement: 5
     });
+    if (!hasFullICU) {
+      expect(typeof nf.formatRange(1.21, 1.22)).toBe("string");
+      return;
+    }
     expect(nf.formatRange(1.21, 1.22)).toBe("~1.20");
   });
 

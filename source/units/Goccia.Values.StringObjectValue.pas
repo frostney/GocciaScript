@@ -51,6 +51,7 @@ type
     function StringToLocaleUpperCase(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function StringToLocaleLowerCase(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function StringSlice(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function StringSubstr(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function StringSubstring(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function StringIndexOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function StringLastIndexOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -105,6 +106,7 @@ uses
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.IntlCollator,
+  Goccia.Values.IntlLocale,
   Goccia.Values.Iterator.Concrete,
   Goccia.Values.Iterator.RegExp,
   Goccia.Values.ProxyValue,
@@ -177,6 +179,66 @@ begin
       ThrowRangeError(Format('invalid language tag: %s', [Tag]));
   end;
   Result := Tag;
+end;
+
+// ECMA-402 ES2026 §16.1.1 TransformCase(S, locales, targetCase)
+function StringCaseLocaleArgumentToLocale(const AArg: TGocciaValue): string;
+var
+  O: TGocciaObjectValue;
+  KValue: TGocciaValue;
+  K, Len: Integer;
+  Pk: string;
+  ObjectRoot: TGocciaTempRoot;
+
+  procedure ValidateLocaleValue(const AValue: TGocciaValue);
+  var
+    Tag, Canonical: string;
+  begin
+    if not ((AValue is TGocciaStringLiteralValue) or
+            (AValue is TGocciaObjectValue)) then
+      ThrowTypeError('locales entries must be strings or objects');
+
+    if AValue is TGocciaIntlLocaleValue then
+      Tag := TGocciaIntlLocaleValue(AValue).LocaleTag
+    else
+      Tag := AValue.ToStringLiteral.Value;
+
+    Canonical := CanonicalizeUnicodeLocaleId(Tag);
+    if Canonical = '' then
+      ThrowRangeError(Format('invalid language tag: %s', [Tag]));
+
+    if Result = '' then
+      Result := Canonical;
+  end;
+
+begin
+  Result := '';
+  if (AArg = nil) or (AArg is TGocciaUndefinedLiteralValue) then
+    Exit;
+
+  if (AArg is TGocciaStringLiteralValue) or (AArg is TGocciaIntlLocaleValue) then
+  begin
+    ValidateLocaleValue(AArg);
+    Exit;
+  end;
+
+  O := ToObject(AArg);
+  InitializeTempRoot(ObjectRoot);
+  AddTempRootIfNeeded(ObjectRoot, O);
+  try
+    Len := LengthOfArrayLike(O);
+    for K := 0 to Len - 1 do
+    begin
+      Pk := IntToStr(K);
+      if not O.HasProperty(Pk) then
+        Continue;
+
+      KValue := O.GetProperty(Pk);
+      ValidateLocaleValue(KValue);
+    end;
+  finally
+    RemoveTempRootIfNeeded(ObjectRoot);
+  end;
 end;
 
 { TGocciaStringObjectValue }
@@ -600,6 +662,7 @@ begin
       Members.AddNamedMethod('toLocaleUpperCase', StringToLocaleUpperCase, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddNamedMethod('toLocaleLowerCase', StringToLocaleLowerCase, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(StringSlice, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddNamedMethod('substr', StringSubstr, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(StringSubstring, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(StringIndexOf, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(StringLastIndexOf, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
@@ -757,9 +820,7 @@ var
   StringValue, Locale, UpperResult: string;
 begin
   StringValue := ExtractStringValue(AThisValue);
-  Locale := '';
-  if (AArgs.Length > 0) and not (AArgs.GetElement(0) is TGocciaUndefinedLiteralValue) then
-    Locale := AArgs.GetElement(0).ToStringLiteral.Value;
+  Locale := StringCaseLocaleArgumentToLocale(AArgs.GetElement(0));
   if TryICUUpperCase(Locale, StringValue, UpperResult) then
     Result := TGocciaStringLiteralValue.Create(UpperResult)
   else
@@ -772,9 +833,7 @@ var
   StringValue, Locale, LowerResult: string;
 begin
   StringValue := ExtractStringValue(AThisValue);
-  Locale := '';
-  if (AArgs.Length > 0) and not (AArgs.GetElement(0) is TGocciaUndefinedLiteralValue) then
-    Locale := AArgs.GetElement(0).ToStringLiteral.Value;
+  Locale := StringCaseLocaleArgumentToLocale(AArgs.GetElement(0));
   if TryICULowerCase(Locale, StringValue, LowerResult) then
     Result := TGocciaStringLiteralValue.Create(LowerResult)
   else
@@ -815,6 +874,32 @@ begin
   if (StartIndex >= 0) and (StartIndex < Len) and (EndIndex > StartIndex) then
     Result := TGocciaStringLiteralValue.Create(
       UTF16Substring(StringValue, StartIndex, EndIndex - StartIndex))
+  else
+    Result := TGocciaStringLiteralValue.Create('');
+end;
+
+// Annex B.2.3.1 String.prototype.substr(start, length)
+function TGocciaStringObjectValue.StringSubstr(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  StringValue: string;
+  StartIndex, RequestedLength, ResultLength: Integer;
+  Len: Integer;
+begin
+  StringValue := ExtractStringValue(AThisValue);
+  Len := UTF16CodeUnitLength(StringValue);
+
+  StartIndex := ToIntegerFromArgs(AArgs);
+  if StartIndex < 0 then
+    StartIndex := Max(Len + StartIndex, 0)
+  else
+    StartIndex := Min(StartIndex, Len);
+
+  RequestedLength := ToIntegerFromArgs(AArgs, 1, Len);
+  ResultLength := Min(Max(RequestedLength, 0), Len - StartIndex);
+
+  if ResultLength > 0 then
+    Result := TGocciaStringLiteralValue.Create(
+      UTF16Substring(StringValue, StartIndex, ResultLength))
   else
     Result := TGocciaStringLiteralValue.Create('');
 end;

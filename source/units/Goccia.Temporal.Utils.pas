@@ -56,6 +56,10 @@ function PadISOYear(const AYear: Integer): string;
 function PadTwo(const AValue: Integer): string;
 function FormatTimeString(const AHour, AMinute, ASecond, AMillisecond, AMicrosecond, ANanosecond: Integer): string;
 function FormatDateString(const AYear, AMonth, ADay: Integer): string;
+function IsValidTemporalCalendarIdentifier(const AValue: string): Boolean;
+function CanonicalizeTemporalCalendarIdentifier(const AValue: string): string;
+function ParseTemporalCalendarStringIdentifier(const AValue: string): string;
+function TryExtractTemporalCalendarAnnotation(const AStr: string; out ACalendarId: string): Boolean;
 
 function TryParseISODate(const AStr: string; out ADate: TTemporalDateRecord): Boolean;
 function TryParseISOTime(const AStr: string; out ATime: TTemporalTimeRecord): Boolean;
@@ -350,16 +354,18 @@ begin
 end;
 
 function FormatTimeString(const AHour, AMinute, ASecond, AMillisecond, AMicrosecond, ANanosecond: Integer): string;
+var
+  Fraction: string;
 begin
   Result := PadTwo(AHour) + ':' + PadTwo(AMinute) + ':' + PadTwo(ASecond);
 
-  if ANanosecond <> 0 then
-    Result := Result + '.' + Format('%.3d%.3d%.3d', [AMillisecond, AMicrosecond, ANanosecond])
-  else if AMicrosecond <> 0 then
-    Result := Result + '.' + Format('%.3d%.3d', [AMillisecond, AMicrosecond])
-  else if AMillisecond <> 0 then
-    Result := Result + '.' + Format('%.3d', [AMillisecond])
-  // else no fractional seconds
+  if (AMillisecond <> 0) or (AMicrosecond <> 0) or (ANanosecond <> 0) then
+  begin
+    Fraction := Format('%.3d%.3d%.3d', [AMillisecond, AMicrosecond, ANanosecond]);
+    while (Length(Fraction) > 0) and (Fraction[Length(Fraction)] = '0') do
+      Delete(Fraction, Length(Fraction), 1);
+    Result := Result + '.' + Fraction;
+  end;
 end;
 
 function TryParseDigits(const AStr: string; var APos: Integer; const ACount: Integer; out AValue: Integer): Boolean;
@@ -405,6 +411,31 @@ begin
   Result := ADigitCount > 0;
 end;
 
+function HasFractionWithMoreThanNineDigits(const AStr: string): Boolean;
+var
+  I, Count: Integer;
+begin
+  Result := False;
+  I := 1;
+  while I <= Length(AStr) do
+  begin
+    if (AStr[I] = '.') or (AStr[I] = ',') then
+    begin
+      Count := 0;
+      Inc(I);
+      while (I <= Length(AStr)) and (AStr[I] >= '0') and (AStr[I] <= '9') do
+      begin
+        Inc(Count);
+        if Count > 9 then
+          Exit(True);
+        Inc(I);
+      end;
+    end
+    else
+      Inc(I);
+  end;
+end;
+
 function IsValidAnnotationKey(const AKey: string): Boolean;
 var
   I: Integer;
@@ -413,8 +444,7 @@ var
 begin
   Result := False;
   if Length(AKey) = 0 then Exit;
-  // First char must be lowercase letter
-  if (AKey[1] < 'a') or (AKey[1] > 'z') then Exit;
+  if not (((AKey[1] >= 'a') and (AKey[1] <= 'z')) or (AKey[1] = '_')) then Exit;
   InSegment := True;
   for I := 2 to Length(AKey) do
   begin
@@ -424,7 +454,8 @@ begin
       if not InSegment then Exit; // double dash
       InSegment := False;
     end
-    else if ((C >= 'a') and (C <= 'z')) or ((C >= '0') and (C <= '9')) then
+    else if ((C >= 'a') and (C <= 'z')) or ((C >= '0') and (C <= '9')) or
+            (C = '_') then
       InSegment := True
     else
       Exit; // invalid char
@@ -433,92 +464,460 @@ begin
   Result := True;
 end;
 
-function StripAnnotations(const AStr: string): string;
+function IsValidTemporalCalendarIdentifier(const AValue: string): Boolean;
 var
   I: Integer;
-  AnnotContent: string;
-  IsCritical: Boolean;
-  KeyEnd: Integer;
-  Key: string;
-  CalendarSeen, TimeZoneSeen: Boolean;
+  Ch: Char;
 begin
-  Result := AStr;
-  CalendarSeen := False;
-  TimeZoneSeen := False;
+  Result := False;
+  if AValue = '' then
+    Exit;
 
-  // Remove all trailing [...] annotations, validating them
-  while (Length(Result) > 0) and (Result[Length(Result)] = ']') do
+  for I := 1 to Length(AValue) do
   begin
-    I := Length(Result) - 1;
-    while (I > 0) and (Result[I] <> '[') do
-      Dec(I);
-    if I > 0 then
-    begin
-      AnnotContent := Copy(Result, I + 1, Length(Result) - I - 1);
-      IsCritical := (Length(AnnotContent) > 0) and (AnnotContent[1] = '!');
-      if IsCritical then
-        AnnotContent := Copy(AnnotContent, 2, Length(AnnotContent) - 1);
+    Ch := AValue[I];
+    if not (((Ch >= 'a') and (Ch <= 'z')) or
+            ((Ch >= '0') and (Ch <= '9')) or
+            (Ch = '-')) then
+      Exit;
+  end;
 
-      // Reject empty annotations
-      if Length(AnnotContent) = 0 then
+  Result := True;
+end;
+
+function CanonicalizeTemporalCalendarIdentifier(const AValue: string): string;
+var
+  LowerValue: string;
+begin
+  LowerValue := LowerCase(AValue);
+  if not IsValidTemporalCalendarIdentifier(LowerValue) then
+    Exit('');
+
+  if LowerValue = 'gregorian' then
+    Result := 'gregory'
+  else if LowerValue = 'islamicc' then
+    Result := 'islamic-civil'
+  else if LowerValue = 'ethiopic-amete-alem' then
+    Result := 'ethioaa'
+  else if (LowerValue = 'buddhist') or
+          (LowerValue = 'chinese') or
+          (LowerValue = 'coptic') or
+          (LowerValue = 'dangi') or
+          (LowerValue = 'ethioaa') or
+          (LowerValue = 'ethiopic') or
+          (LowerValue = 'gregory') or
+          (LowerValue = 'hebrew') or
+          (LowerValue = 'indian') or
+          (LowerValue = 'islamic') or
+          (LowerValue = 'islamic-civil') or
+          (LowerValue = 'islamic-rgsa') or
+          (LowerValue = 'islamic-tbla') or
+          (LowerValue = 'islamic-umalqura') or
+          (LowerValue = 'iso8601') or
+          (LowerValue = 'japanese') or
+          (LowerValue = 'persian') or
+          (LowerValue = 'roc') then
+    Result := LowerValue
+  else
+    Result := '';
+end;
+
+// TC39 Temporal §13.36 ParseTemporalCalendarString(string)
+function ParseTemporalCalendarStringIdentifier(const AValue: string): string;
+var
+  CalendarId: string;
+  DateRec: TTemporalDateRecord;
+  TimeRec: TTemporalTimeRecord;
+  TimeValue: string;
+  Year, Month, Day: Integer;
+  OffsetSeconds: Integer;
+  TimeZone: string;
+  HasDateTimeSeparator: Boolean;
+begin
+  Result := CanonicalizeTemporalCalendarIdentifier(AValue);
+  if Result <> '' then
+    Exit;
+
+  CalendarId := 'iso8601';
+  TryExtractTemporalCalendarAnnotation(AValue, CalendarId);
+
+  HasDateTimeSeparator := (System.Pos('T', AValue) > 1) or
+    (System.Pos('t', AValue) > 1) or (System.Pos(' ', AValue) > 1);
+  TimeValue := AValue;
+  if (Length(TimeValue) > 1) and
+     ((TimeValue[1] = 'T') or (TimeValue[1] = 't')) then
+    TimeValue := Copy(TimeValue, 2, Length(TimeValue) - 1);
+
+  if CoerceToISODate(AValue, DateRec) or
+     CoerceToISODateTime(AValue, DateRec, TimeRec) or
+     ((not HasDateTimeSeparator) and CoerceToISOTime(TimeValue, TimeRec)) or
+     CoerceToISOYearMonth(AValue, Year, Month) or
+     CoerceToISOMonthDay(AValue, Month, Day) or
+     TryParseISODateTimeWithOffset(AValue, DateRec, TimeRec, OffsetSeconds, TimeZone) then
+    Result := CalendarId
+  else
+    Result := '';
+end;
+
+function TryStripTemporalAnnotations(const AStr: string; out AStripped: string;
+  out ACalendarId: string): Boolean;
+var
+  Value: string;
+  BracketStart, BracketEnd, EqualsPos: Integer;
+  Annotation, Key, CalendarValue: string;
+  Critical: Boolean;
+  Annotations: array of string;
+  CriticalAnnotations: array of Boolean;
+  Count, I: Integer;
+  CalendarSeen, CalendarCriticalSeen, TimeZoneSeen: Boolean;
+  CalendarCount: Integer;
+  CanonicalCalendar: string;
+begin
+  Result := False;
+  AStripped := AStr;
+  ACalendarId := 'iso8601';
+  Value := AStr;
+  Count := 0;
+
+  while (Length(Value) > 0) and (Value[Length(Value)] = ']') do
+  begin
+    BracketEnd := Length(Value);
+    BracketStart := BracketEnd - 1;
+    while (BracketStart > 0) and (Value[BracketStart] <> '[') do
+      Dec(BracketStart);
+    if BracketStart = 0 then
+      Exit;
+
+    Annotation := Copy(Value, BracketStart + 1, BracketEnd - BracketStart - 1);
+    Critical := (Length(Annotation) > 0) and (Annotation[1] = '!');
+    if Critical then
+      Annotation := Copy(Annotation, 2, Length(Annotation) - 1);
+    if Annotation = '' then
+      Exit;
+
+    SetLength(Annotations, Count + 1);
+    SetLength(CriticalAnnotations, Count + 1);
+    Annotations[Count] := Annotation;
+    CriticalAnnotations[Count] := Critical;
+    Inc(Count);
+
+    Value := Copy(Value, 1, BracketStart - 1);
+  end;
+
+  CalendarSeen := False;
+  CalendarCriticalSeen := False;
+  TimeZoneSeen := False;
+  CalendarCount := 0;
+
+  for I := Count - 1 downto 0 do
+  begin
+    Annotation := Annotations[I];
+    Critical := CriticalAnnotations[I];
+    EqualsPos := System.Pos('=', Annotation);
+    if EqualsPos > 0 then
+    begin
+      Key := Copy(Annotation, 1, EqualsPos - 1);
+      CalendarValue := Copy(Annotation, EqualsPos + 1, Length(Annotation) - EqualsPos);
+      if not IsValidAnnotationKey(Key) then
         Exit;
 
-      // Check for key=value format
-      KeyEnd := System.Pos('=', AnnotContent);
-      if KeyEnd > 0 then
+      if Key = 'u-ca' then
       begin
-        Key := Copy(AnnotContent, 1, KeyEnd - 1);
-        // Validate key format (must be lowercase alphanumeric with dashes)
-        if not IsValidAnnotationKey(Key) then
-          Exit; // Invalid key - return unchanged so parser rejects
-
-        if Key = 'u-ca' then
+        Inc(CalendarCount);
+        if Critical then
+          CalendarCriticalSeen := True;
+        if (CalendarCount > 1) and (CalendarCriticalSeen or Critical) then
+          Exit;
+        if not CalendarSeen then
         begin
-          // Calendar annotation
-          if CalendarSeen then
-            Exit; // Multiple calendar annotations - reject
+          CanonicalCalendar := CanonicalizeTemporalCalendarIdentifier(CalendarValue);
+          if CanonicalCalendar = '' then
+            Exit;
+          ACalendarId := CanonicalCalendar;
           CalendarSeen := True;
-        end
-        else if IsCritical then
-          Exit; // Unknown critical annotation - reject
-        // Non-critical unknown key=value - strip silently
+        end;
       end
-      else
-      begin
-        // No key=value format: this is a timezone annotation
-        if TimeZoneSeen then
-          Exit; // Multiple timezone annotations - reject
-        TimeZoneSeen := True;
-      end;
-
-      Result := Copy(Result, 1, I - 1);
+      else if Critical then
+        Exit;
     end
     else
-      Break;
+    begin
+      if TimeZoneSeen then
+        Exit;
+      TimeZoneSeen := True;
+    end;
   end;
+
+  AStripped := Value;
+  Result := True;
+end;
+
+function TryExtractTemporalCalendarAnnotation(const AStr: string; out ACalendarId: string): Boolean;
+var
+  Stripped: string;
+begin
+  Result := TryStripTemporalAnnotations(AStr, Stripped, ACalendarId);
+end;
+
+function StripAnnotations(const AStr: string): string;
+var
+  CalendarId: string;
+begin
+  if not TryStripTemporalAnnotations(AStr, Result, CalendarId) then
+    Result := AStr;
+end;
+
+function IsValidTemporalOffsetSuffix(const AStr: string): Boolean;
+var
+  Pos, Hour, Minute, Second: Integer;
+  FracVal: Int64;
+  FracDigits: Integer;
+  ExtendedMinute: Boolean;
+begin
+  Result := False;
+  if Length(AStr) < 3 then
+    Exit;
+
+  Pos := 1;
+  if (AStr[Pos] <> '+') and (AStr[Pos] <> '-') then
+    Exit;
+  Inc(Pos);
+
+  if not TryParseDigits(AStr, Pos, 2, Hour) then
+    Exit;
+  if (Hour < 0) or (Hour > 23) then
+    Exit;
+  if Pos > Length(AStr) then
+    Exit(True);
+
+  ExtendedMinute := False;
+  if AStr[Pos] = ':' then
+  begin
+    ExtendedMinute := True;
+    Inc(Pos);
+  end;
+  if not TryParseDigits(AStr, Pos, 2, Minute) then
+    Exit;
+  if (Minute < 0) or (Minute > 59) then
+    Exit;
+  if Pos > Length(AStr) then
+    Exit(True);
+
+  if ExtendedMinute then
+  begin
+    if AStr[Pos] <> ':' then
+      Exit;
+    Inc(Pos);
+  end;
+  if not TryParseDigits(AStr, Pos, 2, Second) then
+    Exit;
+  if (Second < 0) or (Second > 59) then
+    Exit;
+
+  if (Pos <= Length(AStr)) and ((AStr[Pos] = '.') or (AStr[Pos] = ',')) then
+  begin
+    Inc(Pos);
+    if not TryParseVariableDigits(AStr, Pos, FracVal, FracDigits) then
+      Exit;
+    if FracDigits > 9 then
+      Exit;
+  end;
+
+  Result := Pos > Length(AStr);
 end;
 
 function StripOffsetAndAnnotations(const AStr: string): string;
 var
-  I: Integer;
+  I, TPos, ScanStart, OffsetStart: Integer;
 begin
   Result := StripAnnotations(AStr);
-  // Remove trailing UTC offset (+HH:MM, -HH:MM, +HHMM, -HHMM, +HH, -HH, Z)
-  if (Length(Result) > 0) and ((Result[Length(Result)] = 'Z') or (Result[Length(Result)] = 'z')) then
-  begin
-    Result := Copy(Result, 1, Length(Result) - 1);
-    Exit;
-  end;
-  // Look for +/- offset at end
+
+  TPos := System.Pos('T', Result);
+  if TPos = 0 then
+    TPos := System.Pos('t', Result);
+  if TPos = 0 then
+    TPos := System.Pos(' ', Result);
+  if TPos > 0 then
+    ScanStart := TPos + 1
+  else
+    ScanStart := 1;
+
+  OffsetStart := 0;
   I := Length(Result);
-  while (I > 0) and (Result[I] >= '0') and (Result[I] <= '9') do
+  while I >= ScanStart do
+  begin
+    if (Result[I] = '+') or (Result[I] = '-') then
+    begin
+      OffsetStart := I;
+      Break;
+    end;
     Dec(I);
-  if (I > 0) and (Result[I] = ':') then
+  end;
+
+  if (OffsetStart > 0) and
+     IsValidTemporalOffsetSuffix(Copy(Result, OffsetStart, Length(Result) - OffsetStart + 1)) then
+    Result := Copy(Result, 1, OffsetStart - 1);
+end;
+
+function TryStripTemporalAnnotationsForTime(const AStr: string; out AStripped: string): Boolean;
+var
+  Value: string;
+  BracketStart, BracketEnd, EqualsPos: Integer;
+  Annotation, Key: string;
+  Critical: Boolean;
+  TimeZoneSeen: Boolean;
+  CalendarCount: Integer;
+  CalendarCriticalSeen: Boolean;
+begin
+  Result := False;
+  AStripped := AStr;
+  Value := AStr;
+  TimeZoneSeen := False;
+  CalendarCount := 0;
+  CalendarCriticalSeen := False;
+
+  while (Length(Value) > 0) and (Value[Length(Value)] = ']') do
+  begin
+    BracketEnd := Length(Value);
+    BracketStart := BracketEnd - 1;
+    while (BracketStart > 0) and (Value[BracketStart] <> '[') do
+      Dec(BracketStart);
+    if BracketStart = 0 then
+      Exit;
+
+    Annotation := Copy(Value, BracketStart + 1, BracketEnd - BracketStart - 1);
+    Critical := (Length(Annotation) > 0) and (Annotation[1] = '!');
+    if Critical then
+      Annotation := Copy(Annotation, 2, Length(Annotation) - 1);
+    if Annotation = '' then
+      Exit;
+
+    EqualsPos := System.Pos('=', Annotation);
+    if EqualsPos > 0 then
+    begin
+      Key := Copy(Annotation, 1, EqualsPos - 1);
+      if not IsValidAnnotationKey(Key) then
+        Exit;
+      if Key = 'u-ca' then
+      begin
+        Inc(CalendarCount);
+        if Critical then
+          CalendarCriticalSeen := True;
+        if (CalendarCount > 1) and (CalendarCriticalSeen or Critical) then
+          Exit;
+      end
+      else if Critical then
+        Exit;
+    end
+    else
+    begin
+      if TimeZoneSeen then
+        Exit;
+      TimeZoneSeen := True;
+    end;
+
+    Value := Copy(Value, 1, BracketStart - 1);
+  end;
+
+  AStripped := Value;
+  Result := True;
+end;
+
+function StripOffsetAndAnnotationsForTime(const AStr: string): string;
+var
+  I, TPos, ScanStart, OffsetStart: Integer;
+begin
+  if not TryStripTemporalAnnotationsForTime(AStr, Result) then
+    Result := AStr;
+
+  TPos := System.Pos('T', Result);
+  if TPos = 0 then
+    TPos := System.Pos('t', Result);
+  if TPos = 0 then
+    TPos := System.Pos(' ', Result);
+  if TPos > 0 then
+    ScanStart := TPos + 1
+  else
+    ScanStart := 1;
+
+  OffsetStart := 0;
+  I := Length(Result);
+  while I >= ScanStart do
+  begin
+    if (Result[I] = '+') or (Result[I] = '-') then
+    begin
+      OffsetStart := I;
+      Break;
+    end;
     Dec(I);
-  while (I > 0) and (Result[I] >= '0') and (Result[I] <= '9') do
-    Dec(I);
-  if (I > 0) and ((Result[I] = '+') or (Result[I] = '-')) then
-    Result := Copy(Result, 1, I - 1);
+  end;
+
+  if (OffsetStart > 0) and
+     IsValidTemporalOffsetSuffix(Copy(Result, OffsetStart, Length(Result) - OffsetStart + 1)) then
+    Result := Copy(Result, 1, OffsetStart - 1);
+end;
+
+function TemporalStringHasUTCDesignator(const AStr: string): Boolean;
+var
+  S: string;
+begin
+  S := StripAnnotations(AStr);
+  Result := (Length(S) > 0) and ((S[Length(S)] = 'Z') or (S[Length(S)] = 'z'));
+end;
+
+function PlainTimeStringRequiresDesignator(const AStr: string): Boolean;
+var
+  S: string;
+  Year, Month, Day: Integer;
+
+  function ParseCompactDigits(const AValue: string; const AStart, ACount: Integer;
+    out ANumber: Integer): Boolean;
+  var
+    I: Integer;
+    Ch: Char;
+  begin
+    ANumber := 0;
+    if AStart + ACount - 1 > Length(AValue) then
+      Exit(False);
+    for I := 0 to ACount - 1 do
+    begin
+      Ch := AValue[AStart + I];
+      if (Ch < '0') or (Ch > '9') then
+        Exit(False);
+      ANumber := ANumber * 10 + Ord(Ch) - Ord('0');
+    end;
+    Result := True;
+  end;
+
+  function IsCompactYearMonth(const AValue: string): Boolean;
+  begin
+    Result := (Length(AValue) = 6) and
+      ParseCompactDigits(AValue, 1, 4, Year) and
+      ParseCompactDigits(AValue, 5, 2, Month) and
+      (Month >= 1) and (Month <= 12);
+  end;
+
+  function IsCompactMonthDay(const AValue: string): Boolean;
+  begin
+    Result := (Length(AValue) = 4) and
+      ParseCompactDigits(AValue, 1, 2, Month) and
+      ParseCompactDigits(AValue, 3, 2, Day) and
+      (Month >= 1) and (Month <= 12) and
+      (Day >= 1) and (Day <= DaysInMonth(1972, Month));
+  end;
+begin
+  S := StripAnnotations(AStr);
+  if S = '' then
+    Exit(False);
+  if (S[1] = 'T') or (S[1] = 't') then
+    Exit(False);
+  if (System.Pos('T', S) > 0) or (System.Pos('t', S) > 0) then
+    Exit(False);
+  if (System.Pos(' ', S) > 1) then
+    Exit(False);
+  Result := (S[1] = ' ') or TryParseISOYearMonth(S, Year, Month) or
+    TryParseISOMonthDay(S, Month, Day) or IsCompactYearMonth(S) or
+    IsCompactMonthDay(S);
 end;
 
 function TryParseISODate(const AStr: string; out ADate: TTemporalDateRecord): Boolean;
@@ -527,11 +926,13 @@ var
   Year, Month, Day: Integer;
   C: Char;
   S: string;
+  Extended: Boolean;
 begin
   Result := False;
   S := StripAnnotations(AStr);
   Pos := 1;
   Sign := 1;
+  Extended := False;
 
   // Check for sign prefix
   if Pos <= Length(S) then
@@ -559,15 +960,19 @@ begin
 
   Year := Year * Sign;
 
-  // Expect '-'
-  if (Pos > Length(S)) or (S[Pos] <> '-') then Exit;
-  Inc(Pos);
+  if (Pos <= Length(S)) and (S[Pos] = '-') then
+  begin
+    Extended := True;
+    Inc(Pos);
+  end;
 
   if not TryParseDigits(S, Pos, 2, Month) then Exit;
 
-  // Expect '-'
-  if (Pos > Length(S)) or (S[Pos] <> '-') then Exit;
-  Inc(Pos);
+  if Extended then
+  begin
+    if (Pos > Length(S)) or (S[Pos] <> '-') then Exit;
+    Inc(Pos);
+  end;
 
   if not TryParseDigits(S, Pos, 2, Day) then Exit;
 
@@ -588,6 +993,8 @@ var
   Hour, Minute, Second: Integer;
   FracVal: Int64;
   FracDigits: Integer;
+  HasSecond: Boolean;
+  ExtendedMinute: Boolean;
 begin
   Result := False;
   ATime.Hour := 0;
@@ -600,38 +1007,60 @@ begin
   Pos := 1;
 
   if not TryParseDigits(AStr, Pos, 2, Hour) then Exit;
-  if (Pos > Length(AStr)) or (AStr[Pos] <> ':') then Exit;
-  Inc(Pos);
-  if not TryParseDigits(AStr, Pos, 2, Minute) then Exit;
+  Minute := 0;
+  ExtendedMinute := False;
+  if Pos <= Length(AStr) then
+  begin
+    if AStr[Pos] = ':' then
+    begin
+      ExtendedMinute := True;
+      Inc(Pos);
+      if not TryParseDigits(AStr, Pos, 2, Minute) then Exit;
+    end
+    else if (Pos + 1 <= Length(AStr)) and
+            (AStr[Pos] >= '0') and (AStr[Pos] <= '9') and
+            (AStr[Pos + 1] >= '0') and (AStr[Pos + 1] <= '9') then
+    begin
+      if not TryParseDigits(AStr, Pos, 2, Minute) then Exit;
+    end
+    else if (AStr[Pos] <> '.') and (AStr[Pos] <> ',') then
+      Exit;
+  end;
 
   Second := 0;
+  HasSecond := False;
   if (Pos <= Length(AStr)) and (AStr[Pos] = ':') then
   begin
+    if not ExtendedMinute then Exit;
     Inc(Pos);
     if not TryParseDigits(AStr, Pos, 2, Second) then Exit;
+    HasSecond := True;
+  end
+  else if (not ExtendedMinute) and (Pos + 1 <= Length(AStr)) and
+          (AStr[Pos] >= '0') and (AStr[Pos] <= '9') and
+          (AStr[Pos + 1] >= '0') and (AStr[Pos + 1] <= '9') then
+  begin
+    if not TryParseDigits(AStr, Pos, 2, Second) then Exit;
+    HasSecond := True;
+  end;
 
-    // Fractional seconds
-    if (Pos <= Length(AStr)) and (AStr[Pos] = '.') then
+  // Fractional seconds
+  if HasSecond and (Pos <= Length(AStr)) and ((AStr[Pos] = '.') or (AStr[Pos] = ',')) then
+  begin
+    Inc(Pos);
+    if not TryParseVariableDigits(AStr, Pos, FracVal, FracDigits) then Exit;
+    if FracDigits > 9 then Exit;
+
+    // Pad to 9 digits (nanosecond precision).
+    while FracDigits < 9 do
     begin
-      Inc(Pos);
-      if not TryParseVariableDigits(AStr, Pos, FracVal, FracDigits) then Exit;
-
-      // Pad or truncate to 9 digits (nanosecond precision)
-      while FracDigits < 9 do
-      begin
-        FracVal := FracVal * 10;
-        Inc(FracDigits);
-      end;
-      while FracDigits > 9 do
-      begin
-        FracVal := FracVal div 10;
-        Dec(FracDigits);
-      end;
-
-      ATime.Millisecond := Integer(FracVal div 1000000);
-      ATime.Microsecond := Integer((FracVal div 1000) mod 1000);
-      ATime.Nanosecond := Integer(FracVal mod 1000);
+      FracVal := FracVal * 10;
+      Inc(FracDigits);
     end;
+
+    ATime.Millisecond := Integer(FracVal div 1000000);
+    ATime.Microsecond := Integer((FracVal div 1000) mod 1000);
+    ATime.Nanosecond := Integer(FracVal mod 1000);
   end;
 
   // Clamp leap second (60) to 59
@@ -659,11 +1088,15 @@ begin
   ATime.Microsecond := 0;
   ATime.Nanosecond := 0;
 
+  if HasFractionWithMoreThanNineDigits(AStr) then Exit;
+
   S := AStr;
 
   TPos := System.Pos('T', S);
   if TPos = 0 then
     TPos := System.Pos('t', S);
+  if TPos = 0 then
+    TPos := System.Pos(' ', S);
 
   if TPos = 0 then
   begin
@@ -677,12 +1110,11 @@ begin
 
   // Strip offset and annotations from time part before parsing
   TimePart := StripOffsetAndAnnotations(TimePart);
+  if Length(TimePart) = 0 then
+    Exit;
 
   if not TryParseISODate(DatePart, ADate) then Exit;
-  if Length(TimePart) > 0 then
-  begin
-    if not TryParseISOTime(TimePart, ATime) then Exit;
-  end;
+  if not TryParseISOTime(TimePart, ATime) then Exit;
 
   Result := True;
 end;
@@ -939,9 +1371,13 @@ begin
   ATime.Microsecond := 0;
   ATime.Nanosecond := 0;
 
+  if HasFractionWithMoreThanNineDigits(AStr) then Exit;
+
   TPos := System.Pos('T', AStr);
   if TPos = 0 then
     TPos := System.Pos('t', AStr);
+  if TPos = 0 then
+    TPos := System.Pos(' ', AStr);
   if TPos = 0 then Exit;
 
   DatePart := Copy(AStr, 1, TPos - 1);
@@ -1046,6 +1482,16 @@ var
   TimeRec: TTemporalTimeRecord;
   S: string;
 begin
+  if HasFractionWithMoreThanNineDigits(AStr) then
+  begin
+    Result := False;
+    Exit;
+  end;
+  if TemporalStringHasUTCDesignator(AStr) then
+  begin
+    Result := False;
+    Exit;
+  end;
   // Validate annotations once up front — if invalid, reject immediately
   S := StripAnnotations(AStr);
   if (Length(AStr) > 0) and (AStr[Length(AStr)] = ']') and (S = AStr) then
@@ -1070,11 +1516,22 @@ end;
 
 function CoerceToISOTime(const AStr: string; out ATime: TTemporalTimeRecord): Boolean;
 var
-  S: string;
+  S, DatePart: string;
   TPos: Integer;
+  DateRec: TTemporalDateRecord;
 begin
+  if HasFractionWithMoreThanNineDigits(AStr) then
+  begin
+    Result := False;
+    Exit;
+  end;
+  if TemporalStringHasUTCDesignator(AStr) or PlainTimeStringRequiresDesignator(AStr) then
+  begin
+    Result := False;
+    Exit;
+  end;
   // Strip offset and annotations
-  S := StripOffsetAndAnnotations(AStr);
+  S := StripOffsetAndAnnotationsForTime(AStr);
   // Try time-only
   if TryParseISOTime(S, ATime) then
   begin
@@ -1086,8 +1543,19 @@ begin
   TPos := System.Pos('T', S);
   if TPos = 0 then
     TPos := System.Pos('t', S);
+  if TPos = 0 then
+    TPos := System.Pos(' ', S);
   if TPos > 0 then
   begin
+    if TPos > 1 then
+    begin
+      DatePart := Copy(S, 1, TPos - 1);
+      if not TryParseISODate(DatePart, DateRec) then
+      begin
+        Result := False;
+        Exit;
+      end;
+    end;
     S := Copy(S, TPos + 1, Length(S) - TPos);
     if (Length(S) > 0) and TryParseISOTime(S, ATime) then
     begin
@@ -1102,6 +1570,16 @@ function CoerceToISODateTime(const AStr: string; out ADate: TTemporalDateRecord;
 var
   S: string;
 begin
+  if HasFractionWithMoreThanNineDigits(AStr) then
+  begin
+    Result := False;
+    Exit;
+  end;
+  if TemporalStringHasUTCDesignator(AStr) then
+  begin
+    Result := False;
+    Exit;
+  end;
   // Validate annotations up front
   S := StripAnnotations(AStr);
   if (Length(AStr) > 0) and (AStr[Length(AStr)] = ']') and (S = AStr) then
@@ -1122,6 +1600,11 @@ function CoerceToISOInstant(const AStr: string; out ADate: TTemporalDateRecord;
 var
   TimeZone, S: string;
 begin
+  if HasFractionWithMoreThanNineDigits(AStr) then
+  begin
+    Result := False;
+    Exit;
+  end;
   // Validate annotations up front
   S := StripAnnotations(AStr);
   if (Length(AStr) > 0) and (AStr[Length(AStr)] = ']') and (S = AStr) then

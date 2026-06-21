@@ -23,8 +23,11 @@ type
     FMillisecond: Integer;
     FMicrosecond: Integer;
     FNanosecond: Integer;
+    FCalendarId: string;
   published
     function GetCalendarId(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function GetEra(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function GetEraYear(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function GetYear(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function GetMonth(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function GetMonthCode(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -67,7 +70,8 @@ type
     procedure InitializePrototype;
   public
     constructor Create(const AYear, AMonth, ADay, AHour, AMinute, ASecond,
-      AMillisecond, AMicrosecond, ANanosecond: Integer); overload;
+      AMillisecond, AMicrosecond, ANanosecond: Integer;
+      const ACalendarId: string = 'iso8601'); overload;
 
     function ToStringTag: string; override;
     class procedure ExposePrototype(const AConstructor: TGocciaObjectValue);
@@ -81,6 +85,7 @@ type
     property Millisecond: Integer read FMillisecond;
     property Microsecond: Integer read FMicrosecond;
     property Nanosecond: Integer read FNanosecond;
+    property CalendarId: string read FCalendarId;
   end;
 
 implementation
@@ -88,14 +93,21 @@ implementation
 uses
   SysUtils,
 
+  BigInteger,
+
+  Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.GarbageCollector,
   Goccia.Realm,
+  Goccia.Temporal.Calendar,
+  Goccia.Temporal.DurationMath,
   Goccia.Temporal.Options,
   Goccia.Temporal.TimeZone,
   Goccia.Temporal.Utils,
   Goccia.Utils,
   Goccia.Values.ErrorHelper,
+  Goccia.Values.IntlDateTimeFormat,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue,
   Goccia.Values.TemporalDuration,
@@ -119,6 +131,32 @@ begin
     Result := nil;
 end;
 
+function GetTimeZoneDisambiguationOption(const AOptions: TGocciaValue;
+  const AMethod: string): TTemporalTimeZoneDisambiguation;
+var
+  OptionsObj: TGocciaObjectValue;
+  Value: string;
+begin
+  if (AOptions = nil) or (AOptions is TGocciaUndefinedLiteralValue) then
+    Exit(ttzdCompatible);
+  if not (AOptions is TGocciaObjectValue) then
+    ThrowTypeError(AMethod + ' options must be an object', SSuggestTemporalFromArg);
+
+  OptionsObj := TGocciaObjectValue(AOptions);
+  Value := GetOptionString(OptionsObj, 'disambiguation', 'compatible');
+  if Value = 'compatible' then
+    Result := ttzdCompatible
+  else if Value = 'earlier' then
+    Result := ttzdEarlier
+  else if Value = 'later' then
+    Result := ttzdLater
+  else if Value = 'reject' then
+    Result := ttzdReject
+  else
+    ThrowRangeError(AMethod + ' invalid disambiguation option: ' + Value,
+      SSuggestTemporalRoundArg);
+end;
+
 function AsPlainDateTime(const AValue: TGocciaValue; const AMethod: string): TGocciaTemporalPlainDateTimeValue;
 begin
   if not (AValue is TGocciaTemporalPlainDateTimeValue) then
@@ -126,13 +164,275 @@ begin
   Result := TGocciaTemporalPlainDateTimeValue(AValue);
 end;
 
+function ClampTemporalInteger(const AValue, AMin, AMax: Integer): Integer;
+begin
+  if AValue < AMin then
+    Result := AMin
+  else if AValue > AMax then
+    Result := AMax
+  else
+    Result := AValue;
+end;
+
+procedure ConstrainTemporalTimeFields(var AHour, AMinute, ASecond,
+  AMillisecond, AMicrosecond, ANanosecond: Integer);
+begin
+  AHour := ClampTemporalInteger(AHour, 0, 23);
+  AMinute := ClampTemporalInteger(AMinute, 0, 59);
+  ASecond := ClampTemporalInteger(ASecond, 0, 59);
+  AMillisecond := ClampTemporalInteger(AMillisecond, 0, 999);
+  AMicrosecond := ClampTemporalInteger(AMicrosecond, 0, 999);
+  ANanosecond := ClampTemporalInteger(ANanosecond, 0, 999);
+end;
+
+procedure ValidatePlainDateTimeRange(const AYear, AMonth, ADay, AHour,
+  AMinute, ASecond, AMillisecond, AMicrosecond, ANanosecond: Integer;
+  const AMethod: string);
+begin
+  if (AYear < -271821) or (AYear > 275760) or
+     ((AYear = -271821) and
+      ((AMonth < 4) or ((AMonth = 4) and (ADay < 19)))) or
+     ((AYear = 275760) and
+      ((AMonth > 9) or ((AMonth = 9) and (ADay > 13)))) or
+     ((AYear = -271821) and (AMonth = 4) and (ADay = 19) and
+      (AHour = 0) and (AMinute = 0) and (ASecond = 0) and
+      (AMillisecond = 0) and (AMicrosecond = 0) and (ANanosecond = 0)) or
+     ((AYear = 275760) and (AMonth = 9) and (ADay = 13) and
+      ((AHour > 23) or ((AHour = 23) and
+       ((AMinute > 59) or ((AMinute = 59) and
+        ((ASecond > 59) or ((ASecond = 59) and
+         ((AMillisecond > 999) or ((AMillisecond = 999) and
+          ((AMicrosecond > 999) or ((AMicrosecond = 999) and
+           (ANanosecond > 999)))))))))))) then
+    ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['date-time',
+      AMethod]), SSuggestTemporalDateRange);
+end;
+
+function PlainDateTimeStringWithConstrainedLeapSecond(const AValue: string): string;
+var
+  SeparatorPos, TimeStart, SecondPos: Integer;
+begin
+  Result := AValue;
+  SeparatorPos := System.Pos('T', Result);
+  if SeparatorPos = 0 then
+    SeparatorPos := System.Pos('t', Result);
+  if SeparatorPos = 0 then
+    SeparatorPos := System.Pos(' ', Result);
+  if SeparatorPos = 0 then
+    Exit;
+
+  TimeStart := SeparatorPos + 1;
+  SecondPos := 0;
+  if (TimeStart + 7 <= Length(Result)) and
+     (Result[TimeStart + 2] = ':') and (Result[TimeStart + 5] = ':') then
+    SecondPos := TimeStart + 6
+  else if (TimeStart + 5 <= Length(Result)) and
+          (Result[TimeStart] in ['0'..'9']) and
+          (Result[TimeStart + 1] in ['0'..'9']) and
+          (Result[TimeStart + 2] in ['0'..'9']) and
+          (Result[TimeStart + 3] in ['0'..'9']) then
+    SecondPos := TimeStart + 4;
+
+  if (SecondPos > 0) and (SecondPos + 1 <= Length(Result)) and
+     (Copy(Result, SecondPos, 2) = '60') then
+    Result := Copy(Result, 1, SecondPos - 1) + '59' +
+      Copy(Result, SecondPos + 2, Length(Result) - SecondPos - 1);
+end;
+
+procedure ConstrainPlainDateTimeLeapSecond(var ASecond: Integer); inline;
+begin
+  if ASecond = 60 then
+    ASecond := 59;
+end;
+
+procedure ValidatePlainDateTimeRoundIncrement(const AIncrement: Integer;
+  const ASmallestUnit: TTemporalUnit);
+var
+  MaxVal: Integer;
+begin
+  if AIncrement < 1 then
+    ThrowRangeError(SErrorRoundingIncrementMin, SSuggestTemporalRoundArg);
+  if AIncrement > 1000000000 then
+    ThrowRangeError(SErrorRoundingIncrementMax, SSuggestTemporalRoundArg);
+
+  case ASmallestUnit of
+    tuDay:         MaxVal := 1;
+    tuHour:        MaxVal := 24;
+    tuMinute,
+    tuSecond:      MaxVal := 60;
+    tuMillisecond,
+    tuMicrosecond,
+    tuNanosecond:  MaxVal := 1000;
+  else
+    ThrowRangeError(Format(SErrorTemporalInvalidUnitFor,
+      ['PlainDateTime.prototype.round', 'smallestUnit']), SSuggestTemporalValidUnits);
+  end;
+
+  if (AIncrement > MaxVal) or (MaxVal mod AIncrement <> 0) or
+     ((ASmallestUnit <> tuDay) and (AIncrement = MaxVal)) then
+    ThrowRangeError(Format(SErrorRoundingIncrementDivisor, [AIncrement, MaxVal]),
+      SSuggestTemporalRoundArg);
+end;
+
+function TemporalUnitToOptionString(const AUnit: TTemporalUnit): string;
+begin
+  case AUnit of
+    tuYear:        Result := 'year';
+    tuMonth:       Result := 'month';
+    tuWeek:        Result := 'week';
+    tuDay:         Result := 'day';
+    tuHour:        Result := 'hour';
+    tuMinute:      Result := 'minute';
+    tuSecond:      Result := 'second';
+    tuMillisecond: Result := 'millisecond';
+    tuMicrosecond: Result := 'microsecond';
+    tuNanosecond:  Result := 'nanosecond';
+    tuAuto:        Result := 'auto';
+  else
+    Result := '';
+  end;
+end;
+
+function TemporalRoundingModeToOptionString(const AMode: TTemporalRoundingMode): string;
+begin
+  case AMode of
+    rmCeil:       Result := 'ceil';
+    rmFloor:      Result := 'floor';
+    rmTrunc:      Result := 'trunc';
+    rmHalfCeil:   Result := 'halfCeil';
+    rmHalfFloor:  Result := 'halfFloor';
+    rmHalfTrunc:  Result := 'halfTrunc';
+    rmHalfEven:   Result := 'halfEven';
+    rmExpand:     Result := 'expand';
+  else
+    Result := 'halfExpand';
+  end;
+end;
+
+function NegateTemporalRoundingMode(const AMode: TTemporalRoundingMode): TTemporalRoundingMode;
+begin
+  case AMode of
+    rmCeil:      Result := rmFloor;
+    rmFloor:     Result := rmCeil;
+    rmHalfCeil:  Result := rmHalfFloor;
+    rmHalfFloor: Result := rmHalfCeil;
+  else
+    Result := AMode;
+  end;
+end;
+
+function Float64RepresentableInteger(const AValue: Int64): Int64;
+const
+  MAX_SAFE_INTEGER = Int64(9007199254740991);
+  FIRST_UNSAFE_INTEGER = Int64(9007199254740992);
+var
+  AbsValue, Threshold, Spacing, Quotient, Remainder, RoundedAbs: Int64;
+begin
+  if (AValue >= -MAX_SAFE_INTEGER) and (AValue <= MAX_SAFE_INTEGER) then
+    Exit(AValue);
+
+  AbsValue := Abs(AValue);
+  Threshold := FIRST_UNSAFE_INTEGER;
+  Spacing := 2;
+  while (Threshold <= High(Int64) div 2) and (AbsValue >= Threshold * 2) do
+  begin
+    Threshold := Threshold * 2;
+    Spacing := Spacing * 2;
+  end;
+
+  Quotient := AbsValue div Spacing;
+  Remainder := AbsValue mod Spacing;
+  if (Remainder * 2 > Spacing) or
+     ((Remainder * 2 = Spacing) and Odd(Quotient)) then
+    Inc(Quotient);
+  RoundedAbs := Quotient * Spacing;
+
+  if AValue < 0 then
+    Result := -RoundedAbs
+  else
+    Result := RoundedAbs;
+end;
+
+procedure BalancePlainDateTimeTimeAddition(const AHour, AMinute, ASecond,
+  AMillisecond, AMicrosecond, ANanosecond: Integer;
+  const ADuration: TGocciaTemporalDurationValue; out ABalanced: TTemporalTimeRecord;
+  out AExtraDays: Int64);
+var
+  TimeNs, DayNs, DaysBig, Remainder, H, Mi, S, Ms, Us, Ns: TBigInteger;
+  IgnoredDays: Int64;
+begin
+  TimeNs := TimeDurationFromComponents(
+    TBigInteger.FromInt64(AHour), TBigInteger.FromInt64(AMinute),
+    TBigInteger.FromInt64(ASecond), TBigInteger.FromInt64(AMillisecond),
+    TBigInteger.FromInt64(AMicrosecond), TBigInteger.FromInt64(ANanosecond))
+    .Add(TimeDurationFromComponents(ADuration.HoursBig, ADuration.MinutesBig,
+      ADuration.SecondsBig, ADuration.MillisecondsBig,
+      ADuration.MicrosecondsBig, ADuration.NanosecondsBig));
+  if not IsValidTimeDuration(TimeNs) then
+    ThrowRangeError(SErrorDurationTimeOutOfRange, SSuggestTemporalDurationRange);
+  DayNs := TBigInteger.FromInt64(NANOSECONDS_PER_DAY);
+  if TimeNs.IsNegative then
+    DaysBig := TimeNs.AbsValue.Add(DayNs).Subtract(TBigInteger.One)
+      .Divide(DayNs).Negate
+  else
+    DaysBig := TimeNs.Divide(DayNs);
+  Remainder := TimeNs.Subtract(DaysBig.Multiply(DayNs));
+  AExtraDays := DaysBig.ToInt64;
+  BalanceTimeDurationToFields(Remainder, tuHour, H, Mi, S, Ms, Us, Ns,
+    IgnoredDays);
+  ABalanced.Hour := Integer(H.ToInt64);
+  ABalanced.Minute := Integer(Mi.ToInt64);
+  ABalanced.Second := Integer(S.ToInt64);
+  ABalanced.Millisecond := Integer(Ms.ToInt64);
+  ABalanced.Microsecond := Integer(Us.ToInt64);
+  ABalanced.Nanosecond := Integer(Ns.ToInt64);
+end;
+
+function CalendarFromProperty(const AValue: TGocciaValue; const AMethod: string): string;
+var
+  CalendarString: string;
+begin
+  if AValue is TGocciaTemporalPlainDateValue then
+    Exit(TGocciaTemporalPlainDateValue(AValue).CalendarId);
+  if AValue is TGocciaTemporalPlainDateTimeValue then
+    Exit(TGocciaTemporalPlainDateTimeValue(AValue).CalendarId);
+  if AValue is TGocciaTemporalPlainMonthDayValue then
+    Exit(TGocciaTemporalPlainMonthDayValue(AValue).CalendarId);
+  if AValue is TGocciaTemporalPlainYearMonthValue then
+    Exit(TGocciaTemporalPlainYearMonthValue(AValue).CalendarId);
+  if AValue is TGocciaTemporalZonedDateTimeValue then
+    Exit(TGocciaTemporalZonedDateTimeValue(AValue).CalendarId);
+
+  if not (AValue is TGocciaStringLiteralValue) then
+    ThrowTypeError(AMethod + ' requires a string or Temporal calendar-carrying object',
+      SSuggestTemporalFromArg);
+
+  CalendarString := TGocciaStringLiteralValue(AValue).Value;
+  Result := ParseTemporalCalendarStringIdentifierStrict(
+    PlainDateTimeStringWithConstrainedLeapSecond(CalendarString));
+  if Result = '' then
+    ThrowRangeError('Unknown calendar: ' + CalendarString, SSuggestTemporalFromArg);
+end;
+
+function CalendarInfoForPlainDateTime(const ADateTime: TGocciaTemporalPlainDateTimeValue;
+  const AMethod: string): TTemporalCalendarDateInfo;
+begin
+  if not TryGetCalendarDateInfo(ADateTime.FCalendarId, ADateTime.FYear, ADateTime.FMonth,
+    ADateTime.FDay, Result) then
+    ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['date-time', AMethod]), SSuggestTemporalDateRange);
+end;
+
 function CoercePlainDateTime(const AValue: TGocciaValue; const AMethod: string): TGocciaTemporalPlainDateTimeValue;
 var
   DateRec: TTemporalDateRecord;
   TimeRec: TTemporalTimeRecord;
   Obj: TGocciaObjectValue;
-  V: TGocciaValue;
-  VYear, VMonth, VDay, VHour, VMinute, VSecond: Integer;
+  EmptyArgs: TGocciaArgumentsCollection;
+  Converted, V, VMonthValue, VMonthCode, VEra, VEraYear: TGocciaValue;
+  VYear, VMonth, VDay, VHour, VMinute, VSecond, VMillisecond, VMicrosecond, VNanosecond: Integer;
+  CalendarId, MonthCodeStr: string;
+  HasYear, HasMonth, HasMonthCode, HasDay, IsLeapMonth: Boolean;
+  MonthFieldValue: Integer;
 
   function GetRequiredField(const AName: string): Integer;
   begin
@@ -152,28 +452,117 @@ var
   end;
 
 begin
+  CalendarId := 'iso8601';
   if AValue is TGocciaTemporalPlainDateTimeValue then
     Result := TGocciaTemporalPlainDateTimeValue(AValue)
+  else if AValue is TGocciaTemporalPlainDateValue then
+  begin
+    Result := TGocciaTemporalPlainDateTimeValue.Create(
+      TGocciaTemporalPlainDateValue(AValue).Year,
+      TGocciaTemporalPlainDateValue(AValue).Month,
+      TGocciaTemporalPlainDateValue(AValue).Day,
+      0, 0, 0, 0, 0, 0,
+      TGocciaTemporalPlainDateValue(AValue).CalendarId);
+  end
+  else if AValue is TGocciaTemporalZonedDateTimeValue then
+  begin
+    EmptyArgs := TGocciaArgumentsCollection.Create([]);
+    try
+      Converted := TGocciaTemporalZonedDateTimeValue(AValue).ZonedDateTimeToPlainDateTime(EmptyArgs, AValue);
+      Result := TGocciaTemporalPlainDateTimeValue(Converted);
+    finally
+      EmptyArgs.Free;
+    end;
+  end
   else if AValue is TGocciaStringLiteralValue then
   begin
-    if not CoerceToISODateTime(TGocciaStringLiteralValue(AValue).Value, DateRec, TimeRec) then
+    if (not TryExtractTemporalCalendarAnnotation(
+         TGocciaStringLiteralValue(AValue).Value, CalendarId)) or
+       (not CoerceToISODateTime(
+         PlainDateTimeStringWithConstrainedLeapSecond(
+           TGocciaStringLiteralValue(AValue).Value), DateRec, TimeRec)) then
       ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['date-time', AMethod]), SSuggestTemporalISOFormat);
+    ValidatePlainDateTimeRange(DateRec.Year, DateRec.Month, DateRec.Day,
+      TimeRec.Hour, TimeRec.Minute, TimeRec.Second, TimeRec.Millisecond,
+      TimeRec.Microsecond, TimeRec.Nanosecond, AMethod);
     Result := TGocciaTemporalPlainDateTimeValue.Create(
       DateRec.Year, DateRec.Month, DateRec.Day,
       TimeRec.Hour, TimeRec.Minute, TimeRec.Second,
-      TimeRec.Millisecond, TimeRec.Microsecond, TimeRec.Nanosecond);
+      TimeRec.Millisecond, TimeRec.Microsecond, TimeRec.Nanosecond, CalendarId);
   end
   else if AValue is TGocciaObjectValue then
   begin
     Obj := TGocciaObjectValue(AValue);
-    VYear := GetRequiredField('year');
-    VMonth := GetRequiredField('month');
-    VDay := GetRequiredField('day');
+    V := Obj.GetProperty('calendar');
+    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
+      CalendarId := CalendarFromProperty(V, AMethod);
+    V := Obj.GetProperty('day');
+    HasDay := Assigned(V) and not (V is TGocciaUndefinedLiteralValue);
+    if HasDay then
+      VDay := ToIntegerWithTruncationValue(V);
     VHour := GetOptionalField('hour', 0);
+    VMicrosecond := GetOptionalField('microsecond', 0);
+    VMillisecond := GetOptionalField('millisecond', 0);
     VMinute := GetOptionalField('minute', 0);
+    VMonthValue := Obj.GetProperty(PROP_MONTH);
+    HasMonth := Assigned(VMonthValue) and not (VMonthValue is TGocciaUndefinedLiteralValue);
+    if HasMonth then
+    begin
+      MonthFieldValue := ToIntegerWithTruncationValue(VMonthValue);
+      VMonth := MonthFieldValue;
+    end;
+    VMonthCode := Obj.GetProperty(PROP_MONTH_CODE);
+    HasMonthCode := Assigned(VMonthCode) and not (VMonthCode is TGocciaUndefinedLiteralValue);
+    if HasMonthCode then
+    begin
+      MonthCodeStr := VMonthCode.ToStringLiteral.Value;
+      if not TryParseTemporalMonthCode(MonthCodeStr, VMonth, IsLeapMonth) then
+        ThrowTypeError(Format(SErrorInvalidMonthCodeFor, [AMethod]), SSuggestTemporalMonthCode);
+      if HasMonth and (MonthFieldValue <> VMonth) then
+        ThrowRangeError(Format(SErrorMonthCodeMismatchIn, [AMethod]), SSuggestTemporalMonthCode);
+    end
+    else if not HasMonth then
+      VMonth := 0;
+    VNanosecond := GetOptionalField('nanosecond', 0);
     VSecond := GetOptionalField('second', 0);
+    V := Obj.GetProperty('year');
+    HasYear := Assigned(V) and not (V is TGocciaUndefinedLiteralValue);
+    if HasYear then
+      VYear := ToIntegerWithTruncationValue(V);
+
+    if not HasDay or (not HasMonth and not HasMonthCode) then
+      ThrowTypeError(AMethod + ' requires year, month, day properties',
+        SSuggestTemporalFromArg);
+    if not HasYear then
+    begin
+      VEra := Obj.GetProperty('era');
+      VEraYear := Obj.GetProperty('eraYear');
+      if (VEra = nil) or (VEra is TGocciaUndefinedLiteralValue) or
+         (VEraYear = nil) or (VEraYear is TGocciaUndefinedLiteralValue) or
+         not TryCalendarYearFromEra(CalendarId, VEra.ToStringLiteral.Value,
+           ToIntegerWithTruncationValue(VEraYear), VYear) then
+        ThrowTypeError(AMethod + ' requires year property', SSuggestTemporalFromArg);
+    end;
+    ConstrainPlainDateTimeLeapSecond(VSecond);
+    if CalendarId <> 'iso8601' then
+    begin
+      if HasMonthCode then
+      begin
+        if not TryCalendarMonthCodeDateToISO(CalendarId, VYear, VMonth, VDay,
+          IsLeapMonth, DateRec) then
+          ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['date-time', AMethod]), SSuggestTemporalDateRange);
+      end
+      else if not TryCalendarDateToISO(CalendarId, VYear, VMonth, VDay, DateRec) then
+        ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['date-time', AMethod]), SSuggestTemporalDateRange);
+      VYear := DateRec.Year;
+      VMonth := DateRec.Month;
+      VDay := DateRec.Day;
+    end;
+    ValidatePlainDateTimeRange(VYear, VMonth, VDay, VHour, VMinute, VSecond,
+      VMillisecond, VMicrosecond, VNanosecond, AMethod);
     Result := TGocciaTemporalPlainDateTimeValue.Create(
-      VYear, VMonth, VDay, VHour, VMinute, VSecond, 0, 0, 0);
+      VYear, VMonth, VDay, VHour, VMinute, VSecond, VMillisecond, VMicrosecond,
+      VNanosecond, CalendarId);
   end
   else
   begin
@@ -185,13 +574,15 @@ end;
 { TGocciaTemporalPlainDateTimeValue }
 
 constructor TGocciaTemporalPlainDateTimeValue.Create(const AYear, AMonth, ADay, AHour, AMinute, ASecond,
-  AMillisecond, AMicrosecond, ANanosecond: Integer);
+  AMillisecond, AMicrosecond, ANanosecond: Integer; const ACalendarId: string = 'iso8601');
 begin
   inherited Create(nil);
   if not IsValidDate(AYear, AMonth, ADay) then
     ThrowRangeError(SErrorInvalidDateInPlainDateTime, SSuggestTemporalDateRange);
   if not IsValidTime(AHour, AMinute, ASecond, AMillisecond, AMicrosecond, ANanosecond) then
     ThrowRangeError(SErrorInvalidTimeInPlainDateTime, SSuggestTemporalDateRange);
+  ValidatePlainDateTimeRange(AYear, AMonth, ADay, AHour, AMinute, ASecond,
+    AMillisecond, AMicrosecond, ANanosecond, 'PlainDateTime');
   FYear := AYear;
   FMonth := AMonth;
   FDay := ADay;
@@ -201,6 +592,9 @@ begin
   FMillisecond := AMillisecond;
   FMicrosecond := AMicrosecond;
   FNanosecond := ANanosecond;
+  FCalendarId := CanonicalizeTemporalCalendarIdentifier(ACalendarId);
+  if FCalendarId = '' then
+    ThrowRangeError('Unknown calendar: ' + ACalendarId, SSuggestTemporalDateRange);
   InitializePrototype;
   if Assigned(GetTemporalPlainDateTimeShared) then
     FPrototype := GetTemporalPlainDateTimeShared.Prototype;
@@ -220,6 +614,8 @@ begin
     Members := TGocciaMemberCollection.Create;
     try
       Members.AddAccessor('calendarId', GetCalendarId, nil, [pfConfigurable]);
+      Members.AddAccessor('era', GetEra, nil, [pfConfigurable]);
+      Members.AddAccessor('eraYear', GetEraYear, nil, [pfConfigurable]);
       Members.AddAccessor('year', GetYear, nil, [pfConfigurable]);
       Members.AddAccessor('month', GetMonth, nil, [pfConfigurable]);
       Members.AddAccessor('monthCode', GetMonthCode, nil, [pfConfigurable]);
@@ -291,29 +687,72 @@ end;
 { Getters }
 
 function TGocciaTemporalPlainDateTimeValue.GetCalendarId(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  D: TGocciaTemporalPlainDateTimeValue;
 begin
-  AsPlainDateTime(AThisValue, 'get PlainDateTime.calendarId');
-  Result := TGocciaStringLiteralValue.Create('iso8601');
+  D := AsPlainDateTime(AThisValue, 'get PlainDateTime.calendarId');
+  Result := TGocciaStringLiteralValue.Create(D.FCalendarId);
+end;
+
+function TGocciaTemporalPlainDateTimeValue.GetEra(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  D: TGocciaTemporalPlainDateTimeValue;
+  Info: TTemporalCalendarDateInfo;
+begin
+  D := AsPlainDateTime(AThisValue, 'get PlainDateTime.era');
+  Info := CalendarInfoForPlainDateTime(D, 'get PlainDateTime.era');
+  if not Info.HasEra then
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  Result := TGocciaStringLiteralValue.Create(Info.Era);
+end;
+
+function TGocciaTemporalPlainDateTimeValue.GetEraYear(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  D: TGocciaTemporalPlainDateTimeValue;
+  Info: TTemporalCalendarDateInfo;
+begin
+  D := AsPlainDateTime(AThisValue, 'get PlainDateTime.eraYear');
+  Info := CalendarInfoForPlainDateTime(D, 'get PlainDateTime.eraYear');
+  if not Info.HasEra then
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  Result := TGocciaNumberLiteralValue.Create(Info.EraYear);
 end;
 
 function TGocciaTemporalPlainDateTimeValue.GetYear(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  D: TGocciaTemporalPlainDateTimeValue;
 begin
-  Result := TGocciaNumberLiteralValue.Create(AsPlainDateTime(AThisValue, 'get PlainDateTime.year').FYear);
+  D := AsPlainDateTime(AThisValue, 'get PlainDateTime.year');
+  Result := TGocciaNumberLiteralValue.Create(CalendarInfoForPlainDateTime(D, 'get PlainDateTime.year').Date.Year);
 end;
 
 function TGocciaTemporalPlainDateTimeValue.GetMonth(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  D: TGocciaTemporalPlainDateTimeValue;
 begin
-  Result := TGocciaNumberLiteralValue.Create(AsPlainDateTime(AThisValue, 'get PlainDateTime.month').FMonth);
+  D := AsPlainDateTime(AThisValue, 'get PlainDateTime.month');
+  Result := TGocciaNumberLiteralValue.Create(CalendarInfoForPlainDateTime(D, 'get PlainDateTime.month').Date.Month);
 end;
 
 function TGocciaTemporalPlainDateTimeValue.GetMonthCode(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  D: TGocciaTemporalPlainDateTimeValue;
 begin
-  Result := TGocciaStringLiteralValue.Create('M' + PadTwo(AsPlainDateTime(AThisValue, 'get PlainDateTime.monthCode').FMonth));
+  D := AsPlainDateTime(AThisValue, 'get PlainDateTime.monthCode');
+  Result := TGocciaStringLiteralValue.Create(CalendarInfoForPlainDateTime(D, 'get PlainDateTime.monthCode').MonthCode);
 end;
 
 function TGocciaTemporalPlainDateTimeValue.GetDay(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  D: TGocciaTemporalPlainDateTimeValue;
+  Day: Integer;
 begin
-  Result := TGocciaNumberLiteralValue.Create(AsPlainDateTime(AThisValue, 'get PlainDateTime.day').FDay);
+  D := AsPlainDateTime(AThisValue, 'get PlainDateTime.day');
+  if not TryGetCalendarDateDay(D.FCalendarId, D.FYear, D.FMonth, D.FDay,
+    Day) then
+    ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['date-time',
+      'get PlainDateTime.day']), SSuggestTemporalDateRange);
+  Result := TGocciaNumberLiteralValue.Create(Day);
 end;
 
 function TGocciaTemporalPlainDateTimeValue.GetDayOfWeek(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -321,7 +760,7 @@ var
   D: TGocciaTemporalPlainDateTimeValue;
 begin
   D := AsPlainDateTime(AThisValue, 'get PlainDateTime.dayOfWeek');
-  Result := TGocciaNumberLiteralValue.Create(Goccia.Temporal.Utils.DayOfWeek(D.FYear, D.FMonth, D.FDay));
+  Result := TGocciaNumberLiteralValue.Create(CalendarInfoForPlainDateTime(D, 'get PlainDateTime.dayOfWeek').DayOfWeek);
 end;
 
 function TGocciaTemporalPlainDateTimeValue.GetDayOfYear(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -329,7 +768,7 @@ var
   D: TGocciaTemporalPlainDateTimeValue;
 begin
   D := AsPlainDateTime(AThisValue, 'get PlainDateTime.dayOfYear');
-  Result := TGocciaNumberLiteralValue.Create(Goccia.Temporal.Utils.DayOfYear(D.FYear, D.FMonth, D.FDay));
+  Result := TGocciaNumberLiteralValue.Create(CalendarInfoForPlainDateTime(D, 'get PlainDateTime.dayOfYear').DayOfYear);
 end;
 
 function TGocciaTemporalPlainDateTimeValue.GetWeekOfYear(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -337,6 +776,8 @@ var
   D: TGocciaTemporalPlainDateTimeValue;
 begin
   D := AsPlainDateTime(AThisValue, 'get PlainDateTime.weekOfYear');
+  if D.FCalendarId <> 'iso8601' then
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
   Result := TGocciaNumberLiteralValue.Create(Goccia.Temporal.Utils.WeekOfYear(D.FYear, D.FMonth, D.FDay));
 end;
 
@@ -345,6 +786,8 @@ var
   D: TGocciaTemporalPlainDateTimeValue;
 begin
   D := AsPlainDateTime(AThisValue, 'get PlainDateTime.yearOfWeek');
+  if D.FCalendarId <> 'iso8601' then
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
   Result := TGocciaNumberLiteralValue.Create(Goccia.Temporal.Utils.YearOfWeek(D.FYear, D.FMonth, D.FDay));
 end;
 
@@ -357,9 +800,14 @@ end;
 function TGocciaTemporalPlainDateTimeValue.GetDaysInMonth(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   D: TGocciaTemporalPlainDateTimeValue;
+  DaysInMonth: Integer;
 begin
   D := AsPlainDateTime(AThisValue, 'get PlainDateTime.daysInMonth');
-  Result := TGocciaNumberLiteralValue.Create(Goccia.Temporal.Utils.DaysInMonth(D.FYear, D.FMonth));
+  if not TryGetCalendarDateDaysInMonth(D.FCalendarId, D.FYear, D.FMonth,
+    D.FDay, DaysInMonth) then
+    ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['date-time',
+      'get PlainDateTime.daysInMonth']), SSuggestTemporalDateRange);
+  Result := TGocciaNumberLiteralValue.Create(DaysInMonth);
 end;
 
 function TGocciaTemporalPlainDateTimeValue.GetDaysInYear(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -367,18 +815,23 @@ var
   D: TGocciaTemporalPlainDateTimeValue;
 begin
   D := AsPlainDateTime(AThisValue, 'get PlainDateTime.daysInYear');
-  Result := TGocciaNumberLiteralValue.Create(Goccia.Temporal.Utils.DaysInYear(D.FYear));
+  Result := TGocciaNumberLiteralValue.Create(CalendarInfoForPlainDateTime(D, 'get PlainDateTime.daysInYear').DaysInYear);
 end;
 
 function TGocciaTemporalPlainDateTimeValue.GetMonthsInYear(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  D: TGocciaTemporalPlainDateTimeValue;
 begin
-  AsPlainDateTime(AThisValue, 'get PlainDateTime.monthsInYear');
-  Result := TGocciaNumberLiteralValue.Create(12);
+  D := AsPlainDateTime(AThisValue, 'get PlainDateTime.monthsInYear');
+  Result := TGocciaNumberLiteralValue.Create(CalendarInfoForPlainDateTime(D, 'get PlainDateTime.monthsInYear').MonthsInYear);
 end;
 
 function TGocciaTemporalPlainDateTimeValue.GetInLeapYear(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  D: TGocciaTemporalPlainDateTimeValue;
 begin
-  if Goccia.Temporal.Utils.IsLeapYear(AsPlainDateTime(AThisValue, 'get PlainDateTime.inLeapYear').FYear) then
+  D := AsPlainDateTime(AThisValue, 'get PlainDateTime.inLeapYear');
+  if CalendarInfoForPlainDateTime(D, 'get PlainDateTime.inLeapYear').InLeapYear then
     Result := TGocciaBooleanLiteralValue.TrueValue
   else
     Result := TGocciaBooleanLiteralValue.FalseValue;
@@ -420,17 +873,20 @@ function TGocciaTemporalPlainDateTimeValue.DateTimeWith(const AArgs: TGocciaArgu
 var
   D: TGocciaTemporalPlainDateTimeValue;
   Obj: TGocciaObjectValue;
-  V: TGocciaValue;
+  V, VYear, VMonth, VMonthCode, VDay, VEra, VEraYear, VHour, VMicrosecond,
+    VMillisecond, VMinute, VNanosecond, VSecond: TGocciaValue;
+  DateRec: TTemporalDateRecord;
+  Info: TTemporalCalendarDateInfo;
+  NewYear, NewMonth, NewDay, NewHour, NewMinute, NewSecond,
+    NewMillisecond, NewMicrosecond, NewNanosecond, MonthFieldValue: Integer;
+  MonthCodeStr: string;
+  HasYear, HasMonth, HasMonthCode, HasDay, HasEra, HasEraYear,
+    IsLeapMonth, UseMonthCode, SawField: Boolean;
+  Overflow: TTemporalOverflow;
 
-  function GetFieldOr(const AName: string; const ADefault: Integer): Integer;
-  var
-    Val: TGocciaValue;
+  function IsPresent(const AValue: TGocciaValue): Boolean;
   begin
-    Val := Obj.GetProperty(AName);
-    if (Val = nil) or (Val is TGocciaUndefinedLiteralValue) then
-      Result := ADefault
-    else
-      Result := ToIntegerWithTruncationValue(Val);
+    Result := Assigned(AValue) and not (AValue is TGocciaUndefinedLiteralValue);
   end;
 
 begin
@@ -439,12 +895,158 @@ begin
   if not (V is TGocciaObjectValue) then
     ThrowTypeError(Format(SErrorTemporalWithRequiresObject, ['PlainDateTime']), SSuggestTemporalWithObject);
   Obj := TGocciaObjectValue(V);
+  if Copy(Obj.ToStringTag, 1, 9) = 'Temporal.' then
+    ThrowTypeError(Format(SErrorTemporalWithRequiresObject, ['PlainDateTime']), SSuggestTemporalWithObject);
+
+  V := Obj.GetProperty('calendar');
+  if IsPresent(V) then
+    ThrowTypeError('PlainDateTime.prototype.with does not accept calendar',
+      SSuggestTemporalWithObject);
+  V := Obj.GetProperty('timeZone');
+  if IsPresent(V) then
+    ThrowTypeError('PlainDateTime.prototype.with does not accept timeZone',
+      SSuggestTemporalWithObject);
+
+  Info := CalendarInfoForPlainDateTime(D, 'PlainDateTime.prototype.with');
+  NewYear := Info.Date.Year;
+  NewMonth := Info.Date.Month;
+  NewDay := Info.Date.Day;
+  NewHour := D.FHour;
+  NewMinute := D.FMinute;
+  NewSecond := D.FSecond;
+  NewMillisecond := D.FMillisecond;
+  NewMicrosecond := D.FMicrosecond;
+  NewNanosecond := D.FNanosecond;
+  IsLeapMonth := False;
+  UseMonthCode := False;
+  SawField := False;
+
+  VDay := Obj.GetProperty(PROP_DAY);
+  HasDay := IsPresent(VDay);
+  if HasDay then
+  begin
+    SawField := True;
+    NewDay := ToIntegerWithTruncationValue(VDay);
+  end;
+  VHour := Obj.GetProperty('hour');
+  if IsPresent(VHour) then
+  begin
+    SawField := True;
+    NewHour := ToIntegerWithTruncationValue(VHour);
+  end;
+  VMicrosecond := Obj.GetProperty('microsecond');
+  if IsPresent(VMicrosecond) then
+  begin
+    SawField := True;
+    NewMicrosecond := ToIntegerWithTruncationValue(VMicrosecond);
+  end;
+  VMillisecond := Obj.GetProperty('millisecond');
+  if IsPresent(VMillisecond) then
+  begin
+    SawField := True;
+    NewMillisecond := ToIntegerWithTruncationValue(VMillisecond);
+  end;
+  VMinute := Obj.GetProperty('minute');
+  if IsPresent(VMinute) then
+  begin
+    SawField := True;
+    NewMinute := ToIntegerWithTruncationValue(VMinute);
+  end;
+
+  VMonth := Obj.GetProperty(PROP_MONTH);
+  HasMonth := IsPresent(VMonth);
+  if HasMonth then
+  begin
+    SawField := True;
+    MonthFieldValue := ToIntegerWithTruncationValue(VMonth);
+    NewMonth := MonthFieldValue;
+  end;
+  VMonthCode := Obj.GetProperty(PROP_MONTH_CODE);
+  HasMonthCode := IsPresent(VMonthCode);
+  if HasMonthCode then
+  begin
+    SawField := True;
+    MonthCodeStr := VMonthCode.ToStringLiteral.Value;
+    if not TryParseTemporalMonthCode(MonthCodeStr, NewMonth, IsLeapMonth) then
+      ThrowTypeError(Format(SErrorInvalidMonthCodeFor, ['PlainDateTime.prototype.with']),
+        SSuggestTemporalMonthCode);
+    UseMonthCode := not HasMonth;
+  end;
+  VNanosecond := Obj.GetProperty('nanosecond');
+  if IsPresent(VNanosecond) then
+  begin
+    SawField := True;
+    NewNanosecond := ToIntegerWithTruncationValue(VNanosecond);
+  end;
+  VSecond := Obj.GetProperty('second');
+  if IsPresent(VSecond) then
+  begin
+    SawField := True;
+    NewSecond := ToIntegerWithTruncationValue(VSecond);
+  end;
+  VYear := Obj.GetProperty(PROP_YEAR);
+  HasYear := IsPresent(VYear);
+  if HasYear then
+  begin
+    SawField := True;
+    NewYear := ToIntegerWithTruncationValue(VYear);
+  end
+  else if D.FCalendarId <> 'iso8601' then
+  begin
+    VEra := Obj.GetProperty('era');
+    VEraYear := Obj.GetProperty('eraYear');
+    HasEra := IsPresent(VEra);
+    HasEraYear := IsPresent(VEraYear);
+    if HasEra or HasEraYear then
+    begin
+      SawField := True;
+      if (not HasEra) or (not HasEraYear) or
+         not TryCalendarYearFromEra(D.FCalendarId, VEra.ToStringLiteral.Value,
+           ToIntegerWithTruncationValue(VEraYear), NewYear) then
+        ThrowTypeError('PlainDateTime.prototype.with requires era and eraYear together',
+          SSuggestTemporalFromArg);
+    end;
+  end;
+
+  if not SawField then
+    ThrowTypeError(Format(SErrorTemporalWithRequiresObject, ['PlainDateTime']),
+      SSuggestTemporalWithObject);
+
+  if (HasMonth and (NewMonth < 1)) or (HasDay and (NewDay < 1)) or
+     ((NewYear < -271821) or (NewYear > 275760)) then
+    ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['date-time',
+      'PlainDateTime.prototype.with']), SSuggestTemporalDateRange);
+
+  if HasMonthCode and HasMonth and (NewMonth <> MonthFieldValue) then
+    ThrowRangeError(Format(SErrorMonthCodeMismatchIn, ['PlainDateTime.prototype.with']),
+      SSuggestTemporalMonthCode);
+
+  if (not HasMonth) and (not HasMonthCode) and (D.FCalendarId <> 'iso8601') then
+  begin
+    MonthCodeStr := Info.MonthCode;
+    if not TryParseTemporalMonthCode(MonthCodeStr, NewMonth, IsLeapMonth) then
+      ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['date-time',
+        'PlainDateTime.prototype.with']), SSuggestTemporalDateRange);
+    UseMonthCode := True;
+  end;
+
+  Overflow := GetOverflowOptionFromValue(AArgs.GetElement(1), 'PlainDateTime.prototype.with');
+  if Overflow = toConstrain then
+    ConstrainTemporalTimeFields(NewHour, NewMinute, NewSecond, NewMillisecond,
+      NewMicrosecond, NewNanosecond);
+
+  if not TryResolveCalendarDateToISO(D.FCalendarId, NewYear, NewMonth, NewDay,
+    UseMonthCode, IsLeapMonth, Overflow = toConstrain, DateRec) then
+    ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['date-time',
+      'PlainDateTime.prototype.with']), SSuggestTemporalDateRange);
+  ValidatePlainDateTimeRange(DateRec.Year, DateRec.Month, DateRec.Day,
+    NewHour, NewMinute, NewSecond, NewMillisecond, NewMicrosecond,
+    NewNanosecond, 'PlainDateTime.prototype.with');
 
   Result := TGocciaTemporalPlainDateTimeValue.Create(
-    GetFieldOr('year', D.FYear), GetFieldOr('month', D.FMonth), GetFieldOr('day', D.FDay),
-    GetFieldOr('hour', D.FHour), GetFieldOr('minute', D.FMinute), GetFieldOr('second', D.FSecond),
-    GetFieldOr('millisecond', D.FMillisecond), GetFieldOr('microsecond', D.FMicrosecond),
-    GetFieldOr('nanosecond', D.FNanosecond));
+    DateRec.Year, DateRec.Month, DateRec.Day,
+    NewHour, NewMinute, NewSecond, NewMillisecond, NewMicrosecond,
+    NewNanosecond, D.FCalendarId);
 end;
 
 function TGocciaTemporalPlainDateTimeValue.DateTimeWithPlainTime(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -453,7 +1055,6 @@ var
   Arg: TGocciaValue;
   H, Mi, S, Ms, Us, Ns: Integer;
   T: TGocciaTemporalPlainTimeValue;
-  TimeRec: TTemporalTimeRecord;
 begin
   D := AsPlainDateTime(AThisValue, 'PlainDateTime.prototype.withPlainTime');
   Arg := AArgs.GetElement(0);
@@ -461,24 +1062,15 @@ begin
 
   if Assigned(Arg) and not (Arg is TGocciaUndefinedLiteralValue) then
   begin
-    if Arg is TGocciaTemporalPlainTimeValue then
-    begin
-      T := TGocciaTemporalPlainTimeValue(Arg);
-      H := T.Hour; Mi := T.Minute; S := T.Second;
-      Ms := T.Millisecond; Us := T.Microsecond; Ns := T.Nanosecond;
-    end
-    else if Arg is TGocciaStringLiteralValue then
-    begin
-      if not CoerceToISOTime(TGocciaStringLiteralValue(Arg).Value, TimeRec) then
-        ThrowRangeError(SErrorInvalidTimeString, SSuggestTemporalISOFormat);
-      H := TimeRec.Hour; Mi := TimeRec.Minute; S := TimeRec.Second;
-      Ms := TimeRec.Millisecond; Us := TimeRec.Microsecond; Ns := TimeRec.Nanosecond;
-    end
-    else
-      ThrowTypeError(SErrorPlainDateTimeWithPlainTimeArg, SSuggestTemporalFromArg);
+    T := CoercePlainTime(Arg, 'PlainDateTime.prototype.withPlainTime');
+    H := T.Hour; Mi := T.Minute; S := T.Second;
+    Ms := T.Millisecond; Us := T.Microsecond; Ns := T.Nanosecond;
   end;
 
-  Result := TGocciaTemporalPlainDateTimeValue.Create(D.FYear, D.FMonth, D.FDay, H, Mi, S, Ms, Us, Ns);
+  ValidatePlainDateTimeRange(D.FYear, D.FMonth, D.FDay, H, Mi, S, Ms, Us, Ns,
+    'PlainDateTime.prototype.withPlainTime');
+  Result := TGocciaTemporalPlainDateTimeValue.Create(D.FYear, D.FMonth, D.FDay, H, Mi, S, Ms, Us, Ns,
+    D.FCalendarId);
 end;
 
 function TGocciaTemporalPlainDateTimeValue.DateTimeAdd(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -486,14 +1078,10 @@ var
   D: TGocciaTemporalPlainDateTimeValue;
   Dur: TGocciaTemporalDurationValue;
   Arg: TGocciaValue;
-  DurRec: TTemporalDurationRecord;
-  NewYear, NewMonth, NewDay: Integer;
+  Overflow: TTemporalOverflow;
   DateRec: TTemporalDateRecord;
   ExtraDays: Int64;
   Balanced: TTemporalTimeRecord;
-  ObjArg: TGocciaObjectValue;
-  VF: TGocciaValue;
-  Y, Mo, W, Da, H, Mi, S, Ms, Us, Ns: Int64;
 begin
   try
   D := AsPlainDateTime(AThisValue, 'PlainDateTime.prototype.add');
@@ -502,57 +1090,32 @@ begin
   if Arg is TGocciaTemporalDurationValue then
     Dur := TGocciaTemporalDurationValue(Arg)
   else if Arg is TGocciaStringLiteralValue then
-  begin
-    if not TryParseISODuration(TGocciaStringLiteralValue(Arg).Value, DurRec) then
-      ThrowRangeError(SErrorInvalidDurationString, SSuggestTemporalDurationArg);
-    Dur := TGocciaTemporalDurationValue.Create(
-      DurRec.Years, DurRec.Months, DurRec.Weeks, DurRec.Days,
-      DurRec.Hours, DurRec.Minutes, DurRec.Seconds,
-      DurRec.Milliseconds, DurRec.Microseconds, DurRec.Nanoseconds);
-  end
+    Dur := DurationFromString(TGocciaStringLiteralValue(Arg).Value,
+      SErrorInvalidDurationString)
   else if Arg is TGocciaObjectValue then
-  begin
-    ObjArg := TGocciaObjectValue(Arg);
-    Y := 0; Mo := 0; W := 0; Da := 0; H := 0; Mi := 0; S := 0; Ms := 0; Us := 0; Ns := 0;
-    VF := ObjArg.GetProperty('years'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then Y := ToIntegerWithTruncation64Value(VF);
-    VF := ObjArg.GetProperty('months'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then Mo := ToIntegerWithTruncation64Value(VF);
-    VF := ObjArg.GetProperty('weeks'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then W := ToIntegerWithTruncation64Value(VF);
-    VF := ObjArg.GetProperty('days'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then Da := ToIntegerWithTruncation64Value(VF);
-    VF := ObjArg.GetProperty('hours'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then H := ToIntegerWithTruncation64Value(VF);
-    VF := ObjArg.GetProperty('minutes'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then Mi := ToIntegerWithTruncation64Value(VF);
-    VF := ObjArg.GetProperty('seconds'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then S := ToIntegerWithTruncation64Value(VF);
-    VF := ObjArg.GetProperty('milliseconds'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then Ms := ToIntegerWithTruncation64Value(VF);
-    VF := ObjArg.GetProperty('microseconds'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then Us := ToIntegerWithTruncation64Value(VF);
-    VF := ObjArg.GetProperty('nanoseconds'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then Ns := ToIntegerWithTruncation64Value(VF);
-    Dur := TGocciaTemporalDurationValue.Create(Y, Mo, W, Da, H, Mi, S, Ms, Us, Ns);
-  end
+    Dur := DurationFromObject(TGocciaObjectValue(Arg))
   else
   begin
     ThrowTypeError(Format(SErrorTemporalAddRequiresDuration, ['PlainDateTime']), SSuggestTemporalDurationArg);
     Dur := nil;
   end;
 
-  // Balance time first
-  Balanced := BalanceTime(
-    D.FHour + Dur.Hours, D.FMinute + Dur.Minutes, D.FSecond + Dur.Seconds,
-    D.FMillisecond + Dur.Milliseconds, D.FMicrosecond + Dur.Microseconds,
-    D.FNanosecond + Dur.Nanoseconds, ExtraDays);
-
-  // Add date components
-  NewYear := D.FYear + Integer(Dur.Years);
-  NewMonth := D.FMonth + Integer(Dur.Months);
-  while NewMonth > 12 do begin Inc(NewYear); Dec(NewMonth, 12); end;
-  while NewMonth < 1 do begin Dec(NewYear); Inc(NewMonth, 12); end;
-  NewDay := D.FDay;
-  if NewDay > Goccia.Temporal.Utils.DaysInMonth(NewYear, NewMonth) then
-    NewDay := Goccia.Temporal.Utils.DaysInMonth(NewYear, NewMonth);
-
-  DateRec := AddDaysToDate(NewYear, NewMonth, NewDay, Dur.Weeks * 7 + Dur.Days + ExtraDays);
+  Overflow := GetOverflowOptionFromValue(AArgs.GetElement(1), 'PlainDateTime.prototype.add');
+  BalancePlainDateTimeTimeAddition(D.FHour, D.FMinute, D.FSecond,
+    D.FMillisecond, D.FMicrosecond, D.FNanosecond, Dur, Balanced, ExtraDays);
+  if not TryAddCalendarDate(D.FCalendarId, D.FYear, D.FMonth, D.FDay,
+    Dur.Years, Dur.Months, Dur.Weeks, Dur.Days + ExtraDays,
+    Overflow = toConstrain, DateRec) then
+    ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['date-time',
+      'PlainDateTime.prototype.add']), SSuggestTemporalDateRange);
+  ValidatePlainDateTimeRange(DateRec.Year, DateRec.Month, DateRec.Day,
+    Balanced.Hour, Balanced.Minute, Balanced.Second, Balanced.Millisecond,
+    Balanced.Microsecond, Balanced.Nanosecond, 'PlainDateTime.prototype.add');
 
   Result := TGocciaTemporalPlainDateTimeValue.Create(
     DateRec.Year, DateRec.Month, DateRec.Day,
     Balanced.Hour, Balanced.Minute, Balanced.Second,
-    Balanced.Millisecond, Balanced.Microsecond, Balanced.Nanosecond);
+    Balanced.Millisecond, Balanced.Microsecond, Balanced.Nanosecond, D.FCalendarId);
   except
     on E: ETemporalDurationInt64Overflow do
       ThrowRangeError(E.Message, SSuggestTemporalDurationRange);
@@ -564,11 +1127,7 @@ var
   Dur: TGocciaTemporalDurationValue;
   NegDur: TGocciaTemporalDurationValue;
   Arg: TGocciaValue;
-  DurRec: TTemporalDurationRecord;
   NewArgs: TGocciaArgumentsCollection;
-  ObjArg: TGocciaObjectValue;
-  VF: TGocciaValue;
-  Y, Mo, W, Da, H, Mi, S, Ms, Us, Ns: Int64;
 begin
   try
   Arg := AArgs.GetElement(0);
@@ -576,42 +1135,23 @@ begin
   if Arg is TGocciaTemporalDurationValue then
     Dur := TGocciaTemporalDurationValue(Arg)
   else if Arg is TGocciaStringLiteralValue then
-  begin
-    if not TryParseISODuration(TGocciaStringLiteralValue(Arg).Value, DurRec) then
-      ThrowRangeError(SErrorInvalidDurationString, SSuggestTemporalDurationArg);
-    Dur := TGocciaTemporalDurationValue.Create(
-      DurRec.Years, DurRec.Months, DurRec.Weeks, DurRec.Days,
-      DurRec.Hours, DurRec.Minutes, DurRec.Seconds,
-      DurRec.Milliseconds, DurRec.Microseconds, DurRec.Nanoseconds);
-  end
+    Dur := DurationFromString(TGocciaStringLiteralValue(Arg).Value,
+      SErrorInvalidDurationString)
   else if Arg is TGocciaObjectValue then
-  begin
-    ObjArg := TGocciaObjectValue(Arg);
-    Y := 0; Mo := 0; W := 0; Da := 0; H := 0; Mi := 0; S := 0; Ms := 0; Us := 0; Ns := 0;
-    VF := ObjArg.GetProperty('years'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then Y := ToIntegerWithTruncation64Value(VF);
-    VF := ObjArg.GetProperty('months'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then Mo := ToIntegerWithTruncation64Value(VF);
-    VF := ObjArg.GetProperty('weeks'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then W := ToIntegerWithTruncation64Value(VF);
-    VF := ObjArg.GetProperty('days'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then Da := ToIntegerWithTruncation64Value(VF);
-    VF := ObjArg.GetProperty('hours'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then H := ToIntegerWithTruncation64Value(VF);
-    VF := ObjArg.GetProperty('minutes'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then Mi := ToIntegerWithTruncation64Value(VF);
-    VF := ObjArg.GetProperty('seconds'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then S := ToIntegerWithTruncation64Value(VF);
-    VF := ObjArg.GetProperty('milliseconds'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then Ms := ToIntegerWithTruncation64Value(VF);
-    VF := ObjArg.GetProperty('microseconds'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then Us := ToIntegerWithTruncation64Value(VF);
-    VF := ObjArg.GetProperty('nanoseconds'); if Assigned(VF) and not (VF is TGocciaUndefinedLiteralValue) then Ns := ToIntegerWithTruncation64Value(VF);
-    Dur := TGocciaTemporalDurationValue.Create(Y, Mo, W, Da, H, Mi, S, Ms, Us, Ns);
-  end
+    Dur := DurationFromObject(TGocciaObjectValue(Arg))
   else
   begin
     ThrowTypeError(Format(SErrorTemporalSubtractRequiresDuration, ['PlainDateTime']), SSuggestTemporalDurationArg);
     Dur := nil;
   end;
 
-  NegDur := TGocciaTemporalDurationValue.Create(
-    -Dur.Years, -Dur.Months, -Dur.Weeks, -Dur.Days,
-    -Dur.Hours, -Dur.Minutes, -Dur.Seconds,
-    -Dur.Milliseconds, -Dur.Microseconds, -Dur.Nanoseconds);
+  NegDur := TGocciaTemporalDurationValue.CreateFromBigIntegers(
+    Dur.YearsBig.Negate, Dur.MonthsBig.Negate, Dur.WeeksBig.Negate,
+    Dur.DaysBig.Negate, Dur.HoursBig.Negate, Dur.MinutesBig.Negate,
+    Dur.SecondsBig.Negate, Dur.MillisecondsBig.Negate,
+    Dur.MicrosecondsBig.Negate, Dur.NanosecondsBig.Negate);
 
-  NewArgs := TGocciaArgumentsCollection.Create([NegDur]);
+  NewArgs := TGocciaArgumentsCollection.Create([NegDur, AArgs.GetElement(1)]);
   try
     Result := DateTimeAdd(NewArgs, AThisValue);
   finally
@@ -642,15 +1182,24 @@ begin
   Other := CoercePlainDateTime(AArgs.GetElement(0), 'PlainDateTime.prototype.until');
 
   OptionsObj := GetDiffOptions(AArgs, 1);
-  LargestUnit := GetLargestUnit(OptionsObj, tuDay);
-  if LargestUnit = tuAuto then LargestUnit := tuDay;
-
+  LargestUnit := GetLargestUnit(OptionsObj, tuAuto);
+  RIncrement := GetRoundingIncrement(OptionsObj, 1);
+  RMode := GetRoundingMode(OptionsObj, rmTrunc);
   SmallestUnit := GetSmallestUnit(OptionsObj, tuNanosecond);
+  if LargestUnit = tuAuto then
+  begin
+    if Ord(SmallestUnit) < Ord(tuDay) then
+      LargestUnit := SmallestUnit
+    else
+      LargestUnit := tuDay;
+  end;
   if Ord(LargestUnit) > Ord(SmallestUnit) then
     ThrowRangeError(SErrorDurationRoundLargestSmallerThanSmallest, SSuggestTemporalRoundArg);
-  RMode := GetRoundingMode(OptionsObj, rmTrunc);
-  RIncrement := GetRoundingIncrement(OptionsObj, 1);
   ValidateRoundingIncrement(RIncrement, SmallestUnit, LargestUnit);
+
+  if D.FCalendarId <> Other.FCalendarId then
+    ThrowRangeError('Temporal.PlainDateTime calendars must match',
+      SSuggestTemporalDateRange);
 
   T1Ns := Int64(D.FNanosecond) + Int64(D.FMicrosecond) * 1000 + Int64(D.FMillisecond) * 1000000 +
            Int64(D.FSecond) * Int64(1000000000) + Int64(D.FMinute) * Int64(60000000000) +
@@ -696,7 +1245,7 @@ begin
       TimeDiffNs := TimeDiffNs - Int64(86400000000000);
     end;
 
-    CalendarDateUntil(D.FYear, D.FMonth, D.FDay,
+    CalendarDateUntil(D.FCalendarId, D.FYear, D.FMonth, D.FDay,
       AdjY2, AdjM2, AdjD2, LargestUnit,
       Years, Months, Weeks, Days);
 
@@ -758,7 +1307,7 @@ begin
         begin
           TotalInUnit := AbsDays * 24 + AbsTimeNs div Int64(3600000000000);
           RemNs := AbsTimeNs mod Int64(3600000000000);
-          RH := Sgn * TotalInUnit;
+          RH := Float64RepresentableInteger(Sgn * TotalInUnit);
           RM := Sgn * (RemNs div Int64(60000000000));
           RS := Sgn * ((RemNs div Int64(1000000000)) mod 60);
           RMs := Sgn * ((RemNs div 1000000) mod 1000);
@@ -770,7 +1319,7 @@ begin
           TotalInUnit := AbsDays * 1440 + AbsTimeNs div Int64(60000000000);
           RemNs := AbsTimeNs mod Int64(60000000000);
           RH := 0;
-          RM := Sgn * TotalInUnit;
+          RM := Float64RepresentableInteger(Sgn * TotalInUnit);
           RS := Sgn * (RemNs div Int64(1000000000));
           RMs := Sgn * ((RemNs div 1000000) mod 1000);
           RUs := Sgn * ((RemNs div 1000) mod 1000);
@@ -781,7 +1330,7 @@ begin
           TotalInUnit := AbsDays * 86400 + AbsTimeNs div Int64(1000000000);
           RemNs := AbsTimeNs mod Int64(1000000000);
           RH := 0; RM := 0;
-          RS := Sgn * TotalInUnit;
+          RS := Float64RepresentableInteger(Sgn * TotalInUnit);
           RMs := Sgn * (RemNs div 1000000);
           RUs := Sgn * ((RemNs div 1000) mod 1000);
           RNs := Sgn * (RemNs mod 1000);
@@ -791,7 +1340,7 @@ begin
           TotalInUnit := AbsDays * 86400000 + AbsTimeNs div 1000000;
           RemNs := AbsTimeNs mod 1000000;
           RH := 0; RM := 0; RS := 0;
-          RMs := Sgn * TotalInUnit;
+          RMs := Float64RepresentableInteger(Sgn * TotalInUnit);
           RUs := Sgn * (RemNs div 1000);
           RNs := Sgn * (RemNs mod 1000);
         end;
@@ -799,14 +1348,14 @@ begin
         begin
           TotalInUnit := AbsDays * Int64(86400000000) + AbsTimeNs div 1000;
           RH := 0; RM := 0; RS := 0; RMs := 0;
-          RUs := Sgn * TotalInUnit;
+          RUs := Float64RepresentableInteger(Sgn * TotalInUnit);
           RNs := Sgn * (AbsTimeNs mod 1000);
         end;
     else // tuNanosecond
       begin
         TotalInUnit := AbsDays * Int64(86400000000000) + AbsTimeNs;
         RH := 0; RM := 0; RS := 0; RMs := 0; RUs := 0;
-        RNs := Sgn * TotalInUnit;
+        RNs := Float64RepresentableInteger(Sgn * TotalInUnit);
       end;
     end;
 
@@ -826,20 +1375,57 @@ var
   D, Other: TGocciaTemporalPlainDateTimeValue;
   NewArgs: TGocciaArgumentsCollection;
   OptionsArg: TGocciaValue;
+  OptionsObj, InternalOptions: TGocciaObjectValue;
+  LargestUnit, SmallestUnit: TTemporalUnit;
+  RMode: TTemporalRoundingMode;
+  RIncrement: Integer;
+  UntilDuration: TGocciaTemporalDurationValue;
 begin
   D := AsPlainDateTime(AThisValue, 'PlainDateTime.prototype.since');
   Other := CoercePlainDateTime(AArgs.GetElement(0), 'PlainDateTime.prototype.since');
 
-  // since(other, options) = other.until(this, options)
   OptionsArg := AArgs.GetElement(1);
-  if (OptionsArg <> nil) and not (OptionsArg is TGocciaUndefinedLiteralValue) then
-    NewArgs := TGocciaArgumentsCollection.Create([D, OptionsArg])
-  else
-    NewArgs := TGocciaArgumentsCollection.Create([D]);
+  OptionsObj := GetDiffOptions(AArgs, 1);
+  InternalOptions := nil;
+  if OptionsObj <> nil then
+  begin
+    LargestUnit := GetLargestUnit(OptionsObj, tuAuto);
+    RIncrement := GetRoundingIncrement(OptionsObj, 1);
+    RMode := GetRoundingMode(OptionsObj, rmTrunc);
+    SmallestUnit := GetSmallestUnit(OptionsObj, tuNanosecond);
+
+    InternalOptions := TGocciaObjectValue.Create(nil, 4);
+    InternalOptions.CreateDataPropertyOrThrow('largestUnit',
+      TGocciaStringLiteralValue.Create(TemporalUnitToOptionString(LargestUnit)));
+    InternalOptions.CreateDataPropertyOrThrow('roundingIncrement',
+      TGocciaNumberLiteralValue.Create(RIncrement));
+    InternalOptions.CreateDataPropertyOrThrow('roundingMode',
+      TGocciaStringLiteralValue.Create(
+        TemporalRoundingModeToOptionString(NegateTemporalRoundingMode(RMode))));
+    InternalOptions.CreateDataPropertyOrThrow('smallestUnit',
+      TGocciaStringLiteralValue.Create(TemporalUnitToOptionString(SmallestUnit)));
+    TGarbageCollector.Instance.AddTempRoot(InternalOptions);
+  end;
   try
-    Result := DateTimeUntil(NewArgs, Other);
+    if InternalOptions <> nil then
+      NewArgs := TGocciaArgumentsCollection.Create([Other, InternalOptions])
+    else if (OptionsArg <> nil) and not (OptionsArg is TGocciaUndefinedLiteralValue) then
+      NewArgs := TGocciaArgumentsCollection.Create([Other, OptionsArg])
+    else
+      NewArgs := TGocciaArgumentsCollection.Create([Other]);
+    try
+    UntilDuration := TGocciaTemporalDurationValue(DateTimeUntil(NewArgs, D));
+    Result := TGocciaTemporalDurationValue.Create(
+      -UntilDuration.Years, -UntilDuration.Months, -UntilDuration.Weeks,
+      -UntilDuration.Days, -UntilDuration.Hours, -UntilDuration.Minutes,
+      -UntilDuration.Seconds, -UntilDuration.Milliseconds,
+      -UntilDuration.Microseconds, -UntilDuration.Nanoseconds);
+    finally
+      NewArgs.Free;
+    end;
   finally
-    NewArgs.Free;
+    if InternalOptions <> nil then
+      TGarbageCollector.Instance.RemoveTempRoot(InternalOptions);
   end;
 end;
 
@@ -871,17 +1457,18 @@ begin
   else if Arg is TGocciaObjectValue then
   begin
     OptionsObj := TGocciaObjectValue(Arg);
+    Increment := GetRoundingIncrement(OptionsObj, 1);
+    Mode := GetRoundingMode(OptionsObj, rmHalfExpand);
     SmallestUnit := GetSmallestUnit(OptionsObj, tuNone);
     if SmallestUnit = tuNone then
       ThrowRangeError(SErrorTemporalRoundRequiresSmallestUnit, SSuggestTemporalRoundArg);
-    Mode := GetRoundingMode(OptionsObj, rmHalfExpand);
-    Increment := GetRoundingIncrement(OptionsObj, 1);
   end
   else
   begin
     ThrowTypeError(Format(SErrorTemporalRoundRequiresStringOrOptions, ['PlainDateTime']), SSuggestTemporalRoundArg);
     SmallestUnit := tuNanosecond;
   end;
+  ValidatePlainDateTimeRoundIncrement(Increment, SmallestUnit);
 
   TotalNs := Int64(D.FNanosecond) + Int64(D.FMicrosecond) * 1000 + Int64(D.FMillisecond) * 1000000 +
              Int64(D.FSecond) * Int64(1000000000) + Int64(D.FMinute) * Int64(60000000000) +
@@ -894,7 +1481,10 @@ begin
     Rounded := RoundWithMode(TotalNs, Divisor, Mode);
     ExtraDays := Rounded div NANOSECONDS_PER_DAY;
     DateRec := AddDaysToDate(D.FYear, D.FMonth, D.FDay, ExtraDays);
-    Result := TGocciaTemporalPlainDateTimeValue.Create(DateRec.Year, DateRec.Month, DateRec.Day, 0, 0, 0, 0, 0, 0);
+    ValidatePlainDateTimeRange(DateRec.Year, DateRec.Month, DateRec.Day,
+      0, 0, 0, 0, 0, 0, 'PlainDateTime.prototype.round');
+    Result := TGocciaTemporalPlainDateTimeValue.Create(DateRec.Year, DateRec.Month, DateRec.Day, 0, 0, 0, 0, 0, 0,
+      D.FCalendarId);
     Exit;
   end;
 
@@ -902,11 +1492,14 @@ begin
   Rounded := RoundWithMode(TotalNs, Divisor, Mode);
   Balanced := BalanceTime(0, 0, 0, 0, 0, Rounded, ExtraDays);
   DateRec := AddDaysToDate(D.FYear, D.FMonth, D.FDay, ExtraDays);
+  ValidatePlainDateTimeRange(DateRec.Year, DateRec.Month, DateRec.Day,
+    Balanced.Hour, Balanced.Minute, Balanced.Second, Balanced.Millisecond,
+    Balanced.Microsecond, Balanced.Nanosecond, 'PlainDateTime.prototype.round');
 
   Result := TGocciaTemporalPlainDateTimeValue.Create(
     DateRec.Year, DateRec.Month, DateRec.Day,
     Balanced.Hour, Balanced.Minute, Balanced.Second,
-    Balanced.Millisecond, Balanced.Microsecond, Balanced.Nanosecond);
+    Balanced.Millisecond, Balanced.Microsecond, Balanced.Nanosecond, D.FCalendarId);
 end;
 
 function TGocciaTemporalPlainDateTimeValue.DateTimeEquals(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -918,7 +1511,8 @@ begin
 
   if (CompareDates(D.FYear, D.FMonth, D.FDay, Other.FYear, Other.FMonth, Other.FDay) = 0) and
      (CompareTimes(D.FHour, D.FMinute, D.FSecond, D.FMillisecond, D.FMicrosecond, D.FNanosecond,
-                   Other.FHour, Other.FMinute, Other.FSecond, Other.FMillisecond, Other.FMicrosecond, Other.FNanosecond) = 0) then
+                   Other.FHour, Other.FMinute, Other.FSecond, Other.FMillisecond, Other.FMicrosecond, Other.FNanosecond) = 0) and
+     (D.FCalendarId = Other.FCalendarId) then
     Result := TGocciaBooleanLiteralValue.TrueValue
   else
     Result := TGocciaBooleanLiteralValue.FalseValue;
@@ -945,8 +1539,8 @@ begin
       ThrowTypeError('options must be an object or undefined', SSuggestTemporalFromArg);
     OptionsObj := TGocciaObjectValue(Arg);
   end;
-  ResolveTemporalToStringOptions(OptionsObj, FracDigits, Mode);
   CalDisp := GetCalendarDisplay(OptionsObj);
+  ResolveTemporalToStringOptions(OptionsObj, FracDigits, Mode);
   H := D.FHour; Mi := D.FMinute; S := D.FSecond;
   Ms := D.FMillisecond; Us := D.FMicrosecond; Ns := D.FNanosecond;
   ExtraDays := 0;
@@ -959,13 +1553,15 @@ begin
     DateRec.Month := D.FMonth;
     DateRec.Day := D.FDay;
   end;
+  ValidatePlainDateTimeRange(DateRec.Year, DateRec.Month, DateRec.Day,
+    H, Mi, S, Ms, Us, Ns, 'PlainDateTime.prototype.toString');
   if FracDigits = -2 then // smallestUnit: minute
     TimeStr := PadTwo(H) + ':' + PadTwo(Mi)
   else
     TimeStr := FormatTimeWithPrecision(H, Mi, S, Ms, Us, Ns, FracDigits);
   Result := TGocciaStringLiteralValue.Create(
     FormatDateString(DateRec.Year, DateRec.Month, DateRec.Day) + 'T' +
-    TimeStr + FormatCalendarAnnotation(CalDisp));
+    TimeStr + FormatCalendarAnnotation(CalDisp, D.FCalendarId));
 end;
 
 function TGocciaTemporalPlainDateTimeValue.DateTimeToJSON(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -975,7 +1571,8 @@ begin
   D := AsPlainDateTime(AThisValue, 'PlainDateTime.prototype.toJSON');
   Result := TGocciaStringLiteralValue.Create(
     FormatDateString(D.FYear, D.FMonth, D.FDay) + 'T' +
-    FormatTimeString(D.FHour, D.FMinute, D.FSecond, D.FMillisecond, D.FMicrosecond, D.FNanosecond));
+    FormatTimeString(D.FHour, D.FMinute, D.FSecond, D.FMillisecond, D.FMicrosecond, D.FNanosecond) +
+    FormatCalendarAnnotation(tcdAuto, D.FCalendarId));
 end;
 
 function TGocciaTemporalPlainDateTimeValue.DateTimeValueOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -989,7 +1586,7 @@ var
   D: TGocciaTemporalPlainDateTimeValue;
 begin
   D := AsPlainDateTime(AThisValue, 'PlainDateTime.prototype.toPlainDate');
-  Result := TGocciaTemporalPlainDateValue.Create(D.FYear, D.FMonth, D.FDay);
+  Result := TGocciaTemporalPlainDateValue.Create(D.FYear, D.FMonth, D.FDay, D.FCalendarId);
 end;
 
 function TGocciaTemporalPlainDateTimeValue.DateTimeToPlainTime(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -1006,15 +1603,39 @@ var
   D: TGocciaTemporalPlainDateTimeValue;
 begin
   D := AsPlainDateTime(AThisValue, 'PlainDateTime.prototype.toPlainYearMonth');
-  Result := TGocciaTemporalPlainYearMonthValue.Create(D.FYear, D.FMonth, D.FDay);
+  if D.FCalendarId = 'iso8601' then
+    Result := TGocciaTemporalPlainYearMonthValue.Create(D.FYear, D.FMonth, 1,
+      D.FCalendarId)
+  else
+    Result := TGocciaTemporalPlainYearMonthValue.Create(D.FYear, D.FMonth,
+      D.FDay, D.FCalendarId);
 end;
 
 function TGocciaTemporalPlainDateTimeValue.DateTimeToPlainMonthDay(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   D: TGocciaTemporalPlainDateTimeValue;
+  Info: TTemporalCalendarDateInfo;
+  DateRec: TTemporalDateRecord;
+  MonthPart: Integer;
+  IsLeapMonth: Boolean;
 begin
   D := AsPlainDateTime(AThisValue, 'PlainDateTime.prototype.toPlainMonthDay');
-  Result := TGocciaTemporalPlainMonthDayValue.Create(D.FMonth, D.FDay, D.FYear);
+  if D.FCalendarId = 'iso8601' then
+    Result := TGocciaTemporalPlainMonthDayValue.Create(D.FMonth, D.FDay,
+      1972, D.FCalendarId)
+  else
+  begin
+    Info := CalendarInfoForPlainDateTime(D, 'PlainDateTime.prototype.toPlainMonthDay');
+    if not TryParseTemporalMonthCode(Info.MonthCode, MonthPart, IsLeapMonth) then
+      ThrowRangeError(Format(SErrorInvalidMonthDayStringFor,
+        ['PlainDateTime.prototype.toPlainMonthDay']), SSuggestTemporalDateRange);
+    if not TryResolvePlainMonthDayReferenceDate(D.FCalendarId, MonthPart,
+      Info.Date.Day, True, IsLeapMonth, DateRec) then
+      ThrowRangeError(Format(SErrorInvalidMonthDayStringFor,
+        ['PlainDateTime.prototype.toPlainMonthDay']), SSuggestTemporalDateRange);
+    Result := TGocciaTemporalPlainMonthDayValue.Create(DateRec.Month,
+      DateRec.Day, DateRec.Year, D.FCalendarId);
+  end;
 end;
 
 function TGocciaTemporalPlainDateTimeValue.DateTimeToZonedDateTime(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -1023,7 +1644,7 @@ var
   Arg: TGocciaValue;
   TimeZoneStr: string;
   EpochMs: Int64;
-  OffsetSec: Integer;
+  Disambiguation: TTemporalTimeZoneDisambiguation;
 begin
   D := AsPlainDateTime(AThisValue, 'PlainDateTime.prototype.toZonedDateTime');
   Arg := AArgs.GetElement(0);
@@ -1043,31 +1664,23 @@ begin
     TimeZoneStr := '';
   end;
 
-  if not IsValidTimeZone(TimeZoneStr) then
-    ThrowRangeError(Format(SErrorPlainDateTimeToZonedUnknownTZ, [TimeZoneStr]), SSuggestTemporalTimezone);
+  TimeZoneStr := CanonicalizeTemporalTimeZoneIdentifier(TimeZoneStr);
+  Disambiguation := GetTimeZoneDisambiguationOption(AArgs.GetElement(1),
+    'PlainDateTime.prototype.toZonedDateTime');
 
-  // Compute epoch ms from local components
-  EpochMs := DateToEpochDays(D.FYear, D.FMonth, D.FDay) * Int64(86400000) +
-             Int64(D.FHour) * 3600000 + Int64(D.FMinute) * 60000 +
-             Int64(D.FSecond) * 1000 + D.FMillisecond;
-  // Adjust for timezone offset
-  OffsetSec := GetUtcOffsetSeconds(TimeZoneStr, EpochMs div 1000);
-  EpochMs := EpochMs - Int64(OffsetSec) * 1000;
+  EpochMs := LocalDateTimeToEpochMillisecondsWithDisambiguation(D.FYear,
+    D.FMonth, D.FDay, D.FHour, D.FMinute, D.FSecond, D.FMillisecond,
+    TimeZoneStr, Disambiguation);
 
   Result := TGocciaTemporalZonedDateTimeValue.Create(EpochMs,
-    D.FMicrosecond * 1000 + D.FNanosecond, TimeZoneStr);
+    D.FMicrosecond * 1000 + D.FNanosecond, TimeZoneStr, D.FCalendarId);
 end;
 
 function TGocciaTemporalPlainDateTimeValue.DateTimeToLocaleString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-var
-  EmptyArgs: TGocciaArgumentsCollection;
 begin
-  EmptyArgs := TGocciaArgumentsCollection.Create([]);
-  try
-    Result := DateTimeToString(EmptyArgs, AThisValue);
-  finally
-    EmptyArgs.Free;
-  end;
+  AsPlainDateTime(AThisValue, 'PlainDateTime.prototype.toLocaleString');
+  Result := FormatTemporalValueToLocaleString(AThisValue, AArgs.GetElement(0),
+    AArgs.GetElement(1));
 end;
 
 function TGocciaTemporalPlainDateTimeValue.DateTimeWithCalendar(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -1080,11 +1693,9 @@ begin
   Arg := AArgs.GetElement(0);
   if (Arg = nil) or (Arg is TGocciaUndefinedLiteralValue) then
     ThrowTypeError('PlainDateTime.prototype.withCalendar requires a calendar argument', SSuggestTemporalFromArg);
-  CalId := Arg.ToStringLiteral.Value;
-  if CalId <> 'iso8601' then
-    ThrowRangeError('Unknown calendar: ' + CalId, SSuggestTemporalFromArg);
+  CalId := CalendarFromProperty(Arg, 'PlainDateTime.prototype.withCalendar');
   Result := TGocciaTemporalPlainDateTimeValue.Create(D.FYear, D.FMonth, D.FDay,
-    D.FHour, D.FMinute, D.FSecond, D.FMillisecond, D.FMicrosecond, D.FNanosecond);
+    D.FHour, D.FMinute, D.FSecond, D.FMillisecond, D.FMicrosecond, D.FNanosecond, CalId);
 end;
 
 initialization
