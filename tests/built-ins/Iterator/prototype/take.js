@@ -62,6 +62,30 @@ describe("Iterator.prototype.take()", () => {
     expect(closed).toBe(true);
   });
 
+  test("take keeps helper state alive while close triggers GC", () => {
+    let closed = false;
+    const source = {
+      [Symbol.iterator]() {
+        let i = 0;
+        return {
+          next() {
+            i = i + 1;
+            return { value: { i }, done: false };
+          },
+          return() {
+            closed = true;
+            Goccia.gc();
+            return { value: undefined, done: true };
+          },
+        };
+      },
+    };
+
+    const result = Iterator.from(source[Symbol.iterator]()).take(2).toArray();
+    expect(result.map((entry) => entry.i)).toEqual([1, 2]);
+    expect(closed).toBe(true);
+  });
+
   test("take runs generator finally blocks when limit is reached", () => {
     let finalized = false;
     const gen = {

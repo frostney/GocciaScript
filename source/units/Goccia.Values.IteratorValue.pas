@@ -272,13 +272,21 @@ begin
 end;
 
 procedure CloseIteratorPreservingError(const AIterator: TGocciaIteratorValue);
+var
+  Root: TGocciaTempRoot;
 begin
   if not Assigned(AIterator) then
     Exit;
+  InitializeTempRoot(Root);
+  AddTempRootIfNeeded(Root, AIterator);
   try
-    AIterator.Close;
-  except
-    // Preserve the original abrupt-completion error when cleanup also throws.
+    try
+      AIterator.Close;
+    except
+      // Preserve the original abrupt-completion error when cleanup also throws.
+    end;
+  finally
+    RemoveTempRootIfNeeded(Root);
   end;
 end;
 
@@ -1029,6 +1037,7 @@ var
   Callback, Value: TGocciaValue;
   Done: Boolean;
   Index: Integer;
+  MatchRoot: TGocciaTempRoot;
 begin
   if not (AThisValue is TGocciaObjectValue) then
     ThrowTypeError(SErrorIteratorFindNonIterator, SSuggestIteratorThisType);
@@ -1046,8 +1055,14 @@ begin
       begin
         if InvokeIteratorCallback(Callback, Value, Index).ToBooleanLiteral.Value then
         begin
-          Iterator.Close;
-          Result := Value;
+          InitializeTempRoot(MatchRoot);
+          AddTempRootIfNeeded(MatchRoot, Value);
+          try
+            Iterator.Close;
+            Result := Value;
+          finally
+            RemoveTempRootIfNeeded(MatchRoot);
+          end;
           Exit;
         end;
         Inc(Index);
@@ -1490,6 +1505,8 @@ begin
 end;
 
 function TGocciaIteratorHelperValue.AdvanceNext: TGocciaObjectValue;
+var
+  Root: TGocciaTempRoot;
 begin
   if FDone then
   begin
@@ -1499,14 +1516,19 @@ begin
   if FExecuting then
     ThrowTypeError(SErrorIteratorHelperExecuting, SSuggestIteratorProtocol);
   FExecuting := True;
+  InitializeTempRoot(Root);
+  AddTempRootIfNeeded(Root, Self);
   try
     Result := DoAdvanceNext;
   finally
+    RemoveTempRootIfNeeded(Root);
     FExecuting := False;
   end;
 end;
 
 function TGocciaIteratorHelperValue.DirectNext(out ADone: Boolean): TGocciaValue;
+var
+  Root: TGocciaTempRoot;
 begin
   if FDone then
   begin
@@ -1517,24 +1539,32 @@ begin
   if FExecuting then
     ThrowTypeError(SErrorIteratorHelperExecuting, SSuggestIteratorProtocol);
   FExecuting := True;
+  InitializeTempRoot(Root);
+  AddTempRootIfNeeded(Root, Self);
   try
     Result := DoDirectNext(ADone);
   finally
+    RemoveTempRootIfNeeded(Root);
     FExecuting := False;
   end;
 end;
 
 function TGocciaIteratorHelperValue.ReturnValue(
   const AValue: TGocciaValue): TGocciaObjectValue;
+var
+  Root: TGocciaTempRoot;
 begin
   if FExecuting then
     ThrowTypeError(SErrorIteratorHelperExecuting, SSuggestIteratorProtocol);
   if FDone then
     Exit(CreateIteratorResult(AValue, True));
   FExecuting := True;
+  InitializeTempRoot(Root);
+  AddTempRootIfNeeded(Root, Self);
   try
     Close;
   finally
+    RemoveTempRootIfNeeded(Root);
     FExecuting := False;
   end;
   Result := CreateIteratorResult(AValue, True);
