@@ -54,7 +54,6 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
-  Goccia.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase;
 
@@ -158,7 +157,7 @@ begin
   InitializeTempRoot(NextResultRoot);
   try
     try
-      NextResult := InvokeCallable(FNextMethod, CallArgs, FSource);
+      NextResult := TGocciaFunctionBase(FNextMethod).Call(CallArgs, FSource);
       AddTempRootIfNeeded(NextResultRoot, NextResult);
     finally
       CallArgs.Free;
@@ -299,7 +298,7 @@ begin
     else
       CallArgs := TGocciaArgumentsCollection.Create;
     try
-      ReturnResult := InvokeCallable(ReturnMethod, CallArgs, FSource);
+      ReturnResult := TGocciaFunctionBase(ReturnMethod).Call(CallArgs, FSource);
       AddTempRootIfNeeded(ReturnResultRoot, ReturnResult);
       if not (ReturnResult is TGocciaObjectValue) then
         ThrowTypeError(SErrorIteratorReturnObject, SSuggestIteratorResultObject);
