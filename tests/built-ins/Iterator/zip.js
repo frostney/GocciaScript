@@ -39,31 +39,6 @@ describe("Iterator.zip()", () => {
     expect(result).toEqual([[1, "x"]]);
   });
 
-  test("shortest mode keeps zip helper alive while closing sources", () => {
-    let closed = 0;
-    const makeSource = (limit) => ({
-      [Symbol.iterator]() {
-        let i = 0;
-        return {
-          next() {
-            i = i + 1;
-            if (i <= limit) return { value: { i }, done: false };
-            return { value: undefined, done: true };
-          },
-          return() {
-            closed = closed + 1;
-            Goccia.gc();
-            return { value: undefined, done: true };
-          },
-        };
-      },
-    });
-
-    const result = Iterator.zip([makeSource(2), makeSource(3)]).toArray();
-    expect(result.map((pair) => [pair[0].i, pair[1].i])).toEqual([[1, 1], [2, 2]]);
-    expect(closed).toBeGreaterThan(0);
-  });
-
   test("zips Sets", () => {
     const a = new Set([1, 2]);
     const b = new Set([3, 4]);

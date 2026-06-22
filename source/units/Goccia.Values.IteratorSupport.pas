@@ -126,18 +126,10 @@ begin
 end;
 
 procedure CloseIterator(const AIterator: TGocciaIteratorValue);
-var
-  Root: TGocciaTempRoot;
 begin
   if not Assigned(AIterator) then
     Exit;
-  InitializeTempRoot(Root);
-  AddTempRootIfNeeded(Root, AIterator);
-  try
-    AIterator.Close;
-  finally
-    RemoveTempRootIfNeeded(Root);
-  end;
+  AIterator.Close;
 end;
 
 procedure CloseIteratorPreservingError(const AIterator: TGocciaIteratorValue);

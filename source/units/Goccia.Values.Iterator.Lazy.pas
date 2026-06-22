@@ -112,9 +112,7 @@ function TGocciaLazyMapIteratorValue.DoAdvanceNext: TGocciaObjectValue;
 var
   IterResult: TGocciaObjectValue;
   Value, MappedValue: TGocciaValue;
-  MappedValueRoot: TGocciaTempRoot;
 begin
-  InitializeTempRoot(MappedValueRoot);
   IterResult := FSourceIterator.AdvanceNext;
   if TGocciaBooleanLiteralValue(IterResult.GetProperty(PROP_DONE)).Value then
   begin
@@ -131,12 +129,7 @@ begin
     raise;
   end;
   Inc(FIndex);
-  AddTempRootIfNeeded(MappedValueRoot, MappedValue);
-  try
-    Result := CreateIteratorResult(MappedValue, False);
-  finally
-    RemoveTempRootIfNeeded(MappedValueRoot);
-  end;
+  Result := CreateIteratorResult(MappedValue, False);
 end;
 
 function TGocciaLazyMapIteratorValue.DoDirectNext(out ADone: Boolean): TGocciaValue;
@@ -481,9 +474,7 @@ function TGocciaLazyFlatMapIteratorValue.DoAdvanceNext: TGocciaObjectValue;
 var
   IterResult, InnerResult: TGocciaObjectValue;
   Value, MappedValue: TGocciaValue;
-  MappedValueRoot: TGocciaTempRoot;
 begin
-  InitializeTempRoot(MappedValueRoot);
   if Assigned(FInnerIterator) then
   begin
     try
@@ -522,18 +513,13 @@ begin
     end;
     Inc(FIndex);
 
-    AddTempRootIfNeeded(MappedValueRoot, MappedValue);
     try
-      try
-        FInnerIterator := ResolveIterator(MappedValue);
-        InnerResult := FInnerIterator.AdvanceNext;
-      except
-        AcquireExceptionObject;
-        CloseIteratorPreservingError(FSourceIterator);
-        raise;
-      end;
-    finally
-      RemoveTempRootIfNeeded(MappedValueRoot);
+      FInnerIterator := ResolveIterator(MappedValue);
+      InnerResult := FInnerIterator.AdvanceNext;
+    except
+      AcquireExceptionObject;
+      CloseIteratorPreservingError(FSourceIterator);
+      raise;
     end;
     if not TGocciaBooleanLiteralValue(InnerResult.GetProperty(PROP_DONE)).Value then
     begin
@@ -548,9 +534,7 @@ function TGocciaLazyFlatMapIteratorValue.DoDirectNext(out ADone: Boolean): TGocc
 var
   Value, MappedValue, InnerValue: TGocciaValue;
   InnerDone: Boolean;
-  MappedValueRoot: TGocciaTempRoot;
 begin
-  InitializeTempRoot(MappedValueRoot);
   if Assigned(FInnerIterator) then
   begin
     try
@@ -589,18 +573,13 @@ begin
     end;
     Inc(FIndex);
 
-    AddTempRootIfNeeded(MappedValueRoot, MappedValue);
     try
-      try
-        FInnerIterator := ResolveIterator(MappedValue);
-        InnerValue := FInnerIterator.DirectNext(InnerDone);
-      except
-        AcquireExceptionObject;
-        CloseIteratorPreservingError(FSourceIterator);
-        raise;
-      end;
-    finally
-      RemoveTempRootIfNeeded(MappedValueRoot);
+      FInnerIterator := ResolveIterator(MappedValue);
+      InnerValue := FInnerIterator.DirectNext(InnerDone);
+    except
+      AcquireExceptionObject;
+      CloseIteratorPreservingError(FSourceIterator);
+      raise;
     end;
     if not InnerDone then
     begin

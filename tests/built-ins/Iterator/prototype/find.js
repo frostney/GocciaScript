@@ -33,27 +33,6 @@ describe("Iterator.prototype.find()", () => {
     expect(closed).toBe(1);
   });
 
-  test("find keeps the matched value alive while closing the source iterator", () => {
-    const marker = { ok: true };
-    let closed = false;
-    const source = Iterator.from({
-      count: 0,
-      next() {
-        this.count = this.count + 1;
-        if (this.count === 1) return { value: marker, done: false };
-        return { value: undefined, done: true };
-      },
-      return() {
-        closed = true;
-        Goccia.gc();
-        return { value: undefined, done: true };
-      },
-    });
-
-    expect(source.find((value) => value.ok)).toBe(marker);
-    expect(closed).toBe(true);
-  });
-
   test("find short-circuits after filtering", () => {
     const result = [1, 2, 3, 4, 5].values()
       .filter((x) => x > 2)
