@@ -552,8 +552,6 @@ var
   IntlLoadAttempted: Boolean;
   IntlLoadSucceeded: Boolean;
   IntlInitLock: TRTLCriticalSection;
-  CachedDateFormatter: Pointer;
-  CachedDateFormatterKey: string;
 
 function ICUSucceeded(const AStatus: TICUErrorCode): Boolean;
 begin
@@ -2713,40 +2711,6 @@ begin
     Result := 'yMd';
 end;
 
-function DateTimeFormatterCacheKey(const ALocale: string;
-  const AOptions: TIntlDateTimeFormatOptions): string;
-const
-  SEP = #1;
-begin
-  Result := ALocale + SEP +
-    IntToStr(Ord(AOptions.DateStyle)) + SEP +
-    IntToStr(Ord(AOptions.TimeStyle)) + SEP +
-    AOptions.Calendar + SEP +
-    AOptions.NumberingSystem + SEP +
-    AOptions.TimeZone + SEP +
-    IntToStr(AOptions.Hour12) + SEP +
-    AOptions.HourCycle + SEP +
-    AOptions.Weekday + SEP +
-    AOptions.Era + SEP +
-    AOptions.Year + SEP +
-    AOptions.Month + SEP +
-    AOptions.Day + SEP +
-    AOptions.DayPeriod + SEP +
-    AOptions.Hour + SEP +
-    AOptions.Minute + SEP +
-    AOptions.Second + SEP +
-    IntToStr(AOptions.FractionalSecondDigits) + SEP +
-    AOptions.TimeZoneName;
-end;
-
-procedure CloseCachedDateFormatter;
-begin
-  if Assigned(CachedDateFormatter) and Assigned(IntlFunctions.UdatClose) then
-    IntlFunctions.UdatClose(CachedDateFormatter);
-  CachedDateFormatter := nil;
-  CachedDateFormatterKey := '';
-end;
-
 function UTF8FromCodePoint(const ACodePoint: Cardinal): string;
 begin
   if ACodePoint <= $7F then
@@ -3008,28 +2972,6 @@ begin
   Result := ICUSucceeded(Status) and Assigned(AFormatter);
 end;
 
-function GetCachedDateFormatter(const ALocale: string;
-  const AOptions: TIntlDateTimeFormatOptions; out AFormatter: Pointer): Boolean;
-var
-  Key: string;
-begin
-  Result := False;
-  AFormatter := nil;
-  Key := DateTimeFormatterCacheKey(ALocale, AOptions);
-  if Assigned(CachedDateFormatter) and (CachedDateFormatterKey = Key) then
-  begin
-    AFormatter := CachedDateFormatter;
-    Exit(True);
-  end;
-
-  CloseCachedDateFormatter;
-  if not OpenDateFormatter(ALocale, AOptions, AFormatter) then
-    Exit;
-  CachedDateFormatter := AFormatter;
-  CachedDateFormatterKey := Key;
-  Result := True;
-end;
-
 function TryICUFormatDateTime(const ALocale: string; AMillis: Double;
   const AOptions: TIntlDateTimeFormatOptions; out AFormatted: string): Boolean;
 var
@@ -3044,19 +2986,23 @@ begin
   if not EnsureLoaded then
     Exit;
 
-  if not GetCachedDateFormatter(ALocale, AOptions, Formatter) then
+  if not OpenDateFormatter(ALocale, AOptions, Formatter) then
     Exit;
 
-  FillChar(Buffer, SizeOf(Buffer), 0);
-  Status := ICU_SUCCESS;
-  ResultLen := IntlFunctions.UdatFormat(Formatter, AMillis,
-    @Buffer[0], FORMAT_BUFFER_CAPACITY, nil, Status);
-  if not ICUSucceeded(Status) or (ResultLen <= 0) then
-    Exit;
+  try
+    FillChar(Buffer, SizeOf(Buffer), 0);
+    Status := ICU_SUCCESS;
+    ResultLen := IntlFunctions.UdatFormat(Formatter, AMillis,
+      @Buffer[0], FORMAT_BUFFER_CAPACITY, nil, Status);
+    if not ICUSucceeded(Status) or (ResultLen <= 0) then
+      Exit;
 
-  AFormatted := UnicodeToString(Buffer, ResultLen);
-  AFormatted := PadTwoDigitHourFormatted(AFormatted, AOptions);
-  Result := True;
+    AFormatted := UnicodeToString(Buffer, ResultLen);
+    AFormatted := PadTwoDigitHourFormatted(AFormatted, AOptions);
+    Result := True;
+  finally
+    IntlFunctions.UdatClose(Formatter);
+  end;
 end;
 
 function TryICUFormatDateTimeToParts(const ALocale: string; AMillis: Double;
@@ -3078,28 +3024,32 @@ begin
      not Assigned(IntlFunctions.UfieldpositerNext) then
     Exit;
 
-  if not GetCachedDateFormatter(ALocale, AOptions, Formatter) then
+  if not OpenDateFormatter(ALocale, AOptions, Formatter) then
     Exit;
 
-  Status := ICU_SUCCESS;
-  Iterator := IntlFunctions.UfieldpositerOpen(Status);
-  if not ICUSucceeded(Status) or not Assigned(Iterator) then
-    Exit;
   try
-    FillChar(Buffer, SizeOf(Buffer), 0);
     Status := ICU_SUCCESS;
-    ResultLen := IntlFunctions.UdatFormatForFields(Formatter, AMillis,
-      @Buffer[0], FORMAT_BUFFER_CAPACITY, Iterator, Status);
-    if not ICUSucceeded(Status) or (ResultLen <= 0) then
+    Iterator := IntlFunctions.UfieldpositerOpen(Status);
+    if not ICUSucceeded(Status) or not Assigned(Iterator) then
       Exit;
+    try
+      FillChar(Buffer, SizeOf(Buffer), 0);
+      Status := ICU_SUCCESS;
+      ResultLen := IntlFunctions.UdatFormatForFields(Formatter, AMillis,
+        @Buffer[0], FORMAT_BUFFER_CAPACITY, Iterator, Status);
+      if not ICUSucceeded(Status) or (ResultLen <= 0) then
+        Exit;
 
-    UFormatted := UnicodeString(UnicodeToString(Buffer, ResultLen));
-    SetLength(Spans, 0);
-    CollectIteratorFieldSpans(Iterator, UFIELD_CATEGORY_DATE, Spans);
-    Result := BuildPartsFromFieldSpans(UFormatted, Spans,
-      UFIELD_CATEGORY_DATE, 0, DateFieldToPartType, AParts);
+      UFormatted := UnicodeString(UnicodeToString(Buffer, ResultLen));
+      SetLength(Spans, 0);
+      CollectIteratorFieldSpans(Iterator, UFIELD_CATEGORY_DATE, Spans);
+      Result := BuildPartsFromFieldSpans(UFormatted, Spans,
+        UFIELD_CATEGORY_DATE, 0, DateFieldToPartType, AParts);
+    finally
+      IntlFunctions.UfieldpositerClose(Iterator);
+    end;
   finally
-    IntlFunctions.UfieldpositerClose(Iterator);
+    IntlFunctions.UdatClose(Formatter);
   end;
 end;
 
@@ -3871,11 +3821,8 @@ initialization
   IntlLoadAttempted := False;
   IntlLoadSucceeded := False;
   FillChar(IntlFunctions, SizeOf(IntlFunctions), 0);
-  CachedDateFormatter := nil;
-  CachedDateFormatterKey := '';
 
 finalization
-  CloseCachedDateFormatter;
   DoneCriticalSection(IntlInitLock);
 
 end.
