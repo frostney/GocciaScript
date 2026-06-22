@@ -53,6 +53,8 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.GarbageCollector,
+  Goccia.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase;
 
@@ -93,11 +95,13 @@ var
   Done: Boolean;
   NextResult: TGocciaObjectValue;
   ValueVal: TGocciaValue;
+  ValueRoot: TGocciaTempRoot;
 begin
   if FDone then
     Exit(CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue,
       True));
 
+  InitializeTempRoot(ValueRoot);
   NextResult := AdvanceNextResultInternal(AValue, AHasValue, Done);
   if Done then
     ValueVal := TGocciaUndefinedLiteralValue.UndefinedValue
@@ -112,7 +116,12 @@ begin
     if not Assigned(ValueVal) then
       ValueVal := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
-  Result := CreateIteratorResult(ValueVal, Done);
+  AddTempRootIfNeeded(ValueRoot, ValueVal);
+  try
+    Result := CreateIteratorResult(ValueVal, Done);
+  finally
+    RemoveTempRootIfNeeded(ValueRoot);
+  end;
 end;
 
 function TGocciaGenericIteratorValue.AdvanceNextResultInternal(
@@ -121,6 +130,7 @@ function TGocciaGenericIteratorValue.AdvanceNextResultInternal(
 var
   NextResult, DoneVal: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
+  NextResultRoot: TGocciaTempRoot;
 begin
   if FDone then
   begin
@@ -145,25 +155,31 @@ begin
     CallArgs := TGocciaArgumentsCollection.Create([AValue])
   else
     CallArgs := TGocciaArgumentsCollection.Create;
+  InitializeTempRoot(NextResultRoot);
   try
-    NextResult := TGocciaFunctionBase(FNextMethod).Call(CallArgs, FSource);
+    try
+      NextResult := InvokeCallable(FNextMethod, CallArgs, FSource);
+      AddTempRootIfNeeded(NextResultRoot, NextResult);
+    finally
+      CallArgs.Free;
+    end;
+
+    if not (NextResult is TGocciaObjectValue) then
+      ThrowTypeError(Format(SErrorIteratorResultNotObject, [NextResult.TypeName]), SSuggestIteratorResultObject);
+
+    try
+      DoneVal := TGocciaObjectValue(NextResult).GetProperty(PROP_DONE);
+      ADone := Assigned(DoneVal) and DoneVal.ToBooleanLiteral.Value;
+    except
+      FDone := True;
+      raise;
+    end;
+    if ADone then
+      FDone := True;
+    Result := TGocciaObjectValue(NextResult);
   finally
-    CallArgs.Free;
+    RemoveTempRootIfNeeded(NextResultRoot);
   end;
-
-  if not (NextResult is TGocciaObjectValue) then
-    ThrowTypeError(Format(SErrorIteratorResultNotObject, [NextResult.TypeName]), SSuggestIteratorResultObject);
-
-  try
-    DoneVal := TGocciaObjectValue(NextResult).GetProperty(PROP_DONE);
-    ADone := Assigned(DoneVal) and DoneVal.ToBooleanLiteral.Value;
-  except
-    FDone := True;
-    raise;
-  end;
-  if ADone then
-    FDone := True;
-  Result := TGocciaObjectValue(NextResult);
 end;
 
 function TGocciaGenericIteratorValue.AdvanceNext: TGocciaObjectValue;
@@ -188,15 +204,22 @@ end;
 function TGocciaGenericIteratorValue.DirectNext(out ADone: Boolean): TGocciaValue;
 var
   IteratorResult: TGocciaObjectValue;
+  IteratorResultRoot: TGocciaTempRoot;
 begin
   IteratorResult := AdvanceNextResultInternal(nil, False, ADone);
   if ADone then
     Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  InitializeTempRoot(IteratorResultRoot);
+  AddTempRootIfNeeded(IteratorResultRoot, IteratorResult);
   try
-    Result := IteratorResult.GetProperty(PROP_VALUE);
-  except
-    FDone := True;
-    raise;
+    try
+      Result := IteratorResult.GetProperty(PROP_VALUE);
+    except
+      FDone := True;
+      raise;
+    end;
+  finally
+    RemoveTempRootIfNeeded(IteratorResultRoot);
   end;
   if not Assigned(Result) then
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -206,13 +229,20 @@ function TGocciaGenericIteratorValue.DirectNextValue(
   const AValue: TGocciaValue; out ADone: Boolean): TGocciaValue;
 var
   IteratorResult: TGocciaObjectValue;
+  IteratorResultRoot: TGocciaTempRoot;
 begin
   IteratorResult := AdvanceNextResultInternal(AValue, True, ADone);
+  InitializeTempRoot(IteratorResultRoot);
+  AddTempRootIfNeeded(IteratorResultRoot, IteratorResult);
   try
-    Result := IteratorResult.GetProperty(PROP_VALUE);
-  except
-    FDone := True;
-    raise;
+    try
+      Result := IteratorResult.GetProperty(PROP_VALUE);
+    except
+      FDone := True;
+      raise;
+    end;
+  finally
+    RemoveTempRootIfNeeded(IteratorResultRoot);
   end;
   if not Assigned(Result) then
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -225,6 +255,7 @@ var
   DoneValue: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
   ReturnResult: TGocciaValue;
+  ReturnMethodRoot, ReturnResultRoot: TGocciaTempRoot;
 begin
   if FDone then
   begin
@@ -236,45 +267,54 @@ begin
   end;
 
   ReturnMethod := FSource.GetProperty(PROP_RETURN);
-  if not Assigned(ReturnMethod) or
-     (ReturnMethod is TGocciaUndefinedLiteralValue) or
-     (ReturnMethod is TGocciaNullLiteralValue) then
-  begin
-    FDone := True;
-    if FSource is TGocciaIteratorValue then
+  InitializeTempRoot(ReturnMethodRoot);
+  InitializeTempRoot(ReturnResultRoot);
+  AddTempRootIfNeeded(ReturnMethodRoot, ReturnMethod);
+  try
+    if not Assigned(ReturnMethod) or
+       (ReturnMethod is TGocciaUndefinedLiteralValue) or
+       (ReturnMethod is TGocciaNullLiteralValue) then
     begin
+      FDone := True;
+      if FSource is TGocciaIteratorValue then
+      begin
+        if AHasValue then
+          Result := TGocciaIteratorValue(FSource).ReturnValue(AValue)
+        else
+          Result := TGocciaIteratorValue(FSource).ReturnValue(
+            TGocciaUndefinedLiteralValue.UndefinedValue);
+        Exit;
+      end;
       if AHasValue then
-        Result := TGocciaIteratorValue(FSource).ReturnValue(AValue)
+        Result := CreateIteratorResult(AValue, True)
       else
-        Result := TGocciaIteratorValue(FSource).ReturnValue(
-          TGocciaUndefinedLiteralValue.UndefinedValue);
+        Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
       Exit;
     end;
-    if AHasValue then
-      Result := CreateIteratorResult(AValue, True)
-    else
-      Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
-    Exit;
-  end;
-  if not ReturnMethod.IsCallable then
-    ThrowTypeError(SErrorIteratorReturnMustBeCallable, SSuggestIteratorProtocol);
+    if not ReturnMethod.IsCallable then
+      ThrowTypeError(SErrorIteratorReturnMustBeCallable, SSuggestIteratorProtocol);
 
-  if AHasValue then
-    CallArgs := TGocciaArgumentsCollection.Create([AValue])
-  else
-    CallArgs := TGocciaArgumentsCollection.Create;
-  try
-    ReturnResult := TGocciaFunctionBase(ReturnMethod).Call(CallArgs, FSource);
-    if not (ReturnResult is TGocciaObjectValue) then
-      ThrowTypeError(SErrorIteratorReturnObject, SSuggestIteratorResultObject);
-    // ES2026 §15.5.5 YieldExpression : yield * AssignmentExpression:
-    // return() results with done:false are yielded and may resume delegation.
-    DoneValue := TGocciaObjectValue(ReturnResult).GetProperty(PROP_DONE);
-    if Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value then
-      FDone := True;
-    Result := TGocciaObjectValue(ReturnResult);
+    if AHasValue then
+      CallArgs := TGocciaArgumentsCollection.Create([AValue])
+    else
+      CallArgs := TGocciaArgumentsCollection.Create;
+    try
+      ReturnResult := InvokeCallable(ReturnMethod, CallArgs, FSource);
+      AddTempRootIfNeeded(ReturnResultRoot, ReturnResult);
+      if not (ReturnResult is TGocciaObjectValue) then
+        ThrowTypeError(SErrorIteratorReturnObject, SSuggestIteratorResultObject);
+      // ES2026 §15.5.5 YieldExpression : yield * AssignmentExpression:
+      // return() results with done:false are yielded and may resume delegation.
+      DoneValue := TGocciaObjectValue(ReturnResult).GetProperty(PROP_DONE);
+      if Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value then
+        FDone := True;
+      Result := TGocciaObjectValue(ReturnResult);
+    finally
+      CallArgs.Free;
+    end;
   finally
-    CallArgs.Free;
+    RemoveTempRootIfNeeded(ReturnResultRoot);
+    RemoveTempRootIfNeeded(ReturnMethodRoot);
   end;
 end;
 

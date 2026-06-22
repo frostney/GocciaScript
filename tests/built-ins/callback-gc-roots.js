@@ -205,12 +205,27 @@ describe.runIf(hasGoccia)("native callback GC roots", () => {
       Goccia.gc();
       return value === 2;
     });
+    const mapped = [1, 2].values().map((value) => {
+      Goccia.gc();
+      return { value };
+    }).toArray();
+    const filtered = [{ value: 1 }, { value: 2 }].values().filter((entry) => {
+      Goccia.gc();
+      return entry.value === 2;
+    }).toArray();
+    const flatMapped = [1, 2].values().flatMap((value) => {
+      Goccia.gc();
+      return [{ value }];
+    }).toArray();
 
     expect(sum).toBe(3);
     expect(reduced).toBe(3);
     expect(some).toBe(true);
     expect(every).toBe(true);
     expect(found).toBe(2);
+    expect(mapped.map((entry) => entry.value)).toEqual([1, 2]);
+    expect(filtered.map((entry) => entry.value)).toEqual([2]);
+    expect(flatMapped.map((entry) => entry.value)).toEqual([1, 2]);
   });
 
   test("collection callbacks survive explicit GC", () => {
