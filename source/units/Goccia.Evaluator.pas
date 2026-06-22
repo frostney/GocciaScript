@@ -4240,7 +4240,10 @@ var
   BoxedValue: TGocciaObjectValue;
   ObjectEvaluated: Boolean;
   ShortCircuited: Boolean;
+  Roots: TGocciaActiveRootFrame;
 begin
+  Roots.Initialize;
+  try
   ObjectEvaluated := False;
 
   if AMemberExpression.ObjectExpr is TGocciaCallExpression then
@@ -4248,6 +4251,7 @@ begin
     CallExpr := TGocciaCallExpression(AMemberExpression.ObjectExpr);
     Obj := EvaluateCallWithOptionalShortCircuit(CallExpr, AContext,
       ShortCircuited);
+    AddValueRoot(Roots, Obj);
     ObjectEvaluated := True;
     if Assigned(AOutObjectValue) then
       AOutObjectValue^ := Obj;
@@ -4264,6 +4268,7 @@ begin
     if not ObjectEvaluated then
     begin
       Obj := EvaluateExpression(AMemberExpression.ObjectExpr, AContext);
+      AddValueRoot(Roots, Obj);
       ObjectEvaluated := True;
       if Assigned(AOutObjectValue) then
         AOutObjectValue^ := Obj;
@@ -4279,6 +4284,7 @@ begin
   if AMemberExpression.ObjectExpr is TGocciaSuperExpression then
   begin
     ThisValue := ResolveSuperThisValue(AContext);
+    AddValueRoot(Roots, ThisValue);
     if Assigned(AOutObjectValue) then
       AOutObjectValue^ := ThisValue;
 
@@ -4286,11 +4292,13 @@ begin
     begin
       PropertyValue := EvaluateExpression(AMemberExpression.PropertyExpression,
         AContext);
+      AddValueRoot(Roots, PropertyValue);
     end
     else
     begin
       PropertyValue := TGocciaStringLiteralValue.Create(
         AMemberExpression.PropertyName);
+      AddValueRoot(Roots, PropertyValue);
     end;
 
     Result := GetSuperProperty(AContext, PropertyValue);
@@ -4300,6 +4308,7 @@ begin
   if not ObjectEvaluated then
   begin
     Obj := EvaluateExpression(AMemberExpression.ObjectExpr, AContext);
+    AddValueRoot(Roots, Obj);
     if Assigned(AOutObjectValue) then
       AOutObjectValue^ := Obj;
   end;
@@ -4310,7 +4319,9 @@ begin
   if AMemberExpression.Computed and Assigned(AMemberExpression.PropertyExpression) then
   begin
     PropertyValue := EvaluateExpression(AMemberExpression.PropertyExpression, AContext);
+    AddValueRoot(Roots, PropertyValue);
     PropertyKey := ToPropertyKey(PropertyValue);
+    AddValueRoot(Roots, PropertyKey);
 
     if PropertyKey is TGocciaSymbolValue then
     begin
@@ -4343,6 +4354,7 @@ begin
       else
       begin
         BoxedValue := Obj.Box;
+        AddValueRoot(Roots, BoxedValue);
         if Assigned(BoxedValue) then
         begin
           Result := BoxedValue.GetSymbolPropertyWithReceiver(
@@ -4367,6 +4379,7 @@ begin
   begin
     // Handle primitive boxing for property access
     BoxedValue := Obj.Box;
+    AddValueRoot(Roots, BoxedValue);
     if Assigned(BoxedValue) then
     begin
       Result := BoxedValue.GetPropertyWithContext(PropertyName, Obj);
@@ -4397,6 +4410,9 @@ begin
     begin
       Result := TGocciaUndefinedLiteralValue.UndefinedValue;
     end;
+  end;
+  finally
+    Roots.Clear;
   end;
 end;
 
