@@ -364,9 +364,23 @@ begin
 end;
 
 procedure TGocciaGenericIteratorValue.Close;
+var
+  ReturnMethod: TGocciaValue;
 begin
   if FDone then
     Exit;
+
+  ReturnMethod := FSource.GetProperty(PROP_RETURN);
+  if not Assigned(ReturnMethod) or
+     (ReturnMethod is TGocciaUndefinedLiteralValue) or
+     (ReturnMethod is TGocciaNullLiteralValue) then
+  begin
+    FDone := True;
+    if FSource is TGocciaIteratorValue then
+      TGocciaIteratorValue(FSource).Close;
+    Exit;
+  end;
+
   ReturnInternal(nil, False);
 end;
 
