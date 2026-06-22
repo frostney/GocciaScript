@@ -27,6 +27,34 @@ describe.runIf(isIntl)("Intl constructor/prototype substrate", () => {
     expect(Object.getPrototypeOf(collator)).toBe(proto);
   });
 
+  test("unsupported requested locales resolve to each constructor default", () => {
+    const constructors = [
+      [Intl.Collator],
+      [Intl.NumberFormat],
+      [Intl.DateTimeFormat],
+      [Intl.PluralRules],
+      [Intl.RelativeTimeFormat],
+      [Intl.ListFormat],
+      [Intl.DisplayNames, { type: "language" }],
+      [Intl.Segmenter],
+      [Intl.DurationFormat],
+    ];
+
+    expect(Intl.DateTimeFormat.supportedLocalesOf(["zz-ZZ"]).length).toBe(0);
+
+    for (const [Ctor, options] of constructors) {
+      const defaultLocale = new Ctor(undefined, options).resolvedOptions().locale;
+      const unsupportedLocale = new Ctor("zz-ZZ", options).resolvedOptions().locale;
+      const unsupportedExtensionLocale = new Ctor("zz-ZZ-u-ca-gregory", options)
+        .resolvedOptions().locale;
+
+      expect(unsupportedLocale).toBe(defaultLocale);
+      expect(unsupportedExtensionLocale).toBe(defaultLocale);
+      expect(unsupportedLocale.includes("zz")).toBe(false);
+      expect(unsupportedExtensionLocale.includes("zz")).toBe(false);
+    }
+  });
+
   test("legacy NumberFormat calls define a non-enumerable fallback symbol", () => {
     const receiver = new Intl.NumberFormat();
     const chained = Intl.NumberFormat.call(receiver);

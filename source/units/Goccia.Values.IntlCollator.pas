@@ -247,6 +247,19 @@ begin
   Result := CollatorLocaleLanguage(ALocale) = 'th';
 end;
 
+function KeepCollatorLocaleExtensionKeywords(const ALocale: string): string;
+var
+  Value: string;
+begin
+  Result := LocaleWithoutUnicodeExtension(ALocale);
+  if TryGetUnicodeLocaleExtensionKeyword(ALocale, 'co', Value) then
+    Result := AddUnicodeLocaleExtensionKeyword(Result, 'co', Value);
+  if TryGetUnicodeLocaleExtensionKeyword(ALocale, 'kf', Value) then
+    Result := AddUnicodeLocaleExtensionKeyword(Result, 'kf', Value);
+  if TryGetUnicodeLocaleExtensionKeyword(ALocale, 'kn', Value) then
+    Result := AddUnicodeLocaleExtensionKeyword(Result, 'kn', Value);
+end;
+
 function IsSupportedCollationValue(const ALocale, AValue: string): Boolean;
 var
   Collations: IntlTypes.TStringArray;
@@ -400,6 +413,7 @@ begin
       FLocale := RemoveUnicodeLocaleExtensionKeyword(FLocale, 'co');
   end;
 
+  FLocale := KeepCollatorLocaleExtensionKeywords(FLocale);
   FICULocale := LocaleWithoutUnicodeExtension(FLocale);
   if FUsage = 'search' then
     FICULocale := AddUnicodeLocaleExtensionKeyword(FICULocale, 'co', 'search')

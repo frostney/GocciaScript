@@ -6,10 +6,12 @@ interface
 
 type
   TTemporalTimeZoneDisambiguation = (ttzdCompatible, ttzdEarlier, ttzdLater, ttzdReject);
+  TTemporalTimeZoneIdentifierArray = array of string;
 
 function GetSystemTimeZoneId: string;
 function IsValidTimeZone(const ATimeZone: string): Boolean;
 function IsSupportedCanonicalTimeZoneIdentifier(const ATimeZone: string): Boolean;
+function GetAvailablePrimaryTimeZoneIdentifiers: TTemporalTimeZoneIdentifierArray;
 function TryCanonicalizeTimeZoneIdentifierCase(const ATimeZone: string;
   out ACanonicalTimeZone: string): Boolean;
 function TimeZoneIdentifiersEqual(const ALeft, ARight: string): Boolean;
@@ -293,6 +295,8 @@ threadvar
   CachedTimeZonePathCount: Integer;
   CachedTimeZoneCases: array of TTimeZoneCaseCacheEntry;
   CachedTimeZoneCaseCount: Integer;
+  CachedAvailablePrimaryTimeZoneIdentifiers: TTemporalTimeZoneIdentifierArray;
+  CachedAvailablePrimaryTimeZoneIdentifiersLoaded: Boolean;
 
 function ASCIIEqualsIgnoreCase(const ALeft, ARight: string): Boolean;
 begin
@@ -350,6 +354,87 @@ begin
       Exit;
     end;
   end;
+end;
+
+procedure AddUniqueTimeZoneIdentifier(var AIdentifiers: TTemporalTimeZoneIdentifierArray;
+  var ACount: Integer; const AIdentifier: string);
+var
+  Index: Integer;
+begin
+  if AIdentifier = '' then
+    Exit;
+
+  for Index := 0 to ACount - 1 do
+    if AIdentifiers[Index] = AIdentifier then
+      Exit;
+
+  if ACount >= Length(AIdentifiers) then
+    SetLength(AIdentifiers, ACount + 64);
+  AIdentifiers[ACount] := AIdentifier;
+  Inc(ACount);
+end;
+
+procedure SortTimeZoneIdentifiers(var AIdentifiers: TTemporalTimeZoneIdentifierArray);
+var
+  I, J: Integer;
+  Temp: string;
+begin
+  for I := 0 to Length(AIdentifiers) - 2 do
+    for J := I + 1 to Length(AIdentifiers) - 1 do
+      if CompareStr(AIdentifiers[I], AIdentifiers[J]) > 0 then
+      begin
+        Temp := AIdentifiers[I];
+        AIdentifiers[I] := AIdentifiers[J];
+        AIdentifiers[J] := Temp;
+      end;
+end;
+
+function IsPrimaryAvailableTimeZoneIdentifier(const AIdentifier: string): Boolean;
+var
+  PrimaryIdentifier: string;
+begin
+  Result := (not TryKnownPrimaryTimeZoneIdentifier(AIdentifier,
+    PrimaryIdentifier)) or ASCIIEqualsIgnoreCase(AIdentifier, PrimaryIdentifier);
+end;
+
+// ECMA-402 ES2026 §6.5.3 AvailablePrimaryTimeZoneIdentifiers()
+function BuildAvailablePrimaryTimeZoneIdentifiers: TTemporalTimeZoneIdentifierArray;
+var
+  EmbeddedFileNames: TEmbeddedTimeZoneFileNameArray;
+  Count, Index: Integer;
+begin
+  Count := 0;
+  SetLength(Result, 0);
+
+  if TryGetEmbeddedTimeZoneFileNames(EmbeddedFileNames) then
+  begin
+    for Index := 0 to Length(EmbeddedFileNames) - 1 do
+      if IsPrimaryAvailableTimeZoneIdentifier(EmbeddedFileNames[Index]) then
+        AddUniqueTimeZoneIdentifier(Result, Count, EmbeddedFileNames[Index]);
+  end
+  else
+  begin
+    AddUniqueTimeZoneIdentifier(Result, Count, UTC_TIMEZONE_ID);
+    for Index := 0 to KNOWN_TIMEZONE_PRIMARY_IDENTIFIER_COUNT - 1 do
+      AddUniqueTimeZoneIdentifier(Result, Count,
+        KNOWN_TIMEZONE_PRIMARY_IDENTIFIERS[Index].PrimaryIdentifier);
+  end;
+
+  AddUniqueTimeZoneIdentifier(Result, Count, UTC_TIMEZONE_ID);
+  SetLength(Result, Count);
+  SortTimeZoneIdentifiers(Result);
+end;
+
+function GetAvailablePrimaryTimeZoneIdentifiers: TTemporalTimeZoneIdentifierArray;
+begin
+  if not CachedAvailablePrimaryTimeZoneIdentifiersLoaded then
+  begin
+    CachedAvailablePrimaryTimeZoneIdentifiers :=
+      BuildAvailablePrimaryTimeZoneIdentifiers;
+    CachedAvailablePrimaryTimeZoneIdentifiersLoaded := True;
+  end;
+
+  Result := CachedAvailablePrimaryTimeZoneIdentifiers;
 end;
 
 {$IFDEF MSWINDOWS}
@@ -911,77 +996,16 @@ begin
 end;
 
 function IsSupportedCanonicalTimeZoneIdentifier(const ATimeZone: string): Boolean;
+var
+  AvailableTimeZones: TTemporalTimeZoneIdentifierArray;
+  Index: Integer;
 begin
-  Result := (ATimeZone = 'Africa/Abidjan') or
-    (ATimeZone = 'Africa/Cairo') or
-    (ATimeZone = 'Africa/Casablanca') or
-    (ATimeZone = 'Africa/Johannesburg') or
-    (ATimeZone = 'Africa/Lagos') or
-    (ATimeZone = 'Africa/Nairobi') or
-    (ATimeZone = 'America/Anchorage') or
-    (ATimeZone = 'America/Argentina/Buenos_Aires') or
-    (ATimeZone = 'America/Bogota') or
-    (ATimeZone = 'America/Chicago') or
-    (ATimeZone = 'America/Denver') or
-    (ATimeZone = 'America/Halifax') or
-    (ATimeZone = 'America/Los_Angeles') or
-    (ATimeZone = 'America/Mexico_City') or
-    (ATimeZone = 'America/New_York') or
-    (ATimeZone = 'America/Phoenix') or
-    (ATimeZone = 'America/Santiago') or
-    (ATimeZone = 'America/Sao_Paulo') or
-    (ATimeZone = 'America/St_Johns') or
-    (ATimeZone = 'America/Toronto') or
-    (ATimeZone = 'America/Vancouver') or
-    (ATimeZone = 'Asia/Baghdad') or
-    (ATimeZone = 'Asia/Bangkok') or
-    (ATimeZone = 'Asia/Calcutta') or
-    (ATimeZone = 'Asia/Dhaka') or
-    (ATimeZone = 'Asia/Dubai') or
-    (ATimeZone = 'Asia/Hong_Kong') or
-    (ATimeZone = 'Asia/Istanbul') or
-    (ATimeZone = 'Asia/Jakarta') or
-    (ATimeZone = 'Asia/Jerusalem') or
-    (ATimeZone = 'Asia/Karachi') or
-    (ATimeZone = 'Asia/Kathmandu') or
-    (ATimeZone = 'Asia/Riyadh') or
-    (ATimeZone = 'Asia/Seoul') or
-    (ATimeZone = 'Asia/Shanghai') or
-    (ATimeZone = 'Asia/Singapore') or
-    (ATimeZone = 'Asia/Taipei') or
-    (ATimeZone = 'Asia/Tehran') or
-    (ATimeZone = 'Asia/Tokyo') or
-    (ATimeZone = 'Atlantic/Reykjavik') or
-    (ATimeZone = 'Australia/Melbourne') or
-    (ATimeZone = 'Australia/Perth') or
-    (ATimeZone = 'Australia/Sydney') or
-    (ATimeZone = 'Europe/Amsterdam') or
-    (ATimeZone = 'Europe/Athens') or
-    (ATimeZone = 'Europe/Belgrade') or
-    (ATimeZone = 'Europe/Berlin') or
-    (ATimeZone = 'Europe/Brussels') or
-    (ATimeZone = 'Europe/Bucharest') or
-    (ATimeZone = 'Europe/Budapest') or
-    (ATimeZone = 'Europe/Copenhagen') or
-    (ATimeZone = 'Europe/Dublin') or
-    (ATimeZone = 'Europe/Helsinki') or
-    (ATimeZone = 'Europe/Kyiv') or
-    (ATimeZone = 'Europe/Lisbon') or
-    (ATimeZone = 'Europe/London') or
-    (ATimeZone = 'Europe/Madrid') or
-    (ATimeZone = 'Europe/Moscow') or
-    (ATimeZone = 'Europe/Oslo') or
-    (ATimeZone = 'Europe/Paris') or
-    (ATimeZone = 'Europe/Prague') or
-    (ATimeZone = 'Europe/Rome') or
-    (ATimeZone = 'Europe/Stockholm') or
-    (ATimeZone = 'Europe/Vienna') or
-    (ATimeZone = 'Europe/Warsaw') or
-    (ATimeZone = 'Europe/Zurich') or
-    (ATimeZone = 'Pacific/Auckland') or
-    (ATimeZone = 'Pacific/Fiji') or
-    (ATimeZone = 'Pacific/Honolulu') or
-    (ATimeZone = 'UTC');
+  AvailableTimeZones := GetAvailablePrimaryTimeZoneIdentifiers;
+  for Index := 0 to Length(AvailableTimeZones) - 1 do
+    if AvailableTimeZones[Index] = ATimeZone then
+      Exit(True);
+
+  Result := False;
 end;
 
 function TimeZoneFilesEqual(const ALeft, ARight: string): Boolean;
@@ -1813,12 +1837,15 @@ begin
   CachedTimeZonePathCount := 0;
   SetLength(CachedTimeZoneCases, 0);
   CachedTimeZoneCaseCount := 0;
+  SetLength(CachedAvailablePrimaryTimeZoneIdentifiers, 0);
+  CachedAvailablePrimaryTimeZoneIdentifiersLoaded := False;
 end;
 
 initialization
   CachedTimeZoneCount := 0;
   CachedTimeZonePathCount := 0;
   CachedTimeZoneCaseCount := 0;
+  CachedAvailablePrimaryTimeZoneIdentifiersLoaded := False;
   {$IFDEF MSWINDOWS}
   InitCriticalSection(WindowsICUInitLock);
   {$ENDIF}

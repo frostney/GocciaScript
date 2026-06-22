@@ -642,6 +642,121 @@ begin
   Result := CanonicalizeBcp47Tag(Parsed);
 end;
 
+function LikelySubtagsCandidateKey(const ALanguage, AScript, ARegion: string): string;
+begin
+  Result := LowerCase(ALanguage);
+  if Result = '' then
+    Result := 'und';
+  if AScript <> '' then
+    Result := Result + '-' + AScript;
+  if ARegion <> '' then
+    Result := Result + '-' + ARegion;
+end;
+
+function TryLookupLikelySubtagsCandidate(const ALanguage, AScript,
+  ARegion: string; out AMaximized: string): Boolean;
+var
+  Key: string;
+begin
+  Key := LikelySubtagsCandidateKey(ALanguage, AScript, ARegion);
+  Result := TryGetLikelySubtags(Key, AMaximized);
+end;
+
+function TryCLDRMaximizeLocale(const AInput: string; out AMaximized: string): Boolean;
+var
+  Parsed, LikelyParsed: TBcp47Tag;
+  Language, Script, Region, Likely: string;
+  UseUndefinedFallback: Boolean;
+begin
+  Result := False;
+  AMaximized := '';
+  Parsed := ParseBcp47Tag(AInput);
+  if not Parsed.IsValid then
+    Exit;
+
+  SetLength(Parsed.Variants, 0);
+  SetLength(Parsed.Extensions, 0);
+  Parsed.PrivateUse := '';
+  Parsed := NormalizeBcp47Case(Parsed);
+
+  Language := LowerCase(Parsed.Language);
+  Script := Parsed.Script;
+  Region := Parsed.Region;
+  UseUndefinedFallback := (Language = '') or (Language = 'und');
+
+  if not TryLookupLikelySubtagsCandidate(Language, Script, Region, Likely) and
+     not ((Script <> '') and TryLookupLikelySubtagsCandidate(Language, Script, '', Likely)) and
+     not ((Region <> '') and TryLookupLikelySubtagsCandidate(Language, '', Region, Likely)) and
+     not TryLookupLikelySubtagsCandidate(Language, '', '', Likely) and
+     not (UseUndefinedFallback and (Script <> '') and
+       TryLookupLikelySubtagsCandidate('und', Script, '', Likely)) and
+     not (UseUndefinedFallback and (Region <> '') and
+       TryLookupLikelySubtagsCandidate('und', '', Region, Likely)) and
+     not (UseUndefinedFallback and
+       TryLookupLikelySubtagsCandidate('und', '', '', Likely)) then
+    Exit;
+
+  LikelyParsed := ParseBcp47Tag(Likely);
+  if not LikelyParsed.IsValid then
+    Exit;
+
+  if (Language <> '') and (Language <> 'und') then
+    LikelyParsed.Language := Language;
+  if Script <> '' then
+    LikelyParsed.Script := Script;
+  if Region <> '' then
+    LikelyParsed.Region := Region;
+  LikelyParsed := NormalizeBcp47Case(LikelyParsed);
+
+  AMaximized := CanonicalizeBcp47Tag(LikelyParsed);
+  Result := AMaximized <> '';
+end;
+
+function SameLikelyLocale(const ALeft, ARight: string): Boolean;
+begin
+  Result := CompareText(CanonicalizeUnicodeLocaleId(ALeft),
+    CanonicalizeUnicodeLocaleId(ARight)) = 0;
+end;
+
+function TryCLDRMinimizeLocale(const AInput: string; out AMinimized: string): Boolean;
+var
+  Maximized, Candidate, CandidateMaximized: string;
+  MaximizedParsed: TBcp47Tag;
+
+  function CandidateMatches(const ALanguage, AScript, ARegion: string): Boolean;
+  begin
+    Candidate := LikelySubtagsCandidateKey(ALanguage, AScript, ARegion);
+    Result := TryCLDRMaximizeLocale(Candidate, CandidateMaximized) and
+      SameLikelyLocale(CandidateMaximized, Maximized);
+  end;
+
+begin
+  Result := False;
+  AMinimized := '';
+  if not TryCLDRMaximizeLocale(AInput, Maximized) then
+    Exit;
+
+  MaximizedParsed := ParseBcp47Tag(Maximized);
+  if not MaximizedParsed.IsValid then
+    Exit;
+
+  if CandidateMatches(MaximizedParsed.Language, '', '') then
+    AMinimized := LikelySubtagsCandidateKey(MaximizedParsed.Language, '', '')
+  else if (MaximizedParsed.Region <> '') and
+          CandidateMatches(MaximizedParsed.Language, '', MaximizedParsed.Region) then
+    AMinimized := LikelySubtagsCandidateKey(MaximizedParsed.Language, '',
+      MaximizedParsed.Region)
+  else if (MaximizedParsed.Script <> '') and
+          CandidateMatches(MaximizedParsed.Language, MaximizedParsed.Script, '') then
+    AMinimized := LikelySubtagsCandidateKey(MaximizedParsed.Language,
+      MaximizedParsed.Script, '')
+  else
+    AMinimized := Maximized;
+
+  AMinimized := CanonicalizeUnicodeLocaleId(AMinimized);
+  Result := AMinimized <> '';
+end;
+
 { TGocciaIntlLocaleValue }
 
 procedure TGocciaIntlLocaleValue.ParseTag(const ATag: string; const AOptions: TGocciaObjectValue);
@@ -1110,7 +1225,10 @@ var
 begin
   L := AsLocale(AThisValue, 'Intl.Locale.prototype.maximize');
   if BuildLikelySubtagsInput(L.FTag, LikelyInput, OriginalParsed) and
-     TryICUMaximizeLocale(LikelyInput, Maximized) then
+     TryCLDRMaximizeLocale(LikelyInput, Maximized) then
+    Result := TGocciaIntlLocaleValue.Create(RestoreLikelySubtagsSuffix(OriginalParsed, Maximized))
+  else if BuildLikelySubtagsInput(L.FTag, LikelyInput, OriginalParsed) and
+          TryICUMaximizeLocale(LikelyInput, Maximized) then
     Result := TGocciaIntlLocaleValue.Create(RestoreLikelySubtagsSuffix(OriginalParsed, Maximized))
   else
     Result := TGocciaIntlLocaleValue.Create(L.FTag);
@@ -1124,7 +1242,10 @@ var
 begin
   L := AsLocale(AThisValue, 'Intl.Locale.prototype.minimize');
   if BuildLikelySubtagsInput(L.FTag, LikelyInput, OriginalParsed) and
-     TryICUMinimizeLocale(LikelyInput, Minimized) then
+     TryCLDRMinimizeLocale(LikelyInput, Minimized) then
+    Result := TGocciaIntlLocaleValue.Create(RestoreLikelySubtagsSuffix(OriginalParsed, Minimized))
+  else if BuildLikelySubtagsInput(L.FTag, LikelyInput, OriginalParsed) and
+          TryICUMinimizeLocale(LikelyInput, Minimized) then
     Result := TGocciaIntlLocaleValue.Create(RestoreLikelySubtagsSuffix(OriginalParsed, Minimized))
   else
     Result := TGocciaIntlLocaleValue.Create(L.FTag);

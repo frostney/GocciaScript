@@ -7,7 +7,11 @@ interface
 uses
   SysUtils;
 
+type
+  TEmbeddedTimeZoneFileNameArray = array of string;
+
 function TryGetEmbeddedTimeZoneFile(const ATimeZone: string; out ABytes: TBytes): Boolean;
+function TryGetEmbeddedTimeZoneFileNames(out ANames: TEmbeddedTimeZoneFileNameArray): Boolean;
 function TryCanonicalizeEmbeddedTimeZoneFileName(const ATimeZone: string;
   out ACanonicalTimeZone: string): Boolean;
 
@@ -89,6 +93,52 @@ begin
   Result := TryCopyEmbeddedResourceEntryData(Resource, Container, Entry, ABytes);
 end;
 
+function TryGetEmbeddedTimeZoneFileNames(out ANames: TEmbeddedTimeZoneFileNameArray): Boolean;
+var
+  Resource: TBytes;
+  Container: TEmbeddedResourceContainer;
+  Entry: TEmbeddedResourceEntry;
+  EntryIndex, NameOffset: Integer;
+begin
+  Result := False;
+  SetLength(ANames, 0);
+
+  if not TryReadEmbeddedResource(Resource) then
+    Exit;
+
+  if not TryReadEmbeddedResourceContainer(Resource, TIME_ZONE_DATA_MAGIC,
+     Container) then
+    Exit;
+
+  SetLength(ANames, Container.EntryCount);
+  for EntryIndex := 0 to Container.EntryCount - 1 do
+  begin
+    if not TryReadEmbeddedResourceEntry(Resource, Container, EntryIndex, Entry) then
+    begin
+      SetLength(ANames, 0);
+      Exit;
+    end;
+
+    if Entry.NameOffset > High(Integer) - Container.NamesOffset then
+    begin
+      SetLength(ANames, 0);
+      Exit;
+    end;
+
+    NameOffset := Container.NamesOffset + Entry.NameOffset;
+    if not HasBytesAvailable(Resource, NameOffset, Entry.NameLength) then
+    begin
+      SetLength(ANames, 0);
+      Exit;
+    end;
+
+    ANames[EntryIndex] := CopyStringFromBytes(Resource, NameOffset,
+      Entry.NameLength);
+  end;
+
+  Result := True;
+end;
+
 function TryCanonicalizeEmbeddedTimeZoneFileName(const ATimeZone: string;
   out ACanonicalTimeZone: string): Boolean;
 var
@@ -135,6 +185,12 @@ function TryGetEmbeddedTimeZoneFile(const ATimeZone: string; out ABytes: TBytes)
 begin
   Result := False;
   SetLength(ABytes, 0);
+end;
+
+function TryGetEmbeddedTimeZoneFileNames(out ANames: TEmbeddedTimeZoneFileNameArray): Boolean;
+begin
+  Result := False;
+  SetLength(ANames, 0);
 end;
 
 function TryCanonicalizeEmbeddedTimeZoneFileName(const ATimeZone: string;

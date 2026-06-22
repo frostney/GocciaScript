@@ -63,6 +63,17 @@ describe.runIf(isIntl)("Intl.Collator constructor", () => {
     }
   });
 
+  test("ignores unsupported Unicode extension keys", () => {
+    const defaultOptions = JSON.stringify(new Intl.Collator("en-US").resolvedOptions());
+    const unsupportedKeys = ["ka", "kb", "kc", "kh", "kk", "kr", "ks", "vt"];
+
+    for (const key of unsupportedKeys) {
+      const options = new Intl.Collator(`en-US-u-${key}-invalid`).resolvedOptions();
+      expect(options.locale).toBe("en-US");
+      expect(JSON.stringify(options)).toBe(defaultOptions);
+    }
+  });
+
   test("ignores Unicode extension-like private-use subtags", () => {
     const options = new Intl.Collator("de-x-u-co-phonebk").resolvedOptions();
     expect(options.collation).toBe("default");

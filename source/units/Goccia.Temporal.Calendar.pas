@@ -69,9 +69,7 @@ uses
   Math,
   SysUtils,
 
-  ICU,
-  IntlICU,
-  IntlTypes;
+  ICU;
 
 const
   ICU_SUCCESS = 0;
@@ -85,6 +83,10 @@ const
   MILLISECONDS_PER_HALF_DAY = 43200000.0;
   COPTIC_EPOCH_DAYS = -615558;
   LUNISOLAR_CACHE_SIZE = 4096;
+  LUNISOLAR_YEAR_OFFSET_PROBE_YEAR = 1972;
+  LUNISOLAR_YEAR_OFFSET_PROBE_MONTH = 2;
+  LUNISOLAR_YEAR_OFFSET_PROBE_DAY = 15;
+  TEMPORAL_CALENDAR_CACHE_SIZE = 24;
   TEMPORAL_MIN_ISO_YEAR = -271821;
   TEMPORAL_MIN_ISO_MONTH = 4;
   TEMPORAL_MIN_ISO_DAY = 19;
@@ -168,6 +170,12 @@ type
     CalendarDate: TTemporalDateRecord;
   end;
 
+  TCachedTemporalCalendar = record
+    Valid: Boolean;
+    CalendarId: string;
+    Calendar: TICUCalendar;
+  end;
+
   TChineseYearDaysOverride = record
     Year: Integer;
     DaysInYear: Integer;
@@ -179,6 +187,8 @@ type
   end;
 
 const
+  // Host ICU versions disagree on a small set of modern Chinese lunisolar
+  // month starts/leap labels. Keep Temporal fields stable across platforms.
   CHINESE_YEAR_DAYS_OVERRIDES: array[0..79] of TChineseYearDaysOverride = (
     (Year: 1969; DaysInYear: 354),
     (Year: 1970; DaysInYear: 355),
@@ -295,12 +305,18 @@ var
   CalendarICU: TTemporalCalendarICU;
   CalendarICULoadAttempted: Boolean;
   CalendarICUAvailable: Boolean;
+  CalendarICULock: TRTLCriticalSection;
 
 threadvar
   LunisolarPartsCache: array[0..LUNISOLAR_CACHE_SIZE - 1] of TLunisolarPartsCacheEntry;
   LunisolarMonthsInYearCache: array[0..LUNISOLAR_CACHE_SIZE - 1] of TLunisolarMonthsInYearCacheEntry;
   LunisolarDateToISOCache: array[0..LUNISOLAR_CACHE_SIZE - 1] of TLunisolarDateToISOCacheEntry;
   LunisolarISOToCalendarCache: array[0..LUNISOLAR_CACHE_SIZE - 1] of TLunisolarISOToCalendarCacheEntry;
+  TemporalCalendarCache: array[0..TEMPORAL_CALENDAR_CACHE_SIZE - 1] of TCachedTemporalCalendar;
+  ChineseLunisolarYearOffsetValid: Boolean;
+  ChineseLunisolarYearOffset: Integer;
+  DangiLunisolarYearOffsetValid: Boolean;
+  DangiLunisolarYearOffset: Integer;
 
 function ICUSucceeded(const AStatus: TICUErrorCode): Boolean; inline;
 begin
@@ -351,14 +367,19 @@ end;
 
 function TryGetCalendarICU(out AICU: TTemporalCalendarICU): Boolean;
 begin
-  if not CalendarICULoadAttempted then
-  begin
-    CalendarICULoadAttempted := True;
-    CalendarICUAvailable := TryLoadCalendarICU(CalendarICU);
-  end;
+  EnterCriticalSection(CalendarICULock);
+  try
+    if not CalendarICULoadAttempted then
+    begin
+      CalendarICULoadAttempted := True;
+      CalendarICUAvailable := TryLoadCalendarICU(CalendarICU);
+    end;
 
-  AICU := CalendarICU;
-  Result := CalendarICUAvailable;
+    AICU := CalendarICU;
+    Result := CalendarICUAvailable;
+  finally
+    LeaveCriticalSection(CalendarICULock);
+  end;
 end;
 
 function CalendarLocale(const ACalendarId: string): AnsiString;
@@ -963,10 +984,10 @@ begin
   Result := LunisolarCacheIndex(ACalendarCode, AYear, AMonth, ADay + LeapCode);
 end;
 
-function CalendarBCP47Locale(const ACalendarId: string): string;
-begin
-  Result := 'en-US-u-ca-' + ACalendarId;
-end;
+function TryOpenCalendar(const AICU: TTemporalCalendarICU; const ACalendarId: string;
+  out ACalendar: TICUCalendar): Boolean; forward;
+function TryAcquireCalendar(const AICU: TTemporalCalendarICU; const ACalendarId: string;
+  out ACalendar: TICUCalendar; out AShouldClose: Boolean): Boolean; forward;
 
 function TryChineseDaysInYearOverride(const AYear: Integer;
   out ADaysInYear: Integer): Boolean;
@@ -1030,43 +1051,84 @@ begin
   Result := (AMonthCodeMonth >= 1) and (AMonthCodeMonth <= 12);
 end;
 
-function TryParseLunisolarMonthPart(const AValue: string; out AMonth: Integer;
-  out AIsLeapMonth: Boolean): Boolean;
+function TryGetLunisolarYearOffset(const ACalendarId: string;
+  out AOffset: Integer): Boolean;
 var
-  I: Integer;
-  Digits, Suffix: string;
+  ICUFunctions: TTemporalCalendarICU;
+  Calendar: TICUCalendar;
+  Status: TICUErrorCode;
+  Millis: TICUDate;
+  ShouldClose: Boolean;
+  YearValue, CacheCode: Integer;
 begin
   Result := False;
-  AMonth := 0;
-  AIsLeapMonth := False;
-  Digits := '';
-  I := 1;
-  while (I <= Length(AValue)) and (AValue[I] in ['0'..'9']) do
+  AOffset := 0;
+  CacheCode := LunisolarCalendarCode(ACalendarId);
+  if CacheCode = 1 then
   begin
-    Digits := Digits + AValue[I];
-    Inc(I);
-  end;
-  if (Digits = '') or not TryStrToInt(Digits, AMonth) then
-    Exit;
-  Suffix := LowerCase(Copy(AValue, I, Length(AValue) - I + 1));
-  if Suffix = '' then
-    AIsLeapMonth := False
-  else if Suffix = 'bis' then
-    AIsLeapMonth := True
+    if ChineseLunisolarYearOffsetValid then
+    begin
+      AOffset := ChineseLunisolarYearOffset;
+      Exit(True);
+    end;
+  end
+  else if CacheCode = 2 then
+  begin
+    if DangiLunisolarYearOffsetValid then
+    begin
+      AOffset := DangiLunisolarYearOffset;
+      Exit(True);
+    end;
+  end
   else
-    Exit;
-  Result := (AMonth >= 1) and (AMonth <= 12);
+    Exit(False);
+
+  if not TryGetCalendarICU(ICUFunctions) or
+     not TryAcquireCalendar(ICUFunctions, ACalendarId, Calendar,
+       ShouldClose) then
+    Exit(False);
+
+  try
+    Millis := DateToEpochDays(LUNISOLAR_YEAR_OFFSET_PROBE_YEAR,
+      LUNISOLAR_YEAR_OFFSET_PROBE_MONTH, LUNISOLAR_YEAR_OFFSET_PROBE_DAY) *
+      MS_PER_DAY + MILLISECONDS_PER_HALF_DAY;
+    Status := ICU_SUCCESS;
+    ICUFunctions.SetMillis(Calendar, Millis, Status);
+    if not ICUSucceeded(Status) then
+      Exit(False);
+
+    YearValue := ICUFunctions.GetField(Calendar, ICU_FIELD_EXTENDED_YEAR,
+      Status);
+    if not ICUSucceeded(Status) then
+      Exit(False);
+
+    AOffset := YearValue - LUNISOLAR_YEAR_OFFSET_PROBE_YEAR;
+    if CacheCode = 1 then
+    begin
+      ChineseLunisolarYearOffset := AOffset;
+      ChineseLunisolarYearOffsetValid := True;
+    end
+    else
+    begin
+      DangiLunisolarYearOffset := AOffset;
+      DangiLunisolarYearOffsetValid := True;
+    end;
+    Result := True;
+  finally
+    if ShouldClose then
+      ICUFunctions.CloseCalendar(Calendar);
+  end;
 end;
 
-function TryFormatLunisolarDateParts(const ACalendarId: string; const AISOYear,
+function TryGetLunisolarDateParts(const ACalendarId: string; const AISOYear,
   AISOMonth, AISODay: Integer; out AParts: TLunisolarDateParts): Boolean;
 var
-  Options: TIntlDateTimeFormatOptions;
-  FormatParts: TIntlFormatPartArray;
-  I, CacheCode, CacheIndex: Integer;
-  Millis: Double;
-  HasYear, HasMonth, HasDay: Boolean;
-  PartValue: string;
+  ICUFunctions: TTemporalCalendarICU;
+  Calendar: TICUCalendar;
+  Status: TICUErrorCode;
+  Millis: TICUDate;
+  YearOffset, CacheCode, CacheIndex: Integer;
+  ShouldClose: Boolean;
 begin
   FillChar(AParts, SizeOf(AParts), 0);
   Result := False;
@@ -1087,46 +1149,37 @@ begin
     Exit(True);
   end;
 
-  Options := DefaultDateTimeFormatOptions;
-  Options.Year := 'numeric';
-  Options.Month := 'numeric';
-  Options.Day := 'numeric';
-  Options.TimeZone := 'UTC';
-  Millis := DateToEpochDays(AISOYear, AISOMonth, AISODay) * MS_PER_DAY +
-    MILLISECONDS_PER_HALF_DAY;
-  if not TryICUFormatDateTimeToParts(CalendarBCP47Locale(ACalendarId),
-    Millis, Options, FormatParts) then
+  if not TryGetLunisolarYearOffset(ACalendarId, YearOffset) or
+     not TryGetCalendarICU(ICUFunctions) or
+     not TryAcquireCalendar(ICUFunctions, ACalendarId, Calendar,
+       ShouldClose) then
     Exit;
 
-  HasYear := False;
-  HasMonth := False;
-  HasDay := False;
-  for I := 0 to High(FormatParts) do
-  begin
-    PartValue := FormatParts[I].Value;
-    if (FormatParts[I].PartType = 'year') or
-       (FormatParts[I].PartType = 'relatedYear') then
-    begin
-      if not TryStrToInt(PartValue, AParts.Year) then
-        Exit;
-      HasYear := True;
-    end
-    else if FormatParts[I].PartType = 'month' then
-    begin
-      if not TryParseLunisolarMonthPart(PartValue, AParts.MonthCodeMonth,
-        AParts.IsLeapMonth) then
-        Exit;
-      HasMonth := True;
-    end
-    else if FormatParts[I].PartType = 'day' then
-    begin
-      if not TryStrToInt(PartValue, AParts.Day) then
-        Exit;
-      HasDay := True;
-    end;
+  try
+    Millis := DateToEpochDays(AISOYear, AISOMonth, AISODay) * MS_PER_DAY +
+      MILLISECONDS_PER_HALF_DAY;
+    Status := ICU_SUCCESS;
+    ICUFunctions.SetMillis(Calendar, Millis, Status);
+    if not ICUSucceeded(Status) then
+      Exit;
+
+    AParts.Year := ICUFunctions.GetField(Calendar, ICU_FIELD_EXTENDED_YEAR,
+      Status) - YearOffset;
+    AParts.MonthCodeMonth := ICUFunctions.GetField(Calendar,
+      ICU_FIELD_MONTH, Status) + 1;
+    AParts.Day := ICUFunctions.GetField(Calendar, ICU_FIELD_DATE, Status);
+    AParts.IsLeapMonth := ICUFunctions.GetField(Calendar,
+      ICU_FIELD_IS_LEAP_MONTH, Status) <> 0;
+    if not ICUSucceeded(Status) then
+      Exit;
+  finally
+    if ShouldClose then
+      ICUFunctions.CloseCalendar(Calendar);
   end;
 
-  Result := HasYear and HasMonth and HasDay;
+  Result := (AParts.MonthCodeMonth >= 1) and
+    (AParts.MonthCodeMonth <= 12) and (AParts.Day >= 1) and
+    (AParts.Day <= 30);
   if Result then
   begin
     LunisolarPartsCache[CacheIndex].Valid := True;
@@ -1152,7 +1205,7 @@ begin
   Result := False;
 
   ISODate := EpochDaysToDate(ATargetDays);
-  if not TryFormatLunisolarDateParts(ACalendarId, ISODate.Year,
+  if not TryGetLunisolarDateParts(ACalendarId, ISODate.Year,
     ISODate.Month, ISODate.Day, CurrentParts) then
     Exit;
 
@@ -1160,7 +1213,7 @@ begin
   while True do
   begin
     ISODate := EpochDaysToDate(CurrentDays);
-    if not TryFormatLunisolarDateParts(ACalendarId, ISODate.Year,
+    if not TryGetLunisolarDateParts(ACalendarId, ISODate.Year,
       ISODate.Month, ISODate.Day, CurrentParts) then
       Exit;
     if (CurrentParts.Year <> ACalendarYear) or (CurrentParts.Day <> 1) then
@@ -1172,7 +1225,7 @@ begin
     begin
       CandidateDays := CurrentDays - Delta;
       ISODate := EpochDaysToDate(CandidateDays);
-      if not TryFormatLunisolarDateParts(ACalendarId, ISODate.Year,
+      if not TryGetLunisolarDateParts(ACalendarId, ISODate.Year,
         ISODate.Month, ISODate.Day, CandidateParts) then
         Exit;
       if CandidateParts.Day = 1 then
@@ -1860,7 +1913,7 @@ begin
   for Days := StartDays to EndDays do
   begin
     DateRec := EpochDaysToDate(Days);
-    if not TryFormatLunisolarDateParts(ACalendarId, DateRec.Year,
+    if not TryGetLunisolarDateParts(ACalendarId, DateRec.Year,
       DateRec.Month, DateRec.Day, Parts) then
       Exit;
     if (Parts.Year = AYear) and (Parts.MonthCodeMonth = 1) and
@@ -1877,7 +1930,7 @@ function IsLunisolarYearStart(const ACalendarId: string; const AYear: Integer;
 var
   Parts: TLunisolarDateParts;
 begin
-  Result := TryFormatLunisolarDateParts(ACalendarId, AISODate.Year,
+  Result := TryGetLunisolarDateParts(ACalendarId, AISODate.Year,
     AISODate.Month, AISODate.Day, Parts) and
     (Parts.Year = AYear) and (Parts.MonthCodeMonth = 1) and
     (Parts.Day = 1);
@@ -1930,7 +1983,7 @@ begin
   for Index := 1 to 14 do
   begin
     AISODate := EpochDaysToDate(CurrentDays);
-    if not TryFormatLunisolarDateParts(ACalendarId, AISODate.Year,
+    if not TryGetLunisolarDateParts(ACalendarId, AISODate.Year,
       AISODate.Month, AISODate.Day, CurrentParts) then
       Exit;
     if (CurrentParts.Year <> AYear) or (CurrentParts.Day <> 1) then
@@ -1957,7 +2010,7 @@ begin
     begin
       TargetDays := CurrentDays + ADay - 1;
       AISODate := EpochDaysToDate(TargetDays);
-      if not TryFormatLunisolarDateParts(ACalendarId, AISODate.Year,
+      if not TryGetLunisolarDateParts(ACalendarId, AISODate.Year,
         AISODate.Month, AISODate.Day, TargetParts) then
         Exit;
       if (TargetParts.Year = AYear) and (TargetParts.Day = ADay) and
@@ -1985,7 +2038,7 @@ begin
     begin
       CandidateDays := CurrentDays + Delta;
       AISODate := EpochDaysToDate(CandidateDays);
-      if not TryFormatLunisolarDateParts(ACalendarId, AISODate.Year,
+      if not TryGetLunisolarDateParts(ACalendarId, AISODate.Year,
         AISODate.Month, AISODate.Day, CandidateParts) then
         Exit;
       if CandidateParts.Day = 1 then
@@ -2031,7 +2084,7 @@ begin
   end;
 
   TargetDays := DateToEpochDays(AISOYear, AISOMonth, AISODay);
-  if not TryFormatLunisolarDateParts(ACalendarId, AISOYear, AISOMonth,
+  if not TryGetLunisolarDateParts(ACalendarId, AISOYear, AISOMonth,
     AISODay, Parts) then
     Exit;
   if not TryLunisolarMonthIndexAt(ACalendarId, TargetDays, Parts.Year,
@@ -2344,6 +2397,44 @@ begin
   end;
 end;
 
+function TryAcquireCalendar(const AICU: TTemporalCalendarICU; const ACalendarId: string;
+  out ACalendar: TICUCalendar; out AShouldClose: Boolean): Boolean;
+var
+  Index, EmptyIndex: Integer;
+begin
+  ACalendar := nil;
+  AShouldClose := False;
+  EmptyIndex := -1;
+
+  for Index := Low(TemporalCalendarCache) to High(TemporalCalendarCache) do
+  begin
+    if TemporalCalendarCache[Index].Valid then
+    begin
+      if TemporalCalendarCache[Index].CalendarId = ACalendarId then
+      begin
+        ACalendar := TemporalCalendarCache[Index].Calendar;
+        Exit(Assigned(ACalendar));
+      end;
+    end
+    else if EmptyIndex < 0 then
+      EmptyIndex := Index;
+  end;
+
+  Result := TryOpenCalendar(AICU, ACalendarId, ACalendar);
+  if not Result then
+    Exit;
+
+  if EmptyIndex >= 0 then
+  begin
+    TemporalCalendarCache[EmptyIndex].Valid := True;
+    TemporalCalendarCache[EmptyIndex].CalendarId := ACalendarId;
+    TemporalCalendarCache[EmptyIndex].Calendar := ACalendar;
+    AShouldClose := False;
+  end
+  else
+    AShouldClose := True;
+end;
+
 function TryRawICUCalendarDateToISO(const ACalendarId: string; const AYear,
   AMonth, ADay: Integer; const AIsLeapMonth, AUseLeapMonthFlag: Boolean;
   out AISODate: TTemporalDateRecord): Boolean;
@@ -2354,6 +2445,7 @@ var
   Millis: TICUDate;
   Days: Int64;
   CheckYear, CheckMonth, CheckDay, CheckLeapMonth: Integer;
+  ShouldClose: Boolean;
 begin
   Result := False;
   AISODate.Year := 0;
@@ -2361,7 +2453,8 @@ begin
   AISODate.Day := 0;
 
   if (AMonth < 1) or (ADay < 1) or not TryGetCalendarICU(ICUFunctions) or
-     not TryOpenCalendar(ICUFunctions, ACalendarId, Calendar) then
+     not TryAcquireCalendar(ICUFunctions, ACalendarId, Calendar,
+       ShouldClose) then
     Exit;
 
   try
@@ -2390,7 +2483,8 @@ begin
     AISODate := EpochDaysToDate(Days);
     Result := IsValidDate(AISODate.Year, AISODate.Month, AISODate.Day);
   finally
-    ICUFunctions.CloseCalendar(Calendar);
+    if ShouldClose then
+      ICUFunctions.CloseCalendar(Calendar);
   end;
 end;
 
@@ -2403,6 +2497,7 @@ var
   Millis: TICUDate;
   Days: Int64;
   CalendarMonth, CheckYear, CheckMonth, CheckDay: Integer;
+  ShouldClose: Boolean;
 begin
   Result := False;
   AISODate.Year := 0;
@@ -2485,7 +2580,8 @@ begin
   end;
 
   if (AMonth < 1) or (ADay < 1) or not TryGetCalendarICU(ICUFunctions) or
-     not TryOpenCalendar(ICUFunctions, ACalendarId, Calendar) then
+     not TryAcquireCalendar(ICUFunctions, ACalendarId, Calendar,
+       ShouldClose) then
     Exit;
 
   try
@@ -2510,7 +2606,8 @@ begin
     AISODate := EpochDaysToDate(Days);
     Result := IsValidDate(AISODate.Year, AISODate.Month, AISODate.Day);
   finally
-    ICUFunctions.CloseCalendar(Calendar);
+    if ShouldClose then
+      ICUFunctions.CloseCalendar(Calendar);
   end;
 end;
 
@@ -2856,7 +2953,7 @@ begin
     for Month := 1 to 14 do
     begin
       DateRec := EpochDaysToDate(CurrentDays);
-      if not TryFormatLunisolarDateParts(ACalendarId, DateRec.Year,
+      if not TryGetLunisolarDateParts(ACalendarId, DateRec.Year,
         DateRec.Month, DateRec.Day, Parts) then
         Exit(False);
       if (Parts.Year <> AYear) or (Parts.Day <> 1) then
@@ -2868,7 +2965,7 @@ begin
       begin
         CandidateDays := CurrentDays + Delta;
         DateRec := EpochDaysToDate(CandidateDays);
-        if not TryFormatLunisolarDateParts(ACalendarId, DateRec.Year,
+        if not TryGetLunisolarDateParts(ACalendarId, DateRec.Year,
           DateRec.Month, DateRec.Day, CandidateParts) then
           Exit(False);
         if CandidateParts.Day = 1 then
@@ -3017,6 +3114,7 @@ var
   Calendar: TICUCalendar;
   Status: TICUErrorCode;
   Millis: TICUDate;
+  ShouldClose: Boolean;
 begin
   Result := False;
   ACalendarDate.Year := 0;
@@ -3085,7 +3183,8 @@ begin
   if IsUnsupportedTemporalCalendarConversion(ACalendarId) or
      not IsValidDate(AISOYear, AISOMonth, AISODay) or
      not TryGetCalendarICU(ICUFunctions) or
-     not TryOpenCalendar(ICUFunctions, ACalendarId, Calendar) then
+     not TryAcquireCalendar(ICUFunctions, ACalendarId, Calendar,
+       ShouldClose) then
     Exit;
 
   try
@@ -3104,7 +3203,8 @@ begin
       Dec(ACalendarDate.Month);
     Result := ICUSucceeded(Status);
   finally
-    ICUFunctions.CloseCalendar(Calendar);
+    if ShouldClose then
+      ICUFunctions.CloseCalendar(Calendar);
   end;
 end;
 
@@ -3116,6 +3216,7 @@ var
   Status: TICUErrorCode;
   Millis: TICUDate;
   Parts: TLunisolarDateParts;
+  ShouldClose: Boolean;
 begin
   AIsLeapMonth := False;
   if ACalendarId = 'iso8601' then
@@ -3126,7 +3227,7 @@ begin
 
   if IsLunisolarCalendar(ACalendarId) then
   begin
-    Result := TryFormatLunisolarDateParts(ACalendarId, AISOYear, AISOMonth,
+    Result := TryGetLunisolarDateParts(ACalendarId, AISOYear, AISOMonth,
       AISODay, Parts);
     if Result then
       AIsLeapMonth := Parts.IsLeapMonth;
@@ -3136,7 +3237,8 @@ begin
   Result := False;
   if not IsValidDate(AISOYear, AISOMonth, AISODay) or
      not TryGetCalendarICU(ICUFunctions) or
-     not TryOpenCalendar(ICUFunctions, ACalendarId, Calendar) then
+     not TryAcquireCalendar(ICUFunctions, ACalendarId, Calendar,
+       ShouldClose) then
     Exit;
 
   try
@@ -3149,7 +3251,8 @@ begin
     AIsLeapMonth := ICUFunctions.GetField(Calendar, ICU_FIELD_IS_LEAP_MONTH, Status) <> 0;
     Result := ICUSucceeded(Status);
   finally
-    ICUFunctions.CloseCalendar(Calendar);
+    if ShouldClose then
+      ICUFunctions.CloseCalendar(Calendar);
   end;
 end;
 
@@ -3162,7 +3265,7 @@ begin
   ADay := 0;
   if IsLunisolarCalendar(ACalendarId) then
   begin
-    Result := TryFormatLunisolarDateParts(ACalendarId, AISOYear, AISOMonth,
+    Result := TryGetLunisolarDateParts(ACalendarId, AISOYear, AISOMonth,
       AISODay, Parts);
     if Result then
       ADay := Parts.Day;
@@ -3186,7 +3289,7 @@ begin
   ADaysInMonth := 0;
   if IsLunisolarCalendar(ACalendarId) then
   begin
-    if not TryFormatLunisolarDateParts(ACalendarId, AISOYear, AISOMonth,
+    if not TryGetLunisolarDateParts(ACalendarId, AISOYear, AISOMonth,
       AISODay, Parts) then
       Exit(False);
     CurrentDays := DateToEpochDays(AISOYear, AISOMonth, AISODay) -
@@ -3195,7 +3298,7 @@ begin
     begin
       CandidateDays := CurrentDays + Delta;
       CandidateDate := EpochDaysToDate(CandidateDays);
-      if not TryFormatLunisolarDateParts(ACalendarId, CandidateDate.Year,
+      if not TryGetLunisolarDateParts(ACalendarId, CandidateDate.Year,
         CandidateDate.Month, CandidateDate.Day, CandidateParts) then
         Exit(False);
       if CandidateParts.Day = 1 then
@@ -3228,7 +3331,7 @@ begin
     Exit;
 
   if IsLunisolarCalendar(ACalendarId) and
-     TryFormatLunisolarDateParts(ACalendarId, AISOYear, AISOMonth, AISODay,
+     TryGetLunisolarDateParts(ACalendarId, AISOYear, AISOMonth, AISODay,
        LunisolarParts) then
   begin
     AInfo.MonthCode := FormatTemporalMonthCode(LunisolarParts.MonthCodeMonth,
@@ -3282,8 +3385,31 @@ begin
   end;
 end;
 
+procedure CloseCachedTemporalCalendars;
+var
+  Index: Integer;
+begin
+  if not CalendarICUAvailable then
+    Exit;
+
+  for Index := Low(TemporalCalendarCache) to High(TemporalCalendarCache) do
+  begin
+    if TemporalCalendarCache[Index].Valid and
+       Assigned(TemporalCalendarCache[Index].Calendar) then
+      CalendarICU.CloseCalendar(TemporalCalendarCache[Index].Calendar);
+    TemporalCalendarCache[Index].Valid := False;
+    TemporalCalendarCache[Index].Calendar := nil;
+    TemporalCalendarCache[Index].CalendarId := '';
+  end;
+end;
+
 initialization
+  InitCriticalSection(CalendarICULock);
   CalendarICULoadAttempted := False;
   CalendarICUAvailable := False;
+
+finalization
+  CloseCachedTemporalCalendars;
+  DoneCriticalSection(CalendarICULock);
 
 end.

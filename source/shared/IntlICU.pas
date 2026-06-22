@@ -2639,12 +2639,26 @@ begin
     ASkeleton := ASkeleton + ANumericField;
 end;
 
+function DateTimeHourSkeletonField(const AHourCycle: string): string;
+begin
+  if AHourCycle = 'h11' then
+    Result := 'K'
+  else if AHourCycle = 'h12' then
+    Result := 'h'
+  else if AHourCycle = 'h23' then
+    Result := 'H'
+  else if AHourCycle = 'h24' then
+    Result := 'k'
+  else
+    Result := 'j';
+end;
+
 function BuildDateTimeSkeleton(const AOptions: TIntlDateTimeFormatOptions): string;
 var
   HourField: string;
 begin
   Result := '';
-
+  HourField := DateTimeHourSkeletonField(AOptions.HourCycle);
   if (AOptions.DateStyle <> idtsNone) or (AOptions.TimeStyle <> idtsNone) then
   begin
     case AOptions.DateStyle of
@@ -2654,10 +2668,10 @@ begin
       idtsShort: Result := Result + 'yMd';
     end;
     case AOptions.TimeStyle of
-      idtsFull,
-      idtsLong: Result := Result + 'jmszzzz';
-      idtsMedium: Result := Result + 'jms';
-      idtsShort: Result := Result + 'jm';
+      idtsFull: Result := Result + HourField + 'mszzzz';
+      idtsLong: Result := Result + HourField + 'msz';
+      idtsMedium: Result := Result + HourField + 'ms';
+      idtsShort: Result := Result + HourField + 'm';
     end;
     Exit;
   end;
@@ -2668,16 +2682,6 @@ begin
   AppendDateSkeletonField(Result, AOptions.Month, 'M', 'MM', 'MMM', 'MMMM', 'MMMMM');
   AppendDateSkeletonField(Result, AOptions.Day, 'd', 'dd', 'd', 'd', 'd');
 
-  if AOptions.HourCycle = 'h11' then
-    HourField := 'K'
-  else if AOptions.HourCycle = 'h12' then
-    HourField := 'h'
-  else if AOptions.HourCycle = 'h23' then
-    HourField := 'H'
-  else if AOptions.HourCycle = 'h24' then
-    HourField := 'k'
-  else
-    HourField := 'j';
   if AOptions.Hour = '2-digit' then
     Result := Result + HourField + HourField
   else if AOptions.Hour <> '' then
@@ -2950,7 +2954,15 @@ begin
     TzLen := -1;
   end;
 
-  if (AOptions.DateStyle <> idtsNone) or (AOptions.TimeStyle <> idtsNone) then
+  if (AOptions.TimeStyle <> idtsNone) and
+     ((AOptions.HourCycle = 'h23') or (AOptions.HourCycle = 'h24')) and
+     TryICUGetBestDateTimePattern(EffectiveLocale,
+       BuildDateTimeSkeleton(AOptions), Pattern) then
+  begin
+    ICUDateStyle := UDAT_PATTERN;
+    ICUTimeStyle := UDAT_PATTERN;
+  end
+  else if (AOptions.DateStyle <> idtsNone) or (AOptions.TimeStyle <> idtsNone) then
   begin
     ICUDateStyle := DateTimeStyleToICU(AOptions.DateStyle);
     ICUTimeStyle := DateTimeStyleToICU(AOptions.TimeStyle);

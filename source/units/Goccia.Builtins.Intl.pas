@@ -78,6 +78,7 @@ uses
   Goccia.Intl.CLDRData,
   Goccia.Intl.Helpers,
   Goccia.Realm,
+  Goccia.Temporal.TimeZone,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
@@ -321,18 +322,8 @@ begin
 end;
 
 function ResolveRequestedLocale(const ARequestedLocales: IntlTypes.TStringArray): string;
-var
-  Supported: TStringArray;
 begin
-  Result := '';
-  if Length(ARequestedLocales) = 0 then
-    Exit;
-
-  Supported := SupportedLocalesOf(ARequestedLocales);
-  if Length(Supported) > 0 then
-    Result := Supported[0]
-  else
-    Result := ARequestedLocales[0];
+  Result := ResolveLocaleFromRequested(ARequestedLocales);
 end;
 
 // ECMA-402 ES2026 §9.2.11 GetOption for localeMatcher.
@@ -387,7 +378,10 @@ function TGocciaIntlBuiltin.SupportedValuesOf(const AArgs: TGocciaArgumentsColle
   const AThisValue: TGocciaValue): TGocciaValue;
 var
   Key: string;
+  Collations: TStringArray;
+  TimeZones: TTemporalTimeZoneIdentifierArray;
   ResultArr: TGocciaArrayValue;
+  I: Integer;
 
   procedure AddString(const AValue: string);
   begin
@@ -408,6 +402,40 @@ var
           ResultArr.Elements[I] := ResultArr.Elements[J];
           ResultArr.Elements[J] := Temp;
         end;
+  end;
+
+  function NormalizeSupportedCollation(const AValue: string): string;
+  begin
+    if AValue = 'phonebook' then
+      Result := 'phonebk'
+    else if AValue = 'traditional' then
+      Result := 'trad'
+    else if AValue = 'dictionary' then
+      Result := 'dict'
+    else
+      Result := AValue;
+  end;
+
+  function CollationSupportedByICU(const AValue: string): Boolean;
+  const
+    ProbeLocales: array[0..9] of string = (
+      'en', 'ar', 'de', 'es', 'hi', 'ko', 'ln', 'si', 'sv', 'zh'
+    );
+  var
+    Locale, Collation: string;
+    LocaleCollations: TStringArray;
+  begin
+    Result := False;
+    for Locale in ProbeLocales do
+    begin
+      if not TryICUGetLocaleCollations(Locale, LocaleCollations) then
+        Continue;
+      for Collation in LocaleCollations do
+      begin
+        if SameText(NormalizeSupportedCollation(Collation), AValue) then
+          Exit(True);
+      end;
+    end;
   end;
 
 begin
@@ -436,21 +464,10 @@ begin
   end
   else if Key = 'collation' then
   begin
-    if IntlICUAvailable then
-    begin
-      AddString('compat');
-      AddString('dict');
-      AddString('emoji');
-      AddString('eor');
-      AddString('phonebk');
-      AddString('phonetic');
-      AddString('pinyin');
-      AddString('searchjl');
-      AddString('stroke');
-      AddString('trad');
-      AddString('unihan');
-      AddString('zhuyin');
-    end;
+    if IntlICUAvailable and TryGetLocaleCollations(Collations) then
+      for I := 0 to High(Collations) do
+        if CollationSupportedByICU(Collations[I]) then
+          AddString(Collations[I]);
   end
   else if Key = 'currency' then
   begin
@@ -845,102 +862,9 @@ begin
   end
   else if Key = 'timeZone' then
   begin
-    AddString('Africa/Abidjan');
-    AddString('Africa/Cairo');
-    AddString('Africa/Casablanca');
-    AddString('Africa/Johannesburg');
-    AddString('Africa/Lagos');
-    AddString('Africa/Nairobi');
-    AddString('America/Anchorage');
-    AddString('America/Argentina/Buenos_Aires');
-    AddString('America/Bogota');
-    AddString('America/Chicago');
-    AddString('America/Denver');
-    AddString('America/Halifax');
-    AddString('America/Los_Angeles');
-    AddString('America/Mexico_City');
-    AddString('America/New_York');
-    AddString('America/Phoenix');
-    AddString('America/Santiago');
-    AddString('America/Sao_Paulo');
-    AddString('America/St_Johns');
-    AddString('America/Toronto');
-    AddString('America/Vancouver');
-    AddString('Asia/Baghdad');
-    AddString('Asia/Bangkok');
-    AddString('Asia/Calcutta');
-    AddString('Asia/Dhaka');
-    AddString('Asia/Dubai');
-    AddString('Asia/Hong_Kong');
-    AddString('Asia/Istanbul');
-    AddString('Asia/Jakarta');
-    AddString('Asia/Jerusalem');
-    AddString('Asia/Karachi');
-    AddString('Asia/Kathmandu');
-    AddString('Asia/Riyadh');
-    AddString('Asia/Seoul');
-    AddString('Asia/Shanghai');
-    AddString('Asia/Singapore');
-    AddString('Asia/Taipei');
-    AddString('Asia/Tehran');
-    AddString('Asia/Tokyo');
-    AddString('Atlantic/Reykjavik');
-    AddString('Australia/Melbourne');
-    AddString('Australia/Perth');
-    AddString('Australia/Sydney');
-    AddString('Europe/Amsterdam');
-    AddString('Europe/Athens');
-    AddString('Europe/Belgrade');
-    AddString('Europe/Berlin');
-    AddString('Europe/Brussels');
-    AddString('Europe/Bucharest');
-    AddString('Europe/Budapest');
-    AddString('Europe/Copenhagen');
-    AddString('Europe/Dublin');
-    AddString('Europe/Helsinki');
-    AddString('Europe/Kyiv');
-    AddString('Europe/Lisbon');
-    AddString('Europe/London');
-    AddString('Europe/Madrid');
-    AddString('Europe/Moscow');
-    AddString('Europe/Oslo');
-    AddString('Europe/Paris');
-    AddString('Europe/Prague');
-    AddString('Europe/Rome');
-    AddString('Europe/Stockholm');
-    AddString('Europe/Vienna');
-    AddString('Europe/Warsaw');
-    AddString('Europe/Zurich');
-    AddString('Etc/GMT+1');
-    AddString('Etc/GMT+2');
-    AddString('Etc/GMT+3');
-    AddString('Etc/GMT+4');
-    AddString('Etc/GMT+5');
-    AddString('Etc/GMT+6');
-    AddString('Etc/GMT+7');
-    AddString('Etc/GMT+8');
-    AddString('Etc/GMT+9');
-    AddString('Etc/GMT+10');
-    AddString('Etc/GMT+11');
-    AddString('Etc/GMT+12');
-    AddString('Etc/GMT-1');
-    AddString('Etc/GMT-2');
-    AddString('Etc/GMT-3');
-    AddString('Etc/GMT-4');
-    AddString('Etc/GMT-5');
-    AddString('Etc/GMT-6');
-    AddString('Etc/GMT-7');
-    AddString('Etc/GMT-8');
-    AddString('Etc/GMT-9');
-    AddString('Etc/GMT-10');
-    AddString('Etc/GMT-11');
-    AddString('Etc/GMT-12');
-    AddString('Etc/GMT-13');
-    AddString('Etc/GMT-14');
-    AddString('Pacific/Auckland');
-    AddString('Pacific/Fiji');
-    AddString('Pacific/Honolulu');
-    AddString('UTC');
+    TimeZones := GetAvailablePrimaryTimeZoneIdentifiers;
+    for I := 0 to Length(TimeZones) - 1 do
+      AddString(TimeZones[I]);
   end
   else if Key = 'unit' then
   begin
@@ -1081,6 +1005,7 @@ function CollatorLocaleArgumentToLocale(const AArg: TGocciaValue): string;
 var
   Element: TGocciaValue;
   Tag, Canonical, FirstUnicodeExtensionValue: string;
+  RequestedLocales: TStringArray;
   FirstUnicodeExtension, SecondUnicodeExtension: Integer;
   LowerTag, Tail: string;
 begin
@@ -1132,7 +1057,9 @@ begin
     if Canonical = '' then
       ThrowRangeError(Format('invalid language tag: %s', [Tag]));
   end;
-  Result := Tag;
+  SetLength(RequestedLocales, 1);
+  RequestedLocales[0] := Canonical;
+  Result := ResolveRequestedLocale(RequestedLocales);
 end;
 
 function TGocciaIntlBuiltin.CollatorConstructorFn(const AArgs: TGocciaArgumentsCollection;
@@ -1231,9 +1158,6 @@ var
 begin
   RequestedLocales := CanonicalizeLocaleListFromValue(AArgs.GetElement(0));
   Locale := ResolveRequestedLocale(RequestedLocales);
-  if (Length(RequestedLocales) > 0) and
-     (Pos('-u-', LowerCase(RequestedLocales[0])) > 0) then
-    Locale := RequestedLocales[0];
   Options := nil;
   if AArgs.Length >= 2 then
   begin

@@ -1358,6 +1358,7 @@ var
   K, Len: Integer;
   ObjectRoot: TGocciaTempRoot;
   FoundLocale: Boolean;
+  RequestedLocales: TStringArray;
 
   function CanonicalizeNumberFormatLocaleTag(const ARawTag: string): string;
   begin
@@ -1410,7 +1411,9 @@ begin
   if Tag = '' then
     Exit;
 
-  Result := CanonicalizeNumberFormatLocaleTag(Tag);
+  SetLength(RequestedLocales, 1);
+  RequestedLocales[0] := CanonicalizeNumberFormatLocaleTag(Tag);
+  Result := ResolveLocaleFromRequested(RequestedLocales);
 end;
 
 function NumberFormatOptionsArgumentToObject(

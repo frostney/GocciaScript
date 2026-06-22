@@ -10,6 +10,7 @@ uses
 function CanonicalizeUnicodeLocaleId(const ATag: string): string;
 function CanonicalizeLocaleList(const ATags: IntlTypes.TStringArray): IntlTypes.TStringArray;
 function SupportedLocalesOf(const ARequestedLocales: IntlTypes.TStringArray): IntlTypes.TStringArray;
+function ResolveLocaleFromRequested(const ARequestedLocales: IntlTypes.TStringArray): string;
 function BestAvailableLocale(const AAvailableLocales: IntlTypes.TStringArray;
   const ALocale: string): string;
 function LookupMatcher(const AAvailableLocales, ARequestedLocales: IntlTypes.TStringArray): TIntlResolvedLocale;
@@ -438,6 +439,30 @@ begin
   SetLength(Result, Count);
 end;
 
+// ECMA-402 ES2026 §9.2.7 ResolveLocale: an unmatched request falls back to DefaultLocale().
+function ResolveLocaleFromRequested(const ARequestedLocales: IntlTypes.TStringArray): string;
+var
+  AvailableLocales: IntlTypes.TStringArray;
+  RequestedLocale, NoExtensionTag, AvailableLocale: string;
+  I: Integer;
+begin
+  AvailableLocales := AvailableLocaleList;
+
+  for I := 0 to High(ARequestedLocales) do
+  begin
+    RequestedLocale := ARequestedLocales[I];
+    NoExtensionTag := LocaleWithoutUnicodeExtension(RequestedLocale);
+    if NoExtensionTag = '' then
+      Continue;
+
+    AvailableLocale := BestAvailableLocale(AvailableLocales, NoExtensionTag);
+    if AvailableLocale <> '' then
+      Exit(RequestedLocale);
+  end;
+
+  Result := DefaultLocale;
+end;
+
 function BestAvailableLocale(const AAvailableLocales: IntlTypes.TStringArray;
   const ALocale: string): string;
 var
@@ -532,7 +557,15 @@ end;
 function DefaultLocale: string;
 begin
   if TryICUGetDefaultLocale(Result) then
-    Exit;
+  begin
+    Result := CanonicalizeUnicodeLocaleId(Result);
+    if Result <> '' then
+    begin
+      Result := LocaleWithoutUnicodeExtension(Result);
+      if Result <> '' then
+        Exit;
+    end;
+  end;
 
   Result := 'en';
 end;

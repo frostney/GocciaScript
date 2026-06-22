@@ -62,6 +62,30 @@ describe.runIf(isIntl)("Intl.supportedValuesOf", () => {
     expect(result.length > 0).toBe(true);
   });
 
+  test("timeZone values include accepted primary identifiers", () => {
+    const result = Intl.supportedValuesOf("timeZone");
+    const primaryIdentifiers = [
+      "America/Detroit",
+      "America/Indiana/Indianapolis",
+      "Europe/Istanbul",
+      "Pacific/Chatham",
+    ];
+
+    for (const timeZone of primaryIdentifiers) {
+      expect(result.includes(timeZone)).toBe(true);
+      expect(new Intl.DateTimeFormat("en", { timeZone }).resolvedOptions().timeZone)
+        .toBe(timeZone);
+    }
+  });
+
+  test("timeZone values exclude known link aliases", () => {
+    const result = Intl.supportedValuesOf("timeZone");
+
+    expect(result.includes("Asia/Istanbul")).toBe(false);
+    expect(result.includes("NZ-CHAT")).toBe(false);
+    expect(result.includes("US/Michigan")).toBe(false);
+  });
+
   test("returns an array for 'unit'", () => {
     const result = Intl.supportedValuesOf("unit");
     expect(Array.isArray(result)).toBe(true);
