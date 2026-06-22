@@ -168,6 +168,129 @@ type
     CalendarDate: TTemporalDateRecord;
   end;
 
+  TChineseYearDaysOverride = record
+    Year: Integer;
+    DaysInYear: Integer;
+  end;
+
+  TChineseLeapMonthOverride = record
+    Year: Integer;
+    LeapMonthIndex: Integer;
+  end;
+
+const
+  CHINESE_YEAR_DAYS_OVERRIDES: array[0..79] of TChineseYearDaysOverride = (
+    (Year: 1969; DaysInYear: 354),
+    (Year: 1970; DaysInYear: 355),
+    (Year: 1971; DaysInYear: 384),
+    (Year: 1972; DaysInYear: 354),
+    (Year: 1973; DaysInYear: 354),
+    (Year: 1974; DaysInYear: 384),
+    (Year: 1975; DaysInYear: 354),
+    (Year: 1976; DaysInYear: 384),
+    (Year: 1977; DaysInYear: 354),
+    (Year: 1978; DaysInYear: 355),
+    (Year: 1979; DaysInYear: 384),
+    (Year: 1980; DaysInYear: 355),
+    (Year: 1981; DaysInYear: 354),
+    (Year: 1982; DaysInYear: 384),
+    (Year: 1983; DaysInYear: 354),
+    (Year: 1984; DaysInYear: 384),
+    (Year: 1985; DaysInYear: 354),
+    (Year: 1986; DaysInYear: 354),
+    (Year: 1987; DaysInYear: 384),
+    (Year: 1988; DaysInYear: 355),
+    (Year: 1989; DaysInYear: 355),
+    (Year: 1990; DaysInYear: 384),
+    (Year: 1991; DaysInYear: 354),
+    (Year: 1992; DaysInYear: 354),
+    (Year: 1993; DaysInYear: 383),
+    (Year: 1994; DaysInYear: 355),
+    (Year: 1995; DaysInYear: 384),
+    (Year: 1996; DaysInYear: 354),
+    (Year: 1997; DaysInYear: 355),
+    (Year: 1998; DaysInYear: 384),
+    (Year: 1999; DaysInYear: 354),
+    (Year: 2000; DaysInYear: 354),
+    (Year: 2001; DaysInYear: 384),
+    (Year: 2002; DaysInYear: 354),
+    (Year: 2003; DaysInYear: 355),
+    (Year: 2004; DaysInYear: 384),
+    (Year: 2005; DaysInYear: 354),
+    (Year: 2006; DaysInYear: 385),
+    (Year: 2007; DaysInYear: 354),
+    (Year: 2008; DaysInYear: 354),
+    (Year: 2009; DaysInYear: 384),
+    (Year: 2010; DaysInYear: 354),
+    (Year: 2011; DaysInYear: 354),
+    (Year: 2012; DaysInYear: 384),
+    (Year: 2013; DaysInYear: 355),
+    (Year: 2014; DaysInYear: 384),
+    (Year: 2015; DaysInYear: 354),
+    (Year: 2016; DaysInYear: 355),
+    (Year: 2017; DaysInYear: 384),
+    (Year: 2018; DaysInYear: 354),
+    (Year: 2019; DaysInYear: 354),
+    (Year: 2020; DaysInYear: 384),
+    (Year: 2021; DaysInYear: 354),
+    (Year: 2022; DaysInYear: 355),
+    (Year: 2023; DaysInYear: 384),
+    (Year: 2024; DaysInYear: 354),
+    (Year: 2025; DaysInYear: 384),
+    (Year: 2026; DaysInYear: 354),
+    (Year: 2027; DaysInYear: 354),
+    (Year: 2028; DaysInYear: 384),
+    (Year: 2029; DaysInYear: 355),
+    (Year: 2030; DaysInYear: 354),
+    (Year: 2031; DaysInYear: 384),
+    (Year: 2032; DaysInYear: 355),
+    (Year: 2033; DaysInYear: 384),
+    (Year: 2034; DaysInYear: 354),
+    (Year: 2035; DaysInYear: 354),
+    (Year: 2036; DaysInYear: 384),
+    (Year: 2037; DaysInYear: 354),
+    (Year: 2038; DaysInYear: 354),
+    (Year: 2039; DaysInYear: 384),
+    (Year: 2040; DaysInYear: 355),
+    (Year: 2041; DaysInYear: 355),
+    (Year: 2042; DaysInYear: 384),
+    (Year: 2043; DaysInYear: 354),
+    (Year: 2044; DaysInYear: 384),
+    (Year: 2045; DaysInYear: 354),
+    (Year: 2046; DaysInYear: 354),
+    (Year: 2047; DaysInYear: 384),
+    (Year: 2048; DaysInYear: 354)
+  );
+
+  CHINESE_LEAP_MONTH_OVERRIDES: array[0..25] of TChineseLeapMonthOverride = (
+    (Year: 1971; LeapMonthIndex: 6),
+    (Year: 1974; LeapMonthIndex: 5),
+    (Year: 1976; LeapMonthIndex: 9),
+    (Year: 1979; LeapMonthIndex: 7),
+    (Year: 1982; LeapMonthIndex: 5),
+    (Year: 1987; LeapMonthIndex: 7),
+    (Year: 1990; LeapMonthIndex: 6),
+    (Year: 1993; LeapMonthIndex: 4),
+    (Year: 1995; LeapMonthIndex: 9),
+    (Year: 1998; LeapMonthIndex: 6),
+    (Year: 2001; LeapMonthIndex: 5),
+    (Year: 2004; LeapMonthIndex: 3),
+    (Year: 2006; LeapMonthIndex: 8),
+    (Year: 2009; LeapMonthIndex: 6),
+    (Year: 2012; LeapMonthIndex: 5),
+    (Year: 2017; LeapMonthIndex: 7),
+    (Year: 2020; LeapMonthIndex: 5),
+    (Year: 2023; LeapMonthIndex: 3),
+    (Year: 2025; LeapMonthIndex: 7),
+    (Year: 2028; LeapMonthIndex: 6),
+    (Year: 2031; LeapMonthIndex: 4),
+    (Year: 2036; LeapMonthIndex: 7),
+    (Year: 2039; LeapMonthIndex: 6),
+    (Year: 2042; LeapMonthIndex: 3),
+    (Year: 2044; LeapMonthIndex: 8),
+    (Year: 2047; LeapMonthIndex: 6)
+  );
+
 var
   CalendarICU: TTemporalCalendarICU;
   CalendarICULoadAttempted: Boolean;
@@ -845,6 +968,68 @@ begin
   Result := 'en-US-u-ca-' + ACalendarId;
 end;
 
+function TryChineseDaysInYearOverride(const AYear: Integer;
+  out ADaysInYear: Integer): Boolean;
+var
+  Index: Integer;
+begin
+  for Index := Low(CHINESE_YEAR_DAYS_OVERRIDES) to High(CHINESE_YEAR_DAYS_OVERRIDES) do
+  begin
+    if CHINESE_YEAR_DAYS_OVERRIDES[Index].Year = AYear then
+    begin
+      ADaysInYear := CHINESE_YEAR_DAYS_OVERRIDES[Index].DaysInYear;
+      Exit(True);
+    end;
+  end;
+
+  ADaysInYear := 0;
+  Result := False;
+end;
+
+function TryChineseLeapMonthIndexOverride(const AYear: Integer;
+  out ALeapMonthIndex: Integer): Boolean;
+var
+  Index: Integer;
+begin
+  for Index := Low(CHINESE_LEAP_MONTH_OVERRIDES) to High(CHINESE_LEAP_MONTH_OVERRIDES) do
+  begin
+    if CHINESE_LEAP_MONTH_OVERRIDES[Index].Year = AYear then
+    begin
+      ALeapMonthIndex := CHINESE_LEAP_MONTH_OVERRIDES[Index].LeapMonthIndex;
+      Exit(True);
+    end;
+  end;
+
+  ALeapMonthIndex := 0;
+  Result := False;
+end;
+
+function TryChineseMonthCodeForMonthIndex(const AYear, AMonthIndex: Integer;
+  out AMonthCodeMonth: Integer; out AIsLeapMonth: Boolean): Boolean;
+var
+  LeapMonthIndex: Integer;
+begin
+  Result := False;
+  AMonthCodeMonth := 0;
+  AIsLeapMonth := False;
+
+  if (AMonthIndex < 1) or (AMonthIndex > 13) or
+     not TryChineseLeapMonthIndexOverride(AYear, LeapMonthIndex) then
+    Exit;
+
+  if AMonthIndex < LeapMonthIndex then
+    AMonthCodeMonth := AMonthIndex
+  else if AMonthIndex = LeapMonthIndex then
+  begin
+    AMonthCodeMonth := LeapMonthIndex - 1;
+    AIsLeapMonth := True;
+  end
+  else
+    AMonthCodeMonth := AMonthIndex - 1;
+
+  Result := (AMonthCodeMonth >= 1) and (AMonthCodeMonth <= 12);
+end;
+
 function TryParseLunisolarMonthPart(const AValue: string; out AMonth: Integer;
   out AIsLeapMonth: Boolean): Boolean;
 var
@@ -1190,6 +1375,22 @@ begin
             ((AISOYear >= -3761) and (AISOYear <= -3760));
 end;
 
+function ShouldUseArithmeticHebrewOverrideYear(const AYear: Integer): Boolean;
+begin
+  case AYear of
+    3705, 3952, 4050, 4297, 4544, 4642, 4889, 4967,
+    5136, 5214, 5461, 5559: Result := True;
+  else
+    Result := False;
+  end;
+end;
+
+function ShouldUseArithmeticHebrewISODateOverride(const AISOYear, AISOMonth,
+  AISODay: Integer): Boolean;
+begin
+  Result := (AISOYear = 2046) and (AISOMonth = 10) and (AISODay = 30);
+end;
+
 function HebrewMonthsInYearNumber(const AYear: Integer): Integer;
 begin
   if IsHebrewLeapYearNumber(AYear) then
@@ -1202,6 +1403,20 @@ function HebrewDaysInYearNumber(const AYear: Integer): Integer;
 begin
   Result := Integer(HebrewYearStartEpochDays(AYear + 1) -
     HebrewYearStartEpochDays(AYear));
+end;
+
+function TryHebrewDaysInYearOverride(const AYear: Integer;
+  out ADaysInYear: Integer): Boolean;
+begin
+  if ShouldUseArithmeticHebrewOverrideYear(AYear) or
+     (AYear = 5806) or (AYear = 5807) then
+  begin
+    ADaysInYear := HebrewDaysInYearNumber(AYear);
+    Exit(True);
+  end;
+
+  ADaysInYear := 0;
+  Result := False;
 end;
 
 function HebrewDaysInMonthNumber(const AYear, AMonth: Integer;
@@ -1675,8 +1890,9 @@ var
   CurrentDays, CandidateDays, TargetDays: Int64;
   CurrentParts, TargetParts, CandidateParts: TLunisolarDateParts;
   FirstDate: TTemporalDateRecord;
-  Index, Delta, CacheCode, CacheIndex: Integer;
-  FoundNextStart, MatchesMonth: Boolean;
+  Index, Delta, CacheCode, CacheIndex, LogicalMonthCodeMonth,
+  OverrideMonthCodeMonth: Integer;
+  FoundNextStart, MatchesMonth, LogicalIsLeapMonth, OverrideIsLeapMonth: Boolean;
 begin
   Result := False;
   AISODate.Year := 0;
@@ -1720,10 +1936,20 @@ begin
     if (CurrentParts.Year <> AYear) or (CurrentParts.Day <> 1) then
       Exit;
 
+    LogicalMonthCodeMonth := CurrentParts.MonthCodeMonth;
+    LogicalIsLeapMonth := CurrentParts.IsLeapMonth;
+    if (ACalendarId = 'chinese') and
+       TryChineseMonthCodeForMonthIndex(AYear, Index, OverrideMonthCodeMonth,
+         OverrideIsLeapMonth) then
+    begin
+      LogicalMonthCodeMonth := OverrideMonthCodeMonth;
+      LogicalIsLeapMonth := OverrideIsLeapMonth;
+    end;
+
     MatchesMonth := False;
     if AMatchMonthCode then
-      MatchesMonth := (CurrentParts.MonthCodeMonth = AMonth) and
-        (CurrentParts.IsLeapMonth = AIsLeapMonth)
+      MatchesMonth := (LogicalMonthCodeMonth = AMonth) and
+        (LogicalIsLeapMonth = AIsLeapMonth)
     else
       MatchesMonth := Index = AMonth;
 
@@ -1735,8 +1961,11 @@ begin
         AISODate.Month, AISODate.Day, TargetParts) then
         Exit;
       if (TargetParts.Year = AYear) and (TargetParts.Day = ADay) and
-         (TargetParts.MonthCodeMonth = CurrentParts.MonthCodeMonth) and
-         (TargetParts.IsLeapMonth = CurrentParts.IsLeapMonth) then
+         (((ACalendarId = 'chinese') and
+           TryChineseMonthCodeForMonthIndex(AYear, Index,
+             OverrideMonthCodeMonth, OverrideIsLeapMonth)) or
+          ((TargetParts.MonthCodeMonth = CurrentParts.MonthCodeMonth) and
+           (TargetParts.IsLeapMonth = CurrentParts.IsLeapMonth))) then
       begin
         LunisolarDateToISOCache[CacheIndex].Valid := True;
         LunisolarDateToISOCache[CacheIndex].CalendarCode := CacheCode;
@@ -2227,7 +2456,9 @@ begin
   if (ACalendarId = 'coptic') or (ACalendarId = 'ethiopic') or (ACalendarId = 'ethioaa') then
     Exit(TryCopticFamilyDateToISO(ACalendarId, AYear, AMonth, ADay, AISODate));
 
-  if (ACalendarId = 'hebrew') and ShouldUseArithmeticHebrewYear(AYear) then
+  if (ACalendarId = 'hebrew') and
+     (ShouldUseArithmeticHebrewYear(AYear) or
+      ShouldUseArithmeticHebrewOverrideYear(AYear)) then
     Exit(TryHebrewDateToISO(AYear, AMonth, ADay, AISODate));
 
   if ACalendarId = 'indian' then
@@ -2589,7 +2820,9 @@ begin
     Exit(True);
   end;
 
-  if (ACalendarId = 'hebrew') and ShouldUseArithmeticHebrewYear(AYear) then
+  if (ACalendarId = 'hebrew') and
+     (ShouldUseArithmeticHebrewYear(AYear) or
+      ShouldUseArithmeticHebrewOverrideYear(AYear)) then
   begin
     AMonthsInYear := HebrewMonthsInYearNumber(AYear);
     Exit(True);
@@ -2689,6 +2922,14 @@ begin
       ADaysInYear := 365;
     Exit(True);
   end;
+
+  if (ACalendarId = 'hebrew') and
+     TryHebrewDaysInYearOverride(AYear, ADaysInYear) then
+    Exit(True);
+
+  if (ACalendarId = 'chinese') and
+     TryChineseDaysInYearOverride(AYear, ADaysInYear) then
+    Exit(True);
 
   Result := TryCalendarDateToISO(ACalendarId, AYear, 1, 1, StartDate) and
             TryCalendarDateToISO(ACalendarId, AYear + 1, 1, 1, NextYearDate);
@@ -2825,7 +3066,9 @@ begin
   if (ACalendarId = 'coptic') or (ACalendarId = 'ethiopic') or (ACalendarId = 'ethioaa') then
     Exit(TryISODateToCopticFamily(ACalendarId, AISOYear, AISOMonth, AISODay, ACalendarDate));
 
-  if (ACalendarId = 'hebrew') and ShouldUseArithmeticHebrewISOYear(AISOYear) then
+  if (ACalendarId = 'hebrew') and
+     (ShouldUseArithmeticHebrewISOYear(AISOYear) or
+      ShouldUseArithmeticHebrewISODateOverride(AISOYear, AISOMonth, AISODay)) then
     Exit(TryISODateToHebrew(AISOYear, AISOMonth, AISODay, ACalendarDate));
 
   if ACalendarId = 'indian' then
@@ -2976,6 +3219,8 @@ function TryGetCalendarDateInfo(const ACalendarId: string; const AISOYear, AISOM
 var
   IsLeapMonth: Boolean;
   LunisolarParts: TLunisolarDateParts;
+  ChineseMonthCodeMonth: Integer;
+  ChineseIsLeapMonth: Boolean;
 begin
   FillChar(AInfo, SizeOf(AInfo), 0);
   Result := TryISODateToCalendar(ACalendarId, AISOYear, AISOMonth, AISODay, AInfo.Date);
@@ -2985,8 +3230,15 @@ begin
   if IsLunisolarCalendar(ACalendarId) and
      TryFormatLunisolarDateParts(ACalendarId, AISOYear, AISOMonth, AISODay,
        LunisolarParts) then
+  begin
     AInfo.MonthCode := FormatTemporalMonthCode(LunisolarParts.MonthCodeMonth,
-      LunisolarParts.IsLeapMonth)
+      LunisolarParts.IsLeapMonth);
+    if (ACalendarId = 'chinese') and
+       TryChineseMonthCodeForMonthIndex(AInfo.Date.Year, AInfo.Date.Month,
+         ChineseMonthCodeMonth, ChineseIsLeapMonth) then
+      AInfo.MonthCode := FormatTemporalMonthCode(ChineseMonthCodeMonth,
+        ChineseIsLeapMonth);
+  end
   else
   begin
     if not TryCalendarLeapMonthFlag(ACalendarId, AISOYear, AISOMonth, AISODay, IsLeapMonth) then

@@ -74,6 +74,7 @@ uses
   Goccia.Intl.Helpers,
   Goccia.ObjectModel.Types,
   Goccia.Realm,
+  Goccia.Temporal.Calendar,
   Goccia.Temporal.TimeZone,
   Goccia.Temporal.Utils,
   Goccia.Utils,
@@ -1532,35 +1533,32 @@ begin
     (AOptions.Year <> '');
 end;
 
-function FormatPartsHaveType(const AParts: TIntlFormatPartArray;
-  const APartType: string): Boolean;
-var
-  I: Integer;
-begin
-  Result := False;
-  for I := 0 to Length(AParts) - 1 do
-    if AParts[I].PartType = APartType then
-      Exit(True);
-end;
-
 function AdjustCopticEraFormatted(const AFormatted: string;
   const AOptions: TIntlDateTimeFormatOptions): string;
 begin
   Result := AFormatted;
   if not NeedsCopticEraFallback(AOptions) then
     Exit;
-  if Pos(CopticEraFallbackValue(AOptions), AFormatted) = 0 then
-    Result := AFormatted + CopticEraFallbackValue(AOptions);
+  Result := StringReplace(Result, 'ERA0', '', [rfReplaceAll]);
+  Result := StringReplace(Result, 'ERA1', '', [rfReplaceAll]);
+  if Pos(CopticEraFallbackValue(AOptions), Result) = 0 then
+    Result := Result + CopticEraFallbackValue(AOptions);
 end;
 
 procedure EnsureCopticEraPart(var AParts: TIntlFormatPartArray;
   const AOptions: TIntlDateTimeFormatOptions);
 var
-  Index: Integer;
+  I, Index: Integer;
 begin
-  if not NeedsCopticEraFallback(AOptions) or
-     FormatPartsHaveType(AParts, 'era') then
+  if not NeedsCopticEraFallback(AOptions) then
     Exit;
+
+  for I := 0 to Length(AParts) - 1 do
+    if AParts[I].PartType = 'era' then
+    begin
+      AParts[I].Value := CopticEraFallbackValue(AOptions);
+      Exit;
+    end;
 
   Index := Length(AParts);
   SetLength(AParts, Index + 1);
@@ -1586,7 +1584,10 @@ begin
   if (Pos('-', AFormatted) > 0) and
      (Pos('Anno Hegirae', AFormatted) > 0) then
     Result := StringReplace(AFormatted, 'Anno Hegirae',
-      'Before Anno Hegirae', [rfReplaceAll]);
+      'Before Anno Hegirae', [rfReplaceAll])
+  else if (Pos('-', AFormatted) > 0) and (Pos('AH', AFormatted) > 0) and
+          (Pos('Before AH', AFormatted) = 0) then
+    Result := StringReplace(AFormatted, 'AH', 'Before AH', [rfReplaceAll]);
 end;
 
 procedure AdjustIslamicEraParts(var AParts: TIntlFormatPartArray;
@@ -1613,7 +1614,77 @@ begin
   for I := 0 to Length(AParts) - 1 do
     if (AParts[I].PartType = 'era') and
        (AParts[I].Value = 'Anno Hegirae') then
-      AParts[I].Value := 'Before Anno Hegirae';
+      AParts[I].Value := 'Before Anno Hegirae'
+    else if (AParts[I].PartType = 'era') and
+            (AParts[I].Value = 'AH') then
+      AParts[I].Value := 'Before AH';
+end;
+
+function IsAsciiDigitString(const AValue: string): Boolean;
+var
+  I: Integer;
+begin
+  Result := AValue <> '';
+  for I := 1 to Length(AValue) do
+    if not (AValue[I] in ['0'..'9']) then
+      Exit(False);
+end;
+
+function IsAsciiDigitOrDigitBisString(const AValue: string): Boolean;
+const
+  BIS_SUFFIX = 'bis';
+var
+  DigitLength: Integer;
+begin
+  if IsAsciiDigitString(AValue) then
+    Exit(True);
+
+  if (Length(AValue) <= Length(BIS_SUFFIX)) or
+     (Copy(AValue, Length(AValue) - Length(BIS_SUFFIX) + 1,
+       Length(BIS_SUFFIX)) <> BIS_SUFFIX) then
+    Exit(False);
+
+  DigitLength := Length(AValue) - Length(BIS_SUFFIX);
+  Result := IsAsciiDigitString(Copy(AValue, 1, DigitLength));
+end;
+
+procedure AdjustLunisolarLeapMonthParts(var AParts: TIntlFormatPartArray;
+  const AMillis: Double; const AOptions: TIntlDateTimeFormatOptions);
+const
+  MS_PER_DAY_DOUBLE = 86400000.0;
+var
+  DateRec: TTemporalDateRecord;
+  EpochDays: Int64;
+  Info: TTemporalCalendarDateInfo;
+  MonthCodeMonth, I: Integer;
+  ExpectedMonthValue: string;
+  IsLeapMonth: Boolean;
+begin
+  if not ((AOptions.Calendar = 'chinese') or
+          (AOptions.Calendar = 'dangi')) or
+     (AOptions.TimeZone <> 'UTC') then
+    Exit;
+
+  EpochDays := Trunc(Floor(AMillis / MS_PER_DAY_DOUBLE));
+  DateRec := EpochDaysToDate(EpochDays);
+  if not TryGetCalendarDateInfo(AOptions.Calendar, DateRec.Year,
+     DateRec.Month, DateRec.Day, Info) or
+     not TryParseTemporalMonthCode(Info.MonthCode, MonthCodeMonth,
+       IsLeapMonth) then
+    Exit;
+
+  ExpectedMonthValue := IntToStr(MonthCodeMonth);
+  if IsLeapMonth then
+    ExpectedMonthValue := ExpectedMonthValue + 'bis';
+
+  for I := 0 to Length(AParts) - 1 do
+    if (AParts[I].PartType = 'month') and
+       (AParts[I].Value <> ExpectedMonthValue) and
+       IsAsciiDigitOrDigitBisString(AParts[I].Value) then
+    begin
+      AParts[I].Value := ExpectedMonthValue;
+      Exit;
+    end;
 end;
 
 function DateTimeFormatLocaleArgumentToLocale(const AArg: TGocciaValue): string;
@@ -2101,6 +2172,7 @@ begin
 
   if TryICUFormatDateTimeToParts(DTF.FLocale, Millis, EffectiveOptions, Parts) then
   begin
+    AdjustLunisolarLeapMonthParts(Parts, Millis, EffectiveOptions);
     EnsureCopticEraPart(Parts, EffectiveOptions);
     AdjustIslamicEraParts(Parts, EffectiveOptions);
     Result := FormatPartsToArray(Parts)

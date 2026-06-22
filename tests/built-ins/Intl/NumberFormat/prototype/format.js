@@ -222,4 +222,12 @@ describe.runIf(isIntl)("Intl.NumberFormat.prototype.format", () => {
       useGrouping: false,
     }).format(1234)).toBe("1.2 thousand");
   });
+
+  test("en-IN compact notation uses K for thousands", () => {
+    const nf = new Intl.NumberFormat("en-IN", { notation: "compact" });
+
+    expect(nf.format(1000)).toBe("1K");
+    expect(nf.format(10000)).toBe("10K");
+    expect(nf.format(100000)).toBe("1L");
+  });
 });

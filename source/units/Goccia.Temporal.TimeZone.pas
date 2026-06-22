@@ -45,6 +45,14 @@ uses
   {$ENDIF}
   Classes;
 
+type
+  TTimeZoneIdentifierName = string[64];
+
+  TTimeZonePrimaryIdentifierMapEntry = record
+    Identifier: TTimeZoneIdentifierName;
+    PrimaryIdentifier: TTimeZoneIdentifierName;
+  end;
+
 const
   UTC_TIMEZONE_ID = 'UTC';
   GOCCIA_TZDIR_ENV = 'GOCCIA_TZDIR';
@@ -60,6 +68,7 @@ const
   MILLISECONDS_PER_HOUR = MINUTES_PER_HOUR * MILLISECONDS_PER_MINUTE;
   MILLISECONDS_PER_DAY = 24 * MILLISECONDS_PER_HOUR;
   MAX_SYMLINK_LENGTH = 1024;
+  KNOWN_TIMEZONE_PRIMARY_IDENTIFIER_COUNT = 152;
   {$IFDEF MSWINDOWS}
   ICU_LIBRARY = 'icu.dll';
   ICU_I18N_LIBRARY = 'icuin.dll';
@@ -73,6 +82,160 @@ const
   ICU_TRANSITION_WINDOW_END_SECONDS = 7258118400; // 2200-01-01T00:00:00Z
   ICU_MAX_TRANSITION_COUNT = 4096;
   {$ENDIF}
+  KNOWN_TIMEZONE_PRIMARY_IDENTIFIERS: array[0..KNOWN_TIMEZONE_PRIMARY_IDENTIFIER_COUNT - 1] of TTimeZonePrimaryIdentifierMapEntry = (
+    (Identifier: 'Europe/Nicosia'; PrimaryIdentifier: 'Asia/Nicosia'),
+    (Identifier: 'Asia/Ashkhabad'; PrimaryIdentifier: 'Asia/Ashgabat'),
+    (Identifier: 'Asia/Calcutta'; PrimaryIdentifier: 'Asia/Kolkata'),
+    (Identifier: 'Asia/Choibalsan'; PrimaryIdentifier: 'Asia/Ulaanbaatar'),
+    (Identifier: 'Asia/Chongqing'; PrimaryIdentifier: 'Asia/Shanghai'),
+    (Identifier: 'Asia/Chungking'; PrimaryIdentifier: 'Asia/Shanghai'),
+    (Identifier: 'Asia/Dacca'; PrimaryIdentifier: 'Asia/Dhaka'),
+    (Identifier: 'Asia/Harbin'; PrimaryIdentifier: 'Asia/Shanghai'),
+    (Identifier: 'Asia/Istanbul'; PrimaryIdentifier: 'Europe/Istanbul'),
+    (Identifier: 'Asia/Kashgar'; PrimaryIdentifier: 'Asia/Urumqi'),
+    (Identifier: 'Asia/Katmandu'; PrimaryIdentifier: 'Asia/Kathmandu'),
+    (Identifier: 'Asia/Macao'; PrimaryIdentifier: 'Asia/Macau'),
+    (Identifier: 'Asia/Rangoon'; PrimaryIdentifier: 'Asia/Yangon'),
+    (Identifier: 'Asia/Saigon'; PrimaryIdentifier: 'Asia/Ho_Chi_Minh'),
+    (Identifier: 'Asia/Tel_Aviv'; PrimaryIdentifier: 'Asia/Jerusalem'),
+    (Identifier: 'Asia/Thimbu'; PrimaryIdentifier: 'Asia/Thimphu'),
+    (Identifier: 'Asia/Ujung_Pandang'; PrimaryIdentifier: 'Asia/Makassar'),
+    (Identifier: 'Asia/Ulan_Bator'; PrimaryIdentifier: 'Asia/Ulaanbaatar'),
+    (Identifier: 'Africa/Asmera'; PrimaryIdentifier: 'Africa/Asmara'),
+    (Identifier: 'Africa/Timbuktu'; PrimaryIdentifier: 'Africa/Bamako'),
+    (Identifier: 'Antarctica/South_Pole'; PrimaryIdentifier: 'Antarctica/McMurdo'),
+    (Identifier: 'Australia/ACT'; PrimaryIdentifier: 'Australia/Sydney'),
+    (Identifier: 'Australia/Canberra'; PrimaryIdentifier: 'Australia/Sydney'),
+    (Identifier: 'Australia/Currie'; PrimaryIdentifier: 'Australia/Hobart'),
+    (Identifier: 'Australia/LHI'; PrimaryIdentifier: 'Australia/Lord_Howe'),
+    (Identifier: 'Australia/NSW'; PrimaryIdentifier: 'Australia/Sydney'),
+    (Identifier: 'Australia/North'; PrimaryIdentifier: 'Australia/Darwin'),
+    (Identifier: 'Australia/Queensland'; PrimaryIdentifier: 'Australia/Brisbane'),
+    (Identifier: 'Australia/South'; PrimaryIdentifier: 'Australia/Adelaide'),
+    (Identifier: 'Australia/Tasmania'; PrimaryIdentifier: 'Australia/Hobart'),
+    (Identifier: 'Australia/Victoria'; PrimaryIdentifier: 'Australia/Melbourne'),
+    (Identifier: 'Australia/West'; PrimaryIdentifier: 'Australia/Perth'),
+    (Identifier: 'Australia/Yancowinna'; PrimaryIdentifier: 'Australia/Broken_Hill'),
+    (Identifier: 'Pacific/Enderbury'; PrimaryIdentifier: 'Pacific/Kanton'),
+    (Identifier: 'Pacific/Johnston'; PrimaryIdentifier: 'Pacific/Honolulu'),
+    (Identifier: 'Pacific/Ponape'; PrimaryIdentifier: 'Pacific/Pohnpei'),
+    (Identifier: 'Pacific/Samoa'; PrimaryIdentifier: 'Pacific/Pago_Pago'),
+    (Identifier: 'Pacific/Truk'; PrimaryIdentifier: 'Pacific/Chuuk'),
+    (Identifier: 'Pacific/Yap'; PrimaryIdentifier: 'Pacific/Chuuk'),
+    (Identifier: 'Europe/Belfast'; PrimaryIdentifier: 'Europe/London'),
+    (Identifier: 'Europe/Kiev'; PrimaryIdentifier: 'Europe/Kyiv'),
+    (Identifier: 'Europe/Tiraspol'; PrimaryIdentifier: 'Europe/Chisinau'),
+    (Identifier: 'Europe/Uzhgorod'; PrimaryIdentifier: 'Europe/Kyiv'),
+    (Identifier: 'Europe/Zaporozhye'; PrimaryIdentifier: 'Europe/Kyiv'),
+    (Identifier: 'America/Argentina/ComodRivadavia'; PrimaryIdentifier: 'America/Argentina/Catamarca'),
+    (Identifier: 'America/Atka'; PrimaryIdentifier: 'America/Adak'),
+    (Identifier: 'America/Buenos_Aires'; PrimaryIdentifier: 'America/Argentina/Buenos_Aires'),
+    (Identifier: 'America/Catamarca'; PrimaryIdentifier: 'America/Argentina/Catamarca'),
+    (Identifier: 'America/Coral_Harbour'; PrimaryIdentifier: 'America/Atikokan'),
+    (Identifier: 'America/Cordoba'; PrimaryIdentifier: 'America/Argentina/Cordoba'),
+    (Identifier: 'America/Ensenada'; PrimaryIdentifier: 'America/Tijuana'),
+    (Identifier: 'America/Fort_Wayne'; PrimaryIdentifier: 'America/Indiana/Indianapolis'),
+    (Identifier: 'America/Godthab'; PrimaryIdentifier: 'America/Nuuk'),
+    (Identifier: 'America/Indianapolis'; PrimaryIdentifier: 'America/Indiana/Indianapolis'),
+    (Identifier: 'America/Jujuy'; PrimaryIdentifier: 'America/Argentina/Jujuy'),
+    (Identifier: 'America/Knox_IN'; PrimaryIdentifier: 'America/Indiana/Knox'),
+    (Identifier: 'America/Louisville'; PrimaryIdentifier: 'America/Kentucky/Louisville'),
+    (Identifier: 'America/Mendoza'; PrimaryIdentifier: 'America/Argentina/Mendoza'),
+    (Identifier: 'America/Montreal'; PrimaryIdentifier: 'America/Toronto'),
+    (Identifier: 'America/Nipigon'; PrimaryIdentifier: 'America/Toronto'),
+    (Identifier: 'America/Pangnirtung'; PrimaryIdentifier: 'America/Iqaluit'),
+    (Identifier: 'America/Porto_Acre'; PrimaryIdentifier: 'America/Rio_Branco'),
+    (Identifier: 'America/Rainy_River'; PrimaryIdentifier: 'America/Winnipeg'),
+    (Identifier: 'America/Rosario'; PrimaryIdentifier: 'America/Argentina/Cordoba'),
+    (Identifier: 'America/Santa_Isabel'; PrimaryIdentifier: 'America/Tijuana'),
+    (Identifier: 'America/Shiprock'; PrimaryIdentifier: 'America/Denver'),
+    (Identifier: 'America/Thunder_Bay'; PrimaryIdentifier: 'America/Toronto'),
+    (Identifier: 'America/Virgin'; PrimaryIdentifier: 'America/St_Thomas'),
+    (Identifier: 'America/Yellowknife'; PrimaryIdentifier: 'America/Edmonton'),
+    (Identifier: 'US/Alaska'; PrimaryIdentifier: 'America/Anchorage'),
+    (Identifier: 'US/Aleutian'; PrimaryIdentifier: 'America/Adak'),
+    (Identifier: 'US/Arizona'; PrimaryIdentifier: 'America/Phoenix'),
+    (Identifier: 'US/Central'; PrimaryIdentifier: 'America/Chicago'),
+    (Identifier: 'US/East-Indiana'; PrimaryIdentifier: 'America/Indiana/Indianapolis'),
+    (Identifier: 'US/Eastern'; PrimaryIdentifier: 'America/New_York'),
+    (Identifier: 'US/Hawaii'; PrimaryIdentifier: 'Pacific/Honolulu'),
+    (Identifier: 'US/Indiana-Starke'; PrimaryIdentifier: 'America/Indiana/Knox'),
+    (Identifier: 'US/Michigan'; PrimaryIdentifier: 'America/Detroit'),
+    (Identifier: 'US/Mountain'; PrimaryIdentifier: 'America/Denver'),
+    (Identifier: 'US/Pacific'; PrimaryIdentifier: 'America/Los_Angeles'),
+    (Identifier: 'US/Samoa'; PrimaryIdentifier: 'Pacific/Pago_Pago'),
+    (Identifier: 'Atlantic/Faeroe'; PrimaryIdentifier: 'Atlantic/Faroe'),
+    (Identifier: 'Atlantic/Jan_Mayen'; PrimaryIdentifier: 'Arctic/Longyearbyen'),
+    (Identifier: 'Brazil/Acre'; PrimaryIdentifier: 'America/Rio_Branco'),
+    (Identifier: 'Brazil/DeNoronha'; PrimaryIdentifier: 'America/Noronha'),
+    (Identifier: 'Brazil/East'; PrimaryIdentifier: 'America/Sao_Paulo'),
+    (Identifier: 'Brazil/West'; PrimaryIdentifier: 'America/Manaus'),
+    (Identifier: 'CET'; PrimaryIdentifier: 'Europe/Brussels'),
+    (Identifier: 'CST6CDT'; PrimaryIdentifier: 'America/Chicago'),
+    (Identifier: 'Canada/Atlantic'; PrimaryIdentifier: 'America/Halifax'),
+    (Identifier: 'Canada/Central'; PrimaryIdentifier: 'America/Winnipeg'),
+    (Identifier: 'Canada/Eastern'; PrimaryIdentifier: 'America/Toronto'),
+    (Identifier: 'Canada/Mountain'; PrimaryIdentifier: 'America/Edmonton'),
+    (Identifier: 'Canada/Newfoundland'; PrimaryIdentifier: 'America/St_Johns'),
+    (Identifier: 'Canada/Pacific'; PrimaryIdentifier: 'America/Vancouver'),
+    (Identifier: 'Canada/Saskatchewan'; PrimaryIdentifier: 'America/Regina'),
+    (Identifier: 'Canada/Yukon'; PrimaryIdentifier: 'America/Whitehorse'),
+    (Identifier: 'Chile/Continental'; PrimaryIdentifier: 'America/Santiago'),
+    (Identifier: 'Chile/EasterIsland'; PrimaryIdentifier: 'Pacific/Easter'),
+    (Identifier: 'Cuba'; PrimaryIdentifier: 'America/Havana'),
+    (Identifier: 'EET'; PrimaryIdentifier: 'Europe/Athens'),
+    (Identifier: 'EST'; PrimaryIdentifier: 'America/Panama'),
+    (Identifier: 'EST5EDT'; PrimaryIdentifier: 'America/New_York'),
+    (Identifier: 'Egypt'; PrimaryIdentifier: 'Africa/Cairo'),
+    (Identifier: 'Eire'; PrimaryIdentifier: 'Europe/Dublin'),
+    (Identifier: 'Etc/GMT'; PrimaryIdentifier: 'UTC'),
+    (Identifier: 'Etc/GMT+0'; PrimaryIdentifier: 'UTC'),
+    (Identifier: 'Etc/GMT-0'; PrimaryIdentifier: 'UTC'),
+    (Identifier: 'Etc/GMT0'; PrimaryIdentifier: 'UTC'),
+    (Identifier: 'Etc/Greenwich'; PrimaryIdentifier: 'UTC'),
+    (Identifier: 'Etc/UCT'; PrimaryIdentifier: 'UTC'),
+    (Identifier: 'Etc/UTC'; PrimaryIdentifier: 'UTC'),
+    (Identifier: 'Etc/Universal'; PrimaryIdentifier: 'UTC'),
+    (Identifier: 'Etc/Zulu'; PrimaryIdentifier: 'UTC'),
+    (Identifier: 'GB'; PrimaryIdentifier: 'Europe/London'),
+    (Identifier: 'GB-Eire'; PrimaryIdentifier: 'Europe/London'),
+    (Identifier: 'GMT'; PrimaryIdentifier: 'UTC'),
+    (Identifier: 'GMT+0'; PrimaryIdentifier: 'UTC'),
+    (Identifier: 'GMT-0'; PrimaryIdentifier: 'UTC'),
+    (Identifier: 'GMT0'; PrimaryIdentifier: 'UTC'),
+    (Identifier: 'Greenwich'; PrimaryIdentifier: 'UTC'),
+    (Identifier: 'HST'; PrimaryIdentifier: 'Pacific/Honolulu'),
+    (Identifier: 'Hongkong'; PrimaryIdentifier: 'Asia/Hong_Kong'),
+    (Identifier: 'Iceland'; PrimaryIdentifier: 'Atlantic/Reykjavik'),
+    (Identifier: 'Iran'; PrimaryIdentifier: 'Asia/Tehran'),
+    (Identifier: 'Israel'; PrimaryIdentifier: 'Asia/Jerusalem'),
+    (Identifier: 'Jamaica'; PrimaryIdentifier: 'America/Jamaica'),
+    (Identifier: 'Japan'; PrimaryIdentifier: 'Asia/Tokyo'),
+    (Identifier: 'Kwajalein'; PrimaryIdentifier: 'Pacific/Kwajalein'),
+    (Identifier: 'Libya'; PrimaryIdentifier: 'Africa/Tripoli'),
+    (Identifier: 'MET'; PrimaryIdentifier: 'Europe/Brussels'),
+    (Identifier: 'MST'; PrimaryIdentifier: 'America/Phoenix'),
+    (Identifier: 'MST7MDT'; PrimaryIdentifier: 'America/Denver'),
+    (Identifier: 'Mexico/BajaNorte'; PrimaryIdentifier: 'America/Tijuana'),
+    (Identifier: 'Mexico/BajaSur'; PrimaryIdentifier: 'America/Mazatlan'),
+    (Identifier: 'Mexico/General'; PrimaryIdentifier: 'America/Mexico_City'),
+    (Identifier: 'NZ'; PrimaryIdentifier: 'Pacific/Auckland'),
+    (Identifier: 'NZ-CHAT'; PrimaryIdentifier: 'Pacific/Chatham'),
+    (Identifier: 'Navajo'; PrimaryIdentifier: 'America/Denver'),
+    (Identifier: 'PRC'; PrimaryIdentifier: 'Asia/Shanghai'),
+    (Identifier: 'PST8PDT'; PrimaryIdentifier: 'America/Los_Angeles'),
+    (Identifier: 'Poland'; PrimaryIdentifier: 'Europe/Warsaw'),
+    (Identifier: 'Portugal'; PrimaryIdentifier: 'Europe/Lisbon'),
+    (Identifier: 'ROC'; PrimaryIdentifier: 'Asia/Taipei'),
+    (Identifier: 'ROK'; PrimaryIdentifier: 'Asia/Seoul'),
+    (Identifier: 'Singapore'; PrimaryIdentifier: 'Asia/Singapore'),
+    (Identifier: 'Turkey'; PrimaryIdentifier: 'Europe/Istanbul'),
+    (Identifier: 'UCT'; PrimaryIdentifier: 'UTC'),
+    (Identifier: 'Universal'; PrimaryIdentifier: 'UTC'),
+    (Identifier: 'W-SU'; PrimaryIdentifier: 'Europe/Moscow'),
+    (Identifier: 'WET'; PrimaryIdentifier: 'Europe/Lisbon'),
+    (Identifier: 'Zulu'; PrimaryIdentifier: 'UTC')
+  );
 
 {$IFDEF MSWINDOWS}
 type
@@ -134,6 +297,59 @@ threadvar
 function ASCIIEqualsIgnoreCase(const ALeft, ARight: string): Boolean;
 begin
   Result := SameText(ALeft, ARight);
+end;
+
+function TryKnownTimeZoneIdentifierCase(const ATimeZone: string;
+  out ACanonicalTimeZone: string): Boolean;
+var
+  Entry: TTimeZonePrimaryIdentifierMapEntry;
+begin
+  Result := False;
+  ACanonicalTimeZone := '';
+
+  for Entry in KNOWN_TIMEZONE_PRIMARY_IDENTIFIERS do
+  begin
+    if ASCIIEqualsIgnoreCase(ATimeZone, Entry.Identifier) then
+    begin
+      ACanonicalTimeZone := Entry.Identifier;
+      Result := True;
+      Exit;
+    end;
+
+    if ASCIIEqualsIgnoreCase(ATimeZone, Entry.PrimaryIdentifier) then
+    begin
+      ACanonicalTimeZone := Entry.PrimaryIdentifier;
+      Result := True;
+      Exit;
+    end;
+  end;
+end;
+
+function TryKnownPrimaryTimeZoneIdentifier(const ATimeZone: string;
+  out APrimaryTimeZone: string): Boolean;
+var
+  Entry: TTimeZonePrimaryIdentifierMapEntry;
+begin
+  Result := False;
+  APrimaryTimeZone := '';
+
+  if ASCIIEqualsIgnoreCase(ATimeZone, UTC_TIMEZONE_ID) then
+  begin
+    APrimaryTimeZone := UTC_TIMEZONE_ID;
+    Result := True;
+    Exit;
+  end;
+
+  for Entry in KNOWN_TIMEZONE_PRIMARY_IDENTIFIERS do
+  begin
+    if ASCIIEqualsIgnoreCase(ATimeZone, Entry.Identifier) or
+       ASCIIEqualsIgnoreCase(ATimeZone, Entry.PrimaryIdentifier) then
+    begin
+      APrimaryTimeZone := Entry.PrimaryIdentifier;
+      Result := True;
+      Exit;
+    end;
+  end;
 end;
 
 {$IFDEF MSWINDOWS}
@@ -615,6 +831,14 @@ begin
     Result := True;
   {$ENDIF}
 
+  if (not Result) and TryCanonicalizeEmbeddedTimeZoneFileName(ATimeZone,
+    ACanonicalTimeZone) then
+    Result := True;
+
+  if (not Result) and TryKnownTimeZoneIdentifierCase(ATimeZone,
+    ACanonicalTimeZone) then
+    Result := True;
+
   CacheTimeZoneCase(ATimeZone, ACanonicalTimeZone, Result);
 end;
 
@@ -784,6 +1008,8 @@ function TimeZoneIdentifiersEqual(const ALeft, ARight: string): Boolean;
 var
   LeftOffset, RightOffset: Integer;
   LeftIsOffset, RightIsOffset: Boolean;
+  LeftPrimary, RightPrimary: string;
+  LeftHasPrimary, RightHasPrimary: Boolean;
 begin
   if ALeft = ARight then
     Exit(True);
@@ -795,6 +1021,17 @@ begin
 
   if IsUTCPrimaryEquivalent(ALeft) and IsUTCPrimaryEquivalent(ARight) then
     Exit(True);
+
+  LeftHasPrimary := TryKnownPrimaryTimeZoneIdentifier(ALeft, LeftPrimary);
+  RightHasPrimary := TryKnownPrimaryTimeZoneIdentifier(ARight, RightPrimary);
+  if LeftHasPrimary or RightHasPrimary then
+  begin
+    if not LeftHasPrimary then
+      LeftPrimary := ALeft;
+    if not RightHasPrimary then
+      RightPrimary := ARight;
+    Exit(ASCIIEqualsIgnoreCase(LeftPrimary, RightPrimary));
+  end;
 
   if IsSupportedCanonicalTimeZoneIdentifier(ALeft) and
      IsSupportedCanonicalTimeZoneIdentifier(ARight) then
@@ -866,9 +1103,18 @@ end;
 function TryLoadTimeZoneDataFromKnownLocations(const ATimeZone: string;
   out AData: TTimeZoneInformationData): Boolean;
 var
-  EnvDirectory: string;
+  EnvDirectory, PrimaryTimeZone: string;
 begin
   Result := False;
+
+  if TryKnownPrimaryTimeZoneIdentifier(ATimeZone, PrimaryTimeZone) and
+     (not ASCIIEqualsIgnoreCase(ATimeZone, PrimaryTimeZone)) and
+     TryLoadTimeZoneDataFromKnownLocations(PrimaryTimeZone, AData) then
+  begin
+    AData.Identifier := ATimeZone;
+    Result := True;
+    Exit;
+  end;
 
   EnvDirectory := GetEnvironmentVariable(GOCCIA_TZDIR_ENV);
   if TryLoadTimeZoneDataFromDirectory(EnvDirectory, ATimeZone, AData) then

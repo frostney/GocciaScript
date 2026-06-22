@@ -243,6 +243,23 @@ begin
   end;
 end;
 
+function TryGetRecentCurrencyDisplayName(const ACode: string; out AName: string): Boolean;
+begin
+  if UpperCase(ACode) = 'XCG' then
+  begin
+    AName := 'Caribbean guilder';
+    Exit(True);
+  end
+  else if UpperCase(ACode) = 'ZWG' then
+  begin
+    AName := 'Zimbabwean Gold';
+    Exit(True);
+  end;
+
+  AName := '';
+  Result := False;
+end;
+
 procedure DefineDisplayNamesResolvedProperty(const AObject: TGocciaObjectValue;
   const AName, AValue: string);
 begin
@@ -369,6 +386,9 @@ begin
     Result := TGocciaStringLiteralValue.Create(DisplayName)
   else if TryGetDisplayName(DN.FLocale, Code, DisplayTypeStringToEnum(DN.FType),
     DisplayName) then
+    Result := TGocciaStringLiteralValue.Create(DisplayName)
+  else if (DN.FType = 'currency') and
+          TryGetRecentCurrencyDisplayName(Code, DisplayName) then
     Result := TGocciaStringLiteralValue.Create(DisplayName)
   else
   begin

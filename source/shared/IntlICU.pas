@@ -2060,6 +2060,60 @@ begin
       (AOptions.CurrencySign = incsStandard);
 end;
 
+function IsEnInLocale(const ALocale: string): Boolean;
+begin
+  Result := SameText(ALocale, 'en-IN') or
+    SameText(Copy(ALocale, 1, 6), 'en-IN-');
+end;
+
+function NeedsEnInCompactThousandsFallback(const ALocale: string;
+  const AValue: Double; const AOptions: TIntlNumberFormatOptions): Boolean;
+const
+  EN_IN_COMPACT_THOUSANDS_MIN = 1000.0;
+  EN_IN_COMPACT_LAKH_MIN = 100000.0;
+var
+  Magnitude: Double;
+begin
+  Magnitude := Abs(AValue);
+  Result := IsEnInLocale(ALocale) and (AOptions.Style = insDecimal) and
+    (AOptions.Notation = innCompact) and
+    (AOptions.CompactDisplay = incdShort) and
+    (Magnitude >= EN_IN_COMPACT_THOUSANDS_MIN) and
+    (Magnitude < EN_IN_COMPACT_LAKH_MIN);
+end;
+
+function TryParseInvariantDouble(const AValue: string; out ANumber: Double): Boolean;
+var
+  FormatSettings: TFormatSettings;
+begin
+  FormatSettings := DefaultFormatSettings;
+  FormatSettings.DecimalSeparator := '.';
+  Result := TryStrToFloat(AValue, ANumber, FormatSettings);
+end;
+
+procedure NormalizeICUNumberFormatResult(const ALocale: string;
+  const AValue: Double; const AOptions: TIntlNumberFormatOptions;
+  var AFormatted: string);
+begin
+  if NeedsEnInCompactThousandsFallback(ALocale, AValue, AOptions) and
+     (Length(AFormatted) > 0) and (AFormatted[Length(AFormatted)] = 'T') then
+    AFormatted[Length(AFormatted)] := 'K';
+end;
+
+procedure NormalizeICUNumberFormatParts(const ALocale: string;
+  const AValue: Double; const AOptions: TIntlNumberFormatOptions;
+  var AParts: TIntlFormatPartArray);
+var
+  I: Integer;
+begin
+  if not NeedsEnInCompactThousandsFallback(ALocale, AValue, AOptions) then
+    Exit;
+
+  for I := 0 to Length(AParts) - 1 do
+    if (AParts[I].PartType = 'compact') and (AParts[I].Value = 'T') then
+      AParts[I].Value := 'K';
+end;
+
 function TryICUFormatNumberSkeleton(const ALocale: string; AValue: Double;
   const AOptions: TIntlNumberFormatOptions; out AFormatted: string): Boolean;
 var
@@ -2227,16 +2281,25 @@ function TryICUFormatNumber(const ALocale: string; AValue: Double;
 begin
   AValue := CanonicalizeICUNumberFormatInput(AValue);
   if TryICUFormatNumberSkeleton(ALocale, AValue, AOptions, AFormatted) then
+  begin
+    NormalizeICUNumberFormatResult(ALocale, AValue, AOptions, AFormatted);
     Exit(True);
+  end;
   Result := CanUseLegacyNumberFormatter(AOptions) and
     TryICUFormatNumberDirect(ALocale, AValue, AOptions, AFormatted);
+  if Result then
+    NormalizeICUNumberFormatResult(ALocale, AValue, AOptions, AFormatted);
 end;
 
 function TryICUFormatNumberDecimal(const ALocale, AValue: string;
   const AOptions: TIntlNumberFormatOptions; out AFormatted: string): Boolean;
+var
+  NumberValue: Double;
 begin
   Result := TryICUFormatNumberDecimalSkeleton(ALocale, AValue, AOptions,
     AFormatted);
+  if Result and TryParseInvariantDouble(AValue, NumberValue) then
+    NormalizeICUNumberFormatResult(ALocale, NumberValue, AOptions, AFormatted);
 end;
 
 function TryICUFormatNumberToPartsSkeleton(const ALocale: string; AValue: Double;
@@ -2416,16 +2479,25 @@ function TryICUFormatNumberToParts(const ALocale: string; AValue: Double;
 begin
   AValue := CanonicalizeICUNumberFormatInput(AValue);
   if TryICUFormatNumberToPartsSkeleton(ALocale, AValue, AOptions, AParts) then
+  begin
+    NormalizeICUNumberFormatParts(ALocale, AValue, AOptions, AParts);
     Exit(True);
+  end;
   Result := CanUseLegacyNumberFormatter(AOptions) and
     TryICUFormatNumberToPartsDirect(ALocale, AValue, AOptions, AParts);
+  if Result then
+    NormalizeICUNumberFormatParts(ALocale, AValue, AOptions, AParts);
 end;
 
 function TryICUFormatNumberDecimalToParts(const ALocale, AValue: string;
   const AOptions: TIntlNumberFormatOptions; out AParts: TIntlFormatPartArray): Boolean;
+var
+  NumberValue: Double;
 begin
   Result := TryICUFormatNumberDecimalToPartsSkeleton(ALocale, AValue, AOptions,
     AParts);
+  if Result and TryParseInvariantDouble(AValue, NumberValue) then
+    NormalizeICUNumberFormatParts(ALocale, NumberValue, AOptions, AParts);
 end;
 
 function TryICUFormatNumberRangeInternal(const ALocale: string;

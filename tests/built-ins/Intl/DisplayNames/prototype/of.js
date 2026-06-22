@@ -13,6 +13,13 @@ describe.runIf(isIntl && typeof Intl.DisplayNames !== "undefined")("Intl.Display
     expect(dn.of("USD")).toBe(hasFullICU ? "US Dollar" : "USD");
   });
 
+  test("returns current currency display names missing from older ICU data", () => {
+    const dn = new Intl.DisplayNames("en", { type: "currency", fallback: "none" });
+
+    expect(dn.of("XCG")).toBe("Caribbean guilder");
+    expect(dn.of("ZWG")).toBe("Zimbabwean Gold");
+  });
+
   test("returns localized script display names", () => {
     const dn = new Intl.DisplayNames("en", { type: "script" });
 

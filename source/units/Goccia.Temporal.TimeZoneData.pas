@@ -8,6 +8,8 @@ uses
   SysUtils;
 
 function TryGetEmbeddedTimeZoneFile(const ATimeZone: string; out ABytes: TBytes): Boolean;
+function TryCanonicalizeEmbeddedTimeZoneFileName(const ATimeZone: string;
+  out ACanonicalTimeZone: string): Boolean;
 
 implementation
 
@@ -87,12 +89,59 @@ begin
   Result := TryCopyEmbeddedResourceEntryData(Resource, Container, Entry, ABytes);
 end;
 
+function TryCanonicalizeEmbeddedTimeZoneFileName(const ATimeZone: string;
+  out ACanonicalTimeZone: string): Boolean;
+var
+  Resource: TBytes;
+  Container: TEmbeddedResourceContainer;
+  Entry: TEmbeddedResourceEntry;
+  EntryIndex, NameOffset: Integer;
+  EntryName: string;
+begin
+  Result := False;
+  ACanonicalTimeZone := '';
+
+  if not TryReadEmbeddedResource(Resource) then
+    Exit;
+
+  if not TryReadEmbeddedResourceContainer(Resource, TIME_ZONE_DATA_MAGIC,
+     Container) then
+    Exit;
+
+  for EntryIndex := 0 to Container.EntryCount - 1 do
+  begin
+    if not TryReadEmbeddedResourceEntry(Resource, Container, EntryIndex, Entry) then
+      Exit;
+
+    if Entry.NameOffset > High(Integer) - Container.NamesOffset then
+      Exit;
+    NameOffset := Container.NamesOffset + Entry.NameOffset;
+    if not HasBytesAvailable(Resource, NameOffset, Entry.NameLength) then
+      Exit;
+
+    EntryName := CopyStringFromBytes(Resource, NameOffset, Entry.NameLength);
+    if SameText(EntryName, ATimeZone) then
+    begin
+      ACanonicalTimeZone := EntryName;
+      Result := True;
+      Exit;
+    end;
+  end;
+end;
+
 {$ELSE}
 
 function TryGetEmbeddedTimeZoneFile(const ATimeZone: string; out ABytes: TBytes): Boolean;
 begin
   Result := False;
   SetLength(ABytes, 0);
+end;
+
+function TryCanonicalizeEmbeddedTimeZoneFileName(const ATimeZone: string;
+  out ACanonicalTimeZone: string): Boolean;
+begin
+  Result := False;
+  ACanonicalTimeZone := '';
 end;
 
 {$ENDIF}
