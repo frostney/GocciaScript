@@ -829,6 +829,7 @@ begin
   Index := 0;
 
   TGarbageCollector.Instance.AddTempRoot(Iterator);
+  TGarbageCollector.Instance.AddTempRoot(Callback);
   try
     try
       Value := Iterator.DirectNext(Done);
@@ -843,6 +844,7 @@ begin
       raise;
     end;
   finally
+    TGarbageCollector.Instance.RemoveTempRoot(Callback);
     TGarbageCollector.Instance.RemoveTempRoot(Iterator);
   end;
 
@@ -869,6 +871,7 @@ begin
   Done := False;
 
   TGarbageCollector.Instance.AddTempRoot(Iterator);
+  TGarbageCollector.Instance.AddTempRoot(Callback);
   try
     try
       if HasInitial then
@@ -910,6 +913,7 @@ begin
       raise;
     end;
   finally
+    TGarbageCollector.Instance.RemoveTempRoot(Callback);
     TGarbageCollector.Instance.RemoveTempRoot(Iterator);
   end;
 end;
@@ -965,6 +969,7 @@ begin
   Index := 0;
 
   TGarbageCollector.Instance.AddTempRoot(Iterator);
+  TGarbageCollector.Instance.AddTempRoot(Callback);
   try
     try
       Value := Iterator.DirectNext(Done);
@@ -986,6 +991,7 @@ begin
       raise;
     end;
   finally
+    TGarbageCollector.Instance.RemoveTempRoot(Callback);
     TGarbageCollector.Instance.RemoveTempRoot(Iterator);
   end;
 end;
@@ -1006,6 +1012,7 @@ begin
   Index := 0;
 
   TGarbageCollector.Instance.AddTempRoot(Iterator);
+  TGarbageCollector.Instance.AddTempRoot(Callback);
   try
     try
       Value := Iterator.DirectNext(Done);
@@ -1027,6 +1034,7 @@ begin
       raise;
     end;
   finally
+    TGarbageCollector.Instance.RemoveTempRoot(Callback);
     TGarbageCollector.Instance.RemoveTempRoot(Iterator);
   end;
 end;
@@ -1048,6 +1056,7 @@ begin
   Index := 0;
 
   TGarbageCollector.Instance.AddTempRoot(Iterator);
+  TGarbageCollector.Instance.AddTempRoot(Callback);
   try
     try
       Value := Iterator.DirectNext(Done);
@@ -1075,6 +1084,7 @@ begin
       raise;
     end;
   finally
+    TGarbageCollector.Instance.RemoveTempRoot(Callback);
     TGarbageCollector.Instance.RemoveTempRoot(Iterator);
   end;
 end;
