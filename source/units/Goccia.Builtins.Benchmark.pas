@@ -429,6 +429,7 @@ var
   WasGCEnabled: Boolean;
   MeasurementWatermark: Integer;
   RunArgs: TGocciaArgumentsCollection;
+  ActiveRoots: TGocciaActiveRootFrame;
 begin
   Result.Name := ABenchCase.Name;
   Result.SuiteName := ABenchCase.SuiteName;
@@ -443,6 +444,10 @@ begin
   GC := TGarbageCollector.Instance;
   WasGCEnabled := False;
   SetupResult := nil;
+  ActiveRoots.Initialize;
+  ActiveRoots.Add(ABenchCase.RunFunction);
+  ActiveRoots.Add(ABenchCase.SetupFunction);
+  ActiveRoots.Add(ABenchCase.TeardownFunction);
   RunArgs := TGocciaArgumentsCollection.CreateWithCapacity(1);
   try
     if Assigned(ABenchCase.SetupFunction) then
@@ -454,7 +459,10 @@ begin
       Result.SetupMs := (GetNanoseconds - StartNanoseconds) / 1000000;
 
       if Assigned(SetupResult) and Assigned(GC) then
+      begin
         GC.AddTempRoot(SetupResult);
+        ActiveRoots.Add(SetupResult);
+      end;
     end;
 
     try
@@ -574,6 +582,7 @@ begin
     end;
   finally
     RunArgs.Free;
+    ActiveRoots.Clear;
   end;
 end;
 
@@ -583,6 +592,7 @@ var
   SetupResult: TGocciaValue;
   RunArgs: TGocciaArgumentsCollection;
   GC: TGarbageCollector;
+  ActiveRoots: TGocciaActiveRootFrame;
 begin
   Result.Name := ABenchCase.Name;
   Result.SuiteName := ABenchCase.SuiteName;
@@ -598,6 +608,10 @@ begin
 
   GC := TGarbageCollector.Instance;
   SetupResult := nil;
+  ActiveRoots.Initialize;
+  ActiveRoots.Add(ABenchCase.RunFunction);
+  ActiveRoots.Add(ABenchCase.SetupFunction);
+  ActiveRoots.Add(ABenchCase.TeardownFunction);
   RunArgs := TGocciaArgumentsCollection.CreateWithCapacity(1);
   try
     if Assigned(ABenchCase.SetupFunction) then
@@ -606,7 +620,10 @@ begin
         TGocciaUndefinedLiteralValue.UndefinedValue);
       WaitForFetchIdle;
       if Assigned(SetupResult) and Assigned(GC) then
+      begin
         GC.AddTempRoot(SetupResult);
+        ActiveRoots.Add(SetupResult);
+      end;
     end;
 
     try
@@ -624,6 +641,7 @@ begin
     end;
   finally
     RunArgs.Free;
+    ActiveRoots.Clear;
   end;
 end;
 
