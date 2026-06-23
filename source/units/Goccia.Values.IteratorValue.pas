@@ -6,6 +6,7 @@ interface
 
 uses
   Goccia.Arguments.Collection,
+  Goccia.GarbageCollector,
   Goccia.ObjectModel,
   Goccia.Realm,
   Goccia.Values.ObjectValue,
@@ -68,11 +69,13 @@ type
   TGocciaIteratorHelperValue = class(TGocciaIteratorValue)
   private
     FExecuting: Boolean;
+    FDirectResultRoot: TGocciaTempRoot;
   protected
     function DoAdvanceNext: TGocciaObjectValue; virtual; abstract;
     function DoDirectNext(out ADone: Boolean): TGocciaValue; virtual; abstract;
   public
     constructor Create;
+    destructor Destroy; override;
     function AdvanceNext: TGocciaObjectValue; override;
     function DirectNext(out ADone: Boolean): TGocciaValue; override;
     function ReturnValue(const AValue: TGocciaValue): TGocciaObjectValue; override;
@@ -94,7 +97,6 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
-  Goccia.GarbageCollector,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
@@ -1710,6 +1712,9 @@ var
   SelfWasRooted: Boolean;
 begin
   inherited Create;
+  FExecuting := False;
+  Goccia.GarbageCollector.InitializeTempRoot(FDirectResultRoot);
+
   GC := TGarbageCollector.Instance;
   SelfWasRooted := Assigned(GC) and not GC.IsTempRoot(Self);
   if SelfWasRooted then
@@ -1725,8 +1730,15 @@ begin
   end;
 end;
 
+destructor TGocciaIteratorHelperValue.Destroy;
+begin
+  Goccia.GarbageCollector.RemoveTempRootIfNeeded(FDirectResultRoot);
+  inherited;
+end;
+
 function TGocciaIteratorHelperValue.AdvanceNext: TGocciaObjectValue;
 begin
+  Goccia.GarbageCollector.RemoveTempRootIfNeeded(FDirectResultRoot);
   if FDone then
   begin
     Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
@@ -1744,6 +1756,7 @@ end;
 
 function TGocciaIteratorHelperValue.DirectNext(out ADone: Boolean): TGocciaValue;
 begin
+  Goccia.GarbageCollector.RemoveTempRootIfNeeded(FDirectResultRoot);
   if FDone then
   begin
     ADone := True;
@@ -1755,6 +1768,8 @@ begin
   FExecuting := True;
   try
     Result := DoDirectNext(ADone);
+    if not ADone then
+      Goccia.GarbageCollector.AddTempRootIfNeeded(FDirectResultRoot, Result);
   finally
     FExecuting := False;
   end;
@@ -1778,6 +1793,7 @@ end;
 
 procedure TGocciaIteratorHelperValue.Close;
 begin
+  Goccia.GarbageCollector.RemoveTempRootIfNeeded(FDirectResultRoot);
   FDone := True;
 end;
 
