@@ -98,6 +98,26 @@ uses
   Goccia.Values.IteratorSupport,
   Goccia.Values.SymbolValue;
 
+function AddTempRootIfNeeded(const AValue: TGocciaValue): Boolean;
+var
+  GC: TGarbageCollector;
+begin
+  GC := TGarbageCollector.Instance;
+  Result := Assigned(GC) and Assigned(AValue) and not GC.IsTempRoot(AValue);
+  if Result then
+    GC.AddTempRoot(AValue);
+end;
+
+procedure RemoveTempRootIfNeeded(
+  const AValue: TGocciaValue; const AWasRooted: Boolean);
+var
+  GC: TGarbageCollector;
+begin
+  GC := TGarbageCollector.Instance;
+  if AWasRooted and Assigned(GC) then
+    GC.RemoveTempRoot(AValue);
+end;
+
 { TGocciaLazyMapIteratorValue }
 
 constructor TGocciaLazyMapIteratorValue.Create(const ASourceIterator: TGocciaIteratorValue; const ACallback: TGocciaValue);
@@ -112,6 +132,7 @@ function TGocciaLazyMapIteratorValue.DoAdvanceNext: TGocciaObjectValue;
 var
   IterResult: TGocciaObjectValue;
   Value, MappedValue: TGocciaValue;
+  ValueWasRooted, MappedValueWasRooted: Boolean;
 begin
   IterResult := FSourceIterator.AdvanceNext;
   if IteratorResultDone(IterResult) then
@@ -121,20 +142,31 @@ begin
     Exit;
   end;
   Value := IteratorResultValue(IterResult);
+  ValueWasRooted := AddTempRootIfNeeded(Value);
   try
-    MappedValue := InvokeIteratorCallback(FCallback, Value, FIndex);
-  except
-    AcquireExceptionObject;
-    CloseIteratorPreservingError(FSourceIterator);
-    raise;
+    try
+      MappedValue := InvokeIteratorCallback(FCallback, Value, FIndex);
+    except
+      AcquireExceptionObject;
+      CloseIteratorPreservingError(FSourceIterator);
+      raise;
+    end;
+    MappedValueWasRooted := AddTempRootIfNeeded(MappedValue);
+    try
+      Inc(FIndex);
+      Result := CreateIteratorResult(MappedValue, False);
+    finally
+      RemoveTempRootIfNeeded(MappedValue, MappedValueWasRooted);
+    end;
+  finally
+    RemoveTempRootIfNeeded(Value, ValueWasRooted);
   end;
-  Inc(FIndex);
-  Result := CreateIteratorResult(MappedValue, False);
 end;
 
 function TGocciaLazyMapIteratorValue.DoDirectNext(out ADone: Boolean): TGocciaValue;
 var
   Value: TGocciaValue;
+  ValueWasRooted: Boolean;
 begin
   Value := FSourceIterator.DirectNext(ADone);
   if ADone then
@@ -143,14 +175,19 @@ begin
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
     Exit;
   end;
+  ValueWasRooted := AddTempRootIfNeeded(Value);
   try
-    Result := InvokeIteratorCallback(FCallback, Value, FIndex);
-  except
-    AcquireExceptionObject;
-    CloseIteratorPreservingError(FSourceIterator);
-    raise;
+    try
+      Result := InvokeIteratorCallback(FCallback, Value, FIndex);
+    except
+      AcquireExceptionObject;
+      CloseIteratorPreservingError(FSourceIterator);
+      raise;
+    end;
+    Inc(FIndex);
+  finally
+    RemoveTempRootIfNeeded(Value, ValueWasRooted);
   end;
-  Inc(FIndex);
 end;
 
 procedure TGocciaLazyMapIteratorValue.Close;
@@ -185,7 +222,8 @@ end;
 function TGocciaLazyFilterIteratorValue.DoAdvanceNext: TGocciaObjectValue;
 var
   IterResult: TGocciaObjectValue;
-  Value: TGocciaValue;
+  Value, PredicateValue: TGocciaValue;
+  ValueWasRooted, PredicateWasRooted: Boolean;
 begin
   repeat
     IterResult := FSourceIterator.AdvanceNext;
@@ -196,17 +234,28 @@ begin
       Exit;
     end;
     Value := IteratorResultValue(IterResult);
+    ValueWasRooted := AddTempRootIfNeeded(Value);
     try
-      if InvokeIteratorCallback(FCallback, Value, FIndex).ToBooleanLiteral.Value then
-      begin
-        Inc(FIndex);
-        Result := CreateIteratorResult(Value, False);
-        Exit;
+      try
+        PredicateValue := InvokeIteratorCallback(FCallback, Value, FIndex);
+      except
+        AcquireExceptionObject;
+        CloseIteratorPreservingError(FSourceIterator);
+        raise;
       end;
-    except
-      AcquireExceptionObject;
-      CloseIteratorPreservingError(FSourceIterator);
-      raise;
+      PredicateWasRooted := AddTempRootIfNeeded(PredicateValue);
+      try
+        if PredicateValue.ToBooleanLiteral.Value then
+        begin
+          Inc(FIndex);
+          Result := CreateIteratorResult(Value, False);
+          Exit;
+        end;
+      finally
+        RemoveTempRootIfNeeded(PredicateValue, PredicateWasRooted);
+      end;
+    finally
+      RemoveTempRootIfNeeded(Value, ValueWasRooted);
     end;
     Inc(FIndex);
   until False;
@@ -214,7 +263,8 @@ end;
 
 function TGocciaLazyFilterIteratorValue.DoDirectNext(out ADone: Boolean): TGocciaValue;
 var
-  Value: TGocciaValue;
+  Value, PredicateValue: TGocciaValue;
+  ValueWasRooted, PredicateWasRooted: Boolean;
 begin
   repeat
     Value := FSourceIterator.DirectNext(ADone);
@@ -224,17 +274,28 @@ begin
       Result := TGocciaUndefinedLiteralValue.UndefinedValue;
       Exit;
     end;
+    ValueWasRooted := AddTempRootIfNeeded(Value);
     try
-      if InvokeIteratorCallback(FCallback, Value, FIndex).ToBooleanLiteral.Value then
-      begin
-        Inc(FIndex);
-        Result := Value;
-        Exit;
+      try
+        PredicateValue := InvokeIteratorCallback(FCallback, Value, FIndex);
+      except
+        AcquireExceptionObject;
+        CloseIteratorPreservingError(FSourceIterator);
+        raise;
       end;
-    except
-      AcquireExceptionObject;
-      CloseIteratorPreservingError(FSourceIterator);
-      raise;
+      PredicateWasRooted := AddTempRootIfNeeded(PredicateValue);
+      try
+        if PredicateValue.ToBooleanLiteral.Value then
+        begin
+          Inc(FIndex);
+          Result := Value;
+          Exit;
+        end;
+      finally
+        RemoveTempRootIfNeeded(PredicateValue, PredicateWasRooted);
+      end;
+    finally
+      RemoveTempRootIfNeeded(Value, ValueWasRooted);
     end;
     Inc(FIndex);
   until False;
@@ -272,6 +333,8 @@ end;
 function TGocciaLazyTakeIteratorValue.DoAdvanceNext: TGocciaObjectValue;
 var
   IterResult: TGocciaObjectValue;
+  Value: TGocciaValue;
+  ValueWasRooted: Boolean;
 begin
   if FIndex >= FLimit then
   begin
@@ -288,7 +351,13 @@ begin
     Exit;
   end;
   Inc(FIndex);
-  Result := CreateIteratorResult(IteratorResultValue(IterResult), False);
+  Value := IteratorResultValue(IterResult);
+  ValueWasRooted := AddTempRootIfNeeded(Value);
+  try
+    Result := CreateIteratorResult(Value, False);
+  finally
+    RemoveTempRootIfNeeded(Value, ValueWasRooted);
+  end;
 end;
 
 function TGocciaLazyTakeIteratorValue.DoDirectNext(out ADone: Boolean): TGocciaValue;
@@ -341,6 +410,8 @@ end;
 function TGocciaLazyDropIteratorValue.DoAdvanceNext: TGocciaObjectValue;
 var
   IterResult: TGocciaObjectValue;
+  Value: TGocciaValue;
+  ValueWasRooted: Boolean;
 begin
   while FIndex < FLimit do
   begin
@@ -361,7 +432,13 @@ begin
     Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
     Exit;
   end;
-  Result := CreateIteratorResult(IteratorResultValue(IterResult), False);
+  Value := IteratorResultValue(IterResult);
+  ValueWasRooted := AddTempRootIfNeeded(Value);
+  try
+    Result := CreateIteratorResult(Value, False);
+  finally
+    RemoveTempRootIfNeeded(Value, ValueWasRooted);
+  end;
 end;
 
 function TGocciaLazyDropIteratorValue.DoDirectNext(out ADone: Boolean): TGocciaValue;
@@ -503,6 +580,7 @@ function TGocciaLazyFlatMapIteratorValue.DoAdvanceNext: TGocciaObjectValue;
 var
   IterResult, InnerResult: TGocciaObjectValue;
   Value, MappedValue: TGocciaValue;
+  ValueWasRooted, MappedValueWasRooted, InnerValueWasRooted: Boolean;
 begin
   if Assigned(FInnerIterator) then
   begin
@@ -515,7 +593,13 @@ begin
     end;
     if not IteratorResultDone(InnerResult) then
     begin
-      Result := CreateIteratorResult(IteratorResultValue(InnerResult), False);
+      Value := IteratorResultValue(InnerResult);
+      InnerValueWasRooted := AddTempRootIfNeeded(Value);
+      try
+        Result := CreateIteratorResult(Value, False);
+      finally
+        RemoveTempRootIfNeeded(Value, InnerValueWasRooted);
+      end;
       Exit;
     end;
     FInnerIterator := nil;
@@ -531,28 +615,44 @@ begin
     end;
 
     Value := IteratorResultValue(IterResult);
+    ValueWasRooted := AddTempRootIfNeeded(Value);
     try
-      MappedValue := InvokeIteratorCallback(FCallback, Value, FIndex);
-    except
-      AcquireExceptionObject;
-      CloseIteratorPreservingError(FSourceIterator);
-      if Assigned(FInnerIterator) then
-        CloseIteratorPreservingError(FInnerIterator);
-      raise;
-    end;
-    Inc(FIndex);
+      try
+        MappedValue := InvokeIteratorCallback(FCallback, Value, FIndex);
+      except
+        AcquireExceptionObject;
+        CloseIteratorPreservingError(FSourceIterator);
+        if Assigned(FInnerIterator) then
+          CloseIteratorPreservingError(FInnerIterator);
+        raise;
+      end;
+      MappedValueWasRooted := AddTempRootIfNeeded(MappedValue);
+      try
+        Inc(FIndex);
 
-    try
-      FInnerIterator := ResolveIterator(MappedValue);
-      InnerResult := FInnerIterator.AdvanceNext;
-    except
-      AcquireExceptionObject;
-      CloseIteratorPreservingError(FSourceIterator);
-      raise;
+        try
+          FInnerIterator := ResolveIterator(MappedValue);
+          InnerResult := FInnerIterator.AdvanceNext;
+        except
+          AcquireExceptionObject;
+          CloseIteratorPreservingError(FSourceIterator);
+          raise;
+        end;
+      finally
+        RemoveTempRootIfNeeded(MappedValue, MappedValueWasRooted);
+      end;
+    finally
+      RemoveTempRootIfNeeded(Value, ValueWasRooted);
     end;
     if not IteratorResultDone(InnerResult) then
     begin
-      Result := CreateIteratorResult(IteratorResultValue(InnerResult), False);
+      Value := IteratorResultValue(InnerResult);
+      InnerValueWasRooted := AddTempRootIfNeeded(Value);
+      try
+        Result := CreateIteratorResult(Value, False);
+      finally
+        RemoveTempRootIfNeeded(Value, InnerValueWasRooted);
+      end;
       Exit;
     end;
     FInnerIterator := nil;
@@ -563,6 +663,7 @@ function TGocciaLazyFlatMapIteratorValue.DoDirectNext(out ADone: Boolean): TGocc
 var
   Value, MappedValue, InnerValue: TGocciaValue;
   InnerDone: Boolean;
+  ValueWasRooted, MappedValueWasRooted: Boolean;
 begin
   if Assigned(FInnerIterator) then
   begin
@@ -591,24 +692,34 @@ begin
       Exit;
     end;
 
+    ValueWasRooted := AddTempRootIfNeeded(Value);
     try
-      MappedValue := InvokeIteratorCallback(FCallback, Value, FIndex);
-    except
-      AcquireExceptionObject;
-      CloseIteratorPreservingError(FSourceIterator);
-      if Assigned(FInnerIterator) then
-        CloseIteratorPreservingError(FInnerIterator);
-      raise;
-    end;
-    Inc(FIndex);
+      try
+        MappedValue := InvokeIteratorCallback(FCallback, Value, FIndex);
+      except
+        AcquireExceptionObject;
+        CloseIteratorPreservingError(FSourceIterator);
+        if Assigned(FInnerIterator) then
+          CloseIteratorPreservingError(FInnerIterator);
+        raise;
+      end;
+      MappedValueWasRooted := AddTempRootIfNeeded(MappedValue);
+      try
+        Inc(FIndex);
 
-    try
-      FInnerIterator := ResolveIterator(MappedValue);
-      InnerValue := FInnerIterator.DirectNext(InnerDone);
-    except
-      AcquireExceptionObject;
-      CloseIteratorPreservingError(FSourceIterator);
-      raise;
+        try
+          FInnerIterator := ResolveIterator(MappedValue);
+          InnerValue := FInnerIterator.DirectNext(InnerDone);
+        except
+          AcquireExceptionObject;
+          CloseIteratorPreservingError(FSourceIterator);
+          raise;
+        end;
+      finally
+        RemoveTempRootIfNeeded(MappedValue, MappedValueWasRooted);
+      end;
+    finally
+      RemoveTempRootIfNeeded(Value, ValueWasRooted);
     end;
     if not InnerDone then
     begin
