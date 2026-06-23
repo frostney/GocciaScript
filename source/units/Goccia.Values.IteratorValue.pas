@@ -124,7 +124,6 @@ var
 threadvar
   FPrototypeMethodHost: TGocciaIteratorValue;
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
-  FHelperPrototypeMembers: TArray<TGocciaMemberDefinition>;
   FStaticMembers: TArray<TGocciaMemberDefinition>;
 
 function GetSharedIteratorPrototype: TGocciaObjectValue; inline;
@@ -300,24 +299,19 @@ begin
   HelperPrototype := TGocciaObjectValue.Create(GetSharedIteratorPrototype);
   CurrentRealm.SetSlot(GIteratorHelperPrototypeSlot, HelperPrototype);
 
-  if Length(FHelperPrototypeMembers) = 0 then
-  begin
-    Members := TGocciaMemberCollection.Create;
-    try
-      Members.AddNamedMethod('next', FPrototypeMethodHost.IteratorNext, 0,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod(PROP_RETURN, FPrototypeMethodHost.IteratorHelperReturn, 0,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddSymbolDataProperty(
-        TGocciaSymbolValue.WellKnownToStringTag,
-        TGocciaStringLiteralValue.Create('Iterator Helper'), [pfConfigurable]);
-      FHelperPrototypeMembers := Members.ToDefinitions;
-    finally
-      Members.Free;
-    end;
+  Members := TGocciaMemberCollection.Create;
+  try
+    Members.AddNamedMethod('next', FPrototypeMethodHost.IteratorNext, 0,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod(PROP_RETURN, FPrototypeMethodHost.IteratorHelperReturn, 0,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddSymbolDataProperty(
+      TGocciaSymbolValue.WellKnownToStringTag,
+      TGocciaStringLiteralValue.Create('Iterator Helper'), [pfConfigurable]);
+    RegisterMemberDefinitions(HelperPrototype, Members.ToDefinitions);
+  finally
+    Members.Free;
   end;
-
-  RegisterMemberDefinitions(HelperPrototype, FHelperPrototypeMembers);
 end;
 
 function CreateIteratorResult(const AValue: TGocciaValue; const ADone: Boolean): TGocciaObjectValue;
