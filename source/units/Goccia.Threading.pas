@@ -2,9 +2,8 @@
 
   Provides TGocciaThreadPool which dispatches file-level work items to a
   configurable number of worker threads. Each worker initialises its own
-  thread-local runtime (GC, CallStack, MicrotaskQueue). Non-coverage workers
-  reset that runtime between files so long-running batches do not carry a
-  previous file's thread-local heap into the next dispatch.
+  thread-local runtime (GC, CallStack, MicrotaskQueue) and shuts it down
+  on completion, so there is zero shared mutable state between workers.
 
   Workers pull files from a shared queue so that fast workers naturally
   pick up more files, keeping all cores busy even when file execution
@@ -309,11 +308,9 @@ var
   ConsoleOut, ErrorMsg: string;
   MemoryMeasurement: TCLIJSONMemoryMeasurement;
   Idx: Integer;
-  RuntimeInitialized: Boolean;
 begin
   FLastActivityNs := GetNanoseconds;
   InitThreadRuntime(FEnableCoverage, FMaxBytes);
-  RuntimeInitialized := True;
   BeginCLIJSONMemoryMeasurement(MemoryMeasurement);
   try
     while FQueue.TryDequeue(Item) do
@@ -373,33 +370,17 @@ begin
       { Cancel remaining files across all workers on first error. }
       if FCancelOnError and (not FResults[Idx].Success) then
         FCancelled^ := True;
-
-      if not FEnableCoverage then
-      begin
-        FMemoryStats := CombineCLIJSONMemoryStats(FMemoryStats,
-          FinishCLIJSONMemoryMeasurement(MemoryMeasurement), False);
-        ShutdownThreadRuntime;
-        RuntimeInitialized := False;
-        InitThreadRuntime(False, FMaxBytes);
-        RuntimeInitialized := True;
-        BeginCLIJSONMemoryMeasurement(MemoryMeasurement);
-      end;
     end;
   finally
     // Refresh the timestamp as we exit the work loop so the watchdog
     // does not interpret a slow thread-runtime shutdown as a hang.
     FLastActivityNs := GetNanoseconds;
-    if FEnableCoverage then
-      FMemoryStats := FinishCLIJSONMemoryMeasurement(MemoryMeasurement)
-    else
-      FMemoryStats := CombineCLIJSONMemoryStats(FMemoryStats,
-        FinishCLIJSONMemoryMeasurement(MemoryMeasurement), False);
+    FMemoryStats := FinishCLIJSONMemoryMeasurement(MemoryMeasurement);
     { Detach the coverage tracker before shutting down the runtime so
       the main thread can read it after the worker completes. }
     if FEnableCoverage then
       FCoverageTracker := TGocciaCoverageTracker.Instance;
-    if RuntimeInitialized then
-      ShutdownThreadRuntime;
+    ShutdownThreadRuntime;
   end;
 end;
 
