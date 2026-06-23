@@ -363,7 +363,7 @@ begin
     GC.AddTempRoot(AIterResult);
   try
     DoneValue := AIterResult.GetProperty(PROP_DONE);
-    Result := TGocciaBooleanLiteralValue(DoneValue).Value;
+    Result := Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value;
   finally
     if IterResultWasRooted then
       GC.RemoveTempRoot(AIterResult);
