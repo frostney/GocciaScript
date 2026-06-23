@@ -114,13 +114,13 @@ var
   Value, MappedValue: TGocciaValue;
 begin
   IterResult := FSourceIterator.AdvanceNext;
-  if TGocciaBooleanLiteralValue(IterResult.GetProperty(PROP_DONE)).Value then
+  if IteratorResultDone(IterResult) then
   begin
     FDone := True;
     Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
     Exit;
   end;
-  Value := IterResult.GetProperty(PROP_VALUE);
+  Value := IteratorResultValue(IterResult);
   try
     MappedValue := InvokeIteratorCallback(FCallback, Value, FIndex);
   except
@@ -189,13 +189,13 @@ var
 begin
   repeat
     IterResult := FSourceIterator.AdvanceNext;
-    if TGocciaBooleanLiteralValue(IterResult.GetProperty(PROP_DONE)).Value then
+    if IteratorResultDone(IterResult) then
     begin
       FDone := True;
       Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
       Exit;
     end;
-    Value := IterResult.GetProperty(PROP_VALUE);
+    Value := IteratorResultValue(IterResult);
     try
       if InvokeIteratorCallback(FCallback, Value, FIndex).ToBooleanLiteral.Value then
       begin
@@ -281,14 +281,14 @@ begin
     Exit;
   end;
   IterResult := FSourceIterator.AdvanceNext;
-  if TGocciaBooleanLiteralValue(IterResult.GetProperty(PROP_DONE)).Value then
+  if IteratorResultDone(IterResult) then
   begin
     FDone := True;
     Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
     Exit;
   end;
   Inc(FIndex);
-  Result := CreateIteratorResult(IterResult.GetProperty(PROP_VALUE), False);
+  Result := CreateIteratorResult(IteratorResultValue(IterResult), False);
 end;
 
 function TGocciaLazyTakeIteratorValue.DoDirectNext(out ADone: Boolean): TGocciaValue;
@@ -345,7 +345,7 @@ begin
   while FIndex < FLimit do
   begin
     IterResult := FSourceIterator.AdvanceNext;
-    if TGocciaBooleanLiteralValue(IterResult.GetProperty(PROP_DONE)).Value then
+    if IteratorResultDone(IterResult) then
     begin
       FDone := True;
       Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
@@ -355,13 +355,13 @@ begin
   end;
 
   IterResult := FSourceIterator.AdvanceNext;
-  if TGocciaBooleanLiteralValue(IterResult.GetProperty(PROP_DONE)).Value then
+  if IteratorResultDone(IterResult) then
   begin
     FDone := True;
     Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
     Exit;
   end;
-  Result := CreateIteratorResult(IterResult.GetProperty(PROP_VALUE), False);
+  Result := CreateIteratorResult(IteratorResultValue(IterResult), False);
 end;
 
 function TGocciaLazyDropIteratorValue.DoDirectNext(out ADone: Boolean): TGocciaValue;
@@ -418,6 +418,24 @@ function TGocciaLazyFlatMapIteratorValue.ResolveIterator(const AValue: TGocciaVa
 var
   IteratorMethod, IteratorObj, NextMethod: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
+  GC: TGarbageCollector;
+  ValueWasRooted, MethodWasRooted, IteratorWasRooted: Boolean;
+
+  function AddRootIfNeeded(const ARootValue: TGocciaValue): Boolean;
+  begin
+    Result := Assigned(GC) and Assigned(ARootValue) and
+      not GC.IsTempRoot(ARootValue);
+    if Result then
+      GC.AddTempRoot(ARootValue);
+  end;
+
+  procedure RemoveRootIfNeeded(const ARootValue: TGocciaValue;
+    const AWasRooted: Boolean);
+  begin
+    if AWasRooted then
+      GC.RemoveTempRoot(ARootValue);
+  end;
+
 begin
   // Iterator.prototype.flatMap uses GetIteratorFlattenable(...,
   // reject-primitives): primitives, including strings, are mapper errors.
@@ -425,45 +443,56 @@ begin
     ThrowTypeError(SErrorIteratorFlatMapMustReturnIterable,
       SSuggestIteratorFlatMapCallable);
 
-  IteratorObj := AValue;
-  IteratorMethod := TGocciaObjectValue(AValue).GetSymbolProperty(
-    TGocciaSymbolValue.WellKnownIterator);
-  if Assigned(IteratorMethod) and
-     not (IteratorMethod is TGocciaUndefinedLiteralValue) and
-     not (IteratorMethod is TGocciaNullLiteralValue) then
-  begin
-    if not IteratorMethod.IsCallable then
-      ThrowTypeError(Format(SErrorValueNotFunction, ['[Symbol.iterator]']),
-        SSuggestIteratorProtocol);
+  GC := TGarbageCollector.Instance;
+  ValueWasRooted := AddRootIfNeeded(AValue);
+  try
+    IteratorObj := AValue;
+    IteratorMethod := TGocciaObjectValue(AValue).GetSymbolProperty(
+      TGocciaSymbolValue.WellKnownIterator);
+    if Assigned(IteratorMethod) and
+       not (IteratorMethod is TGocciaUndefinedLiteralValue) and
+       not (IteratorMethod is TGocciaNullLiteralValue) then
+    begin
+      if not IteratorMethod.IsCallable then
+        ThrowTypeError(Format(SErrorValueNotFunction, ['[Symbol.iterator]']),
+          SSuggestIteratorProtocol);
 
-    TGarbageCollector.Instance.AddTempRoot(AValue);
-    try
+      MethodWasRooted := AddRootIfNeeded(IteratorMethod);
       CallArgs := TGocciaArgumentsCollection.Create;
       try
-        IteratorObj := TGocciaFunctionBase(IteratorMethod).Call(CallArgs,
-          AValue);
+        try
+          IteratorObj := TGocciaFunctionBase(IteratorMethod).Call(CallArgs,
+            AValue);
+        finally
+          CallArgs.Free;
+        end;
       finally
-        CallArgs.Free;
+        RemoveRootIfNeeded(IteratorMethod, MethodWasRooted);
       end;
-    finally
-      TGarbageCollector.Instance.RemoveTempRoot(AValue);
+
+      if not (IteratorObj is TGocciaObjectValue) then
+        ThrowTypeError(SErrorIteratorInvalid, SSuggestIteratorProtocol);
     end;
 
-    if not (IteratorObj is TGocciaObjectValue) then
-      ThrowTypeError(SErrorIteratorInvalid, SSuggestIteratorProtocol);
-  end;
+    if IteratorObj is TGocciaIteratorValue then
+    begin
+      Result := TGocciaIteratorValue(IteratorObj);
+      Exit;
+    end;
 
-  if IteratorObj is TGocciaIteratorValue then
-  begin
-    Result := TGocciaIteratorValue(IteratorObj);
-    Exit;
-  end;
-
-  if IteratorObj is TGocciaObjectValue then
-  begin
-    NextMethod := TGocciaObjectValue(IteratorObj).GetProperty(PROP_NEXT);
-    Result := CreateRootedGenericIterator(IteratorObj, NextMethod);
-    Exit;
+    if IteratorObj is TGocciaObjectValue then
+    begin
+      IteratorWasRooted := AddRootIfNeeded(IteratorObj);
+      try
+        NextMethod := TGocciaObjectValue(IteratorObj).GetProperty(PROP_NEXT);
+        Result := CreateRootedGenericIterator(IteratorObj, NextMethod);
+      finally
+        RemoveRootIfNeeded(IteratorObj, IteratorWasRooted);
+      end;
+      Exit;
+    end;
+  finally
+    RemoveRootIfNeeded(AValue, ValueWasRooted);
   end;
 
   ThrowTypeError(SErrorIteratorInvalid, SSuggestIteratorProtocol);
@@ -484,9 +513,9 @@ begin
       CloseIteratorPreservingError(FSourceIterator);
       raise;
     end;
-    if not TGocciaBooleanLiteralValue(InnerResult.GetProperty(PROP_DONE)).Value then
+    if not IteratorResultDone(InnerResult) then
     begin
-      Result := CreateIteratorResult(InnerResult.GetProperty(PROP_VALUE), False);
+      Result := CreateIteratorResult(IteratorResultValue(InnerResult), False);
       Exit;
     end;
     FInnerIterator := nil;
@@ -494,14 +523,14 @@ begin
 
   repeat
     IterResult := FSourceIterator.AdvanceNext;
-    if TGocciaBooleanLiteralValue(IterResult.GetProperty(PROP_DONE)).Value then
+    if IteratorResultDone(IterResult) then
     begin
       FDone := True;
       Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
       Exit;
     end;
 
-    Value := IterResult.GetProperty(PROP_VALUE);
+    Value := IteratorResultValue(IterResult);
     try
       MappedValue := InvokeIteratorCallback(FCallback, Value, FIndex);
     except
@@ -521,9 +550,9 @@ begin
       CloseIteratorPreservingError(FSourceIterator);
       raise;
     end;
-    if not TGocciaBooleanLiteralValue(InnerResult.GetProperty(PROP_DONE)).Value then
+    if not IteratorResultDone(InnerResult) then
     begin
-      Result := CreateIteratorResult(InnerResult.GetProperty(PROP_VALUE), False);
+      Result := CreateIteratorResult(IteratorResultValue(InnerResult), False);
       Exit;
     end;
     FInnerIterator := nil;
