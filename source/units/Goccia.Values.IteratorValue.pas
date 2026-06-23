@@ -1032,7 +1032,7 @@ function TGocciaIteratorValue.IteratorToArray(const AArgs: TGocciaArgumentsColle
 var
   Iterator: TGocciaIteratorValue;
   ResultArray: TGocciaArrayValue;
-  Value: TGocciaValue;
+  Value, RootedValue: TGocciaValue;
   Done: Boolean;
   ValueWasRooted: Boolean;
   GC: TGarbageCollector;
@@ -1051,15 +1051,16 @@ begin
       Value := Iterator.DirectNext(Done);
       while not Done do
       begin
-        ValueWasRooted := Assigned(Value) and not GC.IsTempRoot(Value);
+        RootedValue := Value;
+        ValueWasRooted := Assigned(RootedValue) and not GC.IsTempRoot(RootedValue);
         if ValueWasRooted then
-          GC.AddTempRoot(Value);
+          GC.AddTempRoot(RootedValue);
         try
-          ResultArray.Elements.Add(Value);
+          ResultArray.Elements.Add(RootedValue);
           Value := Iterator.DirectNext(Done);
         finally
           if ValueWasRooted then
-            GC.RemoveTempRoot(Value);
+            GC.RemoveTempRoot(RootedValue);
         end;
       end;
     except
