@@ -728,6 +728,24 @@ begin
     GC.CollectForMemoryPressure(AProtect);
 end;
 
+procedure QueueInterpreterResultHandoff(const AValue: TGocciaValue); inline;
+var
+  GC: TGarbageCollector;
+begin
+  GC := TGarbageCollector.Instance;
+  if Assigned(GC) and Assigned(AValue) then
+    GC.AddQueuedRoot(AValue);
+end;
+
+procedure ClearInterpreterResultHandoff(const AValue: TGocciaValue); inline;
+var
+  GC: TGarbageCollector;
+begin
+  GC := TGarbageCollector.Instance;
+  if Assigned(GC) and Assigned(AValue) then
+    GC.RemoveQueuedRoot(AValue);
+end;
+
 function VarBindingNameCollectionMode(
   const ANonStrictMode, ACompatibilityNonStrictMode: Boolean):
   TGocciaVarBindingNameCollectionMode;
@@ -3712,7 +3730,8 @@ end;
 function EvaluateCallWithOptionalShortCircuit(
   const ACallExpression: TGocciaCallExpression;
   const AContext: TGocciaEvaluationContext;
-  out AShortCircuited: Boolean): TGocciaValue;
+  out AShortCircuited: Boolean;
+  const AQueueResultHandoff: Boolean = False): TGocciaValue;
 var
   Callee: TGocciaValue;
   Arguments: TGocciaArgumentsCollection;
@@ -3907,6 +3926,8 @@ begin
     MarkSuperConstructorCalled;
     AddValueRoot(Roots, Result);
     CollectInterpreterMemoryPressure(Result);
+    if AQueueResultHandoff then
+      QueueInterpreterResultHandoff(Result);
     Roots.Clear;
     Exit;
   end;
@@ -4019,6 +4040,8 @@ begin
       Result := DirectEvalResult;
       AddValueRoot(Roots, Result);
       CollectInterpreterMemoryPressure(Result);
+      if AQueueResultHandoff then
+        QueueInterpreterResultHandoff(Result);
       Exit;
     end;
 
@@ -4070,6 +4093,8 @@ begin
     end;
     AddValueRoot(Roots, Result);
     CollectInterpreterMemoryPressure(Result);
+    if AQueueResultHandoff then
+      QueueInterpreterResultHandoff(Result);
 
   finally
     Arguments.Free;
@@ -4250,8 +4275,12 @@ begin
   begin
     CallExpr := TGocciaCallExpression(AMemberExpression.ObjectExpr);
     Obj := EvaluateCallWithOptionalShortCircuit(CallExpr, AContext,
-      ShortCircuited);
-    AddValueRoot(Roots, Obj);
+      ShortCircuited, True);
+    try
+      AddValueRoot(Roots, Obj);
+    finally
+      ClearInterpreterResultHandoff(Obj);
+    end;
     ObjectEvaluated := True;
     if Assigned(AOutObjectValue) then
       AOutObjectValue^ := Obj;
