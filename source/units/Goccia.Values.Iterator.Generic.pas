@@ -300,8 +300,6 @@ var
   IteratorResult: TGocciaObjectValue;
 begin
   IteratorResult := AdvanceNextResultInternal(AValue, True, ADone);
-  if ADone then
-    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
   try
     Result := IteratorResultValue(IteratorResult);
   except
