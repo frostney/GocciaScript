@@ -386,8 +386,9 @@ end;
 function InvokeIteratorCallback(const ACallback: TGocciaValue; const AValue: TGocciaValue; const AIndex: Integer): TGocciaValue;
 var
   CallArgs: TGocciaArgumentsCollection;
+  IndexValue: TGocciaValue;
   GC: TGarbageCollector;
-  CallbackWasRooted, ValueWasRooted: Boolean;
+  CallbackWasRooted, ValueWasRooted, IndexWasRooted: Boolean;
 begin
   GC := TGarbageCollector.Instance;
   CallbackWasRooted := Assigned(GC) and Assigned(ACallback) and not GC.IsTempRoot(ACallback);
@@ -396,14 +397,20 @@ begin
   ValueWasRooted := Assigned(GC) and Assigned(AValue) and not GC.IsTempRoot(AValue);
   if ValueWasRooted then
     GC.AddTempRoot(AValue);
+  IndexValue := TGocciaNumberLiteralValue.Create(AIndex);
+  IndexWasRooted := Assigned(GC) and not GC.IsTempRoot(IndexValue);
+  if IndexWasRooted then
+    GC.AddTempRoot(IndexValue);
   try
-    CallArgs := TGocciaArgumentsCollection.Create([AValue, TGocciaNumberLiteralValue.Create(AIndex)]);
+    CallArgs := TGocciaArgumentsCollection.Create([AValue, IndexValue]);
     try
       Result := InvokeCallable(ACallback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
     finally
       CallArgs.Free;
     end;
   finally
+    if IndexWasRooted then
+      GC.RemoveTempRoot(IndexValue);
     if ValueWasRooted then
       GC.RemoveTempRoot(AValue);
     if CallbackWasRooted then
