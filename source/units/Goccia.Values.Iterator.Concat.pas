@@ -45,6 +45,26 @@ uses
   Goccia.Values.Iterator.Concrete,
   Goccia.Values.Iterator.Generic;
 
+function AddTempRootIfNeeded(const AValue: TGocciaValue): Boolean;
+var
+  GC: TGarbageCollector;
+begin
+  GC := TGarbageCollector.Instance;
+  Result := Assigned(GC) and Assigned(AValue) and not GC.IsTempRoot(AValue);
+  if Result then
+    GC.AddTempRoot(AValue);
+end;
+
+procedure RemoveTempRootIfNeeded(
+  const AValue: TGocciaValue; const AWasRooted: Boolean);
+var
+  GC: TGarbageCollector;
+begin
+  GC := TGarbageCollector.Instance;
+  if AWasRooted and Assigned(GC) then
+    GC.RemoveTempRoot(AValue);
+end;
+
 { TGocciaConcatIteratorValue }
 
 constructor TGocciaConcatIteratorValue.Create(const AIterables: array of TGocciaConcatIterableRecord);
@@ -140,6 +160,8 @@ end;
 function TGocciaConcatIteratorValue.DoAdvanceNext: TGocciaObjectValue;
 var
   InnerResult: TGocciaObjectValue;
+  InnerValue: TGocciaValue;
+  ValueWasRooted: Boolean;
 begin
   repeat
     if Assigned(FCurrentIterator) then
@@ -155,7 +177,13 @@ begin
       end;
       if not IteratorResultDone(InnerResult) then
       begin
-        Result := CreateIteratorResult(IteratorResultValue(InnerResult), False);
+        InnerValue := IteratorResultValue(InnerResult);
+        ValueWasRooted := AddTempRootIfNeeded(InnerValue);
+        try
+          Result := CreateIteratorResult(InnerValue, False);
+        finally
+          RemoveTempRootIfNeeded(InnerValue, ValueWasRooted);
+        end;
         Exit;
       end;
       FCurrentIterator := nil;

@@ -418,6 +418,26 @@ begin
   end;
 end;
 
+function AddTempRootIfNeeded(const AValue: TGocciaValue): Boolean;
+var
+  GC: TGarbageCollector;
+begin
+  GC := TGarbageCollector.Instance;
+  Result := Assigned(GC) and Assigned(AValue) and not GC.IsTempRoot(AValue);
+  if Result then
+    GC.AddTempRoot(AValue);
+end;
+
+procedure RemoveTempRootIfNeeded(
+  const AValue: TGocciaValue; const AWasRooted: Boolean);
+var
+  GC: TGarbageCollector;
+begin
+  GC := TGarbageCollector.Instance;
+  if AWasRooted and Assigned(GC) then
+    GC.RemoveTempRoot(AValue);
+end;
+
 { TGocciaIteratorValue }
 
 constructor TGocciaIteratorValue.Create;
@@ -1078,9 +1098,10 @@ end;
 function TGocciaIteratorValue.IteratorSome(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Iterator: TGocciaIteratorValue;
-  Callback, Value: TGocciaValue;
+  Callback, Value, PredicateValue: TGocciaValue;
   Done: Boolean;
   Index: Integer;
+  ValueWasRooted, PredicateWasRooted: Boolean;
 begin
   if not (AThisValue is TGocciaObjectValue) then
     ThrowTypeError(SErrorIteratorSomeNonIterator, SSuggestIteratorThisType);
@@ -1096,11 +1117,22 @@ begin
       Value := Iterator.DirectNext(Done);
       while not Done do
       begin
-        if InvokeIteratorCallback(Callback, Value, Index).ToBooleanLiteral.Value then
-        begin
-          Iterator.Close;
-          Result := TGocciaBooleanLiteralValue.TrueValue;
-          Exit;
+        ValueWasRooted := AddTempRootIfNeeded(Value);
+        try
+          PredicateValue := InvokeIteratorCallback(Callback, Value, Index);
+          PredicateWasRooted := AddTempRootIfNeeded(PredicateValue);
+          try
+            if PredicateValue.ToBooleanLiteral.Value then
+            begin
+              Iterator.Close;
+              Result := TGocciaBooleanLiteralValue.TrueValue;
+              Exit;
+            end;
+          finally
+            RemoveTempRootIfNeeded(PredicateValue, PredicateWasRooted);
+          end;
+        finally
+          RemoveTempRootIfNeeded(Value, ValueWasRooted);
         end;
         Inc(Index);
         Value := Iterator.DirectNext(Done);
@@ -1119,9 +1151,10 @@ end;
 function TGocciaIteratorValue.IteratorEvery(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Iterator: TGocciaIteratorValue;
-  Callback, Value: TGocciaValue;
+  Callback, Value, PredicateValue: TGocciaValue;
   Done: Boolean;
   Index: Integer;
+  ValueWasRooted, PredicateWasRooted: Boolean;
 begin
   if not (AThisValue is TGocciaObjectValue) then
     ThrowTypeError(SErrorIteratorEveryNonIterator, SSuggestIteratorThisType);
@@ -1137,11 +1170,22 @@ begin
       Value := Iterator.DirectNext(Done);
       while not Done do
       begin
-        if not InvokeIteratorCallback(Callback, Value, Index).ToBooleanLiteral.Value then
-        begin
-          Iterator.Close;
-          Result := TGocciaBooleanLiteralValue.FalseValue;
-          Exit;
+        ValueWasRooted := AddTempRootIfNeeded(Value);
+        try
+          PredicateValue := InvokeIteratorCallback(Callback, Value, Index);
+          PredicateWasRooted := AddTempRootIfNeeded(PredicateValue);
+          try
+            if not PredicateValue.ToBooleanLiteral.Value then
+            begin
+              Iterator.Close;
+              Result := TGocciaBooleanLiteralValue.FalseValue;
+              Exit;
+            end;
+          finally
+            RemoveTempRootIfNeeded(PredicateValue, PredicateWasRooted);
+          end;
+        finally
+          RemoveTempRootIfNeeded(Value, ValueWasRooted);
         end;
         Inc(Index);
         Value := Iterator.DirectNext(Done);
@@ -1160,9 +1204,10 @@ end;
 function TGocciaIteratorValue.IteratorFind(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Iterator: TGocciaIteratorValue;
-  Callback, Value: TGocciaValue;
+  Callback, Value, PredicateValue: TGocciaValue;
   Done: Boolean;
   Index: Integer;
+  ValueWasRooted, PredicateWasRooted: Boolean;
 begin
   if not (AThisValue is TGocciaObjectValue) then
     ThrowTypeError(SErrorIteratorFindNonIterator, SSuggestIteratorThisType);
@@ -1178,11 +1223,22 @@ begin
       Value := Iterator.DirectNext(Done);
       while not Done do
       begin
-        if InvokeIteratorCallback(Callback, Value, Index).ToBooleanLiteral.Value then
-        begin
-          Iterator.Close;
-          Result := Value;
-          Exit;
+        ValueWasRooted := AddTempRootIfNeeded(Value);
+        try
+          PredicateValue := InvokeIteratorCallback(Callback, Value, Index);
+          PredicateWasRooted := AddTempRootIfNeeded(PredicateValue);
+          try
+            if PredicateValue.ToBooleanLiteral.Value then
+            begin
+              Iterator.Close;
+              Result := Value;
+              Exit;
+            end;
+          finally
+            RemoveTempRootIfNeeded(PredicateValue, PredicateWasRooted);
+          end;
+        finally
+          RemoveTempRootIfNeeded(Value, ValueWasRooted);
         end;
         Inc(Index);
         Value := Iterator.DirectNext(Done);
