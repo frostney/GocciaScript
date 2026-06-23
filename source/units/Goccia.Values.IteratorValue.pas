@@ -155,7 +155,7 @@ begin
   // ES2026 §7.4.2 GetIteratorDirect(obj): capture "next" once.  The
   // generic iterator reports a missing/non-callable next on first use.
   NextMethod := TGocciaObjectValue(AThisValue).GetProperty(PROP_NEXT);
-  Result := TGocciaGenericIteratorValue.Create(AThisValue, NextMethod);
+  Result := CreateRootedGenericIterator(AThisValue, NextMethod);
 end;
 
 function IteratorThisHasCallableReturn(const AThisValue: TGocciaValue): Boolean;
@@ -185,7 +185,7 @@ begin
   if not IteratorThisHasCallableReturn(AThisValue) then
     Exit;
 
-  Iterator := TGocciaGenericIteratorValue.Create(AThisValue,
+  Iterator := CreateRootedGenericIterator(AThisValue,
     TGocciaUndefinedLiteralValue.UndefinedValue);
   if Assigned(TGarbageCollector.Instance) then
     TGarbageCollector.Instance.AddTempRoot(Iterator);
@@ -1123,7 +1123,7 @@ begin
         ThrowTypeError(SErrorIteratorNextMustBeCallable,
           SSuggestIteratorProtocol);
       // Capture-once per ES2024 §7.4.2 GetIteratorDirect.
-      Result := TGocciaGenericIteratorValue.Create(IteratorObj, NextMethod);
+      Result := CreateRootedGenericIterator(IteratorObj, NextMethod);
       Exit;
     end;
 
@@ -1134,7 +1134,7 @@ begin
     if Assigned(NextMethod) and not (NextMethod is TGocciaUndefinedLiteralValue) and NextMethod.IsCallable then
     begin
       // Capture-once per ES2024 §7.4.2 GetIteratorDirect.
-      Result := TGocciaGenericIteratorValue.Create(Value, NextMethod);
+      Result := CreateRootedGenericIterator(Value, NextMethod);
       Exit;
     end;
   end;

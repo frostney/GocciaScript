@@ -44,6 +44,11 @@ type
     procedure MarkReferences; override;
   end;
 
+function CreateRootedGenericIterator(
+  const AIteratorObject: TGocciaValue): TGocciaGenericIteratorValue; overload;
+function CreateRootedGenericIterator(
+  const AIteratorObject, ANextMethod: TGocciaValue): TGocciaGenericIteratorValue; overload;
+
 implementation
 
 uses
@@ -53,6 +58,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.GarbageCollector,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase;
 
@@ -85,6 +91,66 @@ begin
   // redundant GetProperty(PROP_NEXT) and keeps the capture-once contract
   // from the caller through to AdvanceNextInternal.
   FNextMethod := ANextMethod;
+end;
+
+function CreateRootedGenericIterator(
+  const AIteratorObject: TGocciaValue): TGocciaGenericIteratorValue;
+var
+  GC: TGarbageCollector;
+  NextMethod: TGocciaValue;
+  SourceWasRooted: Boolean;
+begin
+  GC := TGarbageCollector.Instance;
+  SourceWasRooted := Assigned(GC) and Assigned(AIteratorObject) and
+    not GC.IsTempRoot(AIteratorObject);
+  if SourceWasRooted then
+    GC.AddTempRoot(AIteratorObject);
+  try
+    if Assigned(AIteratorObject) then
+      NextMethod := AIteratorObject.GetProperty(PROP_NEXT)
+    else
+      NextMethod := nil;
+    Result := CreateRootedGenericIterator(AIteratorObject, NextMethod);
+  finally
+    if SourceWasRooted then
+      GC.RemoveTempRoot(AIteratorObject);
+  end;
+end;
+
+function CreateRootedGenericIterator(
+  const AIteratorObject, ANextMethod: TGocciaValue): TGocciaGenericIteratorValue;
+var
+  GC: TGarbageCollector;
+  SourceWasRooted: Boolean;
+  NextWasRooted: Boolean;
+
+  function AddRootIfNeeded(const AValue: TGocciaValue): Boolean;
+  begin
+    Result := Assigned(GC) and Assigned(AValue) and not GC.IsTempRoot(AValue);
+    if Result then
+      GC.AddTempRoot(AValue);
+  end;
+
+  procedure RemoveRootIfNeeded(
+    const AValue: TGocciaValue; const AWasRooted: Boolean);
+  begin
+    if AWasRooted then
+      GC.RemoveTempRoot(AValue);
+  end;
+
+begin
+  GC := TGarbageCollector.Instance;
+  SourceWasRooted := AddRootIfNeeded(AIteratorObject);
+  try
+    NextWasRooted := AddRootIfNeeded(ANextMethod);
+    try
+      Result := TGocciaGenericIteratorValue.Create(AIteratorObject, ANextMethod);
+    finally
+      RemoveRootIfNeeded(ANextMethod, NextWasRooted);
+    end;
+  finally
+    RemoveRootIfNeeded(AIteratorObject, SourceWasRooted);
+  end;
 end;
 
 function TGocciaGenericIteratorValue.AdvanceNextInternal(

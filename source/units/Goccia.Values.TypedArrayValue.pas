@@ -2898,7 +2898,7 @@ begin
     if Assigned(Iterator) then
     begin
       if not (Iterator is TGocciaGenericIteratorValue) then
-        Iterator := TGocciaGenericIteratorValue.Create(Iterator,
+        Iterator := CreateRootedGenericIterator(Iterator,
           Iterator.GetProperty(PROP_NEXT));
       Values := TGocciaValueList.Create(False);
       ValueRootCount := 0;
@@ -3045,7 +3045,7 @@ begin
     if Assigned(Iterator) then
     begin
       if not (Iterator is TGocciaGenericIteratorValue) then
-        Iterator := TGocciaGenericIteratorValue.Create(Iterator,
+        Iterator := CreateRootedGenericIterator(Iterator,
           Iterator.GetProperty(PROP_NEXT));
       Values := TGocciaValueList.Create(False);
       ValueRootCount := 0;

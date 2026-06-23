@@ -135,7 +135,7 @@ begin
          and NextMethod.IsCallable then
         // Pass the validated NextMethod through (capture-once per
         // ES2024 §7.4.2 GetIteratorDirect).
-        Exit(TGocciaGenericIteratorValue.Create(IteratorObject, NextMethod));
+        Exit(CreateRootedGenericIterator(IteratorObject, NextMethod));
     end;
 
     ThrowTypeError('[Symbol.iterator] did not return a valid iterator');

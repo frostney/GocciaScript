@@ -103,7 +103,7 @@ begin
       end;
       if IteratorObj is TGocciaObjectValue then
       begin
-        Result := TGocciaGenericIteratorValue.Create(IteratorObj);
+        Result := CreateRootedGenericIterator(IteratorObj);
         Exit;
       end;
     end;

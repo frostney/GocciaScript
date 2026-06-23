@@ -91,7 +91,7 @@ begin
     if IteratorObj is TGocciaIteratorValue then
       FCurrentIterator := TGocciaIteratorValue(IteratorObj)
     else
-      FCurrentIterator := TGocciaGenericIteratorValue.Create(IteratorObj);
+      FCurrentIterator := CreateRootedGenericIterator(IteratorObj);
   end;
 
   Inc(FCurrentIndex);

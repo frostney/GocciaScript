@@ -111,7 +111,7 @@ begin
           // ES2026 §7.4.2 GetIteratorDirect captures "next" without
           // validating callability; IteratorStep/IteratorNext reports that
           // error later, after destructuring assignment targets run.
-          Result := TGocciaGenericIteratorValue.Create(IteratorObj, NextMethod);
+          Result := CreateRootedGenericIterator(IteratorObj, NextMethod);
         finally
           RemoveRootIfNeeded(IteratorObj, WasIteratorRooted);
         end;

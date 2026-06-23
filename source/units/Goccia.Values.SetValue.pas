@@ -183,7 +183,7 @@ begin
     if Assigned(NextMethod) and not (NextMethod is TGocciaUndefinedLiteralValue) and NextMethod.IsCallable then
       // Pass the validated NextMethod to the iterator wrapper so the
       // capture-once contract from §7.4.2 GetIteratorDirect holds.
-      Exit(TGocciaGenericIteratorValue.Create(IteratorObject, NextMethod));
+      Exit(CreateRootedGenericIterator(IteratorObject, NextMethod));
   end;
 
   ThrowTypeError(Format(SErrorSetLikeKeysIterator, [AMethodName]), SSuggestIteratorProtocol);

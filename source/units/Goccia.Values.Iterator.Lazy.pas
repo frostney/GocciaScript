@@ -462,7 +462,7 @@ begin
   if IteratorObj is TGocciaObjectValue then
   begin
     NextMethod := TGocciaObjectValue(IteratorObj).GetProperty(PROP_NEXT);
-    Result := TGocciaGenericIteratorValue.Create(IteratorObj, NextMethod);
+    Result := CreateRootedGenericIterator(IteratorObj, NextMethod);
     Exit;
   end;
 
