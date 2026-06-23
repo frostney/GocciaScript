@@ -779,6 +779,9 @@ begin
   else
     Mode := emInterpreted;
 
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.Enabled := True;
+
   WorkerReporter := TBenchmarkReporter.Create;
   try
     try
