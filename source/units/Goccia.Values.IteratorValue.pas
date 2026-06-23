@@ -1631,12 +1631,23 @@ end;
 constructor TGocciaIteratorHelperValue.Create;
 var
   HelperPrototype: TGocciaObjectValue;
+  GC: TGarbageCollector;
+  SelfWasRooted: Boolean;
 begin
   inherited Create;
-  EnsureIteratorHelperPrototypeInitialized;
-  HelperPrototype := GetSharedIteratorHelperPrototype;
-  if Assigned(HelperPrototype) then
-    FPrototype := HelperPrototype;
+  GC := TGarbageCollector.Instance;
+  SelfWasRooted := Assigned(GC) and not GC.IsTempRoot(Self);
+  if SelfWasRooted then
+    GC.AddTempRoot(Self);
+  try
+    EnsureIteratorHelperPrototypeInitialized;
+    HelperPrototype := GetSharedIteratorHelperPrototype;
+    if Assigned(HelperPrototype) then
+      FPrototype := HelperPrototype;
+  finally
+    if SelfWasRooted then
+      GC.RemoveTempRoot(Self);
+  end;
 end;
 
 function TGocciaIteratorHelperValue.AdvanceNext: TGocciaObjectValue;
