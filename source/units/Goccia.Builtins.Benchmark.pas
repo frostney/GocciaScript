@@ -466,6 +466,15 @@ begin
     end;
 
     try
+      if Assigned(GC) then
+      begin
+        WasGCEnabled := GC.Enabled;
+        if Assigned(FOnBeforeMeasurement) then
+          FOnBeforeMeasurement();
+        GC.Collect;
+        GC.Enabled := False;
+      end;
+
       for K := 1 to WARMUP_ITERATIONS do
         InvokeBenchmarkFunction(ABenchCase.RunFunction, SetupResult, RunArgs);
       WaitForFetchIdle;
@@ -474,7 +483,6 @@ begin
 
       if Assigned(GC) then
       begin
-        WasGCEnabled := GC.Enabled;
         if Assigned(FOnBeforeMeasurement) then
           FOnBeforeMeasurement();
         {$IFDEF GC_DEBUG}
@@ -483,7 +491,6 @@ begin
            BoolToStr(GC.Enabled, 'True', 'False'), GC.ManagedObjectCount, GC.Watermark]));
         {$ENDIF}
         GC.Collect;
-        GC.Enabled := False;
         MeasurementWatermark := GC.Watermark;
         {$IFDEF GC_DEBUG}
         WriteLn(Format('[BENCH] %s > %s: post-collect watermark=%d, objects=%d, iterations=%d',
