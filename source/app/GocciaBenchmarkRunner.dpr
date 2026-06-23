@@ -308,6 +308,15 @@ begin
     Result := nil;
 end;
 
+procedure ClearRegisteredBenchmarks(const AEngine: TGocciaEngine);
+var
+  Benchmark: TGocciaBenchmark;
+begin
+  Benchmark := RuntimeBenchmark(AEngine);
+  if Assigned(Benchmark) then
+    Benchmark.ClearRegisteredBenchmarks;
+end;
+
 procedure TBenchmarkRunnerApp.RunBytecodeBenchmarkModule(
   const AEngine: TGocciaEngine;
   const AModule: TGocciaCompiledModule; const AFileName: string);
@@ -374,6 +383,7 @@ begin
           try
             PopulateFileResult(FileResult, ScriptResult, AReporter);
           finally
+            ClearRegisteredBenchmarks(Engine);
             if Assigned(ScriptResult) and Assigned(GC) then
               GC.RemoveTempRoot(ScriptResult);
           end;
@@ -495,6 +505,7 @@ begin
           try
             PopulateFileResult(FileResult, ScriptResult, AReporter);
           finally
+            ClearRegisteredBenchmarks(Engine);
             if Assigned(ScriptResult) and Assigned(GC) then
               GC.RemoveTempRoot(ScriptResult);
           end;
@@ -595,6 +606,7 @@ begin
         try
           PopulateFileResult(FileResult, ScriptResult, AReporter);
         finally
+          ClearRegisteredBenchmarks(Engine);
           if Assigned(ScriptResult) and Assigned(GC) then
             GC.RemoveTempRoot(ScriptResult);
         end;
@@ -696,6 +708,7 @@ begin
         try
           PopulateFileResult(FileResult, ScriptResult, AReporter);
         finally
+          ClearRegisteredBenchmarks(Engine);
           if Assigned(ScriptResult) and Assigned(GC) then
             GC.RemoveTempRoot(ScriptResult);
         end;

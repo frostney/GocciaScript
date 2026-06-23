@@ -74,6 +74,7 @@ type
     function Bench(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function RunBenchmarks(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function RunDeterministicProfile(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    procedure ClearRegisteredBenchmarks;
 
     property OnProgress: TBenchmarkProgressEvent read FOnProgress write FOnProgress;
     property OnBeforeMeasurement: TBenchmarkNotifyEvent read FOnBeforeMeasurement write FOnBeforeMeasurement;
@@ -221,6 +222,14 @@ begin
     BenchCase.OwnsSetupRoot := False;
     BenchCase.OwnsTeardownRoot := False;
   end;
+end;
+
+procedure TGocciaBenchmark.ClearRegisteredBenchmarks;
+begin
+  UnrootRegisteredBenchmarks;
+  FRegisteredBenchmarks.Clear;
+  FRegisteredSuites.Clear;
+  FCurrentSuiteName := '';
 end;
 
 function TGocciaBenchmark.Suite(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;

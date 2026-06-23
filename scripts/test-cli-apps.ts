@@ -34,36 +34,67 @@ import { makeTmpFactory, clean } from "./test-cli/tmpdir";
 
 const makeTmp = makeTmpFactory("goccia-apps-");
 
-function pythonCommand(): string {
-  const python3 = Bun.spawnSync(["python3", "--version"], {
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  return python3.exitCode === 0 ? "python3" : "python";
-}
-
 async function withFetchTestServer(
   callback: (baseUrl: string) => void | Promise<void>,
 ): Promise<void> {
-  const tmp = makeTmp();
-  const portFile = join(tmp, "port.txt");
-  const server = Bun.spawn(
-    [pythonCommand(), resolve("scripts/fetch_test_server.py"), portFile],
-    { stdout: "pipe", stderr: "pipe" },
-  );
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(request) {
+      if (request.method === "HEAD")
+        return new Response(null, { status: 200 });
+      return new Response("ok", { status: 200 });
+    },
+  });
   try {
-    const deadline = Date.now() + 5_000;
-    while (!existsSync(portFile)) {
-      if (Date.now() >= deadline)
-        throw new Error("fetch test server did not write its port file");
-      await Bun.sleep(50);
-    }
-    const port = readFileSync(portFile, "utf-8").trim();
-    await callback(`http://127.0.0.1:${port}`);
+    await callback(`http://127.0.0.1:${server.port}`);
   } finally {
-    server.kill();
-    await server.exited.catch(() => {});
-    clean(tmp);
+    server.stop(true);
+  }
+}
+
+async function runLoaderJsonAsync(
+  source: string,
+  extraArgs?: string[],
+  opts?: { timeout?: number },
+): Promise<{ exitCode: number | null; json: any; stderr: string }> {
+  const hasOutputFlag = extraArgs?.some((a) => a.startsWith("--output="));
+  const proc = Bun.spawn(
+    [
+      LOADER,
+      ...(hasOutputFlag ? [] : ["--output=json"]),
+      ...(extraArgs ?? []),
+    ],
+    {
+      stdin: "pipe",
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  );
+  proc.stdin.write(source);
+  proc.stdin.end();
+
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  if (opts?.timeout != null)
+    timeout = setTimeout(() => proc.kill(), opts.timeout);
+  try {
+    const [exitCode, stdout, stderr] = await Promise.all([
+      proc.exited,
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
+    let json: any;
+    try {
+      json = JSON.parse(stdout);
+    } catch (e: any) {
+      throw new Error(
+        `runLoaderJsonAsync: failed to parse JSON (exitCode=${exitCode}): ${e.message}\nstderr: ${stderr}\nstdout: ${stdout}`,
+      );
+    }
+    return { exitCode, json, stderr };
+  } finally {
+    if (timeout !== undefined)
+      clearTimeout(timeout);
   }
 }
 
@@ -2733,8 +2764,8 @@ console.log("Loader: --allowed-host multiple hosts...");
 }
 
 console.log("Loader: local fetch smoke with --allowed-host...");
-await withFetchTestServer((baseUrl) => {
-  const { exitCode, json, stderr } = runLoaderJson(
+await withFetchTestServer(async (baseUrl) => {
+  const { exitCode, json, stderr } = await runLoaderJsonAsync(
     `const response = await fetch("${baseUrl}/", { method: "HEAD" });\nresponse.status;\n`,
     ["--compat-asi", "--allowed-host=127.0.0.1"],
     { timeout: 10_000 },
