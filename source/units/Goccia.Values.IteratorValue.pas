@@ -1034,22 +1034,33 @@ var
   ResultArray: TGocciaArrayValue;
   Value: TGocciaValue;
   Done: Boolean;
+  ValueWasRooted: Boolean;
+  GC: TGarbageCollector;
 begin
   if not (AThisValue is TGocciaObjectValue) then
     ThrowTypeError(SErrorIteratorToArrayNonIterator, SSuggestIteratorThisType);
 
   Iterator := IteratorThisToDirectIterator(AThisValue, 'toArray');
   ResultArray := TGocciaArrayValue.Create;
+  GC := TGarbageCollector.Instance;
 
-  TGarbageCollector.Instance.AddTempRoot(Iterator);
-  TGarbageCollector.Instance.AddTempRoot(ResultArray);
+  GC.AddTempRoot(Iterator);
+  GC.AddTempRoot(ResultArray);
   try
     try
       Value := Iterator.DirectNext(Done);
       while not Done do
       begin
-        ResultArray.Elements.Add(Value);
-        Value := Iterator.DirectNext(Done);
+        ValueWasRooted := Assigned(Value) and not GC.IsTempRoot(Value);
+        if ValueWasRooted then
+          GC.AddTempRoot(Value);
+        try
+          ResultArray.Elements.Add(Value);
+          Value := Iterator.DirectNext(Done);
+        finally
+          if ValueWasRooted then
+            GC.RemoveTempRoot(Value);
+        end;
       end;
     except
       CloseIteratorPreservingError(Iterator);
@@ -1058,8 +1069,8 @@ begin
 
     Result := ResultArray;
   finally
-    TGarbageCollector.Instance.RemoveTempRoot(ResultArray);
-    TGarbageCollector.Instance.RemoveTempRoot(Iterator);
+    GC.RemoveTempRoot(ResultArray);
+    GC.RemoveTempRoot(Iterator);
   end;
 end;
 
