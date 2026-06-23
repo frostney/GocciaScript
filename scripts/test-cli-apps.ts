@@ -34,6 +34,39 @@ import { makeTmpFactory, clean } from "./test-cli/tmpdir";
 
 const makeTmp = makeTmpFactory("goccia-apps-");
 
+function pythonCommand(): string {
+  const python3 = Bun.spawnSync(["python3", "--version"], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  return python3.exitCode === 0 ? "python3" : "python";
+}
+
+async function withFetchTestServer(
+  callback: (baseUrl: string) => void | Promise<void>,
+): Promise<void> {
+  const tmp = makeTmp();
+  const portFile = join(tmp, "port.txt");
+  const server = Bun.spawn(
+    [pythonCommand(), resolve("scripts/fetch_test_server.py"), portFile],
+    { stdout: "pipe", stderr: "pipe" },
+  );
+  try {
+    const deadline = Date.now() + 5_000;
+    while (!existsSync(portFile)) {
+      if (Date.now() >= deadline)
+        throw new Error("fetch test server did not write its port file");
+      await Bun.sleep(50);
+    }
+    const port = readFileSync(portFile, "utf-8").trim();
+    await callback(`http://127.0.0.1:${port}`);
+  } finally {
+    server.kill();
+    await server.exited.catch(() => {});
+    clean(tmp);
+  }
+}
+
 function assertValidSourceMap(path: string): void {
   const raw = readFileSync(path, "utf-8");
   const map = JSON.parse(raw);
@@ -2699,17 +2732,17 @@ console.log("Loader: --allowed-host multiple hosts...");
   if (!res.text().includes("blocked.test")) throw new Error(`Error should mention blocked host, got: ${res.text()}`);
 }
 
-console.log("Loader: HTTPS fetch smoke with --allowed-host...");
-{
+console.log("Loader: local fetch smoke with --allowed-host...");
+await withFetchTestServer((baseUrl) => {
   const { exitCode, json, stderr } = runLoaderJson(
-    'const response = await fetch("https://www.gstatic.com/generate_204", { method: "HEAD" });\nresponse.status;\n',
-    ["--compat-asi", "--allowed-host=www.gstatic.com"],
+    `const response = await fetch("${baseUrl}/", { method: "HEAD" });\nresponse.status;\n`,
+    ["--compat-asi", "--allowed-host=127.0.0.1"],
     { timeout: 10_000 },
   );
-  if (exitCode !== 0) throw new Error(`HTTPS fetch should exit 0, got ${exitCode}: ${stderr}`);
-  if (json.ok !== true) throw new Error(`HTTPS fetch JSON ok should be true, got ${json.ok}`);
-  if (json.files?.[0]?.result !== 204) throw new Error(`HTTPS fetch status should be 204, got ${json.files?.[0]?.result}`);
-}
+  if (exitCode !== 0) throw new Error(`Local fetch should exit 0, got ${exitCode}: ${stderr}`);
+  if (json.ok !== true) throw new Error(`Local fetch JSON ok should be true, got ${json.ok}`);
+  if (json.files?.[0]?.result !== 200) throw new Error(`Local fetch status should be 200, got ${json.files?.[0]?.result}`);
+});
 
 // ============================================================================
 // --multifile (all runners)

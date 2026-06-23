@@ -105,7 +105,8 @@ var
   SourceStr: string;
   Mapping: Boolean;
   K, Len: Integer;
-  SourceRoot, ResultRoot: TGocciaTempRoot;
+  SourceRoot, ResultRoot, MapCallbackRoot, ThisArgRoot, ValueRoot,
+  IteratorObjRoot, IteratorRoot: TGocciaTempRoot;
 
   // ES2026 §7.3.5 CreateDataPropertyOrThrow(A, P, V)
   procedure CreateDataProperty(const AIndex: Integer; const AValue: TGocciaValue);
@@ -114,6 +115,16 @@ var
       ResultObj.SetProperty(IntToStr(AIndex), AValue)
     else
       TGocciaArrayValue(ResultObj).Elements.Add(AValue);
+  end;
+
+  procedure CreateDataPropertyRooted(const AIndex: Integer; const AValue: TGocciaValue);
+  begin
+    AddTempRootIfNeeded(ValueRoot, AValue);
+    try
+      CreateDataProperty(AIndex, AValue);
+    finally
+      RemoveTempRootIfNeeded(ValueRoot);
+    end;
   end;
 
   // Steps 5a-b / 9-10: If IsConstructor(C), Construct(C, « len »); else ArrayCreate(len)
@@ -174,7 +185,17 @@ begin
 
   InitializeTempRoot(SourceRoot);
   InitializeTempRoot(ResultRoot);
+  InitializeTempRoot(MapCallbackRoot);
+  InitializeTempRoot(ThisArgRoot);
+  InitializeTempRoot(ValueRoot);
+  InitializeTempRoot(IteratorObjRoot);
+  InitializeTempRoot(IteratorRoot);
   AddTempRootIfNeeded(SourceRoot, Source);
+  if Mapping then
+  begin
+    AddTempRootIfNeeded(MapCallbackRoot, MapCallback);
+    AddTempRootIfNeeded(ThisArgRoot, ThisArg);
+  end;
   try
     // Fast path: source is already an array (avoids iterator overhead)
     if Source is TGocciaArrayValue then
@@ -200,7 +221,7 @@ begin
             KValue := InvokeCallable(MapCallback, MapArgs, ThisArg);
           end;
           // Step 5e-v: CreateDataPropertyOrThrow(A, ToString(k), mappedValue)
-          CreateDataProperty(K, KValue);
+          CreateDataPropertyRooted(K, KValue);
         end;
         // Step 5e-iii: Set length
         if UseConstructor and not (ResultObj is TGocciaArrayValue) then
@@ -228,7 +249,7 @@ begin
             MapArgs.SetElement(1, TGocciaNumberLiteralValue.Create(K - 1));
             KValue := InvokeCallable(MapCallback, MapArgs, ThisArg);
           end;
-          CreateDataProperty(K - 1, KValue);
+          CreateDataPropertyRooted(K - 1, KValue);
         end;
         if UseConstructor and not (ResultObj is TGocciaArrayValue) then
           ResultObj.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.Create(Length(SourceStr)));
@@ -279,26 +300,31 @@ begin
               Iterator := TGocciaIteratorValue(IteratorObj)
             else if IteratorObj is TGocciaObjectValue then
             begin
-              NextMethod := IteratorObj.GetProperty(PROP_NEXT);
-              if Assigned(NextMethod) and not (NextMethod is TGocciaUndefinedLiteralValue) and NextMethod.IsCallable then
-                // Capture-once per ES2024 §7.4.2 GetIteratorDirect.
-                Iterator := CreateRootedGenericIterator(IteratorObj, NextMethod)
-              else
-                Iterator := nil;
+              AddTempRootIfNeeded(IteratorObjRoot, IteratorObj);
+              try
+                NextMethod := IteratorObj.GetProperty(PROP_NEXT);
+                if Assigned(NextMethod) and not (NextMethod is TGocciaUndefinedLiteralValue) and NextMethod.IsCallable then
+                  // Capture-once per ES2024 §7.4.2 GetIteratorDirect.
+                  Iterator := CreateRootedGenericIterator(IteratorObj, NextMethod)
+                else
+                  Iterator := nil;
+              finally
+                RemoveTempRootIfNeeded(IteratorObjRoot);
+              end;
             end;
           end;
 
           if not Assigned(Iterator) then
             ThrowTypeError(SErrorIteratorInvalid, SSuggestIteratorProtocol);
 
-          TGarbageCollector.Instance.AddTempRoot(Iterator);
+          AddTempRootIfNeeded(IteratorRoot, Iterator);
           try
             // Step 5d-e: Iterate
             K := 0;
             IterResult := Iterator.AdvanceNext;
-            while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
+            while not IteratorResultDone(IterResult) do
             begin
-              KValue := IterResult.GetProperty(PROP_VALUE);
+              KValue := IteratorResultValue(IterResult);
               if Mapping then
               begin
                 MapArgs.SetElement(0, KValue);
@@ -306,12 +332,12 @@ begin
                 KValue := InvokeCallable(MapCallback, MapArgs, ThisArg);
               end;
               // Step 5e-v: CreateDataPropertyOrThrow(A, ToString(k), mappedValue)
-              CreateDataProperty(K, KValue);
+              CreateDataPropertyRooted(K, KValue);
               Inc(K);
               IterResult := Iterator.AdvanceNext;
             end;
           finally
-            TGarbageCollector.Instance.RemoveTempRoot(Iterator);
+            RemoveTempRootIfNeeded(IteratorRoot);
           end;
           // Step 5e-iii: Set A.[[length]] to k
           if UseConstructor and not (ResultObj is TGocciaArrayValue) then
@@ -353,7 +379,7 @@ begin
                 KValue := InvokeCallable(MapCallback, MapArgs, ThisArg);
               end;
               // Step 12e: CreateDataPropertyOrThrow(A, Pk, mappedValue)
-              CreateDataProperty(K, KValue);
+              CreateDataPropertyRooted(K, KValue);
             end;
             // Step 13: Set A.[[length]] = len
             if UseConstructor and not (ResultObj is TGocciaArrayValue) then
@@ -368,6 +394,8 @@ begin
       end;
     end;
   finally
+    RemoveTempRootIfNeeded(ThisArgRoot);
+    RemoveTempRootIfNeeded(MapCallbackRoot);
     RemoveTempRootIfNeeded(SourceRoot);
     MapArgs.Free;
   end;
