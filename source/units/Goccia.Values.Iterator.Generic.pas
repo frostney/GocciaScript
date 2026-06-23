@@ -62,6 +62,26 @@ uses
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase;
 
+function AddTempRootIfNeeded(const AValue: TGocciaValue): Boolean;
+var
+  GC: TGarbageCollector;
+begin
+  GC := TGarbageCollector.Instance;
+  Result := Assigned(GC) and Assigned(AValue) and not GC.IsTempRoot(AValue);
+  if Result then
+    GC.AddTempRoot(AValue);
+end;
+
+procedure RemoveTempRootIfNeeded(
+  const AValue: TGocciaValue; const AWasRooted: Boolean);
+var
+  GC: TGarbageCollector;
+begin
+  GC := TGarbageCollector.Instance;
+  if AWasRooted then
+    GC.RemoveTempRoot(AValue);
+end;
+
 { TGocciaGenericIteratorValue }
 
 constructor TGocciaGenericIteratorValue.Create(const AIteratorObject: TGocciaValue);
@@ -170,7 +190,7 @@ begin
   else
   begin
     try
-      ValueVal := NextResult.GetProperty(PROP_VALUE);
+      ValueVal := IteratorResultValue(NextResult);
     except
       FDone := True;
       raise;
@@ -187,6 +207,7 @@ function TGocciaGenericIteratorValue.AdvanceNextResultInternal(
 var
   NextResult, DoneVal: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
+  NextResultWasRooted: Boolean;
 begin
   if FDone then
   begin
@@ -220,16 +241,21 @@ begin
   if not (NextResult is TGocciaObjectValue) then
     ThrowTypeError(Format(SErrorIteratorResultNotObject, [NextResult.TypeName]), SSuggestIteratorResultObject);
 
+  NextResultWasRooted := AddTempRootIfNeeded(NextResult);
   try
-    DoneVal := TGocciaObjectValue(NextResult).GetProperty(PROP_DONE);
-    ADone := Assigned(DoneVal) and DoneVal.ToBooleanLiteral.Value;
-  except
-    FDone := True;
-    raise;
+    try
+      DoneVal := TGocciaObjectValue(NextResult).GetProperty(PROP_DONE);
+      ADone := Assigned(DoneVal) and DoneVal.ToBooleanLiteral.Value;
+    except
+      FDone := True;
+      raise;
+    end;
+    if ADone then
+      FDone := True;
+    Result := TGocciaObjectValue(NextResult);
+  finally
+    RemoveTempRootIfNeeded(NextResult, NextResultWasRooted);
   end;
-  if ADone then
-    FDone := True;
-  Result := TGocciaObjectValue(NextResult);
 end;
 
 function TGocciaGenericIteratorValue.AdvanceNext: TGocciaObjectValue;
@@ -259,7 +285,7 @@ begin
   if ADone then
     Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
   try
-    Result := IteratorResult.GetProperty(PROP_VALUE);
+    Result := IteratorResultValue(IteratorResult);
   except
     FDone := True;
     raise;
@@ -275,7 +301,7 @@ var
 begin
   IteratorResult := AdvanceNextResultInternal(AValue, True, ADone);
   try
-    Result := IteratorResult.GetProperty(PROP_VALUE);
+    Result := IteratorResultValue(IteratorResult);
   except
     FDone := True;
     raise;
@@ -291,6 +317,7 @@ var
   DoneValue: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
   ReturnResult: TGocciaValue;
+  ReturnResultWasRooted: Boolean;
 begin
   if FDone then
   begin
@@ -333,12 +360,17 @@ begin
     ReturnResult := TGocciaFunctionBase(ReturnMethod).Call(CallArgs, FSource);
     if not (ReturnResult is TGocciaObjectValue) then
       ThrowTypeError(SErrorIteratorReturnObject, SSuggestIteratorResultObject);
-    // ES2026 §15.5.5 YieldExpression : yield * AssignmentExpression:
-    // return() results with done:false are yielded and may resume delegation.
-    DoneValue := TGocciaObjectValue(ReturnResult).GetProperty(PROP_DONE);
-    if Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value then
-      FDone := True;
-    Result := TGocciaObjectValue(ReturnResult);
+    ReturnResultWasRooted := AddTempRootIfNeeded(ReturnResult);
+    try
+      // ES2026 §15.5.5 YieldExpression : yield * AssignmentExpression:
+      // return() results with done:false are yielded and may resume delegation.
+      DoneValue := TGocciaObjectValue(ReturnResult).GetProperty(PROP_DONE);
+      if Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value then
+        FDone := True;
+      Result := TGocciaObjectValue(ReturnResult);
+    finally
+      RemoveTempRootIfNeeded(ReturnResult, ReturnResultWasRooted);
+    end;
   finally
     CallArgs.Free;
   end;
@@ -357,6 +389,7 @@ var
   DoneValue: TGocciaValue;
   ThrowMethod: TGocciaValue;
   ThrowResult: TGocciaValue;
+  ThrowResultWasRooted: Boolean;
 begin
   if FDone then
     ThrowTypeError('Delegated iterator has no throw method');
@@ -384,10 +417,15 @@ begin
 
   if not (ThrowResult is TGocciaObjectValue) then
     ThrowTypeError('Iterator throw result is not an object');
-  DoneValue := TGocciaObjectValue(ThrowResult).GetProperty(PROP_DONE);
-  if Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value then
-    FDone := True;
-  Result := TGocciaObjectValue(ThrowResult);
+  ThrowResultWasRooted := AddTempRootIfNeeded(ThrowResult);
+  try
+    DoneValue := TGocciaObjectValue(ThrowResult).GetProperty(PROP_DONE);
+    if Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value then
+      FDone := True;
+    Result := TGocciaObjectValue(ThrowResult);
+  finally
+    RemoveTempRootIfNeeded(ThrowResult, ThrowResultWasRooted);
+  end;
 end;
 
 procedure TGocciaGenericIteratorValue.Close;
