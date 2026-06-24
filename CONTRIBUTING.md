@@ -85,7 +85,8 @@ GocciaScript intentionally excludes certain JavaScript features — do **not** a
 
 ## Quick reference
 
-See [AGENTS.md](AGENTS.md#quick-reference) for the full command reference, or [Build System](docs/build-system.md) for detailed documentation.
+See [Build System](docs/build-system.md) for the full build, run, test,
+benchmark, bundler, and configuration command reference.
 
 ## Further reading
 

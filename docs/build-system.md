@@ -12,6 +12,10 @@
 
 GocciaScript uses a self-hosted build script written in FreePascal, executed via `instantfpc`. No external build tools (Make, CMake, npm) are required beyond the FreePascal compiler itself.
 
+This file is the authoritative command reference for local builds and CLI
+usage. Root-level files such as `README.md`, `CONTRIBUTING.md`, and
+`AGENTS.md` link here instead of duplicating the complete command list.
+
 ## Prerequisites
 
 See [Prerequisites](../README.md#prerequisites) in the README for FPC installation instructions.
@@ -86,9 +90,23 @@ printf "const x = 2 + 2; x;" | ./build/GocciaScriptLoader
 printf 'suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n' | ./build/GocciaBenchmarkRunner
 ```
 
-Both loaders are silent about the script's last evaluated value unless you pass `--print` (the value-printing contract is described in [README § Run a Script](../README.md#run-a-script)). For local dev that's fine; for CI scripts and shell pipelines that previously parsed `Result: <value>` from the loader's stdout, pass `--print` and parse the bare value on the line after the timing banner — or switch to `--output=json` and read the `result` field, which is always populated regardless of `--print`.
+Both loaders are silent about the script's last evaluated value unless you pass `--print`. For local dev that's fine; for CI scripts and shell pipelines that previously parsed `Result: <value>` from the loader's stdout, pass `--print` and parse the bare value on the line after the timing banner — or switch to `--output=json` and read the `result` field, which is always populated regardless of `--print`.
 
 Leading Unix shebang lines such as `#!/usr/bin/env goccia` are treated as comments by the lexer, so executable scripts can be run directly without preprocessing.
+
+For a smaller runtime surface without the loader runtime profile, build and run the Bare Script Loader:
+
+```bash
+./build.pas loaderbare && ./build/GocciaScriptLoaderBare example.js
+printf "Goccia.version;" | ./build/GocciaScriptLoaderBare --print
+```
+
+Coverage and profiling output are available from the loader:
+
+```bash
+./build/GocciaScriptLoader example.js --coverage --coverage-format=lcov --coverage-output=coverage.lcov
+./build/GocciaScriptLoader example.js --profile=all --profile-output=profile.json
+```
 
 ### Compile and Test
 
@@ -100,6 +118,15 @@ Leading Unix shebang lines such as `#!/usr/bin/env goccia` are treated as commen
 
 `./build.pas testrunner` also builds `fixtures/ffi/libfixture.*` for the
 current platform, which the folder-configured FFI JavaScript tests need.
+
+Useful test-runner forms:
+
+```bash
+./build/GocciaTestRunner tests --jobs=4
+./build/GocciaTestRunner tests --no-progress --exit-on-first-failure --silent
+./build/GocciaTestRunner tests --output=results.json --log=test-console.log
+./build/GocciaTestRunner tests --coverage --coverage-format=lcov --coverage-output=coverage.lcov
+```
 
 ### Bytecode Mode
 
