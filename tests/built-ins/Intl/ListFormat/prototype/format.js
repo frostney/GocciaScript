@@ -30,6 +30,11 @@ describe.runIf(isIntl && typeof Intl.ListFormat !== "undefined")("Intl.ListForma
     expect(result).toBe("");
   });
 
+  test("formats undefined as an empty list", () => {
+    const lf = new Intl.ListFormat("en");
+    expect(lf.format(undefined)).toBe("");
+  });
+
   test("format returns a string", () => {
     const lf = new Intl.ListFormat("en");
     expect(typeof lf.format(["x", "y"])).toBe("string");

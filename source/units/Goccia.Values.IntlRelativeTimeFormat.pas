@@ -685,6 +685,14 @@ begin
   AppendPart('literal', Copy(AFormatted, NumberStart + Length(NumberText), MaxInt), '');
 end;
 
+procedure DefineRelativeTimeResolvedProperty(const AObject: TGocciaObjectValue;
+  const AName, AValue: string);
+begin
+  AObject.DefineProperty(AName, TGocciaPropertyDescriptorData.Create(
+    TGocciaStringLiteralValue.Create(AValue),
+    [pfEnumerable, pfConfigurable, pfWritable]));
+end;
+
 { TGocciaIntlRelativeTimeFormatValue }
 
 constructor TGocciaIntlRelativeTimeFormatValue.Create(const ALocale: string; const AOptions: TGocciaObjectValue);
@@ -761,7 +769,7 @@ end;
 
 function TGocciaIntlRelativeTimeFormatValue.ToStringTag: string;
 begin
-  Result := 'Intl.RelativeTimeFormat';
+  Result := 'Object';
 end;
 
 procedure TGocciaIntlRelativeTimeFormatValue.InitializePrototype;
@@ -940,10 +948,11 @@ var
 begin
   RTF := AsRelativeTimeFormat(AThisValue, 'Intl.RelativeTimeFormat.prototype.resolvedOptions');
   Obj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
-  Obj.AssignProperty('locale', TGocciaStringLiteralValue.Create(RTF.FLocale));
-  Obj.AssignProperty('style', TGocciaStringLiteralValue.Create(RTF.FStyle));
-  Obj.AssignProperty('numeric', TGocciaStringLiteralValue.Create(RTF.FNumeric));
-  Obj.AssignProperty('numberingSystem', TGocciaStringLiteralValue.Create(RTF.FNumberingSystem));
+  DefineRelativeTimeResolvedProperty(Obj, 'locale', RTF.FLocale);
+  DefineRelativeTimeResolvedProperty(Obj, 'style', RTF.FStyle);
+  DefineRelativeTimeResolvedProperty(Obj, 'numeric', RTF.FNumeric);
+  DefineRelativeTimeResolvedProperty(Obj, 'numberingSystem',
+    RTF.FNumberingSystem);
   Result := Obj;
 end;
 

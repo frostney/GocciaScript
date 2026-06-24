@@ -12,9 +12,9 @@ describe.runIf(isTemporal)("Temporal.PlainMonthDay.from invalid values", () => {
     }).toThrow(RangeError);
   });
 
-  test("throws RangeError for month 13", () => {
-    expect(() => {
-      Temporal.PlainMonthDay.from({ month: 13, day: 1 });
-    }).toThrow(RangeError);
+  test("constrains month 13 by default", () => {
+    const result = Temporal.PlainMonthDay.from({ month: 13, day: 1 });
+    expect(result.monthCode).toBe("M12");
+    expect(result.day).toBe(1);
   });
 });

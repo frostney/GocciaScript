@@ -147,7 +147,8 @@ const
         'const dateTimeClipLimit: number = 8.64e15;'#10 +
         'const toDateInteger = (value: any): number => {'#10 +
         '  const numberValue: number = Number(value);'#10 +
-        '  return Number.isFinite(numberValue) ? Math.trunc(numberValue) : NaN;'#10 +
+        '  if (!Number.isFinite(numberValue)) return NaN;'#10 +
+        '  return numberValue < 0 ? -Math.floor(-numberValue) : Math.floor(numberValue);'#10 +
         '};'#10 +
         'const legacyDateFullYear = (year: number): number =>'#10 +
         '  year >= 0 && year <= 99 ? (year >= 50 ? 1900 + year : 2000 + year) : year;'#10 +
@@ -173,37 +174,8 @@ const
         '  if (lower === "dec" || lower === "december") return 12;'#10 +
         '  return NaN;'#10 +
         '};'#10 +
-        'const makeDateEpochMilliseconds = (args: any[], timeZone: string): number => {'#10 +
-        '  if (args.length === 0) return NaN;'#10 +
-        '  const yearValue: number = toDateInteger(args[0]);'#10 +
-        '  const month: number = toDateInteger(args.length > 1 ? args[1] : 0);'#10 +
-        '  const day: number = toDateInteger(args.length > 2 ? args[2] : 1);'#10 +
-        '  const hour: number = toDateInteger(args.length > 3 ? args[3] : 0);'#10 +
-        '  const minute: number = toDateInteger(args.length > 4 ? args[4] : 0);'#10 +
-        '  const second: number = toDateInteger(args.length > 5 ? args[5] : 0);'#10 +
-        '  const millisecond: number = toDateInteger(args.length > 6 ? args[6] : 0);'#10 +
-        '  if (!Number.isFinite(yearValue) || !Number.isFinite(month) ||'#10 +
-        '      !Number.isFinite(day) || !Number.isFinite(hour) ||'#10 +
-        '      !Number.isFinite(minute) || !Number.isFinite(second) ||'#10 +
-        '      !Number.isFinite(millisecond)) return NaN;'#10 +
-        '  const fullYear: number = yearValue >= 0 && yearValue <= 99 ?'#10 +
-        '    1900 + yearValue : yearValue;'#10 +
-        '  try {'#10 +
-        '    const dt = new Temporal.PlainDateTime(fullYear, 1, 1, 0, 0, 0, 0).add({'#10 +
-        '      months: month,'#10 +
-        '      days: day - 1,'#10 +
-        '      hours: hour,'#10 +
-        '      minutes: minute,'#10 +
-        '      seconds: second,'#10 +
-        '      milliseconds: millisecond'#10 +
-        '    });'#10 +
-        '    const epochMilliseconds: number = dt.toZonedDateTime(timeZone).epochMilliseconds;'#10 +
-        '    if (!Number.isFinite(epochMilliseconds) ||'#10 +
-        '        Math.abs(epochMilliseconds) > dateTimeClipLimit)'#10 +
-        '      return NaN;'#10 +
-        '    return Math.trunc(epochMilliseconds);'#10 +
-        '  } catch (e) { return NaN; }'#10 +
-        '};'#10 +
+        'const makeDateEpochMilliseconds = (args: any[], timeZone: string): number =>'#10 +
+        '  makeDateEpochMillisecondsRaw(args, timeZone, true);'#10 +
         'const legacyDateMonthStarts: any[] = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];'#10 +
         'const legacyDateLeapMonthStarts: any[] = [0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335];'#10 +
         'const legacyDateIsLeapYear = (year: number): boolean =>'#10 +
@@ -211,6 +183,38 @@ const
         'const legacyDateDayFromYear = (year: number): number =>'#10 +
         '  365 * (year - 1970) + Math.floor((year - 1969) / 4) -'#10 +
         '  Math.floor((year - 1901) / 100) + Math.floor((year - 1601) / 400);'#10 +
+        'const makeDateEpochMillisecondsRaw = (args: any[], timeZone: string, adjustTwoDigitYear: boolean): number => {'#10 +
+        '  if (args.length === 0) return NaN;'#10 +
+        '  const yearValue: number = toDateInteger(args[0]);'#10 +
+        '  const monthValue: number = toDateInteger(args.length > 1 ? args[1] : 0);'#10 +
+        '  const dayValue: number = toDateInteger(args.length > 2 ? args[2] : 1);'#10 +
+        '  const hour: number = toDateInteger(args.length > 3 ? args[3] : 0);'#10 +
+        '  const minute: number = toDateInteger(args.length > 4 ? args[4] : 0);'#10 +
+        '  const second: number = toDateInteger(args.length > 5 ? args[5] : 0);'#10 +
+        '  const millisecond: number = toDateInteger(args.length > 6 ? args[6] : 0);'#10 +
+        '  if (!Number.isFinite(yearValue) || !Number.isFinite(monthValue) ||'#10 +
+        '      !Number.isFinite(dayValue) || !Number.isFinite(hour) ||'#10 +
+        '      !Number.isFinite(minute) || !Number.isFinite(second) ||'#10 +
+        '      !Number.isFinite(millisecond)) return NaN;'#10 +
+        '  const baseYear: number = adjustTwoDigitYear && yearValue >= 0 && yearValue <= 99 ?'#10 +
+        '    1900 + yearValue : yearValue;'#10 +
+        '  const monthOffset: number = Math.floor(monthValue / 12);'#10 +
+        '  const year: number = baseYear + monthOffset;'#10 +
+        '  const month: number = monthValue - monthOffset * 12;'#10 +
+        '  const starts: any[] = legacyDateIsLeapYear(year) ? legacyDateLeapMonthStarts : legacyDateMonthStarts;'#10 +
+        '  const dayNumber: number = legacyDateDayFromYear(year) + starts[month] + dayValue - 1;'#10 +
+        '  const timeWithinDay: number = ((hour * 3600000 + minute * 60000) + second * 1000) + millisecond;'#10 +
+        '  const value: number = dayNumber * 86400000 + timeWithinDay;'#10 +
+        '  if (!Number.isFinite(value) || Math.abs(value) > dateTimeClipLimit) return NaN;'#10 +
+        '  const clipped: number = Math.trunc(value);'#10 +
+        '  if (timeZone === "UTC") return clipped;'#10 +
+        '  const local = Temporal.Instant.fromEpochMilliseconds(clipped).toZonedDateTimeISO("UTC");'#10 +
+        '  return Temporal.ZonedDateTime.from({'#10 +
+        '    year: local.year, month: local.month, day: local.day,'#10 +
+        '    hour: local.hour, minute: local.minute, second: local.second,'#10 +
+        '    millisecond: local.millisecond, timeZone'#10 +
+        '  }).epochMilliseconds;'#10 +
+        '};'#10 +
         'const makeLegacyDateEpochMilliseconds = (year: number, month: number, day: number): number => {'#10 +
         '  if (month < 1 || month > 12 || day < 1 || day > 31) return NaN;'#10 +
         '  const fullYear: number = legacyDateFullYear(year);'#10 +
@@ -265,17 +269,231 @@ const
         '  }'#10 +
         '  return undefined;'#10 +
         '};'#10 +
+        'const isDecimalDigit = (ch: string): boolean => ch >= "0" && ch <= "9";'#10 +
+        'const parseFixedDigits = (text: string, start: number, length: number): number => {'#10 +
+        '  const token: string = text.slice(start, start + length);'#10 +
+        '  if (token.length !== length) return NaN;'#10 +
+        '  for (const ch of token)'#10 +
+        '    if (!isDecimalDigit(ch)) return NaN;'#10 +
+        '  const value: number = Number(token);'#10 +
+        '  return Number.isFinite(value) && Math.trunc(value) === value ? value : NaN;'#10 +
+        '};'#10 +
+        'const parseExactDigits = (text: string, length: number): number =>'#10 +
+        '  text.length === length ? parseFixedDigits(text, 0, length) : NaN;'#10 +
+        'const parseYearToken = (text: string): number => {'#10 +
+        '  if (text[0] === "-") return -parseLegacyInteger(text.slice(1));'#10 +
+        '  if (text[0] === "+") return parseLegacyInteger(text.slice(1));'#10 +
+        '  return parseLegacyInteger(text);'#10 +
+        '};'#10 +
+        'const isoDaysInMonth = (year: number, month: number): number => {'#10 +
+        '  if (month < 1 || month > 12) return 0;'#10 +
+        '  if (month === 2) return legacyDateIsLeapYear(year) ? 29 : 28;'#10 +
+        '  if (month === 4 || month === 6 || month === 9 || month === 11) return 30;'#10 +
+        '  return 31;'#10 +
+        '};'#10 +
+        'const isValidISODate = (year: number, month: number, day: number): boolean =>'#10 +
+        '  month >= 1 && month <= 12 && day >= 1 && day <= isoDaysInMonth(year, month);'#10 +
+        'const parseTimeToken = (text: string): any => {'#10 +
+        '  const parts: any[] = text.split(":");'#10 +
+        '  if (parts.length !== 2 && parts.length !== 3) return undefined;'#10 +
+        '  const secondParts: any[] = parts.length === 3 ? String(parts[2]).split(".") : ["0"];'#10 +
+        '  const hour: number = parseLegacyInteger(parts[0]);'#10 +
+        '  const minute: number = parseLegacyInteger(parts[1]);'#10 +
+        '  const second: number = parseLegacyInteger(secondParts[0]);'#10 +
+        '  let millisecond: number = 0;'#10 +
+        '  if (secondParts.length > 1) {'#10 +
+        '    const fraction: string = (String(secondParts[1]) + "000").slice(0, 3);'#10 +
+        '    millisecond = parseLegacyInteger(fraction);'#10 +
+        '  }'#10 +
+        '  if (!Number.isFinite(hour) || !Number.isFinite(minute) || !Number.isFinite(second) || !Number.isFinite(millisecond)) return undefined;'#10 +
+        '  return [hour, minute, second, millisecond];'#10 +
+        '};'#10 +
+        'const parseISOTimeToken = (text: string): any => {'#10 +
+        '  const parts: any[] = text.split(":");'#10 +
+        '  if (parts.length !== 2 && parts.length !== 3) return undefined;'#10 +
+        '  const hour: number = parseExactDigits(parts[0], 2);'#10 +
+        '  const minute: number = parseExactDigits(parts[1], 2);'#10 +
+        '  let second: number = 0;'#10 +
+        '  let millisecond: number = 0;'#10 +
+        '  if (parts.length === 3) {'#10 +
+        '    const secondParts: any[] = String(parts[2]).split(".");'#10 +
+        '    if (secondParts.length !== 1 && secondParts.length !== 2) return undefined;'#10 +
+        '    second = parseExactDigits(secondParts[0], 2);'#10 +
+        '    if (secondParts.length === 2) millisecond = parseExactDigits(secondParts[1], 3);'#10 +
+        '  }'#10 +
+        '  if (!Number.isFinite(hour) || !Number.isFinite(minute) || !Number.isFinite(second) || !Number.isFinite(millisecond)) return undefined;'#10 +
+        '  if (hour < 0 || hour > 24 || minute < 0 || minute > 59 || second < 0 || second > 59) return undefined;'#10 +
+        '  if (hour === 24 && (minute !== 0 || second !== 0 || millisecond !== 0)) return undefined;'#10 +
+        '  return [hour, minute, second, millisecond];'#10 +
+        '};'#10 +
+        'const parseISOOffsetMilliseconds = (text: string): any => {'#10 +
+        '  if (text === "") return 0;'#10 +
+        '  if (text === "Z") return 0;'#10 +
+        '  const sign: string = text[0];'#10 +
+        '  if ((sign !== "+" && sign !== "-") || text.length !== 6 || text[3] !== ":") return undefined;'#10 +
+        '  const hour: number = parseExactDigits(text.slice(1, 3), 2);'#10 +
+        '  const minute: number = parseExactDigits(text.slice(4, 6), 2);'#10 +
+        '  if (!Number.isFinite(hour) || !Number.isFinite(minute) || hour > 23 || minute > 59) return undefined;'#10 +
+        '  const offset: number = (hour * 60 + minute) * 60000;'#10 +
+        '  return sign === "+" ? offset : -offset;'#10 +
+        '};'#10 +
+        'const parseGMTOffsetMilliseconds = (token: string): number => {'#10 +
+        '  if (token === "GMT" || token === "UTC") return 0;'#10 +
+        '  if (token.slice(0, 3) !== "GMT") return NaN;'#10 +
+        '  const sign: string = token[3];'#10 +
+        '  const body: string = token.slice(4);'#10 +
+        '  const parts: any[] = body.split(":");'#10 +
+        '  const hour: number = parseLegacyInteger(parts[0]);'#10 +
+        '  const minute: number = parts.length > 1 ? parseLegacyInteger(parts[1]) : 0;'#10 +
+        '  if ((sign !== "+" && sign !== "-") || !Number.isFinite(hour) || !Number.isFinite(minute)) return NaN;'#10 +
+        '  const offset: number = (hour * 60 + minute) * 60000;'#10 +
+        '  return sign === "+" ? offset : -offset;'#10 +
+        '};'#10 +
+        'const parseDisplayDateString = (text: string): any => {'#10 +
+        '  const parts: any[] = text.split(" ");'#10 +
+        '  if (parts.length < 5) return undefined;'#10 +
+        '  let year: number; let month: number; let day: number; let time: any; let offset: number;'#10 +
+        '  if (String(parts[0]).indexOf(",") >= 0) {'#10 +
+        '    day = parseLegacyInteger(parts[1]);'#10 +
+        '    month = legacyDateMonthNumber(parts[2]);'#10 +
+        '    year = parseYearToken(parts[3]);'#10 +
+        '    time = parseTimeToken(parts[4]);'#10 +
+        '    offset = 0;'#10 +
+        '  } else {'#10 +
+        '    month = legacyDateMonthNumber(parts[1]);'#10 +
+        '    day = parseLegacyInteger(parts[2]);'#10 +
+        '    year = parseYearToken(parts[3]);'#10 +
+        '    time = parseTimeToken(parts[4]);'#10 +
+        '    offset = parts.length > 5 ? parseGMTOffsetMilliseconds(parts[5]) : 0;'#10 +
+        '  }'#10 +
+        '  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day) || time === undefined || !Number.isFinite(offset)) return undefined;'#10 +
+        '  return makeDateEpochMillisecondsRaw([year, month - 1, day, time[0], time[1], time[2], time[3]], "UTC", false) - offset;'#10 +
+        '};'#10 +
+        'const parseISODateString = (text: string): any => {'#10 +
+        '  let position: number = 0;'#10 +
+        '  let sign: number = 1;'#10 +
+        '  let yearLength: number = 4;'#10 +
+        '  if (text[position] === "+" || text[position] === "-") {'#10 +
+        '    sign = text[position] === "-" ? -1 : 1;'#10 +
+        '    position += 1;'#10 +
+        '    yearLength = 6;'#10 +
+        '  }'#10 +
+        '  const yearPart: number = parseFixedDigits(text, position, yearLength);'#10 +
+        '  if (!Number.isFinite(yearPart)) return undefined;'#10 +
+        '  const year: number = sign * yearPart;'#10 +
+        '  if (sign < 0 && yearPart === 0) return NaN;'#10 +
+        '  position += yearLength;'#10 +
+        '  if (position === text.length)'#10 +
+        '    return makeDateEpochMillisecondsRaw([year, 0, 1, 0, 0, 0, 0], "UTC", false);'#10 +
+        '  if (text[position] !== "-") return undefined;'#10 +
+        '  const month: number = parseFixedDigits(text, position + 1, 2);'#10 +
+        '  position += 3;'#10 +
+        '  if (!Number.isFinite(month)) return NaN;'#10 +
+        '  if (month < 1 || month > 12) return NaN;'#10 +
+        '  if (position === text.length)'#10 +
+        '    return makeDateEpochMillisecondsRaw([year, month - 1, 1, 0, 0, 0, 0], "UTC", false);'#10 +
+        '  if (text[position] !== "-") return undefined;'#10 +
+        '  const day: number = parseFixedDigits(text, position + 1, 2);'#10 +
+        '  position += 3;'#10 +
+        '  if (!Number.isFinite(day)) return NaN;'#10 +
+        '  if (!isValidISODate(year, month, day)) return NaN;'#10 +
+        '  if (position === text.length)'#10 +
+        '    return makeDateEpochMillisecondsRaw([year, month - 1, day, 0, 0, 0, 0], "UTC", false);'#10 +
+        '  if (text[position] !== "T") return undefined;'#10 +
+        '  let timeText: string = text.slice(position + 1);'#10 +
+        '  let offset: number = 0;'#10 +
+        '  const zIndex: number = timeText.indexOf("Z");'#10 +
+        '  const plusIndex: number = timeText.indexOf("+");'#10 +
+        '  const minusIndex: number = timeText.indexOf("-");'#10 +
+        '  let offsetIndex: number = -1;'#10 +
+        '  if (zIndex >= 0) offsetIndex = zIndex;'#10 +
+        '  else if (plusIndex >= 0) offsetIndex = plusIndex;'#10 +
+        '  else if (minusIndex >= 0) offsetIndex = minusIndex;'#10 +
+        '  const timePart: string = offsetIndex >= 0 ? timeText.slice(0, offsetIndex) : timeText;'#10 +
+        '  const offsetPart: string = offsetIndex >= 0 ? timeText.slice(offsetIndex) : "";'#10 +
+        '  const time: any = parseISOTimeToken(timePart);'#10 +
+        '  if (time === undefined) return NaN;'#10 +
+        '  if (offsetPart === "")'#10 +
+        '    return makeDateEpochMillisecondsRaw([year, month - 1, day, time[0], time[1], time[2], time[3]], Temporal.Now.timeZoneId(), false);'#10 +
+        '  const parsedOffset: any = parseISOOffsetMilliseconds(offsetPart);'#10 +
+        '  if (parsedOffset === undefined) return NaN;'#10 +
+        '  offset = parsedOffset;'#10 +
+        '  return makeDateEpochMillisecondsRaw([year, month - 1, day, time[0], time[1], time[2], time[3]], "UTC", false) - offset;'#10 +
+        '};'#10 +
         'const parseDateStringToEpoch = (str: any): number => {'#10 +
         '  const text: string = String(str).trim();'#10 +
         '  const legacy: any = parseLegacyDateString(text);'#10 +
         '  if (legacy !== undefined) return legacy;'#10 +
+        '  const iso: any = parseISODateString(text);'#10 +
+        '  if (iso !== undefined) return iso;'#10 +
+        '  const display: any = parseDisplayDateString(text);'#10 +
+        '  if (display !== undefined) return display;'#10 +
         '  try { return Temporal.Instant.from(text).epochMilliseconds; }'#10 +
-        '  catch (e) { return NaN; }'#10 +
+        '  catch (e) {}'#10 +
+        '  return NaN;'#10 +
         '};'#10 +
         'const __GocciaShimNumberFormat: any = Intl.NumberFormat;'#10 +
         'const __GocciaShimDateTimeFormat: any = Intl.DateTimeFormat;'#10 +
         'const __GocciaDateSlots = new WeakMap();'#10 +
-        'const __GocciaDateHasSlot = (date: any): boolean => __GocciaDateSlots.has(date);'#10 +
+        'const __GocciaDateIsObject = (value: any): boolean =>'#10 +
+        '  (typeof value === "object" && value !== null) || typeof value === "function";'#10 +
+        'const __GocciaDateHasSlot = (date: any): boolean =>'#10 +
+        '  __GocciaDateIsObject(date) && __GocciaDateSlots.has(date);'#10 +
+        'const __GocciaDateOrdinaryToPrimitive = (object: any, hint: string): any => {'#10 +
+        '  const first: string = hint === "string" ? "toString" : "valueOf";'#10 +
+        '  const second: string = hint === "string" ? "valueOf" : "toString";'#10 +
+        '  const tryMethod = (name: string): any => {'#10 +
+        '    const method: any = object[name];'#10 +
+        '    if (typeof method !== "function") return { found: false, value: undefined };'#10 +
+        '    const value: any = method.call(object);'#10 +
+        '    if (__GocciaDateIsObject(value)) return { found: false, value: undefined };'#10 +
+        '    return { found: true, value };'#10 +
+        '  };'#10 +
+        '  const firstResult: any = tryMethod(first);'#10 +
+        '  if (firstResult.found) return firstResult.value;'#10 +
+        '  const secondResult: any = tryMethod(second);'#10 +
+        '  if (secondResult.found) return secondResult.value;'#10 +
+        '  throw new TypeError("Cannot convert object to primitive value");'#10 +
+        '};'#10 +
+        'const __GocciaDateToPrimitive = (value: any): any => {'#10 +
+        '  if (!__GocciaDateIsObject(value)) return value;'#10 +
+        '  const exotic: any = value[Symbol.toPrimitive];'#10 +
+        '  if (exotic !== undefined && exotic !== null) {'#10 +
+        '    if (typeof exotic !== "function") throw new TypeError("@@toPrimitive must be a function");'#10 +
+        '    const result: any = exotic.call(value, "default");'#10 +
+        '    if (__GocciaDateIsObject(result)) throw new TypeError("@@toPrimitive must return a primitive value");'#10 +
+        '    return result;'#10 +
+        '  }'#10 +
+        '  return __GocciaDateOrdinaryToPrimitive(value, "number");'#10 +
+        '};'#10 +
+        'const __GocciaDateTimeClip = (epochMilliseconds: any): number => {'#10 +
+        '  const t: number = Math.trunc(Number(epochMilliseconds));'#10 +
+        '  return Number.isFinite(t) && Math.abs(t) <= dateTimeClipLimit ? t : NaN;'#10 +
+        '};'#10 +
+        'const __GocciaDatePad = (value: number, length: number): string => {'#10 +
+        '  return String(Math.abs(Math.trunc(value))).padStart(length, "0");'#10 +
+        '};'#10 +
+        'const __GocciaDateYearString = (year: number): string =>'#10 +
+        '  year < 0 ? "-" + __GocciaDatePad(year, 4) : __GocciaDatePad(year, 4);'#10 +
+        'const __GocciaDateISOYearString = (year: number): string =>'#10 +
+        '  year >= 0 && year <= 9999 ? __GocciaDatePad(year, 4) :'#10 +
+        '    (year < 0 ? "-" : "+") + __GocciaDatePad(year, 6);'#10 +
+        'const __GocciaDateOffsetString = (offset: string): string => offset.replace(":", "");'#10 +
+        'const __GocciaDateFromSingleArgument = (value: any): number => {'#10 +
+        '  if (__GocciaDateHasSlot(value)) return __GocciaDateGetSlot(value);'#10 +
+        '  const primitive: any = __GocciaDateToPrimitive(value);'#10 +
+        '  return typeof primitive === "string" ? parseDateStringToEpoch(primitive) : __GocciaDateTimeClip(primitive);'#10 +
+        '};'#10 +
+        'const __GocciaDateDefaultPrototypeForNewTarget = (newTarget: any): any => {'#10 +
+        '  try {'#10 +
+        '    const FunctionCtor: any = newTarget.constructor;'#10 +
+        '    if (typeof FunctionCtor === "function") {'#10 +
+        '      const proto: any = FunctionCtor("return Date.prototype")();'#10 +
+        '      if (__GocciaDateIsObject(proto)) return proto;'#10 +
+        '    }'#10 +
+        '  } catch (e) {}'#10 +
+        '  return __GocciaDateClass.prototype;'#10 +
+        '};'#10 +
         'const __GocciaDateRequire = (date: any): void => {'#10 +
         '  if (!__GocciaDateHasSlot(date)) throw new TypeError("Date object expected");'#10 +
         '};'#10 +
@@ -329,11 +547,7 @@ const
         '    if (args.length === 0) {'#10 +
         '      ms = Temporal.Now.instant().epochMilliseconds;'#10 +
         '    } else if (args.length === 1) {'#10 +
-        '      const v = args[0];'#10 +
-        '      if (typeof v === "number") {'#10 +
-        '        const t = Math.trunc(v);'#10 +
-        '        ms = Number.isFinite(t) && Math.abs(t) <= 8.64e15 ? t : NaN;'#10 +
-        '      } else { ms = Date.parse(String(v)); }'#10 +
+        '      ms = __GocciaDateFromSingleArgument(args[0]);'#10 +
         '    } else {'#10 +
         '      ms = makeDateEpochMilliseconds(args, Temporal.Now.timeZoneId());'#10 +
         '    }'#10 +
@@ -348,9 +562,9 @@ const
         '  getTime(): number { return __GocciaDateGetSlot(this); }'#10 +
         '  valueOf(): number { return __GocciaDateGetSlot(this); }'#10 +
         '  [Symbol.toPrimitive](hint: string): any {'#10 +
-        '    Date.#require(this);'#10 +
-        '    if (hint === "string" || hint === "default") return this.toString();'#10 +
-        '    if (hint === "number") return this.valueOf();'#10 +
+        '    if (!__GocciaDateIsObject(this)) throw new TypeError("Date.prototype[Symbol.toPrimitive] called on non-object");'#10 +
+        '    if (hint === "string" || hint === "default") return __GocciaDateOrdinaryToPrimitive(this, "string");'#10 +
+        '    if (hint === "number") return __GocciaDateOrdinaryToPrimitive(this, "number");'#10 +
         '    throw new TypeError("Date.prototype[Symbol.toPrimitive] invalid hint");'#10 +
         '  }'#10 +
         '  getFullYear(): number { const z = Date.#local(this); return z ? z.year : NaN; }'#10 +
@@ -377,18 +591,11 @@ const
         '    if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day) ||'#10 +
         '        !Number.isFinite(hour) || !Number.isFinite(minute) || !Number.isFinite(second) ||'#10 +
         '        !Number.isFinite(millisecond)) return NaN;'#10 +
-        '    try {'#10 +
-        '      const dt = new Temporal.PlainDateTime(Math.trunc(year), 1, 1, 0, 0, 0, 0).add({'#10 +
-        '        months: Math.trunc(month), days: Math.trunc(day) - 1,'#10 +
-        '        hours: Math.trunc(hour), minutes: Math.trunc(minute),'#10 +
-        '        seconds: Math.trunc(second), milliseconds: Math.trunc(millisecond)'#10 +
-        '      });'#10 +
-        '      return Date.#clip(dt.toZonedDateTime(timeZone).epochMilliseconds);'#10 +
-        '    } catch (e) { return NaN; }'#10 +
+        '    return makeDateEpochMillisecondsRaw([year, month, day, hour, minute, second, millisecond], timeZone, false);'#10 +
         '  }'#10 +
         '  static #setFromParts(date: any, timeZone: string, z: any, year: number, month: number, day: number, hour: number, minute: number, second: number, millisecond: number): number {'#10 +
         '    Date.#require(date);'#10 +
-        '    if (!z) return Date.#set(date, NaN);'#10 +
+        '    if (!z) return NaN;'#10 +
         '    return Date.#set(date, Date.#epochFromParts(year, month, day, hour, minute, second, millisecond, timeZone));'#10 +
         '  }'#10 +
         '  setTime(time: number): number {'#10 +
@@ -440,16 +647,14 @@ const
         '    const z = Date.#local(this); const d = toDateInteger(day);'#10 +
         '    if (!z) return NaN;'#10 +
         '    if (!Number.isFinite(d)) return Date.#set(this, NaN);'#10 +
-        '    try { return Date.#set(this, Date.#clip(z.add({ days: Math.trunc(d) - z.day }).epochMilliseconds)); }'#10 +
-        '    catch (e) { return Date.#set(this, NaN); }'#10 +
+        '    return Date.#setFromParts(this, Temporal.Now.timeZoneId(), z, z.year, z.month - 1, d, z.hour, z.minute, z.second, z.millisecond);'#10 +
         '  }'#10 +
         '  setUTCDate(day: number): number {'#10 +
         '    Date.#require(this);'#10 +
         '    const z = Date.#utc(this); const d = toDateInteger(day);'#10 +
         '    if (!z) return NaN;'#10 +
         '    if (!Number.isFinite(d)) return Date.#set(this, NaN);'#10 +
-        '    try { return Date.#set(this, Date.#clip(z.add({ days: Math.trunc(d) - z.day }).epochMilliseconds)); }'#10 +
-        '    catch (e) { return Date.#set(this, NaN); }'#10 +
+        '    return Date.#setFromParts(this, "UTC", z, z.year, z.month - 1, d, z.hour, z.minute, z.second, z.millisecond);'#10 +
         '  }'#10 +
         '  setMonth(month: number, day: number): number {'#10 +
         '    Date.#require(this);'#10 +
@@ -471,9 +676,15 @@ const
         '    const z = Date.#utc(this); const y = toDateInteger(year); const m = arguments.length > 1 ? toDateInteger(month) : (z ? z.month - 1 : 0); const d = arguments.length > 2 ? toDateInteger(day) : (z ? z.day : 1);'#10 +
         '    return Date.#setFromParts(this, "UTC", z || true, y, m, d, z ? z.hour : 0, z ? z.minute : 0, z ? z.second : 0, z ? z.millisecond : 0);'#10 +
         '  }'#10 +
-        '  getTimezoneOffset(): number { const z = Date.#local(this); return z ? -(z.offsetNanoseconds / 60000000000) : NaN; }'#10 +
-        '  toISOString(): string { if (!Date.#valid(this)) throw new RangeError("Invalid time value"); return Temporal.Instant.fromEpochMilliseconds(Date.#get(this)).toString(); }'#10 +
-        '  toJSON(): string | null {'#10 +
+        '  getTimezoneOffset(): number { const z = Date.#local(this); if (!z) return NaN; const minutes: number = z.offsetNanoseconds / 60000000000; return minutes === 0 ? 0 : -minutes; }'#10 +
+        '  toISOString(): string {'#10 +
+        '    const z = Date.#utc(this);'#10 +
+        '    if (!z) throw new RangeError("Invalid time value");'#10 +
+        '    return __GocciaDateISOYearString(z.year) + "-" + __GocciaDatePad(z.month, 2) + "-" + __GocciaDatePad(z.day, 2) + "T" +'#10 +
+        '      __GocciaDatePad(z.hour, 2) + ":" + __GocciaDatePad(z.minute, 2) + ":" + __GocciaDatePad(z.second, 2) + "." +'#10 +
+        '      __GocciaDatePad(z.millisecond, 3) + "Z";'#10 +
+        '  }'#10 +
+        '  toJSON(key: any): string | null {'#10 +
         '    if (this === null || this === undefined) throw new TypeError("Date.prototype.toJSON called on null or undefined");'#10 +
         '    const object: any = Object(this);'#10 +
         '    const isObject = (value: any): boolean => (typeof value === "object" && value !== null) || typeof value === "function";'#10 +
@@ -503,41 +714,37 @@ const
         '    Date.#require(this);'#10 +
         '    const z = Date.#local(this);'#10 +
         '    if (!z) return "Invalid Date";'#10 +
-        '    const pad = (n: number): string => n < 10 ? "0" + String(n) : String(n);'#10 +
         '    const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];'#10 +
         '    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];'#10 +
-        '    return days[z.dayOfWeek % 7] + " " + months[z.month - 1] + " " + pad(z.day) + " " +'#10 +
-        '      String(z.year) + " " + pad(z.hour) + ":" + pad(z.minute) + ":" + pad(z.second) + " GMT" + z.offset;'#10 +
+        '    return days[z.dayOfWeek % 7] + " " + months[z.month - 1] + " " + __GocciaDatePad(z.day, 2) + " " +'#10 +
+        '      __GocciaDateYearString(z.year) + " " + __GocciaDatePad(z.hour, 2) + ":" + __GocciaDatePad(z.minute, 2) + ":" + __GocciaDatePad(z.second, 2) + " GMT" + __GocciaDateOffsetString(z.offset);'#10 +
         '  }'#10 +
         '  toDateString(): string {'#10 +
         '    Date.#require(this);'#10 +
         '    const z = Date.#local(this);'#10 +
         '    if (!z) return "Invalid Date";'#10 +
-        '    const pad = (n: number): string => n < 10 ? "0" + String(n) : String(n);'#10 +
         '    const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];'#10 +
         '    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];'#10 +
-        '    return days[z.dayOfWeek % 7] + " " + months[z.month - 1] + " " + pad(z.day) + " " + String(z.year);'#10 +
+        '    return days[z.dayOfWeek % 7] + " " + months[z.month - 1] + " " + __GocciaDatePad(z.day, 2) + " " + __GocciaDateYearString(z.year);'#10 +
         '  }'#10 +
         '  toTimeString(): string {'#10 +
         '    Date.#require(this);'#10 +
         '    const z = Date.#local(this);'#10 +
         '    if (!z) return "Invalid Date";'#10 +
-        '    const pad = (n: number): string => n < 10 ? "0" + String(n) : String(n);'#10 +
-        '    return pad(z.hour) + ":" + pad(z.minute) + ":" + pad(z.second) + " GMT" + z.offset;'#10 +
+        '    return __GocciaDatePad(z.hour, 2) + ":" + __GocciaDatePad(z.minute, 2) + ":" + __GocciaDatePad(z.second, 2) + " GMT" + __GocciaDateOffsetString(z.offset);'#10 +
         '  }'#10 +
         '  toUTCString(): string {'#10 +
         '    Date.#require(this);'#10 +
         '    const z = Date.#utc(this);'#10 +
         '    if (!z) return "Invalid Date";'#10 +
-        '    const pad = (n: number): string => n < 10 ? "0" + String(n) : String(n);'#10 +
         '    const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];'#10 +
         '    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];'#10 +
-        '    return days[z.dayOfWeek % 7] + ", " + pad(z.day) + " " + months[z.month - 1] + " " +'#10 +
-        '      String(z.year) + " " + pad(z.hour) + ":" + pad(z.minute) + ":" + pad(z.second) + " GMT";'#10 +
+        '    return days[z.dayOfWeek % 7] + ", " + __GocciaDatePad(z.day, 2) + " " + months[z.month - 1] + " " +'#10 +
+        '      __GocciaDateYearString(z.year) + " " + __GocciaDatePad(z.hour, 2) + ":" + __GocciaDatePad(z.minute, 2) + ":" + __GocciaDatePad(z.second, 2) + " GMT";'#10 +
         '  }'#10 +
         '  toGMTString(): string { return this.toUTCString(); }'#10 +
         '  static #localeOptions(options: any, needDate: boolean, needTime: boolean): any {'#10 +
-        '    const out: any = {};'#10 +
+        '    const out: any = Object.create(null);'#10 +
         '    if (options !== undefined) {'#10 +
         '      ["localeMatcher", "calendar", "numberingSystem", "timeZone", "hour12", "hourCycle", "formatMatcher",'#10 +
         '       "weekday", "era", "year", "month", "day", "dayPeriod", "hour", "minute", "second",'#10 +
@@ -548,7 +755,7 @@ const
         '    }'#10 +
         '    const hasDate = out.weekday !== undefined || out.year !== undefined || out.month !== undefined || out.day !== undefined || out.dateStyle !== undefined;'#10 +
         '    const hasTime = out.dayPeriod !== undefined || out.hour !== undefined || out.minute !== undefined || out.second !== undefined || out.fractionalSecondDigits !== undefined || out.timeStyle !== undefined;'#10 +
-        '    const needDefaults = !hasDate && !hasTime;'#10 +
+        '    const needDefaults = needDate && needTime ? !hasDate && !hasTime : needDate ? !hasDate : needTime ? !hasTime : false;'#10 +
         '    if (needDefaults && needDate) { out.year = "numeric"; out.month = "numeric"; out.day = "numeric"; }'#10 +
         '    if (needDefaults && needTime) { out.hour = "numeric"; out.minute = "numeric"; out.second = "numeric"; }'#10 +
         '    return out;'#10 +
@@ -568,24 +775,30 @@ const
         '    if (!Date.#valid(this)) return "Invalid Date";'#10 +
         '    return new __GocciaShimDateTimeFormat(args[0], Date.#localeOptions(args[1], false, true)).format(Date.#get(this));'#10 +
         '  }'#10 +
+        '  toTemporalInstant(): any {'#10 +
+        '    const value: number = __GocciaDateGetSlot(this);'#10 +
+        '    if (!Number.isFinite(value)) throw new RangeError("Invalid time value");'#10 +
+        '    return Temporal.Instant.fromEpochMilliseconds(value);'#10 +
+        '  }'#10 +
         '};'#10 +
         'const __GocciaDateConstructor = function(...args: any[]): any {'#10 +
         '  if (new.target === undefined) return new __GocciaDateConstructor().toString();'#10 +
+        '  if (new.target !== __GocciaDateConstructor && !__GocciaDateIsObject(new.target.prototype))'#10 +
+        '    Object.setPrototypeOf(this, __GocciaDateDefaultPrototypeForNewTarget(new.target));'#10 +
         '  let ms: number;'#10 +
         '  if (args.length === 0) {'#10 +
         '    ms = Temporal.Now.instant().epochMilliseconds;'#10 +
         '  } else if (args.length === 1) {'#10 +
-        '    const v = args[0];'#10 +
-        '    if (typeof v === "number") {'#10 +
-        '      const t = Math.trunc(v);'#10 +
-        '      ms = Number.isFinite(t) && Math.abs(t) <= 8.64e15 ? t : NaN;'#10 +
-        '    } else { ms = parseDateStringToEpoch(v); }'#10 +
+        '    ms = __GocciaDateFromSingleArgument(args[0]);'#10 +
         '  } else {'#10 +
         '    ms = makeDateEpochMilliseconds(args, Temporal.Now.timeZoneId());'#10 +
         '  }'#10 +
         '  __GocciaDateSetSlot(this, ms);'#10 +
         '};'#10 +
         'Object.defineProperty(__GocciaDateConstructor, "name", { value: "Date", configurable: true });'#10 +
+        'Object.defineProperty(__GocciaDateConstructor, "length", { value: 7, configurable: true });'#10 +
+        'Object.defineProperty(__GocciaDateClass.UTC, "length", { value: 7, configurable: true });'#10 +
+        'Object.defineProperty(__GocciaDateClass.prototype, Symbol.toPrimitive, { writable: false, configurable: true });'#10 +
         'Object.defineProperty(__GocciaDateConstructor, "now", { value: __GocciaDateClass.now, writable: true, configurable: true });'#10 +
         'Object.defineProperty(__GocciaDateConstructor, "parse", { value: __GocciaDateClass.parse, writable: true, configurable: true });'#10 +
         'Object.defineProperty(__GocciaDateConstructor, "UTC", { value: __GocciaDateClass.UTC, writable: true, configurable: true });'#10 +

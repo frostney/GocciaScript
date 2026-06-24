@@ -256,6 +256,8 @@ begin
 
   if Trimmed = 'Infinity' then
     Exit(Infinity);
+  if Trimmed = '+Infinity' then
+    Exit(Infinity);
   if Trimmed = '-Infinity' then
     Exit(NegInfinity);
 

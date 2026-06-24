@@ -178,6 +178,7 @@ end;
 function TGocciaMath.MathFloor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   NumberArg: TGocciaNumberLiteralValue;
+  IntegralPart: Double;
 begin
   TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Math.floor', ThrowError);
   // Step 1: Let n be ? ToNumber(x).
@@ -195,7 +196,10 @@ begin
     Exit;
   end;
   // Step 3: Return the greatest (closest to +∞) integral Number ≤ n.
-  Result := TGocciaNumberLiteralValue.Create(Floor(NumberArg.Value));
+  IntegralPart := Int(NumberArg.Value);
+  if (NumberArg.Value < 0) and (IntegralPart <> NumberArg.Value) then
+    IntegralPart := IntegralPart - 1;
+  Result := TGocciaNumberLiteralValue.Create(IntegralPart);
 end;
 
 // §21.3.2.10 Math.ceil ( x )
@@ -1214,7 +1218,7 @@ begin
           NextMethod := IteratorObj.GetProperty(PROP_NEXT);
           if Assigned(NextMethod) and not (NextMethod is TGocciaUndefinedLiteralValue) and NextMethod.IsCallable then
             // Capture-once per ES2024 §7.4.2 GetIteratorDirect.
-            Iterator := TGocciaGenericIteratorValue.Create(IteratorObj, NextMethod);
+            Iterator := CreateRootedGenericIterator(IteratorObj, NextMethod);
         end;
       end;
     end;

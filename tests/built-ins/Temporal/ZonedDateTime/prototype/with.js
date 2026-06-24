@@ -15,4 +15,25 @@ describe.runIf(isTemporal)("Temporal.ZonedDateTime.prototype.with", () => {
     expect(updated.month).toBe(3);
     expect(updated.day).toBe(15);
   });
+
+  test("with resolves non-ISO calendar fields", () => {
+    const zdt = Temporal.ZonedDateTime.from({
+      era: "be",
+      eraYear: 2543,
+      monthCode: "M01",
+      day: 1,
+      hour: 12,
+      minute: 34,
+      calendar: "buddhist",
+      timeZone: "UTC"
+    });
+    const updated = zdt.with({ year: 2220 });
+    expect(updated.year).toBe(2220);
+    expect(updated.month).toBe(1);
+    expect(updated.monthCode).toBe("M01");
+    expect(updated.day).toBe(1);
+    expect(updated.hour).toBe(12);
+    expect(updated.minute).toBe(34);
+    expect(updated.calendarId).toBe("buddhist");
+  });
 });

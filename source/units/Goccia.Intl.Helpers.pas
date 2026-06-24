@@ -9,7 +9,8 @@ uses
 
   Goccia.Values.ArrayValue,
   Goccia.Values.ObjectValue,
-  Goccia.Values.Primitives;
+  Goccia.Values.Primitives,
+  Goccia.Values.SymbolValue;
 
 // Converts an ICU format-part array into a JS Array of
 // part objects with 'type' and 'value' properties.
@@ -31,6 +32,7 @@ function TryGetUnicodeLocaleExtensionKeyword(const ALocale, AKey: string;
 function RemoveUnicodeLocaleExtensionKeyword(const ALocale, AKey: string): string;
 function AddUnicodeLocaleExtensionKeyword(const ALocale, AKey, AValue: string): string;
 function IsSupportedNumberingSystem(const AValue: string): Boolean;
+function IntlFallbackSymbol: TGocciaSymbolValue;
 
 implementation
 
@@ -40,7 +42,14 @@ uses
 
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
+  Goccia.Realm,
   Goccia.Values.ErrorHelper;
+
+const
+  INTL_LEGACY_CONSTRUCTED_SYMBOL_DESCRIPTION = 'IntlLegacyConstructedSymbol';
+
+var
+  GIntlFallbackSymbolSlot: TGocciaRealmSlotId;
 
 function FormatPartsToArray(const AParts: TIntlFormatPartArray): TGocciaArrayValue;
 var
@@ -314,16 +323,18 @@ end;
 
 function IsSupportedNumberingSystem(const AValue: string): Boolean;
 const
-  SupportedNumberingSystems: array[0..62] of string = (
+  SupportedNumberingSystems: array[0..77] of string = (
     'adlm', 'ahom', 'arab', 'arabext', 'bali', 'beng', 'bhks', 'brah',
-    'cakm', 'cham', 'deva', 'fullwide', 'gong', 'gonm', 'gujr', 'guru',
-    'hanidec', 'hmng', 'java', 'kali', 'khmr', 'knda', 'lana',
-    'lanatham', 'laoo', 'latn', 'lepc', 'limb', 'mathbold', 'mathdbl',
-    'mathmono', 'mathsanb', 'mathsans', 'mlym', 'modi', 'mong', 'mroo',
-    'mtei', 'mymr', 'mymrshan', 'mymrtlng', 'newa', 'nkoo', 'olck',
-    'orya', 'osma', 'rohg', 'saur', 'shrd', 'sind', 'sinh', 'sora',
-    'sund', 'takr', 'talu', 'tamldec', 'telu', 'thai', 'tibt', 'tirh',
-    'vaii', 'wara', 'wcho');
+    'cakm', 'cham', 'deva', 'diak', 'fullwide', 'gara', 'gong', 'gonm',
+    'gujr', 'gukh', 'guru', 'hanidec', 'hmng', 'hmnp', 'java', 'kali',
+    'kawi', 'khmr', 'knda', 'krai', 'lana', 'lanatham', 'laoo', 'latn',
+    'lepc', 'limb', 'mathbold', 'mathdbl', 'mathmono', 'mathsanb',
+    'mathsans', 'mlym', 'modi', 'mong', 'mroo', 'mtei', 'mymr',
+    'mymrepka', 'mymrpao', 'mymrshan', 'mymrtlng', 'nagm', 'newa', 'nkoo',
+    'olck', 'onao', 'orya', 'osma', 'outlined', 'rohg', 'saur', 'segment',
+    'shrd', 'sind', 'sinh', 'sora', 'sund', 'sunu', 'takr', 'talu',
+    'tamldec', 'telu', 'thai', 'tibt', 'tirh', 'tnsa', 'tols', 'vaii',
+    'wara', 'wcho');
 var
   I: Integer;
 begin
@@ -337,5 +348,24 @@ begin
     end;
   end;
 end;
+
+function IntlFallbackSymbol: TGocciaSymbolValue;
+begin
+  if Assigned(CurrentRealm) then
+  begin
+    Result := TGocciaSymbolValue(CurrentRealm.GetSlot(GIntlFallbackSymbolSlot));
+    if Assigned(Result) then
+      Exit;
+
+    Result := TGocciaSymbolValue.Create(INTL_LEGACY_CONSTRUCTED_SYMBOL_DESCRIPTION);
+    CurrentRealm.SetSlot(GIntlFallbackSymbolSlot, Result);
+    Exit;
+  end;
+
+  Result := TGocciaSymbolValue.Create(INTL_LEGACY_CONSTRUCTED_SYMBOL_DESCRIPTION);
+end;
+
+initialization
+  GIntlFallbackSymbolSlot := RegisterRealmSlot('Intl.[[FallbackSymbol]]');
 
 end.

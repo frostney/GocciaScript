@@ -40,12 +40,14 @@ uses
   IntlTypes,
 
   Goccia.Error.Messages,
+  Goccia.GarbageCollector,
   Goccia.Intl.CLDRData,
   Goccia.Intl.Helpers,
   Goccia.ObjectModel.Types,
   Goccia.Realm,
-  Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
+  Goccia.Values.IteratorSupport,
+  Goccia.Values.IteratorValue,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
 
@@ -90,18 +92,71 @@ begin
     Result := ilfsLong;
 end;
 
-function ExtractStringArray(const AValue: TGocciaValue): TStringArray;
+function ReadListFormatStringOption(const AOptions: TGocciaObjectValue;
+  const AName, ADefault: string; const AAllowed: array of string): string;
 var
-  ArrValue: TGocciaArrayValue;
+  V: TGocciaValue;
   I: Integer;
 begin
-  SetLength(Result, 0);
-  if AValue is TGocciaArrayValue then
+  Result := ADefault;
+  V := AOptions.GetProperty(AName);
+  if not Assigned(V) or (V is TGocciaUndefinedLiteralValue) then
+    Exit;
+
+  Result := V.ToStringLiteral.Value;
+  for I := Low(AAllowed) to High(AAllowed) do
   begin
-    ArrValue := TGocciaArrayValue(AValue);
-    SetLength(Result, ArrValue.Elements.Count);
-    for I := 0 to ArrValue.Elements.Count - 1 do
-      Result[I] := ArrValue.Elements[I].ToStringLiteral.Value;
+    if Result = AAllowed[I] then
+      Exit;
+  end;
+
+  ThrowRangeError(Format(SErrorIntlInvalidOption, [Result, AName]));
+end;
+
+function ExtractStringArray(const AValue: TGocciaValue): TStringArray;
+var
+  Iterator: TGocciaIteratorValue;
+  Item: TGocciaValue;
+  Done: Boolean;
+  Count: Integer;
+  IteratorRoot, ItemRoot: TGocciaTempRoot;
+begin
+  SetLength(Result, 0);
+
+  if (not Assigned(AValue)) or (AValue is TGocciaUndefinedLiteralValue) then
+    Exit;
+
+  Iterator := GetIteratorFromValue(AValue);
+  if not Assigned(Iterator) then
+    ThrowTypeError('Intl.ListFormat requires an iterable');
+
+  Count := 0;
+  InitializeTempRoot(IteratorRoot);
+  InitializeTempRoot(ItemRoot);
+  AddTempRootIfNeeded(IteratorRoot, Iterator);
+  try
+    try
+      Item := Iterator.DirectNext(Done);
+      while not Done do
+      begin
+        AddTempRootIfNeeded(ItemRoot, Item);
+        try
+          if not (Item is TGocciaStringLiteralValue) then
+            ThrowTypeError('Intl.ListFormat iterable yielded a non-string value');
+          SetLength(Result, Count + 1);
+          Result[Count] := TGocciaStringLiteralValue(Item).Value;
+          Inc(Count);
+        finally
+          RemoveTempRootIfNeeded(ItemRoot);
+        end;
+        Item := Iterator.DirectNext(Done);
+      end;
+    except
+      CloseIteratorPreservingError(Iterator);
+      raise;
+    end;
+  finally
+    RemoveTempRootIfNeeded(IteratorRoot);
   end;
 end;
 
@@ -305,7 +360,7 @@ end;
 constructor TGocciaIntlListFormatValue.Create(const ALocale: string; const AOptions: TGocciaObjectValue);
 var
   Canonical: string;
-  V: TGocciaValue;
+  Ignored: string;
 begin
   inherited Create;
   Canonical := CanonicalizeUnicodeLocaleId(ALocale);
@@ -320,20 +375,12 @@ begin
 
   if Assigned(AOptions) then
   begin
-    V := AOptions.GetProperty('type');
-    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-    begin
-      FType := V.ToStringLiteral.Value;
-      if ContainsNulCharacter(FType) then
-        ThrowRangeError(Format(SErrorIntlInvalidOption, [FType, 'type']));
-    end;
-    V := AOptions.GetProperty('style');
-    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-    begin
-      FStyle := V.ToStringLiteral.Value;
-      if ContainsNulCharacter(FStyle) then
-        ThrowRangeError(Format(SErrorIntlInvalidOption, [FStyle, 'style']));
-    end;
+    Ignored := ReadListFormatStringOption(AOptions, 'localeMatcher',
+      'best fit', ['lookup', 'best fit']);
+    FType := ReadListFormatStringOption(AOptions, 'type', FType,
+      ['conjunction', 'disjunction', 'unit']);
+    FStyle := ReadListFormatStringOption(AOptions, 'style', FStyle,
+      ['long', 'short', 'narrow']);
   end;
 
   InitializePrototype;
@@ -343,7 +390,7 @@ end;
 
 function TGocciaIntlListFormatValue.ToStringTag: string;
 begin
-  Result := 'Intl.ListFormat';
+  Result := 'Object';
 end;
 
 procedure TGocciaIntlListFormatValue.InitializePrototype;
@@ -397,11 +444,8 @@ var
   LF: TGocciaIntlListFormatValue;
   Items: TStringArray;
   Formatted: string;
-  I: Integer;
 begin
   LF := AsListFormat(AThisValue, 'Intl.ListFormat.prototype.format');
-  if AArgs.Length < 1 then
-    ThrowTypeError('Intl.ListFormat.prototype.format requires a list argument');
 
   Items := ExtractStringArray(AArgs.GetElement(0));
   if TryICUFormatList(LF.FLocale, Items, ListTypeStringToEnum(LF.FType),
@@ -420,8 +464,6 @@ var
   Parts: TIntlFormatPartArray;
 begin
   LF := AsListFormat(AThisValue, 'Intl.ListFormat.prototype.formatToParts');
-  if AArgs.Length < 1 then
-    ThrowTypeError('Intl.ListFormat.prototype.formatToParts requires a list argument');
 
   Items := ExtractStringArray(AArgs.GetElement(0));
   if TryICUFormatListToParts(LF.FLocale, Items, ListTypeStringToEnum(LF.FType),
@@ -439,9 +481,9 @@ var
 begin
   LF := AsListFormat(AThisValue, 'Intl.ListFormat.prototype.resolvedOptions');
   Obj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
-  Obj.AssignProperty('locale', TGocciaStringLiteralValue.Create(LF.FLocale));
-  Obj.AssignProperty('type', TGocciaStringLiteralValue.Create(LF.FType));
-  Obj.AssignProperty('style', TGocciaStringLiteralValue.Create(LF.FStyle));
+  Obj.CreateDataPropertyOrThrow('locale', TGocciaStringLiteralValue.Create(LF.FLocale));
+  Obj.CreateDataPropertyOrThrow('type', TGocciaStringLiteralValue.Create(LF.FType));
+  Obj.CreateDataPropertyOrThrow('style', TGocciaStringLiteralValue.Create(LF.FStyle));
   Result := Obj;
 end;
 

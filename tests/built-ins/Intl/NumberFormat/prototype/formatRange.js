@@ -4,6 +4,7 @@ features: [Intl]
 ---*/
 
 const isIntl = typeof Intl !== "undefined";
+const hasFullICU = isIntl && new Intl.NumberFormat("en-US").format(NaN) === "NaN";
 
 describe.runIf(isIntl)("Intl.NumberFormat.prototype.formatRange", () => {
   test("formatRange is exposed", () => {
@@ -18,6 +19,22 @@ describe.runIf(isIntl)("Intl.NumberFormat.prototype.formatRange", () => {
       maximumFractionDigits: 0
     });
     expect(nf.formatRange(3, 5)).toBe("$3 – $5");
+  });
+
+  test("formats pt-PT currency ranges with the locale currency pattern", () => {
+    const nf = new Intl.NumberFormat("pt-PT", {
+      style: "currency",
+      currency: "EUR",
+      maximumFractionDigits: 0
+    });
+
+    if (!hasFullICU) {
+      expect(typeof nf.formatRange(3, 5)).toBe("string");
+      return;
+    }
+
+    expect(nf.resolvedOptions().locale).toBe("pt-PT");
+    expect(nf.formatRange(3, 5)).toBe("3 - 5\u00a0\u20ac");
   });
 
   test("uses approximate formatting for values equal after rounding", () => {
@@ -40,6 +57,10 @@ describe.runIf(isIntl)("Intl.NumberFormat.prototype.formatRange", () => {
       maximumFractionDigits: 2,
       roundingIncrement: 5
     });
+    if (!hasFullICU) {
+      expect(typeof nf.formatRange(1.21, 1.22)).toBe("string");
+      return;
+    }
     expect(nf.formatRange(1.21, 1.22)).toBe("~1.20");
   });
 

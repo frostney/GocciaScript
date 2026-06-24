@@ -135,18 +135,31 @@ describe.runIf(isTemporal)("Temporal.Duration.prototype.total", () => {
     expect(d.total({ unit: "days", relativeTo: "2024-01-31" })).toBe(29);
   });
 
-  test("total() leap-day clamping with separate year and month steps", () => {
-    // P1Y1M from 2020-02-29: +1Y → 2021-02-28 (clamped), +1M → 2021-03-28
+  test("total() leap-day clamping with combined year and month duration", () => {
+    // P1Y1M from 2020-02-29 resolves to 2021-03-29.
     const d = Temporal.Duration.from({ years: 1, months: 1 });
     const days = d.total({ unit: "days", relativeTo: "2020-02-29" });
-    // 2020-02-29 to 2021-03-28 = 393 days
-    expect(days).toBe(393);
+    // 2020-02-29 to 2021-03-29 = 394 days
+    expect(days).toBe(394);
   });
 
   test("total() accepts relativeTo as ZonedDateTime", () => {
     const d = Temporal.Duration.from({ months: 6 });
     const zdt = Temporal.ZonedDateTime.from("2024-01-01T00:00:00+00:00[UTC]");
     expect(d.total({ unit: "days", relativeTo: zdt })).toBe(182);
+  });
+
+  test("total() rejects sub-minute offset time zone identifiers in relativeTo strings", () => {
+    const d = new Temporal.Duration(1, 0, 0, 0, 24);
+
+    expect(d.total({
+      unit: "days",
+      relativeTo: "1970-01-01T00:00-00:45:00[-00:45]"
+    })).toBe(366);
+    expect(() => d.total({
+      unit: "days",
+      relativeTo: "1970-01-01T00:00-00:44:59[-00:44:59]"
+    })).toThrow(RangeError);
   });
 
   test("total() accepts relativeTo as ZonedDateTime for years", () => {

@@ -109,6 +109,7 @@ uses
 
   TextSemantics,
 
+  Goccia.GarbageCollector,
   Goccia.Realm,
   Goccia.Values.ArrayValue,
   Goccia.Values.HeadersValue,
@@ -123,6 +124,21 @@ var
   GMapIteratorPrototypeSlot: TGocciaRealmSlotId;
   GSetIteratorPrototypeSlot: TGocciaRealmSlotId;
 
+function AddTempRootIfNeeded(const AValue: TGocciaValue): Boolean;
+begin
+  Result := Assigned(TGarbageCollector.Instance) and Assigned(AValue) and
+    not TGarbageCollector.Instance.IsTempRoot(AValue);
+  if Result then
+    TGarbageCollector.Instance.AddTempRoot(AValue);
+end;
+
+procedure RemoveTempRootIfNeeded(
+  const AValue: TGocciaValue; const AWasRooted: Boolean);
+begin
+  if AWasRooted then
+    TGarbageCollector.Instance.RemoveTempRoot(AValue);
+end;
+
 { TGocciaArrayIteratorValue }
 
 function EnsureArrayIteratorPrototype: TGocciaObjectValue;
@@ -134,14 +150,20 @@ end;
 constructor TGocciaArrayIteratorValue.Create(const ASource: TGocciaValue; const AKind: TGocciaArrayIteratorKind);
 var
   SharedPrototype: TGocciaObjectValue;
+  SourceWasRooted: Boolean;
 begin
-  inherited Create;
-  SharedPrototype := EnsureArrayIteratorPrototype;
-  if Assigned(SharedPrototype) then
-    FPrototype := SharedPrototype;
-  FSource := ASource;
-  FIndex := 0;
-  FKind := AKind;
+  SourceWasRooted := AddTempRootIfNeeded(ASource);
+  try
+    inherited Create;
+    SharedPrototype := EnsureArrayIteratorPrototype;
+    if Assigned(SharedPrototype) then
+      FPrototype := SharedPrototype;
+    FSource := ASource;
+    FIndex := 0;
+    FKind := AKind;
+  finally
+    RemoveTempRootIfNeeded(ASource, SourceWasRooted);
+  end;
 end;
 
 function GetArrayIteratorLen(const ASource: TGocciaValue): Integer;
@@ -254,14 +276,20 @@ end;
 constructor TGocciaStringIteratorValue.Create(const ASource: TGocciaValue);
 var
   SharedPrototype: TGocciaObjectValue;
+  SourceWasRooted: Boolean;
 begin
-  inherited Create;
-  SharedPrototype := EnsureConcreteIteratorPrototype(
-    GStringIteratorPrototypeSlot, 'String Iterator');
-  if Assigned(SharedPrototype) then
-    FPrototype := SharedPrototype;
-  FSource := ASource;
-  FIndex := 0;
+  SourceWasRooted := AddTempRootIfNeeded(ASource);
+  try
+    inherited Create;
+    SharedPrototype := EnsureConcreteIteratorPrototype(
+      GStringIteratorPrototypeSlot, 'String Iterator');
+    if Assigned(SharedPrototype) then
+      FPrototype := SharedPrototype;
+    FSource := ASource;
+    FIndex := 0;
+  finally
+    RemoveTempRootIfNeeded(ASource, SourceWasRooted);
+  end;
 end;
 
 function TGocciaStringIteratorValue.TryReadAndAdvance(
@@ -339,15 +367,21 @@ end;
 constructor TGocciaMapIteratorValue.Create(const ASource: TGocciaValue; const AKind: TGocciaMapIteratorKind);
 var
   SharedPrototype: TGocciaObjectValue;
+  SourceWasRooted: Boolean;
 begin
-  inherited Create;
-  SharedPrototype := EnsureConcreteIteratorPrototype(
-    GMapIteratorPrototypeSlot, 'Map Iterator');
-  if Assigned(SharedPrototype) then
-    FPrototype := SharedPrototype;
-  FSource := ASource;
-  FIndex := 0;
-  FKind := AKind;
+  SourceWasRooted := AddTempRootIfNeeded(ASource);
+  try
+    inherited Create;
+    SharedPrototype := EnsureConcreteIteratorPrototype(
+      GMapIteratorPrototypeSlot, 'Map Iterator');
+    if Assigned(SharedPrototype) then
+      FPrototype := SharedPrototype;
+    FSource := ASource;
+    FIndex := 0;
+    FKind := AKind;
+  finally
+    RemoveTempRootIfNeeded(ASource, SourceWasRooted);
+  end;
 end;
 
 function TGocciaMapIteratorValue.AdvanceNext: TGocciaObjectValue;
@@ -441,15 +475,21 @@ end;
 constructor TGocciaSetIteratorValue.Create(const ASource: TGocciaValue; const AKind: TGocciaSetIteratorKind);
 var
   SharedPrototype: TGocciaObjectValue;
+  SourceWasRooted: Boolean;
 begin
-  inherited Create;
-  SharedPrototype := EnsureConcreteIteratorPrototype(
-    GSetIteratorPrototypeSlot, 'Set Iterator');
-  if Assigned(SharedPrototype) then
-    FPrototype := SharedPrototype;
-  FSource := ASource;
-  FIndex := 0;
-  FKind := AKind;
+  SourceWasRooted := AddTempRootIfNeeded(ASource);
+  try
+    inherited Create;
+    SharedPrototype := EnsureConcreteIteratorPrototype(
+      GSetIteratorPrototypeSlot, 'Set Iterator');
+    if Assigned(SharedPrototype) then
+      FPrototype := SharedPrototype;
+    FSource := ASource;
+    FIndex := 0;
+    FKind := AKind;
+  finally
+    RemoveTempRootIfNeeded(ASource, SourceWasRooted);
+  end;
 end;
 
 function TGocciaSetIteratorValue.AdvanceNext: TGocciaObjectValue;
@@ -538,11 +578,18 @@ end;
 
 constructor TGocciaURLSearchParamsIteratorValue.Create(const ASource: TGocciaValue;
   const AKind: TGocciaURLSearchParamsIteratorKind);
+var
+  SourceWasRooted: Boolean;
 begin
-  inherited Create;
-  FSource := ASource;
-  FIndex := 0;
-  FKind := AKind;
+  SourceWasRooted := AddTempRootIfNeeded(ASource);
+  try
+    inherited Create;
+    FSource := ASource;
+    FIndex := 0;
+    FKind := AKind;
+  finally
+    RemoveTempRootIfNeeded(ASource, SourceWasRooted);
+  end;
 end;
 
 function TGocciaURLSearchParamsIteratorValue.AdvanceNext: TGocciaObjectValue;
@@ -641,11 +688,18 @@ end;
 
 constructor TGocciaHeadersIteratorValue.Create(const ASource: TGocciaValue;
   const AKind: TGocciaHeadersIteratorKind);
+var
+  SourceWasRooted: Boolean;
 begin
-  inherited Create;
-  FSource := ASource;
-  FIndex := 0;
-  FKind := AKind;
+  SourceWasRooted := AddTempRootIfNeeded(ASource);
+  try
+    inherited Create;
+    FSource := ASource;
+    FIndex := 0;
+    FKind := AKind;
+  finally
+    RemoveTempRootIfNeeded(ASource, SourceWasRooted);
+  end;
 end;
 
 function TGocciaHeadersIteratorValue.AdvanceNext: TGocciaObjectValue;

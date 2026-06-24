@@ -15,4 +15,11 @@ describe.runIf(isTemporal)("Temporal.PlainDateTime.prototype.toZonedDateTime", (
     expect(zdt.hour).toBe(13);
     expect(zdt.timeZoneId).toBe("UTC");
   });
+
+  test("date-time strings use the time zone annotation", () => {
+    const dt = new Temporal.PlainDateTime(2000, 5, 2);
+    expect(dt.toZonedDateTime("2021-08-19T17:30[America/Vancouver]").timeZoneId).toBe("America/Vancouver");
+    expect(dt.toZonedDateTime("2021-08-19T17:30Z[America/Vancouver]").timeZoneId).toBe("America/Vancouver");
+    expect(dt.toZonedDateTime("2021-08-19T17:30-07:00[America/Vancouver]").timeZoneId).toBe("America/Vancouver");
+  });
 });

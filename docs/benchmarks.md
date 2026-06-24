@@ -203,10 +203,13 @@ The non-zero exit code ensures CI pipelines fail when benchmarks crash or produc
 | File | Covers |
 |------|--------|
 | `benchmarks/fibonacci.js` | Recursive vs iterative computation |
+| `benchmarks/atomics.js` | Atomics load/store, read-modify-write operations, compareExchange, wait/notify, waitAsync synchronous path |
 | `benchmarks/arrays.js` | Array.from, map, filter, reduce, forEach, find, sort, flat, flatMap |
 | `benchmarks/objects.js` | Object creation, property access, Object.keys/entries, spread |
 | `benchmarks/strings.js` | Concatenation, template literals, split/join, indexOf, trim, replace, pad |
 | `benchmarks/regexp.js` | RegExp construction, prototype methods, and string integration hooks |
+| `benchmarks/intl.js` | Intl.NumberFormat, Intl.DateTimeFormat, and Intl.Collator construction-free hot formatting/comparison paths |
+| `benchmarks/temporal.js` | Temporal PlainDate arithmetic, Duration balancing, ZonedDateTime construction, and DST-aware difference paths |
 | `benchmarks/classes.js` | Instantiation, method dispatch, inheritance, private fields, getters/setters, decorators (class, method, field, getter/setter, static, private, auto-accessor, metadata) |
 | `benchmarks/closures.js` | Closure capture, higher-order functions, call/apply/bind, recursion |
 | `benchmarks/collections.js` | Set add/has/delete/forEach, Map set/get/has/delete/forEach/keys/values |

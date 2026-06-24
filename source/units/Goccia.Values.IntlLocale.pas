@@ -22,10 +22,14 @@ type
     FCalendar: string;
     FCaseFirst: string;
     FCollation: string;
+    FCollationPresent: Boolean;
+    FVariants: string;
     FHourCycle: string;
     FNumberingSystem: string;
     FNumeric: Boolean;
-    FFirstDayOfWeek: Integer;
+    FCaseFirstPresent: Boolean;
+    FFirstDayOfWeek: string;
+    FFirstDayOfWeekPresent: Boolean;
 
     procedure InitializePrototype;
     procedure ParseTag(const ATag: string; const AOptions: TGocciaObjectValue);
@@ -35,6 +39,8 @@ type
 
     function ToStringTag: string; override;
     class procedure ExposePrototype(const AConstructor: TGocciaObjectValue);
+
+    property LocaleTag: string read FTag;
   published
     function IntlLocaleGetLanguage(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function IntlLocaleGetScript(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -43,9 +49,11 @@ type
     function IntlLocaleGetCalendar(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function IntlLocaleGetCaseFirst(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function IntlLocaleGetCollation(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function IntlLocaleGetFirstDayOfWeek(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function IntlLocaleGetHourCycle(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function IntlLocaleGetNumberingSystem(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function IntlLocaleGetNumeric(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function IntlLocaleGetVariants(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function IntlLocaleMaximize(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function IntlLocaleMinimize(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function IntlLocaleGetCalendars(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -103,6 +111,12 @@ function SplitSubtags(const AValue: string): IntlTypes.TStringArray;
 var
   Count, StartIndex, Index: Integer;
 begin
+  if AValue = '' then
+  begin
+    SetLength(Result, 0);
+    Exit;
+  end;
+
   Count := 0;
   SetLength(Result, 0);
   StartIndex := 1;
@@ -122,12 +136,200 @@ begin
   end;
 end;
 
+function IsAsciiAlpha(const AChar: Char): Boolean;
+begin
+  Result := ((AChar >= 'a') and (AChar <= 'z')) or
+            ((AChar >= 'A') and (AChar <= 'Z'));
+end;
+
+function IsAsciiDigit(const AChar: Char): Boolean;
+begin
+  Result := (AChar >= '0') and (AChar <= '9');
+end;
+
+function IsAsciiAlphaNumeric(const AChar: Char): Boolean;
+begin
+  Result := IsAsciiAlpha(AChar) or IsAsciiDigit(AChar);
+end;
+
+function IsAllAsciiAlpha(const AValue: string): Boolean;
+var
+  Index: Integer;
+begin
+  Result := AValue <> '';
+  for Index := 1 to Length(AValue) do
+    if not IsAsciiAlpha(AValue[Index]) then
+      Exit(False);
+end;
+
+function IsAllAsciiDigit(const AValue: string): Boolean;
+var
+  Index: Integer;
+begin
+  Result := AValue <> '';
+  for Index := 1 to Length(AValue) do
+    if not IsAsciiDigit(AValue[Index]) then
+      Exit(False);
+end;
+
+function IsAllAsciiAlphaNumeric(const AValue: string): Boolean;
+var
+  Index: Integer;
+begin
+  Result := AValue <> '';
+  for Index := 1 to Length(AValue) do
+    if not IsAsciiAlphaNumeric(AValue[Index]) then
+      Exit(False);
+end;
+
+function IsUnicodeLanguageOption(const AValue: string): Boolean;
+var
+  Len: Integer;
+begin
+  Len := Length(AValue);
+  Result := (((Len >= 2) and (Len <= 3)) or ((Len >= 5) and (Len <= 8))) and
+            IsAllAsciiAlpha(AValue);
+end;
+
+function IsUnicodeScriptOption(const AValue: string): Boolean;
+begin
+  Result := (Length(AValue) = 4) and IsAllAsciiAlpha(AValue);
+end;
+
+function IsUnicodeRegionOption(const AValue: string): Boolean;
+begin
+  Result := ((Length(AValue) = 2) and IsAllAsciiAlpha(AValue)) or
+            ((Length(AValue) = 3) and IsAllAsciiDigit(AValue));
+end;
+
+function IsUnicodeVariantSubtag(const AValue: string): Boolean;
+var
+  Len: Integer;
+begin
+  Len := Length(AValue);
+  Result := IsAllAsciiAlphaNumeric(AValue) and
+            (((Len >= 5) and (Len <= 8)) or
+             ((Len = 4) and IsAsciiDigit(AValue[1])));
+end;
+
+function IsUnicodeLocaleTypeSubtag(const AValue: string): Boolean;
+var
+  Len: Integer;
+begin
+  Len := Length(AValue);
+  Result := ((Len >= 3) and (Len <= 8)) and IsAllAsciiAlphaNumeric(AValue);
+end;
+
+function IsUnicodeLocaleTypeSequence(const AValue: string): Boolean;
+var
+  Parts: IntlTypes.TStringArray;
+  Index: Integer;
+begin
+  if AValue = '' then
+    Exit(False);
+  if (AValue[1] = '-') or (AValue[Length(AValue)] = '-') or
+     (Pos('--', AValue) > 0) then
+    Exit(False);
+
+  Parts := SplitSubtags(AValue);
+  if Length(Parts) = 0 then
+    Exit(False);
+
+  for Index := 0 to High(Parts) do
+    if not IsUnicodeLocaleTypeSubtag(Parts[Index]) then
+      Exit(False);
+
+  Result := True;
+end;
+
+function IsUnicodeNumberingSystemOption(const AValue: string): Boolean;
+begin
+  Result := IsUnicodeLocaleTypeSequence(AValue);
+end;
+
+function IsValidVariantsOption(const AValue: string): Boolean;
+var
+  Parts: IntlTypes.TStringArray;
+  Index, CompareIndex: Integer;
+begin
+  if AValue = '' then
+    Exit(False);
+
+  Parts := SplitSubtags(LowerCase(AValue));
+  if Length(Parts) = 0 then
+    Exit(False);
+
+  if Pos('--', AValue) > 0 then
+    Exit(False);
+  if (AValue[1] = '-') or (AValue[Length(AValue)] = '-') then
+    Exit(False);
+
+  for Index := 0 to High(Parts) do
+  begin
+    if not IsUnicodeVariantSubtag(Parts[Index]) then
+      Exit(False);
+    for CompareIndex := 0 to Index - 1 do
+      if Parts[CompareIndex] = Parts[Index] then
+        Exit(False);
+  end;
+
+  Result := True;
+end;
+
+function JoinSubtags(const AValues: IntlTypes.TStringArray): string;
+var
+  Index: Integer;
+begin
+  Result := '';
+  for Index := 0 to High(AValues) do
+  begin
+    if Result <> '' then
+      Result := Result + '-';
+    Result := Result + LowerCase(AValues[Index]);
+  end;
+end;
+
+function CanonicalizeLocaleTypeValue(const AKey, AValue: string): string;
+var
+  Key, Value: string;
+begin
+  Key := LowerCase(AKey);
+  Value := LowerCase(AValue);
+
+  if Value = 'true' then
+    Exit('');
+
+  if Key = 'ca' then
+  begin
+    if Value = 'gregorian' then
+      Exit('gregory');
+    if Value = 'ethiopic-amete-alem' then
+      Exit('ethioaa');
+    if Value = 'islamicc' then
+      Exit('islamic-civil');
+  end;
+
+  if Key = 'co' then
+  begin
+    if Value = 'phonebook' then
+      Exit('phonebk');
+    if Value = 'traditional' then
+      Exit('trad');
+    if Value = 'dictionary' then
+      Exit('dict');
+  end;
+
+  Result := Value;
+end;
+
 function NormalizeCalendarType(const AValue: string): string;
 begin
   if AValue = 'gregorian' then
     Result := 'gregory'
   else if AValue = 'ethiopic-amete-alem' then
     Result := 'ethioaa'
+  else if AValue = 'islamicc' then
+    Result := 'islamic-civil'
   else
     Result := AValue;
 end;
@@ -168,6 +370,17 @@ begin
   else
     Result := '';
   end;
+end;
+
+function CanonicalizeFirstDayOfWeekValue(const AValue: string): string;
+var
+  DayNumber: Integer;
+begin
+  DayNumber := DayIdentifierToNumber(AValue);
+  if DayNumber <> 0 then
+    Result := DayNumberToIdentifier(DayNumber)
+  else
+    Result := CanonicalizeLocaleTypeValue('fw', AValue);
 end;
 
 function NormalizeCollationType(const AValue: string): string;
@@ -302,6 +515,23 @@ begin
   end;
 end;
 
+procedure SetParsedVariants(var AParsed: TBcp47Tag; const AVariants: string);
+var
+  Parts: IntlTypes.TStringArray;
+  Index: Integer;
+begin
+  if AVariants = '' then
+  begin
+    SetLength(AParsed.Variants, 0);
+    Exit;
+  end;
+
+  Parts := SplitSubtags(AVariants);
+  SetLength(AParsed.Variants, Length(Parts));
+  for Index := 0 to High(Parts) do
+    AParsed.Variants[Index] := LowerCase(Parts[Index]);
+end;
+
 procedure RemoveEmptyExtensions(var AParsed: TBcp47Tag);
 var
   ReadIndex, WriteIndex: Integer;
@@ -379,6 +609,154 @@ begin
   end;
 end;
 
+function BuildLikelySubtagsInput(const ALocale: string; out AInput: string;
+  out AOriginal: TBcp47Tag): Boolean;
+var
+  BaseParsed: TBcp47Tag;
+begin
+  AOriginal := ParseBcp47Tag(ALocale);
+  Result := AOriginal.IsValid;
+  if not Result then
+    Exit;
+
+  BaseParsed := AOriginal;
+  SetLength(BaseParsed.Extensions, 0);
+  BaseParsed.PrivateUse := '';
+  AInput := CanonicalizeBcp47Tag(BaseParsed);
+  Result := AInput <> '';
+end;
+
+function RestoreLikelySubtagsSuffix(const AOriginal: TBcp47Tag;
+  const ALikelyLocale: string): string;
+var
+  Parsed: TBcp47Tag;
+begin
+  Parsed := ParseBcp47Tag(ALikelyLocale);
+  if not Parsed.IsValid then
+    Exit(ALikelyLocale);
+
+  if (Length(AOriginal.Variants) > 0) and (Length(Parsed.Variants) = 0) then
+    Parsed.Variants := AOriginal.Variants;
+  Parsed.Extensions := AOriginal.Extensions;
+  Parsed.PrivateUse := AOriginal.PrivateUse;
+  Result := CanonicalizeBcp47Tag(Parsed);
+end;
+
+function LikelySubtagsCandidateKey(const ALanguage, AScript, ARegion: string): string;
+begin
+  Result := LowerCase(ALanguage);
+  if Result = '' then
+    Result := 'und';
+  if AScript <> '' then
+    Result := Result + '-' + AScript;
+  if ARegion <> '' then
+    Result := Result + '-' + ARegion;
+end;
+
+function TryLookupLikelySubtagsCandidate(const ALanguage, AScript,
+  ARegion: string; out AMaximized: string): Boolean;
+var
+  Key: string;
+begin
+  Key := LikelySubtagsCandidateKey(ALanguage, AScript, ARegion);
+  Result := TryGetLikelySubtags(Key, AMaximized);
+end;
+
+function TryCLDRMaximizeLocale(const AInput: string; out AMaximized: string): Boolean;
+var
+  Parsed, LikelyParsed: TBcp47Tag;
+  Language, Script, Region, Likely: string;
+  UseUndefinedFallback: Boolean;
+begin
+  Result := False;
+  AMaximized := '';
+  Parsed := ParseBcp47Tag(AInput);
+  if not Parsed.IsValid then
+    Exit;
+
+  SetLength(Parsed.Variants, 0);
+  SetLength(Parsed.Extensions, 0);
+  Parsed.PrivateUse := '';
+  Parsed := NormalizeBcp47Case(Parsed);
+
+  Language := LowerCase(Parsed.Language);
+  Script := Parsed.Script;
+  Region := Parsed.Region;
+  UseUndefinedFallback := (Language = '') or (Language = 'und');
+
+  if not TryLookupLikelySubtagsCandidate(Language, Script, Region, Likely) and
+     not ((Script <> '') and TryLookupLikelySubtagsCandidate(Language, Script, '', Likely)) and
+     not ((Region <> '') and TryLookupLikelySubtagsCandidate(Language, '', Region, Likely)) and
+     not TryLookupLikelySubtagsCandidate(Language, '', '', Likely) and
+     not (UseUndefinedFallback and (Script <> '') and
+       TryLookupLikelySubtagsCandidate('und', Script, '', Likely)) and
+     not (UseUndefinedFallback and (Region <> '') and
+       TryLookupLikelySubtagsCandidate('und', '', Region, Likely)) and
+     not (UseUndefinedFallback and
+       TryLookupLikelySubtagsCandidate('und', '', '', Likely)) then
+    Exit;
+
+  LikelyParsed := ParseBcp47Tag(Likely);
+  if not LikelyParsed.IsValid then
+    Exit;
+
+  if (Language <> '') and (Language <> 'und') then
+    LikelyParsed.Language := Language;
+  if Script <> '' then
+    LikelyParsed.Script := Script;
+  if Region <> '' then
+    LikelyParsed.Region := Region;
+  LikelyParsed := NormalizeBcp47Case(LikelyParsed);
+
+  AMaximized := CanonicalizeBcp47Tag(LikelyParsed);
+  Result := AMaximized <> '';
+end;
+
+function SameLikelyLocale(const ALeft, ARight: string): Boolean;
+begin
+  Result := CompareText(CanonicalizeUnicodeLocaleId(ALeft),
+    CanonicalizeUnicodeLocaleId(ARight)) = 0;
+end;
+
+function TryCLDRMinimizeLocale(const AInput: string; out AMinimized: string): Boolean;
+var
+  Maximized, Candidate, CandidateMaximized: string;
+  MaximizedParsed: TBcp47Tag;
+
+  function CandidateMatches(const ALanguage, AScript, ARegion: string): Boolean;
+  begin
+    Candidate := LikelySubtagsCandidateKey(ALanguage, AScript, ARegion);
+    Result := TryCLDRMaximizeLocale(Candidate, CandidateMaximized) and
+      SameLikelyLocale(CandidateMaximized, Maximized);
+  end;
+
+begin
+  Result := False;
+  AMinimized := '';
+  if not TryCLDRMaximizeLocale(AInput, Maximized) then
+    Exit;
+
+  MaximizedParsed := ParseBcp47Tag(Maximized);
+  if not MaximizedParsed.IsValid then
+    Exit;
+
+  if CandidateMatches(MaximizedParsed.Language, '', '') then
+    AMinimized := LikelySubtagsCandidateKey(MaximizedParsed.Language, '', '')
+  else if (MaximizedParsed.Region <> '') and
+          CandidateMatches(MaximizedParsed.Language, '', MaximizedParsed.Region) then
+    AMinimized := LikelySubtagsCandidateKey(MaximizedParsed.Language, '',
+      MaximizedParsed.Region)
+  else if (MaximizedParsed.Script <> '') and
+          CandidateMatches(MaximizedParsed.Language, MaximizedParsed.Script, '') then
+    AMinimized := LikelySubtagsCandidateKey(MaximizedParsed.Language,
+      MaximizedParsed.Script, '')
+  else
+    AMinimized := Maximized;
+
+  AMinimized := CanonicalizeUnicodeLocaleId(AMinimized);
+  Result := AMinimized <> '';
+end;
+
 { TGocciaIntlLocaleValue }
 
 procedure TGocciaIntlLocaleValue.ParseTag(const ATag: string; const AOptions: TGocciaObjectValue);
@@ -386,10 +764,69 @@ var
   Canonical: string;
   V: TGocciaValue;
   Parsed, BaseParsed: TBcp47Tag;
-  ExtensionValue, FirstDayOption: string;
-  CaseFirstExtensionPresent, NumericExtensionPresent, NumericOptionPresent: Boolean;
+  ExtensionValue, OptionValue: string;
+  NumericExtensionPresent, NumericOptionPresent: Boolean;
+
+  function ReadStringOption(const AName: string; out AValue: string): Boolean;
+  begin
+    Result := TryReadStringOption(AOptions, AName, AValue);
+    if Result and ContainsNulCharacter(AValue) then
+      ThrowRangeError(Format(SErrorIntlInvalidOption, [AValue, AName]));
+  end;
+
+  procedure LoadFieldsFromParsed(const ACanonical: string; const AParsed: TBcp47Tag);
+  begin
+    FTag := ACanonical;
+    FBaseName := ACanonical;
+    FLanguage := LowerCase(AParsed.Language);
+    FScript := AParsed.Script;
+    FRegion := AParsed.Region;
+    FVariants := JoinSubtags(AParsed.Variants);
+    FCalendar := '';
+    FCaseFirst := '';
+    FCollation := '';
+    FCollationPresent := False;
+    FHourCycle := '';
+    FNumberingSystem := '';
+    FNumeric := False;
+    FCaseFirstPresent := False;
+    FFirstDayOfWeek := '';
+    FFirstDayOfWeekPresent := False;
+
+    BaseParsed := AParsed;
+    SetLength(BaseParsed.Extensions, 0);
+    BaseParsed.PrivateUse := '';
+    FBaseName := CanonicalizeBcp47Tag(BaseParsed);
+
+    if TryGetUnicodeLocaleExtensionKeyword(ACanonical, 'ca', ExtensionValue) then
+      FCalendar := NormalizeCalendarType(CanonicalizeLocaleTypeValue('ca', ExtensionValue));
+    if TryGetUnicodeLocaleExtensionKeyword(ACanonical, 'co', ExtensionValue) then
+    begin
+      FCollationPresent := True;
+      FCollation := NormalizeCollationType(CanonicalizeLocaleTypeValue('co', ExtensionValue));
+    end;
+    if TryGetUnicodeLocaleExtensionKeyword(ACanonical, 'hc', ExtensionValue) then
+      FHourCycle := ExtensionValue;
+    if TryGetUnicodeLocaleExtensionKeyword(ACanonical, 'nu', ExtensionValue) then
+      FNumberingSystem := ExtensionValue;
+    if TryGetUnicodeLocaleExtensionKeyword(ACanonical, 'fw', ExtensionValue) then
+    begin
+      FFirstDayOfWeekPresent := True;
+      FFirstDayOfWeek := CanonicalizeFirstDayOfWeekValue(ExtensionValue);
+    end;
+    if TryGetUnicodeLocaleExtensionKeyword(ACanonical, 'kf', ExtensionValue) then
+    begin
+      FCaseFirstPresent := True;
+      FCaseFirst := ExtensionValue;
+    end;
+    if TryGetUnicodeLocaleExtensionKeyword(ACanonical, 'kn', ExtensionValue) then
+    begin
+      NumericExtensionPresent := True;
+      FNumeric := ExtensionValue <> 'false';
+    end;
+  end;
+
 begin
-  CaseFirstExtensionPresent := False;
   NumericExtensionPresent := False;
   NumericOptionPresent := False;
   if ContainsNulCharacter(ATag) then
@@ -403,37 +840,7 @@ begin
   // Extract subtags from the canonical tag via BCP47 parser
   Parsed := ParseBcp47Tag(Canonical);
   if Parsed.IsValid then
-  begin
-    BaseParsed := Parsed;
-    SetLength(BaseParsed.Extensions, 0);
-    BaseParsed.PrivateUse := '';
-    FBaseName := CanonicalizeBcp47Tag(BaseParsed);
-
-    FLanguage := LowerCase(Parsed.Language);
-    FScript := Parsed.Script;
-    FRegion := Parsed.Region;
-
-    if TryGetUnicodeLocaleExtensionKeyword(Canonical, 'ca', ExtensionValue) then
-      FCalendar := NormalizeCalendarType(ExtensionValue);
-    if TryGetUnicodeLocaleExtensionKeyword(Canonical, 'co', ExtensionValue) then
-      FCollation := NormalizeCollationType(ExtensionValue);
-    if TryGetUnicodeLocaleExtensionKeyword(Canonical, 'hc', ExtensionValue) then
-      FHourCycle := ExtensionValue;
-    if TryGetUnicodeLocaleExtensionKeyword(Canonical, 'nu', ExtensionValue) then
-      FNumberingSystem := ExtensionValue;
-    if TryGetUnicodeLocaleExtensionKeyword(Canonical, 'fw', ExtensionValue) then
-      FFirstDayOfWeek := DayIdentifierToNumber(ExtensionValue);
-    if TryGetUnicodeLocaleExtensionKeyword(Canonical, 'kf', ExtensionValue) then
-    begin
-      CaseFirstExtensionPresent := True;
-      FCaseFirst := ExtensionValue;
-    end;
-    if TryGetUnicodeLocaleExtensionKeyword(Canonical, 'kn', ExtensionValue) then
-    begin
-      NumericExtensionPresent := True;
-      FNumeric := ExtensionValue <> 'false';
-    end;
-  end
+    LoadFieldsFromParsed(Canonical, Parsed)
   else
   begin
     // Fallback: extract language from the first subtag
@@ -446,29 +853,90 @@ begin
   // Apply options overrides
   if Assigned(AOptions) then
   begin
-    ReadValidatedStringOption(AOptions, 'language', FLanguage);
-    ReadValidatedStringOption(AOptions, 'script', FScript);
-    ReadValidatedStringOption(AOptions, 'region', FRegion);
-    ReadValidatedStringOption(AOptions, 'calendar', FCalendar);
-    FCalendar := NormalizeCalendarType(FCalendar);
-    ReadValidatedStringOption(AOptions, 'caseFirst', FCaseFirst);
-    ReadValidatedStringOption(AOptions, 'collation', FCollation);
-    FCollation := NormalizeCollationType(FCollation);
-    ReadValidatedStringOption(AOptions, 'hourCycle', FHourCycle);
-    ReadValidatedStringOption(AOptions, 'numberingSystem', FNumberingSystem);
-    if TryReadStringOption(AOptions, 'firstDayOfWeek', FirstDayOption) then
+    if ReadStringOption('language', OptionValue) then
     begin
-      if ContainsNulCharacter(FirstDayOption) then
-        ThrowRangeError(Format(SErrorIntlInvalidOption, [FirstDayOption, 'firstDayOfWeek']));
-      FFirstDayOfWeek := DayIdentifierToNumber(FirstDayOption);
-      if FFirstDayOfWeek = 0 then
-        ThrowRangeError(Format(SErrorIntlInvalidOption, [FirstDayOption, 'firstDayOfWeek']));
+      if not IsUnicodeLanguageOption(OptionValue) then
+        ThrowRangeError(Format(SErrorIntlInvalidOption, [OptionValue, 'language']));
+      FLanguage := LowerCase(OptionValue);
     end;
+
+    if ReadStringOption('script', OptionValue) then
+    begin
+      if not IsUnicodeScriptOption(OptionValue) then
+        ThrowRangeError(Format(SErrorIntlInvalidOption, [OptionValue, 'script']));
+      FScript := OptionValue;
+    end;
+
+    if ReadStringOption('region', OptionValue) then
+    begin
+      if not IsUnicodeRegionOption(OptionValue) then
+        ThrowRangeError(Format(SErrorIntlInvalidOption, [OptionValue, 'region']));
+      FRegion := OptionValue;
+    end;
+
+    if ReadStringOption('variants', OptionValue) then
+    begin
+      if not IsValidVariantsOption(OptionValue) then
+        ThrowRangeError(Format(SErrorIntlInvalidOption, [OptionValue, 'variants']));
+      FVariants := LowerCase(OptionValue);
+    end;
+
+    if ReadStringOption('calendar', OptionValue) then
+    begin
+      if not IsUnicodeLocaleTypeSequence(OptionValue) then
+        ThrowRangeError(Format(SErrorIntlInvalidOption, [OptionValue, 'calendar']));
+      FCalendar := NormalizeCalendarType(CanonicalizeLocaleTypeValue('ca', OptionValue));
+    end;
+
+    if ReadStringOption('collation', OptionValue) then
+    begin
+      if not IsUnicodeLocaleTypeSequence(OptionValue) then
+        ThrowRangeError(Format(SErrorIntlInvalidOption, [OptionValue, 'collation']));
+      FCollation := NormalizeCollationType(CanonicalizeLocaleTypeValue('co', OptionValue));
+      FCollationPresent := True;
+    end;
+
+    if ReadStringOption('firstDayOfWeek', OptionValue) then
+    begin
+      if OptionValue = '' then
+        ThrowRangeError(Format(SErrorIntlInvalidOption, [OptionValue, 'firstDayOfWeek']));
+      OptionValue := CanonicalizeFirstDayOfWeekValue(OptionValue);
+      if (OptionValue = '') or (DayIdentifierToNumber(OptionValue) = 0) or
+         not IsUnicodeLocaleTypeSequence(OptionValue) then
+        ThrowRangeError(Format(SErrorIntlInvalidOption, [OptionValue, 'firstDayOfWeek']));
+      FFirstDayOfWeek := OptionValue;
+      FFirstDayOfWeekPresent := True;
+    end;
+
+    if ReadStringOption('hourCycle', OptionValue) then
+    begin
+      if (OptionValue <> 'h11') and (OptionValue <> 'h12') and
+         (OptionValue <> 'h23') and (OptionValue <> 'h24') then
+        ThrowRangeError(Format(SErrorIntlInvalidOption, [OptionValue, 'hourCycle']));
+      FHourCycle := OptionValue;
+    end;
+
+    if ReadStringOption('caseFirst', OptionValue) then
+    begin
+      if (OptionValue <> 'upper') and (OptionValue <> 'lower') and
+         (OptionValue <> 'false') then
+        ThrowRangeError(Format(SErrorIntlInvalidOption, [OptionValue, 'caseFirst']));
+      FCaseFirst := OptionValue;
+      FCaseFirstPresent := True;
+    end;
+
     V := AOptions.GetProperty('numeric');
     if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
     begin
       NumericOptionPresent := True;
       FNumeric := V.ToBooleanLiteral.Value;
+    end;
+
+    if ReadStringOption('numberingSystem', OptionValue) then
+    begin
+      if not IsUnicodeNumberingSystemOption(OptionValue) then
+        ThrowRangeError(Format(SErrorIntlInvalidOption, [OptionValue, 'numberingSystem']));
+      FNumberingSystem := LowerCase(OptionValue);
     end;
   end;
 
@@ -477,12 +945,13 @@ begin
     Parsed.Language := FLanguage;
     Parsed.Script := FScript;
     Parsed.Region := FRegion;
+    SetParsedVariants(Parsed, FVariants);
     SetUnicodeExtensionKeyword(Parsed, 'ca', FCalendar);
-    SetUnicodeExtensionKeyword(Parsed, 'co', FCollation);
+    SetUnicodeExtensionKeyword(Parsed, 'co', FCollation, FCollationPresent);
     SetUnicodeExtensionKeyword(Parsed, 'hc', FHourCycle);
     SetUnicodeExtensionKeyword(Parsed, 'nu', FNumberingSystem);
-    SetUnicodeExtensionKeyword(Parsed, 'fw', DayNumberToIdentifier(FFirstDayOfWeek));
-    SetUnicodeExtensionKeyword(Parsed, 'kf', FCaseFirst, CaseFirstExtensionPresent);
+    SetUnicodeExtensionKeyword(Parsed, 'fw', FFirstDayOfWeek, FFirstDayOfWeekPresent);
+    SetUnicodeExtensionKeyword(Parsed, 'kf', FCaseFirst, FCaseFirstPresent);
     if FNumeric then
       SetUnicodeExtensionKeyword(Parsed, 'kn', '', True)
     else if NumericExtensionPresent or NumericOptionPresent then
@@ -500,14 +969,8 @@ begin
       Parsed := ParseBcp47Tag(FTag);
       if Parsed.IsValid then
       begin
-        FLanguage := LowerCase(Parsed.Language);
-        FScript := Parsed.Script;
-        FRegion := Parsed.Region;
-
-        BaseParsed := Parsed;
-        SetLength(BaseParsed.Extensions, 0);
-        BaseParsed.PrivateUse := '';
-        FBaseName := CanonicalizeBcp47Tag(BaseParsed);
+        FTag := CanonicalizeBcp47Tag(Parsed);
+        LoadFieldsFromParsed(FTag, Parsed);
       end;
     end;
   end;
@@ -517,7 +980,10 @@ constructor TGocciaIntlLocaleValue.Create(const ATag: string; const AOptions: TG
 begin
   inherited Create;
   FNumeric := False;
-  FFirstDayOfWeek := 0;
+  FCaseFirstPresent := False;
+  FCollationPresent := False;
+  FFirstDayOfWeek := '';
+  FFirstDayOfWeekPresent := False;
   ParseTag(ATag, AOptions);
   InitializePrototype;
   if Assigned(GetIntlLocaleShared) then
@@ -526,7 +992,7 @@ end;
 
 function TGocciaIntlLocaleValue.ToStringTag: string;
 begin
-  Result := 'Intl.Locale';
+  Result := 'Object';
 end;
 
 function TGocciaIntlLocaleValue.ResolveLocaleInfoRegion: string;
@@ -584,9 +1050,11 @@ begin
       Members.AddAccessor('calendar', IntlLocaleGetCalendar, nil, [pfConfigurable]);
       Members.AddAccessor('caseFirst', IntlLocaleGetCaseFirst, nil, [pfConfigurable]);
       Members.AddAccessor('collation', IntlLocaleGetCollation, nil, [pfConfigurable]);
+      Members.AddAccessor('firstDayOfWeek', IntlLocaleGetFirstDayOfWeek, nil, [pfConfigurable]);
       Members.AddAccessor('hourCycle', IntlLocaleGetHourCycle, nil, [pfConfigurable]);
       Members.AddAccessor('numberingSystem', IntlLocaleGetNumberingSystem, nil, [pfConfigurable]);
       Members.AddAccessor('numeric', IntlLocaleGetNumeric, nil, [pfConfigurable]);
+      Members.AddAccessor('variants', IntlLocaleGetVariants, nil, [pfConfigurable]);
       Members.AddNamedMethod('maximize', IntlLocaleMaximize, 0,
         gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddNamedMethod('minimize', IntlLocaleMinimize, 0,
@@ -681,7 +1149,7 @@ var
   L: TGocciaIntlLocaleValue;
 begin
   L := AsLocale(AThisValue, 'get Intl.Locale.prototype.caseFirst');
-  if L.FCaseFirst = '' then
+  if not L.FCaseFirstPresent then
     Result := TGocciaUndefinedLiteralValue.UndefinedValue
   else
     Result := TGocciaStringLiteralValue.Create(L.FCaseFirst);
@@ -696,6 +1164,17 @@ begin
     Result := TGocciaUndefinedLiteralValue.UndefinedValue
   else
     Result := TGocciaStringLiteralValue.Create(L.FCollation);
+end;
+
+function TGocciaIntlLocaleValue.IntlLocaleGetFirstDayOfWeek(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  L: TGocciaIntlLocaleValue;
+begin
+  L := AsLocale(AThisValue, 'get Intl.Locale.prototype.firstDayOfWeek');
+  if not L.FFirstDayOfWeekPresent then
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue
+  else
+    Result := TGocciaStringLiteralValue.Create(L.FFirstDayOfWeek);
 end;
 
 function TGocciaIntlLocaleValue.IntlLocaleGetHourCycle(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -728,14 +1207,30 @@ begin
     Result := TGocciaBooleanLiteralValue.FalseValue;
 end;
 
+function TGocciaIntlLocaleValue.IntlLocaleGetVariants(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  L: TGocciaIntlLocaleValue;
+begin
+  L := AsLocale(AThisValue, 'get Intl.Locale.prototype.variants');
+  if L.FVariants = '' then
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue
+  else
+    Result := TGocciaStringLiteralValue.Create(L.FVariants);
+end;
+
 function TGocciaIntlLocaleValue.IntlLocaleMaximize(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   L: TGocciaIntlLocaleValue;
-  Maximized: string;
+  OriginalParsed: TBcp47Tag;
+  LikelyInput, Maximized: string;
 begin
   L := AsLocale(AThisValue, 'Intl.Locale.prototype.maximize');
-  if TryICUMaximizeLocale(L.FTag, Maximized) then
-    Result := TGocciaIntlLocaleValue.Create(Maximized)
+  if BuildLikelySubtagsInput(L.FTag, LikelyInput, OriginalParsed) and
+     TryCLDRMaximizeLocale(LikelyInput, Maximized) then
+    Result := TGocciaIntlLocaleValue.Create(RestoreLikelySubtagsSuffix(OriginalParsed, Maximized))
+  else if BuildLikelySubtagsInput(L.FTag, LikelyInput, OriginalParsed) and
+          TryICUMaximizeLocale(LikelyInput, Maximized) then
+    Result := TGocciaIntlLocaleValue.Create(RestoreLikelySubtagsSuffix(OriginalParsed, Maximized))
   else
     Result := TGocciaIntlLocaleValue.Create(L.FTag);
 end;
@@ -743,11 +1238,16 @@ end;
 function TGocciaIntlLocaleValue.IntlLocaleMinimize(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   L: TGocciaIntlLocaleValue;
-  Minimized: string;
+  OriginalParsed: TBcp47Tag;
+  LikelyInput, Minimized: string;
 begin
   L := AsLocale(AThisValue, 'Intl.Locale.prototype.minimize');
-  if TryICUMinimizeLocale(L.FTag, Minimized) then
-    Result := TGocciaIntlLocaleValue.Create(Minimized)
+  if BuildLikelySubtagsInput(L.FTag, LikelyInput, OriginalParsed) and
+     TryCLDRMinimizeLocale(LikelyInput, Minimized) then
+    Result := TGocciaIntlLocaleValue.Create(RestoreLikelySubtagsSuffix(OriginalParsed, Minimized))
+  else if BuildLikelySubtagsInput(L.FTag, LikelyInput, OriginalParsed) and
+          TryICUMinimizeLocale(LikelyInput, Minimized) then
+    Result := TGocciaIntlLocaleValue.Create(RestoreLikelySubtagsSuffix(OriginalParsed, Minimized))
   else
     Result := TGocciaIntlLocaleValue.Create(L.FTag);
 end;
@@ -892,7 +1392,7 @@ end;
 function TGocciaIntlLocaleValue.IntlLocaleGetWeekInfo(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   L: TGocciaIntlLocaleValue;
-  FirstDay, WeekendStart, WeekendEnd, MinimalDays: Integer;
+  FirstDay, WeekendStart, WeekendEnd, MinimalDays, OverrideFirstDay: Integer;
   Obj: TGocciaObjectValue;
 begin
   L := AsLocale(AThisValue, 'Intl.Locale.prototype.getWeekInfo');
@@ -905,8 +1405,9 @@ begin
     WeekendEnd := 7;
   end;
 
-  if L.FFirstDayOfWeek <> 0 then
-    FirstDay := L.FFirstDayOfWeek;
+  OverrideFirstDay := DayIdentifierToNumber(L.FFirstDayOfWeek);
+  if OverrideFirstDay <> 0 then
+    FirstDay := OverrideFirstDay;
 
   Obj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
   Obj.AssignProperty('firstDay', TGocciaNumberLiteralValue.Create(FirstDay));

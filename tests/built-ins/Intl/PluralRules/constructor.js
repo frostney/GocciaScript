@@ -26,6 +26,12 @@ describe.runIf(isIntl)("Intl.PluralRules constructor", () => {
     const options = pr.resolvedOptions();
     expect(typeof options.locale).toBe("string");
   });
+
+  test("options are coerced with ToObject unless undefined", () => {
+    expect(() => new Intl.PluralRules("en", null)).toThrow(TypeError);
+    expect(new Intl.PluralRules("en", true)).toBeInstanceOf(Intl.PluralRules);
+    expect(new Intl.PluralRules("en", undefined)).toBeInstanceOf(Intl.PluralRules);
+  });
 });
 
 describe.runIf(isIntl)("Intl.PluralRules non-finite digit options", () => {

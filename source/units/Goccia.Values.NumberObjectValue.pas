@@ -44,6 +44,8 @@ uses
   Math,
   SysUtils,
 
+  BigInteger,
+
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
@@ -61,6 +63,188 @@ var
 threadvar
   FPrototypeMethodHost: TGocciaNumberObjectValue;
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+
+const
+  DOUBLE_EXPONENT_BIAS = 1023;
+  DOUBLE_EXPONENT_BITS_MASK = $7FF;
+  DOUBLE_FRACTION_BITS = 52;
+  DOUBLE_FRACTION_BITS_MASK: QWord = $000FFFFFFFFFFFFF;
+  DOUBLE_HIDDEN_BIT: QWord = $0010000000000000;
+  DECIMAL_EXPONENT_FIXED_THRESHOLD = -6;
+  DECIMAL_RADIX = 10;
+
+function BigIntPower10(const AExponent: Integer): TBigInteger;
+var
+  Base: TBigInteger;
+  Exponent: Integer;
+begin
+  Result := TBigInteger.One;
+  if AExponent <= 0 then
+    Exit;
+
+  Base := TBigInteger.FromInt64(DECIMAL_RADIX);
+  Exponent := AExponent;
+  while Exponent > 0 do
+  begin
+    if (Exponent and 1) = 1 then
+      Result := Result.Multiply(Base);
+    Exponent := Exponent shr 1;
+    if Exponent > 0 then
+      Base := Base.Multiply(Base);
+  end;
+end;
+
+function CompareBinaryRationalToPowerOfTen(const ANumerator,
+  ADenominator: TBigInteger; const ADecimalExponent: Integer): Integer;
+var
+  LeftValue, RightValue: TBigInteger;
+begin
+  if ADecimalExponent >= 0 then
+  begin
+    LeftValue := ANumerator;
+    RightValue := ADenominator.Multiply(BigIntPower10(ADecimalExponent));
+  end
+  else
+  begin
+    LeftValue := ANumerator.Multiply(BigIntPower10(-ADecimalExponent));
+    RightValue := ADenominator;
+  end;
+  Result := LeftValue.Compare(RightValue);
+end;
+
+function PadLeftWithZeros(const AValue: string; const AWidth: Integer): string;
+begin
+  Result := AValue;
+  if Length(Result) < AWidth then
+    Result := StringOfChar('0', AWidth - Length(Result)) + Result;
+end;
+
+procedure PositiveDoubleToBinaryRational(const AValue: Double;
+  out ANumerator, ADenominator: TBigInteger);
+var
+  BinaryExponent: Integer;
+  Bits, Mantissa: QWord;
+  ExponentBits: QWord;
+begin
+  Move(AValue, Bits, SizeOf(Bits));
+  ExponentBits := (Bits shr DOUBLE_FRACTION_BITS) and DOUBLE_EXPONENT_BITS_MASK;
+  Mantissa := Bits and DOUBLE_FRACTION_BITS_MASK;
+  if ExponentBits = 0 then
+    BinaryExponent := 1 - DOUBLE_EXPONENT_BIAS - DOUBLE_FRACTION_BITS
+  else
+  begin
+    Mantissa := Mantissa or DOUBLE_HIDDEN_BIT;
+    BinaryExponent := Integer(ExponentBits) - DOUBLE_EXPONENT_BIAS -
+      DOUBLE_FRACTION_BITS;
+  end;
+
+  ANumerator := TBigInteger.FromInt64(Int64(Mantissa));
+  ADenominator := TBigInteger.One;
+  if BinaryExponent >= 0 then
+    ANumerator := ANumerator.ShiftLeft(BinaryExponent)
+  else
+    ADenominator := ADenominator.ShiftLeft(-BinaryExponent);
+end;
+
+function DecimalExponentForBinaryRational(const ANumerator,
+  ADenominator: TBigInteger; const AApproximation: Double): Integer;
+begin
+  Result := Trunc(Math.Floor(Math.Log10(AApproximation)));
+  while CompareBinaryRationalToPowerOfTen(ANumerator, ADenominator, Result) < 0 do
+    Dec(Result);
+  while CompareBinaryRationalToPowerOfTen(ANumerator, ADenominator, Result + 1) >= 0 do
+    Inc(Result);
+end;
+
+function RoundedPrecisionDigits(const ANumerator, ADenominator: TBigInteger;
+  const APrecision: Integer; var ADecimalExponent: Integer): string;
+var
+  DecimalScale: Integer;
+  Quotient, Remainder, ScaledDenominator, ScaledNumerator: TBigInteger;
+begin
+  DecimalScale := APrecision - 1 - ADecimalExponent;
+  if DecimalScale >= 0 then
+  begin
+    ScaledNumerator := ANumerator.Multiply(BigIntPower10(DecimalScale));
+    ScaledDenominator := ADenominator;
+  end
+  else
+  begin
+    ScaledNumerator := ANumerator;
+    ScaledDenominator := ADenominator.Multiply(BigIntPower10(-DecimalScale));
+  end;
+
+  Quotient := ScaledNumerator.Divide(ScaledDenominator);
+  Remainder := ScaledNumerator.Modulo(ScaledDenominator);
+  // ES2026 §21.1.3.5 step 10.a chooses the larger candidate on a tie.
+  if Remainder.Multiply(TBigInteger.FromInt64(2)).Compare(ScaledDenominator) >= 0 then
+    Quotient := Quotient.Add(TBigInteger.One);
+
+  if Quotient.Compare(BigIntPower10(APrecision)) >= 0 then
+  begin
+    Quotient := Quotient.Divide(TBigInteger.FromInt64(DECIMAL_RADIX));
+    Inc(ADecimalExponent);
+  end;
+
+  Result := PadLeftWithZeros(Quotient.ToString, APrecision);
+end;
+
+function FormatPrecisionString(const ASign, ADigits: string;
+  const ADecimalExponent, APrecision: Integer): string;
+var
+  Mantissa: string;
+begin
+  if (ADecimalExponent < DECIMAL_EXPONENT_FIXED_THRESHOLD) or
+     (ADecimalExponent >= APrecision) then
+  begin
+    Mantissa := ADigits;
+    if APrecision <> 1 then
+      Mantissa := ADigits[1] + '.' + Copy(ADigits, 2, APrecision - 1);
+    if ADecimalExponent > 0 then
+      Exit(ASign + Mantissa + 'e+' + IntToStr(ADecimalExponent));
+    Exit(ASign + Mantissa + 'e-' + IntToStr(-ADecimalExponent));
+  end;
+
+  if ADecimalExponent = APrecision - 1 then
+    Exit(ASign + ADigits);
+
+  if ADecimalExponent >= 0 then
+    Exit(ASign + Copy(ADigits, 1, ADecimalExponent + 1) + '.' +
+      Copy(ADigits, ADecimalExponent + 2, APrecision - ADecimalExponent - 1));
+
+  Result := ASign + '0.' + StringOfChar('0', -(ADecimalExponent + 1)) + ADigits;
+end;
+
+function FormatDoubleToPrecision(const AValue: Double;
+  const APrecision: Integer): string;
+var
+  DecimalExponent: Integer;
+  Denominator, Numerator: TBigInteger;
+  Digits, Sign: string;
+  Value: Double;
+begin
+  Value := AValue;
+  if Value < 0 then
+  begin
+    Sign := '-';
+    Value := -Value;
+  end
+  else
+    Sign := '';
+
+  if Value = 0 then
+  begin
+    Digits := StringOfChar('0', APrecision);
+    Exit(FormatPrecisionString(Sign, Digits, 0, APrecision));
+  end;
+
+  PositiveDoubleToBinaryRational(Value, Numerator, Denominator);
+  DecimalExponent := DecimalExponentForBinaryRational(Numerator,
+    Denominator, Value);
+  Digits := RoundedPrecisionDigits(Numerator, Denominator, APrecision,
+    DecimalExponent);
+  Result := FormatPrecisionString(Sign, Digits, DecimalExponent, APrecision);
+end;
 
 function GetSharedNumberPrototype: TGocciaObjectValue; inline;
 begin
@@ -351,16 +535,8 @@ begin
   // Step 1: Let x be ? thisNumberValue(this value)
   Prim := ExtractPrimitive(AThisValue);
 
-  // Step 4: If x is NaN, return "NaN"
-  // Step 5: If x is +∞𝔽 or -∞𝔽, return the string representation
-  if Prim.IsNaN or Prim.IsInfinity or Prim.IsNegativeInfinity then
-  begin
-    Result := Prim.ToStringLiteral;
-    Exit;
-  end;
-
   // Step 2: If precision is undefined, return ! ToString(x)
-  if AArgs.Length = 0 then
+  if (AArgs.Length = 0) or (AArgs.GetElement(0) is TGocciaUndefinedLiteralValue) then
   begin
     Result := Prim.ToStringLiteral;
     Exit;
@@ -369,12 +545,20 @@ begin
   // Step 3: Let p be ? ToIntegerOrInfinity(precision)
   Precision := ToIntegerFromArgs(AArgs, 0);
 
-  // Step 6: If p < 1 or p > 100, throw a RangeError exception
+  // Step 4: If x is not finite, return Number::toString(x, 10)
+  if Prim.IsNaN or Prim.IsInfinity or Prim.IsNegativeInfinity then
+  begin
+    Result := Prim.ToStringLiteral;
+    Exit;
+  end;
+
+  // Step 5: If p < 1 or p > 100, throw a RangeError exception
   if (Precision < 1) or (Precision > 100) then
     ThrowRangeError(SErrorToPrecisionArgRange, SSuggestNumberRange);
 
-  // Step 7: Format x with p significant digits
-  Result := TGocciaStringLiteralValue.Create(FloatToStrF(Prim.Value, ffGeneral, Precision, 0, InvariantFormatSettings));
+  // Steps 6-15: Format x with p significant digits.
+  Result := TGocciaStringLiteralValue.Create(FormatDoubleToPrecision(Prim.Value,
+    Precision));
 end;
 
 // ES2026 §21.1.3.2 Number.prototype.toExponential(fractionDigits)

@@ -68,11 +68,16 @@ type
   TGocciaIteratorHelperValue = class(TGocciaIteratorValue)
   private
     FExecuting: Boolean;
+    FDirectResultRoot: TGocciaValue;
+    FDirectResultRooted: Boolean;
+    procedure ClearDirectResultRoot;
+    procedure RootDirectResult(const AValue: TGocciaValue);
   protected
     function DoAdvanceNext: TGocciaObjectValue; virtual; abstract;
     function DoDirectNext(out ADone: Boolean): TGocciaValue; virtual; abstract;
   public
     constructor Create;
+    destructor Destroy; override;
     function AdvanceNext: TGocciaObjectValue; override;
     function DirectNext(out ADone: Boolean): TGocciaValue; override;
     function ReturnValue(const AValue: TGocciaValue): TGocciaObjectValue; override;
@@ -80,6 +85,8 @@ type
   end;
 
 function CreateIteratorResult(const AValue: TGocciaValue; const ADone: Boolean): TGocciaObjectValue;
+function IteratorResultDone(const AIterResult: TGocciaObjectValue): Boolean;
+function IteratorResultValue(const AIterResult: TGocciaObjectValue): TGocciaValue;
 function InvokeIteratorCallback(const ACallback: TGocciaValue; const AValue: TGocciaValue; const AIndex: Integer): TGocciaValue;
 procedure CloseIteratorPreservingError(const AIterator: TGocciaIteratorValue);
 
@@ -117,7 +124,6 @@ var
 threadvar
   FPrototypeMethodHost: TGocciaIteratorValue;
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
-  FHelperPrototypeMembers: TArray<TGocciaMemberDefinition>;
   FStaticMembers: TArray<TGocciaMemberDefinition>;
 
 function GetSharedIteratorPrototype: TGocciaObjectValue; inline;
@@ -146,16 +152,13 @@ end;
 
 function IteratorThisToDirectIterator(
   const AThisValue: TGocciaValue; const AMethodName: string): TGocciaIteratorValue;
-var
-  NextMethod: TGocciaValue;
 begin
   if not (AThisValue is TGocciaObjectValue) then
     ThrowTypeError(Format('Iterator.prototype.%s called on non-object', [AMethodName]));
 
   // ES2026 §7.4.2 GetIteratorDirect(obj): capture "next" once.  The
   // generic iterator reports a missing/non-callable next on first use.
-  NextMethod := TGocciaObjectValue(AThisValue).GetProperty(PROP_NEXT);
-  Result := TGocciaGenericIteratorValue.Create(AThisValue, NextMethod);
+  Result := CreateRootedGenericIterator(AThisValue);
 end;
 
 function IteratorThisHasCallableReturn(const AThisValue: TGocciaValue): Boolean;
@@ -185,7 +188,7 @@ begin
   if not IteratorThisHasCallableReturn(AThisValue) then
     Exit;
 
-  Iterator := TGocciaGenericIteratorValue.Create(AThisValue,
+  Iterator := CreateRootedGenericIterator(AThisValue,
     TGocciaUndefinedLiteralValue.UndefinedValue);
   if Assigned(TGarbageCollector.Instance) then
     TGarbageCollector.Instance.AddTempRoot(Iterator);
@@ -296,46 +299,142 @@ begin
   HelperPrototype := TGocciaObjectValue.Create(GetSharedIteratorPrototype);
   CurrentRealm.SetSlot(GIteratorHelperPrototypeSlot, HelperPrototype);
 
-  if Length(FHelperPrototypeMembers) = 0 then
-  begin
-    Members := TGocciaMemberCollection.Create;
-    try
-      Members.AddNamedMethod('next', FPrototypeMethodHost.IteratorNext, 0,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod(PROP_RETURN, FPrototypeMethodHost.IteratorHelperReturn, 0,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddSymbolDataProperty(
-        TGocciaSymbolValue.WellKnownToStringTag,
-        TGocciaStringLiteralValue.Create('Iterator Helper'), [pfConfigurable]);
-      FHelperPrototypeMembers := Members.ToDefinitions;
-    finally
-      Members.Free;
-    end;
+  Members := TGocciaMemberCollection.Create;
+  try
+    Members.AddNamedMethod('next', FPrototypeMethodHost.IteratorNext, 0,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod(PROP_RETURN, FPrototypeMethodHost.IteratorHelperReturn, 0,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddSymbolDataProperty(
+      TGocciaSymbolValue.WellKnownToStringTag,
+      TGocciaStringLiteralValue.Create('Iterator Helper'), [pfConfigurable]);
+    RegisterMemberDefinitions(HelperPrototype, Members.ToDefinitions);
+  finally
+    Members.Free;
   end;
-
-  RegisterMemberDefinitions(HelperPrototype, FHelperPrototypeMembers);
 end;
 
 function CreateIteratorResult(const AValue: TGocciaValue; const ADone: Boolean): TGocciaObjectValue;
+var
+  GC: TGarbageCollector;
+  ValueWasRooted, ResultWasRooted: Boolean;
 begin
-  Result := TGocciaObjectValue.Create;
-  Result.DefineProperty(PROP_VALUE, TGocciaPropertyDescriptorData.Create(AValue, [pfEnumerable, pfConfigurable, pfWritable]));
-  if ADone then
-    Result.DefineProperty(PROP_DONE, TGocciaPropertyDescriptorData.Create(TGocciaBooleanLiteralValue.TrueValue, [pfEnumerable, pfConfigurable, pfWritable]))
-  else
-    Result.DefineProperty(PROP_DONE, TGocciaPropertyDescriptorData.Create(TGocciaBooleanLiteralValue.FalseValue, [pfEnumerable, pfConfigurable, pfWritable]));
+  GC := TGarbageCollector.Instance;
+  ValueWasRooted := Assigned(GC) and Assigned(AValue) and not GC.IsTempRoot(AValue);
+  if ValueWasRooted then
+    GC.AddTempRoot(AValue);
+  try
+    Result := TGocciaObjectValue.Create;
+    ResultWasRooted := Assigned(GC) and not GC.IsTempRoot(Result);
+    if ResultWasRooted then
+      GC.AddTempRoot(Result);
+    try
+      Result.DefineProperty(PROP_VALUE, TGocciaPropertyDescriptorData.Create(AValue, [pfEnumerable, pfConfigurable, pfWritable]));
+      if ADone then
+        Result.DefineProperty(PROP_DONE, TGocciaPropertyDescriptorData.Create(TGocciaBooleanLiteralValue.TrueValue, [pfEnumerable, pfConfigurable, pfWritable]))
+      else
+        Result.DefineProperty(PROP_DONE, TGocciaPropertyDescriptorData.Create(TGocciaBooleanLiteralValue.FalseValue, [pfEnumerable, pfConfigurable, pfWritable]));
+    finally
+      if ResultWasRooted then
+        GC.RemoveTempRoot(Result);
+    end;
+  finally
+    if ValueWasRooted then
+      GC.RemoveTempRoot(AValue);
+  end;
+end;
+
+function IteratorResultDone(const AIterResult: TGocciaObjectValue): Boolean;
+var
+  GC: TGarbageCollector;
+  IterResultWasRooted: Boolean;
+  DoneValue: TGocciaValue;
+begin
+  GC := TGarbageCollector.Instance;
+  IterResultWasRooted := Assigned(GC) and Assigned(AIterResult) and
+    not GC.IsTempRoot(AIterResult);
+  if IterResultWasRooted then
+    GC.AddTempRoot(AIterResult);
+  try
+    DoneValue := AIterResult.GetProperty(PROP_DONE);
+    Result := Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value;
+  finally
+    if IterResultWasRooted then
+      GC.RemoveTempRoot(AIterResult);
+  end;
+end;
+
+function IteratorResultValue(const AIterResult: TGocciaObjectValue): TGocciaValue;
+var
+  GC: TGarbageCollector;
+  IterResultWasRooted: Boolean;
+begin
+  GC := TGarbageCollector.Instance;
+  IterResultWasRooted := Assigned(GC) and Assigned(AIterResult) and
+    not GC.IsTempRoot(AIterResult);
+  if IterResultWasRooted then
+    GC.AddTempRoot(AIterResult);
+  try
+    Result := AIterResult.GetProperty(PROP_VALUE);
+  finally
+    if IterResultWasRooted then
+      GC.RemoveTempRoot(AIterResult);
+  end;
 end;
 
 function InvokeIteratorCallback(const ACallback: TGocciaValue; const AValue: TGocciaValue; const AIndex: Integer): TGocciaValue;
 var
   CallArgs: TGocciaArgumentsCollection;
+  IndexValue: TGocciaValue;
+  GC: TGarbageCollector;
+  CallbackWasRooted, ValueWasRooted, IndexWasRooted: Boolean;
 begin
-  CallArgs := TGocciaArgumentsCollection.Create([AValue, TGocciaNumberLiteralValue.Create(AIndex)]);
+  GC := TGarbageCollector.Instance;
+  CallbackWasRooted := Assigned(GC) and Assigned(ACallback) and not GC.IsTempRoot(ACallback);
+  if CallbackWasRooted then
+    GC.AddTempRoot(ACallback);
+  ValueWasRooted := Assigned(GC) and Assigned(AValue) and not GC.IsTempRoot(AValue);
+  if ValueWasRooted then
+    GC.AddTempRoot(AValue);
+  IndexValue := TGocciaNumberLiteralValue.Create(AIndex);
+  IndexWasRooted := Assigned(GC) and not GC.IsTempRoot(IndexValue);
+  if IndexWasRooted then
+    GC.AddTempRoot(IndexValue);
   try
-    Result := InvokeCallable(ACallback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+    CallArgs := TGocciaArgumentsCollection.Create([AValue, IndexValue]);
+    try
+      Result := InvokeCallable(ACallback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+    finally
+      CallArgs.Free;
+    end;
   finally
-    CallArgs.Free;
+    if IndexWasRooted then
+      GC.RemoveTempRoot(IndexValue);
+    if ValueWasRooted then
+      GC.RemoveTempRoot(AValue);
+    if CallbackWasRooted then
+      GC.RemoveTempRoot(ACallback);
   end;
+end;
+
+function AddTempRootIfNeeded(const AValue: TGocciaValue): Boolean;
+var
+  GC: TGarbageCollector;
+begin
+  GC := TGarbageCollector.Instance;
+  Result := Assigned(GC) and Assigned(AValue) and not GC.IsTempRoot(AValue);
+  if Result then
+    GC.AddTempRoot(AValue);
+end;
+
+procedure RemoveTempRootIfNeeded(
+  const AValue: TGocciaValue; const AWasRooted: Boolean);
+var
+  GC: TGarbageCollector;
+begin
+  GC := TGarbageCollector.Instance;
+  if AWasRooted and Assigned(GC) then
+    GC.RemoveTempRoot(AValue);
 end;
 
 { TGocciaIteratorValue }
@@ -375,11 +474,11 @@ var
   IterResult: TGocciaObjectValue;
 begin
   IterResult := AdvanceNext;
-  ADone := TGocciaBooleanLiteralValue(IterResult.GetProperty(PROP_DONE)).Value;
+  ADone := IteratorResultDone(IterResult);
   if ADone then
     Result := TGocciaUndefinedLiteralValue.UndefinedValue
   else
-    Result := IterResult.GetProperty(PROP_VALUE);
+    Result := IteratorResultValue(IterResult);
 end;
 
 function TGocciaIteratorValue.DirectNextValue(
@@ -388,11 +487,11 @@ var
   IterResult: TGocciaObjectValue;
 begin
   IterResult := AdvanceNextValue(AValue);
-  ADone := TGocciaBooleanLiteralValue(IterResult.GetProperty(PROP_DONE)).Value;
+  ADone := IteratorResultDone(IterResult);
   if ADone then
     Result := TGocciaUndefinedLiteralValue.UndefinedValue
   else
-    Result := IterResult.GetProperty(PROP_VALUE);
+    Result := IteratorResultValue(IterResult);
 end;
 
 function TGocciaIteratorValue.ReturnValue(
@@ -696,20 +795,34 @@ function TGocciaIteratorValue.IteratorMap(const AArgs: TGocciaArgumentsCollectio
 var
   Callback: TGocciaValue;
   Iterator: TGocciaIteratorValue;
+  GC: TGarbageCollector;
+  CallbackWasRooted, IteratorWasRooted: Boolean;
 begin
   if not (AThisValue is TGocciaObjectValue) then
     ThrowTypeError(SErrorIteratorMapNonIterator, SSuggestIteratorThisType);
   Callback := IteratorCallbackArgOrClose(AArgs, AThisValue,
     SErrorIteratorMapCallable, SSuggestIteratorCallable);
-  Iterator := IteratorThisToDirectIterator(AThisValue, 'map');
 
-  TGarbageCollector.Instance.AddTempRoot(Iterator);
+  GC := TGarbageCollector.Instance;
+  CallbackWasRooted := Assigned(GC) and Assigned(Callback) and not GC.IsTempRoot(Callback);
+  if CallbackWasRooted then
+    GC.AddTempRoot(Callback);
   try
-    Result := TGocciaLazyMapIteratorValue.Create(
-      Iterator, Callback
-    );
+    Iterator := IteratorThisToDirectIterator(AThisValue, 'map');
+    IteratorWasRooted := Assigned(GC) and Assigned(Iterator) and not GC.IsTempRoot(Iterator);
+    if IteratorWasRooted then
+      GC.AddTempRoot(Iterator);
+    try
+      Result := TGocciaLazyMapIteratorValue.Create(
+        Iterator, Callback
+      );
+    finally
+      if IteratorWasRooted then
+        GC.RemoveTempRoot(Iterator);
+    end;
   finally
-    TGarbageCollector.Instance.RemoveTempRoot(Iterator);
+    if CallbackWasRooted then
+      GC.RemoveTempRoot(Callback);
   end;
 end;
 
@@ -717,20 +830,34 @@ function TGocciaIteratorValue.IteratorFilter(const AArgs: TGocciaArgumentsCollec
 var
   Callback: TGocciaValue;
   Iterator: TGocciaIteratorValue;
+  GC: TGarbageCollector;
+  CallbackWasRooted, IteratorWasRooted: Boolean;
 begin
   if not (AThisValue is TGocciaObjectValue) then
     ThrowTypeError(SErrorIteratorFilterNonIterator, SSuggestIteratorThisType);
   Callback := IteratorCallbackArgOrClose(AArgs, AThisValue,
     SErrorIteratorFilterCallable, SSuggestIteratorCallable);
-  Iterator := IteratorThisToDirectIterator(AThisValue, 'filter');
 
-  TGarbageCollector.Instance.AddTempRoot(Iterator);
+  GC := TGarbageCollector.Instance;
+  CallbackWasRooted := Assigned(GC) and Assigned(Callback) and not GC.IsTempRoot(Callback);
+  if CallbackWasRooted then
+    GC.AddTempRoot(Callback);
   try
-    Result := TGocciaLazyFilterIteratorValue.Create(
-      Iterator, Callback
-    );
+    Iterator := IteratorThisToDirectIterator(AThisValue, 'filter');
+    IteratorWasRooted := Assigned(GC) and Assigned(Iterator) and not GC.IsTempRoot(Iterator);
+    if IteratorWasRooted then
+      GC.AddTempRoot(Iterator);
+    try
+      Result := TGocciaLazyFilterIteratorValue.Create(
+        Iterator, Callback
+      );
+    finally
+      if IteratorWasRooted then
+        GC.RemoveTempRoot(Iterator);
+    end;
   finally
-    TGarbageCollector.Instance.RemoveTempRoot(Iterator);
+    if CallbackWasRooted then
+      GC.RemoveTempRoot(Callback);
   end;
 end;
 
@@ -786,20 +913,34 @@ function TGocciaIteratorValue.IteratorFlatMap(const AArgs: TGocciaArgumentsColle
 var
   Callback: TGocciaValue;
   Iterator: TGocciaIteratorValue;
+  GC: TGarbageCollector;
+  CallbackWasRooted, IteratorWasRooted: Boolean;
 begin
   if not (AThisValue is TGocciaObjectValue) then
     ThrowTypeError(SErrorIteratorFlatMapNonIterator, SSuggestIteratorThisType);
   Callback := IteratorCallbackArgOrClose(AArgs, AThisValue,
     SErrorIteratorFlatMapCallable, SSuggestIteratorFlatMapCallable);
-  Iterator := IteratorThisToDirectIterator(AThisValue, 'flatMap');
 
-  TGarbageCollector.Instance.AddTempRoot(Iterator);
+  GC := TGarbageCollector.Instance;
+  CallbackWasRooted := Assigned(GC) and Assigned(Callback) and not GC.IsTempRoot(Callback);
+  if CallbackWasRooted then
+    GC.AddTempRoot(Callback);
   try
-    Result := TGocciaLazyFlatMapIteratorValue.Create(
-      Iterator, Callback
-    );
+    Iterator := IteratorThisToDirectIterator(AThisValue, 'flatMap');
+    IteratorWasRooted := Assigned(GC) and Assigned(Iterator) and not GC.IsTempRoot(Iterator);
+    if IteratorWasRooted then
+      GC.AddTempRoot(Iterator);
+    try
+      Result := TGocciaLazyFlatMapIteratorValue.Create(
+        Iterator, Callback
+      );
+    finally
+      if IteratorWasRooted then
+        GC.RemoveTempRoot(Iterator);
+    end;
   finally
-    TGarbageCollector.Instance.RemoveTempRoot(Iterator);
+    if CallbackWasRooted then
+      GC.RemoveTempRoot(Callback);
   end;
 end;
 
@@ -910,24 +1051,36 @@ function TGocciaIteratorValue.IteratorToArray(const AArgs: TGocciaArgumentsColle
 var
   Iterator: TGocciaIteratorValue;
   ResultArray: TGocciaArrayValue;
-  Value: TGocciaValue;
+  Value, RootedValue: TGocciaValue;
   Done: Boolean;
+  ValueWasRooted: Boolean;
+  GC: TGarbageCollector;
 begin
   if not (AThisValue is TGocciaObjectValue) then
     ThrowTypeError(SErrorIteratorToArrayNonIterator, SSuggestIteratorThisType);
 
   Iterator := IteratorThisToDirectIterator(AThisValue, 'toArray');
   ResultArray := TGocciaArrayValue.Create;
+  GC := TGarbageCollector.Instance;
 
-  TGarbageCollector.Instance.AddTempRoot(Iterator);
-  TGarbageCollector.Instance.AddTempRoot(ResultArray);
+  GC.AddTempRoot(Iterator);
+  GC.AddTempRoot(ResultArray);
   try
     try
       Value := Iterator.DirectNext(Done);
       while not Done do
       begin
-        ResultArray.Elements.Add(Value);
-        Value := Iterator.DirectNext(Done);
+        RootedValue := Value;
+        ValueWasRooted := Assigned(RootedValue) and not GC.IsTempRoot(RootedValue);
+        if ValueWasRooted then
+          GC.AddTempRoot(RootedValue);
+        try
+          ResultArray.Elements.Add(RootedValue);
+          Value := Iterator.DirectNext(Done);
+        finally
+          if ValueWasRooted then
+            GC.RemoveTempRoot(RootedValue);
+        end;
       end;
     except
       CloseIteratorPreservingError(Iterator);
@@ -936,17 +1089,18 @@ begin
 
     Result := ResultArray;
   finally
-    TGarbageCollector.Instance.RemoveTempRoot(ResultArray);
-    TGarbageCollector.Instance.RemoveTempRoot(Iterator);
+    GC.RemoveTempRoot(ResultArray);
+    GC.RemoveTempRoot(Iterator);
   end;
 end;
 
 function TGocciaIteratorValue.IteratorSome(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Iterator: TGocciaIteratorValue;
-  Callback, Value: TGocciaValue;
+  Callback, Value, PredicateValue: TGocciaValue;
   Done: Boolean;
   Index: Integer;
+  ValueWasRooted, PredicateWasRooted: Boolean;
 begin
   if not (AThisValue is TGocciaObjectValue) then
     ThrowTypeError(SErrorIteratorSomeNonIterator, SSuggestIteratorThisType);
@@ -962,11 +1116,22 @@ begin
       Value := Iterator.DirectNext(Done);
       while not Done do
       begin
-        if InvokeIteratorCallback(Callback, Value, Index).ToBooleanLiteral.Value then
-        begin
-          Iterator.Close;
-          Result := TGocciaBooleanLiteralValue.TrueValue;
-          Exit;
+        ValueWasRooted := AddTempRootIfNeeded(Value);
+        try
+          PredicateValue := InvokeIteratorCallback(Callback, Value, Index);
+          PredicateWasRooted := AddTempRootIfNeeded(PredicateValue);
+          try
+            if PredicateValue.ToBooleanLiteral.Value then
+            begin
+              Iterator.Close;
+              Result := TGocciaBooleanLiteralValue.TrueValue;
+              Exit;
+            end;
+          finally
+            RemoveTempRootIfNeeded(PredicateValue, PredicateWasRooted);
+          end;
+        finally
+          RemoveTempRootIfNeeded(Value, ValueWasRooted);
         end;
         Inc(Index);
         Value := Iterator.DirectNext(Done);
@@ -985,9 +1150,10 @@ end;
 function TGocciaIteratorValue.IteratorEvery(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Iterator: TGocciaIteratorValue;
-  Callback, Value: TGocciaValue;
+  Callback, Value, PredicateValue: TGocciaValue;
   Done: Boolean;
   Index: Integer;
+  ValueWasRooted, PredicateWasRooted: Boolean;
 begin
   if not (AThisValue is TGocciaObjectValue) then
     ThrowTypeError(SErrorIteratorEveryNonIterator, SSuggestIteratorThisType);
@@ -1003,11 +1169,22 @@ begin
       Value := Iterator.DirectNext(Done);
       while not Done do
       begin
-        if not InvokeIteratorCallback(Callback, Value, Index).ToBooleanLiteral.Value then
-        begin
-          Iterator.Close;
-          Result := TGocciaBooleanLiteralValue.FalseValue;
-          Exit;
+        ValueWasRooted := AddTempRootIfNeeded(Value);
+        try
+          PredicateValue := InvokeIteratorCallback(Callback, Value, Index);
+          PredicateWasRooted := AddTempRootIfNeeded(PredicateValue);
+          try
+            if not PredicateValue.ToBooleanLiteral.Value then
+            begin
+              Iterator.Close;
+              Result := TGocciaBooleanLiteralValue.FalseValue;
+              Exit;
+            end;
+          finally
+            RemoveTempRootIfNeeded(PredicateValue, PredicateWasRooted);
+          end;
+        finally
+          RemoveTempRootIfNeeded(Value, ValueWasRooted);
         end;
         Inc(Index);
         Value := Iterator.DirectNext(Done);
@@ -1026,9 +1203,10 @@ end;
 function TGocciaIteratorValue.IteratorFind(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Iterator: TGocciaIteratorValue;
-  Callback, Value: TGocciaValue;
+  Callback, Value, PredicateValue: TGocciaValue;
   Done: Boolean;
   Index: Integer;
+  ValueWasRooted, PredicateWasRooted: Boolean;
 begin
   if not (AThisValue is TGocciaObjectValue) then
     ThrowTypeError(SErrorIteratorFindNonIterator, SSuggestIteratorThisType);
@@ -1044,11 +1222,22 @@ begin
       Value := Iterator.DirectNext(Done);
       while not Done do
       begin
-        if InvokeIteratorCallback(Callback, Value, Index).ToBooleanLiteral.Value then
-        begin
-          Iterator.Close;
-          Result := Value;
-          Exit;
+        ValueWasRooted := AddTempRootIfNeeded(Value);
+        try
+          PredicateValue := InvokeIteratorCallback(Callback, Value, Index);
+          PredicateWasRooted := AddTempRootIfNeeded(PredicateValue);
+          try
+            if PredicateValue.ToBooleanLiteral.Value then
+            begin
+              Iterator.Close;
+              Result := Value;
+              Exit;
+            end;
+          finally
+            RemoveTempRootIfNeeded(PredicateValue, PredicateWasRooted);
+          end;
+        finally
+          RemoveTempRootIfNeeded(Value, ValueWasRooted);
         end;
         Inc(Index);
         Value := Iterator.DirectNext(Done);
@@ -1070,10 +1259,29 @@ function TGocciaIteratorValue.IteratorFrom(const AArgs: TGocciaArgumentsCollecti
 var
   Value, IteratorMethod, IteratorObj, NextMethod: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
+  GC: TGarbageCollector;
+  ValueWasRooted, MethodWasRooted, IteratorWasRooted: Boolean;
+
+  function AddRootIfNeeded(const ARootValue: TGocciaValue): Boolean;
+  begin
+    Result := Assigned(GC) and Assigned(ARootValue) and
+      not GC.IsTempRoot(ARootValue);
+    if Result then
+      GC.AddTempRoot(ARootValue);
+  end;
+
+  procedure RemoveRootIfNeeded(const ARootValue: TGocciaValue;
+    const AWasRooted: Boolean);
+  begin
+    if AWasRooted then
+      GC.RemoveTempRoot(ARootValue);
+  end;
+
 begin
   if AArgs.Length < 1 then
     ThrowTypeError(SErrorIteratorFromRequiresArg, SSuggestIteratorFromArg);
 
+  GC := TGarbageCollector.Instance;
   Value := AArgs.GetElement(0);
 
   if Value is TGocciaIteratorValue then
@@ -1084,58 +1292,74 @@ begin
 
   if Value is TGocciaObjectValue then
   begin
-    IteratorMethod := TGocciaObjectValue(Value).GetSymbolProperty(TGocciaSymbolValue.WellKnownIterator);
-    // Per ES2024 GetMethod: a present-but-non-callable @@iterator is
-    // a TypeError.  Falling through to the iterator-like (`next` on
-    // Value) branch when @@iterator was malformed would mask the
-    // protocol violation.
-    if Assigned(IteratorMethod) and
-       not (IteratorMethod is TGocciaUndefinedLiteralValue) and
-       not (IteratorMethod is TGocciaNullLiteralValue) and
-       not IteratorMethod.IsCallable then
-      ThrowTypeError(Format(SErrorValueNotFunction, ['[Symbol.iterator]']),
-        SSuggestIteratorProtocol);
-    if Assigned(IteratorMethod) and not (IteratorMethod is TGocciaUndefinedLiteralValue) and IteratorMethod.IsCallable then
-    begin
-      CallArgs := TGocciaArgumentsCollection.Create;
-      try
-        IteratorObj := TGocciaFunctionBase(IteratorMethod).Call(CallArgs, Value);
-      finally
-        CallArgs.Free;
-      end;
-      if IteratorObj is TGocciaIteratorValue then
+    ValueWasRooted := AddRootIfNeeded(Value);
+    try
+      IteratorMethod := TGocciaObjectValue(Value).GetSymbolProperty(TGocciaSymbolValue.WellKnownIterator);
+      // Per ES2024 GetMethod: a present-but-non-callable @@iterator is
+      // a TypeError.  Falling through to the iterator-like (`next` on
+      // Value) branch when @@iterator was malformed would mask the
+      // protocol violation.
+      if Assigned(IteratorMethod) and
+         not (IteratorMethod is TGocciaUndefinedLiteralValue) and
+         not (IteratorMethod is TGocciaNullLiteralValue) and
+         not IteratorMethod.IsCallable then
+        ThrowTypeError(Format(SErrorValueNotFunction, ['[Symbol.iterator]']),
+          SSuggestIteratorProtocol);
+      if Assigned(IteratorMethod) and not (IteratorMethod is TGocciaUndefinedLiteralValue) and IteratorMethod.IsCallable then
       begin
-        Result := IteratorObj;
+        MethodWasRooted := AddRootIfNeeded(IteratorMethod);
+        try
+          CallArgs := TGocciaArgumentsCollection.Create;
+          try
+            IteratorObj := TGocciaFunctionBase(IteratorMethod).Call(CallArgs, Value);
+          finally
+            CallArgs.Free;
+          end;
+        finally
+          RemoveRootIfNeeded(IteratorMethod, MethodWasRooted);
+        end;
+
+        if IteratorObj is TGocciaIteratorValue then
+        begin
+          Result := IteratorObj;
+          Exit;
+        end;
+        // §7.4.3 GetIterator step 4 / TC39 Iterator Helpers
+        // GetIteratorFlattenable step 5: the value returned from
+        // [@@iterator]() must be an Object — anything else is a
+        // protocol violation, NOT a cue to fall back to iterator-like
+        // handling on the outer Value.
+        if not (IteratorObj is TGocciaObjectValue) then
+          ThrowTypeError(SErrorIteratorInvalid, SSuggestIteratorProtocol);
+        IteratorWasRooted := AddRootIfNeeded(IteratorObj);
+        try
+          NextMethod := IteratorObj.GetProperty(PROP_NEXT);
+          if not Assigned(NextMethod) or
+             (NextMethod is TGocciaUndefinedLiteralValue) or
+             not NextMethod.IsCallable then
+            // §7.4.2 GetIteratorDirect step 2: missing/non-callable next.
+            ThrowTypeError(SErrorIteratorNextMustBeCallable,
+              SSuggestIteratorProtocol);
+          // Capture-once per ES2024 §7.4.2 GetIteratorDirect.
+          Result := CreateRootedGenericIterator(IteratorObj, NextMethod);
+        finally
+          RemoveRootIfNeeded(IteratorObj, IteratorWasRooted);
+        end;
         Exit;
       end;
-      // §7.4.3 GetIterator step 4 / TC39 Iterator Helpers
-      // GetIteratorFlattenable step 5: the value returned from
-      // [@@iterator]() must be an Object — anything else is a
-      // protocol violation, NOT a cue to fall back to iterator-like
-      // handling on the outer Value.
-      if not (IteratorObj is TGocciaObjectValue) then
-        ThrowTypeError(SErrorIteratorInvalid, SSuggestIteratorProtocol);
-      NextMethod := IteratorObj.GetProperty(PROP_NEXT);
-      if not Assigned(NextMethod) or
-         (NextMethod is TGocciaUndefinedLiteralValue) or
-         not NextMethod.IsCallable then
-        // §7.4.2 GetIteratorDirect step 2: missing/non-callable next.
-        ThrowTypeError(SErrorIteratorNextMustBeCallable,
-          SSuggestIteratorProtocol);
-      // Capture-once per ES2024 §7.4.2 GetIteratorDirect.
-      Result := TGocciaGenericIteratorValue.Create(IteratorObj, NextMethod);
-      Exit;
-    end;
 
-    // No @@iterator (undefined/null): TC39 Iterator Helpers
-    // GetIteratorFlattenable iterator-like fallback — try the value
-    // itself as a duck-typed iterator (must have a callable next).
-    NextMethod := Value.GetProperty(PROP_NEXT);
-    if Assigned(NextMethod) and not (NextMethod is TGocciaUndefinedLiteralValue) and NextMethod.IsCallable then
-    begin
-      // Capture-once per ES2024 §7.4.2 GetIteratorDirect.
-      Result := TGocciaGenericIteratorValue.Create(Value, NextMethod);
-      Exit;
+      // No @@iterator (undefined/null): TC39 Iterator Helpers
+      // GetIteratorFlattenable iterator-like fallback — try the value
+      // itself as a duck-typed iterator (must have a callable next).
+      NextMethod := Value.GetProperty(PROP_NEXT);
+      if Assigned(NextMethod) and not (NextMethod is TGocciaUndefinedLiteralValue) and NextMethod.IsCallable then
+      begin
+        // Capture-once per ES2024 §7.4.2 GetIteratorDirect.
+        Result := CreateRootedGenericIterator(Value, NextMethod);
+        Exit;
+      end;
+    finally
+      RemoveRootIfNeeded(Value, ValueWasRooted);
     end;
   end;
 
@@ -1481,16 +1705,68 @@ end;
 constructor TGocciaIteratorHelperValue.Create;
 var
   HelperPrototype: TGocciaObjectValue;
+  GC: TGarbageCollector;
+  SelfWasRooted: Boolean;
 begin
   inherited Create;
-  EnsureIteratorHelperPrototypeInitialized;
-  HelperPrototype := GetSharedIteratorHelperPrototype;
-  if Assigned(HelperPrototype) then
-    FPrototype := HelperPrototype;
+  FExecuting := False;
+  FDirectResultRoot := nil;
+  FDirectResultRooted := False;
+
+  GC := TGarbageCollector.Instance;
+  SelfWasRooted := Assigned(GC) and not GC.IsTempRoot(Self);
+  if SelfWasRooted then
+    GC.AddTempRoot(Self);
+  try
+    EnsureIteratorHelperPrototypeInitialized;
+    HelperPrototype := GetSharedIteratorHelperPrototype;
+    if Assigned(HelperPrototype) then
+      FPrototype := HelperPrototype;
+  finally
+    if SelfWasRooted then
+      GC.RemoveTempRoot(Self);
+  end;
+end;
+
+destructor TGocciaIteratorHelperValue.Destroy;
+begin
+  ClearDirectResultRoot;
+  inherited;
+end;
+
+procedure TGocciaIteratorHelperValue.ClearDirectResultRoot;
+var
+  GC: TGarbageCollector;
+begin
+  if FDirectResultRooted then
+  begin
+    GC := TGarbageCollector.Instance;
+    if Assigned(GC) then
+      GC.RemoveQueuedRoot(FDirectResultRoot);
+  end;
+  FDirectResultRoot := nil;
+  FDirectResultRooted := False;
+end;
+
+procedure TGocciaIteratorHelperValue.RootDirectResult(const AValue: TGocciaValue);
+var
+  GC: TGarbageCollector;
+begin
+  ClearDirectResultRoot;
+  if not Assigned(AValue) then
+    Exit;
+  GC := TGarbageCollector.Instance;
+  if Assigned(GC) then
+  begin
+    GC.AddQueuedRoot(AValue);
+    FDirectResultRoot := AValue;
+    FDirectResultRooted := True;
+  end;
 end;
 
 function TGocciaIteratorHelperValue.AdvanceNext: TGocciaObjectValue;
 begin
+  ClearDirectResultRoot;
   if FDone then
   begin
     Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
@@ -1508,6 +1784,7 @@ end;
 
 function TGocciaIteratorHelperValue.DirectNext(out ADone: Boolean): TGocciaValue;
 begin
+  ClearDirectResultRoot;
   if FDone then
   begin
     ADone := True;
@@ -1519,6 +1796,8 @@ begin
   FExecuting := True;
   try
     Result := DoDirectNext(ADone);
+    if not ADone then
+      RootDirectResult(Result);
   finally
     FExecuting := False;
   end;
@@ -1542,6 +1821,7 @@ end;
 
 procedure TGocciaIteratorHelperValue.Close;
 begin
+  ClearDirectResultRoot;
   FDone := True;
 end;
 

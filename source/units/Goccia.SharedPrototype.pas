@@ -31,7 +31,7 @@ uses
 constructor TGocciaSharedPrototype.Create(const AMethodHost: TGocciaValue);
 begin
   inherited Create;
-  FPrototype := TGocciaObjectValue.Create;
+  FPrototype := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
   FMethodHost := AMethodHost;
 
   if Assigned(TGarbageCollector.Instance) then
@@ -63,7 +63,8 @@ begin
   if AConstructor is TGocciaClassValue then
     TGocciaClassValue(AConstructor).ReplacePrototype(FPrototype)
   else if AConstructor is TGocciaObjectValue then
-    TGocciaObjectValue(AConstructor).AssignProperty(PROP_PROTOTYPE, FPrototype);
+    TGocciaObjectValue(AConstructor).DefineProperty(PROP_PROTOTYPE,
+      TGocciaPropertyDescriptorData.Create(FPrototype, []));
   FPrototype.DefineProperty(PROP_CONSTRUCTOR,
     TGocciaPropertyDescriptorData.Create(AConstructor, [pfConfigurable, pfWritable]));
 end;
