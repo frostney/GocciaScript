@@ -8,19 +8,22 @@ uses
   Classes,
 
   Goccia.Builtins.TSV,
-  Goccia.Modules,
-  Goccia.Runtime;
+  Goccia.Runtime,
+  Goccia.RuntimeExtensions.IndexedDataModule,
+  Goccia.Values.ArrayValue;
 
 type
-  TGocciaTSVRuntimeExtension = class(TGocciaRuntimeExtension)
+  TGocciaTSVRuntimeExtension = class(TGocciaIndexedDataModuleRuntimeExtension)
   private
     FBuiltinTSV: TGocciaTSVBuiltin;
+  protected
+    function MatchesModulePath(const AResolvedPath: string): Boolean; override;
+    function ParseModuleRecords(const AContent: UTF8String;
+      const AResolvedPath: string): TGocciaArrayValue; override;
   public
     procedure Attach(const ARuntime: TGocciaRuntimeCore); override;
     procedure Detach; override;
     procedure AddModuleExtensions(const AExtensions: TStrings); override;
-    function TryLoadModule(const AResolvedPath: string;
-      out AModule: TGocciaModule): Boolean; override;
   end;
 
 implementation
@@ -30,9 +33,7 @@ uses
 
   Goccia.Error,
   Goccia.FileExtensions,
-  Goccia.Modules.ContentProvider,
-  Goccia.TSV,
-  Goccia.Values.ArrayValue;
+  Goccia.TSV;
 
 procedure TGocciaTSVRuntimeExtension.Attach(const ARuntime: TGocciaRuntimeCore);
 begin
@@ -54,57 +55,30 @@ begin
   AExtensions.Add(EXT_TSV);
 end;
 
-function TGocciaTSVRuntimeExtension.TryLoadModule(const AResolvedPath: string;
-  out AModule: TGocciaModule): Boolean;
-var
-  Content: TGocciaModuleContent;
-  I: Integer;
-  LoadSucceeded: Boolean;
-  TSVParser: TGocciaTSVParser;
-  TSVRecords: TGocciaArrayValue;
+function TGocciaTSVRuntimeExtension.MatchesModulePath(
+  const AResolvedPath: string): Boolean;
 begin
-  AModule := nil;
   Result := IsTSVExtension(ExtractFileExt(AResolvedPath));
-  if not Result then
-    Exit;
+end;
 
-  Content := Runtime.Engine.ModuleLoader.ContentProvider.LoadContent(
-    AResolvedPath);
-  TSVRecords := nil;
+function TGocciaTSVRuntimeExtension.ParseModuleRecords(
+  const AContent: UTF8String; const AResolvedPath: string): TGocciaArrayValue;
+var
+  TSVParser: TGocciaTSVParser;
+begin
+  TSVParser := TGocciaTSVParser.Create;
   try
-    TSVParser := TGocciaTSVParser.Create;
     try
-      try
-        TSVRecords := TSVParser.Parse(Content.Text);
-      except
-        on E: EGocciaTSVParseError do
-          raise TGocciaRuntimeError.Create(
-            Format('Failed to parse TSV module "%s": %s',
-              [AResolvedPath, E.Message]),
-            0, 0, AResolvedPath, nil);
-      end;
-    finally
-      TSVParser.Free;
-    end;
-
-    AModule := TGocciaModule.Create(AResolvedPath);
-    AModule.LastModified := Content.LastModified;
-    LoadSucceeded := False;
-    try
-      for I := 0 to TSVRecords.Elements.Count - 1 do
-        AModule.ExportsTable.AddOrSetValue(IntToStr(I),
-          TSVRecords.Elements[I]);
-      LoadSucceeded := True;
-    finally
-      if not LoadSucceeded then
-      begin
-        AModule.Free;
-        AModule := nil;
-      end;
+      Result := TSVParser.Parse(AContent);
+    except
+      on E: EGocciaTSVParseError do
+        raise TGocciaRuntimeError.Create(
+          Format('Failed to parse TSV module "%s": %s',
+            [AResolvedPath, E.Message]),
+          0, 0, AResolvedPath, nil);
     end;
   finally
-    TSVRecords.Free;
-    Content.Free;
+    TSVParser.Free;
   end;
 end;
 
