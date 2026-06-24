@@ -165,6 +165,7 @@ function GetSetRecordKeysIterator(const ARecord: TGocciaSetRecord; const AMethod
 var
   CallArgs: TGocciaArgumentsCollection;
   IteratorObject, NextMethod: TGocciaValue;
+  IteratorRoot, NextMethodRoot: TGocciaTempRoot;
 begin
   // ES2026 §24.2.4 Set operation methods: GetIteratorFromMethod(otherRec.[[SetObject]], otherRec.[[Keys]])
   CallArgs := TGocciaArgumentsCollection.Create;
@@ -179,11 +180,25 @@ begin
 
   if IteratorObject is TGocciaObjectValue then
   begin
-    NextMethod := TGocciaObjectValue(IteratorObject).GetProperty(PROP_NEXT);
-    if Assigned(NextMethod) and not (NextMethod is TGocciaUndefinedLiteralValue) and NextMethod.IsCallable then
-      // Pass the validated NextMethod to the iterator wrapper so the
-      // capture-once contract from §7.4.2 GetIteratorDirect holds.
-      Exit(TGocciaGenericIteratorValue.Create(IteratorObject, NextMethod));
+    InitializeTempRoot(IteratorRoot);
+    InitializeTempRoot(NextMethodRoot);
+    AddTempRootIfNeeded(IteratorRoot, IteratorObject);
+    try
+      NextMethod := TGocciaObjectValue(IteratorObject).GetProperty(PROP_NEXT);
+      AddTempRootIfNeeded(NextMethodRoot, NextMethod);
+      try
+        if Assigned(NextMethod) and
+           not (NextMethod is TGocciaUndefinedLiteralValue) and
+           NextMethod.IsCallable then
+          // Pass the validated NextMethod to the iterator wrapper so the
+          // capture-once contract from §7.4.2 GetIteratorDirect holds.
+          Exit(CreateRootedGenericIterator(IteratorObject, NextMethod));
+      finally
+        RemoveTempRootIfNeeded(NextMethodRoot);
+      end;
+    finally
+      RemoveTempRootIfNeeded(IteratorRoot);
+    end;
   end;
 
   ThrowTypeError(Format(SErrorSetLikeKeysIterator, [AMethodName]), SSuggestIteratorProtocol);

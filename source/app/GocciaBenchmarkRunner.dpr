@@ -88,8 +88,9 @@ begin
 end;
 
 type
-  TBenchmarkFileResultArray = array[0..MaxInt div SizeOf(TBenchmarkFileResult) - 1] of TBenchmarkFileResult;
-  PBenchmarkFileResultArray = ^TBenchmarkFileResultArray;
+  PBenchmarkFileResult = ^TBenchmarkFileResult;
+  TBenchmarkFileResultPtrArray = array[0..MaxInt div SizeOf(PBenchmarkFileResult) - 1] of PBenchmarkFileResult;
+  PBenchmarkFileResultPtrArray = ^TBenchmarkFileResultPtrArray;
 
 procedure PopulateFileResult(const AFileResult: TBenchmarkFileResult;
   const AScriptResult: TGocciaObjectValue; const AReporter: TBenchmarkReporter);
@@ -161,23 +162,29 @@ begin
   end;
 end;
 
+procedure AssignErrorFileResult(var AFileResult: TBenchmarkFileResult;
+  const AFileName, AMessage: string);
+begin
+  AFileResult := Default(TBenchmarkFileResult);
+  AFileResult.FileName := AFileName;
+  AFileResult.LexTimeNanoseconds := 0;
+  AFileResult.ParseTimeNanoseconds := 0;
+  AFileResult.CompileTimeNanoseconds := 0;
+  AFileResult.ExecuteTimeNanoseconds := 0;
+  AFileResult.TotalBenchmarks := 0;
+  AFileResult.DurationNanoseconds := 0;
+  SetLength(AFileResult.Entries, 1);
+  AFileResult.Entries[0].Suite := '';
+  AFileResult.Entries[0].Name := '(fatal)';
+  AFileResult.Entries[0].Error := AMessage;
+end;
+
 procedure MakeErrorFileResult(const AFileName, AMessage: string;
   const AReporter: TBenchmarkReporter);
 var
   FileResult: TBenchmarkFileResult;
 begin
-  FileResult := Default(TBenchmarkFileResult);
-  FileResult.FileName := AFileName;
-  FileResult.LexTimeNanoseconds := 0;
-  FileResult.ParseTimeNanoseconds := 0;
-  FileResult.CompileTimeNanoseconds := 0;
-  FileResult.ExecuteTimeNanoseconds := 0;
-  FileResult.TotalBenchmarks := 0;
-  FileResult.DurationNanoseconds := 0;
-  SetLength(FileResult.Entries, 1);
-  FileResult.Entries[0].Suite := '';
-  FileResult.Entries[0].Name := '(fatal)';
-  FileResult.Entries[0].Error := AMessage;
+  AssignErrorFileResult(FileResult, AFileName, AMessage);
   AReporter.AddFileResult(FileResult);
 end;
 
@@ -301,6 +308,15 @@ begin
     Result := nil;
 end;
 
+procedure ClearRegisteredBenchmarks(const AEngine: TGocciaEngine);
+var
+  Benchmark: TGocciaBenchmark;
+begin
+  Benchmark := RuntimeBenchmark(AEngine);
+  if Assigned(Benchmark) then
+    Benchmark.ClearRegisteredBenchmarks;
+end;
+
 procedure TBenchmarkRunnerApp.RunBytecodeBenchmarkModule(
   const AEngine: TGocciaEngine;
   const AModule: TGocciaCompiledModule; const AFileName: string);
@@ -367,6 +383,7 @@ begin
           try
             PopulateFileResult(FileResult, ScriptResult, AReporter);
           finally
+            ClearRegisteredBenchmarks(Engine);
             if Assigned(ScriptResult) and Assigned(GC) then
               GC.RemoveTempRoot(ScriptResult);
           end;
@@ -488,6 +505,7 @@ begin
           try
             PopulateFileResult(FileResult, ScriptResult, AReporter);
           finally
+            ClearRegisteredBenchmarks(Engine);
             if Assigned(ScriptResult) and Assigned(GC) then
               GC.RemoveTempRoot(ScriptResult);
           end;
@@ -588,6 +606,7 @@ begin
         try
           PopulateFileResult(FileResult, ScriptResult, AReporter);
         finally
+          ClearRegisteredBenchmarks(Engine);
           if Assigned(ScriptResult) and Assigned(GC) then
             GC.RemoveTempRoot(ScriptResult);
         end;
@@ -689,6 +708,7 @@ begin
         try
           PopulateFileResult(FileResult, ScriptResult, AReporter);
         finally
+          ClearRegisteredBenchmarks(Engine);
           if Assigned(ScriptResult) and Assigned(GC) then
             GC.RemoveTempRoot(ScriptResult);
         end;
@@ -746,17 +766,21 @@ procedure TBenchmarkRunnerApp.BenchmarkWorkerProc(const AFileName: string;
   out AErrorMessage: string; AData: Pointer);
 var
   WorkerReporter: TBenchmarkReporter;
-  WorkerResults: PBenchmarkFileResultArray;
+  WorkerResults: PBenchmarkFileResultPtrArray;
+  FileResult: PBenchmarkFileResult;
   Mode: TGocciaExecutionMode;
 begin
   AConsoleOutput := '';
   AErrorMessage := '';
-  WorkerResults := PBenchmarkFileResultArray(AData);
+  WorkerResults := PBenchmarkFileResultPtrArray(AData);
 
   if EngineOptions.Mode.Matches(emBytecode) then
     Mode := emBytecode
   else
     Mode := emInterpreted;
+
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.Enabled := True;
 
   WorkerReporter := TBenchmarkReporter.Create;
   try
@@ -764,22 +788,18 @@ begin
       CollectBenchmarkFile(AFileName, WorkerReporter, Mode,
         FWorkerProgressEnabled);
       if WorkerReporter.FileCount > 0 then
-        WorkerResults^[AIndex] := WorkerReporter.Files[0];
+      begin
+        New(FileResult);
+        FileResult^ := WorkerReporter.Files[0];
+        WorkerResults^[AIndex] := FileResult;
+      end;
     except
       on E: Exception do
       begin
         AErrorMessage := E.Message;
-        WorkerResults^[AIndex].FileName := AFileName;
-        WorkerResults^[AIndex].LexTimeNanoseconds := 0;
-        WorkerResults^[AIndex].ParseTimeNanoseconds := 0;
-        WorkerResults^[AIndex].CompileTimeNanoseconds := 0;
-        WorkerResults^[AIndex].ExecuteTimeNanoseconds := 0;
-        WorkerResults^[AIndex].TotalBenchmarks := 0;
-        WorkerResults^[AIndex].DurationNanoseconds := 0;
-        SetLength(WorkerResults^[AIndex].Entries, 1);
-        WorkerResults^[AIndex].Entries[0].Suite := '';
-        WorkerResults^[AIndex].Entries[0].Name := '(fatal)';
-        WorkerResults^[AIndex].Entries[0].Error := E.Message;
+        New(FileResult);
+        AssignErrorFileResult(FileResult^, AFileName, E.Message);
+        WorkerResults^[AIndex] := FileResult;
       end;
     end;
   finally
@@ -859,7 +879,7 @@ var
   DiscoveredFiles: TStringList;
   Reporter: TBenchmarkReporter;
   Pool: TGocciaThreadPool;
-  WorkerData: array of TBenchmarkFileResult;
+  WorkerData: array of PBenchmarkFileResult;
   WallClockStart: Int64;
   MemoryMeasurement: TCLIJSONMemoryMeasurement;
   MainMemoryStats: TCLIJSONMemoryStats;
@@ -917,17 +937,7 @@ begin
         add results to the reporter on the main thread in file order. }
       SetLength(WorkerData, Files.Count);
       for I := 0 to Files.Count - 1 do
-      begin
-        WorkerData[I].FileName := '';
-        WorkerData[I].LexTimeNanoseconds := 0;
-        WorkerData[I].ParseTimeNanoseconds := 0;
-        WorkerData[I].CompileTimeNanoseconds := 0;
-        WorkerData[I].ExecuteTimeNanoseconds := 0;
-        WorkerData[I].TotalBenchmarks := 0;
-        WorkerData[I].DurationNanoseconds := 0;
-        WorkerData[I].DeterministicProfile := False;
-        SetLength(WorkerData[I].Entries, 0);
-      end;
+        WorkerData[I] := nil;
 
       if AnyFileConfigEnablesFlag(Files, EngineOptions.UnsafeFFI) then
         EnsureSharedPrototypesInitialized(InitializeRuntimeWithUnsafeFFI)
@@ -959,12 +969,25 @@ begin
         MainMemoryStats, WorkerMemoryStats, True);
 
       { Collect results on the main thread in original file order. }
-      for I := 0 to Files.Count - 1 do
-      begin
-        if AShowProgress then
-          TBenchmarkProgress.WriteLine(SysUtils.Format('[%d/%d] %s',
-            [I + 1, Files.Count, ExtractFileName(Files[I])]));
-        Reporter.AddFileResult(WorkerData[I]);
+      try
+        for I := 0 to Files.Count - 1 do
+        begin
+          if AShowProgress then
+            TBenchmarkProgress.WriteLine(SysUtils.Format('[%d/%d] %s',
+              [I + 1, Files.Count, ExtractFileName(Files[I])]));
+          if Assigned(WorkerData[I]) then
+            Reporter.AddFileResult(WorkerData[I]^)
+          else
+            MakeErrorFileResult(Files[I], 'Benchmark worker produced no result',
+              Reporter);
+        end;
+      finally
+        for I := 0 to Length(WorkerData) - 1 do
+          if Assigned(WorkerData[I]) then
+          begin
+            Dispose(WorkerData[I]);
+            WorkerData[I] := nil;
+          end;
       end;
     end
     else
