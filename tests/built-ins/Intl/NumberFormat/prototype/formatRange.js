@@ -21,6 +21,22 @@ describe.runIf(isIntl)("Intl.NumberFormat.prototype.formatRange", () => {
     expect(nf.formatRange(3, 5)).toBe("$3 – $5");
   });
 
+  test("formats pt-PT currency ranges with the locale currency pattern", () => {
+    const nf = new Intl.NumberFormat("pt-PT", {
+      style: "currency",
+      currency: "EUR",
+      maximumFractionDigits: 0
+    });
+
+    if (!hasFullICU) {
+      expect(typeof nf.formatRange(3, 5)).toBe("string");
+      return;
+    }
+
+    expect(nf.resolvedOptions().locale).toBe("pt-PT");
+    expect(nf.formatRange(3, 5)).toBe("3 - 5\u00a0\u20ac");
+  });
+
   test("uses approximate formatting for values equal after rounding", () => {
     const nf = new Intl.NumberFormat("en-US", {
       style: "currency",

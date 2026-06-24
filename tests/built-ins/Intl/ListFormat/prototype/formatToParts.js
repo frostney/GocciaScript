@@ -40,4 +40,9 @@ describe.runIf(isIntl && typeof Intl.ListFormat !== "undefined")("Intl.ListForma
       { type: "element", value: "and" },
     ]);
   });
+
+  test("formats undefined as an empty parts list", () => {
+    const lf = new Intl.ListFormat("en-US");
+    expect(lf.formatToParts(undefined)).toEqual([]);
+  });
 });

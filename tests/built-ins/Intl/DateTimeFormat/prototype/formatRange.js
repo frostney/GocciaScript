@@ -70,6 +70,25 @@ describe.runIf(isIntl && isTemporal)("Intl.DateTimeFormat.prototype.formatRange 
     expect(dtf.formatRange(start, end)).toBe("8/4/2021, 12:30:45 AM – 11:30:45 PM");
   });
 
+  test("ignores irrelevant dateStyle and timeStyle fields for Temporal plain values", () => {
+    const dtf = new Intl.DateTimeFormat("en-US", {
+      dateStyle: "short",
+      timeStyle: "short",
+      timeZone: "Pacific/Apia"
+    });
+
+    if (!hasFullICU) {
+      expect(typeof dtf.formatRange(new Temporal.PlainDate(2011, 12, 30),
+        new Temporal.PlainDate(2026, 3, 8))).toBe("string");
+      return;
+    }
+
+    expect(dtf.formatRange(new Temporal.PlainDate(2011, 12, 30),
+      new Temporal.PlainDate(2026, 3, 8))).toBe("12/30/2011\u2009\u2013\u20093/8/2026");
+    expect(dtf.formatRange(new Temporal.PlainTime(12),
+      new Temporal.PlainTime(14))).toBe("12:00\u2009\u2013\u20092:00\u202fPM");
+  });
+
   test("localizes large Temporal.PlainDate ranges through ICU", () => {
     const dtf = new Intl.DateTimeFormat("fr-FR", {
       weekday: "long",

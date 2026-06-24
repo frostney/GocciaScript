@@ -727,6 +727,49 @@ begin
   Result := Pos > Length(AStr);
 end;
 
+function TemporalOffsetIdentifierHasSubMinuteSyntax(const AStr: string): Boolean;
+var
+  Pos, Hour, Minute, Second: Integer;
+  FracVal: Int64;
+  FracDigits: Integer;
+  Extended: Boolean;
+begin
+  Result := False;
+  if Length(AStr) < 6 then
+    Exit;
+  if not (AStr[1] in ['+', '-']) then
+    Exit;
+
+  Pos := 2;
+  if not TryParseDigits(AStr, Pos, 2, Hour) then
+    Exit;
+  Extended := (Pos <= Length(AStr)) and (AStr[Pos] = ':');
+  if Extended then
+    Inc(Pos);
+  if not TryParseDigits(AStr, Pos, 2, Minute) then
+    Exit;
+  if Pos > Length(AStr) then
+    Exit;
+
+  if Extended then
+  begin
+    if AStr[Pos] <> ':' then
+      Exit;
+    Inc(Pos);
+  end;
+  if not TryParseDigits(AStr, Pos, 2, Second) then
+    Exit;
+  if (Pos <= Length(AStr)) and ((AStr[Pos] = '.') or (AStr[Pos] = ',')) then
+  begin
+    Inc(Pos);
+    if not TryParseVariableDigits(AStr, Pos, FracVal, FracDigits) then
+      Exit;
+  end;
+
+  Result := (Hour <= 23) and (Minute <= 59) and (Second <= 59) and
+    (Pos > Length(AStr));
+end;
+
 function StripOffsetAndAnnotations(const AStr: string): string;
 var
   I, TPos, ScanStart, OffsetStart: Integer;
@@ -1414,7 +1457,11 @@ begin
       if (Length(AnnotContent) > 5) and (Copy(AnnotContent, 1, 5) = 'u-ca=') then
         // Calendar annotation - ignore (we only support iso8601)
       else if ATimeZone = '' then
+      begin
+        if TemporalOffsetIdentifierHasSubMinuteSyntax(AnnotContent) then
+          Exit;
         ATimeZone := AnnotContent
+      end
       else
         Exit; // Multiple timezone annotations - reject
       Rest := Copy(Rest, 1, BracketStart - 1);

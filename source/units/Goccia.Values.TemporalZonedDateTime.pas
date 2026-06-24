@@ -1161,6 +1161,7 @@ end;
 function CanonicalizeTimeZoneIdentifier(const AValue: string): string;
 var
   OffsetSeconds: Integer;
+  HasUTCDesignator, HasSubMinuteSyntax: Boolean;
   CaseNormalized: string;
 begin
   if AValue = '' then
@@ -1172,8 +1173,13 @@ begin
   if ASCIIEqualsIgnoreCase(AValue, 'UTC') then
     Exit('UTC');
 
-  if ParseOffsetString(AValue, OffsetSeconds) then
+  if TryParseTemporalOffsetString(AValue, OffsetSeconds, HasUTCDesignator,
+    HasSubMinuteSyntax) then
+  begin
+    if HasSubMinuteSyntax then
+      ThrowRangeError(Format(SErrorUnknownTimezone, [AValue]), SSuggestTemporalTimezone);
     Exit(FormatOffsetString(OffsetSeconds));
+  end;
 
   if IsSupportedCanonicalTimeZoneIdentifier(AValue) and IsValidTimeZone(AValue) then
     Exit(AValue);

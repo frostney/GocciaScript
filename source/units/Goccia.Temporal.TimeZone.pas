@@ -847,6 +847,26 @@ begin
   Inc(CachedTimeZoneCaseCount);
 end;
 
+function OffsetStringHasSubMinuteSyntax(const AValue: string): Boolean;
+var
+  Pos: Integer;
+begin
+  Result := False;
+  if Length(AValue) < 6 then
+    Exit;
+  if not (AValue[1] in ['+', '-']) then
+    Exit;
+
+  Pos := 4;
+  if (Pos <= Length(AValue)) and (AValue[Pos] = ':') then
+    Inc(Pos);
+  Inc(Pos, 2);
+  if Pos > Length(AValue) then
+    Exit;
+  if (AValue[Pos] = ':') or (AValue[Pos] in ['0'..'9']) then
+    Result := True;
+end;
+
 function IsValidTimeZoneName(const AName: string): Boolean;
 var
   I, SegStart: Integer;
@@ -1387,10 +1407,10 @@ begin
     Result := True;
     Exit;
   end;
-  // Accept offset strings like +05:30 as valid timezone IDs
+  // Accept only minute-precision offset strings as valid timezone IDs.
   if ParseOffsetString(ATimeZone, Dummy) then
   begin
-    Result := True;
+    Result := not OffsetStringHasSubMinuteSyntax(ATimeZone);
     Exit;
   end;
   if not IsValidTimeZoneName(ATimeZone) then

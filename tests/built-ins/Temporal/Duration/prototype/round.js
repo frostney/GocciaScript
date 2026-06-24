@@ -199,6 +199,21 @@ describe.runIf(isTemporal)("Temporal.Duration.prototype.round", () => {
     expect(rounded.months).toBe(6);
   });
 
+  test("round rejects sub-minute offset time zone identifiers in relativeTo strings", () => {
+    const d = new Temporal.Duration(1, 0, 0, 0, 24);
+    const valid = d.round({
+      largestUnit: "years",
+      relativeTo: "1970-01-01T00:00-00:45:00[-00:45]"
+    });
+
+    expect(valid.years).toBe(1);
+    expect(valid.days).toBe(1);
+    expect(() => d.round({
+      largestUnit: "years",
+      relativeTo: "1970-01-01T00:00-00:44:59[-00:44:59]"
+    })).toThrow(RangeError);
+  });
+
   test("round accepts relativeTo as ZonedDateTime to days", () => {
     const d = Temporal.Duration.from({ years: 1, months: 1 });
     const zdt = Temporal.ZonedDateTime.from("2020-02-29T10:30:00+00:00[UTC]");

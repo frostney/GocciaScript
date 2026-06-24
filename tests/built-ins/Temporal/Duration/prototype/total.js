@@ -149,6 +149,19 @@ describe.runIf(isTemporal)("Temporal.Duration.prototype.total", () => {
     expect(d.total({ unit: "days", relativeTo: zdt })).toBe(182);
   });
 
+  test("total() rejects sub-minute offset time zone identifiers in relativeTo strings", () => {
+    const d = new Temporal.Duration(1, 0, 0, 0, 24);
+
+    expect(d.total({
+      unit: "days",
+      relativeTo: "1970-01-01T00:00-00:45:00[-00:45]"
+    })).toBe(366);
+    expect(() => d.total({
+      unit: "days",
+      relativeTo: "1970-01-01T00:00-00:44:59[-00:44:59]"
+    })).toThrow(RangeError);
+  });
+
   test("total() accepts relativeTo as ZonedDateTime for years", () => {
     const d = Temporal.Duration.from({ years: 2 });
     const zdt = Temporal.ZonedDateTime.from("2024-01-01T12:00:00+00:00[UTC]");

@@ -123,6 +123,9 @@ var
 begin
   SetLength(Result, 0);
 
+  if (not Assigned(AValue)) or (AValue is TGocciaUndefinedLiteralValue) then
+    Exit;
+
   Iterator := GetIteratorFromValue(AValue);
   if not Assigned(Iterator) then
     ThrowTypeError('Intl.ListFormat requires an iterable');

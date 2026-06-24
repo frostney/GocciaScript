@@ -33,14 +33,16 @@ var
   AvailableLocalesLock: TRTLCriticalSection;
 
 const
-  CLDR_REGIONAL_AVAILABLE_LOCALES: array[0..6] of string = (
+  CLDR_REGIONAL_AVAILABLE_LOCALES: array[0..8] of string = (
     'ar-Latn',
     'de-DE',
     'en-GB',
     'en-IN',
     'en-US',
     'fr-FR',
-    'zh-Hant-TW'
+    'pt-PT',
+    'zh-Hant-TW',
+    'zh-TW'
   );
 
 procedure AppendUniqueLocale(var ALocales: IntlTypes.TStringArray;

@@ -992,17 +992,6 @@ begin
   AEffectiveOptions := AOptions;
   HadExplicitCore := AHasExplicitCoreOptions;
 
-  case AKind of
-    dtfkPlainDate,
-    dtfkPlainYearMonth,
-    dtfkPlainMonthDay:
-      if AEffectiveOptions.TimeStyle <> idtsNone then
-        Exit(False);
-    dtfkPlainTime:
-      if AEffectiveOptions.DateStyle <> idtsNone then
-        Exit(False);
-  end;
-
   if (AEffectiveOptions.DateStyle <> idtsNone) and
      not ((AKind = dtfkInstant) or (AKind = dtfkPlainDate) or
        (AKind = dtfkPlainDateTime) or (AKind = dtfkZonedDateTime)) then

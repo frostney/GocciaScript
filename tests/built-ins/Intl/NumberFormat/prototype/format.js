@@ -230,4 +230,16 @@ describe.runIf(isIntl)("Intl.NumberFormat.prototype.format", () => {
     expect(nf.format(10000)).toBe("10K");
     expect(nf.format(100000)).toBe("1L");
   });
+
+  test("zh-TW uses traditional compact notation data", () => {
+    const nf = new Intl.NumberFormat("zh-TW", { notation: "compact" });
+
+    if (!hasFullICU) {
+      expect(typeof nf.format(987654321)).toBe("string");
+      return;
+    }
+
+    expect(nf.resolvedOptions().locale).toBe("zh-TW");
+    expect(nf.format(987654321)).toBe("9.9\u5104");
+  });
 });
