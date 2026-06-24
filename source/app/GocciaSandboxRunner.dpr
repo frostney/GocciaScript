@@ -331,6 +331,8 @@ begin
       if (SearchRec.Name = '.') or (SearchRec.Name = '..') then
         Continue;
       HostChild := IncludeTrailingPathDelimiter(AHostDirectory) + SearchRec.Name;
+      if HostPathIsSymlink(HostChild) then
+        raise Exception.Create('Seed path is a symlink (not supported): ' + HostChild);
       SandboxChild := SandboxJoinPath(SandboxDirectory, SearchRec.Name);
       if (SearchRec.Attr and faDirectory) <> 0 then
         ImportDirectoryContents(HostChild, SandboxChild)
@@ -348,7 +350,13 @@ var
   HostPath: string;
   TargetPath: string;
 begin
-  HostPath := ExpandFileName(AHostPath);
+  // Strip any trailing separator before the symlink check: POSIX lstat()
+  // follows a final symlink when the path ends in '/', so without this a
+  // symlinked seed leaf would be rejected as `linkdir` but dereferenced as
+  // `linkdir/`. Downstream directory/file imports are delimiter-agnostic.
+  HostPath := ExcludeTrailingPathDelimiter(ExpandFileName(AHostPath));
+  if HostPathIsSymlink(HostPath) then
+    raise Exception.Create('Seed path is a symlink (not supported): ' + HostPath);
   if not FileExists(HostPath) and not DirectoryExists(HostPath) then
     raise Exception.Create('Seed path does not exist: ' + HostPath);
 

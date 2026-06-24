@@ -18,6 +18,7 @@ import {
   existsSync,
   mkdirSync,
   chmodSync,
+  symlinkSync,
 } from "fs";
 import { join, resolve } from "path";
 import {
@@ -2732,6 +2733,143 @@ console.log("SandboxRunner: seed config imports host paths relative to the confi
       throw new Error(`SandboxRunner host seed stdout should include file copied under existing target directory, got: ${stdout}`);
     if (!containsLine(`\n${stdout}`, "3"))
       throw new Error(`SandboxRunner host seed stdout should include base64 byte length, got: ${stdout}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("SandboxRunner: seed directory rejects nested host symlink (no leak)...");
+{
+  const tmp = makeTmp();
+  try {
+    if (process.platform !== "win32") {
+      const seedDir = join(tmp, "seedDir");
+      mkdirSync(seedDir, { recursive: true });
+      writeFileSync(join(tmp, "outside.txt"), "outside-secret");
+      symlinkSync("../outside.txt", join(seedDir, "leak.txt"));
+      const mainJs = join(tmp, "main.js");
+      writeFileSync(mainJs, [
+        'import fs from "fs";',
+        'console.log(fs.readFileSync("/leak.txt", "utf8"));',
+      ].join("\n"));
+
+      const proc = Bun.spawnSync(
+        [SANDBOXRUNNER, "/main.js", `--seed=${seedDir}=/`, `--seed=${mainJs}=/`, "--source-type=module"],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      const output = proc.stdout.toString() + proc.stderr.toString();
+      if (proc.exitCode === 0)
+        throw new Error(`SandboxRunner nested symlink seed should fail, exited 0: ${output}`);
+      if (!output.includes("is a symlink (not supported)"))
+        throw new Error(`SandboxRunner nested symlink seed should report the symlink rejection, got: ${output}`);
+      if (output.includes("outside-secret"))
+        throw new Error(`SandboxRunner nested symlink seed leaked host contents, got: ${output}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("SandboxRunner: direct seed argument rejects host symlink (no leak)...");
+{
+  const tmp = makeTmp();
+  try {
+    if (process.platform !== "win32") {
+      writeFileSync(join(tmp, "outside.txt"), "outside-secret");
+      const link = join(tmp, "link.txt");
+      symlinkSync("outside.txt", link);
+      const mainJs = join(tmp, "main.js");
+      writeFileSync(mainJs, [
+        'import fs from "fs";',
+        'console.log(fs.readFileSync("/leak.txt", "utf8"));',
+      ].join("\n"));
+
+      const proc = Bun.spawnSync(
+        [SANDBOXRUNNER, "/main.js", `--seed=${link}=/leak.txt`, `--seed=${mainJs}=/`, "--source-type=module"],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      const output = proc.stdout.toString() + proc.stderr.toString();
+      if (proc.exitCode === 0)
+        throw new Error(`SandboxRunner direct symlink seed should fail, exited 0: ${output}`);
+      if (!output.includes("is a symlink (not supported)"))
+        throw new Error(`SandboxRunner direct symlink seed should report the symlink rejection, got: ${output}`);
+      if (output.includes("outside-secret"))
+        throw new Error(`SandboxRunner direct symlink seed leaked host contents, got: ${output}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("SandboxRunner: seed-config from directory rejects nested host symlink (no leak)...");
+{
+  const tmp = makeTmp();
+  try {
+    if (process.platform !== "win32") {
+      const seedDir = join(tmp, "seedDir");
+      mkdirSync(seedDir, { recursive: true });
+      writeFileSync(join(tmp, "outside.txt"), "outside-secret");
+      symlinkSync("../outside.txt", join(seedDir, "leak.txt"));
+      const seed = join(tmp, "seed.json");
+      writeFileSync(seed, JSON.stringify({
+        files: [
+          { from: "./seedDir", to: "/" },
+          {
+            path: "/main.js",
+            text: [
+              'import fs from "fs";',
+              'console.log(fs.readFileSync("/leak.txt", "utf8"));',
+            ].join("\n"),
+          },
+        ],
+      }));
+
+      const proc = Bun.spawnSync(
+        [SANDBOXRUNNER, "/main.js", `--seed-config=${seed}`, "--source-type=module"],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      const output = proc.stdout.toString() + proc.stderr.toString();
+      if (proc.exitCode === 0)
+        throw new Error(`SandboxRunner seed-config symlink should fail, exited 0: ${output}`);
+      if (!output.includes("is a symlink (not supported)"))
+        throw new Error(`SandboxRunner seed-config symlink should report the symlink rejection, got: ${output}`);
+      if (output.includes("outside-secret"))
+        throw new Error(`SandboxRunner seed-config symlink leaked host contents, got: ${output}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("SandboxRunner: trailing slash on a symlinked-directory seed is still rejected (no leak)...");
+{
+  const tmp = makeTmp();
+  try {
+    if (process.platform !== "win32") {
+      const outsideDir = join(tmp, "outsideDir");
+      mkdirSync(outsideDir, { recursive: true });
+      writeFileSync(join(outsideDir, "secret.txt"), "outside-secret");
+      const linkDir = join(tmp, "linkDir");
+      symlinkSync("./outsideDir", linkDir);
+      const mainJs = join(tmp, "main.js");
+      writeFileSync(mainJs, [
+        'import fs from "fs";',
+        'console.log(fs.readFileSync("/secret.txt", "utf8"));',
+      ].join("\n"));
+
+      // A trailing slash must not let POSIX lstat() follow the symlinked leaf.
+      const proc = Bun.spawnSync(
+        [SANDBOXRUNNER, "/main.js", `--seed=${linkDir}/=/`, `--seed=${mainJs}=/`, "--source-type=module"],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      const output = proc.stdout.toString() + proc.stderr.toString();
+      if (proc.exitCode === 0)
+        throw new Error(`SandboxRunner trailing-slash symlink seed should fail, exited 0: ${output}`);
+      if (!output.includes("is a symlink (not supported)"))
+        throw new Error(`SandboxRunner trailing-slash symlink seed should report the symlink rejection, got: ${output}`);
+      if (output.includes("outside-secret"))
+        throw new Error(`SandboxRunner trailing-slash symlink seed leaked host contents, got: ${output}`);
+    }
   } finally {
     clean(tmp);
   }
