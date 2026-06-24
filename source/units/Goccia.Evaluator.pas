@@ -728,6 +728,24 @@ begin
     GC.CollectForMemoryPressure(AProtect);
 end;
 
+procedure QueueInterpreterResultHandoff(const AValue: TGocciaValue); inline;
+var
+  GC: TGarbageCollector;
+begin
+  GC := TGarbageCollector.Instance;
+  if Assigned(GC) and Assigned(AValue) then
+    GC.AddQueuedRoot(AValue);
+end;
+
+procedure ClearInterpreterResultHandoff(const AValue: TGocciaValue); inline;
+var
+  GC: TGarbageCollector;
+begin
+  GC := TGarbageCollector.Instance;
+  if Assigned(GC) and Assigned(AValue) then
+    GC.RemoveQueuedRoot(AValue);
+end;
+
 function VarBindingNameCollectionMode(
   const ANonStrictMode, ACompatibilityNonStrictMode: Boolean):
   TGocciaVarBindingNameCollectionMode;
@@ -3712,7 +3730,8 @@ end;
 function EvaluateCallWithOptionalShortCircuit(
   const ACallExpression: TGocciaCallExpression;
   const AContext: TGocciaEvaluationContext;
-  out AShortCircuited: Boolean): TGocciaValue;
+  out AShortCircuited: Boolean;
+  const AQueueResultHandoff: Boolean = False): TGocciaValue;
 var
   Callee: TGocciaValue;
   Arguments: TGocciaArgumentsCollection;
@@ -3907,6 +3926,8 @@ begin
     MarkSuperConstructorCalled;
     AddValueRoot(Roots, Result);
     CollectInterpreterMemoryPressure(Result);
+    if AQueueResultHandoff then
+      QueueInterpreterResultHandoff(Result);
     Roots.Clear;
     Exit;
   end;
@@ -3932,6 +3953,7 @@ begin
       if MemberExpr.Optional and
          ((ThisValue is TGocciaNullLiteralValue) or (ThisValue is TGocciaUndefinedLiteralValue)) then
       begin
+        AShortCircuited := True;
         Result := TGocciaUndefinedLiteralValue.UndefinedValue;
         Roots.Clear;
         Exit;
@@ -4019,6 +4041,8 @@ begin
       Result := DirectEvalResult;
       AddValueRoot(Roots, Result);
       CollectInterpreterMemoryPressure(Result);
+      if AQueueResultHandoff then
+        QueueInterpreterResultHandoff(Result);
       Exit;
     end;
 
@@ -4070,6 +4094,8 @@ begin
     end;
     AddValueRoot(Roots, Result);
     CollectInterpreterMemoryPressure(Result);
+    if AQueueResultHandoff then
+      QueueInterpreterResultHandoff(Result);
 
   finally
     Arguments.Free;
@@ -4240,14 +4266,22 @@ var
   BoxedValue: TGocciaObjectValue;
   ObjectEvaluated: Boolean;
   ShortCircuited: Boolean;
+  Roots: TGocciaActiveRootFrame;
 begin
+  Roots.Initialize;
+  try
   ObjectEvaluated := False;
 
   if AMemberExpression.ObjectExpr is TGocciaCallExpression then
   begin
     CallExpr := TGocciaCallExpression(AMemberExpression.ObjectExpr);
     Obj := EvaluateCallWithOptionalShortCircuit(CallExpr, AContext,
-      ShortCircuited);
+      ShortCircuited, True);
+    try
+      AddValueRoot(Roots, Obj);
+    finally
+      ClearInterpreterResultHandoff(Obj);
+    end;
     ObjectEvaluated := True;
     if Assigned(AOutObjectValue) then
       AOutObjectValue^ := Obj;
@@ -4264,6 +4298,7 @@ begin
     if not ObjectEvaluated then
     begin
       Obj := EvaluateExpression(AMemberExpression.ObjectExpr, AContext);
+      AddValueRoot(Roots, Obj);
       ObjectEvaluated := True;
       if Assigned(AOutObjectValue) then
         AOutObjectValue^ := Obj;
@@ -4279,6 +4314,7 @@ begin
   if AMemberExpression.ObjectExpr is TGocciaSuperExpression then
   begin
     ThisValue := ResolveSuperThisValue(AContext);
+    AddValueRoot(Roots, ThisValue);
     if Assigned(AOutObjectValue) then
       AOutObjectValue^ := ThisValue;
 
@@ -4286,11 +4322,13 @@ begin
     begin
       PropertyValue := EvaluateExpression(AMemberExpression.PropertyExpression,
         AContext);
+      AddValueRoot(Roots, PropertyValue);
     end
     else
     begin
       PropertyValue := TGocciaStringLiteralValue.Create(
         AMemberExpression.PropertyName);
+      AddValueRoot(Roots, PropertyValue);
     end;
 
     Result := GetSuperProperty(AContext, PropertyValue);
@@ -4300,6 +4338,7 @@ begin
   if not ObjectEvaluated then
   begin
     Obj := EvaluateExpression(AMemberExpression.ObjectExpr, AContext);
+    AddValueRoot(Roots, Obj);
     if Assigned(AOutObjectValue) then
       AOutObjectValue^ := Obj;
   end;
@@ -4310,7 +4349,9 @@ begin
   if AMemberExpression.Computed and Assigned(AMemberExpression.PropertyExpression) then
   begin
     PropertyValue := EvaluateExpression(AMemberExpression.PropertyExpression, AContext);
+    AddValueRoot(Roots, PropertyValue);
     PropertyKey := ToPropertyKey(PropertyValue);
+    AddValueRoot(Roots, PropertyKey);
 
     if PropertyKey is TGocciaSymbolValue then
     begin
@@ -4343,6 +4384,7 @@ begin
       else
       begin
         BoxedValue := Obj.Box;
+        AddValueRoot(Roots, BoxedValue);
         if Assigned(BoxedValue) then
         begin
           Result := BoxedValue.GetSymbolPropertyWithReceiver(
@@ -4367,6 +4409,7 @@ begin
   begin
     // Handle primitive boxing for property access
     BoxedValue := Obj.Box;
+    AddValueRoot(Roots, BoxedValue);
     if Assigned(BoxedValue) then
     begin
       Result := BoxedValue.GetPropertyWithContext(PropertyName, Obj);
@@ -4397,6 +4440,9 @@ begin
     begin
       Result := TGocciaUndefinedLiteralValue.UndefinedValue;
     end;
+  end;
+  finally
+    Roots.Clear;
   end;
 end;
 

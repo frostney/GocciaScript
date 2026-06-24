@@ -74,6 +74,7 @@ type
     function Bench(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function RunBenchmarks(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function RunDeterministicProfile(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    procedure ClearRegisteredBenchmarks;
 
     property OnProgress: TBenchmarkProgressEvent read FOnProgress write FOnProgress;
     property OnBeforeMeasurement: TBenchmarkNotifyEvent read FOnBeforeMeasurement write FOnBeforeMeasurement;
@@ -221,6 +222,14 @@ begin
     BenchCase.OwnsSetupRoot := False;
     BenchCase.OwnsTeardownRoot := False;
   end;
+end;
+
+procedure TGocciaBenchmark.ClearRegisteredBenchmarks;
+begin
+  UnrootRegisteredBenchmarks;
+  FRegisteredBenchmarks.Clear;
+  FRegisteredSuites.Clear;
+  FCurrentSuiteName := '';
 end;
 
 function TGocciaBenchmark.Suite(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -420,6 +429,7 @@ var
   WasGCEnabled: Boolean;
   MeasurementWatermark: Integer;
   RunArgs: TGocciaArgumentsCollection;
+  ActiveRoots: TGocciaActiveRootFrame;
 begin
   Result.Name := ABenchCase.Name;
   Result.SuiteName := ABenchCase.SuiteName;
@@ -434,6 +444,10 @@ begin
   GC := TGarbageCollector.Instance;
   WasGCEnabled := False;
   SetupResult := nil;
+  ActiveRoots.Initialize;
+  ActiveRoots.Add(ABenchCase.RunFunction);
+  ActiveRoots.Add(ABenchCase.SetupFunction);
+  ActiveRoots.Add(ABenchCase.TeardownFunction);
   RunArgs := TGocciaArgumentsCollection.CreateWithCapacity(1);
   try
     if Assigned(ABenchCase.SetupFunction) then
@@ -444,11 +458,20 @@ begin
       WaitForFetchIdle;
       Result.SetupMs := (GetNanoseconds - StartNanoseconds) / 1000000;
 
-      if Assigned(SetupResult) and Assigned(GC) then
-        GC.AddTempRoot(SetupResult);
+      if Assigned(SetupResult) then
+        ActiveRoots.Add(SetupResult);
     end;
 
     try
+      if Assigned(GC) then
+      begin
+        WasGCEnabled := GC.Enabled;
+        if Assigned(FOnBeforeMeasurement) then
+          FOnBeforeMeasurement();
+        GC.Collect;
+        GC.Enabled := False;
+      end;
+
       for K := 1 to WARMUP_ITERATIONS do
         InvokeBenchmarkFunction(ABenchCase.RunFunction, SetupResult, RunArgs);
       WaitForFetchIdle;
@@ -457,7 +480,6 @@ begin
 
       if Assigned(GC) then
       begin
-        WasGCEnabled := GC.Enabled;
         if Assigned(FOnBeforeMeasurement) then
           FOnBeforeMeasurement();
         {$IFDEF GC_DEBUG}
@@ -466,7 +488,6 @@ begin
            BoolToStr(GC.Enabled, 'True', 'False'), GC.ManagedObjectCount, GC.Watermark]));
         {$ENDIF}
         GC.Collect;
-        GC.Enabled := False;
         MeasurementWatermark := GC.Watermark;
         {$IFDEF GC_DEBUG}
         WriteLn(Format('[BENCH] %s > %s: post-collect watermark=%d, objects=%d, iterations=%d',
@@ -560,11 +581,10 @@ begin
     finally
       if Assigned(GC) then
         GC.Enabled := WasGCEnabled;
-      if Assigned(SetupResult) and Assigned(GC) then
-        GC.RemoveTempRoot(SetupResult);
     end;
   finally
     RunArgs.Free;
+    ActiveRoots.Clear;
   end;
 end;
 
@@ -574,6 +594,7 @@ var
   SetupResult: TGocciaValue;
   RunArgs: TGocciaArgumentsCollection;
   GC: TGarbageCollector;
+  ActiveRoots: TGocciaActiveRootFrame;
 begin
   Result.Name := ABenchCase.Name;
   Result.SuiteName := ABenchCase.SuiteName;
@@ -589,6 +610,10 @@ begin
 
   GC := TGarbageCollector.Instance;
   SetupResult := nil;
+  ActiveRoots.Initialize;
+  ActiveRoots.Add(ABenchCase.RunFunction);
+  ActiveRoots.Add(ABenchCase.SetupFunction);
+  ActiveRoots.Add(ABenchCase.TeardownFunction);
   RunArgs := TGocciaArgumentsCollection.CreateWithCapacity(1);
   try
     if Assigned(ABenchCase.SetupFunction) then
@@ -596,25 +621,21 @@ begin
       SetupResult := ABenchCase.SetupFunction.CallNoArgs(
         TGocciaUndefinedLiteralValue.UndefinedValue);
       WaitForFetchIdle;
-      if Assigned(SetupResult) and Assigned(GC) then
-        GC.AddTempRoot(SetupResult);
+      if Assigned(SetupResult) then
+        ActiveRoots.Add(SetupResult);
     end;
 
-    try
-      InvokeBenchmarkFunction(ABenchCase.RunFunction, SetupResult, RunArgs);
-      WaitForFetchIdle;
+    InvokeBenchmarkFunction(ABenchCase.RunFunction, SetupResult, RunArgs);
+    WaitForFetchIdle;
 
-      if Assigned(ABenchCase.TeardownFunction) then
-      begin
-        InvokeBenchmarkFunction(ABenchCase.TeardownFunction, SetupResult, RunArgs);
-        WaitForFetchIdle;
-      end;
-    finally
-      if Assigned(SetupResult) and Assigned(GC) then
-        GC.RemoveTempRoot(SetupResult);
+    if Assigned(ABenchCase.TeardownFunction) then
+    begin
+      InvokeBenchmarkFunction(ABenchCase.TeardownFunction, SetupResult, RunArgs);
+      WaitForFetchIdle;
     end;
   finally
     RunArgs.Free;
+    ActiveRoots.Clear;
   end;
 end;
 
@@ -627,14 +648,16 @@ var
   ResultsArray: TGocciaArrayValue;
   SingleResult: TGocciaObjectValue;
   StartNanoseconds, TotalDurationNanoseconds: Int64;
+  GC: TGarbageCollector;
 begin
   StartNanoseconds := GetNanoseconds;
+  GC := TGarbageCollector.Instance;
 
   ResultsArray := nil;
   try
     ResultsArray := TGocciaArrayValue.Create;
-    if Assigned(TGarbageCollector.Instance) then
-      TGarbageCollector.Instance.AddTempRoot(ResultsArray);
+    if Assigned(GC) then
+      GC.AddTempRoot(ResultsArray);
 
     for I := 0 to FRegisteredBenchmarks.Count - 1 do
     begin
@@ -647,19 +670,26 @@ begin
         BenchResult := RunSingleBenchmark(BenchCase);
 
         SingleResult := TGocciaObjectValue.Create;
-        SingleResult.AssignProperty('name', TGocciaStringLiteralValue.Create(BenchResult.Name));
-        SingleResult.AssignProperty('suite', TGocciaStringLiteralValue.Create(BenchResult.SuiteName));
-        SingleResult.AssignProperty('opsPerSec', TGocciaNumberLiteralValue.Create(BenchResult.OpsPerSec));
-        SingleResult.AssignProperty('meanMs', TGocciaNumberLiteralValue.Create(BenchResult.MeanMs));
-        SingleResult.AssignProperty('iterations', TGocciaNumberLiteralValue.Create(BenchResult.Iterations));
-        SingleResult.AssignProperty('totalMs', TGocciaNumberLiteralValue.Create(BenchResult.TotalMs));
-        SingleResult.AssignProperty('variancePercentage', TGocciaNumberLiteralValue.Create(BenchResult.VariancePercentage));
-        SingleResult.AssignProperty('setupMs', TGocciaNumberLiteralValue.Create(BenchResult.SetupMs));
-        SingleResult.AssignProperty('teardownMs', TGocciaNumberLiteralValue.Create(BenchResult.TeardownMs));
-        SingleResult.AssignProperty('minOpsPerSec', TGocciaNumberLiteralValue.Create(BenchResult.MinOpsPerSec));
-        SingleResult.AssignProperty('maxOpsPerSec', TGocciaNumberLiteralValue.Create(BenchResult.MaxOpsPerSec));
+        if Assigned(GC) then
+          GC.AddTempRoot(SingleResult);
+        try
+          SingleResult.AssignProperty('name', TGocciaStringLiteralValue.Create(BenchResult.Name));
+          SingleResult.AssignProperty('suite', TGocciaStringLiteralValue.Create(BenchResult.SuiteName));
+          SingleResult.AssignProperty('opsPerSec', TGocciaNumberLiteralValue.Create(BenchResult.OpsPerSec));
+          SingleResult.AssignProperty('meanMs', TGocciaNumberLiteralValue.Create(BenchResult.MeanMs));
+          SingleResult.AssignProperty('iterations', TGocciaNumberLiteralValue.Create(BenchResult.Iterations));
+          SingleResult.AssignProperty('totalMs', TGocciaNumberLiteralValue.Create(BenchResult.TotalMs));
+          SingleResult.AssignProperty('variancePercentage', TGocciaNumberLiteralValue.Create(BenchResult.VariancePercentage));
+          SingleResult.AssignProperty('setupMs', TGocciaNumberLiteralValue.Create(BenchResult.SetupMs));
+          SingleResult.AssignProperty('teardownMs', TGocciaNumberLiteralValue.Create(BenchResult.TeardownMs));
+          SingleResult.AssignProperty('minOpsPerSec', TGocciaNumberLiteralValue.Create(BenchResult.MinOpsPerSec));
+          SingleResult.AssignProperty('maxOpsPerSec', TGocciaNumberLiteralValue.Create(BenchResult.MaxOpsPerSec));
 
-        ResultsArray.SetElement(ResultsArray.GetLength, SingleResult);
+          ResultsArray.SetElement(ResultsArray.GetLength, SingleResult);
+        finally
+          if Assigned(GC) then
+            GC.RemoveTempRoot(SingleResult);
+        end;
       except
         on E: Exception do
         begin
@@ -668,11 +698,18 @@ begin
           DiscardFetchCompletions;
 
           SingleResult := TGocciaObjectValue.Create;
-          SingleResult.AssignProperty('name', TGocciaStringLiteralValue.Create(BenchCase.Name));
-          SingleResult.AssignProperty('suite', TGocciaStringLiteralValue.Create(BenchCase.SuiteName));
-          SingleResult.AssignProperty('error', TGocciaStringLiteralValue.Create(E.Message));
+          if Assigned(GC) then
+            GC.AddTempRoot(SingleResult);
+          try
+            SingleResult.AssignProperty('name', TGocciaStringLiteralValue.Create(BenchCase.Name));
+            SingleResult.AssignProperty('suite', TGocciaStringLiteralValue.Create(BenchCase.SuiteName));
+            SingleResult.AssignProperty('error', TGocciaStringLiteralValue.Create(E.Message));
 
-          ResultsArray.SetElement(ResultsArray.GetLength, SingleResult);
+            ResultsArray.SetElement(ResultsArray.GetLength, SingleResult);
+          finally
+            if Assigned(GC) then
+              GC.RemoveTempRoot(SingleResult);
+          end;
         end;
       end;
 
@@ -681,16 +718,23 @@ begin
     TotalDurationNanoseconds := GetNanoseconds - StartNanoseconds;
 
     ResultObj := TGocciaObjectValue.Create;
-    ResultObj.AssignProperty('totalBenchmarks', TGocciaNumberLiteralValue.Create(FRegisteredBenchmarks.Count));
-    ResultObj.AssignProperty('results', ResultsArray);
-    ResultObj.AssignProperty('durationNanoseconds', TGocciaNumberLiteralValue.Create(TotalDurationNanoseconds));
+    if Assigned(GC) then
+      GC.AddTempRoot(ResultObj);
+    try
+      ResultObj.AssignProperty('totalBenchmarks', TGocciaNumberLiteralValue.Create(FRegisteredBenchmarks.Count));
+      ResultObj.AssignProperty('results', ResultsArray);
+      ResultObj.AssignProperty('durationNanoseconds', TGocciaNumberLiteralValue.Create(TotalDurationNanoseconds));
 
-    Result := ResultObj;
+      Result := ResultObj;
+    finally
+      if Assigned(GC) then
+        GC.RemoveTempRoot(ResultObj);
+    end;
   finally
-    if Assigned(TGarbageCollector.Instance) then
+    if Assigned(GC) then
     begin
       if Assigned(ResultsArray) then
-        TGarbageCollector.Instance.RemoveTempRoot(ResultsArray);
+        GC.RemoveTempRoot(ResultsArray);
     end;
   end;
 end;
@@ -704,14 +748,16 @@ var
   ResultsArray: TGocciaArrayValue;
   SingleResult: TGocciaObjectValue;
   StartNanoseconds, TotalDurationNanoseconds: Int64;
+  GC: TGarbageCollector;
 begin
   StartNanoseconds := GetNanoseconds;
+  GC := TGarbageCollector.Instance;
 
   ResultsArray := nil;
   try
     ResultsArray := TGocciaArrayValue.Create;
-    if Assigned(TGarbageCollector.Instance) then
-      TGarbageCollector.Instance.AddTempRoot(ResultsArray);
+    if Assigned(GC) then
+      GC.AddTempRoot(ResultsArray);
 
     for I := 0 to FRegisteredBenchmarks.Count - 1 do
     begin
@@ -724,19 +770,26 @@ begin
         BenchResult := RunSingleBenchmarkDeterministic(BenchCase);
 
         SingleResult := TGocciaObjectValue.Create;
-        SingleResult.AssignProperty('name', TGocciaStringLiteralValue.Create(BenchResult.Name));
-        SingleResult.AssignProperty('suite', TGocciaStringLiteralValue.Create(BenchResult.SuiteName));
-        SingleResult.AssignProperty('opsPerSec', TGocciaNumberLiteralValue.Create(BenchResult.OpsPerSec));
-        SingleResult.AssignProperty('meanMs', TGocciaNumberLiteralValue.Create(BenchResult.MeanMs));
-        SingleResult.AssignProperty('iterations', TGocciaNumberLiteralValue.Create(BenchResult.Iterations));
-        SingleResult.AssignProperty('totalMs', TGocciaNumberLiteralValue.Create(BenchResult.TotalMs));
-        SingleResult.AssignProperty('variancePercentage', TGocciaNumberLiteralValue.Create(BenchResult.VariancePercentage));
-        SingleResult.AssignProperty('setupMs', TGocciaNumberLiteralValue.Create(BenchResult.SetupMs));
-        SingleResult.AssignProperty('teardownMs', TGocciaNumberLiteralValue.Create(BenchResult.TeardownMs));
-        SingleResult.AssignProperty('minOpsPerSec', TGocciaNumberLiteralValue.Create(BenchResult.MinOpsPerSec));
-        SingleResult.AssignProperty('maxOpsPerSec', TGocciaNumberLiteralValue.Create(BenchResult.MaxOpsPerSec));
+        if Assigned(GC) then
+          GC.AddTempRoot(SingleResult);
+        try
+          SingleResult.AssignProperty('name', TGocciaStringLiteralValue.Create(BenchResult.Name));
+          SingleResult.AssignProperty('suite', TGocciaStringLiteralValue.Create(BenchResult.SuiteName));
+          SingleResult.AssignProperty('opsPerSec', TGocciaNumberLiteralValue.Create(BenchResult.OpsPerSec));
+          SingleResult.AssignProperty('meanMs', TGocciaNumberLiteralValue.Create(BenchResult.MeanMs));
+          SingleResult.AssignProperty('iterations', TGocciaNumberLiteralValue.Create(BenchResult.Iterations));
+          SingleResult.AssignProperty('totalMs', TGocciaNumberLiteralValue.Create(BenchResult.TotalMs));
+          SingleResult.AssignProperty('variancePercentage', TGocciaNumberLiteralValue.Create(BenchResult.VariancePercentage));
+          SingleResult.AssignProperty('setupMs', TGocciaNumberLiteralValue.Create(BenchResult.SetupMs));
+          SingleResult.AssignProperty('teardownMs', TGocciaNumberLiteralValue.Create(BenchResult.TeardownMs));
+          SingleResult.AssignProperty('minOpsPerSec', TGocciaNumberLiteralValue.Create(BenchResult.MinOpsPerSec));
+          SingleResult.AssignProperty('maxOpsPerSec', TGocciaNumberLiteralValue.Create(BenchResult.MaxOpsPerSec));
 
-        ResultsArray.SetElement(ResultsArray.GetLength, SingleResult);
+          ResultsArray.SetElement(ResultsArray.GetLength, SingleResult);
+        finally
+          if Assigned(GC) then
+            GC.RemoveTempRoot(SingleResult);
+        end;
       except
         on E: Exception do
         begin
@@ -745,23 +798,37 @@ begin
           DiscardFetchCompletions;
 
           SingleResult := TGocciaObjectValue.Create;
-          SingleResult.AssignProperty('name', TGocciaStringLiteralValue.Create(BenchCase.Name));
-          SingleResult.AssignProperty('suite', TGocciaStringLiteralValue.Create(BenchCase.SuiteName));
-          SingleResult.AssignProperty('error', TGocciaStringLiteralValue.Create(E.Message));
-          ResultsArray.SetElement(ResultsArray.GetLength, SingleResult);
+          if Assigned(GC) then
+            GC.AddTempRoot(SingleResult);
+          try
+            SingleResult.AssignProperty('name', TGocciaStringLiteralValue.Create(BenchCase.Name));
+            SingleResult.AssignProperty('suite', TGocciaStringLiteralValue.Create(BenchCase.SuiteName));
+            SingleResult.AssignProperty('error', TGocciaStringLiteralValue.Create(E.Message));
+            ResultsArray.SetElement(ResultsArray.GetLength, SingleResult);
+          finally
+            if Assigned(GC) then
+              GC.RemoveTempRoot(SingleResult);
+          end;
         end;
       end;
     end;
 
     TotalDurationNanoseconds := GetNanoseconds - StartNanoseconds;
     ResultObj := TGocciaObjectValue.Create;
-    ResultObj.AssignProperty('totalBenchmarks', TGocciaNumberLiteralValue.Create(FRegisteredBenchmarks.Count));
-    ResultObj.AssignProperty('durationNanoseconds', TGocciaNumberLiteralValue.Create(TotalDurationNanoseconds));
-    ResultObj.AssignProperty('results', ResultsArray);
-    Result := ResultObj;
+    if Assigned(GC) then
+      GC.AddTempRoot(ResultObj);
+    try
+      ResultObj.AssignProperty('totalBenchmarks', TGocciaNumberLiteralValue.Create(FRegisteredBenchmarks.Count));
+      ResultObj.AssignProperty('durationNanoseconds', TGocciaNumberLiteralValue.Create(TotalDurationNanoseconds));
+      ResultObj.AssignProperty('results', ResultsArray);
+      Result := ResultObj;
+    finally
+      if Assigned(GC) then
+        GC.RemoveTempRoot(ResultObj);
+    end;
   finally
-    if Assigned(TGarbageCollector.Instance) and Assigned(ResultsArray) then
-      TGarbageCollector.Instance.RemoveTempRoot(ResultsArray);
+    if Assigned(GC) and Assigned(ResultsArray) then
+      GC.RemoveTempRoot(ResultsArray);
   end;
 end;
 

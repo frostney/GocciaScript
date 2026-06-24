@@ -59,6 +59,12 @@ describe('Optional Chaining', () => {
     expect(calls).toBe(0);
   });
 
+  test('short-circuits following member access after optional method call on nullish base', () => {
+    const obj = null;
+
+    expect(obj?.method().prop).toBe(undefined);
+  });
+
   test('evaluates the optional chain base only once', () => {
     let reads = 0;
     const holder = {
