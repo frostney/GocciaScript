@@ -1,4 +1,4 @@
-# 0070 - Reject symlinks in sandbox seed imports
+# 0071 - Reject symlinks in sandbox seed imports
 
 ## Status
 
