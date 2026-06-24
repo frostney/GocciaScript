@@ -8566,7 +8566,7 @@ begin
         if ATryAsync then
           Exit(TGocciaVMAsyncFromSyncIteratorValue.Create(Self, IteratorObject,
             NextMethod));
-        Exit(TGocciaGenericIteratorValue.Create(IteratorObject, NextMethod));
+        Exit(CreateRootedGenericIterator(IteratorObject, NextMethod));
       end;
     end;
   end;

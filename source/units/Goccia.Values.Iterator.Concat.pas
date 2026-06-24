@@ -39,10 +39,31 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.GarbageCollector,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.Iterator.Concrete,
   Goccia.Values.Iterator.Generic;
+
+function AddTempRootIfNeeded(const AValue: TGocciaValue): Boolean;
+var
+  GC: TGarbageCollector;
+begin
+  GC := TGarbageCollector.Instance;
+  Result := Assigned(GC) and Assigned(AValue) and not GC.IsTempRoot(AValue);
+  if Result then
+    GC.AddTempRoot(AValue);
+end;
+
+procedure RemoveTempRootIfNeeded(
+  const AValue: TGocciaValue; const AWasRooted: Boolean);
+var
+  GC: TGarbageCollector;
+begin
+  GC := TGarbageCollector.Instance;
+  if AWasRooted and Assigned(GC) then
+    GC.RemoveTempRoot(AValue);
+end;
 
 { TGocciaConcatIteratorValue }
 
@@ -63,25 +84,55 @@ function TGocciaConcatIteratorValue.OpenNextIterator: Boolean;
 var
   CallArgs: TGocciaArgumentsCollection;
   IteratorObj: TGocciaValue;
+  GC: TGarbageCollector;
+  IterableWasRooted, MethodWasRooted, IteratorWasRooted: Boolean;
+
+  function AddRootIfNeeded(const ARootValue: TGocciaValue): Boolean;
+  begin
+    Result := Assigned(GC) and Assigned(ARootValue) and
+      not GC.IsTempRoot(ARootValue);
+    if Result then
+      GC.AddTempRoot(ARootValue);
+  end;
+
+  procedure RemoveRootIfNeeded(const ARootValue: TGocciaValue;
+    const AWasRooted: Boolean);
+  begin
+    if AWasRooted then
+      GC.RemoveTempRoot(ARootValue);
+  end;
+
 begin
   Result := False;
   if FCurrentIndex >= Length(FIterables) then
     Exit;
 
+  GC := TGarbageCollector.Instance;
+  IterableWasRooted := AddRootIfNeeded(FIterables[FCurrentIndex].Iterable);
   if not Assigned(FIterables[FCurrentIndex].IteratorMethod) then
   begin
-    // String iterable — create string iterator directly
-    FCurrentIterator := TGocciaStringIteratorValue.Create(FIterables[FCurrentIndex].Iterable);
+    try
+      // String iterable — create string iterator directly
+      FCurrentIterator := TGocciaStringIteratorValue.Create(FIterables[FCurrentIndex].Iterable);
+    finally
+      RemoveRootIfNeeded(FIterables[FCurrentIndex].Iterable, IterableWasRooted);
+    end;
   end
   else
   begin
-    // TC39 Iterator Sequencing §1 step 3.a.i: Call(method, iterable)
-    CallArgs := TGocciaArgumentsCollection.Create;
+    MethodWasRooted := AddRootIfNeeded(FIterables[FCurrentIndex].IteratorMethod);
     try
-      IteratorObj := TGocciaFunctionBase(FIterables[FCurrentIndex].IteratorMethod).Call(
-        CallArgs, FIterables[FCurrentIndex].Iterable);
+      // TC39 Iterator Sequencing §1 step 3.a.i: Call(method, iterable)
+      CallArgs := TGocciaArgumentsCollection.Create;
+      try
+        IteratorObj := TGocciaFunctionBase(FIterables[FCurrentIndex].IteratorMethod).Call(
+          CallArgs, FIterables[FCurrentIndex].Iterable);
+      finally
+        CallArgs.Free;
+      end;
     finally
-      CallArgs.Free;
+      RemoveRootIfNeeded(FIterables[FCurrentIndex].IteratorMethod, MethodWasRooted);
+      RemoveRootIfNeeded(FIterables[FCurrentIndex].Iterable, IterableWasRooted);
     end;
 
     // TC39 Iterator Sequencing §1 step 3.a.ii: If iter is not an Object, throw TypeError
@@ -91,7 +142,14 @@ begin
     if IteratorObj is TGocciaIteratorValue then
       FCurrentIterator := TGocciaIteratorValue(IteratorObj)
     else
-      FCurrentIterator := TGocciaGenericIteratorValue.Create(IteratorObj);
+    begin
+      IteratorWasRooted := AddRootIfNeeded(IteratorObj);
+      try
+        FCurrentIterator := CreateRootedGenericIterator(IteratorObj);
+      finally
+        RemoveRootIfNeeded(IteratorObj, IteratorWasRooted);
+      end;
+    end;
   end;
 
   Inc(FCurrentIndex);
@@ -102,6 +160,8 @@ end;
 function TGocciaConcatIteratorValue.DoAdvanceNext: TGocciaObjectValue;
 var
   InnerResult: TGocciaObjectValue;
+  InnerValue: TGocciaValue;
+  ValueWasRooted: Boolean;
 begin
   repeat
     if Assigned(FCurrentIterator) then
@@ -115,9 +175,15 @@ begin
         FDone := True;
         raise;
       end;
-      if not TGocciaBooleanLiteralValue(InnerResult.GetProperty(PROP_DONE)).Value then
+      if not IteratorResultDone(InnerResult) then
       begin
-        Result := CreateIteratorResult(InnerResult.GetProperty(PROP_VALUE), False);
+        InnerValue := IteratorResultValue(InnerResult);
+        ValueWasRooted := AddTempRootIfNeeded(InnerValue);
+        try
+          Result := CreateIteratorResult(InnerValue, False);
+        finally
+          RemoveTempRootIfNeeded(InnerValue, ValueWasRooted);
+        end;
         Exit;
       end;
       FCurrentIterator := nil;

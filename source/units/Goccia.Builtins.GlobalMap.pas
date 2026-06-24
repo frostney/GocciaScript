@@ -160,7 +160,7 @@ begin
           NextMethod := IteratorObj.GetProperty(PROP_NEXT);
           if Assigned(NextMethod) and not (NextMethod is TGocciaUndefinedLiteralValue) and NextMethod.IsCallable then
             // Capture-once per ES2024 §7.4.2 GetIteratorDirect.
-            Iterator := TGocciaGenericIteratorValue.Create(IteratorObj, NextMethod)
+            Iterator := CreateRootedGenericIterator(IteratorObj, NextMethod)
           else
             Iterator := nil;
         end
