@@ -16,6 +16,11 @@ describe("Number constructor", () => {
     expect(n).toBe(42);
   });
 
+  test("Number() trims ECMAScript whitespace before parsing +Infinity", () => {
+    expect(Number("\uFEFF+Infinity\u00A0")).toBe(Infinity);
+    expect(+"\uFEFF+Infinity\u00A0").toBe(Infinity);
+  });
+
   test("new Number() instanceof Number", () => {
     const n = new Number(42);
     expect(n instanceof Number).toBe(true);

@@ -2768,15 +2768,89 @@ begin
 end;
 
 function DateTimeZeroDigit(const ANumberingSystem: string): string;
+var
+  CodePoint: Cardinal;
 begin
-  if ANumberingSystem = 'arab' then
-    Result := UTF8FromCodePoint($0660)
-  else if ANumberingSystem = 'deva' then
-    Result := UTF8FromCodePoint($0966)
-  else if ANumberingSystem = 'hanidec' then
-    Result := UTF8FromCodePoint($3007)
-  else
-    Result := '0';
+  if ANumberingSystem = 'adlm' then CodePoint := $1E950
+  else if ANumberingSystem = 'ahom' then CodePoint := $11730
+  else if ANumberingSystem = 'arab' then CodePoint := $660
+  else if ANumberingSystem = 'arabext' then CodePoint := $6F0
+  else if ANumberingSystem = 'bali' then CodePoint := $1B50
+  else if ANumberingSystem = 'beng' then CodePoint := $9E6
+  else if ANumberingSystem = 'bhks' then CodePoint := $11C50
+  else if ANumberingSystem = 'brah' then CodePoint := $11066
+  else if ANumberingSystem = 'cakm' then CodePoint := $11136
+  else if ANumberingSystem = 'cham' then CodePoint := $AA50
+  else if ANumberingSystem = 'deva' then CodePoint := $966
+  else if ANumberingSystem = 'diak' then CodePoint := $11950
+  else if ANumberingSystem = 'fullwide' then CodePoint := $FF10
+  else if ANumberingSystem = 'gara' then CodePoint := $10D40
+  else if ANumberingSystem = 'gong' then CodePoint := $11DA0
+  else if ANumberingSystem = 'gonm' then CodePoint := $11D50
+  else if ANumberingSystem = 'gujr' then CodePoint := $AE6
+  else if ANumberingSystem = 'gukh' then CodePoint := $16130
+  else if ANumberingSystem = 'guru' then CodePoint := $A66
+  else if ANumberingSystem = 'hanidec' then CodePoint := $3007
+  else if ANumberingSystem = 'hmng' then CodePoint := $16B50
+  else if ANumberingSystem = 'hmnp' then CodePoint := $1E140
+  else if ANumberingSystem = 'java' then CodePoint := $A9D0
+  else if ANumberingSystem = 'kali' then CodePoint := $A900
+  else if ANumberingSystem = 'kawi' then CodePoint := $11F50
+  else if ANumberingSystem = 'khmr' then CodePoint := $17E0
+  else if ANumberingSystem = 'knda' then CodePoint := $CE6
+  else if ANumberingSystem = 'krai' then CodePoint := $16D70
+  else if ANumberingSystem = 'lana' then CodePoint := $1A80
+  else if ANumberingSystem = 'lanatham' then CodePoint := $1A90
+  else if ANumberingSystem = 'laoo' then CodePoint := $ED0
+  else if ANumberingSystem = 'latn' then CodePoint := $30
+  else if ANumberingSystem = 'lepc' then CodePoint := $1C40
+  else if ANumberingSystem = 'limb' then CodePoint := $1946
+  else if ANumberingSystem = 'mathbold' then CodePoint := $1D7CE
+  else if ANumberingSystem = 'mathdbl' then CodePoint := $1D7D8
+  else if ANumberingSystem = 'mathmono' then CodePoint := $1D7F6
+  else if ANumberingSystem = 'mathsanb' then CodePoint := $1D7EC
+  else if ANumberingSystem = 'mathsans' then CodePoint := $1D7E2
+  else if ANumberingSystem = 'mlym' then CodePoint := $D66
+  else if ANumberingSystem = 'modi' then CodePoint := $11650
+  else if ANumberingSystem = 'mong' then CodePoint := $1810
+  else if ANumberingSystem = 'mroo' then CodePoint := $16A60
+  else if ANumberingSystem = 'mtei' then CodePoint := $ABF0
+  else if ANumberingSystem = 'mymr' then CodePoint := $1040
+  else if ANumberingSystem = 'mymrepka' then CodePoint := $116DA
+  else if ANumberingSystem = 'mymrpao' then CodePoint := $116D0
+  else if ANumberingSystem = 'mymrshan' then CodePoint := $1090
+  else if ANumberingSystem = 'mymrtlng' then CodePoint := $A9F0
+  else if ANumberingSystem = 'nagm' then CodePoint := $1E4F0
+  else if ANumberingSystem = 'newa' then CodePoint := $11450
+  else if ANumberingSystem = 'nkoo' then CodePoint := $7C0
+  else if ANumberingSystem = 'olck' then CodePoint := $1C50
+  else if ANumberingSystem = 'onao' then CodePoint := $1E5F1
+  else if ANumberingSystem = 'orya' then CodePoint := $B66
+  else if ANumberingSystem = 'osma' then CodePoint := $104A0
+  else if ANumberingSystem = 'outlined' then CodePoint := $1CCF0
+  else if ANumberingSystem = 'rohg' then CodePoint := $10D30
+  else if ANumberingSystem = 'saur' then CodePoint := $A8D0
+  else if ANumberingSystem = 'segment' then CodePoint := $1FBF0
+  else if ANumberingSystem = 'shrd' then CodePoint := $111D0
+  else if ANumberingSystem = 'sind' then CodePoint := $112F0
+  else if ANumberingSystem = 'sinh' then CodePoint := $DE6
+  else if ANumberingSystem = 'sora' then CodePoint := $110F0
+  else if ANumberingSystem = 'sund' then CodePoint := $1BB0
+  else if ANumberingSystem = 'sunu' then CodePoint := $11BF0
+  else if ANumberingSystem = 'takr' then CodePoint := $116C0
+  else if ANumberingSystem = 'talu' then CodePoint := $19D0
+  else if ANumberingSystem = 'tamldec' then CodePoint := $BE6
+  else if ANumberingSystem = 'telu' then CodePoint := $C66
+  else if ANumberingSystem = 'thai' then CodePoint := $E50
+  else if ANumberingSystem = 'tibt' then CodePoint := $F20
+  else if ANumberingSystem = 'tirh' then CodePoint := $114D0
+  else if ANumberingSystem = 'tnsa' then CodePoint := $16AC0
+  else if ANumberingSystem = 'tols' then CodePoint := $11DE0
+  else if ANumberingSystem = 'vaii' then CodePoint := $A620
+  else if ANumberingSystem = 'wara' then CodePoint := $118E0
+  else if ANumberingSystem = 'wcho' then CodePoint := $1E2F0
+  else CodePoint := $30;
+  Result := UTF8FromCodePoint(CodePoint);
 end;
 
 function PadTwoDigitHourFormatted(const AFormatted: string;

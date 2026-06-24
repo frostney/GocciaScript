@@ -1183,14 +1183,19 @@ function TGocciaIntlBuiltin.PluralRulesConstructorFn(const AArgs: TGocciaArgumen
 var
   Locale: string;
   Options: TGocciaObjectValue;
+  OptionsArg: TGocciaValue;
   RequestedLocales: TStringArray;
 begin
   RequireIntlConstructCall(AThisValue, 'PluralRules');
   RequestedLocales := CanonicalizeLocaleListFromValue(AArgs.GetElement(0));
   Locale := ResolveRequestedLocale(RequestedLocales);
   Options := nil;
-  if (AArgs.Length >= 2) and (AArgs.GetElement(1) is TGocciaObjectValue) then
-    Options := TGocciaObjectValue(AArgs.GetElement(1));
+  if AArgs.Length >= 2 then
+  begin
+    OptionsArg := AArgs.GetElement(1);
+    if not IsUndefinedIntlValue(OptionsArg) then
+      Options := ToObject(OptionsArg);
+  end;
   Result := TGocciaIntlPluralRulesValue.Create(Locale, Options);
 end;
 

@@ -32,6 +32,27 @@ describe.runIf(isIntl)("Intl.DateTimeFormat.prototype.formatToParts", () => {
     expect(() => dtf.formatToParts(NaN)).toThrow(RangeError);
   });
 
+  test("formatToParts pads two-digit hours with localized zero digits", () => {
+    const cases = [
+      ["arabext", "\u06f0\u06f0"],
+      ["beng", "\u09e6\u09e6"],
+      ["fullwide", "\uff10\uff10"],
+    ];
+
+    for (const [numberingSystem, expectedHour] of cases) {
+      const formatter = new Intl.DateTimeFormat("en-US", {
+        numberingSystem,
+        timeZone: "UTC",
+        hour: "2-digit",
+        minute: "2-digit",
+        hourCycle: "h23",
+      });
+      const hour = formatter.formatToParts(0)
+        .find((part) => part.type === "hour").value;
+      expect(hour).toBe(expectedHour);
+    }
+  });
+
   test("formatToParts normalizes platform-dependent era data", () => {
     const makeDate = (year) => {
       const date = new Date(0);

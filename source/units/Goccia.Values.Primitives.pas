@@ -873,7 +873,7 @@ var
   HasNonZeroDigit: Boolean;
   IsNegativeDecimal: Boolean;
 begin
-  Trimmed := Trim(FValue);
+  Trimmed := TrimECMAScriptWhitespace(FValue);
 
   // Empty string (after trim) converts to 0
   if Trimmed = '' then

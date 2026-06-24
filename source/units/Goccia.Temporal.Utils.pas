@@ -764,7 +764,7 @@ function TryStripTemporalAnnotationsForTime(const AStr: string; out AStripped: s
 var
   Value: string;
   BracketStart, BracketEnd, EqualsPos: Integer;
-  Annotation, Key: string;
+  Annotation, Key, CalendarValue, CanonicalCalendar: string;
   Critical: Boolean;
   TimeZoneSeen: Boolean;
   CalendarCount: Integer;
@@ -801,6 +801,11 @@ begin
         Exit;
       if Key = 'u-ca' then
       begin
+        CalendarValue := Copy(Annotation, EqualsPos + 1,
+          Length(Annotation) - EqualsPos);
+        CanonicalCalendar := CanonicalizeTemporalCalendarIdentifier(CalendarValue);
+        if CanonicalCalendar = '' then
+          Exit;
         Inc(CalendarCount);
         if Critical then
           CalendarCriticalSeen := True;
@@ -1485,10 +1490,9 @@ begin
 
   // Parse time portion from Rest
   TimePart := Rest;
-  if Length(TimePart) > 0 then
-  begin
-    if not TryParseISOTime(TimePart, ATime) then Exit;
-  end;
+  if Length(TimePart) = 0 then
+    Exit;
+  if not TryParseISOTime(TimePart, ATime) then Exit;
 
   Result := HasExplicitOffset;
 end;
