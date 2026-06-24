@@ -2,6 +2,20 @@ program GocciaTestRunner;
 
 {$I Goccia.inc}
 
+// Run the full JavaScript test suite with access to the entire 4 GB user
+// address space available to a 32-bit process on 64-bit Windows. The runner
+// builds a fresh engine per file and, on worker threads, keeps automatic GC
+// disabled and retains each engine's object graph until the thread finishes
+// the batch (the deliberate "bulk reclaim at shutdown" strategy). The full
+// suite therefore peaks near ~2 GB on i386-win32 — already at the default
+// 2 GB per-process limit on main, and over it once the suite grows — which
+// surfaces as "Out of memory"/"Access violation" failures. Marking the
+// binary large-address-aware lifts that ceiling to 4 GB. 64-bit Windows is
+// already large-address-aware, so this only applies to the 32-bit build.
+{$IF DEFINED(MSWINDOWS) AND DEFINED(CPU32)}
+  {$SETPEFLAGS $20} // IMAGE_FILE_LARGE_ADDRESS_AWARE
+{$ENDIF}
+
 uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
   Classes,
