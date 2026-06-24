@@ -61,127 +61,41 @@ console.log(`Your order total: $${total.toFixed(2)}`);
 ### Build
 
 ```bash
-# Dev build of everything (default — debug info, heap trace, checks)
+# Dev build of everything
 ./build.pas
 
-# Production build (O4, stripped, smart-linked)
+# Production build
 ./build.pas --prod
 
-# Build specific components
-./build.pas loader           # Dev build of Script Loader
-./build.pas loaderbare       # Dev build of Bare Script Loader
-./build.pas sandboxrunner    # Dev build of Sandbox Runner
-./build.pas --prod loader    # Production build of Script Loader
-./build.pas repl             # Interactive REPL
-./build.pas testrunner       # Test runner
-./build.pas benchmarkrunner  # Benchmark runner
+# Build the script loader only
+./build.pas loader
 ```
+
+See [Build System](docs/build-system.md#build-commands) for build modes,
+targets, clean builds, and troubleshooting.
 
 ### Run a Script
 
 ```bash
 ./build.pas loader && ./build/GocciaScriptLoader example.js
-printf "const x = 2 + 2; x;" | ./build/GocciaScriptLoader
+printf "const x = 2 + 2; x;" | ./build/GocciaScriptLoader --print
 ```
 
-By default both loaders are silent about the script's last evaluated value (matching `node script.js` / `bun script.js` / `deno run script.js` / `qjs script.js`). Pass `--print` to emit the bare value on its own line, including `undefined`. This mirrors `node -p` / `bun --print` / `deno eval -p`.
-
-```bash
-printf "2 + 2;" | ./build/GocciaScriptLoader --print            # prints "4" after the timing banner
-printf "undefined;" | ./build/GocciaScriptLoader --print        # prints "undefined"
-```
-
-`GocciaScriptLoader` keeps its human-readable timing banner regardless; `--print` only controls the final value line. For programmatic consumers, `--output=json` always carries the result in the `result` field (no `--print` needed).
-
-For a smaller runtime surface without the loader runtime profile (console, JSON5/TOML/YAML, fetch, SemVer, etc.), build and run `GocciaScriptLoaderBare`:
-
-```bash
-./build.pas loaderbare
-printf "Goccia.version;" | ./build/GocciaScriptLoaderBare --print
-printf "print('hello from bare');" | ./build/GocciaScriptLoaderBare
-./build/GocciaScriptLoaderBare example.js
-```
-
-`GocciaScriptLoaderBare` accepts an explicit entry file, `-`, or no positional argument for stdin. It reads source text in the CLI host and passes it to `TGocciaEngine`; it exposes a CLI-local `print(...args)` helper for stdout, but does not attach `TGocciaRuntime`. Like `GocciaScriptLoader`, it is silent by default — pass `--print` to emit the script's last value (the explicit `print(...)` helper is unaffected by `--print`).
-
-Script files may start with a Unix shebang line like `#!/usr/bin/env goccia`; GocciaScript ignores that first line during lexing.
-
-Files ending in `.mjs` are loaded as module source by default, matching JavaScript runtime convention. Use `--source-type=script` to override that inference, or `--source-type=module` / `"source-type": "module"` to force module source for other extensions.
-
-### Run in a Sandbox
-
-`GocciaSandboxRunner` executes an entry path inside an isolated virtual filesystem. Host files are imported only through explicit seed baselines; they are snapshots, not live mounts.
-
-```bash
-./build.pas sandboxrunner
-./build/GocciaSandboxRunner /main.js --seed=./sandbox-root=/ --source-type=module
-./build/GocciaSandboxRunner /main.js --seed-config=seed.json --diff --diff-output=changes.json
-./build/GocciaSandboxRunner /main.js --seed-config=seed.json --mode=bytecode
-```
-
-Seed JSON uses a top-level `files` array. `{ "from": "./host", "to": "/" }` imports a host file or directory relative to the seed config file, `{ "path": "/main.js", "text": "..." }` defines UTF-8 text inline, and `{ "path": "/data.bin", "base64": "AQID" }` defines binary content. Scripts import sandbox capabilities explicitly:
-
-```javascript
-import fs from "fs";
-import { $, runScript } from "goccia";
-
-await fs.promises.writeFile("/hello.txt", "hello");
-console.log(await $`cat /hello.txt`.text());
-runScript("/other.js");
-```
-
-Nested execution shares the current virtual filesystem by default. To run a child script inside its own virtual filesystem, seed it from parent sandbox paths:
-
-```javascript
-const child = runScript("/worker.js", {
-  sandbox: true,
-  seed: ["/worker.js", { from: "/input", to: "/input" }],
-  diff: true,
-});
-console.log(child.diff);
-```
+By default, both loaders are silent about the script's last evaluated value.
+Pass `--print` to emit it; use `--output=json` for programmatic consumers. See
+[Build System](docs/build-system.md#compile-and-run) for loader options,
+bytecode mode, JSON output, sandbox execution, import maps, config files, and
+resource limits.
 
 ### Run via Bytecode
 
-GocciaScript includes bytecode execution. The public bytecode artifact is `.gbc`.
+GocciaScript includes bytecode execution, and `GocciaBundler` compiles source to
+the public `.gbc` artifact.
 
 ```bash
-# Compile and execute via bytecode
 ./build/GocciaScriptLoader example.js --mode=bytecode
-printf "const x = 2 + 2; x;" | ./build/GocciaScriptLoader --mode=bytecode --print
-
-# Compile to .gbc bytecode file (no execution) — use GocciaBundler
 ./build/GocciaBundler example.js
-./build/GocciaBundler example.js --output=out.gbc
-
-# Load and execute a pre-compiled .gbc file
 ./build/GocciaScriptLoader example.gbc
-
-# Emit structured JSON for programmatic consumers
-printf "console.log('hi'); 2 + 2;" | ./build/GocciaScriptLoader --output=json
-# The JSON envelope includes build metadata, aggregate stdout/stderr,
-# formatted output lines, timing, memory, workers, and per-input files[].
-# Use --output=compact-json for a smaller envelope: build, memory, stdout, and
-# stderr are omitted; the normalized `output` array and structured `error`
-# are preserved.
-printf "console.log('hi'); 2 + 2;" | ./build/GocciaScriptLoader --output=compact-json
-
-# The same `compact-json` value is accepted by GocciaTestRunner (via --output)
-# and GocciaBenchmarkRunner (via --format) for the same envelope.
-./build/GocciaTestRunner tests --output=compact-json
-./build/GocciaBenchmarkRunner benchmarks --format=compact-json --output=out.json
-
-# Inject globals from the CLI
-printf "x + y;" | ./build/GocciaScriptLoader --global x=10 --global y=20 --print
-printf "name;" | ./build/GocciaScriptLoader --globals=context.json --output=json
-printf "name;" | ./build/GocciaScriptLoader --globals=context.json5 --output=json
-printf "name;" | ./build/GocciaScriptLoader --globals=context.toml --output=json
-printf "name;" | ./build/GocciaScriptLoader --globals=context.yaml --output=json
-# `--global name=value` parses inline values as JSON only; `--globals=file` accepts JSON, JSON5, TOML, or YAML by file extension.
-# Injected globals can override earlier injected values, but not built-in globals like console
-
-# Abort long-running scripts
-printf "const f = () => f(); f();" | ./build/GocciaScriptLoader --timeout=100
 ```
 
 See [Bytecode VM](docs/bytecode-vm.md) for the current bytecode executor architecture.
@@ -197,41 +111,18 @@ See [Bytecode VM](docs/bytecode-vm.md) for the current bytecode executor archite
 GocciaScript has 8000+ JavaScript unit tests covering language features, built-in objects, and edge cases.
 
 ```bash
-# Run all tests (GocciaScript TestRunner, all executors)
 ./build.pas testrunner
 ./build/GocciaTestRunner tests
 ./build/GocciaTestRunner tests --mode=bytecode
-
-# Run a specific test
-./build.pas testrunner && ./build/GocciaTestRunner tests/language/expressions/addition/basic-addition.js
-
-# Run tests with 4 parallel workers
-./build.pas testrunner
-./build/GocciaTestRunner tests --jobs=4
-./build/GocciaTestRunner tests --mode=bytecode --jobs=4
-
-# Run tests in standard JavaScript (Vitest) for cross-compatibility
-npx vitest run
 ```
+
+See [Testing](docs/testing.md) for test organization and [Build System](docs/build-system.md#compile-and-test) for runner options.
 
 ### Run Benchmarks
 
 ```bash
-# Run all benchmarks
 ./build.pas benchmarkrunner && ./build/GocciaBenchmarkRunner benchmarks
-
-# Run a specific benchmark
 ./build/GocciaBenchmarkRunner benchmarks/fibonacci.js
-
-# Run a benchmark from stdin
-printf 'suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n' | ./build/GocciaBenchmarkRunner
-
-# Run benchmarks sequentially (single worker)
-./build/GocciaBenchmarkRunner benchmarks --jobs=1
-
-# Export as JSON or CSV
-./build/GocciaBenchmarkRunner benchmarks --format=json --output=results.json
-./build/GocciaBenchmarkRunner benchmarks --format=csv --output=results.csv
 ```
 
 The benchmark runner auto-calibrates iterations per benchmark, reports ops/sec with variance (CV%) and engine-level timing breakdown (lex/parse/execute). Output formats: `console` (default), `text`, `csv`, `json`, `compact-json` (the same envelope as `json` without `build`, `memory`, `stdout`, or `stderr`). Calibration and measurement parameters are configurable via [environment variables](docs/benchmarks.md#configuring-benchmark-parameters).
