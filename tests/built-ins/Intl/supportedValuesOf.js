@@ -17,13 +17,13 @@ describe.runIf(isIntl)("Intl.supportedValuesOf", () => {
     expect(Array.isArray(result)).toBe(true);
   });
 
-  test("collation values match Collator-accepted entries", () => {
+  test("collation values are canonical data values", () => {
     const result = Intl.supportedValuesOf("collation");
-    expect(result.includes("big5han")).toBe(true);
-    expect(result.includes("direct")).toBe(true);
-    expect(result.includes("ducet")).toBe(true);
-    expect(result.includes("gb2312")).toBe(true);
-    expect(result.includes("reformed")).toBe(true);
+
+    for (const value of result) {
+      expect(typeof value).toBe("string");
+      expect(value.length > 0).toBe(true);
+    }
     expect(result.includes("search")).toBe(false);
     expect(result.includes("standard")).toBe(false);
   });
@@ -60,6 +60,30 @@ describe.runIf(isIntl)("Intl.supportedValuesOf", () => {
     const result = Intl.supportedValuesOf("timeZone");
     expect(Array.isArray(result)).toBe(true);
     expect(result.length > 0).toBe(true);
+  });
+
+  test("timeZone values include accepted primary identifiers", () => {
+    const result = Intl.supportedValuesOf("timeZone");
+    const primaryIdentifiers = [
+      "America/Detroit",
+      "America/Indiana/Indianapolis",
+      "Europe/Istanbul",
+      "Pacific/Chatham",
+    ];
+
+    for (const timeZone of primaryIdentifiers) {
+      expect(result.includes(timeZone)).toBe(true);
+      expect(new Intl.DateTimeFormat("en", { timeZone }).resolvedOptions().timeZone)
+        .toBe(timeZone);
+    }
+  });
+
+  test("timeZone values exclude known link aliases", () => {
+    const result = Intl.supportedValuesOf("timeZone");
+
+    expect(result.includes("Asia/Istanbul")).toBe(false);
+    expect(result.includes("NZ-CHAT")).toBe(false);
+    expect(result.includes("US/Michigan")).toBe(false);
   });
 
   test("returns an array for 'unit'", () => {

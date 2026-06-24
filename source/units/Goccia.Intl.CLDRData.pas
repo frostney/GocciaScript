@@ -323,7 +323,9 @@ end;
 
 function TryGetLikelySubtags(const ATag: string; out AMaximized: string): Boolean;
 begin
-  Result := TryLookupSimple('likely-subtags', LowerCase(ATag), AMaximized);
+  Result := TryLookupSimple('likely-subtags', ATag, AMaximized);
+  if not Result then
+    Result := TryLookupSimple('likely-subtags', LowerCase(ATag), AMaximized);
 end;
 
 function TryGetLanguageAlias(const ATag: string; out AReplacement: string): Boolean;

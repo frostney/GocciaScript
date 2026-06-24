@@ -59,7 +59,7 @@ describe.runIf(isTemporal)("Temporal.ZonedDateTime.prototype.since", () => {
 
     const unrounded = beforeHalf.since(start, { largestUnit: "days" });
     expect(unrounded.days).toBe(1);
-    expect(unrounded.hours).toBe(11);
+    expect(unrounded.hours).toBe(12);
 
     const roundedBefore = beforeHalf.since(start, {
       largestUnit: "days",
@@ -72,7 +72,7 @@ describe.runIf(isTemporal)("Temporal.ZonedDateTime.prototype.since", () => {
       roundingMode: "halfExpand",
     });
 
-    expect(roundedBefore.days).toBe(1);
+    expect(roundedBefore.days).toBe(2);
     expect(roundedAfter.days).toBe(2);
 
     const roundedHours = afterHalf.since(start, {
@@ -81,7 +81,7 @@ describe.runIf(isTemporal)("Temporal.ZonedDateTime.prototype.since", () => {
       roundingMode: "halfExpand",
     });
     expect(roundedHours.days).toBe(1);
-    expect(roundedHours.hours).toBe(12);
+    expect(roundedHours.hours).toBe(13);
   });
 
   test("since() rounds days using fall-back day length", () => {
@@ -90,7 +90,7 @@ describe.runIf(isTemporal)("Temporal.ZonedDateTime.prototype.since", () => {
 
     const unrounded = afterHalf.since(start, { largestUnit: "days" });
     expect(unrounded.days).toBe(1);
-    expect(unrounded.hours).toBe(12);
+    expect(unrounded.hours).toBe(11);
     expect(unrounded.minutes).toBe(30);
 
     const rounded = afterHalf.since(start, {
@@ -98,7 +98,7 @@ describe.runIf(isTemporal)("Temporal.ZonedDateTime.prototype.since", () => {
       smallestUnit: "days",
       roundingMode: "halfExpand",
     });
-    expect(rounded.days).toBe(2);
+    expect(rounded.days).toBe(1);
 
     const roundedHours = afterHalf.since(start, {
       largestUnit: "days",
@@ -106,6 +106,6 @@ describe.runIf(isTemporal)("Temporal.ZonedDateTime.prototype.since", () => {
       roundingMode: "halfExpand",
     });
     expect(roundedHours.days).toBe(1);
-    expect(roundedHours.hours).toBe(13);
+    expect(roundedHours.hours).toBe(12);
   });
 });

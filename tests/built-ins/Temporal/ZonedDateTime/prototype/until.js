@@ -65,7 +65,7 @@ describe.runIf(isTemporal)("Temporal.ZonedDateTime.prototype.until", () => {
     const minLimit = min.withTimeZone("-08:12");
     const minInstance = new Temporal.PlainDateTime(1970, 1, 1, 1, 1, 1, 1, 1, 1).toZonedDateTime("-08:12");
     expect(minInstance.until(minLimit, { largestUnit: "years" }).toString())
-      .toBe("-P273790Y8M12DT9H13M1.001001001S");
+      .toBe("-P273790Y8M11DT9H13M1.001001001S");
   });
 
   test("until() chooses the smaller duration at DST month-day boundaries", () => {

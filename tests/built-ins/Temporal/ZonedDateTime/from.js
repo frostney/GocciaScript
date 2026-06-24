@@ -4,6 +4,18 @@ features: [Temporal]
 ---*/
 
 const isTemporal = typeof Temporal !== "undefined";
+const hasCalendarICU = isTemporal && (() => {
+  try {
+    return Temporal.PlainDate.from({
+      year: 1445,
+      month: 12,
+      day: 25,
+      calendar: "islamicc"
+    }).calendarId === "islamic-civil";
+  } catch (_) {
+    return false;
+  }
+})();
 
 describe.runIf(isTemporal)("Temporal.ZonedDateTime.from", () => {
   test("from ISO string with timezone", () => {
@@ -39,5 +51,39 @@ describe.runIf(isTemporal)("Temporal.ZonedDateTime.from", () => {
     expect(zdt.minute).toBe(45);
     expect(zdt.second).toBe(30);
     expect(zdt.timeZoneId).toBe("UTC");
+  });
+
+  test("from property bag preserves sub-minute named-zone offsets", () => {
+    const zdt = Temporal.ZonedDateTime.from({
+      year: 1971,
+      month: 1,
+      day: 1,
+      hour: 12,
+      timeZone: "Africa/Monrovia"
+    });
+    expect(zdt.offset).toBe("-00:44:30");
+  });
+
+  test("from property bag converts supported non-ISO calendar dates", () => {
+    if (!hasCalendarICU) {
+      expect(() => Temporal.ZonedDateTime.from({
+        year: 1445,
+        month: 12,
+        day: 25,
+        calendar: "islamicc",
+        timeZone: "UTC"
+      })).toThrow(RangeError);
+      return;
+    }
+    const zdt = Temporal.ZonedDateTime.from({
+      year: 1445,
+      month: 12,
+      day: 25,
+      calendar: "islamicc",
+      timeZone: "UTC"
+    });
+    const iso = Temporal.ZonedDateTime.from("2024-07-02T00:00:00+00:00[UTC]");
+    expect(zdt.epochNanoseconds).toBe(iso.epochNanoseconds);
+    expect(zdt.calendarId).toBe("islamic-civil");
   });
 });

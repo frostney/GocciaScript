@@ -139,12 +139,11 @@ describe.runIf(isTemporal)("Temporal.Duration.prototype.round", () => {
     })).toThrow(RangeError);
   });
 
-  test("round applies years and months as separate calendar steps", () => {
-    // 2020-02-29 + 1Y = 2021-02-28 (day clamps), + 1M = 2021-03-28 = 393 days.
-    // Collapsing to +13M gives 2021-03-29 = 394 days (wrong).
+  test("round applies years and months as a combined calendar duration", () => {
+    // 2020-02-29 + P1Y1M = 2021-03-29 = 394 days.
     const d = Temporal.Duration.from({ years: 1, months: 1 });
     const inDays = d.round({ smallestUnit: "days", largestUnit: "days", relativeTo: "2020-02-29" });
-    expect(inDays.days).toBe(393);
+    expect(inDays.days).toBe(394);
   });
 
   test("round months with roundingIncrement uses real calendar bucket span", () => {
@@ -200,11 +199,26 @@ describe.runIf(isTemporal)("Temporal.Duration.prototype.round", () => {
     expect(rounded.months).toBe(6);
   });
 
+  test("round rejects sub-minute offset time zone identifiers in relativeTo strings", () => {
+    const d = new Temporal.Duration(1, 0, 0, 0, 24);
+    const valid = d.round({
+      largestUnit: "years",
+      relativeTo: "1970-01-01T00:00-00:45:00[-00:45]"
+    });
+
+    expect(valid.years).toBe(1);
+    expect(valid.days).toBe(1);
+    expect(() => d.round({
+      largestUnit: "years",
+      relativeTo: "1970-01-01T00:00-00:44:59[-00:44:59]"
+    })).toThrow(RangeError);
+  });
+
   test("round accepts relativeTo as ZonedDateTime to days", () => {
     const d = Temporal.Duration.from({ years: 1, months: 1 });
     const zdt = Temporal.ZonedDateTime.from("2020-02-29T10:30:00+00:00[UTC]");
     const rounded = d.round({ smallestUnit: "days", largestUnit: "days", relativeTo: zdt });
-    expect(rounded.days).toBe(393);
+    expect(rounded.days).toBe(394);
   });
 
   test("round with relativeTo as property bag", () => {
@@ -217,7 +231,7 @@ describe.runIf(isTemporal)("Temporal.Duration.prototype.round", () => {
   test("round with relativeTo as property bag to days", () => {
     const d = Temporal.Duration.from({ years: 1, months: 1 });
     const rounded = d.round({ smallestUnit: "days", largestUnit: "days", relativeTo: { year: 2020, month: 2, day: 29 } });
-    expect(rounded.days).toBe(393);
+    expect(rounded.days).toBe(394);
   });
 
   test("round with relativeTo property bag missing fields throws", () => {

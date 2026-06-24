@@ -192,6 +192,7 @@ const
   UCOL_TERTIARY = 2;
   UCOL_QUATERNARY = 3;
   UCOL_IDENTICAL = 15;
+  UCOL_NORMALIZATION_MODE = 4;
   UCOL_STRENGTH = 5;
   UCOL_CASE_FIRST = 2;
   UCOL_CASE_LEVEL = 3;
@@ -199,6 +200,7 @@ const
   UCOL_NUMERIC_COLLATION = 7;
   UCOL_OFF = 16;
   UCOL_SHIFTED = 20;
+  UCOL_NON_IGNORABLE = 21;
   UCOL_ON = 17;
   UCOL_LOWER_FIRST = 24;
   UCOL_UPPER_FIRST = 25;
@@ -1596,6 +1598,11 @@ begin
     if not ICUSucceeded(Status) then
       Exit;
 
+    Status := ICU_SUCCESS;
+    IntlFunctions.UcolSetAttribute(Collator, UCOL_NORMALIZATION_MODE, UCOL_ON, Status);
+    if not ICUSucceeded(Status) then
+      Exit;
+
     if ANumeric then
     begin
       Status := ICU_SUCCESS;
@@ -1634,14 +1641,15 @@ begin
         Exit;
     end;
 
+    Status := ICU_SUCCESS;
     if AIgnorePunctuation then
-    begin
-      Status := ICU_SUCCESS;
       IntlFunctions.UcolSetAttribute(Collator, UCOL_ALTERNATE_HANDLING,
-        UCOL_SHIFTED, Status);
-      if not ICUSucceeded(Status) then
-        Exit;
-    end;
+        UCOL_SHIFTED, Status)
+    else
+      IntlFunctions.UcolSetAttribute(Collator, UCOL_ALTERNATE_HANDLING,
+        UCOL_NON_IGNORABLE, Status);
+    if not ICUSucceeded(Status) then
+      Exit;
 
     CollResult := IntlFunctions.UcolStrcoll(Collator,
       PWideChar(AStr1), Length(AStr1),
@@ -2050,6 +2058,76 @@ begin
       (AOptions.CurrencySign = incsStandard);
 end;
 
+function IsEnInLocale(const ALocale: string): Boolean;
+begin
+  Result := SameText(ALocale, 'en-IN') or
+    SameText(Copy(ALocale, 1, 6), 'en-IN-');
+end;
+
+function NeedsEnInCompactThousandsFallback(const ALocale: string;
+  const AValue: Double; const AOptions: TIntlNumberFormatOptions): Boolean;
+const
+  EN_IN_COMPACT_THOUSANDS_MIN = 1000.0;
+  EN_IN_COMPACT_LAKH_MIN = 100000.0;
+var
+  Magnitude: Double;
+begin
+  Magnitude := Abs(AValue);
+  Result := IsEnInLocale(ALocale) and (AOptions.Style = insDecimal) and
+    (AOptions.Notation = innCompact) and
+    (AOptions.CompactDisplay = incdShort) and
+    (Magnitude >= EN_IN_COMPACT_THOUSANDS_MIN) and
+    (Magnitude < EN_IN_COMPACT_LAKH_MIN);
+end;
+
+function TryParseInvariantDouble(const AValue: string; out ANumber: Double): Boolean;
+var
+  FormatSettings: TFormatSettings;
+begin
+  FormatSettings := DefaultFormatSettings;
+  FormatSettings.DecimalSeparator := '.';
+  Result := TryStrToFloat(AValue, ANumber, FormatSettings);
+end;
+
+procedure NormalizeICUNumberFormatResult(const ALocale: string;
+  const AValue: Double; const AOptions: TIntlNumberFormatOptions;
+  var AFormatted: string);
+begin
+  if NeedsEnInCompactThousandsFallback(ALocale, AValue, AOptions) and
+     (Length(AFormatted) > 0) and (AFormatted[Length(AFormatted)] = 'T') then
+    AFormatted[Length(AFormatted)] := 'K';
+end;
+
+procedure NormalizeICUNumberFormatParts(const ALocale: string;
+  const AValue: Double; const AOptions: TIntlNumberFormatOptions;
+  var AParts: TIntlFormatPartArray);
+var
+  I: Integer;
+begin
+  if not NeedsEnInCompactThousandsFallback(ALocale, AValue, AOptions) then
+    Exit;
+
+  for I := 0 to Length(AParts) - 1 do
+    if (AParts[I].PartType = 'compact') and (AParts[I].Value = 'T') then
+      AParts[I].Value := 'K';
+end;
+
+procedure NormalizeICUNumberRangeFormat(const ALocale: string;
+  const AStartValue, AEndValue: Double; const AOptions: TIntlNumberFormatOptions;
+  var AFormatted: string; var AParts: TIntlFormatPartArray);
+var
+  I: Integer;
+begin
+  if not (NeedsEnInCompactThousandsFallback(ALocale, AStartValue, AOptions) or
+          NeedsEnInCompactThousandsFallback(ALocale, AEndValue, AOptions)) then
+    Exit;
+
+  AFormatted := StringReplace(AFormatted, 'T', 'K', [rfReplaceAll]);
+  for I := 0 to Length(AParts) - 1 do
+    if (AParts[I].PartType = 'compact') and (AParts[I].Value = 'T') then
+      AParts[I].Value := 'K';
+end;
+
 function TryICUFormatNumberSkeleton(const ALocale: string; AValue: Double;
   const AOptions: TIntlNumberFormatOptions; out AFormatted: string): Boolean;
 var
@@ -2217,16 +2295,25 @@ function TryICUFormatNumber(const ALocale: string; AValue: Double;
 begin
   AValue := CanonicalizeICUNumberFormatInput(AValue);
   if TryICUFormatNumberSkeleton(ALocale, AValue, AOptions, AFormatted) then
+  begin
+    NormalizeICUNumberFormatResult(ALocale, AValue, AOptions, AFormatted);
     Exit(True);
+  end;
   Result := CanUseLegacyNumberFormatter(AOptions) and
     TryICUFormatNumberDirect(ALocale, AValue, AOptions, AFormatted);
+  if Result then
+    NormalizeICUNumberFormatResult(ALocale, AValue, AOptions, AFormatted);
 end;
 
 function TryICUFormatNumberDecimal(const ALocale, AValue: string;
   const AOptions: TIntlNumberFormatOptions; out AFormatted: string): Boolean;
+var
+  NumberValue: Double;
 begin
   Result := TryICUFormatNumberDecimalSkeleton(ALocale, AValue, AOptions,
     AFormatted);
+  if Result and TryParseInvariantDouble(AValue, NumberValue) then
+    NormalizeICUNumberFormatResult(ALocale, NumberValue, AOptions, AFormatted);
 end;
 
 function TryICUFormatNumberToPartsSkeleton(const ALocale: string; AValue: Double;
@@ -2406,16 +2493,25 @@ function TryICUFormatNumberToParts(const ALocale: string; AValue: Double;
 begin
   AValue := CanonicalizeICUNumberFormatInput(AValue);
   if TryICUFormatNumberToPartsSkeleton(ALocale, AValue, AOptions, AParts) then
+  begin
+    NormalizeICUNumberFormatParts(ALocale, AValue, AOptions, AParts);
     Exit(True);
+  end;
   Result := CanUseLegacyNumberFormatter(AOptions) and
     TryICUFormatNumberToPartsDirect(ALocale, AValue, AOptions, AParts);
+  if Result then
+    NormalizeICUNumberFormatParts(ALocale, AValue, AOptions, AParts);
 end;
 
 function TryICUFormatNumberDecimalToParts(const ALocale, AValue: string;
   const AOptions: TIntlNumberFormatOptions; out AParts: TIntlFormatPartArray): Boolean;
+var
+  NumberValue: Double;
 begin
   Result := TryICUFormatNumberDecimalToPartsSkeleton(ALocale, AValue, AOptions,
     AParts);
+  if Result and TryParseInvariantDouble(AValue, NumberValue) then
+    NormalizeICUNumberFormatParts(ALocale, NumberValue, AOptions, AParts);
 end;
 
 function TryICUFormatNumberRangeInternal(const ALocale: string;
@@ -2428,6 +2524,7 @@ var
   Skeleton: UnicodeString;
   LocaleAnsi, StartAnsi, EndAnsi: AnsiString;
   Formatter, RangeResult, FormattedValue: Pointer;
+  StartNumber, EndNumber: Double;
 begin
   Result := False;
   AFormatted := '';
@@ -2483,6 +2580,23 @@ begin
       Result := FormattedValueToParts(FormattedValue, UFIELD_CATEGORY_NUMBER,
         UFIELD_CATEGORY_NUMBER_RANGE_SPAN, NumberFieldToPartType,
         AFormatted, AParts);
+      if Result then
+      begin
+        if AUseDecimal then
+        begin
+          if not TryParseInvariantDouble(AStartDecimal, StartNumber) then
+            StartNumber := 0;
+          if not TryParseInvariantDouble(AEndDecimal, EndNumber) then
+            EndNumber := 0;
+        end
+        else
+        begin
+          StartNumber := AStartDouble;
+          EndNumber := AEndDouble;
+        end;
+        NormalizeICUNumberRangeFormat(ALocale, StartNumber, EndNumber,
+          AOptions, AFormatted, AParts);
+      end;
       if Result and not AWantParts then
         SetLength(AParts, 0);
     finally
@@ -2559,12 +2673,26 @@ begin
     ASkeleton := ASkeleton + ANumericField;
 end;
 
+function DateTimeHourSkeletonField(const AHourCycle: string): string;
+begin
+  if AHourCycle = 'h11' then
+    Result := 'K'
+  else if AHourCycle = 'h12' then
+    Result := 'h'
+  else if AHourCycle = 'h23' then
+    Result := 'H'
+  else if AHourCycle = 'h24' then
+    Result := 'k'
+  else
+    Result := 'j';
+end;
+
 function BuildDateTimeSkeleton(const AOptions: TIntlDateTimeFormatOptions): string;
 var
   HourField: string;
 begin
   Result := '';
-
+  HourField := DateTimeHourSkeletonField(AOptions.HourCycle);
   if (AOptions.DateStyle <> idtsNone) or (AOptions.TimeStyle <> idtsNone) then
   begin
     case AOptions.DateStyle of
@@ -2574,10 +2702,10 @@ begin
       idtsShort: Result := Result + 'yMd';
     end;
     case AOptions.TimeStyle of
-      idtsFull,
-      idtsLong: Result := Result + 'jmszzzz';
-      idtsMedium: Result := Result + 'jms';
-      idtsShort: Result := Result + 'jm';
+      idtsFull: Result := Result + HourField + 'mszzzz';
+      idtsLong: Result := Result + HourField + 'msz';
+      idtsMedium: Result := Result + HourField + 'ms';
+      idtsShort: Result := Result + HourField + 'm';
     end;
     Exit;
   end;
@@ -2588,16 +2716,6 @@ begin
   AppendDateSkeletonField(Result, AOptions.Month, 'M', 'MM', 'MMM', 'MMMM', 'MMMMM');
   AppendDateSkeletonField(Result, AOptions.Day, 'd', 'dd', 'd', 'd', 'd');
 
-  if AOptions.HourCycle = 'h11' then
-    HourField := 'K'
-  else if AOptions.HourCycle = 'h12' then
-    HourField := 'h'
-  else if AOptions.HourCycle = 'h23' then
-    HourField := 'H'
-  else if AOptions.HourCycle = 'h24' then
-    HourField := 'k'
-  else
-    HourField := 'j';
   if AOptions.Hour = '2-digit' then
     Result := Result + HourField + HourField
   else if AOptions.Hour <> '' then
@@ -2607,7 +2725,11 @@ begin
   AppendDateSkeletonField(Result, AOptions.Second, 's', 'ss', 's', 's', 's');
   if AOptions.FractionalSecondDigits > 0 then
     Result := Result + StringOfChar('S', AOptions.FractionalSecondDigits);
-  if AOptions.DayPeriod <> '' then
+  if AOptions.DayPeriod = 'narrow' then
+    Result := Result + 'BBBBB'
+  else if AOptions.DayPeriod = 'long' then
+    Result := Result + 'BBBB'
+  else if AOptions.DayPeriod <> '' then
     Result := Result + 'B';
 
   if AOptions.TimeZoneName = 'long' then
@@ -2625,6 +2747,153 @@ begin
 
   if Result = '' then
     Result := 'yMd';
+end;
+
+function UTF8FromCodePoint(const ACodePoint: Cardinal): string;
+begin
+  if ACodePoint <= $7F then
+    Result := Chr(ACodePoint)
+  else if ACodePoint <= $7FF then
+    Result := Chr($C0 or (ACodePoint shr 6)) +
+      Chr($80 or (ACodePoint and $3F))
+  else if ACodePoint <= $FFFF then
+    Result := Chr($E0 or (ACodePoint shr 12)) +
+      Chr($80 or ((ACodePoint shr 6) and $3F)) +
+      Chr($80 or (ACodePoint and $3F))
+  else
+    Result := Chr($F0 or (ACodePoint shr 18)) +
+      Chr($80 or ((ACodePoint shr 12) and $3F)) +
+      Chr($80 or ((ACodePoint shr 6) and $3F)) +
+      Chr($80 or (ACodePoint and $3F));
+end;
+
+function DateTimeZeroDigit(const ANumberingSystem: string): string;
+var
+  CodePoint: Cardinal;
+begin
+  if ANumberingSystem = 'adlm' then CodePoint := $1E950
+  else if ANumberingSystem = 'ahom' then CodePoint := $11730
+  else if ANumberingSystem = 'arab' then CodePoint := $660
+  else if ANumberingSystem = 'arabext' then CodePoint := $6F0
+  else if ANumberingSystem = 'bali' then CodePoint := $1B50
+  else if ANumberingSystem = 'beng' then CodePoint := $9E6
+  else if ANumberingSystem = 'bhks' then CodePoint := $11C50
+  else if ANumberingSystem = 'brah' then CodePoint := $11066
+  else if ANumberingSystem = 'cakm' then CodePoint := $11136
+  else if ANumberingSystem = 'cham' then CodePoint := $AA50
+  else if ANumberingSystem = 'deva' then CodePoint := $966
+  else if ANumberingSystem = 'diak' then CodePoint := $11950
+  else if ANumberingSystem = 'fullwide' then CodePoint := $FF10
+  else if ANumberingSystem = 'gara' then CodePoint := $10D40
+  else if ANumberingSystem = 'gong' then CodePoint := $11DA0
+  else if ANumberingSystem = 'gonm' then CodePoint := $11D50
+  else if ANumberingSystem = 'gujr' then CodePoint := $AE6
+  else if ANumberingSystem = 'gukh' then CodePoint := $16130
+  else if ANumberingSystem = 'guru' then CodePoint := $A66
+  else if ANumberingSystem = 'hanidec' then CodePoint := $3007
+  else if ANumberingSystem = 'hmng' then CodePoint := $16B50
+  else if ANumberingSystem = 'hmnp' then CodePoint := $1E140
+  else if ANumberingSystem = 'java' then CodePoint := $A9D0
+  else if ANumberingSystem = 'kali' then CodePoint := $A900
+  else if ANumberingSystem = 'kawi' then CodePoint := $11F50
+  else if ANumberingSystem = 'khmr' then CodePoint := $17E0
+  else if ANumberingSystem = 'knda' then CodePoint := $CE6
+  else if ANumberingSystem = 'krai' then CodePoint := $16D70
+  else if ANumberingSystem = 'lana' then CodePoint := $1A80
+  else if ANumberingSystem = 'lanatham' then CodePoint := $1A90
+  else if ANumberingSystem = 'laoo' then CodePoint := $ED0
+  else if ANumberingSystem = 'latn' then CodePoint := $30
+  else if ANumberingSystem = 'lepc' then CodePoint := $1C40
+  else if ANumberingSystem = 'limb' then CodePoint := $1946
+  else if ANumberingSystem = 'mathbold' then CodePoint := $1D7CE
+  else if ANumberingSystem = 'mathdbl' then CodePoint := $1D7D8
+  else if ANumberingSystem = 'mathmono' then CodePoint := $1D7F6
+  else if ANumberingSystem = 'mathsanb' then CodePoint := $1D7EC
+  else if ANumberingSystem = 'mathsans' then CodePoint := $1D7E2
+  else if ANumberingSystem = 'mlym' then CodePoint := $D66
+  else if ANumberingSystem = 'modi' then CodePoint := $11650
+  else if ANumberingSystem = 'mong' then CodePoint := $1810
+  else if ANumberingSystem = 'mroo' then CodePoint := $16A60
+  else if ANumberingSystem = 'mtei' then CodePoint := $ABF0
+  else if ANumberingSystem = 'mymr' then CodePoint := $1040
+  else if ANumberingSystem = 'mymrepka' then CodePoint := $116DA
+  else if ANumberingSystem = 'mymrpao' then CodePoint := $116D0
+  else if ANumberingSystem = 'mymrshan' then CodePoint := $1090
+  else if ANumberingSystem = 'mymrtlng' then CodePoint := $A9F0
+  else if ANumberingSystem = 'nagm' then CodePoint := $1E4F0
+  else if ANumberingSystem = 'newa' then CodePoint := $11450
+  else if ANumberingSystem = 'nkoo' then CodePoint := $7C0
+  else if ANumberingSystem = 'olck' then CodePoint := $1C50
+  else if ANumberingSystem = 'onao' then CodePoint := $1E5F1
+  else if ANumberingSystem = 'orya' then CodePoint := $B66
+  else if ANumberingSystem = 'osma' then CodePoint := $104A0
+  else if ANumberingSystem = 'outlined' then CodePoint := $1CCF0
+  else if ANumberingSystem = 'rohg' then CodePoint := $10D30
+  else if ANumberingSystem = 'saur' then CodePoint := $A8D0
+  else if ANumberingSystem = 'segment' then CodePoint := $1FBF0
+  else if ANumberingSystem = 'shrd' then CodePoint := $111D0
+  else if ANumberingSystem = 'sind' then CodePoint := $112F0
+  else if ANumberingSystem = 'sinh' then CodePoint := $DE6
+  else if ANumberingSystem = 'sora' then CodePoint := $110F0
+  else if ANumberingSystem = 'sund' then CodePoint := $1BB0
+  else if ANumberingSystem = 'sunu' then CodePoint := $11BF0
+  else if ANumberingSystem = 'takr' then CodePoint := $116C0
+  else if ANumberingSystem = 'talu' then CodePoint := $19D0
+  else if ANumberingSystem = 'tamldec' then CodePoint := $BE6
+  else if ANumberingSystem = 'telu' then CodePoint := $C66
+  else if ANumberingSystem = 'thai' then CodePoint := $E50
+  else if ANumberingSystem = 'tibt' then CodePoint := $F20
+  else if ANumberingSystem = 'tirh' then CodePoint := $114D0
+  else if ANumberingSystem = 'tnsa' then CodePoint := $16AC0
+  else if ANumberingSystem = 'tols' then CodePoint := $11DE0
+  else if ANumberingSystem = 'vaii' then CodePoint := $A620
+  else if ANumberingSystem = 'wara' then CodePoint := $118E0
+  else if ANumberingSystem = 'wcho' then CodePoint := $1E2F0
+  else CodePoint := $30;
+  Result := UTF8FromCodePoint(CodePoint);
+end;
+
+function PadTwoDigitHourFormatted(const AFormatted: string;
+  const AOptions: TIntlDateTimeFormatOptions): string;
+var
+  ColonPos: Integer;
+  ZeroDigit: string;
+begin
+  Result := AFormatted;
+  if AOptions.Hour <> '2-digit' then
+    Exit;
+
+  ColonPos := Pos(':', AFormatted);
+  if ColonPos <= 1 then
+    Exit;
+
+  ZeroDigit := DateTimeZeroDigit(AOptions.NumberingSystem);
+  if ColonPos = Length(ZeroDigit) + 1 then
+    Result := ZeroDigit + AFormatted;
+  if AOptions.NumberingSystem = 'hanidec' then
+    Result := StringReplace(Result, UTF8FromCodePoint($202F), ' ',
+      [rfReplaceAll]);
+end;
+
+procedure PadTwoDigitHourParts(var AParts: TIntlFormatPartArray;
+  const AOptions: TIntlDateTimeFormatOptions);
+var
+  I: Integer;
+  ZeroDigit: string;
+begin
+  if AOptions.Hour <> '2-digit' then
+    Exit;
+
+  ZeroDigit := DateTimeZeroDigit(AOptions.NumberingSystem);
+  for I := 0 to Length(AParts) - 1 do
+  begin
+    if (AParts[I].PartType = 'hour') and
+       (Length(AParts[I].Value) = Length(ZeroDigit)) then
+      AParts[I].Value := ZeroDigit + AParts[I].Value;
+    if AOptions.NumberingSystem = 'hanidec' then
+      AParts[I].Value := StringReplace(AParts[I].Value,
+        UTF8FromCodePoint($202F), ' ', [rfReplaceAll]);
+  end;
 end;
 
 function FindUnicodeExtensionEnd(const ALocaleLower: string; const AUnicodePos: Integer): Integer;
@@ -2645,9 +2914,9 @@ begin
   end;
 end;
 
-function RemoveUnicodeHourCycleKeyword(const ALocale: string): string;
+function RemoveUnicodeLocaleKeyword(const ALocale, AKey: string): string;
 var
-  LocaleLower, Extension, NewExtension, Token, TokenLower, Suffix: string;
+  LocaleLower, Extension, NewExtension, Token, TokenLower, Suffix, KeyLower: string;
   UnicodePos, ExtensionStart, ExtensionEnd, I, TokenStart: Integer;
   Tokens: IntlTypes.TStringArray;
 
@@ -2661,6 +2930,7 @@ var
 
 begin
   LocaleLower := LowerCase(ALocale);
+  KeyLower := LowerCase(AKey);
   UnicodePos := Pos('-u-', LocaleLower);
   if UnicodePos = 0 then
     Exit(ALocale);
@@ -2686,7 +2956,7 @@ begin
   begin
     Token := Tokens[I];
     TokenLower := LowerCase(Token);
-    if TokenLower = 'hc' then
+    if TokenLower = KeyLower then
     begin
       Inc(I);
       while (I < Length(Tokens)) and (Length(Tokens[I]) > 2) do
@@ -2707,32 +2977,40 @@ begin
     Result := Copy(ALocale, 1, UnicodePos + 2) + NewExtension + Suffix;
 end;
 
-function ApplyDateTimeHourCycleLocaleOption(const ALocale: string;
-  const AOptions: TIntlDateTimeFormatOptions): string;
+function ApplyUnicodeLocaleKeyword(const ALocale, AKey, AValue: string): string;
 var
   LocaleLower: string;
   UnicodePos, ExtensionEnd, PrivateUsePos: Integer;
 begin
-  if AOptions.HourCycle = '' then
+  if AValue = '' then
     Exit(ALocale);
 
-  Result := RemoveUnicodeHourCycleKeyword(ALocale);
+  Result := RemoveUnicodeLocaleKeyword(ALocale, AKey);
   LocaleLower := LowerCase(Result);
   UnicodePos := Pos('-u-', LocaleLower);
   if UnicodePos > 0 then
   begin
     ExtensionEnd := FindUnicodeExtensionEnd(LocaleLower, UnicodePos);
-    Result := Copy(Result, 1, ExtensionEnd - 1) + '-hc-' +
-      AOptions.HourCycle + Copy(Result, ExtensionEnd, Length(Result) - ExtensionEnd + 1);
+    Result := Copy(Result, 1, ExtensionEnd - 1) + '-' + AKey + '-' +
+      AValue + Copy(Result, ExtensionEnd, Length(Result) - ExtensionEnd + 1);
     Exit;
   end;
 
   PrivateUsePos := Pos('-x-', LocaleLower);
   if PrivateUsePos > 0 then
-    Result := Copy(Result, 1, PrivateUsePos - 1) + '-u-hc-' +
-      AOptions.HourCycle + Copy(Result, PrivateUsePos, Length(Result) - PrivateUsePos + 1)
+    Result := Copy(Result, 1, PrivateUsePos - 1) + '-u-' + AKey + '-' +
+      AValue + Copy(Result, PrivateUsePos, Length(Result) - PrivateUsePos + 1)
   else
-    Result := Result + '-u-hc-' + AOptions.HourCycle;
+    Result := Result + '-u-' + AKey + '-' + AValue;
+end;
+
+function ApplyDateTimeLocaleOptions(const ALocale: string;
+  const AOptions: TIntlDateTimeFormatOptions): string;
+begin
+  Result := ALocale;
+  Result := ApplyUnicodeLocaleKeyword(Result, 'ca', AOptions.Calendar);
+  Result := ApplyUnicodeLocaleKeyword(Result, 'nu', AOptions.NumberingSystem);
+  Result := ApplyUnicodeLocaleKeyword(Result, 'hc', AOptions.HourCycle);
 end;
 
 function TryICUGetBestDateTimePattern(const ALocale, ASkeleton: string;
@@ -2790,7 +3068,7 @@ begin
   Result := False;
   AFormatter := nil;
 
-  EffectiveLocale := ApplyDateTimeHourCycleLocaleOption(ALocale, AOptions);
+  EffectiveLocale := ApplyDateTimeLocaleOptions(ALocale, AOptions);
   LocaleAnsi := AnsiString(EffectiveLocale);
 
   if AOptions.TimeZone <> '' then
@@ -2805,7 +3083,15 @@ begin
     TzLen := -1;
   end;
 
-  if (AOptions.DateStyle <> idtsNone) or (AOptions.TimeStyle <> idtsNone) then
+  if (AOptions.TimeStyle <> idtsNone) and
+     ((AOptions.HourCycle = 'h23') or (AOptions.HourCycle = 'h24')) and
+     TryICUGetBestDateTimePattern(EffectiveLocale,
+       BuildDateTimeSkeleton(AOptions), Pattern) then
+  begin
+    ICUDateStyle := UDAT_PATTERN;
+    ICUTimeStyle := UDAT_PATTERN;
+  end
+  else if (AOptions.DateStyle <> idtsNone) or (AOptions.TimeStyle <> idtsNone) then
   begin
     ICUDateStyle := DateTimeStyleToICU(AOptions.DateStyle);
     ICUTimeStyle := DateTimeStyleToICU(AOptions.TimeStyle);
@@ -2853,6 +3139,7 @@ begin
       Exit;
 
     AFormatted := UnicodeToString(Buffer, ResultLen);
+    AFormatted := PadTwoDigitHourFormatted(AFormatted, AOptions);
     Result := True;
   finally
     IntlFunctions.UdatClose(Formatter);
@@ -2880,6 +3167,7 @@ begin
 
   if not OpenDateFormatter(ALocale, AOptions, Formatter) then
     Exit;
+
   try
     Status := ICU_SUCCESS;
     Iterator := IntlFunctions.UfieldpositerOpen(Status);
@@ -2898,6 +3186,8 @@ begin
       CollectIteratorFieldSpans(Iterator, UFIELD_CATEGORY_DATE, Spans);
       Result := BuildPartsFromFieldSpans(UFormatted, Spans,
         UFIELD_CATEGORY_DATE, 0, DateFieldToPartType, AParts);
+      if Result then
+        PadTwoDigitHourParts(AParts, AOptions);
     finally
       IntlFunctions.UfieldpositerClose(Iterator);
     end;
@@ -2935,7 +3225,7 @@ begin
     TzLen := -1;
   end;
 
-  EffectiveLocale := ApplyDateTimeHourCycleLocaleOption(ALocale, AOptions);
+  EffectiveLocale := ApplyDateTimeLocaleOptions(ALocale, AOptions);
   LocaleAnsi := AnsiString(EffectiveLocale);
   SkeletonUnicode := UnicodeString(BuildDateTimeSkeleton(AOptions));
   Status := ICU_SUCCESS;

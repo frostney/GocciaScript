@@ -168,12 +168,99 @@ begin
     Result := AValue;
 end;
 
+function RemoveUnicodeLocaleExtensionAttributes(const ALocale: string): string;
+var
+  LocaleLower, Tail, Suffix, Subtag, NewTail: string;
+  UnicodePos, ExtensionEnd, Index, NextDash, SubtagStart: Integer;
+  SeenKeyword: Boolean;
+
+  procedure AppendSubtag(const ASubtag: string);
+  begin
+    if NewTail <> '' then
+      NewTail := NewTail + '-';
+    NewTail := NewTail + ASubtag;
+  end;
+
+begin
+  LocaleLower := LowerCase(ALocale);
+  UnicodePos := Pos('-u-', LocaleLower);
+  if UnicodePos = 0 then
+    Exit(ALocale);
+
+  ExtensionEnd := Length(ALocale) + 1;
+  Index := UnicodePos + 3;
+  while Index <= Length(ALocale) do
+  begin
+    SubtagStart := Index;
+    NextDash := Pos('-', Copy(ALocale, Index, MaxInt));
+    if NextDash = 0 then
+      NextDash := Length(ALocale) + 1
+    else
+      NextDash := Index + NextDash - 1;
+    Subtag := LowerCase(Copy(ALocale, Index, NextDash - Index));
+    if Length(Subtag) = 1 then
+    begin
+      ExtensionEnd := SubtagStart - 1;
+      Break;
+    end;
+    Index := NextDash + 1;
+  end;
+
+  Tail := Copy(ALocale, UnicodePos + 3, ExtensionEnd - UnicodePos - 3);
+  Suffix := Copy(ALocale, ExtensionEnd, MaxInt);
+  NewTail := '';
+  SeenKeyword := False;
+  Index := 1;
+  while Index <= Length(Tail) do
+  begin
+    NextDash := Pos('-', Copy(Tail, Index, MaxInt));
+    if NextDash = 0 then
+      NextDash := Length(Tail) + 1
+    else
+      NextDash := Index + NextDash - 1;
+    Subtag := Copy(Tail, Index, NextDash - Index);
+    if Length(Subtag) = 2 then
+      SeenKeyword := True;
+    if SeenKeyword then
+      AppendSubtag(Subtag);
+    Index := NextDash + 1;
+  end;
+
+  if NewTail = '' then
+    Result := Copy(ALocale, 1, UnicodePos - 1) + Suffix
+  else
+    Result := Copy(ALocale, 1, UnicodePos + 2) + NewTail + Suffix;
+end;
+
+function CollatorLocaleLanguage(const ALocale: string): string;
+var
+  DashPos: Integer;
+begin
+  Result := LowerCase(LocaleWithoutUnicodeExtension(ALocale));
+  DashPos := Pos('-', Result);
+  if DashPos > 0 then
+    Result := Copy(Result, 1, DashPos - 1);
+end;
+
+function DefaultIgnorePunctuationForLocale(const ALocale: string): Boolean;
+begin
+  Result := CollatorLocaleLanguage(ALocale) = 'th';
+end;
+
+function KeepCollatorLocaleExtensionKeywords(const ALocale: string): string;
+var
+  Value: string;
+begin
+  Result := LocaleWithoutUnicodeExtension(ALocale);
+  if TryGetUnicodeLocaleExtensionKeyword(ALocale, 'co', Value) then
+    Result := AddUnicodeLocaleExtensionKeyword(Result, 'co', Value);
+  if TryGetUnicodeLocaleExtensionKeyword(ALocale, 'kf', Value) then
+    Result := AddUnicodeLocaleExtensionKeyword(Result, 'kf', Value);
+  if TryGetUnicodeLocaleExtensionKeyword(ALocale, 'kn', Value) then
+    Result := AddUnicodeLocaleExtensionKeyword(Result, 'kn', Value);
+end;
+
 function IsSupportedCollationValue(const ALocale, AValue: string): Boolean;
-const
-  SupportedCollations: array[0..16] of string = (
-    'big5han', 'compat', 'dict', 'direct', 'ducet', 'emoji', 'eor',
-    'gb2312', 'phonebk', 'phonetic', 'pinyin', 'reformed', 'searchjl',
-    'stroke', 'trad', 'unihan', 'zhuyin');
 var
   Collations: IntlTypes.TStringArray;
   I: Integer;
@@ -193,15 +280,6 @@ begin
       end;
     end;
   end;
-
-  for I := Low(SupportedCollations) to High(SupportedCollations) do
-  begin
-    if AValue = SupportedCollations[I] then
-    begin
-      Result := True;
-      Exit;
-    end;
-  end;
 end;
 
 { TGocciaIntlCollatorValue }
@@ -219,12 +297,12 @@ begin
   if Canonical = '' then
     FLocale := DefaultLocale
   else
-    FLocale := Canonical;
+    FLocale := RemoveUnicodeLocaleExtensionAttributes(Canonical);
 
   // Defaults
   FSensitivity := 'variant';
   FUsage := 'sort';
-  FIgnorePunctuation := False;
+  FIgnorePunctuation := DefaultIgnorePunctuationForLocale(FLocale);
   FNumeric := False;
   FCaseFirst := 'false';
   FCollation := 'default';
@@ -324,14 +402,22 @@ begin
     if LocaleCaseFirst <> FCaseFirst then
       FLocale := RemoveUnicodeLocaleExtensionKeyword(FLocale, 'kf');
   end;
-  if CollationOptionPresent and TryGetUnicodeLocaleExtensionKeyword(FLocale, 'co', LocaleCollation) then
+  if FUsage = 'search' then
+  begin
+    FCollation := 'default';
+    FLocale := RemoveUnicodeLocaleExtensionKeyword(FLocale, 'co');
+  end
+  else if CollationOptionPresent and TryGetUnicodeLocaleExtensionKeyword(FLocale, 'co', LocaleCollation) then
   begin
     if NormalizeCollationValue(LocaleCollation) <> FCollation then
       FLocale := RemoveUnicodeLocaleExtensionKeyword(FLocale, 'co');
   end;
 
+  FLocale := KeepCollatorLocaleExtensionKeywords(FLocale);
   FICULocale := LocaleWithoutUnicodeExtension(FLocale);
-  if FCollation <> 'default' then
+  if FUsage = 'search' then
+    FICULocale := AddUnicodeLocaleExtensionKeyword(FICULocale, 'co', 'search')
+  else if FCollation <> 'default' then
     FICULocale := AddUnicodeLocaleExtensionKeyword(FICULocale, 'co', FCollation);
 
   InitializePrototype;
@@ -341,7 +427,7 @@ end;
 
 function TGocciaIntlCollatorValue.ToStringTag: string;
 begin
-  Result := 'Intl.Collator';
+  Result := 'Object';
 end;
 
 procedure TGocciaIntlCollatorValue.MarkReferences;
@@ -439,13 +525,13 @@ var
 begin
   C := AsCollator(AThisValue, 'Intl.Collator.prototype.resolvedOptions');
   Obj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
-  Obj.AssignProperty('locale', TGocciaStringLiteralValue.Create(C.FLocale));
-  Obj.AssignProperty('usage', TGocciaStringLiteralValue.Create(C.FUsage));
-  Obj.AssignProperty('sensitivity', TGocciaStringLiteralValue.Create(C.FSensitivity));
-  Obj.AssignProperty('ignorePunctuation', TGocciaBooleanLiteralValue.Create(C.FIgnorePunctuation));
-  Obj.AssignProperty('numeric', TGocciaBooleanLiteralValue.Create(C.FNumeric));
-  Obj.AssignProperty('caseFirst', TGocciaStringLiteralValue.Create(C.FCaseFirst));
-  Obj.AssignProperty('collation', TGocciaStringLiteralValue.Create(C.FCollation));
+  Obj.CreateDataPropertyOrThrow('locale', TGocciaStringLiteralValue.Create(C.FLocale));
+  Obj.CreateDataPropertyOrThrow('usage', TGocciaStringLiteralValue.Create(C.FUsage));
+  Obj.CreateDataPropertyOrThrow('sensitivity', TGocciaStringLiteralValue.Create(C.FSensitivity));
+  Obj.CreateDataPropertyOrThrow('ignorePunctuation', TGocciaBooleanLiteralValue.Create(C.FIgnorePunctuation));
+  Obj.CreateDataPropertyOrThrow('collation', TGocciaStringLiteralValue.Create(C.FCollation));
+  Obj.CreateDataPropertyOrThrow('numeric', TGocciaBooleanLiteralValue.Create(C.FNumeric));
+  Obj.CreateDataPropertyOrThrow('caseFirst', TGocciaStringLiteralValue.Create(C.FCaseFirst));
   Result := Obj;
 end;
 
