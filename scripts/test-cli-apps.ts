@@ -2875,6 +2875,43 @@ console.log("SandboxRunner: trailing slash on a symlinked-directory seed is stil
   }
 }
 
+console.log("SandboxRunner: Windows directory junction seed is rejected (no leak)...");
+{
+  const tmp = makeTmp();
+  try {
+    // Windows-only: file symlinks need elevation on CI runners, but a directory
+    // junction is a reparse point that needs none, so it exercises the Windows
+    // branch of the guard (FileGetAttr + faSymLink) that the win32-skipped tests
+    // above cannot.
+    if (process.platform === "win32") {
+      const outsideDir = join(tmp, "outsideDir");
+      mkdirSync(outsideDir, { recursive: true });
+      writeFileSync(join(outsideDir, "secret.txt"), "outside-secret");
+      const junction = join(tmp, "junction");
+      symlinkSync(outsideDir, junction, "junction");
+      const mainJs = join(tmp, "main.js");
+      writeFileSync(mainJs, [
+        'import fs from "fs";',
+        'console.log(fs.readFileSync("/secret.txt", "utf8"));',
+      ].join("\n"));
+
+      const proc = Bun.spawnSync(
+        [SANDBOXRUNNER, "/main.js", `--seed=${junction}=/`, `--seed=${mainJs}=/`, "--source-type=module"],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      const output = proc.stdout.toString() + proc.stderr.toString();
+      if (proc.exitCode === 0)
+        throw new Error(`SandboxRunner junction seed should fail, exited 0: ${output}`);
+      if (!output.includes("is a symlink (not supported)"))
+        throw new Error(`SandboxRunner junction seed should report the symlink rejection, got: ${output}`);
+      if (output.includes("outside-secret"))
+        throw new Error(`SandboxRunner junction seed leaked host contents, got: ${output}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+}
+
 // ============================================================================
 // --allowed-host option
 // ============================================================================
