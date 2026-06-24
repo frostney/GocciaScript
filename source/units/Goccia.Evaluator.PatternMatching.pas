@@ -155,67 +155,79 @@ var
   CurrentContext, NextContext: TGocciaEvaluationContext;
   RestArray: TGocciaArrayValue;
   RestArrayRooted: Boolean;
+  GC: TGarbageCollector;
+  IteratorWasRooted: Boolean;
   Success: Boolean;
 begin
+  GC := TGarbageCollector.Instance;
+  IteratorWasRooted := Assigned(GC) and Assigned(AIterator) and
+    not GC.IsTempRoot(AIterator);
+  if IteratorWasRooted then
+    GC.AddTempRoot(AIterator);
   CurrentContext := AContext;
   AMatchContext := AContext;
   Success := False;
 
   try
-    for I := 0 to AElements.Count - 1 do
-    begin
-      IterationResult := AIterator.AdvanceNext;
-      if IterationResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value then
-        Exit(False);
-      if not Assigned(AElements[I]) then
-        Continue;
-      IterationValue := IterationResult.GetProperty(PROP_VALUE);
-      if not Assigned(IterationValue) then
-        IterationValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-      if not TryMatchPatternInternal(IterationValue, AElements[I],
-         CurrentContext, NextContext) then
-        Exit(False);
-      CurrentContext := NextContext;
-    end;
-
-    if Assigned(ARestPattern) then
-    begin
-      RestArray := TGocciaArrayValue.Create;
-      RestArrayRooted := Assigned(TGarbageCollector.Instance);
-      if RestArrayRooted then
-        TGarbageCollector.Instance.AddTempRoot(RestArray);
-      try
+    try
+      for I := 0 to AElements.Count - 1 do
+      begin
         IterationResult := AIterator.AdvanceNext;
-        while not IterationResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
-        begin
-          IterationValue := IterationResult.GetProperty(PROP_VALUE);
-          if not Assigned(IterationValue) then
-            IterationValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-          RestArray.Elements.Add(IterationValue);
-          IterationResult := AIterator.AdvanceNext;
-        end;
-        if not TryMatchPatternInternal(RestArray, ARestPattern,
+        if IterationResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value then
+          Exit(False);
+        if not Assigned(AElements[I]) then
+          Continue;
+        IterationValue := IterationResult.GetProperty(PROP_VALUE);
+        if not Assigned(IterationValue) then
+          IterationValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+        if not TryMatchPatternInternal(IterationValue, AElements[I],
            CurrentContext, NextContext) then
           Exit(False);
         CurrentContext := NextContext;
-      finally
-        if RestArrayRooted then
-          TGarbageCollector.Instance.RemoveTempRoot(RestArray);
       end;
-    end
-    else if not AHasRestWildcard then
-    begin
-      IterationResult := AIterator.AdvanceNext;
-      if not IterationResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value then
-        Exit(False);
-    end;
 
-    AMatchContext := CurrentContext;
-    Success := True;
-    Result := True;
+      if Assigned(ARestPattern) then
+      begin
+        RestArray := TGocciaArrayValue.Create;
+        RestArrayRooted := Assigned(TGarbageCollector.Instance);
+        if RestArrayRooted then
+          TGarbageCollector.Instance.AddTempRoot(RestArray);
+        try
+          IterationResult := AIterator.AdvanceNext;
+          while not IterationResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
+          begin
+            IterationValue := IterationResult.GetProperty(PROP_VALUE);
+            if not Assigned(IterationValue) then
+              IterationValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+            RestArray.Elements.Add(IterationValue);
+            IterationResult := AIterator.AdvanceNext;
+          end;
+          if not TryMatchPatternInternal(RestArray, ARestPattern,
+             CurrentContext, NextContext) then
+            Exit(False);
+          CurrentContext := NextContext;
+        finally
+          if RestArrayRooted then
+            TGarbageCollector.Instance.RemoveTempRoot(RestArray);
+        end;
+      end
+      else if not AHasRestWildcard then
+      begin
+        IterationResult := AIterator.AdvanceNext;
+        if not IterationResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value then
+          Exit(False);
+      end;
+
+      AMatchContext := CurrentContext;
+      Success := True;
+      Result := True;
+    finally
+      if not Success then
+        ReleaseMatchContext(CurrentContext, AContext);
+    end;
   finally
-    if not Success then
-      ReleaseMatchContext(CurrentContext, AContext);
+    if IteratorWasRooted then
+      GC.RemoveTempRoot(AIterator);
   end;
 end;
 

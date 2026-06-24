@@ -106,7 +106,7 @@ var
   Mapping: Boolean;
   K, Len: Integer;
   SourceRoot, ResultRoot, MapCallbackRoot, ThisArgRoot, ValueRoot,
-  IteratorObjRoot, IteratorRoot: TGocciaTempRoot;
+  MapValueRoot, MapIndexRoot, IteratorObjRoot, IteratorRoot: TGocciaTempRoot;
 
   // ES2026 §7.3.5 CreateDataPropertyOrThrow(A, P, V)
   procedure CreateDataProperty(const AIndex: Integer; const AValue: TGocciaValue);
@@ -124,6 +124,24 @@ var
       CreateDataProperty(AIndex, AValue);
     finally
       RemoveTempRootIfNeeded(ValueRoot);
+    end;
+  end;
+
+  function InvokeMapCallbackRooted(
+    const AValue: TGocciaValue; const AIndex: Integer): TGocciaValue;
+  var
+    IndexValue: TGocciaValue;
+  begin
+    AddTempRootIfNeeded(MapValueRoot, AValue);
+    IndexValue := TGocciaNumberLiteralValue.Create(AIndex);
+    AddTempRootIfNeeded(MapIndexRoot, IndexValue);
+    try
+      MapArgs.SetElement(0, AValue);
+      MapArgs.SetElement(1, IndexValue);
+      Result := InvokeCallable(MapCallback, MapArgs, ThisArg);
+    finally
+      RemoveTempRootIfNeeded(MapIndexRoot);
+      RemoveTempRootIfNeeded(MapValueRoot);
     end;
   end;
 
@@ -188,6 +206,8 @@ begin
   InitializeTempRoot(MapCallbackRoot);
   InitializeTempRoot(ThisArgRoot);
   InitializeTempRoot(ValueRoot);
+  InitializeTempRoot(MapValueRoot);
+  InitializeTempRoot(MapIndexRoot);
   InitializeTempRoot(IteratorObjRoot);
   InitializeTempRoot(IteratorRoot);
   AddTempRootIfNeeded(SourceRoot, Source);
@@ -215,11 +235,7 @@ begin
             KValue := TGocciaUndefinedLiteralValue.UndefinedValue;
           // Step 5e-iv: If mapping, let mappedValue = Call(mapfn, thisArg, « next, k »)
           if Mapping then
-          begin
-            MapArgs.SetElement(0, KValue);
-            MapArgs.SetElement(1, TGocciaNumberLiteralValue.Create(K));
-            KValue := InvokeCallable(MapCallback, MapArgs, ThisArg);
-          end;
+            KValue := InvokeMapCallbackRooted(KValue, K);
           // Step 5e-v: CreateDataPropertyOrThrow(A, ToString(k), mappedValue)
           CreateDataPropertyRooted(K, KValue);
         end;
@@ -244,11 +260,7 @@ begin
         begin
           KValue := TGocciaStringLiteralValue.Create(SourceStr[K]);
           if Mapping then
-          begin
-            MapArgs.SetElement(0, KValue);
-            MapArgs.SetElement(1, TGocciaNumberLiteralValue.Create(K - 1));
-            KValue := InvokeCallable(MapCallback, MapArgs, ThisArg);
-          end;
+            KValue := InvokeMapCallbackRooted(KValue, K - 1);
           CreateDataPropertyRooted(K - 1, KValue);
         end;
         if UseConstructor and not (ResultObj is TGocciaArrayValue) then
@@ -321,20 +333,22 @@ begin
           try
             // Step 5d-e: Iterate
             K := 0;
-            IterResult := Iterator.AdvanceNext;
-            while not IteratorResultDone(IterResult) do
-            begin
-              KValue := IteratorResultValue(IterResult);
-              if Mapping then
-              begin
-                MapArgs.SetElement(0, KValue);
-                MapArgs.SetElement(1, TGocciaNumberLiteralValue.Create(K));
-                KValue := InvokeCallable(MapCallback, MapArgs, ThisArg);
-              end;
-              // Step 5e-v: CreateDataPropertyOrThrow(A, ToString(k), mappedValue)
-              CreateDataPropertyRooted(K, KValue);
-              Inc(K);
+            try
               IterResult := Iterator.AdvanceNext;
+              while not IteratorResultDone(IterResult) do
+              begin
+                KValue := IteratorResultValue(IterResult);
+                if Mapping then
+                  KValue := InvokeMapCallbackRooted(KValue, K);
+                // Step 5e-v: CreateDataPropertyOrThrow(A, ToString(k), mappedValue)
+                CreateDataPropertyRooted(K, KValue);
+                Inc(K);
+                IterResult := Iterator.AdvanceNext;
+              end;
+            except
+              AcquireExceptionObject;
+              CloseIteratorPreservingError(Iterator);
+              raise;
             end;
           finally
             RemoveTempRootIfNeeded(IteratorRoot);
@@ -373,11 +387,7 @@ begin
                 KValue := TGocciaUndefinedLiteralValue.UndefinedValue;
               // Step 12c-d: If mapping, Call(mapfn, thisArg, « kValue, k »)
               if Mapping then
-              begin
-                MapArgs.SetElement(0, KValue);
-                MapArgs.SetElement(1, TGocciaNumberLiteralValue.Create(K));
-                KValue := InvokeCallable(MapCallback, MapArgs, ThisArg);
-              end;
+                KValue := InvokeMapCallbackRooted(KValue, K);
               // Step 12e: CreateDataPropertyOrThrow(A, Pk, mappedValue)
               CreateDataPropertyRooted(K, KValue);
             end;

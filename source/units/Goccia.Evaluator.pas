@@ -3953,6 +3953,7 @@ begin
       if MemberExpr.Optional and
          ((ThisValue is TGocciaNullLiteralValue) or (ThisValue is TGocciaUndefinedLiteralValue)) then
       begin
+        AShortCircuited := True;
         Result := TGocciaUndefinedLiteralValue.UndefinedValue;
         Roots.Clear;
         Exit;

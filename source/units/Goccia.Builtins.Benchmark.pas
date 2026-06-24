@@ -458,11 +458,8 @@ begin
       WaitForFetchIdle;
       Result.SetupMs := (GetNanoseconds - StartNanoseconds) / 1000000;
 
-      if Assigned(SetupResult) and Assigned(GC) then
-      begin
-        GC.AddTempRoot(SetupResult);
+      if Assigned(SetupResult) then
         ActiveRoots.Add(SetupResult);
-      end;
     end;
 
     try
@@ -584,8 +581,6 @@ begin
     finally
       if Assigned(GC) then
         GC.Enabled := WasGCEnabled;
-      if Assigned(SetupResult) and Assigned(GC) then
-        GC.RemoveTempRoot(SetupResult);
     end;
   finally
     RunArgs.Free;
@@ -626,25 +621,17 @@ begin
       SetupResult := ABenchCase.SetupFunction.CallNoArgs(
         TGocciaUndefinedLiteralValue.UndefinedValue);
       WaitForFetchIdle;
-      if Assigned(SetupResult) and Assigned(GC) then
-      begin
-        GC.AddTempRoot(SetupResult);
+      if Assigned(SetupResult) then
         ActiveRoots.Add(SetupResult);
-      end;
     end;
 
-    try
-      InvokeBenchmarkFunction(ABenchCase.RunFunction, SetupResult, RunArgs);
-      WaitForFetchIdle;
+    InvokeBenchmarkFunction(ABenchCase.RunFunction, SetupResult, RunArgs);
+    WaitForFetchIdle;
 
-      if Assigned(ABenchCase.TeardownFunction) then
-      begin
-        InvokeBenchmarkFunction(ABenchCase.TeardownFunction, SetupResult, RunArgs);
-        WaitForFetchIdle;
-      end;
-    finally
-      if Assigned(SetupResult) and Assigned(GC) then
-        GC.RemoveTempRoot(SetupResult);
+    if Assigned(ABenchCase.TeardownFunction) then
+    begin
+      InvokeBenchmarkFunction(ABenchCase.TeardownFunction, SetupResult, RunArgs);
+      WaitForFetchIdle;
     end;
   finally
     RunArgs.Free;

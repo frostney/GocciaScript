@@ -969,24 +969,26 @@ begin
         MainMemoryStats, WorkerMemoryStats, True);
 
       { Collect results on the main thread in original file order. }
+      try
         for I := 0 to Files.Count - 1 do
         begin
           if AShowProgress then
             TBenchmarkProgress.WriteLine(SysUtils.Format('[%d/%d] %s',
               [I + 1, Files.Count, ExtractFileName(Files[I])]));
-        if Assigned(WorkerData[I]) then
-          Reporter.AddFileResult(WorkerData[I]^)
-        else
-          MakeErrorFileResult(Files[I], 'Benchmark worker produced no result',
-            Reporter);
-      end;
-
-      for I := 0 to Length(WorkerData) - 1 do
-        if Assigned(WorkerData[I]) then
-        begin
-          Dispose(WorkerData[I]);
-          WorkerData[I] := nil;
+          if Assigned(WorkerData[I]) then
+            Reporter.AddFileResult(WorkerData[I]^)
+          else
+            MakeErrorFileResult(Files[I], 'Benchmark worker produced no result',
+              Reporter);
         end;
+      finally
+        for I := 0 to Length(WorkerData) - 1 do
+          if Assigned(WorkerData[I]) then
+          begin
+            Dispose(WorkerData[I]);
+            WorkerData[I] := nil;
+          end;
+      end;
     end
     else
     begin
