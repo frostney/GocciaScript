@@ -901,7 +901,8 @@ begin
       if OptionValue = '' then
         ThrowRangeError(Format(SErrorIntlInvalidOption, [OptionValue, 'firstDayOfWeek']));
       OptionValue := CanonicalizeFirstDayOfWeekValue(OptionValue);
-      if (OptionValue <> '') and not IsUnicodeLocaleTypeSequence(OptionValue) then
+      if (OptionValue = '') or (DayIdentifierToNumber(OptionValue) = 0) or
+         not IsUnicodeLocaleTypeSequence(OptionValue) then
         ThrowRangeError(Format(SErrorIntlInvalidOption, [OptionValue, 'firstDayOfWeek']));
       FFirstDayOfWeek := OptionValue;
       FFirstDayOfWeekPresent := True;

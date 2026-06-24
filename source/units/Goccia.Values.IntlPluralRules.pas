@@ -109,6 +109,16 @@ begin
   ThrowRangeError(Format(SErrorIntlInvalidOption, [Result, AName]));
 end;
 
+function IsPluralRulesRoundingIncrement(const AValue: Integer): Boolean;
+begin
+  case AValue of
+    1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 2500, 5000:
+      Result := True;
+  else
+    Result := False;
+  end;
+end;
+
 procedure DefinePluralRulesDataProperty(const AObject: TGocciaObjectValue;
   const AName: string; const AValue: TGocciaValue);
 begin
@@ -159,6 +169,7 @@ constructor TGocciaIntlPluralRulesValue.Create(const ALocale: string; const AOpt
 var
   Canonical: string;
   V: TGocciaValue;
+  RoundingIncrement: Integer;
   HasMinFrac, HasMaxFrac, HasMinSig, HasMaxSig: Boolean;
 begin
   inherited Create;
@@ -270,7 +281,12 @@ begin
   begin
     V := AOptions.GetProperty('roundingIncrement');
     if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-      ToIntegerWithTruncationValue(V);
+    begin
+      RoundingIncrement := ToIntegerWithTruncationValue(V);
+      if not IsPluralRulesRoundingIncrement(RoundingIncrement) then
+        ThrowRangeError(Format(SErrorIntlInvalidOption,
+          [IntToStr(RoundingIncrement), 'roundingIncrement']));
+    end;
     ReadPluralRulesStringOption(AOptions, 'roundingMode', 'halfExpand',
       ['ceil', 'floor', 'expand', 'trunc', 'halfCeil', 'halfFloor',
        'halfExpand', 'halfTrunc', 'halfEven']);

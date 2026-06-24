@@ -122,8 +122,6 @@ var
   IteratorRoot, ItemRoot: TGocciaTempRoot;
 begin
   SetLength(Result, 0);
-  if AValue is TGocciaUndefinedLiteralValue then
-    Exit;
 
   Iterator := GetIteratorFromValue(AValue);
   if not Assigned(Iterator) then

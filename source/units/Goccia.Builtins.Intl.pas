@@ -1003,62 +1003,44 @@ end;
 
 function CollatorLocaleArgumentToLocale(const AArg: TGocciaValue): string;
 var
-  Element: TGocciaValue;
   Tag, Canonical, FirstUnicodeExtensionValue: string;
   RequestedLocales: TStringArray;
-  FirstUnicodeExtension, SecondUnicodeExtension: Integer;
+  FirstUnicodeExtension, SecondUnicodeExtension, I: Integer;
   LowerTag, Tail: string;
 begin
-  // TODO: CollatorLocaleArgumentToLocale duplicates LocaleCompareArgumentToLocale;
-  // extract both into a shared Intl locale parsing utility.
   Result := '';
-  if (AArg is TGocciaUndefinedLiteralValue) or (AArg = nil) then
+  RequestedLocales := CanonicalizeLocaleListFromValue(AArg);
+  if Length(RequestedLocales) = 0 then
     Exit;
 
-  if AArg is TGocciaStringLiteralValue then
-    Tag := TGocciaStringLiteralValue(AArg).Value
-  else if AArg is TGocciaArrayValue then
+  for I := 0 to High(RequestedLocales) do
   begin
-    if TGocciaArrayValue(AArg).GetLength = 0 then
-      Exit;
-    Element := TGocciaArrayValue(AArg).GetElement(0);
-    if Element is TGocciaStringLiteralValue then
-      Tag := TGocciaStringLiteralValue(Element).Value
-    else if Element is TGocciaObjectValue then
-      Tag := Element.ToStringLiteral.Value
-    else
-      ThrowTypeError('locales array elements must be strings or objects');
-  end
-  else if AArg is TGocciaObjectValue then
-    Tag := AArg.ToStringLiteral.Value
-  else
-    ThrowTypeError('locales argument must be a string, object, array, or undefined');
-
-  Canonical := CanonicalizeUnicodeLocaleId(Tag);
-  if Canonical = '' then
-  begin
-    LowerTag := LowerCase(Tag);
-    FirstUnicodeExtension := Pos('-u-', LowerTag);
-    if FirstUnicodeExtension <> 0 then
-    begin
-      Tail := Copy(LowerTag, FirstUnicodeExtension + 3, MaxInt);
-      SecondUnicodeExtension := Pos('-u-', Tail);
-      if SecondUnicodeExtension <> 0 then
-      begin
-        SecondUnicodeExtension := FirstUnicodeExtension + 3 +
-          SecondUnicodeExtension - 1;
-        FirstUnicodeExtensionValue := Copy(LowerTag, FirstUnicodeExtension + 3,
-          SecondUnicodeExtension - FirstUnicodeExtension - 3);
-        if FirstUnicodeExtensionValue = 'va-posix' then
-          Canonical := CanonicalizeUnicodeLocaleId(
-            Copy(Tag, 1, SecondUnicodeExtension - 1));
-      end;
-    end;
+    Tag := RequestedLocales[I];
+    Canonical := CanonicalizeUnicodeLocaleId(Tag);
     if Canonical = '' then
-      ThrowRangeError(Format('invalid language tag: %s', [Tag]));
+    begin
+      LowerTag := LowerCase(Tag);
+      FirstUnicodeExtension := Pos('-u-', LowerTag);
+      if FirstUnicodeExtension <> 0 then
+      begin
+        Tail := Copy(LowerTag, FirstUnicodeExtension + 3, MaxInt);
+        SecondUnicodeExtension := Pos('-u-', Tail);
+        if SecondUnicodeExtension <> 0 then
+        begin
+          SecondUnicodeExtension := FirstUnicodeExtension + 3 +
+            SecondUnicodeExtension - 1;
+          FirstUnicodeExtensionValue := Copy(LowerTag, FirstUnicodeExtension + 3,
+            SecondUnicodeExtension - FirstUnicodeExtension - 3);
+          if FirstUnicodeExtensionValue = 'va-posix' then
+            Canonical := CanonicalizeUnicodeLocaleId(
+              Copy(Tag, 1, SecondUnicodeExtension - 1));
+        end;
+      end;
+      if Canonical = '' then
+        ThrowRangeError(Format('invalid language tag: %s', [Tag]));
+    end;
+    RequestedLocales[I] := Canonical;
   end;
-  SetLength(RequestedLocales, 1);
-  RequestedLocales[0] := Canonical;
   Result := ResolveRequestedLocale(RequestedLocales);
 end;
 

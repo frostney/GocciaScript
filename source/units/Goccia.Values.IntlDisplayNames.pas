@@ -36,6 +36,7 @@ implementation
 uses
   SysUtils,
 
+  BCP47,
   IntlICU,
   IntlLocaleResolver,
   IntlTypes,
@@ -203,13 +204,19 @@ begin
 end;
 
 function CanonicalDisplayNamesCode(const AType, ACode: string): string;
+var
+  Parsed: TBcp47Tag;
+  I: Integer;
 begin
   Result := ACode;
   if AType = 'language' then
   begin
+    Parsed := ParseBcp47Tag(ACode);
     Result := CanonicalizeUnicodeLocaleId(ACode);
-    if (Result = '') or (Pos('-u-', LowerCase(ACode)) <> 0) or
+    if (Result = '') or (not Parsed.IsValid) or (Parsed.PrivateUse <> '') or
        (Pos('_', ACode) <> 0) then
+      ThrowRangeError(Format(SErrorIntlInvalidOption, [ACode, 'code']));
+    for I := 0 to High(Parsed.Extensions) do
       ThrowRangeError(Format(SErrorIntlInvalidOption, [ACode, 'code']));
   end
   else if AType = 'region' then

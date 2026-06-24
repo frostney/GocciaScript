@@ -1230,7 +1230,7 @@ procedure RoundDiffDuration(
   const AMode: TTemporalRoundingMode;
   const AIncrement: Integer);
 var
-  TimeNs, TotalNs, Divisor: Int64;
+  TimeNs, TotalNs, Divisor, UnitNs: Int64;
   RemNs: Int64;
   Sign: Integer;
   WholeUnits, ScaledValue, PeriodNs, RoundedValue: Int64;
@@ -1239,6 +1239,8 @@ var
   ResultYears, ResultMonths, ResultDays: Int64;
   ResultHours, ResultMinutes, ResultSeconds: Int64;
   ResultMs, ResultUs, ResultNs: Int64;
+  DivisorBig, RoundedBig: TBigInteger;
+  RoundedUnits: Int64;
 
   procedure ValidateRoundedCalendarOffset(const AOffsetMonths: Int64);
   var
@@ -1300,6 +1302,111 @@ var
     else
       Result := False;
     end;
+  end;
+
+  function BigIntFitsInt64(const AValue: TBigInteger): Boolean;
+  begin
+    Result := (AValue.Compare(TBigInteger.FromInt64(Low(Int64))) >= 0) and
+      (AValue.Compare(TBigInteger.FromInt64(High(Int64))) <= 0);
+  end;
+
+  procedure AssignLargeRoundedUnits(const ARoundedUnits: Int64;
+    const AUnit: TTemporalUnit);
+  var
+    WeeksPart, DaysPart, HoursPart, MinutesPart, SecondsPart: Int64;
+    MillisecondsPart, MicrosecondsPart, NanosecondsPart: Int64;
+  begin
+    AYears := 0;
+    AMonths := 0;
+    AWeeks := 0;
+    ADays := 0;
+    AHours := 0;
+    AMinutes := 0;
+    ASeconds := 0;
+    AMilliseconds := 0;
+    AMicroseconds := 0;
+    ANanoseconds := 0;
+
+    WeeksPart := 0;
+    DaysPart := 0;
+    HoursPart := 0;
+    MinutesPart := 0;
+    SecondsPart := 0;
+    MillisecondsPart := 0;
+    MicrosecondsPart := 0;
+    NanosecondsPart := 0;
+
+    case AUnit of
+      tuWeek:
+        WeeksPart := ARoundedUnits;
+      tuDay:
+        DaysPart := ARoundedUnits;
+      tuHour:
+        HoursPart := ARoundedUnits;
+      tuMinute:
+        MinutesPart := ARoundedUnits;
+      tuSecond:
+        SecondsPart := ARoundedUnits;
+      tuMillisecond:
+        MillisecondsPart := ARoundedUnits;
+      tuMicrosecond:
+        MicrosecondsPart := ARoundedUnits;
+      tuNanosecond:
+        NanosecondsPart := ARoundedUnits;
+    else
+      ThrowRangeError(SErrorCannotConvertCalendarUnit, SSuggestTemporalValidUnits);
+    end;
+
+    if (AUnit = tuWeek) and (Ord(ALargestUnit) > Ord(tuWeek)) then
+    begin
+      DaysPart := WeeksPart * 7;
+      WeeksPart := 0;
+    end;
+
+    if Ord(ALargestUnit) <= Ord(tuMicrosecond) then
+    begin
+      MicrosecondsPart := MicrosecondsPart + NanosecondsPart div 1000;
+      NanosecondsPart := NanosecondsPart mod 1000;
+    end;
+    if Ord(ALargestUnit) <= Ord(tuMillisecond) then
+    begin
+      MillisecondsPart := MillisecondsPart + MicrosecondsPart div 1000;
+      MicrosecondsPart := MicrosecondsPart mod 1000;
+    end;
+    if Ord(ALargestUnit) <= Ord(tuSecond) then
+    begin
+      SecondsPart := SecondsPart + MillisecondsPart div 1000;
+      MillisecondsPart := MillisecondsPart mod 1000;
+    end;
+    if Ord(ALargestUnit) <= Ord(tuMinute) then
+    begin
+      MinutesPart := MinutesPart + SecondsPart div 60;
+      SecondsPart := SecondsPart mod 60;
+    end;
+    if Ord(ALargestUnit) <= Ord(tuHour) then
+    begin
+      HoursPart := HoursPart + MinutesPart div 60;
+      MinutesPart := MinutesPart mod 60;
+    end;
+    if Ord(ALargestUnit) <= Ord(tuDay) then
+    begin
+      DaysPart := DaysPart + HoursPart div 24;
+      HoursPart := HoursPart mod 24;
+    end;
+    if Ord(ALargestUnit) <= Ord(tuWeek) then
+    begin
+      WeeksPart := WeeksPart + DaysPart div 7;
+      DaysPart := DaysPart mod 7;
+    end;
+
+    AWeeks := WeeksPart;
+    ADays := DaysPart;
+    AHours := HoursPart;
+    AMinutes := MinutesPart;
+    ASeconds := SecondsPart;
+    AMilliseconds := MillisecondsPart;
+    AMicroseconds := MicrosecondsPart;
+    ANanoseconds := NanosecondsPart;
   end;
 begin
   // Nothing to do when smallestUnit equals the finest granularity and increment is 1
@@ -1545,45 +1652,35 @@ begin
       TotalNs := (AWeeks * 7 + ADays) * NANOSECONDS_PER_DAY + TimeNs;
 
     // Round
-    if (ASmallestUnit = tuDay) and
-       (AIncrement > High(Int64) div NANOSECONDS_PER_DAY) then
+    if ASmallestUnit = tuWeek then
+      UnitNs := NANOSECONDS_PER_DAY * 7
+    else
+      UnitNs := UnitToNanoseconds(ASmallestUnit);
+
+    if AIncrement > High(Int64) div UnitNs then
     begin
-      if TotalNs = 0 then
-        ResultDays := 0
+      DivisorBig := TBigInteger.FromInt64(UnitNs).Multiply(
+        TBigInteger.FromInt64(AIncrement));
+      RoundedBig := RoundBigIntWithMode(TBigInteger.FromInt64(TotalNs),
+        DivisorBig, AMode);
+      if BigIntFitsInt64(RoundedBig) then
+        TotalNs := RoundedBig.ToInt64
       else
       begin
-        ResultDays := 0;
-        case AMode of
-          rmCeil:
-            if TotalNs > 0 then
-              ResultDays := AIncrement;
-          rmFloor:
-            if TotalNs < 0 then
-              ResultDays := -AIncrement;
-          rmExpand:
-            if TotalNs > 0 then
-              ResultDays := AIncrement
-            else
-              ResultDays := -AIncrement;
-        end;
+        if (AYears <> 0) or (AMonths <> 0) or
+           (Ord(ALargestUnit) <= Ord(tuMonth)) then
+          ThrowRangeError('Rounded Temporal duration is outside the supported date range',
+            SSuggestTemporalDateRange);
+        RoundedUnits := RoundedBig.Divide(TBigInteger.FromInt64(UnitNs)).ToInt64;
+        AssignLargeRoundedUnits(RoundedUnits, ASmallestUnit);
+        Exit;
       end;
-      AYears := 0;
-      AMonths := 0;
-      AWeeks := 0;
-      ADays := ResultDays;
-      AHours := 0;
-      AMinutes := 0;
-      ASeconds := 0;
-      AMilliseconds := 0;
-      AMicroseconds := 0;
-      ANanoseconds := 0;
-      Exit;
     end
-    else if ASmallestUnit = tuWeek then
-      Divisor := NANOSECONDS_PER_DAY * 7 * AIncrement
     else
-      Divisor := UnitToNanoseconds(ASmallestUnit) * AIncrement;
-    TotalNs := RoundWithMode(TotalNs, Divisor, AMode);
+    begin
+      Divisor := UnitNs * AIncrement;
+      TotalNs := RoundWithMode(TotalNs, Divisor, AMode);
+    end;
 
     // Rebalance into largestUnit fields
     if (AYears <> 0) or (AMonths <> 0) or

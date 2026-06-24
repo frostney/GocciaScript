@@ -1862,6 +1862,22 @@ var
   CarryDays: Int64;
   Sign: Integer;
   CalendarYears, CalendarMonths, CalendarWeeks, CalendarDays: Int64;
+
+  function AddRelativeCalendarYears(const AYears: Int64): TTemporalDateRecord;
+  begin
+    if not TryAddCalendarDate(RelRecord.CalendarId, RelDate.Year, RelDate.Month,
+      RelDate.Day, AYears, 0, 0, 0, True, Result) then
+      ThrowRangeError(Format(SErrorTemporalInvalidRelativeTo,
+        ['Duration.prototype.round']), SSuggestTemporalRelativeTo);
+  end;
+
+  function AddRelativeCalendarMonths(const AMonths: Int64): TTemporalDateRecord;
+  begin
+    if not TryAddCalendarDate(RelRecord.CalendarId, RelDate.Year, RelDate.Month,
+      RelDate.Day, 0, AMonths, 0, 0, True, Result) then
+      ThrowRangeError(Format(SErrorTemporalInvalidRelativeTo,
+        ['Duration.prototype.round']), SSuggestTemporalRelativeTo);
+  end;
 begin
   try
   D := AsDuration(AThisValue, 'Duration.prototype.round');
@@ -2008,7 +2024,7 @@ begin
         if Sign > 0 then
         begin
           repeat
-            NextDate := AddMonthsToDate(RelDate.Year, RelDate.Month, RelDate.Day, (WholeUnits + 1) * 12);
+            NextDate := AddRelativeCalendarYears(WholeUnits + 1);
             NextEpoch := DateToEpochDays(NextDate.Year, NextDate.Month, NextDate.Day);
             if (NextEpoch > EndEpoch) or ((NextEpoch = EndEpoch) and (TimeNs <= 0)) then
               Break;
@@ -2018,7 +2034,7 @@ begin
         else
         begin
           repeat
-            NextDate := AddMonthsToDate(RelDate.Year, RelDate.Month, RelDate.Day, (WholeUnits - 1) * 12);
+            NextDate := AddRelativeCalendarYears(WholeUnits - 1);
             NextEpoch := DateToEpochDays(NextDate.Year, NextDate.Month, NextDate.Day);
             if (NextEpoch < EndEpoch) or ((NextEpoch = EndEpoch) and (TimeNs >= 0)) then
               Break;
@@ -2033,10 +2049,9 @@ begin
         else
           ScaledValue := -(((-WholeUnits) div Increment) * Increment);
 
-        WalkDate := AddMonthsToDate(RelDate.Year, RelDate.Month, RelDate.Day, ScaledValue * 12);
+        WalkDate := AddRelativeCalendarYears(ScaledValue);
         WalkEpoch := DateToEpochDays(WalkDate.Year, WalkDate.Month, WalkDate.Day);
-        NextDate := AddMonthsToDate(RelDate.Year, RelDate.Month, RelDate.Day,
-          (ScaledValue + Sign * Increment) * 12);
+        NextDate := AddRelativeCalendarYears(ScaledValue + Sign * Increment);
         NextEpoch := DateToEpochDays(NextDate.Year, NextDate.Month, NextDate.Day);
         PeriodNs := Abs(NextEpoch - WalkEpoch) * NANOSECONDS_PER_DAY;
         RoundedValue := RoundWithMode(
@@ -2055,7 +2070,7 @@ begin
         if Sign > 0 then
         begin
           repeat
-            NextDate := AddMonthsToDate(RelDate.Year, RelDate.Month, RelDate.Day, WholeUnits + 1);
+            NextDate := AddRelativeCalendarMonths(WholeUnits + 1);
             NextEpoch := DateToEpochDays(NextDate.Year, NextDate.Month, NextDate.Day);
             if (NextEpoch > EndEpoch) or ((NextEpoch = EndEpoch) and (TimeNs <= 0)) then
               Break;
@@ -2065,7 +2080,7 @@ begin
         else
         begin
           repeat
-            NextDate := AddMonthsToDate(RelDate.Year, RelDate.Month, RelDate.Day, WholeUnits - 1);
+            NextDate := AddRelativeCalendarMonths(WholeUnits - 1);
             NextEpoch := DateToEpochDays(NextDate.Year, NextDate.Month, NextDate.Day);
             if (NextEpoch < EndEpoch) or ((NextEpoch = EndEpoch) and (TimeNs >= 0)) then
               Break;
@@ -2078,10 +2093,9 @@ begin
         else
           ScaledValue := -(((-WholeUnits) div Increment) * Increment);
 
-        WalkDate := AddMonthsToDate(RelDate.Year, RelDate.Month, RelDate.Day, ScaledValue);
+        WalkDate := AddRelativeCalendarMonths(ScaledValue);
         WalkEpoch := DateToEpochDays(WalkDate.Year, WalkDate.Month, WalkDate.Day);
-        NextDate := AddMonthsToDate(RelDate.Year, RelDate.Month, RelDate.Day,
-          ScaledValue + Sign * Increment);
+        NextDate := AddRelativeCalendarMonths(ScaledValue + Sign * Increment);
         NextEpoch := DateToEpochDays(NextDate.Year, NextDate.Month, NextDate.Day);
         PeriodNs := Abs(NextEpoch - WalkEpoch) * NANOSECONDS_PER_DAY;
         RoundedValue := RoundWithMode(
@@ -2119,7 +2133,7 @@ begin
       if Sign > 0 then
       begin
         repeat
-          NextDate := AddMonthsToDate(RelDate.Year, RelDate.Month, RelDate.Day, WholeUnits + 1);
+          NextDate := AddRelativeCalendarMonths(WholeUnits + 1);
           NextEpoch := DateToEpochDays(NextDate.Year, NextDate.Month, NextDate.Day);
           if (NextEpoch > EndEpoch) or ((NextEpoch = EndEpoch) and (TimeNs < 0)) then Break;
           Inc(WholeUnits);
@@ -2128,14 +2142,14 @@ begin
       else
       begin
         repeat
-          NextDate := AddMonthsToDate(RelDate.Year, RelDate.Month, RelDate.Day, WholeUnits - 1);
+          NextDate := AddRelativeCalendarMonths(WholeUnits - 1);
           NextEpoch := DateToEpochDays(NextDate.Year, NextDate.Month, NextDate.Day);
           if (NextEpoch < EndEpoch) or ((NextEpoch = EndEpoch) and (TimeNs > 0)) then Break;
           Dec(WholeUnits);
         until False;
       end;
 
-      WalkDate := AddMonthsToDate(RelDate.Year, RelDate.Month, RelDate.Day, WholeUnits);
+      WalkDate := AddRelativeCalendarMonths(WholeUnits);
       WalkEpoch := DateToEpochDays(WalkDate.Year, WalkDate.Month, WalkDate.Day);
       TotalNsBig := BigIntUnit(EndEpoch - WalkEpoch)
         .Multiply(BigIntUnit(NANOSECONDS_PER_DAY))
@@ -2151,7 +2165,7 @@ begin
       if Sign > 0 then
       begin
         repeat
-          NextDate := AddMonthsToDate(RelDate.Year, RelDate.Month, RelDate.Day, WholeUnits + 1);
+          NextDate := AddRelativeCalendarMonths(WholeUnits + 1);
           NextEpoch := DateToEpochDays(NextDate.Year, NextDate.Month, NextDate.Day);
           PeriodNs := (NextEpoch - WalkEpoch) * NANOSECONDS_PER_DAY;
           if RemNs < PeriodNs then Break;
@@ -2164,7 +2178,7 @@ begin
       else
       begin
         repeat
-          NextDate := AddMonthsToDate(RelDate.Year, RelDate.Month, RelDate.Day, WholeUnits - 1);
+          NextDate := AddRelativeCalendarMonths(WholeUnits - 1);
           NextEpoch := DateToEpochDays(NextDate.Year, NextDate.Month, NextDate.Day);
           PeriodNs := (WalkEpoch - NextEpoch) * NANOSECONDS_PER_DAY;
           if RemNs > -PeriodNs then Break;
@@ -2331,11 +2345,33 @@ begin
 end;
 
 function IsDurationZonedRelativeToValue(const AValue: TGocciaValue): Boolean;
+var
+  Source, Annotation: string;
+  BracketStart, BracketEnd: Integer;
 begin
   if AValue is TGocciaTemporalZonedDateTimeValue then
     Exit(True);
   if AValue is TGocciaStringLiteralValue then
-    Exit(System.Pos('[', TGocciaStringLiteralValue(AValue).Value) > 0);
+  begin
+    Source := TGocciaStringLiteralValue(AValue).Value;
+    while (Length(Source) > 0) and (Source[Length(Source)] = ']') do
+    begin
+      BracketEnd := Length(Source);
+      BracketStart := BracketEnd - 1;
+      while (BracketStart > 0) and (Source[BracketStart] <> '[') do
+        Dec(BracketStart);
+      if BracketStart = 0 then
+        Break;
+      Annotation := Copy(Source, BracketStart + 1,
+        BracketEnd - BracketStart - 1);
+      if (Length(Annotation) > 0) and (Annotation[1] = '!') then
+        Annotation := Copy(Annotation, 2, Length(Annotation) - 1);
+      if not ((Length(Annotation) > 5) and
+              (Copy(Annotation, 1, 5) = 'u-ca=')) then
+        Exit(True);
+      Source := Copy(Source, 1, BracketStart - 1);
+    end;
+  end;
   Result := False;
 end;
 
@@ -2417,7 +2453,8 @@ var
 begin
   Result := False;
   AMonth := 0;
-  if (Length(AMonthCode) <> 3) or not TryStrToInt(Copy(AMonthCode, 2, 2), MonthPart) then
+  if not DurationMonthCodeSyntaxValid(AMonthCode) or
+     not TryStrToInt(Copy(AMonthCode, 2, 2), MonthPart) then
     Exit;
   if (MonthPart < 1) or (MonthPart > 12) then
     Exit;
@@ -2541,7 +2578,7 @@ var
   VEraYear: TGocciaValue;
   Year, Month, Day, Hour, Minute, Second, Millisecond, Microsecond, Nanosecond: Integer;
   CalendarId, MonthCode, OffsetString, TimeZoneString: string;
-  HasMonth, HasMonthCode, HasOffset, HasTimeZone: Boolean;
+  HasMonth, HasMonthCode, HasOffset, HasTimeZone, IsLeapMonth: Boolean;
   MonthFromCode, OffsetSeconds: Integer;
   OffsetHasUTCDesignator, OffsetHasSubMinuteSyntax: Boolean;
   OffsetEpochMs: Int64;
@@ -2583,6 +2620,7 @@ begin
   VMonthCode := AObj.GetProperty(PROP_MONTH_CODE);
   HasMonthCode := not DurationIsUndefinedValue(VMonthCode);
   MonthCode := '';
+  IsLeapMonth := False;
   if HasMonthCode then
   begin
     MonthCode := VMonthCode.ToStringLiteral.Value;
@@ -2625,7 +2663,7 @@ begin
 
   if HasMonthCode then
   begin
-    if not DurationMonthFromMonthCode(MonthCode, MonthFromCode) then
+    if not TryParseTemporalMonthCode(MonthCode, MonthFromCode, IsLeapMonth) then
       ThrowRangeError(Format(SErrorMonthCodeOutOfRangeIn, [AMethod]),
         SSuggestTemporalMonthCode);
     if HasMonth and (Month <> MonthFromCode) then
@@ -2646,7 +2684,7 @@ begin
   else
   begin
     if not TryResolveCalendarDateToISO(CalendarId, Year, Month, Day,
-      HasMonthCode, False, True, ISODate) then
+      HasMonthCode, IsLeapMonth, True, ISODate) then
       ThrowRangeError(Format(SErrorTemporalInvalidRelativeTo, [AMethod]),
         SSuggestTemporalRelativeTo);
     Year := ISODate.Year;
@@ -2737,7 +2775,7 @@ begin
   else if AValue is TGocciaStringLiteralValue then
   begin
     Source := TGocciaStringLiteralValue(AValue).Value;
-    if System.Pos('[', Source) > 0 then
+    if IsDurationZonedRelativeToValue(AValue) then
     begin
       ZonedDateTime := CoerceTemporalZonedDateTime(AValue, AMethod);
       Result := ZonedDateTimeToRelativeDate(ZonedDateTime);
@@ -2884,8 +2922,7 @@ begin
 
   if ARelativeTo is TGocciaTemporalZonedDateTimeValue then
     ZonedDateTime := TGocciaTemporalZonedDateTimeValue(ARelativeTo)
-  else if (ARelativeTo is TGocciaStringLiteralValue) and
-          (System.Pos('[', TGocciaStringLiteralValue(ARelativeTo).Value) > 0) then
+  else if IsDurationZonedRelativeToValue(ARelativeTo) then
     ZonedDateTime := CoerceTemporalZonedDateTime(ARelativeTo, AMethod)
   else
     Exit;
@@ -2951,25 +2988,25 @@ begin
       SSuggestTemporalRelativeTo);
 end;
 
-// Compute the end date of a duration applied from a reference date using
-// ISO 8601 calendar arithmetic (add years+months together, then weeks+days).
-function DurationEndDate(const ADate: TTemporalDateRecord;
+// Compute the end date of a duration applied from a reference date using the
+// relativeTo calendar (add years+months together, then weeks+days).
+function DurationEndDate(const ACalendarId: string; const ADate: TTemporalDateRecord;
   const AYears, AMonths, AWeeks, ADays: Int64): TTemporalDateRecord;
-var
-  Interm: TTemporalDateRecord;
 begin
-  Interm := AddMonthsToDate(ADate, AYears * 12 + AMonths);
-  Result := AddDaysToDate(Interm.Year, Interm.Month, Interm.Day, AWeeks * 7 + ADays);
+  if not TryAddCalendarDate(ACalendarId, ADate.Year, ADate.Month, ADate.Day,
+    AYears, AMonths, AWeeks, ADays, True, Result) then
+    ThrowRangeError(Format(SErrorTemporalInvalidRelativeTo,
+      ['Duration relativeTo']), SSuggestTemporalRelativeTo);
 end;
 
 // Resolve calendar-relative duration components (years, months, weeks) to a
 // concrete day count by walking forward from a reference date.
-function ResolveRelativeDays(const ADate: TTemporalDateRecord;
+function ResolveRelativeDays(const ACalendarId: string; const ADate: TTemporalDateRecord;
   const AYears, AMonths, AWeeks, ADays: Int64): Int64;
 var
   EndRec: TTemporalDateRecord;
 begin
-  EndRec := DurationEndDate(ADate, AYears, AMonths, AWeeks, ADays);
+  EndRec := DurationEndDate(ACalendarId, ADate, AYears, AMonths, AWeeks, ADays);
   Result := DateToEpochDays(EndRec.Year, EndRec.Month, EndRec.Day) -
             DateToEpochDays(ADate.Year, ADate.Month, ADate.Day);
 end;
@@ -2980,7 +3017,8 @@ end;
 // Shared calendar-walk helper for TotalInMonths and TotalInYears.
 // AMonthsPerUnit is 1 for months, 12 for years.
 function ComputeTotalInUnits(const D: TGocciaTemporalDurationValue;
-  const ARelDate: TTemporalDateRecord; const AMonthsPerUnit: Int64): Double;
+  const ACalendarId: string; const ARelDate: TTemporalDateRecord;
+  const AMonthsPerUnit: Int64): Double;
 var
   EndRec, CheckRec, SpanRec: TTemporalDateRecord;
   WholeUnits, CarryDays: Int64;
@@ -3001,7 +3039,7 @@ begin
   CalendarMonths := BigIntToCheckedInt64(D.FMonthsBig, 'months');
   CalendarWeeks := BigIntToCheckedInt64(D.FWeeksBig, 'weeks');
   CalendarDays := BigIntToCheckedInt64(D.FDaysBig, 'days');
-  EndRec := DurationEndDate(ARelDate, CalendarYears, CalendarMonths,
+  EndRec := DurationEndDate(ACalendarId, ARelDate, CalendarYears, CalendarMonths,
     CalendarWeeks, CalendarDays + CarryDays);
   EndEpoch := DateToEpochDays(EndRec.Year, EndRec.Month, EndRec.Day);
 
@@ -3011,21 +3049,30 @@ begin
   WholeUnits := TotalMonthsDiff div AMonthsPerUnit;
 
   // Verify estimate by walking from the reference date
-  CheckRec := AddMonthsToDate(ARelDate, WholeUnits * AMonthsPerUnit);
+  if not TryAddCalendarDate(ACalendarId, ARelDate.Year, ARelDate.Month,
+    ARelDate.Day, 0, WholeUnits * AMonthsPerUnit, 0, 0, True, CheckRec) then
+    ThrowRangeError(Format(SErrorTemporalInvalidRelativeTo,
+      ['Duration.prototype.total']), SSuggestTemporalRelativeTo);
   CheckEpoch := DateToEpochDays(CheckRec.Year, CheckRec.Month, CheckRec.Day);
 
   // Adjust if overshot forward
   while (WholeUnits > 0) and (CheckEpoch > EndEpoch) do
   begin
     Dec(WholeUnits);
-    CheckRec := AddMonthsToDate(ARelDate, WholeUnits * AMonthsPerUnit);
+    if not TryAddCalendarDate(ACalendarId, ARelDate.Year, ARelDate.Month,
+      ARelDate.Day, 0, WholeUnits * AMonthsPerUnit, 0, 0, True, CheckRec) then
+      ThrowRangeError(Format(SErrorTemporalInvalidRelativeTo,
+        ['Duration.prototype.total']), SSuggestTemporalRelativeTo);
     CheckEpoch := DateToEpochDays(CheckRec.Year, CheckRec.Month, CheckRec.Day);
   end;
   // Adjust if overshot backward
   while (WholeUnits < 0) and (CheckEpoch < EndEpoch) do
   begin
     Inc(WholeUnits);
-    CheckRec := AddMonthsToDate(ARelDate, WholeUnits * AMonthsPerUnit);
+    if not TryAddCalendarDate(ACalendarId, ARelDate.Year, ARelDate.Month,
+      ARelDate.Day, 0, WholeUnits * AMonthsPerUnit, 0, 0, True, CheckRec) then
+      ThrowRangeError(Format(SErrorTemporalInvalidRelativeTo,
+        ['Duration.prototype.total']), SSuggestTemporalRelativeTo);
     CheckEpoch := DateToEpochDays(CheckRec.Year, CheckRec.Month, CheckRec.Day);
   end;
 
@@ -3037,13 +3084,21 @@ begin
     .Multiply(BigIntUnit(NANOSECONDS_PER_DAY)).Add(RemainderNsBig);
   if FractionNumerator.Compare(TBigInteger.Zero) >= 0 then
   begin
-    SpanRec := AddMonthsToDate(ARelDate, (WholeUnits + 1) * AMonthsPerUnit);
+    if not TryAddCalendarDate(ACalendarId, ARelDate.Year, ARelDate.Month,
+      ARelDate.Day, 0, (WholeUnits + 1) * AMonthsPerUnit, 0, 0, True,
+      SpanRec) then
+      ThrowRangeError(Format(SErrorTemporalInvalidRelativeTo,
+        ['Duration.prototype.total']), SSuggestTemporalRelativeTo);
     SpanEpoch := DateToEpochDays(SpanRec.Year, SpanRec.Month, SpanRec.Day);
     DaysInSpan := SpanEpoch - CheckEpoch;
   end
   else
   begin
-    SpanRec := AddMonthsToDate(ARelDate, (WholeUnits - 1) * AMonthsPerUnit);
+    if not TryAddCalendarDate(ACalendarId, ARelDate.Year, ARelDate.Month,
+      ARelDate.Day, 0, (WholeUnits - 1) * AMonthsPerUnit, 0, 0, True,
+      SpanRec) then
+      ThrowRangeError(Format(SErrorTemporalInvalidRelativeTo,
+        ['Duration.prototype.total']), SSuggestTemporalRelativeTo);
     SpanEpoch := DateToEpochDays(SpanRec.Year, SpanRec.Month, SpanRec.Day);
     DaysInSpan := CheckEpoch - SpanEpoch;
   end;
@@ -3061,24 +3116,26 @@ begin
 end;
 
 function TotalInMonths(const D: TGocciaTemporalDurationValue;
-  const ARelDate: TTemporalDateRecord): TGocciaValue;
+  const ACalendarId: string; const ARelDate: TTemporalDateRecord): TGocciaValue;
 begin
-  Result := TGocciaNumberLiteralValue.Create(ComputeTotalInUnits(D, ARelDate, 1));
+  Result := TGocciaNumberLiteralValue.Create(ComputeTotalInUnits(D,
+    ACalendarId, ARelDate, 1));
 end;
 
 // Express the duration as a fractional year count relative to a reference date.
 function TotalInYears(const D: TGocciaTemporalDurationValue;
-  const ARelDate: TTemporalDateRecord): TGocciaValue;
+  const ACalendarId: string; const ARelDate: TTemporalDateRecord): TGocciaValue;
 begin
-  Result := TGocciaNumberLiteralValue.Create(ComputeTotalInUnits(D, ARelDate, 12));
+  Result := TGocciaNumberLiteralValue.Create(ComputeTotalInUnits(D,
+    ACalendarId, ARelDate, 12));
 end;
 
 function DurationNanosecondsRelativeToPlainDate(const D: TGocciaTemporalDurationValue;
-  const ARelDate: TTemporalDateRecord): TBigInteger;
+  const ACalendarId: string; const ARelDate: TTemporalDateRecord): TBigInteger;
 var
   ResolvedDays: Int64;
 begin
-  ResolvedDays := ResolveRelativeDays(ARelDate,
+  ResolvedDays := ResolveRelativeDays(ACalendarId, ARelDate,
     BigIntToCheckedInt64(D.FYearsBig, 'years'),
     BigIntToCheckedInt64(D.FMonthsBig, 'months'),
     BigIntToCheckedInt64(D.FWeeksBig, 'weeks'),
@@ -3088,7 +3145,8 @@ begin
 end;
 
 procedure ValidateDurationTotalPlainDateRange(const D: TGocciaTemporalDurationValue;
-  const ARelDate: TTemporalDateRecord; const AMethod: string);
+  const ACalendarId: string; const ARelDate: TTemporalDateRecord;
+  const AMethod: string);
 var
   TimeNsBig, CarryDaysBig, RemainderNsBig, TotalNsBig: TBigInteger;
   CarryDays, CalendarYears, CalendarMonths, CalendarWeeks, CalendarDays: Int64;
@@ -3102,7 +3160,7 @@ begin
   CalendarMonths := BigIntToCheckedInt64(D.FMonthsBig, 'months');
   CalendarWeeks := BigIntToCheckedInt64(D.FWeeksBig, 'weeks');
   CalendarDays := BigIntToCheckedInt64(D.FDaysBig, 'days');
-  EndDate := DurationEndDate(ARelDate, CalendarYears, CalendarMonths,
+  EndDate := DurationEndDate(ACalendarId, ARelDate, CalendarYears, CalendarMonths,
     CalendarWeeks, CalendarDays + CarryDays);
   if (not DurationDateInTemporalRange(EndDate)) or
      (DurationDateAtUpperLimit(EndDate) and RemainderNsBig.IsPositive) or
@@ -3111,7 +3169,7 @@ begin
     ThrowRangeError(Format(SErrorTemporalInvalidRelativeTo, [AMethod]),
       SSuggestTemporalRelativeTo);
 
-  TotalNsBig := DurationNanosecondsRelativeToPlainDate(D, ARelDate);
+  TotalNsBig := DurationNanosecondsRelativeToPlainDate(D, ACalendarId, ARelDate);
   if not IsValidTimeDuration(TotalNsBig) then
     ThrowRangeError(Format(SErrorTemporalInvalidRelativeTo, [AMethod]),
       SSuggestTemporalRelativeTo);
@@ -3213,9 +3271,9 @@ begin
     else
     begin
       OneNanoseconds := DurationNanosecondsRelativeToPlainDate(AOne,
-        RelativeTo.Date);
+        RelativeTo.CalendarId, RelativeTo.Date);
       TwoNanoseconds := DurationNanosecondsRelativeToPlainDate(ATwo,
-        RelativeTo.Date);
+        RelativeTo.CalendarId, RelativeTo.Date);
       if (not IsValidTimeDuration(OneNanoseconds)) or
          (not IsValidTimeDuration(TwoNanoseconds)) then
         ThrowRangeError(Format(SErrorTemporalInvalidRelativeTo,
@@ -3296,7 +3354,8 @@ begin
 
   if HasRelativeTo and (not HasZonedRelativeTo) and
      (IsDurationDateUnit(TargetUnit) or DurationHasDateUnits(D)) then
-    ValidateDurationTotalPlainDateRange(D, RelDate, 'Duration.prototype.total');
+    ValidateDurationTotalPlainDateRange(D, RelRecord.CalendarId, RelDate,
+      'Duration.prototype.total');
   if HasRelativeTo and (not HasZonedRelativeTo) and
      (not IsDurationDateUnit(TargetUnit)) and (D.ComputeSign <> 0) and
      DurationDateBefore(RelDate.Year, RelDate.Month, RelDate.Day,
@@ -3323,9 +3382,9 @@ begin
       ThrowRangeError(Format(SErrorTemporalInvalidRelativeTo,
         ['Duration.prototype.total']), SSuggestTemporalRelativeTo);
     if TargetUnit = tuMonth then
-      Result := TotalInMonths(D, RelDate)
+      Result := TotalInMonths(D, RelRecord.CalendarId, RelDate)
     else
-      Result := TotalInYears(D, RelDate);
+      Result := TotalInYears(D, RelRecord.CalendarId, RelDate);
     Exit;
   end;
   if (TargetUnit = tuWeek) and (not HasRelativeTo) then
@@ -3337,7 +3396,7 @@ begin
     if not HasRelativeTo then
       ThrowRangeError(SErrorDurationTotalRequiresRelativeTo, SSuggestTemporalRelativeTo);
 
-    ResolvedDays := ResolveRelativeDays(RelDate,
+    ResolvedDays := ResolveRelativeDays(RelRecord.CalendarId, RelDate,
       BigIntToCheckedInt64(D.FYearsBig, 'years'),
       BigIntToCheckedInt64(D.FMonthsBig, 'months'),
       BigIntToCheckedInt64(D.FWeeksBig, 'weeks'),
@@ -3406,6 +3465,8 @@ begin
   StringValue := V.ToStringLiteral.Value;
   if StringValue = 'auto' then
     Result := -1
+  else if (Length(StringValue) = 1) and (StringValue[1] in ['0'..'9']) then
+    Result := Ord(StringValue[1]) - Ord('0')
   else
     ThrowRangeError(Format(SErrorInvalidFractionalDigits, [StringValue]),
       SSuggestTemporalRoundArg);

@@ -463,14 +463,27 @@ begin
   Result := DEFAULT_HOUR_CYCLE_24;
 end;
 
-function DateTimeDefaultHourCycle(const ALocale: string): string;
+function DateTimeLocaleUses12HourDefault(const ALocale: string): Boolean;
 var
   LowerLocale: string;
 begin
   LowerLocale := DateTimeAsciiLower(LocaleWithoutUnicodeExtension(ALocale));
-  if (Copy(LowerLocale, 1, 2) = 'en') or
-     (Copy(LowerLocale, 1, 2) = 'ar') or
-     (Copy(LowerLocale, 1, 2) = 'hi') then
+  Result :=
+    (LowerLocale = 'en') or
+    (LowerLocale = 'en-us') or (Copy(LowerLocale, 1, 6) = 'en-us-') or
+    (LowerLocale = 'en-ca') or (Copy(LowerLocale, 1, 6) = 'en-ca-') or
+    (LowerLocale = 'en-au') or (Copy(LowerLocale, 1, 6) = 'en-au-') or
+    (LowerLocale = 'en-nz') or (Copy(LowerLocale, 1, 6) = 'en-nz-') or
+    (LowerLocale = 'en-in') or (Copy(LowerLocale, 1, 6) = 'en-in-') or
+    (LowerLocale = 'en-ph') or (Copy(LowerLocale, 1, 6) = 'en-ph-') or
+    (LowerLocale = 'en-sg') or (Copy(LowerLocale, 1, 6) = 'en-sg-') or
+    (LowerLocale = 'ar') or (Copy(LowerLocale, 1, 3) = 'ar-') or
+    (LowerLocale = 'hi') or (Copy(LowerLocale, 1, 3) = 'hi-');
+end;
+
+function DateTimeDefaultHourCycle(const ALocale: string): string;
+begin
+  if DateTimeLocaleUses12HourDefault(ALocale) then
     Result := DateTimeHourCycle12(ALocale)
   else
     Result := DateTimeHourCycle24;
@@ -983,12 +996,10 @@ begin
     dtfkPlainDate,
     dtfkPlainYearMonth,
     dtfkPlainMonthDay:
-      if (AEffectiveOptions.DateStyle = idtsNone) and
-         (AEffectiveOptions.TimeStyle <> idtsNone) then
+      if AEffectiveOptions.TimeStyle <> idtsNone then
         Exit(False);
     dtfkPlainTime:
-      if (AEffectiveOptions.TimeStyle = idtsNone) and
-         (AEffectiveOptions.DateStyle <> idtsNone) then
+      if AEffectiveOptions.DateStyle <> idtsNone then
         Exit(False);
   end;
 
@@ -1765,9 +1776,15 @@ begin
     AllowISOCalendar := True;
   end
   else if AValue is TGocciaTemporalPlainYearMonthValue then
-    ValueCalendar := TGocciaTemporalPlainYearMonthValue(AValue).CalendarId
+  begin
+    ValueCalendar := TGocciaTemporalPlainYearMonthValue(AValue).CalendarId;
+    AllowISOCalendar := True;
+  end
   else if AValue is TGocciaTemporalPlainMonthDayValue then
-    ValueCalendar := TGocciaTemporalPlainMonthDayValue(AValue).CalendarId
+  begin
+    ValueCalendar := TGocciaTemporalPlainMonthDayValue(AValue).CalendarId;
+    AllowISOCalendar := True;
+  end
   else if AValue is TGocciaTemporalZonedDateTimeValue then
   begin
     ValueCalendar := TGocciaTemporalZonedDateTimeValue(AValue).CalendarId;
@@ -1793,6 +1810,7 @@ begin
   Input := ToDateTimeFormattable(AValue);
   if IsTemporalDateTimeKind(Input.Kind) then
   begin
+    ValidateTemporalLocaleCalendar(ADTF, AValue);
     if (Input.Kind = dtfkZonedDateTime) and not AAllowZonedDateTime then
       ThrowTypeError('Intl.DateTimeFormat.prototype.format does not support Temporal.ZonedDateTime');
     if not FilterTemporalDateTimeOptions(ADTF.FResolvedOptions, Input.Kind,
@@ -2147,6 +2165,7 @@ begin
     Input := ToDateTimeFormattable(AArgs.GetElement(0));
     if IsTemporalDateTimeKind(Input.Kind) then
     begin
+      ValidateTemporalLocaleCalendar(DTF, AArgs.GetElement(0));
       if Input.Kind = dtfkZonedDateTime then
         ThrowTypeError('Intl.DateTimeFormat.prototype.formatToParts does not support Temporal.ZonedDateTime');
       if not FilterTemporalDateTimeOptions(DTF.FResolvedOptions, Input.Kind,
@@ -2204,6 +2223,8 @@ begin
      (TemporalDateTimeValueCalendar(AArgs.GetElement(0)) <>
       TemporalDateTimeValueCalendar(AArgs.GetElement(1))) then
     ThrowRangeError('Temporal values must use the same calendar');
+  if IsTemporalDateTimeKind(StartInput.Kind) then
+    ValidateTemporalLocaleCalendar(DTF, AArgs.GetElement(0));
   if StartInput.Kind = dtfkZonedDateTime then
     ThrowTypeError('Intl.DateTimeFormat.prototype.formatRange does not support Temporal.ZonedDateTime');
 
@@ -2274,6 +2295,8 @@ begin
      (TemporalDateTimeValueCalendar(AArgs.GetElement(0)) <>
       TemporalDateTimeValueCalendar(AArgs.GetElement(1))) then
     ThrowRangeError('Temporal values must use the same calendar');
+  if IsTemporalDateTimeKind(StartInput.Kind) then
+    ValidateTemporalLocaleCalendar(DTF, AArgs.GetElement(0));
   if StartInput.Kind = dtfkZonedDateTime then
     ThrowTypeError('Intl.DateTimeFormat.prototype.formatRangeToParts does not support Temporal.ZonedDateTime');
 

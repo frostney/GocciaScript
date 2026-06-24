@@ -219,6 +219,7 @@ function TryReadNumberFormatIntegerOption(const AOptions: TGocciaObjectValue;
 var
   V: TGocciaValue;
   NumberValue: TGocciaNumberLiteralValue;
+  IntegerValue: Integer;
 begin
   Result := False;
   V := AOptions.GetProperty(AName);
@@ -227,12 +228,16 @@ begin
 
   NumberValue := V.ToNumberLiteral;
   if NumberValue.IsNaN or NumberValue.IsInfinity or
-     NumberValue.IsNegativeInfinity or
-     (NumberValue.Value < AMinimum) or (NumberValue.Value > AMaximum) then
+     NumberValue.IsNegativeInfinity then
     ThrowRangeError(Format(SErrorIntlDigitsOutOfRange,
       [AName, AMinimum, AMaximum]));
 
-  AValue := Trunc(NumberValue.Value);
+  IntegerValue := Trunc(NumberValue.Value);
+  if (IntegerValue < AMinimum) or (IntegerValue > AMaximum) then
+    ThrowRangeError(Format(SErrorIntlDigitsOutOfRange,
+      [AName, AMinimum, AMaximum]));
+
+  AValue := IntegerValue;
   Result := True;
 end;
 
@@ -1273,22 +1278,55 @@ end;
 function IsIntlDecimalString(const AValue: string): Boolean;
 var
   I: Integer;
-  HasDigit: Boolean;
+  HasIntegerDigit, HasFractionDigit, HasExponentDigit: Boolean;
 begin
   Result := False;
-  HasDigit := False;
   if AValue = '' then
     Exit;
 
-  for I := 1 to Length(AValue) do
+  I := 1;
+  if AValue[I] in ['+', '-'] then
+    Inc(I);
+  if I > Length(AValue) then
+    Exit;
+
+  HasIntegerDigit := False;
+  while (I <= Length(AValue)) and (AValue[I] in ['0'..'9']) do
   begin
-    if (AValue[I] >= '0') and (AValue[I] <= '9') then
-      HasDigit := True
-    else if not (AValue[I] in ['+', '-', '.', 'e', 'E']) then
+    HasIntegerDigit := True;
+    Inc(I);
+  end;
+
+  HasFractionDigit := False;
+  if (I <= Length(AValue)) and (AValue[I] = '.') then
+  begin
+    Inc(I);
+    while (I <= Length(AValue)) and (AValue[I] in ['0'..'9']) do
+    begin
+      HasFractionDigit := True;
+      Inc(I);
+    end;
+  end;
+
+  if not HasIntegerDigit and not HasFractionDigit then
+    Exit;
+
+  if (I <= Length(AValue)) and (AValue[I] in ['e', 'E']) then
+  begin
+    Inc(I);
+    if (I <= Length(AValue)) and (AValue[I] in ['+', '-']) then
+      Inc(I);
+    HasExponentDigit := False;
+    while (I <= Length(AValue)) and (AValue[I] in ['0'..'9']) do
+    begin
+      HasExponentDigit := True;
+      Inc(I);
+    end;
+    if not HasExponentDigit then
       Exit;
   end;
 
-  Result := HasDigit;
+  Result := I > Length(AValue);
 end;
 
 function TryReadDecimalRangeInput(const AValue: TGocciaValue;

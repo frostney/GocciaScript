@@ -397,11 +397,78 @@ begin
     PrimaryIdentifier)) or ASCIIEqualsIgnoreCase(AIdentifier, PrimaryIdentifier);
 end;
 
+function TryLoadTimeZoneDataFromFile(const ATimeZone, AFilePath: string;
+  out AData: TTimeZoneInformationData): Boolean; forward;
+
+function ShouldSkipZoneInfoIdentifier(const AIdentifier: string): Boolean;
+var
+  LowerIdentifier: string;
+begin
+  LowerIdentifier := LowerCase(AIdentifier);
+  Result := (AIdentifier = '') or
+    (LowerIdentifier = 'localtime') or
+    (LowerIdentifier = 'posixrules') or
+    (LowerIdentifier = 'leapseconds') or
+    (LowerIdentifier = 'tzdata.zi') or
+    (LowerIdentifier = 'zone.tab') or
+    (LowerIdentifier = 'zone1970.tab') or
+    (LowerIdentifier = 'iso3166.tab') or
+    (Pos('posix/', LowerIdentifier) = 1) or
+    (Pos('right/', LowerIdentifier) = 1) or
+    (Pos('systemv/', LowerIdentifier) = 1);
+end;
+
+procedure AddTimeZoneIdentifiersFromDirectory(const ACurrentDirectory,
+  APrefix: string; var AIdentifiers: TTemporalTimeZoneIdentifierArray;
+  var ACount: Integer; const ADepth: Integer);
+var
+  Search: TSearchRec;
+  Status: Integer;
+  Name, Identifier, Path: string;
+  Data: TTimeZoneInformationData;
+begin
+  if (ACurrentDirectory = '') or (ADepth > 8) or
+     not DirectoryExists(ACurrentDirectory) then
+    Exit;
+
+  Status := FindFirst(IncludeTrailingPathDelimiter(ACurrentDirectory) + '*',
+    faAnyFile, Search);
+  try
+    while Status = 0 do
+    begin
+      Name := Search.Name;
+      if (Name <> '.') and (Name <> '..') then
+      begin
+        if APrefix = '' then
+          Identifier := Name
+        else
+          Identifier := APrefix + '/' + Name;
+        Path := IncludeTrailingPathDelimiter(ACurrentDirectory) + Name;
+
+        if (Search.Attr and faDirectory) <> 0 then
+        begin
+          if not ShouldSkipZoneInfoIdentifier(Identifier + '/') then
+            AddTimeZoneIdentifiersFromDirectory(Path, Identifier, AIdentifiers,
+              ACount, ADepth + 1);
+        end
+        else if IsPrimaryAvailableTimeZoneIdentifier(Identifier) and
+                not ShouldSkipZoneInfoIdentifier(Identifier) and
+                TryLoadTimeZoneDataFromFile(Identifier, Path, Data) then
+          AddUniqueTimeZoneIdentifier(AIdentifiers, ACount, Identifier);
+      end;
+      Status := FindNext(Search);
+    end;
+  finally
+    FindClose(Search);
+  end;
+end;
+
 // ECMA-402 ES2026 §6.5.3 AvailablePrimaryTimeZoneIdentifiers()
 function BuildAvailablePrimaryTimeZoneIdentifiers: TTemporalTimeZoneIdentifierArray;
 var
   EmbeddedFileNames: TEmbeddedTimeZoneFileNameArray;
   Count, Index: Integer;
+  EnvDirectory: string;
 begin
   Count := 0;
   SetLength(Result, 0);
@@ -414,10 +481,13 @@ begin
   end
   else
   begin
-    AddUniqueTimeZoneIdentifier(Result, Count, UTC_TIMEZONE_ID);
-    for Index := 0 to KNOWN_TIMEZONE_PRIMARY_IDENTIFIER_COUNT - 1 do
-      AddUniqueTimeZoneIdentifier(Result, Count,
-        KNOWN_TIMEZONE_PRIMARY_IDENTIFIERS[Index].PrimaryIdentifier);
+    EnvDirectory := GetEnvironmentVariable(GOCCIA_TZDIR_ENV);
+    if EnvDirectory <> '' then
+      AddTimeZoneIdentifiersFromDirectory(EnvDirectory, '', Result, Count, 0);
+    AddTimeZoneIdentifiersFromDirectory(UNIX_ZONEINFO_PATH, '', Result, Count,
+      0);
+    AddTimeZoneIdentifiersFromDirectory(MACOS_DEFAULT_ZONEINFO_PATH, '', Result,
+      Count, 0);
   end;
 
   AddUniqueTimeZoneIdentifier(Result, Count, UTC_TIMEZONE_ID);
@@ -849,6 +919,7 @@ function TryCanonicalizeTimeZoneInDirectory(const ADirectory,
 var
   CurrentDirectory, Segment, ActualName: string;
   StartIndex, I: Integer;
+  IsLastSegment: Boolean;
 begin
   Result := False;
   ACanonicalTimeZone := '';
@@ -867,10 +938,14 @@ begin
            ActualName) then
         Exit;
 
+      IsLastSegment := I > Length(ATimeZone);
+      if IsLastSegment and DirectoryExists(CurrentDirectory + ActualName) then
+        Exit;
+
       if ACanonicalTimeZone <> '' then
         ACanonicalTimeZone := ACanonicalTimeZone + '/';
       ACanonicalTimeZone := ACanonicalTimeZone + ActualName;
-      if I <= Length(ATimeZone) then
+      if not IsLastSegment then
         CurrentDirectory := IncludeTrailingPathDelimiter(CurrentDirectory +
           ActualName);
       StartIndex := I + 1;
@@ -1766,8 +1841,9 @@ end;
 function ParseOffsetString(const AStr: string; out AOffsetSeconds: Integer): Boolean;
 var
   Sign: Integer;
-  Hours, Minutes: Integer;
+  Hours, Minutes, Seconds: Integer;
   Pos: Integer;
+  HasColon: Boolean;
 begin
   Result := False;
   AOffsetSeconds := 0;
@@ -1810,7 +1886,12 @@ begin
   end;
 
   if AStr[Pos] = ':' then
+  begin
+    HasColon := True;
     Inc(Pos);
+  end
+  else
+    HasColon := False;
 
   // Parse minutes (2 digits)
   if Pos + 1 > Length(AStr) then Exit;
@@ -1818,14 +1899,33 @@ begin
   if (AStr[Pos + 1] < '0') or (AStr[Pos + 1] > '9') then Exit;
   Minutes := (Ord(AStr[Pos]) - Ord('0')) * 10 + (Ord(AStr[Pos + 1]) - Ord('0'));
   Inc(Pos, 2);
+  Seconds := 0;
+
+  if Pos <= Length(AStr) then
+  begin
+    if HasColon then
+    begin
+      if AStr[Pos] <> ':' then
+        Exit;
+      Inc(Pos);
+    end;
+
+    if Pos + 1 > Length(AStr) then Exit;
+    if (AStr[Pos] < '0') or (AStr[Pos] > '9') then Exit;
+    if (AStr[Pos + 1] < '0') or (AStr[Pos + 1] > '9') then Exit;
+    Seconds := (Ord(AStr[Pos]) - Ord('0')) * 10 +
+      (Ord(AStr[Pos + 1]) - Ord('0'));
+    Inc(Pos, 2);
+  end;
 
   // Must be at end of string
   if Pos <= Length(AStr) then Exit;
 
   // Validate ranges
-  if (Hours > 23) or (Minutes > 59) then Exit;
+  if (Hours > 23) or (Minutes > 59) or (Seconds > 59) then Exit;
 
-  AOffsetSeconds := Sign * (Hours * MINUTES_PER_HOUR * SECONDS_PER_MINUTE + Minutes * SECONDS_PER_MINUTE);
+  AOffsetSeconds := Sign * (Hours * MINUTES_PER_HOUR * SECONDS_PER_MINUTE +
+    Minutes * SECONDS_PER_MINUTE + Seconds);
   Result := True;
 end;
 

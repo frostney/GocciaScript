@@ -456,7 +456,7 @@ end;
 procedure TGocciaIntlSegmentIteratorValue.BuildSegmentsFallback;
 var
   Utf8Text: string;
-  Idx, SeqLen: Integer;
+  Idx, SeqLen, Utf16Index: Integer;
   CodePoint: Cardinal;
   Seg: TIntlSegment;
   SegStart: Integer;
@@ -468,25 +468,31 @@ begin
   begin
     // Split into individual code points via UTF-8 iteration
     Idx := 1;
+    Utf16Index := 0;
     while Idx <= Length(Utf8Text) do
     begin
       if TryReadUTF8CodePoint(Utf8Text, Idx, CodePoint, SeqLen) then
       begin
         Seg.Segment := Copy(Utf8Text, Idx, SeqLen);
-        Seg.Index := Idx - 1;
+        Seg.Index := Utf16Index;
         Seg.IsWordLike := False;
         SetLength(FSegments, Length(FSegments) + 1);
         FSegments[Length(FSegments) - 1] := Seg;
+        Inc(Utf16Index, UTF16CodeUnitLength(Seg.Segment));
         Inc(Idx, SeqLen);
       end
       else
+      begin
+        Inc(Utf16Index);
         Inc(Idx);
+      end;
     end;
   end
   else if FGranularity = 'word' then
   begin
     // Split on word boundaries (whitespace/punctuation)
     Idx := 1;
+    Utf16Index := 0;
     while Idx <= Length(Utf8Text) do
     begin
       SegStart := Idx;
@@ -498,7 +504,7 @@ begin
         while (Idx <= Length(Utf8Text)) and IsWordBoundaryChar(Utf8Text[Idx]) do
           Inc(Idx);
         Seg.Segment := Copy(Utf8Text, SegStart, Idx - SegStart);
-        Seg.Index := SegStart - 1;
+        Seg.Index := Utf16Index;
         Seg.IsWordLike := False;
       end
       else
@@ -507,12 +513,13 @@ begin
         while (Idx <= Length(Utf8Text)) and not IsWordBoundaryChar(Utf8Text[Idx]) do
           Inc(Idx);
         Seg.Segment := Copy(Utf8Text, SegStart, Idx - SegStart);
-        Seg.Index := SegStart - 1;
+        Seg.Index := Utf16Index;
         Seg.IsWordLike := True;
       end;
 
       SetLength(FSegments, Length(FSegments) + 1);
       FSegments[Length(FSegments) - 1] := Seg;
+      Inc(Utf16Index, UTF16CodeUnitLength(Seg.Segment));
     end;
   end
   else if FGranularity = 'sentence' then
@@ -520,6 +527,7 @@ begin
     // Split on sentence endings: .!? followed by whitespace or end of string
     SegStart := 1;
     Idx := 1;
+    Utf16Index := 0;
     while Idx <= Length(Utf8Text) do
     begin
       if IsSentenceEndChar(Utf8Text[Idx]) then
@@ -532,10 +540,11 @@ begin
           Inc(Idx);
 
         Seg.Segment := Copy(Utf8Text, SegStart, Idx - SegStart);
-        Seg.Index := SegStart - 1;
+        Seg.Index := Utf16Index;
         Seg.IsWordLike := False;
         SetLength(FSegments, Length(FSegments) + 1);
         FSegments[Length(FSegments) - 1] := Seg;
+        Inc(Utf16Index, UTF16CodeUnitLength(Seg.Segment));
         SegStart := Idx;
       end
       else
@@ -546,7 +555,7 @@ begin
     if SegStart <= Length(Utf8Text) then
     begin
       Seg.Segment := Copy(Utf8Text, SegStart, Length(Utf8Text) - SegStart + 1);
-      Seg.Index := SegStart - 1;
+      Seg.Index := Utf16Index;
       Seg.IsWordLike := False;
       SetLength(FSegments, Length(FSegments) + 1);
       FSegments[Length(FSegments) - 1] := Seg;

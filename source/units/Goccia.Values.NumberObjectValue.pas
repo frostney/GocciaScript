@@ -536,7 +536,7 @@ begin
   Prim := ExtractPrimitive(AThisValue);
 
   // Step 2: If precision is undefined, return ! ToString(x)
-  if AArgs.Length = 0 then
+  if (AArgs.Length = 0) or (AArgs.GetElement(0) is TGocciaUndefinedLiteralValue) then
   begin
     Result := Prim.ToStringLiteral;
     Exit;

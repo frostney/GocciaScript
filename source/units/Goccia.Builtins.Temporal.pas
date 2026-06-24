@@ -185,6 +185,13 @@ begin
     ThrowRangeError('Unknown calendar: ' + CalendarString, SSuggestTemporalDateRange);
 end;
 
+function TemporalCalendarPropertyFromObject(const AObject: TGocciaObjectValue): TGocciaValue;
+begin
+  Result := AObject.GetProperty(PROP_CALENDAR_ID);
+  if (Result = nil) or (Result is TGocciaUndefinedLiteralValue) then
+    Result := AObject.GetProperty('calendar');
+end;
+
 function TemporalOverflowOptionFromArgs(const AArgs: TGocciaArgumentsCollection;
   const AIndex: Integer): TTemporalOverflow;
 var
@@ -346,7 +353,8 @@ begin
   ANanosecond := ClampTemporalInteger(ANanosecond, 0, 999);
 end;
 
-procedure GetZonedDateTimeLocalFields(const AZdt: TGocciaTemporalZonedDateTimeValue;
+procedure GetLocalFieldsFromEpoch(const AEpochMilliseconds: Int64;
+  const ASubMillisecondNanoseconds: Integer; const ATimeZone: string;
   out AYear, AMonth, ADay, AHour, AMinute, ASecond, AMillisecond,
       AMicrosecond, ANanosecond: Integer);
 var
@@ -354,9 +362,8 @@ var
   LocalMilliseconds, EpochDays, RemainingMilliseconds: Int64;
   DateRec: TTemporalDateRecord;
 begin
-  OffsetSeconds := GetUtcOffsetSeconds(AZdt.TimeZone,
-    AZdt.EpochMilliseconds div 1000);
-  LocalMilliseconds := AZdt.EpochMilliseconds + Int64(OffsetSeconds) * 1000;
+  OffsetSeconds := GetUtcOffsetSeconds(ATimeZone, AEpochMilliseconds div 1000);
+  LocalMilliseconds := AEpochMilliseconds + Int64(OffsetSeconds) * 1000;
 
   EpochDays := LocalMilliseconds div 86400000;
   RemainingMilliseconds := LocalMilliseconds mod 86400000;
@@ -376,8 +383,17 @@ begin
   RemainingMilliseconds := RemainingMilliseconds mod 60000;
   ASecond := Integer(RemainingMilliseconds div 1000);
   AMillisecond := Integer(RemainingMilliseconds mod 1000);
-  AMicrosecond := AZdt.SubMillisecondNanoseconds div 1000;
-  ANanosecond := AZdt.SubMillisecondNanoseconds mod 1000;
+  AMicrosecond := ASubMillisecondNanoseconds div 1000;
+  ANanosecond := ASubMillisecondNanoseconds mod 1000;
+end;
+
+procedure GetZonedDateTimeLocalFields(const AZdt: TGocciaTemporalZonedDateTimeValue;
+  out AYear, AMonth, ADay, AHour, AMinute, ASecond, AMillisecond,
+      AMicrosecond, ANanosecond: Integer);
+begin
+  GetLocalFieldsFromEpoch(AZdt.EpochMilliseconds,
+    AZdt.SubMillisecondNanoseconds, AZdt.TimeZone, AYear, AMonth, ADay,
+    AHour, AMinute, ASecond, AMillisecond, AMicrosecond, ANanosecond);
 end;
 
 { Duration }
@@ -712,7 +728,7 @@ begin
   else if Arg is TGocciaObjectValue then
   begin
     Obj := TGocciaObjectValue(Arg);
-    V := Obj.GetProperty('calendar');
+    V := TemporalCalendarPropertyFromObject(Obj);
     CalendarId := TemporalCalendarIdFromValue(V);
     CalendarHasEra := TemporalCalendarUsesEra(CalendarId);
 
@@ -1152,7 +1168,7 @@ begin
   else if Arg is TGocciaObjectValue then
   begin
     Obj := TGocciaObjectValue(Arg);
-    V := Obj.GetProperty('calendar');
+    V := TemporalCalendarPropertyFromObject(Obj);
     CalendarId := TemporalCalendarIdFromValue(V);
     CalendarHasEra := TemporalCalendarUsesEra(CalendarId);
     Y := 0; Mo := 0; D := 0; H := 0; Mi := 0; S := 0; Ms := 0; Us := 0; Ns := 0;
@@ -1399,7 +1415,7 @@ begin
   else if Arg is TGocciaObjectValue then
   begin
     Obj := TGocciaObjectValue(Arg);
-    V := Obj.GetProperty('calendar');
+    V := TemporalCalendarPropertyFromObject(Obj);
     CalendarId := TemporalCalendarIdFromValue(V);
     CalendarHasEra := TemporalCalendarUsesEra(CalendarId);
 
@@ -1913,7 +1929,7 @@ begin
   else if Arg is TGocciaObjectValue then
   begin
     Obj := TGocciaObjectValue(Arg);
-    V := Obj.GetProperty('calendar');
+    V := TemporalCalendarPropertyFromObject(Obj);
     CalendarId := TemporalCalendarIdFromValue(V);
 
     VDay := Obj.GetProperty(PROP_DAY);
@@ -2231,31 +2247,45 @@ end;
 
 function TGocciaTemporalBuiltin.NowPlainDateISO(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
-  Y, M, D: Word;
+  EpochNs: Int64;
+  TZ: string;
+  Y, M, D, H, Mi, S, Ms, Us, Ns: Integer;
 begin
-  TemporalNowTimeZoneFromArgument(AArgs.GetElement(0), 'Temporal.Now.plainDateISO');
-  DecodeDate(Now, Y, M, D);
+  EpochNs := GetEpochNanoseconds;
+  TZ := TemporalNowTimeZoneFromArgument(AArgs.GetElement(0),
+    'Temporal.Now.plainDateISO');
+  GetLocalFieldsFromEpoch(EpochNs div 1000000, Integer(EpochNs mod 1000000),
+    TZ, Y, M, D, H, Mi, S, Ms, Us, Ns);
   Result := TGocciaTemporalPlainDateValue.Create(Y, M, D);
 end;
 
 function TGocciaTemporalBuiltin.NowPlainTimeISO(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
-  H, Mi, S, Ms: Word;
+  EpochNs: Int64;
+  TZ: string;
+  Y, M, D, H, Mi, S, Ms, Us, Ns: Integer;
 begin
-  TemporalNowTimeZoneFromArgument(AArgs.GetElement(0), 'Temporal.Now.plainTimeISO');
-  DecodeTime(Now, H, Mi, S, Ms);
-  Result := TGocciaTemporalPlainTimeValue.Create(H, Mi, S, Ms, 0, 0);
+  EpochNs := GetEpochNanoseconds;
+  TZ := TemporalNowTimeZoneFromArgument(AArgs.GetElement(0),
+    'Temporal.Now.plainTimeISO');
+  GetLocalFieldsFromEpoch(EpochNs div 1000000, Integer(EpochNs mod 1000000),
+    TZ, Y, M, D, H, Mi, S, Ms, Us, Ns);
+  Result := TGocciaTemporalPlainTimeValue.Create(H, Mi, S, Ms, Us, Ns);
 end;
 
 function TGocciaTemporalBuiltin.NowPlainDateTimeISO(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
-  Y, Mo, D, H, Mi, S, Ms: Word;
+  EpochNs: Int64;
+  TZ: string;
+  Y, Mo, D, H, Mi, S, Ms, Us, Ns: Integer;
 begin
-  TemporalNowTimeZoneFromArgument(AArgs.GetElement(0), 'Temporal.Now.plainDateTimeISO');
-
-  DecodeDate(Now, Y, Mo, D);
-  DecodeTime(Now, H, Mi, S, Ms);
-  Result := TGocciaTemporalPlainDateTimeValue.Create(Y, Mo, D, H, Mi, S, Ms, 0, 0);
+  EpochNs := GetEpochNanoseconds;
+  TZ := TemporalNowTimeZoneFromArgument(AArgs.GetElement(0),
+    'Temporal.Now.plainDateTimeISO');
+  GetLocalFieldsFromEpoch(EpochNs div 1000000, Integer(EpochNs mod 1000000),
+    TZ, Y, Mo, D, H, Mi, S, Ms, Us, Ns);
+  Result := TGocciaTemporalPlainDateTimeValue.Create(Y, Mo, D, H, Mi, S, Ms,
+    Us, Ns);
 end;
 
 // TC39 Temporal §2.2.1 Temporal.Now.timeZoneId()

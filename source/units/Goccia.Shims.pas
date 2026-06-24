@@ -205,7 +205,15 @@ const
         '  const dayNumber: number = legacyDateDayFromYear(year) + starts[month] + dayValue - 1;'#10 +
         '  const timeWithinDay: number = ((hour * 3600000 + minute * 60000) + second * 1000) + millisecond;'#10 +
         '  const value: number = dayNumber * 86400000 + timeWithinDay;'#10 +
-        '  return Number.isFinite(value) && Math.abs(value) <= dateTimeClipLimit ? Math.trunc(value) : NaN;'#10 +
+        '  if (!Number.isFinite(value) || Math.abs(value) > dateTimeClipLimit) return NaN;'#10 +
+        '  const clipped: number = Math.trunc(value);'#10 +
+        '  if (timeZone === "UTC") return clipped;'#10 +
+        '  const local = Temporal.Instant.fromEpochMilliseconds(clipped).toZonedDateTimeISO("UTC");'#10 +
+        '  return Temporal.ZonedDateTime.from({'#10 +
+        '    year: local.year, month: local.month, day: local.day,'#10 +
+        '    hour: local.hour, minute: local.minute, second: local.second,'#10 +
+        '    millisecond: local.millisecond, timeZone'#10 +
+        '  }).epochMilliseconds;'#10 +
         '};'#10 +
         'const makeLegacyDateEpochMilliseconds = (year: number, month: number, day: number): number => {'#10 +
         '  if (month < 1 || month > 12 || day < 1 || day > 31) return NaN;'#10 +
@@ -405,6 +413,8 @@ const
         '  const offsetPart: string = offsetIndex >= 0 ? timeText.slice(offsetIndex) : "";'#10 +
         '  const time: any = parseISOTimeToken(timePart);'#10 +
         '  if (time === undefined) return NaN;'#10 +
+        '  if (offsetPart === "")'#10 +
+        '    return makeDateEpochMillisecondsRaw([year, month - 1, day, time[0], time[1], time[2], time[3]], Temporal.Now.timeZoneId(), false);'#10 +
         '  const parsedOffset: any = parseISOOffsetMilliseconds(offsetPart);'#10 +
         '  if (parsedOffset === undefined) return NaN;'#10 +
         '  offset = parsedOffset;'#10 +

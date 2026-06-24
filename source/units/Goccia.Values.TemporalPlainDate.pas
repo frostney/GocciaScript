@@ -262,7 +262,8 @@ begin
     if HasMonthCode then
     begin
       MonthCodeStr := VMonthCode.ToStringLiteral.Value;
-      if not TryParseTemporalMonthCode(MonthCodeStr, Month, IsLeapMonth) then
+      if (not TryParseTemporalMonthCode(MonthCodeStr, Month, IsLeapMonth)) or
+         IsLeapMonth then
         ThrowTypeError(Format(SErrorInvalidMonthCodeFor, [AMethod]), SSuggestTemporalMonthCode);
       if HasMonth and (MonthFieldValue <> Month) then
         ThrowRangeError(Format(SErrorMonthCodeMismatchIn, [AMethod]), SSuggestTemporalMonthCode);
@@ -642,7 +643,8 @@ begin
   begin
     SawDateField := True;
     MonthCodeStr := VMonthCode.ToStringLiteral.Value;
-    if not TryParseTemporalMonthCode(MonthCodeStr, NewMonth, IsLeapMonth) then
+    if (not TryParseTemporalMonthCode(MonthCodeStr, NewMonth, IsLeapMonth)) or
+       ((D.FCalendarId = 'iso8601') and IsLeapMonth) then
       ThrowTypeError(Format(SErrorInvalidMonthCodeFor, ['PlainDate.prototype.with']),
         SSuggestTemporalMonthCode);
     UseMonthCode := not HasMonth;

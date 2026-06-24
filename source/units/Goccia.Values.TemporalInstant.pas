@@ -81,7 +81,7 @@ end;
 
 function FormatInstantOffsetString(const AOffsetSeconds: Integer): string;
 var
-  AbsSeconds, TotalMinutes, Hours, Minutes: Integer;
+  AbsSeconds, Hours, Minutes, Seconds: Integer;
   Sign: Char;
 begin
   if AOffsetSeconds < 0 then
@@ -89,10 +89,13 @@ begin
   else
     Sign := '+';
   AbsSeconds := Abs(AOffsetSeconds);
-  TotalMinutes := (AbsSeconds + 30) div 60;
-  Hours := TotalMinutes div 60;
-  Minutes := TotalMinutes mod 60;
-  Result := Sign + Format('%.2d:%.2d', [Hours, Minutes]);
+  Hours := AbsSeconds div 3600;
+  Minutes := (AbsSeconds mod 3600) div 60;
+  Seconds := AbsSeconds mod 60;
+  if Seconds = 0 then
+    Result := Sign + Format('%.2d:%.2d', [Hours, Minutes])
+  else
+    Result := Sign + Format('%.2d:%.2d:%.2d', [Hours, Minutes, Seconds]);
 end;
 
 function GetTemporalInstantShared: TGocciaSharedPrototype; inline;
@@ -550,7 +553,9 @@ function RoundInstantEpochNanosecondsToIncrement(const AValue, AIncrement: TBigI
 var
   Quotient, Remainder, Lower, Upper, DistanceToLower, DistanceToUpper: TBigInteger;
   Compare: Integer;
+  IsNegative: Boolean;
 begin
+  IsNegative := AValue.IsNegative;
   Quotient := AValue.Divide(AIncrement);
   Remainder := AValue.Modulo(AIncrement);
   if Remainder.IsNegative then
@@ -564,10 +569,20 @@ begin
   Upper := Lower.Add(AIncrement);
 
   case AMode of
-    rmFloor, rmTrunc:
+    rmFloor:
       Exit(Lower);
-    rmCeil, rmExpand:
+    rmCeil:
       Exit(Upper);
+    rmTrunc:
+      if IsNegative then
+        Exit(Upper)
+      else
+        Exit(Lower);
+    rmExpand:
+      if IsNegative then
+        Exit(Lower)
+      else
+        Exit(Upper);
   else
     ;
   end;
@@ -581,8 +596,18 @@ begin
     Exit(Upper);
 
   case AMode of
-    rmHalfFloor, rmHalfTrunc:
+    rmHalfFloor:
       Result := Lower;
+    rmHalfTrunc:
+      if IsNegative then
+        Result := Upper
+      else
+        Result := Lower;
+    rmHalfExpand:
+      if IsNegative then
+        Result := Lower
+      else
+        Result := Upper;
     rmHalfEven:
       if Quotient.GetBit(0) then
         Result := Upper
@@ -703,8 +728,8 @@ end;
 function TryParseDurationStringAsBig(const AValue: string;
   out ADuration: TGocciaTemporalDurationValue): Boolean;
 var
-  Pos, NumberStart, FractionStart, Sign: Integer;
-  InTimePart, HasAny: Boolean;
+  Pos, NumberStart, FractionStart, Sign, LastUnitOrder, UnitOrder: Integer;
+  InTimePart, HasAny, FractionSeen: Boolean;
   C: Char;
   NumberText, FractionText: string;
   Whole, FractionNs: TBigInteger;
@@ -736,6 +761,8 @@ begin
 
   InTimePart := False;
   HasAny := False;
+  FractionSeen := False;
+  LastUnitOrder := 0;
   Y := TBigInteger.Zero; Mo := TBigInteger.Zero; W := TBigInteger.Zero;
   Da := TBigInteger.Zero; H := TBigInteger.Zero; Mi := TBigInteger.Zero;
   S := TBigInteger.Zero; Ms := TBigInteger.Zero; Us := TBigInteger.Zero;
@@ -750,6 +777,8 @@ begin
         Exit;
       InTimePart := True;
       Inc(Pos);
+      if Pos > Length(AValue) then
+        Exit;
       Continue;
     end;
 
@@ -776,6 +805,8 @@ begin
     Whole := TBigInteger.FromDecimalString(NumberText);
     C := UpCase(AValue[Pos]);
     Inc(Pos);
+    if FractionSeen then
+      Exit;
     HasAny := True;
 
     if not InTimePart then
@@ -783,10 +814,10 @@ begin
       if FractionText <> '' then
         Exit;
       case C of
-        'Y': Y := Whole;
-        'M': Mo := Whole;
-        'W': W := Whole;
-        'D': Da := Whole;
+        'Y': begin UnitOrder := 1; Y := Whole; end;
+        'M': begin UnitOrder := 2; Mo := Whole; end;
+        'W': begin UnitOrder := 3; W := Whole; end;
+        'D': begin UnitOrder := 4; Da := Whole; end;
       else
         Exit;
       end;
@@ -796,18 +827,21 @@ begin
       case C of
         'H':
         begin
+          UnitOrder := 5;
           H := Whole;
           FractionNs := FractionalDurationNanoseconds(FractionText, NANOSECONDS_PER_HOUR);
           Ns := Ns.Add(FractionNs);
         end;
         'M':
         begin
+          UnitOrder := 6;
           Mi := Whole;
           FractionNs := FractionalDurationNanoseconds(FractionText, NANOSECONDS_PER_MINUTE);
           Ns := Ns.Add(FractionNs);
         end;
         'S':
         begin
+          UnitOrder := 7;
           S := Whole;
           FractionNs := FractionalDurationNanoseconds(FractionText, NANOSECONDS_PER_SECOND);
           Ns := Ns.Add(FractionNs);
@@ -816,6 +850,12 @@ begin
         Exit;
       end;
     end;
+
+    if UnitOrder <= LastUnitOrder then
+      Exit;
+    LastUnitOrder := UnitOrder;
+    if FractionText <> '' then
+      FractionSeen := True;
   end;
 
   if not HasAny then
@@ -1274,10 +1314,12 @@ begin
 end;
 
 procedure ValidateInstantDiffRoundingIncrement(const AIncrement: Integer;
-  const ASmallestUnit: TTemporalUnit);
+  const ASmallestUnit, ALargestUnit: TTemporalUnit);
 var
   MaxVal: Integer;
 begin
+  if ASmallestUnit = ALargestUnit then
+    Exit;
   if AIncrement <= 1 then
     Exit;
   case ASmallestUnit of
@@ -1321,7 +1363,7 @@ begin
     ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, ['Instant.prototype.until', 'smallestUnit']), SSuggestTemporalValidUnits);
   if Ord(LargestUnit) > Ord(SmallestUnit) then
     ThrowRangeError(SErrorDurationRoundLargestSmallerThanSmallest, SSuggestTemporalRoundArg);
-  ValidateInstantDiffRoundingIncrement(RIncrement, SmallestUnit);
+  ValidateInstantDiffRoundingIncrement(RIncrement, SmallestUnit, LargestUnit);
 
   StartNs := EpochNanosecondsFromParts(Inst.FEpochMilliseconds, Inst.FSubMillisecondNanoseconds);
   EndNs := EpochNanosecondsFromParts(Other.FEpochMilliseconds, Other.FSubMillisecondNanoseconds);
@@ -1361,7 +1403,7 @@ begin
     ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, ['Instant.prototype.since', 'smallestUnit']), SSuggestTemporalValidUnits);
   if Ord(LargestUnit) > Ord(SmallestUnit) then
     ThrowRangeError(SErrorDurationRoundLargestSmallerThanSmallest, SSuggestTemporalRoundArg);
-  ValidateInstantDiffRoundingIncrement(RIncrement, SmallestUnit);
+  ValidateInstantDiffRoundingIncrement(RIncrement, SmallestUnit, LargestUnit);
 
   StartNs := EpochNanosecondsFromParts(Other.FEpochMilliseconds, Other.FSubMillisecondNanoseconds);
   EndNs := EpochNanosecondsFromParts(Inst.FEpochMilliseconds, Inst.FSubMillisecondNanoseconds);

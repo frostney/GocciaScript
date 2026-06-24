@@ -2112,6 +2112,22 @@ begin
       AParts[I].Value := 'K';
 end;
 
+procedure NormalizeICUNumberRangeFormat(const ALocale: string;
+  const AStartValue, AEndValue: Double; const AOptions: TIntlNumberFormatOptions;
+  var AFormatted: string; var AParts: TIntlFormatPartArray);
+var
+  I: Integer;
+begin
+  if not (NeedsEnInCompactThousandsFallback(ALocale, AStartValue, AOptions) or
+          NeedsEnInCompactThousandsFallback(ALocale, AEndValue, AOptions)) then
+    Exit;
+
+  AFormatted := StringReplace(AFormatted, 'T', 'K', [rfReplaceAll]);
+  for I := 0 to Length(AParts) - 1 do
+    if (AParts[I].PartType = 'compact') and (AParts[I].Value = 'T') then
+      AParts[I].Value := 'K';
+end;
+
 function TryICUFormatNumberSkeleton(const ALocale: string; AValue: Double;
   const AOptions: TIntlNumberFormatOptions; out AFormatted: string): Boolean;
 var
@@ -2508,6 +2524,7 @@ var
   Skeleton: UnicodeString;
   LocaleAnsi, StartAnsi, EndAnsi: AnsiString;
   Formatter, RangeResult, FormattedValue: Pointer;
+  StartNumber, EndNumber: Double;
 begin
   Result := False;
   AFormatted := '';
@@ -2563,6 +2580,23 @@ begin
       Result := FormattedValueToParts(FormattedValue, UFIELD_CATEGORY_NUMBER,
         UFIELD_CATEGORY_NUMBER_RANGE_SPAN, NumberFieldToPartType,
         AFormatted, AParts);
+      if Result then
+      begin
+        if AUseDecimal then
+        begin
+          if not TryParseInvariantDouble(AStartDecimal, StartNumber) then
+            StartNumber := 0;
+          if not TryParseInvariantDouble(AEndDecimal, EndNumber) then
+            EndNumber := 0;
+        end
+        else
+        begin
+          StartNumber := AStartDouble;
+          EndNumber := AEndDouble;
+        end;
+        NormalizeICUNumberRangeFormat(ALocale, StartNumber, EndNumber,
+          AOptions, AFormatted, AParts);
+      end;
       if Result and not AWantParts then
         SetLength(AParts, 0);
     finally
@@ -2765,6 +2799,27 @@ begin
   if AOptions.NumberingSystem = 'hanidec' then
     Result := StringReplace(Result, UTF8FromCodePoint($202F), ' ',
       [rfReplaceAll]);
+end;
+
+procedure PadTwoDigitHourParts(var AParts: TIntlFormatPartArray;
+  const AOptions: TIntlDateTimeFormatOptions);
+var
+  I: Integer;
+  ZeroDigit: string;
+begin
+  if AOptions.Hour <> '2-digit' then
+    Exit;
+
+  ZeroDigit := DateTimeZeroDigit(AOptions.NumberingSystem);
+  for I := 0 to Length(AParts) - 1 do
+  begin
+    if (AParts[I].PartType = 'hour') and
+       (Length(AParts[I].Value) = Length(ZeroDigit)) then
+      AParts[I].Value := ZeroDigit + AParts[I].Value;
+    if AOptions.NumberingSystem = 'hanidec' then
+      AParts[I].Value := StringReplace(AParts[I].Value,
+        UTF8FromCodePoint($202F), ' ', [rfReplaceAll]);
+  end;
 end;
 
 function FindUnicodeExtensionEnd(const ALocaleLower: string; const AUnicodePos: Integer): Integer;
@@ -3057,6 +3112,8 @@ begin
       CollectIteratorFieldSpans(Iterator, UFIELD_CATEGORY_DATE, Spans);
       Result := BuildPartsFromFieldSpans(UFormatted, Spans,
         UFIELD_CATEGORY_DATE, 0, DateFieldToPartType, AParts);
+      if Result then
+        PadTwoDigitHourParts(AParts, AOptions);
     finally
       IntlFunctions.UfieldpositerClose(Iterator);
     end;

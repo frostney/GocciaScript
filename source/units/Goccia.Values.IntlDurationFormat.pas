@@ -1147,7 +1147,7 @@ begin
     else
     begin
       Value := FieldValue;
-      ValueArg := NumberArgumentForDurationValue(Value, False);
+      ValueArg := TGocciaStringLiteralValue.Create(Numerator.ToString);
     end;
 
     DisplayRequired := False;
@@ -1197,6 +1197,19 @@ begin
 
     if Done then
       Break;
+  end;
+
+  if Length(Groups) = 0 then
+  begin
+    Options := CreateDurationNumberFormatOptions(AFormat,
+      DurationNumberUnitDisplayStyle(AFormat.FSecondsStyle), 'second', False,
+      False, AFormat.FSecondsStyle = '2-digit', False);
+    NumberParts := NumberFormatPartsForDuration(AFormat,
+      NumberArgumentForDurationValue(0, AFields.Sign = -1), Options, 'second');
+    SetLength(GroupParts, 0);
+    AppendDurationPartArray(GroupParts, NumberParts);
+    SetLength(Groups, 1);
+    Groups[0] := GroupParts;
   end;
 
   Result := FormatDurationPartList(AFormat, Groups);

@@ -32,6 +32,17 @@ var
   AvailableLocalesLoaded: Boolean;
   AvailableLocalesLock: TRTLCriticalSection;
 
+const
+  CLDR_REGIONAL_AVAILABLE_LOCALES: array[0..6] of string = (
+    'ar-Latn',
+    'de-DE',
+    'en-GB',
+    'en-IN',
+    'en-US',
+    'fr-FR',
+    'zh-Hant-TW'
+  );
+
 procedure AppendUniqueLocale(var ALocales: IntlTypes.TStringArray;
   var ACount: Integer; const ALocale: string);
 var
@@ -106,6 +117,11 @@ begin
           Canonical := CanonicalizeUnicodeLocaleId(Available[I]);
           AppendUniqueLocale(AvailableLocalesCache, Count, Canonical);
         end;
+        for I := Low(CLDR_REGIONAL_AVAILABLE_LOCALES) to
+          High(CLDR_REGIONAL_AVAILABLE_LOCALES) do
+          AppendUniqueLocale(AvailableLocalesCache, Count,
+            CLDR_REGIONAL_AVAILABLE_LOCALES[I]);
+        AppendUniqueLocale(AvailableLocalesCache, Count, DefaultLocale);
         SetLength(AvailableLocalesCache, Count);
       end;
       AvailableLocalesLoaded := True;
@@ -457,7 +473,8 @@ begin
 
     AvailableLocale := BestAvailableLocale(AvailableLocales, NoExtensionTag);
     if AvailableLocale <> '' then
-      Exit(RequestedLocale);
+      Exit(AvailableLocale + Copy(RequestedLocale, Length(NoExtensionTag) + 1,
+        Length(RequestedLocale) - Length(NoExtensionTag)));
   end;
 
   Result := DefaultLocale;

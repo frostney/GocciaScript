@@ -539,7 +539,8 @@ begin
     Exit;
 
   CalendarId := 'iso8601';
-  TryExtractTemporalCalendarAnnotation(AValue, CalendarId);
+  if not TryExtractTemporalCalendarAnnotation(AValue, CalendarId) then
+    Exit;
 
   HasDateTimeSeparator := (System.Pos('T', AValue) > 1) or
     (System.Pos('t', AValue) > 1) or (System.Pos(' ', AValue) > 1);
@@ -1358,8 +1359,9 @@ function TryParseISODateTimeWithOffset(const AStr: string; out ADate: TTemporalD
 var
   TPos, BracketStart, BracketEnd, I: Integer;
   DatePart, Rest, TimePart, OffsetPart, AnnotContent: string;
-  OffsetSign, OffsetH, OffsetM: Integer;
+  OffsetSign, OffsetH, OffsetM, OffsetS: Integer;
   ParsePos: Integer;
+  HasExplicitOffset, HasColon: Boolean;
 begin
   Result := False;
   AOffsetSeconds := 0;
@@ -1370,6 +1372,7 @@ begin
   ATime.Millisecond := 0;
   ATime.Microsecond := 0;
   ATime.Nanosecond := 0;
+  HasExplicitOffset := False;
 
   if HasFractionWithMoreThanNineDigits(AStr) then Exit;
 
@@ -1419,6 +1422,7 @@ begin
   OffsetPart := '';
   if (Length(Rest) > 0) and ((Rest[Length(Rest)] = 'Z') or (Rest[Length(Rest)] = 'z')) then
   begin
+    HasExplicitOffset := True;
     AOffsetSeconds := 0;
     Rest := Copy(Rest, 1, Length(Rest) - 1);
     if ATimeZone = '' then
@@ -1441,12 +1445,16 @@ begin
 
     if OffsetPart <> '' then
     begin
+      HasExplicitOffset := True;
       if OffsetPart[1] = '+' then OffsetSign := 1 else OffsetSign := -1;
       ParsePos := 2;
       if not TryParseDigits(OffsetPart, ParsePos, 2, OffsetH) then Exit;
       OffsetM := 0;
+      OffsetS := 0;
+      HasColon := False;
       if (ParsePos <= Length(OffsetPart)) and (OffsetPart[ParsePos] = ':') then
       begin
+        HasColon := True;
         Inc(ParsePos);
         if not TryParseDigits(OffsetPart, ParsePos, 2, OffsetM) then Exit;
       end
@@ -1454,9 +1462,21 @@ begin
       begin
         if not TryParseDigits(OffsetPart, ParsePos, 2, OffsetM) then Exit;
       end;
+      if ParsePos <= Length(OffsetPart) then
+      begin
+        if HasColon then
+        begin
+          if OffsetPart[ParsePos] <> ':' then
+            Exit;
+          Inc(ParsePos);
+        end;
+        if not TryParseDigits(OffsetPart, ParsePos, 2, OffsetS) then Exit;
+      end;
+      if ParsePos <= Length(OffsetPart) then
+        Exit;
       // Validate ranges
-      if (OffsetH > 23) or (OffsetM > 59) then Exit;
-      AOffsetSeconds := OffsetSign * (OffsetH * 3600 + OffsetM * 60);
+      if (OffsetH > 23) or (OffsetM > 59) or (OffsetS > 59) then Exit;
+      AOffsetSeconds := OffsetSign * (OffsetH * 3600 + OffsetM * 60 + OffsetS);
       // Set timezone to offset if no annotation timezone
       if ATimeZone = '' then
         ATimeZone := OffsetPart;
@@ -1470,7 +1490,7 @@ begin
     if not TryParseISOTime(TimePart, ATime) then Exit;
   end;
 
-  Result := True;
+  Result := HasExplicitOffset;
 end;
 
 { --------------------------------------------------------------------------- }

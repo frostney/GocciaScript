@@ -911,7 +911,7 @@ begin
     Exit;
   end;
 
-  if TryStrToFloat(Trimmed, TempValue) then
+  if TryStrToFloat(Trimmed, TempValue, InvariantFormatSettings) then
     Result := TGocciaNumberLiteralValue.Create(TempValue)
   else if TryClassifyDecimalNumericString(Trimmed, IsNegativeDecimal, HasNonZeroDigit) then
   begin
