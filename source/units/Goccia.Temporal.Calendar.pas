@@ -1910,7 +1910,8 @@ begin
 
   StartDays := DateToEpochDays(AYear, 1, 1);
   EndDays := DateToEpochDays(AYear, 3, 31);
-  for Days := StartDays to EndDays do
+  Days := StartDays;
+  while Days <= EndDays do
   begin
     DateRec := EpochDaysToDate(Days);
     if not TryGetLunisolarDateParts(ACalendarId, DateRec.Year,
@@ -1922,6 +1923,7 @@ begin
       AISODate := DateRec;
       Exit(True);
     end;
+    Inc(Days);
   end;
 end;
 
