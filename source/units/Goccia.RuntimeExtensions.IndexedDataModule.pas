@@ -46,10 +46,10 @@ begin
   try
     Records := ParseModuleRecords(Content.Text, AResolvedPath);
 
-    AModule := TGocciaModule.Create(AResolvedPath);
-    AModule.LastModified := Content.LastModified;
     LoadSucceeded := False;
+    AModule := TGocciaModule.Create(AResolvedPath);
     try
+      AModule.LastModified := Content.LastModified;
       for I := 0 to Records.Elements.Count - 1 do
         AModule.ExportsTable.AddOrSetValue(IntToStr(I), Records.Elements[I]);
       LoadSucceeded := True;
