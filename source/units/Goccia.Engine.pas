@@ -52,6 +52,7 @@ uses
   Goccia.ObjectModel.Engine,
   Goccia.Realm,
   Goccia.Scope,
+  Goccia.Scope.BindingMap,
   Goccia.SourceMap,
   Goccia.SourcePipeline,
   Goccia.Values.BigIntValue,
@@ -59,6 +60,7 @@ uses
   Goccia.Values.FunctionBase,
   Goccia.Values.HoleValue,
   Goccia.Values.IteratorValue,
+  Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
   Goccia.Values.TypedArrayValue;
@@ -178,6 +180,11 @@ type
     procedure PinSingletons;
     procedure RegisterBuiltIns;
     procedure RegisterBuiltinConstructors;
+    procedure DefineBuiltinBindingPlaceholder(const AName: string;
+      const ADeclarationType: TGocciaDeclarationType);
+    procedure DefineLazyGlobalThisProperty(const AName: string;
+      const AFactory: TGocciaLazyPropertyFactory);
+    procedure RegisterLazyBuiltinGlobalProperties;
     procedure ExecuteShims;
     procedure RegisterTypedArrayConstructor(const AName: string; const AKind: TGocciaTypedArrayKind; const AObjectConstructor: TGocciaClassValue);
     procedure RegisterGlobalThis;
@@ -191,6 +198,13 @@ type
     function GocciaGCMaxBytesGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function GocciaGCSuggestedMaxBytesGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function GocciaGCBytesAllocatedGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function MaterializeTemporalGlobal: TGocciaValue;
+    function MaterializeIntlGlobal: TGocciaValue;
+    function MaterializeAtomicsGlobal: TGocciaValue;
+    function MaterializeProxyGlobal: TGocciaValue;
+    function MaterializeReflectGlobal: TGocciaValue;
+    function MaterializeDisposableStackGlobal: TGocciaValue;
+    function MaterializeAsyncDisposableStackGlobal: TGocciaValue;
     procedure DoRetainModule(const AModule: TObject);
     procedure DiscardRuntimePending;
     procedure PrintSourcePipelineWarnings(
@@ -326,7 +340,6 @@ uses
   Goccia.Values.MapValue,
   Goccia.Values.NativeFunction,
   Goccia.Values.NumberObjectValue,
-  Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.PromiseValue,
   Goccia.Values.SetValue,
   Goccia.Values.SharedArrayBufferValue,
@@ -697,17 +710,106 @@ begin
   FBuiltinSymbol := TGocciaGlobalSymbol.Create(CONSTRUCTOR_SYMBOL, Scope, ThrowError);
   FBuiltinMap := TGocciaGlobalMap.Create(CONSTRUCTOR_MAP, Scope, ThrowError);
   FBuiltinPromise := TGocciaGlobalPromise.Create(CONSTRUCTOR_PROMISE, Scope, ThrowError);
-  FBuiltinTemporal := TGocciaTemporalBuiltin.Create('Temporal', Scope, ThrowError);
-  FBuiltinIntl := TGocciaIntlBuiltin.Create('Intl', Scope, ThrowError);
-  FBuiltinAtomics := TGocciaAtomics.Create(CONSTRUCTOR_ATOMICS, Scope, ThrowError);
+  DefineBuiltinBindingPlaceholder('Temporal', dtLet);
+  DefineBuiltinBindingPlaceholder('Intl', dtLet);
+  DefineBuiltinBindingPlaceholder(CONSTRUCTOR_ATOMICS, dtLet);
   FBuiltinArrayBuffer := TGocciaGlobalArrayBuffer.Create(CONSTRUCTOR_ARRAY_BUFFER, Scope, ThrowError);
-  FBuiltinProxy := TGocciaGlobalProxy.Create(Scope);
-  FBuiltinReflect := TGocciaGlobalReflect.Create('Reflect', Scope, ThrowError);
+  DefineBuiltinBindingPlaceholder(CONSTRUCTOR_PROXY, dtConst);
+  DefineBuiltinBindingPlaceholder('Reflect', dtConst);
   FBuiltinGlobalString := TGocciaGlobalString.Create(CONSTRUCTOR_STRING, Scope, ThrowError);
   FBuiltinGlobals := TGocciaGlobals.Create('Globals', Scope, ThrowError);
-  FBuiltinDisposableStack := TGocciaBuiltinDisposableStack.Create('DisposableStack', Scope, ThrowError);
+  DefineBuiltinBindingPlaceholder(CONSTRUCTOR_DISPOSABLE_STACK, dtConst);
+  DefineBuiltinBindingPlaceholder(CONSTRUCTOR_ASYNC_DISPOSABLE_STACK, dtConst);
   Scope.DefineLexicalBinding(CONSTRUCTOR_ITERATOR, TGocciaIteratorValue.CreateGlobalObject, dtConst, True);
   RegisterBuiltinConstructors;
+end;
+
+procedure TGocciaEngine.DefineBuiltinBindingPlaceholder(const AName: string;
+  const ADeclarationType: TGocciaDeclarationType);
+begin
+  FInterpreter.GlobalScope.DefineLexicalBinding(AName,
+    TGocciaUndefinedLiteralValue.UndefinedValue, ADeclarationType, True);
+end;
+
+procedure TGocciaEngine.DefineLazyGlobalThisProperty(const AName: string;
+  const AFactory: TGocciaLazyPropertyFactory);
+begin
+  if not (FRealm.GlobalObject is TGocciaObjectValue) then
+    Exit;
+
+  TGocciaObjectValue(FRealm.GlobalObject).DefineProperty(AName,
+    TGocciaLazyPropertyDescriptorData.Create(AFactory,
+      [pfWritable, pfConfigurable]));
+end;
+
+procedure TGocciaEngine.RegisterLazyBuiltinGlobalProperties;
+begin
+  DefineLazyGlobalThisProperty('Temporal', MaterializeTemporalGlobal);
+  DefineLazyGlobalThisProperty('Intl', MaterializeIntlGlobal);
+  DefineLazyGlobalThisProperty(CONSTRUCTOR_ATOMICS, MaterializeAtomicsGlobal);
+  DefineLazyGlobalThisProperty(CONSTRUCTOR_PROXY, MaterializeProxyGlobal);
+  DefineLazyGlobalThisProperty('Reflect', MaterializeReflectGlobal);
+  DefineLazyGlobalThisProperty(CONSTRUCTOR_DISPOSABLE_STACK,
+    MaterializeDisposableStackGlobal);
+  DefineLazyGlobalThisProperty(CONSTRUCTOR_ASYNC_DISPOSABLE_STACK,
+    MaterializeAsyncDisposableStackGlobal);
+end;
+
+function TGocciaEngine.MaterializeTemporalGlobal: TGocciaValue;
+begin
+  if not Assigned(FBuiltinTemporal) then
+    FBuiltinTemporal := TGocciaTemporalBuiltin.Create('Temporal',
+      FInterpreter.GlobalScope, ThrowError, False);
+  Result := FBuiltinTemporal.TemporalNamespace;
+end;
+
+function TGocciaEngine.MaterializeIntlGlobal: TGocciaValue;
+begin
+  if not Assigned(FBuiltinIntl) then
+    FBuiltinIntl := TGocciaIntlBuiltin.Create('Intl', FInterpreter.GlobalScope,
+      ThrowError, False);
+  Result := FBuiltinIntl.IntlNamespace;
+end;
+
+function TGocciaEngine.MaterializeAtomicsGlobal: TGocciaValue;
+begin
+  if not Assigned(FBuiltinAtomics) then
+    FBuiltinAtomics := TGocciaAtomics.Create(CONSTRUCTOR_ATOMICS,
+      FInterpreter.GlobalScope, ThrowError, False);
+  Result := FBuiltinAtomics.BuiltinObject;
+end;
+
+function TGocciaEngine.MaterializeProxyGlobal: TGocciaValue;
+begin
+  if not Assigned(FBuiltinProxy) then
+    FBuiltinProxy := TGocciaGlobalProxy.Create(FInterpreter.GlobalScope, False);
+  Result := FBuiltinProxy.ConstructorValue;
+end;
+
+function TGocciaEngine.MaterializeReflectGlobal: TGocciaValue;
+begin
+  if not Assigned(FBuiltinReflect) then
+    FBuiltinReflect := TGocciaGlobalReflect.Create('Reflect',
+      FInterpreter.GlobalScope, ThrowError, False);
+  Result := FBuiltinReflect.BuiltinObject;
+end;
+
+function TGocciaEngine.MaterializeDisposableStackGlobal: TGocciaValue;
+begin
+  if not Assigned(FBuiltinDisposableStack) then
+    FBuiltinDisposableStack := TGocciaBuiltinDisposableStack.Create(
+      CONSTRUCTOR_DISPOSABLE_STACK, FInterpreter.GlobalScope, ThrowError,
+      False);
+  Result := FBuiltinDisposableStack.DisposableStackConstructorValue;
+end;
+
+function TGocciaEngine.MaterializeAsyncDisposableStackGlobal: TGocciaValue;
+begin
+  if not Assigned(FBuiltinDisposableStack) then
+    FBuiltinDisposableStack := TGocciaBuiltinDisposableStack.Create(
+      CONSTRUCTOR_DISPOSABLE_STACK, FInterpreter.GlobalScope, ThrowError,
+      False);
+  Result := FBuiltinDisposableStack.AsyncDisposableStackConstructorValue;
 end;
 
 function ObjectPrototypeProvider: TGocciaObjectValue;
@@ -1043,6 +1145,7 @@ begin
 
   RegisterGocciaScriptGlobal;
   RegisterGlobalThis;
+  RegisterLazyBuiltinGlobalProperties;
 end;
 
 procedure TGocciaEngine.RegisterTypedArrayConstructor(const AName: string; const AKind: TGocciaTypedArrayKind; const AObjectConstructor: TGocciaClassValue);

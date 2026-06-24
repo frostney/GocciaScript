@@ -16,6 +16,8 @@ type
   private
     FDisposableStackPrototype: TGocciaValue;
     FAsyncDisposableStackPrototype: TGocciaValue;
+    FDisposableStackConstructorValue: TGocciaValue;
+    FAsyncDisposableStackConstructorValue: TGocciaValue;
   published
     function DisposableStackConstructor(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
@@ -51,7 +53,11 @@ type
       const AThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope;
-      const AThrowError: TGocciaThrowErrorCallback);
+      const AThrowError: TGocciaThrowErrorCallback;
+      const ADefineGlobalBinding: Boolean = True);
+
+    property DisposableStackConstructorValue: TGocciaValue read FDisposableStackConstructorValue;
+    property AsyncDisposableStackConstructorValue: TGocciaValue read FAsyncDisposableStackConstructorValue;
   end;
 
 procedure ClearDisposableStackSlotMap;
@@ -455,7 +461,8 @@ end;
 { TGocciaBuiltinDisposableStack }
 
 constructor TGocciaBuiltinDisposableStack.Create(const AName: string;
-  const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
+  const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback;
+  const ADefineGlobalBinding: Boolean = True);
 var
   DisposableStackFunc: TGocciaNativeFunctionValue;
   AsyncDisposableStackFunc: TGocciaNativeFunctionValue;
@@ -474,7 +481,9 @@ begin
     TGocciaPropertyDescriptorData.Create(DisposableStackFunc, [pfWritable, pfConfigurable]));
   DisposableStackFunc.DefineProperty(PROP_PROTOTYPE,
     TGocciaPropertyDescriptorData.Create(FDisposableStackPrototype, []));
-  AScope.DefineLexicalBinding(CONSTRUCTOR_DISPOSABLE_STACK, DisposableStackFunc, dtConst, True);
+  FDisposableStackConstructorValue := DisposableStackFunc;
+  if ADefineGlobalBinding then
+    AScope.DefineLexicalBinding(CONSTRUCTOR_DISPOSABLE_STACK, DisposableStackFunc, dtConst, True);
 
   AsyncDisposableStackFunc := TGocciaNativeFunctionValue.Create(
     AsyncDisposableStackConstructor, CONSTRUCTOR_ASYNC_DISPOSABLE_STACK, 0);
@@ -482,7 +491,9 @@ begin
     TGocciaPropertyDescriptorData.Create(AsyncDisposableStackFunc, [pfWritable, pfConfigurable]));
   AsyncDisposableStackFunc.DefineProperty(PROP_PROTOTYPE,
     TGocciaPropertyDescriptorData.Create(FAsyncDisposableStackPrototype, []));
-  AScope.DefineLexicalBinding(CONSTRUCTOR_ASYNC_DISPOSABLE_STACK, AsyncDisposableStackFunc, dtConst, True);
+  FAsyncDisposableStackConstructorValue := AsyncDisposableStackFunc;
+  if ADefineGlobalBinding then
+    AScope.DefineLexicalBinding(CONSTRUCTOR_ASYNC_DISPOSABLE_STACK, AsyncDisposableStackFunc, dtConst, True);
 
   UseFunc := TGocciaNativeFunctionValue.CreateWithoutPrototype(StackUse, PROP_USE, 1);
   AdoptFunc := TGocciaNativeFunctionValue.CreateWithoutPrototype(StackAdopt, PROP_ADOPT, 2);

@@ -58,7 +58,11 @@ type
     procedure RegisterSegmenter;
     procedure RegisterDurationFormat;
   public
-    constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
+    constructor Create(const AName: string; const AScope: TGocciaScope;
+      const AThrowError: TGocciaThrowErrorCallback;
+      const ADefineGlobalBinding: Boolean = True);
+
+    property IntlNamespace: TGocciaObjectValue read FIntlNamespace;
   end;
 
 function CanonicalizeLocaleListFromValue(const ALocales: TGocciaValue): IntlTypes.TStringArray;
@@ -100,8 +104,9 @@ uses
 
 { TGocciaIntlBuiltin }
 
-constructor TGocciaIntlBuiltin.Create(const AName: string; const AScope: TGocciaScope;
-  const AThrowError: TGocciaThrowErrorCallback);
+constructor TGocciaIntlBuiltin.Create(const AName: string;
+  const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback;
+  const ADefineGlobalBinding: Boolean = True);
 var
   IntlMembers: array[0..2] of TGocciaMemberDefinition;
 begin
@@ -133,7 +138,8 @@ begin
       [pfConfigurable]);
     RegisterMemberDefinitions(FIntlNamespace, IntlMembers);
 
-    AScope.DefineLexicalBinding(AName, FIntlNamespace, dtLet, True);
+    if ADefineGlobalBinding then
+      AScope.DefineLexicalBinding(AName, FIntlNamespace, dtLet, True);
   finally
     TGarbageCollector.Instance.RemoveTempRoot(FIntlNamespace);
   end;

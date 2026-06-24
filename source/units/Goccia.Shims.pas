@@ -432,8 +432,6 @@ const
         '  catch (e) {}'#10 +
         '  return NaN;'#10 +
         '};'#10 +
-        'const __GocciaShimNumberFormat: any = Intl.NumberFormat;'#10 +
-        'const __GocciaShimDateTimeFormat: any = Intl.DateTimeFormat;'#10 +
         'const __GocciaDateSlots = new WeakMap();'#10 +
         'const __GocciaDateIsObject = (value: any): boolean =>'#10 +
         '  (typeof value === "object" && value !== null) || typeof value === "function";'#10 +
@@ -510,7 +508,7 @@ const
         '    const numberLocale = {'#10 +
         '      toLocaleString(...args: any[]): string {'#10 +
         '        const value: number = Number.prototype.valueOf.call(this);'#10 +
-        '        return new __GocciaShimNumberFormat(args[0], args[1]).format(value);'#10 +
+        '        return new Intl.NumberFormat(args[0], args[1]).format(value);'#10 +
         '      }'#10 +
         '    }.toLocaleString;'#10 +
         '    const arrayLocale = {'#10 +
@@ -763,17 +761,17 @@ const
         '  toLocaleString(...args: any[]): string {'#10 +
         '    Date.#require(this);'#10 +
         '    if (!Date.#valid(this)) return "Invalid Date";'#10 +
-        '    return new __GocciaShimDateTimeFormat(args[0], Date.#localeOptions(args[1], true, true)).format(Date.#get(this));'#10 +
+        '    return new Intl.DateTimeFormat(args[0], Date.#localeOptions(args[1], true, true)).format(Date.#get(this));'#10 +
         '  }'#10 +
         '  toLocaleDateString(...args: any[]): string {'#10 +
         '    Date.#require(this);'#10 +
         '    if (!Date.#valid(this)) return "Invalid Date";'#10 +
-        '    return new __GocciaShimDateTimeFormat(args[0], Date.#localeOptions(args[1], true, false)).format(Date.#get(this));'#10 +
+        '    return new Intl.DateTimeFormat(args[0], Date.#localeOptions(args[1], true, false)).format(Date.#get(this));'#10 +
         '  }'#10 +
         '  toLocaleTimeString(...args: any[]): string {'#10 +
         '    Date.#require(this);'#10 +
         '    if (!Date.#valid(this)) return "Invalid Date";'#10 +
-        '    return new __GocciaShimDateTimeFormat(args[0], Date.#localeOptions(args[1], false, true)).format(Date.#get(this));'#10 +
+        '    return new Intl.DateTimeFormat(args[0], Date.#localeOptions(args[1], false, true)).format(Date.#get(this));'#10 +
         '  }'#10 +
         '  toTemporalInstant(): any {'#10 +
         '    const value: number = __GocciaDateGetSlot(this);'#10 +

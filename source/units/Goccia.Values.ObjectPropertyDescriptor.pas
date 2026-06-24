@@ -10,6 +10,8 @@ uses
   Goccia.Values.Primitives;
 
 type
+  TGocciaLazyPropertyFactory = function: TGocciaValue of object;
+
   // Flags store resolved descriptor attribute values; Fields store which
   // descriptor keys were explicitly present in a partial descriptor.
   TPropertyFlag = (pfEnumerable, pfConfigurable, pfWritable);
@@ -61,6 +63,16 @@ type
     procedure MarkValues; override;
 
     property Value: TGocciaValue read FValue write FValue;
+  end;
+
+  TGocciaLazyPropertyDescriptorData = class(TGocciaPropertyDescriptorData)
+  private
+    FFactory: TGocciaLazyPropertyFactory;
+    FMaterialized: Boolean;
+  public
+    constructor Create(const AFactory: TGocciaLazyPropertyFactory;
+      const AFlags: TPropertyFlags);
+    function Materialize: TGocciaValue;
   end;
 
   TGocciaPropertyDescriptorAccessor = class(TGocciaPropertyDescriptor)
@@ -180,6 +192,27 @@ begin
     FValue.MarkReferences;
 end;
 
+constructor TGocciaLazyPropertyDescriptorData.Create(
+  const AFactory: TGocciaLazyPropertyFactory; const AFlags: TPropertyFlags);
+begin
+  inherited Create(TGocciaUndefinedLiteralValue.UndefinedValue, AFlags);
+  FFactory := AFactory;
+  FMaterialized := False;
+end;
+
+function TGocciaLazyPropertyDescriptorData.Materialize: TGocciaValue;
+begin
+  if not FMaterialized then
+  begin
+    if TMethod(FFactory).Code <> nil then
+      Value := FFactory()
+    else
+      Value := TGocciaUndefinedLiteralValue.UndefinedValue;
+    FMaterialized := True;
+  end;
+  Result := Value;
+end;
+
 constructor TGocciaPropertyDescriptorAccessor.Create(const AGetter: TGocciaValue; const ASetter: TGocciaValue; const AFlags: TPropertyFlags);
 begin
   inherited Create(AFlags, [pdfEnumerable, pdfConfigurable, pdfGet, pdfSet]);
@@ -231,7 +264,12 @@ end;
 function ClonePropertyDescriptor(
   const ADescriptor: TGocciaPropertyDescriptor): TGocciaPropertyDescriptor;
 begin
-  if ADescriptor is TGocciaPropertyDescriptorData then
+  if ADescriptor is TGocciaLazyPropertyDescriptorData then
+    Result := TGocciaPropertyDescriptorData.CreatePartial(
+      TGocciaLazyPropertyDescriptorData(ADescriptor).Materialize,
+      ADescriptor.Flags,
+      ADescriptor.Fields)
+  else if ADescriptor is TGocciaPropertyDescriptorData then
     Result := TGocciaPropertyDescriptorData.CreatePartial(
       TGocciaPropertyDescriptorData(ADescriptor).Value,
       ADescriptor.Flags,

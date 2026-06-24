@@ -30,7 +30,9 @@ type
     function ReflectSet(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ReflectSetPrototypeOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   public
-    constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
+    constructor Create(const AName: string; const AScope: TGocciaScope;
+      const AThrowError: TGocciaThrowErrorCallback;
+      const ADefineGlobalBinding: Boolean = True);
   end;
 
 implementation
@@ -66,7 +68,9 @@ end;
 
 { TGocciaGlobalReflect }
 
-constructor TGocciaGlobalReflect.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
+constructor TGocciaGlobalReflect.Create(const AName: string;
+  const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback;
+  const ADefineGlobalBinding: Boolean = True);
 var
   Members: TGocciaMemberCollection;
 begin
@@ -97,7 +101,8 @@ begin
   end;
   RegisterMemberDefinitions(FBuiltinObject, FStaticMembers);
 
-  AScope.DefineLexicalBinding(AName, FBuiltinObject, dtConst, True);
+  if ADefineGlobalBinding then
+    AScope.DefineLexicalBinding(AName, FBuiltinObject, dtConst, True);
 end;
 
 // ES2026 §28.1.1 Reflect.apply(target, thisArgument, argumentsList)
