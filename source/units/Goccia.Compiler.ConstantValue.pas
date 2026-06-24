@@ -63,9 +63,8 @@ implementation
 
 uses
   Math,
-  SysUtils,
 
-  TextSemantics,
+  NumericText,
 
   Goccia.Constants,
   Goccia.Values.BigIntValue;
@@ -243,42 +242,6 @@ begin
   end;
 end;
 
-function StringToCompileTimeNumber(const AValue: string): Double;
-var
-  FormatSettings: TFormatSettings;
-  Trimmed: string;
-  TempValue: Double;
-begin
-  Trimmed := TrimECMAScriptWhitespace(AValue);
-
-  if Trimmed = '' then
-    Exit(0.0);
-
-  if Trimmed = 'Infinity' then
-    Exit(Infinity);
-  if Trimmed = '+Infinity' then
-    Exit(Infinity);
-  if Trimmed = '-Infinity' then
-    Exit(NegInfinity);
-
-  if (Length(Trimmed) > 2) and (Trimmed[1] = '0') and
-     ((Trimmed[2] = 'x') or (Trimmed[2] = 'X')) then
-  begin
-    try
-      Exit(StrToInt(Trimmed));
-    except
-      Exit(NaN);
-    end;
-  end;
-
-  FormatSettings := DefaultFormatSettings;
-  FormatSettings.DecimalSeparator := '.';
-  if TryStrToFloat(Trimmed, TempValue, FormatSettings) then
-    Result := TempValue
-  else
-    Result := NaN;
-end;
-
 function TryCompileTimeValueToNumber(const AValue: TGocciaCompileTimeValue;
   out ANumber: Double): Boolean;
 begin
@@ -296,7 +259,9 @@ begin
     ctvkNumber:
       ANumber := AValue.NumberValue;
     ctvkString:
-      ANumber := StringToCompileTimeNumber(AValue.StringValue);
+      // ES2026 §7.1.4.1.1 StringToNumber: shared with runtime coercion
+      // (Goccia.Values.Primitives) so folding cannot diverge from execution.
+      ANumber := StringToNumber(AValue.StringValue);
   else
   begin
     ANumber := 0.0;
