@@ -34,6 +34,70 @@ import { makeTmpFactory, clean } from "./test-cli/tmpdir";
 
 const makeTmp = makeTmpFactory("goccia-apps-");
 
+async function withFetchTestServer(
+  callback: (baseUrl: string) => void | Promise<void>,
+): Promise<void> {
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(request) {
+      if (request.method === "HEAD")
+        return new Response(null, { status: 200 });
+      return new Response("ok", { status: 200 });
+    },
+  });
+  try {
+    await callback(`http://127.0.0.1:${server.port}`);
+  } finally {
+    server.stop(true);
+  }
+}
+
+async function runLoaderJsonAsync(
+  source: string,
+  extraArgs?: string[],
+  opts?: { timeout?: number },
+): Promise<{ exitCode: number | null; json: any; stderr: string }> {
+  const hasOutputFlag = extraArgs?.some((a) => a.startsWith("--output="));
+  const proc = Bun.spawn(
+    [
+      LOADER,
+      ...(hasOutputFlag ? [] : ["--output=json"]),
+      ...(extraArgs ?? []),
+    ],
+    {
+      stdin: "pipe",
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  );
+  proc.stdin.write(source);
+  proc.stdin.end();
+
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  if (opts?.timeout != null)
+    timeout = setTimeout(() => proc.kill(), opts.timeout);
+  try {
+    const [exitCode, stdout, stderr] = await Promise.all([
+      proc.exited,
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
+    let json: any;
+    try {
+      json = JSON.parse(stdout);
+    } catch (e: any) {
+      throw new Error(
+        `runLoaderJsonAsync: failed to parse JSON (exitCode=${exitCode}): ${e.message}\nstderr: ${stderr}\nstdout: ${stdout}`,
+      );
+    }
+    return { exitCode, json, stderr };
+  } finally {
+    if (timeout !== undefined)
+      clearTimeout(timeout);
+  }
+}
+
 function assertValidSourceMap(path: string): void {
   const raw = readFileSync(path, "utf-8");
   const map = JSON.parse(raw);
@@ -2699,17 +2763,17 @@ console.log("Loader: --allowed-host multiple hosts...");
   if (!res.text().includes("blocked.test")) throw new Error(`Error should mention blocked host, got: ${res.text()}`);
 }
 
-console.log("Loader: HTTPS fetch smoke with --allowed-host...");
-{
-  const { exitCode, json, stderr } = runLoaderJson(
-    'const response = await fetch("https://www.gstatic.com/generate_204", { method: "HEAD" });\nresponse.status;\n',
-    ["--compat-asi", "--allowed-host=www.gstatic.com"],
+console.log("Loader: local fetch smoke with --allowed-host...");
+await withFetchTestServer(async (baseUrl) => {
+  const { exitCode, json, stderr } = await runLoaderJsonAsync(
+    `const response = await fetch("${baseUrl}/", { method: "HEAD" });\nresponse.status;\n`,
+    ["--compat-asi", "--allowed-host=127.0.0.1"],
     { timeout: 10_000 },
   );
-  if (exitCode !== 0) throw new Error(`HTTPS fetch should exit 0, got ${exitCode}: ${stderr}`);
-  if (json.ok !== true) throw new Error(`HTTPS fetch JSON ok should be true, got ${json.ok}`);
-  if (json.files?.[0]?.result !== 204) throw new Error(`HTTPS fetch status should be 204, got ${json.files?.[0]?.result}`);
-}
+  if (exitCode !== 0) throw new Error(`Local fetch should exit 0, got ${exitCode}: ${stderr}`);
+  if (json.ok !== true) throw new Error(`Local fetch JSON ok should be true, got ${json.ok}`);
+  if (json.files?.[0]?.result !== 200) throw new Error(`Local fetch status should be 200, got ${json.files?.[0]?.result}`);
+});
 
 // ============================================================================
 // --multifile (all runners)

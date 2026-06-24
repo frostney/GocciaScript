@@ -130,14 +130,11 @@ type
     function NeedsMemoryPressureCollection: Boolean;
     procedure CollectForMemoryPressure(const AProtect: TGCManagedObject);
 
-    // Young-generation collection: pre-marks objects before AWatermark
-    // as surviving, then runs mark-and-sweep. MarkReferences on old
-    // objects short-circuits via "if GCMarked then Exit", and the sweep
-    // only walks objects after the watermark. Both mark and sweep are
-    // O(young) instead of O(all).
-    // Constraint: old objects must not acquire new references to young
-    // objects between the watermark capture and the CollectYoung call.
-    // Safe for benchmark measurement where old objects are read-only.
+    // Young-generation collection: marks from real roots, then sweeps
+    // only objects allocated after AWatermark. Old objects are retained
+    // even when unmarked, but they are not pre-marked because old objects
+    // can acquire young references between the watermark capture and this
+    // collection. Tracing through old roots keeps those young objects live.
     procedure CollectYoung(const AWatermark: Integer);
     procedure ResetPeakBytesAllocated;
 
@@ -808,13 +805,6 @@ begin
         EffectiveWatermark := FManagedObjects.Count;
 
       TGCManagedObject.AdvanceMark;
-
-      for I := 0 to EffectiveWatermark - 1 do
-      begin
-        Obj := FManagedObjects[I];
-        if Assigned(Obj) then
-          Obj.GCMarked := True;
-      end;
 
       MarkRoots;
       TraceWeakReferences;
