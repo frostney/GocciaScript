@@ -25,6 +25,8 @@ Runtime globals (Console, JSON5, JSONL, TOML, YAML, CSV, TSV, Performance, TextE
 
 FFI is not part of the loader runtime profile. CLI tools install `TGocciaFFIRuntimeExtension` when `--unsafe-ffi` is passed or `"unsafe-ffi": true` is set in config.
 
+`ShadowRealm` is a core language built-in but, like the Function constructor's dynamic-code capability, is installed only on demand. The engine registers `globalThis.ShadowRealm` (`Goccia.Builtins.GlobalShadowRealm.pas`) when `--unsafe-shadowrealm` is passed or `"unsafe-shadowrealm": true` is set in config, because `ShadowRealm.prototype.evaluate` performs dynamic source evaluation. See [ADR 0070](adr/0070-opt-in-shadowrealm.md) and the [TC39 proposal table](language-tables.md#tc39-proposals).
+
 ## Adding a New Built-in
 
 See [Adding a New Built-in Type](adding-built-in-types.md) for the complete step-by-step guide with code templates, GC considerations, and a checklist.

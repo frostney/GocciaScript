@@ -1,0 +1,5 @@
+{
+  "unsafe-shadowrealm": true,
+  "compat-var": true,
+  "compat-function": true
+}

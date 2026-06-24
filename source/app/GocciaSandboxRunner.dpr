@@ -15,6 +15,7 @@ uses
 
   Goccia.Application,
   Goccia.Builtins.Console,
+  Goccia.Builtins.GlobalShadowRealm,
   Goccia.CLI.Application,
   Goccia.CLI.Options,
   Goccia.Engine,
@@ -587,6 +588,8 @@ begin
     EmptyConfig);
   AEngine.FunctionConstructor.Enabled := ResolveFlagOption(
     EngineOptions.UnsafeFunctionConstructor, EmptyConfig);
+  if ResolveFlagOption(EngineOptions.UnsafeShadowRealm, EmptyConfig) then
+    EnableShadowRealm(AEngine);
 
   Runtime := AttachRuntime(AEngine);
   ApplyLoaderRuntimeProfile(Runtime);

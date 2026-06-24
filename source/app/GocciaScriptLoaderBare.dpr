@@ -16,6 +16,7 @@ uses
   Goccia.AST.Node,
   Goccia.AST.Statements,
   Goccia.Builtins.Atomics,
+  Goccia.Builtins.GlobalShadowRealm,
   Goccia.CLI.Options,
   Goccia.Engine,
   Goccia.Error,
@@ -65,6 +66,7 @@ type
     Compatibility: TGocciaCompatibilityFlags;
     StrictTypes: Boolean;
     UnsafeFunctionConstructor: Boolean;
+    UnsafeShadowRealm: Boolean;
     Test262Host: Boolean;
     Test262AgentCanSuspend: Boolean;
     Print: Boolean;
@@ -1166,6 +1168,7 @@ begin
   WriteLn('  --source-type=script|module   Load entry as script source or module source (.mjs infers module)');
   WriteLn('  --source-name=PATH            Name stdin source as PATH for diagnostics and module resolution');
   WriteLn('  --unsafe-function-constructor Enable dynamic Function constructor');
+  WriteLn('  --unsafe-shadowrealm          Enable the ShadowRealm constructor');
   WriteLn('  --test262-host                Expose Goccia.test262 host hooks for test262');
   WriteLn('  --print                       Print the script''s last value (incl. undefined)');
   WriteLn('  --timeout=MS                  Per-file cooperative timeout in milliseconds');
@@ -1283,6 +1286,7 @@ begin
   Result.Compatibility := [];
   Result.StrictTypes := False;
   Result.UnsafeFunctionConstructor := False;
+  Result.UnsafeShadowRealm := False;
   Result.Test262Host := False;
   Result.Test262AgentCanSuspend := True;
   Result.Print := False;
@@ -1314,6 +1318,8 @@ begin
       Result.StrictTypes := True
     else if Arg = '--unsafe-function-constructor' then
       Result.UnsafeFunctionConstructor := True
+    else if Arg = '--unsafe-shadowrealm' then
+      Result.UnsafeShadowRealm := True
     else if Arg = '--test262-host' then
       Result.Test262Host := True
     else if Arg = '--print' then
@@ -1381,6 +1387,8 @@ begin
   AEngine.StrictTypes := AOptions.StrictTypes;
   AEngine.SourceType := AOptions.SourceType;
   AEngine.FunctionConstructor.Enabled := AOptions.UnsafeFunctionConstructor;
+  if AOptions.UnsafeShadowRealm then
+    EnableShadowRealm(AEngine);
   SetAtomicsAgentCanSuspend(AOptions.Test262AgentCanSuspend);
   if AOptions.Test262Host then
     AEngine.ModuleLoader.SetContentProvider(

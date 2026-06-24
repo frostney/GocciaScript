@@ -290,6 +290,7 @@ Relative paths are resolved against the current working directory. A missing fil
   "experimental-js-module-source": true,
   "strict-types": true,
   "unsafe-ffi": true,
+  "unsafe-shadowrealm": true,
   "timeout": 5000,
   "max-memory": 10485760,
   "stack-size": 2900,
