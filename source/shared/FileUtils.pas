@@ -18,6 +18,10 @@ function UTF8FileExists(const APath: string): Boolean;
   No BOM stripping or newline normalization is performed. }
 function ReadUTF8FileText(const APath: string): UTF8String;
 
+{ Read an entire file as raw bytes, preserving every byte exactly
+  (NUL bytes, non-UTF-8 sequences, and original newlines). }
+function ReadFileBytes(const APath: string): TBytes;
+
 implementation
 
 function UTF8PathToUnicodeString(const APath: string): UnicodeString;
@@ -122,6 +126,20 @@ begin
 
   SetCodePage(SourceText, CP_UTF8, False);
   Result := UTF8String(SourceText);
+end;
+
+function ReadFileBytes(const APath: string): TBytes;
+var
+  Stream: TFileStream;
+begin
+  Stream := TFileStream.Create(APath, fmOpenRead or fmShareDenyWrite);
+  try
+    SetLength(Result, Stream.Size);
+    if Length(Result) > 0 then
+      Stream.ReadBuffer(Result[0], Length(Result));
+  finally
+    Stream.Free;
+  end;
 end;
 
 end.

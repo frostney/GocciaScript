@@ -495,6 +495,12 @@ begin
   if IsViewOutOfBounds then
     ThrowTypeError(SErrorCannotUseDetachedDataView, SSuggestArrayBufferDetached);
 
+  // Immutable ArrayBuffers proposal: SetViewValue throws when the viewed buffer
+  // is immutable (the observable numeric coercion above still runs first).
+  if (FBufferValue is TGocciaArrayBufferValue) and
+     TGocciaArrayBufferValue(FBufferValue).Immutable then
+    ThrowTypeError('DataView cannot write to an immutable ArrayBuffer');
+
   ViewSize := GetViewByteLength;
   ElementSize := BinaryBytesPerElement(AKind);
   if Int64(Index) + Int64(ElementSize) > Int64(ViewSize) then
