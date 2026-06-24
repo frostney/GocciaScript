@@ -65,13 +65,52 @@ uses
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
 
+function AddTempRootIfNeeded(const AValue: TGocciaValue): Boolean;
+var
+  GC: TGarbageCollector;
+begin
+  GC := TGarbageCollector.Instance;
+  Result := Assigned(GC) and Assigned(AValue) and not GC.IsTempRoot(AValue);
+  if Result then
+    GC.AddTempRoot(AValue);
+end;
+
+procedure RemoveTempRootIfNeeded(
+  const AValue: TGocciaValue; const AWasRooted: Boolean);
+var
+  GC: TGarbageCollector;
+begin
+  GC := TGarbageCollector.Instance;
+  if AWasRooted and Assigned(GC) then
+    GC.RemoveTempRoot(AValue);
+end;
+
 // TC39 Joint Iteration §2.1.1 GetIteratorFlattenable(obj, primitiveHandling)
 function GetIteratorFromIterable(const AValue: TGocciaValue): TGocciaIteratorValue;
 var
   IteratorMethod, IteratorObj: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
+  GC: TGarbageCollector;
+  ValueWasRooted, MethodWasRooted, IteratorWasRooted: Boolean;
+
+  function AddRootIfNeeded(const ARootValue: TGocciaValue): Boolean;
+  begin
+    Result := Assigned(GC) and Assigned(ARootValue) and
+      not GC.IsTempRoot(ARootValue);
+    if Result then
+      GC.AddTempRoot(ARootValue);
+  end;
+
+  procedure RemoveRootIfNeeded(const ARootValue: TGocciaValue;
+    const AWasRooted: Boolean);
+  begin
+    if AWasRooted then
+      GC.RemoveTempRoot(ARootValue);
+  end;
+
 begin
   Result := nil;
+  GC := TGarbageCollector.Instance;
 
   if AValue is TGocciaIteratorValue then
   begin
@@ -81,31 +120,51 @@ begin
 
   if AValue is TGocciaStringLiteralValue then
   begin
-    Result := TGocciaStringIteratorValue.Create(AValue);
+    ValueWasRooted := AddRootIfNeeded(AValue);
+    try
+      Result := TGocciaStringIteratorValue.Create(AValue);
+    finally
+      RemoveRootIfNeeded(AValue, ValueWasRooted);
+    end;
     Exit;
   end;
 
   if AValue is TGocciaObjectValue then
   begin
-    IteratorMethod := TGocciaObjectValue(AValue).GetSymbolProperty(TGocciaSymbolValue.WellKnownIterator);
-    if Assigned(IteratorMethod) and not (IteratorMethod is TGocciaUndefinedLiteralValue) and IteratorMethod.IsCallable then
-    begin
-      CallArgs := TGocciaArgumentsCollection.Create;
-      try
-        IteratorObj := TGocciaFunctionBase(IteratorMethod).Call(CallArgs, AValue);
-      finally
-        CallArgs.Free;
-      end;
-      if IteratorObj is TGocciaIteratorValue then
+    ValueWasRooted := AddRootIfNeeded(AValue);
+    try
+      IteratorMethod := TGocciaObjectValue(AValue).GetSymbolProperty(TGocciaSymbolValue.WellKnownIterator);
+      if Assigned(IteratorMethod) and not (IteratorMethod is TGocciaUndefinedLiteralValue) and IteratorMethod.IsCallable then
       begin
-        Result := TGocciaIteratorValue(IteratorObj);
-        Exit;
+        MethodWasRooted := AddRootIfNeeded(IteratorMethod);
+        try
+          CallArgs := TGocciaArgumentsCollection.Create;
+          try
+            IteratorObj := TGocciaFunctionBase(IteratorMethod).Call(CallArgs, AValue);
+          finally
+            CallArgs.Free;
+          end;
+        finally
+          RemoveRootIfNeeded(IteratorMethod, MethodWasRooted);
+        end;
+        if IteratorObj is TGocciaIteratorValue then
+        begin
+          Result := TGocciaIteratorValue(IteratorObj);
+          Exit;
+        end;
+        if IteratorObj is TGocciaObjectValue then
+        begin
+          IteratorWasRooted := AddRootIfNeeded(IteratorObj);
+          try
+            Result := CreateRootedGenericIterator(IteratorObj);
+          finally
+            RemoveRootIfNeeded(IteratorObj, IteratorWasRooted);
+          end;
+          Exit;
+        end;
       end;
-      if IteratorObj is TGocciaObjectValue then
-      begin
-        Result := TGocciaGenericIteratorValue.Create(IteratorObj);
-        Exit;
-      end;
+    finally
+      RemoveRootIfNeeded(AValue, ValueWasRooted);
     end;
   end;
 end;
@@ -146,9 +205,15 @@ function TGocciaZipIteratorValue.DoAdvanceNext: TGocciaObjectValue;
 var
   Value: TGocciaValue;
   Done: Boolean;
+  ValueWasRooted: Boolean;
 begin
   Value := DoDirectNext(Done);
-  Result := CreateIteratorResult(Value, Done);
+  ValueWasRooted := AddTempRootIfNeeded(Value);
+  try
+    Result := CreateIteratorResult(Value, Done);
+  finally
+    RemoveTempRootIfNeeded(Value, ValueWasRooted);
+  end;
 end;
 
 // TC39 Joint Iteration §1.1 Iterator.zip(iterables [, options]) — yield step
@@ -327,9 +392,15 @@ function TGocciaZipKeyedIteratorValue.DoAdvanceNext: TGocciaObjectValue;
 var
   Value: TGocciaValue;
   Done: Boolean;
+  ValueWasRooted: Boolean;
 begin
   Value := DoDirectNext(Done);
-  Result := CreateIteratorResult(Value, Done);
+  ValueWasRooted := AddTempRootIfNeeded(Value);
+  try
+    Result := CreateIteratorResult(Value, Done);
+  finally
+    RemoveTempRootIfNeeded(Value, ValueWasRooted);
+  end;
 end;
 
 // TC39 Joint Iteration §1.2 Iterator.zipKeyed(iterables [, options]) — yield step

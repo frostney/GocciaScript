@@ -2759,8 +2759,8 @@ var
   BufferByteLength: Integer;
   HasLength: Boolean;
   RawLen: Double;
-  Val: TGocciaValue;
-  ResultRoot: TGocciaTempRoot;
+  Val, NextMethod: TGocciaValue;
+  ResultRoot, IteratorRoot, NextMethodRoot: TGocciaTempRoot;
   ValueRoots: array of TGocciaTempRoot;
   ValueRootCount: Integer;
 begin
@@ -2898,8 +2898,22 @@ begin
     if Assigned(Iterator) then
     begin
       if not (Iterator is TGocciaGenericIteratorValue) then
-        Iterator := TGocciaGenericIteratorValue.Create(Iterator,
-          Iterator.GetProperty(PROP_NEXT));
+      begin
+        InitializeTempRoot(IteratorRoot);
+        InitializeTempRoot(NextMethodRoot);
+        AddTempRootIfNeeded(IteratorRoot, Iterator);
+        try
+          NextMethod := Iterator.GetProperty(PROP_NEXT);
+          AddTempRootIfNeeded(NextMethodRoot, NextMethod);
+          try
+            Iterator := CreateRootedGenericIterator(Iterator, NextMethod);
+          finally
+            RemoveTempRootIfNeeded(NextMethodRoot);
+          end;
+        finally
+          RemoveTempRootIfNeeded(IteratorRoot);
+        end;
+      end;
       Values := TGocciaValueList.Create(False);
       ValueRootCount := 0;
       InitializeTempRoot(ResultRoot);
@@ -2998,14 +3012,15 @@ var
   MapFnArg: TGocciaValue;
   ThisArg: TGocciaValue;
   I, Len: Integer;
-  Val: TGocciaValue;
+  Val, NextMethod: TGocciaValue;
   MapArgs: TGocciaArgumentsCollection;
   Iterator: TGocciaIteratorValue;
   IterResult: TGocciaObjectValue;
   ConstructorValue: TGocciaValue;
   Values: TGocciaValueList;
   SrcObj: TGocciaObjectValue;
-  SourceRoot, MapFnRoot, ThisRoot, ResultRoot: TGocciaTempRoot;
+  SourceRoot, MapFnRoot, ThisRoot, ResultRoot, IteratorRoot,
+  NextMethodRoot: TGocciaTempRoot;
   ValueRoots: array of TGocciaTempRoot;
   ValueRootCount: Integer;
 begin
@@ -3045,8 +3060,22 @@ begin
     if Assigned(Iterator) then
     begin
       if not (Iterator is TGocciaGenericIteratorValue) then
-        Iterator := TGocciaGenericIteratorValue.Create(Iterator,
-          Iterator.GetProperty(PROP_NEXT));
+      begin
+        InitializeTempRoot(IteratorRoot);
+        InitializeTempRoot(NextMethodRoot);
+        AddTempRootIfNeeded(IteratorRoot, Iterator);
+        try
+          NextMethod := Iterator.GetProperty(PROP_NEXT);
+          AddTempRootIfNeeded(NextMethodRoot, NextMethod);
+          try
+            Iterator := CreateRootedGenericIterator(Iterator, NextMethod);
+          finally
+            RemoveTempRootIfNeeded(NextMethodRoot);
+          end;
+        finally
+          RemoveTempRootIfNeeded(IteratorRoot);
+        end;
+      end;
       Values := TGocciaValueList.Create(False);
       ValueRootCount := 0;
       try
