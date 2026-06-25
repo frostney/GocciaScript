@@ -101,3 +101,26 @@ test("thrown and caught error preserves stack", () => {
   expect(caughtStack.startsWith("Error: thrown")).toBe(true);
   expect(caughtStack.includes("thrower")).toBe(true);
 });
+
+test("stack captured inside a function invoked via a native callback has frames", () => {
+  const makeError = () => new Error("via callback");
+  let captured = "";
+  [1].map(() => {
+    captured = makeError().stack;
+  });
+  expect(captured.startsWith("Error: via callback")).toBe(true);
+  expect(captured.includes("    at ")).toBe(true);
+});
+
+test("error thrown inside a native callback preserves a trace", () => {
+  let caughtStack = "";
+  try {
+    [1, 2, 3].forEach((x) => {
+      if (x === 2) throw new Error("in forEach");
+    });
+  } catch (e) {
+    caughtStack = e.stack;
+  }
+  expect(caughtStack.startsWith("Error: in forEach")).toBe(true);
+  expect(caughtStack.includes("    at ")).toBe(true);
+});

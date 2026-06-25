@@ -18,7 +18,7 @@ type
     RegisterCount: Integer;
     LocalCellBase: Integer;
     LocalCellCount: Integer;
-    Arguments: TGocciaRegisterArray;
+    ArgumentBase: Integer;
     ArgCount: Integer;
     Closure: TGocciaBytecodeClosure;
     HandlerCount: Integer;
