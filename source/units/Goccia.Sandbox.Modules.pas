@@ -23,6 +23,7 @@ type
 
     function Exists(const APath: string): Boolean; override;
     function LoadContent(const APath: string): TGocciaModuleContent; override;
+    function LoadContentBytes(const APath: string): TBytes; override;
     function TryGetLastModified(const APath: string;
       out ALastModified: TDateTime): Boolean; override;
   end;
@@ -127,6 +128,17 @@ begin
   Stat := FFs.Stat(APath);
   Result := TGocciaModuleContent.Create(UTF8String(FFs.ReadAllText(APath)),
     Stat.ModifiedAt);
+end;
+
+function TGocciaSandboxModuleContentProvider.LoadContentBytes(
+  const APath: string): TBytes;
+begin
+  if not Assigned(FFs) then
+    raise EStreamError.Create('No sandbox filesystem configured.');
+
+  // Read raw bytes directly from the virtual filesystem so Import Bytes
+  // preserves the exact file contents instead of round-tripping through text.
+  Result := FFs.ReadAllBytes(APath);
 end;
 
 function TGocciaSandboxModuleContentProvider.TryGetLastModified(

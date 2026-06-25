@@ -70,6 +70,7 @@ const
   PROP_RESIZABLE        = 'resizable';
   PROP_GROWABLE         = 'growable';
   PROP_DETACHED         = 'detached';
+  PROP_IMMUTABLE        = 'immutable';
   PROP_BYTES_PER_ELEMENT = 'BYTES_PER_ELEMENT';
   PROP_FROM             = 'from';
   PROP_OF               = 'of';

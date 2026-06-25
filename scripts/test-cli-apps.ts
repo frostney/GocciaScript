@@ -18,6 +18,7 @@ import {
   existsSync,
   mkdirSync,
   chmodSync,
+  symlinkSync,
 } from "fs";
 import { join, resolve } from "path";
 import {
@@ -529,6 +530,75 @@ console.log("Bare Loader: print global...");
   });
   if (proc.exitCode !== 0) throw new Error(`Bare print exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (proc.stdout.toString().trim() !== "hello 7") throw new Error(`Bare print expected hello 7, got: ${proc.stdout.toString()}`);
+}
+
+console.log("Bare Loader: --stack-size bounds deep non-tail recursion with RangeError...");
+{
+  const src =
+    "const f = (n) => (n === 0 ? 0 : 1 + f(n - 1)); try { f(100000); print('NO THROW'); } catch (e) { print(e.constructor.name); }\n";
+  const proc = Bun.spawnSync([BARE, "--mode=bytecode", "--stack-size=1000"], {
+    stdin: new TextEncoder().encode(src),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0) throw new Error(`Bare --stack-size exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (proc.stdout.toString().trim() !== "RangeError")
+    throw new Error(`Bare --stack-size expected RangeError, got: ${proc.stdout.toString()}`);
+}
+
+console.log("Bare Loader: proper tail calls reuse the frame (deep strict tail recursion completes)...");
+{
+  // Without proper tail calls this 100k-deep recursion would exceed --stack-size;
+  // a tail call in strict-mode code reuses the current frame, so it runs in O(1)
+  // stack and completes well under the 1000-frame limit.
+  const src =
+    "const f = (n) => { 'use strict'; return n === 0 ? 'done' : f(n - 1); }; print(f(100000));\n";
+  const proc = Bun.spawnSync([BARE, "--mode=bytecode", "--stack-size=1000"], {
+    stdin: new TextEncoder().encode(src),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0) throw new Error(`Bare tail-call exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (proc.stdout.toString().trim() !== "done")
+    throw new Error(`Bare tail-call expected 'done', got: ${proc.stdout.toString()} / ${proc.stderr.toString()}`);
+}
+
+console.log("Bare Loader: tail-call optimization stays strict-mode only...");
+{
+  // The same tail recursion in sloppy-mode code is NOT a proper tail call, so it
+  // is bounded by --stack-size and throws RangeError.
+  const src =
+    "const f = (n) => (n === 0 ? 'done' : f(n - 1)); try { print(f(100000)); } catch (e) { print(e.constructor.name); }\n";
+  const proc = Bun.spawnSync([BARE, "--mode=bytecode", "--stack-size=1000"], {
+    stdin: new TextEncoder().encode(src),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0) throw new Error(`Bare sloppy tail-call exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (proc.stdout.toString().trim() !== "RangeError")
+    throw new Error(`Bare sloppy tail-call expected RangeError, got: ${proc.stdout.toString()}`);
+}
+
+console.log("Bare Loader: native re-entry recursion throws RangeError instead of crashing...");
+{
+  // Recursion through a native callback (Array.prototype.forEach) and through a
+  // generator resume re-enters the VM on a native stack frame. Both must be
+  // bounded (RangeError), not overflow the native stack (SIGSEGV / non-zero
+  // signal exit).
+  const cases = [
+    "let d = 0; const rec = () => { d++; [0].forEach(rec); }; try { rec(); print('NO THROW'); } catch (e) { print(e.constructor.name); }\n",
+    "let d = 0; function* g() { d++; for (const x of g()) {} yield 1; } try { for (const x of g()) {} print('NO THROW'); } catch (e) { print(e.constructor.name); }\n",
+  ];
+  for (const src of cases) {
+    const proc = Bun.spawnSync(
+      [BARE, "--mode=bytecode", "--compat-function", "--compat-traditional-for-loop"],
+      { stdin: new TextEncoder().encode(src), stdout: "pipe", stderr: "pipe" },
+    );
+    if (proc.exitCode !== 0)
+      throw new Error(`Bare native re-entry exited ${proc.exitCode} (signal ${proc.signalCode}): ${proc.stderr.toString()}`);
+    if (proc.stdout.toString().trim() !== "RangeError")
+      throw new Error(`Bare native re-entry expected RangeError, got: ${proc.stdout.toString()}`);
+  }
 }
 
 console.log("Bare Loader: no runtime globals...");
@@ -2732,6 +2802,180 @@ console.log("SandboxRunner: seed config imports host paths relative to the confi
       throw new Error(`SandboxRunner host seed stdout should include file copied under existing target directory, got: ${stdout}`);
     if (!containsLine(`\n${stdout}`, "3"))
       throw new Error(`SandboxRunner host seed stdout should include base64 byte length, got: ${stdout}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("SandboxRunner: seed directory rejects nested host symlink (no leak)...");
+{
+  const tmp = makeTmp();
+  try {
+    if (process.platform !== "win32") {
+      const seedDir = join(tmp, "seedDir");
+      mkdirSync(seedDir, { recursive: true });
+      writeFileSync(join(tmp, "outside.txt"), "outside-secret");
+      symlinkSync("../outside.txt", join(seedDir, "leak.txt"));
+      const mainJs = join(tmp, "main.js");
+      writeFileSync(mainJs, [
+        'import fs from "fs";',
+        'console.log(fs.readFileSync("/leak.txt", "utf8"));',
+      ].join("\n"));
+
+      const proc = Bun.spawnSync(
+        [SANDBOXRUNNER, "/main.js", `--seed=${seedDir}=/`, `--seed=${mainJs}=/`, "--source-type=module"],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      const output = proc.stdout.toString() + proc.stderr.toString();
+      if (proc.exitCode === 0)
+        throw new Error(`SandboxRunner nested symlink seed should fail, exited 0: ${output}`);
+      if (!output.includes("is a symlink (not supported)"))
+        throw new Error(`SandboxRunner nested symlink seed should report the symlink rejection, got: ${output}`);
+      if (output.includes("outside-secret"))
+        throw new Error(`SandboxRunner nested symlink seed leaked host contents, got: ${output}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("SandboxRunner: direct seed argument rejects host symlink (no leak)...");
+{
+  const tmp = makeTmp();
+  try {
+    if (process.platform !== "win32") {
+      writeFileSync(join(tmp, "outside.txt"), "outside-secret");
+      const link = join(tmp, "link.txt");
+      symlinkSync("outside.txt", link);
+      const mainJs = join(tmp, "main.js");
+      writeFileSync(mainJs, [
+        'import fs from "fs";',
+        'console.log(fs.readFileSync("/leak.txt", "utf8"));',
+      ].join("\n"));
+
+      const proc = Bun.spawnSync(
+        [SANDBOXRUNNER, "/main.js", `--seed=${link}=/leak.txt`, `--seed=${mainJs}=/`, "--source-type=module"],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      const output = proc.stdout.toString() + proc.stderr.toString();
+      if (proc.exitCode === 0)
+        throw new Error(`SandboxRunner direct symlink seed should fail, exited 0: ${output}`);
+      if (!output.includes("is a symlink (not supported)"))
+        throw new Error(`SandboxRunner direct symlink seed should report the symlink rejection, got: ${output}`);
+      if (output.includes("outside-secret"))
+        throw new Error(`SandboxRunner direct symlink seed leaked host contents, got: ${output}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("SandboxRunner: seed-config from directory rejects nested host symlink (no leak)...");
+{
+  const tmp = makeTmp();
+  try {
+    if (process.platform !== "win32") {
+      const seedDir = join(tmp, "seedDir");
+      mkdirSync(seedDir, { recursive: true });
+      writeFileSync(join(tmp, "outside.txt"), "outside-secret");
+      symlinkSync("../outside.txt", join(seedDir, "leak.txt"));
+      const seed = join(tmp, "seed.json");
+      writeFileSync(seed, JSON.stringify({
+        files: [
+          { from: "./seedDir", to: "/" },
+          {
+            path: "/main.js",
+            text: [
+              'import fs from "fs";',
+              'console.log(fs.readFileSync("/leak.txt", "utf8"));',
+            ].join("\n"),
+          },
+        ],
+      }));
+
+      const proc = Bun.spawnSync(
+        [SANDBOXRUNNER, "/main.js", `--seed-config=${seed}`, "--source-type=module"],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      const output = proc.stdout.toString() + proc.stderr.toString();
+      if (proc.exitCode === 0)
+        throw new Error(`SandboxRunner seed-config symlink should fail, exited 0: ${output}`);
+      if (!output.includes("is a symlink (not supported)"))
+        throw new Error(`SandboxRunner seed-config symlink should report the symlink rejection, got: ${output}`);
+      if (output.includes("outside-secret"))
+        throw new Error(`SandboxRunner seed-config symlink leaked host contents, got: ${output}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("SandboxRunner: trailing slash on a symlinked-directory seed is still rejected (no leak)...");
+{
+  const tmp = makeTmp();
+  try {
+    if (process.platform !== "win32") {
+      const outsideDir = join(tmp, "outsideDir");
+      mkdirSync(outsideDir, { recursive: true });
+      writeFileSync(join(outsideDir, "secret.txt"), "outside-secret");
+      const linkDir = join(tmp, "linkDir");
+      symlinkSync("./outsideDir", linkDir);
+      const mainJs = join(tmp, "main.js");
+      writeFileSync(mainJs, [
+        'import fs from "fs";',
+        'console.log(fs.readFileSync("/secret.txt", "utf8"));',
+      ].join("\n"));
+
+      // A trailing slash must not let POSIX lstat() follow the symlinked leaf.
+      const proc = Bun.spawnSync(
+        [SANDBOXRUNNER, "/main.js", `--seed=${linkDir}/=/`, `--seed=${mainJs}=/`, "--source-type=module"],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      const output = proc.stdout.toString() + proc.stderr.toString();
+      if (proc.exitCode === 0)
+        throw new Error(`SandboxRunner trailing-slash symlink seed should fail, exited 0: ${output}`);
+      if (!output.includes("is a symlink (not supported)"))
+        throw new Error(`SandboxRunner trailing-slash symlink seed should report the symlink rejection, got: ${output}`);
+      if (output.includes("outside-secret"))
+        throw new Error(`SandboxRunner trailing-slash symlink seed leaked host contents, got: ${output}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("SandboxRunner: Windows directory junction seed is rejected (no leak)...");
+{
+  const tmp = makeTmp();
+  try {
+    // Windows-only: file symlinks need elevation on CI runners, but a directory
+    // junction is a reparse point that needs none, so it exercises the Windows
+    // branch of the guard (FileGetAttr + faSymLink) that the win32-skipped tests
+    // above cannot.
+    if (process.platform === "win32") {
+      const outsideDir = join(tmp, "outsideDir");
+      mkdirSync(outsideDir, { recursive: true });
+      writeFileSync(join(outsideDir, "secret.txt"), "outside-secret");
+      const junction = join(tmp, "junction");
+      symlinkSync(outsideDir, junction, "junction");
+      const mainJs = join(tmp, "main.js");
+      writeFileSync(mainJs, [
+        'import fs from "fs";',
+        'console.log(fs.readFileSync("/secret.txt", "utf8"));',
+      ].join("\n"));
+
+      const proc = Bun.spawnSync(
+        [SANDBOXRUNNER, "/main.js", `--seed=${junction}=/`, `--seed=${mainJs}=/`, "--source-type=module"],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      const output = proc.stdout.toString() + proc.stderr.toString();
+      if (proc.exitCode === 0)
+        throw new Error(`SandboxRunner junction seed should fail, exited 0: ${output}`);
+      if (!output.includes("is a symlink (not supported)"))
+        throw new Error(`SandboxRunner junction seed should report the symlink rejection, got: ${output}`);
+      if (output.includes("outside-secret"))
+        throw new Error(`SandboxRunner junction seed leaked host contents, got: ${output}`);
+    }
   } finally {
     clean(tmp);
   }

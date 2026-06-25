@@ -632,6 +632,12 @@ begin
   if not IsValidIntegerIndexedElement(ANumericIndex, AIsNegativeZero, Index) then
     Exit;
 
+  // Immutable ArrayBuffers proposal: TypedArraySetElement performs the
+  // observable numeric conversion above but skips the store when the backing
+  // buffer is immutable; integer-indexed [[Set]] still reports success.
+  if IsTypedArrayBackedByImmutableArrayBuffer(Self) then
+    Exit;
+
   if IsBigIntKind(FKind) then
     WriteBigIntElement(Index, BigIntRaw)
   else
@@ -970,6 +976,11 @@ var
 begin
   if not AArray.IsValidIntegerIndexedElement(ANumericIndex,
     AIsNegativeZero, Index) then
+    Exit(False);
+  // Immutable ArrayBuffers proposal: a valid integer index over an immutable
+  // backing buffer cannot be redefined, so [[DefineOwnProperty]] returns false
+  // (Object.defineProperty throws; Reflect.defineProperty returns false).
+  if IsTypedArrayBackedByImmutableArrayBuffer(AArray) then
     Exit(False);
   if ADescriptor.HasConfigurableField and not ADescriptor.Configurable then
     Exit(False);
@@ -1841,11 +1852,9 @@ end;
 function TGocciaTypedArrayValue.TypedArraySort(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   TA: TGocciaTypedArrayValue;
-  I, J, SortLen: Integer;
-  NumberValues: array of Double;
-  BigIntValues: array of Int64;
-  TmpNumber, CompResult: Double;
-  TmpBigInt: Int64;
+  I, SortLen: Integer;
+  NumberValues, NumberScratch: array of Double;
+  BigIntValues, BigIntScratch: array of Int64;
   HasCompare: Boolean;
   AbortSortWriteback: Boolean;
   Comparator: TGocciaValue;
@@ -1941,6 +1950,128 @@ var
     Result := 0;
   end;
 
+  // Bottom-up merge sort over NumberValues using CompareNumbers. O(n log n);
+  // stable, so equal keys retain order (needed for -0/+0 and NaN runs to stay
+  // in CompareNumbers order). Bails out early when a comparator callback detaches
+  // the buffer (AbortSortWriteback).
+  procedure MergeSortNumbers;
+  var
+    // Width and Lo are Int64 so doubling Width and computing Lo + 2 * Width
+    // cannot overflow Integer for very large (multi-GB) 1-byte typed arrays,
+    // where SortLen can approach High(Integer). Range checks are off in
+    // release builds, so an overflow would silently corrupt the merge bounds.
+    Width, Lo: Int64;
+    Mid, Hi, Left, Right, Dest: Integer;
+  begin
+    SetLength(NumberScratch, SortLen);
+    Width := 1;
+    while Width < SortLen do
+    begin
+      Lo := 0;
+      while Lo < SortLen do
+      begin
+        // Clamp in Int64, then narrow: Mid and Hi are <= SortLen <= High(Integer).
+        Mid := Integer(Min(Lo + Width, Int64(SortLen)));
+        Hi := Integer(Min(Lo + 2 * Width, Int64(SortLen)));
+        Left := Integer(Lo);
+        Right := Mid;
+        Dest := Integer(Lo);
+        while (Left < Mid) and (Right < Hi) do
+        begin
+          if CompareNumbers(NumberValues[Right], NumberValues[Left]) < 0 then
+          begin
+            NumberScratch[Dest] := NumberValues[Right];
+            Inc(Right);
+          end
+          else
+          begin
+            NumberScratch[Dest] := NumberValues[Left];
+            Inc(Left);
+          end;
+          if AbortSortWriteback then
+            Exit;
+          Inc(Dest);
+        end;
+        while Left < Mid do
+        begin
+          NumberScratch[Dest] := NumberValues[Left];
+          Inc(Left);
+          Inc(Dest);
+        end;
+        while Right < Hi do
+        begin
+          NumberScratch[Dest] := NumberValues[Right];
+          Inc(Right);
+          Inc(Dest);
+        end;
+        Lo := Lo + 2 * Width;
+      end;
+      for Dest := 0 to SortLen - 1 do
+        NumberValues[Dest] := NumberScratch[Dest];
+      Width := Width * 2;
+    end;
+  end;
+
+  // Bottom-up merge sort over BigIntValues using CompareBigInts. See
+  // MergeSortNumbers for the structure; identical algorithm over Int64 keys.
+  procedure MergeSortBigInts;
+  var
+    // Width and Lo are Int64 so doubling Width and computing Lo + 2 * Width
+    // cannot overflow Integer for very large (multi-GB) 1-byte typed arrays,
+    // where SortLen can approach High(Integer). Range checks are off in
+    // release builds, so an overflow would silently corrupt the merge bounds.
+    Width, Lo: Int64;
+    Mid, Hi, Left, Right, Dest: Integer;
+  begin
+    SetLength(BigIntScratch, SortLen);
+    Width := 1;
+    while Width < SortLen do
+    begin
+      Lo := 0;
+      while Lo < SortLen do
+      begin
+        // Clamp in Int64, then narrow: Mid and Hi are <= SortLen <= High(Integer).
+        Mid := Integer(Min(Lo + Width, Int64(SortLen)));
+        Hi := Integer(Min(Lo + 2 * Width, Int64(SortLen)));
+        Left := Integer(Lo);
+        Right := Mid;
+        Dest := Integer(Lo);
+        while (Left < Mid) and (Right < Hi) do
+        begin
+          if CompareBigInts(BigIntValues[Right], BigIntValues[Left]) < 0 then
+          begin
+            BigIntScratch[Dest] := BigIntValues[Right];
+            Inc(Right);
+          end
+          else
+          begin
+            BigIntScratch[Dest] := BigIntValues[Left];
+            Inc(Left);
+          end;
+          if AbortSortWriteback then
+            Exit;
+          Inc(Dest);
+        end;
+        while Left < Mid do
+        begin
+          BigIntScratch[Dest] := BigIntValues[Left];
+          Inc(Left);
+          Inc(Dest);
+        end;
+        while Right < Hi do
+        begin
+          BigIntScratch[Dest] := BigIntValues[Right];
+          Inc(Right);
+          Inc(Dest);
+        end;
+        Lo := Lo + 2 * Width;
+      end;
+      for Dest := 0 to SortLen - 1 do
+        BigIntValues[Dest] := BigIntScratch[Dest];
+      Width := Width * 2;
+    end;
+  end;
+
 begin
   Comparator := TGocciaUndefinedLiteralValue.UndefinedValue;
   HasCompare := False;
@@ -1967,22 +2098,9 @@ begin
     for I := 0 to SortLen - 1 do
       BigIntValues[I] := TA.ReadBigIntElement(I);
 
-    for I := 1 to SortLen - 1 do
-    begin
-      TmpBigInt := BigIntValues[I];
-      J := I - 1;
-      while J >= 0 do
-      begin
-        CompResult := CompareBigInts(BigIntValues[J], TmpBigInt);
-        if AbortSortWriteback then
-          Exit(AThisValue);
-        if CompResult <= 0 then
-          Break;
-        BigIntValues[J + 1] := BigIntValues[J];
-        Dec(J);
-      end;
-      BigIntValues[J + 1] := TmpBigInt;
-    end;
+    MergeSortBigInts;
+    if AbortSortWriteback then
+      Exit(AThisValue);
 
     for I := 0 to SortLen - 1 do
       TA.WriteBigIntElement(I, BigIntValues[I]);
@@ -1993,22 +2111,9 @@ begin
   for I := 0 to SortLen - 1 do
     NumberValues[I] := TA.ReadElement(I);
 
-  for I := 1 to SortLen - 1 do
-  begin
-    TmpNumber := NumberValues[I];
-    J := I - 1;
-    while J >= 0 do
-    begin
-      CompResult := CompareNumbers(NumberValues[J], TmpNumber);
-      if AbortSortWriteback then
-        Exit(AThisValue);
-      if CompResult <= 0 then
-        Break;
-      NumberValues[J + 1] := NumberValues[J];
-      Dec(J);
-    end;
-    NumberValues[J + 1] := TmpNumber;
-  end;
+  MergeSortNumbers;
+  if AbortSortWriteback then
+    Exit(AThisValue);
 
   for I := 0 to SortLen - 1 do
     TA.WriteElement(I, NumberValues[I]);

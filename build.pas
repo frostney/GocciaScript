@@ -249,6 +249,13 @@ begin
 
     if BuildMode = bmProd then
     begin
+      // -O4 for aggressive optimization. The one -O4 optimization that is
+      // unsafe for this engine, FASTMATH, is force-disabled at the source level
+      // in Shared.inc ({$OPTIMIZATION NOFASTMATH}) because it violates the
+      // IEEE-754 double semantics JavaScript requires (it miscompiled the
+      // edge-case Temporal hoursInDay DST math — PR #797). Keeping the guard in
+      // source rather than here makes it a compiler-enforced invariant that
+      // travels with the code regardless of how fpc is invoked.
       Args.Add('-O4');
       Args.Add('-dPRODUCTION');
       Args.Add('-Xs');

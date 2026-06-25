@@ -428,6 +428,8 @@ GocciaSandboxRunner executes a sandbox entry path after populating an isolated v
 
 `--seed=<host>[=<sandbox>]` resolves the host path relative to the invocation current working directory. When the sandbox target is omitted, directories import their contents to `/` and files import as `/<filename>`.
 
+Host seed imports reject symlinks. A symlink in a `--seed` path or anywhere inside a `--seed-config` `from` directory aborts the run with exit code 1 and `Seed path is a symlink (not supported): <path>`, so seeding never dereferences host data from outside the seed root into the sandbox.
+
 `--seed-config=<file.json>` resolves each `from` path relative to the seed config file. The JSON shape is:
 
 ```json
