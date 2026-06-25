@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-25
 **Area:** `bytecode`
-**Pull Request:** [#799](https://github.com/frostney/GocciaScript/pull/799)
+**Pull Request:** [#802](https://github.com/frostney/GocciaScript/pull/802)
 
 Removed the per-call stack-trace string cost from the bytecode VM call path (#798). `SetupNewFrame` previously pushed `(ATemplate.Name, ExecutionSourcePath, 0, 0)` onto the shared `TGocciaCallStack` on every call, copying two reference-counted strings that are only ever read when an `Error` materialises `.stack`. It now pushes a *deferred* frame carrying the function-template pointer plus a module-path fallback (used only when the template has no own source file); a class-level resolver registered by the VM reproduces the name and source path at capture time, so an ordinary call performs no stack-trace string work. The shared call stack stays decoupled from the bytecode units: the template is held as an opaque `Pointer` and resolved through `TGocciaTemplateTraceResolver`, and the interpreter and native callers keep using the string-based push unchanged.
 
