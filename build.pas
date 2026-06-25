@@ -249,12 +249,18 @@ begin
 
     if BuildMode = bmProd then
     begin
-      // -O3, not -O4: FPC's -O4 enables "uncertain" optimizations that
-      // assume away aliasing and miscompile some engine paths in optimized
-      // builds only (observed as wrong results in edge-case Temporal
-      // ZonedDateTime hoursInDay under sub-hour/discontiguous DST, passing
-      // at -O- and -O3 but failing at -O4). -O3 is the highest safe level.
+      // -O3 with FASTMATH explicitly disabled. FPC's -O4 turns on the
+      // FASTMATH optimization, which reassociates and contracts floating-point
+      // operations and assumes no NaN/Inf — violating the strict IEEE-754
+      // double semantics that JavaScript mandates. That produced wrong results
+      // in the edge-case Temporal ZonedDateTime hoursInDay paths (sub-hour and
+      // discontiguous DST) in optimized builds only: correct at -O- and -O3,
+      // wrong as soon as FASTMATH is on (isolated via `-O3 -OoFASTMATH`, which
+      // reproduces, vs `-O3 -OoORDERFIELDS`, which does not). -O3 already
+      // excludes FASTMATH; -OoNOFASTMATH states the requirement explicitly and
+      // keeps it disabled even if the optimization level is raised later.
       Args.Add('-O3');
+      Args.Add('-OoNOFASTMATH');
       Args.Add('-dPRODUCTION');
       Args.Add('-Xs');
       Args.Add('-CX');
