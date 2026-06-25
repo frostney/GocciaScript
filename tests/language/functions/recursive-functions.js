@@ -34,3 +34,21 @@ test("tail recursion", () => {
 
   expect(sum(5)).toBe(15); // 1+2+3+4+5
 });
+
+test("single-argument tail recursion stays correct across many frames", () => {
+  const countdown = (n) => {
+    if (n === 0) return "done";
+    return countdown(n - 1);
+  };
+
+  expect(countdown(1000)).toBe("done");
+});
+
+test("multi-argument tail recursion reuses the argument window correctly", () => {
+  const sum = (n, acc) => {
+    if (n === 0) return acc;
+    return sum(n - 1, acc + n);
+  };
+
+  expect(sum(1000, 0)).toBe(500500); // 1+2+...+1000
+});
