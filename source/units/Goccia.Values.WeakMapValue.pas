@@ -278,21 +278,51 @@ begin
   inherited;
 end;
 
+// ES2026 §9.9.3 WeakRef Execution: a WeakMap entry's value is live only while
+// its key is live. Marking a value can make it the key of another entry in the
+// same map (an ephemeron chain), so the live set must be propagated to a
+// fixpoint. A single full-slot scan per GC pass would make a chain of length N
+// cost O(N^2) (one link resolved per pass). Resolving the chain with a worklist
+// keyed by object identity makes the whole intra-map trace O(entries): the
+// initial scan seeds directly-reachable values, then each newly marked value is
+// looked up as a key in O(1) to extend the chain. Cross-map links are still
+// driven by the collector's outer trace loop.
 function TGocciaWeakMapValue.TraceWeakReferences: Boolean;
 var
   Pair: TGocciaWeakMapStorage.TKeyValuePair;
-  WasMarked: Boolean;
+  WorkList: array of TGocciaValue;
+  WorkCount: Integer;
+  Current, NextValue: TGocciaValue;
+
+  procedure MarkValue(const AValue: TGocciaValue);
+  begin
+    if not Assigned(AValue) or AValue.GCMarked then
+      Exit;
+    AValue.MarkReferences;
+    Result := True;
+    if WorkCount = Length(WorkList) then
+      SetLength(WorkList, (WorkCount * 2) + 1);
+    WorkList[WorkCount] := AValue;
+    Inc(WorkCount);
+  end;
+
 begin
   Result := False;
+  WorkCount := 0;
+
+  // Seed the worklist with the values of all entries whose key is currently live.
   for Pair in FEntries do
+    if Assigned(Pair.Key) and Pair.Key.GCMarked then
+      MarkValue(Pair.Value);
+
+  // Propagate: a freshly marked value may itself be a live key in this map,
+  // keeping the value of that entry live in turn.
+  while WorkCount > 0 do
   begin
-    if Assigned(Pair.Key) and Pair.Key.GCMarked and Assigned(Pair.Value) then
-    begin
-      WasMarked := Pair.Value.GCMarked;
-      Pair.Value.MarkReferences;
-      if not WasMarked and Pair.Value.GCMarked then
-        Result := True;
-    end;
+    Dec(WorkCount);
+    Current := WorkList[WorkCount];
+    if FEntries.TryGetValue(Current, NextValue) then
+      MarkValue(NextValue);
   end;
 end;
 

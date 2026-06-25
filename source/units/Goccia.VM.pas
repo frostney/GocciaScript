@@ -145,6 +145,11 @@ type
     FCurrentClosure: TGocciaBytecodeClosure;
     FHandlerStack: TGocciaBytecodeHandlerStack;
     FFrameDepth: Integer;
+    // Depth of native VM re-entries (ExecuteClosureRegistersInternal invocations
+    // nested via generator resume, host eval, or native callbacks). Bounded
+    // separately from FFrameDepth because each native re-entry costs a real
+    // native stack frame; see CheckNativeReentryDepth in Goccia.StackLimit.
+    FNativeExecutionDepth: Integer;
     FFrameStack: array of TGocciaVMCallFrame;
     FFrameStackCount: Integer;
     FCurrentExecutionContextPushed: Boolean;
@@ -378,6 +383,9 @@ type
       out APrevCovLine: UInt32; out AProfileTimestamp: Int64): Integer;
     procedure TeardownCurrentFrame(const ATemplate: TGocciaFunctionTemplate;
       const AProfileTimestamp: Int64; const ATargetHandlerCount: Integer);
+    procedure PrepareTailCallFrameReuse(const ATemplate: TGocciaFunctionTemplate;
+      const AProfileTimestamp: Int64; const AInitialFrameStackCount,
+      ASavedHandlerCount: Integer);
     procedure PushSavedStateRoot(const AClosure: TGocciaBytecodeClosure;
       const ANewTarget: TGocciaValue; const AArguments: TGocciaRegisterArray);
     procedure PopSavedStateRoot;
@@ -12322,6 +12330,31 @@ begin
   Dec(FFrameDepth);
 end;
 
+// ES2026 §15.10.3 PrepareForTailCall.  Discards the current frame's resources so
+// the impending SetupNewFrame reuses this frame instead of stacking a new one.
+// The caller's saved frame slot (or the outermost return path) is left intact,
+// so the tail-called function returns directly to the current frame's caller.
+// Register and local-cell windows are collapsed in place: setting the live count
+// to 0 makes the next AcquireRegisters reuse the same memory region, so a chain
+// of tail calls grows neither the frame stack nor the register stack.
+procedure TGocciaVM.PrepareTailCallFrameReuse(
+  const ATemplate: TGocciaFunctionTemplate; const AProfileTimestamp: Int64;
+  const AInitialFrameStackCount, ASavedHandlerCount: Integer);
+var
+  TargetHandlerCount: Integer;
+begin
+  // The handler count active when the current frame began: the parent trampoline
+  // frame's saved count, or the entry handler count if this is the outermost
+  // frame of the running ExecuteClosureRegistersInternal invocation.
+  if FFrameStackCount > AInitialFrameStackCount then
+    TargetHandlerCount := FFrameStack[FFrameStackCount - 1].HandlerCount
+  else
+    TargetHandlerCount := ASavedHandlerCount;
+  TeardownCurrentFrame(ATemplate, AProfileTimestamp, TargetHandlerCount);
+  FRegisterCount := 0;
+  FLocalCellCount := 0;
+end;
+
 procedure TGocciaVM.PushSavedStateRoot(const AClosure: TGocciaBytecodeClosure;
   const ANewTarget: TGocciaValue; const AArguments: TGocciaRegisterArray);
 begin
@@ -12583,6 +12616,12 @@ var
   ExecutionRealm: TGocciaRealm;
   RealmSwitched: Boolean;
 begin
+  // This is a native VM re-entry: the bytecode loop runs on a fresh native stack
+  // frame. Bound the native re-entry depth before any state is saved so the
+  // throw unwinds cleanly (the matching Inc/Dec are paired with the try/finally
+  // below). Without this, generator resume / eval / native-callback recursion
+  // overflows the native stack (SIGSEGV) instead of throwing RangeError.
+  CheckNativeReentryDepth(FNativeExecutionDepth + 1);
   PreviousRealm := CurrentRealm;
   ExecutionRealm := BytecodeClosureExecutionRealm(AClosure, FRealm);
   RealmSwitched := Assigned(ExecutionRealm) and (ExecutionRealm <> PreviousRealm);
@@ -12605,6 +12644,7 @@ begin
   if RealmSwitched then
     SetCurrentRealm(ExecutionRealm);
   try
+    Inc(FNativeExecutionDepth);
     SetupNewFrame(AClosure, AThisValue, AArguments, AArgCount,
       AArg0, AArg1, AArg2, AUseFixedArgs, APushExecutionContext,
       Frame, Template, PrevCovLine, ProfileEntryTimestamp);
@@ -14491,7 +14531,12 @@ begin
                 if not BytecodeFunction.FStrictThis then
                   CallThisRegister := CoerceNonStrictThisRegister(
                     CallThisRegister);
-                PushFrame(A, Frame.IP, Template, PrevCovLine, ProfileEntryTimestamp);
+                if (C and CALL_FLAG_TAIL) <> 0 then
+                  PrepareTailCallFrameReuse(Template, ProfileEntryTimestamp,
+                    InitialFrameStackCount, SavedHandlerCount)
+                else
+                  PushFrame(A, Frame.IP, Template, PrevCovLine,
+                    ProfileEntryTimestamp);
                 SetupNewFrame(BytecodeFunction.FClosure,
                   CallThisRegister, RegisterArgs,
                   Length(RegisterArgs), RegisterUndefined, RegisterUndefined,
@@ -14514,7 +14559,12 @@ begin
                 if not BytecodeFunction.FStrictThis then
                   CallThisRegister := CoerceNonStrictThisRegister(
                     CallThisRegister);
-                PushFrame(A, Frame.IP, Template, PrevCovLine, ProfileEntryTimestamp);
+                if (C and CALL_FLAG_TAIL) <> 0 then
+                  PrepareTailCallFrameReuse(Template, ProfileEntryTimestamp,
+                    InitialFrameStackCount, SavedHandlerCount)
+                else
+                  PushFrame(A, Frame.IP, Template, PrevCovLine,
+                    ProfileEntryTimestamp);
                 SetupNewFrame(BytecodeFunction.FClosure,
                   CallThisRegister, RegisterArgs,
                   Length(RegisterArgs), RegisterUndefined, RegisterUndefined,
@@ -14544,7 +14594,12 @@ begin
               SetLength(RegisterArgs, B);
               for I := 0 to B - 1 do
                 RegisterArgs[I] := FRegisters[A + 1 + I];
-              PushFrame(A, Frame.IP, Template, PrevCovLine, ProfileEntryTimestamp);
+              if (C and CALL_FLAG_TAIL) <> 0 then
+                PrepareTailCallFrameReuse(Template, ProfileEntryTimestamp,
+                  InitialFrameStackCount, SavedHandlerCount)
+              else
+                PushFrame(A, Frame.IP, Template, PrevCovLine,
+                  ProfileEntryTimestamp);
               SetupNewFrame(BytecodeFunction.FClosure,
                 CallThisRegister, RegisterArgs, B,
                 RegisterUndefined, RegisterUndefined, RegisterUndefined, False, True,
@@ -14559,7 +14614,12 @@ begin
 	              for I := 0 to High(RegisterArgs) do
 	                RegisterArgs[I] := ValueToRegister(
 	                  TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(IntToStr(I)));
-              PushFrame(A, Frame.IP, Template, PrevCovLine, ProfileEntryTimestamp);
+              if (C and CALL_FLAG_TAIL) <> 0 then
+                PrepareTailCallFrameReuse(Template, ProfileEntryTimestamp,
+                  InitialFrameStackCount, SavedHandlerCount)
+              else
+                PushFrame(A, Frame.IP, Template, PrevCovLine,
+                  ProfileEntryTimestamp);
               SetupNewFrame(BytecodeFunction.FClosure,
                 CallThisRegister, RegisterArgs, Length(RegisterArgs),
                 RegisterUndefined, RegisterUndefined, RegisterUndefined, False, True,
@@ -14753,9 +14813,15 @@ begin
               SetLength(RegisterArgs, B);
               for I := 0 to B - 1 do
                 RegisterArgs[I] := FRegisters[A + 1 + I];
-              PushFrame(A, Frame.IP, Template, PrevCovLine, ProfileEntryTimestamp);
+              CallThisRegister := FRegisters[A - 1];
+              if (C and CALL_FLAG_TAIL) <> 0 then
+                PrepareTailCallFrameReuse(Template, ProfileEntryTimestamp,
+                  InitialFrameStackCount, SavedHandlerCount)
+              else
+                PushFrame(A, Frame.IP, Template, PrevCovLine,
+                  ProfileEntryTimestamp);
               SetupNewFrame(BytecodeFunction.FClosure,
-                FRegisters[A - 1], RegisterArgs, B,
+                CallThisRegister, RegisterArgs, B,
                 RegisterUndefined, RegisterUndefined, RegisterUndefined, False, True,
                 Frame, Template, PrevCovLine, ProfileEntryTimestamp);
               Continue;
@@ -14768,9 +14834,15 @@ begin
 	              for I := 0 to High(RegisterArgs) do
 	                RegisterArgs[I] := VMValueToRegisterFast(
 	                  TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(IntToStr(I)));
-              PushFrame(A, Frame.IP, Template, PrevCovLine, ProfileEntryTimestamp);
+              CallThisRegister := FRegisters[A - 1];
+              if (C and CALL_FLAG_TAIL) <> 0 then
+                PrepareTailCallFrameReuse(Template, ProfileEntryTimestamp,
+                  InitialFrameStackCount, SavedHandlerCount)
+              else
+                PushFrame(A, Frame.IP, Template, PrevCovLine,
+                  ProfileEntryTimestamp);
               SetupNewFrame(BytecodeFunction.FClosure,
-                FRegisters[A - 1], RegisterArgs, Length(RegisterArgs),
+                CallThisRegister, RegisterArgs, Length(RegisterArgs),
                 RegisterUndefined, RegisterUndefined, RegisterUndefined, False, True,
                 Frame, Template, PrevCovLine, ProfileEntryTimestamp);
               Continue;
@@ -15802,6 +15874,7 @@ begin
     end;
     Result := RegisterUndefined;
   finally
+    Dec(FNativeExecutionDepth);
     try
       // Unwind any remaining trampoline frames (exception escape path)
       while FFrameStackCount > InitialFrameStackCount do

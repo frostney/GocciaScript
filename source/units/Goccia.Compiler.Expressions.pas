@@ -33,7 +33,8 @@ procedure CompilePropertyAssignment(const ACtx: TGocciaCompilationContext;
 procedure CompileArrowFunction(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaArrowFunctionExpression; const ADest: UInt8);
 procedure CompileCall(const ACtx: TGocciaCompilationContext;
-  const AExpr: TGocciaCallExpression; const ADest: UInt8);
+  const AExpr: TGocciaCallExpression; const ADest: UInt8;
+  const ATail: Boolean = False);
 procedure CompileMember(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaMemberExpression; const ADest: UInt8);
 procedure CompileConditional(const ACtx: TGocciaCompilationContext;
@@ -49,7 +50,18 @@ procedure CompileRegexLiteral(const ACtx: TGocciaCompilationContext;
 procedure CompileTemplateWithInterpolation(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaTemplateWithInterpolationExpression; const ADest: UInt8);
 procedure CompileTaggedTemplate(const ACtx: TGocciaCompilationContext;
-  const AExpr: TGocciaTaggedTemplateExpression; const ADest: UInt8);
+  const AExpr: TGocciaTaggedTemplateExpression; const ADest: UInt8;
+  const ATail: Boolean = False);
+// Compiles AExpr into ADest, marking any call that the static semantics place
+// in tail position (ES2026 §15.10.2 HasCallInTailPosition) with CALL_FLAG_TAIL
+// so the VM can reuse the current call frame.  The marked call is still emitted
+// as an ordinary call producing a value in ADest; the caller emits OP_RETURN as
+// usual.  When the VM honors the tail flag it returns directly and that trailing
+// store/return is simply never reached.  Descends only through the
+// tail-position-preserving forms (conditional, &&/||/??, comma); every other
+// form just compiles normally.
+procedure CompileReturnValueTailAware(const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaExpression; const ADest: UInt8);
 procedure CompileNewExpression(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaNewExpression; const ADest: UInt8);
 procedure CompileComputedPropertyAssignment(const ACtx: TGocciaCompilationContext;
@@ -3497,7 +3509,8 @@ end;
 function TryCompileWithIdentifierCall(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaCallExpression; const ADest: UInt8;
   const AArgCount: Integer; const AUseSpread: Boolean;
-  var AJumps: TGocciaCompilerJumpArray; var AJumpCount: Integer): Boolean;
+  var AJumps: TGocciaCompilerJumpArray; var AJumpCount: Integer;
+  const ATail: Boolean = False): Boolean;
 var
   Ident: TGocciaIdentifierExpression;
   ObjReg, BaseReg, ArgsReg, KeyReg, CondReg: UInt8;
@@ -3505,11 +3518,17 @@ var
   I, EndCount: Integer;
   MissJump: Integer;
   EndJumps: array of Integer;
+  TailFlag: UInt8;
 
   procedure EmitBranchCall(const AIsMethodCall, AJumpAfter: Boolean);
   var
     ArgIndex: Integer;
   begin
+    // An optional call is not in tail position (the nullish guard runs after).
+    if ATail and not AExpr.Optional then
+      TailFlag := CALL_FLAG_TAIL
+    else
+      TailFlag := 0;
     if AExpr.Optional then
       AddOptionalChainJump(ACtx, AJumps, AJumpCount, BaseReg);
 
@@ -3518,10 +3537,11 @@ var
       ArgsReg := ACtx.Scope.AllocateRegister;
       CompileSpreadArgsArray(ACtx, AExpr, ArgsReg);
       if AIsMethodCall then
-        EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, BaseReg, ArgsReg, 1))
+        EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, BaseReg, ArgsReg,
+          CALL_FLAG_SPREAD or TailFlag))
       else
         EmitInstruction(ACtx, EncodeABC(OP_CALL, BaseReg, ArgsReg,
-          SpreadCallFlags(ACtx, AExpr, CurrentCodePosition(ACtx))));
+          SpreadCallFlags(ACtx, AExpr, CurrentCodePosition(ACtx)) or TailFlag));
       ACtx.Scope.FreeRegister;
     end
     else
@@ -3531,10 +3551,10 @@ var
           ACtx.Scope.AllocateRegister);
       if AIsMethodCall then
         EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, BaseReg,
-          UInt8(AArgCount), 0))
+          UInt8(AArgCount), TailFlag))
       else
         EmitInstruction(ACtx, EncodeABC(OP_CALL, BaseReg, UInt8(AArgCount),
-        CallFlags(ACtx, AExpr, CurrentCodePosition(ACtx))));
+        CallFlags(ACtx, AExpr, CurrentCodePosition(ACtx)) or TailFlag));
       for ArgIndex := 0 to AArgCount - 1 do
         ACtx.Scope.FreeRegister;
     end;
@@ -3887,7 +3907,8 @@ begin
 end;
 
 procedure CompileCall(const ACtx: TGocciaCompilationContext;
-  const AExpr: TGocciaCallExpression; const ADest: UInt8);
+  const AExpr: TGocciaCallExpression; const ADest: UInt8;
+  const ATail: Boolean = False);
 var
   ArgCount, I: Integer;
   BaseReg, ObjReg, ArgsReg, SuperReg, KeyReg: UInt8;
@@ -3901,6 +3922,7 @@ var
   NilJump, CallNilJump, EndJump: Integer;
   IgnoredJumps: TGocciaCompilerJumpArray;
   IgnoredJumpCount: Integer;
+  MethodTailFlag: UInt8;
 begin
   if TryCompileOptionalChainCall(ACtx, AExpr, ADest) then
     Exit;
@@ -3911,6 +3933,14 @@ begin
   UseSpread := HasSpreadArgument(AExpr);
   CallNilJump := -1;
   IgnoredJumpCount := 0;
+  // ES2026 §15.10.2: an optional call cannot be in tail position here because
+  // the nullish guard runs after the call, and super() writes `this` back after
+  // the call, so neither is the last operation.  Only mark the plain and direct
+  // member call forms.
+  if ATail and not AExpr.Optional then
+    MethodTailFlag := CALL_FLAG_TAIL
+  else
+    MethodTailFlag := 0;
 
   if AExpr.Callee is TGocciaSuperExpression then
   begin
@@ -4026,14 +4056,16 @@ begin
     begin
       ArgsReg := ACtx.Scope.AllocateRegister;
       CompileSpreadArgsArray(ACtx, AExpr, ArgsReg);
-      EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, BaseReg, ArgsReg, 1));
+      EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, BaseReg, ArgsReg,
+        CALL_FLAG_SPREAD or MethodTailFlag));
       ACtx.Scope.FreeRegister;
     end
     else
     begin
       for I := 0 to ArgCount - 1 do
         ACtx.CompileExpression(AExpr.Arguments[I], ACtx.Scope.AllocateRegister);
-      EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, BaseReg, UInt8(ArgCount), 0));
+      EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, BaseReg, UInt8(ArgCount),
+        MethodTailFlag));
       for I := 0 to ArgCount - 1 do
         ACtx.Scope.FreeRegister;
     end;
@@ -4154,14 +4186,16 @@ begin
       begin
         ArgsReg := ACtx.Scope.AllocateRegister;
         CompileSpreadArgsArray(ACtx, AExpr, ArgsReg);
-        EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, BaseReg, ArgsReg, 1));
+        EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, BaseReg, ArgsReg,
+          CALL_FLAG_SPREAD or MethodTailFlag));
         ACtx.Scope.FreeRegister;
       end
       else
       begin
         for I := 0 to ArgCount - 1 do
           ACtx.CompileExpression(AExpr.Arguments[I], ACtx.Scope.AllocateRegister);
-        EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, BaseReg, UInt8(ArgCount), 0));
+        EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, BaseReg, UInt8(ArgCount),
+          MethodTailFlag));
         for I := 0 to ArgCount - 1 do
           ACtx.Scope.FreeRegister;
       end;
@@ -4187,7 +4221,7 @@ begin
   else
   begin
     if TryCompileWithIdentifierCall(ACtx, AExpr, ADest, ArgCount,
-       UseSpread, IgnoredJumps, IgnoredJumpCount) then
+       UseSpread, IgnoredJumps, IgnoredJumpCount, MethodTailFlag <> 0) then
       Exit;
 
     if (ADest + 1 = ACtx.Scope.NextSlot) and
@@ -4206,7 +4240,7 @@ begin
       ArgsReg := ACtx.Scope.AllocateRegister;
       CompileSpreadArgsArray(ACtx, AExpr, ArgsReg);
       EmitInstruction(ACtx, EncodeABC(OP_CALL, BaseReg, ArgsReg,
-        SpreadCallFlags(ACtx, AExpr, CurrentCodePosition(ACtx))));
+        SpreadCallFlags(ACtx, AExpr, CurrentCodePosition(ACtx)) or MethodTailFlag));
       ACtx.Scope.FreeRegister;
     end
     else
@@ -4214,7 +4248,7 @@ begin
       for I := 0 to ArgCount - 1 do
         ACtx.CompileExpression(AExpr.Arguments[I], ACtx.Scope.AllocateRegister);
       EmitInstruction(ACtx, EncodeABC(OP_CALL, BaseReg, UInt8(ArgCount),
-        CallFlags(ACtx, AExpr, CurrentCodePosition(ACtx))));
+        CallFlags(ACtx, AExpr, CurrentCodePosition(ACtx)) or MethodTailFlag));
       for I := 0 to ArgCount - 1 do
         ACtx.Scope.FreeRegister;
     end;
@@ -5080,15 +5114,22 @@ end;
 
 // ES2026 §13.3.11 TaggedTemplate
 procedure CompileTaggedTemplate(const ACtx: TGocciaCompilationContext;
-  const AExpr: TGocciaTaggedTemplateExpression; const ADest: UInt8);
+  const AExpr: TGocciaTaggedTemplateExpression; const ADest: UInt8;
+  const ATail: Boolean = False);
 var
   ObjReg, BaseReg, Arg0Reg: UInt8;
   ArgCount, I: Integer;
   IsMethodCall: Boolean;
+  TailFlag: UInt8;
 begin
   ArgCount := 1 + AExpr.Expressions.Count; // template object + substitution values
   if ArgCount > High(UInt8) then
     raise Exception.Create('Compiler error: too many tagged template substitutions (>254)');
+
+  if ATail then
+    TailFlag := CALL_FLAG_TAIL
+  else
+    TailFlag := 0;
 
   CompileTagCalleeRegisters(ACtx, AExpr.Tag, BaseReg, ObjReg, IsMethodCall);
 
@@ -5107,9 +5148,10 @@ begin
     ACtx.CompileExpression(AExpr.Expressions[I], ACtx.Scope.AllocateRegister);
 
   if IsMethodCall then
-    EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, BaseReg, UInt8(ArgCount), 0))
+    EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, BaseReg, UInt8(ArgCount),
+      TailFlag))
   else
-    EmitInstruction(ACtx, EncodeABC(OP_CALL, BaseReg, UInt8(ArgCount), 0));
+    EmitInstruction(ACtx, EncodeABC(OP_CALL, BaseReg, UInt8(ArgCount), TailFlag));
 
   for I := 0 to AExpr.Expressions.Count - 1 do
     ACtx.Scope.FreeRegister;
@@ -5121,6 +5163,98 @@ begin
   ACtx.Scope.FreeRegister; // BaseReg
   if IsMethodCall then
     ACtx.Scope.FreeRegister; // ObjReg
+end;
+
+// ES2026 §15.10.2 HasCallInTailPosition.  Compiles AExpr into ADest, tagging the
+// call(s) the static semantics place in tail position so the VM may reuse the
+// current frame.  Only the tail-position-preserving expression forms recurse;
+// every other shape (including a call argument, the callee, or a logical
+// short-circuit operand that is returned directly) is compiled normally and is
+// therefore NOT a tail call.
+procedure CompileReturnValueTailAware(const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaExpression; const ADest: UInt8);
+var
+  Conditional: TGocciaConditionalExpression;
+  Binary: TGocciaBinaryExpression;
+  Sequence: TGocciaSequenceExpression;
+  TempReg: UInt8;
+  ElseJump, EndJump, ShortCircuitJump, I: Integer;
+begin
+  // CallExpression Arguments / CallExpression TemplateLiteral: the call itself is
+  // in tail position.
+  if AExpr is TGocciaCallExpression then
+  begin
+    CompileCall(ACtx, TGocciaCallExpression(AExpr), ADest, True);
+    Exit;
+  end;
+  if AExpr is TGocciaTaggedTemplateExpression then
+  begin
+    CompileTaggedTemplate(ACtx, TGocciaTaggedTemplateExpression(AExpr), ADest,
+      True);
+    Exit;
+  end;
+
+  // ConditionalExpression: both branches inherit tail position.
+  if AExpr is TGocciaConditionalExpression then
+  begin
+    Conditional := TGocciaConditionalExpression(AExpr);
+    ACtx.CompileExpression(Conditional.Condition, ADest);
+    ElseJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, ADest);
+    CompileReturnValueTailAware(ACtx, Conditional.Consequent, ADest);
+    EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+    PatchJumpTarget(ACtx, ElseJump);
+    CompileReturnValueTailAware(ACtx, Conditional.Alternate, ADest);
+    PatchJumpTarget(ACtx, EndJump);
+    Exit;
+  end;
+
+  // LogicalANDExpression / LogicalORExpression / CoalesceExpression: only the
+  // right operand inherits tail position.  The short-circuit (left) result is
+  // produced as an ordinary value.
+  if AExpr is TGocciaBinaryExpression then
+  begin
+    Binary := TGocciaBinaryExpression(AExpr);
+    if (Binary.Operator = gttAnd) or (Binary.Operator = gttOr) or
+       (Binary.Operator = gttNullishCoalescing) then
+    begin
+      ACtx.CompileExpression(Binary.Left, ADest);
+      case Binary.Operator of
+        gttAnd:
+          ShortCircuitJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, ADest);
+        gttOr:
+          ShortCircuitJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, ADest);
+      else
+        ShortCircuitJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NOT_NULLISH,
+          ADest);
+      end;
+      CompileReturnValueTailAware(ACtx, Binary.Right, ADest);
+      PatchJumpTarget(ACtx, ShortCircuitJump);
+      Exit;
+    end;
+  end;
+
+  // Expression `,` AssignmentExpression: only the final operand inherits tail
+  // position.
+  if AExpr is TGocciaSequenceExpression then
+  begin
+    Sequence := TGocciaSequenceExpression(AExpr);
+    if Sequence.Expressions.Count >= 2 then
+    begin
+      TempReg := ACtx.Scope.AllocateRegister;
+      try
+        for I := 0 to Sequence.Expressions.Count - 2 do
+          ACtx.CompileExpression(Sequence.Expressions[I], TempReg);
+      finally
+        ACtx.Scope.FreeRegister;
+      end;
+      CompileReturnValueTailAware(ACtx,
+        Sequence.Expressions[Sequence.Expressions.Count - 1], ADest);
+      Exit;
+    end;
+  end;
+
+  // Any other production terminates tail position: compile as an ordinary value.
+  ACtx.CompileExpression(AExpr, ADest);
 end;
 
 function NewExprHasSpread(const AExpr: TGocciaNewExpression): Boolean;
