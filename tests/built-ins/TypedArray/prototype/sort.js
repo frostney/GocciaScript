@@ -9,6 +9,30 @@ describe("TypedArray.prototype.sort", () => {
     expect(ta[4]).toBe(4);
   });
 
+  test("sorts a large array correctly (guards against the O(n^2) sort regression)", () => {
+    const N = 60000;
+    // Strictly descending input is the worst case for the previous insertion
+    // sort; the bottom-up merge sort handles it in O(n log n).
+    const ta = new Uint16Array(Array.from({ length: N }, (_, i) => N - i));
+    ta.sort();
+    expect(ta[0]).toBe(1);
+    expect(ta[N - 1]).toBe(N);
+    const out = Array.from(ta);
+    expect(out.every((v, i) => i === 0 || out[i - 1] <= v)).toBe(true);
+  });
+
+  test("default sort orders -0 before +0 and places NaN last", () => {
+    const ta = new Float64Array([NaN, 3, -0, 2, 0, 1, NaN]);
+    ta.sort();
+    expect(1 / ta[0]).toBe(-Infinity); // -0 sorts first
+    expect(1 / ta[1]).toBe(Infinity); // +0 sorts second
+    expect(ta[2]).toBe(1);
+    expect(ta[3]).toBe(2);
+    expect(ta[4]).toBe(3);
+    expect(ta[5] !== ta[5]).toBe(true); // NaN
+    expect(ta[6] !== ta[6]).toBe(true); // NaN
+  });
+
   describe.each([Int8Array, Uint8Array, Uint8ClampedArray, Int16Array, Uint16Array, Int32Array, Uint32Array, Float16Array, Float32Array, Float64Array])("%s", (TA) => {
     test("sorts numerically by default", () => {
       const ta = new TA([3, 1, 2]);

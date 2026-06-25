@@ -853,6 +853,8 @@ Raises `TGocciaInstructionLimitError` when the limit is reached. A value of zero
 
 In bytecode mode the VM uses a trampoline: bytecode-to-bytecode calls are dispatched iteratively via an explicit frame stack, so the Pascal call stack stays flat regardless of JS call depth. The interpreter mode uses Pascal recursion and relies on the depth check to prevent overflow.
 
+Native re-entries into the bytecode VM — generator resume, host `eval`, and native callbacks such as Array iteration methods or sort comparators — run the bytecode loop on a fresh Pascal stack frame instead of the trampoline. These are bounded separately by a fixed native re-entry cap (`MAX_NATIVE_REENTRY_DEPTH` in `Goccia.StackLimit`), which throws the same `RangeError` well before the native stack can overflow. This is independent of `SetMaxStackDepth`/`--stack-size`, which bounds the much cheaper trampolined frames; it ensures that, for example, infinite recursion mediated by a generator throws rather than crashing the engine.
+
 ```pascal
 uses
   Goccia.StackLimit;

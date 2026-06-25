@@ -2368,11 +2368,11 @@ begin
       TryReadImportAttributeType(OptionsValue, AttributeType,
         HasAttributeType);
       if HasAttributeType and (AttributeType <> 'json') and
-         (AttributeType <> 'text') then
+         (AttributeType <> 'text') and (AttributeType <> 'bytes') then
         raise TGocciaTypeError.Create(
           'Unsupported import attribute type "' + AttributeType + '"',
           Line, Column, '', nil,
-          'Use type "json" or "text" for import attributes.');
+          'Use type "json", "text", or "bytes" for import attributes.');
 
       case FPhase of
         icpSource:

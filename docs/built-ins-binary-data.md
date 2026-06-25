@@ -17,6 +17,8 @@ Implements the [ECMAScript ArrayBuffer](https://developer.mozilla.org/en-US/docs
 
 **Full standard compliance** — includes resizable buffers (`maxByteLength`), `transfer`, and `transferToFixedLength`.
 
+**Immutable buffers** — the [Immutable ArrayBuffers](https://github.com/tc39/proposal-immutable-arraybuffer) proposal is supported: `transferToImmutable([newLength])` returns a fixed-length immutable buffer, the `immutable` getter reports the state, an immutable buffer cannot be detached (`transfer`, `transferToFixedLength`, and `transferToImmutable` throw on it), and writes through a backing view are rejected — TypedArray indexed assignment, `set`, `fill`, `sort`, `copyWithin`, `reverse`, integer-index `defineProperty`, `Atomics`, and `DataView` setters. Immutable buffers also back the default export of [bytes module imports](language.md#modules).
+
 Internally backed by a zero-initialized `TBytes` array. ArrayBuffer instances are cloneable via `structuredClone`.
 
 ## SharedArrayBuffer (`Goccia.Values.SharedArrayBufferValue.pas`)

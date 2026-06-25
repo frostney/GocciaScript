@@ -79,3 +79,6 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0067 — Cross-realm shape dictionary mode](0067-cross-realm-shape-dictionary-mode.md)
 - [0068 — GocciaSandboxRunner with explicit seed baselines](0068-goccia-sandbox-runner.md)
 - [0069 — Nested sandbox virtual filesystems](0069-nested-sandbox-virtual-filesystems.md)
+- [0070 — Shared string-to-number conversion](0070-shared-string-to-number.md)
+- [0071 — Reject symlinks in sandbox seed imports](0071-reject-symlinks-in-sandbox-seed-imports.md)
+- [0072 — Import Bytes with immutable backing](0072-import-bytes-with-immutable-backing.md)
