@@ -632,6 +632,12 @@ begin
   if not IsValidIntegerIndexedElement(ANumericIndex, AIsNegativeZero, Index) then
     Exit;
 
+  // Immutable ArrayBuffers proposal: TypedArraySetElement performs the
+  // observable numeric conversion above but skips the store when the backing
+  // buffer is immutable; integer-indexed [[Set]] still reports success.
+  if IsTypedArrayBackedByImmutableArrayBuffer(Self) then
+    Exit;
+
   if IsBigIntKind(FKind) then
     WriteBigIntElement(Index, BigIntRaw)
   else
@@ -970,6 +976,11 @@ var
 begin
   if not AArray.IsValidIntegerIndexedElement(ANumericIndex,
     AIsNegativeZero, Index) then
+    Exit(False);
+  // Immutable ArrayBuffers proposal: a valid integer index over an immutable
+  // backing buffer cannot be redefined, so [[DefineOwnProperty]] returns false
+  // (Object.defineProperty throws; Reflect.defineProperty returns false).
+  if IsTypedArrayBackedByImmutableArrayBuffer(AArray) then
     Exit(False);
   if ADescriptor.HasConfigurableField and not ADescriptor.Configurable then
     Exit(False);

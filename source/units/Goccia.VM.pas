@@ -8804,7 +8804,7 @@ var
 begin
   TryReadImportAttributeType(AOptions, AttributeType, HasAttributeType);
   if HasAttributeType and (AttributeType <> 'json') and
-     (AttributeType <> 'text') then
+     (AttributeType <> 'text') and (AttributeType <> 'bytes') then
     ThrowTypeError('Unsupported import attribute type "' + AttributeType + '"');
   if HasAttributeType then
     Result := AttributeType

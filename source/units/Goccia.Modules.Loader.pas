@@ -65,6 +65,8 @@ type
       ACacheKey: string): TGocciaModule;
     function LoadTextModule(const AResolvedPath,
       ACacheKey: string; const ADefaultOnly: Boolean): TGocciaModule;
+    function LoadBytesModule(const AResolvedPath,
+      ACacheKey: string): TGocciaModule;
     function ResolveModuleRequestWithAttribute(const AModulePath,
       AAttributeType, AImportingFilePath: string): string;
     procedure RecordFailedModuleError(const ACacheKey: string;
@@ -173,10 +175,12 @@ uses
   Goccia.JSON,
   Goccia.Keywords.Reserved,
   Goccia.Realm,
+  Goccia.Values.ArrayBufferValue,
   Goccia.Values.Error,
   Goccia.Values.FunctionValue,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectValue,
+  Goccia.Values.TypedArrayValue,
   Goccia.VM.Exception;
 
 const
@@ -1152,7 +1156,7 @@ begin
   DecodeImportSpecifierAttribute(AModulePath, RequestedModulePath,
     AttributeType);
   if (AttributeType <> '') and (AttributeType <> 'json') and
-     (AttributeType <> 'text') then
+     (AttributeType <> 'text') and (AttributeType <> 'bytes') then
     raise TGocciaSyntaxError.Create(
       Format('Unsupported import attribute type "%s"', [AttributeType]),
       0, 0, AImportingFilePath, nil);
@@ -1211,6 +1215,12 @@ begin
   if AttributeType = 'text' then
   begin
     Result := LoadTextModule(ResolvedPath, CacheKey, True);
+    Exit;
+  end;
+
+  if AttributeType = 'bytes' then
+  begin
+    Result := LoadBytesModule(ResolvedPath, CacheKey);
     Exit;
   end;
 
@@ -1393,6 +1403,13 @@ var
 begin
   DecodeImportSpecifierAttribute(AModulePath, RequestedModulePath,
     AttributeType);
+  // Import Bytes non-goal: bytes modules are not exposed as source-phase
+  // imports, so reject with a clear message rather than the generic
+  // unsupported-attribute error.
+  if AttributeType = 'bytes' then
+    raise TGocciaSyntaxError.Create(
+      'Source phase imports are not supported for bytes modules',
+      0, 0, AImportingFilePath, nil);
   if (AttributeType <> '') and (AttributeType <> 'json') and
      (AttributeType <> 'text') then
     raise TGocciaSyntaxError.Create(
@@ -1753,7 +1770,7 @@ begin
   DecodeImportSpecifierAttribute(AModulePath, RequestedModulePath,
     AttributeType);
   if (AttributeType <> '') and (AttributeType <> 'json') and
-     (AttributeType <> 'text') then
+     (AttributeType <> 'text') and (AttributeType <> 'bytes') then
     raise TGocciaSyntaxError.Create(
       Format('Unsupported import attribute type "%s"', [AttributeType]),
       0, 0, AImportingFilePath, nil);
@@ -1965,6 +1982,50 @@ begin
     end;
   finally
     Content.Free;
+  end;
+end;
+
+// Import Bytes proposal: load the resolved file as raw bytes, ignoring file
+// extension/MIME, and expose a single default export that is a Uint8Array
+// backed by an immutable ArrayBuffer. Named imports are rejected naturally
+// because the synthetic module declares only the default export.
+function TGocciaModuleLoader.LoadBytesModule(const AResolvedPath,
+  ACacheKey: string): TGocciaModule;
+var
+  Buffer: TGocciaArrayBufferValue;
+  Bytes: TBytes;
+  LastModified: TDateTime;
+  LoadSucceeded: Boolean;
+  Module: TGocciaModule;
+  TypedArray: TGocciaTypedArrayValue;
+begin
+  Bytes := FContentProvider.LoadContentBytes(AResolvedPath);
+  if not FContentProvider.TryGetLastModified(AResolvedPath, LastModified) then
+    LastModified := 0;
+
+  Buffer := TGocciaArrayBufferValue.CreateImmutableFromBytes(Bytes);
+  TypedArray := TGocciaTypedArrayValue.Create(takUint8, Buffer);
+
+  // Root the view (which marks its backing buffer) until the module owns it.
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AddTempRoot(TypedArray);
+  try
+    Module := TGocciaModule.Create(AResolvedPath);
+    Module.LastModified := LastModified;
+    LoadSucceeded := False;
+    try
+      Module.AddExportValue(KEYWORD_DEFAULT, TypedArray);
+      FModules.Add(ACacheKey, Module);
+      ClearFailedModuleError(ACacheKey);
+      Result := Module;
+      LoadSucceeded := True;
+    finally
+      if not LoadSucceeded then
+        Module.Free;
+    end;
+  finally
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.RemoveTempRoot(TypedArray);
   end;
 end;
 
