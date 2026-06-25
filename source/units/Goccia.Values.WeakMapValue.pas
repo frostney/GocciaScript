@@ -97,6 +97,8 @@ end;
 
 destructor TGocciaWeakMapValue.Destroy;
 begin
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.UnregisterWeakContainer(Self);
   FEntries.Free;
   inherited;
 end;
@@ -157,6 +159,12 @@ end;
 
 procedure TGocciaWeakMapValue.SetEntry(const AKey, AValue: TGocciaValue);
 begin
+  // Register as a weak container on the first entry so the GC runs its weak
+  // passes only for code that uses weak collections; a never-populated WeakMap
+  // (e.g. the pinned prototype host) stays unregistered. Registration lasts
+  // until destruction, so a later-emptied map stays registered.
+  if (FEntries.Count = 0) and Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.RegisterWeakContainer(Self);
   FEntries.AddOrSetValue(AKey, AValue);
 end;
 

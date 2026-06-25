@@ -38,6 +38,51 @@ describe.runIf(hasGoccia)("WeakRef GC behavior", () => {
     });
   });
 
+  test("clears a weak reference first created after unrelated heavy allocation", () => {
+    Array.from({ length: 20000 }, (_, i) => ({ n: i })).forEach((o) => o.n);
+
+    let target = { marker: "late" };
+    const ref = new WeakRef(target);
+    target = null;
+
+    const result = new Promise((resolve) => {
+      queueMicrotask(() => {});
+      queueMicrotask(() => {
+        Goccia.gc();
+      });
+      queueMicrotask(() => {
+        Goccia.gc();
+        resolve(ref.deref());
+      });
+    });
+
+    return result.then((value) => {
+      expect(value).toBe(undefined);
+    });
+  });
+
+  test("clears a subclassed WeakRef target after GC", () => {
+    class W extends WeakRef {}
+    let target = { marker: "subclass" };
+    const ref = new W(target);
+    target = null;
+
+    const result = new Promise((resolve) => {
+      queueMicrotask(() => {});
+      queueMicrotask(() => {
+        Goccia.gc();
+      });
+      queueMicrotask(() => {
+        Goccia.gc();
+        resolve(ref.deref());
+      });
+    });
+
+    return result.then((value) => {
+      expect(value).toBe(undefined);
+    });
+  });
+
   test("live target survives explicit GC", () => {
     const target = { marker: "live" };
     const ref = new WeakRef(target);

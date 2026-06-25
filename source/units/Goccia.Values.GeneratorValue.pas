@@ -710,10 +710,16 @@ begin
   Context.NonStrictMode := CompatibilityNonStrictMode and not FStrictCode;
   Context.CompatibilityNonStrictMode := CompatibilityNonStrictMode;
   Context.DisposalTracker := nil;
-  EvalRejectNames := BuildParameterEvalVarDeclarationRejectNames(
-    ArgumentsObjectEnabled and CreatesArgumentsObject and
-    not ParameterListBindsName(FParameters, IDENTIFIER_ARGUMENTS));
   HasParamExpressions := HasParameterExpressions;
+  // EvalRejectNames is only read while evaluating a parameter default, so
+  // only build it when a parameter actually has a default or pattern
+  // expression (parity with TGocciaFunctionValue.ExecuteBody).
+  if HasParamExpressions then
+    EvalRejectNames := BuildParameterEvalVarDeclarationRejectNames(
+      ArgumentsObjectEnabled and CreatesArgumentsObject and
+      not ParameterListBindsName(FParameters, IDENTIFIER_ARGUMENTS))
+  else
+    EvalRejectNames := nil;
 
   if ArgumentsObjectEnabled and CreatesArgumentsObject and
      not ParameterListBindsName(FParameters, IDENTIFIER_ARGUMENTS) and
@@ -936,10 +942,16 @@ begin
   Context.NonStrictMode := CompatibilityNonStrictMode and not FStrictCode;
   Context.CompatibilityNonStrictMode := CompatibilityNonStrictMode;
   Context.DisposalTracker := nil;
-  EvalRejectNames := BuildParameterEvalVarDeclarationRejectNames(
-    ArgumentsObjectEnabled and CreatesArgumentsObject and
-    not ParameterListBindsName(FParameters, IDENTIFIER_ARGUMENTS));
   HasParamExpressions := HasParameterExpressions;
+  // EvalRejectNames is only read while evaluating a parameter default, so
+  // only build it when a parameter actually has a default or pattern
+  // expression (parity with TGocciaFunctionValue.ExecuteBody).
+  if HasParamExpressions then
+    EvalRejectNames := BuildParameterEvalVarDeclarationRejectNames(
+      ArgumentsObjectEnabled and CreatesArgumentsObject and
+      not ParameterListBindsName(FParameters, IDENTIFIER_ARGUMENTS))
+  else
+    EvalRejectNames := nil;
 
   if ArgumentsObjectEnabled and CreatesArgumentsObject and
      not ParameterListBindsName(FParameters, IDENTIFIER_ARGUMENTS) and

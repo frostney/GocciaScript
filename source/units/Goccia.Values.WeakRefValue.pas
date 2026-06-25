@@ -21,6 +21,7 @@ type
     function WeakRefDeref(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
     constructor Create(const AClass: TGocciaClassValue = nil);
+    destructor Destroy; override;
 
     function ToStringTag: string; override;
 
@@ -70,6 +71,13 @@ begin
   Shared := GetWeakRefShared;
   if not Assigned(AClass) and Assigned(Shared) then
     FPrototype := Shared.Prototype;
+end;
+
+destructor TGocciaWeakRefValue.Destroy;
+begin
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.UnregisterWeakContainer(Self);
+  inherited;
 end;
 
 procedure TGocciaWeakRefValue.InitializePrototype;
@@ -125,8 +133,13 @@ procedure TGocciaWeakRefValue.InitializeNativeFromArguments(
 begin
   FTarget := AArguments.GetElement(0);
   RequireCanBeHeldWeakly(FTarget, CONSTRUCTOR_WEAK_REF);
+  // A live WeakRef holds a weak target the GC must clear when it dies, so
+  // count it as a weak container (the prototype host has no target).
   if Assigned(TGarbageCollector.Instance) then
+  begin
     TGarbageCollector.Instance.AddKeptObject(FTarget);
+    TGarbageCollector.Instance.RegisterWeakContainer(Self);
+  end;
 end;
 
 procedure TGocciaWeakRefValue.MarkReferences;
