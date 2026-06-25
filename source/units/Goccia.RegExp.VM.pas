@@ -1051,6 +1051,21 @@ begin
   end;
 end;
 
+// Per-thread memo of the most recently decoded subject. Global match/replace/
+// split/matchAll re-enter ExecuteRegExpVM once per match against the same
+// immutable subject string, so caching the decode avoids re-decoding and
+// re-allocating the whole input on every match (O(matches * length) -> O(length)).
+// Identity-keyed (the driver passes the same string instance each iteration),
+// so the hit check is O(1). Pure optimization — clearing it is always safe.
+// Single-entry: only the most recent subject + its units are retained (a
+// different subject replaces them), so it does not cache across subjects; the
+// retained pair is bounded and FPC finalizes the threadvar at thread exit.
+threadvar
+  GRegExpInputMemoStr: string;
+  GRegExpInputMemoUnits: array of Cardinal;
+  GRegExpInputMemoLength: Integer;
+  GRegExpInputMemoValid: Boolean;
+
 function ExecuteRegExpVM(const AProgram: TRegExpProgram;
   const AInput: string; const AStartIndex: Integer;
   const ARequireStart: Boolean; out AResult: TRegExpVMResult): Boolean;
@@ -1062,10 +1077,25 @@ var
 begin
   Result := False;
   AResult.Matched := False;
-  if (not ARequireStart) and StartCheckIsASCIIOnly(AProgram.StartCheck) and
-     not RawInputHasASCIIStartCandidate(AProgram.StartCheck, AInput) then
-    Exit;
-  BuildRegExpInput(AInput, Input);
+  if GRegExpInputMemoValid and (Pointer(AInput) = Pointer(GRegExpInputMemoStr)) then
+  begin
+    // Cache hit: reuse the decoded units. The raw-input start-candidate
+    // pre-scan is redundant here — FindNextStartCandidate below scans the
+    // decoded units and yields the same no-candidate result.
+    Input.Units := GRegExpInputMemoUnits;
+    Input.Length := GRegExpInputMemoLength;
+  end
+  else
+  begin
+    if (not ARequireStart) and StartCheckIsASCIIOnly(AProgram.StartCheck) and
+       not RawInputHasASCIIStartCandidate(AProgram.StartCheck, AInput) then
+      Exit;
+    BuildRegExpInput(AInput, Input);
+    GRegExpInputMemoStr := AInput;
+    GRegExpInputMemoUnits := Input.Units;
+    GRegExpInputMemoLength := Input.Length;
+    GRegExpInputMemoValid := True;
+  end;
   SlotCount := (AProgram.CaptureCount + 1) * 2;
   SetLength(Slots, SlotCount);
   StartPos := NormalizeInputIndex(Input, AStartIndex, AProgram.FullUnicode);
