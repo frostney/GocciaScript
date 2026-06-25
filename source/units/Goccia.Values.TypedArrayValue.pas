@@ -1945,7 +1945,12 @@ var
   // the buffer (AbortSortWriteback).
   procedure MergeSortNumbers;
   var
-    Width, Lo, Mid, Hi, Left, Right, Dest: Integer;
+    // Width and Lo are Int64 so doubling Width and computing Lo + 2 * Width
+    // cannot overflow Integer for very large (multi-GB) 1-byte typed arrays,
+    // where SortLen can approach High(Integer). Range checks are off in
+    // release builds, so an overflow would silently corrupt the merge bounds.
+    Width, Lo: Int64;
+    Mid, Hi, Left, Right, Dest: Integer;
   begin
     SetLength(NumberScratch, SortLen);
     Width := 1;
@@ -1954,15 +1959,12 @@ var
       Lo := 0;
       while Lo < SortLen do
       begin
-        Mid := Lo + Width;
-        if Mid > SortLen then
-          Mid := SortLen;
-        Hi := Lo + 2 * Width;
-        if Hi > SortLen then
-          Hi := SortLen;
-        Left := Lo;
+        // Clamp in Int64, then narrow: Mid and Hi are <= SortLen <= High(Integer).
+        Mid := Integer(Min(Lo + Width, Int64(SortLen)));
+        Hi := Integer(Min(Lo + 2 * Width, Int64(SortLen)));
+        Left := Integer(Lo);
         Right := Mid;
-        Dest := Lo;
+        Dest := Integer(Lo);
         while (Left < Mid) and (Right < Hi) do
         begin
           if CompareNumbers(NumberValues[Right], NumberValues[Left]) < 0 then
@@ -2003,7 +2005,12 @@ var
   // MergeSortNumbers for the structure; identical algorithm over Int64 keys.
   procedure MergeSortBigInts;
   var
-    Width, Lo, Mid, Hi, Left, Right, Dest: Integer;
+    // Width and Lo are Int64 so doubling Width and computing Lo + 2 * Width
+    // cannot overflow Integer for very large (multi-GB) 1-byte typed arrays,
+    // where SortLen can approach High(Integer). Range checks are off in
+    // release builds, so an overflow would silently corrupt the merge bounds.
+    Width, Lo: Int64;
+    Mid, Hi, Left, Right, Dest: Integer;
   begin
     SetLength(BigIntScratch, SortLen);
     Width := 1;
@@ -2012,15 +2019,12 @@ var
       Lo := 0;
       while Lo < SortLen do
       begin
-        Mid := Lo + Width;
-        if Mid > SortLen then
-          Mid := SortLen;
-        Hi := Lo + 2 * Width;
-        if Hi > SortLen then
-          Hi := SortLen;
-        Left := Lo;
+        // Clamp in Int64, then narrow: Mid and Hi are <= SortLen <= High(Integer).
+        Mid := Integer(Min(Lo + Width, Int64(SortLen)));
+        Hi := Integer(Min(Lo + 2 * Width, Int64(SortLen)));
+        Left := Integer(Lo);
         Right := Mid;
-        Dest := Lo;
+        Dest := Integer(Lo);
         while (Left < Mid) and (Right < Hi) do
         begin
           if CompareBigInts(BigIntValues[Right], BigIntValues[Left]) < 0 then
