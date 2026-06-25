@@ -97,6 +97,8 @@ end;
 
 destructor TGocciaWeakMapValue.Destroy;
 begin
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.UnregisterWeakContainer(Self);
   FEntries.Free;
   inherited;
 end;
@@ -157,6 +159,11 @@ end;
 
 procedure TGocciaWeakMapValue.SetEntry(const AKey, AValue: TGocciaValue);
 begin
+  // Count this map as a live weak container on its first entry, so the GC's
+  // weak passes run only when there is something to trace. An empty WeakMap
+  // (e.g. the pinned prototype host) needs no tracing and stays uncounted.
+  if (FEntries.Count = 0) and Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.RegisterWeakContainer(Self);
   FEntries.AddOrSetValue(AKey, AValue);
 end;
 

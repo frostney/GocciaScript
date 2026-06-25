@@ -91,6 +91,8 @@ end;
 
 destructor TGocciaFinalizationRegistryValue.Destroy;
 begin
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.UnregisterWeakContainer(Self);
   FCells.Free;
   inherited;
 end;
@@ -237,6 +239,9 @@ begin
     Cell.HasUnregisterToken := True;
   end;
 
+  // Count this registry as a live weak container on its first cell.
+  if (Registry.FCells.Count = 0) and Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.RegisterWeakContainer(Registry);
   Registry.FCells.Add(Cell);
   if Assigned(TGarbageCollector.Instance) then
     TGarbageCollector.Instance.AddKeptObject(Target);
