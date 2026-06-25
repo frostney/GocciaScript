@@ -58,8 +58,10 @@ type
     FKeptObjects: TGCObjectSet;
     FRootObjects: TGCObjectSet;
     FActiveRootStack: TGCManagedObjectList;
-    // Live weak containers (WeakMap/WeakSet/WeakRef/FinalizationRegistry).
-    // Lets Collect/CollectYoung skip the weak-reference passes when none exist.
+    // Weak containers (WeakMap/WeakSet/WeakRef/FinalizationRegistry) that have
+    // held weak data: a container joins on its first weak insertion and leaves
+    // only when it is itself collected, so an emptied-but-live container stays
+    // in the set. Lets Collect/CollectYoung skip the weak passes while empty.
     FWeakContainers: TGCObjectSet;
 
     FAllocationsSinceLastGC: Integer;
@@ -706,7 +708,9 @@ begin
       {$ENDIF}
       MarkRoots;
       // The weak-reference passes are no-ops on every non-weak object, so
-      // skip both full-heap walks entirely when no weak container is alive.
+      // skip both full-heap walks entirely while no weak container is tracked.
+      // A populated-then-emptied container stays tracked while live, so the
+      // passes still run for it (see docs/garbage-collector.md).
       if FWeakContainers.Count > 0 then
       begin
         TraceWeakReferences;
