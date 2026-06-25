@@ -58,6 +58,11 @@ type
     FKeptObjects: TGCObjectSet;
     FRootObjects: TGCObjectSet;
     FActiveRootStack: TGCManagedObjectList;
+    // Weak containers (WeakMap/WeakSet/WeakRef/FinalizationRegistry) that have
+    // held weak data: a container joins on its first weak insertion and leaves
+    // only when it is itself collected, so an emptied-but-live container stays
+    // in the set. Lets Collect/CollectYoung skip the weak passes while empty.
+    FWeakContainers: TGCObjectSet;
 
     FAllocationsSinceLastGC: Integer;
     FGCThreshold: Integer;
@@ -99,6 +104,8 @@ type
 
     procedure RegisterObject(const AObject: TGCManagedObject);
     procedure UnregisterObject(const AObject: TGCManagedObject);
+    procedure RegisterWeakContainer(const AObject: TGCManagedObject);
+    procedure UnregisterWeakContainer(const AObject: TGCManagedObject);
     procedure PinObject(const AObject: TGCManagedObject);
     procedure UnpinObject(const AObject: TGCManagedObject);
     procedure AddTempRoot(const AObject: TGCManagedObject);
@@ -378,6 +385,7 @@ begin
   FKeptObjects := TGCObjectSet.Create;
   FRootObjects := TGCObjectSet.Create;
   FActiveRootStack := TGCManagedObjectList.Create(False);
+  FWeakContainers := TGCObjectSet.Create;
   FAllocationsSinceLastGC := 0;
   FGCThreshold := DEFAULT_GC_THRESHOLD;
   FEnabled := True;
@@ -411,6 +419,7 @@ begin
   FKeptObjects.Free;
   FRootObjects.Free;
   FActiveRootStack.Free;
+  FWeakContainers.Free;
   inherited;
 end;
 
@@ -461,6 +470,24 @@ begin
     AObject.GCIndex := -1;
     Dec(FBytesAllocated, AObject.InstanceSize);
   end;
+end;
+
+procedure TGarbageCollector.RegisterWeakContainer(
+  const AObject: TGCManagedObject);
+begin
+  if Assigned(AObject) then
+    FWeakContainers.Add(AObject, True);
+end;
+
+// Weak containers unregister from their own destructors, not from
+// UnregisterObject: UnregisterObject early-exits while collecting for an
+// object already being swept (its GCIndex is -1), so centralizing the removal
+// there would leave a swept weak container dangling in the set.
+procedure TGarbageCollector.UnregisterWeakContainer(
+  const AObject: TGCManagedObject);
+begin
+  if Assigned(FWeakContainers) then
+    FWeakContainers.Remove(AObject);
 end;
 
 procedure TGarbageCollector.ClearActiveRootEntries(
@@ -680,8 +707,15 @@ begin
       StartNs := GetNanoseconds;
       {$ENDIF}
       MarkRoots;
-      TraceWeakReferences;
-      SweepWeakReferences;
+      // The weak-reference passes are no-ops on every non-weak object, so
+      // skip both full-heap walks entirely while no weak container is tracked.
+      // A populated-then-emptied container stays tracked while live, so the
+      // passes still run for it (see docs/garbage-collector.md).
+      if FWeakContainers.Count > 0 then
+      begin
+        TraceWeakReferences;
+        SweepWeakReferences;
+      end;
       {$IFDEF GC_TIMING}
       AfterMarkNs := GetNanoseconds;
       {$ENDIF}
@@ -807,8 +841,11 @@ begin
       TGCManagedObject.AdvanceMark;
 
       MarkRoots;
-      TraceWeakReferences;
-      SweepWeakReferences;
+      if FWeakContainers.Count > 0 then
+      begin
+        TraceWeakReferences;
+        SweepWeakReferences;
+      end;
 
       Collected := 0;
       WriteIdx := EffectiveWatermark;
