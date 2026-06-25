@@ -448,6 +448,7 @@ var
   WrappedHost: TGocciaWrappedFunctionHost;
   Wrapped: TGocciaNativeFunctionValue;
   DestScope: TGocciaExecutionContextScope;
+  ValueRoot: TGocciaTempRoot;
 begin
   // Step 2: primitives cross the boundary unchanged.
   if AValue.IsPrimitive then
@@ -458,48 +459,62 @@ begin
     ThrowTypeError(
       'ShadowRealm cannot pass a non-callable object across the realm boundary');
 
-  // Step 1.b: WrappedFunctionCreate (TC39 ShadowRealm §3.1.1). CopyNameAndLength
-  // (3.1.2) reads the target's "length"/"name"; if a read throws (e.g. a
-  // revoked proxy target), WrappedFunctionCreate throws a TypeError (step 8).
-  TargetLength := 0;
-  TargetName := '';
+  // Reading "length"/"name" can run a proxy get-trap (a GC safe point), and
+  // the wrapper is allocated before CapturedRoot keeps the target alive, so
+  // root the target across both — mirroring InvokeCallable's input rooting.
+  InitializeTempRoot(ValueRoot);
   try
-    if (AValue is TGocciaObjectValue) and
-       TGocciaObjectValue(AValue).HasOwnProperty(PROP_LENGTH) then
-    begin
-      LengthValue := AValue.GetProperty(PROP_LENGTH);
-      if LengthValue is TGocciaNumberLiteralValue then
-        TargetLength := ClampWrappedLength(
-          TGocciaNumberLiteralValue(LengthValue).Value);
-    end;
-    NameValue := AValue.GetProperty(PROP_NAME);
-    if NameValue is TGocciaStringLiteralValue then
-      TargetName := TGocciaStringLiteralValue(NameValue).Value;
-  except
-    on E: TGocciaThrowValue do
-      ThrowTypeError('ShadowRealm cannot copy wrapped function name and length');
-    on E: EGocciaBytecodeThrow do
-      ThrowTypeError('ShadowRealm cannot copy wrapped function name and length');
-    on E: TGocciaError do
-      ThrowTypeError('ShadowRealm cannot copy wrapped function name and length');
-  end;
+    AddTempRootIfNeeded(ValueRoot, AValue);
 
-  WrappedHost := TGocciaWrappedFunctionHost.Create(AValue, ASourceEngine,
-    FEngine);
-  FWrappedHosts.Add(WrappedHost);
-  // Create the wrapper in FEngine's realm so its [[Prototype]] is FEngine's
-  // %Function.prototype% (the realm the value crosses INTO), independent of
-  // whichever realm is currently running.
-  DestScope := FEngine.ActivateRealmExecutionContext;
-  try
-    Wrapped := TGocciaNativeFunctionValue.CreateWithoutPrototype(
-      WrappedHost.Invoke, TargetName, TargetLength);
+    // Step 1.b: WrappedFunctionCreate (TC39 ShadowRealm §3.1.1).
+    // CopyNameAndLength (3.1.2) reads the target's "length"/"name"; if a read
+    // throws (e.g. a revoked proxy target), WrappedFunctionCreate throws a
+    // TypeError (step 8).
+    TargetLength := 0;
+    TargetName := '';
+    try
+      if (AValue is TGocciaObjectValue) and
+         TGocciaObjectValue(AValue).HasOwnProperty(PROP_LENGTH) then
+      begin
+        LengthValue := AValue.GetProperty(PROP_LENGTH);
+        if LengthValue is TGocciaNumberLiteralValue then
+          TargetLength := ClampWrappedLength(
+            TGocciaNumberLiteralValue(LengthValue).Value);
+      end;
+      NameValue := AValue.GetProperty(PROP_NAME);
+      if NameValue is TGocciaStringLiteralValue then
+        TargetName := TGocciaStringLiteralValue(NameValue).Value;
+    except
+      on E: TGocciaThrowValue do
+        ThrowTypeError(
+          'ShadowRealm cannot copy wrapped function name and length');
+      on E: EGocciaBytecodeThrow do
+        ThrowTypeError(
+          'ShadowRealm cannot copy wrapped function name and length');
+      on E: TGocciaError do
+        ThrowTypeError(
+          'ShadowRealm cannot copy wrapped function name and length');
+    end;
+
+    WrappedHost := TGocciaWrappedFunctionHost.Create(AValue, ASourceEngine,
+      FEngine);
+    FWrappedHosts.Add(WrappedHost);
+    // Create the wrapper in FEngine's realm so its [[Prototype]] is FEngine's
+    // %Function.prototype% (the realm the value crosses INTO), independent of
+    // whichever realm is currently running.
+    DestScope := FEngine.ActivateRealmExecutionContext;
+    try
+      Wrapped := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+        WrappedHost.Invoke, TargetName, TargetLength);
+    finally
+      DestScope.Free;
+    end;
+    // Keep the wrapped target reachable for the GC through the wrapper.
+    Wrapped.CapturedRoot := AValue;
+    Result := Wrapped;
   finally
-    DestScope.Free;
+    RemoveTempRootIfNeeded(ValueRoot);
   end;
-  // Keep the wrapped target reachable for the GC through the wrapper function.
-  Wrapped.CapturedRoot := AValue;
-  Result := Wrapped;
 end;
 
 { TGocciaWrappedFunctionHost }
@@ -522,7 +537,9 @@ var
   TargetHost, OwnerHost: TGocciaShadowRealmHost;
   OwnerScope, TargetScope: TGocciaExecutionContextScope;
   WrappedArgs: TGocciaArgumentsCollection;
-  WrappedThis, CallResult: TGocciaValue;
+  WrappedThis, WrappedArg, CallResult: TGocciaValue;
+  ThisRoot: TGocciaTempRoot;
+  ArgRoots: array of TGocciaTempRoot;
   I: Integer;
   Threw: Boolean;
 begin
@@ -537,15 +554,26 @@ begin
   // derives its prototype from the target realm it is passed into.
   OwnerScope := FOwnerEngine.ActivateRealmExecutionContext;
   try
-    // 2.3 steps 5-7: wrap the receiver and each argument INTO the target realm.
-    // A failure here (e.g. a non-callable object argument) propagates as-is,
-    // exactly like the spec's `?` on GetWrappedValue.
-    WrappedThis := TargetHost.WrapIncoming(AThisValue, FOwnerEngine);
+    // Each WrapIncoming below allocates a wrapper and may run a proxy get-trap
+    // (a GC safe point), so keep the already-wrapped receiver and arguments
+    // rooted until InvokeCallable takes over their rooting.
+    InitializeTempRoot(ThisRoot);
+    SetLength(ArgRoots, AArgs.Length);
+    for I := 0 to High(ArgRoots) do
+      InitializeTempRoot(ArgRoots[I]);
     WrappedArgs := TGocciaArgumentsCollection.Create;
     try
+      // 2.3 steps 5-7: wrap the receiver and each argument INTO the target
+      // realm. A failure here (e.g. a non-callable object argument) propagates
+      // as-is, exactly like the spec's `?` on GetWrappedValue.
+      WrappedThis := TargetHost.WrapIncoming(AThisValue, FOwnerEngine);
+      AddTempRootIfNeeded(ThisRoot, WrappedThis);
       for I := 0 to AArgs.Length - 1 do
-        WrappedArgs.Add(
-          TargetHost.WrapIncoming(AArgs.GetElement(I), FOwnerEngine));
+      begin
+        WrappedArg := TargetHost.WrapIncoming(AArgs.GetElement(I), FOwnerEngine);
+        AddTempRootIfNeeded(ArgRoots[I], WrappedArg);
+        WrappedArgs.Add(WrappedArg);
+      end;
       // 2.3 step 8: call the target function in its own realm.
       TargetScope := FTargetEngine.ActivateRealmExecutionContext;
       try
@@ -561,6 +589,9 @@ begin
       end;
     finally
       WrappedArgs.Free;
+      for I := High(ArgRoots) downto 0 do
+        RemoveTempRootIfNeeded(ArgRoots[I]);
+      RemoveTempRootIfNeeded(ThisRoot);
     end;
 
     // 2.3 step 10: a thrown target becomes a TypeError in the caller realm.
