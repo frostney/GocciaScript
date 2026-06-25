@@ -135,6 +135,31 @@ function EvaluateEvalProgram(const AProgram: TGocciaProgram;
   const AAllowSuperCall: Boolean = False;
   const ARejectArgumentsReference: Boolean = False): TGocciaValue;
 
+{ EvaluateEvalProgram split into its two phases, so a caller can distinguish a
+  pre-execution early error from a runtime abrupt completion (both are a Pascal
+  TGocciaError, differing only by phase). PrepareEvalProgram runs phase one — all
+  of the eval Script's pre-execution work: the static early-error passes (forbidden
+  module/using declarations, a forbidden `arguments` reference, and the
+  reference/assignment early errors of ValidateEvalEarlyErrors) and then
+  EvalDeclarationInstantiation. It returns the evaluation context the body runs in.
+  Every error it raises is a pre-execution error: a TGocciaSyntaxError for a static
+  early error (including a duplicate-lexical or lexical/var conflict surfaced by
+  EvalDeclarationInstantiation), or a TGocciaTypeError for a CanDeclareGlobal*
+  conflict. RunEvalProgramBody runs phase two — evaluating the body with that
+  context and returning the Script's completion value; an error it raises is a
+  runtime abrupt completion. EvaluateEvalProgram simply chains the two. }
+function PrepareEvalProgram(const AProgram: TGocciaProgram;
+  const AContext: TGocciaEvaluationContext; const AVarScope,
+  ALexicalScope: TGocciaScope; const AStrictEval: Boolean;
+  const ARejectArgumentsVarDeclaration: Boolean;
+  const ARejectVarDeclarationNames: TGocciaEvalRejectNameArray;
+  const AAllowNewTarget: Boolean = False;
+  const AAllowSuperProperty: Boolean = False;
+  const AAllowSuperCall: Boolean = False;
+  const ARejectArgumentsReference: Boolean = False): TGocciaEvaluationContext;
+function RunEvalProgramBody(const AProgram: TGocciaProgram;
+  const AEvalContext: TGocciaEvaluationContext): TGocciaValue;
+
 { Runs the eval Script's static early-error checks for forbidden references and
   assignments — `new.target` / `super` outside a permitting context and, under
   strict eval, assignment to `eval`/`arguments` — the same pass EvaluateEvalProgram
@@ -2868,19 +2893,14 @@ begin
   end;
 end;
 
-function EvaluateEvalProgram(const AProgram: TGocciaProgram;
+function PrepareEvalProgram(const AProgram: TGocciaProgram;
   const AContext: TGocciaEvaluationContext; const AVarScope,
   ALexicalScope: TGocciaScope; const AStrictEval: Boolean;
   const ARejectArgumentsVarDeclaration: Boolean;
   const ARejectVarDeclarationNames: TGocciaEvalRejectNameArray;
   const AAllowNewTarget: Boolean; const AAllowSuperProperty: Boolean;
   const AAllowSuperCall: Boolean;
-  const ARejectArgumentsReference: Boolean): TGocciaValue;
-var
-  EvalContext: TGocciaEvaluationContext;
-  CF: TGocciaControlFlow;
-  I: Integer;
-  LastValue: TGocciaValue;
+  const ARejectArgumentsReference: Boolean): TGocciaEvaluationContext;
 begin
   ValidateEvalScriptBody(AProgram.Body);
   if ARejectArgumentsReference and
@@ -2888,23 +2908,31 @@ begin
     ThrowSyntaxError('arguments is not allowed in this eval context');
   ValidateEvalEarlyErrors(AProgram, AStrictEval, AAllowNewTarget,
     AAllowSuperProperty, AAllowSuperCall);
-  EvalContext := AContext;
-  EvalContext.Scope := ALexicalScope;
-  EvalContext.NonStrictMode := not AStrictEval;
-  EvalContext.CompatibilityNonStrictMode := AContext.CompatibilityNonStrictMode;
-  EvalContext.InEvalCode := True;
-  EvalContext.EvalVarScope := AVarScope;
+  Result := AContext;
+  Result.Scope := ALexicalScope;
+  Result.NonStrictMode := not AStrictEval;
+  Result.CompatibilityNonStrictMode := AContext.CompatibilityNonStrictMode;
+  Result.InEvalCode := True;
+  Result.EvalVarScope := AVarScope;
   ALexicalScope.NonStrictMode := not AStrictEval;
   AVarScope.NonStrictMode := not AStrictEval;
 
-  EvalDeclarationInstantiation(AProgram, EvalContext, AVarScope, ALexicalScope,
+  EvalDeclarationInstantiation(AProgram, Result, AVarScope, ALexicalScope,
     AStrictEval, ARejectArgumentsVarDeclaration, ARejectVarDeclarationNames);
+end;
 
+function RunEvalProgramBody(const AProgram: TGocciaProgram;
+  const AEvalContext: TGocciaEvaluationContext): TGocciaValue;
+var
+  CF: TGocciaControlFlow;
+  I: Integer;
+  LastValue: TGocciaValue;
+begin
   LastValue := TGocciaUndefinedLiteralValue.UndefinedValue;
   CF := TGocciaControlFlow.Normal(LastValue);
   for I := 0 to AProgram.Body.Count - 1 do
   begin
-    CF := EvaluateStatement(AProgram.Body[I], EvalContext);
+    CF := EvaluateStatement(AProgram.Body[I], AEvalContext);
     if (CF.Kind = cfkNormal) and Assigned(CF.Value) then
       LastValue := CF.Value;
     if CF.Kind <> cfkNormal then
@@ -2924,6 +2952,24 @@ begin
   else
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
+end;
+
+function EvaluateEvalProgram(const AProgram: TGocciaProgram;
+  const AContext: TGocciaEvaluationContext; const AVarScope,
+  ALexicalScope: TGocciaScope; const AStrictEval: Boolean;
+  const ARejectArgumentsVarDeclaration: Boolean;
+  const ARejectVarDeclarationNames: TGocciaEvalRejectNameArray;
+  const AAllowNewTarget: Boolean; const AAllowSuperProperty: Boolean;
+  const AAllowSuperCall: Boolean;
+  const ARejectArgumentsReference: Boolean): TGocciaValue;
+var
+  EvalContext: TGocciaEvaluationContext;
+begin
+  EvalContext := PrepareEvalProgram(AProgram, AContext, AVarScope, ALexicalScope,
+    AStrictEval, ARejectArgumentsVarDeclaration, ARejectVarDeclarationNames,
+    AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall,
+    ARejectArgumentsReference);
+  Result := RunEvalProgramBody(AProgram, EvalContext);
 end;
 
 function EvaluateStatements(const ANodes: TObjectList<TGocciaASTNode>; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;

@@ -53,6 +53,20 @@ describe("ShadowRealm.prototype.evaluate", () => {
     expect(() => realm.evaluate(")(")).toThrow(SyntaxError);
   });
 
+  test("throws a SyntaxError when a top-level lexical binding is declared twice", () => {
+    const realm = new ShadowRealm();
+    expect(() => realm.evaluate("let x; let x;")).toThrow(SyntaxError);
+    expect(() => realm.evaluate("const y = 1; const y = 2;")).toThrow(
+      SyntaxError,
+    );
+    expect(() => realm.evaluate("let z; const z = 1;")).toThrow(SyntaxError);
+    expect(() => realm.evaluate("class C {} class C {}")).toThrow(SyntaxError);
+    // A declaration conflict is a pre-execution early error, so it stays a
+    // SyntaxError rather than being wrapped as the TypeError used for runtime
+    // abrupt completions; re-evaluating a fresh lexical name still succeeds.
+    expect(realm.evaluate("const ok = 2; ok")).toBe(2);
+  });
+
   test("throws a TypeError when the result is a non-callable object", () => {
     const realm = new ShadowRealm();
     expect(() => realm.evaluate("({})")).toThrow(TypeError);
