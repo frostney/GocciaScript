@@ -166,6 +166,10 @@ const
   CALL_FLAG_SPREAD = 1;
   CALL_FLAG_TRUSTED = 2;
   CALL_FLAG_DIRECT_EVAL = 4;
+  // ES2026 §15.10 Tail Position Calls: the call sits in tail position of its
+  // enclosing function, so the VM reuses the current call frame instead of
+  // pushing a new one (PrepareForTailCall).
+  CALL_FLAG_TAIL = 8;
 
   // Sentinel for the C operand of OP_VALIDATE_VALUE / VALIDATE_OP_REQUIRE_ITERABLE.
   //   0..254 = exact element count to consume (0 = empty pattern, drain

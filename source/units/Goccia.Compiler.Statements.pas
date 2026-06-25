@@ -2160,6 +2160,23 @@ begin
     GPendingFinally.Insert(I, Entries[I]);
 end;
 
+// ES2026 §15.10 Tail Position Calls.  A call in tail position reuses the
+// caller's frame (PrepareForTailCall).  A `return <expr>` puts <expr> in tail
+// position, but only when no finally/using/iterator cleanup runs after it
+// (CurrentPendingFinallyBase = 0): e.g. `try { return f(); } finally {...}` is
+// NOT a tail call because the finally still runs, whereas `try {} finally {
+// return f(); }` IS.  Proper tail calls apply in strict-mode code only, and
+// generators/async functions are never candidates.
+function ReturnIsTailPositionEligible(
+  const ACtx: TGocciaCompilationContext): Boolean;
+begin
+  Result := (CurrentPendingFinallyBase = 0) and
+    Assigned(ACtx.Template) and
+    ACtx.Template.StrictCode and
+    (not ACtx.Template.IsGenerator) and
+    (not ACtx.Template.IsAsync);
+end;
+
 procedure CompileReturnStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaReturnStatement);
 var
@@ -2169,7 +2186,15 @@ begin
   if AStmt.HasExpression then
   begin
     Reg := ACtx.Scope.AllocateRegister;
-    ACtx.CompileExpression(AStmt.Value, Reg);
+    // Tag any tail-position call so the VM can reuse the current frame.  The
+    // call is still emitted as an ordinary value-producing call, so the
+    // OP_RETURN below stays correct whether or not the VM acts on the tail
+    // flag (when it does, it returns directly and the OP_RETURN is unreached).
+    if ReturnIsTailPositionEligible(ACtx) then
+      Goccia.Compiler.Expressions.CompileReturnValueTailAware(ACtx,
+        AStmt.Value, Reg)
+    else
+      ACtx.CompileExpression(AStmt.Value, Reg);
     EmitPendingCleanup(ACtx);
     ReturnNeedsAwait := Assigned(ACtx.Template) and ACtx.Template.IsAsync and
       ACtx.Template.IsGenerator;

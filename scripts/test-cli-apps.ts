@@ -531,6 +531,75 @@ console.log("Bare Loader: print global...");
   if (proc.stdout.toString().trim() !== "hello 7") throw new Error(`Bare print expected hello 7, got: ${proc.stdout.toString()}`);
 }
 
+console.log("Bare Loader: --stack-size bounds deep non-tail recursion with RangeError...");
+{
+  const src =
+    "const f = (n) => (n === 0 ? 0 : 1 + f(n - 1)); try { f(100000); print('NO THROW'); } catch (e) { print(e.constructor.name); }\n";
+  const proc = Bun.spawnSync([BARE, "--mode=bytecode", "--stack-size=1000"], {
+    stdin: new TextEncoder().encode(src),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0) throw new Error(`Bare --stack-size exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (proc.stdout.toString().trim() !== "RangeError")
+    throw new Error(`Bare --stack-size expected RangeError, got: ${proc.stdout.toString()}`);
+}
+
+console.log("Bare Loader: proper tail calls reuse the frame (deep strict tail recursion completes)...");
+{
+  // Without proper tail calls this 100k-deep recursion would exceed --stack-size;
+  // a tail call in strict-mode code reuses the current frame, so it runs in O(1)
+  // stack and completes well under the 1000-frame limit.
+  const src =
+    "const f = (n) => { 'use strict'; return n === 0 ? 'done' : f(n - 1); }; print(f(100000));\n";
+  const proc = Bun.spawnSync([BARE, "--mode=bytecode", "--stack-size=1000"], {
+    stdin: new TextEncoder().encode(src),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0) throw new Error(`Bare tail-call exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (proc.stdout.toString().trim() !== "done")
+    throw new Error(`Bare tail-call expected 'done', got: ${proc.stdout.toString()} / ${proc.stderr.toString()}`);
+}
+
+console.log("Bare Loader: tail-call optimization stays strict-mode only...");
+{
+  // The same tail recursion in sloppy-mode code is NOT a proper tail call, so it
+  // is bounded by --stack-size and throws RangeError.
+  const src =
+    "const f = (n) => (n === 0 ? 'done' : f(n - 1)); try { print(f(100000)); } catch (e) { print(e.constructor.name); }\n";
+  const proc = Bun.spawnSync([BARE, "--mode=bytecode", "--stack-size=1000"], {
+    stdin: new TextEncoder().encode(src),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0) throw new Error(`Bare sloppy tail-call exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (proc.stdout.toString().trim() !== "RangeError")
+    throw new Error(`Bare sloppy tail-call expected RangeError, got: ${proc.stdout.toString()}`);
+}
+
+console.log("Bare Loader: native re-entry recursion throws RangeError instead of crashing...");
+{
+  // Recursion through a native callback (Array.prototype.forEach) and through a
+  // generator resume re-enters the VM on a native stack frame. Both must be
+  // bounded (RangeError), not overflow the native stack (SIGSEGV / non-zero
+  // signal exit).
+  const cases = [
+    "let d = 0; const rec = () => { d++; [0].forEach(rec); }; try { rec(); print('NO THROW'); } catch (e) { print(e.constructor.name); }\n",
+    "let d = 0; function* g() { d++; for (const x of g()) {} yield 1; } try { for (const x of g()) {} print('NO THROW'); } catch (e) { print(e.constructor.name); }\n",
+  ];
+  for (const src of cases) {
+    const proc = Bun.spawnSync(
+      [BARE, "--mode=bytecode", "--compat-function", "--compat-traditional-for-loop"],
+      { stdin: new TextEncoder().encode(src), stdout: "pipe", stderr: "pipe" },
+    );
+    if (proc.exitCode !== 0)
+      throw new Error(`Bare native re-entry exited ${proc.exitCode} (signal ${proc.signalCode}): ${proc.stderr.toString()}`);
+    if (proc.stdout.toString().trim() !== "RangeError")
+      throw new Error(`Bare native re-entry expected RangeError, got: ${proc.stdout.toString()}`);
+  }
+}
+
 console.log("Bare Loader: no runtime globals...");
 {
   const source = [
