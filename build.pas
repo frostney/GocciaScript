@@ -249,7 +249,12 @@ begin
 
     if BuildMode = bmProd then
     begin
-      Args.Add('-O4');
+      // -O3, not -O4: FPC's -O4 enables "uncertain" optimizations that
+      // assume away aliasing and miscompile some engine paths in optimized
+      // builds only (observed as wrong results in edge-case Temporal
+      // ZonedDateTime hoursInDay under sub-hour/discontiguous DST, passing
+      // at -O- and -O3 but failing at -O4). -O3 is the highest safe level.
+      Args.Add('-O3');
       Args.Add('-dPRODUCTION');
       Args.Add('-Xs');
       Args.Add('-CX');
