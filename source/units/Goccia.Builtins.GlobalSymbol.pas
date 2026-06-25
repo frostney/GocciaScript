@@ -55,6 +55,21 @@ uses
 
 threadvar
   FStaticMembers: TArray<TGocciaMemberDefinition>;
+  // ES2026 §20.4.2.2: the GlobalSymbolRegistry is one per agent (thread). Every
+  // realm in the thread — the main realm, ShadowRealm child realms, and
+  // $262.createRealm realms — shares it, so Symbol.for(key) yields the same
+  // symbol across realms. The first TGocciaGlobalSymbol created in the thread
+  // owns it; because child realms are torn down before their creator, the owner
+  // outlives every sharer and frees the registry at teardown.
+  GSharedSymbolRegistry: TOrderedStringMap<TGocciaSymbolValue>;
+  GSharedSymbolRegistryOwner: TGocciaGlobalSymbol;
+
+function SharedSymbolRegistry: TOrderedStringMap<TGocciaSymbolValue>;
+begin
+  if not Assigned(GSharedSymbolRegistry) then
+    GSharedSymbolRegistry := TOrderedStringMap<TGocciaSymbolValue>.Create;
+  Result := GSharedSymbolRegistry;
+end;
 
 constructor TGocciaGlobalSymbol.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 var
@@ -62,7 +77,9 @@ var
 begin
   inherited Create(AName, AScope, AThrowError);
 
-  FGlobalRegistry := TOrderedStringMap<TGocciaSymbolValue>.Create;
+  FGlobalRegistry := SharedSymbolRegistry;
+  if not Assigned(GSharedSymbolRegistryOwner) then
+    GSharedSymbolRegistryOwner := Self;
 
   // Initialize shared Symbol prototype
   PrototypeInitializer := TGocciaSymbolValue.Create;
@@ -123,10 +140,19 @@ destructor TGocciaGlobalSymbol.Destroy;
 var
   Pair: TOrderedStringMap<TGocciaSymbolValue>.TKeyValuePair;
 begin
-  if Assigned(TGarbageCollector.Instance) then
-    for Pair in FGlobalRegistry do
-      TGarbageCollector.Instance.UnpinObject(Pair.Value);
-  FGlobalRegistry.Free;
+  // Only the owner frees the shared registry and unpins its symbols, once every
+  // realm that borrows it (child realms are torn down first) is gone.
+  if Self = GSharedSymbolRegistryOwner then
+  begin
+    if Assigned(TGarbageCollector.Instance) and
+       Assigned(GSharedSymbolRegistry) then
+      for Pair in GSharedSymbolRegistry do
+        TGarbageCollector.Instance.UnpinObject(Pair.Value);
+    GSharedSymbolRegistry.Free;
+    GSharedSymbolRegistry := nil;
+    GSharedSymbolRegistryOwner := nil;
+  end;
+  FGlobalRegistry := nil;
   inherited;
 end;
 

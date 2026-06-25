@@ -135,6 +135,14 @@ function EvaluateEvalProgram(const AProgram: TGocciaProgram;
   const AAllowSuperCall: Boolean = False;
   const ARejectArgumentsReference: Boolean = False): TGocciaValue;
 
+{ Runs the eval Script's static early-error checks (the same pass
+  EvaluateEvalProgram performs before evaluating). Raises a TGocciaSyntaxError on
+  the first violation. Exposed so callers that must distinguish early errors
+  (SyntaxError) from runtime abrupt completions can validate up front. }
+procedure ValidateEvalEarlyErrors(const AProgram: TGocciaProgram;
+  const AStrictEval, AAllowNewTarget, AAllowSuperProperty,
+  AAllowSuperCall: Boolean);
+
 implementation
 
 uses

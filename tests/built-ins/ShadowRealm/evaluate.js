@@ -160,3 +160,49 @@ describe("ShadowRealm wrapped functions", () => {
     expect(() => new fn()).toThrow(TypeError);
   });
 });
+
+describe("ShadowRealm evaluate conformance", () => {
+  test("shares the global symbol registry with the caller realm", () => {
+    const realm = new ShadowRealm();
+    const shadowSym = realm.evaluate('Symbol.for("shadowrealm-shared-key")');
+    expect(typeof shadowSym).toBe("symbol");
+    expect(shadowSym).toBe(Symbol.for("shadowrealm-shared-key"));
+    expect(Symbol.keyFor(shadowSym)).toBe("shadowrealm-shared-key");
+  });
+
+  test("a symbol created with Symbol() in the realm is not in the shared registry", () => {
+    const realm = new ShadowRealm();
+    const shadowSym = realm.evaluate('Symbol("not-registered")');
+    expect(Symbol.keyFor(shadowSym)).toBe(undefined);
+  });
+
+  test("throws a SyntaxError when the body uses a strict reserved word", () => {
+    const realm = new ShadowRealm();
+    expect(() => realm.evaluate("var public = 1;")).toThrow(SyntaxError);
+  });
+
+  test("wraps a runtime error thrown inside the realm as a caller-realm TypeError", () => {
+    const realm = new ShadowRealm();
+    expect(() => realm.evaluate("throw new SyntaxError('runtime')")).toThrow(
+      TypeError,
+    );
+  });
+
+  test("copies the target function length onto the wrapped function", () => {
+    const realm = new ShadowRealm();
+    expect(realm.evaluate("(a, b, c) => {}").length).toBe(3);
+  });
+
+  test("preserves an infinite target length on the wrapped function", () => {
+    const realm = new ShadowRealm();
+    const fn = realm.evaluate(
+      "const f = () => {}; Object.defineProperty(f, 'length', { get: () => Infinity, configurable: true }); f;",
+    );
+    expect(fn.length).toBe(Infinity);
+  });
+
+  test("does not expose eval in the child realm when the host has none", () => {
+    const realm = new ShadowRealm();
+    expect(realm.evaluate("typeof eval")).toBe("undefined");
+  });
+});
