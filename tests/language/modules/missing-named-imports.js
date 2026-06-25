@@ -27,4 +27,10 @@ describe("missing named imports reject identically in both engines", () => {
       "../../../fixtures/modules/missing-named-import-text.js",
     );
   });
+
+  test("rejects a missing named import from a bytes module", async () => {
+    await expectMissingExportRejection(
+      "../../../fixtures/modules/missing-named-import-bytes.js",
+    );
+  });
 });
