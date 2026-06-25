@@ -21,6 +21,7 @@ const
   CONSTRUCTOR_WEAK_REF = 'WeakRef';
   CONSTRUCTOR_FINALIZATION_REGISTRY = 'FinalizationRegistry';
   CONSTRUCTOR_PROXY    = 'Proxy';
+  CONSTRUCTOR_SHADOW_REALM = 'ShadowRealm';
   CONSTRUCTOR_PERFORMANCE  = 'Performance';
   CONSTRUCTOR_PROMISE      = 'Promise';
   CONSTRUCTOR_ITERATOR     = 'Iterator';
