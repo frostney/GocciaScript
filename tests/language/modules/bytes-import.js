@@ -66,4 +66,15 @@ describe("bytes module import", () => {
       import.source("./helpers/asset.bin", { with: { type: "bytes" } }),
     ).rejects.toThrow(SyntaxError);
   });
+
+  test("rejects a named import of an export the bytes module lacks", async () => {
+    let error;
+    try {
+      await import("../../../fixtures/modules/missing-named-import-bytes.js");
+    } catch (e) {
+      error = e;
+    }
+    expect(error instanceof SyntaxError).toBe(true);
+    expect(String(error && error.message)).toContain("has no export named");
+  });
 });
