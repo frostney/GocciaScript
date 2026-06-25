@@ -37,6 +37,7 @@ uses
   Goccia.AST.Node,
   Goccia.AST.Statements,
   Goccia.Constants.ConstructorNames,
+  Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
   Goccia.Error,
   Goccia.Evaluator,
@@ -46,6 +47,8 @@ uses
   Goccia.Executor.Bytecode,
   Goccia.Executor.Interpreter,
   Goccia.GarbageCollector,
+  Goccia.Modules,
+  Goccia.Modules.Loader,
   Goccia.ObjectModel,
   Goccia.Scope,
   Goccia.SourcePipeline,
@@ -57,7 +60,9 @@ uses
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
+  Goccia.Values.PromiseValue,
   Goccia.Values.SymbolValue,
+  Goccia.Values.ToPrimitive,
   Goccia.VM.Exception;
 
 type
@@ -96,6 +101,8 @@ type
     function ConstructShadowRealm(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
     function Evaluate(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function ImportValue(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const AEngine: TGocciaEngine);
@@ -176,6 +183,13 @@ begin
   FEngine.Preprocessors := AParentEngine.Preprocessors;
   FEngine.RefreshGlobalThis;
   EnableShadowRealm(FEngine);
+  // Let ShadowRealm.prototype.importValue resolve and read modules the same way
+  // the realm that created this one does. The imported module still evaluates
+  // in this child realm against its own intrinsics; only host file access is
+  // shared. Engine.Compatibility already propagates to the loader; preprocessors
+  // do not, so mirror them here too.
+  FEngine.ModuleLoader.SetContentProvider(AParentEngine.ContentProvider, False);
+  FEngine.ModuleLoader.Preprocessors := AParentEngine.Preprocessors;
   FEngine.SuspendRealmExecutionContext;
 end;
 
@@ -242,6 +256,9 @@ begin
     try
       // ShadowRealm.prototype.evaluate (TC39 ShadowRealm §3.4.1): length 1.
       Members.AddNamedMethod('evaluate', Evaluate, 1, gmkPrototypeMethod,
+        [gmfNoFunctionPrototype]);
+      // ShadowRealm.prototype.importValue (TC39 ShadowRealm §3.4.2): length 2.
+      Members.AddNamedMethod('importValue', ImportValue, 2, gmkPrototypeMethod,
         [gmfNoFunctionPrototype]);
       // ShadowRealm.prototype[@@toStringTag] (TC39 ShadowRealm §3.4.3):
       // { [[Writable]]: false, [[Enumerable]]: false, [[Configurable]]: true }.
@@ -433,6 +450,153 @@ begin
 
     // 3.1.3 step 16: GetWrappedValue(callerRealm, result).
     Result := WrapIncoming(RawResult, ChildEngine);
+  finally
+    OwnerScope.Free;
+  end;
+end;
+
+// TC39 ShadowRealm §3.4.2 ShadowRealm.prototype.importValue ( specifier, exportName )
+// (delegates to RealmImportValue, sec-realmimportvalue)
+function TGocciaShadowRealmHost.ImportValue(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Instance: TGocciaShadowRealmValue;
+  SpecifierArg, ExportNameArg, SpecifierPrimitive: TGocciaValue;
+  Specifier, ExportName: string;
+  ChildEngine: TGocciaEngine;
+  ChildScope, OwnerScope: TGocciaExecutionContextScope;
+  Module: TGocciaModule;
+  ExportValue, WrappedValue, Settled: TGocciaValue;
+  Promise: TGocciaPromiseValue;
+  Threw, ExportFound, WrapThrew, HaveWrapped, SettleReject: Boolean;
+  GC: TGarbageCollector;
+begin
+  // As in evaluate(), importValue runs with the caller realm current. That
+  // caller realm is this method's realm (FEngine) — not the ambient realm of
+  // whoever invoked importValue — so the synchronous TypeErrors below, the
+  // returned promise, and any rejection reason all derive from FEngine's
+  // intrinsics.
+  GC := TGarbageCollector.Instance;
+  OwnerScope := FEngine.ActivateRealmExecutionContext;
+  try
+    // §3.4.2 step 2: ValidateShadowRealmObject(O).
+    if not (AThisValue is TGocciaShadowRealmValue) then
+      ThrowTypeError(
+        'ShadowRealm.prototype.importValue called on incompatible receiver');
+    Instance := TGocciaShadowRealmValue(AThisValue);
+
+    // §3.4.2 step 3: specifierString = ? ToString(specifier). A throwing
+    // coercion (valueOf/toString/@@toPrimitive, or a Symbol) propagates
+    // synchronously in the caller realm — it is not turned into a rejection.
+    if AArgs.Length = 0 then
+      SpecifierArg := TGocciaUndefinedLiteralValue.UndefinedValue
+    else
+      SpecifierArg := AArgs.GetElement(0);
+    SpecifierPrimitive := ToPrimitive(SpecifierArg, tphString);
+    if SpecifierPrimitive is TGocciaSymbolValue then
+      ThrowTypeError('Cannot convert a Symbol value to a string');
+    Specifier := SpecifierPrimitive.ToStringLiteral.Value;
+
+    // §3.4.2 step 4: if exportName is not a String, throw a TypeError. exportName
+    // is type-checked, never coerced — ToString is not called on it.
+    if AArgs.Length < 2 then
+      ExportNameArg := TGocciaUndefinedLiteralValue.UndefinedValue
+    else
+      ExportNameArg := AArgs.GetElement(1);
+    if not (ExportNameArg is TGocciaStringLiteralValue) then
+      ThrowTypeError(
+        'ShadowRealm.prototype.importValue expects a string export name');
+    ExportName := TGocciaStringLiteralValue(ExportNameArg).Value;
+
+    ChildEngine := Instance.ChildRealm.Engine;
+    Module := nil;
+    ExportValue := nil;
+    WrappedValue := nil;
+    Threw := False;
+    ExportFound := False;
+    WrapThrew := False;
+    HaveWrapped := False;
+
+    // RealmImportValue: import the module into the child realm and read the
+    // requested export, all while the child realm is current so the module
+    // evaluates against the child realm's intrinsics. GocciaScript module
+    // loading is synchronous, so the dynamic import is performed inline and the
+    // caller-realm promise is settled before returning; the .then reactions the
+    // caller attaches still run as microtasks.
+    ChildScope := ChildEngine.ActivateRealmExecutionContext;
+    try
+      try
+        Module := ChildEngine.ModuleLoader.LoadModule(Specifier,
+          FEngine.SourcePath);
+        if Assigned(Module) then
+          ExportFound := Module.TryGetExportValue(ExportName, ExportValue);
+      except
+        // A failed import — resolution, parse, link, or an evaluation throw —
+        // rejects with a caller-realm TypeError (RealmImportValue's rejection
+        // handler is callerRealm.[[Intrinsics]].[[%ThrowTypeError%]]).
+        on E: TGocciaThrowValue do Threw := True;
+        on E: EGocciaBytecodeThrow do Threw := True;
+        on E: TGocciaError do Threw := True;
+      end;
+
+      // ExportGetter final step: value = GetWrappedValue(callerRealm, binding).
+      // A non-callable object export makes GetWrappedValue throw, which the
+      // promise turns into a rejection.
+      if (not Threw) and ExportFound then
+      begin
+        try
+          WrappedValue := WrapIncoming(ExportValue, ChildEngine);
+          HaveWrapped := True;
+        except
+          on E: TGocciaThrowValue do WrapThrew := True;
+          on E: EGocciaBytecodeThrow do WrapThrew := True;
+          on E: TGocciaError do WrapThrew := True;
+        end;
+      end;
+    finally
+      ChildScope.Free;
+    end;
+
+    // Settle in the caller realm (OwnerScope is active again): import failure, a
+    // missing export, or a non-wrappable export all reject with a caller-realm
+    // TypeError; success resolves with the wrapped value.
+    if HaveWrapped then
+    begin
+      SettleReject := False;
+      Settled := WrappedValue;
+    end
+    else
+    begin
+      SettleReject := True;
+      if Threw then
+        Settled := Goccia.Values.ErrorHelper.CreateErrorObject(TYPE_ERROR_NAME,
+          'ShadowRealm could not import "' + Specifier + '"')
+      else if WrapThrew then
+        Settled := Goccia.Values.ErrorHelper.CreateErrorObject(TYPE_ERROR_NAME,
+          'ShadowRealm cannot pass the imported value across the realm boundary')
+      else
+        Settled := Goccia.Values.ErrorHelper.CreateErrorObject(TYPE_ERROR_NAME,
+          'ShadowRealm module "' + Specifier + '" has no export named "' +
+          ExportName + '"');
+    end;
+
+    // Root the settle value across the promise allocation so a GC triggered by
+    // creating the promise cannot collect it.
+    if Assigned(GC) then
+      GC.AddTempRoot(Settled);
+    try
+      Promise := TGocciaPromiseValue.Create;
+      if SettleReject then
+        Promise.Reject(Settled)
+      else
+        Promise.Resolve(Settled);
+    finally
+      if Assigned(GC) then
+        GC.RemoveTempRoot(Settled);
+    end;
+
+    Result := Promise;
   finally
     OwnerScope.Free;
   end;
