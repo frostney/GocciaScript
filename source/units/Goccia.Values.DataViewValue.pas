@@ -482,6 +482,15 @@ var
   NumberValue: TGocciaNumberLiteralValue;
   BigIntRaw: Int64;
 begin
+  // Immutable ArrayBuffers proposal, SetViewValue step 3: reject writes to an
+  // immutable buffer before ToIndex, the value coercion, IsViewOutOfBounds, and
+  // the RangeError bounds check. So an out-of-range write to an immutable buffer
+  // still throws TypeError (immutable wins over RangeError) and the value's
+  // valueOf is not observed. (TypedArray's [[Set]] coerces first, by contrast.)
+  if (FBufferValue is TGocciaArrayBufferValue) and
+     TGocciaArrayBufferValue(FBufferValue).Immutable then
+    ThrowTypeError('DataView cannot write to an immutable ArrayBuffer');
+
   Index := DataViewToIndex(ARequestIndex);
   NumberValue := nil;
   BigIntRaw := 0;
@@ -494,12 +503,6 @@ begin
 
   if IsViewOutOfBounds then
     ThrowTypeError(SErrorCannotUseDetachedDataView, SSuggestArrayBufferDetached);
-
-  // Immutable ArrayBuffers proposal: SetViewValue throws when the viewed buffer
-  // is immutable (the observable numeric coercion above still runs first).
-  if (FBufferValue is TGocciaArrayBufferValue) and
-     TGocciaArrayBufferValue(FBufferValue).Immutable then
-    ThrowTypeError('DataView cannot write to an immutable ArrayBuffer');
 
   ViewSize := GetViewByteLength;
   ElementSize := BinaryBytesPerElement(AKind);

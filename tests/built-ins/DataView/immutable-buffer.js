@@ -35,4 +35,20 @@ describe("DataView over an immutable ArrayBuffer", () => {
     expect(() => dv.setUint32(0, 0xffffffff)).toThrow(TypeError);
     expect(dv.getUint32(0)).toBe(0x01020304);
   });
+
+  test("immutability is rejected before the out-of-range bounds check", () => {
+    expect(() => immutableView().setUint8(9999, 0)).toThrow(TypeError);
+  });
+
+  test("immutability is rejected before the value is coerced", () => {
+    let coerced = false;
+    const value = {
+      valueOf() {
+        coerced = true;
+        return 9;
+      },
+    };
+    expect(() => immutableView().setUint32(0, value)).toThrow(TypeError);
+    expect(coerced).toBe(false);
+  });
 });
