@@ -33,6 +33,8 @@ uses
   Generics.Collections,
   Math,
 
+  OrderedStringMap,
+
   Goccia.Arguments.Collection,
   Goccia.AST.Node,
   Goccia.AST.Statements,
@@ -164,6 +166,8 @@ end;
 
 constructor TGocciaShadowRealmChildRealm.Create(
   const AParentEngine: TGocciaEngine);
+var
+  AliasPair: TStringStringMap.TKeyValuePair;
 begin
   inherited Create;
   FSource := TStringList.Create;
@@ -184,12 +188,17 @@ begin
   FEngine.RefreshGlobalThis;
   EnableShadowRealm(FEngine);
   // Let ShadowRealm.prototype.importValue resolve and read modules the same way
-  // the realm that created this one does. The imported module still evaluates
-  // in this child realm against its own intrinsics; only host file access is
-  // shared. Engine.Compatibility already propagates to the loader; preprocessors
-  // do not, so mirror them here too.
+  // the realm that created this one does: share the host content provider, and
+  // carry over the parent's preprocessors and module aliases (import map /
+  // --alias) so bare and aliased specifiers resolve identically. Relative
+  // specifiers already resolve against the parent's entry path, and the module
+  // still evaluates in this child realm against its own intrinsics.
+  // (Engine.Compatibility already propagates to the loader; preprocessors and
+  // resolver aliases do not, so mirror them here.)
   FEngine.ModuleLoader.SetContentProvider(AParentEngine.ContentProvider, False);
   FEngine.ModuleLoader.Preprocessors := AParentEngine.Preprocessors;
+  for AliasPair in AParentEngine.ModuleLoader.Resolver.Aliases do
+    FEngine.ModuleLoader.Resolver.AddAlias(AliasPair.Key, AliasPair.Value);
   FEngine.SuspendRealmExecutionContext;
 end;
 
