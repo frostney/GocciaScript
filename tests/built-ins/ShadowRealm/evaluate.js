@@ -176,9 +176,11 @@ describe("ShadowRealm evaluate conformance", () => {
     expect(Symbol.keyFor(shadowSym)).toBe(undefined);
   });
 
-  test("throws a SyntaxError when the body uses a strict reserved word", () => {
+  test("throws a SyntaxError for a strict-mode reserved word in the body", () => {
     const realm = new ShadowRealm();
-    expect(() => realm.evaluate("var public = 1;")).toThrow(SyntaxError);
+    expect(() => realm.evaluate('"use strict"; var public = 1;')).toThrow(
+      SyntaxError,
+    );
   });
 
   test("wraps a runtime error thrown inside the realm as a caller-realm TypeError", () => {
