@@ -249,18 +249,14 @@ begin
 
     if BuildMode = bmProd then
     begin
-      // -O3 with FASTMATH explicitly disabled. FPC's -O4 turns on the
-      // FASTMATH optimization, which reassociates and contracts floating-point
-      // operations and assumes no NaN/Inf — violating the strict IEEE-754
-      // double semantics that JavaScript mandates. That produced wrong results
-      // in the edge-case Temporal ZonedDateTime hoursInDay paths (sub-hour and
-      // discontiguous DST) in optimized builds only: correct at -O- and -O3,
-      // wrong as soon as FASTMATH is on (isolated via `-O3 -OoFASTMATH`, which
-      // reproduces, vs `-O3 -OoORDERFIELDS`, which does not). -O3 already
-      // excludes FASTMATH; -OoNOFASTMATH states the requirement explicitly and
-      // keeps it disabled even if the optimization level is raised later.
-      Args.Add('-O3');
-      Args.Add('-OoNOFASTMATH');
+      // -O4 for aggressive optimization. The one -O4 optimization that is
+      // unsafe for this engine, FASTMATH, is force-disabled at the source level
+      // in Shared.inc ({$OPTIMIZATION NOFASTMATH}) because it violates the
+      // IEEE-754 double semantics JavaScript requires (it miscompiled the
+      // edge-case Temporal hoursInDay DST math — PR #797). Keeping the guard in
+      // source rather than here makes it a compiler-enforced invariant that
+      // travels with the code regardless of how fpc is invoked.
+      Args.Add('-O4');
       Args.Add('-dPRODUCTION');
       Args.Add('-Xs');
       Args.Add('-CX');
