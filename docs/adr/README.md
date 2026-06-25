@@ -83,4 +83,5 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0071 — Reject symlinks in sandbox seed imports](0071-reject-symlinks-in-sandbox-seed-imports.md)
 - [0072 — Import Bytes with immutable backing](0072-import-bytes-with-immutable-backing.md)
 - [0073 — Opt-in ShadowRealm](0073-opt-in-shadowrealm.md)
+- [0074 — Deferred bytecode call-stack frames](0074-deferred-bytecode-call-stack-frames.md)
 - [0075 — ShadowRealm full test262 conformance](0075-shadowrealm-conformance.md)
