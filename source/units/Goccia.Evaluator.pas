@@ -147,6 +147,16 @@ procedure ValidateEvalEarlyErrors(const AProgram: TGocciaProgram;
   const AStrictEval, AAllowNewTarget, AAllowSuperProperty,
   AAllowSuperCall: Boolean);
 
+{ Complements ValidateEvalEarlyErrors with the eval Script's top-level
+  declaration early errors that EvalDeclarationInstantiation would otherwise
+  raise mid-evaluation: a duplicate lexically-declared name, or a
+  lexically-declared name that is also var-declared (ECMA-262 §16.1.1). Returns
+  the SyntaxError message for the first violation, or '' if there is none.
+  Exposed so callers that must distinguish these early errors (SyntaxError) from
+  runtime abrupt completions (TypeError) can validate up front. }
+function CheckEvalScriptLexicalEarlyError(const AProgram: TGocciaProgram;
+  const AStrictEval, ACompatibilityNonStrict: Boolean): string;
+
 implementation
 
 uses
@@ -1163,13 +1173,21 @@ begin
   end;
 end;
 
-procedure CollectTopLevelEvalLexicalNames(const ANodes: TObjectList<TGocciaStatement>;
-  const ANames: TStringList);
+// Appends the top-level lexically-declared names (let / const / class / enum,
+// including their exported forms) of ANodes to ANames in source order WITHOUT
+// de-duplicating, so callers can detect duplicate lexical declarations. Empty
+// names are skipped.
+procedure AppendTopLevelEvalLexicalNames(
+  const ANodes: TObjectList<TGocciaStatement>; const ANames: TStrings);
 var
   VarDecl: TGocciaVariableDeclaration;
   DestructDecl: TGocciaDestructuringDeclaration;
-  Names: TStringList;
   I, J: Integer;
+  procedure AddRaw(const AName: string);
+  begin
+    if AName <> '' then
+      ANames.Add(AName);
+  end;
 begin
   for I := 0 to ANodes.Count - 1 do
   begin
@@ -1179,7 +1197,7 @@ begin
       if VarDecl.IsVar then
         Continue;
       for J := 0 to High(VarDecl.Variables) do
-        AddUniqueEvalName(ANames, VarDecl.Variables[J].Name);
+        AddRaw(VarDecl.Variables[J].Name);
     end
     else if ANodes[I] is TGocciaExportVariableDeclaration then
     begin
@@ -1187,31 +1205,80 @@ begin
       if VarDecl.IsVar then
         Continue;
       for J := 0 to High(VarDecl.Variables) do
-        AddUniqueEvalName(ANames, VarDecl.Variables[J].Name);
+        AddRaw(VarDecl.Variables[J].Name);
     end
     else if ANodes[I] is TGocciaDestructuringDeclaration then
     begin
       DestructDecl := TGocciaDestructuringDeclaration(ANodes[I]);
       if DestructDecl.IsVar then
         Continue;
-      Names := TStringList.Create;
-      try
-        Names.CaseSensitive := True;
-        CollectPatternBindingNames(DestructDecl.Pattern, Names, True);
-        for J := 0 to Names.Count - 1 do
-          AddUniqueEvalName(ANames, Names[J]);
-      finally
-        Names.Free;
-      end;
+      CollectPatternBindingNames(DestructDecl.Pattern, ANames, False);
     end
     else if ANodes[I] is TGocciaClassDeclaration then
-      AddUniqueEvalName(ANames,
-        TGocciaClassDeclaration(ANodes[I]).ClassDefinition.Name)
+      AddRaw(TGocciaClassDeclaration(ANodes[I]).ClassDefinition.Name)
     else if ANodes[I] is TGocciaEnumDeclaration then
-      AddUniqueEvalName(ANames, TGocciaEnumDeclaration(ANodes[I]).Name)
+      AddRaw(TGocciaEnumDeclaration(ANodes[I]).Name)
     else if ANodes[I] is TGocciaExportEnumDeclaration then
-      AddUniqueEvalName(ANames,
-        TGocciaExportEnumDeclaration(ANodes[I]).Declaration.Name);
+      AddRaw(TGocciaExportEnumDeclaration(ANodes[I]).Declaration.Name);
+  end;
+end;
+
+procedure CollectTopLevelEvalLexicalNames(const ANodes: TObjectList<TGocciaStatement>;
+  const ANames: TStringList);
+var
+  Raw: TStringList;
+  I: Integer;
+begin
+  Raw := TStringList.Create;
+  try
+    Raw.CaseSensitive := True;
+    AppendTopLevelEvalLexicalNames(ANodes, Raw);
+    for I := 0 to Raw.Count - 1 do
+      AddUniqueEvalName(ANames, Raw[I]);
+  finally
+    Raw.Free;
+  end;
+end;
+
+// ECMA-262 §16.1.1 Scripts Static Semantics: Early Errors (also reached from
+// PerformEval for eval code). See the interface declaration for the contract.
+function CheckEvalScriptLexicalEarlyError(const AProgram: TGocciaProgram;
+  const AStrictEval, ACompatibilityNonStrict: Boolean): string;
+var
+  LexRaw, LexUnique, VarNames: TStringList;
+  I: Integer;
+begin
+  Result := '';
+  LexRaw := TStringList.Create;
+  LexUnique := TStringList.Create;
+  VarNames := TStringList.Create;
+  try
+    LexRaw.CaseSensitive := True;
+    LexUnique.CaseSensitive := True;
+    VarNames.CaseSensitive := True;
+
+    // It is a Syntax Error if the LexicallyDeclaredNames of ScriptBody contains
+    // any duplicate entries.
+    AppendTopLevelEvalLexicalNames(AProgram.Body, LexRaw);
+    for I := 0 to LexRaw.Count - 1 do
+      if LexUnique.IndexOf(LexRaw[I]) >= 0 then
+        Exit(Format(SErrorIdentifierAlreadyDeclared, [LexRaw[I]]))
+      else
+        LexUnique.Add(LexRaw[I]);
+
+    // It is a Syntax Error if any element of the LexicallyDeclaredNames of
+    // ScriptBody also occurs in the VarDeclaredNames of ScriptBody. The
+    // collection mode mirrors EvalDeclarationInstantiation so the two agree on
+    // which names are lexically vs var-declared.
+    CollectVarBindingNamesFromStatements(AProgram.Body, VarNames,
+      VarBindingNameCollectionMode(not AStrictEval, ACompatibilityNonStrict));
+    for I := 0 to LexUnique.Count - 1 do
+      if VarNames.IndexOf(LexUnique[I]) >= 0 then
+        Exit(Format(SErrorIdentifierAlreadyDeclared, [LexUnique[I]]));
+  finally
+    VarNames.Free;
+    LexUnique.Free;
+    LexRaw.Free;
   end;
 end;
 

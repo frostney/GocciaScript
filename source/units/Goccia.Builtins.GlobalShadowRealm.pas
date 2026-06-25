@@ -575,14 +575,26 @@ begin
                   VarScope := EvalScope
                 else
                   VarScope := ChildEngine.Interpreter.GlobalScope;
-                // EvalDeclarationInstantiation: var/function bind in the realm's
-                // global var environment (so they persist across evaluate calls
-                // and surface on globalThis); let/const bind in this fresh
-                // per-call lexical scope, so re-evaluating top-level lexical
-                // declarations does not clash.
-                RawResult := EvaluateEvalProgram(ParseResult.ProgramNode,
-                  EvalContext, VarScope, EvalScope, StrictEval, False, nil,
-                  False, False, False);
+                // ValidateEvalEarlyErrors (above) does not cover
+                // EvalDeclarationInstantiation conflicts. A duplicate top-level
+                // lexical name, or a lexical name that is also var-declared, is
+                // likewise a static Script early error (caller-realm SyntaxError,
+                // §3.1.3 step 2), not the runtime TypeError that
+                // EvalDeclarationInstantiation would otherwise produce below.
+                EarlyErrorMessage := CheckEvalScriptLexicalEarlyError(
+                  ParseResult.ProgramNode, StrictEval,
+                  EvalContext.CompatibilityNonStrictMode);
+                if EarlyErrorMessage <> '' then
+                  EarlyErrorThrew := True
+                else
+                  // EvalDeclarationInstantiation: var/function bind in the
+                  // realm's global var environment (so they persist across
+                  // evaluate calls and surface on globalThis); let/const bind in
+                  // this fresh per-call lexical scope, so re-evaluating
+                  // top-level lexical declarations does not clash.
+                  RawResult := EvaluateEvalProgram(ParseResult.ProgramNode,
+                    EvalContext, VarScope, EvalScope, StrictEval, False, nil,
+                    False, False, False);
               finally
                 if Assigned(TGarbageCollector.Instance) then
                   TGarbageCollector.Instance.RemoveTempRoot(EvalScope);
