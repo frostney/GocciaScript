@@ -1318,6 +1318,37 @@ console.log("Loader: --global option...");
   if (json.files?.[0]?.result !== 30) throw new Error(`--global x+y should be 30, got ${json.files?.[0]?.result}`);
 }
 
+console.log("Loader: ShadowRealm.importValue inherits the host module aliases...");
+{
+  const tmp = makeTmp();
+  try {
+    writeFileSync(join(tmp, "real.js"), "export const v = 99;\n");
+    const entry = join(tmp, "entry.js");
+    writeFileSync(
+      entry,
+      [
+        "const realm = new ShadowRealm();",
+        'realm.importValue("aliased", "v").then(',
+        '  (x) => console.log("child-resolved: " + x),',
+        '  (e) => console.log("child-rejected: " + (e && e.constructor && e.constructor.name)),',
+        ");",
+        "",
+      ].join("\n"),
+    );
+    const proc = Bun.spawnSync(
+      [LOADER, entry, "--unsafe-shadowrealm", "--alias", `aliased=${join(tmp, "real.js")}`],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    if (proc.exitCode !== 0)
+      throw new Error(`Loader ShadowRealm alias import exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    const out = proc.stdout.toString();
+    if (!out.includes("child-resolved: 99"))
+      throw new Error(`ShadowRealm.importValue should resolve a host alias in the child realm, got: ${out}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
 console.log("Loader: --globals file...");
 {
   const tmp = makeTmp();
