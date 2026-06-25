@@ -670,7 +670,7 @@ procedure EmitImportBindingAccess(const ACtx: TGocciaCompilationContext;
   const APhase: TGocciaImportCallPhase; const AModulePath, AExportName: string;
   const ADest: UInt8);
 var
-  PathIdx: UInt16;
+  PathIdx, NameIdx: UInt16;
 begin
   PathIdx := ACtx.Template.AddConstantString(AModulePath);
   if APhase = icpSource then
@@ -680,8 +680,16 @@ begin
   else
     EmitInstruction(ACtx, EncodeABx(OP_IMPORT, ADest, PathIdx));
 
+  // ES2026 §16.2.1.7.3.1: a named import of a missing or ambiguous export is a
+  // SyntaxError. OP_GET_IMPORT_BINDING loads the binding from the module
+  // namespace already in ADest and rejects names the module does not export,
+  // so the bytecode entry path (which bypasses link-time validation) still
+  // matches the interpreter (ADR 0014).
   if (APhase = icpEvaluation) and (AExportName <> '') then
-    EmitLoadPropertyByName(ACtx, ADest, ADest, AExportName);
+  begin
+    NameIdx := ACtx.Template.AddConstantString(AExportName);
+    EmitInstruction(ACtx, EncodeABx(OP_GET_IMPORT_BINDING, ADest, NameIdx));
+  end;
 end;
 
 procedure EmitExportBindingUpdates(const ACtx: TGocciaCompilationContext;

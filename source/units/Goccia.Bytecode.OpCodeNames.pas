@@ -36,6 +36,7 @@ begin
     OP_CLOSURE:                        Result := 'OP_CLOSURE';
     OP_PUSH_HANDLER:                   Result := 'OP_PUSH_HANDLER';
     OP_PUSH_FINALLY_HANDLER:           Result := 'OP_PUSH_FINALLY_HANDLER';
+    OP_GET_IMPORT_BINDING:             Result := 'OP_GET_IMPORT_BINDING';
     OP_POP_HANDLER:                    Result := 'OP_POP_HANDLER';
     OP_THROW:                          Result := 'OP_THROW';
     OP_RETURN:                         Result := 'OP_RETURN';
