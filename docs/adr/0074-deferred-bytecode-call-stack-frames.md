@@ -1,0 +1,9 @@
+# Deferred bytecode call-stack frames
+
+**Date:** 2026-06-25
+**Area:** `bytecode`
+**Pull Request:** [#802](https://github.com/frostney/GocciaScript/pull/802)
+
+Removed the per-call stack-trace string cost from the bytecode VM call path (#798). `SetupNewFrame` previously pushed `(ATemplate.Name, ExecutionSourcePath, 0, 0)` onto the shared `TGocciaCallStack` on every call, copying two reference-counted strings that are only ever read when an `Error` materialises `.stack`. It now pushes a *deferred* frame carrying the function-template pointer plus a module-path fallback (used only when the template has no own source file); a class-level resolver registered by the VM reproduces the name and source path at capture time, so an ordinary call performs no stack-trace string work. The shared call stack stays decoupled from the bytecode units: the template is held as an opaque `Pointer` and resolved through `TGocciaTemplateTraceResolver`, and the interpreter and native callers keep using the string-based push unchanged.
+
+Fully removing the per-call push and reconstructing traces from the VM frame stack (`FFrameStack` + `FCurrentClosure` + saved-state roots) was considered and rejected: `CaptureStackTrace`'s `ASkipTop` is calibrated to native frames (e.g. the `Error` constructor frame) that are absent from `FFrameStack`, and constructor frames are pushed by `InvokeConstructor`/`Construct` rather than `SetupNewFrame`, so a frame-stack reconstruction would drop or mis-skip frames. Keeping the push (cheap, pointer-only) preserves frame ordering, native/constructor interleaving, and `ASkipTop` exactly, so `Error.stack` output stays byte-identical to the previous behaviour. This is a deliberate trade-off of a one-time capture-side resolve for zero per-call cost. [bytecode-vm.md](../bytecode-vm.md#performance-direction). [errors.md](../errors.md).
