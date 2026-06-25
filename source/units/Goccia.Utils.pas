@@ -275,6 +275,10 @@ begin
       Result := TGocciaFunctionBase(ACallable).Call(AArgs, AThisValue)
     else if ACallable is TGocciaClassValue then
       Result := TGocciaClassValue(ACallable).Call(AArgs, AThisValue)
+    else if ACallable.IsCallable then
+      // Callable but not a plain function/class — e.g. a callable Proxy.
+      // DispatchCall routes it through the registered proxy apply hook.
+      Result := DispatchCall(ACallable, AArgs, AThisValue)
     else
       ThrowTypeError(Format('%s is not a function', [ACallable.TypeName]));
   finally

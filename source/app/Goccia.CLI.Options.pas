@@ -31,6 +31,7 @@ type
     FMaxInstructions: TInt64Option;
     FUnsafeFFI: TFlagOption;
     FUnsafeFunctionConstructor: TFlagOption;
+    FUnsafeShadowRealm: TFlagOption;
     FStackSize: TIntegerOption;
     FStrictTypes: TFlagOption;
     FAllowedHosts: TRepeatableOption;
@@ -52,6 +53,7 @@ type
     property MaxInstructions: TInt64Option read FMaxInstructions;
     property UnsafeFFI: TFlagOption read FUnsafeFFI;
     property UnsafeFunctionConstructor: TFlagOption read FUnsafeFunctionConstructor;
+    property UnsafeShadowRealm: TFlagOption read FUnsafeShadowRealm;
     property StackSize: TIntegerOption read FStackSize;
     property StrictTypes: TFlagOption read FStrictTypes;
     property AllowedHosts: TRepeatableOption read FAllowedHosts;
@@ -105,7 +107,7 @@ function TryApplyCompatibilityFlagArg(const AArg: string;
 implementation
 
 const
-  ENGINE_FIXED_OPTION_COUNT = 13;
+  ENGINE_FIXED_OPTION_COUNT = 14;
 
   SOURCE_COMPATIBILITY_FLAGS: array[TGocciaCompatibility]
     of TGocciaCompatibilityFlagDescriptor = (
@@ -204,6 +206,8 @@ begin
     'Enable the FFI global (foreign function interface)', 'Runtime');
   FUnsafeFunctionConstructor := TFlagOption.Create('unsafe-function-constructor',
     'Enable the Function constructor (dynamic code generation)', 'Engine');
+  FUnsafeShadowRealm := TFlagOption.Create('unsafe-shadowrealm',
+    'Enable the ShadowRealm constructor (dynamic source evaluation)', 'Engine');
   FStackSize := TIntegerOption.Create('stack-size',
     'Maximum call stack depth (0 = no limit)', 'Engine');
   FStrictTypes := TFlagOption.Create('strict-types',
@@ -230,6 +234,7 @@ begin
   FMaxInstructions.Free;
   FUnsafeFFI.Free;
   FUnsafeFunctionConstructor.Free;
+  FUnsafeShadowRealm.Free;
   FStackSize.Free;
   FStrictTypes.Free;
   FAllowedHosts.Free;
@@ -266,6 +271,8 @@ begin
   Result[Index] := FUnsafeFFI;
   Inc(Index);
   Result[Index] := FUnsafeFunctionConstructor;
+  Inc(Index);
+  Result[Index] := FUnsafeShadowRealm;
   Inc(Index);
   Result[Index] := FStackSize;
   Inc(Index);

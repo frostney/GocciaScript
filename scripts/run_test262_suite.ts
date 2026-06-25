@@ -640,6 +640,9 @@ function test262FeatureFlags(features: readonly string[]): string[] {
   if (features.includes("source-phase-imports-module-source")) {
     flags.push("--experimental-js-module-source");
   }
+  if (features.includes("ShadowRealm") || features.includes("realms-tests")) {
+    flags.push("--unsafe-shadowrealm");
+  }
   return flags;
 }
 
