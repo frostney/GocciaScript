@@ -112,6 +112,8 @@ type
       const ACacheKey: string = '');
     procedure EndEvaluatingModulePath(const APath: string);
     function IsEvaluatingModulePath(const APath: string): Boolean;
+    procedure ValidateStaticNamedImports(const AProgram: TGocciaProgram;
+      const AModule: TGocciaModule);
     function LoadModule(const AModulePath,
       AImportingFilePath: string): TGocciaModule;
     function LoadModuleSourceValue(const AModulePath,
@@ -645,6 +647,50 @@ begin
     FLoadingModules.ContainsKey(ExpandFileName(APath)));
 end;
 
+// ES2026 §16.2.1.7.3.1 InitializeEnvironment: while linking a module, a named
+// import whose ResolveExport result is null or ambiguous is a SyntaxError. The
+// tree-walking interpreter also enforces this lazily as it evaluates each
+// import declaration (Goccia.AST.Statements), but the bytecode compiler resolves
+// import bindings at their use sites, so missing names must be rejected here at
+// link time to keep both engines in lockstep (ADR 0014). Source modules still
+// mid-evaluation in a cycle are skipped via IsEvaluatingModulePath, matching the
+// re-export validation in RegisterStaticModuleExports.
+procedure TGocciaModuleLoader.ValidateStaticNamedImports(
+  const AProgram: TGocciaProgram; const AModule: TGocciaModule);
+var
+  Stmt: TGocciaStatement;
+  ImportDecl: TGocciaImportDeclaration;
+  ImportPair: TStringStringMap.TKeyValuePair;
+  SourceModule: TGocciaModule;
+  I: Integer;
+begin
+  if (not Assigned(AProgram)) or (not Assigned(AModule)) then
+    Exit;
+
+  for I := 0 to AProgram.Body.Count - 1 do
+  begin
+    Stmt := AProgram.Body[I];
+    if not (Stmt is TGocciaImportDeclaration) then
+      Continue;
+
+    ImportDecl := TGocciaImportDeclaration(Stmt);
+    // Only evaluation-phase imports bind exported names; source- and defer-phase
+    // imports bind the module source or namespace object, which always resolve.
+    if (ImportDecl.Phase <> icpEvaluation) or (ImportDecl.Imports.Count = 0) then
+      Continue;
+
+    SourceModule := LoadModule(EncodeImportSpecifierAttribute(
+      ImportDecl.ModulePath, ImportDecl.AttributeType), AModule.Path);
+    for ImportPair in ImportDecl.Imports do
+      if (not SourceModule.CanResolveExport(ImportPair.Value)) and
+         (not IsEvaluatingModulePath(SourceModule.Path)) then
+        raise TGocciaSyntaxError.Create(
+          Format('Module "%s" has no export named "%s"',
+            [ImportDecl.ModulePath, ImportPair.Value]),
+          ImportDecl.Line, ImportDecl.Column, AModule.Path, nil);
+  end;
+end;
+
 procedure TGocciaModuleLoader.RegisterModule(const AResolvedPath: string;
   const AModule: TGocciaModule);
 var
@@ -1140,6 +1186,7 @@ var
     end;
 
     ValidateIndirectReExports;
+    ValidateStaticNamedImports(ProgramNode, Module);
     Module.InvalidateNamespaceObject;
   end;
 begin

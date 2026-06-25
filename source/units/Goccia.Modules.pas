@@ -140,6 +140,7 @@ type
     function ToStringTag: string; override;
     function TryDefineProperty(const AName: string;
       const ADescriptor: TGocciaPropertyDescriptor): Boolean; override;
+    property Module: TGocciaModule read FModule;
   end;
 
   TGocciaModuleSourceValue = class(TGocciaObjectValue)

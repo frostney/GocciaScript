@@ -1594,6 +1594,8 @@ begin
   end;
 
   ValidateIndirectReExports;
+  if Assigned(AModuleLoader) then
+    AModuleLoader.ValidateStaticNamedImports(AProgram, AModule);
 end;
 
 procedure EvaluateEntryRequestedModulesInSourceOrder(
