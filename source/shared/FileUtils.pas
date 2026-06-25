@@ -5,6 +5,7 @@ unit FileUtils;
 interface
 
 uses
+  {$IFDEF UNIX}BaseUnix,{$ENDIF}
   Classes,
   SysUtils;
 
@@ -13,6 +14,10 @@ function FindAllFiles(const ADirectory: string; const AFileExtensions: array of 
 function ExpandUTF8FileName(const APath: string): string;
 function UTF8DirectoryExists(const APath: string): Boolean;
 function UTF8FileExists(const APath: string): Boolean;
+
+{ True when APath itself is a symbolic link (UNIX) or a reparse
+  point / junction (Windows). Does not follow the link. }
+function HostPathIsSymlink(const APath: string): Boolean;
 
 { Read an entire file as raw bytes and tag the result as UTF-8.
   No BOM stripping or newline normalization is performed. }
@@ -57,6 +62,22 @@ function UTF8FileExists(const APath: string): Boolean;
 begin
   Result := FileExists(UTF8PathToUnicodeString(APath));
 end;
+
+function HostPathIsSymlink(const APath: string): Boolean;
+{$IFDEF UNIX}
+var
+  Info: Stat;
+begin
+  Result := (fpLStat(APath, Info) = 0) and fpS_ISLNK(Info.st_mode);
+end;
+{$ELSE}
+var
+  Attr: LongInt;
+begin
+  Attr := FileGetAttr(APath);
+  Result := (Attr <> -1) and ((Attr and faSymLink) <> 0);
+end;
+{$ENDIF}
 
 function MatchesExtension(const AName: string; const AExtensions: array of string): Boolean;
 var

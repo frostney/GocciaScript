@@ -38,6 +38,7 @@ uses
   Goccia.Scope.Redeclaration,
   Goccia.ScriptLoader.Input,
   Goccia.SourcePipeline,
+  Goccia.StackLimit,
   Goccia.Terminal.Colors,
   Goccia.TextFiles,
   Goccia.Threading,
@@ -76,6 +77,7 @@ type
     TimeoutMs: Integer;
     MaxMemoryBytes: Int64;
     MaxInstructions: Int64;
+    StackSize: Integer;
     ProfileModePresent: Boolean;
     ProfileMode: Goccia.CLI.Options.TGocciaProfileMode;
     ProfileOutputPath: string;
@@ -187,6 +189,12 @@ type
 
 const
   BARE_PRINT_GLOBAL_NAME = 'print';
+  // Finite default call-stack depth for the bare loader.  Without a bound,
+  // genuinely unbounded recursion runs until OOM or the (optional) instruction
+  // limit instead of throwing RangeError like a conforming engine.  Proper
+  // tail calls reuse their frame, so this limit only fences off deep *non-tail*
+  // recursion; the value is generous to avoid clipping legitimate recursion.
+  BARE_DEFAULT_MAX_STACK_DEPTH = 10000;
 
 procedure ConfigureEngine(const AEngine: TGocciaEngine;
   const AExecutor: TGocciaExecutor; const AOptions: TBareOptions); forward;
@@ -1171,6 +1179,7 @@ begin
   WriteLn('  --timeout=MS                  Per-file cooperative timeout in milliseconds');
   WriteLn('  --max-memory=BYTES            GC heap byte limit (RangeError on exceed)');
   WriteLn('  --max-instructions=N          Maximum bytecode steps before aborting');
+  WriteLn('  --stack-size=N                Maximum call stack depth (0 = no limit)');
   WriteLn('  --profile=opcodes|functions|all');
   WriteLn('                                Enable bytecode VM profiling (forces bytecode mode)');
   WriteLn('  --profile-output=PATH         Write profiler JSON to PATH');
@@ -1230,6 +1239,17 @@ begin
   if Parsed < 0 then
     raise Exception.Create('--max-instructions must be 0 or greater');
   AOptions.MaxInstructions := Parsed;
+end;
+
+procedure ParseStackSize(const AValue: string; var AOptions: TBareOptions);
+var
+  Parsed: Integer;
+begin
+  if not TryStrToInt(AValue, Parsed) then
+    raise Exception.Create('Invalid --stack-size value: ' + AValue);
+  if Parsed < 0 then
+    raise Exception.Create('--stack-size must be 0 or greater');
+  AOptions.StackSize := Parsed;
 end;
 
 procedure ParseProfileMode(const AValue: string; var AOptions: TBareOptions);
@@ -1294,6 +1314,7 @@ begin
   Result.TimeoutMs := 0;
   Result.MaxMemoryBytes := 0;
   Result.MaxInstructions := 0;
+  Result.StackSize := BARE_DEFAULT_MAX_STACK_DEPTH;
   Result.ProfileModePresent := False;
   Result.ProfileMode := Goccia.CLI.Options.pmAll;
   Result.ProfileOutputPath := '';
@@ -1331,6 +1352,8 @@ begin
     else if Copy(Arg, 1, Length('--max-instructions=')) = '--max-instructions=' then
       ParseMaxInstructions(Copy(Arg, Length('--max-instructions=') + 1, MaxInt),
         Result)
+    else if Copy(Arg, 1, Length('--stack-size=')) = '--stack-size=' then
+      ParseStackSize(Copy(Arg, Length('--stack-size=') + 1, MaxInt), Result)
     else if Copy(Arg, 1, Length('--profile=')) = '--profile=' then
       ParseProfileMode(Copy(Arg, Length('--profile=') + 1, MaxInt), Result)
     else if Copy(Arg, 1, Length('--profile-output=')) = '--profile-output=' then
@@ -1456,6 +1479,7 @@ begin
       and would otherwise overwrite any pre-engine value. }
     StartExecutionTimeout(AOptions.TimeoutMs);
     StartInstructionLimit(AOptions.MaxInstructions);
+    SetMaxStackDepth(AOptions.StackSize);
 
     PrintHost := TBarePrintHost.Create;
     try
