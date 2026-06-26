@@ -24,9 +24,9 @@ import {
   responseCacheSet,
 } from "@/lib/response-cache";
 import {
-  asiFlagName,
   findVersion,
   isFlagSupported,
+  resolveAsiFlag,
   type VendorFeatureSet,
 } from "@/lib/vendor-manifest";
 import { getVendorManifest } from "@/lib/vendor-manifest-server";
@@ -286,12 +286,12 @@ function buildEngineArgs(
       args.push("--allowed-host", host);
     }
   }
-  // ASI's engine flag was renamed `--asi` -> `--compat-asi` after 0.7.x. Send
-  // whichever name the selected binary advertises so the toggle works across
-  // vendored versions, and gate it so a binary advertising neither still runs.
+  // ASI's engine flag was renamed `--asi` -> `--compat-asi` after 0.7.x.
+  // resolveAsiFlag returns the name this binary advertises (or null when it
+  // advertises neither, in which case ASI is omitted entirely).
   if (asi) {
-    const asiFlag = asiFlagName(features, kind);
-    if (isFlagSupported(features, asiFlag, kind)) args.unshift(asiFlag);
+    const asiFlag = resolveAsiFlag(features, kind);
+    if (asiFlag) args.unshift(asiFlag);
   }
   // Compat flags pass through unconditionally — the engine errors when it
   // doesn't recognize them, and that's the desired UX (the user toggled it).

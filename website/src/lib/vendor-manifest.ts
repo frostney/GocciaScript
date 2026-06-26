@@ -111,21 +111,24 @@ export function isFlagSupported(
   return features[kind].includes(name);
 }
 
-/** The ASI engine flag name the selected binary advertises. The flag was
- *  renamed `--asi` -> `--compat-asi` after 0.7.x (aligning it with the other
- *  `--compat-*` flags). Vendored 0.7.x binaries advertise `--asi`; 0.8.0+ and
- *  `nightly` advertise `--compat-asi`. A missing feature set means a locally
- *  built engine that was never probed — that engine is current, so default to
- *  the new name. (Production manifests always probe `--help`, so `undefined`
- *  never happens for a released, vendored version.) */
-export function asiFlagName(
+/** The ASI flag the API actually sends for a binary, or `null` when it sends
+ *  none. The flag was renamed `--asi` -> `--compat-asi` after 0.7.x (aligning it
+ *  with the other `--compat-*` flags): vendored 0.7.x binaries advertise
+ *  `--asi`; 0.8.0+ and `nightly` advertise `--compat-asi`. Resolved per runner
+ *  kind, since the loader and test runner advertise their flags independently.
+ *  `buildEngineArgs` uses this, and the playground passes both kinds to the
+ *  banner, so the displayed command matches the real invocation. A missing
+ *  feature set is a locally built (current) engine that was never probed, so
+ *  default to the new name; `null` means the binary advertises neither name and
+ *  the API omits ASI entirely. */
+export function resolveAsiFlag(
   features: VendorFeatureSet | undefined,
   kind: "loader" | "testRunner",
-): string {
+): string | null {
   if (!features) return "--compat-asi";
   if (features[kind].includes("--compat-asi")) return "--compat-asi";
   if (features[kind].includes("--asi")) return "--asi";
-  return "--compat-asi";
+  return null;
 }
 
 /** Strip a leading `v` so `"v0.7.0"` and `"0.7.0"` compare equal.

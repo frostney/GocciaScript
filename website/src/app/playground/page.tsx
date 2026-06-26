@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
 import { Playground } from "@/components/playground";
-import { asiFlagName, listPlaygroundVersions } from "@/lib/vendor-manifest";
+import { listPlaygroundVersions, resolveAsiFlag } from "@/lib/vendor-manifest";
 import { getVendorManifest } from "@/lib/vendor-manifest-server";
 
 export const metadata: Metadata = {
@@ -29,13 +29,16 @@ export default async function PlaygroundPage() {
   // stable first, `nightly` last).
   const manifest = getVendorManifest();
   const versions = listPlaygroundVersions(manifest);
-  // The ASI flag was renamed `--asi` -> `--compat-asi` after 0.7.x. Resolve the
-  // name per version from each binary's probed features so the playground's
-  // command banner shows the flag the selected binary actually receives.
+  // The ASI flag was renamed `--asi` -> `--compat-asi` after 0.7.x, and the
+  // loader and test runner advertise it independently. Resolve both per version
+  // (null = the API omits ASI) so the playground banner matches the invocation.
   const asiFlags = Object.fromEntries(
     manifest.versions.map((entry) => [
       entry.tag,
-      asiFlagName(entry.features, "loader"),
+      {
+        loader: resolveAsiFlag(entry.features, "loader"),
+        testRunner: resolveAsiFlag(entry.features, "testRunner"),
+      },
     ]),
   );
   return (
