@@ -5021,6 +5021,10 @@ begin
 
   ChildTemplate := TGocciaFunctionTemplate.Create('<get [computed]>');
   ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
+  // Propagate the accessor source so DeclareArgumentsObjectLocal below can elide
+  // the arguments object when the body never references it, matching the other
+  // (non-computed) accessor and method body builders.
+  ChildTemplate.SourceText := AGetter.SourceText;
   ChildTemplate.ParameterCount := 0;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
@@ -5090,6 +5094,10 @@ begin
 
   ChildTemplate := TGocciaFunctionTemplate.Create('<set [computed]>');
   ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
+  // Propagate the accessor source so DeclareArgumentsObjectLocal below can elide
+  // the arguments object when the body never references it, matching the other
+  // (non-computed) accessor and method body builders.
+  ChildTemplate.SourceText := ASetter.SourceText;
   SetterParams := ASetter.Parameters;
   if Length(SetterParams) = 0 then
   begin

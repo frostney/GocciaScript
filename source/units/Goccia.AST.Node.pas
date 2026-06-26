@@ -60,13 +60,19 @@ type
 // object (only relevant under --compat-arguments-object). The arguments object
 // is observable only through the identifier `arguments` or through direct
 // `eval`, and a function's source text spans its whole body — including any
-// nested arrow functions, which share the enclosing `arguments` — so a body
-// containing neither substring can never reference the object and the costly
-// allocation can be skipped. Substring matching over-approximates: a comment,
-// string literal, or longer identifier that merely contains "arguments"/"eval"
-// forces creation. That is always safe (it may keep a needless object but never
-// drops a needed one). Empty source (synthetic functions) is treated
-// conservatively as "may reference".
+// nested arrow functions, which share the enclosing `arguments`. A body that
+// references neither can skip the costly allocation.
+//
+// The scan must account for Unicode-escaped identifiers: the lexer decodes
+// escape sequences inside identifiers, so an escaped spelling of `arguments` or
+// `eval` references the object even though the decoded word never appears
+// literally in the raw source. Every IdentifierName escape is a \uXXXX /
+// \u{...} sequence, so the presence of \u anywhere forces creation. All three
+// substring checks
+// over-approximate (a comment, string literal, regex, or longer identifier that
+// merely contains "arguments"/"eval"/"\u" forces creation), which is always
+// safe: it may keep a needless object but never drops a needed one. Empty
+// source (synthetic functions) is treated conservatively as "may reference".
 function FunctionSourceMayReferenceArgumentsObject(
   const ASourceText: string): Boolean;
 
@@ -77,7 +83,8 @@ function FunctionSourceMayReferenceArgumentsObject(
 begin
   Result := (ASourceText = '') or
             (Pos('arguments', ASourceText) > 0) or
-            (Pos('eval', ASourceText) > 0);
+            (Pos('eval', ASourceText) > 0) or
+            (Pos('\u', ASourceText) > 0);
 end;
 
 constructor TGocciaASTNode.Create(const ALine, AColumn: Integer);

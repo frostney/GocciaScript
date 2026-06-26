@@ -58,4 +58,12 @@ describe("implicit arguments object is materialized only when referenced", () =>
     expect(counted(1, 2, 3)).toBe(3);
     expect(plain(counted(9))).toBe(2);
   });
+
+  test("a Unicode-escaped arguments identifier is still materialized", () => {
+    function viaEscape() {
+      return \u0061rguments.length;
+    }
+
+    expect(viaEscape("a", "b")).toBe(2);
+  });
 });
