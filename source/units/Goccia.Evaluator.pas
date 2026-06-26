@@ -135,6 +135,18 @@ function EvaluateEvalProgram(const AProgram: TGocciaProgram;
   const AAllowSuperCall: Boolean = False;
   const ARejectArgumentsReference: Boolean = False): TGocciaValue;
 
+{ Runs the eval Script's static early-error checks for forbidden references and
+  assignments — `new.target` / `super` outside a permitting context and, under
+  strict eval, assignment to `eval`/`arguments` — the same pass EvaluateEvalProgram
+  runs before evaluating. It does NOT cover EvalDeclarationInstantiation conflicts
+  (e.g. duplicate lexical bindings), which EvaluateEvalProgram still raises later.
+  Raises a TGocciaSyntaxError on the first violation. Exposed so callers that must
+  distinguish these early errors (SyntaxError) from runtime abrupt completions
+  (TypeError) can validate up front. }
+procedure ValidateEvalEarlyErrors(const AProgram: TGocciaProgram;
+  const AStrictEval, AAllowNewTarget, AAllowSuperProperty,
+  AAllowSuperCall: Boolean);
+
 implementation
 
 uses
