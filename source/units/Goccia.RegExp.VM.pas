@@ -1057,9 +1057,12 @@ end;
 // re-allocating the whole input on every match (O(matches * length) -> O(length)).
 // Identity-keyed (the driver passes the same string instance each iteration),
 // so the hit check is O(1). Pure optimization — clearing it is always safe.
-// Single-entry: only the most recent subject + its units are retained (a
-// different subject replaces them), so it does not cache across subjects; the
-// retained pair is bounded and FPC finalizes the threadvar at thread exit.
+// Single-entry: a different subject replaces the retained pair via managed
+// assignment (the prior string/array is released, so the cache never grows).
+// FPC does not auto-finalize managed threadvars at thread exit, so the unit
+// finalization below clears the main-thread memo on shutdown; a worker thread's
+// last-held pair is a bounded residual, the same as the engine's other managed
+// threadvars (e.g. each builtin's FStaticMembers).
 threadvar
   GRegExpInputMemoStr: string;
   GRegExpInputMemoUnits: array of Cardinal;
@@ -1140,5 +1143,18 @@ begin
         AProgram.FullUnicode);
   end;
 end;
+
+// FPC does not auto-finalize managed threadvars at thread exit; release the
+// main-thread memo on shutdown so its retained subject/units are not leaked.
+procedure ClearRegExpInputMemo;
+begin
+  GRegExpInputMemoStr := '';
+  SetLength(GRegExpInputMemoUnits, 0);
+  GRegExpInputMemoLength := 0;
+  GRegExpInputMemoValid := False;
+end;
+
+finalization
+  ClearRegExpInputMemo;
 
 end.
