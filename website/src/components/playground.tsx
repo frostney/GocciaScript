@@ -411,11 +411,16 @@ type PlaygroundProps = {
    *  initialize the dropdown when no share-link or saved selection
    *  is present. */
   defaultVersion?: string;
+  /** ASI flag name (`--asi` or `--compat-asi`) keyed by version tag, resolved
+   *  from each binary's probed features. Display-only — the server resolves the
+   *  real flag the same way; defaults to the modern name for unknown tags. */
+  asiFlags?: Record<string, string>;
 };
 
 export function Playground({
   versions: vendoredVersions = [],
   defaultVersion,
+  asiFlags,
 }: PlaygroundProps) {
   const params = useSearchParams();
 
@@ -557,11 +562,13 @@ export function Playground({
     if (runningRef.current) return;
     runningRef.current = true;
     setRunning(true);
-    // Keep the displayed ASI flag legacy-shaped while the playground can target
-    // released binaries that only advertise `--asi`. A version-aware
-    // `--compat-asi` label is release-coordinated future work.
+    // The ASI flag name depends on the selected engine version (`--asi` before
+    // 0.7.x, `--compat-asi` after); the server resolves it the same way from the
+    // binary's probed features. Default to the modern name when the version
+    // isn't in the map (e.g. a locally built `nightly`).
+    const asiFlag = asiFlags?.[version] ?? "--compat-asi";
     const flagText = [
-      asi ? "--asi" : "",
+      asi ? asiFlag : "",
       compatVar ? "--compat-var" : "",
       compatFunction ? "--compat-function" : "",
     ]
@@ -744,7 +751,16 @@ export function Playground({
       setRunning(false);
       runningRef.current = false;
     }
-  }, [code, backend, version, runner, asi, compatVar, compatFunction]);
+  }, [
+    code,
+    backend,
+    version,
+    runner,
+    asi,
+    compatVar,
+    compatFunction,
+    asiFlags,
+  ]);
 
   const buildShareLink = useCallback(() => {
     const url = new URL(window.location.href);

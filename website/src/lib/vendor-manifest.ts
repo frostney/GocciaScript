@@ -111,6 +111,23 @@ export function isFlagSupported(
   return features[kind].includes(name);
 }
 
+/** The ASI engine flag name the selected binary advertises. The flag was
+ *  renamed `--asi` -> `--compat-asi` after 0.7.x (aligning it with the other
+ *  `--compat-*` flags). Vendored 0.7.x binaries advertise `--asi`; 0.8.0+ and
+ *  `nightly` advertise `--compat-asi`. A missing feature set means a locally
+ *  built engine that was never probed — that engine is current, so default to
+ *  the new name. (Production manifests always probe `--help`, so `undefined`
+ *  never happens for a released, vendored version.) */
+export function asiFlagName(
+  features: VendorFeatureSet | undefined,
+  kind: "loader" | "testRunner",
+): string {
+  if (!features) return "--compat-asi";
+  if (features[kind].includes("--compat-asi")) return "--compat-asi";
+  if (features[kind].includes("--asi")) return "--asi";
+  return "--compat-asi";
+}
+
 /** Strip a leading `v` so `"v0.7.0"` and `"0.7.0"` compare equal.
  *  `"nightly"` and other non-semver tags pass through unchanged. */
 function canonicalTag(tag: string): string {

@@ -24,6 +24,7 @@ import {
   responseCacheSet,
 } from "@/lib/response-cache";
 import {
+  asiFlagName,
   findVersion,
   isFlagSupported,
   type VendorFeatureSet,
@@ -285,11 +286,12 @@ function buildEngineArgs(
       args.push("--allowed-host", host);
     }
   }
-  // Keep sending `--asi` while selected playground versions may only advertise
-  // that legacy flag. Version-aware `--compat-asi` dispatch belongs with the
-  // release that drops support for those older binaries.
-  if (asi && isFlagSupported(features, "--asi", kind)) {
-    args.unshift("--asi");
+  // ASI's engine flag was renamed `--asi` -> `--compat-asi` after 0.7.x. Send
+  // whichever name the selected binary advertises so the toggle works across
+  // vendored versions, and gate it so a binary advertising neither still runs.
+  if (asi) {
+    const asiFlag = asiFlagName(features, kind);
+    if (isFlagSupported(features, asiFlag, kind)) args.unshift(asiFlag);
   }
   // Compat flags pass through unconditionally — the engine errors when it
   // doesn't recognize them, and that's the desired UX (the user toggled it).
