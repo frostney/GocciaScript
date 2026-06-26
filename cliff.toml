@@ -119,6 +119,26 @@ commit_parsers = [
   { message = "^Benchmark runner exit codes", group = "🏗️ Internal" },
   { message = "^Environment specific test failure", group = "🏗️ Internal" },
 
+  # Additional sentence-style verbs present in the history.
+  { message = "^Speed up", group = "⚡ Performance" },
+  { message = "^Cache ", group = "⚡ Performance" },
+  { message = "^Shape-validated", group = "⚡ Performance" },
+  { message = "^Memoize", group = "⚡ Performance" },
+  { message = "^Unify ", group = "🏗️ Internal" },
+  { message = "^Simplify ", group = "🏗️ Internal" },
+  { message = "^Split ", group = "🏗️ Internal" },
+  { message = "^Centralize ", group = "🏗️ Internal" },
+  { message = "^Consolidate ", group = "🏗️ Internal" },
+
+  # Conventional Commits (`type` or `type(scope)`, optional `!` for breaking) —
+  # newer commits use this style alongside the sentence-style prefixes above, so
+  # categorize them by type instead of dropping them into "Other".
+  { message = "^feat(\\(.+\\))?!?:", group = "🚀 Added" },
+  { message = "^fix(\\(.+\\))?!?:", group = "🐛 Fixed" },
+  { message = "^perf(\\(.+\\))?!?:", group = "⚡ Performance" },
+  { message = "^refactor(\\(.+\\))?!?:", group = "🏗️ Internal" },
+  { message = "^(chore|ci|build|test|style|docs)(\\(.+\\))?!?:", group = "🏗️ Internal" },
+
   { message = ".*", group = "📖 Other" },
 ]
 
