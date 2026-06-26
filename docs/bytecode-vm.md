@@ -5,7 +5,7 @@
 ## Executive Summary
 
 - **Two execution modes** — tree-walk interpreter (default) and bytecode VM (`--mode=bytecode`), sharing the same source pipeline, runtime objects, and GC
-- **Executor abstraction** — `TGocciaBytecodeExecutor` implements `TGocciaExecutor` with no dependency on the interpreter or evaluator
+- **Executor abstraction** — `TGocciaBytecodeExecutor` implements `TGocciaExecutor` and drives only the compiler and VM; the one residual coupling is direct `eval`, which the VM still delegates to the tree-walk evaluator
 - **Goccia-owned VM** — executes directly on `TGocciaValue` with tagged `TGocciaRegister` values; not a generic VM layer
 - **Opcode space** — core instructions (0-127) for hot paths, non-core generic ops (128-166), and semantic/helper instructions (167-255) for colder operations like imports/exports
 - **Binary format** — `.gbc` files with little-endian encoding, `GBC\0` magic, and version constant
@@ -17,7 +17,7 @@ GocciaScript has two execution modes:
 - **Interpreter mode**: tree-walk execution over the AST via `TGocciaInterpreterExecutor`
 - **Bytecode mode**: AST compilation to Goccia bytecode, then execution on `TGocciaVM` via `TGocciaBytecodeExecutor`
 
-Both execution modes are implementations of `TGocciaExecutor` (see [Architecture](architecture.md#executor-architecture)). The single `TGocciaEngine` class bootstraps the core language environment (global scope, core built-ins, shims) and delegates execution to whichever executor is configured. Optional runtime globals are attached through runtime extensions. The bytecode executor has no dependency on the interpreter or evaluator — it only uses the compiler and VM.
+Both execution modes are implementations of `TGocciaExecutor` (see [Architecture](architecture.md#executor-architecture)). The single `TGocciaEngine` class bootstraps the core language environment (global scope, core built-ins, shims) and delegates execution to whichever executor is configured. Optional runtime globals are attached through runtime extensions. The `TGocciaBytecodeExecutor` unit itself depends only on the compiler and VM; the VM it drives, however, still calls the tree-walk evaluator for direct `eval` (`TGocciaVM.ExecuteDirectEval` → `EvaluateEvalProgram`), so the bytecode path is not yet fully independent of the evaluator.
 
 ## Pipeline
 
