@@ -4764,7 +4764,8 @@ begin
   for I := 0 to High(AMethod.Parameters) do
     if AMethod.Parameters[I].IsPattern and Assigned(AMethod.Parameters[I].Pattern) then
       CollectDestructuringBindings(AMethod.Parameters[I].Pattern, ChildScope);
-  ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, AMethod.Parameters);
+  ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, AMethod.Parameters,
+    ChildTemplate.SourceText);
   if FormalCount < 0 then
     FormalCount := Length(AMethod.Parameters);
   ChildTemplate.FormalParameterCount := UInt8(FormalCount);
@@ -4855,7 +4856,8 @@ begin
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
   SetLength(EmptyParams, 0);
-  ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, EmptyParams);
+  ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, EmptyParams,
+    ChildTemplate.SourceText);
 
   ACtx.SwapState(ChildTemplate, ChildScope);
   ChildCtx := ACtx;
@@ -4948,7 +4950,8 @@ begin
   ChildTemplate.FormalParameterCount := UInt8(FormalCount);
   if Assigned(ACtx.FormalParameterCounts) then
     ACtx.FormalParameterCounts.AddOrSetValue(ChildTemplate, FormalCount);
-  ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, SetterParams);
+  ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, SetterParams,
+    ChildTemplate.SourceText);
 
   ACtx.SwapState(ChildTemplate, ChildScope);
   ChildCtx := ACtx;
@@ -5022,7 +5025,8 @@ begin
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
   SetLength(EmptyParams, 0);
-  ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, EmptyParams);
+  ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, EmptyParams,
+    ChildTemplate.SourceText);
 
   ACtx.SwapState(ChildTemplate, ChildScope);
   ChildCtx := ACtx;
@@ -5110,7 +5114,8 @@ begin
   ChildTemplate.FormalParameterCount := UInt8(FormalCount);
   if Assigned(ACtx.FormalParameterCounts) then
     ACtx.FormalParameterCounts.AddOrSetValue(ChildTemplate, FormalCount);
-  ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, SetterParams);
+  ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, SetterParams,
+    ChildTemplate.SourceText);
 
   ACtx.SwapState(ChildTemplate, ChildScope);
   ChildCtx := ACtx;
@@ -5207,7 +5212,8 @@ begin
   for I := 0 to High(AMethod.Parameters) do
     if AMethod.Parameters[I].IsPattern and Assigned(AMethod.Parameters[I].Pattern) then
       CollectDestructuringBindings(AMethod.Parameters[I].Pattern, ChildScope);
-  ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, AMethod.Parameters);
+  ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, AMethod.Parameters,
+    ChildTemplate.SourceText);
   if FormalCount < 0 then
     FormalCount := Length(AMethod.Parameters);
   ChildTemplate.FormalParameterCount := UInt8(FormalCount);
