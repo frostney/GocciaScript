@@ -43,6 +43,9 @@ commit_parsers = [
   { message = "^(Website: )?Merge pull request", skip = true },
   # Skip the auto-generated changelog update PR itself so it never lists itself.
   { message = "^(Website: )?Update CHANGELOG", skip = true },
+  # Skip the create-release commit (changelog is written on the release branch
+  # before the tag) so the release commit never appears in a later changelog.
+  { message = "^(Website: )?chore\\(release\\)", skip = true },
 
   { message = "^Website: ", group = "🌐 Website" },
 
