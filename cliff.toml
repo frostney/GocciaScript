@@ -138,6 +138,9 @@ commit_parsers = [
   { message = "^perf(\\(.+\\))?!?:", group = "⚡ Performance" },
   { message = "^refactor(\\(.+\\))?!?:", group = "🏗️ Internal" },
   { message = "^(chore|ci|build|test|style|docs)(\\(.+\\))?!?:", group = "🏗️ Internal" },
+  { message = "^revert(\\(.+\\))?!?:", group = "⏪ Reverted" },
+  # Git's default revert subject (`Revert "..."`) is sentence-style.
+  { message = "^Revert ", group = "⏪ Reverted" },
 
   { message = ".*", group = "📖 Other" },
 ]
