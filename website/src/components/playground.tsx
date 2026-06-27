@@ -411,11 +411,20 @@ type PlaygroundProps = {
    *  initialize the dropdown when no share-link or saved selection
    *  is present. */
   defaultVersion?: string;
+  /** Per-runner-kind ASI flag the API sends for each version tag: `--asi` /
+   *  `--compat-asi`, or `null` when the binary advertises neither (ASI omitted).
+   *  Display-only — the server resolves it the same way, so the banner matches
+   *  the real invocation. */
+  asiFlags?: Record<
+    string,
+    { loader: string | null; testRunner: string | null }
+  >;
 };
 
 export function Playground({
   versions: vendoredVersions = [],
   defaultVersion,
+  asiFlags,
 }: PlaygroundProps) {
   const params = useSearchParams();
 
@@ -557,11 +566,15 @@ export function Playground({
     if (runningRef.current) return;
     runningRef.current = true;
     setRunning(true);
-    // Keep the displayed ASI flag legacy-shaped while the playground can target
-    // released binaries that only advertise `--asi`. A version-aware
-    // `--compat-asi` label is release-coordinated future work.
+    // Match what the server sends: the ASI flag depends on the engine version
+    // AND the runner kind (loader vs test runner), and is omitted when the
+    // binary advertises neither name. An unknown tag (e.g. a locally built
+    // `nightly`) defaults to the modern name; `null` means ASI is omitted.
+    const resolvedAsi =
+      asiFlags?.[version]?.[runner === "test" ? "testRunner" : "loader"];
+    const asiFlag = resolvedAsi === undefined ? "--compat-asi" : resolvedAsi;
     const flagText = [
-      asi ? "--asi" : "",
+      asi && asiFlag ? asiFlag : "",
       compatVar ? "--compat-var" : "",
       compatFunction ? "--compat-function" : "",
     ]
@@ -744,7 +757,16 @@ export function Playground({
       setRunning(false);
       runningRef.current = false;
     }
-  }, [code, backend, version, runner, asi, compatVar, compatFunction]);
+  }, [
+    code,
+    backend,
+    version,
+    runner,
+    asi,
+    compatVar,
+    compatFunction,
+    asiFlags,
+  ]);
 
   const buildShareLink = useCallback(() => {
     const url = new URL(window.location.href);

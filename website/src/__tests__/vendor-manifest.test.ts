@@ -3,6 +3,7 @@ import {
   findVersion,
   isFlagSupported,
   listPlaygroundVersions,
+  resolveAsiFlag,
   type VendorFeatureSet,
   type VendorManifest,
 } from "@/lib/vendor-manifest";
@@ -224,5 +225,41 @@ describe("listPlaygroundVersions", () => {
         ],
       }),
     ).toEqual(["nightly"]);
+  });
+});
+
+describe("resolveAsiFlag", () => {
+  // ASI's engine flag was renamed `--asi` -> `--compat-asi` after 0.7.x.
+  const NEW_FEATURES: VendorFeatureSet = {
+    loader: ["--compat-asi", "--compat-var", "--mode"],
+    testRunner: ["--compat-asi", "--mode"],
+  };
+
+  test("uses --compat-asi when the binary advertises it (0.8.0+ / nightly)", () => {
+    expect(resolveAsiFlag(NEW_FEATURES, "loader")).toBe("--compat-asi");
+    expect(resolveAsiFlag(NEW_FEATURES, "testRunner")).toBe("--compat-asi");
+  });
+
+  test("falls back to --asi for pre-0.8.0 binaries that only advertise it", () => {
+    expect(resolveAsiFlag(LEGACY_061_FEATURES, "loader")).toBe("--asi");
+    expect(resolveAsiFlag(MODERN_FEATURES, "loader")).toBe("--asi");
+  });
+
+  test("defaults to the modern name when features are unprobed (local dev)", () => {
+    expect(resolveAsiFlag(undefined, "loader")).toBe("--compat-asi");
+  });
+
+  test("returns null when the binary advertises neither (server omits ASI)", () => {
+    const neither: VendorFeatureSet = { loader: ["--mode"], testRunner: [] };
+    expect(resolveAsiFlag(neither, "loader")).toBeNull();
+  });
+
+  test("resolves loader and testRunner independently", () => {
+    const mixed: VendorFeatureSet = {
+      loader: ["--compat-asi"],
+      testRunner: ["--asi"],
+    };
+    expect(resolveAsiFlag(mixed, "loader")).toBe("--compat-asi");
+    expect(resolveAsiFlag(mixed, "testRunner")).toBe("--asi");
   });
 });

@@ -1101,17 +1101,14 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      pull-requests: write
     defaults:
       run:
         shell: bash
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
+          # Full history + tags so git-cliff can render the latest release section.
           fetch-depth: 0
-          # Keep the GITHUB_TOKEN persisted: the changelog step below pushes
-          # a branch via `git push --force-with-lease`.
-          persist-credentials: true
 
       - name: Download all build artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -1176,39 +1173,3 @@ jobs:
           files: |
             gocciascript-*.tar.gz
             gocciascript-*.zip
-
-      - name: Generate full changelog
-        uses: orhun/git-cliff-action@f50e11560dce63f7c33227798f90b924471a88b5 # v4
-        with:
-          config: cliff.toml
-          args: -o CHANGELOG.md
-        env:
-          GITHUB_REPO: ${{ github.repository }}
-
-      - name: Open changelog PR
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          VERSION="${GITHUB_REF_NAME}"
-          BRANCH="changelog/${VERSION}"
-
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -B "$BRANCH" origin/main
-          git add CHANGELOG.md
-          if git diff --cached --quiet; then
-            echo "No changelog changes"
-          else
-            git commit -m "Update CHANGELOG.md for ${VERSION}"
-            git push --force-with-lease origin "$BRANCH"
-            if gh pr view "$BRANCH" --json state --jq .state 2>/dev/null | grep -q OPEN; then
-              echo "PR already exists for $BRANCH"
-            else
-              gh pr create \
-                --title "Update CHANGELOG.md for ${VERSION}" \
-                --body "Auto-generated changelog update for the ${VERSION} release." \
-                --base main \
-                --head "$BRANCH" \
-                --label internal
-            fi
-          fi
