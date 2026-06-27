@@ -39,6 +39,35 @@ jobs:
           retention-days: 1
           path: pr-artifacts/*
 
+  # Builds the benchmark runner from the PR's base commit (the `main` the PR
+  # targets) so the `benchmark` job can measure it back-to-back with the PR build
+  # on the *same* runner. This is the trustworthy half of the same-runner A/B
+  # comparison that replaces the old cross-runner cached baseline (issue #815).
+  build-main:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install FPC
+        run: sudo apt-get update && sudo apt-get install fpc -qq > /dev/null
+
+      - name: Build benchmark runner (main base)
+        run: ./build.pas benchmarkrunner --prod
+
+      - name: Upload main benchmark runner
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: build-main
+          retention-days: 1
+          path: build/GocciaBenchmarkRunner
+
   docs:
     runs-on: ubuntu-latest
     steps:
@@ -164,7 +193,7 @@ jobs:
           fi
 
   benchmark:
-    needs: build
+    needs: [build, build-main]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -185,14 +214,68 @@ jobs:
           name: build-pr
           path: build/
 
+      - name: Download main benchmark runner
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: build-main
+          path: build-main/
+
       - name: Make binaries executable
-        run: chmod +x build/*
+        run: |
+          chmod +x build/*
+          chmod +x build-main/*
+
+      # Same-runner A/B (issue #815): the PR and `main` builds are measured on
+      # this one runner so the delta reflects the diff, not cross-runner
+      # variance. Both benchmark the PR's `benchmarks/` workloads. The warm-up
+      # runs are discarded on purpose — they shed runner cold-start (page
+      # faults, sub-turbo clocks) for BOTH binaries so neither the `main` run
+      # (measured first) nor the PR run is penalised by being measured cold.
+      - name: Warm up benchmark runners
+        env:
+          GOCCIA_BENCH_ROUNDS: 1
+        run: |
+          ./build-main/GocciaBenchmarkRunner benchmarks ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --no-progress > /dev/null 2>&1 || true
+          ./build/GocciaBenchmarkRunner benchmarks ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --no-progress > /dev/null 2>&1 || true
+
+      # `main` is built from the PR's base commit, so it cannot run benchmarks the
+      # PR newly adds or changes to use new language features. The report is still
+      # written before a non-zero exit, so continue-on-error keeps such a PR from
+      # being blocked: a benchmark that errors on `main` simply has no baseline
+      # entry and renders as 🆕 new. The PR's own run below is intentionally NOT
+      # tolerant — a broken PR benchmark should fail the leg.
+      - name: Run benchmarks (main base)
+        continue-on-error: true
+        env:
+          GOCCIA_BENCH_CALIBRATION_MS: 100
+          GOCCIA_BENCH_ROUNDS: 7
+        run: ./build-main/GocciaBenchmarkRunner benchmarks ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --no-progress --format=json --output=benchmark-${{ matrix.mode }}-main.json
 
       - name: Run benchmarks
         env:
           GOCCIA_BENCH_CALIBRATION_MS: 100
           GOCCIA_BENCH_ROUNDS: 7
         run: ./build/GocciaBenchmarkRunner benchmarks ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --no-progress --format=json --output=benchmark-${{ matrix.mode }}.json
+
+      - name: Capture deterministic profiles (main base)
+        if: matrix.mode == 'bytecode'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          mkdir -p profile-main
+          while IFS= read -r bench; do
+            rel="${bench#benchmarks/}"
+            out="profile-main/${rel%.*}.json"
+            mkdir -p "$(dirname "$out")"
+            ./build-main/GocciaBenchmarkRunner "$bench" \
+              --mode=bytecode \
+              --profile-deterministic \
+              --profile=all \
+              --profile-output="$out" \
+              --no-progress \
+              --format=compact-json \
+              > /dev/null
+          done < <(find benchmarks -type f \( -name '*.js' -o -name '*.jsx' -o -name '*.ts' -o -name '*.tsx' -o -name '*.mjs' \) ! -path '*/helpers/*' | sort)
 
       - name: Capture deterministic profiles
         if: matrix.mode == 'bytecode'
@@ -227,6 +310,13 @@ jobs:
           retention-days: 1
           path: benchmark-${{ matrix.mode }}.json
 
+      - name: Upload main results
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: benchmark-${{ matrix.mode }}-main
+          retention-days: 1
+          path: benchmark-${{ matrix.mode }}-main.json
+
       - name: Upload deterministic profiles
         if: matrix.mode == 'bytecode'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -234,6 +324,14 @@ jobs:
           name: profile-current
           retention-days: 1
           path: profile-current/
+
+      - name: Upload main deterministic profiles
+        if: matrix.mode == 'bytecode'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: profile-main
+          retention-days: 1
+          path: profile-main/
 
   cli:
     needs: build
@@ -275,6 +373,9 @@ jobs:
 
       - name: Check embedded resource CLI behaviour
         run: bun run scripts/test-cli-embedded-resources.ts
+
+      - name: Check benchmark comparison logic
+        run: bun run scripts/test-benchmark-compare.ts
 
   test262:
     needs: build
@@ -381,259 +482,65 @@ jobs:
           name: profile-current
           path: profile-current/
 
-      - name: Restore interpreted baseline
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+      - name: Download interpreted main results
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        continue-on-error: true
         with:
-          path: benchmark-interpreted-results.json
-          key: benchmark-interpreted-baseline-will-not-match
-          restore-keys: benchmark-interpreted-baseline-
+          name: benchmark-interpreted-main
 
-      - name: Restore bytecode baseline
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+      - name: Download bytecode main results
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        continue-on-error: true
         with:
-          path: benchmark-bytecode-results.json
-          key: benchmark-bytecode-baseline-will-not-match
-          restore-keys: benchmark-bytecode-baseline-
+          name: benchmark-bytecode-main
 
-      - name: Restore deterministic profile baseline
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+      - name: Download main deterministic profiles
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        continue-on-error: true
         with:
-          path: profile-baseline/
-          key: profile-baseline-will-not-match
-          restore-keys: profile-baseline-
-
-      - name: Check baselines
-        run: |
-          if [ -f benchmark-interpreted-results.json ]; then
-            echo "BASELINE_EXISTS=true" >> "$GITHUB_ENV"
-          else
-            echo "BASELINE_EXISTS=false" >> "$GITHUB_ENV"
-          fi
-          if [ -f benchmark-bytecode-results.json ]; then
-            echo "BYTECODE_BASELINE_EXISTS=true" >> "$GITHUB_ENV"
-          else
-            echo "BYTECODE_BASELINE_EXISTS=false" >> "$GITHUB_ENV"
-          fi
+          name: profile-main
+          path: profile-main/
 
       - name: Compare benchmarks and comment
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
             const fs = require('fs');
+            const { buildBenchmarkComparison } = require('./scripts/benchmark-compare.js');
             const { buildProfileDiffSection } = require('./scripts/profile-diff.js');
 
-            const fmtOps = (n) => Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-            const fmtPercent = (change) => {
-              if (change == null) return 'N/A';
-              return `${change >= 0 ? '+' : ''}${change.toFixed(1)}%`;
-            };
-            const fmtAvg = (changes) => {
-              if (changes.length === 0) return '';
-              const avg = changes.reduce((a, b) => a + b, 0) / changes.length;
-              return `avg ${fmtPercent(avg)}`;
-            };
-            const fmtDelta = (classification, change) => {
-              if (change == null) return classification === 'new' ? '🆕' : 'N/A';
-              if (classification === 'improved') return `🟢 ${fmtPercent(change)}`;
-              if (classification === 'regressed') return `🔴 ${fmtPercent(change)}`;
-              if (classification === 'unchanged') return `~ overlap (${fmtPercent(change)})`;
-              return '🆕';
-            };
-            const fmtRange = (entry) => {
-              if (!entry) return '—';
-              if (entry.minOpsPerSec === entry.maxOpsPerSec) return fmtOps(entry.opsPerSec);
-              return `${fmtOps(entry.minOpsPerSec)}..${fmtOps(entry.maxOpsPerSec)}`;
-            };
-            const fmtBenchmark = (entry) => {
-              if (!entry) return '—';
-              if (entry.minOpsPerSec === entry.maxOpsPerSec) return `${fmtOps(entry.opsPerSec)} ops/sec`;
-              return `${fmtOps(entry.opsPerSec)} ops/sec [${fmtRange(entry)}]`;
-            };
-            const fmtCell = (baseEntry, currentEntry) => {
-              if (baseEntry) return `${fmtBenchmark(baseEntry)} → ${fmtBenchmark(currentEntry)}`;
-              return fmtBenchmark(currentEntry);
-            };
-            const normalizeBenchmark = (benchmark) => ({
-              opsPerSec: benchmark.opsPerSec,
-              minOpsPerSec: benchmark.minOpsPerSec ?? benchmark.opsPerSec,
-              maxOpsPerSec: benchmark.maxOpsPerSec ?? benchmark.opsPerSec,
-              variancePercentage: benchmark.variancePercentage ?? 0,
-            });
-            const calculateChange = (baseEntry, currentEntry) => {
-              if (!baseEntry || !baseEntry.opsPerSec) return null;
-              return ((currentEntry.opsPerSec - baseEntry.opsPerSec) / baseEntry.opsPerSec) * 100;
-            };
-            const classify = (baseEntry, currentEntry) => {
-              if (!baseEntry) return 'new';
-              if (currentEntry.minOpsPerSec > baseEntry.maxOpsPerSec) return 'improved';
-              if (currentEntry.maxOpsPerSec < baseEntry.minOpsPerSec) return 'regressed';
-              return 'unchanged';
+            const read = (p) => JSON.parse(fs.readFileSync(p, 'utf8'));
+            const tryRead = (p) => {
+              try { return read(p); }
+              catch (e) { console.log(`No same-runner main result at ${p}:`, e.message); return null; }
             };
 
-            const interpData = JSON.parse(fs.readFileSync('benchmark-interpreted.json', 'utf8'));
-            const bytecodeData = JSON.parse(fs.readFileSync('benchmark-bytecode.json', 'utf8'));
-
-            let interpBaseline = null;
-            if (process.env.BASELINE_EXISTS === 'true') {
-              try { interpBaseline = JSON.parse(fs.readFileSync('benchmark-interpreted-results.json', 'utf8')); }
-              catch (e) { console.log('Failed to parse interpreted baseline:', e.message); }
-            }
-            let bytecodeBaseline = null;
-            if (process.env.BYTECODE_BASELINE_EXISTS === 'true') {
-              try { bytecodeBaseline = JSON.parse(fs.readFileSync('benchmark-bytecode-results.json', 'utf8')); }
-              catch (e) { console.log('Failed to parse bytecode baseline:', e.message); }
-            }
-            const hasAnyBaseline = interpBaseline || bytecodeBaseline;
-
-            function buildMap(data) {
-              const map = {};
-              if (!data) return map;
-              for (const file of data.files) {
-                const m = {};
-                for (const b of file.benchmarks) {
-                  if (!b.error) m[`${b.suite} > ${b.name}`] = normalizeBenchmark(b);
-                }
-                map[file.fileName] = m;
-              }
-              return map;
-            }
-
-            const interpBaseMap = buildMap(interpBaseline);
-            const bytecodeBaseMap = buildMap(bytecodeBaseline);
-            const bytecodeCurrentMap = buildMap(bytecodeData);
-
-            const newStats = () => ({ improved: 0, regressed: 0, unchanged: 0, new: 0, changes: [] });
-            const totals = { interp: newStats(), bytecode: newStats() };
-            let totalBenchmarks = 0;
-            const fileBlocks = [];
-
-            for (const file of interpData.files) {
-              const fileName = file.fileName;
-              const iBase = interpBaseMap[fileName] || {};
-              const bBase = bytecodeBaseMap[fileName] || {};
-              const bCurrent = bytecodeCurrentMap[fileName] || {};
-              const fileS = { interp: newStats(), bytecode: newStats() };
-              let fileRows = '';
-              const benches = file.benchmarks.filter(b => !b.error);
-              totalBenchmarks += benches.length;
-
-              if (hasAnyBaseline) {
-                fileRows += '| Benchmark | Interpreted | Δ | Bytecode | Δ |\n';
-                fileRows += '|-----------|------------|---|---------|---|\n';
-              } else {
-                fileRows += '| Benchmark | Interpreted | Bytecode |\n';
-                fileRows += '|-----------|------------|----------|\n';
-              }
-
-              for (const bench of benches) {
-                const key = `${bench.suite} > ${bench.name}`;
-                const iCurrent = normalizeBenchmark(bench);
-                const bCurrentEntry = bCurrent[key];
-                const iBaseEntry = iBase[key];
-                const bBaseEntry = bBase[key];
-
-                if (hasAnyBaseline) {
-                  let iDelta;
-                  if (iBaseEntry) {
-                    const c = calculateChange(iBaseEntry, iCurrent);
-                    const classification = classify(iBaseEntry, iCurrent);
-                    if (c != null) fileS.interp.changes.push(c);
-                    fileS.interp[classification]++;
-                    iDelta = fmtDelta(classification, c);
-                  } else {
-                    iDelta = '🆕';
-                    fileS.interp.new++;
-                  }
-
-                  let bDelta;
-                  if (bCurrentEntry && bBaseEntry) {
-                    const c = calculateChange(bBaseEntry, bCurrentEntry);
-                    const classification = classify(bBaseEntry, bCurrentEntry);
-                    if (c != null) fileS.bytecode.changes.push(c);
-                    fileS.bytecode[classification]++;
-                    bDelta = fmtDelta(classification, c);
-                  } else if (bCurrentEntry) {
-                    bDelta = '🆕';
-                    fileS.bytecode.new++;
-                  } else {
-                    bDelta = '—';
-                  }
-
-                  fileRows += `| ${bench.name} | ${fmtCell(iBaseEntry, iCurrent)} | ${iDelta} | ${bCurrentEntry ? fmtCell(bBaseEntry, bCurrentEntry) : '—'} | ${bDelta} |\n`;
-                } else {
-                  fileRows += `| ${bench.name} | ${fmtRange(iCurrent)} | ${bCurrentEntry ? fmtRange(bCurrentEntry) : '—'} |\n`;
-                }
-              }
-
-              for (const mode of ['interp', 'bytecode']) {
-                for (const k of ['improved', 'regressed', 'unchanged', 'new']) totals[mode][k] += fileS[mode][k];
-                totals[mode].changes.push(...fileS[mode].changes);
-              }
-
-              const hasSignificant = fileS.interp.improved + fileS.interp.regressed + fileS.bytecode.improved + fileS.bytecode.regressed > 0;
-
-              function modeSummary(label, s) {
-                const p = [];
-                if (s.improved > 0) p.push(`🟢 ${s.improved}`);
-                if (s.regressed > 0) p.push(`🔴 ${s.regressed}`);
-                if (s.new > 0) p.push(`🆕 ${s.new}`);
-                if (s.unchanged > 0) p.push(`${s.unchanged} unch.`);
-                const avg = fmtAvg(s.changes);
-                return `${label}: ${p.length > 0 ? p.join(', ') : `${s.changes.length + s.new}`}${avg ? ` · ${avg}` : ''}`;
-              }
-
-              const fileSummary = hasAnyBaseline
-                ? modeSummary('Interp', fileS.interp) + ' · ' + modeSummary('Bytecode', fileS.bytecode)
-                : `${benches.length} benchmarks`;
-
-              fileBlocks.push({ fileName, fileSummary, fileRows, hasSignificant });
-            }
-
-            let body = '## Benchmark Results\n\n';
-
-            if (hasAnyBaseline) {
-              function overallMode(label, s) {
-                const p = [];
-                if (s.improved > 0) p.push(`🟢 ${s.improved} improved`);
-                if (s.regressed > 0) p.push(`🔴 ${s.regressed} regressed`);
-                if (s.new > 0) p.push(`🆕 ${s.new} new`);
-                if (s.unchanged > 0) p.push(`${s.unchanged} unchanged`);
-                const avg = fmtAvg(s.changes);
-                return `**${label}:** ${p.join(' · ')}${avg ? ` · ${avg}` : ''}`;
-              }
-              body += `**${totalBenchmarks}** benchmarks\n\n`;
-              body += overallMode('Interpreted', totals.interp) + '\\\n';
-              body += overallMode('Bytecode', totals.bytecode) + '\n\n';
-            } else {
-              body += `**${totalBenchmarks}** benchmarks (no baseline)\n\n`;
-            }
-
-            for (const block of fileBlocks) {
-              const shortName = block.fileName.replace(/^benchmarks\//, '');
-              const open = block.hasSignificant ? ' open' : '';
-              body += `<details${open}>\n`;
-              body += `<summary><strong>${shortName}</strong> — ${block.fileSummary}</summary>\n\n`;
-              body += block.fileRows;
-              body += `\n</details>\n\n`;
-            }
-
+            // Deterministic profile diff (opcode/allocation counts) is runner
+            // independent, so it compares the same-runner main build's profiles.
             const skipProfile = /\[skip-profile-check\]/.test(context.payload.pull_request?.body || '');
+            let profileDiff = '';
             try {
-              const profileDiff = buildProfileDiffSection({
-                baselineDir: 'profile-baseline',
+              profileDiff = buildProfileDiffSection({
+                baselineDir: 'profile-main',
                 currentDir: 'profile-current',
                 skip: skipProfile,
-              });
-              body += profileDiff.markdown + '\n\n';
+              }).markdown;
             } catch (error) {
               console.log('Failed to build deterministic profile diff:', error.message);
-              body += '## Deterministic profile diff\n\nDeterministic profile diff: unavailable due to a comparison error.\n\n';
+              profileDiff = '## Deterministic profile diff\n\nDeterministic profile diff: unavailable due to a comparison error.';
             }
 
-            body += '<sub>Measured on ubuntu-latest x64. Benchmark ranges compare cached main-branch min/max ops/sec with the PR run; overlapping ranges are treated as unchanged noise. Percentage deltas are secondary context.</sub>';
+            const { body: inner } = buildBenchmarkComparison({
+              interpData: read('benchmark-interpreted.json'),
+              interpMain: tryRead('benchmark-interpreted-main.json'),
+              bytecodeData: read('benchmark-bytecode.json'),
+              bytecodeMain: tryRead('benchmark-bytecode-main.json'),
+              profileDiff,
+              runnerLabel: 'ubuntu-latest x64',
+            });
 
             const marker = '<!-- benchmark-comparison -->';
-            body = marker + '\n' + body;
+            const body = marker + '\n' + inner;
 
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,

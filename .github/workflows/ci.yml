@@ -779,7 +779,10 @@ jobs:
           GOCCIA_BENCH_ROUNDS: 7
         run: ./build/GocciaBenchmarkRunner benchmarks ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --no-progress
 
-      - name: Run benchmarks and save baseline
+      # main/x86_64-linux emits JSON so the next step can validate the benchmark
+      # report shape. PR comparison no longer reads a cached baseline from here —
+      # each PR builds and benchmarks `main` on its own runner (issue #815).
+      - name: Run benchmarks (validate JSON output)
         if: github.ref == 'refs/heads/main' && matrix.target == 'x86_64-linux'
         env:
           GOCCIA_BENCH_CALIBRATION_MS: 100
@@ -818,13 +821,6 @@ jobs:
             sys.exit(1)
           PY
 
-      - name: Cache benchmark baseline
-        if: github.ref == 'refs/heads/main' && matrix.target == 'x86_64-linux'
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
-        with:
-          path: benchmark-${{ matrix.mode }}-results.json
-          key: benchmark-${{ matrix.mode }}-baseline-${{ github.sha }}
-
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         if: github.ref == 'refs/heads/main' && matrix.target == 'x86_64-linux' && matrix.mode == 'bytecode'
 
@@ -854,13 +850,6 @@ jobs:
             --profile-dir profile-baseline \
             --summary-output benchmark-profile-aggregate.json \
             --markdown-output benchmark-profile-aggregate.md
-
-      - name: Cache deterministic profile baseline
-        if: github.ref == 'refs/heads/main' && matrix.target == 'x86_64-linux' && matrix.mode == 'bytecode'
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
-        with:
-          path: profile-baseline/
-          key: profile-baseline-${{ github.sha }}
 
       - name: Upload benchmark profile
         if: github.ref == 'refs/heads/main' && matrix.target == 'x86_64-linux' && matrix.mode == 'bytecode' && hashFiles('benchmark-profile-aggregate.json') != '' && hashFiles('profile-baseline/**') != ''
@@ -948,6 +937,9 @@ jobs:
 
       - name: Check embedded resource CLI behaviour
         run: bun run scripts/test-cli-embedded-resources.ts
+
+      - name: Check benchmark comparison logic
+        run: bun run scripts/test-benchmark-compare.ts
 
       - name: Check Windows TLS dependencies
         if: runner.os == 'Windows'

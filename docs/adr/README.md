@@ -85,3 +85,4 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0073 — Opt-in ShadowRealm](0073-opt-in-shadowrealm.md)
 - [0074 — Deferred bytecode call-stack frames](0074-deferred-bytecode-call-stack-frames.md)
 - [0075 — ShadowRealm full test262 conformance](0075-shadowrealm-conformance.md)
+- [0076 — Same-runner benchmark comparison](0076-same-runner-benchmark-comparison.md)

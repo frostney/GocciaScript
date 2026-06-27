@@ -217,7 +217,7 @@ function buildProfileDiffSection(options) {
 
   if (baselineFiles.length === 0) {
     return {
-      markdown: '## Deterministic profile diff\n\nDeterministic profile diff: no cached baseline was restored.',
+      markdown: '## Deterministic profile diff\n\nDeterministic profile diff: no `main`-build profile was available.',
       signalCount: 0,
     };
   }
