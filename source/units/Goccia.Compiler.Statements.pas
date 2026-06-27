@@ -4764,7 +4764,8 @@ begin
   for I := 0 to High(AMethod.Parameters) do
     if AMethod.Parameters[I].IsPattern and Assigned(AMethod.Parameters[I].Pattern) then
       CollectDestructuringBindings(AMethod.Parameters[I].Pattern, ChildScope);
-  ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, AMethod.Parameters);
+  ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, AMethod.Parameters,
+    ChildTemplate.SourceText);
   if FormalCount < 0 then
     FormalCount := Length(AMethod.Parameters);
   ChildTemplate.FormalParameterCount := UInt8(FormalCount);
@@ -4855,7 +4856,8 @@ begin
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
   SetLength(EmptyParams, 0);
-  ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, EmptyParams);
+  ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, EmptyParams,
+    ChildTemplate.SourceText);
 
   ACtx.SwapState(ChildTemplate, ChildScope);
   ChildCtx := ACtx;
@@ -4948,7 +4950,8 @@ begin
   ChildTemplate.FormalParameterCount := UInt8(FormalCount);
   if Assigned(ACtx.FormalParameterCounts) then
     ACtx.FormalParameterCounts.AddOrSetValue(ChildTemplate, FormalCount);
-  ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, SetterParams);
+  ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, SetterParams,
+    ChildTemplate.SourceText);
 
   ACtx.SwapState(ChildTemplate, ChildScope);
   ChildCtx := ACtx;
@@ -5018,11 +5021,16 @@ begin
 
   ChildTemplate := TGocciaFunctionTemplate.Create('<get [computed]>');
   ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
+  // Propagate the accessor source so DeclareArgumentsObjectLocal below can elide
+  // the arguments object when the body never references it, matching the other
+  // (non-computed) accessor and method body builders.
+  ChildTemplate.SourceText := AGetter.SourceText;
   ChildTemplate.ParameterCount := 0;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
   SetLength(EmptyParams, 0);
-  ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, EmptyParams);
+  ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, EmptyParams,
+    ChildTemplate.SourceText);
 
   ACtx.SwapState(ChildTemplate, ChildScope);
   ChildCtx := ACtx;
@@ -5086,6 +5094,10 @@ begin
 
   ChildTemplate := TGocciaFunctionTemplate.Create('<set [computed]>');
   ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
+  // Propagate the accessor source so DeclareArgumentsObjectLocal below can elide
+  // the arguments object when the body never references it, matching the other
+  // (non-computed) accessor and method body builders.
+  ChildTemplate.SourceText := ASetter.SourceText;
   SetterParams := ASetter.Parameters;
   if Length(SetterParams) = 0 then
   begin
@@ -5110,7 +5122,8 @@ begin
   ChildTemplate.FormalParameterCount := UInt8(FormalCount);
   if Assigned(ACtx.FormalParameterCounts) then
     ACtx.FormalParameterCounts.AddOrSetValue(ChildTemplate, FormalCount);
-  ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, SetterParams);
+  ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, SetterParams,
+    ChildTemplate.SourceText);
 
   ACtx.SwapState(ChildTemplate, ChildScope);
   ChildCtx := ACtx;
@@ -5207,7 +5220,8 @@ begin
   for I := 0 to High(AMethod.Parameters) do
     if AMethod.Parameters[I].IsPattern and Assigned(AMethod.Parameters[I].Pattern) then
       CollectDestructuringBindings(AMethod.Parameters[I].Pattern, ChildScope);
-  ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, AMethod.Parameters);
+  ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, AMethod.Parameters,
+    ChildTemplate.SourceText);
   if FormalCount < 0 then
     FormalCount := Length(AMethod.Parameters);
   ChildTemplate.FormalParameterCount := UInt8(FormalCount);

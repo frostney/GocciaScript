@@ -92,6 +92,8 @@ end;
 
 destructor TGocciaWeakSetValue.Destroy;
 begin
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.UnregisterWeakContainer(Self);
   FItems.Free;
   inherited;
 end;
@@ -148,6 +150,9 @@ end;
 
 procedure TGocciaWeakSetValue.AddItem(const AValue: TGocciaValue);
 begin
+  // Count this set as a live weak container on its first item (see WeakMap).
+  if (FItems.Count = 0) and Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.RegisterWeakContainer(Self);
   FItems.AddOrSetValue(AValue, True);
 end;
 

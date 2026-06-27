@@ -30,9 +30,14 @@ type
     FSourceText: string;
     FIsExpressionBody: Boolean;
     FIsSimpleParams: Boolean;
+    // Memoized arguments-object decision: 0 = not yet computed, 1 = may
+    // reference (create the object), 2 = provably unused (elide). Reset by
+    // SetSourceText so the lazy scan re-runs if the source span changes.
+    FArgumentsObjectState: Byte;
     function GetFunctionLength: Integer; override;
     function GetFunctionName: string; override;
     function GetSourceText: string; override;
+    procedure SetSourceText(const AValue: string);
     procedure BindThis(const ACallScope: TGocciaScope; const AThisValue: TGocciaValue); virtual;
     function CreateCallScope: TGocciaScope; virtual;
     function CreatesArgumentsObject: Boolean; virtual;
@@ -62,7 +67,7 @@ type
     property IsExpressionBody: Boolean read FIsExpressionBody write FIsExpressionBody;
     property SourceFilePath: string read FSourceFilePath write FSourceFilePath;
     property SourceLine: Integer read FSourceLine write FSourceLine;
-    property SourceText: string read FSourceText write FSourceText;
+    property SourceText: string read FSourceText write SetSourceText;
   end;
 
   TGocciaArrowFunctionValue = class(TGocciaFunctionValue)
@@ -376,9 +381,26 @@ begin
   Result := TGocciaCallScope.Create(FClosure, FName, Length(FParameters) + 2);
 end;
 
+procedure TGocciaFunctionValue.SetSourceText(const AValue: string);
+begin
+  FSourceText := AValue;
+  FArgumentsObjectState := 0;
+end;
+
 function TGocciaFunctionValue.CreatesArgumentsObject: Boolean;
 begin
-  Result := True;
+  // A non-arrow function only needs an implicit arguments object when its body
+  // can reference one. Decide once from the source span (memoized) so the
+  // ~per-call cost is a single byte test; see
+  // FunctionSourceMayReferenceArgumentsObject for why the scan is sound.
+  if FArgumentsObjectState = 0 then
+  begin
+    if FunctionSourceMayReferenceArgumentsObject(FSourceText) then
+      FArgumentsObjectState := 1
+    else
+      FArgumentsObjectState := 2;
+  end;
+  Result := FArgumentsObjectState = 1;
 end;
 
 function DestructuringPatternHasParameterExpression(
@@ -570,10 +592,17 @@ begin
   Context.NonStrictMode := CompatibilityNonStrictMode and not FStrictCode;
   Context.CompatibilityNonStrictMode := CompatibilityNonStrictMode;
   Context.DisposalTracker := nil;
-  EvalRejectNames := BuildParameterEvalVarDeclarationRejectNames(
-    ArgumentsObjectEnabled and CreatesArgumentsObject and
-    not ParameterListBindsName(FParameters, IDENTIFIER_ARGUMENTS));
   HasParamExpressions := HasParameterExpressions;
+  // EvalRejectNames is only read while evaluating a parameter default, so
+  // only build it when a parameter actually has a default or pattern
+  // expression. Simple-parameter functions skip the allocation and the
+  // O(n^2) name dedup entirely.
+  if HasParamExpressions then
+    EvalRejectNames := BuildParameterEvalVarDeclarationRejectNames(
+      ArgumentsObjectEnabled and CreatesArgumentsObject and
+      not ParameterListBindsName(FParameters, IDENTIFIER_ARGUMENTS))
+  else
+    EvalRejectNames := nil;
 
   // Record coverage hit on the declaration line (get/set/constructor/method)
   if Context.CoverageEnabled and (FSourceLine > 0) and (FSourceFilePath <> '') then
@@ -722,6 +751,15 @@ begin
     end;
   end;
 
+  // Expression-body fast path: an expression body cannot contain var,
+  // function, or lexical declarations, so the hoisting passes below are
+  // no-ops for it. Evaluate the single expression directly and skip them.
+  if FIsExpressionBody and (FBodyStatements.Count = 1) then
+  begin
+    Result := EvaluateExpression(TGocciaExpression(FBodyStatements[0]), Context);
+    Exit;
+  end;
+
   // Hoist var declarations to function scope
   HoistVarDeclarations(FBodyStatements, BodyScope, Context);
 
@@ -731,13 +769,6 @@ begin
 
   // Hoist function declarations (both name and value) to function scope
   HoistFunctionDeclarations(FBodyStatements, Context);
-
-  // Expression-body fast path: expression bodies cannot contain return/break
-  if FIsExpressionBody and (FBodyStatements.Count = 1) then
-  begin
-    Result := EvaluateExpression(TGocciaExpression(FBodyStatements[0]), Context);
-    Exit;
-  end;
 
   // Single-return fast path: (x) => { return expr; } — evaluate the return
   // expression directly, bypassing the statement loop
@@ -895,10 +926,13 @@ begin
     Context.NonStrictMode := CompatibilityNonStrictMode and not FStrictCode;
     Context.CompatibilityNonStrictMode := CompatibilityNonStrictMode;
     Context.DisposalTracker := nil;
-    EvalRejectNames := BuildParameterEvalVarDeclarationRejectNames(
-      ArgumentsObjectEnabled and CreatesArgumentsObject and
-      not ParameterListBindsName(FParameters, IDENTIFIER_ARGUMENTS));
     HasParamExpressions := HasParameterExpressions;
+    if HasParamExpressions then
+      EvalRejectNames := BuildParameterEvalVarDeclarationRejectNames(
+        ArgumentsObjectEnabled and CreatesArgumentsObject and
+        not ParameterListBindsName(FParameters, IDENTIFIER_ARGUMENTS))
+    else
+      EvalRejectNames := nil;
 
     if Context.CoverageEnabled and (FSourceLine > 0) and
        (FSourceFilePath <> '') then
@@ -1042,9 +1076,13 @@ begin
       end;
     end;
 
-    HoistVarDeclarations(FBodyStatements, BodyScope, Context);
-    PredeclareFunctionBodyLexicalDeclarations(FBodyStatements, BodyScope);
-    HoistFunctionDeclarations(FBodyStatements, Context);
+    // An expression body has no declarations to hoist; skip the no-op passes.
+    if not (FIsExpressionBody and (FBodyStatements.Count = 1)) then
+    begin
+      HoistVarDeclarations(FBodyStatements, BodyScope, Context);
+      PredeclareFunctionBodyLexicalDeclarations(FBodyStatements, BodyScope);
+      HoistFunctionDeclarations(FBodyStatements, Context);
+    end;
 
     AsyncBodyStatements := TObjectList<TGocciaASTNode>.Create(False);
     if FIsExpressionBody and (FBodyStatements.Count = 1) then

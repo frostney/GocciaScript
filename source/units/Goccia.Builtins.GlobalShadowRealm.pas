@@ -68,12 +68,25 @@ uses
   Goccia.VM.Exception;
 
 type
+  { A direct-eval host bound to one realm, installed on a ShadowRealm child
+    realm's global when the creating realm exposes `eval`. It always evaluates
+    source in its own realm, so child code can never reach across the boundary. }
+  TGocciaShadowRealmEvalHost = class
+  private
+    FEngine: TGocciaEngine;
+  public
+    constructor Create(const AEngine: TGocciaEngine);
+    function Invoke(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+  end;
+
   { Owns one child engine (a fresh realm) created by `new ShadowRealm()`. }
   TGocciaShadowRealmChildRealm = class
   private
     FEngine: TGocciaEngine;
     FSource: TStringList;
     FExecutor: TGocciaExecutor;
+    FEvalHost: TGocciaShadowRealmEvalHost;
   public
     constructor Create(const AParentEngine: TGocciaEngine);
     destructor Destroy; override;
@@ -132,16 +145,17 @@ type
       const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
-{ CopyNameAndLength (TC39 ShadowRealm §3.1.2): clamp a target's "length" to a
-  non-negative integer length for the wrapped function. }
-function ClampWrappedLength(const AValue: Double): Integer;
+{ CopyNameAndLength (TC39 ShadowRealm §3.1.2) with argCount 0: the wrapped
+  function's "length". +∞ stays +∞, -∞ and negatives clamp to 0, finite values
+  truncate toward zero. The result can be +∞, so it is a Double, not an Integer. }
+function ClampWrappedLength(const AValue: Double): Double;
 begin
   if IsNan(AValue) or (AValue <= 0) then
     Result := 0
-  else if AValue >= MaxInt then
-    Result := MaxInt
+  else if IsInfinite(AValue) then
+    Result := AValue
   else
-    Result := Trunc(AValue);
+    Result := Int(AValue);
 end;
 
 function GetShadowRealmHost(
@@ -168,6 +182,8 @@ constructor TGocciaShadowRealmChildRealm.Create(
   const AParentEngine: TGocciaEngine);
 var
   AliasPair: TStringStringMap.TKeyValuePair;
+  EvalFn: TGocciaNativeFunctionValue;
+  InstallScope: TGocciaExecutionContextScope;
 begin
   inherited Create;
   FSource := TStringList.Create;
@@ -199,6 +215,27 @@ begin
   FEngine.ModuleLoader.Preprocessors := AParentEngine.Preprocessors;
   for AliasPair in AParentEngine.ModuleLoader.Resolver.Aliases do
     FEngine.ModuleLoader.Resolver.AddAlias(AliasPair.Key, AliasPair.Value);
+  // SetDefaultGlobalBindings installs `eval` on the realm global. GocciaScript
+  // keeps eval out of normal realms, so mirror the creating realm: when it
+  // exposes `eval`, give the child its own realm-bound eval (which evaluates in
+  // this realm, so isolation holds) so the child global surface matches.
+  if (AParentEngine.Realm.GlobalObject is TGocciaObjectValue) and
+     TGocciaObjectValue(AParentEngine.Realm.GlobalObject).HasOwnProperty(
+       'eval') then
+  begin
+    FEvalHost := TGocciaShadowRealmEvalHost.Create(FEngine);
+    InstallScope := FEngine.ActivateRealmExecutionContext;
+    try
+      EvalFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+        FEvalHost.Invoke, 'eval', 1);
+      EvalFn.DirectEvalHost := True;
+      (FEngine.Realm.GlobalObject as TGocciaObjectValue).DefineProperty('eval',
+        TGocciaPropertyDescriptorData.Create(EvalFn,
+          [pfWritable, pfConfigurable]));
+    finally
+      InstallScope.Free;
+    end;
+  end;
   FEngine.SuspendRealmExecutionContext;
 end;
 
@@ -219,7 +256,102 @@ begin
   end;
   FExecutor.Free;
   FSource.Free;
+  FEvalHost.Free;
   inherited;
+end;
+
+{ TGocciaShadowRealmEvalHost }
+
+constructor TGocciaShadowRealmEvalHost.Create(const AEngine: TGocciaEngine);
+begin
+  inherited Create;
+  FEngine := AEngine;
+end;
+
+// ES2026 §19.2.1 eval ( x ), evaluated in this host's (child) realm.
+function TGocciaShadowRealmEvalHost.Invoke(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  SourceValue: TGocciaValue;
+  SourceText: string;
+  SourceList: TStringList;
+  Options: TGocciaSourcePipelineOptions;
+  OptionsScope: TGocciaSourcePipelineOptionsScope;
+  ParseResult: TGocciaSourcePipelineResult;
+  RealmScope: TGocciaExecutionContextScope;
+  EvalScope, VarScope: TGocciaScope;
+  EvalContext: TGocciaEvaluationContext;
+  StrictEval: Boolean;
+  I: Integer;
+begin
+  // Step 2: if x is not a String, return x unchanged.
+  if AArgs.Length = 0 then
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  SourceValue := AArgs.GetElement(0);
+  if not (SourceValue is TGocciaStringLiteralValue) then
+    Exit(SourceValue);
+  SourceText := TGocciaStringLiteralValue(SourceValue).Value;
+
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  SourceList := TStringList.Create;
+  try
+    SourceList.Text := SourceText;
+    Options := TGocciaSourcePipeline.DefaultOptions;
+    Options.SourceType := stScript;
+    Options.Preprocessors := FEngine.Preprocessors;
+    Options.Compatibility := FEngine.Compatibility;
+    OptionsScope := TGocciaSourcePipeline.ActivateOptions(Options);
+    try
+      RealmScope := FEngine.ActivateRealmExecutionContext;
+      try
+        // The eval runs in this realm, so its parse/runtime errors are this
+        // realm's errors — no cross-realm wrapping (eval was called from here).
+        ParseResult := TGocciaSourcePipeline.Parse(SourceList,
+          '<shadow-realm-eval>', Options);
+        try
+          for I := 0 to ParseResult.ProgramNode.Body.Count - 1 do
+            if ParseResult.ProgramNode.Body[I] is TGocciaUsingDeclaration then
+              ThrowSyntaxError('Using declarations are not allowed at the ' +
+                'top level of eval');
+          StrictEval := HasUseStrictDirective(ParseResult.ProgramNode);
+          if StrictEval then
+            EvalScope := FEngine.Interpreter.GlobalScope.CreateChild(
+              skFunction, 'ShadowRealmEvalFn')
+          else
+            EvalScope := FEngine.Interpreter.GlobalScope.CreateChild(
+              skBlock, 'ShadowRealmEvalFn');
+          EvalScope.ThisValue := FEngine.Interpreter.GlobalScope.ThisValue;
+          if Assigned(TGarbageCollector.Instance) then
+            TGarbageCollector.Instance.AddTempRoot(EvalScope);
+          try
+            EvalContext := FEngine.Interpreter.CreateEvaluationContext;
+            EvalContext.Scope := EvalScope;
+            EvalContext.CurrentFilePath := '<shadow-realm-eval>';
+            EvalContext.NonStrictMode := not StrictEval;
+            if StrictEval then
+              VarScope := EvalScope
+            else
+              VarScope := FEngine.Interpreter.GlobalScope;
+            Result := EvaluateEvalProgram(ParseResult.ProgramNode,
+              EvalContext, VarScope, EvalScope, StrictEval, False, nil,
+              False, False, False);
+          finally
+            if Assigned(TGarbageCollector.Instance) then
+              TGarbageCollector.Instance.RemoveTempRoot(EvalScope);
+          end;
+        finally
+          ParseResult.Free;
+        end;
+      finally
+        RealmScope.Free;
+      end;
+    finally
+      OptionsScope.Free;
+    end;
+  finally
+    SourceList.Free;
+  end;
 end;
 
 { TGocciaShadowRealmHost }
@@ -340,6 +472,8 @@ var
   EvalScope, VarScope: TGocciaScope;
   EvalContext: TGocciaEvaluationContext;
   StrictEval: Boolean;
+  EarlyErrorThrew: Boolean;
+  EarlyErrorMessage: string;
   RawResult: TGocciaValue;
   Threw: Boolean;
   I: Integer;
@@ -368,6 +502,8 @@ begin
     ChildEngine := Instance.ChildRealm.Engine;
     RawResult := TGocciaUndefinedLiteralValue.UndefinedValue;
     Threw := False;
+    EarlyErrorThrew := False;
+    EarlyErrorMessage := '';
 
     SourceList := TStringList.Create;
     try
@@ -403,8 +539,24 @@ begin
           // never the outer realm (ScriptIsStrict of script).
           ChildScope := ChildEngine.ActivateRealmExecutionContext;
           try
+            StrictEval := HasUseStrictDirective(ParseResult.ProgramNode);
+            // §3.1.3: a static early error (e.g. assigning to `arguments` in a
+            // strict body) is a SyntaxError. Validate before evaluating so it is
+            // not conflated with a runtime abrupt completion, which §3.1.3 step
+            // 15 wraps as a caller-realm TypeError (this includes a runtime
+            // SyntaxError thrown later by a nested eval).
             try
-              StrictEval := HasUseStrictDirective(ParseResult.ProgramNode);
+              ValidateEvalEarlyErrors(ParseResult.ProgramNode, StrictEval,
+                False, False, False);
+            except
+              on E: TGocciaSyntaxError do
+              begin
+                EarlyErrorThrew := True;
+                EarlyErrorMessage := E.Message;
+              end;
+            end;
+            if not EarlyErrorThrew then
+            try
               if StrictEval then
                 EvalScope := ChildEngine.Interpreter.GlobalScope.CreateChild(
                   skFunction, 'ShadowRealmEval')
@@ -436,6 +588,9 @@ begin
                   TGarbageCollector.Instance.RemoveTempRoot(EvalScope);
               end;
             except
+              // §3.1.3 step 15: a runtime abrupt completion (including a runtime
+              // SyntaxError, e.g. from a nested eval) becomes a caller-realm
+              // TypeError. Static early errors were already validated above.
               on E: TGocciaThrowValue do Threw := True;
               on E: EGocciaBytecodeThrow do Threw := True;
               on E: TGocciaError do Threw := True;
@@ -452,6 +607,10 @@ begin
     finally
       SourceList.Free;
     end;
+
+    // 3.1.3 step 2: a static early error stays a caller-realm SyntaxError.
+    if EarlyErrorThrew then
+      ThrowSyntaxError(EarlyErrorMessage);
 
     // 3.1.3 step 15: wrap evaluation errors into a caller-realm TypeError.
     if Threw then
@@ -615,7 +774,8 @@ end;
 function TGocciaShadowRealmHost.WrapIncoming(const AValue: TGocciaValue;
   const ASourceEngine: TGocciaEngine): TGocciaValue;
 var
-  TargetLength: Integer;
+  TargetArity: Integer;
+  TargetLengthValue: Double;
   TargetName: string;
   LengthValue, NameValue: TGocciaValue;
   WrappedHost: TGocciaWrappedFunctionHost;
@@ -643,7 +803,7 @@ begin
     // CopyNameAndLength (3.1.2) reads the target's "length"/"name"; if a read
     // throws (e.g. a revoked proxy target), WrappedFunctionCreate throws a
     // TypeError (step 8).
-    TargetLength := 0;
+    TargetLengthValue := 0;
     TargetName := '';
     try
       if (AValue is TGocciaObjectValue) and
@@ -651,7 +811,7 @@ begin
       begin
         LengthValue := AValue.GetProperty(PROP_LENGTH);
         if LengthValue is TGocciaNumberLiteralValue then
-          TargetLength := ClampWrappedLength(
+          TargetLengthValue := ClampWrappedLength(
             TGocciaNumberLiteralValue(LengthValue).Value);
       end;
       NameValue := AValue.GetProperty(PROP_NAME);
@@ -675,10 +835,21 @@ begin
     // Create the wrapper in FEngine's realm so its [[Prototype]] is FEngine's
     // %Function.prototype% (the realm the value crosses INTO), independent of
     // whichever realm is currently running.
+    // The integer arity cannot carry +∞, so pass a finite placeholder and then
+    // define "length" explicitly below.
+    if IsInfinite(TargetLengthValue) or (TargetLengthValue > MaxInt) then
+      TargetArity := 0
+    else
+      TargetArity := Trunc(TargetLengthValue);
     DestScope := FEngine.ActivateRealmExecutionContext;
     try
       Wrapped := TGocciaNativeFunctionValue.CreateWithoutPrototype(
-        WrappedHost.Invoke, TargetName, TargetLength);
+        WrappedHost.Invoke, TargetName, TargetArity);
+      // SetFunctionLength (3.1.2 step 5): "length" is the Number L (which may be
+      // +∞) with attributes { [[W]]: false, [[E]]: false, [[C]]: true }.
+      Wrapped.DefineProperty(PROP_LENGTH,
+        TGocciaPropertyDescriptorData.Create(
+          TGocciaNumberLiteralValue.Create(TargetLengthValue), [pfConfigurable]));
     finally
       DestScope.Free;
     end;
