@@ -456,7 +456,9 @@ end;
 // thrashing when a haystack and needle are tested alternately. Pure cache.
 // The slots hold a reference to the keyed string, so its buffer cannot be
 // freed while cached and its pointer cannot alias a different live string —
-// that is what keeps the pointer-identity key sound (do not drop the refs).
+// that is what keeps the pointer-identity key sound (do not drop the refs
+// while live). FPC does not finalize managed threadvars at thread exit, so the
+// unit finalization below clears both slots on shutdown (no lookups run then).
 threadvar
   GAsciiMemoStr0: string;
   GAsciiMemoStr1: string;
@@ -1255,9 +1257,23 @@ begin
   Result := Buffer.ToString;
 end;
 
+// Release the is-ASCII memo strings on shutdown; FPC does not finalize managed
+// threadvars at thread exit (see the memo declaration above).
+procedure ClearAsciiMemo;
+begin
+  GAsciiMemoStr0 := '';
+  GAsciiMemoStr1 := '';
+  GAsciiMemoVal0 := False;
+  GAsciiMemoVal1 := False;
+  GAsciiMemoNext := 0;
+end;
+
 initialization
   {$IFDEF MSWINDOWS}
   DefaultSystemCodePage := CP_UTF8;
   {$ENDIF}
+
+finalization
+  ClearAsciiMemo;
 
 end.
