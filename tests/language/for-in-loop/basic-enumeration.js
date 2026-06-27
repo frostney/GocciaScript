@@ -198,6 +198,11 @@ test("dedups same-named keys across a deep prototype chain at scale", () => {
   // All shared keys plus one unique key per level, no duplicates.
   expect(seen.length).toBe(SHARED + LEVELS);
 
+  // The inherited level-unique keys follow, ordered nearest (leaf) to
+  // farthest — one per level, guarding against prototype-level reordering.
+  const expectedUnique = Array.from({ length: LEVELS }, (_, i) => "unique" + (LEVELS - 1 - i));
+  expect(seen.slice(SHARED)).toEqual(expectedUnique);
+
   // Shared keys resolve to the leaf level's value.
   expect(leaf.k0).toBe(LEVELS - 1);
 });
