@@ -201,6 +201,11 @@ jobs:
     needs: [build, build-main]
     if: ${{ !cancelled() && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
+    # Backstop: a normal run is ~7-9 min. Per-benchmark calibration can
+    # occasionally run away on a loaded GitHub runner (issue #815 follow-up); the
+    # per-step `timeout`s below cap each pass, and this caps the whole leg so a
+    # runaway fails in minutes instead of burning the default 360-minute budget.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -234,17 +239,23 @@ jobs:
           chmod +x build-main/* 2>/dev/null || true
 
       # Same-runner A/B (issue #815): the PR and `main` builds are measured on
-      # this one runner so the delta reflects the diff, not cross-runner
-      # variance. Both benchmark the PR's `benchmarks/` workloads. The warm-up
-      # runs are discarded on purpose — they shed runner cold-start (page
-      # faults, sub-turbo clocks) for BOTH binaries so neither the `main` run
-      # (measured first) nor the PR run is penalised by being measured cold.
-      - name: Warm up benchmark runners
+      # this one runner so the delta reflects the diff, not cross-runner variance.
+      # Both benchmark the PR's `benchmarks/` workloads.
+      #
+      # One cheap, discarded warm-up pass ramps the runner CPU off its idle clock
+      # and warms the OS file cache for the benchmark sources (shared by both
+      # binaries) before measuring. It deliberately uses a tiny calibration
+      # (10 ms, 1 round) so it stays light: an earlier full two-binary warm-up
+      # roughly doubled the interpreted leg and loaded the runner right before
+      # measuring, destabilising per-benchmark calibration enough that a measured
+      # pass could run away for tens of minutes (issue #815 follow-up). The
+      # runner's built-in per-benchmark warm-up (5 iterations) covers
+      # binary-specific warmth, so warming one binary here is sufficient.
+      - name: Warm up benchmark runner
         env:
           GOCCIA_BENCH_ROUNDS: 1
-        run: |
-          ./build-main/GocciaBenchmarkRunner benchmarks ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --no-progress > /dev/null 2>&1 || true
-          ./build/GocciaBenchmarkRunner benchmarks ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --no-progress > /dev/null 2>&1 || true
+          GOCCIA_BENCH_CALIBRATION_MS: 10
+        run: timeout 120 ./build/GocciaBenchmarkRunner benchmarks ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --no-progress > /dev/null 2>&1 || true
 
       # `main` is built from the PR's base commit, so it cannot run benchmarks the
       # PR newly adds or changes to use new language features. The report is still
@@ -252,18 +263,23 @@ jobs:
       # being blocked: a benchmark that errors on `main` simply has no baseline
       # entry and renders as 🆕 new. The PR's own run below is intentionally NOT
       # tolerant — a broken PR benchmark should fail the leg.
+      # `timeout` (GNU coreutils, present on ubuntu runners) caps a single pass:
+      # a normal interpreted/bytecode pass is ~3 min, so 8 min is generous, and a
+      # runaway calibration loop is killed (SIGKILL 30 s after SIGTERM) instead of
+      # spinning for the whole job. A killed `main` pass writes no JSON and the
+      # comparison degrades to PR-only via if-no-files-found + null-main handling.
       - name: Run benchmarks (main base)
         continue-on-error: true
         env:
           GOCCIA_BENCH_CALIBRATION_MS: 100
           GOCCIA_BENCH_ROUNDS: 7
-        run: ./build-main/GocciaBenchmarkRunner benchmarks ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --no-progress --format=json --output=benchmark-${{ matrix.mode }}-main.json
+        run: timeout -k 30 480 ./build-main/GocciaBenchmarkRunner benchmarks ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --no-progress --format=json --output=benchmark-${{ matrix.mode }}-main.json
 
       - name: Run benchmarks
         env:
           GOCCIA_BENCH_CALIBRATION_MS: 100
           GOCCIA_BENCH_ROUNDS: 7
-        run: ./build/GocciaBenchmarkRunner benchmarks ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --no-progress --format=json --output=benchmark-${{ matrix.mode }}.json
+        run: timeout -k 30 480 ./build/GocciaBenchmarkRunner benchmarks ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --no-progress --format=json --output=benchmark-${{ matrix.mode }}.json
 
       - name: Capture deterministic profiles (main base)
         if: matrix.mode == 'bytecode'
