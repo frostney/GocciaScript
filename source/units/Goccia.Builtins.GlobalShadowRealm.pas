@@ -540,60 +540,66 @@ begin
           ChildScope := ChildEngine.ActivateRealmExecutionContext;
           try
             StrictEval := HasUseStrictDirective(ParseResult.ProgramNode);
-            // §3.1.3: a static early error (e.g. assigning to `arguments` in a
-            // strict body) is a SyntaxError. Validate before evaluating so it is
-            // not conflated with a runtime abrupt completion, which §3.1.3 step
-            // 15 wraps as a caller-realm TypeError (this includes a runtime
-            // SyntaxError thrown later by a nested eval).
+            if StrictEval then
+              EvalScope := ChildEngine.Interpreter.GlobalScope.CreateChild(
+                skFunction, 'ShadowRealmEval')
+            else
+              EvalScope := ChildEngine.Interpreter.GlobalScope.CreateChild(
+                skBlock, 'ShadowRealmEval');
+            EvalScope.ThisValue := ChildEngine.Interpreter.GlobalScope.ThisValue;
+            if Assigned(TGarbageCollector.Instance) then
+              TGarbageCollector.Instance.AddTempRoot(EvalScope);
             try
-              ValidateEvalEarlyErrors(ParseResult.ProgramNode, StrictEval,
-                False, False, False);
-            except
-              on E: TGocciaSyntaxError do
-              begin
-                EarlyErrorThrew := True;
-                EarlyErrorMessage := E.Message;
-              end;
-            end;
-            if not EarlyErrorThrew then
-            try
+              EvalContext := ChildEngine.Interpreter.CreateEvaluationContext;
+              EvalContext.Scope := EvalScope;
+              EvalContext.CurrentFilePath := '<shadow-realm-eval>';
+              EvalContext.NonStrictMode := not StrictEval;
               if StrictEval then
-                EvalScope := ChildEngine.Interpreter.GlobalScope.CreateChild(
-                  skFunction, 'ShadowRealmEval')
+                VarScope := EvalScope
               else
-                EvalScope := ChildEngine.Interpreter.GlobalScope.CreateChild(
-                  skBlock, 'ShadowRealmEval');
-              EvalScope.ThisValue := ChildEngine.Interpreter.GlobalScope.ThisValue;
-              if Assigned(TGarbageCollector.Instance) then
-                TGarbageCollector.Instance.AddTempRoot(EvalScope);
+                VarScope := ChildEngine.Interpreter.GlobalScope;
+              // §3.1.3 splits evaluation into two phases that map to two
+              // different caller-realm errors. PrepareEvalProgram runs the static
+              // early-error passes and EvalDeclarationInstantiation; an early
+              // error there — such as a duplicate top-level lexical binding
+              // (`let x; let x;`), or, under strict eval, assignment to
+              // `eval`/`arguments` — is a SyntaxError, just like a parse failure
+              // (step 2). RunEvalProgramBody then evaluates the body; an abrupt
+              // completion there, including a runtime SyntaxError (e.g. from a
+              // nested eval), is wrapped as a caller-realm TypeError (step 15). A
+              // CanDeclareGlobal* conflict raised during instantiation is itself a
+              // TypeError, so it routes to the same wrap rather than to SyntaxError.
+              //
+              // var/function bind in the realm's global var environment (so they
+              // persist across evaluate calls and surface on globalThis);
+              // let/const bind in this fresh per-call lexical scope, so
+              // re-evaluating top-level lexical declarations does not clash.
               try
-                EvalContext := ChildEngine.Interpreter.CreateEvaluationContext;
-                EvalContext.Scope := EvalScope;
-                EvalContext.CurrentFilePath := '<shadow-realm-eval>';
-                EvalContext.NonStrictMode := not StrictEval;
-                if StrictEval then
-                  VarScope := EvalScope
-                else
-                  VarScope := ChildEngine.Interpreter.GlobalScope;
-                // EvalDeclarationInstantiation: var/function bind in the realm's
-                // global var environment (so they persist across evaluate calls
-                // and surface on globalThis); let/const bind in this fresh
-                // per-call lexical scope, so re-evaluating top-level lexical
-                // declarations does not clash.
-                RawResult := EvaluateEvalProgram(ParseResult.ProgramNode,
+                EvalContext := PrepareEvalProgram(ParseResult.ProgramNode,
                   EvalContext, VarScope, EvalScope, StrictEval, False, nil,
-                  False, False, False);
-              finally
-                if Assigned(TGarbageCollector.Instance) then
-                  TGarbageCollector.Instance.RemoveTempRoot(EvalScope);
+                  False, False, False, False);
+              except
+                on E: TGocciaSyntaxError do
+                begin
+                  EarlyErrorThrew := True;
+                  EarlyErrorMessage := E.Message;
+                end;
+                on E: TGocciaThrowValue do Threw := True;
+                on E: EGocciaBytecodeThrow do Threw := True;
+                on E: TGocciaError do Threw := True;
               end;
-            except
-              // §3.1.3 step 15: a runtime abrupt completion (including a runtime
-              // SyntaxError, e.g. from a nested eval) becomes a caller-realm
-              // TypeError. Static early errors were already validated above.
-              on E: TGocciaThrowValue do Threw := True;
-              on E: EGocciaBytecodeThrow do Threw := True;
-              on E: TGocciaError do Threw := True;
+              if not (EarlyErrorThrew or Threw) then
+              try
+                RawResult := RunEvalProgramBody(ParseResult.ProgramNode,
+                  EvalContext);
+              except
+                on E: TGocciaThrowValue do Threw := True;
+                on E: EGocciaBytecodeThrow do Threw := True;
+                on E: TGocciaError do Threw := True;
+              end;
+            finally
+              if Assigned(TGarbageCollector.Instance) then
+                TGarbageCollector.Instance.RemoveTempRoot(EvalScope);
             end;
           finally
             ChildScope.Free;
