@@ -6,6 +6,7 @@ interface
 
 uses
   Classes,
+  StrUtils,
   SysUtils;
 
 type
@@ -447,12 +448,63 @@ begin
       Chr($80 or (ACodeUnit and $3F));
 end;
 
+// Per-thread is-ASCII memo. The UTF-16 helpers are called repeatedly against
+// the same subject (charCodeAt loops, replaceAll/split, regex substring
+// extraction). For an all-ASCII (single-byte) string, UTF-16 code-unit index
+// equals byte index, so those operations reduce to plain byte ops. The memo
+// makes the all-ASCII test O(1) across repeated calls; two slots avoid
+// thrashing when a haystack and needle are tested alternately. Pure cache.
+// The slots hold a reference to the keyed string, so its buffer cannot be
+// freed while cached and its pointer cannot alias a different live string —
+// that is what keeps the pointer-identity key sound (do not drop the refs
+// while live). FPC does not finalize managed threadvars at thread exit, so the
+// unit finalization below clears both slots on shutdown (no lookups run then).
+threadvar
+  GAsciiMemoStr0: string;
+  GAsciiMemoStr1: string;
+  GAsciiMemoVal0: Boolean;
+  GAsciiMemoVal1: Boolean;
+  GAsciiMemoNext: Integer;
+
+function StringIsAllAscii(const AText: string): Boolean;
+var
+  I: Integer;
+begin
+  if Length(AText) = 0 then
+    Exit(True);
+  if Pointer(AText) = Pointer(GAsciiMemoStr0) then
+    Exit(GAsciiMemoVal0);
+  if Pointer(AText) = Pointer(GAsciiMemoStr1) then
+    Exit(GAsciiMemoVal1);
+  Result := True;
+  for I := 1 to Length(AText) do
+    if Ord(AText[I]) >= $80 then
+    begin
+      Result := False;
+      Break;
+    end;
+  if GAsciiMemoNext = 0 then
+  begin
+    GAsciiMemoStr0 := AText;
+    GAsciiMemoVal0 := Result;
+    GAsciiMemoNext := 1;
+  end
+  else
+  begin
+    GAsciiMemoStr1 := AText;
+    GAsciiMemoVal1 := Result;
+    GAsciiMemoNext := 0;
+  end;
+end;
+
 function UTF16CodeUnitLength(const AText: string): Integer;
 var
   ByteLength: Integer;
   CodePoint: Cardinal;
   Index: Integer;
 begin
+  if StringIsAllAscii(AText) then
+    Exit(Length(AText));
   Result := 0;
   Index := 1;
   while Index <= Length(AText) do
@@ -486,6 +538,13 @@ var
 begin
   if AIndex < 0 then
     Exit('');
+
+  if StringIsAllAscii(AText) then
+  begin
+    if AIndex < Length(AText) then
+      Exit(AText[AIndex + 1]);
+    Exit('');
+  end;
 
   CodeUnitIndex := 0;
   Index := 1;
@@ -538,6 +597,16 @@ begin
   ACodePoint := 0;
   if AIndex < 0 then
     Exit(False);
+
+  if StringIsAllAscii(AText) then
+  begin
+    if AIndex < Length(AText) then
+    begin
+      ACodePoint := Ord(AText[AIndex + 1]);
+      Exit(True);
+    end;
+    Exit(False);
+  end;
 
   CodeUnitIndex := 0;
   Index := 1;
@@ -605,6 +674,9 @@ var
 begin
   if (AStart < 0) or (ACount <= 0) then
     Exit('');
+
+  if StringIsAllAscii(AText) then
+    Exit(Copy(AText, AStart + 1, ACount));
 
   Buffer := TStringBuffer.Create(Length(AText));
   CodeUnitIndex := 0;
@@ -723,7 +795,22 @@ var
   StartIndex: Integer;
   TextUnits: TUTF16CodeUnitArray;
   TextLength: Integer;
+  BytePos: Integer;
 begin
+  if StringIsAllAscii(AText) and StringIsAllAscii(ASearch) then
+  begin
+    // Single-byte text: byte index == UTF-16 code-unit index.
+    StartIndex := Max(0, Min(AStart, Length(AText)));
+    if Length(ASearch) = 0 then
+      Exit(StartIndex);
+    if Length(ASearch) > Length(AText) then
+      Exit(-1);
+    BytePos := PosEx(ASearch, AText, StartIndex + 1);
+    if BytePos = 0 then
+      Exit(-1);
+    Exit(BytePos - 1);
+  end;
+
   TextUnits := BuildUTF16CodeUnitArray(AText);
   SearchUnits := BuildUTF16CodeUnitArray(ASearch);
   TextLength := Length(TextUnits);
@@ -752,6 +839,22 @@ var
   TextUnits: TUTF16CodeUnitArray;
   TextLength: Integer;
 begin
+  if StringIsAllAscii(AText) and StringIsAllAscii(ASearch) then
+  begin
+    // Single-byte text: byte index == UTF-16 code-unit index (mirrors UTF16IndexOf).
+    TextLength := Length(AText);
+    SearchLength := Length(ASearch);
+    StartIndex := Max(0, Min(AStart, TextLength));
+    if SearchLength = 0 then
+      Exit(StartIndex);
+    if SearchLength > TextLength then
+      Exit(-1);
+    for I := Min(StartIndex, TextLength - SearchLength) downto 0 do
+      if CompareByte(AText[I + 1], ASearch[1], SearchLength) = 0 then
+        Exit(I);
+    Exit(-1);
+  end;
+
   TextUnits := BuildUTF16CodeUnitArray(AText);
   SearchUnits := BuildUTF16CodeUnitArray(ASearch);
   TextLength := Length(TextUnits);
@@ -1154,9 +1257,23 @@ begin
   Result := Buffer.ToString;
 end;
 
+// Release the is-ASCII memo strings on shutdown; FPC does not finalize managed
+// threadvars at thread exit (see the memo declaration above).
+procedure ClearAsciiMemo;
+begin
+  GAsciiMemoStr0 := '';
+  GAsciiMemoStr1 := '';
+  GAsciiMemoVal0 := False;
+  GAsciiMemoVal1 := False;
+  GAsciiMemoNext := 0;
+end;
+
 initialization
   {$IFDEF MSWINDOWS}
   DefaultSystemCodePage := CP_UTF8;
   {$ENDIF}
+
+finalization
+  ClearAsciiMemo;
 
 end.
