@@ -232,6 +232,7 @@ type
     procedure SkipBlock;
     procedure SkipBalancedParens;
     procedure SkipStatementOrBlock;
+    procedure SkipTemplateLiteral;
     procedure SkipUnsupportedFunctionSignature;
     // Centralized 'async function' check: enforces same-line constraint,
     // handles disabled-mode fallback.  Call after consuming the 'async' token.
@@ -4723,6 +4724,58 @@ begin
     Line, Column);
 end;
 
+// Skips a complete template literal whose leading token (gttTemplate or
+// gttTemplateHead) is at the cursor, leaving the cursor just past the closing
+// backtick.  The error-recovery skips below (SkipBlock, SkipBalancedParens,
+// SkipUntilSemicolon) must route templates through here: the '}' that closes a
+// '${ ... }' substitution is lexed as a plain gttRightBrace under the default
+// goal, so naive brace/paren counting would miscount it as a structural brace,
+// stop early, and then re-scan the trailing span as a fresh, unterminated
+// template literal.  After consuming that '}', the continuation span must be
+// re-lexed with the template-tail goal, exactly as ParseTemplateLiteral does.
+procedure TGocciaParser.SkipTemplateLiteral;
+var
+  Depth: Integer;
+begin
+  // A template with no substitutions is a single token.
+  if Check(gttTemplate) then
+  begin
+    Advance;
+    Exit;
+  end;
+
+  Advance; // gttTemplateHead: `...${
+  repeat
+    // Skip the substitution expression up to the '}' that closes it, treating
+    // nested templates as units and balancing any inner object/block braces.
+    Depth := 0;
+    while not IsAtEnd do
+    begin
+      if Check(gttTemplateHead) or Check(gttTemplate) then
+        SkipTemplateLiteral
+      else if Check(gttLeftBrace) then
+      begin
+        Inc(Depth);
+        Advance;
+      end
+      else if Check(gttRightBrace) then
+      begin
+        if Depth = 0 then
+          Break;
+        Dec(Depth);
+        Advance;
+      end
+      else
+        Advance;
+    end;
+    if IsAtEnd then
+      Exit;
+    Advance; // gttRightBrace closing the substitution
+    // Re-lex the following span with the template-tail goal so it becomes a
+    // TemplateMiddle/TemplateTail token instead of a stray template start.
+  until ConsumeTemplateContinuation.TokenType = gttTemplateTail;
+end;
+
 procedure TGocciaParser.SkipBlock;
 var
   Depth: Integer;
@@ -4732,9 +4785,14 @@ begin
   Depth := 1;
   while not IsAtEnd and (Depth > 0) do
   begin
-    if Check(gttLeftBrace) then Inc(Depth)
-    else if Check(gttRightBrace) then Dec(Depth);
-    if Depth > 0 then Advance;
+    if Check(gttTemplateHead) or Check(gttTemplate) then
+      SkipTemplateLiteral
+    else
+    begin
+      if Check(gttLeftBrace) then Inc(Depth)
+      else if Check(gttRightBrace) then Dec(Depth);
+      if Depth > 0 then Advance;
+    end;
   end;
   Consume(gttRightBrace, 'Expected "}"',
     SSuggestCloseBlock);
@@ -4749,9 +4807,14 @@ begin
   Depth := 1;
   while not IsAtEnd and (Depth > 0) do
   begin
-    if Check(gttLeftParen) then Inc(Depth)
-    else if Check(gttRightParen) then Dec(Depth);
-    if Depth > 0 then Advance;
+    if Check(gttTemplateHead) or Check(gttTemplate) then
+      SkipTemplateLiteral
+    else
+    begin
+      if Check(gttLeftParen) then Inc(Depth)
+      else if Check(gttRightParen) then Dec(Depth);
+      if Depth > 0 then Advance;
+    end;
   end;
   Consume(gttRightParen, 'Expected ")"',
     SSuggestCloseParenExpression);
@@ -7609,6 +7672,14 @@ begin
     if (Depth = 0) and FAutomaticSemicolonInsertion and
       (Previous.Line < Peek.Line) then
       Exit;
+
+    // Skip template literals whole so a substitution's closing '}' is not
+    // miscounted as a structural brace (see SkipTemplateLiteral).
+    if Check(gttTemplateHead) or Check(gttTemplate) then
+    begin
+      SkipTemplateLiteral;
+      Continue;
+    end;
 
     case Peek.TokenType of
       gttLeftParen, gttLeftBracket, gttLeftBrace, gttLess: Inc(Depth);

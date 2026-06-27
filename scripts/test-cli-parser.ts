@@ -178,4 +178,80 @@ console.log("Unsupported var recovery (ASI and compat-var flags)...");
   if (compatVarNoAsiRes.json.error?.type !== "SyntaxError") throw new Error(`Expected SyntaxError without ASI, got: ${compatVarNoAsiRes.json.error?.type}`);
 }
 
+// -- Disabled traditional for-loop with interpolated template literal -----------
+// Regression: error recovery for a disabled `for (;;)` loop must skip a
+// `${ ... }` substitution as part of its template literal. Previously the
+// substitution's closing brace was miscounted as the structural brace that ends
+// the skipped region, and the trailing backtick was then re-scanned as a fresh,
+// unterminated template literal -- surfacing "Unterminated template literal" at
+// EOF instead of the real "enable --compat-traditional-for-loop" diagnostic.
+
+console.log("Disabled traditional for-loop with interpolated template literal...");
+{
+  const recoveryCases = [
+    {
+      desc: "interpolated template in block body",
+      source: [
+        "const obj = {};",
+        "for (let level = 0; level < 2; level++) {",
+        "  obj[`u${level}`] = level;",
+        "}",
+        "console.log(JSON.stringify(obj));",
+        "",
+      ].join("\n"),
+      expected: "{}\n",
+    },
+    {
+      desc: "interpolated template in non-block body",
+      source: [
+        "const obj = {};",
+        "for (let i = 0; i < 2; i++) obj[`u${i}`] = i;",
+        'console.log("after");',
+        "",
+      ].join("\n"),
+      expected: "after\n",
+    },
+    {
+      desc: "interpolated template in loop header",
+      source: [
+        "let x = 1;",
+        "for (let i = `s${0}`.length; i < 2; i++) { x = 99; }",
+        "console.log(x);",
+        "",
+      ].join("\n"),
+      expected: "1\n",
+    },
+  ];
+
+  for (const { desc, source, expected } of recoveryCases) {
+    for (const args of [[] as string[], ["--mode=bytecode"]]) {
+      const label = args.length ? `${desc} (bytecode)` : desc;
+      const { exitCode, json } = runLoaderJson(source, args);
+      if (json.ok !== true) {
+        if (json.error?.message === "Unterminated template literal")
+          throw new Error(
+            `${label}: regressed -- a disabled traditional for-loop with a template literal surfaced "Unterminated template literal" instead of recovering`,
+          );
+        throw new Error(`${label}: should recover, got ok=${json.ok} error=${JSON.stringify(json.error)}`);
+      }
+      if (exitCode !== 0) throw new Error(`${label}: should exit 0, got ${exitCode}`);
+      if (normalizeLineEndings(json.output) !== expected)
+        throw new Error(`${label}: expected output ${JSON.stringify(expected)}, got ${JSON.stringify(json.output)}`);
+    }
+  }
+
+  // The human-readable diagnostic must name the compat flag, not the lexer's
+  // unterminated-template error.
+  const diag = Bun.spawnSync([LOADER], {
+    stdin: new TextEncoder().encode(recoveryCases[0].source),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const diagOut = `${diag.stdout.toString()}${diag.stderr.toString()}`;
+  if (!diagOut.includes("--compat-traditional-for-loop"))
+    throw new Error(`Expected the diagnostic to reference --compat-traditional-for-loop, got: ${diagOut}`);
+  if (diagOut.includes("Unterminated template literal"))
+    throw new Error(`Diagnostic should not mention an unterminated template literal, got: ${diagOut}`);
+}
+
 console.log("\nAll test-cli-parser.ts tests passed.");
