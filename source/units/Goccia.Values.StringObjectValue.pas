@@ -1924,7 +1924,7 @@ end;
 function TGocciaStringObjectValue.StringPadStart(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   StringValue, PadString, Padding: string;
-  StringLength, TargetLength, PadNeeded: Integer;
+  StringLength, TargetLength, PadNeeded, PadUnitLength: Integer;
 begin
   // Step 1: Let O be RequireObjectCoercible(this value)
   // Step 2: Let S be ToString(O)
@@ -1957,9 +1957,11 @@ begin
   // Step 7: Let truncatedStringFiller be filler repeated and truncated to fillLen
   // Step 8: Return truncatedStringFiller + S
   PadNeeded := TargetLength - StringLength;
-  Padding := '';
-  while UTF16CodeUnitLength(Padding) < PadNeeded do
-    Padding := Padding + PadString;
+  // Repeat arithmetically instead of re-measuring the growing padding each
+  // iteration (which was O(PadNeeded^2) in code-unit re-scans plus concat).
+  PadUnitLength := UTF16CodeUnitLength(PadString);
+  Padding := DupeString(PadString,
+    (PadNeeded + PadUnitLength - 1) div PadUnitLength);
   Padding := UTF16Substring(Padding, 0, PadNeeded);
 
   Result := TGocciaStringLiteralValue.Create(Padding + StringValue);
@@ -1969,7 +1971,7 @@ end;
 function TGocciaStringObjectValue.StringPadEnd(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   StringValue, PadString, Padding: string;
-  StringLength, TargetLength, PadNeeded: Integer;
+  StringLength, TargetLength, PadNeeded, PadUnitLength: Integer;
 begin
   // Step 1: Let O be RequireObjectCoercible(this value)
   // Step 2: Let S be ToString(O)
@@ -2002,9 +2004,11 @@ begin
   // Step 7: Let truncatedStringFiller be filler repeated and truncated to fillLen
   // Step 8: Return S + truncatedStringFiller
   PadNeeded := TargetLength - StringLength;
-  Padding := '';
-  while UTF16CodeUnitLength(Padding) < PadNeeded do
-    Padding := Padding + PadString;
+  // Repeat arithmetically instead of re-measuring the growing padding each
+  // iteration (which was O(PadNeeded^2) in code-unit re-scans plus concat).
+  PadUnitLength := UTF16CodeUnitLength(PadString);
+  Padding := DupeString(PadString,
+    (PadNeeded + PadUnitLength - 1) div PadUnitLength);
   Padding := UTF16Substring(Padding, 0, PadNeeded);
 
   Result := TGocciaStringLiteralValue.Create(StringValue + Padding);

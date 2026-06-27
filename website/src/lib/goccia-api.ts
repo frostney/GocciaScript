@@ -26,6 +26,7 @@ import {
 import {
   findVersion,
   isFlagSupported,
+  resolveAsiFlag,
   type VendorFeatureSet,
 } from "@/lib/vendor-manifest";
 import { getVendorManifest } from "@/lib/vendor-manifest-server";
@@ -285,11 +286,12 @@ function buildEngineArgs(
       args.push("--allowed-host", host);
     }
   }
-  // Keep sending `--asi` while selected playground versions may only advertise
-  // that legacy flag. Version-aware `--compat-asi` dispatch belongs with the
-  // release that drops support for those older binaries.
-  if (asi && isFlagSupported(features, "--asi", kind)) {
-    args.unshift("--asi");
+  // ASI's engine flag was renamed `--asi` -> `--compat-asi` after 0.7.x.
+  // resolveAsiFlag returns the name this binary advertises (or null when it
+  // advertises neither, in which case ASI is omitted entirely).
+  if (asi) {
+    const asiFlag = resolveAsiFlag(features, kind);
+    if (asiFlag) args.unshift(asiFlag);
   }
   // Compat flags pass through unconditionally — the engine errors when it
   // doesn't recognize them, and that's the desired UX (the user toggled it).

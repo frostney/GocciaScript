@@ -424,51 +424,37 @@ end;
 procedure TGocciaTypedArrayValue.WriteNumberLiteral(const AIndex: Integer; const ANum: TGocciaNumberLiteralValue);
 var
   Offset: Integer;
+  ToWrite: Double;
 begin
   if not HasValidElementIndex(AIndex) then
     Exit;
 
-  SyncBufferData;
-  if ANum.IsNaN then
-  begin
-    if IsFloatKind(FKind) then
-    begin
-      Offset := FByteOffset + AIndex * BytesPerElement(FKind);
-      WriteBinaryNumberElement(FBufferData, Offset, ToBinaryElementKind(FKind),
-        ANum.Value, TYPED_ARRAY_LITTLE_ENDIAN);
-    end
-    else
-      WriteElement(AIndex, 0);
-  end
+  // Map the coerced ToNumber result to the value SetValueInBuffer stores: float
+  // kinds keep the value (including NaN/+/-Infinity) verbatim, while integer
+  // kinds store 0 for any non-finite input, except Uint8Clamped which clamps
+  // +Infinity to 255. Selecting the value first lets the index validation, the
+  // backing-store sync, and the byte-offset computation run exactly once per
+  // store instead of being repeated by a nested WriteElement re-dispatch.
+  if IsFloatKind(FKind) then
+    ToWrite := ANum.Value
+  else if ANum.IsNaN then
+    ToWrite := 0
   else if ANum.IsInfinity then
   begin
-    case FKind of
-      takUint8Clamped: WriteElement(AIndex, 255);
-      takFloat16, takFloat32, takFloat64:
-      begin
-        Offset := FByteOffset + AIndex * BytesPerElement(FKind);
-        WriteBinaryNumberElement(FBufferData, Offset, ToBinaryElementKind(FKind),
-          ANum.Value, TYPED_ARRAY_LITTLE_ENDIAN);
-      end;
+    if FKind = takUint8Clamped then
+      ToWrite := 255
     else
-      WriteElement(AIndex, 0);
-    end;
+      ToWrite := 0;
   end
   else if ANum.IsNegativeInfinity then
-  begin
-    case FKind of
-      takFloat16, takFloat32, takFloat64:
-      begin
-        Offset := FByteOffset + AIndex * BytesPerElement(FKind);
-        WriteBinaryNumberElement(FBufferData, Offset, ToBinaryElementKind(FKind),
-          ANum.Value, TYPED_ARRAY_LITTLE_ENDIAN);
-      end;
-    else
-      WriteElement(AIndex, 0);
-    end;
-  end
+    ToWrite := 0
   else
-    WriteElement(AIndex, ANum.Value);
+    ToWrite := ANum.Value;
+
+  SyncBufferData;
+  Offset := FByteOffset + AIndex * BytesPerElement(FKind);
+  WriteBinaryNumberElement(FBufferData, Offset, ToBinaryElementKind(FKind),
+    ToWrite, TYPED_ARRAY_LITTLE_ENDIAN);
 end;
 
 function TGocciaTypedArrayValue.ReadBigIntElement(const AIndex: Integer): Int64;
@@ -552,12 +538,56 @@ begin
   Result := nil;
 end;
 
+// Hot path for CanonicalNumericIndexString: a non-negative integer string with
+// no leading zeros (e.g. "0", "1234") is canonical by construction, because
+// ToString(ToNumber(s)) reproduces s exactly. Up to 15 digits stays below 2^53,
+// so the Double is exact and Number::toString uses plain (non-exponential)
+// notation, guaranteeing the round-trip. Anything else (signs, leading zeros,
+// fractions, exponents, "-0", out-of-range) returns False and defers to the
+// allocation-heavy String->Number->String validation in the caller.
+function TryFastCanonicalIntegerIndex(const AName: string;
+  out ANumericIndex: Double): Boolean;
+var
+  Len, I: Integer;
+  Acc: Int64;
+  C: Char;
+begin
+  Len := Length(AName);
+  if (Len < 1) or (Len > 15) then
+    Exit(False);
+
+  C := AName[1];
+  if (C < '1') or (C > '9') then
+  begin
+    if (Len = 1) and (C = '0') then
+    begin
+      ANumericIndex := 0;
+      Exit(True);
+    end;
+    Exit(False);
+  end;
+
+  Acc := Ord(C) - Ord('0');
+  for I := 2 to Len do
+  begin
+    C := AName[I];
+    if (C < '0') or (C > '9') then
+      Exit(False);
+    Acc := Acc * 10 + (Ord(C) - Ord('0'));
+  end;
+
+  ANumericIndex := Acc;
+  Result := True;
+end;
+
 function TryCanonicalNumericIndexString(const AName: string;
   out ANumericIndex: Double; out AIsNegativeZero: Boolean): Boolean;
 var
   NumberValue: TGocciaNumberLiteralValue;
 begin
   AIsNegativeZero := False;
+  if TryFastCanonicalIntegerIndex(AName, ANumericIndex) then
+    Exit(True);
   if AName = '-0' then
   begin
     ANumericIndex := 0;
