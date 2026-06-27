@@ -105,6 +105,7 @@ uses
   Goccia.Temporal.Options,
   Goccia.Temporal.TimeZone,
   Goccia.Temporal.Utils,
+  Goccia.ThreadCleanupRegistry,
   Goccia.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.IntlDateTimeFormat,
@@ -122,6 +123,11 @@ var
 
 threadvar
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+
+procedure ClearThreadvarMembers;
+begin
+  SetLength(FPrototypeMembers, 0);
+end;
 
 function GetTemporalPlainDateTimeShared: TGocciaSharedPrototype; inline;
 begin
@@ -1699,6 +1705,7 @@ begin
 end;
 
 initialization
+  RegisterThreadvarCleanup(@ClearThreadvarMembers);
   GTemporalPlainDateTimeSharedSlot := RegisterRealmOwnedSlot('Temporal.PlainDateTime.shared');
 
 end.

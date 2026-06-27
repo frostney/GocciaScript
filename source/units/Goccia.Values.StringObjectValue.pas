@@ -102,6 +102,7 @@ uses
   Goccia.GarbageCollector,
   Goccia.Realm,
   Goccia.RegExp.Runtime,
+  Goccia.ThreadCleanupRegistry,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
@@ -121,6 +122,11 @@ var
 threadvar
   FPrototypeMethodHost: TGocciaStringObjectValue;
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+
+procedure ClearThreadvarMembers;
+begin
+  SetLength(FPrototypeMembers, 0);
+end;
 
 function GetSharedStringPrototype: TGocciaObjectValue; inline;
 begin
@@ -2194,6 +2200,7 @@ begin
 end;
 
 initialization
+  RegisterThreadvarCleanup(@ClearThreadvarMembers);
   GStringPrototypeSlot := RegisterRealmSlot('String.prototype');
 
 end.

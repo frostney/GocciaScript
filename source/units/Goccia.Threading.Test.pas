@@ -8,6 +8,7 @@ uses
   SysUtils,
 
   Goccia.GarbageCollector,
+  Goccia.ThreadCleanupRegistry,
   Goccia.Threading,
   Goccia.Values.Primitives,
   TestingPascalLibrary,
@@ -29,6 +30,8 @@ type
     procedure TestPoolResetsCancelledBetweenRuns;
     procedure TestPoolHandlesEmptyFileList;
     procedure TestPoolSingleWorker;
+    procedure TestThreadCleanupRegistryRunsRegistered;
+    procedure TestShutdownThreadRuntimeDrainsRegistryPerWorker;
   end;
 
 { Helpers }
@@ -42,6 +45,30 @@ procedure ResetWorkerState;
 begin
   GWorkerCallCount := 0;
   SetLength(GWorkerFileNames, 0);
+end;
+
+{ Sentinel cleanup callbacks for the ThreadCleanupRegistry tests. Registrations
+  persist for the process (the registry has no unregister), and a registered
+  callback fires on every thread that drains the registry — including worker
+  threads concurrently — so the counters use InterlockedIncrement and each test
+  resets its own counter before measuring a delta. }
+var
+  GSentinelCount: Integer;
+  GSentinelWorkerCount: Integer;
+
+procedure SentinelCleanup;
+begin
+  InterlockedIncrement(GSentinelCount);
+end;
+
+procedure SentinelCleanupSecond;
+begin
+  InterlockedIncrement(GSentinelCount);
+end;
+
+procedure SentinelWorkerCleanup;
+begin
+  InterlockedIncrement(GSentinelWorkerCount);
 end;
 
 type
@@ -95,6 +122,8 @@ begin
   Test('Pool resets Cancelled between runs', TestPoolResetsCancelledBetweenRuns);
   Test('Pool handles empty file list', TestPoolHandlesEmptyFileList);
   Test('Pool single worker processes all files', TestPoolSingleWorker);
+  Test('ThreadCleanupRegistry runs registered callbacks', TestThreadCleanupRegistryRunsRegistered);
+  Test('ShutdownThreadRuntime drains registry once per worker', TestShutdownThreadRuntimeDrainsRegistryPerWorker);
 end;
 
 procedure TTestThreading.TestWorkQueueDrainsAllItems;
@@ -376,6 +405,64 @@ begin
       Expect<Integer>(Length(Pool.Results)).ToBe(3);
       Expect<string>(Pool.Results[0].FileName).ToBe('one.js');
       Expect<string>(Pool.Results[2].FileName).ToBe('three.js');
+    finally
+      Pool.Free;
+    end;
+  finally
+    Files.Free;
+    Host.Free;
+  end;
+end;
+
+procedure TTestThreading.TestThreadCleanupRegistryRunsRegistered;
+begin
+  // A nil callback is ignored (no crash, nothing registered).
+  RegisterThreadvarCleanup(nil);
+
+  // A registered callback runs when the registry is drained.
+  GSentinelCount := 0;
+  RegisterThreadvarCleanup(@SentinelCleanup);
+  RunThreadvarCleanups;
+  Expect<Integer>(GSentinelCount).ToBe(1);
+
+  // Draining again is safe and re-runs the callback (repeatable on any thread).
+  GSentinelCount := 0;
+  RunThreadvarCleanups;
+  Expect<Integer>(GSentinelCount).ToBe(1);
+
+  // Every registered callback runs, not just the first.
+  GSentinelCount := 0;
+  RegisterThreadvarCleanup(@SentinelCleanupSecond);
+  RunThreadvarCleanups;
+  Expect<Integer>(GSentinelCount).ToBe(2);
+end;
+
+procedure TTestThreading.TestShutdownThreadRuntimeDrainsRegistryPerWorker;
+const
+  WORKER_COUNT = 3;
+var
+  Pool: TGocciaThreadPool;
+  Files: TStringList;
+  Host: TTestWorkerHost;
+begin
+  // Each worker thread calls ShutdownThreadRuntime as it exits, which drains the
+  // registry on that thread. With WORKER_COUNT workers, the registered callback
+  // must fire exactly WORKER_COUNT times — proving the per-worker-exit wiring.
+  RegisterThreadvarCleanup(@SentinelWorkerCleanup);
+  GSentinelWorkerCount := 0;
+
+  ResetWorkerState;
+  Host := TTestWorkerHost.Create;
+  Files := TStringList.Create;
+  try
+    Files.Add('w1.js');
+    Files.Add('w2.js');
+    Files.Add('w3.js');
+
+    Pool := TGocciaThreadPool.Create(WORKER_COUNT);
+    try
+      Pool.RunAll(Files, Host.CountingWorker);
+      Expect<Integer>(GSentinelWorkerCount).ToBe(WORKER_COUNT);
     finally
       Pool.Free;
     end;

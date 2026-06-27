@@ -22,6 +22,11 @@ function ExecuteRegExpVM(const AProgram: TRegExpProgram;
   const AInput: string; const AStartIndex: Integer;
   const ARequireStart: Boolean; out AResult: TRegExpVMResult): Boolean;
 
+{ Release the per-thread input-decode memo. Called from this unit's
+  finalization (main thread) and from ShutdownThreadRuntime (worker threads),
+  because FPC does not auto-finalize managed threadvars at thread exit. }
+procedure ClearRegExpInputMemo;
+
 implementation
 
 uses

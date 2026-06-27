@@ -38,6 +38,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.ThreadCleanupRegistry,
   Goccia.Values.DataViewValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
@@ -46,6 +47,11 @@ uses
 
 threadvar
   FStaticMembers: TArray<TGocciaMemberDefinition>;
+
+procedure ClearThreadvarMembers;
+begin
+  SetLength(FStaticMembers, 0);
+end;
 
 const
   NO_MAX_BYTE_LENGTH = -1;
@@ -158,5 +164,8 @@ begin
   else
     Result := TGocciaBooleanLiteralValue.FalseValue;
 end;
+
+initialization
+  RegisterThreadvarCleanup(@ClearThreadvarMembers);
 
 end.

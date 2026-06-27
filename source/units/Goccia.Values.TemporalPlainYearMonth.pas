@@ -67,6 +67,7 @@ uses
   Goccia.Temporal.Calendar,
   Goccia.Temporal.Options,
   Goccia.Temporal.Utils,
+  Goccia.ThreadCleanupRegistry,
   Goccia.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.IntlDateTimeFormat,
@@ -84,6 +85,11 @@ var
 
 threadvar
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+
+procedure ClearThreadvarMembers;
+begin
+  SetLength(FPrototypeMembers, 0);
+end;
 
 function GetTemporalPlainYearMonthShared: TGocciaSharedPrototype; inline;
 begin
@@ -1282,6 +1288,7 @@ begin
 end;
 
 initialization
+  RegisterThreadvarCleanup(@ClearThreadvarMembers);
   GTemporalPlainYearMonthSharedSlot := RegisterRealmOwnedSlot('Temporal.PlainYearMonth.shared');
 
 end.

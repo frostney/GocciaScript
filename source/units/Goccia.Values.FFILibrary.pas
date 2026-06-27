@@ -49,6 +49,7 @@ uses
   Goccia.FFI.Types,
   Goccia.GarbageCollector,
   Goccia.Realm,
+  Goccia.ThreadCleanupRegistry,
   Goccia.Utils,
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ArrayValue,
@@ -65,6 +66,11 @@ var
 
 threadvar
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+
+procedure ClearThreadvarMembers;
+begin
+  SetLength(FPrototypeMembers, 0);
+end;
 
 function GetFFILibraryShared: TGocciaSharedPrototype; inline;
 begin
@@ -702,6 +708,7 @@ begin
 end;
 
 initialization
+  RegisterThreadvarCleanup(@ClearThreadvarMembers);
   GFFILibrarySharedSlot := RegisterRealmOwnedSlot('FFILibrary.shared');
 
 end.

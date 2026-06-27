@@ -170,6 +170,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.Scope,
+  Goccia.ThreadCleanupRegistry,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.BigIntValue,
@@ -190,6 +191,11 @@ var
 threadvar
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
   FUint8Prototype: TGocciaObjectValue;
+
+procedure ClearThreadvarMembers;
+begin
+  SetLength(FPrototypeMembers, 0);
+end;
 
 const
   TYPED_ARRAY_LITTLE_ENDIAN = True;
@@ -3387,6 +3393,7 @@ begin
 end;
 
 initialization
+  RegisterThreadvarCleanup(@ClearThreadvarMembers);
   GTypedArraySharedSlot := RegisterRealmOwnedSlot('TypedArray.shared');
 
 end.

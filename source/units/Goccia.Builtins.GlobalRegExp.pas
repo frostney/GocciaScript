@@ -88,6 +88,7 @@ uses
   Goccia.GarbageCollector,
   Goccia.RegExp.Engine,
   Goccia.RegExp.Runtime,
+  Goccia.ThreadCleanupRegistry,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
@@ -101,6 +102,12 @@ uses
 threadvar
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
   FStaticMembers: TArray<TGocciaMemberDefinition>;
+
+procedure ClearThreadvarMembers;
+begin
+  SetLength(FPrototypeMembers, 0);
+  SetLength(FStaticMembers, 0);
+end;
 
 type
   TRegexReplacementCapture = record
@@ -1478,5 +1485,8 @@ begin
     TGarbageCollector.Instance.RemoveTempRoot(ResultArray);
   end;
 end;
+
+initialization
+  RegisterThreadvarCleanup(@ClearThreadvarMembers);
 
 end.

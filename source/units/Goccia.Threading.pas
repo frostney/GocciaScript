@@ -187,6 +187,7 @@ uses
   Math,
   SysUtils,
 
+  TextSemantics,
   TimingUtils,
 
   Goccia.Builtins.Atomics,
@@ -197,7 +198,9 @@ uses
   Goccia.GarbageCollector,
   Goccia.ImportMeta,
   Goccia.MicrotaskQueue,
+  Goccia.RegExp.VM,
   Goccia.Temporal.TimeZone,
+  Goccia.ThreadCleanupRegistry,
   Goccia.Values.Primitives;
 
 { Thread runtime lifecycle }
@@ -234,6 +237,15 @@ begin
   ClearDisposableStackSlotMap;
   ClearSemverHosts;
   ClearTimeZoneCache;
+  // The #805/#806 memos already finalize on the main thread but, like the
+  // caches above, FPC does not release their managed threadvars on a worker
+  // thread exit — clear them here too.
+  ClearRegExpInputMemo;
+  ClearAsciiMemo;
+  // Drain the engine-wide threadvar-cleanup registry: every builtin's and
+  // value type's cached member-definition array registers its release proc in
+  // Goccia.ThreadCleanupRegistry. This releases this worker thread's copies.
+  RunThreadvarCleanups;
   TGocciaMicrotaskQueue.Shutdown;
   TGocciaCallStack.Shutdown;
   TGarbageCollector.Shutdown;
