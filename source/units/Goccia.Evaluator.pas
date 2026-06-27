@@ -2893,6 +2893,113 @@ begin
   end;
 end;
 
+{ A `return`, or an unlabeled `break`/`continue` with no enclosing iteration or
+  switch, is a Script early error (a SyntaxError) — eval code is never a function
+  body, loop, or switch. Goccia otherwise detects these only at runtime via
+  control-flow propagation (the fallback case in RunEvalProgramBody), which would
+  let ShadowRealm.prototype.evaluate wrap them as a caller-realm TypeError;
+  validating here, before any evaluation, keeps them SyntaxErrors. Recursion walks
+  only statements, so it stops at function/class boundaries (which are
+  expressions) — a `return`/`break`/`continue` inside a nested function is never
+  flagged. Labeled break/continue are left to the parser, which validates their
+  targets and rejects undefined labels.
+
+  Raising TGocciaSyntaxError directly (rather than ThrowSyntaxError, which raises a
+  TGocciaThrowValue) matches the other eval early-error passes so the error is
+  classified as a static SyntaxError, not a runtime abrupt completion. }
+procedure RejectEvalControlFlow(const AMessage: string;
+  const AStmt: TGocciaStatement);
+begin
+  raise TGocciaSyntaxError.Create(AMessage, AStmt.Line, AStmt.Column, '', nil,
+    SSuggestExpressionExpected);
+end;
+
+procedure ValidateEvalControlFlowStatement(const AStmt: TGocciaStatement;
+  const AInIteration, AInSwitch: Boolean);
+var
+  I, J: Integer;
+  BlockStmt: TGocciaBlockStatement;
+  IfStmt: TGocciaIfStatement;
+  TryStmt: TGocciaTryStatement;
+  SwitchStmt: TGocciaSwitchStatement;
+begin
+  if not Assigned(AStmt) then
+    Exit;
+
+  if AStmt is TGocciaReturnStatement then
+    RejectEvalControlFlow('Illegal return statement', AStmt)
+  else if AStmt is TGocciaBreakStatement then
+  begin
+    if (TGocciaBreakStatement(AStmt).TargetLabel = '') and
+       not (AInIteration or AInSwitch) then
+      RejectEvalControlFlow(SErrorIllegalBreakStatement, AStmt);
+  end
+  else if AStmt is TGocciaContinueStatement then
+  begin
+    if (TGocciaContinueStatement(AStmt).TargetLabel = '') and
+       not AInIteration then
+      RejectEvalControlFlow(SErrorIllegalContinueStatement, AStmt);
+  end
+  else if AStmt is TGocciaBlockStatement then
+  begin
+    BlockStmt := TGocciaBlockStatement(AStmt);
+    for I := 0 to BlockStmt.Nodes.Count - 1 do
+      if BlockStmt.Nodes[I] is TGocciaStatement then
+        ValidateEvalControlFlowStatement(
+          TGocciaStatement(BlockStmt.Nodes[I]), AInIteration, AInSwitch);
+  end
+  else if AStmt is TGocciaIfStatement then
+  begin
+    IfStmt := TGocciaIfStatement(AStmt);
+    ValidateEvalControlFlowStatement(IfStmt.Consequent, AInIteration, AInSwitch);
+    ValidateEvalControlFlowStatement(IfStmt.Alternate, AInIteration, AInSwitch);
+  end
+  else if AStmt is TGocciaForStatement then
+    ValidateEvalControlFlowStatement(
+      TGocciaForStatement(AStmt).Body, True, AInSwitch)
+  else if AStmt is TGocciaForOfStatement then
+    ValidateEvalControlFlowStatement(
+      TGocciaForOfStatement(AStmt).Body, True, AInSwitch)
+  else if AStmt is TGocciaForInStatement then
+    ValidateEvalControlFlowStatement(
+      TGocciaForInStatement(AStmt).Body, True, AInSwitch)
+  else if AStmt is TGocciaWhileStatement then
+    ValidateEvalControlFlowStatement(
+      TGocciaWhileStatement(AStmt).Body, True, AInSwitch)
+  else if AStmt is TGocciaDoWhileStatement then
+    ValidateEvalControlFlowStatement(
+      TGocciaDoWhileStatement(AStmt).Body, True, AInSwitch)
+  else if AStmt is TGocciaWithStatement then
+    ValidateEvalControlFlowStatement(
+      TGocciaWithStatement(AStmt).Body, AInIteration, AInSwitch)
+  else if AStmt is TGocciaTryStatement then
+  begin
+    TryStmt := TGocciaTryStatement(AStmt);
+    ValidateEvalControlFlowStatement(TryStmt.Block, AInIteration, AInSwitch);
+    ValidateEvalControlFlowStatement(TryStmt.CatchBlock, AInIteration, AInSwitch);
+    ValidateEvalControlFlowStatement(
+      TryStmt.FinallyBlock, AInIteration, AInSwitch);
+  end
+  else if AStmt is TGocciaSwitchStatement then
+  begin
+    SwitchStmt := TGocciaSwitchStatement(AStmt);
+    for I := 0 to SwitchStmt.Cases.Count - 1 do
+      for J := 0 to SwitchStmt.Cases[I].Consequent.Count - 1 do
+        if SwitchStmt.Cases[I].Consequent[J] is TGocciaStatement then
+          ValidateEvalControlFlowStatement(
+            TGocciaStatement(SwitchStmt.Cases[I].Consequent[J]),
+            AInIteration, True);
+  end;
+end;
+
+procedure ValidateEvalControlFlow(const AProgram: TGocciaProgram);
+var
+  I: Integer;
+begin
+  for I := 0 to AProgram.Body.Count - 1 do
+    ValidateEvalControlFlowStatement(AProgram.Body[I], False, False);
+end;
+
 function PrepareEvalProgram(const AProgram: TGocciaProgram;
   const AContext: TGocciaEvaluationContext; const AVarScope,
   ALexicalScope: TGocciaScope; const AStrictEval: Boolean;
@@ -2908,6 +3015,7 @@ begin
     ThrowSyntaxError('arguments is not allowed in this eval context');
   ValidateEvalEarlyErrors(AProgram, AStrictEval, AAllowNewTarget,
     AAllowSuperProperty, AAllowSuperCall);
+  ValidateEvalControlFlow(AProgram);
   Result := AContext;
   Result.Scope := ALexicalScope;
   Result.NonStrictMode := not AStrictEval;
@@ -2939,6 +3047,9 @@ begin
       Break;
   end;
 
+  // An abrupt top-level completion is a Script early error that
+  // PrepareEvalProgram.ValidateEvalControlFlow already rejected as a SyntaxError
+  // before execution began; these arms are a defensive backstop only.
   case CF.Kind of
     cfkNormal:
       Result := LastValue;
