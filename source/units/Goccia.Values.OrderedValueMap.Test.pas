@@ -36,6 +36,7 @@ type
     { -0 canonicalization (ES2026 §24.5.1). }
     procedure TestNegativeZeroStoredAsPositiveZero;
     procedure TestCanonicalizeKeyMapsNegativeZero;
+    procedure TestAddSetMemberStoresCanonicalKeyAndValue;
 
     { Insertion-ordered cursor with tombstone deletes. }
     procedure TestCursorVisitsInInsertionOrder;
@@ -61,6 +62,7 @@ begin
   Test('null and undefined are distinct keys', TestNullAndUndefinedAreDistinct);
   Test('-0 is stored as +0', TestNegativeZeroStoredAsPositiveZero);
   Test('CanonicalizeKey maps -0 to +0', TestCanonicalizeKeyMapsNegativeZero);
+  Test('AddSetMember stores the canonical element as key and value', TestAddSetMemberStoresCanonicalKeyAndValue);
   Test('Cursor visits entries in insertion order', TestCursorVisitsInInsertionOrder);
   Test('Cursor skips tombstones; re-add appends at end', TestCursorSkipsTombstonesAndReaddAppends);
   Test('RetainIterator/ReleaseIterator track active count', TestIteratorRetainReleaseCounter);
@@ -254,6 +256,27 @@ begin
   Expect<Boolean>(TGocciaNumberLiteralValue(Canonical).IsNegativeZero).ToBe(False);
   // A non -0 key is returned unchanged.
   Expect<Boolean>(TGocciaOrderedValueMap.CanonicalizeKey(Num(5)) = nil).ToBe(False);
+end;
+
+procedure TOrderedValueMapTests.TestAddSetMemberStoresCanonicalKeyAndValue;
+var
+  Store: TGocciaOrderedValueMap;
+  Cursor: Integer;
+  Key, Value: TGocciaValue;
+begin
+  Store := TGocciaOrderedValueMap.Create;
+  try
+    Store.AddSetMember(TGocciaNumberLiteralValue.NegativeZeroValue);
+    Expect<Integer>(Store.Count).ToBe(1);
+    Cursor := 0;
+    Expect<Boolean>(Store.NextEntry(Cursor, Key, Value)).ToBe(True);
+    // Both the key and the value slot hold the canonical +0 (not -0).
+    Expect<Boolean>(TGocciaNumberLiteralValue(Key).IsNegativeZero).ToBe(False);
+    Expect<Boolean>(TGocciaNumberLiteralValue(Value).IsNegativeZero).ToBe(False);
+    Expect<Boolean>(Key = Value).ToBe(True);
+  finally
+    Store.Free;
+  end;
 end;
 
 procedure TOrderedValueMapTests.TestCursorVisitsInInsertionOrder;

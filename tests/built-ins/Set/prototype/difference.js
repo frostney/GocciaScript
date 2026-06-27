@@ -20,6 +20,25 @@ describe("Set.prototype.difference", () => {
     expect(a.difference(b).size).toBe(0);
   });
 
+  test("ignores elements appended by a mutating has callback", () => {
+    const a = new Set([1, 2]);
+    const setLike = {
+      size: 5,
+      has(value) {
+        a.add(99);
+        return value === 1;
+      },
+      keys() {
+        return [].values();
+      },
+    };
+    const result = a.difference(setLike);
+    expect(result.has(2)).toBe(true);
+    expect(result.has(1)).toBe(false);
+    expect(result.has(99)).toBe(false);
+    expect(result.size).toBe(1);
+  });
+
   test("accepts set-like object", () => {
     const setLike = {
       size: 10,

@@ -86,6 +86,16 @@ test("add dedupes by string content, not string identity", () => {
   expect(set.size).toBe(1);
 });
 
+test("treats an omitted argument as the undefined value", () => {
+  const s = new Set();
+  s.add();
+  expect(s.size).toBe(1);
+  expect(s.has(undefined)).toBe(true);
+  expect(s.has()).toBe(true);
+  expect(s.delete()).toBe(true);
+  expect(s.size).toBe(0);
+});
+
 test("throws TypeError when called on non-Set", () => {
   const add = Set.prototype.add;
   expect(() => add.call(Set.prototype, 1)).toThrow(TypeError);

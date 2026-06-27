@@ -160,14 +160,28 @@ begin
     AddComparedPair(AComparedPairs, AActual, AExpected);
     CursorA := 0;
     CursorB := 0;
-    while TGocciaSetValue(AActual).NextItem(CursorA, LeftValue) do
-    begin
-      TGocciaSetValue(AExpected).NextItem(CursorB, RightValue);
-      if not IsDeepEqualInternal(LeftValue, RightValue, AComparedPairs) then
+    // Recursive comparison can run user getters that mutate either set; retain
+    // both so cursors stay valid, and confirm the expected side advances before
+    // comparing (avoids comparing stale out values).
+    TGocciaSetValue(AActual).RetainIterator;
+    TGocciaSetValue(AExpected).RetainIterator;
+    try
+      while TGocciaSetValue(AActual).NextItem(CursorA, LeftValue) do
       begin
-        Result := False;
-        Exit;
+        if not TGocciaSetValue(AExpected).NextItem(CursorB, RightValue) then
+        begin
+          Result := False;
+          Exit;
+        end;
+        if not IsDeepEqualInternal(LeftValue, RightValue, AComparedPairs) then
+        begin
+          Result := False;
+          Exit;
+        end;
       end;
+    finally
+      TGocciaSetValue(AExpected).ReleaseIterator;
+      TGocciaSetValue(AActual).ReleaseIterator;
     end;
     Result := True;
     Exit;
@@ -189,19 +203,33 @@ begin
     AddComparedPair(AComparedPairs, AActual, AExpected);
     CursorA := 0;
     CursorB := 0;
-    while TGocciaMapValue(AActual).NextEntry(CursorA, LeftKey, LeftValue) do
-    begin
-      TGocciaMapValue(AExpected).NextEntry(CursorB, RightKey, RightValue);
-      if not IsDeepEqualInternal(LeftKey, RightKey, AComparedPairs) then
+    // Recursive comparison can run user getters that mutate either map; retain
+    // both so cursors stay valid, and confirm the expected side advances before
+    // comparing (avoids comparing stale out values).
+    TGocciaMapValue(AActual).RetainIterator;
+    TGocciaMapValue(AExpected).RetainIterator;
+    try
+      while TGocciaMapValue(AActual).NextEntry(CursorA, LeftKey, LeftValue) do
       begin
-        Result := False;
-        Exit;
+        if not TGocciaMapValue(AExpected).NextEntry(CursorB, RightKey, RightValue) then
+        begin
+          Result := False;
+          Exit;
+        end;
+        if not IsDeepEqualInternal(LeftKey, RightKey, AComparedPairs) then
+        begin
+          Result := False;
+          Exit;
+        end;
+        if not IsDeepEqualInternal(LeftValue, RightValue, AComparedPairs) then
+        begin
+          Result := False;
+          Exit;
+        end;
       end;
-      if not IsDeepEqualInternal(LeftValue, RightValue, AComparedPairs) then
-      begin
-        Result := False;
-        Exit;
-      end;
+    finally
+      TGocciaMapValue(AExpected).ReleaseIterator;
+      TGocciaMapValue(AActual).ReleaseIterator;
     end;
     Result := True;
     Exit;

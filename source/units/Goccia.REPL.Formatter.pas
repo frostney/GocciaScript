@@ -84,21 +84,28 @@ begin
   else
   begin
     SB.Append(' { ');
+    // FormatREPLValue can recurse into user getters that mutate AMap; retain it
+    // so compaction cannot renumber entries and invalidate Cursor mid-walk.
     I := 0;
     Cursor := 0;
-    while AMap.NextEntry(Cursor, Key, Value) do
-    begin
-      if I >= MAX_INSPECT_ITEMS then
+    AMap.RetainIterator;
+    try
+      while AMap.NextEntry(Cursor, Key, Value) do
       begin
-        SB.Append(', ... ' + IntToStr(Total - MAX_INSPECT_ITEMS) + ' more');
-        Break;
+        if I >= MAX_INSPECT_ITEMS then
+        begin
+          SB.Append(', ... ' + IntToStr(Total - MAX_INSPECT_ITEMS) + ' more');
+          Break;
+        end;
+        if I > 0 then
+          SB.Append(', ');
+        SB.Append(FormatREPLValue(Key, AUseColor));
+        SB.Append(' => ');
+        SB.Append(FormatREPLValue(Value, AUseColor));
+        Inc(I);
       end;
-      if I > 0 then
-        SB.Append(', ');
-      SB.Append(FormatREPLValue(Key, AUseColor));
-      SB.Append(' => ');
-      SB.Append(FormatREPLValue(Value, AUseColor));
-      Inc(I);
+    finally
+      AMap.ReleaseIterator;
     end;
     SB.Append(' }');
   end;
@@ -120,19 +127,26 @@ begin
   else
   begin
     SB.Append(' { ');
+    // FormatREPLValue can recurse into user getters that mutate ASet; retain it
+    // so compaction cannot renumber entries and invalidate Cursor mid-walk.
     I := 0;
     Cursor := 0;
-    while ASet.NextItem(Cursor, Item) do
-    begin
-      if I >= MAX_INSPECT_ITEMS then
+    ASet.RetainIterator;
+    try
+      while ASet.NextItem(Cursor, Item) do
       begin
-        SB.Append(', ... ' + IntToStr(Total - MAX_INSPECT_ITEMS) + ' more');
-        Break;
+        if I >= MAX_INSPECT_ITEMS then
+        begin
+          SB.Append(', ... ' + IntToStr(Total - MAX_INSPECT_ITEMS) + ' more');
+          Break;
+        end;
+        if I > 0 then
+          SB.Append(', ');
+        SB.Append(FormatREPLValue(Item, AUseColor));
+        Inc(I);
       end;
-      if I > 0 then
-        SB.Append(', ');
-      SB.Append(FormatREPLValue(Item, AUseColor));
-      Inc(I);
+    finally
+      ASet.ReleaseIterator;
     end;
     SB.Append(' }');
   end;

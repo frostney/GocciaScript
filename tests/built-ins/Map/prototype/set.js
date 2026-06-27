@@ -88,6 +88,19 @@ test("set uses reference identity for object keys", () => {
   expect(map.get(a)).toBe(2);
 });
 
+test("treats omitted arguments as the undefined key and value", () => {
+  const m = new Map();
+  m.set();
+  expect(m.size).toBe(1);
+  expect(m.has()).toBe(true);
+  expect(m.get()).toBe(undefined);
+  m.set("k");
+  expect(m.has("k")).toBe(true);
+  expect(m.get("k")).toBe(undefined);
+  expect(m.delete()).toBe(true);
+  expect(m.has()).toBe(false);
+});
+
 test("throws TypeError when called on non-Map", () => {
   const set = Map.prototype.set;
   expect(() => set.call(Map.prototype, "k", "v")).toThrow(TypeError);

@@ -841,11 +841,18 @@ begin
   Result := TGocciaMapValue.Create;
   AMemory.Add(AMap, Result);
 
+  // StructuredCloneValue can run user getters that mutate AMap; retain it so
+  // compaction cannot renumber entries mid-walk and invalidate Cursor.
   Cursor := 0;
-  while AMap.NextEntry(Cursor, Key, Value) do
-    Result.SetEntry(
-      StructuredCloneValue(Key, AMemory),
-      StructuredCloneValue(Value, AMemory));
+  AMap.RetainIterator;
+  try
+    while AMap.NextEntry(Cursor, Key, Value) do
+      Result.SetEntry(
+        StructuredCloneValue(Key, AMemory),
+        StructuredCloneValue(Value, AMemory));
+  finally
+    AMap.ReleaseIterator;
+  end;
 end;
 
 function CloneSet(const ASet: TGocciaSetValue;
@@ -857,9 +864,16 @@ begin
   Result := TGocciaSetValue.Create;
   AMemory.Add(ASet, Result);
 
+  // StructuredCloneValue can run user getters that mutate ASet; retain it so
+  // compaction cannot renumber entries mid-walk and invalidate Cursor.
   Cursor := 0;
-  while ASet.NextItem(Cursor, Item) do
-    Result.AddItem(StructuredCloneValue(Item, AMemory));
+  ASet.RetainIterator;
+  try
+    while ASet.NextItem(Cursor, Item) do
+      Result.AddItem(StructuredCloneValue(Item, AMemory));
+  finally
+    ASet.ReleaseIterator;
+  end;
 end;
 
 function CloneArrayBuffer(const ABuf: TGocciaArrayBufferValue;

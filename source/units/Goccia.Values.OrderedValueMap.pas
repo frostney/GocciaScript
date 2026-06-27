@@ -53,6 +53,12 @@ type
     // canonicalizing the key first.
     procedure SetEntry(const AKey, AValue: TGocciaValue);
 
+    // Insert a Set member: the canonical element is stored as both key and
+    // value, so iteration (values/entries/forEach) observes the canonical form
+    // (-0 as +0). Keeping this in the store means Set callers cannot forget to
+    // canonicalize the value slot.
+    procedure AddSetMember(const AValue: TGocciaValue);
+
     // Live, insertion-ordered cursor over active entries. ACursor is a
     // physical index; seed it with 0 and keep calling until False. New
     // entries appended during iteration are visited and deleted (tombstoned)
@@ -184,6 +190,14 @@ begin
   // preserving the entry's original insertion position (Map.set/Set.add
   // semantics).
   Add(CanonicalizeKey(AKey), AValue);
+end;
+
+procedure TGocciaOrderedValueMap.AddSetMember(const AValue: TGocciaValue);
+var
+  Canonical: TGocciaValue;
+begin
+  Canonical := CanonicalizeKey(AValue);
+  Add(Canonical, Canonical);
 end;
 
 function TGocciaOrderedValueMap.NextEntry(var ACursor: Integer;

@@ -303,7 +303,8 @@ begin
   M := TGocciaMapValue(AThisValue);
   // Step 4: For each Record { [[Key]], [[Value]] } p of M.[[MapData]], do
   // Step 4a: If p.[[Key]] is not empty and SameValueZero(p.[[Key]], key) is true, return p.[[Value]]
-  if (AArgs.Length > 0) and M.TryGetValue(AArgs.GetElement(0), Value) then
+  // An omitted argument is the value `undefined` (GetElement yields undefined).
+  if M.TryGetValue(AArgs.GetElement(0), Value) then
     Result := Value
   else
     // Step 5: Return undefined
@@ -321,18 +322,16 @@ begin
   if not (AThisValue is TGocciaMapValue) then
     ThrowTypeError(SErrorMapSetNonMap, SSuggestMapThisType);
   M := TGocciaMapValue(AThisValue);
-  if AArgs.Length >= 2 then
-  begin
-    MapKey := AArgs.GetElement(0);
-    MapValue := AArgs.GetElement(1);
-    // Step 4: For each Record { [[Key]], [[Value]] } p of M.[[MapData]], do
-    //   If p.[[Key]] is not empty and SameValueZero(p.[[Key]], key) is true,
-    //   set p.[[Value]] to value and return M
-    // Step 5: Set key to CanonicalizeKeyedCollectionKey(key) (-0 -> +0)
-    // Step 6: Let p be the Record { [[Key]]: key, [[Value]]: value }
-    // Step 7: Append p to M.[[MapData]]
-    M.SetEntry(MapKey, MapValue);
-  end;
+  // Omitted arguments are the value `undefined` (GetElement yields undefined).
+  MapKey := AArgs.GetElement(0);
+  MapValue := AArgs.GetElement(1);
+  // Step 4: For each Record { [[Key]], [[Value]] } p of M.[[MapData]], do
+  //   If p.[[Key]] is not empty and SameValueZero(p.[[Key]], key) is true,
+  //   set p.[[Value]] to value and return M
+  // Step 5: Set key to CanonicalizeKeyedCollectionKey(key) (-0 -> +0)
+  // Step 6: Let p be the Record { [[Key]]: key, [[Value]]: value }
+  // Step 7: Append p to M.[[MapData]]
+  M.SetEntry(MapKey, MapValue);
   // Step 8: Return M
   Result := AThisValue;
 end;
@@ -350,7 +349,8 @@ begin
   M := TGocciaMapValue(AThisValue);
   // Step 4: For each Record { [[Key]], [[Value]] } p of M.[[MapData]], do
   //   If p.[[Key]] is not empty and SameValueZero(p.[[Key]], key) is true, return true
-  if (AArgs.Length > 0) and M.TryGetValue(AArgs.GetElement(0), Value) then
+  // An omitted argument is the value `undefined` (GetElement yields undefined).
+  if M.TryGetValue(AArgs.GetElement(0), Value) then
     Result := TGocciaBooleanLiteralValue.TrueValue
   else
     // Step 5: Return false
@@ -370,7 +370,8 @@ begin
   // Step 4: For each Record { [[Key]], [[Value]] } p of M.[[MapData]], do
   //   If SameValueZero(p.[[Key]], key) is true, set p.[[Key]]/[[Value]] to
   //   empty (tombstone) and return true
-  if (AArgs.Length > 0) and M.FStore.Remove(AArgs.GetElement(0)) then
+  // An omitted argument is the value `undefined` (GetElement yields undefined).
+  if M.FStore.Remove(AArgs.GetElement(0)) then
     Result := TGocciaBooleanLiteralValue.TrueValue
   else
     // Step 5: Return false

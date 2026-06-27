@@ -111,6 +111,27 @@ begin
   ASet.FStore.Remove(AValue);
 end;
 
+// Copy the set's current members into a plain array. The set-operation methods
+// iterate this snapshot rather than a live cursor: their `has`/`keys` callbacks
+// can run user code that mutates the receiver, and the spec (ES2026 §24.2.4)
+// bounds these loops to the elements present when the operation began —
+// elements appended during a callback must not be visited.
+function SnapshotSetItems(const ASet: TGocciaSetValue): TArray<TGocciaValue>;
+var
+  Cursor, Count: Integer;
+  Item: TGocciaValue;
+begin
+  SetLength(Result, ASet.Count);
+  Count := 0;
+  Cursor := 0;
+  while ASet.NextItem(Cursor, Item) do
+  begin
+    Result[Count] := Item;
+    Inc(Count);
+  end;
+  SetLength(Result, Count);
+end;
+
 function GetSetRecord(const AValue: TGocciaValue; const AMethodName: string): TGocciaSetRecord;
 var
   RawSize: TGocciaValue;
@@ -324,14 +345,11 @@ begin
 end;
 
 procedure TGocciaSetValue.AddItem(const AValue: TGocciaValue);
-var
-  Canonical: TGocciaValue;
 begin
-  // Store the canonicalized element as both key and value so that iteration
-  // yields the canonical form (-0 observed as +0). SetEntry leaves an existing
-  // member in place, matching Set.add (no reordering on re-add).
-  Canonical := TGocciaOrderedValueMap.CanonicalizeKey(AValue);
-  FStore.SetEntry(Canonical, Canonical);
+  // The store canonicalizes and stores the element as both key and value, so
+  // iteration yields the canonical form (-0 observed as +0). An existing member
+  // is left in place, matching Set.add (no reordering on re-add).
+  FStore.AddSetMember(AValue);
 end;
 
 function TGocciaSetValue.NextItem(var ACursor: Integer; out AValue: TGocciaValue): Boolean;
@@ -399,7 +417,8 @@ begin
   S := TGocciaSetValue(AThisValue);
   // Step 4: For each element e of S.[[SetData]], do
   //   If e is not empty and SameValueZero(e, value) is true, return true
-  if (AArgs.Length > 0) and S.ContainsValue(AArgs.GetElement(0)) then
+  // An omitted argument is the value `undefined` (GetElement yields undefined).
+  if S.ContainsValue(AArgs.GetElement(0)) then
     Result := TGocciaBooleanLiteralValue.TrueValue
   else
     // Step 5: Return false
@@ -420,8 +439,8 @@ begin
   //   If e is not empty and SameValueZero(e, value) is true, return S
   // Step 5: If value is -0, set value to +0
   // Step 6: Append value to S.[[SetData]]
-  if AArgs.Length > 0 then
-    S.AddItem(AArgs.GetElement(0));
+  // An omitted argument is the value `undefined` (GetElement yields undefined).
+  S.AddItem(AArgs.GetElement(0));
   // Step 7: Return S
   Result := AThisValue;
 end;
@@ -439,7 +458,8 @@ begin
   // Step 4: For each element e of S.[[SetData]], do
   //   If SameValueZero(e, value) is true, replace e with empty (tombstone)
   //   and return true
-  if (AArgs.Length > 0) and S.FStore.Remove(AArgs.GetElement(0)) then
+  // An omitted argument is the value `undefined` (GetElement yields undefined).
+  if S.FStore.Remove(AArgs.GetElement(0)) then
     Result := TGocciaBooleanLiteralValue.TrueValue
   else
     // Step 5: Return false
@@ -634,9 +654,10 @@ var
   ThisSet, ResultSet: TGocciaSetValue;
   OtherRecord: TGocciaSetRecord;
   Iterator: TGocciaIteratorValue;
-  NextValue, Item: TGocciaValue;
+  NextValue: TGocciaValue;
   Done, WasResultRooted, WasIteratorRooted: Boolean;
-  Cursor: Integer;
+  Snapshot: TArray<TGocciaValue>;
+  I: Integer;
   GC: TGarbageCollector;
 begin
   // Step 1: Let O be the this value
@@ -655,18 +676,14 @@ begin
   try
     if ThisSet.Count <= OtherRecord.Size then
     begin
-      // Step 6: For each element e of O.[[SetData]], do
-      // (SetRecordHas calls user code; hold compaction so the cursor stays valid)
-      ThisSet.RetainIterator;
-      try
-        Cursor := 0;
-        while ThisSet.NextItem(Cursor, Item) do
-          // Step 6a: If e is not empty and SetDataHas(otherRec, e) is true, append e
-          if SetRecordHas(OtherRecord, Item) then
-            ResultSet.AddItem(Item);
-      finally
-        ThisSet.ReleaseIterator;
-      end;
+      // Step 6: For each element e of O.[[SetData]], do. Iterate a snapshot:
+      // SetRecordHas runs user code that may mutate O, and elements appended
+      // during the callback must not be visited (§24.2.4.6).
+      Snapshot := SnapshotSetItems(ThisSet);
+      for I := 0 to High(Snapshot) do
+        // Step 6a: If e is not empty (still a member) and SetDataHas(otherRec, e), append e
+        if ThisSet.ContainsValue(Snapshot[I]) and SetRecordHas(OtherRecord, Snapshot[I]) then
+          ResultSet.AddItem(Snapshot[I]);
     end
     else
     begin
@@ -706,7 +723,8 @@ var
   Iterator: TGocciaIteratorValue;
   NextValue, Item: TGocciaValue;
   Done, WasResultRooted, WasIteratorRooted: Boolean;
-  Cursor: Integer;
+  Cursor, I: Integer;
+  Snapshot: TArray<TGocciaValue>;
   GC: TGarbageCollector;
 begin
   // Step 1: Let O be the this value
@@ -725,18 +743,15 @@ begin
   try
     if ThisSet.Count <= OtherRecord.Size then
     begin
-      // Step 6: For each element e of resultSetData, do
-      // (SetRecordHas calls user code; hold compaction so the cursor stays valid)
-      ThisSet.RetainIterator;
-      try
-        Cursor := 0;
-        while ThisSet.NextItem(Cursor, Item) do
-          // Step 6a: If e is not empty and SetDataHas(otherRec, e) is true, remove e
-          if not SetRecordHas(OtherRecord, Item) then
-            ResultSet.AddItem(Item);
-      finally
-        ThisSet.ReleaseIterator;
-      end;
+      // Step 5/6: resultSetData is a copy of O.[[SetData]]; remove members that
+      // are in other. The spec operates on that copy, so iterate a snapshot
+      // taken before any SetRecordHas callback runs (§24.2.4.5) — mutations to O
+      // during the callback do not affect the result.
+      Snapshot := SnapshotSetItems(ThisSet);
+      for I := 0 to High(Snapshot) do
+        // Step 6a: If e is not in other, keep it.
+        if not SetRecordHas(OtherRecord, Snapshot[I]) then
+          ResultSet.AddItem(Snapshot[I]);
     end
     else
     begin
@@ -837,8 +852,8 @@ function TGocciaSetValue.SetIsSubsetOf(const AArgs: TGocciaArgumentsCollection; 
 var
   ThisSet: TGocciaSetValue;
   OtherRecord: TGocciaSetRecord;
-  Item: TGocciaValue;
-  Cursor: Integer;
+  Snapshot: TArray<TGocciaValue>;
+  I: Integer;
   IsSubset: Boolean;
 begin
   // Step 1: Let O be the this value
@@ -857,20 +872,17 @@ begin
   end;
 
   IsSubset := True;
-  // Step 6: For each element e of O.[[SetData]], do
-  ThisSet.RetainIterator;
-  try
-    Cursor := 0;
-    while ThisSet.NextItem(Cursor, Item) do
-      // Step 6a: If SetDataHas(otherRec, e) is false, return false
-      if not SetRecordHas(OtherRecord, Item) then
-      begin
-        IsSubset := False;
-        Break;
-      end;
-  finally
-    ThisSet.ReleaseIterator;
-  end;
+  // Step 6: For each element e of O.[[SetData]] (snapshot; SetRecordHas can run
+  // user code that mutates O — elements appended during a callback must not be
+  // checked, and elements deleted during a callback are skipped).
+  Snapshot := SnapshotSetItems(ThisSet);
+  for I := 0 to High(Snapshot) do
+    // Step 6a: If e is still a member and SetDataHas(otherRec, e) is false, return false
+    if ThisSet.ContainsValue(Snapshot[I]) and not SetRecordHas(OtherRecord, Snapshot[I]) then
+    begin
+      IsSubset := False;
+      Break;
+    end;
 
   // Step 7: Return true
   if IsSubset then
@@ -939,9 +951,10 @@ var
   ThisSet: TGocciaSetValue;
   OtherRecord: TGocciaSetRecord;
   Iterator: TGocciaIteratorValue;
-  NextValue, Item: TGocciaValue;
+  NextValue: TGocciaValue;
   Done, WasIteratorRooted, IsDisjoint: Boolean;
-  Cursor: Integer;
+  Snapshot: TArray<TGocciaValue>;
+  I: Integer;
   GC: TGarbageCollector;
 begin
   // Step 1: Let O be the this value
@@ -955,20 +968,17 @@ begin
   if ThisSet.Count <= OtherRecord.Size then
   begin
     IsDisjoint := True;
-    // Step 5: For each element e of O.[[SetData]], do
-    ThisSet.RetainIterator;
-    try
-      Cursor := 0;
-      while ThisSet.NextItem(Cursor, Item) do
-        // Step 5a: If e is not empty and SetDataHas(otherRec, e) is true, return false
-        if SetRecordHas(OtherRecord, Item) then
-        begin
-          IsDisjoint := False;
-          Break;
-        end;
-    finally
-      ThisSet.ReleaseIterator;
-    end;
+    // Step 5: For each element e of O.[[SetData]] (snapshot; SetRecordHas can
+    // run user code that mutates O — appended elements must not be checked,
+    // deleted elements are skipped).
+    Snapshot := SnapshotSetItems(ThisSet);
+    for I := 0 to High(Snapshot) do
+      // Step 5a: If e is still a member and SetDataHas(otherRec, e) is true, return false
+      if ThisSet.ContainsValue(Snapshot[I]) and SetRecordHas(OtherRecord, Snapshot[I]) then
+      begin
+        IsDisjoint := False;
+        Break;
+      end;
     if not IsDisjoint then
     begin
       Result := TGocciaBooleanLiteralValue.FalseValue;
