@@ -121,9 +121,9 @@ export function gocciaRunInputSchema() {
       },
       asi: {
         type: "boolean",
-        // Keep this schema description legacy-shaped while the website API
-        // targets released binaries that only advertise `--asi`. A version-aware
-        // `--compat-asi` alias/description is release-coordinated future work.
+        // The website API resolves the ASI flag per selected binary
+        // (`--asi` on 0.7.x, `--compat-asi` on 0.8.0+) via `asiFlagName`, so this
+        // single `asi` field stays version-agnostic on the wire.
         description:
           "Enable automatic semicolon insertion. The website API keeps this short field for version compatibility; selected binaries may map it to --asi or --compat-asi.",
         default: true,

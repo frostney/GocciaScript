@@ -352,8 +352,10 @@ test produces the same ID on both platforms.
 Default categories: `built-ins, harness, intl402, language, staging`
 (everything except `annexB`).
 
-- `annexB` is legacy/deprecated browser-only behavior we don't intend
-  to support.
+- `annexB` (legacy/deprecated browser-only behavior) is excluded from
+  the default run. Some Annex B surfaces are implemented anyway (e.g.
+  `String.prototype.substr`, `__proto__`, `__defineGetter__`); a coherent
+  Annex B policy is still under evaluation.
 - `intl402` covers Intl APIs (ECMA-402); tests exercise
   `Intl.getCanonicalLocales`, constructors, and formatting operations.
 - `staging` is forward-looking proposals — engine-readiness signal.
@@ -380,12 +382,7 @@ Do not rebuild a generic eligibility filter (the structural blast-radius
 control is per-test subprocess + `--timeout` + `--max-memory`, not
 pre-execution exclusion).
 
-Current entries:
-
-- `built-ins/Iterator/concat/throws-typeerror-when-generator-is-running-next.js`
-  — [#514](https://github.com/frostney/GocciaScript/issues/514)
-- `staging/sm/RegExp/test-trailing.js`
-  — [#515](https://github.com/frostney/GocciaScript/issues/515)
+Currently empty — there are no native-level crashes being skipped.
 
 ## Updating the contract
 
