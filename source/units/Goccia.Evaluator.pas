@@ -2758,6 +2758,19 @@ var
         Exit(True);
     Result := False;
   end;
+  // A duplicate lexical name, or a lexical/var conflict, is a static Script
+  // early error (ECMA-262 §16.1.1). Raise TGocciaSyntaxError directly — like
+  // RejectEvalControlFlow and the parser's redeclaration error, and unlike
+  // ThrowSyntaxError, which raises a throwable TGocciaThrowValue — so a caller
+  // distinguishing early errors from runtime abrupt completions (notably
+  // ShadowRealm.prototype.evaluate, which maps the former to a caller-realm
+  // SyntaxError and the latter to a TypeError) classifies it correctly.
+  procedure RaiseAlreadyDeclared(const AName: string);
+  begin
+    raise TGocciaSyntaxError.Create(
+      Format(SErrorIdentifierAlreadyDeclared, [AName]), 0, 0, '', nil,
+      SSuggestAlreadyDeclared);
+  end;
 begin
   VarNames := TStringList.Create;
   LexNames := TStringList.Create;
@@ -2777,16 +2790,14 @@ begin
     CollectTopLevelEvalLexicalNames(AProgram.Body, LexNames);
     for I := 0 to LexNames.Count - 1 do
       if VarNames.IndexOf(LexNames[I]) >= 0 then
-        ThrowSyntaxError(Format(SErrorIdentifierAlreadyDeclared, [LexNames[I]]),
-          SSuggestAlreadyDeclared);
+        RaiseAlreadyDeclared(LexNames[I]);
 
     if not AStrictEval then
     begin
       if AVarScope.ScopeKind = skGlobal then
         for I := 0 to VarNames.Count - 1 do
           if AVarScope.HasLexicalDeclaration(VarNames[I]) then
-            ThrowSyntaxError(Format(SErrorIdentifierAlreadyDeclared,
-              [VarNames[I]]), SSuggestAlreadyDeclared);
+            RaiseAlreadyDeclared(VarNames[I]);
 
       ScopeCursor := ALexicalScope;
       while Assigned(ScopeCursor) and (ScopeCursor <> AVarScope) do
@@ -2795,30 +2806,26 @@ begin
           for I := 0 to VarNames.Count - 1 do
             if ScopeCursor.ContainsOwnLexicalBinding(VarNames[I]) or
                ScopeCursor.ContainsOwnVarBinding(VarNames[I]) then
-              ThrowSyntaxError(Format(SErrorIdentifierAlreadyDeclared,
-                [VarNames[I]]), SSuggestAlreadyDeclared);
+              RaiseAlreadyDeclared(VarNames[I]);
         ScopeCursor := ScopeCursor.Parent;
       end;
 
       if AVarScope.ScopeKind <> skGlobal then
         for I := 0 to VarNames.Count - 1 do
           if AVarScope.ContainsOwnLexicalBinding(VarNames[I]) then
-            ThrowSyntaxError(Format(SErrorIdentifierAlreadyDeclared,
-              [VarNames[I]]), SSuggestAlreadyDeclared);
+            RaiseAlreadyDeclared(VarNames[I]);
     end;
 
     if (not AStrictEval) then
     begin
       for I := 0 to VarNames.Count - 1 do
         if RejectsVarDeclarationName(VarNames[I]) then
-          ThrowSyntaxError(Format(SErrorIdentifierAlreadyDeclared,
-            [VarNames[I]]), SSuggestAlreadyDeclared);
+          RaiseAlreadyDeclared(VarNames[I]);
     end;
 
     if (not AStrictEval) and ARejectArgumentsVarDeclaration and
        (VarNames.IndexOf(IDENTIFIER_ARGUMENTS) >= 0) then
-      ThrowSyntaxError(Format(SErrorIdentifierAlreadyDeclared,
-        [IDENTIFIER_ARGUMENTS]), SSuggestAlreadyDeclared);
+      RaiseAlreadyDeclared(IDENTIFIER_ARGUMENTS);
 
     CollectEvalFunctionDeclarations(AProgram.Body, FunctionDeclarations);
     for I := FunctionDeclarations.Count - 1 downto 0 do

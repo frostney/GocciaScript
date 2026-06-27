@@ -140,6 +140,18 @@ describe("ShadowRealm.prototype.evaluate", () => {
     // Re-declaring the same top-level lexical name must not clash.
     expect(realm.evaluate("const scoped = 2; scoped")).toBe(2);
   });
+
+  test("throws a SyntaxError when a top-level name is both lexically and var declared", () => {
+    const realm = new ShadowRealm();
+    expect(() => realm.evaluate("let y; var y;")).toThrow(SyntaxError);
+    expect(() => realm.evaluate("var y; let y;")).toThrow(SyntaxError);
+  });
+
+  test("allows distinct top-level lexical and var names", () => {
+    const realm = new ShadowRealm();
+    expect(realm.evaluate("var a = 1; let b = 2; a + b")).toBe(3);
+    expect(realm.evaluate("let c = 4; var d = 5; c + d")).toBe(9);
+  });
 });
 
 describe("ShadowRealm wrapped functions", () => {
