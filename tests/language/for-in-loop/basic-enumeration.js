@@ -151,3 +151,58 @@ test("deleted own shadow does not expose inherited property", () => {
 
   expect(keys).toEqual(["a"]);
 });
+
+test("enumerable own key shadowing a same-named inherited key is yielded once", () => {
+  const proto = { shared: "proto", onlyProto: 1 };
+  const obj = Object.create(proto);
+  obj.shared = "own";
+  obj.onlyOwn = 2;
+
+  const keys = [];
+  for (const key in obj) keys.push(key);
+
+  // "shared" appears once, in its own (nearer) position; never re-yielded
+  // from the prototype.
+  expect(keys).toEqual(["shared", "onlyOwn", "onlyProto"]);
+});
+
+test("dedups same-named keys across a deep prototype chain at scale", () => {
+  // Build a 12-level chain where every level redeclares the same 40 keys,
+  // plus one level-unique key. Each shared key must be yielded exactly once
+  // (from the nearest level); per-level order is preserved.
+  const LEVELS = 12;
+  const SHARED = 40;
+  const sharedKeys = Array.from({ length: SHARED }, (_, i) => "k" + i);
+
+  const leaf = Array.from({ length: LEVELS }).reduce((proto, _unused, level) => {
+    const obj = Object.create(proto);
+    for (const key of sharedKeys) obj[key] = level;
+    obj["unique" + level] = level;
+    return obj;
+  }, null);
+
+  const seen = [];
+  const counts = {};
+  for (const key in leaf) {
+    seen.push(key);
+    counts[key] = (counts[key] || 0) + 1;
+  }
+
+  // Every key yielded exactly once.
+  for (const key of seen) expect(counts[key]).toBe(1);
+
+  // The nearest (leaf) level owns the shared keys, in their declared order,
+  // before any inherited level-unique keys.
+  expect(seen.slice(0, SHARED)).toEqual(sharedKeys);
+
+  // All shared keys plus one unique key per level, no duplicates.
+  expect(seen.length).toBe(SHARED + LEVELS);
+
+  // The inherited level-unique keys follow, ordered nearest (leaf) to
+  // farthest — one per level, guarding against prototype-level reordering.
+  const expectedUnique = Array.from({ length: LEVELS }, (_, i) => "unique" + (LEVELS - 1 - i));
+  expect(seen.slice(SHARED)).toEqual(expectedUnique);
+
+  // Shared keys resolve to the leaf level's value.
+  expect(leaf.k0).toBe(LEVELS - 1);
+});
