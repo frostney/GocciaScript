@@ -178,6 +178,14 @@ _Avoid_: Runtime global, compatibility flag.
 The CLI host that compiles source to `.gbc` artifacts without executing the program.
 _Avoid_: Compiler when referring to the user-facing tool.
 
+**Bundle Builder**:
+The CLI host that packages a resolved module graph into a single multi-module `.gcbundle` artifact (bytecode modules, JSON modules, and explicit assets). Distinct from the Bundler, which compiles individual source files to single-module `.gbc` artifacts.
+_Avoid_: Bundler when a multi-module package is meant.
+
+**Bundle**:
+A multi-module `.gcbundle` artifact produced by the Bundle Builder: a versioned container with its own magic, distinct from a single-module `.gbc` artifact so it cannot be loaded as one.
+_Avoid_: `.gbc` artifact, single-module bytecode.
+
 ### Values And Bindings
 
 **Value**:

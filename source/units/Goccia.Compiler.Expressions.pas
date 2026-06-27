@@ -115,7 +115,8 @@ function ParameterListHasDefaultValues(
 function ParameterListIsSimple(const AParams: TGocciaParameterArray): Boolean;
 function SyntheticParamLocalName(const AIndex: Integer): string;
 function DeclareArgumentsObjectLocal(const ACtx: TGocciaCompilationContext;
-  const AScope: TGocciaCompilerScope; const AParams: TGocciaParameterArray): Integer;
+  const AScope: TGocciaCompilerScope; const AParams: TGocciaParameterArray;
+  const ASourceText: string): Integer;
 procedure EmitCreateArgumentsObject(const ACtx: TGocciaCompilationContext;
   const AArgumentsSlot: Integer; const AUseMappedArguments: Boolean;
   const AFormalParameterCount: Integer);
@@ -2384,12 +2385,19 @@ begin
 end;
 
 function DeclareArgumentsObjectLocal(const ACtx: TGocciaCompilationContext;
-  const AScope: TGocciaCompilerScope; const AParams: TGocciaParameterArray): Integer;
+  const AScope: TGocciaCompilerScope; const AParams: TGocciaParameterArray;
+  const ASourceText: string): Integer;
 begin
   if not ACtx.ArgumentsObjectEnabled then
     Exit(-1);
 
   if ParameterListBindsName(AParams, IDENTIFIER_ARGUMENTS) then
+    Exit(-1);
+
+  // Skip the arguments local (and the OP_CREATE_ARGUMENTS it would trigger)
+  // when the function body provably never references it; see
+  // FunctionSourceMayReferenceArgumentsObject.
+  if not FunctionSourceMayReferenceArgumentsObject(ASourceText) then
     Exit(-1);
 
   Result := AScope.DeclareVarLocal(IDENTIFIER_ARGUMENTS);
@@ -4488,7 +4496,8 @@ begin
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
   ChildTemplate.ParameterCount := 0;
   SetLength(EmptyParams, 0);
-  ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, EmptyParams);
+  ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, EmptyParams,
+    ChildTemplate.SourceText);
 
   ACtx.SwapState(ChildTemplate, ChildScope);
   try
@@ -4571,7 +4580,8 @@ begin
   for I := 0 to High(SetterParams) do
     if SetterParams[I].IsPattern and Assigned(SetterParams[I].Pattern) then
       CollectDestructuringBindings(SetterParams[I].Pattern, ChildScope);
-  ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, SetterParams);
+  ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, SetterParams,
+    ChildTemplate.SourceText);
   ApplyParameterTypeAnnotations(ChildScope, ChildTemplate, SetterParams,
     ACtx.StrictTypes);
 
@@ -4646,7 +4656,8 @@ begin
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
   ChildTemplate.ParameterCount := 0;
   SetLength(EmptyParams, 0);
-  ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, EmptyParams);
+  ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, EmptyParams,
+    ChildTemplate.SourceText);
 
   ACtx.SwapState(ChildTemplate, ChildScope);
   try
@@ -4730,7 +4741,8 @@ begin
   for I := 0 to High(SetterParams) do
     if SetterParams[I].IsPattern and Assigned(SetterParams[I].Pattern) then
       CollectDestructuringBindings(SetterParams[I].Pattern, ChildScope);
-  ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, SetterParams);
+  ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, SetterParams,
+    ChildTemplate.SourceText);
   ApplyParameterTypeAnnotations(ChildScope, ChildTemplate, SetterParams,
     ACtx.StrictTypes);
 
@@ -5423,7 +5435,8 @@ begin
     if AExpr.Parameters[I].IsPattern and Assigned(AExpr.Parameters[I].Pattern) then
       CollectDestructuringBindings(AExpr.Parameters[I].Pattern, ChildScope);
 
-  ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, AExpr.Parameters);
+  ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, AExpr.Parameters,
+    ChildTemplate.SourceText);
 
   ApplyParameterTypeAnnotations(ChildScope, ChildTemplate, AExpr.Parameters,
     ACtx.StrictTypes);

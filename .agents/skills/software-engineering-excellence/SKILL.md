@@ -1,18 +1,19 @@
 ---
 name: software-engineering-excellence
 description: >-
-  The standard for what good and excellent engineering work means, applied as
-  an ambient layer that sits above the execution/workflow skills. It defines the
-  bar — grounding in reality, full-scope completeness, reuse over duplication,
-  real validation, and maintainability as the governor — so the agent works to a
-  defined standard instead of improvising its own, and keeps climbing from
-  merely-working toward excellent rather than settling at good-enough. Use
-  whenever writing, editing, reviewing, debugging, refactoring, designing, or
-  spiking code in any language or stack — and especially on long, multi-step, or
-  autonomous tasks where the agent would otherwise quietly narrow scope, ship
-  only the happy path, duplicate code that already exists, swap a decided
-  approach, or call something done without verifying it. Apply it even when no
-  instruction explicitly asks for "quality" or "best practices" — it is the
+  Ambient engineering-quality skill that MUST be selected for any code edit,
+  implementation, debugging pass, review fix, refactor, architecture change,
+  test-harness change, or substantial technical investigation in any stack.
+  Use this before acting on engineering work, especially after user
+  correction or when scope, tooling, validation, or architecture might drift.
+  Defines the standard for good and excellent engineering work, sitting above
+  execution/workflow skills: grounding in reality, full-scope completeness,
+  reuse over duplication, real validation, right-sized value, and maintainability
+  as the governor. It prevents the agent from improvising its own definition of
+  good, quietly narrowing scope, shipping only the happy path, duplicating code
+  that already exists, swapping a decided approach, over-correcting after
+  feedback, or claiming work is done without verifying it. Apply it even when no
+  instruction asks for "quality" or "best practices" — it is the
   default standard for engineering work, not an add-on.
 license: Unlicense OR MIT
 ---
@@ -103,6 +104,12 @@ When you are not certain, the move is to surface — not to improvise, and not t
 - **A clear instruction needs no permission.** If the request already says it ("do X, and also Y"), do both; don't ask whether to continue when the answer is already on the page.
 - **Calibrate ceremony to stakes.** On a throwaway spike, recommend an option and proceed. On a consequential change, present the options and wait. Match the size of the pause to the cost of being wrong.
 - **Leave a durable trail.** Externalize the decisions, the open questions, the limitations, and the next step into artifacts that survive a fresh context — long work is a chain of handoffs, and whoever picks up after you (including you after a context reset) has none of your in-head state.
+
+### After Correction Rule
+
+When the user rejects, challenges, or says the work is overdone, do not broaden scope, add tooling, swap frameworks, or compensate with more activity. First restate the broken contract in one sentence, identify the smallest corrective change, check existing decisions and project strategy, then act only inside that boundary.
+
+If evidence shows the boundary itself is wrong, surface that explicitly before changing it. After a correction, increase precision, not force.
 
 *Why:* every failure mode in this file shares one root — the agent quietly making a scope, quality, or design call it had no authority to make silently. Surfacing turns that into a decision the human can see and steer.
 
