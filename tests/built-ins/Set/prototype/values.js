@@ -68,6 +68,28 @@ test("Set.entries() iterator with next()", () => {
   expect(iter.next().done).toBe(true);
 });
 
+test("live iterator reflects delete and add during iteration", () => {
+  const set = new Set([1, 2, 3]);
+  const seen = [];
+  for (const value of set) {
+    seen.push(value);
+    if (value === 1) {
+      set.delete(2);
+      set.add(4);
+    }
+  }
+  expect(seen).toEqual([1, 3, 4]);
+});
+
+test("live iterator skips a not-yet-visited value deleted after it starts", () => {
+  const set = new Set([1, 2, 3]);
+  const iter = set.values();
+  expect(iter.next().value).toBe(1);
+  set.delete(3);
+  expect(iter.next().value).toBe(2);
+  expect(iter.next().done).toBe(true);
+});
+
 test("values throws TypeError when called on non-Set", () => {
   const values = Set.prototype.values;
   expect(() => values.call(Set.prototype)).toThrow(TypeError);

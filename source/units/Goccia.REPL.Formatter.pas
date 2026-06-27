@@ -73,28 +73,32 @@ function FormatMapValue(const AMap: TGocciaMapValue;
   const AUseColor: Boolean): string;
 var
   SB: TStringBuffer;
-  I, Remaining: Integer;
+  I, Total, Cursor: Integer;
+  Key, Value: TGocciaValue;
 begin
   SB := TStringBuffer.Create;
-  SB.Append('Map(' + IntToStr(AMap.Entries.Count) + ')');
-  if AMap.Entries.Count = 0 then
+  Total := AMap.Count;
+  SB.Append('Map(' + IntToStr(Total) + ')');
+  if Total = 0 then
     SB.Append(' {}')
   else
   begin
     SB.Append(' { ');
-    for I := 0 to AMap.Entries.Count - 1 do
+    I := 0;
+    Cursor := 0;
+    while AMap.NextEntry(Cursor, Key, Value) do
     begin
       if I >= MAX_INSPECT_ITEMS then
       begin
-        Remaining := AMap.Entries.Count - MAX_INSPECT_ITEMS;
-        SB.Append(', ... ' + IntToStr(Remaining) + ' more');
+        SB.Append(', ... ' + IntToStr(Total - MAX_INSPECT_ITEMS) + ' more');
         Break;
       end;
       if I > 0 then
         SB.Append(', ');
-      SB.Append(FormatREPLValue(AMap.Entries[I].Key, AUseColor));
+      SB.Append(FormatREPLValue(Key, AUseColor));
       SB.Append(' => ');
-      SB.Append(FormatREPLValue(AMap.Entries[I].Value, AUseColor));
+      SB.Append(FormatREPLValue(Value, AUseColor));
+      Inc(I);
     end;
     SB.Append(' }');
   end;
@@ -105,26 +109,30 @@ function FormatSetValue(const ASet: TGocciaSetValue;
   const AUseColor: Boolean): string;
 var
   SB: TStringBuffer;
-  I, Remaining: Integer;
+  I, Total, Cursor: Integer;
+  Item: TGocciaValue;
 begin
   SB := TStringBuffer.Create;
-  SB.Append('Set(' + IntToStr(ASet.Items.Count) + ')');
-  if ASet.Items.Count = 0 then
+  Total := ASet.Count;
+  SB.Append('Set(' + IntToStr(Total) + ')');
+  if Total = 0 then
     SB.Append(' {}')
   else
   begin
     SB.Append(' { ');
-    for I := 0 to ASet.Items.Count - 1 do
+    I := 0;
+    Cursor := 0;
+    while ASet.NextItem(Cursor, Item) do
     begin
       if I >= MAX_INSPECT_ITEMS then
       begin
-        Remaining := ASet.Items.Count - MAX_INSPECT_ITEMS;
-        SB.Append(', ... ' + IntToStr(Remaining) + ' more');
+        SB.Append(', ... ' + IntToStr(Total - MAX_INSPECT_ITEMS) + ' more');
         Break;
       end;
       if I > 0 then
         SB.Append(', ');
-      SB.Append(FormatREPLValue(ASet.Items[I], AUseColor));
+      SB.Append(FormatREPLValue(Item, AUseColor));
+      Inc(I);
     end;
     SB.Append(' }');
   end;

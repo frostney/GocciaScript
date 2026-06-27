@@ -835,31 +835,31 @@ end;
 function CloneMap(const AMap: TGocciaMapValue;
   const AMemory: THashMap<TGocciaValue, TGocciaValue>): TGocciaMapValue;
 var
-  I: Integer;
-  Entry: TGocciaMapEntry;
+  Cursor: Integer;
+  Key, Value: TGocciaValue;
 begin
   Result := TGocciaMapValue.Create;
   AMemory.Add(AMap, Result);
 
-  for I := 0 to AMap.Entries.Count - 1 do
-  begin
-    Entry := AMap.Entries[I];
+  Cursor := 0;
+  while AMap.NextEntry(Cursor, Key, Value) do
     Result.SetEntry(
-      StructuredCloneValue(Entry.Key, AMemory),
-      StructuredCloneValue(Entry.Value, AMemory));
-  end;
+      StructuredCloneValue(Key, AMemory),
+      StructuredCloneValue(Value, AMemory));
 end;
 
 function CloneSet(const ASet: TGocciaSetValue;
   const AMemory: THashMap<TGocciaValue, TGocciaValue>): TGocciaSetValue;
 var
-  I: Integer;
+  Cursor: Integer;
+  Item: TGocciaValue;
 begin
   Result := TGocciaSetValue.Create;
   AMemory.Add(ASet, Result);
 
-  for I := 0 to ASet.Items.Count - 1 do
-    Result.AddItem(StructuredCloneValue(ASet.Items[I], AMemory));
+  Cursor := 0;
+  while ASet.NextItem(Cursor, Item) do
+    Result.AddItem(StructuredCloneValue(Item, AMemory));
 end;
 
 function CloneArrayBuffer(const ABuf: TGocciaArrayBufferValue;
