@@ -260,10 +260,10 @@ When a benchmark has a `setup` or `teardown` function, a second line displays th
 Benchmarks run as part of the CI pipeline in both **interpreter mode** and
 **bytecode mode**. CI uses `GOCCIA_BENCH_CALIBRATION_MS=100` and
 `GOCCIA_BENCH_ROUNDS=7` for stable measurements with IQR outlier filtering. On
-pushes to `main`, the ubuntu-latest x64 runner saves JSON baselines for each
-mode (`benchmark-interpreted-results.json` and `benchmark-bytecode-results.json`)
-to the GitHub Actions cache. See [testing.md](testing.md#ci-integration) for the
-full pipeline overview.
+pushes to `main`, the ubuntu-latest x64 runner emits JSON and validates the
+report shape. PR comparison builds and benchmarks `main` on the PR's own runner
+rather than reading a cached baseline ([ADR 0076](adr/0076-same-runner-benchmark-comparison.md)).
+See [testing.md](testing.md#ci-integration) for the full pipeline overview.
 
 Main bytecode benchmark runs also retain deterministic VM profile reports. The
 GitHub Actions artifact is named `benchmark-profile` and contains:
@@ -284,13 +284,15 @@ paths are `benchmark-profiles/runs/<artifactId>/aggregate.json.gz`,
 
 ### PR Benchmark Comparison
 
-The PR workflow (`.github/workflows/pr.yml`) restores the cached baseline JSON from `main`, runs the benchmark matrix, and posts a collapsible comparison comment on the PR. Each benchmark file gets a **unified table** with both execution modes side by side:
+The PR workflow (`.github/workflows/pr.yml`) builds the PR's base commit (`main`) in a `build-main` job and benchmarks that `main` build and the PR build **back-to-back on the same runner** (after a discarded warm-up), so deltas reflect the diff rather than cross-runner variance (issue #815, [ADR 0076](adr/0076-same-runner-benchmark-comparison.md)). The comparison logic lives in [`scripts/benchmark-compare.js`](../scripts/benchmark-compare.js) (unit-tested by `scripts/test-benchmark-compare.ts`). It posts a collapsible comparison comment on the PR; each benchmark file gets a **unified table** with both execution modes side by side:
 
-- Each table row shows `| Benchmark | Interpreted | Δ | Bytecode | Δ |` with the point estimate and cached/PR min-max range in the form `10,000 ops/sec [9,500..10,500] → 9,200 ops/sec [8,700..9,700]`
-- Classification uses **range overlap** instead of a single point value: if the PR run sits fully above the baseline range it is improved, if it sits fully below it is regressed, and overlapping ranges are treated as unchanged noise
+- Each table row shows `| Benchmark | Interpreted (main → PR) | Δ | Bytecode (main → PR) | Δ |` with the point estimate and same-runner `main`/PR min-max range in the form `10,000 ops/sec [9,500..10,500] → 9,200 ops/sec [8,700..9,700]`
+- Classification uses **range overlap** instead of a single point value: if the PR run sits fully above the `main` range it is improved, if it sits fully below it is regressed, and overlapping ranges are treated as unchanged noise
 - Percentage deltas remain in the `Δ` column as secondary context, even when the classifier marks a benchmark as `~ overlap`
+- The overall summary reports the measured **median per-run variance** as a noise floor, so sub-noise deltas are read as unchanged
 - Results are **grouped by file**, each in a collapsible `<details>` section
 - Files with significant changes (improvements or regressions) are auto-expanded
 - Each file summary shows per-mode counts (e.g., `Interp: 🟢 1, 7 unch. · Bytecode: 🟢 2, 6 unch.`)
 - The **overall PR summary** shows per-mode totals on separate lines with average percentage deltas
-- 🟢 marks non-overlapping improvements, 🔴 marks non-overlapping regressions, `~ overlap` marks overlapping ranges, and 🆕 marks new benchmarks with no baseline
+- The comparison is **advisory** (comment-only, never merge-blocking)
+- 🟢 marks non-overlapping improvements, 🔴 marks non-overlapping regressions, `~ overlap` marks overlapping ranges, and 🆕 marks new benchmarks absent from the `main` build
