@@ -99,6 +99,17 @@ type
     function GetEnumerator: TEnumerator; inline;
     function EntryAt(AIndex: Integer): TBaseMap<TKey, TValue>.TKeyValuePair;
 
+    // Number of physical entry slots, including tombstones — the upper bound of
+    // valid physical indices. Stable while compaction is suppressed; grows only
+    // by appends. Callers that need "the entries present at a point in time"
+    // (e.g. spec-bounded Set operations) capture this, then iterate with
+    // NextEntryBounded so entries appended later are not visited.
+    function EntrySlotCount: Integer;
+    // Like GetNextEntry, but stops once the next active slot would be at or past
+    // ALimit. Skips tombstones below ALimit.
+    function NextEntryBounded(var AIterState: Integer; ALimit: Integer;
+      out AKey: TKey; out AValue: TValue): Boolean;
+
     property Capacity: Integer read FBucketCount;
   end;
 
@@ -425,6 +436,31 @@ function TOrderedMap<TKey, TValue>.GetNextEntry(var AIterState: Integer;
   out AKey: TKey; out AValue: TValue): Boolean;
 begin
   while AIterState < FEntryCount do
+  begin
+    if FEntries[AIterState].Active then
+    begin
+      AKey := FEntries[AIterState].Key;
+      AValue := FEntries[AIterState].Value;
+      Inc(AIterState);
+      Result := True;
+      Exit;
+    end;
+    Inc(AIterState);
+  end;
+  Result := False;
+end;
+
+function TOrderedMap<TKey, TValue>.EntrySlotCount: Integer;
+begin
+  Result := FEntryCount;
+end;
+
+function TOrderedMap<TKey, TValue>.NextEntryBounded(var AIterState: Integer;
+  ALimit: Integer; out AKey: TKey; out AValue: TValue): Boolean;
+begin
+  if ALimit > FEntryCount then
+    ALimit := FEntryCount;
+  while AIterState < ALimit do
   begin
     if FEntries[AIterState].Active then
     begin

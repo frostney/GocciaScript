@@ -42,6 +42,9 @@ type
     procedure TestCursorVisitsInInsertionOrder;
     procedure TestCursorSkipsTombstonesAndReaddAppends;
 
+    { Bounded iteration for spec-bounded Set operations. }
+    procedure TestNextEntryBoundedSkipsTombstonesAndExcludesAppends;
+
     { Compaction gating for live iterators. }
     procedure TestIteratorRetainReleaseCounter;
   public
@@ -65,6 +68,7 @@ begin
   Test('AddSetMember stores the canonical element as key and value', TestAddSetMemberStoresCanonicalKeyAndValue);
   Test('Cursor visits entries in insertion order', TestCursorVisitsInInsertionOrder);
   Test('Cursor skips tombstones; re-add appends at end', TestCursorSkipsTombstonesAndReaddAppends);
+  Test('NextEntryBounded skips tombstones and excludes appends past the limit', TestNextEntryBoundedSkipsTombstonesAndExcludesAppends);
   Test('RetainIterator/ReleaseIterator track active count', TestIteratorRetainReleaseCounter);
 end;
 
@@ -331,6 +335,34 @@ begin
     while Store.NextEntry(Cursor, Key, Value) do
       Order := Order + TGocciaStringLiteralValue(Key).Value;
     Expect<string>(Order).ToBe('acb');
+  finally
+    Store.Free;
+  end;
+end;
+
+procedure TOrderedValueMapTests.TestNextEntryBoundedSkipsTombstonesAndExcludesAppends;
+var
+  Store: TGocciaOrderedValueMap;
+  Cursor, Limit: Integer;
+  Key, Value: TGocciaValue;
+  Order: string;
+begin
+  Store := TGocciaOrderedValueMap.Create;
+  try
+    Store.SetEntry(Str('a'), Num(1));
+    Store.SetEntry(Str('b'), Num(2));
+    Store.SetEntry(Str('c'), Num(3));
+    Limit := Store.EntrySlotCount;
+    Expect<Integer>(Limit).ToBe(3);
+    // Tombstone a slot below the limit and append one past it.
+    Expect<Boolean>(Store.Remove(Str('b'))).ToBe(True);
+    Store.SetEntry(Str('d'), Num(4));
+    Order := '';
+    Cursor := 0;
+    while Store.NextEntryBounded(Cursor, Limit, Key, Value) do
+      Order := Order + TGocciaStringLiteralValue(Key).Value;
+    // 'b' skipped (tombstone), 'd' excluded (appended at a slot >= Limit).
+    Expect<string>(Order).ToBe('ac');
   finally
     Store.Free;
   end;

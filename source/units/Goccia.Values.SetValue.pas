@@ -48,6 +48,12 @@ type
 
     // Live, insertion-ordered cursor over active members. Seed ACursor with 0.
     function NextItem(var ACursor: Integer; out AValue: TGocciaValue): Boolean;
+    // Like NextItem, but stops at physical slot ALimit (captured via
+    // EntrySlotCount before a set operation that runs user callbacks), so
+    // members appended during a callback are not visited.
+    function NextItemBounded(var ACursor: Integer; ALimit: Integer;
+      out AValue: TGocciaValue): Boolean;
+    function EntrySlotCount: Integer;
     procedure RetainIterator;
     procedure ReleaseIterator;
     function Count: Integer;
@@ -111,11 +117,12 @@ begin
   ASet.FStore.Remove(AValue);
 end;
 
-// Copy the set's current members into a plain array. The set-operation methods
-// iterate this snapshot rather than a live cursor: their `has`/`keys` callbacks
-// can run user code that mutates the receiver, and the spec (ES2026 §24.2.4)
-// bounds these loops to the elements present when the operation began —
-// elements appended during a callback must not be visited.
+// Copy the set's current members into a plain array. `difference` iterates this
+// snapshot because the spec (ES2026 §24.2.4.5) builds its result from a copy of
+// O.[[SetData]] taken before any `has` callback runs, so later mutations of the
+// receiver — including delete-then-readd — do not affect the result. The
+// live-iterating operations (intersection/isSubsetOf/isDisjointFrom) instead use
+// NextItemBounded over the original physical slots.
 function SnapshotSetItems(const ASet: TGocciaSetValue): TArray<TGocciaValue>;
 var
   Cursor, Count: Integer;
@@ -357,6 +364,19 @@ var
   Key: TGocciaValue;
 begin
   Result := FStore.NextEntry(ACursor, Key, AValue);
+end;
+
+function TGocciaSetValue.NextItemBounded(var ACursor: Integer; ALimit: Integer;
+  out AValue: TGocciaValue): Boolean;
+var
+  Key: TGocciaValue;
+begin
+  Result := FStore.NextEntryBounded(ACursor, ALimit, Key, AValue);
+end;
+
+function TGocciaSetValue.EntrySlotCount: Integer;
+begin
+  Result := FStore.EntrySlotCount;
 end;
 
 procedure TGocciaSetValue.RetainIterator;
@@ -654,10 +674,9 @@ var
   ThisSet, ResultSet: TGocciaSetValue;
   OtherRecord: TGocciaSetRecord;
   Iterator: TGocciaIteratorValue;
-  NextValue: TGocciaValue;
+  NextValue, Item: TGocciaValue;
   Done, WasResultRooted, WasIteratorRooted: Boolean;
-  Snapshot: TArray<TGocciaValue>;
-  I: Integer;
+  Cursor, Limit: Integer;
   GC: TGarbageCollector;
 begin
   // Step 1: Let O be the this value
@@ -676,14 +695,22 @@ begin
   try
     if ThisSet.Count <= OtherRecord.Size then
     begin
-      // Step 6: For each element e of O.[[SetData]], do. Iterate a snapshot:
-      // SetRecordHas runs user code that may mutate O, and elements appended
-      // during the callback must not be visited (§24.2.4.6).
-      Snapshot := SnapshotSetItems(ThisSet);
-      for I := 0 to High(Snapshot) do
-        // Step 6a: If e is not empty (still a member) and SetDataHas(otherRec, e), append e
-        if ThisSet.ContainsValue(Snapshot[I]) and SetRecordHas(OtherRecord, Snapshot[I]) then
-          ResultSet.AddItem(Snapshot[I]);
+      // Step 6: For each element e of O.[[SetData]] present when the operation
+      // began. SetRecordHas runs user code that may mutate O; retain the store
+      // so physical slot indices stay stable, and bound iteration to the
+      // original slot count — appended members are not visited, deleted members
+      // are skipped, and a delete-then-readd lands past the bound (§24.2.4.6).
+      Limit := ThisSet.EntrySlotCount;
+      ThisSet.RetainIterator;
+      try
+        Cursor := 0;
+        while ThisSet.NextItemBounded(Cursor, Limit, Item) do
+          // Step 6a: If SetDataHas(otherRec, e) is true, append e
+          if SetRecordHas(OtherRecord, Item) then
+            ResultSet.AddItem(Item);
+      finally
+        ThisSet.ReleaseIterator;
+      end;
     end
     else
     begin
@@ -852,8 +879,8 @@ function TGocciaSetValue.SetIsSubsetOf(const AArgs: TGocciaArgumentsCollection; 
 var
   ThisSet: TGocciaSetValue;
   OtherRecord: TGocciaSetRecord;
-  Snapshot: TArray<TGocciaValue>;
-  I: Integer;
+  Item: TGocciaValue;
+  Cursor, Limit: Integer;
   IsSubset: Boolean;
 begin
   // Step 1: Let O be the this value
@@ -872,17 +899,25 @@ begin
   end;
 
   IsSubset := True;
-  // Step 6: For each element e of O.[[SetData]] (snapshot; SetRecordHas can run
-  // user code that mutates O — elements appended during a callback must not be
-  // checked, and elements deleted during a callback are skipped).
-  Snapshot := SnapshotSetItems(ThisSet);
-  for I := 0 to High(Snapshot) do
-    // Step 6a: If e is still a member and SetDataHas(otherRec, e) is false, return false
-    if ThisSet.ContainsValue(Snapshot[I]) and not SetRecordHas(OtherRecord, Snapshot[I]) then
-    begin
-      IsSubset := False;
-      Break;
-    end;
+  // Step 6: For each element e of O.[[SetData]] present when the operation
+  // began. SetRecordHas runs user code that may mutate O; retain the store and
+  // bound iteration to the original slot count so appended members are not
+  // checked, deleted members are skipped, and a delete-then-readd lands past
+  // the bound (§24.2.3.8).
+  Limit := ThisSet.EntrySlotCount;
+  ThisSet.RetainIterator;
+  try
+    Cursor := 0;
+    while ThisSet.NextItemBounded(Cursor, Limit, Item) do
+      // Step 6a: If SetDataHas(otherRec, e) is false, return false
+      if not SetRecordHas(OtherRecord, Item) then
+      begin
+        IsSubset := False;
+        Break;
+      end;
+  finally
+    ThisSet.ReleaseIterator;
+  end;
 
   // Step 7: Return true
   if IsSubset then
@@ -951,10 +986,9 @@ var
   ThisSet: TGocciaSetValue;
   OtherRecord: TGocciaSetRecord;
   Iterator: TGocciaIteratorValue;
-  NextValue: TGocciaValue;
+  NextValue, Item: TGocciaValue;
   Done, WasIteratorRooted, IsDisjoint: Boolean;
-  Snapshot: TArray<TGocciaValue>;
-  I: Integer;
+  Cursor, Limit: Integer;
   GC: TGarbageCollector;
 begin
   // Step 1: Let O be the this value
@@ -968,17 +1002,25 @@ begin
   if ThisSet.Count <= OtherRecord.Size then
   begin
     IsDisjoint := True;
-    // Step 5: For each element e of O.[[SetData]] (snapshot; SetRecordHas can
-    // run user code that mutates O — appended elements must not be checked,
-    // deleted elements are skipped).
-    Snapshot := SnapshotSetItems(ThisSet);
-    for I := 0 to High(Snapshot) do
-      // Step 5a: If e is still a member and SetDataHas(otherRec, e) is true, return false
-      if ThisSet.ContainsValue(Snapshot[I]) and SetRecordHas(OtherRecord, Snapshot[I]) then
-      begin
-        IsDisjoint := False;
-        Break;
-      end;
+    // Step 5: For each element e of O.[[SetData]] present when the operation
+    // began. SetRecordHas runs user code that may mutate O; retain the store and
+    // bound iteration to the original slot count so appended elements are not
+    // checked, deleted elements are skipped, and a delete-then-readd lands past
+    // the bound (§24.2.3.6).
+    Limit := ThisSet.EntrySlotCount;
+    ThisSet.RetainIterator;
+    try
+      Cursor := 0;
+      while ThisSet.NextItemBounded(Cursor, Limit, Item) do
+        // Step 5a: If SetDataHas(otherRec, e) is true, return false
+        if SetRecordHas(OtherRecord, Item) then
+        begin
+          IsDisjoint := False;
+          Break;
+        end;
+    finally
+      ThisSet.ReleaseIterator;
+    end;
     if not IsDisjoint then
     begin
       Result := TGocciaBooleanLiteralValue.FalseValue;
