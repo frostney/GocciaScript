@@ -165,6 +165,36 @@ test("JSON.stringify indents each deeper nesting level by exactly one more gap",
   });
 });
 
+test("JSON.stringify serializes deeply nested objects without a gap", () => {
+  const makeNested = (depth) =>
+    Array.from({ length: depth }).reduce((acc) => ({ child: acc }), { leaf: true });
+  expect(JSON.stringify(makeNested(4))).toBe(
+    '{"child":{"child":{"child":{"child":{"leaf":true}}}}}',
+  );
+});
+
+test("JSON.stringify serializes deeply nested arrays without a gap", () => {
+  const nestArr = (depth) =>
+    Array.from({ length: depth }).reduce((acc) => [acc], [1]);
+  expect(JSON.stringify(nestArr(3))).toBe("[[[[1]]]]");
+});
+
+test("JSON.stringify pretty-prints interleaved objects and arrays", () => {
+  const value = { a: [{ b: [1] }] };
+  const expected = [
+    "{",
+    '  "a": [',
+    "    {",
+    '      "b": [',
+    "        1",
+    "      ]",
+    "    }",
+    "  ]",
+    "}",
+  ].join("\n");
+  expect(JSON.stringify(value, null, 2)).toBe(expected);
+});
+
 test("JSON.stringify with replacer function", () => {
   const obj = { a: 1, b: "hello", c: true };
   const result = JSON.stringify(obj, (key, value) => {

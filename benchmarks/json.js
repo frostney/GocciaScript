@@ -172,6 +172,14 @@ suite("JSON.stringify with replacer", () => {
       const s = JSON.stringify(deep, null, 2);
     },
   });
+
+  bench("stringify very deeply nested object with 2-space indent", {
+    setup: () =>
+      Array.from({ length: 200 }).reduce((acc) => ({ child: acc }), { leaf: true }),
+    run: (deep) => {
+      const s = JSON.stringify(deep, null, 2);
+    },
+  });
 });
 
 suite("JSON roundtrip", () => {

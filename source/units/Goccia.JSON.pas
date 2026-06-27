@@ -10,6 +10,7 @@ uses
   SysUtils,
 
   JSONParser,
+  StringBuffer,
 
   Goccia.Values.ArrayValue,
   Goccia.Values.ObjectValue,
@@ -50,10 +51,9 @@ type
     function ShouldOmitRootValue(const AValue: TGocciaValue): Boolean;
     function QuoteJSON5String(const AStr: string): string;
     function SerializeObjectKey(const AKey: string): string;
-    function StringifyPreparedValue(const AValue: TGocciaValue; const AIndent: Integer = 0): string;
-    function StringifyValue(const AValue: TGocciaValue; const AIndent: Integer = 0; const AKey: string = ''): string;
-    function StringifyObject(const AObj: TGocciaObjectValue; const AIndent: Integer): string;
-    function StringifyArray(const AArr: TGocciaArrayValue; const AIndent: Integer): string;
+    procedure WriteValue(var ABuffer: TStringBuffer; const AValue: TGocciaValue; const AIndent: Integer = 0);
+    procedure WriteObject(var ABuffer: TStringBuffer; const AObj: TGocciaObjectValue; const AIndent: Integer);
+    procedure WriteArray(var ABuffer: TStringBuffer; const AArr: TGocciaArrayValue; const AIndent: Integer);
     function MakeIndent(const ALevel: Integer): string;
   public
     constructor Create; overload;
@@ -68,7 +68,6 @@ implementation
 uses
   StrUtils,
 
-  StringBuffer,
   TextSemantics,
 
   Goccia.Arguments.Collection,
@@ -460,6 +459,7 @@ var
   PreviousPropertyList: TArray<string>;
   PreviousTraversalStack: TList<TGocciaObjectValue>;
   RootValue: TGocciaValue;
+  Buffer: TStringBuffer;
 begin
   PreviousGap := FGap;
   PreviousHasPropertyList := FHasPropertyList;
@@ -485,7 +485,11 @@ begin
     if ShouldOmitRootValue(RootValue) then
       Result := ''
     else
-      Result := StringifyPreparedValue(RootValue);
+    begin
+      Buffer := TStringBuffer.Create;
+      WriteValue(Buffer, RootValue);
+      Result := Buffer.ToString;
+    end;
   finally
     FTraversalStack.Free;
     FTraversalStack := PreviousTraversalStack;
@@ -738,219 +742,207 @@ begin
     Result := '"' + EscapeJSONString(AKey) + '"';
 end;
 
-function TGocciaJSONStringifier.StringifyValue(const AValue: TGocciaValue;
-  const AIndent: Integer; const AKey: string): string;
-begin
-  Result := StringifyPreparedValue(ApplyToJSON(AValue, AKey), AIndent);
-end;
-
-function TGocciaJSONStringifier.StringifyPreparedValue(const AValue: TGocciaValue;
-  const AIndent: Integer): string;
+procedure TGocciaJSONStringifier.WriteValue(var ABuffer: TStringBuffer;
+  const AValue: TGocciaValue; const AIndent: Integer);
 var
   EffectiveValue: TGocciaValue;
 begin
-  // ES2026 §25.5.2.2 step 4a: If value has [[IsRawJSON]], return its raw text verbatim.
+  // ES2026 §25.5.2.2 step 4a: If value has [[IsRawJSON]], write its raw text verbatim.
   if AValue is TGocciaRawJSONValue then
-    Exit(TGocciaRawJSONValue(AValue).RawText);
+  begin
+    ABuffer.Append(TGocciaRawJSONValue(AValue).RawText);
+    Exit;
+  end;
 
   // ES2026 §25.5.4.2 steps 4.b-4.d: unwrap boxed primitives.
   EffectiveValue := CoerceWrappedPrimitive(AValue);
 
   if EffectiveValue is TGocciaNullLiteralValue then
-    Result := 'null'
+    ABuffer.Append('null')
   else if EffectiveValue is TGocciaUndefinedLiteralValue then
-    Result := 'null'
+    ABuffer.Append('null')
   else if EffectiveValue is TGocciaHoleValue then
-    Result := 'null'
+    ABuffer.Append('null')
   else if EffectiveValue is TGocciaBooleanLiteralValue then
   begin
     if EffectiveValue.ToBooleanLiteral.Value then
-      Result := 'true'
+      ABuffer.Append('true')
     else
-      Result := 'false';
+      ABuffer.Append('false');
   end
   else if EffectiveValue is TGocciaNumberLiteralValue then
   begin
     if TGocciaNumberLiteralValue(EffectiveValue).IsInfinity then
     begin
       if FMode = jsmJSON5 then
-        Result := 'Infinity'
+        ABuffer.Append('Infinity')
       else
-        Result := 'null';
+        ABuffer.Append('null');
     end
     else if TGocciaNumberLiteralValue(EffectiveValue).IsNegativeInfinity then
     begin
       if FMode = jsmJSON5 then
-        Result := '-Infinity'
+        ABuffer.Append('-Infinity')
       else
-        Result := 'null';
+        ABuffer.Append('null');
     end
     else if TGocciaNumberLiteralValue(EffectiveValue).IsNaN then
     begin
       if FMode = jsmJSON5 then
-        Result := 'NaN'
+        ABuffer.Append('NaN')
       else
-        Result := 'null';
+        ABuffer.Append('null');
     end
     else
-      Result := SerializeJSONNumber(EffectiveValue.ToNumberLiteral.Value);
+      ABuffer.Append(SerializeJSONNumber(EffectiveValue.ToNumberLiteral.Value));
   end
   else if EffectiveValue is TGocciaStringLiteralValue then
   begin
     if FMode = jsmJSON5 then
-      Result := QuoteJSON5String(EffectiveValue.ToStringLiteral.Value)
+      ABuffer.Append(QuoteJSON5String(EffectiveValue.ToStringLiteral.Value))
     else
-      Result := '"' + EscapeJSONString(EffectiveValue.ToStringLiteral.Value) + '"';
+      ABuffer.Append('"' + EscapeJSONString(EffectiveValue.ToStringLiteral.Value) + '"');
   end
   // ES2026 §25.5.2.5 step 10: BigInt values throw TypeError
   else if EffectiveValue is TGocciaBigIntValue then
     ThrowTypeError('Do not know how to serialize a BigInt',
       'use BigInt.prototype.toString() or a custom replacer')
   else if EffectiveValue.IsCallable then
-    Result := 'null'
+    ABuffer.Append('null')
   else if EffectiveValue is TGocciaSymbolValue then
-    Result := 'null'
+    ABuffer.Append('null')
   else if EffectiveValue is TGocciaArrayValue then
-    Result := StringifyArray(TGocciaArrayValue(EffectiveValue), AIndent)
+    WriteArray(ABuffer, TGocciaArrayValue(EffectiveValue), AIndent)
   else if EffectiveValue is TGocciaObjectValue then
-    Result := StringifyObject(TGocciaObjectValue(EffectiveValue), AIndent)
+    WriteObject(ABuffer, TGocciaObjectValue(EffectiveValue), AIndent)
   else
-    Result := 'null';
+    ABuffer.Append('null');
 end;
 
-function TGocciaJSONStringifier.StringifyObject(const AObj: TGocciaObjectValue; const AIndent: Integer): string;
+procedure TGocciaJSONStringifier.WriteObject(var ABuffer: TStringBuffer;
+  const AObj: TGocciaObjectValue; const AIndent: Integer);
 var
-  SB: TStringBuffer;
   Key: string;
   Keys: TArray<string>;
   PropValue: TGocciaValue;
   Value: TGocciaValue;
   HasProperties: Boolean;
-  Separator, ChildIndent, CloseIndent: string;
+  ChildIndent, CloseIndent: string;
 begin
   if FTraversalStack.IndexOf(AObj) <> -1 then
     ThrowTypeError(CircularErrorName);
 
   FTraversalStack.Add(AObj);
   try
-    SB := TStringBuffer.Create;
-    try
-      HasProperties := False;
+    HasProperties := False;
 
-      if FGap <> '' then
-      begin
-        Separator := ',' + #10;
-        ChildIndent := MakeIndent(AIndent + 1);
-        CloseIndent := MakeIndent(AIndent);
-      end
-      else
-      begin
-        Separator := ',';
-        ChildIndent := '';
-        CloseIndent := '';
-      end;
-
-      // ES2026 §25.5.4.5 SerializeJSONObject step 5: PropertyList replaces
-      // own-key enumeration; keys absent from the object serialize as
-      // undefined and are omitted below.
-      if FHasPropertyList then
-        Keys := FPropertyList
-      else
-        Keys := AObj.GetEnumerablePropertyNames;
-
-      for Key in Keys do
-      begin
-        PropValue := AObj.GetProperty(Key);
-        if PropValue = nil then
-          Continue;
-        Value := ApplyToJSON(PropValue, Key);
-        if ShouldOmitObjectProperty(Value) then
-          Continue;
-
-        if HasProperties then
-          SB.Append(Separator);
-        SB.Append(ChildIndent);
-        SB.Append(SerializeObjectKey(Key));
-        SB.Append(':');
-        if FGap <> '' then
-          SB.AppendChar(' ');
-        SB.Append(StringifyPreparedValue(Value, AIndent + 1));
-        HasProperties := True;
-      end;
-
-      if not HasProperties then
-        Result := '{}'
-      else if FGap <> '' then
-      begin
-        if FMode = jsmJSON5 then
-          Result := '{' + #10 + SB.ToString + ',' + #10 + CloseIndent + '}'
-        else
-          Result := '{' + #10 + SB.ToString + #10 + CloseIndent + '}';
-      end
-      else
-        Result := '{' + SB.ToString + '}';
-    finally
-    end;
-  finally
-    FTraversalStack.Delete(FTraversalStack.Count - 1);
-  end;
-end;
-
-function TGocciaJSONStringifier.StringifyArray(const AArr: TGocciaArrayValue; const AIndent: Integer): string;
-var
-  SB: TStringBuffer;
-  I: Integer;
-  Len: Integer;
-  Value: TGocciaValue;
-  Separator, ChildIndent, CloseIndent: string;
-begin
-  if FTraversalStack.IndexOf(AArr) <> -1 then
-    ThrowTypeError(CircularErrorName);
-
-  FTraversalStack.Add(AArr);
-  Len := LengthOfArrayLike(AArr);
-  if Len = 0 then
-  begin
-    Result := '[]';
-    FTraversalStack.Delete(FTraversalStack.Count - 1);
-    Exit;
-  end;
-
-  try
     if FGap <> '' then
     begin
-      Separator := ',' + #10;
       ChildIndent := MakeIndent(AIndent + 1);
       CloseIndent := MakeIndent(AIndent);
     end
     else
     begin
-      Separator := ',';
       ChildIndent := '';
       CloseIndent := '';
     end;
 
-    SB := TStringBuffer.Create;
-    try
+    ABuffer.AppendChar('{');
+
+    // ES2026 §25.5.4.5 SerializeJSONObject step 5: PropertyList replaces
+    // own-key enumeration; keys absent from the object serialize as
+    // undefined and are omitted below.
+    if FHasPropertyList then
+      Keys := FPropertyList
+    else
+      Keys := AObj.GetEnumerablePropertyNames;
+
+    for Key in Keys do
+    begin
+      PropValue := AObj.GetProperty(Key);
+      if PropValue = nil then
+        Continue;
+      Value := ApplyToJSON(PropValue, Key);
+      if ShouldOmitObjectProperty(Value) then
+        Continue;
+
+      if HasProperties then
+        ABuffer.AppendChar(',');
+      // The opening newline is deferred to the first emitted property so an
+      // all-omitted object still serializes as '{}'.
+      if FGap <> '' then
+        ABuffer.AppendChar(#10);
+      ABuffer.Append(ChildIndent);
+      ABuffer.Append(SerializeObjectKey(Key));
+      ABuffer.AppendChar(':');
+      if FGap <> '' then
+        ABuffer.AppendChar(' ');
+      WriteValue(ABuffer, Value, AIndent + 1);
+      HasProperties := True;
+    end;
+
+    if HasProperties and (FGap <> '') then
+    begin
+      if FMode = jsmJSON5 then
+        ABuffer.AppendChar(',');
+      ABuffer.AppendChar(#10);
+      ABuffer.Append(CloseIndent);
+    end;
+    ABuffer.AppendChar('}');
+  finally
+    FTraversalStack.Delete(FTraversalStack.Count - 1);
+  end;
+end;
+
+procedure TGocciaJSONStringifier.WriteArray(var ABuffer: TStringBuffer;
+  const AArr: TGocciaArrayValue; const AIndent: Integer);
+var
+  I: Integer;
+  Len: Integer;
+  Value: TGocciaValue;
+  ChildIndent, CloseIndent: string;
+begin
+  if FTraversalStack.IndexOf(AArr) <> -1 then
+    ThrowTypeError(CircularErrorName);
+
+  FTraversalStack.Add(AArr);
+  try
+    Len := LengthOfArrayLike(AArr);
+    ABuffer.AppendChar('[');
+
+    if Len > 0 then
+    begin
+      if FGap <> '' then
+      begin
+        ChildIndent := MakeIndent(AIndent + 1);
+        CloseIndent := MakeIndent(AIndent);
+      end
+      else
+      begin
+        ChildIndent := '';
+        CloseIndent := '';
+      end;
+
       for I := 0 to Len - 1 do
       begin
         if I > 0 then
-          SB.Append(Separator);
-        SB.Append(ChildIndent);
+          ABuffer.AppendChar(',');
+        if FGap <> '' then
+          ABuffer.AppendChar(#10);
+        ABuffer.Append(ChildIndent);
         Value := ApplyToJSON(AArr.GetProperty(IntToStr(I)), IntToStr(I));
-        SB.Append(StringifyPreparedValue(Value, AIndent + 1));
+        WriteValue(ABuffer, Value, AIndent + 1);
       end;
+
       if FGap <> '' then
       begin
         if FMode = jsmJSON5 then
-          Result := '[' + #10 + SB.ToString + ',' + #10 + CloseIndent + ']'
-        else
-          Result := '[' + #10 + SB.ToString + #10 + CloseIndent + ']';
-      end
-      else
-        Result := '[' + SB.ToString + ']';
-    finally
+          ABuffer.AppendChar(',');
+        ABuffer.AppendChar(#10);
+        ABuffer.Append(CloseIndent);
+      end;
     end;
+    ABuffer.AppendChar(']');
   finally
     FTraversalStack.Delete(FTraversalStack.Count - 1);
   end;
