@@ -5408,7 +5408,7 @@ var
   Keys: TArray<string>;
   Key: string;
   KeyValue: TGocciaStringLiteralValue;
-  Visited: TStringList;
+  Visited: TOrderedStringMap<Boolean>;
   GC: TGarbageCollector;
   ChainDepth: Integer;
 begin
@@ -5424,9 +5424,11 @@ begin
     Obj := ToObject(AValue);
     if Assigned(GC) then
       GC.AddTempRoot(Obj);
-    Visited := TStringList.Create;
+    // Dedup keys across the prototype chain via O(1) hash-set membership
+    // (native case-sensitive string equality); OrderForInPropertyKeys
+    // (above) owns per-level enumeration order.
+    Visited := TOrderedStringMap<Boolean>.Create;
     try
-      Visited.CaseSensitive := True;
       Current := Obj;
       ChainDepth := 0;
       while Assigned(Current) do
@@ -5439,10 +5441,10 @@ begin
         Keys := OrderForInPropertyKeys(Current.GetAllPropertyNames);
         for Key in Keys do
         begin
-          if Visited.IndexOf(Key) >= 0 then
+          if Visited.ContainsKey(Key) then
             Continue;
 
-          Visited.Add(Key);
+          Visited.Add(Key, True);
           EntryObj := TGocciaObjectValue.Create;
           if Assigned(GC) then
             GC.AddTempRoot(EntryObj);
