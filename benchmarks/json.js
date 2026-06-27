@@ -157,6 +157,21 @@ suite("JSON.stringify with replacer", () => {
       const s = JSON.stringify({ name: "test", items: [1, 2, 3], nested: { x: 1 } }, null, "\t");
     },
   });
+
+  bench("stringify deeply nested object with 2-space indent", {
+    setup: () =>
+      Array.from({ length: 50 }).reduce((acc) => ({ child: acc }), { leaf: true }),
+    run: (deep) => {
+      const s = JSON.stringify(deep, null, 2);
+    },
+  });
+
+  bench("stringify deeply nested array with 2-space indent", {
+    setup: () => Array.from({ length: 50 }).reduce((acc) => [acc], [1]),
+    run: (deep) => {
+      const s = JSON.stringify(deep, null, 2);
+    },
+  });
 });
 
 suite("JSON roundtrip", () => {

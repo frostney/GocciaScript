@@ -107,6 +107,64 @@ test("JSON.stringify with space string", () => {
   expect(result).toContain("\t");
 });
 
+test("JSON.stringify pretty-prints nested objects with per-level indentation", () => {
+  const makeNested = (depth) =>
+    Array.from({ length: depth }).reduce((acc) => ({ child: acc }), { leaf: true });
+  const expected = [
+    "{",
+    '  "child": {',
+    '    "child": {',
+    '      "child": {',
+    '        "child": {',
+    '          "leaf": true',
+    "        }",
+    "      }",
+    "    }",
+    "  }",
+    "}",
+  ].join("\n");
+  expect(JSON.stringify(makeNested(4), null, 2)).toBe(expected);
+});
+
+test("JSON.stringify pretty-prints nested arrays with per-level indentation", () => {
+  const nestArr = (depth) =>
+    Array.from({ length: depth }).reduce((acc) => [acc], [1]);
+  const expected = [
+    "[",
+    "  [",
+    "    [",
+    "      [",
+    "        1",
+    "      ]",
+    "    ]",
+    "  ]",
+    "]",
+  ].join("\n");
+  expect(JSON.stringify(nestArr(3), null, 2)).toBe(expected);
+});
+
+test("JSON.stringify repeats a multi-character gap once per nesting level", () => {
+  const expected = ['{', 'ab"a": {', 'abab"b": 1', 'ab}', '}'].join("\n");
+  expect(JSON.stringify({ a: { b: 1 } }, null, "ab")).toBe(expected);
+});
+
+test("JSON.stringify indents each deeper nesting level by exactly one more gap", () => {
+  const makeNested = (depth) =>
+    Array.from({ length: depth }).reduce((acc) => ({ child: acc }), { leaf: true });
+  const out = JSON.stringify(makeNested(30), null, 2);
+  // Each keyed line starts with its indentation followed by a quoted key, so the
+  // index of the first quote equals the number of leading spaces for that line.
+  const indentOf = (line) => line.indexOf('"');
+  const keyedLines = out
+    .split("\n")
+    .filter((line) => line.includes('"child"') || line.includes('"leaf"'));
+  // 30 wrappers plus the innermost leaf object => 31 keyed lines, each one gap deeper.
+  expect(keyedLines.length).toBe(31);
+  keyedLines.forEach((line, i) => {
+    expect(indentOf(line)).toBe((i + 1) * 2);
+  });
+});
+
 test("JSON.stringify with replacer function", () => {
   const obj = { a: 1, b: "hello", c: true };
   const result = JSON.stringify(obj, (key, value) => {
