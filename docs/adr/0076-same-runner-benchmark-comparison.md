@@ -3,6 +3,7 @@
 **Date:** 2026-06-27
 **Area:** `ci` / `tooling`
 **Issue:** [#815](https://github.com/frostney/GocciaScript/issues/815)
+**Pull Request:** [#886](https://github.com/frostney/GocciaScript/pull/886)
 
 The PR "Benchmark Results" comment previously classified benchmarks as 🟢 improved / 🔴 regressed by comparing the PR's freshly-measured run against a **cached baseline measured in a different job, on a different GitHub-hosted runner, at a different time** (whatever `main` last pushed). The baseline was written by `ci.yml`'s `benchmark` job via `actions/cache/save` and restored in `pr.yml`'s `benchmark-comment` job by `restore-keys` prefix. Cross-runner/cross-time variance is systematically larger than each run's own min/max spread, so the range-overlap classifier (improved iff PR min > baseline max) flipped large numbers of benchmarks to improved/regressed even when the diff could not possibly affect them — e.g. PR [#805](https://github.com/frostney/GocciaScript/pull/805) (regex-decode only) reported `arraybuffer.js` and `arrays.js`, which use no regex, as broadly improved. The verdicts were confident but not actionable, and a real regression was indistinguishable from runner noise.
 
