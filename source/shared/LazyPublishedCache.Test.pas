@@ -44,11 +44,21 @@ begin
   Result := False;
 end;
 
+function LoadPartialThenFails(const AKey: string; out AData: TBytes): Boolean;
+begin
+  // Writes a payload into the out slot, then reports failure — mimics a
+  // resource read that sizes its buffer before a failing ReadBuffer.
+  SetLength(AData, 4);
+  AData[0] := 1;
+  Result := False;
+end;
+
 type
   TLazyPublishedCacheTests = class(TTestSuite)
   private
     procedure TestLoadsOnceAndPublishes;
     procedure TestMemoizesFailureWithoutRetrying;
+    procedure TestFailedLoadDropsPartialData;
     procedure TestPassesKeyToLoader;
     procedure TestWorksForAnyPayloadType;
   public
@@ -59,6 +69,7 @@ procedure TLazyPublishedCacheTests.SetupTests;
 begin
   Test('Loads once and publishes data for warm reads', TestLoadsOnceAndPublishes);
   Test('Memoizes load failure and does not retry', TestMemoizesFailureWithoutRetrying);
+  Test('Drops partial data when the loader fails', TestFailedLoadDropsPartialData);
   Test('Passes the key through to the loader', TestPassesKeyToLoader);
   Test('Works for any payload type', TestWorksForAnyPayloadType);
 end;
@@ -92,6 +103,20 @@ begin
     // Failure is memoized, so the loader is not re-attempted on the next call.
     Expect<Boolean>(Cache.Ensure('k', @LoadFails)).ToBe(False);
     Expect<Integer>(GFailLoads).ToBe(1);
+    Expect<Integer>(Length(Cache.Data)).ToBe(0);
+  finally
+    Cache.Done;
+  end;
+end;
+
+procedure TLazyPublishedCacheTests.TestFailedLoadDropsPartialData;
+var
+  Cache: TLazyPublishedCache<TBytes>;
+begin
+  Cache.Init;
+  try
+    Expect<Boolean>(Cache.Ensure('k', @LoadPartialThenFails)).ToBe(False);
+    // The payload the loader wrote into Data before failing must not survive.
     Expect<Integer>(Length(Cache.Data)).ToBe(0);
   finally
     Cache.Done;

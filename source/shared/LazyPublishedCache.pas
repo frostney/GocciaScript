@@ -85,6 +85,13 @@ begin
     end;
 
     Available := ALoader(AKey, Data);
+    // A loader that partially fills Data and then fails (e.g. a resource read
+    // that sizes its buffer before a failing ReadBuffer) would otherwise leave
+    // that payload resident for the process lifetime, since Loaded stays True
+    // and the slot is never reloaded. Drop it so a failed load publishes an
+    // empty value rather than a stale partial one.
+    if not Available then
+      Data := Default(T);
     WriteBarrier;
     Loaded := True;
     Result := Available;
