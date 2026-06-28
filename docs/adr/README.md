@@ -90,4 +90,5 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0078 — Thread-local cleanup registry for managed threadvars](0078-thread-local-cleanup-registry.md)
 - [0079 — Keep speculatively-scanned tokens across parenthesized-group probes](0079-keep-speculatively-scanned-tokens.md)
 - [0080 — FormatDouble first-hit precision scan](0080-formatdouble-first-hit-precision-scan.md)
-- [0081 — Unify embedded-data caches onto a lock-free publication primitive](0081-lazy-published-cache-primitive.md)
+- [0081 — Reject shared value caches as a runtime optimization](0081-reject-value-caches-for-allocation-reduction.md)
+- [0082 — Unify embedded-data caches onto a lock-free publication primitive](0082-lazy-published-cache-primitive.md)

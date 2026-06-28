@@ -521,7 +521,8 @@ uses
   Goccia.Values.ProxyValue,
   Goccia.Values.Shape,
   Goccia.Values.ToObject,
-  Goccia.Values.ToPrimitive;
+  Goccia.Values.ToPrimitive,
+  Goccia.Values.TypedArrayValue;
 
 const
   BYTECODE_PRIVATE_SLOT_PREFIX = '#slot:';
@@ -7656,11 +7657,24 @@ var
   Key: TGocciaPropertyKey;
   KeyName: string;
   ReceiverArray: TGocciaArrayValue;
+  FastIndex: Integer;
+  FastElement: Double;
 begin
   if (caoThrowOnNullUndefined in AOptions) and
      (AObjReg.Kind in [grkUndefined, grkNull]) then
     ThrowTypeError(SErrorCannotConvertNullOrUndefined,
       SSuggestCheckNullBeforeAccess)
+  else if (AObjReg.Kind = grkObject) and
+          (AObjReg.ObjectValue is TGocciaTypedArrayValue) and
+          TryGetArrayIndexRegister(AKeyReg, FastIndex) and
+          TGocciaTypedArrayValue(AObjReg.ObjectValue)
+            .TryReadIndexedScalar(FastIndex, FastElement) then
+    // Typed-array unboxed element read: the element goes straight into the
+    // destination register as a scalar, with no heap TGocciaNumberLiteralValue and
+    // no IntToStr index name. Non-index keys, BigInt kinds, and out-of-range indices
+    // fall through to the generic object branch below, which handles length, methods,
+    // `undefined` for out-of-range reads, BigInt boxing, and symbol keys unchanged.
+    FRegisters[ADest] := RegisterFromDouble(FastElement)
   else if (AObjReg.Kind = grkObject) and
           (AObjReg.ObjectValue is TGocciaArrayValue) then
   begin
@@ -7752,7 +7766,21 @@ var
   Value: TGocciaValue;
   TargetValue: TGocciaValue;
   BoxedTarget: TGocciaObjectValue;
+  FastIndex: Integer;
 begin
+  // Typed-array unboxed element write: a numeric-scalar value going to a valid
+  // integer index stores directly, with no heap TGocciaNumberLiteralValue and no
+  // IntToStr index name. ToNumber on a Number is side-effect-free, so the spec's
+  // observable conversion is preserved. BigInt kinds (a Number value must throw),
+  // non-index keys, and non-scalar values fall through to the boxed path below.
+  if (FRegisters[ATargetIndex].Kind = grkObject) and
+     (FRegisters[ATargetIndex].ObjectValue is TGocciaTypedArrayValue) and
+     RegisterIsNumericScalar(AValueReg) and
+     TryGetArrayIndexRegister(AKeyReg, FastIndex) and
+     TGocciaTypedArrayValue(FRegisters[ATargetIndex].ObjectValue)
+       .TryWriteIndexedScalar(FastIndex, RegisterToDouble(AValueReg)) then
+    Exit;
+
   Value := RegisterToValue(AValueReg);
   if (FRegisters[ATargetIndex].Kind = grkObject) and
      (FRegisters[ATargetIndex].ObjectValue is TGocciaArrayValue) then

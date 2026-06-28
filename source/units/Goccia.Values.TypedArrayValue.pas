@@ -44,7 +44,9 @@ type
     function HasValidBackingRange(const ALength: Integer): Boolean;
     function HasValidElementIndex(const AIndex: Integer): Boolean;
 
+    function ReadElementUnchecked(const AIndex: Integer): Double;
     function ReadElement(const AIndex: Integer): Double;
+    procedure WriteElementUnchecked(const AIndex: Integer; const AValue: Double);
     procedure WriteElement(const AIndex: Integer; const AValue: Double);
     procedure WriteNumberLiteral(const AIndex: Integer; const ANum: TGocciaNumberLiteralValue);
 
@@ -98,6 +100,18 @@ type
     property ByteOffset: Integer read FByteOffset;
     property Length: Integer read GetLength;
     property Kind: TGocciaTypedArrayKind read FKind;
+
+    // Boxing-free element fast paths for the bytecode VM computed-access cores.
+    // TryReadIndexedScalar yields the element as a raw Double for non-BigInt kinds
+    // and a valid in-range index; it returns False (caller falls back to GetProperty)
+    // for BigInt kinds and out-of-range indices. TryWriteIndexedScalar stores an
+    // already-numeric scalar value (ToNumber on a Number is side-effect-free, so the
+    // observable conversion the spec requires is preserved) with the same coercion as
+    // WriteNumberLiteral; it returns False for BigInt kinds so the caller takes the
+    // throwing slow path, and True (handled) for non-BigInt kinds whether or not the
+    // index is in range or the backing buffer is immutable.
+    function TryReadIndexedScalar(const AIndex: Integer; out AValue: Double): Boolean;
+    function TryWriteIndexedScalar(const AIndex: Integer; const AValue: Double): Boolean;
   published
     function TypedArrayAt(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function TypedArrayFill(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -401,66 +415,78 @@ end;
 
 { Element read/write via buffer }
 
-function TGocciaTypedArrayValue.ReadElement(const AIndex: Integer): Double;
+function TGocciaTypedArrayValue.ReadElementUnchecked(const AIndex: Integer): Double;
 var
   Offset: Integer;
 begin
-  if not HasValidElementIndex(AIndex) then
-    Exit(0);
-
+  // Precondition: AIndex is in range (the caller validated HasValidElementIndex).
+  // One sync + read, with no redundant bounds re-check on the hot element path.
   SyncBufferData;
   Offset := FByteOffset + AIndex * BytesPerElement(FKind);
   Result := ReadBinaryNumberElement(FBufferData, Offset,
     ToBinaryElementKind(FKind), TYPED_ARRAY_LITTLE_ENDIAN);
 end;
 
-procedure TGocciaTypedArrayValue.WriteElement(const AIndex: Integer; const AValue: Double);
+function TGocciaTypedArrayValue.ReadElement(const AIndex: Integer): Double;
+begin
+  if not HasValidElementIndex(AIndex) then
+    Exit(0);
+  Result := ReadElementUnchecked(AIndex);
+end;
+
+procedure TGocciaTypedArrayValue.WriteElementUnchecked(const AIndex: Integer; const AValue: Double);
 var
   Offset: Integer;
 begin
-  if not HasValidElementIndex(AIndex) then
-    Exit;
-
+  // Precondition: AIndex is in range (the caller validated HasValidElementIndex).
+  // Integer coercion of the ToNumber result — non-finite -> 0 for integer kinds,
+  // Uint8Clamped clamping +Infinity to 255, float kinds verbatim — is performed by
+  // WriteBinaryNumberElement, so it is not repeated here. One sync + write.
   SyncBufferData;
   Offset := FByteOffset + AIndex * BytesPerElement(FKind);
   WriteBinaryNumberElement(FBufferData, Offset, ToBinaryElementKind(FKind),
     AValue, TYPED_ARRAY_LITTLE_ENDIAN);
 end;
 
-procedure TGocciaTypedArrayValue.WriteNumberLiteral(const AIndex: Integer; const ANum: TGocciaNumberLiteralValue);
-var
-  Offset: Integer;
-  ToWrite: Double;
+procedure TGocciaTypedArrayValue.WriteElement(const AIndex: Integer; const AValue: Double);
 begin
   if not HasValidElementIndex(AIndex) then
     Exit;
+  WriteElementUnchecked(AIndex, AValue);
+end;
 
-  // Map the coerced ToNumber result to the value SetValueInBuffer stores: float
-  // kinds keep the value (including NaN/+/-Infinity) verbatim, while integer
-  // kinds store 0 for any non-finite input, except Uint8Clamped which clamps
-  // +Infinity to 255. Selecting the value first lets the index validation, the
-  // backing-store sync, and the byte-offset computation run exactly once per
-  // store instead of being repeated by a nested WriteElement re-dispatch.
-  if IsFloatKind(FKind) then
-    ToWrite := ANum.Value
-  else if ANum.IsNaN then
-    ToWrite := 0
-  else if ANum.IsInfinity then
-  begin
-    if FKind = takUint8Clamped then
-      ToWrite := 255
-    else
-      ToWrite := 0;
-  end
-  else if ANum.IsNegativeInfinity then
-    ToWrite := 0
-  else
-    ToWrite := ANum.Value;
+procedure TGocciaTypedArrayValue.WriteNumberLiteral(const AIndex: Integer; const ANum: TGocciaNumberLiteralValue);
+begin
+  if not HasValidElementIndex(AIndex) then
+    Exit;
+  WriteElementUnchecked(AIndex, ANum.Value);
+end;
 
-  SyncBufferData;
-  Offset := FByteOffset + AIndex * BytesPerElement(FKind);
-  WriteBinaryNumberElement(FBufferData, Offset, ToBinaryElementKind(FKind),
-    ToWrite, TYPED_ARRAY_LITTLE_ENDIAN);
+function TGocciaTypedArrayValue.TryReadIndexedScalar(const AIndex: Integer; out AValue: Double): Boolean;
+begin
+  // BigInt kinds yield TGocciaBigIntValue, never a Double, so they fall back to the
+  // boxed path; an out-of-range index falls back so the caller yields `undefined`.
+  if IsBigIntKind(FKind) or (not HasValidElementIndex(AIndex)) then
+    Exit(False);
+  AValue := ReadElementUnchecked(AIndex);
+  Result := True;
+end;
+
+function TGocciaTypedArrayValue.TryWriteIndexedScalar(const AIndex: Integer; const AValue: Double): Boolean;
+begin
+  // A Number value into a BigInt typed array must throw (ToBigInt(Number) throws), so
+  // signal not-handled and let the caller take the boxed, throwing slow path.
+  if IsBigIntKind(FKind) then
+    Exit(False);
+  // Non-BigInt integer-indexed [[Set]] is always "handled": an out-of-range index is
+  // ignored and an immutable backing buffer skips the store, both reporting success
+  // per ES2026 10.4.5.9 / the Immutable ArrayBuffers proposal.
+  Result := True;
+  if not HasValidElementIndex(AIndex) then
+    Exit;
+  if IsTypedArrayBackedByImmutableArrayBuffer(Self) then
+    Exit;
+  WriteElementUnchecked(AIndex, AValue);
 end;
 
 function TGocciaTypedArrayValue.ReadBigIntElement(const AIndex: Integer): Int64;
