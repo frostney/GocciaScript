@@ -438,7 +438,7 @@ const
         'const __GocciaDateIsObject = (value: any): boolean =>'#10 +
         '  (typeof value === "object" && value !== null) || typeof value === "function";'#10 +
         'const __GocciaDateHasSlot = (date: any): boolean =>'#10 +
-        '  __GocciaDateIsObject(date) && __GocciaDateSlots.has(date);'#10 +
+        '  __GocciaDateSlots.get(date) !== undefined;'#10 +
         'const __GocciaDateOrdinaryToPrimitive = (object: any, hint: string): any => {'#10 +
         '  const first: string = hint === "string" ? "toString" : "valueOf";'#10 +
         '  const second: string = hint === "string" ? "valueOf" : "toString";'#10 +
@@ -480,6 +480,7 @@ const
         '    (year < 0 ? "-" : "+") + __GocciaDatePad(year, 6);'#10 +
         'const __GocciaDateOffsetString = (offset: string): string => offset.replace(":", "");'#10 +
         'const __GocciaDateFromSingleArgument = (value: any): number => {'#10 +
+        '  if (typeof value === "number") return __GocciaDateTimeClip(value);'#10 +
         '  if (__GocciaDateHasSlot(value)) return __GocciaDateGetSlot(value);'#10 +
         '  const primitive: any = __GocciaDateToPrimitive(value);'#10 +
         '  return typeof primitive === "string" ? parseDateStringToEpoch(primitive) : __GocciaDateTimeClip(primitive);'#10 +
@@ -494,12 +495,16 @@ const
         '  } catch (e) {}'#10 +
         '  return __GocciaDateClass.prototype;'#10 +
         '};'#10 +
+        '// A Date slot only ever stores a number (never undefined), so a missing'#10 +
+        '// entry reads back as undefined and doubles as the brand check. This keeps'#10 +
+        '// the hot accessors to a single WeakMap lookup instead of has()+get().'#10 +
         'const __GocciaDateRequire = (date: any): void => {'#10 +
-        '  if (!__GocciaDateHasSlot(date)) throw new TypeError("Date object expected");'#10 +
+        '  if (__GocciaDateSlots.get(date) === undefined) throw new TypeError("Date object expected");'#10 +
         '};'#10 +
         'const __GocciaDateGetSlot = (date: any): number => {'#10 +
-        '  __GocciaDateRequire(date);'#10 +
-        '  return __GocciaDateSlots.get(date);'#10 +
+        '  const value: any = __GocciaDateSlots.get(date);'#10 +
+        '  if (value === undefined) throw new TypeError("Date object expected");'#10 +
+        '  return value;'#10 +
         '};'#10 +
         'const __GocciaDateSetSlot = (date: any, value: number): number => {'#10 +
         '  __GocciaDateSlots.set(date, value);'#10 +
@@ -557,8 +562,8 @@ const
         '  static #get(date: any): number { return __GocciaDateGetSlot(date); }'#10 +
         '  static #set(date: any, value: number): number { return __GocciaDateSetSlot(date, value); }'#10 +
         '  static #valid(date: any): boolean { return Number.isFinite(Date.#get(date)); }'#10 +
-        '  static #local(date: any): any { return Date.#valid(date) ? new Temporal.ZonedDateTime(BigInt(Date.#get(date)) * 1000000n, Temporal.Now.timeZoneId()) : null; }'#10 +
-        '  static #utc(date: any): any { return Date.#valid(date) ? new Temporal.ZonedDateTime(BigInt(Date.#get(date)) * 1000000n, "UTC") : null; }'#10 +
+        '  static #local(date: any): any { const ms: number = Date.#get(date); return Number.isFinite(ms) ? new Temporal.ZonedDateTime(BigInt(ms) * 1000000n, Temporal.Now.timeZoneId()) : null; }'#10 +
+        '  static #utc(date: any): any { const ms: number = Date.#get(date); return Number.isFinite(ms) ? new Temporal.ZonedDateTime(BigInt(ms) * 1000000n, "UTC") : null; }'#10 +
         '  getTime(): number { return __GocciaDateGetSlot(this); }'#10 +
         '  valueOf(): number { return __GocciaDateGetSlot(this); }'#10 +
         '  [Symbol.toPrimitive](hint: string): any {'#10 +

@@ -24,6 +24,21 @@ describe.runIf(isTemporal)("Temporal.ZonedDateTime constructor", () => {
     expect(zdt.calendarId).toBe("iso8601");
   });
 
+  test("canonical named time zones are accepted and preserved", () => {
+    const zones = [
+      "Africa/Cairo",
+      "America/Los_Angeles",
+      "Asia/Tokyo",
+      "Europe/London",
+      "Pacific/Auckland",
+      "UTC",
+    ];
+    for (const id of zones) {
+      expect(new Temporal.ZonedDateTime(0n, id).timeZoneId).toBe(id);
+    }
+    expect(() => new Temporal.ZonedDateTime(0n, "Not/AZone")).toThrow(RangeError);
+  });
+
   test("constructor stores non-ISO calendarId", () => {
     const zdt = new Temporal.ZonedDateTime(0n, "Europe/Madrid", "gregory");
     expect(zdt.calendarId).toBe("gregory");
