@@ -47,7 +47,8 @@ uses
   SysUtils,
 
   EmbeddedResourceReader,
-  Generated.IntlData;
+  Generated.IntlData,
+  LazyPublishedCache;
 
 const
   CLDR_RCDATA_RESOURCE_TYPE = MAKEINTRESOURCE(10);
@@ -55,26 +56,18 @@ const
     (Ord('G'), Ord('O'), Ord('C'), Ord('C'), Ord('I'), Ord('A'), Ord('C'), Ord('L'));
 
 var
-  CachedCLDRResource: TBytes;
-  CachedCLDRResourceLoaded: Boolean;
+  CLDRResourceCache: TLazyPublishedCache<TBytes>;
 
-function TryReadEmbeddedResource(out ABuffer: TBytes): Boolean;
+function LoadCLDRResource(const AKey: string; out ABuffer: TBytes): Boolean;
 var
   Stream: TResourceStream;
   BufferSize: Integer;
 begin
-  if CachedCLDRResourceLoaded then
-  begin
-    ABuffer := CachedCLDRResource;
-    Result := Length(ABuffer) > 0;
-    Exit;
-  end;
-
   Result := False;
   SetLength(ABuffer, 0);
   Stream := nil;
   try
-    Stream := TResourceStream.Create(HInstance, GeneratedIntlDataResourceName,
+    Stream := TResourceStream.Create(HInstance, AKey,
       CLDR_RCDATA_RESOURCE_TYPE);
     if Stream.Size > High(Integer) then
     begin
@@ -88,12 +81,19 @@ begin
       Stream.ReadBuffer(ABuffer[0], BufferSize);
     Stream.Free;
     Stream := nil;
-    CachedCLDRResource := ABuffer;
-    CachedCLDRResourceLoaded := True;
     Result := True;
   except
     Stream.Free;
   end;
+end;
+
+function TryReadEmbeddedResource(out ABuffer: TBytes): Boolean;
+begin
+  if CLDRResourceCache.Ensure(GeneratedIntlDataResourceName, @LoadCLDRResource) then
+    ABuffer := CLDRResourceCache.Data
+  else
+    SetLength(ABuffer, 0);
+  Result := Length(ABuffer) > 0;
 end;
 
 function TryGetSectionData(const ASectionName: string;
@@ -769,6 +769,12 @@ begin
     TryParseInteger(Copy(Value, SecondColon + 1, ThirdColon - SecondColon - 1), AWeekendEnd) and
     TryParseInteger(Copy(Value, ThirdColon + 1, Length(Value) - ThirdColon), AMinimalDays);
 end;
+
+initialization
+  CLDRResourceCache.Init;
+
+finalization
+  CLDRResourceCache.Done;
 
 {$ELSE}
 
