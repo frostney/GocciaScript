@@ -54,6 +54,23 @@ suite("number prototype methods", () => {
     },
   });
 
+  bench("toString non-integer (shortest round-trip)", {
+    run: () => {
+      const xs = [
+        0.1 + 0.2,
+        Math.PI,
+        Math.sqrt(2),
+        Math.E,
+        123.456789012345,
+        9.18742501042e222,
+        5.7016275775556e-8,
+      ];
+      let total = 0;
+      for (const x of xs) total += x.toString().length;
+      return total;
+    },
+  });
+
   bench("valueOf", {
     run: () => {
       const a = (42).valueOf();

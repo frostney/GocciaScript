@@ -308,8 +308,8 @@ begin
   // Each probe reads Str into a fixed ShortString and parses with the
   // locale-free Val instead of Trim + TryStrToFloat. Val selects the same width
   // here (verified byte-for-byte over 74.9M doubles) while avoiding both the
-  // per-iteration heap allocation and the TFormatSettings scan (~2x faster on
-  // this path).
+  // per-iteration heap allocation and the TFormatSettings scan; this is ~1.4x
+  // faster end-to-end on float-stringify-heavy workloads (see ADR 0079).
   for W := 9 to 24 do
   begin
     Str(AValue:W, Buf);
