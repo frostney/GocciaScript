@@ -178,4 +178,107 @@ console.log("Unsupported var recovery (ASI and compat-var flags)...");
   if (compatVarNoAsiRes.json.error?.type !== "SyntaxError") throw new Error(`Expected SyntaxError without ASI, got: ${compatVarNoAsiRes.json.error?.type}`);
 }
 
+// -- Disabled-feature recovery with interpolated template literals --------------
+// Regression: error recovery for a disabled construct must skip a `${ ... }`
+// substitution as part of its template literal. Previously the substitution's
+// closing brace was miscounted as the structural brace that ends the skipped
+// region, and the trailing backtick was then re-scanned as a fresh, unterminated
+// template literal -- surfacing "Unterminated template literal" at EOF instead of
+// the real compat-flag diagnostic. The for, while, and do...while recovery paths
+// all share the SkipBalancedParens/SkipBlock/SkipUntilSemicolon + SkipTemplate-
+// Literal flow, so each is covered here.
+
+console.log("Disabled-feature recovery with interpolated template literals...");
+{
+  const recoveryCases = [
+    {
+      desc: "for-loop, interpolated template in block body",
+      compatFlag: "--compat-traditional-for-loop",
+      source: [
+        "const obj = {};",
+        "for (let level = 0; level < 2; level++) {",
+        "  obj[`u${level}`] = level;",
+        "}",
+        "console.log(JSON.stringify(obj));",
+        "",
+      ].join("\n"),
+      expected: "{}\n",
+    },
+    {
+      desc: "for-loop, interpolated template in non-block body",
+      compatFlag: "--compat-traditional-for-loop",
+      source: [
+        "const obj = {};",
+        "for (let i = 0; i < 2; i++) obj[`u${i}`] = i;",
+        'console.log("after");',
+        "",
+      ].join("\n"),
+      expected: "after\n",
+    },
+    {
+      desc: "for-loop, interpolated template in loop header",
+      compatFlag: "--compat-traditional-for-loop",
+      source: [
+        "let x = 1;",
+        "for (let i = `s${0}`.length; i < 2; i++) { x = 99; }",
+        "console.log(x);",
+        "",
+      ].join("\n"),
+      expected: "1\n",
+    },
+    {
+      desc: "while-loop, interpolated template in condition",
+      compatFlag: "--compat-while-loops",
+      source: [
+        "let n = 0;",
+        "while (`v${n}`.length > 99) { n = 99; }",
+        'console.log("while-after");',
+        "",
+      ].join("\n"),
+      expected: "while-after\n",
+    },
+    {
+      desc: "do...while loop, interpolated template in body",
+      compatFlag: "--compat-while-loops",
+      source: [
+        "let n = 0;",
+        "do { const s = `d${n}`; } while (n > 99);",
+        'console.log("do-after");',
+        "",
+      ].join("\n"),
+      expected: "do-after\n",
+    },
+  ];
+
+  for (const { desc, compatFlag, source, expected } of recoveryCases) {
+    for (const args of [[] as string[], ["--mode=bytecode"]]) {
+      const label = args.length ? `${desc} (bytecode)` : desc;
+      const { exitCode, json } = runLoaderJson(source, args);
+      if (json.ok !== true) {
+        if (json.error?.message === "Unterminated template literal")
+          throw new Error(
+            `${label}: regressed -- a disabled construct with a template literal surfaced "Unterminated template literal" instead of recovering`,
+          );
+        throw new Error(`${label}: should recover, got ok=${json.ok} error=${JSON.stringify(json.error)}`);
+      }
+      if (exitCode !== 0) throw new Error(`${label}: should exit 0, got ${exitCode}`);
+      if (normalizeLineEndings(json.output) !== expected)
+        throw new Error(`${label}: expected output ${JSON.stringify(expected)}, got ${JSON.stringify(json.output)}`);
+    }
+
+    // The human-readable diagnostic must name the compat flag, not the lexer's
+    // unterminated-template error. Parsing is shared across modes, so check once.
+    const diag = Bun.spawnSync([LOADER], {
+      stdin: new TextEncoder().encode(source),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const diagOut = `${diag.stdout.toString()}${diag.stderr.toString()}`;
+    if (!diagOut.includes(compatFlag))
+      throw new Error(`${desc}: expected the diagnostic to reference ${compatFlag}, got: ${diagOut}`);
+    if (diagOut.includes("Unterminated template literal"))
+      throw new Error(`${desc}: diagnostic should not mention an unterminated template literal, got: ${diagOut}`);
+  }
+}
+
 console.log("\nAll test-cli-parser.ts tests passed.");
