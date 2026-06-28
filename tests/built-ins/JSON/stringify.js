@@ -87,6 +87,13 @@ test("JSON.stringify preserves round-trip precision for large fractional floatin
   expect(JSON.parse(JSON.stringify(value))).toBe(value);
 });
 
+test("JSON.stringify emits the shortest round-tripping form for fractional floating-point numbers", () => {
+  expect(JSON.stringify(0.1 + 0.2)).toBe("0.30000000000000004");
+  expect(JSON.stringify(1 / 3)).toBe("0.3333333333333333");
+  expect(JSON.stringify(9.18742501042e222)).toBe("9.18742501042e+222");
+  expect(JSON.stringify(5.7016275775556e-8)).toBe("5.7016275775556e-8");
+});
+
 test("JSON.stringify strings with special characters", () => {
   expect(JSON.stringify("hello\nworld")).toBe('"hello\\nworld"');
   expect(JSON.stringify("tab\there")).toBe('"tab\\there"');
