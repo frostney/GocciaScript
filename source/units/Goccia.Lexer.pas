@@ -257,27 +257,6 @@ begin
   Result := False;
 end;
 
-// A token type is goal-sensitive when the lexer can produce a different token
-// at the same source position depending on the lexical goal. Only two lexer
-// branches are goal-dependent, so only their outputs qualify (issue #808):
-//   * '/' -> a regex literal (gttRegex) when the goal allows regex, else a
-//     division operator (gttSlash / gttSlashAssign). See ScanToken's '/' case.
-//   * a template-tail '}' -> gttTemplateMiddle / gttTemplateTail when the goal
-//     requires template continuation, else an ordinary gttRightBrace. See
-//     ScanNextToken's template-continuation branch.
-// Every other token type is classified identically under any goal.
-function TokenTypeIsGoalSensitive(const ATokenType: TGocciaTokenType): Boolean;
-  inline;
-begin
-  case ATokenType of
-    gttRegex, gttSlash, gttSlashAssign,
-    gttRightBrace, gttTemplateMiddle, gttTemplateTail:
-      Result := True;
-  else
-    Result := False;
-  end;
-end;
-
 constructor TGocciaLexer.Create(const ASource, AFileName: string);
 begin
   FSource := ASource;
@@ -326,20 +305,37 @@ begin
     FTokens.Delete(FTokens.Count - 1);
 end;
 
-// Whether any token at or after index ACount is goal-sensitive — i.e. would be
-// classified differently under another lexical goal. Used by the speculative
-// parenthesized-group scans (TGocciaParser) to decide whether their
-// look-ahead tokens can be kept for the real parse to reuse, or must be
-// dropped and re-lexed because a goal-dependent token ('/' or a template-tail
-// '}') was scanned speculatively under the wrong goal (issue #808).
+// Whether any token at or after index ACount is goal-sensitive — would be
+// classified differently under another lexical goal — so the speculative
+// parenthesized-group scans (TGocciaParser) must drop their look-ahead tokens
+// and let the real parse re-lex them, rather than reuse them (issue #808).
+//
+// Only two lexer branches depend on the goal:
+//   * '/' — a regex literal (gttRegex) vs a division operator (gttSlash /
+//     gttSlashAssign); always goal-sensitive.
+//   * a '}' that closes a `${...}` template substitution — gttTemplateMiddle /
+//     gttTemplateTail under the template-tail goal vs an ordinary gttRightBrace
+//     otherwise. A probe scans a template's opener (gttTemplateHead) before
+//     reaching its closer, so a '}' only matters once a substitution is open;
+//     object, block, and destructuring braces with no template in scope stay
+//     reusable.
 function TGocciaLexer.HasGoalSensitiveTokenSince(
   const ACount: Integer): Boolean;
 var
   I: Integer;
+  InTemplateSubstitution: Boolean;
 begin
+  InTemplateSubstitution := False;
   for I := ACount to FTokens.Count - 1 do
-    if TokenTypeIsGoalSensitive(FTokens[I].TokenType) then
-      Exit(True);
+    case FTokens[I].TokenType of
+      gttRegex, gttSlash, gttSlashAssign:
+        Exit(True);
+      gttTemplateHead, gttTemplateMiddle:
+        InTemplateSubstitution := True;
+      gttRightBrace, gttTemplateTail:
+        if InTemplateSubstitution then
+          Exit(True);
+    end;
   Result := False;
 end;
 

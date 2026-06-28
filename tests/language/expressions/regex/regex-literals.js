@@ -75,6 +75,16 @@ test("callback chains with division bodies parse and run", () => {
   expect(out.join(",")).toBe("1.5,2");
 });
 
+test("object and destructuring arrow parameters coexist with division", () => {
+  const fromPattern = ({ a, b }) => a / b;
+  const fromDefault = (x = { n: 8 }) => x.n / 2;
+  const nested = ({ a, b: { c } }) => a / c;
+
+  expect(fromPattern({ a: 10, b: 2 })).toBe(5);
+  expect(fromDefault()).toBe(4);
+  expect(nested({ a: 12, b: { c: 4 } })).toBe(3);
+});
+
 test("regex literals throw SyntaxError for duplicate flags", () => {
   expect(() => {
     new RegExp("a", "gg");
