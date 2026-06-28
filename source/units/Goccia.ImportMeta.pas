@@ -163,4 +163,10 @@ begin
   end;
 end;
 
+finalization
+  // FPC does not auto-finalize managed threadvars at thread exit. Worker
+  // threads release this cache through ShutdownThreadRuntime; clear the main
+  // thread's copy on process shutdown too.
+  ClearImportMetaCache;
+
 end.

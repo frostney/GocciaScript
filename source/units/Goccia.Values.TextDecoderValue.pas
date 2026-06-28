@@ -56,6 +56,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.Realm,
+  Goccia.ThreadCleanupRegistry,
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction,
@@ -67,6 +68,11 @@ var
 
 threadvar
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+
+procedure ClearThreadvarMembers;
+begin
+  SetLength(FPrototypeMembers, 0);
+end;
 
 function GetTextDecoderShared: TGocciaSharedPrototype; inline;
 begin
@@ -518,6 +524,7 @@ begin
 end;
 
 initialization
+  RegisterThreadvarCleanup(@ClearThreadvarMembers);
   GTextDecoderSharedSlot := RegisterRealmOwnedSlot('TextDecoder.shared');
 
 end.

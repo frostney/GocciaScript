@@ -71,6 +71,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.Realm,
+  Goccia.ThreadCleanupRegistry,
   Goccia.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
@@ -86,6 +87,11 @@ var
 
 threadvar
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+
+procedure ClearThreadvarMembers;
+begin
+  SetLength(FPrototypeMembers, 0);
+end;
 
 function GetMapShared: TGocciaSharedPrototype; inline;
 begin
@@ -598,5 +604,6 @@ end;
 
 initialization
   GMapSharedSlot := RegisterRealmOwnedSlot('Map.shared');
+  RegisterThreadvarCleanup(@ClearThreadvarMembers);
 
 end.

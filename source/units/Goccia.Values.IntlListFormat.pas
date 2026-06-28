@@ -45,6 +45,7 @@ uses
   Goccia.Intl.Helpers,
   Goccia.ObjectModel.Types,
   Goccia.Realm,
+  Goccia.ThreadCleanupRegistry,
   Goccia.Values.ErrorHelper,
   Goccia.Values.IteratorSupport,
   Goccia.Values.IteratorValue,
@@ -56,6 +57,11 @@ var
 
 threadvar
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+
+procedure ClearThreadvarMembers;
+begin
+  SetLength(FPrototypeMembers, 0);
+end;
 
 function GetIntlListFormatShared: TGocciaSharedPrototype; inline;
 begin
@@ -488,6 +494,7 @@ begin
 end;
 
 initialization
+  RegisterThreadvarCleanup(@ClearThreadvarMembers);
   GIntlListFormatSharedSlot := RegisterRealmOwnedSlot('Intl.ListFormat.shared');
 
 end.

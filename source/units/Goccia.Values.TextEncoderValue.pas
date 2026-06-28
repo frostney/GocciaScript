@@ -45,6 +45,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.Realm,
+  Goccia.ThreadCleanupRegistry,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -55,6 +56,11 @@ var
 
 threadvar
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+
+procedure ClearThreadvarMembers;
+begin
+  SetLength(FPrototypeMembers, 0);
+end;
 
 function GetTextEncoderShared: TGocciaSharedPrototype; inline;
 begin
@@ -313,6 +319,7 @@ begin
 end;
 
 initialization
+  RegisterThreadvarCleanup(@ClearThreadvarMembers);
   GTextEncoderSharedSlot := RegisterRealmOwnedSlot('TextEncoder.shared');
 
 end.

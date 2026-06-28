@@ -72,10 +72,17 @@ implementation
 uses
   SysUtils,
 
-  TimingUtils;
+  TimingUtils,
+
+  Goccia.ThreadCleanupRegistry;
 
 threadvar
   FStaticMembers: TArray<TGocciaMemberDefinition>;
+
+procedure ClearThreadvarMembers;
+begin
+  SetLength(FStaticMembers, 0);
+end;
 
 constructor TGocciaConsole.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 var
@@ -390,5 +397,8 @@ begin
     EmitLine('table', GroupPrefix + FormatForDisplay(AArgs.GetElement(0)));
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
+
+initialization
+  RegisterThreadvarCleanup(@ClearThreadvarMembers);
 
 end.

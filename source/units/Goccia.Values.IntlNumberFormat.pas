@@ -74,6 +74,7 @@ uses
   Goccia.Intl.Helpers,
   Goccia.ObjectModel.Types,
   Goccia.Realm,
+  Goccia.ThreadCleanupRegistry,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.BigIntObjectValue,
@@ -91,6 +92,11 @@ var
 
 threadvar
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+
+procedure ClearThreadvarMembers;
+begin
+  SetLength(FPrototypeMembers, 0);
+end;
 
 type
   TGocciaIntlNumberFormatBoundFormatValue = class(TGocciaNativeFunctionValue)
@@ -2111,6 +2117,7 @@ begin
 end;
 
 initialization
+  RegisterThreadvarCleanup(@ClearThreadvarMembers);
   GIntlNumberFormatSharedSlot := RegisterRealmOwnedSlot('Intl.NumberFormat.shared');
 
 end.

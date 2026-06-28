@@ -56,6 +56,7 @@ uses
   Goccia.GarbageCollector,
   Goccia.MicrotaskQueue,
   Goccia.Realm,
+  Goccia.ThreadCleanupRegistry,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue,
@@ -66,6 +67,11 @@ var
 
 threadvar
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+
+procedure ClearThreadvarMembers;
+begin
+  SetLength(FPrototypeMembers, 0);
+end;
 
 function GetFinalizationRegistryShared: TGocciaSharedPrototype; inline;
 begin
@@ -284,5 +290,6 @@ end;
 initialization
   GFinalizationRegistrySharedSlot :=
     RegisterRealmOwnedSlot('FinalizationRegistry.shared');
+  RegisterThreadvarCleanup(@ClearThreadvarMembers);
 
 end.

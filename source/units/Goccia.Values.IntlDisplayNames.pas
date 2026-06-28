@@ -45,6 +45,7 @@ uses
   Goccia.Intl.CLDRData,
   Goccia.ObjectModel.Types,
   Goccia.Realm,
+  Goccia.ThreadCleanupRegistry,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
@@ -54,6 +55,11 @@ var
 
 threadvar
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+
+procedure ClearThreadvarMembers;
+begin
+  SetLength(FPrototypeMembers, 0);
+end;
 
 function GetIntlDisplayNamesShared: TGocciaSharedPrototype; inline;
 begin
@@ -424,6 +430,7 @@ begin
 end;
 
 initialization
+  RegisterThreadvarCleanup(@ClearThreadvarMembers);
   GIntlDisplayNamesSharedSlot := RegisterRealmOwnedSlot('Intl.DisplayNames.shared');
 
 end.

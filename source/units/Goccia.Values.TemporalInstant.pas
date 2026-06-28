@@ -58,6 +58,7 @@ uses
   Goccia.Temporal.Options,
   Goccia.Temporal.TimeZone,
   Goccia.Temporal.Utils,
+  Goccia.ThreadCleanupRegistry,
   Goccia.Values.BigIntValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.IntlDateTimeFormat,
@@ -71,6 +72,11 @@ var
 
 threadvar
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+
+procedure ClearThreadvarMembers;
+begin
+  SetLength(FPrototypeMembers, 0);
+end;
 
 function InstantEpochSecond(const AEpochMilliseconds: Int64): Int64; inline;
 begin
@@ -1670,6 +1676,7 @@ begin
 end;
 
 initialization
+  RegisterThreadvarCleanup(@ClearThreadvarMembers);
   GTemporalInstantSharedSlot := RegisterRealmOwnedSlot('Temporal.Instant.shared');
 
 end.

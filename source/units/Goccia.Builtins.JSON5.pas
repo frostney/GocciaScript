@@ -70,6 +70,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.ThreadCleanupRegistry,
   Goccia.Utils,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
@@ -84,6 +85,11 @@ uses
 
 threadvar
   FStaticMembers: TArray<TGocciaMemberDefinition>;
+
+procedure ClearThreadvarMembers;
+begin
+  SetLength(FStaticMembers, 0);
+end;
 
 function UTF8CopyByCharacters(const AText: string;
   const AMaxChars: Integer): string;
@@ -633,5 +639,8 @@ begin
     end;
   end;
 end;
+
+initialization
+  RegisterThreadvarCleanup(@ClearThreadvarMembers);
 
 end.

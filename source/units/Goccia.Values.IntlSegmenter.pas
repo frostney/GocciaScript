@@ -82,6 +82,7 @@ uses
   Goccia.Error.Messages,
   Goccia.ObjectModel.Types,
   Goccia.Realm,
+  Goccia.ThreadCleanupRegistry,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
@@ -97,6 +98,13 @@ threadvar
   FSegmenterPrototypeMembers: TArray<TGocciaMemberDefinition>;
   FSegmentsPrototypeMembers: TArray<TGocciaMemberDefinition>;
   FSegmentIteratorPrototypeMembers: TArray<TGocciaMemberDefinition>;
+
+procedure ClearThreadvarMembers;
+begin
+  SetLength(FSegmenterPrototypeMembers, 0);
+  SetLength(FSegmentsPrototypeMembers, 0);
+  SetLength(FSegmentIteratorPrototypeMembers, 0);
+end;
 
 function GetIntlSegmenterShared: TGocciaSharedPrototype; inline;
 begin
@@ -642,6 +650,7 @@ begin
 end;
 
 initialization
+  RegisterThreadvarCleanup(@ClearThreadvarMembers);
   GIntlSegmenterSharedSlot := RegisterRealmOwnedSlot('Intl.Segmenter.shared');
   GIntlSegmentsSharedSlot := RegisterRealmOwnedSlot('Intl.Segments.shared');
   GIntlSegmentIteratorSharedSlot := RegisterRealmOwnedSlot('Intl.SegmentIterator.shared');

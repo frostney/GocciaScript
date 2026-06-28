@@ -50,6 +50,7 @@ uses
   Goccia.Intl.CLDRData,
   Goccia.ObjectModel.Types,
   Goccia.Realm,
+  Goccia.ThreadCleanupRegistry,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
@@ -64,6 +65,11 @@ const
 
 threadvar
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+
+procedure ClearThreadvarMembers;
+begin
+  SetLength(FPrototypeMembers, 0);
+end;
 
 function GetIntlPluralRulesShared: TGocciaSharedPrototype; inline;
 begin
@@ -461,6 +467,7 @@ begin
 end;
 
 initialization
+  RegisterThreadvarCleanup(@ClearThreadvarMembers);
   GIntlPluralRulesSharedSlot := RegisterRealmOwnedSlot('Intl.PluralRules.shared');
 
 end.

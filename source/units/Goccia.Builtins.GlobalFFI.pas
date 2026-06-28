@@ -31,6 +31,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.FFI.DynamicLibrary,
+  Goccia.ThreadCleanupRegistry,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FFILibrary,
   Goccia.Values.FFIPointer,
@@ -38,6 +39,11 @@ uses
 
 threadvar
   FStaticMembers: TArray<TGocciaMemberDefinition>;
+
+procedure ClearThreadvarMembers;
+begin
+  SetLength(FStaticMembers, 0);
+end;
 
 const
   {$IFDEF DARWIN}
@@ -104,5 +110,8 @@ function TGocciaGlobalFFI.FFISuffixGetter(const AArgs: TGocciaArgumentsCollectio
 begin
   Result := TGocciaStringLiteralValue.Create(SHARED_LIBRARY_SUFFIX);
 end;
+
+initialization
+  RegisterThreadvarCleanup(@ClearThreadvarMembers);
 
 end.

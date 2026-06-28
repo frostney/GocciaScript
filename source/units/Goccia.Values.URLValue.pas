@@ -135,6 +135,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.Realm,
+  Goccia.ThreadCleanupRegistry,
   Goccia.URL.Parser,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
@@ -147,6 +148,11 @@ var
 
 threadvar
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+
+procedure ClearThreadvarMembers;
+begin
+  SetLength(FPrototypeMembers, 0);
+end;
 
 function GetURLShared: TGocciaSharedPrototype; inline;
 begin
@@ -889,6 +895,7 @@ begin
 end;
 
 initialization
+  RegisterThreadvarCleanup(@ClearThreadvarMembers);
   GURLSharedSlot := RegisterRealmOwnedSlot('URL.shared');
 
 end.
