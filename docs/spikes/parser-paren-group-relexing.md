@@ -1,6 +1,6 @@
 # Parenthesized-group re-lexing
 
-*Measurement record for [issue #808](https://github.com/frostney/GocciaScript/issues/808) / [ADR 0078](../adr/0078-keep-speculatively-scanned-tokens.md). Point-in-time snapshot — not maintained.*
+*Measurement record for [issue #808](https://github.com/frostney/GocciaScript/issues/808) / [ADR 0079](../adr/0079-keep-speculatively-scanned-tokens.md). Point-in-time snapshot — not maintained.*
 
 ## Executive Summary
 

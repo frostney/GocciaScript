@@ -139,6 +139,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.ObjectModel,
+  Goccia.ThreadCleanupRegistry,
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassHelper,
   Goccia.Values.ErrorHelper,
@@ -159,6 +160,11 @@ var
 threadvar
   FPrototypeMethodHost: TGocciaObjectValue;
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+
+procedure ClearThreadvarMembers;
+begin
+  SetLength(FPrototypeMembers, 0);
+end;
 
 const
   MAX_PROTOTYPE_CHAIN_DEPTH = 256;
@@ -1916,6 +1922,7 @@ begin
 end;
 
 initialization
+  RegisterThreadvarCleanup(@ClearThreadvarMembers);
   GObjectPrototypeSlot := RegisterRealmSlot('Object.prototype');
 
 end.

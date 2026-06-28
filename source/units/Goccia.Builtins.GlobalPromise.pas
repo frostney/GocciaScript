@@ -58,6 +58,7 @@ uses
   Goccia.InstructionLimit,
   Goccia.MicrotaskQueue,
   Goccia.Realm,
+  Goccia.ThreadCleanupRegistry,
   Goccia.Timeout,
   Goccia.Utils,
   Goccia.Values.Error,
@@ -75,6 +76,11 @@ uses
 
 threadvar
   FStaticMembers: TArray<TGocciaMemberDefinition>;
+
+procedure ClearThreadvarMembers;
+begin
+  SetLength(FStaticMembers, 0);
+end;
 
 type
   TPromiseCapability = record
@@ -1924,5 +1930,8 @@ begin
   { Step 7: Return promiseCapability.[[Promise]] }
   Result := Capability.Promise;
 end;
+
+initialization
+  RegisterThreadvarCleanup(@ClearThreadvarMembers);
 
 end.

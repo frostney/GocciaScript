@@ -96,6 +96,7 @@ uses
   Goccia.GarbageCollector,
   Goccia.ObjectModel,
   Goccia.Realm,
+  Goccia.ThreadCleanupRegistry,
   Goccia.Threading,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -112,6 +113,11 @@ var
 threadvar
   FMethodHost: TGocciaSymbolValue;
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+
+procedure ClearThreadvarMembers;
+begin
+  SetLength(FPrototypeMembers, 0);
+end;
 
 threadvar
   GNextSymbolId: Integer;
@@ -510,6 +516,7 @@ begin
 end;
 
 initialization
+  RegisterThreadvarCleanup(@ClearThreadvarMembers);
   GSymbolPrototypeSlot := RegisterRealmSlot('Symbol.prototype');
 
 end.

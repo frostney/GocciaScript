@@ -129,6 +129,7 @@ uses
   Goccia.GarbageCollector,
   Goccia.Generator.Continuation,
   Goccia.Realm,
+  Goccia.ThreadCleanupRegistry,
   Goccia.Timeout,
   Goccia.Utils,
   Goccia.Utils.Arrays,
@@ -153,6 +154,11 @@ var
 threadvar
   FPrototypeMethodHost: TGocciaArrayValue;
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+
+procedure ClearThreadvarMembers;
+begin
+  SetLength(FPrototypeMembers, 0);
+end;
 
 function GetSharedArrayPrototype: TGocciaObjectValue; inline;
 begin
@@ -4275,6 +4281,7 @@ begin
 end;
 
 initialization
+  RegisterThreadvarCleanup(@ClearThreadvarMembers);
   GArrayPrototypeSlot := RegisterRealmSlot('Array.prototype');
 
 end.

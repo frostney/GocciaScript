@@ -100,6 +100,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
+  Goccia.ThreadCleanupRegistry,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
@@ -125,6 +126,12 @@ threadvar
   FPrototypeMethodHost: TGocciaIteratorValue;
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
   FStaticMembers: TArray<TGocciaMemberDefinition>;
+
+procedure ClearThreadvarMembers;
+begin
+  SetLength(FPrototypeMembers, 0);
+  SetLength(FStaticMembers, 0);
+end;
 
 function GetSharedIteratorPrototype: TGocciaObjectValue; inline;
 begin
@@ -1826,6 +1833,7 @@ begin
 end;
 
 initialization
+  RegisterThreadvarCleanup(@ClearThreadvarMembers);
   GIteratorPrototypeSlot := RegisterRealmSlot('Iterator.prototype');
   GIteratorHelperPrototypeSlot := RegisterRealmSlot('IteratorHelper.prototype');
   GIteratorConstructorSlot := RegisterRealmSlot('Iterator');

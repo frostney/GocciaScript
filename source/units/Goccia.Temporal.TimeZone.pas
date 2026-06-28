@@ -1971,6 +1971,10 @@ initialization
   {$ENDIF}
 
 finalization
+  // FPC does not auto-finalize managed threadvars at thread exit. Worker
+  // threads release the cache through ShutdownThreadRuntime; clear the main
+  // thread's copy on process shutdown too.
+  ClearTimeZoneCache;
   {$IFDEF MSWINDOWS}
   DoneCriticalSection(WindowsICUInitLock);
   {$ENDIF}

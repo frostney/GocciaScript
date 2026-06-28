@@ -71,6 +71,11 @@ function NormalizeNewlinesToLF(const AText: string): string;
 function NormalizeUTF8NewlinesToLF(const AText: UTF8String): UTF8String;
 function StringListToLFText(const ALines: TStrings): string;
 
+{ Release the per-thread is-ASCII memo. Called from this unit's finalization
+  (main thread) and from ShutdownThreadRuntime (worker threads), because FPC
+  does not auto-finalize managed threadvars at thread exit. }
+procedure ClearAsciiMemo;
+
 implementation
 
 uses

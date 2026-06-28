@@ -78,6 +78,7 @@ uses
   Goccia.Realm,
   Goccia.Temporal.DurationMath,
   Goccia.Temporal.Utils,
+  Goccia.ThreadCleanupRegistry,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
@@ -93,6 +94,11 @@ var
 
 threadvar
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+
+procedure ClearThreadvarMembers;
+begin
+  SetLength(FPrototypeMembers, 0);
+end;
 
 function GetIntlDurationFormatShared: TGocciaSharedPrototype; inline;
 begin
@@ -1415,6 +1421,7 @@ begin
 end;
 
 initialization
+  RegisterThreadvarCleanup(@ClearThreadvarMembers);
   GIntlDurationFormatSharedSlot := RegisterRealmOwnedSlot('Intl.DurationFormat.shared');
 
 end.

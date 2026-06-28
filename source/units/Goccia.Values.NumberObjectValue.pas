@@ -51,6 +51,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.Realm,
+  Goccia.ThreadCleanupRegistry,
   Goccia.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction;
@@ -63,6 +64,11 @@ var
 threadvar
   FPrototypeMethodHost: TGocciaNumberObjectValue;
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+
+procedure ClearThreadvarMembers;
+begin
+  SetLength(FPrototypeMembers, 0);
+end;
 
 const
   DOUBLE_EXPONENT_BIAS = 1023;
@@ -648,5 +654,6 @@ end;
 
 initialization
   GNumberPrototypeSlot := RegisterRealmSlot('Number.prototype');
+  RegisterThreadvarCleanup(@ClearThreadvarMembers);
 
 end.

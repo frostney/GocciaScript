@@ -51,6 +51,7 @@ uses
   Goccia.Intl.Helpers,
   Goccia.ObjectModel.Types,
   Goccia.Realm,
+  Goccia.ThreadCleanupRegistry,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -61,6 +62,11 @@ var
 
 threadvar
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+
+procedure ClearThreadvarMembers;
+begin
+  SetLength(FPrototypeMembers, 0);
+end;
 
 type
   TGocciaIntlCollatorBoundCompareValue = class(TGocciaNativeFunctionValue)
@@ -537,5 +543,6 @@ end;
 
 initialization
   GIntlCollatorSharedSlot := RegisterRealmOwnedSlot('Intl.Collator.shared');
+  RegisterThreadvarCleanup(@ClearThreadvarMembers);
 
 end.

@@ -84,6 +84,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.JSON,
   Goccia.Realm,
+  Goccia.ThreadCleanupRegistry,
   Goccia.Utils,
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ErrorHelper,
@@ -96,6 +97,11 @@ var
 
 threadvar
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+
+procedure ClearThreadvarMembers;
+begin
+  SetLength(FPrototypeMembers, 0);
+end;
 
 function GetResponseShared: TGocciaSharedPrototype; inline;
 begin
@@ -479,6 +485,7 @@ begin
 end;
 
 initialization
+  RegisterThreadvarCleanup(@ClearThreadvarMembers);
   GResponseSharedSlot := RegisterRealmOwnedSlot('Response.shared');
 
 end.

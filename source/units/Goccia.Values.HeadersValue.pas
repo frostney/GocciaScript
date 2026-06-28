@@ -75,6 +75,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.Realm,
+  Goccia.ThreadCleanupRegistry,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
@@ -88,6 +89,11 @@ var
 
 threadvar
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+
+procedure ClearThreadvarMembers;
+begin
+  SetLength(FPrototypeMembers, 0);
+end;
 
 function GetHeadersShared: TGocciaSharedPrototype; inline;
 begin
@@ -388,5 +394,6 @@ end;
 
 initialization
   GHeadersSharedSlot := RegisterRealmOwnedSlot('Headers.shared');
+  RegisterThreadvarCleanup(@ClearThreadvarMembers);
 
 end.

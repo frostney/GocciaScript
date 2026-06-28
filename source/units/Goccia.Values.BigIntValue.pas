@@ -63,6 +63,7 @@ uses
   Goccia.GarbageCollector,
   Goccia.ObjectModel,
   Goccia.Realm,
+  Goccia.ThreadCleanupRegistry,
   Goccia.Threading,
   Goccia.Utils,
   Goccia.Values.BigIntObjectValue,
@@ -121,6 +122,11 @@ var
 threadvar
   FMethodHost: TGocciaBigIntValue;
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+
+procedure ClearThreadvarMembers;
+begin
+  SetLength(FPrototypeMembers, 0);
+end;
 
 function GetSharedBigIntPrimitivePrototype: TGocciaObjectValue; inline;
 begin
@@ -335,6 +341,7 @@ begin
 end;
 
 initialization
+  RegisterThreadvarCleanup(@ClearThreadvarMembers);
   GBigIntPrimitivePrototypeSlot := RegisterRealmSlot('BigInt.prototype');
 
 end.

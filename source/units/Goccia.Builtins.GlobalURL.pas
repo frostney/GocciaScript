@@ -44,6 +44,7 @@ uses
   Goccia.Arguments.Validator,
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.ThreadCleanupRegistry,
   Goccia.URL.Parser,
   Goccia.Values.ErrorHelper,
   Goccia.Values.URLSearchParamsValue,
@@ -51,6 +52,11 @@ uses
 
 threadvar
   FStaticMembers: TArray<TGocciaMemberDefinition>;
+
+procedure ClearThreadvarMembers;
+begin
+  SetLength(FStaticMembers, 0);
+end;
 
 { TGocciaGlobalURL }
 
@@ -158,5 +164,8 @@ begin
   // Initialize the shared URLSearchParams prototype lazily
   TGocciaURLSearchParamsValue.ExposePrototype(FBuiltinObject);
 end;
+
+initialization
+  RegisterThreadvarCleanup(@ClearThreadvarMembers);
 
 end.

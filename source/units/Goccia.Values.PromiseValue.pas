@@ -104,6 +104,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.MicrotaskQueue,
+  Goccia.ThreadCleanupRegistry,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
@@ -120,6 +121,11 @@ var
 
 threadvar
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+
+procedure ClearThreadvarMembers;
+begin
+  SetLength(FPrototypeMembers, 0);
+end;
 
 function GetPromiseSharedForRealm(
   const ARealm: TGocciaRealm): TGocciaSharedPrototype; inline;
@@ -932,6 +938,7 @@ begin
 end;
 
 initialization
+  RegisterThreadvarCleanup(@ClearThreadvarMembers);
   GPromiseSharedSlot := RegisterRealmOwnedSlot('Promise.shared');
   GPromiseDefaultConstructorSlot := RegisterRealmSlot('Promise.defaultConstructor');
 

@@ -38,6 +38,7 @@ implementation
 uses
   Goccia.GarbageCollector,
   Goccia.Realm,
+  Goccia.ThreadCleanupRegistry,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ToObject;
 
@@ -49,6 +50,11 @@ var
 threadvar
   FPrototypeMethodHost: TGocciaBooleanObjectValue;
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+
+procedure ClearThreadvarMembers;
+begin
+  SetLength(FPrototypeMembers, 0);
+end;
 
 function GetSharedBooleanPrototype: TGocciaObjectValue; inline;
 begin
@@ -166,6 +172,7 @@ begin
 end;
 
 initialization
+  RegisterThreadvarCleanup(@ClearThreadvarMembers);
   GBooleanPrototypeSlot := RegisterRealmSlot('Boolean.prototype');
 
 end.
