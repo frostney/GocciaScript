@@ -188,64 +188,70 @@ begin
   Result := TryExtractRanges(Resource, Container, Entry, ARanges);
 end;
 
-function TryGetEmbeddedPairs(const AKey: string; var ACachedPairs:
-  TCodePointPairArray; var ACachedPairsLoaded, ACachedPairsAvailable: Boolean;
-  var ACachedPairsLock: TRTLCriticalSection;
-  out APairs: TCodePointPairArray): Boolean;
+{ Lazily load an immutable case-fold/uppercase pair table and publish it for
+  lock-free reads. The table is consulted on every code-point comparison of an
+  icase backreference and of a unicode+icase \b assertion, so after the cold
+  one-shot load the warm path must not enter the critical section (issue #813).
+  ACachedPairsLoaded is published LAST, after the table data and
+  ACachedPairsAvailable, with a write barrier on the cold path and a matching
+  read barrier on the warm path; a reader that observes ACachedPairsLoaded =
+  True therefore also observes the fully-written table on weakly-ordered
+  targets (e.g. AArch64). Load failure is memoized too (Loaded = True,
+  Available = False) so an absent or corrupt resource is not re-attempted on
+  every call. Callers binary-search the module-level array in place (passed as
+  a const argument, which makes no managed copy), avoiding per-comparison
+  dynamic-array refcount churn. }
+function EnsureEmbeddedPairsReady(const AKey: string;
+  var ACachedPairs: TCodePointPairArray;
+  var ACachedPairsLoaded, ACachedPairsAvailable: Boolean;
+  var ACachedPairsLock: TRTLCriticalSection): Boolean;
 var
   Resource: TBytes;
   Container: TEmbeddedResourceContainer;
   Entry: TEmbeddedResourceEntry;
 begin
+  if ACachedPairsLoaded then
+  begin
+    ReadBarrier;
+    Result := ACachedPairsAvailable;
+    Exit;
+  end;
+
   EnterCriticalSection(ACachedPairsLock);
   try
     if ACachedPairsLoaded then
     begin
-      APairs := ACachedPairs;
       Result := ACachedPairsAvailable;
       Exit;
     end;
 
-    Result := False;
-    SetLength(APairs, 0);
+    SetLength(ACachedPairs, 0);
+    ACachedPairsAvailable :=
+      TryReadEmbeddedResource(Resource) and
+      TryReadEmbeddedResourceContainer(Resource, UCD_MAGIC, Container) and
+      TryFindEmbeddedResourceEntry(Resource, AKey, Container, Entry) and
+      TryExtractCaseFoldPairs(Resource, Container, Entry, ACachedPairs);
+
+    WriteBarrier;
     ACachedPairsLoaded := True;
-    ACachedPairsAvailable := False;
-
-    if not TryReadEmbeddedResource(Resource) then
-      Exit;
-
-    if not TryReadEmbeddedResourceContainer(Resource, UCD_MAGIC, Container) then
-      Exit;
-
-    if not TryFindEmbeddedResourceEntry(Resource, AKey, Container, Entry) then
-      Exit;
-
-    if not TryExtractCaseFoldPairs(Resource, Container, Entry, ACachedPairs) then
-      Exit;
-
-    APairs := ACachedPairs;
-    ACachedPairsAvailable := True;
-    Result := True;
+    Result := ACachedPairsAvailable;
   finally
     LeaveCriticalSection(ACachedPairsLock);
   end;
 end;
 
-function TryGetEmbeddedCaseFoldPairs(
-  out APairs: TCodePointPairArray): Boolean;
+function EnsureCaseFoldPairsReady: Boolean;
 begin
-  Result := TryGetEmbeddedPairs(CASE_FOLDING_ENTRY_KEY, CachedCaseFoldPairs,
+  Result := EnsureEmbeddedPairsReady(CASE_FOLDING_ENTRY_KEY, CachedCaseFoldPairs,
     CachedCaseFoldPairsLoaded, CachedCaseFoldPairsAvailable,
-    CachedCaseFoldPairsLock, APairs);
+    CachedCaseFoldPairsLock);
 end;
 
-function TryGetEmbeddedNonUnicodeUppercasePairs(
-  out APairs: TCodePointPairArray): Boolean;
+function EnsureNonUnicodeUppercasePairsReady: Boolean;
 begin
-  Result := TryGetEmbeddedPairs(NON_UNICODE_UPPERCASE_ENTRY_KEY,
+  Result := EnsureEmbeddedPairsReady(NON_UNICODE_UPPERCASE_ENTRY_KEY,
     CachedNonUnicodeUppercasePairs, CachedNonUnicodeUppercasePairsLoaded,
-    CachedNonUnicodeUppercasePairsAvailable,
-    CachedNonUnicodeUppercasePairsLock, APairs);
+    CachedNonUnicodeUppercasePairsAvailable, CachedNonUnicodeUppercasePairsLock);
 end;
 
 function TryFindPairTarget(const APairs: TCodePointPairArray;
@@ -282,11 +288,10 @@ end;
 
 function TryGetUnicodeSimpleCaseFold(ACodePoint: Cardinal;
   out AFoldedCodePoint: Cardinal): Boolean;
-var
-  Pairs: TCodePointPairArray;
 begin
-  if TryGetEmbeddedCaseFoldPairs(Pairs) then
-    Result := TryFindPairTarget(Pairs, ACodePoint, AFoldedCodePoint)
+  if EnsureCaseFoldPairsReady then
+    Result := TryFindPairTarget(CachedCaseFoldPairs, ACodePoint,
+      AFoldedCodePoint)
   else
   begin
     AFoldedCodePoint := ACodePoint;
@@ -386,11 +391,10 @@ end;
 
 function TryGetRegExpNonUnicodeUppercase(ACodePoint: Cardinal;
   out AUpperCodePoint: Cardinal): Boolean;
-var
-  Pairs: TCodePointPairArray;
 begin
-  if TryGetEmbeddedNonUnicodeUppercasePairs(Pairs) then
-    Result := TryFindPairTarget(Pairs, ACodePoint, AUpperCodePoint)
+  if EnsureNonUnicodeUppercasePairsReady then
+    Result := TryFindPairTarget(CachedNonUnicodeUppercasePairs, ACodePoint,
+      AUpperCodePoint)
   else
   begin
     AUpperCodePoint := ACodePoint;
@@ -424,39 +428,37 @@ end;
 
 procedure ExpandUnicodeSimpleCaseFolding(
   var ARanges: TUnicodePropertyRangeArray);
-var
-  Pairs: TCodePointPairArray;
 begin
-  if TryGetEmbeddedCaseFoldPairs(Pairs) then
-    ExpandCaseEquivalence(ARanges, Pairs);
+  if EnsureCaseFoldPairsReady then
+    ExpandCaseEquivalence(ARanges, CachedCaseFoldPairs);
 end;
 
 procedure ReduceUnicodeSimpleCaseFoldClosed(
   var ARanges: TUnicodePropertyRangeArray);
 var
   OriginalRanges: TUnicodePropertyRangeArray;
-  Pairs: TCodePointPairArray;
   I, J: Integer;
   Target: Cardinal;
   HasInside, HasOutside: Boolean;
 begin
-  if not TryGetEmbeddedCaseFoldPairs(Pairs) then
+  if not EnsureCaseFoldPairsReady then
     Exit;
 
   SetLength(OriginalRanges, Length(ARanges));
   for I := 0 to High(ARanges) do
     OriginalRanges[I] := ARanges[I];
 
-  for I := 0 to High(Pairs) do
+  for I := 0 to High(CachedCaseFoldPairs) do
   begin
-    Target := Pairs[I].Target;
+    Target := CachedCaseFoldPairs[I].Target;
     HasInside := RangeContainsCodePoint(OriginalRanges, Target);
     HasOutside := not HasInside;
 
-    for J := 0 to High(Pairs) do
-      if Pairs[J].Target = Target then
+    for J := 0 to High(CachedCaseFoldPairs) do
+      if CachedCaseFoldPairs[J].Target = Target then
       begin
-        if RangeContainsCodePoint(OriginalRanges, Pairs[J].Source) then
+        if RangeContainsCodePoint(OriginalRanges,
+           CachedCaseFoldPairs[J].Source) then
           HasInside := True
         else
           HasOutside := True;
@@ -466,19 +468,17 @@ begin
       Continue;
 
     RemoveFoldRange(ARanges, Target);
-    for J := 0 to High(Pairs) do
-      if Pairs[J].Target = Target then
-        RemoveFoldRange(ARanges, Pairs[J].Source);
+    for J := 0 to High(CachedCaseFoldPairs) do
+      if CachedCaseFoldPairs[J].Target = Target then
+        RemoveFoldRange(ARanges, CachedCaseFoldPairs[J].Source);
   end;
 end;
 
 procedure ExpandRegExpNonUnicodeCaseFolding(
   var ARanges: TUnicodePropertyRangeArray);
-var
-  Pairs: TCodePointPairArray;
 begin
-  if TryGetEmbeddedNonUnicodeUppercasePairs(Pairs) then
-    ExpandCaseEquivalence(ARanges, Pairs);
+  if EnsureNonUnicodeUppercasePairsReady then
+    ExpandCaseEquivalence(ARanges, CachedNonUnicodeUppercasePairs);
 end;
 
 initialization
