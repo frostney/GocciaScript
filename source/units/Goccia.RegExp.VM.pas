@@ -22,9 +22,11 @@ function ExecuteRegExpVM(const AProgram: TRegExpProgram;
   const AInput: string; const AStartIndex: Integer;
   const ARequireStart: Boolean; out AResult: TRegExpVMResult): Boolean;
 
-{ Release the per-thread input-decode memo. Called from this unit's
-  finalization (main thread) and from ShutdownThreadRuntime (worker threads),
-  because FPC does not auto-finalize managed threadvars at thread exit. }
+{ Release the per-thread input-decode memo. Registered with
+  Goccia.ThreadCleanupRegistry from this unit's initialization, so the drain
+  releases it on worker exit (ShutdownThreadRuntime) and on the main thread (the
+  registry's finalization), because FPC does not auto-finalize managed
+  threadvars at thread exit. }
 procedure ClearRegExpInputMemo;
 
 implementation
@@ -33,6 +35,7 @@ uses
   TextSemantics,
 
   Goccia.RegExp.UnicodeData,
+  Goccia.ThreadCleanupRegistry,
   Goccia.Timeout;
 
 const
@@ -1149,8 +1152,10 @@ begin
   end;
 end;
 
-// FPC does not auto-finalize managed threadvars at thread exit; release the
-// main-thread memo on shutdown so its retained subject/units are not leaked.
+// FPC does not auto-finalize managed threadvars at thread exit; registered in
+// this unit's initialization so the registry drain releases this thread's memo
+// on worker exit and at main-thread shutdown, keeping its retained subject/units
+// from leaking.
 procedure ClearRegExpInputMemo;
 begin
   GRegExpInputMemoStr := '';
@@ -1159,7 +1164,16 @@ begin
   GRegExpInputMemoValid := False;
 end;
 
-finalization
-  ClearRegExpInputMemo;
+initialization
+  // FPC does not auto-finalize managed threadvars at thread exit. Register this
+  // unit's regex-input memo, and also the is-ASCII memo owned by the shared
+  // TextSemantics unit: TextSemantics is generic infrastructure that stays free
+  // of engine dependencies, so its per-thread memo is registered here instead
+  // (every engine binary links the regex VM). See ClearAsciiMemo in
+  // source/shared/TextSemantics.pas. The registry drain releases both memos on
+  // worker exit (ShutdownThreadRuntime) and on the main thread
+  // (Goccia.ThreadCleanupRegistry's finalization).
+  RegisterThreadvarCleanup(@ClearRegExpInputMemo);
+  RegisterThreadvarCleanup(@ClearAsciiMemo);
 
 end.

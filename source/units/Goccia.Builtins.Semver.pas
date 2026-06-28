@@ -26,6 +26,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.ObjectModel,
   Goccia.Semver,
+  Goccia.ThreadCleanupRegistry,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction,
@@ -1489,8 +1490,9 @@ end;
 
 initialization
   GSemverHosts := TSemverHostList.Create(True);
-
-finalization
-  ClearSemverHosts;
+  // FPC does not auto-finalize managed threadvars at thread exit. The registry
+  // drain frees this thread's host list on worker exit (ShutdownThreadRuntime)
+  // and on the main thread (Goccia.ThreadCleanupRegistry's finalization).
+  RegisterThreadvarCleanup(@ClearSemverHosts);
 
 end.
