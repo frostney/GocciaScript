@@ -97,6 +97,11 @@ type
     destructor Destroy; override;
     function CreateCheckpoint: TGocciaLexerCheckpoint;
     procedure RestoreCheckpoint(const ACheckpoint: TGocciaLexerCheckpoint);
+    // True when a token at or after ACount is goal-sensitive ('/' or a
+    // template-tail '}'), i.e. when a speculative scan's look-ahead tokens
+    // cannot be reused and must be re-lexed under the parser's real goal
+    // (issue #808).
+    function HasGoalSensitiveTokenSince(const ACount: Integer): Boolean;
     function ScanNextToken(const ALexicalGoal: TGocciaLexicalGoal): TGocciaToken;
     property ScanTimeNanoseconds: Int64 read FScanTimeNanoseconds;
     property Tokens: TObjectList<TGocciaToken> read FTokens;
@@ -252,6 +257,27 @@ begin
   Result := False;
 end;
 
+// A token type is goal-sensitive when the lexer can produce a different token
+// at the same source position depending on the lexical goal. Only two lexer
+// branches are goal-dependent, so only their outputs qualify (issue #808):
+//   * '/' -> a regex literal (gttRegex) when the goal allows regex, else a
+//     division operator (gttSlash / gttSlashAssign). See ScanToken's '/' case.
+//   * a template-tail '}' -> gttTemplateMiddle / gttTemplateTail when the goal
+//     requires template continuation, else an ordinary gttRightBrace. See
+//     ScanNextToken's template-continuation branch.
+// Every other token type is classified identically under any goal.
+function TokenTypeIsGoalSensitive(const ATokenType: TGocciaTokenType): Boolean;
+  inline;
+begin
+  case ATokenType of
+    gttRegex, gttSlash, gttSlashAssign,
+    gttRightBrace, gttTemplateMiddle, gttTemplateTail:
+      Result := True;
+  else
+    Result := False;
+  end;
+end;
+
 constructor TGocciaLexer.Create(const ASource, AFileName: string);
 begin
   FSource := ASource;
@@ -298,6 +324,23 @@ begin
 
   while FTokens.Count > ACheckpoint.TokenCount do
     FTokens.Delete(FTokens.Count - 1);
+end;
+
+// Whether any token at or after index ACount is goal-sensitive — i.e. would be
+// classified differently under another lexical goal. Used by the speculative
+// parenthesized-group scans (TGocciaParser) to decide whether their
+// look-ahead tokens can be kept for the real parse to reuse, or must be
+// dropped and re-lexed because a goal-dependent token ('/' or a template-tail
+// '}') was scanned speculatively under the wrong goal (issue #808).
+function TGocciaLexer.HasGoalSensitiveTokenSince(
+  const ACount: Integer): Boolean;
+var
+  I: Integer;
+begin
+  for I := ACount to FTokens.Count - 1 do
+    if TokenTypeIsGoalSensitive(FTokens[I].TokenType) then
+      Exit(True);
+  Result := False;
 end;
 
 function TGocciaLexer.GetSourceLines: TStringList;

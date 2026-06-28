@@ -87,3 +87,4 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0075 — ShadowRealm full test262 conformance](0075-shadowrealm-conformance.md)
 - [0076 — Same-runner benchmark comparison](0076-same-runner-benchmark-comparison.md)
 - [0077 — SameValueZero-keyed ordered store for Map and Set](0077-samevaluezero-ordered-collections.md)
+- [0078 — Keep speculatively-scanned tokens across parenthesized-group probes](0078-keep-speculatively-scanned-tokens.md)
