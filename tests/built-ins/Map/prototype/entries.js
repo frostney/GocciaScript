@@ -43,6 +43,35 @@ test("spread on map produces entries", () => {
   expect([...map]).toEqual([["a", 1], ["b", 2]]);
 });
 
+test("live iterator skips a not-yet-visited key deleted after it starts", () => {
+  const map = new Map([["a", 1], ["b", 2], ["c", 3]]);
+  const iter = map.entries();
+  expect(iter.next().value).toEqual(["a", 1]);
+  map.delete("c");
+  expect(iter.next().value).toEqual(["b", 2]);
+  expect(iter.next().done).toBe(true);
+});
+
+test("live iterator yields a key appended after it starts", () => {
+  const map = new Map([["a", 1]]);
+  const iter = map.entries();
+  expect(iter.next().value).toEqual(["a", 1]);
+  map.set("b", 2);
+  expect(iter.next().value).toEqual(["b", 2]);
+  expect(iter.next().done).toBe(true);
+});
+
+test("for...of deleting the current key visits every original key", () => {
+  const map = new Map([["a", 1], ["b", 2], ["c", 3]]);
+  const seen = [];
+  for (const [key] of map) {
+    seen.push(key);
+    map.delete(key);
+  }
+  expect(seen).toEqual(["a", "b", "c"]);
+  expect(map.size).toBe(0);
+});
+
 test("entries throws TypeError when called on non-Map", () => {
   const entries = Map.prototype.entries;
   expect(() => entries.call(Map.prototype)).toThrow(TypeError);

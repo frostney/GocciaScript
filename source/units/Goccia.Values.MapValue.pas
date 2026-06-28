@@ -5,25 +5,19 @@ unit Goccia.Values.MapValue;
 interface
 
 uses
-  Generics.Collections,
-
   Goccia.Arguments.Collection,
   Goccia.ObjectModel,
   Goccia.SharedPrototype,
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassValue,
   Goccia.Values.ObjectValue,
+  Goccia.Values.OrderedValueMap,
   Goccia.Values.Primitives;
 
 type
-  TGocciaMapEntry = record
-    Key: TGocciaValue;
-    Value: TGocciaValue;
-  end;
-
   TGocciaMapValue = class(TGocciaInstanceValue)
   private
-    FEntries: TList<TGocciaMapEntry>;
+    FStore: TGocciaOrderedValueMap;
   public
     function MapGet(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function MapSet(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -39,11 +33,23 @@ type
     function MapGetOrInsertComputed(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     procedure InitializePrototype;
   public
-    function FindEntry(const AKey: TGocciaValue): Integer;
     constructor Create(const AClass: TGocciaClassValue = nil);
     destructor Destroy; override;
 
+    // Insert or in-place update (keeps insertion position), with -0 -> +0
+    // key canonicalization.
     procedure SetEntry(const AKey, AValue: TGocciaValue);
+    // SameValueZero lookup. Returns False (and AValue undefined) when absent.
+    function TryGetValue(const AKey: TGocciaValue; out AValue: TGocciaValue): Boolean;
+
+    // Live, insertion-ordered cursor used by the Map iterators / forEach.
+    // Seed ACursor with 0; new entries appended mid-iteration are visited and
+    // deleted entries are skipped. Bracket external iteration with
+    // RetainIterator / ReleaseIterator so compaction cannot renumber entries.
+    function NextEntry(var ACursor: Integer; out AKey, AValue: TGocciaValue): Boolean;
+    procedure RetainIterator;
+    procedure ReleaseIterator;
+    function Count: Integer;
 
     function GetProperty(const AName: string): TGocciaValue; override;
     function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; override;
@@ -54,14 +60,11 @@ type
     procedure MarkReferences; override;
 
     class procedure ExposePrototype(const AConstructor: TGocciaValue);
-
-    property Entries: TList<TGocciaMapEntry> read FEntries;
   end;
 
 implementation
 
 uses
-  Goccia.Arithmetic,
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
@@ -103,7 +106,7 @@ var
   Shared: TGocciaSharedPrototype;
 begin
   inherited Create(AClass);
-  FEntries := TList<TGocciaMapEntry>.Create;
+  FStore := TGocciaOrderedValueMap.Create;
   InitializePrototype;
   Shared := GetMapShared;
   if not Assigned(AClass) and Assigned(Shared) then
@@ -170,7 +173,7 @@ end;
 
 destructor TGocciaMapValue.Destroy;
 begin
-  FEntries.Free;
+  FStore.Free;
   inherited;
 end;
 
@@ -208,48 +211,52 @@ end;
 
 procedure TGocciaMapValue.MarkReferences;
 var
-  I: Integer;
+  Cursor: Integer;
+  Key, Value: TGocciaValue;
 begin
   if GCMarked then Exit;
   inherited;
 
-  for I := 0 to FEntries.Count - 1 do
+  Cursor := 0;
+  while FStore.NextEntry(Cursor, Key, Value) do
   begin
-    if Assigned(FEntries[I].Key) then
-      FEntries[I].Key.MarkReferences;
-    if Assigned(FEntries[I].Value) then
-      FEntries[I].Value.MarkReferences;
+    if Assigned(Key) then
+      Key.MarkReferences;
+    if Assigned(Value) then
+      Value.MarkReferences;
   end;
-end;
-
-function TGocciaMapValue.FindEntry(const AKey: TGocciaValue): Integer;
-var
-  I: Integer;
-begin
-  for I := 0 to FEntries.Count - 1 do
-  begin
-    if IsSameValueZero(FEntries[I].Key, AKey) then
-    begin
-      Result := I;
-      Exit;
-    end;
-  end;
-  Result := -1;
 end;
 
 procedure TGocciaMapValue.SetEntry(const AKey, AValue: TGocciaValue);
-var
-  Index: Integer;
-  Entry: TGocciaMapEntry;
 begin
-  Index := FindEntry(AKey);
-  Entry.Key := AKey;
-  Entry.Value := AValue;
+  FStore.SetEntry(AKey, AValue);
+end;
 
-  if Index >= 0 then
-    FEntries[Index] := Entry
-  else
-    FEntries.Add(Entry);
+function TGocciaMapValue.TryGetValue(const AKey: TGocciaValue;
+  out AValue: TGocciaValue): Boolean;
+begin
+  Result := FStore.TryGetValue(AKey, AValue);
+end;
+
+function TGocciaMapValue.NextEntry(var ACursor: Integer;
+  out AKey, AValue: TGocciaValue): Boolean;
+begin
+  Result := FStore.NextEntry(ACursor, AKey, AValue);
+end;
+
+procedure TGocciaMapValue.RetainIterator;
+begin
+  FStore.RetainIterator;
+end;
+
+procedure TGocciaMapValue.ReleaseIterator;
+begin
+  FStore.ReleaseIterator;
+end;
+
+function TGocciaMapValue.Count: Integer;
+begin
+  Result := FStore.Count;
 end;
 
 function TGocciaMapValue.GetProperty(const AName: string): TGocciaValue;
@@ -260,22 +267,24 @@ end;
 function TGocciaMapValue.GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue;
 begin
   if AName = PROP_SIZE then
-    Result := TGocciaNumberLiteralValue.Create(FEntries.Count)
+    Result := TGocciaNumberLiteralValue.Create(FStore.Count)
   else
     Result := inherited GetPropertyWithContext(AName, AThisContext);
 end;
 
 function TGocciaMapValue.ToArray: TGocciaArrayValue;
 var
-  I: Integer;
+  Cursor: Integer;
+  Key, Value: TGocciaValue;
   EntryArr: TGocciaArrayValue;
 begin
   Result := TGocciaArrayValue.Create;
-  for I := 0 to FEntries.Count - 1 do
+  Cursor := 0;
+  while FStore.NextEntry(Cursor, Key, Value) do
   begin
     EntryArr := TGocciaArrayValue.Create;
-    EntryArr.Elements.Add(FEntries[I].Key);
-    EntryArr.Elements.Add(FEntries[I].Value);
+    EntryArr.Elements.Add(Key);
+    EntryArr.Elements.Add(Value);
     Result.Elements.Add(EntryArr);
   end;
 end;
@@ -291,26 +300,21 @@ end;
 function TGocciaMapValue.MapGet(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   M: TGocciaMapValue;
-  Index: Integer;
+  Value: TGocciaValue;
 begin
   // Step 1: Let M be the this value
   // Steps 2-3: If M does not have a [[MapData]] internal slot, throw a TypeError
   if not (AThisValue is TGocciaMapValue) then
     ThrowTypeError(SErrorMapGetNonMap, SSuggestMapThisType);
   M := TGocciaMapValue(AThisValue);
-  if AArgs.Length > 0 then
-  begin
-    // Step 4: For each Record { [[Key]], [[Value]] } p of M.[[MapData]], do
-    // Step 4a: If p.[[Key]] is not empty and SameValueZero(p.[[Key]], key) is true, return p.[[Value]]
-    Index := M.FindEntry(AArgs.GetElement(0));
-    if Index >= 0 then
-    begin
-      Result := M.Entries[Index].Value;
-      Exit;
-    end;
-  end;
-  // Step 5: Return undefined
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  // Step 4: For each Record { [[Key]], [[Value]] } p of M.[[MapData]], do
+  // Step 4a: If p.[[Key]] is not empty and SameValueZero(p.[[Key]], key) is true, return p.[[Value]]
+  // An omitted argument is the value `undefined` (GetElement yields undefined).
+  if M.TryGetValue(AArgs.GetElement(0), Value) then
+    Result := Value
+  else
+    // Step 5: Return undefined
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 // ES2026 §24.1.3.9 Map.prototype.set(key, value)
@@ -324,18 +328,16 @@ begin
   if not (AThisValue is TGocciaMapValue) then
     ThrowTypeError(SErrorMapSetNonMap, SSuggestMapThisType);
   M := TGocciaMapValue(AThisValue);
-  if AArgs.Length >= 2 then
-  begin
-    MapKey := AArgs.GetElement(0);
-    MapValue := AArgs.GetElement(1);
-    // Step 4: For each Record { [[Key]], [[Value]] } p of M.[[MapData]], do
-    //   If p.[[Key]] is not empty and SameValueZero(p.[[Key]], key) is true,
-    //   set p.[[Value]] to value and return M
-    // Step 5: If key is -0, set key to +0
-    // Step 6: Let p be the Record { [[Key]]: key, [[Value]]: value }
-    // Step 7: Append p to M.[[MapData]]
-    M.SetEntry(MapKey, MapValue);
-  end;
+  // Omitted arguments are the value `undefined` (GetElement yields undefined).
+  MapKey := AArgs.GetElement(0);
+  MapValue := AArgs.GetElement(1);
+  // Step 4: For each Record { [[Key]], [[Value]] } p of M.[[MapData]], do
+  //   If p.[[Key]] is not empty and SameValueZero(p.[[Key]], key) is true,
+  //   set p.[[Value]] to value and return M
+  // Step 5: Set key to CanonicalizeKeyedCollectionKey(key) (-0 -> +0)
+  // Step 6: Let p be the Record { [[Key]]: key, [[Value]]: value }
+  // Step 7: Append p to M.[[MapData]]
+  M.SetEntry(MapKey, MapValue);
   // Step 8: Return M
   Result := AThisValue;
 end;
@@ -344,6 +346,7 @@ end;
 function TGocciaMapValue.MapHas(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   M: TGocciaMapValue;
+  Value: TGocciaValue;
 begin
   // Step 1: Let M be the this value
   // Steps 2-3: If M does not have a [[MapData]] internal slot, throw a TypeError
@@ -352,7 +355,8 @@ begin
   M := TGocciaMapValue(AThisValue);
   // Step 4: For each Record { [[Key]], [[Value]] } p of M.[[MapData]], do
   //   If p.[[Key]] is not empty and SameValueZero(p.[[Key]], key) is true, return true
-  if (AArgs.Length > 0) and (M.FindEntry(AArgs.GetElement(0)) >= 0) then
+  // An omitted argument is the value `undefined` (GetElement yields undefined).
+  if M.TryGetValue(AArgs.GetElement(0), Value) then
     Result := TGocciaBooleanLiteralValue.TrueValue
   else
     // Step 5: Return false
@@ -363,29 +367,21 @@ end;
 function TGocciaMapValue.MapDelete(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   M: TGocciaMapValue;
-  Index: Integer;
 begin
   // Step 1: Let M be the this value
   // Steps 2-3: If M does not have a [[MapData]] internal slot, throw a TypeError
   if not (AThisValue is TGocciaMapValue) then
     ThrowTypeError(SErrorMapDeleteNonMap, SSuggestMapThisType);
   M := TGocciaMapValue(AThisValue);
-  // Step 5 (early): Default return false
-  Result := TGocciaBooleanLiteralValue.FalseValue;
-  if AArgs.Length > 0 then
-  begin
-    // Step 4: For each Record { [[Key]], [[Value]] } p of M.[[MapData]], do
-    Index := M.FindEntry(AArgs.GetElement(0));
-    if Index >= 0 then
-    begin
-      // Step 4a: If p.[[Key]] is not empty and SameValueZero(p.[[Key]], key) is true
-      // Step 4a.i: Set p.[[Key]] to empty / Step 4a.ii: Set p.[[Value]] to empty
-      M.FEntries.Delete(Index);
-      // Step 4a.iii: Return true
-      Result := TGocciaBooleanLiteralValue.TrueValue;
-    end;
-  end;
-  // Step 5: Return false
+  // Step 4: For each Record { [[Key]], [[Value]] } p of M.[[MapData]], do
+  //   If SameValueZero(p.[[Key]], key) is true, set p.[[Key]]/[[Value]] to
+  //   empty (tombstone) and return true
+  // An omitted argument is the value `undefined` (GetElement yields undefined).
+  if M.FStore.Remove(AArgs.GetElement(0)) then
+    Result := TGocciaBooleanLiteralValue.TrueValue
+  else
+    // Step 5: Return false
+    Result := TGocciaBooleanLiteralValue.FalseValue;
 end;
 
 // ES2026 §24.1.3.1 Map.prototype.clear()
@@ -397,7 +393,7 @@ begin
     ThrowTypeError(SErrorMapClearNonMap, SSuggestMapThisType);
   // Step 4: For each Record { [[Key]], [[Value]] } p of M.[[MapData]], do
   //   Set p.[[Key]] to empty, set p.[[Value]] to empty
-  TGocciaMapValue(AThisValue).FEntries.Clear;
+  TGocciaMapValue(AThisValue).FStore.Clear;
   // Step 5: Return undefined
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
@@ -406,10 +402,10 @@ end;
 function TGocciaMapValue.MapForEach(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   M: TGocciaMapValue;
-  Callback, ThisArg: TGocciaValue;
+  Callback, ThisArg, Key, Value: TGocciaValue;
   TypedCallback: TGocciaFunctionBase;
   CallArgs: TGocciaArgumentsCollection;
-  I: Integer;
+  Cursor: Integer;
   MapRoot, CallbackRoot, ThisRoot: TGocciaTempRoot;
 begin
   // Steps 1-3: If M does not have a [[MapData]] internal slot, throw a TypeError
@@ -441,12 +437,17 @@ begin
   AddTempRootIfNeeded(MapRoot, M);
   AddTempRootIfNeeded(CallbackRoot, Callback);
   AddTempRootIfNeeded(ThisRoot, ThisArg);
+  // Hold compaction off so the cursor's entry indices stay valid even if the
+  // callback adds or deletes entries (ES2026 §24.1.3.5: numEntries is re-read
+  // each step; appended keys are visited, deleted keys are skipped).
+  M.RetainIterator;
   try
-  // Step 6: For each Record { [[Key]], [[Value]] } p of M.[[MapData]], do
-    for I := 0 to M.Entries.Count - 1 do
+    // Step 6: For each Record { [[Key]], [[Value]] } p of M.[[MapData]], do
+    Cursor := 0;
+    while M.NextEntry(Cursor, Key, Value) do
     begin
       // Step 6b: Call(callbackfn, thisArg, « p.[[Value]], p.[[Key]], M »)
-      CallArgs := TGocciaArgumentsCollection.Create([M.Entries[I].Value, M.Entries[I].Key, M]);
+      CallArgs := TGocciaArgumentsCollection.Create([Value, Key, M]);
       try
         if Assigned(TypedCallback) then
           TypedCallback.Call(CallArgs, ThisArg)
@@ -460,6 +461,7 @@ begin
     // Step 7: Return undefined
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   finally
+    M.ReleaseIterator;
     RemoveTempRootIfNeeded(ThisRoot);
     RemoveTempRootIfNeeded(CallbackRoot);
     RemoveTempRootIfNeeded(MapRoot);
@@ -514,34 +516,26 @@ end;
 function TGocciaMapValue.MapGetOrInsert(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   M: TGocciaMapValue;
-  MapKey, DefaultValue: TGocciaValue;
-  Index: Integer;
+  MapKey, DefaultValue, Existing: TGocciaValue;
 begin
   // Steps 1-3: If M does not have a [[MapData]] internal slot, throw a TypeError
   if not (AThisValue is TGocciaMapValue) then
     ThrowTypeError(SErrorMapGetOrInsertNonMap, SSuggestMapThisType);
   M := TGocciaMapValue(AThisValue);
-  if AArgs.Length < 2 then
-  begin
-    if AArgs.Length > 0 then
-      MapKey := AArgs.GetElement(0)
-    else
-      MapKey := TGocciaUndefinedLiteralValue.UndefinedValue;
-    Index := M.FindEntry(MapKey);
-    if Index >= 0 then
-      Exit(M.Entries[Index].Value);
-    DefaultValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-    M.SetEntry(MapKey, DefaultValue);
-    Exit(DefaultValue);
-  end;
+  if AArgs.Length > 0 then
+    MapKey := AArgs.GetElement(0)
+  else
+    MapKey := TGocciaUndefinedLiteralValue.UndefinedValue;
 
-  MapKey := AArgs.GetElement(0);
-  DefaultValue := AArgs.GetElement(1);
   // Step 4: For each Record { [[Key]], [[Value]] } p of M.[[MapData]], do
   //   If SameValueZero(p.[[Key]], key) is true, return p.[[Value]]
-  Index := M.FindEntry(MapKey);
-  if Index >= 0 then
-    Exit(M.Entries[Index].Value);
+  if M.TryGetValue(MapKey, Existing) then
+    Exit(Existing);
+
+  if AArgs.Length >= 2 then
+    DefaultValue := AArgs.GetElement(1)
+  else
+    DefaultValue := TGocciaUndefinedLiteralValue.UndefinedValue;
   // Step 5: Set key to CanonicalizeKeyedCollectionKey(key)
   // Step 6: Append Record { [[Key]]: key, [[Value]]: value } to M.[[MapData]]
   M.SetEntry(MapKey, DefaultValue);
@@ -553,10 +547,9 @@ end;
 function TGocciaMapValue.MapGetOrInsertComputed(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   M: TGocciaMapValue;
-  MapKey, CallbackArg, ComputedValue: TGocciaValue;
+  MapKey, CallbackArg, ComputedValue, Existing: TGocciaValue;
   TypedCallback: TGocciaFunctionBase;
   CallArgs: TGocciaArgumentsCollection;
-  Index: Integer;
   MapRoot, KeyRoot, CallbackRoot: TGocciaTempRoot;
 begin
   // Steps 1-3: If M does not have a [[MapData]] internal slot, throw a TypeError
@@ -578,9 +571,8 @@ begin
 
   // Step 4: For each Record { [[Key]], [[Value]] } p of M.[[MapData]], do
   //   If SameValueZero(p.[[Key]], key) is true, return p.[[Value]]
-  Index := M.FindEntry(MapKey);
-  if Index >= 0 then
-    Exit(M.Entries[Index].Value);
+  if M.TryGetValue(MapKey, Existing) then
+    Exit(Existing);
 
   InitializeTempRoot(MapRoot);
   InitializeTempRoot(KeyRoot);

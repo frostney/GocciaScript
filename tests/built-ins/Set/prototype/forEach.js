@@ -66,3 +66,34 @@ test("forEach passes set as third callback argument", () => {
   });
   expect(receivedSet).toBe(set);
 });
+
+test("forEach visits values appended during iteration", () => {
+  const set = new Set([1]);
+  const seen = [];
+  set.forEach((value) => {
+    seen.push(value);
+    if (value === 1) set.add(2);
+  });
+  expect(seen).toEqual([1, 2]);
+});
+
+test("forEach does not visit a value deleted before it is reached", () => {
+  const set = new Set([1, 2, 3]);
+  const seen = [];
+  set.forEach((value) => {
+    seen.push(value);
+    if (value === 1) set.delete(2);
+  });
+  expect(seen).toEqual([1, 3]);
+});
+
+test("forEach deleting the current value does not skip the next", () => {
+  const set = new Set([1, 2, 3]);
+  const seen = [];
+  set.forEach((value) => {
+    seen.push(value);
+    set.delete(value);
+  });
+  expect(seen).toEqual([1, 2, 3]);
+  expect(set.size).toBe(0);
+});

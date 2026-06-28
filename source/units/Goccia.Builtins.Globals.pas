@@ -835,31 +835,45 @@ end;
 function CloneMap(const AMap: TGocciaMapValue;
   const AMemory: THashMap<TGocciaValue, TGocciaValue>): TGocciaMapValue;
 var
-  I: Integer;
-  Entry: TGocciaMapEntry;
+  Cursor: Integer;
+  Key, Value: TGocciaValue;
 begin
   Result := TGocciaMapValue.Create;
   AMemory.Add(AMap, Result);
 
-  for I := 0 to AMap.Entries.Count - 1 do
-  begin
-    Entry := AMap.Entries[I];
-    Result.SetEntry(
-      StructuredCloneValue(Entry.Key, AMemory),
-      StructuredCloneValue(Entry.Value, AMemory));
+  // StructuredCloneValue can run user getters that mutate AMap; retain it so
+  // compaction cannot renumber entries mid-walk and invalidate Cursor.
+  Cursor := 0;
+  AMap.RetainIterator;
+  try
+    while AMap.NextEntry(Cursor, Key, Value) do
+      Result.SetEntry(
+        StructuredCloneValue(Key, AMemory),
+        StructuredCloneValue(Value, AMemory));
+  finally
+    AMap.ReleaseIterator;
   end;
 end;
 
 function CloneSet(const ASet: TGocciaSetValue;
   const AMemory: THashMap<TGocciaValue, TGocciaValue>): TGocciaSetValue;
 var
-  I: Integer;
+  Cursor: Integer;
+  Item: TGocciaValue;
 begin
   Result := TGocciaSetValue.Create;
   AMemory.Add(ASet, Result);
 
-  for I := 0 to ASet.Items.Count - 1 do
-    Result.AddItem(StructuredCloneValue(ASet.Items[I], AMemory));
+  // StructuredCloneValue can run user getters that mutate ASet; retain it so
+  // compaction cannot renumber entries mid-walk and invalidate Cursor.
+  Cursor := 0;
+  ASet.RetainIterator;
+  try
+    while ASet.NextItem(Cursor, Item) do
+      Result.AddItem(StructuredCloneValue(Item, AMemory));
+  finally
+    ASet.ReleaseIterator;
+  end;
 end;
 
 function CloneArrayBuffer(const ABuf: TGocciaArrayBufferValue;

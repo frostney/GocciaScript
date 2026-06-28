@@ -42,6 +42,65 @@ test("set with NaN key", () => {
   expect(map.get(NaN)).toBe("second");
 });
 
+test("set normalizes a -0 key to +0", () => {
+  const map = new Map();
+  map.set(-0, "neg");
+  expect(map.has(0)).toBe(true);
+  expect(map.get(0)).toBe("neg");
+  expect(map.size).toBe(1);
+  const key = [...map.keys()][0];
+  expect(Object.is(key, 0)).toBe(true);
+  expect(Object.is(key, -0)).toBe(false);
+});
+
+test("set treats +0 and -0 as the same key", () => {
+  const map = new Map();
+  map.set(0, "a");
+  map.set(-0, "b");
+  expect(map.size).toBe(1);
+  expect(map.get(0)).toBe("b");
+});
+
+test("set keys by string content, not string identity", () => {
+  const map = new Map();
+  map.set("a" + "b", 1);
+  map.set("ab", 2);
+  expect(map.size).toBe(1);
+  expect(map.get("ab")).toBe(2);
+});
+
+test("set treats number 1 and string '1' as distinct keys", () => {
+  const map = new Map();
+  map.set(1, "num");
+  map.set("1", "str");
+  expect(map.size).toBe(2);
+  expect(map.get(1)).toBe("num");
+  expect(map.get("1")).toBe("str");
+});
+
+test("set uses reference identity for object keys", () => {
+  const map = new Map();
+  const a = {};
+  map.set(a, 1);
+  map.set(a, 2);
+  map.set({}, 3);
+  expect(map.size).toBe(2);
+  expect(map.get(a)).toBe(2);
+});
+
+test("treats omitted arguments as the undefined key and value", () => {
+  const m = new Map();
+  m.set();
+  expect(m.size).toBe(1);
+  expect(m.has()).toBe(true);
+  expect(m.get()).toBe(undefined);
+  m.set("k");
+  expect(m.has("k")).toBe(true);
+  expect(m.get("k")).toBe(undefined);
+  expect(m.delete()).toBe(true);
+  expect(m.has()).toBe(false);
+});
+
 test("throws TypeError when called on non-Map", () => {
   const set = Map.prototype.set;
   expect(() => set.call(Map.prototype, "k", "v")).toThrow(TypeError);
