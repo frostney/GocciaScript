@@ -100,7 +100,6 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
-  Goccia.ThreadCleanupRegistry,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
@@ -114,24 +113,16 @@ uses
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
 
-// Iterator.prototype lives in a per-realm slot so engine teardown unpins
-// the prototype.  Method host and member definitions stay process-wide
-// (immutable across realms) — same pattern as Number.prototype.
+// Iterator.prototype, its helper prototype, the Iterator constructor, and the
+// method host all live in per-realm slots, so the realm pins them on SetSlot and
+// unpins them on Destroy.  The method host (Self in InitializePrototype) backs
+// the prototype, helper, constructor, and static methods; the member definitions
+// are rebuilt per realm because they bind to this realm's host. #892
 var
   GIteratorPrototypeSlot: TGocciaRealmSlotId;
   GIteratorHelperPrototypeSlot: TGocciaRealmSlotId;
   GIteratorConstructorSlot: TGocciaRealmSlotId;
-
-threadvar
-  FPrototypeMethodHost: TGocciaIteratorValue;
-  FPrototypeMembers: TArray<TGocciaMemberDefinition>;
-  FStaticMembers: TArray<TGocciaMemberDefinition>;
-
-procedure ClearThreadvarMembers;
-begin
-  SetLength(FPrototypeMembers, 0);
-  SetLength(FStaticMembers, 0);
-end;
+  GIteratorMethodHostSlot: TGocciaRealmSlotId;
 
 function GetSharedIteratorPrototype: TGocciaObjectValue; inline;
 begin
@@ -153,6 +144,17 @@ function GetSharedIteratorHelperPrototype: TGocciaObjectValue; inline;
 begin
   if Assigned(CurrentRealm) then
     Result := TGocciaObjectValue(CurrentRealm.GetSlot(GIteratorHelperPrototypeSlot))
+  else
+    Result := nil;
+end;
+
+// The per-realm method host (Self from InitializePrototype) that the helper,
+// constructor, and static methods bind to.  Populated by InitializePrototype,
+// which every entry point calls via EnsurePrototypeInitialized first. #892
+function GetIteratorMethodHost: TGocciaIteratorValue; inline;
+begin
+  if Assigned(CurrentRealm) then
+    Result := TGocciaIteratorValue(CurrentRealm.GetSlot(GIteratorMethodHostSlot))
   else
     Result := nil;
 end;
@@ -308,9 +310,9 @@ begin
 
   Members := TGocciaMemberCollection.Create;
   try
-    Members.AddNamedMethod('next', FPrototypeMethodHost.IteratorNext, 0,
+    Members.AddNamedMethod('next', GetIteratorMethodHost.IteratorNext, 0,
       gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-    Members.AddNamedMethod(PROP_RETURN, FPrototypeMethodHost.IteratorHelperReturn, 0,
+    Members.AddNamedMethod(PROP_RETURN, GetIteratorMethodHost.IteratorHelperReturn, 0,
       gmkPrototypeMethod, [gmfNoFunctionPrototype]);
     Members.AddSymbolDataProperty(
       TGocciaSymbolValue.WellKnownToStringTag,
@@ -556,7 +558,7 @@ begin
   Result.DefineProperty('next',
     TGocciaPropertyDescriptorData.Create(
       TGocciaNativeFunctionValue.CreateWithoutPrototype(
-        FPrototypeMethodHost.IteratorNext, 'next', 0),
+        GetIteratorMethodHost.IteratorNext, 'next', 0),
       [pfConfigurable, pfWritable]));
   Result.DefineSymbolProperty(
     TGocciaSymbolValue.WellKnownToStringTag,
@@ -569,6 +571,7 @@ procedure TGocciaIteratorValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
   SharedPrototype: TGocciaObjectValue;
+  PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
   if not Assigned(CurrentRealm) then Exit;
   if Assigned(GetSharedIteratorPrototype) then Exit;
@@ -576,49 +579,44 @@ begin
   SharedPrototype := TGocciaObjectValue.Create(
     TGocciaObjectValue.SharedObjectPrototype);
   CurrentRealm.SetSlot(GIteratorPrototypeSlot, SharedPrototype);
-  if Length(FPrototypeMembers) = 0 then
-  begin
-    // First realm to initialize wins: pin Self as the singleton method host
-    // for the lifetime of the process.  Method callbacks captured into
-    // FPrototypeMembers bind to this host, so subsequent realms must reuse it
-    // (otherwise the cached callbacks would reference a freed instance).
-    FPrototypeMethodHost := Self;
-    if Assigned(TGarbageCollector.Instance) then
-      TGarbageCollector.Instance.PinObject(FPrototypeMethodHost);
+  // The native methods below bind to this instance (Self); keep it alive for the
+  // realm's lifetime in its own slot so the realm unpins it on Destroy.  The
+  // helper, constructor, and static setup read it back via GetIteratorMethodHost.
+  // #892
+  CurrentRealm.SetSlot(GIteratorMethodHostSlot, Self);
 
-    Members := TGocciaMemberCollection.Create;
-    try
-      Members.AddNamedMethod('next', IteratorNext, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddAccessor(PROP_CONSTRUCTOR, IteratorGetConstructor,
-        IteratorSetConstructor, [pfConfigurable], gmkPrototypeGetter);
-      Members.AddSymbolMethod(
-        TGocciaSymbolValue.WellKnownIterator, '[Symbol.iterator]',
-        IteratorSelf, 0, [pfConfigurable, pfWritable]);
-      Members.AddSymbolMethod(
-        TGocciaSymbolValue.WellKnownDispose, '[Symbol.dispose]',
-        IteratorDispose, 0, [pfConfigurable, pfWritable],
-        [gmfNoFunctionPrototype]);
-      Members.AddSymbolAccessor(
-        TGocciaSymbolValue.WellKnownToStringTag, '[Symbol.toStringTag]',
-        IteratorGetToStringTag, IteratorSetToStringTag,
-        [pfConfigurable]);
-      Members.AddNamedMethod('map', IteratorMap, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('filter', IteratorFilter, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('take', IteratorTake, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('drop', IteratorDrop, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('forEach', IteratorForEach, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('reduce', IteratorReduce, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('toArray', IteratorToArray, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('some', IteratorSome, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('every', IteratorEvery, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('find', IteratorFind, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('flatMap', IteratorFlatMap, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      FPrototypeMembers := Members.ToDefinitions;
-    finally
-      Members.Free;
-    end;
+  Members := TGocciaMemberCollection.Create;
+  try
+    Members.AddNamedMethod('next', IteratorNext, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddAccessor(PROP_CONSTRUCTOR, IteratorGetConstructor,
+      IteratorSetConstructor, [pfConfigurable], gmkPrototypeGetter);
+    Members.AddSymbolMethod(
+      TGocciaSymbolValue.WellKnownIterator, '[Symbol.iterator]',
+      IteratorSelf, 0, [pfConfigurable, pfWritable]);
+    Members.AddSymbolMethod(
+      TGocciaSymbolValue.WellKnownDispose, '[Symbol.dispose]',
+      IteratorDispose, 0, [pfConfigurable, pfWritable],
+      [gmfNoFunctionPrototype]);
+    Members.AddSymbolAccessor(
+      TGocciaSymbolValue.WellKnownToStringTag, '[Symbol.toStringTag]',
+      IteratorGetToStringTag, IteratorSetToStringTag,
+      [pfConfigurable]);
+    Members.AddNamedMethod('map', IteratorMap, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod('filter', IteratorFilter, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod('take', IteratorTake, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod('drop', IteratorDrop, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod('forEach', IteratorForEach, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod('reduce', IteratorReduce, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod('toArray', IteratorToArray, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod('some', IteratorSome, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod('every', IteratorEvery, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod('find', IteratorFind, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod('flatMap', IteratorFlatMap, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    PrototypeMembers := Members.ToDefinitions;
+  finally
+    Members.Free;
   end;
-  RegisterMemberDefinitions(SharedPrototype, FPrototypeMembers);
+  RegisterMemberDefinitions(SharedPrototype, PrototypeMembers);
 end;
 
 class function TGocciaIteratorValue.CreateGlobalObject: TGocciaObjectValue;
@@ -626,6 +624,7 @@ var
   Members: TGocciaMemberCollection;
   IteratorConstructor: TGocciaNativeFunctionValue;
   SharedPrototype: TGocciaObjectValue;
+  StaticMembers: TArray<TGocciaMemberDefinition>;
 begin
   EnsurePrototypeInitialized;
 
@@ -633,26 +632,23 @@ begin
     Exit(GetSharedIteratorConstructor);
 
   IteratorConstructor := TGocciaNativeFunctionValue.Create(
-    FPrototypeMethodHost.IteratorConstructorCall, CONSTRUCTOR_ITERATOR, 0);
-  IteratorConstructor.ConstructCallback := FPrototypeMethodHost.IteratorConstruct;
+    GetIteratorMethodHost.IteratorConstructorCall, CONSTRUCTOR_ITERATOR, 0);
+  IteratorConstructor.ConstructCallback := GetIteratorMethodHost.IteratorConstruct;
   if Assigned(CurrentRealm) then
     CurrentRealm.SetSlot(GIteratorConstructorSlot, IteratorConstructor);
 
   Result := IteratorConstructor;
-  if Length(FStaticMembers) = 0 then
-  begin
-    Members := TGocciaMemberCollection.Create;
-    try
-      Members.AddNamedMethod('from', FPrototypeMethodHost.IteratorFrom, 1, gmkStaticMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('concat', FPrototypeMethodHost.IteratorConcat, 0, gmkStaticMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('zip', FPrototypeMethodHost.IteratorZip, 1, gmkStaticMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('zipKeyed', FPrototypeMethodHost.IteratorZipKeyed, 1, gmkStaticMethod, [gmfNoFunctionPrototype]);
-      FStaticMembers := Members.ToDefinitions;
-    finally
-      Members.Free;
-    end;
+  Members := TGocciaMemberCollection.Create;
+  try
+    Members.AddNamedMethod('from', GetIteratorMethodHost.IteratorFrom, 1, gmkStaticMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod('concat', GetIteratorMethodHost.IteratorConcat, 0, gmkStaticMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod('zip', GetIteratorMethodHost.IteratorZip, 1, gmkStaticMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod('zipKeyed', GetIteratorMethodHost.IteratorZipKeyed, 1, gmkStaticMethod, [gmfNoFunctionPrototype]);
+    StaticMembers := Members.ToDefinitions;
+  finally
+    Members.Free;
   end;
-  RegisterMemberDefinitions(Result, FStaticMembers);
+  RegisterMemberDefinitions(Result, StaticMembers);
   SharedPrototype := GetSharedIteratorPrototype;
   if Assigned(SharedPrototype) then
     Result.DefineProperty(PROP_PROTOTYPE,
@@ -1833,9 +1829,9 @@ begin
 end;
 
 initialization
-  RegisterThreadvarCleanup(@ClearThreadvarMembers);
   GIteratorPrototypeSlot := RegisterRealmSlot('Iterator.prototype');
   GIteratorHelperPrototypeSlot := RegisterRealmSlot('IteratorHelper.prototype');
   GIteratorConstructorSlot := RegisterRealmSlot('Iterator');
+  GIteratorMethodHostSlot := RegisterRealmSlot('Iterator.prototype.methodHost');
 
 end.

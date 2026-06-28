@@ -139,7 +139,6 @@ uses
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.ObjectModel,
-  Goccia.ThreadCleanupRegistry,
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassHelper,
   Goccia.Values.ErrorHelper,
@@ -150,21 +149,14 @@ uses
   Goccia.Values.Shape,
   Goccia.Values.ToPrimitive;
 
-// Object.prototype lives in a per-realm slot.  See Goccia.Realm and the
-// matching pattern in Goccia.Values.ArrayValue for the rationale; the method
-// host and member definitions stay in process-wide threadvar caches because
-// they are immutable across realms.
+// Object.prototype and its method host both live in per-realm slots, so the
+// realm pins them on SetSlot and unpins them on Destroy.  The method definitions
+// are rebuilt per realm because their method pointers embed the host instance;
+// keeping the host realm-owned (rather than a per-thread pinned threadvar that
+// outlives every realm) means it is reclaimed with its realm. See #892.
 var
   GObjectPrototypeSlot: TGocciaRealmSlotId;
-
-threadvar
-  FPrototypeMethodHost: TGocciaObjectValue;
-  FPrototypeMembers: TArray<TGocciaMemberDefinition>;
-
-procedure ClearThreadvarMembers;
-begin
-  SetLength(FPrototypeMembers, 0);
-end;
+  GObjectMethodHostSlot: TGocciaRealmSlotId;
 
 const
   MAX_PROTOTYPE_CHAIN_DEPTH = 256;
@@ -611,43 +603,41 @@ class procedure TGocciaObjectValue.InitializeSharedPrototype;
 var
   Members: TGocciaMemberCollection;
   SharedPrototype: TGocciaObjectValue;
+  MethodHost: TGocciaObjectValue;
+  PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
   // No realm yet - very early bootstrap path.  Subsequent constructor runs
   // under an assigned realm will retry.
   if not Assigned(CurrentRealm) then Exit;
   if Assigned(GetSharedObjectPrototype) then Exit;
 
-  if not Assigned(FPrototypeMethodHost) then
-    FPrototypeMethodHost := TGocciaObjectValue.Create;
+  MethodHost := TGocciaObjectValue.Create;
   SharedPrototype := TGocciaObjectValue.Create;
   CurrentRealm.SetSlot(GObjectPrototypeSlot, SharedPrototype);
-  if Length(FPrototypeMembers) = 0 then
-  begin
-    Members := TGocciaMemberCollection.Create;
-    try
-      Members.AddMethod(FPrototypeMethodHost.ObjectPrototypeToString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(FPrototypeMethodHost.ObjectPrototypeHasOwnProperty, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(FPrototypeMethodHost.ObjectPrototypeIsPrototypeOf, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(FPrototypeMethodHost.ObjectPrototypePropertyIsEnumerable, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(FPrototypeMethodHost.ObjectPrototypeToLocaleString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(FPrototypeMethodHost.ObjectPrototypeValueOf, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      FPrototypeMembers := Members.ToDefinitions;
-    finally
-      Members.Free;
-    end;
-    FPrototypeMembers[0].ExposedName := PROP_TO_STRING;
-    FPrototypeMembers[1].ExposedName := 'hasOwnProperty';
-    FPrototypeMembers[2].ExposedName := PROP_IS_PROTOTYPE_OF;
-    FPrototypeMembers[3].ExposedName := PROP_PROPERTY_IS_ENUMERABLE;
-    FPrototypeMembers[4].ExposedName := PROP_TO_LOCALE_STRING;
-    FPrototypeMembers[5].ExposedName := PROP_VALUE_OF;
-  end;
-  RegisterMemberDefinitions(SharedPrototype, FPrototypeMembers);
+  // Keep the method host alive for the realm's lifetime in its own slot: the
+  // realm pins it here and unpins it on Destroy, together with the prototype
+  // whose method pointers embed it. #892
+  CurrentRealm.SetSlot(GObjectMethodHostSlot, MethodHost);
 
-  // SharedPrototype is pinned via the realm slot; the method host is a
-  // process-wide singleton (immutable across realms) that we pin directly.
-  if Assigned(TGarbageCollector.Instance) then
-    TGarbageCollector.Instance.PinObject(FPrototypeMethodHost);
+  Members := TGocciaMemberCollection.Create;
+  try
+    Members.AddMethod(MethodHost.ObjectPrototypeToString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(MethodHost.ObjectPrototypeHasOwnProperty, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(MethodHost.ObjectPrototypeIsPrototypeOf, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(MethodHost.ObjectPrototypePropertyIsEnumerable, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(MethodHost.ObjectPrototypeToLocaleString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(MethodHost.ObjectPrototypeValueOf, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    PrototypeMembers := Members.ToDefinitions;
+  finally
+    Members.Free;
+  end;
+  PrototypeMembers[0].ExposedName := PROP_TO_STRING;
+  PrototypeMembers[1].ExposedName := 'hasOwnProperty';
+  PrototypeMembers[2].ExposedName := PROP_IS_PROTOTYPE_OF;
+  PrototypeMembers[3].ExposedName := PROP_PROPERTY_IS_ENUMERABLE;
+  PrototypeMembers[4].ExposedName := PROP_TO_LOCALE_STRING;
+  PrototypeMembers[5].ExposedName := PROP_VALUE_OF;
+  RegisterMemberDefinitions(SharedPrototype, PrototypeMembers);
 end;
 
 destructor TGocciaObjectValue.Destroy;
@@ -1922,7 +1912,7 @@ begin
 end;
 
 initialization
-  RegisterThreadvarCleanup(@ClearThreadvarMembers);
   GObjectPrototypeSlot := RegisterRealmSlot('Object.prototype');
+  GObjectMethodHostSlot := RegisterRealmSlot('Object.prototype.methodHost');
 
 end.

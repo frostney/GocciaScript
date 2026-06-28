@@ -102,7 +102,6 @@ uses
   Goccia.GarbageCollector,
   Goccia.Realm,
   Goccia.RegExp.Runtime,
-  Goccia.ThreadCleanupRegistry,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
@@ -114,19 +113,13 @@ uses
   Goccia.Values.SymbolValue,
   Goccia.Values.ToObject;
 
-// String.prototype lives in a per-realm slot.  Method host and member
-// definitions stay process-wide (immutable across realms).
+// String.prototype lives in a per-realm slot and is its own method host: the
+// prototype instance (Self in InitializePrototype) backs the native methods.
+// The realm pins it on SetSlot and unpins it on Destroy, so there is no
+// per-thread pin outliving the realm; the member definitions are rebuilt per
+// realm because they bind to this realm's prototype instance. #892
 var
   GStringPrototypeSlot: TGocciaRealmSlotId;
-
-threadvar
-  FPrototypeMethodHost: TGocciaStringObjectValue;
-  FPrototypeMembers: TArray<TGocciaMemberDefinition>;
-
-procedure ClearThreadvarMembers;
-begin
-  SetLength(FPrototypeMembers, 0);
-end;
 
 function GetSharedStringPrototype: TGocciaObjectValue; inline;
 begin
@@ -650,69 +643,65 @@ end;
 procedure TGocciaStringObjectValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
+  PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
   if not Assigned(CurrentRealm) then Exit;
   if Assigned(GetSharedStringPrototype) then Exit;
 
+  // Self is both the String.prototype object (held in the realm slot below) and
+  // the method host the native methods bind to, so the realm slot already keeps
+  // it alive and unpins it on Destroy — no separate host pin needed. #892
   CurrentRealm.SetSlot(GStringPrototypeSlot, Self);
-  FPrototypeMethodHost := Self;
-  if Length(FPrototypeMembers) = 0 then
-  begin
-    Members := TGocciaMemberCollection.Create;
-    try
-      Members.AddAccessor(PROP_LENGTH, StringLength, nil, []);
-      Members.AddMethod(StringCharAt, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(StringCharCodeAt, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(StringToUpperCase, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(StringToLowerCase, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('toLocaleUpperCase', StringToLocaleUpperCase, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('toLocaleLowerCase', StringToLocaleLowerCase, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(StringSlice, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('substr', StringSubstr, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(StringSubstring, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(StringIndexOf, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(StringLastIndexOf, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(StringIncludes, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(StringStartsWith, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(StringEndsWith, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(StringTrim, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(StringTrimStart, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(StringTrimEnd, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('replace', StringReplaceMethod, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('replaceAll', StringReplaceAllMethod, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(StringSplit, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(StringMatch, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(StringMatchAll, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(StringSearch, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(StringRepeat, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(StringPadStart, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(StringPadEnd, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(StringConcat, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(StringAt, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(StringValueOf, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(StringToString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(StringCodePointAt, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(StringLocaleCompare, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(StringNormalize, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(StringIsWellFormed, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(StringToWellFormed, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddSymbolMethod(
-        TGocciaSymbolValue.WellKnownIterator,
-        '[Symbol.iterator]',
-        StringSymbolIterator,
-        0,
-        [pfConfigurable, pfWritable]);
-      FPrototypeMembers := Members.ToDefinitions;
-    finally
-      Members.Free;
-    end;
-  end;
-  RegisterMemberDefinitions(Self, FPrototypeMembers);
 
-  // SharedPrototype is pinned through the realm slot.  Pin the host directly
-  // since it's a process-wide singleton.
-  if Assigned(TGarbageCollector.Instance) then
-    TGarbageCollector.Instance.PinObject(FPrototypeMethodHost);
+  Members := TGocciaMemberCollection.Create;
+  try
+    Members.AddAccessor(PROP_LENGTH, StringLength, nil, []);
+    Members.AddMethod(StringCharAt, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(StringCharCodeAt, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(StringToUpperCase, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(StringToLowerCase, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod('toLocaleUpperCase', StringToLocaleUpperCase, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod('toLocaleLowerCase', StringToLocaleLowerCase, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(StringSlice, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod('substr', StringSubstr, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(StringSubstring, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(StringIndexOf, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(StringLastIndexOf, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(StringIncludes, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(StringStartsWith, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(StringEndsWith, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(StringTrim, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(StringTrimStart, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(StringTrimEnd, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod('replace', StringReplaceMethod, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod('replaceAll', StringReplaceAllMethod, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(StringSplit, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(StringMatch, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(StringMatchAll, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(StringSearch, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(StringRepeat, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(StringPadStart, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(StringPadEnd, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(StringConcat, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(StringAt, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(StringValueOf, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(StringToString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(StringCodePointAt, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(StringLocaleCompare, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(StringNormalize, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(StringIsWellFormed, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(StringToWellFormed, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddSymbolMethod(
+      TGocciaSymbolValue.WellKnownIterator,
+      '[Symbol.iterator]',
+      StringSymbolIterator,
+      0,
+      [pfConfigurable, pfWritable]);
+    PrototypeMembers := Members.ToDefinitions;
+  finally
+    Members.Free;
+  end;
+  RegisterMemberDefinitions(Self, PrototypeMembers);
 end;
 
 class function TGocciaStringObjectValue.GetSharedPrototype: TGocciaObjectValue;
@@ -2200,7 +2189,6 @@ begin
 end;
 
 initialization
-  RegisterThreadvarCleanup(@ClearThreadvarMembers);
   GStringPrototypeSlot := RegisterRealmSlot('String.prototype');
 
 end.

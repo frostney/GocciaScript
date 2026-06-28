@@ -124,6 +124,7 @@ uses
   Goccia.Error,
   Goccia.Keywords.Reserved,
   Goccia.Modules,
+  Goccia.ThreadCleanupRegistry,
   Goccia.Token,
   Goccia.Types.Enforcement,
   Goccia.Values.Primitives;
@@ -214,6 +215,12 @@ procedure EmitGlobalDefinesForPattern(const ACtx: TGocciaCompilationContext;
   const AIsVar: Boolean; const AHasInitializer: Boolean); forward;
 
 threadvar
+  // GBreakJumps/GContinueJumps are created and freed within
+  // BeginLoopControl/EndLoopControl; GPendingFinally is save/restored and freed
+  // via Save/RestorePendingFinally — all nil at rest, so no thread-exit leak.
+  // GLabelControls is a lazily-created container reused across compilations and
+  // never freed otherwise; it is released at thread teardown (see
+  // ClearCompilerWorkingState, #892).
   GBreakJumps: TList<Integer>;
   GContinueJumps: TList<Integer>;
   GPendingFinally: TList<TPendingFinallyEntry>;
@@ -1114,6 +1121,11 @@ end;
 threadvar
   // Module-level stack of using resource entries for the current block.
   // Populated by CompileUsingDeclaration, consumed by CompileBlockStatement.
+  // GUsingResources is a lazily-created container reused across compilations and
+  // never freed otherwise (its entries are balanced/emptied during a compile);
+  // it is released at thread teardown (see ClearCompilerWorkingState, #892).
+  // GPreallocatedUsingDisposeSlots is save/restored and freed per switch
+  // statement, so it is nil at rest.
   GUsingResources: TList<TUsingResourceEntry>;
   GPreallocatedUsingDisposeSlots: TList<TPreallocatedUsingDisposeSlot>;
 
@@ -6955,5 +6967,21 @@ begin
   GPendingFinally.Free;
   GPendingFinally := TList<TPendingFinallyEntry>(ASaved);
 end;
+
+// FPC does not auto-finalize object-reference threadvars at thread exit. The
+// compiler's GUsingResources and GLabelControls list containers are created
+// lazily and reused across every compilation on the thread (their entries are
+// balanced during a compile, but the container objects themselves outlive it),
+// so they leak one container per thread unless released explicitly. Registered
+// with Goccia.ThreadCleanupRegistry so they are freed on both the worker-exit
+// and main-thread-finalization paths. #892
+procedure ClearCompilerWorkingState;
+begin
+  FreeAndNil(GUsingResources);
+  FreeAndNil(GLabelControls);
+end;
+
+initialization
+  RegisterThreadvarCleanup(@ClearCompilerWorkingState);
 
 end.

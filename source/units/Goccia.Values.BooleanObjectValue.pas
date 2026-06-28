@@ -36,25 +36,18 @@ type
 implementation
 
 uses
-  Goccia.GarbageCollector,
   Goccia.Realm,
-  Goccia.ThreadCleanupRegistry,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ToObject;
 
-// Boolean.prototype lives in a per-realm slot.  Method host and member
-// definitions stay process-wide (immutable across realms).
+// Boolean.prototype lives in a per-realm slot.  Its method host (Self in
+// InitializePrototype) lives in its own per-realm slot too, so the realm pins it
+// on SetSlot and unpins it on Destroy rather than keeping a per-thread pin for
+// the process lifetime; the member definitions are rebuilt per realm because
+// they bind to this realm's host. #892
 var
   GBooleanPrototypeSlot: TGocciaRealmSlotId;
-
-threadvar
-  FPrototypeMethodHost: TGocciaBooleanObjectValue;
-  FPrototypeMembers: TArray<TGocciaMemberDefinition>;
-
-procedure ClearThreadvarMembers;
-begin
-  SetLength(FPrototypeMembers, 0);
-end;
+  GBooleanMethodHostSlot: TGocciaRealmSlotId;
 
 function GetSharedBooleanPrototype: TGocciaObjectValue; inline;
 begin
@@ -93,30 +86,25 @@ procedure TGocciaBooleanObjectValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
   SharedPrototype: TGocciaObjectValue;
+  PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
   if not Assigned(CurrentRealm) then Exit;
   if Assigned(GetSharedBooleanPrototype) then Exit;
 
   SharedPrototype := TGocciaObjectValue.Create;
   CurrentRealm.SetSlot(GBooleanPrototypeSlot, SharedPrototype);
-  FPrototypeMethodHost := Self;
-  if Length(FPrototypeMembers) = 0 then
-  begin
-    Members := TGocciaMemberCollection.Create;
-    try
-      Members.AddMethod(BooleanValueOf, 0);
-      Members.AddMethod(BooleanToString, 0);
-      FPrototypeMembers := Members.ToDefinitions;
-    finally
-      Members.Free;
-    end;
+  // The native methods below bind to this instance (Self); keep it alive for the
+  // realm's lifetime in its own slot so the realm unpins it on Destroy. #892
+  CurrentRealm.SetSlot(GBooleanMethodHostSlot, Self);
+  Members := TGocciaMemberCollection.Create;
+  try
+    Members.AddMethod(BooleanValueOf, 0);
+    Members.AddMethod(BooleanToString, 0);
+    PrototypeMembers := Members.ToDefinitions;
+  finally
+    Members.Free;
   end;
-  RegisterMemberDefinitions(SharedPrototype, FPrototypeMembers);
-
-  // SharedPrototype pinned via realm slot; method host pinned directly
-  // because it's a process-wide singleton.
-  if Assigned(TGarbageCollector.Instance) then
-    TGarbageCollector.Instance.PinObject(FPrototypeMethodHost);
+  RegisterMemberDefinitions(SharedPrototype, PrototypeMembers);
 end;
 
 function TGocciaBooleanObjectValue.GetProperty(const AName: string): TGocciaValue;
@@ -172,7 +160,7 @@ begin
 end;
 
 initialization
-  RegisterThreadvarCleanup(@ClearThreadvarMembers);
   GBooleanPrototypeSlot := RegisterRealmSlot('Boolean.prototype');
+  GBooleanMethodHostSlot := RegisterRealmSlot('Boolean.prototype.methodHost');
 
 end.
