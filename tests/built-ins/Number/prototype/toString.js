@@ -128,6 +128,12 @@ describe("Number.prototype.toString", () => {
     expect("" + 1e20).toBe("100000000000000000000");
     expect("" + 1e21).toBe("1e+21");
   });
+
+  test("String, template, and concatenation coercion share the non-integer shortest round-trip", () => {
+    expect(String(0.1 + 0.2)).toBe("0.30000000000000004");
+    expect(`${0.1 + 0.2}`).toBe("0.30000000000000004");
+    expect("" + Math.PI).toBe("3.141592653589793");
+  });
 });
 
 describe("Number.prototype.toString non-finite radix", () => {
