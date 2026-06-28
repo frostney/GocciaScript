@@ -1093,12 +1093,26 @@ end;
 function IsSupportedCanonicalTimeZoneIdentifier(const ATimeZone: string): Boolean;
 var
   AvailableTimeZones: TTemporalTimeZoneIdentifierArray;
-  Index: Integer;
+  Low, High, Mid, Cmp: Integer;
 begin
+  // GetAvailablePrimaryTimeZoneIdentifiers returns a list sorted ascending by
+  // CompareStr (see SortTimeZoneIdentifiers). Probe it with a binary search
+  // instead of an O(n) scan: this runs on every ZonedDateTime time-zone
+  // canonicalization, and the available-zone list has several hundred entries.
   AvailableTimeZones := GetAvailablePrimaryTimeZoneIdentifiers;
-  for Index := 0 to Length(AvailableTimeZones) - 1 do
-    if AvailableTimeZones[Index] = ATimeZone then
-      Exit(True);
+  Low := 0;
+  High := Length(AvailableTimeZones) - 1;
+  while Low <= High do
+  begin
+    Mid := Low + (High - Low) div 2;
+    Cmp := CompareStr(AvailableTimeZones[Mid], ATimeZone);
+    if Cmp = 0 then
+      Exit(True)
+    else if Cmp < 0 then
+      Low := Mid + 1
+    else
+      High := Mid - 1;
+  end;
 
   Result := False;
 end;

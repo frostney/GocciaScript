@@ -97,6 +97,10 @@ type
     procedure Clear; override;
 
     function GetEnumerator: TEnumerator; inline;
+    // Random-access lookup by active-entry position: O(AIndex), since it scans
+    // active entries from the start. For sequential iteration use the enumerator
+    // (`for Pair in Map do`); driving EntryAt from a `for I := 0 to Count - 1`
+    // loop re-scans the prefix on every call and is O(Count^2).
     function EntryAt(AIndex: Integer): TBaseMap<TKey, TValue>.TKeyValuePair;
 
     // Number of physical entry slots, including tombstones — the upper bound of
