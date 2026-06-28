@@ -119,7 +119,7 @@ Use `FormatDouble` (from `Goccia.Values.Primitives`) for any float-to-string con
 Result := FloatToStr(AValue);
 Result := FormatFloat('0.###', AValue);
 
-// Correct — ES2026 §6.1.6.1.13 Number::toString, always uses '.'
+// Correct — ES2026 §6.1.6.1.20 Number::toString, always uses '.'
 Result := FormatDouble(AValue);
 
 // Correct — formatted output with invariant decimal separator
