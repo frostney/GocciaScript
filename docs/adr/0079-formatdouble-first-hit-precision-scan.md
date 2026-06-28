@@ -3,6 +3,7 @@
 **Date:** 2026-06-28
 **Area:** `engine`
 **Issue:** [#812](https://github.com/frostney/GocciaScript/issues/812)
+**Pull Request:** [#899](https://github.com/frostney/GocciaScript/pull/899)
 
 `FormatDouble` (`Goccia.Values.Primitives`) implements ES2026 §6.1.6.1.20 `Number::toString` for the non-integer case by finding the shortest decimal that round-trips: it scans the `Str(V:W)` precision width `W` from 9 (2 significant digits) to 24 (17 significant digits) and takes the **first** width whose output parses back to the original double. The normative step requires `k` (the digit count) to be "as small as possible", so the shortest representation is a conformance requirement, not a quality-of-implementation nicety. This path backs `Number.prototype.toString`, `String(x)`, template interpolation, property-key stringification, and `JSON.stringify` of floats; `toFixed`/`toExponential`/`toPrecision` use a separate `FormatDoubleToPrecision` path and are unaffected.
 
