@@ -250,6 +250,34 @@ describe("Date methods", () => {
     }
   });
 
+  test("slot-requiring methods reject a plain non-Date object receiver", () => {
+    const slotMethods = [
+      "getTime",
+      "valueOf",
+      "getFullYear",
+      "getUTCFullYear",
+      "getTimezoneOffset",
+      "setTime",
+      "setFullYear",
+      "toISOString",
+      "toString",
+    ];
+
+    for (const method of slotMethods) {
+      const fn = Date.prototype[method];
+      expect(() => fn.call({})).toThrow(TypeError);
+      expect(() => fn.call(Object.create(Date.prototype))).toThrow(TypeError);
+    }
+  });
+
+  test("constructor reads the time value from a Date argument and clips numbers", () => {
+    const source = new Date(1718451045123);
+    expect(new Date(source).getTime()).toBe(1718451045123);
+    expect(new Date(2000).getTime()).toBe(2000);
+    expect(Number.isNaN(new Date(NaN).getTime())).toBe(true);
+    expect(Number.isNaN(new Date(NaN).getTimezoneOffset())).toBe(true);
+  });
+
   test("toJSON remains generic for object receivers", () => {
     const receiver = {
       valueOf() { return 1; },
