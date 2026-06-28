@@ -5857,18 +5857,16 @@ begin
   end
   else
   begin
-    for I := 0 to AClassDef.InstanceProperties.Count - 1 do
+    for Entry in AClassDef.InstanceProperties do
     begin
-      Entry := AClassDef.InstanceProperties.EntryAt(I);
       ValReg := ChildScope.AllocateRegister;
       ACtx.CompileExpression(Entry.Value, ValReg);
       EmitDefineStaticPropertyByName(ChildCtx, ThisReg, ValReg, Entry.Key);
       ChildScope.FreeRegister;
     end;
 
-    for I := 0 to AClassDef.PrivateInstanceProperties.Count - 1 do
+    for Entry in AClassDef.PrivateInstanceProperties do
     begin
-      Entry := AClassDef.PrivateInstanceProperties.EntryAt(I);
       ValReg := ChildScope.AllocateRegister;
       ACtx.CompileExpression(Entry.Value, ValReg);
       EmitDefineStaticPropertyByName(ChildCtx, ThisReg, ValReg,

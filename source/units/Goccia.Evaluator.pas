@@ -7590,9 +7590,8 @@ begin
   end
   else
   begin
-    for I := 0 to AClassValue.InstancePropertyDefs.Count - 1 do
+    for Entry in AClassValue.InstancePropertyDefs do
     begin
-      Entry := AClassValue.InstancePropertyDefs.EntryAt(I);
       PropertyValue := EvaluateExpression(Entry.Value, LocalContext);
       AInstance.AssignProperty(Entry.Key, PropertyValue);
     end;
@@ -7675,9 +7674,8 @@ begin
   end
   else
   begin
-    for I := 0 to AClassValue.InstancePropertyDefs.Count - 1 do
+    for Entry in AClassValue.InstancePropertyDefs do
     begin
-      Entry := AClassValue.InstancePropertyDefs.EntryAt(I);
       PropertyValue := EvaluateExpression(Entry.Value, AContext);
       AInstance.AssignProperty(Entry.Key, PropertyValue);
     end;
@@ -8849,18 +8847,12 @@ begin
   end;
 
   // Store instance property definitions on the class in declaration order
-  for I := 0 to AClassDef.InstanceProperties.Count - 1 do
-  begin
-    PropertyEntry := AClassDef.InstanceProperties.EntryAt(I);
+  for PropertyEntry in AClassDef.InstanceProperties do
     ClassValue.AddInstanceProperty(PropertyEntry.Key, PropertyEntry.Value);
-  end;
 
   // Store private instance property definitions on the class in declaration order
-  for I := 0 to AClassDef.PrivateInstanceProperties.Count - 1 do
-  begin
-    PropertyEntry := AClassDef.PrivateInstanceProperties.EntryAt(I);
+  for PropertyEntry in AClassDef.PrivateInstanceProperties do
     ClassValue.AddPrivateInstanceProperty(PropertyEntry.Key, PropertyEntry.Value);
-  end;
 
   if Length(AClassDef.FElements) = 0 then
   begin
@@ -10440,11 +10432,9 @@ procedure InitializePrivateInstanceProperties(const AInstance: TGocciaObjectValu
 var
   PropertyValue: TGocciaValue;
   Entry: TGocciaExpressionMap.TKeyValuePair;
-  I: Integer;
 begin
-  for I := 0 to AClassValue.PrivateInstancePropertyDefs.Count - 1 do
+  for Entry in AClassValue.PrivateInstancePropertyDefs do
   begin
-    Entry := AClassValue.PrivateInstancePropertyDefs.EntryAt(I);
     if Assigned(Entry.Value) then
       PropertyValue := EvaluateExpression(Entry.Value, AContext)
     else
