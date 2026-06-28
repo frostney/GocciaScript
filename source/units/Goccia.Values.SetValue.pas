@@ -771,14 +771,18 @@ begin
     if ThisSet.Count <= OtherRecord.Size then
     begin
       // Step 5/6: resultSetData is a copy of O.[[SetData]]; remove members that
-      // are in other. The spec operates on that copy, so iterate a snapshot
-      // taken before any SetRecordHas callback runs (§24.2.4.5) — mutations to O
-      // during the callback do not affect the result.
+      // are in other. Copy into the temp-rooted ResultSet first so the snapshot
+      // members stay reachable even if a SetRecordHas callback deletes one from
+      // O and triggers a GC, then remove those present in other (§24.2.4.5).
+      // Operating on the copy also means mutations to O during the callback do
+      // not affect the result.
       Snapshot := SnapshotSetItems(ThisSet);
       for I := 0 to High(Snapshot) do
-        // Step 6a: If e is not in other, keep it.
-        if not SetRecordHas(OtherRecord, Snapshot[I]) then
-          ResultSet.AddItem(Snapshot[I]);
+        ResultSet.AddItem(Snapshot[I]);
+      for I := 0 to High(Snapshot) do
+        // Step 6a: If e is in other, remove it from the result.
+        if SetRecordHas(OtherRecord, Snapshot[I]) then
+          RemoveSetItem(ResultSet, Snapshot[I]);
     end
     else
     begin
