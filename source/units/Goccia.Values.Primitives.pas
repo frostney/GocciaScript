@@ -303,13 +303,13 @@ begin
   // monotonic in W. The first hit is still the shortest and spec-correct, but a
   // binary search can converge above it and emit a non-shortest string,
   // violating "k as small as possible" in ES2026 Number::toString. See
-  // docs/adr/0079-formatdouble-first-hit-precision-scan.md.
+  // docs/adr/0080-formatdouble-first-hit-precision-scan.md.
   //
   // Each probe reads Str into a fixed ShortString and parses with the
   // locale-free Val instead of Trim + TryStrToFloat. Val selects the same width
   // here (verified byte-for-byte over 74.9M doubles) while avoiding both the
   // per-iteration heap allocation and the TFormatSettings scan; this is ~1.4x
-  // faster end-to-end on float-stringify-heavy workloads (see ADR 0079).
+  // faster end-to-end on float-stringify-heavy workloads (see ADR 0080).
   for W := 9 to 24 do
   begin
     Str(AValue:W, Buf);

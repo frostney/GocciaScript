@@ -97,6 +97,11 @@ type
     destructor Destroy; override;
     function CreateCheckpoint: TGocciaLexerCheckpoint;
     procedure RestoreCheckpoint(const ACheckpoint: TGocciaLexerCheckpoint);
+    // True when a token at or after ACount is goal-sensitive ('/' or a
+    // template-tail '}'), i.e. when a speculative scan's look-ahead tokens
+    // cannot be reused and must be re-lexed under the parser's real goal
+    // (issue #808).
+    function HasGoalSensitiveTokenSince(const ACount: Integer): Boolean;
     function ScanNextToken(const ALexicalGoal: TGocciaLexicalGoal): TGocciaToken;
     property ScanTimeNanoseconds: Int64 read FScanTimeNanoseconds;
     property Tokens: TObjectList<TGocciaToken> read FTokens;
@@ -298,6 +303,40 @@ begin
 
   while FTokens.Count > ACheckpoint.TokenCount do
     FTokens.Delete(FTokens.Count - 1);
+end;
+
+// Whether any token at or after index ACount is goal-sensitive — would be
+// classified differently under another lexical goal — so the speculative
+// parenthesized-group scans (TGocciaParser) must drop their look-ahead tokens
+// and let the real parse re-lex them, rather than reuse them (issue #808).
+//
+// Only two lexer branches depend on the goal:
+//   * '/' — a regex literal (gttRegex) vs a division operator (gttSlash /
+//     gttSlashAssign); always goal-sensitive.
+//   * a '}' that closes a `${...}` template substitution — gttTemplateMiddle /
+//     gttTemplateTail under the template-tail goal vs an ordinary gttRightBrace
+//     otherwise. A probe scans a template's opener (gttTemplateHead) before
+//     reaching its closer, so a '}' only matters once a substitution is open;
+//     object, block, and destructuring braces with no template in scope stay
+//     reusable.
+function TGocciaLexer.HasGoalSensitiveTokenSince(
+  const ACount: Integer): Boolean;
+var
+  I: Integer;
+  InTemplateSubstitution: Boolean;
+begin
+  InTemplateSubstitution := False;
+  for I := ACount to FTokens.Count - 1 do
+    case FTokens[I].TokenType of
+      gttRegex, gttSlash, gttSlashAssign:
+        Exit(True);
+      gttTemplateHead, gttTemplateMiddle:
+        InTemplateSubstitution := True;
+      gttRightBrace, gttTemplateTail:
+        if InTemplateSubstitution then
+          Exit(True);
+    end;
+  Result := False;
 end;
 
 function TGocciaLexer.GetSourceLines: TStringList;

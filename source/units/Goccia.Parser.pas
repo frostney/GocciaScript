@@ -2897,7 +2897,12 @@ function TGocciaParser.IsMatchExpressionAhead: Boolean;
       end;
     finally
       FCurrent := SavedCurrent;
-      if Assigned(FLexer) then
+      // Keep the speculatively-scanned tokens cached on the normal path. Drop
+      // them (rewinding the lexer) only when a lex error means the group is
+      // retried under the other goal, or when a goal-sensitive token was
+      // scanned and must be re-lexed under the parser's real goal (issue #808).
+      if Assigned(FLexer) and
+        (ALexError or FLexer.HasGoalSensitiveTokenSince(SavedLexer.TokenCount)) then
         FLexer.RestoreCheckpoint(SavedLexer);
     end;
   end;
@@ -5478,7 +5483,12 @@ function TGocciaParser.LooksLikeTraditionalForHeader: Boolean;
       end;
     finally
       FCurrent := SavedCurrent;
-      if Assigned(FLexer) then
+      // Keep the speculatively-scanned tokens cached on the normal path. Drop
+      // them (rewinding the lexer) only when a lex error means the group is
+      // retried under the other goal, or when a goal-sensitive token was
+      // scanned and must be re-lexed under the parser's real goal (issue #808).
+      if Assigned(FLexer) and
+        (ALexError or FLexer.HasGoalSensitiveTokenSince(SavedLexer.TokenCount)) then
         FLexer.RestoreCheckpoint(SavedLexer);
     end;
   end;
@@ -7454,7 +7464,12 @@ var
   ParenCount: Integer;
   CurrentType: TGocciaTokenType;
 begin
-  // Save current position for rollback
+  // Probe the parenthesized group for an arrow, then rewind the parser cursor.
+  // The tokens scanned here are kept for the real parse to reuse instead of
+  // being re-lexed — unless the probe scanned a goal-sensitive token ('/' or a
+  // template-tail '}'), in which case they are dropped and re-lexed under the
+  // real goal (issue #808). This probe scans under InputElementDiv only and
+  // never catches lexer errors — a lex error here is a genuine syntax error.
   SavedCurrent := FCurrent;
   if Assigned(FLexer) then
     SavedLexer := FLexer.CreateCheckpoint;
@@ -7560,7 +7575,12 @@ begin
     Result := CheckWithLexicalGoal(gttArrow, glgInputElementDiv);
   finally
     FCurrent := SavedCurrent;
-    if Assigned(FLexer) then
+    // Keep the probe's look-ahead tokens cached unless one of them is
+    // goal-sensitive (a '/' or template-tail scanned under the probe's Div
+    // goal), in which case drop them so the real parse re-lexes under the
+    // correct goal (issue #808).
+    if Assigned(FLexer) and
+      FLexer.HasGoalSensitiveTokenSince(SavedLexer.TokenCount) then
       FLexer.RestoreCheckpoint(SavedLexer);
   end;
 end;

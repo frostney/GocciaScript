@@ -88,4 +88,5 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0076 — Same-runner benchmark comparison](0076-same-runner-benchmark-comparison.md)
 - [0077 — SameValueZero-keyed ordered store for Map and Set](0077-samevaluezero-ordered-collections.md)
 - [0078 — Thread-local cleanup registry for managed threadvars](0078-thread-local-cleanup-registry.md)
-- [0079 — FormatDouble first-hit precision scan](0079-formatdouble-first-hit-precision-scan.md)
+- [0079 — Keep speculatively-scanned tokens across parenthesized-group probes](0079-keep-speculatively-scanned-tokens.md)
+- [0080 — FormatDouble first-hit precision scan](0080-formatdouble-first-hit-precision-scan.md)
