@@ -416,23 +416,18 @@ end;
 
 procedure TTestThreading.TestThreadCleanupRegistryRunsRegistered;
 begin
-  // A nil callback is ignored (no crash, nothing registered).
-  RegisterThreadvarCleanup(nil);
+  // SentinelCleanup and SentinelCleanupSecond are registered once at startup
+  // (see the program body), honouring RegisterThreadvarCleanup's
+  // write-once-at-init contract. A nil callback was also registered there and
+  // must be ignored — otherwise the drain below would call a nil pointer.
 
-  // A registered callback runs when the registry is drained.
-  GSentinelCount := 0;
-  RegisterThreadvarCleanup(@SentinelCleanup);
-  RunThreadvarCleanups;
-  Expect<Integer>(GSentinelCount).ToBe(1);
-
-  // Draining again is safe and re-runs the callback (repeatable on any thread).
+  // Draining runs every registered callback (both sentinels, nil skipped).
   GSentinelCount := 0;
   RunThreadvarCleanups;
-  Expect<Integer>(GSentinelCount).ToBe(1);
+  Expect<Integer>(GSentinelCount).ToBe(2);
 
-  // Every registered callback runs, not just the first.
+  // Draining again is safe and re-runs them (repeatable on any thread).
   GSentinelCount := 0;
-  RegisterThreadvarCleanup(@SentinelCleanupSecond);
   RunThreadvarCleanups;
   Expect<Integer>(GSentinelCount).ToBe(2);
 end;
@@ -445,10 +440,10 @@ var
   Files: TStringList;
   Host: TTestWorkerHost;
 begin
+  // SentinelWorkerCleanup is registered once at startup (see the program body).
   // Each worker thread calls ShutdownThreadRuntime as it exits, which drains the
   // registry on that thread. With WORKER_COUNT workers, the registered callback
   // must fire exactly WORKER_COUNT times — proving the per-worker-exit wiring.
-  RegisterThreadvarCleanup(@SentinelWorkerCleanup);
   GSentinelWorkerCount := 0;
 
   ResetWorkerState;
@@ -480,6 +475,13 @@ begin
   TGarbageCollector.Initialize;
   PinPrimitiveSingletons;
   InitCriticalSection(GWorkerLock);
+  // Register the cleanup sentinels once here, before any worker thread is
+  // spawned, honouring RegisterThreadvarCleanup's write-once-at-init contract.
+  // The nil registration must be ignored (a nil callback would crash the drain).
+  RegisterThreadvarCleanup(nil);
+  RegisterThreadvarCleanup(@SentinelCleanup);
+  RegisterThreadvarCleanup(@SentinelCleanupSecond);
+  RegisterThreadvarCleanup(@SentinelWorkerCleanup);
   try
     TestRunnerProgram.AddSuite(TTestThreading.Create('Threading'));
     TestRunnerProgram.Run;
