@@ -1067,10 +1067,11 @@ end;
 // so the hit check is O(1). Pure optimization — clearing it is always safe.
 // Single-entry: a different subject replaces the retained pair via managed
 // assignment (the prior string/array is released, so the cache never grows).
-// FPC does not auto-finalize managed threadvars at thread exit, so the unit
-// finalization below clears the main-thread memo on shutdown; a worker thread's
-// last-held pair is a bounded residual, the same as the engine's other managed
-// threadvars (e.g. each builtin's FStaticMembers).
+// FPC does not auto-finalize managed threadvars at thread exit. ClearRegExpInputMemo
+// is registered with Goccia.ThreadCleanupRegistry from this unit's initialization,
+// so the registry drain releases each thread's pair on worker exit
+// (ShutdownThreadRuntime) and the main thread's on process shutdown (the
+// registry's finalization) — no thread retains a residual.
 threadvar
   GRegExpInputMemoStr: string;
   GRegExpInputMemoUnits: array of Cardinal;
