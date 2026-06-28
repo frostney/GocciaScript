@@ -27,6 +27,64 @@ test("regex literals coexist with division expressions", () => {
   expect(8 / 2).toBe(4);
 });
 
+test("regex literals are recognized as the first token inside parentheses", () => {
+  expect((/ab+c/.test("abbbc"))).toBe(true);
+  expect((/x/).source).toBe("x");
+});
+
+test("regex literals are recognized after a comma inside parentheses", () => {
+  expect((0, /x/.source)).toBe("x");
+});
+
+test("division is recognized inside and after parenthesized groups", () => {
+  const a = 10;
+  const b = 2;
+  const c = 5;
+
+  expect((a / b / c)).toBe(1);
+  expect((a) / b).toBe(5);
+  expect(((a - 0)) / b).toBe(5);
+  expect(({ v: a / b }).v).toBe(5);
+});
+
+test("regex literals work as arrow default parameter values", () => {
+  const sourceOf = (re = /\d+/) => re.source;
+
+  expect(sourceOf()).toBe("\\d+");
+  expect(sourceOf(/ab/).length).toBe(2);
+});
+
+test("arrow bodies can return division expressions", () => {
+  const half = (x) => x / 2;
+  const ratio = (x, y) => x / y;
+
+  expect(half(10)).toBe(5);
+  expect(ratio(20, 4)).toBe(5);
+});
+
+test("deeply nested parenthesized arrows and groups disambiguate", () => {
+  const inc = ((((q) => q + 1)));
+
+  expect(inc(41)).toBe(42);
+  expect(((((7))))).toBe(7);
+});
+
+test("callback chains with division bodies parse and run", () => {
+  const out = [1, 2, 3, 4].map((n) => n / 2).filter((n) => n > 1);
+
+  expect(out.join(",")).toBe("1.5,2");
+});
+
+test("object and destructuring arrow parameters coexist with division", () => {
+  const fromPattern = ({ a, b }) => a / b;
+  const fromDefault = (x = { n: 8 }) => x.n / 2;
+  const nested = ({ a, b: { c } }) => a / c;
+
+  expect(fromPattern({ a: 10, b: 2 })).toBe(5);
+  expect(fromDefault()).toBe(4);
+  expect(nested({ a: 12, b: { c: 4 } })).toBe(3);
+});
+
 test("regex literals throw SyntaxError for duplicate flags", () => {
   expect(() => {
     new RegExp("a", "gg");

@@ -132,4 +132,23 @@ describe("template interpolation regex literal scanning", () => {
     const x = `${total / 2}`;
     expect(x).toBe("5");
   });
+
+  test("template interpolation inside a parenthesized expression", () => {
+    const x = 7;
+
+    expect((`v=${x + 1}`)).toBe("v=8");
+    expect((`a${1 + 2}b${3 + 4}c`)).toBe("a3b7c");
+  });
+
+  test("template interpolation inside a nested parenthesized group", () => {
+    const x = 7;
+
+    expect((((`n=${x / 2}`)))).toBe("n=3.5");
+  });
+
+  test("regex and template interpolation together inside parentheses", () => {
+    const x = 2;
+
+    expect((/ab/.test("ab") ? `y=${x / 2}` : "n")).toBe("y=1");
+  });
 });

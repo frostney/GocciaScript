@@ -5,7 +5,7 @@
 ## Executive Summary
 
 - **Three testing layers** — JavaScript end-to-end tests (primary), CLI behavior tests (secondary), Pascal unit tests (tertiary)
-- **Syntax failures live at the CLI layer** — Parse and early-error checks belong in CLI tests, not in runtime JS tests via dynamic code execution
+- **Valid code → `tests/`; rejected code → `scripts/test-cli-*.ts`** — JavaScript tests assert valid code runs and returns the right result; parser/lexer **rejection** (SyntaxError, caret, error envelope) belongs in `scripts/test-cli-parser.ts` / `test-cli-lexer.ts`, because with no `eval`/`Function` a parse error cannot be asserted from inside a JS test
 - **Built-in test framework** — `describe`/`test`/`expect` with async support, mock functions, lifecycle hooks, and Vitest-compatible matchers
 - **One method per file** — Each test file focuses on a single method; edge cases are co-located with happy-path tests
 - **Run with**: `./build.pas testrunner`, `./build/GocciaTestRunner tests`, and `./build/GocciaTestRunner tests --mode=bytecode`
@@ -13,15 +13,19 @@
 GocciaScript uses three testing layers in priority order:
 
 1. **JavaScript end-to-end tests (primary)** -- `.js` tests in `tests/` that exercise the full pipeline through the same public surface that users call. CI runs the full suite in both **interpreter mode** and **bytecode mode**. Every new feature or bug fix should include tests at this layer.
-2. **CLI behavior tests (CI integration)** -- Shell-level checks in `.github/workflows/pr.yml` that verify `GocciaScriptLoader`, `GocciaTestRunner`, and `GocciaBenchmarkRunner` CLI behavior: JSON output structure, coverage CLI (console summary, lcov, JSON, branch coverage), error display (source context, caret, suggestions), numeric separator rejection, source map generation, stdin smoke tests, timeout handling, global injection, and benchmark output format.
+2. **CLI behavior tests (CI integration)** -- Standalone bun scripts under `scripts/test-cli-*.ts` (`test-cli.ts`, `test-cli-lexer.ts`, `test-cli-parser.ts`, `test-cli-config.ts`, `test-cli-apps.ts`, `test-cli-embedded-resources.ts`) that the PR and main workflows run via `bun run` in the `cli` job. They invoke `GocciaScriptLoader`, `GocciaTestRunner`, and `GocciaBenchmarkRunner` as subprocesses and assert on exit codes, output structure, and error envelopes — above all **parser/lexer rejection** that a JS test cannot express (malformed source must fail with a `SyntaxError`, caret, suggestion, and JSON `error` envelope, in both modes), plus JSON output structure, coverage CLI, source maps, numeric separator rejection, timeout handling, global injection, and config loading.
 3. **Pascal unit tests (tertiary)** -- Native `*.Test.pas` coverage for low-level runtime and value system internals that are not reachable through a stable public API.
 
-When choosing where to add coverage, prefer the most public entry point available:
+When choosing where to add coverage, prefer the most public entry point — and match the **kind** of check to the layer that can actually express it:
 
-- JavaScript feature behavior: add or extend tests under `tests/`
-- Parse failures and early errors: add CLI parser/lexer coverage under `scripts/test-cli-*.ts` so CI validates the failing source as a whole program, including JSON error envelopes and bytecode-mode parsing where relevant
-- CLI behavior (`GocciaScriptLoader`, `GocciaTestRunner`, `GocciaBenchmarkRunner`): add command-level smoke tests in `pr.yml` that assert on visible output
-- Pascal unit tests: add native `*.Test.pas` coverage only when the behavior is genuinely internal or not reachable through a documented user-facing entry point
+| What you are verifying | Where it goes | Why there |
+|---|---|---|
+| Valid code runs and produces the correct result — semantics, conformance, edge cases | JavaScript tests under `tests/` (run by `GocciaTestRunner` in both interpreter and bytecode mode) | Exercises the full lexer → parser → interpreter/VM pipeline through the public surface |
+| Malformed source is **rejected** — a `SyntaxError`/early error, and its message, caret, suggestion, exit code, and JSON `error` envelope | `scripts/test-cli-parser.ts` (parser) or `scripts/test-cli-lexer.ts` (lexer), run by the CI `cli` job | A JS test **cannot** assert rejection: with no `eval`/`Function`, a parse or lex error simply fails to load the whole test file. These scripts run `GocciaScriptLoader` as a subprocess and assert on its exit code and error output, in both modes |
+| CLI tool contract — output formats (`--output=json`, `--format`), `--coverage`, `--source-map`, `--timeout`, global injection, config loading | the matching `scripts/test-cli-*.ts` (`test-cli.ts`, `test-cli-apps.ts`, `test-cli-config.ts`, `test-cli-embedded-resources.ts`), run by the CI `cli` job | Command-level behaviour over the real binaries |
+| Low-level runtime/value internals not reachable from JavaScript | Pascal `*.Test.pas` | Internal-only behaviour |
+
+A JavaScript test that merely *parses and runs* a construct — e.g. `(a / b)` evaluating to `1`, or `(/x/).test(...)` returning `true` — is a positive **execution/conformance** test. It confirms the construct works, but it does **not** prove that a *different*, malformed construct is rejected, and it is not the lexer/parser gate. When a change is about what the parser or lexer accepts or rejects (disambiguation, early errors, token classification), put the rejection cases in `scripts/test-cli-parser.ts` / `test-cli-lexer.ts`.
 
 Do not use dynamic source execution (`Function(...)`, `eval(...)`, or equivalent runtime compilation) inside the JavaScript suite merely to smuggle parser failures into a runtime test. Keep dynamic-code assertions in `tests/` only when the dynamic-code API itself is the feature under test, such as `Function` constructor behavior or direct `eval` semantics.
 
@@ -376,7 +380,7 @@ JavaScript end-to-end tests are the **primary** testing mechanism. Every new fea
 - **Readable specifications** -- JavaScript test files are readable by anyone familiar with Jest/Vitest conventions.
 - **Source of truth** -- If a behavior isn't covered by a JavaScript test, it isn't guaranteed.
 
-CLI behavior tests in `pr.yml` form the second layer, verifying that the command-line tools produce correct output structure, handle error cases gracefully, and that options like `--coverage`, `--output=json`, `--source-map`, and `--timeout` work end-to-end. These tests run in CI on every pull request.
+CLI behavior tests — the bun scripts under `scripts/test-cli-*.ts`, run by the workflows' `cli` job — form the second layer, verifying that the command-line tools produce correct output structure, **reject malformed source with the right error**, and that options like `--coverage`, `--output=json`, `--source-map`, and `--timeout` work end-to-end. These tests run in CI on every pull request.
 
 Pascal unit tests (`*.Test.pas`) exist as a tertiary layer for behavior that cannot be reached through script code or other documented user-facing entry points. Even there, prefer stateless, repeatable input/output checks over tests that are tightly coupled to incidental implementation structure.
 
@@ -395,7 +399,7 @@ The `GocciaTestRunner` program:
 
 ## CLI Behavior Tests (CI Integration)
 
-The PR workflow (`.github/workflows/pr.yml`) includes shell-level smoke tests that verify CLI tool behavior on every pull request. These checks assert on command output rather than internal state, catching regressions in the user-facing interface.
+The CLI behaviour tests are standalone bun scripts under `scripts/test-cli-*.ts` that the PR and main workflows run (via `bun run`) in the `cli` job on every pull request. They assert on command output, exit codes, and error envelopes rather than internal state, catching regressions in the user-facing interface. `test-cli-parser.ts` and `test-cli-lexer.ts` specifically own the parser/lexer **rejection** paths (malformed source must fail with the correct `SyntaxError` and envelope) that the JavaScript suite cannot express.
 
 **What the CLI tests cover:**
 
@@ -414,7 +418,7 @@ The PR workflow (`.github/workflows/pr.yml`) includes shell-level smoke tests th
 | Stdin smoke tests | Piped input executes correctly in interpreter mode and bytecode mode |
 | GocciaBenchmarkRunner output | `--format=json` produces valid JSON with benchmark structure |
 
-This table is non-exhaustive — the [pr.yml workflow](../.github/workflows/pr.yml) is the source of truth. The intent is to check all CLI options, all parser error display paths, and all output format correctness. To add a new CLI behavior check, add a step to the appropriate job in `pr.yml`.
+This table is non-exhaustive — the `scripts/test-cli-*.ts` scripts that the `cli` job runs are the source of truth. The intent is to check all CLI options, all parser/lexer error paths, and all output-format correctness. To add a new check, add a case to the matching `scripts/test-cli-*.ts` (parser/lexer rejection → `test-cli-parser.ts` / `test-cli-lexer.ts`; CLI flags/output → `test-cli.ts` / `test-cli-apps.ts`); the `cli` job already invokes these scripts, so no workflow change is needed.
 
 ## Pascal Unit Tests (Tertiary)
 
