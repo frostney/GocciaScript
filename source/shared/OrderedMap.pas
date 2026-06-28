@@ -72,6 +72,12 @@ type
   protected
     function HashKey(const AKey: TKey): Cardinal; virtual;
     function KeysEqual(const A, B: TKey): Boolean; virtual;
+    // Gate for the tombstone-reclaiming Compact in Add.  Default True.
+    // Subclasses whose entries are observed by live, index-based cursors
+    // (e.g. JS Map/Set iterators) override this to suppress compaction
+    // while a cursor is active: Compact renumbers FEntries, but Grow does
+    // not, so returning False keeps physical indices stable for the cursor.
+    function CanCompact: Boolean; virtual;
 
     function GetCount: Integer; override;
     function GetValue(const AKey: TKey): TValue; override;
@@ -92,6 +98,17 @@ type
 
     function GetEnumerator: TEnumerator; inline;
     function EntryAt(AIndex: Integer): TBaseMap<TKey, TValue>.TKeyValuePair;
+
+    // Number of physical entry slots, including tombstones — the upper bound of
+    // valid physical indices. Stable while compaction is suppressed; grows only
+    // by appends. Callers that need "the entries present at a point in time"
+    // (e.g. spec-bounded Set operations) capture this, then iterate with
+    // NextEntryBounded so entries appended later are not visited.
+    function EntrySlotCount: Integer;
+    // Like GetNextEntry, but stops once the next active slot would be at or past
+    // ALimit. Skips tombstones below ALimit.
+    function NextEntryBounded(var AIterState: Integer; ALimit: Integer;
+      out AKey: TKey; out AValue: TValue): Boolean;
 
     property Capacity: Integer read FBucketCount;
   end;
@@ -138,6 +155,11 @@ begin
     Result := PCardinal(@A)^ = PCardinal(@B)^
   else
     Result := CompareMem(@A, @B, SizeOf(TKey));
+end;
+
+function TOrderedMap<TKey, TValue>.CanCompact: Boolean;
+begin
+  Result := True;
 end;
 
 { Probe }
@@ -282,7 +304,7 @@ begin
 
   if (FEntryCount + 1) * 100 > FBucketCount * LOAD_FACTOR_PERCENT then
   begin
-    if FCount < FEntryCount div 2 then
+    if (FCount < FEntryCount div 2) and CanCompact then
       Compact
     else
       Grow;
@@ -414,6 +436,31 @@ function TOrderedMap<TKey, TValue>.GetNextEntry(var AIterState: Integer;
   out AKey: TKey; out AValue: TValue): Boolean;
 begin
   while AIterState < FEntryCount do
+  begin
+    if FEntries[AIterState].Active then
+    begin
+      AKey := FEntries[AIterState].Key;
+      AValue := FEntries[AIterState].Value;
+      Inc(AIterState);
+      Result := True;
+      Exit;
+    end;
+    Inc(AIterState);
+  end;
+  Result := False;
+end;
+
+function TOrderedMap<TKey, TValue>.EntrySlotCount: Integer;
+begin
+  Result := FEntryCount;
+end;
+
+function TOrderedMap<TKey, TValue>.NextEntryBounded(var AIterState: Integer;
+  ALimit: Integer; out AKey: TKey; out AValue: TValue): Boolean;
+begin
+  if ALimit > FEntryCount then
+    ALimit := FEntryCount;
+  while AIterState < ALimit do
   begin
     if FEntries[AIterState].Active then
     begin

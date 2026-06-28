@@ -63,7 +63,7 @@ var
 
   procedure AddToGroup(const AValue: TGocciaValue; const AIndex: Integer);
   var
-    EntryIndex: Integer;
+    ExistingGroup: TGocciaValue;
   begin
     CallArgs := TGocciaArgumentsCollection.Create;
     try
@@ -75,9 +75,8 @@ var
     end;
 
     // Use Map's SameValueZero lookup to preserve key identity (1 vs "1", etc.)
-    EntryIndex := ResultMap.FindEntry(GroupKey);
-    if EntryIndex >= 0 then
-      GroupArray := TGocciaArrayValue(ResultMap.Entries[EntryIndex].Value)
+    if ResultMap.TryGetValue(GroupKey, ExistingGroup) then
+      GroupArray := TGocciaArrayValue(ExistingGroup)
     else
     begin
       GroupArray := TGocciaArrayValue.Create;

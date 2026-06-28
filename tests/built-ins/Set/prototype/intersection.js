@@ -19,6 +19,49 @@ describe("Set.prototype.intersection", () => {
     expect(a.intersection(new Set()).size).toBe(0);
   });
 
+  test("skips an element deleted by a mutating has callback", () => {
+    const a = new Set([1, 2, 3]);
+    const setLike = {
+      size: 5,
+      has(value) {
+        if (value === 1) a.delete(2);
+        return true;
+      },
+      keys() {
+        return [].values();
+      },
+    };
+    const result = a.intersection(setLike);
+    expect(result.has(1)).toBe(true);
+    expect(result.has(3)).toBe(true);
+    expect(result.has(2)).toBe(false);
+    expect(result.size).toBe(2);
+  });
+
+  test("does not revisit a member deleted then re-added during a has callback", () => {
+    const a = new Set([1, 2, 3]);
+    const setLike = {
+      size: 5,
+      has(value) {
+        if (value === 1) {
+          a.delete(3);
+          a.add(3);
+        }
+        return true;
+      },
+      keys() {
+        return [].values();
+      },
+    };
+    const result = a.intersection(setLike);
+    // 3's original entry was emptied and the re-add is past the start-of-call
+    // bound, so it is not visited.
+    expect(result.has(1)).toBe(true);
+    expect(result.has(2)).toBe(true);
+    expect(result.has(3)).toBe(false);
+    expect(result.size).toBe(2);
+  });
+
   test("accepts set-like object", () => {
     const setLike = {
       size: 10,

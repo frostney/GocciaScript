@@ -79,6 +79,8 @@ var
   ActualKeys, ExpectedKeys: TArray<string>;
   I: Integer;
   Key: string;
+  CursorA, CursorB: Integer;
+  LeftKey, LeftValue, RightKey, RightValue: TGocciaValue;
 begin
   // Base case: strict equality (handles primitives and same object references)
   if IsStrictEqual(AActual, AExpected) then
@@ -142,10 +144,10 @@ begin
     Exit;
   end;
 
-  // Handle Sets
+  // Handle Sets — compared by insertion order, element for element.
   if (AActual is TGocciaSetValue) and (AExpected is TGocciaSetValue) then
   begin
-    if TGocciaSetValue(AActual).Items.Count <> TGocciaSetValue(AExpected).Items.Count then
+    if TGocciaSetValue(AActual).Count <> TGocciaSetValue(AExpected).Count then
     begin
       Result := False;
       Exit;
@@ -156,23 +158,39 @@ begin
       Exit;
     end;
     AddComparedPair(AComparedPairs, AActual, AExpected);
-    for I := 0 to TGocciaSetValue(AActual).Items.Count - 1 do
-    begin
-      if not IsDeepEqualInternal(TGocciaSetValue(AActual).Items[I],
-        TGocciaSetValue(AExpected).Items[I], AComparedPairs) then
+    CursorA := 0;
+    CursorB := 0;
+    // Recursive comparison can run user getters that mutate either set; retain
+    // both so cursors stay valid, and confirm the expected side advances before
+    // comparing (avoids comparing stale out values).
+    TGocciaSetValue(AActual).RetainIterator;
+    TGocciaSetValue(AExpected).RetainIterator;
+    try
+      while TGocciaSetValue(AActual).NextItem(CursorA, LeftValue) do
       begin
-        Result := False;
-        Exit;
+        if not TGocciaSetValue(AExpected).NextItem(CursorB, RightValue) then
+        begin
+          Result := False;
+          Exit;
+        end;
+        if not IsDeepEqualInternal(LeftValue, RightValue, AComparedPairs) then
+        begin
+          Result := False;
+          Exit;
+        end;
       end;
+    finally
+      TGocciaSetValue(AExpected).ReleaseIterator;
+      TGocciaSetValue(AActual).ReleaseIterator;
     end;
     Result := True;
     Exit;
   end;
 
-  // Handle Maps
+  // Handle Maps — compared by insertion order, entry for entry.
   if (AActual is TGocciaMapValue) and (AExpected is TGocciaMapValue) then
   begin
-    if TGocciaMapValue(AActual).Entries.Count <> TGocciaMapValue(AExpected).Entries.Count then
+    if TGocciaMapValue(AActual).Count <> TGocciaMapValue(AExpected).Count then
     begin
       Result := False;
       Exit;
@@ -183,20 +201,35 @@ begin
       Exit;
     end;
     AddComparedPair(AComparedPairs, AActual, AExpected);
-    for I := 0 to TGocciaMapValue(AActual).Entries.Count - 1 do
-    begin
-      if not IsDeepEqualInternal(TGocciaMapValue(AActual).Entries[I].Key,
-        TGocciaMapValue(AExpected).Entries[I].Key, AComparedPairs) then
+    CursorA := 0;
+    CursorB := 0;
+    // Recursive comparison can run user getters that mutate either map; retain
+    // both so cursors stay valid, and confirm the expected side advances before
+    // comparing (avoids comparing stale out values).
+    TGocciaMapValue(AActual).RetainIterator;
+    TGocciaMapValue(AExpected).RetainIterator;
+    try
+      while TGocciaMapValue(AActual).NextEntry(CursorA, LeftKey, LeftValue) do
       begin
-        Result := False;
-        Exit;
+        if not TGocciaMapValue(AExpected).NextEntry(CursorB, RightKey, RightValue) then
+        begin
+          Result := False;
+          Exit;
+        end;
+        if not IsDeepEqualInternal(LeftKey, RightKey, AComparedPairs) then
+        begin
+          Result := False;
+          Exit;
+        end;
+        if not IsDeepEqualInternal(LeftValue, RightValue, AComparedPairs) then
+        begin
+          Result := False;
+          Exit;
+        end;
       end;
-      if not IsDeepEqualInternal(TGocciaMapValue(AActual).Entries[I].Value,
-        TGocciaMapValue(AExpected).Entries[I].Value, AComparedPairs) then
-      begin
-        Result := False;
-        Exit;
-      end;
+    finally
+      TGocciaMapValue(AExpected).ReleaseIterator;
+      TGocciaMapValue(AActual).ReleaseIterator;
     end;
     Result := True;
     Exit;

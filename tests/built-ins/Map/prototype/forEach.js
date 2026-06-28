@@ -69,3 +69,49 @@ test("forEach passes map as third callback argument", () => {
   });
   expect(receivedMap).toBe(map);
 });
+
+test("forEach visits entries appended during iteration", () => {
+  const map = new Map([["a", 1]]);
+  const seen = [];
+  map.forEach((value, key) => {
+    seen.push(key);
+    if (key === "a") map.set("b", 2);
+  });
+  expect(seen).toEqual(["a", "b"]);
+});
+
+test("forEach does not visit an entry deleted before it is reached", () => {
+  const map = new Map([["a", 1], ["b", 2], ["c", 3]]);
+  const seen = [];
+  map.forEach((value, key) => {
+    seen.push(key);
+    if (key === "a") map.delete("b");
+  });
+  expect(seen).toEqual(["a", "c"]);
+});
+
+test("forEach deleting the current key does not skip the next", () => {
+  const map = new Map([["a", 1], ["b", 2], ["c", 3]]);
+  const seen = [];
+  map.forEach((value, key) => {
+    seen.push(key);
+    map.delete(key);
+  });
+  expect(seen).toEqual(["a", "b", "c"]);
+  expect(map.size).toBe(0);
+});
+
+test("forEach revisits a key deleted after visiting then re-added", () => {
+  const map = new Map([["a", 1], ["b", 2]]);
+  const seen = [];
+  let readded = false;
+  map.forEach((value, key) => {
+    seen.push(key);
+    if (key === "b" && !readded) {
+      readded = true;
+      map.delete("a");
+      map.set("a", 1);
+    }
+  });
+  expect(seen).toEqual(["a", "b", "a"]);
+});
