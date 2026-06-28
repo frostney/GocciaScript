@@ -3,6 +3,7 @@
 **Date:** 2026-06-28
 **Area:** `engine`
 **Issue:** [#892](https://github.com/frostney/GocciaScript/issues/892)
+**Pull Request:** [#904](https://github.com/frostney/GocciaScript/pull/904)
 
 Follow-up to [#885](https://github.com/frostney/GocciaScript/issues/885) / [#891](https://github.com/frostney/GocciaScript/pull/891) ([ADR 0078](0078-thread-local-cleanup-registry.md)), which released *managed* threadvars (AnsiString, dynamic arrays) at thread exit via `Goccia.ThreadCleanupRegistry` but deliberately scoped out *object-reference* threadvars because FPC never auto-finalizes object references anywhere. #892 audits those. There are two categories.
 
