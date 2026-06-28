@@ -17,7 +17,7 @@ All numbers are `GocciaScriptLoader --output=json` phase timing (the same vehicl
 - **nested** — one top-level expression `const _ = ((( … 0 … )));` at parenthesis depth *D*. Each `(` triggers a fresh `IsArrowFunction` probe over the whole inner span.
 - **arrow-dense** — *N* declarations of `const fK = (a, b, c) => (a + b) * (c - a);`. Linear in *N*; every line has a parenthesized parameter list and parenthesized sub-expressions.
 
-The benchmark runner is execution-only and its parse cost is a one-shot per-file metric; the dynamic `Function` constructor (which would let `run` re-parse) is disabled by default for sandbox safety, so the loader's parse-phase JSON is the measurement vehicle. `benchmarks/parser-arrow-groups.js` is committed as the matching arrow-execution benchmark.
+The benchmark runner is execution-only (it times the `run` callback, not parsing) and the dynamic `Function` constructor that would let a benchmark re-parse is disabled by default for sandbox safety, so a benchmark cannot gate parse cost — the loader's parse-phase JSON is the measurement vehicle, and parse-behaviour regressions are gated by the JavaScript regression tests under `tests/language/`.
 
 ## Results
 
