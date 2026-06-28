@@ -12,16 +12,10 @@ implementation
 uses
   SysUtils,
 
+  LazyPublishedCache,
   UnicodeICU,
 
   Goccia.RegExp.UnicodeData;
-
-type
-  TIdentifierRangeCache = record
-    Ranges: TUnicodePropertyRangeArray;
-    Loaded: Boolean;
-    Available: Boolean;
-  end;
 
 const
   IDENTIFIER_START_PROPERTY = 'ID_Start';
@@ -30,9 +24,8 @@ const
   ZERO_WIDTH_JOINER_CODE_POINT = $200D;
 
 var
-  IdentifierStartCache: TIdentifierRangeCache;
-  IdentifierPartCache: TIdentifierRangeCache;
-  IdentifierRangeLock: TRTLCriticalSection;
+  IdentifierStartCache: TLazyPublishedCache<TUnicodePropertyRangeArray>;
+  IdentifierPartCache: TLazyPublishedCache<TUnicodePropertyRangeArray>;
 
 function IsASCIIIdentifierStartCodePoint(ACodePoint: Cardinal): Boolean;
 begin
@@ -53,39 +46,6 @@ begin
   Result := TryGetUnicodePropertyRanges(APropertyName, ARanges);
   if not Result then
     Result := TryICUGetUnicodePropertyRanges(APropertyName, '', ARanges);
-end;
-
-function TryGetCachedIdentifierRanges(const APropertyName: string;
-  var ACache: TIdentifierRangeCache;
-  out ARanges: TUnicodePropertyRangeArray): Boolean;
-var
-  LoadedRanges: TUnicodePropertyRangeArray;
-begin
-  EnterCriticalSection(IdentifierRangeLock);
-  try
-    if ACache.Loaded then
-    begin
-      ARanges := ACache.Ranges;
-      Result := ACache.Available;
-      Exit;
-    end;
-
-    ACache.Loaded := True;
-    ACache.Available := False;
-    SetLength(ACache.Ranges, 0);
-    SetLength(LoadedRanges, 0);
-
-    if TryLoadIdentifierRanges(APropertyName, LoadedRanges) then
-    begin
-      ACache.Ranges := LoadedRanges;
-      ACache.Available := True;
-    end;
-
-    ARanges := ACache.Ranges;
-    Result := ACache.Available;
-  finally
-    LeaveCriticalSection(IdentifierRangeLock);
-  end;
 end;
 
 function RangeContainsCodePoint(const ARanges: TUnicodePropertyRangeArray;
@@ -110,8 +70,6 @@ end;
 
 // ES2026 §12.7 IdentifierStartChar
 function IsIdentifierStartCodePoint(ACodePoint: Cardinal): Boolean;
-var
-  Ranges: TUnicodePropertyRangeArray;
 begin
   if ACodePoint > $10FFFF then
     Exit(False);
@@ -119,16 +77,14 @@ begin
     Exit(True);
   if ACodePoint <= $7F then
     Exit(False);
-  if not TryGetCachedIdentifierRanges(IDENTIFIER_START_PROPERTY,
-     IdentifierStartCache, Ranges) then
+  if not IdentifierStartCache.Ensure(IDENTIFIER_START_PROPERTY,
+     @TryLoadIdentifierRanges) then
     Exit(False);
-  Result := RangeContainsCodePoint(Ranges, ACodePoint);
+  Result := RangeContainsCodePoint(IdentifierStartCache.Data, ACodePoint);
 end;
 
 // ES2026 §12.7 IdentifierPartChar
 function IsIdentifierPartCodePoint(ACodePoint: Cardinal): Boolean;
-var
-  Ranges: TUnicodePropertyRangeArray;
 begin
   if ACodePoint > $10FFFF then
     Exit(False);
@@ -139,20 +95,18 @@ begin
     Exit(True);
   if ACodePoint <= $7F then
     Exit(False);
-  if not TryGetCachedIdentifierRanges(IDENTIFIER_PART_PROPERTY,
-     IdentifierPartCache, Ranges) then
+  if not IdentifierPartCache.Ensure(IDENTIFIER_PART_PROPERTY,
+     @TryLoadIdentifierRanges) then
     Exit(False);
-  Result := RangeContainsCodePoint(Ranges, ACodePoint);
+  Result := RangeContainsCodePoint(IdentifierPartCache.Data, ACodePoint);
 end;
 
 initialization
-  InitCriticalSection(IdentifierRangeLock);
-  IdentifierStartCache.Loaded := False;
-  IdentifierStartCache.Available := False;
-  IdentifierPartCache.Loaded := False;
-  IdentifierPartCache.Available := False;
+  IdentifierStartCache.Init;
+  IdentifierPartCache.Init;
 
 finalization
-  DoneCriticalSection(IdentifierRangeLock);
+  IdentifierPartCache.Done;
+  IdentifierStartCache.Done;
 
 end.

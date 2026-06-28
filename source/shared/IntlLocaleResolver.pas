@@ -24,13 +24,12 @@ uses
 
   BCP47,
   IntlICU,
+  LazyPublishedCache,
 
   Goccia.Intl.CLDRData;
 
 var
-  AvailableLocalesCache: IntlTypes.TStringArray;
-  AvailableLocalesLoaded: Boolean;
-  AvailableLocalesLock: TRTLCriticalSection;
+  AvailableLocalesCache: TLazyPublishedCache<IntlTypes.TStringArray>;
 
 const
   CLDR_REGIONAL_AVAILABLE_LOCALES: array[0..8] of string = (
@@ -98,41 +97,43 @@ begin
   Result := LocaleWithoutUnicodeExtension(Parsed);
 end;
 
-// ECMA-402 ES2026 supportedLocalesOf constructors use [[AvailableLocales]].
-function AvailableLocaleList: IntlTypes.TStringArray;
+function LoadAvailableLocales(const AKey: string;
+  out ALocales: IntlTypes.TStringArray): Boolean;
 var
   Available: IntlTypes.TStringArray;
   Canonical: string;
   I, Count: Integer;
 begin
-  EnterCriticalSection(AvailableLocalesLock);
-  try
-    if not AvailableLocalesLoaded then
+  SetLength(ALocales, 0);
+  if TryICUGetAvailableLocales(Available) then
+  begin
+    Count := 0;
+    SetLength(ALocales, Length(Available));
+    for I := 0 to High(Available) do
     begin
-      SetLength(AvailableLocalesCache, 0);
-      if TryICUGetAvailableLocales(Available) then
-      begin
-        Count := 0;
-        SetLength(AvailableLocalesCache, Length(Available));
-        for I := 0 to High(Available) do
-        begin
-          Canonical := CanonicalizeUnicodeLocaleId(Available[I]);
-          AppendUniqueLocale(AvailableLocalesCache, Count, Canonical);
-        end;
-        for I := Low(CLDR_REGIONAL_AVAILABLE_LOCALES) to
-          High(CLDR_REGIONAL_AVAILABLE_LOCALES) do
-          AppendUniqueLocale(AvailableLocalesCache, Count,
-            CLDR_REGIONAL_AVAILABLE_LOCALES[I]);
-        AppendUniqueLocale(AvailableLocalesCache, Count, DefaultLocale);
-        SetLength(AvailableLocalesCache, Count);
-      end;
-      AvailableLocalesLoaded := True;
+      Canonical := CanonicalizeUnicodeLocaleId(Available[I]);
+      AppendUniqueLocale(ALocales, Count, Canonical);
     end;
-
-    Result := AvailableLocalesCache;
-  finally
-    LeaveCriticalSection(AvailableLocalesLock);
+    for I := Low(CLDR_REGIONAL_AVAILABLE_LOCALES) to
+      High(CLDR_REGIONAL_AVAILABLE_LOCALES) do
+      AppendUniqueLocale(ALocales, Count,
+        CLDR_REGIONAL_AVAILABLE_LOCALES[I]);
+    AppendUniqueLocale(ALocales, Count, DefaultLocale);
+    SetLength(ALocales, Count);
   end;
+  // The available-locale list is authoritative even when empty: if ICU is
+  // unavailable the engine resolves against an empty set and does not retry, so
+  // the load always publishes a usable value (preserving the pre-#894
+  // memoize-on-first-call behavior, where the loaded flag was set
+  // unconditionally and the cached list returned as-is).
+  Result := True;
+end;
+
+// ECMA-402 ES2026 supportedLocalesOf constructors use [[AvailableLocales]].
+function AvailableLocaleList: IntlTypes.TStringArray;
+begin
+  AvailableLocalesCache.Ensure('', @LoadAvailableLocales);
+  Result := AvailableLocalesCache.Data;
 end;
 
 function SplitBySeparator(const AValue: string; const ASeparator: Char): IntlTypes.TStringArray;
@@ -590,11 +591,9 @@ begin
 end;
 
 initialization
-  InitCriticalSection(AvailableLocalesLock);
-  AvailableLocalesLoaded := False;
+  AvailableLocalesCache.Init;
 
 finalization
-  DoneCriticalSection(AvailableLocalesLock);
-  SetLength(AvailableLocalesCache, 0);
+  AvailableLocalesCache.Done;
 
 end.

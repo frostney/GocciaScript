@@ -22,7 +22,8 @@ uses
   Classes,
 
   EmbeddedResourceReader,
-  Generated.TimeZoneData;
+  Generated.TimeZoneData,
+  LazyPublishedCache;
 
 const
   TIME_ZONE_RCDATA_RESOURCE_TYPE = MAKEINTRESOURCE(10);
@@ -30,26 +31,18 @@ const
     (Ord('G'), Ord('O'), Ord('C'), Ord('C'), Ord('I'), Ord('A'), Ord('T'), Ord('Z'));
 
 var
-  CachedTZResource: TBytes;
-  CachedTZResourceLoaded: Boolean;
+  TZResourceCache: TLazyPublishedCache<TBytes>;
 
-function TryReadEmbeddedResource(out ABuffer: TBytes): Boolean;
+function LoadTZResource(const AKey: string; out ABuffer: TBytes): Boolean;
 var
   Stream: TResourceStream;
   BufferSize: Integer;
 begin
-  if CachedTZResourceLoaded then
-  begin
-    ABuffer := CachedTZResource;
-    Result := Length(ABuffer) > 0;
-    Exit;
-  end;
-
   Result := False;
   SetLength(ABuffer, 0);
   Stream := nil;
   try
-    Stream := TResourceStream.Create(HInstance, GeneratedTimeZoneDataResourceName,
+    Stream := TResourceStream.Create(HInstance, AKey,
       TIME_ZONE_RCDATA_RESOURCE_TYPE);
     if Stream.Size > High(Integer) then
     begin
@@ -63,12 +56,19 @@ begin
       Stream.ReadBuffer(ABuffer[0], BufferSize);
     Stream.Free;
     Stream := nil;
-    CachedTZResource := ABuffer;
-    CachedTZResourceLoaded := True;
     Result := True;
   except
     Stream.Free;
   end;
+end;
+
+function TryReadEmbeddedResource(out ABuffer: TBytes): Boolean;
+begin
+  if TZResourceCache.Ensure(GeneratedTimeZoneDataResourceName, @LoadTZResource) then
+    ABuffer := TZResourceCache.Data
+  else
+    SetLength(ABuffer, 0);
+  Result := Length(ABuffer) > 0;
 end;
 
 function TryGetEmbeddedTimeZoneFile(const ATimeZone: string; out ABytes: TBytes): Boolean;
@@ -178,6 +178,12 @@ begin
     end;
   end;
 end;
+
+initialization
+  TZResourceCache.Init;
+
+finalization
+  TZResourceCache.Done;
 
 {$ELSE}
 
