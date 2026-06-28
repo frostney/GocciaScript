@@ -12,12 +12,12 @@ A speculative probe **keeps** the tokens it scanned for the real parse to reuse,
 
 A token is goal-sensitive when the lexer can produce a different token at the same source position depending on the [`TGocciaLexicalGoal`](../../source/units/Goccia.Lexer.pas). Only two lexer branches are goal-dependent, so only their outputs qualify:
 
-- `/` — a regex literal (`gttRegex`) when the goal allows regex, otherwise a division operator (`gttSlash` / `gttSlashAssign`).
-- a template-tail `}` — `gttTemplateMiddle` / `gttTemplateTail` when the goal requires template continuation, otherwise an ordinary `gttRightBrace`.
+- `/` — a regex literal (`gttRegex`) when the goal allows regex, otherwise a division operator (`gttSlash` / `gttSlashAssign`). Always goal-sensitive.
+- a `}` that closes a `${...}` template substitution — `gttTemplateMiddle` / `gttTemplateTail` when the goal requires template continuation, otherwise an ordinary `gttRightBrace`. Only the substitution-closing `}` qualifies; object, block, and destructuring braces are classified identically under any goal and stay reusable.
 
-Every other token type is classified identically under any goal, so a token a probe scanned (under its own goal) is byte-for-byte what the real parse would have produced — reusing it is behaviour-preserving. A probe that scanned a `/` or template-tail `}` may have classified it under the wrong goal (a probe scans the whole group under one goal, e.g. `IsArrowFunction` under `InputElementDiv`), so those groups are dropped and re-lexed under the real parse's per-token goals, exactly as before.
+Every other token type is classified identically under any goal, so a token a probe scanned (under its own goal) is byte-for-byte what the real parse would have produced — reusing it is behaviour-preserving. A probe that scanned a `/` or template-substitution `}` may have classified it under the wrong goal (a probe scans the whole group under one goal, e.g. `IsArrowFunction` under `InputElementDiv`), so those groups are dropped and re-lexed under the real parse's per-token goals, exactly as before.
 
-The lexer exposes `HasGoalSensitiveTokenSince(ACount)` (an O(1)-per-token scan of the newly-appended range). Each probe's `finally` keeps its look-ahead tokens unless that returns true (or, for the two retry sites, a lexer error means the group is being retried under the other goal). No per-token goal metadata is stored and no already-scanned token is ever re-classified.
+The lexer exposes `HasGoalSensitiveTokenSince(ACount)` (an O(1)-per-token scan of the newly-appended range). A `/` is sensitive outright; a `}` is sensitive only once the scan has seen a template opener (`gttTemplateHead`), which a probe always reaches before the matching closer — so ordinary `}` braces with no template in scope are kept. Each probe's `finally` keeps its look-ahead tokens unless that returns true (or, for the two retry sites, a lexer error means the group is being retried under the other goal). No per-token goal metadata is stored and no already-scanned token is ever re-classified.
 
 ## Rejected alternative — goal-tagged re-derivation
 
