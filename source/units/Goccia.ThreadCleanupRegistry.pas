@@ -23,8 +23,13 @@ interface
 
 type
   { Parameterless cleanup callback. Must release only the calling thread's own
-    managed threadvars (e.g. SetLength(FMembers, 0)); it runs on whichever
-    thread drains the registry, so it must not touch another thread's state. }
+    managed state — usually a managed threadvar (e.g. SetLength(FMembers, 0)),
+    but also a thread's own entries in a shared lock-guarded structure (e.g. the
+    Atomics waiter list, where each waiter is keyed by its owner thread id). It
+    runs on whichever thread drains the registry, so it must not touch another
+    thread's state, and — because the drain runs on both worker exit and
+    main-thread finalization — it must stay safe to call after that state has
+    already been torn down by a unit's own finalization. }
   TGocciaThreadvarCleanupProc = procedure;
 
 { Register a threadvar-cleanup callback. Call once per unit, from the unit's
@@ -36,6 +41,11 @@ procedure RegisterThreadvarCleanup(const AProc: TGocciaThreadvarCleanupProc);
   ShutdownThreadRuntime (worker threads) and this unit's finalization (main
   thread). Safe to call multiple times and on any thread. }
 procedure RunThreadvarCleanups;
+
+{ Returns True if AProc is currently registered. Intended for regression tests
+  that pin a specific unit's cleanup registration (so a dropped
+  RegisterThreadvarCleanup call fails loudly); not part of the teardown path. }
+function IsThreadvarCleanupRegistered(const AProc: TGocciaThreadvarCleanupProc): Boolean;
 
 implementation
 
@@ -70,6 +80,21 @@ var
 begin
   for I := 0 to GCleanupCount - 1 do
     GCleanups[I]();
+end;
+
+function IsThreadvarCleanupRegistered(const AProc: TGocciaThreadvarCleanupProc): Boolean;
+var
+  I: Integer;
+begin
+  // Compare the stored code pointers byte-for-byte. A direct `=` (or a Pointer
+  // cast) on a parameterless procedural variable makes FPC *call* it instead of
+  // reading its address; passing the procvars to CompareByte's untyped const
+  // params takes their addresses, so this reads the code pointers without
+  // invoking them.
+  for I := 0 to GCleanupCount - 1 do
+    if CompareByte(GCleanups[I], AProc, SizeOf(TGocciaThreadvarCleanupProc)) = 0 then
+      Exit(True);
+  Result := False;
 end;
 
 finalization

@@ -36,6 +36,7 @@ uses
   SysUtils,
   Goccia.Temporal.Utils,
   Goccia.Temporal.TimeZoneData,
+  Goccia.ThreadCleanupRegistry,
   Goccia.Values.ErrorHelper,
   TimeZoneInformationFile,
   {$IFDEF UNIX}
@@ -1980,15 +1981,18 @@ initialization
   CachedTimeZonePathCount := 0;
   CachedTimeZoneCaseCount := 0;
   CachedAvailablePrimaryTimeZoneIdentifiersLoaded := False;
+  // FPC does not auto-finalize managed threadvars at thread exit. The registry
+  // drain releases this thread's timezone cache on worker exit
+  // (ShutdownThreadRuntime) and on the main thread
+  // (Goccia.ThreadCleanupRegistry's finalization).
+  RegisterThreadvarCleanup(@ClearTimeZoneCache);
   {$IFDEF MSWINDOWS}
   InitCriticalSection(WindowsICUInitLock);
   {$ENDIF}
 
 finalization
-  // FPC does not auto-finalize managed threadvars at thread exit. Worker
-  // threads release the cache through ShutdownThreadRuntime; clear the main
-  // thread's copy on process shutdown too.
-  ClearTimeZoneCache;
+  // The timezone cache threadvars are released via Goccia.ThreadCleanupRegistry
+  // (registered above); only the Windows ICU init lock is torn down here.
   {$IFDEF MSWINDOWS}
   DoneCriticalSection(WindowsICUInitLock);
   {$ENDIF}
