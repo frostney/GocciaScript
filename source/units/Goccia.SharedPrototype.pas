@@ -16,7 +16,7 @@ type
   // members.
   //
   // Member definitions are rebuilt per realm — the units no longer cache them in a
-  // cross-realm threadvar (#892 / ADR 0083) — so the host bound into a prototype's
+  // cross-realm threadvar (#892 / ADR 0084) — so the host bound into a prototype's
   // method callbacks is always the live, realm-owned host that is released with the
   // realm on Destroy. (Caching a member array across realms, bound to an earlier
   // realm's now-freed host, is what made this unsafe before the per-realm rebuild;

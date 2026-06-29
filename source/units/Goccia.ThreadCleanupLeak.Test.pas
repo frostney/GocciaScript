@@ -25,7 +25,15 @@ uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
   SysUtils,
 
+  TextSemantics,
+
+  Goccia.Builtins.Atomics,
+  Goccia.Builtins.DisposableStack,
+  Goccia.Builtins.Semver,
   Goccia.GarbageCollector,
+  Goccia.ImportMeta,
+  Goccia.RegExp.VM,
+  Goccia.Temporal.TimeZone,
   Goccia.ThreadCleanupRegistry,
   Goccia.Threading.Init,
   Goccia.Values.Primitives,
@@ -40,6 +48,7 @@ type
 
     procedure TestDrainReclaimsMemberDefinitionThreadvars;
     procedure TestRegistryDrainIsIdempotent;
+    procedure TestMigratedCacheCleanupsAreRegistered;
   end;
 
 procedure TLeakTests.SetupTests;
@@ -54,6 +63,8 @@ begin
     TestRegistryDrainIsIdempotent);
   Test('draining the registry reclaims per-thread member-definition threadvars',
     TestDrainReclaimsMemberDefinitionThreadvars);
+  Test('each migrated per-thread cache/memo cleanup is registered with the registry',
+    TestMigratedCacheCleanupsAreRegistered);
 end;
 
 procedure TLeakTests.TestDrainReclaimsMemberDefinitionThreadvars;
@@ -113,6 +124,25 @@ begin
 
   Expect<Boolean>(
     (AfterSecondDrain - AfterFirstDrain) <= MAX_IDEMPOTENT_DRAIN_NOISE_BYTES).ToBe(True);
+end;
+
+procedure TLeakTests.TestMigratedCacheCleanupsAreRegistered;
+begin
+  // Issue #893: each per-thread cache/memo that ShutdownThreadRuntime used to
+  // clear by an explicit call must instead register its clear with
+  // Goccia.ThreadCleanupRegistry from its owning unit's initialization (those
+  // units are pulled in via this program's uses clause). If a unit drops its
+  // RegisterThreadvarCleanup call, that threadvar silently leaks again on every
+  // worker-thread exit; pinning each registration here makes that regress
+  // loudly. (TestDrainReclaimsMemberDefinitionThreadvars proves the drain then
+  // runs the registered cleanups and reclaims their heap.)
+  Expect<Boolean>(IsThreadvarCleanupRegistered(@ClearImportMetaCache)).ToBe(True);
+  Expect<Boolean>(IsThreadvarCleanupRegistered(@ShutdownAtomicsWaitersForCurrentThread)).ToBe(True);
+  Expect<Boolean>(IsThreadvarCleanupRegistered(@ClearDisposableStackSlotMap)).ToBe(True);
+  Expect<Boolean>(IsThreadvarCleanupRegistered(@ClearSemverHosts)).ToBe(True);
+  Expect<Boolean>(IsThreadvarCleanupRegistered(@ClearTimeZoneCache)).ToBe(True);
+  Expect<Boolean>(IsThreadvarCleanupRegistered(@ClearRegExpInputMemo)).ToBe(True);
+  Expect<Boolean>(IsThreadvarCleanupRegistered(@ClearAsciiMemo)).ToBe(True);
 end;
 
 begin

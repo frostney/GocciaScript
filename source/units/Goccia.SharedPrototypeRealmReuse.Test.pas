@@ -1,5 +1,5 @@
 { Regression gate for the per-realm prototype rebuild in the TGocciaSharedPrototype
-  units (#892 / ADR 0083).
+  units (#892 / ADR 0084).
 
   ~30 value units (Map, Set, WeakMap/WeakSet/WeakRef, FinalizationRegistry,
   Promise, ArrayBuffer, all Intl*, all Temporal*, ...) build their prototype via
@@ -9,7 +9,7 @@
   were cached in a cross-realm threadvar, which bound every later realm's
   prototype to the FIRST realm's host; once that realm was destroyed and the GC
   collected, the host was freed and the cached `procedure of object` callbacks
-  pointed at a freed instance. ADR 0083 removed that cross-realm cache.
+  pointed at a freed instance. ADR 0084 removed that cross-realm cache.
 
   This test drives the multi-realm path: it runs many independent engines (each
   its own realm) on one thread, forcing a full GC collection and a heap stomp
@@ -25,7 +25,7 @@
   FRegExpConstructor on the SpeciesConstructor fallback (receiver constructor =
   undefined), so this test additionally poisons the FPC heap and forces that path:
   it crashed with an access violation before the per-realm rebuild and passes after.
-  See docs/adr/0083. }
+  See docs/adr/0084. }
 
 program Goccia.SharedPrototypeRealmReuse.Test;
 
@@ -70,7 +70,7 @@ const
     // RegExp is a constructor-style builtin (not TGocciaSharedPrototype) whose
     // per-realm host is freed with its engine; [Symbol.split] / [Symbol.matchAll]
     // read the host's FRegExpConstructor field via SpeciesConstructor, so a stale
-    // cross-realm member cache dispatches them against a freed host (ADR 0083).
+    // cross-realm member cache dispatches them against a freed host (ADR 0084).
     'const parts = "a-b-c".split(/-/); if (parts.length !== 3 || parts[1] !== "b") throw new Error("RegExp.split");' + sLineBreak +
     'const ms = [..."a1b2".matchAll(/[0-9]/g)]; if (ms.length !== 2 || ms[0][0] !== "1") throw new Error("RegExp.matchAll");' + sLineBreak +
     // constructor=undefined forces RegExp[Symbol.matchAll] and [Symbol.split] down
