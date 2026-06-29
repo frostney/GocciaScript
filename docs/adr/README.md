@@ -93,3 +93,4 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0081 — Reject shared value caches as a runtime optimization](0081-reject-value-caches-for-allocation-reduction.md)
 - [0082 — Unify embedded-data caches onto a lock-free publication primitive](0082-lazy-published-cache-primitive.md)
 - [0083 — Realm-owned prototype method hosts and object-reference threadvar audit](0083-realm-owned-prototype-method-hosts.md)
+- [0084 — Cross-realm prototype member cache is safe for TGocciaSharedPrototype units](0084-shared-prototype-cross-realm-member-cache-safe.md)
