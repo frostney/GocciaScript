@@ -16,7 +16,7 @@
   between them, then exercises the shared-prototype types in the later realms.
   Each script self-verifies and throws on any discrepancy, so a regression that
   reintroduced a cross-realm cache (binding a later realm to a freed host) would
-  surface as a thrown error (caught below) or a hard crash.
+  surface as a thrown error (caught by the shared test runner) or a hard crash.
 
   It also covers Goccia.Builtins.GlobalRegExp, a constructor-style builtin (not a
   TGocciaSharedPrototype unit) whose per-realm host is freed to the FPC heap rather
@@ -73,11 +73,15 @@ const
     // cross-realm member cache dispatches them against a freed host (ADR 0083).
     'const parts = "a-b-c".split(/-/); if (parts.length !== 3 || parts[1] !== "b") throw new Error("RegExp.split");' + sLineBreak +
     'const ms = [..."a1b2".matchAll(/[0-9]/g)]; if (ms.length !== 2 || ms[0][0] !== "1") throw new Error("RegExp.matchAll");' + sLineBreak +
-    // constructor=undefined forces RegExp[Symbol.matchAll] down the
-    // SpeciesConstructor fallback, which CONSTRUCTS via the host's FRegExpConstructor
-    // field -> dereferences the (stale, freed) host, not just reads it.
+    // constructor=undefined forces RegExp[Symbol.matchAll] and [Symbol.split] down
+    // the SpeciesConstructor fallback, which CONSTRUCTS via the host's
+    // FRegExpConstructor field -> dereferences the (stale, freed) host, not just
+    // reads it. matchAll and split are the only two callbacks that touch the host,
+    // so both fallbacks are exercised.
     'const reC = /[0-9]/g; reC.constructor = undefined;' + sLineBreak +
     'const mc = [...reC[Symbol.matchAll]("a1b2")]; if (mc.length !== 2) throw new Error("RegExp.matchAll species-fallback");' + sLineBreak +
+    'const reS = /-/; reS.constructor = undefined;' + sLineBreak +
+    'const sp = reS[Symbol.split]("a-b-c"); if (sp.length !== 3 || sp[1] !== "b") throw new Error("RegExp.split species-fallback");' + sLineBreak +
     'const ex = /[a-z]/.exec("9x"); if (!ex || ex[0] !== "x") throw new Error("RegExp.exec");' + sLineBreak +
     'if (!/[0-9]/.test("x5")) throw new Error("RegExp.test");' + sLineBreak +
     'if (/abc/.source !== "abc") throw new Error("RegExp.source");';
@@ -98,8 +102,12 @@ end;
 
 procedure TRealmReuseTests.TestSharedPrototypeSurvivesRealmTeardownAndCollect;
 const
-  CYCLES = 12;
-  FPC_STOMP_PER_CYCLE = 512;
+  // Stomp magnitudes are empirical, not tuned to a threshold: they only need to
+  // be large enough to reliably reclaim and overwrite a freed host's block before
+  // the next realm dispatches against it. They are deliberately generous (verified
+  // to fault pre-fix); reducing them weakens the gate, it does not make it stricter.
+  CYCLES = 12;                // independent realms run back-to-back on this thread
+  FPC_STOMP_PER_CYCLE = 512;  // same-size FPC-heap allocations to reclaim the freed RegExp host
 var
   I, J: Integer;
   Stomp: array of TGocciaObjectValue;
@@ -145,7 +153,8 @@ begin
       TGarbageCollector.Instance.Collect;
 
       // ...then aggressively reuse the freed GC blocks, so any later dereference
-      // of a freed GC host reads stomped memory rather than intact data.
+      // of a freed GC host reads stomped memory rather than intact data. The 4096
+      // is generous GC-object churn, empirical like the FPC stomp count above.
       SetLength(Stomp, 4096);
       for J := 0 to High(Stomp) do
         Stomp[J] := TGocciaObjectValue.Create;
