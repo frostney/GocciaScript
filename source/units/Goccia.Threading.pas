@@ -187,19 +187,12 @@ uses
   Math,
   SysUtils,
 
-  TextSemantics,
   TimingUtils,
 
-  Goccia.Builtins.Atomics,
-  Goccia.Builtins.DisposableStack,
-  Goccia.Builtins.Semver,
   Goccia.CallStack,
   Goccia.Coverage,
   Goccia.GarbageCollector,
-  Goccia.ImportMeta,
   Goccia.MicrotaskQueue,
-  Goccia.RegExp.VM,
-  Goccia.Temporal.TimeZone,
   Goccia.ThreadCleanupRegistry,
   Goccia.Values.Primitives;
 
@@ -232,19 +225,17 @@ procedure ShutdownThreadRuntime;
 begin
   // Coverage tracker is NOT shut down here — the main thread reads it
   // after workers complete, then merges into the main tracker.
-  ClearImportMetaCache;
-  ShutdownAtomicsWaitersForCurrentThread;
-  ClearDisposableStackSlotMap;
-  ClearSemverHosts;
-  ClearTimeZoneCache;
-  // The #805/#806 memos already finalize on the main thread but, like the
-  // caches above, FPC does not release their managed threadvars on a worker
-  // thread exit — clear them here too.
-  ClearRegExpInputMemo;
-  ClearAsciiMemo;
-  // Drain the engine-wide threadvar-cleanup registry: every builtin's and
-  // value type's cached member-definition array registers its release proc in
-  // Goccia.ThreadCleanupRegistry. This releases this worker thread's copies.
+  //
+  // Drain the engine-wide threadvar-cleanup registry. Every per-thread managed
+  // cache and memo registers its release proc in Goccia.ThreadCleanupRegistry
+  // from its own unit initialization — the builtins' and value types' cached
+  // member-definition arrays, plus the import.meta, Atomics-waiter,
+  // disposable-stack, semver-host, timezone, regex-input and is-ASCII caches —
+  // so this single drain releases all of this worker thread's copies (the
+  // registry's own finalization does the same on the main thread). Run it
+  // before the ordered object-lifecycle shutdowns below so caches that touch
+  // the collector (e.g. import.meta unpinning) are released while the GC is
+  // still alive.
   RunThreadvarCleanups;
   TGocciaMicrotaskQueue.Shutdown;
   TGocciaCallStack.Shutdown;

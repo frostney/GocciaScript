@@ -34,6 +34,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.ThreadCleanupRegistry,
   Goccia.URI,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction;
@@ -163,10 +164,12 @@ begin
   end;
 end;
 
-finalization
-  // FPC does not auto-finalize managed threadvars at thread exit. Worker
-  // threads release this cache through ShutdownThreadRuntime; clear the main
-  // thread's copy on process shutdown too.
-  ClearImportMetaCache;
+initialization
+  // FPC does not auto-finalize managed threadvars at thread exit. Register the
+  // cache clear so the registry drain releases this thread's copy on whichever
+  // thread tears down: a worker via ShutdownThreadRuntime, the main thread via
+  // Goccia.ThreadCleanupRegistry's finalization. (ClearImportMetaCache is also
+  // called directly from the engine's own teardown in Goccia.Engine.)
+  RegisterThreadvarCleanup(@ClearImportMetaCache);
 
 end.
