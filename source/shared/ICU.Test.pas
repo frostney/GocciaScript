@@ -2,10 +2,11 @@
   source/shared/ICU.pas.
 
   The Linux loader must pick up whatever ICU major is installed — including
-  versions newer than any the engine has seen before — with no code change. The
-  version parsing and the "newest present" directory scan are pure string and
-  directory logic with no platform dependency, so they run on every platform and
-  are pinned here, including majors above the old hard-coded 76 ceiling. }
+  versions newer than any the engine has seen before, and ICU reachable only via
+  LD_LIBRARY_PATH — with no code change. The version parsing and the directory
+  scans are pure string and directory logic with no platform dependency, so they
+  run on every platform and are pinned here, including majors above the old
+  hard-coded 76 ceiling. }
 
 program ICU.Test;
 
@@ -25,6 +26,7 @@ type
   private
     procedure TestParseMajorVersion;
     procedure TestHighestInDirHasNoCap;
+    procedure TestHighestInDirListAcrossPaths;
   public
     procedure SetupTests; override;
   end;
@@ -34,8 +36,17 @@ var
   Handle: THandle;
 begin
   Handle := FileCreate(APath);
-  if Handle <> THandle(-1) then
-    FileClose(Handle);
+  if Handle = THandle(-1) then
+    raise Exception.CreateFmt('Failed to create test fixture file: %s', [APath]);
+  FileClose(Handle);
+end;
+
+function MakeTempDir(const APrefix: string): string;
+begin
+  Result := GetTempFileName(GetTempDir, APrefix);
+  DeleteFile(Result);
+  if not ForceDirectories(Result) then
+    raise Exception.CreateFmt('Failed to create test fixture directory: %s', [Result]);
 end;
 
 procedure TICUTests.SetupTests;
@@ -44,6 +55,8 @@ begin
     TestParseMajorVersion);
   Test('HighestICUMajorVersionInDir returns the newest present major, uncapped',
     TestHighestInDirHasNoCap);
+  Test('HighestICUMajorVersionInDirList scans every dir and skips empty segments',
+    TestHighestInDirListAcrossPaths);
 end;
 
 procedure TICUTests.TestParseMajorVersion;
@@ -63,9 +76,7 @@ procedure TICUTests.TestHighestInDirHasNoCap;
 var
   Dir: string;
 begin
-  Dir := GetTempFileName(GetTempDir, 'gicu');
-  DeleteFile(Dir);
-  ForceDirectories(Dir);
+  Dir := MakeTempDir('gicu');
   try
     // No ICU library present.
     Expect<Integer>(HighestICUMajorVersionInDir(Dir, I18N_BASE)).ToBe(0);
@@ -88,6 +99,29 @@ begin
     DeleteFile(IncludeTrailingPathDelimiter(Dir) + 'libicuuc.so.100');
     DeleteFile(IncludeTrailingPathDelimiter(Dir) + 'unrelated.txt');
     RemoveDir(Dir);
+  end;
+end;
+
+procedure TICUTests.TestHighestInDirListAcrossPaths;
+var
+  DirA, DirB: string;
+begin
+  DirA := MakeTempDir('gicua');
+  DirB := MakeTempDir('gicub');
+  try
+    TouchFile(IncludeTrailingPathDelimiter(DirA) + 'libicui18n.so.76');
+    TouchFile(IncludeTrailingPathDelimiter(DirB) + 'libicui18n.so.99');
+
+    // Newest across the whole list; the trailing empty segment is skipped.
+    Expect<Integer>(HighestICUMajorVersionInDirList(
+      DirA + ':' + DirB + ':', ':', I18N_BASE)).ToBe(99);
+    // An empty list discovers nothing.
+    Expect<Integer>(HighestICUMajorVersionInDirList('', ':', I18N_BASE)).ToBe(0);
+  finally
+    DeleteFile(IncludeTrailingPathDelimiter(DirA) + 'libicui18n.so.76');
+    DeleteFile(IncludeTrailingPathDelimiter(DirB) + 'libicui18n.so.99');
+    RemoveDir(DirA);
+    RemoveDir(DirB);
   end;
 end;
 

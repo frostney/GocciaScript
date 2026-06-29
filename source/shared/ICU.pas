@@ -17,9 +17,13 @@ function ICUGetProcAddress(const AName: string): Pointer;
   ParseICUSoMajorVersion extracts the major from a versioned SONAME
   ('libicui18n.so.77' -> 77; '...so.76.1' -> 76; unversioned/garbage -> 0).
   HighestICUMajorVersionInDir returns the newest major among '<ABase>.<major>'
-  files in ADir, or 0 when none is found. }
+  files in ADir, or 0 when none is found. HighestICUMajorVersionInDirList does the
+  same across a separator-delimited directory list (e.g. the entries of
+  LD_LIBRARY_PATH), skipping empty segments. }
 function ParseICUSoMajorVersion(const AFileName, ABase: string): Integer;
 function HighestICUMajorVersionInDir(const ADir, ABase: string): Integer;
+function HighestICUMajorVersionInDirList(const ADirList: string; ASeparator: Char;
+  const ABase: string): Integer;
 
 implementation
 
@@ -100,6 +104,36 @@ begin
     end;
 end;
 
+function HighestICUMajorVersionInDirList(const ADirList: string; ASeparator: Char;
+  const ABase: string): Integer;
+var
+  Rest, Dir: string;
+  SepPos, Major: Integer;
+begin
+  Result := 0;
+  Rest := ADirList;
+  while Rest <> '' do
+  begin
+    SepPos := Pos(ASeparator, Rest);
+    if SepPos > 0 then
+    begin
+      Dir := Copy(Rest, 1, SepPos - 1);
+      Delete(Rest, 1, SepPos);
+    end
+    else
+    begin
+      Dir := Rest;
+      Rest := '';
+    end;
+    if Dir <> '' then
+    begin
+      Major := HighestICUMajorVersionInDir(Dir, ABase);
+      if Major > Result then
+        Result := Major;
+    end;
+  end;
+end;
+
 {$IFDEF LINUX}
 const
   // Standard locations distributions install the versioned ICU runtime into,
@@ -118,12 +152,20 @@ var
   DirIndex, Major: Integer;
 begin
   Result := 0;
+  // Standard system locations.
   for DirIndex := Low(ICU_SCAN_DIRS) to High(ICU_SCAN_DIRS) do
   begin
     Major := HighestICUMajorVersionInDir(ICU_SCAN_DIRS[DirIndex], ICU_I18N_BASE);
     if Major > Result then
       Result := Major;
   end;
+  // Directories the dynamic linker also searches via LD_LIBRARY_PATH, so an ICU
+  // reachable only through an env override is still discovered — LoadLibrary then
+  // resolves the chosen major by SONAME through the linker.
+  Major := HighestICUMajorVersionInDirList(
+    GetEnvironmentVariable('LD_LIBRARY_PATH'), ':', ICU_I18N_BASE);
+  if Major > Result then
+    Result := Major;
 end;
 
 function TryLoadVersionedICU(AVersion: Integer; out AHandle: TLibHandle): Boolean;
