@@ -1,12 +1,11 @@
-{ Unit tests for the runtime ICU version discovery in source/shared/ICU.pas.
+{ Unit tests for the platform-independent ICU version discovery helpers in
+  source/shared/ICU.pas.
 
   The Linux loader must pick up whatever ICU major is installed — including
-  versions newer than any the engine has seen before — without a code change.
-  These tests pin the version parsing and the "newest present" directory scan
-  that make that work, including majors above the old hard-coded 76 ceiling.
-
-  The discovery helpers are Linux-only; on other platforms ICU loads by a single
-  fixed library name and there is nothing to discover, so the suite is a no-op. }
+  versions newer than any the engine has seen before — with no code change. The
+  version parsing and the "newest present" directory scan are pure string and
+  directory logic with no platform dependency, so they run on every platform and
+  are pinned here, including majors above the old hard-coded 76 ceiling. }
 
 program ICU.Test;
 
@@ -18,20 +17,18 @@ uses
   ICU,
   TestingPascalLibrary;
 
+const
+  I18N_BASE = 'libicui18n.so';
+
 type
   TICUTests = class(TTestSuite)
   private
-    {$IFDEF LINUX}
     procedure TestParseMajorVersion;
-    procedure TestDiscoverHighestInDirHasNoCap;
-    {$ELSE}
-    procedure TestDiscoveryIsLinuxOnly;
-    {$ENDIF}
+    procedure TestHighestInDirHasNoCap;
   public
     procedure SetupTests; override;
   end;
 
-{$IFDEF LINUX}
 procedure TouchFile(const APath: string);
 var
   Handle: THandle;
@@ -40,36 +37,29 @@ begin
   if Handle <> THandle(-1) then
     FileClose(Handle);
 end;
-{$ENDIF}
 
 procedure TICUTests.SetupTests;
 begin
-  {$IFDEF LINUX}
   Test('ParseICUSoMajorVersion extracts the major from a versioned SONAME',
     TestParseMajorVersion);
   Test('HighestICUMajorVersionInDir returns the newest present major, uncapped',
-    TestDiscoverHighestInDirHasNoCap);
-  {$ELSE}
-  Test('ICU version discovery is Linux-only (no-op on this platform)',
-    TestDiscoveryIsLinuxOnly);
-  {$ENDIF}
+    TestHighestInDirHasNoCap);
 end;
 
-{$IFDEF LINUX}
 procedure TICUTests.TestParseMajorVersion;
 begin
-  Expect<Integer>(ParseICUSoMajorVersion('libicui18n.so.77', 'libicui18n.so')).ToBe(77);
-  Expect<Integer>(ParseICUSoMajorVersion('libicui18n.so.100', 'libicui18n.so')).ToBe(100);
-  Expect<Integer>(ParseICUSoMajorVersion('libicui18n.so.76.1', 'libicui18n.so')).ToBe(76);
-  Expect<Integer>(ParseICUSoMajorVersion('libicui18n.so.70', 'libicui18n.so')).ToBe(70);
+  Expect<Integer>(ParseICUSoMajorVersion('libicui18n.so.77', I18N_BASE)).ToBe(77);
+  Expect<Integer>(ParseICUSoMajorVersion('libicui18n.so.100', I18N_BASE)).ToBe(100);
+  Expect<Integer>(ParseICUSoMajorVersion('libicui18n.so.76.1', I18N_BASE)).ToBe(76);
+  Expect<Integer>(ParseICUSoMajorVersion('libicui18n.so.70', I18N_BASE)).ToBe(70);
   // No numeric version, or an unrelated SONAME, yields 0.
-  Expect<Integer>(ParseICUSoMajorVersion('libicui18n.so', 'libicui18n.so')).ToBe(0);
-  Expect<Integer>(ParseICUSoMajorVersion('libicui18n.so.', 'libicui18n.so')).ToBe(0);
-  Expect<Integer>(ParseICUSoMajorVersion('libicui18n.so.x', 'libicui18n.so')).ToBe(0);
-  Expect<Integer>(ParseICUSoMajorVersion('libicuuc.so.76', 'libicui18n.so')).ToBe(0);
+  Expect<Integer>(ParseICUSoMajorVersion('libicui18n.so', I18N_BASE)).ToBe(0);
+  Expect<Integer>(ParseICUSoMajorVersion('libicui18n.so.', I18N_BASE)).ToBe(0);
+  Expect<Integer>(ParseICUSoMajorVersion('libicui18n.so.x', I18N_BASE)).ToBe(0);
+  Expect<Integer>(ParseICUSoMajorVersion('libicuuc.so.76', I18N_BASE)).ToBe(0);
 end;
 
-procedure TICUTests.TestDiscoverHighestInDirHasNoCap;
+procedure TICUTests.TestHighestInDirHasNoCap;
 var
   Dir: string;
 begin
@@ -78,7 +68,7 @@ begin
   ForceDirectories(Dir);
   try
     // No ICU library present.
-    Expect<Integer>(HighestICUMajorVersionInDir(Dir)).ToBe(0);
+    Expect<Integer>(HighestICUMajorVersionInDir(Dir, I18N_BASE)).ToBe(0);
 
     // A spread of majors, including ones above the old hard-coded 76 ceiling.
     TouchFile(IncludeTrailingPathDelimiter(Dir) + 'libicui18n.so.74');
@@ -89,7 +79,7 @@ begin
     TouchFile(IncludeTrailingPathDelimiter(Dir) + 'libicuuc.so.100');
     TouchFile(IncludeTrailingPathDelimiter(Dir) + 'unrelated.txt');
 
-    Expect<Integer>(HighestICUMajorVersionInDir(Dir)).ToBe(100);
+    Expect<Integer>(HighestICUMajorVersionInDir(Dir, I18N_BASE)).ToBe(100);
   finally
     DeleteFile(IncludeTrailingPathDelimiter(Dir) + 'libicui18n.so.74');
     DeleteFile(IncludeTrailingPathDelimiter(Dir) + 'libicui18n.so.76');
@@ -100,12 +90,6 @@ begin
     RemoveDir(Dir);
   end;
 end;
-{$ELSE}
-procedure TICUTests.TestDiscoveryIsLinuxOnly;
-begin
-  Expect<Boolean>(ICULibraryAvailable or True).ToBe(True);
-end;
-{$ENDIF}
 
 begin
   TestRunnerProgram.AddSuite(TICUTests.Create('ICU'));

@@ -11,15 +11,15 @@ function TryGetICULibraryHandle(out AHandle: TLibHandle): Boolean;
 function ICULibraryAvailable: Boolean;
 function ICUGetProcAddress(const AName: string): Pointer;
 
-{$IFDEF LINUX}
-{ Exposed for unit tests of the runtime ICU version discovery.
+{ Platform-independent helpers behind the runtime ICU version discovery (the
+  library loading that uses them is Linux-only). They are pure string/directory
+  logic, so they are available — and unit-tested — on every platform.
   ParseICUSoMajorVersion extracts the major from a versioned SONAME
-  ('libicui18n.so.77' -> 77; 'libicui18n.so.76.1' -> 76; unversioned/garbage -> 0).
-  HighestICUMajorVersionInDir returns the newest ICU major whose i18n library is
-  present in ADir, or 0 when none is found. }
+  ('libicui18n.so.77' -> 77; '...so.76.1' -> 76; unversioned/garbage -> 0).
+  HighestICUMajorVersionInDir returns the newest major among '<ABase>.<major>'
+  files in ADir, or 0 when none is found. }
 function ParseICUSoMajorVersion(const AFileName, ABase: string): Integer;
-function HighestICUMajorVersionInDir(const ADir: string): Integer;
-{$ENDIF}
+function HighestICUMajorVersionInDir(const ADir, ABase: string): Integer;
 
 implementation
 
@@ -54,19 +54,6 @@ var
   ICUVersionSuffix: string;
   {$ENDIF}
 
-{$IFDEF LINUX}
-const
-  // Standard locations distributions install the versioned ICU runtime into,
-  // across the Linux targets the project builds (Debian/Ubuntu multiarch for
-  // x86_64 and aarch64, plus the generic lib dirs other distros use). These are
-  // only scanned to learn which ICU majors are present; LoadLibrary still
-  // resolves the final path through the dynamic linker, and a non-existent dir
-  // is simply skipped, so listing both arch triplets is harmless.
-  ICU_SCAN_DIRS: array[0..6] of string = (
-    '/usr/lib/x86_64-linux-gnu', '/usr/lib/aarch64-linux-gnu',
-    '/lib/x86_64-linux-gnu', '/lib/aarch64-linux-gnu',
-    '/usr/lib64', '/usr/lib', '/usr/local/lib');
-
 function ParseICUSoMajorVersion(const AFileName, ABase: string): Integer;
 var
   Prefix, Digits: string;
@@ -88,24 +75,43 @@ begin
     Result := StrToIntDef(Digits, 0);
 end;
 
-function HighestICUMajorVersionInDir(const ADir: string): Integer;
+function HighestICUMajorVersionInDir(const ADir, ABase: string): Integer;
 var
   SearchRec: TSearchRec;
   Major: Integer;
 begin
+  // Scan every entry and let ParseICUSoMajorVersion decide what matches, rather
+  // than rely on FindFirst wildcard semantics (which differ across platforms), so
+  // the helper behaves identically everywhere it is tested.
   Result := 0;
-  if FindFirst(IncludeTrailingPathDelimiter(ADir) + ICU_I18N_BASE + '.*',
+  if FindFirst(IncludeTrailingPathDelimiter(ADir) + AllFilesMask,
       faAnyFile, SearchRec) = 0 then
     try
       repeat
-        Major := ParseICUSoMajorVersion(SearchRec.Name, ICU_I18N_BASE);
-        if Major > Result then
-          Result := Major;
+        if (SearchRec.Attr and faDirectory) = 0 then
+        begin
+          Major := ParseICUSoMajorVersion(SearchRec.Name, ABase);
+          if Major > Result then
+            Result := Major;
+        end;
       until FindNext(SearchRec) <> 0;
     finally
       FindClose(SearchRec);
     end;
 end;
+
+{$IFDEF LINUX}
+const
+  // Standard locations distributions install the versioned ICU runtime into,
+  // across the Linux targets the project builds (Debian/Ubuntu multiarch for
+  // x86_64 and aarch64, plus the generic lib dirs other distros use). These are
+  // only scanned to learn which ICU majors are present; LoadLibrary still
+  // resolves the final path through the dynamic linker, and a non-existent dir
+  // is simply skipped, so listing both arch triplets is harmless.
+  ICU_SCAN_DIRS: array[0..6] of string = (
+    '/usr/lib/x86_64-linux-gnu', '/usr/lib/aarch64-linux-gnu',
+    '/lib/x86_64-linux-gnu', '/lib/aarch64-linux-gnu',
+    '/usr/lib64', '/usr/lib', '/usr/local/lib');
 
 function DiscoverHighestICUMajorVersion: Integer;
 var
@@ -114,7 +120,7 @@ begin
   Result := 0;
   for DirIndex := Low(ICU_SCAN_DIRS) to High(ICU_SCAN_DIRS) do
   begin
-    Major := HighestICUMajorVersionInDir(ICU_SCAN_DIRS[DirIndex]);
+    Major := HighestICUMajorVersionInDir(ICU_SCAN_DIRS[DirIndex], ICU_I18N_BASE);
     if Major > Result then
       Result := Major;
   end;
