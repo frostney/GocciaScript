@@ -11,6 +11,16 @@ function TryGetICULibraryHandle(out AHandle: TLibHandle): Boolean;
 function ICULibraryAvailable: Boolean;
 function ICUGetProcAddress(const AName: string): Pointer;
 
+{$IFDEF LINUX}
+{ Exposed for unit tests of the runtime ICU version discovery.
+  ParseICUSoMajorVersion extracts the major from a versioned SONAME
+  ('libicui18n.so.77' -> 77; 'libicui18n.so.76.1' -> 76; unversioned/garbage -> 0).
+  HighestICUMajorVersionInDir returns the newest ICU major whose i18n library is
+  present in ADir, or 0 when none is found. }
+function ParseICUSoMajorVersion(const AFileName, ABase: string): Integer;
+function HighestICUMajorVersionInDir(const ADir: string): Integer;
+{$ENDIF}
+
 implementation
 
 uses
@@ -27,7 +37,10 @@ const
   {$IFDEF LINUX}
   ICU_I18N_BASE = 'libicui18n.so';
   ICU_UC_BASE = 'libicuuc.so';
-  ICU_VERSION_MAX = 76;
+  // Oldest ICU major that still exports the symbols the engine resolves. There is
+  // deliberately NO maximum: the newest installed major is discovered at runtime
+  // (DiscoverHighestICUMajorVersion), so a newer ICU — 77 and beyond — is picked
+  // up with no code change.
   ICU_VERSION_MIN = 70;
   {$ENDIF}
 
@@ -42,37 +55,111 @@ var
   {$ENDIF}
 
 {$IFDEF LINUX}
-function TryLoadLinuxICU(out AHandle: TLibHandle): Boolean;
+const
+  // Standard locations distributions install the versioned ICU runtime into,
+  // across the Linux targets the project builds (Debian/Ubuntu multiarch for
+  // x86_64 and aarch64, plus the generic lib dirs other distros use). These are
+  // only scanned to learn which ICU majors are present; LoadLibrary still
+  // resolves the final path through the dynamic linker, and a non-existent dir
+  // is simply skipped, so listing both arch triplets is harmless.
+  ICU_SCAN_DIRS: array[0..6] of string = (
+    '/usr/lib/x86_64-linux-gnu', '/usr/lib/aarch64-linux-gnu',
+    '/lib/x86_64-linux-gnu', '/lib/aarch64-linux-gnu',
+    '/usr/lib64', '/usr/lib', '/usr/local/lib');
+
+function ParseICUSoMajorVersion(const AFileName, ABase: string): Integer;
 var
-  Version: Integer;
-  LibName, UCLibName: string;
+  Prefix, Digits: string;
+  Index: Integer;
+begin
+  Result := 0;
+  Prefix := ABase + '.';
+  if Copy(AFileName, 1, Length(Prefix)) <> Prefix then
+    Exit;
+  Digits := '';
+  Index := Length(Prefix) + 1;
+  while (Index <= Length(AFileName)) and
+        (AFileName[Index] >= '0') and (AFileName[Index] <= '9') do
+  begin
+    Digits := Digits + AFileName[Index];
+    Inc(Index);
+  end;
+  if Digits <> '' then
+    Result := StrToIntDef(Digits, 0);
+end;
+
+function HighestICUMajorVersionInDir(const ADir: string): Integer;
+var
+  SearchRec: TSearchRec;
+  Major: Integer;
+begin
+  Result := 0;
+  if FindFirst(IncludeTrailingPathDelimiter(ADir) + ICU_I18N_BASE + '.*',
+      faAnyFile, SearchRec) = 0 then
+    try
+      repeat
+        Major := ParseICUSoMajorVersion(SearchRec.Name, ICU_I18N_BASE);
+        if Major > Result then
+          Result := Major;
+      until FindNext(SearchRec) <> 0;
+    finally
+      FindClose(SearchRec);
+    end;
+end;
+
+function DiscoverHighestICUMajorVersion: Integer;
+var
+  DirIndex, Major: Integer;
+begin
+  Result := 0;
+  for DirIndex := Low(ICU_SCAN_DIRS) to High(ICU_SCAN_DIRS) do
+  begin
+    Major := HighestICUMajorVersionInDir(ICU_SCAN_DIRS[DirIndex]);
+    if Major > Result then
+      Result := Major;
+  end;
+end;
+
+function TryLoadVersionedICU(AVersion: Integer; out AHandle: TLibHandle): Boolean;
+var
+  UC: TLibHandle;
 begin
   Result := False;
+  AHandle := LoadLibrary(ICU_I18N_BASE + '.' + IntToStr(AVersion));
+  if AHandle = NilHandle then
+    Exit;
+  UC := LoadLibrary(ICU_UC_BASE + '.' + IntToStr(AVersion));
+  if UC = NilHandle then
+  begin
+    UnloadLibrary(AHandle);
+    AHandle := NilHandle;
+    Exit;
+  end;
+  UCHandle := UC;
+  ICUVersionSuffix := '_' + IntToStr(AVersion);
+  Result := True;
+end;
+
+function TryLoadLinuxICU(out AHandle: TLibHandle): Boolean;
+var
+  Version, Highest: Integer;
+begin
   AHandle := NilHandle;
   UCHandle := NilHandle;
 
-  for Version := ICU_VERSION_MAX downto ICU_VERSION_MIN do
-  begin
-    AHandle := NilHandle;
-    UCHandle := NilHandle;
-    LibName := ICU_I18N_BASE + '.' + IntToStr(Version);
-    UCLibName := ICU_UC_BASE + '.' + IntToStr(Version);
-    AHandle := LoadLibrary(LibName);
-    if AHandle <> NilHandle then
+  // Try the newest installed ICU first, then any older co-installed majors down
+  // to the compatibility floor. The ceiling is whatever is installed, so newer
+  // releases (77+) need no code change.
+  Highest := DiscoverHighestICUMajorVersion;
+  for Version := Highest downto ICU_VERSION_MIN do
+    if TryLoadVersionedICU(Version, AHandle) then
     begin
-      UCHandle := LoadLibrary(UCLibName);
-      if UCHandle = NilHandle then
-      begin
-        UnloadLibrary(AHandle);
-        AHandle := NilHandle;
-        Continue;
-      end;
-      ICUVersionSuffix := '_' + IntToStr(Version);
       Result := True;
       Exit;
     end;
-  end;
 
+  // Fallback: an unversioned SONAME (a -dev symlink, or a toolchain that keeps
+  // unversioned exported symbols).
   AHandle := LoadLibrary(ICU_I18N_BASE);
   if AHandle <> NilHandle then
   begin
@@ -86,8 +173,11 @@ begin
     begin
       ICUVersionSuffix := '';
       Result := True;
+      Exit;
     end;
   end;
+
+  Result := False;
 end;
 {$ENDIF}
 
