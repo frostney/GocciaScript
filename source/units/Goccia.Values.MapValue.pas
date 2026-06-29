@@ -71,7 +71,6 @@ uses
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.Realm,
-  Goccia.ThreadCleanupRegistry,
   Goccia.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
@@ -84,14 +83,6 @@ uses
 // process-wide (immutable across realms).
 var
   GMapSharedSlot: TGocciaRealmOwnedSlotId;
-
-threadvar
-  FPrototypeMembers: TArray<TGocciaMemberDefinition>;
-
-procedure ClearThreadvarMembers;
-begin
-  SetLength(FPrototypeMembers, 0);
-end;
 
 function GetMapShared: TGocciaSharedPrototype; inline;
 begin
@@ -117,43 +108,41 @@ procedure TGocciaMapValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
   Shared: TGocciaSharedPrototype;
+  PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
   if not Assigned(CurrentRealm) then Exit;
   if Assigned(GetMapShared) then Exit;
 
   Shared := TGocciaSharedPrototype.Create(Self);
   CurrentRealm.SetOwnedSlot(GMapSharedSlot, Shared);
-  if Length(FPrototypeMembers) = 0 then
-  begin
-    Members := TGocciaMemberCollection.Create;
-    try
-      Members.AddNamedMethod('get', MapGet, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('set', MapSet, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('has', MapHas, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('delete', MapDelete, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('clear', MapClear, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('forEach', MapForEach, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('keys', MapKeys, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('values', MapValues, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('entries', MapEntries, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('getOrInsert', MapGetOrInsert, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('getOrInsertComputed', MapGetOrInsertComputed, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddSymbolMethod(
-        TGocciaSymbolValue.WellKnownIterator,
-        '[Symbol.iterator]',
-        MapSymbolIterator,
-        0,
-        [pfConfigurable, pfWritable]);
-      Members.AddSymbolDataProperty(
-        TGocciaSymbolValue.WellKnownToStringTag,
-        TGocciaStringLiteralValue.Create(CONSTRUCTOR_MAP),
-        [pfConfigurable]);
-      FPrototypeMembers := Members.ToDefinitions;
-    finally
-      Members.Free;
-    end;
+  Members := TGocciaMemberCollection.Create;
+  try
+    Members.AddNamedMethod('get', MapGet, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod('set', MapSet, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod('has', MapHas, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod('delete', MapDelete, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod('clear', MapClear, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod('forEach', MapForEach, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod('keys', MapKeys, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod('values', MapValues, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod('entries', MapEntries, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod('getOrInsert', MapGetOrInsert, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod('getOrInsertComputed', MapGetOrInsertComputed, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddSymbolMethod(
+      TGocciaSymbolValue.WellKnownIterator,
+      '[Symbol.iterator]',
+      MapSymbolIterator,
+      0,
+      [pfConfigurable, pfWritable]);
+    Members.AddSymbolDataProperty(
+      TGocciaSymbolValue.WellKnownToStringTag,
+      TGocciaStringLiteralValue.Create(CONSTRUCTOR_MAP),
+      [pfConfigurable]);
+    PrototypeMembers := Members.ToDefinitions;
+  finally
+    Members.Free;
   end;
-  RegisterMemberDefinitions(Shared.Prototype, FPrototypeMembers);
+  RegisterMemberDefinitions(Shared.Prototype, PrototypeMembers);
 end;
 
 class procedure TGocciaMapValue.ExposePrototype(const AConstructor: TGocciaValue);
@@ -604,6 +593,5 @@ end;
 
 initialization
   GMapSharedSlot := RegisterRealmOwnedSlot('Map.shared');
-  RegisterThreadvarCleanup(@ClearThreadvarMembers);
 
 end.

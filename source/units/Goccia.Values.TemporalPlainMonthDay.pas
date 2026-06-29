@@ -65,7 +65,6 @@ uses
   Goccia.Realm,
   Goccia.Temporal.Calendar,
   Goccia.Temporal.Options,
-  Goccia.ThreadCleanupRegistry,
   Goccia.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.IntlDateTimeFormat,
@@ -78,14 +77,6 @@ uses
 
 var
   GTemporalPlainMonthDaySharedSlot: TGocciaRealmOwnedSlotId;
-
-threadvar
-  FPrototypeMembers: TArray<TGocciaMemberDefinition>;
-
-procedure ClearThreadvarMembers;
-begin
-  SetLength(FPrototypeMembers, 0);
-end;
 
 function GetTemporalPlainMonthDayShared: TGocciaSharedPrototype; inline;
 begin
@@ -548,35 +539,33 @@ procedure TGocciaTemporalPlainMonthDayValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
   Shared: TGocciaSharedPrototype;
+  PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
   if not Assigned(CurrentRealm) then Exit;
   if Assigned(GetTemporalPlainMonthDayShared) then Exit;
   Shared := TGocciaSharedPrototype.Create(Self);
   CurrentRealm.SetOwnedSlot(GTemporalPlainMonthDaySharedSlot, Shared);
-  if Length(FPrototypeMembers) = 0 then
-  begin
-    Members := TGocciaMemberCollection.Create;
-    try
-      Members.AddAccessor(PROP_CALENDAR_ID, GetCalendarId, nil, [pfConfigurable]);
-      Members.AddAccessor(PROP_MONTH_CODE, GetMonthCode, nil, [pfConfigurable]);
-      Members.AddAccessor(PROP_DAY, GetDay, nil, [pfConfigurable]);
-      Members.AddMethod(MonthDayWith, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(MonthDayEquals, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(MonthDayToString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(MonthDayToJSON, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(MonthDayValueOf, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(MonthDayToPlainDate, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(MonthDayToLocaleString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddSymbolDataProperty(
-        TGocciaSymbolValue.WellKnownToStringTag,
-        TGocciaStringLiteralValue.Create('Temporal.PlainMonthDay'),
-        [pfConfigurable]);
-      FPrototypeMembers := Members.ToDefinitions;
-    finally
-      Members.Free;
-    end;
+  Members := TGocciaMemberCollection.Create;
+  try
+    Members.AddAccessor(PROP_CALENDAR_ID, GetCalendarId, nil, [pfConfigurable]);
+    Members.AddAccessor(PROP_MONTH_CODE, GetMonthCode, nil, [pfConfigurable]);
+    Members.AddAccessor(PROP_DAY, GetDay, nil, [pfConfigurable]);
+    Members.AddMethod(MonthDayWith, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(MonthDayEquals, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(MonthDayToString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(MonthDayToJSON, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(MonthDayValueOf, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(MonthDayToPlainDate, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(MonthDayToLocaleString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddSymbolDataProperty(
+      TGocciaSymbolValue.WellKnownToStringTag,
+      TGocciaStringLiteralValue.Create('Temporal.PlainMonthDay'),
+      [pfConfigurable]);
+    PrototypeMembers := Members.ToDefinitions;
+  finally
+    Members.Free;
   end;
-  RegisterMemberDefinitions(Shared.Prototype, FPrototypeMembers);
+  RegisterMemberDefinitions(Shared.Prototype, PrototypeMembers);
 end;
 
 class procedure TGocciaTemporalPlainMonthDayValue.ExposePrototype(const AConstructor: TGocciaObjectValue);
@@ -908,7 +897,6 @@ begin
 end;
 
 initialization
-  RegisterThreadvarCleanup(@ClearThreadvarMembers);
   GTemporalPlainMonthDaySharedSlot := RegisterRealmOwnedSlot('Temporal.PlainMonthDay.shared');
 
 end.

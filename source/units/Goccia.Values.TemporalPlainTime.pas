@@ -70,7 +70,6 @@ uses
   Goccia.Temporal.DurationMath,
   Goccia.Temporal.Options,
   Goccia.Temporal.Utils,
-  Goccia.ThreadCleanupRegistry,
   Goccia.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.IntlDateTimeFormat,
@@ -82,14 +81,6 @@ uses
 
 var
   GTemporalPlainTimeSharedSlot: TGocciaRealmOwnedSlotId;
-
-threadvar
-  FPrototypeMembers: TArray<TGocciaMemberDefinition>;
-
-procedure ClearThreadvarMembers;
-begin
-  SetLength(FPrototypeMembers, 0);
-end;
 
 function GetTemporalPlainTimeShared: TGocciaSharedPrototype; inline;
 begin
@@ -269,42 +260,40 @@ procedure TGocciaTemporalPlainTimeValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
   Shared: TGocciaSharedPrototype;
+  PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
   if not Assigned(CurrentRealm) then Exit;
   if Assigned(GetTemporalPlainTimeShared) then Exit;
   Shared := TGocciaSharedPrototype.Create(Self);
   CurrentRealm.SetOwnedSlot(GTemporalPlainTimeSharedSlot, Shared);
-  if Length(FPrototypeMembers) = 0 then
-  begin
-    Members := TGocciaMemberCollection.Create;
-    try
-      Members.AddAccessor('hour', GetHour, nil, [pfConfigurable]);
-      Members.AddAccessor('minute', GetMinute, nil, [pfConfigurable]);
-      Members.AddAccessor('second', GetSecond, nil, [pfConfigurable]);
-      Members.AddAccessor('millisecond', GetMillisecond, nil, [pfConfigurable]);
-      Members.AddAccessor('microsecond', GetMicrosecond, nil, [pfConfigurable]);
-      Members.AddAccessor('nanosecond', GetNanosecond, nil, [pfConfigurable]);
-      Members.AddMethod(TimeWith, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(TimeAdd, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(TimeSubtract, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(TimeUntil, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(TimeSince, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(TimeRound, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(TimeEquals, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(TimeToString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(TimeToJSON, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(TimeValueOf, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(PlainTimeToLocaleString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddSymbolDataProperty(
-        TGocciaSymbolValue.WellKnownToStringTag,
-        TGocciaStringLiteralValue.Create('Temporal.PlainTime'),
-        [pfConfigurable]);
-      FPrototypeMembers := Members.ToDefinitions;
-    finally
-      Members.Free;
-    end;
+  Members := TGocciaMemberCollection.Create;
+  try
+    Members.AddAccessor('hour', GetHour, nil, [pfConfigurable]);
+    Members.AddAccessor('minute', GetMinute, nil, [pfConfigurable]);
+    Members.AddAccessor('second', GetSecond, nil, [pfConfigurable]);
+    Members.AddAccessor('millisecond', GetMillisecond, nil, [pfConfigurable]);
+    Members.AddAccessor('microsecond', GetMicrosecond, nil, [pfConfigurable]);
+    Members.AddAccessor('nanosecond', GetNanosecond, nil, [pfConfigurable]);
+    Members.AddMethod(TimeWith, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(TimeAdd, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(TimeSubtract, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(TimeUntil, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(TimeSince, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(TimeRound, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(TimeEquals, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(TimeToString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(TimeToJSON, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(TimeValueOf, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(PlainTimeToLocaleString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddSymbolDataProperty(
+      TGocciaSymbolValue.WellKnownToStringTag,
+      TGocciaStringLiteralValue.Create('Temporal.PlainTime'),
+      [pfConfigurable]);
+    PrototypeMembers := Members.ToDefinitions;
+  finally
+    Members.Free;
   end;
-  RegisterMemberDefinitions(Shared.Prototype, FPrototypeMembers);
+  RegisterMemberDefinitions(Shared.Prototype, PrototypeMembers);
 end;
 
 class procedure TGocciaTemporalPlainTimeValue.ExposePrototype(const AConstructor: TGocciaObjectValue);
@@ -742,7 +731,6 @@ begin
 end;
 
 initialization
-  RegisterThreadvarCleanup(@ClearThreadvarMembers);
   GTemporalPlainTimeSharedSlot := RegisterRealmOwnedSlot('Temporal.PlainTime.shared');
 
 end.

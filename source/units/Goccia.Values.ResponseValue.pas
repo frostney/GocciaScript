@@ -84,7 +84,6 @@ uses
   Goccia.Error.Suggestions,
   Goccia.JSON,
   Goccia.Realm,
-  Goccia.ThreadCleanupRegistry,
   Goccia.Utils,
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ErrorHelper,
@@ -94,14 +93,6 @@ uses
 
 var
   GResponseSharedSlot: TGocciaRealmOwnedSlotId;
-
-threadvar
-  FPrototypeMembers: TArray<TGocciaMemberDefinition>;
-
-procedure ClearThreadvarMembers;
-begin
-  SetLength(FPrototypeMembers, 0);
-end;
 
 function GetResponseShared: TGocciaSharedPrototype; inline;
 begin
@@ -148,48 +139,46 @@ procedure TGocciaResponseValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
   Shared: TGocciaSharedPrototype;
+  PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
   if not Assigned(CurrentRealm) then Exit;
   if Assigned(GetResponseShared) then Exit;
 
   Shared := TGocciaSharedPrototype.Create(Self);
   CurrentRealm.SetOwnedSlot(GResponseSharedSlot, Shared);
-  if Length(FPrototypeMembers) = 0 then
-  begin
-    Members := TGocciaMemberCollection.Create;
-    try
-      // Read-only accessors
-      Members.AddAccessor(PROP_STATUS,
-        ResponseStatusGetter, nil, [pfConfigurable, pfEnumerable]);
-      Members.AddAccessor(PROP_STATUS_TEXT,
-        ResponseStatusTextGetter, nil, [pfConfigurable, pfEnumerable]);
-      Members.AddAccessor(PROP_OK,
-        ResponseOkGetter, nil, [pfConfigurable, pfEnumerable]);
-      Members.AddAccessor(PROP_URL,
-        ResponseUrlGetter, nil, [pfConfigurable, pfEnumerable]);
-      Members.AddAccessor(PROP_HEADERS,
-        ResponseHeadersGetter, nil, [pfConfigurable, pfEnumerable]);
-      Members.AddAccessor(PROP_TYPE,
-        ResponseTypeGetter, nil, [pfConfigurable, pfEnumerable]);
-      Members.AddAccessor(PROP_REDIRECTED,
-        ResponseRedirectedGetter, nil, [pfConfigurable, pfEnumerable]);
-      Members.AddAccessor(PROP_BODY_USED,
-        ResponseBodyUsedGetter, nil, [pfConfigurable, pfEnumerable]);
+  Members := TGocciaMemberCollection.Create;
+  try
+    // Read-only accessors
+    Members.AddAccessor(PROP_STATUS,
+      ResponseStatusGetter, nil, [pfConfigurable, pfEnumerable]);
+    Members.AddAccessor(PROP_STATUS_TEXT,
+      ResponseStatusTextGetter, nil, [pfConfigurable, pfEnumerable]);
+    Members.AddAccessor(PROP_OK,
+      ResponseOkGetter, nil, [pfConfigurable, pfEnumerable]);
+    Members.AddAccessor(PROP_URL,
+      ResponseUrlGetter, nil, [pfConfigurable, pfEnumerable]);
+    Members.AddAccessor(PROP_HEADERS,
+      ResponseHeadersGetter, nil, [pfConfigurable, pfEnumerable]);
+    Members.AddAccessor(PROP_TYPE,
+      ResponseTypeGetter, nil, [pfConfigurable, pfEnumerable]);
+    Members.AddAccessor(PROP_REDIRECTED,
+      ResponseRedirectedGetter, nil, [pfConfigurable, pfEnumerable]);
+    Members.AddAccessor(PROP_BODY_USED,
+      ResponseBodyUsedGetter, nil, [pfConfigurable, pfEnumerable]);
 
-      // Body consumption methods
-      Members.AddNamedMethod(PROP_TEXT, ResponseText, 0,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod(PROP_JSON, ResponseJSON, 0,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod(PROP_ARRAY_BUFFER_METHOD, ResponseArrayBuffer, 0,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    // Body consumption methods
+    Members.AddNamedMethod(PROP_TEXT, ResponseText, 0,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod(PROP_JSON, ResponseJSON, 0,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod(PROP_ARRAY_BUFFER_METHOD, ResponseArrayBuffer, 0,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype]);
 
-      FPrototypeMembers := Members.ToDefinitions;
-    finally
-      Members.Free;
-    end;
+    PrototypeMembers := Members.ToDefinitions;
+  finally
+    Members.Free;
   end;
-  RegisterMemberDefinitions(Shared.Prototype, FPrototypeMembers);
+  RegisterMemberDefinitions(Shared.Prototype, PrototypeMembers);
 end;
 
 class procedure TGocciaResponseValue.ExposePrototype(const AConstructor: TGocciaValue);
@@ -485,7 +474,6 @@ begin
 end;
 
 initialization
-  RegisterThreadvarCleanup(@ClearThreadvarMembers);
   GResponseSharedSlot := RegisterRealmOwnedSlot('Response.shared');
 
 end.

@@ -1,26 +1,22 @@
-{ Use-after-free regression gate for the TGocciaSharedPrototype units (#892
-  follow-up).
+{ Regression gate for the per-realm prototype rebuild in the TGocciaSharedPrototype
+  units (#892 / ADR 0083).
 
   ~30 value units (Map, Set, WeakMap/WeakSet/WeakRef, FinalizationRegistry,
   Promise, ArrayBuffer, all Intl*, all Temporal*, ...) build their prototype via
-  TGocciaSharedPrototype.Create(Self) — where Self is a per-realm host instance,
-  unpinned when the realm is torn down — while caching their member definitions
-  in a process-wide threadvar guarded by `if Length(FPrototypeMembers) = 0`.
-  The cached member array's `procedure of object` callbacks are therefore bound
-  to the FIRST realm's host on a thread, and are reused (bound to that same host)
-  by every later realm on the thread. After the first realm is destroyed and the
-  GC collects, that host is freed.
+  TGocciaSharedPrototype.Create(Self), where Self is the current realm's host
+  instance (unpinned when the realm is torn down) whose methods back the
+  prototype's members. Those members are now rebuilt per realm. Previously they
+  were cached in a cross-realm threadvar, which bound every later realm's
+  prototype to the FIRST realm's host; once that realm was destroyed and the GC
+  collected, the host was freed and the cached `procedure of object` callbacks
+  pointed at a freed instance. ADR 0083 removed that cross-realm cache.
 
-  This test drives exactly that path: it runs many independent engines (each its
-  own realm) on one thread, forcing a full GC collection between them so the
-  first realm's host is actually reclaimed, then exercises the shared-prototype
-  types in the later realms. Each script self-verifies its results and throws on
-  any discrepancy, so a use-after-free that corrupted dispatch surfaces either as
-  a thrown error (caught below) or a hard crash (fails the suite). Passing
-  confirms the bound callbacks never dereference the freed host (they re-derive
-  their receiver from the JS `this`), which is why the cross-realm cache is safe
-  despite the realm-owned host. See docs/adr/0084 (and docs/adr/0083 for the
-  related #892 migration). }
+  This test drives the multi-realm path: it runs many independent engines (each
+  its own realm) on one thread, forcing a full GC collection and a heap stomp
+  between them, then exercises the shared-prototype types in the later realms.
+  Each script self-verifies and throws on any discrepancy, so a regression that
+  reintroduced a cross-realm cache (binding a later realm to a freed host) would
+  surface as a thrown error (caught below) or a hard crash. See docs/adr/0083. }
 
 program Goccia.SharedPrototypeRealmReuse.Test;
 

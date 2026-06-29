@@ -56,7 +56,6 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.Realm,
-  Goccia.ThreadCleanupRegistry,
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction,
@@ -65,14 +64,6 @@ uses
 
 var
   GTextDecoderSharedSlot: TGocciaRealmOwnedSlotId;
-
-threadvar
-  FPrototypeMembers: TArray<TGocciaMemberDefinition>;
-
-procedure ClearThreadvarMembers;
-begin
-  SetLength(FPrototypeMembers, 0);
-end;
 
 function GetTextDecoderShared: TGocciaSharedPrototype; inline;
 begin
@@ -361,27 +352,25 @@ procedure TGocciaTextDecoderValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
   Shared: TGocciaSharedPrototype;
+  PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
   if not Assigned(CurrentRealm) then Exit;
   if Assigned(GetTextDecoderShared) then Exit;
 
   Shared := TGocciaSharedPrototype.Create(Self);
   CurrentRealm.SetOwnedSlot(GTextDecoderSharedSlot, Shared);
-  if Length(FPrototypeMembers) = 0 then
-  begin
-    Members := TGocciaMemberCollection.Create;
-    try
-      Members.AddAccessor(PROP_ENCODING, EncodingGetter, nil, [pfConfigurable]);
-      Members.AddAccessor(PROP_FATAL, FatalGetter, nil, [pfConfigurable]);
-      Members.AddAccessor(PROP_IGNORE_BOM, IgnoreBOMGetter, nil, [pfConfigurable]);
-      Members.AddNamedMethod(PROP_DECODE, Decode, 1, gmkPrototypeMethod,
-        [gmfNoFunctionPrototype]);
-      FPrototypeMembers := Members.ToDefinitions;
-    finally
-      Members.Free;
-    end;
+  Members := TGocciaMemberCollection.Create;
+  try
+    Members.AddAccessor(PROP_ENCODING, EncodingGetter, nil, [pfConfigurable]);
+    Members.AddAccessor(PROP_FATAL, FatalGetter, nil, [pfConfigurable]);
+    Members.AddAccessor(PROP_IGNORE_BOM, IgnoreBOMGetter, nil, [pfConfigurable]);
+    Members.AddNamedMethod(PROP_DECODE, Decode, 1, gmkPrototypeMethod,
+      [gmfNoFunctionPrototype]);
+    PrototypeMembers := Members.ToDefinitions;
+  finally
+    Members.Free;
   end;
-  RegisterMemberDefinitions(Shared.Prototype, FPrototypeMembers);
+  RegisterMemberDefinitions(Shared.Prototype, PrototypeMembers);
 end;
 
 class procedure TGocciaTextDecoderValue.ExposePrototype(const AConstructor: TGocciaValue);
@@ -524,7 +513,6 @@ begin
 end;
 
 initialization
-  RegisterThreadvarCleanup(@ClearThreadvarMembers);
   GTextDecoderSharedSlot := RegisterRealmOwnedSlot('TextDecoder.shared');
 
 end.
