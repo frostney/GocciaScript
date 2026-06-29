@@ -16,7 +16,16 @@
   between them, then exercises the shared-prototype types in the later realms.
   Each script self-verifies and throws on any discrepancy, so a regression that
   reintroduced a cross-realm cache (binding a later realm to a freed host) would
-  surface as a thrown error (caught below) or a hard crash. See docs/adr/0083. }
+  surface as a thrown error (caught below) or a hard crash.
+
+  It also covers Goccia.Builtins.GlobalRegExp, a constructor-style builtin (not a
+  TGocciaSharedPrototype unit) whose per-realm host is freed to the FPC heap rather
+  than the GC heap, and which had the same cross-realm member cache. Its cached
+  [Symbol.matchAll] / [Symbol.split] callbacks dereference the host's
+  FRegExpConstructor on the SpeciesConstructor fallback (receiver constructor =
+  undefined), so this test additionally poisons the FPC heap and forces that path:
+  it crashed with an access violation before the per-realm rebuild and passes after.
+  See docs/adr/0083. }
 
 program Goccia.SharedPrototypeRealmReuse.Test;
 
@@ -26,6 +35,7 @@ uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
   SysUtils,
 
+  Goccia.Builtins.GlobalRegExp,
   Goccia.Engine,
   Goccia.GarbageCollector,
   Goccia.Values.ObjectValue,
@@ -56,7 +66,21 @@ const
     'const dur = Temporal.Duration.from({ hours: 2, minutes: 30 });' + sLineBreak +
     'if (dur.hours !== 2 || dur.minutes !== 30) throw new Error("Temporal.Duration");' + sLineBreak +
     'const inst = Temporal.Instant.fromEpochMilliseconds(1000);' + sLineBreak +
-    'if (inst.epochMilliseconds !== 1000) throw new Error("Temporal.Instant");';
+    'if (inst.epochMilliseconds !== 1000) throw new Error("Temporal.Instant");' + sLineBreak +
+    // RegExp is a constructor-style builtin (not TGocciaSharedPrototype) whose
+    // per-realm host is freed with its engine; [Symbol.split] / [Symbol.matchAll]
+    // read the host's FRegExpConstructor field via SpeciesConstructor, so a stale
+    // cross-realm member cache dispatches them against a freed host (ADR 0083).
+    'const parts = "a-b-c".split(/-/); if (parts.length !== 3 || parts[1] !== "b") throw new Error("RegExp.split");' + sLineBreak +
+    'const ms = [..."a1b2".matchAll(/[0-9]/g)]; if (ms.length !== 2 || ms[0][0] !== "1") throw new Error("RegExp.matchAll");' + sLineBreak +
+    // constructor=undefined forces RegExp[Symbol.matchAll] down the
+    // SpeciesConstructor fallback, which CONSTRUCTS via the host's FRegExpConstructor
+    // field -> dereferences the (stale, freed) host, not just reads it.
+    'const reC = /[0-9]/g; reC.constructor = undefined;' + sLineBreak +
+    'const mc = [...reC[Symbol.matchAll]("a1b2")]; if (mc.length !== 2) throw new Error("RegExp.matchAll species-fallback");' + sLineBreak +
+    'const ex = /[a-z]/.exec("9x"); if (!ex || ex[0] !== "x") throw new Error("RegExp.exec");' + sLineBreak +
+    'if (!/[0-9]/.test("x5")) throw new Error("RegExp.test");' + sLineBreak +
+    'if (/abc/.source !== "abc") throw new Error("RegExp.source");';
 
 type
   TRealmReuseTests = class(TTestSuite)
@@ -75,9 +99,13 @@ end;
 procedure TRealmReuseTests.TestSharedPrototypeSurvivesRealmTeardownAndCollect;
 const
   CYCLES = 12;
+  FPC_STOMP_PER_CYCLE = 512;
 var
   I, J: Integer;
   Stomp: array of TGocciaObjectValue;
+  FpcStomp: array of Pointer;
+  FpcStompCount: Integer;
+  HostSize: PtrUInt;
 begin
   // Each cycle builds a fresh engine/realm and rebuilds every unit's prototype
   // members bound to that realm's own host, then tears the realm down (RunScript
@@ -86,27 +114,55 @@ begin
   // freed host. If a regression reintroduced a cross-realm member cache, cycles
   // 1+ would dispatch against cycle 0's freed host and throw or crash here;
   // correct results across all cycles prove the per-realm rebuild holds.
-  for I := 0 to CYCLES - 1 do
-  begin
-    TGocciaEngine.RunScript(SELF_VERIFYING_SCRIPT, '<realm-reuse-' + IntToStr(I) + '>');
+  //
+  // Two pools are stomped because the hazard lives in two: the
+  // TGocciaSharedPrototype hosts are GC-managed (reclaimed by Collect, so the
+  // GC-object stomp reuses their freed blocks), while the RegExp builtin host
+  // (TGocciaGlobalRegExp, a plain TObject) is freed to the FPC heap. A same-size
+  // FPC-heap stomp, kept allocated across the next realm's run, overwrites that
+  // freed host so a stale cross-realm RegExp member cache dereferences garbage
+  // (hard crash) instead of coincidentally-intact memory.
+  HostSize := TGocciaGlobalRegExp.InstanceSize;
+  FpcStompCount := 0;
+  SetLength(FpcStomp, CYCLES * FPC_STOMP_PER_CYCLE);
+  try
+    for I := 0 to CYCLES - 1 do
+    begin
+      TGocciaEngine.RunScript(SELF_VERIFYING_SCRIPT, '<realm-reuse-' + IntToStr(I) + '>');
 
-    // Reclaim the just-torn-down realm's unpinned host instances...
-    TGarbageCollector.Instance.Collect;
+      // Claim the just-freed FPC-heap RegExp host block with 0xFF FIRST — before
+      // the GC churn below can reuse it — and keep it held, so the NEXT realm
+      // dispatching a cached RegExp callback against this freed host reads a
+      // poisoned pointer (hard crash) rather than coincidentally-intact memory.
+      for J := 1 to FPC_STOMP_PER_CYCLE do
+      begin
+        GetMem(FpcStomp[FpcStompCount], HostSize);
+        FillByte(FpcStomp[FpcStompCount]^, HostSize, $FF);
+        Inc(FpcStompCount);
+      end;
 
-    // ...then aggressively reuse the freed blocks, so any later dereference of a
-    // freed host reads stomped memory rather than coincidentally-intact data.
-    SetLength(Stomp, 4096);
-    for J := 0 to High(Stomp) do
-      Stomp[J] := TGocciaObjectValue.Create;
-    for J := 0 to High(Stomp) do
-      Stomp[J] := nil;
-    SetLength(Stomp, 0);
-    TGarbageCollector.Instance.Collect;
+      // Reclaim the just-torn-down realm's unpinned GC host instances...
+      TGarbageCollector.Instance.Collect;
+
+      // ...then aggressively reuse the freed GC blocks, so any later dereference
+      // of a freed GC host reads stomped memory rather than intact data.
+      SetLength(Stomp, 4096);
+      for J := 0 to High(Stomp) do
+        Stomp[J] := TGocciaObjectValue.Create;
+      for J := 0 to High(Stomp) do
+        Stomp[J] := nil;
+      SetLength(Stomp, 0);
+
+      TGarbageCollector.Instance.Collect;
+    end;
+
+    // Reaching here without a thrown error or crash across all cycles is the pass
+    // condition.
+    Expect<Boolean>(True).ToBe(True);
+  finally
+    for J := 0 to FpcStompCount - 1 do
+      FreeMem(FpcStomp[J]);
   end;
-
-  // Reaching here without a thrown error or crash across all cycles is the pass
-  // condition.
-  Expect<Boolean>(True).ToBe(True);
 end;
 
 begin
