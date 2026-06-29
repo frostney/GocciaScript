@@ -79,13 +79,13 @@ var
   I, J: Integer;
   Stomp: array of TGocciaObjectValue;
 begin
-  // Cycle 0 builds and caches each unit's FPrototypeMembers, bound to that
-  // realm's host instances, then tears the realm down (RunScript frees the
-  // engine), unpinning those hosts. The collect below reclaims them. Cycles 1+
-  // hit the `Length(FPrototypeMembers) <> 0` fast path, so they re-apply the
-  // cached members — bound to cycle 0's now-freed hosts — to their own fresh
-  // prototypes, and then dispatch against them. A use-after-free here throws or
-  // crashes; correct results prove the freed host is never dereferenced.
+  // Each cycle builds a fresh engine/realm and rebuilds every unit's prototype
+  // members bound to that realm's own host, then tears the realm down (RunScript
+  // frees the engine) and the collect below reclaims that host. Because members
+  // are rebuilt per realm, no later realm is ever bound to an earlier realm's
+  // freed host. If a regression reintroduced a cross-realm member cache, cycles
+  // 1+ would dispatch against cycle 0's freed host and throw or crash here;
+  // correct results across all cycles prove the per-realm rebuild holds.
   for I := 0 to CYCLES - 1 do
   begin
     TGocciaEngine.RunScript(SELF_VERIFYING_SCRIPT, '<realm-reuse-' + IntToStr(I) + '>');

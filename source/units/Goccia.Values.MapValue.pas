@@ -79,8 +79,8 @@ uses
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
 
-// Map.prototype lives in a per-realm owned slot.  Member definitions stay
-// process-wide (immutable across realms).
+// Map.prototype lives in a per-realm owned slot; its member definitions are
+// rebuilt per realm (bound to that realm's host), not cached cross-realm.
 var
   GMapSharedSlot: TGocciaRealmOwnedSlotId;
 

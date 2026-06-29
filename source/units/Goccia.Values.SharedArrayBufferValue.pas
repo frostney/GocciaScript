@@ -172,8 +172,7 @@ begin
   try
     Members.AddMethod(SharedArrayBufferSlice, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
     Members.AddMethod(SharedArrayBufferGrow, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-    Members.AddPublishedGetter(
-      TGocciaSharedArrayBufferValue, 'ByteLength', PROP_BYTE_LENGTH, [pfConfigurable]);
+    Members.AddAccessor(PROP_BYTE_LENGTH, SharedArrayBufferByteLengthGetter, nil, [pfConfigurable]);
     Members.AddAccessor(PROP_MAX_BYTE_LENGTH, SharedArrayBufferMaxByteLengthGetter, nil, [pfConfigurable]);
     Members.AddAccessor(PROP_GROWABLE, SharedArrayBufferGrowableGetter, nil, [pfConfigurable]);
     Members.AddSymbolDataProperty(
