@@ -114,13 +114,21 @@ end;
 
 // BigInt.prototype (the JS-visible prototype, shared by primitive 1n and the
 // rare object wrapper) lives in a per-realm slot so JS-side mutations don't
-// leak across realms.  Method host and member definitions are immutable
-// process-wide.
+// leak across realms.  The member definitions are immutable process-wide and
+// cached in a managed threadvar (released via Goccia.ThreadCleanupRegistry, #885).
+//
+// Unlike the other prototype-host units migrated to realm slots in #892, the
+// method host here is BigIntZero — the 0n process-wide singleton that
+// Goccia.Builtins.GlobalBigInt passes to InitializePrototype as Self. 0n is
+// already pinned for the process lifetime by BigIntZero itself and is the same
+// fixed-value-singleton category as the primitive singletons (out of #892's
+// scope), so there is no per-thread prototype-host leak and no separate host
+// threadvar: InitializePrototype just re-pins Self. Moving the host to a realm
+// slot would make the realm unpin 0n on Destroy and break the shared singleton.
 var
   GBigIntPrimitivePrototypeSlot: TGocciaRealmSlotId;
 
 threadvar
-  FMethodHost: TGocciaBigIntValue;
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
 
 procedure ClearThreadvarMembers;
@@ -196,13 +204,11 @@ begin
 
   if Length(FPrototypeMembers) = 0 then
   begin
-    // First realm to initialize wins: pin Self as the singleton method host
-    // for the lifetime of the process.  Method callbacks captured into
-    // FPrototypeMembers bind to this host, so subsequent realms must reuse it
-    // (otherwise the cached callbacks would reference a freed instance).
-    FMethodHost := Self;
+    // Self is BigIntZero (0n), the process-wide singleton method host the cached
+    // member callbacks bind to. It is already pinned for the process lifetime by
+    // BigIntZero; re-pin defensively so the binding stays valid for the cache.
     if Assigned(TGarbageCollector.Instance) then
-      TGarbageCollector.Instance.PinObject(FMethodHost);
+      TGarbageCollector.Instance.PinObject(Self);
 
     Members := TGocciaMemberCollection.Create;
     try

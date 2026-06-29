@@ -60,7 +60,6 @@ uses
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.Realm,
-  Goccia.ThreadCleanupRegistry,
   Goccia.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.IteratorSupport,
@@ -72,14 +71,6 @@ uses
 
 var
   GWeakMapSharedSlot: TGocciaRealmOwnedSlotId;
-
-threadvar
-  FPrototypeMembers: TArray<TGocciaMemberDefinition>;
-
-procedure ClearThreadvarMembers;
-begin
-  SetLength(FPrototypeMembers, 0);
-end;
 
 function GetWeakMapShared: TGocciaSharedPrototype; inline;
 begin
@@ -113,33 +104,31 @@ procedure TGocciaWeakMapValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
   Shared: TGocciaSharedPrototype;
+  PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
   if not Assigned(CurrentRealm) then Exit;
   if Assigned(GetWeakMapShared) then Exit;
 
   Shared := TGocciaSharedPrototype.Create(Self);
   CurrentRealm.SetOwnedSlot(GWeakMapSharedSlot, Shared);
-  if Length(FPrototypeMembers) = 0 then
-  begin
-    Members := TGocciaMemberCollection.Create;
-    try
-      // Built-in prototype methods are not constructors per ES spec.
-      Members.AddNamedMethod('delete', WeakMapDelete, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype, gmfNotConstructable]);
-      Members.AddNamedMethod('get', WeakMapGet, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype, gmfNotConstructable]);
-      Members.AddNamedMethod('getOrInsert', WeakMapGetOrInsert, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype, gmfNotConstructable]);
-      Members.AddNamedMethod('getOrInsertComputed', WeakMapGetOrInsertComputed, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype, gmfNotConstructable]);
-      Members.AddNamedMethod('has', WeakMapHas, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype, gmfNotConstructable]);
-      Members.AddNamedMethod('set', WeakMapSet, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype, gmfNotConstructable]);
-      Members.AddSymbolDataProperty(
-        TGocciaSymbolValue.WellKnownToStringTag,
-        TGocciaStringLiteralValue.Create(CONSTRUCTOR_WEAK_MAP),
-        [pfConfigurable]);
-      FPrototypeMembers := Members.ToDefinitions;
-    finally
-      Members.Free;
-    end;
+  Members := TGocciaMemberCollection.Create;
+  try
+    // Built-in prototype methods are not constructors per ES spec.
+    Members.AddNamedMethod('delete', WeakMapDelete, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype, gmfNotConstructable]);
+    Members.AddNamedMethod('get', WeakMapGet, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype, gmfNotConstructable]);
+    Members.AddNamedMethod('getOrInsert', WeakMapGetOrInsert, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype, gmfNotConstructable]);
+    Members.AddNamedMethod('getOrInsertComputed', WeakMapGetOrInsertComputed, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype, gmfNotConstructable]);
+    Members.AddNamedMethod('has', WeakMapHas, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype, gmfNotConstructable]);
+    Members.AddNamedMethod('set', WeakMapSet, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype, gmfNotConstructable]);
+    Members.AddSymbolDataProperty(
+      TGocciaSymbolValue.WellKnownToStringTag,
+      TGocciaStringLiteralValue.Create(CONSTRUCTOR_WEAK_MAP),
+      [pfConfigurable]);
+    PrototypeMembers := Members.ToDefinitions;
+  finally
+    Members.Free;
   end;
-  RegisterMemberDefinitions(Shared.Prototype, FPrototypeMembers);
+  RegisterMemberDefinitions(Shared.Prototype, PrototypeMembers);
 end;
 
 class procedure TGocciaWeakMapValue.ExposePrototype(
@@ -481,7 +470,6 @@ begin
 end;
 
 initialization
-  RegisterThreadvarCleanup(@ClearThreadvarMembers);
   GWeakMapSharedSlot := RegisterRealmOwnedSlot('WeakMap.shared');
 
 end.

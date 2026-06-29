@@ -105,7 +105,6 @@ uses
   Goccia.Temporal.Options,
   Goccia.Temporal.TimeZone,
   Goccia.Temporal.Utils,
-  Goccia.ThreadCleanupRegistry,
   Goccia.Utils,
   Goccia.Values.BigIntValue,
   Goccia.Values.ErrorHelper,
@@ -122,14 +121,6 @@ uses
 
 var
   GTemporalZonedDateTimeSharedSlot: TGocciaRealmOwnedSlotId;
-
-threadvar
-  FPrototypeMembers: TArray<TGocciaMemberDefinition>;
-
-procedure ClearThreadvarMembers;
-begin
-  SetLength(FPrototypeMembers, 0);
-end;
 
 function GetTemporalZonedDateTimeShared: TGocciaSharedPrototype; inline;
 begin
@@ -2037,74 +2028,72 @@ procedure TGocciaTemporalZonedDateTimeValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
   Shared: TGocciaSharedPrototype;
+  PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
   if not Assigned(CurrentRealm) then Exit;
   if Assigned(GetTemporalZonedDateTimeShared) then Exit;
   Shared := TGocciaSharedPrototype.Create(Self);
   CurrentRealm.SetOwnedSlot(GTemporalZonedDateTimeSharedSlot, Shared);
-  if Length(FPrototypeMembers) = 0 then
-  begin
-    Members := TGocciaMemberCollection.Create;
-    try
-      Members.AddAccessor('calendarId', GetCalendarId, nil, [pfConfigurable]);
-      Members.AddAccessor('timeZoneId', GetTimeZoneId, nil, [pfConfigurable]);
-      Members.AddAccessor('era', GetEra, nil, [pfConfigurable]);
-      Members.AddAccessor('eraYear', GetEraYear, nil, [pfConfigurable]);
-      Members.AddAccessor('year', GetYear, nil, [pfConfigurable]);
-      Members.AddAccessor('month', GetMonth, nil, [pfConfigurable]);
-      Members.AddAccessor('monthCode', GetMonthCode, nil, [pfConfigurable]);
-      Members.AddAccessor('day', GetDay, nil, [pfConfigurable]);
-      Members.AddAccessor('dayOfWeek', GetDayOfWeek, nil, [pfConfigurable]);
-      Members.AddAccessor('dayOfYear', GetDayOfYear, nil, [pfConfigurable]);
-      Members.AddAccessor('weekOfYear', GetWeekOfYear, nil, [pfConfigurable]);
-      Members.AddAccessor('yearOfWeek', GetYearOfWeek, nil, [pfConfigurable]);
-      Members.AddAccessor('daysInWeek', GetDaysInWeek, nil, [pfConfigurable]);
-      Members.AddAccessor('daysInMonth', GetDaysInMonth, nil, [pfConfigurable]);
-      Members.AddAccessor('daysInYear', GetDaysInYear, nil, [pfConfigurable]);
-      Members.AddAccessor('monthsInYear', GetMonthsInYear, nil, [pfConfigurable]);
-      Members.AddAccessor('inLeapYear', GetInLeapYear, nil, [pfConfigurable]);
-      Members.AddAccessor('hoursInDay', GetHoursInDay, nil, [pfConfigurable]);
-      Members.AddAccessor('hour', GetHour, nil, [pfConfigurable]);
-      Members.AddAccessor('minute', GetMinute, nil, [pfConfigurable]);
-      Members.AddAccessor('second', GetSecond, nil, [pfConfigurable]);
-      Members.AddAccessor('millisecond', GetMillisecond, nil, [pfConfigurable]);
-      Members.AddAccessor('microsecond', GetMicrosecond, nil, [pfConfigurable]);
-      Members.AddAccessor('nanosecond', GetNanosecond, nil, [pfConfigurable]);
-      Members.AddAccessor('offset', GetOffset, nil, [pfConfigurable]);
-      Members.AddAccessor('offsetNanoseconds', GetOffsetNanoseconds, nil, [pfConfigurable]);
-      Members.AddAccessor('epochMilliseconds', GetEpochMilliseconds, nil, [pfConfigurable]);
-      Members.AddAccessor('epochNanoseconds', GetEpochNanoseconds, nil, [pfConfigurable]);
-      Members.AddMethod(ZonedDateTimeWith, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ZonedDateTimeWithPlainDate, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ZonedDateTimeWithPlainTime, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ZonedDateTimeWithTimeZone, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ZonedDateTimeWithCalendar, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ZonedDateTimeAdd, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ZonedDateTimeSubtract, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ZonedDateTimeUntil, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ZonedDateTimeSince, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ZonedDateTimeRound, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ZonedDateTimeEquals, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ZonedDateTimeGetTimeZoneTransition, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ZonedDateTimeStartOfDay, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ZonedDateTimeToInstant, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ZonedDateTimeToPlainDate, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ZonedDateTimeToPlainTime, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ZonedDateTimeToPlainDateTime, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ZonedDateTimeToString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ZonedDateTimeToJSON, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ZonedDateTimeValueOf, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ZonedDateTimeToLocaleString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddSymbolDataProperty(
-        TGocciaSymbolValue.WellKnownToStringTag,
-        TGocciaStringLiteralValue.Create('Temporal.ZonedDateTime'),
-        [pfConfigurable]);
-      FPrototypeMembers := Members.ToDefinitions;
-    finally
-      Members.Free;
-    end;
+  Members := TGocciaMemberCollection.Create;
+  try
+    Members.AddAccessor('calendarId', GetCalendarId, nil, [pfConfigurable]);
+    Members.AddAccessor('timeZoneId', GetTimeZoneId, nil, [pfConfigurable]);
+    Members.AddAccessor('era', GetEra, nil, [pfConfigurable]);
+    Members.AddAccessor('eraYear', GetEraYear, nil, [pfConfigurable]);
+    Members.AddAccessor('year', GetYear, nil, [pfConfigurable]);
+    Members.AddAccessor('month', GetMonth, nil, [pfConfigurable]);
+    Members.AddAccessor('monthCode', GetMonthCode, nil, [pfConfigurable]);
+    Members.AddAccessor('day', GetDay, nil, [pfConfigurable]);
+    Members.AddAccessor('dayOfWeek', GetDayOfWeek, nil, [pfConfigurable]);
+    Members.AddAccessor('dayOfYear', GetDayOfYear, nil, [pfConfigurable]);
+    Members.AddAccessor('weekOfYear', GetWeekOfYear, nil, [pfConfigurable]);
+    Members.AddAccessor('yearOfWeek', GetYearOfWeek, nil, [pfConfigurable]);
+    Members.AddAccessor('daysInWeek', GetDaysInWeek, nil, [pfConfigurable]);
+    Members.AddAccessor('daysInMonth', GetDaysInMonth, nil, [pfConfigurable]);
+    Members.AddAccessor('daysInYear', GetDaysInYear, nil, [pfConfigurable]);
+    Members.AddAccessor('monthsInYear', GetMonthsInYear, nil, [pfConfigurable]);
+    Members.AddAccessor('inLeapYear', GetInLeapYear, nil, [pfConfigurable]);
+    Members.AddAccessor('hoursInDay', GetHoursInDay, nil, [pfConfigurable]);
+    Members.AddAccessor('hour', GetHour, nil, [pfConfigurable]);
+    Members.AddAccessor('minute', GetMinute, nil, [pfConfigurable]);
+    Members.AddAccessor('second', GetSecond, nil, [pfConfigurable]);
+    Members.AddAccessor('millisecond', GetMillisecond, nil, [pfConfigurable]);
+    Members.AddAccessor('microsecond', GetMicrosecond, nil, [pfConfigurable]);
+    Members.AddAccessor('nanosecond', GetNanosecond, nil, [pfConfigurable]);
+    Members.AddAccessor('offset', GetOffset, nil, [pfConfigurable]);
+    Members.AddAccessor('offsetNanoseconds', GetOffsetNanoseconds, nil, [pfConfigurable]);
+    Members.AddAccessor('epochMilliseconds', GetEpochMilliseconds, nil, [pfConfigurable]);
+    Members.AddAccessor('epochNanoseconds', GetEpochNanoseconds, nil, [pfConfigurable]);
+    Members.AddMethod(ZonedDateTimeWith, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ZonedDateTimeWithPlainDate, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ZonedDateTimeWithPlainTime, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ZonedDateTimeWithTimeZone, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ZonedDateTimeWithCalendar, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ZonedDateTimeAdd, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ZonedDateTimeSubtract, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ZonedDateTimeUntil, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ZonedDateTimeSince, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ZonedDateTimeRound, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ZonedDateTimeEquals, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ZonedDateTimeGetTimeZoneTransition, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ZonedDateTimeStartOfDay, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ZonedDateTimeToInstant, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ZonedDateTimeToPlainDate, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ZonedDateTimeToPlainTime, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ZonedDateTimeToPlainDateTime, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ZonedDateTimeToString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ZonedDateTimeToJSON, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ZonedDateTimeValueOf, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ZonedDateTimeToLocaleString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddSymbolDataProperty(
+      TGocciaSymbolValue.WellKnownToStringTag,
+      TGocciaStringLiteralValue.Create('Temporal.ZonedDateTime'),
+      [pfConfigurable]);
+    PrototypeMembers := Members.ToDefinitions;
+  finally
+    Members.Free;
   end;
-  RegisterMemberDefinitions(Shared.Prototype, FPrototypeMembers);
+  RegisterMemberDefinitions(Shared.Prototype, PrototypeMembers);
 end;
 
 class procedure TGocciaTemporalZonedDateTimeValue.ExposePrototype(const AConstructor: TGocciaObjectValue);
@@ -4202,7 +4191,6 @@ begin
 end;
 
 initialization
-  RegisterThreadvarCleanup(@ClearThreadvarMembers);
   GTemporalZonedDateTimeSharedSlot := RegisterRealmOwnedSlot('Temporal.ZonedDateTime.shared');
 
 end.

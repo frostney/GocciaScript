@@ -9,6 +9,19 @@ uses
   Goccia.Values.Primitives;
 
 type
+  // Realm-owned prototype + method host: stored in a TGocciaRealm owned slot, so
+  // the realm Frees this on Destroy and our destructor unpins both members below.
+  // Built-in value units create one as TGocciaSharedPrototype.Create(Self), where
+  // Self is the *current realm's* host instance whose methods back the prototype's
+  // members.
+  //
+  // Member definitions are rebuilt per realm — the units no longer cache them in a
+  // cross-realm threadvar (#892 / ADR 0084) — so the host bound into a prototype's
+  // method callbacks is always the live, realm-owned host that is released with the
+  // realm on Destroy. (Caching a member array across realms, bound to an earlier
+  // realm's now-freed host, is what made this unsafe before the per-realm rebuild;
+  // Goccia.SharedPrototypeRealmReuse.Test guards against a regression. As defence
+  // in depth the callbacks also take their receiver from the JS `this`, not Self.)
   TGocciaSharedPrototype = class
   private
     FPrototype: TGocciaObjectValue;

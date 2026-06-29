@@ -3176,6 +3176,9 @@ begin
 end;
 
 threadvar
+  // Non-owning "active generator" pointer: GC-managed and save/restored around
+  // each generator activation, so it is not a thread-exit leak (object-reference
+  // threadvar audit, #892).
   GActiveBytecodeGenerator: TGocciaBytecodeGeneratorObjectValue;
 
 type

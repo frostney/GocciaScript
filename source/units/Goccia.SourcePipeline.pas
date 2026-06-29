@@ -150,6 +150,9 @@ uses
   Goccia.Token;
 
 threadvar
+  // Non-owning "active scope" pointer, save/restored around each pipeline run
+  // (nil at rest), so it is not a thread-exit leak (object-reference threadvar
+  // audit, #892).
   GActiveSourcePipelineOptionsScope: TGocciaSourcePipelineOptionsScope;
 
 function SourceTextToLines(const ASource: UTF8String): TStringList;

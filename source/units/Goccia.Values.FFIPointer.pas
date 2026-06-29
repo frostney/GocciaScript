@@ -47,7 +47,6 @@ uses
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.Realm,
-  Goccia.ThreadCleanupRegistry,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
@@ -55,14 +54,6 @@ uses
 var
   GFFIPointerSharedSlot: TGocciaRealmOwnedSlotId;
   GFFINullPointerSlot: TGocciaRealmSlotId;
-
-threadvar
-  FPrototypeMembers: TArray<TGocciaMemberDefinition>;
-
-procedure ClearThreadvarMembers;
-begin
-  SetLength(FPrototypeMembers, 0);
-end;
 
 function GetFFIPointerShared: TGocciaSharedPrototype; inline;
 begin
@@ -91,28 +82,26 @@ procedure TGocciaFFIPointerValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
   Shared: TGocciaSharedPrototype;
+  PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
   if not Assigned(CurrentRealm) then Exit;
   if Assigned(GetFFIPointerShared) then Exit;
 
   Shared := TGocciaSharedPrototype.Create(Self);
   CurrentRealm.SetOwnedSlot(GFFIPointerSharedSlot, Shared);
-  if Length(FPrototypeMembers) = 0 then
-  begin
-    Members := TGocciaMemberCollection.Create;
-    try
-      Members.AddAccessor(PROP_IS_NULL, IsNullGetter, nil, [pfConfigurable]);
-      Members.AddAccessor(PROP_FFI_ADDRESS, AddressGetter, nil, [pfConfigurable]);
-      Members.AddSymbolDataProperty(
-        TGocciaSymbolValue.WellKnownToStringTag,
-        TGocciaStringLiteralValue.Create(FFI_POINTER_TAG),
-        [pfConfigurable]);
-      FPrototypeMembers := Members.ToDefinitions;
-    finally
-      Members.Free;
-    end;
+  Members := TGocciaMemberCollection.Create;
+  try
+    Members.AddAccessor(PROP_IS_NULL, IsNullGetter, nil, [pfConfigurable]);
+    Members.AddAccessor(PROP_FFI_ADDRESS, AddressGetter, nil, [pfConfigurable]);
+    Members.AddSymbolDataProperty(
+      TGocciaSymbolValue.WellKnownToStringTag,
+      TGocciaStringLiteralValue.Create(FFI_POINTER_TAG),
+      [pfConfigurable]);
+    PrototypeMembers := Members.ToDefinitions;
+  finally
+    Members.Free;
   end;
-  RegisterMemberDefinitions(Shared.Prototype, FPrototypeMembers);
+  RegisterMemberDefinitions(Shared.Prototype, PrototypeMembers);
 end;
 
 class function TGocciaFFIPointerValue.NullPointer: TGocciaFFIPointerValue;
@@ -200,7 +189,6 @@ begin
 end;
 
 initialization
-  RegisterThreadvarCleanup(@ClearThreadvarMembers);
   GFFIPointerSharedSlot := RegisterRealmOwnedSlot('FFIPointer.shared');
   GFFINullPointerSlot := RegisterRealmSlot('FFIPointer.nullPointer');
 

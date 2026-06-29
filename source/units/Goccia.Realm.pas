@@ -131,6 +131,9 @@ uses
   SysUtils;
 
 threadvar
+  // Non-owning "current realm" pointer: the realm is owned and freed by its
+  // engine and this is overwritten on each engine run, so it is not a
+  // thread-exit leak (object-reference threadvar audit, #892).
   GCurrentRealm: TGocciaRealm;
   GCurrentFunctionContextStack: array of record
     Scope: TObject;

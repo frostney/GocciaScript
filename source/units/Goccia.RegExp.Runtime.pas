@@ -73,6 +73,9 @@ type
   end;
 
 threadvar
+  // Non-owning cache of the current realm's RegExp prototype (a GC-managed,
+  // realm-owned object set on each engine run), so it is not a thread-exit leak
+  // (object-reference threadvar audit, #892).
   GRegExpPrototype: TGocciaObjectValue;
 
 constructor TGocciaRegExpProgramData.Create(const AProgram: TRegExpProgram);

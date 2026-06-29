@@ -47,11 +47,20 @@ type
     procedure SetupTests; override;
 
     procedure TestDrainReclaimsMemberDefinitionThreadvars;
+    procedure TestRegistryDrainIsIdempotent;
     procedure TestMigratedCacheCleanupsAreRegistered;
   end;
 
 procedure TLeakTests.SetupTests;
 begin
+  // Idempotency runs first so the eagerly-created GPublishedGetterHosts list is
+  // still live for its first FreeAndNil — the reclaim test would otherwise have
+  // already drained it, leaving the object-reference container cleanups
+  // unexercised. EnsureSharedPrototypesInitialized rebuilds a fresh engine on
+  // every call, so the reclaim test below re-populates the member-definition
+  // threadvars regardless of order. #892
+  Test('registry drain is idempotent for object-reference container cleanups (#892)',
+    TestRegistryDrainIsIdempotent);
   Test('draining the registry reclaims per-thread member-definition threadvars',
     TestDrainReclaimsMemberDefinitionThreadvars);
   Test('each migrated per-thread cache/memo cleanup is registered with the registry',
@@ -83,6 +92,38 @@ begin
   Drained := Int64(GetHeapStatus.TotalAllocated);
 
   Expect<Boolean>((Populated - Drained) >= MIN_RECLAIMED_BYTES).ToBe(True);
+end;
+
+procedure TLeakTests.TestRegistryDrainIsIdempotent;
+const
+  // A second drain over already-nil'd threadvars reclaims ~nothing; this tolerance
+  // absorbs collector/heap-manager bookkeeping noise around the extra Collect so
+  // the idempotency check does not flake on exact heap-total equality, while still
+  // catching a double-free re-allocation or a real leak.
+  MAX_IDEMPOTENT_DRAIN_NOISE_BYTES = 1024;
+var
+  AfterFirstDrain, AfterSecondDrain: Int64;
+begin
+  // #892 routes object-reference container threadvars through the registry with
+  // FreeAndNil-based cleanups (e.g. Goccia.ObjectModel's published-getter host
+  // list, which is created eagerly in that unit's initialization, and the
+  // Goccia.Compiler.Statements working-state lists). RunThreadvarCleanups runs
+  // on both the worker-exit and main-thread-finalization paths and is documented
+  // as safe to call repeatedly, so a second drain must be a no-op rather than a
+  // double-free. (A non-idempotent `.Free` without nil would fault here on the
+  // eagerly-created published-getter host list.)
+  EnsureSharedPrototypesInitialized;
+  RunThreadvarCleanups;
+  TGarbageCollector.Instance.Collect;
+  AfterFirstDrain := Int64(GetHeapStatus.TotalAllocated);
+
+  // Second drain over the now-cleared (nil'd) threadvars must not crash or grow.
+  RunThreadvarCleanups;
+  TGarbageCollector.Instance.Collect;
+  AfterSecondDrain := Int64(GetHeapStatus.TotalAllocated);
+
+  Expect<Boolean>(
+    (AfterSecondDrain - AfterFirstDrain) <= MAX_IDEMPOTENT_DRAIN_NOISE_BYTES).ToBe(True);
 end;
 
 procedure TLeakTests.TestMigratedCacheCleanupsAreRegistered;

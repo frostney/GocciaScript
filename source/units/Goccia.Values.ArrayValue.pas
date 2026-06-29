@@ -129,7 +129,6 @@ uses
   Goccia.GarbageCollector,
   Goccia.Generator.Continuation,
   Goccia.Realm,
-  Goccia.ThreadCleanupRegistry,
   Goccia.Timeout,
   Goccia.Utils,
   Goccia.Utils.Arrays,
@@ -142,23 +141,16 @@ uses
   Goccia.Values.ToObject,
   Goccia.Values.ToPrimitive;
 
-// Per-realm slot for Array.prototype.  Threadvar method host and member
-// definitions cache below stay process-wide because they are immutable across
-// realms - the host is a sentinel TGocciaArrayValue used purely to bind
-// native method functions, and the member definitions describe those (pure
-// native) functions.  Resetting the realm rebuilds a fresh prototype object
-// and re-registers the same definitions on it.
+// Per-realm slots for Array.prototype and its method host.  The host is the
+// first TGocciaArrayValue constructed in the realm (Self in InitializePrototype);
+// the native prototype methods bind to it.  Both live in realm slots, so the
+// realm pins them on SetSlot and unpins them on Destroy — the host is reclaimed
+// with its realm rather than pinned per-thread for the process lifetime.  The
+// member definitions are rebuilt per realm because they bind to this realm's
+// host. #892
 var
   GArrayPrototypeSlot: TGocciaRealmSlotId;
-
-threadvar
-  FPrototypeMethodHost: TGocciaArrayValue;
-  FPrototypeMembers: TArray<TGocciaMemberDefinition>;
-
-procedure ClearThreadvarMembers;
-begin
-  SetLength(FPrototypeMembers, 0);
-end;
+  GArrayMethodHostSlot: TGocciaRealmSlotId;
 
 function GetSharedArrayPrototype: TGocciaObjectValue; inline;
 begin
@@ -1068,6 +1060,7 @@ procedure TGocciaArrayValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
   SharedPrototype: TGocciaObjectValue;
+  PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
   // No realm yet - happens during very early bootstrap (e.g. PinSingletons
   // creating BigInt singletons before SetCurrentRealm runs on the engine).
@@ -1078,70 +1071,63 @@ begin
 
   SharedPrototype := TGocciaObjectValue.Create;
   CurrentRealm.SetSlot(GArrayPrototypeSlot, SharedPrototype);
-  if Length(FPrototypeMembers) = 0 then
-  begin
-    // First realm to initialize on this thread wins: pin Self as the
-    // singleton method host for the process lifetime.  Method callbacks
-    // captured into FPrototypeMembers bind to this host, so subsequent
-    // realms must reuse it — re-assigning FPrototypeMethodHost on every
-    // realm switch would leak a fresh pinned TGocciaArrayValue per realm
-    // while the cached method definitions still reference the original.
-    FPrototypeMethodHost := Self;
-    if Assigned(TGarbageCollector.Instance) then
-      TGarbageCollector.Instance.PinObject(FPrototypeMethodHost);
+  // The native prototype methods below bind to this instance (Self).  Keep it
+  // alive for the realm's lifetime in its own slot: the realm pins it here and
+  // unpins it on Destroy, together with the prototype whose method pointers
+  // embed it, so no per-thread pin outlives every realm. #892
+  CurrentRealm.SetSlot(GArrayMethodHostSlot, Self);
 
-    Members := TGocciaMemberCollection.Create;
-    try
-      Members.AddDataProperty(PROP_LENGTH, TGocciaNumberLiteralValue.ZeroValue, [pfWritable]);
-      Members.AddMethod(ArrayMap, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ArrayFilter, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ArrayReduce, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ArrayReduceRight, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ArrayForEach, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ArraySome, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ArrayEvery, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ArrayFlat, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ArrayFlatMap, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ArrayJoin, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ArrayToString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ArrayIncludes, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ArrayPush, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ArrayPop, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ArraySlice, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ArrayFind, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ArrayFindIndex, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ArrayIndexOf, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ArrayLastIndexOf, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ArrayConcat, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ArrayReverse, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ArrayToReversed, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ArrayToSorted, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ArrayToSpliced, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ArraySort, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ArraySplice, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ArrayShift, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ArrayUnshift, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ArrayFill, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ArrayAt, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ArrayFindLast, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ArrayFindLastIndex, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ArrayWith, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ArrayCopyWithin, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ArrayValues, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ArrayKeys, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ArrayEntries, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddSymbolMethod(
-        TGocciaSymbolValue.WellKnownIterator,
-        '[Symbol.iterator]',
-        ArraySymbolIterator,
-        0,
-        [pfConfigurable, pfWritable]);
-      FPrototypeMembers := Members.ToDefinitions;
-    finally
-      Members.Free;
-    end;
+  Members := TGocciaMemberCollection.Create;
+  try
+    Members.AddDataProperty(PROP_LENGTH, TGocciaNumberLiteralValue.ZeroValue, [pfWritable]);
+    Members.AddMethod(ArrayMap, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ArrayFilter, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ArrayReduce, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ArrayReduceRight, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ArrayForEach, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ArraySome, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ArrayEvery, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ArrayFlat, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ArrayFlatMap, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ArrayJoin, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ArrayToString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ArrayIncludes, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ArrayPush, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ArrayPop, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ArraySlice, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ArrayFind, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ArrayFindIndex, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ArrayIndexOf, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ArrayLastIndexOf, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ArrayConcat, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ArrayReverse, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ArrayToReversed, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ArrayToSorted, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ArrayToSpliced, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ArraySort, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ArraySplice, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ArrayShift, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ArrayUnshift, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ArrayFill, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ArrayAt, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ArrayFindLast, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ArrayFindLastIndex, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ArrayWith, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ArrayCopyWithin, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ArrayValues, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ArrayKeys, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ArrayEntries, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddSymbolMethod(
+      TGocciaSymbolValue.WellKnownIterator,
+      '[Symbol.iterator]',
+      ArraySymbolIterator,
+      0,
+      [pfConfigurable, pfWritable]);
+    PrototypeMembers := Members.ToDefinitions;
+  finally
+    Members.Free;
   end;
-  RegisterMemberDefinitions(SharedPrototype, FPrototypeMembers);
+  RegisterMemberDefinitions(SharedPrototype, PrototypeMembers);
 end;
 
 class procedure TGocciaArrayValue.ExposePrototype(const AConstructor: TGocciaValue);
@@ -4281,7 +4267,7 @@ begin
 end;
 
 initialization
-  RegisterThreadvarCleanup(@ClearThreadvarMembers);
   GArrayPrototypeSlot := RegisterRealmSlot('Array.prototype');
+  GArrayMethodHostSlot := RegisterRealmSlot('Array.prototype.methodHost');
 
 end.

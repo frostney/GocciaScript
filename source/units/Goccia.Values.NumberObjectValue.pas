@@ -49,26 +49,19 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
-  Goccia.GarbageCollector,
   Goccia.Realm,
-  Goccia.ThreadCleanupRegistry,
   Goccia.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction;
 
-// Number.prototype lives in a per-realm slot.  Method host and member
-// definitions stay process-wide (immutable across realms).
+// Number.prototype lives in a per-realm slot.  Its method host (Self in
+// InitializePrototype) lives in its own per-realm slot too, so the realm pins it
+// on SetSlot and unpins it on Destroy rather than keeping a per-thread pin for
+// the process lifetime; the member definitions are rebuilt per realm because
+// they bind to this realm's host. #892
 var
   GNumberPrototypeSlot: TGocciaRealmSlotId;
-
-threadvar
-  FPrototypeMethodHost: TGocciaNumberObjectValue;
-  FPrototypeMembers: TArray<TGocciaMemberDefinition>;
-
-procedure ClearThreadvarMembers;
-begin
-  SetLength(FPrototypeMembers, 0);
-end;
+  GNumberMethodHostSlot: TGocciaRealmSlotId;
 
 const
   DOUBLE_EXPONENT_BIAS = 1023;
@@ -310,32 +303,28 @@ procedure TGocciaNumberObjectValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
   SharedPrototype: TGocciaObjectValue;
+  PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
   if not Assigned(CurrentRealm) then Exit;
   if Assigned(GetSharedNumberPrototype) then Exit;
 
   SharedPrototype := TGocciaObjectValue.Create;
   CurrentRealm.SetSlot(GNumberPrototypeSlot, SharedPrototype);
-  if Length(FPrototypeMembers) = 0 then
-  begin
-    FPrototypeMethodHost := Self;
-    Members := TGocciaMemberCollection.Create;
-    try
-      Members.AddNamedMethod('toFixed', NumberToFixed, 1);
-      Members.AddNamedMethod(PROP_TO_STRING, NumberToString, 1);
-      Members.AddNamedMethod(PROP_VALUE_OF, NumberValueOf, 0);
-      Members.AddNamedMethod('toPrecision', NumberToPrecision, 1);
-      Members.AddNamedMethod('toExponential', NumberToExponential, 1);
-      FPrototypeMembers := Members.ToDefinitions;
-    finally
-      Members.Free;
-    end;
-    // Method host is a process-wide singleton; pin it once so cached
-    // FPrototypeMembers callbacks remain valid across realms.
-    if Assigned(TGarbageCollector.Instance) then
-      TGarbageCollector.Instance.PinObject(FPrototypeMethodHost);
+  // The native methods below bind to this instance (Self); keep it alive for the
+  // realm's lifetime in its own slot so the realm unpins it on Destroy. #892
+  CurrentRealm.SetSlot(GNumberMethodHostSlot, Self);
+  Members := TGocciaMemberCollection.Create;
+  try
+    Members.AddNamedMethod('toFixed', NumberToFixed, 1);
+    Members.AddNamedMethod(PROP_TO_STRING, NumberToString, 1);
+    Members.AddNamedMethod(PROP_VALUE_OF, NumberValueOf, 0);
+    Members.AddNamedMethod('toPrecision', NumberToPrecision, 1);
+    Members.AddNamedMethod('toExponential', NumberToExponential, 1);
+    PrototypeMembers := Members.ToDefinitions;
+  finally
+    Members.Free;
   end;
-  RegisterMemberDefinitions(SharedPrototype, FPrototypeMembers);
+  RegisterMemberDefinitions(SharedPrototype, PrototypeMembers);
 end;
 
 class function TGocciaNumberObjectValue.GetSharedPrototype: TGocciaObjectValue;
@@ -654,6 +643,6 @@ end;
 
 initialization
   GNumberPrototypeSlot := RegisterRealmSlot('Number.prototype');
-  RegisterThreadvarCleanup(@ClearThreadvarMembers);
+  GNumberMethodHostSlot := RegisterRealmSlot('Number.prototype.methodHost');
 
 end.

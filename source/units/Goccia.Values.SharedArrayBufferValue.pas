@@ -61,21 +61,12 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.Realm,
-  Goccia.ThreadCleanupRegistry,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
 
 var
   GSharedArrayBufferSharedSlot: TGocciaRealmOwnedSlotId;
-
-threadvar
-  FPrototypeMembers: TArray<TGocciaMemberDefinition>;
-
-procedure ClearThreadvarMembers;
-begin
-  SetLength(FPrototypeMembers, 0);
-end;
 
 function GetSharedArrayBufferShared: TGocciaSharedPrototype; inline;
 begin
@@ -170,32 +161,29 @@ procedure TGocciaSharedArrayBufferValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
   Shared: TGocciaSharedPrototype;
+  PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
   if not Assigned(CurrentRealm) then Exit;
   if Assigned(GetSharedArrayBufferShared) then Exit;
 
   Shared := TGocciaSharedPrototype.Create(Self);
   CurrentRealm.SetOwnedSlot(GSharedArrayBufferSharedSlot, Shared);
-  if Length(FPrototypeMembers) = 0 then
-  begin
-    Members := TGocciaMemberCollection.Create;
-    try
-      Members.AddMethod(SharedArrayBufferSlice, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(SharedArrayBufferGrow, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddPublishedGetter(
-        TGocciaSharedArrayBufferValue, 'ByteLength', PROP_BYTE_LENGTH, [pfConfigurable]);
-      Members.AddAccessor(PROP_MAX_BYTE_LENGTH, SharedArrayBufferMaxByteLengthGetter, nil, [pfConfigurable]);
-      Members.AddAccessor(PROP_GROWABLE, SharedArrayBufferGrowableGetter, nil, [pfConfigurable]);
-      Members.AddSymbolDataProperty(
-        TGocciaSymbolValue.WellKnownToStringTag,
-        TGocciaStringLiteralValue.Create(CONSTRUCTOR_SHARED_ARRAY_BUFFER),
-        [pfConfigurable]);
-      FPrototypeMembers := Members.ToDefinitions;
-    finally
-      Members.Free;
-    end;
+  Members := TGocciaMemberCollection.Create;
+  try
+    Members.AddMethod(SharedArrayBufferSlice, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(SharedArrayBufferGrow, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddAccessor(PROP_BYTE_LENGTH, SharedArrayBufferByteLengthGetter, nil, [pfConfigurable]);
+    Members.AddAccessor(PROP_MAX_BYTE_LENGTH, SharedArrayBufferMaxByteLengthGetter, nil, [pfConfigurable]);
+    Members.AddAccessor(PROP_GROWABLE, SharedArrayBufferGrowableGetter, nil, [pfConfigurable]);
+    Members.AddSymbolDataProperty(
+      TGocciaSymbolValue.WellKnownToStringTag,
+      TGocciaStringLiteralValue.Create(CONSTRUCTOR_SHARED_ARRAY_BUFFER),
+      [pfConfigurable]);
+    PrototypeMembers := Members.ToDefinitions;
+  finally
+    Members.Free;
   end;
-  RegisterMemberDefinitions(Shared.Prototype, FPrototypeMembers);
+  RegisterMemberDefinitions(Shared.Prototype, PrototypeMembers);
 end;
 
 class procedure TGocciaSharedArrayBufferValue.ExposePrototype(const AConstructor: TGocciaValue);
@@ -434,7 +422,6 @@ begin
 end;
 
 initialization
-  RegisterThreadvarCleanup(@ClearThreadvarMembers);
   GSharedArrayBufferSharedSlot := RegisterRealmOwnedSlot('SharedArrayBuffer.shared');
 
 end.
