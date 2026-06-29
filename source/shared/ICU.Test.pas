@@ -112,11 +112,15 @@ begin
     TouchFile(IncludeTrailingPathDelimiter(DirA) + 'libicui18n.so.76');
     TouchFile(IncludeTrailingPathDelimiter(DirB) + 'libicui18n.so.99');
 
-    // Newest across the whole list; the trailing empty segment is skipped.
+    // Use '|' as the list separator, not ':'. The generated temp paths are
+    // absolute and on Windows contain a drive-letter colon, which a ':'
+    // separator would wrongly split. The production caller passes ':' for
+    // LD_LIBRARY_PATH; the separator is a parameter, so the split logic under
+    // test is identical either way.
     Expect<Integer>(HighestICUMajorVersionInDirList(
-      DirA + ':' + DirB + ':', ':', I18N_BASE)).ToBe(99);
+      DirA + '|' + DirB + '|', '|', I18N_BASE)).ToBe(99);
     // An empty list discovers nothing.
-    Expect<Integer>(HighestICUMajorVersionInDirList('', ':', I18N_BASE)).ToBe(0);
+    Expect<Integer>(HighestICUMajorVersionInDirList('', '|', I18N_BASE)).ToBe(0);
   finally
     DeleteFile(IncludeTrailingPathDelimiter(DirA) + 'libicui18n.so.76');
     DeleteFile(IncludeTrailingPathDelimiter(DirB) + 'libicui18n.so.99');
