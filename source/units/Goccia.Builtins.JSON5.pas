@@ -55,7 +55,8 @@ type
       const AThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope;
-      const AThrowError: TGocciaThrowErrorCallback);
+      const AThrowError: TGocciaThrowErrorCallback;
+      const ADefineGlobalBinding: Boolean = True);
     destructor Destroy; override;
   end;
 
@@ -114,7 +115,8 @@ begin
 end;
 
 constructor TGocciaJSON5Builtin.Create(const AName: string;
-  const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
+  const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback;
+  const ADefineGlobalBinding: Boolean = True);
 var
   Members: TGocciaMemberCollection;
 begin
@@ -138,7 +140,8 @@ begin
   end;
 
   RegisterMemberDefinitions(FBuiltinObject, FStaticMembers);
-  AScope.DefineLexicalBinding(AName, FBuiltinObject, dtLet, True);
+  if ADefineGlobalBinding then
+    AScope.DefineLexicalBinding(AName, FBuiltinObject, dtLet, True);
 end;
 
 destructor TGocciaJSON5Builtin.Destroy;

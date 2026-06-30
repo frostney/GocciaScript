@@ -25,7 +25,17 @@ uses
   Goccia.RuntimeExtensions.TOML,
   Goccia.RuntimeExtensions.TSV,
   Goccia.RuntimeExtensions.URL,
-  Goccia.RuntimeExtensions.YAML;
+  Goccia.RuntimeExtensions.YAML,
+  Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.Primitives;
+
+// Plain factory wrapper so the SemVer namespace can be installed as a lazy
+// property; CreateSemverNamespace returns TGocciaObjectValue, which is not
+// procedural-type-compatible with TGocciaLazyPlainFactory directly.
+function SemverNamespaceFactory: TGocciaValue;
+begin
+  Result := CreateSemverNamespace;
+end;
 
 procedure ApplyLoaderRuntimeProfile(const ARuntime: TGocciaRuntimeCore);
 begin
@@ -43,8 +53,11 @@ begin
   ARuntime.Install(TGocciaURLRuntimeExtension.Create);
   ARuntime.Install(TGocciaFetchRuntimeExtension.Create);
   if Assigned(ARuntime.Engine.GocciaGlobal) then
-    ARuntime.Engine.GocciaGlobal.AssignProperty(
-      SEMVER_NAMESPACE_PROPERTY, CreateSemverNamespace);
+    // Defer building the SemVer namespace until Goccia.semver is first touched.
+    // Enumerable to match the eager data property it replaces.
+    ARuntime.Engine.DefineLazyObjectProperty(ARuntime.Engine.GocciaGlobal,
+      SEMVER_NAMESPACE_PROPERTY, SemverNamespaceFactory,
+      [pfEnumerable, pfWritable, pfConfigurable]);
 end;
 
 end.

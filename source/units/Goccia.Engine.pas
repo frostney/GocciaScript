@@ -140,6 +140,7 @@ type
     FSourceLines: TStringList;
     FExtensions: TGocciaEngineExtensionList;
     FRetainedModules: TObjectList;
+    FLazyThunks: TObjectList;
 
     // Core language built-in objects
     FBuiltinMath: TGocciaMath;
@@ -248,6 +249,12 @@ type
     procedure SetAllowedFetchHosts(const AHosts: TStrings);
     procedure InjectGlobal(const AKey: string; const AValue: TGocciaValue);
     procedure RegisterGlobal(const AName: string; const AValue: TGocciaValue);
+    procedure RegisterLazyGlobal(const AName: string;
+      const AFactory: TGocciaLazyPropertyFactory;
+      const ADeclarationType: TGocciaDeclarationType);
+    procedure DefineLazyObjectProperty(const ATarget: TGocciaObjectValue;
+      const AName: string; const AFactory: TGocciaLazyPlainFactory;
+      const AFlags: TPropertyFlags);
     procedure InjectGlobalsFromJSON(const AJsonString: string);
     procedure InjectGlobalsFromJSON5(const AJSON5String: UTF8String);
     procedure InjectGlobalsFromTOML(const ATOMLString: UTF8String);
@@ -416,6 +423,40 @@ begin
   end;
 end;
 
+procedure TGocciaEngine.RegisterLazyGlobal(const AName: string;
+  const AFactory: TGocciaLazyPropertyFactory;
+  const ADeclarationType: TGocciaDeclarationType);
+begin
+  // Public seam for runtime extensions: expose a global name whose backing
+  // object is built only on first reflective touch.  Mirrors the lazy
+  // built-in path (DefineBuiltinBindingPlaceholder + DefineLazyGlobalThisProperty)
+  // but is callable after engine boot, when extensions attach.
+  DefineBuiltinBindingPlaceholder(AName, ADeclarationType);
+  DefineLazyGlobalThisProperty(AName, AFactory);
+  // Mark the binding as already mirrored so the RefreshGlobalThis that
+  // TGocciaRuntimeCore.Install runs after each attach skips it, preserving the
+  // lazy descriptor instead of resolving (and materializing) the value while
+  // re-mirroring globals.
+  FInterpreter.GlobalScope.MarkGlobalObjectBackedBinding(AName);
+end;
+
+procedure TGocciaEngine.DefineLazyObjectProperty(
+  const ATarget: TGocciaObjectValue; const AName: string;
+  const AFactory: TGocciaLazyPlainFactory; const AFlags: TPropertyFlags);
+var
+  Thunk: TGocciaLazyValueThunk;
+begin
+  if not Assigned(ATarget) then
+    Exit;
+  // Back a lazy own property on ATarget with a standalone factory, deferring its
+  // construction until the property is first read or reflected on.  The engine
+  // owns the bridging thunk for its lifetime.
+  Thunk := TGocciaLazyValueThunk.Create(AFactory);
+  FLazyThunks.Add(Thunk);
+  ATarget.DefineProperty(AName,
+    TGocciaLazyPropertyDescriptorData.Create(Thunk.Materialize, AFlags));
+end;
+
 procedure TGocciaEngine.InjectGlobalsFromJSON(const AJsonString: string);
 var
   Parser: TGocciaJSONParser;
@@ -552,17 +593,24 @@ procedure TGocciaEngine.ExecuteShims;
 var
   I: Integer;
   Shim: TGocciaShimDefinition;
+  Materializer: TGocciaShimMaterializer;
 begin
   for I := 0 to DefaultShimCount - 1 do
   begin
     Shim := DefaultShim(I);
-    if (Shim.Name = 'hasOwnProperty') or (Shim.Name = '__proto__') or
-       (Shim.Name = 'defineGetter') or (Shim.Name = 'defineSetter') or
-       (Shim.Name = 'lookupGetter') or (Shim.Name = 'lookupSetter') then
+    if IsSideEffectShim(Shim.Name) then
+      // Mutates Object.prototype with no exported global to bind lazily, so it
+      // runs eagerly at boot.
       LoadShimValue(FInterpreter, Shim)
     else
-      FInterpreter.GlobalScope.DefineLexicalBinding(Shim.Name,
-        LoadShimValue(FInterpreter, Shim), dtConst, True);
+    begin
+      // Defer the name-bound shim's lex/parse/tree-walk until the global is
+      // first touched.  The heaviest shim (Date, ~671 source lines) is then
+      // never parsed for scripts that don't use it.
+      Materializer := TGocciaShimMaterializer.Create(FInterpreter, Shim);
+      FLazyThunks.Add(Materializer);
+      RegisterLazyGlobal(Shim.Name, Materializer.Materialize, dtConst);
+    end;
   end;
 end;
 
@@ -613,6 +661,9 @@ begin
   TGarbageCollector.Instance.AddRootObject(FInterpreter.GlobalScope);
 
   FInjectedGlobals := TStringList.Create;
+  // Owns the lazy materializers (shims, runtime namespaces) whose factory
+  // closures back lazy global properties; freed in the destructor.
+  FLazyThunks := TObjectList.Create(True);
   RegisterDefaultShimNames(FShims);
   PinSingletons;
   RegisterBuiltIns;
@@ -640,6 +691,7 @@ begin
       TGarbageCollector.Instance.RemoveRootObject(FInterpreter.GlobalScope);
 
     FRetainedModules.Free;
+    FLazyThunks.Free;
     FExtensions.Free;
     FBuiltinMath.Free;
     FBuiltinGlobalObject.Free;
@@ -1230,6 +1282,15 @@ begin
 
   for Name in Scope.GetOwnBindingNames do
   begin
+    // A binding becomes GlobalObjectBacked only after it has already been
+    // mirrored onto the global object below, so skipping backed bindings makes
+    // RefreshGlobalThis (re-run on every runtime-extension install) cost O(new
+    // bindings) instead of O(all globals).  It is also load-bearing for lazy
+    // globals: re-reading their value here through Scope.GetValue would resolve
+    // the global-object property and force materialization, defeating the
+    // lazy descriptor installed by RegisterLazyGlobal / lazy built-ins.
+    if Scope.IsGlobalObjectBackedBinding(Name) then
+      Continue;
     // ES2026 §19.1: Value properties (NaN, Infinity, undefined) are
     // { [[Writable]]: false, [[Enumerable]]: false, [[Configurable]]: false }.
     // All other global object properties are

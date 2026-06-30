@@ -75,6 +75,21 @@ type
     function Materialize: TGocciaValue;
   end;
 
+  // Standalone (non-method) lazy factory.
+  TGocciaLazyPlainFactory = function: TGocciaValue;
+
+  // Bridges a TGocciaLazyPlainFactory to the of-object TGocciaLazyPropertyFactory
+  // that TGocciaLazyPropertyDescriptorData expects, so a lazy property can be
+  // backed by a standalone function.  The owner (e.g. the engine) keeps the
+  // thunk alive for the descriptor's lifetime.
+  TGocciaLazyValueThunk = class
+  private
+    FFactory: TGocciaLazyPlainFactory;
+  public
+    constructor Create(const AFactory: TGocciaLazyPlainFactory);
+    function Materialize: TGocciaValue;
+  end;
+
   TGocciaPropertyDescriptorAccessor = class(TGocciaPropertyDescriptor)
   private
     FGetter: TGocciaValue;
@@ -211,6 +226,20 @@ begin
     FMaterialized := True;
   end;
   Result := Value;
+end;
+
+constructor TGocciaLazyValueThunk.Create(const AFactory: TGocciaLazyPlainFactory);
+begin
+  inherited Create;
+  FFactory := AFactory;
+end;
+
+function TGocciaLazyValueThunk.Materialize: TGocciaValue;
+begin
+  if Assigned(FFactory) then
+    Result := FFactory()
+  else
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 constructor TGocciaPropertyDescriptorAccessor.Create(const AGetter: TGocciaValue; const ASetter: TGocciaValue; const AFlags: TPropertyFlags);
