@@ -402,6 +402,9 @@ jobs:
       - name: Check embedded resource CLI behaviour
         run: bun run scripts/test-cli-embedded-resources.ts
 
+      - name: Check Intl taint robustness under lazy materialization
+        run: bun run scripts/test-cli-intl-taint.ts
+
       - name: Check benchmark comparison logic
         run: bun run scripts/test-benchmark-compare.ts
 
