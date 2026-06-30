@@ -54,10 +54,10 @@ When the website is in scope, also run its configured checks: `cd website` then 
 ### 4. Source-truth sync — the core of the skill
 First the existing structural doc checks (already gated in `lefthook` and `pr.yml`; re-run as insurance):
 ```bash
-npx tsx scripts/check-doc-links.ts
-npx tsx scripts/check-doc-symbols.ts
-npx tsx scripts/check-doc-duplication.ts
-npx tsx scripts/check-doc-length.ts
+bun scripts/check-doc-links.ts
+bun scripts/check-doc-symbols.ts
+bun scripts/check-doc-duplication.ts
+bun scripts/check-doc-length.ts
 ```
 Then the **two-layer currency check** nothing else covers — stale numbers and misleading prose across **both** `docs/*.md` **and** the website's `.ts/.tsx` copy (the structural checks above are markdown-only):
 
