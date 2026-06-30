@@ -30,9 +30,12 @@ uses
   Goccia.Builtins.Atomics,
   Goccia.Builtins.DisposableStack,
   Goccia.Builtins.Semver,
+  Goccia.Engine,
   Goccia.GarbageCollector,
   Goccia.ImportMeta,
+  Goccia.Interpreter,
   Goccia.RegExp.VM,
+  Goccia.Scope,
   Goccia.Temporal.TimeZone,
   Goccia.ThreadCleanupRegistry,
   Goccia.Threading.Init,
@@ -49,6 +52,8 @@ type
     procedure TestDrainReclaimsMemberDefinitionThreadvars;
     procedure TestRegistryDrainIsIdempotent;
     procedure TestMigratedCacheCleanupsAreRegistered;
+
+    procedure MaterializeLazyBuiltins(const AEngine: TGocciaEngine);
   end;
 
 procedure TLeakTests.SetupTests;
@@ -69,10 +74,15 @@ end;
 
 procedure TLeakTests.TestDrainReclaimsMemberDefinitionThreadvars;
 const
-  // One engine populates ~64 member-definition arrays (records with strings);
-  // their combined heap is far above this floor, while collector/allocator noise
-  // around a single Collect stays well below it.
-  MIN_RECLAIMED_BYTES = 8 * 1024;
+  // One engine (with the heavyweight globals materialized below) populates many
+  // member-definition arrays (records with strings) whose combined heap is well
+  // above this floor, while collector/allocator noise around a single Collect
+  // stays at the ~1 KiB scale of the idempotent test's tolerance. The floor was
+  // 8 KiB when every builtin was constructed eagerly; lazy materialization
+  // (#747/#790) shrank the boot-time eager footprint, and on 32-bit targets the
+  // smaller records put the eager set just under 8 KiB. 4 KiB stays comfortably
+  // above noise on every target while still catching a regressed (no-op) drain.
+  MIN_RECLAIMED_BYTES = 4 * 1024;
 var
   Populated, Drained: Int64;
 begin
@@ -80,7 +90,11 @@ begin
   // populates this thread's FStaticMembers / FPrototypeMembers threadvars. The
   // engine objects themselves are freed inside the call; the member-definition
   // arrays are threadvars and outlive it (the leak this issue is about).
-  EnsureSharedPrototypesInitialized;
+  // Materialize the heavyweight globals too: they are built lazily now
+  // (#747/#790), so a bare engine constructor no longer populates their
+  // member-definition threadvars. Touching them keeps this leak gate exercising
+  // the largest threadvar populators (Temporal's classes, Intl's constructors).
+  EnsureSharedPrototypesInitialized(MaterializeLazyBuiltins);
   TGarbageCollector.Instance.Collect;
   Populated := Int64(GetHeapStatus.TotalAllocated);
 
@@ -92,6 +106,19 @@ begin
   Drained := Int64(GetHeapStatus.TotalAllocated);
 
   Expect<Boolean>((Populated - Drained) >= MIN_RECLAIMED_BYTES).ToBe(True);
+end;
+
+procedure TLeakTests.MaterializeLazyBuiltins(const AEngine: TGocciaEngine);
+const
+  LazyGlobals: array[0 .. 6] of string = ('Temporal', 'Intl', 'Atomics',
+    'Proxy', 'Reflect', 'DisposableStack', 'AsyncDisposableStack');
+var
+  I: Integer;
+begin
+  // Reading each lazy global through the scope forces its backing object to
+  // materialize, populating that builtin's member-definition threadvars.
+  for I := Low(LazyGlobals) to High(LazyGlobals) do
+    AEngine.Interpreter.GlobalScope.GetValue(LazyGlobals[I]);
 end;
 
 procedure TLeakTests.TestRegistryDrainIsIdempotent;
