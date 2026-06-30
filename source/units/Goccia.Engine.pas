@@ -819,8 +819,21 @@ end;
 function TGocciaEngine.MaterializeIntlGlobal: TGocciaValue;
 begin
   if not Assigned(FBuiltinIntl) then
+  begin
     FBuiltinIntl := TGocciaIntlBuiltin.Create('Intl', FInterpreter.GlobalScope,
       ThrowError, False);
+    // Capture the intrinsic %Intl.NumberFormat% / %Intl.DateTimeFormat% into
+    // hidden global bindings the locale shims use. ECMA-402 toLocaleString
+    // constructs the intrinsic, not the global, so Number/Date toLocaleString
+    // must keep working after user code replaces the Intl.NumberFormat /
+    // Intl.DateTimeFormat namespace properties. These are captured here (on Intl
+    // construction, before any user taint can run) and defined after boot, so
+    // they are never mirrored onto globalThis.
+    FInterpreter.GlobalScope.DefineLexicalBinding('__GocciaIntlNumberFormat',
+      FBuiltinIntl.IntlNamespace.GetProperty('NumberFormat'), dtConst, True);
+    FInterpreter.GlobalScope.DefineLexicalBinding('__GocciaIntlDateTimeFormat',
+      FBuiltinIntl.IntlNamespace.GetProperty('DateTimeFormat'), dtConst, True);
+  end;
   Result := FBuiltinIntl.IntlNamespace;
 end;
 
