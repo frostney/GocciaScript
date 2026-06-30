@@ -1,38 +1,20 @@
 /*---
 description: >
-  Lazily-materialized Intl is robust to userland tainting: its construction does
-  not read or write through Object.prototype accessors, and Number/Date
-  toLocaleString use the intrinsic NumberFormat/DateTimeFormat rather than the
-  replaceable global. Regression for the lazy-built-in materialization work,
-  which made Intl materialize after user code can run.
+  Number/Date toLocaleString construct the intrinsic NumberFormat/DateTimeFormat
+  rather than the replaceable Intl globals, even after user code taints those
+  globals. Regression for the lazy-built-in materialization work.
+
+  The companion "Intl construction is robust to a tainted Object.prototype" path
+  only reproduces when Intl materializes *after* user code runs; the first-party
+  runner materializes Intl eagerly (its harness touches Intl before any test),
+  so that path is covered by the bare-loader scripts/test-cli-intl-taint.ts and
+  the pinned test262 intl402 taint suite instead.
 features: [Intl]
 ---*/
 
 const isIntl = typeof Intl !== "undefined";
 
 describe.runIf(isIntl)("lazy Intl is taint-robust", () => {
-  test("Intl constructors materialize after Object.prototype is tainted", () => {
-    // Getter-only accessors on Object.prototype: option-record construction must
-    // not [[Set]] through them, and undefined-options handling must not [[Get]]
-    // through them. This is the first touch of Intl in this file, so the
-    // namespace materializes only now — after the taint. A throw here fails the
-    // test.
-    const tainted = ["type", "style", "numeric", "localeMatcher"];
-    for (const name of tainted) {
-      Object.defineProperty(Object.prototype, name, {
-        configurable: true,
-        get() { throw new Error(`Object.prototype.${name} getter must not run`); },
-      });
-    }
-    try {
-      expect(new Intl.PluralRules().select(9)).toBe("other");
-      expect(typeof new Intl.RelativeTimeFormat().format(1, "day")).toBe("string");
-      expect(new Intl.ListFormat([], undefined).resolvedOptions().type).toBe("conjunction");
-    } finally {
-      for (const name of tainted) delete Object.prototype[name];
-    }
-  });
-
   test("Number/Array/Date toLocaleString use the intrinsic, not the global", () => {
     const originalNumberFormat = Intl.NumberFormat;
     const originalDateTimeFormat = Intl.DateTimeFormat;

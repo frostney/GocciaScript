@@ -829,10 +829,17 @@ begin
     // Intl.DateTimeFormat namespace properties. These are captured here (on Intl
     // construction, before any user taint can run) and defined after boot, so
     // they are never mirrored onto globalThis.
-    FInterpreter.GlobalScope.DefineLexicalBinding('__GocciaIntlNumberFormat',
-      FBuiltinIntl.IntlNamespace.GetProperty('NumberFormat'), dtConst, True);
-    FInterpreter.GlobalScope.DefineLexicalBinding('__GocciaIntlDateTimeFormat',
-      FBuiltinIntl.IntlNamespace.GetProperty('DateTimeFormat'), dtConst, True);
+    // Define-if-absent: user code could have declared these reserved names
+    // before first touching Intl; redeclaring a const binding would throw and
+    // abort materialization.
+    if not FInterpreter.GlobalScope.ContainsOwnLexicalBinding(
+      '__GocciaIntlNumberFormat') then
+      FInterpreter.GlobalScope.DefineLexicalBinding('__GocciaIntlNumberFormat',
+        FBuiltinIntl.IntlNamespace.GetProperty('NumberFormat'), dtConst, True);
+    if not FInterpreter.GlobalScope.ContainsOwnLexicalBinding(
+      '__GocciaIntlDateTimeFormat') then
+      FInterpreter.GlobalScope.DefineLexicalBinding('__GocciaIntlDateTimeFormat',
+        FBuiltinIntl.IntlNamespace.GetProperty('DateTimeFormat'), dtConst, True);
   end;
   Result := FBuiltinIntl.IntlNamespace;
 end;
@@ -1295,14 +1302,23 @@ begin
 
   for Name in Scope.GetOwnBindingNames do
   begin
-    // A binding becomes GlobalObjectBacked only after it has already been
-    // mirrored onto the global object below, so skipping backed bindings makes
-    // RefreshGlobalThis (re-run on every runtime-extension install) cost O(new
-    // bindings) instead of O(all globals).  It is also load-bearing for lazy
-    // globals: re-reading their value here through Scope.GetValue would resolve
-    // the global-object property and force materialization, defeating the
-    // lazy descriptor installed by RegisterLazyGlobal / lazy built-ins.
-    if Scope.IsGlobalObjectBackedBinding(Name) then
+    // Internal intrinsic-capture bindings (e.g. __GocciaIntlNumberFormat) must
+    // never be mirrored onto globalThis; they are engine-private and exist only
+    // for the locale shims.
+    if (Length(Name) >= 8) and (Copy(Name, 1, 8) = '__Goccia') then
+      Continue;
+    // A built-in binding becomes GlobalObjectBacked only after it has already
+    // been mirrored onto the global object below, so skipping backed *built-in*
+    // bindings makes RefreshGlobalThis (re-run on every runtime-extension
+    // install) cost O(new bindings) instead of O(all globals).  It is also
+    // load-bearing for lazy globals: re-reading their value here through
+    // Scope.GetValue would resolve the global-object property and force
+    // materialization, defeating the lazy descriptor installed by
+    // RegisterLazyGlobal / lazy built-ins.  Host-injected globals (BuiltIn =
+    // False) are NOT skipped: RegisterGlobal can replace them via
+    // ForceUpdateBinding, and the mirrored globalThis property must be refreshed
+    // to the new value.
+    if Scope.IsGlobalObjectBackedBinding(Name) and Scope.IsBuiltInBinding(Name) then
       Continue;
     // ES2026 §19.1: Value properties (NaN, Infinity, undefined) are
     // { [[Writable]]: false, [[Enumerable]]: false, [[Configurable]]: false }.

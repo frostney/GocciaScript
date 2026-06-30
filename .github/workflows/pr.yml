@@ -823,8 +823,7 @@ jobs:
               section += row('Boot (median)', fmtMs(boot.interpreted?.medianMs), fmtMs(boot.bytecode?.medianMs));
               section += row('Boot (min)', fmtMs(boot.interpreted?.minMs), fmtMs(boot.bytecode?.minMs));
               section += `\n_Empty-script (\`0;\`) end-to-end process wall-clock for \`GocciaScriptLoader\`, min and median over ${boot.runs ?? '?'} runs after ${boot.warmup ?? '?'} warmups. Includes a fixed process / dynamic-loader floor that does not shrink, so it understates the engine-boot speedup; treat as practical boot time, not pure engine work._\n`;
-              const bootMedian = boot.bytecode?.medianMs ?? boot.interpreted?.medianMs;
-              body += details(`Boot${typeof bootMedian === 'number' ? ` (~${fmtMs(bootMedian)} bytecode)` : ''}`, section);
+              body += details('Boot', section);
             }
 
             body += '<sub>Measured on ubuntu-latest x64.</sub>';

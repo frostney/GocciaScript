@@ -36,6 +36,11 @@ for (const name of ["type", "style", "numeric", "localeMatcher"]) {
 new Intl.PluralRules().select(9);
 new Intl.RelativeTimeFormat().format(1, "day");
 new Intl.ListFormat([], undefined).resolvedOptions();
+// DisplayNames is where the null-prototype bootstrap fix lives. Construct it
+// directly; the options bag is null-prototype because reading a user object's
+// inherited tainted accessors is correct ECMA-402 GetOption behaviour, not the
+// internal-bootstrap path under test.
+new Intl.DisplayNames("en", Object.assign(Object.create(null), { type: "language" })).of("de");
 for (const name of ["type", "style", "numeric", "localeMatcher"]) delete Object.prototype[name];
 
 // toLocaleString must construct the intrinsic, not the replaceable global.

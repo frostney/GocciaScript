@@ -25,8 +25,18 @@ if (!loader || !output) {
   process.exit(2);
 }
 
-const runs = Number(Bun.env.BOOT_TIMING_RUNS ?? "60");
-const warmup = Number(Bun.env.BOOT_TIMING_WARMUP ?? "10");
+function intEnv(name: string, fallback: number, min: number): number {
+  const raw = Bun.env[name];
+  if (raw === undefined || raw === "") return fallback;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < min) {
+    throw new Error(`${name} must be an integer >= ${min}, got: ${raw}`);
+  }
+  return value;
+}
+
+const runs = intEnv("BOOT_TIMING_RUNS", 60, 1);
+const warmup = intEnv("BOOT_TIMING_WARMUP", 10, 0);
 
 interface ModeTiming {
   minMs: number;
@@ -35,13 +45,19 @@ interface ModeTiming {
 
 function measure(script: string, modeArgs: string[]): ModeTiming {
   const samples: number[] = [];
+  const label = modeArgs.join(" ") || "interpreter";
   for (let i = 0; i < warmup + runs; i++) {
     const start = Bun.nanoseconds();
-    Bun.spawnSync([loader, script, ...modeArgs], {
+    const result = Bun.spawnSync([loader, script, ...modeArgs], {
       stdout: "ignore",
       stderr: "ignore",
     });
     const elapsedMs = (Bun.nanoseconds() - start) / 1e6;
+    // A crashed/non-zero child run is not a valid boot sample — fail rather than
+    // write boot-timing.json from bogus timings.
+    if (result.exitCode !== 0) {
+      throw new Error(`loader exited ${result.exitCode} measuring boot (${label})`);
+    }
     if (i >= warmup) samples.push(elapsedMs);
   }
   samples.sort((a, b) => a - b);

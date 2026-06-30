@@ -102,10 +102,10 @@ describe("lazy globals stay configurable and writable", () => {
     expect("JSONL" in globalThis).toBe(false);
   });
 
-  test("assigning a lazy global is not overwritten by later materialization", () => {
-    globalThis.YAML = 123;
-    expect(globalThis.YAML).toBe(123);
-  });
+  // The write-before-materialization case (a write to a still-lazy global must
+  // not be clobbered when it would otherwise materialize) needs the global to be
+  // untouched first, so it lives in its own fresh-engine file:
+  // lazy-global-write-before-materialize.js.
 });
 
 describe("lazy Goccia.semver namespace", () => {
