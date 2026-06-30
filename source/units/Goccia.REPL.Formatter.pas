@@ -73,28 +73,39 @@ function FormatMapValue(const AMap: TGocciaMapValue;
   const AUseColor: Boolean): string;
 var
   SB: TStringBuffer;
-  I, Remaining: Integer;
+  I, Total, Cursor: Integer;
+  Key, Value: TGocciaValue;
 begin
   SB := TStringBuffer.Create;
-  SB.Append('Map(' + IntToStr(AMap.Entries.Count) + ')');
-  if AMap.Entries.Count = 0 then
+  Total := AMap.Count;
+  SB.Append('Map(' + IntToStr(Total) + ')');
+  if Total = 0 then
     SB.Append(' {}')
   else
   begin
     SB.Append(' { ');
-    for I := 0 to AMap.Entries.Count - 1 do
-    begin
-      if I >= MAX_INSPECT_ITEMS then
+    // FormatREPLValue can recurse into user getters that mutate AMap; retain it
+    // so compaction cannot renumber entries and invalidate Cursor mid-walk.
+    I := 0;
+    Cursor := 0;
+    AMap.RetainIterator;
+    try
+      while AMap.NextEntry(Cursor, Key, Value) do
       begin
-        Remaining := AMap.Entries.Count - MAX_INSPECT_ITEMS;
-        SB.Append(', ... ' + IntToStr(Remaining) + ' more');
-        Break;
+        if I >= MAX_INSPECT_ITEMS then
+        begin
+          SB.Append(', ... ' + IntToStr(Total - MAX_INSPECT_ITEMS) + ' more');
+          Break;
+        end;
+        if I > 0 then
+          SB.Append(', ');
+        SB.Append(FormatREPLValue(Key, AUseColor));
+        SB.Append(' => ');
+        SB.Append(FormatREPLValue(Value, AUseColor));
+        Inc(I);
       end;
-      if I > 0 then
-        SB.Append(', ');
-      SB.Append(FormatREPLValue(AMap.Entries[I].Key, AUseColor));
-      SB.Append(' => ');
-      SB.Append(FormatREPLValue(AMap.Entries[I].Value, AUseColor));
+    finally
+      AMap.ReleaseIterator;
     end;
     SB.Append(' }');
   end;
@@ -105,26 +116,37 @@ function FormatSetValue(const ASet: TGocciaSetValue;
   const AUseColor: Boolean): string;
 var
   SB: TStringBuffer;
-  I, Remaining: Integer;
+  I, Total, Cursor: Integer;
+  Item: TGocciaValue;
 begin
   SB := TStringBuffer.Create;
-  SB.Append('Set(' + IntToStr(ASet.Items.Count) + ')');
-  if ASet.Items.Count = 0 then
+  Total := ASet.Count;
+  SB.Append('Set(' + IntToStr(Total) + ')');
+  if Total = 0 then
     SB.Append(' {}')
   else
   begin
     SB.Append(' { ');
-    for I := 0 to ASet.Items.Count - 1 do
-    begin
-      if I >= MAX_INSPECT_ITEMS then
+    // FormatREPLValue can recurse into user getters that mutate ASet; retain it
+    // so compaction cannot renumber entries and invalidate Cursor mid-walk.
+    I := 0;
+    Cursor := 0;
+    ASet.RetainIterator;
+    try
+      while ASet.NextItem(Cursor, Item) do
       begin
-        Remaining := ASet.Items.Count - MAX_INSPECT_ITEMS;
-        SB.Append(', ... ' + IntToStr(Remaining) + ' more');
-        Break;
+        if I >= MAX_INSPECT_ITEMS then
+        begin
+          SB.Append(', ... ' + IntToStr(Total - MAX_INSPECT_ITEMS) + ' more');
+          Break;
+        end;
+        if I > 0 then
+          SB.Append(', ');
+        SB.Append(FormatREPLValue(Item, AUseColor));
+        Inc(I);
       end;
-      if I > 0 then
-        SB.Append(', ');
-      SB.Append(FormatREPLValue(ASet.Items[I], AUseColor));
+    finally
+      ASet.ReleaseIterator;
     end;
     SB.Append(' }');
   end;

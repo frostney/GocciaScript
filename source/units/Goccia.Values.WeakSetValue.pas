@@ -67,9 +67,6 @@ uses
 var
   GWeakSetSharedSlot: TGocciaRealmOwnedSlotId;
 
-threadvar
-  FPrototypeMembers: TArray<TGocciaMemberDefinition>;
-
 function GetWeakSetShared: TGocciaSharedPrototype; inline;
 begin
   if Assigned(CurrentRealm) then
@@ -92,6 +89,8 @@ end;
 
 destructor TGocciaWeakSetValue.Destroy;
 begin
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.UnregisterWeakContainer(Self);
   FItems.Free;
   inherited;
 end;
@@ -100,30 +99,28 @@ procedure TGocciaWeakSetValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
   Shared: TGocciaSharedPrototype;
+  PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
   if not Assigned(CurrentRealm) then Exit;
   if Assigned(GetWeakSetShared) then Exit;
 
   Shared := TGocciaSharedPrototype.Create(Self);
   CurrentRealm.SetOwnedSlot(GWeakSetSharedSlot, Shared);
-  if Length(FPrototypeMembers) = 0 then
-  begin
-    Members := TGocciaMemberCollection.Create;
-    try
-      // Built-in prototype methods are not constructors per ES spec.
-      Members.AddNamedMethod('add', WeakSetAdd, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype, gmfNotConstructable]);
-      Members.AddNamedMethod('delete', WeakSetDelete, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype, gmfNotConstructable]);
-      Members.AddNamedMethod('has', WeakSetHas, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype, gmfNotConstructable]);
-      Members.AddSymbolDataProperty(
-        TGocciaSymbolValue.WellKnownToStringTag,
-        TGocciaStringLiteralValue.Create(CONSTRUCTOR_WEAK_SET),
-        [pfConfigurable]);
-      FPrototypeMembers := Members.ToDefinitions;
-    finally
-      Members.Free;
-    end;
+  Members := TGocciaMemberCollection.Create;
+  try
+    // Built-in prototype methods are not constructors per ES spec.
+    Members.AddNamedMethod('add', WeakSetAdd, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype, gmfNotConstructable]);
+    Members.AddNamedMethod('delete', WeakSetDelete, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype, gmfNotConstructable]);
+    Members.AddNamedMethod('has', WeakSetHas, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype, gmfNotConstructable]);
+    Members.AddSymbolDataProperty(
+      TGocciaSymbolValue.WellKnownToStringTag,
+      TGocciaStringLiteralValue.Create(CONSTRUCTOR_WEAK_SET),
+      [pfConfigurable]);
+    PrototypeMembers := Members.ToDefinitions;
+  finally
+    Members.Free;
   end;
-  RegisterMemberDefinitions(Shared.Prototype, FPrototypeMembers);
+  RegisterMemberDefinitions(Shared.Prototype, PrototypeMembers);
 end;
 
 class procedure TGocciaWeakSetValue.ExposePrototype(
@@ -148,6 +145,9 @@ end;
 
 procedure TGocciaWeakSetValue.AddItem(const AValue: TGocciaValue);
 begin
+  // Count this set as a live weak container on its first item (see WeakMap).
+  if (FItems.Count = 0) and Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.RegisterWeakContainer(Self);
   FItems.AddOrSetValue(AValue, True);
 end;
 

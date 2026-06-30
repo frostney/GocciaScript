@@ -30,6 +30,12 @@ type
     function LoadContent(const APath: string): TGocciaModuleContent; virtual; abstract;
     function TryGetLastModified(const APath: string;
       out ALastModified: TDateTime): Boolean; virtual; abstract;
+
+    { Raw bytes of the resolved module, preserving every byte exactly for
+      Import Bytes (NUL bytes, non-UTF-8 data, original newlines). The base
+      implementation reuses LoadContent; providers backed by exact byte storage
+      should override it to avoid the UTF-8/source-line round trip. }
+    function LoadContentBytes(const APath: string): TBytes; virtual;
   end;
 
   TGocciaUnavailableModuleContentProvider = class(TGocciaModuleContentProvider)
@@ -44,6 +50,7 @@ type
   public
     function Exists(const APath: string): Boolean; override;
     function LoadContent(const APath: string): TGocciaModuleContent; override;
+    function LoadContentBytes(const APath: string): TBytes; override;
     function TryGetLastModified(const APath: string;
       out ALastModified: TDateTime): Boolean; override;
   end;
@@ -90,6 +97,21 @@ begin
   Result := FText;
 end;
 
+{ TGocciaModuleContentProvider }
+
+function TGocciaModuleContentProvider.LoadContentBytes(
+  const APath: string): TBytes;
+var
+  Content: TGocciaModuleContent;
+begin
+  Content := LoadContent(APath);
+  try
+    Result := BytesOf(Content.Text);
+  finally
+    Content.Free;
+  end;
+end;
+
 { TGocciaUnavailableModuleContentProvider }
 
 function TGocciaUnavailableModuleContentProvider.Exists(
@@ -130,6 +152,12 @@ begin
   if not TryGetFileLastModified(APath, LastModified) then
     LastModified := 0;
   Result := TGocciaModuleContent.Create(SourceText, LastModified);
+end;
+
+function TGocciaFileSystemModuleContentProvider.LoadContentBytes(
+  const APath: string): TBytes;
+begin
+  Result := ReadFileBytes(APath);
 end;
 
 function TGocciaFileSystemModuleContentProvider.TryGetLastModified(

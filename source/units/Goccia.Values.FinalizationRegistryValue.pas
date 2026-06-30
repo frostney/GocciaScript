@@ -64,9 +64,6 @@ uses
 var
   GFinalizationRegistrySharedSlot: TGocciaRealmOwnedSlotId;
 
-threadvar
-  FPrototypeMembers: TArray<TGocciaMemberDefinition>;
-
 function GetFinalizationRegistryShared: TGocciaSharedPrototype; inline;
 begin
   if Assigned(CurrentRealm) then
@@ -91,6 +88,8 @@ end;
 
 destructor TGocciaFinalizationRegistryValue.Destroy;
 begin
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.UnregisterWeakContainer(Self);
   FCells.Free;
   inherited;
 end;
@@ -99,28 +98,26 @@ procedure TGocciaFinalizationRegistryValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
   Shared: TGocciaSharedPrototype;
+  PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
   if not Assigned(CurrentRealm) then Exit;
   if Assigned(GetFinalizationRegistryShared) then Exit;
 
   Shared := TGocciaSharedPrototype.Create(Self);
   CurrentRealm.SetOwnedSlot(GFinalizationRegistrySharedSlot, Shared);
-  if Length(FPrototypeMembers) = 0 then
-  begin
-    Members := TGocciaMemberCollection.Create;
-    try
-      Members.AddNamedMethod('register', FinalizationRegistryRegister, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype, gmfNotConstructable]);
-      Members.AddNamedMethod('unregister', FinalizationRegistryUnregister, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype, gmfNotConstructable]);
-      Members.AddSymbolDataProperty(
-        TGocciaSymbolValue.WellKnownToStringTag,
-        TGocciaStringLiteralValue.Create(CONSTRUCTOR_FINALIZATION_REGISTRY),
-        [pfConfigurable]);
-      FPrototypeMembers := Members.ToDefinitions;
-    finally
-      Members.Free;
-    end;
+  Members := TGocciaMemberCollection.Create;
+  try
+    Members.AddNamedMethod('register', FinalizationRegistryRegister, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype, gmfNotConstructable]);
+    Members.AddNamedMethod('unregister', FinalizationRegistryUnregister, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype, gmfNotConstructable]);
+    Members.AddSymbolDataProperty(
+      TGocciaSymbolValue.WellKnownToStringTag,
+      TGocciaStringLiteralValue.Create(CONSTRUCTOR_FINALIZATION_REGISTRY),
+      [pfConfigurable]);
+    PrototypeMembers := Members.ToDefinitions;
+  finally
+    Members.Free;
   end;
-  RegisterMemberDefinitions(Shared.Prototype, FPrototypeMembers);
+  RegisterMemberDefinitions(Shared.Prototype, PrototypeMembers);
 end;
 
 class procedure TGocciaFinalizationRegistryValue.ExposePrototype(
@@ -237,6 +234,9 @@ begin
     Cell.HasUnregisterToken := True;
   end;
 
+  // Count this registry as a live weak container on its first cell.
+  if (Registry.FCells.Count = 0) and Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.RegisterWeakContainer(Registry);
   Registry.FCells.Add(Cell);
   if Assigned(TGarbageCollector.Instance) then
     TGarbageCollector.Instance.AddKeptObject(Target);

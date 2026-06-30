@@ -62,9 +62,6 @@ var
 const
   FRENCH_COMPACT_PLURAL_MANY_THRESHOLD = 1000000;
 
-threadvar
-  FPrototypeMembers: TArray<TGocciaMemberDefinition>;
-
 function GetIntlPluralRulesShared: TGocciaSharedPrototype; inline;
 begin
   if Assigned(CurrentRealm) then
@@ -310,32 +307,30 @@ procedure TGocciaIntlPluralRulesValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
   Shared: TGocciaSharedPrototype;
+  PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
   if not Assigned(CurrentRealm) then Exit;
   if Assigned(GetIntlPluralRulesShared) then Exit;
 
   Shared := TGocciaSharedPrototype.Create(Self);
   CurrentRealm.SetOwnedSlot(GIntlPluralRulesSharedSlot, Shared);
-  if Length(FPrototypeMembers) = 0 then
-  begin
-    Members := TGocciaMemberCollection.Create;
-    try
-      Members.AddNamedMethod('select', IntlPluralRulesSelect, 1,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('selectRange', IntlPluralRulesSelectRange, 2,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('resolvedOptions', IntlPluralRulesResolvedOptions, 0,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddSymbolDataProperty(
-        TGocciaSymbolValue.WellKnownToStringTag,
-        TGocciaStringLiteralValue.Create('Intl.PluralRules'),
-        [pfConfigurable]);
-      FPrototypeMembers := Members.ToDefinitions;
-    finally
-      Members.Free;
-    end;
+  Members := TGocciaMemberCollection.Create;
+  try
+    Members.AddNamedMethod('select', IntlPluralRulesSelect, 1,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod('selectRange', IntlPluralRulesSelectRange, 2,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod('resolvedOptions', IntlPluralRulesResolvedOptions, 0,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddSymbolDataProperty(
+      TGocciaSymbolValue.WellKnownToStringTag,
+      TGocciaStringLiteralValue.Create('Intl.PluralRules'),
+      [pfConfigurable]);
+    PrototypeMembers := Members.ToDefinitions;
+  finally
+    Members.Free;
   end;
-  RegisterMemberDefinitions(Shared.Prototype, FPrototypeMembers);
+  RegisterMemberDefinitions(Shared.Prototype, PrototypeMembers);
 end;
 
 class procedure TGocciaIntlPluralRulesValue.ExposePrototype(const AConstructor: TGocciaObjectValue);

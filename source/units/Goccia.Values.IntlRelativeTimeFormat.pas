@@ -56,9 +56,6 @@ uses
 var
   GIntlRelativeTimeFormatSharedSlot: TGocciaRealmOwnedSlotId;
 
-threadvar
-  FPrototypeMembers: TArray<TGocciaMemberDefinition>;
-
 function GetIntlRelativeTimeFormatShared: TGocciaSharedPrototype; inline;
 begin
   if Assigned(CurrentRealm) then
@@ -776,32 +773,30 @@ procedure TGocciaIntlRelativeTimeFormatValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
   Shared: TGocciaSharedPrototype;
+  PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
   if not Assigned(CurrentRealm) then Exit;
   if Assigned(GetIntlRelativeTimeFormatShared) then Exit;
 
   Shared := TGocciaSharedPrototype.Create(Self);
   CurrentRealm.SetOwnedSlot(GIntlRelativeTimeFormatSharedSlot, Shared);
-  if Length(FPrototypeMembers) = 0 then
-  begin
-    Members := TGocciaMemberCollection.Create;
-    try
-      Members.AddNamedMethod('format', IntlRelativeTimeFormatFormat, 2,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('formatToParts', IntlRelativeTimeFormatFormatToParts, 2,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('resolvedOptions', IntlRelativeTimeFormatResolvedOptions, 0,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddSymbolDataProperty(
-        TGocciaSymbolValue.WellKnownToStringTag,
-        TGocciaStringLiteralValue.Create('Intl.RelativeTimeFormat'),
-        [pfConfigurable]);
-      FPrototypeMembers := Members.ToDefinitions;
-    finally
-      Members.Free;
-    end;
+  Members := TGocciaMemberCollection.Create;
+  try
+    Members.AddNamedMethod('format', IntlRelativeTimeFormatFormat, 2,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod('formatToParts', IntlRelativeTimeFormatFormatToParts, 2,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod('resolvedOptions', IntlRelativeTimeFormatResolvedOptions, 0,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddSymbolDataProperty(
+      TGocciaSymbolValue.WellKnownToStringTag,
+      TGocciaStringLiteralValue.Create('Intl.RelativeTimeFormat'),
+      [pfConfigurable]);
+    PrototypeMembers := Members.ToDefinitions;
+  finally
+    Members.Free;
   end;
-  RegisterMemberDefinitions(Shared.Prototype, FPrototypeMembers);
+  RegisterMemberDefinitions(Shared.Prototype, PrototypeMembers);
 end;
 
 class procedure TGocciaIntlRelativeTimeFormatValue.ExposePrototype(const AConstructor: TGocciaObjectValue);

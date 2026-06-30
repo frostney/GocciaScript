@@ -75,6 +75,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.Scope.BindingMap,
+  Goccia.ThreadCleanupRegistry,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
@@ -576,8 +577,9 @@ begin
 end;
 
 initialization
-
-finalization
-  ClearDisposableStackSlotMap;
+  // FPC does not auto-finalize managed threadvars at thread exit. The registry
+  // drain releases this thread's slot map on worker exit (ShutdownThreadRuntime)
+  // and on the main thread (Goccia.ThreadCleanupRegistry's finalization).
+  RegisterThreadvarCleanup(@ClearDisposableStackSlotMap);
 
 end.

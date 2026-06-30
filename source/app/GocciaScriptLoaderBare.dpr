@@ -16,6 +16,7 @@ uses
   Goccia.AST.Node,
   Goccia.AST.Statements,
   Goccia.Builtins.Atomics,
+  Goccia.Builtins.GlobalShadowRealm,
   Goccia.CLI.Options,
   Goccia.Engine,
   Goccia.Error,
@@ -38,6 +39,7 @@ uses
   Goccia.Scope.Redeclaration,
   Goccia.ScriptLoader.Input,
   Goccia.SourcePipeline,
+  Goccia.StackLimit,
   Goccia.Terminal.Colors,
   Goccia.TextFiles,
   Goccia.Threading,
@@ -65,6 +67,7 @@ type
     Compatibility: TGocciaCompatibilityFlags;
     StrictTypes: Boolean;
     UnsafeFunctionConstructor: Boolean;
+    UnsafeShadowRealm: Boolean;
     Test262Host: Boolean;
     Test262AgentCanSuspend: Boolean;
     Print: Boolean;
@@ -76,6 +79,7 @@ type
     TimeoutMs: Integer;
     MaxMemoryBytes: Int64;
     MaxInstructions: Int64;
+    StackSize: Integer;
     ProfileModePresent: Boolean;
     ProfileMode: Goccia.CLI.Options.TGocciaProfileMode;
     ProfileOutputPath: string;
@@ -187,6 +191,12 @@ type
 
 const
   BARE_PRINT_GLOBAL_NAME = 'print';
+  // Finite default call-stack depth for the bare loader.  Without a bound,
+  // genuinely unbounded recursion runs until OOM or the (optional) instruction
+  // limit instead of throwing RangeError like a conforming engine.  Proper
+  // tail calls reuse their frame, so this limit only fences off deep *non-tail*
+  // recursion; the value is generous to avoid clipping legitimate recursion.
+  BARE_DEFAULT_MAX_STACK_DEPTH = 10000;
 
 procedure ConfigureEngine(const AEngine: TGocciaEngine;
   const AExecutor: TGocciaExecutor; const AOptions: TBareOptions); forward;
@@ -1166,11 +1176,13 @@ begin
   WriteLn('  --source-type=script|module   Load entry as script source or module source (.mjs infers module)');
   WriteLn('  --source-name=PATH            Name stdin source as PATH for diagnostics and module resolution');
   WriteLn('  --unsafe-function-constructor Enable dynamic Function constructor');
+  WriteLn('  --unsafe-shadowrealm          Enable the ShadowRealm constructor');
   WriteLn('  --test262-host                Expose Goccia.test262 host hooks for test262');
   WriteLn('  --print                       Print the script''s last value (incl. undefined)');
   WriteLn('  --timeout=MS                  Per-file cooperative timeout in milliseconds');
   WriteLn('  --max-memory=BYTES            GC heap byte limit (RangeError on exceed)');
   WriteLn('  --max-instructions=N          Maximum bytecode steps before aborting');
+  WriteLn('  --stack-size=N                Maximum call stack depth (0 = no limit)');
   WriteLn('  --profile=opcodes|functions|all');
   WriteLn('                                Enable bytecode VM profiling (forces bytecode mode)');
   WriteLn('  --profile-output=PATH         Write profiler JSON to PATH');
@@ -1232,6 +1244,17 @@ begin
   AOptions.MaxInstructions := Parsed;
 end;
 
+procedure ParseStackSize(const AValue: string; var AOptions: TBareOptions);
+var
+  Parsed: Integer;
+begin
+  if not TryStrToInt(AValue, Parsed) then
+    raise Exception.Create('Invalid --stack-size value: ' + AValue);
+  if Parsed < 0 then
+    raise Exception.Create('--stack-size must be 0 or greater');
+  AOptions.StackSize := Parsed;
+end;
+
 procedure ParseProfileMode(const AValue: string; var AOptions: TBareOptions);
 begin
   if AValue = 'opcodes' then
@@ -1283,6 +1306,7 @@ begin
   Result.Compatibility := [];
   Result.StrictTypes := False;
   Result.UnsafeFunctionConstructor := False;
+  Result.UnsafeShadowRealm := False;
   Result.Test262Host := False;
   Result.Test262AgentCanSuspend := True;
   Result.Print := False;
@@ -1294,6 +1318,7 @@ begin
   Result.TimeoutMs := 0;
   Result.MaxMemoryBytes := 0;
   Result.MaxInstructions := 0;
+  Result.StackSize := BARE_DEFAULT_MAX_STACK_DEPTH;
   Result.ProfileModePresent := False;
   Result.ProfileMode := Goccia.CLI.Options.pmAll;
   Result.ProfileOutputPath := '';
@@ -1314,6 +1339,8 @@ begin
       Result.StrictTypes := True
     else if Arg = '--unsafe-function-constructor' then
       Result.UnsafeFunctionConstructor := True
+    else if Arg = '--unsafe-shadowrealm' then
+      Result.UnsafeShadowRealm := True
     else if Arg = '--test262-host' then
       Result.Test262Host := True
     else if Arg = '--print' then
@@ -1331,6 +1358,8 @@ begin
     else if Copy(Arg, 1, Length('--max-instructions=')) = '--max-instructions=' then
       ParseMaxInstructions(Copy(Arg, Length('--max-instructions=') + 1, MaxInt),
         Result)
+    else if Copy(Arg, 1, Length('--stack-size=')) = '--stack-size=' then
+      ParseStackSize(Copy(Arg, Length('--stack-size=') + 1, MaxInt), Result)
     else if Copy(Arg, 1, Length('--profile=')) = '--profile=' then
       ParseProfileMode(Copy(Arg, Length('--profile=') + 1, MaxInt), Result)
     else if Copy(Arg, 1, Length('--profile-output=')) = '--profile-output=' then
@@ -1381,6 +1410,8 @@ begin
   AEngine.StrictTypes := AOptions.StrictTypes;
   AEngine.SourceType := AOptions.SourceType;
   AEngine.FunctionConstructor.Enabled := AOptions.UnsafeFunctionConstructor;
+  if AOptions.UnsafeShadowRealm then
+    EnableShadowRealm(AEngine);
   SetAtomicsAgentCanSuspend(AOptions.Test262AgentCanSuspend);
   if AOptions.Test262Host then
     AEngine.ModuleLoader.SetContentProvider(
@@ -1456,6 +1487,7 @@ begin
       and would otherwise overwrite any pre-engine value. }
     StartExecutionTimeout(AOptions.TimeoutMs);
     StartInstructionLimit(AOptions.MaxInstructions);
+    SetMaxStackDepth(AOptions.StackSize);
 
     PrintHost := TBarePrintHost.Create;
     try

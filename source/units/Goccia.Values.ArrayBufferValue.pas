@@ -32,6 +32,12 @@ type
     constructor Create(const AByteLength: Integer; const AMaxByteLength: Integer); overload;
     constructor Create(const AClass: TGocciaClassValue); overload;
 
+    { Immutable ArrayBuffers proposal: build a fixed-length immutable buffer
+      directly from raw bytes, without the transfer-and-detach dance. The bytes
+      are adopted by reference; callers must not mutate AData afterwards. }
+    class function CreateImmutableFromBytes(
+      const AData: TBytes): TGocciaArrayBufferValue;
+
     function GetProperty(const AName: string): TGocciaValue; override;
     function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; override;
     function ToStringTag: string; override;
@@ -57,6 +63,7 @@ type
     function ArrayBufferMaxByteLengthGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ArrayBufferResizableGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ArrayBufferDetachedGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ArrayBufferImmutableGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
 implementation
@@ -77,9 +84,6 @@ uses
 
 var
   GArrayBufferSharedSlot: TGocciaRealmOwnedSlotId;
-
-threadvar
-  FPrototypeMembers: TArray<TGocciaMemberDefinition>;
 
 function GetArrayBufferShared: TGocciaSharedPrototype; inline;
 begin
@@ -242,39 +246,49 @@ begin
     FPrototype := Shared.Prototype;
 end;
 
+// Immutable ArrayBuffers proposal: create a fixed-length immutable buffer
+// whose data block is the supplied bytes. Used by Import Bytes to back the
+// default Uint8Array export.
+class function TGocciaArrayBufferValue.CreateImmutableFromBytes(
+  const AData: TBytes): TGocciaArrayBufferValue;
+begin
+  Result := TGocciaArrayBufferValue.Create(0);
+  Result.FData := AData;
+  Result.FImmutable := True;
+end;
+
 procedure TGocciaArrayBufferValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
   Shared: TGocciaSharedPrototype;
+  PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
   if not Assigned(CurrentRealm) then Exit;
   if Assigned(GetArrayBufferShared) then Exit;
 
   Shared := TGocciaSharedPrototype.Create(Self);
   CurrentRealm.SetOwnedSlot(GArrayBufferSharedSlot, Shared);
-  if Length(FPrototypeMembers) = 0 then
-  begin
-    Members := TGocciaMemberCollection.Create;
-    try
-      Members.AddMethod(ArrayBufferSlice, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ArrayBufferResize, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ArrayBufferTransfer, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ArrayBufferTransferToFixedLength, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ArrayBufferTransferToImmutable, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddAccessor(PROP_BYTE_LENGTH, ArrayBufferByteLengthGetter, nil, [pfConfigurable]);
-      Members.AddAccessor(PROP_MAX_BYTE_LENGTH, ArrayBufferMaxByteLengthGetter, nil, [pfConfigurable]);
-      Members.AddAccessor(PROP_RESIZABLE, ArrayBufferResizableGetter, nil, [pfConfigurable]);
-      Members.AddAccessor(PROP_DETACHED, ArrayBufferDetachedGetter, nil, [pfConfigurable]);
-      Members.AddSymbolDataProperty(
-        TGocciaSymbolValue.WellKnownToStringTag,
-        TGocciaStringLiteralValue.Create(CONSTRUCTOR_ARRAY_BUFFER),
-        [pfConfigurable]);
-      FPrototypeMembers := Members.ToDefinitions;
-    finally
-      Members.Free;
-    end;
+  Members := TGocciaMemberCollection.Create;
+  try
+    Members.AddMethod(ArrayBufferSlice, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ArrayBufferResize, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ArrayBufferTransfer, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ArrayBufferTransferToFixedLength, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ArrayBufferTransferToImmutable, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddAccessor(PROP_BYTE_LENGTH, ArrayBufferByteLengthGetter, nil, [pfConfigurable]);
+    Members.AddAccessor(PROP_MAX_BYTE_LENGTH, ArrayBufferMaxByteLengthGetter, nil, [pfConfigurable]);
+    Members.AddAccessor(PROP_RESIZABLE, ArrayBufferResizableGetter, nil, [pfConfigurable]);
+    Members.AddAccessor(PROP_DETACHED, ArrayBufferDetachedGetter, nil, [pfConfigurable]);
+    Members.AddAccessor(PROP_IMMUTABLE, ArrayBufferImmutableGetter, nil, [pfConfigurable]);
+    Members.AddSymbolDataProperty(
+      TGocciaSymbolValue.WellKnownToStringTag,
+      TGocciaStringLiteralValue.Create(CONSTRUCTOR_ARRAY_BUFFER),
+      [pfConfigurable]);
+    PrototypeMembers := Members.ToDefinitions;
+  finally
+    Members.Free;
   end;
-  RegisterMemberDefinitions(Shared.Prototype, FPrototypeMembers);
+  RegisterMemberDefinitions(Shared.Prototype, PrototypeMembers);
 end;
 
 class procedure TGocciaArrayBufferValue.ExposePrototype(const AConstructor: TGocciaValue);
@@ -384,6 +398,13 @@ begin
     else
       Result := TGocciaBooleanLiteralValue.FalseValue;
   end
+  else if AName = PROP_IMMUTABLE then
+  begin
+    if FImmutable then
+      Result := TGocciaBooleanLiteralValue.TrueValue
+    else
+      Result := TGocciaBooleanLiteralValue.FalseValue;
+  end
   else
     Result := inherited GetPropertyWithContext(AName, AThisContext);
 end;
@@ -414,6 +435,18 @@ begin
   Buf := RequireArrayBuffer(AThisValue, 'ArrayBuffer.prototype.detached');
   // ES2026 §25.1.6.2 step 4: Return IsDetachedBuffer(O)
   if Buf.FDetached then
+    Result := TGocciaBooleanLiteralValue.TrueValue
+  else
+    Result := TGocciaBooleanLiteralValue.FalseValue;
+end;
+
+// Immutable ArrayBuffers proposal: get ArrayBuffer.prototype.immutable
+function TGocciaArrayBufferValue.ArrayBufferImmutableGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Buf: TGocciaArrayBufferValue;
+begin
+  Buf := RequireArrayBuffer(AThisValue, 'ArrayBuffer.prototype.immutable');
+  if Buf.FImmutable then
     Result := TGocciaBooleanLiteralValue.TrueValue
   else
     Result := TGocciaBooleanLiteralValue.FalseValue;
@@ -498,6 +531,11 @@ var
 begin
   // Callers have converted newLength; revalidate before reading storage.
   EnsureArrayBufferAttached(ABuf, SErrorCannotTransferDetachedArrayBuffer);
+
+  // Immutable ArrayBuffers proposal: an immutable buffer can never be detached,
+  // so transfer / transferToFixedLength / transferToImmutable throw on it.
+  if ABuf.FImmutable then
+    ThrowTypeError('Cannot transfer an immutable ArrayBuffer');
 
   // ES2026 §25.1.2.4 steps 5-6: Determine new maxByteLength
   // Preserve the original maxByteLength; AllocateArrayBuffer throws RangeError

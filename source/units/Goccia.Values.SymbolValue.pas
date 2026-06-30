@@ -87,8 +87,6 @@ type
 implementation
 
 uses
-  HashMap,
-
   Goccia.Constants.PropertyNames,
   Goccia.Constants.TypeNames,
   Goccia.Error.Messages,
@@ -103,19 +101,17 @@ uses
   Goccia.Values.SymbolObjectValue;
 
 // Symbol.prototype lives in a per-realm slot so that JS-visible mutations
-// (e.g. Symbol.prototype.foo = 1) do not leak across engine recreation.
-// FMethodHost and FPrototypeMembers stay process-wide on each thread because
-// they are immutable build-time data (host singleton + member descriptors).
+// (e.g. Symbol.prototype.foo = 1) do not leak across engine recreation.  Its
+// method host (Self in InitializePrototype) lives in its own per-realm slot too,
+// so the realm pins it on SetSlot and unpins it on Destroy rather than keeping a
+// per-thread pin for the process lifetime; the member definitions are rebuilt
+// per realm because they bind to this realm's host. #892
 var
   GSymbolPrototypeSlot: TGocciaRealmSlotId;
-
-threadvar
-  FMethodHost: TGocciaSymbolValue;
-  FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+  GSymbolMethodHostSlot: TGocciaRealmSlotId;
 
 threadvar
   GNextSymbolId: Integer;
-  GSymbolRegistry: THashMap<Integer, TGocciaSymbolValue>;
 
 function GetSharedSymbolPrototype: TGocciaObjectValue; inline;
 begin
@@ -176,46 +172,41 @@ procedure TGocciaSymbolValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
   Proto: TGocciaObjectValue;
+  PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
   if not Assigned(CurrentRealm) then Exit;
   if Assigned(GetSharedSymbolPrototype) then Exit;
 
   Proto := TGocciaObjectValue.Create;
   CurrentRealm.SetSlot(GSymbolPrototypeSlot, Proto);
-  FMethodHost := Self;
+  // The native methods below bind to this instance (Self); keep it alive for the
+  // realm's lifetime in its own slot so the realm unpins it on Destroy. #892
+  CurrentRealm.SetSlot(GSymbolMethodHostSlot, Self);
 
-  if Length(FPrototypeMembers) = 0 then
-  begin
-    Members := TGocciaMemberCollection.Create;
-    try
-      Members.AddAccessor(PROP_DESCRIPTION, GetDescription, nil, [pfConfigurable]);
-      Members.AddNamedMethod(PROP_TO_STRING, SymbolToString, 0,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype, gmfNotConstructable]);
-      Members.AddNamedMethod(PROP_VALUE_OF, SymbolValueOf, 0,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype, gmfNotConstructable]);
-      Members.AddSymbolMethod(
-        TGocciaSymbolValue.WellKnownToPrimitive,
-        '[Symbol.toPrimitive]',
-        SymbolToPrimitive,
-        1,
-        [pfConfigurable],
-        [gmfNoFunctionPrototype, gmfNotConstructable]);
-      Members.AddSymbolDataProperty(
-        TGocciaSymbolValue.WellKnownToStringTag,
-        TGocciaStringLiteralValue.Create('Symbol'),
-        [pfConfigurable]);
-      FPrototypeMembers := Members.ToDefinitions;
-    finally
-      Members.Free;
-    end;
+  Members := TGocciaMemberCollection.Create;
+  try
+    Members.AddAccessor(PROP_DESCRIPTION, GetDescription, nil, [pfConfigurable]);
+    Members.AddNamedMethod(PROP_TO_STRING, SymbolToString, 0,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype, gmfNotConstructable]);
+    Members.AddNamedMethod(PROP_VALUE_OF, SymbolValueOf, 0,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype, gmfNotConstructable]);
+    Members.AddSymbolMethod(
+      TGocciaSymbolValue.WellKnownToPrimitive,
+      '[Symbol.toPrimitive]',
+      SymbolToPrimitive,
+      1,
+      [pfConfigurable],
+      [gmfNoFunctionPrototype, gmfNotConstructable]);
+    Members.AddSymbolDataProperty(
+      TGocciaSymbolValue.WellKnownToStringTag,
+      TGocciaStringLiteralValue.Create('Symbol'),
+      [pfConfigurable]);
+    PrototypeMembers := Members.ToDefinitions;
+  finally
+    Members.Free;
   end;
 
-  RegisterMemberDefinitions(Proto, FPrototypeMembers);
-
-  // Prototype is pinned by the realm slot.  Method host is a process-wide
-  // singleton kept alive across realms.
-  if Assigned(TGarbageCollector.Instance) then
-    TGarbageCollector.Instance.PinObject(FMethodHost);
+  RegisterMemberDefinitions(Proto, PrototypeMembers);
 end;
 
 class function TGocciaSymbolValue.SharedPrototype: TGocciaValue;
@@ -448,9 +439,6 @@ begin
   FId := GNextSymbolId;
   FRegistered := False;
   Inc(GNextSymbolId);
-  if not Assigned(GSymbolRegistry) then
-    GSymbolRegistry := THashMap<Integer, TGocciaSymbolValue>.Create;
-  GSymbolRegistry.AddOrSetValue(FId, Self);
 end;
 
 function TGocciaSymbolValue.IsPrimitive: Boolean;
@@ -511,5 +499,6 @@ end;
 
 initialization
   GSymbolPrototypeSlot := RegisterRealmSlot('Symbol.prototype');
+  GSymbolMethodHostSlot := RegisterRealmSlot('Symbol.prototype.methodHost');
 
 end.

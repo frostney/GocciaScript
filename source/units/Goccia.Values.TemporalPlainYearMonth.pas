@@ -82,9 +82,6 @@ uses
 var
   GTemporalPlainYearMonthSharedSlot: TGocciaRealmOwnedSlotId;
 
-threadvar
-  FPrototypeMembers: TArray<TGocciaMemberDefinition>;
-
 function GetTemporalPlainYearMonthShared: TGocciaSharedPrototype; inline;
 begin
   if Assigned(CurrentRealm) then
@@ -282,46 +279,44 @@ procedure TGocciaTemporalPlainYearMonthValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
   Shared: TGocciaSharedPrototype;
+  PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
   if not Assigned(CurrentRealm) then Exit;
   if Assigned(GetTemporalPlainYearMonthShared) then Exit;
   Shared := TGocciaSharedPrototype.Create(Self);
   CurrentRealm.SetOwnedSlot(GTemporalPlainYearMonthSharedSlot, Shared);
-  if Length(FPrototypeMembers) = 0 then
-  begin
-    Members := TGocciaMemberCollection.Create;
-    try
-      Members.AddAccessor('calendarId', GetCalendarId, nil, [pfConfigurable]);
-      Members.AddAccessor('era', GetEra, nil, [pfConfigurable]);
-      Members.AddAccessor('eraYear', GetEraYear, nil, [pfConfigurable]);
-      Members.AddAccessor('year', GetYear, nil, [pfConfigurable]);
-      Members.AddAccessor('month', GetMonth, nil, [pfConfigurable]);
-      Members.AddAccessor('monthCode', GetMonthCode, nil, [pfConfigurable]);
-      Members.AddAccessor('daysInMonth', GetDaysInMonth, nil, [pfConfigurable]);
-      Members.AddAccessor('daysInYear', GetDaysInYear, nil, [pfConfigurable]);
-      Members.AddAccessor('monthsInYear', GetMonthsInYear, nil, [pfConfigurable]);
-      Members.AddAccessor('inLeapYear', GetInLeapYear, nil, [pfConfigurable]);
-      Members.AddMethod(YearMonthWith, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(YearMonthAdd, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(YearMonthSubtract, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(YearMonthUntil, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(YearMonthSince, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(YearMonthEquals, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(YearMonthToString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(YearMonthToJSON, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(YearMonthValueOf, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(YearMonthToPlainDate, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(YearMonthToLocaleString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddSymbolDataProperty(
-        TGocciaSymbolValue.WellKnownToStringTag,
-        TGocciaStringLiteralValue.Create('Temporal.PlainYearMonth'),
-        [pfConfigurable]);
-      FPrototypeMembers := Members.ToDefinitions;
-    finally
-      Members.Free;
-    end;
+  Members := TGocciaMemberCollection.Create;
+  try
+    Members.AddAccessor('calendarId', GetCalendarId, nil, [pfConfigurable]);
+    Members.AddAccessor('era', GetEra, nil, [pfConfigurable]);
+    Members.AddAccessor('eraYear', GetEraYear, nil, [pfConfigurable]);
+    Members.AddAccessor('year', GetYear, nil, [pfConfigurable]);
+    Members.AddAccessor('month', GetMonth, nil, [pfConfigurable]);
+    Members.AddAccessor('monthCode', GetMonthCode, nil, [pfConfigurable]);
+    Members.AddAccessor('daysInMonth', GetDaysInMonth, nil, [pfConfigurable]);
+    Members.AddAccessor('daysInYear', GetDaysInYear, nil, [pfConfigurable]);
+    Members.AddAccessor('monthsInYear', GetMonthsInYear, nil, [pfConfigurable]);
+    Members.AddAccessor('inLeapYear', GetInLeapYear, nil, [pfConfigurable]);
+    Members.AddMethod(YearMonthWith, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(YearMonthAdd, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(YearMonthSubtract, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(YearMonthUntil, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(YearMonthSince, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(YearMonthEquals, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(YearMonthToString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(YearMonthToJSON, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(YearMonthValueOf, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(YearMonthToPlainDate, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(YearMonthToLocaleString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddSymbolDataProperty(
+      TGocciaSymbolValue.WellKnownToStringTag,
+      TGocciaStringLiteralValue.Create('Temporal.PlainYearMonth'),
+      [pfConfigurable]);
+    PrototypeMembers := Members.ToDefinitions;
+  finally
+    Members.Free;
   end;
-  RegisterMemberDefinitions(Shared.Prototype, FPrototypeMembers);
+  RegisterMemberDefinitions(Shared.Prototype, PrototypeMembers);
 end;
 
 class procedure TGocciaTemporalPlainYearMonthValue.ExposePrototype(const AConstructor: TGocciaObjectValue);

@@ -161,7 +161,7 @@ type
 
   procedure PinPrimitiveSingletons;
 
-  // ES2026 §6.1.6.1.13 Number::toString(x)
+  // ES2026 §6.1.6.1.20 Number::toString(x)
   function FormatDouble(AValue: Double): string;
 
   function InvariantFormatSettings: TFormatSettings;
@@ -171,6 +171,7 @@ implementation
 uses
   Math,
 
+  NumericText,
   TextSemantics,
 
   Goccia.Constants,
@@ -192,7 +193,7 @@ begin
   Result.DecimalSeparator := '.';
 end;
 
-// ES2026 §6.1.6.1.13 Number::toString(x)
+// ES2026 §6.1.6.1.20 Number::toString(x)
 function FormatDouble(AValue: Double): string;
 
   procedure FormatES(const AMantissa: string; AK, AN: Integer; ANeg: Boolean;
@@ -230,7 +231,8 @@ function FormatDouble(AValue: Double): string;
 var
   IsNeg: Boolean;
   SciStr, Mantissa, TestStr: string;
-  Exp, N, K, I, W, EPos, D: Integer;
+  Buf: ShortString;
+  Exp, N, K, I, W, EPos, D, Code: Integer;
   Parsed: Double;
   FS: TFormatSettings;
 begin
@@ -289,17 +291,45 @@ begin
     Exit;
   end;
 
-  // General case: find the shortest round-tripping representation.
-  // Str(V:W) outputs scientific notation with (W - 7) significant digits
-  // (for 3-digit exponents) and correctly rounds at each precision level.
-  // W=9 gives the minimum (2 sig digits), W=24 gives the maximum (17).
+  // General case: find the shortest round-tripping representation by scanning
+  // precision upward and taking the FIRST width that parses back exactly.
+  // Str(V:W) emits scientific notation with (W - 7) significant digits (doubles
+  // always have a 3-digit decimal exponent); W=9 gives the minimum (2 sig
+  // digits), W=24 the maximum (17, which always round-trips).
+  //
+  // This scan must stay first-hit-from-the-bottom; it must NOT be replaced with
+  // a binary search or any probe-skipping scheme. FPC Str is not correctly
+  // rounded at every width, so the "parses back exactly" predicate is not
+  // monotonic in W. The first hit is still the shortest and spec-correct, but a
+  // binary search can converge above it and emit a non-shortest string,
+  // violating "k as small as possible" in ES2026 Number::toString. See
+  // docs/adr/0080-formatdouble-first-hit-precision-scan.md.
+  //
+  // Each probe reads Str into a fixed ShortString and parses with the
+  // locale-free Val instead of Trim + TryStrToFloat. Val selects the same width
+  // here (verified byte-for-byte over 74.9M doubles) while avoiding both the
+  // per-iteration heap allocation and the TFormatSettings scan; this is ~1.4x
+  // faster end-to-end on float-stringify-heavy workloads (see ADR 0080).
   for W := 9 to 24 do
   begin
-    Str(AValue:W, SciStr);
-    SciStr := Trim(SciStr);
+    Str(AValue:W, Buf);
 
-    if TryStrToFloat(SciStr, Parsed, FS) and (Parsed = AValue) then
+    // Str right-justifies within width W; AValue is positive here, so the only
+    // padding is leading spaces. Strip them in place (no heap allocation) before
+    // parsing: this keeps the round-trip test independent of how Val treats
+    // leading blanks, and leaves Buf ready for the mantissa extraction on a hit.
+    if (Length(Buf) > 0) and (Buf[1] = ' ') then
     begin
+      I := 2;
+      while (I <= Length(Buf)) and (Buf[I] = ' ') do
+        Inc(I);
+      Delete(Buf, 1, I - 1);
+    end;
+
+    Val(Buf, Parsed, Code);
+    if (Code = 0) and (Parsed = AValue) then
+    begin
+      SciStr := Buf;
       EPos := Pos('E', SciStr);
       Mantissa := Copy(SciStr, 1, EPos - 1);
       Exp := StrToInt(Copy(SciStr, EPos + 1, Length(SciStr) - EPos));
@@ -795,140 +825,13 @@ begin
     Result := TGocciaBooleanLiteralValue.FalseValue;
 end;
 
-function TryClassifyDecimalNumericString(const AValue: string; out ANegative: Boolean;
-  out AHasNonZeroDigit: Boolean): Boolean;
-var
-  Index: Integer;
-  HasDigit: Boolean;
-  HasIntegerOrFractionDigit: Boolean;
-  HasExponentDigit: Boolean;
-begin
-  ANegative := False;
-  AHasNonZeroDigit := False;
-  HasIntegerOrFractionDigit := False;
-  Index := 1;
-
-  if Index <= Length(AValue) then
-  begin
-    if AValue[Index] = '-' then
-    begin
-      ANegative := True;
-      Inc(Index);
-    end
-    else if AValue[Index] = '+' then
-      Inc(Index);
-  end;
-
-  HasDigit := False;
-  while (Index <= Length(AValue)) and CharInSet(AValue[Index], ['0'..'9']) do
-  begin
-    HasDigit := True;
-    if AValue[Index] <> '0' then
-      AHasNonZeroDigit := True;
-    Inc(Index);
-  end;
-  HasIntegerOrFractionDigit := HasIntegerOrFractionDigit or HasDigit;
-
-  if (Index <= Length(AValue)) and (AValue[Index] = '.') then
-  begin
-    Inc(Index);
-    HasDigit := False;
-    while (Index <= Length(AValue)) and CharInSet(AValue[Index], ['0'..'9']) do
-    begin
-      HasDigit := True;
-      if AValue[Index] <> '0' then
-        AHasNonZeroDigit := True;
-      Inc(Index);
-    end;
-    HasIntegerOrFractionDigit := HasIntegerOrFractionDigit or HasDigit;
-  end;
-
-  if not HasIntegerOrFractionDigit then
-    Exit(False);
-
-  if (Index <= Length(AValue)) and ((AValue[Index] = 'e') or (AValue[Index] = 'E')) then
-  begin
-    Inc(Index);
-    if (Index <= Length(AValue)) and ((AValue[Index] = '+') or (AValue[Index] = '-')) then
-      Inc(Index);
-
-    HasExponentDigit := False;
-    while (Index <= Length(AValue)) and CharInSet(AValue[Index], ['0'..'9']) do
-    begin
-      HasExponentDigit := True;
-      Inc(Index);
-    end;
-
-    if not HasExponentDigit then
-      Exit(False);
-  end;
-
-  Result := Index > Length(AValue);
-end;
-
 function TGocciaStringLiteralValue.ToNumberLiteral: TGocciaNumberLiteralValue;
-var
-  TempValue: Double;
-  Trimmed: string;
-  HasNonZeroDigit: Boolean;
-  IsNegativeDecimal: Boolean;
 begin
-  Trimmed := TrimECMAScriptWhitespace(FValue);
-
-  // Empty string (after trim) converts to 0
-  if Trimmed = '' then
-  begin
-    Result := TGocciaNumberLiteralValue.ZeroValue;
-    Exit;
-  end;
-
-  // Handle Infinity / -Infinity
-  if Trimmed = 'Infinity' then
-  begin
-    Result := TGocciaNumberLiteralValue.Create(Infinity);
-    Exit;
-  end;
-  if Trimmed = '-Infinity' then
-  begin
-    Result := TGocciaNumberLiteralValue.Create(NegInfinity);
-    Exit;
-  end;
-  if Trimmed = '+Infinity' then
-  begin
-    Result := TGocciaNumberLiteralValue.Create(Infinity);
-    Exit;
-  end;
-
-  // Handle hex strings 0x / 0X
-  if (Length(Trimmed) > 2) and (Trimmed[1] = '0') and ((Trimmed[2] = 'x') or (Trimmed[2] = 'X')) then
-  begin
-    try
-      TempValue := StrToInt(Trimmed);
-      Result := TGocciaNumberLiteralValue.Create(TempValue);
-    except
-      Result := TGocciaNumberLiteralValue.NaNValue;
-    end;
-    Exit;
-  end;
-
-  if TryStrToFloat(Trimmed, TempValue, InvariantFormatSettings) then
-    Result := TGocciaNumberLiteralValue.Create(TempValue)
-  else if TryClassifyDecimalNumericString(Trimmed, IsNegativeDecimal, HasNonZeroDigit) then
-  begin
-    if HasNonZeroDigit then
-    begin
-      if IsNegativeDecimal then
-        Result := TGocciaNumberLiteralValue.Create(NegInfinity)
-      else
-        Result := TGocciaNumberLiteralValue.Create(Infinity);
-    end
-    else if IsNegativeDecimal then
-      Result := TGocciaNumberLiteralValue.NegativeZeroValue
-    else
-      Result := TGocciaNumberLiteralValue.ZeroValue;
-  end
-  else
-    Result := TGocciaNumberLiteralValue.NaNValue;
+  // ES2026 §7.1.4.1.1 ToNumber applied to the String type. Delegates to the
+  // shared NumericText.StringToNumber so this runtime coercion path and the
+  // compiler's constant folding (Goccia.Compiler.ConstantValue) cannot drift.
+  // Create stores the raw Double verbatim, preserving NaN, +/-Infinity, and -0.
+  Result := TGocciaNumberLiteralValue.Create(StringToNumber(FValue));
 end;
 
 function TGocciaStringLiteralValue.ToStringLiteral: TGocciaStringLiteralValue;

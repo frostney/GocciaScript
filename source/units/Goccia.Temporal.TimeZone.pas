@@ -36,6 +36,7 @@ uses
   SysUtils,
   Goccia.Temporal.Utils,
   Goccia.Temporal.TimeZoneData,
+  Goccia.ThreadCleanupRegistry,
   Goccia.Values.ErrorHelper,
   TimeZoneInformationFile,
   {$IFDEF UNIX}
@@ -1093,12 +1094,26 @@ end;
 function IsSupportedCanonicalTimeZoneIdentifier(const ATimeZone: string): Boolean;
 var
   AvailableTimeZones: TTemporalTimeZoneIdentifierArray;
-  Index: Integer;
+  Low, High, Mid, Cmp: Integer;
 begin
+  // GetAvailablePrimaryTimeZoneIdentifiers returns a list sorted ascending by
+  // CompareStr (see SortTimeZoneIdentifiers). Probe it with a binary search
+  // instead of an O(n) scan: this runs on every ZonedDateTime time-zone
+  // canonicalization, and the available-zone list has several hundred entries.
   AvailableTimeZones := GetAvailablePrimaryTimeZoneIdentifiers;
-  for Index := 0 to Length(AvailableTimeZones) - 1 do
-    if AvailableTimeZones[Index] = ATimeZone then
-      Exit(True);
+  Low := 0;
+  High := Length(AvailableTimeZones) - 1;
+  while Low <= High do
+  begin
+    Mid := Low + (High - Low) div 2;
+    Cmp := CompareStr(AvailableTimeZones[Mid], ATimeZone);
+    if Cmp = 0 then
+      Exit(True)
+    else if Cmp < 0 then
+      Low := Mid + 1
+    else
+      High := Mid - 1;
+  end;
 
   Result := False;
 end;
@@ -1966,11 +1981,18 @@ initialization
   CachedTimeZonePathCount := 0;
   CachedTimeZoneCaseCount := 0;
   CachedAvailablePrimaryTimeZoneIdentifiersLoaded := False;
+  // FPC does not auto-finalize managed threadvars at thread exit. The registry
+  // drain releases this thread's timezone cache on worker exit
+  // (ShutdownThreadRuntime) and on the main thread
+  // (Goccia.ThreadCleanupRegistry's finalization).
+  RegisterThreadvarCleanup(@ClearTimeZoneCache);
   {$IFDEF MSWINDOWS}
   InitCriticalSection(WindowsICUInitLock);
   {$ENDIF}
 
 finalization
+  // The timezone cache threadvars are released via Goccia.ThreadCleanupRegistry
+  // (registered above); only the Windows ICU init lock is torn down here.
   {$IFDEF MSWINDOWS}
   DoneCriticalSection(WindowsICUInitLock);
   {$ENDIF}

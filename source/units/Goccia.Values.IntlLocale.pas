@@ -89,9 +89,6 @@ uses
 var
   GIntlLocaleSharedSlot: TGocciaRealmOwnedSlotId;
 
-threadvar
-  FPrototypeMembers: TArray<TGocciaMemberDefinition>;
-
 function GetIntlLocaleShared: TGocciaSharedPrototype; inline;
 begin
   if Assigned(CurrentRealm) then
@@ -1033,58 +1030,56 @@ procedure TGocciaIntlLocaleValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
   Shared: TGocciaSharedPrototype;
+  PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
   if not Assigned(CurrentRealm) then Exit;
   if Assigned(GetIntlLocaleShared) then Exit;
 
   Shared := TGocciaSharedPrototype.Create(Self);
   CurrentRealm.SetOwnedSlot(GIntlLocaleSharedSlot, Shared);
-  if Length(FPrototypeMembers) = 0 then
-  begin
-    Members := TGocciaMemberCollection.Create;
-    try
-      Members.AddAccessor('language', IntlLocaleGetLanguage, nil, [pfConfigurable]);
-      Members.AddAccessor('script', IntlLocaleGetScript, nil, [pfConfigurable]);
-      Members.AddAccessor('region', IntlLocaleGetRegion, nil, [pfConfigurable]);
-      Members.AddAccessor('baseName', IntlLocaleGetBaseName, nil, [pfConfigurable]);
-      Members.AddAccessor('calendar', IntlLocaleGetCalendar, nil, [pfConfigurable]);
-      Members.AddAccessor('caseFirst', IntlLocaleGetCaseFirst, nil, [pfConfigurable]);
-      Members.AddAccessor('collation', IntlLocaleGetCollation, nil, [pfConfigurable]);
-      Members.AddAccessor('firstDayOfWeek', IntlLocaleGetFirstDayOfWeek, nil, [pfConfigurable]);
-      Members.AddAccessor('hourCycle', IntlLocaleGetHourCycle, nil, [pfConfigurable]);
-      Members.AddAccessor('numberingSystem', IntlLocaleGetNumberingSystem, nil, [pfConfigurable]);
-      Members.AddAccessor('numeric', IntlLocaleGetNumeric, nil, [pfConfigurable]);
-      Members.AddAccessor('variants', IntlLocaleGetVariants, nil, [pfConfigurable]);
-      Members.AddNamedMethod('maximize', IntlLocaleMaximize, 0,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('minimize', IntlLocaleMinimize, 0,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('getCalendars', IntlLocaleGetCalendars, 0,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('getCollations', IntlLocaleGetCollations, 0,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('getHourCycles', IntlLocaleGetHourCycles, 0,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('getNumberingSystems', IntlLocaleGetNumberingSystems, 0,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('getTimeZones', IntlLocaleGetTimeZones, 0,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('getTextInfo', IntlLocaleGetTextInfo, 0,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('getWeekInfo', IntlLocaleGetWeekInfo, 0,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('toString', IntlLocaleToString, 0,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddSymbolDataProperty(
-        TGocciaSymbolValue.WellKnownToStringTag,
-        TGocciaStringLiteralValue.Create('Intl.Locale'),
-        [pfConfigurable]);
-      FPrototypeMembers := Members.ToDefinitions;
-    finally
-      Members.Free;
-    end;
+  Members := TGocciaMemberCollection.Create;
+  try
+    Members.AddAccessor('language', IntlLocaleGetLanguage, nil, [pfConfigurable]);
+    Members.AddAccessor('script', IntlLocaleGetScript, nil, [pfConfigurable]);
+    Members.AddAccessor('region', IntlLocaleGetRegion, nil, [pfConfigurable]);
+    Members.AddAccessor('baseName', IntlLocaleGetBaseName, nil, [pfConfigurable]);
+    Members.AddAccessor('calendar', IntlLocaleGetCalendar, nil, [pfConfigurable]);
+    Members.AddAccessor('caseFirst', IntlLocaleGetCaseFirst, nil, [pfConfigurable]);
+    Members.AddAccessor('collation', IntlLocaleGetCollation, nil, [pfConfigurable]);
+    Members.AddAccessor('firstDayOfWeek', IntlLocaleGetFirstDayOfWeek, nil, [pfConfigurable]);
+    Members.AddAccessor('hourCycle', IntlLocaleGetHourCycle, nil, [pfConfigurable]);
+    Members.AddAccessor('numberingSystem', IntlLocaleGetNumberingSystem, nil, [pfConfigurable]);
+    Members.AddAccessor('numeric', IntlLocaleGetNumeric, nil, [pfConfigurable]);
+    Members.AddAccessor('variants', IntlLocaleGetVariants, nil, [pfConfigurable]);
+    Members.AddNamedMethod('maximize', IntlLocaleMaximize, 0,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod('minimize', IntlLocaleMinimize, 0,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod('getCalendars', IntlLocaleGetCalendars, 0,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod('getCollations', IntlLocaleGetCollations, 0,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod('getHourCycles', IntlLocaleGetHourCycles, 0,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod('getNumberingSystems', IntlLocaleGetNumberingSystems, 0,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod('getTimeZones', IntlLocaleGetTimeZones, 0,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod('getTextInfo', IntlLocaleGetTextInfo, 0,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod('getWeekInfo', IntlLocaleGetWeekInfo, 0,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod('toString', IntlLocaleToString, 0,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddSymbolDataProperty(
+      TGocciaSymbolValue.WellKnownToStringTag,
+      TGocciaStringLiteralValue.Create('Intl.Locale'),
+      [pfConfigurable]);
+    PrototypeMembers := Members.ToDefinitions;
+  finally
+    Members.Free;
   end;
-  RegisterMemberDefinitions(Shared.Prototype, FPrototypeMembers);
+  RegisterMemberDefinitions(Shared.Prototype, PrototypeMembers);
 end;
 
 class procedure TGocciaIntlLocaleValue.ExposePrototype(const AConstructor: TGocciaObjectValue);

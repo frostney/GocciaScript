@@ -124,6 +124,7 @@ uses
   Goccia.Error,
   Goccia.Keywords.Reserved,
   Goccia.Modules,
+  Goccia.ThreadCleanupRegistry,
   Goccia.Token,
   Goccia.Types.Enforcement,
   Goccia.Values.Primitives;
@@ -214,6 +215,12 @@ procedure EmitGlobalDefinesForPattern(const ACtx: TGocciaCompilationContext;
   const AIsVar: Boolean; const AHasInitializer: Boolean); forward;
 
 threadvar
+  // GBreakJumps/GContinueJumps are created and freed within
+  // BeginLoopControl/EndLoopControl; GPendingFinally is save/restored and freed
+  // via Save/RestorePendingFinally — all nil at rest, so no thread-exit leak.
+  // GLabelControls is a lazily-created container reused across compilations and
+  // never freed otherwise; it is released at thread teardown (see
+  // ClearCompilerWorkingState, #892).
   GBreakJumps: TList<Integer>;
   GContinueJumps: TList<Integer>;
   GPendingFinally: TList<TPendingFinallyEntry>;
@@ -1114,6 +1121,11 @@ end;
 threadvar
   // Module-level stack of using resource entries for the current block.
   // Populated by CompileUsingDeclaration, consumed by CompileBlockStatement.
+  // GUsingResources is a lazily-created container reused across compilations and
+  // never freed otherwise (its entries are balanced/emptied during a compile);
+  // it is released at thread teardown (see ClearCompilerWorkingState, #892).
+  // GPreallocatedUsingDisposeSlots is save/restored and freed per switch
+  // statement, so it is nil at rest.
   GUsingResources: TList<TUsingResourceEntry>;
   GPreallocatedUsingDisposeSlots: TList<TPreallocatedUsingDisposeSlot>;
 
@@ -2160,6 +2172,23 @@ begin
     GPendingFinally.Insert(I, Entries[I]);
 end;
 
+// ES2026 §15.10 Tail Position Calls.  A call in tail position reuses the
+// caller's frame (PrepareForTailCall).  A `return <expr>` puts <expr> in tail
+// position, but only when no finally/using/iterator cleanup runs after it
+// (CurrentPendingFinallyBase = 0): e.g. `try { return f(); } finally {...}` is
+// NOT a tail call because the finally still runs, whereas `try {} finally {
+// return f(); }` IS.  Proper tail calls apply in strict-mode code only, and
+// generators/async functions are never candidates.
+function ReturnIsTailPositionEligible(
+  const ACtx: TGocciaCompilationContext): Boolean;
+begin
+  Result := (CurrentPendingFinallyBase = 0) and
+    Assigned(ACtx.Template) and
+    ACtx.Template.StrictCode and
+    (not ACtx.Template.IsGenerator) and
+    (not ACtx.Template.IsAsync);
+end;
+
 procedure CompileReturnStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaReturnStatement);
 var
@@ -2169,7 +2198,15 @@ begin
   if AStmt.HasExpression then
   begin
     Reg := ACtx.Scope.AllocateRegister;
-    ACtx.CompileExpression(AStmt.Value, Reg);
+    // Tag any tail-position call so the VM can reuse the current frame.  The
+    // call is still emitted as an ordinary value-producing call, so the
+    // OP_RETURN below stays correct whether or not the VM acts on the tail
+    // flag (when it does, it returns directly and the OP_RETURN is unreached).
+    if ReturnIsTailPositionEligible(ACtx) then
+      Goccia.Compiler.Expressions.CompileReturnValueTailAware(ACtx,
+        AStmt.Value, Reg)
+    else
+      ACtx.CompileExpression(AStmt.Value, Reg);
     EmitPendingCleanup(ACtx);
     ReturnNeedsAwait := Assigned(ACtx.Template) and ACtx.Template.IsAsync and
       ACtx.Template.IsGenerator;
@@ -4739,7 +4776,8 @@ begin
   for I := 0 to High(AMethod.Parameters) do
     if AMethod.Parameters[I].IsPattern and Assigned(AMethod.Parameters[I].Pattern) then
       CollectDestructuringBindings(AMethod.Parameters[I].Pattern, ChildScope);
-  ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, AMethod.Parameters);
+  ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, AMethod.Parameters,
+    ChildTemplate.SourceText);
   if FormalCount < 0 then
     FormalCount := Length(AMethod.Parameters);
   ChildTemplate.FormalParameterCount := UInt8(FormalCount);
@@ -4830,7 +4868,8 @@ begin
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
   SetLength(EmptyParams, 0);
-  ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, EmptyParams);
+  ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, EmptyParams,
+    ChildTemplate.SourceText);
 
   ACtx.SwapState(ChildTemplate, ChildScope);
   ChildCtx := ACtx;
@@ -4923,7 +4962,8 @@ begin
   ChildTemplate.FormalParameterCount := UInt8(FormalCount);
   if Assigned(ACtx.FormalParameterCounts) then
     ACtx.FormalParameterCounts.AddOrSetValue(ChildTemplate, FormalCount);
-  ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, SetterParams);
+  ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, SetterParams,
+    ChildTemplate.SourceText);
 
   ACtx.SwapState(ChildTemplate, ChildScope);
   ChildCtx := ACtx;
@@ -4993,11 +5033,16 @@ begin
 
   ChildTemplate := TGocciaFunctionTemplate.Create('<get [computed]>');
   ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
+  // Propagate the accessor source so DeclareArgumentsObjectLocal below can elide
+  // the arguments object when the body never references it, matching the other
+  // (non-computed) accessor and method body builders.
+  ChildTemplate.SourceText := AGetter.SourceText;
   ChildTemplate.ParameterCount := 0;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
   SetLength(EmptyParams, 0);
-  ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, EmptyParams);
+  ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, EmptyParams,
+    ChildTemplate.SourceText);
 
   ACtx.SwapState(ChildTemplate, ChildScope);
   ChildCtx := ACtx;
@@ -5061,6 +5106,10 @@ begin
 
   ChildTemplate := TGocciaFunctionTemplate.Create('<set [computed]>');
   ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
+  // Propagate the accessor source so DeclareArgumentsObjectLocal below can elide
+  // the arguments object when the body never references it, matching the other
+  // (non-computed) accessor and method body builders.
+  ChildTemplate.SourceText := ASetter.SourceText;
   SetterParams := ASetter.Parameters;
   if Length(SetterParams) = 0 then
   begin
@@ -5085,7 +5134,8 @@ begin
   ChildTemplate.FormalParameterCount := UInt8(FormalCount);
   if Assigned(ACtx.FormalParameterCounts) then
     ACtx.FormalParameterCounts.AddOrSetValue(ChildTemplate, FormalCount);
-  ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, SetterParams);
+  ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, SetterParams,
+    ChildTemplate.SourceText);
 
   ACtx.SwapState(ChildTemplate, ChildScope);
   ChildCtx := ACtx;
@@ -5182,7 +5232,8 @@ begin
   for I := 0 to High(AMethod.Parameters) do
     if AMethod.Parameters[I].IsPattern and Assigned(AMethod.Parameters[I].Pattern) then
       CollectDestructuringBindings(AMethod.Parameters[I].Pattern, ChildScope);
-  ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, AMethod.Parameters);
+  ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, AMethod.Parameters,
+    ChildTemplate.SourceText);
   if FormalCount < 0 then
     FormalCount := Length(AMethod.Parameters);
   ChildTemplate.FormalParameterCount := UInt8(FormalCount);
@@ -5818,18 +5869,16 @@ begin
   end
   else
   begin
-    for I := 0 to AClassDef.InstanceProperties.Count - 1 do
+    for Entry in AClassDef.InstanceProperties do
     begin
-      Entry := AClassDef.InstanceProperties.EntryAt(I);
       ValReg := ChildScope.AllocateRegister;
       ACtx.CompileExpression(Entry.Value, ValReg);
       EmitDefineStaticPropertyByName(ChildCtx, ThisReg, ValReg, Entry.Key);
       ChildScope.FreeRegister;
     end;
 
-    for I := 0 to AClassDef.PrivateInstanceProperties.Count - 1 do
+    for Entry in AClassDef.PrivateInstanceProperties do
     begin
-      Entry := AClassDef.PrivateInstanceProperties.EntryAt(I);
       ValReg := ChildScope.AllocateRegister;
       ACtx.CompileExpression(Entry.Value, ValReg);
       EmitDefineStaticPropertyByName(ChildCtx, ThisReg, ValReg,
@@ -6918,5 +6967,21 @@ begin
   GPendingFinally.Free;
   GPendingFinally := TList<TPendingFinallyEntry>(ASaved);
 end;
+
+// FPC does not auto-finalize object-reference threadvars at thread exit. The
+// compiler's GUsingResources and GLabelControls list containers are created
+// lazily and reused across every compilation on the thread (their entries are
+// balanced during a compile, but the container objects themselves outlive it),
+// so they leak one container per thread unless released explicitly. Registered
+// with Goccia.ThreadCleanupRegistry so they are freed on both the worker-exit
+// and main-thread-finalization paths. #892
+procedure ClearCompilerWorkingState;
+begin
+  FreeAndNil(GUsingResources);
+  FreeAndNil(GLabelControls);
+end;
+
+initialization
+  RegisterThreadvarCleanup(@ClearCompilerWorkingState);
 
 end.

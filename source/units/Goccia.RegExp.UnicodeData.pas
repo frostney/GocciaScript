@@ -28,7 +28,8 @@ uses
   SysUtils,
 
   EmbeddedResourceReader,
-  Generated.UnicodeData;
+  Generated.UnicodeData,
+  LazyPublishedCache;
 
 type
   TCodePointPair = record
@@ -111,59 +112,45 @@ begin
 end;
 
 var
-  CachedUCDResource: TBytes;
-  CachedUCDResourceLoaded: Boolean;
-  CachedUCDResourceLock: TRTLCriticalSection;
-  CachedCaseFoldPairs: TCodePointPairArray;
-  CachedCaseFoldPairsLoaded: Boolean;
-  CachedCaseFoldPairsAvailable: Boolean;
-  CachedCaseFoldPairsLock: TRTLCriticalSection;
-  CachedNonUnicodeUppercasePairs: TCodePointPairArray;
-  CachedNonUnicodeUppercasePairsLoaded: Boolean;
-  CachedNonUnicodeUppercasePairsAvailable: Boolean;
-  CachedNonUnicodeUppercasePairsLock: TRTLCriticalSection;
+  UCDResourceCache: TLazyPublishedCache<TBytes>;
+  CaseFoldPairsCache: TLazyPublishedCache<TCodePointPairArray>;
+  NonUnicodeUppercasePairsCache: TLazyPublishedCache<TCodePointPairArray>;
 
-function TryReadEmbeddedResource(out ABuffer: TBytes): Boolean;
+function LoadUCDResource(const AKey: string; out ABuffer: TBytes): Boolean;
 var
   Stream: TResourceStream;
   BufferSize: Integer;
 begin
-  EnterCriticalSection(CachedUCDResourceLock);
+  Result := False;
+  SetLength(ABuffer, 0);
+  Stream := nil;
   try
-    if CachedUCDResourceLoaded then
+    Stream := TResourceStream.Create(HInstance, AKey, UCD_RCDATA_RESOURCE_TYPE);
+    if Stream.Size > High(Integer) then
     begin
-      ABuffer := CachedUCDResource;
-      Result := Length(ABuffer) > 0;
+      Stream.Free;
       Exit;
     end;
 
-    Result := False;
-    SetLength(ABuffer, 0);
+    BufferSize := Integer(Stream.Size);
+    SetLength(ABuffer, BufferSize);
+    if BufferSize > 0 then
+      Stream.ReadBuffer(ABuffer[0], BufferSize);
+    Stream.Free;
     Stream := nil;
-    try
-      Stream := TResourceStream.Create(HInstance, GeneratedUnicodeDataResourceName,
-        UCD_RCDATA_RESOURCE_TYPE);
-      if Stream.Size > High(Integer) then
-      begin
-        Stream.Free;
-        Exit;
-      end;
-
-      BufferSize := Integer(Stream.Size);
-      SetLength(ABuffer, BufferSize);
-      if BufferSize > 0 then
-        Stream.ReadBuffer(ABuffer[0], BufferSize);
-      Stream.Free;
-      Stream := nil;
-      CachedUCDResource := ABuffer;
-      CachedUCDResourceLoaded := True;
-      Result := True;
-    except
-      Stream.Free;
-    end;
-  finally
-    LeaveCriticalSection(CachedUCDResourceLock);
+    Result := True;
+  except
+    Stream.Free;
   end;
+end;
+
+function TryReadEmbeddedResource(out ABuffer: TBytes): Boolean;
+begin
+  if UCDResourceCache.Ensure(GeneratedUnicodeDataResourceName, @LoadUCDResource) then
+    ABuffer := UCDResourceCache.Data
+  else
+    SetLength(ABuffer, 0);
+  Result := Length(ABuffer) > 0;
 end;
 
 function TryGetEmbeddedPropertyRanges(const AKey: string;
@@ -188,64 +175,43 @@ begin
   Result := TryExtractRanges(Resource, Container, Entry, ARanges);
 end;
 
-function TryGetEmbeddedPairs(const AKey: string; var ACachedPairs:
-  TCodePointPairArray; var ACachedPairsLoaded, ACachedPairsAvailable: Boolean;
-  var ACachedPairsLock: TRTLCriticalSection;
+{ Lazily load the immutable case-fold/uppercase pair table named AKey. The cold
+  load (resource read, container/entry lookup, pair extraction) runs once; the
+  table is then consulted on every code-point comparison of an icase
+  backreference and of a unicode+icase \b assertion, so the warm path must not
+  take a lock. The barrier-correct lazy-publication discipline lives in
+  TLazyPublishedCache (introduced for these tables in #813, unified across the
+  engine's embedded-data caches in #894): the loaded flag is published last
+  behind a write barrier and read behind a matching read barrier, so a
+  concurrent regex worker that observes the table as loaded also observes its
+  fully-written contents on weakly-ordered targets. Load failure is memoized so
+  an absent or corrupt resource is not re-attempted. Callers binary-search the
+  cache's Data array in place (passed as a const argument, which makes no
+  managed copy), avoiding per-comparison dynamic-array refcount churn. }
+function LoadEmbeddedPairs(const AKey: string;
   out APairs: TCodePointPairArray): Boolean;
 var
   Resource: TBytes;
   Container: TEmbeddedResourceContainer;
   Entry: TEmbeddedResourceEntry;
 begin
-  EnterCriticalSection(ACachedPairsLock);
-  try
-    if ACachedPairsLoaded then
-    begin
-      APairs := ACachedPairs;
-      Result := ACachedPairsAvailable;
-      Exit;
-    end;
-
-    Result := False;
-    SetLength(APairs, 0);
-    ACachedPairsLoaded := True;
-    ACachedPairsAvailable := False;
-
-    if not TryReadEmbeddedResource(Resource) then
-      Exit;
-
-    if not TryReadEmbeddedResourceContainer(Resource, UCD_MAGIC, Container) then
-      Exit;
-
-    if not TryFindEmbeddedResourceEntry(Resource, AKey, Container, Entry) then
-      Exit;
-
-    if not TryExtractCaseFoldPairs(Resource, Container, Entry, ACachedPairs) then
-      Exit;
-
-    APairs := ACachedPairs;
-    ACachedPairsAvailable := True;
-    Result := True;
-  finally
-    LeaveCriticalSection(ACachedPairsLock);
-  end;
+  SetLength(APairs, 0);
+  Result :=
+    TryReadEmbeddedResource(Resource) and
+    TryReadEmbeddedResourceContainer(Resource, UCD_MAGIC, Container) and
+    TryFindEmbeddedResourceEntry(Resource, AKey, Container, Entry) and
+    TryExtractCaseFoldPairs(Resource, Container, Entry, APairs);
 end;
 
-function TryGetEmbeddedCaseFoldPairs(
-  out APairs: TCodePointPairArray): Boolean;
+function EnsureCaseFoldPairsReady: Boolean;
 begin
-  Result := TryGetEmbeddedPairs(CASE_FOLDING_ENTRY_KEY, CachedCaseFoldPairs,
-    CachedCaseFoldPairsLoaded, CachedCaseFoldPairsAvailable,
-    CachedCaseFoldPairsLock, APairs);
+  Result := CaseFoldPairsCache.Ensure(CASE_FOLDING_ENTRY_KEY, @LoadEmbeddedPairs);
 end;
 
-function TryGetEmbeddedNonUnicodeUppercasePairs(
-  out APairs: TCodePointPairArray): Boolean;
+function EnsureNonUnicodeUppercasePairsReady: Boolean;
 begin
-  Result := TryGetEmbeddedPairs(NON_UNICODE_UPPERCASE_ENTRY_KEY,
-    CachedNonUnicodeUppercasePairs, CachedNonUnicodeUppercasePairsLoaded,
-    CachedNonUnicodeUppercasePairsAvailable,
-    CachedNonUnicodeUppercasePairsLock, APairs);
+  Result := NonUnicodeUppercasePairsCache.Ensure(NON_UNICODE_UPPERCASE_ENTRY_KEY,
+    @LoadEmbeddedPairs);
 end;
 
 function TryFindPairTarget(const APairs: TCodePointPairArray;
@@ -282,11 +248,10 @@ end;
 
 function TryGetUnicodeSimpleCaseFold(ACodePoint: Cardinal;
   out AFoldedCodePoint: Cardinal): Boolean;
-var
-  Pairs: TCodePointPairArray;
 begin
-  if TryGetEmbeddedCaseFoldPairs(Pairs) then
-    Result := TryFindPairTarget(Pairs, ACodePoint, AFoldedCodePoint)
+  if EnsureCaseFoldPairsReady then
+    Result := TryFindPairTarget(CaseFoldPairsCache.Data, ACodePoint,
+      AFoldedCodePoint)
   else
   begin
     AFoldedCodePoint := ACodePoint;
@@ -386,11 +351,10 @@ end;
 
 function TryGetRegExpNonUnicodeUppercase(ACodePoint: Cardinal;
   out AUpperCodePoint: Cardinal): Boolean;
-var
-  Pairs: TCodePointPairArray;
 begin
-  if TryGetEmbeddedNonUnicodeUppercasePairs(Pairs) then
-    Result := TryFindPairTarget(Pairs, ACodePoint, AUpperCodePoint)
+  if EnsureNonUnicodeUppercasePairsReady then
+    Result := TryFindPairTarget(NonUnicodeUppercasePairsCache.Data, ACodePoint,
+      AUpperCodePoint)
   else
   begin
     AUpperCodePoint := ACodePoint;
@@ -424,39 +388,37 @@ end;
 
 procedure ExpandUnicodeSimpleCaseFolding(
   var ARanges: TUnicodePropertyRangeArray);
-var
-  Pairs: TCodePointPairArray;
 begin
-  if TryGetEmbeddedCaseFoldPairs(Pairs) then
-    ExpandCaseEquivalence(ARanges, Pairs);
+  if EnsureCaseFoldPairsReady then
+    ExpandCaseEquivalence(ARanges, CaseFoldPairsCache.Data);
 end;
 
 procedure ReduceUnicodeSimpleCaseFoldClosed(
   var ARanges: TUnicodePropertyRangeArray);
 var
   OriginalRanges: TUnicodePropertyRangeArray;
-  Pairs: TCodePointPairArray;
   I, J: Integer;
   Target: Cardinal;
   HasInside, HasOutside: Boolean;
 begin
-  if not TryGetEmbeddedCaseFoldPairs(Pairs) then
+  if not EnsureCaseFoldPairsReady then
     Exit;
 
   SetLength(OriginalRanges, Length(ARanges));
   for I := 0 to High(ARanges) do
     OriginalRanges[I] := ARanges[I];
 
-  for I := 0 to High(Pairs) do
+  for I := 0 to High(CaseFoldPairsCache.Data) do
   begin
-    Target := Pairs[I].Target;
+    Target := CaseFoldPairsCache.Data[I].Target;
     HasInside := RangeContainsCodePoint(OriginalRanges, Target);
     HasOutside := not HasInside;
 
-    for J := 0 to High(Pairs) do
-      if Pairs[J].Target = Target then
+    for J := 0 to High(CaseFoldPairsCache.Data) do
+      if CaseFoldPairsCache.Data[J].Target = Target then
       begin
-        if RangeContainsCodePoint(OriginalRanges, Pairs[J].Source) then
+        if RangeContainsCodePoint(OriginalRanges,
+           CaseFoldPairsCache.Data[J].Source) then
           HasInside := True
         else
           HasOutside := True;
@@ -466,30 +428,28 @@ begin
       Continue;
 
     RemoveFoldRange(ARanges, Target);
-    for J := 0 to High(Pairs) do
-      if Pairs[J].Target = Target then
-        RemoveFoldRange(ARanges, Pairs[J].Source);
+    for J := 0 to High(CaseFoldPairsCache.Data) do
+      if CaseFoldPairsCache.Data[J].Target = Target then
+        RemoveFoldRange(ARanges, CaseFoldPairsCache.Data[J].Source);
   end;
 end;
 
 procedure ExpandRegExpNonUnicodeCaseFolding(
   var ARanges: TUnicodePropertyRangeArray);
-var
-  Pairs: TCodePointPairArray;
 begin
-  if TryGetEmbeddedNonUnicodeUppercasePairs(Pairs) then
-    ExpandCaseEquivalence(ARanges, Pairs);
+  if EnsureNonUnicodeUppercasePairsReady then
+    ExpandCaseEquivalence(ARanges, NonUnicodeUppercasePairsCache.Data);
 end;
 
 initialization
-  InitCriticalSection(CachedUCDResourceLock);
-  InitCriticalSection(CachedCaseFoldPairsLock);
-  InitCriticalSection(CachedNonUnicodeUppercasePairsLock);
+  UCDResourceCache.Init;
+  CaseFoldPairsCache.Init;
+  NonUnicodeUppercasePairsCache.Init;
 
 finalization
-  DoneCriticalSection(CachedNonUnicodeUppercasePairsLock);
-  DoneCriticalSection(CachedCaseFoldPairsLock);
-  DoneCriticalSection(CachedUCDResourceLock);
+  NonUnicodeUppercasePairsCache.Done;
+  CaseFoldPairsCache.Done;
+  UCDResourceCache.Done;
 
 {$ELSE}
 

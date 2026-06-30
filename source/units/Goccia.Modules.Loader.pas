@@ -65,6 +65,8 @@ type
       ACacheKey: string): TGocciaModule;
     function LoadTextModule(const AResolvedPath,
       ACacheKey: string; const ADefaultOnly: Boolean): TGocciaModule;
+    function LoadBytesModule(const AResolvedPath,
+      ACacheKey: string): TGocciaModule;
     function ResolveModuleRequestWithAttribute(const AModulePath,
       AAttributeType, AImportingFilePath: string): string;
     procedure RecordFailedModuleError(const ACacheKey: string;
@@ -110,6 +112,8 @@ type
       const ACacheKey: string = '');
     procedure EndEvaluatingModulePath(const APath: string);
     function IsEvaluatingModulePath(const APath: string): Boolean;
+    procedure ValidateStaticNamedImports(const AProgram: TGocciaProgram;
+      const AModule: TGocciaModule);
     function LoadModule(const AModulePath,
       AImportingFilePath: string): TGocciaModule;
     function LoadModuleSourceValue(const AModulePath,
@@ -173,10 +177,12 @@ uses
   Goccia.JSON,
   Goccia.Keywords.Reserved,
   Goccia.Realm,
+  Goccia.Values.ArrayBufferValue,
   Goccia.Values.Error,
   Goccia.Values.FunctionValue,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectValue,
+  Goccia.Values.TypedArrayValue,
   Goccia.VM.Exception;
 
 const
@@ -639,6 +645,50 @@ begin
     FEvaluatingModules.ContainsKey(ExpandFileName(APath)) or
     FLoadingModules.ContainsKey(APath) or
     FLoadingModules.ContainsKey(ExpandFileName(APath)));
+end;
+
+// ES2026 §16.2.1.7.3.1 InitializeEnvironment: while linking a module, a named
+// import whose ResolveExport result is null or ambiguous is a SyntaxError. The
+// tree-walking interpreter also enforces this lazily as it evaluates each
+// import declaration (Goccia.AST.Statements), but the bytecode compiler resolves
+// import bindings at their use sites, so missing names must be rejected here at
+// link time to keep both engines in lockstep (ADR 0014). Source modules still
+// mid-evaluation in a cycle are skipped via IsEvaluatingModulePath, matching the
+// re-export validation in RegisterStaticModuleExports.
+procedure TGocciaModuleLoader.ValidateStaticNamedImports(
+  const AProgram: TGocciaProgram; const AModule: TGocciaModule);
+var
+  Stmt: TGocciaStatement;
+  ImportDecl: TGocciaImportDeclaration;
+  ImportPair: TStringStringMap.TKeyValuePair;
+  SourceModule: TGocciaModule;
+  I: Integer;
+begin
+  if (not Assigned(AProgram)) or (not Assigned(AModule)) then
+    Exit;
+
+  for I := 0 to AProgram.Body.Count - 1 do
+  begin
+    Stmt := AProgram.Body[I];
+    if not (Stmt is TGocciaImportDeclaration) then
+      Continue;
+
+    ImportDecl := TGocciaImportDeclaration(Stmt);
+    // Only evaluation-phase imports bind exported names; source- and defer-phase
+    // imports bind the module source or namespace object, which always resolve.
+    if (ImportDecl.Phase <> icpEvaluation) or (ImportDecl.Imports.Count = 0) then
+      Continue;
+
+    SourceModule := LoadModule(EncodeImportSpecifierAttribute(
+      ImportDecl.ModulePath, ImportDecl.AttributeType), AModule.Path);
+    for ImportPair in ImportDecl.Imports do
+      if (not SourceModule.CanResolveExport(ImportPair.Value)) and
+         (not IsEvaluatingModulePath(SourceModule.Path)) then
+        raise TGocciaSyntaxError.Create(
+          Format('Module "%s" has no export named "%s"',
+            [ImportDecl.ModulePath, ImportPair.Value]),
+          ImportDecl.Line, ImportDecl.Column, AModule.Path, nil);
+  end;
 end;
 
 procedure TGocciaModuleLoader.RegisterModule(const AResolvedPath: string;
@@ -1136,6 +1186,7 @@ var
     end;
 
     ValidateIndirectReExports;
+    ValidateStaticNamedImports(ProgramNode, Module);
     Module.InvalidateNamespaceObject;
   end;
 begin
@@ -1152,7 +1203,7 @@ begin
   DecodeImportSpecifierAttribute(AModulePath, RequestedModulePath,
     AttributeType);
   if (AttributeType <> '') and (AttributeType <> 'json') and
-     (AttributeType <> 'text') then
+     (AttributeType <> 'text') and (AttributeType <> 'bytes') then
     raise TGocciaSyntaxError.Create(
       Format('Unsupported import attribute type "%s"', [AttributeType]),
       0, 0, AImportingFilePath, nil);
@@ -1211,6 +1262,12 @@ begin
   if AttributeType = 'text' then
   begin
     Result := LoadTextModule(ResolvedPath, CacheKey, True);
+    Exit;
+  end;
+
+  if AttributeType = 'bytes' then
+  begin
+    Result := LoadBytesModule(ResolvedPath, CacheKey);
     Exit;
   end;
 
@@ -1393,6 +1450,13 @@ var
 begin
   DecodeImportSpecifierAttribute(AModulePath, RequestedModulePath,
     AttributeType);
+  // Import Bytes non-goal: bytes modules are not exposed as source-phase
+  // imports, so reject with a clear message rather than the generic
+  // unsupported-attribute error.
+  if AttributeType = 'bytes' then
+    raise TGocciaSyntaxError.Create(
+      'Source phase imports are not supported for bytes modules',
+      0, 0, AImportingFilePath, nil);
   if (AttributeType <> '') and (AttributeType <> 'json') and
      (AttributeType <> 'text') then
     raise TGocciaSyntaxError.Create(
@@ -1753,7 +1817,7 @@ begin
   DecodeImportSpecifierAttribute(AModulePath, RequestedModulePath,
     AttributeType);
   if (AttributeType <> '') and (AttributeType <> 'json') and
-     (AttributeType <> 'text') then
+     (AttributeType <> 'text') and (AttributeType <> 'bytes') then
     raise TGocciaSyntaxError.Create(
       Format('Unsupported import attribute type "%s"', [AttributeType]),
       0, 0, AImportingFilePath, nil);
@@ -1965,6 +2029,50 @@ begin
     end;
   finally
     Content.Free;
+  end;
+end;
+
+// Import Bytes proposal: load the resolved file as raw bytes, ignoring file
+// extension/MIME, and expose a single default export that is a Uint8Array
+// backed by an immutable ArrayBuffer. Named imports are rejected naturally
+// because the synthetic module declares only the default export.
+function TGocciaModuleLoader.LoadBytesModule(const AResolvedPath,
+  ACacheKey: string): TGocciaModule;
+var
+  Buffer: TGocciaArrayBufferValue;
+  Bytes: TBytes;
+  LastModified: TDateTime;
+  LoadSucceeded: Boolean;
+  Module: TGocciaModule;
+  TypedArray: TGocciaTypedArrayValue;
+begin
+  Bytes := FContentProvider.LoadContentBytes(AResolvedPath);
+  if not FContentProvider.TryGetLastModified(AResolvedPath, LastModified) then
+    LastModified := 0;
+
+  Buffer := TGocciaArrayBufferValue.CreateImmutableFromBytes(Bytes);
+  TypedArray := TGocciaTypedArrayValue.Create(takUint8, Buffer);
+
+  // Root the view (which marks its backing buffer) until the module owns it.
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AddTempRoot(TypedArray);
+  try
+    Module := TGocciaModule.Create(AResolvedPath);
+    Module.LastModified := LastModified;
+    LoadSucceeded := False;
+    try
+      Module.AddExportValue(KEYWORD_DEFAULT, TypedArray);
+      FModules.Add(ACacheKey, Module);
+      ClearFailedModuleError(ACacheKey);
+      Result := Module;
+      LoadSucceeded := True;
+    finally
+      if not LoadSucceeded then
+        Module.Free;
+    end;
+  finally
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.RemoveTempRoot(TypedArray);
   end;
 end;
 

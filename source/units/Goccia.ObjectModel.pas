@@ -133,6 +133,7 @@ implementation
 
 uses
   Goccia.SharedPrototype,
+  Goccia.ThreadCleanupRegistry,
   Goccia.Values.ClassValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectValue,
@@ -156,7 +157,16 @@ type
   end;
 
 threadvar
+  // Per-thread list of published getter/setter host objects; owns its entries
+  // (Create(True)). FPC does not auto-finalize object-reference threadvars at
+  // thread exit, so this is released on both teardown paths via
+  // Goccia.ThreadCleanupRegistry (worker exit + main-thread finalization). #892
   GPublishedGetterHosts: TObjectList<TObject>;
+
+procedure ClearPublishedGetterHosts;
+begin
+  FreeAndNil(GPublishedGetterHosts);
+end;
 
 function KindToString(const AKind: TGocciaMemberKind): string;
 begin
@@ -769,5 +779,6 @@ end;
 
 initialization
   GPublishedGetterHosts := TObjectList<TObject>.Create(True);
+  RegisterThreadvarCleanup(@ClearPublishedGetterHosts);
 
 end.

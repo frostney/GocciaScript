@@ -36,11 +36,17 @@ uses
 
   Goccia.Arguments.Validator,
   Goccia.Constants.NumericLimits,
+  Goccia.ThreadCleanupRegistry,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor;
 
 threadvar
   FStaticMembers: TArray<TGocciaMemberDefinition>;
+
+procedure ClearThreadvarMembers;
+begin
+  SetLength(FStaticMembers, 0);
+end;
 
 constructor TGocciaGlobalNumber.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 var
@@ -477,5 +483,8 @@ begin
   else
     Result := TGocciaBooleanLiteralValue.FalseValue;
 end;
+
+initialization
+  RegisterThreadvarCleanup(@ClearThreadvarMembers);
 
 end.

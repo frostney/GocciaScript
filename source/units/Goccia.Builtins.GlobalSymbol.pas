@@ -47,6 +47,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
+  Goccia.ThreadCleanupRegistry,
   Goccia.Values.ErrorHelper,
   Goccia.Values.HoleValue,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -56,13 +57,35 @@ uses
 threadvar
   FStaticMembers: TArray<TGocciaMemberDefinition>;
 
+  // ES2026 §20.4.2.2: the GlobalSymbolRegistry is one per agent (thread). Every
+  // realm in the thread — the main realm, ShadowRealm child realms, and
+  // $262.createRealm realms — shares it, so Symbol.for(key) yields the same
+  // symbol across realms. It is reference-counted by the live TGocciaGlobalSymbol
+  // instances on the thread and freed only when the last one is destroyed, so no
+  // realm can read it after teardown regardless of engine creation/teardown order.
+  GSharedSymbolRegistry: TOrderedStringMap<TGocciaSymbolValue>;
+  GSharedSymbolRegistryRefs: Integer;
+
+procedure ClearThreadvarMembers;
+begin
+  SetLength(FStaticMembers, 0);
+end;
+
+function SharedSymbolRegistry: TOrderedStringMap<TGocciaSymbolValue>;
+begin
+  if not Assigned(GSharedSymbolRegistry) then
+    GSharedSymbolRegistry := TOrderedStringMap<TGocciaSymbolValue>.Create;
+  Result := GSharedSymbolRegistry;
+end;
+
 constructor TGocciaGlobalSymbol.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 var
   PrototypeInitializer: TGocciaSymbolValue;
 begin
   inherited Create(AName, AScope, AThrowError);
 
-  FGlobalRegistry := TOrderedStringMap<TGocciaSymbolValue>.Create;
+  FGlobalRegistry := SharedSymbolRegistry;
+  Inc(GSharedSymbolRegistryRefs);
 
   // Initialize shared Symbol prototype
   PrototypeInitializer := TGocciaSymbolValue.Create;
@@ -123,10 +146,20 @@ destructor TGocciaGlobalSymbol.Destroy;
 var
   Pair: TOrderedStringMap<TGocciaSymbolValue>.TKeyValuePair;
 begin
-  if Assigned(TGarbageCollector.Instance) then
-    for Pair in FGlobalRegistry do
-      TGarbageCollector.Instance.UnpinObject(Pair.Value);
-  FGlobalRegistry.Free;
+  // Free the shared registry and unpin its symbols only when the last
+  // TGocciaGlobalSymbol on the thread is destroyed, so an overlapping engine can
+  // never read freed storage no matter the creation/teardown order.
+  Dec(GSharedSymbolRegistryRefs);
+  if (GSharedSymbolRegistryRefs <= 0) and Assigned(GSharedSymbolRegistry) then
+  begin
+    if Assigned(TGarbageCollector.Instance) then
+      for Pair in GSharedSymbolRegistry do
+        TGarbageCollector.Instance.UnpinObject(Pair.Value);
+    GSharedSymbolRegistry.Free;
+    GSharedSymbolRegistry := nil;
+    GSharedSymbolRegistryRefs := 0;
+  end;
+  FGlobalRegistry := nil;
   inherited;
 end;
 
@@ -230,5 +263,8 @@ begin
   { Step 4: Return undefined }
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
+
+initialization
+  RegisterThreadvarCleanup(@ClearThreadvarMembers);
 
 end.

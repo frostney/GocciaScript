@@ -209,6 +209,8 @@ type
     procedure SkipExpression;
     procedure SkipExpressionWithLexicalGoal(
       const ALexicalGoal: TGocciaLexicalGoal);
+    function TokenRequiresFollowingOperand(
+      const ATokenType: TGocciaTokenType): Boolean;
     // TC39 Pattern Matching
     function ParseMatchExpression: TGocciaMatchExpression;
     function ParseMatchPattern: TGocciaMatchPattern;
@@ -232,6 +234,7 @@ type
     procedure SkipBlock;
     procedure SkipBalancedParens;
     procedure SkipStatementOrBlock;
+    procedure SkipTemplateLiteral;
     procedure SkipUnsupportedFunctionSignature;
     // Centralized 'async function' check: enforces same-line constraint,
     // handles disabled-mode fallback.  Call after consuming the 'async' token.
@@ -2865,6 +2868,20 @@ function TGocciaParser.IsMatchExpressionAhead: Boolean;
         EnsureToken(ScanIndex, ALexicalGoal);
         while ScanIndex < FTokens.Count do
         begin
+          // Skip a template literal whole so its '${ ... }' substitution
+          // closer (a gttRightBrace under this goal) and any parentheses in
+          // the substitution are not miscounted as discriminant structure.
+          // SkipTemplateLiteral works off the live cursor, so drive it from
+          // ScanIndex and resume the index scan past the template; the outer
+          // finally restores FCurrent (see SkipTemplateLiteral).
+          if FTokens[ScanIndex].TokenType in [gttTemplateHead, gttTemplate] then
+          begin
+            FCurrent := ScanIndex;
+            SkipTemplateLiteral;
+            ScanIndex := FCurrent;
+            EnsureToken(ScanIndex, ALexicalGoal);
+            Continue;
+          end;
           case FTokens[ScanIndex].TokenType of
             gttLeftParen:
               Inc(Depth);
@@ -2896,7 +2913,12 @@ function TGocciaParser.IsMatchExpressionAhead: Boolean;
       end;
     finally
       FCurrent := SavedCurrent;
-      if Assigned(FLexer) then
+      // Keep the speculatively-scanned tokens cached on the normal path. Drop
+      // them (rewinding the lexer) only when a lex error means the group is
+      // retried under the other goal, or when a goal-sensitive token was
+      // scanned and must be re-lexed under the parser's real goal (issue #808).
+      if Assigned(FLexer) and
+        (ALexError or FLexer.HasGoalSensitiveTokenSince(SavedLexer.TokenCount)) then
         FLexer.RestoreCheckpoint(SavedLexer);
     end;
   end;
@@ -4723,6 +4745,90 @@ begin
     Line, Column);
 end;
 
+// Skips a complete template literal whose leading token (gttTemplate or
+// gttTemplateHead) is at the cursor, leaving the cursor just past the closing
+// backtick.  The error-recovery skips below (SkipBlock, SkipBalancedParens,
+// SkipUntilSemicolon) and the speculative parenthesized-group probes
+// (IsArrowFunction's SkipExpressionWithLexicalGoal / SkipDestructuringPattern,
+// IsMatchExpressionAhead, LooksLikeTraditionalForHeader) must route templates
+// through here: the '}' that closes a '${ ... }' substitution is lexed as a
+// plain gttRightBrace under any non-template goal, so naive brace/paren counting
+// would miscount it as a structural brace, stop early, and then re-scan the
+// trailing span as a fresh, unterminated template literal.  After consuming that
+// '}', the continuation span must be re-lexed with the template-tail goal,
+// exactly as ParseTemplateLiteral does.
+//
+// The substitution body is scanned operand-aware (RegExp goal where an operand
+// is expected, Div otherwise) so a '/' inside the substitution is classified as
+// a regex literal vs a division operator just as the real parse would — a
+// mis-lexed '/' would otherwise run a regex literal past the substitution's '}'.
+procedure TGocciaParser.SkipTemplateLiteral;
+var
+  Depth: Integer;
+  NeedsOperand: Boolean;
+  CurrentType: TGocciaTokenType;
+
+  function SubstitutionGoal: TGocciaLexicalGoal;
+  begin
+    if NeedsOperand then
+      Result := glgInputElementRegExp
+    else
+      Result := glgInputElementDiv;
+  end;
+
+begin
+  // A template with no substitutions is a single token.
+  if Check(gttTemplate) then
+  begin
+    Advance;
+    Exit;
+  end;
+
+  Advance; // gttTemplateHead: `...${
+  repeat
+    // Skip the substitution expression up to the '}' that closes it, treating
+    // nested templates as units and balancing any inner object/block braces.
+    Depth := 0;
+    NeedsOperand := True;
+    while True do
+    begin
+      // Peek under the operand-aware goal *before* testing for EOF: a plain
+      // IsAtEnd/Peek would lex the next token under the default goal and a '/'
+      // would become a runaway regex literal that swallows the closing '}'.
+      CurrentType := PeekWithLexicalGoal(SubstitutionGoal).TokenType;
+      if CurrentType = gttEOF then
+        Exit; // unterminated substitution; leave the cursor at EOF
+      case CurrentType of
+        gttTemplateHead, gttTemplate:
+          begin
+            SkipTemplateLiteral;
+            NeedsOperand := False;
+          end;
+        gttLeftBrace:
+          begin
+            Inc(Depth);
+            Advance;
+            NeedsOperand := True;
+          end;
+        gttRightBrace:
+          begin
+            if Depth = 0 then
+              Break;
+            Dec(Depth);
+            Advance;
+            NeedsOperand := False;
+          end;
+      else
+        Advance;
+        NeedsOperand := TokenRequiresFollowingOperand(CurrentType);
+      end;
+    end;
+    Advance; // gttRightBrace closing the substitution
+    // Re-lex the following span with the template-tail goal so it becomes a
+    // TemplateMiddle/TemplateTail token instead of a stray template start.
+  until ConsumeTemplateContinuation.TokenType = gttTemplateTail;
+end;
+
 procedure TGocciaParser.SkipBlock;
 var
   Depth: Integer;
@@ -4732,9 +4838,14 @@ begin
   Depth := 1;
   while not IsAtEnd and (Depth > 0) do
   begin
-    if Check(gttLeftBrace) then Inc(Depth)
-    else if Check(gttRightBrace) then Dec(Depth);
-    if Depth > 0 then Advance;
+    if Check(gttTemplateHead) or Check(gttTemplate) then
+      SkipTemplateLiteral
+    else
+    begin
+      if Check(gttLeftBrace) then Inc(Depth)
+      else if Check(gttRightBrace) then Dec(Depth);
+      if Depth > 0 then Advance;
+    end;
   end;
   Consume(gttRightBrace, 'Expected "}"',
     SSuggestCloseBlock);
@@ -4749,9 +4860,14 @@ begin
   Depth := 1;
   while not IsAtEnd and (Depth > 0) do
   begin
-    if Check(gttLeftParen) then Inc(Depth)
-    else if Check(gttRightParen) then Dec(Depth);
-    if Depth > 0 then Advance;
+    if Check(gttTemplateHead) or Check(gttTemplate) then
+      SkipTemplateLiteral
+    else
+    begin
+      if Check(gttLeftParen) then Inc(Depth)
+      else if Check(gttRightParen) then Dec(Depth);
+      if Depth > 0 then Advance;
+    end;
   end;
   Consume(gttRightParen, 'Expected ")"',
     SSuggestCloseParenExpression);
@@ -5389,6 +5505,21 @@ function TGocciaParser.LooksLikeTraditionalForHeader: Boolean;
         EnsureToken(Idx, ALexicalGoal);
         while (Idx < FTokens.Count) and (Depth > 0) do
         begin
+          // Skip a template literal whole so its '${ ... }' substitution
+          // closer (a gttRightBrace under this goal) is not miscounted as a
+          // structural brace, which would drop Depth to 0 and misclassify a
+          // traditional `for(init; ...)` whose init holds a template as a
+          // for-of/in head. SkipTemplateLiteral works off the live cursor, so
+          // drive it from Idx and resume past the template; the outer finally
+          // restores FCurrent (see SkipTemplateLiteral).
+          if FTokens[Idx].TokenType in [gttTemplateHead, gttTemplate] then
+          begin
+            FCurrent := Idx;
+            SkipTemplateLiteral;
+            Idx := FCurrent;
+            EnsureToken(Idx, ALexicalGoal);
+            Continue;
+          end;
           Tok := FTokens[Idx];
           case Tok.TokenType of
             gttLeftParen, gttLeftBracket, gttLeftBrace:
@@ -5415,7 +5546,12 @@ function TGocciaParser.LooksLikeTraditionalForHeader: Boolean;
       end;
     finally
       FCurrent := SavedCurrent;
-      if Assigned(FLexer) then
+      // Keep the speculatively-scanned tokens cached on the normal path. Drop
+      // them (rewinding the lexer) only when a lex error means the group is
+      // retried under the other goal, or when a goal-sensitive token was
+      // scanned and must be re-lexed under the parser's real goal (issue #808).
+      if Assigned(FLexer) and
+        (ALexError or FLexer.HasGoalSensitiveTokenSince(SavedLexer.TokenCount)) then
         FLexer.RestoreCheckpoint(SavedLexer);
     end;
   end;
@@ -7391,7 +7527,12 @@ var
   ParenCount: Integer;
   CurrentType: TGocciaTokenType;
 begin
-  // Save current position for rollback
+  // Probe the parenthesized group for an arrow, then rewind the parser cursor.
+  // The tokens scanned here are kept for the real parse to reuse instead of
+  // being re-lexed — unless the probe scanned a goal-sensitive token ('/' or a
+  // template-tail '}'), in which case they are dropped and re-lexed under the
+  // real goal (issue #808). This probe scans under InputElementDiv only and
+  // never catches lexer errors — a lex error here is a genuine syntax error.
   SavedCurrent := FCurrent;
   if Assigned(FLexer) then
     SavedLexer := FLexer.CreateCheckpoint;
@@ -7497,7 +7638,12 @@ begin
     Result := CheckWithLexicalGoal(gttArrow, glgInputElementDiv);
   finally
     FCurrent := SavedCurrent;
-    if Assigned(FLexer) then
+    // Keep the probe's look-ahead tokens cached unless one of them is
+    // goal-sensitive (a '/' or template-tail scanned under the probe's Div
+    // goal), in which case drop them so the real parse re-lexes under the
+    // correct goal (issue #808).
+    if Assigned(FLexer) and
+      FLexer.HasGoalSensitiveTokenSince(SavedLexer.TokenCount) then
       FLexer.RestoreCheckpoint(SavedLexer);
   end;
 end;
@@ -7609,6 +7755,14 @@ begin
     if (Depth = 0) and FAutomaticSemicolonInsertion and
       (Previous.Line < Peek.Line) then
       Exit;
+
+    // Skip template literals whole so a substitution's closing '}' is not
+    // miscounted as a structural brace (see SkipTemplateLiteral).
+    if Check(gttTemplateHead) or Check(gttTemplate) then
+    begin
+      SkipTemplateLiteral;
+      Continue;
+    end;
 
     case Peek.TokenType of
       gttLeftParen, gttLeftBracket, gttLeftBrace, gttLess: Inc(Depth);
@@ -8357,6 +8511,34 @@ begin
   Result := TGocciaContinueStatement.Create(Line, Column, TargetLabel);
 end;
 
+// Whether a '/' immediately following a token of the given type begins a regex
+// literal (an operand is expected) rather than a division operator.  Shared by
+// the speculative skips (SkipExpressionWithLexicalGoal, SkipDestructuringPattern)
+// and the template-substitution scan in SkipTemplateLiteral so they classify a
+// following '/' under the correct lexical goal.
+function TGocciaParser.TokenRequiresFollowingOperand(
+  const ATokenType: TGocciaTokenType): Boolean;
+begin
+  case ATokenType of
+    gttAssign, gttPlusAssign, gttMinusAssign, gttStarAssign,
+    gttSlashAssign, gttPercentAssign, gttPowerAssign,
+    gttNullishCoalescingAssign, gttLogicalAndAssign,
+    gttLogicalOrAssign,
+    gttQuestion, gttColon, gttComma,
+    gttOr, gttAnd, gttNullishCoalescing,
+    gttBitwiseOr, gttBitwiseXor, gttBitwiseAnd,
+    gttEqual, gttNotEqual, gttLooseEqual, gttLooseNotEqual,
+    gttGreater, gttGreaterEqual, gttLess, gttLessEqual,
+    gttInstanceof, gttIn,
+    gttLeftShift, gttRightShift, gttUnsignedRightShift,
+    gttPlus, gttMinus, gttStar, gttSlash, gttPercent, gttPower,
+    gttNot, gttBitwiseNot, gttTypeof, gttVoid, gttDelete,
+    gttNew, gttArrow:
+      Exit(True);
+  end;
+  Result := False;
+end;
+
 procedure TGocciaParser.SkipDestructuringPattern;
 var
   BracketCount, BraceCount: Integer;
@@ -8370,28 +8552,6 @@ var
     Result := glgInputElementDiv;
   end;
 
-  function TokenRequiresFollowingOperand(
-    const ATokenType: TGocciaTokenType): Boolean;
-  begin
-    case ATokenType of
-      gttAssign, gttPlusAssign, gttMinusAssign, gttStarAssign,
-      gttSlashAssign, gttPercentAssign, gttPowerAssign,
-      gttNullishCoalescingAssign, gttLogicalAndAssign,
-      gttLogicalOrAssign,
-      gttQuestion, gttColon, gttComma,
-      gttOr, gttAnd, gttNullishCoalescing,
-      gttBitwiseOr, gttBitwiseXor, gttBitwiseAnd,
-      gttEqual, gttNotEqual, gttLooseEqual, gttLooseNotEqual,
-      gttGreater, gttGreaterEqual, gttLess, gttLessEqual,
-      gttInstanceof, gttIn,
-      gttLeftShift, gttRightShift, gttUnsignedRightShift,
-      gttPlus, gttMinus, gttStar, gttSlash, gttPercent, gttPower,
-      gttNot, gttBitwiseNot, gttTypeof, gttVoid, gttDelete,
-      gttNew, gttArrow:
-        Exit(True);
-    end;
-    Result := False;
-  end;
 begin
   BracketCount := 0;
   BraceCount := 0;
@@ -8411,6 +8571,16 @@ begin
     CurrentType := PeekWithLexicalGoal(NextGoal).TokenType;
     if CurrentType = gttEOF then
       Break;
+
+    // Skip a template literal whole: its '${ ... }' substitution closer is a
+    // gttRightBrace under this goal and would otherwise be miscounted as a
+    // destructuring brace (see SkipTemplateLiteral).
+    if CurrentType in [gttTemplateHead, gttTemplate] then
+    begin
+      SkipTemplateLiteral;
+      NeedsOperand := False;
+      Continue;
+    end;
 
     case CurrentType of
       gttLeftBracket:
@@ -8463,28 +8633,6 @@ var
     Result := ALexicalGoal;
   end;
 
-  function TokenRequiresFollowingOperand(
-    const ATokenType: TGocciaTokenType): Boolean;
-  begin
-    case ATokenType of
-      gttAssign, gttPlusAssign, gttMinusAssign, gttStarAssign,
-      gttSlashAssign, gttPercentAssign, gttPowerAssign,
-      gttNullishCoalescingAssign, gttLogicalAndAssign,
-      gttLogicalOrAssign,
-      gttQuestion, gttColon, gttComma,
-      gttOr, gttAnd, gttNullishCoalescing,
-      gttBitwiseOr, gttBitwiseXor, gttBitwiseAnd,
-      gttEqual, gttNotEqual, gttLooseEqual, gttLooseNotEqual,
-      gttGreater, gttGreaterEqual, gttLess, gttLessEqual,
-      gttInstanceof, gttIn,
-      gttLeftShift, gttRightShift, gttUnsignedRightShift,
-      gttPlus, gttMinus, gttStar, gttSlash, gttPercent, gttPower,
-      gttNot, gttBitwiseNot, gttTypeof, gttVoid, gttDelete,
-      gttNew, gttArrow:
-        Exit(True);
-    end;
-    Result := False;
-  end;
 begin
   ParenCount := 0;
   BracketCount := 0;
@@ -8502,6 +8650,17 @@ begin
     if (ParenCount = 0) and (BracketCount = 0) and (BraceCount = 0) and
        (CurrentType in [gttComma, gttRightParen]) then
       Break;
+
+    // Skip a template literal whole: its '${ ... }' substitution closer is a
+    // gttRightBrace under this goal and would otherwise be miscounted as a
+    // structural brace, stopping the skip mid-default-value (see
+    // SkipTemplateLiteral).
+    if CurrentType in [gttTemplateHead, gttTemplate] then
+    begin
+      SkipTemplateLiteral;
+      NeedsOperand := False;
+      Continue;
+    end;
 
     case CurrentType of
       gttLeftParen:

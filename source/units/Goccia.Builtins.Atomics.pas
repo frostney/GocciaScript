@@ -76,6 +76,7 @@ uses
   Goccia.Error.Messages,
   Goccia.GarbageCollector,
   Goccia.InstructionLimit,
+  Goccia.ThreadCleanupRegistry,
   Goccia.Timeout,
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.BigIntValue,
@@ -909,6 +910,22 @@ var
   Waiter: TAtomicsWaiter;
   Waiters: TObjectList<TAtomicsWaiter>;
 begin
+  // Registered with Goccia.ThreadCleanupRegistry, so the drain runs this on
+  // worker exit AND again at main-thread finalization — by which point this
+  // unit's own finalization has already run ShutdownAtomicsWaiters (nil-ing
+  // GAtomicsWaiters) and DoneCriticalSection'd GAtomicsLock. Bail out before
+  // touching the now-destroyed lock when the list is already gone.
+  //
+  // This pre-lock read of the shared GAtomicsWaiters is deliberately unlocked.
+  // On the main-thread finalization path the process is single-threaded, so it
+  // cannot race. On a worker-exit path the lock is alive and another worker may
+  // be creating GAtomicsWaiters (nil -> non-nil) under it, but the read still
+  // gives THIS thread a correct answer: a thread only has waiters to remove
+  // after the list was created (creation precedes any Add), so reading nil means
+  // this thread has nothing to clean. It is a single aligned-pointer load —
+  // atomic on supported targets, never torn.
+  if not Assigned(GAtomicsWaiters) then
+    Exit;
   RemovedWaiters := TList<TAtomicsWaiter>.Create;
   try
     CurrentThreadId := GetCurrentThreadId;
@@ -1375,6 +1392,12 @@ end;
 
 initialization
   InitCriticalSection(GAtomicsLock);
+  // Worker threads release their own Atomics waiters via the registry drain in
+  // ShutdownThreadRuntime. ShutdownAtomicsWaitersForCurrentThread removes only
+  // the calling thread's entries from the shared GAtomicsWaiters list; the
+  // main thread's all-threads teardown stays in this unit's finalization below
+  // (the per-thread/all-threads distinction is deliberate).
+  RegisterThreadvarCleanup(@ShutdownAtomicsWaitersForCurrentThread);
 
 finalization
   ShutdownAtomicsWaiters;

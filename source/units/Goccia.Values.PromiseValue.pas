@@ -118,9 +118,6 @@ var
   GPromiseSharedSlot: TGocciaRealmOwnedSlotId;
   GPromiseDefaultConstructorSlot: TGocciaRealmSlotId;
 
-threadvar
-  FPrototypeMembers: TArray<TGocciaMemberDefinition>;
-
 function GetPromiseSharedForRealm(
   const ARealm: TGocciaRealm): TGocciaSharedPrototype; inline;
 begin
@@ -510,6 +507,7 @@ procedure TGocciaPromiseValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
   Shared: TGocciaSharedPrototype;
+  PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
   if not Assigned(CurrentRealm) then Exit;
   if Assigned(GetPromiseShared) then Exit;
@@ -519,23 +517,20 @@ begin
   if not Assigned(TGocciaObjectValue.SharedObjectPrototype) then
     TGocciaObjectValue.InitializeSharedPrototype;
   Shared.Prototype.Prototype := TGocciaObjectValue.SharedObjectPrototype;
-  if Length(FPrototypeMembers) = 0 then
-  begin
-    Members := TGocciaMemberCollection.Create;
-    try
-      Members.AddMethod(PromiseThen, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(PromiseCatch, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(PromiseFinally, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddSymbolDataProperty(
-        TGocciaSymbolValue.WellKnownToStringTag,
-        TGocciaStringLiteralValue.Create('Promise'),
-        [pfConfigurable]);
-      FPrototypeMembers := Members.ToDefinitions;
-    finally
-      Members.Free;
-    end;
+  Members := TGocciaMemberCollection.Create;
+  try
+    Members.AddMethod(PromiseThen, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(PromiseCatch, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(PromiseFinally, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddSymbolDataProperty(
+      TGocciaSymbolValue.WellKnownToStringTag,
+      TGocciaStringLiteralValue.Create('Promise'),
+      [pfConfigurable]);
+    PrototypeMembers := Members.ToDefinitions;
+  finally
+    Members.Free;
   end;
-  RegisterMemberDefinitions(Shared.Prototype, FPrototypeMembers);
+  RegisterMemberDefinitions(Shared.Prototype, PrototypeMembers);
 end;
 
 class procedure TGocciaPromiseValue.ExposePrototype(const AConstructor: TGocciaObjectValue);

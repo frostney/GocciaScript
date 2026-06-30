@@ -63,9 +63,6 @@ uses
 var
   GFFILibrarySharedSlot: TGocciaRealmOwnedSlotId;
 
-threadvar
-  FPrototypeMembers: TArray<TGocciaMemberDefinition>;
-
 function GetFFILibraryShared: TGocciaSharedPrototype; inline;
 begin
   if Assigned(CurrentRealm) then
@@ -489,31 +486,29 @@ procedure TGocciaFFILibraryValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
   Shared: TGocciaSharedPrototype;
+  PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
   if not Assigned(CurrentRealm) then Exit;
   if Assigned(GetFFILibraryShared) then Exit;
 
   Shared := TGocciaSharedPrototype.Create(Self);
   CurrentRealm.SetOwnedSlot(GFFILibrarySharedSlot, Shared);
-  if Length(FPrototypeMembers) = 0 then
-  begin
-    Members := TGocciaMemberCollection.Create;
-    try
-      Members.AddNamedMethod('bind', Bind, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('symbol', Symbol, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('close', Close, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddAccessor(PROP_FFI_PATH, PathGetter, nil, [pfConfigurable]);
-      Members.AddAccessor(PROP_FFI_CLOSED, ClosedGetter, nil, [pfConfigurable]);
-      Members.AddSymbolDataProperty(
-        TGocciaSymbolValue.WellKnownToStringTag,
-        TGocciaStringLiteralValue.Create(FFI_LIBRARY_TAG),
-        [pfConfigurable]);
-      FPrototypeMembers := Members.ToDefinitions;
-    finally
-      Members.Free;
-    end;
+  Members := TGocciaMemberCollection.Create;
+  try
+    Members.AddNamedMethod('bind', Bind, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod('symbol', Symbol, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod('close', Close, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddAccessor(PROP_FFI_PATH, PathGetter, nil, [pfConfigurable]);
+    Members.AddAccessor(PROP_FFI_CLOSED, ClosedGetter, nil, [pfConfigurable]);
+    Members.AddSymbolDataProperty(
+      TGocciaSymbolValue.WellKnownToStringTag,
+      TGocciaStringLiteralValue.Create(FFI_LIBRARY_TAG),
+      [pfConfigurable]);
+    PrototypeMembers := Members.ToDefinitions;
+  finally
+    Members.Free;
   end;
-  RegisterMemberDefinitions(Shared.Prototype, FPrototypeMembers);
+  RegisterMemberDefinitions(Shared.Prototype, PrototypeMembers);
 end;
 
 class procedure TGocciaFFILibraryValue.ExposePrototype(const ATarget: TGocciaObjectValue);

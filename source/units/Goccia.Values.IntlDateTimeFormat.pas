@@ -95,9 +95,6 @@ uses
 var
   GIntlDateTimeFormatSharedSlot: TGocciaRealmOwnedSlotId;
 
-threadvar
-  FPrototypeMembers: TArray<TGocciaMemberDefinition>;
-
 const
   GREGORIAN_CYCLE_YEARS = 400;
   NANOSECONDS_PER_MILLISECOND = 1000000;
@@ -2053,36 +2050,34 @@ procedure TGocciaIntlDateTimeFormatValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
   Shared: TGocciaSharedPrototype;
+  PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
   if not Assigned(CurrentRealm) then Exit;
   if Assigned(GetIntlDateTimeFormatShared) then Exit;
 
   Shared := TGocciaSharedPrototype.Create(Self);
   CurrentRealm.SetOwnedSlot(GIntlDateTimeFormatSharedSlot, Shared);
-  if Length(FPrototypeMembers) = 0 then
-  begin
-    Members := TGocciaMemberCollection.Create;
-    try
-      Members.AddAccessor('format', IntlDateTimeFormatFormatGetter, nil,
-        [pfConfigurable]);
-      Members.AddNamedMethod('formatToParts', IntlDateTimeFormatFormatToParts, 1,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('formatRange', IntlDateTimeFormatFormatRange, 2,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('formatRangeToParts', IntlDateTimeFormatFormatRangeToParts, 2,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('resolvedOptions', IntlDateTimeFormatResolvedOptions, 0,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddSymbolDataProperty(
-        TGocciaSymbolValue.WellKnownToStringTag,
-        TGocciaStringLiteralValue.Create('Intl.DateTimeFormat'),
-        [pfConfigurable]);
-      FPrototypeMembers := Members.ToDefinitions;
-    finally
-      Members.Free;
-    end;
+  Members := TGocciaMemberCollection.Create;
+  try
+    Members.AddAccessor('format', IntlDateTimeFormatFormatGetter, nil,
+      [pfConfigurable]);
+    Members.AddNamedMethod('formatToParts', IntlDateTimeFormatFormatToParts, 1,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod('formatRange', IntlDateTimeFormatFormatRange, 2,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod('formatRangeToParts', IntlDateTimeFormatFormatRangeToParts, 2,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod('resolvedOptions', IntlDateTimeFormatResolvedOptions, 0,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddSymbolDataProperty(
+      TGocciaSymbolValue.WellKnownToStringTag,
+      TGocciaStringLiteralValue.Create('Intl.DateTimeFormat'),
+      [pfConfigurable]);
+    PrototypeMembers := Members.ToDefinitions;
+  finally
+    Members.Free;
   end;
-  RegisterMemberDefinitions(Shared.Prototype, FPrototypeMembers);
+  RegisterMemberDefinitions(Shared.Prototype, PrototypeMembers);
 end;
 
 class procedure TGocciaIntlDateTimeFormatValue.ExposePrototype(const AConstructor: TGocciaObjectValue);

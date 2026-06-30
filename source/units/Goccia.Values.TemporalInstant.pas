@@ -69,9 +69,6 @@ uses
 var
   GTemporalInstantSharedSlot: TGocciaRealmOwnedSlotId;
 
-threadvar
-  FPrototypeMembers: TArray<TGocciaMemberDefinition>;
-
 function InstantEpochSecond(const AEpochMilliseconds: Int64): Int64; inline;
 begin
   Result := AEpochMilliseconds div 1000;
@@ -1135,38 +1132,36 @@ procedure TGocciaTemporalInstantValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
   Shared: TGocciaSharedPrototype;
+  PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
   if not Assigned(CurrentRealm) then Exit;
   if Assigned(GetTemporalInstantShared) then Exit;
   Shared := TGocciaSharedPrototype.Create(Self);
   CurrentRealm.SetOwnedSlot(GTemporalInstantSharedSlot, Shared);
-  if Length(FPrototypeMembers) = 0 then
-  begin
-    Members := TGocciaMemberCollection.Create;
-    try
-      Members.AddAccessor('epochMilliseconds', GetEpochMilliseconds, nil, [pfConfigurable]);
-      Members.AddAccessor('epochNanoseconds', GetEpochNanoseconds, nil, [pfConfigurable]);
-      Members.AddMethod(InstantAdd, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(InstantSubtract, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(InstantUntil, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(InstantSince, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(InstantRound, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(InstantEquals, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(InstantToString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(InstantToLocaleString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(InstantToJSON, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(InstantValueOf, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(InstantToZonedDateTimeISO, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddSymbolDataProperty(
-        TGocciaSymbolValue.WellKnownToStringTag,
-        TGocciaStringLiteralValue.Create('Temporal.Instant'),
-        [pfConfigurable]);
-      FPrototypeMembers := Members.ToDefinitions;
-    finally
-      Members.Free;
-    end;
+  Members := TGocciaMemberCollection.Create;
+  try
+    Members.AddAccessor('epochMilliseconds', GetEpochMilliseconds, nil, [pfConfigurable]);
+    Members.AddAccessor('epochNanoseconds', GetEpochNanoseconds, nil, [pfConfigurable]);
+    Members.AddMethod(InstantAdd, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(InstantSubtract, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(InstantUntil, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(InstantSince, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(InstantRound, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(InstantEquals, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(InstantToString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(InstantToLocaleString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(InstantToJSON, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(InstantValueOf, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(InstantToZonedDateTimeISO, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddSymbolDataProperty(
+      TGocciaSymbolValue.WellKnownToStringTag,
+      TGocciaStringLiteralValue.Create('Temporal.Instant'),
+      [pfConfigurable]);
+    PrototypeMembers := Members.ToDefinitions;
+  finally
+    Members.Free;
   end;
-  RegisterMemberDefinitions(Shared.Prototype, FPrototypeMembers);
+  RegisterMemberDefinitions(Shared.Prototype, PrototypeMembers);
 end;
 
 class procedure TGocciaTemporalInstantValue.ExposePrototype(const AConstructor: TGocciaObjectValue);

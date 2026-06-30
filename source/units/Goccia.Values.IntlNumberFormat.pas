@@ -89,9 +89,6 @@ uses
 var
   GIntlNumberFormatSharedSlot: TGocciaRealmOwnedSlotId;
 
-threadvar
-  FPrototypeMembers: TArray<TGocciaMemberDefinition>;
-
 type
   TGocciaIntlNumberFormatBoundFormatValue = class(TGocciaNativeFunctionValue)
   private
@@ -1800,36 +1797,34 @@ procedure TGocciaIntlNumberFormatValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
   Shared: TGocciaSharedPrototype;
+  PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
   if not Assigned(CurrentRealm) then Exit;
   if Assigned(GetIntlNumberFormatShared) then Exit;
 
   Shared := TGocciaSharedPrototype.Create(Self);
   CurrentRealm.SetOwnedSlot(GIntlNumberFormatSharedSlot, Shared);
-  if Length(FPrototypeMembers) = 0 then
-  begin
-    Members := TGocciaMemberCollection.Create;
-    try
-      Members.AddAccessor('format', IntlNumberFormatFormatGetter, nil,
-        [pfConfigurable]);
-      Members.AddNamedMethod('formatToParts', IntlNumberFormatFormatToParts, 1,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('formatRange', IntlNumberFormatFormatRange, 2,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('formatRangeToParts', IntlNumberFormatFormatRangeToParts, 2,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('resolvedOptions', IntlNumberFormatResolvedOptions, 0,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddSymbolDataProperty(
-        TGocciaSymbolValue.WellKnownToStringTag,
-        TGocciaStringLiteralValue.Create('Intl.NumberFormat'),
-        [pfConfigurable]);
-      FPrototypeMembers := Members.ToDefinitions;
-    finally
-      Members.Free;
-    end;
+  Members := TGocciaMemberCollection.Create;
+  try
+    Members.AddAccessor('format', IntlNumberFormatFormatGetter, nil,
+      [pfConfigurable]);
+    Members.AddNamedMethod('formatToParts', IntlNumberFormatFormatToParts, 1,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod('formatRange', IntlNumberFormatFormatRange, 2,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod('formatRangeToParts', IntlNumberFormatFormatRangeToParts, 2,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod('resolvedOptions', IntlNumberFormatResolvedOptions, 0,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddSymbolDataProperty(
+      TGocciaSymbolValue.WellKnownToStringTag,
+      TGocciaStringLiteralValue.Create('Intl.NumberFormat'),
+      [pfConfigurable]);
+    PrototypeMembers := Members.ToDefinitions;
+  finally
+    Members.Free;
   end;
-  RegisterMemberDefinitions(Shared.Prototype, FPrototypeMembers);
+  RegisterMemberDefinitions(Shared.Prototype, PrototypeMembers);
 end;
 
 class procedure TGocciaIntlNumberFormatValue.ExposePrototype(const AConstructor: TGocciaObjectValue);

@@ -21,6 +21,7 @@ type
     function WeakRefDeref(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
     constructor Create(const AClass: TGocciaClassValue = nil);
+    destructor Destroy; override;
 
     function ToStringTag: string; override;
 
@@ -49,9 +50,6 @@ uses
 var
   GWeakRefSharedSlot: TGocciaRealmOwnedSlotId;
 
-threadvar
-  FPrototypeMembers: TArray<TGocciaMemberDefinition>;
-
 function GetWeakRefShared: TGocciaSharedPrototype; inline;
 begin
   if Assigned(CurrentRealm) then
@@ -72,31 +70,36 @@ begin
     FPrototype := Shared.Prototype;
 end;
 
+destructor TGocciaWeakRefValue.Destroy;
+begin
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.UnregisterWeakContainer(Self);
+  inherited;
+end;
+
 procedure TGocciaWeakRefValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
   Shared: TGocciaSharedPrototype;
+  PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
   if not Assigned(CurrentRealm) then Exit;
   if Assigned(GetWeakRefShared) then Exit;
 
   Shared := TGocciaSharedPrototype.Create(Self);
   CurrentRealm.SetOwnedSlot(GWeakRefSharedSlot, Shared);
-  if Length(FPrototypeMembers) = 0 then
-  begin
-    Members := TGocciaMemberCollection.Create;
-    try
-      Members.AddNamedMethod('deref', WeakRefDeref, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype, gmfNotConstructable]);
-      Members.AddSymbolDataProperty(
-        TGocciaSymbolValue.WellKnownToStringTag,
-        TGocciaStringLiteralValue.Create(CONSTRUCTOR_WEAK_REF),
-        [pfConfigurable]);
-      FPrototypeMembers := Members.ToDefinitions;
-    finally
-      Members.Free;
-    end;
+  Members := TGocciaMemberCollection.Create;
+  try
+    Members.AddNamedMethod('deref', WeakRefDeref, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype, gmfNotConstructable]);
+    Members.AddSymbolDataProperty(
+      TGocciaSymbolValue.WellKnownToStringTag,
+      TGocciaStringLiteralValue.Create(CONSTRUCTOR_WEAK_REF),
+      [pfConfigurable]);
+    PrototypeMembers := Members.ToDefinitions;
+  finally
+    Members.Free;
   end;
-  RegisterMemberDefinitions(Shared.Prototype, FPrototypeMembers);
+  RegisterMemberDefinitions(Shared.Prototype, PrototypeMembers);
 end;
 
 class procedure TGocciaWeakRefValue.ExposePrototype(
@@ -125,8 +128,13 @@ procedure TGocciaWeakRefValue.InitializeNativeFromArguments(
 begin
   FTarget := AArguments.GetElement(0);
   RequireCanBeHeldWeakly(FTarget, CONSTRUCTOR_WEAK_REF);
+  // A live WeakRef holds a weak target the GC must clear when it dies, so
+  // count it as a weak container (the prototype host has no target).
   if Assigned(TGarbageCollector.Instance) then
+  begin
     TGarbageCollector.Instance.AddKeptObject(FTarget);
+    TGarbageCollector.Instance.RegisterWeakContainer(Self);
+  end;
 end;
 
 procedure TGocciaWeakRefValue.MarkReferences;

@@ -98,10 +98,6 @@ uses
   Goccia.Values.SymbolValue,
   Goccia.Values.ToObject;
 
-threadvar
-  FPrototypeMembers: TArray<TGocciaMemberDefinition>;
-  FStaticMembers: TArray<TGocciaMemberDefinition>;
-
 type
   TRegexReplacementCapture = record
     Value: TGocciaValue;
@@ -559,6 +555,8 @@ constructor TGocciaGlobalRegExp.Create(const AName: string;
   const AObjectPrototype: TGocciaObjectValue);
 var
   Members: TGocciaMemberCollection;
+  PrototypeMembers: TArray<TGocciaMemberDefinition>;
+  StaticMembers: TArray<TGocciaMemberDefinition>;
 begin
   inherited Create(AName, AScope, AThrowError);
 
@@ -566,57 +564,54 @@ begin
   if Assigned(TGarbageCollector.Instance) then
     TGarbageCollector.Instance.PinObject(FRegExpPrototype);
 
-  if Length(FPrototypeMembers) = 0 then
-  begin
-    Members := TGocciaMemberCollection.Create;
-    try
-      Members.AddNamedMethod('exec', RegExpExec, 1, gmkPrototypeMethod,
-        [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('test', RegExpTest, 1, gmkPrototypeMethod,
-        [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('toString', RegExpToStringMethod, 0,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddSymbolMethod(TGocciaSymbolValue.WellKnownMatch,
-        '[Symbol.match]', RegExpSymbolMatch, 1,
-        [pfConfigurable, pfWritable], [gmfNoFunctionPrototype]);
-      Members.AddSymbolMethod(TGocciaSymbolValue.WellKnownMatchAll,
-        '[Symbol.matchAll]', RegExpSymbolMatchAll, 1,
-        [pfConfigurable, pfWritable], [gmfNoFunctionPrototype]);
-      Members.AddSymbolMethod(TGocciaSymbolValue.WellKnownReplace,
-        '[Symbol.replace]', RegExpSymbolReplace, 2,
-        [pfConfigurable, pfWritable], [gmfNoFunctionPrototype]);
-      Members.AddSymbolMethod(TGocciaSymbolValue.WellKnownSearch,
-        '[Symbol.search]', RegExpSymbolSearch, 1,
-        [pfConfigurable, pfWritable], [gmfNoFunctionPrototype]);
-      Members.AddSymbolMethod(TGocciaSymbolValue.WellKnownSplit,
-        '[Symbol.split]', RegExpSymbolSplit, 2,
-        [pfConfigurable, pfWritable], [gmfNoFunctionPrototype]);
-      Members.AddAccessor(PROP_SOURCE, RegExpSourceGetter, nil,
-        [pfConfigurable]);
-      Members.AddAccessor(PROP_FLAGS, RegExpFlagsGetter, nil,
-        [pfConfigurable]);
-      Members.AddAccessor(PROP_GLOBAL, RegExpGlobalGetter, nil,
-        [pfConfigurable]);
-      Members.AddAccessor(PROP_IGNORE_CASE, RegExpIgnoreCaseGetter, nil,
-        [pfConfigurable]);
-      Members.AddAccessor(PROP_MULTILINE, RegExpMultilineGetter, nil,
-        [pfConfigurable]);
-      Members.AddAccessor(PROP_DOT_ALL, RegExpDotAllGetter, nil,
-        [pfConfigurable]);
-      Members.AddAccessor(PROP_UNICODE, RegExpUnicodeGetter, nil,
-        [pfConfigurable]);
-      Members.AddAccessor(PROP_STICKY, RegExpStickyGetter, nil,
-        [pfConfigurable]);
-      Members.AddAccessor(PROP_UNICODE_SETS, RegExpUnicodeSetsGetter, nil,
-        [pfConfigurable]);
-      Members.AddAccessor(PROP_HAS_INDICES, RegExpHasIndicesGetter, nil,
-        [pfConfigurable]);
-      FPrototypeMembers := Members.ToDefinitions;
-    finally
-      Members.Free;
-    end;
+  Members := TGocciaMemberCollection.Create;
+  try
+    Members.AddNamedMethod('exec', RegExpExec, 1, gmkPrototypeMethod,
+      [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod('test', RegExpTest, 1, gmkPrototypeMethod,
+      [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod('toString', RegExpToStringMethod, 0,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddSymbolMethod(TGocciaSymbolValue.WellKnownMatch,
+      '[Symbol.match]', RegExpSymbolMatch, 1,
+      [pfConfigurable, pfWritable], [gmfNoFunctionPrototype]);
+    Members.AddSymbolMethod(TGocciaSymbolValue.WellKnownMatchAll,
+      '[Symbol.matchAll]', RegExpSymbolMatchAll, 1,
+      [pfConfigurable, pfWritable], [gmfNoFunctionPrototype]);
+    Members.AddSymbolMethod(TGocciaSymbolValue.WellKnownReplace,
+      '[Symbol.replace]', RegExpSymbolReplace, 2,
+      [pfConfigurable, pfWritable], [gmfNoFunctionPrototype]);
+    Members.AddSymbolMethod(TGocciaSymbolValue.WellKnownSearch,
+      '[Symbol.search]', RegExpSymbolSearch, 1,
+      [pfConfigurable, pfWritable], [gmfNoFunctionPrototype]);
+    Members.AddSymbolMethod(TGocciaSymbolValue.WellKnownSplit,
+      '[Symbol.split]', RegExpSymbolSplit, 2,
+      [pfConfigurable, pfWritable], [gmfNoFunctionPrototype]);
+    Members.AddAccessor(PROP_SOURCE, RegExpSourceGetter, nil,
+      [pfConfigurable]);
+    Members.AddAccessor(PROP_FLAGS, RegExpFlagsGetter, nil,
+      [pfConfigurable]);
+    Members.AddAccessor(PROP_GLOBAL, RegExpGlobalGetter, nil,
+      [pfConfigurable]);
+    Members.AddAccessor(PROP_IGNORE_CASE, RegExpIgnoreCaseGetter, nil,
+      [pfConfigurable]);
+    Members.AddAccessor(PROP_MULTILINE, RegExpMultilineGetter, nil,
+      [pfConfigurable]);
+    Members.AddAccessor(PROP_DOT_ALL, RegExpDotAllGetter, nil,
+      [pfConfigurable]);
+    Members.AddAccessor(PROP_UNICODE, RegExpUnicodeGetter, nil,
+      [pfConfigurable]);
+    Members.AddAccessor(PROP_STICKY, RegExpStickyGetter, nil,
+      [pfConfigurable]);
+    Members.AddAccessor(PROP_UNICODE_SETS, RegExpUnicodeSetsGetter, nil,
+      [pfConfigurable]);
+    Members.AddAccessor(PROP_HAS_INDICES, RegExpHasIndicesGetter, nil,
+      [pfConfigurable]);
+    PrototypeMembers := Members.ToDefinitions;
+  finally
+    Members.Free;
   end;
-  RegisterMemberDefinitions(FRegExpPrototype, FPrototypeMembers);
+  RegisterMemberDefinitions(FRegExpPrototype, PrototypeMembers);
 
   SetRegExpPrototype(FRegExpPrototype);
 
@@ -633,17 +628,14 @@ begin
   FRegExpPrototype.DefineProperty(PROP_CONSTRUCTOR,
     TGocciaPropertyDescriptorData.Create(FRegExpConstructor, [pfConfigurable, pfWritable]));
 
-  if Length(FStaticMembers) = 0 then
-  begin
-    Members := TGocciaMemberCollection.Create;
-    try
-      Members.AddMethod(RegExpEscape, 1, gmkStaticMethod);
-      FStaticMembers := Members.ToDefinitions;
-    finally
-      Members.Free;
-    end;
+  Members := TGocciaMemberCollection.Create;
+  try
+    Members.AddMethod(RegExpEscape, 1, gmkStaticMethod);
+    StaticMembers := Members.ToDefinitions;
+  finally
+    Members.Free;
   end;
-  RegisterMemberDefinitions(FRegExpConstructor, FStaticMembers);
+  RegisterMemberDefinitions(FRegExpConstructor, StaticMembers);
 
   AScope.DefineLexicalBinding(AName, FRegExpConstructor, dtConst, True);
 end;

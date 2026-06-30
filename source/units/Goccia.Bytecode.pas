@@ -135,7 +135,10 @@ const
   //   v65 -> v66: added long-name global var declaration and dynamic
   //               static/private field definition opcodes for oversized
   //               test262 identifier/class-field generated sources.
-  GOCCIA_FORMAT_VERSION = 66;
+  //   v66 -> v67: added OP_GET_IMPORT_BINDING so bytecode rejects a named
+  //               import of a missing export at its use site, matching the
+  //               interpreter's link-time SyntaxError (ADR 0014).
+  GOCCIA_FORMAT_VERSION = 67;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   // OP_DEFINE_GLOBAL_CONST operand B declaration modes.
   GLOBAL_DEFINE_VAR = 0;
@@ -166,6 +169,10 @@ const
   CALL_FLAG_SPREAD = 1;
   CALL_FLAG_TRUSTED = 2;
   CALL_FLAG_DIRECT_EVAL = 4;
+  // ES2026 §15.10 Tail Position Calls: the call sits in tail position of its
+  // enclosing function, so the VM reuses the current call frame instead of
+  // pushing a new one (PrepareForTailCall).
+  CALL_FLAG_TAIL = 8;
 
   // Sentinel for the C operand of OP_VALIDATE_VALUE / VALIDATE_OP_REQUIRE_ITERABLE.
   //   0..254 = exact element count to consume (0 = empty pattern, drain
@@ -379,7 +386,8 @@ type
     OP_SUPER_SET_BASE = 209,
     OP_DEFINE_GLOBAL_VAR_DECL_LONG = 210,
     OP_DEFINE_STATIC_PROP_DYNAMIC = 211,
-    OP_PUSH_FINALLY_HANDLER = 212
+    OP_PUSH_FINALLY_HANDLER = 212,
+    OP_GET_IMPORT_BINDING = 213
   );
 
 function EncodeABC(const AOp: TGocciaOpCode; const A, B, C: UInt8): UInt32; inline;

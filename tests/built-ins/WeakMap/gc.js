@@ -29,6 +29,49 @@ describe.runIf(hasGoccia)("WeakMap GC behavior", () => {
     expect(map.get(liveKey).marker).toBe("live");
   });
 
+  test("walks a deep key-as-value chain after GC without quadratic blowup", () => {
+    const map = new WeakMap();
+    const head = {};
+    const length = 60000;
+    let key = head;
+    Array.from({ length }).forEach(() => {
+      const next = {};
+      map.set(key, next);
+      key = next;
+    });
+    Goccia.gc();
+
+    let walked = 0;
+    let node = head;
+    Array.from({ length: length + 1 }).forEach(() => {
+      if (node !== undefined) {
+        walked = walked + 1;
+        node = map.get(node);
+      }
+    });
+    expect(walked).toBe(length + 1);
+    expect(node).toBe(undefined);
+  });
+
+  test("collects an unreachable deep chain so keys are not retained", () => {
+    Goccia.gc();
+    const baseline = Goccia.gc.bytesAllocated;
+
+    (() => {
+      const map = new WeakMap();
+      let key = {};
+      Array.from({ length: 60000 }).forEach(() => {
+        const next = {};
+        map.set(key, next);
+        key = next;
+      });
+      expect(Goccia.gc.bytesAllocated).toBeGreaterThan(baseline);
+    })();
+
+    Goccia.gc();
+    expect(Goccia.gc.bytesAllocated).toBeLessThan(baseline + 1024 * 1024);
+  });
+
   test("constructor roots current set method across iterable user code", () => {
     const original = WeakMap.prototype.set;
     const key = {};

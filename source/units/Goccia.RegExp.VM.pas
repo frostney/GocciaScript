@@ -22,12 +22,20 @@ function ExecuteRegExpVM(const AProgram: TRegExpProgram;
   const AInput: string; const AStartIndex: Integer;
   const ARequireStart: Boolean; out AResult: TRegExpVMResult): Boolean;
 
+{ Release the per-thread input-decode memo. Registered with
+  Goccia.ThreadCleanupRegistry from this unit's initialization, so the drain
+  releases it on worker exit (ShutdownThreadRuntime) and on the main thread (the
+  registry's finalization), because FPC does not auto-finalize managed
+  threadvars at thread exit. }
+procedure ClearRegExpInputMemo;
+
 implementation
 
 uses
   TextSemantics,
 
   Goccia.RegExp.UnicodeData,
+  Goccia.ThreadCleanupRegistry,
   Goccia.Timeout;
 
 const
@@ -1051,6 +1059,25 @@ begin
   end;
 end;
 
+// Per-thread memo of the most recently decoded subject. Global match/replace/
+// split/matchAll re-enter ExecuteRegExpVM once per match against the same
+// immutable subject string, so caching the decode avoids re-decoding and
+// re-allocating the whole input on every match (O(matches * length) -> O(length)).
+// Identity-keyed (the driver passes the same string instance each iteration),
+// so the hit check is O(1). Pure optimization — clearing it is always safe.
+// Single-entry: a different subject replaces the retained pair via managed
+// assignment (the prior string/array is released, so the cache never grows).
+// FPC does not auto-finalize managed threadvars at thread exit. ClearRegExpInputMemo
+// is registered with Goccia.ThreadCleanupRegistry from this unit's initialization,
+// so the registry drain releases each thread's pair on worker exit
+// (ShutdownThreadRuntime) and the main thread's on process shutdown (the
+// registry's finalization) — no thread retains a residual.
+threadvar
+  GRegExpInputMemoStr: string;
+  GRegExpInputMemoUnits: array of Cardinal;
+  GRegExpInputMemoLength: Integer;
+  GRegExpInputMemoValid: Boolean;
+
 function ExecuteRegExpVM(const AProgram: TRegExpProgram;
   const AInput: string; const AStartIndex: Integer;
   const ARequireStart: Boolean; out AResult: TRegExpVMResult): Boolean;
@@ -1062,10 +1089,25 @@ var
 begin
   Result := False;
   AResult.Matched := False;
-  if (not ARequireStart) and StartCheckIsASCIIOnly(AProgram.StartCheck) and
-     not RawInputHasASCIIStartCandidate(AProgram.StartCheck, AInput) then
-    Exit;
-  BuildRegExpInput(AInput, Input);
+  if GRegExpInputMemoValid and (Pointer(AInput) = Pointer(GRegExpInputMemoStr)) then
+  begin
+    // Cache hit: reuse the decoded units. The raw-input start-candidate
+    // pre-scan is redundant here — FindNextStartCandidate below scans the
+    // decoded units and yields the same no-candidate result.
+    Input.Units := GRegExpInputMemoUnits;
+    Input.Length := GRegExpInputMemoLength;
+  end
+  else
+  begin
+    if (not ARequireStart) and StartCheckIsASCIIOnly(AProgram.StartCheck) and
+       not RawInputHasASCIIStartCandidate(AProgram.StartCheck, AInput) then
+      Exit;
+    BuildRegExpInput(AInput, Input);
+    GRegExpInputMemoStr := AInput;
+    GRegExpInputMemoUnits := Input.Units;
+    GRegExpInputMemoLength := Input.Length;
+    GRegExpInputMemoValid := True;
+  end;
   SlotCount := (AProgram.CaptureCount + 1) * 2;
   SetLength(Slots, SlotCount);
   StartPos := NormalizeInputIndex(Input, AStartIndex, AProgram.FullUnicode);
@@ -1110,5 +1152,29 @@ begin
         AProgram.FullUnicode);
   end;
 end;
+
+// FPC does not auto-finalize managed threadvars at thread exit; registered in
+// this unit's initialization so the registry drain releases this thread's memo
+// on worker exit and at main-thread shutdown, keeping its retained subject/units
+// from leaking.
+procedure ClearRegExpInputMemo;
+begin
+  GRegExpInputMemoStr := '';
+  SetLength(GRegExpInputMemoUnits, 0);
+  GRegExpInputMemoLength := 0;
+  GRegExpInputMemoValid := False;
+end;
+
+initialization
+  // FPC does not auto-finalize managed threadvars at thread exit. Register this
+  // unit's regex-input memo, and also the is-ASCII memo owned by the shared
+  // TextSemantics unit: TextSemantics is generic infrastructure that stays free
+  // of engine dependencies, so its per-thread memo is registered here instead
+  // (every engine binary links the regex VM). See ClearAsciiMemo in
+  // source/shared/TextSemantics.pas. The registry drain releases both memos on
+  // worker exit (ShutdownThreadRuntime) and on the main thread
+  // (Goccia.ThreadCleanupRegistry's finalization).
+  RegisterThreadvarCleanup(@ClearRegExpInputMemo);
+  RegisterThreadvarCleanup(@ClearAsciiMemo);
 
 end.

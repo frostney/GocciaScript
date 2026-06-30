@@ -2,6 +2,18 @@
 description: Number operation benchmarks
 ---*/
 
+// Hoisted so the bench measures FormatDouble's shortest-round-trip path rather
+// than the per-iteration cost of rebuilding the list and recomputing constants.
+const ToStringNonIntegerSamples = [
+  0.1 + 0.2,
+  Math.PI,
+  Math.sqrt(2),
+  Math.E,
+  123.456789012345,
+  9.18742501042e222,
+  5.7016275775556e-8,
+];
+
 suite("number creation", () => {
   bench("integer arithmetic", {
     run: () => {
@@ -51,6 +63,14 @@ suite("number prototype methods", () => {
       const a = num.toString();
       const b = num.toString(16);
       const c = num.toString(10);
+    },
+  });
+
+  bench("toString non-integer (shortest round-trip)", {
+    run: () => {
+      let total = 0;
+      for (const x of ToStringNonIntegerSamples) total += x.toString().length;
+      return total;
     },
   });
 

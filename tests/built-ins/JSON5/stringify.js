@@ -85,6 +85,25 @@ describe.runIf(hasJSON5)("JSON5.stringify", () => {
     expect(JSON5.stringify([1], null, "\t")).toBe("[\n\t1,\n]");
   });
 
+  test("pretty-prints deeply nested objects with a trailing comma at each level", () => {
+    const makeNested = (depth) =>
+      Array.from({ length: depth }).reduce((acc) => ({ child: acc }), {
+        leaf: true,
+      });
+    const expected = [
+      "{",
+      "  child: {",
+      "    child: {",
+      "      child: {",
+      "        leaf: true,",
+      "      },",
+      "    },",
+      "  },",
+      "}",
+    ].join("\n");
+    expect(JSON5.stringify(makeNested(3), null, 2)).toBe(expected);
+  });
+
   test("supports replacer arrays and functions", () => {
     expect(JSON5.stringify({ a: 1, b: 2, 3: 3 }, ["a", 3])).toBe("{a:1,'3':3}");
     expect(JSON5.stringify({ a: { a: 1, b: 2 }, b: { a: 3 } }, ["a"])).toBe(

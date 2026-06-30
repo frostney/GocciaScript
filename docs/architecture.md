@@ -9,7 +9,7 @@
 - **Shared source pipeline** — Preprocessors, lexer, parser, warning data, source maps, and AST artifacts are shared between execution modes
 - **Shared execution substrate** — Both execution modes share the same value types, core scope model, runtime extension mechanism, and mark-and-sweep GC
 - **Goccia-specific** — The bytecode VM operates directly on `TGocciaValue`, not a generic VM abstraction
-- **No cross-dependency** — The bytecode executor has no dependency on the interpreter or evaluator units
+- **Near-independent executors** — The `TGocciaBytecodeExecutor` unit does not depend on the interpreter or evaluator units; the VM it drives still delegates direct `eval` to the tree-walk evaluator, the one remaining cross-dependency
 
 ## Overview
 
@@ -116,7 +116,7 @@ TGocciaExecutor (abstract — Goccia.Executor.pas)
 │     Wraps TGocciaInterpreter for tree-walk execution
 └── TGocciaBytecodeExecutor (Goccia.Executor.Bytecode.pas)
       Compiles to bytecode and runs on TGocciaVM
-      No dependency on Goccia.Interpreter or Goccia.Evaluator
+      Executor unit is evaluator-free; the VM still uses Goccia.Evaluator for direct eval
 ```
 
 The engine always creates a `TGocciaInterpreter` for bootstrapping (global scope creation, built-in registration, shim loading). The executor receives the bootstrapped global scope and module loader via `Initialize`, then handles all program and module body execution independently.

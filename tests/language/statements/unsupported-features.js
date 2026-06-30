@@ -43,6 +43,32 @@ describe.runIf(hasGoccia)("unsupported features are skipped", () => {
     expect(x).toBe(1);
   });
 
+  test("for loop with interpolated template literal in block body is skipped", () => {
+    const obj = {};
+    for (let level = 0; level < 2; level++) {
+      obj[`u${level}`] = level;
+    }
+    expect(Object.keys(obj).length).toBe(0);
+  });
+
+  test("for loop with interpolated template literal in non-block body is skipped", () => {
+    const obj = {};
+    for (let i = 0; i < 2; i++) obj[`u${i}`] = i;
+    expect(Object.keys(obj).length).toBe(0);
+  });
+
+  test("for loop with interpolated template literal in its header is skipped", () => {
+    let x = 1;
+    for (let i = `s${0}`.length; i < 2; i++) { x = 99; }
+    expect(x).toBe(1);
+  });
+
+  test("for loop with nested interpolated template literals is skipped", () => {
+    const parts = [];
+    for (let i = 0; i < 2; i++) { parts.push(`a${`b${i}c`}d`); }
+    expect(parts.length).toBe(0);
+  });
+
   test("code after skipped while loop executes", () => {
     let x = 1;
     while (x < 10) { x = 99; }

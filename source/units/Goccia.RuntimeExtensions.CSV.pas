@@ -8,19 +8,22 @@ uses
   Classes,
 
   Goccia.Builtins.CSV,
-  Goccia.Modules,
-  Goccia.Runtime;
+  Goccia.Runtime,
+  Goccia.RuntimeExtensions.IndexedDataModule,
+  Goccia.Values.ArrayValue;
 
 type
-  TGocciaCSVRuntimeExtension = class(TGocciaRuntimeExtension)
+  TGocciaCSVRuntimeExtension = class(TGocciaIndexedDataModuleRuntimeExtension)
   private
     FBuiltinCSV: TGocciaCSVBuiltin;
+  protected
+    function MatchesModulePath(const AResolvedPath: string): Boolean; override;
+    function ParseModuleRecords(const AContent: UTF8String;
+      const AResolvedPath: string): TGocciaArrayValue; override;
   public
     procedure Attach(const ARuntime: TGocciaRuntimeCore); override;
     procedure Detach; override;
     procedure AddModuleExtensions(const AExtensions: TStrings); override;
-    function TryLoadModule(const AResolvedPath: string;
-      out AModule: TGocciaModule): Boolean; override;
   end;
 
 implementation
@@ -30,9 +33,7 @@ uses
 
   Goccia.CSV,
   Goccia.Error,
-  Goccia.FileExtensions,
-  Goccia.Modules.ContentProvider,
-  Goccia.Values.ArrayValue;
+  Goccia.FileExtensions;
 
 procedure TGocciaCSVRuntimeExtension.Attach(const ARuntime: TGocciaRuntimeCore);
 begin
@@ -54,57 +55,30 @@ begin
   AExtensions.Add(EXT_CSV);
 end;
 
-function TGocciaCSVRuntimeExtension.TryLoadModule(const AResolvedPath: string;
-  out AModule: TGocciaModule): Boolean;
-var
-  Content: TGocciaModuleContent;
-  CSVParser: TGocciaCSVParser;
-  CSVRecords: TGocciaArrayValue;
-  I: Integer;
-  LoadSucceeded: Boolean;
+function TGocciaCSVRuntimeExtension.MatchesModulePath(
+  const AResolvedPath: string): Boolean;
 begin
-  AModule := nil;
   Result := IsCSVExtension(ExtractFileExt(AResolvedPath));
-  if not Result then
-    Exit;
+end;
 
-  Content := Runtime.Engine.ModuleLoader.ContentProvider.LoadContent(
-    AResolvedPath);
-  CSVRecords := nil;
+function TGocciaCSVRuntimeExtension.ParseModuleRecords(
+  const AContent: UTF8String; const AResolvedPath: string): TGocciaArrayValue;
+var
+  CSVParser: TGocciaCSVParser;
+begin
+  CSVParser := TGocciaCSVParser.Create;
   try
-    CSVParser := TGocciaCSVParser.Create;
     try
-      try
-        CSVRecords := CSVParser.Parse(Content.Text);
-      except
-        on E: EGocciaCSVParseError do
-          raise TGocciaRuntimeError.Create(
-            Format('Failed to parse CSV module "%s": %s',
-              [AResolvedPath, E.Message]),
-            0, 0, AResolvedPath, nil);
-      end;
-    finally
-      CSVParser.Free;
-    end;
-
-    AModule := TGocciaModule.Create(AResolvedPath);
-    AModule.LastModified := Content.LastModified;
-    LoadSucceeded := False;
-    try
-      for I := 0 to CSVRecords.Elements.Count - 1 do
-        AModule.ExportsTable.AddOrSetValue(IntToStr(I),
-          CSVRecords.Elements[I]);
-      LoadSucceeded := True;
-    finally
-      if not LoadSucceeded then
-      begin
-        AModule.Free;
-        AModule := nil;
-      end;
+      Result := CSVParser.Parse(AContent);
+    except
+      on E: EGocciaCSVParseError do
+        raise TGocciaRuntimeError.Create(
+          Format('Failed to parse CSV module "%s": %s',
+            [AResolvedPath, E.Message]),
+          0, 0, AResolvedPath, nil);
     end;
   finally
-    CSVRecords.Free;
-    Content.Free;
+    CSVParser.Free;
   end;
 end;
 

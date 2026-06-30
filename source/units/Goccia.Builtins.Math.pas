@@ -71,6 +71,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.Float16,
   Goccia.GarbageCollector,
+  Goccia.ThreadCleanupRegistry,
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassHelper,
   Goccia.Values.ErrorHelper,
@@ -82,6 +83,11 @@ uses
 
 threadvar
   FStaticMembers: TArray<TGocciaMemberDefinition>;
+
+procedure ClearThreadvarMembers;
+begin
+  SetLength(FStaticMembers, 0);
+end;
 
 { TGocciaMath }
 
@@ -1254,5 +1260,8 @@ begin
 
   Result := TGocciaNumberLiteralValue.Create(Sum + Compensation);
 end;
+
+initialization
+  RegisterThreadvarCleanup(@ClearThreadvarMembers);
 
 end.

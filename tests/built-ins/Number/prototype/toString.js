@@ -93,6 +93,22 @@ describe("Number.prototype.toString", () => {
     expect((0.0000001).toString()).toBe("1e-7");
   });
 
+  test("toString returns the shortest round-tripping form for computed fractional values", () => {
+    expect((0.1 + 0.2).toString()).toBe("0.30000000000000004");
+    expect((1 / 3).toString()).toBe("0.3333333333333333");
+    expect((2 / 3).toString()).toBe("0.6666666666666666");
+    expect(Math.PI.toString()).toBe("3.141592653589793");
+    expect(Math.sqrt(2).toString()).toBe("1.4142135623730951");
+  });
+
+  test("toString uses the fewest significant digits for scientific-notation values", () => {
+    expect(Number.MAX_VALUE.toString()).toBe("1.7976931348623157e+308");
+    expect((9.18742501042e222).toString()).toBe("9.18742501042e+222");
+    expect((6.1103717251161e201).toString()).toBe("6.1103717251161e+201");
+    expect((7.5183158306161e142).toString()).toBe("7.5183158306161e+142");
+    expect((5.7016275775556e-8).toString()).toBe("5.7016275775556e-8");
+  });
+
   test("String() coercion matches toString for large integers", () => {
     expect(String(1e15)).toBe("1000000000000000");
     expect(String(1e20)).toBe("100000000000000000000");
@@ -111,6 +127,16 @@ describe("Number.prototype.toString", () => {
     expect("" + 1e15).toBe("1000000000000000");
     expect("" + 1e20).toBe("100000000000000000000");
     expect("" + 1e21).toBe("1e+21");
+  });
+
+  test("String, template, and concatenation coercion share the non-integer shortest round-trip", () => {
+    expect(String(0.1 + 0.2)).toBe("0.30000000000000004");
+    expect(`${0.1 + 0.2}`).toBe("0.30000000000000004");
+    expect("" + (0.1 + 0.2)).toBe("0.30000000000000004");
+
+    expect(String(Math.PI)).toBe("3.141592653589793");
+    expect(`${Math.PI}`).toBe("3.141592653589793");
+    expect("" + Math.PI).toBe("3.141592653589793");
   });
 });
 

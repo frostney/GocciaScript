@@ -9,8 +9,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 env:
   FPC_VERSION: "3.2.2"
@@ -49,6 +48,7 @@ jobs:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Restore toolchain cache
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
@@ -281,6 +281,7 @@ jobs:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Download build
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -405,6 +406,7 @@ jobs:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Download build
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -486,6 +488,7 @@ jobs:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Download build
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -572,6 +575,7 @@ jobs:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Download build
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -606,6 +610,7 @@ jobs:
           ref: ${{ steps.test262-pin.outputs.sha }}
           path: test262-suite
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Run test262 conformance suite
         continue-on-error: true
@@ -755,6 +760,7 @@ jobs:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Download build
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -773,7 +779,10 @@ jobs:
           GOCCIA_BENCH_ROUNDS: 7
         run: ./build/GocciaBenchmarkRunner benchmarks ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --no-progress
 
-      - name: Run benchmarks and save baseline
+      # main/x86_64-linux emits JSON so the next step can validate the benchmark
+      # report shape. PR comparison no longer reads a cached baseline from here —
+      # each PR builds and benchmarks `main` on its own runner (issue #815).
+      - name: Run benchmarks (validate JSON output)
         if: github.ref == 'refs/heads/main' && matrix.target == 'x86_64-linux'
         env:
           GOCCIA_BENCH_CALIBRATION_MS: 100
@@ -812,13 +821,6 @@ jobs:
             sys.exit(1)
           PY
 
-      - name: Cache benchmark baseline
-        if: github.ref == 'refs/heads/main' && matrix.target == 'x86_64-linux'
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
-        with:
-          path: benchmark-${{ matrix.mode }}-results.json
-          key: benchmark-${{ matrix.mode }}-baseline-${{ github.sha }}
-
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         if: github.ref == 'refs/heads/main' && matrix.target == 'x86_64-linux' && matrix.mode == 'bytecode'
 
@@ -848,13 +850,6 @@ jobs:
             --profile-dir profile-baseline \
             --summary-output benchmark-profile-aggregate.json \
             --markdown-output benchmark-profile-aggregate.md
-
-      - name: Cache deterministic profile baseline
-        if: github.ref == 'refs/heads/main' && matrix.target == 'x86_64-linux' && matrix.mode == 'bytecode'
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
-        with:
-          path: profile-baseline/
-          key: profile-baseline-${{ github.sha }}
 
       - name: Upload benchmark profile
         if: github.ref == 'refs/heads/main' && matrix.target == 'x86_64-linux' && matrix.mode == 'bytecode' && hashFiles('benchmark-profile-aggregate.json') != '' && hashFiles('profile-baseline/**') != ''
@@ -911,6 +906,7 @@ jobs:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Download build
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -942,6 +938,9 @@ jobs:
       - name: Check embedded resource CLI behaviour
         run: bun run scripts/test-cli-embedded-resources.ts
 
+      - name: Check benchmark comparison logic
+        run: bun run scripts/test-benchmark-compare.ts
+
       - name: Check Windows TLS dependencies
         if: runner.os == 'Windows'
         shell: pwsh
@@ -970,6 +969,7 @@ jobs:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Download build
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -994,6 +994,8 @@ jobs:
       group: nightly-release
       cancel-in-progress: false
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     defaults:
       run:
         shell: bash
@@ -1001,6 +1003,7 @@ jobs:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Check if nightly already published today
         id: check
@@ -1088,12 +1091,15 @@ jobs:
     needs: [test, toml-compliance, json5-compliance, benchmark, cli]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     defaults:
       run:
         shell: bash
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
+          # Full history + tags so git-cliff can render the latest release section.
           fetch-depth: 0
 
       - name: Download all build artifacts
@@ -1159,39 +1165,3 @@ jobs:
           files: |
             gocciascript-*.tar.gz
             gocciascript-*.zip
-
-      - name: Generate full changelog
-        uses: orhun/git-cliff-action@f50e11560dce63f7c33227798f90b924471a88b5 # v4
-        with:
-          config: cliff.toml
-          args: -o CHANGELOG.md
-        env:
-          GITHUB_REPO: ${{ github.repository }}
-
-      - name: Open changelog PR
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          VERSION="${GITHUB_REF_NAME}"
-          BRANCH="changelog/${VERSION}"
-
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -B "$BRANCH" origin/main
-          git add CHANGELOG.md
-          if git diff --cached --quiet; then
-            echo "No changelog changes"
-          else
-            git commit -m "Update CHANGELOG.md for ${VERSION}"
-            git push --force-with-lease origin "$BRANCH"
-            if gh pr view "$BRANCH" --json state --jq .state 2>/dev/null | grep -q OPEN; then
-              echo "PR already exists for $BRANCH"
-            else
-              gh pr create \
-                --title "Update CHANGELOG.md for ${VERSION}" \
-                --body "Auto-generated changelog update for the ${VERSION} release." \
-                --base main \
-                --head "$BRANCH" \
-                --label internal
-            fi
-          fi

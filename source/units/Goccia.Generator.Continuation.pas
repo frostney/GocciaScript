@@ -218,6 +218,9 @@ uses
   Goccia.Values.SymbolValue;
 
 threadvar
+  // Non-owning "current continuation" pointer: GC-managed and save/restored
+  // around each generator run (nil at rest), so it is not a thread-exit leak
+  // (object-reference threadvar audit, #892).
   GCurrentContinuation: TGocciaGeneratorContinuation;
   GAsyncAwaitSuspensionDepth: Integer;
 

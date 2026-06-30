@@ -5,7 +5,7 @@
 ## Executive Summary
 
 - **Two execution modes** — tree-walk interpreter (default) and bytecode VM (`--mode=bytecode`), sharing the same source pipeline, runtime objects, and GC
-- **Executor abstraction** — `TGocciaBytecodeExecutor` implements `TGocciaExecutor` with no dependency on the interpreter or evaluator
+- **Executor abstraction** — `TGocciaBytecodeExecutor` implements `TGocciaExecutor` and drives only the compiler and VM; the one residual coupling is direct `eval`, which the VM still delegates to the tree-walk evaluator
 - **Goccia-owned VM** — executes directly on `TGocciaValue` with tagged `TGocciaRegister` values; not a generic VM layer
 - **Opcode space** — core instructions (0-127) for hot paths, non-core generic ops (128-166), and semantic/helper instructions (167-255) for colder operations like imports/exports
 - **Binary format** — `.gbc` files with little-endian encoding, `GBC\0` magic, and version constant
@@ -17,7 +17,7 @@ GocciaScript has two execution modes:
 - **Interpreter mode**: tree-walk execution over the AST via `TGocciaInterpreterExecutor`
 - **Bytecode mode**: AST compilation to Goccia bytecode, then execution on `TGocciaVM` via `TGocciaBytecodeExecutor`
 
-Both execution modes are implementations of `TGocciaExecutor` (see [Architecture](architecture.md#executor-architecture)). The single `TGocciaEngine` class bootstraps the core language environment (global scope, core built-ins, shims) and delegates execution to whichever executor is configured. Optional runtime globals are attached through runtime extensions. The bytecode executor has no dependency on the interpreter or evaluator — it only uses the compiler and VM.
+Both execution modes are implementations of `TGocciaExecutor` (see [Architecture](architecture.md#executor-architecture)). The single `TGocciaEngine` class bootstraps the core language environment (global scope, core built-ins, shims) and delegates execution to whichever executor is configured. Optional runtime globals are attached through runtime extensions. The `TGocciaBytecodeExecutor` unit itself depends only on the compiler and VM; the VM it drives, however, still calls the tree-walk evaluator for direct `eval` (`TGocciaVM.ExecuteDirectEval` → `EvaluateEvalProgram`), so the bytecode path is not yet fully independent of the evaluator.
 
 ## Pipeline
 
@@ -114,8 +114,11 @@ Recent VM cleanup and optimization work has focused on reducing per-instruction 
 - cache and reuse shared primitive values directly in registers
 - avoid eager allocation of closure cells for uncaptured locals
 - pre-size argument collections for calls and construction
+- hold call arguments in a stack-disciplined arena window (`FArgumentStack` with a base+count window, mirroring the register and local-cell stacks) instead of a per-call dynamic array, so an ordinary call performs no argument-array allocation; frame save/restore and native re-entry store `(base, count)` rather than copying
+- defer stack-trace frames on the hot call path: push the function-template pointer rather than copying its name/source strings, and materialise them only when a trace is captured (see [ADR 0074](adr/0074-deferred-bytecode-call-stack-frames.md))
 - use unchecked template access in the dispatch loop where bounds are already guaranteed
 - keep fast register access limited to proven hot/simple paths; local-slot and complex property paths should only move to fast access when they stay correct and measurably improve throughput
+- the register, local-cell, and argument window fills are GC-safety/correctness critical (the GC marks the whole live window): they are deliberately retained rather than trimmed
 
 ### Inline Caches
 
@@ -129,7 +132,7 @@ Hits and fills serve only exact-class `TGocciaObjectValue` / `TGocciaVMLiteralOb
 
 Cached pointers (scope, shape) are compared for identity only and never dereferenced. Scope cache entries carry an entry-version stamp against allocator address reuse; shape entries need none, because shapes are never freed within an engine's lifetime, function templates never outlive their engine, and cross-realm maps stop shape tracking before a foreign realm can cache their owner layout.
 
-Computed property access (`OP_ARRAY_GET`/`OP_ARRAY_SET`, `OP_GET_INDEX`/`OP_SET_INDEX`, `OP_DEL_INDEX`) shares one key-classification and receiver-dispatch implementation (`ClassifyPropertyKey` plus the `ExecGet/ExecSet/ExecDeleteComputedProperty` cores in `Goccia.VM.pas`); per-opcode semantic differences are explicit `TGocciaComputedAccessOptions`, not divergent copies.
+Computed property access (`OP_ARRAY_GET`/`OP_ARRAY_SET`, `OP_GET_INDEX`/`OP_SET_INDEX`, `OP_DEL_INDEX`) shares one key-classification and receiver-dispatch implementation (`ClassifyPropertyKey` plus the `ExecGet/ExecSet/ExecDeleteComputedProperty` cores in `Goccia.VM.pas`); per-opcode semantic differences are explicit `TGocciaComputedAccessOptions`, not divergent copies. A non-BigInt `TGocciaTypedArrayValue` receiver at an array-index key takes an unboxed element fast path (`TryReadIndexedScalar`/`TryWriteIndexedScalar`): reads move the element straight into a register scalar and numeric-scalar writes store it directly, so neither allocates the heap `TGocciaNumberLiteralValue` or index-name string the generic object branch would. BigInt kinds, non-index keys, and non-scalar write values fall through to the boxed path; an out-of-range or detached **read** does too (yielding `undefined`). A non-BigInt scalar **write**, however, keeps its integer-indexed exotic semantics in place even for an out-of-range index or immutable backing buffer — the store is skipped and reported as successful, never boxed. All value semantics are preserved, including the observable `ToNumber` ordering of integer-indexed `[[Set]]`.
 
 The current optimization target is reducing bytecode-mode suite time further without diverging interpreter and bytecode semantics.
 

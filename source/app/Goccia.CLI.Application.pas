@@ -12,6 +12,7 @@ uses
   CLI.Options,
 
   Goccia.Application,
+  Goccia.Builtins.GlobalShadowRealm,
   Goccia.CLI.Options,
   Goccia.Engine,
   Goccia.Executor,
@@ -571,6 +572,10 @@ begin
   { unsafe-function-constructor: CLI flag > per-file config > root config > default (false) }
   AEngine.FunctionConstructor.Enabled := ResolveFlagOption(
     AEngineOptions.UnsafeFunctionConstructor, AFileConfig);
+
+  { unsafe-shadowrealm: CLI flag > per-file config > root config > default (false) }
+  if ResolveFlagOption(AEngineOptions.UnsafeShadowRealm, AFileConfig) then
+    EnableShadowRealm(AEngine);
 
   { max-memory: CLI option > per-file config > root config > system default.
     Always set explicitly so a previous file's per-file override does

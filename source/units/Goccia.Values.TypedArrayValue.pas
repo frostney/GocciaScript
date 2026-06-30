@@ -44,7 +44,9 @@ type
     function HasValidBackingRange(const ALength: Integer): Boolean;
     function HasValidElementIndex(const AIndex: Integer): Boolean;
 
+    function ReadElementUnchecked(const AIndex: Integer): Double;
     function ReadElement(const AIndex: Integer): Double;
+    procedure WriteElementUnchecked(const AIndex: Integer; const AValue: Double);
     procedure WriteElement(const AIndex: Integer; const AValue: Double);
     procedure WriteNumberLiteral(const AIndex: Integer; const ANum: TGocciaNumberLiteralValue);
 
@@ -98,6 +100,18 @@ type
     property ByteOffset: Integer read FByteOffset;
     property Length: Integer read GetLength;
     property Kind: TGocciaTypedArrayKind read FKind;
+
+    // Boxing-free element fast paths for the bytecode VM computed-access cores.
+    // TryReadIndexedScalar yields the element as a raw Double for non-BigInt kinds
+    // and a valid in-range index; it returns False (caller falls back to GetProperty)
+    // for BigInt kinds and out-of-range indices. TryWriteIndexedScalar stores an
+    // already-numeric scalar value (ToNumber on a Number is side-effect-free, so the
+    // observable conversion the spec requires is preserved) with the same coercion as
+    // WriteNumberLiteral; it returns False for BigInt kinds so the caller takes the
+    // throwing slow path, and True (handled) for non-BigInt kinds whether or not the
+    // index is in range or the backing buffer is immutable.
+    function TryReadIndexedScalar(const AIndex: Integer; out AValue: Double): Boolean;
+    function TryWriteIndexedScalar(const AIndex: Integer; const AValue: Double): Boolean;
   published
     function TypedArrayAt(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function TypedArrayFill(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -170,6 +184,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.Scope,
+  Goccia.ThreadCleanupRegistry,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.BigIntValue,
@@ -190,6 +205,11 @@ var
 threadvar
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
   FUint8Prototype: TGocciaObjectValue;
+
+procedure ClearThreadvarMembers;
+begin
+  SetLength(FPrototypeMembers, 0);
+end;
 
 const
   TYPED_ARRAY_LITTLE_ENDIAN = True;
@@ -395,80 +415,78 @@ end;
 
 { Element read/write via buffer }
 
-function TGocciaTypedArrayValue.ReadElement(const AIndex: Integer): Double;
+function TGocciaTypedArrayValue.ReadElementUnchecked(const AIndex: Integer): Double;
 var
   Offset: Integer;
 begin
-  if not HasValidElementIndex(AIndex) then
-    Exit(0);
-
+  // Precondition: AIndex is in range (the caller validated HasValidElementIndex).
+  // One sync + read, with no redundant bounds re-check on the hot element path.
   SyncBufferData;
   Offset := FByteOffset + AIndex * BytesPerElement(FKind);
   Result := ReadBinaryNumberElement(FBufferData, Offset,
     ToBinaryElementKind(FKind), TYPED_ARRAY_LITTLE_ENDIAN);
 end;
 
-procedure TGocciaTypedArrayValue.WriteElement(const AIndex: Integer; const AValue: Double);
+function TGocciaTypedArrayValue.ReadElement(const AIndex: Integer): Double;
+begin
+  if not HasValidElementIndex(AIndex) then
+    Exit(0);
+  Result := ReadElementUnchecked(AIndex);
+end;
+
+procedure TGocciaTypedArrayValue.WriteElementUnchecked(const AIndex: Integer; const AValue: Double);
 var
   Offset: Integer;
 begin
-  if not HasValidElementIndex(AIndex) then
-    Exit;
-
+  // Precondition: AIndex is in range (the caller validated HasValidElementIndex).
+  // Integer coercion of the ToNumber result — non-finite -> 0 for integer kinds,
+  // Uint8Clamped clamping +Infinity to 255, float kinds verbatim — is performed by
+  // WriteBinaryNumberElement, so it is not repeated here. One sync + write.
   SyncBufferData;
   Offset := FByteOffset + AIndex * BytesPerElement(FKind);
   WriteBinaryNumberElement(FBufferData, Offset, ToBinaryElementKind(FKind),
     AValue, TYPED_ARRAY_LITTLE_ENDIAN);
 end;
 
-procedure TGocciaTypedArrayValue.WriteNumberLiteral(const AIndex: Integer; const ANum: TGocciaNumberLiteralValue);
-var
-  Offset: Integer;
+procedure TGocciaTypedArrayValue.WriteElement(const AIndex: Integer; const AValue: Double);
 begin
   if not HasValidElementIndex(AIndex) then
     Exit;
+  WriteElementUnchecked(AIndex, AValue);
+end;
 
-  SyncBufferData;
-  if ANum.IsNaN then
-  begin
-    if IsFloatKind(FKind) then
-    begin
-      Offset := FByteOffset + AIndex * BytesPerElement(FKind);
-      WriteBinaryNumberElement(FBufferData, Offset, ToBinaryElementKind(FKind),
-        ANum.Value, TYPED_ARRAY_LITTLE_ENDIAN);
-    end
-    else
-      WriteElement(AIndex, 0);
-  end
-  else if ANum.IsInfinity then
-  begin
-    case FKind of
-      takUint8Clamped: WriteElement(AIndex, 255);
-      takFloat16, takFloat32, takFloat64:
-      begin
-        Offset := FByteOffset + AIndex * BytesPerElement(FKind);
-        WriteBinaryNumberElement(FBufferData, Offset, ToBinaryElementKind(FKind),
-          ANum.Value, TYPED_ARRAY_LITTLE_ENDIAN);
-      end;
-    else
-      WriteElement(AIndex, 0);
-    end;
-  end
-  else if ANum.IsNegativeInfinity then
-  begin
-    case FKind of
-      takFloat16, takFloat32, takFloat64:
-      begin
-        Offset := FByteOffset + AIndex * BytesPerElement(FKind);
-        WriteBinaryNumberElement(FBufferData, Offset, ToBinaryElementKind(FKind),
-          ANum.Value, TYPED_ARRAY_LITTLE_ENDIAN);
-      end;
-    else
-      WriteElement(AIndex, 0);
-    end;
-  end
-  else
-    WriteElement(AIndex, ANum.Value);
+procedure TGocciaTypedArrayValue.WriteNumberLiteral(const AIndex: Integer; const ANum: TGocciaNumberLiteralValue);
+begin
+  if not HasValidElementIndex(AIndex) then
+    Exit;
+  WriteElementUnchecked(AIndex, ANum.Value);
+end;
+
+function TGocciaTypedArrayValue.TryReadIndexedScalar(const AIndex: Integer; out AValue: Double): Boolean;
+begin
+  // BigInt kinds yield TGocciaBigIntValue, never a Double, so they fall back to the
+  // boxed path; an out-of-range index falls back so the caller yields `undefined`.
+  if IsBigIntKind(FKind) or (not HasValidElementIndex(AIndex)) then
+    Exit(False);
+  AValue := ReadElementUnchecked(AIndex);
+  Result := True;
+end;
+
+function TGocciaTypedArrayValue.TryWriteIndexedScalar(const AIndex: Integer; const AValue: Double): Boolean;
+begin
+  // A Number value into a BigInt typed array must throw (ToBigInt(Number) throws), so
+  // signal not-handled and let the caller take the boxed, throwing slow path.
+  if IsBigIntKind(FKind) then
+    Exit(False);
+  // Non-BigInt integer-indexed [[Set]] is always "handled": an out-of-range index is
+  // ignored and an immutable backing buffer skips the store, both reporting success
+  // per ES2026 10.4.5.9 / the Immutable ArrayBuffers proposal.
+  Result := True;
+  if not HasValidElementIndex(AIndex) then
+    Exit;
+  if IsTypedArrayBackedByImmutableArrayBuffer(Self) then
+    Exit;
+  WriteElementUnchecked(AIndex, AValue);
 end;
 
 function TGocciaTypedArrayValue.ReadBigIntElement(const AIndex: Integer): Int64;
@@ -552,12 +570,56 @@ begin
   Result := nil;
 end;
 
+// Hot path for CanonicalNumericIndexString: a non-negative integer string with
+// no leading zeros (e.g. "0", "1234") is canonical by construction, because
+// ToString(ToNumber(s)) reproduces s exactly. Up to 15 digits stays below 2^53,
+// so the Double is exact and Number::toString uses plain (non-exponential)
+// notation, guaranteeing the round-trip. Anything else (signs, leading zeros,
+// fractions, exponents, "-0", out-of-range) returns False and defers to the
+// allocation-heavy String->Number->String validation in the caller.
+function TryFastCanonicalIntegerIndex(const AName: string;
+  out ANumericIndex: Double): Boolean;
+var
+  Len, I: Integer;
+  Acc: Int64;
+  C: Char;
+begin
+  Len := Length(AName);
+  if (Len < 1) or (Len > 15) then
+    Exit(False);
+
+  C := AName[1];
+  if (C < '1') or (C > '9') then
+  begin
+    if (Len = 1) and (C = '0') then
+    begin
+      ANumericIndex := 0;
+      Exit(True);
+    end;
+    Exit(False);
+  end;
+
+  Acc := Ord(C) - Ord('0');
+  for I := 2 to Len do
+  begin
+    C := AName[I];
+    if (C < '0') or (C > '9') then
+      Exit(False);
+    Acc := Acc * 10 + (Ord(C) - Ord('0'));
+  end;
+
+  ANumericIndex := Acc;
+  Result := True;
+end;
+
 function TryCanonicalNumericIndexString(const AName: string;
   out ANumericIndex: Double; out AIsNegativeZero: Boolean): Boolean;
 var
   NumberValue: TGocciaNumberLiteralValue;
 begin
   AIsNegativeZero := False;
+  if TryFastCanonicalIntegerIndex(AName, ANumericIndex) then
+    Exit(True);
   if AName = '-0' then
   begin
     ANumericIndex := 0;
@@ -630,6 +692,12 @@ begin
     NumberValue := AValue.ToNumberLiteral;
 
   if not IsValidIntegerIndexedElement(ANumericIndex, AIsNegativeZero, Index) then
+    Exit;
+
+  // Immutable ArrayBuffers proposal: TypedArraySetElement performs the
+  // observable numeric conversion above but skips the store when the backing
+  // buffer is immutable; integer-indexed [[Set]] still reports success.
+  if IsTypedArrayBackedByImmutableArrayBuffer(Self) then
     Exit;
 
   if IsBigIntKind(FKind) then
@@ -970,6 +1038,11 @@ var
 begin
   if not AArray.IsValidIntegerIndexedElement(ANumericIndex,
     AIsNegativeZero, Index) then
+    Exit(False);
+  // Immutable ArrayBuffers proposal: a valid integer index over an immutable
+  // backing buffer cannot be redefined, so [[DefineOwnProperty]] returns false
+  // (Object.defineProperty throws; Reflect.defineProperty returns false).
+  if IsTypedArrayBackedByImmutableArrayBuffer(AArray) then
     Exit(False);
   if ADescriptor.HasConfigurableField and not ADescriptor.Configurable then
     Exit(False);
@@ -1841,11 +1914,9 @@ end;
 function TGocciaTypedArrayValue.TypedArraySort(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   TA: TGocciaTypedArrayValue;
-  I, J, SortLen: Integer;
-  NumberValues: array of Double;
-  BigIntValues: array of Int64;
-  TmpNumber, CompResult: Double;
-  TmpBigInt: Int64;
+  I, SortLen: Integer;
+  NumberValues, NumberScratch: array of Double;
+  BigIntValues, BigIntScratch: array of Int64;
   HasCompare: Boolean;
   AbortSortWriteback: Boolean;
   Comparator: TGocciaValue;
@@ -1941,6 +2012,128 @@ var
     Result := 0;
   end;
 
+  // Bottom-up merge sort over NumberValues using CompareNumbers. O(n log n);
+  // stable, so equal keys retain order (needed for -0/+0 and NaN runs to stay
+  // in CompareNumbers order). Bails out early when a comparator callback detaches
+  // the buffer (AbortSortWriteback).
+  procedure MergeSortNumbers;
+  var
+    // Width and Lo are Int64 so doubling Width and computing Lo + 2 * Width
+    // cannot overflow Integer for very large (multi-GB) 1-byte typed arrays,
+    // where SortLen can approach High(Integer). Range checks are off in
+    // release builds, so an overflow would silently corrupt the merge bounds.
+    Width, Lo: Int64;
+    Mid, Hi, Left, Right, Dest: Integer;
+  begin
+    SetLength(NumberScratch, SortLen);
+    Width := 1;
+    while Width < SortLen do
+    begin
+      Lo := 0;
+      while Lo < SortLen do
+      begin
+        // Clamp in Int64, then narrow: Mid and Hi are <= SortLen <= High(Integer).
+        Mid := Integer(Min(Lo + Width, Int64(SortLen)));
+        Hi := Integer(Min(Lo + 2 * Width, Int64(SortLen)));
+        Left := Integer(Lo);
+        Right := Mid;
+        Dest := Integer(Lo);
+        while (Left < Mid) and (Right < Hi) do
+        begin
+          if CompareNumbers(NumberValues[Right], NumberValues[Left]) < 0 then
+          begin
+            NumberScratch[Dest] := NumberValues[Right];
+            Inc(Right);
+          end
+          else
+          begin
+            NumberScratch[Dest] := NumberValues[Left];
+            Inc(Left);
+          end;
+          if AbortSortWriteback then
+            Exit;
+          Inc(Dest);
+        end;
+        while Left < Mid do
+        begin
+          NumberScratch[Dest] := NumberValues[Left];
+          Inc(Left);
+          Inc(Dest);
+        end;
+        while Right < Hi do
+        begin
+          NumberScratch[Dest] := NumberValues[Right];
+          Inc(Right);
+          Inc(Dest);
+        end;
+        Lo := Lo + 2 * Width;
+      end;
+      for Dest := 0 to SortLen - 1 do
+        NumberValues[Dest] := NumberScratch[Dest];
+      Width := Width * 2;
+    end;
+  end;
+
+  // Bottom-up merge sort over BigIntValues using CompareBigInts. See
+  // MergeSortNumbers for the structure; identical algorithm over Int64 keys.
+  procedure MergeSortBigInts;
+  var
+    // Width and Lo are Int64 so doubling Width and computing Lo + 2 * Width
+    // cannot overflow Integer for very large (multi-GB) 1-byte typed arrays,
+    // where SortLen can approach High(Integer). Range checks are off in
+    // release builds, so an overflow would silently corrupt the merge bounds.
+    Width, Lo: Int64;
+    Mid, Hi, Left, Right, Dest: Integer;
+  begin
+    SetLength(BigIntScratch, SortLen);
+    Width := 1;
+    while Width < SortLen do
+    begin
+      Lo := 0;
+      while Lo < SortLen do
+      begin
+        // Clamp in Int64, then narrow: Mid and Hi are <= SortLen <= High(Integer).
+        Mid := Integer(Min(Lo + Width, Int64(SortLen)));
+        Hi := Integer(Min(Lo + 2 * Width, Int64(SortLen)));
+        Left := Integer(Lo);
+        Right := Mid;
+        Dest := Integer(Lo);
+        while (Left < Mid) and (Right < Hi) do
+        begin
+          if CompareBigInts(BigIntValues[Right], BigIntValues[Left]) < 0 then
+          begin
+            BigIntScratch[Dest] := BigIntValues[Right];
+            Inc(Right);
+          end
+          else
+          begin
+            BigIntScratch[Dest] := BigIntValues[Left];
+            Inc(Left);
+          end;
+          if AbortSortWriteback then
+            Exit;
+          Inc(Dest);
+        end;
+        while Left < Mid do
+        begin
+          BigIntScratch[Dest] := BigIntValues[Left];
+          Inc(Left);
+          Inc(Dest);
+        end;
+        while Right < Hi do
+        begin
+          BigIntScratch[Dest] := BigIntValues[Right];
+          Inc(Right);
+          Inc(Dest);
+        end;
+        Lo := Lo + 2 * Width;
+      end;
+      for Dest := 0 to SortLen - 1 do
+        BigIntValues[Dest] := BigIntScratch[Dest];
+      Width := Width * 2;
+    end;
+  end;
+
 begin
   Comparator := TGocciaUndefinedLiteralValue.UndefinedValue;
   HasCompare := False;
@@ -1967,22 +2160,9 @@ begin
     for I := 0 to SortLen - 1 do
       BigIntValues[I] := TA.ReadBigIntElement(I);
 
-    for I := 1 to SortLen - 1 do
-    begin
-      TmpBigInt := BigIntValues[I];
-      J := I - 1;
-      while J >= 0 do
-      begin
-        CompResult := CompareBigInts(BigIntValues[J], TmpBigInt);
-        if AbortSortWriteback then
-          Exit(AThisValue);
-        if CompResult <= 0 then
-          Break;
-        BigIntValues[J + 1] := BigIntValues[J];
-        Dec(J);
-      end;
-      BigIntValues[J + 1] := TmpBigInt;
-    end;
+    MergeSortBigInts;
+    if AbortSortWriteback then
+      Exit(AThisValue);
 
     for I := 0 to SortLen - 1 do
       TA.WriteBigIntElement(I, BigIntValues[I]);
@@ -1993,22 +2173,9 @@ begin
   for I := 0 to SortLen - 1 do
     NumberValues[I] := TA.ReadElement(I);
 
-  for I := 1 to SortLen - 1 do
-  begin
-    TmpNumber := NumberValues[I];
-    J := I - 1;
-    while J >= 0 do
-    begin
-      CompResult := CompareNumbers(NumberValues[J], TmpNumber);
-      if AbortSortWriteback then
-        Exit(AThisValue);
-      if CompResult <= 0 then
-        Break;
-      NumberValues[J + 1] := NumberValues[J];
-      Dec(J);
-    end;
-    NumberValues[J + 1] := TmpNumber;
-  end;
+  MergeSortNumbers;
+  if AbortSortWriteback then
+    Exit(AThisValue);
 
   for I := 0 to SortLen - 1 do
     TA.WriteElement(I, NumberValues[I]);
@@ -3252,6 +3419,7 @@ begin
 end;
 
 initialization
+  RegisterThreadvarCleanup(@ClearThreadvarMembers);
   GTypedArraySharedSlot := RegisterRealmOwnedSlot('TypedArray.shared');
 
 end.

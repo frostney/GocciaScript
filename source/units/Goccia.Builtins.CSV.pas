@@ -48,6 +48,7 @@ implementation
 uses
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.ThreadCleanupRegistry,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
@@ -57,6 +58,11 @@ uses
 
 threadvar
   FStaticMembers: TArray<TGocciaMemberDefinition>;
+
+procedure ClearThreadvarMembers;
+begin
+  SetLength(FStaticMembers, 0);
+end;
 
 constructor TGocciaCSVBuiltin.Create(const AName: string;
   const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
@@ -422,5 +428,8 @@ begin
     Result := TGocciaStringLiteralValue.Create(
       TGocciaCSVStringifier.Stringify(Data, Delimiter, Headers));
 end;
+
+initialization
+  RegisterThreadvarCleanup(@ClearThreadvarMembers);
 
 end.

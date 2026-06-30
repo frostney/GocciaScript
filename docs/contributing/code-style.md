@@ -119,7 +119,7 @@ Use `FormatDouble` (from `Goccia.Values.Primitives`) for any float-to-string con
 Result := FloatToStr(AValue);
 Result := FormatFloat('0.###', AValue);
 
-// Correct — ES2026 §6.1.6.1.13 Number::toString, always uses '.'
+// Correct — ES2026 §6.1.6.1.20 Number::toString, always uses '.'
 Result := FormatDouble(AValue);
 
 // Correct — formatted output with invariant decimal separator
@@ -253,7 +253,9 @@ The codebase provides purpose-built hash maps that replace `TDictionary` on hot 
 
 **Never use** `TFPDataHashTable` — it has catastrophic insert performance (400,000 ns/insert vs 50 ns for `TOrderedStringMap` at N=20). See [spikes/fpc-hashmap-performance.md](../spikes/fpc-hashmap-performance.md) for the full benchmark analysis.
 
-**API compatibility:** All custom maps share the same core API as `TDictionary`: `Add`, `AddOrSetValue`, `TryGetValue`, `ContainsKey`, `Remove`, `Clear`. Iteration uses `Keys`, `Values`, or `ToArray` returning dynamic arrays (not enumerators), so use indexed `for` loops instead of `for...in`.
+**API compatibility:** All custom maps share the same core API as `TDictionary`: `Add`, `AddOrSetValue`, `TryGetValue`, `ContainsKey`, `Remove`, `Clear`. The `Keys`, `Values`, and `ToArray` accessors return dynamic arrays, so index those with a `for` loop rather than `for...in`.
+
+**Sequential iteration:** `TOrderedStringMap` and `TOrderedMap` also expose a key/value-pair enumerator — prefer `for Pair in Map do`, which yields entries in declaration order at O(1) amortized per step (this is how the class, scope, and module code iterate these maps). Do **not** iterate by driving the random-access `EntryAt(Index)` from a `for Index := 0 to Count - 1` loop: `EntryAt` scans active entries from the start (O(Index)), so the loop is O(N²).
 
 ### Function and Method Names
 

@@ -83,7 +83,8 @@ type
   TGocciaVMSavedStateRoot = record
     Closure: TGocciaBytecodeClosure;
     NewTarget: TGocciaValue;
-    Arguments: TGocciaRegisterArray;
+    ArgumentBase: Integer;
+    ArgCount: Integer;
   end;
   TGocciaVMSavedStateRootArray = array of TGocciaVMSavedStateRoot;
 
@@ -134,7 +135,16 @@ type
     FLocalCellBase: Integer;
     FLocalCells: PGocciaBytecodeCell;
     FLocalCellCount: Integer;
-    FCurrentArguments: TGocciaRegisterArray;
+    // Call arguments live in a growable arena window (FArgumentStack) with a
+    // base+count window, mirroring the register and local-cell stacks. The
+    // window holds the current frame's arguments; PushFrame/PopFrame and native
+    // re-entry save/restore (base,count) integers instead of copying an array,
+    // so an ordinary call allocates nothing here. FArguments points at the live
+    // window and must be recomputed after any AcquireArgumentWindow (which may
+    // reallocate the backing array) and after any frame restore.
+    FArgumentStack: TGocciaRegisterArray;
+    FArgumentBase: Integer;
+    FArguments: PGocciaRegister;
     FArgCount: Integer;
     FGlobalScope: TGocciaScope;
     FGlobalThisValue: TGocciaValue;
@@ -145,6 +155,11 @@ type
     FCurrentClosure: TGocciaBytecodeClosure;
     FHandlerStack: TGocciaBytecodeHandlerStack;
     FFrameDepth: Integer;
+    // Depth of native VM re-entries (ExecuteClosureRegistersInternal invocations
+    // nested via generator resume, host eval, or native callbacks). Bounded
+    // separately from FFrameDepth because each native re-entry costs a real
+    // native stack frame; see CheckNativeReentryDepth in Goccia.StackLimit.
+    FNativeExecutionDepth: Integer;
     FFrameStack: array of TGocciaVMCallFrame;
     FFrameStackCount: Integer;
     FCurrentExecutionContextPushed: Boolean;
@@ -181,6 +196,8 @@ type
     procedure ReleaseArguments(const AArguments: TGocciaArgumentsCollection);
     procedure AcquireRegisters(const ACount: Integer);
     procedure AcquireLocalCells(const ACount: Integer);
+    procedure AcquireArgumentWindow(const ACount: Integer);
+    function CurrentArgumentsSnapshot: TGocciaRegisterArray;
     procedure EnsureRegisterCapacity(const ACount: Integer);
     procedure EnsureLocalCapacity(const ACount: Integer);
     function GetLocalCell(const AIndex: Integer): TGocciaBytecodeCell;
@@ -378,8 +395,11 @@ type
       out APrevCovLine: UInt32; out AProfileTimestamp: Int64): Integer;
     procedure TeardownCurrentFrame(const ATemplate: TGocciaFunctionTemplate;
       const AProfileTimestamp: Int64; const ATargetHandlerCount: Integer);
+    procedure PrepareTailCallFrameReuse(const ATemplate: TGocciaFunctionTemplate;
+      const AProfileTimestamp: Int64; const AInitialFrameStackCount,
+      ASavedHandlerCount: Integer);
     procedure PushSavedStateRoot(const AClosure: TGocciaBytecodeClosure;
-      const ANewTarget: TGocciaValue; const AArguments: TGocciaRegisterArray);
+      const ANewTarget: TGocciaValue; const AArgumentBase, AArgCount: Integer);
     procedure PopSavedStateRoot;
     procedure SetupNewFrame(const AClosure: TGocciaBytecodeClosure;
       const AThisValue: TGocciaRegister; const AArguments: TGocciaRegisterArray;
@@ -449,6 +469,7 @@ uses
   SysUtils,
 
   BigInteger,
+  OrderedStringMap,
   TextSemantics,
   TimingUtils,
 
@@ -500,7 +521,8 @@ uses
   Goccia.Values.ProxyValue,
   Goccia.Values.Shape,
   Goccia.Values.ToObject,
-  Goccia.Values.ToPrimitive;
+  Goccia.Values.ToPrimitive,
+  Goccia.Values.TypedArrayValue;
 
 const
   BYTECODE_PRIVATE_SLOT_PREFIX = '#slot:';
@@ -2706,12 +2728,17 @@ var
         MarkRegisterReferences(FVM.FLocalCellStack[J].Value);
   end;
 
-  procedure MarkRegisterArray(const ARegisters: TGocciaRegisterArray);
+  procedure MarkArgumentRange(const ABase, ACount: Integer);
   var
-    J: Integer;
+    J, RangeLimit: Integer;
   begin
-    for J := 0 to High(ARegisters) do
-      MarkRegisterReferences(ARegisters[J]);
+    if (ABase < 0) or (ACount <= 0) or (ABase >= Length(FVM.FArgumentStack)) then
+      Exit;
+    RangeLimit := ABase + ACount;
+    if RangeLimit > Length(FVM.FArgumentStack) then
+      RangeLimit := Length(FVM.FArgumentStack);
+    for J := ABase to RangeLimit - 1 do
+      MarkRegisterReferences(FVM.FArgumentStack[J]);
   end;
 
 begin
@@ -2736,7 +2763,11 @@ begin
     FVM.FCurrentDynamicVarScope.MarkReferences;
   if Assigned(FVM.FCurrentAsyncPromise) then
     FVM.FCurrentAsyncPromise.MarkReferences;
-  MarkRegisterArray(FVM.FCurrentArguments);
+  // The argument arena is stack-disciplined like the register/cell stacks, so
+  // marking [0, current top) covers the current frame plus every suspended and
+  // native-re-entry ancestor window. The per-frame and per-saved-root ranges
+  // below are redundant with this but kept for parity with the register stack.
+  MarkArgumentRange(0, FVM.FArgumentBase + FVM.FArgCount);
 
   Limit := FVM.FRegisterBase + FVM.FRegisterCount;
   if Limit > Length(FVM.FRegisterStack) then
@@ -2754,7 +2785,8 @@ begin
   for I := 0 to FVM.FFrameStackCount - 1 do
   begin
     MarkClosureReferences(FVM.FFrameStack[I].Closure);
-    MarkRegisterArray(FVM.FFrameStack[I].Arguments);
+    MarkArgumentRange(FVM.FFrameStack[I].ArgumentBase,
+      FVM.FFrameStack[I].ArgCount);
     MarkRegisterRange(FVM.FFrameStack[I].RegisterBase,
       FVM.FFrameStack[I].RegisterCount);
     MarkLocalCellRange(FVM.FFrameStack[I].LocalCellBase,
@@ -2772,7 +2804,8 @@ begin
     MarkClosureReferences(FVM.FTempSavedStateRoots[I].Closure);
     if Assigned(FVM.FTempSavedStateRoots[I].NewTarget) then
       FVM.FTempSavedStateRoots[I].NewTarget.MarkReferences;
-    MarkRegisterArray(FVM.FTempSavedStateRoots[I].Arguments);
+    MarkArgumentRange(FVM.FTempSavedStateRoots[I].ArgumentBase,
+      FVM.FTempSavedStateRoots[I].ArgCount);
   end;
 
   if Assigned(FVM.FActiveDecoratorSession) then
@@ -3143,6 +3176,9 @@ begin
 end;
 
 threadvar
+  // Non-owning "active generator" pointer: GC-managed and save/restored around
+  // each generator activation, so it is not a thread-exit leak (object-reference
+  // threadvar audit, #892).
   GActiveBytecodeGenerator: TGocciaBytecodeGeneratorObjectValue;
 
 type
@@ -6003,6 +6039,25 @@ begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
+// Resolves a deferred call-stack frame (pushed by SetupNewFrame as a bare
+// template pointer) into its display name and own source path. Registered on
+// the shared call stack so the hot call path pays no per-call string cost; the
+// strings are materialised only when a stack trace is captured.
+procedure VMTemplateTraceResolver(const ATemplate: Pointer;
+  out AName, ASourcePath: string);
+var
+  Template: TGocciaFunctionTemplate;
+begin
+  AName := '';
+  ASourcePath := '';
+  if not Assigned(ATemplate) then
+    Exit;
+  Template := TGocciaFunctionTemplate(ATemplate);
+  AName := Template.Name;
+  if Assigned(Template.DebugInfo) and (Template.DebugInfo.SourceFile <> '') then
+    ASourcePath := Template.DebugInfo.SourceFile;
+end;
+
 constructor TGocciaVM.Create;
 const
   INITIAL_STACK_SIZE = 4096;
@@ -6011,6 +6066,10 @@ begin
   FPreviousExceptionMask := GetExceptionMask;
   SetExceptionMask([exInvalidOp, exDenormalized, exZeroDivide, exOverflow, exUnderflow, exPrecision]);
   FHandlerStack := TGocciaBytecodeHandlerStack.Create;
+  // Teach the shared call stack how to materialise the template-pointer frames
+  // that SetupNewFrame pushes on the hot path. This is class-level, so it is
+  // independent of which thread's call-stack instance ends up running.
+  TGocciaCallStack.SetTemplateResolver(@VMTemplateTraceResolver);
   FArgumentPoolCount := 0;
   FActiveDecoratorSession := nil;
   FLastClosureThisValue := RegisterUndefined;
@@ -6029,6 +6088,10 @@ begin
   FLocalCellBase := 0;
   FLocalCells := nil;
   FLocalCellCount := 0;
+  SetLength(FArgumentStack, INITIAL_STACK_SIZE);
+  FArgumentBase := 0;
+  FArguments := nil;
+  FArgCount := 0;
   SetLength(FFrameStack, 64);
   FFrameStackCount := 0;
   FStackRoot := TGocciaVMStackRoot.Create(Self);
@@ -7106,6 +7169,44 @@ begin
   FillChar(FLocalCells^, ACount * SizeOf(TGocciaBytecodeCell), 0);
 end;
 
+// Acquire a fresh argument window on the arena, stack-disciplined exactly like
+// AcquireRegisters/AcquireLocalCells. The window is zero-filled so the GC, which
+// marks the whole live arena ([0, top)), never dereferences stale slot contents:
+// this keeps argument acquisition GC-safe regardless of caller ordering, at the
+// cost of touching ACount register slots. (Scope (c) of #798 evaluated removing
+// this and the register/cell fills; they are GC-safety/correctness critical on
+// this hot path, so the substantive wins come from the allocation removal and
+// cheap stack-trace push above, not from trimming these fills.)
+procedure TGocciaVM.AcquireArgumentWindow(const ACount: Integer);
+var
+  NewBase, Required: Integer;
+begin
+  NewBase := FArgumentBase + FArgCount;
+  // Reserve at least one slot beyond the base so @FArgumentStack[NewBase] is a
+  // valid address even for a zero-argument call (ACount = 0) under range checks.
+  Required := NewBase + ACount + 1;
+  if Required > Length(FArgumentStack) then
+    SetLength(FArgumentStack, Required * 2);
+  FArgumentBase := NewBase;
+  FArgCount := ACount;
+  FArguments := @FArgumentStack[FArgumentBase];
+  if ACount > 0 then
+    FillChar(FArguments^, ACount * SizeOf(TGocciaRegister), 0);
+end;
+
+// Copy the current frame's live argument window out of the arena into a
+// detached array. Used when an owner (e.g. a generator/async continuation)
+// must retain the arguments beyond the lifetime of the arena window, which is
+// reused once the frame is torn down.
+function TGocciaVM.CurrentArgumentsSnapshot: TGocciaRegisterArray;
+var
+  I: Integer;
+begin
+  SetLength(Result, FArgCount);
+  for I := 0 to FArgCount - 1 do
+    Result[I] := FArguments[I];
+end;
+
 procedure TGocciaVM.EnsureRegisterCapacity(const ACount: Integer);
 var
   Growth, Required: Integer;
@@ -7559,11 +7660,24 @@ var
   Key: TGocciaPropertyKey;
   KeyName: string;
   ReceiverArray: TGocciaArrayValue;
+  FastIndex: Integer;
+  FastElement: Double;
 begin
   if (caoThrowOnNullUndefined in AOptions) and
      (AObjReg.Kind in [grkUndefined, grkNull]) then
     ThrowTypeError(SErrorCannotConvertNullOrUndefined,
       SSuggestCheckNullBeforeAccess)
+  else if (AObjReg.Kind = grkObject) and
+          (AObjReg.ObjectValue is TGocciaTypedArrayValue) and
+          TryGetArrayIndexRegister(AKeyReg, FastIndex) and
+          TGocciaTypedArrayValue(AObjReg.ObjectValue)
+            .TryReadIndexedScalar(FastIndex, FastElement) then
+    // Typed-array unboxed element read: the element goes straight into the
+    // destination register as a scalar, with no heap TGocciaNumberLiteralValue and
+    // no IntToStr index name. Non-index keys, BigInt kinds, and out-of-range indices
+    // fall through to the generic object branch below, which handles length, methods,
+    // `undefined` for out-of-range reads, BigInt boxing, and symbol keys unchanged.
+    FRegisters[ADest] := RegisterFromDouble(FastElement)
   else if (AObjReg.Kind = grkObject) and
           (AObjReg.ObjectValue is TGocciaArrayValue) then
   begin
@@ -7655,7 +7769,21 @@ var
   Value: TGocciaValue;
   TargetValue: TGocciaValue;
   BoxedTarget: TGocciaObjectValue;
+  FastIndex: Integer;
 begin
+  // Typed-array unboxed element write: a numeric-scalar value going to a valid
+  // integer index stores directly, with no heap TGocciaNumberLiteralValue and no
+  // IntToStr index name. ToNumber on a Number is side-effect-free, so the spec's
+  // observable conversion is preserved. BigInt kinds (a Number value must throw),
+  // non-index keys, and non-scalar values fall through to the boxed path below.
+  if (FRegisters[ATargetIndex].Kind = grkObject) and
+     (FRegisters[ATargetIndex].ObjectValue is TGocciaTypedArrayValue) and
+     RegisterIsNumericScalar(AValueReg) and
+     TryGetArrayIndexRegister(AKeyReg, FastIndex) and
+     TGocciaTypedArrayValue(FRegisters[ATargetIndex].ObjectValue)
+       .TryWriteIndexedScalar(FastIndex, RegisterToDouble(AValueReg)) then
+    Exit;
+
   Value := RegisterToValue(AValueReg);
   if (FRegisters[ATargetIndex].Kind = grkObject) and
      (FRegisters[ATargetIndex].ObjectValue is TGocciaArrayValue) then
@@ -8329,7 +8457,7 @@ var
   Keys: TArray<string>;
   Key: string;
   KeyValue: TGocciaStringLiteralValue;
-  Visited: TStringList;
+  Visited: TOrderedStringMap<Boolean>;
   GC: TGarbageCollector;
   ChainDepth: Integer;
 begin
@@ -8345,9 +8473,11 @@ begin
     Obj := ToObject(AValue);
     if Assigned(GC) then
       GC.AddTempRoot(Obj);
-    Visited := TStringList.Create;
+    // Dedup keys across the prototype chain via O(1) hash-set membership
+    // (native case-sensitive string equality); VMOrderOwnPropertyStringKeys
+    // (above) owns per-level enumeration order.
+    Visited := TOrderedStringMap<Boolean>.Create;
     try
-      Visited.CaseSensitive := True;
       Current := Obj;
       ChainDepth := 0;
       while Assigned(Current) do
@@ -8360,10 +8490,10 @@ begin
         Keys := VMOrderOwnPropertyStringKeys(Current.GetAllPropertyNames);
         for Key in Keys do
         begin
-          if Visited.IndexOf(Key) >= 0 then
+          if Visited.ContainsKey(Key) then
             Continue;
 
-          Visited.Add(Key);
+          Visited.Add(Key, True);
           EntryObj := TGocciaObjectValue.Create;
           if Assigned(GC) then
             GC.AddTempRoot(EntryObj);
@@ -8796,7 +8926,7 @@ var
 begin
   TryReadImportAttributeType(AOptions, AttributeType, HasAttributeType);
   if HasAttributeType and (AttributeType <> 'json') and
-     (AttributeType <> 'text') then
+     (AttributeType <> 'text') and (AttributeType <> 'bytes') then
     ThrowTypeError('Unsupported import attribute type "' + AttributeType + '"');
   if HasAttributeType then
     Result := AttributeType
@@ -9688,10 +9818,7 @@ begin
   Args := AcquireArguments(FArgCount);
   try
     for I := 0 to FArgCount - 1 do
-      if I < Length(FCurrentArguments) then
-        Args.Add(RegisterToValue(FCurrentArguments[I]))
-      else
-        Args.Add(TGocciaUndefinedLiteralValue.UndefinedValue);
+      Args.Add(RegisterToValue(FArguments[I]));
     if AUseMappedArguments then
     begin
       MappedCount := AFormalParameterCount;
@@ -12260,7 +12387,7 @@ begin
   FFrameStack[FFrameStackCount].RegisterCount := FRegisterCount;
   FFrameStack[FFrameStackCount].LocalCellBase := FLocalCellBase;
   FFrameStack[FFrameStackCount].LocalCellCount := FLocalCellCount;
-  FFrameStack[FFrameStackCount].Arguments := Copy(FCurrentArguments);
+  FFrameStack[FFrameStackCount].ArgumentBase := FArgumentBase;
   FFrameStack[FFrameStackCount].ArgCount := FArgCount;
   FFrameStack[FFrameStackCount].Closure := FCurrentClosure;
   FFrameStack[FFrameStackCount].HandlerCount := FHandlerStack.Count;
@@ -12289,9 +12416,9 @@ begin
   FLocalCellBase := FFrameStack[FFrameStackCount].LocalCellBase;
   FLocalCellCount := FFrameStack[FFrameStackCount].LocalCellCount;
   FLocalCells := @FLocalCellStack[FLocalCellBase];
-  FCurrentArguments := FFrameStack[FFrameStackCount].Arguments;
-  FFrameStack[FFrameStackCount].Arguments := nil;
+  FArgumentBase := FFrameStack[FFrameStackCount].ArgumentBase;
   FArgCount := FFrameStack[FFrameStackCount].ArgCount;
+  FArguments := @FArgumentStack[FArgumentBase];
   FCurrentClosure := FFrameStack[FFrameStackCount].Closure;
   APrevCovLine := FFrameStack[FFrameStackCount].PrevCovLine;
   AProfileTimestamp := FFrameStack[FFrameStackCount].ProfileEntryTimestamp;
@@ -12322,14 +12449,47 @@ begin
   Dec(FFrameDepth);
 end;
 
+// ES2026 §15.10.3 PrepareForTailCall.  Discards the current frame's resources so
+// the impending SetupNewFrame reuses this frame instead of stacking a new one.
+// The caller's saved frame slot (or the outermost return path) is left intact,
+// so the tail-called function returns directly to the current frame's caller.
+// Register and local-cell windows are collapsed in place: setting the live count
+// to 0 makes the next AcquireRegisters reuse the same memory region, so a chain
+// of tail calls grows neither the frame stack nor the register stack.
+procedure TGocciaVM.PrepareTailCallFrameReuse(
+  const ATemplate: TGocciaFunctionTemplate; const AProfileTimestamp: Int64;
+  const AInitialFrameStackCount, ASavedHandlerCount: Integer);
+var
+  TargetHandlerCount: Integer;
+begin
+  // The handler count active when the current frame began: the parent trampoline
+  // frame's saved count, or the entry handler count if this is the outermost
+  // frame of the running ExecuteClosureRegistersInternal invocation.
+  if FFrameStackCount > AInitialFrameStackCount then
+    TargetHandlerCount := FFrameStack[FFrameStackCount - 1].HandlerCount
+  else
+    TargetHandlerCount := ASavedHandlerCount;
+  TeardownCurrentFrame(ATemplate, AProfileTimestamp, TargetHandlerCount);
+  // Collapse the register, local-cell, AND argument windows in place: setting
+  // each live count to 0 makes the next Acquire* reuse the same base. The
+  // argument window must be reset alongside the others or a tail-call chain
+  // advances FArgumentBase unboundedly (the next AcquireArgumentWindow uses
+  // NewBase := FArgumentBase + FArgCount), reintroducing the very unbounded
+  // growth proper tail calls exist to avoid.
+  FRegisterCount := 0;
+  FLocalCellCount := 0;
+  FArgCount := 0;
+end;
+
 procedure TGocciaVM.PushSavedStateRoot(const AClosure: TGocciaBytecodeClosure;
-  const ANewTarget: TGocciaValue; const AArguments: TGocciaRegisterArray);
+  const ANewTarget: TGocciaValue; const AArgumentBase, AArgCount: Integer);
 begin
   if FTempSavedStateRootCount >= Length(FTempSavedStateRoots) then
     SetLength(FTempSavedStateRoots, FTempSavedStateRootCount * 2 + 4);
   FTempSavedStateRoots[FTempSavedStateRootCount].Closure := AClosure;
   FTempSavedStateRoots[FTempSavedStateRootCount].NewTarget := ANewTarget;
-  FTempSavedStateRoots[FTempSavedStateRootCount].Arguments := AArguments;
+  FTempSavedStateRoots[FTempSavedStateRootCount].ArgumentBase := AArgumentBase;
+  FTempSavedStateRoots[FTempSavedStateRootCount].ArgCount := AArgCount;
   Inc(FTempSavedStateRootCount);
 end;
 
@@ -12340,7 +12500,8 @@ begin
   Dec(FTempSavedStateRootCount);
   FTempSavedStateRoots[FTempSavedStateRootCount].Closure := nil;
   FTempSavedStateRoots[FTempSavedStateRootCount].NewTarget := nil;
-  FTempSavedStateRoots[FTempSavedStateRootCount].Arguments := nil;
+  FTempSavedStateRoots[FTempSavedStateRootCount].ArgumentBase := 0;
+  FTempSavedStateRoots[FTempSavedStateRootCount].ArgCount := 0;
 end;
 
 procedure TGocciaVM.SetupNewFrame(const AClosure: TGocciaBytecodeClosure;
@@ -12363,33 +12524,39 @@ begin
 
   AcquireRegisters(Max(ATemplate.MaxRegisters, 1));
   AcquireLocalCells(Max(ATemplate.MaxRegisters, 1));
-  SetLength(FCurrentArguments, AArgCount);
+  // Acquire the argument window on the arena (sets FArgumentBase/FArgCount and
+  // FArguments) before reading the previous frame's FArgCount, then fill it.
+  AcquireArgumentWindow(AArgCount);
   for I := 0 to AArgCount - 1 do
     if AUseFixedArgs then
       case I of
         0:
-          FCurrentArguments[I] := AArg0;
+          FArguments[I] := AArg0;
         1:
-          FCurrentArguments[I] := AArg1;
+          FArguments[I] := AArg1;
         2:
-          FCurrentArguments[I] := AArg2;
+          FArguments[I] := AArg2;
       else
-        FCurrentArguments[I] := RegisterUndefined;
+        FArguments[I] := RegisterUndefined;
       end
     else
-      FCurrentArguments[I] := AArguments[I];
-  FArgCount := AArgCount;
+      FArguments[I] := AArguments[I];
   FCurrentClosure := AClosure;
   if Assigned(AClosure) and Assigned(AClosure.GlobalScope) then
     FGlobalScope := AClosure.GlobalScope;
   FCurrentDynamicVarScope := nil;
   FCurrentExecutionContextPushed := False;
   Inc(FFrameDepth);
+  // Push a deferred frame: store the template pointer and (only when the
+  // template has no own source file) the module-path fallback, so an ordinary
+  // call performs no per-call stack-trace string work. The resolver registered
+  // in the constructor reproduces ATemplate.Name and ExecutionSourcePath at
+  // capture time, keeping Error.stack output byte-identical.
   if Assigned(TGocciaCallStack.Instance) then
-    TGocciaCallStack.Instance.Push(
-      ATemplate.Name,
-      ExecutionSourcePath,
-      0, 0);
+    if Assigned(ATemplate.DebugInfo) and (ATemplate.DebugInfo.SourceFile <> '') then
+      TGocciaCallStack.Instance.PushTemplate(Pointer(ATemplate), '')
+    else
+      TGocciaCallStack.Instance.PushTemplate(Pointer(ATemplate), ExecutionSourcePath);
 
   AFrame := Default(TGocciaVMCallFrame);
   AFrame.Template := ATemplate;
@@ -12424,7 +12591,7 @@ begin
 
   SetLocalRaw(0, AThisValue);
   for I := 0 to FArgCount - 1 do
-    SetLocalRaw(I + 1, FCurrentArguments[I]);
+    SetLocalRaw(I + 1, FArguments[I]);
 
   ExecutionRealm := BytecodeClosureExecutionRealm(AClosure, FRealm);
 
@@ -12518,7 +12685,7 @@ var
   SavedRegisterCount: Integer;
   SavedLocalCellBase: Integer;
   SavedLocalCellCount: Integer;
-  SavedCurrentArguments: TGocciaRegisterArray;
+  SavedArgumentBase: Integer;
   SavedArgCount: Integer;
   SavedClosure: TGocciaBytecodeClosure;
   SavedNewTarget: TGocciaValue;
@@ -12567,6 +12734,7 @@ var
   BuiltinConstructorMatch: Boolean;
   RegisterArgs: TGocciaRegisterArray;
   CallThisRegister: TGocciaRegister;
+  FixedArg0, FixedArg1, FixedArg2: TGocciaRegister;
   BytecodeFunction: TGocciaBytecodeFunctionValue;
   BoundFunction: TGocciaBoundFunctionValue;
   JumpOffset: Integer;
@@ -12583,6 +12751,12 @@ var
   ExecutionRealm: TGocciaRealm;
   RealmSwitched: Boolean;
 begin
+  // This is a native VM re-entry: the bytecode loop runs on a fresh native stack
+  // frame. Bound the native re-entry depth before any state is saved so the
+  // throw unwinds cleanly (the matching Inc/Dec are paired with the try/finally
+  // below). Without this, generator resume / eval / native-callback recursion
+  // overflows the native stack (SIGSEGV) instead of throwing RangeError.
+  CheckNativeReentryDepth(FNativeExecutionDepth + 1);
   PreviousRealm := CurrentRealm;
   ExecutionRealm := BytecodeClosureExecutionRealm(AClosure, FRealm);
   RealmSwitched := Assigned(ExecutionRealm) and (ExecutionRealm <> PreviousRealm);
@@ -12591,7 +12765,7 @@ begin
   SavedRegisterCount := FRegisterCount;
   SavedLocalCellBase := FLocalCellBase;
   SavedLocalCellCount := FLocalCellCount;
-  SavedCurrentArguments := Copy(FCurrentArguments);
+  SavedArgumentBase := FArgumentBase;
   SavedArgCount := FArgCount;
   SavedClosure := FCurrentClosure;
   SavedNewTarget := FCurrentNewTarget;
@@ -12601,10 +12775,12 @@ begin
   SavedHandlerCount := FHandlerStack.Count;
   InitialFrameStackCount := FFrameStackCount;
   FLastClosureThisValue := AThisValue;
-  PushSavedStateRoot(SavedClosure, SavedNewTarget, SavedCurrentArguments);
+  PushSavedStateRoot(SavedClosure, SavedNewTarget, SavedArgumentBase,
+    SavedArgCount);
   if RealmSwitched then
     SetCurrentRealm(ExecutionRealm);
   try
+    Inc(FNativeExecutionDepth);
     SetupNewFrame(AClosure, AThisValue, AArguments, AArgCount,
       AArg0, AArg1, AArg2, AUseFixedArgs, APushExecutionContext,
       Frame, Template, PrevCovLine, ProfileEntryTimestamp);
@@ -12836,8 +13012,8 @@ begin
         FRegisters[A] := RegisterInt(FArgCount);
 
       OP_LOAD_ARGUMENT:
-        if (B < Length(FCurrentArguments)) then
-          SetRegisterRaw(A, FCurrentArguments[B])
+        if (B < FArgCount) then
+          SetRegisterRaw(A, FArguments[B])
         else
           FRegisters[A] := RegisterUndefined;
 
@@ -12853,10 +13029,7 @@ begin
       begin
         ArgsArray := TGocciaArrayValue.Create;
         for I := B to FArgCount - 1 do
-          if I < Length(FCurrentArguments) then
-            ArgsArray.Elements.Add(RegisterToValue(FCurrentArguments[I]))
-          else
-            ArgsArray.Elements.Add(TGocciaUndefinedLiteralValue.UndefinedValue);
+          ArgsArray.Elements.Add(RegisterToValue(FArguments[I]));
         FRegisters[A] := RegisterObject(ArgsArray);
       end;
 
@@ -14491,7 +14664,12 @@ begin
                 if not BytecodeFunction.FStrictThis then
                   CallThisRegister := CoerceNonStrictThisRegister(
                     CallThisRegister);
-                PushFrame(A, Frame.IP, Template, PrevCovLine, ProfileEntryTimestamp);
+                if (C and CALL_FLAG_TAIL) <> 0 then
+                  PrepareTailCallFrameReuse(Template, ProfileEntryTimestamp,
+                    InitialFrameStackCount, SavedHandlerCount)
+                else
+                  PushFrame(A, Frame.IP, Template, PrevCovLine,
+                    ProfileEntryTimestamp);
                 SetupNewFrame(BytecodeFunction.FClosure,
                   CallThisRegister, RegisterArgs,
                   Length(RegisterArgs), RegisterUndefined, RegisterUndefined,
@@ -14514,7 +14692,12 @@ begin
                 if not BytecodeFunction.FStrictThis then
                   CallThisRegister := CoerceNonStrictThisRegister(
                     CallThisRegister);
-                PushFrame(A, Frame.IP, Template, PrevCovLine, ProfileEntryTimestamp);
+                if (C and CALL_FLAG_TAIL) <> 0 then
+                  PrepareTailCallFrameReuse(Template, ProfileEntryTimestamp,
+                    InitialFrameStackCount, SavedHandlerCount)
+                else
+                  PushFrame(A, Frame.IP, Template, PrevCovLine,
+                    ProfileEntryTimestamp);
                 SetupNewFrame(BytecodeFunction.FClosure,
                   CallThisRegister, RegisterArgs,
                   Length(RegisterArgs), RegisterUndefined, RegisterUndefined,
@@ -14541,14 +14724,46 @@ begin
               CallThisRegister := RegisterUndefined;
             if (C and 1) = 0 then
             begin
-              SetLength(RegisterArgs, B);
-              for I := 0 to B - 1 do
-                RegisterArgs[I] := FRegisters[A + 1 + I];
-              PushFrame(A, Frame.IP, Template, PrevCovLine, ProfileEntryTimestamp);
-              SetupNewFrame(BytecodeFunction.FClosure,
-                CallThisRegister, RegisterArgs, B,
-                RegisterUndefined, RegisterUndefined, RegisterUndefined, False, True,
-                Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+              if B <= 3 then
+              begin
+                // Fixed-arg fast path: capture up to three arguments by value
+                // before any frame push or tail-call window reuse, so they
+                // survive AcquireRegisters' fill, and skip the RegisterArgs
+                // staging array entirely. SetupNewFrame consumes only the first
+                // B of these (bounded by AArgCount).
+                if B >= 1 then FixedArg0 := FRegisters[A + 1]
+                else FixedArg0 := RegisterUndefined;
+                if B >= 2 then FixedArg1 := FRegisters[A + 2]
+                else FixedArg1 := RegisterUndefined;
+                if B >= 3 then FixedArg2 := FRegisters[A + 3]
+                else FixedArg2 := RegisterUndefined;
+                if (C and CALL_FLAG_TAIL) <> 0 then
+                  PrepareTailCallFrameReuse(Template, ProfileEntryTimestamp,
+                    InitialFrameStackCount, SavedHandlerCount)
+                else
+                  PushFrame(A, Frame.IP, Template, PrevCovLine,
+                    ProfileEntryTimestamp);
+                SetupNewFrame(BytecodeFunction.FClosure,
+                  CallThisRegister, TGocciaRegisterArray(nil), B,
+                  FixedArg0, FixedArg1, FixedArg2, True, True,
+                  Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+              end
+              else
+              begin
+                SetLength(RegisterArgs, B);
+                for I := 0 to B - 1 do
+                  RegisterArgs[I] := FRegisters[A + 1 + I];
+                if (C and CALL_FLAG_TAIL) <> 0 then
+                  PrepareTailCallFrameReuse(Template, ProfileEntryTimestamp,
+                    InitialFrameStackCount, SavedHandlerCount)
+                else
+                  PushFrame(A, Frame.IP, Template, PrevCovLine,
+                    ProfileEntryTimestamp);
+                SetupNewFrame(BytecodeFunction.FClosure,
+                  CallThisRegister, RegisterArgs, B,
+                  RegisterUndefined, RegisterUndefined, RegisterUndefined, False, True,
+                  Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+              end;
               Continue;
             end
             else if (FRegisters[B].Kind = grkObject) and
@@ -14559,7 +14774,12 @@ begin
 	              for I := 0 to High(RegisterArgs) do
 	                RegisterArgs[I] := ValueToRegister(
 	                  TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(IntToStr(I)));
-              PushFrame(A, Frame.IP, Template, PrevCovLine, ProfileEntryTimestamp);
+              if (C and CALL_FLAG_TAIL) <> 0 then
+                PrepareTailCallFrameReuse(Template, ProfileEntryTimestamp,
+                  InitialFrameStackCount, SavedHandlerCount)
+              else
+                PushFrame(A, Frame.IP, Template, PrevCovLine,
+                  ProfileEntryTimestamp);
               SetupNewFrame(BytecodeFunction.FClosure,
                 CallThisRegister, RegisterArgs, Length(RegisterArgs),
                 RegisterUndefined, RegisterUndefined, RegisterUndefined, False, True,
@@ -14753,9 +14973,15 @@ begin
               SetLength(RegisterArgs, B);
               for I := 0 to B - 1 do
                 RegisterArgs[I] := FRegisters[A + 1 + I];
-              PushFrame(A, Frame.IP, Template, PrevCovLine, ProfileEntryTimestamp);
+              CallThisRegister := FRegisters[A - 1];
+              if (C and CALL_FLAG_TAIL) <> 0 then
+                PrepareTailCallFrameReuse(Template, ProfileEntryTimestamp,
+                  InitialFrameStackCount, SavedHandlerCount)
+              else
+                PushFrame(A, Frame.IP, Template, PrevCovLine,
+                  ProfileEntryTimestamp);
               SetupNewFrame(BytecodeFunction.FClosure,
-                FRegisters[A - 1], RegisterArgs, B,
+                CallThisRegister, RegisterArgs, B,
                 RegisterUndefined, RegisterUndefined, RegisterUndefined, False, True,
                 Frame, Template, PrevCovLine, ProfileEntryTimestamp);
               Continue;
@@ -14768,9 +14994,15 @@ begin
 	              for I := 0 to High(RegisterArgs) do
 	                RegisterArgs[I] := VMValueToRegisterFast(
 	                  TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(IntToStr(I)));
-              PushFrame(A, Frame.IP, Template, PrevCovLine, ProfileEntryTimestamp);
+              CallThisRegister := FRegisters[A - 1];
+              if (C and CALL_FLAG_TAIL) <> 0 then
+                PrepareTailCallFrameReuse(Template, ProfileEntryTimestamp,
+                  InitialFrameStackCount, SavedHandlerCount)
+              else
+                PushFrame(A, Frame.IP, Template, PrevCovLine,
+                  ProfileEntryTimestamp);
               SetupNewFrame(BytecodeFunction.FClosure,
-                FRegisters[A - 1], RegisterArgs, Length(RegisterArgs),
+                CallThisRegister, RegisterArgs, Length(RegisterArgs),
                 RegisterUndefined, RegisterUndefined, RegisterUndefined, False, True,
                 Frame, Template, PrevCovLine, ProfileEntryTimestamp);
               Continue;
@@ -15006,7 +15238,8 @@ begin
             AwaitContinuation := GActiveBytecodeGenerator
           else if not Template.IsGenerator then
             AwaitContinuation := TGocciaBytecodeGeneratorObjectValue.CreateRegisters(
-              Self, FCurrentClosure, GetLocalRegister(0), FCurrentArguments, False)
+              Self, FCurrentClosure, GetLocalRegister(0),
+              CurrentArgumentsSnapshot, False)
           else
             AwaitContinuation := nil;
 
@@ -15212,6 +15445,27 @@ begin
           SetRegister(A, ImportModuleSourceValue(
             Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue,
             GlobalName));
+        end;
+
+      // ES2026 §16.2.1.7.3.1 InitializeEnvironment: resolving a named import to
+      // a missing or ambiguous export is a SyntaxError. The module namespace is
+      // already loaded into register A by a preceding OP_IMPORT; reject names it
+      // cannot resolve before reading the binding value so bytecode matches the
+      // interpreter even on the entry path, which skips link-time validation.
+      // CanResolveExport (not HasExport) walks star/forwarding chains, matching
+      // the loader's ValidateStaticNamedImports and re-export validators.
+      OP_GET_IMPORT_BINDING:
+        begin
+          GlobalName := Template.GetConstantUnchecked(
+            DecodeBx(Instruction)).StringValue;
+          if (FRegisters[A].Kind = grkObject) and
+             (FRegisters[A].ObjectValue is TGocciaModuleNamespaceObject) and
+             (not TGocciaModuleNamespaceObject(FRegisters[A].ObjectValue)
+                .Module.CanResolveExport(GlobalName)) then
+            ThrowSyntaxError(Format('Module "%s" has no export named "%s"',
+              [TGocciaModuleNamespaceObject(FRegisters[A].ObjectValue).Module.Path,
+               GlobalName]));
+          SetRegister(A, GetPropertyValue(GetRegister(A), GlobalName));
         end;
 
       OP_EXPORT:
@@ -15802,6 +16056,7 @@ begin
     end;
     Result := RegisterUndefined;
   finally
+    Dec(FNativeExecutionDepth);
     try
       // Unwind any remaining trampoline frames (exception escape path)
       while FFrameStackCount > InitialFrameStackCount do
@@ -15818,8 +16073,9 @@ begin
       FGlobalScope := SavedGlobalScope;
       FCurrentDynamicVarScope := SavedDynamicVarScope;
       FCurrentExecutionContextPushed := SavedExecutionContextPushed;
-      FCurrentArguments := SavedCurrentArguments;
+      FArgumentBase := SavedArgumentBase;
       FArgCount := SavedArgCount;
+      FArguments := @FArgumentStack[FArgumentBase];
       FRegisterBase := SavedRegisterBase;
       FRegisterCount := SavedRegisterCount;
       FRegisters := @FRegisterStack[FRegisterBase];

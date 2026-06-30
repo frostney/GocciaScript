@@ -40,6 +40,7 @@ function RegisterHole: TGocciaRegister; inline;
 function RegisterBoolean(const AValue: Boolean): TGocciaRegister; inline;
 function RegisterInt(const AValue: Int64): TGocciaRegister; inline;
 function RegisterFloat(const AValue: Double): TGocciaRegister; inline;
+function RegisterFromDouble(const AValue: Double): TGocciaRegister; inline;
 function RegisterObject(const AValue: TGocciaValue): TGocciaRegister; inline;
 function ValueToRegister(const AValue: TGocciaValue): TGocciaRegister; inline;
 function RegisterToValue(const ARegister: TGocciaRegister): TGocciaValue; inline;
@@ -81,6 +82,30 @@ function RegisterFloat(const AValue: Double): TGocciaRegister; inline;
 begin
   Result.Kind := grkFloat;
   Result.FloatValue := AValue;
+end;
+
+function RegisterFromDouble(const AValue: Double): TGocciaRegister; inline;
+var
+  Bits: Int64 absolute AValue;
+begin
+  // Build a register directly from a raw Double without ever allocating a heap
+  // TGocciaNumberLiteralValue. Mirrors the number branch of VMValueToRegisterFast:
+  // exact integers in LongInt range become grkInt (so downstream scalar opcodes and
+  // the Zero/One singletons engage on later boxing), and -0.0 stays float to keep
+  // its sign bit. NaN/Infinity/non-integers stay float.
+  if AValue = 0.0 then
+  begin
+    if Bits < 0 then
+      Exit(RegisterFloat(AValue)); // -0.0: preserve the sign bit as a float
+    Exit(RegisterInt(0));
+  end;
+  if AValue = 1.0 then
+    Exit(RegisterInt(1));
+  if (not IsNaN(AValue)) and (not IsInfinite(AValue)) and
+     (Frac(AValue) = 0.0) and
+     (AValue >= Low(LongInt)) and (AValue <= High(LongInt)) then
+    Exit(RegisterInt(Trunc(AValue)));
+  Result := RegisterFloat(AValue);
 end;
 
 function RegisterObject(const AValue: TGocciaValue): TGocciaRegister; inline;

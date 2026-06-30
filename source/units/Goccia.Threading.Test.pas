@@ -8,6 +8,7 @@ uses
   SysUtils,
 
   Goccia.GarbageCollector,
+  Goccia.ThreadCleanupRegistry,
   Goccia.Threading,
   Goccia.Values.Primitives,
   TestingPascalLibrary,
@@ -29,6 +30,8 @@ type
     procedure TestPoolResetsCancelledBetweenRuns;
     procedure TestPoolHandlesEmptyFileList;
     procedure TestPoolSingleWorker;
+    procedure TestThreadCleanupRegistryRunsRegistered;
+    procedure TestShutdownThreadRuntimeDrainsRegistryPerWorker;
   end;
 
 { Helpers }
@@ -42,6 +45,30 @@ procedure ResetWorkerState;
 begin
   GWorkerCallCount := 0;
   SetLength(GWorkerFileNames, 0);
+end;
+
+{ Sentinel cleanup callbacks for the ThreadCleanupRegistry tests. Registrations
+  persist for the process (the registry has no unregister), and a registered
+  callback fires on every thread that drains the registry — including worker
+  threads concurrently — so the counters use InterlockedIncrement and each test
+  resets its own counter before measuring a delta. }
+var
+  GSentinelCount: Integer;
+  GSentinelWorkerCount: Integer;
+
+procedure SentinelCleanup;
+begin
+  InterlockedIncrement(GSentinelCount);
+end;
+
+procedure SentinelCleanupSecond;
+begin
+  InterlockedIncrement(GSentinelCount);
+end;
+
+procedure SentinelWorkerCleanup;
+begin
+  InterlockedIncrement(GSentinelWorkerCount);
 end;
 
 type
@@ -95,6 +122,8 @@ begin
   Test('Pool resets Cancelled between runs', TestPoolResetsCancelledBetweenRuns);
   Test('Pool handles empty file list', TestPoolHandlesEmptyFileList);
   Test('Pool single worker processes all files', TestPoolSingleWorker);
+  Test('ThreadCleanupRegistry runs registered callbacks', TestThreadCleanupRegistryRunsRegistered);
+  Test('ShutdownThreadRuntime drains registry once per worker', TestShutdownThreadRuntimeDrainsRegistryPerWorker);
 end;
 
 procedure TTestThreading.TestWorkQueueDrainsAllItems;
@@ -385,6 +414,59 @@ begin
   end;
 end;
 
+procedure TTestThreading.TestThreadCleanupRegistryRunsRegistered;
+begin
+  // SentinelCleanup and SentinelCleanupSecond are registered once at startup
+  // (see the program body), honouring RegisterThreadvarCleanup's
+  // write-once-at-init contract. A nil callback was also registered there and
+  // must be ignored — otherwise the drain below would call a nil pointer.
+
+  // Draining runs every registered callback (both sentinels, nil skipped).
+  GSentinelCount := 0;
+  RunThreadvarCleanups;
+  Expect<Integer>(GSentinelCount).ToBe(2);
+
+  // Draining again is safe and re-runs them (repeatable on any thread).
+  GSentinelCount := 0;
+  RunThreadvarCleanups;
+  Expect<Integer>(GSentinelCount).ToBe(2);
+end;
+
+procedure TTestThreading.TestShutdownThreadRuntimeDrainsRegistryPerWorker;
+const
+  WORKER_COUNT = 3;
+var
+  Pool: TGocciaThreadPool;
+  Files: TStringList;
+  Host: TTestWorkerHost;
+begin
+  // SentinelWorkerCleanup is registered once at startup (see the program body).
+  // Each worker thread calls ShutdownThreadRuntime as it exits, which drains the
+  // registry on that thread. With WORKER_COUNT workers, the registered callback
+  // must fire exactly WORKER_COUNT times — proving the per-worker-exit wiring.
+  GSentinelWorkerCount := 0;
+
+  ResetWorkerState;
+  Host := TTestWorkerHost.Create;
+  Files := TStringList.Create;
+  try
+    Files.Add('w1.js');
+    Files.Add('w2.js');
+    Files.Add('w3.js');
+
+    Pool := TGocciaThreadPool.Create(WORKER_COUNT);
+    try
+      Pool.RunAll(Files, Host.CountingWorker);
+      Expect<Integer>(GSentinelWorkerCount).ToBe(WORKER_COUNT);
+    finally
+      Pool.Free;
+    end;
+  finally
+    Files.Free;
+    Host.Free;
+  end;
+end;
+
 begin
   // Worker threads call InitThreadRuntime → PinPrimitiveSingletons, which
   // in turn touches UndefinedValue/NullValue/... — those getters assert
@@ -393,6 +475,13 @@ begin
   TGarbageCollector.Initialize;
   PinPrimitiveSingletons;
   InitCriticalSection(GWorkerLock);
+  // Register the cleanup sentinels once here, before any worker thread is
+  // spawned, honouring RegisterThreadvarCleanup's write-once-at-init contract.
+  // The nil registration must be ignored (a nil callback would crash the drain).
+  RegisterThreadvarCleanup(nil);
+  RegisterThreadvarCleanup(@SentinelCleanup);
+  RegisterThreadvarCleanup(@SentinelCleanupSecond);
+  RegisterThreadvarCleanup(@SentinelWorkerCleanup);
   try
     TestRunnerProgram.AddSuite(TTestThreading.Create('Threading'));
     TestRunnerProgram.Run;

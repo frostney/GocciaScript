@@ -5,6 +5,7 @@ unit FileUtils;
 interface
 
 uses
+  {$IFDEF UNIX}BaseUnix,{$ENDIF}
   Classes,
   SysUtils;
 
@@ -14,9 +15,17 @@ function ExpandUTF8FileName(const APath: string): string;
 function UTF8DirectoryExists(const APath: string): Boolean;
 function UTF8FileExists(const APath: string): Boolean;
 
+{ True when APath itself is a symbolic link (UNIX) or a reparse
+  point / junction (Windows). Does not follow the link. }
+function HostPathIsSymlink(const APath: string): Boolean;
+
 { Read an entire file as raw bytes and tag the result as UTF-8.
   No BOM stripping or newline normalization is performed. }
 function ReadUTF8FileText(const APath: string): UTF8String;
+
+{ Read an entire file as raw bytes, preserving every byte exactly
+  (NUL bytes, non-UTF-8 sequences, and original newlines). }
+function ReadFileBytes(const APath: string): TBytes;
 
 implementation
 
@@ -53,6 +62,22 @@ function UTF8FileExists(const APath: string): Boolean;
 begin
   Result := FileExists(UTF8PathToUnicodeString(APath));
 end;
+
+function HostPathIsSymlink(const APath: string): Boolean;
+{$IFDEF UNIX}
+var
+  Info: Stat;
+begin
+  Result := (fpLStat(APath, Info) = 0) and fpS_ISLNK(Info.st_mode);
+end;
+{$ELSE}
+var
+  Attr: LongInt;
+begin
+  Attr := FileGetAttr(APath);
+  Result := (Attr <> -1) and ((Attr and faSymLink) <> 0);
+end;
+{$ENDIF}
 
 function MatchesExtension(const AName: string; const AExtensions: array of string): Boolean;
 var
@@ -122,6 +147,20 @@ begin
 
   SetCodePage(SourceText, CP_UTF8, False);
   Result := UTF8String(SourceText);
+end;
+
+function ReadFileBytes(const APath: string): TBytes;
+var
+  Stream: TFileStream;
+begin
+  Stream := TFileStream.Create(APath, fmOpenRead or fmShareDenyWrite);
+  try
+    SetLength(Result, Stream.Size);
+    if Length(Result) > 0 then
+      Stream.ReadBuffer(Result[0], Length(Result));
+  finally
+    Stream.Free;
+  end;
 end;
 
 end.
