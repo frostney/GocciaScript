@@ -52,6 +52,7 @@ uses
   Goccia.ObjectModel.Engine,
   Goccia.Realm,
   Goccia.Scope,
+  Goccia.Scope.BindingMap,
   Goccia.SourceMap,
   Goccia.SourcePipeline,
   Goccia.Values.BigIntValue,
@@ -59,6 +60,7 @@ uses
   Goccia.Values.FunctionBase,
   Goccia.Values.HoleValue,
   Goccia.Values.IteratorValue,
+  Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
   Goccia.Values.TypedArrayValue;
@@ -138,6 +140,7 @@ type
     FSourceLines: TStringList;
     FExtensions: TGocciaEngineExtensionList;
     FRetainedModules: TObjectList;
+    FLazyThunks: TObjectList;
 
     // Core language built-in objects
     FBuiltinMath: TGocciaMath;
@@ -178,6 +181,11 @@ type
     procedure PinSingletons;
     procedure RegisterBuiltIns;
     procedure RegisterBuiltinConstructors;
+    procedure DefineBuiltinBindingPlaceholder(const AName: string;
+      const ADeclarationType: TGocciaDeclarationType);
+    procedure DefineLazyGlobalThisProperty(const AName: string;
+      const AFactory: TGocciaLazyPropertyFactory);
+    procedure RegisterLazyBuiltinGlobalProperties;
     procedure ExecuteShims;
     procedure RegisterTypedArrayConstructor(const AName: string; const AKind: TGocciaTypedArrayKind; const AObjectConstructor: TGocciaClassValue);
     procedure RegisterGlobalThis;
@@ -191,6 +199,13 @@ type
     function GocciaGCMaxBytesGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function GocciaGCSuggestedMaxBytesGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function GocciaGCBytesAllocatedGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function MaterializeTemporalGlobal: TGocciaValue;
+    function MaterializeIntlGlobal: TGocciaValue;
+    function MaterializeAtomicsGlobal: TGocciaValue;
+    function MaterializeProxyGlobal: TGocciaValue;
+    function MaterializeReflectGlobal: TGocciaValue;
+    function MaterializeDisposableStackGlobal: TGocciaValue;
+    function MaterializeAsyncDisposableStackGlobal: TGocciaValue;
     procedure DoRetainModule(const AModule: TObject);
     procedure DiscardRuntimePending;
     procedure PrintSourcePipelineWarnings(
@@ -234,6 +249,12 @@ type
     procedure SetAllowedFetchHosts(const AHosts: TStrings);
     procedure InjectGlobal(const AKey: string; const AValue: TGocciaValue);
     procedure RegisterGlobal(const AName: string; const AValue: TGocciaValue);
+    procedure RegisterLazyGlobal(const AName: string;
+      const AFactory: TGocciaLazyPropertyFactory;
+      const ADeclarationType: TGocciaDeclarationType);
+    procedure DefineLazyObjectProperty(const ATarget: TGocciaObjectValue;
+      const AName: string; const AFactory: TGocciaLazyPlainFactory;
+      const AFlags: TPropertyFlags);
     procedure InjectGlobalsFromJSON(const AJsonString: string);
     procedure InjectGlobalsFromJSON5(const AJSON5String: UTF8String);
     procedure InjectGlobalsFromTOML(const ATOMLString: UTF8String);
@@ -327,7 +348,6 @@ uses
   Goccia.Values.MapValue,
   Goccia.Values.NativeFunction,
   Goccia.Values.NumberObjectValue,
-  Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.PromiseValue,
   Goccia.Values.SetValue,
   Goccia.Values.SharedArrayBufferValue,
@@ -401,6 +421,40 @@ begin
     FInterpreter.GlobalScope.DefineLexicalBinding(AName, AValue, dtConst);
     FInjectedGlobals.Add(AName);
   end;
+end;
+
+procedure TGocciaEngine.RegisterLazyGlobal(const AName: string;
+  const AFactory: TGocciaLazyPropertyFactory;
+  const ADeclarationType: TGocciaDeclarationType);
+begin
+  // Public seam for runtime extensions: expose a global name whose backing
+  // object is built only on first reflective touch.  Mirrors the lazy
+  // built-in path (DefineBuiltinBindingPlaceholder + DefineLazyGlobalThisProperty)
+  // but is callable after engine boot, when extensions attach.
+  DefineBuiltinBindingPlaceholder(AName, ADeclarationType);
+  DefineLazyGlobalThisProperty(AName, AFactory);
+  // Mark the binding as already mirrored so the RefreshGlobalThis that
+  // TGocciaRuntimeCore.Install runs after each attach skips it, preserving the
+  // lazy descriptor instead of resolving (and materializing) the value while
+  // re-mirroring globals.
+  FInterpreter.GlobalScope.MarkGlobalObjectBackedBinding(AName);
+end;
+
+procedure TGocciaEngine.DefineLazyObjectProperty(
+  const ATarget: TGocciaObjectValue; const AName: string;
+  const AFactory: TGocciaLazyPlainFactory; const AFlags: TPropertyFlags);
+var
+  Thunk: TGocciaLazyValueThunk;
+begin
+  if not Assigned(ATarget) then
+    Exit;
+  // Back a lazy own property on ATarget with a standalone factory, deferring its
+  // construction until the property is first read or reflected on.  The engine
+  // owns the bridging thunk for its lifetime.
+  Thunk := TGocciaLazyValueThunk.Create(AFactory);
+  FLazyThunks.Add(Thunk);
+  ATarget.DefineProperty(AName,
+    TGocciaLazyPropertyDescriptorData.Create(Thunk.Materialize, AFlags));
 end;
 
 procedure TGocciaEngine.InjectGlobalsFromJSON(const AJsonString: string);
@@ -539,17 +593,24 @@ procedure TGocciaEngine.ExecuteShims;
 var
   I: Integer;
   Shim: TGocciaShimDefinition;
+  Materializer: TGocciaShimMaterializer;
 begin
   for I := 0 to DefaultShimCount - 1 do
   begin
     Shim := DefaultShim(I);
-    if (Shim.Name = 'hasOwnProperty') or (Shim.Name = '__proto__') or
-       (Shim.Name = 'defineGetter') or (Shim.Name = 'defineSetter') or
-       (Shim.Name = 'lookupGetter') or (Shim.Name = 'lookupSetter') then
+    if IsSideEffectShim(Shim.Name) then
+      // Mutates Object.prototype with no exported global to bind lazily, so it
+      // runs eagerly at boot.
       LoadShimValue(FInterpreter, Shim)
     else
-      FInterpreter.GlobalScope.DefineLexicalBinding(Shim.Name,
-        LoadShimValue(FInterpreter, Shim), dtConst, True);
+    begin
+      // Defer the name-bound shim's lex/parse/tree-walk until the global is
+      // first touched.  The heaviest shim (Date, ~671 source lines) is then
+      // never parsed for scripts that don't use it.
+      Materializer := TGocciaShimMaterializer.Create(FInterpreter, Shim);
+      FLazyThunks.Add(Materializer);
+      RegisterLazyGlobal(Shim.Name, Materializer.Materialize, dtConst);
+    end;
   end;
 end;
 
@@ -600,6 +661,9 @@ begin
   TGarbageCollector.Instance.AddRootObject(FInterpreter.GlobalScope);
 
   FInjectedGlobals := TStringList.Create;
+  // Owns the lazy materializers (shims, runtime namespaces) whose factory
+  // closures back lazy global properties; freed in the destructor.
+  FLazyThunks := TObjectList.Create(True);
   RegisterDefaultShimNames(FShims);
   PinSingletons;
   RegisterBuiltIns;
@@ -627,6 +691,7 @@ begin
       TGarbageCollector.Instance.RemoveRootObject(FInterpreter.GlobalScope);
 
     FRetainedModules.Free;
+    FLazyThunks.Free;
     FExtensions.Free;
     FBuiltinMath.Free;
     FBuiltinGlobalObject.Free;
@@ -698,17 +763,126 @@ begin
   FBuiltinSymbol := TGocciaGlobalSymbol.Create(CONSTRUCTOR_SYMBOL, Scope, ThrowError);
   FBuiltinMap := TGocciaGlobalMap.Create(CONSTRUCTOR_MAP, Scope, ThrowError);
   FBuiltinPromise := TGocciaGlobalPromise.Create(CONSTRUCTOR_PROMISE, Scope, ThrowError);
-  FBuiltinTemporal := TGocciaTemporalBuiltin.Create('Temporal', Scope, ThrowError);
-  FBuiltinIntl := TGocciaIntlBuiltin.Create('Intl', Scope, ThrowError);
-  FBuiltinAtomics := TGocciaAtomics.Create(CONSTRUCTOR_ATOMICS, Scope, ThrowError);
+  DefineBuiltinBindingPlaceholder('Temporal', dtLet);
+  DefineBuiltinBindingPlaceholder('Intl', dtLet);
+  DefineBuiltinBindingPlaceholder(CONSTRUCTOR_ATOMICS, dtLet);
   FBuiltinArrayBuffer := TGocciaGlobalArrayBuffer.Create(CONSTRUCTOR_ARRAY_BUFFER, Scope, ThrowError);
-  FBuiltinProxy := TGocciaGlobalProxy.Create(Scope);
-  FBuiltinReflect := TGocciaGlobalReflect.Create('Reflect', Scope, ThrowError);
+  DefineBuiltinBindingPlaceholder(CONSTRUCTOR_PROXY, dtConst);
+  DefineBuiltinBindingPlaceholder('Reflect', dtConst);
   FBuiltinGlobalString := TGocciaGlobalString.Create(CONSTRUCTOR_STRING, Scope, ThrowError);
   FBuiltinGlobals := TGocciaGlobals.Create('Globals', Scope, ThrowError);
-  FBuiltinDisposableStack := TGocciaBuiltinDisposableStack.Create('DisposableStack', Scope, ThrowError);
+  DefineBuiltinBindingPlaceholder(CONSTRUCTOR_DISPOSABLE_STACK, dtConst);
+  DefineBuiltinBindingPlaceholder(CONSTRUCTOR_ASYNC_DISPOSABLE_STACK, dtConst);
   Scope.DefineLexicalBinding(CONSTRUCTOR_ITERATOR, TGocciaIteratorValue.CreateGlobalObject, dtConst, True);
   RegisterBuiltinConstructors;
+end;
+
+procedure TGocciaEngine.DefineBuiltinBindingPlaceholder(const AName: string;
+  const ADeclarationType: TGocciaDeclarationType);
+begin
+  FInterpreter.GlobalScope.DefineLexicalBinding(AName,
+    TGocciaUndefinedLiteralValue.UndefinedValue, ADeclarationType, True);
+end;
+
+procedure TGocciaEngine.DefineLazyGlobalThisProperty(const AName: string;
+  const AFactory: TGocciaLazyPropertyFactory);
+begin
+  if not (FRealm.GlobalObject is TGocciaObjectValue) then
+    Exit;
+
+  TGocciaObjectValue(FRealm.GlobalObject).DefineProperty(AName,
+    TGocciaLazyPropertyDescriptorData.Create(AFactory,
+      [pfWritable, pfConfigurable]));
+end;
+
+procedure TGocciaEngine.RegisterLazyBuiltinGlobalProperties;
+begin
+  DefineLazyGlobalThisProperty('Temporal', MaterializeTemporalGlobal);
+  DefineLazyGlobalThisProperty('Intl', MaterializeIntlGlobal);
+  DefineLazyGlobalThisProperty(CONSTRUCTOR_ATOMICS, MaterializeAtomicsGlobal);
+  DefineLazyGlobalThisProperty(CONSTRUCTOR_PROXY, MaterializeProxyGlobal);
+  DefineLazyGlobalThisProperty('Reflect', MaterializeReflectGlobal);
+  DefineLazyGlobalThisProperty(CONSTRUCTOR_DISPOSABLE_STACK,
+    MaterializeDisposableStackGlobal);
+  DefineLazyGlobalThisProperty(CONSTRUCTOR_ASYNC_DISPOSABLE_STACK,
+    MaterializeAsyncDisposableStackGlobal);
+end;
+
+function TGocciaEngine.MaterializeTemporalGlobal: TGocciaValue;
+begin
+  if not Assigned(FBuiltinTemporal) then
+    FBuiltinTemporal := TGocciaTemporalBuiltin.Create('Temporal',
+      FInterpreter.GlobalScope, ThrowError, False);
+  Result := FBuiltinTemporal.TemporalNamespace;
+end;
+
+function TGocciaEngine.MaterializeIntlGlobal: TGocciaValue;
+begin
+  if not Assigned(FBuiltinIntl) then
+  begin
+    FBuiltinIntl := TGocciaIntlBuiltin.Create('Intl', FInterpreter.GlobalScope,
+      ThrowError, False);
+    // Capture the intrinsic %Intl.NumberFormat% / %Intl.DateTimeFormat% into
+    // hidden global bindings the locale shims use. ECMA-402 toLocaleString
+    // constructs the intrinsic, not the global, so Number/Date toLocaleString
+    // must keep working after user code replaces the Intl.NumberFormat /
+    // Intl.DateTimeFormat namespace properties. These are captured here (on Intl
+    // construction, before any user taint can run) and defined after boot, so
+    // they are never mirrored onto globalThis.
+    // Define-if-absent: user code could have declared these reserved names
+    // before first touching Intl; redeclaring a const binding would throw and
+    // abort materialization.
+    if not FInterpreter.GlobalScope.ContainsOwnLexicalBinding(
+      '__GocciaIntlNumberFormat') then
+      FInterpreter.GlobalScope.DefineLexicalBinding('__GocciaIntlNumberFormat',
+        FBuiltinIntl.IntlNamespace.GetProperty('NumberFormat'), dtConst, True);
+    if not FInterpreter.GlobalScope.ContainsOwnLexicalBinding(
+      '__GocciaIntlDateTimeFormat') then
+      FInterpreter.GlobalScope.DefineLexicalBinding('__GocciaIntlDateTimeFormat',
+        FBuiltinIntl.IntlNamespace.GetProperty('DateTimeFormat'), dtConst, True);
+  end;
+  Result := FBuiltinIntl.IntlNamespace;
+end;
+
+function TGocciaEngine.MaterializeAtomicsGlobal: TGocciaValue;
+begin
+  if not Assigned(FBuiltinAtomics) then
+    FBuiltinAtomics := TGocciaAtomics.Create(CONSTRUCTOR_ATOMICS,
+      FInterpreter.GlobalScope, ThrowError, False);
+  Result := FBuiltinAtomics.BuiltinObject;
+end;
+
+function TGocciaEngine.MaterializeProxyGlobal: TGocciaValue;
+begin
+  if not Assigned(FBuiltinProxy) then
+    FBuiltinProxy := TGocciaGlobalProxy.Create(FInterpreter.GlobalScope, False);
+  Result := FBuiltinProxy.ConstructorValue;
+end;
+
+function TGocciaEngine.MaterializeReflectGlobal: TGocciaValue;
+begin
+  if not Assigned(FBuiltinReflect) then
+    FBuiltinReflect := TGocciaGlobalReflect.Create('Reflect',
+      FInterpreter.GlobalScope, ThrowError, False);
+  Result := FBuiltinReflect.BuiltinObject;
+end;
+
+function TGocciaEngine.MaterializeDisposableStackGlobal: TGocciaValue;
+begin
+  if not Assigned(FBuiltinDisposableStack) then
+    FBuiltinDisposableStack := TGocciaBuiltinDisposableStack.Create(
+      CONSTRUCTOR_DISPOSABLE_STACK, FInterpreter.GlobalScope, ThrowError,
+      False);
+  Result := FBuiltinDisposableStack.DisposableStackConstructorValue;
+end;
+
+function TGocciaEngine.MaterializeAsyncDisposableStackGlobal: TGocciaValue;
+begin
+  if not Assigned(FBuiltinDisposableStack) then
+    FBuiltinDisposableStack := TGocciaBuiltinDisposableStack.Create(
+      CONSTRUCTOR_DISPOSABLE_STACK, FInterpreter.GlobalScope, ThrowError,
+      False);
+  Result := FBuiltinDisposableStack.AsyncDisposableStackConstructorValue;
 end;
 
 function ObjectPrototypeProvider: TGocciaObjectValue;
@@ -1044,6 +1218,7 @@ begin
 
   RegisterGocciaScriptGlobal;
   RegisterGlobalThis;
+  RegisterLazyBuiltinGlobalProperties;
 end;
 
 procedure TGocciaEngine.RegisterTypedArrayConstructor(const AName: string; const AKind: TGocciaTypedArrayKind; const AObjectConstructor: TGocciaClassValue);
@@ -1127,6 +1302,24 @@ begin
 
   for Name in Scope.GetOwnBindingNames do
   begin
+    // Internal intrinsic-capture bindings (e.g. __GocciaIntlNumberFormat) must
+    // never be mirrored onto globalThis; they are engine-private and exist only
+    // for the locale shims.
+    if (Length(Name) >= 8) and (Copy(Name, 1, 8) = '__Goccia') then
+      Continue;
+    // A built-in binding becomes GlobalObjectBacked only after it has already
+    // been mirrored onto the global object below, so skipping backed *built-in*
+    // bindings makes RefreshGlobalThis (re-run on every runtime-extension
+    // install) cost O(new bindings) instead of O(all globals).  It is also
+    // load-bearing for lazy globals: re-reading their value here through
+    // Scope.GetValue would resolve the global-object property and force
+    // materialization, defeating the lazy descriptor installed by
+    // RegisterLazyGlobal / lazy built-ins.  Host-injected globals (BuiltIn =
+    // False) are NOT skipped: RegisterGlobal can replace them via
+    // ForceUpdateBinding, and the mirrored globalThis property must be refreshed
+    // to the new value.
+    if Scope.IsGlobalObjectBackedBinding(Name) and Scope.IsBuiltInBinding(Name) then
+      Continue;
     // ES2026 §19.1: Value properties (NaN, Infinity, undefined) are
     // { [[Writable]]: false, [[Enumerable]]: false, [[Configurable]]: false }.
     // All other global object properties are

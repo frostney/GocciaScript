@@ -22,6 +22,12 @@ type
   TGocciaObjectValue = class(TGocciaValue)
   private
     procedure SetRegExpData(const AValue: TObject);
+    function MaterializeOwnLazyProperty(const AName: string;
+      const ADescriptor: TGocciaPropertyDescriptor): TGocciaPropertyDescriptor;
+    procedure MaterializeAllLazyStringProperties;
+    function StoreLazyPropertyDescriptor(const AName: string;
+      const ADescriptor: TGocciaPropertyDescriptor;
+      out ABlockedByExtensibility: Boolean): Boolean;
   protected
     FProperties: TGocciaPropertyMap;
     FSymbolDescriptors: TSymbolDescriptorMap;
@@ -358,6 +364,65 @@ begin
     Exit;
   FRegExpData.Free;
   FRegExpData := AValue;
+end;
+
+function TGocciaObjectValue.MaterializeOwnLazyProperty(const AName: string;
+  const ADescriptor: TGocciaPropertyDescriptor): TGocciaPropertyDescriptor;
+var
+  LazyDescriptor: TGocciaLazyPropertyDescriptorData;
+  MaterializedDescriptor: TGocciaPropertyDescriptorData;
+  Value: TGocciaValue;
+begin
+  Result := ADescriptor;
+  if not (ADescriptor is TGocciaLazyPropertyDescriptorData) then
+    Exit;
+
+  LazyDescriptor := TGocciaLazyPropertyDescriptorData(ADescriptor);
+  Value := LazyDescriptor.Materialize;
+  MaterializedDescriptor := TGocciaPropertyDescriptorData.Create(
+    Value, LazyDescriptor.Flags);
+  FProperties.Add(AName, MaterializedDescriptor);
+  LazyDescriptor.Free;
+  Result := MaterializedDescriptor;
+end;
+
+procedure TGocciaObjectValue.MaterializeAllLazyStringProperties;
+var
+  Descriptor: TGocciaPropertyDescriptor;
+  I: Integer;
+  Keys: TArray<string>;
+begin
+  Keys := FProperties.Keys;
+  for I := 0 to High(Keys) do
+    if FProperties.TryGetValue(Keys[I], Descriptor) then
+      MaterializeOwnLazyProperty(Keys[I], Descriptor);
+end;
+
+function TGocciaObjectValue.StoreLazyPropertyDescriptor(const AName: string;
+  const ADescriptor: TGocciaPropertyDescriptor;
+  out ABlockedByExtensibility: Boolean): Boolean;
+var
+  Current: TGocciaPropertyDescriptor;
+begin
+  Result := False;
+  ABlockedByExtensibility := False;
+  if not (ADescriptor is TGocciaLazyPropertyDescriptorData) then
+    Exit;
+
+  Current := nil;
+  FProperties.TryGetValue(AName, Current);
+  if not Assigned(Current) and not FExtensible then
+  begin
+    ABlockedByExtensibility := True;
+    Exit;
+  end;
+  if Assigned(Current) and not Current.Configurable then
+    Exit;
+
+  if Assigned(Current) then
+    Current.Free;
+  FProperties.Add(AName, ADescriptor);
+  Result := True;
 end;
 
 class function TGocciaObjectValue.GetSharedObjectPrototype: TGocciaObjectValue;
@@ -741,6 +806,7 @@ var
 begin
   if FProperties.TryGetValue(AName, Descriptor) then
   begin
+    Descriptor := MaterializeOwnLazyProperty(AName, Descriptor);
     if Descriptor is TGocciaPropertyDescriptorAccessor then
     begin
       Accessor := TGocciaPropertyDescriptorAccessor(Descriptor);
@@ -1095,9 +1161,19 @@ procedure TGocciaObjectValue.DefineProperty(const AName: string; const ADescript
 var
   Current: TGocciaPropertyDescriptor;
   Applied: TGocciaPropertyDescriptor;
+  BlockedByExtensibility: Boolean;
 begin
+  if StoreLazyPropertyDescriptor(AName, ADescriptor,
+     BlockedByExtensibility) then
+    Exit;
+  if BlockedByExtensibility then
+    ThrowTypeError(Format(SErrorCannotAddPropertyNotExtensible, [AName]),
+      SSuggestObjectNotExtensible);
+
   Current := nil;
   FProperties.TryGetValue(AName, Current);
+  if Assigned(Current) then
+    Current := MaterializeOwnLazyProperty(AName, Current);
   if not ValidateAndCreatePropertyDescriptor(Current, ADescriptor,
     FExtensible, Applied) then
   begin
@@ -1123,9 +1199,21 @@ function TGocciaObjectValue.TryDefineProperty(const AName: string; const ADescri
 var
   Current: TGocciaPropertyDescriptor;
   Applied: TGocciaPropertyDescriptor;
+  BlockedByExtensibility: Boolean;
 begin
+  if StoreLazyPropertyDescriptor(AName, ADescriptor,
+     BlockedByExtensibility) then
+    Exit(True);
+  if BlockedByExtensibility then
+  begin
+    ADescriptor.Free;
+    Exit(False);
+  end;
+
   Current := nil;
   FProperties.TryGetValue(AName, Current);
+  if Assigned(Current) then
+    Current := MaterializeOwnLazyProperty(AName, Current);
   if not ValidateAndCreatePropertyDescriptor(Current, ADescriptor,
     FExtensible, Applied) then
   begin
@@ -1204,6 +1292,7 @@ var
   Keys: TArray<string>;
   Count: Integer;
 begin
+  MaterializeAllLazyStringProperties;
   SetLength(Keys, FProperties.Count);
   Count := 0;
   for Key in FProperties.Keys do
@@ -1260,6 +1349,7 @@ var
 begin
   if FProperties.TryGetValue(AName, Descriptor) then
   begin
+    Descriptor := MaterializeOwnLazyProperty(AName, Descriptor);
     if Descriptor is TGocciaPropertyDescriptorAccessor then
     begin
       Accessor := TGocciaPropertyDescriptorAccessor(Descriptor);
@@ -1319,7 +1409,9 @@ end;
 
 function TGocciaObjectValue.GetOwnPropertyDescriptor(const AName: string): TGocciaPropertyDescriptor;
 begin
-  if not FProperties.TryGetValue(AName, Result) then
+  if FProperties.TryGetValue(AName, Result) then
+    Result := MaterializeOwnLazyProperty(AName, Result)
+  else
     Result := nil;
 end;
 
@@ -1332,8 +1424,12 @@ begin
 end;
 
 function TGocciaObjectValue.HasOwnProperty(const AName: string): Boolean;
+var
+  Descriptor: TGocciaPropertyDescriptor;
 begin
-  Result := FProperties.ContainsKey(AName);
+  Result := FProperties.TryGetValue(AName, Descriptor);
+  if Result then
+    MaterializeOwnLazyProperty(AName, Descriptor);
 end;
 
 function TGocciaObjectValue.DeleteProperty(const AName: string): Boolean;
@@ -1345,6 +1441,7 @@ begin
     Result := True;
     Exit;
   end;
+  Descriptor := MaterializeOwnLazyProperty(AName, Descriptor);
 
   if not Descriptor.Configurable then
   begin
@@ -1363,6 +1460,7 @@ var
   Names: TArray<string>;
   Count: Integer;
 begin
+  MaterializeAllLazyStringProperties;
   SetLength(Names, FProperties.Count);
   Count := 0;
 
@@ -1437,6 +1535,7 @@ var
   Names: TArray<string>;
   Count: Integer;
 begin
+  MaterializeAllLazyStringProperties;
   SetLength(Names, FProperties.Count);
   Count := 0;
   for Key in FProperties.Keys do

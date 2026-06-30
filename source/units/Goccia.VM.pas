@@ -1491,9 +1491,14 @@ function VMGetOwnDataDescriptorValue(const AObject: TGocciaObjectValue;
 var
   Descriptor: TGocciaPropertyDescriptor;
 begin
+  // Exact-class match: a lazy descriptor (TGocciaLazyPropertyDescriptorData, the
+  // only TGocciaPropertyDescriptorData subclass) must NOT be served raw here —
+  // its Value is undefined until materialized. Excluding it routes the first
+  // read through the virtual GetProperty path, which materializes and replaces
+  // the entry in place with a plain descriptor, so later reads hit this fast path.
   Result := Assigned(AObject) and
     AObject.Properties.TryGetValue(AName, Descriptor) and
-    (Descriptor is TGocciaPropertyDescriptorData);
+    (Descriptor.ClassType = TGocciaPropertyDescriptorData);
   if Result then
     AValue := TGocciaPropertyDescriptorData(Descriptor).Value
   else
@@ -1563,11 +1568,14 @@ function VMTryGetCachedOwnDataProperty(const AObject: TGocciaObjectValue;
 var
   Descriptor: TGocciaPropertyDescriptor;
 begin
+  // Exact-class match excludes a not-yet-materialized lazy descriptor (see
+  // VMGetOwnDataDescriptorValue); a cache miss here routes the first read
+  // through GetProperty, which materializes and replaces the entry in place.
   Result := (ACache^.Shape = Pointer(
       TGocciaShapedPropertyMap(AObject.Properties).Shape)) and
     (ACache^.Shape <> nil) and
     AObject.Properties.TryGetValueAtEntry(ACache^.EntryIndex, Descriptor) and
-    (Descriptor is TGocciaPropertyDescriptorData);
+    (Descriptor.ClassType = TGocciaPropertyDescriptorData);
   if Result then
   begin
     AValue := TGocciaPropertyDescriptorData(Descriptor).Value;
@@ -1702,7 +1710,9 @@ begin
   if not Walk.Properties.TryGetValueAtEntry(ACache^.EntryIndex,
     Descriptor) then
     Exit;
-  if not (Descriptor is TGocciaPropertyDescriptorData) then
+  // Exact-class match: never serve a not-yet-materialized lazy descriptor raw
+  // (see VMGetOwnDataDescriptorValue).
+  if Descriptor.ClassType <> TGocciaPropertyDescriptorData then
     Exit;
   AValue := TGocciaPropertyDescriptorData(Descriptor).Value;
   // Validated hit: reset the streak so only consecutive misses count (see
@@ -1761,7 +1771,7 @@ begin
       Continue;
     end;
     if (not Walk.Properties.TryGetValueAtEntry(EntryIndex, Descriptor)) or
-       (not (Descriptor is TGocciaPropertyDescriptorData)) then
+       (Descriptor.ClassType <> TGocciaPropertyDescriptorData) then
       Exit;
     // Presence at the holder: the entry must lie inside the shape's
     // covered prefix for the cached (shape, index) pair to stay valid.
@@ -1815,9 +1825,12 @@ function VMSetOwnWritableDataDescriptorValue(const AObject: TGocciaObjectValue;
 var
   Descriptor: TGocciaPropertyDescriptor;
 begin
+  // Exact-class match: route writes to a not-yet-materialized lazy descriptor
+  // through the slow [[Set]] path, so a write is not silently overwritten by a
+  // later materialization (see VMGetOwnDataDescriptorValue).
   Result := Assigned(AObject) and
     AObject.Properties.TryGetValue(AName, Descriptor) and
-    (Descriptor is TGocciaPropertyDescriptorData);
+    (Descriptor.ClassType = TGocciaPropertyDescriptorData);
   if not Result then
     Exit;
   if not TGocciaPropertyDescriptorData(Descriptor).Writable then
@@ -13522,6 +13535,14 @@ begin
                   TGocciaObjectValue(FRegisters[B].ObjectValue), GlobalName,
                   KeyIndex, PrivateDescriptor) of
                   oppData:
+                  // A not-yet-materialized lazy descriptor (the only
+                  // TGocciaPropertyDescriptorData subclass) must not be read raw
+                  // or cached here: route its first touch through
+                  // GetPropertyValue, which materializes it and replaces the
+                  // entry in place with a plain descriptor so later reads cache
+                  // normally.
+                  if PrivateDescriptor.ClassType =
+                     TGocciaPropertyDescriptorData then
                   begin
                     if Assigned(PropertyReadCache) and
                        (PropertyReadCache^.MissStreak <
@@ -13531,7 +13552,10 @@ begin
                         KeyIndex, PropertyReadCache);
                     SetRegisterFast(A,
                       TGocciaPropertyDescriptorData(PrivateDescriptor).Value);
-                  end;
+                  end
+                  else
+                    SetRegister(A, GetPropertyValue(
+                      FRegisters[B].ObjectValue, GlobalName));
                   oppNonData:
                   begin
                     // Accessor/exotic own descriptor: never cacheable here;

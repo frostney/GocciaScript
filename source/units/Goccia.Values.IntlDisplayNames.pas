@@ -362,7 +362,12 @@ begin
   Shared := GetIntlDisplayNamesShared;
   if not Assigned(Shared) then
   begin
-    DefaultOpts := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
+    // Null-prototype: this internal bootstrap options object must not inherit
+    // %Object.prototype%, so building the prototype (which can happen lazily,
+    // after user code has installed accessors on Object.prototype) never reads
+    // or [[Set]]s through a tainted inherited "type"/etc. accessor. ECMA-402
+    // option records are CreateDataProperty-populated and not user-observable.
+    DefaultOpts := TGocciaObjectValue.Create(nil);
     DefaultOpts.AssignProperty('type', TGocciaStringLiteralValue.Create('language'));
     TGocciaIntlDisplayNamesValue.Create(DefaultLocale, DefaultOpts);
     Shared := GetIntlDisplayNamesShared;

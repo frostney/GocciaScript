@@ -19,7 +19,8 @@ type
     function ProxyRevocable(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
   public
-    constructor Create(const AScope: TGocciaScope);
+    constructor Create(const AScope: TGocciaScope;
+      const ADefineGlobalBinding: Boolean = True);
 
     property ConstructorValue: TGocciaValue read FConstructorValue;
   end;
@@ -37,7 +38,8 @@ uses
   Goccia.Values.ObjectValue,
   Goccia.Values.ProxyValue;
 
-constructor TGocciaGlobalProxy.Create(const AScope: TGocciaScope);
+constructor TGocciaGlobalProxy.Create(const AScope: TGocciaScope;
+  const ADefineGlobalBinding: Boolean = True);
 var
   ConstructorFn: TGocciaNativeFunctionValue;
 begin
@@ -48,7 +50,8 @@ begin
       PROP_REVOCABLE, 2));
   FConstructorValue := ConstructorFn;
 
-  AScope.DefineLexicalBinding(CONSTRUCTOR_PROXY, FConstructorValue, dtConst, True);
+  if ADefineGlobalBinding then
+    AScope.DefineLexicalBinding(CONSTRUCTOR_PROXY, FConstructorValue, dtConst, True);
 end;
 
 // ES2026 §28.2.1 Proxy(target, handler)

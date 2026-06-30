@@ -78,7 +78,11 @@ type
     procedure RegisterZonedDateTime;
     procedure RegisterNow;
   public
-    constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
+    constructor Create(const AName: string; const AScope: TGocciaScope;
+      const AThrowError: TGocciaThrowErrorCallback;
+      const ADefineGlobalBinding: Boolean = True);
+
+    property TemporalNamespace: TGocciaObjectValue read FTemporalNamespace;
   end;
 
 implementation
@@ -121,8 +125,9 @@ const
 
 { TGocciaTemporalBuiltin }
 
-constructor TGocciaTemporalBuiltin.Create(const AName: string; const AScope: TGocciaScope;
-  const AThrowError: TGocciaThrowErrorCallback);
+constructor TGocciaTemporalBuiltin.Create(const AName: string;
+  const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback;
+  const ADefineGlobalBinding: Boolean = True);
 var
   TemporalMembers: array[0..0] of TGocciaMemberDefinition;
 begin
@@ -147,7 +152,8 @@ begin
       [pfConfigurable]);
     RegisterMemberDefinitions(FTemporalNamespace, TemporalMembers);
 
-    AScope.DefineLexicalBinding(AName, FTemporalNamespace, dtLet, True);
+    if ADefineGlobalBinding then
+      AScope.DefineLexicalBinding(AName, FTemporalNamespace, dtLet, True);
   finally
     TGarbageCollector.Instance.RemoveTempRoot(FTemporalNamespace);
   end;

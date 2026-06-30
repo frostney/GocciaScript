@@ -27,8 +27,26 @@ type
     Source: string;     // GocciaScript module source with a single named export
   end;
 
+  { Defers a single name-bound shim's lex/parse/evaluate until the global is
+    first touched.  Holds the interpreter and shim definition; Materialize
+    matches the of-object lazy factory the engine registers on globalThis.
+    The engine owns the materializer for its lifetime. }
+  TGocciaShimMaterializer = class
+  private
+    FInterpreter: TGocciaInterpreter;
+    FShim: TGocciaShimDefinition;
+  public
+    constructor Create(const AInterpreter: TGocciaInterpreter;
+      const AShim: TGocciaShimDefinition);
+    function Materialize: TGocciaValue;
+  end;
+
 function DefaultShimCount: Integer;
 function DefaultShim(const AIndex: Integer): TGocciaShimDefinition;
+
+{ True for shims that only mutate Object.prototype and export no value, so they
+  have no global name to bind lazily and must run eagerly at boot. }
+function IsSideEffectShim(const AName: string): Boolean;
 
 { Populate AShims with the names of all default shims.
   Call before RegisterBuiltIns so Goccia.shims reflects the names. }
@@ -50,7 +68,7 @@ uses
   Goccia.SourcePipeline;
 
 const
-  DEFAULT_SHIMS: array[0..12] of TGocciaShimDefinition = (
+  DEFAULT_SHIMS: array[0..13] of TGocciaShimDefinition = (
     ( // WHATWG HTML spec §8.3 — legacy btoa(data) via Uint8Array.toBase64
       Name: 'btoa';
       FileName: '<shim:btoa>';
@@ -432,8 +450,6 @@ const
         '  catch (e) {}'#10 +
         '  return NaN;'#10 +
         '};'#10 +
-        'const __GocciaShimNumberFormat: any = Intl.NumberFormat;'#10 +
-        'const __GocciaShimDateTimeFormat: any = Intl.DateTimeFormat;'#10 +
         'const __GocciaDateSlots = new WeakMap();'#10 +
         'const __GocciaDateIsObject = (value: any): boolean =>'#10 +
         '  (typeof value === "object" && value !== null) || typeof value === "function";'#10 +
@@ -512,34 +528,6 @@ const
         '};'#10 +
         'const __GocciaDateClass = class Date {'#10 +
         '  static {'#10 +
-        '    const numberLocale = {'#10 +
-        '      toLocaleString(...args: any[]): string {'#10 +
-        '        const value: number = Number.prototype.valueOf.call(this);'#10 +
-        '        return new __GocciaShimNumberFormat(args[0], args[1]).format(value);'#10 +
-        '      }'#10 +
-        '    }.toLocaleString;'#10 +
-        '    const arrayLocale = {'#10 +
-        '      toLocaleString(...args: any[]): string {'#10 +
-        '        if (this === null || this === undefined) throw new TypeError("Array.prototype.toLocaleString called on null or undefined");'#10 +
-        '        const array: any = Object(this);'#10 +
-        '        const length: number = Number(array.length);'#10 +
-        '        const len: number = !Number.isFinite(length) || length <= 0 ? 0 : Math.trunc(length);'#10 +
-        '        const elementString = (index: number): string => {'#10 +
-        '          const nextElement: any = array[index];'#10 +
-        '          if (nextElement !== undefined && nextElement !== null) {'#10 +
-        '            const method: any = Object(nextElement).toLocaleString;'#10 +
-        '            if (typeof method !== "function")'#10 +
-        '              throw new TypeError("Array.prototype.toLocaleString element toLocaleString is not a function");'#10 +
-        '            return String(method.call(nextElement, args[0], args[1]));'#10 +
-        '          }'#10 +
-        '          return "";'#10 +
-        '        };'#10 +
-        '        const build = (index: number, result: string): string => index >= len ? result : build(index + 1, result + (index > 0 ? "," : "") + elementString(index));'#10 +
-        '        return build(0, "");'#10 +
-        '      }'#10 +
-        '    }.toLocaleString;'#10 +
-        '    Object.defineProperty(Number.prototype, "toLocaleString", { value: numberLocale, writable: true, configurable: true });'#10 +
-        '    Object.defineProperty(Array.prototype, "toLocaleString", { value: arrayLocale, writable: true, configurable: true });'#10 +
         '    Object.defineProperty(this.prototype, Symbol.toStringTag, { value: "Date", writable: true, configurable: true });'#10 +
         '  }'#10 +
         '  static now(): number { return Temporal.Now.instant().epochMilliseconds; }'#10 +
@@ -768,17 +756,20 @@ const
         '  toLocaleString(...args: any[]): string {'#10 +
         '    Date.#require(this);'#10 +
         '    if (!Date.#valid(this)) return "Invalid Date";'#10 +
-        '    return new __GocciaShimDateTimeFormat(args[0], Date.#localeOptions(args[1], true, true)).format(Date.#get(this));'#10 +
+        '    void Intl;'#10 +
+        '    return new __GocciaIntlDateTimeFormat(args[0], Date.#localeOptions(args[1], true, true)).format(Date.#get(this));'#10 +
         '  }'#10 +
         '  toLocaleDateString(...args: any[]): string {'#10 +
         '    Date.#require(this);'#10 +
         '    if (!Date.#valid(this)) return "Invalid Date";'#10 +
-        '    return new __GocciaShimDateTimeFormat(args[0], Date.#localeOptions(args[1], true, false)).format(Date.#get(this));'#10 +
+        '    void Intl;'#10 +
+        '    return new __GocciaIntlDateTimeFormat(args[0], Date.#localeOptions(args[1], true, false)).format(Date.#get(this));'#10 +
         '  }'#10 +
         '  toLocaleTimeString(...args: any[]): string {'#10 +
         '    Date.#require(this);'#10 +
         '    if (!Date.#valid(this)) return "Invalid Date";'#10 +
-        '    return new __GocciaShimDateTimeFormat(args[0], Date.#localeOptions(args[1], false, true)).format(Date.#get(this));'#10 +
+        '    void Intl;'#10 +
+        '    return new __GocciaIntlDateTimeFormat(args[0], Date.#localeOptions(args[1], false, true)).format(Date.#get(this));'#10 +
         '  }'#10 +
         '  toTemporalInstant(): any {'#10 +
         '    const value: number = __GocciaDateGetSlot(this);'#10 +
@@ -810,6 +801,47 @@ const
         'Object.defineProperty(__GocciaDateConstructor, "prototype", { value: __GocciaDateClass.prototype, writable: false, configurable: false });'#10 +
         'Object.defineProperty(__GocciaDateClass.prototype, "constructor", { value: __GocciaDateConstructor, writable: true, configurable: true });'#10 +
         'export const Date = __GocciaDateConstructor;'
+    ),
+    ( // toLocaleString for Number/Array via Intl. Installed eagerly: these
+      // prototype mutations were previously a side effect of the (now lazy)
+      // Date shim's static block, so they must not depend on Date being
+      // materialized. Intl is referenced only when a method is called, so this
+      // does not force Intl materialization at boot.
+      Name: 'numberArrayToLocaleString';
+      FileName: '<shim:numberArrayToLocaleString>';
+      Source:
+        'export const numberArrayToLocaleString = ((numberProto: any, arrayProto: any): any => {'#10 +
+        '  const numberLocale = {'#10 +
+        '    toLocaleString(...args: any[]): string {'#10 +
+        '      const value: number = Number.prototype.valueOf.call(this);'#10 +
+        '      void Intl;'#10 +
+        '      return new __GocciaIntlNumberFormat(args[0], args[1]).format(value);'#10 +
+        '    }'#10 +
+        '  }.toLocaleString;'#10 +
+        '  const arrayLocale = {'#10 +
+        '    toLocaleString(...args: any[]): string {'#10 +
+        '      if (this === null || this === undefined) throw new TypeError("Array.prototype.toLocaleString called on null or undefined");'#10 +
+        '      const array: any = Object(this);'#10 +
+        '      const length: number = Number(array.length);'#10 +
+        '      const len: number = !Number.isFinite(length) || length <= 0 ? 0 : Math.trunc(length);'#10 +
+        '      const elementString = (index: number): string => {'#10 +
+        '        const nextElement: any = array[index];'#10 +
+        '        if (nextElement !== undefined && nextElement !== null) {'#10 +
+        '          const method: any = Object(nextElement).toLocaleString;'#10 +
+        '          if (typeof method !== "function")'#10 +
+        '            throw new TypeError("Array.prototype.toLocaleString element toLocaleString is not a function");'#10 +
+        '          return String(method.call(nextElement, args[0], args[1]));'#10 +
+        '        }'#10 +
+        '        return "";'#10 +
+        '      };'#10 +
+        '      const build = (index: number, result: string): string => index >= len ? result : build(index + 1, result + (index > 0 ? "," : "") + elementString(index));'#10 +
+        '      return build(0, "");'#10 +
+        '    }'#10 +
+        '  }.toLocaleString;'#10 +
+        '  Object.defineProperty(numberProto, "toLocaleString", { value: numberLocale, writable: true, configurable: true });'#10 +
+        '  Object.defineProperty(arrayProto, "toLocaleString", { value: arrayLocale, writable: true, configurable: true });'#10 +
+        '  return numberLocale;'#10 +
+        '})(Number.prototype, Array.prototype);'
     ),
     ( // ES2026 §20.1.3.2 — legacy hasOwnProperty via Object.hasOwn
       Name: 'hasOwnProperty';
@@ -989,6 +1021,27 @@ begin
   finally
     ModuleParseResult.Free;
   end;
+end;
+
+function IsSideEffectShim(const AName: string): Boolean;
+begin
+  Result := (AName = 'numberArrayToLocaleString') or
+    (AName = 'hasOwnProperty') or (AName = '__proto__') or
+    (AName = 'defineGetter') or (AName = 'defineSetter') or
+    (AName = 'lookupGetter') or (AName = 'lookupSetter');
+end;
+
+constructor TGocciaShimMaterializer.Create(
+  const AInterpreter: TGocciaInterpreter; const AShim: TGocciaShimDefinition);
+begin
+  inherited Create;
+  FInterpreter := AInterpreter;
+  FShim := AShim;
+end;
+
+function TGocciaShimMaterializer.Materialize: TGocciaValue;
+begin
+  Result := LoadShimValue(FInterpreter, FShim);
 end;
 
 end.

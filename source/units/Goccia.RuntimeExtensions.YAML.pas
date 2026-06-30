@@ -9,12 +9,14 @@ uses
 
   Goccia.Builtins.YAML,
   Goccia.Modules,
-  Goccia.Runtime;
+  Goccia.Runtime,
+  Goccia.Values.Primitives;
 
 type
   TGocciaYAMLRuntimeExtension = class(TGocciaRuntimeExtension)
   private
     FBuiltinYAML: TGocciaYAMLBuiltin;
+    function MaterializeYAML: TGocciaValue;
   public
     procedure Attach(const ARuntime: TGocciaRuntimeCore); override;
     procedure Detach; override;
@@ -35,17 +37,25 @@ uses
   Goccia.GarbageCollector,
   Goccia.Keywords.Reserved,
   Goccia.Modules.ContentProvider,
+  Goccia.Scope,
   Goccia.Values.ArrayValue,
   Goccia.Values.ObjectValue,
-  Goccia.Values.Primitives,
   Goccia.YAML;
 
 procedure TGocciaYAMLRuntimeExtension.Attach(
   const ARuntime: TGocciaRuntimeCore);
 begin
   inherited Attach(ARuntime);
-  FBuiltinYAML := TGocciaYAMLBuiltin.Create('YAML',
-    Runtime.Engine.Interpreter.GlobalScope, Runtime.Engine.ThrowError);
+  // Defer building the YAML namespace until first reflective access.
+  Runtime.Engine.RegisterLazyGlobal('YAML', MaterializeYAML, dtLet);
+end;
+
+function TGocciaYAMLRuntimeExtension.MaterializeYAML: TGocciaValue;
+begin
+  if not Assigned(FBuiltinYAML) then
+    FBuiltinYAML := TGocciaYAMLBuiltin.Create('YAML',
+      Runtime.Engine.Interpreter.GlobalScope, Runtime.Engine.ThrowError, False);
+  Result := FBuiltinYAML.BuiltinObject;
 end;
 
 procedure TGocciaYAMLRuntimeExtension.Detach;

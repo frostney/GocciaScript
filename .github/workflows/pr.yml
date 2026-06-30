@@ -402,8 +402,43 @@ jobs:
       - name: Check embedded resource CLI behaviour
         run: bun run scripts/test-cli-embedded-resources.ts
 
+      - name: Check Intl taint robustness under lazy materialization
+        run: bun run scripts/test-cli-intl-taint.ts
+
       - name: Check benchmark comparison logic
         run: bun run scripts/test-benchmark-compare.ts
+
+  boot-timing:
+    needs: build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+
+      - name: Download build
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: build-pr
+          path: build/
+
+      - name: Make binaries executable
+        run: chmod +x build/*
+
+      - name: Measure empty-script boot wall-clock
+        run: bun run scripts/measure-boot-timing.ts build/GocciaScriptLoader boot-timing.json
+
+      - name: Upload boot timing
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: boot-timing
+          retention-days: 1
+          path: boot-timing.json
 
   test262:
     needs: build
@@ -594,7 +629,7 @@ jobs:
             }
 
   timing-comment:
-    needs: [test, benchmark]
+    needs: [test, benchmark, boot-timing]
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -626,6 +661,12 @@ jobs:
         continue-on-error: true
         with:
           name: benchmark-bytecode
+
+      - name: Download boot timing
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        continue-on-error: true
+        with:
+          name: boot-timing
 
       - name: Post timing comment
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
@@ -680,11 +721,14 @@ jobs:
             const testBytecode = tryRead('test-results-bytecode.json');
             const benchInterp = tryRead('benchmark-interpreted.json');
             const benchBytecode = tryRead('benchmark-bytecode.json');
+            const boot = tryRead('boot-timing.json');
 
-            if (!testInterp && !testBytecode && !benchInterp && !benchBytecode) {
+            if (!testInterp && !testBytecode && !benchInterp && !benchBytecode && !boot) {
               console.log('No timing data available');
               return;
             }
+
+            const fmtMs = (ms) => typeof ms === 'number' ? ms.toFixed(1) + 'ms' : '—';
 
             let body = '## Suite Timing\n\n';
 
@@ -771,6 +815,15 @@ jobs:
               section += '_GC rows aggregate the main thread plus all worker thread-local GCs. Benchmark runner performs explicit between-file collections, so collection and collected-object counts can be much higher than the test runner._\n\n';
               section += memoryRows(benchInterp, benchBytecode);
               body += details(`Benchmarks (interpreted: ${countSummary(iBenchCount)}; bytecode: ${countSummary(bBenchCount)})`, section);
+            }
+
+            if (boot) {
+              let section = '| Metric | Interpreted | Bytecode |\n';
+              section += '|--------|------------|----------|\n';
+              section += row('Boot (median)', fmtMs(boot.interpreted?.medianMs), fmtMs(boot.bytecode?.medianMs));
+              section += row('Boot (min)', fmtMs(boot.interpreted?.minMs), fmtMs(boot.bytecode?.minMs));
+              section += `\n_Empty-script (\`0;\`) end-to-end process wall-clock for \`GocciaScriptLoader\`, min and median over ${boot.runs ?? '?'} runs after ${boot.warmup ?? '?'} warmups. Includes a fixed process / dynamic-loader floor that does not shrink, so it understates the engine-boot speedup; treat as practical boot time, not pure engine work._\n`;
+              body += details('Boot', section);
             }
 
             body += '<sub>Measured on ubuntu-latest x64.</sub>';

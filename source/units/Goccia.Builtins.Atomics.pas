@@ -25,7 +25,8 @@ type
   TGocciaAtomics = class(TGocciaBuiltin)
   public
     constructor Create(const AName: string; AScope: TGocciaScope;
-      AThrowError: TGocciaThrowErrorCallback);
+      AThrowError: TGocciaThrowErrorCallback;
+      const ADefineGlobalBinding: Boolean = True);
     destructor Destroy; override;
   published
     function AtomicsAdd(const AArgs: TGocciaArgumentsCollection;
@@ -959,7 +960,8 @@ begin
 end;
 
 constructor TGocciaAtomics.Create(const AName: string; AScope: TGocciaScope;
-  AThrowError: TGocciaThrowErrorCallback);
+  AThrowError: TGocciaThrowErrorCallback;
+  const ADefineGlobalBinding: Boolean = True);
 var
   Members: TGocciaMemberCollection;
   StaticMembers: TArray<TGocciaMemberDefinition>;
@@ -1006,7 +1008,8 @@ begin
   end;
 
   RegisterMemberDefinitions(FBuiltinObject, StaticMembers);
-  AScope.DefineLexicalBinding(AName, FBuiltinObject, dtLet, True);
+  if ADefineGlobalBinding then
+    AScope.DefineLexicalBinding(AName, FBuiltinObject, dtLet, True);
 end;
 
 destructor TGocciaAtomics.Destroy;

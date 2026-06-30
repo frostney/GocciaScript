@@ -79,6 +79,7 @@ type
       const ANonStrictMode: Boolean = False); virtual;
     procedure ForceUpdateBinding(const AName: string; const AValue: TGocciaValue);
     procedure MarkGlobalObjectBackedBinding(const AName: string);
+    function IsGlobalObjectBackedBinding(const AName: string): Boolean;
 
     // Var binding support (separate map on function/module/global scopes)
     procedure DefineVariableBinding(const AName: string; const AValue: TGocciaValue;
@@ -735,6 +736,23 @@ begin
     LexicalBinding.GlobalObjectBacked := True;
     FVarBindings.AddOrSetValue(AName, LexicalBinding);
   end;
+end;
+
+function TGocciaScope.IsGlobalObjectBackedBinding(const AName: string): Boolean;
+var
+  LexicalBinding: TLexicalBinding;
+begin
+  // Reads the binding's GlobalObjectBacked flag without resolving its value,
+  // so callers can detect an already-mirrored global without triggering lazy
+  // materialization (which a value read through TryGetBinding would force).
+  if FLexicalBindings.TryGetValue(AName, LexicalBinding) then
+    Exit(LexicalBinding.GlobalObjectBacked);
+
+  if Assigned(FVarBindings) and FVarBindings.TryGetValue(AName,
+     LexicalBinding) then
+    Exit(LexicalBinding.GlobalObjectBacked);
+
+  Result := False;
 end;
 
 procedure TGocciaScope.DefineVariableBinding(const AName: string; const AValue: TGocciaValue;

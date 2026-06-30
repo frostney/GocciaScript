@@ -10,12 +10,15 @@ uses
   Goccia.Builtins.JSONL,
   Goccia.Runtime,
   Goccia.RuntimeExtensions.IndexedDataModule,
-  Goccia.Values.ArrayValue;
+  Goccia.Scope,
+  Goccia.Values.ArrayValue,
+  Goccia.Values.Primitives;
 
 type
   TGocciaJSONLRuntimeExtension = class(TGocciaIndexedDataModuleRuntimeExtension)
   private
     FBuiltinJSONL: TGocciaJSONLBuiltin;
+    function MaterializeJSONL: TGocciaValue;
   protected
     function MatchesModulePath(const AResolvedPath: string): Boolean; override;
     function ParseModuleRecords(const AContent: UTF8String;
@@ -39,8 +42,16 @@ procedure TGocciaJSONLRuntimeExtension.Attach(
   const ARuntime: TGocciaRuntimeCore);
 begin
   inherited Attach(ARuntime);
-  FBuiltinJSONL := TGocciaJSONLBuiltin.Create('JSONL',
-    Runtime.Engine.Interpreter.GlobalScope, Runtime.Engine.ThrowError);
+  // Defer building the JSONL namespace until first reflective access.
+  Runtime.Engine.RegisterLazyGlobal('JSONL', MaterializeJSONL, dtLet);
+end;
+
+function TGocciaJSONLRuntimeExtension.MaterializeJSONL: TGocciaValue;
+begin
+  if not Assigned(FBuiltinJSONL) then
+    FBuiltinJSONL := TGocciaJSONLBuiltin.Create('JSONL',
+      Runtime.Engine.Interpreter.GlobalScope, Runtime.Engine.ThrowError, False);
+  Result := FBuiltinJSONL.BuiltinObject;
 end;
 
 procedure TGocciaJSONLRuntimeExtension.Detach;
