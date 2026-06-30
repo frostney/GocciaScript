@@ -130,6 +130,8 @@ type
     FDescribeTimeout: TIntegerOption;
     procedure InitializeRuntime(const AEngine: TGocciaEngine);
     procedure InitializeRuntimeWithUnsafeFFI(const AEngine: TGocciaEngine);
+    procedure WarmUpRuntime(const AEngine: TGocciaEngine);
+    procedure WarmUpRuntimeWithUnsafeFFI(const AEngine: TGocciaEngine);
     function RunRegisteredTests(const AEngine: TGocciaEngine): TGocciaObjectValue;
   protected
     procedure Configure; override;
@@ -474,6 +476,19 @@ var
 begin
   Runtime := AttachRuntime(AEngine);
   ApplyTestRunnerRuntimeProfile(Runtime);
+end;
+
+procedure TTestRunnerApp.WarmUpRuntime(const AEngine: TGocciaEngine);
+begin
+  InitializeRuntime(AEngine);
+  WarmUpSharedLazyGlobals(AEngine);
+end;
+
+procedure TTestRunnerApp.WarmUpRuntimeWithUnsafeFFI(
+  const AEngine: TGocciaEngine);
+begin
+  InitializeRuntimeWithUnsafeFFI(AEngine);
+  WarmUpSharedLazyGlobals(AEngine);
 end;
 
 procedure TTestRunnerApp.InitializeRuntimeWithUnsafeFFI(
@@ -1138,9 +1153,9 @@ begin
   // Force all shared prototypes to be initialised on the main thread
   // before any worker thread starts, avoiding class-var race conditions.
   if AnyFileConfigEnablesFlag(AFiles, EngineOptions.UnsafeFFI) then
-    EnsureSharedPrototypesInitialized(InitializeRuntimeWithUnsafeFFI)
+    EnsureSharedPrototypesInitialized(WarmUpRuntimeWithUnsafeFFI)
   else
-    EnsureSharedPrototypesInitialized(InitializeRuntime);
+    EnsureSharedPrototypesInitialized(WarmUpRuntime);
 
   WallClockStart := GetNanoseconds;
 

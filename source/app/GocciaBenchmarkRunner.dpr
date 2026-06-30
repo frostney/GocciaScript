@@ -226,6 +226,8 @@ type
       const AMode: TGocciaExecutionMode; const AShowProgress: Boolean);
     procedure InitializeRuntime(const AEngine: TGocciaEngine);
     procedure InitializeRuntimeWithUnsafeFFI(const AEngine: TGocciaEngine);
+    procedure WarmUpRuntime(const AEngine: TGocciaEngine);
+    procedure WarmUpRuntimeWithUnsafeFFI(const AEngine: TGocciaEngine);
   protected
     procedure Configure; override;
     procedure Validate; override;
@@ -940,9 +942,9 @@ begin
         WorkerData[I] := nil;
 
       if AnyFileConfigEnablesFlag(Files, EngineOptions.UnsafeFFI) then
-        EnsureSharedPrototypesInitialized(InitializeRuntimeWithUnsafeFFI)
+        EnsureSharedPrototypesInitialized(WarmUpRuntimeWithUnsafeFFI)
       else
-        EnsureSharedPrototypesInitialized(InitializeRuntime);
+        EnsureSharedPrototypesInitialized(WarmUpRuntime);
 
       BeginCLIJSONMemoryMeasurement(MemoryMeasurement);
       WallClockStart := GetNanoseconds;
@@ -1141,6 +1143,19 @@ procedure TBenchmarkRunnerApp.InitializeRuntimeWithUnsafeFFI(
 begin
   InitializeRuntime(AEngine);
   GetRuntime(AEngine).Install(TGocciaFFIRuntimeExtension.Create);
+end;
+
+procedure TBenchmarkRunnerApp.WarmUpRuntime(const AEngine: TGocciaEngine);
+begin
+  InitializeRuntime(AEngine);
+  WarmUpSharedLazyGlobals(AEngine);
+end;
+
+procedure TBenchmarkRunnerApp.WarmUpRuntimeWithUnsafeFFI(
+  const AEngine: TGocciaEngine);
+begin
+  InitializeRuntimeWithUnsafeFFI(AEngine);
+  WarmUpSharedLazyGlobals(AEngine);
 end;
 
 procedure TBenchmarkRunnerApp.ExecuteWithPaths(const APaths: TStringList);

@@ -26,12 +26,25 @@ type
 procedure EnsureSharedPrototypesInitialized(
   const AInitializer: TGocciaEngineInitializer = nil);
 
+{ Materialises the lazy heavyweight globals (#747/#790) on the given engine so
+  that their process-global initialisation — Intl loads ICU/CLDR data, Temporal
+  loads time-zone data — runs now rather than on first touch. Parallel runners
+  must call this on the main-thread warm-up engine before spawning workers:
+  otherwise the first worker to touch one of these triggers that shared init
+  concurrently with other workers, which surfaces as intermittent failures
+  (e.g. ICU locale-data fallbacks). It is deliberately NOT folded into
+  EnsureSharedPrototypesInitialized, because single-engine callers (the script
+  loader, the bundler) rely on these globals staying lazy for boot time. }
+procedure WarmUpSharedLazyGlobals(const AEngine: TGocciaEngine);
+
 implementation
 
 uses
   Classes,
 
-  Goccia.GarbageCollector;
+  Goccia.GarbageCollector,
+  Goccia.Interpreter,
+  Goccia.Scope;
 
 procedure EnsureSharedPrototypesInitialized(
   const AInitializer: TGocciaEngineInitializer);
@@ -64,6 +77,17 @@ begin
   finally
     Source.Free;
   end;
+end;
+
+procedure WarmUpSharedLazyGlobals(const AEngine: TGocciaEngine);
+const
+  HeavyGlobals: array[0 .. 6] of string = ('Temporal', 'Intl', 'Atomics',
+    'Proxy', 'Reflect', 'DisposableStack', 'AsyncDisposableStack');
+var
+  I: Integer;
+begin
+  for I := Low(HeavyGlobals) to High(HeavyGlobals) do
+    AEngine.Interpreter.GlobalScope.GetValue(HeavyGlobals[I]);
 end;
 
 end.
