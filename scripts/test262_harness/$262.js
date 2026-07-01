@@ -16,9 +16,9 @@ if (typeof Goccia === "undefined" || Goccia.test262Host !== true) {
   throw new Error("$262 host hooks require GocciaScriptLoaderBare --test262-host");
 }
 
-function AbstractModuleSource() {
+const AbstractModuleSource = () => {
   throw new TypeError("%AbstractModuleSource% is not a constructor");
-}
+};
 
 var $262 = {
   global: globalThis,
