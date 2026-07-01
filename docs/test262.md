@@ -354,9 +354,12 @@ Default categories: `built-ins, harness, intl402, language, staging`
 (everything except `annexB`).
 
 - `annexB` (legacy/deprecated browser-only behavior) is excluded from
-  the default run. Some Annex B surfaces are implemented anyway (e.g.
-  `String.prototype.substr`, `__proto__`, `__defineGetter__`); a coherent
-  Annex B policy is still under evaluation.
+  the default run and is not a pre-1.0 release target. Some Annex B
+  surfaces are implemented anyway (e.g. `String.prototype.substr`,
+  `__proto__`, `__defineGetter__`) because they already support current
+  compatibility work or layer cleanly as shims. Treat Annex B results as
+  informational unless a future Web API/browser-compatibility profile
+  deliberately re-opens the policy. See [ADR 0085](adr/0085-defer-annex-b-before-1-0.md).
 - `intl402` covers Intl APIs (ECMA-402); tests exercise
   `Intl.getCanonicalLocales`, constructors, and formatting operations.
 - `staging` is forward-looking proposals — engine-readiness signal.
