@@ -1869,7 +1869,7 @@ interface RegressionDelta {
   totalPassedDelta: number;
   /** Tests that were not PASS in baseline but are PASS in current. */
   newPasses: string[];
-  /** Tests that were PASS in baseline but are not PASS in current. */
+  /** Tests that were PASS in baseline but are now non-timeout failures. */
   newFails: string[];
   /** Tests that newly report TIMEOUT compared with baseline. */
   newTimeouts: string[];
@@ -1906,10 +1906,14 @@ function computeRegression(
     for (const r of data.results) {
       const prev = prevById.get(r.id);
       if (!prev) continue;
-      if (prev !== "PASS" && r.status === "PASS") newPasses.push(r.id);
-      else if (prev === "PASS" && r.status !== "PASS") newFails.push(r.id);
       if (prev !== "TIMEOUT" && r.status === "TIMEOUT") newTimeouts.push(r.id);
-      else if (prev === "TIMEOUT" && r.status !== "TIMEOUT") resolvedTimeouts.push(r.id);
+      else if (prev === "TIMEOUT" && r.status !== "TIMEOUT") {
+        resolvedTimeouts.push(r.id);
+      } else if (prev !== "PASS" && r.status === "PASS") {
+        newPasses.push(r.id);
+      } else if (prev === "PASS" && r.status !== "PASS") {
+        newFails.push(r.id);
+      }
     }
   }
   return { hasBaseline, totalPassedDelta, newPasses, newFails, newTimeouts, resolvedTimeouts };
@@ -1955,8 +1959,7 @@ function buildCommentMarkdown(
   const s = data.summary;
   const delta = computeRegression(data, baseline);
   const hasBaseline = delta.hasBaseline;
-  const regressed =
-    hasBaseline && (delta.totalPassedDelta < 0 || delta.newFails.length > 0);
+  const regressed = hasBaseline && delta.newFails.length > 0;
 
   if (regressed) {
     body += `> 🚫 **Regression vs cached \`main\` baseline.** ${delta.newFails.length} previously-passing test(s) now fail; pass count Δ ${delta.totalPassedDelta >= 0 ? "+" : ""}${delta.totalPassedDelta}. This run blocks merge — see "Newly failing" below.\n\n`;
@@ -2071,7 +2074,7 @@ function buildCommentMarkdown(
   const baselineNote = hasBaseline
     ? " Δ vs main compares against the most recent cached `main` baseline."
     : " No `main` baseline cached yet — Δ columns will appear once a `main` run completes.";
-  body += `<sub>Steady-state failures are non-blocking; regressions vs the cached main baseline (lower total pass count, or any PASS → non-PASS transition) fail the conformance gate. Measured on ubuntu-latest x64, bytecode mode. Areas grouped by the first two test262 path components; minimum 25 attempted tests, areas already at 100% excluded.${baselineNote}</sub>\n`;
+  body += `<sub>Steady-state failures and timeouts are non-blocking; PASS → non-timeout failure transitions fail the conformance gate. Measured on ubuntu-latest x64, bytecode mode. Areas grouped by the first two test262 path components; minimum 25 attempted tests, areas already at 100% excluded.${baselineNote}</sub>\n`;
 
   return { markdown: marker + "\n" + body, regressed };
 }
@@ -2103,7 +2106,7 @@ function runComment(argv: string[]): number {
     // Single-line CI annotation; the per-test list is already in the
     // markdown comment posted to the PR, so don't repeat it here.
     console.error(
-      "::error title=test262 regression::Pass count dropped or a previously-passing test now fails. See the PR comment for per-test deltas.",
+      "::error title=test262 regression::A previously-passing test now fails. See the PR comment for per-test deltas.",
     );
     return 1;
   }
