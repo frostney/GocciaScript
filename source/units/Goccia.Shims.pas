@@ -528,7 +528,10 @@ const
         '};'#10 +
         'const __GocciaDateClass = class Date {'#10 +
         '  static {'#10 +
-        '    Object.defineProperty(this.prototype, Symbol.toStringTag, { value: "Date", writable: true, configurable: true });'#10 +
+        '    Object.defineProperty(this.prototype, Symbol.toStringTag, {'#10 +
+        '      get(): any { return __GocciaDateSlots.get(this) === undefined ? undefined : "Date"; },'#10 +
+        '      configurable: true'#10 +
+        '    });'#10 +
         '  }'#10 +
         '  static now(): number { return Temporal.Now.instant().epochMilliseconds; }'#10 +
         '  static parse(str: string): number { return parseDateStringToEpoch(str); }'#10 +

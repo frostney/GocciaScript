@@ -5,12 +5,11 @@ unit Goccia.Utils.Arrays;
 interface
 
 uses
-  Goccia.Values.ArrayValue,
+  Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
-// ES2026 §7.3.5 CreateDataPropertyOrThrow(A, k, value) for arrays.
-// Handles both pre-allocated arrays (from Construct) and empty arrays.
-procedure ArrayCreateDataProperty(const AArray: TGocciaArrayValue; const AIndex: Integer; const AValue: TGocciaValue); inline;
+// ES2026 §7.3.6 CreateDataPropertyOrThrow(O, P, V) for array indices.
+procedure ArrayCreateDataProperty(const AObject: TGocciaObjectValue; const AIndex: Integer; const AValue: TGocciaValue); inline;
 
 implementation
 
@@ -19,20 +18,13 @@ uses
 
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
-  Goccia.Values.ErrorHelper,
-  Goccia.Values.HoleValue;
+  Goccia.Values.ErrorHelper;
 
-procedure ArrayCreateDataProperty(const AArray: TGocciaArrayValue; const AIndex: Integer; const AValue: TGocciaValue);
+procedure ArrayCreateDataProperty(const AObject: TGocciaObjectValue; const AIndex: Integer; const AValue: TGocciaValue);
 begin
   if AIndex < 0 then
     ThrowRangeError(Format(SErrorInvalidArrayIndexFmt, [AIndex]), SSuggestArrayLengthRange);
-  if AIndex < AArray.Elements.Count then
-    AArray.Elements[AIndex] := AValue
-  else
-  begin
-    ExtendElementsWithHoles(AArray.Elements, AIndex);
-    AArray.Elements.Add(AValue);
-  end;
+  AObject.CreateDataPropertyOrThrow(IntToStr(AIndex), AValue);
 end;
 
 end.

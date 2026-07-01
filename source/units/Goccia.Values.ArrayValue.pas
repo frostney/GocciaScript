@@ -7,6 +7,7 @@ interface
 uses
   Goccia.Arguments.Collection,
   Goccia.ObjectModel,
+  Goccia.Realm,
   Goccia.Values.ClassValue,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
@@ -20,7 +21,8 @@ type
       const AThisValue: TGocciaValue; const ARequiresCallback: Boolean = True): TGocciaValue;
     function IsArrayHole(const AElement: TGocciaValue): Boolean; inline;
 
-    procedure FlattenInto(const ATarget: TGocciaArrayValue; const ADepth: Integer);
+    procedure FlattenInto(const ATarget: TGocciaObjectValue; const ADepth: Integer;
+      var ATargetIndex: Integer);
     procedure ThrowError(const AMessage: string; const AArgs: array of const); overload; inline;
     procedure ThrowError(const AMessage: string); overload; inline;
     procedure ThrowError(const AMessage: string; const AArgs: array of const; const ASuggestion: string); overload; inline;
@@ -108,6 +110,7 @@ type
   end;
 
   function DefaultCompare(constref A, B: TGocciaValue): Integer;
+  function GetSharedArrayPrototypeForRealm(const ARealm: TGocciaRealm): TGocciaObjectValue;
 
 implementation
 
@@ -128,7 +131,6 @@ uses
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.Generator.Continuation,
-  Goccia.Realm,
   Goccia.Timeout,
   Goccia.Utils,
   Goccia.Utils.Arrays,
@@ -137,6 +139,7 @@ uses
   Goccia.Values.FunctionBase,
   Goccia.Values.HoleValue,
   Goccia.Values.Iterator.Concrete,
+  Goccia.Values.ProxyValue,
   Goccia.Values.SymbolValue,
   Goccia.Values.ToObject,
   Goccia.Values.ToPrimitive;
@@ -160,6 +163,14 @@ begin
     Result := nil;
 end;
 
+function GetSharedArrayPrototypeForRealm(const ARealm: TGocciaRealm): TGocciaObjectValue;
+begin
+  if Assigned(ARealm) then
+    Result := TGocciaObjectValue(ARealm.GetSlot(GArrayPrototypeSlot))
+  else
+    Result := nil;
+end;
+
 type
   // Uniform facade over native arrays and generic array-like objects.
   // Methods use this to operate on any ToObject'd receiver, keeping a fast
@@ -172,6 +183,7 @@ type
     // (ArrayCreate: 2^32-1; safe-integer length: 2^53-1) before truncation.
     RawLen: Double;
     Arr: TGocciaArrayValue; // non-nil only when Obj is a native array
+    SpeciesArr: TGocciaArrayValue; // non-nil when receiver is an Array or Array Proxy
     procedure Init(const AThisValue: TGocciaValue);
     function Get(const AIndex: Integer): TGocciaValue;
     procedure Put(const AIndex: Integer; const AValue: TGocciaValue);
@@ -270,11 +282,15 @@ end;
 
 
 procedure TArrayLikeView.Init(const AThisValue: TGocciaValue);
+var
+  ArrayProbe: TGocciaValue;
 begin
   Obj := ToObject(AThisValue);
+  SpeciesArr := nil;
   if Obj is TGocciaArrayValue then
   begin
     Arr := TGocciaArrayValue(Obj);
+    SpeciesArr := Arr;
     if Arr.FLength < Arr.Elements.Count then
       Arr.FLength := Arr.Elements.Count;
     RawLen := Arr.FLength;
@@ -286,6 +302,15 @@ begin
   else
   begin
     Arr := nil;
+    ArrayProbe := Obj;
+    while ArrayProbe is TGocciaProxyValue do
+    begin
+      if TGocciaProxyValue(ArrayProbe).Revoked then
+        ThrowTypeError(SErrorProxyRevoked, SSuggestProxyRevoked);
+      ArrayProbe := TGocciaProxyValue(ArrayProbe).Target;
+    end;
+    if ArrayProbe is TGocciaArrayValue then
+      SpeciesArr := TGocciaArrayValue(ArrayProbe);
     Len := LengthOfArrayLikeEx(Obj, RawLen);
   end;
 end;
@@ -825,10 +850,16 @@ begin
 end;
 
 // ES2026 §7.3.35 ArraySpeciesCreate(originalArray, length)
-function ArraySpeciesCreate(const AOriginal: TGocciaArrayValue; const ALength: Integer): TGocciaArrayValue;
+function ArrayCreateWithLength(const ALength: Integer): TGocciaArrayValue;
+begin
+  Result := TGocciaArrayValue.Create;
+  if ALength > 0 then
+    Result.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.Create(ALength));
+end;
+
+function ArraySpeciesCreate(const AOriginal: TGocciaArrayValue; const ALength: Integer): TGocciaObjectValue;
 var
   ConstructorMethod, Species: TGocciaValue;
-  SpeciesClass: TGocciaClassValue;
   LengthArgs: TGocciaArgumentsCollection;
   Instance: TGocciaValue;
 begin
@@ -836,41 +867,47 @@ begin
   ConstructorMethod := AOriginal.GetProperty(PROP_CONSTRUCTOR);
 
   // Steps 4-5: If C is an object, get @@species; if null/undefined, fall through
-  if ConstructorMethod is TGocciaClassValue then
+  Species := ConstructorMethod;
+  if ConstructorMethod is TGocciaObjectValue then
   begin
-    SpeciesClass := TGocciaClassValue(ConstructorMethod);
-    Species := SpeciesClass.GetSymbolProperty(TGocciaSymbolValue.WellKnownSpecies);
+    // Cross-realm arrays whose constructor is the other realm's intrinsic
+    // Array constructor fall back to the current realm's %Array%.
+    if (ConstructorMethod is TGocciaArrayClassValue) and
+       (TGocciaArrayClassValue(ConstructorMethod).CreationRealm <> CurrentRealm) then
+      Species := TGocciaUndefinedLiteralValue.UndefinedValue
+    else
+      Species := TGocciaObjectValue(ConstructorMethod).GetSymbolProperty(
+        TGocciaSymbolValue.WellKnownSpecies);
 
     if (Species is TGocciaUndefinedLiteralValue) or (Species is TGocciaNullLiteralValue) then
     begin
       // Step 6: If C is undefined, return ArrayCreate(length)
-      Result := TGocciaArrayValue.Create;
-      Exit;
-    end;
-
-    // Step 7: If IsConstructor(C) is false, throw TypeError
-    if not (Species is TGocciaClassValue) then
-      ThrowTypeError(SErrorSpeciesNotConstructor,
-        SSuggestSpeciesConstructor);
-
-    // Step 8: Return Construct(C, « length »)
-    SpeciesClass := TGocciaClassValue(Species);
-    LengthArgs := TGocciaArgumentsCollection.Create([TGocciaNumberLiteralValue.Create(ALength)]);
-    try
-      Instance := SpeciesClass.Instantiate(LengthArgs);
-    finally
-      LengthArgs.Free;
-    end;
-
-    if Instance is TGocciaArrayValue then
-    begin
-      Result := TGocciaArrayValue(Instance);
+      Result := ArrayCreateWithLength(ALength);
       Exit;
     end;
   end;
 
   // Step 6: If C is undefined, return ArrayCreate(length)
-  Result := TGocciaArrayValue.Create;
+  if (Species is TGocciaUndefinedLiteralValue) then
+    Exit(ArrayCreateWithLength(ALength));
+
+  // Step 7: If IsConstructor(C) is false, throw TypeError
+  if (not Assigned(Species)) or not Species.IsConstructable then
+    ThrowTypeError(SErrorSpeciesNotConstructor,
+      SSuggestSpeciesConstructor);
+
+  // Step 8: Return Construct(C, « length »)
+  LengthArgs := TGocciaArgumentsCollection.Create([TGocciaNumberLiteralValue.Create(ALength)]);
+  try
+    Instance := ConstructValue(Species, LengthArgs, Species);
+  finally
+    LengthArgs.Free;
+  end;
+
+  if not (Instance is TGocciaObjectValue) then
+    ThrowTypeError(SErrorSpeciesNotConstructor, SSuggestSpeciesConstructor);
+
+  Result := TGocciaObjectValue(Instance);
 end;
 
 
@@ -1059,8 +1096,9 @@ end;
 procedure TGocciaArrayValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
-  SharedPrototype: TGocciaObjectValue;
+  SharedPrototype, Unscopables: TGocciaObjectValue;
   PrototypeMembers: TArray<TGocciaMemberDefinition>;
+  ValuesMethod: TGocciaValue;
 begin
   // No realm yet - happens during very early bootstrap (e.g. PinSingletons
   // creating BigInt singletons before SetCurrentRealm runs on the engine).
@@ -1069,7 +1107,7 @@ begin
   if not Assigned(CurrentRealm) then Exit;
   if Assigned(GetSharedArrayPrototype) then Exit;
 
-  SharedPrototype := TGocciaObjectValue.Create;
+  SharedPrototype := Self;
   CurrentRealm.SetSlot(GArrayPrototypeSlot, SharedPrototype);
   // The native prototype methods below bind to this instance (Self).  Keep it
   // alive for the realm's lifetime in its own slot: the realm pins it here and
@@ -1087,7 +1125,7 @@ begin
     Members.AddMethod(ArrayForEach, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
     Members.AddMethod(ArraySome, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
     Members.AddMethod(ArrayEvery, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-    Members.AddMethod(ArrayFlat, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(ArrayFlat, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
     Members.AddMethod(ArrayFlatMap, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
     Members.AddMethod(ArrayJoin, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
     Members.AddMethod(ArrayToString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
@@ -1128,6 +1166,46 @@ begin
     Members.Free;
   end;
   RegisterMemberDefinitions(SharedPrototype, PrototypeMembers);
+  ValuesMethod := SharedPrototype.GetProperty('values');
+  SharedPrototype.DefineSymbolProperty(
+    TGocciaSymbolValue.WellKnownIterator,
+    TGocciaPropertyDescriptorData.Create(ValuesMethod, [pfConfigurable, pfWritable]));
+
+  Unscopables := TGocciaObjectValue.Create(nil);
+  Unscopables.DefineProperty('at',
+    TGocciaPropertyDescriptorData.Create(TGocciaBooleanLiteralValue.TrueValue, [pfEnumerable, pfConfigurable, pfWritable]));
+  Unscopables.DefineProperty('copyWithin',
+    TGocciaPropertyDescriptorData.Create(TGocciaBooleanLiteralValue.TrueValue, [pfEnumerable, pfConfigurable, pfWritable]));
+  Unscopables.DefineProperty('entries',
+    TGocciaPropertyDescriptorData.Create(TGocciaBooleanLiteralValue.TrueValue, [pfEnumerable, pfConfigurable, pfWritable]));
+  Unscopables.DefineProperty('fill',
+    TGocciaPropertyDescriptorData.Create(TGocciaBooleanLiteralValue.TrueValue, [pfEnumerable, pfConfigurable, pfWritable]));
+  Unscopables.DefineProperty('find',
+    TGocciaPropertyDescriptorData.Create(TGocciaBooleanLiteralValue.TrueValue, [pfEnumerable, pfConfigurable, pfWritable]));
+  Unscopables.DefineProperty('findIndex',
+    TGocciaPropertyDescriptorData.Create(TGocciaBooleanLiteralValue.TrueValue, [pfEnumerable, pfConfigurable, pfWritable]));
+  Unscopables.DefineProperty('findLast',
+    TGocciaPropertyDescriptorData.Create(TGocciaBooleanLiteralValue.TrueValue, [pfEnumerable, pfConfigurable, pfWritable]));
+  Unscopables.DefineProperty('findLastIndex',
+    TGocciaPropertyDescriptorData.Create(TGocciaBooleanLiteralValue.TrueValue, [pfEnumerable, pfConfigurable, pfWritable]));
+  Unscopables.DefineProperty('flat',
+    TGocciaPropertyDescriptorData.Create(TGocciaBooleanLiteralValue.TrueValue, [pfEnumerable, pfConfigurable, pfWritable]));
+  Unscopables.DefineProperty('flatMap',
+    TGocciaPropertyDescriptorData.Create(TGocciaBooleanLiteralValue.TrueValue, [pfEnumerable, pfConfigurable, pfWritable]));
+  Unscopables.DefineProperty('includes',
+    TGocciaPropertyDescriptorData.Create(TGocciaBooleanLiteralValue.TrueValue, [pfEnumerable, pfConfigurable, pfWritable]));
+  Unscopables.DefineProperty('keys',
+    TGocciaPropertyDescriptorData.Create(TGocciaBooleanLiteralValue.TrueValue, [pfEnumerable, pfConfigurable, pfWritable]));
+  Unscopables.DefineProperty('toReversed',
+    TGocciaPropertyDescriptorData.Create(TGocciaBooleanLiteralValue.TrueValue, [pfEnumerable, pfConfigurable, pfWritable]));
+  Unscopables.DefineProperty('toSorted',
+    TGocciaPropertyDescriptorData.Create(TGocciaBooleanLiteralValue.TrueValue, [pfEnumerable, pfConfigurable, pfWritable]));
+  Unscopables.DefineProperty('toSpliced',
+    TGocciaPropertyDescriptorData.Create(TGocciaBooleanLiteralValue.TrueValue, [pfEnumerable, pfConfigurable, pfWritable]));
+  Unscopables.DefineProperty('values',
+    TGocciaPropertyDescriptorData.Create(TGocciaBooleanLiteralValue.TrueValue, [pfEnumerable, pfConfigurable, pfWritable]));
+  SharedPrototype.DefineSymbolProperty(TGocciaSymbolValue.WellKnownUnscopables,
+    TGocciaPropertyDescriptorData.Create(Unscopables, [pfConfigurable]));
 end;
 
 class procedure TGocciaArrayValue.ExposePrototype(const AConstructor: TGocciaValue);
@@ -1433,7 +1511,7 @@ end;
 function TGocciaArrayValue.ArrayMap(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   View: TArrayLikeView;
-  ResultArray: TGocciaArrayValue;
+  ResultArray: TGocciaObjectValue;
   Callback: TGocciaValue;
   TypedCallback: TGocciaFunctionBase;
   ThisArg: TGocciaValue;
@@ -1451,10 +1529,10 @@ begin
   // length: 2^32) would spin trying to allocate billions of slots and
   // iterate them, well past any cooperative timeout.
   View.CheckArrayCreateLen;
-  if Assigned(View.Arr) then
-    ResultArray := ArraySpeciesCreate(View.Arr, View.Len)
+  if Assigned(View.SpeciesArr) then
+    ResultArray := ArraySpeciesCreate(View.SpeciesArr, View.Len)
   else
-    ResultArray := TGocciaArrayValue.Create(nil, View.Len);
+    ResultArray := ArrayCreateWithLength(View.Len);
   InitializeTempRoot(ResultRoot);
   AddTempRootIfNeeded(ResultRoot, ResultArray);
   try
@@ -1478,9 +1556,6 @@ begin
       CallArgs.Free;
     end;
 
-    // Ensure result has correct length (preserve trailing holes)
-    ExtendElementsWithHoles(ResultArray.Elements, View.Len);
-
     Result := ResultArray;
   finally
     RemoveTempRootIfNeeded(ResultRoot);
@@ -1494,10 +1569,10 @@ var
   Callback: TGocciaValue;
   TypedCallback: TGocciaFunctionBase;
   ThisArg: TGocciaValue;
-  ResultArray: TGocciaArrayValue;
+  ResultArray: TGocciaObjectValue;
   CallArgs: TGocciaArrayCallbackArgs;
   PredicateResult, Element: TGocciaValue;
-  I: Integer;
+  I, ToIndex: Integer;
   Sparse: TArray<Int64>;
   K: Int64;
   ResultRoot: TGocciaTempRoot;
@@ -1505,10 +1580,11 @@ begin
   View.Init(AThisValue);
   Callback := ValidateArrayMethodCall('filter', AArgs, AThisValue, True);
   ThisArg := GetArrayCallbackThisArg(AArgs);
-  if Assigned(View.Arr) then
-    ResultArray := ArraySpeciesCreate(View.Arr, 0)
+  if Assigned(View.SpeciesArr) then
+    ResultArray := ArraySpeciesCreate(View.SpeciesArr, 0)
   else
     ResultArray := TGocciaArrayValue.Create;
+  ToIndex := 0;
   InitializeTempRoot(ResultRoot);
   AddTempRootIfNeeded(ResultRoot, ResultArray);
   try
@@ -1529,7 +1605,10 @@ begin
           CallArgs.Index := TGocciaNumberLiteralValue.Create(Int64ToDouble(K));
           PredicateResult := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
           if PredicateResult.ToBooleanLiteral.Value then
-            ResultArray.Elements.Add(Element);
+          begin
+            ArrayCreateDataProperty(ResultArray, ToIndex, Element);
+            Inc(ToIndex);
+          end;
         end;
       end
       else
@@ -1545,7 +1624,10 @@ begin
           PredicateResult := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
 
           if PredicateResult.ToBooleanLiteral.Value then
-            ResultArray.Elements.Add(Element);
+          begin
+            ArrayCreateDataProperty(ResultArray, ToIndex, Element);
+            Inc(ToIndex);
+          end;
         end;
       end;
     finally
@@ -1858,7 +1940,7 @@ begin
     if Assigned(JoinMethod) and JoinMethod.IsCallable then
       Result := InvokeCallable(JoinMethod, EmptyArgs, AThisValue)
     else
-      Result := ArrayJoin(EmptyArgs, AThisValue);
+      Result := Obj.ObjectPrototypeToString(EmptyArgs, AThisValue);
   finally
     EmptyArgs.Free;
   end;
@@ -2076,7 +2158,8 @@ begin
 end;
 
 // ES2026 §23.1.3.11.1 FlattenIntoArray(target, source, ..., depth)
-procedure TGocciaArrayValue.FlattenInto(const ATarget: TGocciaArrayValue; const ADepth: Integer);
+procedure TGocciaArrayValue.FlattenInto(const ATarget: TGocciaObjectValue;
+  const ADepth: Integer; var ATargetIndex: Integer);
 var
   View: TArrayLikeView;
   I: Integer;
@@ -2092,10 +2175,13 @@ begin
     Element := View.Get(I);
     // Step 3c-v: If depth > 0 and IsConcatSpreadable(element), recurse
     if (Element is TGocciaArrayValue) and (ADepth > 0) then
-      TGocciaArrayValue(Element).FlattenInto(ATarget, ADepth - 1)
+      TGocciaArrayValue(Element).FlattenInto(ATarget, ADepth - 1, ATargetIndex)
     else
+    begin
       // Step 3c-v-2: Else, CreateDataPropertyOrThrow(target, targetIndex, element)
-      ATarget.Elements.Add(Element);
+      ArrayCreateDataProperty(ATarget, ATargetIndex, Element);
+      Inc(ATargetIndex);
+    end;
   end;
 end;
 
@@ -2103,9 +2189,8 @@ end;
 function TGocciaArrayValue.ArrayFlat(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   View: TArrayLikeView;
-  ResultArray: TGocciaArrayValue;
-  DepthNum: TGocciaNumberLiteralValue;
-  Depth, I: Integer;
+  ResultArray: TGocciaObjectValue;
+  Depth, I, TargetIndex: Integer;
   Element: TGocciaValue;
 begin
   // Step 1: Let O be ToObject(this value)
@@ -2114,42 +2199,34 @@ begin
   Depth := 1;
 
   // Step 4: If depth is not undefined, let depthNum be ToIntegerOrInfinity(depth)
-  if AArgs.Length > 0 then
+  if (AArgs.Length > 0) and
+     not (AArgs.GetElement(0) is TGocciaUndefinedLiteralValue) then
   begin
-    if not (AArgs.GetElement(0) is TGocciaNumberLiteralValue) then
-      ThrowError(SErrorArrayFlatExpectsNumber, [], SSuggestArrayThisType);
-
-    DepthNum := AArgs.GetElement(0).ToNumberLiteral;
-    if DepthNum.IsNaN then
-      Depth := 0
-    else if DepthNum.IsInfinity then
-      Depth := MaxInt
-    else if DepthNum.IsNegativeInfinity then
-      Depth := 0
-    else if DepthNum.Value > MaxInt then
-      Depth := MaxInt
-    else if DepthNum.Value < 0 then
-      Depth := 0
-    else
-      Depth := Trunc(DepthNum.Value);
+    Depth := ToIntegerValue(AArgs.GetElement(0));
+    if Depth < 0 then
+      Depth := 0;
   end;
 
   // Step 5: Let A be ArraySpeciesCreate(O, 0)
-  if Assigned(View.Arr) then
-    ResultArray := ArraySpeciesCreate(View.Arr, 0)
+  if Assigned(View.SpeciesArr) then
+    ResultArray := ArraySpeciesCreate(View.SpeciesArr, 0)
   else
     ResultArray := TGocciaArrayValue.Create;
 
   // Step 6: FlattenIntoArray via View for prototype-aware semantics
+  TargetIndex := 0;
   for I := 0 to View.Len - 1 do
   begin
     if not View.HasIndex(I) then
       Continue;
     Element := View.Get(I);
     if (Element is TGocciaArrayValue) and (Depth > 0) then
-      TGocciaArrayValue(Element).FlattenInto(ResultArray, Depth - 1)
+      TGocciaArrayValue(Element).FlattenInto(ResultArray, Depth - 1, TargetIndex)
     else
-      ResultArray.Elements.Add(Element);
+    begin
+      ArrayCreateDataProperty(ResultArray, TargetIndex, Element);
+      Inc(TargetIndex);
+    end;
   end;
   // Step 7: Return A
   Result := ResultArray;
@@ -2159,22 +2236,23 @@ end;
 function TGocciaArrayValue.ArrayFlatMap(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   View, MappedView: TArrayLikeView;
-  ResultArray: TGocciaArrayValue;
+  ResultArray: TGocciaObjectValue;
   Callback: TGocciaValue;
   TypedCallback: TGocciaFunctionBase;
   ThisArg: TGocciaValue;
   CallArgs: TGocciaArrayCallbackArgs;
-  I, J: Integer;
+  I, J, TargetIndex: Integer;
   MappedValue: TGocciaValue;
   ResultRoot, MappedValueRoot: TGocciaTempRoot;
 begin
   View.Init(AThisValue);
   Callback := ValidateArrayMethodCall('flatMap', AArgs, AThisValue, True);
   ThisArg := GetArrayCallbackThisArg(AArgs);
-  if Assigned(View.Arr) then
-    ResultArray := ArraySpeciesCreate(View.Arr, 0)
+  if Assigned(View.SpeciesArr) then
+    ResultArray := ArraySpeciesCreate(View.SpeciesArr, 0)
   else
     ResultArray := TGocciaArrayValue.Create;
+  TargetIndex := 0;
   InitializeTempRoot(ResultRoot);
   InitializeTempRoot(MappedValueRoot);
   AddTempRootIfNeeded(ResultRoot, ResultArray);
@@ -2203,11 +2281,17 @@ begin
             for J := 0 to MappedView.Len - 1 do
             begin
               if MappedView.HasIndex(J) then
-                ResultArray.Elements.Add(MappedView.Get(J));
+              begin
+                ArrayCreateDataProperty(ResultArray, TargetIndex, MappedView.Get(J));
+                Inc(TargetIndex);
+              end;
             end;
           end
           else
-            ResultArray.Elements.Add(MappedValue);
+          begin
+            ArrayCreateDataProperty(ResultArray, TargetIndex, MappedValue);
+            Inc(TargetIndex);
+          end;
         finally
           RemoveTempRootIfNeeded(MappedValueRoot);
         end;
@@ -2310,7 +2394,7 @@ end;
 function TGocciaArrayValue.ArraySlice(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   View: TArrayLikeView;
-  ResultArray: TGocciaArrayValue;
+  ResultArray: TGocciaObjectValue;
   StartIndex, EndIndex, Needed: Integer;
   I, N: Integer;
   K: Int64;
@@ -2350,7 +2434,8 @@ begin
     RawK := Min(RawStart, View.RawLen);
 
   // Step 5: If end is undefined, let relativeEnd be len; else ToIntegerOrInfinity(end)
-  if AArgs.Length > 1 then
+  if (AArgs.Length > 1) and
+     not (AArgs.GetElement(1) is TGocciaUndefinedLiteralValue) then
   begin
     RawEnd := AArgs.GetElement(1).ToNumberLiteral.Value;
     if IsNaN(RawEnd) then
@@ -2379,10 +2464,10 @@ begin
   // After the check, RawNeeded ≤ MaxInt — safe to truncate for the loop.
   Needed := Integer(Trunc(RawNeeded));
 
-  if Assigned(View.Arr) then
-    ResultArray := ArraySpeciesCreate(View.Arr, Needed)
+  if Assigned(View.SpeciesArr) then
+    ResultArray := ArraySpeciesCreate(View.SpeciesArr, Needed)
   else
-    ResultArray := TGocciaArrayValue.Create(nil, Needed);
+    ResultArray := ArrayCreateWithLength(Needed);
 
   // Step 9: Let n be 0; repeat while k < final
   N := 0;
@@ -2415,7 +2500,7 @@ begin
   end;
 
   // Ensure result has correct length (preserve trailing holes)
-  ExtendElementsWithHoles(ResultArray.Elements, N);
+  ResultArray.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.Create(N));
 
   // Step 11: Return A
   Result := ResultArray;
@@ -2732,9 +2817,6 @@ begin
   // Step 1: Let O be ToObject(this value)
   View.Init(AThisValue);
 
-  if AArgs.Length < 1 then
-    ThrowError(SErrorArrayCopyWithinRequiresTarget, [], SSuggestArrayThisType);
-
   // Step 3: Let relativeTarget be ToIntegerOrInfinity(target)
   Target := ToIntegerFromArgs(AArgs);
   // Step 4: If relativeTarget < 0, let to be max(len + relativeTarget, 0); else min(relativeTarget, len)
@@ -2746,7 +2828,11 @@ begin
   Start := NormalizeRelativeIndex(Start, View.Len);
 
   // Step 7: If end is undefined, let relativeEnd be len; else ToIntegerOrInfinity(end)
-  EndIdx := ToIntegerFromArgs(AArgs, 2, View.Len);
+  if (AArgs.Length > 2) and
+     not (AArgs.GetElement(2) is TGocciaUndefinedLiteralValue) then
+    EndIdx := ToIntegerFromArgs(AArgs, 2)
+  else
+    EndIdx := View.Len;
   // Step 8: If relativeEnd < 0, let final be max(len + relativeEnd, 0); else min(relativeEnd, len)
   EndIdx := NormalizeRelativeIndex(EndIdx, View.Len);
 
@@ -2970,7 +3056,7 @@ end;
 // Spread a concat-spreadable value into the result array using array-like
 // iteration so that non-array spreadable objects (e.g., objects with
 // Symbol.isConcatSpreadable) are handled correctly.
-procedure SpreadIntoConcat(const ASource: TGocciaValue; const AResult: TGocciaArrayValue; var N: Integer);
+procedure SpreadIntoConcat(const ASource: TGocciaValue; const AResult: TGocciaObjectValue; var N: Integer);
 var
   SrcView: TArrayLikeView;
   J: Integer;
@@ -3002,15 +3088,15 @@ begin
       ArrayCreateDataProperty(AResult, N, SrcView.Get(J));
     Inc(N);
   end;
-  // Ensure result reflects trailing holes from this spread
-  ExtendElementsWithHoles(AResult.Elements, N);
+  // Ensure result reflects trailing holes from this spread.
+  AResult.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.Create(N));
 end;
 
 // ES2026 §23.1.3.1 Array.prototype.concat(...arguments)
 function TGocciaArrayValue.ArrayConcat(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   View: TArrayLikeView;
-  ResultArray: TGocciaArrayValue;
+  ResultArray: TGocciaObjectValue;
   I, N: Integer;
   Arg: TGocciaValue;
 begin
@@ -3018,8 +3104,8 @@ begin
   View.Init(AThisValue);
 
   // Step 2: Let A be ArraySpeciesCreate(O, 0)
-  if Assigned(View.Arr) then
-    ResultArray := ArraySpeciesCreate(View.Arr, 0)
+  if Assigned(View.SpeciesArr) then
+    ResultArray := ArraySpeciesCreate(View.SpeciesArr, 0)
   else
     ResultArray := TGocciaArrayValue.Create;
 
@@ -3049,6 +3135,8 @@ begin
       Inc(N);
     end;
   end;
+
+  ResultArray.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.Create(N));
 
   // Step 6: Return A
   Result := ResultArray;
@@ -3884,7 +3972,7 @@ end;
 function TGocciaArrayValue.ArraySplice(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   View: TArrayLikeView;
-  Removed: TGocciaArrayValue;
+  Removed: TGocciaObjectValue;
   ActualStart, DeleteCount, ItemCount, NewLen: Integer;
   I, From, Target: Integer;
   RawStart, RawDeleteCount, RawActualStart, RawActualDeleteCount, RawNewLen: Double;
@@ -3898,8 +3986,8 @@ begin
   // Step 5: If start is not present
   if AArgs.Length < 1 then
   begin
-    if Assigned(View.Arr) then
-      Removed := ArraySpeciesCreate(View.Arr, 0)
+    if Assigned(View.SpeciesArr) then
+      Removed := ArraySpeciesCreate(View.SpeciesArr, 0)
     else
       Removed := TGocciaArrayValue.Create;
     Result := Removed;
@@ -3961,8 +4049,8 @@ begin
   DeleteCount := Integer(Trunc(RawActualDeleteCount));
 
   // Step 10: Let A be ArraySpeciesCreate(O, actualDeleteCount)
-  if Assigned(View.Arr) then
-    Removed := ArraySpeciesCreate(View.Arr, DeleteCount)
+  if Assigned(View.SpeciesArr) then
+    Removed := ArraySpeciesCreate(View.SpeciesArr, DeleteCount)
   else
     Removed := TGocciaArrayValue.Create;
 
@@ -4090,7 +4178,7 @@ begin
   end;
 
   // Ensure removed array has correct length (preserve trailing holes)
-  ExtendElementsWithHoles(Removed.Elements, DeleteCount);
+  Removed.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.Create(DeleteCount));
 
   // Step 17: Return A
   Result := Removed;
@@ -4193,7 +4281,11 @@ begin
   StartIdx := ToIntegerFromArgs(AArgs, 1);
 
   // Step 6: If end is undefined, let relativeEnd be len; else ToIntegerOrInfinity(end)
-  EndIdx := ToIntegerFromArgs(AArgs, 2, View.Len);
+  if (AArgs.Length > 2) and
+     not (AArgs.GetElement(2) is TGocciaUndefinedLiteralValue) then
+    EndIdx := ToIntegerFromArgs(AArgs, 2)
+  else
+    EndIdx := View.Len;
 
   // Step 5: If relativeStart < 0, let k be max(len + relativeStart, 0); else min(relativeStart, len)
   StartIdx := NormalizeRelativeIndex(StartIdx, View.Len);
