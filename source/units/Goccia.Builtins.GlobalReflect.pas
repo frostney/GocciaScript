@@ -125,14 +125,14 @@ begin
   ArgsList := AArgs.GetElement(2);
 
   // Step 1: If IsCallable(target) is false, throw a TypeError exception
-  if not (Target is TGocciaFunctionBase) then
+  if not Target.IsCallable then
     ThrowTypeError(SErrorReflectApplyTargetMustBeFunction, SSuggestNotFunctionType);
 
   // Step 2: Let args be ? CreateListFromArrayLike(argumentsList)
   CallArgs := CreateListFromArrayLike(ArgsList, 'Reflect.apply');
   try
     // Step 3: Return ? Call(target, thisArgument, args)
-    Result := TGocciaFunctionBase(Target).Call(CallArgs, ThisArg);
+    Result := InvokeCallable(Target, CallArgs, ThisArg);
   finally
     CallArgs.Free;
   end;

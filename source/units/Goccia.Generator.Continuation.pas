@@ -15,6 +15,7 @@ uses
   Goccia.DisposalTracker,
   Goccia.Evaluator.Context,
   Goccia.Scope,
+  Goccia.Utils,
   Goccia.Values.IteratorValue,
   Goccia.Values.Primitives,
   Goccia.Values.PromiseValue;
@@ -829,7 +830,7 @@ begin
                   ThrowTypeError('Iterator return is not callable');
                 CallArgs := TGocciaArgumentsCollection.Create;
                 try
-                  RawIteratorResult := AwaitValue(TGocciaFunctionBase(ReturnMethod).Call(
+                  RawIteratorResult := AwaitValue(InvokeCallable(ReturnMethod,
                     CallArgs, FDelegateAsyncIterator));
                 finally
                   CallArgs.Free;
@@ -841,7 +842,7 @@ begin
             end;
             CallArgs := TGocciaArgumentsCollection.Create([FPendingValue]);
             try
-              RawIteratorResult := AwaitValue(TGocciaFunctionBase(IteratorMethod).Call(
+              RawIteratorResult := AwaitValue(InvokeCallable(IteratorMethod,
                 CallArgs, FDelegateAsyncIterator));
             finally
               CallArgs.Free;
@@ -860,7 +861,7 @@ begin
                 ThrowTypeError('Iterator return is not callable');
               CallArgs := TGocciaArgumentsCollection.Create;
               try
-                RawIteratorResult := AwaitValue(TGocciaFunctionBase(ReturnMethod).Call(
+                RawIteratorResult := AwaitValue(InvokeCallable(ReturnMethod,
                   CallArgs, FDelegateAsyncIterator));
               finally
                 CallArgs.Free;
@@ -910,7 +911,7 @@ begin
               ThrowTypeError('Iterator return is not callable');
             CallArgs := TGocciaArgumentsCollection.Create([FPendingValue]);
             try
-              RawIteratorResult := AwaitValue(TGocciaFunctionBase(IteratorMethod).Call(
+              RawIteratorResult := AwaitValue(InvokeCallable(IteratorMethod,
                 CallArgs, FDelegateAsyncIterator));
             finally
               CallArgs.Free;
@@ -978,8 +979,8 @@ begin
         begin
           CallArgs := TGocciaArgumentsCollection.Create;
           try
-            FDelegateAsyncIterator := TGocciaFunctionBase(IteratorMethod).Call(
-              CallArgs, YieldedValue);
+            FDelegateAsyncIterator := InvokeCallable(IteratorMethod, CallArgs,
+              YieldedValue);
           finally
             CallArgs.Free;
           end;
@@ -1026,7 +1027,7 @@ begin
         else
           CallArgs := TGocciaArgumentsCollection.Create;
         try
-          RawIteratorResult := AwaitValue(TGocciaFunctionBase(FDelegateAsyncNext).Call(
+          RawIteratorResult := AwaitValue(InvokeCallable(FDelegateAsyncNext,
             CallArgs, FDelegateAsyncIterator));
         finally
           CallArgs.Free;

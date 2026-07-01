@@ -40,6 +40,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
+  Goccia.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.Iterator.Concrete,
@@ -125,7 +126,7 @@ begin
       // TC39 Iterator Sequencing §1 step 3.a.i: Call(method, iterable)
       CallArgs := TGocciaArgumentsCollection.Create;
       try
-        IteratorObj := TGocciaFunctionBase(FIterables[FCurrentIndex].IteratorMethod).Call(
+        IteratorObj := InvokeCallable(FIterables[FCurrentIndex].IteratorMethod,
           CallArgs, FIterables[FCurrentIndex].Iterable);
       finally
         CallArgs.Free;
