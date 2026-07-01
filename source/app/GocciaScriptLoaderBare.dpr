@@ -191,6 +191,8 @@ type
 
 const
   BARE_PRINT_GLOBAL_NAME = 'print';
+  TEST262_TIMEOUT_MARKER = 'GocciaTest262:Timeout';
+  TEST262_TIMEOUT_EXIT_CODE = 124;
   // Finite default call-stack depth for the bare loader.  Without a bound,
   // genuinely unbounded recursion runs until OOM or the (optional) instruction
   // limit instead of throwing RangeError like a conforming engine.  Proper
@@ -1553,10 +1555,24 @@ end;
 var
   Options: TBareOptions;
 begin
+  Options := Default(TBareOptions);
   try
     Options := ParseOptions;
     ExitCode := RunBare(Options);
   except
+    on E: TGocciaTimeoutError do
+    begin
+      if Options.Test262Host then
+      begin
+        WriteLn(StdErr, TEST262_TIMEOUT_MARKER, ':', E.DurationMs);
+        ExitCode := TEST262_TIMEOUT_EXIT_CODE;
+      end
+      else
+      begin
+        WriteLn(StdErr, 'Error: ', E.Message);
+        ExitCode := 1;
+      end;
+    end;
     on E: TGocciaError do
     begin
       WriteLn(StdErr, E.GetDetailedMessage(IsColorTerminal));

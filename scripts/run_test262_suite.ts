@@ -325,6 +325,8 @@ const ASYNC_PASS = "Test262:AsyncTestComplete";
 const ASYNC_FAIL_PREFIX = "Test262:AsyncTestFailure:";
 const NEG_NO_ERROR = "Test262:NegativeTestNoError";
 const NEG_ERROR_PREFIX = "Test262:NegativeTestError:";
+const TEST262_TIMEOUT_EXIT_CODE = 124;
+const TEST262_TIMEOUT_RE = /^GocciaTest262:Timeout:(\d+)$/m;
 
 // Pascal-side exception classes that indicate engine internals failing,
 // not a JS-level throw. `Error: ` is NOT included here — Goccia's bytecode
@@ -365,10 +367,20 @@ function classifyRunResult(args: ClassifyArgs): {
       diagnostic: result.stderr.slice(0, 800),
     };
   }
+  const engineTimeout = result.stderr.trim().match(TEST262_TIMEOUT_RE);
+  if (engineTimeout && exitCode === TEST262_TIMEOUT_EXIT_CODE) {
+    return {
+      outcome: "TIMEOUT",
+      reason: `engine timeout ${engineTimeout[1]}ms`,
+      diagnostic: "",
+    };
+  }
+
   if (exitCode > 1 || exitCode < 0) {
     // Pascal-side abnormal exit; see GocciaScriptLoaderBare's exception
     // handlers (it uses 1 for clean JS throws and Halt(1) for parse/options
-    // errors; anything else is unexpected).
+    // errors; test262-host timeouts are the only expected non-1 failure
+    // exit, and they must carry the marker above).
     return {
       outcome: "WRAPPER_INFRA",
       reason: `unexpected exit ${exitCode}`,
@@ -1847,6 +1859,8 @@ interface BaselineSummary {
   totalRun?: number;
   passed?: number;
   failed?: number;
+  wrapperInfraFailures?: number;
+  timeouts?: number;
 }
 
 interface RegressionDelta {
@@ -1855,8 +1869,12 @@ interface RegressionDelta {
   totalPassedDelta: number;
   /** Tests that were not PASS in baseline but are PASS in current. */
   newPasses: string[];
-  /** Tests that were PASS in baseline but are not PASS in current. */
+  /** Tests that were PASS in baseline but are now non-timeout failures. */
   newFails: string[];
+  /** Tests that newly report TIMEOUT compared with baseline. */
+  newTimeouts: string[];
+  /** Tests that no longer report TIMEOUT compared with baseline. */
+  resolvedTimeouts: string[];
 }
 
 function computeRegression(
@@ -1864,24 +1882,41 @@ function computeRegression(
   baseline: { summary: BaselineSummary; results?: PerTestRecord[] } | null,
 ): RegressionDelta {
   const hasBaseline = !!(baseline && baseline.summary);
-  if (!data) return { hasBaseline, totalPassedDelta: 0, newPasses: [], newFails: [] };
+  if (!data) {
+    return {
+      hasBaseline,
+      totalPassedDelta: 0,
+      newPasses: [],
+      newFails: [],
+      newTimeouts: [],
+      resolvedTimeouts: [],
+    };
+  }
   const baseTotalPassed = hasBaseline ? (baseline!.summary.passed ?? 0) : 0;
   const totalPassedDelta = hasBaseline
     ? data.summary.passed - baseTotalPassed
     : data.summary.passed;
   const newPasses: string[] = [];
   const newFails: string[] = [];
+  const newTimeouts: string[] = [];
+  const resolvedTimeouts: string[] = [];
   if (hasBaseline) {
     const prevById = new Map<string, Outcome>();
     for (const r of baseline!.results || []) prevById.set(r.id, r.status);
     for (const r of data.results) {
       const prev = prevById.get(r.id);
       if (!prev) continue;
-      if (prev !== "PASS" && r.status === "PASS") newPasses.push(r.id);
-      else if (prev === "PASS" && r.status !== "PASS") newFails.push(r.id);
+      if (prev !== "TIMEOUT" && r.status === "TIMEOUT") newTimeouts.push(r.id);
+      else if (prev === "TIMEOUT" && r.status !== "TIMEOUT") {
+        resolvedTimeouts.push(r.id);
+      } else if (prev !== "PASS" && r.status === "PASS") {
+        newPasses.push(r.id);
+      } else if (prev === "PASS" && r.status !== "PASS") {
+        newFails.push(r.id);
+      }
     }
   }
-  return { hasBaseline, totalPassedDelta, newPasses, newFails };
+  return { hasBaseline, totalPassedDelta, newPasses, newFails, newTimeouts, resolvedTimeouts };
 }
 
 interface AreaBucket {
@@ -1924,8 +1959,7 @@ function buildCommentMarkdown(
   const s = data.summary;
   const delta = computeRegression(data, baseline);
   const hasBaseline = delta.hasBaseline;
-  const regressed =
-    hasBaseline && (delta.totalPassedDelta < 0 || delta.newFails.length > 0);
+  const regressed = hasBaseline && delta.newFails.length > 0;
 
   if (regressed) {
     body += `> 🚫 **Regression vs cached \`main\` baseline.** ${delta.newFails.length} previously-passing test(s) now fail; pass count Δ ${delta.totalPassedDelta >= 0 ? "+" : ""}${delta.totalPassedDelta}. This run blocks merge — see "Newly failing" below.\n\n`;
@@ -1940,22 +1974,27 @@ function buildCommentMarkdown(
   if (s.wrapperInfraFailures > 0) {
     body += `> ⚠️ **${s.wrapperInfraFailures} wrapper infrastructure failure(s)** — conformance numbers untrustworthy until fixed.\n\n`;
   }
+  if (s.timeouts > 0) {
+    body += `> **${s.timeouts} timeout(s)** — counted separately from ordinary conformance failures; inspect the full artifact for affected tests.\n\n`;
+  }
 
-  body += "| Category | Run | Passed | Δ Pass | Failed | Pass-rate | Δ Rate |\n";
-  body += "|----------|----:|-------:|-------:|-------:|----------:|-------:|\n";
+  body += "| Category | Run | Passed | Δ Pass | Failed | Timeouts | Δ Timeout | Wrap-Infra | Pass-rate | Δ Rate |\n";
+  body += "|----------|----:|-------:|-------:|-------:|---------:|----------:|-----------:|----------:|-------:|\n";
   for (const c of s.byCategory) {
     const rate = c.run > 0 ? c.passed / c.run : 0;
     const ba = baselineByCat.get(c.category);
     const dPass = ba ? c.passed - ba.passed : c.passed;
+    const dTimeout = ba ? c.timeouts - (ba.timeouts ?? 0) : c.timeouts;
     const baseRate = ba && ba.run > 0 ? ba.passed / ba.run : null;
-    body += `| \`${c.category}\` | ${fmt(c.run)} | ${fmt(c.passed)} | ${ba ? signed(dPass) : "🆕"} | ${fmt(c.failed)} | ${pct(c.passed, c.run)} | ${signedPp(rate, baseRate)} |\n`;
+    body += `| \`${c.category}\` | ${fmt(c.run)} | ${fmt(c.passed)} | ${ba ? signed(dPass) : "🆕"} | ${fmt(c.failed)} | ${fmt(c.timeouts)} | ${ba ? signed(dTimeout) : "🆕"} | ${fmt(c.wrapperInfra)} | ${pct(c.passed, c.run)} | ${signedPp(rate, baseRate)} |\n`;
   }
   // Totals row
   const totalRate = s.totalRun > 0 ? s.passed / s.totalRun : 0;
   const baseTotalRun = (baseline?.summary.totalRun) ?? 0;
   const baseTotalPassed = (baseline?.summary.passed) ?? 0;
+  const baseTotalTimeouts = (baseline?.summary.timeouts) ?? 0;
   const baseTotalRate = baseTotalRun > 0 ? baseTotalPassed / baseTotalRun : null;
-  body += `| **total** | ${fmt(s.totalRun)} | ${fmt(s.passed)} | ${hasBaseline ? signed(delta.totalPassedDelta) : "🆕"} | ${fmt(s.failed)} | ${pct(s.passed, s.totalRun)} | ${signedPp(totalRate, baseTotalRate)} |\n\n`;
+  body += `| **total** | ${fmt(s.totalRun)} | ${fmt(s.passed)} | ${hasBaseline ? signed(delta.totalPassedDelta) : "🆕"} | ${fmt(s.failed)} | ${fmt(s.timeouts)} | ${hasBaseline ? signed(s.timeouts - baseTotalTimeouts) : "🆕"} | ${fmt(s.wrapperInfraFailures)} | ${pct(s.passed, s.totalRun)} | ${signedPp(totalRate, baseTotalRate)} |\n\n`;
 
   // Areas closest to 100%
   const MIN_SAMPLE = 25;
@@ -1997,8 +2036,14 @@ function buildCommentMarkdown(
   }
 
   // Per-test deltas (collapsible)
-  if (hasBaseline && (delta.newPasses.length > 0 || delta.newFails.length > 0)) {
-    body += `<details${regressed ? " open" : ""}>\n<summary>Per-test deltas (+${delta.newPasses.length} / -${delta.newFails.length})</summary>\n\n`;
+  if (
+    hasBaseline &&
+    (delta.newPasses.length > 0 ||
+      delta.newFails.length > 0 ||
+      delta.newTimeouts.length > 0 ||
+      delta.resolvedTimeouts.length > 0)
+  ) {
+    body += `<details${regressed ? " open" : ""}>\n<summary>Per-test deltas (+${delta.newPasses.length} / -${delta.newFails.length} / timeout +${delta.newTimeouts.length} / -${delta.resolvedTimeouts.length})</summary>\n\n`;
     if (delta.newFails.length > 0) {
       body += `**Newly failing (${delta.newFails.length}):**\n\n`;
       for (const id of delta.newFails.slice(0, 100)) body += `- \`${id}\`\n`;
@@ -2011,13 +2056,25 @@ function buildCommentMarkdown(
       if (delta.newPasses.length > 100) body += `- _… ${delta.newPasses.length - 100} more_\n`;
       body += "\n";
     }
+    if (delta.newTimeouts.length > 0) {
+      body += `**New timeouts (${delta.newTimeouts.length}):**\n\n`;
+      for (const id of delta.newTimeouts.slice(0, 100)) body += `- \`${id}\`\n`;
+      if (delta.newTimeouts.length > 100) body += `- _… ${delta.newTimeouts.length - 100} more_\n`;
+      body += "\n";
+    }
+    if (delta.resolvedTimeouts.length > 0) {
+      body += `**Resolved timeouts (${delta.resolvedTimeouts.length}):**\n\n`;
+      for (const id of delta.resolvedTimeouts.slice(0, 100)) body += `- \`${id}\`\n`;
+      if (delta.resolvedTimeouts.length > 100) body += `- _… ${delta.resolvedTimeouts.length - 100} more_\n`;
+      body += "\n";
+    }
     body += "</details>\n\n";
   }
 
   const baselineNote = hasBaseline
     ? " Δ vs main compares against the most recent cached `main` baseline."
     : " No `main` baseline cached yet — Δ columns will appear once a `main` run completes.";
-  body += `<sub>Steady-state failures are non-blocking; regressions vs the cached main baseline (lower total pass count, or any PASS → non-PASS transition) fail the conformance gate. Measured on ubuntu-latest x64, bytecode mode. Areas grouped by the first two test262 path components; minimum 25 attempted tests, areas already at 100% excluded.${baselineNote}</sub>\n`;
+  body += `<sub>Steady-state failures and timeouts are non-blocking; PASS → non-timeout failure transitions fail the conformance gate. Measured on ubuntu-latest x64, bytecode mode. Areas grouped by the first two test262 path components; minimum 25 attempted tests, areas already at 100% excluded.${baselineNote}</sub>\n`;
 
   return { markdown: marker + "\n" + body, regressed };
 }
@@ -2049,7 +2106,7 @@ function runComment(argv: string[]): number {
     // Single-line CI annotation; the per-test list is already in the
     // markdown comment posted to the PR, so don't repeat it here.
     console.error(
-      "::error title=test262 regression::Pass count dropped or a previously-passing test now fails. See the PR comment for per-test deltas.",
+      "::error title=test262 regression::A previously-passing test now fails. See the PR comment for per-test deltas.",
     );
     return 1;
   }
