@@ -265,7 +265,7 @@ A `const` global providing engine metadata and Goccia-owned utility APIs:
 
 **Goccia.shims**
 
-Goccia.shims lists the shim names registered by the engine for the current realm. These shims are active by default and are part of the ECMAScript conformance track, not a recommendation for new userland code. When a legacy ECMAScript global or prototype surface has a newer JavaScript spelling, the older surface should live here as a shim over the newer implementation.
+Goccia.shims lists the shim names registered by the engine for the current realm. These shims are active by default and are part of the ECMAScript conformance track, not a recommendation for new userland code. When a legacy ECMAScript global or prototype surface has a newer JavaScript spelling, the older surface should live here as a shim over the newer implementation. This shim policy is not a commitment to broad Annex B support; browser-only Annex B semantics are deferred before 1.0 unless a future Web API/browser-compatibility profile re-opens them. See [ADR 0085](adr/0085-defer-annex-b-before-1-0.md).
 
 Current default shims:
 
