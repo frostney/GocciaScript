@@ -15398,7 +15398,9 @@ begin
                TGocciaObjectValue(FGlobalScope.ThisValue).HasProperty(GlobalName) then
               raise TGocciaTypeError.Create(
                 Format(SErrorAssignToConstant, [GlobalName]),
-                0, 0, '', nil, SSuggestUseLetNotConst);
+                Template.DebugInfo.GetLineForPC(Frame.IP - 1),
+                Template.DebugInfo.GetColumnForPC(Frame.IP - 1),
+                '', nil, SSuggestUseLetNotConst);
             ThrowReferenceError(GlobalName + ' is not defined');
           end;
         end;
@@ -15420,7 +15422,9 @@ begin
                TGocciaObjectValue(FGlobalScope.ThisValue).HasProperty(GlobalName) then
               raise TGocciaTypeError.Create(
                 Format(SErrorAssignToConstant, [GlobalName]),
-                0, 0, '', nil, SSuggestUseLetNotConst);
+                Template.DebugInfo.GetLineForPC(Frame.IP - 1),
+                Template.DebugInfo.GetColumnForPC(Frame.IP - 1),
+                '', nil, SSuggestUseLetNotConst);
             TGocciaObjectValue(FGlobalScope.ThisValue).AssignPropertyWithReceiver(
               GlobalName, RegisterToValue(FRegisters[A]), FGlobalScope.ThisValue);
           end;

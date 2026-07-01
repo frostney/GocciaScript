@@ -171,6 +171,8 @@ type
     function TypedArrayOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
+function IsTypedArrayIteratorValue(const AObject: TGocciaObjectValue): Boolean;
+
 implementation
 
 uses
@@ -231,6 +233,11 @@ type
     function ToStringTag: string; override;
     procedure MarkReferences; override;
   end;
+
+function IsTypedArrayIteratorValue(const AObject: TGocciaObjectValue): Boolean;
+begin
+  Result := AObject is TGocciaTypedArrayIteratorValue;
+end;
 
 function GetTypedArrayShared: TGocciaSharedPrototype; inline;
 begin

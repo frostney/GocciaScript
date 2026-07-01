@@ -146,18 +146,33 @@ uses
   Goccia.GarbageCollector,
   Goccia.ObjectModel,
   Goccia.Values.ArgumentsObjectValue,
+  Goccia.Values.ArrayBufferValue,
   Goccia.Values.ArrayValue,
   Goccia.Values.BooleanObjectValue,
   Goccia.Values.ClassHelper,
+  Goccia.Values.DataViewValue,
   Goccia.Values.ErrorHelper,
+  Goccia.Values.FinalizationRegistryValue,
   Goccia.Values.FunctionBase,
   Goccia.Values.FunctionValue,
+  Goccia.Values.GeneratorValue,
+  Goccia.Values.Iterator.Concrete,
+  Goccia.Values.Iterator.Generic,
+  Goccia.Values.IteratorValue,
+  Goccia.Values.MapValue,
   Goccia.Values.NativeFunction,
   Goccia.Values.NumberObjectValue,
+  Goccia.Values.PromiseValue,
   Goccia.Values.ProxyValue,
+  Goccia.Values.SetValue,
   Goccia.Values.Shape,
+  Goccia.Values.SharedArrayBufferValue,
   Goccia.Values.StringObjectValue,
-  Goccia.Values.ToPrimitive;
+  Goccia.Values.ToPrimitive,
+  Goccia.Values.TypedArrayValue,
+  Goccia.Values.WeakMapValue,
+  Goccia.Values.WeakRefValue,
+  Goccia.Values.WeakSetValue;
 
 // Object.prototype and its method host both live in per-realm slots, so the
 // realm pins them on SetSlot and unpins them on Destroy.  The method definitions
@@ -489,24 +504,26 @@ var
 
   function LegacyBuiltinTagForObject(const AObject: TGocciaObjectValue): string;
 
-    function IsECMAScriptBuiltinObjectTag(const ATag: string): Boolean;
+    function IsECMAScriptBuiltinObject(const AObject: TGocciaObjectValue): Boolean;
     begin
-      Result := (ATag = CONSTRUCTOR_MAP) or
-        (ATag = CONSTRUCTOR_SET) or
-        (ATag = CONSTRUCTOR_WEAK_MAP) or
-        (ATag = CONSTRUCTOR_WEAK_SET) or
-        (ATag = CONSTRUCTOR_WEAK_REF) or
-        (ATag = CONSTRUCTOR_FINALIZATION_REGISTRY) or
-        (ATag = CONSTRUCTOR_PROMISE) or
-        (ATag = CONSTRUCTOR_ARRAY_BUFFER) or
-        (ATag = CONSTRUCTOR_SHARED_ARRAY_BUFFER) or
-        (ATag = CONSTRUCTOR_DATA_VIEW) or
-        (ATag = CONSTRUCTOR_ITERATOR) or
-        (ATag = 'Array Iterator') or
-        (ATag = 'Generator') or
-        (ATag = 'Map Iterator') or
-        (ATag = 'Set Iterator') or
-        (ATag = 'String Iterator');
+      Result := (AObject is TGocciaMapValue) or
+        (AObject is TGocciaSetValue) or
+        (AObject is TGocciaWeakMapValue) or
+        (AObject is TGocciaWeakSetValue) or
+        (AObject is TGocciaWeakRefValue) or
+        (AObject is TGocciaFinalizationRegistryValue) or
+        (AObject is TGocciaPromiseValue) or
+        (AObject is TGocciaArrayBufferValue) or
+        (AObject is TGocciaSharedArrayBufferValue) or
+        (AObject is TGocciaDataViewValue) or
+        (AObject is TGocciaGenericIteratorValue) or
+        (AObject is TGocciaIteratorHelperValue) or
+        (AObject is TGocciaArrayIteratorValue) or
+        IsTypedArrayIteratorValue(AObject) or
+        (AObject is TGocciaGeneratorObjectValue) or
+        (AObject is TGocciaMapIteratorValue) or
+        (AObject is TGocciaSetIteratorValue) or
+        (AObject is TGocciaStringIteratorValue);
     end;
 
   begin
@@ -519,7 +536,7 @@ var
     else
     begin
       Result := AObject.ToStringTag;
-      if IsECMAScriptBuiltinObjectTag(Result) then
+      if IsECMAScriptBuiltinObject(AObject) then
         Result := CONSTRUCTOR_OBJECT;
     end;
   end;
