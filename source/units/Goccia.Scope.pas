@@ -322,6 +322,7 @@ implementation
 uses
   SysUtils,
 
+  Goccia.Constants.PropertyNames,
   Goccia.Error,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
@@ -849,7 +850,7 @@ var
 begin
   if (FScopeKind <> skGlobal) or not (FThisValue is TGocciaObjectValue) then
     Exit(False);
-  if (AName = 'Goccia') or (AName = 'globalThis') then
+  if (AName = PROP_GOCCIA) or (AName = PROP_GLOBAL_THIS) then
     Exit(False);
 
   GlobalObject := TGocciaObjectValue(FThisValue);
@@ -983,7 +984,7 @@ begin
      (Root.FThisValue is TGocciaObjectValue) then
   begin
     GlobalObject := TGocciaObjectValue(Root.FThisValue);
-    if ((AName = 'Goccia') or (AName = 'globalThis')) and
+    if ((AName = PROP_GOCCIA) or (AName = PROP_GLOBAL_THIS)) and
        GlobalObject.HasProperty(AName) then
       raise TGocciaTypeError.Create(
         Format(SErrorAssignToConstant, [AName]),
@@ -1021,7 +1022,7 @@ begin
   begin
     if not LexicalBinding.IsAccessible then
       RaiseBindingNotInitialized(AName, ALine, AColumn);
-    if (AName = 'Goccia') or (AName = 'globalThis') then
+    if (AName = PROP_GOCCIA) or (AName = PROP_GLOBAL_THIS) then
       raise TGocciaTypeError.Create(
         Format(SErrorAssignToConstant, [AName]),
         ALine, AColumn, '', nil,
@@ -1059,7 +1060,7 @@ begin
   if (FScopeKind = skGlobal) and (FThisValue is TGocciaObjectValue) and
      TGocciaObjectValue(FThisValue).HasProperty(AName) then
   begin
-    if (AName = 'Goccia') or (AName = 'globalThis') then
+    if (AName = PROP_GOCCIA) or (AName = PROP_GLOBAL_THIS) then
       raise TGocciaTypeError.Create(
         Format(SErrorAssignToConstant, [AName]),
         ALine, AColumn, '', nil,

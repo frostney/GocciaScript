@@ -82,7 +82,7 @@ type
     function DirectNext(out ADone: Boolean): TGocciaValue; override;
     function ReturnValue(const AValue: TGocciaValue): TGocciaObjectValue; override;
     procedure Close; override;
-    function UsesECMAScriptBuiltinTagFallback: Boolean; override;
+    function BuiltinTagFallback: Boolean; override;
   end;
 
 function CreateIteratorResult(const AValue: TGocciaValue; const ADone: Boolean): TGocciaObjectValue;
@@ -1829,7 +1829,7 @@ begin
   FDone := True;
 end;
 
-function TGocciaIteratorHelperValue.UsesECMAScriptBuiltinTagFallback: Boolean;
+function TGocciaIteratorHelperValue.BuiltinTagFallback: Boolean;
 begin
   Result := True;
 end;

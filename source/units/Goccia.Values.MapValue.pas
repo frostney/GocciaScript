@@ -55,7 +55,7 @@ type
     function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; override;
     function ToArray: TGocciaArrayValue;
     function ToStringTag: string; override;
-    function UsesECMAScriptBuiltinTagFallback: Boolean; override;
+    function BuiltinTagFallback: Boolean; override;
 
     procedure InitializeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); override;
     procedure MarkReferences; override;
@@ -284,7 +284,7 @@ begin
   Result := CONSTRUCTOR_MAP;
 end;
 
-function TGocciaMapValue.UsesECMAScriptBuiltinTagFallback: Boolean;
+function TGocciaMapValue.BuiltinTagFallback: Boolean;
 begin
   Result := True;
 end;

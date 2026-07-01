@@ -36,7 +36,7 @@ type
     destructor Destroy; override;
 
     function ToStringTag: string; override;
-    function UsesECMAScriptBuiltinTagFallback: Boolean; override;
+    function BuiltinTagFallback: Boolean; override;
 
     procedure InitializeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); override;
     procedure MarkReferences; override;
@@ -141,7 +141,7 @@ begin
   Result := CONSTRUCTOR_FINALIZATION_REGISTRY;
 end;
 
-function TGocciaFinalizationRegistryValue.UsesECMAScriptBuiltinTagFallback: Boolean;
+function TGocciaFinalizationRegistryValue.BuiltinTagFallback: Boolean;
 begin
   Result := True;
 end;

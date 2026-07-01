@@ -29,6 +29,7 @@ uses
   BigInteger,
 
   Goccia.Arithmetic,
+  Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.Values.BigIntObjectValue,
@@ -69,12 +70,12 @@ function IsImmutableProjectGlobalProperty(const AObj: TGocciaObjectValue;
 var
   GlobalThisValue: TGocciaValue;
 begin
-  if (APropertyName <> 'Goccia') and (APropertyName <> 'globalThis') then
+  if (APropertyName <> PROP_GOCCIA) and (APropertyName <> PROP_GLOBAL_THIS) then
     Exit(False);
-  if not AObj.HasOwnProperty('globalThis') then
+  if not AObj.HasOwnProperty(PROP_GLOBAL_THIS) then
     Exit(False);
 
-  GlobalThisValue := AObj.GetProperty('globalThis');
+  GlobalThisValue := AObj.GetProperty(PROP_GLOBAL_THIS);
   Result := GlobalThisValue = AObj;
 end;
 

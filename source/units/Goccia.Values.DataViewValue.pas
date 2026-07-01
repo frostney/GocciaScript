@@ -48,7 +48,7 @@ type
       const AByteOffset: Integer = 0; const AByteLength: Integer = AUTO_BYTE_LENGTH); overload;
 
     function ToStringTag: string; override;
-    function UsesECMAScriptBuiltinTagFallback: Boolean; override;
+    function BuiltinTagFallback: Boolean; override;
 
     procedure InitializeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); override;
     procedure MarkReferences; override;
@@ -431,7 +431,7 @@ begin
   Result := CONSTRUCTOR_DATA_VIEW;
 end;
 
-function TGocciaDataViewValue.UsesECMAScriptBuiltinTagFallback: Boolean;
+function TGocciaDataViewValue.BuiltinTagFallback: Boolean;
 begin
   Result := True;
 end;

@@ -39,6 +39,7 @@ type
     FHasErrorData: Boolean;
     FHasRegExpData: Boolean;
     FRegExpData: TObject;
+    function BuiltinTagFallback: Boolean; virtual;
   public
     class procedure InitializeSharedPrototype;
     class function GetSharedObjectPrototype: TGocciaObjectValue; static;
@@ -52,7 +53,7 @@ type
     function TypeName: string; override;
     function TypeOf: string; override;
     function ToStringTag: string; virtual;
-    function UsesECMAScriptBuiltinTagFallback: Boolean; virtual;
+    property HasBuiltinTagFallback: Boolean read BuiltinTagFallback;
 
     function ToStringLiteral: TGocciaStringLiteralValue; override;
     function ToBooleanLiteral: TGocciaBooleanLiteralValue; override;
@@ -500,7 +501,7 @@ var
     else
     begin
       Result := AObject.ToStringTag;
-      if AObject.UsesECMAScriptBuiltinTagFallback then
+      if AObject.HasBuiltinTagFallback then
         Result := CONSTRUCTOR_OBJECT;
     end;
   end;
@@ -780,7 +781,7 @@ begin
   Result := CONSTRUCTOR_OBJECT;
 end;
 
-function TGocciaObjectValue.UsesECMAScriptBuiltinTagFallback: Boolean;
+function TGocciaObjectValue.BuiltinTagFallback: Boolean;
 begin
   Result := False;
 end;

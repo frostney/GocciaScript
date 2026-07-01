@@ -41,7 +41,7 @@ type
     function GetProperty(const AName: string): TGocciaValue; override;
     function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; override;
     function ToStringTag: string; override;
-    function UsesECMAScriptBuiltinTagFallback: Boolean; override;
+    function BuiltinTagFallback: Boolean; override;
 
     procedure InitializeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); override;
     procedure MarkReferences; override;
@@ -415,7 +415,7 @@ begin
   Result := CONSTRUCTOR_ARRAY_BUFFER;
 end;
 
-function TGocciaArrayBufferValue.UsesECMAScriptBuiltinTagFallback: Boolean;
+function TGocciaArrayBufferValue.BuiltinTagFallback: Boolean;
 begin
   Result := True;
 end;

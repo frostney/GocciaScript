@@ -2592,7 +2592,7 @@ type
       const AContinuationIP: Integer);
     procedure MarkReferences; override;
     function ToStringTag: string; override;
-    function UsesECMAScriptBuiltinTagFallback: Boolean; override;
+    function BuiltinTagFallback: Boolean; override;
   end;
 
   TGocciaBytecodeAsyncGeneratorObjectValue = class(TGocciaObjectValue)
@@ -2636,7 +2636,7 @@ type
       const AThisValue: TGocciaValue): TGocciaValue;
     procedure MarkReferences; override;
     function ToStringTag: string; override;
-    function UsesECMAScriptBuiltinTagFallback: Boolean; override;
+    function BuiltinTagFallback: Boolean; override;
   end;
 
   TGocciaVMAsyncGeneratorYieldAwaitHandler = class(TGocciaObjectValue)
@@ -4873,7 +4873,7 @@ begin
   Result := 'Generator';
 end;
 
-function TGocciaBytecodeGeneratorObjectValue.UsesECMAScriptBuiltinTagFallback: Boolean;
+function TGocciaBytecodeGeneratorObjectValue.BuiltinTagFallback: Boolean;
 begin
   Result := True;
 end;
@@ -5307,7 +5307,7 @@ begin
   Result := 'AsyncGenerator';
 end;
 
-function TGocciaBytecodeAsyncGeneratorObjectValue.UsesECMAScriptBuiltinTagFallback: Boolean;
+function TGocciaBytecodeAsyncGeneratorObjectValue.BuiltinTagFallback: Boolean;
 begin
   Result := True;
 end;
@@ -12742,6 +12742,7 @@ var
   GlobalName: string;
   GlobalBindingValue: TGocciaValue;
   GlobalReadCache: PGocciaGlobalReadCacheEntry;
+  DebugLine, DebugColumn: Integer;
   PropertyReadCache: PGocciaPropertyReadCacheEntry;
   ProtoReadCache: PGocciaProtoReadCacheEntry;
   AttributeType: string;
@@ -12784,6 +12785,17 @@ var
   PreviousRealm: TGocciaRealm;
   ExecutionRealm: TGocciaRealm;
   RealmSwitched: Boolean;
+
+  procedure CurrentInstructionDebugLocation(out ALine, AColumn: Integer);
+  begin
+    ALine := 0;
+    AColumn := 0;
+    if (not Assigned(Template)) or (not Assigned(Template.DebugInfo)) then
+      Exit;
+    ALine := Template.DebugInfo.GetLineForPC(Frame.IP - 1);
+    AColumn := Template.DebugInfo.GetColumnForPC(Frame.IP - 1);
+  end;
+
 begin
   // This is a native VM re-entry: the bytecode loop runs on a fresh native stack
   // frame. Bound the native re-entry depth before any state is saved so the
@@ -15414,14 +15426,16 @@ begin
           if not FGlobalScope.TryAssignExistingBinding(GlobalName,
             RegisterToValue(FRegisters[A])) then
           begin
-            if ((GlobalName = 'Goccia') or (GlobalName = 'globalThis')) and
+            if ((GlobalName = PROP_GOCCIA) or (GlobalName = PROP_GLOBAL_THIS)) and
                (FGlobalScope.ThisValue is TGocciaObjectValue) and
                TGocciaObjectValue(FGlobalScope.ThisValue).HasProperty(GlobalName) then
+            begin
+              CurrentInstructionDebugLocation(DebugLine, DebugColumn);
               raise TGocciaTypeError.Create(
                 Format(SErrorAssignToConstant, [GlobalName]),
-                Template.DebugInfo.GetLineForPC(Frame.IP - 1),
-                Template.DebugInfo.GetColumnForPC(Frame.IP - 1),
+                DebugLine, DebugColumn,
                 '', nil, SSuggestUseLetNotConst);
+            end;
             ThrowReferenceError(GlobalName + ' is not defined');
           end;
         end;
@@ -15439,13 +15453,15 @@ begin
             RegisterToValue(FRegisters[A]), True)) and
              (FGlobalScope.ThisValue is TGocciaObjectValue) then
           begin
-            if ((GlobalName = 'Goccia') or (GlobalName = 'globalThis')) and
+            if ((GlobalName = PROP_GOCCIA) or (GlobalName = PROP_GLOBAL_THIS)) and
                TGocciaObjectValue(FGlobalScope.ThisValue).HasProperty(GlobalName) then
+            begin
+              CurrentInstructionDebugLocation(DebugLine, DebugColumn);
               raise TGocciaTypeError.Create(
                 Format(SErrorAssignToConstant, [GlobalName]),
-                Template.DebugInfo.GetLineForPC(Frame.IP - 1),
-                Template.DebugInfo.GetColumnForPC(Frame.IP - 1),
+                DebugLine, DebugColumn,
                 '', nil, SSuggestUseLetNotConst);
+            end;
             TGocciaObjectValue(FGlobalScope.ThisValue).AssignPropertyWithReceiver(
               GlobalName, RegisterToValue(FRegisters[A]), FGlobalScope.ThisValue);
           end;

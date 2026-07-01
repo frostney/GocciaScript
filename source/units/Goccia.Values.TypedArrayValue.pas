@@ -229,7 +229,7 @@ type
     function AdvanceNext: TGocciaObjectValue; override;
     function DirectNext(out ADone: Boolean): TGocciaValue; override;
     function ToStringTag: string; override;
-    function UsesECMAScriptBuiltinTagFallback: Boolean; override;
+    function BuiltinTagFallback: Boolean; override;
     procedure MarkReferences; override;
   end;
 
@@ -1477,7 +1477,7 @@ begin
   Result := 'Array Iterator';
 end;
 
-function TGocciaTypedArrayIteratorValue.UsesECMAScriptBuiltinTagFallback: Boolean;
+function TGocciaTypedArrayIteratorValue.BuiltinTagFallback: Boolean;
 begin
   Result := True;
 end;

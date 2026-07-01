@@ -33,7 +33,7 @@ type
     function GetProperty(const AName: string): TGocciaValue; override;
     function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; override;
     function ToStringTag: string; override;
-    function UsesECMAScriptBuiltinTagFallback: Boolean; override;
+    function BuiltinTagFallback: Boolean; override;
 
     procedure InitializeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); override;
     procedure MarkReferences; override;
@@ -283,7 +283,7 @@ begin
   Result := CONSTRUCTOR_SHARED_ARRAY_BUFFER;
 end;
 
-function TGocciaSharedArrayBufferValue.UsesECMAScriptBuiltinTagFallback: Boolean;
+function TGocciaSharedArrayBufferValue.BuiltinTagFallback: Boolean;
 begin
   Result := True;
 end;

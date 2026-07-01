@@ -34,7 +34,7 @@ type
     function DeleteItem(const AValue: TGocciaValue): Boolean;
 
     function ToStringTag: string; override;
-    function UsesECMAScriptBuiltinTagFallback: Boolean; override;
+    function BuiltinTagFallback: Boolean; override;
 
     procedure InitializeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); override;
     procedure MarkReferences; override;
@@ -162,7 +162,7 @@ begin
   Result := CONSTRUCTOR_WEAK_SET;
 end;
 
-function TGocciaWeakSetValue.UsesECMAScriptBuiltinTagFallback: Boolean;
+function TGocciaWeakSetValue.BuiltinTagFallback: Boolean;
 begin
   Result := True;
 end;

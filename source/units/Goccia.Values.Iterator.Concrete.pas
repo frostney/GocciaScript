@@ -22,7 +22,7 @@ type
     function AdvanceNext: TGocciaObjectValue; override;
     function DirectNext(out ADone: Boolean): TGocciaValue; override;
     function ToStringTag: string; override;
-    function UsesECMAScriptBuiltinTagFallback: Boolean; override;
+    function BuiltinTagFallback: Boolean; override;
     procedure MarkReferences; override;
   end;
 
@@ -36,7 +36,7 @@ type
     function AdvanceNext: TGocciaObjectValue; override;
     function DirectNext(out ADone: Boolean): TGocciaValue; override;
     function ToStringTag: string; override;
-    function UsesECMAScriptBuiltinTagFallback: Boolean; override;
+    function BuiltinTagFallback: Boolean; override;
     procedure MarkReferences; override;
   end;
 
@@ -58,7 +58,7 @@ type
     function DirectNext(out ADone: Boolean): TGocciaValue; override;
     procedure Close; override;
     function ToStringTag: string; override;
-    function UsesECMAScriptBuiltinTagFallback: Boolean; override;
+    function BuiltinTagFallback: Boolean; override;
     procedure MarkReferences; override;
   end;
 
@@ -77,7 +77,7 @@ type
     function DirectNext(out ADone: Boolean): TGocciaValue; override;
     procedure Close; override;
     function ToStringTag: string; override;
-    function UsesECMAScriptBuiltinTagFallback: Boolean; override;
+    function BuiltinTagFallback: Boolean; override;
     procedure MarkReferences; override;
   end;
 
@@ -276,7 +276,7 @@ begin
   Result := 'Array Iterator';
 end;
 
-function TGocciaArrayIteratorValue.UsesECMAScriptBuiltinTagFallback: Boolean;
+function TGocciaArrayIteratorValue.BuiltinTagFallback: Boolean;
 begin
   Result := True;
 end;
@@ -372,7 +372,7 @@ begin
   Result := 'String Iterator';
 end;
 
-function TGocciaStringIteratorValue.UsesECMAScriptBuiltinTagFallback: Boolean;
+function TGocciaStringIteratorValue.BuiltinTagFallback: Boolean;
 begin
   Result := True;
 end;
@@ -506,7 +506,7 @@ begin
   Result := 'Map Iterator';
 end;
 
-function TGocciaMapIteratorValue.UsesECMAScriptBuiltinTagFallback: Boolean;
+function TGocciaMapIteratorValue.BuiltinTagFallback: Boolean;
 begin
   Result := True;
 end;
@@ -635,7 +635,7 @@ begin
   Result := 'Set Iterator';
 end;
 
-function TGocciaSetIteratorValue.UsesECMAScriptBuiltinTagFallback: Boolean;
+function TGocciaSetIteratorValue.BuiltinTagFallback: Boolean;
 begin
   Result := True;
 end;
