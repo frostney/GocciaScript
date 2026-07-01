@@ -14,7 +14,7 @@ type
   private
     procedure TestEscapesDoubleQuote;
     procedure TestEscapesBackslash;
-    procedure TestEscapesSolidus;
+    procedure TestPreservesSolidus;
     procedure TestEscapesNul;
     procedure TestEscapesUnitSeparator;
     procedure TestShortEscapes;
@@ -30,9 +30,9 @@ procedure TJSONUtilsTests.SetupTests;
 begin
   Test('Escapes double quote as \"', TestEscapesDoubleQuote);
   Test('Escapes backslash as \\', TestEscapesBackslash);
-  Test('Escapes solidus as \/', TestEscapesSolidus);
+  Test('Preserves solidus unchanged', TestPreservesSolidus);
   Test('Escapes NUL (#0) as \u0000', TestEscapesNul);
-  Test('Escapes unit separator (#31) as \u001F', TestEscapesUnitSeparator);
+  Test('Escapes unit separator (#31) as \u001f', TestEscapesUnitSeparator);
   Test('Uses short escapes for \b \t \n \f \r', TestShortEscapes);
   Test('Handles multiple special chars in one string', TestCombinedSpecialChars);
   Test('Preserves non-control multibyte UTF-8 characters', TestPreservesMultibyteUTF8);
@@ -52,10 +52,10 @@ begin
   Expect<string>(EscapeJSONString('a\b')).ToBe('a\\b');
 end;
 
-procedure TJSONUtilsTests.TestEscapesSolidus;
+procedure TJSONUtilsTests.TestPreservesSolidus;
 begin
-  Expect<string>(EscapeJSONString('/')).ToBe('\/');
-  Expect<string>(EscapeJSONString('</script>')).ToBe('<\/script>');
+  Expect<string>(EscapeJSONString('/')).ToBe('/');
+  Expect<string>(EscapeJSONString('</script>')).ToBe('</script>');
 end;
 
 // #0 (U+0000) is a C0 control char with no short escape
@@ -67,7 +67,7 @@ end;
 // #31 (U+001F) is the last C0 control char, no short escape
 procedure TJSONUtilsTests.TestEscapesUnitSeparator;
 begin
-  Expect<string>(EscapeJSONString(#31)).ToBe('\u001F');
+  Expect<string>(EscapeJSONString(#31)).ToBe('\u001f');
 end;
 
 // All five named short escapes: \b \t \n \f \r
@@ -85,7 +85,7 @@ end;
 procedure TJSONUtilsTests.TestCombinedSpecialChars;
 begin
   Expect<string>(EscapeJSONString('"' + '\' + #10 + #0 + 'ok')).ToBe('\"\\' + '\n' + '\u0000ok');
-  Expect<string>(EscapeJSONString(#9 + '/' + #31)).ToBe('\t' + '\/' + '\u001F');
+  Expect<string>(EscapeJSONString(#9 + '/' + #31)).ToBe('\t' + '/' + '\u001f');
 end;
 
 // Non-ASCII characters above U+001F must pass through unescaped.

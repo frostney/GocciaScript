@@ -89,29 +89,38 @@ end;
 
 function TGocciaNativeFunctionValue.Construct(const AArguments: TGocciaArgumentsCollection; const ANewTarget: TGocciaValue): TGocciaValue;
 var
+  PreviousRealm: TGocciaRealm;
   ProtoValue: TGocciaValue;
 begin
-  if Assigned(FConstructCallback) then
-    Result := FConstructCallback(AArguments, ANewTarget)
-  else
-  begin
-    Result := FFunction(AArguments, TGocciaHoleValue.HoleValue);
-    // Error / Promise register explicit ConstructCallbacks because their
-    // specs require prototype resolution before argument coercion.
-    if (TGocciaValue(ANewTarget) <> TGocciaValue(Self)) and
-       (Result is TGocciaObjectValue) then
+  PreviousRealm := CurrentRealm;
+  if Assigned(FCreationRealm) and (FCreationRealm <> PreviousRealm) then
+    SetCurrentRealm(FCreationRealm);
+  try
+    if Assigned(FConstructCallback) then
+      Result := FConstructCallback(AArguments, ANewTarget)
+    else
     begin
-      if not Assigned(FCachedIntrinsicProto) then
+      Result := FFunction(AArguments, TGocciaHoleValue.HoleValue);
+      // Error / Promise register explicit ConstructCallbacks because their
+      // specs require prototype resolution before argument coercion.
+      if (TGocciaValue(ANewTarget) <> TGocciaValue(Self)) and
+         (Result is TGocciaObjectValue) then
       begin
-        ProtoValue := Self.GetProperty(PROP_PROTOTYPE);
-        if ProtoValue is TGocciaObjectValue then
-          FCachedIntrinsicProto := TGocciaObjectValue(ProtoValue)
-        else
-          FCachedIntrinsicProto := TGocciaObjectValue.SharedObjectPrototype;
+        if not Assigned(FCachedIntrinsicProto) then
+        begin
+          ProtoValue := Self.GetProperty(PROP_PROTOTYPE);
+          if ProtoValue is TGocciaObjectValue then
+            FCachedIntrinsicProto := TGocciaObjectValue(ProtoValue)
+          else
+            FCachedIntrinsicProto := TGocciaObjectValue.SharedObjectPrototype;
+        end;
+        TGocciaObjectValue(Result).Prototype :=
+          GetProtoFromConstructorWithIntrinsic(ANewTarget, FCachedIntrinsicProto);
       end;
-      TGocciaObjectValue(Result).Prototype :=
-        GetProtoFromConstructorWithIntrinsic(ANewTarget, FCachedIntrinsicProto);
     end;
+  finally
+    if Assigned(FCreationRealm) and (FCreationRealm <> PreviousRealm) then
+      SetCurrentRealm(PreviousRealm);
   end;
 end;
 

@@ -450,6 +450,11 @@ end;
 destructor TGocciaJSONVisitor.Destroy;
 begin
   FRootRecord.Free;
+  while FRecordStack.Count > 0 do
+  begin
+    FRecordStack[FRecordStack.Count - 1].Free;
+    FRecordStack.Delete(FRecordStack.Count - 1);
+  end;
   FRecordStack.Free;
   FStack.Free;
   FKeyStack.Free;
