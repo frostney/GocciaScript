@@ -202,6 +202,7 @@ end;
 procedure TAsyncDisposableStackDisposeJob.Drain;
 var
   Resource: TGocciaDisposableResource;
+  CallArgs: TGocciaArgumentsCollection;
   DisposeResult: TGocciaValue;
 begin
   while FIndex >= 0 do
@@ -213,12 +214,25 @@ begin
     begin
       try
         if Resource.HasDisposeArgument then
-          DisposeResult := TGocciaFunctionBase(Resource.DisposeMethod).CallOneArg(
-            Resource.DisposeArgument,
-            TGocciaUndefinedLiteralValue.UndefinedValue)
+        begin
+          CallArgs := TGocciaArgumentsCollection.Create([Resource.DisposeArgument]);
+          try
+            DisposeResult := InvokeCallable(Resource.DisposeMethod, CallArgs,
+              TGocciaUndefinedLiteralValue.UndefinedValue);
+          finally
+            CallArgs.Free;
+          end;
+        end
         else
-          DisposeResult := TGocciaFunctionBase(Resource.DisposeMethod).CallNoArgs(
-            Resource.ResourceValue);
+        begin
+          CallArgs := TGocciaArgumentsCollection.Create;
+          try
+            DisposeResult := InvokeCallable(Resource.DisposeMethod, CallArgs,
+              Resource.ResourceValue);
+          finally
+            CallArgs.Free;
+          end;
+        end;
         if Resource.Hint = dhAsyncDispose then
         begin
           ScheduleAwait(DisposeResult);
