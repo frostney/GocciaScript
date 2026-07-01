@@ -2,6 +2,47 @@
 
 All notable changes to GocciaScript are documented in this file.
 
+## [0.8.1] - 2026-07-01
+
+### ⚡ Performance
+
+- perf(engine): materialize built-ins, runtime globals, and shims lazily at boot (#790)
+- perf(vm): unbox typed-array element reads and writes in the bytecode VM (#900)
+- perf(engine): speed up FormatDouble shortest-representation scan (#899)
+- perf(parser): keep parenthesized-group probe tokens instead of re-lexing (#896)
+- perf(engine): replace O(F^2) EntryAt(I) class-field loops with the enumerator (#898)
+- perf(engine): trim Date shim slot fan-out and binary-search timezone lookup (#897)
+- perf(regexp): serve case-fold tables lock-free on the icase hot path (#895)
+- perf(engine): back strong Map/Set with a SameValueZero-keyed ordered hash (#890)
+- perf(engine): make for-in key dedup O(k) with a hash set (#888)
+- perf(json): make deeply nested JSON.stringify O(depth^2) (#887)
+- perf(string): ASCII byte-op fast paths for the UTF-16 string helpers (#806)
+
+### 🌐 Website
+
+- docs: sync release claims to shipped reality (test262 %, runtime size, unit-test count) (#915)
+
+### 🏗️ Internal
+
+- docs(skills): review the full retained window in profile-report-review (#914)
+- docs(skills): add prepare-release skill (#909)
+- refactor(engine): migrate per-thread cache clears into the cleanup registry (#893) (#903)
+- chore(test262): bump pin to 020cb740 (#905)
+- chore(toml-test): bump pin to 4d77658d (#906)
+- chore(tc39-mcp): bump pin to v0.5.0 (#907)
+- refactor(engine): unify embedded-data caches onto a lock-free publication primitive (#902)
+- ci(benchmark): compare PR against a same-runner main build (#886)
+
+### 🐛 Fixed
+
+- fix(engine): audit object-reference threadvars and rebuild prototype members per realm (#904)
+- fix(intl): discover the installed ICU version at runtime instead of a hardcoded max (#908)
+- fix(parser): make speculative paren-group probes template-aware (#901)
+- fix(engine): release managed threadvars on worker-thread exit (#891)
+- fix(parser): skip interpolated templates in disabled-feature recovery (#889)
+- fix(engine): map ShadowRealm.evaluate declaration early errors to SyntaxError (#817)
+- fix(engine): map ShadowRealm eval instantiation errors to SyntaxError (#816)
+
 ## [0.8.0] - 2026-06-26
 
 ### ⚡ Performance
@@ -262,17 +303,13 @@ All notable changes to GocciaScript are documented in this file.
 
 ### 🏗️ Internal
 
-- Update CHANGELOG.md for 0.7.0 (#457)
+- Unify stdin handling across all three runners (#461)
 
 ### 🐛 Fixed
 
 - Fix microtask drain re-entrancy crashing async-generator yield rejection (#465)
 - Fix generator loop resume and async iterator lookup (#456)
 - Fix changelog website grouping (#459)
-
-### 📖 Other
-
-- Unify stdin handling across all three runners (#461)
 
 ## [0.7.0] - 2026-04-29
 
@@ -306,12 +343,13 @@ All notable changes to GocciaScript are documented in this file.
 ### 🏗️ Internal
 
 - Extract shared text semantics utilities (#439)
+- Unify CLI JSON reporting (#433)
 - Update copyright year in LICENSE file (#384)
+- Simplify hasOwnProperty shim binding (#347)
 - Refactor engine around pluggable executors (#332)
 - Update ECMAScript edition references to 2027 (#323)
 - Refactor CLIs onto shared application framework (#299)
 - Update docs (#302)
-- Update CHANGELOG.md for 0.6.1 (#293)
 - Refactor GC into `Goccia.GarbageCollector` (#254)
 
 ### 🐛 Fixed
@@ -347,7 +385,6 @@ All notable changes to GocciaScript are documented in this file.
 ### 📖 Other
 
 - Embed IANA timezone data for Temporal (#440)
-- Unify CLI JSON reporting (#433)
 - Strengthen test262 runner and ECMAScript edge-case coverage (#402)
 - Skip unsupported generator methods during parsing (#388)
 - Infer names for anonymous classes and object functions (#387)
@@ -358,7 +395,6 @@ All notable changes to GocciaScript are documented in this file.
 - Recompute ZonedDateTime UTC offset after rounding (#358) (#362)
 - Expose build date in version metadata (#360)
 - Require BigInt for Temporal epoch nanoseconds (#346)
-- Simplify hasOwnProperty shim binding (#347)
 - Reject mixed stdout benchmark report formats (#340)
 - Suppress progress output in structured and worker paths (#334)
 - Restructure sources under source/ and rename build artifacts (#333)
@@ -743,8 +779,14 @@ All notable changes to GocciaScript are documented in this file.
 
 ### ⚡ Performance
 
+- perf: use singleton values throughout the codebase instead of allocating
+- perf: use TStringBuilder in Array.ToStringLiteral
+- perf: fast path in fn.apply for TGocciaArrayValue arguments
+- perf: return singleton ZeroValue/OneValue from Boolean.ToNumberLiteral
 - Optimize GC membership checks from O(n) to O(1) with TDictionary
 - Replace direct TGocciaScope.Create with CreateChild
+- perf: use TStringBuilder for string and template literal scanning
+- perf: use TDictionary for keyword lookup in lexer
 - Optimize arrays, functions, scope & benchmark
 - Inline hot paths
 
@@ -762,12 +804,16 @@ All notable changes to GocciaScript are documented in this file.
 - Update AGENTS.md
 - Update documentation
 - Refactor: add RunScripts and centralize entrypoint
+- Split out methods, class methods and arrow functions explicitly
+- docs: document Boolean singleton, fn.apply fast path, and Array TStringBuilder optimizations
 - Update environment variable (skip 64-bit windows build for now)
 - Update Goccia.Values.FunctionValue.pas
 - Update documentation
 - Extract ParseObjectMethodBody helper in ObjectLiteral
+- Consolidate Engine built-in registration methods
 - Extract shared ParseGetterExpression/ParseSetterExpression in parser
 - Extract SpreadIterableInto helpers to deduplicate spread expansion
+- Simplify Engine singleton pinning and destructor cleanup
 - Extract CreateArrayCallbackArgs helper for array iterator methods
 - Extract EvaluateSimpleNumericBinaryOp for subtraction, multiplication, power
 - Extract MarkPropertyDescriptor helper in GCMarkReferences
@@ -776,12 +822,23 @@ All notable changes to GocciaScript are documented in this file.
 - Extract EvaluateStatementsSafe to eliminate duplicated exception handling
 - Update logo.png
 - Update documentation
+- Simplify GetProperty/SetProperty calls
+- refactor: standardise argument validation in TestAssertions
+- refactor: add virtual GetProperty/SetProperty on TGocciaValue base class
+- refactor: extract CopyStatementList helper in evaluator
+- refactor: remove DefineBuiltin legacy method from TGocciaScope
+- refactor: remove unused IPropertyMethods and IIndexMethods interfaces
+- refactor: extract ParseParameterList in the parser
+- refactor: eliminate GlobalEvaluationContext mutable global state
+- refactor: remove legacy object evaluation path in EvaluateObject
+- refactor: extract GetPropertyFromValue/SetPropertyOnValue/DefinePropertyOnValue helpers
 - Update build.yml
 - Update README.md
 - Update build.yml
 - Update build.yml
 - Refactor error handling; remove debug logging
 - Update build.yml
+- Simplify Number builtin to use FBuiltinObject
 - Update error handling/throwing
 - Update object creation test to be ECMAScript compatible
 - Update `toThrow` assertion to compare error class names
@@ -795,10 +852,14 @@ All notable changes to GocciaScript are documented in this file.
 - Update `String.prototype` boxed methods
 - Refactor method calls
 - Update test debug output
+- Simplify compound operation
 - Update ty-catch implementation
 - Update Goccia.Values.FunctionValue.Test.pas
 - Refactor native function to reduce duplication
 - Update `Math.clamp`
+- Simplify array includes checks
+- Simplify function calling further
+- Simplify function calling
 - Update class instantiation
 - Update template evaluation and property initialization
 - Update test cases
@@ -808,11 +869,13 @@ All notable changes to GocciaScript are documented in this file.
 - Update Github actions
 - Update example.js
 - Update initial test suite
+- Simplify valid identifier check
 - Update built-in constructor signature
 - Update class definitions and class expressions
 - Update compound assignments
 - Update logger
 - Update tests and script loading functionality
+- Simplify MethodValue based off FunctionValue
 - Update FunctionTest
 - Update workflow
 - Update build and build-and-run commands
@@ -821,6 +884,7 @@ All notable changes to GocciaScript are documented in this file.
 ### 🐛 Fixed
 
 - Fixes method definitions
+- fix: isolate module scope so module variables don't leak into global
 - Fixes native test suite
 - Fixes spread operator test throwing correct type error
 - Fixes string conversion for arrays
@@ -876,34 +940,13 @@ All notable changes to GocciaScript are documented in this file.
 
 - Use VMT methods for type checks
 - Rename variancePct to variancePercentage
-- Split out methods, class methods and arrow functions explicitly
 - Move basic example into examples folder
-- perf: use singleton values throughout the codebase instead of allocating
-- docs: document Boolean singleton, fn.apply fast path, and Array TStringBuilder optimizations
-- perf: use TStringBuilder in Array.ToStringLiteral
-- perf: fast path in fn.apply for TGocciaArrayValue arguments
-- perf: return singleton ZeroValue/OneValue from Boolean.ToNumberLiteral
 - Use shared prototype
 - Use StringBuilder instead of string concat
 - Address TODO comments: fix, improve, or resolve 11 items
-- Consolidate Engine built-in registration methods
 - Share string prototype singleton across all string boxing
 - Standardize error handling: use ThrowTypeError in destructuring
-- Simplify Engine singleton pinning and destructor cleanup
 - Use TStringBuilder for template literal evaluation
-- Simplify GetProperty/SetProperty calls
-- refactor: standardise argument validation in TestAssertions
-- perf: use TStringBuilder for string and template literal scanning
-- perf: use TDictionary for keyword lookup in lexer
-- fix: isolate module scope so module variables don't leak into global
-- refactor: add virtual GetProperty/SetProperty on TGocciaValue base class
-- refactor: extract CopyStatementList helper in evaluator
-- refactor: remove DefineBuiltin legacy method from TGocciaScope
-- refactor: remove unused IPropertyMethods and IIndexMethods interfaces
-- refactor: extract ParseParameterList in the parser
-- refactor: eliminate GlobalEvaluationContext mutable global state
-- refactor: remove legacy object evaluation path in EvaluateObject
-- refactor: extract GetPropertyFromValue/SetPropertyOnValue/DefinePropertyOnValue helpers
 - Trying to get Windows64 build to work
 - 32-bit compatibility and compile x64 on Windows
 - Delete BenchmarkRunner
@@ -912,7 +955,6 @@ All notable changes to GocciaScript are documented in this file.
 - Spread iterables in tests; disable Vitest watch
 - Delete WARP.md
 - Try/finally fix; function prototype and parser updates
-- Simplify Number builtin to use FBuiltinObject
 - Updated documentation
 - Uses `TGocciaArgumentValidator` for global object and array
 - Uses `TGocciaArgumentValidator` where possible
@@ -935,7 +977,6 @@ All notable changes to GocciaScript are documented in this file.
 - First round of TGocciaScope refactors
 - Restructured Evaluator calls
 - Updates to property descriptors
-- Simplify compound operation
 - Initial try-catch implementation
 - Workaround for closure capturing
 - Parser support for for statements
@@ -943,23 +984,18 @@ All notable changes to GocciaScript are documented in this file.
 - Adding spread operator
 - Restructure object tests
 - Updated computed properties
-- Simplify array includes checks
 - Removed unnecessary casts to Array
-- Simplify function calling further
-- Simplify function calling
 - Restructure object tests
 - Further test fixes
 - Build in silent mode
 - Updates tests
 - Delete TestUtils.pas
 - Expose built-in objects from the interpreter
-- Simplify valid identifier check
 - Adds native testing library
 - Initial version of test handlers
 - Added `instanceof`
 - Spec compliance
 - Small fixes
-- Simplify MethodValue based off FunctionValue
 - Restructured interpreter
 - Move built-ins into separate units
 - Cursor rules
