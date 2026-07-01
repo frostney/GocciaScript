@@ -32,14 +32,47 @@ uses
 
   Goccia.Constants.PropertyNames,
   Goccia.Error,
+  Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
   Goccia.Values.SymbolValue;
+
+function TryGetStringDataProperty(const AObject: TGocciaObjectValue;
+  const AName: string; out AValue: string): Boolean;
+var
+  Current: TGocciaObjectValue;
+  Descriptor: TGocciaPropertyDescriptor;
+  Value: TGocciaValue;
+begin
+  Result := False;
+  AValue := '';
+  Current := AObject;
+
+  while Assigned(Current) do
+  begin
+    Descriptor := Current.GetOwnPropertyDescriptor(AName);
+    if Assigned(Descriptor) then
+    begin
+      if Descriptor is TGocciaPropertyDescriptorData then
+      begin
+        Value := TGocciaPropertyDescriptorData(Descriptor).Value;
+        if Value is TGocciaStringLiteralValue then
+        begin
+          AValue := TGocciaStringLiteralValue(Value).Value;
+          Exit(True);
+        end;
+      end;
+      Exit(False);
+    end;
+
+    Current := Current.Prototype;
+  end;
+end;
 
 function ExtractThrowLocation(const AThrown: TGocciaValue;
   out AErrorName, AErrorMessage, AFrameFileName: string;
   out ALine, AColumn: Integer): Boolean;
 var
-  StackValue, MsgValue, NameValue: TGocciaValue;
+  TextValue: string;
   StackStr: string;
   AtPos, ParenPos, ColonPos1, ColonPos2, I: Integer;
 begin
@@ -52,18 +85,12 @@ begin
 
   if not (AThrown is TGocciaObjectValue) then Exit;
 
-  NameValue := TGocciaObjectValue(AThrown).GetProperty(PROP_NAME);
-  if Assigned(NameValue) and (NameValue is TGocciaStringLiteralValue) then
-    AErrorName := TGocciaStringLiteralValue(NameValue).Value;
+  if TryGetStringDataProperty(TGocciaObjectValue(AThrown), PROP_NAME, TextValue) then
+    AErrorName := TextValue;
+  if TryGetStringDataProperty(TGocciaObjectValue(AThrown), PROP_MESSAGE, TextValue) then
+    AErrorMessage := TextValue;
 
-  MsgValue := TGocciaObjectValue(AThrown).GetProperty(PROP_MESSAGE);
-  if Assigned(MsgValue) and (MsgValue is TGocciaStringLiteralValue) then
-    AErrorMessage := TGocciaStringLiteralValue(MsgValue).Value;
-
-  StackValue := TGocciaObjectValue(AThrown).GetProperty(PROP_STACK);
-  if not Assigned(StackValue) or not (StackValue is TGocciaStringLiteralValue) then Exit;
-
-  StackStr := TGocciaStringLiteralValue(StackValue).Value;
+  if not TryGetStringDataProperty(TGocciaObjectValue(AThrown), PROP_STACK, StackStr) then Exit;
 
   // Find first "at ... (file:line:col)" frame
   AtPos := Pos('    at ', StackStr);
@@ -106,7 +133,7 @@ var
   ErrorName, ErrorMessage, FrameFileName: string;
   Line, Col: Integer;
   EffectiveFileName: string;
-  StackValue: TGocciaValue;
+  StackText, MessageText, NameText: string;
 begin
   if ExtractThrowLocation(AThrown, ErrorName, ErrorMessage, FrameFileName, Line, Col) and
      Assigned(ASourceLines) and (Line > 0) and (Line <= ASourceLines.Count) then
@@ -128,10 +155,18 @@ begin
     // unwound by the time this runs and re-entry is unsafe.
     if AThrown is TGocciaObjectValue then
     begin
-      StackValue := TGocciaObjectValue(AThrown).GetProperty(PROP_STACK);
-      if Assigned(StackValue) and (StackValue is TGocciaStringLiteralValue) and
-         (TGocciaStringLiteralValue(StackValue).Value <> '') then
-        Result := TGocciaStringLiteralValue(StackValue).Value
+      if TryGetStringDataProperty(TGocciaObjectValue(AThrown), PROP_STACK, StackText) and
+         (StackText <> '') then
+        Result := StackText
+      else if TryGetStringDataProperty(TGocciaObjectValue(AThrown), PROP_MESSAGE, MessageText) and
+              (MessageText <> '') then
+      begin
+        if TryGetStringDataProperty(TGocciaObjectValue(AThrown), PROP_NAME, NameText) and
+           (NameText <> '') then
+          Result := Format('%s: %s', [NameText, MessageText])
+        else
+          Result := MessageText;
+      end
       else
         Result := Format('[object %s]', [TGocciaObjectValue(AThrown).ToStringTag]);
     end
