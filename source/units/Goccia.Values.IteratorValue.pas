@@ -1314,7 +1314,7 @@ begin
         try
           CallArgs := TGocciaArgumentsCollection.Create;
           try
-            IteratorObj := TGocciaFunctionBase(IteratorMethod).Call(CallArgs, Value);
+            IteratorObj := InvokeCallable(IteratorMethod, CallArgs, Value);
           finally
             CallArgs.Free;
           end;

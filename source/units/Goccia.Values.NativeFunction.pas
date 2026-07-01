@@ -78,15 +78,13 @@ var
   RealmSwitched: Boolean;
 begin
   PreviousRealm := CurrentRealm;
-  RealmSwitched := Assigned(CreationRealm) and
-    (CreationRealm <> PreviousRealm);
+  RealmSwitched := Assigned(FCreationRealm) and
+    (FCreationRealm <> PreviousRealm);
   if RealmSwitched then
-    SetCurrentRealm(CreationRealm);
-  PushCurrentFunctionExecutionContext(nil, Self);
+    SetCurrentRealm(FCreationRealm);
   try
     Result := FFunction(AArguments, AThisValue);
   finally
-    PopCurrentFunctionExecutionContext;
     if RealmSwitched then
       SetCurrentRealm(PreviousRealm);
   end;
@@ -99,11 +97,10 @@ var
   RealmSwitched: Boolean;
 begin
   PreviousRealm := CurrentRealm;
-  RealmSwitched := Assigned(CreationRealm) and
-    (CreationRealm <> PreviousRealm);
+  RealmSwitched := Assigned(FCreationRealm) and
+    (FCreationRealm <> PreviousRealm);
   if RealmSwitched then
-    SetCurrentRealm(CreationRealm);
-  PushCurrentFunctionExecutionContext(nil, Self);
+    SetCurrentRealm(FCreationRealm);
   try
     if Assigned(FConstructCallback) then
       Result := FConstructCallback(AArguments, ANewTarget)
@@ -128,7 +125,6 @@ begin
       end;
     end;
   finally
-    PopCurrentFunctionExecutionContext;
     if RealmSwitched then
       SetCurrentRealm(PreviousRealm);
   end;

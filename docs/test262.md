@@ -227,6 +227,7 @@ reads the exit code.
 | Async body never calls `$DONE`                        | no `Test262:Async*` marker, exit 0        | conformance fail   |
 | Engine killed by signal (SIGSEGV, OOM)                | `signalCode != null` or exit > 1          | wrapper infra      |
 | Pascal-side error (`EAccessViolation`, `ESocket`, …)  | stderr starts with Pascal class name      | wrapper infra      |
+| Engine cooperative timeout                             | `GocciaScriptLoaderBare --test262-host` exits 124 and emits `GocciaTest262:Timeout:<ms>` | timeout            |
 | Per-test wall-clock timeout                            | `setTimeout(() => ac.abort(), wallClockMs)` fired (signalCode SIGTERM/SIGKILL) | timeout            |
 | Negative-runtime catch path itself crashes            | no marker emitted at all                  | wrapper infra      |
 

@@ -1809,6 +1809,8 @@ end;
 
 // ES2026 §10.2.2 [[Call]] — class constructors are not callable without new
 function TGocciaClassValue.Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  PreviousRealm: TGocciaRealm;
 begin
   // String/Number/Boolean act as type conversion functions when called without new
   // ES2026 §22.1.1.1 String(value) — Symbol returns SymbolDescriptiveString
@@ -1845,7 +1847,17 @@ begin
        not (AArguments.GetElement(0) is TGocciaNullLiteralValue) then
     begin
       if AArguments.GetElement(0).IsPrimitive then
-        Result := AArguments.GetElement(0).Box
+      begin
+        PreviousRealm := CurrentRealm;
+        if Assigned(FCreationRealm) and (FCreationRealm <> PreviousRealm) then
+          SetCurrentRealm(FCreationRealm);
+        try
+          Result := AArguments.GetElement(0).Box;
+        finally
+          if Assigned(FCreationRealm) and (FCreationRealm <> PreviousRealm) then
+            SetCurrentRealm(PreviousRealm);
+        end;
+      end
       else
         Result := AArguments.GetElement(0);
     end

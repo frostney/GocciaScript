@@ -27,6 +27,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
+  Goccia.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.Iterator.Concrete,
@@ -88,7 +89,7 @@ begin
         try
           CallArgs := TGocciaArgumentsCollection.Create;
           try
-            IteratorObj := TGocciaFunctionBase(IteratorMethod).Call(CallArgs, IteratorHost);
+            IteratorObj := InvokeCallable(IteratorMethod, CallArgs, IteratorHost);
           finally
             CallArgs.Free;
           end;

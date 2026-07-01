@@ -97,4 +97,23 @@ describe("await using declaration", () => {
     }
     expect(caught instanceof TypeError).toBe(true);
   });
+
+  test("throws TypeError when async disposer is a class constructor", async () => {
+    class AsyncDisposer {
+      constructor() {
+        return Promise.resolve();
+      }
+    }
+
+    let caught;
+    try {
+      {
+        await using resource = { [Symbol.asyncDispose]: AsyncDisposer };
+      }
+    } catch (e) {
+      caught = e;
+    }
+
+    expect(caught instanceof TypeError).toBe(true);
+  });
 });

@@ -11,6 +11,22 @@ test("JSON.parse basic values", () => {
   expect(JSON.parse("null")).toBeNull();
 });
 
+test("JSON.parse has the spec function length", () => {
+  expect(JSON.parse.length).toBe(2);
+  const descriptor = Object.getOwnPropertyDescriptor(JSON.parse, "length");
+  expect(descriptor.writable).toBe(false);
+  expect(descriptor.enumerable).toBe(false);
+  expect(descriptor.configurable).toBe(true);
+});
+
+test("JSON.parse applies ToString to the text argument", () => {
+  expect(JSON.parse(42)).toBe(42);
+  expect(JSON.parse(true)).toBe(true);
+  expect(JSON.parse(null)).toBe(null);
+  expect(() => JSON.parse()).toThrow(SyntaxError);
+  expect(() => JSON.parse(undefined)).toThrow(SyntaxError);
+});
+
 test("JSON.parse objects", () => {
   const json = '{"name":"Alice","age":30,"active":true}';
   const obj = JSON.parse(json);
