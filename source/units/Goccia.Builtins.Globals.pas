@@ -621,52 +621,66 @@ var
   Item: TGocciaValue;
   Message: string;
   Done: Boolean;
+  ResultRoot, IteratorRoot, ErrorsArrayRoot: TGocciaTempRoot;
 begin
   if (AArgs.Length > 1) and not (AArgs.GetElement(1) is TGocciaUndefinedLiteralValue) then
     Message := AArgs.GetElement(1).ToStringLiteral.Value
   else
     Message := '';
 
+  InitializeTempRoot(ResultRoot);
+  InitializeTempRoot(IteratorRoot);
+  InitializeTempRoot(ErrorsArrayRoot);
+
   Result := TGocciaObjectValue.Create(AProto);
-  Result.HasErrorData := True;
-  if Assigned(TGocciaCallStack.Instance) then
-    Result.ErrorStack :=
-      TGocciaCallStack.Instance.CaptureStackTrace(AGGREGATE_ERROR_NAME,
-        Message, 1);
-
-  if (AArgs.Length > 1) and not (AArgs.GetElement(1) is TGocciaUndefinedLiteralValue) then
-    Result.DefineProperty(PROP_MESSAGE, TGocciaPropertyDescriptorData.Create(
-      TGocciaStringLiteralValue.Create(Message), [pfConfigurable, pfWritable]));
-
-  if AArgs.Length > 2 then
-    InstallErrorCause(Result, AArgs.GetElement(2));
-
-  if AArgs.Length > 0 then
-    Errors := AArgs.GetElement(0)
-  else
-    Errors := TGocciaUndefinedLiteralValue.UndefinedValue;
-
-  Iterator := GetIteratorFromValue(Errors);
-  if not Assigned(Iterator) then
-    ThrowTypeError('AggregateError errors argument must be iterable');
-
-  ErrorsArray := TGocciaArrayValue.Create;
+  AddTempRootIfNeeded(ResultRoot, Result);
   try
-    while True do
-    begin
-      Item := Iterator.DirectNext(Done);
-      if Done then
-        Break;
-      ErrorsArray.Elements.Add(Item);
-    end;
-  except
-    AcquireExceptionObject;
-    CloseIteratorPreservingError(Iterator);
-    raise;
-  end;
+    Result.HasErrorData := True;
+    if Assigned(TGocciaCallStack.Instance) then
+      Result.ErrorStack :=
+        TGocciaCallStack.Instance.CaptureStackTrace(AGGREGATE_ERROR_NAME,
+          Message, 1);
 
-  Result.DefineProperty(PROP_ERRORS, TGocciaPropertyDescriptorData.Create(
-    ErrorsArray, [pfConfigurable, pfWritable]));
+    if (AArgs.Length > 1) and not (AArgs.GetElement(1) is TGocciaUndefinedLiteralValue) then
+      Result.DefineProperty(PROP_MESSAGE, TGocciaPropertyDescriptorData.Create(
+        TGocciaStringLiteralValue.Create(Message), [pfConfigurable, pfWritable]));
+
+    if AArgs.Length > 2 then
+      InstallErrorCause(Result, AArgs.GetElement(2));
+
+    if AArgs.Length > 0 then
+      Errors := AArgs.GetElement(0)
+    else
+      Errors := TGocciaUndefinedLiteralValue.UndefinedValue;
+
+    Iterator := GetIteratorFromValue(Errors);
+    if not Assigned(Iterator) then
+      ThrowTypeError('AggregateError errors argument must be iterable');
+    AddTempRootIfNeeded(IteratorRoot, Iterator);
+
+    ErrorsArray := TGocciaArrayValue.Create;
+    AddTempRootIfNeeded(ErrorsArrayRoot, ErrorsArray);
+    try
+      while True do
+      begin
+        Item := Iterator.DirectNext(Done);
+        if Done then
+          Break;
+        ErrorsArray.Elements.Add(Item);
+      end;
+    except
+      AcquireExceptionObject;
+      CloseIteratorPreservingError(Iterator);
+      raise;
+    end;
+
+    Result.DefineProperty(PROP_ERRORS, TGocciaPropertyDescriptorData.Create(
+      ErrorsArray, [pfConfigurable, pfWritable]));
+  finally
+    RemoveTempRootIfNeeded(ErrorsArrayRoot);
+    RemoveTempRootIfNeeded(IteratorRoot);
+    RemoveTempRootIfNeeded(ResultRoot);
+  end;
 end;
 
 function TGocciaGlobals.AggregateErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
