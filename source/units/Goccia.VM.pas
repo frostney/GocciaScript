@@ -15392,7 +15392,15 @@ begin
         begin
           if not FGlobalScope.TryAssignExistingBinding(GlobalName,
             RegisterToValue(FRegisters[A])) then
+          begin
+            if ((GlobalName = 'Goccia') or (GlobalName = 'globalThis')) and
+               (FGlobalScope.ThisValue is TGocciaObjectValue) and
+               TGocciaObjectValue(FGlobalScope.ThisValue).HasProperty(GlobalName) then
+              raise TGocciaTypeError.Create(
+                Format(SErrorAssignToConstant, [GlobalName]),
+                0, 0, '', nil, SSuggestUseLetNotConst);
             ThrowReferenceError(GlobalName + ' is not defined');
+          end;
         end;
       end;
 
@@ -15407,8 +15415,15 @@ begin
           if (not FGlobalScope.TryAssignExistingBinding(GlobalName,
             RegisterToValue(FRegisters[A]), True)) and
              (FGlobalScope.ThisValue is TGocciaObjectValue) then
+          begin
+            if ((GlobalName = 'Goccia') or (GlobalName = 'globalThis')) and
+               TGocciaObjectValue(FGlobalScope.ThisValue).HasProperty(GlobalName) then
+              raise TGocciaTypeError.Create(
+                Format(SErrorAssignToConstant, [GlobalName]),
+                0, 0, '', nil, SSuggestUseLetNotConst);
             TGocciaObjectValue(FGlobalScope.ThisValue).AssignPropertyWithReceiver(
               GlobalName, RegisterToValue(FRegisters[A]), FGlobalScope.ThisValue);
+          end;
         end;
       end;
 

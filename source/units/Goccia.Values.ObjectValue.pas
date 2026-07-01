@@ -145,14 +145,18 @@ uses
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.ObjectModel,
+  Goccia.Values.ArgumentsObjectValue,
   Goccia.Values.ArrayValue,
+  Goccia.Values.BooleanObjectValue,
   Goccia.Values.ClassHelper,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.FunctionValue,
   Goccia.Values.NativeFunction,
+  Goccia.Values.NumberObjectValue,
   Goccia.Values.ProxyValue,
   Goccia.Values.Shape,
+  Goccia.Values.StringObjectValue,
   Goccia.Values.ToPrimitive;
 
 // Object.prototype and its method host both live in per-realm slots, so the
@@ -484,8 +488,40 @@ var
   end;
 
   function LegacyBuiltinTagForObject(const AObject: TGocciaObjectValue): string;
+
+    function IsECMAScriptBuiltinObjectTag(const ATag: string): Boolean;
+    begin
+      Result := (ATag = CONSTRUCTOR_MAP) or
+        (ATag = CONSTRUCTOR_SET) or
+        (ATag = CONSTRUCTOR_WEAK_MAP) or
+        (ATag = CONSTRUCTOR_WEAK_SET) or
+        (ATag = CONSTRUCTOR_WEAK_REF) or
+        (ATag = CONSTRUCTOR_FINALIZATION_REGISTRY) or
+        (ATag = CONSTRUCTOR_PROMISE) or
+        (ATag = CONSTRUCTOR_ARRAY_BUFFER) or
+        (ATag = CONSTRUCTOR_SHARED_ARRAY_BUFFER) or
+        (ATag = CONSTRUCTOR_DATA_VIEW) or
+        (ATag = CONSTRUCTOR_ITERATOR) or
+        (ATag = 'Array Iterator') or
+        (ATag = 'Generator') or
+        (ATag = 'Map Iterator') or
+        (ATag = 'Set Iterator') or
+        (ATag = 'String Iterator');
+    end;
+
   begin
-    Result := AObject.ToStringTag;
+    if AObject is TGocciaStringObjectValue then
+      Result := CONSTRUCTOR_STRING
+    else if AObject is TGocciaNumberObjectValue then
+      Result := CONSTRUCTOR_NUMBER
+    else if AObject is TGocciaBooleanObjectValue then
+      Result := CONSTRUCTOR_BOOLEAN
+    else
+    begin
+      Result := AObject.ToStringTag;
+      if IsECMAScriptBuiltinObjectTag(Result) then
+        Result := CONSTRUCTOR_OBJECT;
+    end;
   end;
 
 begin
@@ -506,7 +542,9 @@ begin
       Tag := 'Error'
     else if Obj.HasRegExpData then
       Tag := 'RegExp'
-    else if (Obj is TGocciaProxyValue) then
+    else if IsArgumentsObjectValue(Obj) then
+      Tag := 'Arguments'
+    else if Obj is TGocciaProxyValue then
       Tag := CONSTRUCTOR_OBJECT
     else
       Tag := LegacyBuiltinTagForObject(Obj);
@@ -1915,8 +1953,8 @@ begin
         [pdfConfigurable])
     else if IsDataDescriptor(Descriptor) then
       NewDescriptor := TGocciaPropertyDescriptorData.CreatePartial(
-        TGocciaPropertyDescriptorData(Descriptor).Value, [],
-        [pdfValue, pdfConfigurable, pdfWritable])
+        TGocciaUndefinedLiteralValue.UndefinedValue, [],
+        [pdfConfigurable, pdfWritable])
     else
       NewDescriptor := TGocciaPropertyDescriptor.Create([],
         [pdfConfigurable]);

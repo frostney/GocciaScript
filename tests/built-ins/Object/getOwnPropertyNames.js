@@ -142,6 +142,21 @@ describe("Object.getOwnPropertyNames", () => {
     expect(() => Object.getOwnPropertyNames(proxy)).toThrow(TypeError);
   });
 
+  test("uses intrinsic array creation after global Array is reassigned", () => {
+    const oldArray = Array;
+    Array = () => {
+      throw new Error("custom Array should not be called");
+    };
+
+    try {
+      const names = Object.getOwnPropertyNames({});
+      expect(Object.prototype.toString.call(names)).toBe("[object Array]");
+      expect(names.length).toBe(0);
+    } finally {
+      Array = oldArray;
+    }
+  });
+
   test("throws for null", () => {
     expect(() => Object.getOwnPropertyNames(null)).toThrow(TypeError);
   });

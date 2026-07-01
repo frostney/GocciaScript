@@ -134,4 +134,20 @@ describe("Object.freeze", () => {
     } catch (error) {}
     expect(arr[0]).toBe("a");
   });
+
+  test("proxy freeze does not pass a value field in data descriptors", () => {
+    const seen = [];
+    const target = { value: 1 };
+    const proxy = new Proxy(target, {
+      defineProperty(_target, key, descriptor) {
+        seen.push([key, descriptor.value, descriptor.writable, descriptor.configurable]);
+        return Reflect.defineProperty(_target, key, descriptor);
+      },
+    });
+
+    Object.freeze(proxy);
+
+    expect(seen).toEqual([["value", undefined, false, false]]);
+    expect(target.value).toBe(1);
+  });
 });
