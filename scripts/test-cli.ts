@@ -214,6 +214,29 @@ console.log("--compat-function (Loader) + Bare loader compat parsing...");
     const bareStdin = await $`cat ${bothSrc} | ${BARE} --print - --compat-var --compat-function 2>&1`.text();
     if (bareStdin.trim() !== "22") throw new Error(`Bare stdin --compat-var --compat-function expected 22, got: ${bareStdin}`);
 
+    const thrownObjectSrc = join(tmp, "throw-test262-object.js");
+    writeFileSync(
+      thrownObjectSrc,
+      [
+        "function Test262Error(message) {",
+        "  this.message = message || '';",
+        "}",
+        "Test262Error.prototype.toString = function () {",
+        "  return 'Test262Error: ' + this.message;",
+        "};",
+        "throw new Test262Error('issue 830 readable failure message');",
+        "",
+      ].join("\n"),
+    );
+    const thrownObject = await $`cat ${thrownObjectSrc} | ${BARE} --mode=bytecode - --compat-function 2>&1`.nothrow();
+    const thrownObjectOut = thrownObject.text();
+    if (thrownObject.exitCode === 0)
+      throw new Error("Bare thrown Test262Error-style object should fail");
+    if (!thrownObjectOut.includes("issue 830 readable failure message"))
+      throw new Error(`Bare thrown Test262Error-style object should report its message, got: ${thrownObjectOut}`);
+    if (thrownObjectOut.trim() === "[object Object]")
+      throw new Error("Bare thrown Test262Error-style object should not collapse to [object Object]");
+
     // --compat-all regression guard: the flag was removed and must now be
     // rejected as an unknown option.
     const bareCompatAll = await $`echo 'x;' | ${BARE} --compat-all - 2>&1`.nothrow();
