@@ -41,6 +41,7 @@ type
     function ReturnValue(const AValue: TGocciaValue): TGocciaObjectValue; override;
     function ThrowValue(const AValue: TGocciaValue): TGocciaObjectValue; override;
     procedure Close; override;
+    function UsesECMAScriptBuiltinTagFallback: Boolean; override;
     procedure MarkReferences; override;
   end;
 
@@ -445,6 +446,11 @@ begin
   if FDone then
     Exit;
   ReturnInternal(nil, False);
+end;
+
+function TGocciaGenericIteratorValue.UsesECMAScriptBuiltinTagFallback: Boolean;
+begin
+  Result := True;
 end;
 
 procedure TGocciaGenericIteratorValue.MarkReferences;

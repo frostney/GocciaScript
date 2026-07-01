@@ -33,6 +33,7 @@ type
     function GetProperty(const AName: string): TGocciaValue; override;
     function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; override;
     function ToStringTag: string; override;
+    function UsesECMAScriptBuiltinTagFallback: Boolean; override;
 
     procedure InitializeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); override;
     procedure MarkReferences; override;
@@ -280,6 +281,11 @@ end;
 function TGocciaSharedArrayBufferValue.ToStringTag: string;
 begin
   Result := CONSTRUCTOR_SHARED_ARRAY_BUFFER;
+end;
+
+function TGocciaSharedArrayBufferValue.UsesECMAScriptBuiltinTagFallback: Boolean;
+begin
+  Result := True;
 end;
 
 // ES2026 §25.2.5.1 get SharedArrayBuffer.prototype.byteLength

@@ -171,8 +171,6 @@ type
     function TypedArrayOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
-function IsTypedArrayIteratorValue(const AObject: TGocciaObjectValue): Boolean;
-
 implementation
 
 uses
@@ -231,13 +229,9 @@ type
     function AdvanceNext: TGocciaObjectValue; override;
     function DirectNext(out ADone: Boolean): TGocciaValue; override;
     function ToStringTag: string; override;
+    function UsesECMAScriptBuiltinTagFallback: Boolean; override;
     procedure MarkReferences; override;
   end;
-
-function IsTypedArrayIteratorValue(const AObject: TGocciaObjectValue): Boolean;
-begin
-  Result := AObject is TGocciaTypedArrayIteratorValue;
-end;
 
 function GetTypedArrayShared: TGocciaSharedPrototype; inline;
 begin
@@ -1481,6 +1475,11 @@ end;
 function TGocciaTypedArrayIteratorValue.ToStringTag: string;
 begin
   Result := 'Array Iterator';
+end;
+
+function TGocciaTypedArrayIteratorValue.UsesECMAScriptBuiltinTagFallback: Boolean;
+begin
+  Result := True;
 end;
 
 procedure TGocciaTypedArrayIteratorValue.MarkReferences;

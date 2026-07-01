@@ -52,6 +52,7 @@ type
     function TypeName: string; override;
     function TypeOf: string; override;
     function ToStringTag: string; virtual;
+    function UsesECMAScriptBuiltinTagFallback: Boolean; virtual;
 
     function ToStringLiteral: TGocciaStringLiteralValue; override;
     function ToBooleanLiteral: TGocciaBooleanLiteralValue; override;
@@ -146,33 +147,18 @@ uses
   Goccia.GarbageCollector,
   Goccia.ObjectModel,
   Goccia.Values.ArgumentsObjectValue,
-  Goccia.Values.ArrayBufferValue,
   Goccia.Values.ArrayValue,
   Goccia.Values.BooleanObjectValue,
   Goccia.Values.ClassHelper,
-  Goccia.Values.DataViewValue,
   Goccia.Values.ErrorHelper,
-  Goccia.Values.FinalizationRegistryValue,
   Goccia.Values.FunctionBase,
   Goccia.Values.FunctionValue,
-  Goccia.Values.GeneratorValue,
-  Goccia.Values.Iterator.Concrete,
-  Goccia.Values.Iterator.Generic,
-  Goccia.Values.IteratorValue,
-  Goccia.Values.MapValue,
   Goccia.Values.NativeFunction,
   Goccia.Values.NumberObjectValue,
-  Goccia.Values.PromiseValue,
   Goccia.Values.ProxyValue,
-  Goccia.Values.SetValue,
   Goccia.Values.Shape,
-  Goccia.Values.SharedArrayBufferValue,
   Goccia.Values.StringObjectValue,
-  Goccia.Values.ToPrimitive,
-  Goccia.Values.TypedArrayValue,
-  Goccia.Values.WeakMapValue,
-  Goccia.Values.WeakRefValue,
-  Goccia.Values.WeakSetValue;
+  Goccia.Values.ToPrimitive;
 
 // Object.prototype and its method host both live in per-realm slots, so the
 // realm pins them on SetSlot and unpins them on Destroy.  The method definitions
@@ -503,29 +489,6 @@ var
   end;
 
   function LegacyBuiltinTagForObject(const AObject: TGocciaObjectValue): string;
-
-    function IsECMAScriptBuiltinObject(const AObject: TGocciaObjectValue): Boolean;
-    begin
-      Result := (AObject is TGocciaMapValue) or
-        (AObject is TGocciaSetValue) or
-        (AObject is TGocciaWeakMapValue) or
-        (AObject is TGocciaWeakSetValue) or
-        (AObject is TGocciaWeakRefValue) or
-        (AObject is TGocciaFinalizationRegistryValue) or
-        (AObject is TGocciaPromiseValue) or
-        (AObject is TGocciaArrayBufferValue) or
-        (AObject is TGocciaSharedArrayBufferValue) or
-        (AObject is TGocciaDataViewValue) or
-        (AObject is TGocciaGenericIteratorValue) or
-        (AObject is TGocciaIteratorHelperValue) or
-        (AObject is TGocciaArrayIteratorValue) or
-        IsTypedArrayIteratorValue(AObject) or
-        (AObject is TGocciaGeneratorObjectValue) or
-        (AObject is TGocciaMapIteratorValue) or
-        (AObject is TGocciaSetIteratorValue) or
-        (AObject is TGocciaStringIteratorValue);
-    end;
-
   begin
     if AObject is TGocciaStringObjectValue then
       Result := CONSTRUCTOR_STRING
@@ -536,7 +499,7 @@ var
     else
     begin
       Result := AObject.ToStringTag;
-      if IsECMAScriptBuiltinObject(AObject) then
+      if AObject.UsesECMAScriptBuiltinTagFallback then
         Result := CONSTRUCTOR_OBJECT;
     end;
   end;
@@ -814,6 +777,11 @@ end;
 function TGocciaObjectValue.ToStringTag: string;
 begin
   Result := CONSTRUCTOR_OBJECT;
+end;
+
+function TGocciaObjectValue.UsesECMAScriptBuiltinTagFallback: Boolean;
+begin
+  Result := False;
 end;
 
 // ES2026 §7.1.17 ToString. For an object: ToPrimitive(O, string) → ToString

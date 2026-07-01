@@ -75,6 +75,7 @@ type
     function GetProperty(const AName: string): TGocciaValue; override;
     function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; override;
     function ToStringTag: string; override;
+    function UsesECMAScriptBuiltinTagFallback: Boolean; override;
 
     procedure MarkReferences; override;
 
@@ -924,6 +925,11 @@ end;
 function TGocciaPromiseValue.ToStringTag: string;
 begin
   Result := 'Promise';
+end;
+
+function TGocciaPromiseValue.UsesECMAScriptBuiltinTagFallback: Boolean;
+begin
+  Result := True;
 end;
 
 initialization
