@@ -108,7 +108,7 @@ See [Bytecode VM](docs/bytecode-vm.md) for the current bytecode executor archite
 
 ### Run Tests
 
-GocciaScript has 8000+ JavaScript unit tests covering language features, built-in objects, and edge cases.
+GocciaScript has 11,000+ JavaScript unit tests covering language features, built-in objects, and edge cases.
 
 ```bash
 ./build.pas testrunner
