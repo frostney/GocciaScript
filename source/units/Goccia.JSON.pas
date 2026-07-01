@@ -20,6 +20,24 @@ type
   EGocciaJSONParseError = class(Exception);
   TJSONStringifyMode = (jsmJSON, jsmJSON5);
 
+  TGocciaJSONParseRecord = class
+  private
+    FElements: TObjectList<TGocciaJSONParseRecord>;
+    FEntries: TObjectList<TGocciaJSONParseRecord>;
+    FEntryKeys: TStringList;
+    FSourceText: string;
+    FValue: TGocciaValue;
+  public
+    constructor Create(const AValue: TGocciaValue; const ASourceText: string);
+    destructor Destroy; override;
+    procedure AddElement(const ARecord: TGocciaJSONParseRecord);
+    procedure AddEntry(const AKey: string; const ARecord: TGocciaJSONParseRecord);
+    function ElementAt(const AIndex: Integer): TGocciaJSONParseRecord;
+    function EntryForKey(const AKey: string): TGocciaJSONParseRecord;
+    property SourceText: string read FSourceText;
+    property Value: TGocciaValue read FValue;
+  end;
+
   TGocciaJSONParser = class
   private
     FCapabilities: TJSONParserCapabilities;
@@ -30,11 +48,14 @@ type
     function Parse(const AText: UTF8String): TGocciaValue; virtual;
     procedure ParseWithSources(const AText: UTF8String;
       out AValue: TGocciaValue; const ASourceTexts: TStringList);
+    procedure ParseWithRecord(const AText: UTF8String;
+      out AValue: TGocciaValue; out AParseRecord: TGocciaJSONParseRecord);
   end;
 
   TGocciaJSONStringifier = class
   private
     FGap: string;
+    FApplyToJSON: Boolean;
     FHasPropertyList: Boolean;
     FMode: TJSONStringifyMode;
     FPreferredQuoteChar: Char;
@@ -53,14 +74,15 @@ type
     function SerializeObjectKey(const AKey: string): string;
     procedure WriteValue(var ABuffer: TStringBuffer; const AValue: TGocciaValue; const AIndent: Integer = 0);
     procedure WriteObject(var ABuffer: TStringBuffer; const AObj: TGocciaObjectValue; const AIndent: Integer);
-    procedure WriteArray(var ABuffer: TStringBuffer; const AArr: TGocciaArrayValue; const AIndent: Integer);
+    procedure WriteArray(var ABuffer: TStringBuffer; const AArr: TGocciaObjectValue; const AIndent: Integer);
     function MakeIndent(const ALevel: Integer): string;
   public
     constructor Create; overload;
     constructor Create(const AMode: TJSONStringifyMode); overload;
     function Stringify(const AValue: TGocciaValue; const AGap: string = '';
       const APreferredQuoteChar: Char = #0;
-      const APropertyList: TStringList = nil): string;
+      const APropertyList: TStringList = nil;
+      const AApplyToJSON: Boolean = True): string;
   end;
 
 implementation
@@ -72,12 +94,14 @@ uses
 
   Goccia.Arguments.Collection,
   Goccia.Constants.PropertyNames,
+  Goccia.Error.Messages,
   Goccia.JSON.Utils,
   Goccia.Utils,
   Goccia.Values.BigIntValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.HoleValue,
   Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.ProxyValue,
   Goccia.Values.RawJSON,
   Goccia.Values.StringObjectValue,
   Goccia.Values.SymbolValue,
@@ -87,13 +111,17 @@ uses
 type
   TGocciaJSONVisitor = class(TAbstractJSONParser)
   private
+    FCollectRecords: Boolean;
     FCollectSources: Boolean;
     FKeyStack: TStringList;
+    FRecordStack: TList<TGocciaJSONParseRecord>;
     FResult: TGocciaValue;
+    FRootRecord: TGocciaJSONParseRecord;
     FSourceTexts: TStringList;
     FStack: TList<TGocciaValue>;
     FValueStartPosition: Integer;
     procedure RecordSourceText;
+    function MakePrimitiveRecord(const AValue: TGocciaValue): TGocciaJSONParseRecord;
   protected
     procedure OnNull; override;
     procedure OnBoolean(const AValue: Boolean); override;
@@ -107,12 +135,16 @@ type
     procedure OnEndArray; override;
     procedure OnValueStart; override;
     procedure EmitValue(const AValue: TGocciaValue);
+    procedure EmitValueAndRecord(const AValue: TGocciaValue;
+      const ARecord: TGocciaJSONParseRecord);
   public
     constructor Create;
     constructor Create(
       const ACapabilities: TJSONParserCapabilities);
     destructor Destroy; override;
     function Parse(const AText: UTF8String): TGocciaValue;
+    function ReleaseRootRecord: TGocciaJSONParseRecord;
+    property CollectRecords: Boolean read FCollectRecords write FCollectRecords;
     property CollectSources: Boolean read FCollectSources write FCollectSources;
     property SourceTexts: TStringList read FSourceTexts;
   end;
@@ -250,6 +282,79 @@ begin
   ASB.AppendChar(AValue);
 end;
 
+function IsJSONArrayValue(const AValue: TGocciaValue): Boolean;
+var
+  Current: TGocciaValue;
+  Proxy: TGocciaProxyValue;
+begin
+  Current := AValue;
+  while Current is TGocciaProxyValue do
+  begin
+    Proxy := TGocciaProxyValue(Current);
+    if Proxy.Revoked then
+      ThrowTypeError(SErrorProxyRevoked);
+    Current := Proxy.Target;
+  end;
+  Result := Current is TGocciaArrayValue;
+end;
+
+{ TGocciaJSONParseRecord }
+
+constructor TGocciaJSONParseRecord.Create(const AValue: TGocciaValue;
+  const ASourceText: string);
+begin
+  inherited Create;
+  FValue := AValue;
+  FSourceText := ASourceText;
+  FElements := TObjectList<TGocciaJSONParseRecord>.Create(True);
+  FEntries := TObjectList<TGocciaJSONParseRecord>.Create(True);
+  FEntryKeys := TStringList.Create;
+end;
+
+destructor TGocciaJSONParseRecord.Destroy;
+begin
+  FEntryKeys.Free;
+  FEntries.Free;
+  FElements.Free;
+  inherited;
+end;
+
+procedure TGocciaJSONParseRecord.AddElement(
+  const ARecord: TGocciaJSONParseRecord);
+begin
+  if Assigned(ARecord) then
+    FElements.Add(ARecord);
+end;
+
+procedure TGocciaJSONParseRecord.AddEntry(const AKey: string;
+  const ARecord: TGocciaJSONParseRecord);
+begin
+  if not Assigned(ARecord) then
+    Exit;
+  FEntryKeys.Add(AKey);
+  FEntries.Add(ARecord);
+end;
+
+function TGocciaJSONParseRecord.ElementAt(
+  const AIndex: Integer): TGocciaJSONParseRecord;
+begin
+  if (AIndex >= 0) and (AIndex < FElements.Count) then
+    Result := FElements[AIndex]
+  else
+    Result := nil;
+end;
+
+function TGocciaJSONParseRecord.EntryForKey(
+  const AKey: string): TGocciaJSONParseRecord;
+var
+  I: Integer;
+begin
+  for I := FEntryKeys.Count - 1 downto 0 do
+    if FEntryKeys[I] = AKey then
+      Exit(FEntries[I]);
+  Result := nil;
+end;
+
 { TGocciaJSONParser }
 
 constructor TGocciaJSONParser.Create;
@@ -301,6 +406,26 @@ begin
   end;
 end;
 
+procedure TGocciaJSONParser.ParseWithRecord(const AText: UTF8String;
+  out AValue: TGocciaValue; out AParseRecord: TGocciaJSONParseRecord);
+var
+  Visitor: TGocciaJSONVisitor;
+begin
+  Visitor := TGocciaJSONVisitor.Create(FCapabilities);
+  try
+    Visitor.CollectRecords := True;
+    try
+      AValue := Visitor.Parse(AText);
+      AParseRecord := Visitor.ReleaseRootRecord;
+    except
+      on E: EJSONParseError do
+        raise EGocciaJSONParseError.Create(E.Message);
+    end;
+  finally
+    Visitor.Free;
+  end;
+end;
+
 { TGocciaJSONVisitor }
 
 constructor TGocciaJSONVisitor.Create;
@@ -313,14 +438,19 @@ constructor TGocciaJSONVisitor.Create(
 begin
   inherited Create(ACapabilities);
   FStack := TList<TGocciaValue>.Create;
+  FRecordStack := TList<TGocciaJSONParseRecord>.Create;
   FKeyStack := TStringList.Create;
   FSourceTexts := TStringList.Create;
   FResult := nil;
+  FRootRecord := nil;
+  FCollectRecords := False;
   FCollectSources := False;
 end;
 
 destructor TGocciaJSONVisitor.Destroy;
 begin
+  FRootRecord.Free;
+  FRecordStack.Free;
   FStack.Free;
   FKeyStack.Free;
   FSourceTexts.Free;
@@ -331,6 +461,12 @@ function TGocciaJSONVisitor.Parse(const AText: UTF8String): TGocciaValue;
 begin
   DoParse(AText);
   Result := FResult;
+end;
+
+function TGocciaJSONVisitor.ReleaseRootRecord: TGocciaJSONParseRecord;
+begin
+  Result := FRootRecord;
+  FRootRecord := nil;
 end;
 
 procedure TGocciaJSONVisitor.OnValueStart;
@@ -345,18 +481,48 @@ begin
       CurrentPosition - FValueStartPosition));
 end;
 
+function TGocciaJSONVisitor.MakePrimitiveRecord(
+  const AValue: TGocciaValue): TGocciaJSONParseRecord;
+begin
+  if FCollectRecords then
+    Result := TGocciaJSONParseRecord.Create(AValue,
+      Copy(string(SourceTextData), FValueStartPosition,
+        CurrentPosition - FValueStartPosition))
+  else
+    Result := nil;
+end;
+
 procedure TGocciaJSONVisitor.EmitValue(const AValue: TGocciaValue);
+begin
+  EmitValueAndRecord(AValue, nil);
+end;
+
+procedure TGocciaJSONVisitor.EmitValueAndRecord(const AValue: TGocciaValue;
+  const ARecord: TGocciaJSONParseRecord);
 var
   Container: TGocciaValue;
   Key: string;
+  ParentRecord: TGocciaJSONParseRecord;
 begin
   if FStack.Count = 0 then
-    FResult := AValue
+  begin
+    FResult := AValue;
+    if FCollectRecords then
+      FRootRecord := ARecord;
+  end
   else
   begin
     Container := FStack[FStack.Count - 1];
+    if FCollectRecords and (FRecordStack.Count > 0) then
+      ParentRecord := FRecordStack[FRecordStack.Count - 1]
+    else
+      ParentRecord := nil;
     if Container is TGocciaArrayValue then
-      TGocciaArrayValue(Container).Elements.Add(AValue)
+    begin
+      TGocciaArrayValue(Container).Elements.Add(AValue);
+      if Assigned(ParentRecord) then
+        ParentRecord.AddElement(ARecord);
+    end
     else if Container is TGocciaObjectValue then
     begin
       Key := FKeyStack[FKeyStack.Count - 1];
@@ -364,6 +530,8 @@ begin
       TGocciaObjectValue(Container).DefineProperty(Key,
         TGocciaPropertyDescriptorData.Create(AValue,
           [pfWritable, pfEnumerable, pfConfigurable]));
+      if Assigned(ParentRecord) then
+        ParentRecord.AddEntry(Key, ARecord);
     end;
   end;
 end;
@@ -371,40 +539,57 @@ end;
 procedure TGocciaJSONVisitor.OnNull;
 begin
   RecordSourceText;
-  EmitValue(TGocciaNullLiteralValue.NullValue);
+  EmitValueAndRecord(TGocciaNullLiteralValue.NullValue,
+    MakePrimitiveRecord(TGocciaNullLiteralValue.NullValue));
 end;
 
 procedure TGocciaJSONVisitor.OnBoolean(const AValue: Boolean);
+var
+  Value: TGocciaValue;
 begin
   RecordSourceText;
   if AValue then
-    EmitValue(TGocciaBooleanLiteralValue.TrueValue)
+    Value := TGocciaBooleanLiteralValue.TrueValue
   else
-    EmitValue(TGocciaBooleanLiteralValue.FalseValue);
+    Value := TGocciaBooleanLiteralValue.FalseValue;
+  EmitValueAndRecord(Value, MakePrimitiveRecord(Value));
 end;
 
 procedure TGocciaJSONVisitor.OnString(const AValue: string);
+var
+  Value: TGocciaValue;
 begin
   RecordSourceText;
-  EmitValue(TGocciaStringLiteralValue.Create(AValue));
+  Value := TGocciaStringLiteralValue.Create(AValue);
+  EmitValueAndRecord(Value, MakePrimitiveRecord(Value));
 end;
 
 procedure TGocciaJSONVisitor.OnInteger(const AValue: Int64);
+var
+  Value: TGocciaValue;
 begin
   RecordSourceText;
-  EmitValue(TGocciaNumberLiteralValue.Create(AValue));
+  Value := TGocciaNumberLiteralValue.Create(AValue);
+  EmitValueAndRecord(Value, MakePrimitiveRecord(Value));
 end;
 
 procedure TGocciaJSONVisitor.OnFloat(const AValue: Double);
+var
+  Value: TGocciaValue;
 begin
   RecordSourceText;
-  EmitValue(TGocciaNumberLiteralValue.Create(AValue));
+  Value := TGocciaNumberLiteralValue.Create(AValue);
+  EmitValueAndRecord(Value, MakePrimitiveRecord(Value));
 end;
 
 procedure TGocciaJSONVisitor.OnBeginObject;
+var
+  Obj: TGocciaObjectValue;
 begin
-  FStack.Add(TGocciaObjectValue.Create(
-    TGocciaObjectValue.SharedObjectPrototype));
+  Obj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
+  FStack.Add(Obj);
+  if FCollectRecords then
+    FRecordStack.Add(TGocciaJSONParseRecord.Create(Obj, ''));
 end;
 
 procedure TGocciaJSONVisitor.OnObjectKey(const AKey: string);
@@ -414,25 +599,44 @@ end;
 
 procedure TGocciaJSONVisitor.OnEndObject;
 var
+  RecordNode: TGocciaJSONParseRecord;
   Val: TGocciaValue;
 begin
   Val := FStack[FStack.Count - 1];
   FStack.Delete(FStack.Count - 1);
-  EmitValue(Val);
+  RecordNode := nil;
+  if FCollectRecords then
+  begin
+    RecordNode := FRecordStack[FRecordStack.Count - 1];
+    FRecordStack.Delete(FRecordStack.Count - 1);
+  end;
+  EmitValueAndRecord(Val, RecordNode);
 end;
 
 procedure TGocciaJSONVisitor.OnBeginArray;
+var
+  Arr: TGocciaArrayValue;
 begin
-  FStack.Add(TGocciaArrayValue.Create);
+  Arr := TGocciaArrayValue.Create;
+  FStack.Add(Arr);
+  if FCollectRecords then
+    FRecordStack.Add(TGocciaJSONParseRecord.Create(Arr, ''));
 end;
 
 procedure TGocciaJSONVisitor.OnEndArray;
 var
+  RecordNode: TGocciaJSONParseRecord;
   Val: TGocciaValue;
 begin
   Val := FStack[FStack.Count - 1];
   FStack.Delete(FStack.Count - 1);
-  EmitValue(Val);
+  RecordNode := nil;
+  if FCollectRecords then
+  begin
+    RecordNode := FRecordStack[FRecordStack.Count - 1];
+    FRecordStack.Delete(FRecordStack.Count - 1);
+  end;
+  EmitValueAndRecord(Val, RecordNode);
 end;
 
 { TGocciaJSONStringifier }
@@ -450,9 +654,10 @@ end;
 
 function TGocciaJSONStringifier.Stringify(const AValue: TGocciaValue;
   const AGap: string; const APreferredQuoteChar: Char;
-  const APropertyList: TStringList): string;
+  const APropertyList: TStringList; const AApplyToJSON: Boolean): string;
 var
   I: Integer;
+  PreviousApplyToJSON: Boolean;
   PreviousGap: string;
   PreviousHasPropertyList: Boolean;
   PreviousPreferredQuoteChar: Char;
@@ -461,12 +666,14 @@ var
   RootValue: TGocciaValue;
   Buffer: TStringBuffer;
 begin
+  PreviousApplyToJSON := FApplyToJSON;
   PreviousGap := FGap;
   PreviousHasPropertyList := FHasPropertyList;
   PreviousPreferredQuoteChar := FPreferredQuoteChar;
   PreviousPropertyList := FPropertyList;
   PreviousTraversalStack := FTraversalStack;
 
+  FApplyToJSON := AApplyToJSON;
   FGap := AGap;
   FPreferredQuoteChar := APreferredQuoteChar;
   // ES2026 §25.5.4 step 12: PropertyList lives in the JSON Serialization
@@ -493,6 +700,7 @@ begin
   finally
     FTraversalStack.Free;
     FTraversalStack := PreviousTraversalStack;
+    FApplyToJSON := PreviousApplyToJSON;
     FPreferredQuoteChar := PreviousPreferredQuoteChar;
     FPropertyList := PreviousPropertyList;
     FHasPropertyList := PreviousHasPropertyList;
@@ -526,23 +734,26 @@ var
   Args: TGocciaArgumentsCollection;
 begin
   Result := AValue;
-  if not (AValue is TGocciaObjectValue) then
+  if not FApplyToJSON then
+    Exit;
+
+  if not ((AValue is TGocciaObjectValue) or (AValue is TGocciaBigIntValue)) then
     Exit;
 
   if FMode = jsmJSON5 then
   begin
     MethodName := PROP_TO_JSON5;
-    ToJSONMethod := TGocciaObjectValue(AValue).GetProperty(MethodName);
+    ToJSONMethod := AValue.GetProperty(MethodName);
     if not Assigned(ToJSONMethod) or not ToJSONMethod.IsCallable then
     begin
       MethodName := PROP_TO_JSON;
-      ToJSONMethod := TGocciaObjectValue(AValue).GetProperty(MethodName);
+      ToJSONMethod := AValue.GetProperty(MethodName);
     end;
   end
   else
   begin
     MethodName := PROP_TO_JSON;
-    ToJSONMethod := TGocciaObjectValue(AValue).GetProperty(MethodName);
+    ToJSONMethod := AValue.GetProperty(MethodName);
   end;
 
   if not Assigned(ToJSONMethod) or not ToJSONMethod.IsCallable then
@@ -811,8 +1022,9 @@ begin
     ABuffer.Append('null')
   else if EffectiveValue is TGocciaSymbolValue then
     ABuffer.Append('null')
-  else if EffectiveValue is TGocciaArrayValue then
-    WriteArray(ABuffer, TGocciaArrayValue(EffectiveValue), AIndent)
+  else if (EffectiveValue is TGocciaObjectValue) and
+    IsJSONArrayValue(EffectiveValue) then
+    WriteArray(ABuffer, TGocciaObjectValue(EffectiveValue), AIndent)
   else if EffectiveValue is TGocciaObjectValue then
     WriteObject(ABuffer, TGocciaObjectValue(EffectiveValue), AIndent)
   else
@@ -895,7 +1107,7 @@ begin
 end;
 
 procedure TGocciaJSONStringifier.WriteArray(var ABuffer: TStringBuffer;
-  const AArr: TGocciaArrayValue; const AIndent: Integer);
+  const AArr: TGocciaObjectValue; const AIndent: Integer);
 var
   I: Integer;
   Len: Integer;

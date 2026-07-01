@@ -48,7 +48,8 @@ type
 implementation
 
 uses
-  Goccia.Constants.PropertyNames;
+  Goccia.Constants.PropertyNames,
+  Goccia.Realm;
 
 constructor TGocciaNativeFunctionValue.Create(const AFunction: TGocciaNativeFunctionCallback;
   const AName: string; const AArity: Integer);
@@ -72,8 +73,18 @@ begin
 end;
 
 function TGocciaNativeFunctionValue.Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  PreviousRealm: TGocciaRealm;
 begin
-  Result := FFunction(AArguments, AThisValue);
+  PreviousRealm := CurrentRealm;
+  if Assigned(FCreationRealm) and (FCreationRealm <> PreviousRealm) then
+    SetCurrentRealm(FCreationRealm);
+  try
+    Result := FFunction(AArguments, AThisValue);
+  finally
+    if Assigned(FCreationRealm) and (FCreationRealm <> PreviousRealm) then
+      SetCurrentRealm(PreviousRealm);
+  end;
 end;
 
 function TGocciaNativeFunctionValue.Construct(const AArguments: TGocciaArgumentsCollection; const ANewTarget: TGocciaValue): TGocciaValue;

@@ -12,6 +12,18 @@ test("JSON.stringify basic values", () => {
   expect(JSON.stringify(undefined)).toBeUndefined();
 });
 
+test("JSON.stringify has the spec function length", () => {
+  expect(JSON.stringify.length).toBe(3);
+  const descriptor = Object.getOwnPropertyDescriptor(JSON.stringify, "length");
+  expect(descriptor.writable).toBe(false);
+  expect(descriptor.enumerable).toBe(false);
+  expect(descriptor.configurable).toBe(true);
+});
+
+test("JSON.stringify treats a missing value as undefined", () => {
+  expect(JSON.stringify()).toBeUndefined();
+});
+
 test("JSON.stringify omits root function and symbol values", () => {
   expect(JSON.stringify(() => {})).toBeUndefined();
   expect(JSON.stringify(Symbol("root"))).toBeUndefined();
@@ -97,6 +109,13 @@ test("JSON.stringify emits the shortest round-tripping form for fractional float
 test("JSON.stringify strings with special characters", () => {
   expect(JSON.stringify("hello\nworld")).toBe('"hello\\nworld"');
   expect(JSON.stringify("tab\there")).toBe('"tab\\there"');
+});
+
+test("JSON.stringify uses QuoteJSONString escape semantics", () => {
+  expect(JSON.stringify("/")).toBe('"/"');
+  expect(JSON.stringify("\u0000\u000b\u001f")).toBe('"\\u0000\\u000b\\u001f"');
+  expect(JSON.stringify("\uD800")).toBe('"\\ud800"');
+  expect(JSON.stringify("\uDC00")).toBe('"\\udc00"');
 });
 
 test("JSON.stringify with space number", () => {
