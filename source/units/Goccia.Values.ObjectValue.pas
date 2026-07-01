@@ -145,6 +145,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.ObjectModel,
+  Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassHelper,
   Goccia.Values.ErrorHelper,
@@ -815,7 +816,7 @@ begin
         Args := TGocciaArgumentsCollection.Create;
         try
           Args.Add(AValue);
-          TGocciaFunctionBase(Accessor.Setter).Call(Args, Self);
+          InvokeCallable(Accessor.Setter, Args, Self);
         finally
           Args.Free;
         end;
@@ -853,7 +854,7 @@ begin
           Args := TGocciaArgumentsCollection.Create;
           try
             Args.Add(AValue);
-            TGocciaFunctionBase(Accessor.Setter).Call(Args, Self);
+            InvokeCallable(Accessor.Setter, Args, Self);
           finally
             Args.Free;
           end;
@@ -960,7 +961,7 @@ begin
   Args := TGocciaArgumentsCollection.Create;
   try
     Args.Add(AValue);
-    TGocciaFunctionBase(Accessor.Setter).Call(Args, AReceiver);
+    InvokeCallable(Accessor.Setter, Args, AReceiver);
   finally
     Args.Free;
   end;
@@ -1620,8 +1621,8 @@ begin
         Args := TGocciaArgumentsCollection.Create;
         try
           Args.Add(AValue);
-          if Accessor.Setter is TGocciaFunctionBase then
-            TGocciaFunctionBase(Accessor.Setter).Call(Args, Self);
+          if Accessor.Setter.IsCallable then
+            InvokeCallable(Accessor.Setter, Args, Self);
         finally
           Args.Free;
         end;
@@ -1654,8 +1655,8 @@ begin
           Args := TGocciaArgumentsCollection.Create;
           try
             Args.Add(AValue);
-            if Accessor.Setter is TGocciaFunctionBase then
-              TGocciaFunctionBase(Accessor.Setter).Call(Args, Self);
+            if Accessor.Setter.IsCallable then
+              InvokeCallable(Accessor.Setter, Args, Self);
           finally
             Args.Free;
           end;
@@ -1758,7 +1759,7 @@ begin
   Args := TGocciaArgumentsCollection.Create;
   try
     Args.Add(AValue);
-    TGocciaFunctionBase(Accessor.Setter).Call(Args, AReceiver);
+    InvokeCallable(Accessor.Setter, Args, AReceiver);
   finally
     Args.Free;
   end;

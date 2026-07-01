@@ -309,7 +309,7 @@ begin
             // Step 5c: Let iteratorRecord = GetIteratorFromMethod(items, usingIterator)
             CallArgs := TGocciaArgumentsCollection.Create;
             try
-              IteratorObj := TGocciaFunctionBase(IteratorMethod).Call(CallArgs, Source);
+              IteratorObj := InvokeCallable(IteratorMethod, CallArgs, Source);
             finally
               CallArgs.Free;
             end;
@@ -455,7 +455,7 @@ var
 
     CloseArgs := TGocciaArgumentsCollection.Create;
     try
-      CloseResult := TGocciaFunctionBase(ReturnMethod).Call(CloseArgs, AIterator);
+      CloseResult := InvokeCallable(ReturnMethod, CloseArgs, AIterator);
       CloseResult := AwaitValue(CloseResult);
       if not (CloseResult is TGocciaObjectValue) then
         ThrowTypeError(SErrorIteratorReturnObject, SSuggestIteratorProtocol);
@@ -541,7 +541,7 @@ begin
           // TC39 Array.fromAsync §2.1.1.1 step 4.a: GetIterator(asyncItems, async)
           EmptyArgs := TGocciaArgumentsCollection.Create;
           try
-            IteratorObj := TGocciaFunctionBase(IteratorMethod).Call(EmptyArgs, Source);
+            IteratorObj := InvokeCallable(IteratorMethod, EmptyArgs, Source);
           finally
             EmptyArgs.Free;
           end;
@@ -561,7 +561,7 @@ begin
                 while True do
                 begin
                   // TC39 Array.fromAsync §2.1.1.1 step 4.b.ii: Await(IteratorNext(iteratorRecord))
-                  NextResult := TGocciaFunctionBase(NextMethod).Call(EmptyArgs, IteratorObj);
+                  NextResult := InvokeCallable(NextMethod, EmptyArgs, IteratorObj);
                   NextResult := AwaitValue(NextResult);
 
                   // ES2026 §7.4.2 step 5: If nextResult is not an Object, throw a TypeError
@@ -632,7 +632,7 @@ begin
               // TC39 Array.fromAsync §2.1.1.1 step 4.a: GetIterator(asyncItems, sync)
               EmptyArgs := TGocciaArgumentsCollection.Create;
               try
-                IteratorObj := TGocciaFunctionBase(IteratorMethod).Call(EmptyArgs, Source);
+                IteratorObj := InvokeCallable(IteratorMethod, EmptyArgs, Source);
               finally
                 EmptyArgs.Free;
               end;

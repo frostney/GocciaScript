@@ -72,6 +72,7 @@ uses
   Goccia.Float16,
   Goccia.GarbageCollector,
   Goccia.ThreadCleanupRegistry,
+  Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassHelper,
   Goccia.Values.ErrorHelper,
@@ -1213,7 +1214,7 @@ begin
       begin
         CallArgs := TGocciaArgumentsCollection.Create;
         try
-          IteratorObj := TGocciaFunctionBase(IteratorMethod).Call(CallArgs, Iterable);
+          IteratorObj := InvokeCallable(IteratorMethod, CallArgs, Iterable);
         finally
           CallArgs.Free;
         end;

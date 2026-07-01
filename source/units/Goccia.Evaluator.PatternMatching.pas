@@ -43,6 +43,7 @@ uses
   Goccia.Scope,
   Goccia.Scope.BindingMap,
   Goccia.Token,
+  Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.BigIntObjectValue,
   Goccia.Values.BigIntValue,
@@ -119,8 +120,7 @@ begin
 
     CallArguments := TGocciaArgumentsCollection.Create;
     try
-      IteratorObject := TGocciaFunctionBase(IteratorMethod).Call(
-        CallArguments, AValue);
+      IteratorObject := InvokeCallable(IteratorMethod, CallArguments, AValue);
     finally
       CallArguments.Free;
     end;
@@ -407,7 +407,7 @@ begin
     Hint.AssignProperty(PROP_MATCH_TYPE, TGocciaStringLiteralValue.Create(AMatchType));
     Arguments.Add(ASubject);
     Arguments.Add(Hint);
-    Result := TGocciaFunctionBase(AMatcherFunction).Call(Arguments, AThisValue);
+    Result := InvokeCallable(AMatcherFunction, Arguments, AThisValue);
   finally
     Arguments.Free;
   end;

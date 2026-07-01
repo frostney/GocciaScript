@@ -76,6 +76,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.Scope.BindingMap,
   Goccia.ThreadCleanupRegistry,
+  Goccia.Utils,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
@@ -249,6 +250,7 @@ var
   Slot: PDisposableStackSlot;
   I: Integer;
   Resource: TGocciaDisposableResource;
+  CallArgs: TGocciaArgumentsCollection;
   CurrentError: TGocciaValue;
   HasError: Boolean;
 begin
@@ -274,11 +276,25 @@ begin
     begin
       try
         if Resource.HasDisposeArgument then
-          TGocciaFunctionBase(Resource.DisposeMethod).CallOneArg(
-            Resource.DisposeArgument,
-            TGocciaUndefinedLiteralValue.UndefinedValue)
+        begin
+          CallArgs := TGocciaArgumentsCollection.Create([Resource.DisposeArgument]);
+          try
+            InvokeCallable(Resource.DisposeMethod, CallArgs,
+              TGocciaUndefinedLiteralValue.UndefinedValue);
+          finally
+            CallArgs.Free;
+          end;
+        end
         else
-          TGocciaFunctionBase(Resource.DisposeMethod).CallNoArgs(Resource.ResourceValue);
+        begin
+          CallArgs := TGocciaArgumentsCollection.Create;
+          try
+            InvokeCallable(Resource.DisposeMethod, CallArgs,
+              Resource.ResourceValue);
+          finally
+            CallArgs.Free;
+          end;
+        end;
       except
         on E: EGocciaBytecodeThrow do
         begin

@@ -874,7 +874,7 @@ begin
 end;
 
 
-function CallCompareFunc(const ACompareFunc: TGocciaFunctionBase; const ACallArgs: TGocciaArgumentsCollection;
+function CallCompareFunc(const ACompareFunc: TGocciaValue; const ACallArgs: TGocciaArgumentsCollection;
   const A, B: TGocciaValue; const AThisValue: TGocciaValue): Double;
 var
   CompResult: TGocciaNumberLiteralValue;
@@ -903,7 +903,7 @@ begin
   PreviousContinuation := SuspendCurrentGeneratorContinuation;
   try
     try
-      CompResult := ACompareFunc.Call(ACallArgs, AThisValue).ToNumberLiteral;
+      CompResult := InvokeCallable(ACompareFunc, ACallArgs, AThisValue).ToNumberLiteral;
     finally
       RestoreCurrentGeneratorContinuation(PreviousContinuation);
     end;
@@ -924,7 +924,7 @@ begin
     Result := CompResult.Value;
 end;
 
-procedure StableSortElements(const AElements: TGocciaValueList; const ACompareFunc: TGocciaFunctionBase;
+procedure StableSortElements(const AElements: TGocciaValueList; const ACompareFunc: TGocciaValue;
   const ACallArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue);
 var
   Buffer: array of TGocciaValue;
@@ -3165,7 +3165,7 @@ begin
       begin
         CallArgs := TGocciaArgumentsCollection.Create([nil, nil]);
         try
-          StableSortElements(ResultArray.Elements, TGocciaFunctionBase(CustomSortFunction), CallArgs, AThisValue);
+          StableSortElements(ResultArray.Elements, CustomSortFunction, CallArgs, AThisValue);
         finally
           CallArgs.Free;
         end;
@@ -3857,7 +3857,7 @@ begin
         CallArgs := TGocciaArgumentsCollection.Create([nil, nil]);
         try
           if TempArr.Elements.Count > 1 then
-            StableSortElements(TempArr.Elements, TGocciaFunctionBase(CustomSortFunction), CallArgs, AThisValue);
+            StableSortElements(TempArr.Elements, CustomSortFunction, CallArgs, AThisValue);
         finally
           CallArgs.Free;
         end;

@@ -57,6 +57,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
+  Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
@@ -140,7 +141,7 @@ begin
         try
           CallArgs := TGocciaArgumentsCollection.Create;
           try
-            IteratorObj := TGocciaFunctionBase(IteratorMethod).Call(CallArgs, AValue);
+            IteratorObj := InvokeCallable(IteratorMethod, CallArgs, AValue);
           finally
             CallArgs.Free;
           end;

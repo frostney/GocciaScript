@@ -208,6 +208,7 @@ uses
   Goccia.StackLimit,
   Goccia.Timeout,
   Goccia.Token,
+  Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.AsyncFunctionValue,
   Goccia.Values.Await,
@@ -6262,7 +6263,7 @@ var
         SSuggestIteratorProtocol);
     CloseArgs := TGocciaArgumentsCollection.Create;
     try
-      ReturnResult := TGocciaFunctionBase(ReturnMethod).Call(CloseArgs, AIter);
+      ReturnResult := InvokeCallable(ReturnMethod, CloseArgs, AIter);
     finally
       CloseArgs.Free;
     end;
@@ -6333,7 +6334,7 @@ begin
     begin
       EmptyArgs := TGocciaArgumentsCollection.Create;
       try
-        IteratorObj := TGocciaFunctionBase(IteratorMethod).Call(EmptyArgs, IterableValue);
+        IteratorObj := InvokeCallable(IteratorMethod, EmptyArgs, IterableValue);
       finally
         EmptyArgs.Free;
       end;
@@ -6368,7 +6369,7 @@ begin
           end
           else
           begin
-            NextResult := TGocciaFunctionBase(NextMethod).Call(EmptyArgs, IteratorObj);
+            NextResult := InvokeCallable(NextMethod, EmptyArgs, IteratorObj);
             NextResult := AwaitValue(NextResult);
 
             // ES2026 §7.4.2 step 5: If nextResult is not an Object, throw a TypeError
@@ -6837,6 +6838,7 @@ function DisposeTrackedResources(const ATracker: TGocciaDisposalTracker;
 var
   I: Integer;
   Resource: TGocciaDisposableResource;
+  CallArgs: TGocciaArgumentsCollection;
   CurrentError: TGocciaValue;
   HasError: Boolean;
 begin
@@ -6850,7 +6852,12 @@ begin
     if Assigned(Resource.DisposeMethod) and Resource.DisposeMethod.IsCallable then
     begin
       try
-        TGocciaFunctionBase(Resource.DisposeMethod).CallNoArgs(Resource.ResourceValue);
+        CallArgs := TGocciaArgumentsCollection.Create;
+        try
+          InvokeCallable(Resource.DisposeMethod, CallArgs, Resource.ResourceValue);
+        finally
+          CallArgs.Free;
+        end;
       except
         on E: TGocciaThrowValue do
         begin
