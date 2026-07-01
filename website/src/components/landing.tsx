@@ -1015,11 +1015,13 @@ export function Landing({
               </AnchorH3>
               <p className="text-ink-2 mb-4">
                 Dynamic code construction and scope-changing syntax are left out
-                to keep execution predictable in embedded runtimes. Coercive or
-                legacy forms such as <code className={inlineCodeClass}>==</code>
-                , <code className={inlineCodeClass}>var</code>, and{" "}
-                <code className={inlineCodeClass}>arguments</code> have explicit
-                alternatives. See{" "}
+                of the recommended defaults to keep execution predictable in
+                embedded runtimes. Coercive or legacy forms such as{" "}
+                <code className={inlineCodeClass}>==</code>,{" "}
+                <code className={inlineCodeClass}>var</code>, and{" "}
+                <code className={inlineCodeClass}>arguments</code> stay off by
+                default but remain available behind explicit compatibility flags
+                — a curated default, not a language ceiling. See{" "}
                 <Link href="/docs/language" className="link-button">
                   Language
                 </Link>{" "}
@@ -1059,10 +1061,11 @@ export function Landing({
               </div>
               <p className="compat-note">
                 Compatibility flags primarily exist for ECMAScript conformance
-                and legacy code. They can opt back into syntax such as{" "}
+                and legacy code. They opt back into excluded syntax such as{" "}
                 <code className={inlineCodeClass}>var</code>,{" "}
-                <code className={inlineCodeClass}>function</code>, and ASI via
-                CLI or config flags.
+                <code className={inlineCodeClass}>function</code>, loose
+                equality, <code className={inlineCodeClass}>arguments</code>, and
+                ASI via CLI or config flags.
               </p>
               <div className="mt-10">
                 <p className="text-ink-2 mb-0 text-[0.92rem]">

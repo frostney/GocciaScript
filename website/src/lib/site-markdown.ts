@@ -163,7 +163,7 @@ async function homeMarkdown(): Promise<string> {
     "",
     "## Intentionally excluded",
     "",
-    "Dynamic code construction and scope-changing syntax are left out of the recommended defaults to keep execution predictable in embedded runtimes. Compatibility flags primarily exist for ECMAScript conformance and legacy code; they can opt back into selected syntax such as `var`, `function`, and ASI via CLI or config flags.",
+    "Dynamic code construction and scope-changing syntax are left out of the recommended defaults to keep execution predictable in embedded runtimes. Coercive or legacy forms such as `==`, `var`, and `arguments` stay off by default but remain available behind explicit compatibility flags — a curated default, not a language ceiling. Those flags primarily exist for ECMAScript conformance and legacy code, opting back into excluded syntax such as `var`, `function`, loose equality, `arguments`, and ASI via CLI or config flags.",
     "",
     list(EXCLUDED.map((item) => `\`${item.name}\` - ${item.why}`)),
     "",
