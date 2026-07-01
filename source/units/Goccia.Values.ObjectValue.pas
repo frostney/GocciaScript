@@ -39,6 +39,7 @@ type
     FHasErrorData: Boolean;
     FHasRegExpData: Boolean;
     FRegExpData: TObject;
+    function BuiltinTagFallback: Boolean; virtual;
   public
     class procedure InitializeSharedPrototype;
     class function GetSharedObjectPrototype: TGocciaObjectValue; static;
@@ -52,6 +53,7 @@ type
     function TypeName: string; override;
     function TypeOf: string; override;
     function ToStringTag: string; virtual;
+    property HasBuiltinTagFallback: Boolean read BuiltinTagFallback;
 
     function ToStringLiteral: TGocciaStringLiteralValue; override;
     function ToBooleanLiteral: TGocciaBooleanLiteralValue; override;
@@ -146,14 +148,18 @@ uses
   Goccia.GarbageCollector,
   Goccia.ObjectModel,
   Goccia.Utils,
+  Goccia.Values.ArgumentsObjectValue,
   Goccia.Values.ArrayValue,
+  Goccia.Values.BooleanObjectValue,
   Goccia.Values.ClassHelper,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.FunctionValue,
   Goccia.Values.NativeFunction,
+  Goccia.Values.NumberObjectValue,
   Goccia.Values.ProxyValue,
   Goccia.Values.Shape,
+  Goccia.Values.StringObjectValue,
   Goccia.Values.ToPrimitive;
 
 // Object.prototype and its method host both live in per-realm slots, so the
@@ -486,7 +492,18 @@ var
 
   function LegacyBuiltinTagForObject(const AObject: TGocciaObjectValue): string;
   begin
-    Result := AObject.ToStringTag;
+    if AObject is TGocciaStringObjectValue then
+      Result := CONSTRUCTOR_STRING
+    else if AObject is TGocciaNumberObjectValue then
+      Result := CONSTRUCTOR_NUMBER
+    else if AObject is TGocciaBooleanObjectValue then
+      Result := CONSTRUCTOR_BOOLEAN
+    else
+    begin
+      Result := AObject.ToStringTag;
+      if AObject.HasBuiltinTagFallback then
+        Result := CONSTRUCTOR_OBJECT;
+    end;
   end;
 
 begin
@@ -507,7 +524,9 @@ begin
       Tag := 'Error'
     else if Obj.HasRegExpData then
       Tag := 'RegExp'
-    else if (Obj is TGocciaProxyValue) then
+    else if IsArgumentsObjectValue(Obj) then
+      Tag := 'Arguments'
+    else if Obj is TGocciaProxyValue then
       Tag := CONSTRUCTOR_OBJECT
     else
       Tag := LegacyBuiltinTagForObject(Obj);
@@ -760,6 +779,11 @@ end;
 function TGocciaObjectValue.ToStringTag: string;
 begin
   Result := CONSTRUCTOR_OBJECT;
+end;
+
+function TGocciaObjectValue.BuiltinTagFallback: Boolean;
+begin
+  Result := False;
 end;
 
 // ES2026 §7.1.17 ToString. For an object: ToPrimitive(O, string) → ToString
@@ -1916,8 +1940,8 @@ begin
         [pdfConfigurable])
     else if IsDataDescriptor(Descriptor) then
       NewDescriptor := TGocciaPropertyDescriptorData.CreatePartial(
-        TGocciaPropertyDescriptorData(Descriptor).Value, [],
-        [pdfValue, pdfConfigurable, pdfWritable])
+        TGocciaUndefinedLiteralValue.UndefinedValue, [],
+        [pdfConfigurable, pdfWritable])
     else
       NewDescriptor := TGocciaPropertyDescriptor.Create([],
         [pdfConfigurable]);

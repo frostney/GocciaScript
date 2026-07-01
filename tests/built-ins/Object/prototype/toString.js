@@ -197,6 +197,45 @@ describe("Object.prototype.toString", () => {
       expect(Object.prototype.toString.call(obj)).toBe("[object Object]");
     });
 
+    test("built-in objects fall back to Object when Symbol.toStringTag is absent", () => {
+      const mapTag = Map.prototype[Symbol.toStringTag];
+      const setTag = Set.prototype[Symbol.toStringTag];
+
+      delete Map.prototype[Symbol.toStringTag];
+      delete Set.prototype[Symbol.toStringTag];
+
+      try {
+        expect(Object.prototype.toString.call(new Map())).toBe("[object Object]");
+        expect(Object.prototype.toString.call(new Set())).toBe("[object Object]");
+      } finally {
+        Object.defineProperty(Map.prototype, Symbol.toStringTag, {
+          value: mapTag,
+          configurable: true,
+        });
+        Object.defineProperty(Set.prototype, Symbol.toStringTag, {
+          value: setTag,
+          configurable: true,
+        });
+      }
+    });
+
+    test("built-in objects fall back to Object for non-string Symbol.toStringTag", () => {
+      const mapTag = Map.prototype[Symbol.toStringTag];
+      Object.defineProperty(Map.prototype, Symbol.toStringTag, {
+        value: new String("Map"),
+        configurable: true,
+      });
+
+      try {
+        expect(Object.prototype.toString.call(new Map())).toBe("[object Object]");
+      } finally {
+        Object.defineProperty(Map.prototype, Symbol.toStringTag, {
+          value: mapTag,
+          configurable: true,
+        });
+      }
+    });
+
     test("Symbol.toStringTag on inherited prototype", () => {
       class Base {
         get [Symbol.toStringTag]() {

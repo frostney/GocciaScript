@@ -43,6 +43,8 @@ const
   PROP_READ         = 'read';
   PROP_VALUE        = 'value';
   PROP_VALUES       = 'values';
+  PROP_GOCCIA       = 'Goccia';
+  PROP_GLOBAL_THIS  = 'globalThis';
   PROP_SLICE        = 'slice';
   PROP_TAG_NAME     = 'tagName';
   PROP_NEXT         = 'next';

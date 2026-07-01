@@ -46,6 +46,7 @@ type
     // resolution after the own lexical map has already been consulted.
     function IsGlobalBuiltInObjectBinding(
       const ALexicalBinding: TLexicalBinding): Boolean;
+    function CanSetGlobalObjectProperty(const AName: string): Boolean;
     function TryGetGlobalBuiltInObjectBinding(const AName: string;
       const ALexicalBinding: TLexicalBinding;
       out ABinding: TLexicalBinding): Boolean;
@@ -321,6 +322,7 @@ implementation
 uses
   SysUtils,
 
+  Goccia.Constants.PropertyNames,
   Goccia.Error,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
@@ -848,6 +850,8 @@ var
 begin
   if (FScopeKind <> skGlobal) or not (FThisValue is TGocciaObjectValue) then
     Exit(False);
+  if (AName = PROP_GOCCIA) or (AName = PROP_GLOBAL_THIS) then
+    Exit(False);
 
   GlobalObject := TGocciaObjectValue(FThisValue);
   Descriptor := GlobalObject.GetOwnPropertyDescriptor(AName);
@@ -980,6 +984,12 @@ begin
      (Root.FThisValue is TGocciaObjectValue) then
   begin
     GlobalObject := TGocciaObjectValue(Root.FThisValue);
+    if ((AName = PROP_GOCCIA) or (AName = PROP_GLOBAL_THIS)) and
+       GlobalObject.HasProperty(AName) then
+      raise TGocciaTypeError.Create(
+        Format(SErrorAssignToConstant, [AName]),
+        ALine, AColumn, '', nil,
+        SSuggestUseLetNotConst);
     GlobalObject.AssignPropertyWithReceiver(AName, AValue, GlobalObject);
     Exit;
   end;
@@ -1012,12 +1022,17 @@ begin
   begin
     if not LexicalBinding.IsAccessible then
       RaiseBindingNotInitialized(AName, ALine, AColumn);
+    if (AName = PROP_GOCCIA) or (AName = PROP_GLOBAL_THIS) then
+      raise TGocciaTypeError.Create(
+        Format(SErrorAssignToConstant, [AName]),
+        ALine, AColumn, '', nil,
+        SSuggestUseLetNotConst);
     if IsGlobalBuiltInObjectBinding(LexicalBinding) then
     begin
       GlobalObject := TGocciaObjectValue(FThisValue);
       if not GlobalObject.HasProperty(AName) then
         Exit(False);
-      if LexicalBinding.Writable then
+      if CanSetGlobalObjectProperty(AName) then
       begin
         if ANonStrictMode then
           GlobalObject.AssignPropertyWithReceiver(AName, AValue, GlobalObject)
@@ -1045,6 +1060,11 @@ begin
   if (FScopeKind = skGlobal) and (FThisValue is TGocciaObjectValue) and
      TGocciaObjectValue(FThisValue).HasProperty(AName) then
   begin
+    if (AName = PROP_GOCCIA) or (AName = PROP_GLOBAL_THIS) then
+      raise TGocciaTypeError.Create(
+        Format(SErrorAssignToConstant, [AName]),
+        ALine, AColumn, '', nil,
+        SSuggestUseLetNotConst);
     GlobalObject := TGocciaObjectValue(FThisValue);
     if ANonStrictMode then
       GlobalObject.AssignPropertyWithReceiver(AName, AValue, GlobalObject)
@@ -1154,6 +1174,20 @@ function TGocciaScope.IsGlobalBuiltInObjectBinding(
 begin
   Result := ALexicalBinding.BuiltIn and ALexicalBinding.GlobalObjectBacked and
     (FScopeKind = skGlobal) and (FThisValue is TGocciaObjectValue);
+end;
+
+function TGocciaScope.CanSetGlobalObjectProperty(const AName: string): Boolean;
+var
+  Descriptor: TGocciaPropertyDescriptor;
+  GlobalObject: TGocciaObjectValue;
+begin
+  if (FScopeKind <> skGlobal) or not (FThisValue is TGocciaObjectValue) then
+    Exit(False);
+
+  GlobalObject := TGocciaObjectValue(FThisValue);
+  Descriptor := GlobalObject.GetOwnPropertyDescriptor(AName);
+  Result := Assigned(Descriptor) and IsDataDescriptor(Descriptor) and
+    Descriptor.Writable;
 end;
 
 function TGocciaScope.TryGetGlobalBuiltInObjectBinding(const AName: string;
