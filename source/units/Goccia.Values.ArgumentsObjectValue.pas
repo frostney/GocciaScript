@@ -33,7 +33,7 @@ uses
 
   Goccia.Constants.PropertyNames,
   Goccia.Values.ArrayValue,
-  Goccia.Values.ErrorHelper,
+  Goccia.Values.FunctionBase,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue,
@@ -89,35 +89,14 @@ type
     procedure MarkReferences; override;
   end;
 
-  TArgumentsThrowerHost = class
-  public
-    function ThrowTypeError(const AArgs: TGocciaArgumentsCollection;
-      const AThisValue: TGocciaValue): TGocciaValue;
-  end;
-
-var
-  GArgumentsThrowerHost: TArgumentsThrowerHost;
-
-function TArgumentsThrowerHost.ThrowTypeError(
-  const AArgs: TGocciaArgumentsCollection;
-  const AThisValue: TGocciaValue): TGocciaValue;
-begin
-  Goccia.Values.ErrorHelper.ThrowTypeError(
-    '''caller'', ''callee'', and ''arguments'' properties may not be accessed');
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-end;
-
 function TGocciaArgumentsObjectValue.ToStringTag: string;
 begin
   Result := 'Arguments';
 end;
 
-function CreateThrowTypeErrorFunction: TGocciaNativeFunctionValue;
+function CreateThrowTypeErrorFunction: TGocciaFunctionBase;
 begin
-  if not Assigned(GArgumentsThrowerHost) then
-    GArgumentsThrowerHost := TArgumentsThrowerHost.Create;
-  Result := TGocciaNativeFunctionValue.CreateWithoutPrototype(
-    GArgumentsThrowerHost.ThrowTypeError, 'ThrowTypeError', 0);
+  Result := GetThrowTypeErrorIntrinsic;
 end;
 
 function ArrayPrototypeIteratorFunction: TGocciaValue;
@@ -445,7 +424,7 @@ end;
 function CreateUnmappedArgumentsObject(
   const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue;
 var
-  Thrower: TGocciaNativeFunctionValue;
+  Thrower: TGocciaFunctionBase;
 begin
   Result := TGocciaArgumentsObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype,
     AArguments.Length + 2);
@@ -479,8 +458,5 @@ begin
   Result := TGocciaMappedArgumentsObjectValue.CreateForCells(
     AArguments, AParameterCells, ACallee);
 end;
-
-finalization
-  GArgumentsThrowerHost.Free;
 
 end.

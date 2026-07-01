@@ -47,6 +47,8 @@ type
     function BuildAggregateError(const AArgs: TGocciaArgumentsCollection; const AProto: TGocciaObjectValue): TGocciaObjectValue;
     function BuildSuppressedError(const AArgs: TGocciaArgumentsCollection; const AProto: TGocciaObjectValue): TGocciaObjectValue;
     function BuildDOMException(const AArgs: TGocciaArgumentsCollection; const AProto: TGocciaObjectValue): TGocciaObjectValue;
+    function ErrorStackGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ErrorStackSetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
     function ErrorConstruct(const AArgs: TGocciaArgumentsCollection; const ANewTarget: TGocciaValue): TGocciaValue;
     function EvalErrorConstruct(const AArgs: TGocciaArgumentsCollection; const ANewTarget: TGocciaValue): TGocciaValue;
@@ -107,6 +109,8 @@ uses
   Goccia.Values.FinalizationRegistryValue,
   Goccia.Values.FunctionBase,
   Goccia.Values.HoleValue,
+  Goccia.Values.IteratorSupport,
+  Goccia.Values.IteratorValue,
   Goccia.Values.MapValue,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -223,6 +227,8 @@ var
   DOMExceptionConstructorFunc: TGocciaNativeFunctionValue;
   ErrorStaticMembers: TArray<TGocciaMemberDefinition>;
   ErrorProtoMembers: TArray<TGocciaMemberDefinition>;
+  StackGetterFunc: TGocciaNativeFunctionValue;
+  StackSetterFunc: TGocciaNativeFunctionValue;
 begin
   inherited Create(AName, AScope, AThrowError);
 
@@ -242,6 +248,13 @@ begin
     Free;
   end;
   RegisterMemberDefinitions(FErrorProto, ErrorProtoMembers);
+  StackGetterFunc := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+    ErrorStackGetter, 'get stack', 0);
+  StackSetterFunc := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+    ErrorStackSetter, 'set stack', 1);
+  FErrorProto.DefineProperty(PROP_STACK,
+    TGocciaPropertyDescriptorAccessor.Create(StackGetterFunc, StackSetterFunc,
+      [pfConfigurable]));
 
   FEvalErrorProto := TGocciaObjectValue.Create(FErrorProto);
   FEvalErrorProto.DefineProperty(PROP_NAME, TGocciaPropertyDescriptorData.Create(TGocciaStringLiteralValue.Create(EVAL_ERROR_NAME), [pfConfigurable, pfWritable]));
@@ -443,14 +456,57 @@ begin
   end;
 
   if Assigned(TGocciaCallStack.Instance) then
-    Result.DefineProperty(PROP_STACK,
-      TGocciaPropertyDescriptorData.Create(
-        TGocciaStringLiteralValue.Create(
-          TGocciaCallStack.Instance.CaptureStackTrace(AName, MessageText, 1)),
-        [pfConfigurable, pfWritable]));
+    Result.ErrorStack :=
+      TGocciaCallStack.Instance.CaptureStackTrace(AName, MessageText, 1);
 
   if AArgs.Length > 1 then
     InstallErrorCause(Result, AArgs.GetElement(1));
+end;
+
+function TGocciaGlobals.ErrorStackGetter(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  if not (AThisValue is TGocciaObjectValue) then
+    ThrowTypeError('Error.prototype.stack getter called on non-object');
+
+  if not TGocciaObjectValue(AThisValue).HasErrorData then
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+
+  Result := TGocciaStringLiteralValue.Create(
+    TGocciaObjectValue(AThisValue).ErrorStack);
+end;
+
+function TGocciaGlobals.ErrorStackSetter(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Descriptor: TGocciaPropertyDescriptor;
+  Receiver: TGocciaObjectValue;
+  Value: TGocciaValue;
+begin
+  if not (AThisValue is TGocciaObjectValue) then
+    ThrowTypeError('Error.prototype.stack setter called on non-object');
+
+  if AArgs.Length > 0 then
+    Value := AArgs.GetElement(0)
+  else
+    Value := TGocciaUndefinedLiteralValue.UndefinedValue;
+  if not (Value is TGocciaStringLiteralValue) then
+    ThrowTypeError('Error.prototype.stack must be set to a string');
+
+  Receiver := TGocciaObjectValue(AThisValue);
+  if Receiver = FErrorProto then
+    ThrowTypeError('Cannot set Error.prototype.stack');
+
+  Descriptor := Receiver.GetOwnPropertyDescriptor(PROP_STACK);
+  if Assigned(Descriptor) then
+  begin
+    if not Receiver.AssignPropertyWithReceiver(PROP_STACK, Value, Receiver) then
+      ThrowTypeError('Cannot set stack property');
+  end
+  else
+    Receiver.CreateDataPropertyOrThrow(PROP_STACK, Value);
+
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 { Error ( message [ , options ] ) — §20.5.1.1
@@ -561,31 +617,50 @@ function TGocciaGlobals.BuildAggregateError(const AArgs: TGocciaArgumentsCollect
 var
   Errors: TGocciaValue;
   ErrorsArray: TGocciaArrayValue;
+  Iterator: TGocciaIteratorValue;
+  Item: TGocciaValue;
   Message: string;
-  I: Integer;
+  Done: Boolean;
 begin
-  ErrorsArray := TGocciaArrayValue.Create;
-  if AArgs.Length > 0 then
-  begin
-    Errors := AArgs.GetElement(0);
-    if Errors is TGocciaArrayValue then
-    begin
-      for I := 0 to TGocciaArrayValue(Errors).Elements.Count - 1 do
-        ErrorsArray.Elements.Add(TGocciaArrayValue(Errors).Elements[I]);
-    end;
-  end;
-
   if (AArgs.Length > 1) and not (AArgs.GetElement(1) is TGocciaUndefinedLiteralValue) then
     Message := AArgs.GetElement(1).ToStringLiteral.Value
   else
     Message := '';
 
-  Result := CreateErrorObject(AGGREGATE_ERROR_NAME, Message);
-  Result.Prototype := AProto;
-  Result.AssignProperty(PROP_ERRORS, ErrorsArray);
+  Result := TGocciaObjectValue.Create(AProto);
+  Result.HasErrorData := True;
+  if Assigned(TGocciaCallStack.Instance) then
+    Result.ErrorStack :=
+      TGocciaCallStack.Instance.CaptureStackTrace(AGGREGATE_ERROR_NAME,
+        Message, 1);
+
+  if (AArgs.Length > 1) and not (AArgs.GetElement(1) is TGocciaUndefinedLiteralValue) then
+    Result.DefineProperty(PROP_MESSAGE, TGocciaPropertyDescriptorData.Create(
+      TGocciaStringLiteralValue.Create(Message), [pfConfigurable, pfWritable]));
 
   if AArgs.Length > 2 then
     InstallErrorCause(Result, AArgs.GetElement(2));
+
+  if AArgs.Length > 0 then
+    Errors := AArgs.GetElement(0)
+  else
+    Errors := TGocciaUndefinedLiteralValue.UndefinedValue;
+
+  Iterator := GetIteratorFromValue(Errors);
+  if not Assigned(Iterator) then
+    ThrowTypeError('AggregateError errors argument must be iterable');
+
+  ErrorsArray := TGocciaArrayValue.Create;
+  while True do
+  begin
+    Item := Iterator.DirectNext(Done);
+    if Done then
+      Break;
+    ErrorsArray.Elements.Add(Item);
+  end;
+
+  Result.DefineProperty(PROP_ERRORS, TGocciaPropertyDescriptorData.Create(
+    ErrorsArray, [pfConfigurable, pfWritable]));
 end;
 
 function TGocciaGlobals.AggregateErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -620,8 +695,16 @@ begin
   else
     Message := '';
 
-  Result := CreateErrorObject(SUPPRESSED_ERROR_NAME, Message, 1);
-  Result.Prototype := AProto;
+  Result := TGocciaObjectValue.Create(AProto);
+  Result.HasErrorData := True;
+  if Assigned(TGocciaCallStack.Instance) then
+    Result.ErrorStack :=
+      TGocciaCallStack.Instance.CaptureStackTrace(SUPPRESSED_ERROR_NAME,
+        Message, 1);
+
+  if (AArgs.Length > 2) and not (AArgs.GetElement(2) is TGocciaUndefinedLiteralValue) then
+    Result.DefineProperty(PROP_MESSAGE, TGocciaPropertyDescriptorData.Create(
+      TGocciaStringLiteralValue.Create(Message), [pfConfigurable, pfWritable]));
 
   Result.DefineProperty(PROP_ERROR,
     TGocciaPropertyDescriptorData.Create(ErrorArg, [pfConfigurable, pfWritable]));
@@ -670,6 +753,11 @@ begin
   Result := CreateErrorObject(Name, Message, 1);
   Result.HasErrorData := False;
   Result.Prototype := AProto;
+  if Result.ErrorStack <> '' then
+    Result.DefineProperty(PROP_STACK,
+      TGocciaPropertyDescriptorData.Create(
+        TGocciaStringLiteralValue.Create(Result.ErrorStack),
+        [pfConfigurable, pfWritable]));
   Result.AssignProperty(PROP_CODE, TGocciaNumberLiteralValue.Create(DOMExceptionLegacyCode(Name)));
 end;
 
@@ -685,55 +773,64 @@ end;
 function TGocciaGlobals.ErrorConstruct(const AArgs: TGocciaArgumentsCollection; const ANewTarget: TGocciaValue): TGocciaValue;
 begin
   Result := BuildErrorObject(ERROR_NAME,
-    GetProtoFromConstructorWithIntrinsic(ANewTarget, FErrorProto), AArgs);
+    GetProtoFromConstructorWithIntrinsic(ANewTarget, FErrorProto,
+      GErrorProtoSlot), AArgs);
 end;
 
 function TGocciaGlobals.EvalErrorConstruct(const AArgs: TGocciaArgumentsCollection; const ANewTarget: TGocciaValue): TGocciaValue;
 begin
   Result := BuildErrorObject(EVAL_ERROR_NAME,
-    GetProtoFromConstructorWithIntrinsic(ANewTarget, FEvalErrorProto), AArgs);
+    GetProtoFromConstructorWithIntrinsic(ANewTarget, FEvalErrorProto,
+      GEvalErrorProtoSlot), AArgs);
 end;
 
 function TGocciaGlobals.TypeErrorConstruct(const AArgs: TGocciaArgumentsCollection; const ANewTarget: TGocciaValue): TGocciaValue;
 begin
   Result := BuildErrorObject(TYPE_ERROR_NAME,
-    GetProtoFromConstructorWithIntrinsic(ANewTarget, FTypeErrorProto), AArgs);
+    GetProtoFromConstructorWithIntrinsic(ANewTarget, FTypeErrorProto,
+      GTypeErrorProtoSlot), AArgs);
 end;
 
 function TGocciaGlobals.ReferenceErrorConstruct(const AArgs: TGocciaArgumentsCollection; const ANewTarget: TGocciaValue): TGocciaValue;
 begin
   Result := BuildErrorObject(REFERENCE_ERROR_NAME,
-    GetProtoFromConstructorWithIntrinsic(ANewTarget, FReferenceErrorProto), AArgs);
+    GetProtoFromConstructorWithIntrinsic(ANewTarget, FReferenceErrorProto,
+      GReferenceErrorProtoSlot), AArgs);
 end;
 
 function TGocciaGlobals.RangeErrorConstruct(const AArgs: TGocciaArgumentsCollection; const ANewTarget: TGocciaValue): TGocciaValue;
 begin
   Result := BuildErrorObject(RANGE_ERROR_NAME,
-    GetProtoFromConstructorWithIntrinsic(ANewTarget, FRangeErrorProto), AArgs);
+    GetProtoFromConstructorWithIntrinsic(ANewTarget, FRangeErrorProto,
+      GRangeErrorProtoSlot), AArgs);
 end;
 
 function TGocciaGlobals.SyntaxErrorConstruct(const AArgs: TGocciaArgumentsCollection; const ANewTarget: TGocciaValue): TGocciaValue;
 begin
   Result := BuildErrorObject(SYNTAX_ERROR_NAME,
-    GetProtoFromConstructorWithIntrinsic(ANewTarget, FSyntaxErrorProto), AArgs);
+    GetProtoFromConstructorWithIntrinsic(ANewTarget, FSyntaxErrorProto,
+      GSyntaxErrorProtoSlot), AArgs);
 end;
 
 function TGocciaGlobals.URIErrorConstruct(const AArgs: TGocciaArgumentsCollection; const ANewTarget: TGocciaValue): TGocciaValue;
 begin
   Result := BuildErrorObject(URI_ERROR_NAME,
-    GetProtoFromConstructorWithIntrinsic(ANewTarget, FURIErrorProto), AArgs);
+    GetProtoFromConstructorWithIntrinsic(ANewTarget, FURIErrorProto,
+      GURIErrorProtoSlot), AArgs);
 end;
 
 function TGocciaGlobals.AggregateErrorConstruct(const AArgs: TGocciaArgumentsCollection; const ANewTarget: TGocciaValue): TGocciaValue;
 begin
   Result := BuildAggregateError(AArgs,
-    GetProtoFromConstructorWithIntrinsic(ANewTarget, FAggregateErrorProto));
+    GetProtoFromConstructorWithIntrinsic(ANewTarget, FAggregateErrorProto,
+      GAggregateErrorProtoSlot));
 end;
 
 function TGocciaGlobals.SuppressedErrorConstruct(const AArgs: TGocciaArgumentsCollection; const ANewTarget: TGocciaValue): TGocciaValue;
 begin
   Result := BuildSuppressedError(AArgs,
-    GetProtoFromConstructorWithIntrinsic(ANewTarget, FSuppressedErrorProto));
+    GetProtoFromConstructorWithIntrinsic(ANewTarget, FSuppressedErrorProto,
+      GSuppressedErrorProtoSlot));
 end;
 
 function TGocciaGlobals.DOMExceptionConstruct(const AArgs: TGocciaArgumentsCollection; const ANewTarget: TGocciaValue): TGocciaValue;

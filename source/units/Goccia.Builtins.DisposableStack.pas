@@ -82,6 +82,7 @@ uses
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
+  Goccia.Values.PromiseValue,
   Goccia.Values.SymbolValue,
   Goccia.VM.Exception;
 
@@ -94,6 +95,27 @@ type
     IsAsync: Boolean;
   end;
   PDisposableStackSlot = ^TDisposableStackSlot;
+
+  TAsyncDisposableStackDisposeJob = class(TGocciaObjectValue)
+  private
+    FSlot: PDisposableStackSlot;
+    FIndex: Integer;
+    FCurrentError: TGocciaValue;
+    FHasError: Boolean;
+    FResultPromise: TGocciaPromiseValue;
+    procedure AddError(const AError: TGocciaValue);
+    procedure Drain;
+    procedure ScheduleAwait(const AValue: TGocciaValue);
+  public
+    constructor Create(const ASlot: PDisposableStackSlot;
+      const APromise: TGocciaPromiseValue);
+    function AwaitFulfilled(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function AwaitRejected(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    procedure MarkReferences; override;
+    procedure Start;
+  end;
 
 threadvar
   GSlotMap: THashMap<TGocciaObjectValue, PDisposableStackSlot>;
@@ -125,10 +147,176 @@ begin
       SSuggestDisposableStackThisType);
 end;
 
+constructor TAsyncDisposableStackDisposeJob.Create(
+  const ASlot: PDisposableStackSlot; const APromise: TGocciaPromiseValue);
+begin
+  inherited Create(nil);
+  FSlot := ASlot;
+  FIndex := ASlot^.Tracker.Count - 1;
+  FResultPromise := APromise;
+end;
+
+procedure TAsyncDisposableStackDisposeJob.AddError(const AError: TGocciaValue);
+begin
+  if FHasError then
+    FCurrentError := CreateSuppressedErrorObject(AError, FCurrentError)
+  else
+    FCurrentError := AError;
+  FHasError := True;
+end;
+
+procedure TAsyncDisposableStackDisposeJob.ScheduleAwait(
+  const AValue: TGocciaValue);
+var
+  AwaitPromise: TGocciaPromiseValue;
+  FulfillHandler, RejectHandler: TGocciaNativeFunctionValue;
+begin
+  AwaitPromise := TGocciaPromiseValue.Create;
+  FulfillHandler := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+    AwaitFulfilled, '', 1);
+  RejectHandler := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+    AwaitRejected, '', 1);
+  FulfillHandler.CapturedRoot := Self;
+  RejectHandler.CapturedRoot := Self;
+  try
+    if AValue is TGocciaPromiseValue then
+      AwaitPromise.SubscribeTo(TGocciaPromiseValue(AValue))
+    else
+      AwaitPromise.Resolve(AValue);
+    AwaitPromise.InvokeThen(FulfillHandler, RejectHandler);
+  except
+    on E: EGocciaBytecodeThrow do
+    begin
+      AddError(E.ThrownValue);
+      Drain;
+    end;
+    on E: TGocciaThrowValue do
+    begin
+      AddError(E.Value);
+      Drain;
+    end;
+  end;
+end;
+
+procedure TAsyncDisposableStackDisposeJob.Drain;
+var
+  Resource: TGocciaDisposableResource;
+  DisposeResult: TGocciaValue;
+begin
+  while FIndex >= 0 do
+  begin
+    Resource := FSlot^.Tracker.GetResource(FIndex);
+    Dec(FIndex);
+
+    if Assigned(Resource.DisposeMethod) and Resource.DisposeMethod.IsCallable then
+    begin
+      try
+        if Resource.HasDisposeArgument then
+          DisposeResult := TGocciaFunctionBase(Resource.DisposeMethod).CallOneArg(
+            Resource.DisposeArgument,
+            TGocciaUndefinedLiteralValue.UndefinedValue)
+        else
+          DisposeResult := TGocciaFunctionBase(Resource.DisposeMethod).CallNoArgs(
+            Resource.ResourceValue);
+        if Resource.Hint = dhAsyncDispose then
+        begin
+          ScheduleAwait(DisposeResult);
+          Exit;
+        end;
+      except
+        on E: EGocciaBytecodeThrow do
+          AddError(E.ThrownValue);
+        on E: TGocciaThrowValue do
+          AddError(E.Value);
+      end;
+    end
+    else if Resource.Hint = dhAsyncDispose then
+    begin
+      ScheduleAwait(TGocciaUndefinedLiteralValue.UndefinedValue);
+      Exit;
+    end;
+  end;
+
+  if FHasError then
+    FResultPromise.Reject(FCurrentError)
+  else
+    FResultPromise.Resolve(TGocciaUndefinedLiteralValue.UndefinedValue);
+end;
+
+function TAsyncDisposableStackDisposeJob.AwaitFulfilled(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Drain;
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TAsyncDisposableStackDisposeJob.AwaitRejected(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  if AArgs.Length > 0 then
+    AddError(AArgs.GetElement(0))
+  else
+    AddError(TGocciaUndefinedLiteralValue.UndefinedValue);
+  Drain;
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+procedure TAsyncDisposableStackDisposeJob.MarkReferences;
+begin
+  if GCMarked then Exit;
+  inherited;
+  if Assigned(FCurrentError) then
+    FCurrentError.MarkReferences;
+  if Assigned(FResultPromise) then
+    FResultPromise.MarkReferences;
+end;
+
+procedure TAsyncDisposableStackDisposeJob.Start;
+begin
+  Drain;
+end;
+
 procedure RequireNotDisposed(const ASlot: PDisposableStackSlot);
 begin
   if ASlot^.Disposed then
     ThrowReferenceError(SErrorDisposableStackAlreadyDisposed, SSuggestDisposableStackAlreadyDisposed);
+end;
+
+function GetAsyncStackUseDisposeMethod(const AValue: TGocciaValue;
+  out AHint: TGocciaDisposalHint): TGocciaValue;
+var
+  Method: TGocciaValue;
+begin
+  if not (AValue is TGocciaObjectValue) then
+    Exit(nil);
+
+  Method := TGocciaObjectValue(AValue).GetSymbolProperty(
+    TGocciaSymbolValue.WellKnownAsyncDispose);
+  if Assigned(Method) and not (Method is TGocciaUndefinedLiteralValue) and
+     not (Method is TGocciaNullLiteralValue) then
+  begin
+    if not Method.IsCallable then
+      ThrowTypeError(Format(SErrorDisposePropertyNotFunction,
+        ['asyncDispose']), SSuggestDisposable);
+    AHint := dhAsyncDispose;
+    Exit(Method);
+  end;
+
+  Method := TGocciaObjectValue(AValue).GetSymbolProperty(
+    TGocciaSymbolValue.WellKnownDispose);
+  if Assigned(Method) and not (Method is TGocciaUndefinedLiteralValue) and
+     not (Method is TGocciaNullLiteralValue) then
+  begin
+    if not Method.IsCallable then
+      ThrowTypeError(Format(SErrorDisposePropertyNotFunction, ['dispose']),
+        SSuggestDisposable);
+    AHint := dhSyncDispose;
+    Exit(Method);
+  end;
+
+  Result := nil;
 end;
 
 function CreateDisposableStackInstance(const AIsAsync: Boolean;
@@ -171,6 +359,7 @@ var
   Slot: PDisposableStackSlot;
   Value: TGocciaValue;
   DisposeMethod: TGocciaValue;
+  Hint: TGocciaDisposalHint;
 begin
   Slot := GetSlotForKind(AThisValue, True);
   RequireNotDisposed(Slot);
@@ -182,15 +371,16 @@ begin
 
   if (Value is TGocciaUndefinedLiteralValue) or (Value is TGocciaNullLiteralValue) then
   begin
+    Slot^.Tracker.AddResource(Value, nil, dhAsyncDispose);
     Result := Value;
     Exit;
   end;
 
-  DisposeMethod := GetDisposeMethod(Value, dhAsyncDispose);
+  DisposeMethod := GetAsyncStackUseDisposeMethod(Value, Hint);
   if not Assigned(DisposeMethod) then
     ThrowTypeError(SErrorValueNotAsyncDisposable, SSuggestDisposable);
 
-  Slot^.Tracker.AddResource(Value, DisposeMethod, dhAsyncDispose);
+  Slot^.Tracker.AddResource(Value, DisposeMethod, Hint);
   Result := Value;
 end;
 
@@ -243,8 +433,7 @@ begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
-function DisposeStackForKind(const AThisValue: TGocciaValue;
-  const AExpectedAsync: Boolean): TGocciaValue;
+function DisposeStackForKind(const AThisValue: TGocciaValue): TGocciaValue;
 var
   Slot: PDisposableStackSlot;
   I: Integer;
@@ -252,7 +441,7 @@ var
   CurrentError: TGocciaValue;
   HasError: Boolean;
 begin
-  Slot := GetSlotForKind(AThisValue, AExpectedAsync);
+  Slot := GetSlotForKind(AThisValue, False);
 
   // Idempotent: if already disposed, return undefined
   if Slot^.Disposed then
@@ -278,7 +467,8 @@ begin
             Resource.DisposeArgument,
             TGocciaUndefinedLiteralValue.UndefinedValue)
         else
-          TGocciaFunctionBase(Resource.DisposeMethod).CallNoArgs(Resource.ResourceValue);
+          TGocciaFunctionBase(Resource.DisposeMethod).CallNoArgs(
+            Resource.ResourceValue);
       except
         on E: EGocciaBytecodeThrow do
         begin
@@ -310,7 +500,7 @@ end;
 function TGocciaBuiltinDisposableStack.StackDispose(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := DisposeStackForKind(AThisValue, False);
+  Result := DisposeStackForKind(AThisValue);
 end;
 
 // TC39 Explicit Resource Management §3.4.3.7 DisposableStack.prototype.move()
@@ -388,8 +578,31 @@ end;
 // TC39 Explicit Resource Management §3.5.3.5 AsyncDisposableStack.prototype.disposeAsync()
 function TGocciaBuiltinDisposableStack.AsyncStackDispose(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Job: TAsyncDisposableStackDisposeJob;
+  Promise: TGocciaPromiseValue;
+  Slot: PDisposableStackSlot;
 begin
-  Result := DisposeStackForKind(AThisValue, True);
+  Promise := TGocciaPromiseValue.Create;
+  try
+    Slot := GetSlotForKind(AThisValue, True);
+    if Slot^.Disposed then
+    begin
+      Promise.Resolve(TGocciaUndefinedLiteralValue.UndefinedValue);
+      Exit(Promise);
+    end
+    else
+      Slot^.Disposed := True;
+
+    Job := TAsyncDisposableStackDisposeJob.Create(Slot, Promise);
+    Job.Start;
+  except
+    on E: EGocciaBytecodeThrow do
+      Promise.Reject(E.ThrownValue);
+    on E: TGocciaThrowValue do
+      Promise.Reject(E.Value);
+  end;
+  Result := Promise;
 end;
 
 // TC39 Explicit Resource Management §3.5.3.7 AsyncDisposableStack.prototype.move()

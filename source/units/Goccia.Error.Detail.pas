@@ -45,6 +45,12 @@ var
 begin
   Result := False;
   AValue := '';
+  if (AName = PROP_STACK) and AObject.HasErrorData and
+     (AObject.ErrorStack <> '') then
+  begin
+    AValue := AObject.ErrorStack;
+    Exit(True);
+  end;
   Current := AObject;
 
   while Assigned(Current) do

@@ -152,7 +152,12 @@ function GetProtoFromConstructor(const ANewTarget: TGocciaValue): TGocciaObjectV
 // Native constructors pass their own %Foo.prototype% so the fallback
 // is correct (e.g. Error → %Error.prototype%, not %Object.prototype%).
 function GetProtoFromConstructorWithIntrinsic(const ANewTarget: TGocciaValue;
-  const AIntrinsicDefault: TGocciaObjectValue): TGocciaObjectValue;
+  const AIntrinsicDefault: TGocciaObjectValue;
+  const AIntrinsicSlot: TGocciaRealmSlotId = -1): TGocciaObjectValue;
+
+// ES2026 §10.2.4.1 %ThrowTypeError%: one frozen thrower per realm, reused by
+// AddRestrictedFunctionProperties and unmapped arguments objects.
+function GetThrowTypeErrorIntrinsic: TGocciaFunctionBase;
 
 // ES2026 §10.2.2 [[Construct]] for ordinary function objects: call the body
 // with the receiver as `this`; if the body returns an Object, that wins —
@@ -216,6 +221,7 @@ const
 // (Function.prototype.foo = ...) must not leak across engine recreation.
 var
   GFunctionPrototypeSlot: TGocciaRealmSlotId;
+  GThrowTypeErrorSlot: TGocciaRealmSlotId;
   GProxyPredicate: TGocciaProxyPredicate;
   GProxyApplyHook: TGocciaProxyApplyHook;
   GProxyConstructHook: TGocciaProxyConstructHook;
@@ -275,8 +281,10 @@ begin
 end;
 
 function GetProtoFromConstructorWithIntrinsic(const ANewTarget: TGocciaValue;
-  const AIntrinsicDefault: TGocciaObjectValue): TGocciaObjectValue;
+  const AIntrinsicDefault: TGocciaObjectValue;
+  const AIntrinsicSlot: TGocciaRealmSlotId): TGocciaObjectValue;
 var
+  FallbackRealm: TGocciaRealm;
   ProtoValue: TGocciaValue;
 begin
   if ANewTarget is TGocciaObjectValue then
@@ -287,7 +295,46 @@ begin
   if ProtoValue is TGocciaObjectValue then
     Result := TGocciaObjectValue(ProtoValue)
   else
+  begin
+    if (AIntrinsicSlot >= 0) and (ANewTarget is TGocciaFunctionBase) then
+    begin
+      FallbackRealm := TGocciaFunctionBase(ANewTarget).CreationRealm;
+      if Assigned(FallbackRealm) then
+      begin
+        Result := TGocciaObjectValue(FallbackRealm.GetSlot(AIntrinsicSlot));
+        if Assigned(Result) then
+          Exit;
+      end;
+    end;
     Result := AIntrinsicDefault;
+  end;
+end;
+
+function GetThrowTypeErrorIntrinsic: TGocciaFunctionBase;
+var
+  Shared: TGocciaFunctionSharedPrototype;
+  Thrower: TGocciaNativeFunctionValue;
+begin
+  if not Assigned(CurrentRealm) then
+    Exit(nil);
+
+  Result := TGocciaFunctionBase(CurrentRealm.GetSlot(GThrowTypeErrorSlot));
+  if Assigned(Result) then
+    Exit;
+
+  Shared := GetSharedFunctionPrototype;
+  if not Assigned(Shared) then
+    Shared := TGocciaFunctionSharedPrototype.Create;
+
+  Thrower := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+    Shared.RestrictedFunctionPropertyThrow, '', 0);
+  Thrower.DefineProperty(PROP_LENGTH, TGocciaPropertyDescriptorData.Create(
+    TGocciaNumberLiteralValue.ZeroValue, []));
+  Thrower.DefineProperty(PROP_NAME, TGocciaPropertyDescriptorData.Create(
+    TGocciaStringLiteralValue.Create(''), []));
+  Thrower.Freeze;
+  CurrentRealm.SetSlot(GThrowTypeErrorSlot, Thrower);
+  Result := Thrower;
 end;
 
 function ConstructOrdinaryWithReceiver(const ATarget: TGocciaFunctionBase;
@@ -913,8 +960,7 @@ begin
       TGocciaNumberLiteralValue.ZeroValue, [pfConfigurable]));
     DefineProperty(PROP_NAME, TGocciaPropertyDescriptorData.Create(
       TGocciaStringLiteralValue.Create(''), [pfConfigurable]));
-    Thrower := TGocciaNativeFunctionValue.CreateWithoutPrototype(
-      RestrictedFunctionPropertyThrow, '', 0);
+    Thrower := TGocciaNativeFunctionValue(GetThrowTypeErrorIntrinsic);
     DefineProperty(PROP_CALLER, TGocciaPropertyDescriptorAccessor.Create(
       Thrower, Thrower, [pfConfigurable]));
     DefineProperty(PROP_ARGUMENTS, TGocciaPropertyDescriptorAccessor.Create(
@@ -1501,5 +1547,6 @@ end;
 
 initialization
   GFunctionPrototypeSlot := RegisterRealmSlot('Function.prototype');
+  GThrowTypeErrorSlot := RegisterRealmSlot('%ThrowTypeError%');
 
 end.
