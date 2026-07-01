@@ -651,12 +651,18 @@ begin
     ThrowTypeError('AggregateError errors argument must be iterable');
 
   ErrorsArray := TGocciaArrayValue.Create;
-  while True do
-  begin
-    Item := Iterator.DirectNext(Done);
-    if Done then
-      Break;
-    ErrorsArray.Elements.Add(Item);
+  try
+    while True do
+    begin
+      Item := Iterator.DirectNext(Done);
+      if Done then
+        Break;
+      ErrorsArray.Elements.Add(Item);
+    end;
+  except
+    AcquireExceptionObject;
+    CloseIteratorPreservingError(Iterator);
+    raise;
   end;
 
   Result.DefineProperty(PROP_ERRORS, TGocciaPropertyDescriptorData.Create(

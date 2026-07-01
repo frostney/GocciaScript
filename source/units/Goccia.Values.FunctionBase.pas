@@ -324,7 +324,12 @@ begin
 
   Shared := GetSharedFunctionPrototype;
   if not Assigned(Shared) then
+  begin
     Shared := TGocciaFunctionSharedPrototype.Create;
+    Result := TGocciaFunctionBase(CurrentRealm.GetSlot(GThrowTypeErrorSlot));
+    if Assigned(Result) then
+      Exit;
+  end;
 
   Thrower := TGocciaNativeFunctionValue.CreateWithoutPrototype(
     Shared.RestrictedFunctionPropertyThrow, '', 0);
