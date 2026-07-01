@@ -783,6 +783,97 @@ console.log("Bare Loader: --test262-host exposes Goccia test262 hooks...");
     throw new Error(`Bare --test262-host should expose realm hooks, got: ${proc.stdout.toString()}`);
 }
 
+console.log("test262 runner: engine timeout is classified as TIMEOUT...");
+{
+  const tmp = makeTmp();
+  try {
+    const suite = join(tmp, "suite");
+    const harness = join(suite, "harness");
+    const tests = join(suite, "test", "built-ins");
+    mkdirSync(harness, { recursive: true });
+    mkdirSync(tests, { recursive: true });
+    writeFileSync(join(harness, "sta.js"), "");
+    writeFileSync(join(harness, "assert.js"), "");
+
+    const timeoutTest = join(tests, "timeout-loop.js");
+    writeFileSync(timeoutTest, "while (true) {}\n");
+    const timeoutOut = join(tmp, "timeout-result.json");
+    const timeoutProc = Bun.spawnSync(
+      [
+        "bun",
+        "scripts/run_test262_suite.ts",
+        "--suite-dir", suite,
+        "--categories", "built-ins",
+        "--filter", "built-ins/timeout-loop.js",
+        "--mode=bytecode",
+        "--jobs=1",
+        "--timeout-ms=50",
+        "--output", timeoutOut,
+      ],
+      { stdout: "pipe", stderr: "pipe", timeout: 10_000 },
+    );
+    if (timeoutProc.exitCode !== 1)
+      throw new Error(`test262 timeout fixture should exit 1, got ${timeoutProc.exitCode}: ${timeoutProc.stderr.toString()}`);
+    const timeoutJson = JSON.parse(readFileSync(timeoutOut, "utf8"));
+    if (timeoutJson.summary.timeouts !== 1 || timeoutJson.summary.failed !== 0)
+      throw new Error(`engine timeout should be TIMEOUT, got summary ${JSON.stringify(timeoutJson.summary)}`);
+    if (timeoutJson.results?.[0]?.status !== "TIMEOUT")
+      throw new Error(`engine timeout result should be TIMEOUT, got ${timeoutJson.results?.[0]?.status}`);
+
+    const thrownErrorTest = join(tests, "timeout-like-error.js");
+    writeFileSync(thrownErrorTest, 'throw new Error("file timed out after 50ms");\n');
+    const thrownErrorOut = join(tmp, "timeout-like-error-result.json");
+    const thrownErrorProc = Bun.spawnSync(
+      [
+        "bun",
+        "scripts/run_test262_suite.ts",
+        "--suite-dir", suite,
+        "--categories", "built-ins",
+        "--filter", "built-ins/timeout-like-error.js",
+        "--mode=bytecode",
+        "--jobs=1",
+        "--timeout-ms=50",
+        "--output", thrownErrorOut,
+      ],
+      { stdout: "pipe", stderr: "pipe", timeout: 10_000 },
+    );
+    if (thrownErrorProc.exitCode !== 1)
+      throw new Error(`test262 thrown timeout-like error should exit 1, got ${thrownErrorProc.exitCode}: ${thrownErrorProc.stderr.toString()}`);
+    const thrownErrorJson = JSON.parse(readFileSync(thrownErrorOut, "utf8"));
+    if (thrownErrorJson.summary.failed !== 1 || thrownErrorJson.summary.timeouts !== 0)
+      throw new Error(`timeout-like user Error should remain FAIL, got summary ${JSON.stringify(thrownErrorJson.summary)}`);
+    if (thrownErrorJson.results?.[0]?.status !== "FAIL")
+      throw new Error(`timeout-like user Error result should be FAIL, got ${thrownErrorJson.results?.[0]?.status}`);
+
+    const markerErrorTest = join(tests, "timeout-marker-error.js");
+    writeFileSync(markerErrorTest, 'throw new Error("\\nGocciaTest262:Timeout:50");\n');
+    const markerErrorOut = join(tmp, "timeout-marker-error-result.json");
+    const markerErrorProc = Bun.spawnSync(
+      [
+        "bun",
+        "scripts/run_test262_suite.ts",
+        "--suite-dir", suite,
+        "--categories", "built-ins",
+        "--filter", "built-ins/timeout-marker-error.js",
+        "--mode=bytecode",
+        "--jobs=1",
+        "--timeout-ms=50",
+        "--output", markerErrorOut,
+      ],
+      { stdout: "pipe", stderr: "pipe", timeout: 10_000 },
+    );
+    if (markerErrorProc.exitCode !== 1)
+      throw new Error(`test262 marker-like user Error should exit 1, got ${markerErrorProc.exitCode}: ${markerErrorProc.stderr.toString()}`);
+    const markerErrorJson = JSON.parse(readFileSync(markerErrorOut, "utf8"));
+    if (markerErrorJson.summary.failed !== 1 || markerErrorJson.summary.timeouts !== 0)
+      throw new Error(`marker-like user Error should remain FAIL, got summary ${JSON.stringify(markerErrorJson.summary)}`);
+    if (markerErrorJson.results?.[0]?.status !== "FAIL")
+      throw new Error(`marker-like user Error result should be FAIL, got ${markerErrorJson.results?.[0]?.status}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
 console.log("Bare Loader: --test262-host child realms expose host records...");
 {
   const proc = Bun.spawnSync([BARE, "--test262-host"], {

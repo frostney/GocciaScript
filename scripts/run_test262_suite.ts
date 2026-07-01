@@ -325,6 +325,8 @@ const ASYNC_PASS = "Test262:AsyncTestComplete";
 const ASYNC_FAIL_PREFIX = "Test262:AsyncTestFailure:";
 const NEG_NO_ERROR = "Test262:NegativeTestNoError";
 const NEG_ERROR_PREFIX = "Test262:NegativeTestError:";
+const TEST262_TIMEOUT_EXIT_CODE = 124;
+const TEST262_TIMEOUT_RE = /^GocciaTest262:Timeout:(\d+)$/m;
 
 // Pascal-side exception classes that indicate engine internals failing,
 // not a JS-level throw. `Error: ` is NOT included here — Goccia's bytecode
@@ -365,10 +367,20 @@ function classifyRunResult(args: ClassifyArgs): {
       diagnostic: result.stderr.slice(0, 800),
     };
   }
+  const engineTimeout = result.stderr.trim().match(TEST262_TIMEOUT_RE);
+  if (engineTimeout && exitCode === TEST262_TIMEOUT_EXIT_CODE) {
+    return {
+      outcome: "TIMEOUT",
+      reason: `engine timeout ${engineTimeout[1]}ms`,
+      diagnostic: "",
+    };
+  }
+
   if (exitCode > 1 || exitCode < 0) {
     // Pascal-side abnormal exit; see GocciaScriptLoaderBare's exception
     // handlers (it uses 1 for clean JS throws and Halt(1) for parse/options
-    // errors; anything else is unexpected).
+    // errors; test262-host timeouts are the only expected non-1 failure
+    // exit, and they must carry the marker above).
     return {
       outcome: "WRAPPER_INFRA",
       reason: `unexpected exit ${exitCode}`,
