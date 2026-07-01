@@ -812,8 +812,17 @@ const FAQ_ITEMS: { question: string; answer: ReactNode }[] = [
   },
   {
     question: "Is GocciaScript production-ready?",
-    answer:
-      "GocciaScript is still pre-1.0, so APIs and compatibility behavior can change between releases. With more than 80% of test262 passing, it is ready for serious experiments and bounded production embedding where the supported surface matches your needs.",
+    answer: (
+      <>
+        GocciaScript is still pre-1.0, so APIs and compatibility behavior can
+        change between releases. Its current{" "}
+        <Link href="/compatibility" className="link-button">
+          test262 conformance
+        </Link>{" "}
+        already makes it suitable for serious experiments and bounded production
+        embedding where the supported surface matches your needs.
+      </>
+    ),
   },
   {
     question: "How does the sandbox model work?",
