@@ -75,14 +75,17 @@ end;
 function TGocciaNativeFunctionValue.Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   PreviousRealm: TGocciaRealm;
+  RealmSwitched: Boolean;
 begin
   PreviousRealm := CurrentRealm;
-  if Assigned(FCreationRealm) and (FCreationRealm <> PreviousRealm) then
+  RealmSwitched := Assigned(FCreationRealm) and
+    (FCreationRealm <> PreviousRealm);
+  if RealmSwitched then
     SetCurrentRealm(FCreationRealm);
   try
     Result := FFunction(AArguments, AThisValue);
   finally
-    if Assigned(FCreationRealm) and (FCreationRealm <> PreviousRealm) then
+    if RealmSwitched then
       SetCurrentRealm(PreviousRealm);
   end;
 end;
@@ -91,9 +94,12 @@ function TGocciaNativeFunctionValue.Construct(const AArguments: TGocciaArguments
 var
   PreviousRealm: TGocciaRealm;
   ProtoValue: TGocciaValue;
+  RealmSwitched: Boolean;
 begin
   PreviousRealm := CurrentRealm;
-  if Assigned(FCreationRealm) and (FCreationRealm <> PreviousRealm) then
+  RealmSwitched := Assigned(FCreationRealm) and
+    (FCreationRealm <> PreviousRealm);
+  if RealmSwitched then
     SetCurrentRealm(FCreationRealm);
   try
     if Assigned(FConstructCallback) then
@@ -119,7 +125,7 @@ begin
       end;
     end;
   finally
-    if Assigned(FCreationRealm) and (FCreationRealm <> PreviousRealm) then
+    if RealmSwitched then
       SetCurrentRealm(PreviousRealm);
   end;
 end;

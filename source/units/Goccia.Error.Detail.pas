@@ -64,6 +64,13 @@ begin
       Exit(False);
     end;
 
+    if (Current = AObject) and (AName = PROP_STACK) and
+       AObject.HasErrorData and (AObject.ErrorStack <> '') then
+    begin
+      AValue := AObject.ErrorStack;
+      Exit(True);
+    end;
+
     Current := Current.Prototype;
   end;
 end;

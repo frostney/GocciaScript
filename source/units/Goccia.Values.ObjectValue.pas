@@ -37,6 +37,7 @@ type
     FSealed: Boolean;
     FExtensible: Boolean;
     FHasErrorData: Boolean;
+    FErrorStack: string;
     FHasRegExpData: Boolean;
     FRegExpData: TObject;
     function BuiltinTagFallback: Boolean; virtual;
@@ -122,6 +123,7 @@ type
     property Sealed: Boolean read FSealed;
     property Extensible: Boolean read FExtensible;
     property HasErrorData: Boolean read FHasErrorData write FHasErrorData;
+    property ErrorStack: string read FErrorStack write FErrorStack;
     property HasRegExpData: Boolean read FHasRegExpData write FHasRegExpData;
     property RegExpData: TObject read FRegExpData write SetRegExpData;
   published

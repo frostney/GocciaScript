@@ -79,6 +79,39 @@ test("AggregateError constructor", () => {
   expect(error.errors[1].message).toBe("e2");
 });
 
+test("AggregateError roots partially built objects while consuming iterator", () => {
+  const first = { label: "first" };
+  const second = { label: "second" };
+  const iterable = {
+    [Symbol.iterator]() {
+      Goccia.gc();
+      let index = 0;
+      return {
+        next() {
+          Goccia.gc();
+          if (index === 0) {
+            index += 1;
+            return { done: false, value: first };
+          }
+          if (index === 1) {
+            index += 1;
+            return { done: false, value: second };
+          }
+          return { done: true };
+        },
+      };
+    },
+  };
+
+  const error = new AggregateError(iterable, "multiple errors", { cause: first });
+  Goccia.gc();
+  expect(error.message).toBe("multiple errors");
+  expect(error.cause).toBe(first);
+  expect(error.errors.length).toBe(2);
+  expect(error.errors[0]).toBe(first);
+  expect(error.errors[1]).toBe(second);
+});
+
 test("AggregateError instanceof Error", () => {
   const error = new AggregateError([], "test");
   expect(error instanceof Error).toBe(true);
