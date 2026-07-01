@@ -35,6 +35,21 @@ describe("class constructor callable dispatch", () => {
     });
   });
 
+  it("throws TypeError when accessor getters are class constructors", () => {
+    const object = {};
+    const prototype = {};
+    const symbol = Symbol("getter");
+
+    Object.defineProperty(object, "value", { get: CallbackClass });
+    Object.defineProperty(prototype, "inherited", { get: CallbackClass });
+    Object.defineProperty(object, symbol, { get: CallbackClass });
+    Object.setPrototypeOf(object, prototype);
+
+    expectClassCallTypeError(() => object.value);
+    expectClassCallTypeError(() => object.inherited);
+    expectClassCallTypeError(() => object[symbol]);
+  });
+
   it("throws TypeError when Reflect.apply calls a class constructor target", () => {
     expectClassCallTypeError(() => Reflect.apply(CallbackClass, undefined, []));
   });

@@ -6883,6 +6883,7 @@ function DisposeTrackedResourcesAsync(const ATracker: TGocciaDisposalTracker;
 var
   I: Integer;
   Resource: TGocciaDisposableResource;
+  CallArgs: TGocciaArgumentsCollection;
   CurrentError: TGocciaValue;
   HasError: Boolean;
   CallResult: TGocciaValue;
@@ -6897,8 +6898,13 @@ begin
     if Assigned(Resource.DisposeMethod) and Resource.DisposeMethod.IsCallable then
     begin
       try
-        CallResult := TGocciaFunctionBase(Resource.DisposeMethod)
-          .CallNoArgs(Resource.ResourceValue);
+        CallArgs := TGocciaArgumentsCollection.Create;
+        try
+          CallResult := InvokeCallable(Resource.DisposeMethod, CallArgs,
+            Resource.ResourceValue);
+        finally
+          CallArgs.Free;
+        end;
         // For async disposal, await the result
         if Resource.Hint = dhAsyncDispose then
         begin

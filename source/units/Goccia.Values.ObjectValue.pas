@@ -1358,7 +1358,7 @@ begin
       begin
         Args := TGocciaArgumentsCollection.Create;
         try
-          Result := TGocciaFunctionBase(Accessor.Getter).Call(Args, AThisContext);
+          Result := InvokeCallable(Accessor.Getter, Args, AThisContext);
         finally
           Args.Free;
         end;
@@ -1386,7 +1386,7 @@ begin
         begin
           Args := TGocciaArgumentsCollection.Create;
           try
-            Result := TGocciaFunctionBase(Accessor.Getter).Call(Args, AThisContext);
+            Result := InvokeCallable(Accessor.Getter, Args, AThisContext);
           finally
             Args.Free;
           end;
@@ -1792,8 +1792,8 @@ begin
       begin
         Args := TGocciaArgumentsCollection.Create;
         try
-          if Accessor.Getter is TGocciaFunctionBase then
-            Result := TGocciaFunctionBase(Accessor.Getter).Call(Args, AReceiver)
+          if Accessor.Getter.IsCallable then
+            Result := InvokeCallable(Accessor.Getter, Args, AReceiver)
           else
             Result := TGocciaUndefinedLiteralValue.UndefinedValue;
         finally
