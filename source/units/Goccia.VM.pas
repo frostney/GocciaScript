@@ -2878,15 +2878,24 @@ function TGocciaVMSyncDisposeFallbackValue.Call(
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
   if Assigned(FDisposeMethod) and FDisposeMethod.IsCallable then
-    TGocciaFunctionBase(FDisposeMethod).Call(AArguments, AThisValue);
+    InvokeCallable(FDisposeMethod, AArguments, AThisValue);
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 function TGocciaVMSyncDisposeFallbackValue.CallNoArgs(
   const AThisValue: TGocciaValue): TGocciaValue;
+var
+  CallArgs: TGocciaArgumentsCollection;
 begin
   if Assigned(FDisposeMethod) and FDisposeMethod.IsCallable then
-    TGocciaFunctionBase(FDisposeMethod).CallNoArgs(AThisValue);
+  begin
+    CallArgs := TGocciaArgumentsCollection.Create;
+    try
+      InvokeCallable(FDisposeMethod, CallArgs, AThisValue);
+    finally
+      CallArgs.Free;
+    end;
+  end;
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
@@ -2923,8 +2932,7 @@ var
 begin
   if Assigned(FDisposeMethod) and FDisposeMethod.IsCallable then
   begin
-    DisposeResult := TGocciaFunctionBase(FDisposeMethod).Call(
-      AArguments, AThisValue);
+    DisposeResult := InvokeCallable(FDisposeMethod, AArguments, AThisValue);
     if Assigned(DisposeResult) then
       AwaitValue(DisposeResult);
   end;
@@ -2934,12 +2942,17 @@ end;
 function TGocciaVMAsyncDisposeMethodValue.CallNoArgs(
   const AThisValue: TGocciaValue): TGocciaValue;
 var
+  CallArgs: TGocciaArgumentsCollection;
   DisposeResult: TGocciaValue;
 begin
   if Assigned(FDisposeMethod) and FDisposeMethod.IsCallable then
   begin
-    DisposeResult := TGocciaFunctionBase(FDisposeMethod).CallNoArgs(
-      AThisValue);
+    CallArgs := TGocciaArgumentsCollection.Create;
+    try
+      DisposeResult := InvokeCallable(FDisposeMethod, CallArgs, AThisValue);
+    finally
+      CallArgs.Free;
+    end;
     if Assigned(DisposeResult) then
       AwaitValue(DisposeResult);
   end;
@@ -3278,7 +3291,7 @@ begin
      not FNextMethod.IsCallable then
     ThrowTypeError(SErrorAsyncIteratorNextNotCallable,
       SSuggestAsyncIteratorProtocol);
-  Result := TGocciaFunctionBase(FNextMethod).Call(AArgs, FIteratorValue);
+  Result := InvokeCallable(FNextMethod, AArgs, FIteratorValue);
 end;
 
 function TGocciaVMAsyncIteratorRecordValue.ReturnValue(
@@ -3313,7 +3326,7 @@ begin
 
   CallArgs := TGocciaArgumentsCollection.Create([Value]);
   try
-    Result := TGocciaFunctionBase(ReturnMethod).Call(CallArgs, FIteratorValue);
+    Result := InvokeCallable(ReturnMethod, CallArgs, FIteratorValue);
   finally
     CallArgs.Free;
   end;
@@ -3367,7 +3380,7 @@ begin
       ThrowTypeError('Iterator throw is not callable');
     CallArgs := TGocciaArgumentsCollection.Create([Value]);
     try
-      Exit(TGocciaFunctionBase(ThrowMethod).Call(CallArgs, FIteratorValue));
+      Exit(InvokeCallable(ThrowMethod, CallArgs, FIteratorValue));
     finally
       CallArgs.Free;
     end;
@@ -3382,8 +3395,8 @@ begin
       ThrowTypeError('Iterator return is not callable');
     CallArgs := TGocciaArgumentsCollection.Create;
     try
-      ReturnResult := AwaitValue(TGocciaFunctionBase(ReturnMethod).Call(
-        CallArgs, FIteratorValue));
+      ReturnResult := AwaitValue(InvokeCallable(ReturnMethod, CallArgs,
+        FIteratorValue));
     finally
       CallArgs.Free;
     end;
@@ -3443,7 +3456,7 @@ begin
       begin
         CallArgs := TGocciaArgumentsCollection.Create;
         try
-          TGocciaFunctionBase(ReturnMethod).Call(CallArgs, FIteratorValue);
+          InvokeCallable(ReturnMethod, CallArgs, FIteratorValue);
         finally
           CallArgs.Free;
         end;
@@ -3612,7 +3625,7 @@ begin
     else
       CallArgs := TGocciaArgumentsCollection.Create;
     try
-      IteratorResult := TGocciaFunctionBase(FNextMethod).Call(CallArgs, FIteratorValue);
+      IteratorResult := InvokeCallable(FNextMethod, CallArgs, FIteratorValue);
     finally
       CallArgs.Free;
     end;
@@ -3695,7 +3708,7 @@ begin
 
     CallArgs := TGocciaArgumentsCollection.Create([Value]);
     try
-      IteratorResult := TGocciaFunctionBase(ReturnMethod).Call(CallArgs, FIteratorValue);
+      IteratorResult := InvokeCallable(ReturnMethod, CallArgs, FIteratorValue);
     finally
       CallArgs.Free;
     end;
@@ -3772,7 +3785,7 @@ begin
         ThrowTypeError('Iterator throw is not callable');
       CallArgs := TGocciaArgumentsCollection.Create([Value]);
       try
-        IteratorResult := TGocciaFunctionBase(ThrowMethod).Call(CallArgs, FIteratorValue);
+        IteratorResult := InvokeCallable(ThrowMethod, CallArgs, FIteratorValue);
       finally
         CallArgs.Free;
       end;
@@ -3797,7 +3810,7 @@ begin
         ThrowTypeError('Iterator return is not callable');
       CallArgs := TGocciaArgumentsCollection.Create;
       try
-        IteratorResult := TGocciaFunctionBase(ReturnMethod).Call(CallArgs, FIteratorValue);
+        IteratorResult := InvokeCallable(ReturnMethod, CallArgs, FIteratorValue);
       finally
         CallArgs.Free;
       end;
@@ -4111,8 +4124,7 @@ var
     const AArgs: TGocciaArgumentsCollection): TGocciaValue;
   begin
     try
-      Result := AwaitDelegateResult(TGocciaFunctionBase(AMethod).Call(
-        AArgs, AThisValue));
+      Result := AwaitDelegateResult(InvokeCallable(AMethod, AArgs, AThisValue));
     except
       ClearDelegateState;
       raise;
@@ -8089,8 +8101,7 @@ begin
       SSuggestIteratorProtocol);
   CallArgs := TGocciaArgumentsCollection.Create;
   try
-    ReturnResult := TGocciaFunctionBase(ReturnMethod).Call(
-      CallArgs, AIteratorObject);
+    ReturnResult := InvokeCallable(ReturnMethod, CallArgs, AIteratorObject);
   finally
     CallArgs.Free;
   end;
@@ -8123,8 +8134,7 @@ begin
       SSuggestIteratorProtocol);
   CallArgs := TGocciaArgumentsCollection.Create;
   try
-    ReturnResult := TGocciaFunctionBase(ReturnMethod).Call(
-      CallArgs, AIteratorObject);
+    ReturnResult := InvokeCallable(ReturnMethod, CallArgs, AIteratorObject);
   finally
     CallArgs.Free;
   end;
@@ -8276,7 +8286,7 @@ begin
           CheckInstructionLimit;
           CallArgs := AcquireArguments;
           try
-            NextResult := TGocciaFunctionBase(NextMethod).Call(CallArgs, IteratorValue);
+            NextResult := InvokeCallable(NextMethod, CallArgs, IteratorValue);
           finally
             ReleaseArguments(CallArgs);
           end;
@@ -8373,7 +8383,7 @@ begin
 
     CallArgs := AcquireArguments;
     try
-      IteratorObject := TGocciaFunctionBase(IteratorMethod).Call(CallArgs, AIterable);
+      IteratorObject := InvokeCallable(IteratorMethod, CallArgs, AIterable);
     finally
       ReleaseArguments(CallArgs);
     end;
@@ -8431,7 +8441,7 @@ begin
         CheckInstructionLimit;
         CallArgs := AcquireArguments;
         try
-          NextResult := TGocciaFunctionBase(NextMethod).Call(CallArgs, IteratorValue);
+          NextResult := InvokeCallable(NextMethod, CallArgs, IteratorValue);
         finally
           ReleaseArguments(CallArgs);
         end;
@@ -8639,7 +8649,7 @@ begin
     begin
       CallArgs := AcquireArguments;
       try
-        Result := TGocciaFunctionBase(IteratorMethod).Call(CallArgs, AIterable);
+        Result := InvokeCallable(IteratorMethod, CallArgs, AIterable);
       finally
         ReleaseArguments(CallArgs);
       end;
@@ -8697,8 +8707,7 @@ begin
           SSuggestIteratorProtocol);
       CallArgs := AcquireArguments;
       try
-        IteratorObject := TGocciaFunctionBase(IteratorMethod).Call(CallArgs,
-          AIterable);
+        IteratorObject := InvokeCallable(IteratorMethod, CallArgs, AIterable);
       finally
         ReleaseArguments(CallArgs);
       end;
@@ -15155,7 +15164,7 @@ begin
           begin
             CallArgs := AcquireArguments;
             try
-              IterResult := TGocciaFunctionBase(NextMethod).Call(CallArgs, IterResult);
+              IterResult := InvokeCallable(NextMethod, CallArgs, IterResult);
             finally
               ReleaseArguments(CallArgs);
             end;
@@ -15206,7 +15215,7 @@ begin
 
           CallArgs := AcquireArguments;
           try
-            IterResult := TGocciaFunctionBase(NextMethod).Call(CallArgs, IterResult);
+            IterResult := InvokeCallable(NextMethod, CallArgs, IterResult);
           finally
             ReleaseArguments(CallArgs);
           end;

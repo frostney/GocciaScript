@@ -543,7 +543,6 @@ function TGocciaMapValue.MapGetOrInsertComputed(const AArgs: TGocciaArgumentsCol
 var
   M: TGocciaMapValue;
   MapKey, CallbackArg, ComputedValue, Existing: TGocciaValue;
-  TypedCallback: TGocciaFunctionBase;
   CallArgs: TGocciaArgumentsCollection;
   MapRoot, KeyRoot, CallbackRoot: TGocciaTempRoot;
 begin
@@ -576,11 +575,11 @@ begin
   AddTempRootIfNeeded(KeyRoot, MapKey);
   AddTempRootIfNeeded(CallbackRoot, CallbackArg);
   try
-    // Step 5: Let value be ? Call(callbackfn, undefined, « key »)
-    TypedCallback := TGocciaFunctionBase(CallbackArg);
     CallArgs := TGocciaArgumentsCollection.Create([MapKey]);
     try
-      ComputedValue := TypedCallback.Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+      // Step 5: Let value be ? Call(callbackfn, undefined, « key »)
+      ComputedValue := InvokeCallable(CallbackArg, CallArgs,
+        TGocciaUndefinedLiteralValue.UndefinedValue);
     finally
       CallArgs.Free;
     end;

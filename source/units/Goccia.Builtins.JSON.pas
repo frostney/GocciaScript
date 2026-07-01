@@ -9,7 +9,6 @@ uses
   Generics.Collections,
 
   Goccia.Arguments.Collection,
-  Goccia.Arguments.Validator,
   Goccia.Builtins.Base,
   Goccia.Error.ThrowErrorCallback,
   Goccia.JSON,
@@ -25,17 +24,16 @@ type
   private
     FParser: TGocciaJSONParser;
     FReplacerTraversalStack: TList<TGocciaObjectValue>;
-    FReviverSourceIndex: Integer;
-    FReviverSourceTexts: TStringList;
     FStringifier: TGocciaJSONStringifier;
 
-    function ApplyReviver(const AHolder: TGocciaValue; const AKey: string; const AReviver: TGocciaValue): TGocciaValue;
+    function ApplyReviver(const AHolder: TGocciaValue; const AKey: string;
+      const AReviver: TGocciaValue; const AParseRecord: TGocciaJSONParseRecord): TGocciaValue;
     function ApplyReplacer(const AHolder: TGocciaValue; const AKey: string; const AValue: TGocciaValue; const AReplacer: TGocciaValue): TGocciaValue;
     function ApplyToJSON(const AValue: TGocciaValue; const AKey: string): TGocciaValue;
     function ResolveGap(const ASpaceArg: TGocciaValue): string;
     function TransformWithReplacer(const AHolder: TGocciaValue; const AKey: string; const AValue: TGocciaValue; const AReplacer: TGocciaValue): TGocciaValue;
     function StringifyWithReplacer(const AValue: TGocciaValue; const AReplacer: TGocciaValue; const AGap: string): string;
-    function StringifyWithAllowList(const AValue: TGocciaValue; const AAllowList: TGocciaArrayValue; const AGap: string): string;
+    function StringifyWithAllowList(const AValue: TGocciaValue; const AAllowList: TGocciaObjectValue; const AGap: string): string;
   protected
   published
     function JSONIsRawJSON(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -55,16 +53,19 @@ uses
 
   TextSemantics,
 
+  Goccia.Arithmetic,
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.ThreadCleanupRegistry,
   Goccia.Utils,
+  Goccia.Values.BigIntValue,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
   Goccia.Values.HoleValue,
   Goccia.Values.NumberObjectValue,
   Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.ProxyValue,
   Goccia.Values.StringObjectValue,
   Goccia.Values.SymbolValue,
   Goccia.Values.ToObject,
@@ -92,9 +93,9 @@ begin
   Members := TGocciaMemberCollection.Create;
   try
     Members.AddMethod(JSONIsRawJSON, 1, gmkStaticMethod);
-    Members.AddMethod(JSONParse, 1, gmkStaticMethod);
+    Members.AddMethod(JSONParse, 2, gmkStaticMethod);
     Members.AddMethod(JSONRawJSON, 1, gmkStaticMethod);
-    Members.AddMethod(JSONStringify, 1, gmkStaticMethod);
+    Members.AddMethod(JSONStringify, 3, gmkStaticMethod);
     Members.AddSymbolDataProperty(
       TGocciaSymbolValue.WellKnownToStringTag,
       TGocciaStringLiteralValue.Create('JSON'),
@@ -116,14 +117,50 @@ begin
   inherited;
 end;
 
-// ES2026 §25.5.1.1 InternalizeJSONProperty ( holder, name, reviver )
-function TGocciaJSONBuiltin.ApplyReviver(const AHolder: TGocciaValue; const AKey: string; const AReviver: TGocciaValue): TGocciaValue;
+function IsJSONObjectArray(const AValue: TGocciaValue): Boolean;
+var
+  Current: TGocciaValue;
+  Proxy: TGocciaProxyValue;
+begin
+  Current := AValue;
+  while Current is TGocciaProxyValue do
+  begin
+    Proxy := TGocciaProxyValue(Current);
+    if Proxy.Revoked then
+      ThrowTypeError(SErrorProxyRevoked, SSuggestProxyRevoked);
+    Current := Proxy.Target;
+  end;
+  Result := Current is TGocciaArrayValue;
+end;
+
+function ChildRecordForIndex(const AParseRecord: TGocciaJSONParseRecord;
+  const AIndex: Integer): TGocciaJSONParseRecord;
+begin
+  if Assigned(AParseRecord) then
+    Result := AParseRecord.ElementAt(AIndex)
+  else
+    Result := nil;
+end;
+
+function ChildRecordForKey(const AParseRecord: TGocciaJSONParseRecord;
+  const AKey: string): TGocciaJSONParseRecord;
+begin
+  if Assigned(AParseRecord) then
+    Result := AParseRecord.EntryForKey(AKey)
+  else
+    Result := nil;
+end;
+
+// ES2026 §25.5.2.4 InternalizeJSONProperty ( holder, name, reviver, parseRecord )
+function TGocciaJSONBuiltin.ApplyReviver(const AHolder: TGocciaValue; const AKey: string;
+  const AReviver: TGocciaValue; const AParseRecord: TGocciaJSONParseRecord): TGocciaValue;
 var
   Value, NewValue: TGocciaValue;
   Obj: TGocciaObjectValue;
-  Arr: TGocciaArrayValue;
   I: Integer;
+  Len: Integer;
   PropKey: string;
+  Keys: TArray<string>;
   Args: TGocciaArgumentsCollection;
   Context: TGocciaObjectValue;
 begin
@@ -134,46 +171,46 @@ begin
   if Value is TGocciaObjectValue then
   begin
     Obj := TGocciaObjectValue(Value);
-    if Obj is TGocciaArrayValue then
+    if IsJSONObjectArray(Obj) then
     begin
-      // Step 2a: If val is an Array, for each index I from 0 to len-1:
-      Arr := TGocciaArrayValue(Obj);
-      for I := 0 to Arr.Elements.Count - 1 do
+      // Step 2a: If val is an Array, for each index I from 0 to len-1.
+      Len := LengthOfArrayLike(Obj);
+      for I := 0 to Len - 1 do
       begin
         // Step 2a.i: Let newElement be ? InternalizeJSONProperty(val, ToString(I), reviver).
-        NewValue := ApplyReviver(Arr, IntToStr(I), AReviver);
-        // Step 2a.ii: If newElement is undefined, delete the element; else replace it.
+        NewValue := ApplyReviver(Obj, IntToStr(I), AReviver,
+          ChildRecordForIndex(AParseRecord, I));
+        // Step 2a.ii: If newElement is undefined, delete the element; else create a data property.
         if NewValue is TGocciaUndefinedLiteralValue then
-          Arr.Elements[I] := TGocciaHoleValue.HoleValue
+          Obj.DeleteProperty(IntToStr(I))
         else
-          Arr.Elements[I] := NewValue;
+          Obj.TryCreateDataProperty(IntToStr(I), NewValue);
       end;
     end
     else
     begin
       // Step 2b: Else val is an ordinary Object, for each enumerable key:
-      for PropKey in Obj.GetEnumerablePropertyNames do
+      Keys := Obj.GetEnumerablePropertyNames;
+      for PropKey in Keys do
       begin
         // Step 2b.i: Let newElement be ? InternalizeJSONProperty(val, P, reviver).
-        NewValue := ApplyReviver(Obj, PropKey, AReviver);
-        // Step 2b.ii: If newElement is undefined, delete property; else set it.
+        NewValue := ApplyReviver(Obj, PropKey, AReviver,
+          ChildRecordForKey(AParseRecord, PropKey));
+        // Step 2b.ii: If newElement is undefined, delete property; else create a data property.
         if NewValue is TGocciaUndefinedLiteralValue then
           Obj.DeleteProperty(PropKey)
         else
-          Obj.AssignProperty(PropKey, NewValue);
+          Obj.TryCreateDataProperty(PropKey, NewValue);
       end;
     end;
   end;
 
-  // ES2026 §25.5.1.1 step 3: Build the context object for source text access.
-  Context := TGocciaObjectValue.Create;
-  if not (Value is TGocciaObjectValue) and Assigned(FReviverSourceTexts) and
-    (FReviverSourceIndex < FReviverSourceTexts.Count) then
-  begin
-    Context.AssignProperty(PROP_SOURCE,
-      TGocciaStringLiteralValue.Create(FReviverSourceTexts[FReviverSourceIndex]));
-    Inc(FReviverSourceIndex);
-  end;
+  // ES2026 §25.5.2.4 step 3: Build the context object for source text access.
+  Context := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
+  if Assigned(AParseRecord) and not (Value is TGocciaObjectValue) and
+    (AParseRecord.SourceText <> '') and IsSameValue(AParseRecord.Value, Value) then
+    Context.CreateDataPropertyOrThrow(PROP_SOURCE,
+      TGocciaStringLiteralValue.Create(AParseRecord.SourceText));
 
   // Step 4: Return ? Call(reviver, holder, « name, val, context »).
   Args := TGocciaArgumentsCollection.CreateWithCapacity(3);
@@ -210,21 +247,22 @@ begin
     Result := TGocciaBooleanLiteralValue.FalseValue;
 end;
 
-// ES2026 §25.5.1 JSON.parse ( text [ , reviver ] )
+// ES2026 §25.5.2 JSON.parse ( text [ , reviver ] )
 function TGocciaJSONBuiltin.JSONParse(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   HasReviver: Boolean;
-  PreviousSourceIndex: Integer;
-  PreviousSourceTexts: TStringList;
+  JSONString: string;
+  ParseRecord: TGocciaJSONParseRecord;
   Reviver: TGocciaValue;
   Root: TGocciaObjectValue;
-  SourceTexts: TStringList;
+  TextValue: TGocciaValue;
 begin
-  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'JSON.parse', ThrowError);
-
-  // Step 1: Let jsonString be ? ToString(text).
-  if not (AArgs.GetElement(0) is TGocciaStringLiteralValue) then
-    ThrowTypeError(SErrorJSONParseArgMustBeString, SSuggestStringArgRequired);
+  // ES2026 §25.5.2 step 1: Let jsonString be ? ToString(text).
+  if AArgs.Length >= 1 then
+    TextValue := AArgs.GetElement(0)
+  else
+    TextValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+  JSONString := TextValue.ToStringLiteral.Value;
 
   // Step 2-3: Parse and optionally apply the reviver with source text access.
   HasReviver := (AArgs.Length >= 2) and AArgs.GetElement(1).IsCallable;
@@ -232,41 +270,30 @@ begin
   if HasReviver then
   begin
     Reviver := AArgs.GetElement(1);
-    SourceTexts := TStringList.Create;
+    ParseRecord := nil;
     try
-      // Step 2: Parse with source text tracking for the reviver context.
+      // Step 2: Parse with parse-record tracking for the reviver context.
       try
-        FParser.ParseWithSources(
-          AArgs.GetElement(0).ToStringLiteral.Value, Result, SourceTexts);
+        FParser.ParseWithRecord(JSONString, Result, ParseRecord);
       except
         on E: Exception do
           ThrowSyntaxError(E.Message, SSuggestJSONFormat);
       end;
 
       // Steps 5-7: Wrap in root object and create the empty-string root data property.
-      Root := TGocciaObjectValue.Create;
+      Root := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
       Root.CreateDataPropertyOrThrow('', Result);
 
-      // Save/restore for reentrancy (reviver may call JSON.parse).
-      PreviousSourceTexts := FReviverSourceTexts;
-      PreviousSourceIndex := FReviverSourceIndex;
-      FReviverSourceTexts := SourceTexts;
-      FReviverSourceIndex := 0;
-      try
-        Result := ApplyReviver(Root, '', Reviver);
-      finally
-        FReviverSourceTexts := PreviousSourceTexts;
-        FReviverSourceIndex := PreviousSourceIndex;
-      end;
+      Result := ApplyReviver(Root, '', Reviver, ParseRecord);
     finally
-      SourceTexts.Free;
+      ParseRecord.Free;
     end;
   end
   else
   begin
     // No reviver — parse without source text collection.
     try
-      Result := FParser.Parse(AArgs.GetElement(0).ToStringLiteral.Value);
+      Result := FParser.Parse(JSONString);
     except
       on E: Exception do
         ThrowSyntaxError(E.Message, SSuggestJSONFormat);
@@ -372,10 +399,10 @@ var
   Args: TGocciaArgumentsCollection;
 begin
   Result := AValue;
-  if not (AValue is TGocciaObjectValue) then
+  if not ((AValue is TGocciaObjectValue) or (AValue is TGocciaBigIntValue)) then
     Exit;
 
-  ToJSONMethod := TGocciaObjectValue(AValue).GetProperty(PROP_TO_JSON);
+  ToJSONMethod := AValue.GetProperty(PROP_TO_JSON);
   if not Assigned(ToJSONMethod) or not ToJSONMethod.IsCallable then
     Exit;
 
@@ -407,7 +434,6 @@ function TGocciaJSONBuiltin.TransformWithReplacer(const AHolder: TGocciaValue; c
 var
   Replaced, PropValue, TransformedProp: TGocciaValue;
   Obj: TGocciaObjectValue;
-  Arr: TGocciaArrayValue;
   NewObj: TGocciaObjectValue;
   NewArr: TGocciaArrayValue;
   Key: string;
@@ -444,20 +470,20 @@ begin
   end;
 
   // Step 4: If result is an Array, recursively serialize each element (SerializeJSONArray).
-  if Replaced is TGocciaArrayValue then
+  if (Replaced is TGocciaObjectValue) and IsJSONObjectArray(Replaced) then
   begin
-    if FReplacerTraversalStack.IndexOf(TGocciaArrayValue(Replaced)) <> -1 then
+    Obj := TGocciaObjectValue(Replaced);
+    if FReplacerTraversalStack.IndexOf(Obj) <> -1 then
       ThrowTypeError(SErrorJSONCircularStructure, SSuggestJSONFormat);
 
-    FReplacerTraversalStack.Add(TGocciaArrayValue(Replaced));
-    Arr := TGocciaArrayValue(Replaced);
+    FReplacerTraversalStack.Add(Obj);
     NewArr := TGocciaArrayValue.Create;
     try
-      Len := LengthOfArrayLike(Arr);
+      Len := LengthOfArrayLike(Obj);
       for I := 0 to Len - 1 do
       begin
-        PropValue := Arr.GetProperty(IntToStr(I));
-        TransformedProp := TransformWithReplacer(Arr, IntToStr(I), PropValue, AReplacer);
+        PropValue := Obj.GetProperty(IntToStr(I));
+        TransformedProp := TransformWithReplacer(Obj, IntToStr(I), PropValue, AReplacer);
         NewArr.Elements.Add(TransformedProp);
       end;
     finally
@@ -466,7 +492,7 @@ begin
     Result := NewArr;
   end
   // Step 5: If result is an Object, recursively serialize each property (SerializeJSONObject).
-  else if (Replaced is TGocciaObjectValue) and not (Replaced is TGocciaArrayValue) then
+  else if Replaced is TGocciaObjectValue then
   begin
     if FReplacerTraversalStack.IndexOf(TGocciaObjectValue(Replaced)) <> -1 then
       ThrowTypeError(SErrorJSONCircularStructure, SSuggestJSONFormat);
@@ -502,8 +528,8 @@ var
   Root: TGocciaObjectValue;
   Transformed: TGocciaValue;
 begin
-  // Step 10: Let wrapper be OrdinaryObjectCreate(null).
-  Root := TGocciaObjectValue.Create;
+  // Step 10: Let wrapper be OrdinaryObjectCreate(%Object.prototype%).
+  Root := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
   // Step 11: Perform ! CreateDataPropertyOrThrow(wrapper, "", value).
   Root.CreateDataPropertyOrThrow('', AValue);
   // Step 12: Return ? SerializeJSONProperty(state, "", wrapper).
@@ -516,13 +542,13 @@ begin
     Exit;
   end;
 
-  Result := FStringifier.Stringify(Transformed, AGap);
+  Result := FStringifier.Stringify(Transformed, AGap, #0, nil, False);
 end;
 
 // §25.5.4 step 5: Stringify with an Array replacer (PropertyList filter).
 // PropertyList is part of the serializer state, so it filters every object
 // at every depth (SerializeJSONObject step 5), not just the root.
-function TGocciaJSONBuiltin.StringifyWithAllowList(const AValue: TGocciaValue; const AAllowList: TGocciaArrayValue; const AGap: string): string;
+function TGocciaJSONBuiltin.StringifyWithAllowList(const AValue: TGocciaValue; const AAllowList: TGocciaObjectValue; const AGap: string): string;
 var
   Element: TGocciaValue;
   HasItem: Boolean;
@@ -565,17 +591,18 @@ begin
   end;
 end;
 
-// §25.5.4 JSON.stringify ( value [ , replacer [ , space ] ] )
+// ES2026 §25.5.4 JSON.stringify ( value [ , replacer [ , space ] ] )
 function TGocciaJSONBuiltin.JSONStringify(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Value, ReplacerArg, SpaceArg: TGocciaValue;
   Gap: string;
   Stringified: string;
 begin
-  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'JSON.stringify', ThrowError);
-
   // Step 1: Let state be { ReplacerFunction: undefined, PropertyList: undefined, Indent: "", Gap: "" }.
-  Value := AArgs.GetElement(0);
+  if AArgs.Length >= 1 then
+    Value := AArgs.GetElement(0)
+  else
+    Value := TGocciaUndefinedLiteralValue.UndefinedValue;
 
   Gap := '';
   try
@@ -602,9 +629,9 @@ begin
         Exit;
       end
       // Steps 4-5: If replacer is an Array, build state.PropertyList.
-      else if ReplacerArg is TGocciaArrayValue then
+      else if (ReplacerArg is TGocciaObjectValue) and IsJSONObjectArray(ReplacerArg) then
       begin
-        Stringified := StringifyWithAllowList(Value, TGocciaArrayValue(ReplacerArg), Gap);
+        Stringified := StringifyWithAllowList(Value, TGocciaObjectValue(ReplacerArg), Gap);
         if Stringified = '' then
           Result := TGocciaUndefinedLiteralValue.UndefinedValue
         else
