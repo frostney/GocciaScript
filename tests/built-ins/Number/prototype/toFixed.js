@@ -42,6 +42,17 @@ describe("Number.prototype.toFixed", () => {
     expect(Infinity.toFixed()).toBe("Infinity");
   });
 
+  test("toFixed uses exact binary64 decimal rounding", () => {
+    expect((1000000000000000128).toFixed(0)).toBe("1000000000000000128");
+    expect((0.00008).toFixed(3)).toBe("0.000");
+    expect((0.00008).toFixed(4)).toBe("0.0001");
+  });
+
+  test("toFixed delegates large magnitudes to Number stringification", () => {
+    expect((1e21).toFixed(0)).toBe("1e+21");
+    expect((1e21).toFixed(2)).toBe("1e+21");
+  });
+
   test("toFixed used in template literal", () => {
     const total = 6.5;
     expect(`$${total.toFixed(2)}`).toBe("$6.50");

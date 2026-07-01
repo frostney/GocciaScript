@@ -46,6 +46,12 @@ describe("Number.prototype.toString", () => {
     expect((-0).toString()).toBe("0");
   });
 
+  test("Number.prototype has Number wrapper internal data", () => {
+    expect(Number.prototype.toString()).toBe("0");
+    expect(Number.prototype.toString(2)).toBe("0");
+    expect(Object.prototype.toString.call(Number.prototype)).toBe("[object Number]");
+  });
+
   test("integers >= 1e15 and < 1e21 use fixed-point notation", () => {
     expect((1e15).toString()).toBe("1000000000000000");
     expect((1e16).toString()).toBe("10000000000000000");
@@ -147,5 +153,21 @@ describe("Number.prototype.toString non-finite radix", () => {
 
   test("NaN radix throws RangeError", () => {
     expect(() => (5).toString(NaN)).toThrow(RangeError);
+  });
+
+  test("special receivers coerce and validate radix before stringifying", () => {
+    expect(() => NaN.toString(1)).toThrow(RangeError);
+    expect(() => Infinity.toString(37)).toThrow(RangeError);
+  });
+
+  test("special receivers propagate abrupt radix coercion", () => {
+    const radix = {
+      valueOf() {
+        throw new Error("radix");
+      },
+    };
+    expect(() => NaN.toString(radix)).toThrow(Error);
+    expect(() => Infinity.toString(radix)).toThrow(Error);
+    expect(() => (0).toString(radix)).toThrow(Error);
   });
 });
