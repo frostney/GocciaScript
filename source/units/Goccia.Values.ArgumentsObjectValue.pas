@@ -24,6 +24,7 @@ function CreateMappedBytecodeArgumentsObject(
   const AArguments: TGocciaArgumentsCollection;
   const AParameterCells: array of TGocciaBytecodeCell;
   const ACallee: TGocciaValue): TGocciaObjectValue;
+function IsArgumentsObjectValue(const AValue: TGocciaValue): Boolean;
 
 implementation
 
@@ -92,6 +93,11 @@ type
 function TGocciaArgumentsObjectValue.ToStringTag: string;
 begin
   Result := 'Arguments';
+end;
+
+function IsArgumentsObjectValue(const AValue: TGocciaValue): Boolean;
+begin
+  Result := AValue is TGocciaArgumentsObjectValue;
 end;
 
 function CreateThrowTypeErrorFunction: TGocciaFunctionBase;

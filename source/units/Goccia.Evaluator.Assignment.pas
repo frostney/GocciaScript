@@ -29,6 +29,7 @@ uses
   BigInteger,
 
   Goccia.Arithmetic,
+  Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.Values.BigIntObjectValue,
@@ -64,6 +65,20 @@ begin
   Result := nil;
 end;
 
+function IsImmutableProjectGlobalProperty(const AObj: TGocciaObjectValue;
+  const APropertyName: string): Boolean;
+var
+  GlobalThisValue: TGocciaValue;
+begin
+  if (APropertyName <> PROP_GOCCIA) and (APropertyName <> PROP_GLOBAL_THIS) then
+    Exit(False);
+  if not AObj.HasOwnProperty(PROP_GLOBAL_THIS) then
+    Exit(False);
+
+  GlobalThisValue := AObj.GetProperty(PROP_GLOBAL_THIS);
+  Result := GlobalThisValue = AObj;
+end;
+
 procedure AssignProperty(const AObj: TGocciaValue; const APropertyName: string; const AValue: TGocciaValue; const AOnError: TGocciaThrowErrorCallback; const ALine, AColumn: Integer; const ANonStrictMode: Boolean = False);
 var
   BoxedValue: TGocciaObjectValue;
@@ -80,6 +95,10 @@ begin
 
   if AObj is TGocciaObjectValue then
   begin
+    if IsImmutableProjectGlobalProperty(TGocciaObjectValue(AObj),
+       APropertyName) then
+      ThrowTypeError(Format(SErrorAssignToConstant, [APropertyName]),
+        SSuggestUseLetNotConst);
     if ANonStrictMode then
       TGocciaObjectValue(AObj).AssignPropertyWithReceiver(APropertyName, AValue, AObj)
     else

@@ -1290,9 +1290,9 @@ var
   Flags: TPropertyFlags;
 begin
   Scope := FInterpreter.GlobalScope;
-  if Scope.ContainsOwnLexicalBinding('globalThis') and
-     (Scope.GetValue('globalThis') is TGocciaObjectValue) then
-    GlobalThisObj := TGocciaObjectValue(Scope.GetValue('globalThis'))
+  if Scope.ContainsOwnLexicalBinding(PROP_GLOBAL_THIS) and
+     (Scope.GetValue(PROP_GLOBAL_THIS) is TGocciaObjectValue) then
+    GlobalThisObj := TGocciaObjectValue(Scope.GetValue(PROP_GLOBAL_THIS))
   else
     GlobalThisObj := TGocciaObjectValue.Create;
 
@@ -1333,13 +1333,13 @@ begin
     Scope.MarkGlobalObjectBackedBinding(Name);
   end;
 
-  GlobalThisObj.DefineProperty('globalThis',
+  GlobalThisObj.DefineProperty(PROP_GLOBAL_THIS,
     TGocciaPropertyDescriptorData.Create(GlobalThisObj, [pfWritable, pfConfigurable]));
-  if Scope.ContainsOwnLexicalBinding('globalThis') then
-    Scope.ForceUpdateBinding('globalThis', GlobalThisObj)
+  if Scope.ContainsOwnLexicalBinding(PROP_GLOBAL_THIS) then
+    Scope.ForceUpdateBinding(PROP_GLOBAL_THIS, GlobalThisObj)
   else
-    Scope.DefineLexicalBinding('globalThis', GlobalThisObj, dtConst, True);
-  Scope.MarkGlobalObjectBackedBinding('globalThis');
+    Scope.DefineLexicalBinding(PROP_GLOBAL_THIS, GlobalThisObj, dtConst, True);
+  Scope.MarkGlobalObjectBackedBinding(PROP_GLOBAL_THIS);
 
   // ES2026 §9.1.2.5 NewGlobalEnvironment: a global Environment Record's
   // [[GlobalThisValue]] is the global object. Top-level `this` resolves
@@ -1419,7 +1419,7 @@ begin
   GocciaObj.AssignProperty('gc', GCFunc);
 
   FGocciaGlobal := GocciaObj;
-  FInterpreter.GlobalScope.DefineLexicalBinding('Goccia', FGocciaGlobal, dtConst, True);
+  FInterpreter.GlobalScope.DefineLexicalBinding(PROP_GOCCIA, FGocciaGlobal, dtConst, True);
 end;
 
 function TGocciaEngine.GetResolver: TGocciaModuleResolver;

@@ -31,6 +31,14 @@ describe("arguments object", () => {
     expect(unmapped("value")).toBe([][Symbol.iterator]);
   });
 
+  test("Object.prototype.toString brands arguments objects", () => {
+    function capture() {
+      return Object.prototype.toString.call(arguments);
+    }
+
+    expect(capture()).toBe("[object Arguments]");
+  });
+
   test("simple parameter arguments alias parameter bindings", () => {
     function capture(first, second) {
       const before = [arguments[0], first, arguments[1], second];

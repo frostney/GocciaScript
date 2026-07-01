@@ -22,6 +22,7 @@ type
     function AdvanceNext: TGocciaObjectValue; override;
     function DirectNext(out ADone: Boolean): TGocciaValue; override;
     function ToStringTag: string; override;
+    function BuiltinTagFallback: Boolean; override;
     procedure MarkReferences; override;
   end;
 
@@ -35,6 +36,7 @@ type
     function AdvanceNext: TGocciaObjectValue; override;
     function DirectNext(out ADone: Boolean): TGocciaValue; override;
     function ToStringTag: string; override;
+    function BuiltinTagFallback: Boolean; override;
     procedure MarkReferences; override;
   end;
 
@@ -56,6 +58,7 @@ type
     function DirectNext(out ADone: Boolean): TGocciaValue; override;
     procedure Close; override;
     function ToStringTag: string; override;
+    function BuiltinTagFallback: Boolean; override;
     procedure MarkReferences; override;
   end;
 
@@ -74,6 +77,7 @@ type
     function DirectNext(out ADone: Boolean): TGocciaValue; override;
     procedure Close; override;
     function ToStringTag: string; override;
+    function BuiltinTagFallback: Boolean; override;
     procedure MarkReferences; override;
   end;
 
@@ -272,6 +276,11 @@ begin
   Result := 'Array Iterator';
 end;
 
+function TGocciaArrayIteratorValue.BuiltinTagFallback: Boolean;
+begin
+  Result := True;
+end;
+
 procedure TGocciaArrayIteratorValue.MarkReferences;
 begin
   if GCMarked then Exit;
@@ -361,6 +370,11 @@ end;
 function TGocciaStringIteratorValue.ToStringTag: string;
 begin
   Result := 'String Iterator';
+end;
+
+function TGocciaStringIteratorValue.BuiltinTagFallback: Boolean;
+begin
+  Result := True;
 end;
 
 procedure TGocciaStringIteratorValue.MarkReferences;
@@ -492,6 +506,11 @@ begin
   Result := 'Map Iterator';
 end;
 
+function TGocciaMapIteratorValue.BuiltinTagFallback: Boolean;
+begin
+  Result := True;
+end;
+
 procedure TGocciaMapIteratorValue.MarkReferences;
 begin
   if GCMarked then Exit;
@@ -614,6 +633,11 @@ end;
 function TGocciaSetIteratorValue.ToStringTag: string;
 begin
   Result := 'Set Iterator';
+end;
+
+function TGocciaSetIteratorValue.BuiltinTagFallback: Boolean;
+begin
+  Result := True;
 end;
 
 procedure TGocciaSetIteratorValue.MarkReferences;

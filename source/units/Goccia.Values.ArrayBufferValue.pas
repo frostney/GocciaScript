@@ -41,6 +41,7 @@ type
     function GetProperty(const AName: string): TGocciaValue; override;
     function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; override;
     function ToStringTag: string; override;
+    function BuiltinTagFallback: Boolean; override;
 
     procedure InitializeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); override;
     procedure MarkReferences; override;
@@ -412,6 +413,11 @@ end;
 function TGocciaArrayBufferValue.ToStringTag: string;
 begin
   Result := CONSTRUCTOR_ARRAY_BUFFER;
+end;
+
+function TGocciaArrayBufferValue.BuiltinTagFallback: Boolean;
+begin
+  Result := True;
 end;
 
 // ES2026 §25.1.6.1 get ArrayBuffer.prototype.byteLength
