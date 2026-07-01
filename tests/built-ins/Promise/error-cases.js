@@ -208,3 +208,32 @@ test("Promise capability executor throws when called twice by constructor", () =
     expect(e.name).toBe("TypeError");
   }
 });
+
+test("Promise capability executor can be called again after undefined resolving functions", () => {
+  class CallsExecutorWithUndefinedFirst {
+    constructor(executor) {
+      executor(undefined, undefined);
+      executor(() => {}, () => {});
+    }
+  }
+
+  expect(Promise.resolve.call(CallsExecutorWithUndefinedFirst, 1)).toBeInstanceOf(
+    CallsExecutorWithUndefinedFirst
+  );
+});
+
+test("Promise capability executor throws when only one resolving function was captured", () => {
+  class CallsExecutorWithRejectFirst {
+    constructor(executor) {
+      executor(undefined, () => {});
+      executor(() => {}, () => {});
+    }
+  }
+
+  try {
+    Promise.resolve.call(CallsExecutorWithRejectFirst, 1);
+    throw new Error("Expected TypeError");
+  } catch (e) {
+    expect(e.name).toBe("TypeError");
+  }
+});

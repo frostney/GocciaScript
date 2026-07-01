@@ -16,9 +16,13 @@ if (typeof Goccia === "undefined" || Goccia.test262Host !== true) {
   throw new Error("$262 host hooks require GocciaScriptLoaderBare --test262-host");
 }
 
+function AbstractModuleSource() {
+  throw new TypeError("%AbstractModuleSource% is not a constructor");
+}
+
 var $262 = {
   global: globalThis,
-  AbstractModuleSource: function AbstractModuleSource() {},
+  AbstractModuleSource,
 
   detachArrayBuffer(buffer) {
     buffer.transfer();
@@ -71,4 +75,26 @@ var $262 = {
   },
 };
 
-$262.AbstractModuleSource.prototype = Goccia.test262.abstractModuleSourcePrototype;
+Object.defineProperty($262.AbstractModuleSource, "prototype", {
+  value: Goccia.test262.abstractModuleSourcePrototype,
+  writable: false,
+  enumerable: false,
+  configurable: false,
+});
+Object.defineProperty($262.AbstractModuleSource.prototype, "constructor", {
+  value: $262.AbstractModuleSource,
+  writable: true,
+  enumerable: false,
+  configurable: true,
+});
+Object.defineProperty($262.AbstractModuleSource.prototype, Symbol.toStringTag, {
+  get() {
+    return this &&
+      typeof this === "object" &&
+      this !== $262.AbstractModuleSource.prototype
+      ? "ModuleSource"
+      : undefined;
+  },
+  enumerable: false,
+  configurable: true,
+});
