@@ -413,11 +413,7 @@ begin
   Result := TryReadUTF8CodePointAllowSurrogates(AText, AIndex,
     ACodeUnit, AByteLength);
   if Result then
-  begin
-    if ACodeUnit <= $FFFF then
-      Exit(True);
     Exit(True);
-  end;
   if (AIndex >= 1) and (AIndex <= Length(AText)) then
   begin
     ACodeUnit := Ord(AText[AIndex]);
