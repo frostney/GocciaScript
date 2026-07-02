@@ -125,10 +125,12 @@ uses
   Goccia.GarbageCollector,
   Goccia.Realm,
   Goccia.Values.ArrayValue,
+  Goccia.Values.ErrorHelper,
   Goccia.Values.HeadersValue,
   Goccia.Values.MapValue,
   Goccia.Values.SetValue,
   Goccia.Values.ToObject,
+  Goccia.Values.TypedArrayValue,
   Goccia.Values.URLSearchParamsValue;
 
 var
@@ -183,6 +185,12 @@ function GetArrayIteratorLen(const ASource: TGocciaValue): Integer;
 begin
   if ASource is TGocciaArrayValue then
     Result := TGocciaArrayValue(ASource).Elements.Count
+  else if ASource is TGocciaTypedArrayValue then
+  begin
+    if IsTypedArrayOutOfBounds(TGocciaTypedArrayValue(ASource)) then
+      ThrowTypeError('TypedArray is out of bounds');
+    Result := TGocciaTypedArrayValue(ASource).Length;
+  end
   else
     Result := LengthOfArrayLike(TGocciaObjectValue(ASource));
 end;

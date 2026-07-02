@@ -86,6 +86,7 @@ uses
   Goccia.Values.FunctionBase,
   Goccia.Values.Iterator.Concrete,
   Goccia.Values.Iterator.Generic,
+  Goccia.Values.IteratorSupport,
   Goccia.Values.IteratorValue,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -303,28 +304,30 @@ end;
 procedure TGocciaSetValue.InitializeNativeFromArguments(const AArguments: TGocciaArgumentsCollection);
 var
   InitArg: TGocciaValue;
-  ArrValue: TGocciaArrayValue;
-  OtherSet: TGocciaSetValue;
-  Cursor: Integer;
+  Iterator: TGocciaIteratorValue;
   Item: TGocciaValue;
-  I: Integer;
+  Done: Boolean;
 begin
   if AArguments.Length = 0 then
     Exit;
   InitArg := AArguments.GetElement(0);
-  if InitArg is TGocciaArrayValue then
-  begin
-    ArrValue := TGocciaArrayValue(InitArg);
-    for I := 0 to ArrValue.Elements.Count - 1 do
-      if Assigned(ArrValue.Elements[I]) then
-        AddItem(ArrValue.Elements[I]);
-  end
-  else if InitArg is TGocciaSetValue then
-  begin
-    OtherSet := TGocciaSetValue(InitArg);
-    Cursor := 0;
-    while OtherSet.NextItem(Cursor, Item) do
-      AddItem(Item);
+  if (InitArg is TGocciaUndefinedLiteralValue) or
+     (InitArg is TGocciaNullLiteralValue) then
+    Exit;
+
+  Iterator := GetIteratorFromValue(InitArg);
+  if not Assigned(Iterator) then
+    ThrowTypeError('Set constructor argument is not iterable');
+
+  try
+    repeat
+      Item := Iterator.DirectNext(Done);
+      if not Done then
+        AddItem(Item);
+    until Done;
+  except
+    CloseIteratorPreservingError(Iterator);
+    raise;
   end;
 end;
 

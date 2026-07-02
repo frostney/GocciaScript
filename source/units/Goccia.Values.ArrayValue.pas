@@ -140,6 +140,7 @@ uses
   Goccia.Values.HoleValue,
   Goccia.Values.Iterator.Concrete,
   Goccia.Values.ProxyValue,
+  Goccia.Values.StringObjectValue,
   Goccia.Values.SymbolValue,
   Goccia.Values.ToObject,
   Goccia.Values.ToPrimitive;
@@ -389,7 +390,11 @@ end;
 procedure TArrayLikeView.Put(const AIndex: Integer; const AValue: TGocciaValue);
 begin
   if Assigned(Arr) then
-    Arr.SetElement(AIndex, AValue)
+  begin
+    if not Arr.SetElement(AIndex, AValue) then
+      ThrowTypeError(Format(SErrorCannotAssignReadOnly, [IntToStr(AIndex)]),
+        SSuggestCannotDeleteNonConfigurable);
+  end
   else
     Obj.AssignProperty(IntToStr(AIndex), AValue);
 end;
@@ -451,13 +456,12 @@ end;
 
 function TArrayLikeView.NeedsSparsePath: Boolean;
 begin
-  // Native arrays cap length at 2^32 - 1 and have a fast Elements array; the
-  // dense Integer loop is fine for them.  Generic array-likes need the
-  // sparse path as soon as RawLen exceeds MaxInt — Len is a 32-bit Integer,
-  // so the dense loop saturates at 2^31 - 1 and would silently skip every
-  // index beyond that.  Callers like filter / reduce / forEach / includes /
-  // some / every / indexOf / lastIndexOf / find* all rely on this gate.
-  Result := (not Assigned(Arr)) and (RawLen > MaxInt);
+  // Len is a 32-bit Integer, so the dense loop saturates at 2^31 - 1 and
+  // would silently skip every index beyond that.  Native arrays also need
+  // this path for sparse property-map elements near the 2^32 - 1 array limit.
+  // Callers like filter / reduce / forEach / includes / some / every /
+  // indexOf / lastIndexOf / find* all rely on this gate.
+  Result := RawLen > MaxInt;
 end;
 
 function TArrayLikeView.Len64: Int64;
@@ -476,22 +480,22 @@ procedure TArrayLikeView.DeleteIndex(const AIndex: Integer);
 begin
   if Assigned(Arr) then
   begin
-    if (AIndex >= 0) and (AIndex < Arr.Elements.Count) then
-      Arr.Elements[AIndex] := TGocciaHoleValue.HoleValue;
+    if not Arr.DeleteProperty(IntToStr(AIndex)) then
+      ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [IntToStr(AIndex)]),
+        SSuggestCannotDeleteNonConfigurable);
   end
   else
-    Obj.DeleteProperty(IntToStr(AIndex));
+  begin
+    if not Obj.DeleteProperty(IntToStr(AIndex)) then
+      ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [IntToStr(AIndex)]),
+        SSuggestCannotDeleteNonConfigurable);
+  end;
 end;
 
 procedure TArrayLikeView.SetLen(const ANewLen: Integer);
 begin
   if Assigned(Arr) then
-  begin
-    while Arr.Elements.Count > ANewLen do
-      Arr.Elements.Delete(Arr.Elements.Count - 1);
-    ExtendElementsWithHoles(Arr.Elements, ANewLen);
-    Arr.FLength := ANewLen;
-  end
+    Arr.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.Create(ANewLen))
   else
     Obj.AssignProperty(PROP_LENGTH, TGocciaNumberLiteralValue.Create(ANewLen));
 end;
@@ -576,6 +580,20 @@ begin
   if A < B then Result := -1
   else if A > B then Result := 1
   else Result := 0;
+end;
+
+function NormalizeRelativeIndex64(const ARelative, ALength: Int64): Int64;
+begin
+  if ARelative < 0 then
+  begin
+    Result := ALength + ARelative;
+    if Result < 0 then
+      Result := 0;
+  end
+  else if ARelative > ALength then
+    Result := ALength
+  else
+    Result := ARelative;
 end;
 
 // ES2026 §10.4.2.4 ArraySetLength(A, Desc): delete own array-index
@@ -671,19 +689,16 @@ end;
 
 function ArrayLengthFromDescriptorValue(const AValue: TGocciaValue): Int64;
 var
+  NewLen: Cardinal;
   NumberValue: TGocciaNumberLiteralValue;
-  RawLen: Double;
-  TruncLen: Int64;
 begin
+  NewLen := ToUint32Value(AValue);
   NumberValue := AValue.ToNumberLiteral;
-  RawLen := NumberValue.Value;
   if NumberValue.IsNaN or NumberValue.IsInfinite or
-     (RawLen < 0) or (RawLen > MAX_ARRAY_LENGTH_F) then
+     NumberValue.IsNegativeInfinity or
+     (NumberValue.Value <> NewLen) then
     ThrowRangeError(SErrorInvalidArrayLength, SSuggestArrayLengthRange);
-  TruncLen := Trunc(RawLen);
-  if RawLen <> TruncLen then
-    ThrowRangeError(SErrorInvalidArrayLength, SSuggestArrayLengthRange);
-  Result := TruncLen;
+  Result := NewLen;
 end;
 
 function TryApplyArrayLengthDescriptor(
@@ -850,14 +865,14 @@ begin
 end;
 
 // ES2026 §7.3.35 ArraySpeciesCreate(originalArray, length)
-function ArrayCreateWithLength(const ALength: Integer): TGocciaArrayValue;
+function ArrayCreateWithLength(const ALength: Int64): TGocciaArrayValue;
 begin
   Result := TGocciaArrayValue.Create;
   if ALength > 0 then
-    Result.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.Create(ALength));
+    Result.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.Create(Int64ToDouble(ALength)));
 end;
 
-function ArraySpeciesCreate(const AOriginal: TGocciaArrayValue; const ALength: Integer): TGocciaObjectValue;
+function ArraySpeciesCreate(const AOriginal: TGocciaObjectValue; const ALength: Int64): TGocciaObjectValue;
 var
   ConstructorMethod, Species: TGocciaValue;
   LengthArgs: TGocciaArgumentsCollection;
@@ -897,7 +912,7 @@ begin
       SSuggestSpeciesConstructor);
 
   // Step 8: Return Construct(C, « length »)
-  LengthArgs := TGocciaArgumentsCollection.Create([TGocciaNumberLiteralValue.Create(ALength)]);
+  LengthArgs := TGocciaArgumentsCollection.Create([TGocciaNumberLiteralValue.Create(Int64ToDouble(ALength))]);
   try
     Instance := ConstructValue(Species, LengthArgs, Species);
   finally
@@ -940,7 +955,8 @@ begin
   PreviousContinuation := SuspendCurrentGeneratorContinuation;
   try
     try
-      CompResult := InvokeCallable(ACompareFunc, ACallArgs, AThisValue).ToNumberLiteral;
+      CompResult := InvokeCallable(ACompareFunc, ACallArgs,
+        TGocciaUndefinedLiteralValue.UndefinedValue).ToNumberLiteral;
     finally
       RestoreCurrentGeneratorContinuation(PreviousContinuation);
     end;
@@ -1385,6 +1401,25 @@ begin
     Exit;
   end;
 
+  if Assigned(FPrototype) then
+  begin
+    Result := FPrototype.AssignPropertyWithReceiver(IndexName, AValue, Self);
+    Exit;
+  end;
+
+  if FFrozen and (AIndex < FElements.Count) and
+     not IsArrayHole(FElements[AIndex]) then
+  begin
+    Result := False;
+    Exit;
+  end;
+
+  if (AIndex >= FLength) and not FLengthWritable then
+  begin
+    Result := False;
+    Exit;
+  end;
+
   if (not Extensible) and
      not ((AIndex < FElements.Count) and not IsArrayHole(FElements[AIndex])) then
   begin
@@ -1522,17 +1557,15 @@ begin
   View.Init(AThisValue);
   Callback := ValidateArrayMethodCall('map', AArgs, AThisValue, True);
   ThisArg := GetArrayCallbackThisArg(AArgs);
-  // Step 5: Let A be ArraySpeciesCreate(O, len) — ArrayCreate throws
-  // RangeError if len > 2^32 - 1.  Doing this *before* allocating the
-  // capacity-hinted TGocciaArrayValue matters: len is clamped to MaxInt
-  // downstream, so without this guard a pathological array-like (e.g.
-  // length: 2^32) would spin trying to allocate billions of slots and
-  // iterate them, well past any cooperative timeout.
-  View.CheckArrayCreateLen;
   if Assigned(View.SpeciesArr) then
-    ResultArray := ArraySpeciesCreate(View.SpeciesArr, View.Len)
+    ResultArray := ArraySpeciesCreate(View.Obj, View.Len64)
   else
+  begin
+    // Step 5: Let A be ArraySpeciesCreate(O, len) — default ArrayCreate
+    // throws RangeError if len > 2^32 - 1.
+    View.CheckArrayCreateLen;
     ResultArray := ArrayCreateWithLength(View.Len);
+  end;
   InitializeTempRoot(ResultRoot);
   AddTempRootIfNeeded(ResultRoot, ResultArray);
   try
@@ -1581,7 +1614,7 @@ begin
   Callback := ValidateArrayMethodCall('filter', AArgs, AThisValue, True);
   ThisArg := GetArrayCallbackThisArg(AArgs);
   if Assigned(View.SpeciesArr) then
-    ResultArray := ArraySpeciesCreate(View.SpeciesArr, 0)
+    ResultArray := ArraySpeciesCreate(View.Obj, 0)
   else
     ResultArray := TGocciaArrayValue.Create;
   ToIndex := 0;
@@ -2209,7 +2242,7 @@ begin
 
   // Step 5: Let A be ArraySpeciesCreate(O, 0)
   if Assigned(View.SpeciesArr) then
-    ResultArray := ArraySpeciesCreate(View.SpeciesArr, 0)
+    ResultArray := ArraySpeciesCreate(View.Obj, 0)
   else
     ResultArray := TGocciaArrayValue.Create;
 
@@ -2249,7 +2282,7 @@ begin
   Callback := ValidateArrayMethodCall('flatMap', AArgs, AThisValue, True);
   ThisArg := GetArrayCallbackThisArg(AArgs);
   if Assigned(View.SpeciesArr) then
-    ResultArray := ArraySpeciesCreate(View.SpeciesArr, 0)
+    ResultArray := ArraySpeciesCreate(View.Obj, 0)
   else
     ResultArray := TGocciaArrayValue.Create;
   TargetIndex := 0;
@@ -2312,6 +2345,7 @@ var
   View: TArrayLikeView;
   NewLen, I: Integer;
   RawNewLen: Double;
+  K: Int64;
 begin
   // Step 1: Let O be ToObject(this value)
   View.Init(AThisValue);
@@ -2326,33 +2360,46 @@ begin
     // receivers we still write so accessor/writability semantics fire.
     // Use RawLen so we don't truncate receivers whose length exceeds
     // MaxInt back down to View.Len.
-    if not Assigned(View.Arr) then
-      View.Obj.AssignProperty(PROP_LENGTH,
-        TGocciaNumberLiteralValue.Create(View.RawLen));
+    if Assigned(View.Arr) and View.Arr.FLengthWritable then
+    begin
+      Result := TGocciaNumberLiteralValue.Create(View.RawLen);
+      Exit;
+    end;
+    View.Obj.AssignProperty(PROP_LENGTH,
+      TGocciaNumberLiteralValue.Create(View.RawLen));
     Result := TGocciaNumberLiteralValue.Create(View.RawLen);
     Exit;
   end;
 
   RawNewLen := View.RawLen + AArgs.Length;
-  View.CheckSafeIntegerLen(RawNewLen);
+  if RawNewLen > MAX_SAFE_INTEGER_F then
+    ThrowTypeError(
+      'Array length exceeds maximum safe integer (2^53 - 1)',
+      'use a smaller length');
 
-  // Fast path: native array
-  if Assigned(View.Arr) then
+  if RawNewLen > MaxInt then
   begin
+    K := View.Len64;
     for I := 0 to AArgs.Length - 1 do
-      View.Arr.Elements.Add(AArgs.GetElement(I));
-    Result := TGocciaNumberLiteralValue.Create(View.Arr.Elements.Count);
+    begin
+      View.Obj.AssignProperty(IntToStr(K), AArgs.GetElement(I));
+      Inc(K);
+    end;
+    View.Obj.AssignProperty(PROP_LENGTH,
+      TGocciaNumberLiteralValue.Create(RawNewLen));
+    Result := TGocciaNumberLiteralValue.Create(RawNewLen);
     Exit;
   end;
 
-  // Generic path: Set(O, ToString(len), E), len = len + 1
+  // Set(O, ToString(len), E), len = len + 1
   NewLen := View.Len;
   for I := 0 to AArgs.Length - 1 do
   begin
-    View.Put(NewLen, AArgs.GetElement(I));
+    View.Obj.AssignProperty(IntToStr(NewLen), AArgs.GetElement(I));
     Inc(NewLen);
   end;
-  View.SetLen(NewLen);
+  if (not Assigned(View.Arr)) or (View.Arr.FLength <> NewLen) then
+    View.SetLen(NewLen);
   Result := TGocciaNumberLiteralValue.Create(NewLen);
 end;
 
@@ -2360,6 +2407,7 @@ end;
 function TGocciaArrayValue.ArrayPop(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   View: TArrayLikeView;
+  NewLen64: Int64;
 begin
   // Step 1: Let O be ToObject(this value)
   View.Init(AThisValue);
@@ -2372,22 +2420,25 @@ begin
     Exit;
   end;
 
+  if View.RawLen > MaxInt then
+  begin
+    NewLen64 := View.Len64 - 1;
+    Result := View.Get64(NewLen64);
+    if not View.Obj.DeleteProperty(IntToStr(NewLen64)) then
+      ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [IntToStr(NewLen64)]),
+        SSuggestCannotDeleteNonConfigurable);
+    View.Obj.AssignProperty(PROP_LENGTH,
+      TGocciaNumberLiteralValue.Create(Int64ToDouble(NewLen64)));
+    Exit;
+  end;
+
   // Step 5: Let element be Get(O, ToString(newLen))
   Result := View.Get(View.Len - 1);
 
-  // Fast path: native array
-  if Assigned(View.Arr) then
-  begin
-    View.Arr.Elements.Delete(View.Arr.Elements.Count - 1);
-    View.Arr.FLength := View.Len - 1;
-  end
-  else
-  begin
-    // Step 6: DeletePropertyOrThrow(O, ToString(newLen))
-    View.DeleteIndex(View.Len - 1);
-    // Step 7: Set(O, "length", newLen)
-    View.SetLen(View.Len - 1);
-  end;
+  // Step 6: DeletePropertyOrThrow(O, ToString(newLen))
+  View.DeleteIndex(View.Len - 1);
+  // Step 7: Set(O, "length", newLen)
+  View.SetLen(View.Len - 1);
 end;
 
 // ES2026 §23.1.3.26 Array.prototype.slice(start, end)
@@ -2465,7 +2516,7 @@ begin
   Needed := Integer(Trunc(RawNeeded));
 
   if Assigned(View.SpeciesArr) then
-    ResultArray := ArraySpeciesCreate(View.SpeciesArr, Needed)
+    ResultArray := ArraySpeciesCreate(View.Obj, Needed)
   else
     ResultArray := ArrayCreateWithLength(Needed);
 
@@ -2529,15 +2580,19 @@ begin
 
   CallArgs := TGocciaArrayCallbackArgs.Create(View.Obj);
   try
-    // Sparse path: spec says find iterates every integer in [0, len) without
-    // a HasProperty check, so on a length-2^53 receiver the dense loop would
-    // call the predicate 2^53 times.  Engines materially observable beyond
-    // ~2^32 iterations don't exist in practice; we restrict to the indices
-    // actually present on the chain, matching what tractable test262 fixtures
-    // can exercise.
     if View.NeedsSparsePath then
     begin
-      Sparse := CollectSparseIndicesInRange(View.Obj, 0, View.Len64);
+      Element := View.Get64(0);
+      CallArgs.Element := Element;
+      CallArgs.Index := TGocciaNumberLiteralValue.Create(0);
+      CallResult := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
+      if CallResult.ToBooleanLiteral.Value then
+      begin
+        Result := Element;
+        Exit;
+      end;
+
+      Sparse := CollectSparseIndicesInRange(View.Obj, 1, View.Len64);
       for K in Sparse do
       begin
         Element := View.Get64(K);
@@ -2599,7 +2654,17 @@ begin
   try
     if View.NeedsSparsePath then
     begin
-      Sparse := CollectSparseIndicesInRange(View.Obj, 0, View.Len64);
+      Element := View.Get64(0);
+      CallArgs.Element := Element;
+      CallArgs.Index := TGocciaNumberLiteralValue.Create(0);
+      CallResult := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
+      if CallResult.ToBooleanLiteral.Value then
+      begin
+        Result := TGocciaNumberLiteralValue.Create(0);
+        Exit;
+      end;
+
+      Sparse := CollectSparseIndicesInRange(View.Obj, 1, View.Len64);
       for K in Sparse do
       begin
         Element := View.Get64(K);
@@ -2647,6 +2712,7 @@ var
   I: Integer;
   Element, CallResult: TGocciaValue;
   Sparse: TArray<Int64>;
+  LastIndex: Int64;
   J: Integer;
 begin
   View.Init(AThisValue);
@@ -2661,7 +2727,18 @@ begin
   try
     if View.NeedsSparsePath then
     begin
-      Sparse := CollectSparseIndicesInRange(View.Obj, 0, View.Len64);
+      LastIndex := View.Len64 - 1;
+      Element := View.Get64(LastIndex);
+      CallArgs.Element := Element;
+      CallArgs.Index := TGocciaNumberLiteralValue.Create(Int64ToDouble(LastIndex));
+      CallResult := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
+      if CallResult.ToBooleanLiteral.Value then
+      begin
+        Result := Element;
+        Exit;
+      end;
+
+      Sparse := CollectSparseIndicesInRange(View.Obj, 0, LastIndex);
       for J := High(Sparse) downto 0 do
       begin
         Element := View.Get64(Sparse[J]);
@@ -2709,6 +2786,7 @@ var
   I: Integer;
   Element, CallResult: TGocciaValue;
   Sparse: TArray<Int64>;
+  LastIndex: Int64;
   J: Integer;
 begin
   View.Init(AThisValue);
@@ -2723,7 +2801,18 @@ begin
   try
     if View.NeedsSparsePath then
     begin
-      Sparse := CollectSparseIndicesInRange(View.Obj, 0, View.Len64);
+      LastIndex := View.Len64 - 1;
+      Element := View.Get64(LastIndex);
+      CallArgs.Element := Element;
+      CallArgs.Index := TGocciaNumberLiteralValue.Create(Int64ToDouble(LastIndex));
+      CallResult := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
+      if CallResult.ToBooleanLiteral.Value then
+      begin
+        Result := TGocciaNumberLiteralValue.Create(Int64ToDouble(LastIndex));
+        Exit;
+      end;
+
+      Sparse := CollectSparseIndicesInRange(View.Obj, 0, LastIndex);
       for J := High(Sparse) downto 0 do
       begin
         Element := View.Get64(Sparse[J]);
@@ -2811,11 +2900,57 @@ function TGocciaArrayValue.ArrayCopyWithin(const AArgs: TGocciaArgumentsCollecti
 var
   View: TArrayLikeView;
   Target, Start, EndIdx, Count, I: Integer;
+  Target64, Start64, End64, Count64, From64, To64: Int64;
+  Direction: Integer;
   Temp: array of TGocciaValue;
   Present: array of Boolean;
 begin
   // Step 1: Let O be ToObject(this value)
   View.Init(AThisValue);
+
+  if View.NeedsSparsePath then
+  begin
+    Target64 := NormalizeRelativeIndex64(ToInteger64FromArgs(AArgs, 0), View.Len64);
+    Start64 := NormalizeRelativeIndex64(ToInteger64FromArgs(AArgs, 1), View.Len64);
+    if (AArgs.Length > 2) and
+       not (AArgs.GetElement(2) is TGocciaUndefinedLiteralValue) then
+      End64 := NormalizeRelativeIndex64(ToInteger64FromArgs(AArgs, 2), View.Len64)
+    else
+      End64 := View.Len64;
+    Count64 := End64 - Start64;
+    if Count64 > View.Len64 - Target64 then
+      Count64 := View.Len64 - Target64;
+    if Count64 <= 0 then
+    begin
+      Result := View.Obj;
+      Exit;
+    end;
+
+    From64 := Start64;
+    To64 := Target64;
+    Direction := 1;
+    if (From64 < To64) and (To64 < From64 + Count64) then
+    begin
+      Direction := -1;
+      From64 := From64 + Count64 - 1;
+      To64 := To64 + Count64 - 1;
+    end;
+
+    while Count64 > 0 do
+    begin
+      if View.HasIndex64(From64) then
+        View.Obj.AssignProperty(IntToStr(To64), View.Get64(From64))
+      else if not View.Obj.DeleteProperty(IntToStr(To64)) then
+        ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [IntToStr(To64)]),
+          SSuggestCannotDeleteNonConfigurable);
+      From64 := From64 + Direction;
+      To64 := To64 + Direction;
+      Dec(Count64);
+    end;
+
+    Result := View.Obj;
+    Exit;
+  end;
 
   // Step 3: Let relativeTarget be ToIntegerOrInfinity(target)
   Target := ToIntegerFromArgs(AArgs);
@@ -2886,12 +3021,9 @@ begin
   end;
 
   if AArgs.Length < 1 then
-  begin
-    Result := TGocciaNumberLiteralValue.Create(-1);
-    Exit;
-  end;
-
-  SearchValue := AArgs.GetElement(0);
+    SearchValue := TGocciaUndefinedLiteralValue.UndefinedValue
+  else
+    SearchValue := AArgs.GetElement(0);
 
   // Sparse iteration path for generic array-likes whose claimed length
   // exceeds 2^32 - 1.  The dense Integer loop would saturate to MaxInt and
@@ -2969,12 +3101,9 @@ begin
   end;
 
   if AArgs.Length < 1 then
-  begin
-    Result := TGocciaNumberLiteralValue.Create(-1);
-    Exit;
-  end;
-
-  SearchValue := AArgs.GetElement(0);
+    SearchValue := TGocciaUndefinedLiteralValue.UndefinedValue
+  else
+    SearchValue := AArgs.GetElement(0);
 
   // Sparse iteration path for generic array-likes whose claimed length
   // exceeds 2^32 - 1.  See ArrayIndexOf for rationale.
@@ -3036,6 +3165,7 @@ end;
 function IsConcatSpreadable(const AValue: TGocciaValue): Boolean;
 var
   Spreadable: TGocciaValue;
+  Probe: TGocciaValue;
 begin
   if not (AValue is TGocciaObjectValue) then
   begin
@@ -3050,7 +3180,14 @@ begin
     Exit;
   end;
   // Step 2: Return IsArray(O)
-  Result := AValue is TGocciaArrayValue;
+  Probe := AValue;
+  while Probe is TGocciaProxyValue do
+  begin
+    if TGocciaProxyValue(Probe).Revoked then
+      ThrowTypeError(SErrorProxyRevoked, SSuggestProxyRevoked);
+    Probe := TGocciaProxyValue(Probe).Target;
+  end;
+  Result := Probe is TGocciaArrayValue;
 end;
 
 // Spread a concat-spreadable value into the result array using array-like
@@ -3061,6 +3198,9 @@ var
   SrcView: TArrayLikeView;
   J: Integer;
   EndN: Double;
+  Sparse: TArray<Int64>;
+  K, Target64: Int64;
+  Element: TGocciaValue;
 begin
   SrcView.Init(ASource);
   // ES2026 §23.1.3.1 step 5.c.iii.2: if n + len > 2^53 - 1, throw TypeError.
@@ -3069,6 +3209,30 @@ begin
     ThrowTypeError(
       'Array length exceeds maximum safe integer (2^53 - 1)',
       'use a smaller length');
+
+  if SrcView.NeedsSparsePath then
+  begin
+    Sparse := CollectSparseIndicesInRange(SrcView.Obj, 0, SrcView.Len64);
+    for K in Sparse do
+    begin
+      Element := SrcView.Get64(K);
+      Target64 := Int64(N) + K;
+      if Target64 > MaxInt then
+        ThrowRangeError(
+          'Array length exceeds engine maximum (MaxInt)',
+          'use a smaller length');
+      ArrayCreateDataProperty(AResult, Integer(Target64), Element);
+    end;
+    if EndN > MAX_ARRAY_LENGTH_F then
+      ThrowRangeError(SErrorInvalidArrayLength, SSuggestArrayLengthRange);
+    if EndN > MaxInt then
+      ThrowRangeError(
+        'Array length exceeds engine maximum (MaxInt)',
+        'use a smaller length');
+    N := Trunc(EndN);
+    Exit;
+  end;
+
   // Pragmatic guards: this implementation tracks `n` as an Integer and
   // cannot materialise more than 2^32 - 1 elements in a native array.  A
   // source length that would carry `n` past that bound is rejected up-front
@@ -3088,24 +3252,30 @@ begin
       ArrayCreateDataProperty(AResult, N, SrcView.Get(J));
     Inc(N);
   end;
-  // Ensure result reflects trailing holes from this spread.
-  AResult.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.Create(N));
 end;
 
 // ES2026 §23.1.3.1 Array.prototype.concat(...arguments)
 function TGocciaArrayValue.ArrayConcat(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
-  View: TArrayLikeView;
+  Obj: TGocciaObjectValue;
+  ArrayProbe: TGocciaValue;
   ResultArray: TGocciaObjectValue;
   I, N: Integer;
   Arg: TGocciaValue;
 begin
   // Step 1: Let O be ToObject(this value)
-  View.Init(AThisValue);
+  Obj := ToObject(AThisValue);
+  ArrayProbe := Obj;
+  while ArrayProbe is TGocciaProxyValue do
+  begin
+    if TGocciaProxyValue(ArrayProbe).Revoked then
+      ThrowTypeError(SErrorProxyRevoked, SSuggestProxyRevoked);
+    ArrayProbe := TGocciaProxyValue(ArrayProbe).Target;
+  end;
 
   // Step 2: Let A be ArraySpeciesCreate(O, 0)
-  if Assigned(View.SpeciesArr) then
-    ResultArray := ArraySpeciesCreate(View.SpeciesArr, 0)
+  if ArrayProbe is TGocciaArrayValue then
+    ResultArray := ArraySpeciesCreate(Obj, 0)
   else
     ResultArray := TGocciaArrayValue.Create;
 
@@ -3113,11 +3283,11 @@ begin
   N := 0;
 
   // Step 4: Prepend O to items — check IsConcatSpreadable
-  if IsConcatSpreadable(View.Obj) then
-    SpreadIntoConcat(View.Obj, ResultArray, N)
+  if IsConcatSpreadable(Obj) then
+    SpreadIntoConcat(Obj, ResultArray, N)
   else
   begin
-    ArrayCreateDataProperty(ResultArray, N, View.Obj);
+    ArrayCreateDataProperty(ResultArray, N, Obj);
     Inc(N);
   end;
 
@@ -3160,9 +3330,9 @@ begin
   begin
     // ES2026 §23.1.3.23 steps 4a-i: preserve sparsity via HasProperty/Delete
     LowerExists := View.HasIndex(I);
-    UpperExists := View.HasIndex(J);
     if LowerExists then
       Lower := View.Get(I);
+    UpperExists := View.HasIndex(J);
     if UpperExists then
       Upper := View.Get(J);
 
@@ -3308,7 +3478,9 @@ begin
 
   // Step 5: If skipCount is not present, let actualSkipCount be len - actualStart
   // Step 6: Else let actualSkipCount be min(max(ToIntegerOrInfinity(skipCount), 0), len - actualStart)
-  if AArgs.Length > 1 then
+  if AArgs.Length = 0 then
+    RawActualSkipCount := 0
+  else if AArgs.Length > 1 then
   begin
     RawSkipCount := AArgs.GetElement(1).ToNumberLiteral.Value;
     if IsNaN(RawSkipCount) then
@@ -3568,6 +3740,10 @@ begin
   end
   else if AName = PROP_LENGTH then
   begin
+    if not FLengthWritable then
+      ThrowTypeError(Format(SErrorCannotAssignReadOnly, [AName]),
+        SSuggestCannotDeleteNonConfigurable);
+
     // §10.4.2.1 → OrdinarySet → OrdinarySetWithOwnDescriptor step 3e:
     // own writable data property ⇒ [[DefineOwnProperty]](P, {[[Value]]: V})
     Desc := TGocciaPropertyDescriptorData.CreatePartial(AValue, [],
@@ -3987,9 +4163,12 @@ begin
   if AArgs.Length < 1 then
   begin
     if Assigned(View.SpeciesArr) then
-      Removed := ArraySpeciesCreate(View.SpeciesArr, 0)
+      Removed := ArraySpeciesCreate(View.Obj, 0)
     else
       Removed := TGocciaArrayValue.Create;
+    if not (Assigned(View.Arr) and View.Arr.FLengthWritable) then
+      View.Obj.AssignProperty(PROP_LENGTH,
+        TGocciaNumberLiteralValue.Create(View.RawLen));
     Result := Removed;
     Exit;
   end;
@@ -4050,7 +4229,7 @@ begin
 
   // Step 10: Let A be ArraySpeciesCreate(O, actualDeleteCount)
   if Assigned(View.SpeciesArr) then
-    Removed := ArraySpeciesCreate(View.SpeciesArr, DeleteCount)
+    Removed := ArraySpeciesCreate(View.Obj, DeleteCount)
   else
     Removed := TGocciaArrayValue.Create;
 
@@ -4233,9 +4412,13 @@ begin
   // length > MaxInt aren't truncated back to View.Len.
   if ArgCount = 0 then
   begin
-    if not Assigned(View.Arr) then
-      View.Obj.AssignProperty(PROP_LENGTH,
-        TGocciaNumberLiteralValue.Create(View.RawLen));
+    if Assigned(View.Arr) and View.Arr.FLengthWritable then
+    begin
+      Result := TGocciaNumberLiteralValue.Create(View.RawLen);
+      Exit;
+    end;
+    View.Obj.AssignProperty(PROP_LENGTH,
+      TGocciaNumberLiteralValue.Create(View.RawLen));
     Result := TGocciaNumberLiteralValue.Create(View.RawLen);
     Exit;
   end;
@@ -4248,14 +4431,15 @@ begin
   for I := View.Len - 1 downto 0 do
   begin
     if View.HasIndex(I) then
-      View.Put(I + ArgCount, View.Get(I))
+      View.Obj.AssignProperty(IntToStr(I + ArgCount), View.Get(I))
     else
       View.DeleteIndex(I + ArgCount);
   end;
   // Set items at front
   for I := 0 to ArgCount - 1 do
-    View.Put(I, AArgs.GetElement(I));
-  View.SetLen(NewLen);
+    View.Obj.AssignProperty(IntToStr(I), AArgs.GetElement(I));
+  if (not Assigned(View.Arr)) or (View.Arr.FLength <> NewLen) then
+    View.SetLen(NewLen);
 
   // Step 7: Return len + argCount
   Result := TGocciaNumberLiteralValue.Create(NewLen);
@@ -4267,6 +4451,7 @@ var
   View: TArrayLikeView;
   FillValue: TGocciaValue;
   StartIdx, EndIdx, I: Integer;
+  Start64, End64, I64: Int64;
 begin
   // Step 1: Let O be ToObject(this value)
   View.Init(AThisValue);
@@ -4276,6 +4461,30 @@ begin
     FillValue := TGocciaUndefinedLiteralValue.UndefinedValue
   else
     FillValue := AArgs.GetElement(0);
+
+  if View.NeedsSparsePath then
+  begin
+    Start64 := NormalizeRelativeIndex64(ToInteger64FromArgs(AArgs, 1), View.Len64);
+    if (AArgs.Length > 2) and
+       not (AArgs.GetElement(2) is TGocciaUndefinedLiteralValue) then
+      End64 := NormalizeRelativeIndex64(ToInteger64FromArgs(AArgs, 2), View.Len64)
+    else
+      End64 := View.Len64;
+
+    if (View.Obj is TGocciaStringObjectValue) and (Start64 < End64) then
+      ThrowTypeError(Format(SErrorCannotAssignReadOnly, [IntToStr(Start64)]),
+        SSuggestCannotDeleteNonConfigurable);
+
+    I64 := Start64;
+    while I64 < End64 do
+    begin
+      View.Obj.AssignProperty(IntToStr(I64), FillValue);
+      Inc(I64);
+    end;
+
+    Result := View.Obj;
+    Exit;
+  end;
 
   // Step 4: Let relativeStart be ToIntegerOrInfinity(start)
   StartIdx := ToIntegerFromArgs(AArgs, 1);
@@ -4291,6 +4500,10 @@ begin
   StartIdx := NormalizeRelativeIndex(StartIdx, View.Len);
   // Step 7: If relativeEnd < 0, let final be max(len + relativeEnd, 0); else min(relativeEnd, len)
   EndIdx := NormalizeRelativeIndex(EndIdx, View.Len);
+
+  if (View.Obj is TGocciaStringObjectValue) and (StartIdx < EndIdx) then
+    ThrowTypeError(Format(SErrorCannotAssignReadOnly, [IntToStr(StartIdx)]),
+      SSuggestCannotDeleteNonConfigurable);
 
   // Step 8: Repeat, while k < final — Set(O, ToString(k), value)
   for I := StartIdx to EndIdx - 1 do

@@ -830,7 +830,7 @@ const
         '      const elementString = (index: number): string => {'#10 +
         '        const nextElement: any = array[index];'#10 +
         '        if (nextElement !== undefined && nextElement !== null) {'#10 +
-        '          const method: any = Object(nextElement).toLocaleString;'#10 +
+        '          const method: any = nextElement.toLocaleString;'#10 +
         '          if (typeof method !== "function")'#10 +
         '            throw new TypeError("Array.prototype.toLocaleString element toLocaleString is not a function");'#10 +
         '          return String(method.call(nextElement, args[0], args[1]));'#10 +

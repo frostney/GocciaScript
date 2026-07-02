@@ -171,6 +171,8 @@ type
     function TypedArrayOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
+function IsTypedArrayOutOfBounds(const AArray: TGocciaTypedArrayValue): Boolean;
+
 implementation
 
 uses
@@ -240,8 +242,6 @@ begin
   else
     Result := nil;
 end;
-
-function IsTypedArrayOutOfBounds(const AArray: TGocciaTypedArrayValue): Boolean; forward;
 
 function IsTypedArrayBackedByImmutableArrayBuffer(
   const AArray: TGocciaTypedArrayValue): Boolean; forward;
@@ -967,6 +967,7 @@ end;
 
 function TGocciaTypedArrayValue.GetProperty(const AName: string): TGocciaValue;
 var
+  Descriptor: TGocciaPropertyDescriptor;
   IsNegativeZero: Boolean;
   Index: Integer;
   NumericIndex: Double;
@@ -979,6 +980,10 @@ begin
       Result := TGocciaUndefinedLiteralValue.UndefinedValue;
     Exit;
   end;
+  Descriptor := inherited GetOwnPropertyDescriptor(AName);
+  if Assigned(Descriptor) then
+    Exit(inherited GetProperty(AName));
+
   if AName = PROP_LENGTH then
     Exit(TGocciaNumberLiteralValue.Create(GetLength));
   if AName = PROP_BYTE_LENGTH then

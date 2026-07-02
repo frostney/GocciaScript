@@ -301,22 +301,22 @@ begin
         try
           // Step 5d-e: Iterate
           K := 0;
-          try
-            IterResult := Iterator.AdvanceNext;
-            while not IteratorResultDone(IterResult) do
-            begin
-              KValue := IteratorResultValue(IterResult);
+          IterResult := Iterator.AdvanceNext;
+          while not IteratorResultDone(IterResult) do
+          begin
+            KValue := IteratorResultValue(IterResult);
+            try
               if Mapping then
                 KValue := InvokeMapCallbackRooted(KValue, K);
               // Step 5e-v: CreateDataPropertyOrThrow(A, ToString(k), mappedValue)
               CreateDataPropertyRooted(K, KValue);
-              Inc(K);
-              IterResult := Iterator.AdvanceNext;
+            except
+              AcquireExceptionObject;
+              CloseIteratorPreservingError(Iterator);
+              raise;
             end;
-          except
-            AcquireExceptionObject;
-            CloseIteratorPreservingError(Iterator);
-            raise;
+            Inc(K);
+            IterResult := Iterator.AdvanceNext;
           end;
         finally
           RemoveTempRootIfNeeded(IteratorRoot);
