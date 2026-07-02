@@ -1,5 +1,6 @@
 describe("Boolean.prototype.valueOf", () => {
   test("returns primitive boolean values", () => {
+    expect(Boolean.prototype.valueOf()).toBe(false);
     expect(Boolean.prototype.valueOf.call(true)).toBe(true);
     expect(Boolean.prototype.valueOf.call(false)).toBe(false);
     expect(new Boolean(true).valueOf()).toBe(true);

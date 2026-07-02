@@ -10,6 +10,39 @@ describe("Number constructor", () => {
     expect(n.toFixed(2)).toBe("3.14");
   });
 
+  test("Number wrapper prototypes are wired to the realm intrinsics", () => {
+    expect(Object.getPrototypeOf(Number.prototype)).toBe(Object.prototype);
+    expect(Object.getPrototypeOf(new Number(1))).toBe(Number.prototype);
+  });
+
+  test("boxed Number respects an explicit null prototype", () => {
+    const boxed = Object(7);
+
+    Object.setPrototypeOf(boxed, null);
+
+    expect(Object.getPrototypeOf(boxed)).toBeNull();
+    expect(boxed.valueOf).toBeUndefined();
+    expect(boxed.toString).toBeUndefined();
+  });
+
+  test("newTarget fallback uses intrinsic Number.prototype, not mutable global Number", () => {
+    const OriginalNumber = Number;
+    const originalPrototype = Number.prototype;
+    const fakePrototype = {};
+
+    const NewTarget = Object.defineProperty((class Target {}).bind(null), "prototype", {
+      value: null,
+    });
+
+    globalThis.Number = { prototype: fakePrototype };
+    try {
+      const boxed = Reflect.construct(OriginalNumber, [3], NewTarget);
+      expect(Object.getPrototypeOf(boxed)).toBe(originalPrototype);
+    } finally {
+      globalThis.Number = OriginalNumber;
+    }
+  });
+
   test("Number() as function returns primitive", () => {
     const n = Number("42");
     expect(typeof n).toBe("number");

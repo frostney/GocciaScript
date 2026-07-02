@@ -31,6 +31,12 @@ describe("Number.prototype.toExponential", () => {
     expect(result).toBe("0.00e+0");
   });
 
+  test("rounds explicit fraction digits from the binary64 value", () => {
+    expect((123.456).toExponential(17)).toBe("1.23456000000000003e+2");
+    expect((0.0001).toExponential(20)).toBe("1.00000000000000004792e-4");
+    expect((0.9999).toExponential(20)).toBe("9.99900000000000011013e-1");
+  });
+
   test("throws RangeError for negative fraction digits", () => {
     expect(() => (1).toExponential(-1)).toThrow(RangeError);
   });
@@ -47,5 +53,16 @@ describe("Number.prototype.toExponential non-finite digits", () => {
 
   test("-Infinity digits throws RangeError", () => {
     expect(() => (5).toExponential(-Infinity)).toThrow(RangeError);
+  });
+
+  test("non-finite receivers still coerce explicit fraction digits first", () => {
+    expect(NaN.toExponential(Infinity)).toBe("NaN");
+    expect(Infinity.toExponential(1000)).toBe("Infinity");
+    expect(() => NaN.toExponential(Symbol("digits"))).toThrow(TypeError);
+    expect(() => NaN.toExponential({
+      valueOf() {
+        throw new Error("digits");
+      },
+    })).toThrow(Error);
   });
 });

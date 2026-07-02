@@ -14,6 +14,11 @@ describe("Number.prototype.valueOf", () => {
     expect((-0).valueOf()).toBe(-0);
   });
 
+  test("Number.prototype has +0 Number data", () => {
+    expect(Number.prototype.valueOf()).toBe(0);
+    expect(1 / Number.prototype.valueOf()).toBe(Infinity);
+  });
+
   test("valueOf on negative numbers", () => {
     expect((-5).valueOf()).toBe(-5);
     expect((-3.14).valueOf()).toBe(-3.14);

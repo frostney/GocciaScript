@@ -89,6 +89,7 @@ begin
 
   // Set up BigInt.prototype
   Proto := TGocciaObjectValue(TGocciaBigIntValue.SharedPrototype);
+  Proto.Prototype := TGocciaObjectValue.SharedObjectPrototype;
 
   // ES2026 §21.2.3.1 BigInt.prototype.constructor
   Proto.DefineProperty(PROP_CONSTRUCTOR,
