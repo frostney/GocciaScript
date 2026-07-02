@@ -1443,7 +1443,9 @@ end;
 function EvaluateGeneratorAwait(const AAwaitExpression: TGocciaAwaitExpression;
   const AContext: TGocciaEvaluationContext): TGocciaValue;
 begin
-  if not Assigned(GCurrentContinuation) or GCurrentContinuation.IsAsyncGenerator then
+  if not Assigned(GCurrentContinuation) or
+     (GCurrentContinuation.IsAsyncGenerator and
+      not AsyncAwaitSuspensionEnabled) then
     Result := AwaitValue(EvaluateExpression(AAwaitExpression.Operand, AContext))
   else
     Result := GCurrentContinuation.AwaitExpressionValue(
