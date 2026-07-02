@@ -380,7 +380,7 @@ begin
     Exit;
 
   SharedPrototype := GetSharedNumberPrototype;
-  if Assigned(SharedPrototype) and
+  if not Assigned(Prototype) and Assigned(SharedPrototype) and
      (SharedPrototype <> TGocciaObjectValue(Self)) then
     Result := SharedPrototype.GetPropertyWithContext(AName, AThisContext);
 end;

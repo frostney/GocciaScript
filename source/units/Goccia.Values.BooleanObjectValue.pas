@@ -78,7 +78,8 @@ begin
   FPrimitive := APrimitive;
   InitializePrototype;
   SharedPrototype := GetSharedBooleanPrototype;
-  if not Assigned(AClass) and Assigned(SharedPrototype) then
+  if not Assigned(AClass) and Assigned(SharedPrototype) and
+     (SharedPrototype <> TGocciaObjectValue(Self)) then
     FPrototype := SharedPrototype;
 end;
 
@@ -91,7 +92,7 @@ begin
   if not Assigned(CurrentRealm) then Exit;
   if Assigned(GetSharedBooleanPrototype) then Exit;
 
-  SharedPrototype := TGocciaObjectValue.Create;
+  SharedPrototype := Self;
   CurrentRealm.SetSlot(GBooleanPrototypeSlot, SharedPrototype);
   // The native methods below bind to this instance (Self); keep it alive for the
   // realm's lifetime in its own slot so the realm unpins it on Destroy. #892
@@ -118,13 +119,17 @@ begin
 end;
 
 function TGocciaBooleanObjectValue.GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue;
+var
+  SharedPrototype: TGocciaObjectValue;
 begin
   Result := inherited GetPropertyWithContext(AName, AThisContext);
   if not (Result is TGocciaUndefinedLiteralValue) then
     Exit;
 
-  if Assigned(GetSharedBooleanPrototype) then
-    Result := GetSharedBooleanPrototype.GetPropertyWithContext(AName, AThisContext);
+  SharedPrototype := GetSharedBooleanPrototype;
+  if not Assigned(Prototype) and Assigned(SharedPrototype) and
+     (SharedPrototype <> TGocciaObjectValue(Self)) then
+    Result := SharedPrototype.GetPropertyWithContext(AName, AThisContext);
 end;
 
 class function TGocciaBooleanObjectValue.GetSharedPrototype: TGocciaObjectValue;

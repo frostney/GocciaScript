@@ -73,14 +73,16 @@ begin
 end;
 
 function TGocciaBigIntObjectValue.GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue;
+var
+  SharedPrototype: TGocciaObjectValue;
 begin
   Result := inherited GetPropertyWithContext(AName, AThisContext);
   if not (Result is TGocciaUndefinedLiteralValue) then
     Exit;
 
-  if Assigned(TGocciaBigIntValue.SharedPrototype) then
-    Result := TGocciaObjectValue(TGocciaBigIntValue.SharedPrototype)
-      .GetPropertyWithContext(AName, AThisContext);
+  SharedPrototype := TGocciaObjectValue(TGocciaBigIntValue.SharedPrototype);
+  if not Assigned(Prototype) and Assigned(SharedPrototype) then
+    Result := SharedPrototype.GetPropertyWithContext(AName, AThisContext);
 end;
 
 class function TGocciaBigIntObjectValue.GetSharedPrototype: TGocciaObjectValue;

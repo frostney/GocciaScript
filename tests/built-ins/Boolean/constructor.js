@@ -5,6 +5,11 @@ describe("Boolean constructor", () => {
     expect(b.valueOf()).toBe(true);
   });
 
+  test("Boolean wrapper prototypes are wired to the realm intrinsics", () => {
+    expect(Object.getPrototypeOf(Boolean.prototype)).toBe(Object.prototype);
+    expect(Object.getPrototypeOf(new Boolean(true))).toBe(Boolean.prototype);
+  });
+
   test("new Boolean(false).valueOf() is false", () => {
     const b = new Boolean(false);
     expect(b.valueOf()).toBe(false);
