@@ -79,6 +79,7 @@ function TryICUFormatRelativeTimeToParts(const ALocale: string; AValue: Double;
 
 function TryICUGetDefaultLocale(out ALocale: string): Boolean;
 
+function TryICUNormalize(const AForm, AStr: string; out AResult: string): Boolean;
 function TryICUUpperCase(const ALocale, AStr: string; out AResult: string): Boolean;
 function TryICULowerCase(const ALocale, AStr: string; out AResult: string): Boolean;
 
@@ -433,11 +434,14 @@ type
   TUcasemapOpen = function(const ALocale: PAnsiChar; AOptions: LongInt;
     var AStatus: TICUErrorCode): TUCaseMap; cdecl;
   TUcasemapClose = procedure(ACsm: TUCaseMap); cdecl;
-  TUcasemapUtf8ToUpper = function(ACsm: TUCaseMap; ADest: PAnsiChar;
+  TUcasemapUtf8Map = function(ACsm: TUCaseMap; ADest: PAnsiChar;
     ADestCapacity: LongInt; const ASrc: PAnsiChar; ASrcLength: LongInt;
     var AStatus: TICUErrorCode): LongInt; cdecl;
-  TUcasemapUtf8ToLower = function(ACsm: TUCaseMap; ADest: PAnsiChar;
-    ADestCapacity: LongInt; const ASrc: PAnsiChar; ASrcLength: LongInt;
+  TUcasemapUtf8ToUpper = TUcasemapUtf8Map;
+  TUcasemapUtf8ToLower = TUcasemapUtf8Map;
+  TUnorm2GetInstance = function(var AStatus: TICUErrorCode): Pointer; cdecl;
+  TUnorm2Normalize = function(ANormalizer: Pointer; const ASrc: PUChar;
+    ASrcLength: LongInt; ADest: PUChar; ADestCapacity: LongInt;
     var AStatus: TICUErrorCode): LongInt; cdecl;
   TIntlICUFunctions = record
     UlocGetDefault: TUlocGetDefault;
@@ -536,6 +540,11 @@ type
     UcasemapClose: TUcasemapClose;
     UcasemapUtf8ToUpper: TUcasemapUtf8ToUpper;
     UcasemapUtf8ToLower: TUcasemapUtf8ToLower;
+    Unorm2GetNFCInstance: TUnorm2GetInstance;
+    Unorm2GetNFDInstance: TUnorm2GetInstance;
+    Unorm2GetNFKCInstance: TUnorm2GetInstance;
+    Unorm2GetNFKDInstance: TUnorm2GetInstance;
+    Unorm2Normalize: TUnorm2Normalize;
   end;
 
   TICUFieldSpan = record
@@ -812,6 +821,16 @@ begin
   if Assigned(S) then F.UcasemapUtf8ToUpper := TUcasemapUtf8ToUpper(S);
   S := ResolveSymbol(AHandle, 'ucasemap_utf8ToLower');
   if Assigned(S) then F.UcasemapUtf8ToLower := TUcasemapUtf8ToLower(S);
+  S := ResolveSymbol(AHandle, 'unorm2_getNFCInstance');
+  if Assigned(S) then F.Unorm2GetNFCInstance := TUnorm2GetInstance(S);
+  S := ResolveSymbol(AHandle, 'unorm2_getNFDInstance');
+  if Assigned(S) then F.Unorm2GetNFDInstance := TUnorm2GetInstance(S);
+  S := ResolveSymbol(AHandle, 'unorm2_getNFKCInstance');
+  if Assigned(S) then F.Unorm2GetNFKCInstance := TUnorm2GetInstance(S);
+  S := ResolveSymbol(AHandle, 'unorm2_getNFKDInstance');
+  if Assigned(S) then F.Unorm2GetNFKDInstance := TUnorm2GetInstance(S);
+  S := ResolveSymbol(AHandle, 'unorm2_normalize');
+  if Assigned(S) then F.Unorm2Normalize := TUnorm2Normalize(S);
 
   IntlFunctions := F;
   Result := True;
@@ -3867,11 +3886,76 @@ begin
   Result := ALocale <> '';
 end;
 
-function TryICUUpperCase(const ALocale, AStr: string; out AResult: string): Boolean;
+function TryICUNormalize(const AForm, AStr: string; out AResult: string): Boolean;
+var
+  Getter: TUnorm2GetInstance;
+  Normalizer: Pointer;
+  Status: TICUErrorCode;
+  Source, Normalized: UnicodeString;
+  Buffer: array of WideChar;
+  Capacity, ResultLen: LongInt;
+begin
+  Result := False;
+  AResult := AStr;
+
+  if not EnsureLoaded then
+    Exit;
+
+  if not Assigned(IntlFunctions.Unorm2Normalize) then
+    Exit;
+
+  Getter := nil;
+  if AForm = 'NFC' then
+    Getter := IntlFunctions.Unorm2GetNFCInstance
+  else if AForm = 'NFD' then
+    Getter := IntlFunctions.Unorm2GetNFDInstance
+  else if AForm = 'NFKC' then
+    Getter := IntlFunctions.Unorm2GetNFKCInstance
+  else if AForm = 'NFKD' then
+    Getter := IntlFunctions.Unorm2GetNFKDInstance;
+
+  if not Assigned(Getter) then
+    Exit;
+
+  Status := ICU_SUCCESS;
+  Normalizer := Getter(Status);
+  if not ICUSucceeded(Status) or not Assigned(Normalizer) then
+    Exit;
+
+  Source := UnicodeString(AStr);
+  Capacity := Max(Length(Source) * 4 + 8, 8);
+  repeat
+    SetLength(Buffer, Capacity);
+    Status := ICU_SUCCESS;
+    ResultLen := IntlFunctions.Unorm2Normalize(Normalizer,
+      PWideChar(Source), Length(Source), @Buffer[0], Capacity, Status);
+    if (Status = ICU_BUFFER_OVERFLOW) or (ResultLen > Capacity) then
+      Capacity := Max(ResultLen, Capacity * 2)
+    else
+      Break;
+  until False;
+
+  if not ICUSucceeded(Status) or (ResultLen < 0) then
+    Exit;
+
+  if ResultLen = 0 then
+    AResult := ''
+  else
+  begin
+    SetLength(Normalized, ResultLen);
+    Move(Buffer[0], Normalized[1], ResultLen * SizeOf(WideChar));
+    AResult := string(Normalized);
+  end;
+  Result := True;
+end;
+
+function TryICUCaseMapUTF8(const ALocale, AStr: string;
+  AMap: TUcasemapUtf8ToUpper; out AResult: string): Boolean;
 var
   Status: TICUErrorCode;
   CaseMap: TUCaseMap;
-  DestBuf: array[0..1023] of AnsiChar;
+  DestBuf: array of AnsiChar;
+  DestCapacity: LongInt;
   ResultLen: LongInt;
   LocaleAnsi, SrcAnsi: AnsiString;
   ResultUtf8: UTF8String;
@@ -3883,8 +3967,7 @@ begin
     Exit;
 
   if not Assigned(IntlFunctions.UcasemapOpen) or
-     not Assigned(IntlFunctions.UcasemapClose) or
-     not Assigned(IntlFunctions.UcasemapUtf8ToUpper) then
+     not Assigned(IntlFunctions.UcasemapClose) or not Assigned(AMap) then
     Exit;
 
   LocaleAnsi := AnsiString(ALocale);
@@ -3896,11 +3979,19 @@ begin
     Exit;
 
   try
-    FillChar(DestBuf, SizeOf(DestBuf), 0);
-    Status := ICU_SUCCESS;
-    ResultLen := IntlFunctions.UcasemapUtf8ToUpper(CaseMap,
-      @DestBuf[0], 1024, PAnsiChar(SrcAnsi), Length(SrcAnsi), Status);
-    if not ICUSucceeded(Status) or (ResultLen <= 0) then
+    DestCapacity := Max(Length(SrcAnsi) * 4 + 8, 8);
+    repeat
+      SetLength(DestBuf, DestCapacity);
+      Status := ICU_SUCCESS;
+      ResultLen := AMap(CaseMap, @DestBuf[0], DestCapacity,
+        PAnsiChar(SrcAnsi), Length(SrcAnsi), Status);
+      if (Status = ICU_BUFFER_OVERFLOW) or (ResultLen > DestCapacity) then
+        DestCapacity := Max(ResultLen, DestCapacity * 2)
+      else
+        Break;
+    until False;
+
+    if not ICUSucceeded(Status) or (ResultLen < 0) then
       Exit;
 
     SetLength(ResultUtf8, ResultLen);
@@ -3913,50 +4004,26 @@ begin
   end;
 end;
 
-function TryICULowerCase(const ALocale, AStr: string; out AResult: string): Boolean;
-var
-  Status: TICUErrorCode;
-  CaseMap: TUCaseMap;
-  DestBuf: array[0..1023] of AnsiChar;
-  ResultLen: LongInt;
-  LocaleAnsi, SrcAnsi: AnsiString;
-  ResultUtf8: UTF8String;
+function TryICUUpperCase(const ALocale, AStr: string; out AResult: string): Boolean;
 begin
-  Result := False;
-  AResult := AStr;
-
   if not EnsureLoaded then
-    Exit;
-
-  if not Assigned(IntlFunctions.UcasemapOpen) or
-     not Assigned(IntlFunctions.UcasemapClose) or
-     not Assigned(IntlFunctions.UcasemapUtf8ToLower) then
-    Exit;
-
-  LocaleAnsi := AnsiString(ALocale);
-  SrcAnsi := AnsiString(UTF8Encode(UnicodeString(AStr)));
-
-  Status := ICU_SUCCESS;
-  CaseMap := IntlFunctions.UcasemapOpen(PAnsiChar(LocaleAnsi), 0, Status);
-  if not ICUSucceeded(Status) or not Assigned(CaseMap) then
-    Exit;
-
-  try
-    FillChar(DestBuf, SizeOf(DestBuf), 0);
-    Status := ICU_SUCCESS;
-    ResultLen := IntlFunctions.UcasemapUtf8ToLower(CaseMap,
-      @DestBuf[0], 1024, PAnsiChar(SrcAnsi), Length(SrcAnsi), Status);
-    if not ICUSucceeded(Status) or (ResultLen <= 0) then
-      Exit;
-
-    SetLength(ResultUtf8, ResultLen);
-    if ResultLen > 0 then
-      Move(DestBuf[0], ResultUtf8[1], ResultLen);
-    AResult := string(UTF8Decode(ResultUtf8));
-    Result := True;
-  finally
-    IntlFunctions.UcasemapClose(CaseMap);
+  begin
+    AResult := AStr;
+    Exit(False);
   end;
+  Result := TryICUCaseMapUTF8(ALocale, AStr,
+    IntlFunctions.UcasemapUtf8ToUpper, AResult);
+end;
+
+function TryICULowerCase(const ALocale, AStr: string; out AResult: string): Boolean;
+begin
+  if not EnsureLoaded then
+  begin
+    AResult := AStr;
+    Exit(False);
+  end;
+  Result := TryICUCaseMapUTF8(ALocale, AStr,
+    IntlFunctions.UcasemapUtf8ToLower, AResult);
 end;
 
 initialization

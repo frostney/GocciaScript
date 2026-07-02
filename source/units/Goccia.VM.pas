@@ -704,6 +704,19 @@ function BytecodePrivateTokenForKey(const AKey,
 function BytecodePrivateReceiverBrandToken(
   const AObject: TGocciaValue): string; forward;
 
+function UTF16CodeUnitImmediateToUTF8(const ACodeUnit: UInt16): string;
+begin
+  if ACodeUnit <= $7F then
+    Result := Chr(ACodeUnit)
+  else if ACodeUnit <= $7FF then
+    Result := Chr($C0 or (ACodeUnit shr 6)) +
+      Chr($80 or (ACodeUnit and $3F))
+  else
+    Result := Chr($E0 or (ACodeUnit shr 12)) +
+      Chr($80 or ((ACodeUnit shr 6) and $3F)) +
+      Chr($80 or (ACodeUnit and $3F));
+end;
+
 { TGocciaVMDirectEvalScope }
 
 constructor TGocciaVMDirectEvalScope.Create(const AParent: TGocciaScope;
@@ -12908,6 +12921,10 @@ begin
         else
           FRegisters[A] := ValueToRegister(
             ConstantToValue(Template.GetConstantUnchecked(DecodeBx(Instruction))));
+
+      OP_LOAD_CHAR:
+        FRegisters[A] := ValueToRegister(TGocciaStringLiteralValue.Create(
+          UTF16CodeUnitImmediateToUTF8(DecodeBx(Instruction))));
 
       OP_LOAD_REGEXP:
         FRegisters[A] := ValueToRegister(

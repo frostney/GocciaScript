@@ -123,8 +123,13 @@ test("forward backreference resolves correctly", () => {
   expect(result.groups.word).toBe("hello");
 });
 
-test("invalid named backreference throws", () => {
+test("unknown named backreference is legacy literal when no named groups exist", () => {
+  const re = new RegExp("\\k<nosuchgroup>");
+  expect(re.test("k<nosuchgroup>")).toBe(true);
+});
+
+test("invalid named backreference throws when named groups exist", () => {
   expect(() => {
-    new RegExp("\\k<nosuchgroup>");
+    new RegExp("(?<x>a)\\k<nosuchgroup>");
   }).toThrow();
 });

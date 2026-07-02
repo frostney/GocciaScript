@@ -1048,7 +1048,8 @@ begin
     end
     else
     begin
-      Pattern := PatternArg.ToStringLiteral.Value;
+      if not (PatternArg is TGocciaUndefinedLiteralValue) then
+        Pattern := PatternArg.ToStringLiteral.Value;
       if (AArgs.Length > 1) and
          not (AArgs.GetElement(1) is TGocciaUndefinedLiteralValue) then
         Flags := AArgs.GetElement(1).ToStringLiteral.Value;
@@ -1107,7 +1108,8 @@ begin
     GRegExpPrototypeSlot);
 
   // §22.2.4.1 step 7: RegExpInitialize — remaining ToString coercions
-  if not PatternIsRegExp and (AArgs.Length > 0) then
+  if not PatternIsRegExp and (AArgs.Length > 0) and
+     not (PatternArg is TGocciaUndefinedLiteralValue) then
     Pattern := PatternArg.ToStringLiteral.Value;
   if FlagsProvided then
     Flags := AArgs.GetElement(1).ToStringLiteral.Value;
@@ -1184,7 +1186,7 @@ begin
   else
     Input := TGocciaUndefinedLiteralValue.UndefinedValue.ToStringLiteral.Value;
 
-  if MatchRegExpObjectOnce(AThisValue, Input, MatchValue) then
+  if MatchRegExpBuiltinObjectOnce(AThisValue, Input, MatchValue) then
     Result := MatchValue
   else
     Result := TGocciaNullLiteralValue.NullValue;

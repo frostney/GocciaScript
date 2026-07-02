@@ -21,6 +21,11 @@ describe("String.prototype.toWellFormed", () => {
     expect(emoji.toWellFormed()).toBe(emoji);
   });
 
+  test("surrogate pair formed by concatenation is preserved", () => {
+    const emoji = "\uD83D" + "\uDCA9";
+    expect(("a" + emoji + "d").toWellFormed()).toBe("a" + emoji + "d");
+  });
+
   test("lone high surrogate is replaced with U+FFFD", () => {
     expect("\uD800".toWellFormed()).toBe("\uFFFD");
   });

@@ -44,10 +44,9 @@ describe("String constructor", () => {
     expect(s instanceof String).toBe(true);
   });
 
-  test("new String(symbol) wraps display string (ES2026 §22.1.1.1)", () => {
-    const s = new String(Symbol("x"));
-    expect(typeof s).toBe("object");
-    expect(s.valueOf()).toBe("Symbol(x)");
+  test("new String(symbol) throws TypeError (ES2026 §22.1.1.1)", () => {
+    expect(() => new String(Symbol("x"))).toThrow(TypeError);
+    expect(String(Symbol("x"))).toBe("Symbol(x)");
   });
 
   test("String(obj) invokes user toString() (ES2026 §7.1.17 ToString)", () => {

@@ -22,6 +22,7 @@ type
   end;
 
 const
+  MAX_UNICODE_CODE_POINT = $10FFFF;
   UNICODE_REPLACEMENT_CODE_POINT = $FFFD;
   UTF8_REPLACEMENT_CHARACTER = #$EF#$BF#$BD;
 
@@ -42,8 +43,11 @@ function TrimECMAScriptWhitespaceStart(const AText: string): string;
 function TrimECMAScriptWhitespaceEnd(const AText: string): string;
 function IsWellFormedUTF8(const AText: string): Boolean;
 function ToWellFormedUTF8(const AText: string): string;
+function IsWellFormedUTF16(const AText: AnsiString): Boolean;
+function ToWellFormedUTF16(const AText: AnsiString): AnsiString;
 function UTF8CodePointLength(const AText: string): Integer;
 function UTF8CodePointAt(const AText: string; const AIndex: Integer): string;
+function UTF16CodeUnitToUTF8(const ACodeUnit: Cardinal): string;
 function UTF16CodeUnitLength(const AText: string): Integer;
 function UTF16CodeUnitAt(const AText: string; const AIndex: Integer): string;
 function TryUTF16CodePointValueAt(const AText: string; const AIndex: Integer;
@@ -86,6 +90,7 @@ uses
   Math,
 
   fpwidestring,
+  IntlICU,
   StringBuffer;
 
 function RetagUTF8Text(const ABytes: RawByteString): string;
@@ -388,6 +393,122 @@ begin
         InvalidLength := Length(AText) - Index + 1;
       Inc(Index, InvalidLength);
     end;
+  end;
+  Result := Buffer.ToString;
+end;
+
+function IsHighSurrogateCodeUnit(const ACodeUnit: Cardinal): Boolean; inline;
+begin
+  Result := (ACodeUnit >= $D800) and (ACodeUnit <= $DBFF);
+end;
+
+function IsLowSurrogateCodeUnit(const ACodeUnit: Cardinal): Boolean; inline;
+begin
+  Result := (ACodeUnit >= $DC00) and (ACodeUnit <= $DFFF);
+end;
+
+function ReadUTF16EncodedUnitAt(const AText: string; const AIndex: Integer;
+  out ACodeUnit: Cardinal; out AByteLength: Integer): Boolean;
+begin
+  Result := TryReadUTF8CodePointAllowSurrogates(AText, AIndex,
+    ACodeUnit, AByteLength);
+  if Result then
+  begin
+    if ACodeUnit <= $FFFF then
+      Exit(True);
+    Exit(True);
+  end;
+  if (AIndex >= 1) and (AIndex <= Length(AText)) then
+  begin
+    ACodeUnit := Ord(AText[AIndex]);
+    AByteLength := 1;
+    Exit(False);
+  end;
+  ACodeUnit := 0;
+  AByteLength := 0;
+end;
+
+function IsWellFormedUTF16(const AText: AnsiString): Boolean;
+var
+  ByteLength, NextByteLength: Integer;
+  CodeUnit, NextCodeUnit: Cardinal;
+  Index: Integer;
+begin
+  Index := 1;
+  while Index <= Length(AText) do
+  begin
+    if not ReadUTF16EncodedUnitAt(AText, Index, CodeUnit, ByteLength) then
+      Exit(False);
+    if CodeUnit > $FFFF then
+    begin
+      Inc(Index, ByteLength);
+      Continue;
+    end;
+    if IsLowSurrogateCodeUnit(CodeUnit) then
+      Exit(False);
+    if IsHighSurrogateCodeUnit(CodeUnit) then
+    begin
+      if (Index + ByteLength > Length(AText)) or
+         not ReadUTF16EncodedUnitAt(AText, Index + ByteLength,
+           NextCodeUnit, NextByteLength) or
+         not IsLowSurrogateCodeUnit(NextCodeUnit) then
+        Exit(False);
+      Inc(Index, ByteLength + NextByteLength);
+      Continue;
+    end;
+    Inc(Index, ByteLength);
+  end;
+  Result := True;
+end;
+
+function ToWellFormedUTF16(const AText: AnsiString): AnsiString;
+var
+  Buffer: TStringBuffer;
+  ByteLength, NextByteLength: Integer;
+  CodeUnit, NextCodeUnit: Cardinal;
+  Index: Integer;
+begin
+  Buffer := TStringBuffer.Create(Length(AText));
+  Index := 1;
+  while Index <= Length(AText) do
+  begin
+    if not ReadUTF16EncodedUnitAt(AText, Index, CodeUnit, ByteLength) then
+    begin
+      Buffer.Append(UTF8_REPLACEMENT_CHARACTER);
+      Inc(Index, Max(ByteLength, 1));
+      Continue;
+    end;
+    if CodeUnit > $FFFF then
+    begin
+      Buffer.Append(Copy(AText, Index, ByteLength));
+      Inc(Index, ByteLength);
+      Continue;
+    end;
+    if IsLowSurrogateCodeUnit(CodeUnit) then
+    begin
+      Buffer.Append(UTF8_REPLACEMENT_CHARACTER);
+      Inc(Index, ByteLength);
+      Continue;
+    end;
+    if IsHighSurrogateCodeUnit(CodeUnit) then
+    begin
+      if (Index + ByteLength <= Length(AText)) and
+         ReadUTF16EncodedUnitAt(AText, Index + ByteLength,
+           NextCodeUnit, NextByteLength) and
+         IsLowSurrogateCodeUnit(NextCodeUnit) then
+      begin
+        Buffer.Append(Copy(AText, Index, ByteLength + NextByteLength));
+        Inc(Index, ByteLength + NextByteLength);
+      end
+      else
+      begin
+        Buffer.Append(UTF8_REPLACEMENT_CHARACTER);
+        Inc(Index, ByteLength);
+      end;
+      Continue;
+    end;
+    Buffer.Append(Copy(AText, Index, ByteLength));
+    Inc(Index, ByteLength);
   end;
   Result := Buffer.ToString;
 end;
@@ -899,14 +1020,46 @@ begin
   Result := RetagUTF8Text(Bytes);
 end;
 
+function ContainsUnicodeNonCharacter(const AText: string): Boolean;
+var
+  ByteLength: Integer;
+  CodePoint: Cardinal;
+  Index: Integer;
+begin
+  Index := 1;
+  while Index <= Length(AText) do
+  begin
+    if TryReadUTF8CodePointAllowSurrogates(AText, Index, CodePoint,
+      ByteLength) then
+    begin
+      if ((CodePoint >= $FDD0) and (CodePoint <= $FDEF)) or
+         (((CodePoint and $FFFE) = $FFFE) and
+          (CodePoint <= $10FFFF)) then
+        Exit(True);
+      Inc(Index, ByteLength);
+    end
+    else
+      Inc(Index);
+  end;
+  Result := False;
+end;
+
 function UnicodeLowerCaseUTF8(const AText: string): string;
 begin
+  if (not IsWellFormedUTF16(AText)) or ContainsUnicodeNonCharacter(AText) then
+    Exit(AText);
+  if TryICULowerCase('', AText, Result) then
+    Exit;
   Result := UnicodeStringToUTF8Text(
     UnicodeLowerCase(UTF8TextToUnicodeString(AText)));
 end;
 
 function UnicodeUpperCaseUTF8(const AText: string): string;
 begin
+  if (not IsWellFormedUTF16(AText)) or ContainsUnicodeNonCharacter(AText) then
+    Exit(AText);
+  if TryICUUpperCase('', AText, Result) then
+    Exit;
   Result := UnicodeStringToUTF8Text(
     UnicodeUpperCase(UTF8TextToUnicodeString(AText)));
 end;
