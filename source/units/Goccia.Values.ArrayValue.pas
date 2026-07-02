@@ -3582,6 +3582,7 @@ begin
   NewLen := View.RawLen + InsertCount - RawActualSkipCount;
   View.CheckSafeIntegerLen(NewLen);
   View.CheckArrayCreateLenValue(NewLen);
+  NewLenInt := Integer(Trunc(NewLen));
 
   ActualSkipCount64 := Trunc(RawActualSkipCount);
   ActualStartIndex := Integer(Trunc(RawActualStart));
@@ -3591,7 +3592,7 @@ begin
     DeleteCount := Integer(ActualSkipCount64);
 
   // Step 9: Let A be ArrayCreate(newLen)
-  ResultArray := TGocciaArrayValue.Create;
+  ResultArray := TGocciaArrayValue.Create(nil, NewLenInt);
 
   // Step 11: Copy elements before actualStart.  ActualStartIndex ≤ NewLen ≤
   // MaxInt, so the dense Integer loop covers the full leading range.  When
@@ -3612,7 +3613,6 @@ begin
   // enumeration so high-index source elements are picked up.  toSpliced does
   // not preserve holes — every result position is a data property — so
   // pre-fill the tail with undefined and overwrite present indices.
-  NewLenInt := Integer(Trunc(NewLen));
   TailLen := NewLenInt - ActualStartIndex - InsertCount;
   if View.NeedsSparsePath then
   begin

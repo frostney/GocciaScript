@@ -108,6 +108,26 @@ describe("Array.fromAsync", () => {
     expect(await Array.fromAsync(arrayLike)).toEqual(["a", "b"]);
   });
 
+  test("array-like path preserves block lexicals across await", async () => {
+    const arrayIterator = [].values();
+    const iteratorPrototype = Object.getPrototypeOf(arrayIterator);
+    const originalNext = iteratorPrototype.next;
+
+    try {
+      iteratorPrototype.next = () => {
+        throw new Error("Array.fromAsync array-like path used ArrayIteratorPrototype.next");
+      };
+
+      const expected = [0, 1, 2];
+      const input = { length: 3, 0: 0, 1: 1, 2: 2 };
+      const output = await Array.fromAsync(input);
+
+      expect(output).toEqual(expected);
+    } finally {
+      iteratorPrototype.next = originalNext;
+    }
+  });
+
   test("passes thisArg to the mapping function for array-like input", async () => {
     const mappedArrayLike = {
       0: 2,
