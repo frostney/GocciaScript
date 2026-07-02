@@ -761,12 +761,18 @@ console.log("Bare Loader: test262 host marker is hidden by default...");
 
 console.log("Bare Loader: --test262-host exposes Goccia test262 hooks...");
 {
-  const proc = Bun.spawnSync([BARE, "--test262-host"], {
+  const proc = Bun.spawnSync([BARE, "--test262-host", "--compat-loose-equality"], {
     stdin: new TextEncoder().encode([
       "print(Goccia.test262Host);",
       "print(typeof Goccia.test262);",
       "print(typeof Goccia.test262.createRealm);",
       "print(typeof Goccia.test262.evalScript);",
+      "const htmlDDA = Goccia.test262.isHTMLDDA;",
+      "print(typeof htmlDDA);",
+      "print(Boolean(htmlDDA));",
+      "print(htmlDDA == null);",
+      "print(htmlDDA == undefined);",
+      "print(htmlDDA === undefined);",
       "const realm = Goccia.test262.createRealm();",
       "print(realm.global.Object !== Object);",
       "print(typeof realm.global.eval);",
@@ -776,7 +782,20 @@ console.log("Bare Loader: --test262-host exposes Goccia test262 hooks...");
     stdout: "pipe",
     stderr: "pipe",
   });
-  const expected = "true\nobject\nfunction\nfunction\ntrue\nfunction\n3";
+  const expected = [
+    "true",
+    "object",
+    "function",
+    "function",
+    "undefined",
+    "false",
+    "true",
+    "true",
+    "false",
+    "true",
+    "function",
+    "3",
+  ].join("\n");
   if (proc.exitCode !== 0)
     throw new Error(`Bare --test262-host hook probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)

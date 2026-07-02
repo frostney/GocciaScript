@@ -90,6 +90,13 @@ type
   TBareTest262AgentThread = class;
   TBareTest262Host = class;
 
+  TGocciaTest262IsHTMLDDAValue = class(TGocciaObjectValue)
+  public
+    function HasHTMLDDAInternalSlot: Boolean; override;
+    function TypeOf: string; override;
+    function ToBooleanLiteral: TGocciaBooleanLiteralValue; override;
+  end;
+
   TBareTest262EvalHost = class
   private
     FEngine: TGocciaEngine;
@@ -237,8 +244,24 @@ begin
       ATest262EvalHost.EvalScript, 'evalScript', 1));
   Test262Obj.AssignProperty('abstractModuleSourcePrototype',
     TGocciaModuleSourceValue.SharedPrototype);
+  Test262Obj.AssignProperty('isHTMLDDA', TGocciaTest262IsHTMLDDAValue.Create);
   Test262Obj.AssignProperty('agent', ATest262Host.CreateAgentObject);
   AEngine.GocciaGlobal.AssignProperty('test262', Test262Obj);
+end;
+
+function TGocciaTest262IsHTMLDDAValue.HasHTMLDDAInternalSlot: Boolean;
+begin
+  Result := True;
+end;
+
+function TGocciaTest262IsHTMLDDAValue.TypeOf: string;
+begin
+  Result := 'undefined';
+end;
+
+function TGocciaTest262IsHTMLDDAValue.ToBooleanLiteral: TGocciaBooleanLiteralValue;
+begin
+  Result := TGocciaBooleanLiteralValue.FalseValue;
 end;
 
 function TBarePrintHost.Print(const AArgs: TGocciaArgumentsCollection;

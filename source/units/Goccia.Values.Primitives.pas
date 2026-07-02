@@ -29,6 +29,7 @@ type
     function ToNumberLiteral: TGocciaNumberLiteralValue; virtual; abstract;
     function ToStringLiteral: TGocciaStringLiteralValue; virtual; abstract;
 
+    function HasHTMLDDAInternalSlot: Boolean; virtual;
     function IsPrimitive: Boolean; virtual;
     function IsCallable: Boolean; virtual;
     function IsConstructable: Boolean; virtual;
@@ -394,6 +395,11 @@ function TGocciaValue.RuntimeCopy: TGocciaValue;
 begin
   // Default: return self (for singletons and complex values like objects/functions)
   Result := Self;
+end;
+
+function TGocciaValue.HasHTMLDDAInternalSlot: Boolean;
+begin
+  Result := False;
 end;
 
 function TGocciaValue.IsPrimitive: Boolean;

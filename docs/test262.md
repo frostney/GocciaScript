@@ -250,7 +250,8 @@ Bodies see only the identifiers stock test262 expects:
 - `$DONE`, `$DONOTEVALUATE` (from `sta.js` / `doneprintHandle.js` when included)
 - `print` (Goccia engine global; stock `doneprintHandle.js` uses it for async markers)
 - `$262` helpers implemented by Goccia's bundled host object:
-  `detachArrayBuffer`, `evalScript`, `gc`, `global`, and `createRealm`
+  `detachArrayBuffer`, `evalScript`, `gc`, `global`, `createRealm`,
+  `AbstractModuleSource`, and `IsHTMLDDA`
 - `$262.agent` helpers used by Atomics tests: `start`, `broadcast`,
   `receiveBroadcast`, `report`, `getReport`, `sleep`, `monotonicNow`, and
   `leaving`

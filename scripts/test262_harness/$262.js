@@ -19,7 +19,7 @@ if (typeof Goccia === "undefined" || Goccia.test262Host !== true) {
 const AbstractModuleSource = () => {
   throw new TypeError("%AbstractModuleSource% is not a constructor");
 };
-const IsHTMLDDA = {};
+const IsHTMLDDA = Goccia.test262.isHTMLDDA;
 
 var $262 = {
   global: globalThis,
